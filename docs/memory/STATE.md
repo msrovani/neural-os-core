@@ -1,60 +1,54 @@
 # Project State — neural-os-core
 
 ## Sprint 1 — Chassi Básico (Complete)
+## Sprint 2 — Observabilidade Ring 0 (Complete)
 
 ### Current Status
+
 | Category | Status |
 |---|---|
-| Last QEMU Boot | ✅ Boot OK — serial message displayed |
-| Compilation | ✅ `cargo build` — 0 errors |
-| Serial Output | ✅ `[SYSTEM] Neural Microkernel Iniciado...` |
-| VGA Output | ❌ Not mapped by bootloader (using serial) |
-| Toolchain | ✅ nightly-2026-06-21, MinGW-w64, bootimage v0.10.4 |
-
-### Architecture Overview
-
-```
-User: cargo run
-  └─ cargo compiles kernel for x86_64-unknown-none
-     └─ bootimage runner:
-        ├─ compiles bootloader v0.9.34
-        ├─ combines into bootable disk image
-        └─ launches qemu-system-x86_64
-           ├─ -m 2G
-           └─ -serial stdio
-              └─ bootloader → _start(boot_info) → serial message → loop
-```
+| Last QEMU Boot | ✅ Boot OK — VGA + serial messages displayed |
+| Compilation | ✅ `cargo check` — 0 errors |
+| VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
+| Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
+| Panic Handler | ✅ Logs to VGA and serial simultaneously |
+| Toolchain | ✅ nightly, bootimage v0.10.4, MinGW-w64 |
 
 ### Files
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | Kernel entry point, serial init/write, panic handler |
-| `Cargo.toml` | Package + bootloader build-dep + bootimage config |
-| `.cargo/config.toml` | Target, runner, relocation-model=static |
-| `rust-toolchain.toml` | Nightly pinned, llvm-tools-preview |
-| `AGENTS.md` | System rules for AI-assisted IDEs |
-| `docs/architecture/0001-*.md` | ADR-0001: Initial Architecture and Toolchain |
-| `docs/memory/STATE.md` | This file — project state tracker |
-| `docs/memory/SESSION_001.md` | Detailed session log with problems/solutions |
+| `src/main.rs` | Entry point (`entry_point!` macro), panic handler dual output |
+| `src/vga_buffer.rs` | VGA Writer, Color/ScreenChar/VgaBuffer structs, `print!/println!` |
+| `src/serial.rs` | 16550 UART via `uart_16550`, `serial_print!/serial_println!` |
+| `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` |
+| `.cargo/config.toml` | Target, runner, `relocation-model=static` |
+| `docs/architecture/0001-initial-architecture-and-toolchain.md` | ADR-0001 |
+| `docs/architecture/0002-vga-and-serial-logging.md` | ADR-0002 |
+| `docs/memory/STATE.md` | This file |
+| `docs/memory/SESSION_001.md` | Sprint 1 session log |
+| `docs/memory/SESSION_002.md` | Sprint 2 session log |
 
-### Environment Dependencies
+### Dependencies
 
-| Tool | Path | Purpose |
+| Crate | Version | Purpose |
 |---|---|---|
-| Rust nightly | via rustup | Kernel + bootloader compilation |
-| MSYS2 | `C:\msys64` | MinGW-w64 C linker for bootimage |
-| MinGW-w64 | `C:\msys64\mingw64\bin` | gcc, linker for native tool compilation |
-| bootimage | `~/.cargo/bin` | Creates bootable disk image from kernel |
-| QEMU | `C:\Program Files\qemu` | x86_64 emulation for testing |
+| `bootloader` (build-dep) | 0.9.34 | Boot image creation, `binary + map_physical_memory` |
+| `bootloader` (dep) | 0.9.34 | Kernel-side `BootInfo` type + `entry_point!` macro |
+| `spin` | 0.9 | `Mutex<T>` for `no_std` synchronization |
+| `lazy_static` | 1.5 | `lazy_static!` with `spin_no_std` feature |
+| `uart_16550` | 0.2 | Serial port driver for 16550 UART |
 
 ### Known Issues
-1. **No VGA** — bootloader v0.9 does not map `0xB8000` into kernel page tables. Serial output only.
-2. **MinGW dependency** — bootimage compiled with GNU toolchain; MSVC path untested.
-3. **Nightly-bound** — bootloader v0.9.34 may break with future nightly changes (especially ELF format).
 
-### Next Sprint (Planned)
-- [ ] Map VGA buffer via `map_physical_memory` feature
-- [ ] Add interrupt handling (IDT + PIC)
-- [ ] Introduction to NPU Ring 0 interface specification
-- [ ] Replace busy-loop with power-saving idle
+1. **`spin::Mutex` single-core** — will deadlock in interrupt handler if the interrupted code holds the same lock.
+2. **VGA init after boot** — early bootloader panics (before `kernel_main`) only visible via bootloader's own VGA.
+3. **MinGW linker required** — `bootimage` compilation needs C linker; MSVC alternative requires Visual Studio Build Tools.
+
+### Next Steps (Sprint 3)
+
+- [ ] Add interrupt handling (IDT + PIC) with proper lock safety
+- [ ] Implement recursive page table access for manual page mapping
+- [ ] Introduce a framebuffer abstraction layer (beyond VGA text mode)
+- [ ] Outline NPU Ring 0 interface specification
+- [ ] Replace `spin::Mutex` with `lock_api` for IRQ safety
