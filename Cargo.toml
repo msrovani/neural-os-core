@@ -1,0 +1,12 @@
+[package]
+name = "neural-os-core"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+bootloader = { version = "0.9", default-features = false, features = ["binary"] }
+
+[package.metadata.bootimage]
+run-args = ["-m", "2G", "-serial", "stdio"]
+
+

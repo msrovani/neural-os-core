@@ -1,0 +1,24 @@
+target/
+
+# Compiled binaries / disk images
+*.bin
+*.o
+*.elf
+
+# QEMU artifacts
+*.qcow2
+*.vmdk
+*.vdi
+
+# Rust project files (Cargo.lock is committed for executables)
+
+# IDE/editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS metadata
+Thumbs.db
+.DS_Store
