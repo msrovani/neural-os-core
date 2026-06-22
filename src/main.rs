@@ -86,13 +86,17 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("[ROUTER] Intencao processada. Acao escolhida: {} (0=Daemon, 1=Halt)", decision);
 
     let bit_input = tensor::Tensor::from_row_major((1, 3), vec![1.5, -0.5, 2.0]).unwrap();
-    let bit_weights = tensor::TernaryTensor::from_row_major(
-        (3, 2), vec![1_i8, -1, 0, 1, -1, 0],
+    let weights_f32 = tensor::Tensor::from_row_major(
+        (3, 2), vec![1.5_f32, -1.8, 0.2, 2.1, -3.0, 0.0],
     ).unwrap();
-    let bit_linear = nn::BitLinear::new(bit_weights, None);
+    let packed_weights = tensor::quantize_to_packed(&weights_f32, 0.5);
+    let compressed_size = packed_weights.packed_data.len();
+    let bit_linear = nn::BitLinear::new(packed_weights, None);
     let bit_output = bit_linear.forward(&bit_input);
-    serial_println!("[BITNET] Inferencia Hibrida concluida. Resultado: {:?}", bit_output.data);
-    println!("[BITNET] Inferencia Hibrida concluida. Resultado: {:?}", bit_output.data);
+    serial_println!("[BITNET] Inferencia 2-bit concluida. Tamanho comprimido: {} bytes. Output: {:?}",
+        compressed_size, bit_output.data);
+    println!("[BITNET] Inferencia 2-bit concluida. Tamanho comprimido: {} bytes. Output: {:?}",
+        compressed_size, bit_output.data);
 
     interrupts::init_pics();
     interrupts::enable_interrupts();

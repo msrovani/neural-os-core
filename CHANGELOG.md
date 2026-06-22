@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.10.0] — 2026-06-21
+
+### Added
+
+- `PackedTernaryTensor` struct (`src/tensor.rs`) — 2-bit per weight, 4 weights per byte
+- `pack_weights(weights: &[i8]) -> Vec<u8>` — packs i8 values into u8 with bit shifting
+- `get_weight(index: usize) -> i8` — extracts original value via `(byte >> pos) & 0b11`
+- `matmul_hybrid()` on `PackedTernaryTensor` — reads weights bit-by-bit from packed storage
+- `quantize_to_packed(tensor: &Tensor, threshold: f32) -> PackedTernaryTensor` — f32→ternary calibration
+- ADR-0012: 2-bit Packing and Ternary Quantization
+
+### Changed
+
+- `src/nn.rs::BitLinear` — `weights` field changed from `TernaryTensor` to `PackedTernaryTensor`
+- `src/main.rs` — BitNet test now uses quantization + packed inference flow
+- Version bumped to 0.10.0
+
 ## [0.9.0] — 2026-06-21
 
 ### Added

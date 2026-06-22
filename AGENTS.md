@@ -25,7 +25,7 @@ You are a Senior Systems and AI Engineer specializing in bare-metal Rust develop
 - Commit messages must follow Conventional Commits (e.g., `feat: implement memory allocator`, `fix: resolve page fault in qemu`).
 - Comment complex unsafe blocks extensively, explaining *why* the `unsafe` keyword is necessary for that specific hardware interaction.
 
-# Project Summary — neural-os-core v0.9.0
+# Project Summary — neural-os-core v0.10.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -38,7 +38,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 9 Sprints Complete
+## 10 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -67,6 +67,9 @@ VGA text buffer — 16-color Writer, scrolling, `print!/println!`, buffer at run
 ### Sprint 9 (v0.9.0) — Ternary Inference (Phase 3 start)
 `TernaryTensor { shape, data: Vec<i8> }` — values in {-1, 0, 1}. `matmul_hybrid()` — ADD/SUB-only kernel (no `*` operator). `nn::BitLinear` — ternary forward pass. Tested: [1.5, -0.5, 2.0] → ternary → [-0.5, -2.0]. ADR-0011, ADR-0010 (Roadmap).
 
+### Sprint 10 (v0.10.0) — 2-bit Packing & Ternary Quantization
+`PackedTernaryTensor` — 4 ternary weights per `u8` byte via `pack_weights()` + `get_weight()`. 2-bit encoding: `00→0, 01→+1, 10→-1`. `quantize_to_packed(tensor, threshold)` — f32→ternary calibration via Δ thresholding. BitLinear refactored to use packed storage. 12× compression vs f32 (24 bytes → 2 bytes). ADR-0012.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
@@ -76,6 +79,7 @@ VGA text buffer — 16-color Writer, scrolling, `print!/println!`, buffer at run
 - **`OffsetPageTable` via Cr3** — reads CR3 for L4 table addr, no recursive mapping
 - **Heap at `0x4444_4444_0000`** — high address, safe from kernel/bootloader range
 - **Ternary ADD/SUB kernel** — zero FPU multiplications in weight matmul
+- **2-bit packing** — 4 ternary weights per byte, `quantize_to_packed()` calibration pass
 
 ## Boot Sequence
 ```
@@ -89,7 +93,7 @@ cargo run → bootloader → kernel_main
   ├─ int3() → Breakpoint handler
   ├─ Box/Vec/Tensor/SiLU/RMSNorm tests
   ├─ Intent Router: Linear → SiLU → argmax
-  ├─ BitNet: BitLinear ternary matmul
+  ├─ BitNet: quantize_to_packed() → BitLinear 2-bit forward
   ├─ init_pics()                  (PIC remap)
   ├─ enable_interrupts()          (sti)
   └─ loop { hlt(); watchdog TIMER_TICKS }
@@ -107,11 +111,11 @@ cargo run → bootloader → kernel_main
 | libm | 0.2 |
 | pic8259 | 0.10 |
 
-## Next Sprint (Sprint 10)
-Bitmap FrameDeallocator, Slab allocator, calibration pass (f32→ternary via Δ), packed 2-bit storage.
+## Next Sprint (Sprint 11)
+Bitmap FrameDeallocator, Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
 
 ## Roadmap (ADR-0010)
-- Phase 3: Ternary Inference (Sprints 9–11, Q3 2026)
+- Phase 3: Ternary Inference (Sprints 9–11, Q3 2026) — Sprint 10 done, 1 remaining
 - Phase 4: Zero-Copy SFS (Sprints 12–15, Q4 2026)
 - Phase 5: WASM Skills (Sprints 16–18, Q1 2027)
 - Phase 6: AIOS Syscalls (Sprints 19–21, Q2 2027)

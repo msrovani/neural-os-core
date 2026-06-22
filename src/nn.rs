@@ -1,5 +1,5 @@
+use crate::tensor::PackedTernaryTensor;
 use crate::tensor::Tensor;
-use crate::tensor::TernaryTensor;
 
 pub struct Linear {
     pub weights: Tensor,
@@ -25,12 +25,12 @@ impl Linear {
 }
 
 pub struct BitLinear {
-    pub weights: TernaryTensor,
+    pub weights: PackedTernaryTensor,
     pub bias: Option<Tensor>,
 }
 
 impl BitLinear {
-    pub fn new(weights: TernaryTensor, bias: Option<Tensor>) -> Self {
+    pub fn new(weights: PackedTernaryTensor, bias: Option<Tensor>) -> Self {
         BitLinear { weights, bias }
     }
 

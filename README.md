@@ -10,9 +10,9 @@ neural-os-core is an experimental AI Operating System (AIOS) built from scratch 
 | 1 | GPU | Tensor execution and heavy lifting (future: SIMD/AVX matmul) |
 | 2 | CPU | Wasmtime execution of ephemeral Daemons/Agents |
 
-## Current State — Sprint 9 (Ternary Inference Engine)
+## Current State — Sprint 10 (2-bit Packing & Ternary Quantization)
 
-All 9 subsystems booting and verified in QEMU:
+All 10 subsystems booting and verified in QEMU:
 
 ```
 [SYSTEM]  Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.
@@ -20,7 +20,7 @@ All 9 subsystems booting and verified in QEMU:
 [TEST]    Box::new(41) = 41
 [TEST]    SiLU([-1, 0, 1]) = [-0.26894143, 0.0, 0.7310586]
 [ROUTER]  Intencao processada. Acao escolhida: 0 (0=Daemon, 1=Halt)
-[BITNET]  Inferencia Hibrida concluida. Resultado: [-0.5, -2.0]
+[BITNET]  Inferencia 2-bit concluida. Tamanho comprimido: 2 bytes. Output: [-0.5, -2.0]
 [PIC]     8259A remapeado: PIC1 offset 32, PIC2 offset 40.
 [WATCHDOG] Ticks do temporizador: 100
 ```
@@ -46,6 +46,9 @@ All 9 subsystems booting and verified in QEMU:
 | TernaryTensor | ✅ `Vec<i8>` weights, 4× compression vs f32 |
 | Hybrid MatMul | ✅ ADD/SUB-only kernel — zero FPU multiplications |
 | BitLinear Layer | ✅ Ternary dense layer with `matmul_hybrid()` |
+| PackedTernaryTensor | ✅ 2-bit packing — 4 weights/byte, 12× vs f32 |
+| Quantization | ✅ `quantize_to_packed(f32, Δ)` — calibration pass |
+| Comp. BitLinear | ✅ `PackedTernaryTensor` — inference from 2-bit storage |
 
 ## Prerequisites
 
@@ -98,7 +101,7 @@ cargo run
                       ├─ int3() → Breakpoint handler → log → ret
                        ├─ Box/Vec/Tensor/SiLU/RMSNorm tests
                        ├─ Intent Router: Linear(3→2) → SiLU → argmax
-                       ├─ BitNet: BitLinear ternary matmul ← Sprint 9
+                       ├─ BitNet: quantize_to_packed() → 2-bit forward ← Sprint 10
                        ├─ interrupts::init_pics()
                        ├─ interrupts::enable_interrupts()
                        └─ loop { hlt(); watchdog ticks }

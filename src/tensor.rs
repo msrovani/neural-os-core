@@ -76,6 +76,7 @@ impl Tensor {
     }
 }
 
+#[allow(dead_code)]
 pub struct TernaryTensor {
     pub shape: (usize, usize),
     pub data: Vec<i8>,
@@ -91,6 +92,7 @@ impl TernaryTensor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_row_major(shape: (usize, usize), data: Vec<i8>) -> Option<Self> {
         if data.len() != shape.0 * shape.1 {
             return None;
@@ -98,6 +100,7 @@ impl TernaryTensor {
         Some(TernaryTensor { shape, data })
     }
 
+    #[allow(dead_code)]
     pub fn matmul_hybrid(&self, input: &Tensor) -> Option<Tensor> {
         let (k, n) = self.shape;
         let (m, k2) = input.shape;
@@ -119,5 +122,91 @@ impl TernaryTensor {
             }
         }
         Some(result)
+    }
+}
+
+pub struct PackedTernaryTensor {
+    pub shape: (usize, usize),
+    pub packed_data: Vec<u8>,
+}
+
+impl PackedTernaryTensor {
+    fn encode_weight(v: i8) -> u8 {
+        match v {
+            -1 => 0b10,
+            0 => 0b00,
+            1 => 0b01,
+            _ => 0b00,
+        }
+    }
+
+    fn decode_weight(bits: u8) -> i8 {
+        match bits & 0b11 {
+            0b00 => 0,
+            0b01 => 1,
+            0b10 => -1,
+            _ => 0,
+        }
+    }
+
+    pub fn pack_weights(weights: &[i8]) -> Vec<u8> {
+        let packed_len = (weights.len() + 3) / 4;
+        let mut packed = vec![0u8; packed_len];
+        for (i, &w) in weights.iter().enumerate() {
+            let byte_idx = i / 4;
+            let bit_pos = (i % 4) * 2;
+            packed[byte_idx] |= Self::encode_weight(w) << bit_pos;
+        }
+        packed
+    }
+
+    pub fn get_weight(&self, index: usize) -> i8 {
+        let byte_idx = index / 4;
+        let bit_pos = (index % 4) * 2;
+        let bits = (self.packed_data[byte_idx] >> bit_pos) & 0b11;
+        Self::decode_weight(bits)
+    }
+
+    pub fn matmul_hybrid(&self, input: &Tensor) -> Option<Tensor> {
+        let (k, n) = self.shape;
+        let (m, k2) = input.shape;
+        if k != k2 {
+            return None;
+        }
+        let mut result = Tensor::new((m, n));
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = 0.0_f32;
+                for t in 0..k {
+                    let w = self.get_weight(t * n + j);
+                    match w {
+                        1 => sum += input.data[i * k + t],
+                        -1 => sum -= input.data[i * k + t],
+                        _ => {}
+                    }
+                }
+                result.data[i * n + j] = sum;
+            }
+        }
+        Some(result)
+    }
+}
+
+pub fn quantize_to_packed(tensor: &Tensor, threshold: f32) -> PackedTernaryTensor {
+    let mut ternary = Vec::with_capacity(tensor.data.len());
+    for &val in tensor.data.iter() {
+        let q = if val > threshold {
+            1_i8
+        } else if val < -threshold {
+            -1_i8
+        } else {
+            0_i8
+        };
+        ternary.push(q);
+    }
+    let packed = PackedTernaryTensor::pack_weights(&ternary);
+    PackedTernaryTensor {
+        shape: tensor.shape,
+        packed_data: packed,
     }
 }

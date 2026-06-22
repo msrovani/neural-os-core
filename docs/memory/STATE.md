@@ -9,6 +9,7 @@
 ## Sprint 7 — Intent Router MLP e Forward Pass (Complete)
 ## Sprint 8 — Hardware Interrupts & Memory Safety (Complete)
 ## Sprint 9 — Ternary Inference Engine (Complete)
+## Sprint 10 — 2-bit Packing and Ternary Quantization (Complete)
 
 ### Current Status
 
@@ -41,8 +42,11 @@
 | Frame Deallocator | ✅ `FrameDeallocator` trait + `EmptyFrameDeallocator` stub |
 | TernaryTensor | ✅ `i8` storage, shape (in, out), `from_row_major()` |
 | Hybrid MatMul | ✅ ADD/SUB-only — zero multiplicações, `match w {1 => add, -1 => sub, _ => skip}` |
-| BitLinear | ✅ Camada densa ternária com `forward()` usando `matmul_hybrid()` |
-| BitNet Test | ✅ Input `[1.5, -0.5, 2.0]` → saída `[-0.5, -2.0]` (verified) |
+| BitLinear (i8) | ✅ Camada densa ternária com `forward()` |
+| PackedTernaryTensor | ✅ 2-bit packing — 4 weights/byte via `pack_weights()` + `get_weight()` |
+| Quantization | ✅ `quantize_to_packed(f32_tensor, threshold)` — calibração ternária |
+| Compressed BitLinear | ✅ `PackedTernaryTensor` no lugar de `i8` — 12× vs f32, 3× vs i8 |
+| 2-bit Inference | ✅ `[1.5, -1.8, 0.2, ...]` → threshold 0.5 → 2 bytes → `[-0.5, -2.0]` |
 | `libm` crate | ✅ v0.2.16 — `expf`, `sqrtf` em `no_std` |
 | Toolchain | ✅ nightly, bootimage v0.10.4, MinGW-w64 |
 
@@ -57,13 +61,13 @@
 | `src/memory.rs` | `OffsetPageTable`, `BootInfoFrameAllocator`, `FrameDeallocator` trait, `init_memory()` |
 | `src/allocator.rs` | `LockedHeap` global allocator, `init_heap()` |
 | `src/simd.rs` | `enable_simd()` — CR0/CR4 FPU/SSE enablement |
-| `src/tensor.rs` | `Tensor` + `TernaryTensor` — `matmul`, `matmul_hybrid`, transpose, apply |
+| `src/tensor.rs` | `Tensor` + `TernaryTensor` + `PackedTernaryTensor` — matmul, hybrid, pack, quantize |
 | `src/nn.rs` | `silu()`, `rms_norm()`, `Linear`, `BitLinear`, `argmax` — MLP + ternary layer |
 | `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` + `x86_64` + `linked_list_allocator` + `libm` + `pic8259` |
 | `.cargo/config.toml` | Target, runner, `relocation-model=static` |
-| `docs/architecture/0001-*.md` to `0011-*.md` | 11 ADRs |
+| `docs/architecture/0001-*.md` to `0012-*.md` | 12 ADRs |
 | `docs/memory/STATE.md` | This file |
-| `docs/memory/SESSION_001.md` to `SESSION_009.md` | Sprint logs |
+| `docs/memory/SESSION_001.md` to `SESSION_010.md` | Sprint logs |
 
 ### Dependencies
 
@@ -85,17 +89,16 @@
 3. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
 4. **MinGW linker required** — `bootimage` needs C linker.
 
-### Next Steps (Sprint 10 — Phase 3 cont.)
+### Next Steps (Sprint 11 — Phase 3 calibr.)
 
-- [x] TernaryTensor struct — `i8` storage, `from_row_major()`
-- [x] `matmul_hybrid()` — ADD/SUB-only kernel (zero FPU multiplications)
-- [x] BitLinear layer — `forward()` using `matmul_hybrid()` + bias
-- [x] BitNet test — input `[1.5, -0.5, 2.0]` → ADD/SUB ternary → `[-0.5, -2.0]`
-- [x] ADR-0011: BitLinear and Hybrid Ternary MatMul
+- [x] PackedTernaryTensor — 2-bit encoding, `pack_weights()`, `get_weight()`
+- [x] `quantize_to_packed(tensor, threshold)` — f32 → ternary calibration
+- [x] BitLinear refactored — `PackedTernaryTensor` instead of `i8`
+- [x] End-to-end test: f32 weights → threshold 0.5 → 2 bytes packed → forward → `[-0.5, -2.0]`
+- [x] ADR-0012: 2-bit Packing and Ternary Quantization
 - [ ] Bitmap/Free-list FrameDeallocator — reuso real de frames físicos
 - [ ] Slab allocator — reduzir fragmentação do heap
-- [ ] Calibration pass — `f32` → ternary thresholding via `Δ = α · E[|w|]`
-- [ ] `TernaryTensor::packed()` — 2-bit packing (4 weights per byte) for weight storage
+- [ ] Phase 3 close: benchmark ternary vs f32 perf in QEMU
 
 ---
 
