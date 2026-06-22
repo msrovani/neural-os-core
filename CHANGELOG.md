@@ -6,6 +6,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.9.0] — 2026-06-21
+
+### Added
+
+- `TernaryTensor` struct (`src/tensor.rs`) — weight storage as `Vec<i8>` with values in {-1, 0, 1}
+- `TernaryTensor::from_row_major()` — constructor with shape validation
+- `TernaryTensor::matmul_hybrid(input: &Tensor) -> Option<Tensor>` — ADD/SUB-only kernel
+  - Weight `+1` → `accumulator += input[t]`
+  - Weight `-1` → `accumulator -= input[t]`
+  - Weight `0` → skip (no multiplication)
+- `nn::BitLinear` struct (`src/nn.rs`) — ternary dense layer
+  - `forward()` = `matmul_hybrid()` + optional bias
+- BitNet hybrid inference test in boot flow
+  - Input `[1.5, -0.5, 2.0]` × TernaryTensor(3×2) → `[-0.5, -2.0]`
+  - Zero multiplication operators in the inner loop
+- ADR-0011: BitLinear and Hybrid Ternary MatMul
+
+## [0.8.0] — 2026-06-21
+
+### Added
+
+- `pic8259 = "0.10"` dependency — 8259A PIC driver with `ChainedPics`
+- PIC remap (PIC1 → vector 32, PIC2 → vector 40) — `interrupts::init_pics()`
+- PIT Timer watchdog handler (IRQ 0, vector 32) — atomic `TIMER_TICKS` counter + EOI
+- Page Fault handler (vector 14) — reads `CR2`, logs fault address, halts via `hlt`
+- `interrupts::enable_interrupts()` — `sti` instruction sets IF=1
+- `memory.rs:FrameDeallocator` trait — `deallocate_frame()` for future frame recycling
+- `EmptyFrameDeallocator` — no-op stub until bitmap allocator
+- ADR-0009: PIC Watchdog and Page Fault Safety
+
+### Changed
+
+- `src/interrupts.rs` — IDT extended with `page_fault` and `idt[32]` (timer)
+- `src/main.rs` — `init_pics()` + `enable_interrupts()` + watchdog `hlt` loop
+- `src/memory.rs` — `FrameDeallocator` trait + `EmptyFrameDeallocator` added
+
+## [0.7.0] — 2026-06-21
+
+### Added
+
+- `Tensor::transposed()` — row-major to column-major transposition (W^T support)
+- `nn::Linear` struct with `weights: Tensor` and `bias: Option<Tensor>`
+  - `forward(&self, input) -> Tensor` implements Y = X·W^T + B
+- `nn::argmax(tensor) -> usize` — returns index of highest logit
+- Intent Router MLP in boot flow
+  - Input embedding + Linear(3→2) + SiLU + argmax = kernel decision
+  - Tested: `[1.0, -0.5, 0.3]` → action 0 (Acionar Daemon Ring 2)
+- ADR-0007: Intent Router MLP — Primeiro Córtex Primitivo
+
+## [0.6.0] — 2026-06-21
+
+### Added
+
+- `libm = "0.2"` dependency for `no_std` math functions (`expf`, `sqrtf`)
+- Neural primitives module (`src/nn.rs`)
+  - `silu(x)` activation via `libm::expf` — tested: `[-1, 0, 1] → [-0.269, 0, 0.731]`
+  - `rms_norm(tensor, weight, eps)` via `libm::sqrtf` — tested: RMSNorm of SiLU output
+- `Tensor::add_scalar`, `Tensor::mul_scalar`, `Tensor::apply<F>` (generic closure)
+- `nn::silu` used as closure arg to `Tensor::apply` in boot test
+- ADR-0006: Neural Primitives and libm
+
 ## [0.5.0] — 2026-06-21
 
 ### Added

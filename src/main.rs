@@ -12,6 +12,7 @@ use bootloader::bootinfo::BootInfo;
 mod allocator;
 mod interrupts;
 mod memory;
+mod nn;
 mod serial;
 mod simd;
 mod tensor;
@@ -65,5 +66,42 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         println!("[TEST] Tensor Matmul Result: shape ({}, {}), data: {:?}", c.shape.0, c.shape.1, c.data);
     }
 
-    loop {}
+    let mut tensor = tensor::Tensor::from_row_major((1, 3), vec![-1.0, 0.0, 1.0]).unwrap();
+    tensor.apply(nn::silu);
+    serial_println!("[TEST] SiLU([-1, 0, 1]) = {:?}", tensor.data);
+    println!("[TEST] SiLU([-1, 0, 1]) = {:?}", tensor.data);
+
+    nn::rms_norm(&mut tensor, 1.0, 1e-6);
+    serial_println!("[TEST] RMSNorm(SiLU(...), weight=1.0) = {:?}", tensor.data);
+    println!("[TEST] RMSNorm(SiLU(...), weight=1.0) = {:?}", tensor.data);
+
+    let emb = tensor::Tensor::from_row_major((1, 3), vec![1.0, -0.5, 0.3]).unwrap();
+    let w_data = vec![1.0, 0.0, 1.0, -1.0, 0.0, -1.0];
+    let w = tensor::Tensor::from_row_major((2, 3), w_data).unwrap();
+    let linear = nn::Linear::new(w, None);
+    let mut logits = linear.forward(&emb);
+    logits.apply(nn::silu);
+    let decision = nn::argmax(&logits);
+    serial_println!("[ROUTER] Intencao processada. Acao escolhida: {} (0=Daemon, 1=Halt)", decision);
+    println!("[ROUTER] Intencao processada. Acao escolhida: {} (0=Daemon, 1=Halt)", decision);
+
+    let bit_input = tensor::Tensor::from_row_major((1, 3), vec![1.5, -0.5, 2.0]).unwrap();
+    let bit_weights = tensor::TernaryTensor::from_row_major(
+        (3, 2), vec![1_i8, -1, 0, 1, -1, 0],
+    ).unwrap();
+    let bit_linear = nn::BitLinear::new(bit_weights, None);
+    let bit_output = bit_linear.forward(&bit_input);
+    serial_println!("[BITNET] Inferencia Hibrida concluida. Resultado: {:?}", bit_output.data);
+    println!("[BITNET] Inferencia Hibrida concluida. Resultado: {:?}", bit_output.data);
+
+    interrupts::init_pics();
+    interrupts::enable_interrupts();
+
+    loop {
+        x86_64::instructions::hlt();
+        let ticks = interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        if ticks > 0 && ticks % 100 == 0 {
+            serial_println!("[WATCHDOG] Ticks do temporizador: {}", ticks);
+        }
+    }
 }

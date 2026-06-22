@@ -3,6 +3,24 @@ use x86_64::structures::paging::{FrameAllocator, OffsetPageTable, PageTable, Phy
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 
+#[allow(dead_code)]
+/// Trait para desalocação de frames físicos de 4KiB.
+/// TODO: Sprint 9 — implementar bitmap/free-list frame deallocator.
+pub trait FrameDeallocator {
+    fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>);
+}
+
+#[allow(dead_code)]
+/// Deallocator vazio que apenas descarta frames.
+/// TODO: Substituir por implementação real (bitmap/slab).
+pub struct EmptyFrameDeallocator;
+
+impl FrameDeallocator for EmptyFrameDeallocator {
+    fn deallocate_frame(&mut self, _frame: PhysFrame<Size4KiB>) {
+        // No-op: frames não são reutilizados até implementação do bitmap.
+    }
+}
+
 pub struct BootInfoFrameAllocator {
     memory_map: &'static MemoryMap,
     next: usize,
