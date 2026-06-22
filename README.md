@@ -10,7 +10,7 @@ neural-os-core is an experimental AI Operating System (AIOS) being developed fro
 | 1 | GPU | Tensor execution and heavy lifting |
 | 2 | CPU | Wasmtime execution of Daemons/Agents |
 
-## Current Status — Sprint 4
+## Current Status — Sprint 5
 
 | Category | Status |
 |---|---|
@@ -23,6 +23,8 @@ neural-os-core is an experimental AI Operating System (AIOS) being developed fro
 | Page Tables (OffsetPageTable) | ✅ Via `Cr3::read()` + `physical_memory_offset` |
 | Frame Allocator | ✅ `BootInfoFrameAllocator` — lê mapa UEFI/BIOS |
 | Heap (alloc crate) | ✅ `LockedHeap` 100 KB, `Box`/`Vec` testados |
+| FPU/SSE (SIMD) | ✅ CR0/CR4 ativados — `f32`/`f64` nativos |
+| Tensor Engine | ✅ `Tensor` struct with `matmul()` (f32 dot product) |
 | Next | PIC remap, PIT timer, Page Fault handler |
 
 ## Prerequisites
@@ -57,6 +59,7 @@ Expected serial output:
 [EXCEPTION] Breakpoint Detectado
 [TEST] Box::new(41) = 41
 [TEST] Vec = [10, 20, 30]
+[TEST] Tensor Matmul Result: shape (1, 1), data: [32.0]
 ```
 
 Same appears in QEMU VGA window. Close window to stop.
@@ -88,12 +91,14 @@ cargo run
                  │   ├─ GDT.load + set_cs
                  │   ├─ load_tss
                  │   └─ IDT.load (lidt)
-                 ├─ println! / serial_println!
+                  ├─ simd::enable_simd()               ← NEW
+                  ├─ println! / serial_println!
                   ├─ int3() → Breakpoint handler → log → ret
-                  ├─ memory::init_memory(offset)   ← NEW
+                  ├─ memory::init_memory(offset)
                   ├─ BootInfoFrameAllocator::init
                   ├─ allocator::init_heap(mapper, alloc)
                   ├─ Box::new(41) → Vec::push → log
+                  ├─ Tensor 1×3 × 3×1 → matmul → log     ← NEW
                   └─ loop
 ```
 
@@ -120,24 +125,28 @@ Frames são alocados via `BootInfoFrameAllocator` que lê regiões `Usable` do m
 neural-os-core/
 ├── .cargo/config.toml          # target, runner, rustflags
 ├── src/
-│   ├── main.rs                 # entry_point!, panic handler, kernel_main, int3, alloc test
+│   ├── main.rs                 # entry_point!, panic handler, boot flow, alloc + tensor test
 │   ├── vga_buffer.rs           # VGA Writer, print!/println!
 │   ├── serial.rs               # 16550 UART, serial_print!/serial_println!
 │   ├── interrupts.rs           # IDT, TSS, GDT, handlers (Breakpoint, Double Fault)
 │   ├── memory.rs               # OffsetPageTable, BootInfoFrameAllocator
-│   └── allocator.rs            # LockedHeap global allocator, init_heap()
+│   ├── allocator.rs            # LockedHeap global allocator, init_heap()
+│   ├── simd.rs                 # enable_simd() — FPU/SSE via CR0/CR4
+│   └── tensor.rs               # Tensor struct with matmul()
 ├── docs/
 │   ├── architecture/
 │   │   ├── 0001-initial-architecture-and-toolchain.md
 │   │   ├── 0002-vga-and-serial-logging.md
 │   │   ├── 0003-interrupt-descriptor-table.md
-│   │   └── 0004-memory-paging-and-heap.md
+│   │   ├── 0004-memory-paging-and-heap.md
+│   │   └── 0005-simd-and-fpu-enablement.md
 │   └── memory/
 │       ├── STATE.md
 │       ├── SESSION_001.md
 │       ├── SESSION_002.md
 │       ├── SESSION_003.md
-│       └── SESSION_004.md
+│       ├── SESSION_004.md
+│       ├── SESSION_005.md
 ├── Cargo.toml
 ├── CHANGELOG.md
 ├── rust-toolchain.toml
@@ -153,6 +162,7 @@ neural-os-core/
 | 0002 | VGA and Serial Logging Infrastructure |
 | 0003 | Interrupt Descriptor Table |
 | 0004 | Memory Paging and Heap Allocation |
+| 0005 | SIMD and FPU Enablement |
 
 ## Crate Dependencies
 

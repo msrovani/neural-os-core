@@ -4,6 +4,7 @@
 ## Sprint 2 — Observabilidade Ring 0 (Complete)
 ## Sprint 3 — Captura de Exceções da CPU (Complete)
 ## Sprint 4 — Alocação Dinâmica e Heap (Complete)
+## Sprint 5 — Ativação de SIMD e Fundação Tensorial (Complete)
 
 ### Current Status
 
@@ -20,6 +21,9 @@
 | Frame Allocator | ✅ `BootInfoFrameAllocator` — lê mapa UEFI/BIOS, retorna frames Usable |
 | Heap | ✅ `LockedHeap` global allocator (linked_list_allocator v0.9.1) |
 | `alloc` crate | ✅ `Box`, `Vec` testados no boot flow |
+| FPU/SSE (SIMD) | ✅ CR0: clear EMULATE_COPROC, set MONITOR + NUMERIC_ERROR |
+| | ✅ CR4: set OSFXSR + OSXMMEXCPT_ENABLE |
+| Tensor Engine | ✅ `Tensor` struct with f32 matmul (1×3 × 3×1 = 1×1) |
 | Toolchain | ✅ nightly, bootimage v0.10.4, MinGW-w64 |
 
 ### Files
@@ -32,6 +36,8 @@
 | `src/interrupts.rs` | IDT, TSS, GDT, Breakpoint + Double Fault handlers |
 | `src/memory.rs` | `OffsetPageTable`, `BootInfoFrameAllocator`, `init_memory()` |
 | `src/allocator.rs` | `LockedHeap` global allocator, `init_heap()` |
+| `src/simd.rs` | `enable_simd()` — CR0/CR4 FPU/SSE enablement |
+| `src/tensor.rs` | `Tensor` struct with `matmul()` (f32 dot product) |
 | `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` + `x86_64` + `linked_list_allocator` |
 | `.cargo/config.toml` | Target, runner, `relocation-model=static` |
 | `docs/architecture/0001-*.md` to `0004-*.md` | 4 ADRs |
@@ -48,6 +54,7 @@
 | `uart_16550` | 0.2 | 16550 UART driver |
 | `x86_64` | 0.14.11 | IDT, GDT, TSS, page tables, frame allocator trait |
 | `linked_list_allocator` | 0.9.1 | `LockedHeap` global allocator |
+| (FPU/SSE via `x86_64` CR0/CR4) | — | Sem dependências extras |
 
 ### Known Issues
 
@@ -58,6 +65,9 @@
 
 ### Next Steps (Sprint 5)
 
+- [x] Enable FPU/SSE via CR0/CR4 (simd.rs)
+- [x] Tensor struct with f32 matmul (tensor.rs)
+- [x] ADR-0005: SIMD and FPU Enablement
 - [ ] PIC remap (8259A) — reencaminhar IRQs de hardware para vetores ≥ 32
 - [ ] PIT timer handler — interrupção periódica para preempção
 - [ ] Page Fault handler — capturar e tratar `#PF` (pré-requisito para memória semântica)

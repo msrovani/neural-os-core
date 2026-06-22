@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.5.0] — 2026-06-21
+
+### Added
+
+- SIMD enablement module (`src/simd.rs`)
+  - `enable_simd()` — CR0: clear `EMULATE_COPROCESSOR`, set `MONITOR_COPROCESSOR` + `NUMERIC_ERROR`
+  - CR4: set `OSFXSR` + `OSXMMEXCPT_ENABLE`
+  - `f32`/`f64` operations now execute natively without `#NM` exceptions
+- Tensor Engine module (`src/tensor.rs`)
+  - `Tensor` struct with `shape: (usize, usize)` and `data: Vec<f32>`
+  - `from_row_major()`, `matmul()` — dot product multiplication
+  - Tested: 1×3 × 3×1 → 1×1 = `[32.0]`
+- `simd::enable_simd()` call in boot flow after heap init
+- ADR-0005: SIMD and FPU Enablement
+
+### Changed
+
+- `main.rs`: added `mod simd; mod tensor;` + tensor matmul test
+
 ## [0.4.0] — 2026-06-21
 
 ### Added

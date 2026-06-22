@@ -5,6 +5,7 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::vec;
 use alloc::vec::Vec;
 use bootloader::bootinfo::BootInfo;
 
@@ -12,6 +13,8 @@ mod allocator;
 mod interrupts;
 mod memory;
 mod serial;
+mod simd;
+mod tensor;
 mod vga_buffer;
 
 #[panic_handler]
@@ -33,6 +36,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("heap initialization failed");
 
+    simd::enable_simd();
+
     println!("[SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.");
     serial_println!("[SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.");
 
@@ -50,6 +55,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     vec.push(30);
     serial_println!("[TEST] Vec = {:?}", vec);
     println!("[TEST] Vec = {:?}", vec);
+
+    let a_data = vec![1.0_f32, 2.0_f32, 3.0_f32];
+    let a = tensor::Tensor::from_row_major((1, 3), a_data).unwrap();
+    let b_data = vec![4.0_f32, 5.0_f32, 6.0_f32];
+    let b = tensor::Tensor::from_row_major((3, 1), b_data).unwrap();
+    if let Some(c) = a.matmul(&b) {
+        serial_println!("[TEST] Tensor Matmul Result: shape ({}, {}), data: {:?}", c.shape.0, c.shape.1, c.data);
+        println!("[TEST] Tensor Matmul Result: shape ({}, {}), data: {:?}", c.shape.0, c.shape.1, c.data);
+    }
 
     loop {}
 }
