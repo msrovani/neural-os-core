@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.4.0] — 2026-06-21
+
+### Added
+
+- Memory module (`src/memory.rs`)
+  - `OffsetPageTable` — cria mapper via `Cr3::read()` + `physical_memory_offset`
+  - `BootInfoFrameAllocator` — implementa `FrameAllocator<Size4KiB>` iterando mapa UEFI/BIOS
+  - `init_memory(offset)` — retorna `OffsetPageTable<'static>` pronto
+- Heap allocator module (`src/allocator.rs`)
+  - `LockedHeap` como `#[global_allocator]` via `linked_list_allocator` v0.9.1
+  - `init_heap(mapper, frame_allocator)` — mapeia 25 páginas (100 KB) em `0x4444_4444_0000`
+- `extern crate alloc` ativado — `Box::new(41)` e `Vec::push([10, 20, 30])` testados em QEMU
+- `linked_list_allocator = "0.9"` dependency
+- ADR-0004: Memory Paging and Heap Allocation
+- SESSION_004.md: Sprint 4 detailed log
+
 ## [0.3.0] — 2026-06-21
 
 ### Added

@@ -10,7 +10,7 @@ neural-os-core is an experimental AI Operating System (AIOS) being developed fro
 | 1 | GPU | Tensor execution and heavy lifting |
 | 2 | CPU | Wasmtime execution of Daemons/Agents |
 
-## Current Status — Sprint 3
+## Current Status — Sprint 4
 
 | Category | Status |
 |---|---|
@@ -20,6 +20,9 @@ neural-os-core is an experimental AI Operating System (AIOS) being developed fro
 | Panic Handler | ✅ Dual output: VGA + serial |
 | IDT (Breakpoint, Double Fault) | ✅ Captura e log com IST stack switching |
 | GDT + TSS | ✅ Custom GDT with TSS descriptor |
+| Page Tables (OffsetPageTable) | ✅ Via `Cr3::read()` + `physical_memory_offset` |
+| Frame Allocator | ✅ `BootInfoFrameAllocator` — lê mapa UEFI/BIOS |
+| Heap (alloc crate) | ✅ `LockedHeap` 100 KB, `Box`/`Vec` testados |
 | Next | PIC remap, PIT timer, Page Fault handler |
 
 ## Prerequisites
@@ -52,6 +55,8 @@ Expected serial output:
 [SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.
 [TEST] Forcando Breakpoint (int3)...
 [EXCEPTION] Breakpoint Detectado
+[TEST] Box::new(41) = 41
+[TEST] Vec = [10, 20, 30]
 ```
 
 Same appears in QEMU VGA window. Close window to stop.
@@ -84,8 +89,12 @@ cargo run
                  │   ├─ load_tss
                  │   └─ IDT.load (lidt)
                  ├─ println! / serial_println!
-                 ├─ int3() → Breakpoint handler → log → ret
-                 └─ loop
+                  ├─ int3() → Breakpoint handler → log → ret
+                  ├─ memory::init_memory(offset)   ← NEW
+                  ├─ BootInfoFrameAllocator::init
+                  ├─ allocator::init_heap(mapper, alloc)
+                  ├─ Box::new(41) → Vec::push → log
+                  └─ loop
 ```
 
 ### Exception Handling
@@ -97,26 +106,38 @@ cargo run
 
 Double Fault uses IST (Interrupt Stack Table) entry 0 with a dedicated 20KB stack to prevent Triple Fault.
 
+### Heap Allocation
+
+| Component | Address | Size | Allocator |
+|---|---|---|---|
+| Heap | `0x4444_4444_0000` | 100 KB | `linked_list_allocator::LockedHeap` (free-list) |
+
+Frames são alocados via `BootInfoFrameAllocator` que lê regiões `Usable` do mapa de memória física fornecido pela UEFI/BIOS. Páginas são mapeadas com `PRESENT | WRITABLE` via `OffsetPageTable`.
+
 ## Project Structure
 
 ```
 neural-os-core/
 ├── .cargo/config.toml          # target, runner, rustflags
 ├── src/
-│   ├── main.rs                 # entry_point!, panic handler, kernel_main, int3 test
+│   ├── main.rs                 # entry_point!, panic handler, kernel_main, int3, alloc test
 │   ├── vga_buffer.rs           # VGA Writer, print!/println!
 │   ├── serial.rs               # 16550 UART, serial_print!/serial_println!
-│   └── interrupts.rs           # IDT, TSS, GDT, handlers (Breakpoint, Double Fault)
+│   ├── interrupts.rs           # IDT, TSS, GDT, handlers (Breakpoint, Double Fault)
+│   ├── memory.rs               # OffsetPageTable, BootInfoFrameAllocator
+│   └── allocator.rs            # LockedHeap global allocator, init_heap()
 ├── docs/
 │   ├── architecture/
 │   │   ├── 0001-initial-architecture-and-toolchain.md
 │   │   ├── 0002-vga-and-serial-logging.md
-│   │   └── 0003-interrupt-descriptor-table.md
+│   │   ├── 0003-interrupt-descriptor-table.md
+│   │   └── 0004-memory-paging-and-heap.md
 │   └── memory/
 │       ├── STATE.md
 │       ├── SESSION_001.md
 │       ├── SESSION_002.md
-│       └── SESSION_003.md
+│       ├── SESSION_003.md
+│       └── SESSION_004.md
 ├── Cargo.toml
 ├── CHANGELOG.md
 ├── rust-toolchain.toml
@@ -131,6 +152,7 @@ neural-os-core/
 | 0001 | Initial Architecture and Toolchain |
 | 0002 | VGA and Serial Logging Infrastructure |
 | 0003 | Interrupt Descriptor Table |
+| 0004 | Memory Paging and Heap Allocation |
 
 ## Crate Dependencies
 
@@ -140,7 +162,8 @@ neural-os-core/
 | `spin` | 0.9 | `Mutex<T>` for `no_std` |
 | `lazy_static` | 1.5 | Lazy initialization |
 | `uart_16550` | 0.2 | 16550 UART driver |
-| `x86_64` | 0.14.11 | IDT, GDT, TSS, CPU instructions |
+| `x86_64` | 0.14.11 | IDT, GDT, TSS, page tables, CPU instructions |
+| `linked_list_allocator` | 0.9.1 | `LockedHeap` global allocator |
 
 ## License
 

@@ -3,7 +3,7 @@
 ## Sprint 1 — Chassi Básico (Complete)
 ## Sprint 2 — Observabilidade Ring 0 (Complete)
 ## Sprint 3 — Captura de Exceções da CPU (Complete)
-## Sprint 4 — Interrupções de Hardware e Page Faults (Pending)
+## Sprint 4 — Alocação Dinâmica e Heap (Complete)
 
 ### Current Status
 
@@ -16,48 +16,50 @@
 | Panic Handler | ✅ Logs to VGA and serial simultaneously |
 | IDT | ✅ Breakpoint + Double Fault handlers, IST stack switch for DF |
 | GDT + TSS | ✅ Custom GDT with TSS descriptor for Double Fault stack switching |
+| Page Tables | ✅ `OffsetPageTable` via `Cr3` + `physical_memory_offset` |
+| Frame Allocator | ✅ `BootInfoFrameAllocator` — lê mapa UEFI/BIOS, retorna frames Usable |
+| Heap | ✅ `LockedHeap` global allocator (linked_list_allocator v0.9.1) |
+| `alloc` crate | ✅ `Box`, `Vec` testados no boot flow |
 | Toolchain | ✅ nightly, bootimage v0.10.4, MinGW-w64 |
 
 ### Files
 
 | File | Purpose |
 |---|---|
-| `src/main.rs` | Entry point (`entry_point!`), panic handler dual output, `int3()` test |
-| `src/vga_buffer.rs` | VGA Writer, Color/ScreenChar/VgaBuffer, `print!/println!` |
-| `src/serial.rs` | 16550 UART via `uart_16550`, `serial_print!/serial_println!` |
-| `src/interrupts.rs` | IDT, TSS, GDT init; Breakpoint + Double Fault handlers |
-| `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` + `x86_64` |
+| `src/main.rs` | Entry point, panic handler, boot flow with `Box`/`Vec` test |
+| `src/vga_buffer.rs` | VGA Writer, `print!/println!` |
+| `src/serial.rs` | 16550 UART, `serial_print!/serial_println!` |
+| `src/interrupts.rs` | IDT, TSS, GDT, Breakpoint + Double Fault handlers |
+| `src/memory.rs` | `OffsetPageTable`, `BootInfoFrameAllocator`, `init_memory()` |
+| `src/allocator.rs` | `LockedHeap` global allocator, `init_heap()` |
+| `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` + `x86_64` + `linked_list_allocator` |
 | `.cargo/config.toml` | Target, runner, `relocation-model=static` |
-| `docs/architecture/0001-initial-architecture-and-toolchain.md` | ADR-0001 |
-| `docs/architecture/0002-vga-and-serial-logging.md` | ADR-0002 |
-| `docs/architecture/0003-interrupt-descriptor-table.md` | ADR-0003 |
+| `docs/architecture/0001-*.md` to `0004-*.md` | 4 ADRs |
 | `docs/memory/STATE.md` | This file |
-| `docs/memory/SESSION_001.md` | Sprint 1 |
-| `docs/memory/SESSION_002.md` | Sprint 2 |
-| `docs/memory/SESSION_003.md` | Sprint 3 |
+| `docs/memory/SESSION_001.md` to `SESSION_003.md` | Sprint logs |
 
 ### Dependencies
 
 | Crate | Version | Purpose |
 |---|---|---|
-| `bootloader` (build-dep) | 0.9.34 | Boot image creation, `binary + map_physical_memory` |
-| `bootloader` (dep) | 0.9.34 | Kernel-side `BootInfo` type + `entry_point!` macro |
-| `spin` | 0.9 | `Mutex<T>` for `no_std` synchronization |
-| `lazy_static` | 1.5 | `lazy_static!` with `spin_no_std` feature |
-| `uart_16550` | 0.2 | Serial port driver for 16550 UART |
-| `x86_64` | 0.14.11 | IDT, GDT, TSS structures, CPU instructions |
+| `bootloader` | 0.9.34 | Boot image, `BootInfo`, `map_physical_memory` |
+| `spin` | 0.9 | `Mutex<T>` for `no_std` sync |
+| `lazy_static` | 1.5 | `lazy_static!` with `spin_no_std` |
+| `uart_16550` | 0.2 | 16550 UART driver |
+| `x86_64` | 0.14.11 | IDT, GDT, TSS, page tables, frame allocator trait |
+| `linked_list_allocator` | 0.9.1 | `LockedHeap` global allocator |
 
 ### Known Issues
 
-1. **`spin::Mutex` single-core** — deadlock if exception fires while VGA lock is held.
-2. **VGA init after boot** — early bootloader panics only visible via bootloader's own VGA.
-3. **MinGW linker required** — `bootimage` needs C linker; MSVC alternative requires VS Build Tools.
-4. **Double Fault stack static 20KB** — overflow corrupts adjacent memory.
+1. **`spin::Mutex` single-core** — deadlock if exception fires while VGA/heap lock is held.
+2. **Frame allocator monotonic** — `allocate_frame()` nunca reusa frames; precisa de slab allocator.
+3. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
+4. **MinGW linker required** — `bootimage` needs C linker.
 
-### Next Steps (Sprint 4)
+### Next Steps (Sprint 5)
 
 - [ ] PIC remap (8259A) — reencaminhar IRQs de hardware para vetores ≥ 32
 - [ ] PIT timer handler — interrupção periódica para preempção
 - [ ] Page Fault handler — capturar e tratar `#PF` (pré-requisito para memória semântica)
-- [ ] Replace `spin::Mutex` with `lock_api` for IRQ safety
-- [ ] Outline NPU Ring 0 interface specification
+- [ ] Implement `FrameDeallocator` para reuso de frames
+- [ ] Slab allocator para reduzir fragmentação do heap
