@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.3.0] — 2026-06-21
+
+### Added
+
+- IDT (Interrupt Descriptor Table) module (`src/interrupts.rs`)
+  - Breakpoint handler (`#BP`, vector 3) — logs VGA + serial, returns
+  - Double Fault handler (`#DF`, vector 8) — logs VGA + serial, panics
+  - TSS with IST entry 0 (20KB dedicated stack) for Double Fault stack switching
+  - GDT with kernel code segment + TSS descriptor
+  - `init_idt()` — loads GDT, sets CS, loads TSS, loads IDT
+- `x86_64` crate v0.14.11 dependency (IDT, GDT, TSS, CPU instructions)
+- `#![feature(abi_x86_interrupt)]` for `extern "x86-interrupt"` calling convention
+- Forced `int3()` breakpoint test in boot flow
+- ADR-0003: Interrupt Descriptor Table
+- SESSION_003.md: Sprint 3 detailed log
+- QEMU path added to `PATH` documentation for Windows
+
+### Fixed
+
+- Handler signature adapted to `x86_64` v0.14.13 API (`InterruptStackFrame` by value)
+- `static_mut_refs` warning — replaced `&STACK` with `core::ptr::addr_of!(STACK)`
+- Deprecated `set_cs` — replaced with `CS::set_reg()` via `Segment` trait
+- Macro scoping — explicit `use crate::{println, serial_println}` in interrupts module
+
 ## [0.2.0] — 2026-06-21
 
 ### Added

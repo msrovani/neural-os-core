@@ -10,7 +10,7 @@ neural-os-core is an experimental AI Operating System (AIOS) being developed fro
 | 1 | GPU | Tensor execution and heavy lifting |
 | 2 | CPU | Wasmtime execution of Daemons/Agents |
 
-## Current Status — Sprint 2
+## Current Status — Sprint 3
 
 | Category | Status |
 |---|---|
@@ -18,51 +18,51 @@ neural-os-core is an experimental AI Operating System (AIOS) being developed fro
 | VGA Output | ✅ 80×25 text mode via `map_physical_memory` |
 | Serial Logging | ✅ 16550 UART (COM1, port `0x3F8`) |
 | Panic Handler | ✅ Dual output: VGA + serial |
-| Remaining | Interrupts, page tables, NPU interface |
+| IDT (Breakpoint, Double Fault) | ✅ Captura e log com IST stack switching |
+| GDT + TSS | ✅ Custom GDT with TSS descriptor |
+| Next | PIC remap, PIT timer, Page Fault handler |
 
 ## Prerequisites
 
 | Tool | Version | Installation |
 |---|---|---|
-| Rust | nightly (MSVC or GNU) | `rustup toolchain install nightly` |
+| Rust | nightly | `rustup toolchain install nightly` |
 | `llvm-tools-preview` | — | `rustup component add llvm-tools-preview` |
 | `bootimage` | 0.10.x | `cargo install bootimage` |
-| QEMU | 7+ | `winget install QEMU` or manual |
+| QEMU | 7+ | `winget install QEMU` or manual (add to PATH) |
 | C linker | MSVC or MinGW | VS Build Tools or MSYS2 + MinGW-w64 |
 
-> **Windows without MSVC:** If Visual Studio Build Tools are not installed, install MSYS2 and MinGW-w64:
+> **Windows without MSVC:** Install MSYS2 then `pacman -S mingw-w64-x86_64-gcc`, add `C:\msys64\mingw64\bin` to PATH.
+> **QEMU path:** If `cargo run` fails with "program not found", add QEMU dir to PATH:
 > ```powershell
-> # Install MSYS2 from https://www.msys2.org/
-> # Then in MSYS2 terminal:
-> pacman -S mingw-w64-x86_64-gcc
-> # Add C:\msys64\mingw64\bin to your PATH
+> $env:Path += ";C:\Program Files\qemu"
 > ```
 
 ## Quick Start
 
 ```powershell
-# Clone and enter
 git clone https://github.com/msrovani/neural-os-core
 cd neural-os-core
-
-# Build and boot in QEMU
 cargo run
 ```
 
-Expected output on the serial console:
+Expected serial output:
 
 ```
 [SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.
+[TEST] Forcando Breakpoint (int3)...
+[EXCEPTION] Breakpoint Detectado
 ```
 
-The same message appears in the QEMU VGA window. Close the window to stop.
+Same appears in QEMU VGA window. Close window to stop.
 
-### Other Commands
+### Commands
 
 ```powershell
-cargo build          # compile only
-cargo bootimage      # create bootable disk image (without running)
-cargo check          # type-check without codegen
+cargo run          # build + boot in QEMU
+cargo build        # compile only
+cargo bootimage    # create bootable image (without running)
+cargo check        # type-check without codegen
 ```
 
 ## Architecture
@@ -71,24 +71,31 @@ cargo check          # type-check without codegen
 
 ```
 cargo run
-  └─ cargo build (kernel → x86_64-unknown-none)
+  └─ cargo build → x86_64-unknown-none
      └─ bootimage runner
-        ├─ build bootloader (v0.9.34)
-        ├─ combine kernel + bootloader → bootimage.bin
+        ├─ build bootloader v0.9.34
+        ├─ combine → bootimage.bin
         └─ qemu-system-x86_64 -m 2G -serial stdio
-           └─ bootloader sets up long mode, page tables
-              └─ calls kernel_main(&BootInfo)
-                 ├─ vga_buffer::init(physical_memory_offset)
-                 ├─ println!("...")       → VGA window
-                 └─ serial_println!("...") → host terminal
+           └─ bootloader → long mode, page tables
+              └─ kernel_main(&BootInfo)
+                 ├─ vga_buffer::init(offset)
+                 ├─ interrupts::init_idt()   ← NEW
+                 │   ├─ GDT.load + set_cs
+                 │   ├─ load_tss
+                 │   └─ IDT.load (lidt)
+                 ├─ println! / serial_println!
+                 ├─ int3() → Breakpoint handler → log → ret
+                 └─ loop
 ```
 
-### Ring 0 Observability
+### Exception Handling
 
-| Channel | Backend | Macro | Target |
-|---|---|---|---|
-| VGA Text | `0xB8000` via `map_physical_memory` | `print!` / `println!` | QEMU window |
-| Serial | 16550 UART @ `0x3F8` | `serial_print!` / `serial_println!` | Host terminal |
+| Exception | Vector | Behavior |
+|---|---|---|
+| Breakpoint (`#BP`) | 3 | Logs, returns (continues execution) |
+| Double Fault (`#DF`) | 8 | Logs, panics (aborts system) |
+
+Double Fault uses IST (Interrupt Stack Table) entry 0 with a dedicated 20KB stack to prevent Triple Fault.
 
 ## Project Structure
 
@@ -96,31 +103,44 @@ cargo run
 neural-os-core/
 ├── .cargo/config.toml          # target, runner, rustflags
 ├── src/
-│   ├── main.rs                 # entry_point!, panic handler, kernel_main
-│   ├── vga_buffer.rs           # VGA Writer, Color, print!/println!
-│   └── serial.rs               # 16550 UART, serial_print!/serial_println!
+│   ├── main.rs                 # entry_point!, panic handler, kernel_main, int3 test
+│   ├── vga_buffer.rs           # VGA Writer, print!/println!
+│   ├── serial.rs               # 16550 UART, serial_print!/serial_println!
+│   └── interrupts.rs           # IDT, TSS, GDT, handlers (Breakpoint, Double Fault)
 ├── docs/
 │   ├── architecture/
 │   │   ├── 0001-initial-architecture-and-toolchain.md
-│   │   └── 0002-vga-and-serial-logging.md
+│   │   ├── 0002-vga-and-serial-logging.md
+│   │   └── 0003-interrupt-descriptor-table.md
 │   └── memory/
-│       ├── STATE.md            # project state tracker
-│       ├── SESSION_001.md      # Sprint 1 detailed log
-│       └── SESSION_002.md      # Sprint 2 detailed log
+│       ├── STATE.md
+│       ├── SESSION_001.md
+│       ├── SESSION_002.md
+│       └── SESSION_003.md
 ├── Cargo.toml
+├── CHANGELOG.md
 ├── rust-toolchain.toml
-├── AGENTS.md                   # rules for AI-assisted IDEs
+├── AGENTS.md
 └── README.md
 ```
 
-## Documentation Protocol (ADR)
-
-Architectural decisions are recorded in `docs/architecture/`:
+## Architectural Decisions (ADRs)
 
 | ADR | Title |
 |---|---|
 | 0001 | Initial Architecture and Toolchain |
 | 0002 | VGA and Serial Logging Infrastructure |
+| 0003 | Interrupt Descriptor Table |
+
+## Crate Dependencies
+
+| Crate | Version | Purpose |
+|---|---|---|
+| `bootloader` | 0.9.34 | Boot image + BootInfo |
+| `spin` | 0.9 | `Mutex<T>` for `no_std` |
+| `lazy_static` | 1.5 | Lazy initialization |
+| `uart_16550` | 0.2 | 16550 UART driver |
+| `x86_64` | 0.14.11 | IDT, GDT, TSS, CPU instructions |
 
 ## License
 

@@ -1,6 +1,6 @@
 [package]
 name = "neural-os-core"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -8,6 +8,7 @@ bootloader = { version = "0.9", default-features = false, features = ["map_physi
 spin = "0.9"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 uart_16550 = "0.2"
+x86_64 = "0.14.11"
 
 [build-dependencies]
 bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }
