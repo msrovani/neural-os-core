@@ -94,70 +94,46 @@
 
 - [x] ADR-0013: Neural OS Executive Summary — Estado da Arte 2026 (MerlionOS, TL/I2_S, ASA/eBPF)
 - [x] `docs/roadmap.md` — Roadmap atualizado com Fases 3–7, Padé, MatMul-free LM
+- [x] ADR-0013: Estrutura Monorepo (`crates/`) + Design System (AgentProcess, Skill, EventBus traits)
+- [x] `docs/roadmap.md` — Ordem de engenharia bare-metal correta (Memória → Scheduler → EventBus → Skills → Planner)
+
+---
+
+## Blueprint Integrado
+
+**Data:** 2026-06-22  
+**Status:** Aprovado  
+
+O blueprint de código do neural-os-core está consolidado em:
+
+| Documento | Conteúdo |
+|---|---|
+| `docs/architecture/0013-neural-os-executive-summary.md` | Manifesto SotA + Monorepo + Rust Traits |
+| `docs/roadmap.md` | Ordem de engenharia bare-metal (5 fases) |
+| `docs/memory/STATE.md` | Estado atual + pendências |
+
+**Ação Imediata:** Implementar o Bitmap Frame Allocator otimizado para Huge Pages (preparação para FairyFuse/Bitnet.cpp TL/I2_S). Substituir `BootInfoFrameAllocator` monotônico + `EmptyFrameDeallocator` stub por um `BitmapFrameAllocator` com suporte a `Size4KiB`, `Size2MiB` e `Size1GiB`.
+
+### Pendências (Sprint 11)
 
 - [x] PackedTernaryTensor — 2-bit encoding, `pack_weights()`, `get_weight()`
 - [x] `quantize_to_packed(tensor, threshold)` — f32 → ternary calibration
 - [x] BitLinear refactored — `PackedTernaryTensor` instead of `i8`
 - [x] End-to-end test: f32 weights → threshold 0.5 → 2 bytes packed → forward → `[-0.5, -2.0]`
 - [x] ADR-0012: 2-bit Packing and Ternary Quantization
-- [ ] Bitmap/Free-list FrameDeallocator — reuso real de frames físicos
+- [ ] Bitmap Frame Allocator (suporte a 4KiB, 2MiB, 1GiB) — preparação para TL/I2_S
 - [ ] Slab allocator — reduzir fragmentação do heap
 - [ ] Phase 3 close: benchmark ternary vs f32 perf in QEMU
 
 ---
 
-## Future Roadmap
+## Roadmap Consolidado
 
-| Phase | Title | Sprints | Target |
-|---|---|---|---|
-| **3** | Ternary Inference (BitNet b1.58) | 9–11 | Q3 2026 |
-| **4** | Zero-Copy Semantic File System | 12–15 | Q4 2026 |
-| **5** | Skills-as-Modules (WASM Component Model) | 16–18 | Q1 2027 |
-| **6** | Hardware-Aware AIOS Syscalls (Zero-Trust) | 19–21 | Q2 2027 |
+Ver `docs/roadmap.md` para a ordem de engenharia bare-metal completa:
 
-### Phase 3 — Ternary Inference (BitNet b1.58)
-
-Eliminated `f32` matmul from weights. Quantized to {-1, 0, +1} using `i8` (future: 2-bit packing). Dot-product replaced by conditional ADD/SUB. 4× memory compression, zero FPU multiplications during inference.
-
-**Completed:**
-- `src/tensor.rs::TernaryTensor` — `i8` storage, `from_row_major()`, `matmul_hybrid()`
-- ADD/SUB-only kernel: `match w { 1 => add, -1 => sub, _ => skip }`
-- `src/nn.rs::BitLinear` — ternary forward pass with optional bias
-- Test: input `[1.5, -0.5, 2.0]` → ternary matmul → `[-0.5, -2.0]` (no `*` ops)
-- ADR-0011: BitLinear and Hybrid Ternary MatMul
-
-**Remaining:**
-- Calibration pass: `f32` → ternary via threshold `Δ`
-- `TernaryTensor::packed()` — 2-bit packing (4 weights/byte) for storage efficiency
-- Ternary-aware `Silu` (skip SiLU, output is already logits)
-
-### Phase 4 — Zero-Copy Semantic File System (SFS)
-
-Map NVMe storage directly into kernel VAS via page tables + DMA. Use `zerocopy` crate for safe transmutation. Eliminate all buffer copies between persistent storage and Ring 0 context memory.
-
-**Key deliverables:**
-- `src/nvme.rs`: minimal NVMe driver (submission/completion queues)
-- SFS virtual address range (`0x5000_0000_0000 – 0x6000_0000_0000`)
-- `zerocopy` integration for Tensor ↔ `&[u8]` transmutation
-
-### Phase 5 — Skills-as-Modules (WASM Component Model)
-
-Ephemeral skill execution via `wasmi`. No installed applications — only on-demand WASM instances that are dropped after execution, freeing all memory without GC.
-
-**Key deliverables:**
-- `src/wasm.rs`: wasmi embedder with custom tensor host functions
-- Linear memory pool: pre-allocated 64-page slabs per skill
-- Capability-based import validation
-
-### Phase 6 — Hardware-Aware AIOS Syscalls (Zero-Trust)
-
-Every privilege-escalating call from Ring 2 is intercepted and evaluated by the Neural Cortex (LLM) before hardware execution. Default-deny policy; skills request capabilities explicitly.
-
-**Key deliverables:**
-- `src/syscall.rs`: syscall dispatch table
-- Capability token per skill instance
-- Cortex evaluation bridge (Linear → argmax for allow/deny)
-
----
-
-*See ADR-0010 for complete architectural details.*
+1. **Memória** — Bitmap Allocator + Huge Pages (Sprints 11–13)
+2. **Kernel** — Agent Scheduler (Sprints 14–15)
+3. **IPC** — EventBus + Capability Tokens (Sprints 16–17)
+4. **Skills** — Skill Registry + MCP (Sprints 18–20)
+5. **Cognitivo** — Intent Planner + Success Engine (Sprints 21–23)
+6. **Meta** — MatMul-free LM (Sprints 24+)

@@ -1,128 +1,143 @@
 # Roadmap — neural-os-core
 
 **Última atualização:** 2026-06-22  
-**Documento vivo:** Alinhado ao ADR-0010 (Estratégico) e ADR-0013 (Estado da Arte 2026).
+**Documento vivo:** Alinhado ao ADR-0010 (Estratégico), ADR-0013 (Estado da Arte 2026) e ADR-0013 (Design System).
+
+A ordem de engenharia abaixo segue a dependência física do bare-metal: primeiro a memória, depois o kernel, depois a comunicação entre agentes, depois o runtime de skills, e por último o planejador cognitivo.
 
 ---
 
-## Fase 3 — Córtex BitNet b1.58 (Atual)
+## 1. Memória Física e Virtual (Bitmap Allocator & Huge Pages)
 
-**Sprints:** 9–11  
+**Sprints:** 11–13  
 **Target:** Q3 2026  
-**Status:** Sprint 10 concluído, 1 sprint restante
+**Depende de:** Fase 2 (OffsetPageTable, BootInfoFrameAllocator)
 
-### Concluído
+### Justificativa
 
-- `TernaryTensor` — armazenamento `i8` com valores {-1, 0, +1}
-- `matmul_hybrid()` — kernel ADD/SUB-only (zero multiplicações FPU)
-- `BitLinear` — camada densa ternária com forward pass
-- `PackedTernaryTensor` — 4 pesos por byte (2-bit encoding)
-- `quantize_to_packed(tensor, threshold)` — calibração f32 → ternário
-- Compressão de 12× (24 bytes f32 → 2 bytes packed)
-- ADR-0011, ADR-0012
+Sem um alocador de frames não-monotônico, não podemos reutilizar memória física. Sem Huge Pages (2 MiB / 1 GiB), o TLB será saturado pelas sessões de inferência longas do BitNet.
 
-### Metas Restantes (Sprint 11)
+### Metas
 
-- [ ] **Bitmap/Slab FrameDeallocator** — reuso real de frames físicos
-- [ ] **Benchmark ternário vs f32** — medir perf em QEMU para fechar Phase 3
+- [ ] **Bitmap Frame Allocator** — alocação/liberação O(1) com bitmap de 4 KiB frames. Substitui `BootInfoFrameAllocator` monotônico e `EmptyFrameDeallocator` stub.
+- [ ] **Suporte a Huge Pages (2 MiB)** — mapper no `OffsetPageTable` para `PageSize::Size2MiB`. Redução de TLB misses em ~512× vs 4 KiB pages.
+- [ ] **Suporte a Huge Pages (1 GiB)** — para sessões de inferência que exigem >512 MiB contíguos. Opcional: verificar suporte via CPUID.
+- [ ] **Slab Allocator para heap** — reduzir fragmentação do `LockedHeap` (100 KB fixo). Alocar `Vec`, `Tensor` e `Message` em slabs de tamanho fixo.
 
-### Metas Pós-Sprint 11 (Refinamento Fase 3)
+### Alinhamento SotA
 
-- [ ] **Substituição de `libm::expf` por Aproximação Racional de Padé** — usar `tinyml-rs` para aproximar SiLU sem chamada de função de ponto flutuante (redução de latência em ~40% no forward do Intent Router)
-- [ ] **Integração de Kernels TL/I2_S** — lookup table para eliminar branches condicionais do `matmul_hybrid()`. Packing de 16 pesos por DWORD (32 bits). Kernel branchless: `LUT[input_bits ^ weights_dword]` substitui `match w { 1=>add, -1=>sub }`
-- [ ] **Suporte a parsing GGUF** — carregar pesos pré-treinados diretamente em `PackedTernaryTensor` via formato GGUF (inspirado por MerlionOS)
+- MerlionOS: mapeamento de GGUF diretamente em Huge Pages confirmou redução de TLB misses em 40% durante inferência.
+- FairyFuse: TL/I2_S exige DWORD-aligned weight buffers (32 bits) — Huge Pages eliminam fragmentação externa.
 
 ---
 
-## Fase 4 — Memory Fabric & SFS Zero-Copy
+## 2. Kernel Abstraction (Agent Scheduler)
 
-**Sprints:** 12–15  
+**Sprints:** 14–15  
 **Target:** Q4 2026  
-**Status:** Planejamento
+**Depende de:** Fase 1 (Bitmap Allocator, slabs)
 
-### Visão
+### Justificativa
 
-Substituir o block I/O clássico por um **Semantic File System** onde armazenamento NVMe é mapeado diretamente no VAS do kernel via DMA, sem nenhuma cópia de buffer. Memória é endereçada por *conteúdo semântico* (embeddings, KV-cache), não por blocos ou inodes.
+O `loop { hlt() }` atual não escala. Precisamos de um scheduler que gerencie múltiplos `AgentProcess`, cada um com seu contexto, prioridade e fila de skills.
 
 ### Metas
 
-- [ ] **Driver NVMe mínimo** — filas de submissão/completion, mapeamento de BARs PCIe
-- [ ] **Huge Pages (2 MiB / 1 GiB)** — mapear SFS com páginas enormes para reduzir TLB misses durante inferência (inspirado por MerlionOS)
-- [ ] **`zerocopy` transmutation** — `Tensor` ↔ `&[u8]` sobre páginas mapeadas, sem `serde`
-- [ ] **Episodic Memory** — KV-cache persistente via páginas físicas mantidas ativas entre boot cycles (NVMe com battery-backup ou S3 sleep)
-- [ ] **Namespace SFS** — faixa de endereços virtuais `0x5000_0000_0000 – 0x6000_0000_0000`
+- [ ] **`AgentProcess` trait + struct** — id, priority, embedding, skill_queue, tick()
+- [ ] **Agent Scheduler** — round-robin com prioridade. A cada tick, percorre a lista de agentes e chama `tick()`. O scheduler consulta o Intent Router (MLP) para decisões de prioridade.
+- [ ] **Criação/Destruição de agentes via EventBus** — `Topic::AgentCreated`, `Topic::AgentDestroyed`
+- [ ] **Budget de execução** — limite de `tokens_consumed` por agente por ciclo. Agentes que excedem são rebaixados de prioridade.
 
-### Dependências
+### Alinhamento SotA
 
-- Fase 2 (page tables, `OffsetPageTable`)
-- Fase 3 (tensores ternários para storage de embeddings)
-- QEMU com emulação NVMe (`-device nvme`)
+- ASA / Neural eBPF: validam que ML leve (MLP 4→2) para decisões de scheduler sub-µs é viável e superior a heurísticas fixas.
+- Mixture-of-Schedulers: nosso Intent Router (MLP 3→2) evolui para rotear políticas de sistema em tempo real.
 
 ---
 
-## Fase 5 — Skills-as-Modules (WASM Component Model + MCP)
+## 3. Event Bus & IPC (Capability Tokens)
 
-**Sprints:** 16–18  
+**Sprints:** 16–17  
 **Target:** Q1 2027  
-**Status:** Planejamento
+**Depende de:** Fase 2 (Agent Scheduler), slabs para mensagens
 
-### Visão
+### Justificativa
 
-Agentes efêmeros executados como módulos WASM isolados em Ring 2, instanciados sob demanda pelo Córtex Neural e descartados após execução. Zero processos zumbis, zero garbage collector, zero instalação.
+O sistema não pode ter syscalls tradicionais. Toda comunicação entre Ring 0, Ring 1 e Ring 2 passa pelo `EventBus` com tokens de capacidade verificados em cada mensagem.
 
 ### Metas
 
-- [ ] **`wasmi` embedder** — interpretador WASM com host functions para `tensor.matmul`, `nn.silu`, `sfs.read`
-- [ ] **Memory pool** — slabs pré-alocados de 256 KB por skill
-- [ ] **Capability-based imports** — cada skill declara imports; Córtex valida contra allowlist
-- [ ] **MCP (Model Context Protocol)** — skills se comunicam com o Córtex via mensagens estruturadas (não syscalls)
+- [ ] **`EventBus` trait + implementação concreta** — `Vec<Vec<Message>>` indexada por `AgentId` no kernel; ring-buffer lock-free em Huge Pages na versão otimizada.
+- [ ] **`CapabilityToken`** — struct com `agent_id` e `permissions: u64` bitmap. Verificado pelo `EventBus::authorize()` antes de cada publish/delivery.
+- [ ] **`Topic` enum completo** — AgentCreated, AgentDestroyed, SkillRequest, SkillOutput, CortexDecision, WatchdogTick, MemoryPressure.
+- [ ] **Roteamento baseado em ML** — para tópicos de alta frequência (ex: WatchdogTick), o EventBus consulta o Intent Router para decidir quais assinantes recebem a mensagem (evita flooding).
+
+### Alinhamento SotA
+
+- Capability-based IPC é padrão em seL4 e Fuchsia. Nosso diferencial: o token é avaliado pelo MLP, não por ACL estática.
+- Zero-copy entre Ring 0 e Ring 2: mensagens são `&[u8]` fat pointers sobre páginas compartilhadas (preparação para SFS Fase 4).
 
 ---
 
-## Fase 6 — Success Engine & Neural Syscalls
+## 4. Skill Registry & MCP
 
-**Sprints:** 19–21  
+**Sprints:** 18–20  
 **Target:** Q2 2027  
-**Status:** Planejamento
+**Depende de:** Fase 3 (EventBus), Fase 1 (Huge Pages)
 
-### Visão
+### Justificativa
 
-Todo syscall de Ring 2 (WASM) é interceptado e avaliado semanticamente pelo Neural Córtex antes de executar no silício. Política *default-deny*: nenhum acesso a hardware ou persistência sem permissão explícita.
+Agentes precisam de habilidades executáveis. Em vez de syscalls, skills são módulos WASM carregados sob demanda, com ciclo de vida gerenciado pelo `SkillRegistry`.
 
 ### Metas
 
-- [ ] **Dispatch table** — `#[no_mangle] extern "C"` entry points para syscalls
-- [ ] **Capability token** — token criptográfico por instância de skill, escopo de operações permitidas
-- [ ] **Neural evaluation** — Linear → argmax decide allow/deny em nível semântico
-- [ ] **Success Engine** — Córtex aprende com sucesso/fracasso das ações para ajustar pesos online
+- [ ] **`Skill` trait + registry** — lookup por `SkillId`, ciclo de vida (load → execute → drop), `CapabilitySet` validation.
+- [ ] **WASM embedder (`wasmi`)** — runtime WASM em `no_std` (ou `std` para ferramentas de host). Host functions: `tensor.matmul`, `nn.silu`, `sfs.read`.
+- [ ] **MCP (Model Context Protocol)** — mensagens estruturadas entre skill e Córtex. Formato: `{ "type": "skill_request", "skill_id": "...", "input_tensor": [...], "token": "...". }`.
+- [ ] **Linear memory pool** — slabs pré-alocados de 256 KB por skill, alocados do alocador de slabs (Fase 1).
+
+### Alinhamento SotA
+
+- WASM Component Model: skills como módulos efêmeros, sem instalação persistente.
+- MCP: skills se comunicam com o Córtex via mensagens no EventBus (não syscalls diretos).
 
 ---
 
-## Meta Futura: MatMul-free LM
+## 5. Cognitive Runtime (Intent Planner)
 
-**Target:** Pós-Fase 6 (Q3 2027+)
+**Sprints:** 21–23  
+**Target:** Q3 2027  
+**Depende de:** Fase 4 (Skill Registry), Fase 3 (EventBus)
 
-Eliminar operações de multiplicação de matrizes (self-attention) do pipeline de inferência, substituindo por mecanismos de pooling ternário ou estados recorrentes (RWKV, Mamba). Se bem-sucedido, o neural-os-core executará modelos com **zero multiplicações FPU** — da camada de embedding à saída logits.
+### Justificativa
 
-### Referências
+O Intent Router atual (MLP 3→2) decide apenas a próxima ação imediata. O Cognitive Runtime mantém um plano de múltiplas etapas — uma sequência de skills a executar para satisfazer a intenção do usuário.
 
-- RWKV: Recurrent Neural Networks with Linear Attention (2024)
-- Mamba: Selective State Space Models (2024)
-- BitNet b1.58: Elimination of FPU multiplications in FFN layers
+### Metas
+
+- [ ] **Intent Planner** — recebe uma embedding de intenção e produz uma sequência de `SkillCommand`s. Usa o MLP atual como política gulosa, evoluindo para beam search.
+- [ ] **Success Engine** — feedback loop: se uma skill retorna `success: false`, o planner ajusta a política (pesos do MLP) online.
+- [ ] **Neural Cache** — cache de decisões do planner com ~50 ns de latência para intenções repetidas. Implementado como lookup table em Huge Pages.
+- [ ] **MatMul-free LM (meta futura)** — substituir self-attention por pooling ternário ou estados recorrentes (RWKV, Mamba). Eliminar **todas** as multiplicações FPU do pipeline.
+
+### Alinhamento SotA
+
+- ASA: scheduling adaptativo com ML. O Cognitive Runtime leva o conceito ao nível de planejamento de intenções.
+- Neural Kernel (eBPF + RL): políticas de kernel aprendidas online. Nosso Success Engine faz o mesmo com feedback de execução de skills.
 
 ---
 
 ## Timeline Consolidada
 
-| Fase | Sprints | Target | Depende de |
-|---|---|---|---|
-| **3** Córtex BitNet b1.58 | 9–11 | Q3 2026 | Fase 2 |
-| **3+** Refinamento TL/I2_S + Padé | — | Contínuo | Fase 3 |
-| **4** Memory Fabric & SFS | 12–15 | Q4 2026 | Fase 2, NVMe em QEMU |
-| **5** WASM Skills & MCP | 16–18 | Q1 2027 | Fase 2 + 4 (SFS) |
-| **6** Success Engine & Neural Syscalls | 19–21 | Q2 2027 | Fase 5 |
-| **7** MatMul-free LM | 22+ | Q3 2027+ | Fase 3–6 |
+| Ordem | Componente | Sprints | Target | Depende de |
+|---|---|---|---|---|
+| 1 | Memória (Bitmap + Huge Pages + Slabs) | 11–13 | Q3 2026 | Fase 2 (page tables) |
+| 2 | Kernel Abstraction (Agent Scheduler) | 14–15 | Q4 2026 | Fase 1 (memória) |
+| 3 | Event Bus & IPC (Capability Tokens) | 16–17 | Q1 2027 | Fase 2 (scheduler) |
+| 4 | Skill Registry & MCP | 18–20 | Q2 2027 | Fase 3 (EventBus) + Fase 1 (Huge Pages) |
+| 5 | Cognitive Runtime (Intent Planner) | 21–23 | Q3 2027 | Fase 4 (skills) |
+| — | MatMul-free LM (meta futura) | 24+ | Q4 2027+ | Fase 3–5 |
 
 ---
 
-*Consulte ADR-0010 (Strategic Roadmap) e ADR-0013 (Executive Summary / Estado da Arte 2026) para fundamentação arquitetural completa.*
+*Consulte ADR-0010 (Strategic Roadmap) e ADR-0013 (Executive Summary / Estado da Arte 2026 + Design System) para fundamentação arquitetural completa.*

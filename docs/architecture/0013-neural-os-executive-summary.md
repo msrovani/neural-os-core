@@ -140,6 +140,215 @@ A pesquisa acadêmica 2025/2026 confirma:
 
 O neural-os-core permanece inédito na integração simultânea dos quatro pilares. Esta ADR serve como manifesto arquitetural e prova de ineditabilidade para publicação acadêmica futura.
 
+---
+
+## Estrutura Monorepo (Cargo Workspace)
+
+Inspirado pelo ecossistema `aios-rs`, o repositório será reorganizado como um Cargo Workspace com crates independentes, cada um responsável por um domínio do sistema:
+
+```
+neural-os-core/
+├── Cargo.toml                    # Workspace root
+├── crates/
+│   ├── neural-kernel/            # Ring 0 — microkernel bare-metal
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs           # entry_point, panic handler, boot flow
+│   │       ├── vga_buffer.rs
+│   │       ├── serial.rs
+│   │       ├── interrupts.rs     # IDT, GDT, TSS, PIC, PIT
+│   │       ├── memory.rs         # OffsetPageTable, allocators
+│   │       ├── simd.rs
+│   │       ├── tensor.rs         # Tensor, TernaryTensor, PackedTernaryTensor
+│   │       └── nn.rs             # silu, Linear, BitLinear, argmax
+│   │
+│   ├── agent-core/               # Ring 1 — abstração de agente (no_std)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── process.rs        # AgentProcess trait + struct
+│   │       ├── scheduler.rs      # Agent Scheduler (MLP-driven)
+│   │       └── context.rs        # Context memory, KV-cache
+│   │
+│   ├── skill-registry/           # Ring 2 — WASM Skills + MCP (no_std ou std)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── registry.rs       # Skill trait, lookup, lifecycle
+│   │       ├── wasm.rs           # wasmi embedder / WASM runtime
+│   │       └── mcp.rs            # Model Context Protocol messages
+│   │
+│   └── event-bus/                # IPC — publish/subscribe interno (no_std)
+│       ├── Cargo.toml
+│       └── src/
+│           ├── lib.rs
+│           ├── bus.rs            # EventBus core, channels
+│           ├── capability.rs     # CapabilityToken, permission model
+│           └── message.rs        # Event, Message, Priority
+│
+├── docs/                         # ADRs, roadmap, session logs
+└── Cargo.lock
+```
+
+### Regras do Workspace
+
+1. `neural-kernel` é o único crate que depende do `bootloader` e roda em bare-metal (`#![no_std]`, `x86_64-unknown-none`).
+2. `agent-core` e `event-bus` são `no_std` — podem ser compilados para host (testes unitários) ou target (kernel).
+3. `skill-registry` pode optar por `std` quando compilado para ferramentas de host (ex: carregar .wasm do filesystem para testes). No kernel, usa `no_std` + alocador personalizado.
+4. Dependências entre crates seguem a seta de isolamento: `neural-kernel ← agent-core ← skill-registry ← event-bus` (nenhuma dependência cíclica).
+
+---
+
+## Design System (Rust Traits)
+
+### AgentProcess
+
+Define a unidade mínima de execução no sistema — um agente que possui identidade, contexto e uma fila de habilidades a executar.
+
+```rust
+/// Identificador único de 64 bits para um agente no sistema.
+/// Gerado pelo Agent Scheduler no momento da criação.
+pub type AgentId = u64;
+
+/// Prioridade de execução do agente. Decidida pelo Intent Router.
+#[repr(u8)]
+pub enum Priority {
+    Critical = 0,
+    High     = 1,
+    Normal   = 2,
+    Low      = 3,
+    Idle     = 4,
+}
+
+/// Contexto de execução de um agente.
+/// Mantido em Ring 0 (context memory) e consultado a cada forward pass.
+pub struct AgentContext {
+    pub id: AgentId,
+    pub priority: Priority,
+    pub embedding: [f32; 3],       // embedding de intenção (input do MLP)
+    pub skill_queue: Vec<SkillId>, // fila de skills a executar
+}
+
+/// Trait que todo agente deve implementar.
+pub trait AgentProcess {
+    fn id(&self) -> AgentId;
+    fn context(&self) -> &AgentContext;
+    fn context_mut(&mut self) -> &mut AgentContext;
+    fn tick(&mut self) -> Option<SkillCommand>;  // chamado a cada ciclo do scheduler
+}
+```
+
+### Skill (Trait)
+
+Habilidade executável — opera em Ring 2 (WASM) no futuro, mas o trait é agnóstico ao runtime.
+
+```rust
+/// Identificador de skill (UUID simplificado para 64 bits).
+pub type SkillId = u64;
+
+/// Resultado da execução de uma skill.
+pub struct SkillOutput {
+    pub tensor: Option<Tensor>,       // tensor de saída (ex: logits)
+    pub tokens_consumed: usize,       // budget consumido
+    pub success: bool,
+}
+
+/// Conjunto de capacidades que uma skill declara necessitar.
+pub struct CapabilitySet {
+    pub requires_network: bool,
+    pub requires_persist: bool,
+    pub requires_mmio: bool,
+    pub max_memory_pages: usize,
+}
+
+/// Trait que toda skill deve implementar.
+pub trait Skill {
+    fn name(&self) -> &'static str;
+    fn capabilities(&self) -> CapabilitySet;
+    fn execute(&mut self, input: &Tensor) -> SkillOutput;
+    fn drop(&mut self);  // cleanup forçado pelo scheduler
+}
+```
+
+### EventBus (Publish/Subscribe com Capability Tokens)
+
+Único mecanismo de IPC do sistema. Não há syscalls diretos — toda comunicação entre Ring 0, Ring 1 e Ring 2 passa por mensagens no barramento.
+
+```rust
+/// Token de capacidade — acompanha toda mensagem no barramento.
+/// Gerado pelo Agent Scheduler e verificado pelo EventBus antes de entregar.
+pub struct CapabilityToken {
+    pub agent_id: AgentId,
+    pub permissions: u64,  // bitmap de permissões
+}
+
+/// Mensagem trafegada no barramento.
+pub struct Message {
+    pub topic: Topic,
+    pub payload: &'static [u8],  // fat pointer para dado serializado
+    pub token: CapabilityToken,
+    pub priority: Priority,
+}
+
+/// Tópicos do barramento de eventos.
+pub enum Topic {
+    AgentCreated(AgentId),
+    AgentDestroyed(AgentId),
+    SkillRequest(SkillId),
+    SkillOutput { skill: SkillId, output: SkillOutput },
+    CortexDecision { action: u8, confidence: f32 },
+    WatchdogTick(u64),
+    MemoryPressure { free_pages: usize, threshold: usize },
+}
+
+/// Trait do barramento de eventos.
+pub trait EventBus {
+    /// Inscreve um agente em um tópico.
+    fn subscribe(&mut self, agent: AgentId, topic: Topic) -> Result<(), ()>;
+
+    /// Cancela inscrição.
+    fn unsubscribe(&mut self, agent: AgentId, topic: &Topic);
+
+    /// Publica uma mensagem no barramento.
+    /// A mensagem só é entregue se o token do remetente tiver permissão para o tópico.
+    fn publish(&mut self, msg: Message) -> Result<(), ()>;
+
+    /// Um agente consome a próxima mensagem de sua fila (non-blocking).
+    fn poll(&mut self, agent: AgentId) -> Option<Message>;
+
+    /// Verifica se um token tem permissão para publicar/consumir em um tópico.
+    fn authorize(&self, token: &CapabilityToken, topic: &Topic) -> bool;
+}
+```
+
+### Fluxo de Execução com Traits
+
+```
+boot → AgentScheduler::new()
+         ├─ EventBus::subscribe(cortex, Topic::SkillRequest)
+         ├─ EventBus::subscribe(cortex, Topic::AgentCreated)
+         └─ loop {
+              for agent in agents {
+                  if let Some(cmd) = agent.tick() {
+                      let msg = Message { topic: SkillRequest(cmd.skill_id), ... };
+                      event_bus.publish(msg);  // EventBus verifica token
+                  }
+              }
+              if let Some(msg) = event_bus.poll(cortex_id) {
+                  // Cortex processa e publica decisão
+                  event_bus.publish(Message { topic: CortexDecision {...}, ... });
+              }
+            }
+```
+
+### Regras de Design
+
+1. **AgentProcess** é a única abstração de usuário no sistema — não há `Process` ou `Thread`.
+2. **Skill** substitui o conceito de "syscall": skills são funções puras (input → output) que executam em sandbox.
+3. **EventBus** substitui IPC clássico (sockets, pipes, signals). Todo estado compartilhado passa por mensagens com tokens de capacidade verificados.
+4. Nenhum trait depende de `std`. Todos usam `core` + `alloc`.
+5. A implementação concreta de `EventBus` usa uma `Vec<Vec<Message>>` indexada por `AgentId` no kernel, evoluindo para um ring-buffer lock-free em Huge Pages na Fase 4.
+
 ## References
 
 - MerlionOS: A Bare-Metal Rust OS with GGUF Model Parsing (2025)
