@@ -12,6 +12,7 @@
 ## Sprint 10 — 2-bit Packing and Ternary Quantization (Complete)
 ## Sprint 11 — Bitmap Frame Allocator (Complete)
 ## Sprint 12 — Kernel Abstraction: Async Neural Executor (Complete)
+## Sprint 13 — Event Bus IPC com Capability Tokens (Complete)
 
 ### Current Status
 
@@ -32,6 +33,11 @@
 | AgentTask | ✅ `id`, `Pin<Box<dyn Future>>`, `AtomicU64` ID generation |
 | DummyWaker | ✅ `RawWakerVTable` em `no_std` (clone/wake/drop no-ops) |
 | system_daemon | ✅ `async fn` test — spawn, executa, complete, idle loop com hardware context |
+| EventBus crate | ✅ `event-bus` — `no_std`, `alloc`, publish/subscribe com `BTreeMap` + `Arc<Mutex<VecDeque>>` |
+| CapabilityToken | ✅ `pub struct CapabilityToken(pub u64)` — `is_valid()` check (token > 0) |
+| Event | ✅ `{ id, topic, payload, token }` — ID gerado automaticamente no publish |
+| Publish/Subscribe | ✅ `subscribe(topic) -> Receiver`, `publish(Event) -> Result` com validação de token |
+| IPC Flow | ✅ `system_daemon` subscribe → yield → `hardware_monitor` publish → receive → complete |
 | Heap | ✅ `LockedHeap` global allocator (linked_list_allocator v0.9.1) |
 | `alloc` crate | ✅ `Box`, `Vec` testados no boot flow |
 | FPU/SSE (SIMD) | ✅ CR0: clear EMULATE_COPROC, set MONITOR + NUMERIC_ERROR |
@@ -75,6 +81,10 @@
 | `crates/neural-kernel/src/task/mod.rs` | `DummyWaker` — `RawWakerVTable` em `no_std` |
 | `crates/neural-kernel/src/task/agent.rs` | `AgentTask` — `id: u64`, `Pin<Box<dyn Future>>` |
 | `crates/neural-kernel/src/task/executor.rs` | `NeuralExecutor` — `VecDeque` loop cooperativo |
+| `crates/event-bus/src/lib.rs` | Re-exports: `EventBus`, `CapabilityToken`, `Event` |
+| `crates/event-bus/src/capability.rs` | `CapabilityToken(pub u64)` — validação de permissão |
+| `crates/event-bus/src/event.rs` | `Event { id, topic, payload, token }` |
+| `crates/event-bus/src/bus.rs` | `EventBus` — `BTreeMap<String, Vec<Arc<Mutex<VecDeque>>>>` |
 | `Cargo.toml` (root) | Workspace manifest |
 | `crates/neural-kernel/Cargo.toml` | Kernel package, deps, bootimage metadata |
 | `crates/agent-core/Cargo.toml` | Agent abstraction crate (stub) |
@@ -129,13 +139,13 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Ação Imediata (Concluída):** Bitmap Frame Allocator implementado — 128 KB bitmap, init UEFI, alloc/dealloc, `allocate_contiguous()` para Huge Pages, `hardware_context_tensor() -> [f32; 2]`. 1000 alloc/dealloc estáveis em QEMU. Monorepo workspace criado.
 
-**Sprint 12 (Concluído):** Kernel Abstraction — Neural Executor cooperativo (`VecDeque<AgentTask>`, `RawWakerVTable` em `no_std`). Substitui o `loop { hlt() }` por polling assíncrono. AgentTask com IDs atômicos, DummyWaker, e log do `hardware_context_tensor` a cada 100 iterações.
+**Sprint 13 (Concluído):** Event Bus IPC — crate `event-bus` com `CapabilityToken`, `Event`, `EventBus` (publish/subscribe). `system_daemon` assina "SYSTEM_READY" e aguarda assincronamente. `hardware_monitor_daemon` publica o evento com token validado. IPC cooperativo entre agentes via `yield_now().await`.
 
-### Pendências (Sprint 13)
+### Pendências (Sprint 14)
 
-- [x] NeuralExecutor + AgentTask + DummyWaker (RawWakerVTable)
-- [x] async system_daemon — spawn, poll, complete
-- [x] Executor idle loop: hardware context + watchdog + hlt
+- [x] EventBus — publish/subscribe com validação de CapabilityToken
+- [x] Receiver — `try_receive()` para polling não-bloqueante
+- [x] yield_now() — cooperação explícita entre tasks
 - [ ] Slab allocator — reduzir fragmentação do heap
 
 ---

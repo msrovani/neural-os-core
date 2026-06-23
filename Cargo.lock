@@ -42,6 +42,9 @@ dependencies = [
 [[package]]
 name = "event-bus"
 version = "0.1.0"
+dependencies = [
+ "spin",
+]
 
 [[package]]
 name = "fixedvec"
@@ -90,9 +93,10 @@ dependencies = [
 
 [[package]]
 name = "neural-kernel"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "bootloader",
+ "event-bus",
  "lazy_static",
  "libm",
  "linked_list_allocator",

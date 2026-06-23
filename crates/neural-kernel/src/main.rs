@@ -5,9 +5,11 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use bootloader::bootinfo::BootInfo;
+use event_bus::{CapabilityToken, Event};
 use memory::BitmapFrameAllocator;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 
@@ -20,6 +22,12 @@ mod simd;
 mod task;
 mod tensor;
 mod vga_buffer;
+
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
+}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -147,10 +155,45 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     let mut executor = task::executor::NeuralExecutor::new(&frame_allocator);
     executor.spawn(task::agent::AgentTask::new(system_daemon()));
+    executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon()));
     executor.run();
 }
 
 async fn system_daemon() {
-    println!("[DAEMON] Agente assincrono inicializado.");
-    serial_println!("[DAEMON] Agente assincrono inicializado.");
+    println!("[DAEMON] Agente assincrono inicializado. Aguardando SYSTEM_READY...");
+    serial_println!("[DAEMON] Agente assincrono inicializado. Aguardando SYSTEM_READY...");
+
+    let receiver = EVENT_BUS.subscribe("SYSTEM_READY");
+
+    loop {
+        if let Some(event) = receiver.try_receive() {
+            println!("[IPC] Evento recebido no topico {} com payload protegido. Token: {}",
+                event.topic, event.token.0);
+            serial_println!("[IPC] Evento recebido no topico {} com payload protegido. Token: {}",
+                event.topic, event.token.0);
+            println!("[DAEMON] SYSTEM_READY confirmado. Ciclo de inicializacao completo.");
+            serial_println!("[DAEMON] SYSTEM_READY confirmado. Ciclo de inicializacao completo.");
+            break;
+        }
+        task::yield_now().await;
+    }
+}
+
+async fn hardware_monitor_daemon() {
+    let event = Event {
+        id: 0,
+        topic: String::from("SYSTEM_READY"),
+        payload: vec![1, 2, 3],
+        token: CapabilityToken(1),
+    };
+    match EVENT_BUS.publish(event) {
+        Ok(()) => {
+            println!("[MONITOR] Evento SYSTEM_READY publicado.");
+            serial_println!("[MONITOR] Evento SYSTEM_READY publicado.");
+        }
+        Err(e) => {
+            println!("[MONITOR] Falha na publicacao: {}", e);
+            serial_println!("[MONITOR] Falha na publicacao: {}", e);
+        }
+    }
 }
