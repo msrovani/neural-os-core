@@ -23,7 +23,7 @@
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
 | Panic Handler | ✅ Logs to VGA and serial simultaneously |
-| IDT | ✅ Breakpoint + Double Fault handlers, IST stack switch for DF |
+ | IDT | ✅ Breakpoint + Double Fault + Page Fault + GPF + NP + SS + TS + AC handlers; vetores 33-255 com `unhandled_interrupt_handler` (EOI duplo) |
 | GDT + TSS | ✅ Custom GDT with TSS descriptor for Double Fault stack switching |
 | Page Tables | ✅ `OffsetPageTable` via `Cr3` + `physical_memory_offset` |
 | Frame Allocator | ✅ `BitmapFrameAllocator` — bitmap 128 KB, init via UEFI map, alloc/dealloc O(n), 0% leak |
@@ -72,7 +72,7 @@
 | `crates/neural-kernel/src/main.rs` | Entry point, panic handler, boot flow |
 | `crates/neural-kernel/src/vga_buffer.rs` | VGA Writer, `print!/println!` |
 | `crates/neural-kernel/src/serial.rs` | 16550 UART, `serial_print!/serial_println!` |
-| `crates/neural-kernel/src/interrupts.rs` | IDT, TSS, GDT, Breakpoint + Double Fault + Page Fault + PIT Timer + PIC remap |
+ | `crates/neural-kernel/src/interrupts.rs` | IDT, TSS, GDT, Breakpoint + Double Fault + Page Fault + PIT Timer + PIC remap + GPF/NP/SS/TS/AC handlers + `unhandled_interrupt_handler` |
 | `crates/neural-kernel/src/memory.rs` | `OffsetPageTable`, `BitmapFrameAllocator`, `init_memory()` |
 | `crates/neural-kernel/src/allocator.rs` | `LockedHeap` global allocator, `init_heap()` |
 | `crates/neural-kernel/src/simd.rs` | `enable_simd()` — CR0/CR4 FPU/SSE enablement |
@@ -116,9 +116,9 @@
 
 ### Known Issues
 
-1. **`spin::Mutex` single-core** — deadlock if exception fires while VGA/heap lock is held.
-2. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
-3. **MinGW linker required** — `bootimage` needs C linker.
+1. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
+2. **MinGW linker required** — `bootimage` needs C linker.
+3. **IDT coverage** — Vetores 33-255 têm `unhandled_interrupt_handler` (EOI duplo), seguro mas sem diagnóstico. Futuro: mascarar IRQs não usadas no PIC.
 
 ### Next Steps (Sprint 11 — Phase 3 close + SotA integration)
 
@@ -147,6 +147,8 @@ O blueprint de código do neural-os-core está consolidado em:
 **Sprint 13 (Concluído):** Event Bus IPC — crate `event-bus` com `CapabilityToken`, `Event`, `EventBus` (publish/subscribe). `system_daemon` assina "SYSTEM_READY" e aguarda assincronamente. `hardware_monitor_daemon` publica o evento com token validado. IPC cooperativo entre agentes via `yield_now().await`.
 
 **Sprint 14 (Concluído):** Skill Registry e MCP Layer operacionais. Crate `skill-registry` com `Skill` trait (Send+Sync), `McpManifest` (nome, descrição, tokens requeridos), e `SkillRegistry` — registro central com validação Zero-Trust de `CapabilityToken` antes da execução. `EchoSkill` de demonstração registrada no boot, executada pelo agente `system_daemon` ao receber `SYSTEM_READY`. Saída QEMU verificada: `[SKILL] EchoSkill executada. Output reverso: [3, 2, 1]`.
+
+**FIX:** Kernel Panic (Double Fault) no idle loop foi corrigido. Raiz: IRQ não tratada (keyboard, vetor 33) sem handler → #NP sem handler → Double Fault. Solução: `unhandled_interrupt_handler` registrado para vetores 33-255 com EOI duplo; handlers para #GP, #NP, #SS, #TS, #AC registrados; timer handler usa `out 0x20, 0x20` raw (sem spinlock). Sistema estável testado até 1400+ ticks PIT.
 
 ### Pendências (Sprint 15)
 

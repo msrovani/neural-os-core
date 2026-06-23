@@ -58,7 +58,15 @@ lazy_static! {
                 .set_stack_index(DOUBLE_FAULT_IST_INDEX);
         }
         idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.general_protection_fault.set_handler_fn(gpf_handler);
+        idt.stack_segment_fault.set_handler_fn(stack_segment_handler);
+        idt.segment_not_present.set_handler_fn(segment_not_present_handler);
+        idt.invalid_tss.set_handler_fn(invalid_tss_handler);
+        idt.alignment_check.set_handler_fn(alignment_check_handler);
         idt[32].set_handler_fn(timer_handler);
+        for i in 33..=255usize {
+            idt[i].set_handler_fn(unhandled_interrupt_handler);
+        }
         idt
     };
 }
@@ -72,9 +80,9 @@ extern "x86-interrupt" fn double_fault_handler(
     _stack_frame: InterruptStackFrame,
     error_code: u64,
 ) -> ! {
-    println!("[EXCEPTION] DOUBLE FAULT - Erro irrecuperavel na CPU (error_code: {})", error_code);
-    serial_println!("[EXCEPTION] DOUBLE FAULT - Erro irrecuperavel na CPU (error_code: {})", error_code);
-    panic!("Double Fault: erro irrecuperavel na CPU");
+    serial_println!("[EXCEPTION] DOUBLE FAULT (err={}) HALT", error_code);
+    println!("[EXCEPTION] DOUBLE FAULT (err={}) HALT", error_code);
+    loop { x86_64::instructions::hlt(); }
 }
 
 extern "x86-interrupt" fn page_fault_handler(
@@ -92,7 +100,44 @@ extern "x86-interrupt" fn page_fault_handler(
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     unsafe {
-        PICS.lock().notify_end_of_interrupt(PIC_1_OFFSET);
+        core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
+    }
+}
+
+extern "x86-interrupt" fn gpf_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
+    serial_println!("[EXCEPTION] General Protection Fault (err={}) HALT", error_code);
+    println!("[EXCEPTION] General Protection Fault (err={}) HALT", error_code);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn stack_segment_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
+    serial_println!("[EXCEPTION] Stack Segment Fault (err={}) HALT", error_code);
+    println!("[EXCEPTION] Stack Segment Fault (err={}) HALT", error_code);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn segment_not_present_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
+    serial_println!("[EXCEPTION] Segment Not Present (err={}) HALT", error_code);
+    println!("[EXCEPTION] Segment Not Present (err={}) HALT", error_code);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn invalid_tss_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
+    serial_println!("[EXCEPTION] Invalid TSS (err={}) HALT", error_code);
+    println!("[EXCEPTION] Invalid TSS (err={}) HALT", error_code);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn alignment_check_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
+    serial_println!("[EXCEPTION] Alignment Check (err={}) HALT", error_code);
+    println!("[EXCEPTION] Alignment Check (err={}) HALT", error_code);
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn unhandled_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    unsafe {
+        core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
+        core::arch::asm!("out 0xA0, al", in("al") 0x20u8, options(nostack, preserves_flags));
     }
 }
 
