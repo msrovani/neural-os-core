@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.13.0] — 2026-06-23
+
+### Added
+
+- Hardware Neural Routing — IRQ1 keyboard → EventBus → Agent pipeline (`crates/neural-kernel/src/main.rs`)
+  - Top-Half: `keyboard_interrupt_handler` (IDT[33]) lê porta 0x60 → `LAST_SCANCODE` (AtomicU8, Release) → EOI raw
+  - Bottom-Half: `hw_bridge_daemon` (async task) poll AtomicU8 → publica `RAW_HW_IRQ1` no EventBus
+  - `input_daemon` (async task) subscreve RAW_HW_IRQ1 → buffer String → `scancode_to_ascii()` → ENTER publica `USER_INTENT`
+  - `intent_router_daemon` (Cortex) subscreve USER_INTENT → mock inference → `SkillRegistry::execute_skill`
+- Closed Intent Pipeline (Sprint 16)
+  - `SystemStatusSkill` — lê `global_hardware_context()` via TicketLock, loga `"Memoria RAM: {:.2}%"`
+  - 5 tasks spawnadas (3 persistentes), 1000+ PIT ticks estáveis, zero Double Faults
+- `TicketLock` FIFO crate (`crates/ticket-lock/src/lib.rs`)
+  - `TicketLock<T>` — `AtomicUsize ticket/serving`, `UnsafeCell<T>`, spin loop justo
+  - Garantia FIFO, `Send` + `Sync` para T: Send
+  - `TicketLockGuard` com `Deref`/`DerefMut` e incremento `serving` no Drop
+- EventBus refatorado para TicketLock
+  - `EventBus.subscribers`: `spin::Mutex` → `TicketLock<BTreeMap<...>>`
+  - `Receiver.queue`: `Arc<TicketLock<VecDeque<Event>>>`
+  - ID counter: `Arc<AtomicU64>` (was raw u64)
+- `GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>>` — frame allocator encapsulado
+- `init_global_allocator()` — migra frame allocator para TicketLock pós-boot
+- `global_hardware_context()` — acesso thread-safe via TicketLock
+- NeuralExecutor simplificado: campo `frame_allocator` removido, usa `global_hardware_context()`
+- `sync` module (`crates/neural-kernel/src/sync/`) — re-exporta `ticket_lock::*`
+- ADR-0013: Neural OS Executive Summary (SotA 2026)
+
+### Changed
+
+- EventBus modernizado: `spin::Mutex` substituído por `TicketLock` (Sprint 17)
+- BitmapFrameAllocator agora protegido por `TicketLock` (não mais por `spin::Mutex`)
+- NeuralExecutor não gerencia mais frame_allocator — acesso global via TicketLock
+- `interrupts.rs` — expandido com handlers: GPF, Stack Segment, Segment Not Present, Invalid TSS, Alignment Check
+
 ## [0.12.0] — 2026-06-22
 
 ### Added
@@ -15,25 +49,18 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
   - `pub struct NeuralExecutor { task_queue: VecDeque<AgentTask> }` — cooperative polling loop
   - `DummyWaker` via `RawWakerVTable` — no-op waker for `no_std` environments
   - `pub fn run(&mut self)` — replaces `loop { hlt() }`; polls tasks, logs hardware context every 100 iterations
+- Event Bus IPC (`crates/event-bus/`)
+  - `CapabilityToken`, `Event`, `EventBus` with publish/subscribe via `BTreeMap + spin::Mutex`
+  - `Receiver::try_receive()` for non-blocking polling
+  - `yield_now().await` for explicit cooperation
+- Skill Registry & MCP Layer (`crates/skill-registry/`)
+  - `trait Skill: Send + Sync` with `manifest()` + `execute()`
+  - `SkillRegistry` with Zero-Trust CapabilityToken validation
+  - `EchoSkill` — reverses payload bytes
+  - `SystemStatusSkill` — logs RAM occupancy via hardware context
 - `async fn system_daemon()` — test agent that spawns, executes, and completes
+- `async fn hardware_monitor_daemon()` — publishes SYSTEM_READY with Token(1)
 - Boot sequence: `NeuralExecutor::run()` instead of raw `hlt` loop
-
-## [0.11.0] — 2026-06-22
-
-### Added
-
-- `PackedTernaryTensor` struct (`src/tensor.rs`) — 2-bit per weight, 4 weights per byte
-- `pack_weights(weights: &[i8]) -> Vec<u8>` — packs i8 values into u8 with bit shifting
-- `get_weight(index: usize) -> i8` — extracts original value via `(byte >> pos) & 0b11`
-- `matmul_hybrid()` on `PackedTernaryTensor` — reads weights bit-by-bit from packed storage
-- `quantize_to_packed(tensor: &Tensor, threshold: f32) -> PackedTernaryTensor` — f32→ternary calibration
-- ADR-0012: 2-bit Packing and Ternary Quantization
-
-### Changed
-
-- `src/nn.rs::BitLinear` — `weights` field changed from `TernaryTensor` to `PackedTernaryTensor`
-- `src/main.rs` — BitNet test now uses quantization + packed inference flow
-- Version bumped to 0.10.0
 
 ## [0.11.0] — 2026-06-22
 
@@ -45,10 +72,16 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - `allocate_contiguous(count)` — aloca N frames contíguos para Huge Pages (2 MiB / 1 GiB)
 - `hardware_context_tensor() -> [f32; 2]` — `[taxa_ocupacao, 0.0]` via contador de alocações
 - Stress test: 1000 alloc/dealloc estáveis, 0% leak, RAM Tensor confirmado em QEMU
+- `PackedTernaryTensor` struct (`crates/neural-kernel/src/tensor.rs`) — 2-bit per weight, 4 weights per byte
+- `pack_weights()` + `get_weight()` — pack/extract 2-bit ternary values
+- `matmul_hybrid()` on `PackedTernaryTensor` — reads weights bit-by-bit from packed storage
+- `quantize_to_packed(tensor, threshold)` — f32→ternary calibration
+- ADR-0012: 2-bit Packing and Ternary Quantization
 
 ### Changed
 
-- `src/main.rs` — substitui `BootInfoFrameAllocator` + `EmptyFrameDeallocator` por `BitmapFrameAllocator`
+- `nn::BitLinear` — `weights` field changed from `TernaryTensor` to `PackedTernaryTensor`
+- `main.rs` — BitNet test now uses quantization + packed inference flow
 - Monorepo workspace: `src/` movido para `crates/neural-kernel/src/`
 
 ## [0.10.0] — 2026-06-21

@@ -25,7 +25,7 @@ You are a Senior Systems and AI Engineer specializing in bare-metal Rust develop
 - Commit messages must follow Conventional Commits (e.g., `feat: implement memory allocator`, `fix: resolve page fault in qemu`).
 - Comment complex unsafe blocks extensively, explaining *why* the `unsafe` keyword is necessary for that specific hardware interaction.
 
-# Project Summary — neural-os-core v0.10.0
+# Project Summary — neural-os-core v0.12.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -38,7 +38,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 14 Sprints Complete
+## 17 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -77,10 +77,19 @@ VGA text buffer — 16-color Writer, scrolling, `print!/println!`, buffer at run
 `NeuralExecutor` — cooperative `VecDeque<AgentTask>` polling loop. `AgentTask { id: u64, future: Pin<Box<dyn Future>> }` with `AtomicU64` IDs. `DummyWaker` via `RawWakerVTable` in `no_std`. `run()` replaces `loop { hlt() }` — polls tasks, logs hardware context every 100 iterations, yields via `hlt()`. Tested: `async fn system_daemon()` spawns, polls, completes.
 
 ### Sprint 13 (v0.12.0) — Event Bus IPC with Capability Tokens
-`event-bus` crate — `CapabilityToken`, `Event`, `EventBus` with `pub/sub` via `BTreeMap + Arc<Mutex<VecDeque>>`. `Receiver::try_receive()` for non-blocking polling. `yield_now().await` for explicit cooperation. IPC flow: system_daemon subscribes to "SYSTEM_READY", hardware_monitor publishes with Token(1), event delivered via executor coop loop.
+`event-bus` crate — `CapabilityToken`, `Event`, `EventBus` with `pub/sub` via `TicketLock<BTreeMap>`. `Receiver::try_receive()` for non-blocking polling. `yield_now().await` for explicit cooperation. IPC flow: system_daemon subscribes to "SYSTEM_READY", hardware_monitor publishes with Token(1), event delivered via executor coop loop.
 
 ### Sprint 14 (v0.12.0) — Skill Registry & MCP Layer
-`skill-registry` crate — `Skill` trait (Send+Sync), `McpManifest` struct (name, description, required_tokens), `SkillRegistry` with Zero-Trust CapabilityToken validation before `execute()`. `EchoSkill` registered at boot, invoked by system_daemon upon receiving SYSTEM_READY event. Output verified: `[SKILL] EchoSkill executada. Output reverso: [3, 2, 1]`.
+`skill-registry` crate — `Skill` trait (Send+Sync), `McpManifest` struct (name, description, required_tokens), `SkillRegistry` with Zero-Trust CapabilityToken validation before `execute()`. `EchoSkill` + `SystemStatusSkill` registered at boot, invoked by system_daemon upon receiving SYSTEM_READY event. Output verified: `[SKILL] EchoSkill executada. Output reverso: [3, 2, 1]`.
+
+### Sprint 15 (v0.12.0) — Hardware Neural Routing (IRQ1 → EventBus → Agent)
+Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 → `LAST_SCANCODE: AtomicU8` (Release) → raw EOI. `hw_bridge_daemon` polls AtomicU8 (Acquire swap) → publishes `RAW_HW_IRQ1` on EventBus. `input_daemon` subscribes, logs scancode, infers key 'A' for scan code 0x1E. 5 tasks spawned, 500+ PIT ticks stable, zero Double Faults.
+
+### Sprint 16 (v0.12.0) — Closed Intent Pipeline (Cortex Ignition)
+`input_daemon` evolved with heap-allocated String buffer + `scancode_to_ascii()` (A-Z, Space, Backspace). ENTER (0x1C) publishes `USER_INTENT`. `intent_router_daemon` (Cortex) subscribes `USER_INTENT`, runs mock inference (contains "STATUS" → ID 1, else ID 0), executes `SkillRegistry::execute_skill("system_status")`. `SystemStatusSkill` reads `hardware_context_tensor` via `TicketLock` and logs RAM occupancy. 5 tasks (3 persistent), 1000+ PIT ticks. Full pipeline: keyboard → buffer → USER_INTENT → Cortex → Skill Registry.
+
+### Sprint 17 (v0.12.0) — TicketLock FIFO & Concurrency Refactor
+`crates/ticket-lock/` — `TicketLock<T>` with `AtomicUsize ticket/serving` + `UnsafeCell<T>` + fair spin loop. `Send` + `Sync`. EventBus refactored: `spin::Mutex` → `TicketLock` in `subscribers` and `Receiver.queue`; ID counter → `AtomicU64`. `GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>>`. NeuralExecutor simplified (no frame_allocator field). System ready for SMP activation.
 
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
@@ -126,6 +135,8 @@ cargo run → bootloader → kernel_main
 | libm | 0.2 |
 | pic8259 | 0.10 |
 | event-bus | workspace (path) |
+| skill-registry | workspace (path) |
+| ticket-lock | workspace (path) |
 
 ## Workspace Crates
 | Crate | Status |
@@ -134,8 +145,9 @@ cargo run → bootloader → kernel_main
 | `agent-core` | stub |
 | `skill-registry` | v0.1.0 — MCP Layer: Skill trait, McpManifest, Registry com validação de token |
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
+| `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 15)
+## Next Sprint (Sprint 18)
 Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
 
 ## Monorepo Structure
@@ -143,9 +155,11 @@ Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
 - `crates/agent-core/` — AgentProcess trait + scheduler (stub)
 - `crates/skill-registry/` — Skill trait + MCP Layer (Skill, McpManifest, SkillRegistry com validação Zero-Trust)
 - `crates/event-bus/` — EventBus IPC + CapabilityToken (publish/subscribe implementado)
+- `crates/ticket-lock/` — TicketLock FIFO (AtomicUsize ticket/serving, spin loop justo)
 
 ## Roadmap
 See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, MatMul-free).
 
 ## References
 - ADR-0013: Executive Summary / Estado da Arte 2026 (MerlionOS, FairyFuse/Bitnet.cpp, ASA/eBPF)
+- ADR-0014: Ideias de Evolução de Hardware (SMP, APIC, USB neural, AI-driven arch)
