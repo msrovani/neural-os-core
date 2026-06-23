@@ -12,13 +12,13 @@
 ## Sprint 10 — 2-bit Packing and Ternary Quantization (Complete)
 ## Sprint 11 — Bitmap Frame Allocator (Complete)
 ## Sprint 12 — Kernel Abstraction: Async Neural Executor (Complete)
-## Sprint 13 — Event Bus IPC com Capability Tokens (Complete)
+## Sprint 14 — Skill Registry & MCP Layer (Complete)
 
 ### Current Status
 
-| Category | Status |
-|---|---|
-| Last QEMU Boot | ✅ Boot OK — VGA + serial + Breakpoint handler |
+ | Category | Status |
+|---|---|---|
+| Last QEMU Boot | ✅ Boot OK — VGA + serial + Breakpoint handler + EchoSkill execution |
 | Compilation | ✅ `cargo check` — 0 errors, 0 warnings |
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
@@ -37,7 +37,7 @@
 | CapabilityToken | ✅ `pub struct CapabilityToken(pub u64)` — `is_valid()` check (token > 0) |
 | Event | ✅ `{ id, topic, payload, token }` — ID gerado automaticamente no publish |
 | Publish/Subscribe | ✅ `subscribe(topic) -> Receiver`, `publish(Event) -> Result` com validação de token |
-| IPC Flow | ✅ `system_daemon` subscribe → yield → `hardware_monitor` publish → receive → complete |
+ | IPC Flow | ✅ `system_daemon` subscribe → yield → `hardware_monitor` publish → receive → `SkillRegistry.execute_skill` → complete |
 | Heap | ✅ `LockedHeap` global allocator (linked_list_allocator v0.9.1) |
 | `alloc` crate | ✅ `Box`, `Vec` testados no boot flow |
 | FPU/SSE (SIMD) | ✅ CR0: clear EMULATE_COPROC, set MONITOR + NUMERIC_ERROR |
@@ -84,7 +84,11 @@
 | `crates/event-bus/src/lib.rs` | Re-exports: `EventBus`, `CapabilityToken`, `Event` |
 | `crates/event-bus/src/capability.rs` | `CapabilityToken(pub u64)` — validação de permissão |
 | `crates/event-bus/src/event.rs` | `Event { id, topic, payload, token }` |
-| `crates/event-bus/src/bus.rs` | `EventBus` — `BTreeMap<String, Vec<Arc<Mutex<VecDeque>>>>` |
+ | `crates/event-bus/src/bus.rs` | `EventBus` — `BTreeMap<String, Vec<Arc<Mutex<VecDeque>>>>` |
+| `crates/skill-registry/src/lib.rs` | Re-exports: `SkillRegistry`, `Skill`, `McpManifest` |
+| `crates/skill-registry/src/mcp.rs` | `McpManifest { name, description, required_tokens }` |
+| `crates/skill-registry/src/skill.rs` | `trait Skill: Send + Sync { manifest(), execute() }` |
+| `crates/skill-registry/src/registry.rs` | `SkillRegistry` — `BTreeMap`, register, execute_skill com token validation |
 | `Cargo.toml` (root) | Workspace manifest |
 | `crates/neural-kernel/Cargo.toml` | Kernel package, deps, bootimage metadata |
 | `crates/agent-core/Cargo.toml` | Agent abstraction crate (stub) |
@@ -100,7 +104,8 @@
 
 | Crate | Version | Purpose |
 |---|---|---|
-| `bootloader` | 0.9.34 | Boot image, `BootInfo`, `map_physical_memory` |
+ | `bootloader` | 0.9.34 | Boot image, `BootInfo`, `map_physical_memory` |
+| `skill-registry` | 0.1.0 | MCP layer — `Skill`, `McpManifest`, `SkillRegistry` com validação de token |
 | `spin` | 0.9 | `Mutex<T>` for `no_std` sync |
 | `lazy_static` | 1.5 | `lazy_static!` with `spin_no_std` |
 | `uart_16550` | 0.2 | 16550 UART driver |
@@ -141,11 +146,10 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Sprint 13 (Concluído):** Event Bus IPC — crate `event-bus` com `CapabilityToken`, `Event`, `EventBus` (publish/subscribe). `system_daemon` assina "SYSTEM_READY" e aguarda assincronamente. `hardware_monitor_daemon` publica o evento com token validado. IPC cooperativo entre agentes via `yield_now().await`.
 
-### Pendências (Sprint 14)
+**Sprint 14 (Concluído):** Skill Registry e MCP Layer operacionais. Crate `skill-registry` com `Skill` trait (Send+Sync), `McpManifest` (nome, descrição, tokens requeridos), e `SkillRegistry` — registro central com validação Zero-Trust de `CapabilityToken` antes da execução. `EchoSkill` de demonstração registrada no boot, executada pelo agente `system_daemon` ao receber `SYSTEM_READY`. Saída QEMU verificada: `[SKILL] EchoSkill executada. Output reverso: [3, 2, 1]`.
 
-- [x] EventBus — publish/subscribe com validação de CapabilityToken
-- [x] Receiver — `try_receive()` para polling não-bloqueante
-- [x] yield_now() — cooperação explícita entre tasks
+### Pendências (Sprint 15)
+
 - [ ] Slab allocator — reduzir fragmentação do heap
 
 ---
@@ -154,9 +158,9 @@ O blueprint de código do neural-os-core está consolidado em:
 
 Ver `docs/roadmap.md` para a ordem de engenharia bare-metal completa:
 
-1. **Memória** — Bitmap Allocator + Huge Pages (Sprints 11–13)
-2. **Kernel** — Agent Scheduler (Sprints 14–15)
-3. **IPC** — EventBus + Capability Tokens (Sprints 16–17)
-4. **Skills** — Skill Registry + MCP (Sprints 18–20)
-5. **Cognitivo** — Intent Planner + Success Engine (Sprints 21–23)
-6. **Meta** — MatMul-free LM (Sprints 24+)
+1. **Memória** — Bitmap Allocator + Huge Pages (Sprints 11–12)
+2. **Kernel** — Agent Scheduler (Sprint 13)
+3. **IPC** — EventBus + Capability Tokens (Sprint 13)
+4. **Skills** — Skill Registry + MCP (Sprint 14) ✅
+5. **Cognitivo** — Intent Planner + Success Engine (Sprints 15+)
+6. **Meta** — Slab Allocator, MatMul-free LM (Sprints 15+)

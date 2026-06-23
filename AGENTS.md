@@ -38,7 +38,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 13 Sprints Complete
+## 14 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -79,6 +79,9 @@ VGA text buffer — 16-color Writer, scrolling, `print!/println!`, buffer at run
 ### Sprint 13 (v0.12.0) — Event Bus IPC with Capability Tokens
 `event-bus` crate — `CapabilityToken`, `Event`, `EventBus` with `pub/sub` via `BTreeMap + Arc<Mutex<VecDeque>>`. `Receiver::try_receive()` for non-blocking polling. `yield_now().await` for explicit cooperation. IPC flow: system_daemon subscribes to "SYSTEM_READY", hardware_monitor publishes with Token(1), event delivered via executor coop loop.
 
+### Sprint 14 (v0.12.0) — Skill Registry & MCP Layer
+`skill-registry` crate — `Skill` trait (Send+Sync), `McpManifest` struct (name, description, required_tokens), `SkillRegistry` with Zero-Trust CapabilityToken validation before `execute()`. `EchoSkill` registered at boot, invoked by system_daemon upon receiving SYSTEM_READY event. Output verified: `[SKILL] EchoSkill executada. Output reverso: [3, 2, 1]`.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
@@ -105,6 +108,7 @@ cargo run → bootloader → kernel_main
   ├─ BitNet: quantize_to_packed() → BitLinear 2-bit forward
   ├─ init_pics()                  (PIC remap)
   ├─ enable_interrupts()          (sti)
+  ├─ SkillRegistry (EchoSkill)    (Skill Registry + MCP Layer)
   └─ NeuralExecutor::run()
        └─ AgentTask::new(system_daemon) → poll → hlt
             └─ hardware_context_tensor() a cada 100 iteracoes
@@ -128,16 +132,16 @@ cargo run → bootloader → kernel_main
 |---|---|
 | `neural-kernel` | v0.12.0 — kernel bare-metal |
 | `agent-core` | stub |
-| `skill-registry` | stub |
+| `skill-registry` | v0.1.0 — MCP Layer: Skill trait, McpManifest, Registry com validação de token |
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 
-## Next Sprint (Sprint 13)
+## Next Sprint (Sprint 15)
 Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
 
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
 - `crates/agent-core/` — AgentProcess trait + scheduler (stub)
-- `crates/skill-registry/` — Skill trait + WASM runtime (stub)
+- `crates/skill-registry/` — Skill trait + MCP Layer (Skill, McpManifest, SkillRegistry com validação Zero-Trust)
 - `crates/event-bus/` — EventBus IPC + CapabilityToken (publish/subscribe implementado)
 
 ## Roadmap

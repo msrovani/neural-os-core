@@ -10,6 +10,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use bootloader::bootinfo::BootInfo;
 use event_bus::{CapabilityToken, Event};
+use skill_registry::{McpManifest, Skill, SkillRegistry};
 use memory::BitmapFrameAllocator;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 
@@ -25,8 +26,29 @@ mod vga_buffer;
 
 use lazy_static::lazy_static;
 
+struct EchoSkill;
+
+impl Skill for EchoSkill {
+    fn manifest(&self) -> McpManifest {
+        McpManifest {
+            name: String::from("echo"),
+            description: String::from("Reverses the input payload bytes as a demonstration skill"),
+            required_tokens: vec![1],
+        }
+    }
+    fn execute(&self, payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let reversed: Vec<u8> = payload.iter().rev().copied().collect();
+        Ok(reversed)
+    }
+}
+
 lazy_static! {
     static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
+    static ref SKILL_REGISTRY: spin::Mutex<SkillRegistry> = {
+        let mut reg = SkillRegistry::new();
+        reg.register(alloc::boxed::Box::new(EchoSkill));
+        spin::Mutex::new(reg)
+    };
 }
 
 #[panic_handler]
@@ -171,6 +193,20 @@ async fn system_daemon() {
                 event.topic, event.token.0);
             serial_println!("[IPC] Evento recebido no topico {} com payload protegido. Token: {}",
                 event.topic, event.token.0);
+
+            let reg = SKILL_REGISTRY.lock();
+            match reg.execute_skill("echo", &event.payload, &event.token) {
+                Ok(output) => {
+                    println!("[SKILL] EchoSkill executada. Output reverso: {:?}", output);
+                    serial_println!("[SKILL] EchoSkill executada. Output reverso: {:?}", output);
+                }
+                Err(e) => {
+                    println!("[SKILL] Erro ao executar skill: {}", e);
+                    serial_println!("[SKILL] Erro ao executar skill: {}", e);
+                }
+            }
+            drop(reg);
+
             println!("[DAEMON] SYSTEM_READY confirmado. Ciclo de inicializacao completo.");
             serial_println!("[DAEMON] SYSTEM_READY confirmado. Ciclo de inicializacao completo.");
             break;
