@@ -367,38 +367,68 @@ HardwareInventory::collect(boot_info)
   ├── Accelerators: NPU/GPU detectados via PCI class + DID
   └── Storage: NVMe/VirtIO detectados via PCI class
 
+────────── MEMORY HIERARCHY INDEX (MHI) ──────────
+  ├── struct MemoryTier { device, kind, capacity, bandwidth, latency, is_unified, numa_node }
+  ├── struct MemoryHierarchy { tiers: Vec<MemoryTier> }  ← ordenado do mais rápido ao mais lento
+  ├── enum AllocTier { Dram, Vram, Nvme, Hdd }
+  ├── fn alloc_by_tier(tier: AllocTier, size) -> Option<PhysAddr>
+  │     └── MVP: só AllocTier::Dram implementado (BitmapAllocator)
+  │     └── Vram → None (disponível em Sprint 23+)
+  │     └── Nvme → None (disponível em Sprint 24+)
+  │
+  ├── MemoryHierarchy populado no boot com tiers detectados:
+  │     Ex: { DRAM: 16384 MB @ 19.2 GB/s } (só DRAM no MVP)
+  │     Ex: { VRAM: 4 GB @ 112 GB/s, DRAM: 16 GB @ 19.2 GB/s, NVMe: 256 GB @ 3.5 GB/s }
+  │
+  └── Visível ao usuário via "status memory":
+        [CORTEX] Memory Hierarchy:
+          tier[0] DRAM: 16384 MB @ 19.2 GB/s ← ativo
+          tier[1] VRAM: GTX 1050 (4 GB) ← sem driver
+          tier[2] NVMe: 256 GB ← sem driver
+────────── FIM MHI ──────────
+
 MLP 512→256→64→9 ternário (pesos embutidos no kernel)
   ├── Embedding do brand name: [f32; 32]
   ├── Core counts, freqs, cache: normalizados
   ├── Features one-hot (AVX-512, AMX, VNNI, x2APIC, hybrid...)
   ├── RAM total, PCI count, accelerators
-  └── 9 saídas categóricas (argmax por grupo):
+  └── 12 saídas categóricas (argmax por grupo):
         ring0: {software, NPU, P_core}
         ring1: {P_cores, GPU, hybrid}
         ring2: {E_cores, idle_P, mixed}
         p_cores_for_ring1: u8
         sfs_policy: {NVMe_only, tiered, all_ram}
         heap_size_mb: u16
+        heap_tier: {Dram, Vram, Nvme}          ← guia MHI
+        tensor_tier: {Dram, Vram, Nvme}        ← guia MHI
+        kv_cache_tier: {Dram, Vram, Nvme}      ← guia MHI
         trust_default: {deny, allow_known, allow}
         power_policy: {performance, balanced, low}
-        heap_tier: {VRAM, RAM, NVMe} (prepara Memory Hierarchy)
+        sfs_active_tier: {Dram, Nvme}          ← guia MHI
 
 SystemArchitecture → Config dinâmica
-  ├── init_heap(arch.heap_size_mb) — tamanho do heap decidido pelo MLP
+  ├── init_heap(arch.heap_size_mb, arch.heap_tier)
+  │     └── No MVP: heap_tier ignorado, aloca na DRAM
+  │     └── Pós-MVP: aloca no tier decidido
   ├── init_smp(arch.ring0, ring1, ring2, arch.p_cores_for_ring1)
   ├── init_npu(arch.ring0_target) — se NPU, tenta init; fallback software
-  ├── init_trust(arch.trust_default) — política de confiança
-  └── init_power(arch.power_policy) — decisão de energia
+  ├── init_trust(arch.trust_default)
+  ├── init_power(arch.power_policy)
+  └── init_mhi(arch.heap_tier, arch.tensor_tier, ...)
+        └── Configura MemoryHierarchy com decisões do MLP
 
 Boot flow adaptativo
   ├── HardwareInventory::collect() antes de qualquer configuração
   ├── infer_architecture() → SystemArchitecture
+  ├── init_mhi() — MHI populado com tiers detectados + decisões do MLP
   ├── init_*() na ordem determinada pela arch
-  └── Boot log exibe a decisão do MLP
+  └── Boot log exibe a decisão do MLP + MHI
 
-Hardware query skill
-  ├── "status hardware" → exibe inventário + decisão do MLP
-  └── "status arch" → exibe SystemArchitecture ativa
+Hardware query skills
+  ├── "status" → info geral + skills disponíveis
+  ├── "status hardware" → inventário completo
+  ├── "status arch" → SystemArchitecture ativa
+  └── "status memory" → MHI completo (tiers, decisões, drivers ausentes)
 ```
 
 ### Arquivos criados/modificados:
@@ -566,9 +596,17 @@ E recebe:
   ring0          → software (no NPU)
   ring1          → P_cores (AVX-512 not present)
   ring2          → P_cores idle (no E-cores on this CPU)
-  heap           → 64 MB
+  heap           → 64 MB (tier: DRAM)
+  tensor         → DRAM (Vram detected but driver absent)
+  kv_cache       → DRAM (Vram would be better, 4 GB available)
+  sfs_active     → DRAM (Nvme detected but driver absent)
   trust          → allow_known
   power          → balanced
+
+[MHI] Memory Hierarchy Index:
+  tier[0] DRAM: 16384 MB @ 19.2 GB/s ← heap, tensor, kv_cache, sfs
+  tier[1] VRAM: GTX 1050 4 GB @ 112 GB/s ← detected, driver missing
+  tier[2] NVMe: 256 GB @ 3.5 GB/s ← detected, driver missing
 
 [SYSTEM] Neural OS Hermes ready.
 Type 'help' for available commands.
@@ -576,15 +614,26 @@ Type 'help' for available commands.
 > 
 
 > help
-[CORTEX] Skills: echo, system_status, system_info, pci_scan, power, trust, arch, help
+[CORTEX] Skills: echo, system_status, system_info, pci_scan, power, trust, arch, memory, help
 [CORTEX] Digite '<skill> help' para detalhes.
-[CORTEX] Hardware detectado: VGA text, serial, PS/2 keyboard, APIC timer, PCI bus
+[CORTEX] Hardware detectado: VGA text, serial, PS/2 keyboard, APIC timer, PCI bus, DRAM
 
 > status
 [SKILL] CPU: i5-7200U @ 2.5 GHz (boost 3.1), 2 P-cores/4 threads
 [SKILL] RAM: 16384 MB total, 0.2% ocupada
 [SKILL] PCI: 15 dispositivos (GPU GTX 1050, NVMe, xHCI...)
 [SKILL] Trust: 3 entradas ativas
+
+> status memory
+[CORTEX] Memory Hierarchy Index:
+  tier[0] DRAM: 16384 MB @ 19.2 GB/s ← ativo
+  tier[1] VRAM: GTX 1050 4 GB @ 112 GB/s ← instale skill gpu_bar
+  tier[2] NVMe: 256 GB @ 3.5 GB/s ← instale skill nvme_driver
+
+[CORTEX] MLP decidiu:
+  heap_tier     → Dram (padrao)
+  tensor_tier   → Dram (Vram recomendado, 112 GB/s > 19 GB/s)
+  kv_cache_tier → Dram (Vram seria 4x mais rapido)
 
 > power off
 [SKILL] Shutting down...
@@ -597,10 +646,14 @@ Type 'help' for available commands.
 | Boota em QEMU `-m 512M` | ✅ | — |
 | Boota em hardware real UEFI | ✅ | ✅ |
 | PCI scan detecta dispositivos | ✅ | ✅ |
-| MLP de arquitetura decide config | ✅ | — |
+| Memory Hierarchy Index populado | ✅ | ✅ |
+| `alloc_by_tier(Dram)` funcional | ✅ | — |
+| `alloc_by_tier(Vram/Nvme)` retorna `None` com diagnóstico | ✅ | — |
+| `status memory` exibe tiers + drivers ausentes | ✅ | ✅ |
+| MLP de arquitetura decide config (incl. heap/tensor/kv tiers) | ✅ | — |
 | Chat loop funcional (VGA + serial) | ✅ | ✅ |
 | Intent Router classifica 3+ intents | ✅ | — |
-| Skills: status, pci, power, help | ✅ | ✅ |
+| Skills: status, memory, pci, power, help | ✅ | ✅ |
 | Trust Cache funcional | ✅ | — |
 | APIC timer (sem PIC) | ✅ | — |
 | SMP (mínimo 2 cores) | — | ✅ |
@@ -611,8 +664,11 @@ Type 'help' for available commands.
 
 | Excluído | Motivo | Previsão |
 |---|---|---|
+| `alloc_by_tier(Vram)` | Requer BAR de GPU mapeado | Sprint 23+ |
+| `alloc_by_tier(Nvme)` | Requer driver NVMe | Sprint 24+ |
+| `alloc_by_tier(Hdd)` | Requer SFS + driver ATA/NVMe | Sprint 24+ |
 | USB driver | Complexidade alta, PS/2 legacy suficiente | Sprint 23+ |
-| NVMe driver | MVP é stateless, sem SFS | Sprint 23+ |
+| NVMe driver (full) | MVP é stateless, sem SFS | Sprint 24+ |
 | UEFI framebuffer | VGA text funciona | Sprint 23+ |
 | WASM embedder | Skills Rust traits bastam | Sprint 24+ |
 | NPU real | Requer hardware AMD APU + firmware | Sprint 25+ |
