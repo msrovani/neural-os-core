@@ -12,6 +12,7 @@ const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 
 pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> = TicketLock::new(None);
+pub static PHYS_MEM_OFFSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 /// Alocador de frames físicos baseado em bitmap.
 
@@ -142,6 +143,20 @@ impl BitmapFrameAllocator {
         None
     }
 
+    /// Aloca um frame em endereço físico < 1 MiB (frames 0..255).
+    /// Essencial para o trampoline real-mode do SMP.
+    pub fn allocate_below_1mb(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        let max_frame = core::cmp::min(256, self.total_frames);
+        for i in 0..max_frame {
+            if !self.test_bit(i) {
+                self.set_bit(i);
+                self.allocated_count += 1;
+                return Some(PhysFrame::containing_address(PhysAddr::new(i as u64 * FRAME_SIZE)));
+            }
+        }
+        None
+    }
+
     /// Retorna o tensor de contexto de hardware para o roteador MLP.
     /// `[taxa_ocupacao, 0.0]` — fração de frames alocados vs total utilizável.
     pub fn hardware_context_tensor(&self) -> [f32; 2] {
@@ -202,6 +217,7 @@ pub fn global_hardware_context() -> [f32; 2] {
 }
 
 pub unsafe fn init_memory(physical_memory_offset: u64) -> OffsetPageTable<'static> {
+    PHYS_MEM_OFFSET.store(physical_memory_offset, core::sync::atomic::Ordering::Release);
     let (level_4_frame, _) = x86_64::registers::control::Cr3::read();
     let phys = level_4_frame.start_address();
     let virt = VirtAddr::new(physical_memory_offset) + phys.as_u64();

@@ -6,7 +6,12 @@ use x86_64::VirtAddr;
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 100 * 1024;
+pub const HEAP_SIZE: usize = 4 * 1024 * 1024;
+
+pub const SLAB_START: usize = HEAP_START;
+pub const SLAB_SIZE: usize = 8 * 65536;
+pub const LARGE_HEAP_START: usize = HEAP_START + SLAB_SIZE;
+pub const LARGE_HEAP_SIZE: usize = HEAP_SIZE - SLAB_SIZE;
 
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,
@@ -34,7 +39,8 @@ pub fn init_heap(
     }
 
     unsafe {
-        ALLOCATOR.lock().init(HEAP_START, HEAP_SIZE);
+        crate::slab::SLAB_ALLOCATOR.lock().init(SLAB_START);
+        ALLOCATOR.lock().init(LARGE_HEAP_START, LARGE_HEAP_SIZE);
     }
 
     Ok(())
