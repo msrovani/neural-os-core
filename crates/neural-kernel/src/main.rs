@@ -15,9 +15,12 @@ use skill_registry::{McpManifest, Skill, SkillRegistry};
 use memory::BitmapFrameAllocator;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 
+mod acpi;
 mod allocator;
+mod apic;
 mod interrupts;
 mod memory;
+mod pci;
 mod sync;
 mod nn;
 mod serial;
@@ -191,8 +194,17 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
         ram_tensor[0], ram_tensor[1]);
 
-    interrupts::init_pics();
-    interrupts::enable_interrupts();
+    let _pci_devices = unsafe { pci::init_pci() };
+
+    let acpi_info = unsafe { acpi::init_acpi(boot_info.physical_memory_offset) };
+    if let Some(ref info) = acpi_info {
+        unsafe { apic::init_apic(info); }
+    } else {
+        serial_println!("[APIC] ACPI nao encontrado. Mantendo PIC legacy.");
+        println!("[APIC] ACPI nao encontrado. Mantendo PIC legacy.");
+        interrupts::init_pics();
+        interrupts::enable_interrupts();
+    }
 
     memory::init_global_allocator(frame_allocator);
 
