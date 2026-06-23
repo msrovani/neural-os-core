@@ -215,29 +215,65 @@ que substitui e absorve o roadmap.md e as ideias avulsas:
 - `interrupts.rs` — `send_eoi()`: PIC EOI se `!USING_APIC`, APIC EOI se `USING_APIC`.
 - Boot flow: `pci::init_pci()` → `acpi::init_acpi()` → `apic::init_apic()` (fallback PIC se ACPI ausente).
 
-### Pendências (Sprint 19 — Block 2: SMP + Slab)
+## Sprint 19 (Block 2: SMP + Slab) — Concluído
 
-- [ ] PerCpu struct + GS.base segment register
-- [ ] alloc_below_1mb() para trampoline real-mode
-- [ ] Trampoline assembly 16→32→PAE→64→Rust
-- [ ] INIT-SIPI-SIPI via LAPIC ICR (wake APs)
-- [ ] Slab allocator (buckets 32-4096)
-- [ ] Heap expandido de 100 KB para 4 MB
+**Data:** 2026-06-23
+
+### Entregas
+
+1. **`memory.rs` — `allocate_below_1mb()`** — Aloca um frame físico em endereço < 1 MiB (frames 0..255). Essencial para página de trampoline real-mode do SMP. `PHYS_MEM_OFFSET` global (AtomicU64) armazena o offset de memória física para acesso de qualquer módulo.
+
+2. **`slab.rs` — Slab Allocator** — Alocador de pools fixos com 8 buckets (32, 64, 128, 256, 512, 1024, 2048, 4096 bytes). Cada bucket tem zona de 64 KB dentro do heap, com free list ligada via `*mut u8`. `SLAB_ALLOCATOR: Mutex<SlabAllocator>` com métricas atômicas (alloc_count, dealloc_count). `unsafe impl Send for SlabAllocator`.
+
+3. **`allocator.rs` — Heap 4 MB** — `HEAP_SIZE` expandido de 100 KB para 4 MB (4.194.304 bytes). Os primeiros 512 KB (8 × 64 KB) são reservados para o Slab Allocator; o restante (~3,5 MB) alimenta o `LockedHeap` geral. Ambos inicializados em `init_heap()`.
+
+4. **`smp/percpu.rs` — PerCpu struct + GS.base** — `PerCpu` repr(C) de 64 bytes: self_ptr, cpu_id, cpu_type, lapic_id, bsp_flag, online, ring. `BSP_PCPU` static inicializado. `init_bsp_percpu()` escreve self_ptr e lapic_id, depois seta GS.base via `wrmsr(0xC0000101)`. `this_cpu()` lê gs:[0] para obter o ponteiro, `cpu_id()` lê gs:[8].
+
+5. **`smp/trampoline.rs` — Trampoline 16→32→PAE→64→Rust** — Assembly `global_asm!` com header de 48 bytes patchable: jmp32, jmp64, cr3, stack, percpu, entry_fn. 16-bit: carrega jmp32_val via CS segment (CS.base = phys_addr após SIPI), seta PE, far jump via push/retf. 32-bit: LGDT (pre-patched), PAE, CR3, EFER.LME, paging, far jump via push/retf. 64-bit: stack, GS.base, `call rax` para entry_fn. `init_trampoline()` copia blob para página < 1 MB e patcha todos os campos.
+
+6. **`smp/mod.rs` — SMP Orchestrator** — `init_smp()`: verifica APIC, lê CR3, obtém BSP LAPIC ID, init PerCpu, aloca trampoline page < 1 MB via `allocate_below_1mb()`, aloca stack (16 KB), identity-mapping da trampoline page via OffsetPageTable, patcha trampoline, envia INIT-SIPI-SIPI. `ap_entry()` — função extern "C" chamada pelo AP ao entrar em 64-bit.
+
+7. **`apic.rs` — IPI functions** — `send_init_ipi()`: ICR low = (5<<8)|(1<<14)|(1<<15)|(3<<18). `send_sipi(vec)`: ICR low = (6<<8)|(3<<18)|vec. `wait_for_ipi_delivery()`: spin até bit 12 (delivery status) clear. `lapic_id()`: lê LAPIC ID register (offset 0x20 >> 24).
+
+8. **`main.rs` — Boot flow atualizado** — `mapper` scoped para evitar aliasing. `mod smp; mod slab;`. Slab metrics exibidas após init. `init_smp()` chamado antes do executor.
+
+### Arquivos criados/modificados neste sprint
+
+| Arquivo | Ação | Linhas |
+|---|---|---|
+| `src/slab.rs` | Criado | 152 |
+| `src/smp/mod.rs` | Criado | 112 |
+| `src/smp/percpu.rs` | Criado | 74 |
+| `src/smp/trampoline.rs` | Criado | 187 |
+| `src/memory.rs` | Modificado (+25) | +`allocate_below_1mb()`, +`PHYS_MEM_OFFSET` |
+| `src/allocator.rs` | Modificado | HEAP_SIZE 100KB→4MB, slab init |
+| `src/apic.rs` | Modificado (+55) | +IPI functions, +`lapic_id()` |
+| `src/main.rs` | Modificado | +mod smp, +mod slab, +init_smp(), mapper scoped |
+
+### Dependências novas
+Nenhuma (tudo com crates existentes + `core::arch::asm!` + `global_asm!`).
+
+### Pendências (Sprint 20 — Block 3: Chat + Intent Router)
+
+- [ ] Terminal loop: scancode→ASCII→line buffer
+- [ ] MLP intent inference (mock upgrade)
+- [ ] Multi-word command parsing
+- [ ] EventBus integration for chat responses
 
 ---
 
 ## Roadmap — Chain de 6 Blocos (ADR-0015)
 
-A rota atual é a **chain de 6 blocos** definida na ADR-0015. O roadmap.md original está superseded.
+A rota atual é a **chain de 6 blocos** definida na ADR-0015.
 
 | Bloco | Nome | Sprints | Pré-requisito | Entrega |
 |---|---|---|---|---|
-| 0 | Genesis (já concluído) | 1–17 | — | Kernel bootável, EventBus, Skills, Executor, PIC, keyboard |
-| 1 | PCI + ACPI + APIC | 18 | Block 0 | ECR: PCI scan → MADT → LAPIC → IOAPIC → PIC disable → APIC-driven I/O |
-| 2 | SMP + Slab Allocator | 19 | Block 1 | CorePools, PerCpu, trampoline, INIT-SIPI-SIPI, slab heap |
-| 3 | Chat + Intent Router | 20 | Block 2 | Terminal loop, scancode→ASCII→string, intent inference |
-| 4 | MLP + MHI + Auto-detecção | 21 | Block 3 | SystemArchitecture MLP 512→256→64→9, MemoryHierarchy, alloc_by_tier |
-| 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache, trust allow/deny |
-| MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural completo |
+| 0 | Genesis (concluído) | 1–17 | — | Kernel bootável, EventBus, Skills, Executor, PIC, keyboard |
+| 1 | PCI + ACPI + APIC | 18 (concluído) | Block 0 | PCI scan → MADT → LAPIC → IOAPIC → PIC disable → APIC I/O |
+| 2 | SMP + Slab Allocator | 19 (concluído) | Block 1 | PerCpu, trampoline, INIT-SIPI-SIPI, slab heap 4 MB |
+| 3 | Chat + Intent Router | 20 | Block 2 | Terminal loop, line input, MLP intent routing |
+| 4 | MLP + MHI + Auto-detecção | 21 | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
+| 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache |
+| MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural |
 
 Para inventário completo de 116 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).

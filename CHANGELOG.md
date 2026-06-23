@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.14.0] — 2026-06-23
+
+### Added (Sprint 19 — Block 2: SMP + Slab + Heap 4 MB)
+
+- `allocate_below_1mb()` — BitmapFrameAllocator aloca frame < 1 MiB para trampoline real-mode (`src/memory.rs`)
+- `PHYS_MEM_OFFSET` — AtomicU64 global com offset de memória física para acesso de qualquer módulo (`src/memory.rs`)
+- Slab Allocator — 8 buckets (32, 64, 128, 256, 512, 1024, 2048, 4096), free list ligada, `Mutex<SlabAllocator>` com métricas atômicas (`src/slab.rs`)
+- Heap expandido de 100 KB para 4 MB — primeiros 512 KB para Slab, restante 3.5 MB para LockedHeap (`src/allocator.rs`)
+- PerCpu struct (repr(C), 64 bytes) com self_ptr, cpu_id, lapic_id, bsp_flag, ring. GS.base via wrmsr(0xC0000101) (`src/smp/percpu.rs`)
+- `this_cpu()` — lê gs:[0] para obter ponteiro PerCpu. `cpu_id()` lê gs:[8]
+- Trampoline assembly (global_asm!) — 16-bit → 32-bit protected → PAE → EFER.LME → paging → 64-bit long mode → Rust entry. Header patcheable de 48 bytes com campos jmp32/jmp64/cr3/stack/percpu/entry_fn (`src/smp/trampoline.rs`)
+- INIT-SIPI-SIPI via LAPIC ICR — `send_init_ipi()`, `send_sipi(vector)` com entrega via shorthand "all excluding self" (`src/apic.rs`)
+- `wait_for_ipi_delivery()` — spin até ICR delivery status clear. `lapic_id()` — LAPIC ID register (offset 0x20)
+- SMP orchestrator — `init_smp()` aloca trampoline, identity-maps, patcha, dispara INIT-SIPI-SIPI (`src/smp/mod.rs`)
+- `ap_entry()` — entry point chamado pelos APs em modo 64-bit
+
+### Changed
+
+- `main.rs` — `mapper` scoped no boot flow para evitar aliasing com o mapper do SMP init
+- Boot flow: adicionados `mod smp`, `mod slab`, `crate::smp::init_smp()` antes do NeuralExecutor
+
 ## [0.13.0] — 2026-06-23
 
 ### Added (Sprint 18 — Block 1)

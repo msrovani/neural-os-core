@@ -51,7 +51,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 - Commit messages must follow Conventional Commits (e.g., `feat: implement memory allocator`, `fix: resolve page fault in qemu`).
 - Comment complex unsafe blocks extensively, explaining *why* the `unsafe` keyword is necessary for that specific hardware interaction.
 
-# Project Summary — neural-os-core v0.13.0
+# Project Summary — neural-os-core v0.14.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -64,7 +64,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 18 Sprints Complete
+## 19 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -119,6 +119,9 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 
 ### Sprint 18 (v0.13.0) — PCI + ACPI + APIC (Block 1)
 `crates/neural-kernel/src/pci.rs` — PCI scan via CF8/CFC, 256 busses, vendor/device/class/BARs. `acpi.rs` — RSDP discovery (EBDA + BIOS), RSDT/XSDT walking, MADT parsing (LAPIC, IOAPIC, x2APIC). `apic.rs` — LAPIC init (SVR, TPR), IOAPIC init (IRQ0→vec32, IRQ1→vec33), PIC disable. `send_eoi()` with APIC/PIC fallback via `USING_APIC: AtomicBool`. Boot flow: `init_pci()` → `init_acpi()` → `init_apic()` (fallback PIC). 3 new files, 0 new deps.
+
+### Sprint 19 (v0.14.0) — SMP + Slab + Heap 4 MB (Block 2)
+`memory.rs` — `allocate_below_1mb()` para trampoline page, `PHYS_MEM_OFFSET` global. `slab.rs` — Slab Allocator com 8 buckets (32-4096 bytes), free list via raw pointers, `Mutex<SlabAllocator>` com métricas. `allocator.rs` — heap 4 MB, 512 KB slab zone + 3.5 MB LockedHeap zone. `smp/percpu.rs` — PerCpu repr(C) 64 bytes, GS.base via wrmsr(0xC0000101), `this_cpu()` + `cpu_id()`. `smp/trampoline.rs` — global_asm! trampoline 16→32→PAE→64→Rust, patchable header, LGDT + CR3 + EFER + paging. `smp/mod.rs` — INIT-SIPI-SIPI via LAPIC ICR, identity-mapping, AP entry. `apic.rs` — `send_init_ipi()`, `send_sipi()`, `wait_for_ipi_delivery()`, `lapic_id()`. 4 new files (smp/ module), 0 new deps.
 
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
@@ -178,8 +181,8 @@ cargo run → bootloader → kernel_main
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 19 — Block 2)
-PerCpu struct, GS.base segment register, trampoline assembly, INIT-SIPI-SIPI, Slab allocator, heap 4 MB.
+## Next Sprint (Sprint 20 — Block 3)
+Terminal loop: scancode→ASCII→line buffer, MLP intent inference (mock upgrade), multi-word command parsing, EventBus integration for chat responses.
 
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
