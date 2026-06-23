@@ -29,6 +29,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 2. **Memorize** — Registre nos arquivos de uso da IDE assistida por IA (`AGENTS.md`, `.cursor/rules/`, e qualquer outro mecanismo de contexto futuro). Atualize o `IDEA_BANK.md` se ideias mudaram de status. Isso garante que a próxima sessão de IA comece sabendo o que aconteceu.
 
 3. **Documente** — Registre nos arquivos de uso humano seguindo boas práticas de dev:
+   - `README.md` (visão geral atualizada para humanos — o que foi construído, como o sistema se comporta)
    - `CHANGELOG.md` (Keep a Changelog + Conventional Commits)
    - `docs/memory/STATE.md` (estado atualizado do kernel)
    - `docs/memory/SESSION_NNN.md` (relato narrativo da sessão, dificuldades, decisões)
