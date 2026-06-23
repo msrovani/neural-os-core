@@ -10,6 +10,8 @@
 ## Sprint 8 — Hardware Interrupts & Memory Safety (Complete)
 ## Sprint 9 — Ternary Inference Engine (Complete)
 ## Sprint 10 — 2-bit Packing and Ternary Quantization (Complete)
+## Sprint 11 — Bitmap Frame Allocator (Complete)
+## Sprint 12 — Kernel Abstraction: Async Neural Executor (Complete)
 
 ### Current Status
 
@@ -26,6 +28,10 @@
 | Frame Allocator | ✅ `BitmapFrameAllocator` — bitmap 128 KB, init via UEFI map, alloc/dealloc O(n), 0% leak |
 | Bitmap Stress Test | ✅ 1000 alloc/dealloc estáveis — `[KERNEL] Status RAM Tensor: [0.001011, 0.0]` |
 | Contiguous Alloc | ✅ `allocate_contiguous(count)` preparado para Huge Pages (Fase 4) |
+| Async Neural Executor | ✅ `NeuralExecutor` — `VecDeque<AgentTask>`, cooperative poll, RawWakerVTable |
+| AgentTask | ✅ `id`, `Pin<Box<dyn Future>>`, `AtomicU64` ID generation |
+| DummyWaker | ✅ `RawWakerVTable` em `no_std` (clone/wake/drop no-ops) |
+| system_daemon | ✅ `async fn` test — spawn, executa, complete, idle loop com hardware context |
 | Heap | ✅ `LockedHeap` global allocator (linked_list_allocator v0.9.1) |
 | `alloc` crate | ✅ `Box`, `Vec` testados no boot flow |
 | FPU/SSE (SIMD) | ✅ CR0: clear EMULATE_COPROC, set MONITOR + NUMERIC_ERROR |
@@ -66,6 +72,9 @@
 | `crates/neural-kernel/src/simd.rs` | `enable_simd()` — CR0/CR4 FPU/SSE enablement |
 | `crates/neural-kernel/src/tensor.rs` | `Tensor` + `TernaryTensor` + `PackedTernaryTensor` |
 | `crates/neural-kernel/src/nn.rs` | `silu()`, `rms_norm()`, `Linear`, `BitLinear`, `argmax` |
+| `crates/neural-kernel/src/task/mod.rs` | `DummyWaker` — `RawWakerVTable` em `no_std` |
+| `crates/neural-kernel/src/task/agent.rs` | `AgentTask` — `id: u64`, `Pin<Box<dyn Future>>` |
+| `crates/neural-kernel/src/task/executor.rs` | `NeuralExecutor` — `VecDeque` loop cooperativo |
 | `Cargo.toml` (root) | Workspace manifest |
 | `crates/neural-kernel/Cargo.toml` | Kernel package, deps, bootimage metadata |
 | `crates/agent-core/Cargo.toml` | Agent abstraction crate (stub) |
@@ -120,14 +129,14 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Ação Imediata (Concluída):** Bitmap Frame Allocator implementado — 128 KB bitmap, init UEFI, alloc/dealloc, `allocate_contiguous()` para Huge Pages, `hardware_context_tensor() -> [f32; 2]`. 1000 alloc/dealloc estáveis em QEMU. Monorepo workspace criado.
 
-### Pendências (Sprint 11)
+**Sprint 12 (Concluído):** Kernel Abstraction — Neural Executor cooperativo (`VecDeque<AgentTask>`, `RawWakerVTable` em `no_std`). Substitui o `loop { hlt() }` por polling assíncrono. AgentTask com IDs atômicos, DummyWaker, e log do `hardware_context_tensor` a cada 100 iterações.
 
-- [x] Bitmap Frame Allocator — substitui `BootInfoFrameAllocator` monotônico
-- [x] `hardware_context_tensor()` — `[taxa_ocupacao, 0.0]` para roteador MLP
-- [x] Monorepo workspace — `crates/neural-kernel` + stub crates
-- [x] Stress test — 1000 alloc/dealloc sem leak, RAM Tensor confirmado
+### Pendências (Sprint 13)
+
+- [x] NeuralExecutor + AgentTask + DummyWaker (RawWakerVTable)
+- [x] async system_daemon — spawn, poll, complete
+- [x] Executor idle loop: hardware context + watchdog + hlt
 - [ ] Slab allocator — reduzir fragmentação do heap
-- [ ] Phase 3 close: benchmark ternary vs f32 perf in QEMU
 
 ---
 

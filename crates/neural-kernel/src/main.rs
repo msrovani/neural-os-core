@@ -17,6 +17,7 @@ mod memory;
 mod nn;
 mod serial;
 mod simd;
+mod task;
 mod tensor;
 mod vga_buffer;
 
@@ -141,11 +142,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     interrupts::init_pics();
     interrupts::enable_interrupts();
 
-    loop {
-        x86_64::instructions::hlt();
-        let ticks = interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        if ticks > 0 && ticks % 100 == 0 {
-            serial_println!("[WATCHDOG] Ticks do temporizador: {}", ticks);
-        }
-    }
+    serial_println!("[EXECUTOR] Inicializando Neural Executor...");
+    println!("[EXECUTOR] Inicializando Neural Executor...");
+
+    let mut executor = task::executor::NeuralExecutor::new(&frame_allocator);
+    executor.spawn(task::agent::AgentTask::new(system_daemon()));
+    executor.run();
+}
+
+async fn system_daemon() {
+    println!("[DAEMON] Agente assincrono inicializado.");
+    serial_println!("[DAEMON] Agente assincrono inicializado.");
 }

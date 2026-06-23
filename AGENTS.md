@@ -38,7 +38,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 10 Sprints Complete
+## 12 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -70,6 +70,12 @@ VGA text buffer — 16-color Writer, scrolling, `print!/println!`, buffer at run
 ### Sprint 10 (v0.10.0) — 2-bit Packing & Ternary Quantization
 `PackedTernaryTensor` — 4 ternary weights per `u8` byte via `pack_weights()` + `get_weight()`. 2-bit encoding: `00→0, 01→+1, 10→-1`. `quantize_to_packed(tensor, threshold)` — f32→ternary calibration via Δ thresholding. BitLinear refactored to use packed storage. 12× compression vs f32 (24 bytes → 2 bytes). ADR-0012.
 
+### Sprint 11 (v0.11.0) — Bitmap Frame Allocator
+`BitmapFrameAllocator` — 128 KB `.bss` bitmap covering 4 GB physical. `init()` via UEFI `MemoryMap`. Implements `FrameAllocator<Size4KiB>` + `FrameDeallocator<Size4KiB>` (real dealloc). `allocate_contiguous(count)` for Huge Pages. `hardware_context_tensor() -> [f32; 2]` for MLP router. Stress test: 1000 alloc/dealloc stable at 0.1% occupancy. Monorepo workspace established.
+
+### Sprint 12 (v0.12.0) — Async Neural Executor (Kernel Abstraction)
+`NeuralExecutor` — cooperative `VecDeque<AgentTask>` polling loop. `AgentTask { id: u64, future: Pin<Box<dyn Future>> }` with `AtomicU64` IDs. `DummyWaker` via `RawWakerVTable` in `no_std`. `run()` replaces `loop { hlt() }` — polls tasks, logs hardware context every 100 iterations, yields via `hlt()`. Tested: `async fn system_daemon()` spawns, polls, completes.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
@@ -96,7 +102,9 @@ cargo run → bootloader → kernel_main
   ├─ BitNet: quantize_to_packed() → BitLinear 2-bit forward
   ├─ init_pics()                  (PIC remap)
   ├─ enable_interrupts()          (sti)
-  └─ loop { hlt(); watchdog TIMER_TICKS }
+  └─ NeuralExecutor::run()
+       └─ AgentTask::new(system_daemon) → poll → hlt
+            └─ hardware_context_tensor() a cada 100 iteracoes
 ```
 
 ## Active Dependencies
@@ -111,11 +119,11 @@ cargo run → bootloader → kernel_main
 | libm | 0.2 |
 | pic8259 | 0.10 |
 
-## Next Sprint (Sprint 12)
+## Next Sprint (Sprint 13)
 Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
 
 ## Monorepo Structure
-- `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN)
+- `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
 - `crates/agent-core/` — AgentProcess trait + scheduler (stub)
 - `crates/skill-registry/` — Skill trait + WASM runtime (stub)
 - `crates/event-bus/` — EventBus IPC + CapabilityToken (stub)

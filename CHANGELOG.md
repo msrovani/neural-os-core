@@ -6,7 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.10.0] — 2026-06-21
+## [0.12.0] — 2026-06-22
+
+### Added
+
+- Async Neural Executor (`crates/neural-kernel/src/task/`)
+  - `pub struct AgentTask { id: u64, future: Pin<Box<dyn Future>> }` — with `AtomicU64` ID generation
+  - `pub struct NeuralExecutor { task_queue: VecDeque<AgentTask> }` — cooperative polling loop
+  - `DummyWaker` via `RawWakerVTable` — no-op waker for `no_std` environments
+  - `pub fn run(&mut self)` — replaces `loop { hlt() }`; polls tasks, logs hardware context every 100 iterations
+- `async fn system_daemon()` — test agent that spawns, executes, and completes
+- Boot sequence: `NeuralExecutor::run()` instead of raw `hlt` loop
+
+## [0.11.0] — 2026-06-22
 
 ### Added
 
@@ -23,7 +35,23 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - `src/main.rs` — BitNet test now uses quantization + packed inference flow
 - Version bumped to 0.10.0
 
-## [0.9.0] — 2026-06-21
+## [0.11.0] — 2026-06-22
+
+### Added
+
+- `BitmapFrameAllocator` — 128 KB `.bss` bitmap covering 4 GB physical memory
+- `init(&mut self, memory_map)` — varre UEFI MemoryMap, marca `Usable` como livre, o resto ocupado
+- `FrameAllocator<Size4KiB>` + `FrameDeallocator<Size4KiB>` — alloc/dealloc reais com busca linear
+- `allocate_contiguous(count)` — aloca N frames contíguos para Huge Pages (2 MiB / 1 GiB)
+- `hardware_context_tensor() -> [f32; 2]` — `[taxa_ocupacao, 0.0]` via contador de alocações
+- Stress test: 1000 alloc/dealloc estáveis, 0% leak, RAM Tensor confirmado em QEMU
+
+### Changed
+
+- `src/main.rs` — substitui `BootInfoFrameAllocator` + `EmptyFrameDeallocator` por `BitmapFrameAllocator`
+- Monorepo workspace: `src/` movido para `crates/neural-kernel/src/`
+
+## [0.10.0] — 2026-06-21
 
 ### Added
 
