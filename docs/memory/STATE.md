@@ -15,6 +15,7 @@
 ## Sprint 14 — Skill Registry & MCP Layer (Complete)
 ## Sprint 15 — Hardware Neural Routing: IRQ 1 → Event Bus → Agent (Complete)
 ## Sprint 16 — A Ignição do Córtex: Ciclo de Intenção Fechado (Complete)
+## Sprint 17 — Primitiva TicketLock FIFO & Refactor de Concorrência (Complete)
 
 ### Current Status
 
@@ -37,9 +38,12 @@
  | hw_bridge_daemon | ✅ Polls `interrupts::LAST_SCANCODE` (AtomicU8 swap Acquire) → publica `Event { topic: "RAW_HW_IRQ1", payload: [scancode] }` no EventBus |
  | input_daemon | ✅ Subscribe "RAW_HW_IRQ1" → buffer String → scancode→ASCII (A-Z, Space) → ENTER (0x1C) publica USER_INTENT |
  | intent_router_daemon (Córtex) | ✅ Subscribe USER_INTENT → mock inference (text contains "STATUS" → ID 1 else 0) → SkillRegistry::execute_skill("system_status") |
-| SystemStatusSkill | ✅ `Skill` impl: lê `hardware_context_tensor` via `FRAME_ALLOCATOR_PTR` global, imprime `"Memoria RAM: {:.2}%. CPU: Agentes Cooperativos."` |
+ | SystemStatusSkill | ✅ `Skill` impl: lê `hardware_context_tensor` via `memory::global_hardware_context()` (TicketLock), imprime `"Memoria RAM: {:.2}%. CPU: Agentes Cooperativos."` |
 | Ciclo Intenção Fechado | ✅ Teclado → buffer → USER_INTENT → Córtex (NPU mock) → Skill Registry (MCP) → log RAM |
-| FRAME_ALLOCATOR_PTR | ✅ `spin::Mutex<Option<FrameAllocatorPtr>>` — raw pointer Send+Sync wrapper, setado antes do executor |
+ | TicketLock FIFO | ✅ `ticket-lock` crate — `TicketLock<T>` com `AtomicUsize ticket/serving`, `UnsafeCell<T>`, spin loop, Garantia FIFO, Send+Sync |
+| EventBus refactor | ✅ Substituído `spin::Mutex` por `TicketLock` em `EventBus.subscribers` e `Receiver.queue`; ID counter migrado para `AtomicU64` |
+| GLOBAL_ALLOCATOR | ✅ `memory::GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>>` — alocações físicas concorrentes sem data races |
+| NeuralExecutor refactor | ✅ `frame_allocator` field removido — executor usa `memory::global_hardware_context()` via TicketLock |
 | Top-Half/Bottom-Half I/O | ✅ Interrupt handler = microsecond (port read + atomic store + EOI); HW Bridge em user-context (alloc + publish + EventBus) |
 | system_daemon | ✅ `async fn` test — spawn, executa, complete, idle loop com hardware context |
 | EventBus crate | ✅ `event-bus` — `no_std`, `alloc`, publish/subscribe com `BTreeMap` + `Arc<Mutex<VecDeque>>` |
@@ -93,12 +97,15 @@
  | `crates/neural-kernel/src/main.rs` (`hw_bridge_daemon`) | Polls AtomicU8 → EventBus::publish("RAW_HW_IRQ1") |
 | `crates/neural-kernel/src/main.rs` (`input_daemon`) | Subscribe "RAW_HW_IRQ1" → buffer String → scancode→ASCII → ENTER flush USER_INTENT |
 | `crates/neural-kernel/src/main.rs` (`intent_router_daemon`) | Subscribe USER_INTENT → mock inference → SkillRegistry::execute_skill |
-| `crates/neural-kernel/src/main.rs` (`SystemStatusSkill`) | Skill MCP: lê hardware_context_tensor via FRAME_ALLOCATOR_PTR → log RAM |
+| `crates/neural-kernel/src/main.rs` (`SystemStatusSkill`) | Skill MCP: lê hardware_context_tensor via memory::global_hardware_context() → log RAM |
+| `crates/neural-kernel/src/sync/ticket_lock.rs` | Re-exporta `ticket_lock::*` (TicketLock FIFO) |
+| `crates/neural-kernel/src/sync/mod.rs` | Module sync — `pub mod ticket_lock;` |
+| `crates/ticket-lock/src/lib.rs` | `TicketLock<T>` — AtomicUsize ticket/serving + UnsafeCell<T> + spin loop justo |
 | `crates/neural-kernel/src/interrupts.rs` (`keyboard_interrupt_handler`) | IDT[33]: port 0x60 → AtomicU8 Release → raw EOI |
 | `crates/event-bus/src/lib.rs` | Re-exports: `EventBus`, `CapabilityToken`, `Event` |
 | `crates/event-bus/src/capability.rs` | `CapabilityToken(pub u64)` — validação de permissão |
 | `crates/event-bus/src/event.rs` | `Event { id, topic, payload, token }` |
- | `crates/event-bus/src/bus.rs` | `EventBus` — `BTreeMap<String, Vec<Arc<Mutex<VecDeque>>>>` |
+ | `crates/event-bus/src/bus.rs` | `EventBus` — `TicketLock<BTreeMap<>>`, `Arc<TicketLock<VecDeque>>`, `AtomicU64` ID |
 | `crates/skill-registry/src/lib.rs` | Re-exports: `SkillRegistry`, `Skill`, `McpManifest` |
 | `crates/skill-registry/src/mcp.rs` | `McpManifest { name, description, required_tokens }` |
 | `crates/skill-registry/src/skill.rs` | `trait Skill: Send + Sync { manifest(), execute() }` |
@@ -107,7 +114,8 @@
 | `crates/neural-kernel/Cargo.toml` | Kernel package, deps, bootimage metadata |
 | `crates/agent-core/Cargo.toml` | Agent abstraction crate (stub) |
 | `crates/skill-registry/Cargo.toml` | WASM Skills crate (stub) |
-| `crates/event-bus/Cargo.toml` | IPC EventBus crate (stub) |
+| `crates/event-bus/Cargo.toml` | IPC EventBus crate — dep `ticket-lock` (no more `spin`) |
+| `crates/ticket-lock/Cargo.toml` | Primitiva TicketLock FIFO para sincronização bare-metal |
 | `.cargo/config.toml` | Target, runner, `relocation-model=static` |
 | `docs/architecture/0001-*.md` to `0013-*.md` | 13 ADRs |
 | `docs/memory/STATE.md` | This file |
@@ -116,11 +124,12 @@
 
 ### Dependencies
 
-| Crate | Version | Purpose |
-|---|---|---|
+ | Crate | Version | Purpose |
+|---|---|---|---|
  | `bootloader` | 0.9.34 | Boot image, `BootInfo`, `map_physical_memory` |
 | `skill-registry` | 0.1.0 | MCP layer — `Skill`, `McpManifest`, `SkillRegistry` com validação de token |
-| `spin` | 0.9 | `Mutex<T>` for `no_std` sync |
+| `ticket-lock` | 0.1.0 | TicketLock FIFO — sincronização justa com AtomicUsize + UnsafeCell |
+| `spin` | 0.9 | `Mutex<T>` for `no_std` sync (ainda usado no kernel, removido do event-bus) |
 | `lazy_static` | 1.5 | `lazy_static!` with `spin_no_std` |
 | `uart_16550` | 0.2 | 16550 UART driver |
 | `x86_64` | 0.14.11 | IDT, GDT, TSS, page tables, frame allocator trait |
@@ -164,9 +173,11 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Sprint 15 (Concluído):** Roteamento de Hardware Neural — Top-Half/Bottom-Half I/O implementado. Interrupt handler do teclado (IDT[33]) lê porta 0x60 via `x86_64::instructions::port::Port`, armazena scancode em `LAST_SCANCODE: AtomicU8` com `Release`, e envia EOI raw. `hw_bridge_daemon` (contexto normal) faz `swap(0, Acquire)` do atômico e publica `Event { topic: "RAW_HW_IRQ1", ... }` no EventBus. `input_daemon` (agente de I/O) assina o tópico, loga o scancode e infere tecla 'A' para scan code 0x1E. Validação em QEMU: 4 tasks spawnadas (2 completam, 2 ficam em loop de polling), 500+ ticks PIT sem Double Fault. ADR-0013 validado: kernel roteia bytes brutos, daemons interpretam semântica.
 
-**Sprint 16 (Concluído):** A Ignição do Córtex — Ciclo de Intenção Fechado. `input_daemon` evoluído com buffer `String` heap-alocado + `scancode_to_ascii()` (A-Z, Espaço, Backspace). ENTER (0x1C) publica `USER_INTENT`. `intent_router_daemon` (Córtex) assina `USER_INTENT`, faz mock inference (contains "STATUS" → ID 1, else ID 0), e aciona `SkillRegistry::execute_skill("system_status")`. `SystemStatusSkill` lê o `hardware_context_tensor` via ponteiro global `FRAME_ALLOCATOR_PTR` e loga ocupação RAM. 5 tasks spawnadas (3 persistentes: HW Bridge, Input Daemon, Córtex). 1000+ ticks PIT estáveis. Pipeline completo validado em QEMU: Teclado → Buffer → USER_INTENT → Córtex → Skill Registry.
+**Sprint 16 (Concluído):** A Ignição do Córtex — Ciclo de Intenção Fechado. `input_daemon` evoluído com buffer `String` heap-alocado + `scancode_to_ascii()` (A-Z, Espaço, Backspace). ENTER (0x1C) publica `USER_INTENT`. `intent_router_daemon` (Córtex) assina `USER_INTENT`, faz mock inference (contains "STATUS" → ID 1, else ID 0), e aciona `SkillRegistry::execute_skill("system_status")`. `SystemStatusSkill` lê o `hardware_context_tensor` via `memory::global_hardware_context()` e loga ocupação RAM. 5 tasks spawnadas (3 persistentes: HW Bridge, Input Daemon, Córtex). 1000+ ticks PIT estáveis. Pipeline completo validado em QEMU: Teclado → Buffer → USER_INTENT → Córtex → Skill Registry.
 
-### Pendências (Sprint 17)
+**Sprint 17 (Concluído):** Primitiva TicketLock FIFO implementada. `crates/ticket-lock/` — `TicketLock<T>` com `AtomicUsize ticket/serving` + `UnsafeCell<T>` + spin loop justo. `Send` + `Sync` garantidos. EventBus refatorado: `spin::Mutex` substituído por `TicketLock` em `subscribers` e `Receiver.queue`; contador de ID migrado para `AtomicU64`. BitmapFrameAllocator encapsulado em `memory::GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>>`. NeuralExecutor simplificado: campo `frame_allocator` removido, executor consulta o estado global via `global_hardware_context()`. Compilação limpa (0 warnings, 0 erros). Sistema preparado para ativação SMP (ADR-0013).
+
+### Pendências (Sprint 18)
 
 - [ ] Slab allocator — reduzir fragmentação do heap
 - [ ] Phase 3 benchmark: ternary vs f32 inference perf in QEMU

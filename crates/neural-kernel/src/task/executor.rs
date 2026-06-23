@@ -3,21 +3,18 @@ use core::task::{Context, Poll};
 
 use super::agent::AgentTask;
 use super::dummy_waker;
-use crate::memory::BitmapFrameAllocator;
 use crate::serial_println;
 use crate::println;
 
-pub struct NeuralExecutor<'a> {
+pub struct NeuralExecutor {
     task_queue: VecDeque<AgentTask>,
-    frame_allocator: &'a BitmapFrameAllocator,
     iteration: u64,
 }
 
-impl<'a> NeuralExecutor<'a> {
-    pub fn new(frame_allocator: &'a BitmapFrameAllocator) -> Self {
+impl NeuralExecutor {
+    pub fn new() -> Self {
         NeuralExecutor {
             task_queue: VecDeque::new(),
-            frame_allocator,
             iteration: 0,
         }
     }
@@ -51,7 +48,7 @@ impl<'a> NeuralExecutor<'a> {
             self.iteration += 1;
 
             if self.iteration % 100 == 0 {
-                let ram = self.frame_allocator.hardware_context_tensor();
+                let ram = crate::memory::global_hardware_context();
                 serial_println!("[EXECUTOR] Hardware context: RAM=[{:.6}, {:.6}] tasks={}",
                     ram[0], ram[1], self.task_queue.len());
             }

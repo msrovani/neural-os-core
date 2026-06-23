@@ -1,4 +1,5 @@
 use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
+use ticket_lock::TicketLock;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB};
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
@@ -9,6 +10,8 @@ use x86_64::VirtAddr;
 const BITMAP_SIZE: usize = 131072;
 const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
+
+pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> = TicketLock::new(None);
 
 /// Alocador de frames físicos baseado em bitmap.
 
@@ -173,6 +176,29 @@ impl FrameDeallocator<Size4KiB> for BitmapFrameAllocator {
             }
         }
     }
+}
+
+pub fn init_global_allocator(alloc: BitmapFrameAllocator) {
+    *GLOBAL_ALLOCATOR.lock() = Some(alloc);
+}
+
+#[allow(dead_code)]
+pub fn alloc_physical_frame() -> Option<PhysFrame<Size4KiB>> {
+    let mut guard = GLOBAL_ALLOCATOR.lock();
+    guard.as_mut().and_then(|a| a.allocate_frame())
+}
+
+#[allow(dead_code)]
+pub unsafe fn dealloc_physical_frame(frame: PhysFrame<Size4KiB>) {
+    let mut guard = GLOBAL_ALLOCATOR.lock();
+    if let Some(ref mut a) = *guard {
+        a.deallocate_frame(frame);
+    }
+}
+
+pub fn global_hardware_context() -> [f32; 2] {
+    let guard = GLOBAL_ALLOCATOR.lock();
+    guard.as_ref().map_or([0.0, 0.0], |a| a.hardware_context_tensor())
 }
 
 pub unsafe fn init_memory(physical_memory_offset: u64) -> OffsetPageTable<'static> {

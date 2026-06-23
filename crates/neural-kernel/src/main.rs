@@ -18,6 +18,7 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 mod allocator;
 mod interrupts;
 mod memory;
+mod sync;
 mod nn;
 mod serial;
 mod simd;
@@ -43,10 +44,6 @@ impl Skill for EchoSkill {
     }
 }
 
-struct FrameAllocatorPtr(*const ());
-unsafe impl Send for FrameAllocatorPtr {}
-unsafe impl Sync for FrameAllocatorPtr {}
-
 struct SystemStatusSkill;
 
 impl Skill for SystemStatusSkill {
@@ -58,12 +55,8 @@ impl Skill for SystemStatusSkill {
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
-        let guard = FRAME_ALLOCATOR_PTR.lock();
-        let ptr = guard.as_ref().ok_or("FRAME_ALLOCATOR_PTR not set")?.0;
-        let alloc = unsafe { &*(ptr as *const BitmapFrameAllocator) };
-        let tensor = alloc.hardware_context_tensor();
+        let tensor = crate::memory::global_hardware_context();
         let occupancy_pct = tensor[0] * 100.0;
-        drop(guard);
         serial_println!("[SKILL EXECUTADA] Memoria RAM: {:.2}%. CPU: Agentes Cooperativos em operacao.", occupancy_pct);
         println!("[SKILL EXECUTADA] Memoria RAM: {:.2}%. CPU: Agentes Cooperativos em operacao.", occupancy_pct);
         Ok(alloc::vec::Vec::new())
@@ -72,7 +65,6 @@ impl Skill for SystemStatusSkill {
 
 lazy_static! {
     static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
-    static ref FRAME_ALLOCATOR_PTR: spin::Mutex<Option<FrameAllocatorPtr>> = spin::Mutex::new(None);
     static ref SKILL_REGISTRY: spin::Mutex<SkillRegistry> = {
         let mut reg = SkillRegistry::new();
         reg.register(alloc::boxed::Box::new(EchoSkill));
@@ -199,15 +191,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
         ram_tensor[0], ram_tensor[1]);
 
-    *FRAME_ALLOCATOR_PTR.lock() = Some(FrameAllocatorPtr(&frame_allocator as *const BitmapFrameAllocator as *const ()));
-
     interrupts::init_pics();
     interrupts::enable_interrupts();
+
+    memory::init_global_allocator(frame_allocator);
 
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
     println!("[EXECUTOR] Inicializando Neural Executor...");
 
-    let mut executor = task::executor::NeuralExecutor::new(&frame_allocator);
+    let mut executor = task::executor::NeuralExecutor::new();
     executor.spawn(task::agent::AgentTask::new(system_daemon()));
     executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon()));
     executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/ticket-lock",
     "crates/neural-kernel",
     "crates/agent-core",
     "crates/skill-registry",

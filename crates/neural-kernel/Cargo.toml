@@ -14,6 +14,7 @@ libm = "0.2"
 pic8259 = "0.10"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
+ticket-lock = { path = "../ticket-lock" }
 
 [build-dependencies]
 bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }

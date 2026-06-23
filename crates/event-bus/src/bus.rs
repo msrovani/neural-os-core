@@ -4,12 +4,13 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use spin::Mutex;
+use core::sync::atomic::{AtomicU64, Ordering};
+use ticket_lock::TicketLock;
 
 use crate::event::Event;
 
 pub struct Receiver {
-    queue: Arc<Mutex<VecDeque<Event>>>,
+    queue: Arc<TicketLock<VecDeque<Event>>>,
 }
 
 impl Receiver {
@@ -19,21 +20,20 @@ impl Receiver {
 }
 
 pub struct EventBus {
-    subscribers: Mutex<BTreeMap<String, Vec<Arc<Mutex<VecDeque<Event>>>>>>,
-    #[allow(dead_code)]
-    next_event_id: Mutex<u64>,
+    subscribers: TicketLock<BTreeMap<String, Vec<Arc<TicketLock<VecDeque<Event>>>>>>,
+    next_event_id: AtomicU64,
 }
 
 impl EventBus {
     pub fn new() -> Self {
         EventBus {
-            subscribers: Mutex::new(BTreeMap::new()),
-            next_event_id: Mutex::new(1),
+            subscribers: TicketLock::new(BTreeMap::new()),
+            next_event_id: AtomicU64::new(1),
         }
     }
 
     pub fn subscribe(&self, topic: &str) -> Receiver {
-        let queue = Arc::new(Mutex::new(VecDeque::new()));
+        let queue = Arc::new(TicketLock::new(VecDeque::new()));
         let mut subs = self.subscribers.lock();
         match subs.entry(String::from(topic)) {
             Entry::Occupied(mut o) => {
@@ -50,10 +50,7 @@ impl EventBus {
         if !event.token.is_valid() {
             return Err("token de capacidade invalido");
         }
-        let mut id_lock = self.next_event_id.lock();
-        event.id = *id_lock;
-        *id_lock += 1;
-        drop(id_lock);
+        event.id = self.next_event_id.fetch_add(1, Ordering::Relaxed);
         let subs = self.subscribers.lock();
         if let Some(queues) = subs.get(&event.topic) {
             for q in queues {
