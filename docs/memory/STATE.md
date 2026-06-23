@@ -65,9 +65,10 @@
 | `src/nn.rs` | `silu()`, `rms_norm()`, `Linear`, `BitLinear`, `argmax` — MLP + ternary layer |
 | `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` + `x86_64` + `linked_list_allocator` + `libm` + `pic8259` |
 | `.cargo/config.toml` | Target, runner, `relocation-model=static` |
-| `docs/architecture/0001-*.md` to `0012-*.md` | 12 ADRs |
+| `docs/architecture/0001-*.md` to `0013-*.md` | 13 ADRs |
 | `docs/memory/STATE.md` | This file |
 | `docs/memory/SESSION_001.md` to `SESSION_010.md` | Sprint logs |
+| `docs/roadmap.md` | Roadmap geral — fases 3–7, TL/I2_S, Padé, MatMul-free |
 
 ### Dependencies
 
@@ -89,7 +90,10 @@
 3. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
 4. **MinGW linker required** — `bootimage` needs C linker.
 
-### Next Steps (Sprint 11 — Phase 3 calibr.)
+### Next Steps (Sprint 11 — Phase 3 close + SotA integration)
+
+- [x] ADR-0013: Neural OS Executive Summary — Estado da Arte 2026 (MerlionOS, TL/I2_S, ASA/eBPF)
+- [x] `docs/roadmap.md` — Roadmap atualizado com Fases 3–7, Padé, MatMul-free LM
 
 - [x] PackedTernaryTensor — 2-bit encoding, `pack_weights()`, `get_weight()`
 - [x] `quantize_to_packed(tensor, threshold)` — f32 → ternary calibration

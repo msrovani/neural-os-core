@@ -114,8 +114,8 @@ cargo run → bootloader → kernel_main
 ## Next Sprint (Sprint 11)
 Bitmap FrameDeallocator, Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
 
-## Roadmap (ADR-0010)
-- Phase 3: Ternary Inference (Sprints 9–11, Q3 2026) — Sprint 10 done, 1 remaining
-- Phase 4: Zero-Copy SFS (Sprints 12–15, Q4 2026)
-- Phase 5: WASM Skills (Sprints 16–18, Q1 2027)
-- Phase 6: AIOS Syscalls (Sprints 19–21, Q2 2027)
+## Roadmap
+See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, MatMul-free).
+
+## References
+- ADR-0013: Executive Summary / Estado da Arte 2026 (MerlionOS, FairyFuse/Bitnet.cpp, ASA/eBPF)
