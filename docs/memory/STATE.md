@@ -14,6 +14,7 @@
 ## Sprint 12 — Kernel Abstraction: Async Neural Executor (Complete)
 ## Sprint 14 — Skill Registry & MCP Layer (Complete)
 ## Sprint 15 — Hardware Neural Routing: IRQ 1 → Event Bus → Agent (Complete)
+## Sprint 16 — A Ignição do Córtex: Ciclo de Intenção Fechado (Complete)
 
 ### Current Status
 
@@ -34,7 +35,11 @@
 | AgentTask | ✅ `id`, `Pin<Box<dyn Future>>`, `AtomicU64` ID generation |
 | DummyWaker | ✅ `RawWakerVTable` em `no_std` (clone/wake/drop no-ops) |
  | hw_bridge_daemon | ✅ Polls `interrupts::LAST_SCANCODE` (AtomicU8 swap Acquire) → publica `Event { topic: "RAW_HW_IRQ1", payload: [scancode] }` no EventBus |
-| input_daemon | ✅ Subscribe "RAW_HW_IRQ1" → recebe scancode → log → infers 0x1E = 'A' |
+ | input_daemon | ✅ Subscribe "RAW_HW_IRQ1" → buffer String → scancode→ASCII (A-Z, Space) → ENTER (0x1C) publica USER_INTENT |
+ | intent_router_daemon (Córtex) | ✅ Subscribe USER_INTENT → mock inference (text contains "STATUS" → ID 1 else 0) → SkillRegistry::execute_skill("system_status") |
+| SystemStatusSkill | ✅ `Skill` impl: lê `hardware_context_tensor` via `FRAME_ALLOCATOR_PTR` global, imprime `"Memoria RAM: {:.2}%. CPU: Agentes Cooperativos."` |
+| Ciclo Intenção Fechado | ✅ Teclado → buffer → USER_INTENT → Córtex (NPU mock) → Skill Registry (MCP) → log RAM |
+| FRAME_ALLOCATOR_PTR | ✅ `spin::Mutex<Option<FrameAllocatorPtr>>` — raw pointer Send+Sync wrapper, setado antes do executor |
 | Top-Half/Bottom-Half I/O | ✅ Interrupt handler = microsecond (port read + atomic store + EOI); HW Bridge em user-context (alloc + publish + EventBus) |
 | system_daemon | ✅ `async fn` test — spawn, executa, complete, idle loop com hardware context |
 | EventBus crate | ✅ `event-bus` — `no_std`, `alloc`, publish/subscribe com `BTreeMap` + `Arc<Mutex<VecDeque>>` |
@@ -86,7 +91,9 @@
 | `crates/neural-kernel/src/task/agent.rs` | `AgentTask` — `id: u64`, `Pin<Box<dyn Future>>` |
 | `crates/neural-kernel/src/task/executor.rs` | `NeuralExecutor` — `VecDeque` loop cooperativo |
  | `crates/neural-kernel/src/main.rs` (`hw_bridge_daemon`) | Polls AtomicU8 → EventBus::publish("RAW_HW_IRQ1") |
-| `crates/neural-kernel/src/main.rs` (`input_daemon`) | Subscribe "RAW_HW_IRQ1" → log scancode → infer key |
+| `crates/neural-kernel/src/main.rs` (`input_daemon`) | Subscribe "RAW_HW_IRQ1" → buffer String → scancode→ASCII → ENTER flush USER_INTENT |
+| `crates/neural-kernel/src/main.rs` (`intent_router_daemon`) | Subscribe USER_INTENT → mock inference → SkillRegistry::execute_skill |
+| `crates/neural-kernel/src/main.rs` (`SystemStatusSkill`) | Skill MCP: lê hardware_context_tensor via FRAME_ALLOCATOR_PTR → log RAM |
 | `crates/neural-kernel/src/interrupts.rs` (`keyboard_interrupt_handler`) | IDT[33]: port 0x60 → AtomicU8 Release → raw EOI |
 | `crates/event-bus/src/lib.rs` | Re-exports: `EventBus`, `CapabilityToken`, `Event` |
 | `crates/event-bus/src/capability.rs` | `CapabilityToken(pub u64)` — validação de permissão |
@@ -157,7 +164,9 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Sprint 15 (Concluído):** Roteamento de Hardware Neural — Top-Half/Bottom-Half I/O implementado. Interrupt handler do teclado (IDT[33]) lê porta 0x60 via `x86_64::instructions::port::Port`, armazena scancode em `LAST_SCANCODE: AtomicU8` com `Release`, e envia EOI raw. `hw_bridge_daemon` (contexto normal) faz `swap(0, Acquire)` do atômico e publica `Event { topic: "RAW_HW_IRQ1", ... }` no EventBus. `input_daemon` (agente de I/O) assina o tópico, loga o scancode e infere tecla 'A' para scan code 0x1E. Validação em QEMU: 4 tasks spawnadas (2 completam, 2 ficam em loop de polling), 500+ ticks PIT sem Double Fault. ADR-0013 validado: kernel roteia bytes brutos, daemons interpretam semântica.
 
-### Pendências (Sprint 16)
+**Sprint 16 (Concluído):** A Ignição do Córtex — Ciclo de Intenção Fechado. `input_daemon` evoluído com buffer `String` heap-alocado + `scancode_to_ascii()` (A-Z, Espaço, Backspace). ENTER (0x1C) publica `USER_INTENT`. `intent_router_daemon` (Córtex) assina `USER_INTENT`, faz mock inference (contains "STATUS" → ID 1, else ID 0), e aciona `SkillRegistry::execute_skill("system_status")`. `SystemStatusSkill` lê o `hardware_context_tensor` via ponteiro global `FRAME_ALLOCATOR_PTR` e loga ocupação RAM. 5 tasks spawnadas (3 persistentes: HW Bridge, Input Daemon, Córtex). 1000+ ticks PIT estáveis. Pipeline completo validado em QEMU: Teclado → Buffer → USER_INTENT → Córtex → Skill Registry.
+
+### Pendências (Sprint 17)
 
 - [ ] Slab allocator — reduzir fragmentação do heap
 - [ ] Phase 3 benchmark: ternary vs f32 inference perf in QEMU
@@ -168,9 +177,10 @@ O blueprint de código do neural-os-core está consolidado em:
 
 Ver `docs/roadmap.md` para a ordem de engenharia bare-metal completa:
 
-1. **Memória** — Bitmap Allocator + Huge Pages (Sprints 11–12)
-2. **Kernel** — Agent Scheduler (Sprint 13)
-3. **IPC** — EventBus + Capability Tokens (Sprint 13)
-4. **Skills** — Skill Registry + MCP (Sprint 14) ✅
-5. **Cognitivo** — Intent Planner + Success Engine (Sprints 15+)
-6. **Meta** — Slab Allocator, MatMul-free LM (Sprints 15+)
+1. **Memória** — Bitmap Allocator + Huge Pages (Sprints 11–12) ✅
+2. **Kernel** — Async Neural Executor (Sprint 12) ✅
+3. **I/O HW** — Hardware Neural Routing IRQ1 → EventBus (Sprint 15) ✅
+4. **IPC** — EventBus + Capability Tokens (Sprint 13) ✅
+5. **Skills** — Skill Registry + MCP (Sprint 14) ✅
+6. **Cognitivo** — Córtex / Ciclo de Intenção (Sprint 16) ✅
+7. **Meta** — Slab Allocator, Agent Scheduler, MatMul-free LM (Sprints 17+)
