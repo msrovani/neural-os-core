@@ -3,6 +3,10 @@
 version = 4
 
 [[package]]
+name = "agent-core"
+version = "0.1.0"
+
+[[package]]
 name = "bit_field"
 version = "0.10.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -34,6 +38,10 @@ dependencies = [
  "x86_64",
  "xmas-elf",
 ]
+
+[[package]]
+name = "event-bus"
+version = "0.1.0"
 
 [[package]]
 name = "fixedvec"
@@ -81,7 +89,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "neural-os-core"
+name = "neural-kernel"
 version = "0.10.0"
 dependencies = [
  "bootloader",
@@ -167,6 +175,10 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "skill-registry"
+version = "0.1.0"
 
 [[package]]
 name = "spin"

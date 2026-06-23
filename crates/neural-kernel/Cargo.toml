@@ -1,0 +1,20 @@
+[package]
+name = "neural-kernel"
+version = "0.10.0"
+edition = "2021"
+
+[dependencies]
+bootloader = { version = "0.9", default-features = false, features = ["map_physical_memory"] }
+spin = "0.9"
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
+uart_16550 = "0.2"
+x86_64 = "0.14.11"
+linked_list_allocator = "0.9"
+libm = "0.2"
+pic8259 = "0.10"
+
+[build-dependencies]
+bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }
+
+[package.metadata.bootimage]
+run-args = ["-m", "2G", "-serial", "stdio"]

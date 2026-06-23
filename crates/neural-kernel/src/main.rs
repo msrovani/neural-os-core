@@ -8,6 +8,8 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use bootloader::bootinfo::BootInfo;
+use memory::BitmapFrameAllocator;
+use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 
 mod allocator;
 mod interrupts;
@@ -32,7 +34,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     interrupts::init_idt();
 
     let mut mapper = unsafe { memory::init_memory(boot_info.physical_memory_offset) };
-    let mut frame_allocator = unsafe { memory::BootInfoFrameAllocator::init(&boot_info.memory_map) };
+    let mut frame_allocator = BitmapFrameAllocator::empty();
+    frame_allocator.init(&boot_info.memory_map);
 
     allocator::init_heap(&mut mapper, &mut frame_allocator)
         .expect("heap initialization failed");
@@ -97,6 +100,43 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         compressed_size, bit_output.data);
     println!("[BITNET] Inferencia 2-bit concluida. Tamanho comprimido: {} bytes. Output: {:?}",
         compressed_size, bit_output.data);
+
+    // --- Stress test: 1000 alloc/desaloc no Bitmap Frame Allocator ---
+    serial_println!("[KERNEL] Bitmap Allocator: iniciando stress test (1000 iteracoes)...");
+    println!("[KERNEL] Bitmap Allocator: iniciando stress test (1000 iteracoes)...");
+
+    {
+        let mut allocated_frames: Vec<Option<x86_64::structures::paging::PhysFrame>> = Vec::new();
+
+        for i in 0..1000 {
+            let frame = frame_allocator.allocate_frame();
+            match frame {
+                Some(f) => {
+                    allocated_frames.push(Some(f));
+                }
+                None => {
+                    serial_println!("[KERNEL] Stress: falhou alocar na iteracao {}", i);
+                    println!("[KERNEL] Stress: falhou alocar na iteracao {}", i);
+                    break;
+                }
+            }
+
+            if i % 2 == 0 && !allocated_frames.is_empty() {
+                if let Some(Some(f)) = allocated_frames.last() {
+                    unsafe {
+                        frame_allocator.deallocate_frame(*f);
+                    }
+                }
+                allocated_frames.pop();
+            }
+        }
+    }
+
+    let ram_tensor = frame_allocator.hardware_context_tensor();
+    serial_println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
+        ram_tensor[0], ram_tensor[1]);
+    println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
+        ram_tensor[0], ram_tensor[1]);
 
     interrupts::init_pics();
     interrupts::enable_interrupts();

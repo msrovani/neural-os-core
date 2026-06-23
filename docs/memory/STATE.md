@@ -23,7 +23,9 @@
 | IDT | ✅ Breakpoint + Double Fault handlers, IST stack switch for DF |
 | GDT + TSS | ✅ Custom GDT with TSS descriptor for Double Fault stack switching |
 | Page Tables | ✅ `OffsetPageTable` via `Cr3` + `physical_memory_offset` |
-| Frame Allocator | ✅ `BootInfoFrameAllocator` — lê mapa UEFI/BIOS, retorna frames Usable |
+| Frame Allocator | ✅ `BitmapFrameAllocator` — bitmap 128 KB, init via UEFI map, alloc/dealloc O(n), 0% leak |
+| Bitmap Stress Test | ✅ 1000 alloc/dealloc estáveis — `[KERNEL] Status RAM Tensor: [0.001011, 0.0]` |
+| Contiguous Alloc | ✅ `allocate_contiguous(count)` preparado para Huge Pages (Fase 4) |
 | Heap | ✅ `LockedHeap` global allocator (linked_list_allocator v0.9.1) |
 | `alloc` crate | ✅ `Box`, `Vec` testados no boot flow |
 | FPU/SSE (SIMD) | ✅ CR0: clear EMULATE_COPROC, set MONITOR + NUMERIC_ERROR |
@@ -39,7 +41,7 @@
 | PIC 8259A Remap | ✅ PIC1 → vetor 32, PIC2 → vetor 40 via `ChainedPics` |
 | PIT Watchdog | ✅ Timer a ~18.2 Hz, contador atômico, EOI |
 | Page Fault Handler | ✅ CR2 → log → `hlt` loop (barreira Ring 2) |
-| Frame Deallocator | ✅ `FrameDeallocator` trait + `EmptyFrameDeallocator` stub |
+| Frame Deallocator | ✅ `BitmapFrameAllocator` implementa `FrameDeallocator<Size4KiB>` — reuso real |
 | TernaryTensor | ✅ `i8` storage, shape (in, out), `from_row_major()` |
 | Hybrid MatMul | ✅ ADD/SUB-only — zero multiplicações, `match w {1 => add, -1 => sub, _ => skip}` |
 | BitLinear (i8) | ✅ Camada densa ternária com `forward()` |
@@ -49,21 +51,26 @@
 | 2-bit Inference | ✅ `[1.5, -1.8, 0.2, ...]` → threshold 0.5 → 2 bytes → `[-0.5, -2.0]` |
 | `libm` crate | ✅ v0.2.16 — `expf`, `sqrtf` em `no_std` |
 | Toolchain | ✅ nightly, bootimage v0.10.4, MinGW-w64 |
+| Monorepo Workspace | ✅ Cargo workspace em `crates/` — `neural-kernel`, `agent-core`, `skill-registry`, `event-bus` |
 
 ### Files
 
 | File | Purpose |
-|---|---|
-| `src/main.rs` | Entry point, panic handler, boot flow with `Box`/`Vec` test |
-| `src/vga_buffer.rs` | VGA Writer, `print!/println!` |
-| `src/serial.rs` | 16550 UART, `serial_print!/serial_println!` |
-| `src/interrupts.rs` | IDT, TSS, GDT, Breakpoint + Double Fault + Page Fault + PIT Timer + PIC remap |
-| `src/memory.rs` | `OffsetPageTable`, `BootInfoFrameAllocator`, `FrameDeallocator` trait, `init_memory()` |
-| `src/allocator.rs` | `LockedHeap` global allocator, `init_heap()` |
-| `src/simd.rs` | `enable_simd()` — CR0/CR4 FPU/SSE enablement |
-| `src/tensor.rs` | `Tensor` + `TernaryTensor` + `PackedTernaryTensor` — matmul, hybrid, pack, quantize |
-| `src/nn.rs` | `silu()`, `rms_norm()`, `Linear`, `BitLinear`, `argmax` — MLP + ternary layer |
-| `Cargo.toml` | `bootloader` + `spin` + `lazy_static` + `uart_16550` + `x86_64` + `linked_list_allocator` + `libm` + `pic8259` |
+|---|---|---|
+| `crates/neural-kernel/src/main.rs` | Entry point, panic handler, boot flow |
+| `crates/neural-kernel/src/vga_buffer.rs` | VGA Writer, `print!/println!` |
+| `crates/neural-kernel/src/serial.rs` | 16550 UART, `serial_print!/serial_println!` |
+| `crates/neural-kernel/src/interrupts.rs` | IDT, TSS, GDT, Breakpoint + Double Fault + Page Fault + PIT Timer + PIC remap |
+| `crates/neural-kernel/src/memory.rs` | `OffsetPageTable`, `BitmapFrameAllocator`, `init_memory()` |
+| `crates/neural-kernel/src/allocator.rs` | `LockedHeap` global allocator, `init_heap()` |
+| `crates/neural-kernel/src/simd.rs` | `enable_simd()` — CR0/CR4 FPU/SSE enablement |
+| `crates/neural-kernel/src/tensor.rs` | `Tensor` + `TernaryTensor` + `PackedTernaryTensor` |
+| `crates/neural-kernel/src/nn.rs` | `silu()`, `rms_norm()`, `Linear`, `BitLinear`, `argmax` |
+| `Cargo.toml` (root) | Workspace manifest |
+| `crates/neural-kernel/Cargo.toml` | Kernel package, deps, bootimage metadata |
+| `crates/agent-core/Cargo.toml` | Agent abstraction crate (stub) |
+| `crates/skill-registry/Cargo.toml` | WASM Skills crate (stub) |
+| `crates/event-bus/Cargo.toml` | IPC EventBus crate (stub) |
 | `.cargo/config.toml` | Target, runner, `relocation-model=static` |
 | `docs/architecture/0001-*.md` to `0013-*.md` | 13 ADRs |
 | `docs/memory/STATE.md` | This file |
@@ -86,9 +93,8 @@
 ### Known Issues
 
 1. **`spin::Mutex` single-core** — deadlock if exception fires while VGA/heap lock is held.
-2. **Frame allocator monotonic** — `allocate_frame()` nunca reusa frames; precisa de slab allocator.
-3. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
-4. **MinGW linker required** — `bootimage` needs C linker.
+2. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
+3. **MinGW linker required** — `bootimage` needs C linker.
 
 ### Next Steps (Sprint 11 — Phase 3 close + SotA integration)
 
@@ -112,16 +118,14 @@ O blueprint de código do neural-os-core está consolidado em:
 | `docs/roadmap.md` | Ordem de engenharia bare-metal (5 fases) |
 | `docs/memory/STATE.md` | Estado atual + pendências |
 
-**Ação Imediata:** Implementar o Bitmap Frame Allocator otimizado para Huge Pages (preparação para FairyFuse/Bitnet.cpp TL/I2_S). Substituir `BootInfoFrameAllocator` monotônico + `EmptyFrameDeallocator` stub por um `BitmapFrameAllocator` com suporte a `Size4KiB`, `Size2MiB` e `Size1GiB`.
+**Ação Imediata (Concluída):** Bitmap Frame Allocator implementado — 128 KB bitmap, init UEFI, alloc/dealloc, `allocate_contiguous()` para Huge Pages, `hardware_context_tensor() -> [f32; 2]`. 1000 alloc/dealloc estáveis em QEMU. Monorepo workspace criado.
 
 ### Pendências (Sprint 11)
 
-- [x] PackedTernaryTensor — 2-bit encoding, `pack_weights()`, `get_weight()`
-- [x] `quantize_to_packed(tensor, threshold)` — f32 → ternary calibration
-- [x] BitLinear refactored — `PackedTernaryTensor` instead of `i8`
-- [x] End-to-end test: f32 weights → threshold 0.5 → 2 bytes packed → forward → `[-0.5, -2.0]`
-- [x] ADR-0012: 2-bit Packing and Ternary Quantization
-- [ ] Bitmap Frame Allocator (suporte a 4KiB, 2MiB, 1GiB) — preparação para TL/I2_S
+- [x] Bitmap Frame Allocator — substitui `BootInfoFrameAllocator` monotônico
+- [x] `hardware_context_tensor()` — `[taxa_ocupacao, 0.0]` para roteador MLP
+- [x] Monorepo workspace — `crates/neural-kernel` + stub crates
+- [x] Stress test — 1000 alloc/dealloc sem leak, RAM Tensor confirmado
 - [ ] Slab allocator — reduzir fragmentação do heap
 - [ ] Phase 3 close: benchmark ternary vs f32 perf in QEMU
 

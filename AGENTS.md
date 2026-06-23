@@ -111,8 +111,14 @@ cargo run → bootloader → kernel_main
 | libm | 0.2 |
 | pic8259 | 0.10 |
 
-## Next Sprint (Sprint 11)
-Bitmap FrameDeallocator, Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
+## Next Sprint (Sprint 12)
+Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
+
+## Monorepo Structure
+- `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN)
+- `crates/agent-core/` — AgentProcess trait + scheduler (stub)
+- `crates/skill-registry/` — Skill trait + WASM runtime (stub)
+- `crates/event-bus/` — EventBus IPC + CapabilityToken (stub)
 
 ## Roadmap
 See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, MatMul-free).
