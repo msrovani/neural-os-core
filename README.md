@@ -25,6 +25,50 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
+## 🏗️ What's Been Built (Sprint 18 — Block 1)
+
+The kernel now discovers real hardware. After boot, it scans PCI devices, parses ACPI tables, and initializes the APIC:
+
+```
+[PCI] Scan concluido: 12 dispositivos encontrados.
+[PCI] 00:00.00 8086:1237 class=06 subclass=00  # Host bridge
+[PCI] 00:01.00 8086:7000 class=06 subclass=01  # ISA bridge
+[PCI] 00:02.00 1234:1111 class=03 subclass=00  # VGA controller
+[PCI] 00:03.00 1AF4:1041 class=02 subclass=00  # VirtIO net
+[PCI] 00:04.00 1AF4:1001 class=01 subclass=00  # VirtIO block
+...
+
+[ACPI] RSDP encontrado. Revisao: 2. RSDT em 0x7f6e0000
+[ACPI] MADT: LAPICs: 1, IOAPICs: 1
+
+[APIC] LAPIC base via MSR: 0xfee00000
+[APIC] LAPIC inicializado.
+[APIC] IOAPIC em 0xfec00000. Max redirecionamentos: 23
+[APIC] Timer (IRQ0) redirecionado para vetor 32.
+[APIC] Teclado (IRQ1) redirecionado para vetor 33.
+[APIC] PIC 8259 desabilitado.
+[APIC] APIC operacional. Interrupcoes via LAPIC/IOAPIC.
+
+[EXECUTOR] Inicializando Neural Executor...
+```
+
+### What each module does
+
+| Module | What | How |
+|---|---|---|
+| `pci.rs` | PCI scan via CF8/CFC | 256 busses × 32 devices, vendor/device/class/BARs |
+| `acpi.rs` | ACPI parser | RSDP search (EBDA + BIOS), RSDT/XSDT, MADT (LAPIC/IOAPIC) |
+| `apic.rs` | APIC init | LAPIC (SVR, TPR), IOAPIC (IRQ redirection), PIC disable |
+| `interrupts.rs` | Dual EOI | `USING_APIC` atomic flag → APIC or PIC EOI per interrupt |
+
+### Next: Block 2 — SMP Multi-core (Sprint 19)
+
+PerCpu struct, GS.base segment, trampoline assembly, INIT-SIPI-SIPI wake, Slab allocator, heap 4 MB.
+
+**The boot sequence is becoming an AI pipeline. Block 4 will add the MLP that decides how to configure the system. This is just the beginning.**
+
+---
+
 ## 🔥 The Vision
 
 ### What if memory was managed by... usabilidade?
