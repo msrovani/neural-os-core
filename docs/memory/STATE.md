@@ -13,6 +13,7 @@
 ## Sprint 11 — Bitmap Frame Allocator (Complete)
 ## Sprint 12 — Kernel Abstraction: Async Neural Executor (Complete)
 ## Sprint 14 — Skill Registry & MCP Layer (Complete)
+## Sprint 15 — Hardware Neural Routing: IRQ 1 → Event Bus → Agent (Complete)
 
 ### Current Status
 
@@ -23,7 +24,7 @@
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
 | Panic Handler | ✅ Logs to VGA and serial simultaneously |
- | IDT | ✅ Breakpoint + Double Fault + Page Fault + GPF + NP + SS + TS + AC handlers; vetores 33-255 com `unhandled_interrupt_handler` (EOI duplo) |
+ | IDT | ✅ Breakpoint + Double Fault + Page Fault + GPF + NP + SS + TS + AC handlers; vetor 33 → `keyboard_interrupt_handler` (porta 0x60, atomic store Release, EOI master); vetores 34-255 com `unhandled_interrupt_handler` (EOI duplo) |
 | GDT + TSS | ✅ Custom GDT with TSS descriptor for Double Fault stack switching |
 | Page Tables | ✅ `OffsetPageTable` via `Cr3` + `physical_memory_offset` |
 | Frame Allocator | ✅ `BitmapFrameAllocator` — bitmap 128 KB, init via UEFI map, alloc/dealloc O(n), 0% leak |
@@ -32,6 +33,9 @@
 | Async Neural Executor | ✅ `NeuralExecutor` — `VecDeque<AgentTask>`, cooperative poll, RawWakerVTable |
 | AgentTask | ✅ `id`, `Pin<Box<dyn Future>>`, `AtomicU64` ID generation |
 | DummyWaker | ✅ `RawWakerVTable` em `no_std` (clone/wake/drop no-ops) |
+ | hw_bridge_daemon | ✅ Polls `interrupts::LAST_SCANCODE` (AtomicU8 swap Acquire) → publica `Event { topic: "RAW_HW_IRQ1", payload: [scancode] }` no EventBus |
+| input_daemon | ✅ Subscribe "RAW_HW_IRQ1" → recebe scancode → log → infers 0x1E = 'A' |
+| Top-Half/Bottom-Half I/O | ✅ Interrupt handler = microsecond (port read + atomic store + EOI); HW Bridge em user-context (alloc + publish + EventBus) |
 | system_daemon | ✅ `async fn` test — spawn, executa, complete, idle loop com hardware context |
 | EventBus crate | ✅ `event-bus` — `no_std`, `alloc`, publish/subscribe com `BTreeMap` + `Arc<Mutex<VecDeque>>` |
 | CapabilityToken | ✅ `pub struct CapabilityToken(pub u64)` — `is_valid()` check (token > 0) |
@@ -81,6 +85,9 @@
 | `crates/neural-kernel/src/task/mod.rs` | `DummyWaker` — `RawWakerVTable` em `no_std` |
 | `crates/neural-kernel/src/task/agent.rs` | `AgentTask` — `id: u64`, `Pin<Box<dyn Future>>` |
 | `crates/neural-kernel/src/task/executor.rs` | `NeuralExecutor` — `VecDeque` loop cooperativo |
+ | `crates/neural-kernel/src/main.rs` (`hw_bridge_daemon`) | Polls AtomicU8 → EventBus::publish("RAW_HW_IRQ1") |
+| `crates/neural-kernel/src/main.rs` (`input_daemon`) | Subscribe "RAW_HW_IRQ1" → log scancode → infer key |
+| `crates/neural-kernel/src/interrupts.rs` (`keyboard_interrupt_handler`) | IDT[33]: port 0x60 → AtomicU8 Release → raw EOI |
 | `crates/event-bus/src/lib.rs` | Re-exports: `EventBus`, `CapabilityToken`, `Event` |
 | `crates/event-bus/src/capability.rs` | `CapabilityToken(pub u64)` — validação de permissão |
 | `crates/event-bus/src/event.rs` | `Event { id, topic, payload, token }` |
@@ -118,7 +125,7 @@
 
 1. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
 2. **MinGW linker required** — `bootimage` needs C linker.
-3. **IDT coverage** — Vetores 33-255 têm `unhandled_interrupt_handler` (EOI duplo), seguro mas sem diagnóstico. Futuro: mascarar IRQs não usadas no PIC.
+3. **IDT coverage** — Vetor 33 (keyboard) tratado; vetores 34-255 têm `unhandled_interrupt_handler` (EOI duplo), seguro mas sem diagnóstico. Futuro: mascarar IRQs não usadas no PIC.
 
 ### Next Steps (Sprint 11 — Phase 3 close + SotA integration)
 
@@ -148,11 +155,12 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Sprint 14 (Concluído):** Skill Registry e MCP Layer operacionais. Crate `skill-registry` com `Skill` trait (Send+Sync), `McpManifest` (nome, descrição, tokens requeridos), e `SkillRegistry` — registro central com validação Zero-Trust de `CapabilityToken` antes da execução. `EchoSkill` de demonstração registrada no boot, executada pelo agente `system_daemon` ao receber `SYSTEM_READY`. Saída QEMU verificada: `[SKILL] EchoSkill executada. Output reverso: [3, 2, 1]`.
 
-**FIX:** Kernel Panic (Double Fault) no idle loop foi corrigido. Raiz: IRQ não tratada (keyboard, vetor 33) sem handler → #NP sem handler → Double Fault. Solução: `unhandled_interrupt_handler` registrado para vetores 33-255 com EOI duplo; handlers para #GP, #NP, #SS, #TS, #AC registrados; timer handler usa `out 0x20, 0x20` raw (sem spinlock). Sistema estável testado até 1400+ ticks PIT.
+**Sprint 15 (Concluído):** Roteamento de Hardware Neural — Top-Half/Bottom-Half I/O implementado. Interrupt handler do teclado (IDT[33]) lê porta 0x60 via `x86_64::instructions::port::Port`, armazena scancode em `LAST_SCANCODE: AtomicU8` com `Release`, e envia EOI raw. `hw_bridge_daemon` (contexto normal) faz `swap(0, Acquire)` do atômico e publica `Event { topic: "RAW_HW_IRQ1", ... }` no EventBus. `input_daemon` (agente de I/O) assina o tópico, loga o scancode e infere tecla 'A' para scan code 0x1E. Validação em QEMU: 4 tasks spawnadas (2 completam, 2 ficam em loop de polling), 500+ ticks PIT sem Double Fault. ADR-0013 validado: kernel roteia bytes brutos, daemons interpretam semântica.
 
-### Pendências (Sprint 15)
+### Pendências (Sprint 16)
 
 - [ ] Slab allocator — reduzir fragmentação do heap
+- [ ] Phase 3 benchmark: ternary vs f32 inference perf in QEMU
 
 ---
 

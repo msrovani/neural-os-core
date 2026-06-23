@@ -5,6 +5,8 @@
 
 A ordem de engenharia abaixo segue a dependência física do bare-metal: primeiro a memória, depois o kernel, depois a comunicação entre agentes, depois o runtime de skills, e por último o planejador cognitivo.
 
+> **Nota:** Sprints 11–15 concluídos. Phase 1 (Bitmap Allocator) e Phase 2 (Async Executor) entregues. Phase 3 (EventBus IPC), Phase 4 (Skill Registry) e Phase 2.5 (Hardware Neural Routing) adiantados.
+
 ---
 
 ## 1. Memória Física e Virtual (Bitmap Allocator & Huge Pages)
@@ -31,11 +33,55 @@ Sem um alocador de frames não-monotônico, não podemos reutilizar memória fí
 
 ---
 
-## 2. Kernel Abstraction (Agent Scheduler)
+## 2. Kernel Abstraction (Async Neural Executor)
 
-**Sprints:** 14–15  
+**Sprints:** 12  
+**Target:** Q3 2026  
+**Depende de:** Fase 1 (Bitmap Allocator)
+
+### Metas
+
+- [x] **`NeuralExecutor`** — `VecDeque<AgentTask>` cooperative polling com `DummyWaker` (`RawWakerVTable` em `no_std`)
+- [x] **`AgentTask`** — `{ id: u64, future: Pin<Box<dyn Future>> }` com `AtomicU64` ID generation
+- [ ] **Agent Scheduler** — round-robin com prioridade. A cada tick, percorre a lista de agentes e chama `tick()`. O scheduler consulta o Intent Router (MLP) para decisões de prioridade.
+- [ ] **Budget de execução** — limite de `tokens_consumed` por agente por ciclo.
+
+---
+
+## 2.5. Hardware Neural Routing
+
+**Sprint:** 15  
+**Target:** Q3 2026  
+**Depende de:** Phase 3 (EventBus), Phase 2 (Executor)
+
+### Justificativa
+
+Antes de construir um scheduler completo, precisamos provar que o kernel pode rotear I/O de hardware bruta para agentes via EventBus — validando a arquitetura Top-Half/Bottom-Half e a segregação Ring 0/Ring 2.
+
+### Metas
+
+- [x] **`keyboard_interrupt_handler` (IDT[33])** — Top-Half: lê porta 0x60 via `x86_64::Port`, armazena em `LAST_SCANCODE: AtomicU8` (Release), EOI raw (`out 0x20, 0x20`). Sem alocações, sem spinlocks.
+- [x] **`hw_bridge_daemon`** — Bottom-Half: `swap(0, Acquire)` do atômico → `EventBus::publish("RAW_HW_IRQ1", [scancode])`. Executa em contexto normal (user).
+- [x] **`input_daemon`** — Subscribe "RAW_HW_IRQ1" → log scancode → infer key (0x1E = 'A').
+- [x] **Validação QEMU** — 4 tasks spawnadas, 500+ ticks PIT sem Double Fault. ADR-0013 validado: kernel roteia bytes, daemons interpretam.
+
+### Arquitetura
+
+```
+Interrupt HW → Top-Half (µs) → AtomicU8 → Bottom-Half (Daemon) → EventBus → Agent
+```
+
+### Alinhamento SotA
+
+- ASA / Microkernel design: separação entre mechanism (interrupt → atomic) e policy (daemon → EventBus → agent).
+
+---
+
+## 2. Kernel Abstraction (Agent Scheduler — futuro)
+
+**Sprints:** 16–17  
 **Target:** Q4 2026  
-**Depende de:** Fase 1 (Bitmap Allocator, slabs)
+**Depende de:** Fase 1 (slabs), Fase 2.5 (HW routing)
 
 ### Justificativa
 
@@ -57,9 +103,9 @@ O `loop { hlt() }` atual não escala. Precisamos de um scheduler que gerencie m�
 
 ## 3. Event Bus & IPC (Capability Tokens)
 
-**Sprints:** 16–17  
-**Target:** Q1 2027  
-**Depende de:** Fase 2 (Agent Scheduler), slabs para mensagens
+**Sprints:** 13  
+**Target:** Q3 2026  
+**Depende de:** Fase 2 (Async Executor)
 
 ### Justificativa
 
@@ -67,10 +113,12 @@ O sistema não pode ter syscalls tradicionais. Toda comunicação entre Ring 0, 
 
 ### Metas
 
-- [ ] **`EventBus` trait + implementação concreta** — `Vec<Vec<Message>>` indexada por `AgentId` no kernel; ring-buffer lock-free em Huge Pages na versão otimizada.
-- [ ] **`CapabilityToken`** — struct com `agent_id` e `permissions: u64` bitmap. Verificado pelo `EventBus::authorize()` antes de cada publish/delivery.
-- [ ] **`Topic` enum completo** — AgentCreated, AgentDestroyed, SkillRequest, SkillOutput, CortexDecision, WatchdogTick, MemoryPressure.
-- [ ] **Roteamento baseado em ML** — para tópicos de alta frequência (ex: WatchdogTick), o EventBus consulta o Intent Router para decidir quais assinantes recebem a mensagem (evita flooding).
+- [x] **`EventBus` struct** — `BTreeMap<String, Vec<Arc<Mutex<VecDeque<Event>>>>>`, publish/subscribe com `Receiver`
+- [x] **`CapabilityToken(pub u64)`** — validação `is_valid()` (token > 0), verificado no `publish()`
+- [x] **`Event` struct** — `{ id: u64, topic: String, payload: Vec<u8>, token: CapabilityToken }`, ID gerado automaticamente
+- [x] **IPC Flow** — `hardware_monitor_daemon` publish → `system_daemon` receive → EchoSkill execute → complete
+- [ ] **`Topic` enum completo** — AgentCreated, AgentDestroyed, SkillRequest, SkillOutput, CortexDecision, WatchdogTick, MemoryPressure
+- [ ] **Roteamento baseado em ML** — para tópicos de alta frequência, EventBus consulta Intent Router para filtrar assinantes
 
 ### Alinhamento SotA
 
@@ -81,9 +129,9 @@ O sistema não pode ter syscalls tradicionais. Toda comunicação entre Ring 0, 
 
 ## 4. Skill Registry & MCP
 
-**Sprints:** 18–20  
-**Target:** Q2 2027  
-**Depende de:** Fase 3 (EventBus), Fase 1 (Huge Pages)
+**Sprints:** 14  
+**Target:** Q3 2026  
+**Depende de:** Fase 3 (EventBus)
 
 ### Justificativa
 
@@ -91,10 +139,13 @@ Agentes precisam de habilidades executáveis. Em vez de syscalls, skills são m�
 
 ### Metas
 
-- [ ] **`Skill` trait + registry** — lookup por `SkillId`, ciclo de vida (load → execute → drop), `CapabilitySet` validation.
-- [ ] **WASM embedder (`wasmi`)** — runtime WASM em `no_std` (ou `std` para ferramentas de host). Host functions: `tensor.matmul`, `nn.silu`, `sfs.read`.
-- [ ] **MCP (Model Context Protocol)** — mensagens estruturadas entre skill e Córtex. Formato: `{ "type": "skill_request", "skill_id": "...", "input_tensor": [...], "token": "...". }`.
-- [ ] **Linear memory pool** — slabs pré-alocados de 256 KB por skill, alocados do alocador de slabs (Fase 1).
+- [x] **`Skill` trait (Send+Sync)** — `manifest() -> McpManifest`, `execute(&[u8]) -> Result<Vec<u8>>`
+- [x] **`McpManifest` struct** — `{ name, description, required_tokens }`
+- [x] **`SkillRegistry`** — `BTreeMap<String, Box<dyn Skill>>`, register + `execute_skill` com Zero-Trust `CapabilityToken` validation
+- [x] **`EchoSkill`** — skill de demonstração (reversão de payload), registrada no boot
+- [x] **Invocation flow** — `system_daemon` recebe SYSTEM_READY via EventBus → `SkillRegistry::execute_skill("echo", ...)` → output `[3,2,1]` confirmado em QEMU
+- [ ] **WASM embedder (`wasmi`)** — runtime WASM em `no_std`. Host functions: `tensor.matmul`, `nn.silu`, `sfs.read`.
+- [ ] **Linear memory pool** — slabs pré-alocados de 256 KB por skill.
 
 ### Alinhamento SotA
 
@@ -129,14 +180,17 @@ O Intent Router atual (MLP 3→2) decide apenas a próxima ação imediata. O Co
 
 ## Timeline Consolidada
 
-| Ordem | Componente | Sprints | Target | Depende de |
+| Ordem | Componente | Sprints | Target | Status |
 |---|---|---|---|---|
-| 1 | Memória (Bitmap + Huge Pages + Slabs) | 11–13 | Q3 2026 | Fase 2 (page tables) |
-| 2 | Kernel Abstraction (Agent Scheduler) | 14–15 | Q4 2026 | Fase 1 (memória) |
-| 3 | Event Bus & IPC (Capability Tokens) | 16–17 | Q1 2027 | Fase 2 (scheduler) |
-| 4 | Skill Registry & MCP | 18–20 | Q2 2027 | Fase 3 (EventBus) + Fase 1 (Huge Pages) |
-| 5 | Cognitive Runtime (Intent Planner) | 21–23 | Q3 2027 | Fase 4 (skills) |
-| — | MatMul-free LM (meta futura) | 24+ | Q4 2027+ | Fase 3–5 |
+| 1 | Memória (Bitmap Allocator) | 11 | Q3 2026 | ✅ Concluído |
+| 2 | Kernel — Async Neural Executor | 12 | Q3 2026 | ✅ Concluído |
+| 3 | Event Bus & IPC (Capability Tokens) | 13 | Q3 2026 | ✅ Concluído |
+| 4 | Skill Registry & MCP Layer | 14 | Q3 2026 | ✅ Concluído |
+| 2.5 | Hardware Neural Routing (IRQ1 → EventBus) | 15 | Q3 2026 | ✅ Concluído |
+| 5 | Memória — Slab Allocator | 16 | Q4 2026 | Pendente |
+| 6 | Agent Scheduler (Round-Robin) | 17 | Q4 2026 | Depende de Slab |
+| 7 | Cognitive Runtime (Intent Planner) | 18+ | Q1 2027+ | Depende de Agent Scheduler |
+| — | MatMul-free LM (meta futura) | 19+ | Q2 2027+ | Fase 5+ |
 
 ---
 

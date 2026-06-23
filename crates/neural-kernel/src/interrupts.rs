@@ -1,5 +1,5 @@
 use crate::{println, serial_println};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
@@ -13,6 +13,7 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
 
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 
 lazy_static! {
     static ref PICS: Mutex<ChainedPics> =
@@ -64,7 +65,8 @@ lazy_static! {
         idt.invalid_tss.set_handler_fn(invalid_tss_handler);
         idt.alignment_check.set_handler_fn(alignment_check_handler);
         idt[32].set_handler_fn(timer_handler);
-        for i in 33..=255usize {
+        idt[33].set_handler_fn(keyboard_interrupt_handler);
+        for i in 34..=255usize {
             idt[i].set_handler_fn(unhandled_interrupt_handler);
         }
         idt
@@ -99,6 +101,16 @@ extern "x86-interrupt" fn page_fault_handler(
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    unsafe {
+        core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
+    }
+}
+
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    use x86_64::instructions::port::Port;
+    let mut data_port = Port::<u8>::new(0x60);
+    let scancode: u8 = unsafe { data_port.read() };
+    LAST_SCANCODE.store(scancode, Ordering::Release);
     unsafe {
         core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
     }

@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use bootloader::bootinfo::BootInfo;
+use core::sync::atomic::Ordering;
 use event_bus::{CapabilityToken, Event};
 use skill_registry::{McpManifest, Skill, SkillRegistry};
 use memory::BitmapFrameAllocator;
@@ -178,6 +179,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     let mut executor = task::executor::NeuralExecutor::new(&frame_allocator);
     executor.spawn(task::agent::AgentTask::new(system_daemon()));
     executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon()));
+    executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));
+    executor.spawn(task::agent::AgentTask::new(input_daemon()));
     executor.run();
 }
 
@@ -215,6 +218,22 @@ async fn system_daemon() {
     }
 }
 
+async fn hw_bridge_daemon() {
+    loop {
+        let scancode = crate::interrupts::LAST_SCANCODE.swap(0, Ordering::Acquire);
+        if scancode != 0 {
+            let event = Event {
+                id: 0,
+                topic: String::from("RAW_HW_IRQ1"),
+                payload: vec![scancode],
+                token: CapabilityToken(1),
+            };
+            let _ = EVENT_BUS.publish(event);
+        }
+        task::yield_now().await;
+    }
+}
+
 async fn hardware_monitor_daemon() {
     let event = Event {
         id: 0,
@@ -231,5 +250,21 @@ async fn hardware_monitor_daemon() {
             println!("[MONITOR] Falha na publicacao: {}", e);
             serial_println!("[MONITOR] Falha na publicacao: {}", e);
         }
+    }
+}
+
+async fn input_daemon() {
+    let receiver = EVENT_BUS.subscribe("RAW_HW_IRQ1");
+    loop {
+        if let Some(event) = receiver.try_receive() {
+            let scancode = event.payload.first().copied().unwrap_or(0);
+            println!("[INPUT_DAEMON] Sinal bruto IRQ1: 0x{:X}", scancode);
+            serial_println!("[INPUT_DAEMON] Sinal bruto IRQ1: 0x{:X}", scancode);
+            if scancode == 0x1E {
+                println!("[INPUT_DAEMON] Tecla 'A' pressionada (scan code 0x1E)");
+                serial_println!("[INPUT_DAEMON] Tecla 'A' pressionada (scan code 0x1E)");
+            }
+        }
+        task::yield_now().await;
     }
 }
