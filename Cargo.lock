@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "neural-os-core"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "bootloader",
  "lazy_static",
