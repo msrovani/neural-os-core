@@ -99,11 +99,19 @@ extern "x86-interrupt" fn page_fault_handler(
     }
 }
 
+fn send_eoi() {
+    if crate::apic::USING_APIC.load(Ordering::Relaxed) {
+        unsafe { crate::apic::apic_eoi(); }
+    } else {
+        unsafe {
+            core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
+        }
+    }
+}
+
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
-    unsafe {
-        core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
-    }
+    send_eoi();
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -111,9 +119,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut data_port = Port::<u8>::new(0x60);
     let scancode: u8 = unsafe { data_port.read() };
     LAST_SCANCODE.store(scancode, Ordering::Release);
-    unsafe {
-        core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
-    }
+    send_eoi();
 }
 
 extern "x86-interrupt" fn gpf_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
@@ -147,9 +153,13 @@ extern "x86-interrupt" fn alignment_check_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn unhandled_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    unsafe {
-        core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
-        core::arch::asm!("out 0xA0, al", in("al") 0x20u8, options(nostack, preserves_flags));
+    if crate::apic::USING_APIC.load(Ordering::Relaxed) {
+        unsafe { crate::apic::apic_eoi(); }
+    } else {
+        unsafe {
+            core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
+            core::arch::asm!("out 0xA0, al", in("al") 0x20u8, options(nostack, preserves_flags));
+        }
     }
 }
 
