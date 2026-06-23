@@ -21,6 +21,8 @@ mod apic;
 mod interrupts;
 mod memory;
 mod pci;
+mod slab;
+mod smp;
 mod sync;
 mod nn;
 mod serial;
@@ -89,12 +91,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     vga_buffer::init(boot_info.physical_memory_offset);
     interrupts::init_idt();
 
-    let mut mapper = unsafe { memory::init_memory(boot_info.physical_memory_offset) };
     let mut frame_allocator = BitmapFrameAllocator::empty();
     frame_allocator.init(&boot_info.memory_map);
 
-    allocator::init_heap(&mut mapper, &mut frame_allocator)
-        .expect("heap initialization failed");
+    {
+        let mut mapper = unsafe { memory::init_memory(boot_info.physical_memory_offset) };
+        allocator::init_heap(&mut mapper, &mut frame_allocator)
+            .expect("heap initialization failed");
+    }
 
     simd::enable_simd();
 
@@ -207,6 +211,13 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
 
     memory::init_global_allocator(frame_allocator);
+
+    let slab_metrics = { let s = crate::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
+    serial_println!("[SLAB] Alocador slab operacional. Allocs: {}, Deallocs: {}",
+        slab_metrics.0, slab_metrics.1);
+    println!("[SLAB] Alocador slab com {} buckets ativos.", slab::BUCKET_SIZES.len());
+
+    unsafe { smp::init_smp(); }
 
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
     println!("[EXECUTOR] Inicializando Neural Executor...");

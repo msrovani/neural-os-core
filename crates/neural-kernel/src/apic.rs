@@ -11,6 +11,8 @@ const IA32_APIC_BASE_MSR: u32 = 0x1B;
 const LAPIC_SVR: u64 = 0xF0;
 const LAPIC_TPR: u64 = 0x80;
 const LAPIC_EOI: u64 = 0xB0;
+const LAPIC_ICR_LOW: u64 = 0x300;
+const LAPIC_ICR_HIGH: u64 = 0x310;
 const LAPIC_LVT_TIMER: u64 = 0x320;
 const LAPIC_INIT_COUNT: u64 = 0x380;
 const LAPIC_DIVIDE_CONFIG: u64 = 0x3E0;
@@ -153,5 +155,59 @@ pub unsafe fn apic_eoi() {
     if base != 0 {
         let eoi_addr = (base + LAPIC_EOI) as *mut u32;
         write_volatile(eoi_addr, 0);
+    }
+}
+
+pub unsafe fn send_init_ipi() {
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 { return; }
+
+    // Wait for ICR to be idle
+    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
+        core::hint::spin_loop();
+    }
+
+    // INIT IPI: delivery=INIT(5), trigger=level(1), level=assert(1), shorthand=all_excl_self(3)
+    let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15) | (3 << 18);
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0); // dest field = 0 (shorthand)
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+
+    serial_println!("[SMP] INIT IPI enviado (ICR=0x{:08x})", icr_val);
+    println!("[SMP] INIT IPI enviado.");
+}
+
+pub unsafe fn send_sipi(trampoline_vector: u8) {
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 { return; }
+
+    // Wait for ICR to be idle
+    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
+        core::hint::spin_loop();
+    }
+
+    // SIPI: delivery=StartUp(6), vector=trampoline_vector, shorthand=all_excl_self(3)
+    let icr_val = (6u32 << 8) | (3 << 18) | trampoline_vector as u32;
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+
+    serial_println!("[SMP] SIPI enviado (ICR=0x{:08x}, vetor={:#04x})", icr_val, trampoline_vector);
+    println!("[SMP] SIPI enviado (vetor={:#04x}).", trampoline_vector);
+}
+
+pub unsafe fn wait_for_ipi_delivery() {
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 { return; }
+
+    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
+        core::hint::spin_loop();
+    }
+}
+
+pub fn lapic_id() -> u8 {
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 { return 0; }
+    unsafe {
+        let id_reg = read_volatile((base + 0x20) as *const u32);
+        (id_reg >> 24) as u8
     }
 }
