@@ -20,12 +20,37 @@ You are a Senior Systems and AI Engineer specializing in bare-metal Rust develop
 - For every new module (e.g., memory paging, inference engine port), you must first create or update an Architecture Decision Record (ADR) in the `/docs/architecture/` folder.
 - Maintain a `/docs/memory/STATE.md` file summarizing the current state of the kernel, last successful QEMU boot status, and pending tasks. Update this file automatically at the end of complex tasks.
 
+# Premissa: Ciclo de Progresso Pós-Tarefa
+
+Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo completo:
+
+1. **Aprenda** — Documente todas as dificuldades, barreiras, erros corrigidos a quente, ideias corrigidas, modulações e lateralizações necessárias durante a execução. Seja explícito sobre o que deu errado e como foi resolvido.
+
+2. **Memorize** — Registre nos arquivos de uso da IDE assistida por IA (`AGENTS.md`, `.cursor/rules/`, e qualquer outro mecanismo de contexto futuro). Atualize o `IDEA_BANK.md` se ideias mudaram de status. Isso garante que a próxima sessão de IA comece sabendo o que aconteceu.
+
+3. **Documente** — Registre nos arquivos de uso humano seguindo boas práticas de dev:
+   - `CHANGELOG.md` (Keep a Changelog + Conventional Commits)
+   - `docs/memory/STATE.md` (estado atualizado do kernel)
+   - `docs/memory/SESSION_NNN.md` (relato narrativo da sessão, dificuldades, decisões)
+
+4. **Versione** — Gere toda a necessidade de registro de versões: incremente versão no `Cargo.toml` se aplicável, atualize metadados, garanta que `cargo check --release` passa (0 erros, 0 warnings).
+
+5. **Git** — Commit e push para o repositório. Mensagens seguem Conventional Commits. Commits atômicos por bloco lógico.
+
+6. **Merge/Review** — Se houver uma versão para análise no git remoto (branch diferente, PR, ou commit que avançou enquanto trabalhávamos), leia, analise e relate sumariamente antes de continuar. Incorpore se compatível, documente conflitos se houver.
+
+# Premissa Básica: Toda Ideia Tem Destino
+- **Toda ideia, conceito, decisão ou sugestão já discutida neste projeto — entre qualquer dev e a IDA IA — DEVE ter um destino conhecido e documentado no `docs/memory/IDEA_BANK.md`.**
+- Nada é descartado sem registro. Ideias podem ser: implementadas (`✅`), agendadas para sprint (`🟡`), adiadas para pós-MVP com dependências documentadas (`⏳`), marcadas como "requer patrocínio/hardware" (`💰`), ou descartadas com justificativa explícita (`❌`).
+- **Por que esta premissa existe:** Estamos inovando em caminhos pouco ou não trilhados (bare-metal neural OS, Memory Hierarchy Index, intent routing em Ring 0). Muitas ideias não são implementáveis hoje — seja por limitação tecnológica, falta de hardware, ou prioridade. Mas amanhã um dev pode saber como fazer, a tecnologia pode melhorar, ou podem surgir patrocinadores. Se a ideia não estiver registrada, ela morre.
+- O `IDEA_BANK.md` é o cerebelo do projeto — retém toda memória de longo prazo. Consulte-o antes de tomar qualquer decisão arquitetural. Atualize-o quando uma ideia mudar de status ou uma nova ideia for discutida.
+
 # Code Style & Versioning
 - Adhere strictly to idiomatic Rust. Use `clippy` configurations.
 - Commit messages must follow Conventional Commits (e.g., `feat: implement memory allocator`, `fix: resolve page fault in qemu`).
 - Comment complex unsafe blocks extensively, explaining *why* the `unsafe` keyword is necessary for that specific hardware interaction.
 
-# Project Summary — neural-os-core v0.12.0
+# Project Summary — neural-os-core v0.13.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -38,7 +63,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 17 Sprints Complete
+## 18 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -91,6 +116,9 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 17 (v0.12.0) — TicketLock FIFO & Concurrency Refactor
 `crates/ticket-lock/` — `TicketLock<T>` with `AtomicUsize ticket/serving` + `UnsafeCell<T>` + fair spin loop. `Send` + `Sync`. EventBus refactored: `spin::Mutex` → `TicketLock` in `subscribers` and `Receiver.queue`; ID counter → `AtomicU64`. `GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>>`. NeuralExecutor simplified (no frame_allocator field). System ready for SMP activation.
 
+### Sprint 18 (v0.13.0) — PCI + ACPI + APIC (Block 1)
+`crates/neural-kernel/src/pci.rs` — PCI scan via CF8/CFC, 256 busses, vendor/device/class/BARs. `acpi.rs` — RSDP discovery (EBDA + BIOS), RSDT/XSDT walking, MADT parsing (LAPIC, IOAPIC, x2APIC). `apic.rs` — LAPIC init (SVR, TPR), IOAPIC init (IRQ0→vec32, IRQ1→vec33), PIC disable. `send_eoi()` with APIC/PIC fallback via `USING_APIC: AtomicBool`. Boot flow: `init_pci()` → `init_acpi()` → `init_apic()` (fallback PIC). 3 new files, 0 new deps.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
@@ -115,8 +143,10 @@ cargo run → bootloader → kernel_main
   ├─ Box/Vec/Tensor/SiLU/RMSNorm tests
   ├─ Intent Router: Linear → SiLU → argmax
   ├─ BitNet: quantize_to_packed() → BitLinear 2-bit forward
-  ├─ init_pics()                  (PIC remap)
-  ├─ enable_interrupts()          (sti)
+  ├─ 1000x frame stress test
+  ├─ init_pci()                   (PCI scan)
+  ├─ init_acpi()                  (RSDP + MADT)
+  ├─ init_apic(info)              (LAPIC + IOAPIC + PIC disable) ou fallback PIC
   ├─ SkillRegistry (EchoSkill)    (Skill Registry + MCP Layer)
   └─ NeuralExecutor::run()
        └─ AgentTask::new(system_daemon) → poll → hlt
@@ -147,8 +177,8 @@ cargo run → bootloader → kernel_main
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 18)
-Slab allocator, Phase 3 benchmark ternary vs f32 perf in QEMU.
+## Next Sprint (Sprint 19 — Block 2)
+PerCpu struct, GS.base segment register, trampoline assembly, INIT-SIPI-SIPI, Slab allocator, heap 4 MB.
 
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)

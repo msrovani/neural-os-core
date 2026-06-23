@@ -2,6 +2,8 @@
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
+> **🧠 AI/Dev Quick Start:** `SUMMARY.md` (resumo) · `AGENTS.md` (regras) · `docs/memory/IDEA_BANK.md` (ideias) · `docs/architecture/0015-curso-correcao-mvp.md` (plano)
+
 ```
 
 

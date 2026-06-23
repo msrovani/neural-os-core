@@ -8,7 +8,13 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [0.13.0] — 2026-06-23
 
-### Added
+### Added (Sprint 18 — Block 1)
+
+- PCI scan — CF8/CFC config space access, 256 bus × 32 device enumeration, vendor/device/class/BARs (`crates/neural-kernel/src/pci.rs`)
+- ACPI parser — RSDP discovery (EBDA + BIOS area), RSDT/XSDT walking, MADT LAPIC/IOAPIC/x2APIC parsing (`crates/neural-kernel/src/acpi.rs`)
+- APIC init — LAPIC SVR + TPR + timer masked, IOAPIC IRQ0→vec32 + IRQ1→vec33, PIC disable (`crates/neural-kernel/src/apic.rs`)
+- Dual EOI — `USING_APIC: AtomicBool` + `send_eoi()` com fallback APIC/PIC para handlers
+- Boot flow: `init_pci()` → `init_acpi()` → `init_apic(info)` (fallback PIC se sem ACPI)
 
 - Hardware Neural Routing — IRQ1 keyboard → EventBus → Agent pipeline (`crates/neural-kernel/src/main.rs`)
   - Top-Half: `keyboard_interrupt_handler` (IDT[33]) lê porta 0x60 → `LAST_SCANCODE` (AtomicU8, Release) → EOI raw

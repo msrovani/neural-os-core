@@ -16,6 +16,21 @@
 ## Sprint 15 — Hardware Neural Routing: IRQ 1 → Event Bus → Agent (Complete)
 ## Sprint 16 — A Ignição do Córtex: Ciclo de Intenção Fechado (Complete)
 ## Sprint 17 — Primitiva TicketLock FIFO & Refactor de Concorrência (Complete)
+## Sprint 17b — Reescrita de Rota: ADR-0015 + IDEA_BANK.md (Complete)
+- Análise de lacunas: 116 itens catalogados (ADR-0014 + roadmap), 0 perdidos
+- Master Registry extraído para `docs/memory/IDEA_BANK.md` — documento vivo, standalone, consultável de qualquer clone
+- Premissa Básica adicionada ao AGENTS.md: toda ideia tem destino conhecido
+- Hierarquia técnica de dependências (8 camadas) para todos os 45 itens ⏳ Pós-MVP e 9 💰 Sponsor
+- Mapa de calor: 46% no MVP, 4% agendados, 39% pós-MVP, 8% sponsor, 2% descartados
+- README reescrito como manifesto
+- Direção validada: 6 blocos em chain → ISO bootável x86-64 UEFI
+
+## Sprint 18 — Block 1: PCI + ACPI + APIC (Complete)
+- `crates/neural-kernel/src/pci.rs` — PCI scan via CF8/CFC, vendor/device/class/BARs, bridge support
+- `crates/neural-kernel/src/acpi.rs` — RSDP discovery (EBDA + BIOS area), RSDT/XSDT walking, MADT parsing (LAPIC/IOAPIC/x2APIC)
+- `crates/neural-kernel/src/apic.rs` — LAPIC init (SVR, TPR, timer disabled), IOAPIC init (redirect timer→vec32, keyboard→vec33), PIC disable, APIC-aware EOI
+- `interrupts.rs` — `send_eoi()` com fallback: APIC se `USING_APIC`, senão PIC
+- `main.rs` — boot flow: `pci::init_pci()` → `acpi::init_acpi()` → `apic::init_apic()` (ou fallback PIC)
 
 ### Current Status
 
@@ -143,26 +158,42 @@
 2. **MinGW linker required** — `bootimage` needs C linker.
 3. **IDT coverage** — Vetor 33 (keyboard) tratado; vetores 34-255 têm `unhandled_interrupt_handler` (EOI duplo), seguro mas sem diagnóstico. Futuro: mascarar IRQs não usadas no PIC.
 
-### Next Steps (Sprint 11 — Phase 3 close + SotA integration)
+### Next Steps — Sprint 18 (Block 1: PCI + ACPI + APIC)
 
-- [x] ADR-0013: Neural OS Executive Summary — Estado da Arte 2026 (MerlionOS, TL/I2_S, ASA/eBPF)
-- [x] `docs/roadmap.md` — Roadmap atualizado com Fases 3–7, Padé, MatMul-free LM
-- [x] ADR-0013: Estrutura Monorepo (`crates/`) + Design System (AgentProcess, Skill, EventBus traits)
-- [x] `docs/roadmap.md` — Ordem de engenharia bare-metal correta (Memória → Scheduler → EventBus → Skills → Planner)
+- [ ] **PCI scan (CF8/CFC)** — enumerar barramento 0..255, ler vendor/device/class/BARs
+- [ ] **ACPI RSDP/MADT parser** — descobrir LAPICs presentes, modo PIC vs APIC
+- [ ] **LAPIC init (BSP)** — SVR, spurious vector, task priority
+- [ ] **IOAPIC init** — redirection entries: keyboard→IRQ1, timer→IRQ0
+- [ ] **PIC disables** — mask+remap ou disable via OCW1
+- [ ] **ECR (Early Concept Release)** — 6 milestones: PCI scan → ACPI MADT → LAPIC → IOAPIC → PIC disable → Timer+Keyboard via APIC
+
+### Backlog (Sprint 19+, Block 2)
+
+- [ ] **SMP wake** — trampoline 16→32→PAE→64, INIT-SIPI-SIPI, PerCpu struct, GS.base
+- [ ] **Slab allocator** — buckets 32-4096 para heap dinâmico
+- [ ] **CorePools** — P-core/E-core aware assignment
+
+### Long-term (Pós-MVP)
+
+- Ver `docs/architecture/0015-curso-correcao-mvp.md` Apêndice A para inventário completo de 116 itens.
 
 ---
 
 ## Blueprint Integrado
 
-**Data:** 2026-06-22  
-**Status:** Aprovado  
+**Data:** 2026-06-23  
+**Status:** ADR-0015 aprovado como novo plano diretor  
 
-O blueprint de código do neural-os-core está consolidado em:
+O plano diretor do neural-os-core é agora **ADR-0015 (Curso Correção MVP Hermes)**,
+que substitui e absorve o roadmap.md e as ideias avulsas:
 
 | Documento | Conteúdo |
 |---|---|
-| `docs/architecture/0013-neural-os-executive-summary.md` | Manifesto SotA + Monorepo + Rust Traits |
-| `docs/roadmap.md` | Ordem de engenharia bare-metal (5 fases) |
+| `docs/architecture/0015-curso-correcao-mvp.md` | ⭐ Novo plano diretor: chain de 6 blocos → MVP Hermes + Master Registry (116 itens) |
+| `docs/architecture/0013-neural-os-executive-summary.md` | Manifesto SotA + Monorepo + Rust Traits (histórico) |
+| `docs/architecture/0014-ideias-hardware.md` | Inventário de ideias de hardware (histórico, absorvido pelo IDEA_BANK.md) |
+| `docs/roadmap.md` | Roadmap original (superseded by ADR-0015 + IDEA_BANK.md) |
+| `docs/memory/IDEA_BANK.md` | 🧠 Cerebelo do projeto — 116 ideias catalogadas com status + hierarquia técnica |
 | `docs/memory/STATE.md` | Estado atual + pendências |
 
 **Ação Imediata (Concluída):** Bitmap Frame Allocator implementado — 128 KB bitmap, init UEFI, alloc/dealloc, `allocate_contiguous()` para Huge Pages, `hardware_context_tensor() -> [f32; 2]`. 1000 alloc/dealloc estáveis em QEMU. Monorepo workspace criado.
@@ -177,21 +208,36 @@ O blueprint de código do neural-os-core está consolidado em:
 
 **Sprint 17 (Concluído):** Primitiva TicketLock FIFO implementada. `crates/ticket-lock/` — `TicketLock<T>` com `AtomicUsize ticket/serving` + `UnsafeCell<T>` + spin loop justo. `Send` + `Sync` garantidos. EventBus refatorado: `spin::Mutex` substituído por `TicketLock` em `subscribers` e `Receiver.queue`; contador de ID migrado para `AtomicU64`. BitmapFrameAllocator encapsulado em `memory::GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>>`. NeuralExecutor simplificado: campo `frame_allocator` removido, executor consulta o estado global via `global_hardware_context()`. Compilação limpa (0 warnings, 0 erros). Sistema preparado para ativação SMP (ADR-0013).
 
-### Pendências (Sprint 18)
+**Sprint 18 (Concluído):** Block 1 — PCI Scan + ACPI MADT + LAPIC/IOAPIC. Três novos módulos criados:
+- `pci.rs` — Scan via CF8/CFC, lê vendor/device/class/subclass/prog_if/BARs para cada dispositivo nos 256 busses. Suporte a PCI-PCI bridges (multi-função). `init_pci()` → loga dispositivos.
+- `acpi.rs` — RSDP discovery (EBDA 0x80000-0xA0000 + BIOS 0xE0000-0x100000), RSDT/XSDT walking, MADT parsing com LAPIC entries (type 0), IOAPIC entries (type 1), x2APIC detection (type 2). `init_acpi()` → `AcpiInfo` com bases e contagens.
+- `apic.rs` — LAPIC init: SVR enable (0x100), TPR=0, timer masked. IOAPIC init: redireciona IRQ0→vec32, IRQ1→vec33. PIC desabilitado (0xFF nas portas de dados). `USING_APIC: AtomicBool` + `apic_eoi()` com fallback via `LAPIC_VIRT_BASE` global.
+- `interrupts.rs` — `send_eoi()`: PIC EOI se `!USING_APIC`, APIC EOI se `USING_APIC`.
+- Boot flow: `pci::init_pci()` → `acpi::init_acpi()` → `apic::init_apic()` (fallback PIC se ACPI ausente).
 
-- [ ] Slab allocator — reduzir fragmentação do heap
-- [ ] Phase 3 benchmark: ternary vs f32 inference perf in QEMU
+### Pendências (Sprint 19 — Block 2: SMP + Slab)
+
+- [ ] PerCpu struct + GS.base segment register
+- [ ] alloc_below_1mb() para trampoline real-mode
+- [ ] Trampoline assembly 16→32→PAE→64→Rust
+- [ ] INIT-SIPI-SIPI via LAPIC ICR (wake APs)
+- [ ] Slab allocator (buckets 32-4096)
+- [ ] Heap expandido de 100 KB para 4 MB
 
 ---
 
-## Roadmap Consolidado
+## Roadmap — Chain de 6 Blocos (ADR-0015)
 
-Ver `docs/roadmap.md` para a ordem de engenharia bare-metal completa:
+A rota atual é a **chain de 6 blocos** definida na ADR-0015. O roadmap.md original está superseded.
 
-1. **Memória** — Bitmap Allocator + Huge Pages (Sprints 11–12) ✅
-2. **Kernel** — Async Neural Executor (Sprint 12) ✅
-3. **I/O HW** — Hardware Neural Routing IRQ1 → EventBus (Sprint 15) ✅
-4. **IPC** — EventBus + Capability Tokens (Sprint 13) ✅
-5. **Skills** — Skill Registry + MCP (Sprint 14) ✅
-6. **Cognitivo** — Córtex / Ciclo de Intenção (Sprint 16) ✅
-7. **Meta** — Slab Allocator, Agent Scheduler, MatMul-free LM (Sprints 17+)
+| Bloco | Nome | Sprints | Pré-requisito | Entrega |
+|---|---|---|---|---|
+| 0 | Genesis (já concluído) | 1–17 | — | Kernel bootável, EventBus, Skills, Executor, PIC, keyboard |
+| 1 | PCI + ACPI + APIC | 18 | Block 0 | ECR: PCI scan → MADT → LAPIC → IOAPIC → PIC disable → APIC-driven I/O |
+| 2 | SMP + Slab Allocator | 19 | Block 1 | CorePools, PerCpu, trampoline, INIT-SIPI-SIPI, slab heap |
+| 3 | Chat + Intent Router | 20 | Block 2 | Terminal loop, scancode→ASCII→string, intent inference |
+| 4 | MLP + MHI + Auto-detecção | 21 | Block 3 | SystemArchitecture MLP 512→256→64→9, MemoryHierarchy, alloc_by_tier |
+| 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache, trust allow/deny |
+| MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural completo |
+
+Para inventário completo de 116 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).

@@ -1,0 +1,19 @@
+---
+description: Toda ideia discutida neste projeto tem destino conhecido no IDEA_BANK.md
+globs: 
+---
+
+Consulte sempre `docs/memory/IDEA_BANK.md` antes de tomar qualquer decisão arquitetural.
+
+Este projeto segue a **Premissa Básica**: toda ideia, conceito, decisão ou sugestão já discutida
+deve ter destino conhecido no IDEA_BANK.md. Nada é descartado sem registro.
+
+- ✅ Implementada
+- 🟡 Agendada para sprint
+- ⏳ Pós-MVP (com dependências na Seção 3)
+- 💰 Requer patrocínio/hardware
+- ❌ Descartada (com justificativa)
+
+Se você está prestes a sugerir uma implementação, primeiro verifique se a ideia já existe
+no IDEA_BANK.md. Se existir e estiver ⏳ Pós-MVP, verifique a hierarquia de dependências
+(Seção 3) antes de propor roadmap. Se não existir, adicione-a.
