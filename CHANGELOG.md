@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.17.0] — 2026-06-24
+
+### Added (Sprint 22 — Block 5: Skills + Trust Cache)
+
+- **`trust.rs`** — `TrustCache` with:
+  - `is_trusted(token, skill_name, now_ticks)` — checks cache and denylist
+  - `trust_allow(token, skill_name, now_ticks)` — permanent trust until explicit deny
+  - `trust_deny(token, skill_name)` — revoke trust + add to denylist
+  - `check_or_cache(token, skill_name, now_ticks, ttl_ticks)` — auto-cache on valid token (360 ticks ≈ 20s TTL)
+- **`HardwareInfoSkill`** — new skill exposing `SystemArchitecture` (ring mode, heap size, etc.) and MHI tier info. Invoked via `/hw`, `/hardware`, or `/info` commands.
+- **`SystemStatusSkill` upgraded** — now reads MHI tiers + `GLOBAL_ALLOCATOR` occupancy to report per-tier free/total RAM in MB.
+- **`SkillRegistry` additions** (`registry.rs`):
+  - `has_skill(name) -> bool` — check if skill exists
+  - `validate_token(name, token) -> bool` — check token authorization without executing
+  - `execute_skill_unchecked(name, payload)` — skip token validation (caller must validate)
+- **Trust-aware Hermes commands**:
+  - `/trust allow <token> <skill>` — permanently authorize a token for a skill
+  - `/trust deny <token> <skill>` — revoke authorization
+  - `/hw` — display hardware info and system architecture
+  - All skill executions (`/status`, `/echo`, MLP-triggered) now use `execute_skill_with_trust()` helper
+- **Help text updated** — lists all available commands
+- Version bump: v0.16.0 → v0.17.0
+
 ## [0.16.0] — 2026-06-23
 
 ### Fixed (Sprint 21 — IOAPIC mask bug)

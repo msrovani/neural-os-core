@@ -28,6 +28,7 @@ mod slab;
 mod smp;
 mod sync;
 mod nn;
+mod trust;
 mod serial;
 mod simd;
 mod task;
@@ -58,16 +59,66 @@ impl Skill for SystemStatusSkill {
     fn manifest(&self) -> McpManifest {
         McpManifest {
             name: String::from("system_status"),
-            description: String::from("Reports RAM occupancy and CPU status via hardware context tensor"),
+            description: String::from("Reports RAM free/total per MHI tier and CPU status"),
             required_tokens: vec![1],
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
-        let tensor = crate::memory::global_hardware_context();
-        let occupancy_pct = tensor[0] * 100.0;
-        serial_println!("[SKILL EXECUTADA] Memoria RAM: {:.2}%. CPU: Agentes Cooperativos em operacao.", occupancy_pct);
-        println!("[SKILL EXECUTADA] Memoria RAM: {:.2}%. CPU: Agentes Cooperativos em operacao.", occupancy_pct);
-        Ok(alloc::vec::Vec::new())
+        let mhi_guard = MEMORY_HIERARCHY.lock();
+        let msg = if let Some(mhi) = mhi_guard.as_ref() {
+            if let Some(tier) = mhi.tiers.first() {
+                let guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+                let occupancy = guard.as_ref().map_or(0.0, |a| a.hardware_context_tensor()[0]);
+                drop(guard);
+                let free_mb = (tier.capacity_bytes as f64 * (1.0 - occupancy as f64)) / 1_048_576.0;
+                let total_mb = tier.capacity_bytes as f64 / 1_048_576.0;
+                alloc::format!("[{:?}] {:.1} MB free / {:.1} MB total. CPU: modo cooperativo.",
+                    tier.kind, free_mb, total_mb)
+            } else {
+                String::from("MHI: no tiers available")
+            }
+        } else {
+            String::from("MHI not initialized")
+        };
+        drop(mhi_guard);
+        serial_println!("[SKILL] SystemStatus: {}", msg);
+        println!("[SKILL] SystemStatus: {}", msg);
+        Ok(msg.into_bytes())
+    }
+}
+
+struct HardwareInfoSkill;
+
+impl Skill for HardwareInfoSkill {
+    fn manifest(&self) -> McpManifest {
+        McpManifest {
+            name: String::from("hardware_info"),
+            description: String::from("Reports hardware inventory and system architecture"),
+            required_tokens: vec![1],
+        }
+    }
+    fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let arch = SYSTEM_ARCH.lock();
+        let info = arch.as_ref().map(|a| {
+            alloc::format!(
+                "Arch: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
+                a.ring0_mode, a.ring1_mode, a.heap_size_mb,
+                a.trust_level, a.power_mode, a.tensor_tier,
+            )
+        }).unwrap_or_else(|| String::from("Arch: unknown"));
+        drop(arch);
+
+        let mhi_guard = MEMORY_HIERARCHY.lock();
+        let mem_info = mhi_guard.as_ref().map(|m| {
+            let tier = &m.tiers[0];
+            alloc::format!("RAM: {} MB avail ({:?})", tier.capacity_bytes / 1_048_576, tier.kind)
+        }).unwrap_or_else(|| String::from("MHI: unknown"));
+        drop(mhi_guard);
+
+        let response = alloc::format!("{}\n{}", info, mem_info);
+        serial_println!("[SKILL] HardwareInfo: {}", response);
+        println!("[SKILL] HardwareInfo: {}", response);
+        Ok(response.into_bytes())
     }
 }
 
@@ -77,9 +128,13 @@ lazy_static! {
         let mut reg = SkillRegistry::new();
         reg.register(alloc::boxed::Box::new(EchoSkill));
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
+        reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
         spin::Mutex::new(reg)
     };
     static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
+    static ref TRUST_CACHE: spin::Mutex<trust::TrustCache> = spin::Mutex::new(trust::TrustCache::new());
+    static ref SYSTEM_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
+    static ref MEMORY_HIERARCHY: spin::Mutex<Option<mhi::MemoryHierarchy>> = spin::Mutex::new(None);
 }
 
 #[panic_handler]
@@ -243,6 +298,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("[MHI] Memory hierarchy: {} tier(s), {:.1} MB usable.",
         mhi.tiers.len(), mhi.tiers[0].capacity_bytes as f64 / 1_048_576.0);
 
+    *SYSTEM_ARCH.lock() = Some(arch);
+    *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
+
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
     println!("[EXECUTOR] Inicializando Neural Executor...");
 
@@ -279,6 +337,30 @@ fn scancode_to_ascii(scancode: u8) -> Option<char> {
         0x33 => Some(','), 0x34 => Some('.'), 0x35 => Some('/'),
         _ => None,
     }
+}
+
+fn execute_skill_with_trust(
+    skill_name: &str,
+    payload: &[u8],
+    token: &event_bus::CapabilityToken,
+) -> Result<Vec<u8>, &'static str> {
+    let token_val = token.0;
+    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    const AUTO_TTL: u64 = 360;
+
+    {
+        let mut tc = TRUST_CACHE.lock();
+        if !tc.is_trusted(token_val, skill_name, now) {
+            let reg = SKILL_REGISTRY.lock();
+            if !reg.validate_token(skill_name, token) {
+                return Err("token nao autorizado para esta skill");
+            }
+            tc.check_or_cache(token_val, skill_name, now, AUTO_TTL);
+        }
+    }
+
+    let reg = SKILL_REGISTRY.lock();
+    reg.execute_skill_unchecked(skill_name, payload)
 }
 
 async fn system_daemon() {
@@ -335,6 +417,7 @@ async fn intent_router_daemon() {
     let receiver = EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT);
     let status_skill_name = String::from("system_status");
     let echo_skill_name = String::from("echo");
+    let hw_skill_name = String::from("hardware_info");
     loop {
         if let Some(event) = receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
@@ -344,19 +427,13 @@ async fn intent_router_daemon() {
             let cmd = hermes::parse_command(text);
             let response = match cmd {
                 hermes::Command::Status => {
-                    let reg = SKILL_REGISTRY.lock();
-                    let result = reg.execute_skill(&status_skill_name, &event.payload, &event.token);
-                    drop(reg);
-                    match result {
+                    match execute_skill_with_trust(&status_skill_name, &event.payload, &event.token) {
                         Ok(_) => String::from("System status report executado."),
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
-                hermes::Command::Echo(arg) => {
-                    let reg = SKILL_REGISTRY.lock();
-                    let result = reg.execute_skill(&echo_skill_name, arg.as_bytes(), &event.token);
-                    drop(reg);
-                    match result {
+                hermes::Command::Echo(ref arg) => {
+                    match execute_skill_with_trust(&echo_skill_name, arg.as_bytes(), &event.token) {
                         Ok(output) => {
                             let reversed = core::str::from_utf8(&output).unwrap_or("(bytes nao UTF-8)");
                             alloc::format!("Echo reverso: \"{}\"", reversed)
@@ -364,27 +441,44 @@ async fn intent_router_daemon() {
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
-                hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <texto>, /help | Ou digite algo para o MLP classificar.")
+                hermes::Command::HardwareInfo => {
+                    match execute_skill_with_trust(&hw_skill_name, &event.payload, &event.token) {
+                        Ok(output) => {
+                            core::str::from_utf8(&output).unwrap_or("(binary)").to_string()
+                        }
+                        Err(e) => alloc::format!("Erro: {}", e),
+                    }
                 }
-                hermes::Command::Chat(msg) => {
-                    let intent_id = INTENT_MLP.classify(&msg);
+                hermes::Command::TrustAllow(token, ref skill) => {
+                    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    {
+                        let mut tc = TRUST_CACHE.lock();
+                        tc.trust_allow(token, skill, now);
+                    }
+                    alloc::format!("Trust permitido: token {} pode usar skill '{}'", token, skill)
+                }
+                hermes::Command::TrustDeny(token, ref skill) => {
+                    {
+                        let mut tc = TRUST_CACHE.lock();
+                        tc.trust_deny(token, skill);
+                    }
+                    alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
+                }
+                hermes::Command::Help => {
+                    String::from("Comandos: /status, /echo <txt>, /hw, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                }
+                hermes::Command::Chat(ref msg) => {
+                    let intent_id = INTENT_MLP.classify(msg);
                     serial_println!("[CORTEX] MLP intent ID: {}", intent_id);
                     match intent_id {
                         1 => {
-                            let reg = SKILL_REGISTRY.lock();
-                            let result = reg.execute_skill(&status_skill_name, msg.as_bytes(), &event.token);
-                            drop(reg);
-                            match result {
+                            match execute_skill_with_trust(&status_skill_name, msg.as_bytes(), &event.token) {
                                 Ok(_) => String::from("Status report (via MLP)."),
                                 Err(e) => alloc::format!("Erro: {}", e),
                             }
                         }
                         2 => {
-                            let reg = SKILL_REGISTRY.lock();
-                            let result = reg.execute_skill(&echo_skill_name, msg.as_bytes(), &event.token);
-                            drop(reg);
-                            match result {
+                            match execute_skill_with_trust(&echo_skill_name, msg.as_bytes(), &event.token) {
                                 Ok(output) => {
                                     let reversed = core::str::from_utf8(&output).unwrap_or("(bytes)");
                                     alloc::format!("Echo (via MLP): \"{}\"", reversed)

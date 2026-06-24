@@ -345,14 +345,62 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
 
-### Pendências (Sprint 22 — Block 5: Skills + Trust Cache + ISO)
+## Sprint 22 (Block 5: Skills + Trust Cache) — Concluído (v0.17.0)
 
-- [ ] SystemStatusSkill consumir MHI (mostrar RAM livre por tier)
-- [ ] HardwareInfoSkill — exibir info do SystemArchitecture
-- [ ] TrustCache — cache de tokens de capability com TTL
-- [ ] Refinar detecção de arquitetura com PCI info
-- [ ] ISO bootável (bônus: ISO via `bootimage` ou grub)
-- [ ] `cargo bootimage --release` + QEMU boot test
+**Data:** 2026-06-24
+
+### Entregas
+
+1. **`trust.rs` — TrustCache** — Cache de tokens de capability com suporte a TTL e denylist:
+   - `trust_allow(token, skill_name, now)` — autorização permanente até revogação explícita
+   - `trust_deny(token, skill_name)` — remove do cache + adiciona à denylist
+   - `is_trusted(token, skill_name, now)` — verifica cache e denylist, respeita TTL
+   - `check_or_cache(token, skill_name, now, ttl)` — auto-cache após validação bem-sucedida (TTL default: 360 ticks ≈ 20s)
+   - Trust-once-use-always via `/trust allow`; auto-expira após 20s sem re-uso
+
+2. **`HardwareInfoSkill`** — Nova skill que expõe `SystemArchitecture` (ring0_mode, ring1_mode, heap_size_mb, trust_level, power_mode, tensor_tier) e `MemoryHierarchy` (RAM disponível por tier). Invocada por `/hw`, `/hardware`, `/info`. Registrada no boot via `SKILL_REGISTRY`.
+
+3. **`SystemStatusSkill` atualizado** — Agora lê `MEMORY_HIERARCHY` global + `GLOBAL_ALLOCATOR::hardware_context_tensor()` para reportar RAM livre/total por tier (ex: `[Dram] 1234.5 MB free / 2048.0 MB total`).
+
+4. **`SkillRegistry` expandido** (`registry.rs`):
+   - `has_skill(name)` — consulta existência de skill
+   - `validate_token(name, token)` — valida token sem executar
+   - `execute_skill_unchecked(name, payload)` — executa sem re-validar token
+
+5. **Trust-aware Hermes** — Novo helper `execute_skill_with_trust()` daemon que:
+   - Verifica `TRUST_CACHE` primeiro (fast path)
+   - Se não confiável, valida token via `SkillRegistry::validate_token()` (slow path)
+   - Se válido, faz `check_or_cache()` para acelerar próximas chamadas
+   - Executa via `execute_skill_unchecked()` sem dupla validação
+
+6. **Novos comandos Hermes**:
+   - `/trust allow <token> <skill>` — autorização permanente
+   - `/trust deny <token> <skill>` — revogação imediata
+   - `/hw` — informações de hardware
+   - Help atualizado com todos os comandos
+
+7. **Globais do kernel**:
+   - `SYSTEM_ARCH: Mutex<Option<SystemArchitecture>>` — cache da arquitetura inferida
+   - `MEMORY_HIERARCHY: Mutex<Option<MemoryHierarchy>>` — cache da hierarquia de memória
+   - `TRUST_CACHE: Mutex<TrustCache>` — cache de trust para skills
+
+### Arquivos criados/modificados
+
+| Arquivo | Ação |
+|---|---|
+| `src/trust.rs` | Criado (65 linhas) |
+| `src/main.rs` | Modificado — SystemStatusSkill upgrade, HardwareInfoSkill, globals, helper, intent_router upgrade |
+| `src/hermes.rs` | Modificado — Command enum + parse_command com TrustAllow/TrustDeny/HardwareInfo |
+| `crates/skill-registry/src/registry.rs` | Modificado — +has_skill, +validate_token, +execute_skill_unchecked |
+| `Cargo.toml` | v0.16.0 → v0.17.0 |
+
+### Dependências novas
+
+Nenhuma (tudo com crates existentes + `alloc::collections::BTreeMap`).
+
+### Pendências (Sprint 23 — Network Sprint, pós-MVP)
+
+Ver ADR-0016 para detalhes completos.
 
 ### Pendências (Sprint 23 — Network Sprint, pós-MVP)
 
@@ -371,9 +419,9 @@ A rota atual é a **chain de 6 blocos** (ADR-0015) + **Network Sprint** (ADR-001
 | 2 | SMP + Slab Allocator | 19 (concluído) | Block 1 | PerCpu, trampoline, INIT-SIPI-SIPI, slab heap 4 MB |
 | 3 | Hermes Chat | 20 (concluído) | Block 2 | MLP intent router, commands, console daemon |
 | 4 | MLP + MHI + Auto-detecção | 21 (concluído) | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
-| 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache |
-| MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural |
-| 6 | **Network Sprint** | 23 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
+| 5 | Skills + Trust Cache | 22 (concluído) | Block 4 | SystemStatusSkill MHI, HardwareInfoSkill, TrustCache, trust allow/deny |
+| MVP | **Neural OS Hermes ISO** | 23 | Block 5 | ISO bootável x86-64 UEFI com chat neural (fundido com Sprint 23) |
+| 6 | **Network Sprint** | 24 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
 | 7 | NVMe + SFS persistente | 24 | Network | Armazenamento durável |
 | 8+ | WASM + TLS + multi-agent | 25+ | SFS | Skills WASM, HTTPS, agentes de rede |
 

@@ -57,7 +57,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-# Project Summary — neural-os-core v0.15.0
+# Project Summary — neural-os-core v0.17.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -70,7 +70,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 20 Sprints Complete
+## 21 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -136,6 +136,9 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 21 (v0.16.0) — MHI + Inventory + SystemArchitecture (Block 4)
 `mhi.rs` — `AllocTier` enum (Dram/Vram/Nvme/Hdd), `MemoryTier` struct, `MemoryHierarchy::new()` auto-creates Dram tier from bitmap allocator, `alloc_by_tier(Dram)` allocates contiguous physical frames. `inventory.rs` — `HardwareInventory::collect()` gathers CPU, RAM, PCI devices; `SystemArchitecture::infer()` rule-based heuristics (GPU→ring1, RAM→heap, cores→power). Boot flow: PCI scan → collect → infer → log → MHI init → executor. **IOAPIC mask bug fixed:** `redirect_irq()` no longer sets bit 16 (MASK), allowing timer/keyboard interrupts to reach the BSP. Without this fix, `hlt()` never woke and the executor stalled after 1 poll cycle. Debugged via `-d int,cpu_reset,guest_errors` + serial `IOAPIC redirection[0]: low=0x00010000`.
 
+### Sprint 22 (v0.17.0) — Skills + Trust Cache (Block 5)
+`trust.rs` — `TrustCache` with `trust_allow()` (permanent), `trust_deny()` (revoke + denylist), `is_trusted()` (TTL-aware), `check_or_cache()` (auto-cache 20s). `HardwareInfoSkill` — exposes SystemArchitecture + MHI tiers via `/hw` command. `SystemStatusSkill` upgraded to read MHI tiers for per-tier free RAM reporting. `SkillRegistry` expanded: `has_skill()`, `validate_token()`, `execute_skill_unchecked()`. New Hermes commands: `/trust allow <token> <skill>`, `/trust deny <token> <skill>`, `/hw`. `execute_skill_with_trust()` helper: fast path via TrustCache, slow path via validate_token + auto-cache. Global statics: `SYSTEM_ARCH`, `MEMORY_HIERARCHY`, `TRUST_CACHE`. Version v0.16.0 → v0.17.0.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
@@ -166,6 +169,10 @@ cargo run → bootloader → kernel_main
   ├─ init_apic(info)              (LAPIC + IOAPIC + PIC disable) ou fallback PIC
   ├─ smp::init_smp()              (INIT-SIPI-SIPI → AP multi-core boot)
   ├─ SkillRegistry (EchoSkill)    (Skill Registry + MCP Layer)
+  ├─ SystemArchitecture::infer
+  ├─ MemoryHierarchy::new()
+  ├─ *SYSTEM_ARCH.lock() = Some(arch)
+  ├─ *MEMORY_HIERARCHY.lock() = Some(mhi)
   └─ NeuralExecutor::run()
        ├─ AgentTask::new(system_daemon) → poll → hlt
        ├─ AgentTask::new(hardware_monitor_daemon)
@@ -194,14 +201,14 @@ cargo run → bootloader → kernel_main
 ## Workspace Crates
 | Crate | Status |
 |---|---|
-| `neural-kernel` | v0.15.0 — kernel bare-metal + SMP + Hermes Chat |
+| `neural-kernel` | v0.17.0 — kernel bare-metal + SMP + Hermes Chat + Trust Cache |
 | `agent-core` | stub |
 | `skill-registry` | v0.1.0 — MCP Layer: Skill trait, McpManifest, Registry com validação de token |
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 21 — Block 4: MLP + MHI + Auto-detection)
-MemoryHierarchyIndex, `alloc_by_tier(Dram)`, `HardwareInventory::collect()`, `SystemArchitecture` MLP (512→256→64→9 ternary). Adaptive boot flow.
+## Next Sprint (Sprint 23 — Network Sprint, pós-MVP)
+VirtIO-net driver + smoltcp TCP/IP + DNS client + HTTP client. Ver ADR-0016. Terminal Hermes remoto sobre TCP.
 
 ## Network Strategy (ADR-0016)
 Rede não está no MVP (Sprints 1-22) mas é o **primeiro sprint pós-MVP (Sprint 23)**. Stack: VirtIO-net (`virtio-drivers`) + smoltcp (TCP/IP) + HTTP client. Ver ADR-0016 para detalhes completos e os 8 novos itens (117-124) no IDEA_BANK.md.

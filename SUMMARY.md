@@ -4,7 +4,7 @@
 
 **Visão:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferência neural. A hierarquia de memória (VRAM, DRAM, NVMe, HDD) é um pool único roteado por MLP. O boot é um pipeline de IA: detecta hardware → decide configuração → conversa com usuário → executa skills.
 
-**Estado atual:** MVP em construção via chain de 6 blocos (ADR-0015). Bloco 0 (Genesis) concluído — kernel bootável com VGA, serial, heap, EventBus IPC, Skill Registry, 5 agentes cooperativos, PIC+keyboard, Intent Router MLP. Próximo: Bloco 1 (PCI+ACPI+APIC, Sprint 18).
+**Estado atual:** MVP em construção via chain de 6 blocos (ADR-0015). Blocos 0-5 concluídos — kernel bootável com Hermes Chat, Trust Cache, HardwareInfoSkill, MHI, SMP, PCI/ACPI/APIC, EventBus IPC, Skill Registry, 6 agentes cooperativos. Próximo: Sprint 23 (Network Sprint — VirtIO-net + smoltcp).
 
 **Arquitetura chave:**
 - Ring 0: NPU (Intent routing, contexto)
