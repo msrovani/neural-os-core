@@ -35,8 +35,10 @@
 ### Current Status
 
  | Category | Status |
-|---|---|---|
-| Last QEMU Boot | ✅ Boot OK — VGA + serial + Breakpoint handler + EchoSkill execution |
+ |---|---|---|
+ | Last QEMU Boot | ✅ Boot OK — kernel boots, e1000 initialized (Link UP), DHCP triggers PageFault (DMA buffer bug exposed after RCTL/TCTL fix) |
+ | Code Review | ✅ 10 CRITICAL, 12 HIGH, 16+ MEDIUM, 12+ LOW identified and cataloged |
+ | Critical Bugs Fixed | ✅ 10/10 — e1000 enable, BAR mask, DHCP broadcast/ACK, slab off-by-one, nostack UB, bridge bus, XSDT stride, mhi leak, nn bias |
 | Compilation | ✅ `cargo check` — 0 errors, 0 warnings |
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
@@ -160,25 +162,15 @@
 4. **PIT timer via IOAPIC não funciona** — Bootloader mapeia MMIO IOAPIC/LAPIC como write-back (WB). `set_page_uc()` tenta forçar UC via page table walk mas pode não funcionar se páginas forem 2 MiB/1 GiB. Solução atual: usar LAPIC timer em vez de PIT → IOAPIC.
 5. **Serial output 24× slower** — IOAPIC dump consolidado de 24 linhas para 1 linha. QEMU com `-serial file:` tem latência de ~87µs/byte para saída serial.
 6. **QEMU TCG slow** — Serial output at 115200 baud em QEMU TCG adiciona ~4.35ms por linha serial, resultando em ~0.01-0.02× speed ratio vs real hardware.
+7. **e1000 DHCP PageFault** — `send()` acessa TX buffer físico sem offset adequado. Exposed by RCTL/TCTL enable in Sprint 23.
 
-### Next Steps — Sprint 23 (Network Sprint, pós-MVP)
+### Next Steps — Sprint 24 (HIGH/MEDIUM/LOW fix sprint)
 
-- [ ] **PCI scan (CF8/CFC)** — enumerar barramento 0..255, ler vendor/device/class/BARs
-- [ ] **ACPI RSDP/MADT parser** — descobrir LAPICs presentes, modo PIC vs APIC
-- [ ] **LAPIC init (BSP)** — SVR, spurious vector, task priority
-- [ ] **IOAPIC init** — redirection entries: keyboard→IRQ1, timer→IRQ0
-- [ ] **PIC disables** — mask+remap ou disable via OCW1
-- [ ] **ECR (Early Concept Release)** — 6 milestones: PCI scan → ACPI MADT → LAPIC → IOAPIC → PIC disable → Timer+Keyboard via APIC
-
-### Backlog (Sprint 19+, Block 2)
-
-- [ ] **SMP wake** — trampoline 16→32→PAE→64, INIT-SIPI-SIPI, PerCpu struct, GS.base
-- [ ] **Slab allocator** — buckets 32-4096 para heap dinâmico
-- [ ] **CorePools** — P-core/E-core aware assignment
-
-### Long-term (Pós-MVP)
-
-- Ver `docs/architecture/0015-curso-correcao-mvp.md` Apêndice A para inventário completo de 116 itens.
+- [ ] **Fix e1000 DMA buffer mapping** — PageFault at VirtAddr(0x2103b0) in `send()`
+- [ ] **12 HIGH priority items** from code review (see IDEA_BANK.md or ADR-0017)
+- [ ] **16+ MEDIUM priority items**
+- [ ] **12+ LOW priority items**
+- [ ] Full QEMU boot validation after fixes
 
 ---
 

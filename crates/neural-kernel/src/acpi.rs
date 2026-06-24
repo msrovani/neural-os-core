@@ -105,7 +105,6 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     );
 
     let rsdt_virt = VirtAddr::new(physical_memory_offset + rsdt_phys);
-    let rsdt_ptr = rsdt_virt.as_u64() as *const u32;
     let rsdt_signature_ptr = rsdt_virt.as_u64() as *const u8;
 
     let mut sig = [0u8; 4];
@@ -113,7 +112,8 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         sig[i] = read_volatile(rsdt_signature_ptr.add(i));
     }
 
-    if &sig != b"RSDT" && &sig != b"XSDT" {
+    let is_xsdt = &sig == b"XSDT";
+    if &sig != b"RSDT" && !is_xsdt {
         serial_println!("[ACPI] Assinatura invalida: {:?}", core::str::from_utf8(&sig));
         println!("[ACPI] Assinatura invalida: {:?}", core::str::from_utf8(&sig));
         return None;
@@ -121,9 +121,10 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
 
     let rsdt_len_raw = rsdt_virt.as_u64() as *const u32;
     let rsdt_len = read_volatile(rsdt_len_raw.add(1)) as usize;
-    let entry_count = (rsdt_len - 36) / 4;
+    let entry_size: usize = if is_xsdt { 8 } else { 4 };
+    let entry_count = (rsdt_len - 36) / entry_size;
 
-    serial_println!("[ACPI] Tabela RSDT/XSDT: {} bytes, {} entradas.", rsdt_len, entry_count);
+    serial_println!("[ACPI] Tabela RSDT/XSDT: {} bytes, {} entradas ({} bytes cada).", rsdt_len, entry_count, entry_size);
     println!("[ACPI] Tabela: {} bytes, {} entradas.", rsdt_len, entry_count);
 
     let mut lapic_base = 0xFEE0_0000u64;
@@ -134,8 +135,13 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     let mut iso_overrides = Vec::new();
 
     for i in 0..entry_count {
-        let entry_ptr = rsdt_ptr.add(2 + i);
-        let table_phys = read_volatile(entry_ptr) as u64;
+        let entry_ptr = rsdt_virt.as_u64() as *const u8;
+        let entry_offset = 36 + i * entry_size;
+        let table_phys = if is_xsdt {
+            read_volatile(entry_ptr.add(entry_offset) as *const u64)
+        } else {
+            read_volatile(entry_ptr.add(entry_offset) as *const u32) as u64
+        };
         let table_virt = VirtAddr::new(physical_memory_offset + table_phys);
         let table_ptr = table_virt.as_u64() as *const u8;
 

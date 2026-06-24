@@ -233,3 +233,42 @@ See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, Ma
 ## References
 - ADR-0013: Executive Summary / Estado da Arte 2026 (MerlionOS, FairyFuse/Bitnet.cpp, ASA/eBPF)
 - ADR-0014: Ideias de Evolução de Hardware (SMP, APIC, USB neural, AI-driven arch)
+
+<!-- context7 -->
+## Rust Crate Ecosystem — Always Use Context7 + crates.io
+
+Rust crates (distributed via crates.io) evolve rapidly. Always use Context7 to fetch current docs for these essential categories:
+
+### Searching crates.io
+When a user mentions a Rust crate or library feature not in Context7, search **crates.io** via its search API:
+- URL format: `https://crates.io/api/v1/crates?q={query}&per_page=5`
+- Or browse: `https://crates.io/search?q={query}`
+- Use `WebFetch` to read crate pages for version info, features, and docs links
+- Cross-reference with `docs.rs` for API docs: `https://docs.rs/{crate-name}/{version}`
+
+### Async & Network
+- **Tokio** — async runtime, network I/O, timers. Main library for async Rust.
+- **Reqwest** — HTTP client (GET, POST, consume APIs).
+- **Actix-web** — high-performance actor-based web framework.
+- **Rocket** — type-safe, ergonomic web framework.
+
+### Serialization & Data
+- **Serde** — industry standard for serialization/deserialization (JSON, YAML, BSON, etc.).
+- **SQLx** — async SQL with compile-time query checking (PostgreSQL, MySQL, SQLite).
+- **Diesel** — ORM/Query Builder with compile-time SQL validation.
+
+### Parallelism & Error Handling
+- **Rayon** — data parallelism across CPU cores.
+- **Thiserror** — ergonomic custom error types.
+
+### CLI & Terminal
+- **Ratatui** — TUI (Text User Interface) framework for rich terminal UIs.
+- **Clap** — CLI argument parser with subcommands, flags, auto-help.
+
+## Steps
+
+1. Always start with `resolve-library-id` using the library name and the user's question, unless the user provides an exact library ID in `/org/project` format
+2. Pick the best match (ID format: `/org/project`) by: exact name match, description relevance, code snippet count, source reputation (High/Medium preferred), and benchmark score (higher is better). If results don't look right, try alternate names or queries (e.g., "next.js" not "nextjs", or rephrase the question). Use version-specific IDs when the user mentions a version
+3. `query-docs` with the selected library ID and the user's full question (not single words)
+4. Answer using the fetched docs
+<!-- context7 -->

@@ -16,6 +16,7 @@ pub enum Command {
     Echo(String),
     Help,
     HardwareInfo,
+    NetDiag,
     TrustAllow(u64, String),
     TrustDeny(u64, String),
     Chat(String),
@@ -38,6 +39,9 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("hw") || name.eq_ignore_ascii_case("hardware") || name.eq_ignore_ascii_case("info") {
             return Command::HardwareInfo;
+        }
+        if name.eq_ignore_ascii_case("netdiag") || name.eq_ignore_ascii_case("netinfo") || name.eq_ignore_ascii_case("network") {
+            return Command::NetDiag;
         }
         if name.eq_ignore_ascii_case("trust") {
             let remainder = parts.next().unwrap_or("");

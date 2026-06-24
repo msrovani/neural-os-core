@@ -1,6 +1,6 @@
 [package]
 name = "neural-kernel"
-version = "0.17.0"
+version = "0.17.1"
 edition = "2021"
 
 [dependencies]
@@ -20,4 +20,4 @@ ticket-lock = { path = "../ticket-lock" }
 bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }
 
 [package.metadata.bootimage]
-run-args = ["-m", "2G", "-serial", "stdio"]
+run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=e1000"]

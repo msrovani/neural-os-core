@@ -34,6 +34,9 @@ mod simd;
 mod task;
 mod tensor;
 mod vga_buffer;
+mod e1000;
+mod net;
+mod proto;
 
 use lazy_static::lazy_static;
 
@@ -129,6 +132,7 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(EchoSkill));
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
         reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
+        reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
         spin::Mutex::new(reg)
     };
     static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
@@ -301,8 +305,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     *SYSTEM_ARCH.lock() = Some(arch);
     *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
 
+    unsafe { net::init_network(); }
+
     let if_flag: u64;
-    unsafe { core::arch::asm!("pushfq; pop {}", out(reg) if_flag, options(nostack, preserves_flags)); }
+    unsafe { core::arch::asm!("pushfq; pop {}", out(reg) if_flag, options(preserves_flags)); }
     serial_println!("[EXECUTOR] RFLAGS.IF={}", (if_flag >> 9) & 1);
     serial_println!("[EXECUTOR] Aguardando timer (busy wait 2s)...");
     let start_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
@@ -426,6 +432,7 @@ async fn intent_router_daemon() {
     let status_skill_name = String::from("system_status");
     let echo_skill_name = String::from("echo");
     let hw_skill_name = String::from("hardware_info");
+    let net_diag_skill_name = String::from("net_diag");
     loop {
         if let Some(event) = receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
@@ -457,6 +464,14 @@ async fn intent_router_daemon() {
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
+                hermes::Command::NetDiag => {
+                    match execute_skill_with_trust(&net_diag_skill_name, &event.payload, &event.token) {
+                        Ok(output) => {
+                            String::from(core::str::from_utf8(&output).unwrap_or("(binary)"))
+                        }
+                        Err(e) => alloc::format!("Erro: {}", e),
+                    }
+                }
                 hermes::Command::TrustAllow(token, ref skill) => {
                     let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                     {
@@ -473,7 +488,7 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent_id = INTENT_MLP.classify(msg);

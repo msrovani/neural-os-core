@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.17.1] — 2026-06-24
+
+### Fixed (Sprint 23 — Code Review & Critical Bugfix Sprint)
+
+- **#1 — e1000 RCTL/TCTL enable:** Added `REG_RCTL` / `REG_TCTL` constants and 8 enable bits. NIC was previously dead.
+- **#2 — e1000 MMIO BAR mask:** Replaced `if/else (bar0 & 1)` with unconditional `(bar0 & !0xF) as u64`.
+- **#3 — DHCP broadcast MAC acceptance:** `parse_dhcp_offer` and `parse_dhcp_ack` now accept `FF:FF:FF:FF:FF:FF` as destination.
+- **#4 — DHCP false positive ACK:** Changed `return true` to `return false` when no ACK received.
+- **#5 — Slab allocator off-by-one:** `addr + block_size <= zone_end` → `addr + block_size < zone_end` prevents buffer overflow.
+- **#6 — Inline asm UB:** Removed `options(nostack)` from `pushfq; pop` instruction.
+- **#7 — PCI bridge secondary bus:** Added `read_config_byte()`, reads secondary bus number at offset 0x19 instead of hardcoded `bus+1`.
+- **#8 — ACPI XSDT stride:** Detects XSDT vs RSDT; uses 8-byte entry stride for XSDT (was 4 bytes, truncating 64-bit pointers).
+- **#9 — MHI alloc_by_tier:** Uses `allocate_contiguous()` first; frees previously allocated frames on failure.
+- **#10 — Neural bias per batch row:** Bias now applied to all batch rows (nested loop `batch_size × out_features`).
+- **DHCP protocol fixes:** xid kept same for REQUEST (not `+1`); hostname option length 12→11 (`b"neural-aios"` is 11 bytes).
+- **mhi.rs:** Added `FrameDeallocator` import for deallocation cleanup.
+- ADR-0017: Critical Bugfix Sprint documentation.
+- SESSION_023.md: Detailed session log with difficulties and decisions.
+- Version bump: v0.17.0 → v0.17.1
+
 ## [0.17.0] — 2026-06-24
 
 ### Added (Sprint 22 — Block 5: Skills + Trust Cache)
