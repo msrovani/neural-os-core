@@ -301,6 +301,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     *SYSTEM_ARCH.lock() = Some(arch);
     *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
 
+    let if_flag: u64;
+    unsafe { core::arch::asm!("pushfq; pop {}", out(reg) if_flag, options(nostack, preserves_flags)); }
+    serial_println!("[EXECUTOR] RFLAGS.IF={}", (if_flag >> 9) & 1);
+    serial_println!("[EXECUTOR] Aguardando timer (busy wait 2s)...");
+    let start_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    for _ in 0..8000000u64 { core::hint::spin_loop(); }
+    let end_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    serial_println!("[EXECUTOR] Timer ticks: antes={}, depois={}", start_ticks, end_ticks);
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
     println!("[EXECUTOR] Inicializando Neural Executor...");
 
@@ -444,7 +452,7 @@ async fn intent_router_daemon() {
                 hermes::Command::HardwareInfo => {
                     match execute_skill_with_trust(&hw_skill_name, &event.payload, &event.token) {
                         Ok(output) => {
-                            core::str::from_utf8(&output).unwrap_or("(binary)").to_string()
+                            String::from(core::str::from_utf8(&output).unwrap_or("(binary)"))
                         }
                         Err(e) => alloc::format!("Erro: {}", e),
                     }

@@ -157,8 +157,11 @@
 1. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
 2. **MinGW linker required** — `bootimage` needs C linker.
 3. **IDT coverage** — Vetor 33 (keyboard) tratado; vetores 34-255 têm `unhandled_interrupt_handler` (EOI duplo), seguro mas sem diagnóstico. Futuro: mascarar IRQs não usadas no PIC.
+4. **PIT timer via IOAPIC não funciona** — Bootloader mapeia MMIO IOAPIC/LAPIC como write-back (WB). `set_page_uc()` tenta forçar UC via page table walk mas pode não funcionar se páginas forem 2 MiB/1 GiB. Solução atual: usar LAPIC timer em vez de PIT → IOAPIC.
+5. **Serial output 24× slower** — IOAPIC dump consolidado de 24 linhas para 1 linha. QEMU com `-serial file:` tem latência de ~87µs/byte para saída serial.
+6. **QEMU TCG slow** — Serial output at 115200 baud em QEMU TCG adiciona ~4.35ms por linha serial, resultando em ~0.01-0.02× speed ratio vs real hardware.
 
-### Next Steps — Sprint 18 (Block 1: PCI + ACPI + APIC)
+### Next Steps — Sprint 23 (Network Sprint, pós-MVP)
 
 - [ ] **PCI scan (CF8/CFC)** — enumerar barramento 0..255, ler vendor/device/class/BARs
 - [ ] **ACPI RSDP/MADT parser** — descobrir LAPICs presentes, modo PIC vs APIC
@@ -345,9 +348,24 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
 
-## Sprint 22 (Block 5: Skills + Trust Cache) — Concluído (v0.17.0)
+## Sprint 22 (Block 5: Skills + Trust Cache + Timer Fix) — Concluído (v0.17.0)
 
 **Data:** 2026-06-24
+
+### Timer Fix — LAPIC Timer (pós-Sprint 22)
+
+**Problema:** PIT timer não dispara no modo APIC. IOAPIC MMIO mapeado como write-back (WB) pelo bootloader (`map_physical_memory`). `write_volatile` para IOAPIC fica no cache L1/L2 e nunca alcança o dispositivo. PIC mode confirmado funcional (timer funciona perfeitamente).
+
+**Solução:** Substituir PIT → IOAPIC (vetor 32) por LAPIC timer (vetor 32). LAPIC timer é auto-contido no processador, não depende de IOAPIC routing. Código alterado em `apic.rs`:
+- `start_timer()` — programa LVT_TIMER com `vector=32 | periodic(0x20000)`, initial count=8,388,608, divide=1
+- IOAPIC redirect para timer removido (só mantido keyboard→vetor 33)
+- `set_page_uc()` melhorado com handling para 2 MiB e 1 GiB huge pages
+
+**Confirmação QEMU:** 
+- `[TIMER] Interrupt fired! tick=0` até `tick=4`
+- `[EXECUTOR] Timer ticks: antes=58, depois=229` (171 ticks durante busy wait)
+- Pipeline completo: SYSTEM_READY → EchoSkill → Executor → Watchdog (2100+ ticks)
+- `cargo check --release`: 0 erros, mesmas 16 warnings esperadas (dead code policy)
 
 ### Entregas
 

@@ -2,6 +2,8 @@ use crate::acpi::AcpiInfo;
 use crate::{println, serial_println};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::ptr::{read_volatile, write_volatile};
+use x86_64::structures::paging::{PageTable, PageTableFlags};
+use x86_64::VirtAddr;
 
 pub static USING_APIC: AtomicBool = AtomicBool::new(false);
 static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
@@ -51,12 +53,19 @@ impl Lapic {
         self.write(LAPIC_SVR, svr | 0x100);
         self.write(LAPIC_TPR, 0);
 
-        self.write(LAPIC_LVT_TIMER, 0x10000);
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
         self.write(LAPIC_INIT_COUNT, 0);
 
         serial_println!("[APIC] LAPIC inicializado. Base: 0x{:x}", self.base);
         println!("[APIC] LAPIC inicializado.");
+    }
+
+    unsafe fn start_timer(&self) {
+        self.write(LAPIC_LVT_TIMER, 32 | 0x20000);
+        self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
+        self.write(LAPIC_INIT_COUNT, 0x800000);
+
+        serial_println!("[APIC] LAPIC timer iniciado: vetor 32, count=8388608, div=1.");
     }
 }
 
@@ -83,40 +92,55 @@ impl IoApic {
         write_volatile(window_addr, value);
     }
 
-    unsafe fn redirect_irq(&self, irq: u8, vector: u8, delivery_mode: u8) {
+    unsafe fn redirect_gsi(&self, gsi: u8, vector: u8, delivery_mode: u8) {
         let redir_low = (vector as u32) | ((delivery_mode as u32) << 8);
         let redir_high = 0u32;
-        let reg_index = 0x10 + (irq as u8) * 2;
+        let reg_index = 0x10 + gsi * 2;
         self.write(reg_index, redir_low);
         self.write(reg_index + 1, redir_high);
     }
 
-    unsafe fn init(&self) {
+    unsafe fn init(&self, iso_overrides: &[(u8, u32)]) {
         let max_redirect = (self.read(0x01) >> 16) & 0xFF;
         serial_println!("[APIC] IOAPIC em 0x{:x}. Max redirecionamentos: {}", self.base, max_redirect);
         println!("[APIC] IOAPIC encontrado. Max redirecionamentos: {}", max_redirect);
 
-        for irq in 0..=max_redirect as u8 {
-            let reg = 0x10 + irq * 2;
-            let low = self.read(reg);
-            let high = self.read(reg + 1);
-            serial_println!("[APIC] IOAPIC redirection[{}]: low=0x{:08x}, high=0x{:08x}", irq, low, high);
-        }
+        let any_unmasked = (0..=max_redirect as u8).any(|gsi| {
+            let low = self.read(0x10 + gsi * 2);
+            (low & 0x10000) == 0
+        });
+        serial_println!("[APIC] IOAPIC dump: {} redirects, all_masked={}", max_redirect + 1, !any_unmasked);
 
-        self.redirect_irq(0, 32, 0);
-        self.redirect_irq(1, 33, 0);
-        serial_println!("[APIC] Timer (IRQ0) redirecionado para vetor 32.");
+        let kbd_gsi = iso_overrides.iter()
+            .find(|(source, _)| *source == 1)
+            .map(|(_, gsi)| *gsi as u8)
+            .unwrap_or(1);
+
+        self.redirect_gsi(kbd_gsi, 33, 0);
+
+        let v1_reg = 0x10 + kbd_gsi * 2;
+        let v1_low = self.read(v1_reg);
+        let v1_high = self.read(v1_reg + 1);
+        serial_println!("[APIC] IOAPIC verificado: kbd GSI {} (0x{:02x}:0x{:08x})",
+            kbd_gsi, v1_high, v1_low);
         serial_println!("[APIC] Teclado (IRQ1) redirecionado para vetor 33.");
-        println!("[APIC] IOAPIC configurado: timer→vec32, keyboard→vec33.");
+        println!("[APIC] IOAPIC configurado: keyboard→vec33.");
     }
 }
 
-unsafe fn disable_pic() {
-    core::arch::asm!("out dx, al", in("dx") PIC_MASTER_DATA, in("al") 0xFFu8, options(nostack, preserves_flags));
-    core::arch::asm!("out dx, al", in("dx") PIC_SLAVE_DATA, in("al") 0xFFu8, options(nostack, preserves_flags));
-    serial_println!("[APIC] PIC 8259 desabilitado (mascara todos IRQs).");
-    println!("[APIC] PIC 8259 desabilitado.");
-}
+    unsafe fn disable_pic() {
+        core::arch::asm!("out dx, al", in("dx") PIC_MASTER_DATA, in("al") 0xFFu8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") PIC_SLAVE_DATA, in("al") 0xFFu8, options(nostack, preserves_flags));
+        serial_println!("[APIC] PIC 8259 desabilitado (mascara todos IRQs).");
+        println!("[APIC] PIC 8259 desabilitado.");
+    }
+
+    pub unsafe fn pit_init() {
+        core::arch::asm!("out 0x43, al", in("al") 0x36u8, options(nostack, preserves_flags));
+        core::arch::asm!("out 0x40, al", in("al") 0x00u8, options(nostack, preserves_flags));
+        core::arch::asm!("out 0x40, al", in("al") 0x00u8, options(nostack, preserves_flags));
+        serial_println!("[PIT] Canal 0 programado: modo 3, divisor 65536 (18.2 Hz).");
+    }
 
 unsafe fn read_lapic_base_msr() -> u64 {
     let msr_value = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read();
@@ -125,9 +149,69 @@ unsafe fn read_lapic_base_msr() -> u64 {
     base
 }
 
+unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
+    let virt = VirtAddr::new(phys_addr + phys_mem_offset);
+
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let base = VirtAddr::new(phys_mem_offset);
+
+    let l4_virt = base + l4_frame.start_address().as_u64();
+    let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+    let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+
+    if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut flags = l3_entry.flags();
+        flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+        l3_entry.set_flags(flags);
+        x86_64::instructions::tlb::flush(virt);
+        return;
+    }
+
+    let l3_virt = base + l3_entry.addr().as_u64();
+    let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+    let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+
+    if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut flags = l2_entry.flags();
+        flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+        l2_entry.set_flags(flags);
+        x86_64::instructions::tlb::flush(virt);
+        return;
+    }
+
+    let l2_virt = base + l2_entry.addr().as_u64();
+    let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+    let l1_entry = &mut l2_table[usize::from(virt.p2_index())];
+    if !l1_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+
+    if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut flags = l1_entry.flags();
+        flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+        l1_entry.set_flags(flags);
+        x86_64::instructions::tlb::flush(virt);
+        return;
+    }
+
+    let l1_virt = base + l1_entry.addr().as_u64();
+    let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+    let pte = &mut l1_table[usize::from(virt.p1_index())];
+
+    let mut flags = pte.flags();
+    flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+    pte.set_flags(flags);
+
+    x86_64::instructions::tlb::flush(virt);
+}
+
 pub unsafe fn init_apic(info: &AcpiInfo) {
     serial_println!("[APIC] Inicializando APIC...");
     println!("[APIC] Inicializando APIC...");
+
+    set_page_uc(0xFEC0_0000, info.phys_mem_offset);
+    set_page_uc(0xFEE0_0000, info.phys_mem_offset);
+    serial_println!("[APIC] IOAPIC/LAPIC pages mapped uncacheable.");
 
     let _msr_base = read_lapic_base_msr();
 
@@ -137,10 +221,13 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     lapic.init();
 
     disable_pic();
+    pit_init();
 
     let ioapic_virt_base = info.ioapic_base + info.phys_mem_offset;
     let ioapic = IoApic::new(ioapic_virt_base);
-    ioapic.init();
+    ioapic.init(&info.iso_overrides);
+
+    lapic.start_timer();
 
     USING_APIC.store(true, Ordering::Release);
 

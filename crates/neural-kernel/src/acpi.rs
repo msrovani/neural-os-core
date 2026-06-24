@@ -1,4 +1,5 @@
 use crate::{println, serial_println};
+use alloc::vec::Vec;
 use core::ptr::read_volatile;
 use x86_64::VirtAddr;
 
@@ -15,7 +16,7 @@ struct RsdpDescriptor {
     reserved: [u8; 3],
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AcpiInfo {
     pub lapic_base: u64,
     pub ioapic_base: u64,
@@ -23,6 +24,7 @@ pub struct AcpiInfo {
     pub ioapic_count: u8,
     pub has_x2apic: bool,
     pub phys_mem_offset: u64,
+    pub iso_overrides: Vec<(u8, u32)>,
 }
 
 fn checksum_valid(data: &[u8]) -> bool {
@@ -129,6 +131,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     let mut lapic_count = 0u8;
     let mut ioapic_count = 0u8;
     let mut has_x2apic = false;
+    let mut iso_overrides = Vec::new();
 
     for i in 0..entry_count {
         let entry_ptr = rsdt_ptr.add(2 + i);
@@ -175,10 +178,23 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                             );
                         }
                         2 => {
-                            has_x2apic = true;
+                            let source = read_volatile(table_ptr.add(offset + 3) as *const u8);
+                            let gsi = read_volatile(table_ptr.add(offset + 4) as *const u32);
+                            let flags = read_volatile(table_ptr.add(offset + 8) as *const u16);
+                            serial_println!("[ACPI] ISO: source={} gsi={} flags=0x{:04x}", source, gsi, flags);
+                            iso_overrides.push((source, gsi));
                         }
                         5 => {
+                            let lapic_addr_raw = table_ptr.add(offset + 4) as *const u32;
+                            let new_lapic = read_volatile(lapic_addr_raw) as u64;
+                            if new_lapic != 0 {
+                                lapic_base = new_lapic;
+                                serial_println!("[ACPI] LAPIC Address Override: 0x{:x}", lapic_base);
+                            }
+                        }
+                        9 => {
                             lapic_count += 1;
+                            has_x2apic = true;
                         }
                         _ => {}
                     }
@@ -205,5 +221,6 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         ioapic_count,
         has_x2apic,
         phys_mem_offset: physical_memory_offset,
+        iso_overrides,
     })
 }
