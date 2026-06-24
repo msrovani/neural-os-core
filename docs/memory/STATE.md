@@ -317,11 +317,21 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 - [ ] `SystemArchitecture` MLP (512→256→64→9 ternary)
 - [ ] Boot flow adaptativo: collect → infer → init
 
+### Pendências (Sprint 23 — Network Sprint, pós-MVP)
+
+Ver ADR-0016 para detalhes completos.
+
+- [ ] VirtIO-net driver (PCI 1AF4:1041) via `virtio-drivers` crate
+- [ ] smoltcp TCP/IP stack integration (ARP, IPv4, TCP, UDP)
+- [ ] DNS resolver (smoltcp `dns` feature)
+- [ ] HTTP GET/POST client (~200 LOC)
+- [ ] Hermes `/fetch` command
+
 ---
 
-## Roadmap — Chain de 6 Blocos (ADR-0015)
+## Roadmap — Chain de 8 Blocos (ADR-0015 + ADR-0016)
 
-A rota atual é a **chain de 6 blocos** definida na ADR-0015.
+A rota atual é a **chain de 6 blocos** (ADR-0015) + **Network Sprint** (ADR-0016).
 
 | Bloco | Nome | Sprints | Pré-requisito | Entrega |
 |---|---|---|---|---|
@@ -332,5 +342,8 @@ A rota atual é a **chain de 6 blocos** definida na ADR-0015.
 | 4 | MLP + MHI + Auto-detecção | 21 | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
 | 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache |
 | MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural |
+| 6 | **Network Sprint** | 23 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
+| 7 | NVMe + SFS persistente | 24 | Network | Armazenamento durável |
+| 8+ | WASM + TLS + multi-agent | 25+ | SFS | Skills WASM, HTTPS, agentes de rede |
 
 Para inventário completo de 116 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).

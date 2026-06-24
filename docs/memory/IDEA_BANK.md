@@ -143,7 +143,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 70 | PCI bridges (hierarquia de barramento) | 🟡 Block 1 | Sprint 18 | Suporte básico: multi-função em bridges PCI-PCI. |
 | 71 | NVMe driver (PCI Class 01.08) | ⏳ Pós-MVP | Sprint 24+ | MVP é stateless. Sem SFS, NVMe é desnecessário. |
 | 72 | VirtIO-blk (PCI 1AF4:1001) | ⏳ Pós-MVP | Sprint 24+ | Alternativa QEMU ao NVMe. |
-| 73 | VirtIO-net (PCI 1AF4:1041) | ⏳ Pós-MVP | Sprint 24+ | MVP sem rede. |
+| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 | Sprint 23 | Superseded by ADR-0016. VirtIO-net movido para Sprint 23 como parte do Network Sprint. |
 | 74 | VirtIO-gpu (PCI 1AF4:1050) | ⏳ Pós-MVP | Sprint 24+ | MVP usa VGA text. |
 | 75 | Intel HDA audio | ⏳ Pós-MVP | Fase 5+ | Nenhuma skill de áudio no MVP. |
 | 76 | Sem kernel thread de hotplug | ✅ Princípio | — | Diretriz adotada. |
@@ -233,6 +233,25 @@ Nada é descartado sem registro. Ideias podem ser:
 | 115 | Sponsor: NPU AMD XDNA requer parceria | 💰 Sponsor | Sprint 25+ | Sem hardware, sem implementação. |
 | 116 | Sponsor: port para ARM/RISC-V | 💰 Sponsor | Futuro | Fora do escopo x86-64. |
 
+### 1.16. Rede/Network Stack
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 117 | VirtIO-net driver (PCI) sobre `virtio-drivers` crate | 🟡 Sprint 23 | Sprint 23 | PCI scan já detecta 1AF4:1041. VirtIO é spec simples. |
+| 118 | smoltcp TCP/IP stack integration | 🟡 Sprint 23 | Sprint 23 | ARP/IP/TCP/UDP/DNS no_std, usado pelo Redox OS. |
+| 119 | DNS resolver (smoltcp `dns` feature) | 🟡 Sprint 23 | Sprint 23 | Resolução de hostnames para HTTP. |
+| 120 | HTTP GET/POST client minimal (~200 LOC) | 🟡 Sprint 23 | Sprint 23 | Saída de smoltcp TCP para skills e weight updates. |
+| 121 | Hermes `/fetch` command | 🟡 Sprint 23 | Sprint 23 | Comando de shell para baixar arquivos via HTTP. |
+| 122 | Skill manifest field `requires_network: bool` | 🟡 Sprint 23 | Sprint 23 | Skills podem declarar necessidade de rede. |
+| 123 | TLS 1.3 client (`embedded-tls` crate) | ⏳ Pós-MVP | Sprint 25+ | Obrigatório para HTTPS. Postergado para WASM. |
+| 124 | Wi-Fi / Ethernet (e1000/RTL8139 para HW real) | ⏳ Pós-MVP | Sprint 26+ | VirtIO só funciona em QEMU. HW real precisa de driver nativo. |
+
+### 1.17. Documentação e ADRs
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 125 | ADR-0016: Network Strategy | ✅ Documentado | Sprint 20 | Decisão arquitetural sobre quando/como implementar rede. |
+
 ---
 
 ## Seção 2 — Mapa de Calor
@@ -245,6 +264,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | AI Detection | 10 | 9 | 0 | 1 | 0 | 0 |
 | MHI | 12 | 8 | 1 | 3 | 0 | 0 |
 | Periféricos | 11 | 3 | 0 | 6 | 0 | 0 |
+| Rede/Network | 8 | 0 | 6 | 2 | 0 | 0 |
 | Áudio/Vídeo | 6 | 0 | 0 | 4 | 0 | 2 |
 | Princípios | 6 | 6 | 0 | 0 | 0 | 0 |
 | Roadmap Memória | 4 | 2 | 0 | 2 | 0 | 0 |
@@ -254,7 +274,8 @@ Nada é descartado sem registro. Ideias podem ser:
 | Roadmap Cognitive | 4 | 0 | 0 | 4 | 0 | 0 |
 | Roadmap Timeline | 3 | 0 | 0 | 3 | 0 | 0 |
 | Outras | 5 | 4 | 0 | 0 | 1 | 0 |
-| **Total** | **116** | **53 (46%)** | **5 (4%)** | **45 (39%)** | **9 (8%)** | **2 (2%)** |
+| Docs/ADRs | 1 | 1 | 0 | 0 | 0 | 0 |
+| **Total** | **125** | **54 (43%)** | **11 (9%)** | **47 (38%)** | **9 (7%)** | **2 (2%)** |
 
 ---
 
@@ -545,3 +566,5 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-23 | Sprint 18: Itens 16-19 (LAPIC/IOAPIC/MADT), 68-69 (PCI scan) → ✅ Block 1 | Dev + IDA IA |
 | 2026-06-23 | Itens 34 (acpi crate) → 🟡 Sprint 18 (parser ACPI mínimo implementado, crate não usado) | Dev + IDA IA |
 | 2026-06-23 | Sprint 19: Itens 20-33 (SMP multi-core boot) → ✅ Block 2; AP boots with -smp 2 and -smp 4; race fix with spin::Mutex on CPU_COUNT | Dev + IDA IA |
+| 2026-06-23 | Sprint 20: Itens 114 (Hermes Chat) → ✅ Block 3; IntentMlp MLP + command parser + console daemon | Dev + IDA IA |
+| 2026-06-23 | ADR-0016: Itens 117-125 (Network Strategy) → adicionados; VirtIO-net + smoltcp + HTTP movidos para Sprint 23; MVP+1 = Network Sprint | IDA IA |

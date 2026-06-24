@@ -200,6 +200,9 @@ cargo run → bootloader → kernel_main
 ## Next Sprint (Sprint 21 — Block 4: MLP + MHI + Auto-detection)
 MemoryHierarchyIndex, `alloc_by_tier(Dram)`, `HardwareInventory::collect()`, `SystemArchitecture` MLP (512→256→64→9 ternary). Adaptive boot flow.
 
+## Network Strategy (ADR-0016)
+Rede não está no MVP (Sprints 1-22) mas é o **primeiro sprint pós-MVP (Sprint 23)**. Stack: VirtIO-net (`virtio-drivers`) + smoltcp (TCP/IP) + HTTP client. Ver ADR-0016 para detalhes completos e os 8 novos itens (117-124) no IDEA_BANK.md.
+
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
 - `crates/agent-core/` — AgentProcess trait + scheduler (stub)
