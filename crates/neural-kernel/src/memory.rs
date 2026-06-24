@@ -175,6 +175,10 @@ impl BitmapFrameAllocator {
         None
     }
 
+    pub fn usable_memory_bytes(&self) -> u64 {
+        self.usable_frames as u64 * 4096
+    }
+
     /// Retorna o tensor de contexto de hardware para o roteador MLP.
     /// `[taxa_ocupacao, 0.0]` — fração de frames alocados vs total utilizável.
     pub fn hardware_context_tensor(&self) -> [f32; 2] {

@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-23 (Sprint 19 — Block 2 concluído: SMP multi-core boot funcional)  
+**Última atualização:** 2026-06-23 (Sprint 21 — Block 4 concluído: MHI + HardwareInventory + SystemArchitecture)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---

@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.16.0] — 2026-06-23
+
+### Added (Sprint 21 — Block 4: MLP + MHI + Auto-detecção)
+
+- `mhi.rs` — Memory Hierarchy Index with:
+  - `AllocTier` enum: Dram, Vram, Nvme, Hdd
+  - `MemoryTier` struct: kind, capacity_bytes, bandwidth_mbs, latency_ns, name
+  - `MemoryHierarchy::new()` — auto-creates Dram tier from bitmap frame allocator
+  - `alloc_by_tier(Dram)` — allocates contiguous physical frames, returns PhysAddr
+  - Other tiers return `None` (drivers not yet implemented)
+- `inventory.rs` — Hardware Inventory & System Architecture with:
+  - `HardwareInventory::collect(pci_devices, acpi_info)` — CPU count, RAM, PCI device detection (VirtIO-net/GPU, NVMe, XHCI)
+  - `SystemArchitecture::infer(inv)` — rule-based heuristics: GPU detect → ring1, RAM size → heap, CPU count → power mode
+  - Both pure data structures for future MLP weight training (item #51)
+- `memory.rs` — `BitmapFrameAllocator::usable_memory_bytes()` public accessor
+- **Adaptive boot flow** — `main.rs` now runs: PCI scan → HardwareInventory::collect() → SystemArchitecture::infer() → log to VGA+serial → MHI init → NeuralExecutor. Example output: `[ARCH] ring0=0 ring1=0 heap=2048MB` / `[MHI] 1 tier(s), X MB usable.`
+- **Workspace crate versions** — `neural-kernel` bumped to v0.16.0
+
 ## [0.15.0] — 2026-06-23
 
 ### Added (Sprint 20 — Block 3: Hermes Chat)

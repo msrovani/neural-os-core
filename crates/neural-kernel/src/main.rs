@@ -20,7 +20,9 @@ mod allocator;
 mod apic;
 mod hermes;
 mod interrupts;
+mod inventory;
 mod memory;
+mod mhi;
 mod pci;
 mod slab;
 mod smp;
@@ -220,6 +222,26 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("[SLAB] Alocador slab com {} buckets ativos.", slab::BUCKET_SIZES.len());
 
     unsafe { smp::init_smp(); }
+
+    let pci_devices = unsafe { pci::scan_pci() };
+    let arch = inventory::SystemArchitecture::infer(
+        &inventory::HardwareInventory::collect(pci_devices, acpi_info.as_ref()),
+    );
+    serial_println!(
+        "[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
+        arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
+        arch.trust_level, arch.power_mode, arch.tensor_tier,
+    );
+    println!(
+        "[ARCH] System architecture: ring0={} ring1={} heap={}MB",
+        arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
+    );
+
+    let mhi = mhi::MemoryHierarchy::new();
+    serial_println!("[MHI] {} tier(s). Best: {:?} ({} bytes avail)",
+        mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
+    println!("[MHI] Memory hierarchy: {} tier(s), {:.1} MB usable.",
+        mhi.tiers.len(), mhi.tiers[0].capacity_bytes as f64 / 1_048_576.0);
 
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
     println!("[EXECUTOR] Inicializando Neural Executor...");

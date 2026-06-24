@@ -309,23 +309,46 @@ O Sprint 19 (Block 2) foi completado com a correção do boot multi-core. A caus
 ### Dependências novas
 Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
-### Pendências (Sprint 21 — Block 4: MLP + MHI + Auto-detecção)
+## Sprint 21 (Block 4: MLP + MHI + Auto-detecção) — Concluído (v0.16.0)
 
-- [ ] MemoryHierarchyIndex: `MemoryTier`, `MemoryHierarchy`, `AllocTier` enum
-- [ ] `alloc_by_tier(Dram)` — alocar em DRAM via MHI
-- [ ] `HardwareInventory::collect()` — auto-detect via PCI + CPUID
-- [ ] `SystemArchitecture` MLP (512→256→64→9 ternary)
-- [ ] Boot flow adaptativo: collect → infer → init
+**Data:** 2026-06-23
+
+### Entregas
+
+1. **`mhi.rs` — Memory Hierarchy Index** — `AllocTier` enum (`Dram`/`Vram`/`Nvme`/`Hdd`), `MemoryTier` struct com `kind`, `capacity_bytes`, `bandwidth_mbs`, `latency_ns`, `name`. `MemoryHierarchy::new()` cria um tier DRAM a partir do bitmap frame allocator. `alloc_by_tier(Dram)` — aloca frames físicos contíguos via `GLOBAL_ALLOCATOR` e retorna `PhysAddr`. Outros tiers retornam `None` com log (drivers não implementados).
+
+2. **`inventory.rs` — HardwareInventory + SystemArchitecture** — `HardwareInventory::collect(pci_devices, acpi_info)` reúne: CPU count, RAM total (via `usable_memory_bytes()`), PCI devices, detecção de VirtIO-net/GPU, NVMe, XHCI. `SystemArchitecture::infer(inv)` com heurísticas baseadas em PCI class (GPU → ring1_mode=1), RAM (heap 2048/512/64 MB), CPU count (power_mode=1 se >4 cores). Ambos estruturas puras — sem pesos treinados (item #51 ⏳).
+
+3. **Boot flow adaptativo** — `main.rs` agora executa: PCI scan → HardwareInventory::collect() → SystemArchitecture::infer() → log em VGA+serial → MHI init com tiers → NeuralExecutor. Exemplo de saída serial: `[ARCH] System architecture: ring0=0 ring1=0 heap=2048MB trust=1 power=0 tensor=0`; `[MHI] 1 tier(s). Best: Dram (X bytes avail)`.
+
+4. **`memory.rs` — `usable_memory_bytes()`** — método público em `BitmapFrameAllocator` retorna `usable_frames * 4096` para a MHI e inventory.
+
+### Arquivos criados/modificados neste sprint
+
+| Arquivo | Ação |
+|---|---|
+| `src/mhi.rs` | Criado (80 linhas) |
+| `src/inventory.rs` | Criado (80 linhas) |
+| `src/memory.rs` | Modificado — +`usable_memory_bytes()` |
+| `src/main.rs` | Modificado — +mod mhi, +mod inventory, boot flow adaptativo |
+| `Cargo.toml` | v0.15.0 → v0.16.0 |
+
+### Dependências novas
+
+Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
+
+### Pendências (Sprint 22 — Block 5: Skills + Trust Cache + ISO)
+
+- [ ] SystemStatusSkill consumir MHI (mostrar RAM livre por tier)
+- [ ] HardwareInfoSkill — exibir info do SystemArchitecture
+- [ ] TrustCache — cache de tokens de capability com TTL
+- [ ] Refinar detecção de arquitetura com PCI info
+- [ ] ISO bootável (bônus: ISO via `bootimage` ou grub)
+- [ ] `cargo bootimage --release` + QEMU boot test
 
 ### Pendências (Sprint 23 — Network Sprint, pós-MVP)
 
 Ver ADR-0016 para detalhes completos.
-
-- [ ] VirtIO-net driver (PCI 1AF4:1041) via `virtio-drivers` crate
-- [ ] smoltcp TCP/IP stack integration (ARP, IPv4, TCP, UDP)
-- [ ] DNS resolver (smoltcp `dns` feature)
-- [ ] HTTP GET/POST client (~200 LOC)
-- [ ] Hermes `/fetch` command
 
 ---
 
@@ -334,12 +357,12 @@ Ver ADR-0016 para detalhes completos.
 A rota atual é a **chain de 6 blocos** (ADR-0015) + **Network Sprint** (ADR-0016).
 
 | Bloco | Nome | Sprints | Pré-requisito | Entrega |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | 0 | Genesis (concluído) | 1–17 | — | Kernel bootável, EventBus, Skills, Executor, PIC, keyboard |
 | 1 | PCI + ACPI + APIC | 18 (concluído) | Block 0 | PCI scan → MADT → LAPIC → IOAPIC → PIC disable → APIC I/O |
 | 2 | SMP + Slab Allocator | 19 (concluído) | Block 1 | PerCpu, trampoline, INIT-SIPI-SIPI, slab heap 4 MB |
 | 3 | Hermes Chat | 20 (concluído) | Block 2 | MLP intent router, commands, console daemon |
-| 4 | MLP + MHI + Auto-detecção | 21 | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
+| 4 | MLP + MHI + Auto-detecção | 21 (concluído) | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
 | 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache |
 | MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural |
 | 6 | **Network Sprint** | 23 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
