@@ -176,6 +176,22 @@ pub unsafe fn send_init_ipi() {
     println!("[SMP] INIT IPI enviado.");
 }
 
+pub unsafe fn send_init_deassert_ipi() {
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 { return; }
+
+    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
+        core::hint::spin_loop();
+    }
+
+    // INIT de-assert: delivery=INIT(5), trigger=level(1), level=de-assert(0), shorthand=all_excl_self(3)
+    let icr_val = (5u32 << 8) | (3 << 18);
+    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+
+    serial_println!("[SMP] INIT de-assert enviado (ICR=0x{:08x})", icr_val);
+}
+
 pub unsafe fn send_sipi(trampoline_vector: u8) {
     let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
     if base == 0 { return; }

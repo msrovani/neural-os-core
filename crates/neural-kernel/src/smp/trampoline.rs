@@ -1,5 +1,6 @@
 use core::arch::global_asm;
 use core::ptr;
+use core::sync::atomic::Ordering;
 
 global_asm!(
     ".intel_syntax noprefix",
@@ -23,6 +24,16 @@ global_asm!(
     ".globl trampoline_patch_entry",
     "trampoline_patch_entry: .quad 0",
 
+    // Offset constants (single-symbol operands for asm)
+    ".set off_gdt_pseudo, trampoline_gdt_pseudo - trampoline_start",
+    ".set off_stack,      trampoline_patch_stack - trampoline_start",
+    ".set off_cr3,        trampoline_patch_cr3 - trampoline_start",
+    ".set off_jmp64,      trampoline_patch_jmp64 - trampoline_start",
+    ".set off_stack, trampoline_patch_stack - trampoline_start",
+    ".set off_percpu, trampoline_patch_percpu - trampoline_start",
+    ".set off_entry, trampoline_patch_entry - trampoline_start",
+    ".set off_32,         trampoline_32 - trampoline_start",
+
     // 16-bit entry: SIPI lands here with CS.base = trampoline phys addr
     ".code16",
     "  cli",
@@ -31,6 +42,10 @@ global_asm!(
     "  mov ds, ax",
     "  mov ss, ax",
     "  mov sp, 0x1000",
+
+    // LGDT antes de sair do modo real (GDT via cs:offset)
+    "  .byte 0x2E, 0x0F, 0x01, 0x16",
+    "  .word off_gdt_pseudo",
 
     // Load jmp32_val into EBX via cs:[patch_jmp32 - start]
     "  .byte 0x2E, 0x66, 0xA1",
@@ -62,14 +77,13 @@ global_asm!(
     "  mov gs, ax",
 
     // EBX = jmp32_val, phys_base = EBX - offset(trampoline_32 - trampoline_start)
-    "  sub ebx, trampoline_32 - trampoline_start",
+    // Emit SUB EBX, imm32 via raw bytes (GAS Intel treats .set symbols as memory, not immediate)
+    "  .byte 0x81, 0xEB",
+    "  .4byte trampoline_32 - trampoline_start",
 
-    // LGDT (GDT base in pseudo-desc pre-patched in Rust)
-    "  lgdt [ebx + trampoline_gdt_pseudo - trampoline_start]",
-
-    // Stack
-    "  mov eax, [ebx + trampoline_patch_stack - trampoline_start]",
-    "  mov esp, eax",
+    // Stack: use top of trampoline page (identity-mapped, below 2MB)
+    // 64-bit mode will reload RSP from the heap via the patch field
+    "  lea esp, [ebx + 0x1000]",
 
     // PAE
     "  mov eax, cr4",
@@ -77,7 +91,7 @@ global_asm!(
     "  mov cr4, eax",
 
     // CR3
-    "  mov eax, [ebx + trampoline_patch_cr3 - trampoline_start]",
+    "  mov eax, [ebx + off_cr3]",
     "  mov cr3, eax",
 
     // EFER.LME
@@ -92,7 +106,7 @@ global_asm!(
     "  mov cr0, eax",
 
     // Far jump to 64-bit
-    "  mov eax, [ebx + trampoline_patch_jmp64 - trampoline_start]",
+    "  mov eax, [ebx + off_jmp64]",
     "  push 0x18",
     "  push eax",
     "  retf",
@@ -101,19 +115,21 @@ global_asm!(
     ".globl trampoline_64",
     "trampoline_64:",
     ".code64",
-    "  xor ax, ax",
-    "  mov ds, ax",
-    "  mov es, ax",
-    "  mov ss, ax",
-    "  mov fs, ax",
-    "  mov gs, ax",
+    // Segments already valid from 32-bit mode; RBX holds trampoline phys base
+    // Use [rbx + offset] instead of RIP-relative (which breaks when code is relocated)
 
-    // Stack (RIP-relative)
-    "  mov rax, [rip + trampoline_patch_stack - trampoline_64]",
+    // Enable NXE (No-Execute) in EFER — required for page tables with NX bit set
+    "  mov ecx, 0xC0000080",
+    "  rdmsr",
+    "  or eax, 0x800",
+    "  wrmsr",
+
+    // Stack
+    "  mov rax, [rbx + off_stack]",
     "  mov rsp, rax",
 
     // GS.base = PerCpu
-    "  mov rax, [rip + trampoline_patch_percpu - trampoline_64]",
+    "  mov rax, [rbx + off_percpu]",
     "  test rax, rax",
     "  jz 1f",
     "  mov rcx, 0xC0000101",
@@ -121,7 +137,7 @@ global_asm!(
     "  shr rdx, 32",
     "  wrmsr",
     "1:",
-    "  mov rax, [rip + trampoline_patch_entry - trampoline_64]",
+    "  mov rax, [rbx + off_entry]",
     "  test rax, rax",
     "  jz 2f",
     "  call rax",
@@ -174,7 +190,7 @@ pub unsafe fn init_trampoline(
     percpu_addr: u64,
     entry_fn: extern "C" fn(u64) -> !,
 ) {
-    let tramp_virt = (phys_addr + crate::memory::PHYS_MEM_OFFSET) as *mut u8;
+    let tramp_virt = (phys_addr + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
     let size = offset_of(&trampoline_start as *const u8, &trampoline_end as *const u8);
     ptr::copy_nonoverlapping(&trampoline_start as *const u8, tramp_virt, size);
 
@@ -199,6 +215,6 @@ pub unsafe fn init_trampoline(
     ptr::write_volatile(tramp_virt.add(gp_off + 2) as *mut u32, gdt_phys as u32);
 }
 
-pub fn trampoline_size() -> usize {
+pub unsafe fn trampoline_size() -> usize {
     offset_of(&trampoline_start as *const u8, &trampoline_end as *const u8)
 }

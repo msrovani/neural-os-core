@@ -22,3 +22,6 @@ target/
 # OS metadata
 Thumbs.db
 .DS_Store
+
+# QEMU debug logs (use target/qemu-logs/)
+qemu_*.log

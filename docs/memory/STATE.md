@@ -253,6 +253,32 @@ que substitui e absorve o roadmap.md e as ideias avulsas:
 ### Dependências novas
 Nenhuma (tudo com crates existentes + `core::arch::asm!` + `global_asm!`).
 
+## Sprint 19 SMP Multi-Core Fix (v0.14.1)
+
+**Data:** 2026-06-23
+
+O Sprint 19 (Block 2) foi completado com a correção do boot multi-core. A causa raiz era que o bootloader identity-mapa apenas as páginas 0-7 (phys 0x0-0x7FFF), mas o AP precisa da página 0x40000 (VA 0x400A4) para executar o trampoline_64. PT[64] estava zero → #PF → triple fault.
+
+### Correções Aplicadas
+
+1. **Identity-map PTE** — `write_volatile` em `phys_offset + 0x4200` escreve PTE `0x40000 | 0x003` (Present|Write). Uma única instrução.
+
+2. **Race condition CPU_COUNT** — `spin::Mutex` protege `fetch_add` porque QEMU TCG não garante atomicidade cross-vCPU. Todos os APs liam o mesmo valor.
+
+3. **50ms busy-wait** após segundo SIPI para contagem precisa.
+
+4. **Slab Allocator** — `SLAB_CHUNK_SIZE` = bucket_size (não alinhado para 8). Corrigido o `put()` que corrompia a free list.
+
+5. **asm! memcpy** — `copy_nonoverlapping` → `asm!("rep movsb")` para evitar `native_memcpy`.
+
+### Resultados
+
+- `-smp 2`: ✅ `APs acordados: 1`
+- `-smp 4`: ✅ `APs acordados: 3`
+- `qemu_trace.log`: zero `check_exception`
+- `cargo check --release`: 0 erros, 0 warnings
+- `cargo bootimage --release`: 0 erros
+
 ### Pendências (Sprint 20 — Block 3: Chat + Intent Router)
 
 - [ ] Terminal loop: scancode→ASCII→line buffer

@@ -70,13 +70,24 @@ impl BitmapFrameAllocator {
             }
         }
 
+        // Marca frames 2-159 (0x8000 a 0x9F000) como utilizáveis
+        // para uso exclusivo do trampoline SMP (BIOS não reporta esta região).
+        // Frames 0 (IVT) e 1 (BDA) permanecem ocupados.
+        for i in 2..160 {
+            if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
+                self.clear_bit(i as usize);
+                usable_count += 1;
+            }
+        }
+
         self.total_frames = core::cmp::min(
             (last_end / FRAME_SIZE) as usize,
             BITMAP_SIZE * BITS_PER_BYTE,
         );
         self.usable_frames = usable_count;
         self.allocated_count = 0;
-        self.next_free_bit = 0;
+        // Pula frames 0-255 (abaixo de 1 MB) — reservados para trampoline SMP
+        self.next_free_bit = 256;
     }
 
     /// Marca um bit como 0 (frame livre).
@@ -146,8 +157,15 @@ impl BitmapFrameAllocator {
     /// Aloca um frame em endereço físico < 1 MiB (frames 0..255).
     /// Essencial para o trampoline real-mode do SMP.
     pub fn allocate_below_1mb(&mut self) -> Option<PhysFrame<Size4KiB>> {
-        let max_frame = core::cmp::min(256, self.total_frames);
-        for i in 0..max_frame {
+        // Tenta frame 64 (0x40000 = 256 KB, longe da IVT/BDA/EBDA)
+        let idx = 64;
+        if idx < self.total_frames && !self.test_bit(idx) {
+            self.set_bit(idx);
+            self.allocated_count += 1;
+            return Some(PhysFrame::containing_address(PhysAddr::new(idx as u64 * FRAME_SIZE)));
+        }
+        // Fallback: varre de 254 para baixo
+        for i in (2..core::cmp::min(255, self.total_frames)).rev() {
             if !self.test_bit(i) {
                 self.set_bit(i);
                 self.allocated_count += 1;

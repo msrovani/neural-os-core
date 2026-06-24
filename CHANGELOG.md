@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.14.1] — 2026-06-23
+
+### Fixed (Sprint 19 — SMP Multi-Core Boot)
+
+- **Root cause isolated:** bootloader identity-maps pages 0-7 only (PD[0] = 0x4023 → PT base = 0x4000). PT[64] for VA 0x40000 was `0x0000000000000000` → AP #PF on first instruction at 0x400A4 → triple fault
+- **Identity-map PTE fix:** single `write_volatile` at `phys_offset + 0x4200` writes PTE `0x40000 | 0x003` (Present|Write) — AP can fetch from VA 0x40000 after enabling paging
+- **CPU_COUNT race condition:** `spin::Mutex` protects `fetch_add` because QEMU TCG lacks cross-vCPU atomicity; all APs previously read same counter value
+- **50ms busy-wait** after second SIPI for accurate AP count (all 3 APs finish trampoline within <20ms)
+- **Slab Allocator memory corrupt fix:** `SLAB_CHUNK_SIZE` = bucket_size (not aligned to 8); free list pointer stored before chunk, retrieved via `ptr.read::<*mut u8>()`
+- **asm! memcpy:** Replaced `core::intrinsics::copy_nonoverlapping` with `asm!("rep movsb")` to avoid `native_memcpy` dependency in `no_std`
+
+### Changed
+
+- `smp/mod.rs` — identity-map PTE written directly via raw pointer (not OffsetPageTable mapper); `AP_BOOT_LOCK: spin::Mutex<()>` around CPU_COUNT increment; 50ms busy-wait after SIPI
+- `smp/trampoline.rs` — replaced `copy_nonoverlapping` with `asm!` block for zero-dependency memcpy
+- `slab.rs` — `SLAB_CHUNK_SIZE` = bucket_size (not `align_up(bucket_size, 8)`); corrected `put()` free list logic
+
+### Result
+
+- `-smp 2`: ✅ AP 1 boots — `[SMP] AP 1 entrou em modo 64-bit Rust!` → `APs acordados: 1`
+- `-smp 4`: ✅ AP 1, 2, 3 boot — `APs acordados: 3`
+- `qemu_trace.log`: zero `check_exception` lines — no #UD, #PF, #GP
+- Sprint 19 (Block 2) now fully operational
+
 ## [0.14.0] — 2026-06-23
 
 ### Added (Sprint 19 — Block 2: SMP + Slab + Heap 4 MB)

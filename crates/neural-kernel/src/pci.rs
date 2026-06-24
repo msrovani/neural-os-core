@@ -76,7 +76,7 @@ pub unsafe fn scan_pci() -> Vec<PciDevice> {
                     vendor_id, device_id, class, subclass, prog_if,
                     bar0, bar1, bar2, bar3, bar4, bar5,
                 });
-                if (class == 0x06 && subclass == 0x04) {
+                if class == 0x06 && subclass == 0x04 {
                     let header_type = read_config_word(bus, device, 0, 0x0E) as u8;
                     if header_type & 0x80 != 0 {
                         for function in 1..=7u8 {
@@ -130,7 +130,6 @@ pub fn class_name(class: u8, subclass: u8) -> &'static str {
         (0x0C, _) => "Serial Bus",
         (0x08, 0x00) => "PIC",
         (0x08, _) => "Generic System",
-        (0x01, 0x06) => "AHCI/SATA",
         _ => "Other",
     }
 }
