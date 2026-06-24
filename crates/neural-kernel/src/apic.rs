@@ -84,7 +84,7 @@ impl IoApic {
     }
 
     unsafe fn redirect_irq(&self, irq: u8, vector: u8, delivery_mode: u8) {
-        let redir_low = (vector as u32) | ((delivery_mode as u32) << 8) | (1u32 << 16);
+        let redir_low = (vector as u32) | ((delivery_mode as u32) << 8);
         let redir_high = 0u32;
         let reg_index = 0x10 + (irq as u8) * 2;
         self.write(reg_index, redir_low);

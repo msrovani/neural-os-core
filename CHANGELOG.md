@@ -8,6 +8,10 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [0.16.0] — 2026-06-23
 
+### Fixed (Sprint 21 — IOAPIC mask bug)
+
+- **apic.rs `redirect_irq()`** — removed `(1u32 << 16)` from redirection entry low dword. Bit 16 is the MASK bit in IOAPIC redirection entries. The original code set it, masking all interrupts (timer, keyboard, etc.). Without timer interrupts, the executor's `hlt()` never woke up, stalling the system after the first poll cycle. Debug output confirmed: `IOAPIC redirection[0]: low=0x00010000` (bit 16 = masked). After fix: timer IRQ0 (vector 32) delivers at ~18.2 Hz, executor cycles normally.
+
 ### Added (Sprint 21 — Block 4: MLP + MHI + Auto-detecção)
 
 - `mhi.rs` — Memory Hierarchy Index with:

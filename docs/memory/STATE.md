@@ -333,6 +333,14 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 | `src/main.rs` | Modificado — +mod mhi, +mod inventory, boot flow adaptativo |
 | `Cargo.toml` | v0.15.0 → v0.16.0 |
 
+### Bug Fix — IOAPIC redirect_irq mask bit
+
+**Descoberto durante teste QEMU:** O executor parava após 1 ciclo de polling porque `hlt()` nunca recebia interrupção de timer.
+
+**Causa raiz:** `apic.rs:87` — `redirect_irq()` montava o redirection entry com `(1u32 << 16)`, que é o bit MASK no IOAPIC IOREDTBL. Todos os 24 redirecionamentos (IRQ0-23) ficavam mascarados. Confirmado por `IOAPIC redirection[0]: low=0x00010000` no log serial.
+
+**Correção:** Removido `| (1u32 << 16)` — redirecionamentos agora ficam com bit 16 = 0 (unmasked). Timer IRQ0 → vetor 32, teclado IRQ1 → vetor 33. Pipeline executor roda completo.
+
 ### Dependências novas
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).

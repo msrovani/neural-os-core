@@ -43,9 +43,16 @@ Implementar o Memory Hierarchy Index (MHI), HardwareInventory e SystemArchitectu
 
 ### Dificuldades e Correções
 
-1. **`usable_frames` é field privado** — `BitmapFrameAllocator::usable_frames` tem visibilidade module-private. Precisava ser acessível de `mhi.rs` e `inventory.rs`. Solução: adicionar `pub fn usable_memory_bytes(&self) -> u64` como accessor público.
-2. **PCI scan duplicado** — a primeira chamada em `init_pci()` loga dispositivos mas descarta o return. A segunda chamada (via `pci::scan_pci()`) alimenta o inventory. PCI scan custa <1ms em QEMU, então é aceitável.
-3. **Unused imports** (warnings limpos) — `alloc::string::String` em inventory.rs, `Ordering` + `PhysFrame`/`Size4KiB` em mhi.rs foram removidos.
+1. **`usable_frames` é field privado** — `BitmapFrameAllocator::usable_frames` tem visibilidade module-private. Solução: adicionar `pub fn usable_memory_bytes(&self) -> u64` como accessor público.
+2. **PCI scan duplicado** — a primeira chamada em `init_pci()` loga dispositivos, a segunda (via `pci::scan_pci()`) alimenta o inventory. PCI scan custa <1ms em QEMU, aceitável.
+3. **Unused imports** (limpos) — `alloc::string::String` em inventory.rs, `Ordering` + `PhysFrame`/`Size4KiB` em mhi.rs removidos.
+4. **IOAPIC mask bug (crítico)** — `redirect_irq()` em `apic.rs:87` setava `(1u32 << 16)` no redirection entry. Bit 16 = MASK no IOAPIC IOREDTBL. Todos os 24 IRQs ficavam mascarados → PIT timer nunca entregava interrupção → `hlt()` no executor dormia para sempre → apenas 1 ciclo de polling executava. Descoberto via debug: output serial mostrava `IOAPIC redirection[0]: low=0x00010000`. Corrigido removendo o shift. Confirmado: execução contínua com timer ~18.2 Hz, pipeline IPC completo (SYSTEM_READY → EchoSkill).
+
+## Lições Aprendidas
+
+- **IOAPIC redirection entry layout**: bits 0-7 = vector, 8-10 = delivery mode, 11 = dest mode, 12 = delivery status (RO), 13 = polarity, 15 = trigger mode, **16 = MASK** (1 = masked). O código antigo copiou o valor de reset (0x00010000) sem perceber que o bit 16 era o mask.
+- **Debug via QEMU log**: `-d int,cpu_reset,guest_errors -D target/qemu-logs/qemu_trace.log` confirmou zero `check_exception` — o sistema não crashava, só dormia. O problema era funcional (interrupções) não estrutural (page fault, double fault).
+- **Testes com timer**: sem interrupção de timer, sistemas cooperativos com `hlt()` travam silenciosamente. O indicador era a ausência de `[WATCHDOG]` no log.
 
 ## Resultados
 

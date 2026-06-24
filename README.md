@@ -25,31 +25,27 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built (Sprint 18 — Block 1)
+## 🏗️ What's Been Built (Sprint 21 — Block 4)
 
-The kernel now discovers real hardware. After boot, it scans PCI devices, parses ACPI tables, and initializes the APIC:
+The kernel discovers hardware, detects architecture, builds a memory hierarchy, and boots 6 cooperative AI agents:
 
 ```
-[PCI] Scan concluido: 12 dispositivos encontrados.
-[PCI] 00:00.00 8086:1237 class=06 subclass=00  # Host bridge
-[PCI] 00:01.00 8086:7000 class=06 subclass=01  # ISA bridge
-[PCI] 00:02.00 1234:1111 class=03 subclass=00  # VGA controller
-[PCI] 00:03.00 1AF4:1041 class=02 subclass=00  # VirtIO net
-[PCI] 00:04.00 1AF4:1001 class=01 subclass=00  # VirtIO block
-...
-
-[ACPI] RSDP encontrado. Revisao: 2. RSDT em 0x7f6e0000
-[ACPI] MADT: LAPICs: 1, IOAPICs: 1
-
-[APIC] LAPIC base via MSR: 0xfee00000
-[APIC] LAPIC inicializado.
-[APIC] IOAPIC em 0xfec00000. Max redirecionamentos: 23
-[APIC] Timer (IRQ0) redirecionado para vetor 32.
-[APIC] Teclado (IRQ1) redirecionado para vetor 33.
-[APIC] PIC 8259 desabilitado.
-[APIC] APIC operacional. Interrupcoes via LAPIC/IOAPIC.
-
-[EXECUTOR] Inicializando Neural Executor...
+[SYSTEM]  Neural Microkernel Iniciado.
+[TEST]    Breakpoint, Box, Vec, Tensor, SiLU, RMSNorm, Intent Router
+[BITNET]  Inferencia 2-bit concluida. Output: [-0.5, -2.0]
+[KERNEL]  Bitmap Allocator: 1000 iteracoes estaveis
+[PCI]     Scan: 4 dispositivos (QEMU q35)
+[ACPI]    RSDP + RSDT + MADT (LAPIC/IOAPIC)
+[APIC]    LAPIC + IOAPIC + PIC disable + timer/keyboard routing
+[SMP]     AP 1 entrou em modo 64-bit Rust! (2 cores)
+[ARCH]    ring0=0 ring1=1 heap=512MB trust=1 power=0 tensor=0
+[MHI]     1 tier(s). Best: Dram (2140823552 bytes avail)
+[EXECUTOR] 6 tasks spawned (system, monitor, hw_bridge, input, cortex, console)
+[DAEMON]  Agente assincrono inicializado. Aguardando SYSTEM_READY...
+[MONITOR] Evento SYSTEM_READY publicado.
+[IPC]     Evento recebido no topico SYSTEM_READY. Token: 1
+[SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
+[DAEMON]  SYSTEM_READY confirmado. Ciclo de inicializacao completo.
 ```
 
 ### What each module does
@@ -59,13 +55,15 @@ The kernel now discovers real hardware. After boot, it scans PCI devices, parses
 | `pci.rs` | PCI scan via CF8/CFC | 256 busses × 32 devices, vendor/device/class/BARs |
 | `acpi.rs` | ACPI parser | RSDP search (EBDA + BIOS), RSDT/XSDT, MADT (LAPIC/IOAPIC) |
 | `apic.rs` | APIC init | LAPIC (SVR, TPR), IOAPIC (IRQ redirection), PIC disable |
+| `smp/` | SMP multi-core | PerCpu GS.base, trampoline 16→64, INIT-SIPI-SIPI |
+| `mhi.rs` | Memory Hierarchy Index | `AllocTier` (Dram/Vram/Nvme/Hdd), `alloc_by_tier()` |
+| `inventory.rs` | Hardware Inventory | `HardwareInventory::collect()`, `SystemArchitecture::infer()` |
+| `hermes.rs` | Hermes Chat | MLP intent router, `/status`, `/echo`, `/help` |
 | `interrupts.rs` | Dual EOI | `USING_APIC` atomic flag → APIC or PIC EOI per interrupt |
 
-### Next: Block 2 — SMP Multi-core (Sprint 19)
+### Next: Block 5 — Skills + Trust Cache (Sprint 22)
 
-PerCpu struct, GS.base segment, trampoline assembly, INIT-SIPI-SIPI wake, Slab allocator, heap 4 MB.
-
-**The boot sequence is becoming an AI pipeline. Block 4 will add the MLP that decides how to configure the system. This is just the beginning.**
+SystemStatusSkill consumir MHI, HardwareInfoSkill, TrustCache com TTL, ISO bootável.
 
 ---
 
@@ -126,19 +124,24 @@ Each block builds on the previous. No shortcuts. No copilot. No bloat.
 
 ## 🚀 Current State
 
-The chain is at **Block 0 (Genesis)** — Sprint 17 complete. Here's what boots in QEMU right now:
+The chain is at **Block 4 (Auto-Config)** — Sprint 21 complete. Here's what boots in QEMU right now:
 
 ```
 [SYSTEM]  Neural Microkernel Iniciado.
-[EXCEPTION] Breakpoint Detectado
-[TEST]    SiLU([-1, 0, 1]) = [-0.26894143, 0.0, 0.7310586]
+[TEST]    Breakpoint, Box, Vec, Tensor, SiLU, RMSNorm, Intent Router
 [BITNET]  Inferencia 2-bit concluida. Output: [-0.5, -2.0]
+[KERNEL]  Bitmap Allocator: 1000 iteracoes estaveis
+[PCI]     Scan: 4 dispositivos QEMU q35
+[ACPI]    RSDP + RSDT + MADT parsing
+[APIC]    LAPIC + IOAPIC + PIC disable
+[SMP]     AP 1 boot (2 cores)
+[ARCH]    ring0=0 ring1=1 heap=512MB trust=1 power=0 tensor=0
+[MHI]     1 tier, Dram ~2 GB
+[EXECUTOR] 6 tasks → pipeline completo → idle
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
-[AGENT]   5 tasks cooperando via EventBus
-[WATCHDOG] Ticks do temporizador: 100
 ```
 
-**Block 0 capability:**
+**Sprint 21 capability:**
 - ✅ VGA 80×25 + Serial 0x3F8 (dual output)
 - ✅ IDT with 8 exception handlers + PIT + keyboard
 - ✅ Bitmap Frame Allocator (128 KB bitmap, covers 4 GB)
@@ -147,7 +150,13 @@ The chain is at **Block 0 (Genesis)** — Sprint 17 complete. Here's what boots 
 - ✅ TicketLock FIFO (SMP-safe synchronization)
 - ✅ EventBus IPC + CapabilityToken (zero-trust messaging)
 - ✅ Skill Registry + MCP Layer (EchoSkill, SystemStatus)
-- ✅ NeuralExecutor with 5 cooperative agents
+- ✅ NeuralExecutor with 6 cooperative agents
+- ✅ PCI scan (CF8/CFC) + ACPI (RSDP/MADT) + APIC (LAPIC/IOAPIC)
+- ✅ SMP multi-core (trampoline, GS.base, INIT-SIPI-SIPI)
+- ✅ Slab allocator (8 buckets) + 4 MB heap
+- ✅ Hermes Chat (MLP intent router, `/status`, `/echo`, `/help`)
+- ✅ MHI (MemoryTier, AllocTier, `alloc_by_tier(Dram)`)
+- ✅ HardwareInventory + SystemArchitecture auto-detection
 
 ---
 
@@ -194,14 +203,16 @@ QEMU window opens. VGA output on screen, serial output in terminal. Type your in
 ## 🎯 Roadmap to MVP
 
 | Block | Sprint | Deliverable | Status |
-|---|---|---|---|
-| 0 | 17 | VGA, serial, heap, EventBus, 5 agents | ✅ Concluído |
-| 1 | **18** | **PCI scan + ACPI + APIC BSP** | 🔄 Próximo |
-| 2 | **19** | **PerCpu + SMP + Slab allocator** | ⏳ |
-| 3 | **20** | **Chat loop + Intent Router** | ⏳ |
-| 4 | **21** | **MLP Architecture + MHI** | ⏳ |
-| 5 | **22** | **Hardware skills + Trust Cache** | ⏳ |
-| 6 | — | **MVP: Bootable ISO** | ⏳ |
+|---|---|---|---|---|
+| 0 | 1-17 | VGA, serial, heap, EventBus, agents | ✅ Concluído |
+| 1 | 18 | PCI scan + ACPI + APIC | ✅ Concluído |
+| 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ Concluído |
+| 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ Concluído |
+| 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ Concluído |
+| 5 | **22** | **Skills + Trust Cache + ISO** | 🟡 Próximo |
+| 6 | 23 | Network Sprint (VirtIO-net + smoltcp + HTTP) | ⏳ |
+| 7 | 24 | NVMe + SFS persistente | ⏳ |
+| 8+ | 25+ | WASM + TLS + multi-agent | ⏳ |
 
 ---
 

@@ -133,6 +133,9 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 20 (v0.15.0) — Hermes Chat (Block 3)
 `hermes.rs` — `IntentMlp` with real MLP forward pass: 16-word bag-of-words encoding → Linear(16→8) → SiLU → Linear(8→3) → argmax. Hand-crafted weights for 3 intents (chat=0, status=1, echo=2). `parse_command()` — multi-word parser: `/status`, `/echo <text>`, `/help`. scancode table expanded with digits 0-9 and punctuation. `intent_router_daemon` upgraded from mock string-contains to real MLP + command dispatch + `HERMES_RESPONSE` EventBus topic. New `hermes_console_daemon` subscribes and displays `[Hermes]` responses on VGA+serial. 6 async tasks in executor.
 
+### Sprint 21 (v0.16.0) — MHI + Inventory + SystemArchitecture (Block 4)
+`mhi.rs` — `AllocTier` enum (Dram/Vram/Nvme/Hdd), `MemoryTier` struct, `MemoryHierarchy::new()` auto-creates Dram tier from bitmap allocator, `alloc_by_tier(Dram)` allocates contiguous physical frames. `inventory.rs` — `HardwareInventory::collect()` gathers CPU, RAM, PCI devices; `SystemArchitecture::infer()` rule-based heuristics (GPU→ring1, RAM→heap, cores→power). Boot flow: PCI scan → collect → infer → log → MHI init → executor. **IOAPIC mask bug fixed:** `redirect_irq()` no longer sets bit 16 (MASK), allowing timer/keyboard interrupts to reach the BSP. Without this fix, `hlt()` never woke and the executor stalled after 1 poll cycle. Debugged via `-d int,cpu_reset,guest_errors` + serial `IOAPIC redirection[0]: low=0x00010000`.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
