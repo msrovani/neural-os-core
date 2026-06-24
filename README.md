@@ -166,22 +166,27 @@ The chain is at **Block 5 (Skills + Trust Cache)** — Sprint 22 complete. Here'
 ## 📐 Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Neural OS Hermes                      │
-├─────────────────────────────────────────────────────────┤
-│  Ring 0 (Intent Router)     MLP 3→2 ternário (< 1 µs)   │
-│  Ring 1 (Tensor Engine)     matmul + neural primitives  │
-│  Ring 2 (Agent Runtime)     EventBus + Skills + WASM     │
-├─────────────────────────────────────────────────────────┤
+┌──────────────────────────────────────────────────────────┐
+│                   Neural OS Hermes — AIOS                 │
+├──────────────────────────────────────────────────────────┤
+│  Ring 0 (Reflex)    Tiny MLP 16→8→3  sub-µs             │
+│  Ring 1 (Cortex)    BitNet LLM 1.5B  ~5-15 tok/s        │
+│  Ring 2 (Action)    WASM Skills      SkillRegistry       │
+├──────────────────────────────────────────────────────────┤
 │  Memory Hierarchy Index     alloc_by_tier()              │
 │  Event Bus                  pub/sub + CapabilityToken    │
 │  Skill Registry             zero-trust + MCP layer       │
-│  PCI/ACPI/APIC              hardware discovery           │
-├─────────────────────────────────────────────────────────┤
+│  PCI/ACPI/APIC/SMP          hardware discovery           │
+├──────────────────────────────────────────────────────────┤
 │  Bootloader (UEFI/BIOS)     bootloader crate v0.9.34    │
 │  no_std Rust                x86_64-unknown-none          │
 │  Target                     QEMU → AMD APU (real HW)    │
-└─────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
+
+Decision Pipeline:
+  Event → Ring 0 Reflex MLP → "precisa pensar?" → 
+    ├── Não (confiança > 90%) → executa ação direta
+    └── Sim → Ring 1 BitNet LLM → intenção → Ring 2 Skill → executa
 ```
 
 ---
@@ -206,16 +211,19 @@ QEMU window opens. VGA output on screen, serial output in terminal. Type your in
 ## 🎯 Roadmap to MVP
 
 | Block | Sprint | Deliverable | Status |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | 0 | 1-17 | VGA, serial, heap, EventBus, agents | ✅ Concluído |
 | 1 | 18 | PCI scan + ACPI + APIC | ✅ Concluído |
 | 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ Concluído |
 | 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ Concluído |
 | 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ Concluído |
-| 5 | **22** | **Skills + Trust Cache + LAPIC timer** | ✅ Concluído |
-| 6 | **23** | **Network (VirtIO-net + smoltcp + HTTP)** | 🟡 Próximo |
-| 7 | 24 | NVMe + SFS persistente | ⏳ |
-| 8+ | 25+ | WASM + TLS + multi-agent | ⏳ |
+| 5 | 22 | Skills + Trust Cache + LAPIC timer | ✅ Concluído |
+| 6 | 23 | Network (VirtIO-net + smoltcp + HTTP) | 🟡 Próximo |
+| 7 | 24 | Bugfix Sprint (12 HIGH + 16 MEDIUM + 12 LOW) | 🟡 |
+| **8** | **25** | **Transformer Engine (Attention, generation, micro-model)** | 🆕 **Planejado** |
+| **9** | **26** | **Cortex Daemon + Modelo 1.5B BitNet** | 🆕 **Planejado** |
+| **10** | **27+** | **Reflex tuning + Success Engine** | 🆕 **Planejado** |
+| 11 | 25+ | WASM + TLS + multi-agent | ⏳ |
 
 ---
 
@@ -254,7 +262,11 @@ This is not a Linux distribution. This is not a Unix clone. This is a ground-up 
 | 0012 | [2-bit Packing and Quantization](docs/architecture/0012-2bit-packing-quantization.md) |
 | 0013 | [Executive Summary / SotA 2026](docs/architecture/0013-neural-os-executive-summary.md) |
 | 0014 | [Hardware Evolution Ideas (post-MVP)](docs/architecture/0014-ideias-hardware.md) |
-| **0015** | **[Course Correction → MVP Hermes](docs/architecture/0015-curso-correcao-mvp.md)** ← **You are here** |
+| 0015 | [Course Correction → MVP Hermes](docs/architecture/0015-curso-correcao-mvp.md) |
+| 0016 | [Network Strategy](docs/architecture/0016-network-strategy.md) |
+| 0017 | [Critical Bugfix Sprint](docs/architecture/0017-critical-bugfix-sprint.md) |
+| 0018 | [Sprint 24 Plan](docs/architecture/0018-sprint-24-plan.md) |
+| **0019** | **[Neural Cortex — BitNet LLM Integration](docs/architecture/0019-neural-cortex-bitnet-llm.md)** ← **You are here** |
 
 ---
 

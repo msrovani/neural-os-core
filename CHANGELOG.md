@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.18.0] — 2026-06-24
+
+### Planned (Sprint 24+ — Neural Cortex BitNet LLM Integration)
+
+- **ADR-0019** — Neural Cortex Architecture: 3-layer decision pipeline (Reflex MLP → BitNet LLM 1.5B → WASM Skills)
+- **31 new IDEA_BANK items** (#126-156): Transformer Engine, Cortex Daemon, Success Engine, Training Pipeline
+- **Sprint 25:** Attention, causal mask, softmax, TransformerBlock, generation loop, tokenizer, micro-model (1M)
+- **Sprint 26:** Cortex Daemon, 1.5B model (~375 MB), model HTTP update, hardware/memory/trust decisions via LLM
+- **Sprint 27+:** Reflex threshold tuning, sampling strategies, speculative decoding, Success Engine (online learning)
+- **Memory budget:** 2 GB QEMU → 375 MB model + ~100 MB runtime + ~1.5 GB free
+- Version bump: v0.17.1 → v0.18.0 (architecture planning)
+
 ## [0.17.1] — 2026-06-24
 
 ### Fixed (Sprint 23 — Code Review & Critical Bugfix Sprint)

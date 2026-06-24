@@ -434,5 +434,28 @@ A rota atual é a **chain de 6 blocos** (ADR-0015) + **Network Sprint** (ADR-001
 | 6 | **Network Sprint** | 24 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
 | 7 | NVMe + SFS persistente | 24 | Network | Armazenamento durável |
 | 8+ | WASM + TLS + multi-agent | 25+ | SFS | Skills WASM, HTTPS, agentes de rede |
+| **9** | **Neural Cortex BitNet LLM** | **25-29+** | **Rede** | **Transformer + 1.5B LLM + Success Engine** |
 
-Para inventário completo de 116 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
+## Neural Cortex — BitNet LLM Integration (ADR-0019)
+
+**Arquitetura de 3 camadas de decisão neural:**
+
+```
+Ring 0: Reflex MLP (16→8→3) — sub-ms, filtra "precisa do LLM?"
+Ring 1: BitNet LLM 1.5B (2-bit ternary, ~375 MB) — ~5-15 tok/s, decide intenção/ação/tier/skill
+Ring 2: WASM Skills — executa a decisão
+```
+
+**31 novos itens** no IDEA_BANK.md (#126-156). 5 Sprints de execução:
+
+| Sprint | Entrega | Modelo |
+|---|---|---|
+| 25 | Transformer Engine (Attention, generation) | Micro 1M params (~250 KB) |
+| 26 | Cortex Daemon + decisões LLM | 1.5B params (~375 MB) |
+| 27 | Reflex threshold + sampling tuning | 1.5B params |
+| 28 | Networked Cortex (HTTP downloads) | 1.5B params |
+| 29+ | Success Engine (online learning) | 1.5B params |
+
+**Memory:** 2 GB QEMU → 375 MB modelo + ~100 MB runtime + ~1.5 GB livre.
+
+Para inventário completo de 156 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
