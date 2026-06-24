@@ -18,6 +18,7 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 mod acpi;
 mod allocator;
 mod apic;
+mod hermes;
 mod interrupts;
 mod memory;
 mod pci;
@@ -76,6 +77,7 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
         spin::Mutex::new(reg)
     };
+    static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
 }
 
 #[panic_handler]
@@ -228,6 +230,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));
     executor.spawn(task::agent::AgentTask::new(input_daemon()));
     executor.spawn(task::agent::AgentTask::new(intent_router_daemon()));
+    executor.spawn(task::agent::AgentTask::new(hermes_console_daemon()));
     executor.run();
 }
 
@@ -243,6 +246,15 @@ fn scancode_to_ascii(scancode: u8) -> Option<char> {
         0x2F => Some('V'), 0x11 => Some('W'), 0x2D => Some('X'),
         0x15 => Some('Y'), 0x2C => Some('Z'),
         0x39 => Some(' '),
+        0x02 => Some('1'), 0x03 => Some('2'), 0x04 => Some('3'),
+        0x05 => Some('4'), 0x06 => Some('5'), 0x07 => Some('6'),
+        0x08 => Some('7'), 0x09 => Some('8'), 0x0A => Some('9'),
+        0x0B => Some('0'),
+        0x0C => Some('-'), 0x0D => Some('='),
+        0x1A => Some('['), 0x1B => Some(']'),
+        0x27 => Some(';'), 0x28 => Some('\''),
+        0x29 => Some('`'), 0x2B => Some('\\'),
+        0x33 => Some(','), 0x34 => Some('.'), 0x35 => Some('/'),
         _ => None,
     }
 }
@@ -298,33 +310,92 @@ async fn hw_bridge_daemon() {
 }
 
 async fn intent_router_daemon() {
-    let receiver = EVENT_BUS.subscribe("USER_INTENT");
-    let status_skill = String::from("system_status");
+    let receiver = EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT);
+    let status_skill_name = String::from("system_status");
+    let echo_skill_name = String::from("echo");
     loop {
         if let Some(event) = receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[CORTEX] Texto do usuario recebido: \"{}\"", text);
-            println!("[CORTEX] Texto do usuario recebido: \"{}\"", text);
-            let intent_id = if text.contains("STATUS") || text.contains("status") { 1 } else { 0 };
-            serial_println!("[CORTEX] Intencao inferida: ID {}", intent_id);
-            println!("[CORTEX] Intencao inferida: ID {}", intent_id);
-            if intent_id == 1 {
-                let reg = SKILL_REGISTRY.lock();
-                match reg.execute_skill(&status_skill, &event.payload, &event.token) {
-                    Ok(_output) => {
-                        serial_println!("[CORTEX] SystemStatusSkill executada com sucesso.");
-                        println!("[CORTEX] SystemStatusSkill executada com sucesso.");
-                    }
-                    Err(e) => {
-                        serial_println!("[CORTEX] Erro na skill: {}", e);
-                        println!("[CORTEX] Erro na skill: {}", e);
+            serial_println!("[CORTEX] Texto do usuario: \"{}\"", text);
+            println!("[CORTEX] Texto do usuario: \"{}\"", text);
+
+            let cmd = hermes::parse_command(text);
+            let response = match cmd {
+                hermes::Command::Status => {
+                    let reg = SKILL_REGISTRY.lock();
+                    let result = reg.execute_skill(&status_skill_name, &event.payload, &event.token);
+                    drop(reg);
+                    match result {
+                        Ok(_) => String::from("System status report executado."),
+                        Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
-                drop(reg);
-            } else {
-                serial_println!("[CORTEX] Intencao ID 0: acao padrao (nenhuma skill registrada).");
-                println!("[CORTEX] Intencao ID 0: acao padrao (nenhuma skill registrada).");
-            }
+                hermes::Command::Echo(arg) => {
+                    let reg = SKILL_REGISTRY.lock();
+                    let result = reg.execute_skill(&echo_skill_name, arg.as_bytes(), &event.token);
+                    drop(reg);
+                    match result {
+                        Ok(output) => {
+                            let reversed = core::str::from_utf8(&output).unwrap_or("(bytes nao UTF-8)");
+                            alloc::format!("Echo reverso: \"{}\"", reversed)
+                        }
+                        Err(e) => alloc::format!("Erro: {}", e),
+                    }
+                }
+                hermes::Command::Help => {
+                    String::from("Comandos: /status, /echo <texto>, /help | Ou digite algo para o MLP classificar.")
+                }
+                hermes::Command::Chat(msg) => {
+                    let intent_id = INTENT_MLP.classify(&msg);
+                    serial_println!("[CORTEX] MLP intent ID: {}", intent_id);
+                    match intent_id {
+                        1 => {
+                            let reg = SKILL_REGISTRY.lock();
+                            let result = reg.execute_skill(&status_skill_name, msg.as_bytes(), &event.token);
+                            drop(reg);
+                            match result {
+                                Ok(_) => String::from("Status report (via MLP)."),
+                                Err(e) => alloc::format!("Erro: {}", e),
+                            }
+                        }
+                        2 => {
+                            let reg = SKILL_REGISTRY.lock();
+                            let result = reg.execute_skill(&echo_skill_name, msg.as_bytes(), &event.token);
+                            drop(reg);
+                            match result {
+                                Ok(output) => {
+                                    let reversed = core::str::from_utf8(&output).unwrap_or("(bytes)");
+                                    alloc::format!("Echo (via MLP): \"{}\"", reversed)
+                                }
+                                Err(e) => alloc::format!("Erro: {}", e),
+                            }
+                        }
+                        _ => {
+                            alloc::format!("Hermes: \"{}\" — entendido. (intent chatear)", msg)
+                        }
+                    }
+                }
+            };
+
+            let resp_event = event_bus::Event {
+                id: 0,
+                topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
+                payload: response.into_bytes(),
+                token: event_bus::CapabilityToken(1),
+            };
+            let _ = EVENT_BUS.publish(resp_event);
+        }
+        task::yield_now().await;
+    }
+}
+
+async fn hermes_console_daemon() {
+    let receiver = EVENT_BUS.subscribe(hermes::TOPIC_HERMES_RESPONSE);
+    loop {
+        if let Some(event) = receiver.try_receive() {
+            let text = core::str::from_utf8(&event.payload).unwrap_or("(bytes)");
+            serial_println!("[Hermes] {}", text);
+            println!("[Hermes] {}", text);
         }
         task::yield_now().await;
     }

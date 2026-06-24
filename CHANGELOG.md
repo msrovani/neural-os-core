@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.15.0] — 2026-06-23
+
+### Added (Sprint 20 — Block 3: Hermes Chat)
+
+- `hermes.rs` — Hermes Chat console module with:
+  - `IntentMlp` — real MLP intent classifier: bag-of-words (16-word vocab) → Linear(16→8) → SiLU → Linear(8→3) → argmax (3 intents: chat, status, echo)
+  - Hand-crafted weights for keyword-based classification (status/memory/ram/cpu/system → status intent; echo/reverse → echo intent; hello/hi/help → chat intent)
+  - `parse_command()` — multi-word command parser: `/status`, `/echo <text>`, `/help`, `/stats`, `/mem`
+  - `Command` enum: Status, Echo(String), Help, Chat(String)
+- **scancode_to_ascii()** — expanded with digits 0-9 (0x02-0x0B) and punctuation (`- = [ ] ; ' ` \ , . /`) for full command-line input
+- **intent_router_daemon** — upgraded from mock string-contains to:
+  - `parse_command()` dispatches `/status` and `/echo` to SkillRegistry
+  - Unrecognized text → `INTENT_MLP.classify()` → routes to SystemStatusSkill (intent 1), EchoSkill (intent 2), or default chat response (intent 0)
+  - Publishes responses on `HERMES_RESPONSE` EventBus topic
+- **hermes_console_daemon** — subscribes `HERMES_RESPONSE`, prints `[Hermes] <response>` to both VGA and serial
+- Both new daemons spawn in the NeuralExecutor (6 tasks total)
+
+### Changed
+
+- `main.rs` — added `mod hermes;`, `INTENT_MLP` lazy_static, expanded scancode table, upgraded intent_router + new console daemon
+
 ## [0.14.1] — 2026-06-23
 
 ### Fixed (Sprint 19 — SMP Multi-Core Boot)

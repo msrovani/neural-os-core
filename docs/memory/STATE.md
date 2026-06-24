@@ -279,12 +279,43 @@ O Sprint 19 (Block 2) foi completado com a correção do boot multi-core. A caus
 - `cargo check --release`: 0 erros, 0 warnings
 - `cargo bootimage --release`: 0 erros
 
-### Pendências (Sprint 20 — Block 3: Chat + Intent Router)
+## Sprint 20 (Block 3: Hermes Chat) — Concluído (v0.15.0)
 
-- [ ] Terminal loop: scancode→ASCII→line buffer
-- [ ] MLP intent inference (mock upgrade)
-- [ ] Multi-word command parsing
-- [ ] EventBus integration for chat responses
+**Data:** 2026-06-23
+
+### Entregas
+
+1. **`hermes.rs` — Hermes Chat console module** — `IntentMlp` com classificação MLP real: bag-of-words (16 palavras do vocabulário) → Linear(16→8) → SiLU → Linear(8→3) → argmax. Pesos artesanais para 3 intenções: chat (0), status (1), echo (2). `parse_command()` — analisador multi-palavras com suporte a comandos `/status`, `/echo <texto>`, `/help`, `/stats`, `/mem`.
+
+2. **`scancode_to_ascii()` expandida** — agora reconhece dígitos 0-9 (scancodes 0x02-0x0B) e pontuações (`- = [ ] ; ' ` \ , . /`). Necessário para digitar comandos como `/status`.
+
+3. **`intent_router_daemon` atualizado** — substitui o mock `text.contains("STATUS")` pelo pipeline real:
+   - `parse_command()` tenta encaixar comando explícito primeiro
+   - Se não for comando, `INTENT_MLP.classify()` via MLP real
+   - Intent 1 (status) → `SystemStatusSkill` via SkillRegistry
+   - Intent 2 (echo) → `EchoSkill` via SkillRegistry
+   - Intent 0 (chat) → resposta padrão
+   - Respostas publicadas no tópico `HERMES_RESPONSE` do EventBus
+
+4. **`hermes_console_daemon`** — nova task que assina `HERMES_RESPONSE` e exibe `[Hermes] <resposta>` no VGA e serial. 6 tasks no executor.
+
+### Arquivos criados/modificados neste sprint
+
+| Arquivo | Ação |
+|---|---|
+| `src/hermes.rs` | Criado (165 linhas) |
+| `src/main.rs` | Modificado — +mod hermes, scancodes expandidas, intent_router upgrade, console daemon |
+
+### Dependências novas
+Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
+
+### Pendências (Sprint 21 — Block 4: MLP + MHI + Auto-detecção)
+
+- [ ] MemoryHierarchyIndex: `MemoryTier`, `MemoryHierarchy`, `AllocTier` enum
+- [ ] `alloc_by_tier(Dram)` — alocar em DRAM via MHI
+- [ ] `HardwareInventory::collect()` — auto-detect via PCI + CPUID
+- [ ] `SystemArchitecture` MLP (512→256→64→9 ternary)
+- [ ] Boot flow adaptativo: collect → infer → init
 
 ---
 
@@ -297,7 +328,7 @@ A rota atual é a **chain de 6 blocos** definida na ADR-0015.
 | 0 | Genesis (concluído) | 1–17 | — | Kernel bootável, EventBus, Skills, Executor, PIC, keyboard |
 | 1 | PCI + ACPI + APIC | 18 (concluído) | Block 0 | PCI scan → MADT → LAPIC → IOAPIC → PIC disable → APIC I/O |
 | 2 | SMP + Slab Allocator | 19 (concluído) | Block 1 | PerCpu, trampoline, INIT-SIPI-SIPI, slab heap 4 MB |
-| 3 | Chat + Intent Router | 20 | Block 2 | Terminal loop, line input, MLP intent routing |
+| 3 | Hermes Chat | 20 (concluído) | Block 2 | MLP intent router, commands, console daemon |
 | 4 | MLP + MHI + Auto-detecção | 21 | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
 | 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache |
 | MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural |
