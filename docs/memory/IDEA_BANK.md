@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-24 (Ed25519 Trust Identity — item #176, total 176)  
+**Última atualização:** 2026-06-25 (Tier 4 Agent Frameworks Analysis — itens #228-249, total 249)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -336,7 +336,104 @@ Nada é descartado sem registro. Ideias podem ser:
 | 176 | **Ed25519 Cryptographic Identity for TrustCache** — substitui `CapabilityToken(u64)` estático por assinatura Ed25519; Token vira chave pública + assinatura da requisição; Zero-Trust real em nível de kernel | 🟡 Baixa | Sprint 27 | Crom-meueu: identidade criptográfica Ed25519 portada para bare-metal `no_std`. ~300 LOC usando `ed25519-dalek` (sem std) ou implementação custom. Depende de #166 (Multi-mode Trust) como camada de permissão sobre a identidade. |
 
 **ADR-0020:** `docs/architecture/0020-crom-ecosystem-analysis.md` — Análise de viabilidade Rust com código modelo para 9 features (#164-175). Item #176 (Ed25519) adicionado posteriormente.
- 
+
+### 1.24. Life OS / Personal OS Ecosystem (20 repos Tier 1)
+
+| # | Item | Classificação | Sprint | Motivação |
+|---|---|---|---|---|
+| 177 | **7D Spectrum Graph Leve** — Grafo de conhecimento 7-dimensional para EventBus; Edge Prophecy (Jaccard similarity) p/ predizer conexões. Substitui BTreeMap por `Vec<(u64,u64,u8,u64)>`. Dá memória associativa ao Hermes | ✅ Imediata | Sprint 24 | ~200 LOC sobre EventBus existente. Spectrum Graph do PrismOS-AI portado para no_std. |
+| 178 | **Runtime SDD (Structured Decision Document)** — Antes de executar skill, Hermes mostra goal/context/plan/expected outcome/rollback. Reasoning visível no VGA | ✅ Imediata | Sprint 24 | ~80 LOC no intent_router_daemon. Alinha com chain-of-thought determinístico. |
+| 179 | **File System as Context** — Em vez de RAG embedding, usa filesystem como índice de conhecimento. CDC Rabin chunking + grep-like scan sobre arquivos `.bitmem` | 🟡 Baixa | Sprint 27 | ~300 LOC sobre CDC Rabin (#165). Requer VirtIO-blk (Sprint 24+). Bridge p/ SFS (Layer 2). |
+| 180 | **DA Identity Layer** — Persona persistente do Hermes (SOUL.md/IDENTITY.md/TELOS.md). Hermes atual é stateless; identidade dá voz/personalidade consistentes | 🟡 Baixa | Sprint 27 | ~100 LOC. Parser markdown mínimo. Identidade hardcoded como fallback sem disco. |
+| 181 | **Temporal Knowledge Graph** — Grafo temporal com validity windows e contradiction detection 97% LongMemEval-S. Extensão do Spectrum Graph (#177) com `(t_start, t_end)` por aresta | 🟠 Média | Sprint 28 | ~500 LOC sobre #177. taOSmd port: archive append-only, detecção de sobreposição temporal. |
+| 182 | **Proactive Push / Heartbeat Scheduler** — Tentáculos autônomos que monitoram fontes e fazem push proativo. NeuralExecutor ganha agendamento push baseado em LAPIC timer ticks | 🟠 Média | Sprint 28 | ~400 LOC. Dedup hash + priority queue. Push externo requer Network Sprint. |
+| 183 | **WASM Sandbox para Skills** — Sandbox via paging (não wasmtime): skill executa em página separada com PTE NX + shared memory controlado. Fuel metering + auto-rollback | 🟠 Média | Sprint 28 | ~800 LOC. Alternativa no_std ao wasmtime. Depende de #172 MCP Server. |
+| 184 | **Intent Transparency** — Após cada resposta Hermes, mostrar query type, reasoning band, confidence, alternatives. MLP argmax era silencioso — agora é visível | 🟡 Baixa | Sprint 27 | ~200 LOC. Log estruturado no intent_router_daemon. Sem dependências. |
+| 185 | **Energy / Circadian Tracking** — Usuário reporta energia (1-10) via `/energy`. Scheduler casa tarefas com capacidade real. 15-25 min task chunks, dopamine hooks | 🟡 Baixa | Sprint 27 | ~150 LOC como skill. Requer #157 Usage Pattern Analyzer p/ correlação. |
+| 186 | **AppForge / App Store** — Plataforma de apps com catalog, instalação one-click, hardware-aware filtering. Store backend sobre MCP + SFS | 🔴 Alta | Sprint 29+ | ~1500 LOC total. Frontend inviável sem framebuffer (💰 Sponsor). |
+| 187 | **Multi-User / Multi-Persona** — Vários usuários com memória isolada, trust tiers diferentes. Certificate Authority + Dual-LLM split (quarentena/planejamento) | 🔴 Alta | Sprint 29+ | ~600 LOC. Redesign do scheduler. PerCpu → PerUser. TrustCache multicamada. |
+| 188 | **Visual Workflow Builder** — Drag-and-drop pipeline DAG (Trigger/Tool/Agent/Condition/Loop/Gate). AI workflow designer via chat | ⏳ Futuro | — | Requer framebuffer VESA + mouse. CLI ASCII DAG perde valor visual. |
+| 189 | **Federated Cluster / P2P Workers** — Mesh de AI compute (gaming PC, Mac, RPi, Android). Auto-descoberta, pareamento PIN, checkpoint distribuído | ⏳ Futuro | — | Depende de toda stack de rede + scheduler distribuído + WASM remoto. |
+| 190 | **Algorithm loop de 7 fases no Hermes** — THINK antes de agir (carrega contexto adicional), VERIFY depois (confirma ISC). Não só MLP→argmax→skill. THINK consulta KNOWLEDGE graph, VERIFY checa resultado contra critério | 🟡 Baixa | Sprint 27 | ~300 LOC. PAI Algorithm v6.3.0: OBSERVE→THINK→PLAN→BUILD→EXECUTE→VERIFY→LEARN. Ref: `docs/architecture/0021-life-os-ecosystem-analysis.md#2-o-algorithm-v630` |
+| 191 | **Council skill** — Antes de decisão ambígua, 3 vozes (OtImista, Cético, Pragmático) votam. Argmax vence. Melhora qualidade de intent classification em bordas | 🟡 Baixa | Sprint 27 | ~150 LOC como skill. PAI Council skill: multiple perspective simulation. Ref: `0021-life-os-ecosystem-analysis.md#skills-como-deterministic-units` |
+| 192 | **Loop Detection no NeuralExecutor** — Monitora repetição de `AgentTask.id`, força break/log warning após N≥3 repetições sem progresso | ✅ Imediata | Sprint 24 | ~80 LOC. PAI Loop skill detecta repeat patterns em tool calls. Ref: `0021-life-os-ecosystem-analysis.md#skills-como-deterministic-units` |
+| 193 | **Bitter Pill Engineering** — Força etapas obrigatórias (cargo check antes de deploy, test antes de merge) mesmo que usuário peça atalho. Hermes recusa pular passos críticos | 🟡 Baixa | Sprint 27 | ~100 LOC no intent_router. PAI BitterPillEngineering skill. Ref: `0021-life-os-ecosystem-analysis.md#skills-como-deterministic-units` |
+| 194 | **ISA como formato de sprint** — Cada sprint tem ISA (Ideal State Artifact) com ISCs verificáveis. Substitui verificação ad-hoc "cargo check + QEMU boot" por critérios binários formais | 🟡 Baixa | Sprint 27 | ~200 LOC + docs. PAI ISA: 12 seções (Problem→Vision→Goal→Criteria→Test Strategy→Verification). Ref: `0021-life-os-ecosystem-analysis.md#3-o-isa-ideal-state-artifact` |
+| 195 | **Hermes Rating (Satisfaction Capture)** — Após cada resposta, usuário dá 👍/👎 via `/rate`. Alimenta TrustCache weight adjustment + Success Engine feedback loop | 🟡 Baixa | Sprint 27 | ~100 LOC no hermes_console_daemon. PAI SatisfactionCapture.hook.ts (18 KB). Ref: `0021-life-os-ecosystem-analysis.md#4-o-sistema-de-hooks-37-hooks` |
+| 196 | **Evals skill** — Avalia respostas do Hermes contra critérios predefinidos antes de mostrar ao usuário. Se confidence < 0.7, re-executa com mais contexto | 🟠 Média | Sprint 28 | ~300 LOC. PAI Evals skill. Ref: `0021-life-os-ecosystem-analysis.md#skills-como-deterministic-units` |
+| 197 | **Container Zones via TrustCache** — Trust token define quais regiões de memória/skills a skill pode acessar. Implementa containment zones do PAI em bare-metal | 🟠 Média | Sprint 28 | ~400 LOC sobre #176 Ed25519. PAI ContainmentGuard.hook.ts + containment-zones.ts. Ref: `0021-life-os-ecosystem-analysis.md#10-security--containment` |
+| 198 | **Boot-time security policy (.pai-protected.json equivalente)** — Banco de regexes de segurança compilado no boot. Skills são validadas contra patterns antes de executar | 🟡 Baixa | Sprint 27 | ~100 LOC. PAI .pai-protected.json: 17 categorias, 100+ regexes. Ref: `0021-life-os-ecosystem-analysis.md#10-security--containment` |
+| 199 | **IterationBudget com Grace Cycle** — Max poll cycles per AgentTask, um grace cycle extra após exhaustion para finalização limpa | ✅ Imediata | Sprint 24 | ~50 LOC. Hermes Agent `agent/iteration_budget.py`. Ref: ADR-0022. |
+| 200 | **Skill Metadata Frontmatter** — `version`, `author`, `description` (≤60 chars), `tags` na Skill trait. Routing constraint de 60 chars para caber em linha VGA 80-col | ✅ Imediata | Sprint 24 | ~80 LOC. Hermes Agent `/learn` + OpenClaw marketplace. Ref: ADR-0022. |
+| 201 | **Audit Ring Buffer** — Ring buffer fixo de eventos de auditoria no executor (task_id, tool_name, outcome, LAPIC tick). Expor via syscall | ✅ Imediata | Sprint 24 | ~80 LOC. GitAgent `.gitagent/audit.jsonl`. Ref: ADR-0022. |
+| 202 | **Agent Identity Awakening Mode** — Duas personalidades Hermes: "Awakening" (primeiro boot) e "Established" (memória presente). MLP weights diferentes selecionados via HAS_MEMORY flag | ✅ Imediata | Sprint 24 | ~50 LOC. GitAgent `src/context.ts` + PAI SOUL.md. Ref: ADR-0022. |
+| 203 | **Context Fencing + Streaming Scrubber** — Byte-level type markers no EventBus (`[UserInput]`, `[HardwareTelemetry]`). State machine scrubber remove na recepção | 🟡 Baixa | Sprint 27 | ~150 LOC. Hermes Agent `StreamingContextScrubber`. Ref: ADR-0022. |
+| 204 | **Heartbeat Idle Gate com Open Work Digest** — Watchdog detecta idle vs active. Tick é idle só quando sem reminders E sem subagentes ativos | 🟡 Baixa | Sprint 27 | ~200 LOC. Lethe `scheduler/brainstem.rs`. Ref: ADR-0022. |
+| 205 | **ProactiveRateLimiter com Deferred Outbox** — Rolling window (24h ticks) + cooldown. Outbox segura 1 msg deferida, msg nova superseded, stale >6h descartada | 🟡 Baixa | Sprint 27 | ~150 LOC. Lethe `scheduler/proactive.rs`. Ref: ADR-0022. |
+| 206 | **Lifecycle Hooks via Pre/Post Poll Callbacks** — HookRegistry com slots fixos de function pointers. Hooks retornam Allow/Block/Modify | 🟡 Baixa | Sprint 27 | ~200 LOC. GitAgent `hooks/hooks.yaml`. Ref: ADR-0022. |
+| 207 | **MemoryProvider + MemoryManager Trait** — Trait pluggável sobre MHI tiers. MemoryManager orquestra prefetch/sync em background via executor cooperativo | 🟠 Média | Sprint 28 | ~400 LOC. Hermes Agent `agent/memory_manager.py` + Lethe `memory/store.rs`. Ref: ADR-0022. |
+| 208 | **Capability-Based Tool Permission Model** — TrustCache verifica (token, skill, tier) antes da execução. Skills declaram tiers de memória + tokens autorizados | 🟠 Média | Sprint 28 | ~400 LOC. Hermes Agent `acp_adapter/permissions.py` + Ironclaw WASM sandbox. Ref: ADR-0022. |
+| 209 | **Actor Registry com Permission Model** — Registry de subagentes: spawn/terminate/kill, can_message() hierarchical, task state machine (Planned→Running→Blocked→Done), open_work tracking | 🟠 Média | Sprint 28 | ~500 LOC. Lethe `actor/registry.rs` (~46KB). Kameo-inspired. Ref: ADR-0022. |
+| 210 | **Subagent Crash-Recovery Persistence** — Estado de subagentes persistido em região de memória reservada. Boot walk + rehidrata. Serialização postcard/bincode | 🔴 Alta | Sprint 29+ | ~600 LOC. Lethe `actor/persistence.rs` + Ironclaw state. Ref: ADR-0022. |
+| 211 | **ComputeBackend Trait** — Abstrai 3 rings (NPU/GPU/CPU) atrás de trait. Intent router chama `COMPUTE_BACKEND.execute()` sem saber qual ring | 🔴 Alta | Sprint 29+ | ~800 LOC. ZeroClaw Peripheral trait + Ironclaw WASM/Docker. Ref: ADR-0022. |
+| 212 | **Plugin System via Loadable Page Ranges** — Plugin = região page-aligned em RAM com PluginDescriptor + tools + hooks. Walk linked list de regiões | ⏳ Futuro | — | Requer SFS Layer 2. GitAgent `plugins/<id>/plugin.yaml`. Ref: ADR-0022. |
+| 213 | **WASM + Docker Sandbox para Skills** — Ferramentas em WASM containers isolados com capability-based permissions + rate limiting + resource limits | ⏳ Futuro | — | Requer #183 WASM Sandbox + Network Sprint. ZeroClaw/Ironclaw. Ref: ADR-0022. |
+
+**ADR-0021:** `docs/architecture/0021-life-os-ecosystem-analysis.md` — Análise de 20 repos Tier 1 (Life OS / Personal OS). 13 ideias extraídas + 9 do PAI deep-dive (#190-198). Total: 22 ideias.
+**ADR-0022:** `docs/architecture/0022-personal-ai-assistant-ecosystem-analysis.md` — Análise de 21 repos Tier 2 (Personal AI Assistants). 15 ideias extraídas (#199-213). Deep-dives: Lethe (Rust), Hermes Agent (202k ★), GitAgent, Rust ecosystem (ZeroClaw, Ironclaw).
+
+### 1.26. Tier 3 — Memory Systems & Second Brain (2026-06-25)
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 214 | **SHA-256 Memory Dedup** — Port SHA-256 dedup (5min sliding window) to no_std; prevent duplicate EventBus messages and TrustCache entries | 🟡 Sprint 23 | Sprint 23 | agentmemory dedup.ts. ~100 LOC. Sem novas deps (SHA-256 via `sha2` ou manual). |
+| 215 | **Privacy Filter for Memory** — Strip API keys, secrets, `<private>` tagged content before memory storage; regex + pattern matching | 🟡 Sprint 23 | Sprint 23 | agentmemory privacy.ts. ~80 LOC. Proteção zero-trust para TrustCache. |
+| 216 | **Memory TTL/Eviction** — Auto-evict stale memory entries based on configurable TTL; EvictionPolicy enum (TimeToLive, ImportanceRank, AccessFrequency) | 🟡 Sprint 23 | Sprint 23 | agentmemory evict.ts, auto-forget.ts. ~150 LOC. |
+| 217 | **Hybrid Search (BM25 + MLP)** — RRF fusion for Hermes intent routing; combine MLP intent classifier with BM25 keyword fallback; Reciprocal Rank Fusion with k=60 | 🟡 Sprint 24 | Sprint 24 | agentmemory search.ts. ~200 LOC. BM25 já implementável em no_std. |
+| 218 | **4-Tier Memory Consolidation** — Working→Episodic→Semantic→Procedural pipeline in Hermes daemon; EventBus topics for each tier transition | 🟡 Sprint 24 | Sprint 24 | agentmemory consolidation-pipeline.ts. ~400 LOC. Aproveita EventBus. |
+| 219 | **Ebbinghaus Decay for TrustCache** — strength = importance × e^(-λ_eff × days) × (1 + recall_count × 0.2); λ_eff = 0.16 × (1 - importance × 0.8) | 🟡 Sprint 24 | Sprint 24 | nexo + YourMemory. ~120 LOC. libm expf. |
+| 220 | **Session Replay** — Record Hermes daemon turns as atomic events; replay with speed control for debugging | 🟡 Sprint 24 | Sprint 24 | agentmemory replay.ts. ~200 LOC. |
+| 221 | **Knowledge Graph on MHI** — Entity extraction + BFS traversal over semantic file system; GraphNode/GraphEdge with bi-temporal timestamps | 🟡 Sprint 25 | Sprint 25 | agentmemory graph.ts, temporal-graph.ts. ~500 LOC. |
+| 222 | **Metacognitive Guard** — Before each Hermes skill execution, check TrustCache for past mistakes; inject known error patterns, schemas, blocking rules | 🟡 Sprint 25 | Sprint 25 | nexo guard system. ~300 LOC. |
+| 223 | **Draft→Review→Merge Memory** — Memory changes staged as drafts on EventBus; Hermes daemon reviews before merge; approval/rejection workflow | 🟡 Sprint 25 | Sprint 25 | novyx-vault workflow. ~350 LOC. |
+| 224 | **Atkinson-Shiffrin Cognitive Memory** — Full 3-tier memory: Sensory Register (48h) → STM (7d) → LTM (permanent, semantic-indexed); promotion on access frequency | 🟡 Sprint 26 | Sprint 26+ | nexo brain architecture. ~800 LOC. Maior item individual do Tier 3. |
+| 225 | **Bi-temporal Knowledge Graph for MHI** — Track MHI tiers across time; append-only, old facts superseded never deleted | 🟡 Sprint 26 | Sprint 26+ | MemoryOS + agentmemory temporal-graph.ts. ~600 LOC. |
+| 226 | **Team/Shared Memory** — Namespaced memory across neural-os-core instances; shared + private isolation per agent ring | ⏳ Pós-MVP | — | agentmemory team.ts. ~400 LOC. |
+| 227 | **Memory Git Snapshots** — Version, rollback, diff memory state; SHA-256 commit chain for TrustCache and Hermes memory | ⏳ Pós-MVP | — | agentmemory snapshot.ts. ~500 LOC. |
+
+**ADR-0023:** `docs/architecture/0023-memory-systems-second-brain-analysis.md` — Análise de 14 repos Tier 3 (Memory Systems & Second Brain). 14 ideias extraídas (#214-227). Deep-dives: agentmemory (24k ★, 60+ source files), nexo (Atkinson-Shiffrin + Ebbinghaus), novyx-vault (Draft→Review→Merge + Ghost Connections), MemoryOS (bi-temporal KG).
+
+### Tier 4 — Agent Frameworks (#228-#249)
+
+Ideias portadas de 6 repos Tier 4: Cline (63.9k ★), Agent Zero (18.2k ★), Microsoft Agent Framework (11.7k ★), OpenHands (77k ★), opencode/Crush (13.1k ★), open-agent (new).
+
+| # | Item | Destino | Target | Fonte + Detalhes |
+|---|---|---|---|---|
+| 228 | **Tool Policy Registry** — Extend SkillRegistry with `{ enabled: bool, autoApprove: bool }` per tool, wildcard fallback, `validate_tool_call()` denies blocked tools | 🟡 Sprint 23 | Sprint 23 | Cline agent-runtime.ts toolPolicies. ~80 LOC. |
+| 229 | **Usage Tracker** — Lightweight token/metrics accumulator for hardware_context_tensor(): track input_chars, output_chars, cache_hits, iterations per daemon | 🟡 Sprint 23 | Sprint 23 | Cline AgentUsage struct. ~50 LOC. |
+| 230 | **Auto-Compact Hermes Buffer** — After 3+ conversation cycles without user input, trigger summarize_context skill to compact buffer into single [System Note] | 🟡 Sprint 23 | Sprint 23 | opencode auto-compact pattern. ~60 LOC. |
+| 231 | **Event-Sourced Conversation State** — Replace mutable String buffer in Hermes with VecDeque<ConversationEvent { type, payload, timestamp }> immutable event log | 🟡 Sprint 23 | Sprint 23 | OpenHands Action/Observation typed events. ~100 LOC. |
+| 232 | **Cron Scheduler** — ScheduleService with CronSpec { prompt, schedule, enabled, model_id, tool_policies }, periodic poll via LAPIC timer, markdown report writer | 🟡 Sprint 24 | Sprint 24 | Cline CronRunner + SqliteCronStore. ~350 LOC. |
+| 233 | **Session Checkpoint/MHI Snapshot** — checkpoint() saves kernel state + MHI tier stats to reserved frames; restore() rollback on Double Fault | 🟡 Sprint 24 | Sprint 24 | Cline ClineCore restore(). ~200 LOC. |
+| 234 | **Plan/Execute Modes** — Hermes dual-mode: plan mode (analysis only, no tool execution), act mode (full execution with auto-approve) | 🟡 Sprint 24 | Sprint 24 | Cline + MS Agent. ~150 LOC. |
+| 235 | **Graph-Based Multi-Daemon Orchestration** — Extend EventBus with sequential / concurrent / handoff patterns for daemon chains | 🟡 Sprint 24 | Sprint 24 | MS Agent graph-based workflows. ~250 LOC. |
+| 236 | **Plugin Hub / MCP Index** — McpRegistry discovers and installs skill packages from remote index with AI-driven security scanning | 🟡 Sprint 25 | Sprint 25 | Agent Zero Plugin Hub (100+ plugins). ~400 LOC. |
+| 237 | **Completion Terminal Skills** — lifecycle.completes_run: bool on McpManifest, SkillRegistry auto-routes terminal response to HERMES_RESPONSE | 🟡 Sprint 25 | Sprint 25 | Cline completesRun + completionPolicy. ~120 LOC. |
+| 238 | **Claim-Based Daemon Lease** — LeaseDaemon skill: acquire lease with TTL, heartbeat via LAPIC timer, release on completion; prevents double-execution | 🟡 Sprint 25 | Sprint 25 | Cline claimDueRuns + claimLeaseHeartbeat. ~200 LOC. |
+| 239 | **Time Travel / Workspace Snapshot** — Capture BitmapFrameAllocator state + MHI tiers at checkpoint, restore on Double Fault or /restore command | 🟡 Sprint 25 | Sprint 25 | Agent Zero Time Travel + Cline checkpoint. ~300 LOC. |
+| 240 | **Context Compaction with Ebbinghaus Decay** — Conversation events decay via Ebbinghaus formula; summarize_context when budget < 20% remaining | 🟡 Sprint 25 | Sprint 25 | Cline + Tier 3 Ebbinghaus. ~150 LOC. |
+| 241 | **OpenTelemetry-Like Observability** — Trace event logging via serial output, structured log format, per-daemon latency/usage metrics | 🟡 Sprint 26+ | Sprint 26+ | MS Agent OpenTelemetry. ~500 LOC. |
+| 242 | **AI-Driven Security Scan for Skills** — Use Intent MLP to classify skill behavior as safe/suspicious/malicious before execution | 🟡 Sprint 26+ | Sprint 26+ | Agent Zero AI-driven plugin security scan. ~350 LOC. |
+| 243 | **Hub Discovery / Multi-Instance Board** — EventBus instances discover each other via shared MHI memory region, coordinate task assignment | 🟡 Sprint 26+ | Sprint 26+ | Cline cline-hub Kanban multi-agent board. ~400 LOC. |
+| 244 | **Human-in-the-Loop Approval** — request_tool_approval() blocks tool execution until keyboard confirmation via /approve or /deny | 🟡 Sprint 26+ | Sprint 26+ | MS Agent + Cline tool approval. ~250 LOC. |
+| 245 | **Remote Agent Execution** — Hub daemon on separate machine, EventBus over VirtIO-net TCP | ⏳ Pós-MVP | — | Cline hub discovery. ~800 LOC. |
+| 246 | **Skill Marketplace** — Signed, versioned MCP packages published to remote registry; Hermes /install <pkg> | ⏳ Pós-MVP | — | Agent Zero Plugin Index. ~600 LOC. |
+| 247 | **Automatic Context Compaction Agent** — Dedicated daemon that monitors conversation budget and proactively compacts | ⏳ Pós-MVP | — | Cline + opencode. ~300 LOC. |
+| 248 | **Docker Sandbox** — Containerized execution environment for skills | ❌ Descartado | — | Incompatível com bare-metal no_std (sem container runtime em Ring 0-2). |
+| 249 | **Python/.NET Runtime** — Multi-language agent runtime support | ❌ Descartado | — | Barreira de linguagem; Python requer OS que neural-os-core substitui. |
+
+**ADR-0024:** `docs/architecture/0024-agent-frameworks-analysis.md` — Análise de 6 repos Tier 4 (Agent Frameworks). 22 ideias extraídas (#228-249). Deep-dive: Cline (63.9k ★, 293 releases, 6.338 commits, AgentRuntime + ClineCore + CronRunner). Ideias imediatas: Tool Policy Registry, Usage Tracker, Auto-Compact Buffer, Event-Sourced Conversation (Sprint 23, ~230 LOC total).
+
 ---
 
 ## Seção 2 — Mapa de Calor
@@ -366,7 +463,11 @@ Nada é descartado sem registro. Ideias podem ser:
 | Treinamento (1.21) | 4 | 0 | 4 | 0 | 0 | 0 |
 | Self-Optimization (1.22) | 7 | 0 | 5 | 2 | 0 | 0 |
 | Crom Ecosystem (1.23) | 13 | 2 | 5 | 6 | 0 | 0 |
-| **Total** | **176** | **58 (33%)** | **46 (26%)** | **61 (35%)** | **9 (5%)** | **2 (1%)** |
+| Life OS Ecosystem (1.24) | 22 | 0 | 18 | 4 | 0 | 0 |
+| Tier 2 PAI Ecosystem (1.25) | 15 | 4 | 6 | 3 | 0 | 2 |
+| Tier 3 Memory Systems (1.26) | 14 | 0 | 9 | 5 | 0 | 0 |
+| Tier 4 Agent Frameworks (1.27) | 22 | 0 | 17 | 3 | 0 | 2 |
+| **Total** | **249** | **62 (25%)** | **96 (39%)** | **76 (30%)** | **9 (4%)** | **6 (2%)** |
 
 ---
 
@@ -706,3 +807,8 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-24 | Itens 164-175 (Crom Ecosystem Analysis) → adicionados; 12 ideias portadas de MrJc01/75 repos: XOR Delta, CDC, TV-DSL, Codebook VQ, ReAct loop, MCP Server, Workspace isolation | IDA IA |
 | 2026-06-24 | ADR-0020 (Crom Ecosystem Rust Viability Analysis) → criado; código modelo no_std para 9 items (#164-175), ~1.780 LOC kernel + ~300 LOC Python | IDA IA |
 | 2026-06-24 | Item 176 (Ed25519 Cryptographic Identity for TrustCache) → adicionado; upgrade do CapabilityToken(u64) para assinatura Ed25519 real; derivado de Crom-meueu | IDA IA + Auditoria Externa |
+| 2026-06-25 | ADR-0021: Itens 177-189 (Life OS Ecosystem Analysis) → adicionados; 13 ideias extraídas de 20 repos: Spectrum Graph, Runtime SDD, FS as Context, DA Identity, Temporal KG, Proactive Push, WASM Sandbox, Intent Transparency, Energy Tracking, AppForge, Multi-User, Workflow Builder, Federated Cluster | IDA IA |
+| 2026-06-25 | PAI Deep-Dive: Itens 190-198 → adicionados; 9 ideias extraídas de danielmiessler/LifeOS (PAI v5.0.0): Algorithm 7-phase loop, Council skill, Loop Detection, Bitter Pill, ISA format, Hermes Rating, Evals, Container Zones, Boot security policy | IDA IA |
+| 2026-06-25 | ADR-0022: Itens 199-213 (Tier 2 PAI Ecosystem) → adicionados; 15 ideias extraídas de 21 repos: IterationBudget, Skill Metadata, Audit Ring, Awakening Mode, Context Fencing, Heartbeat Idle Gate, RateLimiter, Lifecycle Hooks, MemoryProvider, Tool Permissions, Actor Registry, Crash-Recovery, ComputeBackend, Plugin System, WASM Sandbox | IDA IA |
+| 2026-06-25 | ADR-0023: Itens 214-227 (Tier 3 Memory Systems & Second Brain) → adicionados; 14 ideias extraídas de 14 repos: SHA-256 Dedup, Privacy Filter, TTL Eviction, Hybrid Search, 4-Tier Consolidation, Ebbinghaus Decay, Session Replay, Knowledge Graph, Metacognitive Guard, Draft→Review→Merge, Atkinson-Shiffrin Memory, Bi-temporal KG, Team Memory, Git Snapshots. Deep-dive: agentmemory (24k ★, 60+ source files). | IDA IA |
+| 2026-06-25 | ADR-0024: Itens 228-249 (Tier 4 Agent Frameworks) → adicionados; 22 ideias extraídas de 6 repos: Tool Policy Registry, Usage Tracker, Auto-Compact Buffer, Event-Sourced Conversation, Cron Scheduler, Session Checkpoint, Plan/Execute Modes, Graph Orchestration, Plugin Hub, Completion Terminal Skills, Claim-Based Lease, Time Travel, Context Compaction, Observability, AI Security Scan, Hub Discovery, Human-in-the-Loop, Remote Execution, Skill Marketplace, Context Compaction Agent. Deep-dive: Cline (63.9k ★, 293 releases, 6.338 commits, AgentRuntime + ClineCore + CronRunner). | IDA IA |

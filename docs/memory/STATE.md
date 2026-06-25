@@ -479,4 +479,29 @@ Ring 2: WASM Skills — executa a decisão
 
 **Memory:** 2 GB QEMU → 375 MB modelo + ~100 MB runtime + ~1.5 GB livre.
 
-Para inventário completo de 156 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
+Para inventário completo de 249 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
+
+---
+
+## Ecosystem Analysis Progress (4 Tiers Complete)
+
+### Tier 2 — Personal AI Assistants (ADR-0022, 21 repos, complete)
+- 15 ideas (#199-213), deep-dives: OpenClaw (380k ★), Hermes Agent (202k ★), Lethe (Rust brain-inspired), ZeroClaw (32k ★, Rust), Ironclaw (12k ★, Rust)
+
+### Tier 3 — Memory Systems & Second Brain (ADR-0023, 14 repos, complete)
+- 14 ideas (#214-227), deep-dives: agentmemory (24k ★, 60+ source files), nexo (Atkinson-Shiffrin + Ebbinghaus). Key portable patterns: SHA-256 dedup, Privacy filter, TTL eviction, Ebbinghaus decay — all <150 LOC each
+
+### Tier 4 — Agent Frameworks (ADR-0024, 6 repos, complete)
+- 22 ideas (#228-249), deep-dive: **Cline** (63.9k ★, 293 releases, 6,338 commits). Key portable patterns: Tool Policy Registry, Usage Tracker, Event-Sourced Conversation, Cron Scheduler, Session Checkpoint, Claim-Based Leases — all directly mappable to Hermes daemon + EventBus + TrustCache + LAPIC timer
+
+### Totals
+| Tier | Repos | Ideas | ADR |
+|------|-------|-------|-----|
+| 0 (Crom) | 75 | 22 | ADR-0020 |
+| 1 (Life OS) | 20 | 26 | ADR-0021 |
+| 2 (Personal AI Assistants) | 21 | 15 | ADR-0022 |
+| 3 (Memory Systems) | 14 | 14 | ADR-0023 |
+| 4 (Agent Frameworks) | 6 | 22 | ADR-0024 |
+| **Total** | **136** | **99** | |
+
+**Next:** Tier 5 (Language-Specific Runtimes) — WASM, Rust native agents, C ABI tools

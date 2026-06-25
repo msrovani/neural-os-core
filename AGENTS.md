@@ -271,4 +271,40 @@ When a user mentions a Rust crate or library feature not in Context7, search **c
 2. Pick the best match (ID format: `/org/project`) by: exact name match, description relevance, code snippet count, source reputation (High/Medium preferred), and benchmark score (higher is better). If results don't look right, try alternate names or queries (e.g., "next.js" not "nextjs", or rephrase the question). Use version-specific IDs when the user mentions a version
 3. `query-docs` with the selected library ID and the user's full question (not single words)
 4. Answer using the fetched docs
+
+# Ecosystem Analysis Reference (Tiers 0-4 Complete, 136 repos, 99 ideas)
+
+## Key Portable Patterns from Agent Frameworks (Tier 4)
+
+When implementing Hermes daemon features, reference these patterns from Cline (63.9k ★):
+
+### AgentRuntime Pattern (Cline)
+- **Hook lifecycle**: 7 hook points — beforeRun, afterRun, beforeModel, afterModel, beforeTool, afterTool, onEvent
+- **Tool policies**: `{ enabled: bool, autoApprove: bool }` per tool with wildcard `"*"` fallback
+- **Completion terminal tools**: `lifecycle.completesRun` marks terminal skills  
+- **Turn-based iteration**: `maxIterations` guard, inner loop: generate → parse → execute → check
+- **Streaming tool assembly**: Accumulates JSON arguments, reports parse errors, merges metadata
+
+### CronRunner Pattern (Cline)
+- **Claim-based scheduling**: Atomic claim with lease heartbeat, prevents double-execution
+- **Resource limiter**: Per-spec maxParallel concurrency
+- **Timeout handling**: spec.timeoutSeconds → withTimeout → abort → mark failed
+- **Report generation**: Markdown reports per run
+
+### Event-Sourced Conversation (OpenHands)
+- **Immutable event log**: `VecDeque<ConversationEvent { type, payload, timestamp }>` — pause, resume, fork, replay
+- **Agent as pure function**: `f(history) -> next event`
+
+### Other Portable Patterns
+- **Ebbinghaus decay** (Tier 3): ~20 LOC formula for memory decay
+- **SHA-256 dedup** (Tier 3): ~50 LOC for content-based deduplication (5-min window)
+- **Auto-compact** (opencode/Crush): Summarize buffer when approaching context limit
+- **Graph orchestration** (MS Agent): sequential/concurrent/handoff between daemons
+- **Plugin Hub** (Agent Zero): Remote MCP index with AI-driven security scanning
+
+## Sprint 23 (Immediate) Items
+- #228 Tool Policy Registry (~80 LOC) — SkillRegistry `{ enabled, autoApprove }`
+- #229 Usage Tracker (~50 LOC) — metrics accumulator for hardware_context_tensor()
+- #230 Auto-Compact Hermes Buffer (~60 LOC) — summarize_context after 3+ cycles
+- #231 Event-Sourced Conversation (~100 LOC) — VecDeque<ConversationEvent>
 <!-- context7 -->
