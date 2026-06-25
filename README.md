@@ -25,9 +25,9 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built (Sprint 22 — Block 5)
+## 🏗️ What's Been Built (Sprint 24 — Crom Ecosystem Analysis)
 
-The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache:
+The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache. Latest analysis: ported **12 architectural patterns** from MrJc01's Crom ecosystem (75 repos) — XOR Delta reconstruction, CDC Rabin fingerprinting, TV-DSL co-processor, Codebook VQ compression, ReAct loop, MCP Server support, and more (see ADR-0020).
 
 ```
 [SYSTEM]  Neural Microkernel Iniciado.

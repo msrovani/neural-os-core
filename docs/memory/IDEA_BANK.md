@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-24 (ADR-0019: Neural Cortex BitNet LLM adicionado — 31 novos itens, total 156)  
+**Última atualização:** 2026-06-24 (Crom Ecosystem Analysis — 12 novos itens, total 175)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -303,6 +303,39 @@ Nada é descartado sem registro. Ideias podem ser:
 | 155 | Pipeline `bitnet.cpp` quantization script | 🟡 Sprint 25 | Sprint 25 | Ferramenta para quantizar qualquer modelo. |
 | 156 | Ferramenta de validação — forward match kernel vs Python | 🟡 Sprint 25 | Sprint 25 | Garante que kernel e Python produzem mesmos outputs. |
 
+### 1.22. Self-Optimization / Workflow Learning
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 157 | **Usage Pattern Analyzer** — LLM observa últimas N intenções, detecta workflow do usuário (hora, frequência, recursos) | 🟡 Sprint 27 | Sprint 27 | Base de todo o ciclo de auto-otimização. Analisa EventBus history + MLP decisions. |
+| 158 | **Workflow Predictor** — pré-carrega recursos (MHI tiers, scheduler priority) baseado em hora/dia/padrão detectado | 🟡 Sprint 27 | Sprint 27 | Ex: "14h toda segunda → pré-alocar 6 GB RAM + GPU para CAD". Depende de #157. |
+| 159 | **Auto-Skill Generator** — cria skill WASM para tarefa repetitiva detectada (≥3 ocorrências no mesmo workflow) | 🟡 Sprint 28 | Sprint 28 | Ex: "render_batch" skill gerada automaticamente. Depende de #103 (WASM). |
+| 160 | **Dynamic Resource Scaling** — MHI ajusta tiers (Dram/Vram/Nvme) dinamicamente pelo uso real, não só por boot | 🟡 Sprint 27 | Sprint 27 | MHI hoje é estático (boot). Evolui para auto-ajuste. Depende de #56-67. |
+| 161 | **Self-Optimizing Scheduler** — prioriza agentes conforme workflow detectado (render → GPU agent high prio) | 🟡 Sprint 27 | Sprint 27 | Depende de #96 (Agent Scheduler) + #157. |
+| 162 | **Workflow Profile** — perfil salvo exportável ("arquiteto", "escritório", "dev") com recursos, skills, prioridades | 🟡 Sprint 28 | Sprint 28 | Permite trocar perfil sem rebuild. Depende de #157 + SFS (Layer 2). |
+| 163 | **Hardware Config Learning** — `SystemArchitecture` evolui com feedback do usuário (não só heurística de boot) | 🟡 Sprint 27 | Sprint 27 | LLM ajusta `SystemArchitecture` baseado em uso real. Depende de #135 + #157. |
+
+---
+
+### 1.23. Crom Ecosystem — Ideas Ported from MrJc01 (75 repos)
+
+| # | Item | Classificação | Sprint | Motivação |
+|---|---|---|---|---|
+| 164 | **XOR Delta reconstruction** — modo Archive lossless no PackedTernaryTensor; armazena resíduo XOR para round-trip bit-exact | ✅ Imediata | Sprint 24 | ~50 LOC sobre operações bitwise existentes. Permite verificação SHA-256 do output. |
+| 165 | **CDC Rabin Fingerprint** — Content-Defined Chunking via rolling hash p/ dividir `.bitnet` models em chunks carregáveis | ✅ Imediata | Sprint 24 | ~80 LOC, rolling hash polinomial. Útil para carregamento sob demanda de modelos grandes. |
+| 166 | **Multi-mode Trust** — PermissionMode enum (TotalAccess/AskEveryTime/Scoped) no TrustCache | 🟡 Baixa | Sprint 27 | ~100 LOC sobre TrustCache existente. Alinha com HITL do Crom-Agente. |
+| 167 | **TV-DSL Co-processor** — AST determinístico para expressões matemáticas; Hermes chama co-processador para cálculos exatos sem alucinação | 🟡 Baixa | Sprint 27 | ~200 LOC, parser de expr matemática em `no_std` (reusa `libm`). Zero alucinação aritmética — crítico p/ arquiteto (volumetria) e escritório (impostos). |
+| 168 | **PonderNet dynamic stop** — Reflex MLP decide quantos ciclos de inferência executar (não fixo) baseado em confiança | 🟡 Baixa | Sprint 27 | ~150 LOC sobre executor existente. Adaptive compute = eficiência energética. |
+| 169 | **Codebook Compression (VQ)** — Vector Quantization p/ PackedTernaryTensor; substitui `quantize_to_packed()` por `train_codebook()` + `lookup()` O(1) | 🟠 Média | Sprint 28 | ~300 LOC kernel + script Python treinamento. Crompressor-Neurônio: 97.56% acc com 40.8× compressão. |
+| 170 | **KV Cache Codebook** — aplica VQ ao cache de atenção do Transformer Engine; 94.2% redução real (Crompressor-Neurônio Lab06) | 🟠 Média | Sprint 28 | Depende de #126-131 (Transformer Engine pronto). Reduz cache de 2 MB p/ ~120 KB por camada. |
+| 171 | **ReAct loop com auto-correção** — NeuralExecutor evolui com fase de verificação: hash de ações recentes, detecção de loop infinito, re-tentativa em erro | 🟠 Média | Sprint 28 | ~300 LOC. Crom-Agente: 40 capacidades, loop ReAct com auto-verificação via lint/test. |
+| 172 | **MCP Server support** — EventBus + SkillRegistry evoluem para suportar servidores MCP externos via JSON-RPC 2.0 | 🟠 Média | Sprint 28 | ~400 LOC. Requer parser JSON em `no_std` ou protocolo binário custom. Compatibilidade com ecossistema MCP. |
+| 173 | **Codebook LLM finetune** — treinar APENAS o codebook (5.770 params) em vez dos pesos (235K), superando baseline 98.08% vs 97.53% | ⏳ Pós-MVP | Sprint 29+ | Pesquisa: Crompressor-Neurônio Tensor-Vivo Exp2. Success Engine pode usar codebook learning p/ ajuste online. |
+| 174 | **Delta branches (speculative decoding)** — branches de inferência paralela com 99.9% economia de memória via XOR delta entre branches | ⏳ Pós-MVP | Sprint 29+ | Crompressor-Neurônio Lab07. Requer scheduler maduro + múltiplos cores. Viabilidade depende de benchmark real. |
+| 175 | **Workspace isolation** — per-project config (skills/recursos/trust) isolados por workspace, estilo `.crom/config.json` | ⏳ Pós-MVP | Sprint 29+ | Crom-Agente workspace isolation. Requer SFS (Layer 2) para persistência. |
+
+**ADR-0020:** `docs/architecture/0020-crom-ecosystem-analysis.md` — Análise de viabilidade Rust com código modelo para cada item #164-175. ~2.080 LOC total para 9 features portáveis.
+ 
 ---
 
 ## Seção 2 — Mapa de Calor
@@ -330,7 +363,9 @@ Nada é descartado sem registro. Ideias podem ser:
 | Transformer Engine (1.19) | 7 | 0 | 7 | 0 | 0 | 0 |
 | Success Engine (1.20) | 4 | 0 | 0 | 4 | 0 | 0 |
 | Treinamento (1.21) | 4 | 0 | 4 | 0 | 0 | 0 |
-| **Total** | **156** | **56 (36%)** | **36 (23%)** | **53 (34%)** | **9 (6%)** | **2 (1%)** |
+| Self-Optimization (1.22) | 7 | 0 | 5 | 2 | 0 | 0 |
+| Crom Ecosystem (1.23) | 12 | 2 | 4 | 6 | 0 | 0 |
+| **Total** | **175** | **58 (33%)** | **45 (26%)** | **61 (35%)** | **9 (5%)** | **2 (1%)** |
 
 ---
 
@@ -509,6 +544,10 @@ Nada nesta camada depende de itens pós-MVP.
 [8] WASM skill dispatch para USB
   Pré: [1] xHCI, [103] WASM
   Razão: USB + WASM = duplo pós-MVP.
+
+[159] Auto-Skill Generator — cria skill WASM para workflow detectado
+  Pré: [103] WASM, [157] Usage Pattern Analyzer
+  Razão: requer WASM + detector de padrões de uso.
 ```
 
 ### Camada 6 — Memória Avançada (Sprint 23-24+)
@@ -554,6 +593,36 @@ Nada nesta camada depende de itens pós-MVP.
   Razão: futuro distante. Roadmap original já marcava Fase 7.
 ```
 
+### Camada 9 — Self-Optimization & Workflow Learning (Sprint 27+)
+
+```
+[157] Usage Pattern Analyzer — LLM detecta workflow do usuário
+  Pré: [126-131] Transformer Engine + Cortex Daemon (Sprint 25), [99] EventBus
+  → Bloqueia: [158, 159, 161, 162, 163]
+  Razão: precisa do LLM rodando para analisar padrões de intenção.
+
+[158] Workflow Predictor — pré-carrega recursos por hora/padrão
+  Pré: [157]
+  → Bloqueia: [162]
+  Razão: predição sem análise de padrão é chute.
+
+[160] Dynamic Resource Scaling — MHI auto-ajuste por uso real
+  Pré: [56-67] MHI tiers (existe), [157] Usage Pattern Analyzer
+  Razão: MHI hoje é estático. Scaling dinâmico requer análise de uso.
+
+[161] Self-Optimizing Scheduler — prioriza por workflow detectado
+  Pré: [96] Agent Scheduler (Layer 4), [157] Usage Pattern Analyzer
+  Razão: scheduler precisa existir antes de ser auto-otimizado.
+
+[162] Workflow Profile — perfil exportável
+  Pré: [157], [158] Workflow Predictor, SFS (Layer 2)
+  Razão: requer análise + predição + persistência.
+
+[163] Hardware Config Learning — SystemArchitecture evolve
+  Pré: [135] LLM decide hardware arch (Sprint 26), [157]
+  Razão: heurística de boot vira LLM query contínua.
+```
+
 ### Camada S — Sponsor / Hardware Real
 
 ```
@@ -592,7 +661,13 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
   │     ┌───────────┐                            ┌──────────────┐
   │     │ Layer 6   │◄────────────────────── [108]│ MatMul-Free  │
   │     │ HugePages │                            │ (Fase 7)     │
-  │     └───────────┘                            └──────────────┘
+  │     └───────────┘                            └──────┬───────┘
+  │           ▼                                        ▼
+  │     ┌───────────┐                            ┌──────────────┐
+  │     │ Layer 9   │◄── [157-163]                │ Self-Optim   │
+  │     │ Workflow  │                            │ Sprint 27+   │
+  │     │ Learning  │                            └──────────────┘
+  │     └───────────┘
   │
   └── Layer S (Sponsor): NPU XDNA, ARM/RISC-V — sem data
 ```
@@ -626,3 +701,6 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-24 | ADR-0017: Itens CRÍTICOS corrigidos (e1000, DHCP, slab, nos, bridge, xsdt, mhi, nn) | IDA IA |
 | 2026-06-24 | ADR-0018: Sprint 24 plan (12 HIGH + 16 MEDIUM + 12 LOW bugs) | IDA IA |
 | 2026-06-24 | ADR-0019: Itens 126-156 (Neural Cortex BitNet LLM) → adicionados; Transformer Engine + Cortex Daemon + Success Engine + Training Pipeline | IDA IA |
+| 2026-06-24 | Itens 157-163 (Self-Optimization / Workflow Learning) → adicionados; Usage Pattern Analyzer, Workflow Predictor, Auto-Skill Generator, Dynamic Resource Scaling, Self-Optimizing Scheduler, Workflow Profile, Hardware Config Learning | Dev + IDA IA |
+| 2026-06-24 | Itens 164-175 (Crom Ecosystem Analysis) → adicionados; 12 ideias portadas de MrJc01/75 repos: XOR Delta, CDC, TV-DSL, Codebook VQ, ReAct loop, MCP Server, Workspace isolation | IDA IA |
+| 2026-06-24 | ADR-0020 (Crom Ecosystem Rust Viability Analysis) → criado; código modelo no_std para 9 items (#164-175), ~1.780 LOC kernel + ~300 LOC Python | IDA IA |

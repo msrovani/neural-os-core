@@ -164,13 +164,34 @@
 6. **QEMU TCG slow** — Serial output at 115200 baud em QEMU TCG adiciona ~4.35ms por linha serial, resultando em ~0.01-0.02× speed ratio vs real hardware.
 7. **e1000 DHCP PageFault** — `send()` acessa TX buffer físico sem offset adequado. Exposed by RCTL/TCTL enable in Sprint 23.
 
-### Next Steps — Sprint 24 (HIGH/MEDIUM/LOW fix sprint)
+### Next Steps — Sprint 24 (Crom Features + Bugfixes)
 
+- [ ] **Implement XOR Delta (#164)** — Archive mode lossless no PackedTernaryTensor (~50 LOC)
+- [ ] **Implement CDC Rabin Fingerprint (#165)** — Content-Defined Chunking para modelos .bitnet (~80 LOC)
 - [ ] **Fix e1000 DMA buffer mapping** — PageFault at VirtAddr(0x2103b0) in `send()`
 - [ ] **12 HIGH priority items** from code review (see IDEA_BANK.md or ADR-0017)
 - [ ] **16+ MEDIUM priority items**
 - [ ] **12+ LOW priority items**
 - [ ] Full QEMU boot validation after fixes
+
+### ADR-0020 — Crom Ecosystem Analysis Complete
+
+Análise de 75 repositórios MrJc01 → 12 ideias portadas para neural-os-core:
+
+| # | Item | Sprint | LOC |
+|---|---|---|---|
+| 164 | XOR Delta Reconstruction | 24 | ~50 |
+| 165 | CDC Rabin Fingerprint | 24 | ~80 |
+| 166 | Multi-mode Trust | 27 | ~100 |
+| 167 | TV-DSL Co-processor | 27 | ~200 |
+| 168 | PonderNet Dynamic Stop | 27 | ~150 |
+| 169 | Codebook Compression VQ | 28 | ~300+Python |
+| 170 | KV Cache Codebook | 28 | ~200 |
+| 171 | ReAct Loop Auto-Correção | 28 | ~300 |
+| 172 | MCP Server Support | 28 | ~400 |
+| 173-175 | Futuro (pós-MVP) | 29+ | pesquisa |
+
+**Documento:** `docs/architecture/0020-crom-ecosystem-analysis.md`
 
 ---
 
