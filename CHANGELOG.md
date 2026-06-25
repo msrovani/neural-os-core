@@ -6,6 +6,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.18.4] — 2026-06-25
+
+### Added (Tier 4 Agent Frameworks Analysis — ADR-0024)
+
+- **ADR-0024** — Comprehensive analysis of 6 Agent Frameworks repos (Tier 4)
+- **Deep-dive: Cline** (63.9k ★, 293 releases, 6,338 commits) — AgentRuntime, ClineCore, CronRunner source read
+- **22 new IDEA_BANK items** (#228-249), classified by complexity:
+  - **Sprint 23 (immediate):** Tool Policy Registry (#228), Usage Tracker (#229), Auto-Compact Buffer (#230), Event-Sourced Conversation (#231)
+  - **Sprint 24 (low):** Cron Scheduler (#232), Session Checkpoint (#233), Plan/Execute Modes (#234), Graph Orchestration (#235)
+  - **Sprint 25 (medium):** Plugin Hub (#236), Completion Terminal Skills (#237), Claim-Based Lease (#238), Time Travel (#239), Context Compaction (#240)
+  - **Sprint 26+ (high):** Observability (#241), AI Security Scan (#242), Hub Discovery (#243), Human-in-the-Loop (#244)
+  - **Future:** 3 items (#245-247)
+  - **Discarded:** 2 items (#248-249 — Docker, Python/.NET)
+- **Key portable patterns:** Hook lifecycle (7 points), Tool policies (wildcard + per-tool), Claim-based scheduling with lease heartbeat, Session checkpoint/restore, Event-sourced conversation
+- **IDEA_BANK.md** updated to **249 total items**
+- **AGENTS.md** updated with Sprint 23 reference patterns
+- **Documentation review:** README.md, SUMMARY.md, roadmap.md, ADR-0015 — all updated for 249 items
+- **SESSION_025.md** created
+- Version bump: v0.18.3 → v0.18.4
+
+## [0.18.3] — 2026-06-25
+
+### Added (Tier 3 Memory Systems Analysis — ADR-0023)
+
+- **ADR-0023** — Comprehensive analysis of 14 Memory Systems repos (Tier 3)
+- **Deep-dive: agentmemory** (24k ★, 60+ source files) — SHA-256 dedup, Privacy filter, BM25+Vector+Graph hybrid search, 4-tier consolidation
+- **Deep-dive: nexo** (cognitive memory) — Atkinson-Shiffrin 3-tier, Ebbinghaus decay, trust scoring, metacognitive guard
+- **14 new IDEA_BANK items** (#214-227), classified by complexity
+- Key portable: SHA-256 dedup (~50 LOC), Ebbinghaus decay (~20 LOC), TTL eviction (~40 LOC) — all no_std Rust
+- **IDEA_BANK.md** updated to 227 items
+
+## [0.18.2] — 2026-06-25
+
+### Added (Tier 2 PAI Ecosystem Analysis — ADR-0022)
+
+- **ADR-0022** — Comprehensive analysis of 21 Personal AI Assistant repos (Tier 2)
+- Deep-dives: OpenClaw (380k ★, Rust), Hermes Agent (202k ★), Lethe (Rust brain-inspired), ZeroClaw (32k ★, Rust)
+- **15 new IDEA_BANK items** (#199-213)
+- Key portable: Skill Metadata, Audit Ring, Awakening Mode, Context Fencing, Tool Permissions, Lifecycle Hooks
+
+### Added (Tier 1 Life OS Analysis — ADR-0021)
+
+- **ADR-0021** — Comprehensive analysis of 20 Life OS repos
+- **13 new IDEA_BANK items** (#177-189)
+- Key portable: Spectrum Graph, Runtime SDD, FS as Context, Temporal KG, AppForge, WASM Sandbox
+
 ## [0.18.1] — 2026-06-24
 
 ### Added (Crom Ecosystem Analysis — ADR-0020 + Ed25519 Identity)

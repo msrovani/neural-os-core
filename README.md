@@ -25,9 +25,9 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built (Sprint 24 — Crom Ecosystem Analysis)
+## 🏗️ What's Been Built (Sprint 22 — Hermes Chat + Skills + Trust Cache)
 
-The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache. Latest analysis: ported **12 architectural patterns** from MrJc01's Crom ecosystem (75 repos) — XOR Delta reconstruction, CDC Rabin fingerprinting, TV-DSL co-processor, Codebook VQ compression, ReAct loop, MCP Server support, and more (see ADR-0020).
+The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache. Ecosystem analysis complete across 5 tiers (136 repos, 249 ideas cataloged):
 
 ```
 [SYSTEM]  Neural Microkernel Iniciado.
@@ -49,6 +49,18 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 [EXECUTOR] Hardware context: RAM=[0.023943, 0.000000] tasks=4
 ```
 
+### Ecosystem Analysis (5 Tiers Complete — 136 repos, 249 ideas)
+
+| Tier | Repos | Ideas | ADR | Highlight |
+|------|-------|-------|-----|-----------|
+| 0 (Crom) | 75 | 22 | ADR-0020 | XOR Delta, CDC Rabin, Codebook VQ, ReAct loop |
+| 1 (Life OS) | 20 | 26 | ADR-0021 | Spectrum Graph, Temporal KG, Intent Transparency |
+| 2 (PAI) | 21 | 15 | ADR-0022 | Skill Metadata, Audit Ring, Context Fencing |
+| 3 (Memory) | 14 | 14 | ADR-0023 | SHA-256 dedup, Ebbinghaus decay, 4-tier consolidation |
+| 4 (Agent Frameworks) | 6 | 22 | ADR-0024 | Tool Policy, Usage Tracker, Cron Scheduler, Cline patterns |
+
+**Next:** Tier 5 (Language-Specific Runtimes) — WASM, Rust native agents, C ABI
+
 ### What each module does
 
 | Module | What | How |
@@ -63,9 +75,9 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 | `trust.rs` | TrustCache | Token cache with TTL, denylist, `check_or_cache()` |
 | `interrupts.rs` | Dual EOI | `USING_APIC` atomic flag → APIC or PIC EOI per interrupt |
 
-### Next: Network Sprint — Sprint 23 (pós-MVP)
+### Next: Sprint 23 — Network Sprint + Tool Policy (#228)
 
-VirtIO-net + smoltcp TCP/IP + DNS + HTTP client per ADR-0016. Terminal Hermes remoto sobre TCP.
+VirtIO-net + smoltcp TCP/IP + DNS + HTTP client per ADR-0016. Terminal Hermes remoto sobre TCP. Also: Tool Policy Registry (#228), Usage Tracker (#229), Auto-Compact Buffer (#230), Event-Sourced Conversation (#231).
 
 ---
 
@@ -211,19 +223,20 @@ QEMU window opens. VGA output on screen, serial output in terminal. Type your in
 ## 🎯 Roadmap to MVP
 
 | Block | Sprint | Deliverable | Status |
-|---|---|---|---|---|---|---|
-| 0 | 1-17 | VGA, serial, heap, EventBus, agents | ✅ Concluído |
-| 1 | 18 | PCI scan + ACPI + APIC | ✅ Concluído |
-| 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ Concluído |
-| 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ Concluído |
-| 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ Concluído |
-| 5 | 22 | Skills + Trust Cache + LAPIC timer | ✅ Concluído |
-| 6 | 23 | Network (VirtIO-net + smoltcp + HTTP) | 🟡 Próximo |
-| 7 | 24 | Bugfix Sprint (12 HIGH + 16 MEDIUM + 12 LOW) | 🟡 |
-| **8** | **25** | **Transformer Engine (Attention, generation, micro-model)** | 🆕 **Planejado** |
-| **9** | **26** | **Cortex Daemon + Modelo 1.5B BitNet** | 🆕 **Planejado** |
-| **10** | **27+** | **Reflex tuning + Success Engine** | 🆕 **Planejado** |
-| 11 | 25+ | WASM + TLS + multi-agent | ⏳ |
+|---|---|---|---|
+| 0 | 1-17 | VGA, serial, heap, EventBus, agents | ✅ |
+| 1 | 18 | PCI scan + ACPI + APIC | ✅ |
+| 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ |
+| 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ |
+| 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ |
+| 5 | 22 | Skills + Trust Cache + LAPIC timer | ✅ |
+| — | — | Ecosystem analysis (Tiers 0-4, 136 repos, 249 ideas) | ✅ |
+| 6 | 23 | Network (VirtIO-net + smoltcp + HTTP) + Sprint 23 items (#228-#231) | 🟡 Próximo |
+| 7 | 24 | Network completion + Sprint 24 items (#232-#235) | 🟡 |
+| **8** | **25** | **Transformer Engine + Sprint 25 items (#236-#240)** | **🆕 Planejado** |
+| **9** | **26** | **Cortex Daemon + Sprint 26+ items (#241-#244)** | **🆕 Planejado** |
+| **10** | **27+** | **Reflex tuning + Success Engine** | **🆕 Planejado** |
+| 11 | 28+ | WASM + TLS + multi-agent | ⏳ |
 
 ---
 
@@ -249,7 +262,7 @@ This is not a Linux distribution. This is not a Unix clone. This is a ground-up 
 ## 📚 Architecture Decision Records
 
 | ADR | Title |
-|---|---|
+|---|---|---|
 | 0001 | [Initial Architecture and Toolchain](docs/architecture/0001-initial-architecture-and-toolchain.md) |
 | 0002 | [VGA and Serial Logging](docs/architecture/0002-vga-and-serial-logging.md) |
 | 0003 | [Interrupt Descriptor Table](docs/architecture/0003-interrupt-descriptor-table.md) |
@@ -257,6 +270,7 @@ This is not a Linux distribution. This is not a Unix clone. This is a ground-up 
 | 0005 | [SIMD and FPU Enablement](docs/architecture/0005-simd-and-fpu-enablement.md) |
 | 0006 | [Neural Primitives and libm](docs/architecture/0006-neural-primitives-and-libm.md) |
 | 0007 | [Intent Router MLP](docs/architecture/0007-intent-router-mlp.md) |
+| 0009 | [PIC, Watchdog and Page Fault](docs/architecture/0009-pic-watchdog-and-page-fault.md) |
 | 0010 | [Strategic Roadmap](docs/architecture/0010-strategic-roadmap-and-innovations.md) |
 | 0011 | [BitLinear and Ternary MatMul](docs/architecture/0011-bitlinear-and-hybrid-matmul.md) |
 | 0012 | [2-bit Packing and Quantization](docs/architecture/0012-2bit-packing-quantization.md) |
@@ -266,7 +280,12 @@ This is not a Linux distribution. This is not a Unix clone. This is a ground-up 
 | 0016 | [Network Strategy](docs/architecture/0016-network-strategy.md) |
 | 0017 | [Critical Bugfix Sprint](docs/architecture/0017-critical-bugfix-sprint.md) |
 | 0018 | [Sprint 24 Plan](docs/architecture/0018-sprint-24-plan.md) |
-| **0019** | **[Neural Cortex — BitNet LLM Integration](docs/architecture/0019-neural-cortex-bitnet-llm.md)** ← **You are here** |
+| 0019 | [Neural Cortex — BitNet LLM Integration](docs/architecture/0019-neural-cortex-bitnet-llm.md) |
+| 0020 | [Crom Ecosystem Rust Analysis](docs/architecture/0020-crom-ecosystem-analysis.md) |
+| 0021 | [Life OS Ecosystem Analysis](docs/architecture/0021-life-os-ecosystem-analysis.md) |
+| 0022 | [Personal AI Assistant Ecosystem](docs/architecture/0022-personal-ai-assistant-ecosystem-analysis.md) |
+| 0023 | [Memory Systems & Second Brain](docs/architecture/0023-memory-systems-second-brain-analysis.md) |
+| **0024** | **[Agent Frameworks Analysis](docs/architecture/0024-agent-frameworks-analysis.md)** ← **You are here** |
 
 ---
 

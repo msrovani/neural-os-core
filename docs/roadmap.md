@@ -3,7 +3,7 @@
 **Última atualização:** 2026-06-23  
 **⚠️ Este documento está superseded pela ADR-0015** (`docs/architecture/0015-curso-correcao-mvp.md`).
 
-A nova rota é a **chain de 6 blocos** que leva ao MVP Neural OS Hermes — ISO bootável x86-64 UEFI com chat neural, auto-detecção de hardware, Memory Hierarchy Index, e skills de sistema. Consulte a **ADR-0015** para o plano diretor completo, incluindo o **Master Registry** (Apêndice A) que cataloga 116 ideias com status individual.
+A nova rota é a **chain de 6 blocos** que leva ao MVP Neural OS Hermes — ISO bootável x86-64 UEFI com chat neural, auto-detecção de hardware, Memory Hierarchy Index, e skills de sistema. Consulte a **ADR-0015** para o plano diretor completo, e o **IDEA_BANK.md** para o inventário vivo de **249 ideias** catalogadas (Tiers 0-4, 136 repos analisados).
 
 **Documento histórico:** Alinhado ao ADR-0010 (Estratégico), ADR-0013 (Estado da Arte 2026) e ADR-0013 (Design System). Mantido para referência de fases 3–7 originais.
 

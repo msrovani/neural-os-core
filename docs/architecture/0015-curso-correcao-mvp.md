@@ -1007,7 +1007,7 @@ Este apêndice cataloga **toda ideia, decisão e item** dos documentos precursor
 | Outras | 5 | 4 | 0 | 0 | 1 | 0 |
 | **Total** | **116** | **53 (46%)** | **5 (4%)** | **45 (39%)** | **9 (8%)** | **2 (2%)** |
 
-**Nenhum item perdido.** 116 itens catalogados, todos com destino conhecido. 53 (46%) dentro do MVP, 5 (4%) agendados para sprints específicas, 45 (39%) pós-MVP com motivo documentado, 9 (8%) aguardam patrocínio/hardware, 2 (2%) descartados com justificativa.
+**Nenhum item perdido.** 116 itens originais catalogados (ADRs 0014-0015). O inventário vivo cresceu para **249 itens** via análises de ecossistema (Tiers 0-4, ADRs 0020-0024). Consulte o `IDEA_BANK.md` para o estado atual. Distribuição original: 53 (46%) dentro do MVP, 5 (4%) agendados para sprints específicas, 45 (39%) pós-MVP com motivo documentado, 9 (8%) aguardam patrocínio/hardware, 2 (2%) descartados com justificativa.
 
 ---
 

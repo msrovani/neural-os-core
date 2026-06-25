@@ -4,7 +4,7 @@
 
 **Visão:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferência neural. A hierarquia de memória (VRAM, DRAM, NVMe, HDD) é um pool único roteado por MLP. O boot é um pipeline de IA: detecta hardware → decide configuração → conversa com usuário → executa skills.
 
-**Estado atual:** MVP em construção via chain de 6 blocos (ADR-0015). Blocos 0-5 concluídos — kernel bootável com Hermes Chat, Trust Cache, HardwareInfoSkill, MHI, SMP, PCI/ACPI/APIC, EventBus IPC, Skill Registry, 6 agentes cooperativos. Próximo: Sprint 23 (Network Sprint — VirtIO-net + smoltcp).
+**Estado atual:** MVP em construção via chain de 6 blocos (ADR-0015). Blocos 0-5 concluídos — kernel bootável com Hermes Chat, Trust Cache, HardwareInfoSkill, MHI, SMP, PCI/ACPI/APIC, EventBus IPC, Skill Registry, 6 agentes cooperativos. Próximo: Sprint 23 (Network Sprint — VirtIO-net + smoltcp). Análise de ecossistema completa (Tiers 0-4, 136 repos, 249 ideias catalogadas — ADRs 0020-0024).
 
 **Arquitetura chave:**
 - Ring 0: NPU (Intent routing, contexto)
@@ -15,7 +15,7 @@
 - Zero-trust: nenhum dispositivo roda sem permissão explícita
 
 **Para AI que vai me editar:**
-1. Leia `docs/memory/IDEA_BANK.md` antes de sugerir qualquer mudança — lá estão 116 ideias catalogadas com status e dependências. Toda ideia já discutida tem destino.
+1. Leia `docs/memory/IDEA_BANK.md` antes de sugerir qualquer mudança — lá estão **249 ideias** catalogadas com status e dependências (Tiers 0-4, 136 repos analisados). Toda ideia já discutida tem destino.
 2. Leia `docs/architecture/0015-curso-correcao-mvp.md` para o plano diretor.
 3. Leia `docs/memory/STATE.md` para o estado atual detalhado.
 4. Leia `AGENTS.md` para regras operacionais (no_std, sem POSIX, QEMU first).
