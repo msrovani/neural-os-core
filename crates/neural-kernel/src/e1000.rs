@@ -162,14 +162,12 @@ impl E1000Driver {
         let link_up = self.r32(REG_STATUS) & STATUS_LU != 0;
         serial_println!("[E1000] Link: {}", if link_up { "UP" } else { "DOWN (forcing)" });
 
-        // Allocate RX ring
         self.rx_desc_paddr = Self::alloc_page();
         if self.rx_desc_paddr == 0 { return false; }
         let rx_desc_vaddr = self.rx_desc_paddr + pmoff;
         let rx_desc = core::slice::from_raw_parts_mut(rx_desc_vaddr as *mut RxDesc, NUM_DESC);
         for i in 0..NUM_DESC { rx_desc[i] = core::mem::zeroed(); }
 
-        // Allocate TX ring
         self.tx_desc_paddr = Self::alloc_page();
         if self.tx_desc_paddr == 0 { return false; }
         let tx_desc_vaddr = self.tx_desc_paddr + pmoff;
@@ -179,7 +177,6 @@ impl E1000Driver {
             tx_desc[i].status = TX_DESC_DONE;
         }
 
-        // Allocate RX buffers
         for i in 0..NUM_DESC {
             let buf = Self::alloc_page();
             if buf == 0 { return false; }
@@ -188,7 +185,6 @@ impl E1000Driver {
             self.rx_buf_paddrs[i] = buf;
         }
 
-        // Allocate TX buffers
         for i in 0..NUM_DESC {
             let buf = Self::alloc_page();
             if buf == 0 { return false; }

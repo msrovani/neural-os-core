@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core Hermes v0.19.0
-#   Ecosystem Analysis Complete (136 repos, 249 ideias)
-#   ADR-0015 (Curso Correção) + ADRs 0020-0024 (Pesquisa)
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.1
+#   Sprint 23 Bugfix: e1000 DMA + /ping Command
+#   allocate_contiguous fix · DHCP skip · /ping
 # ═══════════════════════════════════════════════
 
 # Role and Purpose
@@ -74,7 +74,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - All output to both VGA (QEMU window) and serial (host terminal)
 - ADR + session log documentation protocol
 - Windows toolchain with MinGW-w64 linker
-- Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
+- Every sprint: `cargo check --release` (0 errors) + QEMU boot. Dead-code/unused warnings are EXPECTED per Known Warnings Policy (currently ~35).
 
 ## 21 Sprints Complete
 

@@ -60,6 +60,7 @@ pub enum Command {
     HardwareInfo,
     NetDiag,
     Fetch(String),
+    Ping(String),
     TrustAllow(u64, String),
     TrustDeny(u64, String),
     Usage,
@@ -109,6 +110,10 @@ pub fn parse_command(line: &str) -> Command {
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {
             let arg = parts.next().unwrap_or("").trim().to_string();
             return Command::Fetch(arg);
+        }
+        if name.eq_ignore_ascii_case("ping") {
+            let arg = parts.next().unwrap_or("").trim().to_string();
+            return Command::Ping(arg);
         }
         if name.eq_ignore_ascii_case("usage") || name.eq_ignore_ascii_case("metrics") {
             return Command::Usage;

@@ -57,25 +57,21 @@ pub unsafe fn init_network() -> bool {
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     println!("[NET] Driver de rede pronto.");
 
-    if try_dhcp() {
-        serial_println!("[NET] DHCP bem-sucedido.");
-        println!("[NET] Configuracao de rede via DHCP.");
-        let cfg = NET_CONFIG.lock();
-        serial_println!("[NET] IP: {}.{}.{}.{} / GW: {}.{}.{}.{} / DNS: {}.{}.{}.{}",
-            cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3],
-            cfg.gateway_ip[0], cfg.gateway_ip[1], cfg.gateway_ip[2], cfg.gateway_ip[3],
-            cfg.dns_ip[0], cfg.dns_ip[1], cfg.dns_ip[2], cfg.dns_ip[3]);
-        true
-    } else {
-        serial_println!("[NET] DHCP falhou. Usando configuracao estatica (10.0.2.15).");
-        println!("[NET] DHCP indisponivel. Usando IP estatico.");
-        let mut cfg = NET_CONFIG.lock();
-        cfg.ip = [10, 0, 2, 15];
-        cfg.configured = true;
-        true
-    }
+    // Pulando DHCP (lento no QEMU TCG). Usando IP estatico.
+    serial_println!("[NET] Usando configuracao estatica (10.0.2.15).");
+    println!("[NET] Usando configuracao estatica.");
+    let mut cfg = NET_CONFIG.lock();
+    cfg.ip = [10, 0, 2, 15];
+    cfg.configured = true;
+    drop(cfg);
+
+    // Gateway MAC para QEMU user-mode: 52:54:00:12:34:56 (padrao slirp)
+    NET_CONFIG.lock().gateway_mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+    serial_println!("[NET] Gateway MAC configurado: 52:54:00:12:34:56");
+    true
 }
 
+#[allow(dead_code)]
 unsafe fn try_dhcp() -> bool {
     for attempt in 0..5 {
         serial_println!("[DHCP] Tentativa {}...", attempt + 1);
@@ -131,6 +127,58 @@ pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> 
         for _ in 0..100000000 { core::hint::spin_loop(); }
         if let Some(pkt) = driver.recv() {
             return crate::proto::parse_http_response(&pkt, our_mac);
+        }
+    }
+    None
+}
+
+pub unsafe fn ping(target_ip: [u8; 4]) -> Option<u64> {
+    let cfg = NET_CONFIG.lock();
+    let our_ip = cfg.ip;
+    let our_mac = cfg.mac;
+    let gw_mac = cfg.gateway_mac;
+    drop(cfg);
+
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+
+    if gw_mac == [0; 6] {
+        let our_mac2 = driver.mac();
+        drop(guard);
+        let cfg2 = NET_CONFIG.lock();
+        let gw = cfg2.gateway_ip;
+        drop(cfg2);
+        crate::proto::arp_request(our_mac2, gw);
+        for _ in 0..10000000 { core::hint::spin_loop(); }
+        let mut guard2 = E1000.lock();
+        let driver2 = guard2.as_mut().unwrap();
+        if let Some(pkt) = driver2.recv() {
+            if let Some(gwm) = crate::proto::parse_arp_reply(&pkt) {
+                NET_CONFIG.lock().gateway_mac = gwm;
+            }
+        }
+        drop(guard2);
+    }
+
+    let cfg = NET_CONFIG.lock();
+    let gw_mac_final = cfg.gateway_mac;
+    drop(cfg);
+    if gw_mac_final == [0; 6] { return None; }
+
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+    let ident: u16 = 0x1234;
+    let seq: u16 = 1;
+    crate::proto::icmp_echo_request(driver, our_mac, gw_mac_final, our_ip, target_ip, ident, seq);
+    drop(guard);
+
+    for _ in 0..30000000 { core::hint::spin_loop(); }
+
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+    if let Some(pkt) = driver.recv() {
+        if crate::proto::parse_icmp_reply(&pkt, our_mac, target_ip, ident, seq).is_some() {
+            return Some(1);
         }
     }
     None

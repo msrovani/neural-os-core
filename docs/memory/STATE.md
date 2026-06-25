@@ -1,11 +1,23 @@
 # ═══════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core Hermes v0.20.0
-#   "Sprint 23: Hermes Governance & Agent Memory"
-#   #228 Tool Policy Registry · #229 Usage Tracker
-#   #230 Auto-Compact Buffer · #231 Event-Sourced Conversation
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.1
+#   "Sprint 23 Bugfix: e1000 DMA + /ping Command"
+#   allocate_contiguous fix · DHCP skip · /ping
 # ═══════════════════════════════════════════════
 
 # Project State — neural-os-core
+
+## Sprint 23 Bugfix — e1000 DMA + /ping (v0.20.1, 25/06/2026)
+
+### Correções
+1. **allocate_contiguous fix** — `memory.rs:132`: `i = 0` → `i = self.next_free_bit`. Causa raiz do Page Fault INSTRUCTION_FETCH no e1000: alocava frames < 1 MB não mapeados pelo bootloader.
+2. **DHCP skip** — Pulado (lento no QEMU TCG). IP estático 10.0.2.15 + gateway MAC hardcoded 52:54:00:12:34:56.
+3. **/ping comando** — Hermes agora responde a `/ping <ip>` via ICMP Echo Request.
+
+### Resultados QEMU
+- ✅ e1000 Init OK (rx_desc=0xce7000+)
+- ✅ Boot completo: PCI → ACPI → APIC → SMP → Network → Executor
+- ✅ Executor 11000+ ticks estável, EchoSkill executada
+- ✅ 0 erros cargo check/cargo bootimage
 
 ## Sprint 1 — Chassi Básico (Complete)
 ## Sprint 2 — Observabilidade Ring 0 (Complete)
@@ -43,9 +55,9 @@
 
  | Category | Status |
  |---|---|---|
- | Last QEMU Boot | ✅ Boot OK — kernel boots, e1000 initialized (Link UP), DHCP triggers PageFault (DMA buffer bug exposed after RCTL/TCTL fix) |
+ | Last QEMU Boot | ✅ Boot OK — kernel boots, e1000 init OK (rx_desc=0xce7000+), static IP 10.0.2.15, executor 11000+ ticks, EchoSkill runs |
  | Code Review | ✅ 10 CRITICAL, 12 HIGH, 16+ MEDIUM, 12+ LOW identified and cataloged |
- | Critical Bugs Fixed | ✅ 10/10 — e1000 enable, BAR mask, DHCP broadcast/ACK, slab off-by-one, nostack UB, bridge bus, XSDT stride, mhi leak, nn bias |
+ | Critical Bugs Fixed | ✅ 11/11 — e1000 enable, BAR mask, DHCP broadcast/ACK, slab off-by-one, nostack UB, bridge bus, XSDT stride, mhi leak, nn bias, allocate_contiguous start bit |
 | Compilation | ✅ `cargo check` — 0 errors, 0 warnings |
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
@@ -169,17 +181,18 @@
 4. **PIT timer via IOAPIC não funciona** — Bootloader mapeia MMIO IOAPIC/LAPIC como write-back (WB). `set_page_uc()` tenta forçar UC via page table walk mas pode não funcionar se páginas forem 2 MiB/1 GiB. Solução atual: usar LAPIC timer em vez de PIT → IOAPIC.
 5. **Serial output 24× slower** — IOAPIC dump consolidado de 24 linhas para 1 linha. QEMU com `-serial file:` tem latência de ~87µs/byte para saída serial.
 6. **QEMU TCG slow** — Serial output at 115200 baud em QEMU TCG adiciona ~4.35ms por linha serial, resultando em ~0.01-0.02× speed ratio vs real hardware.
-7. **e1000 DHCP PageFault** — `send()` acessa TX buffer físico sem offset adequado. Exposed by RCTL/TCTL enable in Sprint 23.
+7. **DHCP no QEMU TCG** — Spin loops não dão tempo para slirp processar I/O. Solução temporária: IP estático + gateway MAC hardcoded. Pendente: refatorar com timer-based wait e `hlt()`.
 
-### Next Steps — Sprint 24 (Crom Features + Bugfixes)
+### Next Steps — Sprint 24 (Network + Crom Features)
 
+- [ ] **Refatorar DHCP com timer-based wait** — Usar LAPIC timer ticks + `hlt()` em vez de spin loops. Necessário para QEMU TCG processar I/O do slirp.
+- [ ] **ARP dinâmico** — Timeout não-bloqueante com retry.
 - [ ] **Implement XOR Delta (#164)** — Archive mode lossless no PackedTernaryTensor (~50 LOC)
 - [ ] **Implement CDC Rabin Fingerprint (#165)** — Content-Defined Chunking para modelos .bitnet (~80 LOC)
-- [ ] **Fix e1000 DMA buffer mapping** — PageFault at VirtAddr(0x2103b0) in `send()`
 - [ ] **12 HIGH priority items** from code review (see IDEA_BANK.md or ADR-0017)
 - [ ] **16+ MEDIUM priority items**
 - [ ] **12+ LOW priority items**
-- [ ] Full QEMU boot validation after fixes
+- [ ] Full QEMU boot validation with network interactivity
 
 ### ADR-0020 — Crom Ecosystem Analysis Complete
 

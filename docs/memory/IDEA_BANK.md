@@ -245,6 +245,9 @@ Nada é descartado sem registro. Ideias podem ser:
 | 122 | Skill manifest field `requires_network: bool` | 🟡 Sprint 23 | Sprint 23 | Skills podem declarar necessidade de rede. |
 | 123 | TLS 1.3 client (`embedded-tls` crate) | ⏳ Pós-MVP | Sprint 25+ | Obrigatório para HTTPS. Postergado para WASM. |
 | 124 | Wi-Fi / Ethernet (e1000/RTL8139 para HW real) | ⏳ Pós-MVP | Sprint 26+ | VirtIO só funciona em QEMU. HW real precisa de driver nativo. |
+| 250 | **Comando `/ping <ip>`** — ICMP Echo Request via e1000 | ✅ Block 6 | Sprint 23 | `net::ping()` usa `icmp_echo_request` + `parse_icmp_reply`. |
+| 251 | **DHCP timer-based wait** — refatorar spin loops para `hlt()` com timeout por timer ticks | 🟡 Sprint 24 | Sprint 24 | Spin loops não funcionam no QEMU TCG (slirp não processa I/O). Necessário para DHCP dinâmico. |
+| 252 | **ARP não-bloqueante** — timeout com retry usando timer ticks em vez de spin loop | 🟡 Sprint 24 | Sprint 24 | ARP sem resposta no QEMU TCG. Gateway MAC hardcoded temporariamente. |
 
 ### 1.17. Documentação e ADRs
 
@@ -812,3 +815,4 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-25 | ADR-0022: Itens 199-213 (Tier 2 PAI Ecosystem) → adicionados; 15 ideias extraídas de 21 repos: IterationBudget, Skill Metadata, Audit Ring, Awakening Mode, Context Fencing, Heartbeat Idle Gate, RateLimiter, Lifecycle Hooks, MemoryProvider, Tool Permissions, Actor Registry, Crash-Recovery, ComputeBackend, Plugin System, WASM Sandbox | IDA IA |
 | 2026-06-25 | ADR-0023: Itens 214-227 (Tier 3 Memory Systems & Second Brain) → adicionados; 14 ideias extraídas de 14 repos: SHA-256 Dedup, Privacy Filter, TTL Eviction, Hybrid Search, 4-Tier Consolidation, Ebbinghaus Decay, Session Replay, Knowledge Graph, Metacognitive Guard, Draft→Review→Merge, Atkinson-Shiffrin Memory, Bi-temporal KG, Team Memory, Git Snapshots. Deep-dive: agentmemory (24k ★, 60+ source files). | IDA IA |
 | 2026-06-25 | ADR-0024: Itens 228-249 (Tier 4 Agent Frameworks) → adicionados; 22 ideias extraídas de 6 repos: Tool Policy Registry, Usage Tracker, Auto-Compact Buffer, Event-Sourced Conversation, Cron Scheduler, Session Checkpoint, Plan/Execute Modes, Graph Orchestration, Plugin Hub, Completion Terminal Skills, Claim-Based Lease, Time Travel, Context Compaction, Observability, AI Security Scan, Hub Discovery, Human-in-the-Loop, Remote Execution, Skill Marketplace, Context Compaction Agent. Deep-dive: Cline (63.9k ★, 293 releases, 6.338 commits, AgentRuntime + ClineCore + CronRunner). | IDA IA |
+| 2026-06-25 | Sprint 23 Bugfix: Itens 250-252 (e1000 DMA fix, /ping, DHCP/ARP refactor pendente) → adicionados; allocate_contiguous fix (start de next_free_bit), DHCP skip, /ping command. Boot QEMU validado: e1000 init OK, executor 11000+ ticks. | Dev + IDA IA |

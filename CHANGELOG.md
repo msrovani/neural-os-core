@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.20.1] — 2026-06-25 — e1000 DMA Fix + /ping Command
+
+### Fixed
+
+- **e1000 Page Fault** — `allocate_contiguous()` começava do bit 0, alocando frames físicos < 1 MB não mapeados pelo bootloader. Corrigido para iniciar de `next_free_bit`, evitando a região não mapeada. Root cause: bootloader `map_physical_memory` só mapeia regiões `Usable` da UEFI; frames 2-159 (usados para trampoline SMP) não estão no mapa virtual.
+- **DHCP removido (temporário)** — Spin loops no QEMU TCG não dão tempo para o slirp processar I/O. IP estático 10.0.2.15 + gateway MAC hardcoded 52:54:00:12:34:56.
+
+### Added
+
+- **Comando `/ping <ip>`** — ICMP Echo Request via e1000. `net::ping()` usa `icmp_echo_request` + `parse_icmp_reply` existentes. Help atualizado.
+
+### Changed
+
+- `src/memory.rs` — `allocate_contiguous()`: `i = 0` → `i = self.next_free_bit`
+- Debug prints removidos de `e1000.rs` e `net.rs`
+- DHCP/DNS funções marcadas `#[allow(dead_code)]`
+- `cargo check --release`: 0 erros, 35 warnings
+- Boot QEMU validado: e1000 Init OK, executor 11000+ ticks estável
+
 ## [0.20.0] — 2026-06-25 — Sprint 23: Hermes Governance & Agent Memory
 
 ### Added

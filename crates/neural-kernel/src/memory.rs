@@ -133,7 +133,7 @@ impl BitmapFrameAllocator {
         if count == 0 {
             return None;
         }
-        let mut i = 0;
+        let mut i = self.next_free_bit;
         while i <= self.total_frames.saturating_sub(count) {
             let mut found = true;
             for j in 0..count {

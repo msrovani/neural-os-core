@@ -135,6 +135,7 @@ pub fn parse_icmp_reply(pkt: &[u8], our_mac: [u8; 6], _expected_src: [u8; 4], id
 }
 
 // === DHCP ===
+#[allow(dead_code)]
 pub unsafe fn dhcp_discover(attempt: u32) -> bool {
     use crate::net::E1000;
     let guard = E1000.lock();

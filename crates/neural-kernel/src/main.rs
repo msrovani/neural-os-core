@@ -526,6 +526,23 @@ async fn intent_router_daemon() {
                         None => String::from("Formato: /fetch http://ip:port/path (DNS numerico apenas)"),
                     }
                 }
+                hermes::Command::Ping(ref target) => {
+                    let parts: Vec<&str> = target.split('.').collect();
+                    if parts.len() == 4 {
+                        let ip = [
+                            parts[0].parse().unwrap_or(0),
+                            parts[1].parse().unwrap_or(0),
+                            parts[2].parse().unwrap_or(0),
+                            parts[3].parse().unwrap_or(0),
+                        ];
+                        match unsafe { crate::net::ping(ip) } {
+                            Some(_) => alloc::format!("Pong! {} -> OK", target),
+                            None => alloc::format!("Ping {} falhou: sem resposta", target),
+                        }
+                    } else {
+                        String::from("Formato: /ping <ip> (ex: /ping 10.0.2.2)")
+                    }
+                }
                 hermes::Command::Usage => {
                     let snap = USAGE_TRACKER.lock().snapshot();
                     alloc::format!(
@@ -554,7 +571,7 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent_id = INTENT_MLP.classify(msg);
