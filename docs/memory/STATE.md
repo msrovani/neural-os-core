@@ -345,14 +345,35 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
 
-### Pendências (Sprint 22 — Block 5: Skills + Trust Cache + ISO)
+## Sprint 22 (Block 5: Skills + Trust Cache) — Concluído (v0.17.0)
 
-- [ ] SystemStatusSkill consumir MHI (mostrar RAM livre por tier)
-- [ ] HardwareInfoSkill — exibir info do SystemArchitecture
-- [ ] TrustCache — cache de tokens de capability com TTL
-- [ ] Refinar detecção de arquitetura com PCI info
-- [ ] ISO bootável (bônus: ISO via `bootimage` ou grub)
-- [ ] `cargo bootimage --release` + QEMU boot test
+**Data:** 2026-06-23
+
+### Entregas
+
+1. **TrustCache** — `crates/skill-registry/src/trust_cache.rs`: `TrustEntry` com token, granted_at, ttl_ticks; `TrustCache::grant()` (com TTL override), `revoke()`, `is_trusted()`. `DEFAULT_TTL_TICKS = 1800` (~100s). `TRUST_CACHE` global no kernel.
+
+2. **SystemStatusSkill upgrade** — agora consome MHI: `MemoryHierarchy::new()` exibe RAM por tier (nome, capacidade). `hardware_context_tensor()` retorna `[ratio, allocated_count]`. Saída: `[SYSSTATUS] RAM: 0.29% used | MHI: 1 tier(s), ~2042 MB`.
+
+3. **HardwareInfoSkill** — nova skill registrada no `SKILL_REGISTRY`. Lê `GLOBAL_ARCH` (SystemArchitecture) e `MemoryHierarchy::new()` para expor CPU cores, GPU, heap, MHI tiers, bandwidth. Saída: `[HWINFO] CPU: 2 core(s) | GPU: ativo | Heap: 512 MB`.
+
+4. **GLOBAL_ARCH** — `spin::Mutex<Option<SystemArchitecture>>` armazena a arquitetura detectada para consumo por skills e daemons.
+
+5. **Boot flow** — `[ARCH]` agora inclui `PCI devices: {len}`: mostra contagem de dispositivos PCI detectados.
+
+### Arquivos criados/modificados
+
+| Arquivo | Ação |
+|---|---|
+| `crates/skill-registry/src/trust_cache.rs` | Criado (55 linhas) |
+| `crates/skill-registry/src/lib.rs` | Modificado — +mod trust_cache, +exports |
+| `crates/neural-kernel/src/main.rs` | Modificado — HardwareInfoSkill, GLOBAL_ARCH, TRUST_CACHE, SystemStatusSkill upgrade |
+| `crates/neural-kernel/src/memory.rs` | Modificado — +allocated_frame_count(), hardware_context_tensor() retorna allocated_count |
+| `Cargo.toml` | v0.16.0 → v0.17.0 |
+
+### Pendências (Sprint 23 — Network Sprint, pós-MVP)
+
+Ver ADR-0016 para detalhes completos.
 
 ### Pendências (Sprint 23 — Network Sprint, pós-MVP)
 

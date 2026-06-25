@@ -58,15 +58,58 @@ impl Skill for SystemStatusSkill {
     fn manifest(&self) -> McpManifest {
         McpManifest {
             name: String::from("system_status"),
-            description: String::from("Reports RAM occupancy and CPU status via hardware context tensor"),
+            description: String::from("Reports RAM occupancy per tier via MHI and hardware context"),
             required_tokens: vec![1],
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let tensor = crate::memory::global_hardware_context();
         let occupancy_pct = tensor[0] * 100.0;
-        serial_println!("[SKILL EXECUTADA] Memoria RAM: {:.2}%. CPU: Agentes Cooperativos em operacao.", occupancy_pct);
-        println!("[SKILL EXECUTADA] Memoria RAM: {:.2}%. CPU: Agentes Cooperativos em operacao.", occupancy_pct);
+
+        serial_println!("[SYSSTATUS] RAM: {:.2}% used | Alloc frames: {}/{}", occupancy_pct,
+            tensor[1] as u64, tensor[0] as u64);
+        println!("[SYSSTATUS] RAM: {:.2}% used", occupancy_pct);
+
+        let mhi = crate::mhi::MemoryHierarchy::new();
+        for (i, tier) in mhi.tiers.iter().enumerate() {
+            serial_println!("[SYSSTATUS]   tier[{}] {:?}: {:.1} MB", i, tier.kind,
+                tier.capacity_bytes as f64 / 1_048_576.0);
+        }
+        Ok(alloc::vec::Vec::new())
+    }
+}
+
+struct HardwareInfoSkill;
+
+impl Skill for HardwareInfoSkill {
+    fn manifest(&self) -> McpManifest {
+        McpManifest {
+            name: String::from("hardware_info"),
+            description: String::from("Displays detected CPU count, GPU presence, heap size, and ring assignments"),
+            required_tokens: vec![1],
+        }
+    }
+    fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let arch_guard = GLOBAL_ARCH.lock();
+        if let Some(ref arch) = *arch_guard {
+            serial_println!("[HWINFO] CPU cores: {}", arch.ring0_mode + arch.ring1_mode + 1);
+            serial_println!("[HWINFO] Ring1 (GPU): {}", if arch.ring1_mode > 0 { "ativo" } else { "ausente" });
+            serial_println!("[HWINFO] Heap: {} MB | Power mode: {} | Tensor tier: {}", arch.heap_size_mb, arch.power_mode, arch.tensor_tier);
+            println!("[HWINFO] CPU: {} core(s) | GPU: {} | Heap: {} MB",
+                arch.ring0_mode + arch.ring1_mode + 1,
+                if arch.ring1_mode > 0 { "ativo" } else { "ausente" },
+                arch.heap_size_mb);
+        } else {
+            serial_println!("[HWINFO] Architecture info not available");
+            println!("[HWINFO] Architecture info not available");
+        }
+        drop(arch_guard);
+
+        let mhi = crate::mhi::MemoryHierarchy::new();
+        serial_println!("[HWINFO] MHI tiers: {}", mhi.tiers.len());
+        for (i, tier) in mhi.tiers.iter().enumerate() {
+            serial_println!("[HWINFO]   tier[{}] {}: {:.1} MB @ {} MB/s", i, tier.name, tier.capacity_bytes as f64 / 1_048_576.0, tier.bandwidth_mbs);
+        }
         Ok(alloc::vec::Vec::new())
     }
 }
@@ -77,9 +120,12 @@ lazy_static! {
         let mut reg = SkillRegistry::new();
         reg.register(alloc::boxed::Box::new(EchoSkill));
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
+        reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
         spin::Mutex::new(reg)
     };
     static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
+    static ref GLOBAL_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
+    static ref TRUST_CACHE: spin::Mutex<skill_registry::TrustCache> = spin::Mutex::new(skill_registry::TrustCache::new());
 }
 
 #[panic_handler]
@@ -224,17 +270,20 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     unsafe { smp::init_smp(); }
 
     let pci_devices = unsafe { pci::scan_pci() };
-    let arch = inventory::SystemArchitecture::infer(
-        &inventory::HardwareInventory::collect(pci_devices, acpi_info.as_ref()),
-    );
+    let inventory_data = inventory::HardwareInventory::collect(pci_devices, acpi_info.as_ref());
+    let arch = inventory::SystemArchitecture::infer(&inventory_data);
+    {
+        let mut arch_guard = GLOBAL_ARCH.lock();
+        *arch_guard = Some(arch.clone());
+    }
     serial_println!(
         "[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
         arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
         arch.trust_level, arch.power_mode, arch.tensor_tier,
     );
     println!(
-        "[ARCH] System architecture: ring0={} ring1={} heap={}MB",
-        arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
+        "[ARCH] System architecture: ring0={} ring1={} heap={}MB | PCI devices: {}",
+        arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb, inventory_data.pci_devices.len(),
     );
 
     let mhi = mhi::MemoryHierarchy::new();

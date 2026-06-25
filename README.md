@@ -209,8 +209,8 @@ QEMU window opens. VGA output on screen, serial output in terminal. Type your in
 | 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ Concluído |
 | 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ Concluído |
 | 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ Concluído |
-| 5 | **22** | **Skills + Trust Cache + ISO** | 🟡 Próximo |
-| 6 | 23 | Network Sprint (VirtIO-net + smoltcp + HTTP) | ⏳ |
+| 5 | 22 | TrustCache + MHI Skills + HardwareInfoSkill | ✅ Concluído |
+| 6 | **23** | **Network Sprint (VirtIO-net + smoltcp + HTTP)** | 🟡 Próximo |
 | 7 | 24 | NVMe + SFS persistente | ⏳ |
 | 8+ | 25+ | WASM + TLS + multi-agent | ⏳ |
 

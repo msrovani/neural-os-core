@@ -179,13 +179,17 @@ impl BitmapFrameAllocator {
         self.usable_frames as u64 * 4096
     }
 
+    pub fn allocated_frame_count(&self) -> usize {
+        self.allocated_count
+    }
+
     /// Retorna o tensor de contexto de hardware para o roteador MLP.
-    /// `[taxa_ocupacao, 0.0]` — fração de frames alocados vs total utilizável.
+    /// `[taxa_ocupacao, allocated_count]`.
     pub fn hardware_context_tensor(&self) -> [f32; 2] {
         let total = core::cmp::max(self.usable_frames, 1);
         [
             self.allocated_count as f32 / total as f32,
-            0.0,
+            self.allocated_count as f32,
         ]
     }
 }

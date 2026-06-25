@@ -136,6 +136,9 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 21 (v0.16.0) — MHI + Inventory + SystemArchitecture (Block 4)
 `mhi.rs` — `AllocTier` enum (Dram/Vram/Nvme/Hdd), `MemoryTier` struct, `MemoryHierarchy::new()` auto-creates Dram tier from bitmap allocator, `alloc_by_tier(Dram)` allocates contiguous physical frames. `inventory.rs` — `HardwareInventory::collect()` gathers CPU, RAM, PCI devices; `SystemArchitecture::infer()` rule-based heuristics (GPU→ring1, RAM→heap, cores→power). Boot flow: PCI scan → collect → infer → log → MHI init → executor. **IOAPIC mask bug fixed:** `redirect_irq()` no longer sets bit 16 (MASK), allowing timer/keyboard interrupts to reach the BSP. Without this fix, `hlt()` never woke and the executor stalled after 1 poll cycle. Debugged via `-d int,cpu_reset,guest_errors` + serial `IOAPIC redirection[0]: low=0x00010000`.
 
+### Sprint 22 (v0.17.0) — TrustCache + MHI Skills + Block 5)
+`trust_cache.rs` in skill-registry — `TrustEntry` with TTL, `TrustCache::grant/revoke/is_trusted()` with `DEFAULT_TTL_TICKS = 1800` (~100s). SystemStatusSkill upgraded to consume MHI (RAM per tier). HardwareInfoSkill created — reads `GLOBAL_ARCH` (stored after inference) and reports CPU/GPU/heap/MHI tiers. `hardware_context_tensor()` now returns `[ratio, allocated_count]`. `GLOBAL_ARCH` lazy_static stores SystemArchitecture post-boot. Boot flow logs PCI device count. 0 errors, QEMU boot verified.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo

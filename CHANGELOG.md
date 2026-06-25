@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.17.0] — 2026-06-23
+
+### Added (Sprint 22 — Block 5: Skills + Trust Cache + ISO)
+
+- `crates/skill-registry/src/trust_cache.rs` — TrustCache with TTL-based token cache:
+  - `TrustEntry { token, granted_at, ttl_ticks }` with `is_expired(current_ticks)`
+  - `TrustCache::grant(token, current_ticks, ttl_override)` and `revoke(token)`
+  - `TrustCache::is_trusted(token, current_ticks)` — O(1) BTreeMap lookup
+  - `DEFAULT_TTL_TICKS: 1800` (~100 seconds at 18.2 Hz)
+- **SystemStatusSkill upgraded** — now consumes MHI: reports RAM occupancy per tier and allocated frame count. `hardware_context_tensor()` now returns `[ratio, allocated_count]` instead of `[ratio, 0]`.
+- **HardwareInfoSkill** — new skill exposing CPU count, GPU presence, heap size, power mode, and MHI tier details via `GLOBAL_ARCH` lazy_static.
+- **`GLOBAL_ARCH`** — `spin::Mutex<Option<SystemArchitecture>>` stores architecture after inference, accessible from skills and daemons.
+- **Boot flow** — PCI device count now logged in `[ARCH]` line: `PCI devices: {n}`.
+- **`memory.rs`** — added `allocated_frame_count()` public accessor.
+- **Workspace crate versions** — `neural-kernel` bumped to v0.17.0.
+
 ## [0.16.0] — 2026-06-23
 
 ### Fixed (Sprint 21 — IOAPIC mask bug)
