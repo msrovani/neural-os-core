@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core Hermes v0.20.1
-#   Sprint 23 Bugfix: e1000 DMA + /ping Command
-#   allocate_contiguous fix · DHCP skip · /ping
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.2
+#   Network Sprint: e1000 Fixes + Neural Architecture
+#   TDT fix · NUM_DESC 48 · PTHRESH 8 · Neural Network
 # ═══════════════════════════════════════════════
 
 # Role and Purpose
@@ -63,7 +63,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-# Project Summary — neural-os-core v0.19.0
+# Project Summary — neural-os-core v0.20.2
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.

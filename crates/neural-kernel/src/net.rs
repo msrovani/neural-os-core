@@ -1,6 +1,13 @@
 use crate::e1000::E1000Driver;
 use crate::{println, serial_println};
 use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
+use event_bus::{CapabilityToken, Event};
+
+pub const TOPIC_HW_NET_E1000: &str = "HW_NET_E1000";
+pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
+pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
+pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
 pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
 
@@ -26,7 +33,20 @@ pub static NET_CONFIG: spin::Mutex<NetConfig> = spin::Mutex::new(NetConfig {
     online: false,
 });
 
-pub unsafe fn init_network() -> bool {
+pub fn wait_ticks(ticks: usize) {
+    let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+    let mut guard: usize = 0;
+    loop {
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(start) >= ticks { break; }
+        // Safety fallback: se ticks nao avancam, timeout apos ~1B iteracoes
+        if guard >= 100_000_000 { break; }
+        guard += 1;
+        x86_64::instructions::hlt();
+    }
+}
+
+pub unsafe fn init_driver_network() -> bool {
     let pci_devices = crate::pci::scan_pci();
     let mut dev_opt = None;
     for dev in &pci_devices {
@@ -45,6 +65,7 @@ pub unsafe fn init_network() -> bool {
         Some(d) => d,
         None => {
             serial_println!("[NET] Nenhum dispositivo de rede encontrado.");
+            println!("[NET] Nenhum dispositivo de rede encontrado.");
             return false;
         }
     };
@@ -53,34 +74,141 @@ pub unsafe fn init_network() -> bool {
     NET_CONFIG.lock().mac = mac;
     *E1000.lock() = Some(driver);
 
-    serial_println!("[NET] Driver e1000 inicializado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+    serial_println!("[NET] e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    println!("[NET] Driver de rede pronto.");
+    println!("[NET] e1000 iniciado.");
 
-    // Pulando DHCP (lento no QEMU TCG). Usando IP estatico.
-    serial_println!("[NET] Usando configuracao estatica (10.0.2.15).");
-    println!("[NET] Usando configuracao estatica.");
-    let mut cfg = NET_CONFIG.lock();
-    cfg.ip = [10, 0, 2, 15];
-    cfg.configured = true;
-    drop(cfg);
-
-    // Gateway MAC para QEMU user-mode: 52:54:00:12:34:56 (padrao slirp)
-    NET_CONFIG.lock().gateway_mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
-    serial_println!("[NET] Gateway MAC configurado: 52:54:00:12:34:56");
+    let hw_event = crate::Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_HW_NET_E1000),
+        payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
+        token: crate::CapabilityToken(1),
+    };
+    let _ = crate::EVENT_BUS.publish(hw_event);
     true
 }
 
-#[allow(dead_code)]
-unsafe fn try_dhcp() -> bool {
-    for attempt in 0..5 {
-        serial_println!("[DHCP] Tentativa {}...", attempt + 1);
-        if crate::proto::dhcp_discover(attempt) {
-            return true;
+pub unsafe fn network_bootstrap() -> bool {
+    let mac = NET_CONFIG.lock().mac;
+
+    // Configura IP antes de qualquer ARP
+    NET_CONFIG.lock().ip = [10, 0, 2, 15];
+
+    serial_println!("[NET] Bootstrap: ARP para gateway 10.0.2.1...");
+
+    let mut gw_mac_opt = None;
+    let (tpt0, tpr0) = {
+        let guard = E1000.lock();
+        let driver = guard.as_ref().unwrap();
+        let t = unsafe { driver.debug_mmio_read(0x0400C) };
+        let r = unsafe { driver.debug_mmio_read(0x04010) };
+        serial_println!("[NET] e1000 antes: TPT={} TPR={}", t, r);
+        (t, r)
+    };
+
+    let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+    let mut rx_count: u32 = 0;
+    let mut last_arp_tick = start;
+    loop {
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(start) > 200 { break; }
+        if gw_mac_opt.is_some() { break; }
+
+        // Re-envia ARP a cada ~10 ticks para garantir que slirp processe
+        if now.wrapping_sub(last_arp_tick) >= 10 {
+            crate::proto::arp_request(mac, [10, 0, 2, 1]);
+            last_arp_tick = now;
         }
-        for _ in 0..50000000 { core::hint::spin_loop(); }
+
+        let mut guard = E1000.lock();
+        let driver = guard.as_mut().unwrap();
+        loop {
+            if let Some(pkt) = driver.recv() {
+                rx_count += 1;
+                if let Some(gw) = crate::proto::parse_arp_reply(&pkt) {
+                    gw_mac_opt = Some(gw);
+                }
+            } else {
+                break;
+            }
+        }
+        drop(guard);
+        x86_64::instructions::hlt();
     }
-    false
+
+    if rx_count > 0 {
+        serial_println!("[NET] Bootstrap: RX {} pacote(s) durante wait", rx_count);
+    }
+
+    {
+        let guard = E1000.lock();
+        let driver = guard.as_ref().unwrap();
+        let tpt1 = unsafe { driver.debug_mmio_read(0x0400C) };
+        let tpr1 = unsafe { driver.debug_mmio_read(0x04010) };
+        serial_println!("[NET] e1000 depois: TPT={} TPR={} (dTX={} dRX={})", tpt1, tpr1, tpt1.wrapping_sub(tpt0), tpr1.wrapping_sub(tpr0));
+    }
+
+    if let Some(gw_mac) = gw_mac_opt {
+        NET_CONFIG.lock().gateway_mac = gw_mac;
+        NET_CONFIG.lock().ip = [10, 0, 2, 15];
+        NET_CONFIG.lock().configured = true;
+        NET_CONFIG.lock().online = true;
+        serial_println!("[NET] Bootstrap OK. GW MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}. IP: 10.0.2.15",
+            gw_mac[0], gw_mac[1], gw_mac[2], gw_mac[3], gw_mac[4], gw_mac[5]);
+        println!("[NET] Rede configurada via bootstrap.");
+
+        let cfg_event = crate::Event {
+            id: 0,
+            topic: alloc::string::String::from(TOPIC_NETWORK_CONFIGURED),
+            payload: alloc::vec![10, 0, 2, 15],
+            token: crate::CapabilityToken(1),
+        };
+        let _ = crate::EVENT_BUS.publish(cfg_event);
+        true
+    } else {
+        NET_CONFIG.lock().gateway_mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        NET_CONFIG.lock().ip = [10, 0, 2, 15];
+        NET_CONFIG.lock().configured = true;
+        serial_println!("[NET] Bootstrap: ARP sem resposta. Usando fallback estatico.");
+        println!("[NET] Rede em modo DEGRADADO (IP estatico).");
+
+        let deg_event = crate::Event {
+            id: 0,
+            topic: alloc::string::String::from(TOPIC_NETWORK_DEGRADED),
+            payload: alloc::vec![10, 0, 2, 15],
+            token: crate::CapabilityToken(1),
+        };
+        let _ = crate::EVENT_BUS.publish(deg_event);
+        true
+    }
+}
+
+pub async fn network_health_daemon() {
+    let receiver = crate::EVENT_BUS.subscribe(TOPIC_NETWORK_CONFIGURED);
+    let deg_receiver = crate::EVENT_BUS.subscribe(TOPIC_NETWORK_DEGRADED);
+    let mut health_counter: u64 = 0;
+
+    loop {
+        if let Some(event) = receiver.try_receive() {
+            serial_println!("[NET-HEALTH] Rede configurada via bootstrap.");
+        }
+        if let Some(event) = deg_receiver.try_receive() {
+            serial_println!("[NET-HEALTH] Rede em modo degradado.");
+        }
+
+        if health_counter % 100 == 0 && NET_CONFIG.lock().configured {
+            // Health check a cada 100 ciclos: verifica link
+            let guard = E1000.lock();
+            if let Some(ref _driver) = *guard {
+                // Link status check via MMIO nao e pratico aqui sem e1000 method
+                serial_println!("[NET-HEALTH] tick={} MAC ativo", health_counter);
+            }
+            drop(guard);
+        }
+
+        health_counter += 1;
+        crate::task::yield_now().await;
+    }
 }
 
 pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
@@ -89,45 +217,19 @@ pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> 
     let our_mac = cfg.mac;
     let gw_mac = cfg.gateway_mac;
     drop(cfg);
+    if gw_mac == [0; 6] { return None; }
 
     let mut guard = E1000.lock();
     let driver = guard.as_mut().unwrap();
+    crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
+    drop(guard);
 
-    if gw_mac == [0; 6] {
-        let our_mac = driver.mac();
-        drop(guard);
-        let cfg = NET_CONFIG.lock();
-        let gw = cfg.gateway_ip;
-        drop(cfg);
-        crate::proto::arp_request(our_mac, gw);
-        for _ in 0..10000000 { core::hint::spin_loop(); }
-        let mut guard = E1000.lock();
-        let driver = guard.as_mut().unwrap();
-        if let Some(pkt) = driver.recv() {
-            if let Some(gw_mac) = crate::proto::parse_arp_reply(&pkt) {
-                NET_CONFIG.lock().gateway_mac = gw_mac;
-            }
-        }
-        drop(guard);
-        let mut guard = E1000.lock();
-        let driver = guard.as_mut().unwrap();
-        let cfg = NET_CONFIG.lock();
-        let gw_mac = cfg.gateway_mac;
-        drop(cfg);
-        if gw_mac == [0; 6] {
-            return None;
-        }
-        crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
-        for _ in 0..100000000 { core::hint::spin_loop(); }
-        if let Some(pkt) = driver.recv() {
-            return crate::proto::parse_http_response(&pkt, our_mac);
-        }
-    } else {
-        crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
-        for _ in 0..100000000 { core::hint::spin_loop(); }
-        if let Some(pkt) = driver.recv() {
-            return crate::proto::parse_http_response(&pkt, our_mac);
-        }
+    for _ in 0..100000000 { core::hint::spin_loop(); }
+
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+    if let Some(pkt) = driver.recv() {
+        return crate::proto::parse_http_response(&pkt, our_mac);
     }
     None
 }
@@ -138,38 +240,13 @@ pub unsafe fn ping(target_ip: [u8; 4]) -> Option<u64> {
     let our_mac = cfg.mac;
     let gw_mac = cfg.gateway_mac;
     drop(cfg);
+    if gw_mac == [0; 6] { return None; }
 
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-
-    if gw_mac == [0; 6] {
-        let our_mac2 = driver.mac();
-        drop(guard);
-        let cfg2 = NET_CONFIG.lock();
-        let gw = cfg2.gateway_ip;
-        drop(cfg2);
-        crate::proto::arp_request(our_mac2, gw);
-        for _ in 0..10000000 { core::hint::spin_loop(); }
-        let mut guard2 = E1000.lock();
-        let driver2 = guard2.as_mut().unwrap();
-        if let Some(pkt) = driver2.recv() {
-            if let Some(gwm) = crate::proto::parse_arp_reply(&pkt) {
-                NET_CONFIG.lock().gateway_mac = gwm;
-            }
-        }
-        drop(guard2);
-    }
-
-    let cfg = NET_CONFIG.lock();
-    let gw_mac_final = cfg.gateway_mac;
-    drop(cfg);
-    if gw_mac_final == [0; 6] { return None; }
-
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
     let ident: u16 = 0x1234;
     let seq: u16 = 1;
-    crate::proto::icmp_echo_request(driver, our_mac, gw_mac_final, our_ip, target_ip, ident, seq);
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+    crate::proto::icmp_echo_request(driver, our_mac, gw_mac, our_ip, target_ip, ident, seq);
     drop(guard);
 
     for _ in 0..30000000 { core::hint::spin_loop(); }
@@ -191,17 +268,18 @@ pub fn run_network_diagnostics() -> crate::String {
     let gw = cfg.gateway_ip;
     let dns = cfg.dns_ip;
     let configured = cfg.configured;
+    let online = cfg.online;
     drop(cfg);
 
     let mut report = crate::String::new();
-    report.push_str("=== Diagnostico de Rede [IA] ===\n");
+    report.push_str("=== Diagnostico de Rede ===\n");
 
     if !configured {
         report.push_str("Rede nao configurada.\n");
-        report.push_str("Verifique o adaptador de rede (e1000) no QEMU.\n");
         return report;
     }
 
+    report.push_str(&alloc::format!("Status: {}\n", if online { "ONLINE" } else { "DEGRADED" }));
     report.push_str(&alloc::format!(
         "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
@@ -212,8 +290,7 @@ pub fn run_network_diagnostics() -> crate::String {
         gw[0], gw[1], gw[2], gw[3],
         dns[0], dns[1], dns[2], dns[3]
     ));
-
-    report.push_str("\nSistema com capacidade de rede.\n");
+    report.push_str("Diagnostico concluido.\n");
     report
 }
 

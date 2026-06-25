@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.20.2] — 2026-06-25 — Network Sprint: e1000 Fixes + Neural Architecture
+
+### Fixed
+
+- **e1000 TDT write protocol** — `send()` escrevia REG_TDT = idx, mas com TDH=0 ambos iguais → ring empty. Corrigido: TDT = (idx+1) % NUM_DESC.
+- **NUM_DESC aumentado 32→48** — 82540EM requer mínimo 48 descritores RX (Linux e1000 driver docs).
+- **RXDCTL PTHRESH 0→8** — Prefetch threshold zero impedia RX de receber pacotes. Linux driver recomenda PTHRESH=8.
+- **Ordem init RX** — RCTL.EN agora escrito antes de RDT (Intel spec).
+- **Offsets estatísticas corrigidos** — TPT=0x0400C, TPR=0x04010 (não 0x10C0/0x1080).
+- **SMP desabilitado até segunda ordem** — SMP multi-core com `-smp 4` instável no QEMU TCG.
+
+### Added
+
+- **Arquitetura Neural de Rede** — init_driver_network() mínimo + network_bootstrap() com ARP periódico/hlt + network_health_daemon() async.
+- **Debug methods** — debug_mmio_read(), debug_rx_desc(), debug_tx_desc() no e1000 driver.
+- **EventBus HW_NET_E1000** — publicado quando e1000 é detectado.
+- **Arquivo `NETWORK_DEBUG_HOME.md`** — relatório completo para continuar debug em casa.
+
+### Changed
+
+- Network discovery agora é neural: hardware → evento → daemon → skill.
+- `/ping`, `/fetch`, `/netdiag` roteados pelo MLP.
+- IP configurado antes do ARP (SPA válido nas requisições).
+- `cargo check --release`: 0 erros, ~35 warnings
+
 ## [0.20.1] — 2026-06-25 — e1000 DMA Fix + /ping Command
 
 ### Fixed

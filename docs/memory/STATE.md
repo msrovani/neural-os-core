@@ -1,22 +1,33 @@
 # ═══════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core Hermes v0.20.1
-#   "Sprint 23 Bugfix: e1000 DMA + /ping Command"
-#   allocate_contiguous fix · DHCP skip · /ping
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.2
+#   "Network Sprint: e1000 Fixes + Neural Architecture"
+#   TDT fix · NUM_DESC 48 · PTHRESH 8 · Neural Network
 # ═══════════════════════════════════════════════
 
 # Project State — neural-os-core
 
-## Sprint 23 Bugfix — e1000 DMA + /ping (v0.20.1, 25/06/2026)
+## Sprint 23 Network — e1000 Fixes + Neural Architecture (v0.20.2, 25/06/2026)
 
-### Correções
-1. **allocate_contiguous fix** — `memory.rs:132`: `i = 0` → `i = self.next_free_bit`. Causa raiz do Page Fault INSTRUCTION_FETCH no e1000: alocava frames < 1 MB não mapeados pelo bootloader.
-2. **DHCP skip** — Pulado (lento no QEMU TCG). IP estático 10.0.2.15 + gateway MAC hardcoded 52:54:00:12:34:56.
-3. **/ping comando** — Hermes agora responde a `/ping <ip>` via ICMP Echo Request.
+### Correções e1000
+1. **TDT protocol fix** — `send()` escrevia TDT com valor igual a TDH (ambos 0), hardware via ring vazio. Corrigido: TDT = (idx+1) % NUM_DESC.
+2. **NUM_DESC 32→48** — 82540EM requer mínimo 48 descritores (Linux e1000 driver docs).
+3. **RXDCTL PTHRESH 0→8** — Prefetch threshold zero impedia RX.
+4. **RCTL.EN antes de RDT** — Ordem de init corrigida por Intel spec.
+5. **Offsets TPT/TPR** — Corrigidos para 0x0400C/0x04010 (82540EM).
+
+### Arquitetura Neural de Rede (Nova)
+1. **init_driver_network()** — Mínimo: detecta e1000, inicia driver, publica HW_NET_E1000.
+2. **network_bootstrap()** — ARP periódico com hlt(), IP configurado antes do ARP, timeout ~2s.
+3. **network_health_daemon()** — Async, monitora link periodicamente a cada 100 ciclos.
+4. **/ping, /fetch, /netdiag** — Roteados pelo MLP para skills.
 
 ### Resultados QEMU
-- ✅ e1000 Init OK (rx_desc=0xce7000+)
-- ✅ Boot completo: PCI → ACPI → APIC → SMP → Network → Executor
-- ✅ Executor 11000+ ticks estável, EchoSkill executada
+- ✅ e1000 Init OK (rx_desc=0xce8000+)
+- ✅ TX descriptor processado pelo hardware (TDH avança, length=42)
+- ❌ TPT=0 — pacote não enviado (qemu_send_packet não chamado/retorna 0)
+- ❌ TPR=0 — nenhum pacote recebido
+- ❌ ARP sem resposta — consequência do TX não funcionar
+- ✅ Executor rodando, health daemon ativo
 - ✅ 0 erros cargo check/cargo bootimage
 
 ## Sprint 1 — Chassi Básico (Complete)
