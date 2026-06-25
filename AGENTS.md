@@ -282,7 +282,7 @@ When a user mentions a Rust crate or library feature not in Context7, search **c
 3. `query-docs` with the selected library ID and the user's full question (not single words)
 4. Answer using the fetched docs
 
-# Ecosystem Analysis Reference (Tiers 0-4 Complete, 136 repos, 99 ideas)
+# Ecosystem Analysis Reference (Tiers 0-5 Complete, 141 repos, 111 ideias)
 
 ## Key Portable Patterns from Agent Frameworks (Tier 4)
 
@@ -311,6 +311,17 @@ When implementing Hermes daemon features, reference these patterns from Cline (6
 - **Auto-compact** (opencode/Crush): Summarize buffer when approaching context limit
 - **Graph orchestration** (MS Agent): sequential/concurrent/handoff between daemons
 - **Plugin Hub** (Agent Zero): Remote MCP index with AI-driven security scanning
+
+## Tier 3b — Security, Sandbox & Filesystem (ADR-0025, 5 repos, complete)
+**Repo URLs for future reference:**
+- https://github.com/InnerWarden/innerwarden — 159★, 2057 commits, 7900+ tests — eBPF safety, 82 detectors, 69 correlation rules, knowledge graph
+- https://github.com/akitaonrails/ai-jail — 595★ — Multi-OS sandbox wrapper: bwrap + Landlock + seccomp
+- https://github.com/lspecian/vexfs — 24★ — Linux kernel-native vector search filesystem (FUSE + API + Dashboard)
+- https://github.com/ckanthony/Chisel — 12★ — Rust file tools with kernel-enforced path confinement
+- https://github.com/cori-do/cori-kernel — 17★ — Safe kernel principles for AI agents
+
+### 12 portable patterns → 7 viable Sprints 24-27 (~1310 LOC), 3 future Sprint 28+, 6 discarded.
+Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 
 ## Sprint 23 (Immediate) Items
 - #228 Tool Policy Registry (~80 LOC) — SkillRegistry `{ enabled, autoApprove }`

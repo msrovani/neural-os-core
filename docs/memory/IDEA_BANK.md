@@ -252,6 +252,23 @@ Nada é descartado sem registro. Ideias podem ser:
 | 254 | **e1000 NUM_DESC 32→48** — 82540EM requer mínimo 48 descritores RX | ✅ Block 6 | Sprint 23 | Linux e1000 driver docs: "48-256 for 82542 and 82543-based adapters". |
 | 255 | **Arquitetura Neural de Rede** — init_driver_network() → HW_NET_E1000 EventBus → network_bootstrap() → network_health_daemon() → skill routing | ✅ Block 6 | Sprint 23 | Hardware detection first, IA decide routing. |
 
+### 1.20. Tier 3 Security Patterns — InnerWarden, ai-jail, vexfs, Chisel
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 256 | **Path Confinement para Skills** — SkillRegistry verifica allowlist de paths por token antes de operar (Chisel + ai-jail) | 🟡 Sprint 24 | Sprint 24 | ~60 LOC. TrustCache já faz validação similar. |
+| 257 | **Mask Secrets** — TrustCache/SkillRegistry mascara paths/env vars sensíveis antes de expor para skills (ai-jail `--mask`) | 🟡 Sprint 24 | Sprint 24 | ~50 LOC. Substitui padrões por "[REDACTED]". |
+| 258 | **Graduated Enforcement** — PolicyState machine: Observe→Warn→Contain→Enforce (InnerWarden) | 🟡 Sprint 24 | Sprint 24 | ~80 LOC. Adiciona estado ao SkillRegistry. |
+| 259 | **Posture-Aware Alerting** — Skills verificam estado do hardware antes de agir (InnerWarden) | 🟡 Sprint 24 | Sprint 24 | ~40 LOC. Se link down → não configura rede. |
+| 260 | **Event→Detector→Response Pipeline** — EventBus → Detector stateful → Correlation → Response Skill (InnerWarden core) | 🟡 Sprint 25 | Sprint 25 | ~200 LOC. 5 detectores iniciais (PortScan, ArpSpoof, PingFlood, DhcpStarvation, TimerAnomaly). Novo crate `security-pipeline`. |
+| 261 | **Decision Review + Human Escalation** — Detector com baixa confiança publica NEEDS_REVIEW com timeout (InnerWarden) | 🟡 Sprint 25 | Sprint 25 | ~120 LOC. Timeout auto-resolve. High severity nunca auto-resolve. |
+| 262 | **Hash Chain Audit Trail** — EventLog com SHA-256 chain: cada evento contém hash do anterior (InnerWarden) | 🟡 Sprint 25 | Sprint 25 | ~60 LOC. Extensão do #231. verify_chain() → bool. |
+| 263 | **Knowledge Graph para Eventos de Segurança** — Grafo em memória: 6 node types, ~20 relations (InnerWarden knowledge graph) | 🟡 Sprint 26 | Sprint 26 | ~400 LOC. Node types: Process, NetworkEndpoint, File, Skill, Hardware, User. |
+| 264 | **Cross-Layer Correlation Rules** — Regras multi-estágio: ARP Spoof→Port Scan→Data Exfil (InnerWarden 69 regras) | 🟡 Sprint 27 | Sprint 27 | ~300 LOC. 5 regras iniciais. Risco de falso positivo. |
+| 265 | **Filesystem como Vector Search** — Operações de arquivo expõem vector search via xattr (vexfs) | ⏳ Pós-MVP | Sprint 28+ | Depende de SFS implementado. |
+| 266 | **Multi-dialect Vector API** — API server compatível com ChromaDB/Qdrant (vexfs) | ⏳ Pós-MVP | Sprint 28+ | Depende de MemPalace ou SFS com embeddings. |
+| 267 | **OverlayFS Copy-on-Write** — Writes de agentes vão para overlay separado (ai-jail) | ⏳ Pós-MVP | Sprint 28+ | Depende de VFS implementada. |
+
 ### 1.17. Documentação e ADRs
 
 | # | Item | Destino | Target | Motivação |
@@ -820,3 +837,4 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-25 | ADR-0024: Itens 228-249 (Tier 4 Agent Frameworks) → adicionados; 22 ideias extraídas de 6 repos: Tool Policy Registry, Usage Tracker, Auto-Compact Buffer, Event-Sourced Conversation, Cron Scheduler, Session Checkpoint, Plan/Execute Modes, Graph Orchestration, Plugin Hub, Completion Terminal Skills, Claim-Based Lease, Time Travel, Context Compaction, Observability, AI Security Scan, Hub Discovery, Human-in-the-Loop, Remote Execution, Skill Marketplace, Context Compaction Agent. Deep-dive: Cline (63.9k ★, 293 releases, 6.338 commits, AgentRuntime + ClineCore + CronRunner). | IDA IA |
 | 2026-06-25 | Sprint 23 Bugfix: Itens 250-252 (e1000 DMA fix, /ping, DHCP/ARP refactor pendente) → adicionados; allocate_contiguous fix (start de next_free_bit), DHCP skip, /ping command. Boot QEMU validado: e1000 init OK, executor 11000+ ticks. | Dev + IDA IA |
 | 2026-06-25 | Network Sprint: Itens 253-255 (e1000 TDT protocol fix, NUM_DESC 48, PTHRESH 8, Neural Network Architecture) → adicionados; TPT=0 ainda não resolvido (qemu_send_packet não chamado). Novo modelo: init_driver_network() → HW_NET_E1000 → network_bootstrap() → skill-based routing. | Dev + IDA IA |
+| 2026-06-25 | ADR-0025: Itens 256-267 (Tier 3 Security Patterns) → adicionados; 12 padrões extraídos de 5 repos (InnerWarden 159★, ai-jail 595★, vexfs 24★, Chisel 12★, cori-kernel 17★). 7 itens viaveis Sprints 24-27 (256-264), 3 ideias futuras Sprint 28+ (265-267), 6 padrões descartados. Deep-dive: InnerWarden (2057 commits, 7900+ testes, 45 eBPF programas, 82 detectores, 69 regras correlação). | IDA IA |

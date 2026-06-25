@@ -1,15 +1,59 @@
 # Roadmap — neural-os-core (Superseded)
 
-**Última atualização:** 2026-06-23  
+**Última atualização:** 2026-06-25  
 **⚠️ Este documento está superseded pela ADR-0015** (`docs/architecture/0015-curso-correcao-mvp.md`).
 
-A nova rota é a **chain de 6 blocos** que leva ao MVP Neural OS Hermes — ISO bootável x86-64 UEFI com chat neural, auto-detecção de hardware, Memory Hierarchy Index, e skills de sistema. Consulte a **ADR-0015** para o plano diretor completo, e o **IDEA_BANK.md** para o inventário vivo de **249 ideias** catalogadas (Tiers 0-4, 136 repos analisados).
+A nova rota é a **chain de 6 blocos** que leva ao MVP Neural OS Hermes — ISO bootável x86-64 UEFI com chat neural, auto-detecção de hardware, Memory Hierarchy Index, e skills de sistema. Consulte a **ADR-0015** para o plano diretor completo, e o **IDEA_BANK.md** para o inventário vivo de **267 ideias** catalogadas (Tiers 0-5, 141 repos analisados).
+
+**ADR-0025 (Tier 3 Security Patterns):** 5 novos repositórios analisados (InnerWarden 159★, ai-jail 595★, vexfs 24★, Chisel 12★, cori-kernel 17★). 12 padrões portáveis extraídos, 7 implementáveis Sprints 24-27 (~1310 LOC), 3 futuros Sprint 28+, 6 descartados.
 
 **Documento histórico:** Alinhado ao ADR-0010 (Estratégico), ADR-0013 (Estado da Arte 2026) e ADR-0013 (Design System). Mantido para referência de fases 3–7 originais.
 
 A ordem de engenharia abaixo segue a dependência física do bare-metal: primeiro a memória, depois o kernel, depois a comunicação entre agentes, depois o runtime de skills, e por último o planejador cognitivo.
 
 > **Nota:** Sprints 11–15 concluídos. Phase 1 (Bitmap Allocator) e Phase 2 (Async Executor) entregues. Phase 3 (EventBus IPC), Phase 4 (Skill Registry) e Phase 2.5 (Hardware Neural Routing) adiantados.
+
+---
+
+## Sprints 24-28 — Security & Sandbox (Tier 3 Patterns)
+
+Baseado na análise ADR-0025 (InnerWarden, ai-jail, vexfs, Chisel, cori-kernel).
+
+### Sprint 24 — Path Confinement & Enforcement (~230 LOC)
+
+| Item | LOC | Fonte | Descrição |
+|---|---|---|---|
+| #256 Path Confinement | ~60 | Chisel + ai-jail | SkillRegistry verifica allowlist de paths por token |
+| #257 Mask Secrets | ~50 | ai-jail `--mask` | TrustCache mascara paths/env vars sensíveis |
+| #258 Graduated Enforcement | ~80 | InnerWarden | PolicyState machine: Observe→Warn→Contain→Enforce |
+| #259 Posture-Aware Alerting | ~40 | InnerWarden | Skills verificam hardware antes de agir |
+
+### Sprint 25 — Detection Pipeline & Audit (~380 LOC)
+
+| Item | LOC | Fonte | Descrição |
+|---|---|---|---|
+| #260 Event→Detector→Response Pipeline | ~200 | InnerWarden (core) | Novo crate `security-pipeline`. 5 detectores iniciais |
+| #261 Decision Review + Human Escalation | ~120 | InnerWarden | NEEDS_REVIEW com timeout, auto-resolve |
+| #262 Hash Chain Audit Trail | ~60 | InnerWarden | SHA-256 chain no EventLog #231 |
+
+### Sprint 26-27 — Knowledge Graph & Correlation (~700 LOC)
+
+| Item | LOC | Fonte | Descrição |
+|---|---|---|---|
+| #263 Knowledge Graph (6 nodes, ~20 relations) | ~400 | InnerWarden | Grafo em memória para correlação de eventos |
+| #264 Cross-Layer Correlation Rules (5 regras) | ~300 | InnerWarden | Multi-estágio: ARP Spoof → Scan → Exfil |
+
+### Sprint 28+ — Filesystem & Vector Search (~800+ LOC)
+
+| Item | LOC | Fonte | Depende de |
+|---|---|---|---|
+| #265 Filesystem como Vector Search | ~300+ | vexfs | SFS implementado |
+| #266 Multi-dialect Vector API | ~300+ | vexfs (ChromaDB) | MemPalace ou SFS |
+| #267 OverlayFS Copy-on-Write | ~200+ | ai-jail | VFS implementada |
+
+### Descartados (6 padrões)
+
+eBPF, Seccomp-bpf, Kernel module, FUSE, XDP, Namespace isolation — todos requerem Linux kernel ou não aplicam a bare-metal.
 
 ---
 
