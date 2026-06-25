@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-24 (Crom Ecosystem Analysis — 12 novos itens, total 175)  
+**Última atualização:** 2026-06-24 (Ed25519 Trust Identity — item #176, total 176)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -333,8 +333,9 @@ Nada é descartado sem registro. Ideias podem ser:
 | 173 | **Codebook LLM finetune** — treinar APENAS o codebook (5.770 params) em vez dos pesos (235K), superando baseline 98.08% vs 97.53% | ⏳ Pós-MVP | Sprint 29+ | Pesquisa: Crompressor-Neurônio Tensor-Vivo Exp2. Success Engine pode usar codebook learning p/ ajuste online. |
 | 174 | **Delta branches (speculative decoding)** — branches de inferência paralela com 99.9% economia de memória via XOR delta entre branches | ⏳ Pós-MVP | Sprint 29+ | Crompressor-Neurônio Lab07. Requer scheduler maduro + múltiplos cores. Viabilidade depende de benchmark real. |
 | 175 | **Workspace isolation** — per-project config (skills/recursos/trust) isolados por workspace, estilo `.crom/config.json` | ⏳ Pós-MVP | Sprint 29+ | Crom-Agente workspace isolation. Requer SFS (Layer 2) para persistência. |
+| 176 | **Ed25519 Cryptographic Identity for TrustCache** — substitui `CapabilityToken(u64)` estático por assinatura Ed25519; Token vira chave pública + assinatura da requisição; Zero-Trust real em nível de kernel | 🟡 Baixa | Sprint 27 | Crom-meueu: identidade criptográfica Ed25519 portada para bare-metal `no_std`. ~300 LOC usando `ed25519-dalek` (sem std) ou implementação custom. Depende de #166 (Multi-mode Trust) como camada de permissão sobre a identidade. |
 
-**ADR-0020:** `docs/architecture/0020-crom-ecosystem-analysis.md` — Análise de viabilidade Rust com código modelo para cada item #164-175. ~2.080 LOC total para 9 features portáveis.
+**ADR-0020:** `docs/architecture/0020-crom-ecosystem-analysis.md` — Análise de viabilidade Rust com código modelo para 9 features (#164-175). Item #176 (Ed25519) adicionado posteriormente.
  
 ---
 
@@ -364,8 +365,8 @@ Nada é descartado sem registro. Ideias podem ser:
 | Success Engine (1.20) | 4 | 0 | 0 | 4 | 0 | 0 |
 | Treinamento (1.21) | 4 | 0 | 4 | 0 | 0 | 0 |
 | Self-Optimization (1.22) | 7 | 0 | 5 | 2 | 0 | 0 |
-| Crom Ecosystem (1.23) | 12 | 2 | 4 | 6 | 0 | 0 |
-| **Total** | **175** | **58 (33%)** | **45 (26%)** | **61 (35%)** | **9 (5%)** | **2 (1%)** |
+| Crom Ecosystem (1.23) | 13 | 2 | 5 | 6 | 0 | 0 |
+| **Total** | **176** | **58 (33%)** | **46 (26%)** | **61 (35%)** | **9 (5%)** | **2 (1%)** |
 
 ---
 
@@ -704,3 +705,4 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-24 | Itens 157-163 (Self-Optimization / Workflow Learning) → adicionados; Usage Pattern Analyzer, Workflow Predictor, Auto-Skill Generator, Dynamic Resource Scaling, Self-Optimizing Scheduler, Workflow Profile, Hardware Config Learning | Dev + IDA IA |
 | 2026-06-24 | Itens 164-175 (Crom Ecosystem Analysis) → adicionados; 12 ideias portadas de MrJc01/75 repos: XOR Delta, CDC, TV-DSL, Codebook VQ, ReAct loop, MCP Server, Workspace isolation | IDA IA |
 | 2026-06-24 | ADR-0020 (Crom Ecosystem Rust Viability Analysis) → criado; código modelo no_std para 9 items (#164-175), ~1.780 LOC kernel + ~300 LOC Python | IDA IA |
+| 2026-06-24 | Item 176 (Ed25519 Cryptographic Identity for TrustCache) → adicionado; upgrade do CapabilityToken(u64) para assinatura Ed25519 real; derivado de Crom-meueu | IDA IA + Auditoria Externa |

@@ -8,7 +8,7 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [0.18.1] — 2026-06-24
 
-### Added (Crom Ecosystem Analysis — ADR-0020)
+### Added (Crom Ecosystem Analysis — ADR-0020 + Ed25519 Identity)
 
 - **ADR-0020** — Comprehensive Rust viability analysis of MrJc01's Crom ecosystem (75 repos)
 - **9 actionable items** with `no_std` Rust code models, classified by complexity:
@@ -18,7 +18,8 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - **3 future items** (#173-175): Codebook LLM finetune, Delta branches, Workspace isolation
 - **~1,780 LOC kernel** + **~300 LOC Python** total for all 9 features
 - **Disposições:** gRPC, FUSE, Firecracker VMs, Verbo language, Crom-Pet, Active Inference — descartados como inviáveis
-- IDEA_BANK.md updated with ADR-0020 reference in section 1.23
+- **#176 — Ed25519 Cryptographic Identity** for TrustCache: upgrades static `CapabilityToken(u64)` to real Ed25519 signing (Crom-meueu port). ~300 LOC, Sprint 27, depends on #166 Multi-mode Trust
+- IDEA_BANK.md updated with ADR-0020 reference in section 1.23 + item #176
 - SESSION_024.md created with full session narrative
 - Version bump: v0.18.0 → v0.18.1
 
