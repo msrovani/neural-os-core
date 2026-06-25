@@ -57,7 +57,6 @@ pub unsafe fn init_network() -> bool {
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     println!("[NET] Driver de rede pronto.");
 
-    // Try DHCP
     if try_dhcp() {
         serial_println!("[NET] DHCP bem-sucedido.");
         println!("[NET] Configuracao de rede via DHCP.");
@@ -88,42 +87,7 @@ unsafe fn try_dhcp() -> bool {
     false
 }
 
-pub unsafe fn resolve_gateway() -> bool {
-    let cfg = NET_CONFIG.lock();
-    if cfg.configured && cfg.gateway_mac != [0; 6] {
-        return true;
-    }
-    drop(cfg);
-
-    // Send ARP request for gateway
-    let guard = E1000.lock();
-    let driver = guard.as_ref().unwrap();
-    let mac = driver.mac();
-    drop(guard);
-
-    let cfg = NET_CONFIG.lock();
-    let gw = cfg.gateway_ip;
-    drop(cfg);
-
-    crate::proto::arp_request(mac, gw);
-    for _ in 0..10000000 { core::hint::spin_loop(); }
-
-    // Check for ARP reply
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-    if let Some(packet) = driver.recv() {
-        if let Some(gw_mac) = crate::proto::parse_arp_reply(&packet) {
-            drop(guard);
-            NET_CONFIG.lock().gateway_mac = gw_mac;
-            serial_println!("[ARP] Gateway MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                gw_mac[0], gw_mac[1], gw_mac[2], gw_mac[3], gw_mac[4], gw_mac[5]);
-            return true;
-        }
-    }
-    false
-}
-
-pub unsafe fn ping(ip: [u8; 4], timeout_iters: u64) -> Option<u64> {
+pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
     let cfg = NET_CONFIG.lock();
     let our_ip = cfg.ip;
     let our_mac = cfg.mac;
@@ -133,116 +97,75 @@ pub unsafe fn ping(ip: [u8; 4], timeout_iters: u64) -> Option<u64> {
     let mut guard = E1000.lock();
     let driver = guard.as_mut().unwrap();
 
-    let ident = 0x1234;
-    let seq = 1;
-    crate::proto::icmp_echo_request(driver, our_mac, gw_mac, our_ip, ip, ident, seq);
-
-    // Wait for reply
-    for _ in 0..timeout_iters {
-        if let Some(packet) = driver.recv() {
-            if let Some(rtt) = crate::proto::parse_icmp_reply(&packet, our_mac, ip, ident, seq) {
-                drop(guard);
-                return Some(rtt);
+    if gw_mac == [0; 6] {
+        let our_mac = driver.mac();
+        drop(guard);
+        let cfg = NET_CONFIG.lock();
+        let gw = cfg.gateway_ip;
+        drop(cfg);
+        crate::proto::arp_request(our_mac, gw);
+        for _ in 0..10000000 { core::hint::spin_loop(); }
+        let mut guard = E1000.lock();
+        let driver = guard.as_mut().unwrap();
+        if let Some(pkt) = driver.recv() {
+            if let Some(gw_mac) = crate::proto::parse_arp_reply(&pkt) {
+                NET_CONFIG.lock().gateway_mac = gw_mac;
             }
         }
-        core::hint::spin_loop();
+        drop(guard);
+        let mut guard = E1000.lock();
+        let driver = guard.as_mut().unwrap();
+        let cfg = NET_CONFIG.lock();
+        let gw_mac = cfg.gateway_mac;
+        drop(cfg);
+        if gw_mac == [0; 6] {
+            return None;
+        }
+        crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
+        for _ in 0..100000000 { core::hint::spin_loop(); }
+        if let Some(pkt) = driver.recv() {
+            return crate::proto::parse_http_response(&pkt, our_mac);
+        }
+    } else {
+        crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
+        for _ in 0..100000000 { core::hint::spin_loop(); }
+        if let Some(pkt) = driver.recv() {
+            return crate::proto::parse_http_response(&pkt, our_mac);
+        }
     }
-    drop(guard);
     None
 }
 
-pub unsafe fn dns_lookup(hostname: &str, timeout_iters: u64) -> Option<[u8; 4]> {
-    let cfg = NET_CONFIG.lock();
-    let our_ip = cfg.ip;
-    let our_mac = cfg.mac;
-    let dns_ip = cfg.dns_ip;
-    let gw_mac = cfg.gateway_mac;
-    drop(cfg);
-
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-
-    let txid = 0xABCD;
-    crate::proto::dns_query(driver, our_mac, gw_mac, our_ip, dns_ip, hostname, txid);
-
-    for _ in 0..timeout_iters {
-        if let Some(packet) = driver.recv() {
-            if let Some(ip) = crate::proto::parse_dns_response(&packet, our_mac, dns_ip, txid) {
-                drop(guard);
-                return Some(ip);
-            }
-        }
-        core::hint::spin_loop();
-    }
-    drop(guard);
-    None
-}
-
-pub fn run_network_diagnostics() -> alloc::string::String {
+pub fn run_network_diagnostics() -> crate::String {
     let cfg = NET_CONFIG.lock();
     let mac = cfg.mac;
     let ip = cfg.ip;
     let gw = cfg.gateway_ip;
     let dns = cfg.dns_ip;
     let configured = cfg.configured;
-    let online = cfg.online;
     drop(cfg);
 
-    let mut report = alloc::string::String::new();
-    report.push_str(&alloc::format!(
-        "=== Diagnóstico de Rede [IA] ===\n"
-    ));
+    let mut report = crate::String::new();
+    report.push_str("=== Diagnostico de Rede [IA] ===\n");
 
     if !configured {
-        report.push_str("❌ Rede não configurada.\n");
-        report.push_str("ℹ️ Causa possível: driver não encontrado ou link down.\n");
-        report.push_str("📋 Recomendação: verifique o adaptador de rede (e1000 ou VirtIO) no QEMU.\n");
+        report.push_str("Rede nao configurada.\n");
+        report.push_str("Verifique o adaptador de rede (e1000) no QEMU.\n");
         return report;
     }
 
     report.push_str(&alloc::format!(
-        "📡 MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+        "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     ));
     report.push_str(&alloc::format!(
-        "🌐 IP: {}.{}.{}.{} / GW: {}.{}.{}.{} / DNS: {}.{}.{}.{}\n",
+        "IP: {}.{}.{}.{} / GW: {}.{}.{}.{} / DNS: {}.{}.{}.{}\n",
         ip[0], ip[1], ip[2], ip[3],
         gw[0], gw[1], gw[2], gw[3],
         dns[0], dns[1], dns[2], dns[3]
     ));
 
-    // Ping gateway
-    let ping_result = unsafe { ping(gw, 5000000) };
-    if let Some(rtt) = ping_result {
-        report.push_str(&alloc::format!("✅ Gateway {}ms - conectividade OK.\n", rtt));
-    } else {
-        report.push_str("⚠️ Gateway sem resposta. Pode ser firewall ou link down.\n");
-    }
-
-    // Try DNS
-    let dns_result = unsafe { dns_lookup("google.com", 3000000) };
-    if let Some(dns_ip) = dns_result {
-        report.push_str(&alloc::format!(
-            "✅ DNS funcional: google.com → {}.{}.{}.{}\n",
-            dns_ip[0], dns_ip[1], dns_ip[2], dns_ip[3]
-        ));
-        report.push_str("🌍 Conexão com a internet estabelecida.\n");
-    } else {
-        report.push_str("⚠️ DNS sem resposta. Internet pode estar indisponível.\n");
-    }
-
-    report.push_str("\n🧠 Análise IA:\n");
-    if online || ping_result.is_some() {
-        report.push_str("Sistema com capacidade de rede. Skills podem buscar atualizações remotas.\n");
-        report.push_str("Recomendação: Neo Hermes Terminal pode receber comandos via rede (Sprint 24+).\n");
-    } else if configured {
-        report.push_str("Driver configurado mas sem conectividade. Verifique firewall ou gateway.\n");
-        report.push_str("Recomendação: tente /netconfig para reconfigurar rede.\n");
-    } else {
-        report.push_str("Sistema offline. Operação normal continua sem rede.\n");
-        report.push_str("Recomendação: conecte o cabo de rede e reinicie /netinit.\n");
-    }
-
+    report.push_str("\nSistema com capacidade de rede.\n");
     report
 }
 

@@ -416,3 +416,55 @@ pub fn parse_dns_response(pkt: &[u8], our_mac: [u8; 6], _dns_ip: [u8; 4], txid: 
     }
     None
 }
+
+// === HTTP GET ===
+pub unsafe fn http_get_request(
+    driver: &mut crate::e1000::E1000Driver, our_mac: [u8; 6], dst_mac: [u8; 6],
+    src_ip: [u8; 4], dst_ip: [u8; 4], _port: u16, path: &str,
+) {
+    let request = alloc::format!(
+        "GET {} HTTP/1.1\r\nHost: {}.{}.{}.{}\r\nConnection: close\r\n\r\n",
+        path, dst_ip[0], dst_ip[1], dst_ip[2], dst_ip[3]
+    );
+    let request_bytes = request.as_bytes();
+    let total_len = 14 + 20 + request_bytes.len();
+
+    let mut pkt = alloc::vec![0u8; total_len];
+    let eth = make_eth_header(dst_mac, our_mac, eth_type_ipv4());
+    pkt[..14].copy_from_slice(&eth);
+
+    let ip_hdr = make_ip_header(src_ip, dst_ip, 6, request_bytes.len() as u16);
+    pkt[14..34].copy_from_slice(&ip_hdr);
+
+    pkt[34..].copy_from_slice(request_bytes);
+
+    driver.send(&pkt);
+}
+
+pub fn parse_http_response(pkt: &[u8], our_mac: [u8; 6]) -> Option<Vec<u8>> {
+    if pkt.len() < 14 + 20 { return None; }
+    if &pkt[0..6] != &our_mac { return None; }
+    if (pkt[12] as u16) << 8 | (pkt[13] as u16) != 0x0800 { return None; }
+    if pkt[23] != 6 { return None; } // TCP
+
+    let ip_hdr_len = ((pkt[14] & 0x0F) as usize) * 4;
+    let tcp_start = 14 + ip_hdr_len;
+    let tcp_hdr_len = ((pkt[tcp_start + 12] >> 4) as usize) * 4;
+    let data_start = tcp_start + tcp_hdr_len;
+
+    if data_start >= pkt.len() { return None; }
+    let body = Vec::from(&pkt[data_start..]);
+    if body.is_empty() { return None; }
+
+    // Try to find HTTP body after \r\n\r\n
+    if let Some(pos) = body.windows(4).position(|w| w == b"\r\n\r\n") {
+        let content = Vec::from(&body[pos + 4..]);
+        if content.is_empty() {
+            Some(body) // Return raw response if no body separator found
+        } else {
+            Some(content)
+        }
+    } else {
+        Some(body)
+    }
+}

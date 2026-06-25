@@ -5,7 +5,7 @@ use core::ptr::{read_volatile, write_volatile};
 use alloc::vec::Vec;
 
 const E1000_VENDOR: u16 = 0x8086;
-const E1000_DEVICE: u16 = 0x100E;
+pub const E1000_DEVICE: u16 = 0x100E;
 
 const REG_CTRL: u64 = 0x0000;
 const REG_STATUS: u64 = 0x0008;
@@ -284,4 +284,22 @@ impl E1000Driver {
     }
 
     pub fn mac(&self) -> [u8; 6] { self.mac_addr }
+}
+
+impl E1000Driver {
+    pub unsafe fn rx_ready(&self) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let idx = self.rx_cur % NUM_DESC;
+        let rx_vaddr = self.rx_desc_paddr + pmoff;
+        let rx = &*(rx_vaddr as *const [RxDesc; NUM_DESC]);
+        rx[idx].status & RX_DESC_DONE != 0
+    }
+
+    unsafe fn tx_ready(&self) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let idx = self.tx_cur % NUM_DESC;
+        let tx_vaddr = self.tx_desc_paddr + pmoff;
+        let tx = &*(tx_vaddr as *const [TxDesc; NUM_DESC]);
+        tx[idx].status & TX_DESC_DONE != 0 || tx[idx].buffer_addr == 0
+    }
 }

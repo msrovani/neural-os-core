@@ -478,6 +478,54 @@ async fn intent_router_daemon() {
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
+                hermes::Command::Fetch(ref url) => {
+                    let parsed: Option<([u8; 4], u16, alloc::string::String)> = {
+                        let url_str = url.trim();
+                        if let Some(rest) = url_str.strip_prefix("http://") {
+                            let without_slash = if let Some(pos) = rest.find('/') {
+                                let (hp, p) = rest.split_at(pos);
+                                (hp, alloc::string::ToString::to_string(p))
+                            } else {
+                                (rest, alloc::string::String::from("/"))
+                            };
+                            let (host_str, path) = without_slash;
+                            let (host_only, port) = if let Some(pos) = host_str.find(':') {
+                                let (h, p_str) = host_str.split_at(pos);
+                                let p: u16 = p_str[1..].parse().unwrap_or(80);
+                                (h, p)
+                            } else {
+                                (host_str, 80u16)
+                            };
+                            let parts: Vec<&str> = host_only.split('.').collect();
+                            if parts.len() == 4 {
+                                let ip = [
+                                    parts[0].parse().unwrap_or(0),
+                                    parts[1].parse().unwrap_or(0),
+                                    parts[2].parse().unwrap_or(0),
+                                    parts[3].parse().unwrap_or(0),
+                                ];
+                                Some((ip, port, path))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    match parsed {
+                        Some((host_ip, port, path)) => {
+                            match unsafe { crate::net::http_get(host_ip, port, &path) } {
+                                Some(body) => {
+                                    let text = core::str::from_utf8(&body).unwrap_or("(binary)");
+                                    let preview = if text.len() > 200 { &text[..200] } else { text };
+                                    alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
+                                }
+                                None => String::from("Fetch falhou: sem resposta"),
+                            }
+                        }
+                        None => String::from("Formato: /fetch http://ip:port/path (DNS numerico apenas)"),
+                    }
+                }
                 hermes::Command::Usage => {
                     let snap = USAGE_TRACKER.lock().snapshot();
                     alloc::format!(
@@ -506,7 +554,7 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent_id = INTENT_MLP.classify(msg);
