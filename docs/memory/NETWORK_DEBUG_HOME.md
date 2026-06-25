@@ -51,6 +51,14 @@ Mesmo com TDT corrigido, TPT stays 0. Evidências:
 4. Verificar se o buffer_addr no descritor é válido (físico < 4 GB)
 5. Adicionar debug no QEMU monitor: `info qtree` para ver status do e1000
 6. Testar com smp=1 (evita race conditions do TCG multi-core)
+7. **Adicionar debug no QEMU:** `-d int,cpu_reset,guest_errors` para capturar se há erros internos
+
+### Testado sem sucesso
+- TX desc status = 0 (DD=0): mesma coisa, TPT=0, TDH avança, len=42
+- TX desc status = DD=1: mesma coisa, TPT=0, TDH avança, len=42
+- Conclusão: QEMU NÃO depende do bit DD para TX. O descritor é lido independentemente.
+- Suspeita atual: QEMU lê o descritor, tenta transmitir, mas o backend (slirp) rejeita.
+- Próximo passo: usar `-trace e1000\*` para ver exatamente onde o TX falha.
 
 ## Arquivos Modificados
 
