@@ -6,6 +6,139 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.20.2] — 2026-06-25 — Network Sprint: e1000 Fixes + Neural Architecture
+
+### Fixed
+
+- **e1000 TDT write protocol** — `send()` escrevia REG_TDT = idx, mas com TDH=0 ambos iguais → ring empty. Corrigido: TDT = (idx+1) % NUM_DESC.
+- **NUM_DESC aumentado 32→48** — 82540EM requer mínimo 48 descritores RX (Linux e1000 driver docs).
+- **RXDCTL PTHRESH 0→8** — Prefetch threshold zero impedia RX de receber pacotes. Linux driver recomenda PTHRESH=8.
+- **Ordem init RX** — RCTL.EN agora escrito antes de RDT (Intel spec).
+- **Offsets estatísticas corrigidos** — TPT=0x0400C, TPR=0x04010 (não 0x10C0/0x1080).
+- **SMP desabilitado até segunda ordem** — SMP multi-core com `-smp 4` instável no QEMU TCG.
+
+### Added
+
+- **Arquitetura Neural de Rede** — init_driver_network() mínimo + network_bootstrap() com ARP periódico/hlt + network_health_daemon() async.
+- **Debug methods** — debug_mmio_read(), debug_rx_desc(), debug_tx_desc() no e1000 driver.
+- **EventBus HW_NET_E1000** — publicado quando e1000 é detectado.
+- **Arquivo `NETWORK_DEBUG_HOME.md`** — relatório completo para continuar debug em casa.
+
+### Changed
+
+- Network discovery agora é neural: hardware → evento → daemon → skill.
+- `/ping`, `/fetch`, `/netdiag` roteados pelo MLP.
+- IP configurado antes do ARP (SPA válido nas requisições).
+- `cargo check --release`: 0 erros, ~35 warnings
+
+## [0.20.1] — 2026-06-25 — e1000 DMA Fix + /ping Command
+
+### Fixed
+
+- **e1000 Page Fault** — `allocate_contiguous()` começava do bit 0, alocando frames físicos < 1 MB não mapeados pelo bootloader. Corrigido para iniciar de `next_free_bit`, evitando a região não mapeada. Root cause: bootloader `map_physical_memory` só mapeia regiões `Usable` da UEFI; frames 2-159 (usados para trampoline SMP) não estão no mapa virtual.
+- **DHCP removido (temporário)** — Spin loops no QEMU TCG não dão tempo para o slirp processar I/O. IP estático 10.0.2.15 + gateway MAC hardcoded 52:54:00:12:34:56.
+
+### Added
+
+- **Comando `/ping <ip>`** — ICMP Echo Request via e1000. `net::ping()` usa `icmp_echo_request` + `parse_icmp_reply` existentes. Help atualizado.
+
+### Changed
+
+- `src/memory.rs` — `allocate_contiguous()`: `i = 0` → `i = self.next_free_bit`
+- Debug prints removidos de `e1000.rs` e `net.rs`
+- DHCP/DNS funções marcadas `#[allow(dead_code)]`
+- `cargo check --release`: 0 erros, 35 warnings
+- Boot QEMU validado: e1000 Init OK, executor 11000+ ticks estável
+
+## [0.20.0] — 2026-06-25 — Sprint 23: Hermes Governance & Agent Memory
+
+### Added
+
+- **#228 Tool Policy Registry** — `SkillRegistry.set_policy()` / `get_policy()` with per-skill `{ enabled, autoApprove }` and `"*"` wildcard fallback. `execute_skill` now gates on `enabled`; `auto_approve` bypasses token validation.
+- **#229 Usage Tracker** — `UsageTracker` global with `record_call()`, `snapshot()`, `to_metrics_tensor()`. Tracks per-skill call counts and exec time. Accessible via `/usage` Hermes command.
+- **#230 Auto-Compact Hermes Buffer** — `ConversationTracker` auto-compacts conversation after 3 cycles. Summary logged to serial on compact.
+- **#231 Event-Sourced Conversation** — `EventLog` with `VecDeque<ConversationEvent>` (max 256), push/iter/summarize. Events recorded for UserInput and HermesResponse. Query via `/conv` Hermes command.
+- New Hermes commands: `/usage`, `/conv`
+- Help updated to include all new commands
+- `cargo check --release`: 0 errors
+- Version bump: v0.19.0 → v0.20.0
+
+## [0.19.0] — 2026-06-25 — 🏁 "Hermes Awakening" Milestone
+
+### Milestone: Ecosystem Analysis Complete (Tiers 0-4)
+
+- **136 repositories analyzed** across 5 tiers (Crom 75, Life OS 20, PAI 21, Memory 14, Agent Frameworks 6)
+- **249 ideas cataloged** in IDEA_BANK.md, all with status and sprint assignment
+- **5 Architecture Decision Records** created (ADRs 0020-0024)
+- Documentation chain fully reviewed and repaired: README.md, SUMMARY.md, roadmap.md, ADR-0015, CHANGELOG.md — all consistent
+- **99 portable patterns** extracted — from XOR Delta (50 LOC) to Cline AgentRuntime (850 LOC patterns)
+- **Key findings confirmed:** Hermes daemon architecture mirrors industry best practices (hook lifecycle, skill registry, event bus, trust cache)
+- **Phase transition:** Research → Implementation. Next: Sprint 23 (Network + Tool Policy + Usage Tracker + Event-Sourced Conversation)
+- Version bump: v0.18.4 → v0.19.0
+
+## [0.18.4] — 2026-06-25
+
+### Added (Tier 4 Agent Frameworks Analysis — ADR-0024)
+
+- **ADR-0024** — Comprehensive analysis of 6 Agent Frameworks repos (Tier 4)
+- **Deep-dive: Cline** (63.9k ★, 293 releases, 6,338 commits) — AgentRuntime, ClineCore, CronRunner source read
+- **22 new IDEA_BANK items** (#228-249), classified by complexity:
+  - **Sprint 23 (immediate):** Tool Policy Registry (#228), Usage Tracker (#229), Auto-Compact Buffer (#230), Event-Sourced Conversation (#231)
+  - **Sprint 24 (low):** Cron Scheduler (#232), Session Checkpoint (#233), Plan/Execute Modes (#234), Graph Orchestration (#235)
+  - **Sprint 25 (medium):** Plugin Hub (#236), Completion Terminal Skills (#237), Claim-Based Lease (#238), Time Travel (#239), Context Compaction (#240)
+  - **Sprint 26+ (high):** Observability (#241), AI Security Scan (#242), Hub Discovery (#243), Human-in-the-Loop (#244)
+  - **Future:** 3 items (#245-247)
+  - **Discarded:** 2 items (#248-249 — Docker, Python/.NET)
+- **Key portable patterns:** Hook lifecycle (7 points), Tool policies (wildcard + per-tool), Claim-based scheduling with lease heartbeat, Session checkpoint/restore, Event-sourced conversation
+- **IDEA_BANK.md** updated to **249 total items**
+- **AGENTS.md** updated with Sprint 23 reference patterns
+- **Documentation review:** README.md, SUMMARY.md, roadmap.md, ADR-0015 — all updated for 249 items
+- **SESSION_025.md** created
+- Version bump: v0.18.3 → v0.18.4
+
+## [0.18.3] — 2026-06-25
+
+### Added (Tier 3 Memory Systems Analysis — ADR-0023)
+
+- **ADR-0023** — Comprehensive analysis of 14 Memory Systems repos (Tier 3)
+- **Deep-dive: agentmemory** (24k ★, 60+ source files) — SHA-256 dedup, Privacy filter, BM25+Vector+Graph hybrid search, 4-tier consolidation
+- **Deep-dive: nexo** (cognitive memory) — Atkinson-Shiffrin 3-tier, Ebbinghaus decay, trust scoring, metacognitive guard
+- **14 new IDEA_BANK items** (#214-227), classified by complexity
+- Key portable: SHA-256 dedup (~50 LOC), Ebbinghaus decay (~20 LOC), TTL eviction (~40 LOC) — all no_std Rust
+- **IDEA_BANK.md** updated to 227 items
+
+## [0.18.2] — 2026-06-25
+
+### Added (Tier 2 PAI Ecosystem Analysis — ADR-0022)
+
+- **ADR-0022** — Comprehensive analysis of 21 Personal AI Assistant repos (Tier 2)
+- Deep-dives: OpenClaw (380k ★, Rust), Hermes Agent (202k ★), Lethe (Rust brain-inspired), ZeroClaw (32k ★, Rust)
+- **15 new IDEA_BANK items** (#199-213)
+- Key portable: Skill Metadata, Audit Ring, Awakening Mode, Context Fencing, Tool Permissions, Lifecycle Hooks
+
+### Added (Tier 1 Life OS Analysis — ADR-0021)
+
+- **ADR-0021** — Comprehensive analysis of 20 Life OS repos
+- **13 new IDEA_BANK items** (#177-189)
+- Key portable: Spectrum Graph, Runtime SDD, FS as Context, Temporal KG, AppForge, WASM Sandbox
+
+## [0.18.1] — 2026-06-24
+
+### Added (Crom Ecosystem Analysis — ADR-0020 + Ed25519 Identity)
+
+- **ADR-0020** — Comprehensive Rust viability analysis of MrJc01's Crom ecosystem (75 repos)
+- **9 actionable items** with `no_std` Rust code models, classified by complexity:
+  - **Sprint 24 (immediate):** XOR Delta reconstruction (#164), CDC Rabin Fingerprint (#165)
+  - **Sprint 27 (low):** Multi-mode Trust (#166), TV-DSL Co-processor (#167), PonderNet (#168)
+  - **Sprint 28 (medium):** Codebook VQ (#169), KV Cache Codebook (#170), ReAct loop (#171), MCP Server (#172)
+- **3 future items** (#173-175): Codebook LLM finetune, Delta branches, Workspace isolation
+- **~1,780 LOC kernel** + **~300 LOC Python** total for all 9 features
+- **Disposições:** gRPC, FUSE, Firecracker VMs, Verbo language, Crom-Pet, Active Inference — descartados como inviáveis
+- **#176 — Ed25519 Cryptographic Identity** for TrustCache: upgrades static `CapabilityToken(u64)` to real Ed25519 signing (Crom-meueu port). ~300 LOC, Sprint 27, depends on #166 Multi-mode Trust
+- IDEA_BANK.md updated with ADR-0020 reference in section 1.23 + item #176
+- SESSION_024.md created with full session narrative
+- Version bump: v0.18.0 → v0.18.1
+
 ## [0.18.0] — 2026-06-24
 
 ### Planned (Sprint 24+ — Neural Cortex BitNet LLM Integration)

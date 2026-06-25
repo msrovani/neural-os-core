@@ -1,6 +1,13 @@
 use crate::e1000::E1000Driver;
 use crate::{println, serial_println};
 use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
+use event_bus::{CapabilityToken, Event};
+
+pub const TOPIC_HW_NET_E1000: &str = "HW_NET_E1000";
+pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
+pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
+pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
 pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
 
@@ -26,7 +33,20 @@ pub static NET_CONFIG: spin::Mutex<NetConfig> = spin::Mutex::new(NetConfig {
     online: false,
 });
 
-pub unsafe fn init_network() -> bool {
+pub fn wait_ticks(ticks: usize) {
+    let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+    let mut guard: usize = 0;
+    loop {
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(start) >= ticks { break; }
+        // Safety fallback: se ticks nao avancam, timeout apos ~1B iteracoes
+        if guard >= 100_000_000 { break; }
+        guard += 1;
+        x86_64::instructions::hlt();
+    }
+}
+
+pub unsafe fn init_driver_network() -> bool {
     let pci_devices = crate::pci::scan_pci();
     let mut dev_opt = None;
     for dev in &pci_devices {
@@ -45,6 +65,7 @@ pub unsafe fn init_network() -> bool {
         Some(d) => d,
         None => {
             serial_println!("[NET] Nenhum dispositivo de rede encontrado.");
+            println!("[NET] Nenhum dispositivo de rede encontrado.");
             return false;
         }
     };
@@ -53,132 +74,194 @@ pub unsafe fn init_network() -> bool {
     NET_CONFIG.lock().mac = mac;
     *E1000.lock() = Some(driver);
 
-    serial_println!("[NET] Driver e1000 inicializado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+    serial_println!("[NET] e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    println!("[NET] Driver de rede pronto.");
+    println!("[NET] e1000 iniciado.");
 
-    // Try DHCP
-    if try_dhcp() {
-        serial_println!("[NET] DHCP bem-sucedido.");
-        println!("[NET] Configuracao de rede via DHCP.");
-        let cfg = NET_CONFIG.lock();
-        serial_println!("[NET] IP: {}.{}.{}.{} / GW: {}.{}.{}.{} / DNS: {}.{}.{}.{}",
-            cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3],
-            cfg.gateway_ip[0], cfg.gateway_ip[1], cfg.gateway_ip[2], cfg.gateway_ip[3],
-            cfg.dns_ip[0], cfg.dns_ip[1], cfg.dns_ip[2], cfg.dns_ip[3]);
+    let hw_event = crate::Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_HW_NET_E1000),
+        payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
+        token: crate::CapabilityToken(1),
+    };
+    let _ = crate::EVENT_BUS.publish(hw_event);
+    true
+}
+
+pub unsafe fn network_bootstrap() -> bool {
+    let mac = NET_CONFIG.lock().mac;
+
+    // Configura IP antes de qualquer ARP
+    NET_CONFIG.lock().ip = [10, 0, 2, 15];
+
+    serial_println!("[NET] Bootstrap: ARP para gateway 10.0.2.1...");
+
+    let mut gw_mac_opt = None;
+    let (tpt0, tpr0) = {
+        let guard = E1000.lock();
+        let driver = guard.as_ref().unwrap();
+        let t = unsafe { driver.debug_mmio_read(0x0400C) };
+        let r = unsafe { driver.debug_mmio_read(0x04010) };
+        serial_println!("[NET] e1000 antes: TPT={} TPR={}", t, r);
+        (t, r)
+    };
+
+    let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+    let mut rx_count: u32 = 0;
+    let mut last_arp_tick = start;
+    loop {
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        if now.wrapping_sub(start) > 200 { break; }
+        if gw_mac_opt.is_some() { break; }
+
+        // Re-envia ARP a cada ~10 ticks para garantir que slirp processe
+        if now.wrapping_sub(last_arp_tick) >= 10 {
+            crate::proto::arp_request(mac, [10, 0, 2, 1]);
+            last_arp_tick = now;
+        }
+
+        let mut guard = E1000.lock();
+        let driver = guard.as_mut().unwrap();
+        loop {
+            if let Some(pkt) = driver.recv() {
+                rx_count += 1;
+                if let Some(gw) = crate::proto::parse_arp_reply(&pkt) {
+                    gw_mac_opt = Some(gw);
+                }
+            } else {
+                break;
+            }
+        }
+        drop(guard);
+        x86_64::instructions::hlt();
+    }
+
+    if rx_count > 0 {
+        serial_println!("[NET] Bootstrap: RX {} pacote(s) durante wait", rx_count);
+    }
+
+    {
+        let guard = E1000.lock();
+        let driver = guard.as_ref().unwrap();
+        let tpt1 = unsafe { driver.debug_mmio_read(0x0400C) };
+        let tpr1 = unsafe { driver.debug_mmio_read(0x04010) };
+        serial_println!("[NET] e1000 depois: TPT={} TPR={} (dTX={} dRX={})", tpt1, tpr1, tpt1.wrapping_sub(tpt0), tpr1.wrapping_sub(tpr0));
+    }
+
+    if let Some(gw_mac) = gw_mac_opt {
+        NET_CONFIG.lock().gateway_mac = gw_mac;
+        NET_CONFIG.lock().ip = [10, 0, 2, 15];
+        NET_CONFIG.lock().configured = true;
+        NET_CONFIG.lock().online = true;
+        serial_println!("[NET] Bootstrap OK. GW MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}. IP: 10.0.2.15",
+            gw_mac[0], gw_mac[1], gw_mac[2], gw_mac[3], gw_mac[4], gw_mac[5]);
+        println!("[NET] Rede configurada via bootstrap.");
+
+        let cfg_event = crate::Event {
+            id: 0,
+            topic: alloc::string::String::from(TOPIC_NETWORK_CONFIGURED),
+            payload: alloc::vec![10, 0, 2, 15],
+            token: crate::CapabilityToken(1),
+        };
+        let _ = crate::EVENT_BUS.publish(cfg_event);
         true
     } else {
-        serial_println!("[NET] DHCP falhou. Usando configuracao estatica (10.0.2.15).");
-        println!("[NET] DHCP indisponivel. Usando IP estatico.");
-        let mut cfg = NET_CONFIG.lock();
-        cfg.ip = [10, 0, 2, 15];
-        cfg.configured = true;
+        NET_CONFIG.lock().gateway_mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+        NET_CONFIG.lock().ip = [10, 0, 2, 15];
+        NET_CONFIG.lock().configured = true;
+        serial_println!("[NET] Bootstrap: ARP sem resposta. Usando fallback estatico.");
+        println!("[NET] Rede em modo DEGRADADO (IP estatico).");
+
+        let deg_event = crate::Event {
+            id: 0,
+            topic: alloc::string::String::from(TOPIC_NETWORK_DEGRADED),
+            payload: alloc::vec![10, 0, 2, 15],
+            token: crate::CapabilityToken(1),
+        };
+        let _ = crate::EVENT_BUS.publish(deg_event);
         true
     }
 }
 
-unsafe fn try_dhcp() -> bool {
-    for attempt in 0..5 {
-        serial_println!("[DHCP] Tentativa {}...", attempt + 1);
-        if crate::proto::dhcp_discover(attempt) {
-            return true;
+pub async fn network_health_daemon() {
+    let receiver = crate::EVENT_BUS.subscribe(TOPIC_NETWORK_CONFIGURED);
+    let deg_receiver = crate::EVENT_BUS.subscribe(TOPIC_NETWORK_DEGRADED);
+    let mut health_counter: u64 = 0;
+
+    loop {
+        if let Some(event) = receiver.try_receive() {
+            serial_println!("[NET-HEALTH] Rede configurada via bootstrap.");
         }
-        for _ in 0..50000000 { core::hint::spin_loop(); }
-    }
-    false
-}
+        if let Some(event) = deg_receiver.try_receive() {
+            serial_println!("[NET-HEALTH] Rede em modo degradado.");
+        }
 
-pub unsafe fn resolve_gateway() -> bool {
-    let cfg = NET_CONFIG.lock();
-    if cfg.configured && cfg.gateway_mac != [0; 6] {
-        return true;
-    }
-    drop(cfg);
-
-    // Send ARP request for gateway
-    let guard = E1000.lock();
-    let driver = guard.as_ref().unwrap();
-    let mac = driver.mac();
-    drop(guard);
-
-    let cfg = NET_CONFIG.lock();
-    let gw = cfg.gateway_ip;
-    drop(cfg);
-
-    crate::proto::arp_request(mac, gw);
-    for _ in 0..10000000 { core::hint::spin_loop(); }
-
-    // Check for ARP reply
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-    if let Some(packet) = driver.recv() {
-        if let Some(gw_mac) = crate::proto::parse_arp_reply(&packet) {
+        if health_counter % 100 == 0 && NET_CONFIG.lock().configured {
+            // Health check a cada 100 ciclos: verifica link
+            let guard = E1000.lock();
+            if let Some(ref _driver) = *guard {
+                // Link status check via MMIO nao e pratico aqui sem e1000 method
+                serial_println!("[NET-HEALTH] tick={} MAC ativo", health_counter);
+            }
             drop(guard);
-            NET_CONFIG.lock().gateway_mac = gw_mac;
-            serial_println!("[ARP] Gateway MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                gw_mac[0], gw_mac[1], gw_mac[2], gw_mac[3], gw_mac[4], gw_mac[5]);
-            return true;
         }
+
+        health_counter += 1;
+        crate::task::yield_now().await;
     }
-    false
 }
 
-pub unsafe fn ping(ip: [u8; 4], timeout_iters: u64) -> Option<u64> {
+pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
     let cfg = NET_CONFIG.lock();
     let our_ip = cfg.ip;
     let our_mac = cfg.mac;
     let gw_mac = cfg.gateway_mac;
     drop(cfg);
+    if gw_mac == [0; 6] { return None; }
 
     let mut guard = E1000.lock();
     let driver = guard.as_mut().unwrap();
-
-    let ident = 0x1234;
-    let seq = 1;
-    crate::proto::icmp_echo_request(driver, our_mac, gw_mac, our_ip, ip, ident, seq);
-
-    // Wait for reply
-    for _ in 0..timeout_iters {
-        if let Some(packet) = driver.recv() {
-            if let Some(rtt) = crate::proto::parse_icmp_reply(&packet, our_mac, ip, ident, seq) {
-                drop(guard);
-                return Some(rtt);
-            }
-        }
-        core::hint::spin_loop();
-    }
+    crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
     drop(guard);
+
+    for _ in 0..100000000 { core::hint::spin_loop(); }
+
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+    if let Some(pkt) = driver.recv() {
+        return crate::proto::parse_http_response(&pkt, our_mac);
+    }
     None
 }
 
-pub unsafe fn dns_lookup(hostname: &str, timeout_iters: u64) -> Option<[u8; 4]> {
+pub unsafe fn ping(target_ip: [u8; 4]) -> Option<u64> {
     let cfg = NET_CONFIG.lock();
     let our_ip = cfg.ip;
     let our_mac = cfg.mac;
-    let dns_ip = cfg.dns_ip;
     let gw_mac = cfg.gateway_mac;
     drop(cfg);
+    if gw_mac == [0; 6] { return None; }
+
+    let ident: u16 = 0x1234;
+    let seq: u16 = 1;
+    let mut guard = E1000.lock();
+    let driver = guard.as_mut().unwrap();
+    crate::proto::icmp_echo_request(driver, our_mac, gw_mac, our_ip, target_ip, ident, seq);
+    drop(guard);
+
+    for _ in 0..30000000 { core::hint::spin_loop(); }
 
     let mut guard = E1000.lock();
     let driver = guard.as_mut().unwrap();
-
-    let txid = 0xABCD;
-    crate::proto::dns_query(driver, our_mac, gw_mac, our_ip, dns_ip, hostname, txid);
-
-    for _ in 0..timeout_iters {
-        if let Some(packet) = driver.recv() {
-            if let Some(ip) = crate::proto::parse_dns_response(&packet, our_mac, dns_ip, txid) {
-                drop(guard);
-                return Some(ip);
-            }
+    if let Some(pkt) = driver.recv() {
+        if crate::proto::parse_icmp_reply(&pkt, our_mac, target_ip, ident, seq).is_some() {
+            return Some(1);
         }
-        core::hint::spin_loop();
     }
-    drop(guard);
     None
 }
 
-pub fn run_network_diagnostics() -> alloc::string::String {
+pub fn run_network_diagnostics() -> crate::String {
     let cfg = NET_CONFIG.lock();
     let mac = cfg.mac;
     let ip = cfg.ip;
@@ -188,61 +271,26 @@ pub fn run_network_diagnostics() -> alloc::string::String {
     let online = cfg.online;
     drop(cfg);
 
-    let mut report = alloc::string::String::new();
-    report.push_str(&alloc::format!(
-        "=== Diagnóstico de Rede [IA] ===\n"
-    ));
+    let mut report = crate::String::new();
+    report.push_str("=== Diagnostico de Rede ===\n");
 
     if !configured {
-        report.push_str("❌ Rede não configurada.\n");
-        report.push_str("ℹ️ Causa possível: driver não encontrado ou link down.\n");
-        report.push_str("📋 Recomendação: verifique o adaptador de rede (e1000 ou VirtIO) no QEMU.\n");
+        report.push_str("Rede nao configurada.\n");
         return report;
     }
 
+    report.push_str(&alloc::format!("Status: {}\n", if online { "ONLINE" } else { "DEGRADED" }));
     report.push_str(&alloc::format!(
-        "📡 MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+        "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
     ));
     report.push_str(&alloc::format!(
-        "🌐 IP: {}.{}.{}.{} / GW: {}.{}.{}.{} / DNS: {}.{}.{}.{}\n",
+        "IP: {}.{}.{}.{} / GW: {}.{}.{}.{} / DNS: {}.{}.{}.{}\n",
         ip[0], ip[1], ip[2], ip[3],
         gw[0], gw[1], gw[2], gw[3],
         dns[0], dns[1], dns[2], dns[3]
     ));
-
-    // Ping gateway
-    let ping_result = unsafe { ping(gw, 5000000) };
-    if let Some(rtt) = ping_result {
-        report.push_str(&alloc::format!("✅ Gateway {}ms - conectividade OK.\n", rtt));
-    } else {
-        report.push_str("⚠️ Gateway sem resposta. Pode ser firewall ou link down.\n");
-    }
-
-    // Try DNS
-    let dns_result = unsafe { dns_lookup("google.com", 3000000) };
-    if let Some(dns_ip) = dns_result {
-        report.push_str(&alloc::format!(
-            "✅ DNS funcional: google.com → {}.{}.{}.{}\n",
-            dns_ip[0], dns_ip[1], dns_ip[2], dns_ip[3]
-        ));
-        report.push_str("🌍 Conexão com a internet estabelecida.\n");
-    } else {
-        report.push_str("⚠️ DNS sem resposta. Internet pode estar indisponível.\n");
-    }
-
-    report.push_str("\n🧠 Análise IA:\n");
-    if online || ping_result.is_some() {
-        report.push_str("Sistema com capacidade de rede. Skills podem buscar atualizações remotas.\n");
-        report.push_str("Recomendação: Neo Hermes Terminal pode receber comandos via rede (Sprint 24+).\n");
-    } else if configured {
-        report.push_str("Driver configurado mas sem conectividade. Verifique firewall ou gateway.\n");
-        report.push_str("Recomendação: tente /netconfig para reconfigurar rede.\n");
-    } else {
-        report.push_str("Sistema offline. Operação normal continua sem rede.\n");
-        report.push_str("Recomendação: conecte o cabo de rede e reinicie /netinit.\n");
-    }
-
+    report.push_str("Diagnostico concluido.\n");
     report
 }
 

@@ -1,3 +1,9 @@
+# ═══════════════════════════════════════════════
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.2
+#   Network Sprint: e1000 Fixes + Neural Architecture
+#   TDT fix · NUM_DESC 48 · PTHRESH 8 · Neural Network
+# ═══════════════════════════════════════════════
+
 # Role and Purpose
 You are a Senior Systems and AI Engineer specializing in bare-metal Rust development, microkernel architecture, and neural inference orchestration. You are developing "neural-os-core", an AI Operating System (AIOS) from scratch.
 
@@ -57,7 +63,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-# Project Summary — neural-os-core v0.17.0
+# Project Summary — neural-os-core v0.20.2
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -68,7 +74,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - All output to both VGA (QEMU window) and serial (host terminal)
 - ADR + session log documentation protocol
 - Windows toolchain with MinGW-w64 linker
-- Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
+- Every sprint: `cargo check --release` (0 errors) + QEMU boot. Dead-code/unused warnings are EXPECTED per Known Warnings Policy (currently ~35).
 
 ## 21 Sprints Complete
 
@@ -134,6 +140,10 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 `hermes.rs` — `IntentMlp` with real MLP forward pass: 16-word bag-of-words encoding → Linear(16→8) → SiLU → Linear(8→3) → argmax. Hand-crafted weights for 3 intents (chat=0, status=1, echo=2). `parse_command()` — multi-word parser: `/status`, `/echo <text>`, `/help`. scancode table expanded with digits 0-9 and punctuation. `intent_router_daemon` upgraded from mock string-contains to real MLP + command dispatch + `HERMES_RESPONSE` EventBus topic. New `hermes_console_daemon` subscribes and displays `[Hermes]` responses on VGA+serial. 6 async tasks in executor.
 
 ### Sprint 21 (v0.16.0) — MHI + Inventory + SystemArchitecture (Block 4)
+
+### Sprint 22 (v0.17.0) — Skills + Trust Cache + LAPIC Timer Fix (Block 5)
+
+`trust.rs` — `TrustCache` with `trust_allow()` (permanent), `trust_deny()` (revoke + denylist), `is_trusted()` (TTL-aware), `check_or_cache()` (auto-cache 20s). `HardwareInfoSkill` — exposes SystemArchitecture + MHI tiers via `/hw` command. `SystemStatusSkill` upgraded to read MHI tiers for per-tier free RAM reporting. `SkillRegistry` expanded: `has_skill()`, `validate_token()`, `execute_skill_unchecked()`. New Hermes commands: `/trust allow <token> <skill>`, `/trust deny <token> <skill>`, `/hw`. `execute_skill_with_trust()` helper. **Timer fix:** PIT via IOAPIC não funcionava (IOAPIC MMIO mapeado WB). Solução: `Lapic::start_timer()` com LAPIC timer (vetor 32, count=8,388,608, periodic). IOAPIC redirect mantido só para keyboard (vetor 33). `set_page_uc()` com suporte a 2 MiB/1 GiB huge pages. Boot QEMU validado: 171 ticks em busy wait, pipeline completo EchoSkill + Watchdog 2100+ ticks. Global statics: `SYSTEM_ARCH`, `MEMORY_HIERARCHY`, `TRUST_CACHE`. Version v0.16.0 → v0.17.0.
 `mhi.rs` — `AllocTier` enum (Dram/Vram/Nvme/Hdd), `MemoryTier` struct, `MemoryHierarchy::new()` auto-creates Dram tier from bitmap allocator, `alloc_by_tier(Dram)` allocates contiguous physical frames. `inventory.rs` — `HardwareInventory::collect()` gathers CPU, RAM, PCI devices; `SystemArchitecture::infer()` rule-based heuristics (GPU→ring1, RAM→heap, cores→power). Boot flow: PCI scan → collect → infer → log → MHI init → executor. **IOAPIC mask bug fixed:** `redirect_irq()` no longer sets bit 16 (MASK), allowing timer/keyboard interrupts to reach the BSP. Without this fix, `hlt()` never woke and the executor stalled after 1 poll cycle. Debugged via `-d int,cpu_reset,guest_errors` + serial `IOAPIC redirection[0]: low=0x00010000`.
 
 ### Sprint 22 (v0.17.0) — Skills + Trust Cache + LAPIC Timer Fix (Block 5)
@@ -271,4 +281,51 @@ When a user mentions a Rust crate or library feature not in Context7, search **c
 2. Pick the best match (ID format: `/org/project`) by: exact name match, description relevance, code snippet count, source reputation (High/Medium preferred), and benchmark score (higher is better). If results don't look right, try alternate names or queries (e.g., "next.js" not "nextjs", or rephrase the question). Use version-specific IDs when the user mentions a version
 3. `query-docs` with the selected library ID and the user's full question (not single words)
 4. Answer using the fetched docs
+
+# Ecosystem Analysis Reference (Tiers 0-5 Complete, 141 repos, 111 ideias)
+
+## Key Portable Patterns from Agent Frameworks (Tier 4)
+
+When implementing Hermes daemon features, reference these patterns from Cline (63.9k ★):
+
+### AgentRuntime Pattern (Cline)
+- **Hook lifecycle**: 7 hook points — beforeRun, afterRun, beforeModel, afterModel, beforeTool, afterTool, onEvent
+- **Tool policies**: `{ enabled: bool, autoApprove: bool }` per tool with wildcard `"*"` fallback
+- **Completion terminal tools**: `lifecycle.completesRun` marks terminal skills  
+- **Turn-based iteration**: `maxIterations` guard, inner loop: generate → parse → execute → check
+- **Streaming tool assembly**: Accumulates JSON arguments, reports parse errors, merges metadata
+
+### CronRunner Pattern (Cline)
+- **Claim-based scheduling**: Atomic claim with lease heartbeat, prevents double-execution
+- **Resource limiter**: Per-spec maxParallel concurrency
+- **Timeout handling**: spec.timeoutSeconds → withTimeout → abort → mark failed
+- **Report generation**: Markdown reports per run
+
+### Event-Sourced Conversation (OpenHands)
+- **Immutable event log**: `VecDeque<ConversationEvent { type, payload, timestamp }>` — pause, resume, fork, replay
+- **Agent as pure function**: `f(history) -> next event`
+
+### Other Portable Patterns
+- **Ebbinghaus decay** (Tier 3): ~20 LOC formula for memory decay
+- **SHA-256 dedup** (Tier 3): ~50 LOC for content-based deduplication (5-min window)
+- **Auto-compact** (opencode/Crush): Summarize buffer when approaching context limit
+- **Graph orchestration** (MS Agent): sequential/concurrent/handoff between daemons
+- **Plugin Hub** (Agent Zero): Remote MCP index with AI-driven security scanning
+
+## Tier 3b — Security, Sandbox & Filesystem (ADR-0025, 5 repos, complete)
+**Repo URLs for future reference:**
+- https://github.com/InnerWarden/innerwarden — 159★, 2057 commits, 7900+ tests — eBPF safety, 82 detectors, 69 correlation rules, knowledge graph
+- https://github.com/akitaonrails/ai-jail — 595★ — Multi-OS sandbox wrapper: bwrap + Landlock + seccomp
+- https://github.com/lspecian/vexfs — 24★ — Linux kernel-native vector search filesystem (FUSE + API + Dashboard)
+- https://github.com/ckanthony/Chisel — 12★ — Rust file tools with kernel-enforced path confinement
+- https://github.com/cori-do/cori-kernel — 17★ — Safe kernel principles for AI agents
+
+### 12 portable patterns → 7 viable Sprints 24-27 (~1310 LOC), 3 future Sprint 28+, 6 discarded.
+Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
+
+## Sprint 23 (Immediate) Items
+- #228 Tool Policy Registry (~80 LOC) — SkillRegistry `{ enabled, autoApprove }`
+- #229 Usage Tracker (~50 LOC) — metrics accumulator for hardware_context_tensor()
+- #230 Auto-Compact Hermes Buffer (~60 LOC) — summarize_context after 3+ cycles
+- #231 Event-Sourced Conversation (~100 LOC) — VecDeque<ConversationEvent>
 <!-- context7 -->

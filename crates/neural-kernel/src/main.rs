@@ -33,6 +33,8 @@ mod serial;
 mod simd;
 mod task;
 mod tensor;
+mod usage;
+mod conversation;
 mod vga_buffer;
 mod e1000;
 mod net;
@@ -133,12 +135,16 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
         reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
         reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
+        reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         spin::Mutex::new(reg)
     };
     static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
     static ref TRUST_CACHE: spin::Mutex<trust::TrustCache> = spin::Mutex::new(trust::TrustCache::new());
     static ref SYSTEM_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
     static ref MEMORY_HIERARCHY: spin::Mutex<Option<mhi::MemoryHierarchy>> = spin::Mutex::new(None);
+    static ref USAGE_TRACKER: spin::Mutex<usage::UsageTracker> = spin::Mutex::new(usage::UsageTracker::new());
+    static ref EVENT_LOG: spin::Mutex<conversation::EventLog> = spin::Mutex::new(conversation::EventLog::new());
+    static ref CONVERSATION_TRACKER: spin::Mutex<hermes::ConversationTracker> = spin::Mutex::new(hermes::ConversationTracker::new());
 }
 
 #[panic_handler]
@@ -305,16 +311,19 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     *SYSTEM_ARCH.lock() = Some(arch);
     *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
 
-    unsafe { net::init_network(); }
+    // Fase 1: driver e1000 (non-blocking)
+    let net_avail = unsafe { net::init_driver_network() };
+    if net_avail {
+        // Fase 2: bootstrap de rede (blocking com hlt, timeout ~200 ticks)
+        serial_println!("[NET] Iniciando bootstrap de rede (timeout ~2s)...");
+        unsafe { net::network_bootstrap(); }
+    } else {
+        serial_println!("[NET] Sem hardware de rede. Modo offline.");
+        println!("[NET] Sem hardware de rede.");
+    }
 
-    let if_flag: u64;
-    unsafe { core::arch::asm!("pushfq; pop {}", out(reg) if_flag, options(preserves_flags)); }
-    serial_println!("[EXECUTOR] RFLAGS.IF={}", (if_flag >> 9) & 1);
-    serial_println!("[EXECUTOR] Aguardando timer (busy wait 2s)...");
-    let start_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    for _ in 0..8000000u64 { core::hint::spin_loop(); }
-    let end_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    serial_println!("[EXECUTOR] Timer ticks: antes={}, depois={}", start_ticks, end_ticks);
+    let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    serial_println!("[EXECUTOR] Timer ticks: {}", ticks);
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
     println!("[EXECUTOR] Inicializando Neural Executor...");
 
@@ -322,6 +331,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     executor.spawn(task::agent::AgentTask::new(system_daemon()));
     executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon()));
     executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));
+    executor.spawn(task::agent::AgentTask::new(net::network_health_daemon()));
     executor.spawn(task::agent::AgentTask::new(input_daemon()));
     executor.spawn(task::agent::AgentTask::new(intent_router_daemon()));
     executor.spawn(task::agent::AgentTask::new(hermes_console_daemon()));
@@ -472,6 +482,83 @@ async fn intent_router_daemon() {
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
+                hermes::Command::Fetch(ref url) => {
+                    let parsed: Option<([u8; 4], u16, alloc::string::String)> = {
+                        let url_str = url.trim();
+                        if let Some(rest) = url_str.strip_prefix("http://") {
+                            let without_slash = if let Some(pos) = rest.find('/') {
+                                let (hp, p) = rest.split_at(pos);
+                                (hp, alloc::string::ToString::to_string(p))
+                            } else {
+                                (rest, alloc::string::String::from("/"))
+                            };
+                            let (host_str, path) = without_slash;
+                            let (host_only, port) = if let Some(pos) = host_str.find(':') {
+                                let (h, p_str) = host_str.split_at(pos);
+                                let p: u16 = p_str[1..].parse().unwrap_or(80);
+                                (h, p)
+                            } else {
+                                (host_str, 80u16)
+                            };
+                            let parts: Vec<&str> = host_only.split('.').collect();
+                            if parts.len() == 4 {
+                                let ip = [
+                                    parts[0].parse().unwrap_or(0),
+                                    parts[1].parse().unwrap_or(0),
+                                    parts[2].parse().unwrap_or(0),
+                                    parts[3].parse().unwrap_or(0),
+                                ];
+                                Some((ip, port, path))
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    match parsed {
+                        Some((host_ip, port, path)) => {
+                            match unsafe { crate::net::http_get(host_ip, port, &path) } {
+                                Some(body) => {
+                                    let text = core::str::from_utf8(&body).unwrap_or("(binary)");
+                                    let preview = if text.len() > 200 { &text[..200] } else { text };
+                                    alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
+                                }
+                                None => String::from("Fetch falhou: sem resposta"),
+                            }
+                        }
+                        None => String::from("Formato: /fetch http://ip:port/path (DNS numerico apenas)"),
+                    }
+                }
+                hermes::Command::Ping(ref target) => {
+                    let parts: Vec<&str> = target.split('.').collect();
+                    if parts.len() == 4 {
+                        let ip = [
+                            parts[0].parse().unwrap_or(0),
+                            parts[1].parse().unwrap_or(0),
+                            parts[2].parse().unwrap_or(0),
+                            parts[3].parse().unwrap_or(0),
+                        ];
+                        match unsafe { crate::net::ping(ip) } {
+                            Some(_) => alloc::format!("Pong! {} -> OK", target),
+                            None => alloc::format!("Ping {} falhou: sem resposta", target),
+                        }
+                    } else {
+                        String::from("Formato: /ping <ip> (ex: /ping 10.0.2.2)")
+                    }
+                }
+                hermes::Command::Usage => {
+                    let snap = USAGE_TRACKER.lock().snapshot();
+                    alloc::format!(
+                        "Usage: {} chamadas totais, {} ticks.{}",
+                        snap.total_calls, snap.total_exec_time_ticks,
+                        snap.by_skill.iter().map(|(n, c)| alloc::format!(" {}:{}", n, c)).collect::<alloc::string::String>(),
+                    )
+                }
+                hermes::Command::Conversation => {
+                    let log = EVENT_LOG.lock();
+                    log.summarize()
+                }
                 hermes::Command::TrustAllow(token, ref skill) => {
                     let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                     {
@@ -488,7 +575,7 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent_id = INTENT_MLP.classify(msg);
@@ -516,6 +603,28 @@ async fn intent_router_daemon() {
                 }
             };
 
+            let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            USAGE_TRACKER.lock().record_call("intent_router", 1);
+            EVENT_LOG.lock().push(
+                conversation::EventKind::UserInput,
+                event.payload.clone(),
+                now,
+            );
+            EVENT_LOG.lock().push(
+                conversation::EventKind::HermesResponse,
+                response.as_bytes().to_vec(),
+                now,
+            );
+            CONVERSATION_TRACKER.lock().record_exchange(text, &response);
+            if CONVERSATION_TRACKER.lock().needs_compact() {
+                let compact_msg = CONVERSATION_TRACKER.lock().compact();
+                serial_println!("[HERMES] {}", compact_msg);
+                EVENT_LOG.lock().push(
+                    conversation::EventKind::ContextCompacted,
+                    compact_msg.into_bytes(),
+                    now,
+                );
+            }
             let resp_event = event_bus::Event {
                 id: 0,
                 topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),

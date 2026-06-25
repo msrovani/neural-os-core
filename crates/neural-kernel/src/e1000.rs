@@ -5,7 +5,7 @@ use core::ptr::{read_volatile, write_volatile};
 use alloc::vec::Vec;
 
 const E1000_VENDOR: u16 = 0x8086;
-const E1000_DEVICE: u16 = 0x100E;
+pub const E1000_DEVICE: u16 = 0x100E;
 
 const REG_CTRL: u64 = 0x0000;
 const REG_STATUS: u64 = 0x0008;
@@ -49,7 +49,7 @@ const EERD_DONE: u32 = 0x10;
 const RXDCTL_GRAN: u32 = 0x01000000;
 const TXDCTL_GRAN: u32 = 0x01000000;
 
-const NUM_DESC: usize = 32;
+const NUM_DESC: usize = 48;
 
 #[repr(C)]
 struct RxDesc {
@@ -162,14 +162,12 @@ impl E1000Driver {
         let link_up = self.r32(REG_STATUS) & STATUS_LU != 0;
         serial_println!("[E1000] Link: {}", if link_up { "UP" } else { "DOWN (forcing)" });
 
-        // Allocate RX ring
         self.rx_desc_paddr = Self::alloc_page();
         if self.rx_desc_paddr == 0 { return false; }
         let rx_desc_vaddr = self.rx_desc_paddr + pmoff;
         let rx_desc = core::slice::from_raw_parts_mut(rx_desc_vaddr as *mut RxDesc, NUM_DESC);
         for i in 0..NUM_DESC { rx_desc[i] = core::mem::zeroed(); }
 
-        // Allocate TX ring
         self.tx_desc_paddr = Self::alloc_page();
         if self.tx_desc_paddr == 0 { return false; }
         let tx_desc_vaddr = self.tx_desc_paddr + pmoff;
@@ -179,7 +177,6 @@ impl E1000Driver {
             tx_desc[i].status = TX_DESC_DONE;
         }
 
-        // Allocate RX buffers
         for i in 0..NUM_DESC {
             let buf = Self::alloc_page();
             if buf == 0 { return false; }
@@ -188,7 +185,6 @@ impl E1000Driver {
             self.rx_buf_paddrs[i] = buf;
         }
 
-        // Allocate TX buffers
         for i in 0..NUM_DESC {
             let buf = Self::alloc_page();
             if buf == 0 { return false; }
@@ -202,13 +198,12 @@ impl E1000Driver {
         self.w32(REG_RAL, mac_low32);
         self.w32(REG_RAH, mac_high16);
 
-        // Program RX ring
+        // Program RX ring base (antes de habilitar)
         self.w32(REG_RDBAL, self.rx_desc_paddr as u32);
         self.w32(REG_RDBAH, (self.rx_desc_paddr >> 32) as u32);
         self.w32(REG_RDLEN, (NUM_DESC * 16) as u32);
         self.w32(REG_RDH, 0);
-        self.w32(REG_RDT, (NUM_DESC - 1) as u32);
-        self.w32(REG_RXDCTL, 0);
+        self.w32(REG_RXDCTL, (8u32 << 16)); // PTHRESH=8 (Linux driver min)
 
         // Program TX ring
         self.w32(REG_TDBAL, self.tx_desc_paddr as u32);
@@ -218,8 +213,12 @@ impl E1000Driver {
         self.w32(REG_TDT, 0);
         self.w32(REG_TXDCTL, 0);
 
-        // Enable RX and TX
+        // Enable RX primeiro, DEPOIS setar RDT
         self.w32(REG_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LPE | RCTL_BSIZE | RCTL_SECRC);
+        for _ in 0..1000 { core::hint::spin_loop(); }
+        self.w32(REG_RDT, (NUM_DESC - 1) as u32);
+
+        // Enable TX
         self.w32(REG_TCTL, TCTL_EN | TCTL_PSP | TCTL_CT | TCTL_COLD);
 
         // Enable interrupts
@@ -247,9 +246,15 @@ impl E1000Driver {
 
         tx[idx].length = data.len() as u16;
         tx[idx].cmd = TX_CMD_EOP | TX_CMD_IFCS | TX_CMD_RS;
-        tx[idx].status = 0;
+        tx[idx].status = TX_DESC_DONE; // DD=1: software pronto, hardware pode enviar
 
-        self.w32(REG_TDT, idx as u32);
+        self.w32(REG_TDT, ((idx + 1) % NUM_DESC) as u32);
+        // Le descritor de volta apos hardware processar
+        let st_after = tx[idx].status;
+        let ln_after = tx[idx].length;
+        if self.tx_cur < 3 {
+            serial_println!("[E1000] TX{} apos: status=0x{:x} len={}", idx, st_after, ln_after);
+        }
         self.tx_cur += 1;
         true
     }
@@ -284,4 +289,42 @@ impl E1000Driver {
     }
 
     pub fn mac(&self) -> [u8; 6] { self.mac_addr }
+}
+
+impl E1000Driver {
+    pub unsafe fn rx_ready(&self) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let idx = self.rx_cur % NUM_DESC;
+        let rx_vaddr = self.rx_desc_paddr + pmoff;
+        let rx = &*(rx_vaddr as *const [RxDesc; NUM_DESC]);
+        rx[idx].status & RX_DESC_DONE != 0
+    }
+
+    pub unsafe fn debug_mmio_read(&self, reg: u64) -> u32 {
+        self.r32(reg)
+    }
+
+    pub unsafe fn debug_rx_desc(&self, idx: usize) -> (u64, u16, u8) {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let rx_vaddr = self.rx_desc_paddr + pmoff;
+        let rx = &*(rx_vaddr as *const [RxDesc; NUM_DESC]);
+        let i = idx % NUM_DESC;
+        (rx[i].buffer_addr, rx[i].length, rx[i].status)
+    }
+
+    pub unsafe fn debug_tx_desc(&self, idx: usize) -> (u64, u16, u8) {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let tx_vaddr = self.tx_desc_paddr + pmoff;
+        let tx = &*(tx_vaddr as *const [TxDesc; NUM_DESC]);
+        let i = idx % NUM_DESC;
+        (tx[i].buffer_addr, tx[i].length, tx[i].status)
+    }
+
+    unsafe fn tx_ready(&self) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let idx = self.tx_cur % NUM_DESC;
+        let tx_vaddr = self.tx_desc_paddr + pmoff;
+        let tx = &*(tx_vaddr as *const [TxDesc; NUM_DESC]);
+        tx[idx].status & TX_DESC_DONE != 0 || tx[idx].buffer_addr == 0
+    }
 }

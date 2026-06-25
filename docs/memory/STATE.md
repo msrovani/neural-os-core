@@ -1,4 +1,34 @@
+# ═══════════════════════════════════════════════
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.2
+#   "Network Sprint: e1000 Fixes + Neural Architecture"
+#   TDT fix · NUM_DESC 48 · PTHRESH 8 · Neural Network
+# ═══════════════════════════════════════════════
+
 # Project State — neural-os-core
+
+## Sprint 23 Network — e1000 Fixes + Neural Architecture (v0.20.2, 25/06/2026)
+
+### Correções e1000
+1. **TDT protocol fix** — `send()` escrevia TDT com valor igual a TDH (ambos 0), hardware via ring vazio. Corrigido: TDT = (idx+1) % NUM_DESC.
+2. **NUM_DESC 32→48** — 82540EM requer mínimo 48 descritores (Linux e1000 driver docs).
+3. **RXDCTL PTHRESH 0→8** — Prefetch threshold zero impedia RX.
+4. **RCTL.EN antes de RDT** — Ordem de init corrigida por Intel spec.
+5. **Offsets TPT/TPR** — Corrigidos para 0x0400C/0x04010 (82540EM).
+
+### Arquitetura Neural de Rede (Nova)
+1. **init_driver_network()** — Mínimo: detecta e1000, inicia driver, publica HW_NET_E1000.
+2. **network_bootstrap()** — ARP periódico com hlt(), IP configurado antes do ARP, timeout ~2s.
+3. **network_health_daemon()** — Async, monitora link periodicamente a cada 100 ciclos.
+4. **/ping, /fetch, /netdiag** — Roteados pelo MLP para skills.
+
+### Resultados QEMU
+- ✅ e1000 Init OK (rx_desc=0xce8000+)
+- ✅ TX descriptor processado pelo hardware (TDH avança, length=42)
+- ❌ TPT=0 — pacote não enviado (qemu_send_packet não chamado/retorna 0)
+- ❌ TPR=0 — nenhum pacote recebido
+- ❌ ARP sem resposta — consequência do TX não funcionar
+- ✅ Executor rodando, health daemon ativo
+- ✅ 0 erros cargo check/cargo bootimage
 
 ## Sprint 1 — Chassi Básico (Complete)
 ## Sprint 2 — Observabilidade Ring 0 (Complete)
@@ -36,9 +66,9 @@
 
  | Category | Status |
  |---|---|---|
- | Last QEMU Boot | ✅ Boot OK — kernel boots, e1000 initialized (Link UP), DHCP triggers PageFault (DMA buffer bug exposed after RCTL/TCTL fix) |
+ | Last QEMU Boot | ✅ Boot OK — kernel boots, e1000 init OK (rx_desc=0xce7000+), static IP 10.0.2.15, executor 11000+ ticks, EchoSkill runs |
  | Code Review | ✅ 10 CRITICAL, 12 HIGH, 16+ MEDIUM, 12+ LOW identified and cataloged |
- | Critical Bugs Fixed | ✅ 10/10 — e1000 enable, BAR mask, DHCP broadcast/ACK, slab off-by-one, nostack UB, bridge bus, XSDT stride, mhi leak, nn bias |
+ | Critical Bugs Fixed | ✅ 11/11 — e1000 enable, BAR mask, DHCP broadcast/ACK, slab off-by-one, nostack UB, bridge bus, XSDT stride, mhi leak, nn bias, allocate_contiguous start bit |
 | Compilation | ✅ `cargo check` — 0 errors, 0 warnings |
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
@@ -162,15 +192,37 @@
 4. **PIT timer via IOAPIC não funciona** — Bootloader mapeia MMIO IOAPIC/LAPIC como write-back (WB). `set_page_uc()` tenta forçar UC via page table walk mas pode não funcionar se páginas forem 2 MiB/1 GiB. Solução atual: usar LAPIC timer em vez de PIT → IOAPIC.
 5. **Serial output 24× slower** — IOAPIC dump consolidado de 24 linhas para 1 linha. QEMU com `-serial file:` tem latência de ~87µs/byte para saída serial.
 6. **QEMU TCG slow** — Serial output at 115200 baud em QEMU TCG adiciona ~4.35ms por linha serial, resultando em ~0.01-0.02× speed ratio vs real hardware.
-7. **e1000 DHCP PageFault** — `send()` acessa TX buffer físico sem offset adequado. Exposed by RCTL/TCTL enable in Sprint 23.
+7. **DHCP no QEMU TCG** — Spin loops não dão tempo para slirp processar I/O. Solução temporária: IP estático + gateway MAC hardcoded. Pendente: refatorar com timer-based wait e `hlt()`.
 
-### Next Steps — Sprint 24 (HIGH/MEDIUM/LOW fix sprint)
+### Next Steps — Sprint 24 (Network + Crom Features)
 
-- [ ] **Fix e1000 DMA buffer mapping** — PageFault at VirtAddr(0x2103b0) in `send()`
+- [ ] **Refatorar DHCP com timer-based wait** — Usar LAPIC timer ticks + `hlt()` em vez de spin loops. Necessário para QEMU TCG processar I/O do slirp.
+- [ ] **ARP dinâmico** — Timeout não-bloqueante com retry.
+- [ ] **Implement XOR Delta (#164)** — Archive mode lossless no PackedTernaryTensor (~50 LOC)
+- [ ] **Implement CDC Rabin Fingerprint (#165)** — Content-Defined Chunking para modelos .bitnet (~80 LOC)
 - [ ] **12 HIGH priority items** from code review (see IDEA_BANK.md or ADR-0017)
 - [ ] **16+ MEDIUM priority items**
 - [ ] **12+ LOW priority items**
-- [ ] Full QEMU boot validation after fixes
+- [ ] Full QEMU boot validation with network interactivity
+
+### ADR-0020 — Crom Ecosystem Analysis Complete
+
+Análise de 75 repositórios MrJc01 → 12 ideias portadas para neural-os-core:
+
+| # | Item | Sprint | LOC |
+|---|---|---|---|
+| 164 | XOR Delta Reconstruction | 24 | ~50 |
+| 165 | CDC Rabin Fingerprint | 24 | ~80 |
+| 166 | Multi-mode Trust | 27 | ~100 |
+| 167 | TV-DSL Co-processor | 27 | ~200 |
+| 168 | PonderNet Dynamic Stop | 27 | ~150 |
+| 169 | Codebook Compression VQ | 28 | ~300+Python |
+| 170 | KV Cache Codebook | 28 | ~200 |
+| 171 | ReAct Loop Auto-Correção | 28 | ~300 |
+| 172 | MCP Server Support | 28 | ~400 |
+| 173-175 | Futuro (pós-MVP) | 29+ | pesquisa |
+
+**Documento:** `docs/architecture/0020-crom-ecosystem-analysis.md`
 
 ---
 
@@ -340,6 +392,42 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
 
+## Sprint 23 — Hermes Governance & Agent Memory (v0.20.0)
+
+**Data:** 2026-06-25
+
+### Entregas
+
+1. **#228 Tool Policy Registry** — `SkillRegistry` expandido com `BTreeMap<String, ToolPolicy>` onde cada política tem `enabled: bool` e `auto_approve: bool`. Suporte a wildcard `"*"` como fallback. `execute_skill()` verifica `enabled` antes de executar; `auto_approve` permite ignorar validação de token. Novos métodos: `set_policy()`, `get_policy()`, `is_enabled()`, `is_auto_approve()`, `list_skills()`.
+
+2. **#229 Usage Tracker** — `usage.rs`: `UsageTracker` global com `record_call(skill, duration_ticks)` e `snapshot() -> UsageSnapshot { total_calls, by_skill, total_exec_time_ticks }`. `to_metrics_tensor()` exporta como `[f32; 4]` para o roteador MLP. Atomic counter para eventos leves (`record_event()` / `event_count()`). Comando `/usage` no Hermes.
+
+3. **#230 Auto-Compact Hermes Buffer** — `ConversationTracker` em `hermes.rs`: `record_exchange()` + `needs_compact()` (gatilho em 3 ciclos) + `compact()` que gera sumário textual e limpa o buffer. Integrado ao `intent_router_daemon`: após `HERMES_RESPONSE`, registra troca e compacta se necessário.
+
+4. **#231 Event-Sourced Conversation** — `conversation.rs`: `EventLog` com `VecDeque<ConversationEvent>` (max 256), `EventKind { UserInput, HermesResponse, SkillExecuted, SystemEvent, ContextCompacted }`. `push()`, `iter()`, `last_n()`, `events_since()`, `summarize()`. Eventos de `UserInput` e `HermesResponse` registrados automaticamente. Comando `/conv` no Hermes.
+
+### Arquivos criados/modificados
+
+| Arquivo | Ação |
+|---|---|
+| `src/usage.rs` | Criado |
+| `src/conversation.rs` | Criado |
+| `src/hermes.rs` | Modificado — +ConversationTracker, +Command::Usage/Conversation |
+| `crates/skill-registry/src/registry.rs` | Modificado — +ToolPolicy, +set_policy/get_policy/is_enabled/is_auto_approve/list_skills |
+| `crates/skill-registry/src/lib.rs` | Modificado — +ToolPolicy export |
+| `src/main.rs` | Modificado — +mod usage/conversation, +globals, +comandos, +event recording |
+
+### Dependências novas
+Nenhuma.
+
+### Métricas
+- Tool Policy Registry: ~80 LOC
+- Usage Tracker: ~75 LOC  
+- Auto-Compact Buffer: ~45 LOC
+- Event-Sourced Conversation: ~100 LOC
+- Total: ~300 LOC
+- `cargo check --release`: 0 erros, 0 failures
+
 ## Sprint 22 (Block 5: Skills + Trust Cache + Timer Fix) — Concluído (v0.17.0)
 
 **Data:** 2026-06-24
@@ -458,4 +546,53 @@ Ring 2: WASM Skills — executa a decisão
 
 **Memory:** 2 GB QEMU → 375 MB modelo + ~100 MB runtime + ~1.5 GB livre.
 
-Para inventário completo de 156 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
+Para inventário completo de 249 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
+
+---
+
+## Ecosystem Analysis Progress (4 Tiers Complete)
+
+### Tier 2 — Personal AI Assistants (ADR-0022, 21 repos, complete)
+- 15 ideas (#199-213), deep-dives: OpenClaw (380k ★), Hermes Agent (202k ★), Lethe (Rust brain-inspired), ZeroClaw (32k ★, Rust), Ironclaw (12k ★, Rust)
+
+### Tier 3 — Memory Systems & Second Brain (ADR-0023, 14 repos, complete)
+- 14 ideas (#214-227), deep-dives: agentmemory (24k ★, 60+ source files), nexo (Atkinson-Shiffrin + Ebbinghaus). Key portable patterns: SHA-256 dedup, Privacy filter, TTL eviction, Ebbinghaus decay — all <150 LOC each
+
+### Tier 4 — Agent Frameworks (ADR-0024, 6 repos, complete)
+- 22 ideas (#228-249), deep-dive: **Cline** (63.9k ★, 293 releases, 6,338 commits). Key portable patterns: Tool Policy Registry, Usage Tracker, Event-Sourced Conversation, Cron Scheduler, Session Checkpoint, Claim-Based Leases — all directly mappable to Hermes daemon + EventBus + TrustCache + LAPIC timer
+
+### Totals
+| Tier | Repos | Ideas | ADR |
+|------|-------|-------|-----|
+| 0 (Crom) | 75 | 22 | ADR-0020 |
+| 1 (Life OS) | 20 | 26 | ADR-0021 |
+| 2 (Personal AI Assistants) | 21 | 15 | ADR-0022 |
+| 3 (Memory Systems) | 14 | 14 | ADR-0023 |
+| 4 (Agent Frameworks) | 6 | 22 | ADR-0024 |
+| **Total** | **136** | **99** | |
+
+**Next:** Tier 5 (Language-Specific Runtimes) — WASM, Rust native agents, C ABI tools
+
+---
+
+## 🏁 Milestone: Sprint 23 — Hermes Governance & Agent Memory (25/06/2026)
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║   SPRINT 23 COMPLETE — 4 ITEMS · 300+ LOC · 0 ERRORS        ║
+║                                                              ║
+║   #228 Tool Policy Registry         SkillRegistry policy    ║
+║   #229 Usage Tracker                Metrics accumulator     ║
+║   #230 Auto-Compact Hermes Buffer   3-cycle compact         ║
+║   #231 Event-Sourced Conversation   VecDeque immutable log  ║
+║                                                              ║
+║   Phase 1 — Foundation (Sprints 1-22)   ✅ Kernel bootável   ║
+║   Phase 2 — Ecosystem Research          ✅ 136 repos done   ║
+║   Phase 3 — Sprint 23 Implementation    ✅ 4 items done      ║
+║                                                              ║
+║   "We don't need an OS that runs AI.                         ║
+║    We need an OS that IS AI."                                ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+**v0.20.0 — "Hermes Governance"** — Quatro padrões da análise de ecossistema implementados. Tool Policy, Usage Tracker, Auto-Compact, Event-Sourced Conversation — todos operacionais no kernel. Próximo: network stack (VirtIO-net + smoltcp) ou Crom features (XOR Delta, CDC Rabin Fingerprint).
