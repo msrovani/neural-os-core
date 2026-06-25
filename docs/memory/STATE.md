@@ -35,8 +35,10 @@
 ### Current Status
 
  | Category | Status |
-|---|---|---|
-| Last QEMU Boot | ✅ Boot OK — VGA + serial + Breakpoint handler + EchoSkill execution |
+ |---|---|---|
+ | Last QEMU Boot | ✅ Boot OK — kernel boots, e1000 initialized (Link UP), DHCP triggers PageFault (DMA buffer bug exposed after RCTL/TCTL fix) |
+ | Code Review | ✅ 10 CRITICAL, 12 HIGH, 16+ MEDIUM, 12+ LOW identified and cataloged |
+ | Critical Bugs Fixed | ✅ 10/10 — e1000 enable, BAR mask, DHCP broadcast/ACK, slab off-by-one, nostack UB, bridge bus, XSDT stride, mhi leak, nn bias |
 | Compilation | ✅ `cargo check` — 0 errors, 0 warnings |
 | VGA Output | ✅ Mapped via `map_physical_memory`, Writer with `print!/println!` |
 | Serial Output | ✅ `uart_16550` driver, `serial_print!/serial_println!` via port `0x3F8` |
@@ -157,25 +159,18 @@
 1. **Heap 100 KB fixo** — tamanho arbitrário, precisa de budget tuning.
 2. **MinGW linker required** — `bootimage` needs C linker.
 3. **IDT coverage** — Vetor 33 (keyboard) tratado; vetores 34-255 têm `unhandled_interrupt_handler` (EOI duplo), seguro mas sem diagnóstico. Futuro: mascarar IRQs não usadas no PIC.
+4. **PIT timer via IOAPIC não funciona** — Bootloader mapeia MMIO IOAPIC/LAPIC como write-back (WB). `set_page_uc()` tenta forçar UC via page table walk mas pode não funcionar se páginas forem 2 MiB/1 GiB. Solução atual: usar LAPIC timer em vez de PIT → IOAPIC.
+5. **Serial output 24× slower** — IOAPIC dump consolidado de 24 linhas para 1 linha. QEMU com `-serial file:` tem latência de ~87µs/byte para saída serial.
+6. **QEMU TCG slow** — Serial output at 115200 baud em QEMU TCG adiciona ~4.35ms por linha serial, resultando em ~0.01-0.02× speed ratio vs real hardware.
+7. **e1000 DHCP PageFault** — `send()` acessa TX buffer físico sem offset adequado. Exposed by RCTL/TCTL enable in Sprint 23.
 
-### Next Steps — Sprint 18 (Block 1: PCI + ACPI + APIC)
+### Next Steps — Sprint 24 (HIGH/MEDIUM/LOW fix sprint)
 
-- [ ] **PCI scan (CF8/CFC)** — enumerar barramento 0..255, ler vendor/device/class/BARs
-- [ ] **ACPI RSDP/MADT parser** — descobrir LAPICs presentes, modo PIC vs APIC
-- [ ] **LAPIC init (BSP)** — SVR, spurious vector, task priority
-- [ ] **IOAPIC init** — redirection entries: keyboard→IRQ1, timer→IRQ0
-- [ ] **PIC disables** — mask+remap ou disable via OCW1
-- [ ] **ECR (Early Concept Release)** — 6 milestones: PCI scan → ACPI MADT → LAPIC → IOAPIC → PIC disable → Timer+Keyboard via APIC
-
-### Backlog (Sprint 19+, Block 2)
-
-- [ ] **SMP wake** — trampoline 16→32→PAE→64, INIT-SIPI-SIPI, PerCpu struct, GS.base
-- [ ] **Slab allocator** — buckets 32-4096 para heap dinâmico
-- [ ] **CorePools** — P-core/E-core aware assignment
-
-### Long-term (Pós-MVP)
-
-- Ver `docs/architecture/0015-curso-correcao-mvp.md` Apêndice A para inventário completo de 116 itens.
+- [ ] **Fix e1000 DMA buffer mapping** — PageFault at VirtAddr(0x2103b0) in `send()`
+- [ ] **12 HIGH priority items** from code review (see IDEA_BANK.md or ADR-0017)
+- [ ] **16+ MEDIUM priority items**
+- [ ] **12+ LOW priority items**
+- [ ] Full QEMU boot validation after fixes
 
 ---
 
@@ -345,31 +340,73 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
 
-## Sprint 22 (Block 5: Skills + Trust Cache) — Concluído (v0.17.0)
+## Sprint 22 (Block 5: Skills + Trust Cache + Timer Fix) — Concluído (v0.17.0)
 
-**Data:** 2026-06-23
+**Data:** 2026-06-24
+
+### Timer Fix — LAPIC Timer (pós-Sprint 22)
+
+**Problema:** PIT timer não dispara no modo APIC. IOAPIC MMIO mapeado como write-back (WB) pelo bootloader (`map_physical_memory`). `write_volatile` para IOAPIC fica no cache L1/L2 e nunca alcança o dispositivo. PIC mode confirmado funcional (timer funciona perfeitamente).
+
+**Solução:** Substituir PIT → IOAPIC (vetor 32) por LAPIC timer (vetor 32). LAPIC timer é auto-contido no processador, não depende de IOAPIC routing. Código alterado em `apic.rs`:
+- `start_timer()` — programa LVT_TIMER com `vector=32 | periodic(0x20000)`, initial count=8,388,608, divide=1
+- IOAPIC redirect para timer removido (só mantido keyboard→vetor 33)
+- `set_page_uc()` melhorado com handling para 2 MiB e 1 GiB huge pages
+
+**Confirmação QEMU:** 
+- `[TIMER] Interrupt fired! tick=0` até `tick=4`
+- `[EXECUTOR] Timer ticks: antes=58, depois=229` (171 ticks durante busy wait)
+- Pipeline completo: SYSTEM_READY → EchoSkill → Executor → Watchdog (2100+ ticks)
+- `cargo check --release`: 0 erros, mesmas 16 warnings esperadas (dead code policy)
 
 ### Entregas
 
-1. **TrustCache** — `crates/skill-registry/src/trust_cache.rs`: `TrustEntry` com token, granted_at, ttl_ticks; `TrustCache::grant()` (com TTL override), `revoke()`, `is_trusted()`. `DEFAULT_TTL_TICKS = 1800` (~100s). `TRUST_CACHE` global no kernel.
+1. **`trust.rs` — TrustCache** — Cache de tokens de capability com suporte a TTL e denylist:
+   - `trust_allow(token, skill_name, now)` — autorização permanente até revogação explícita
+   - `trust_deny(token, skill_name)` — remove do cache + adiciona à denylist
+   - `is_trusted(token, skill_name, now)` — verifica cache e denylist, respeita TTL
+   - `check_or_cache(token, skill_name, now, ttl)` — auto-cache após validação bem-sucedida (TTL default: 360 ticks ≈ 20s)
+   - Trust-once-use-always via `/trust allow`; auto-expira após 20s sem re-uso
 
-2. **SystemStatusSkill upgrade** — agora consome MHI: `MemoryHierarchy::new()` exibe RAM por tier (nome, capacidade). `hardware_context_tensor()` retorna `[ratio, allocated_count]`. Saída: `[SYSSTATUS] RAM: 0.29% used | MHI: 1 tier(s), ~2042 MB`.
+2. **`HardwareInfoSkill`** — Nova skill que expõe `SystemArchitecture` (ring0_mode, ring1_mode, heap_size_mb, trust_level, power_mode, tensor_tier) e `MemoryHierarchy` (RAM disponível por tier). Invocada por `/hw`, `/hardware`, `/info`. Registrada no boot via `SKILL_REGISTRY`.
 
-3. **HardwareInfoSkill** — nova skill registrada no `SKILL_REGISTRY`. Lê `GLOBAL_ARCH` (SystemArchitecture) e `MemoryHierarchy::new()` para expor CPU cores, GPU, heap, MHI tiers, bandwidth. Saída: `[HWINFO] CPU: 2 core(s) | GPU: ativo | Heap: 512 MB`.
+3. **`SystemStatusSkill` atualizado** — Agora lê `MEMORY_HIERARCHY` global + `GLOBAL_ALLOCATOR::hardware_context_tensor()` para reportar RAM livre/total por tier (ex: `[Dram] 1234.5 MB free / 2048.0 MB total`).
 
-4. **GLOBAL_ARCH** — `spin::Mutex<Option<SystemArchitecture>>` armazena a arquitetura detectada para consumo por skills e daemons.
+4. **`SkillRegistry` expandido** (`registry.rs`):
+   - `has_skill(name)` — consulta existência de skill
+   - `validate_token(name, token)` — valida token sem executar
+   - `execute_skill_unchecked(name, payload)` — executa sem re-validar token
 
-5. **Boot flow** — `[ARCH]` agora inclui `PCI devices: {len}`: mostra contagem de dispositivos PCI detectados.
+5. **Trust-aware Hermes** — Novo helper `execute_skill_with_trust()` daemon que:
+   - Verifica `TRUST_CACHE` primeiro (fast path)
+   - Se não confiável, valida token via `SkillRegistry::validate_token()` (slow path)
+   - Se válido, faz `check_or_cache()` para acelerar próximas chamadas
+   - Executa via `execute_skill_unchecked()` sem dupla validação
+
+6. **Novos comandos Hermes**:
+   - `/trust allow <token> <skill>` — autorização permanente
+   - `/trust deny <token> <skill>` — revogação imediata
+   - `/hw` — informações de hardware
+   - Help atualizado com todos os comandos
+
+7. **Globais do kernel**:
+   - `SYSTEM_ARCH: Mutex<Option<SystemArchitecture>>` — cache da arquitetura inferida
+   - `MEMORY_HIERARCHY: Mutex<Option<MemoryHierarchy>>` — cache da hierarquia de memória
+   - `TRUST_CACHE: Mutex<TrustCache>` — cache de trust para skills
 
 ### Arquivos criados/modificados
 
 | Arquivo | Ação |
 |---|---|
-| `crates/skill-registry/src/trust_cache.rs` | Criado (55 linhas) |
-| `crates/skill-registry/src/lib.rs` | Modificado — +mod trust_cache, +exports |
-| `crates/neural-kernel/src/main.rs` | Modificado — HardwareInfoSkill, GLOBAL_ARCH, TRUST_CACHE, SystemStatusSkill upgrade |
-| `crates/neural-kernel/src/memory.rs` | Modificado — +allocated_frame_count(), hardware_context_tensor() retorna allocated_count |
+| `src/trust.rs` | Criado (65 linhas) |
+| `src/main.rs` | Modificado — SystemStatusSkill upgrade, HardwareInfoSkill, globals, helper, intent_router upgrade |
+| `src/hermes.rs` | Modificado — Command enum + parse_command com TrustAllow/TrustDeny/HardwareInfo |
+| `crates/skill-registry/src/registry.rs` | Modificado — +has_skill, +validate_token, +execute_skill_unchecked |
 | `Cargo.toml` | v0.16.0 → v0.17.0 |
+
+### Dependências novas
+
+Nenhuma (tudo com crates existentes + `alloc::collections::BTreeMap`).
 
 ### Pendências (Sprint 23 — Network Sprint, pós-MVP)
 
@@ -392,10 +429,33 @@ A rota atual é a **chain de 6 blocos** (ADR-0015) + **Network Sprint** (ADR-001
 | 2 | SMP + Slab Allocator | 19 (concluído) | Block 1 | PerCpu, trampoline, INIT-SIPI-SIPI, slab heap 4 MB |
 | 3 | Hermes Chat | 20 (concluído) | Block 2 | MLP intent router, commands, console daemon |
 | 4 | MLP + MHI + Auto-detecção | 21 (concluído) | Block 3 | MemoryHierarchyIndex, alloc_by_tier, SystemArchitecture MLP |
-| 5 | Skills + Trust Cache | 22 | Block 4 | system_status, hardware_info, trust_cache |
-| MVP | **Neural OS Hermes ISO** | 22 | Block 5 | ISO bootável x86-64 UEFI com chat neural |
-| 6 | **Network Sprint** | 23 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
+| 5 | Skills + Trust Cache | 22 (concluído) | Block 4 | SystemStatusSkill MHI, HardwareInfoSkill, TrustCache, trust allow/deny |
+| MVP | **Neural OS Hermes ISO** | 23 | Block 5 | ISO bootável x86-64 UEFI com chat neural (fundido com Sprint 23) |
+| 6 | **Network Sprint** | 24 | MVP | VirtIO-net + smoltcp + DNS + HTTP |
 | 7 | NVMe + SFS persistente | 24 | Network | Armazenamento durável |
 | 8+ | WASM + TLS + multi-agent | 25+ | SFS | Skills WASM, HTTPS, agentes de rede |
+| **9** | **Neural Cortex BitNet LLM** | **25-29+** | **Rede** | **Transformer + 1.5B LLM + Success Engine** |
 
-Para inventário completo de 116 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).
+## Neural Cortex — BitNet LLM Integration (ADR-0019)
+
+**Arquitetura de 3 camadas de decisão neural:**
+
+```
+Ring 0: Reflex MLP (16→8→3) — sub-ms, filtra "precisa do LLM?"
+Ring 1: BitNet LLM 1.5B (2-bit ternary, ~375 MB) — ~5-15 tok/s, decide intenção/ação/tier/skill
+Ring 2: WASM Skills — executa a decisão
+```
+
+**31 novos itens** no IDEA_BANK.md (#126-156). 5 Sprints de execução:
+
+| Sprint | Entrega | Modelo |
+|---|---|---|
+| 25 | Transformer Engine (Attention, generation) | Micro 1M params (~250 KB) |
+| 26 | Cortex Daemon + decisões LLM | 1.5B params (~375 MB) |
+| 27 | Reflex threshold + sampling tuning | 1.5B params |
+| 28 | Networked Cortex (HTTP downloads) | 1.5B params |
+| 29+ | Success Engine (online learning) | 1.5B params |
+
+**Memory:** 2 GB QEMU → 375 MB modelo + ~100 MB runtime + ~1.5 GB livre.
+
+Para inventário completo de 156 itens com status individual: ver `docs/memory/IDEA_BANK.md` (documento vivo, standalone).

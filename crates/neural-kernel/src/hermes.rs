@@ -15,6 +15,10 @@ pub enum Command {
     Status,
     Echo(String),
     Help,
+    HardwareInfo,
+    NetDiag,
+    TrustAllow(u64, String),
+    TrustDeny(u64, String),
     Chat(String),
 }
 
@@ -32,6 +36,30 @@ pub fn parse_command(line: &str) -> Command {
         if name.eq_ignore_ascii_case("echo") {
             let arg = parts.next().unwrap_or("").trim().to_string();
             return Command::Echo(arg);
+        }
+        if name.eq_ignore_ascii_case("hw") || name.eq_ignore_ascii_case("hardware") || name.eq_ignore_ascii_case("info") {
+            return Command::HardwareInfo;
+        }
+        if name.eq_ignore_ascii_case("netdiag") || name.eq_ignore_ascii_case("netinfo") || name.eq_ignore_ascii_case("network") {
+            return Command::NetDiag;
+        }
+        if name.eq_ignore_ascii_case("trust") {
+            let remainder = parts.next().unwrap_or("");
+            let mut sub_parts = remainder.splitn(3, |c: char| c.is_whitespace());
+            let sub = sub_parts.next().unwrap_or("");
+            if sub.eq_ignore_ascii_case("allow") {
+                let token_str = sub_parts.next().unwrap_or("0");
+                let skill = sub_parts.next().unwrap_or("").to_string();
+                if let Ok(token) = token_str.parse::<u64>() {
+                    return Command::TrustAllow(token, skill);
+                }
+            } else if sub.eq_ignore_ascii_case("deny") {
+                let token_str = sub_parts.next().unwrap_or("0");
+                let skill = sub_parts.next().unwrap_or("").to_string();
+                if let Ok(token) = token_str.parse::<u64>() {
+                    return Command::TrustDeny(token, skill);
+                }
+            }
         }
         if name.eq_ignore_ascii_case("help") || name == "?" || name.eq_ignore_ascii_case("h") {
             return Command::Help;

@@ -57,7 +57,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-# Project Summary — neural-os-core v0.15.0
+# Project Summary — neural-os-core v0.17.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
@@ -70,7 +70,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors, 0 warnings) + QEMU boot
 
-## 20 Sprints Complete
+## 21 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -136,8 +136,8 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 21 (v0.16.0) — MHI + Inventory + SystemArchitecture (Block 4)
 `mhi.rs` — `AllocTier` enum (Dram/Vram/Nvme/Hdd), `MemoryTier` struct, `MemoryHierarchy::new()` auto-creates Dram tier from bitmap allocator, `alloc_by_tier(Dram)` allocates contiguous physical frames. `inventory.rs` — `HardwareInventory::collect()` gathers CPU, RAM, PCI devices; `SystemArchitecture::infer()` rule-based heuristics (GPU→ring1, RAM→heap, cores→power). Boot flow: PCI scan → collect → infer → log → MHI init → executor. **IOAPIC mask bug fixed:** `redirect_irq()` no longer sets bit 16 (MASK), allowing timer/keyboard interrupts to reach the BSP. Without this fix, `hlt()` never woke and the executor stalled after 1 poll cycle. Debugged via `-d int,cpu_reset,guest_errors` + serial `IOAPIC redirection[0]: low=0x00010000`.
 
-### Sprint 22 (v0.17.0) — TrustCache + MHI Skills + Block 5)
-`trust_cache.rs` in skill-registry — `TrustEntry` with TTL, `TrustCache::grant/revoke/is_trusted()` with `DEFAULT_TTL_TICKS = 1800` (~100s). SystemStatusSkill upgraded to consume MHI (RAM per tier). HardwareInfoSkill created — reads `GLOBAL_ARCH` (stored after inference) and reports CPU/GPU/heap/MHI tiers. `hardware_context_tensor()` now returns `[ratio, allocated_count]`. `GLOBAL_ARCH` lazy_static stores SystemArchitecture post-boot. Boot flow logs PCI device count. 0 errors, QEMU boot verified.
+### Sprint 22 (v0.17.0) — Skills + Trust Cache + LAPIC Timer Fix (Block 5)
+`trust.rs` — `TrustCache` with `trust_allow()` (permanent), `trust_deny()` (revoke + denylist), `is_trusted()` (TTL-aware), `check_or_cache()` (auto-cache 20s). `HardwareInfoSkill` — exposes SystemArchitecture + MHI tiers via `/hw` command. `SystemStatusSkill` upgraded to read MHI tiers for per-tier free RAM reporting. `SkillRegistry` expanded: `has_skill()`, `validate_token()`, `execute_skill_unchecked()`. New Hermes commands: `/trust allow <token> <skill>`, `/trust deny <token> <skill>`, `/hw`. `execute_skill_with_trust()` helper. **Timer fix:** PIT via IOAPIC não funcionava (IOAPIC MMIO mapeado WB). Solução: `Lapic::start_timer()` com LAPIC timer (vetor 32, count=8,388,608, periodic). IOAPIC redirect mantido só para keyboard (vetor 33). `set_page_uc()` com suporte a 2 MiB/1 GiB huge pages. Boot QEMU validado: 171 ticks em busy wait, pipeline completo EchoSkill + Watchdog 2100+ ticks. Global statics: `SYSTEM_ARCH`, `MEMORY_HIERARCHY`, `TRUST_CACHE`. Version v0.16.0 → v0.17.0.
 
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
@@ -166,10 +166,21 @@ cargo run → bootloader → kernel_main
   ├─ 1000x frame stress test
   ├─ init_pci()                   (PCI scan)
   ├─ init_acpi()                  (RSDP + MADT)
-  ├─ init_apic(info)              (LAPIC + IOAPIC + PIC disable) ou fallback PIC
+  ├─ init_apic(info)              (set_page_uc → LAPIC init + start_timer → PIC disable → IOAPIC keyboard redirect)
   ├─ smp::init_smp()              (INIT-SIPI-SIPI → AP multi-core boot)
   ├─ SkillRegistry (EchoSkill)    (Skill Registry + MCP Layer)
+  ├─ SystemArchitecture::infer
+  ├─ MemoryHierarchy::new()
+  ├─ *SYSTEM_ARCH.lock() = Some(arch)
+  ├─ *MEMORY_HIERARCHY.lock() = Some(mhi)
   └─ NeuralExecutor::run()
+       ├─ AgentTask::new(system_daemon) → poll → hlt (woken by LAPIC timer)
+       ├─ AgentTask::new(hardware_monitor_daemon)
+       ├─ AgentTask::new(hw_bridge_daemon)
+       ├─ AgentTask::new(input_daemon)
+       ├─ AgentTask::new(intent_router_daemon)
+       └─ AgentTask::new(hermes_console_daemon)
+            └─ hardware_context_tensor() a cada 100 iteracoes
        ├─ AgentTask::new(system_daemon) → poll → hlt
        ├─ AgentTask::new(hardware_monitor_daemon)
        ├─ AgentTask::new(hw_bridge_daemon)
@@ -197,14 +208,14 @@ cargo run → bootloader → kernel_main
 ## Workspace Crates
 | Crate | Status |
 |---|---|
-| `neural-kernel` | v0.15.0 — kernel bare-metal + SMP + Hermes Chat |
+| `neural-kernel` | v0.17.0 — kernel bare-metal + SMP + Hermes Chat + Trust Cache |
 | `agent-core` | stub |
 | `skill-registry` | v0.1.0 — MCP Layer: Skill trait, McpManifest, Registry com validação de token |
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 21 — Block 4: MLP + MHI + Auto-detection)
-MemoryHierarchyIndex, `alloc_by_tier(Dram)`, `HardwareInventory::collect()`, `SystemArchitecture` MLP (512→256→64→9 ternary). Adaptive boot flow.
+## Next Sprint (Sprint 23 — Network Sprint, pós-MVP)
+VirtIO-net driver + smoltcp TCP/IP + DNS client + HTTP client. Ver ADR-0016. Terminal Hermes remoto sobre TCP.
 
 ## Network Strategy (ADR-0016)
 Rede não está no MVP (Sprints 1-22) mas é o **primeiro sprint pós-MVP (Sprint 23)**. Stack: VirtIO-net (`virtio-drivers`) + smoltcp (TCP/IP) + HTTP client. Ver ADR-0016 para detalhes completos e os 8 novos itens (117-124) no IDEA_BANK.md.
@@ -222,3 +233,42 @@ See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, Ma
 ## References
 - ADR-0013: Executive Summary / Estado da Arte 2026 (MerlionOS, FairyFuse/Bitnet.cpp, ASA/eBPF)
 - ADR-0014: Ideias de Evolução de Hardware (SMP, APIC, USB neural, AI-driven arch)
+
+<!-- context7 -->
+## Rust Crate Ecosystem — Always Use Context7 + crates.io
+
+Rust crates (distributed via crates.io) evolve rapidly. Always use Context7 to fetch current docs for these essential categories:
+
+### Searching crates.io
+When a user mentions a Rust crate or library feature not in Context7, search **crates.io** via its search API:
+- URL format: `https://crates.io/api/v1/crates?q={query}&per_page=5`
+- Or browse: `https://crates.io/search?q={query}`
+- Use `WebFetch` to read crate pages for version info, features, and docs links
+- Cross-reference with `docs.rs` for API docs: `https://docs.rs/{crate-name}/{version}`
+
+### Async & Network
+- **Tokio** — async runtime, network I/O, timers. Main library for async Rust.
+- **Reqwest** — HTTP client (GET, POST, consume APIs).
+- **Actix-web** — high-performance actor-based web framework.
+- **Rocket** — type-safe, ergonomic web framework.
+
+### Serialization & Data
+- **Serde** — industry standard for serialization/deserialization (JSON, YAML, BSON, etc.).
+- **SQLx** — async SQL with compile-time query checking (PostgreSQL, MySQL, SQLite).
+- **Diesel** — ORM/Query Builder with compile-time SQL validation.
+
+### Parallelism & Error Handling
+- **Rayon** — data parallelism across CPU cores.
+- **Thiserror** — ergonomic custom error types.
+
+### CLI & Terminal
+- **Ratatui** — TUI (Text User Interface) framework for rich terminal UIs.
+- **Clap** — CLI argument parser with subcommands, flags, auto-help.
+
+## Steps
+
+1. Always start with `resolve-library-id` using the library name and the user's question, unless the user provides an exact library ID in `/org/project` format
+2. Pick the best match (ID format: `/org/project`) by: exact name match, description relevance, code snippet count, source reputation (High/Medium preferred), and benchmark score (higher is better). If results don't look right, try alternate names or queries (e.g., "next.js" not "nextjs", or rephrase the question). Use version-specific IDs when the user mentions a version
+3. `query-docs` with the selected library ID and the user's full question (not single words)
+4. Answer using the fetched docs
+<!-- context7 -->

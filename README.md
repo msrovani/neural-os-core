@@ -25,9 +25,9 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built (Sprint 21 — Block 4)
+## 🏗️ What's Been Built (Sprint 22 — Block 5)
 
-The kernel discovers hardware, detects architecture, builds a memory hierarchy, and boots 6 cooperative AI agents:
+The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache:
 
 ```
 [SYSTEM]  Neural Microkernel Iniciado.
@@ -36,16 +36,17 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 [KERNEL]  Bitmap Allocator: 1000 iteracoes estaveis
 [PCI]     Scan: 4 dispositivos (QEMU q35)
 [ACPI]    RSDP + RSDT + MADT (LAPIC/IOAPIC)
-[APIC]    LAPIC + IOAPIC + PIC disable + timer/keyboard routing
+[APIC]    LAPIC timer + IOAPIC keyboard + PIC disable
 [SMP]     AP 1 entrou em modo 64-bit Rust! (2 cores)
-[ARCH]    ring0=0 ring1=1 heap=512MB trust=1 power=0 tensor=0
-[MHI]     1 tier(s). Best: Dram (2140823552 bytes avail)
+[ARCH]    ring0=0 ring1=1 heap=64MB trust=1 power=0 tensor=0
+[MHI]     1 tier(s). Best: Dram (261 MB avail)
+[EXECUTOR] Timer ticks: antes=58, depois=229  ← LAPIC timer @ ~100 Hz
 [EXECUTOR] 6 tasks spawned (system, monitor, hw_bridge, input, cortex, console)
-[DAEMON]  Agente assincrono inicializado. Aguardando SYSTEM_READY...
 [MONITOR] Evento SYSTEM_READY publicado.
-[IPC]     Evento recebido no topico SYSTEM_READY. Token: 1
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
 [DAEMON]  SYSTEM_READY confirmado. Ciclo de inicializacao completo.
+[WATCHDOG] Ticks do temporizador: 2100+
+[EXECUTOR] Hardware context: RAM=[0.023943, 0.000000] tasks=4
 ```
 
 ### What each module does
@@ -53,17 +54,18 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 | Module | What | How |
 |---|---|---|
 | `pci.rs` | PCI scan via CF8/CFC | 256 busses × 32 devices, vendor/device/class/BARs |
-| `acpi.rs` | ACPI parser | RSDP search (EBDA + BIOS), RSDT/XSDT, MADT (LAPIC/IOAPIC) |
-| `apic.rs` | APIC init | LAPIC (SVR, TPR), IOAPIC (IRQ redirection), PIC disable |
+| `acpi.rs` | ACPI parser | RSDP search (EBDA + BIOS), RSDT/XSDT, MADT (+ Interrupt Source Override) |
+| `apic.rs` | APIC init | LAPIC timer (vector 32, periodic), IOAPIC keyboard redirect, PIC disable |
 | `smp/` | SMP multi-core | PerCpu GS.base, trampoline 16→64, INIT-SIPI-SIPI |
 | `mhi.rs` | Memory Hierarchy Index | `AllocTier` (Dram/Vram/Nvme/Hdd), `alloc_by_tier()` |
 | `inventory.rs` | Hardware Inventory | `HardwareInventory::collect()`, `SystemArchitecture::infer()` |
-| `hermes.rs` | Hermes Chat | MLP intent router, `/status`, `/echo`, `/help` |
+| `hermes.rs` | Hermes Chat | MLP intent router, `/status`, `/echo`, `/help`, `/hw`, `/trust allow/deny` |
+| `trust.rs` | TrustCache | Token cache with TTL, denylist, `check_or_cache()` |
 | `interrupts.rs` | Dual EOI | `USING_APIC` atomic flag → APIC or PIC EOI per interrupt |
 
-### Next: Block 5 — Skills + Trust Cache (Sprint 22)
+### Next: Network Sprint — Sprint 23 (pós-MVP)
 
-SystemStatusSkill consumir MHI, HardwareInfoSkill, TrustCache com TTL, ISO bootável.
+VirtIO-net + smoltcp TCP/IP + DNS + HTTP client per ADR-0016. Terminal Hermes remoto sobre TCP.
 
 ---
 
@@ -114,8 +116,8 @@ Block 1 (PCI+ACPI) ─── Hardware discovery (CF8/CFC, MADT, LAPIC)
 Block 2 (SMP+Heap) ─── Multi-core + slab allocator (4 MB heap)
 Block 3 (Hermes UI) ─── Chat loop + Intent Router (neural terminal)
 Block 4 (Auto-Conf) ─── MLP architecture detector + MHI
-Block 5 (Skills)    ─── Hardware control + Trust Cache
-Block 6 (MVP)       ─── Bootable ISO on any x86-64 UEFI
+Block 5 (Skills)    ─── Skills + Trust Cache + LAPIC timer
+Block 6 (Network)   ─── VirtIO-net + TCP/IP + DNS + HTTP
 ```
 
 Each block builds on the previous. No shortcuts. No copilot. No bloat.
@@ -124,61 +126,67 @@ Each block builds on the previous. No shortcuts. No copilot. No bloat.
 
 ## 🚀 Current State
 
-The chain is at **Block 4 (Auto-Config)** — Sprint 21 complete. Here's what boots in QEMU right now:
+The chain is at **Block 5 (Skills + Trust Cache)** — Sprint 22 complete. Here's what boots in QEMU right now:
 
 ```
 [SYSTEM]  Neural Microkernel Iniciado.
-[TEST]    Breakpoint, Box, Vec, Tensor, SiLU, RMSNorm, Intent Router
-[BITNET]  Inferencia 2-bit concluida. Output: [-0.5, -2.0]
-[KERNEL]  Bitmap Allocator: 1000 iteracoes estaveis
-[PCI]     Scan: 4 dispositivos QEMU q35
-[ACPI]    RSDP + RSDT + MADT parsing
-[APIC]    LAPIC + IOAPIC + PIC disable
+[APIC]    LAPIC timer (vetor 32, count=8M, div=1) — ~100 Hz
+[TIMER]   Interrupt fired! tick=0..4 → 171 ticks in busy wait
 [SMP]     AP 1 boot (2 cores)
-[ARCH]    ring0=0 ring1=1 heap=512MB trust=1 power=0 tensor=0
-[MHI]     1 tier, Dram ~2 GB
-[EXECUTOR] 6 tasks → pipeline completo → idle
-[SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
+[ARCH]    ring0=0 ring1=1 heap=64MB trust=1 power=0 tensor=0
+[MHI]     1 tier, Dram ~261 MB avail
+[EXECUTOR] Timer ticks: antes=58, depois=229
+[EXECUTOR] 6 tasks → SYSTEM_READY → EchoSkill → Watchdog 2100+
+[WATCHDOG] Ticks do temporizador: 2100
+[EXECUTOR] Hardware context: RAM=[0.023943, 0.000000] tasks=4
 ```
 
-**Sprint 21 capability:**
+**Sprint 22 capability:**
 - ✅ VGA 80×25 + Serial 0x3F8 (dual output)
-- ✅ IDT with 8 exception handlers + PIT + keyboard
+- ✅ IDT with 8 exception handlers + keyboard
 - ✅ Bitmap Frame Allocator (128 KB bitmap, covers 4 GB)
 - ✅ FPU/SSE + Tensor f32 matmul, SiLU, RMSNorm
 - ✅ TernaryTensor + PackedTernaryTensor (2-bit, 12× compression)
 - ✅ TicketLock FIFO (SMP-safe synchronization)
 - ✅ EventBus IPC + CapabilityToken (zero-trust messaging)
-- ✅ Skill Registry + MCP Layer (EchoSkill, SystemStatus)
+- ✅ Skill Registry + MCP Layer (EchoSkill, SystemStatus, HardwareInfo)
 - ✅ NeuralExecutor with 6 cooperative agents
-- ✅ PCI scan (CF8/CFC) + ACPI (RSDP/MADT) + APIC (LAPIC/IOAPIC)
+- ✅ PCI scan (CF8/CFC) + ACPI (RSDP/MADT + Interrupt Source Override) + APIC
 - ✅ SMP multi-core (trampoline, GS.base, INIT-SIPI-SIPI)
 - ✅ Slab allocator (8 buckets) + 4 MB heap
-- ✅ Hermes Chat (MLP intent router, `/status`, `/echo`, `/help`)
+- ✅ Hermes Chat (MLP intent router, `/status`, `/echo`, `/help`, `/hw`, `/trust allow/deny`)
 - ✅ MHI (MemoryTier, AllocTier, `alloc_by_tier(Dram)`)
 - ✅ HardwareInventory + SystemArchitecture auto-detection
+- ✅ LAPIC timer (periodic, vetor 32) — substitui PIT → IOAPIC
+- ✅ TrustCache (allow/deny/check, TTL 360 ticks, denylist)
+- ✅ MADT parsing: Interrupt Source Override + x2APIC
 
 ---
 
 ## 📐 Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Neural OS Hermes                      │
-├─────────────────────────────────────────────────────────┤
-│  Ring 0 (Intent Router)     MLP 3→2 ternário (< 1 µs)   │
-│  Ring 1 (Tensor Engine)     matmul + neural primitives  │
-│  Ring 2 (Agent Runtime)     EventBus + Skills + WASM     │
-├─────────────────────────────────────────────────────────┤
+┌──────────────────────────────────────────────────────────┐
+│                   Neural OS Hermes — AIOS                 │
+├──────────────────────────────────────────────────────────┤
+│  Ring 0 (Reflex)    Tiny MLP 16→8→3  sub-µs             │
+│  Ring 1 (Cortex)    BitNet LLM 1.5B  ~5-15 tok/s        │
+│  Ring 2 (Action)    WASM Skills      SkillRegistry       │
+├──────────────────────────────────────────────────────────┤
 │  Memory Hierarchy Index     alloc_by_tier()              │
 │  Event Bus                  pub/sub + CapabilityToken    │
 │  Skill Registry             zero-trust + MCP layer       │
-│  PCI/ACPI/APIC              hardware discovery           │
-├─────────────────────────────────────────────────────────┤
+│  PCI/ACPI/APIC/SMP          hardware discovery           │
+├──────────────────────────────────────────────────────────┤
 │  Bootloader (UEFI/BIOS)     bootloader crate v0.9.34    │
 │  no_std Rust                x86_64-unknown-none          │
 │  Target                     QEMU → AMD APU (real HW)    │
-└─────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
+
+Decision Pipeline:
+  Event → Ring 0 Reflex MLP → "precisa pensar?" → 
+    ├── Não (confiança > 90%) → executa ação direta
+    └── Sim → Ring 1 BitNet LLM → intenção → Ring 2 Skill → executa
 ```
 
 ---
@@ -203,16 +211,19 @@ QEMU window opens. VGA output on screen, serial output in terminal. Type your in
 ## 🎯 Roadmap to MVP
 
 | Block | Sprint | Deliverable | Status |
-|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | 0 | 1-17 | VGA, serial, heap, EventBus, agents | ✅ Concluído |
 | 1 | 18 | PCI scan + ACPI + APIC | ✅ Concluído |
 | 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ Concluído |
 | 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ Concluído |
 | 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ Concluído |
-| 5 | 22 | TrustCache + MHI Skills + HardwareInfoSkill | ✅ Concluído |
-| 6 | **23** | **Network Sprint (VirtIO-net + smoltcp + HTTP)** | 🟡 Próximo |
-| 7 | 24 | NVMe + SFS persistente | ⏳ |
-| 8+ | 25+ | WASM + TLS + multi-agent | ⏳ |
+| 5 | 22 | Skills + Trust Cache + LAPIC timer | ✅ Concluído |
+| 6 | 23 | Network (VirtIO-net + smoltcp + HTTP) | 🟡 Próximo |
+| 7 | 24 | Bugfix Sprint (12 HIGH + 16 MEDIUM + 12 LOW) | 🟡 |
+| **8** | **25** | **Transformer Engine (Attention, generation, micro-model)** | 🆕 **Planejado** |
+| **9** | **26** | **Cortex Daemon + Modelo 1.5B BitNet** | 🆕 **Planejado** |
+| **10** | **27+** | **Reflex tuning + Success Engine** | 🆕 **Planejado** |
+| 11 | 25+ | WASM + TLS + multi-agent | ⏳ |
 
 ---
 
@@ -251,7 +262,11 @@ This is not a Linux distribution. This is not a Unix clone. This is a ground-up 
 | 0012 | [2-bit Packing and Quantization](docs/architecture/0012-2bit-packing-quantization.md) |
 | 0013 | [Executive Summary / SotA 2026](docs/architecture/0013-neural-os-executive-summary.md) |
 | 0014 | [Hardware Evolution Ideas (post-MVP)](docs/architecture/0014-ideias-hardware.md) |
-| **0015** | **[Course Correction → MVP Hermes](docs/architecture/0015-curso-correcao-mvp.md)** ← **You are here** |
+| 0015 | [Course Correction → MVP Hermes](docs/architecture/0015-curso-correcao-mvp.md) |
+| 0016 | [Network Strategy](docs/architecture/0016-network-strategy.md) |
+| 0017 | [Critical Bugfix Sprint](docs/architecture/0017-critical-bugfix-sprint.md) |
+| 0018 | [Sprint 24 Plan](docs/architecture/0018-sprint-24-plan.md) |
+| **0019** | **[Neural Cortex — BitNet LLM Integration](docs/architecture/0019-neural-cortex-bitnet-llm.md)** ← **You are here** |
 
 ---
 

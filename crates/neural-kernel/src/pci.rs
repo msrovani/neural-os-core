@@ -49,6 +49,11 @@ unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset: u8) -> u16
     ((dword >> ((offset as u32 & 2) * 8)) & 0xFFFF) as u16
 }
 
+unsafe fn read_config_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
+    let dword = read_config_dword(bus, device, function, offset & 0xFC);
+    ((dword >> ((offset as u32 & 3) * 8)) & 0xFF) as u8
+}
+
 unsafe fn read_bar(bus: u8, device: u8, function: u8, bar_index: u8) -> u32 {
     let offset = 0x10 + bar_index * 4;
     read_config_dword(bus, device, function, offset)
@@ -77,17 +82,19 @@ pub unsafe fn scan_pci() -> Vec<PciDevice> {
                     bar0, bar1, bar2, bar3, bar4, bar5,
                 });
                 if class == 0x06 && subclass == 0x04 {
-                    let header_type = read_config_word(bus, device, 0, 0x0E) as u8;
-                    if header_type & 0x80 != 0 {
-                        for function in 1..=7u8 {
-                            let vf = read_config_word(bus, device, function, 0x00);
+                    // Read secondary bus number from bridge config space offset 0x19
+                    let sec_bus = read_config_byte(bus, device, 0, 0x19);
+                    if sec_bus != 0 {
+                        for function in 0..=7u8 {
+                            let vf = read_config_word(sec_bus, device, function, 0x00);
                             if vf != 0xFFFF && vf != 0x0000 {
-                                let df = read_config_word(bus, device, function, 0x02);
+                                let df = read_config_word(sec_bus, device, function, 0x02);
+                                let bar0 = read_bar(sec_bus, device, function, 0);
                                 devices.push(PciDevice {
-                                    bus: bus + 1, device, function,
+                                    bus: sec_bus, device, function,
                                     vendor_id: vf, device_id: df,
                                     class, subclass, prog_if: 0,
-                                    bar0: 0, bar1: 0, bar2: 0,
+                                    bar0, bar1: 0, bar2: 0,
                                     bar3: 0, bar4: 0, bar5: 0,
                                 });
                             }

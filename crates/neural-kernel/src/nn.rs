@@ -15,9 +15,11 @@ impl Linear {
         let w_t = self.weights.transposed();
         let mut output = input.matmul(&w_t).expect("Linear::forward: shape mismatch");
         if let Some(ref bias) = self.bias {
-            let (_, out_features) = output.shape;
-            for j in 0..out_features {
-                output.data[j] += bias.data[j];
+            let (batch_size, out_features) = output.shape;
+            for i in 0..batch_size {
+                for j in 0..out_features {
+                    output.data[i * out_features + j] += bias.data[j];
+                }
             }
         }
         output

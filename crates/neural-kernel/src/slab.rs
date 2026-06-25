@@ -46,7 +46,7 @@ impl SlabBucket {
 
         let mut addr = zone_start;
         let mut prev: *mut u8 = core::ptr::null_mut();
-        while addr + block_size <= zone_end {
+        while addr + block_size < zone_end {
             let curr = addr as *mut u8;
             if prev.is_null() {
                 self.free_head = curr;

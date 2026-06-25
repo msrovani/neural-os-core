@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-23 (Sprint 21 — Block 4 concluído: MHI + HardwareInventory + SystemArchitecture)  
+**Última atualização:** 2026-06-24 (ADR-0019: Neural Cortex BitNet LLM adicionado — 31 novos itens, total 156)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -252,6 +252,57 @@ Nada é descartado sem registro. Ideias podem ser:
 |---|---|---|---|---|
 | 125 | ADR-0016: Network Strategy | ✅ Documentado | Sprint 20 | Decisão arquitetural sobre quando/como implementar rede. |
 
+### 1.18. Neural Cortex — BitNet LLM (Novo Plano Diretor)
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 126 | **Transformer Engine** — Attention (`QK^T/√d`), causal mask, softmax, FFN (SiLU), residual | 🟡 Sprint 25 | Sprint 25 | Core da arquitetura LLM. ~80+50 LOC em cima de `Tensor`. |
+| 127 | **Tokenizer character-level** — ASCII 32-126 + `<BOS>/<EOS>/<PAD>` | 🟡 Sprint 25 | Sprint 25 | Entrada/saída de texto bare-metal. Reutiliza `scancode_to_ascii()`. |
+| 128 | **Autoregressive generation** — loop `tokenize → forward → sample → next` | 🟡 Sprint 25 | Sprint 25 | ~30 LOC. Gera resposta token por token até `<EOS>`. |
+| 129 | **Model format `.bitnet`** — binary spec com magic, header, packed ternary weights | 🟡 Sprint 25 | Sprint 25 | Formato padronizado para modelos exportados do Python. |
+| 130 | **Model loader** — `include_bytes!` + `allocate_contiguous()` → `PackedTernaryTensor` | 🟡 Sprint 25 | Sprint 25 | Carrega micro-modelo (~1M params, ~250 KB). |
+| 131 | **Micro-model TinyStories** (1M params, 4 layers, hidden=128) treinado em Python | 🟡 Sprint 25 | Sprint 25 | Modelo de prova para testar pipeline completo. |
+| 132 | **Cortex Daemon** — async task que recebe `LLM_REQUEST` → gera → publica resposta | 🟡 Sprint 26 | Sprint 26 | Substitui mock do `intent_router_daemon`. |
+| 133 | **Modelo 1.5B params** (distilado do Llama 3.2 1B → ternário 2-bit, ~375 MB) | 🟡 Sprint 26 | Sprint 26 | Cérebro completo do AIOS. ~5-15 tok/s em x86-64. |
+| 134 | **Model update via HTTP** — download `.bitnet` → validar hash → hot-swap | 🟡 Sprint 26 | Sprint 26 | Permite evolução do modelo sem recompilar kernel. |
+| 135 | **LLM decide hardware arch** — substitui `SystemArchitecture::infer()` heurístico | 🟡 Sprint 26 | Sprint 26 | MLP (item #51) vira LLM query. |
+| 136 | **LLM decide memory tier** — roteia alocações Dram/Vram/Nvme/Hdd | 🟡 Sprint 26 | Sprint 26 | Substitui `AllocTier` heurístico. |
+| 137 | **LLM classifica USB devices** — Neural Cortex 7→5 allow/deny/learn/no_intent/suspect | 🟡 Sprint 27 | Sprint 27 | Substitui item #3 (MLP 7→5). |
+| 138 | **LLM dispatch skills** — qual skill executar para cada intenção | 🟡 Sprint 27 | Sprint 27 | Evolução do roteamento atual. |
+| 139 | **Reflex MLP threshold tuning** — se confiança > 0.9, bypassa LLM | 🟡 Sprint 27 | Sprint 27 | Performance: decisões simples em microssegundos. |
+| 140 | **Speculative decoding** — Reflex MLP prediz próximo token, LLM verifica | ⏳ Pós-MVP | Sprint 27+ | Acelera geração 2-3×. |
+| 141 | **1.5B model benchmark** — 5-15 tok/s on single x86-64 core (AVX2) | 🟡 Sprint 26 | Sprint 26 | Critério de aceite do Cortex. |
+
+### 1.19. Transformer Engine (Detalhamento Técnico)
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 142 | `Attention` struct — q_proj, k_proj, v_proj, o_proj (todos `Linear`) | 🟡 Sprint 25 | Sprint 25 | Bloco fundamental do transformer. |
+| 143 | `causal_mask` — triângulo superior -inf, diag/abaixo 0 | 🟡 Sprint 25 | Sprint 25 | Impede token de "ver" o futuro. |
+| 144 | `softmax` row-wise em cima de `Tensor` | 🟡 Sprint 25 | Sprint 25 | Normalização das probabilidades de atenção. |
+| 145 | `TransformerBlock` — RMSNorm → Attn → residual → RMSNorm → FFN(SiLU) → residual | 🟡 Sprint 25 | Sprint 25 | Camada completa do transformer. |
+| 146 | `Transformer` — embed → N×TransformerBlock → RMSNorm → unembed | 🟡 Sprint 25 | Sprint 25 | Modelo completo. |
+| 147 | `generate()` — loop: forward → sample → next | 🟡 Sprint 25 | Sprint 25 | Geração autoregressiva. |
+| 148 | Sampling: argmax, top-k(3/5/10), temperature | 🟡 Sprint 27 | Sprint 27 | Controla criatividade da resposta. |
+
+### 1.20. Success Engine (Ajuste Online)
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 149 | Feedback loop — usuário avalia resposta (👍/👎) | ⏳ Pós-MVP | Sprint 29+ | Input para ajuste de pesos. |
+| 150 | Ternary weight update — {-1,0,+1} → {-1,0,+1} com probabilidade | ⏳ Pós-MVP | Sprint 29+ | Algoritmo de aprendizado online. Pesquisa. |
+| 151 | Experience replay buffer (últimas N interações) | ⏳ Pós-MVP | Sprint 29+ | Evita esquecimento catastrófico. |
+| 152 | Weight consolidation — export modelo atualizado | ⏳ Pós-MVP | Sprint 29+ | Persistência do aprendizado. |
+
+### 1.21. Treinamento (Host-side, Python)
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 153 | Train micro BitNet (1M params, TinyStories) → export `.bitnet` | 🟡 Sprint 25 | Sprint 25 | Modelo de teste para integrar. |
+| 154 | Distil Llama 3.2 1B → ternário → `.bitnet` 1.5B | 🟡 Sprint 26 | Sprint 26 | Modelo completo do AIOS. |
+| 155 | Pipeline `bitnet.cpp` quantization script | 🟡 Sprint 25 | Sprint 25 | Ferramenta para quantizar qualquer modelo. |
+| 156 | Ferramenta de validação — forward match kernel vs Python | 🟡 Sprint 25 | Sprint 25 | Garante que kernel e Python produzem mesmos outputs. |
+
 ---
 
 ## Seção 2 — Mapa de Calor
@@ -274,8 +325,12 @@ Nada é descartado sem registro. Ideias podem ser:
 | Roadmap Cognitive | 4 | 0 | 0 | 4 | 0 | 0 |
 | Roadmap Timeline | 3 | 0 | 0 | 3 | 0 | 0 |
 | Outras | 5 | 4 | 0 | 0 | 1 | 0 |
-| Docs/ADRs | 1 | 1 | 0 | 0 | 0 | 0 |
-| **Total** | **125** | **54 (43%)** | **11 (9%)** | **47 (38%)** | **9 (7%)** | **2 (2%)** |
+| Docs/ADRs | 3 | 3 | 0 | 0 | 0 | 0 |
+| Neural Cortex LLM (1.18) | 16 | 0 | 14 | 2 | 0 | 0 |
+| Transformer Engine (1.19) | 7 | 0 | 7 | 0 | 0 | 0 |
+| Success Engine (1.20) | 4 | 0 | 0 | 4 | 0 | 0 |
+| Treinamento (1.21) | 4 | 0 | 4 | 0 | 0 | 0 |
+| **Total** | **156** | **56 (36%)** | **36 (23%)** | **53 (34%)** | **9 (6%)** | **2 (1%)** |
 
 ---
 
@@ -568,3 +623,6 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-23 | Sprint 19: Itens 20-33 (SMP multi-core boot) → ✅ Block 2; AP boots with -smp 2 and -smp 4; race fix with spin::Mutex on CPU_COUNT | Dev + IDA IA |
 | 2026-06-23 | Sprint 20: Itens 114 (Hermes Chat) → ✅ Block 3; IntentMlp MLP + command parser + console daemon | Dev + IDA IA |
 | 2026-06-23 | ADR-0016: Itens 117-125 (Network Strategy) → adicionados; VirtIO-net + smoltcp + HTTP movidos para Sprint 23; MVP+1 = Network Sprint | IDA IA |
+| 2026-06-24 | ADR-0017: Itens CRÍTICOS corrigidos (e1000, DHCP, slab, nos, bridge, xsdt, mhi, nn) | IDA IA |
+| 2026-06-24 | ADR-0018: Sprint 24 plan (12 HIGH + 16 MEDIUM + 12 LOW bugs) | IDA IA |
+| 2026-06-24 | ADR-0019: Itens 126-156 (Neural Cortex BitNet LLM) → adicionados; Transformer Engine + Cortex Daemon + Success Engine + Training Pipeline | IDA IA |

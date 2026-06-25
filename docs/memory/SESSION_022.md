@@ -1,68 +1,70 @@
-# SESSION 022 — Block 5: Skills + Trust Cache + ISO
+# Sessão 022 — Sprint 22: Skills + Trust Cache (Block 5)
 
-**Data:** 2026-06-23  
-**Versão:** v0.17.0  
-**Sprint:** 22 (Block 5)
+**Data:** 2026-06-24
+**Duração:** Implementação completa do Block 5
+**Versão:** v0.17.0
 
-## Objetivo
+## Contexto
 
-Implementar TrustCache, atualizar SystemStatusSkill para consumir MHI, criar HardwareInfoSkill, e refinar detecção de arquitetura.
+Sprint 22 é o Block 5 da chain de 6 blocos (ADR-0015): Skills + Trust Cache. O objetivo era upgrade do `SystemStatusSkill`, criar `HardwareInfoSkill`, implementar `TrustCache` com suporte a TTL e denylist, integrar trust-aware execution nos daemons Hermes, e expor comandos `/trust allow/deny` e `/hw` no terminal.
 
-## Progresso
+## Dificuldades e Decisões
 
-### TrustCache (`crates/skill-registry/src/trust_cache.rs`)
+### 1. Onde colocar o TrustCache?
 
-- `TrustEntry` struct: token, granted_at (timer ticks), ttl_ticks
-- `TrustCache` struct: BTreeMap<u64, TrustEntry>, AtomicU64 next_id
-- `grant(token, current_ticks, ttl_override)` — insere com TTL
-- `revoke(token)` — remove entry
-- `is_trusted(token, current_ticks)` — verifica se não expirou
-- `DEFAULT_TTL_TICKS = 1800` (~100s a 18.2 Hz)
-- Exportado via `crates/skill-registry/src/lib.rs`
+**Problema:** TrustCache precisa de fonte de tempo (PIT ticks) para TTL, que é específica do kernel. Ao mesmo tempo, validação de token é responsabilidade do `skill-registry` crate.
 
-### SystemStatusSkill upgrade
+**Decisão:** TrustCache como módulo separado em `crates/neural-kernel/src/trust.rs`, consumido via `execute_skill_with_trust()` helper em `main.rs`. O `SkillRegistry` ganhou três métodos novos (`has_skill`, `validate_token`, `execute_skill_unchecked`) para permitir o padrão: TrustCache → validate → cache → execute_unchecked.
 
-- Agora chama `memory::global_hardware_context()` que retorna `[ratio, allocated_count]`
-- Consome `mhi::MemoryHierarchy::new()` para exibir RAM por tier
-- `hardware_context_tensor()` modificado: `[1]` agora retorna `allocated_count` (antes `0.0`)
+### 2. Trust-once-use-always vs TTL
 
-### HardwareInfoSkill
+**Problema:** O MVP exige "trust-once-use-always" para boa experiência, mas sem TTL tokens ficariam em cache para sempre se o usuário nunca revogasse.
 
-- Nova skill: lê `GLOBAL_ARCH` (SystemArchitecture guardado pós-boot)
-- Reporta CPU cores, GPU status, heap size, power mode, MHI tiers/bandwidth
-- Registrada no SKILL_REGISTRY junto com EchoSkill e SystemStatusSkill
+**Decisão:** Dois níveis:
+- `trust_allow()` = TTL = `u64::MAX` (efetivamente permanente, só revoga com `trust deny`)
+- `check_or_cache()` (auto-cache) = TTL = 360 ticks ≈ 20s (expira se não re-validado)
 
-### GLOBAL_ARCH
+### 3. Dupla validação de token
 
-- `lazy_static! { static ref GLOBAL_ARCH: spin::Mutex<Option<SystemArchitecture>> }`
-- Populado após `SystemArchitecture::infer()` no boot flow
-- Acessível por skills e daemons
+**Problema:** O `execute_skill()` original sempre validava o `CapabilityToken` contra os `required_tokens` do manifesto. Com TrustCache, a validação já foi feita — executar de novo seria redundante.
 
-### Boot flow
+**Decisão:** Criado `execute_skill_unchecked()` que ignora o token. O helper `execute_skill_with_trust()` garante que a validação acontece exatamente uma vez:
+1. Verifica TrustCache (fast path)
+2. Se falhar, valida via `validate_token()` (slow path)
+3. Se válido, faz `check_or_cache()` para acelerar próximas chamadas
+4. Executa via `execute_skill_unchecked()` sem re-validar
 
-- `[ARCH]` agora loga contagem de PCI devices
+### 4. Globais de sistema
 
-## Dificuldades e Correções
+**Problema:** `SystemArchitecture` e `MemoryHierarchy` eram variáveis locais em `kernel_main`. Skills precisavam acessá-las.
 
-1. **`hardware_context_tensor()[1]` inútil** — estava fixo em 0.0. Alterado para retornar `allocated_count as f32`.
-2. **TrustCache sem acesso a TIMER_TICKS** — o crate skill-registry não pode importar `crate::interrupts::TIMER_TICKS` do kernel. Solução: passar `current_ticks` como parâmetro em vez de usar extern function.
+**Decisão:** Três novos `lazy_static!` globais em `main.rs`: `SYSTEM_ARCH`, `MEMORY_HIERARCHY`, `TRUST_CACHE`. Preenchidos após `infer()` e `MemoryHierarchy::new()` no boot flow.
 
-## Resultados
+### 5. Parsing de comandos trust
 
-- `cargo check --release`: ✅ 0 errors, 17 warnings (todos pre-existentes)
-- `cargo bootimage --release`: ✅ Bootimage criado
-- QEMU boot: ✅ 6 tasks, pipeline completo, novas skills registradas
+**Problema:** `/trust allow 123 echo` requer parsing de 3 tokens após a barra, mas `splitn(2, whitespace)` no `parse_command()` original só divide em 2 partes.
 
-## Arquivos
+**Solução:** Para comandos `/trust`, o remainder (`"allow 123 echo"`) é dividido novamente com `splitn(3, whitespace)` para extrair subcomando, token u64 e skill name. `u64::from_str` via `parse()` funciona em `no_std` porque `u64` implementa `FromStr` em `core`.
 
-| Arquivo | Ação |
-|---|---|
-| `crates/skill-registry/src/trust_cache.rs` | Criado |
-| `crates/skill-registry/src/lib.rs` | Modificado |
-| `crates/neural-kernel/src/main.rs` | Modificado |
-| `crates/neural-kernel/src/memory.rs` | Modificado |
-| `Cargo.toml` | v0.16.0 → v0.17.0 |
-| `CHANGELOG.md` | Modificado |
-| `docs/memory/STATE.md` | Modificado |
-| `docs/memory/SESSION_022.md` | Criado |
-| `AGENTS.md` | Modificado |
+### 6. Cargo toolchain ausente
+
+`cargo` não está no PATH desta máquina. Todas as verificações foram manuais por revisão de código. Confiabilidade: todas as APIs usadas são existentes (BTreeMap, AtomicUsize, str::parse, etc.) ou foram estendidas com compatibilidade retroativa.
+
+## Arquivos Criados/Modificados
+
+| Arquivo | Ação | Linhas |
+|---|---|---|
+| `src/trust.rs` | Criado | 65 |
+| `src/hermes.rs` | Modificado | +Command::HardwareInfo, +TrustAllow/Deny, parse expansion |
+| `src/main.rs` | Modificado | Skills upgrade, globals, helper, intent_router refactor |
+| `skill-registry/src/registry.rs` | Modificado | +has_skill, +validate_token, +execute_skill_unchecked |
+| `Cargo.toml` | Modificado | v0.16.0 → v0.17.0 |
+
+## Estado Final
+
+- `cargo check --release`: ❌ Não verificado (toolchain ausente) — revisão manual
+- `bootimage`: ❌ Não verificado
+- QEMU boot: ❌ Não testado
+- Skills: 3 registradas (echo, system_status, hardware_info)
+- TrustCache: operacional com allow/deny/is_trusted/check_or_cache
+- Hermes: 9 comandos (/status, /echo, /hw, /trust allow, /trust deny, /help, + MLP chat)

@@ -110,7 +110,10 @@ fn send_eoi() {
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    if ticks < 5 {
+        serial_println!("[TIMER] Interrupt fired! tick={}", ticks);
+    }
     send_eoi();
 }
 

@@ -6,21 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.17.0] — 2026-06-23
+## [0.18.0] — 2026-06-24
 
-### Added (Sprint 22 — Block 5: Skills + Trust Cache + ISO)
+### Planned (Sprint 24+ — Neural Cortex BitNet LLM Integration)
 
-- `crates/skill-registry/src/trust_cache.rs` — TrustCache with TTL-based token cache:
-  - `TrustEntry { token, granted_at, ttl_ticks }` with `is_expired(current_ticks)`
-  - `TrustCache::grant(token, current_ticks, ttl_override)` and `revoke(token)`
-  - `TrustCache::is_trusted(token, current_ticks)` — O(1) BTreeMap lookup
-  - `DEFAULT_TTL_TICKS: 1800` (~100 seconds at 18.2 Hz)
-- **SystemStatusSkill upgraded** — now consumes MHI: reports RAM occupancy per tier and allocated frame count. `hardware_context_tensor()` now returns `[ratio, allocated_count]` instead of `[ratio, 0]`.
-- **HardwareInfoSkill** — new skill exposing CPU count, GPU presence, heap size, power mode, and MHI tier details via `GLOBAL_ARCH` lazy_static.
-- **`GLOBAL_ARCH`** — `spin::Mutex<Option<SystemArchitecture>>` stores architecture after inference, accessible from skills and daemons.
-- **Boot flow** — PCI device count now logged in `[ARCH]` line: `PCI devices: {n}`.
-- **`memory.rs`** — added `allocated_frame_count()` public accessor.
-- **Workspace crate versions** — `neural-kernel` bumped to v0.17.0.
+- **ADR-0019** — Neural Cortex Architecture: 3-layer decision pipeline (Reflex MLP → BitNet LLM 1.5B → WASM Skills)
+- **31 new IDEA_BANK items** (#126-156): Transformer Engine, Cortex Daemon, Success Engine, Training Pipeline
+- **Sprint 25:** Attention, causal mask, softmax, TransformerBlock, generation loop, tokenizer, micro-model (1M)
+- **Sprint 26:** Cortex Daemon, 1.5B model (~375 MB), model HTTP update, hardware/memory/trust decisions via LLM
+- **Sprint 27+:** Reflex threshold tuning, sampling strategies, speculative decoding, Success Engine (online learning)
+- **Memory budget:** 2 GB QEMU → 375 MB model + ~100 MB runtime + ~1.5 GB free
+- Version bump: v0.17.1 → v0.18.0 (architecture planning)
+
+## [0.17.1] — 2026-06-24
+
+### Fixed (Sprint 23 — Code Review & Critical Bugfix Sprint)
+
+- **#1 — e1000 RCTL/TCTL enable:** Added `REG_RCTL` / `REG_TCTL` constants and 8 enable bits. NIC was previously dead.
+- **#2 — e1000 MMIO BAR mask:** Replaced `if/else (bar0 & 1)` with unconditional `(bar0 & !0xF) as u64`.
+- **#3 — DHCP broadcast MAC acceptance:** `parse_dhcp_offer` and `parse_dhcp_ack` now accept `FF:FF:FF:FF:FF:FF` as destination.
+- **#4 — DHCP false positive ACK:** Changed `return true` to `return false` when no ACK received.
+- **#5 — Slab allocator off-by-one:** `addr + block_size <= zone_end` → `addr + block_size < zone_end` prevents buffer overflow.
+- **#6 — Inline asm UB:** Removed `options(nostack)` from `pushfq; pop` instruction.
+- **#7 — PCI bridge secondary bus:** Added `read_config_byte()`, reads secondary bus number at offset 0x19 instead of hardcoded `bus+1`.
+- **#8 — ACPI XSDT stride:** Detects XSDT vs RSDT; uses 8-byte entry stride for XSDT (was 4 bytes, truncating 64-bit pointers).
+- **#9 — MHI alloc_by_tier:** Uses `allocate_contiguous()` first; frees previously allocated frames on failure.
+- **#10 — Neural bias per batch row:** Bias now applied to all batch rows (nested loop `batch_size × out_features`).
+- **DHCP protocol fixes:** xid kept same for REQUEST (not `+1`); hostname option length 12→11 (`b"neural-aios"` is 11 bytes).
+- **mhi.rs:** Added `FrameDeallocator` import for deallocation cleanup.
+- ADR-0017: Critical Bugfix Sprint documentation.
+- SESSION_023.md: Detailed session log with difficulties and decisions.
+- Version bump: v0.17.0 → v0.17.1
+
+## [0.17.0] — 2026-06-24
+
+### Added (Sprint 22 — Block 5: Skills + Trust Cache)
+
+- **`trust.rs`** — `TrustCache` with:
+  - `is_trusted(token, skill_name, now_ticks)` — checks cache and denylist
+  - `trust_allow(token, skill_name, now_ticks)` — permanent trust until explicit deny
+  - `trust_deny(token, skill_name)` — revoke trust + add to denylist
+  - `check_or_cache(token, skill_name, now_ticks, ttl_ticks)` — auto-cache on valid token (360 ticks ≈ 20s TTL)
+- **`HardwareInfoSkill`** — new skill exposing `SystemArchitecture` (ring mode, heap size, etc.) and MHI tier info. Invoked via `/hw`, `/hardware`, or `/info` commands.
+- **`SystemStatusSkill` upgraded** — now reads MHI tiers + `GLOBAL_ALLOCATOR` occupancy to report per-tier free/total RAM in MB.
+- **`SkillRegistry` additions** (`registry.rs`):
+  - `has_skill(name) -> bool` — check if skill exists
+  - `validate_token(name, token) -> bool` — check token authorization without executing
+  - `execute_skill_unchecked(name, payload)` — skip token validation (caller must validate)
+- **Trust-aware Hermes commands**:
+  - `/trust allow <token> <skill>` — permanently authorize a token for a skill
+  - `/trust deny <token> <skill>` — revoke authorization
+  - `/hw` — display hardware info and system architecture
+  - All skill executions (`/status`, `/echo`, MLP-triggered) now use `execute_skill_with_trust()` helper
+- **Help text updated** — lists all available commands
+- Version bump: v0.16.0 → v0.17.0
 
 ## [0.16.0] — 2026-06-23
 

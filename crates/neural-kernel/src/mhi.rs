@@ -1,7 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use x86_64::PhysAddr;
-use x86_64::structures::paging::FrameAllocator;
+use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AllocTier {
@@ -55,13 +55,32 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<PhysAddr> {
     match tier {
         AllocTier::Dram => {
             let num_frames = (size + 4095) / 4096;
+            if num_frames == 0 { return None; }
             let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
             let alloc = guard.as_mut()?;
-            let first = alloc.allocate_frame()?;
-            for _ in 1..num_frames {
-                alloc.allocate_frame()?;
+            if num_frames == 1 {
+                let frame = alloc.allocate_frame()?;
+                return Some(frame.start_address());
             }
-            Some(first.start_address())
+            let contiguous = alloc.allocate_contiguous(num_frames);
+            if let Some(frame) = contiguous {
+                return Some(frame.start_address());
+            }
+            // Fallback: allocate non-contiguous frames, free on failure
+            let mut frames = alloc::vec::Vec::new();
+            for _ in 0..num_frames {
+                match alloc.allocate_frame() {
+                    Some(f) => frames.push(f),
+                    None => {
+                        // Free already-allocated frames
+                        for f in frames {
+                            unsafe { alloc.deallocate_frame(f); }
+                        }
+                        return None;
+                    }
+                }
+            }
+            Some(frames[0].start_address())
         }
         AllocTier::Vram => {
             crate::serial_println!("[MHI] Vram alloc not implemented (no GPU driver)");
