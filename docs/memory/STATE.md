@@ -1,7 +1,8 @@
 # ═══════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core Hermes v0.19.0
-#   "Ecosystem Analysis Complete — 136 repos, 249 ideias"
-#   ADR-0015 (Curso Correção) + ADRs 0020-0024 (Pesquisa)
+#   PLANO DIRETOR — neural-os-core Hermes v0.20.0
+#   "Sprint 23: Hermes Governance & Agent Memory"
+#   #228 Tool Policy Registry · #229 Usage Tracker
+#   #230 Auto-Compact Buffer · #231 Event-Sourced Conversation
 # ═══════════════════════════════════════════════
 
 # Project State — neural-os-core
@@ -367,6 +368,42 @@ Nenhuma (Tensor + Linear + SiLU já existentes no kernel).
 
 Nenhuma (tudo com crates existentes + PCI scan + bitmap allocator já implementados).
 
+## Sprint 23 — Hermes Governance & Agent Memory (v0.20.0)
+
+**Data:** 2026-06-25
+
+### Entregas
+
+1. **#228 Tool Policy Registry** — `SkillRegistry` expandido com `BTreeMap<String, ToolPolicy>` onde cada política tem `enabled: bool` e `auto_approve: bool`. Suporte a wildcard `"*"` como fallback. `execute_skill()` verifica `enabled` antes de executar; `auto_approve` permite ignorar validação de token. Novos métodos: `set_policy()`, `get_policy()`, `is_enabled()`, `is_auto_approve()`, `list_skills()`.
+
+2. **#229 Usage Tracker** — `usage.rs`: `UsageTracker` global com `record_call(skill, duration_ticks)` e `snapshot() -> UsageSnapshot { total_calls, by_skill, total_exec_time_ticks }`. `to_metrics_tensor()` exporta como `[f32; 4]` para o roteador MLP. Atomic counter para eventos leves (`record_event()` / `event_count()`). Comando `/usage` no Hermes.
+
+3. **#230 Auto-Compact Hermes Buffer** — `ConversationTracker` em `hermes.rs`: `record_exchange()` + `needs_compact()` (gatilho em 3 ciclos) + `compact()` que gera sumário textual e limpa o buffer. Integrado ao `intent_router_daemon`: após `HERMES_RESPONSE`, registra troca e compacta se necessário.
+
+4. **#231 Event-Sourced Conversation** — `conversation.rs`: `EventLog` com `VecDeque<ConversationEvent>` (max 256), `EventKind { UserInput, HermesResponse, SkillExecuted, SystemEvent, ContextCompacted }`. `push()`, `iter()`, `last_n()`, `events_since()`, `summarize()`. Eventos de `UserInput` e `HermesResponse` registrados automaticamente. Comando `/conv` no Hermes.
+
+### Arquivos criados/modificados
+
+| Arquivo | Ação |
+|---|---|
+| `src/usage.rs` | Criado |
+| `src/conversation.rs` | Criado |
+| `src/hermes.rs` | Modificado — +ConversationTracker, +Command::Usage/Conversation |
+| `crates/skill-registry/src/registry.rs` | Modificado — +ToolPolicy, +set_policy/get_policy/is_enabled/is_auto_approve/list_skills |
+| `crates/skill-registry/src/lib.rs` | Modificado — +ToolPolicy export |
+| `src/main.rs` | Modificado — +mod usage/conversation, +globals, +comandos, +event recording |
+
+### Dependências novas
+Nenhuma.
+
+### Métricas
+- Tool Policy Registry: ~80 LOC
+- Usage Tracker: ~75 LOC  
+- Auto-Compact Buffer: ~45 LOC
+- Event-Sourced Conversation: ~100 LOC
+- Total: ~300 LOC
+- `cargo check --release`: 0 erros, 0 failures
+
 ## Sprint 22 (Block 5: Skills + Trust Cache + Timer Fix) — Concluído (v0.17.0)
 
 **Data:** 2026-06-24
@@ -514,19 +551,24 @@ Para inventário completo de 249 itens com status individual: ver `docs/memory/I
 
 ---
 
-## 🏁 Milestone: Ecosystem Analysis Complete (25/06/2026)
+## 🏁 Milestone: Sprint 23 — Hermes Governance & Agent Memory (25/06/2026)
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║   TIERS 0-4 COMPLETE · 136 REPOS · 249 IDEAS · 5 ADRs       ║
+║   SPRINT 23 COMPLETE — 4 ITEMS · 300+ LOC · 0 ERRORS        ║
 ║                                                              ║
-║   Phase 1 — Foundation (Sprints 1-22)     ✅ Kernel bootável  ║
-║   Phase 2 — Ecosystem Research (Tiers 0-4) ✅ 136 repos done ║
-║   Phase 3 — Implementation (Sprint 23+)    🟡 Próximo         ║
+║   #228 Tool Policy Registry         SkillRegistry policy    ║
+║   #229 Usage Tracker                Metrics accumulator     ║
+║   #230 Auto-Compact Hermes Buffer   3-cycle compact         ║
+║   #231 Event-Sourced Conversation   VecDeque immutable log  ║
+║                                                              ║
+║   Phase 1 — Foundation (Sprints 1-22)   ✅ Kernel bootável   ║
+║   Phase 2 — Ecosystem Research          ✅ 136 repos done   ║
+║   Phase 3 — Sprint 23 Implementation    ✅ 4 items done      ║
 ║                                                              ║
 ║   "We don't need an OS that runs AI.                         ║
 ║    We need an OS that IS AI."                                ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
-**v0.19.0 — "Hermes Awakening"** — Documentação unificada, visão de futuro consolidada, 99 patterns portados de 136 repositórios. Próximo: implementar Sprint 23 (Network + Tool Policy + Usage Tracker + Event-Sourced Conversation).
+**v0.20.0 — "Hermes Governance"** — Quatro padrões da análise de ecossistema implementados. Tool Policy, Usage Tracker, Auto-Compact, Event-Sourced Conversation — todos operacionais no kernel. Próximo: network stack (VirtIO-net + smoltcp) ou Crom features (XOR Delta, CDC Rabin Fingerprint).

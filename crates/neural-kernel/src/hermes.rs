@@ -1,9 +1,51 @@
 use alloc::string::String;
 use alloc::string::ToString;
+use alloc::vec::Vec;
 use crate::tensor::Tensor;
 
 pub const TOPIC_USER_INTENT: &str = "USER_INTENT";
 pub const TOPIC_HERMES_RESPONSE: &str = "HERMES_RESPONSE";
+
+const AUTO_COMPACT_THRESHOLD: usize = 3;
+
+pub struct ConversationTracker {
+    cycle_count: usize,
+    buffer: Vec<(String, String)>,
+}
+
+impl ConversationTracker {
+    pub const fn new() -> Self {
+        ConversationTracker {
+            cycle_count: 0,
+            buffer: Vec::new(),
+        }
+    }
+
+    pub fn record_exchange(&mut self, user_input: &str, hermes_response: &str) {
+        self.buffer.push((String::from(user_input), String::from(hermes_response)));
+        self.cycle_count = self.buffer.len();
+    }
+
+    pub fn needs_compact(&self) -> bool {
+        self.cycle_count >= AUTO_COMPACT_THRESHOLD
+    }
+
+    pub fn compact(&mut self) -> String {
+        let summary = alloc::format!(
+            "[auto-compact] {} ciclos de conversa: ultima entrada: '{}', ultima resposta: '{}'",
+            self.cycle_count,
+            self.buffer.last().map_or("", |(u, _)| u.as_str()),
+            self.buffer.last().map_or("", |(_, r)| r.as_str()),
+        );
+        self.buffer.clear();
+        self.cycle_count = 0;
+        summary
+    }
+
+    pub fn cycle_count(&self) -> usize {
+        self.cycle_count
+    }
+}
 
 const VOCAB: [&str; 16] = [
     "status", "memory", "ram", "cpu", "system",
@@ -19,6 +61,8 @@ pub enum Command {
     NetDiag,
     TrustAllow(u64, String),
     TrustDeny(u64, String),
+    Usage,
+    Conversation,
     Chat(String),
 }
 
@@ -60,6 +104,12 @@ pub fn parse_command(line: &str) -> Command {
                     return Command::TrustDeny(token, skill);
                 }
             }
+        }
+        if name.eq_ignore_ascii_case("usage") || name.eq_ignore_ascii_case("metrics") {
+            return Command::Usage;
+        }
+        if name.eq_ignore_ascii_case("conv") || name.eq_ignore_ascii_case("conversation") || name.eq_ignore_ascii_case("log") {
+            return Command::Conversation;
         }
         if name.eq_ignore_ascii_case("help") || name == "?" || name.eq_ignore_ascii_case("h") {
             return Command::Help;

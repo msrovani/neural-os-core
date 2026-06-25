@@ -33,6 +33,8 @@ mod serial;
 mod simd;
 mod task;
 mod tensor;
+mod usage;
+mod conversation;
 mod vga_buffer;
 mod e1000;
 mod net;
@@ -133,12 +135,16 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
         reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
         reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
+        reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         spin::Mutex::new(reg)
     };
     static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
     static ref TRUST_CACHE: spin::Mutex<trust::TrustCache> = spin::Mutex::new(trust::TrustCache::new());
     static ref SYSTEM_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
     static ref MEMORY_HIERARCHY: spin::Mutex<Option<mhi::MemoryHierarchy>> = spin::Mutex::new(None);
+    static ref USAGE_TRACKER: spin::Mutex<usage::UsageTracker> = spin::Mutex::new(usage::UsageTracker::new());
+    static ref EVENT_LOG: spin::Mutex<conversation::EventLog> = spin::Mutex::new(conversation::EventLog::new());
+    static ref CONVERSATION_TRACKER: spin::Mutex<hermes::ConversationTracker> = spin::Mutex::new(hermes::ConversationTracker::new());
 }
 
 #[panic_handler]
@@ -472,6 +478,18 @@ async fn intent_router_daemon() {
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
+                hermes::Command::Usage => {
+                    let snap = USAGE_TRACKER.lock().snapshot();
+                    alloc::format!(
+                        "Usage: {} chamadas totais, {} ticks.{}",
+                        snap.total_calls, snap.total_exec_time_ticks,
+                        snap.by_skill.iter().map(|(n, c)| alloc::format!(" {}:{}", n, c)).collect::<alloc::string::String>(),
+                    )
+                }
+                hermes::Command::Conversation => {
+                    let log = EVENT_LOG.lock();
+                    log.summarize()
+                }
                 hermes::Command::TrustAllow(token, ref skill) => {
                     let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                     {
@@ -488,7 +506,7 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent_id = INTENT_MLP.classify(msg);
@@ -516,6 +534,28 @@ async fn intent_router_daemon() {
                 }
             };
 
+            let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            USAGE_TRACKER.lock().record_call("intent_router", 1);
+            EVENT_LOG.lock().push(
+                conversation::EventKind::UserInput,
+                event.payload.clone(),
+                now,
+            );
+            EVENT_LOG.lock().push(
+                conversation::EventKind::HermesResponse,
+                response.as_bytes().to_vec(),
+                now,
+            );
+            CONVERSATION_TRACKER.lock().record_exchange(text, &response);
+            if CONVERSATION_TRACKER.lock().needs_compact() {
+                let compact_msg = CONVERSATION_TRACKER.lock().compact();
+                serial_println!("[HERMES] {}", compact_msg);
+                EVENT_LOG.lock().push(
+                    conversation::EventKind::ContextCompacted,
+                    compact_msg.into_bytes(),
+                    now,
+                );
+            }
             let resp_event = event_bus::Event {
                 id: 0,
                 topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),

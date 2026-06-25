@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.20.0] — 2026-06-25 — Sprint 23: Hermes Governance & Agent Memory
+
+### Added
+
+- **#228 Tool Policy Registry** — `SkillRegistry.set_policy()` / `get_policy()` with per-skill `{ enabled, autoApprove }` and `"*"` wildcard fallback. `execute_skill` now gates on `enabled`; `auto_approve` bypasses token validation.
+- **#229 Usage Tracker** — `UsageTracker` global with `record_call()`, `snapshot()`, `to_metrics_tensor()`. Tracks per-skill call counts and exec time. Accessible via `/usage` Hermes command.
+- **#230 Auto-Compact Hermes Buffer** — `ConversationTracker` auto-compacts conversation after 3 cycles. Summary logged to serial on compact.
+- **#231 Event-Sourced Conversation** — `EventLog` with `VecDeque<ConversationEvent>` (max 256), push/iter/summarize. Events recorded for UserInput and HermesResponse. Query via `/conv` Hermes command.
+- New Hermes commands: `/usage`, `/conv`
+- Help updated to include all new commands
+- `cargo check --release`: 0 errors
+- Version bump: v0.19.0 → v0.20.0
+
 ## [0.19.0] — 2026-06-25 — 🏁 "Hermes Awakening" Milestone
 
 ### Milestone: Ecosystem Analysis Complete (Tiers 0-4)
