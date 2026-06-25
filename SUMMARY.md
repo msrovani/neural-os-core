@@ -1,3 +1,10 @@
+# ═══════════════════════════════════════════════
+#   PLANO DIRETOR — Neural OS Hermes
+#   Versão v0.19.0 — "Hermes Awakening"
+#   Ecosystem Analysis Complete · Tiers 0-4 (136 repos)
+#   249 ideas catalogadas · 5 ADRs de ecossistema
+# ═══════════════════════════════════════════════
+
 # Neural OS Hermes — AI Summary
 
 **O que é:** Um sistema operacional bare-metal (no_std Rust, sem Linux) onde o kernel É uma rede neural. Uma "viagem no reino da maionese" — um SO que roda IA, mas mais importante, que **é** IA.

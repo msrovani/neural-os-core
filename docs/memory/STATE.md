@@ -1,3 +1,9 @@
+# ═══════════════════════════════════════════════
+#   PLANO DIRETOR — neural-os-core Hermes v0.19.0
+#   "Ecosystem Analysis Complete — 136 repos, 249 ideias"
+#   ADR-0015 (Curso Correção) + ADRs 0020-0024 (Pesquisa)
+# ═══════════════════════════════════════════════
+
 # Project State — neural-os-core
 
 ## Sprint 1 — Chassi Básico (Complete)
@@ -505,3 +511,22 @@ Para inventário completo de 249 itens com status individual: ver `docs/memory/I
 | **Total** | **136** | **99** | |
 
 **Next:** Tier 5 (Language-Specific Runtimes) — WASM, Rust native agents, C ABI tools
+
+---
+
+## 🏁 Milestone: Ecosystem Analysis Complete (25/06/2026)
+
+```
+╔══════════════════════════════════════════════════════════════╗
+║   TIERS 0-4 COMPLETE · 136 REPOS · 249 IDEAS · 5 ADRs       ║
+║                                                              ║
+║   Phase 1 — Foundation (Sprints 1-22)     ✅ Kernel bootável  ║
+║   Phase 2 — Ecosystem Research (Tiers 0-4) ✅ 136 repos done ║
+║   Phase 3 — Implementation (Sprint 23+)    🟡 Próximo         ║
+║                                                              ║
+║   "We don't need an OS that runs AI.                         ║
+║    We need an OS that IS AI."                                ║
+╚══════════════════════════════════════════════════════════════╝
+```
+
+**v0.19.0 — "Hermes Awakening"** — Documentação unificada, visão de futuro consolidada, 99 patterns portados de 136 repositórios. Próximo: implementar Sprint 23 (Network + Tool Policy + Usage Tracker + Event-Sourced Conversation).

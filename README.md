@@ -2,7 +2,7 @@
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
-> **🧠 AI/Dev Quick Start:** `SUMMARY.md` (resumo) · `AGENTS.md` (regras) · `docs/memory/IDEA_BANK.md` (ideias) · `docs/architecture/0015-curso-correcao-mvp.md` (plano)
+> **🧠 AI/Dev Quick Start:** `SUMMARY.md` (plano diretor) · `AGENTS.md` (regras) · `docs/memory/IDEA_BANK.md` (249 ideias) · `docs/memory/STATE.md` (estado) · `docs/architecture/0015-curso-correcao-mvp.md` + ADRs 0020-0024 (estratégia)
 
 ```
 
@@ -25,7 +25,9 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built (Sprint 22 — Hermes Chat + Skills + Trust Cache)
+## 🏗️ What's Been Built — v0.19.0 "Hermes Awakening" (Milestone)
+
+![Status](https://img.shields.io/badge/status-stable-brightgreen) ![Version](https://img.shields.io/badge/version-0.19.0-blue) ![Tiers](https://img.shields.io/badge/ecosystem-136_repos_·_249_ideas-orange)
 
 The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache. Ecosystem analysis complete across 5 tiers (136 repos, 249 ideas cataloged):
 
