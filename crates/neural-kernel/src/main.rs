@@ -30,6 +30,7 @@ mod smp;
 mod sync;
 mod nn;
 mod trust;
+mod self_heal;
 mod serial;
 mod xhci;
 mod simd;
@@ -188,19 +189,47 @@ lazy_static! {
     static ref USAGE_TRACKER: spin::Mutex<usage::UsageTracker> = spin::Mutex::new(usage::UsageTracker::new());
     static ref EVENT_LOG: spin::Mutex<conversation::EventLog> = spin::Mutex::new(conversation::EventLog::new());
     static ref CONVERSATION_TRACKER: spin::Mutex<hermes::ConversationTracker> = spin::Mutex::new(hermes::ConversationTracker::new());
+    static ref SELF_HEAL: spin::Mutex<self_heal::SelfHeal> = spin::Mutex::new(self_heal::SelfHeal::new());
 }
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("[PANIC] {}", info);
     serial_println!("[PANIC] {}", info);
+
+    let msg = alloc::format!("{}", info);
+    let kind = if msg.contains("PageFault") { "PageFault" } else if msg.contains("DoubleFault") { "DoubleFault" } else { "Panic" };
+
+    // Attempt self-healing
+    let ctx = self_heal::ErrorContext {
+        kind,
+        message: msg.clone(),
+        file: String::from(info.location().map_or("?", |l| l.file())),
+        line: info.location().map_or(0, |l| l.line()),
+        ring: 0,
+        daemon: String::from("kernel"),
+        tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed),
+    };
+    let action = SELF_HEAL.lock().analyze(&ctx);
+    match action {
+        self_heal::RecoveryAction::LogAndContinue => {
+            serial_println!("[SELF-HEAL] Continuando apos erro...");
+        }
+        self_heal::RecoveryAction::RestartDaemon(ref name) => {
+            serial_println!("[SELF-HEAL] Reiniciando daemon '{}'...", name);
+        }
+        self_heal::RecoveryAction::CreateSkill(ref name, ref fix) => {
+            serial_println!("[SELF-HEAL] Skill dinamica sugerida para '{}': {}", name, fix);
+        }
+        _ => {}
+    }
+
     let _ = EVENT_BUS.publish(crate::Event {
         id: 0,
         topic: alloc::string::String::from(cortex::TOPIC_KERNEL_ERROR),
-        payload: alloc::format!("{}", info).into_bytes(),
+        payload: msg.into_bytes(),
         token: crate::CapabilityToken(1),
     });
-    // A small wait for the event to be dispatched before halting
     for _ in 0..100000 { core::hint::spin_loop(); }
     loop { x86_64::instructions::hlt(); }
 }
