@@ -75,7 +75,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors) + QEMU boot. Dead-code/unused warnings are EXPECTED per Known Warnings Policy (currently ~40).
 
-## 24 Sprints Complete
+## 25 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -150,6 +150,9 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 
 ### Sprint 24 (v0.24.0–v0.24.1) — smoltcp + e1000 removal + SMP fix (Block 7)
 `netstack.rs` — smoltcp 0.13.1 integrado via Device trait (Rtl8139Phy). API HTTP não-bloqueante: `http_new()` + `http_poll()` (1 estado/tick). `time_utils::datetime()` — UNIX→data BR global. **e1000 removido** — arquivo deletado, init removido, proto.rs limpo. **SMP fix crítico:** `OffsetPageTable::map_to()` substitui raw PTE write que corrompia dados da BIOS quando PD[0] é HUGE_PAGE. 3 APs estáveis, page fault APIC eliminado.
+
+### Sprint 25 (v0.25.0) — Neural Cortex in Hermes (Block 8)
+`cortex.rs` — `Cortex::think()` classifica texto em 12 intenções. `intent_router_daemon` substitui `INTENT_MLP` (hand-crafted 16→8→3) por dispatch neural com skills. Pipeline completo: teclado → EVENT_BUS → Cortex → SkillRegistry → VGA. MemPalace 3.5.0 instalado para memória persistente.
 
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)

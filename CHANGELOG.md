@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.25.0] — 2026-06-25 — Neural Cortex in Hermes
+
+### Added
+- **Cortex neural intent router** — `cortex.rs`: `Cortex::think()` classifica texto em 12 intenções (SystemStatus, Echo, HardwareInfo, TrustAllow/Deny, Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat).
+- **Pipeline neural completo** — teclado → input_daemon → USER_INTENT → intent_router_daemon → Cortex → SkillRegistry → VGA.
+- **Dispatch automático** — intent_router_daemon usa `SKILL_REGISTRY.has_skill()` para rotear para skills existentes.
+
+### Removed
+- **INTENT_MLP** — MLP antigo (16→8→3, hand-crafted) removido. Substituído por Cortex.
+
 ## [0.24.1] — 2026-06-25 — SMP Huge Page Fix
 
 ### Fixed

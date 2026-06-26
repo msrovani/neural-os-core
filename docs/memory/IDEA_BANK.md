@@ -48,7 +48,7 @@ Nada é descartado sem registro. Ideias podem ser:
 |---|---|---|---|---|
 | 1 | xHCI controller mínimo (<500 LOC, BAR0, port status) | ⏳ Pós-MVP | Sprint 23+ | MVP usa PS/2 legacy. xHCI requer PCI (Block 1) + driver USB (~500 LOC). |
 | 2 | `identify_device()` → VID/PID/class | ⏳ Pós-MVP | Sprint 23+ | Bloqueado pelo xHCI driver. |
-| 3 | Neural Cortex classify (MLP 7→5: allow/deny/learn/no_intent/suspect) | ⏳ Pós-MVP | Sprint 23+ | MLP arquitetura (Block 4) pode ser estendido. |
+| 3 | Neural Cortex classify (MLP 7→5: allow/deny/learn/no_intent/suspect) | ✅ Sprint 25 | Sprint 25 | Implementado como `cortex::Cortex::think()` com 12 intenções. Substitui INTENT_MLP antigo (16→8→3). |
 | 4 | Trust Cache (TrustEntry, TrustTable, trust-once-use-always) | 🔄 Fundido no Block 5 | Sprint 22 | TrustCache do MVP (Block 5) é versão simplificada. |
 | 5 | Trust Cache: regra de 5 situações (auto-ON, conhecido, novo, rejeitado, desconhecido) | 🔄 Fundido no Block 5 | Sprint 22 | Incorporado à TrustTable do MVP. |
 | 6 | Trust Cache: persistência no SFS (`/system/trust/usb.tbl`) | ⏳ Pós-MVP | Sprint 24+ | Requer SFS (Sprint 24). MVP sem persistência. |

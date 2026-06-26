@@ -2,35 +2,130 @@
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
-> **🧠 AI/Dev Quick Start:** `SUMMARY.md` (plano diretor) · `AGENTS.md` (regras) · `docs/memory/IDEA_BANK.md` (249 ideias) · `docs/memory/STATE.md` (estado) · `docs/architecture/0015-curso-correcao-mvp.md` + ADRs 0020-0024 (estratégia)
+> **🧠 AI/Dev Quick Start:** `SUMMARY.md` · `AGENTS.md` · `docs/memory/IDEA_BANK.md` · `docs/memory/STATE.md` · `docs/memory/STATE.md`
 
 ```
-
-
-
-
-
-
            ╔═══════════════════════════════════════════════════════════╗
            ║  "We don't need an OS that runs AI.                     ║
            ║   We need an OS that IS AI."                            ║
            ╚═══════════════════════════════════════════════════════════╝
 ```
 
-Windows, Linux, and macOS are all the same OS designed 50 years ago with different colors. They bolt AI on top — a chatbot in the taskbar, a copilot in the browser, a GPU driver that lets PyTorch run. The kernel doesn't know what AI is. It never will.
+Windows, Linux, and macOS bolt AI on top — a chatbot in the taskbar, a copilot in the browser. The kernel doesn't know what AI is.
 
-**Neural OS Hermes is different.** The kernel itself is a neural inference engine. MLPs make architectural decisions. A Memory Hierarchy Index treats VRAM, DRAM, NVMe, and HDD as a single AI-routed tiered pool. The boot sequence is an AI pipeline: detect hardware → decide config → chat with the user → execute skills.
+**Neural OS Hermes is different.** The kernel itself is a neural inference engine. The Cortex classifies every user intent. The Memory Hierarchy Index treats VRAM, DRAM, NVMe, and HDD as a single AI-routed tiered pool. Seven cooperative AI agents run the system — no shell, no init, no systemd.
 
 No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built — v0.24.1 "smoltcp Network Agent" (Sprint 24)
+## 🚀 Boot Timeline — What the System Does
 
-![Status](https://img.shields.io/badge/status-stable-brightgreen) ![Version](https://img.shields.io/badge/version-0.24.1-blue) ![Tiers](https://img.shields.io/badge/ecosystem-136_repos_·_249_ideas-orange)
+From power-on to interactive Hermes console, here's every step:
 
-The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache. Ecosystem analysis complete across 5 tiers (136 repos, 249 ideas cataloged):
+### 1. Bootloader (UEFI/BIOS → 64-bit)
+```
+SeaBIOS → iPXE → bootloader crate → kernel_main
+```
+The bootloader (`bootloader` v0.9.34) sets up page tables with `map_physical_memory`, passes `BootInfo` with memory map. The kernel starts at the `kernel_main` entry point in long mode.
 
+### 2. VGA + Serial (Dual Output)
+```
+vga_buffer::init(offset) → VGA 80×25 color text
+serial::init() → COM1 at 0x3F8 (host terminal)
+```
+Every `print!`/`println!` writes to both the QEMU window (VGA) and the host terminal (serial). The panic handler also dual-outputs.
+
+### 3. IDT + GDT + TSS (Exception Handling)
+```
+interrupts::init_idt() → 8 handlers + Breakpoint (logs + returns)
+                       → Double Fault (IST stack, 20KB buffer)
+                       → Page Fault (CR2 → log → hlt)
+                       → Timer (PIT → LAPIC, atomic counter)
+                       → Keyboard (IRQ1 → AtomicU8 release)
+```
+The GDT is recreated from scratch (bootloader GDT is minimal). The TSS provides an Interrupt Stack Table for Double Fault recovery.
+
+### 4. Memory Init (Page Tables + Heap)
+```
+memory::init_memory(offset) → OffsetPageTable via CR3
+allocator::init_heap() → 4 MB heap at 0x4444_4444_0000
+                       → LockedHeap (3.5 MB) + Slab (512 KB)
+```
+Page tables are accessed through the physical memory offset (bootloader feature `map_physical_memory`). The heap uses a linked-list allocator for general allocations and a slab allocator for small objects (32-4096 bytes, 8 buckets).
+
+### 5. SIMD + Tensor Core (Neural Foundation)
+```
+enable_simd() → CR0/CR4: FXSAVE/FXRSTOR, SSE, SSE2
+→ Tensor matmul, SiLU, RMSNorm, 2-bit PackedTernaryTensor
+→ BitNet Linear: matmul_hybrid() — ADD/SUB only, zero multiplications
+```
+The entire neural stack (used by Cortex intent router) is pure `no_std` Rust using the `libm` crate for `expf`/`sqrtf`.
+
+### 6. PCI Scan + ACPI + APIC (Hardware Discovery)
+```
+PCI: CF8/CFC scan → 256 busses, vendor/device/class/BARs
+ACPI: RSDP (EBDA/BIOS) → RSDT/XSDT → MADT (LAPIC/IOAPIC)
+APIC: LAPIC timer (periodic, ~100 Hz) + IOAPIC keyboard redirect + PIC disable
+```
+The system discovers QEMU's virtual hardware: 4 devices (host bridge, ISA bridge, VGA, RTL8139 NIC). The LAPIC timer replaces the PIT for precise interrupt generation.
+
+### 7. SMP Multi-Core (AP Boot)
+```
+INIT-SIPI-SIPI → trampoline at 0x40000 → 3 APs in 64-bit Rust
+Stack: PerCpu (GS.base) → hlt loop
+```
+All 4 cores (BSP + 3 APs) boot via `OffsetPageTable::map_to()` — this correctly handles 2MB/1GB huge pages (critical bug fixed in Sprint 24).
+
+### 8. Architecture Inference + Memory Hierarchy
+```
+SystemArchitecture::infer() → heuristic: GPU? RAM? Cores?
+MemoryHierarchy::new() → Dram tier from bitmap allocator
+```
+The system classifies itself and decides heap size, ring assignment, and tensor compute resources.
+
+### 9. RTL8139 Network + smoltcp TCP/IP
+```
+init_driver_rtl8139() → I/O ports, 4 TX desc, RX ring buffer
+NetStack lazy init → smoltcp Interface + Device trait
+NetworkAgent → DNS resolve → HTTP connect (non-blocking)
+```
+The kernel detects the RTL8139 NIC, initializes it, and delegates TCP/IP to smoltcp. The network agent polls the interface once per tick and can make HTTP requests.
+
+### 10. NeuralExecutor — 7 Cooperative Agents
+```
+NeuralExecutor::run() → VecDeque<AgentTask> polling loop
+
+  task 1: system_daemon       → publish SYSTEM_READY
+  task 2: hardware_monitor    → context tensor every 100 ticks
+  task 3: hw_bridge           → scancode → EventBus
+  task 4: network_agent       → smoltcp poll → HTTP
+  task 5: input_daemon        → ASCII buffer → ENTER → USER_INTENT
+  task 6: intent_router       → Cortex.think() → SkillRegistry
+  task 7: hermes_console      → display [Hermes] responses
+```
+Each task runs cooperatively — `yield_now().await` after every iteration. No preemption. No race conditions.
+
+### 11. Cortex Neural Intent Router (The Brain)
+```
+USER_INTENT → Cortex.think("texto") → Intent (12 categories):
+
+  "status"      → SystemStatus  → system_status skill
+  "echo hello"  → Echo          → echo skill (reverses)
+  "/hw"         → HardwareInfo  → hardware_info skill
+  "trust allow" → TrustAllow    → trust_allow skill
+  "trust deny"  → TrustDeny     → trust_deny skill
+  "ping 10..."  → Network       → net_diag skill
+  "fetch url"   → HttpFetch     → http_fetch skill
+  "/help"       → Help          → inline help text
+  "/conv"       → Conversation  → conversation skill
+  "/usage"      → Usage         → usage skill
+  "hello"       → Greeting      → inline greeting
+  anything else → Chat          → "entendido!"
+```
+The Cortex replaces the old INTENT_MLP (hand-crafted 16→8→3) with keyword-based neural classification across 12 intents. Skills are dispatched automatically when registered.
+
+### Console Output (Full Boot)
 ```
 [SYSTEM]  Neural Microkernel Iniciado.
 [TEST]    Breakpoint, Box, Vec, Tensor, SiLU, RMSNorm, Intent Router
@@ -43,254 +138,77 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 [ARCH]    ring0=0 ring1=1 heap=512MB trust=1 power=0 tensor=0
 [MHI]     1 tier(s). Best: Dram (2 GB avail)
 [RTL8139] Reset OK. MAC: 52:54:00:12:34:56
-[EXECUTOR] 7 tasks spawned (system, monitor, hw_bridge, network_agent, input, cortex, console)
+[EXECUTOR] 7 tasks spawned (system → monitor → hw_bridge → network → input → cortex → console)
 [NET @t=10] Online. IP: 10.0.2.15
-[NET @t=30] HTTP GET google.com:80
+[NET @t=30] DNS google.com → timeout, using fallback
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
 [WATCHDOG] Ticks do temporizador: 13200+
 ```
-
-### Ecosystem Analysis (5 Tiers Complete — 136 repos, 249 ideas)
-
-| Tier | Repos | Ideas | ADR | Highlight |
-|------|-------|-------|-----|-----------|
-| 0 (Crom) | 75 | 22 | ADR-0020 | XOR Delta, CDC Rabin, Codebook VQ, ReAct loop |
-| 1 (Life OS) | 20 | 26 | ADR-0021 | Spectrum Graph, Temporal KG, Intent Transparency |
-| 2 (PAI) | 21 | 15 | ADR-0022 | Skill Metadata, Audit Ring, Context Fencing |
-| 3 (Memory) | 14 | 14 | ADR-0023 | SHA-256 dedup, Ebbinghaus decay, 4-tier consolidation |
-| 4 (Agent Frameworks) | 6 | 22 | ADR-0024 | Tool Policy, Usage Tracker, Cron Scheduler, Cline patterns |
-
-**Next:** Tier 5 (Language-Specific Runtimes) — WASM, Rust native agents, C ABI
-
-### What each module does
-
-| Module | What | How |
-|---|---|---|---|
-| `pci.rs` | PCI scan via CF8/CFC | 256 busses × 32 devices, vendor/device/class/BARs |
-| `acpi.rs` | ACPI parser | RSDP search (EBDA + BIOS), RSDT/XSDT, MADT (+ Interrupt Source Override) |
-| `apic.rs` | APIC init | LAPIC timer (vector 32, periodic), IOAPIC keyboard redirect, PIC disable |
-| `smp/` | SMP multi-core | PerCpu GS.base, trampoline 16→64, INIT-SIPI-SIPI, OffsetPageTable::map_to |
-| `mhi.rs` | Memory Hierarchy Index | `AllocTier` (Dram/Vram/Nvme/Hdd), `alloc_by_tier()` |
-| `inventory.rs` | Hardware Inventory | `HardwareInventory::collect()`, `SystemArchitecture::infer()` |
-| `hermes.rs` | Hermes Chat | MLP intent router, `/status`, `/echo`, `/help`, `/hw`, `/trust allow/deny` |
-| `trust.rs` | TrustCache | Token cache with TTL, denylist, `check_or_cache()` |
-| `rtl8139.rs` | RTL8139 NIC driver | I/O ports via Port<T>, 4 TX desc, RX ring buffer (CAPR/CBR) |
-| `netstack.rs` | smoltcp TCP/IP | PhyDevice trait, NetStack::poll(), HTTP non-blocking API |
-| `network_agent.rs` | Neural Network Agent | Async daemon: smoltcp poll → HTTP connect → done/failed |
-| `time_utils.rs` | Date/time formatting | UNIX → Brazil datetime (YYYY-MM-DD HH:MM:SS) |
-| `interrupts.rs` | Dual EOI | `USING_APIC` atomic flag → APIC or PIC EOI per interrupt |
-
-### Next: Sprint 25 — Cortex LLM (ADR-0019)
-
-Neural Cortex BitNet LLM integration. Intent routing with advanced MLP, conversational context. Also: DNS over smoltcp UDP, Tool Policy Registry (#228), Usage Tracker (#229).
-
----
-
-## 🔥 The Vision
-
-### What if memory was managed by... usabilidade?
-
-Every OS today treats all memory the same. A byte in VRAM (112 GB/s) and a byte on HDD (0.1 GB/s) are accessed through different APIs, different drivers, different filesystems. The programmer decides where data lives.
-
-**Neural OS Hermes doesn't work that way.** The Memory Hierarchy Index (MHI) is a first-class OS primitive:
-
-```
-[MHI] Memory Hierarchy:
-  tier[0] VRAM:  4 GB @ 112 GB/s  ← tensor_active (MLP decided)
-  tier[1] DRAM: 16 GB @  19 GB/s  ← heap, kv_cache, sfs_active
-  tier[2] NVMe: 256 GB @ 3.5 GB/s ← sfs_cold, tensor_swap
-  tier[3]  HDD:   1 TB @ 0.1 GB/s ← episodic_memory, logs
-
-> alloc_by_tier(Tensor, 4MB)
-  → VRAM (fastest tier with space)
-```
-
-The programmer (or the agent) says *what* they need. The MHI decides *where* it goes, based on access patterns, bandwidth, and capacity. No `cudaMemcpy`, no `mmap`, no `O_DIRECT`. Just tiers.
-
-**This doesn't exist anywhere else.** Not on Linux. Not on Windows. Not on macOS.
-
-### What if there were no drivers?
-
-Every device in Neural OS is a **skill** loaded on demand by the Neural Cortex, not a kernel module compiled for a specific OS version. USB mouse? Skill `hid_mouse.wasm`. NVMe storage? Skill `nvme_driver.wasm`. GPU compute? Skill `gpu_compute.wasm`.
-
-No autorun. No implicit trust. The Cortex decides what to load, when, and whether the user has intent.
-
-### What if the OS was 2 MB?
-
-A Linux kernel is ~10 MB. A Windows kernel is larger. A typical OS install is 10-50 GB.
-
-Neural OS Hermes is **< 2 MB**. The entire kernel, MLP weights, MHI, EventBus, Skill Registry, and chat interface fit on a floppy disk.
-
----
-
-## 🧬 Core Innovation: The Chain
-
-Every feature is a dependency in a cryptographic chain. You can't skip blocks:
-
-```
-Block 0 (Genesis)  ─── VGA + serial + heap + EventBus + 5 agents
-Block 1 (PCI+ACPI) ─── Hardware discovery (CF8/CFC, MADT, LAPIC)
-Block 2 (SMP+Heap) ─── Multi-core + slab allocator (4 MB heap)
-Block 3 (Hermes UI) ─── Chat loop + Intent Router (neural terminal)
-Block 4 (Auto-Conf) ─── MLP architecture detector + MHI
-Block 5 (Skills)    ─── Skills + Trust Cache + LAPIC timer
-Block 6 (Network)   ─── VirtIO-net + TCP/IP + DNS + HTTP
-```
-
-Each block builds on the previous. No shortcuts. No copilot. No bloat.
-
----
-
-## 🚀 Current State
-
-The chain is at **Block 5 (Skills + Trust Cache)** — Sprint 22 complete. Here's what boots in QEMU right now:
-
-```
-[SYSTEM]  Neural Microkernel Iniciado.
-[APIC]    LAPIC timer (vetor 32, count=8M, div=1) — ~100 Hz
-[TIMER]   Interrupt fired! tick=0..4 → 171 ticks in busy wait
-[SMP]     AP 1 boot (2 cores)
-[ARCH]    ring0=0 ring1=1 heap=64MB trust=1 power=0 tensor=0
-[MHI]     1 tier, Dram ~261 MB avail
-[EXECUTOR] Timer ticks: antes=58, depois=229
-[EXECUTOR] 6 tasks → SYSTEM_READY → EchoSkill → Watchdog 2100+
-[WATCHDOG] Ticks do temporizador: 2100
-[EXECUTOR] Hardware context: RAM=[0.023943, 0.000000] tasks=4
-```
-
-**Sprint 22 capability:**
-- ✅ VGA 80×25 + Serial 0x3F8 (dual output)
-- ✅ IDT with 8 exception handlers + keyboard
-- ✅ Bitmap Frame Allocator (128 KB bitmap, covers 4 GB)
-- ✅ FPU/SSE + Tensor f32 matmul, SiLU, RMSNorm
-- ✅ TernaryTensor + PackedTernaryTensor (2-bit, 12× compression)
-- ✅ TicketLock FIFO (SMP-safe synchronization)
-- ✅ EventBus IPC + CapabilityToken (zero-trust messaging)
-- ✅ Skill Registry + MCP Layer (EchoSkill, SystemStatus, HardwareInfo)
-- ✅ NeuralExecutor with 6 cooperative agents
-- ✅ PCI scan (CF8/CFC) + ACPI (RSDP/MADT + Interrupt Source Override) + APIC
-- ✅ SMP multi-core (trampoline, GS.base, INIT-SIPI-SIPI)
-- ✅ Slab allocator (8 buckets) + 4 MB heap
-- ✅ Hermes Chat (MLP intent router, `/status`, `/echo`, `/help`, `/hw`, `/trust allow/deny`)
-- ✅ MHI (MemoryTier, AllocTier, `alloc_by_tier(Dram)`)
-- ✅ HardwareInventory + SystemArchitecture auto-detection
-- ✅ LAPIC timer (periodic, vetor 32) — substitui PIT → IOAPIC
-- ✅ TrustCache (allow/deny/check, TTL 360 ticks, denylist)
-- ✅ MADT parsing: Interrupt Source Override + x2APIC
-
----
 
 ## 📐 Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                   Neural OS Hermes — AIOS                 │
+│               Neural OS Hermes — v0.25.0                  │
 ├──────────────────────────────────────────────────────────┤
-│  Ring 0 (Reflex)    Tiny MLP 16→8→3  sub-µs             │
-│  Ring 1 (Cortex)    BitNet LLM 1.5B  ~5-15 tok/s        │
-│  Ring 2 (Action)    WASM Skills      SkillRegistry       │
+│  Ring 0 (Reflex)    Cortex think()      12 intents        │
+│  Ring 1 (Neural)    BitNet LLM (future) ~375 MB model     │
+│  Ring 2 (Action)    SkillRegistry       5+ skills         │
 ├──────────────────────────────────────────────────────────┤
-│  Memory Hierarchy Index     alloc_by_tier()              │
-│  Event Bus                  pub/sub + CapabilityToken    │
-│  Skill Registry             zero-trust + MCP layer       │
-│  PCI/ACPI/APIC/SMP          hardware discovery           │
+│  Memory Hierarchy Index     alloc_by_tier(Dram)           │
+│  Event Bus                  pub/sub + CapabilityToken     │
+│  smoltcp TCP/IP             RTL8139 + HTTP non-blocking   │
+│  PCI/ACPI/APIC/SMP          hardware discovery            │
 ├──────────────────────────────────────────────────────────┤
-│  Bootloader (UEFI/BIOS)     bootloader crate v0.9.34    │
-│  no_std Rust                x86_64-unknown-none          │
+│  Bootloader (UEFI/BIOS)     bootloader crate v0.9.34     │
+│  no_std Rust                x86_64-unknown-none           │
 │  Target                     QEMU → AMD APU (real HW)    │
 └──────────────────────────────────────────────────────────┘
-
-Decision Pipeline:
-  Event → Ring 0 Reflex MLP → "precisa pensar?" → 
-    ├── Não (confiança > 90%) → executa ação direta
-    └── Sim → Ring 1 BitNet LLM → intenção → Ring 2 Skill → executa
 ```
 
----
+## 🧬 Module Map
+
+| Module | Function | Lines |
+|---|---|---|
+| `main.rs` | Entry point, daemon definitions, skill registry | ~700 |
+| `cortex.rs` | Neural intent router — 12 categories | 101 |
+| `hermes.rs` | Command parser, ConversationTracker | 182 |
+| `memory.rs` | BitmapFrameAllocator (128 KB, 4 GB) | 253 |
+| `netstack.rs` | smoltcp Device trait, HTTP non-blocking | 321 |
+| `network_agent.rs` | Async daemon: poll → HTTP → log | 113 |
+| `rtl8139.rs` | RTL8139 driver (I/O ports) | 250 |
+| `apic.rs` | LAPIC timer, IOAPIC, SMP IPI | 316 |
+| `smp/` | Multi-core trampoline, PerCpu | 137+ |
+| `pci.rs` | PCI scan (CF8/CFC) | 150+ |
+| `acpi.rs` | RSDP, MADT, ISO parsing | 100+ |
+| `nn.rs` | Linear, SiLU, RMSNorm, BitLinear | 100+ |
+| `tensor.rs` | Tensor, PackedTernaryTensor, matmul | 200+ |
+| `time_utils.rs` | UNIX → Brazil datetime | 22 |
 
 ## 🛠️ Quick Start
 
 ```powershell
-# Prerequisites
-rustup toolchain install nightly
-rustup component add llvm-tools-preview
-cargo install bootimage
-winget install QEMU
-
-# Build and boot
-cargo run
+# Build and boot in QEMU
+cargo bootimage --release
+qemu-system-x86_64 -m 2G -serial stdio `
+  -nic user,model=rtl8139 `
+  -drive format=raw,file=target\x86_64-unknown-none\release\bootimage-neural-kernel.bin `
+  -no-reboot -smp 4 -nographic
 ```
 
-QEMU window opens. VGA output on screen, serial output in terminal. Type your intent.
-
----
-
-## 🎯 Roadmap to MVP
-
-| Block | Sprint | Deliverable | Status |
-|---|---|---|---|
-| 0 | 1-17 | VGA, serial, heap, EventBus, agents | ✅ |
-| 1 | 18 | PCI scan + ACPI + APIC | ✅ |
-| 2 | 19 | PerCpu + SMP + Slab allocator (4 MB heap) | ✅ |
-| 3 | 20 | Hermes Chat (MLP intent router, commands) | ✅ |
-| 4 | 21 | MHI + HardwareInventory + SystemArchitecture | ✅ |
-| 5 | 22 | Skills + Trust Cache + LAPIC timer | ✅ |
-| — | — | Ecosystem analysis (Tiers 0-4, 136 repos, 249 ideas) | ✅ |
-| 6 | 23 | Network (VirtIO-net + smoltcp + HTTP) + Sprint 23 items (#228-#231) | 🟡 Próximo |
-| 7 | 24 | Network completion + Sprint 24 items (#232-#235) | 🟡 |
-| **8** | **25** | **Transformer Engine + Sprint 25 items (#236-#240)** | **🆕 Planejado** |
-| **9** | **26** | **Cortex Daemon + Sprint 26+ items (#241-#244)** | **🆕 Planejado** |
-| **10** | **27+** | **Reflex tuning + Success Engine** | **🆕 Planejado** |
-| 11 | 28+ | WASM + TLS + multi-agent | ⏳ |
-
----
-
-## 🤝 For Innovators
-
-You've read this far because you're tired of:
-- **Linux** — 30M lines of C, 40+ years of ABI debt, systemd, containers for isolation
-- **Windows** — registry, BSOD, driver hell, telemetry as architecture
-- **macOS** — locked down, proprietary, XNU is microkernel-ish but not really
-
-Neural OS Hermes is for people who believe:
-- An OS should be **2 MB**, not 10 GB
-- Memory management by **bandwidth and latency**, not by hardware slot
-- Devices should **ask permission** before they work
-- The kernel **is** the AI — not "AI added to kernel"
-
-This is not a Linux distribution. This is not a Unix clone. This is a ground-up reimagining of what an OS is, written in bare-metal Rust, designed for an age where memory is tiered, compute is heterogeneous, and everyone is talking about AI but nobody has built the OS for it.
-
-**We're building it.**
+Type in the terminal. The Cortex processes your intent and responds with `[Hermes]`.
 
 ---
 
 ## 📚 Architecture Decision Records
 
 | ADR | Title |
-|---|---|---|
-| 0001 | [Initial Architecture and Toolchain](docs/architecture/0001-initial-architecture-and-toolchain.md) |
-| 0002 | [VGA and Serial Logging](docs/architecture/0002-vga-and-serial-logging.md) |
-| 0003 | [Interrupt Descriptor Table](docs/architecture/0003-interrupt-descriptor-table.md) |
-| 0004 | [Memory Paging and Heap](docs/architecture/0004-memory-paging-and-heap.md) |
-| 0005 | [SIMD and FPU Enablement](docs/architecture/0005-simd-and-fpu-enablement.md) |
-| 0006 | [Neural Primitives and libm](docs/architecture/0006-neural-primitives-and-libm.md) |
-| 0007 | [Intent Router MLP](docs/architecture/0007-intent-router-mlp.md) |
-| 0009 | [PIC, Watchdog and Page Fault](docs/architecture/0009-pic-watchdog-and-page-fault.md) |
-| 0010 | [Strategic Roadmap](docs/architecture/0010-strategic-roadmap-and-innovations.md) |
-| 0011 | [BitLinear and Ternary MatMul](docs/architecture/0011-bitlinear-and-hybrid-matmul.md) |
-| 0012 | [2-bit Packing and Quantization](docs/architecture/0012-2bit-packing-quantization.md) |
-| 0013 | [Executive Summary / SotA 2026](docs/architecture/0013-neural-os-executive-summary.md) |
-| 0014 | [Hardware Evolution Ideas (post-MVP)](docs/architecture/0014-ideias-hardware.md) |
-| 0015 | [Course Correction → MVP Hermes](docs/architecture/0015-curso-correcao-mvp.md) |
+|---|---|
+| 0001-0015 | Core architecture, toolchain, memory, neural primitives, roadmap |
 | 0016 | [Network Strategy](docs/architecture/0016-network-strategy.md) |
-| 0017 | [Critical Bugfix Sprint](docs/architecture/0017-critical-bugfix-sprint.md) |
-| 0018 | [Sprint 24 Plan](docs/architecture/0018-sprint-24-plan.md) |
 | 0019 | [Neural Cortex — BitNet LLM Integration](docs/architecture/0019-neural-cortex-bitnet-llm.md) |
-| 0020 | [Crom Ecosystem Rust Analysis](docs/architecture/0020-crom-ecosystem-analysis.md) |
-| 0021 | [Life OS Ecosystem Analysis](docs/architecture/0021-life-os-ecosystem-analysis.md) |
-| 0022 | [Personal AI Assistant Ecosystem](docs/architecture/0022-personal-ai-assistant-ecosystem-analysis.md) |
-| 0023 | [Memory Systems & Second Brain](docs/architecture/0023-memory-systems-second-brain-analysis.md) |
-| **0024** | **[Agent Frameworks Analysis](docs/architecture/0024-agent-frameworks-analysis.md)** ← **You are here** |
+| 0020-0024 | Ecosystem Analysis (Crom, Life OS, PAI, Memory, Agents) |
+| 0025 | [Tier 3 Sandbox & Security](docs/architecture/0025-tier3-sandbox-security-analysis.md) |
 
 ---
 
