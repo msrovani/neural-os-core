@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.25.0
+# Neural OS Hermes ⚡ — v0.27.0 🏆 TRANSFORMER NO KERNEL 🏆
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -11,7 +11,7 @@
 
 Every OS today bolts AI on top — a chatbot in the taskbar, a copilot in the browser, a GPU driver that lets PyTorch run. The kernel doesn't know what AI is. It never will.
 
-**Neural OS Hermes is different.** The kernel IS a neural inference engine. The Cortex classifies every user intent. Seven cooperative AI agents run the system. A Memory Hierarchy Index treats DRAM, VRAM, NVMe, and HDD as a single AI-routed tiered pool. No shell. No init. No systemd. Just tensors, events, and intent.
+**Neural OS Hermes is different.** The kernel IS a neural inference engine. The Cortex classifies every user intent. **A 4-layer BitNet transformer with 272K ternary parameters generates text from user input — no OS has ever done this bare-metal.** Seven cooperative AI agents run the system. No shell. No init. No systemd. Just tensors, events, and intent.
 
 ---
 
@@ -130,6 +130,15 @@ The Cortex classifies user text and dispatches to the appropriate skill.
 [NET @t=10] Online. IP: 10.0.2.15
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
 [WATCHDOG] Ticks do temporizador: 13200+
+
+### 🏆 Transformer LLM Gerando Texto (26/06/2026)
+```
+> OI
+[CORTEX-LLM] Generating for: "OI"
+[CORTEX-LLM] Generated: ".$={=T*=.=.=.=.=.=.=.=.=.=.=.=.="
+[Hermes] .$={=T*=.=.=.=.=.=.=.=.=.=.=.=.=
+```
+O primeiro bare-metal transformer a gerar texto num kernel `no_std`. Pesos aleatórios por enquanto — o próximo passo é treinar um modelo de verdade.
 ```
 
 ---

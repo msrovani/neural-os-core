@@ -1,6 +1,7 @@
 # ═══════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.24.1
-#   Sprint 24: smoltcp + e1000 removal + SMP huge page fix
+#   PLANO DIRETOR — neural-os-core v0.27.0 🏆
+#   TRANSFORMER LLM NO KERNEL BARE-METAL
+#   "OI" → Transformer 272K params → ".$={=T*=.=.=.=.=.=.=.=.=.=.=.=.="
 # ═══════════════════════════════════════════════
 
 # Role and Purpose
@@ -62,7 +63,7 @@ Após cada rodada de tarefas com sucesso (goal atingido), execute este ciclo com
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-# Project Summary — neural-os-core v0.24.1
+# Project Summary — neural-os-core v0.27.0
 
 ## Goal
 Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestration across NPU/GPU/CPU rings.
