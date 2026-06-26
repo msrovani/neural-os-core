@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.39.0 — AGENT/SKILL-FIRST ARCHITECTURE
+# Neural OS Hermes ⚡ — v0.40.0 — AGENT/SKILL-FIRST 🏆
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -10,22 +10,20 @@
 ## 🔥 O que o torna único
 
 ### 0. Tudo é Agente ou Skill
-Não existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade no sistema é um **Agente** com manifesto, ciclo de vida e capacidades. Habilidades (**Skills**) são a interface de requisição-resposta dos Agentes.
+**Bloco 11 (Sprints 39-42 consolidado):** Não existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade é um **Agente** com manifesto, ScheduleKind e ciclo de vida. Habilidades (**Skills**) são a interface de requisição-resposta.
 
-16 agentes planejados (v0.39.0):
-| Código | Agente | Status | Função |
+16 agentes (Sprint 40 — SystemAgent nativo, 7 LegacyTaskAgent wrapper):
+| Código | Agente | Status | Tipo |
 |---|---|---|---|
-| A-001 | SystemAgent | 🟡 task | Init, report_ready |
-| A-002 | MonitorAgent | 🟡 task | Hardware context |
-| A-003 | HwBridgeAgent | 🟡 task | IRQ bridge |
-| A-004 | NetAgent | 🟡 task | Network poll |
-| A-005 | InputAgent | 🟡 task | Keyboard |
-| A-006 | CortexAgent | 🟡 task | LLM inference |
-| A-007 | HermesAgent | 🟡 task | Intent routing |
-| A-008 | ConsoleAgent | 🟡 task | VGA+serial |
-| A-009-A-016 | DriverAgents + SystemAgents | ✅ struct | PCI, SMP, Trust, Memory, etc. |
-
-**Migração em andamento (Sprint 40+):** 8 `async fn` tasks → Agent trait unificada.
+| A-001 | **SystemAgent** | ✅ Agent | Oneshot → SYSTEM_READY |
+| A-002 | MonitorAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-003 | HwBridgeAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-004 | NetAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-005 | InputAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-006 | CortexAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-007 | HermesAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-008 | ConsoleAgent | 🟡 wrapper | LegacyTaskAgent |
+| A-009..A-016 | DriverAgents + SystemAgents | ✅ struct | PCI, SMP, Trust, Memory |
 
 ### 1. Kernel que SE CURA
 Quando um erro ocorre (Page Fault, GPF, OOM), o kernel não dá BSOD:
@@ -79,7 +77,7 @@ SelfHeal::record_failure() → lessons.push()
   → Próximo erro similar: already_tried()=true → action DIFERENTE
 ```
 
-## 🏗️ O que foi construído (34 sprints)
+## 🏗️ O que foi construído (40 sprints / 11 blocos)
 
 | Bloco | Sprints | O que |
 |---|---|---|
@@ -89,7 +87,8 @@ SelfHeal::record_failure() → lessons.push()
 | Transformer | 26-27 | Attention, 4 layers BitNet, generate_text() |
 | HW-Aware LLM | 28-30 | PCI+USB+SMBIOS training, xHCI driver |
 | Capabilities | 31 | O que cada hardware FAZ + skills + MHI |
-| Self-Healing | 32-34 | Panic → LLM → recovery, Failure Taxonomy |
+| Self-Healing | 32-37 | Panic → LLM → recovery, Failure Taxonomy, checkpoint |
+| **Agent/Skill-First** | **39-42** | **Agent trait, AgentRegistry, skill_loader, runtime skills** |
 
 ## 🔬 Sources de conhecimento do LLM
 

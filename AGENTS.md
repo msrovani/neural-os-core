@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.39.0 🏆
+#   PLANO DIRETOR — neural-os-core v0.40.0 🏆
 #   AGENT/SKILL-FIRST ARCHITECTURE
 #   Tudo é agente ou skill. Nada de tasks, serviços, drivers avulsos.
 # ════════════════════════════════════════════════════════
@@ -39,18 +39,18 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
-# Current Agent Landscape (v0.39.0 — 16 agents planned, 8 implemented as tasks)
+# Current Agent Landscape (v0.40.0 — 16 agents — Block 11 consolidado)
 
 | Código | Agente | Status | Tipo | Função |
 |---|---|---|---|---|
-| A-001 | SystemAgent | 🟡 task | System | Init, report_ready |
-| A-002 | MonitorAgent | 🟡 task | System | Hardware context tensor |
-| A-003 | HwBridgeAgent | 🟡 task | Router | Scancode IRQ bridge |
-| A-004 | NetAgent | 🟡 task | Network | smoltcp poll + HTTP |
-| A-005 | InputAgent | 🟡 task | Console | Keyboard buffer |
-| A-006 | CortexAgent | 🟡 task | Inference | LLM generate_text() |
-| A-007 | HermesAgent | 🟡 task | Router | Intent routing + skills |
-| A-008 | ConsoleAgent | 🟡 task | Console | VGA+serial output |
+| A-001 | **SystemAgent** | ✅ Agent | System (Oneshot) | Init, SYSTEM_READY, EchoSkill |
+| A-002 | MonitorAgent | 🟡 wrapper | System (Legacy) | Hardware context tensor |
+| A-003 | HwBridgeAgent | 🟡 wrapper | Router (Legacy) | Scancode IRQ bridge |
+| A-004 | NetAgent | 🟡 wrapper | Network (Legacy) | smoltcp poll + HTTP |
+| A-005 | InputAgent | 🟡 wrapper | Console (Legacy) | Keyboard buffer |
+| A-006 | CortexAgent | 🟡 wrapper | Inference (Legacy) | LLM generate_text() |
+| A-007 | HermesAgent | 🟡 wrapper | Router (Legacy) | Intent routing + skills |
+| A-008 | ConsoleAgent | 🟡 wrapper | Console (Legacy) | VGA+serial output |
 | A-009 | NetDriverAgent | 📝 módulo | Driver | RTL8139 bare-metal |
 | A-010 | UsbDriverAgent | 📝 módulo | Driver | xHCI port scan |
 | A-011 | SelfHealAgent | ✅ struct | System | Failure recovery |
@@ -60,7 +60,9 @@ TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(toke
 | A-015 | TrustAgent | ✅ struct | System | TrustCache |
 | A-016 | SkillManagerAgent | 🟡 struct | Skill | skill_loader + /add_skill |
 
-Status: ✅ = existente como struct/módulo, 🟡 = implementado como task (migrar para Agent trait), 📝 = módulo avulso
+Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo existente, 🟡 wrapper = LegacyTaskAgent (migrar), 📝 = módulo avulso
+
+**Bloco 11 (Sprints 39-42):** Bloco único e consolidado. Tudo sobre agentes e skills — desde a base (SkillLoader, Agent trait) até a migração completa dos 7 wrappers e DriverAgents.
 
 # Operational Rules & Guardrails
 - **Zero Hallucination Policy:** State explicitly if you don't know a low-level hardware interaction. Do not invent `no_std`-incompatible crates.
@@ -194,8 +196,8 @@ cargo run → bootloader → kernel_main
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 40 — Agent-First Refactoring)
-Migração das 8 async fn tasks para Agent trait. Ver IDEA_BANK.md Section 1.28 (itens A-001 a A-020). AgentRegistry + AgentScheduler substituem SkillRegistry + NeuralExecutor.
+## Next Sprint (Sprint 41-42 — Continuação Bloco 11)
+Migração dos 7 LegacyTaskAgent para Agent nativos + DriverAgents. EventDriven schedule. Ver IDEA_BANK.md Section 1.28 (itens A-001 a A-020).
 
 ## Network Strategy (ADR-0016)
 Rede implementada via RTL8139 (Sprint 23) + smoltcp (Sprint 24). Próximo passo: VirtIO-net para performance (`virtio-drivers`). Ver ADR-0016.
