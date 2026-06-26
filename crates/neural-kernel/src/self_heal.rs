@@ -115,8 +115,8 @@ impl SelfHeal {
             self.checkpoint.allocated_count = alloc.allocated_count;
         }
         drop(guard);
-        self.checkpoint.mhi_dram_bytes = crate::mhi::MEMORY_HIERARCHY.lock().as_ref()
-            .map_or(0, |m| m.tiers[0].capacity_bytes);
+        self.checkpoint.mhi_dram_bytes = crate::MEMORY_HIERARCHY.lock().as_ref()
+            .map_or(0, |m| m.tiers[0].capacity_bytes as u64);
         self.checkpoint.tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
         self.checkpoint.valid = true;
         serial_println!("[CHECKPOINT] Salvo @ tick {} — {} frames alocados",
