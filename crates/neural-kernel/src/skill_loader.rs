@@ -86,6 +86,22 @@ impl SkillLoader {
         Ok(())
     }
 
+    /// Remove a skill by name
+    pub fn remove_skill(&mut self, name: &str) -> bool {
+        let len = self.skills.len();
+        self.skills.retain(|s| s.name != name);
+        self.skills.len() < len
+    }
+
+    /// List all registered skill names
+    pub fn list_skills(&self) -> Vec<(String, String, usize)> {
+        let mut list = Vec::new();
+        for skill in &self.skills {
+            list.push((skill.name.clone(), skill.description.clone(), skill.instructions.len()));
+        }
+        list
+    }
+
     /// Build a system prompt from all registered skills
     pub fn build_system_prompt(&self) -> String {
         let mut prompt = String::from("Voce e o Cortex LLM do Neural OS Hermes. Siga estas skills:\n\n");
