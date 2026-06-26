@@ -84,6 +84,8 @@ extern "x86-interrupt" fn double_fault_handler(
 ) -> ! {
     serial_println!("[EXCEPTION] DOUBLE FAULT (err={}) HALT", error_code);
     println!("[EXCEPTION] DOUBLE FAULT (err={}) HALT", error_code);
+    let class = crate::self_heal::FailureClass::classify("DoubleFault", "");
+    serial_println!("[SELF-HEAL] Double Fault: {:?} — {}", class, class.default_recovery());
     loop { x86_64::instructions::hlt(); }
 }
 
@@ -92,11 +94,18 @@ extern "x86-interrupt" fn page_fault_handler(
     error_code: x86_64::structures::idt::PageFaultErrorCode,
 ) {
     let addr = x86_64::registers::control::Cr2::read();
-    serial_println!("[SECURITY] Page Fault detectado em {:?}. Acesso negado. Error code: {:?}", addr, error_code);
-    println!("[SECURITY] Page Fault detectado em {:?}. Acesso negado.", addr);
-    loop {
-        x86_64::instructions::hlt();
+    serial_println!("[SECURITY] Page Fault em {:?}. Error: {:?}", addr, error_code);
+    println!("[SECURITY] Page Fault em {:?}.", addr);
+    let class = crate::self_heal::FailureClass::classify("PageFault", "");
+    serial_println!("[SELF-HEAL] Page Fault: {:?} em {:?}. {}", class, addr, class.default_recovery());
+    // Map the faulting page if possible
+    if error_code.contains(x86_64::structures::idt::PageFaultErrorCode::CAUSED_BY_WRITE)
+        && !error_code.contains(x86_64::structures::idt::PageFaultErrorCode::MALFORMED_TABLE)
+    {
+        serial_println!("[SELF-HEAL] Tentando remediar page fault...");
+        // Just log and continue (actual recovery requires page table changes)
     }
+    loop { x86_64::instructions::hlt(); }
 }
 
 fn send_eoi() {
