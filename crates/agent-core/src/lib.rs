@@ -114,15 +114,44 @@ impl AgentRegistry {
     }
 }
 
-/// Scheduler loop — called from kernel
-/// `halt()`: called when no agent needs CPU (platform-specific hlt)
-/// `check_respawns(): returns names of agents to re-create (e.g., from RESPAWN_QUEUE)`
-/// `spawn_agent(name): creates a new Agent by name`
 impl AgentRegistry {
+    /// Run all Oneshot agents synchronously (boot phase).
+    pub fn init_phase(&mut self) {
+        let mut i = 0;
+        while i < self.agents.len() {
+            let sched = self.agents[i].schedule;
+            if sched != ScheduleKind::Oneshot { i += 1; continue; }
+            if !self.agents[i].agent.manifest().auto_start { i += 1; continue; }
+            // Use raw pointer to bypass borrow checker for synchronous boot init
+            let ptr: *mut AgentInstance = &mut self.agents[i];
+            unsafe {
+                (*ptr).state = AgentState::Active;
+                (*ptr).agent.on_activate();
+                loop {
+                    let result = (*ptr).agent.tick(0, (*ptr).tick_counter + 1);
+                    (*ptr).tick_counter += 1;
+                    match result {
+                        AgentTickResult::Done => { (*ptr).state = AgentState::Done; break; }
+                        AgentTickResult::Crashed => { (*ptr).state = AgentState::Crashed; break; }
+                        AgentTickResult::Pending => {}
+                    }
+                }
+            }
+            i += 1;
+        }
+    }
+
+    /// Scheduler loop — called from kernel
+    /// `halt()`: called when no agent needs CPU (platform-specific hlt)
+    /// `check_respawns(): returns names of agents to re-create (e.g., from RESPAWN_QUEUE)`
+    /// `spawn_agent(name): creates a new Agent by name`
     pub fn run<H: Fn(), C: FnMut() -> Vec<String>, S: Fn(&str) -> Option<Box<dyn Agent>>>(
         &mut self, halt: H, mut check_respawns: C, spawn_agent: S,
     ) -> ! {
         for i in 0..self.agents.len() {
+            if self.agents[i].state == AgentState::Done || self.agents[i].state == AgentState::Crashed {
+                continue;
+            }
             if self.agents[i].agent.manifest().auto_start {
                 self.agents[i].state = AgentState::Active;
                 self.agents[i].agent.on_activate();
