@@ -74,6 +74,24 @@ impl Tensor {
         }
         Tensor { shape: (cols, rows), data }
     }
+
+    pub fn add(&self, other: &Tensor) -> Option<Tensor> {
+        if self.shape != other.shape { return None; }
+        let mut data = self.data.clone();
+        for (a, b) in data.iter_mut().zip(other.data.iter()) {
+            *a += b;
+        }
+        Some(Tensor { shape: self.shape, data })
+    }
+
+    pub fn element_mul(&self, other: &Tensor) -> Option<Tensor> {
+        if self.shape != other.shape { return None; }
+        let mut data = self.data.clone();
+        for (a, b) in data.iter_mut().zip(other.data.iter()) {
+            *a *= b;
+        }
+        Some(Tensor { shape: self.shape, data })
+    }
 }
 
 #[allow(dead_code)]
