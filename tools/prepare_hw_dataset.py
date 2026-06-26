@@ -164,6 +164,23 @@ def parse_usb_ids(path: str) -> list:
         pass
     return entries
 
+USB_SPEED_DATA = [
+    ("usb speed 1", "Low Speed (1.5 Mbps) — teclados, mouses, dispositivos simples"),
+    ("usb speed 2", "Full Speed (12 Mbps) — joysticks, hubs, audio USB 1.x"),
+    ("usb speed 3", "High Speed (480 Mbps) — pendrives USB 2.0, cameras, HDs externos"),
+    ("usb speed 4", "Super Speed (5 Gbps) — USB 3.0: pendrives rapidos, SSDs, hubs"),
+    ("usb speed 5", "Super Speed+ (10 Gbps) — USB 3.1 Gen 2: dispositivos de alto desempenho"),
+    ("xHCI controller", "eXtensible Host Controller Interface — controlador USB 3.0 padrao"),
+    ("xHCI 1033:0194", "NEC uPD720200 — controlador xHCI USB 3.0, 2 portas, 64 slots"),
+    ("quantas portas usb", "xHCI reporta ate 64 portas virtuais, 2-4 fisicas tipicamente"),
+    ("que velocidades usb", "USB suporta Low (1.5M), Full (12M), High (480M), Super (5G), Super+ (10G)"),
+    ("o que e um hub usb", "Hub USB — expansor de portas, repete o sinal para varios dispositivos"),
+    ("como conectar usb", "USB e plug-and-play: o controlador xHCI detecta automaticamente"),
+    ("dispositivo velocidade baixa", "USB Low Speed — teclado ou mouse tipicamente"),
+    ("armazenamento usb", "USB Mass Storage — pendrives, HDs externos, SSDs portateis"),
+    ("USB identificado", "Dispositivo USB conectado — LLM pode identifica-lo por VID/PID"),
+]
+
 SMBIOS_DATA = [
     ("smbios system manufacturer", "QEMU"),
     ("smbios system product", "Standard PC (Q35 + ICH9, 2009)"),
@@ -223,6 +240,10 @@ def main():
         usb_entries = parse_usb_ids(args.usb_ids)
         print(f"[PARSE] Extraidas {len(usb_entries)} entradas do {args.usb_ids}")
         entries.extend(usb_entries)
+
+    # Add USB speed data
+    for inp, out in USB_SPEED_DATA:
+        entries.append((inp, "", out))
 
     # Add SMBIOS data
     smbios_count = 0
