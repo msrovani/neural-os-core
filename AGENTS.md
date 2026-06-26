@@ -164,6 +164,12 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 28 (v0.28.0) — HW-Aware Cortex LLM + HwIdentifySkill
 PCI ID database (23.858 entradas) → dataset → treino PyTorch → modelo .bitnet (loss 1.39) → kernel carrega via `load_model()`. `HwIdentifySkill`: `/hw` → PCI scan → LLM identifica cada dispositivo por vendor/device. Pipeline de treino: `tools/prepare_hw_dataset.py` + `tools/train_hw_model.py`.
 
+### Sprint 31 (v0.31.0) — Hardware Capabilities
+25 pares de capabilities (class → tipo → skills → MHI → driver). Modelo sabe o que fazer com cada hardware: "USB class 08 → Mass Storage: armazenamento. MHI: HDD. Driver: padrão."
+
+### Sprints 32-36 (v0.32.0–v0.36.0) — Self-Healing Kernel (Bloco Único)
+Panic handler → FailureClass::classify() → SelfHeal::analyze() → RecoveryAction (RestartDaemon, CreateSkill, LogAndContinue). KERNEL_ERROR no EventBus + EventLog. Failure Taxonomy com 5 classes (Memory, Execution, Resource, Logic, External). Exception handlers (Page Fault, Double Fault, GPF) com SelfHeal. RESPAWN_QUEUE para o executor recriar tasks. Corrective prompting: erro → LLM_REQUEST → LLM sugere recuperação. Feedback loop: lessons → already_tried() → estratégias alternativas. **5 mini-sprints em 1 bloco coeso.**
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo

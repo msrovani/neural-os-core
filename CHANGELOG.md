@@ -6,26 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.34.0] — 2026-06-26 — Self-Healing + Failure Taxonomy
+## [0.36.0] — 2026-06-26 — Self-Healing Kernel (Bloco Único, Sprints 32-36)
 
-### Added
-- **FailureClass enum** — MemoryFault, ExecutionFault, ResourceFault, LogicFault, ExternalFault, UnknownFault
-- **KernelError EventLog** — erros do kernel persistem nos últimos 256 eventos
-- **SelfHeal::analyze(ctx, recover)** — agora aceita parâmetro recover para tentar recuperação
-- **SelfHeal::already_tried()** — feedback loop: evita repetir estratégias que falharam
+### Added — SelfHealing Module
+- **SelfHeal** — `analyze(ctx, recover)`, `RecoveryAction` (RestartDaemon, CreateSkill, LogAndContinue, CheckpointRestore)
+- **FailureClass enum** — Memory/Execution/Resource/Logic/External/Unknown — classifica qualquer erro
+- **FailureClass::default_recovery()** — sugestão de recuperação baseada na classe
+- **lessons: Vec<FailedStrategy>** — feedback loop: erros passados evitam repetição
+- **already_tried()** — detecta estratégia já falhou antes e sugere alternativa
 
-## [0.33.0] — 2026-06-26 — Self-Healing Feedback Loop
+### Added — Error Pipeline
+- **KERNEL_ERROR EventBus topic** — panic_handler publica erro antes de halt
+- **KernelError EventLog** — erros persistem nos últimos 256 eventos (circular buffer)
+- **Corrective prompting** — erro → LLM_REQUEST com contexto → LLM sugere recuperação
+- **RESPAWN_QUEUE** — daemons com erro são recriados automaticamente pelo executor
+- **Exception handlers** — Page Fault, Double Fault, GPF com FailureClass + SelfHeal
+- **Error recovery training data** — 12+ pares (page fault, double fault, self heal, etc)
 
-### Added
-- **SelfHeal.lessons** — `Vec<FailedStrategy>` armazena {erro, acao, tick}
-- **Feedback loop** — `already_tried()` impede repetição de estratégias que falharam
-
-## [0.32.0] — 2026-06-26 — Self-Healing Kernel
-
-### Added
-- **KERNEL_ERROR EventBus topic** — panic_handler publica antes de halt
-- **SelfHeal module** — `analyze()`, `pending_fixes`, `RecoveryAction` (LogAndContinue, RestartDaemon, CreateSkill)
-- **Error recovery training data** — 12 pares (page fault, double fault, null pointer, self heal)
+### Added — SelfHealing Infrastructure
+- `self_heal.rs` (100 LOC) — módulo completo de auto-cura
+- `spawn_task_by_name()` em main.rs — mapeia nome do daemon → função async
+- Executor verifica RESPAWN_QUEUE a cada tick e recria tasks
+- `EventKind::KernelError` no conversation.rs
 
 ## [0.31.0] — 2026-06-26 — Hardware Capabilities
 
