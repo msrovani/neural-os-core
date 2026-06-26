@@ -181,6 +181,34 @@ USB_SPEED_DATA = [
     ("USB identificado", "Dispositivo USB conectado — LLM pode identifica-lo por VID/PID"),
 ]
 
+CAPABILITIES_DATA = [
+    ("USB class 08", "Mass Storage: armazenamento de dados. Capabilities: leitura, escrita, backup. MHI: HDD ou NVMe. Driver: padrao USB."),
+    ("USB class 0E", "Video: captura de imagem. Capabilities: camera, video_capture. MHI: Dram. Driver: padrao UVC."),
+    ("USB class 01", "Audio: reproducao/gravacao. Capabilities: speaker, mic. MHI: Dram. Driver: padrao UAC."),
+    ("USB class 03", "HID: interface humana. Capabilities: input, keystrokes. MHI: Dram. Driver: padrao HID."),
+    ("USB class 02", "Communications: modem/rede. Capabilities: network, serial. MHI: Dram."),
+    ("USB class 09", "Hub: expansao de portas. Capabilities: port_multiplier. MHI: pass-through."),
+    ("USB class E0", "Wireless: Bluetooth/WiFi. Capabilities: wireless, ble. MHI: Dram."),
+    ("PCI class 02", "Rede: Ethernet. Capabilities: network_tx, network_rx, dma. Skills: smoltcp, http_get. MHI: Dram."),
+    ("PCI class 01", "Armazenamento: controladora de disco. Capabilities: block_io, dma. MHI: NVMe ou HDD."),
+    ("PCI class 0108", "NVMe: SSD ultra-rapido. Capabilities: fast_io. MHI: Nvme tier 2."),
+    ("PCI class 03", "Video: GPU/VGA. Capabilities: framebuffer, compute. MHI: Vram tier 0."),
+    ("PCI class 0C03", "USB: controladora USB. Capabilities: usb_host. MHI: Dram."),
+    ("PCI class 04", "Audio: placa de som. Capabilities: playback, capture. MHI: Dram."),
+    ("PCI class 06", "Bridge: conexao barramentos. Capabilities: pci_bridge. MHI: infraestrutura."),
+    ("o que fazer com usb storage", "Montar volume, MHI HDD, file_manager backup logs."),
+    ("o que fazer com camera usb", "Streaming UVC, deteccao objetos via MLP."),
+    ("o que fazer com gpu", "Framebuffer + gpu_compute para inferencia, Vram no MHI."),
+    ("o que fazer com placa de rede", "smoltcp TCP/IP, HTTP, network_agent health check."),
+    ("o que fazer com nvme", "MHI Nvme tier, swap transformer, modelos .bitnet."),
+    ("driver rtl8139", "Proprietario documentado. rtl8139.rs implementado."),
+    ("driver usb storage", "Padrao USB class 08. Sem fabricante."),
+    ("driver uvc", "Padrao USB Video Class. Sem fabricante."),
+    ("onde alocar nvme", "MHI Nvme tier (alta prioridade)."),
+    ("onde alocar gpu", "MHI Vram tier (mais rapido)."),
+    ("onde alocar ethernet", "MHI Dram tier (buffers rede)."),
+]
+
 SMBIOS_DATA = [
     ("smbios system manufacturer", "QEMU"),
     ("smbios system product", "Standard PC (Q35 + ICH9, 2009)"),
@@ -251,6 +279,13 @@ def main():
         entries.append((inp, "", out))
         smbios_count += 1
     print(f"[SMBIOS] {smbios_count} entradas adicionadas")
+
+    # === HARDWARE CAPABILITIES ===
+    cap_count = 0
+    for inp, out in CAPABILITIES_DATA:
+        entries.append((inp, "", out))
+        cap_count += 1
+    print(f"[CAPABILITIES] {cap_count} entradas de capabilities adicionadas")
 
     # === KERNEL CODE KNOWLEDGE ===
     kernel_knowledge = [
