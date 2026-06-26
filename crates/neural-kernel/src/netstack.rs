@@ -5,6 +5,7 @@ use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
+use smoltcp::socket::udp as udp_socket;
 
 use crate::net::RTL8139;
 
@@ -210,4 +211,111 @@ impl NetStack {
         iface.poll(Instant::from_millis(0), phy, sockets);
         sockets.remove(conn.handle);
     }
+
+    fn encode_dns_name(name: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for part in name.split('.') {
+            buf.push(part.len() as u8);
+            buf.extend_from_slice(part.as_bytes());
+        }
+        buf.push(0);
+        buf
+    }
+
+    fn parse_dns_name(pkt: &[u8], offset: usize) -> (usize, usize) {
+        let mut pos = offset;
+        let mut jumped = false;
+        let mut end = 0;
+        while pos < pkt.len() {
+            let b = pkt[pos];
+            if b & 0xC0 == 0xC0 {
+                if !jumped { end = pos + 2; }
+                pos = ((b as usize & 0x3F) << 8) | (pkt[pos + 1] as usize);
+                jumped = true;
+            } else if b == 0 {
+                pos += 1;
+                return (pos, if jumped { end } else { pos });
+            } else {
+                pos += 1 + b as usize;
+            }
+        }
+        (pos, pos)
+    }
+
+    pub fn dns_resolve(&mut self, hostname: &str) -> Option<[u8; 4]> {
+        let txid: u16 = 0x1234;
+        let qname = Self::encode_dns_name(hostname);
+
+        let mut query = Vec::with_capacity(12 + qname.len() + 4);
+        query.extend_from_slice(&txid.to_be_bytes());
+        query.extend_from_slice(&[0x01, 0x00]);
+        query.extend_from_slice(&[0x00, 0x01]);
+        query.extend_from_slice(&[0x00, 0x00]);
+        query.extend_from_slice(&[0x00, 0x00]);
+        query.extend_from_slice(&[0x00, 0x00]);
+        query.extend_from_slice(&qname);
+        query.extend_from_slice(&[0x00, 0x01]);
+        query.extend_from_slice(&[0x00, 0x01]);
+
+        let dns_server = (IpAddress::v4(10, 0, 2, 3), 53u16);
+
+        let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
+        let payload = vec![0u8; 512];
+        let buf_rx = udp_socket::PacketBuffer::new(meta, payload);
+        let meta2 = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
+        let payload2 = vec![0u8; 512];
+        let buf_tx = udp_socket::PacketBuffer::new(meta2, payload2);
+        let socket = udp_socket::Socket::new(buf_rx, buf_tx);
+        let handle = self.sockets.add(socket);
+
+        {
+            let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
+            let _ = udp.bind(54321);
+            let _ = udp.send_slice(&query, dns_server);
+        }
+
+        for _ in 0..100 {
+            let Self { ref mut iface, ref mut phy, ref mut sockets } = self;
+            iface.poll(Instant::from_millis(0), phy, sockets);
+
+            let payload = {
+                let udp = sockets.get_mut::<udp_socket::Socket>(handle);
+                udp.recv().ok().map(|(data, _)| Vec::from(data))
+            };
+
+            if let Some(ref data) = payload {
+                if data.len() < 12 { break; }
+                let resp_txid = u16::from_be_bytes([data[0], data[1]]);
+                if resp_txid != txid { continue; }
+                let flags = u16::from_be_bytes([data[2], data[3]]);
+                if flags & 0x8000 == 0 { continue; }
+                let ancount = u16::from_be_bytes([data[6], data[7]]);
+                if ancount == 0 { break; }
+
+                let (mut pos, _) = Self::parse_dns_name(data, 12);
+                pos += 4;
+
+                for _ in 0..ancount {
+                    let (new_pos, name_end) = Self::parse_dns_name(data, pos);
+                    pos = new_pos;
+                    let rtype = u16::from_be_bytes([data[pos], data[pos + 1]]);
+                    let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
+                    let _ttl = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+                    let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
+                    pos += 10;
+
+                    if rtype == 1 && rclass == 1 && rdlen == 4 {
+                        let ip = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
+                        self.sockets.remove(handle);
+                        return Some(ip);
+                    }
+                    pos = name_end.max(pos + rdlen);
+                }
+                break;
+            }
+        }
+        self.sockets.remove(handle);
+        None
+    }
 }
+ 

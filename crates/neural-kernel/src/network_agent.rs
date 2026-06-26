@@ -1,8 +1,7 @@
 use crate::net::{NETSTACK, NET_CONFIG};
-use crate::netstack::{NetStack, HttpConn, HttpState};
+use crate::netstack::{HttpConn, HttpState};
 use crate::serial_println;
 
-const GOOGLE_IP: [u8; 4] = [142, 250, 80, 110];
 const GW_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 
 fn log(tick: u64, msg: &str) {
@@ -10,7 +9,7 @@ fn log(tick: u64, msg: &str) {
 }
 
 fn init_netstack(mac: [u8; 6]) {
-    let mut ns = NetStack::new(mac);
+    let mut ns = crate::netstack::NetStack::new(mac);
     ns.set_ip([10, 0, 2, 15]);
     *NETSTACK.lock() = Some(ns);
 }
@@ -19,6 +18,7 @@ pub async fn network_agent_daemon() {
     let mut tick: u64 = 0;
     let mut state: u8 = 0;
     let mut http: Option<HttpConn> = None;
+    let mut target_ip: [u8; 4] = [0, 0, 0, 0];
 
     loop {
         if let Some(ref mut ns) = *NETSTACK.lock() {
@@ -28,7 +28,8 @@ pub async fn network_agent_daemon() {
                 ns.http_poll(c, tick);
                 match &c.state {
                     HttpState::Done(data) => {
-                        log(tick, &alloc::format!("HTTP OK: {} bytes", data.len()));
+                        let text = core::str::from_utf8(data).unwrap_or("<binary>");
+                        log(tick, &alloc::format!("HTTP OK ({} bytes): {}", data.len(), text.trim_end()));
                         ns.http_close(c);
                         http = None;
                         state = 99;
@@ -47,7 +48,6 @@ pub async fn network_agent_daemon() {
         match state {
             0 => {
                 if NETSTACK.lock().is_some() {
-                    NET_CONFIG.lock().mac = NET_CONFIG.lock().mac; // force existence
                     NET_CONFIG.lock().ip = [10, 0, 2, 15];
                     NET_CONFIG.lock().gateway_mac = GW_MAC;
                     NET_CONFIG.lock().configured = true;
@@ -60,18 +60,28 @@ pub async fn network_agent_daemon() {
                         init_netstack(mac);
                         state = 1;
                     } else {
-                        state = 99;
                         log(tick, "No NIC");
+                        state = 99;
                     }
                 }
             }
             1 => {
-                if tick >= 30 && NETSTACK.lock().is_some() {
+                if tick >= 30 {
                     let mut guard = NETSTACK.lock();
-                    let ns = guard.as_mut().unwrap();
-                    http = Some(ns.http_new(GOOGLE_IP, 80, "/"));
-                    log(tick, "HTTP GET google.com:80");
-                    state = 2;
+                    if let Some(ref mut ns) = *guard {
+                        log(tick, "DNS resolving google.com...");
+                        if let Some(ip) = ns.dns_resolve("google.com") {
+                            target_ip = ip;
+                            log(tick, &alloc::format!("DNS OK: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
+                            http = Some(ns.http_new(ip, 80, "/"));
+                            state = 2;
+                        } else {
+                            log(tick, "DNS timeout, using fallback IP");
+                            target_ip = [142, 250, 80, 110];
+                            http = Some(ns.http_new(target_ip, 80, "/"));
+                            state = 2;
+                        }
+                    }
                 }
             }
             _ => {
@@ -85,4 +95,3 @@ pub async fn network_agent_daemon() {
         crate::task::yield_now().await;
     }
 }
- 
