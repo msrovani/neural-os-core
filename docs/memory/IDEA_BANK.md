@@ -459,6 +459,165 @@ Ideias portadas de 6 repos Tier 4: Cline (63.9k ★), Agent Zero (18.2k ★), Mi
 
 ---
 
+### 1.28. Agent/Skill-First Architecture — A Grande Virada
+
+**Data:** 2026-06-26
+**Status:** ⚡ Paradigma fundamental. Este seção redefine a arquitetura de cima a baixo.
+
+#### O Princípio
+
+> **Tudo no Neural OS Hermes é um Agente ou uma Skill.** Não existem "tasks", "services", "drivers" ou "daemons" como conceitos separados. Cada entidade no sistema é um Agente com identidade, manifesto, ciclo de vida e capacidades declaradas. Habilidades (Skills) são a interface de requisição-resposta dos Agentes.
+
+#### Por que esta virada?
+
+O projeto começou com 8 `async fn` hardcoded no executor (`system_daemon`, `hw_bridge_daemon`, `input_daemon`, etc.). Cada sprint adicionava mais uma task. Skills (EchoSkill, SystemStatusSkill) eram uma preocupação separada. Drivers (rtl8139, xhci) estavam fora do sistema de skills.
+
+Isso criou **3 regimes ontológicos diferentes** — tasks, skills, drivers — cada um com suas próprias regras, apesar de todos serem, na prática, agentes.
+
+A virada **Agent/Skill-First** unifica tudo:
+
+| Antes | Depois |
+|---|---|
+| 8 `async fn` tasks | 8+ Agent instances no AgentRegistry |
+| SkillRegistry separado | SkillRegistry = catálogo de skills dos agentes |
+| Drivers mod.rs avulsos | Driver Agents com `HardwareDriver` capability |
+| Boot linear de funções | Boot = chain de agent activations |
+| Executor coopera loop | AgentScheduler coordena agentes |
+| Trust por token | Trust por agente + token + capability |
+| `/add_skill` via LLM | LLM cria Agent + Skills atomically |
+
+#### O Agente
+
+```rust
+pub enum AgentKind {
+    System,      // init, monitor, lifecycle
+    Driver,      // hardware driver
+    Inference,   // LLM, MLP
+    Router,      // intent routing
+    Console,     // I/O (keyboard, VGA, serial)
+    Network,     // network stack poll
+    Skill,       // pure skill agent (no persistence)
+}
+
+pub struct AgentManifest {
+    pub name: &'static str,
+    pub kind: AgentKind,
+    pub capabilities: &'static [Capability],
+    pub auto_start: bool,         // ativa no boot
+    pub persist: bool,            // respawn on crash
+    pub schedule: ScheduleKind,   // PollEveryNTicks, EventDriven, Continuous
+    pub trust_tokens: &'static [u64],
+}
+```
+
+#### As Skills
+
+Cada Agente expõe zero ou mais Skills:
+```rust
+pub struct SkillManifest {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub agent: &'static str,         // agente dono
+    pub required_tokens: &'static [u64],
+    pub completes_run: bool,         // skill terminal?
+    pub instructions: &'static str,  // para LLM routing
+}
+```
+
+#### Boot = Agent Activation Chain
+
+```
+cargo run → bootloader → kernel_main
+  ├─ [Agent] vga_buffer::init()           → ConsoleAgent (VGA+Serial)
+  ├─ [Agent] interrupts::init_idt()       → SystemAgent (GDT+IDT+TSS)
+  ├─ [Agent] memory::init_memory()        → MemoryAgent (PageTable)
+  ├─ [Agent] allocator::init_heap()       → MemoryAgent (Heap)
+  ├─ [Agent] simd::enable_simd()          → SystemAgent (CR0/CR4)
+  ├─ [Agent] pci::init_pci()              → PCIAgent (PCI scan)
+  ├─ [Agent] acpi::init_acpi()            → ACPIAgent (RSDP+MADT)
+  ├─ [Agent] smp::init_smp()              → SMPAgent (AP boot)
+  ├─ [Agent] inventory::hardware_scan()   → HwDiscoverAgent
+  │   ├── detecta RTL8139 → NetDriverAgent
+  │   └── detecta xHCI   → UsbDriverAgent
+  ├─ [Agent] cortex::TransformerModel     → CortexAgent (LLM)
+  ├─ [Agent] HermesAgent (intent + console + input)
+  └─ AgentScheduler::run()
+       └─ Cada tick: poll agents, route events, respawn mortos
+```
+
+#### Reclassification Grid (Implementado → Migrar)
+
+| ID Antigo | Nome | Vira Agente | Tipo | Novo ID |
+|---|---|---|---|---|
+| task #1 | system_daemon | SystemAgent | System | A-001 |
+| task #2 | hardware_monitor | MonitorAgent | System | A-002 |
+| task #3 | hw_bridge | HwBridgeAgent | Router | A-003 |
+| task #4 | network_agent | NetAgent | Network | A-004 |
+| task #5 | input_daemon | InputAgent | Console | A-005 |
+| task #6 | cortex_llm | CortexAgent | Inference | A-006 |
+| task #7 | intent_router | HermesAgent | Router | A-007 |
+| task #8 | hermes_console | ConsoleAgent | Console | A-008 |
+| — | rtl8139 driver | NetDriverAgent | Driver | A-009 |
+| — | xhci driver | UsbDriverAgent | Driver | A-010 |
+| — | self_heal | SelfHealAgent | System | A-011 |
+| — | memory/allocator | MemoryAgent | System | A-012 |
+| — | pci, acpi, apic | PlatformAgent | System | A-013 |
+| — | smp | SMPAgent | System | A-014 |
+| — | trust cache | TrustAgent | System | A-015 |
+| — | skill_loader | SkillManagerAgent | System | A-016 |
+
+#### AgentRegistry + Scheduler
+
+O `AgentRegistry` substitui o `SkillRegistry` atual como catálogo central:
+
+```rust
+pub struct AgentRegistry {
+    agents: Vec<AgentInstance>,        // todos agentes registrados
+    skills: BTreeMap<String, SkillRef>, // skills catalogadas por nome
+    scheduler: AgentScheduler,
+}
+
+pub struct AgentInstance {
+    manifest: AgentManifest,
+    state: AgentState,  // Inactive, Active, Blocked, Crashed
+    tick_budget: u64,
+    last_poll: u64,
+}
+```
+
+O `AgentScheduler` substitui o `NeuralExecutor`:
+- Cada agente declara seu ScheduleKind
+- A cada tick, scheduler pergunta: "este agente deve rodar agora?"
+- Se sim, chama `agent.tick()` (que pode fazer polling de eventos, processar I/O, etc.)
+- Se crash, verifica `persist` → respawn automático
+
+#### | # | Item | Destino | Target | Motivação |
+
+| A-001 | **Agent trait + AgentManifest** — nova trait unificada que substitui as 8 async fn avulsas. `Agent { manifest, tick(), skills() }` | 🟡 Sprint 40+ | Sprint 40 | Coração da virada. Cada task vira um Agent. |
+| A-002 | **AgentRegistry** — catálogo central de todos agentes. Substitui parcialmente SkillRegistry (skills viram sub-recursos dos agentes) | 🟡 Sprint 40+ | Sprint 40 | Registry de agentes vivos + skills indexadas. |
+| A-003 | **AgentScheduler** — substitui NeuralExecutor. Poll agents pelo schedule declarado, não por ordem fixa. Suporta: tick-based, event-driven, continuous | 🟡 Sprint 40+ | Sprint 40 | Executor v2. |
+| A-004 | **Reclassification: 8 tasks → 8 agents** — system_daemon→SystemAgent, hw_bridge→HwBridgeAgent, input→InputAgent, cortex_llm→CortexAgent, intent_router→HermesAgent, hermes_console→ConsoleAgent, monitor→MonitorAgent, network→NetAgent | 🟡 Sprint 40+ | Sprint 40 | Refactor do main.rs. |
+| A-005 | **Driver Agents** — rtl8139, xhci, pci, acpi, apic, smp viram agents com `AgentKind::Driver` ou `AgentKind::System`. Cada um expõe skills de hardware | 🟡 Sprint 41+ | Sprint 41 | Drivers entram no ecossistema de agentes. |
+| A-006 | **AgentState Machine** — Inactive→Active→Blocked→Crashed→Respawn. Scheduling consciente do estado | 🟡 Sprint 40+ | Sprint 40 | Scheduler só polla agentes Active. |
+| A-007 | **Capability-Based Routing** — EventBus roteia eventos para agents que declaram `Capability` relevante. Substitui match fixo do intent_router | 🟡 Sprint 41+ | Sprint 41 | Routing dinâmico. |
+| A-008 | **Agent Identity + SOUL.md** — Cada agente tem identidade persistente (SOUL.md no SFS). CortexAgent tem persona, ConsoleAgent tem voice | ⏳ Pós-MVP | Sprint 42+ | Requer SFS. |
+| A-009 | **SkillManagerAgent** — Agente especializado em criar, editar, remover skills. `/add_skill` vira delegado a este agente. LLM gera skill, SkillManagerAgent registra | 🟡 Sprint 40+ | Sprint 40 | Já parcialmente implementado via PENDING_SKILL. |
+| A-010 | **TrustAgent** — Centraliza toda autorização. Substitui TrustCache avulso. Agents consultam TrustAgent antes de executar skills | 🟡 Sprint 40+ | Sprint 40 | Trust como agente, não cache solto. |
+| A-011 | **SelfHealAgent** — Já implementado como SelfHeal struct. Migrar para AgentKind::System com skill `recover` | 🟡 Sprint 40+ | Sprint 40 | Self-healing como agente. |
+| A-012 | **MemoryAgent** — Gerencia BitmapFrameAllocator, MHI tiers, Slab. Skills: `alloc`, `dealloc`, `status` | 🟡 Sprint 41+ | Sprint 41 | Memória como agente. |
+| A-013 | **Agent Schedules** — Tick-based (poll a cada N ticks), Event-driven (só acorda com evento), Continuous (roda todo tick), Idle (só responde, nunca inicia) | 🟡 Sprint 40+ | Sprint 40 | Eficiência energética. |
+| A-014 | **Agent Budget + Watchdog** — Cada agente tem tick_budget por ciclo. Se excede, watchdog pausa. Implementa IterationBudget (#199) | 🟡 Sprint 40+ | Sprint 40 | Previne runaway agents. |
+| A-015 | **Agent Hooks** — Pre/Post tick hooks. HookRegistry com slots fixos de function pointers. Hooks retornam Allow/Block/Modify (#206) | 🟡 Sprint 41+ | Sprint 41 | Plugin system via hooks. |
+| A-016 | **Multi-Agent Orchestration** — Graph-based: sequential, concurrent, handoff entre agents. EventBus padrão MS Agent (#235) | 🟡 Sprint 41+ | Sprint 41 | Composição de agentes. |
+| A-017 | **Agent as Pure Function** — Event-sourced: `f(history) -> next action`. Cada tick do agent é um ConversationEvent (#231) | 🟡 Sprint 41+ | Sprint 41 | Replay, debug, rollback. |
+| A-018 | **Agent Identity Awakening** — Duas personalidades por agent: "Awakening" (first boot) e "Established" (memória presente). MLP weights diferentes (#202) | ⏳ Pós-MVP | Sprint 42+ | Requer SFS para memória. |
+| A-019 | **Council Agent** — Antes de decisão ambígua, 3 sub-agentes (Otimista, Cético, Pragmático) votam. Argmax vence (#191) | ⏳ Pós-MVP | Sprint 42+ | Qualidade de decisão. |
+| A-020 | **HermesAgent como Supervisor** — HermesAgent (intent_router atual) coordena os demais agentes. Decide qual agente ativar baseado na intenção do usuário | 🟡 Sprint 40+ | Sprint 40 | Já é assim na prática. Formalizar. |
+
+**Nota:** A refatoração agent-first é **aditiva**, não disruptiva. Cada agent pode ser introduzido um por vez, mantendo compatibilidade com o executor atual. A migração começa encapsulando as 8 async fn em `Agent::tick()`, depois substitui o NeuralExecutor pelo AgentScheduler.
+
+---
+
 ## Seção 2 — Mapa de Calor
 
 | Fonte | Total | ✅ No MVP | 🟡 Sprint | ⏳ Pós-MVP | 💰 Sponsor | ❌ Descarte |
@@ -491,7 +650,8 @@ Ideias portadas de 6 repos Tier 4: Cline (63.9k ★), Agent Zero (18.2k ★), Mi
 | Tier 3 Memory Systems (1.26) | 14 | 0 | 9 | 5 | 0 | 0 |
 | Tier 4 Agent Frameworks (1.27) | 22 | 0 | 17 | 3 | 0 | 2 |
 | Self-Healing Kernel (Sprints 32-37) | 6 | 6 | 0 | 0 | 0 | 0 |
-| **Total** | **255** | **68 (27%)** | **96 (38%)** | **76 (30%)** | **9 (3%)** | **6 (2%)** |
+| Agent/Skill-First Architecture | 20 | 0 | 20 | 0 | 0 | 0 |
+| **Total** | **275** | **68 (25%)** | **116 (42%)** | **76 (28%)** | **9 (3%)** | **6 (2%)** |
 
 ---
 
@@ -839,3 +999,5 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-25 | Sprint 23 Bugfix: Itens 250-252 (e1000 DMA fix, /ping, DHCP/ARP refactor pendente) → adicionados; allocate_contiguous fix (start de next_free_bit), DHCP skip, /ping command. Boot QEMU validado: e1000 init OK, executor 11000+ ticks. | Dev + IDA IA |
 | 2026-06-25 | Network Sprint: Itens 253-255 (e1000 TDT protocol fix, NUM_DESC 48, PTHRESH 8, Neural Network Architecture) → adicionados; TPT=0 ainda não resolvido (qemu_send_packet não chamado). Novo modelo: init_driver_network() → HW_NET_E1000 → network_bootstrap() → skill-based routing. | Dev + IDA IA |
 | 2026-06-25 | ADR-0025: Itens 256-267 (Tier 3 Security Patterns) → adicionados; 12 padrões extraídos de 5 repos (InnerWarden 159★, ai-jail 595★, vexfs 24★, Chisel 12★, cori-kernel 17★). 7 itens viaveis Sprints 24-27 (256-264), 3 ideias futuras Sprint 28+ (265-267), 6 padrões descartados. Deep-dive: InnerWarden (2057 commits, 7900+ testes, 45 eBPF programas, 82 detectores, 69 regras correlação). | IDA IA |
+| 2026-06-26 | **Section 1.28 Agent/Skill-First Architecture** — 20 itens (A-001 a A-020) adicionados. Reclassificação: tudo vira agente/skill, nada de tasks/serviços. Paradigma fundamental. | Dev + IDA IA |
+| 2026-06-26 | **IDEA_BANK total: 275 itens.** Heat map atualizado: 68 ✅, 116 🟡, 76 ⏳, 9 💰, 6 ❌ | Dev + IDA IA |
