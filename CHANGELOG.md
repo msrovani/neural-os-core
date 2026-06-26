@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.28.0] — 2026-06-26 — HW-Aware Cortex LLM + HwIdentifySkill
+
+### Added
+- **HwIdentifySkill** — `/hw` → PCI scan → Cortex LLM identifica dispositivos
+- **Intent::HardwareIdentify** — "identifique hardware" → chama a skill
+- **PCI ID training pipeline** — 23.858 entradas, 31.436 pares, modelo loss 1.39
+- **tools/prepare_hw_dataset.py** + **tools/train_hw_model.py**
+- Modelo treinado carregado via `include_bytes!("../micro.bitnet")` + `load_model()`
+
 ## [0.27.0] — 2026-06-26 — Cortex LLM Daemon
 
 ### Added

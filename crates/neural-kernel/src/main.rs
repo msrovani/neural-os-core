@@ -31,6 +31,7 @@ mod sync;
 mod nn;
 mod trust;
 mod serial;
+mod xhci;
 mod simd;
 mod task;
 mod tensor;
