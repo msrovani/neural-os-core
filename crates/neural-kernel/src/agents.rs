@@ -546,3 +546,211 @@ impl Agent for HermesAgent {
 }
 
 // network_agent_tick is called directly via crate::network_agent::network_agent_tick()
+
+// ---------------------------------------------------------------------------
+// Boot phase agents (Oneshot) — Block 11 Driver/System Agent wrappers
+// ---------------------------------------------------------------------------
+
+/// PlatformAgent — PCI + ACPI + APIC + SMP init
+pub struct PlatformAgent { phase: u8 }
+
+const PLATFORM_MANIFEST: AgentManifest = AgentManifest {
+    name: "platform",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl PlatformAgent {
+    pub fn new() -> Self { PlatformAgent { phase: 0 } }
+}
+
+impl Agent for PlatformAgent {
+    fn manifest(&self) -> &AgentManifest { &PLATFORM_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        match self.phase {
+            0 => {
+                unsafe { crate::pci::init_pci(); }
+                self.phase = 1;
+                AgentTickResult::Pending
+            }
+            1 => {
+                let phys_off = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+                let acpi_info = unsafe { crate::acpi::init_acpi(phys_off) };
+                if let Some(ref info) = acpi_info {
+                    unsafe { crate::apic::init_apic(info); }
+                }
+                self.phase = 2;
+                AgentTickResult::Pending
+            }
+            2 => {
+                unsafe { crate::smp::init_smp(); }
+                AgentTickResult::Done
+            }
+            _ => AgentTickResult::Done,
+        }
+    }
+}
+
+/// MemoryAgent — global allocator init + MHI + SystemArchitecture
+pub struct MemoryAgent { phase: u8 }
+
+const MEMORYAGENT_MANIFEST: AgentManifest = AgentManifest {
+    name: "memory",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl MemoryAgent {
+    pub fn new() -> Self { MemoryAgent { phase: 0 } }
+}
+
+impl Agent for MemoryAgent {
+    fn manifest(&self) -> &AgentManifest { &MEMORYAGENT_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        match self.phase {
+            0 => {
+                let pci_devices = unsafe { crate::pci::scan_pci() };
+                let arch = crate::inventory::SystemArchitecture::infer(
+                    &crate::inventory::HardwareInventory::collect(pci_devices, None),
+                );
+                serial_println!("[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
+                    arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
+                    arch.trust_level, arch.power_mode, arch.tensor_tier);
+                *crate::SYSTEM_ARCH.lock() = Some(arch);
+                self.phase = 1;
+                AgentTickResult::Pending
+            }
+            1 => {
+                let mhi = crate::mhi::MemoryHierarchy::new();
+                serial_println!("[MHI] {} tier(s). Best: {:?} ({} bytes avail)",
+                    mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
+                *crate::MEMORY_HIERARCHY.lock() = Some(mhi.clone());
+                AgentTickResult::Done
+            }
+            _ => AgentTickResult::Done,
+        }
+    }
+}
+
+/// NetDriverAgent — RTL8139 init
+pub struct NetDriverAgent;
+
+const NETDRIVER_MANIFEST: AgentManifest = AgentManifest {
+    name: "net_driver",
+    kind: AgentKind::Driver,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for NetDriverAgent {
+    fn manifest(&self) -> &AgentManifest { &NETDRIVER_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        unsafe {
+            if crate::net::init_driver_rtl8139() {
+                serial_println!("[NET] RTL8139 OK.");
+            } else {
+                serial_println!("[NET] Sem hardware de rede. Modo offline.");
+            }
+        }
+        AgentTickResult::Done
+    }
+}
+
+/// UsbDriverAgent — xHCI port scan + init
+pub struct UsbDriverAgent;
+
+const USBDRIVER_MANIFEST: AgentManifest = AgentManifest {
+    name: "usb_driver",
+    kind: AgentKind::Driver,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for UsbDriverAgent {
+    fn manifest(&self) -> &AgentManifest { &USBDRIVER_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        unsafe {
+            let pci_devices = crate::pci::scan_pci();
+            for dev in &pci_devices {
+                if dev.class == 0x0C && dev.subclass == 0x03 {
+                    if let Some(mut xhci) = crate::xhci::XhciDriver::new(dev) {
+                        if xhci.init() {
+                            let usb_devices = xhci.port_scan();
+                            serial_println!("[USB] {} dispositivo(s) conectado(s)", usb_devices.len());
+                        }
+                    }
+                }
+            }
+        }
+        AgentTickResult::Done
+    }
+}
+
+/// SelfHealAgent — init SELF_HEAL struct
+pub struct BootSelfHealAgent;
+
+const SELFHEAL_MANIFEST: AgentManifest = AgentManifest {
+    name: "self_heal",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for BootSelfHealAgent {
+    fn manifest(&self) -> &AgentManifest { &SELFHEAL_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        crate::SELF_HEAL.lock();
+        serial_println!("[AGENT] SelfHealAgent pronto.");
+        AgentTickResult::Done
+    }
+}
+
+/// TrustAgent — init TRUST_CACHE
+pub struct BootTrustAgent;
+
+const TRUST_MANIFEST: AgentManifest = AgentManifest {
+    name: "trust",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for BootTrustAgent {
+    fn manifest(&self) -> &AgentManifest { &TRUST_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        crate::TRUST_CACHE.lock();
+        serial_println!("[AGENT] TrustAgent pronto.");
+        AgentTickResult::Done
+    }
+}
+
+/// HwDetectAgent — HwIdentifySkill scan + LLM query
+pub struct HwDetectAgent;
+
+const HWDETECT_MANIFEST: AgentManifest = AgentManifest {
+    name: "hw_detect",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for HwDetectAgent {
+    fn manifest(&self) -> &AgentManifest { &HWDETECT_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        let reg = crate::SKILL_REGISTRY.lock();
+        if let Ok(output) = reg.execute_skill_unchecked("hw_identify", &[]) {
+            let text = core::str::from_utf8(&output).unwrap_or("(error)");
+            serial_println!("[HW-SCAN] Dispositivos detectados:\n{}", text);
+        }
+        AgentTickResult::Done
+    }
+}

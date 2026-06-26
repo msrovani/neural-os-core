@@ -422,91 +422,25 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
         ram_tensor[0], ram_tensor[1]);
 
-    let _pci_devices = unsafe { pci::init_pci() };
-
-    let acpi_info = unsafe { acpi::init_acpi(boot_info.physical_memory_offset) };
-    if let Some(ref info) = acpi_info {
-        unsafe { apic::init_apic(info); }
-    } else {
-        serial_println!("[APIC] ACPI nao encontrado. Mantendo PIC legacy.");
-        println!("[APIC] ACPI nao encontrado. Mantendo PIC legacy.");
-        interrupts::init_pics();
-        interrupts::enable_interrupts();
-    }
-
     memory::init_global_allocator(frame_allocator);
 
     let slab_metrics = { let s = crate::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
     serial_println!("[SLAB] Alocador slab operacional. Allocs: {}, Deallocs: {}",
         slab_metrics.0, slab_metrics.1);
-    println!("[SLAB] Alocador slab com {} buckets ativos.", slab::BUCKET_SIZES.len());
 
-    unsafe { smp::init_smp(); }
-
-    let pci_devices = unsafe { pci::scan_pci() };
-    let arch = inventory::SystemArchitecture::infer(
-        &inventory::HardwareInventory::collect(pci_devices, acpi_info.as_ref()),
-    );
-    serial_println!(
-        "[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
-        arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
-        arch.trust_level, arch.power_mode, arch.tensor_tier,
-    );
-    println!(
-        "[ARCH] System architecture: ring0={} ring1={} heap={}MB",
-        arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
-    );
-
-    let mhi = mhi::MemoryHierarchy::new();
-    serial_println!("[MHI] {} tier(s). Best: {:?} ({} bytes avail)",
-        mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
-    println!("[MHI] Memory hierarchy: {} tier(s), {:.1} MB usable.",
-        mhi.tiers.len(), mhi.tiers[0].capacity_bytes as f64 / 1_048_576.0);
-
-    *SYSTEM_ARCH.lock() = Some(arch);
-    *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
-
-    unsafe {
-        if net::init_driver_rtl8139() {
-            serial_println!("[NET] RTL8139 OK.");
-        } else {
-            serial_println!("[NET] Sem hardware de rede. Modo offline.");
-            println!("[NET] Sem hardware de rede.");
-        }
-    }
-
-    // Init xHCI USB controller if present
-    unsafe {
-        let pci_devices = pci::scan_pci();
-        for dev in &pci_devices {
-            if dev.class == 0x0C && dev.subclass == 0x03 {
-                if let Some(mut xhci) = xhci::XhciDriver::new(dev) {
-                    if xhci.init() {
-                        let usb_devices = xhci.port_scan();
-                        serial_println!("[USB] {} dispositivo(s) conectado(s)", usb_devices.len());
-                    }
-                }
-            }
-        }
-    }
-
-    // Auto hardware identification via LLM
-    {
-        let skill = HwIdentifySkill;
-        let result = skill.execute(&[]);
-        if let Ok(output) = result {
-            let text = core::str::from_utf8(&output).unwrap_or("(error)");
-            serial_println!("[HW-SCAN] Dispositivos detectados:\n{}", text);
-            println!("[HW-SCAN] {}", text.lines().next().unwrap_or(""));
-        }
-    }
-
-    let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    serial_println!("[SCHEDULER] Timer ticks: {}", ticks);
-    serial_println!("[SCHEDULER] Inicializando AgentScheduler (Sprint 40)...");
-    println!("[SCHEDULER] Inicializando AgentScheduler...");
+    // Boot phase agents — cada um é um Agent Oneshot que executa init
     let mut registry = agent_core::AgentRegistry::new();
-    // 8 agentes nativos — Bloco 11 completo
+    registry.register(Box::new(agents::PlatformAgent::new()));
+    registry.register(Box::new(agents::MemoryAgent::new()));
+    registry.register(Box::new(agents::BootSelfHealAgent));
+    registry.register(Box::new(agents::BootTrustAgent));
+    registry.register(Box::new(agents::NetDriverAgent));
+    registry.register(Box::new(agents::UsbDriverAgent));
+    registry.register(Box::new(agents::HwDetectAgent));
+    serial_println!("[BOOT] {} boot agents registrados. Executando init_phase...", registry.agents.len());
+    registry.init_phase();
+
+    // Runtime agents — polling loop contínuo
     registry.register(Box::new(SystemAgent::new()));
     registry.register(Box::new(agents::MonitorAgent::new()));
     registry.register(Box::new(agents::HwBridgeAgent));
@@ -515,7 +449,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     registry.register(Box::new(agents::CortexAgent::new()));
     registry.register(Box::new(agents::HermesAgent::new()));
     registry.register(Box::new(agents::ConsoleAgent::new()));
-    serial_println!("[SCHEDULER] {} agentes nativos registrados. Executando...", registry.agents.len());
+    serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
         || {
