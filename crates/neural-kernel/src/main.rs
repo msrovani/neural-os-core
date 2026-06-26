@@ -196,6 +196,7 @@ lazy_static! {
         let loader = skill_loader::load_embedded_skills();
         spin::Mutex::new(loader)
     };
+    static ref PENDING_SKILL: spin::Mutex<Option<(alloc::string::String, alloc::string::String)>> = spin::Mutex::new(None);
 }
 
 fn spawn_task_by_name(name: &str, executor: &mut task::executor::NeuralExecutor) {
@@ -623,14 +624,49 @@ async fn intent_router_daemon() {
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
                 serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-                EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
-                CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
-                let resp_event = event_bus::Event {
-                    id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
-                    payload: alloc::format!("[Hermes] {}", text).into_bytes(),
-                    token: event_bus::CapabilityToken(1),
-                };
-                let _ = EVENT_BUS.publish(resp_event);
+
+                // Check if this response is for skill creation
+                let is_skill_response = PENDING_SKILL.lock().is_some();
+
+                if is_skill_response {
+                    let (name, desc) = PENDING_SKILL.lock().take().unwrap();
+                    // Validate the LLM output as a skill
+                    let mut storage = SKILL_STORAGE.lock();
+                    match storage.register_skill(text) {
+                        Ok(()) => {
+                            let msg = alloc::format!("[Hermes] Skill '{}' criada com sucesso via LLM! Instrucoes: {}. Use /show_skills para ver.", name, desc);
+                            serial_println!("[SKILL-LLM] Skill '{}' gerada e registrada ({} bytes)", name, text.len());
+                            EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, msg.as_bytes().to_vec(), now);
+                            let resp_event = event_bus::Event {
+                                id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
+                                payload: msg.into_bytes(),
+                                token: event_bus::CapabilityToken(1),
+                            };
+                            let _ = EVENT_BUS.publish(resp_event);
+                        }
+                        Err(e) => {
+                            let msg = alloc::format!("[Hermes] Erro ao criar skill '{}': {}. A LLM gerou conteudo invalido.", name, e);
+                            serial_println!("[SKILL-LLM] Falha: {} — saida: {}", e, text);
+                            let resp_event = event_bus::Event {
+                                id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
+                                payload: msg.into_bytes(),
+                                token: event_bus::CapabilityToken(1),
+                            };
+                            let _ = EVENT_BUS.publish(resp_event);
+                        }
+                    }
+                    EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
+                } else {
+                    // Normal chat response
+                    EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
+                    CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
+                    let resp_event = event_bus::Event {
+                        id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
+                        payload: alloc::format!("[Hermes] {}", text).into_bytes(),
+                        token: event_bus::CapabilityToken(1),
+                    };
+                    let _ = EVENT_BUS.publish(resp_event);
+                }
             }
         }
 
@@ -765,7 +801,7 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill, /rm_skill <name>, /reload_skills, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill <nome> <desc>, /rm_skill <name>, /reload_skills, /help | /add_skill usa a LLM para gerar a skill automaticamente.")
                 }
                 hermes::Command::ShowSkills => {
                     let storage = SKILL_STORAGE.lock();
@@ -780,8 +816,25 @@ async fn intent_router_daemon() {
                         msg
                     }
                 }
-                hermes::Command::AddSkill => {
-                    String::from("Para adicionar uma skill, edite o arquivo skills/<nome>.md e execute /reload_skills. Carga via teclado sera implementada em breve.")
+                hermes::Command::AddSkill(ref name, ref desc) => {
+                    let prompt = alloc::format!(
+                        "Crie uma skill para o Neural OS Hermes (formato SKILL.md do Hermes Agent).\n\
+                         Nome: {}\nDescricao: {}\n\
+                         Formato:\n---\nname: <nome>\ndescription: <descricao>\nrequired_tokens: [1]\n---\n\n\
+                         <instrucoes markdown com passo a passo, criterios de sucesso e exemplos>\n\n\
+                         Gera APENAS o bloco da skill (frontmatter + instrucoes), sem explicacoes extras.",
+                        name, desc,
+                    );
+                    *PENDING_SKILL.lock() = Some((name.clone(), desc.clone()));
+                    let req = crate::Event {
+                        id: 0,
+                        topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
+                        payload: prompt.into_bytes(),
+                        token: crate::CapabilityToken(1),
+                    };
+                    let _ = EVENT_BUS.publish(req);
+                    awaiting_llm = true;
+                    String::from("...")
                 }
                 hermes::Command::RmSkill(ref name) => {
                     let mut storage = SKILL_STORAGE.lock();
