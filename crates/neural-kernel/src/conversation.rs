@@ -11,6 +11,7 @@ pub enum EventKind {
     SkillExecuted,
     SystemEvent,
     ContextCompacted,
+    KernelError,
 }
 
 #[derive(Clone, Debug)]
