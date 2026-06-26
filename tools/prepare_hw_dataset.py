@@ -137,9 +137,61 @@ def generate_jsonl(entries: list, output: str):
     print(f"[DATASET] Gerados {count} pares de treino em {output}")
     return count
 
+def parse_usb_ids(path: str) -> list:
+    """Parse usb.ids into (vendor, device, description) tuples."""
+    entries = []
+    current_vendor = None
+    try:
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for line in f:
+                if line.startswith('#'):
+                    continue
+                line = line.rstrip()
+                if not line:
+                    continue
+                m = re.match(r'^([0-9a-fA-F]{4})\s+(.+)$', line)
+                if m:
+                    current_vendor = m.group(1).lower()
+                    desc = m.group(2)
+                    entries.append((f"{current_vendor}", "", f"USB: {desc}"))
+                    continue
+                m = re.match(r'^\t([0-9a-fA-F]{4})\s+(.+)$', line)
+                if m and current_vendor:
+                    device = m.group(1).lower()
+                    desc = m.group(2)
+                    entries.append((current_vendor, device, f"USB: {desc}"))
+    except FileNotFoundError:
+        pass
+    return entries
+
+SMBIOS_DATA = [
+    ("smbios system manufacturer", "QEMU"),
+    ("smbios system product", "Standard PC (Q35 + ICH9, 2009)"),
+    ("smbios bios vendor", "SeaBIOS"),
+    ("smbios bios version", "rel-1.16.3-0"),
+    ("smbios baseboard", "QEMU Q35"),
+    ("smbios processor", "QEMU virtual CPU"),
+    ("smbios memory", "2048 MB DDR4"),
+    ("fabricante sistema", "QEMU — maquina virtual"),
+    ("qual bios", "SeaBIOS — firmware open source padrao do QEMU"),
+    ("versao bios", "rel-1.16.3 — SeaBIOS"),
+    ("qual placa mae", "QEMU Q35 — chipset ICH9"),
+    ("memoria instalada", "2048 MB (2 GB) — configurada via -m 2G"),
+    ("virtualizacao", "QEMU System Emulator — virtualizacao full-system"),
+    ("processador virtual", "QEMU Virtual CPU versao 11.0.50 — x86-64"),
+    ("tipo de placa", "QEMU Q35 — chipset Intel ICH9"),
+    ("hardware plataforma", "QEMU q35 — virtualizacao x86-64 completa"),
+    ("qual chipset", "Intel 82441FX + ICH9 (PIIX4) — emulacao QEMU"),
+    ("placa de rede onboard", "Realtek RTL8139 — Fast Ethernet, emulada pelo QEMU"),
+    ("video onboard", "QEMU Virtual VGA — framebuffer simples, 16 MB VRAM"),
+    ("controladora usb", "xHCI — USB 3.0, emulada pelo QEMU"),
+    ("tempo de atividade", "LAPIC timer periodico ~100 Hz, contador de ticks"),
+]
+
 def main():
     parser = argparse.ArgumentParser(description='Generate HW knowledge dataset')
     parser.add_argument('--pci-ids', default='pci.ids', help='PCI ID database file')
+    parser.add_argument('--usb-ids', default='usb.ids', help='USB ID database file')
     parser.add_argument('--output', default='hw_knowledge.jsonl', help='Output JSONL file')
     parser.add_argument('--download', action='store_true', help='Download pci.ids')
     args = parser.parse_args()
@@ -166,8 +218,79 @@ def main():
             else:
                 entries.append((parts[0], parts[1], desc))
 
+    # Parse USB IDs
+    if os.path.exists(args.usb_ids):
+        usb_entries = parse_usb_ids(args.usb_ids)
+        print(f"[PARSE] Extraidas {len(usb_entries)} entradas do {args.usb_ids}")
+        entries.extend(usb_entries)
+
+    # Add SMBIOS data
+    smbios_count = 0
+    for inp, out in SMBIOS_DATA:
+        entries.append((inp, "", out))
+        smbios_count += 1
+    print(f"[SMBIOS] {smbios_count} entradas adicionadas")
+
+    # === KERNEL CODE KNOWLEDGE ===
+    kernel_knowledge = [
+        ("o que e neural os", "Neural OS Hermes — sistema operacional IA-native, bare-metal Rust, sem Linux"),
+        ("arquitetura kernel", "Microkernel com 3 rings: Reflex (Cortex), LLM (BitNet), Skills (WASM)"),
+        ("o que e o executor", "NeuralExecutor — scheduler cooperativo com 8 tasks async"),
+        ("o que e EVENT_BUS", "EventBus — pub/sub com CapabilityToken, IPC entre daemons"),
+        ("o que e SKILL_REGISTRY", "SkillRegistry — registro central de skills com zero-trust policy"),
+        ("o que e TRUST_CACHE", "TrustCache — cache de tokens de capacidade com TTL e denylist"),
+        ("o que e o CORTEX", "Cortex — roteador neural de intencoes, 12 categorias, dispatch para skills"),
+        ("o que e TRANSFORMER", "TransformerModel — 4 camadas BitNet, 272K params ternarios, generate_text()"),
+        ("o que e GLOBAL_ALLOCATOR", "BitmapFrameAllocator — 128KB bitmap, 4GB fisico, allocate_contiguous()"),
+        ("o que e PHYS_MEM_OFFSET", "Offset de mapeamento da memoria fisica no espaco virtual"),
+        ("o que e rtl8139", "RTL8139 — driver de rede via I/O ports, 4 TX desc, RX ring buffer"),
+        ("o que e smoltcp", "smoltcp 0.13.1 — pilha TCP/IP no_std, Device trait para RTL8139"),
+        ("o que e PciDevice", "Dispositivo PCI com vendor_id, device_id, class, bar0-5"),
+        ("o que e OffsetPageTable", "Mapper de paginacao 4 niveis, suporta huge pages 2MB/1GB"),
+        ("o que e APIC", "Advanced Programmable Interrupt Controller — LAPIC + IOAPIC"),
+        ("o que e LAPIC timer", "Timer periodico do LAPIC, ~100 Hz, vetor 32, substitui PIT"),
+        ("o que e SMP", "Symmetric Multi-Processing — INIT-SIPI-SIPI, trampoline, PerCpu GS.base"),
+        ("o que e MHI", "Memory Hierarchy Index — gerenciamento de memoria por tiers (Dram/Vram/Nvme/Hdd)"),
+        ("o que e MLP", "Multilayer Perceptron — rede neural feedforward para classificacao de intencoes"),
+        ("o que e PackedTernaryTensor", "Tensor ternario 2-bit — 4 pesos por byte, matmul ADD/SUB sem multiplicacao"),
+        ("o que e BitNet", "Arquitetura BitNet 1.58-bit — pesos ternarios {-1,0,+1}, inferencia eficiente"),
+        ("o que e HwIdentifySkill", "Skill que executa PCI scan e envia para o LLM identificar dispositivos"),
+        ("o que e input_daemon", "Daemon que le scancodes do teclado, monta buffer ASCII, publica USER_INTENT"),
+        ("o que e intent_router", "Daemon que recebe USER_INTENT, classifica via Cortex, executa skills"),
+        ("o que e cortex_llm", "Daemon LLM que recebe LLM_REQUEST, gera texto via transformer, publica resposta"),
+        ("o que e TIMER_TICKS", "Contador atomico de ticks do LAPIC timer, usado para timeouts"),
+        ("boot sequence", "bootloader → VGA → IDT → heap → SIMD → PCI → ACPI → APIC → SMP → NET → executor"),
+        ("explique o boot", "11 fases do boot: firmware → kernel → hardware discovery → 8 agents → console"),
+        ("quantas tasks", "8 tasks: system, monitor, hw_bridge, network, input, cortex_llm, router, console"),
+        ("o que faz o system_daemon", "Publica SYSTEM_READY e morre — sinaliza que o sistema iniciou"),
+        ("o que faz o hermes_console", "Escuta HERMES_RESPONSE e exibe [Hermes] no VGA + serial"),
+        ("que linguagem", "Rust puro, no_std, nightly, x86_64-unknown-none"),
+        ("versao kernel", "v0.28.0 — HW-Aware Cortex LLM"),
+        ("qual bootloader", "bootloader crate v0.9.34 com map_physical_memory"),
+        ("target hardware", "QEMU q35 → AMD APU com memoria unificada"),
+    ]
+    for inp, out in kernel_knowledge:
+        entries.append((inp, "", out))
+
+    # === GIT HISTORY ===
+    import subprocess
+    try:
+        result = subprocess.run(['git', 'log', '--oneline', '--format=%h %s', '-100'],
+                              capture_output=True, cwd=os.path.dirname(__file__) + '/..')
+        raw = result.stdout.decode('utf-8', errors='replace')
+        for line in raw.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.strip().split(' ', 1)
+            if len(parts) == 2:
+                hash_id, message = parts
+                entries.append((f"commit {hash_id}", "", f"Git: {message}"))
+                entries.append((f"o que fez o commit {hash_id}", "", message))
+    except:
+        print("[GIT] Aviso: git log falhou, pulando historico")
+
     if not entries:
-        print("[WARN] Nenhuma entrada PCI encontrada — usando exemplos embutidos")
+        print("[WARN] Nenhuma entrada encontrada — usando exemplos embutidos")
         entries = [("8086", "1237", "Intel 82441FX PMC")]
 
     generate_jsonl(entries, args.output)
