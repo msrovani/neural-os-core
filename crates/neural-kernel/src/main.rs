@@ -145,7 +145,7 @@ impl Skill for HwIdentifySkill {
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let devices = unsafe { crate::pci::scan_pci() };
         let mut report = String::new();
-        let mut llm_query = alloc::format!("Identifique estes dispositivos PCI:\n");
+        let mut llm_query = alloc::format!("Identifique este hardware e explique o que posso fazer com cada dispositivo:\n");
         for dev in &devices {
             let class_desc = crate::pci::class_name(dev.class, dev.subclass);
             report.push_str(&alloc::format!(
@@ -155,7 +155,7 @@ impl Skill for HwIdentifySkill {
                 dev.class, dev.subclass, class_desc,
             ));
             llm_query.push_str(&alloc::format!(
-                "{:04x}:{:04x} classe {:02x}/{:02x}\n",
+                "{:04x}:{:04x} class {:02x}/{:02x}\n",
                 dev.vendor_id, dev.device_id, dev.class, dev.subclass,
             ));
         }
