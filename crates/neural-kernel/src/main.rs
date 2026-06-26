@@ -18,6 +18,7 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
 mod acpi;
+mod agents;
 mod allocator;
 mod apic;
 mod cortex;
@@ -247,57 +248,6 @@ impl Agent for SystemAgent {
             AgentTickResult::Done
         } else {
             AgentTickResult::Pending
-        }
-    }
-}
-
-/// LegacyTaskAgent — wrapper para migrar async fn tasks para Agent sem reescrever
-pub struct LegacyTaskAgent {
-    future: Option<core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()>>>>,
-    name: &'static str,
-    manifest: AgentManifest,
-}
-
-impl LegacyTaskAgent {
-    pub fn new(name: &'static str, future: impl core::future::Future<Output = ()> + 'static) -> Self {
-        // Legacy agents are Continuous (poll every tick) and auto-start
-        let manifest = AgentManifest {
-            name,
-            kind: AgentKind::System,
-            schedule: ScheduleKind::Continuous,
-            auto_start: true,
-            persist: true,
-        };
-        LegacyTaskAgent {
-            future: Some(alloc::boxed::Box::pin(future)),
-            name,
-            manifest,
-        }
-    }
-}
-
-// Safety: Legacy tasks never hold non-Send types across yield points in practice
-unsafe impl Send for LegacyTaskAgent {}
-
-impl Agent for LegacyTaskAgent {
-    fn manifest(&self) -> &AgentManifest { &self.manifest }
-
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        if let Some(mut fut) = self.future.take() {
-            let waker = crate::task::dummy_waker();
-            let mut ctx = Context::from_waker(&waker);
-            match fut.as_mut().poll(&mut ctx) {
-                Poll::Pending => {
-                    self.future = Some(fut);
-                    AgentTickResult::Pending
-                }
-                Poll::Ready(()) => {
-                    serial_println!("[AGENT] Legacy '{}' concluido.", self.name);
-                    AgentTickResult::Done
-                }
-            }
-        } else {
-            AgentTickResult::Done
         }
     }
 }
@@ -556,42 +506,41 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     serial_println!("[SCHEDULER] Inicializando AgentScheduler (Sprint 40)...");
     println!("[SCHEDULER] Inicializando AgentScheduler...");
     let mut registry = agent_core::AgentRegistry::new();
-    // Native Agent: SystemAgent (substitui system_daemon)
-    registry.register(alloc::boxed::Box::new(SystemAgent::new()));
-    // Legacy wrappers: 7 daemons ainda como async fn
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("monitor", hardware_monitor_daemon())));
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("hw_bridge", hw_bridge_daemon())));
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("network_agent", network_agent::network_agent_daemon())));
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("input", input_daemon())));
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("cortex_llm", cortex_llm_daemon())));
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("intent_router", intent_router_daemon())));
-    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("hermes_console", hermes_console_daemon())));
-    serial_println!("[SCHEDULER] {} agentes registrados. Executando...", registry.agents.len());
+    // 8 agentes nativos — Bloco 11 completo
+    registry.register(Box::new(SystemAgent::new()));
+    registry.register(Box::new(agents::MonitorAgent::new()));
+    registry.register(Box::new(agents::HwBridgeAgent));
+    registry.register(Box::new(agents::NetAgent::new()));
+    registry.register(Box::new(agents::InputAgent::new()));
+    registry.register(Box::new(agents::CortexAgent::new()));
+    registry.register(Box::new(agents::HermesAgent::new()));
+    registry.register(Box::new(agents::ConsoleAgent::new()));
+    serial_println!("[SCHEDULER] {} agentes nativos registrados. Executando...", registry.agents.len());
     registry.run(
-        || { x86_64::instructions::hlt(); },           // halt
-        || {                                            // check_respawns
+        || { x86_64::instructions::hlt(); },
+        || {
             let q = RESPAWN_QUEUE.lock().clone();
             if !q.is_empty() { RESPAWN_QUEUE.lock().clear(); }
             q
         },
-        |name| {                                        // spawn_agent
+        |name| {
             serial_println!("[SCHEDULER] Respawning agent '{}'...", name);
-            let agent: Option<LegacyTaskAgent> = match name {
-                "monitor" => Some(LegacyTaskAgent::new("monitor", hardware_monitor_daemon())),
-                "hw_bridge" => Some(LegacyTaskAgent::new("hw_bridge", hw_bridge_daemon())),
-                "network_agent" => Some(LegacyTaskAgent::new("network_agent", network_agent::network_agent_daemon())),
-                "input" => Some(LegacyTaskAgent::new("input", input_daemon())),
-                "cortex_llm" => Some(LegacyTaskAgent::new("cortex_llm", cortex_llm_daemon())),
-                "intent_router" => Some(LegacyTaskAgent::new("intent_router", intent_router_daemon())),
-                "hermes_console" => Some(LegacyTaskAgent::new("hermes_console", hermes_console_daemon())),
+            let agent: Option<Box<dyn Agent>> = match name {
+                "monitor" => Some(Box::new(agents::MonitorAgent::new())),
+                "hw_bridge" => Some(Box::new(agents::HwBridgeAgent)),
+                "network_agent" => Some(Box::new(agents::NetAgent::new())),
+                "input" => Some(Box::new(agents::InputAgent::new())),
+                "cortex_llm" => Some(Box::new(agents::CortexAgent::new())),
+                "intent_router" => Some(Box::new(agents::HermesAgent::new())),
+                "hermes_console" => Some(Box::new(agents::ConsoleAgent::new())),
                 _ => None,
             };
-            agent.map(|a| alloc::boxed::Box::new(a) as alloc::boxed::Box<dyn Agent>)
+            agent
         },
     );
 }
 
-fn scancode_to_ascii(scancode: u8) -> Option<char> {
+pub(crate) fn scancode_to_ascii(scancode: u8) -> Option<char> {
     match scancode {
         0x1E => Some('A'), 0x30 => Some('B'), 0x2E => Some('C'),
         0x20 => Some('D'), 0x12 => Some('E'), 0x21 => Some('F'),
@@ -616,483 +565,4 @@ fn scancode_to_ascii(scancode: u8) -> Option<char> {
     }
 }
 
-fn execute_skill_with_trust(
-    skill_name: &str,
-    payload: &[u8],
-    token: &event_bus::CapabilityToken,
-) -> Result<Vec<u8>, &'static str> {
-    let token_val = token.0;
-    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    const AUTO_TTL: u64 = 360;
-
-    {
-        let mut tc = TRUST_CACHE.lock();
-        if !tc.is_trusted(token_val, skill_name, now) {
-            let reg = SKILL_REGISTRY.lock();
-            if !reg.validate_token(skill_name, token) {
-                return Err("token nao autorizado para esta skill");
-            }
-            tc.check_or_cache(token_val, skill_name, now, AUTO_TTL);
-        }
-    }
-
-    let reg = SKILL_REGISTRY.lock();
-    reg.execute_skill_unchecked(skill_name, payload)
-}
-
-async fn system_daemon() {
-    println!("[DAEMON] Agente assincrono inicializado. Aguardando SYSTEM_READY...");
-    serial_println!("[DAEMON] Agente assincrono inicializado. Aguardando SYSTEM_READY...");
-
-    let receiver = EVENT_BUS.subscribe("SYSTEM_READY");
-
-    loop {
-        if let Some(event) = receiver.try_receive() {
-            println!("[IPC] Evento recebido no topico {} com payload protegido. Token: {}",
-                event.topic, event.token.0);
-            serial_println!("[IPC] Evento recebido no topico {} com payload protegido. Token: {}",
-                event.topic, event.token.0);
-
-            let reg = SKILL_REGISTRY.lock();
-            match reg.execute_skill("echo", &event.payload, &event.token) {
-                Ok(output) => {
-                    println!("[SKILL] EchoSkill executada. Output reverso: {:?}", output);
-                    serial_println!("[SKILL] EchoSkill executada. Output reverso: {:?}", output);
-                }
-                Err(e) => {
-                    println!("[SKILL] Erro ao executar skill: {}", e);
-                    serial_println!("[SKILL] Erro ao executar skill: {}", e);
-                }
-            }
-            drop(reg);
-
-            println!("[DAEMON] SYSTEM_READY confirmado. Ciclo de inicializacao completo.");
-            serial_println!("[DAEMON] SYSTEM_READY confirmado. Ciclo de inicializacao completo.");
-            break;
-        }
-        task::yield_now().await;
-    }
-}
-
-async fn hw_bridge_daemon() {
-    loop {
-        let scancode = crate::interrupts::LAST_SCANCODE.swap(0, Ordering::Acquire);
-        if scancode != 0 {
-            let event = Event {
-                id: 0,
-                topic: String::from("RAW_HW_IRQ1"),
-                payload: vec![scancode],
-                token: CapabilityToken(1),
-            };
-            let _ = EVENT_BUS.publish(event);
-        }
-        task::yield_now().await;
-    }
-}
-
-async fn cortex_llm_daemon() {
-    let model_data = include_bytes!("../micro.bitnet");
-    let model = cortex::load_model(model_data).unwrap_or_else(|| {
-        serial_println!("[CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.");
-        cortex::TransformerModel::new()
-    });
-    let receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST);
-    serial_println!("[CORTEX-LLM] Transformer loaded. Skills carregadas em runtime via SKILL_STORAGE.");
-    loop {
-        if let Some(event) = receiver.try_receive() {
-            let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[CORTEX-LLM] Generating for: \"{}\"", user_text);
-            // Rebuild system prompt from runtime SKILL_STORAGE (sempre reflete skills atuais)
-            let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
-            let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
-            let output = cortex::generate_text(&model, &full_prompt);
-            serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
-            let resp = crate::Event {
-                id: 0,
-                topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
-                payload: output.into_bytes(),
-                token: crate::CapabilityToken(1),
-            };
-            let _ = EVENT_BUS.publish(resp);
-        }
-        task::yield_now().await;
-    }
-}
-
-async fn intent_router_daemon() {
-    let user_receiver = EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT);
-    let llm_receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE);
-    let cortex = cortex::Cortex::new();
-    let status_skill_name = String::from("system_status");
-    let echo_skill_name = String::from("echo");
-    let hw_skill_name = String::from("hardware_info");
-    let net_diag_skill_name = String::from("net_diag");
-    let mut awaiting_llm = false;
-    loop {
-        // Check for LLM response (may arrive many ticks later)
-        if awaiting_llm {
-            if let Some(event) = llm_receiver.try_receive() {
-                awaiting_llm = false;
-                let text = core::str::from_utf8(&event.payload).unwrap_or("");
-                serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
-                let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-
-                // Check if this response is for skill creation
-                let is_skill_response = PENDING_SKILL.lock().is_some();
-
-                if is_skill_response {
-                    let (name, desc) = PENDING_SKILL.lock().take().unwrap();
-                    // Validate the LLM output as a skill
-                    let mut storage = SKILL_STORAGE.lock();
-                    match storage.register_skill(text) {
-                        Ok(()) => {
-                            let msg = alloc::format!("[Hermes] Skill '{}' criada com sucesso via LLM! Instrucoes: {}. Use /show_skills para ver.", name, desc);
-                            serial_println!("[SKILL-LLM] Skill '{}' gerada e registrada ({} bytes)", name, text.len());
-                            EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, msg.as_bytes().to_vec(), now);
-                            let resp_event = event_bus::Event {
-                                id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
-                                payload: msg.into_bytes(),
-                                token: event_bus::CapabilityToken(1),
-                            };
-                            let _ = EVENT_BUS.publish(resp_event);
-                        }
-                        Err(e) => {
-                            let msg = alloc::format!("[Hermes] Erro ao criar skill '{}': {}. A LLM gerou conteudo invalido.", name, e);
-                            serial_println!("[SKILL-LLM] Falha: {} — saida: {}", e, text);
-                            let resp_event = event_bus::Event {
-                                id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
-                                payload: msg.into_bytes(),
-                                token: event_bus::CapabilityToken(1),
-                            };
-                            let _ = EVENT_BUS.publish(resp_event);
-                        }
-                    }
-                    EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
-                } else {
-                    // Normal chat response
-                    EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
-                    CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
-                    let resp_event = event_bus::Event {
-                        id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
-                        payload: alloc::format!("[Hermes] {}", text).into_bytes(),
-                        token: event_bus::CapabilityToken(1),
-                    };
-                    let _ = EVENT_BUS.publish(resp_event);
-                }
-            }
-        }
-
-        if let Some(event) = user_receiver.try_receive() {
-            let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[CORTEX] Texto do usuario: \"{}\"", text);
-            println!("[CORTEX] Texto do usuario: \"{}\"", text);
-
-            let cmd = hermes::parse_command(text);
-            let response = match cmd {
-                hermes::Command::Status => {
-                    match execute_skill_with_trust(&status_skill_name, &event.payload, &event.token) {
-                        Ok(_) => String::from("System status report executado."),
-                        Err(e) => alloc::format!("Erro: {}", e),
-                    }
-                }
-                hermes::Command::Echo(ref arg) => {
-                    match execute_skill_with_trust(&echo_skill_name, arg.as_bytes(), &event.token) {
-                        Ok(output) => {
-                            let reversed = core::str::from_utf8(&output).unwrap_or("(bytes nao UTF-8)");
-                            alloc::format!("Echo reverso: \"{}\"", reversed)
-                        }
-                        Err(e) => alloc::format!("Erro: {}", e),
-                    }
-                }
-                hermes::Command::HardwareInfo => {
-                    match execute_skill_with_trust(&hw_skill_name, &event.payload, &event.token) {
-                        Ok(output) => {
-                            String::from(core::str::from_utf8(&output).unwrap_or("(binary)"))
-                        }
-                        Err(e) => alloc::format!("Erro: {}", e),
-                    }
-                }
-                hermes::Command::NetDiag => {
-                    match execute_skill_with_trust(&net_diag_skill_name, &event.payload, &event.token) {
-                        Ok(output) => {
-                            String::from(core::str::from_utf8(&output).unwrap_or("(binary)"))
-                        }
-                        Err(e) => alloc::format!("Erro: {}", e),
-                    }
-                }
-                hermes::Command::Fetch(ref url) => {
-                    let parsed: Option<([u8; 4], u16, alloc::string::String)> = {
-                        let url_str = url.trim();
-                        if let Some(rest) = url_str.strip_prefix("http://") {
-                            let without_slash = if let Some(pos) = rest.find('/') {
-                                let (hp, p) = rest.split_at(pos);
-                                (hp, alloc::string::ToString::to_string(p))
-                            } else {
-                                (rest, alloc::string::String::from("/"))
-                            };
-                            let (host_str, path) = without_slash;
-                            let (host_only, port) = if let Some(pos) = host_str.find(':') {
-                                let (h, p_str) = host_str.split_at(pos);
-                                let p: u16 = p_str[1..].parse().unwrap_or(80);
-                                (h, p)
-                            } else {
-                                (host_str, 80u16)
-                            };
-                            let parts: Vec<&str> = host_only.split('.').collect();
-                            if parts.len() == 4 {
-                                let ip = [
-                                    parts[0].parse().unwrap_or(0),
-                                    parts[1].parse().unwrap_or(0),
-                                    parts[2].parse().unwrap_or(0),
-                                    parts[3].parse().unwrap_or(0),
-                                ];
-                                Some((ip, port, path))
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    };
-                    match parsed {
-                        Some((host_ip, port, path)) => {
-                            match unsafe { crate::net::http_get(host_ip, port, &path) } {
-                                Some(body) => {
-                                    let text = core::str::from_utf8(&body).unwrap_or("(binary)");
-                                    let preview = if text.len() > 200 { &text[..200] } else { text };
-                                    alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
-                                }
-                                None => String::from("Fetch falhou: sem resposta"),
-                            }
-                        }
-                        None => String::from("Formato: /fetch http://ip:port/path (DNS numerico apenas)"),
-                    }
-                }
-                hermes::Command::Ping(ref target) => {
-                    let parts: Vec<&str> = target.split('.').collect();
-                    if parts.len() == 4 {
-                        let ip = [
-                            parts[0].parse().unwrap_or(0),
-                            parts[1].parse().unwrap_or(0),
-                            parts[2].parse().unwrap_or(0),
-                            parts[3].parse().unwrap_or(0),
-                        ];
-                        match unsafe { crate::net::ping(ip) } {
-                            Some(_) => alloc::format!("Pong! {} -> OK", target),
-                            None => alloc::format!("Ping {} falhou: sem resposta", target),
-                        }
-                    } else {
-                        String::from("Formato: /ping <ip> (ex: /ping 10.0.2.2)")
-                    }
-                }
-                hermes::Command::Usage => {
-                    let snap = USAGE_TRACKER.lock().snapshot();
-                    alloc::format!(
-                        "Usage: {} chamadas totais, {} ticks.{}",
-                        snap.total_calls, snap.total_exec_time_ticks,
-                        snap.by_skill.iter().map(|(n, c)| alloc::format!(" {}:{}", n, c)).collect::<alloc::string::String>(),
-                    )
-                }
-                hermes::Command::Conversation => {
-                    let log = EVENT_LOG.lock();
-                    log.summarize()
-                }
-                hermes::Command::TrustAllow(token, ref skill) => {
-                    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-                    {
-                        let mut tc = TRUST_CACHE.lock();
-                        tc.trust_allow(token, skill, now);
-                    }
-                    alloc::format!("Trust permitido: token {} pode usar skill '{}'", token, skill)
-                }
-                hermes::Command::TrustDeny(token, ref skill) => {
-                    {
-                        let mut tc = TRUST_CACHE.lock();
-                        tc.trust_deny(token, skill);
-                    }
-                    alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
-                }
-                hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill <nome> <desc>, /rm_skill <name>, /reload_skills, /help | /add_skill usa a LLM para gerar a skill automaticamente.")
-                }
-                hermes::Command::ShowSkills => {
-                    let storage = SKILL_STORAGE.lock();
-                    let list = storage.list_skills();
-                    if list.is_empty() {
-                        String::from("Nenhuma skill carregada.")
-                    } else {
-                        let mut msg = alloc::format!("Skills ({}) carregadas:\n", list.len());
-                        for (i, (name, desc, bytes)) in list.iter().enumerate() {
-                            msg.push_str(&alloc::format!("{}. {} - {} ({} bytes)\n", i + 1, name, desc, bytes));
-                        }
-                        msg
-                    }
-                }
-                hermes::Command::AddSkill(ref name, ref desc) => {
-                    let prompt = alloc::format!(
-                        "Crie uma skill para o Neural OS Hermes (formato SKILL.md do Hermes Agent).\n\
-                         Nome: {}\nDescricao: {}\n\
-                         Formato:\n---\nname: <nome>\ndescription: <descricao>\nrequired_tokens: [1]\n---\n\n\
-                         <instrucoes markdown com passo a passo, criterios de sucesso e exemplos>\n\n\
-                         Gera APENAS o bloco da skill (frontmatter + instrucoes), sem explicacoes extras.",
-                        name, desc,
-                    );
-                    *PENDING_SKILL.lock() = Some((name.clone(), desc.clone()));
-                    let req = crate::Event {
-                        id: 0,
-                        topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
-                        payload: prompt.into_bytes(),
-                        token: crate::CapabilityToken(1),
-                    };
-                    let _ = EVENT_BUS.publish(req);
-                    awaiting_llm = true;
-                    String::from("...")
-                }
-                hermes::Command::RmSkill(ref name) => {
-                    let mut storage = SKILL_STORAGE.lock();
-                    if storage.remove_skill(name) {
-                        alloc::format!("Skill '{}' removida.", name)
-                    } else {
-                        alloc::format!("Skill '{}' nao encontrada.", name)
-                    }
-                }
-                hermes::Command::ReloadSkills => {
-                    let mut storage = SKILL_STORAGE.lock();
-                    *storage = skill_loader::load_embedded_skills();
-                    let count = storage.skills.len();
-                    let prompt_size = storage.build_system_prompt().len();
-                    alloc::format!("Skills recarregadas do disco: {} skills, {} bytes de prompt.", count, prompt_size)
-                }
-                hermes::Command::Chat(ref msg) => {
-                    let intent = cortex.think(msg);
-                    let intent_name = intent.skill_name();
-                    serial_println!("[CORTEX] Intent: {} = {:?}", intent_name, intent);
-                    let response = match intent {
-                        cortex::Intent::Greeting | cortex::Intent::Chat => {
-                            serial_println!("[CORTEX-LLM] Enviando para LLM: \"{}\"", msg);
-                            let req = crate::Event {
-                                id: 0,
-                                topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
-                                payload: msg.as_bytes().to_vec(),
-                                token: crate::CapabilityToken(1),
-                            };
-                            let _ = EVENT_BUS.publish(req);
-                            awaiting_llm = true;
-                            String::from("...")
-                        }
-                        _ => {
-                            match SKILL_REGISTRY.lock().has_skill(intent_name) {
-                                true => {
-                                    match execute_skill_with_trust(intent_name, msg.as_bytes(), &event.token) {
-                                        Ok(output) => {
-                                            let text = core::str::from_utf8(&output).unwrap_or("(binary)");
-                                            alloc::format!("[Cortex] {}: {}", intent_name, text)
-                                        }
-                                        Err(e) => alloc::format!("[Cortex] {} erro: {}", intent_name, e),
-                                    }
-                                }
-                                false => {
-                                    alloc::format!("Hermes: Nao tenho skill para '{}'. Tente /help", intent_name)
-                                }
-                            }
-                        }
-                    };
-                    serial_println!("[CORTEX] Response: {}", response);
-                    response
-                }
-            };
-
-            if !awaiting_llm {
-                let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-                USAGE_TRACKER.lock().record_call("intent_router", 1);
-                EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);
-                EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, response.as_bytes().to_vec(), now);
-                CONVERSATION_TRACKER.lock().record_exchange(text, &response);
-                if CONVERSATION_TRACKER.lock().needs_compact() {
-                    let compact_msg = CONVERSATION_TRACKER.lock().compact();
-                    serial_println!("[HERMES] {}", compact_msg);
-                    EVENT_LOG.lock().push(conversation::EventKind::ContextCompacted, compact_msg.into_bytes(), now);
-                }
-                let resp_event = event_bus::Event {
-                    id: 0,
-                    topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
-                    payload: response.into_bytes(),
-                    token: event_bus::CapabilityToken(1),
-                };
-                let _ = EVENT_BUS.publish(resp_event);
-            } else {
-                EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(),
-                    crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
-            }
-        }
-        task::yield_now().await;
-    }
-}
-
-async fn hermes_console_daemon() {
-    let receiver = EVENT_BUS.subscribe(hermes::TOPIC_HERMES_RESPONSE);
-    loop {
-        if let Some(event) = receiver.try_receive() {
-            let text = core::str::from_utf8(&event.payload).unwrap_or("(bytes)");
-            serial_println!("[Hermes] {}", text);
-            println!("[Hermes] {}", text);
-        }
-        task::yield_now().await;
-    }
-}
-
-async fn hardware_monitor_daemon() {
-    let event = Event {
-        id: 0,
-        topic: String::from("SYSTEM_READY"),
-        payload: vec![1, 2, 3],
-        token: CapabilityToken(1),
-    };
-    match EVENT_BUS.publish(event) {
-        Ok(()) => {
-            println!("[MONITOR] Evento SYSTEM_READY publicado.");
-            serial_println!("[MONITOR] Evento SYSTEM_READY publicado.");
-        }
-        Err(e) => {
-            println!("[MONITOR] Falha na publicacao: {}", e);
-            serial_println!("[MONITOR] Falha na publicacao: {}", e);
-        }
-    }
-}
-
-async fn input_daemon() {
-    let receiver = EVENT_BUS.subscribe("RAW_HW_IRQ1");
-    let mut buffer = String::new();
-    loop {
-        if let Some(event) = receiver.try_receive() {
-            let scancode = event.payload.first().copied().unwrap_or(0);
-            if scancode < 0x80 {
-                match scancode {
-                    0x1C => {
-                        let text = core::mem::take(&mut buffer);
-                        if !text.is_empty() {
-                            serial_println!("[INPUT] ENTER detected — publishing USER_INTENT: \"{}\"", text);
-                            println!("[INPUT] ENTER detected — publishing USER_INTENT: \"{}\"", text);
-                            let event = Event {
-                                id: 0,
-                                topic: String::from("USER_INTENT"),
-                                payload: text.into_bytes(),
-                                token: CapabilityToken(1),
-                            };
-                            let _ = EVENT_BUS.publish(event);
-                        }
-                    }
-                    0x0E => {
-                        buffer.pop();
-                    }
-                    _ => {
-                        if let Some(ch) = scancode_to_ascii(scancode) {
-                            buffer.push(ch);
-                        }
-                    }
-                }
-            }
-        }
-        task::yield_now().await;
-    }
-}
+// All old async fn daemons removed — migrated to native agents in agents.rs
