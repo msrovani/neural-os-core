@@ -6,6 +6,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.24.1] — 2026-06-25 — SMP Huge Page Fix
+
+### Fixed
+- **SMP trampoline huge page corruption** — Identidade de página do trampoline usava `pd0 & mask` para obter `pt_base`, mas não verificava HUGE_PAGE (bit 7). Se PD[0] é uma página de 2MB, `pd0 & mask` aponta para dados, não para uma L1 page table. Escrever PTE[64] (offset 0x200) corrompia dados da BIOS/IVT, impedindo boot dos APs e causando page faults com MALFORMED_TABLE no APIC. Substituído por `OffsetPageTable::map_to()` que gerencia todos os tamanhos de página.
+- **Page fault no LAPIC EOI** — Causa raiz: mesma corrupção de tabela acima. Eliminado pelo fix do SMP.
+
+## [0.24.0] — 2026-06-25 — smoltcp Network Agent + e1000 Removal
+
+### Added
+- **smoltcp 0.13.1 integrado** — `netstack.rs`: Device trait para RTL8139, `NetStack::poll()` via smoltcp Interface.
+- **HTTP não-bloqueante** — `NetStack::http_new()` + `http_poll()`: API baseada em estados (Connecting → Sending → Receiving → Done/Failed), 1 poll/tick.
+- **time_utils::datetime()** — Conversão UNIX→data-hora BR, disponível globalmente.
+
+### Removed
+- **e1000 driver** — Arquivo `e1000.rs` deletado. Substituído por RTL8139 + smoltcp.
+- **proto.rs limpo** — Removidas funções E1000-dependentes (icmp_echo_request, dhcp_discover, http_get_request). Mantidos apenas utilitários (eth_header, ip_header, ip_checksum, parsers).
+
+### Changed
+- **network_agent.rs reescrito** — 473→113 linhas. Remove classificação raw Ethernet, construtores de pacotes manuais, estado TCP manual. Substituído por: `NetStack` lazy → HTTP connect → poll → done/failed.
+- **Agent agora usa smoltcp** — Em vez de drenar RX manualmente, chama `netstack.poll()`.
+- **net.rs** — Remove `http_get()`, `ping()` legados (stubs). Remove `E1000` static.
+
+## [0.23.4] — 2026-06-25 — TCP handshake + HTTP GET
+
+### Added
+- **Mini TCP stack** — `build_tcp_segment()`: SYN, SYN-ACK, ACK, FIN com checksum TCP via pseudo-header.
+- **HTTP GET google.com** — TCP SYN → SYN-ACK → ACK → HTTP GET → FIN. TX len=54 (SYN) funcional, timeout por NAT slirp.
+- **Classificação TCP** — `PacketClass::TcpSynAck`, `TcpData` para processar handshake.
+
+## [0.23.3] — 2026-06-25 — RTL8139 Driver + Neural Network Agent
+
+### Added
+- **RTL8139 bare-metal driver** — `rtl8139.rs`: I/O ports via Port\<T\>, 4 descritores TX fixos, RX ring buffer circular (CAPR/CBR), MAC via registradores.
+- **Neural Network Agent** — `network_agent.rs`: async task que drena RX, classifica pacotes (ARP/UDP/ICMP/TCP), responde automaticamente. Timeline `[NET @t=NN]`.
+- **init_driver_rtl8139()** — Scan PCI 0x10EC:0x8139, init, publica HW_NET_RTL8139.
+- **ArpSender trait** — Refatoração de proto.rs: `send_arp_inner()` genérica implementada para E1000Driver e Rtl8139Driver.
+
+### Changed
+- Boot flow: RTL8139 primeiro, fallback e1000.
+- Cargo.toml: versionamento `v0.{sprint}.{item}+build{build}`.
+- bootimage run-args: `model=rtl8139`.
+
 ## [0.20.2] — 2026-06-25 — Network Sprint: e1000 Fixes + Neural Architecture
 
 ### Fixed
