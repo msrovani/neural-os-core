@@ -32,6 +32,7 @@ mod nn;
 mod trust;
 mod self_heal;
 mod serial;
+mod skill_loader;
 mod xhci;
 mod simd;
 mod task;
@@ -578,13 +579,18 @@ async fn cortex_llm_daemon() {
         serial_println!("[CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.");
         cortex::TransformerModel::new()
     });
+    let skill_loader = crate::skill_loader::load_embedded_skills();
+    let system_prompt = skill_loader.build_system_prompt();
     let receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST);
-    serial_println!("[CORTEX-LLM] Transformer loaded. Starting daemon...");
+    serial_println!("[CORTEX-LLM] Transformer loaded + {} skills, {} bytes de system prompt",
+        skill_loader.skills.len(), system_prompt.len());
     loop {
         if let Some(event) = receiver.try_receive() {
-            let prompt = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[CORTEX-LLM] Generating for: \"{}\"", prompt);
-            let output = cortex::generate_text(&model, prompt);
+            let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
+            serial_println!("[CORTEX-LLM] Generating for: \"{}\"", user_text);
+            // Prepend system prompt (skills instructions) to guide generation
+            let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
+            let output = cortex::generate_text(&model, &full_prompt);
             serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
             let resp = crate::Event {
                 id: 0,
