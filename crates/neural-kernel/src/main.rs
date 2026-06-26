@@ -334,6 +334,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));
     executor.spawn(task::agent::AgentTask::new(network_agent::network_agent_daemon()));
     executor.spawn(task::agent::AgentTask::new(input_daemon()));
+    executor.spawn(task::agent::AgentTask::new(cortex_llm_daemon()));
     executor.spawn(task::agent::AgentTask::new(intent_router_daemon()));
     executor.spawn(task::agent::AgentTask::new(hermes_console_daemon()));
     executor.run();
@@ -433,6 +434,28 @@ async fn hw_bridge_daemon() {
                 token: CapabilityToken(1),
             };
             let _ = EVENT_BUS.publish(event);
+        }
+        task::yield_now().await;
+    }
+}
+
+async fn cortex_llm_daemon() {
+    let model = cortex::TransformerModel::new();
+    let receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST);
+    serial_println!("[CORTEX-LLM] Transformer loaded. Starting daemon...");
+    loop {
+        if let Some(event) = receiver.try_receive() {
+            let prompt = core::str::from_utf8(&event.payload).unwrap_or("");
+            serial_println!("[CORTEX-LLM] Generating for: \"{}\"", prompt);
+            let output = cortex::generate_text(&model, prompt);
+            serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
+            let resp = crate::Event {
+                id: 0,
+                topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
+                payload: output.into_bytes(),
+                token: crate::CapabilityToken(1),
+            };
+            let _ = EVENT_BUS.publish(resp);
         }
         task::yield_now().await;
     }
