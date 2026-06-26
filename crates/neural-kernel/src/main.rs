@@ -194,7 +194,15 @@ lazy_static! {
 fn panic(info: &core::panic::PanicInfo) -> ! {
     println!("[PANIC] {}", info);
     serial_println!("[PANIC] {}", info);
-    loop {}
+    let _ = EVENT_BUS.publish(crate::Event {
+        id: 0,
+        topic: alloc::string::String::from(cortex::TOPIC_KERNEL_ERROR),
+        payload: alloc::format!("{}", info).into_bytes(),
+        token: crate::CapabilityToken(1),
+    });
+    // A small wait for the event to be dispatched before halting
+    for _ in 0..100000 { core::hint::spin_loop(); }
+    loop { x86_64::instructions::hlt(); }
 }
 
 bootloader::entry_point!(kernel_main);

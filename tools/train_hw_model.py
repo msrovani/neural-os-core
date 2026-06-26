@@ -113,20 +113,21 @@ class TransformerModel(nn.Module):
         B, T = tokens.shape
         x = self.embed(tokens)
         if mask is None:
-            mask = torch.triu(torch.full((1, 1, T, T), float('-inf')), diagonal=1)
+            mask = torch.triu(torch.full((1, 1, T, T), float('-inf'), device=tokens.device), diagonal=1)
         for layer in self.layers:
             x = layer(x, mask)
         logits = self.unembed(self.rms_final(x))
         return logits
 
     def generate(self, tokenizer, prompt, max_len=32):
-        tokens = torch.tensor([tokenizer.encode(prompt)]).long()
+        device = next(self.parameters()).device
+        tokens = torch.tensor([tokenizer.encode(prompt)]).long().to(device)
         for _ in range(max_len):
             if tokens.size(1) >= MAX_SEQ:
                 break
             logits = self.forward(tokens)
             next_token = logits[0, -1].argmax().item()
-            tokens = torch.cat([tokens, torch.tensor([[next_token]])], dim=1)
+            tokens = torch.cat([tokens, torch.tensor([[next_token]], device=device)], dim=1)
             if next_token == EOS:
                 break
         return tokenizer.decode(tokens[0].tolist())
@@ -256,6 +257,8 @@ def train():
     examples, tokenizer = load_dataset(args.dataset, args.max_examples)
     print(f"[TRAIN] {len(examples)} exemplos carregados")
 
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = TransformerModel().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)

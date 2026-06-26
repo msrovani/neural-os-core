@@ -4,6 +4,7 @@ use core::f32::NEG_INFINITY;
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
 pub const TOPIC_LLM_RESPONSE: &str = "LLM_RESPONSE";
+pub const TOPIC_KERNEL_ERROR: &str = "KERNEL_ERROR";
 use crate::nn::{silu, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 

@@ -181,6 +181,24 @@ USB_SPEED_DATA = [
     ("USB identificado", "Dispositivo USB conectado — LLM pode identifica-lo por VID/PID"),
 ]
 
+# ═══════════════════════════════════════════════
+#  ERROR RECOVERY — O LLM AJUDA A CONSERTAR O SISTEMA
+# ═══════════════════════════════════════════════
+ERROR_RECOVERY_DATA = [
+    ("kernel panic page fault", "Page Fault: acesso a memoria invalido. Causas: ponteiro nulo, endereco nao mapeado, buffer overflow. Possivel recuperacao: matar task ofensora, liberar memoria, continuar."),
+    ("kernel panic double fault", "Double Fault: excecao dupla. Causa: STACK overflow ou corrupcao de tabela. Possivel recuperacao: verificar IST stack, reiniciar core, restaurar contexto."),
+    ("kernel panic general protection", "General Protection Fault: acesso a memoria protegida. Causas: segmento invalido, porta IO sem privilegio, acesso a pagina UC. Possivel recuperacao: verificar endereco, logar contexto."),
+    ("kernel panic out of memory", "Out of Memory: sem memoria para alocar. Causas: heap estourado, fragmentacao, leak. Possivel recuperacao: compactar heap, liberar slabs, usar swap no MHI."),
+    ("kernel panic deref null", "Null Pointer Dereference: tentativa de ler/escrever em endereco 0. Possivel recuperacao: identificar modulo ofensor, reiniciar servico, continuar."),
+    ("kernel panic stack overflow", "Stack Overflow: pilha estourou. Causas: recursao infinita, variavel local grande. Possivel recuperacao: verificar IST, aumentar stack, reiniciar."),
+    ("kernel panic assert", "Assertion Failed: condicao esperada era falsa. Causas: bug em logica, estado invalido. Possivel recuperacao: logar contexto, tentar continuar ignorando."),
+    ("como recuperar de page fault", "Page Fault: o LLM analisa o endereco em CR2, verifica a tabela de paginas, sugere: remapear, ignorar acesso, ou matar o daemon."),
+    ("como recuperar de double fault", "Double Fault: sistema instavel. O LLM sugere reiniciar o core AP, restaurar estado via checkpoint."),
+    ("como evitar null pointer", "Null pointer: usar Option<T> em vez de raw pointers, verificar com match antes de usar."),
+    ("o que fazer com um erro", "Erro no kernel: 1) Logar o erro 2) Analisar via LLM a causa 3) Tentar recuperacao automatica 4) Se falhar, exibir mensagem de erro amigavel."),
+    ("self heal", "Self-Healing: o kernel captura panics, publica KERNEL_ERROR, o LLM analisa e sugere acao. Possivel: habilitar/desabilitar feature, reiniciar driver, restaurar checkpoint."),
+]
+
 CAPABILITIES_DATA = [
     ("USB class 08", "Mass Storage: armazenamento de dados. Capabilities: leitura, escrita, backup. MHI: HDD ou NVMe. Driver: padrao USB."),
     ("USB class 0E", "Video: captura de imagem. Capabilities: camera, video_capture. MHI: Dram. Driver: padrao UVC."),
