@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.27.0 🏆 TRANSFORMER NO KERNEL 🏆
+# Neural OS Hermes ⚡ — v0.28.0 🏆 HW-AWARE CORTEX LLM 🏆
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -11,7 +11,7 @@
 
 Every OS today bolts AI on top — a chatbot in the taskbar, a copilot in the browser, a GPU driver that lets PyTorch run. The kernel doesn't know what AI is. It never will.
 
-**Neural OS Hermes is different.** The kernel IS a neural inference engine. The Cortex classifies every user intent. **A 4-layer BitNet transformer with 272K ternary parameters generates text from user input — no OS has ever done this bare-metal.** Seven cooperative AI agents run the system. No shell. No init. No systemd. Just tensors, events, and intent.
+**Neural OS Hermes is different.** The kernel IS a neural inference engine. The Cortex classifies every user intent. **A 4-layer BitNet transformer with 272K ternary parameters generates text from user input — trained on 23.858 PCI IDs to identify hardware.** Seven cooperative AI agents run the system. No shell. No init. No systemd. Just tensors, events, and intent.
 
 ---
 
@@ -130,6 +130,19 @@ The Cortex classifies user text and dispatches to the appropriate skill.
 [NET @t=10] Online. IP: 10.0.2.15
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
 [WATCHDOG] Ticks do temporizador: 13200+
+
+### 🏆 HW-Aware Cortex LLM (26/06/2026)
+O modelo foi treinado com 23.858 entradas PCI ID. Agora identifica hardware:
+```
+> identifique hardware
+[CORTEX-LLM] Generating for: "Identifique estes dispositivos PCI:
+8086:1237 classe 06/00
+8086:7000 classe 06/01
+1234:1111 classe 03/00
+10ec:8139 classe 02/00"
+[CORTEX-LLM] Generated: "8086 1237 intel 82441fx pmc bridge... 10ec 8139 realtek rtl8139 fast ethernet"
+[Hermes] Intel 82441FX PMC — Host Bridge, class 06/00
+```
 
 ### 🏆 Transformer LLM Gerando Texto (26/06/2026)
 ```
@@ -320,11 +333,12 @@ The Memory Hierarchy Index treats all physical memory as a single pool divided i
 | 1-22 | 0-5 | MVP base (toolchain, VGA, heap, SIMD, IPC, SMP, skills, APIC) | ✅ |
 | 23 | 6 | RTL8139 driver + Neural Network Agent + TCP handshake | ✅ |
 | 24 | 7 | smoltcp + e1000 removal + SMP huge page fix | ✅ |
-| **25** | **8** | **Neural Cortex in Hermes — 12-intent router, skill dispatch** | **✅ Current** |
-| 26 | 9 | Transformer Engine (Attention, generate, tokenizer, micro-model) | 🟡 Próximo |
-| 27 | 10 | Cortex Daemon (LLM request/response, prompt templates) | 🔲 |
-| 28 | 11 | Reflex tuning + speculative decoding | 🔲 |
-| 29+ | 12 | Networked Cortex (remote API, weight update) | 🔲 |
+| 25 | 8 | Neural Cortex in Hermes — 12-intent router, skill dispatch | ✅ |
+| 26 | 9 | Transformer Engine (Attention, generate, tokenizer, micro-model) | ✅ |
+| 27 | 10 | Cortex Daemon (LLM request/response, prompt templates) | ✅ |
+| **28** | **11** | **HW-Aware Cortex LLM + PCI ID training + HwIdentifySkill** | **✅ Current** |
+| 29 | 12 | xHCI USB Driver (detect + identify devices via Cortex LLM) | 🟡 Planejado |
+| 30+ | 13 | Networked Cortex + WASM + multi-agent | 🔲 |
 
 ## 🧬 Module Map
 
@@ -348,6 +362,7 @@ The Memory Hierarchy Index treats all physical memory as a single pool divided i
 | `usage.rs` | 73 | UsageTracker: per-skill call counts, metrics tensor |
 | `conversation.rs` | 79 | EventLog: VecDeque, last_n, summarize |
 | `proto.rs` | 101 | Ethernet/IP/ARP/ICMP header builders and parsers |
+| `xhci.rs` | 82 | xHCI USB controller driver stub (Sprint 29) |
 
 ## 🛠️ Quick Start
 
