@@ -440,7 +440,11 @@ async fn hw_bridge_daemon() {
 }
 
 async fn cortex_llm_daemon() {
-    let model = cortex::TransformerModel::new();
+    let model_data = include_bytes!("../micro.bitnet");
+    let model = cortex::load_model(model_data).unwrap_or_else(|| {
+        serial_println!("[CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.");
+        cortex::TransformerModel::new()
+    });
     let receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST);
     serial_println!("[CORTEX-LLM] Transformer loaded. Starting daemon...");
     loop {
