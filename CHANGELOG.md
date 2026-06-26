@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.30.0] — 2026-06-26 — USB Device Detection + Final Model
+
+### Added
+- **xHCI USB driver**: port scan, speed detection, device identification
+- **USB speed knowledge**: 14 novos pares no dataset (Low/Full/High/Super/Super+)
+- **HW identification inclui USB**: 5 dispositivos detectados (4 PCI + 1 xHCI)
+
+### Changed
+- **Modelo final**: 66.640 pares (PCI 23.858 + USB 23.963 + SMBIOS + kernel + git), loss 1.14
+- **xHCI driver simplificado**: init + port_scan estável, sem GPF
+
 ## [0.28.0] — 2026-06-26 — Final Model: 66K pairs + USB Database
 
 ### Added
