@@ -461,8 +461,9 @@ Ideias portadas de 6 repos Tier 4: Cline (63.9k ★), Agent Zero (18.2k ★), Mi
 
 ### 1.28. Agent/Skill-First Architecture — A Grande Virada
 
+**Bloco 11 — Sprints 39-42 (consolidado)**
 **Data:** 2026-06-26
-**Status:** ⚡ Paradigma fundamental. Este seção redefine a arquitetura de cima a baixo.
+**Status:** ⚡ Paradigma fundamental. Sprints 39-40 implementados (SkillLoader, Agent trait, AgentRegistry, SystemAgent). Sprints 41-42 continuam migração.
 
 #### O Princípio
 

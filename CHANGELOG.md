@@ -6,31 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.39.0] — 2026-06-26 — Skill Loader + Runtime Skills + Agent/Skill-First Paradigm
+## [0.40.0] — 2026-06-26 — Agent-First Refactoring (Block 11, Sprints 39-42 consolidado)
 
-### Added — Skill Loader (Sprint 39)
-- **skill_loader.rs** — parseia skills.md com frontmatter (name/description/required_tokens/instructions)
-- **Security validator** — 9 padrões de prompt injection bloqueados no registro de skills
-- **`SKILL_STORAGE` global** — `spin::Mutex<SkillLoader>` seedado no boot, modificável em runtime
+### Bloco 11 — Agent/Skill-First Architecture 🏆
+
+**Paradigma:** Tudo no Neural OS Hermes é um Agente ou uma Skill. Nada de tasks, serviços, drivers avulsos.
+
+### Implementado nos Sprints 39-40
+
+#### Skill Loader + Runtime Skills (Sprint 39)
+- **skill_loader.rs** — parseia skills.md com frontmatter, segurança (9 padrões de injection), runtime SKILL_STORAGE global
 - **System prompt reconstruído a cada LLM_REQUEST** — sempre reflete skills runtime atuais
+- **Comandos**: `/show_skills`, `/add_skill <nome> <desc>` (LLM gera skill), `/rm_skill`, `/reload_skills`
 - **Embedded skills**: hw_identify.md (670 bytes) + self_heal.md (621 bytes)
-- **`/show_skills`** — lista todas skills registradas em runtime
-- **`/add_skill <nome> <desc>`** — LLM gera skill automaticamente via LLM_REQUEST
-- **`/rm_skill <nome>`** — remove skill por nome
-- **`/reload_skills`** — recarrega seed do disco
 
-### Changed — Agent/Skill-First Architecture (Documentação)
-- **IDEA_BANK.md** — Section 1.28 adicionada: 20 itens (A-001 a A-020) redefinindo a arquitetura
-- **275 itens catalogados** (de 255) — heat map atualizado
-- **AGENTS.md reescrito** — paradigma agent/skill-first, landscape de 16 agentes
-- **STATE.md reescrito** — arquitetura centrada em agentes
-- **README.md atualizado** — agent/skill-first perspective
+#### Agent Trait + Scheduler (Sprint 40)
+- **`agent-core` crate** — `Agent` trait (manifest, tick, activate), `AgentKind` (System/Driver/Inference/Router/Console/Network/Skill), `ScheduleKind` (Oneshot/Continuous/PollEvery/EventDriven), `AgentRegistry`, `AgentScheduler::run()`
+- **SystemAgent** — primeiro agente nativo, substitui `system_daemon`
+- **LegacyTaskAgent** — wrapper para migração gradual das 7 async fn restantes
+- **`NeuralExecutor` removido** — `agent.rs`, `executor.rs` deletados, `spawn_task_by_name` eliminado
+- **RESPAWN_QUEUE integrado** — scheduler respawna agents via `check_respawns` + `spawn_agent`
+- **Documentação revista** — AGENTS.md, STATE.md, README.md, IDEA_BANK.md Section 1.28 (275 itens)
 
-### Removed
-- `cortex_llm_daemon(system_prompt: String)` — skills agora carregadas via SKILL_STORAGE global
-
-### Technical Debt
-- `cortex_llm_daemon` mensagem de boot ainda reflete formato antigo (cosmético)
+### Pendente (Sprint 41-42, mesmo bloco)
+- Migrar 7 LegacyTaskAgent para Agentes nativos (MonitorAgent, HwBridgeAgent, NetAgent, InputAgent, CortexAgent, HermesAgent, ConsoleAgent)
+- Migrar DriverAgents (NetDriverAgent, UsbDriverAgent)
+- EventDriven schedule para agents orientados a evento
 
 ## [0.37.0] — 2026-06-26 — Self-Healing + Checkpoint/Restore (Sprints 32-37)
 

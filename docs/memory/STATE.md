@@ -17,19 +17,19 @@
 | HW-Aware LLM | 28-30 | 0.28–0.30 | PCI+USB+SMBIOS+xHCI+model |
 | Capabilities | 31 | 0.31 | O que cada HW faz + skills + MHI |
 | Self-Healing | 32-37 | 0.32–0.37 | Panic→LLM→recovery, taxonomy, respawn, checkpoint |
-| Skill Loader | 39 | 0.39 | skills.md + runtime SKILL_STORAGE + /add_skill via LLM |
+| **Agent/Skill-First** | **39-42** | **0.39-0.40** | **Agent trait, AgentRegistry, skill_loader, runtime skills** |
 
-## Agent Landscape (16 agents planejados, 8 como tasks)
+## Agent Landscape (16 agents — SystemAgent nativo, 7 LegacyTaskAgent wrapper, 8 structs)
 | Código | Agente | Status | Tipo |
 |---|---|---|---|
-| A-001 | SystemAgent | 🟡 task | System |
-| A-002 | MonitorAgent | 🟡 task | System |
-| A-003 | HwBridgeAgent | 🟡 task | Router |
-| A-004 | NetAgent | 🟡 task | Network |
-| A-005 | InputAgent | 🟡 task | Console |
-| A-006 | CortexAgent | 🟡 task | Inference |
-| A-007 | HermesAgent | 🟡 task | Router |
-| A-008 | ConsoleAgent | 🟡 task | Console |
+| A-001 | **SystemAgent** | ✅ agent | System — Oneshot, nativo |
+| A-002 | MonitorAgent | 🟡 wrapper | System — LegacyTaskAgent |
+| A-003 | HwBridgeAgent | 🟡 wrapper | Router — LegacyTaskAgent |
+| A-004 | NetAgent | 🟡 wrapper | Network — LegacyTaskAgent |
+| A-005 | InputAgent | 🟡 wrapper | Console — LegacyTaskAgent |
+| A-006 | CortexAgent | 🟡 wrapper | Inference — LegacyTaskAgent |
+| A-007 | HermesAgent | 🟡 wrapper | Router — LegacyTaskAgent |
+| A-008 | ConsoleAgent | 🟡 wrapper | Console — LegacyTaskAgent |
 | A-009 | NetDriverAgent | 📝 módulo | Driver |
 | A-010 | UsbDriverAgent | 📝 módulo | Driver |
 | A-011 | SelfHealAgent | ✅ struct | System |
@@ -39,17 +39,17 @@
 | A-015 | TrustAgent | ✅ struct | System |
 | A-016 | SkillManagerAgent | 🟡 struct | Skill |
 
-## 8 Tasks Atuais (serão Agent instances)
-1. system → 2. monitor → 3. hw_bridge → 4. network_agent →
-5. input → 6. cortex_llm → 7. intent_router → 8. hermes_console
+## Agentes e Tasks Atuais
+- **SystemAgent** (nativo ✅) — SYSTEM_READY, EchoSkill
+- **7 LegacyTaskAgent** (wrappers 🟡) — monitor, hw_bridge, network_agent, input, cortex_llm, intent_router, hermes_console
+- **8 structs** (✅) — SelfHealAgent, MemoryAgent, PlatformAgent, SMPAgent, TrustAgent, SkillManagerAgent, NetDriverAgent, UsbDriverAgent
 
 ## Modelo
 - 66.780 pares, GTX 1050, loss 1.156, 68 KB
 
 ## Skills em Runtime
-- SKILL_STORAGE global (Mutex<SkillLoader>), seed do disco, modificável via /show_skills, /add_skill, /rm_skill, /reload_skills
-- /add_skill <nome> <desc> → LLM gera skill automaticamente
-- system prompt reconstruído a cada LLM_REQUEST a partir das skills atuais
+- SKILL_STORAGE global, skills via `/add_skill <nome> <desc>` (LLM gera automaticamente)
+- system prompt reconstruído a cada LLM_REQUEST
 
-## Próximo Sprint (40 — Agent-First Refactoring)
-Encapsular 8 tasks em Agent trait. AgentRegistry + AgentScheduler substituem NeuralExecutor. Manter compatibilidade (migração aditiva).
+## Próximo (Sprint 41-42, mesmo bloco)
+Migrar 7 LegacyTaskAgent para Agentes nativos + DriverAgents. EventDriven schedule.
