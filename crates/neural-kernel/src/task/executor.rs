@@ -57,6 +57,7 @@ impl NeuralExecutor {
             let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             if ticks > 0 && ticks % 100 == 0 {
                 serial_println!("[WATCHDOG] Ticks: {}", ticks);
+                crate::SELF_HEAL.lock().save_checkpoint();
             }
             x86_64::instructions::hlt();
         }
