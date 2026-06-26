@@ -279,13 +279,13 @@ Nada é descartado sem registro. Ideias podem ser:
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 126 | **Transformer Engine** — Attention (`QK^T/√d`), causal mask, softmax, FFN (SiLU), residual | 🟡 Sprint 25 | Sprint 25 | Core da arquitetura LLM. ~80+50 LOC em cima de `Tensor`. |
+| 126 | **Transformer Engine** — Attention (`QK^T/√d`), causal mask, softmax, FFN (SiLU), residual | ✅ Sprint 26 | Sprint 26 | Implementado em cortex.rs: 4 layers, Attention Q/K/V/O, causal mask, RMSNorm, SiLU FFN, residual. |
 | 127 | **Tokenizer character-level** — ASCII 32-126 + `<BOS>/<EOS>/<PAD>` | 🟡 Sprint 25 | Sprint 25 | Entrada/saída de texto bare-metal. Reutiliza `scancode_to_ascii()`. |
 | 128 | **Autoregressive generation** — loop `tokenize → forward → sample → next` | 🟡 Sprint 25 | Sprint 25 | ~30 LOC. Gera resposta token por token até `<EOS>`. |
 | 129 | **Model format `.bitnet`** — binary spec com magic, header, packed ternary weights | 🟡 Sprint 25 | Sprint 25 | Formato padronizado para modelos exportados do Python. |
 | 130 | **Model loader** — `include_bytes!` + `allocate_contiguous()` → `PackedTernaryTensor` | 🟡 Sprint 25 | Sprint 25 | Carrega micro-modelo (~1M params, ~250 KB). |
 | 131 | **Micro-model TinyStories** (1M params, 4 layers, hidden=128) treinado em Python | 🟡 Sprint 25 | Sprint 25 | Modelo de prova para testar pipeline completo. |
-| 132 | **Cortex Daemon** — async task que recebe `LLM_REQUEST` → gera → publica resposta | 🟡 Sprint 26 | Sprint 26 | Substitui mock do `intent_router_daemon`. |
+| 132 | **Cortex Daemon** — async task que recebe `LLM_REQUEST` → gera → publica resposta | ✅ Sprint 27 | Sprint 27 | Implementado como `cortex_llm_daemon` (8ª task). TransformerModel carregado no boot. |
 | 133 | **Modelo 1.5B params** (distilado do Llama 3.2 1B → ternário 2-bit, ~375 MB) | 🟡 Sprint 26 | Sprint 26 | Cérebro completo do AIOS. ~5-15 tok/s em x86-64. |
 | 134 | **Model update via HTTP** — download `.bitnet` → validar hash → hot-swap | 🟡 Sprint 26 | Sprint 26 | Permite evolução do modelo sem recompilar kernel. |
 | 135 | **LLM decide hardware arch** — substitui `SystemArchitecture::infer()` heurístico | 🟡 Sprint 26 | Sprint 26 | MLP (item #51) vira LLM query. |

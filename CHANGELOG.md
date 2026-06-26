@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.27.0] — 2026-06-26 — Cortex LLM Daemon
+
+### Added
+- **cortex_llm_daemon** — 8ª task async: subscribe `LLM_REQUEST` → generate → publish `LLM_RESPONSE`
+- **LLM_REQUEST/LLM_RESPONSE** — novos tópicos EventBus para comunicação com o LLM
+- **8 tasks cooperativas** — system, monitor, hw_bridge, network_agent, input, cortex_llm, intent_router, hermes_console
+- **9600+ ticks estável** — transformer carregado sem travamentos
+
+## [0.26.0] — 2026-06-26 — Transformer Engine
+
+### Added
+- **Transformer completo** — `cortex.rs`: Attention Q/K/V/O, causal mask, softmax, 4 camadas BitNet
+- **Tokenizer char-level** — ASCII 32-126, 99 tokens (BOS/EOS/PAD)
+- **generate_text()** — loop autoregressivo argmax, max 32 tokens, para em EOS
+- **Model loader .bitnet** — parse do formato binário (magic 0xBE11BE11)
+- **Python gen_micro_model.py** — gera modelo de 68 KB (~272K params ternários)
+- **Tensor::add() + element_mul()** — operações para resíduos do transformer
+
 ## [0.25.0] — 2026-06-25 — Neural Cortex in Hermes
 
 ### Added

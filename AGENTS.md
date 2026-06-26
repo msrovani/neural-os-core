@@ -75,7 +75,7 @@ Build a bare-metal Rust microkernel (neural-os-core) for AI inference orchestrat
 - Windows toolchain with MinGW-w64 linker
 - Every sprint: `cargo check --release` (0 errors) + QEMU boot. Dead-code/unused warnings are EXPECTED per Known Warnings Policy (currently ~40).
 
-## 25 Sprints Complete
+## 27 Sprints Complete
 
 ### Sprint 1 (v0.1.0) — Toolchain & Boot
 Toolchain nightly + x86_64-unknown-none, bootloader v0.9.34, `cargo run` boots in QEMU, serial output at port 0x3F8, `relocation-model=static` fix, MinGW-w64 setup, ADR-0001.
@@ -154,6 +154,12 @@ Top-Half/Bottom-Half I/O. Keyboard interrupt handler (IDT[33]) reads port 0x60 �
 ### Sprint 25 (v0.25.0) — Neural Cortex in Hermes (Block 8)
 `cortex.rs` — `Cortex::think()` classifica texto em 12 intenções. `intent_router_daemon` substitui `INTENT_MLP` (hand-crafted 16→8→3) por dispatch neural com skills. Pipeline completo: teclado → EVENT_BUS → Cortex → SkillRegistry → VGA. MemPalace 3.5.0 instalado para memória persistente.
 
+### Sprint 26 (v0.26.0) — Transformer Engine (Block 9)
+`cortex.rs` expandido com `TransformerModel`: Attention Q/K/V/O com causal mask, 4 camadas BitNet (RMSNorm → Attention → residual → RMSNorm → SiLU FFN → residual), tokenizer char-level, `generate_text()` autoregressivo. Model loader `.bitnet` (magic 0xBE11BE11). Python `gen_micro_model.py` para gerar pesos — 68 KB, ~272K params ternários.
+
+### Sprint 27 (v0.27.0) — Cortex LLM Daemon (Block 10)
+`cortex_llm_daemon` — 8ª task no executor cooperativo. Subscribe `LLM_REQUEST` → `generate_text()` → publish `LLM_RESPONSE`. Transformer carregado no boot sem travamentos. 9600+ ticks estável. 8 tasks: system, monitor, hw_bridge, network_agent, input, cortex_llm, intent_router, hermes_console.
+
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
 - **`Mutex<Option<Writer>>`** for VGA (not `lazy_static!`) — depends on runtime BootInfo
@@ -195,6 +201,7 @@ cargo run → bootloader → kernel_main
         ├─ AgentTask::new(hw_bridge_daemon)
         ├─ AgentTask::new(network_agent_daemon)  (smoltcp poll + HTTP get)
         ├─ AgentTask::new(input_daemon)
+        ├─ AgentTask::new(cortex_llm_daemon)     (LLM transformer generate)
         ├─ AgentTask::new(intent_router_daemon)
         └─ AgentTask::new(hermes_console_daemon)
              └─ hardware_context_tensor() a cada 100 iteracoes
