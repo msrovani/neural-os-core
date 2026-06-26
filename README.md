@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.34.0 — SELF-HEALING KERNEL
+# Neural OS Hermes ⚡ — v0.39.0 — AGENT/SKILL-FIRST ARCHITECTURE
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -8,6 +8,24 @@
 ```
 
 ## 🔥 O que o torna único
+
+### 0. Tudo é Agente ou Skill
+Não existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade no sistema é um **Agente** com manifesto, ciclo de vida e capacidades. Habilidades (**Skills**) são a interface de requisição-resposta dos Agentes.
+
+16 agentes planejados (v0.39.0):
+| Código | Agente | Status | Função |
+|---|---|---|---|
+| A-001 | SystemAgent | 🟡 task | Init, report_ready |
+| A-002 | MonitorAgent | 🟡 task | Hardware context |
+| A-003 | HwBridgeAgent | 🟡 task | IRQ bridge |
+| A-004 | NetAgent | 🟡 task | Network poll |
+| A-005 | InputAgent | 🟡 task | Keyboard |
+| A-006 | CortexAgent | 🟡 task | LLM inference |
+| A-007 | HermesAgent | 🟡 task | Intent routing |
+| A-008 | ConsoleAgent | 🟡 task | VGA+serial |
+| A-009-A-016 | DriverAgents + SystemAgents | ✅ struct | PCI, SMP, Trust, Memory, etc. |
+
+**Migração em andamento (Sprint 40+):** 8 `async fn` tasks → Agent trait unificada.
 
 ### 1. Kernel que SE CURA
 Quando um erro ocorre (Page Fault, GPF, OOM), o kernel não dá BSOD:
@@ -25,29 +43,16 @@ PCI IDs (23.858) + USB IDs (23.963) + SMBIOS + Kernel + Git
 + Capabilities (25) + Error Recovery (16) + Learning (5)
 ```
 
-Sabe responder:
-- "USB class 08" → "Mass Storage: armazenamento. MHI: HDD. Driver: padrão."
-- "como recuperar de page fault" → "LLM analisa CR2, sugere remapear ou reiniciar daemon"
-- "o que fazer com gpu" → "Framebuffer + gpu_compute, Vram no MHI"
+### 3. Skills em Runtime (não compile-time)
+Skills são carregadas em runtime via `SKILL_STORAGE` global. Usuário pode criar skills digitando `/add_skill <nome> <desc>` — a LLM gera automaticamente a skill em formato SKILL.md.
 
-### 3. Auto-descoberta de hardware
+### 4. Skills editáveis sem recompilar
 ```
-Boot → PCI scan (4+ dispositivos) → HwIdentifySkill → LLM_REQUEST →
-  "10ec:8139 é Realtek RTL8139 Fast Ethernet — classe rede"
-  "1033:0194 é NEC xHCI — controladora USB 3.0"
+/show_skills      → lista skills ativas
+/add_skill nome   → LLM gera skill baseada na descrição
+/rm_skill nome    → remove skill
+/reload_skills    → recarrega do seed
 ```
-
-### 4. 8 agentes cooperativos
-| # | Task | O que faz |
-|---|---|---|
-| 1 | system_daemon | SYSTEM_READY (morre) |
-| 2 | hardware_monitor | Context tensor a cada 100 ticks |
-| 3 | hw_bridge | Scancode IRQ → EventBus |
-| 4 | network_agent | smoltcp poll → HTTP |
-| 5 | input_daemon | Buffer ASCII → ENTER → USER_INTENT |
-| 6 | cortex_llm | LLM_REQUEST → generate_text() |
-| 7 | intent_router | Cortex.think() → SkillRegistry |
-| 8 | hermes_console | HERMES_RESPONSE → VGA |
 
 ## 🧠 Self-Healing Architecture
 

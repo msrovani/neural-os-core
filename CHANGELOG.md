@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.39.0] — 2026-06-26 — Skill Loader + Runtime Skills + Agent/Skill-First Paradigm
+
+### Added — Skill Loader (Sprint 39)
+- **skill_loader.rs** — parseia skills.md com frontmatter (name/description/required_tokens/instructions)
+- **Security validator** — 9 padrões de prompt injection bloqueados no registro de skills
+- **`SKILL_STORAGE` global** — `spin::Mutex<SkillLoader>` seedado no boot, modificável em runtime
+- **System prompt reconstruído a cada LLM_REQUEST** — sempre reflete skills runtime atuais
+- **Embedded skills**: hw_identify.md (670 bytes) + self_heal.md (621 bytes)
+- **`/show_skills`** — lista todas skills registradas em runtime
+- **`/add_skill <nome> <desc>`** — LLM gera skill automaticamente via LLM_REQUEST
+- **`/rm_skill <nome>`** — remove skill por nome
+- **`/reload_skills`** — recarrega seed do disco
+
+### Changed — Agent/Skill-First Architecture (Documentação)
+- **IDEA_BANK.md** — Section 1.28 adicionada: 20 itens (A-001 a A-020) redefinindo a arquitetura
+- **275 itens catalogados** (de 255) — heat map atualizado
+- **AGENTS.md reescrito** — paradigma agent/skill-first, landscape de 16 agentes
+- **STATE.md reescrito** — arquitetura centrada em agentes
+- **README.md atualizado** — agent/skill-first perspective
+
+### Removed
+- `cortex_llm_daemon(system_prompt: String)` — skills agora carregadas via SKILL_STORAGE global
+
+### Technical Debt
+- `cortex_llm_daemon` mensagem de boot ainda reflete formato antigo (cosmético)
+
 ## [0.37.0] — 2026-06-26 — Self-Healing + Checkpoint/Restore (Sprints 32-37)
 
 ### Added
