@@ -363,6 +363,17 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         }
     }
 
+    // Auto hardware identification via LLM
+    {
+        let skill = HwIdentifySkill;
+        let result = skill.execute(&[]);
+        if let Ok(output) = result {
+            let text = core::str::from_utf8(&output).unwrap_or("(error)");
+            serial_println!("[HW-SCAN] Dispositivos detectados:\n{}", text);
+            println!("[HW-SCAN] {}", text.lines().next().unwrap_or(""));
+        }
+    }
+
     let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     serial_println!("[EXECUTOR] Timer ticks: {}", ticks);
     serial_println!("[EXECUTOR] Inicializando Neural Executor...");
