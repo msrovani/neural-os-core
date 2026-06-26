@@ -18,6 +18,7 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 mod acpi;
 mod allocator;
 mod apic;
+mod cortex;
 mod hermes;
 mod interrupts;
 mod inventory;
@@ -141,7 +142,6 @@ lazy_static! {
         reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         spin::Mutex::new(reg)
     };
-    static ref INTENT_MLP: hermes::IntentMlp = hermes::IntentMlp::new();
     static ref TRUST_CACHE: spin::Mutex<trust::TrustCache> = spin::Mutex::new(trust::TrustCache::new());
     static ref SYSTEM_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
     static ref MEMORY_HIERARCHY: spin::Mutex<Option<mhi::MemoryHierarchy>> = spin::Mutex::new(None);
@@ -440,6 +440,7 @@ async fn hw_bridge_daemon() {
 
 async fn intent_router_daemon() {
     let receiver = EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT);
+    let cortex = cortex::Cortex::new();
     let status_skill_name = String::from("system_status");
     let echo_skill_name = String::from("echo");
     let hw_skill_name = String::from("hardware_info");
@@ -579,28 +580,35 @@ async fn intent_router_daemon() {
                     String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
                 }
                 hermes::Command::Chat(ref msg) => {
-                    let intent_id = INTENT_MLP.classify(msg);
-                    serial_println!("[CORTEX] MLP intent ID: {}", intent_id);
-                    match intent_id {
-                        1 => {
-                            match execute_skill_with_trust(&status_skill_name, msg.as_bytes(), &event.token) {
-                                Ok(_) => String::from("Status report (via MLP)."),
-                                Err(e) => alloc::format!("Erro: {}", e),
-                            }
+                    let intent = cortex.think(msg);
+                    let intent_name = intent.skill_name();
+                    serial_println!("[CORTEX] Intent: {} = {:?}", intent_name, intent);
+                    let response = match intent {
+                        cortex::Intent::Greeting => {
+                            String::from("Hermes: Ola! Digite /help para comandos, ou converse comigo.")
                         }
-                        2 => {
-                            match execute_skill_with_trust(&echo_skill_name, msg.as_bytes(), &event.token) {
-                                Ok(output) => {
-                                    let reversed = core::str::from_utf8(&output).unwrap_or("(bytes)");
-                                    alloc::format!("Echo (via MLP): \"{}\"", reversed)
-                                }
-                                Err(e) => alloc::format!("Erro: {}", e),
-                            }
+                        cortex::Intent::Chat => {
+                            alloc::format!("Hermes: \"{}\" — entendido! (intent chatear)", msg)
                         }
                         _ => {
-                            alloc::format!("Hermes: \"{}\" — entendido. (intent chatear)", msg)
+                            match SKILL_REGISTRY.lock().has_skill(intent_name) {
+                                true => {
+                                    match execute_skill_with_trust(intent_name, msg.as_bytes(), &event.token) {
+                                        Ok(output) => {
+                                            let text = core::str::from_utf8(&output).unwrap_or("(binary)");
+                                            alloc::format!("[Cortex] {}: {}", intent_name, text)
+                                        }
+                                        Err(e) => alloc::format!("[Cortex] {} erro: {}", intent_name, e),
+                                    }
+                                }
+                                false => {
+                                    alloc::format!("Hermes: Nao tenho skill para '{}'. Tente /help", intent_name)
+                                }
+                            }
                         }
-                    }
+                    };
+                    serial_println!("[CORTEX] Response: {}", response);
+                    response
                 }
             };
 
