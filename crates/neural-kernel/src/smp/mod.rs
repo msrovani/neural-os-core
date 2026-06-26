@@ -5,6 +5,9 @@ use crate::apic;
 use crate::memory;
 use crate::{println, serial_println};
 use core::sync::atomic::{AtomicU64, Ordering};
+use x86_64::structures::paging::{OffsetPageTable, PageTable, Mapper, Size4KiB, Page, PhysFrame, PageTableFlags};
+use x86_64::VirtAddr;
+use x86_64::PhysAddr;
 
 use spin::Mutex;
 
@@ -75,20 +78,24 @@ pub unsafe fn init_smp() {
     let _stack_32_top = tramp_phys + 4096;
     let stack_64_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64 - 0x1000;
 
-    // Identity-map trampoline page (VA 0x40000 -> PA 0x40000)
+    // Identity-map trampoline page (VA 0x40000 -> PA tramp_phys)
+    // Use OffsetPageTable to handle 2MB/1GB huge pages correctly
     {
         let phys_offset = memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
         let (l4_frame, _) = x86_64::registers::control::Cr3::read();
-        let l4_virt = (l4_frame.start_address().as_u64() + phys_offset) as *const u64;
-        let pml4e = unsafe { *l4_virt.add(0) };
-        let pdpt_base = (pml4e & 0x000ffffffffff000) + phys_offset;
-        let pdpte = unsafe { *(pdpt_base as *const u64) };
-        let pd_base = (pdpte & 0x000ffffffffff000) + phys_offset;
-        let pd0 = unsafe { *(pd_base as *const u64) };
-        let pt_base = (pd0 & 0x000ffffffffff000) + phys_offset;
-        let pte_ptr = (pt_base + 0x200) as *mut u64;
-        let pte_val: u64 = (tramp_phys as u64) | 0x003;
-        unsafe { core::ptr::write_volatile(pte_ptr, pte_val); }
+        let phys = l4_frame.start_address();
+        let virt = VirtAddr::new(phys_offset) + phys.as_u64();
+        let page_table_ptr: *mut PageTable = virt.as_mut_ptr();
+        let page_table = unsafe { &mut *page_table_ptr };
+        let mut mapper = unsafe { OffsetPageTable::new(page_table, VirtAddr::new(phys_offset)) };
+
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(0x40000));
+        let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(tramp_phys));
+        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+
+        let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+        let allocator = guard.as_mut().unwrap();
+        unsafe { mapper.map_to(page, frame, flags, &mut *allocator).unwrap().flush(); }
     }
 
     let percpu_addr = &percpu::BSP_PCPU as *const _ as u64;
