@@ -38,7 +38,9 @@ mod conversation;
 mod vga_buffer;
 mod e1000;
 mod net;
+mod network_agent;
 mod proto;
+mod rtl8139;
 
 use lazy_static::lazy_static;
 
@@ -311,15 +313,11 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     *SYSTEM_ARCH.lock() = Some(arch);
     *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
 
-    // Fase 1: driver e1000 (non-blocking)
-    let net_avail = unsafe { net::init_driver_network() };
-    if net_avail {
-        // Fase 2: bootstrap de rede (blocking com hlt, timeout ~200 ticks)
-        serial_println!("[NET] Iniciando bootstrap de rede (timeout ~2s)...");
-        unsafe { net::network_bootstrap(); }
-    } else {
-        serial_println!("[NET] Sem hardware de rede. Modo offline.");
-        println!("[NET] Sem hardware de rede.");
+    unsafe {
+        if !net::init_driver_rtl8139() && !net::init_driver_network() {
+            serial_println!("[NET] Sem hardware de rede. Modo offline.");
+            println!("[NET] Sem hardware de rede.");
+        }
     }
 
     let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
@@ -331,7 +329,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     executor.spawn(task::agent::AgentTask::new(system_daemon()));
     executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon()));
     executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));
-    executor.spawn(task::agent::AgentTask::new(net::network_health_daemon()));
+    executor.spawn(task::agent::AgentTask::new(network_agent::network_agent_daemon()));
     executor.spawn(task::agent::AgentTask::new(input_daemon()));
     executor.spawn(task::agent::AgentTask::new(intent_router_daemon()));
     executor.spawn(task::agent::AgentTask::new(hermes_console_daemon()));

@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "neural-kernel"
-version = "0.20.2"
+version = "0.23.3"
 dependencies = [
  "bootloader",
  "event-bus",

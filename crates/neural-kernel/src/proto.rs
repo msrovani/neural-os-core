@@ -4,9 +4,8 @@ use crate::serial_println;
 // Ethernet frame helpers
 fn eth_broadcast() -> [u8; 6] { [0xFF; 6] }
 fn eth_type_ipv4() -> u16 { 0x0800 }
-fn eth_type_arp() -> u16 { 0x0806 }
 
-fn make_eth_header(dst: [u8; 6], src: [u8; 6], ethertype: u16) -> [u8; 14] {
+pub fn eth_header(dst: [u8; 6], src: [u8; 6], ethertype: u16) -> [u8; 14] {
     let mut hdr = [0u8; 14];
     hdr[0..6].copy_from_slice(&dst);
     hdr[6..12].copy_from_slice(&src);
@@ -22,7 +21,7 @@ fn check_eth_header(pkt: &[u8], expected_dst: [u8; 6], expected_type: u16) -> bo
     typ == expected_type
 }
 
-fn ip_checksum(data: &[u8]) -> u16 {
+pub fn ip_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
     let mut i = 0;
     while i + 1 < data.len() {
@@ -34,7 +33,7 @@ fn ip_checksum(data: &[u8]) -> u16 {
     !(sum as u16)
 }
 
-fn make_ip_header(src: [u8; 4], dst: [u8; 4], proto: u8, payload_len: u16) -> [u8; 20] {
+pub fn ip_header(src: [u8; 4], dst: [u8; 4], proto: u8, payload_len: u16) -> [u8; 20] {
     let total_len = 20 + payload_len;
     let mut hdr = [0u8; 20];
     hdr[0] = 0x45; // Version 4, IHL 5
@@ -48,34 +47,6 @@ fn make_ip_header(src: [u8; 4], dst: [u8; 4], proto: u8, payload_len: u16) -> [u
     hdr[10] = (cksum >> 8) as u8;
     hdr[11] = (cksum & 0xFF) as u8;
     hdr
-}
-
-// === ARP ===
-pub unsafe fn arp_request(local_mac: [u8; 6], target_ip: [u8; 4]) {
-    use crate::net::E1000;
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-
-    let mut pkt = Vec::with_capacity(42);
-    pkt.extend_from_slice(&make_eth_header(eth_broadcast(), local_mac, eth_type_arp()));
-
-    // ARP header
-    pkt.extend_from_slice(&[0x00, 0x01]); // HTYPE: Ethernet
-    pkt.extend_from_slice(&[0x08, 0x00]); // PTYPE: IPv4
-    pkt.push(6);  // HLEN
-    pkt.push(4);  // PLEN
-    pkt.extend_from_slice(&[0x00, 0x01]); // OPER: Request
-    pkt.extend_from_slice(&local_mac);     // Sender MAC
-    pkt.extend_from_slice(&[0, 0, 0, 0]); // Sender IP (will be filled below)
-    pkt.extend_from_slice(&[0xFF; 6]);     // Target MAC (broadcast)
-    pkt.extend_from_slice(&target_ip);     // Target IP
-
-    // Fill sender IP (our IP from config)
-    let our_ip = crate::net::NET_CONFIG.lock().ip;
-    pkt[28..32].copy_from_slice(&our_ip); // Sender IP in ARP header
-
-    driver.send(&pkt);
-    serial_println!("[ARP] Request enviado para {}.{}.{}.{}", target_ip[0], target_ip[1], target_ip[2], target_ip[3]);
 }
 
 pub fn parse_arp_reply(pkt: &[u8]) -> Option<[u8; 6]> {
@@ -96,11 +67,11 @@ pub unsafe fn icmp_echo_request(
     src_ip: [u8; 4], dst_ip: [u8; 4], ident: u16, seq: u16,
 ) {
     let mut pkt = Vec::with_capacity(14 + 20 + 8 + 32);
-    pkt.extend_from_slice(&make_eth_header(dst_mac, our_mac, eth_type_ipv4()));
+    pkt.extend_from_slice(&eth_header(dst_mac, our_mac, eth_type_ipv4()));
 
     let payload: [u8; 32] = [0x00; 32]; // ICMP data
     let icmp_len = 8 + 32;
-    let ip_hdr = make_ip_header(src_ip, dst_ip, 1, icmp_len as u16);
+    let ip_hdr = ip_header(src_ip, dst_ip, 1, icmp_len as u16);
     pkt.extend_from_slice(&ip_hdr);
 
     // ICMP header: Echo Request (type=8, code=0)
@@ -148,10 +119,10 @@ pub unsafe fn dhcp_discover(attempt: u32) -> bool {
 
     let xid = 0x12345678 + attempt;
     let mut pkt = Vec::with_capacity(14 + 20 + 8 + 240 + 64);
-    pkt.extend_from_slice(&make_eth_header(eth_broadcast(), our_mac, eth_type_ipv4()));
+    pkt.extend_from_slice(&eth_header(eth_broadcast(), our_mac, eth_type_ipv4()));
 
     let udp_len = 8 + 240 + 64;
-    let ip_hdr = make_ip_header([0, 0, 0, 0], [255, 255, 255, 255], 17, udp_len as u16);
+    let ip_hdr = ip_header([0, 0, 0, 0], [255, 255, 255, 255], 17, udp_len as u16);
     pkt.extend_from_slice(&ip_hdr);
 
     // UDP header (src=68, dst=67)
@@ -274,9 +245,9 @@ unsafe fn dhcp_request(requested_ip: [u8; 4], server_ip: [u8; 4], xid: u32) {
     let driver = guard.as_mut().unwrap();
 
     let mut pkt = Vec::with_capacity(14 + 20 + 8 + 240 + 64);
-    pkt.extend_from_slice(&make_eth_header(eth_broadcast(), our_mac, eth_type_ipv4()));
+    pkt.extend_from_slice(&eth_header(eth_broadcast(), our_mac, eth_type_ipv4()));
     let udp_len = 8 + 240 + 64;
-    let ip_hdr = make_ip_header([0, 0, 0, 0], [255, 255, 255, 255], 17, udp_len as u16);
+    let ip_hdr = ip_header([0, 0, 0, 0], [255, 255, 255, 255], 17, udp_len as u16);
     pkt.extend_from_slice(&ip_hdr);
     pkt.extend_from_slice(&[0x00, 68, 0x00, 67]); // ports 68, 67
     pkt.extend_from_slice(&(udp_len as u16).to_be_bytes());
@@ -338,9 +309,9 @@ pub unsafe fn dns_query(
     let total_len = 14 + 20 + udp_len;
 
     let mut pkt = Vec::with_capacity(total_len);
-    pkt.extend_from_slice(&make_eth_header(dst_mac, our_mac, eth_type_ipv4()));
+    pkt.extend_from_slice(&eth_header(dst_mac, our_mac, eth_type_ipv4()));
 
-    let ip_hdr = make_ip_header(src_ip, dns_ip, 17, udp_len as u16);
+    let ip_hdr = ip_header(src_ip, dns_ip, 17, udp_len as u16);
     pkt.extend_from_slice(&ip_hdr);
 
     // UDP header
@@ -431,10 +402,10 @@ pub unsafe fn http_get_request(
     let total_len = 14 + 20 + request_bytes.len();
 
     let mut pkt = alloc::vec![0u8; total_len];
-    let eth = make_eth_header(dst_mac, our_mac, eth_type_ipv4());
+    let eth = eth_header(dst_mac, our_mac, eth_type_ipv4());
     pkt[..14].copy_from_slice(&eth);
 
-    let ip_hdr = make_ip_header(src_ip, dst_ip, 6, request_bytes.len() as u16);
+    let ip_hdr = ip_header(src_ip, dst_ip, 6, request_bytes.len() as u16);
     pkt[14..34].copy_from_slice(&ip_hdr);
 
     pkt[34..].copy_from_slice(request_bytes);
