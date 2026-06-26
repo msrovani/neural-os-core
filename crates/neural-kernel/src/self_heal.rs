@@ -60,6 +60,7 @@ pub struct FailedStrategy {
     pub tick: u64,
 }
 
+#[derive(Debug)]
 pub enum RecoveryAction {
     LogAndContinue,
     RestartDaemon(String),

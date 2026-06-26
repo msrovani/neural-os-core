@@ -190,6 +190,21 @@ lazy_static! {
     static ref EVENT_LOG: spin::Mutex<conversation::EventLog> = spin::Mutex::new(conversation::EventLog::new());
     static ref CONVERSATION_TRACKER: spin::Mutex<hermes::ConversationTracker> = spin::Mutex::new(hermes::ConversationTracker::new());
     static ref SELF_HEAL: spin::Mutex<self_heal::SelfHeal> = spin::Mutex::new(self_heal::SelfHeal::new());
+    static ref RESPAWN_QUEUE: spin::Mutex<alloc::vec::Vec<alloc::string::String>> = spin::Mutex::new(alloc::vec::Vec::new());
+}
+
+fn spawn_task_by_name(name: &str, executor: &mut task::executor::NeuralExecutor) {
+    serial_println!("[RESPAWN] Recriando daemon '{}'...", name);
+    match name {
+        "hardware_monitor" => executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon())),
+        "hw_bridge" => executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon())),
+        "network_agent" => executor.spawn(task::agent::AgentTask::new(network_agent::network_agent_daemon())),
+        "input" => executor.spawn(task::agent::AgentTask::new(input_daemon())),
+        "cortex_llm" => executor.spawn(task::agent::AgentTask::new(cortex_llm_daemon())),
+        "intent_router" => executor.spawn(task::agent::AgentTask::new(intent_router_daemon())),
+        "hermes_console" => executor.spawn(task::agent::AgentTask::new(hermes_console_daemon())),
+        _ => serial_println!("[RESPAWN] Daemon '{}' desconhecido", name),
+    }
 }
 
 #[panic_handler]
@@ -210,13 +225,31 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         ring: 0, daemon: String::from("kernel"),
         tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
     };
-    let action = SELF_HEAL.lock().analyze(&ctx, true);
+    let mut heal = SELF_HEAL.lock();
+    let action = heal.analyze(&ctx, true);
     match action {
         self_heal::RecoveryAction::LogAndContinue => serial_println!("[SELF-HEAL] Continuando..."),
-        self_heal::RecoveryAction::RestartDaemon(ref n) => serial_println!("[SELF-HEAL] Reiniciar daemon '{}'", n),
-        self_heal::RecoveryAction::CreateSkill(ref n, ref f) => serial_println!("[SELF-HEAL] Skill '{}': {}", n, f),
+        self_heal::RecoveryAction::RestartDaemon(ref n) => {
+            serial_println!("[SELF-HEAL] Respawning daemon '{}'...", n);
+            RESPAWN_QUEUE.lock().push(n.clone());
+        }
+        self_heal::RecoveryAction::CreateSkill(ref n, ref f) => {
+            serial_println!("[SELF-HEAL] Skill '{}': {}", n, f);
+            heal.pending_fixes.push((n.clone(), f.clone()));
+        }
         _ => {}
     }
+    drop(heal);
+
+    // Corrective prompting: LLM analisa o erro
+    let llm_prompt = alloc::format!("Erro no kernel: {} em {}. Classificado como {:?}. {:?}. O que fazer? {}",
+        msg, ctx.file, class, action, class.default_recovery());
+    let _ = EVENT_BUS.publish(crate::Event {
+        id: 0,
+        topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
+        payload: llm_prompt.into_bytes(),
+        token: crate::CapabilityToken(1),
+    });
 
     let msg_bytes = msg.clone().into_bytes();
     let _ = EVENT_BUS.publish(crate::Event {
