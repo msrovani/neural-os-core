@@ -1,29 +1,40 @@
-# Sessão 037 — Sprints 31-34: Capabilities + Self-Healing + Failure Taxonomy
+# Sessão 037 — Self-Healing Kernel (Bloco Único, Sprints 32-36)
 
 **Data:** 26/06/2026
-**Versão:** v0.34.0
+**Versão:** v0.36.0
 
-## Resumo dos Sprints
+## Visão Geral
+Sprints 32-36 foram consolidados em **1 bloco coeso**: Self-Healing Kernel.
+O que era 5 sprints separados virou um pipeline único de auto-cura.
 
-### Sprint 31 — Hardware Capabilities (v0.31.0)
-- Dataset de capabilities: 25 pares mapeando class → tipo → skills → MHI
-- Modelo sabe o que fazer com cada hardware: armazenar, streamar, computar
-- "o que fazer com usb storage" → "montar volume, file_manager, backup logs"
+## O Bloco Self-Healing
 
-### Sprint 32 — Self-Healing Kernel (v0.32.0)
-- KERNEL_ERROR topic + panic_handler modificado
-- SelfHeal analisa erro e sugere recovery action
-- Treinado na GTX 1050 (loss 1.156, 12K exemplos em 12 épocas)
+| Mini-sprint | O que entrou |
+|---|---|
+| **SelfHeal + EventBus** | `SelfHeal::analyze()`, `KERNEL_ERROR` topic, panic_handler modificado |
+| **Feedback loop** | `lessons: Vec<FailedStrategy>`, `already_tried()` → evita repetir falhas |
+| **Failure Taxonomy** | `FailureClass::{Memory,Execution,Resource,Logic,External}`, `default_recovery()` |
+| **Exception handlers** | Page Fault, Double Fault, GPF com SelfHeal + classificação |
+| **Respawn + Corrective** | `RESPAWN_QUEUE`, executor recria tasks, `LLM_REQUEST` com contexto do erro |
 
-### Sprint 33 — Feedback Loop (v0.33.0)
-- Hermes aprende com erros: `lessons: Vec<FailedStrategy>`
-- `already_tried()` evita repetir estratégias que falharam
-- "erro repetido" → "SelfHeal detecta que ja tentou antes, sugere alternativa"
+## Pipeline Final
+```
+ERRO → FailureClass::classify() → SelfHeal::analyze()
+  → already_tried()? → alternativa
+  → RecoveryAction:
+      RestartDaemon → RESPAWN_QUEUE → executor recria
+      CreateSkill → pending_fixes pendente
+      LogAndContinue → non-fatal
+  → LLM_REQUEST (corrective prompting) → LLM sugere
+  → Se falhar → lessons.push() → próxima tenta DIFERENTE
+```
 
-### Sprint 34 — Failure Taxonomy (v0.34.0)
-- `FailureClass` enum: MemoryFault, ExecutionFault, ResourceFault, LogicFault, ExternalFault
-- `KernelError` no EventLog (persiste nos últimos 256 eventos)
-- SelfHeal refatorado com `analyze(ctx, recover)`, `already_tried()`
-
-## Próximo: Sprint 35 — Exception Handlers com SelfHeal
-Implementar recovery real nos handlers de exceção (Page Fault, GPF)
+## Arquivos criados/modificados no bloco
+| Arquivo | Linhas | Função |
+|---|---|---|
+| `self_heal.rs` | ~100 | SelfHeal, FailureClass, RecoveryAction, lessons |
+| `interrupts.rs` | +15 | Page Fault + Double Fault com SelfHeal |
+| `task/executor.rs` | +10 | RESPAWN_QUEUE check a cada tick |
+| `main.rs` | +30 | spawn_task_by_name, corrective prompting |
+| `conversation.rs` | +1 | EventKind::KernelError |
+| `prepare_hw_dataset.py` | +30 | Error recovery training data |
