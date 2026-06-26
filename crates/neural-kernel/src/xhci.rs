@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use crate::pci::PciDevice;
-use crate::memory::PHYS_MEM_OFFSET;
+use crate::memory::{PHYS_MEM_OFFSET};
 use crate::serial_println;
 use core::sync::atomic::Ordering;
 
@@ -13,6 +13,9 @@ pub struct UsbDevice {
 
 pub struct XhciDriver {
     op: u64,
+    mmio: u64,
+    capl: u64,
+    db: u64,
     pub ports: u8,
     pub slots: u8,
 }
@@ -22,14 +25,18 @@ impl XhciDriver {
         if dev.class != 0x0C || dev.subclass != 0x03 { return None; }
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let mmio = ((dev.bar0 & !0xF) as u64) + pmoff;
-        let op = mmio + core::ptr::read_volatile(mmio as *const u8) as u64;
+        let capl = core::ptr::read_volatile(mmio as *const u8) as u64;
+        let op = mmio + capl;
+        let db_off = (core::ptr::read_volatile((mmio + 0x14) as *const u32) as u64) & !0x3;
         let hcs1 = core::ptr::read_volatile((mmio + 4) as *const u32);
-        serial_println!("[XHCI] Controller: {} portas, {} slots", hcs1 & 0xFF, (hcs1 >> 8) & 0xFF);
-        Some(XhciDriver { op, ports: (hcs1 & 0xFF) as u8, slots: ((hcs1 >> 8) & 0xFF) as u8 })
+        serial_println!("[XHCI] capl={} db_off=0x{:x} mmio=0x{:x}", capl, db_off, mmio);
+        Some(XhciDriver { op, mmio, capl, db: mmio + db_off, ports: (hcs1 & 0xFF) as u8, slots: ((hcs1 >> 8) & 0xFF) as u8 })
     }
 
     pub unsafe fn init(&mut self) -> bool {
-        serial_println!("[XHCI] Init OK: {} portas disponiveis", self.ports);
+        // Map MMIO as uncacheable to prevent GPF on doorbell access
+        crate::apic::set_page_uc(self.mmio - PHYS_MEM_OFFSET.load(Ordering::Relaxed), PHYS_MEM_OFFSET.load(Ordering::Relaxed));
+        serial_println!("[XHCI] Init OK: {} portas, {} slots, db=0x{:x}", self.ports, self.slots, self.db);
         true
     }
 
@@ -39,30 +46,14 @@ impl XhciDriver {
             let portsc = core::ptr::read_volatile((self.op + 0x400 + port as u64 * 0x10) as *const u32);
             if portsc & 0x01 == 0 { continue; }
             let speed = ((portsc >> 20) & 0x0F) as u8;
-            let speed_name = match speed {
-                1 => "Low Speed (1.5 Mbps) — teclado/mouse",
-                2 => "Full Speed (12 Mbps) — USB 1.x",
-                3 => "High Speed (480 Mbps) — USB 2.0 pendrive",
-                4 => "Super Speed (5 Gbps) — USB 3.0",
-                5 => "Super Speed+ (10 Gbps) — USB 3.1",
-                _ => "Unknown",
-            };
-            serial_println!("[USB] Porta {}: {} conectado — {}", port, speed_name, self.speed_desc(speed));
-            // TODO: xHCI TRB-based Get Descriptor for VID/PID — Sprint 31
+            let desc = self.speed_name(speed);
+            serial_println!("[USB] Porta {}: {} conectado (speed={})", port, desc, speed);
             devices.push(UsbDevice { port, speed, vendor_id: 0, product_id: 0 });
         }
         devices
     }
 
-    fn speed_desc(&self, speed: u8) -> &'static str {
-        match speed {
-            1 => "dispositivo USB 1.x (teclado, mouse, baixa velocidade)",
-            2 => "dispositivo USB 2.0 full speed",
-            3 => "dispositivo USB 2.0 high speed (pendrive, camera)",
-            4 => "dispositivo USB 3.0 super speed (SSD externo, hub SS)",
-            5 => "dispositivo USB 3.1 super speed+ (10 Gbps)",
-            _ => "dispositivo USB de velocidade desconhecida",
-        }
+    fn speed_name(&self, speed: u8) -> &'static str {
+        match speed { 1 => "Low 1.5M", 2 => "Full 12M", 3 => "High 480M", 4 => "Super 5G", 5 => "Super+ 10G", _ => "Unknown" }
     }
 }
-

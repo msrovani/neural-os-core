@@ -149,7 +149,7 @@ unsafe fn read_lapic_base_msr() -> u64 {
     base
 }
 
-unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
+pub(crate) unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     let virt = VirtAddr::new(phys_addr + phys_mem_offset);
 
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();

@@ -490,7 +490,8 @@ Ideias portadas de 6 repos Tier 4: Cline (63.9k ★), Agent Zero (18.2k ★), Mi
 | Tier 2 PAI Ecosystem (1.25) | 15 | 4 | 6 | 3 | 0 | 2 |
 | Tier 3 Memory Systems (1.26) | 14 | 0 | 9 | 5 | 0 | 0 |
 | Tier 4 Agent Frameworks (1.27) | 22 | 0 | 17 | 3 | 0 | 2 |
-| **Total** | **249** | **62 (25%)** | **96 (39%)** | **76 (30%)** | **9 (4%)** | **6 (2%)** |
+| Self-Healing Kernel (Sprints 32-37) | 6 | 6 | 0 | 0 | 0 | 0 |
+| **Total** | **255** | **68 (27%)** | **96 (38%)** | **76 (30%)** | **9 (3%)** | **6 (2%)** |
 
 ---
 
