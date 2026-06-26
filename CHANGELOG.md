@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.34.0] — 2026-06-26 — Self-Healing + Failure Taxonomy
+
+### Added
+- **FailureClass enum** — MemoryFault, ExecutionFault, ResourceFault, LogicFault, ExternalFault, UnknownFault
+- **KernelError EventLog** — erros do kernel persistem nos últimos 256 eventos
+- **SelfHeal::analyze(ctx, recover)** — agora aceita parâmetro recover para tentar recuperação
+- **SelfHeal::already_tried()** — feedback loop: evita repetir estratégias que falharam
+
+## [0.33.0] — 2026-06-26 — Self-Healing Feedback Loop
+
+### Added
+- **SelfHeal.lessons** — `Vec<FailedStrategy>` armazena {erro, acao, tick}
+- **Feedback loop** — `already_tried()` impede repetição de estratégias que falharam
+
+## [0.32.0] — 2026-06-26 — Self-Healing Kernel
+
+### Added
+- **KERNEL_ERROR EventBus topic** — panic_handler publica antes de halt
+- **SelfHeal module** — `analyze()`, `pending_fixes`, `RecoveryAction` (LogAndContinue, RestartDaemon, CreateSkill)
+- **Error recovery training data** — 12 pares (page fault, double fault, null pointer, self heal)
+
+## [0.31.0] — 2026-06-26 — Hardware Capabilities
+
+### Added
+- **Capabilities dataset** — 25 pares mapeando class → tipo → skills → MHI → driver status
+- **"o que fazer com" knowledge** — 6 pares: usb storage, camera, audio, gpu, rede, nvme
+- **Where to allocate MHI** — 3 pares: nvme, gpu, ethernet
+- **HD conhecimento de capacidades** — todo hardware agora mapeado para ação + skill + MHI
+
 ## [0.30.0] — 2026-06-26 — USB Device Detection + Final Model
 
 ### Added
