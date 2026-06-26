@@ -200,27 +200,21 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     let msg = alloc::format!("{}", info);
     let kind = if msg.contains("PageFault") { "PageFault" } else if msg.contains("DoubleFault") { "DoubleFault" } else { "Panic" };
 
-    // Attempt self-healing
+    let class = self_heal::FailureClass::classify(kind, &msg);
+    serial_println!("[SELF-HEAL] Class: {:?} — {}", class, class.default_recovery());
+
     let ctx = self_heal::ErrorContext {
-        kind,
-        message: msg.clone(),
+        kind, message: msg.clone(),
         file: String::from(info.location().map_or("?", |l| l.file())),
         line: info.location().map_or(0, |l| l.line()),
-        ring: 0,
-        daemon: String::from("kernel"),
+        ring: 0, daemon: String::from("kernel"),
         tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
     };
-    let action = SELF_HEAL.lock().analyze(&ctx);
+    let action = SELF_HEAL.lock().analyze(&ctx, true);
     match action {
-        self_heal::RecoveryAction::LogAndContinue => {
-            serial_println!("[SELF-HEAL] Continuando apos erro...");
-        }
-        self_heal::RecoveryAction::RestartDaemon(ref name) => {
-            serial_println!("[SELF-HEAL] Reiniciando daemon '{}'...", name);
-        }
-        self_heal::RecoveryAction::CreateSkill(ref name, ref fix) => {
-            serial_println!("[SELF-HEAL] Skill dinamica sugerida para '{}': {}", name, fix);
-        }
+        self_heal::RecoveryAction::LogAndContinue => serial_println!("[SELF-HEAL] Continuando..."),
+        self_heal::RecoveryAction::RestartDaemon(ref n) => serial_println!("[SELF-HEAL] Reiniciar daemon '{}'", n),
+        self_heal::RecoveryAction::CreateSkill(ref n, ref f) => serial_println!("[SELF-HEAL] Skill '{}': {}", n, f),
         _ => {}
     }
 
@@ -230,6 +224,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         payload: msg.into_bytes(),
         token: crate::CapabilityToken(1),
     });
+    EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.into_bytes(),
+        crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
     for _ in 0..100000 { core::hint::spin_loop(); }
     loop { x86_64::instructions::hlt(); }
 }

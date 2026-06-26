@@ -14,6 +14,45 @@ pub struct ErrorContext {
     pub tick: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum FailureClass {
+    MemoryFault,
+    ExecutionFault,
+    ResourceFault,
+    LogicFault,
+    ExternalFault,
+    UnknownFault,
+}
+
+impl FailureClass {
+    pub fn classify(kind: &str, msg: &str) -> Self {
+        if kind.contains("PageFault") || msg.contains("OOM") || msg.contains("memory") {
+            FailureClass::MemoryFault
+        } else if kind.contains("DoubleFault") || kind.contains("GeneralProtection") || msg.contains("GPF") {
+            FailureClass::ExecutionFault
+        } else if msg.contains("skill") || msg.contains("not found") || msg.contains("timeout") {
+            FailureClass::ResourceFault
+        } else if msg.contains("assert") || msg.contains("Assertion") {
+            FailureClass::LogicFault
+        } else if msg.contains("network") || msg.contains("device") {
+            FailureClass::ExternalFault
+        } else {
+            FailureClass::UnknownFault
+        }
+    }
+
+    pub fn default_recovery(&self) -> &'static str {
+        match self {
+            FailureClass::MemoryFault => "Compactar heap, verificar page table, reiniciar daemon",
+            FailureClass::ExecutionFault => "Verificar IST stack, reiniciar core AP, restaurar checkpoint",
+            FailureClass::ResourceFault => "Registrar recurso faltante, criar skill sob demanda",
+            FailureClass::LogicFault => "Logar contexto, tentar continuar ignorando assert",
+            FailureClass::ExternalFault => "Retentar operacao, timeout maior, fallback offline",
+            FailureClass::UnknownFault => "Logar para analise do LLM, halt seguro",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct FailedStrategy {
     pub error_msg: String,
@@ -43,66 +82,30 @@ impl SelfHeal {
     }
 
     pub fn record_failure(&mut self, msg: String, action: String, tick: u64) {
-        serial_println!("[SELF-HEAL] Registrando falha: '{}' com '{}' falhou. Aprendendo...", msg, action);
+        serial_println!("[SELF-HEAL] Falha registrada: '{}' + '{}'", msg, action);
         self.lessons.push(FailedStrategy { error_msg: msg, attempted_action: action, tick });
     }
 
-    pub fn analyze(&mut self, ctx: &ErrorContext) -> RecoveryAction {
-        let msg_slice = &ctx.message;
-        serial_println!("[SELF-HEAL] Erro: {} | {}:{} | ring {} | daemon '{}' | tick {}",
-            ctx.kind, ctx.file, ctx.line, ctx.ring, ctx.daemon, ctx.tick);
+    pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
+        let class = FailureClass::classify(ctx.kind, &ctx.message);
+        serial_println!("[SELF-HEAL] {:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
 
-        // Check for OOM
-        if msg_slice.contains("OOM") || msg_slice.contains("out of memory") {
-            if !self.already_tried(msg_slice, "compact_heap") {
-                self.lessons.push(FailedStrategy {
-                    error_msg: ctx.message.clone(), attempted_action: String::from("compact_heap"), tick: ctx.tick,
-                });
-                serial_println!("[SELF-HEAL] OOM: compactar heap. (aprendizado: se falhar, tentar swap no MHI)");
-                return RecoveryAction::LogAndContinue;
-            }
-            serial_println!("[SELF-HEAL] OOM: compactar ja tentado. Sugerindo: matar skill menos prioritarias.");
-            return RecoveryAction::LogAndContinue;
+        if !recover { return RecoveryAction::LogAndContinue; }
+
+        if class == FailureClass::MemoryFault && !self.already_tried(&ctx.message, "restart") {
+            self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("restart"), tick: ctx.tick });
+            return RecoveryAction::RestartDaemon(ctx.daemon.clone());
         }
-
-        // Check for Page Fault
-        if ctx.kind.contains("PageFault") {
-            if !self.already_tried(msg_slice, "restart_daemon") {
-                self.lessons.push(FailedStrategy {
-                    error_msg: ctx.message.clone(), attempted_action: String::from("restart_daemon"), tick: ctx.tick,
-                });
-                serial_println!("[SELF-HEAL] Page Fault: reiniciando daemon '{}'.", ctx.daemon);
-                return RecoveryAction::RestartDaemon(ctx.daemon.clone());
-            }
-            serial_println!("[SELF-HEAL] Page Fault: restart ja tentado. Sugerindo: desabilitar modulo problematico.");
-            return RecoveryAction::LogAndContinue;
+        if class == FailureClass::ResourceFault && !self.already_tried(&ctx.message, "create") {
+            let fix = format!("Criar: {}", ctx.message);
+            self.pending_fixes.push((ctx.daemon.clone(), fix.clone()));
+            self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("create"), tick: ctx.tick });
+            return RecoveryAction::CreateSkill(ctx.daemon.clone(), fix);
         }
-
-        // Check for missing skill
-        if msg_slice.contains("skill nao encontrada") || msg_slice.contains("not found") {
-            let key = format!("create_skill:{}", ctx.daemon);
-            if !self.already_tried(msg_slice, &key) {
-                let fix = format!("Registrar skill faltante: {} (sugerida pelo LLM)", ctx.message);
-                self.pending_fixes.push((ctx.daemon.clone(), fix.clone()));
-                self.lessons.push(FailedStrategy {
-                    error_msg: ctx.message.clone(), attempted_action: key, tick: ctx.tick,
-                });
-                serial_println!("[SELF-HEAL] Pendencia registrada: {}", fix);
-                return RecoveryAction::CreateSkill(ctx.daemon.clone(), fix);
-            }
-            serial_println!("[SELF-HEAL] Skill ja solicitada antes. Sugerindo: implementar manualmente.");
-            return RecoveryAction::LogAndContinue;
-        }
-
-        serial_println!("[SELF-HEAL] Erro desconhecido. Logando. Lições aprendidas: {}", self.lessons.len());
         RecoveryAction::LogAndContinue
     }
 
     pub fn list_pending(&self) -> Vec<String> {
         self.pending_fixes.iter().map(|(d, f)| format!("[{}] {}", d, f)).collect()
-    }
-
-    pub fn list_lessons(&self) -> Vec<String> {
-        self.lessons.iter().map(|l| format!("[tick {}] '{}' -> '{}' FALHOU", l.tick, l.error_msg, l.attempted_action)).collect()
     }
 }
