@@ -197,6 +197,17 @@ ERROR_RECOVERY_DATA = [
     ("como evitar null pointer", "Null pointer: usar Option<T> em vez de raw pointers, verificar com match antes de usar."),
     ("o que fazer com um erro", "Erro no kernel: 1) Logar o erro 2) Analisar via LLM a causa 3) Tentar recuperacao automatica 4) Se falhar, exibir mensagem de erro amigavel."),
     ("self heal", "Self-Healing: o kernel captura panics, publica KERNEL_ERROR, o LLM analisa e sugere acao. Possivel: habilitar/desabilitar feature, reiniciar driver, restaurar checkpoint."),
+    ("self heal restart daemon", "Recovery Action: restart_daemon — mata o daemon com erro e o recria. Usado para Page Fault em tasks assincronas."),
+    ("self heal create skill", "Recovery Action: create_skill — quando uma skill nao existe, o LLM sugere o codigo. O sistema armazena como pendencia."),
+    ("self heal log", "Recovery Action: log_and_continue — erros nao fatais sao logados e o sistema continua. Usado para Breakpoint, assertions."),
+    ("o que e self heal", "Self-Healing Kernel: sistema que captura erros, analisa via LLM, e tenta recuperacao automatica sem BSOD."),
+    ("tipos de recovery action", "Recovery Actions: restart_daemon (reinicia task), create_skill (cria skill faltante), log_and_continue (ignora), checkpoint_restore (restaura)."),
+    ("erro em daemon", "Daemon com erro: o SelfHeal identifica qual daemon, reinicia a task, e loga o erro para analise posterior."),
+    ("skill nao encontrada", "Skill nao registrada: SelfHeal registra como pendencia, sugestao do LLM para criar a skill automaticamente."),
+    ("hermes aprende com erros", "Hermes aprende com erros: quando uma estrategia de recuperacao falha, o SelfHeal registra a falha e tenta uma abordagem diferente na proxima vez."),
+    ("erro repetido", "Erro repetido: o SelfHeal detecta que a mesma estrategia ja foi tentada antes (via lessons list) e sugere acao alternativa."),
+    ("feedback loop self heal", "Feedback loop: erro → LLM analisa → tenta recovery → se falhar → registra licao → na proxima, tenta outra estrategia."),
+    ("aprendizado self heal", "SelfHeal.lessons: armazena {erro, acao_tentada, tick}. Usado para evitar repeticoes de falhas."),
 ]
 
 CAPABILITIES_DATA = [
