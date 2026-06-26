@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-25 (Tier 4 Agent Frameworks Analysis — itens #228-249, total 249)  
+**Última atualização:** 2026-06-26 (Seção 6 — Sprint Planning, 7 blocos futuros, 55 itens 🟡)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -652,7 +652,8 @@ O `AgentScheduler` substitui o `NeuralExecutor`:
 | Tier 4 Agent Frameworks (1.27) | 22 | 0 | 17 | 3 | 0 | 2 |
 | Self-Healing Kernel (Sprints 32-37) | 6 | 6 | 0 | 0 | 0 | 0 |
 | Agent/Skill-First Architecture | 20 | 0 | 20 | 0 | 0 | 0 |
-| **Total** | **275** | **68 (25%)** | **116 (42%)** | **76 (28%)** | **9 (3%)** | **6 (2%)** |
+| Sprint Planning (Seção 6) | 55 | 0 | 55 | 0 | 0 | 0 |
+| **Total** | **330** | **68 (21%)** | **171 (52%)** | **76 (23%)** | **9 (3%)** | **6 (2%)** |
 
 ---
 
@@ -975,6 +976,136 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 
 ---
 
+## Seção 6 — Sprint Planning (itens 🟡 agendados, consolidados por bloco)
+
+Blocos futuros gerados por análise de afinidade: cada bloco agrupa itens 🟡 de seções diferentes que compartilham o mesmo foco. Blocos com menos de 3 itens foram fundidos em blocos adjacentes.
+
+### Bloco 12 — Network Evolution (Sprints 43-44)
+**Foco:** DHCP dinâmico, VirtIO-net, HTTP fetch avançado, MCP externo
+
+| Item | O que | LOC |
+|---|---|---|
+| #251 | DHCP timer-based wait (hlt ao invés de spin) | ~80 |
+| #252 | ARP não-bloqueante com retry por timer ticks | ~60 |
+| #73 | VirtIO-net driver (PCI 1AF4:1041) | ~400 |
+| #122 | Skill manifest field `requires_network: bool` | ~20 |
+| #172 | MCP Server support via EventBus + JSON-RPC | ~400 |
+| #236 | Plugin Hub / MCP Index com AI security scan | ~400 |
+| #232 | Cron Scheduler baseado em LAPIC timer | ~350 |
+| | **Total bloco** | **~1710 LOC** |
+
+### Bloco 13 — Trust & Security (Sprint 45)
+**Foco:** Upgrade do TrustCache, identidade criptográfica, pipeline de segurança
+
+| Item | O que | LOC |
+|---|---|---|
+| #166 | Multi-mode Trust (TotalAccess/AskEveryTime/Scoped) | ~100 |
+| #176 | Ed25519 Cryptographic Identity (substitui CapabilityToken) | ~300 |
+| #256 | Path Confinement para Skills | ~60 |
+| #257 | Mask Secrets no TrustCache | ~50 |
+| #258 | Graduated Enforcement (Observe→Warn→Contain→Enforce) | ~80 |
+| #259 | Posture-Aware Alerting (skills checam hardware antes) | ~40 |
+| #198 | Boot-time security policy (regex patterns compilados) | ~100 |
+| #260 | Event→Detector→Response Pipeline (5 detectores) | ~200 |
+| | **Total bloco** | **~930 LOC** |
+
+### Bloco 14 — Hermes Cognitive (Sprint 46)
+**Foco:** Upgrade do HermesAgent — reasoning visível, loop ReAct 7 fases, identidade
+
+| Item | O que | LOC |
+|---|---|---|
+| #178 | Runtime SDD (goal/context/plan/rollback antes de skill) | ~80 |
+| #190 | Algorithm loop 7 fases (THINK→PLAN→BUILD→EXECUTE→VERIFY→LEARN) | ~300 |
+| #191 | Council skill (3 vozes Otimista/Cético/Pragmático votam) | ~150 |
+| #193 | Bitter Pill Engineering (força cargo check antes de deploy) | ~100 |
+| #194 | ISA como formato de sprint | ~200 |
+| #184 | Intent Transparency (mostrar confidence, alternatives) | ~200 |
+| #203 | Context Fencing + Streaming Scrubber | ~150 |
+| #180 | DA Identity Layer (SOUL.md para Hermes) | ~100 |
+| | **Total bloco** | **~1280 LOC** |
+
+### Bloco 15 — Memory Systems (Sprints 47-48)
+**Foco:** Memória persistente, dedup, decay Ebbinghaus, grafo de conhecimento
+
+| Item | O que | LOC |
+|---|---|---|
+| #214 | SHA-256 Memory Dedup (5min sliding window) | ~100 |
+| #215 | Privacy Filter (stripa secrets antes de armazenar) | ~80 |
+| #216 | Memory TTL/Eviction (TimeToLive, ImportanceRank) | ~150 |
+| #219 | Ebbinghaus Decay para TrustCache | ~120 |
+| #217 | Hybrid Search (BM25 + MLP) para intent routing | ~200 |
+| #218 | 4-Tier Memory Consolidation (Working→Episodic→Semantic→Procedural) | ~400 |
+| #220 | Session Replay (eventos atômicos para debug) | ~200 |
+| #222 | Metacognitive Guard (verifica erros passados antes de skill) | ~300 |
+| #223 | Draft→Review→Merge Memory (workflow de aprovação) | ~350 |
+| #224 | Atkinson-Shiffrin 3-tier (Sensory→STM→LTM) | ~800 |
+| | **Total bloco** | **~2700 LOC** |
+
+### Bloco 16 — Self-Optimization (Sprint 49)
+**Foco:** LLM observa padrões de uso, pré-carrega recursos, scheduler adaptativo
+
+| Item | O que | LOC |
+|---|---|---|
+| #157 | Usage Pattern Analyzer (LLM detecta workflow) | ~250 |
+| #158 | Workflow Predictor (pré-carrega MHI por hora/padrão) | ~200 |
+| #160 | Dynamic Resource Scaling (MHI auto-ajuste) | ~200 |
+| #161 | Self-Optimizing Scheduler (prioriza por workflow) | ~300 |
+| #163 | Hardware Config Learning (SystemArchitecture evolve) | ~150 |
+| #135 | LLM decide hardware arch (substitui heurística) | ~100 |
+| #136 | LLM decide memory tier (roteia alocações) | ~100 |
+| #139 | Reflex MLP threshold tuning (bypassa LLM se >0.9) | ~80 |
+| | **Total bloco** | **~1380 LOC** |
+
+### Bloco 17 — Cortex LLM v2 (Sprint 50)
+**Foco:** Modelo maior, sampling, codebook compression, update HTTP
+
+| Item | O que | LOC |
+|---|---|---|
+| #148 | Sampling: argmax, top-k(3/5/10), temperature | ~80 |
+| #133 | Modelo 1.5B params (distilado Llama 3.2 → ternário) | Python |
+| #134 | Model update via HTTP (download .bitnet → hot-swap) | ~200 |
+| #141 | 1.5B model benchmark (5-15 tok/s x86-64) | ~50 |
+| #169 | Codebook Compression (VQ) para PackedTernaryTensor | ~300 |
+| #170 | KV Cache Codebook (VQ no cache de atenção) | ~200 |
+| | **Total bloco** | **~830 LOC + Python** |
+
+### Bloco 18 — Platform & Drivers (Sprint 51)
+**Foco:** x2APIC, PCI bridges, Huge Pages, UEFI framebuffer
+
+| Item | O que | LOC |
+|---|---|---|
+| #18 | x2APIC mode (MSR-based, sem MMIO) | ~100 |
+| #34 | acpi crate para parser MADT/PPTT | ~200 |
+| #35 | raw-cpuid crate (features de CPU) | ~100 |
+| #70 | PCI bridges (hierarquia multi-barramento) | ~100 |
+| #92 | Huge Pages 2 MiB | ~200 |
+| #93 | Huge Pages 1 GiB | ~100 |
+| #79 | UEFI framebuffer (BGRA32 writer) | ~300 |
+| #80 | Font rendering para alta resolução | ~200 |
+| | **Total bloco** | **~1300 LOC** |
+
+### Resumo dos 7 blocos
+
+| Bloco | Sprints | Foco | LOC estimado | Itens 🟡 |
+|---|---|---|---|---|
+| 12 | 43-44 | Network Evolution | ~1710 | 7 |
+| 13 | 45 | Trust & Security | ~930 | 8 |
+| 14 | 46 | Hermes Cognitive | ~1280 | 8 |
+| 15 | 47-48 | Memory Systems | ~2700 | 10 |
+| 16 | 49 | Self-Optimization | ~1380 | 8 |
+| 17 | 50 | Cortex LLM v2 | ~830 | 6 |
+| 18 | 51 | Platform & Drivers | ~1300 | 8 |
+| | **Total** | | **~10130 LOC** | **55** |
+
+### Notas
+
+1. **Ordem executável:** Blocos 12 → 13 → 14 → 15 → 16 → 17 → 18 (cada bloco pode ser implementado independentemente)
+2. **Dependências entre blocos:** Block 16 (Self-Optimization) depende de Block 14 (Hermes Cognitive) para o Usage Pattern Analyzer. Block 17 depende de Block 12 (Network) para model update via HTTP.
+3. **Bloco 18 fica por último** por ter menor impacto funcional — x2APIC e Huge Pages são otimizações, framebuffer é upgrade visual.
+4. **Sprints 39-42 (Bloco 11)** já foram implementados: SkillLoader, Agent trait, AgentRegistry, 8 agentes nativos, SystemAgent como prova.
+
+---
+
 ## Seção 5 — Changelog do Idea Bank
 
 | Data | Mudança | Responsável |
@@ -1002,3 +1133,4 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 | 2026-06-25 | ADR-0025: Itens 256-267 (Tier 3 Security Patterns) → adicionados; 12 padrões extraídos de 5 repos (InnerWarden 159★, ai-jail 595★, vexfs 24★, Chisel 12★, cori-kernel 17★). 7 itens viaveis Sprints 24-27 (256-264), 3 ideias futuras Sprint 28+ (265-267), 6 padrões descartados. Deep-dive: InnerWarden (2057 commits, 7900+ testes, 45 eBPF programas, 82 detectores, 69 regras correlação). | IDA IA |
 | 2026-06-26 | **Section 1.28 Agent/Skill-First Architecture** — 20 itens (A-001 a A-020) adicionados. Reclassificação: tudo vira agente/skill, nada de tasks/serviços. Paradigma fundamental. | Dev + IDA IA |
 | 2026-06-26 | **IDEA_BANK total: 275 itens.** Heat map atualizado: 68 ✅, 116 🟡, 76 ⏳, 9 💰, 6 ❌ | Dev + IDA IA |
+| 2026-06-26 | **Seção 6 — Sprint Planning** adicionada: 7 blocos futuros (12-18) com 55 itens 🟡 consolidados. Total: 330 itens. | Dev + IDA IA |
