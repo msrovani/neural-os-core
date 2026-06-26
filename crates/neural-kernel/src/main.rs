@@ -208,7 +208,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         line: info.location().map_or(0, |l| l.line()),
         ring: 0,
         daemon: String::from("kernel"),
-        tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed),
+        tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
     };
     let action = SELF_HEAL.lock().analyze(&ctx);
     match action {
