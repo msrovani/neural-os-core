@@ -218,13 +218,14 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         _ => {}
     }
 
+    let msg_bytes = msg.clone().into_bytes();
     let _ = EVENT_BUS.publish(crate::Event {
         id: 0,
         topic: alloc::string::String::from(cortex::TOPIC_KERNEL_ERROR),
-        payload: msg.into_bytes(),
+        payload: msg_bytes,
         token: crate::CapabilityToken(1),
     });
-    EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.clone().into_bytes(),
+    EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.into_bytes(),
         crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
     for _ in 0..100000 { core::hint::spin_loop(); }
     loop { x86_64::instructions::hlt(); }
