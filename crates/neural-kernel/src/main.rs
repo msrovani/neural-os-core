@@ -462,14 +462,34 @@ async fn cortex_llm_daemon() {
 }
 
 async fn intent_router_daemon() {
-    let receiver = EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT);
+    let user_receiver = EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT);
+    let llm_receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE);
     let cortex = cortex::Cortex::new();
     let status_skill_name = String::from("system_status");
     let echo_skill_name = String::from("echo");
     let hw_skill_name = String::from("hardware_info");
     let net_diag_skill_name = String::from("net_diag");
+    let mut awaiting_llm = false;
     loop {
-        if let Some(event) = receiver.try_receive() {
+        // Check for LLM response (may arrive many ticks later)
+        if awaiting_llm {
+            if let Some(event) = llm_receiver.try_receive() {
+                awaiting_llm = false;
+                let text = core::str::from_utf8(&event.payload).unwrap_or("");
+                serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
+                let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
+                CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
+                let resp_event = event_bus::Event {
+                    id: 0, topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
+                    payload: alloc::format!("[Hermes] {}", text).into_bytes(),
+                    token: event_bus::CapabilityToken(1),
+                };
+                let _ = EVENT_BUS.publish(resp_event);
+            }
+        }
+
+        if let Some(event) = user_receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             serial_println!("[CORTEX] Texto do usuario: \"{}\"", text);
             println!("[CORTEX] Texto do usuario: \"{}\"", text);
@@ -607,11 +627,17 @@ async fn intent_router_daemon() {
                     let intent_name = intent.skill_name();
                     serial_println!("[CORTEX] Intent: {} = {:?}", intent_name, intent);
                     let response = match intent {
-                        cortex::Intent::Greeting => {
-                            String::from("Hermes: Ola! Digite /help para comandos, ou converse comigo.")
-                        }
-                        cortex::Intent::Chat => {
-                            alloc::format!("Hermes: \"{}\" — entendido! (intent chatear)", msg)
+                        cortex::Intent::Greeting | cortex::Intent::Chat => {
+                            serial_println!("[CORTEX-LLM] Enviando para LLM: \"{}\"", msg);
+                            let req = crate::Event {
+                                id: 0,
+                                topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
+                                payload: msg.as_bytes().to_vec(),
+                                token: crate::CapabilityToken(1),
+                            };
+                            let _ = EVENT_BUS.publish(req);
+                            awaiting_llm = true;
+                            String::from("...")
                         }
                         _ => {
                             match SKILL_REGISTRY.lock().has_skill(intent_name) {
@@ -635,35 +661,28 @@ async fn intent_router_daemon() {
                 }
             };
 
-            let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-            USAGE_TRACKER.lock().record_call("intent_router", 1);
-            EVENT_LOG.lock().push(
-                conversation::EventKind::UserInput,
-                event.payload.clone(),
-                now,
-            );
-            EVENT_LOG.lock().push(
-                conversation::EventKind::HermesResponse,
-                response.as_bytes().to_vec(),
-                now,
-            );
-            CONVERSATION_TRACKER.lock().record_exchange(text, &response);
-            if CONVERSATION_TRACKER.lock().needs_compact() {
-                let compact_msg = CONVERSATION_TRACKER.lock().compact();
-                serial_println!("[HERMES] {}", compact_msg);
-                EVENT_LOG.lock().push(
-                    conversation::EventKind::ContextCompacted,
-                    compact_msg.into_bytes(),
-                    now,
-                );
+            if !awaiting_llm {
+                let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                USAGE_TRACKER.lock().record_call("intent_router", 1);
+                EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);
+                EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, response.as_bytes().to_vec(), now);
+                CONVERSATION_TRACKER.lock().record_exchange(text, &response);
+                if CONVERSATION_TRACKER.lock().needs_compact() {
+                    let compact_msg = CONVERSATION_TRACKER.lock().compact();
+                    serial_println!("[HERMES] {}", compact_msg);
+                    EVENT_LOG.lock().push(conversation::EventKind::ContextCompacted, compact_msg.into_bytes(), now);
+                }
+                let resp_event = event_bus::Event {
+                    id: 0,
+                    topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
+                    payload: response.into_bytes(),
+                    token: event_bus::CapabilityToken(1),
+                };
+                let _ = EVENT_BUS.publish(resp_event);
+            } else {
+                EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(),
+                    crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
             }
-            let resp_event = event_bus::Event {
-                id: 0,
-                topic: alloc::string::String::from(hermes::TOPIC_HERMES_RESPONSE),
-                payload: response.into_bytes(),
-                token: event_bus::CapabilityToken(1),
-            };
-            let _ = EVENT_BUS.publish(resp_event);
         }
         task::yield_now().await;
     }
