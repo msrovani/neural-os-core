@@ -363,6 +363,21 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         }
     }
 
+    // Init xHCI USB controller if present
+    unsafe {
+        let pci_devices = pci::scan_pci();
+        for dev in &pci_devices {
+            if dev.class == 0x0C && dev.subclass == 0x03 {
+                if let Some(mut xhci) = xhci::XhciDriver::new(dev) {
+                    if xhci.init() {
+                        let usb_devices = xhci.port_scan();
+                        serial_println!("[USB] {} dispositivo(s) conectado(s)", usb_devices.len());
+                    }
+                }
+            }
+        }
+    }
+
     // Auto hardware identification via LLM
     {
         let skill = HwIdentifySkill;
