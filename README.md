@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.29.0 🏆 USB + LLM + HW DETECTION 🏆
+# Neural OS Hermes ⚡ — v0.30.0 🏆 USB DETECTION + FINAL MODEL 🏆
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -345,9 +345,10 @@ The Memory Hierarchy Index treats all physical memory as a single pool divided i
 | 26 | 9 | Transformer Engine (Attention, generate, tokenizer, micro-model) | ✅ |
 | 27 | 10 | Cortex Daemon (LLM request/response, prompt templates) | ✅ |
 | **28** | **11** | **HW-Aware Cortex LLM + PCI ID training + HwIdentifySkill** | **✅ Current** |
-| **29** | **12** | **xHCI USB Driver + port enumeration + LLM identification** | **✅ Current** |
-| 30 | 13 | Full USB device descriptors (vendor/device ID) + USB → LLM pipeline | 🟡 Próximo |
-| 31+ | 14 | Networked Cortex + WASM + multi-agent | 🔲 |
+| 29 | 12 | xHCI USB Driver + port enumeration | ✅ |
+| **30** | **13** | **USB speed detection + final model 66K pairs + HW identification** | **✅ Current** |
+| 31 | 14 | Full USB device descriptors (vendor/device ID via TRB) | 🟡 Próximo |
+| 32+ | 15 | Networked Cortex + WASM + multi-agent | 🔲 |
 
 ## 🧬 Module Map
 
