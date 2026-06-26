@@ -12,6 +12,12 @@ const GITHUB_IP: [u8; 4] = [140, 82, 121, 3];
 const NTP_SERVER: [u8; 4] = [200, 160, 7, 186];
 const NTP_EPOCH: u64 = 2208988800;
 const BR_TZ_OFFSET: u64 = 10800;
+const HOST_IP: [u8; 4] = [10, 0, 2, 2];
+const IPPROTO_TCP: u8 = 6;
+
+const TCP_FLAG_FIN: u8 = 0x01;
+const TCP_FLAG_SYN: u8 = 0x02;
+const TCP_FLAG_ACK: u8 = 0x10;
 
 enum PacketClass {
     ArpRequest { sender_mac: [u8; 6], target_ip: [u8; 4] },
@@ -19,6 +25,8 @@ enum PacketClass {
     IcmpEcho { src_ip: [u8; 4], ident: u16, seq: u16, payload: Vec<u8> },
     IcmpEchoReply { ident: u16 },
     UdpPacket { dst_port: u16 },
+    TcpSynAck { src_ip: [u8; 4], seq: u32, ack: u32, our_mac: [u8; 6] },
+    TcpData { src_ip: [u8; 4], seq: u32, ack: u32, data: Vec<u8> },
     DhcpOffer { yiaddr: [u8; 4] },
     Unknown { eth_type: u16, len: usize },
 }
@@ -61,6 +69,24 @@ fn classify(pkt: &[u8]) -> PacketClass {
                         classify_dhcp_offer(pkt)
                     } else {
                         PacketClass::UdpPacket { dst_port }
+                    }
+                }
+                IPPROTO_TCP => {
+                    if pkt.len() < 14 + 20 + 20 { return PacketClass::Unknown { eth_type, len: pkt.len() }; }
+                    let tcp_off = ((pkt[14 + 20 + 12] >> 4) as usize) * 4;
+                    let flags = pkt[14 + 20 + 13];
+                    let seq = u32::from_be_bytes([pkt[14 + 20 + 4], pkt[14 + 20 + 5], pkt[14 + 20 + 6], pkt[14 + 20 + 7]]);
+                    let ack = u32::from_be_bytes([pkt[14 + 20 + 8], pkt[14 + 20 + 9], pkt[14 + 20 + 10], pkt[14 + 20 + 11]]);
+                    let our_mac = [pkt[0], pkt[1], pkt[2], pkt[3], pkt[4], pkt[5]];
+                    const SYNACK: u8 = TCP_FLAG_SYN | TCP_FLAG_ACK;
+                    const RSTACK: u8 = 0x04 | TCP_FLAG_ACK;
+                    match flags & 0x3F {
+                        SYNACK => PacketClass::TcpSynAck { src_ip, seq, ack, our_mac },
+                        f if f & TCP_FLAG_ACK != 0 && tcp_off < pkt.len() - 14 - 20 => {
+                            PacketClass::TcpData { src_ip, seq, ack, data: pkt[14 + 20 + tcp_off..].to_vec() }
+                        }
+                        RSTACK => PacketClass::TcpSynAck { src_ip, seq, ack, our_mac },
+                        _ => PacketClass::Unknown { eth_type, len: pkt.len() },
                     }
                 }
                 _ => PacketClass::Unknown { eth_type, len: pkt.len() },
@@ -140,6 +166,50 @@ fn build_ntp_request(local_mac: [u8; 6], dst_mac: [u8; 6], our_ip: [u8; 4], serv
     pkt
 }
 
+fn tcp_checksum(src_ip: [u8; 4], dst_ip: [u8; 4], segment: &[u8]) -> u16 {
+    let len = segment.len() as u16;
+    let mut pseudo = Vec::with_capacity(12 + len as usize);
+    pseudo.extend_from_slice(&src_ip);
+    pseudo.extend_from_slice(&dst_ip);
+    pseudo.push(0);
+    pseudo.push(IPPROTO_TCP);
+    pseudo.extend_from_slice(&len.to_be_bytes());
+    pseudo.extend_from_slice(segment);
+    crate::proto::ip_checksum(&pseudo)
+}
+
+fn build_tcp_segment(dst_mac: [u8; 6], local_mac: [u8; 6], our_ip: [u8; 4], dst_ip: [u8; 4], src_port: u16, dst_port: u16, seq: u32, ack: u32, flags: u8, data: &[u8]) -> Vec<u8> {
+    let tcp_hdr = 20;
+    let total = 14 + 20 + tcp_hdr + data.len();
+    let mut pkt = Vec::with_capacity(total);
+    pkt.extend_from_slice(&crate::proto::eth_header(dst_mac, local_mac, ETH_IPV4));
+    pkt.extend_from_slice(&crate::proto::ip_header(our_ip, dst_ip, IPPROTO_TCP, (tcp_hdr + data.len()) as u16));
+    pkt.extend_from_slice(&src_port.to_be_bytes());
+    pkt.extend_from_slice(&dst_port.to_be_bytes());
+    pkt.extend_from_slice(&seq.to_be_bytes());
+    pkt.extend_from_slice(&ack.to_be_bytes());
+    pkt.push(0x50);
+    pkt.push(flags);
+    pkt.extend_from_slice(&[0xFF, 0xFF]);
+    pkt.extend_from_slice(&[0, 0]);
+    pkt.extend_from_slice(&[0, 0]);
+    pkt.extend_from_slice(data);
+    let seg_start = 14 + 20;
+    let seg_end = pkt.len();
+    let cksum = tcp_checksum(our_ip, dst_ip, &pkt[seg_start..seg_end]);
+    pkt[seg_start + 16] = (cksum >> 8) as u8;
+    pkt[seg_start + 17] = (cksum & 0xFF) as u8;
+    pkt
+}
+
+fn parse_http_body(data: &[u8]) -> Option<Vec<u8>> {
+    if let Some(pos) = data.windows(4).position(|w| w == b"\r\n\r\n") {
+        Some(Vec::from(&data[pos + 4..]))
+    } else {
+        Some(data.to_vec())
+    }
+}
+
 fn parse_ntp_timestamp(pkt: &[u8]) -> Option<u64> {
     if pkt.len() < 14 + 20 + 8 + 48 { return None; }
     let dst_port = (pkt[36] as u16) << 8 | (pkt[37] as u16);
@@ -208,6 +278,13 @@ pub async fn network_agent_daemon() {
     let mut ntp_replied = false;
     let mut ntp_time: Option<alloc::string::String> = None;
 
+    const HTTP_PORT: u16 = 80;
+    const HTTP_SRC: u16 = 54321;
+    let mut tcp_seq = 100u32;
+    let mut tcp_ack = 0u32;
+    let mut tcp_state = 0u8;
+    let mut http_body: Option<alloc::string::String> = None;
+
     loop {
         let mut guard = RTL8139.lock();
         if let Some(ref mut driver) = *guard {
@@ -254,6 +331,31 @@ pub async fn network_agent_daemon() {
                                 log(tick, &format!("NTP reply from {}.{}.{}.{}: {} ({})",
                                     NTP_SERVER[0], NTP_SERVER[1], NTP_SERVER[2], NTP_SERVER[3],
                                     dt, tz));
+                            }
+                        }
+                    }
+                    PacketClass::TcpSynAck { src_ip, seq, ack, our_mac } => {
+                        if tcp_state == 1 && src_ip == HOST_IP {
+                            tcp_ack = seq.wrapping_add(1);
+                            tcp_seq = ack;
+                            let reply = build_tcp_segment([data[6], data[7], data[8], data[9], data[10], data[11]], our_mac, our_ip, HOST_IP, HTTP_SRC, HTTP_PORT, tcp_seq, tcp_ack, TCP_FLAG_ACK, &[]);
+                            unsafe { driver.send(&reply); }
+                            tcp_state = 2;
+                            log(tick, "TCP handshake OK to 10.0.2.2:80");
+                        }
+                    }
+                    PacketClass::TcpData { src_ip, seq, ack, data: tcp_data } => {
+                        if tcp_state == 2 && src_ip == HOST_IP && http_body.is_none() {
+                            let body = parse_http_body(&tcp_data);
+                            if let Some(b) = body {
+                                let text = core::str::from_utf8(&b).unwrap_or("<binary>");
+                                http_body = Some(alloc::string::String::from(text));
+                                let local_mac = driver.mac();
+                                let dst_mac = [data[6], data[7], data[8], data[9], data[10], data[11]];
+                                let fin = build_tcp_segment(dst_mac, local_mac, our_ip, HOST_IP, HTTP_SRC, HTTP_PORT, ack, seq.wrapping_add(tcp_data.len() as u32), TCP_FLAG_FIN | TCP_FLAG_ACK, &[]);
+                                unsafe { driver.send(&fin); }
+                                log(tick, &format!("HTTP response: {} ({} bytes)", text.trim_end(), b.len()));
+                                tcp_state = 3;
                             }
                         }
                     }
@@ -315,6 +417,24 @@ pub async fn network_agent_daemon() {
         if ntp_sent && !ntp_replied && tick >= (SKIP_PING + SKIP_NTP + 40) {
             log(tick, &format!("NTP timeout — no reply from {}.{}.{}.{}", NTP_SERVER[0], NTP_SERVER[1], NTP_SERVER[2], NTP_SERVER[3]));
             ntp_replied = true;
+        }
+
+        if ntp_replied && tcp_state == 0 && tick >= (SKIP_PING + SKIP_NTP + 50) {
+            let local_mac = NET_CONFIG.lock().mac;
+            let gw = NET_CONFIG.lock().gateway_mac;
+            let syn = build_tcp_segment(gw, local_mac, our_ip, HOST_IP, HTTP_SRC, HTTP_PORT, tcp_seq, 0, TCP_FLAG_SYN, &[]);
+            let mut guard = RTL8139.lock();
+            if let Some(ref mut driver) = *guard {
+                unsafe { driver.send(&syn); }
+                tcp_state = 1;
+                tcp_seq = tcp_seq.wrapping_add(1);
+                log(tick, "TCP SYN to 10.0.2.2:80 sent");
+            }
+            drop(guard);
+        }
+
+        if tcp_state == 2 && http_body.is_some() && tick % 200 == 0 {
+            log(tick, &format!("Last HTTP: {:?}", http_body.as_ref().map(|s| s.len())));
         }
 
         if tick % 200 == 0 && configured {
