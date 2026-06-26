@@ -1,4 +1,4 @@
-# Sprint 29 — xHCI USB Driver (Plano)
+# Sprint 29 — xHCI USB Driver ✅ (Completo, v0.29.0–v0.30.0)
 
 **Target:** v0.29.0
 

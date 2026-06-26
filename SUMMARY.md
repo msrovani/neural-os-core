@@ -1,17 +1,16 @@
 # ═══════════════════════════════════════════════
 #   PLANO DIRETOR — Neural OS Hermes
-#   Versão v0.19.0 — "Hermes Awakening"
-#   Ecosystem Analysis Complete · Tiers 0-4 (136 repos)
-#   249 ideas catalogadas · 5 ADRs de ecossistema
+#   Versão v0.36.0 — Self-Healing Kernel
+#   Transformer LLM · HW Detection · Auto-Cura
 # ═══════════════════════════════════════════════
 
 # Neural OS Hermes — AI Summary
 
-**O que é:** Um sistema operacional bare-metal (no_std Rust, sem Linux) onde o kernel É uma rede neural. Uma "viagem no reino da maionese" — um SO que roda IA, mas mais importante, que **é** IA.
+**O que é:** Um sistema operacional bare-metal (no_std Rust, sem Linux) onde o kernel É uma rede neural — um SO que roda IA, mas mais importante, que **é** IA.
 
-**Visão:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferência neural. A hierarquia de memória (VRAM, DRAM, NVMe, HDD) é um pool único roteado por MLP. O boot é um pipeline de IA: detecta hardware → decide configuração → conversa com usuário → executa skills.
+**Visão:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferência neural. O LLM identifica hardware, decide onde alocar no MHI, e se recupera de erros automaticamente.
 
-**Estado atual:** MVP em construção via chain de 6 blocos (ADR-0015). Blocos 0-5 concluídos — kernel bootável com Hermes Chat, Trust Cache, HardwareInfoSkill, MHI, SMP, PCI/ACPI/APIC, EventBus IPC, Skill Registry, 6 agentes cooperativos. Próximo: Sprint 23 (Network Sprint — VirtIO-net + smoltcp). Análise de ecossistema completa (Tiers 0-4, 136 repos, 249 ideias catalogadas — ADRs 0020-0024).
+**Estado atual:** 8 agentes cooperativos rodando. Transformer 4 layers BitNet (~272K params) treinado na GTX 1050 com 66.780 pares (PCI + USB + SMBIOS + kernel + git + capabilities + erros). Self-Healing: panic → FailureClass → RecoveryAction → corrective prompting via LLM.
 
 **Arquitetura chave:**
 - Ring 0: NPU (Intent routing, contexto)
