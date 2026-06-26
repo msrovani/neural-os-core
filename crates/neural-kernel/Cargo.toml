@@ -1,6 +1,6 @@
 [package]
 name = "neural-kernel"
-version = "0.39.0"
+version = "0.40.0"
 edition = "2021"
 
 [dependencies]
@@ -16,6 +16,7 @@ event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp"] }
+agent-core = { path = "../agent-core" }
 
 [build-dependencies]
 bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }
