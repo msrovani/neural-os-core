@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.28.0 🏆 HW-AWARE CORTEX LLM 🏆
+# Neural OS Hermes ⚡ — v0.29.0 🏆 USB + LLM + HW DETECTION 🏆
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -11,7 +11,7 @@
 
 Every OS today bolts AI on top — a chatbot in the taskbar, a copilot in the browser, a GPU driver that lets PyTorch run. The kernel doesn't know what AI is. It never will.
 
-**Neural OS Hermes is different.** The kernel IS a neural inference engine. The Cortex classifies every user intent. **A 4-layer BitNet transformer with 272K ternary parameters generates text from user input — trained on 23.858 PCI IDs to identify hardware.** Seven cooperative AI agents run the system. No shell. No init. No systemd. Just tensors, events, and intent.
+**Neural OS Hermes is different.** The kernel IS a neural inference engine. The Cortex classifies every user intent. **A 4-layer BitNet transformer with ~177K ternary parameters generates text from user input — trained on 66K pairs: PCI IDs, USB IDs, SMBIOS, kernel code, and git history.** An xHCI USB driver detects connected devices and the LLM identifies them. Seven cooperative AI agents run the system. No shell. No init. No systemd. Just tensors, events, and intent.
 
 ---
 
@@ -130,6 +130,14 @@ The Cortex classifies user text and dispatches to the appropriate skill.
 [NET @t=10] Online. IP: 10.0.2.15
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
 [WATCHDOG] Ticks do temporizador: 13200+
+
+### 🏆 USB Detection via xHCI (26/06/2026)
+```
+[PCI] 00:04.00 1033:0194 class=0c subclass=03
+[XHCI] Init: 16 slots, 64 portas
+[USB] Porta 0: conectado
+[HW-SCAN] 00:04.0 1033:0194 class=0c/03 USB 3.0 (xHCI)
+```
 
 ### 🏆 HW-Aware Cortex LLM (26/06/2026)
 O modelo foi treinado com 23.858 entradas PCI ID. Agora identifica hardware:
@@ -337,8 +345,9 @@ The Memory Hierarchy Index treats all physical memory as a single pool divided i
 | 26 | 9 | Transformer Engine (Attention, generate, tokenizer, micro-model) | ✅ |
 | 27 | 10 | Cortex Daemon (LLM request/response, prompt templates) | ✅ |
 | **28** | **11** | **HW-Aware Cortex LLM + PCI ID training + HwIdentifySkill** | **✅ Current** |
-| 29 | 12 | xHCI USB Driver (detect + identify devices via Cortex LLM) | 🟡 Planejado |
-| 30+ | 13 | Networked Cortex + WASM + multi-agent | 🔲 |
+| **29** | **12** | **xHCI USB Driver + port enumeration + LLM identification** | **✅ Current** |
+| 30 | 13 | Full USB device descriptors (vendor/device ID) + USB → LLM pipeline | 🟡 Próximo |
+| 31+ | 14 | Networked Cortex + WASM + multi-agent | 🔲 |
 
 ## 🧬 Module Map
 
@@ -362,7 +371,7 @@ The Memory Hierarchy Index treats all physical memory as a single pool divided i
 | `usage.rs` | 73 | UsageTracker: per-skill call counts, metrics tensor |
 | `conversation.rs` | 79 | EventLog: VecDeque, last_n, summarize |
 | `proto.rs` | 101 | Ethernet/IP/ARP/ICMP header builders and parsers |
-| `xhci.rs` | 82 | xHCI USB controller driver stub (Sprint 29) |
+| `xhci.rs` | 118 | xHCI USB 3.0 driver — port scan, device detect, speed detection |
 
 ## 🛠️ Quick Start
 
