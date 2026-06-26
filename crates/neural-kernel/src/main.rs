@@ -131,6 +131,44 @@ impl Skill for HardwareInfoSkill {
     }
 }
 
+struct HwIdentifySkill;
+
+impl Skill for HwIdentifySkill {
+    fn manifest(&self) -> McpManifest {
+        McpManifest {
+            name: String::from("hw_identify"),
+            description: String::from("Identifies all PCI hardware using the Cortex LLM"),
+            required_tokens: vec![1],
+        }
+    }
+    fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let devices = unsafe { crate::pci::scan_pci() };
+        let mut report = String::new();
+        let mut llm_query = alloc::format!("Identifique estes dispositivos PCI:\n");
+        for dev in &devices {
+            let class_desc = crate::pci::class_name(dev.class, dev.subclass);
+            report.push_str(&alloc::format!(
+                "{:02x}:{:02x}.{} {:04x}:{:04x} class={:02x}/{:02x} {}\n",
+                dev.bus, dev.device, dev.function,
+                dev.vendor_id, dev.device_id,
+                dev.class, dev.subclass, class_desc,
+            ));
+            llm_query.push_str(&alloc::format!(
+                "{:04x}:{:04x} classe {:02x}/{:02x}\n",
+                dev.vendor_id, dev.device_id, dev.class, dev.subclass,
+            ));
+        }
+        serial_println!("[HW-ID] {} dispositivos encontrados. Enviando para LLM...", devices.len());
+        let _ = EVENT_BUS.publish(crate::Event {
+            id: 0,
+            topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
+            payload: llm_query.into_bytes(),
+            token: crate::CapabilityToken(1),
+        });
+        Ok(report.into_bytes())
+    }
+}
+
 lazy_static! {
     static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
     static ref SKILL_REGISTRY: spin::Mutex<SkillRegistry> = {
@@ -139,6 +177,7 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
         reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
         reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
+        reg.register(alloc::boxed::Box::new(HwIdentifySkill));
         reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         spin::Mutex::new(reg)
     };

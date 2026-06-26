@@ -311,7 +311,11 @@ impl Cortex {
         } else if lower.contains("echo") || lower.contains("reverse") || lower.contains("repeat") {
             Intent::Echo
         } else if lower.contains("hw") || lower.contains("hardware") {
-            Intent::HardwareInfo
+            if lower.contains("identify") || lower.contains("identifique") || lower.contains("id ") || lower == "hw" {
+                Intent::HardwareIdentify
+            } else {
+                Intent::HardwareInfo
+            }
         } else if lower.contains("trust allow") {
             Intent::TrustAllow
         } else if lower.contains("trust deny") {
@@ -336,7 +340,7 @@ impl Cortex {
 
 #[derive(Debug)]
 pub enum Intent {
-    SystemStatus, Echo, HardwareInfo, TrustAllow, TrustDeny,
+    SystemStatus, Echo, HardwareInfo, HardwareIdentify, TrustAllow, TrustDeny,
     Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat,
 }
 
@@ -346,6 +350,7 @@ impl Intent {
             Intent::SystemStatus => "system_status",
             Intent::Echo => "echo",
             Intent::HardwareInfo => "hardware_info",
+            Intent::HardwareIdentify => "hw_identify",
             Intent::TrustAllow => "trust_allow",
             Intent::TrustDeny => "trust_deny",
             Intent::Network => "net_diag",
