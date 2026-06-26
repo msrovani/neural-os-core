@@ -66,6 +66,10 @@ pub enum Command {
     Usage,
     Conversation,
     Chat(String),
+    ShowSkills,
+    AddSkill,
+    RmSkill(String),
+    ReloadSkills,
 }
 
 pub fn parse_command(line: &str) -> Command {
@@ -123,6 +127,19 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("help") || name == "?" || name.eq_ignore_ascii_case("h") {
             return Command::Help;
+        }
+        if name.eq_ignore_ascii_case("show_skills") || name.eq_ignore_ascii_case("skills") || name.eq_ignore_ascii_case("list_skills") {
+            return Command::ShowSkills;
+        }
+        if name.eq_ignore_ascii_case("add_skill") || name.eq_ignore_ascii_case("learn") {
+            return Command::AddSkill;
+        }
+        if name.eq_ignore_ascii_case("rm_skill") || name.eq_ignore_ascii_case("remove_skill") || name.eq_ignore_ascii_case("forget") {
+            let arg = parts.next().unwrap_or("").trim().to_string();
+            return Command::RmSkill(arg);
+        }
+        if name.eq_ignore_ascii_case("reload_skills") || name.eq_ignore_ascii_case("reset_skills") {
+            return Command::ReloadSkills;
         }
     }
     Command::Chat(trimmed.to_string())

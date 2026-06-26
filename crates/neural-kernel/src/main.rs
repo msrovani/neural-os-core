@@ -192,6 +192,10 @@ lazy_static! {
     static ref CONVERSATION_TRACKER: spin::Mutex<hermes::ConversationTracker> = spin::Mutex::new(hermes::ConversationTracker::new());
     static ref SELF_HEAL: spin::Mutex<self_heal::SelfHeal> = spin::Mutex::new(self_heal::SelfHeal::new());
     static ref RESPAWN_QUEUE: spin::Mutex<alloc::vec::Vec<alloc::string::String>> = spin::Mutex::new(alloc::vec::Vec::new());
+    static ref SKILL_STORAGE: spin::Mutex<skill_loader::SkillLoader> = {
+        let loader = skill_loader::load_embedded_skills();
+        spin::Mutex::new(loader)
+    };
 }
 
 fn spawn_task_by_name(name: &str, executor: &mut task::executor::NeuralExecutor) {
@@ -579,16 +583,14 @@ async fn cortex_llm_daemon() {
         serial_println!("[CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.");
         cortex::TransformerModel::new()
     });
-    let skill_loader = crate::skill_loader::load_embedded_skills();
-    let system_prompt = skill_loader.build_system_prompt();
     let receiver = EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST);
-    serial_println!("[CORTEX-LLM] Transformer loaded + {} skills, {} bytes de system prompt",
-        skill_loader.skills.len(), system_prompt.len());
+    serial_println!("[CORTEX-LLM] Transformer loaded. Skills carregadas em runtime via SKILL_STORAGE.");
     loop {
         if let Some(event) = receiver.try_receive() {
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
             serial_println!("[CORTEX-LLM] Generating for: \"{}\"", user_text);
-            // Prepend system prompt (skills instructions) to guide generation
+            // Rebuild system prompt from runtime SKILL_STORAGE (sempre reflete skills atuais)
+            let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
             let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
             let output = cortex::generate_text(&model, &full_prompt);
             serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
@@ -763,7 +765,38 @@ async fn intent_router_daemon() {
                     alloc::format!("Trust revogado: token {} negado para skill '{}'", token, skill)
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /help | Ou digite algo para o MLP.")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill, /rm_skill <name>, /reload_skills, /help | Ou digite algo para o MLP.")
+                }
+                hermes::Command::ShowSkills => {
+                    let storage = SKILL_STORAGE.lock();
+                    let list = storage.list_skills();
+                    if list.is_empty() {
+                        String::from("Nenhuma skill carregada.")
+                    } else {
+                        let mut msg = alloc::format!("Skills ({}) carregadas:\n", list.len());
+                        for (i, (name, desc, bytes)) in list.iter().enumerate() {
+                            msg.push_str(&alloc::format!("{}. {} - {} ({} bytes)\n", i + 1, name, desc, bytes));
+                        }
+                        msg
+                    }
+                }
+                hermes::Command::AddSkill => {
+                    String::from("Para adicionar uma skill, edite o arquivo skills/<nome>.md e execute /reload_skills. Carga via teclado sera implementada em breve.")
+                }
+                hermes::Command::RmSkill(ref name) => {
+                    let mut storage = SKILL_STORAGE.lock();
+                    if storage.remove_skill(name) {
+                        alloc::format!("Skill '{}' removida.", name)
+                    } else {
+                        alloc::format!("Skill '{}' nao encontrada.", name)
+                    }
+                }
+                hermes::Command::ReloadSkills => {
+                    let mut storage = SKILL_STORAGE.lock();
+                    *storage = skill_loader::load_embedded_skills();
+                    let count = storage.skills.len();
+                    let prompt_size = storage.build_system_prompt().len();
+                    alloc::format!("Skills recarregadas do disco: {} skills, {} bytes de prompt.", count, prompt_size)
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent = cortex.think(msg);
