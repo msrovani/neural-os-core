@@ -25,9 +25,9 @@ No drivers. No syscalls. No kernel modules. Just tensors, events, and intent.
 
 ---
 
-## 🏗️ What's Been Built — v0.19.0 "Hermes Awakening" (Milestone)
+## 🏗️ What's Been Built — v0.24.1 "smoltcp Network Agent" (Sprint 24)
 
-![Status](https://img.shields.io/badge/status-stable-brightgreen) ![Version](https://img.shields.io/badge/version-0.19.0-blue) ![Tiers](https://img.shields.io/badge/ecosystem-136_repos_·_249_ideas-orange)
+![Status](https://img.shields.io/badge/status-stable-brightgreen) ![Version](https://img.shields.io/badge/version-0.24.1-blue) ![Tiers](https://img.shields.io/badge/ecosystem-136_repos_·_249_ideas-orange)
 
 The kernel discovers hardware, detects architecture, builds a memory hierarchy, boots 6 cooperative AI agents, and executes verified skills with trust cache. Ecosystem analysis complete across 5 tiers (136 repos, 249 ideas cataloged):
 
@@ -36,19 +36,18 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 [TEST]    Breakpoint, Box, Vec, Tensor, SiLU, RMSNorm, Intent Router
 [BITNET]  Inferencia 2-bit concluida. Output: [-0.5, -2.0]
 [KERNEL]  Bitmap Allocator: 1000 iteracoes estaveis
-[PCI]     Scan: 4 dispositivos (QEMU q35)
+[PCI]     Scan: 4 dispositivos (00:03.00 10ec:8139)
 [ACPI]    RSDP + RSDT + MADT (LAPIC/IOAPIC)
 [APIC]    LAPIC timer + IOAPIC keyboard + PIC disable
-[SMP]     AP 1 entrou em modo 64-bit Rust! (2 cores)
-[ARCH]    ring0=0 ring1=1 heap=64MB trust=1 power=0 tensor=0
-[MHI]     1 tier(s). Best: Dram (261 MB avail)
-[EXECUTOR] Timer ticks: antes=58, depois=229  ← LAPIC timer @ ~100 Hz
-[EXECUTOR] 6 tasks spawned (system, monitor, hw_bridge, input, cortex, console)
-[MONITOR] Evento SYSTEM_READY publicado.
+[SMP]     APs acordados: 3 (3 cores via OffsetPageTable)
+[ARCH]    ring0=0 ring1=1 heap=512MB trust=1 power=0 tensor=0
+[MHI]     1 tier(s). Best: Dram (2 GB avail)
+[RTL8139] Reset OK. MAC: 52:54:00:12:34:56
+[EXECUTOR] 7 tasks spawned (system, monitor, hw_bridge, network_agent, input, cortex, console)
+[NET @t=10] Online. IP: 10.0.2.15
+[NET @t=30] HTTP GET google.com:80
 [SKILL]   EchoSkill executada. Output reverso: [3, 2, 1]
-[DAEMON]  SYSTEM_READY confirmado. Ciclo de inicializacao completo.
-[WATCHDOG] Ticks do temporizador: 2100+
-[EXECUTOR] Hardware context: RAM=[0.023943, 0.000000] tasks=4
+[WATCHDOG] Ticks do temporizador: 13200+
 ```
 
 ### Ecosystem Analysis (5 Tiers Complete — 136 repos, 249 ideas)
@@ -66,20 +65,24 @@ The kernel discovers hardware, detects architecture, builds a memory hierarchy, 
 ### What each module does
 
 | Module | What | How |
-|---|---|---|
+|---|---|---|---|
 | `pci.rs` | PCI scan via CF8/CFC | 256 busses × 32 devices, vendor/device/class/BARs |
 | `acpi.rs` | ACPI parser | RSDP search (EBDA + BIOS), RSDT/XSDT, MADT (+ Interrupt Source Override) |
 | `apic.rs` | APIC init | LAPIC timer (vector 32, periodic), IOAPIC keyboard redirect, PIC disable |
-| `smp/` | SMP multi-core | PerCpu GS.base, trampoline 16→64, INIT-SIPI-SIPI |
+| `smp/` | SMP multi-core | PerCpu GS.base, trampoline 16→64, INIT-SIPI-SIPI, OffsetPageTable::map_to |
 | `mhi.rs` | Memory Hierarchy Index | `AllocTier` (Dram/Vram/Nvme/Hdd), `alloc_by_tier()` |
 | `inventory.rs` | Hardware Inventory | `HardwareInventory::collect()`, `SystemArchitecture::infer()` |
 | `hermes.rs` | Hermes Chat | MLP intent router, `/status`, `/echo`, `/help`, `/hw`, `/trust allow/deny` |
 | `trust.rs` | TrustCache | Token cache with TTL, denylist, `check_or_cache()` |
+| `rtl8139.rs` | RTL8139 NIC driver | I/O ports via Port<T>, 4 TX desc, RX ring buffer (CAPR/CBR) |
+| `netstack.rs` | smoltcp TCP/IP | PhyDevice trait, NetStack::poll(), HTTP non-blocking API |
+| `network_agent.rs` | Neural Network Agent | Async daemon: smoltcp poll → HTTP connect → done/failed |
+| `time_utils.rs` | Date/time formatting | UNIX → Brazil datetime (YYYY-MM-DD HH:MM:SS) |
 | `interrupts.rs` | Dual EOI | `USING_APIC` atomic flag → APIC or PIC EOI per interrupt |
 
-### Next: Sprint 23 — Network Sprint + Tool Policy (#228)
+### Next: Sprint 25 — Cortex LLM (ADR-0019)
 
-VirtIO-net + smoltcp TCP/IP + DNS + HTTP client per ADR-0016. Terminal Hermes remoto sobre TCP. Also: Tool Policy Registry (#228), Usage Tracker (#229), Auto-Compact Buffer (#230), Event-Sourced Conversation (#231).
+Neural Cortex BitNet LLM integration. Intent routing with advanced MLP, conversational context. Also: DNS over smoltcp UDP, Tool Policy Registry (#228), Usage Tracker (#229).
 
 ---
 
