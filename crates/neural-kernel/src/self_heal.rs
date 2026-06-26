@@ -1,7 +1,32 @@
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::format;
+use core::sync::atomic::Ordering;
+use crate::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
 use crate::serial_println;
+
+#[derive(Clone, Debug)]
+pub struct Checkpoint {
+    pub valid: bool,
+    pub bitmap: [u8; 131072],
+    pub next_free_bit: usize,
+    pub total_frames: usize,
+    pub usable_frames: usize,
+    pub allocated_count: usize,
+    pub mhi_dram_bytes: u64,
+    pub tick: u64,
+}
+
+impl Checkpoint {
+    pub const fn empty() -> Self {
+        Checkpoint {
+            valid: false, bitmap: [0; 131072],
+            next_free_bit: 0, total_frames: 0,
+            usable_frames: 0, allocated_count: 0,
+            mhi_dram_bytes: 0, tick: 0,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ErrorContext {
@@ -71,11 +96,50 @@ pub enum RecoveryAction {
 pub struct SelfHeal {
     pub pending_fixes: Vec<(String, String)>,
     pub lessons: Vec<FailedStrategy>,
+    pub checkpoint: Checkpoint,
 }
 
 impl SelfHeal {
     pub const fn new() -> Self {
-        SelfHeal { pending_fixes: Vec::new(), lessons: Vec::new() }
+        SelfHeal { pending_fixes: Vec::new(), lessons: Vec::new(), checkpoint: Checkpoint::empty() }
+    }
+
+    pub fn save_checkpoint(&mut self) {
+        serial_println!("[CHECKPOINT] Salvando estado do kernel...");
+        let guard = GLOBAL_ALLOCATOR.lock();
+        if let Some(ref alloc) = *guard {
+            self.checkpoint.bitmap = alloc.bitmap;
+            self.checkpoint.next_free_bit = alloc.next_free_bit;
+            self.checkpoint.total_frames = alloc.total_frames;
+            self.checkpoint.usable_frames = alloc.usable_frames;
+            self.checkpoint.allocated_count = alloc.allocated_count;
+        }
+        drop(guard);
+        self.checkpoint.mhi_dram_bytes = crate::mhi::MEMORY_HIERARCHY.lock().as_ref()
+            .map_or(0, |m| m.tiers[0].capacity_bytes);
+        self.checkpoint.tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
+        self.checkpoint.valid = true;
+        serial_println!("[CHECKPOINT] Salvo @ tick {} — {} frames alocados",
+            self.checkpoint.tick, self.checkpoint.allocated_count);
+    }
+
+    pub fn restore_checkpoint(&mut self) -> bool {
+        if !self.checkpoint.valid {
+            serial_println!("[CHECKPOINT] Nenhum checkpoint valido para restaurar.");
+            return false;
+        }
+        serial_println!("[CHECKPOINT] Restaurando estado @ tick {}...", self.checkpoint.tick);
+        let mut guard = GLOBAL_ALLOCATOR.lock();
+        if let Some(ref mut alloc) = *guard {
+            alloc.bitmap = self.checkpoint.bitmap;
+            alloc.next_free_bit = self.checkpoint.next_free_bit;
+            alloc.total_frames = self.checkpoint.total_frames;
+            alloc.usable_frames = self.checkpoint.usable_frames;
+            alloc.allocated_count = self.checkpoint.allocated_count;
+        }
+        drop(guard);
+        serial_println!("[CHECKPOINT] Restaurado. {} frames.", self.checkpoint.allocated_count);
+        true
     }
 
     fn already_tried(&self, msg: &str, action: &str) -> bool {

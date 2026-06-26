@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.37.0] — 2026-06-26 — Self-Healing + Checkpoint/Restore (Sprints 32-37)
+
+### Added
+- **Session Checkpoint** — `SelfHeal.save_checkpoint()` salva bitmap allocator + MHI + tick a cada 100 ticks
+- **Checkpoint Restore** — `SelfHeal.restore_checkpoint()` restaura estado do kernel em Double Fault
+- **Double Fault → restore** — double_fault_handler tenta restore antes de halt
+- **SelfHeal.checkpoint** — `Checkpoint` struct com bitmap (128KB), contadores, MHI
+
 ## [0.36.0] — 2026-06-26 — Self-Healing Kernel (Bloco Único, Sprints 32-36)
 
 ### Added — SelfHealing Module

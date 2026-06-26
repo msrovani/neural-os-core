@@ -82,10 +82,18 @@ extern "x86-interrupt" fn double_fault_handler(
     _stack_frame: InterruptStackFrame,
     error_code: u64,
 ) -> ! {
-    serial_println!("[EXCEPTION] DOUBLE FAULT (err={}) HALT", error_code);
-    println!("[EXCEPTION] DOUBLE FAULT (err={}) HALT", error_code);
-    let class = crate::self_heal::FailureClass::classify("DoubleFault", "");
-    serial_println!("[SELF-HEAL] Double Fault: {:?} — {}", class, class.default_recovery());
+    serial_println!("[EXCEPTION] DOUBLE FAULT (err={})", error_code);
+    println!("[EXCEPTION] DOUBLE FAULT (err={})", error_code);
+    use crate::self_heal::FailureClass;
+    let class = FailureClass::classify("DoubleFault", "");
+    serial_println!("[SELF-HEAL] {:?}: tentando restore de checkpoint...", class);
+    let restored = crate::SELF_HEAL.lock().restore_checkpoint();
+    if restored {
+        serial_println!("[SELF-HEAL] Checkpoint restaurado! O sistema pode continuar instavel.");
+        serial_println!("[SELF-HEAL] Recomendado: reiniciar daemons afetados via RESPAWN_QUEUE.");
+    } else {
+        serial_println!("[SELF-HEAL] Nenhum checkpoint disponivel. Halt.");
+    }
     loop { x86_64::instructions::hlt(); }
 }
 
