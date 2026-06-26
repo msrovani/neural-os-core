@@ -10,10 +10,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 use bootloader::bootinfo::BootInfo;
 use core::sync::atomic::Ordering;
-use event_bus::{CapabilityToken, Event};
+use core::task::{Context, Poll};
+use event_bus::{CapabilityToken, Event, Receiver};
 use skill_registry::{McpManifest, Skill, SkillRegistry};
 use memory::BitmapFrameAllocator;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
+use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
 mod acpi;
 mod allocator;
@@ -199,17 +201,104 @@ lazy_static! {
     static ref PENDING_SKILL: spin::Mutex<Option<(alloc::string::String, alloc::string::String)>> = spin::Mutex::new(None);
 }
 
-fn spawn_task_by_name(name: &str, executor: &mut task::executor::NeuralExecutor) {
-    serial_println!("[RESPAWN] Recriando daemon '{}'...", name);
-    match name {
-        "hardware_monitor" => executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon())),
-        "hw_bridge" => executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon())),
-        "network_agent" => executor.spawn(task::agent::AgentTask::new(network_agent::network_agent_daemon())),
-        "input" => executor.spawn(task::agent::AgentTask::new(input_daemon())),
-        "cortex_llm" => executor.spawn(task::agent::AgentTask::new(cortex_llm_daemon())),
-        "intent_router" => executor.spawn(task::agent::AgentTask::new(intent_router_daemon())),
-        "hermes_console" => executor.spawn(task::agent::AgentTask::new(hermes_console_daemon())),
-        _ => serial_println!("[RESPAWN] Daemon '{}' desconhecido", name),
+// ---------------------------------------------------------------------------
+// Agent trait implementations — Sprint 40: Agent-First Refactoring
+// ---------------------------------------------------------------------------
+
+/// SystemAgent — substitui system_daemon. Oneshot: ativa, aguarda SYSTEM_READY, conclui.
+pub struct SystemAgent {
+    receiver: Option<event_bus::Receiver>,
+    done: bool,
+}
+
+const SYSTEM_MANIFEST: AgentManifest = AgentManifest {
+    name: "system",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl SystemAgent {
+    pub fn new() -> Self {
+        SystemAgent { receiver: None, done: false }
+    }
+}
+
+impl Agent for SystemAgent {
+    fn manifest(&self) -> &AgentManifest { &SYSTEM_MANIFEST }
+
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        if self.done { return AgentTickResult::Done; }
+        if self.receiver.is_none() {
+            self.receiver = Some(EVENT_BUS.subscribe("SYSTEM_READY"));
+            serial_println!("[AGENT] SystemAgent ativo. Aguardando SYSTEM_READY...");
+        }
+        if let Some(event) = self.receiver.as_mut().unwrap().try_receive() {
+            let reg = SKILL_REGISTRY.lock();
+            let out = reg.execute_skill("echo", &event.payload, &event.token);
+            drop(reg);
+            if let Ok(output) = out {
+                serial_println!("[AGENT] EchoSkill: {:?}", output);
+            }
+            serial_println!("[AGENT] SystemAgent: SYSTEM_READY confirmado. Concluido.");
+            println!("[AGENT] SystemAgent: SYSTEM_READY confirmado.");
+            self.done = true;
+            AgentTickResult::Done
+        } else {
+            AgentTickResult::Pending
+        }
+    }
+}
+
+/// LegacyTaskAgent — wrapper para migrar async fn tasks para Agent sem reescrever
+pub struct LegacyTaskAgent {
+    future: Option<core::pin::Pin<alloc::boxed::Box<dyn core::future::Future<Output = ()>>>>,
+    name: &'static str,
+    manifest: AgentManifest,
+}
+
+impl LegacyTaskAgent {
+    pub fn new(name: &'static str, future: impl core::future::Future<Output = ()> + 'static) -> Self {
+        // Legacy agents are Continuous (poll every tick) and auto-start
+        let manifest = AgentManifest {
+            name,
+            kind: AgentKind::System,
+            schedule: ScheduleKind::Continuous,
+            auto_start: true,
+            persist: true,
+        };
+        LegacyTaskAgent {
+            future: Some(alloc::boxed::Box::pin(future)),
+            name,
+            manifest,
+        }
+    }
+}
+
+// Safety: Legacy tasks never hold non-Send types across yield points in practice
+unsafe impl Send for LegacyTaskAgent {}
+
+impl Agent for LegacyTaskAgent {
+    fn manifest(&self) -> &AgentManifest { &self.manifest }
+
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        if let Some(mut fut) = self.future.take() {
+            let waker = crate::task::dummy_waker();
+            let mut ctx = Context::from_waker(&waker);
+            match fut.as_mut().poll(&mut ctx) {
+                Poll::Pending => {
+                    self.future = Some(fut);
+                    AgentTickResult::Pending
+                }
+                Poll::Ready(()) => {
+                    serial_println!("[AGENT] Legacy '{}' concluido.", self.name);
+                    AgentTickResult::Done
+                }
+            }
+        } else {
+            AgentTickResult::Done
+        }
     }
 }
 
@@ -463,20 +552,43 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
 
     let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    serial_println!("[EXECUTOR] Timer ticks: {}", ticks);
-    serial_println!("[EXECUTOR] Inicializando Neural Executor...");
-    println!("[EXECUTOR] Inicializando Neural Executor...");
-
-    let mut executor = task::executor::NeuralExecutor::new();
-    executor.spawn(task::agent::AgentTask::new(system_daemon()));
-    executor.spawn(task::agent::AgentTask::new(hardware_monitor_daemon()));
-    executor.spawn(task::agent::AgentTask::new(hw_bridge_daemon()));
-    executor.spawn(task::agent::AgentTask::new(network_agent::network_agent_daemon()));
-    executor.spawn(task::agent::AgentTask::new(input_daemon()));
-    executor.spawn(task::agent::AgentTask::new(cortex_llm_daemon()));
-    executor.spawn(task::agent::AgentTask::new(intent_router_daemon()));
-    executor.spawn(task::agent::AgentTask::new(hermes_console_daemon()));
-    executor.run();
+    serial_println!("[SCHEDULER] Timer ticks: {}", ticks);
+    serial_println!("[SCHEDULER] Inicializando AgentScheduler (Sprint 40)...");
+    println!("[SCHEDULER] Inicializando AgentScheduler...");
+    let mut registry = agent_core::AgentRegistry::new();
+    // Native Agent: SystemAgent (substitui system_daemon)
+    registry.register(alloc::boxed::Box::new(SystemAgent::new()));
+    // Legacy wrappers: 7 daemons ainda como async fn
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("monitor", hardware_monitor_daemon())));
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("hw_bridge", hw_bridge_daemon())));
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("network_agent", network_agent::network_agent_daemon())));
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("input", input_daemon())));
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("cortex_llm", cortex_llm_daemon())));
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("intent_router", intent_router_daemon())));
+    registry.register(alloc::boxed::Box::new(LegacyTaskAgent::new("hermes_console", hermes_console_daemon())));
+    serial_println!("[SCHEDULER] {} agentes registrados. Executando...", registry.agents.len());
+    registry.run(
+        || { x86_64::instructions::hlt(); },           // halt
+        || {                                            // check_respawns
+            let q = RESPAWN_QUEUE.lock().clone();
+            if !q.is_empty() { RESPAWN_QUEUE.lock().clear(); }
+            q
+        },
+        |name| {                                        // spawn_agent
+            serial_println!("[SCHEDULER] Respawning agent '{}'...", name);
+            let agent: Option<LegacyTaskAgent> = match name {
+                "monitor" => Some(LegacyTaskAgent::new("monitor", hardware_monitor_daemon())),
+                "hw_bridge" => Some(LegacyTaskAgent::new("hw_bridge", hw_bridge_daemon())),
+                "network_agent" => Some(LegacyTaskAgent::new("network_agent", network_agent::network_agent_daemon())),
+                "input" => Some(LegacyTaskAgent::new("input", input_daemon())),
+                "cortex_llm" => Some(LegacyTaskAgent::new("cortex_llm", cortex_llm_daemon())),
+                "intent_router" => Some(LegacyTaskAgent::new("intent_router", intent_router_daemon())),
+                "hermes_console" => Some(LegacyTaskAgent::new("hermes_console", hermes_console_daemon())),
+                _ => None,
+            };
+            agent.map(|a| alloc::boxed::Box::new(a) as alloc::boxed::Box<dyn Agent>)
+        },
+    );
 }
 
 fn scancode_to_ascii(scancode: u8) -> Option<char> {
