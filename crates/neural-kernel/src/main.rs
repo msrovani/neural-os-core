@@ -224,7 +224,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         payload: msg.into_bytes(),
         token: crate::CapabilityToken(1),
     });
-    EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.into_bytes(),
+    EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.clone().into_bytes(),
         crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
     for _ in 0..100000 { core::hint::spin_loop(); }
     loop { x86_64::instructions::hlt(); }
