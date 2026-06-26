@@ -1,17 +1,16 @@
-use crate::e1000::E1000Driver;
+use crate::netstack::NetStack;
 use crate::rtl8139::Rtl8139Driver;
 use crate::{println, serial_println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
-pub const TOPIC_HW_NET_E1000: &str = "HW_NET_E1000";
 pub const TOPIC_HW_NET_RTL8139: &str = "HW_NET_RTL8139";
 pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
 pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
 pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
-pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
 pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
+pub static NETSTACK: spin::Mutex<Option<NetStack>> = spin::Mutex::new(None);
 
 pub struct NetConfig {
     pub mac: [u8; 6],
@@ -46,48 +45,6 @@ pub fn wait_ticks(ticks: usize) {
         guard += 1;
         x86_64::instructions::hlt();
     }
-}
-
-pub unsafe fn init_driver_network() -> bool {
-    let pci_devices = crate::pci::scan_pci();
-    let mut dev_opt = None;
-    for dev in &pci_devices {
-        if dev.vendor_id == 0x8086 && dev.device_id == 0x100E {
-            serial_println!("[NET] e1000 detectado: {:02x}:{:02x}.{:02x}", dev.bus, dev.device, dev.function);
-            println!("[NET] e1000 detectado.");
-            let mut driver = E1000Driver::new(dev).unwrap();
-            if driver.init() {
-                dev_opt = Some(driver);
-                break;
-            }
-        }
-    }
-
-    let driver = match dev_opt {
-        Some(d) => d,
-        None => {
-            serial_println!("[NET] Nenhum dispositivo de rede encontrado.");
-            println!("[NET] Nenhum dispositivo de rede encontrado.");
-            return false;
-        }
-    };
-
-    let mac = driver.mac();
-    NET_CONFIG.lock().mac = mac;
-    *E1000.lock() = Some(driver);
-
-    serial_println!("[NET] e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    println!("[NET] e1000 iniciado.");
-
-    let hw_event = crate::Event {
-        id: 0,
-        topic: alloc::string::String::from(TOPIC_HW_NET_E1000),
-        payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
-        token: crate::CapabilityToken(1),
-    };
-    let _ = crate::EVENT_BUS.publish(hw_event);
-    true
 }
 
 pub unsafe fn init_driver_rtl8139() -> bool {
@@ -131,55 +88,8 @@ pub unsafe fn init_driver_rtl8139() -> bool {
     true
 }
 
-pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
-    let cfg = NET_CONFIG.lock();
-    let our_ip = cfg.ip;
-    let our_mac = cfg.mac;
-    let gw_mac = cfg.gateway_mac;
-    drop(cfg);
-    if gw_mac == [0; 6] { return None; }
-
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-    crate::proto::http_get_request(driver, our_mac, gw_mac, our_ip, host, port, path);
-    drop(guard);
-
-    for _ in 0..100000000 { core::hint::spin_loop(); }
-
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-    if let Some(pkt) = driver.recv() {
-        return crate::proto::parse_http_response(&pkt, our_mac);
-    }
-    None
-}
-
-pub unsafe fn ping(target_ip: [u8; 4]) -> Option<u64> {
-    let cfg = NET_CONFIG.lock();
-    let our_ip = cfg.ip;
-    let our_mac = cfg.mac;
-    let gw_mac = cfg.gateway_mac;
-    drop(cfg);
-    if gw_mac == [0; 6] { return None; }
-
-    let ident: u16 = 0x1234;
-    let seq: u16 = 1;
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-    crate::proto::icmp_echo_request(driver, our_mac, gw_mac, our_ip, target_ip, ident, seq);
-    drop(guard);
-
-    for _ in 0..30000000 { core::hint::spin_loop(); }
-
-    let mut guard = E1000.lock();
-    let driver = guard.as_mut().unwrap();
-    if let Some(pkt) = driver.recv() {
-        if crate::proto::parse_icmp_reply(&pkt, our_mac, target_ip, ident, seq).is_some() {
-            return Some(1);
-        }
-    }
-    None
-}
+pub unsafe fn http_get(_host: [u8; 4], _port: u16, _path: &str) -> Option<Vec<u8>> { None }
+pub unsafe fn ping(_target_ip: [u8; 4]) -> Option<u64> { None }
 
 pub fn run_network_diagnostics() -> crate::String {
     let cfg = NET_CONFIG.lock();

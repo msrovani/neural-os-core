@@ -33,11 +33,12 @@ mod serial;
 mod simd;
 mod task;
 mod tensor;
+mod time_utils;
 mod usage;
 mod conversation;
 mod vga_buffer;
-mod e1000;
 mod net;
+mod netstack;
 mod network_agent;
 mod proto;
 mod rtl8139;
@@ -314,7 +315,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     *MEMORY_HIERARCHY.lock() = Some(mhi.clone());
 
     unsafe {
-        if !net::init_driver_rtl8139() && !net::init_driver_network() {
+        if net::init_driver_rtl8139() {
+            serial_println!("[NET] RTL8139 OK.");
+        } else {
             serial_println!("[NET] Sem hardware de rede. Modo offline.");
             println!("[NET] Sem hardware de rede.");
         }
