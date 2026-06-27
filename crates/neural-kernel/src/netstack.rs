@@ -24,18 +24,18 @@ impl TxToken for PhyToken {
     where F: FnOnce(&mut [u8]) -> R {
         let mut buf = vec![0u8; len];
         let r = f(&mut buf);
-        unsafe { send_raw(buf) };
+        unsafe { nic_send(buf) };
         r
     }
 }
 
-unsafe fn send_raw(data: Vec<u8>) {
+unsafe fn nic_send(data: Vec<u8>) {
     if let Some(ref mut driver) = *RTL8139.lock() {
         driver.send(&data);
     }
 }
 
-unsafe fn recv_raw() -> Option<Vec<u8>> {
+unsafe fn nic_recv() -> Option<Vec<u8>> {
     if let Some(ref mut driver) = *RTL8139.lock() {
         driver.recv()
     } else {
@@ -43,9 +43,9 @@ unsafe fn recv_raw() -> Option<Vec<u8>> {
     }
 }
 
-pub struct Rtl8139Phy;
+pub struct NetPhy;
 
-impl Device for Rtl8139Phy {
+impl Device for NetPhy {
     type RxToken<'x> = PhyToken;
     type TxToken<'x> = PhyToken;
 
@@ -57,7 +57,7 @@ impl Device for Rtl8139Phy {
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let data = unsafe { recv_raw() }?;
+        let data = unsafe { nic_recv() }?;
         Some((PhyToken(data), PhyToken(vec![])))
     }
 
@@ -87,7 +87,7 @@ pub struct HttpConn {
 pub struct NetStack {
     iface: Interface,
     sockets: SocketSet<'static>,
-    phy: Rtl8139Phy,
+    phy: NetPhy,
     dhcp_handle: SocketHandle,
     pub dhcp_done: bool,
 }
@@ -101,7 +101,7 @@ impl NetStack {
         let eth = EthernetAddress::from_bytes(&mac);
         let config = Config::new(HardwareAddress::Ethernet(eth));
         let now = Instant::from_millis(0);
-        let mut phy = Rtl8139Phy;
+        let mut phy = NetPhy;
         let iface = Interface::new(config, &mut phy, now);
         let mut sockets = SocketSet::new(vec![]);
 
