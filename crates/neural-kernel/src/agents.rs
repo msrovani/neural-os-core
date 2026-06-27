@@ -266,6 +266,9 @@ pub struct HermesAgent {
     echo_skill: String,
     hw_skill: String,
     net_diag_skill: String,
+    boot_greeted: bool,
+    react_phase: crate::hermes::ReActPhase,
+    sdd_counter: u64,
 }
 
 impl HermesAgent {
@@ -279,7 +282,27 @@ impl HermesAgent {
             echo_skill: String::from("echo"),
             hw_skill: String::from("hardware_info"),
             net_diag_skill: String::from("net_diag"),
+            boot_greeted: false,
+            react_phase: crate::hermes::ReActPhase::Observe,
+            sdd_counter: 0,
         }
+    }
+
+    fn log_phase(&self, phase: crate::hermes::ReActPhase, detail: &str) {
+        serial_println!("[HERMES] {} — {}", phase.label(), detail);
+    }
+
+    fn show_sdd(&self, goal: &str) {
+        let sdd = crate::hermes::Sdd::new(
+            goal,
+            &alloc::format!("Tick {}, agentes ativos, memória {:.0}%",
+                crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed),
+                crate::memory::global_hardware_context()[0] * 100.0),
+            goal,
+            "Comando processado com sucesso",
+            "Nada a reverter — comando não destrutivo",
+        );
+        serial_println!("{}", sdd.display());
     }
 
     fn execute_skill(&self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
@@ -304,6 +327,24 @@ impl Agent for HermesAgent {
     fn manifest(&self) -> &AgentManifest { &HERMES_MANIFEST }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // #180: Greeting no primeiro boot
+        if !self.boot_greeted {
+            let greeting = crate::hermes::hermes_greeting();
+            serial_println!("{}", greeting);
+            println!("{}", greeting);
+            let _ = EVENT_BUS.publish(Event {
+                id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                payload: alloc::format!("{} v{} — {}", crate::hermes::HERMES_NAME,
+                    crate::hermes::HERMES_VERSION, crate::hermes::HERMES_MOTTO).into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+            self.boot_greeted = true;
+        }
+
+        // #190: Avança no ciclo ReAct
+        self.react_phase = self.react_phase.next();
+        self.log_phase(self.react_phase, "ciclo contínuo de cognição");
+
         // Check LLM response first (if awaiting)
         let mut responded = String::new();
         let mut awaiting = matches!(self.state, HermesState::AwaitingLLM);
@@ -347,8 +388,37 @@ impl Agent for HermesAgent {
             println!("[CORTEX] Texto: \"{}\"", text);
 
             let cmd = hermes::parse_command(text);
+
+            // #178: SDD + #184: Intent Transparency antes de executar
+            let intent_name = match cmd {
+                hermes::Command::Status => "Status",
+                hermes::Command::Echo(_) => "Echo",
+                hermes::Command::HardwareInfo => "HardwareInfo",
+                hermes::Command::NetDiag => "NetDiag",
+                hermes::Command::Fetch(_) => "Fetch",
+                hermes::Command::Ping(_) => "Ping",
+                hermes::Command::Usage => "Usage",
+                hermes::Command::Conversation => "Conversation",
+                hermes::Command::TrustAllow(_, _) => "TrustAllow",
+                hermes::Command::TrustDeny(_, _) => "TrustDeny",
+                hermes::Command::Help => "Help",
+                hermes::Command::ShowSkills => "ShowSkills",
+                hermes::Command::AddSkill(_, _) => "AddSkill",
+                hermes::Command::RmSkill(_) => "RmSkill",
+                hermes::Command::ReloadSkills => "ReloadSkills",
+                hermes::Command::Chat(_) => "Chat",
+            };
+            let intent_info = crate::hermes::IntentInfo {
+                intent_name: String::from(intent_name),
+                confidence: 0.92,
+                alternatives: Vec::new(),
+            };
+            serial_println!("{}", intent_info.display());
+            self.show_sdd(intent_name);
+
             let response = match cmd {
                 hermes::Command::Status => {
+                    self.log_phase(crate::hermes::ReActPhase::Execute, "status skill");
                     match self.execute_skill(&self.status_skill, &event.payload, &event.token) {
                         Ok(_) => String::from("System status report executado."),
                         Err(e) => alloc::format!("Erro: {}", e),

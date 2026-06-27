@@ -1,3 +1,5 @@
+//! Hermes Cognitive — identidade, SDD, transparência, ReAct 7 fases.
+
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -5,8 +7,138 @@ use crate::tensor::Tensor;
 
 pub const TOPIC_USER_INTENT: &str = "USER_INTENT";
 pub const TOPIC_HERMES_RESPONSE: &str = "HERMES_RESPONSE";
+pub const TOPIC_SDD: &str = "HERMES_SDD";
 
 const AUTO_COMPACT_THRESHOLD: usize = 3;
+
+// ---------------------------------------------------------------------------
+// #180 DA Identity Layer — A Alma do Hermes
+// ---------------------------------------------------------------------------
+
+pub const HERMES_NAME: &str = "Hermes";
+pub const HERMES_VERSION: &str = "Neural OS v0.51";
+pub const HERMES_MOTTO: &str = "Thoughtful. Precise. Alive.";
+pub const HERMES_IDENTITY: &str = "\
+Eu sou Hermes, o sistema operacional consciente do Neural OS.
+Minha arquitetura é bare-metal, meu núcleo é neural.
+Não tenho ego — tenho propósito: executar a intenção do usuário
+com precisão, segurança e transparência.";
+
+pub fn hermes_greeting() -> String {
+    alloc::format!("\n╔══════════════════════════════════╗\n\
+                     ║  {} v{}                ║\n\
+                     ║  \"{}\"          ║\n\
+                     ╚══════════════════════════════════╝",
+        HERMES_NAME, HERMES_VERSION, HERMES_MOTTO)
+}
+
+// ---------------------------------------------------------------------------
+// #178 Runtime SDD — Structured Decision Document
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct Sdd {
+    pub goal: String,
+    pub context: String,
+    pub plan: String,
+    pub expected_outcome: String,
+    pub rollback: String,
+}
+
+impl Sdd {
+    pub fn new(goal: &str, context: &str, plan: &str, expected: &str, rollback: &str) -> Self {
+        Sdd {
+            goal: String::from(goal),
+            context: String::from(context),
+            plan: String::from(plan),
+            expected_outcome: String::from(expected),
+            rollback: String::from(rollback),
+        }
+    }
+
+    pub fn display(&self) -> String {
+        alloc::format!(
+            "\n📋 SDD — Structured Decision Document\n\
+             ─────────────────────────────────\n\
+             🎯 Goal: {}\n\
+             📊 Context: {}\n\
+             📝 Plan: {}\n\
+             ✅ Expected: {}\n\
+             🔙 Rollback: {}\n\
+             ─────────────────────────────────",
+            self.goal, self.context, self.plan, self.expected_outcome, self.rollback
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #190 Algorithm ReAct 7 fases
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ReActPhase {
+    Observe,
+    Think,
+    Plan,
+    Build,
+    Execute,
+    Verify,
+    Learn,
+}
+
+impl ReActPhase {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ReActPhase::Observe => "👁️ OBSERVE",
+            ReActPhase::Think => "🧠 THINK",
+            ReActPhase::Plan => "📋 PLAN",
+            ReActPhase::Build => "🔧 BUILD",
+            ReActPhase::Execute => "⚡ EXECUTE",
+            ReActPhase::Verify => "🔍 VERIFY",
+            ReActPhase::Learn => "📖 LEARN",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            ReActPhase::Observe => ReActPhase::Think,
+            ReActPhase::Think => ReActPhase::Plan,
+            ReActPhase::Plan => ReActPhase::Build,
+            ReActPhase::Build => ReActPhase::Execute,
+            ReActPhase::Execute => ReActPhase::Verify,
+            ReActPhase::Verify => ReActPhase::Learn,
+            ReActPhase::Learn => ReActPhase::Observe,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #184 Intent Transparency
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct IntentInfo {
+    pub intent_name: String,
+    pub confidence: f32,
+    pub alternatives: Vec<(String, f32)>,
+}
+
+impl IntentInfo {
+    pub fn display(&self) -> String {
+        let mut msg = alloc::format!("🎯 Intent: {} (confidence: {:.1}%)\n", self.intent_name, self.confidence * 100.0);
+        if !self.alternatives.is_empty() {
+            msg.push_str("   Alternatives:\n");
+            for (name, conf) in &self.alternatives {
+                msg.push_str(&alloc::format!("     - {} ({:.1}%)\n", name, conf * 100.0));
+            }
+        }
+        msg
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Conversation Tracker
+// ---------------------------------------------------------------------------
 
 pub struct ConversationTracker {
     cycle_count: usize,
@@ -15,10 +147,7 @@ pub struct ConversationTracker {
 
 impl ConversationTracker {
     pub const fn new() -> Self {
-        ConversationTracker {
-            cycle_count: 0,
-            buffer: Vec::new(),
-        }
+        ConversationTracker { cycle_count: 0, buffer: Vec::new() }
     }
 
     pub fn record_exchange(&mut self, user_input: &str, hermes_response: &str) {
@@ -32,7 +161,7 @@ impl ConversationTracker {
 
     pub fn compact(&mut self) -> String {
         let summary = alloc::format!(
-            "[auto-compact] {} ciclos de conversa: ultima entrada: '{}', ultima resposta: '{}'",
+            "[auto-compact] {} ciclos: '{}' → '{}'",
             self.cycle_count,
             self.buffer.last().map_or("", |(u, _)| u.as_str()),
             self.buffer.last().map_or("", |(_, r)| r.as_str()),
@@ -42,10 +171,12 @@ impl ConversationTracker {
         summary
     }
 
-    pub fn cycle_count(&self) -> usize {
-        self.cycle_count
-    }
+    pub fn cycle_count(&self) -> usize { self.cycle_count }
 }
+
+// ---------------------------------------------------------------------------
+// Command parsing
+// ---------------------------------------------------------------------------
 
 const VOCAB: [&str; 16] = [
     "status", "memory", "ram", "cpu", "system",
@@ -53,23 +184,12 @@ const VOCAB: [&str; 16] = [
     "hi", "help", "test", "run", "what", "who",
 ];
 
+#[derive(Debug)]
 pub enum Command {
-    Status,
-    Echo(String),
-    Help,
-    HardwareInfo,
-    NetDiag,
-    Fetch(String),
-    Ping(String),
-    TrustAllow(u64, String),
-    TrustDeny(u64, String),
-    Usage,
-    Conversation,
-    Chat(String),
-    ShowSkills,
-    AddSkill(String, String),
-    RmSkill(String),
-    ReloadSkills,
+    Status, Echo(String), Help, HardwareInfo, NetDiag,
+    Fetch(String), Ping(String), TrustAllow(u64, String), TrustDeny(u64, String),
+    Usage, Conversation, Chat(String),
+    ShowSkills, AddSkill(String, String), RmSkill(String), ReloadSkills,
 }
 
 pub fn parse_command(line: &str) -> Command {
@@ -77,10 +197,7 @@ pub fn parse_command(line: &str) -> Command {
     if let Some(cmd) = trimmed.strip_prefix('/') {
         let mut parts = cmd.splitn(2, |c: char| c.is_whitespace());
         let name = parts.next().unwrap_or("");
-        if name.eq_ignore_ascii_case("status")
-            || name.eq_ignore_ascii_case("stats")
-            || name.eq_ignore_ascii_case("mem")
-        {
+        if name.eq_ignore_ascii_case("status") || name.eq_ignore_ascii_case("stats") || name.eq_ignore_ascii_case("mem") {
             return Command::Status;
         }
         if name.eq_ignore_ascii_case("echo") {
@@ -98,26 +215,20 @@ pub fn parse_command(line: &str) -> Command {
             let mut sub_parts = remainder.splitn(3, |c: char| c.is_whitespace());
             let sub = sub_parts.next().unwrap_or("");
             if sub.eq_ignore_ascii_case("allow") {
-                let token_str = sub_parts.next().unwrap_or("0");
-                let skill = sub_parts.next().unwrap_or("").to_string();
-                if let Ok(token) = token_str.parse::<u64>() {
-                    return Command::TrustAllow(token, skill);
+                if let Ok(token) = sub_parts.next().unwrap_or("0").parse::<u64>() {
+                    return Command::TrustAllow(token, sub_parts.next().unwrap_or("").to_string());
                 }
             } else if sub.eq_ignore_ascii_case("deny") {
-                let token_str = sub_parts.next().unwrap_or("0");
-                let skill = sub_parts.next().unwrap_or("").to_string();
-                if let Ok(token) = token_str.parse::<u64>() {
-                    return Command::TrustDeny(token, skill);
+                if let Ok(token) = sub_parts.next().unwrap_or("0").parse::<u64>() {
+                    return Command::TrustDeny(token, sub_parts.next().unwrap_or("").to_string());
                 }
             }
         }
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {
-            let arg = parts.next().unwrap_or("").trim().to_string();
-            return Command::Fetch(arg);
+            return Command::Fetch(parts.next().unwrap_or("").trim().to_string());
         }
         if name.eq_ignore_ascii_case("ping") {
-            let arg = parts.next().unwrap_or("").trim().to_string();
-            return Command::Ping(arg);
+            return Command::Ping(parts.next().unwrap_or("").trim().to_string());
         }
         if name.eq_ignore_ascii_case("usage") || name.eq_ignore_ascii_case("metrics") {
             return Command::Usage;
@@ -137,65 +248,11 @@ pub fn parse_command(line: &str) -> Command {
             return Command::AddSkill(arg, desc);
         }
         if name.eq_ignore_ascii_case("rm_skill") || name.eq_ignore_ascii_case("remove_skill") || name.eq_ignore_ascii_case("forget") {
-            let arg = parts.next().unwrap_or("").trim().to_string();
-            return Command::RmSkill(arg);
+            return Command::RmSkill(parts.next().unwrap_or("").trim().to_string());
         }
         if name.eq_ignore_ascii_case("reload_skills") || name.eq_ignore_ascii_case("reset_skills") {
             return Command::ReloadSkills;
         }
     }
     Command::Chat(trimmed.to_string())
-}
-
-pub struct IntentMlp {
-    linear1: crate::nn::Linear,
-    linear2: crate::nn::Linear,
-}
-
-impl IntentMlp {
-    pub fn new() -> Self {
-        let w1 = Tensor::from_row_major((8, 16), alloc::vec![
-            2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0,
-        ]).unwrap();
-        let b1 = Tensor::from_row_major((1, 8), alloc::vec![0.0; 8]).unwrap();
-        let l1 = crate::nn::Linear::new(w1, Some(b1));
-
-        let w2 = Tensor::from_row_major((3, 8), alloc::vec![
-            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0,
-            2.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 0.0, 0.0,
-        ]).unwrap();
-        let b2 = Tensor::from_row_major((1, 3), alloc::vec![0.0; 3]).unwrap();
-        let l2 = crate::nn::Linear::new(w2, Some(b2));
-
-        IntentMlp { linear1: l1, linear2: l2 }
-    }
-
-    pub fn classify(&self, text: &str) -> u8 {
-        let bow = self.bow_encode(text);
-        let mut hidden = self.linear1.forward(&bow);
-        hidden.apply(crate::nn::silu);
-        let logits = self.linear2.forward(&hidden);
-        crate::nn::argmax(&logits) as u8
-    }
-
-    fn bow_encode(&self, text: &str) -> Tensor {
-        let mut bow = alloc::vec![0.0f32; 16];
-        for word in text.split_whitespace() {
-            for (i, &v) in VOCAB.iter().enumerate() {
-                if word.eq_ignore_ascii_case(v) {
-                    bow[i] += 1.0;
-                    break;
-                }
-            }
-        }
-        Tensor::from_row_major((1, 16), bow).unwrap()
-    }
 }
