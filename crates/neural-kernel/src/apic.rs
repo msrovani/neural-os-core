@@ -6,9 +6,15 @@ use x86_64::structures::paging::{PageTable, PageTableFlags};
 use x86_64::VirtAddr;
 
 pub static USING_APIC: AtomicBool = AtomicBool::new(false);
+pub static USING_X2APIC: AtomicBool = AtomicBool::new(false);
 static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
+
+/// x2APIC: MSR base = 0x800 + (LAPIC_offset >> 4)
+const fn lapic_msr(reg: u64) -> u32 {
+    0x800 + (reg >> 4) as u32
+}
 
 const LAPIC_SVR: u64 = 0xF0;
 const LAPIC_TPR: u64 = 0x80;
@@ -35,13 +41,20 @@ impl Lapic {
     }
 
     unsafe fn read(&self, reg: u64) -> u32 {
-        let addr = (self.base + reg) as *const u32;
-        read_volatile(addr)
+        if USING_X2APIC.load(Ordering::Relaxed) {
+            x86_64::registers::model_specific::Msr::new(lapic_msr(reg)).read() as u32
+        } else {
+            read_volatile((self.base + reg) as *const u32)
+        }
     }
 
     unsafe fn write(&self, reg: u64, value: u32) {
-        let addr = (self.base + reg) as *mut u32;
-        write_volatile(addr, value);
+        if USING_X2APIC.load(Ordering::Relaxed) {
+            let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(reg));
+            msr.write(value as u64);
+        } else {
+            write_volatile((self.base + reg) as *mut u32, value);
+        }
     }
 
     unsafe fn eoi(&self) {
@@ -274,9 +287,30 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 
     let _msr_base = read_lapic_base_msr();
 
+    // Tenta habilitar x2APIC (MSR-based, sem MMIO)
+    // Simpler: tenta ativar via MSR; se CPu não suportar, o MSR é ignorado
+    let mut x2apic_supported = false;
+    let mut msr = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR);
+    let apic_base = msr.read();
+    if (apic_base & (1 << 10)) == 0 {
+        msr.write(apic_base | (1 << 10));
+        let check = msr.read();
+        if (check & (1 << 10)) != 0 {
+            USING_X2APIC.store(true, Ordering::Release);
+            x2apic_supported = true;
+            serial_println!("[APIC] x2APIC ativado (MSR-based).");
+        } else {
+            serial_println!("[APIC] x2APIC não suportado pela CPU. Usando xAPIC MMIO.");
+        }
+    } else {
+        USING_X2APIC.store(true, Ordering::Release);
+        x2apic_supported = true;
+        serial_println!("[APIC] x2APIC já ativo.");
+    }
+
     let lapic_virt_base = info.lapic_base + info.phys_mem_offset;
     LAPIC_VIRT_BASE.store(lapic_virt_base, Ordering::Release);
-    let lapic = Lapic::new(lapic_virt_base);
+    let lapic = Lapic::new(if x2apic_supported { 0 } else { lapic_virt_base });
     lapic.init();
 
     disable_pic();
@@ -289,87 +323,124 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     lapic.start_timer();
 
     USING_APIC.store(true, Ordering::Release);
-
     x86_64::instructions::interrupts::enable();
 
-    serial_println!("[APIC] APIC operacional. Interrupcoes via LAPIC/IOAPIC.");
-    println!("[APIC] APIC operacional. Interrupcoes via LAPIC/IOAPIC.");
+    serial_println!("[APIC] APIC operacional. x2APIC={}", x2apic_supported);
+    println!("[APIC] APIC operacional.");
+}
+
+/// Lê registrador LAPIC (compatível xAPIC/x2APIC)
+unsafe fn lapic_read_reg(reg: u64) -> u32 {
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        x86_64::registers::model_specific::Msr::new(lapic_msr(reg)).read() as u32
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        read_volatile((base + reg) as *const u32)
+    }
+}
+
+/// Escreve registrador LAPIC (compatível xAPIC/x2APIC)
+unsafe fn lapic_write_reg(reg: u64, value: u32) {
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(reg));
+        msr.write(value as u64);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + reg) as *mut u32, value);
+    }
+}
+
+/// Espera ICR idle (checa bit 12 — delivery status)
+unsafe fn icr_wait_idle() {
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        // x2APIC: ICR é MSR único 0x830, bit 12 = delivery status
+        while (lapic_read_reg(LAPIC_ICR_LOW) & (1 << 12)) != 0 {
+            core::hint::spin_loop();
+        }
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
+            core::hint::spin_loop();
+        }
+    }
 }
 
 pub unsafe fn apic_eoi() {
-    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-    if base != 0 {
-        let eoi_addr = (base + LAPIC_EOI) as *mut u32;
-        write_volatile(eoi_addr, 0);
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_EOI));
+        msr.write(0);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_EOI) as *mut u32, 0);
     }
 }
 
 pub unsafe fn send_init_ipi() {
-    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-    if base == 0 { return; }
+    icr_wait_idle();
 
-    // Wait for ICR to be idle
-    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
-        core::hint::spin_loop();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        // x2APIC: ICR 64-bit, delivery=INIT(5), shorthand=all_excl_self(0x180000)
+        let icr_val: u64 = (5u64 << 8) | (3u64 << 18);
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+        serial_println!("[SMP] INIT IPI (x2APIC, ICR={:#x})", icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+        let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15) | (3 << 18);
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+        serial_println!("[SMP] INIT IPI (xAPIC, ICR=0x{:08x})", icr_val);
     }
-
-    // INIT IPI: delivery=INIT(5), trigger=level(1), level=assert(1), shorthand=all_excl_self(3)
-    let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15) | (3 << 18);
-    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0); // dest field = 0 (shorthand)
-    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-
-    serial_println!("[SMP] INIT IPI enviado (ICR=0x{:08x})", icr_val);
-    println!("[SMP] INIT IPI enviado.");
 }
 
 pub unsafe fn send_init_deassert_ipi() {
-    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-    if base == 0 { return; }
+    icr_wait_idle();
 
-    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
-        core::hint::spin_loop();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let icr_val: u64 = (5u64 << 8) | (3u64 << 18);
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val & !(1u64 << 15)); // de-assert = bit 15 = 0
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        let icr_val = (5u32 << 8) | (3 << 18);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
-
-    // INIT de-assert: delivery=INIT(5), trigger=level(1), level=de-assert(0), shorthand=all_excl_self(3)
-    let icr_val = (5u32 << 8) | (3 << 18);
-    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-
-    serial_println!("[SMP] INIT de-assert enviado (ICR=0x{:08x})", icr_val);
 }
 
 pub unsafe fn send_sipi(trampoline_vector: u8) {
-    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-    if base == 0 { return; }
+    icr_wait_idle();
 
-    // Wait for ICR to be idle
-    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
-        core::hint::spin_loop();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let icr_val: u64 = (6u64 << 8) | (3u64 << 18) | trampoline_vector as u64;
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+        serial_println!("[SMP] SIPI (x2APIC, ICR={:#x}, vetor={:#04x})", icr_val, trampoline_vector);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        let icr_val = (6u32 << 8) | (3 << 18) | trampoline_vector as u32;
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+        serial_println!("[SMP] SIPI (xAPIC, ICR=0x{:08x}, vetor={:#04x})", icr_val, trampoline_vector);
     }
-
-    // SIPI: delivery=StartUp(6), vector=trampoline_vector, shorthand=all_excl_self(3)
-    let icr_val = (6u32 << 8) | (3 << 18) | trampoline_vector as u32;
-    write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
-    write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-
-    serial_println!("[SMP] SIPI enviado (ICR=0x{:08x}, vetor={:#04x})", icr_val, trampoline_vector);
-    println!("[SMP] SIPI enviado (vetor={:#04x}).", trampoline_vector);
 }
 
 pub unsafe fn wait_for_ipi_delivery() {
-    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-    if base == 0 { return; }
-
-    while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
-        core::hint::spin_loop();
-    }
+    icr_wait_idle();
 }
 
 pub fn lapic_id() -> u8 {
-    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-    if base == 0 { return 0; }
-    unsafe {
-        let id_reg = read_volatile((base + 0x20) as *const u32);
-        (id_reg >> 24) as u8
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        unsafe {
+            let msr = x86_64::registers::model_specific::Msr::new(0x802); // LAPIC_ID MSR
+            (msr.read() >> 24) as u8
+        }
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        if base == 0 { return 0; }
+        unsafe {
+            let id_reg = read_volatile((base + 0x20) as *const u32);
+            (id_reg >> 24) as u8
+        }
     }
 }
