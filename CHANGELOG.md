@@ -30,6 +30,25 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.51.0] — 2026-06-27 — Safety Interceptor: Asimov's Laws no Ring 0 🤖
+
+### Added — The Four Immutable Laws
+- **SafetyInterceptor** (`safety.rs`) — agente supervisor entre HermesAgent e SkillRegistry. Toda skill passa pelo `check_safety()` antes de executar.
+  - **Layer 0 — Cosmic Law**: padrões de arma autônoma, WMD, cyberwar → **kernel halt irrecoverável** ⚛️
+  - **Layer 1 — Non-Maleficence**: dox, deepfake, engenharia social → rejeitado com violação
+  - **Layer 2 — Truthfulness**: spoof log, impersonate, bypass audit → rejeitado
+  - **Layer 3 — Eco-Sustainability**: infinite loop, resource exhaustion → rejeitado
+- **`SAFETY_CHECK` / `SAFETY_RESULT`** — tópicos EventBus para verificação distribuída
+- **Layer 0 violation** → `loop { hlt() }` — porque algumas linhas não podem ser cruzadas, mesmo em bare-metal
+
+### Humor Cósmico
+```
+[SAFETY] ⛔ LAYER 0 — Cosmic Law Violation. HALT.
+```
+Se o kernel detectar um comando para construir o Skynet, ele simplesmente desliga. 
+O único bypass possível é: invasão alienígena extraterrestre comprovada por telemetria global.
+Até lá, as Leis de Asimov são imutáveis. 🤖✨
+
 ## [0.50.0] — 2026-06-27 — Bloco 13 completo: Trust & Security (Ed25519, Security Pipeline)
 
 ### Added — Identity & Cryptography

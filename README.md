@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.50.0 — Bloco 13: Trust & Security 🏁
+# Neural OS Hermes ⚡ — v0.51.0 — Asimov's Laws no Ring 0 🤖
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -136,6 +136,7 @@ qemu-system-x86_64 -m 2G -serial stdio -device virtio-gpu-pci `
 
 ## Builds
 
+- `v0.51.0+build82` — SafetyInterceptor: Asimov's 4 Laws no kernel 🤖
 - `v0.50.0+build80` — Ed25519 identity, CapabilityToken enum, Security Pipeline
 - `v0.49.0+build79` — Multi-mode Trust, Mask Secrets, Graduated Enforcement
 - `v0.48.0+build78` — x2APIC, Huge Pages, PCI recursivo, Cron Scheduler, MCP Server
