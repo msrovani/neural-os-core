@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.45.0 🏆
-#   AGENT/SKILL-FIRST + VIRTIO-GPU + BUGFIX ESTRUTURAL
+#   PLANO DIRETOR — neural-os-core v0.47.0 🏆
+#   AGENT/SKILL-FIRST + VIRTIO-GPU + PCI CAPS + BUGFIX
 #   Tudo é agente ou skill. Drivers manuais sem dependências externas.
 # ════════════════════════════════════════════════════════
 
@@ -20,6 +20,7 @@
 | Agent/Skill-First | 39-42 | 0.39-0.40 | Agent trait, AgentRegistry, 15 agentes nativos |
 | Network Evolution | 43-44 | 0.41-0.42 | DHCP, ARP, VirtIO-net manual, NetPhy unificada |
 | **Display + Bugfix** | **45** | **0.43-0.45** | **Framebuffer, DisplayAgent, VirtIO-GPU PCI caps, bugfix estrutural** |
+| **CDC + Delta + Locks** | **46-47** | **0.46-0.47** | **IrqSafeLock, DmaBuf, TicketLock, watchdog, CDC Rabin, XOR Delta, semantic snapshot** |
 
 ## Agent Landscape (16 agentes nativos — v0.45.0)
 | Código | Agente | Status | Tipo | Função |
@@ -79,7 +80,14 @@
 - `requires_network: bool` no frontmatter
 - system prompt reconstruído a cada LLM_REQUEST
 
-## Próximo
-- VirtIO-GPU: debugar GET_DISPLAY_INFO (resposta 0x0)
-- PCI capabilities: suporte a cfg_type=5 (PCI config access)
-- Drivers GPU nativos: postergado (inviável sem crate compatível)
+## Próximo (Bloco 12 — Network + Platform)
+- MCP Server (#172) — JSON-RPC 2.0 sobre EventBus
+- Cron Scheduler (#232) — agendamento periódico via LAPIC timer
+- PCI capabilities: cfg_type=5 (PCI config access)
+- Huge Pages 2 MiB / 1 GiB (#92-93)
+- x2APIC (#18), crates acpi/raw-cpuid (#34-35)
+
+## Pendente
+- VirtIO-GPU GET_DISPLAY_INFO (resposta 0x0 — feature select corrigido mas QEMU TCG lento)
+- WASM sandbox — requer `wasmi` + redesign do scheduler (~1500 LOC)
+- Drivers GPU nativos — inviável sem crate compatível (zerocopy-derive + MinGW)

@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.47.0] — 2026-06-27 — CDC Rabin + XOR Delta + Semantic Snapshot + Bugfix final
+
+### Added
+- **CDC Rabin Chunking** (`chunker.rs`) — Content-Defined Chunking via rolling hash polinomial de 64 bits. Divide bitmaps e buffers em chunks de tamanho variável baseado no conteúdo. `chunk_data()` → `merge_chunks()` round-trip testado.
+- **XOR Delta** (`delta.rs`) — `ArchiveTensor` com reconstrução bit-exata via XOR residual entre versões de `PackedTernaryTensor`. `ArchiveTensor::new()` + `reconstruct()` com round-trip testado.
+- **Semantic Snapshot** (`self_heal.rs`) — `SelfHeal::semantic_snapshot(prev_bitmap)` aplica CDC Rabin + XOR delta no bitmap do alocador. Armazena apenas chunks modificados entre checkpoints.
+- **IrqSafeLock** (`sync/irq_lock.rs`) — FIFO lock com `cli` na aquisição e restauração de RFLAGS.IF no drop. Previne deadlock em handlers de interrupção.
+- **DmaBuf** (`dma.rs`) — `dma_alloc(size)` retorna `DmaBuf { phys, virt, size }` com páginas marcadas `NO_CACHE | WRITE_THROUGH`. Previne corrupção por cache incoerente CPU↔DMA.
+- **Watchdog** — `AgentInstance::consecutive_pending`. Se agente retorna Pending por 10000+ ticks seguidos, scheduler força estado `Crashed`. Prevê loop infinito.
+
+### Changed
+- `SKILL_REGISTRY`, `TRUST_CACHE`, `EVENT_LOG`, `USAGE_TRACKER`, `CONVERSATION_TRACKER`, `SKILL_STORAGE` migrados de `spin::Mutex` para `ticket_lock::TicketLock` (FIFO, sem starvation).
+- `SELF_HEAL`, `RESPAWN_QUEUE`, `PENDING_SKILL` migrados para `crate::sync::irq_lock::IrqSafeLock` (IRQ-safe).
+
+### Removed
+- Últimos vestígios de `spin::Mutex` em estruturas de contenção média/alta.
+
+### Fixed
+- Bug H3 (APIC SVR) — vetor espúrio redirecionado para 255.
+- Bug H4 (IDT) — cobertura total 0-31 com 32 handlers nomeados.
+- Bug H5 (PIC EOI) — EOI duplo no escravo (0xA0) para vetores >= 40.
+- Bug H11 (PCI multi-function) — header_type bit 7 verificado.
+- Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
+
 ## [0.40.0] — 2026-06-26 — Agent-First Refactoring (Block 11, Sprints 39-42 consolidado)
 
 ### Bloco 11 — Agent/Skill-First Architecture 🏆

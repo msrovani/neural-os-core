@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.45.0 🏆
+#   PLANO DIRETOR — neural-os-core v0.47.0 🏆
 #   AGENT/SKILL-FIRST + VIRTIO-GPU + PCI CAPS + BUGFIX
 #   Tudo é agente ou skill. Drivers manuais sem dependências externas.
 # ════════════════════════════════════════════════════════
@@ -39,7 +39,7 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
-# Current Agent Landscape (v0.45.0 — 16 agents — Block 11 consolidado)
+# Current Agent Landscape (v0.47.0 — 16 agents — Block 11 consolidado)
 
 | Código | Agente | Status | Tipo | Função |
 |---|---|---|---|---|
@@ -197,11 +197,11 @@ cargo run → bootloader → kernel_main
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Sprint 41-42 — Continuação Bloco 11)
-Migração dos 7 LegacyTaskAgent para Agent nativos + DriverAgents. EventDriven schedule. Ver IDEA_BANK.md Section 1.28 (itens A-001 a A-020).
+## Next Sprint (Bloco 12 — Network + Platform)
+MCP Server (#172), Cron Scheduler (#232), PCI capabilities completo (#70), Huge Pages (#92-93). Ver IDEA_BANK.md Seção 6.
 
 ## Network Strategy (ADR-0016)
-Rede implementada via RTL8139 (Sprint 23) + smoltcp (Sprint 24). Próximo passo: VirtIO-net para performance (`virtio-drivers`). Ver ADR-0016.
+Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. Próximo passo: MCP Server (#172) para expor Hermes como serviço JSON-RPC.
 
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
