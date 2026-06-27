@@ -143,7 +143,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 70 | PCI bridges (hierarquia de barramento) | 🟡 Block 1 | Sprint 18 | Suporte básico: multi-função em bridges PCI-PCI. |
 | 71 | NVMe driver (PCI Class 01.08) | ⏳ Pós-MVP | Sprint 24+ | MVP é stateless. Sem SFS, NVMe é desnecessário. |
 | 72 | VirtIO-blk (PCI 1AF4:1001) | ⏳ Pós-MVP | Sprint 24+ | Alternativa QEMU ao NVMe. |
-| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 | Sprint 23 | Superseded by ADR-0016. VirtIO-net movido para Sprint 23 como parte do Network Sprint. |
+| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 (⚠️ não 100%) | Sprint 23 | Driver manual implementado sem `virtio-drivers` crate (bloqueado por zerocopy-derive + MinGW). Pendente: IRQ, TX recycling, integridade. Revisitar pós-migração MSVC. |
 | 74 | VirtIO-gpu (PCI 1AF4:1050) | ⏳ Pós-MVP | Sprint 24+ | MVP usa VGA text. |
 | 75 | Intel HDA audio | ⏳ Pós-MVP | Fase 5+ | Nenhuma skill de áudio no MVP. |
 | 76 | Sem kernel thread de hotplug | ✅ Princípio | — | Diretriz adotada. |
