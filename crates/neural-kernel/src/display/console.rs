@@ -1,0 +1,130 @@
+//! Neural Console — layout multi-região sobre o framebuffer.
+//!
+//! Divide a tela em:
+//! - Status bar (topo): tick, agentes, memória, LLM, rede
+//! - Conversation area (meio): histórico Hermes
+//! - Tensor strip (fundo): faixa colorida refletindo hardware context
+
+use alloc::collections::VecDeque;
+use alloc::string::String;
+use alloc::vec::Vec;
+use crate::display::fb::Framebuffer;
+use crate::display::font;
+
+const COL_BG: (u8, u8, u8) = (10, 10, 20);
+const COL_FG: (u8, u8, u8) = (200, 200, 220);
+const COL_STATUS_BG: (u8, u8, u8) = (20, 20, 40);
+const COL_GREEN: (u8, u8, u8) = (0, 200, 100);
+const COL_YELLOW: (u8, u8, u8) = (220, 200, 0);
+const COL_RED: (u8, u8, u8) = (220, 50, 50);
+const COL_CYAN: (u8, u8, u8) = (0, 200, 200);
+const COL_BLUE: (u8, u8, u8) = (80, 130, 220);
+
+/// Console neural multi-região
+pub struct NeuralConsole {
+    pub fb: Framebuffer,
+    conv_lines: VecDeque<String>,
+    _tensor_value: f32,
+}
+
+impl NeuralConsole {
+    pub fn new(fb: Framebuffer) -> Self {
+        NeuralConsole { fb, conv_lines: VecDeque::new(), _tensor_value: 0.0 }
+    }
+
+    /// Renderiza um frame completo
+    pub fn render(&mut self, tick: u64, agent_count: usize, mem_pct: f32, llm_busy: bool, net_online: bool) {
+        let w = self.fb.info.width;
+        let h = self.fb.info.height;
+
+        self.fb.fill_rect(0, 0, w, h, COL_BG.0, COL_BG.1, COL_BG.2);
+
+        // Tensor strip (topo 4px) — gradiente horizontal reflete memória
+        for x in 0..w {
+            let t = (x as f32 / w as f32);
+            let r = (30.0 + t * mem_pct * 200.0) as u8;
+            let g = (10.0 + (1.0 - t) * 60.0) as u8;
+            self.fb.set_pixel(x, 0, r, g, 30 + (t * 150.0) as u8);
+            self.fb.set_pixel(x, 1, r/2, g/2, 15);
+        }
+
+        // Status bar (abaixo da tensor strip)
+        let status_y = 4;
+        let ch = font::CHAR_H;
+        let cw = font::CHAR_W;
+
+        self.fb.fill_rect(0, status_y - 1, w, status_y + ch + 2, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
+
+        let llm_str = if llm_busy { "LLM:gen" } else { "LLM:idle" };
+        let net_str = if net_online { "NET:on" } else { "NET:off" };
+        let mem_str = alloc::format!("{:.0}%", mem_pct * 100.0);
+        let status = alloc::format!("Hermes t:{} ag:{} mem:{} {} {}",
+            tick, agent_count, mem_str, llm_str, net_str);
+        self.draw_text(2, status_y, &status, COL_CYAN);
+
+        // Conversation area
+        let conv_y = status_y + ch + 4;
+        let max_lines = (h - conv_y - 4) / ch;
+        let lines: alloc::vec::Vec<(String, (u8,u8,u8))> = self.conv_lines.iter()
+            .skip(self.conv_lines.len().saturating_sub(max_lines))
+            .map(|line| (line.clone(), self.color_for_line(line)))
+            .collect();
+        for (i, (line, color)) in lines.iter().enumerate() {
+            let y = conv_y + i * ch;
+            self.draw_text(2, y, line, *color);
+        }
+
+        // Bottom separator line
+        if h > 6 {
+            self.fb.set_pixel(0, h - 3, COL_BLUE.0/2, COL_BLUE.1/2, COL_BLUE.2/2);
+        }
+    }
+
+    /// Adiciona linha ao buffer de conversa
+    pub fn push_line(&mut self, line: &str) {
+        // Trunca linhas longas
+        if line.len() > 250 {
+            let truncated: String = line.chars().take(247).collect();
+            self.conv_lines.push_back(truncated + "...");
+        } else {
+            self.conv_lines.push_back(String::from(line));
+        }
+        if self.conv_lines.len() > 500 {
+            self.conv_lines.pop_front();
+        }
+    }
+
+    fn color_for_line(&self, line: &str) -> (u8, u8, u8) {
+        if line.starts_with("[Hermes]") { COL_GREEN }
+        else if line.starts_with("[CORTEX]") || line.starts_with("[CORTEX-LLM]") { COL_YELLOW }
+        else if line.starts_with("[NET]") { COL_CYAN }
+        else if line.starts_with("[SKILL]") { COL_BLUE }
+        else if line.starts_with("[ERROR]") || line.starts_with("[PANIC]") { COL_RED }
+        else { COL_FG }
+    }
+
+    fn draw_char(&mut self, x: usize, y: usize, c: char, fg: (u8, u8, u8)) {
+        if let Some(bitmap) = font::get_char_bitmap(c) {
+            for dy in 0..font::CHAR_H {
+                let row = bitmap[dy];
+                for dx in 0..font::CHAR_W {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        self.fb.set_pixel(x + dx, y + dy, fg.0, fg.1, fg.2);
+                    } else {
+                        self.fb.set_pixel(x + dx, y + dy, COL_BG.0, COL_BG.1, COL_BG.2);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_text(&mut self, x: usize, y: usize, text: &str, fg: (u8, u8, u8)) {
+        let mut cx = x;
+        let w = self.fb.info.width;
+        for c in text.chars() {
+            if cx + font::CHAR_W > w { break; }
+            self.draw_char(cx, y, c, fg);
+            cx += font::CHAR_W;
+        }
+    }
+}
