@@ -49,8 +49,11 @@ impl Lapic {
     }
 
     unsafe fn init(&self) {
+        // SVR: vetor espúrio = 0xFF (255), bit 8 = APIC enable
+        // Evita #DE falso quando interrupção espúria chega com vetor 0
         let svr = self.read(LAPIC_SVR);
-        self.write(LAPIC_SVR, svr | 0x100);
+        let svr_fixed = (svr & 0xFFFFFF00) | 0xFF | 0x100;
+        self.write(LAPIC_SVR, svr_fixed);
         self.write(LAPIC_TPR, 0);
 
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
@@ -105,26 +108,34 @@ impl IoApic {
         serial_println!("[APIC] IOAPIC em 0x{:x}. Max redirecionamentos: {}", self.base, max_redirect);
         println!("[APIC] IOAPIC encontrado. Max redirecionamentos: {}", max_redirect);
 
-        let any_unmasked = (0..=max_redirect as u8).any(|gsi| {
-            let low = self.read(0x10 + gsi * 2);
-            (low & 0x10000) == 0
-        });
-        serial_println!("[APIC] IOAPIC dump: {} redirects, all_masked={}", max_redirect + 1, !any_unmasked);
+        // Mascara TODAS as RTEs inicialmente (bit 16)
+        for gsi in 0..=max_redirect as u8 {
+            let reg = 0x10 + gsi * 2;
+            let low = self.read(reg);
+            self.write(reg, low | 0x10000); // bit 16 = MASK
+        }
 
         let kbd_gsi = iso_overrides.iter()
             .find(|(source, _)| *source == 1)
             .map(|(_, gsi)| *gsi as u8)
             .unwrap_or(1);
 
-        self.redirect_gsi(kbd_gsi, 33, 0);
+        // Timer (IRQ0) → vetor 32, desmascarado
+        self.redirect_gsi(0, 32, 0);
+        let reg_tmr = 0x10;
+        self.write(reg_tmr, self.read(reg_tmr) & !0x10000); // unmask
 
-        let v1_reg = 0x10 + kbd_gsi * 2;
-        let v1_low = self.read(v1_reg);
-        let v1_high = self.read(v1_reg + 1);
+        // Keyboard (IRQ1) → vetor 33, desmascarado
+        self.redirect_gsi(kbd_gsi, 33, 0);
+        let reg_kbd = 0x10 + kbd_gsi * 2;
+        self.write(reg_kbd, self.read(reg_kbd) & !0x10000); // unmask
+
+        let v1_low = self.read(reg_kbd);
+        let v1_high = self.read(reg_kbd + 1);
         serial_println!("[APIC] IOAPIC verificado: kbd GSI {} (0x{:02x}:0x{:08x})",
             kbd_gsi, v1_high, v1_low);
-        serial_println!("[APIC] Teclado (IRQ1) redirecionado para vetor 33.");
-        println!("[APIC] IOAPIC configurado: keyboard→vec33.");
+        serial_println!("[APIC] Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.");
+        println!("[APIC] IOAPIC configurado: keyboard->vec33, demais IRQs mascarados.");
     }
 }
 

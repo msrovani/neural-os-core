@@ -33,9 +33,36 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Migrar DriverAgents (NetDriverAgent, UsbDriverAgent)
 - EventDriven schedule para agents orientados a evento
 
-## [0.42.0] — 2026-06-27 — Bloco 12: Network Evolution (DHCP + VirtIO-net manual)
+## [0.45.0] — 2026-06-27 — Bloco 12+13: VirtIO-GPU + PCI caps + MMIO + Bugfixes
 
-### Added — DHCP (Fase 1)
+### Added — VirtIO-GPU (Sprint 51+)
+- **Driver VirtIO-GPU bare-metal** — `virtio_gpu.rs` (425 LOC, 0 deps externas)
+- **PCI capabilities parser** — `read_pci_capabilities()`, `read_virtio_cap()` em pci.rs
+- **MMIO BAR mapping** — `map_mmio_page()` cria page table entries uncacheable (UC)
+- **Modern VirtIO MMIO register layout** — feature select (bits 32+), queue enable, queue split desc/driver/device
+- **GpuDriverAgent** — boot agent que detecta e init VirtIO-GPU (1AF4:1050 / 1045)
+- **DisplayAgent** — integrado com `GPU` global + `NeuralConsole` render no framebuffer
+- **VirtIO-GPU init parcial**: PCI capabilities ✅, MMIO mapping ✅, queue setup ✅, feature negotiation ✅, GET_DISPLAY_INFO ⏳
+
+### Fixed — Bug H3: APIC SVR vetor espúrio
+- `apic.rs` — SVR escrito com `0xFF | 0x100` para redirecionar interrupções espúrias para vetor 255
+
+### Fixed — Bug H4: Cobertura IDT 0-31
+- `interrupts.rs` — Handlers genéricos para todas exceções 0-31 com dump textual via serial
+
+### Fixed — Bug H5: EOI duplo no PIC escravo
+- `interrupts.rs` — `send_eoi()` agora envia EOI para mestre (0x20) E escravo (0xA0) em interrupções >= 40
+
+### Fixed — Bug H6: SMP race em alloc_below_1mb
+- `memory.rs` — `alloc_below_1mb()` envolto em `GLOBAL_ALLOCATOR.lock()` (TicketLock FIFO)
+
+### Fixed — Bug H11: PCI multi-function otimizado
+- `pci.rs` — `header_type` (offset 0x0E) verifica bit 7 (multi-function) antes de scanear funções 1-7
+
+### Fixed — Bug H12: IOAPIC RTEs não usadas mascaradas
+- `apic.rs` — Pós-init, varre RTEs 2-23 e seta bit 16 (MASKED) nas que não são IRQ0/IRQ1
+
+## [0.42.0] — 2026-06-27 — Bloco 12: Network Evolution (DHCP + VirtIO-net manual)
 - **smoltcp socket-dhcpv4** integrado — auto-descoberta de IP, gateway, DNS
 - **dhcp_poll()** — chamado a cada tick até configurar, timeout 200 ticks → fallback IP estático
 - **ARP delegado ao smoltcp** — gateway MAC hardcoded removido
