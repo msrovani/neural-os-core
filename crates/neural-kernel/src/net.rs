@@ -83,7 +83,7 @@ pub unsafe fn init_driver_rtl8139() -> bool {
         id: 0,
         topic: alloc::string::String::from(TOPIC_HW_NET_RTL8139),
         payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
-        token: crate::CapabilityToken(1),
+        token: crate::CapabilityToken::Legacy(1),
     };
     let _ = crate::EVENT_BUS.publish(hw_event);
     true

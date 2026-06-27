@@ -1,6 +1,6 @@
 [package]
 name = "neural-kernel"
-version = "0.49.0"
+version = "0.50.0"
 edition = "2021"
 
 [dependencies]
@@ -17,6 +17,7 @@ skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4", "socket-dns", "proto-dns"] }
 agent-core = { path = "../agent-core" }
+ed25519-dalek = { version = "2.2", default-features = false }
 # VirtIO driver manual sem dependências externas (ver virtio_net.rs)
 embedded-graphics = { version = "0.8.2", default-features = false }
 # noto-sans-mono-bitmap — nightly incompatibility (zero-variant enum repr)
