@@ -8,7 +8,7 @@ use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
 use smoltcp::socket::udp as udp_socket;
 use smoltcp::socket::dhcpv4::{self, Event as DhcpEvent, Socket as DhcpSocket};
 
-use crate::net::RTL8139;
+use crate::net::{RTL8139, VIRTIO_DEV};
 
 pub struct PhyToken(pub Vec<u8>);
 
@@ -30,17 +30,21 @@ impl TxToken for PhyToken {
 }
 
 unsafe fn nic_send(data: Vec<u8>) {
-    if let Some(ref mut driver) = *RTL8139.lock() {
-        driver.send(&data);
+    if let Some(ref mut nic) = *RTL8139.lock() {
+        nic.send(&data);
+    } else if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
+        nic.send(&data);
     }
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
-    if let Some(ref mut driver) = *RTL8139.lock() {
-        driver.recv()
-    } else {
-        None
+    if let Some(ref mut nic) = *RTL8139.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
+    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    None
 }
 
 pub struct NetPhy;
