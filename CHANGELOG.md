@@ -33,6 +33,25 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Migrar DriverAgents (NetDriverAgent, UsbDriverAgent)
 - EventDriven schedule para agents orientados a evento
 
+## [0.42.0] — 2026-06-27 — Bloco 12: Network Evolution (DHCP + VirtIO-net manual)
+
+### Added — DHCP (Fase 1)
+- **smoltcp socket-dhcpv4** integrado — auto-descoberta de IP, gateway, DNS
+- **dhcp_poll()** — chamado a cada tick até configurar, timeout 200 ticks → fallback IP estático
+- **ARP delegado ao smoltcp** — gateway MAC hardcoded removido
+- **requires_network** — campo `bool` no `SkillManifest` (frontmatter)
+
+### Added — VirtIO-net (Fase 2) ⚠️ não 100%
+- **Driver VirtIO manual** (~230 LOC) — PCI legacy transport, I/O ports, descritores
+- Sem dependência do `virtio-drivers` crate (bloqueada por `zerocopy-derive` + MinGW)
+- `NetPhy` unificada — tenta RTL8139, fallback VirtIO
+- **Pendente:** IRQ (MSI-X), TX buffer recycling, validação de integridade
+
+### Changed
+- `netstack.rs` — `NetPhy` substitui `Rtl8139Phy`, suporta múltiplos NICs
+- `agents.rs` — NetDriverAgent tenta VirtIO primeiro, RTL8139 depois
+- `network_agent.rs` — DHCP timeout treatment, fallback estável
+
 ## [0.37.0] — 2026-06-26 — Self-Healing + Checkpoint/Restore (Sprints 32-37)
 
 ### Added

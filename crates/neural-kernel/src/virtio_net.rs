@@ -1,6 +1,12 @@
 //! Minimal VirtIO-net driver — bare-metal, sem dependências externas.
 //! Implementa o transporte PCI legacy (OASIS VirtIO 1.1 §4.1).
 //!
+//! ⚠️ Driver manual não 100%: sem IRQ (MSI-X), TX buffers não são reciclados
+//! (vazamento de memória em TX), sem validação de integridade de descritores.
+//! O `virtio-drivers` crate é a solução correta, mas está bloqueado por
+//! `zerocopy-derive` (proc macro incompatível com MinGW toolchain no Windows).
+//! Revisitar quando houver crate compatível ou após migração para MSVC.
+//!
 //! A struct VIRTIO_DEV em net.rs é populada por init_driver_virtio().
 //! A NetPhy unificada em netstack.rs tenta RTL8139 e VirtIO.
 
