@@ -22,8 +22,10 @@ mod agents;
 mod allocator;
 mod apic;
 mod cortex;
+mod cron;
 mod display;
 mod hermes;
+mod mcp;
 mod interrupts;
 mod inventory;
 mod memory;
@@ -461,8 +463,12 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Nota: framebuffer via bootloader depende da versão. 
     // bootloader 0.9+ expõe BootInfo::frame_buffer (Option<FrameBuffer>).
     // Será integrado quando disponível. Por enquanto, VGA text mode funciona.
-    // DisplayAgent substitui ConsoleAgent quando framebuffer disponível
+    // DisplayAgent + CronAgent + McpAgent
     registry.register(Box::new(display::agent::DisplayAgent::new()));
+    let mut cron = cron::CronAgent::new();
+    cron.init_defaults();
+    registry.register(Box::new(cron));
+    registry.register(Box::new(mcp::McpAgent::new()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
@@ -482,6 +488,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
                 "intent_router" => Some(Box::new(agents::HermesAgent::new())),
                 "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
                 "display" => Some(Box::new(display::agent::DisplayAgent::new())),
+                "cron" => Some(Box::new(cron::CronAgent::new())),
+                "mcp" => Some(Box::new(mcp::McpAgent::new())),
                 _ => None,
             };
             agent

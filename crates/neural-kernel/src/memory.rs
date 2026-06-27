@@ -175,6 +175,41 @@ impl BitmapFrameAllocator {
         None
     }
 
+    /// Aloca um bloco contíguo de N frames e mapeia como 2 MiB Huge Page.
+    /// Se `count` for múltiplo de 512 (2 MiB / 4 KiB), mapeia como huge page.
+    /// Retorna o PhysFrame do início do bloco.
+    #[allow(dead_code)]
+    pub fn allocate_huge_2mb(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+        if count == 0 || count % 512 != 0 {
+            return self.allocate_contiguous(count);
+        }
+        // Tenta alocar blocos de 512 frames alinhados a 2 MiB
+        let huge_count = count / 512;
+        for h in 0.. {
+            let start_bit = self.next_free_bit + h * 512;
+            // Verifica alinhamento a 2 MiB
+            if start_bit % 512 != 0 { continue; }
+            if start_bit + count > self.total_frames { break; }
+            let mut ok = true;
+            for j in 0..count {
+                if self.test_bit(start_bit + j) { ok = false; break; }
+            }
+            if ok {
+                for j in 0..count { self.set_bit(start_bit + j); }
+                self.next_free_bit = start_bit + count;
+                self.allocated_count += count;
+                return Some(PhysFrame::containing_address(PhysAddr::new(start_bit as u64 * FRAME_SIZE)));
+            }
+        }
+        None
+    }
+
+    /// Aloca alinhado a 1 GiB (262144 frames) — para Huge Pages 1G
+    #[allow(dead_code)]
+    pub fn allocate_huge_1gb(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        self.allocate_huge_2mb(262144)
+    }
+
     pub fn usable_memory_bytes(&self) -> u64 {
         self.usable_frames as u64 * 4096
     }
