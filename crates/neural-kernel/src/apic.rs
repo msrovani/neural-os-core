@@ -287,26 +287,10 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 
     let _msr_base = read_lapic_base_msr();
 
-    // Tenta habilitar x2APIC (MSR-based, sem MMIO)
-    // Simpler: tenta ativar via MSR; se CPu não suportar, o MSR é ignorado
-    let mut x2apic_supported = false;
-    let mut msr = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR);
-    let apic_base = msr.read();
-    if (apic_base & (1 << 10)) == 0 {
-        msr.write(apic_base | (1 << 10));
-        let check = msr.read();
-        if (check & (1 << 10)) != 0 {
-            USING_X2APIC.store(true, Ordering::Release);
-            x2apic_supported = true;
-            serial_println!("[APIC] x2APIC ativado (MSR-based).");
-        } else {
-            serial_println!("[APIC] x2APIC não suportado pela CPU. Usando xAPIC MMIO.");
-        }
-    } else {
-        USING_X2APIC.store(true, Ordering::Release);
-        x2apic_supported = true;
-        serial_println!("[APIC] x2APIC já ativo.");
-    }
+    // x2APIC: desabilitado por enquanto (MSR escrita requer CPUID, que conflita com
+    // LLVM/MinGW no EBX). QEMU TCG funciona perfeitamente com xAPIC MMIO.
+    // Para ativar: ver CPUID.01h:ECX[21], setar IA32_APIC_BASE[10].
+    let x2apic_supported = false;
 
     let lapic_virt_base = info.lapic_base + info.phys_mem_offset;
     LAPIC_VIRT_BASE.store(lapic_virt_base, Ordering::Release);
