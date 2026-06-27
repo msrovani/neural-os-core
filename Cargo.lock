@@ -221,7 +221,7 @@ checksum = "c3c8dda44ff03a2f238717214da50f65d5a53b45cd213a7370424ffdb6fae815"
 
 [[package]]
 name = "neural-kernel"
-version = "0.47.0"
+version = "0.48.0"
 dependencies = [
  "agent-core",
  "bootloader",
