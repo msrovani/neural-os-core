@@ -143,8 +143,16 @@ Nada é descartado sem registro. Ideias podem ser:
 | 70 | PCI bridges (hierarquia de barramento) | 🟡 Block 1 | Sprint 18 | Suporte básico: multi-função em bridges PCI-PCI. |
 | 71 | NVMe driver (PCI Class 01.08) | ⏳ Pós-MVP | Sprint 24+ | MVP é stateless. Sem SFS, NVMe é desnecessário. |
 | 72 | VirtIO-blk (PCI 1AF4:1001) | ⏳ Pós-MVP | Sprint 24+ | Alternativa QEMU ao NVMe. |
-| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 (⚠️ não 100%) | Sprint 23 | Driver manual implementado sem `virtio-drivers` crate (bloqueado por zerocopy-derive + MinGW). Pendente: IRQ, TX recycling, integridade. Revisitar pós-migração MSVC. |
-| 73b | **VirtIO-GPU (PCI 1AF4:1050)** | 🟡 Sprint 45 (⚠️ não 100%) | Sprint 45 | Driver manual PCI caps + MMIO + control queue. GET_DISPLAY_INFO ⏳. Mesmo bloqueio do zerocopy-derive. |
+| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 (⚠️ não 100%) | Sprint 23 | Driver manual implementado sem `virtio-drivers` crate. Pendente: IRQ, TX recycling. |
+| 73b | **VirtIO-GPU (PCI 1AF4:1050)** | 🟡 Sprint 45 (⚠️ 95%) | Sprint 45 | Driver manual PCI caps + MMIO + queue setup. GET_DISPLAY_INFO ⏳ (QEMU TCG lento). |
+| 166 | **Multi-mode Trust** | ✅ v0.49.0 | Sprint 49 | PermissionMode enum. `trust_allow_with_mode()`. |
+| 176 | **Ed25519 Cryptographic Identity** | ✅ v0.50.0 | Sprint 50 | `identity.rs`, `CapabilityToken` enum, `verify_signature()` bare-metal. |
+| 198 | **Boot-time security policy** | ✅ v0.49.0 | Sprint 49 | `TrustCache::load_boot_policy()` seta `PolicyState::Contain` no boot. |
+| 256 | **Path Confinement** | ✅ v0.49.0 | Sprint 49 | `PathRule` + `check_path()` no TrustCache. |
+| 257 | **Mask Secrets** | ✅ v0.49.0 | Sprint 49 | `mask_secrets()` — 12 padrões, substitui por "*" |
+| 258 | **Graduated Enforcement** | ✅ v0.49.0 | Sprint 49 | `PolicyState` máquina: Observe→Warn→Contain→Enforce. |
+| 259 | **Posture-Aware Alerting** | ✅ v0.49.0 | Sprint 49 | `posture_check()` verifica hardware antes de executar skill. |
+| 260 | **Event→Detector→Response Pipeline** | ✅ v0.50.0 | Sprint 50 | 5 detectores (PortScan, ArpSpoof, PingFlood, DhcpStarvation, TimerAnomaly) + correlação. |
 | 74 | VirtIO-gpu (PCI 1AF4:1050) | ⏳ Pós-MVP | Sprint 24+ | MVP usa VGA text. |
 | 75 | Intel HDA audio | ⏳ Pós-MVP | Fase 5+ | Nenhuma skill de áudio no MVP. |
 | 76 | Sem kernel thread de hotplug | ✅ Princípio | — | Diretriz adotada. |
@@ -1129,3 +1137,5 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-06-26 | **Section 1.28 Agent/Skill-First Architecture** — 20 itens (A-001 a A-020) adicionados. Reclassificação: tudo vira agente/skill, nada de tasks/serviços. Paradigma fundamental. | Dev + IDA IA |
 | 2026-06-26 | **IDEA_BANK total: 275 itens.** Heat map atualizado: 68 ✅, 116 🟡, 76 ⏳, 9 💰, 6 ❌ | Dev + IDA IA |
 | 2026-06-26 | **Seção 6 — Sprint Planning** adicionada: 7 blocos futuros (12-18) com 55 itens 🟡 consolidados. Total: 330 itens. | Dev + IDA IA |
+| 2026-06-27 | **Bloco 12 implementado:** x2APIC, Huge Pages, PCI bridges recursivo, Cron Scheduler, MCP Server (#18, #70, #92, #93, #172, #232). | Dev + IDA IA |
+| 2026-06-27 | **Bloco 13 implementado:** Multi-mode Trust, Path Confinement, Mask Secrets, Graduated Enforcement, Posture-Aware, Boot Policy, Security Pipeline, Ed25519 identity (#166, #176, #198, #256-260). | Dev + IDA IA |

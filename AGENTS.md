@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.47.0 🏆
-#   AGENT/SKILL-FIRST + VIRTIO-GPU + PCI CAPS + BUGFIX
+#   PLANO DIRETOR — neural-os-core v0.50.0 🏆
+#   AGENT/SKILL-FIRST + BLOCOS 12+13 COMPLETOS
 #   Tudo é agente ou skill. Drivers manuais sem dependências externas.
 # ════════════════════════════════════════════════════════
 
@@ -39,7 +39,7 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
-# Current Agent Landscape (v0.47.0 — 16 agents — Block 11 consolidado)
+# Current Agent Landscape (v0.50.0 — 18 agents — Block 11+12+13)
 
 | Código | Agente | Status | Tipo | Função |
 |---|---|---|---|---|
@@ -59,12 +59,16 @@ TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(toke
 | A-014 | **MemoryAgent** | ✅ Agent | System (Oneshot) | MHI + SystemArchitecture |
 | A-015 | **GpuDriverAgent** | ✅ Agent | Driver (Oneshot) | **VirtIO-GPU detect** |
 | A-016 | **HwDetectAgent** | ✅ Agent | System (Oneshot) | HwIdentifySkill |
+| A-017 | **CronAgent** | ✅ Agent | System (Continuous) | Cron Scheduler (#232) |
+| A-018 | **SecurityAgent** | ✅ Agent | System (Continuous) | Security Pipeline (#260) |
 
 Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo existente, 🟡 wrapper = LegacyTaskAgent (migrar), 📝 = módulo avulso
 
-**Bloco 11 (Sprints 39-42):** Bloco único e consolidado. Tudo sobre agentes e skills — desde a base (SkillLoader, Agent trait) até a migração completa dos 7 wrappers e DriverAgents.
+**Bloco 11 (Sprints 39-42):** Bloco único consolidado. Agent/Skill-First completo.
 **Bloco 12 (Sprints 43-44):** Network Evolution — DHCP, ARP, VirtIO-net manual, NetPhy unificada.
 **Sprint 45 (v0.43-0.45):** Display subsystem + VirtIO-GPU + bugfix estrutural (H3-H12).
+**Bloco 12v2 (Sprint 48):** x2APIC, Huge Pages, PCI bridges, Cron Scheduler, MCP Server.
+**Bloco 13 (Sprints 49-50):** Trust & Security — Ed25519, Security Pipeline, Mask Secrets.
 
 # Operational Rules & Guardrails
 - **Zero Hallucination Policy:** State explicitly if you don't know a low-level hardware interaction. Do not invent `no_std`-incompatible crates.
@@ -184,6 +188,8 @@ cargo run → bootloader → kernel_main
 | libm | 0.2 |
 | pic8259 | 0.10 |
 | smoltcp | 0.13 (alloc, medium-ethernet, proto-ipv4, socket-tcp, socket-udp) |
+| ed25519-dalek | 2.2 (default-features=false) |
+| embedded-graphics | 0.8 |
 | event-bus | workspace (path) |
 | skill-registry | workspace (path) |
 | ticket-lock | workspace (path) |
@@ -191,17 +197,17 @@ cargo run → bootloader → kernel_main
 ## Workspace Crates
 | Crate | Status |
 |---|---|
-| `neural-kernel` | v0.39.0 — kernel bare-metal + SMP + Hermes Chat + RTL8139 + smoltcp + SelfHeal + skills.md |
-| `agent-core` | stub (migração agent-first começa aqui) |
+| `neural-kernel` | v0.50.0 — kernel bare-metal + SMP + Hermes Chat + RTL8139 + smoltcp + SelfHeal + skills.md |
+| `agent-core` | v0.1.0 — Agent trait, AgentRegistry, AgentScheduler, watchdog |
 | `skill-registry` | v0.1.0 — MCP Layer: Skill trait, McpManifest, Registry com validação de token |
 | `event-bus` | v0.1.0 — IPC publish/subscribe |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Bloco 12 — Network + Platform)
-MCP Server (#172), Cron Scheduler (#232), PCI capabilities completo (#70), Huge Pages (#92-93). Ver IDEA_BANK.md Seção 6.
+## Next Sprint (Bloco 14 — Hermes Cognitive + Self-Optimization)
+Runtime SDD (#178), Algorithm ReAct 7 fases (#190), Council skill (#191), Usage Pattern Analyzer (#157), Dynamic Resource Scaling (#160). Ver IDEA_BANK.md Seção 6.
 
 ## Network Strategy (ADR-0016)
-Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. Próximo passo: MCP Server (#172) para expor Hermes como serviço JSON-RPC.
+Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP.
 
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
