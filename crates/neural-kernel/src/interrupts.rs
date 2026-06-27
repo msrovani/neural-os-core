@@ -194,8 +194,8 @@ lazy_static! {
         idt.virtualization.set_handler_fn(virtualization_handler);
         idt.security_exception.set_handler_fn(security_exception_handler);
 
-        // Vetores 20-31 (Reserved) via index
-        for i in 20..=31usize { idt[i].set_handler_fn(reserved_handler); }
+        // Vetor 20, 22-31: reservados pela CPU (não devem disparar)
+        // Vetor 21 = SecurityException (já configurado acima)
 
         // Hardware IRQs
         idt[32].set_handler_fn(timer_handler);
