@@ -49,6 +49,7 @@ mod netstack;
 mod network_agent;
 mod proto;
 mod rtl8139;
+mod virtio_net;
 
 use lazy_static::lazy_static;
 
