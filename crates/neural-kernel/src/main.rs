@@ -22,6 +22,7 @@ mod agents;
 mod allocator;
 mod apic;
 mod cortex;
+mod display;
 mod hermes;
 mod interrupts;
 mod inventory;
@@ -449,7 +450,13 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     registry.register(Box::new(agents::InputAgent::new()));
     registry.register(Box::new(agents::CortexAgent::new()));
     registry.register(Box::new(agents::HermesAgent::new()));
-    registry.register(Box::new(agents::ConsoleAgent::new()));
+    // DisplayAgent — gerencia framebuffer (se disponível) ou VGA
+    serial_println!("[DISPLAY] Inicializando DisplayAgent.");
+    // Nota: framebuffer via bootloader depende da versão. 
+    // bootloader 0.9+ expõe BootInfo::frame_buffer (Option<FrameBuffer>).
+    // Será integrado quando disponível. Por enquanto, VGA text mode funciona.
+    // DisplayAgent substitui ConsoleAgent quando framebuffer disponível
+    registry.register(Box::new(display::agent::DisplayAgent::new()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
@@ -467,7 +474,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
                 "input" => Some(Box::new(agents::InputAgent::new())),
                 "cortex_llm" => Some(Box::new(agents::CortexAgent::new())),
                 "intent_router" => Some(Box::new(agents::HermesAgent::new())),
-                "hermes_console" => Some(Box::new(agents::ConsoleAgent::new())),
+                "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
+                "display" => Some(Box::new(display::agent::DisplayAgent::new())),
                 _ => None,
             };
             agent
