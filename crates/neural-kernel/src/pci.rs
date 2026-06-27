@@ -22,7 +22,7 @@ pub struct PciDevice {
     pub bar5: u32,
 }
 
-unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
+pub(crate) unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     let address = 0x8000_0000u32
         | ((bus as u32) << 16)
         | ((device as u32) << 11)
@@ -49,7 +49,7 @@ unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset: u8) -> u16
     ((dword >> ((offset as u32 & 2) * 8)) & 0xFFFF) as u16
 }
 
-unsafe fn read_config_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
+pub(crate) unsafe fn read_config_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     let dword = read_config_dword(bus, device, function, offset & 0xFC);
     ((dword >> ((offset as u32 & 3) * 8)) & 0xFF) as u8
 }
@@ -119,6 +119,62 @@ pub unsafe fn init_pci() -> Vec<PciDevice> {
         );
     }
     devices
+}
+
+/// Estrutura de uma capability PCI vendor-specific VirtIO (tipo 0x09)
+#[derive(Debug, Clone, Copy)]
+pub struct VirtioPciCap {
+    pub bar: u8,
+    pub offset: u32,
+    pub length: u32,
+    pub cfg_type: u8,  // 0=common, 1=notify, 2=isr, 3=device, 4=pci_cfg
+}
+
+/// Lê o ponteiro de capabilities (offset 0x34) e retorna um array
+pub unsafe fn read_pci_capabilities(bus: u8, device: u8, function: u8) -> alloc::vec::Vec<(u8, u8)> {
+    let mut caps = alloc::vec::Vec::new();
+    let mut ptr = read_config_byte(bus, device, function, 0x34) as u8;
+    while ptr != 0 {
+        let cap_id = read_config_byte(bus, device, function, ptr);
+        let next = read_config_byte(bus, device, function, ptr + 1);
+        caps.push((cap_id, ptr));
+        ptr = next;
+    }
+    caps
+}
+
+/// Varre capabilities PCI por tipo 0x09 (VirtIO vendor-specific)
+/// e extrai cfg_type, bar, offset, length para encontrar o MMIO base.
+pub unsafe fn read_virtio_cap(bus: u8, device: u8, function: u8, target_cfg_type: u8) -> Option<VirtioPciCap> {
+    let caps = read_pci_capabilities(bus, device, function);
+    for (cap_id, ptr) in &caps {
+        if *cap_id == 0x09 {
+            let cfg_type = read_config_byte(bus, device, function, ptr + 3);
+            if cfg_type == target_cfg_type {
+                let bar = read_config_byte(bus, device, function, ptr + 4);
+                let offset = read_config_dword(bus, device, function, ptr + 8);
+                let length = read_config_dword(bus, device, function, ptr + 12);
+                let len = if length > 0 { length } else { 0x1000 };
+                return Some(VirtioPciCap { bar, offset, length: len, cfg_type });
+            }
+        }
+    }
+    None
+}
+
+/// Lê o valor da BAR (32-bit) de um device, considerando BARs 64-bit
+pub unsafe fn read_bar_value(bus: u8, device: u8, function: u8, bar_index: u8) -> u64 {
+    let offset = 0x10 + bar_index * 4;
+    let low = read_config_dword(bus, device, function, offset);
+    if low & 1 == 1 { return (low & !0xFF) as u64; } // I/O
+    let btype = (low >> 1) & 3;
+    if btype == 2 {
+        // 64-bit MMIO: BAR+1 contém high bits
+        let high = read_config_dword(bus, device, function, offset + 4) as u64;
+        (low & !0xF) as u64 | (high << 32)
+    } else {
+        (low & !0xF) as u64
+    }
 }
 
 pub fn class_name(class: u8, subclass: u8) -> &'static str {

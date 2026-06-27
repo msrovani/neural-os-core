@@ -39,7 +39,19 @@ struct RegOffsets {
 }
 
 const LEGACY: RegOffsets = RegOffsets { df: 0x00, gf: 0x04, qa: 0x08, qs: 0x0C, qsl: 0x0E, qn: 0x10, st: 0x12 };
-const MODERN: RegOffsets = RegOffsets { df: 0x000, gf: 0x008, qa: 0x010, qs: 0x014, qsl: 0x018, qn: 0x01C, st: 0x020 };
+
+// Modern virtio MMIO (common config at BAR+offset cap.cfg_type=1)
+// VirtIO 1.1 §4.1.4.3: struct virtio_pci_common_cfg
+// Offsets from common config base (BAR4 + 0x0000 for our device)
+const MODERN: RegOffsets = RegOffsets {
+    df: 0x04,  // device_feature (R, after select=0)
+    gf: 0x0C,  // driver_feature (W, after select=0x08)
+    qa: 0x20,  // queue_desc (64-bit, low at 0x20, high at 0x24)  
+    qs: 0x18,  // queue_size (R, after queue_select at 0x16)
+    qsl: 0x16, // queue_select (W, write queue index here)
+    qn: 0x0,   // Notify is NOT in common config; in device-specific notify cap
+    st: 0x14,  // device_status (R/W)
+};
 
 /// Register access: I/O ports (legacy) ou MMIO (modern)
 struct Regs {
@@ -111,51 +123,85 @@ unsafe fn alloc_pages(n: usize) -> Option<(u64, *mut u8)> {
 
 unsafe fn setup_q(io: &Regs, idx: u16, sz: u16) -> Option<u64> {
     io.w16(io.ro.qsl, idx);
-    // MMIO: queue size at ro.qs, legacy: same
     if io.r32(io.ro.qs) < sz as u32 { return None; }
     let (pa, va) = alloc_pages(3)?; core::ptr::write_bytes(va, 0, 12288);
-    io.w32(io.ro.qa, (pa >> 12) as u32);
+
+    if io.ro.qa == LEGACY.qa {
+        // Legacy I/O: single PFN
+        io.w32(io.ro.qa, (pa >> 12) as u32);
+    } else {
+        // Modern MMIO: desc/driver/device split (3 separate addresses)
+        io.w32(io.ro.qa, pa as u32);        // QueueDescLow
+        io.w32(io.ro.qa + 4, (pa >> 32) as u32); // QueueDescHigh
+        let avail_pa = pa + 4096;
+        io.w32(io.ro.qa + 8, avail_pa as u32);   // QueueDriverLow
+        io.w32(io.ro.qa + 12, (avail_pa >> 32) as u32); // QueueDriverHigh
+        let used_pa = pa + 8192;
+        io.w32(io.ro.qa + 16, used_pa as u32);   // QueueDeviceLow
+        io.w32(io.ro.qa + 20, (used_pa >> 32) as u32); // QueueDeviceHigh
+    }
     Some(pa)
 }
 
 pub struct GpuDevice {
     pub fb_addr: u64, pub fb_width: u32, pub fb_height: u32, pub fb_stride: u32,
+    pub notify_addr: u64, // MMIO address for queue notify
     pub present: bool,
 }
 
 impl GpuDevice {
     pub fn new(dev: &crate::pci::PciDevice, phys_mem_offset: u64) -> Option<Self> {
         serial_println!("[VGPU] BAR0={:#x} BAR1={:#x}", dev.bar0, dev.bar1);
-        // Detect BAR type com verificação de 32 vs 64-bit
-        let (io_base, mmio_base, is_mmio) = if dev.bar0 & 1 == 1 {
-            // Legacy I/O BAR
-            ((dev.bar0 & !0xFF) as u16, 0u64, false)
-        } else {
-            let btype = (dev.bar0 >> 1) & 3; // bits 2-1: 00=32bit, 10=64bit
-            let base = if btype == 2 {
-                // 64-bit MMIO: BAR0 (low) + BAR1 (high)
-                let low = dev.bar0 as u64 & !0xF;
-                let high = (dev.bar1 as u64) << 32;
-                low | high
-            } else {
-                // 32-bit MMIO
-                (dev.bar0 & !0xF) as u64
-            };
-            if base == 0 { return None; }
-            // Verifica se address cabe no mapeamento (fitness check)
-            let test_virt = base.wrapping_add(phys_mem_offset);
-            if test_virt >> 47 != 0 && test_virt >> 47 != 0x1FFFF {
-                serial_println!("[VGPU] BAR address {:x} não mapeável (test={:x})", base, test_virt);
-                return None;
-            }
-            (0u16, base, true)
-        };
 
-        // Map MMIO BAR as uncacheable
-        if is_mmio && mmio_base > 0 {
-            unsafe { crate::apic::set_page_uc(mmio_base, phys_mem_offset); }
-            serial_println!("[VGPU] MMIO BAR {:x} mapeado UC", mmio_base);
+        // Debug: dump todas as capabilities PCI
+        unsafe {
+            let caps_list = crate::pci::read_pci_capabilities(dev.bus, dev.device, dev.function);
+            for (id, ptr) in &caps_list {
+                if *id == 0x09 {
+                    let cfg = crate::pci::read_config_byte(dev.bus, dev.device, dev.function, ptr + 3);
+                    let bar = crate::pci::read_config_byte(dev.bus, dev.device, dev.function, ptr + 4);
+                    let off = crate::pci::read_config_dword(dev.bus, dev.device, dev.function, ptr + 8);
+                    let len = crate::pci::read_config_dword(dev.bus, dev.device, dev.function, ptr + 12);
+                    serial_println!("[VGPU] VirtIO cap ptr={:#x} cfg={} bar={} off={:#x} len={:#x}", ptr, cfg, bar, off, len);
+                } else {
+                    serial_println!("[VGPU] PCI cap id={:#x} ptr={:#x}", id, ptr);
+                }
+            }
         }
+
+        // Para VirtIO moderno (0x1050), o MMIO base está em capabilities PCI,
+        // não nas BARs padrão. Usamos read_virtio_cap + read_bar_value.
+        let (io_base, mmio_base, is_mmio) = unsafe {
+            if dev.bar0 & 1 == 1 {
+                ((dev.bar0 & !0xFF) as u16, 0u64, false)
+            } else {
+                // Tenta encontrar o MMIO via VirtIO PCI capability (cfg_type=0 = common)
+                    let cap = crate::pci::read_virtio_cap(dev.bus, dev.device, dev.function, 1);
+                if let Some(cap) = cap {
+                    let bar_addr = crate::pci::read_bar_value(dev.bus, dev.device, dev.function, cap.bar);
+                    let base = bar_addr + cap.offset as u64;
+                    // Verifica se endereço é mapeável
+                    let test_virt = base.wrapping_add(phys_mem_offset);
+                    if test_virt >> 47 != 0 && test_virt >> 47 != 0x1FFFF {
+                        serial_println!("[VGPU] BAR {:x} não mapeável", base);
+                        return None;
+                    }
+                    // Mapeia como uncacheable
+                    crate::apic::set_page_uc(base, phys_mem_offset);
+                    serial_println!("[VGPU] VirtIO cap: bar={} off={:#x} len={:#x} base={:#x}",
+                        cap.bar, cap.offset, cap.length, base);
+                    (0u16, base, true)
+                } else {
+                    // Fallback: legacy I/O? Verifica BAR0 I/O bit
+                    if dev.bar0 & 1 == 1 {
+                        ((dev.bar0 & !0xFF) as u16, 0u64, false)
+                    } else {
+                        serial_println!("[VGPU] Sem capability VirtIO");
+                        return None;
+                    }
+                }
+            }
+        };
 
         // Map MMIO BAR as uncacheable BEFORE accessing
         if is_mmio && mmio_base > 0 {
@@ -195,122 +241,158 @@ impl GpuDevice {
                 None => { serial_println!("[VGPU] Queue setup falhou"); return None; }
             };
 
+            // Compute notify address for modern MMIO
+            let notify_addr: u64 = if is_mmio {
+                // Lê notify capability (cfg_type=2) do mesmo dispositivo
+                let notify_cap = crate::pci::read_virtio_cap(dev.bus, dev.device, dev.function, 2);
+                if let Some(nc) = notify_cap {
+                    let bar_val = crate::pci::read_bar_value(dev.bus, dev.device, dev.function, nc.bar);
+                    bar_val + nc.offset as u64
+                } else {
+                    0
+                }
+            } else { 0 };
+
             // DRIVER_OK
             io.add_status(4);
-            serial_println!("[VGPU] status after DRIVER_OK={:x} qs={:x}", io.r8(io.ro.st), io.r32(io.ro.qs));
+            serial_println!("[VGPU] status after DRIVER_OK={:x} notify={:#x}", io.r8(io.ro.st), notify_addr);
 
             // GET_DISPLAY_INFO via control queue
             let off = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
             let (cpa, cva) = alloc_pages(2)?;
             core::ptr::write_bytes(cva, 0, 8192);
 
-            // Write command: GET_DISPLAY_INFO
-            *(cpa as *mut u32) = 0x0100u32;
+            // Write command: GET_DISPLAY_INFO (use virtual address = phys + offset)
+            let cva = cpa + off;
+            *(cva as *mut u32) = 0x0100u32;
 
             // Setup descriptor in control queue
-            // Queue memory layout: page0=desc, page1=avail, page2=used
-            let d = (qpa + off) as *mut u64;              // desc table
-            let a = (qpa + off + 4096) as *mut u16;       // avail ring starts at +4096
+            let desc_base = (qpa + off) as *mut u8;
+            let avail = (qpa + off + 4096) as *mut u16;
 
-            // desc[0]: command buffer (device reads)
-            *d = cpa;                             // addr
-            *((d as *mut u32).add(2)) = 24;       // len
-            // desc[1]: response buffer (device writes) at cpa+0x100
-            *d.add(2) = cpa + 0x100;              // addr
-            *((d as *mut u32).add(6)) = 128;       // len
-            *((d as *mut u16).add(6)) = 2;         // flags = WRITE
+            // desc[0]: comando
+            *(desc_base as *mut u64) = cpa;
+            *((desc_base as *mut u32).add(2)) = 24;  // len = 24
+            // desc[1]: resposta
+            let d1 = desc_base.add(16);
+            *(d1 as *mut u64) = cpa + 0x100;
+            *((d1 as *mut u32).add(2)) = 128;         // len = 128
+            *((d1 as *mut u16).add(6)) = 2;            // flags = WRITE
 
-            // Submit to avail ring
-            *a.add(4) = 0;  // ring[0] = 0
+            // Avail ring
+            *avail.add(4) = 0;
             core::sync::atomic::fence(Ordering::SeqCst);
-            *a = 1;         // idx = 1
+            *avail = 1;
 
             // Notify queue 0
-            io.w16(io.ro.qn, 0);
+            if notify_addr > 0 {
+                let no_off = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+                unsafe { ((notify_addr + no_off) as *mut u16).write_volatile(0); }
+            } else {
+                io.w16(io.ro.qn, 0);
+            }
 
             // Poll for completion
             for _ in 0..1000000 {
                 core::hint::spin_loop();
-                let used_idx = *((qpa + off + 8192) as *const u16);
+                let used_idx = *((qpa + 8192 + off) as *const u16);
                 if used_idx > 0 { break; }
             }
 
-            let resp_type = *((cpa + 0x100 + off) as *const u32);
+            let resp_type = *((cva + 0x100) as *const u32);
             if resp_type != 0x1100 {
                 serial_println!("[VGPU] GET_DISPLAY resp={:#x}", resp_type);
-                // Use default resolution
                 let (fw, fh) = (1024u32, 768u32);
-                return init_framebuffer(&io, qpa, cpa, off, fw, fh);
+                return init_framebuffer(&io, qpa, cpa, off, fw, fh, notify_addr);
             }
 
-            let width = *((cpa + 0x100 + off + 24) as *const u32);
-            let height = *((cpa + 0x100 + off + 28) as *const u32);
+            let width = *((cva + 0x100 + 24) as *const u32);
+            let height = *((cva + 0x100 + 28) as *const u32);
             let fb_w = if width > 0 && width <= 8192 { width } else { 1024 };
             let fb_h = if height > 0 && height <= 8192 { height } else { 768 };
 
             serial_println!("[VGPU] Display {}x{}", fb_w, fb_h);
 
-            init_framebuffer(&io, qpa, cpa, off, fb_w, fb_h)
+            init_framebuffer(&io, qpa, cpa, off, fb_w, fb_h, notify_addr)
         }
     }
 }
 
-unsafe fn init_framebuffer(io: &Regs, qpa: u64, cpa: u64, off: u64, width: u32, height: u32) -> Option<GpuDevice> {
+unsafe fn init_framebuffer(io: &Regs, qpa: u64, cpa: u64, off: u64, width: u32, height: u32, notify_addr: u64) -> Option<GpuDevice> {
+    let cva = cpa + off; // virtual address for CPU writes
     let fb_sz = (width * height * 4) as usize;
     let fb_pg = (fb_sz + 4095) / 4096;
     let (fb_pa, fb_va) = alloc_pages(fb_pg)?;
     core::ptr::write_bytes(fb_va, 0, fb_pg * 4096);
 
-    // RESOURCE_CREATE_2D: type=0x0101, fields: res_id, format, w, h
-    *(cpa as *mut u32) = 0x0101;
-    *((cpa as *mut u32).add(6)) = 1;     // resource_id
-    *((cpa as *mut u32).add(7)) = 1;     // format B8G8R8A8
-    *((cpa as *mut u32).add(8)) = width;
-    *((cpa as *mut u32).add(9)) = height;
-    submit_q(io, qpa, cpa, 40, off);
+    // RESOURCE_CREATE_2D
+    *(cva as *mut u32) = 0x0101;
+    *((cva as *mut u32).add(6)) = 1;     // resource_id
+    *((cva as *mut u32).add(7)) = 1;     // format B8G8R8A8
+    *((cva as *mut u32).add(8)) = width;
+    *((cva as *mut u32).add(9)) = height;
+    submit_q(io, qpa, cpa, 40, off, notify_addr);
     if !poll_q(qpa, off) { serial_println!("[VGPU] CREATE fail"); return None; }
 
-    // RESOURCE_ATTACH_BACKING: type=0x0102
-    *(cpa as *mut u32) = 0x0102;
-    *((cpa as *mut u32).add(6)) = 1;              // resource_id
-    *((cpa as *mut u32).add(7)) = fb_pg as u32;   // nr_entries
+    // RESOURCE_ATTACH_BACKING
+    *(cva as *mut u32) = 0x0102;
+    *((cva as *mut u32).add(6)) = 1;              // resource_id
+    *((cva as *mut u32).add(7)) = fb_pg as u32;   // nr_entries
     for i in 0..fb_pg {
-        let e = (cpa + 32 + i as u64 * 16) as *mut u64;
+        let e = (cva + 32 + i as u64 * 16) as *mut u64;
         *e = fb_pa + (i as u64 * 4096);
-        let lenp = (cpa + 32 + i as u64 * 16 + 8) as *mut u32;
+        let lenp = (cva + 32 + i as u64 * 16 + 8) as *mut u32;
         *lenp = if i == fb_pg - 1 { (fb_sz % 4096) as u32 } else { 4096 };
     }
-    submit_q(io, qpa, cpa, 32 + fb_pg * 16, off);
+    submit_q(io, qpa, cpa, 32 + fb_pg * 16, off, notify_addr);
     if !poll_q(qpa, off) { serial_println!("[VGPU] ATTACH fail"); return None; }
 
-    // SET_SCANOUT: type=0x0103, fields: res_id, scanout_id, rect{x,y,w,h}
-    *(cpa as *mut u32) = 0x0103;
-    *((cpa as *mut u32).add(6)) = 1;     // resource_id
-    *((cpa as *mut u32).add(7)) = 0;     // scanout_id = 0
-    *((cpa as *mut u32).add(8)) = 0;     // rect.x
-    *((cpa as *mut u32).add(9)) = 0;     // rect.y
-    *((cpa as *mut u32).add(10)) = width;
-    *((cpa as *mut u32).add(11)) = height;
-    submit_q(io, qpa, cpa, 48, off);
+    // SET_SCANOUT
+    *(cva as *mut u32) = 0x0103;
+    *((cva as *mut u32).add(6)) = 1;     // resource_id
+    *((cva as *mut u32).add(7)) = 0;     // scanout_id = 0
+    *((cva as *mut u32).add(8)) = 0;     // rect.x
+    *((cva as *mut u32).add(9)) = 0;     // rect.y
+    *((cva as *mut u32).add(10)) = width;
+    *((cva as *mut u32).add(11)) = height;
+    submit_q(io, qpa, cpa, 48, off, notify_addr);
     poll_q(qpa, off);
 
     serial_println!("[VGPU] VirtIO-GPU OK: {}x{} fb={:#x}", width, height, fb_pa);
 
-    Some(GpuDevice { fb_addr: fb_pa, fb_width: width, fb_height: height, fb_stride: width*4, present: true })
+    Some(GpuDevice { fb_addr: fb_pa, fb_width: width, fb_height: height, fb_stride: width*4, notify_addr, present: true })
 }
 
-unsafe fn submit_q(io: &Regs, qpa: u64, cpa: u64, cmd_len: usize, off: u64) {
-    let d = (qpa + off) as *mut u64;
-    let a = (qpa + off + 4096) as *mut u16;
-    *d = cpa;                                // desc[0].addr = cmd
-    *((d as *mut u32).add(2)) = cmd_len as u32; // len
-    *d.add(2) = cpa + 0x100;                 // desc[1].addr = resp
-    *((d as *mut u32).add(6)) = 64;           // resp len
-    *((d as *mut u16).add(6)) = 2;            // WRITE
-    *a.add(4) = 0;
+unsafe fn submit_q(io: &Regs, qpa: u64, cpa: u64, cmd_len: usize, off: u64, notify_addr: u64) {
+    // Descriptor table: cada descritor tem 16 bytes (addr:8, len:4, flags:2, next:2)
+    // Usamos byte offsets explícitos para evitar erros de alinhamento
+    let desc_base = (qpa + off) as *mut u8;
+    let avail = (qpa + off + 4096) as *mut u16;
+
+    // desc[0]: comando (device lê)
+    *(desc_base as *mut u64) = cpa;                          // +0: addr = cmd phys
+    *((desc_base as *mut u32).add(2)) = cmd_len as u32;      // +8: len
+    // desc[0].flags = 0 (device read), desc[0].next = 0 (já são 0 do init)
+
+    // desc[1]: resposta (device escreve)
+    let d1 = desc_base.add(16);                              // +16: desc[1] start
+    *(d1 as *mut u64) = cpa + 0x100;                         // +16: addr = resp phys
+    *((d1 as *mut u32).add(2)) = 64;                          // +24: len
+    *((d1 as *mut u16).add(6)) = 2;                           // +28: flags = WRITE
+
+    // Avail ring: ring[0] = 0 (descriptor chain head)
+    *avail.add(4) = 0;
     core::sync::atomic::fence(Ordering::SeqCst);
-    *a = 1;  // avail.idx = 1
-    io.w16(io.ro.qn, 0);
+    *avail = 1;  // avail.idx = 1
+
+    // Notify device
+    if notify_addr > 0 {
+        let no_off = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        ((notify_addr + no_off) as *mut u16).write_volatile(0);
+    } else {
+        io.w16(io.ro.qn, 0);
+    }
+}
 }
 
 unsafe fn poll_q(qpa: u64, off: u64) -> bool {
