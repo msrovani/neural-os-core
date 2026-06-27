@@ -55,6 +55,7 @@ mod netstack;
 mod network_agent;
 mod proto;
 mod rtl8139;
+mod security;
 mod virtio_net;
 mod virtio_gpu;
 
@@ -469,6 +470,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     cron.init_defaults();
     registry.register(Box::new(cron));
     registry.register(Box::new(mcp::McpAgent::new()));
+    registry.register(Box::new(security::SecurityAgent::new()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
@@ -490,6 +492,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
                 "display" => Some(Box::new(display::agent::DisplayAgent::new())),
                 "cron" => Some(Box::new(cron::CronAgent::new())),
                 "mcp" => Some(Box::new(mcp::McpAgent::new())),
+                "security" => Some(Box::new(security::SecurityAgent::new())),
                 _ => None,
             };
             agent
