@@ -30,6 +30,30 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.53.0] — 2026-06-27 — Bloco 14: Hermes Cognitive fase 2/4 (Council, Bitter Pill, Context Fencing)
+### Added — Council skill (#191)
+- 3 vozes artificiais: Otimista 🌟, Cético 🔍, Pragmático ⚖️ — cada uma com argumento e confiança
+- `council_deliberate(query)` → `(CouncilVote, CouncilVote, CouncilVote)`
+- `council_display()` — formata votos para serial + console
+- Ativado automaticamente para comandos `Chat` no HermesAgent
+
+### Added — Context Fencing (#203)
+- Marcadores de tipo: `[UserInput]`, `[HardwareTelemetry]`, `[LLMRequest]`, `[LLMResponse]`, `[SecurityEvent]`
+- `fence_message(marker, payload)` — adiciona marcador
+- `scrub_message(msg)` — remove marcador na recepção
+
+### Added — Bitter Pill Engineering (#193)
+- 4 etapas obrigatórias: `cargo check`, `test`, `semver`, `review`
+- `check_bitter_pill(command)` → `Option<&str>` com motivo da recusa
+- Se usuário tenta pular (ex: "skip cargo check"), Hermes recusa com `🛑`
+
+## [0.52.0] — 2026-06-27 — Hermes Cognitive fase 1/4 (Identidade, SDD, ReAct, Transparency)
+### Added
+- **DA Identity Layer** (#180) — `HERMES_NAME`, `HERMES_VERSION`, `HERMES_MOTTO`, `hermes_greeting()` com arte ASCII
+- **Runtime SDD** (#178) — `Sdd { goal, context, plan, expected, rollback }` exibido antes de executar skills
+- **ReAct 7 fases** (#190) — `ReActPhase::Observe→Think→Plan→Build→Execute→Verify→Learn`, ciclo contínuo no tick
+- **Intent Transparency** (#184) — `IntentInfo { intent_name, confidence, alternatives }` mostrado no serial a cada comando
+
 ## [0.51.0] — 2026-06-27 — Safety Interceptor: Asimov's Laws no Ring 0 🤖
 
 ### Added — The Four Immutable Laws
