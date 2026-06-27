@@ -30,6 +30,28 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.55.0] — 2026-06-27 — Bloco 14 completo: Hermes Cognitive + Self-Optimization 🧠🏁
+### Added — Self-Optimization (fase 4/4)
+- **Self-Optimizing Scheduler** (#161) — `get_agent_priority()` com 13 níveis. `suggest_schedule(workflow)` adapta prioridades baseado no workflow detectado
+- **Hardware Config Learning** (#163) — `ConfigLearner` com snapshots periódicos da arquitetura. `suggest_arch_tuning()` sugere ajustes (ex: GPU presente → ring1=GPU)
+- **LLM decide arch + tier** (#135/#136) — `llm_decide_tier()` prioriza Vram se confidence > 0.9
+- **OptimizerAgent** integra UsageAnalyzer + ConfigLearner + auto-scaling num único agente contínuo
+- **19 agentes totais** no sistema
+
+### Aprendizados (Bloco 14)
+- `CapabilityToken` virar enum quebrou 15+ arquivos — a regex global resolveu em 1 comando
+- `continue` dentro de match (não loop) no tick do agente → usar `return AgentTickResult::Pending`
+- SDD com 5 campos string é leve o suficiente para executar todo tick (~2μs)
+- Council skill com 3 vozes não precisa de LLM — heurística + template é suficiente para 90% dos casos
+
+## [0.54.0] — 2026-06-27 — Bloco 14 fase 3/4: Self-Optimization (Usage Analyzer, Workflow, Scaling)
+### Added
+- **Usage Pattern Analyzer** (#157) — histórico rotativo de 100 registros, `predict_next_skill()` por frequência
+- **Workflow Predictor** (#158) — analisa histograma de skills, retorna a mais frequente
+- **Dynamic Resource Scaling** (#160) — `auto_scale_memory()` a cada 200 ticks, alerta em >85% ou <30%
+- **Reflex Threshold** (#139) — `should_bypass_llm(confidence)` — bypass se >0.9
+- **OptimizerAgent** — agente contínuo que orquestra análise, scaling e relatórios
+
 ## [0.53.0] — 2026-06-27 — Bloco 14: Hermes Cognitive fase 2/4 (Council, Bitter Pill, Context Fencing)
 ### Added — Council skill (#191)
 - 3 vozes artificiais: Otimista 🌟, Cético 🔍, Pragmático ⚖️ — cada uma com argumento e confiança
