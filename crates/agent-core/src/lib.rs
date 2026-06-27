@@ -62,6 +62,7 @@ pub struct AgentInstance {
     pub last_poll: u64,
     pub tick_counter: u64,
     pub schedule: ScheduleKind,
+    pub consecutive_pending: u64,  // watchdog: ticks consecutivos sem Done
 }
 
 impl AgentInstance {
@@ -73,6 +74,7 @@ impl AgentInstance {
             last_poll: 0,
             tick_counter: 0,
             schedule,
+            consecutive_pending: 0,
         }
     }
 }
@@ -190,8 +192,16 @@ impl AgentRegistry {
                 self.agents[i].tick_counter += 1;
                 let tc = self.agents[i].tick_counter;
                 let result = self.agents[i].agent.tick(tick_id, tc);
+                // Watchdog: detecta loops infinitos (10000+ ticks sem Done)
                 match result {
+                    AgentTickResult::Pending => {
+                        self.agents[i].consecutive_pending += 1;
+                        if self.agents[i].consecutive_pending > 10000 {
+                            self.agents[i].state = AgentState::Crashed;
+                        }
+                    }
                     AgentTickResult::Done => {
+                        self.agents[i].consecutive_pending = 0;
                         if schedule == ScheduleKind::Oneshot {
                             self.agents[i].state = AgentState::Done;
                         }
