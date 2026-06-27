@@ -54,6 +54,7 @@ mod vga_buffer;
 mod net;
 mod netstack;
 mod network_agent;
+mod optimizer;
 mod proto;
 mod rtl8139;
 mod safety;
@@ -474,6 +475,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     registry.register(Box::new(mcp::McpAgent::new()));
     registry.register(Box::new(security::SecurityAgent::new()));
     registry.register(Box::new(safety::SafetyAgent::new()));
+    registry.register(Box::new(optimizer::OptimizerAgent::new()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
@@ -497,6 +499,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
                 "mcp" => Some(Box::new(mcp::McpAgent::new())),
                 "security" => Some(Box::new(security::SecurityAgent::new())),
                 "safety" => Some(Box::new(safety::SafetyAgent::new())),
+                "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())),
                 _ => None,
             };
             agent
