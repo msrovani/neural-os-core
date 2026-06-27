@@ -144,6 +144,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 71 | NVMe driver (PCI Class 01.08) | ⏳ Pós-MVP | Sprint 24+ | MVP é stateless. Sem SFS, NVMe é desnecessário. |
 | 72 | VirtIO-blk (PCI 1AF4:1001) | ⏳ Pós-MVP | Sprint 24+ | Alternativa QEMU ao NVMe. |
 | 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 (⚠️ não 100%) | Sprint 23 | Driver manual implementado sem `virtio-drivers` crate (bloqueado por zerocopy-derive + MinGW). Pendente: IRQ, TX recycling, integridade. Revisitar pós-migração MSVC. |
+| 73b | **VirtIO-GPU (PCI 1AF4:1050)** | 🟡 Sprint 45 (⚠️ não 100%) | Sprint 45 | Driver manual PCI caps + MMIO + control queue. GET_DISPLAY_INFO ⏳. Mesmo bloqueio do zerocopy-derive. |
 | 74 | VirtIO-gpu (PCI 1AF4:1050) | ⏳ Pós-MVP | Sprint 24+ | MVP usa VGA text. |
 | 75 | Intel HDA audio | ⏳ Pós-MVP | Fase 5+ | Nenhuma skill de áudio no MVP. |
 | 76 | Sem kernel thread de hotplug | ✅ Princípio | — | Diretriz adotada. |
@@ -359,6 +360,19 @@ Nada é descartado sem registro. Ideias podem ser:
 | 176 | **Ed25519 Cryptographic Identity for TrustCache** — substitui `CapabilityToken(u64)` estático por assinatura Ed25519; Token vira chave pública + assinatura da requisição; Zero-Trust real em nível de kernel | 🟡 Baixa | Sprint 27 | Crom-meueu: identidade criptográfica Ed25519 portada para bare-metal `no_std`. ~300 LOC usando `ed25519-dalek` (sem std) ou implementação custom. Depende de #166 (Multi-mode Trust) como camada de permissão sobre a identidade. |
 
 **ADR-0020:** `docs/architecture/0020-crom-ecosystem-analysis.md` — Análise de viabilidade Rust com código modelo para 9 features (#164-175). Item #176 (Ed25519) adicionado posteriormente.
+
+### 1.29. Bugfix Estrutural (Sprint 45) — H3 a H12
+
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 268 | **H3 — APIC SVR vetor espúrio** — SVR escrito com vetor 0, causa #DE falso em interrupções espúrias | ✅ v0.45.0 | Sprint 45 | Fix: SVR = `(svr & 0xFFFFFF00) \| 0xFF \| 0x100` (vetor 255 + APIC enable) |
+| 269 | **H4 — IDT sem cobertura total 0-31** — Exceções #DE, #UD, #NM, #MC, #XM, #VE, #CP sem handlers, causam Triple Fault silencioso | ✅ v0.45.0 | Sprint 45 | Fix: 32 handlers nomeados com dump textual de InterruptStackFrame |
+| 270 | **H5 — PIC EOI sem duplo para escravo** — Interrupções do PIC escravo (vetores 40-47) não recebem EQI no 0xA0 | ✅ v0.45.0 | Sprint 45 | Fix: `send_eoi(vector)` envia para 0x20 e 0xA0 se vector >= 40 |
+| 271 | **H11 — PCI multi-function sem verificação** — Scanner força funções 1-7 em dispositivos single-function, desperdiçando ciclos | ✅ v0.45.0 | Sprint 45 | Fix: `header_type` (offset 0x0E) bit 7 verificado antes de escanear |
+| 272 | **H12 — IOAPIC RTEs desmascaradas** — Ruído elétrico em linhas não usadas gera interrupções fantasmas | ✅ v0.45.0 | Sprint 45 | Fix: Todas RTEs inicializadas com bit 16 = MASK |
+| 273 | **VirtIO-GPU driver manual** — PCI capabilities + MMIO mapping + control queue. GET_DISPLAY_INFO pendente (resposta 0x0) | 🟡 Sprint 45 (⚠️ 95%) | Sprint 45 | Sem zerocopy-derive. Feature negotiation, queue enable, ring layout corrigidos. Falta response. |
+
+
 
 ### 1.24. Life OS / Personal OS Ecosystem (20 repos Tier 1)
 
@@ -652,8 +666,9 @@ O `AgentScheduler` substitui o `NeuralExecutor`:
 | Tier 4 Agent Frameworks (1.27) | 22 | 0 | 17 | 3 | 0 | 2 |
 | Self-Healing Kernel (Sprints 32-37) | 6 | 6 | 0 | 0 | 0 | 0 |
 | Agent/Skill-First Architecture | 20 | 0 | 20 | 0 | 0 | 0 |
+| Bugfix Estrutural (Sprint 45) | 6 | 5 | 1 | 0 | 0 | 0 |
 | Sprint Planning (Seção 6) | 55 | 0 | 55 | 0 | 0 | 0 |
-| **Total** | **330** | **68 (21%)** | **171 (52%)** | **76 (23%)** | **9 (3%)** | **6 (2%)** |
+| **Total** | **336** | **73 (22%)** | **172 (51%)** | **76 (23%)** | **9 (3%)** | **6 (2%)** |
 
 ---
 

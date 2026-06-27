@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.40.0 — AGENT/SKILL-FIRST 🏆
+# Neural OS Hermes ⚡ — v0.45.0 — AGENT/SKILL-FIRST + VIRTIO-GPU + BUGFIX 🏆
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -12,18 +12,20 @@
 ### 0. Tudo é Agente ou Skill
 **Bloco 11 (Sprints 39-42 consolidado):** Não existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade é um **Agente** com manifesto, ScheduleKind e ciclo de vida. Habilidades (**Skills**) são a interface de requisição-resposta.
 
-16 agentes (Sprint 40 — SystemAgent nativo, 7 LegacyTaskAgent wrapper):
-| Código | Agente | Status | Tipo |
+16 agentes nativos (v0.45.0):
+| Código | Agente | Tipo | Driver/Driver manual |
 |---|---|---|---|
-| A-001 | **SystemAgent** | ✅ Agent | Oneshot → SYSTEM_READY |
-| A-002 | MonitorAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-003 | HwBridgeAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-004 | NetAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-005 | InputAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-006 | CortexAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-007 | HermesAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-008 | ConsoleAgent | 🟡 wrapper | LegacyTaskAgent |
-| A-009..A-016 | DriverAgents + SystemAgents | ✅ struct | PCI, SMP, Trust, Memory |
+| A-001 | SystemAgent | System | Init, EchoSkill |
+| A-002 | MonitorAgent | System | SYSTEM_READY |
+| A-003 | HwBridgeAgent | Router | IRQ bridge |
+| A-004 | NetAgent | Network | smoltcp poll |
+| A-005 | InputAgent | Console | Keyboard |
+| A-006 | CortexAgent | Inference | LLM transformer |
+| A-007 | HermesAgent | Router | Intent + skills |
+| A-008 | **DisplayAgent** | Console | **Framebuffer BGRA32** |
+| A-009 | NetDriverAgent | Driver | RTL8139 + VirtIO-net |
+| A-010 | UsbDriverAgent | Driver | xHCI USB |
+| A-011–A-016 | Boot agents | System/Driver | PCI, SMP, Trust, GPU |
 
 ### 1. Kernel que SE CURA
 Quando um erro ocorre (Page Fault, GPF, OOM), o kernel não dá BSOD:
@@ -77,18 +79,20 @@ SelfHeal::record_failure() → lessons.push()
   → Próximo erro similar: already_tried()=true → action DIFERENTE
 ```
 
-## 🏗️ O que foi construído (40 sprints / 11 blocos)
+## 🏗️ O que foi construído (45 sprints / 13 blocos)
 
-| Bloco | Sprints | O que |
-|---|---|---|
-| Chassi | 1-17 | VGA, heap, EventBus, IPC, SMP, APIC |
-| Discovery | 18-22 | PCI, ACPI, MHI, Trust, LAPIC timer |
-| Rede | 23-24 | RTL8139, smoltcp, e1000 removal |
-| Transformer | 26-27 | Attention, 4 layers BitNet, generate_text() |
-| HW-Aware LLM | 28-30 | PCI+USB+SMBIOS training, xHCI driver |
-| Capabilities | 31 | O que cada hardware FAZ + skills + MHI |
-| Self-Healing | 32-37 | Panic → LLM → recovery, Failure Taxonomy, checkpoint |
-| **Agent/Skill-First** | **39-42** | **Agent trait, AgentRegistry, skill_loader, runtime skills** |
+| Bloco | Sprints | v | O que |
+|---|---|---|---|
+| Chassi | 1-17 | 0.1–0.12 | VGA, heap, EventBus, IPC, SMP, APIC |
+| Discovery | 18-22 | 0.13–0.17 | PCI, ACPI, MHI, Trust, LAPIC |
+| Rede | 23-24 | 0.23–0.24 | RTL8139, smoltcp |
+| Transformer | 26-27 | 0.26–0.27 | Attention BitNet |
+| HW-Aware LLM | 28-30 | 0.28–0.30 | PCI+USB training |
+| Capabilities | 31 | 0.31 | HW mapping |
+| Self-Healing | 32-37 | 0.32–0.37 | Failure taxonomy |
+| Agent/Skill-First | 39-42 | 0.39–0.40 | Agent trait, 15 agentes |
+| Network Evo | 43-44 | 0.41–0.42 | DHCP, ARP, VirtIO-net, NetPhy |
+| **Display+Bugfix** | **45** | **0.43–0.45** | **Framebuffer, VirtIO-GPU, 5 bugs** |
 
 ## 🔬 Sources de conhecimento do LLM
 

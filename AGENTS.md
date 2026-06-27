@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.40.0 🏆
-#   AGENT/SKILL-FIRST ARCHITECTURE
-#   Tudo é agente ou skill. Nada de tasks, serviços, drivers avulsos.
+#   PLANO DIRETOR — neural-os-core v0.45.0 🏆
+#   AGENT/SKILL-FIRST + VIRTIO-GPU + PCI CAPS + BUGFIX
+#   Tudo é agente ou skill. Drivers manuais sem dependências externas.
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -39,30 +39,32 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
-# Current Agent Landscape (v0.40.0 — 16 agents — Block 11 consolidado)
+# Current Agent Landscape (v0.45.0 — 16 agents — Block 11 consolidado)
 
 | Código | Agente | Status | Tipo | Função |
 |---|---|---|---|---|
 | A-001 | **SystemAgent** | ✅ Agent | System (Oneshot) | Init, SYSTEM_READY, EchoSkill |
-| A-002 | MonitorAgent | 🟡 wrapper | System (Legacy) | Hardware context tensor |
-| A-003 | HwBridgeAgent | 🟡 wrapper | Router (Legacy) | Scancode IRQ bridge |
-| A-004 | NetAgent | 🟡 wrapper | Network (Legacy) | smoltcp poll + HTTP |
-| A-005 | InputAgent | 🟡 wrapper | Console (Legacy) | Keyboard buffer |
-| A-006 | CortexAgent | 🟡 wrapper | Inference (Legacy) | LLM generate_text() |
-| A-007 | HermesAgent | 🟡 wrapper | Router (Legacy) | Intent routing + skills |
-| A-008 | ConsoleAgent | 🟡 wrapper | Console (Legacy) | VGA+serial output |
-| A-009 | NetDriverAgent | 📝 módulo | Driver | RTL8139 bare-metal |
-| A-010 | UsbDriverAgent | 📝 módulo | Driver | xHCI port scan |
-| A-011 | SelfHealAgent | ✅ struct | System | Failure recovery |
-| A-012 | MemoryAgent | ✅ struct | System | Bitmap/Slab/MHI |
-| A-013 | PlatformAgent | ✅ módulo | System | PCI+ACPI+APIC |
-| A-014 | SMPAgent | ✅ módulo | System | Multi-core boot |
-| A-015 | TrustAgent | ✅ struct | System | TrustCache |
-| A-016 | SkillManagerAgent | 🟡 struct | Skill | skill_loader + /add_skill |
+| A-002 | MonitorAgent | ✅ Agent | System (Oneshot) | Publica SYSTEM_READY |
+| A-003 | HwBridgeAgent | ✅ Agent | Router (Continuous) | Scancode IRQ bridge |
+| A-004 | NetAgent | ✅ Agent | Network (Continuous) | smoltcp poll + HTTP |
+| A-005 | InputAgent | ✅ Agent | Console (Continuous) | Keyboard buffer |
+| A-006 | CortexAgent | ✅ Agent | Inference (Continuous) | LLM generate_text() |
+| A-007 | HermesAgent | ✅ Agent | Router (Continuous) | Intent routing + skills |
+| A-008 | **DisplayAgent** | ✅ Agent | Console (Continuous) | **Framebuffer BGRA32** |
+| A-009 | NetDriverAgent | ✅ Agent | Driver (Oneshot) | RTL8139 + VirtIO-net |
+| A-010 | UsbDriverAgent | ✅ Agent | Driver (Oneshot) | xHCI port scan |
+| A-011 | **BootSelfHealAgent** | ✅ Agent | System (Oneshot) | SelfHeal init |
+| A-012 | **BootTrustAgent** | ✅ Agent | System (Oneshot) | TrustCache init |
+| A-013 | **PlatformAgent** | ✅ Agent | System (Oneshot) | PCI+ACPI+APIC+SMP |
+| A-014 | **MemoryAgent** | ✅ Agent | System (Oneshot) | MHI + SystemArchitecture |
+| A-015 | **GpuDriverAgent** | ✅ Agent | Driver (Oneshot) | **VirtIO-GPU detect** |
+| A-016 | **HwDetectAgent** | ✅ Agent | System (Oneshot) | HwIdentifySkill |
 
 Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo existente, 🟡 wrapper = LegacyTaskAgent (migrar), 📝 = módulo avulso
 
 **Bloco 11 (Sprints 39-42):** Bloco único e consolidado. Tudo sobre agentes e skills — desde a base (SkillLoader, Agent trait) até a migração completa dos 7 wrappers e DriverAgents.
+**Bloco 12 (Sprints 43-44):** Network Evolution — DHCP, ARP, VirtIO-net manual, NetPhy unificada.
+**Sprint 45 (v0.43-0.45):** Display subsystem + VirtIO-GPU + bugfix estrutural (H3-H12).
 
 # Operational Rules & Guardrails
 - **Zero Hallucination Policy:** State explicitly if you don't know a low-level hardware interaction. Do not invent `no_std`-incompatible crates.
@@ -139,7 +141,7 @@ Panic handler → FailureClass::classify() → SelfHeal::analyze() → RecoveryA
 ```
 cargo run → bootloader → kernel_main
   ├─ vga_buffer::init(offset)
-  ├─ interrupts::init_idt()       (GDT + TSS + IDT)
+  ├─ interrupts::init_idt()       (GDT + TSS + IDT — 32 handlers 0-31)
   ├─ memory::init_memory(offset)  (OffsetPageTable)
   ├─ BootInfoFrameAllocator::init
   ├─ allocator::init_heap()       (LockedHeap 100 KB)
@@ -149,26 +151,25 @@ cargo run → bootloader → kernel_main
   ├─ Intent Router: Linear → SiLU → argmax
   ├─ BitNet: quantize_to_packed() → BitLinear 2-bit forward
   ├─ 1000x frame stress test
-  ├─ init_pci()                   (PCI scan)
-  ├─ init_acpi()                  (RSDP + MADT)
-  ├─ init_apic(info)              (set_page_uc → LAPIC init + start_timer → PIC disable → IOAPIC keyboard redirect)
-   ├─ smp::init_smp()              (INIT-SIPI-SIPI → AP multi-core boot via OffsetPageTable)
-   ├─ SkillRegistry (EchoSkill)    (Skill Registry + MCP Layer)
-   ├─ SystemArchitecture::infer
-   ├─ MemoryHierarchy::new()
-   ├─ *SYSTEM_ARCH.lock() = Some(arch)
-   ├─ *MEMORY_HIERARCHY.lock() = Some(mhi)
-   ├─ init_driver_rtl8139()       (RTL8139 via I/O ports, fallback offline)
-   └─ NeuralExecutor::run()
-        ├─ AgentTask::new(system_daemon) → poll → hlt (woken by LAPIC timer)
-        ├─ AgentTask::new(hardware_monitor_daemon)
-        ├─ AgentTask::new(hw_bridge_daemon)
-        ├─ AgentTask::new(network_agent_daemon)  (smoltcp poll + HTTP get)
-        ├─ AgentTask::new(input_daemon)
-        ├─ AgentTask::new(cortex_llm_daemon)     (LLM transformer generate)
-        ├─ AgentTask::new(intent_router_daemon)
-        └─ AgentTask::new(hermes_console_daemon)
-             └─ hardware_context_tensor() a cada 100 iteracoes
+  ├─ init_global_allocator()
+  ├── AgentRegistry::init_phase()  (8 boot agents):
+  │    PlatformAgent   → PCI + ACPI + APIC + SMP
+  │    MemoryAgent     → Arch + MHI
+  │    BootSelfHealAgent
+  │    BootTrustAgent
+  │    NetDriverAgent  → VirtIO-net → RTL8139
+  │    UsbDriverAgent  → xHCI
+  │    GpuDriverAgent  → VirtIO-GPU (PCI caps)
+  │    HwDetectAgent   → HwIdentifySkill
+  └── AgentRegistry::run()         (8 runtime agents):
+       SystemAgent      → SYSTEM_READY + EchoSkill
+       MonitorAgent     → (oneshot, já foi)
+       HwBridgeAgent    → scancode bridge
+       NetAgent         → DHCP + smoltcp poll
+       InputAgent       → keyboard buffer
+       CortexAgent      → LLM inference
+       HermesAgent      → intent routing + skills
+       DisplayAgent     → VGA + framebuffer output
 ```
 
 ## Active Dependencies (neural-kernel)
