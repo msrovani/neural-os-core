@@ -38,7 +38,7 @@ impl Agent for MonitorAgent {
     fn manifest(&self) -> &AgentManifest { &MONITOR_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if self.done { return AgentTickResult::Done; }
-        let event = Event { id: 0, topic: String::from("SYSTEM_READY"), payload: vec![1, 2, 3], token: CapabilityToken(1) };
+        let event = Event { id: 0, topic: String::from("SYSTEM_READY"), payload: vec![1, 2, 3], token: CapabilityToken::Legacy(1) };
         match EVENT_BUS.publish(event) {
             Ok(()) => { serial_println!("[MONITOR] Evento SYSTEM_READY publicado."); }
             Err(e) => { serial_println!("[MONITOR] Falha: {}", e); }
@@ -70,7 +70,7 @@ impl Agent for HwBridgeAgent {
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from("RAW_HW_IRQ1"),
                 payload: vec![scancode],
-                token: CapabilityToken(1),
+                token: CapabilityToken::Legacy(1),
             });
         }
         AgentTickResult::Pending
@@ -148,7 +148,7 @@ impl Agent for InputAgent {
                             println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
                             let _ = EVENT_BUS.publish(Event {
                                 id: 0, topic: String::from("USER_INTENT"),
-                                payload: text.into_bytes(), token: CapabilityToken(1),
+                                payload: text.into_bytes(), token: CapabilityToken::Legacy(1),
                             });
                         }
                     }
@@ -232,7 +232,7 @@ impl Agent for CortexAgent {
             serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
-                payload: output.into_bytes(), token: CapabilityToken(1),
+                payload: output.into_bytes(), token: CapabilityToken::Legacy(1),
             });
         }
         AgentTickResult::Pending
@@ -283,7 +283,7 @@ impl HermesAgent {
     }
 
     fn execute_skill(&self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
-        let token_val = token.0;
+        let token_val = token.as_legacy();
         let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         {
             let mut tc = TRUST_CACHE.lock();
@@ -464,7 +464,7 @@ impl Agent for HermesAgent {
                     *PENDING_SKILL.lock() = Some((name.clone(), desc.clone()));
                     let _ = EVENT_BUS.publish(Event {
                         id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
-                        payload: prompt.into_bytes(), token: CapabilityToken(1),
+                        payload: prompt.into_bytes(), token: CapabilityToken::Legacy(1),
                     });
                     self.state = HermesState::AwaitingLLM;
                     String::from("...")
@@ -490,7 +490,7 @@ impl Agent for HermesAgent {
                             serial_println!("[CORTEX-LLM] Enviando: \"{}\"", msg);
                             let _ = EVENT_BUS.publish(Event {
                                 id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
-                                payload: msg.as_bytes().to_vec(), token: CapabilityToken(1),
+                                payload: msg.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
                             });
                             self.state = HermesState::AwaitingLLM;
                             String::from("...")
@@ -534,7 +534,7 @@ impl Agent for HermesAgent {
                 }
                 let _ = EVENT_BUS.publish(Event {
                     id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-                    payload: response.into_bytes(), token: CapabilityToken(1),
+                    payload: response.into_bytes(), token: CapabilityToken::Legacy(1),
                 });
             } else {
                 EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);

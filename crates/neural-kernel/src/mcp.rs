@@ -61,7 +61,7 @@ impl McpAgent {
                     id: 0,
                     topic: String::from(hermes::TOPIC_USER_INTENT),
                     payload: method.as_bytes().to_vec(),
-                    token: crate::CapabilityToken(1),
+                    token: crate::CapabilityToken::Legacy(1),
                 });
                 Some(alloc::format!("MCP: '{}' roteado para Hermes", cmd))
             }

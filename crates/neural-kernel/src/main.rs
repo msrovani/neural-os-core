@@ -25,6 +25,7 @@ mod cortex;
 mod cron;
 mod display;
 mod hermes;
+mod identity;
 mod mcp;
 mod interrupts;
 mod inventory;
@@ -178,7 +179,7 @@ impl Skill for HwIdentifySkill {
             id: 0,
             topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
             payload: llm_query.into_bytes(),
-            token: crate::CapabilityToken(1),
+            token: crate::CapabilityToken::Legacy(1),
         });
         Ok(report.into_bytes())
     }
@@ -303,7 +304,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         id: 0,
         topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
         payload: llm_prompt.into_bytes(),
-        token: crate::CapabilityToken(1),
+        token: crate::CapabilityToken::Legacy(1),
     });
 
     let msg_bytes = msg.clone().into_bytes();
@@ -311,7 +312,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         id: 0,
         topic: alloc::string::String::from(cortex::TOPIC_KERNEL_ERROR),
         payload: msg_bytes,
-        token: crate::CapabilityToken(1),
+        token: crate::CapabilityToken::Legacy(1),
     });
     EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.into_bytes(),
         crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);

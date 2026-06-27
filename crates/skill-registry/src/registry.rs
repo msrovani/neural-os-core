@@ -62,7 +62,7 @@ impl SkillRegistry {
     pub fn validate_token(&self, name: &str, token: &CapabilityToken) -> bool {
         if let Some(skill) = self.skills.get(name) {
             let manifest = skill.manifest();
-            return manifest.required_tokens.contains(&token.0);
+            return manifest.required_tokens.contains(&token.as_legacy());
         }
         false
     }
@@ -87,7 +87,7 @@ impl SkillRegistry {
         }
         if !self.is_auto_approve(name) {
             let manifest = skill.manifest();
-            if !manifest.required_tokens.contains(&token.0) {
+            if !manifest.required_tokens.contains(&token.as_legacy()) {
                 return Err("token de capacidade nao autorizado para esta skill");
             }
         }

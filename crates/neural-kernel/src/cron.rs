@@ -72,7 +72,7 @@ impl Agent for CronAgent {
                     id: 0,
                     topic: job.topic.clone(),
                     payload: job.message.as_bytes().to_vec(),
-                    token: crate::CapabilityToken(1),
+                    token: crate::CapabilityToken::Legacy(1),
                 });
             }
         }

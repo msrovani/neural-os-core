@@ -114,7 +114,7 @@ impl SecurityAgent {
                     id: 0,
                     topic: String::from("SECURITY_ALERT"),
                     payload: alloc::format!("ALERTA: {} eventos detectados, severidade {}", self.events.len(), sev).into_bytes(),
-                    token: crate::CapabilityToken(1),
+                    token: crate::CapabilityToken::Legacy(1),
                 });
             }
             self.events.clear();
