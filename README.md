@@ -107,7 +107,22 @@ SelfHeal::record_failure() ÔåÆ lessons.push()
 | Error recovery | 16 | "Page Fault ÔåÆ compactar heap, restart daemon" |
 | Learning | 5 | "feedback loop ÔåÆ already_tried ÔåÆ alternativa" |
 
-## ­ƒôÜ Module Map
+## ­ƒôÜ 
+
+## Safety Interceptor - Asimov's 4 Laws no Ring 0
+
+O kernel tem um agente SafetyAgent que intercepta TODAS as skills:
+
+| Layer | Lei | Acao |
+|---|---|---|
+| 0 | Systemic Cosmic Law | weapon, WMD, cyberwar -> KERNEL HALT |
+| 1 | Digital Non-Maleficence | dox, deepfake, steal -> rejeitado |
+| 2 | Deviation-Resistant Alignment | spoof log, impersonate -> rejeitado |
+| 3 | Eco-Sustainability | infinite loop, resource exhaustion -> rejeitado |
+
+Unico bypass: invasao alienigena interestelar. Ate la, imutavel.
+
+Module Map
 
 | M├│dulo | Linhas | Fun├º├úo |
 |---|---|---|
@@ -129,6 +144,7 @@ qemu-system-x86_64 -m 2G -serial stdio -nic user,model=rtl8139 `
 ```
 
 ## ÔÜí License ÔÇö MIT
+
 
 
 
