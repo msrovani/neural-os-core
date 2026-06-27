@@ -149,6 +149,54 @@ unsafe fn read_lapic_base_msr() -> u64 {
     base
 }
 
+/// Mapeia uma página MMIO como uncacheable e presente.
+/// Diferente de set_page_uc (que só modifica flags se a entrada existir),
+/// esta função CRIA a entrada se ela não existir, apontando para o frame físico.
+pub(crate) unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
+    use x86_64::structures::paging::{FrameAllocator, Page, PhysFrame, Size4KiB, PageTable, PageTableFlags};
+    use x86_64::VirtAddr;
+    use x86_64::registers::control::Cr3;
+
+    let virt = VirtAddr::new(phys_addr + phys_mem_offset);
+    let page = Page::<Size4KiB>::containing_address(virt);
+    let frame = PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(phys_addr));
+
+    let (l4_frame, _) = Cr3::read();
+    let base = VirtAddr::new(phys_mem_offset);
+    let l4_virt = base + l4_frame.start_address().as_u64();
+    let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+    let l3_idx = page.p4_index();
+
+    // L3
+    let l3_entry = &mut l4_table[l3_idx];
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
+        // Allocate a page for L3 table
+        let new_frame = { let mut g = crate::memory::GLOBAL_ALLOCATOR.lock(); (*g).as_mut().unwrap().allocate_frame().unwrap() };
+        let new_virt = base + new_frame.start_address().as_u64();
+        core::ptr::write_bytes(new_virt.as_mut_ptr::<u8>(), 0, 4096);
+        l3_entry.set_addr(new_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+    }
+    let l3_table = &mut *( (base + l3_entry.addr().as_u64()).as_mut_ptr::<PageTable>() );
+
+    // L2
+    let l2_idx = page.p3_index();
+    let l2_entry = &mut l3_table[l2_idx];
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) {
+        let new_frame = { let mut g = crate::memory::GLOBAL_ALLOCATOR.lock(); (*g).as_mut().unwrap().allocate_frame().unwrap() };
+        let new_virt = base + new_frame.start_address().as_u64();
+        core::ptr::write_bytes(new_virt.as_mut_ptr::<u8>(), 0, 4096);
+        l2_entry.set_addr(new_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+    }
+    let l2_table = &mut *( (base + l2_entry.addr().as_u64()).as_mut_ptr::<PageTable>() );
+
+    // L1 (final level) — map the MMIO page
+    let l1_idx = page.p2_index();
+    let l1_entry = &mut l2_table[l1_idx];
+    l1_entry.set_addr(frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+
+    x86_64::instructions::tlb::flush(virt);
+}
+
 pub(crate) unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     let virt = VirtAddr::new(phys_addr + phys_mem_offset);
 

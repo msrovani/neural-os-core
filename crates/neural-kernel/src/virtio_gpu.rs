@@ -26,31 +26,26 @@ pub const VIRTIO_GPU_MODERN: u16 = 0x1050; // modern only (MMIO)
 
 const QUEUE_NUM: u16 = 32;
 
-// --- Register constraints (diferentes para I/O legacy vs MMIO modern) ---
+// --- Register constraints (I/O legacy vs MMIO modern) ---
 #[derive(Clone, Copy)]
 struct RegOffsets {
-    df: u16,  // device features
-    gf: u16,  // guest features
-    qa: u16,  // queue address
-    qs: u16,  // queue size
-    qsl: u16, // queue select
-    qn: u16,  // queue notify
-    st: u16,  // device status
+    df: u16, gf: u16, qa: u16, qs: u16, qsl: u16, qn: u16, st: u16, qe: u16,
 }
 
-const LEGACY: RegOffsets = RegOffsets { df: 0x00, gf: 0x04, qa: 0x08, qs: 0x0C, qsl: 0x0E, qn: 0x10, st: 0x12 };
+const LEGACY: RegOffsets = RegOffsets {
+    df: 0x00, gf: 0x04, qa: 0x08, qs: 0x0C, qsl: 0x0E, qn: 0x10, st: 0x12, qe: 0,
+};
 
-// Modern virtio MMIO (common config at BAR+offset cap.cfg_type=1)
-// VirtIO 1.1 §4.1.4.3: struct virtio_pci_common_cfg
-// Offsets from common config base (BAR4 + 0x0000 for our device)
+// Modern VirtIO 1.1 §4.1.4.3: struct virtio_pci_common_cfg offsets
 const MODERN: RegOffsets = RegOffsets {
-    df: 0x04,  // device_feature (R, after select=0)
-    gf: 0x0C,  // driver_feature (W, after select=0x08)
-    qa: 0x20,  // queue_desc (64-bit, low at 0x20, high at 0x24)  
-    qs: 0x18,  // queue_size (R, after queue_select at 0x16)
-    qsl: 0x16, // queue_select (W, write queue index here)
-    qn: 0x0,   // Notify is NOT in common config; in device-specific notify cap
-    st: 0x14,  // device_status (R/W)
+    df: 0x04,  // device_feature (R, after DeviceFeatureSel=0x00)
+    gf: 0x0C,  // driver_feature (W, after DriverFeatureSel=0x08)
+    qa: 0x20,  // queue_desc (64-bit)
+    qs: 0x18,  // queue_size
+    qsl: 0x16, // queue_select
+    qn: 0x0,   // notify not in common cfg
+    st: 0x14,  // device_status
+    qe: 0x1C,  // queue_enable (W: 1 = enable)
 };
 
 /// Register access: I/O ports (legacy) ou MMIO (modern)
@@ -97,17 +92,21 @@ impl Regs {
     /// Modern MMIO requires writing the register select first for 64-bit features
     fn write_feat_hi(&self, v: u32) {
         if self.is_mmio {
-            // Modern: select high 32 bits, then write
-            unsafe { (self.mmio_ptr(0x00C)).write_volatile(v); } // GuestFeaturesHigh at 0x00C
+            // Modern: write 1 to DriverFeatureSel (0x08), then write to DriverFeature (0x0C)
+            unsafe { (self.mmio_ptr(0x08)).write_volatile(1u32); }
+            unsafe { (self.mmio_ptr(0x0C)).write_volatile(v); }
+            unsafe { (self.mmio_ptr(0x08)).write_volatile(0u32); } // restore
         } else {
-            // Legacy: write at offset +4
             self.w32(self.ro.gf + 4, v);
         }
     }
     fn read_feat_hi(&self) -> u32 {
         if self.is_mmio {
-            // Modern: select high, read
-            unsafe { (self.mmio_ptr(0x004)).read_volatile() } // DeviceFeaturesHigh at 0x004
+            // Modern: write 1 to DeviceFeatureSel (0x00), then read from DeviceFeature (0x04)
+            unsafe { (self.mmio_ptr(0x00)).write_volatile(1u32); }
+            let v = unsafe { (self.mmio_ptr(0x04)).read_volatile() };
+            unsafe { (self.mmio_ptr(0x00)).write_volatile(0u32); } // restore
+            v
         } else {
             self.r32(self.ro.df + 4)
         }
@@ -130,15 +129,15 @@ unsafe fn setup_q(io: &Regs, idx: u16, sz: u16) -> Option<u64> {
         // Legacy I/O: single PFN
         io.w32(io.ro.qa, (pa >> 12) as u32);
     } else {
-        // Modern MMIO: desc/driver/device split (3 separate addresses)
-        io.w32(io.ro.qa, pa as u32);        // QueueDescLow
-        io.w32(io.ro.qa + 4, (pa >> 32) as u32); // QueueDescHigh
-        let avail_pa = pa + 4096;
-        io.w32(io.ro.qa + 8, avail_pa as u32);   // QueueDriverLow
-        io.w32(io.ro.qa + 12, (avail_pa >> 32) as u32); // QueueDriverHigh
-        let used_pa = pa + 8192;
-        io.w32(io.ro.qa + 16, used_pa as u32);   // QueueDeviceLow
-        io.w32(io.ro.qa + 20, (used_pa >> 32) as u32); // QueueDeviceHigh
+        // Modern MMIO: desc/driver/device split
+        io.w32(io.ro.qa, pa as u32);
+        io.w32(io.ro.qa + 4, (pa >> 32) as u32);
+        io.w32(io.ro.qa + 8, (pa + 4096) as u32);
+        io.w32(io.ro.qa + 12, ((pa + 4096) >> 32) as u32);
+        io.w32(io.ro.qa + 16, (pa + 8192) as u32);
+        io.w32(io.ro.qa + 20, ((pa + 8192) >> 32) as u32);
+        // Enable queue (modern only)
+        io.w16(io.ro.qe, 1);
     }
     Some(pa)
 }
@@ -187,7 +186,7 @@ impl GpuDevice {
                         return None;
                     }
                     // Mapeia como uncacheable
-                    crate::apic::set_page_uc(base, phys_mem_offset);
+                    crate::apic::map_mmio_page(base, phys_mem_offset);
                     serial_println!("[VGPU] VirtIO cap: bar={} off={:#x} len={:#x} base={:#x}",
                         cap.bar, cap.offset, cap.length, base);
                     (0u16, base, true)
@@ -205,7 +204,7 @@ impl GpuDevice {
 
         // Map MMIO BAR as uncacheable BEFORE accessing
         if is_mmio && mmio_base > 0 {
-            unsafe { crate::apic::set_page_uc(mmio_base, phys_mem_offset); }
+            unsafe { crate::apic::map_mmio_page(mmio_base, phys_mem_offset); }
             serial_println!("[VGPU] MMIO BAR mapeado UC em {:x}", mmio_base);
         }
 
@@ -221,11 +220,29 @@ impl GpuDevice {
             // ACK + DRIVER
             io.add_status(1); io.add_status(2);
 
-            // Features (64-bit)
-            let feat_low = io.r32(io.ro.df);
-            let feat_high = io.read_feat_hi();
-            io.w32(io.ro.gf, feat_low);
-            io.write_feat_hi(feat_high);
+            // Features (64-bit) — modern precisa selecionar low/high via FeatureSel
+            if is_mmio {
+                // Select low (0), read, write
+                unsafe { (io.mmio_ptr(0x00)).write_volatile(0u32); } // DeviceFeatureSel = 0
+                let feats = unsafe { (io.mmio_ptr(0x04)).read_volatile() }; // DeviceFeature
+                unsafe { (io.mmio_ptr(0x08)).write_volatile(0u32); } // DriverFeatureSel = 0
+                unsafe { (io.mmio_ptr(0x0C)).write_volatile(feats); } // DriverFeature (low)
+                // Select high (1), read, write
+                unsafe { (io.mmio_ptr(0x00)).write_volatile(1u32); }
+                let feats_hi = unsafe { (io.mmio_ptr(0x04)).read_volatile() };
+                unsafe { (io.mmio_ptr(0x08)).write_volatile(1u32); }
+                unsafe { (io.mmio_ptr(0x0C)).write_volatile(feats_hi); }
+                // Restore selects to 0
+                unsafe { (io.mmio_ptr(0x00)).write_volatile(0u32); }
+                unsafe { (io.mmio_ptr(0x08)).write_volatile(0u32); }
+                serial_println!("[VGPU] dev_feat lo={:#x} hi={:#x}", feats, feats_hi);
+            } else {
+                let feat_low = io.r32(io.ro.df);
+                let feat_high = io.r32(io.ro.df + 4);
+                io.w32(io.ro.gf, feat_low);
+                io.w32(io.ro.gf + 4, feat_high);
+                serial_println!("[VGPU] dev_feat lo={:#x} hi={:#x}", feat_low, feat_high);
+            }
 
             // FEATURES_OK
             io.add_status(8);
@@ -279,10 +296,11 @@ impl GpuDevice {
             *((d1 as *mut u32).add(2)) = 128;         // len = 128
             *((d1 as *mut u16).add(6)) = 2;            // flags = WRITE
 
-            // Avail ring
-            *avail.add(4) = 0;
+            // Avail ring: flags at +0, idx at +2, ring[] at +4
+            *avail = 0;         // flags = 0
+            *avail.add(1) = 0;  // ring[0] = 0 (descriptor chain head = descriptor 0)
             core::sync::atomic::fence(Ordering::SeqCst);
-            *avail = 1;
+            *avail.add(2) = 1;  // idx = 1 (updated AFTER ring entries)
 
             // Notify queue 0
             if notify_addr > 0 {
@@ -292,11 +310,10 @@ impl GpuDevice {
                 io.w16(io.ro.qn, 0);
             }
 
-            // Poll for completion
+            // Poll for completion (used ring idx at offset +2 from page 2)
             for _ in 0..1000000 {
                 core::hint::spin_loop();
-                let used_idx = *((qpa + 8192 + off) as *const u16);
-                if used_idx > 0 { break; }
+                if *((qpa + 8192 + off + 2) as *const u16) > 0 { break; }
             }
 
             let resp_type = *((cva + 0x100) as *const u32);
@@ -380,10 +397,11 @@ unsafe fn submit_q(io: &Regs, qpa: u64, cpa: u64, cmd_len: usize, off: u64, noti
     *((d1 as *mut u32).add(2)) = 64;                          // +24: len
     *((d1 as *mut u16).add(6)) = 2;                           // +28: flags = WRITE
 
-    // Avail ring: ring[0] = 0 (descriptor chain head)
-    *avail.add(4) = 0;
+    // Avail ring: flags=0, ring[0]=0, idx=1
+    *avail = 0;
+    *avail.add(1) = 0;          // ring[0] = descriptor 0
     core::sync::atomic::fence(Ordering::SeqCst);
-    *avail = 1;  // avail.idx = 1
+    *avail.add(2) = 1;          // idx = 1 (written AFTER ring entries)
 
     // Notify device
     if notify_addr > 0 {
@@ -393,11 +411,11 @@ unsafe fn submit_q(io: &Regs, qpa: u64, cpa: u64, cmd_len: usize, off: u64, noti
         io.w16(io.ro.qn, 0);
     }
 }
-}
 
 unsafe fn poll_q(qpa: u64, off: u64) -> bool {
+    // Used ring at page 2: flags at +0, idx at +2
     for _ in 0..2000000 {
-        if *((qpa + 8192 + off) as *const u16) > 0 { return true; }
+        if *((qpa + 8192 + off + 2) as *const u16) > 0 { return true; }
         core::hint::spin_loop();
     }
     false
