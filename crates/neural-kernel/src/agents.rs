@@ -756,3 +756,29 @@ impl Agent for HwDetectAgent {
         AgentTickResult::Done
     }
 }
+
+// ---------------------------------------------------------------------------
+// GpuDriverAgent — init VirtIO-GPU (boot phase)
+// ---------------------------------------------------------------------------
+
+pub struct GpuDriverAgent;
+
+const GPUDRIVER_MANIFEST: AgentManifest = AgentManifest {
+    name: "gpu_driver",
+    kind: AgentKind::Driver,
+    schedule: ScheduleKind::Oneshot,
+    auto_start: true,
+    persist: false,
+};
+
+impl Agent for GpuDriverAgent {
+    fn manifest(&self) -> &AgentManifest { &GPUDRIVER_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        unsafe {
+            if crate::virtio_gpu::init_driver_virtio_gpu() {
+                serial_println!("[VGPU] VirtIO-GPU OK.");
+            }
+        }
+        AgentTickResult::Done
+    }
+}

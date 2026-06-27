@@ -51,6 +51,7 @@ mod network_agent;
 mod proto;
 mod rtl8139;
 mod virtio_net;
+mod virtio_gpu;
 
 use lazy_static::lazy_static;
 
@@ -438,6 +439,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     registry.register(Box::new(agents::BootTrustAgent));
     registry.register(Box::new(agents::NetDriverAgent));
     registry.register(Box::new(agents::UsbDriverAgent));
+    registry.register(Box::new(agents::GpuDriverAgent));
     registry.register(Box::new(agents::HwDetectAgent));
     serial_println!("[BOOT] {} boot agents registrados. Executando init_phase...", registry.agents.len());
     registry.init_phase();

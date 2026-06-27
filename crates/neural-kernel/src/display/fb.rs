@@ -8,6 +8,9 @@ use embedded_graphics::{
     Pixel,
 };
 
+/// GPU device global — populado por init_driver_virtio_gpu()
+pub static GPU: spin::Mutex<Option<crate::virtio_gpu::GpuDevice>> = spin::Mutex::new(None);
+
 /// Informações do framebuffer obtidas do bootloader
 #[derive(Clone, Copy)]
 pub struct FramebufferInfo {
