@@ -44,6 +44,7 @@ mod tensor;
 mod time_utils;
 mod usage;
 mod conversation;
+mod dma;
 mod vga_buffer;
 mod net;
 mod netstack;
@@ -180,7 +181,8 @@ impl Skill for HwIdentifySkill {
 
 lazy_static! {
     static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
-    static ref SKILL_REGISTRY: spin::Mutex<SkillRegistry> = {
+    // Locks IRQ-safe: SELF_HEAL e RESPAWN_QUEUE são acessados de handlers de exceção
+    static ref SKILL_REGISTRY: ticket_lock::TicketLock<SkillRegistry> = {
         let mut reg = SkillRegistry::new();
         reg.register(alloc::boxed::Box::new(EchoSkill));
         reg.register(alloc::boxed::Box::new(SystemStatusSkill));
@@ -188,21 +190,21 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
         reg.register(alloc::boxed::Box::new(HwIdentifySkill));
         reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
-        spin::Mutex::new(reg)
+        ticket_lock::TicketLock::new(reg)
     };
-    static ref TRUST_CACHE: spin::Mutex<trust::TrustCache> = spin::Mutex::new(trust::TrustCache::new());
+    static ref TRUST_CACHE: ticket_lock::TicketLock<trust::TrustCache> = ticket_lock::TicketLock::new(trust::TrustCache::new());
     static ref SYSTEM_ARCH: spin::Mutex<Option<inventory::SystemArchitecture>> = spin::Mutex::new(None);
     static ref MEMORY_HIERARCHY: spin::Mutex<Option<mhi::MemoryHierarchy>> = spin::Mutex::new(None);
-    static ref USAGE_TRACKER: spin::Mutex<usage::UsageTracker> = spin::Mutex::new(usage::UsageTracker::new());
-    static ref EVENT_LOG: spin::Mutex<conversation::EventLog> = spin::Mutex::new(conversation::EventLog::new());
-    static ref CONVERSATION_TRACKER: spin::Mutex<hermes::ConversationTracker> = spin::Mutex::new(hermes::ConversationTracker::new());
-    static ref SELF_HEAL: spin::Mutex<self_heal::SelfHeal> = spin::Mutex::new(self_heal::SelfHeal::new());
-    static ref RESPAWN_QUEUE: spin::Mutex<alloc::vec::Vec<alloc::string::String>> = spin::Mutex::new(alloc::vec::Vec::new());
-    static ref SKILL_STORAGE: spin::Mutex<skill_loader::SkillLoader> = {
+    static ref USAGE_TRACKER: ticket_lock::TicketLock<usage::UsageTracker> = ticket_lock::TicketLock::new(usage::UsageTracker::new());
+    static ref EVENT_LOG: ticket_lock::TicketLock<conversation::EventLog> = ticket_lock::TicketLock::new(conversation::EventLog::new());
+    static ref CONVERSATION_TRACKER: ticket_lock::TicketLock<hermes::ConversationTracker> = ticket_lock::TicketLock::new(hermes::ConversationTracker::new());
+    static ref SELF_HEAL: crate::sync::irq_lock::IrqSafeLock<self_heal::SelfHeal> = crate::sync::irq_lock::IrqSafeLock::new(self_heal::SelfHeal::new());
+    static ref RESPAWN_QUEUE: crate::sync::irq_lock::IrqSafeLock<alloc::vec::Vec<alloc::string::String>> = crate::sync::irq_lock::IrqSafeLock::new(alloc::vec::Vec::new());
+    static ref SKILL_STORAGE: ticket_lock::TicketLock<skill_loader::SkillLoader> = {
         let loader = skill_loader::load_embedded_skills();
-        spin::Mutex::new(loader)
+        ticket_lock::TicketLock::new(loader)
     };
-    static ref PENDING_SKILL: spin::Mutex<Option<(alloc::string::String, alloc::string::String)>> = spin::Mutex::new(None);
+    static ref PENDING_SKILL: crate::sync::irq_lock::IrqSafeLock<Option<(alloc::string::String, alloc::string::String)>> = crate::sync::irq_lock::IrqSafeLock::new(None);
 }
 
 // ---------------------------------------------------------------------------
