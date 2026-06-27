@@ -2,8 +2,10 @@ param(
     [string]$Smp = "2",
     [int]$Memory = 2048,
     [string]$Nic = "user,model=rtl8139",
-    [switch]$NoGraphic = $true,
-    [switch]$DebugInt = $false
+    [switch]$NoGraphic = $false,
+    [switch]$DebugInt = $false,
+    [switch]$NoAccel = $false,
+    [string]$Vga = "std"
 )
 
 $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -15,39 +17,58 @@ if (-not (Test-Path $bootImg)) {
     exit 1
 }
 
+# Check if WHPX is available (Windows Hypervisor Platform)
+$accel = ""
+if (-not $NoAccel) {
+    # Test WHPX by trying to initialize with a real machine type
+    $test = qemu-system-x86_64 -accel whpx -M pc -S 2>&1 | Select-String -SimpleMatch "not found"
+    if (-not $test) {
+        $accel = "whpx"
+    } else {
+        $testHax = qemu-system-x86_64 -accel hax -M pc -S 2>&1 | Select-String -SimpleMatch "not found"
+        if (-not $testHax) {
+            $accel = "hax"
+        }
+    }
+}
+
 $qemuArgs = @(
     "-m", "${Memory}M",
     "-serial", "file:$logFile",
     "-nic", $Nic,
     "-drive", "format=raw,file=$bootImg",
     "-no-reboot",
-    "-smp", $Smp
+    "-smp", $Smp,
+    "-vga", $Vga
 )
 
-if ($NoGraphic) {
-    $qemuArgs += "-nographic"
+if ($accel -eq "whpx") {
+    $qemuArgs = @("-accel", "whpx") + $qemuArgs
+    Write-Host "[QEMU] WHPX acceleration enabled (Windows Hypervisor Platform)"
+} elseif ($accel -eq "hax") {
+    $qemuArgs = @("-accel", "hax") + $qemuArgs
+    Write-Host "[QEMU] HAXM acceleration enabled"
+} else {
+    Write-Host "[QEMU] No hardware acceleration available. Using TCG (slow)."
 }
 
 if ($DebugInt) {
-    $qemuArgs += "-d", "int,cpu_reset,guest_errors"
-    $logTrace = "logs\neural-trace-$timestamp.log"
-    $qemuArgs += "-D", $logTrace
+    $qemuArgs += @("-d", "int,cpu_reset,guest_errors", "-D", "logs\neural-trace-$timestamp.log")
 }
 
 Write-Host "[QEMU] Boot log -> $logFile"
-if ($DebugInt) { Write-Host "[QEMU] Trace log -> $logTrace" }
-Write-Host "[QEMU] Starting Neural OS Hermes v0.40.0..."
+Write-Host "[QEMU] Starting Neural OS Hermes v0.55.0..."
 Write-Host ""
 
-# Run QEMU and also show serial output live
+# Run QEMU
 qemu-system-x86_64 @qemuArgs
 
-# Show last 30 lines of log
+# Show summary after QEMU exits
 Write-Host ""
 if (Test-Path $logFile) {
-    Write-Host "[QEMU] Exit. Last 30 lines:"
+    Write-Host "[QEMU] Exit. Last lines:"
     Write-Host "----------------------------------------"
-    Get-Content $logFile -Tail 30
+    Get-Content $logFile -Tail 20
     Write-Host "----------------------------------------"
     Write-Host "[QEMU] Full log: $logFile"
 }
