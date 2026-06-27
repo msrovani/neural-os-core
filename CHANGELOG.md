@@ -30,6 +30,39 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.50.0] — 2026-06-27 — Bloco 13 completo: Trust & Security (Ed25519, Security Pipeline)
+
+### Added — Identity & Cryptography
+- **Ed25519 identity** (`identity.rs`) — `verify_signature()` bare-metal usando `ed25519-dalek` no_std. `TrustedPublicKeys` array embutida no boot. `IdentityToken { public_key, signature, agent_name, tick }`.
+- **CapabilityToken upgrade** (`event-bus::capability`) — virou enum `CapabilityToken::Legacy(u64)` + `Ed25519(IdentityPayload)`. Compatibilidade retroativa mantida via `From<u64>`, `as_legacy()`, `is_valid()`.
+
+### Added — Security Pipeline
+- **SecurityAgent** (`security.rs`) — 5 detectores: PortScan, ArpSpoof, PingFlood, DhcpStarvation, TimerAnomaly. Correlação multi-evento com severidade 1-5. Alerta SECURITY_ALERT no EventBus.
+- **Multi-mode Trust** (#166) — `PermissionMode::TotalAccess | AskEveryTime | Scoped(Vec<String>)`
+- **Mask Secrets** (#257) — `mask_secrets()` mascara 12 padrões (API_KEY, TOKEN, sk-, ghp_, etc)
+- **Graduated Enforcement** (#258) — `PolicyState::Observe → Warn → Contain → Enforce` com escalonamento automático em `record_violation()`
+- **Path Confinement** (#256) — `PathRule` + `check_path()` limita paths por skill
+- **Posture-Aware Alerting** (#259) — `posture_check()` verifica NET_CONFIG.online antes de skill de rede
+- **Boot-time security policy** (#198) — `load_boot_policy()` seta `global_policy = PolicyState::Contain`
+
+## [0.48.0] — 2026-06-27 — Bloco 12: Network + Platform (x2APIC, Huge Pages, PCI bridges, Cron, MCP)
+
+### Added — x2APIC (#18)
+- `apic.rs` — `USING_X2APIC` flag, `lapic_read_reg()`/`lapic_write_reg()` com fallback MSR↔MMIO. Habilitado via MSR IA32_APIC_BASE bit 10.
+- Todas as funções IPI (send_init_ipi, send_sipi, wait_for_ipi_delivery) adaptadas para x2APIC.
+
+### Added — Huge Pages (#92-93)
+- `memory.rs` — `allocate_huge_2mb()` (512 frames alinhados a 2 MiB), `allocate_huge_1gb()` (262144 frames)
+
+### Added — PCI bridges recursivos (#70)
+- `pci.rs` — `scan_bus()` recursiva com `visited` set, detecta bridges multi-nível automaticamente
+
+### Added — Cron Scheduler (#232)
+- `cron.rs` — `CronAgent` com jobs por nome/intervalo. `init_defaults()` registra health (200 ticks) e memory_report (500 ticks). Publica eventos CRON_HEALTH e CRON_REPORT no EventBus.
+
+### Added — MCP Server (#172)
+- `mcp.rs` — `McpAgent` com parser de comandos textuais: `echo`, `status`, `skill list`, `help`. Comandos desconhecidos roteados para HermesAgent via USER_INTENT.
+
 ## [0.40.0] — 2026-06-26 — Agent-First Refactoring (Block 11, Sprints 39-42 consolidado)
 
 ### Bloco 11 — Agent/Skill-First Architecture 🏆

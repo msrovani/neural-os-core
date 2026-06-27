@@ -1,4 +1,4 @@
-# Neural OS Hermes ⚡ — v0.47.0
+# Neural OS Hermes ⚡ — v0.50.0 — Bloco 13: Trust & Security 🏁
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -126,8 +126,8 @@ qemu-system-x86_64 -m 2G -serial stdio -device virtio-gpu-pci `
 | bootloader | 0.9.34 | UEFI/BIOS handoff, map_physical_memory |
 | x86_64 | 0.14.13 | IDT, GDT, TSS, paging, ports, MSR |
 | smoltcp | 0.13 | TCP/IP stack, DHCP, DNS |
+| ed25519-dalek | 2.2 | Ed25519 signature verification (no_std) |
 | embedded-graphics | 0.8.2 | DrawTarget for framebuffer |
-| spin | 0.9 | Mutex (being replaced by TicketLock) |
 | ticket-lock | workspace | FIFO TicketLock |
 | event-bus | workspace | IPC publish/subscribe |
 | skill-registry | workspace | Skill trait + MCP |
@@ -136,14 +136,14 @@ qemu-system-x86_64 -m 2G -serial stdio -device virtio-gpu-pci `
 
 ## Builds
 
-- `v0.47.0+build77` — CDC Rabin + XOR Delta + Semantic Snapshot + IrqSafeLock + DmaBuf
+- `v0.50.0+build80` — Ed25519 identity, CapabilityToken enum, Security Pipeline
+- `v0.49.0+build79` — Multi-mode Trust, Mask Secrets, Graduated Enforcement
+- `v0.48.0+build78` — x2APIC, Huge Pages, PCI recursivo, Cron Scheduler, MCP Server
+- `v0.47.0+build77` — CDC Rabin, XOR Delta, Semantic Snapshot, IrqSafeLock, DmaBuf
 - `v0.46.0+build76` — IrqSafeLock, TicketLock generalization, watchdog, DmaBuf
 - `v0.45.0+build75` — Bugfix H3-H12, VirtIO-GPU PCI caps, DisplayAgent
 - `v0.44.0+build74` — VirtIO-GPU PCI capabilities + MMIO + queue setup
 - `v0.43.0+build73` — DisplayAgent + Framebuffer + embedded-graphics + font
-- `v0.42.0+build72` — VirtIO-GPU detection + MMIO + GpuDriverAgent
-- `v0.41.0+build71` — VirtIO-net manual driver, NetPhy unified
-- `v0.41.0+build70` — DHCP, ARP, requires_network
 
 ## Custom Commands (Hermes Chat)
 
