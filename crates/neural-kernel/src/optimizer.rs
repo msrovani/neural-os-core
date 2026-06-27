@@ -1,5 +1,5 @@
-//! Self-Optimization — Usage Patterns, Workflow Prediction, Dynamic Scaling.
-//! Bloco 14 — itens #157 a #163.
+//! Self-Optimization — Usage Patterns, Workflow, Scheduling, Config Learning.
+//! Bloco 14 — itens #157 a #163 + #135, #136.
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
@@ -112,11 +112,118 @@ pub fn should_bypass_llm(confidence: f32) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// #161 Self-Optimizing Scheduler
+// ---------------------------------------------------------------------------
+
+const AGENT_PRIORITIES: &[(&str, u8)] = &[
+    ("display", 5),   // output sempre responsivo
+    ("input", 5),     // entrada do usuário
+    ("hermes_console", 4),
+    ("intent_router", 4),
+    ("cortex_llm", 3),
+    ("network_agent", 2),
+    ("hw_bridge", 2),
+    ("monitor", 1),
+    ("security", 4),  // segurança tem prioridade
+    ("safety", 5),    // safety é máxima
+    ("cron", 2),
+    ("mcp", 2),
+    ("optimizer", 1),
+];
+
+pub fn get_agent_priority(name: &str) -> u8 {
+    for (n, p) in AGENT_PRIORITIES {
+        if *n == name { return *p; }
+    }
+    3 // default medium
+}
+
+/// #161: Sugere reordenação de agentes baseado no workflow detectado
+pub fn suggest_schedule(workflow: &str) -> alloc::string::String {
+    match workflow {
+        "network" => alloc::format!("📋 Workflow '{}': priorizar NetAgent, NetDriverAgent, MCP", workflow),
+        "llm" => alloc::format!("📋 Workflow '{}': priorizar CortexAgent, DisplayAgent", workflow),
+        "security" => alloc::format!("📋 Workflow '{}': priorizar SecurityAgent, SafetyAgent", workflow),
+        _ => alloc::format!("📋 Workflow '{}': schedule padrão", workflow),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #163 Hardware Config Learning
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct HardwareConfigSnapshot {
+    pub tick: u64,
+    pub ring0_mode: u8,
+    pub heap_mb: u64,
+    pub gpu_present: bool,
+    pub net_online: bool,
+}
+
+pub struct ConfigLearner {
+    snapshots: Vec<HardwareConfigSnapshot>,
+}
+
+impl ConfigLearner {
+    pub fn new() -> Self {
+        ConfigLearner { snapshots: Vec::new() }
+    }
+
+    /// Tira um snapshot da configuração atual de hardware
+    pub fn snapshot(&mut self) {
+        let arch = crate::SYSTEM_ARCH.lock();
+        let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let snap = HardwareConfigSnapshot {
+            tick,
+            ring0_mode: arch.as_ref().map_or(0, |a| a.ring0_mode),
+            heap_mb: arch.as_ref().map_or(0, |a| a.heap_size_mb as u64),
+            gpu_present: crate::display::fb::GPU.lock().is_some(),
+            net_online: crate::net::NET_CONFIG.lock().online,
+        };
+        drop(arch);
+        self.snapshots.push(snap);
+        if self.snapshots.len() > 20 { self.snapshots.remove(0); }
+    }
+
+    /// #135: Sugere mudanças na arquitetura baseado em snapshots
+    pub fn suggest_arch_tuning(&self) -> alloc::string::String {
+        // Exemplo: se GPU está presente e online, sugere ring1=GPU
+        let has_gpu = self.snapshots.last().map_or(false, |s| s.gpu_present);
+        let mut suggestions = alloc::string::String::from("🔧 Arch Tuning Suggestions:\n");
+        if has_gpu {
+            suggestions.push_str("   - GPU detected: set ring1=GPU (GPU compute)\n");
+        }
+        if !self.has_variance() {
+            suggestions.push_str("   - Config estável: manter parâmetros atuais\n");
+        }
+        suggestions
+    }
+
+    fn has_variance(&self) -> bool {
+        if self.snapshots.len() < 2 { return false; }
+        let first = &self.snapshots[0];
+        self.snapshots.iter().skip(1).any(|s| s.ring0_mode != first.ring0_mode)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #136 LLM decide memory tier (placeholder — integração com CortexAgent)
+// ---------------------------------------------------------------------------
+
+pub fn llm_decide_tier(confidence: f32, model_size_kb: u32) -> &'static str {
+    if confidence > 0.9 { "Vram" }
+    else if model_size_kb > 1024 { "Dram" }
+    else { "Dram" }
+}
+
+// ---------------------------------------------------------------------------
 // Optimizer Agent
 // ---------------------------------------------------------------------------
 
 pub struct OptimizerAgent {
     analyzer: UsagePatternAnalyzer,
+    config_learner: ConfigLearner,
     tick_counter: u64,
 }
 
@@ -124,6 +231,7 @@ impl OptimizerAgent {
     pub fn new() -> Self {
         OptimizerAgent {
             analyzer: UsagePatternAnalyzer::new(),
+            config_learner: ConfigLearner::new(),
             tick_counter: 0,
         }
     }
@@ -147,6 +255,17 @@ impl Agent for OptimizerAgent {
         // #157: Relatório a cada 500 ticks
         if self.tick_counter % 500 == 0 {
             serial_println!("{}", self.analyzer.report());
+        }
+
+        // #163: Snapshot de config a cada 1000 ticks
+        if self.tick_counter % 1000 == 0 {
+            self.config_learner.snapshot();
+            serial_println!("{}", self.config_learner.suggest_arch_tuning());
+
+            // #161: Sugere schedule baseado no workflow detectado
+            if let Some(predicted) = self.analyzer.predict_next_skill() {
+                serial_println!("{}", suggest_schedule(predicted));
+            }
         }
 
         AgentTickResult::Pending
