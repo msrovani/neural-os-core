@@ -11,6 +11,7 @@ pub struct SkillManifest {
     pub description: String,
     pub required_tokens: Vec<u64>,
     pub instructions: String,
+    pub requires_network: bool,
 }
 
 pub struct SkillLoader {
@@ -37,6 +38,7 @@ impl SkillLoader {
         let mut name = "";
         let mut description = "";
         let mut tokens_str = "";
+        let mut requires_network = false;
         for line in frontmatter.lines() {
             if let Some(val) = line.strip_prefix("name: ") {
                 name = val.trim();
@@ -44,6 +46,8 @@ impl SkillLoader {
                 description = val.trim();
             } else if let Some(val) = line.strip_prefix("required_tokens: ") {
                 tokens_str = val.trim();
+            } else if let Some(val) = line.strip_prefix("requires_network: ") {
+                requires_network = val.trim().eq_ignore_ascii_case("true");
             }
         }
 
@@ -78,6 +82,7 @@ impl SkillLoader {
             description: String::from(description),
             required_tokens: tokens,
             instructions: String::from(instructions),
+            requires_network,
         };
 
         serial_println!("[SKILL] Registrada: '{}' — {} ({} tokens, {} bytes)",

@@ -3,9 +3,10 @@ use alloc::vec::Vec;
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr};
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, IpCidr};
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
 use smoltcp::socket::udp as udp_socket;
+use smoltcp::socket::dhcpv4::{self, Event as DhcpEvent, Socket as DhcpSocket};
 
 use crate::net::RTL8139;
 
@@ -87,6 +88,12 @@ pub struct NetStack {
     iface: Interface,
     sockets: SocketSet<'static>,
     phy: Rtl8139Phy,
+    dhcp_handle: SocketHandle,
+    pub dhcp_done: bool,
+}
+
+fn ip_to_u32(ip: [u8; 4]) -> u32 {
+    (ip[0] as u32) << 24 | (ip[1] as u32) << 16 | (ip[2] as u32) << 8 | ip[3] as u32
 }
 
 impl NetStack {
@@ -96,21 +103,48 @@ impl NetStack {
         let now = Instant::from_millis(0);
         let mut phy = Rtl8139Phy;
         let iface = Interface::new(config, &mut phy, now);
-        let sockets = SocketSet::new(vec![]);
-        NetStack { iface, sockets, phy }
+        let mut sockets = SocketSet::new(vec![]);
+
+        // DHCP socket — auto-discovery via broadcast
+        let dhcp = DhcpSocket::new();
+        let dhcp_handle = sockets.add(dhcp);
+
+        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false }
     }
 
     pub fn poll(&mut self, tick: i64) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets } = self;
+        let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         iface.poll(Instant::from_millis(tick), phy, sockets);
     }
 
-    pub fn set_ip(&mut self, ip: [u8; 4]) {
-        let addr = IpAddress::v4(ip[0], ip[1], ip[2], ip[3]);
-        let cidr = IpCidr::new(addr, 24);
-        self.iface.update_ip_addrs(|addrs| {
-            addrs.push(cidr).unwrap();
-        });
+    /// Poll DHCP — must be called each tick until dhcp_done = true
+    /// Returns (gateway_ip, dns_ip) when configured
+    pub fn dhcp_poll(&mut self, tick: i64) -> (bool, [u8; 4], [u8; 4]) {
+        let Self { ref mut iface, ref mut phy, ref mut sockets, ref mut dhcp_done, .. } = self;
+        iface.poll(Instant::from_millis(tick), phy, sockets);
+
+        let dhcp = sockets.get_mut::<DhcpSocket>(self.dhcp_handle);
+        if let Some(event) = dhcp.poll() {
+            match event {
+                DhcpEvent::Configured(config) => {
+                    // Apply IP address from DHCP
+                    let cidr = smoltcp::wire::IpCidr::Ipv4(config.address);
+                    iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
+                    // Apply default route via DHCP router
+                    if let Some(router) = config.router {
+                        iface.routes_mut().add_default_ipv4_route(router.into()).ok();
+                    }
+                    let gw = config.router.map(|r| r.octets()).unwrap_or([0; 4]);
+                    let dns = config.dns_servers.first().map(|s| s.octets()).unwrap_or([10, 0, 2, 3]);
+                    *dhcp_done = true;
+                    return (true, gw, dns);
+                }
+                DhcpEvent::Deconfigured => {
+                    *dhcp_done = false;
+                }
+            }
+        }
+        (false, [0; 4], [0; 4])
     }
 
     pub fn http_new(&mut self, host: [u8; 4], port: u16, path: &str) -> HttpConn {
@@ -140,7 +174,7 @@ impl NetStack {
     }
 
     pub fn http_poll(&mut self, conn: &mut HttpConn, now: u64) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets } = self;
+        let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         iface.poll(Instant::from_millis(now as i64), phy, sockets);
 
         conn.timeout = conn.timeout.wrapping_add(1);
@@ -205,44 +239,14 @@ impl NetStack {
     }
 
     pub fn http_close(&mut self, conn: &mut HttpConn) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets } = self;
+        let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         let tcp = sockets.get_mut::<TcpSocket>(conn.handle);
         tcp.close();
         iface.poll(Instant::from_millis(0), phy, sockets);
         sockets.remove(conn.handle);
     }
 
-    fn encode_dns_name(name: &str) -> Vec<u8> {
-        let mut buf = Vec::new();
-        for part in name.split('.') {
-            buf.push(part.len() as u8);
-            buf.extend_from_slice(part.as_bytes());
-        }
-        buf.push(0);
-        buf
-    }
-
-    fn parse_dns_name(pkt: &[u8], offset: usize) -> (usize, usize) {
-        let mut pos = offset;
-        let mut jumped = false;
-        let mut end = 0;
-        while pos < pkt.len() {
-            let b = pkt[pos];
-            if b & 0xC0 == 0xC0 {
-                if !jumped { end = pos + 2; }
-                pos = ((b as usize & 0x3F) << 8) | (pkt[pos + 1] as usize);
-                jumped = true;
-            } else if b == 0 {
-                pos += 1;
-                return (pos, if jumped { end } else { pos });
-            } else {
-                pos += 1 + b as usize;
-            }
-        }
-        (pos, pos)
-    }
-
-    pub fn dns_resolve(&mut self, hostname: &str) -> Option<[u8; 4]> {
+    pub fn dns_resolve(&mut self, hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
         let txid: u16 = 0x1234;
         let qname = Self::encode_dns_name(hostname);
 
@@ -257,7 +261,7 @@ impl NetStack {
         query.extend_from_slice(&[0x00, 0x01]);
         query.extend_from_slice(&[0x00, 0x01]);
 
-        let dns_server = (IpAddress::v4(10, 0, 2, 3), 53u16);
+        let dns_server_addr = (IpAddress::v4(dns_server[0], dns_server[1], dns_server[2], dns_server[3]), 53u16);
 
         let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
         let payload = vec![0u8; 512];
@@ -271,11 +275,11 @@ impl NetStack {
         {
             let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
             let _ = udp.bind(54321);
-            let _ = udp.send_slice(&query, dns_server);
+            let _ = udp.send_slice(&query, dns_server_addr);
         }
 
         for _ in 0..100 {
-            let Self { ref mut iface, ref mut phy, ref mut sockets } = self;
+            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
             iface.poll(Instant::from_millis(0), phy, sockets);
 
             let payload = {
@@ -317,5 +321,34 @@ impl NetStack {
         self.sockets.remove(handle);
         None
     }
+
+    fn encode_dns_name(name: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for part in name.split('.') {
+            buf.push(part.len() as u8);
+            buf.extend_from_slice(part.as_bytes());
+        }
+        buf.push(0);
+        buf
+    }
+
+    fn parse_dns_name(pkt: &[u8], offset: usize) -> (usize, usize) {
+        let mut pos = offset;
+        let mut jumped = false;
+        let mut end = 0;
+        while pos < pkt.len() {
+            let b = pkt[pos];
+            if b & 0xC0 == 0xC0 {
+                if !jumped { end = pos + 2; }
+                pos = ((b as usize & 0x3F) << 8) | (pkt[pos + 1] as usize);
+                jumped = true;
+            } else if b == 0 {
+                pos += 1;
+                return (pos, if jumped { end } else { pos });
+            } else {
+                pos += 1 + b as usize;
+            }
+        }
+        (pos, pos)
+    }
 }
- 

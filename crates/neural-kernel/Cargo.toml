@@ -15,7 +15,7 @@ pic8259 = "0.10"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
-smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp"] }
+smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4", "socket-dns", "proto-dns"] }
 agent-core = { path = "../agent-core" }
 
 [build-dependencies]
