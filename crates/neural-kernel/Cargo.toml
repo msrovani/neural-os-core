@@ -17,9 +17,7 @@ skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4", "socket-dns", "proto-dns"] }
 agent-core = { path = "../agent-core" }
-# VirtIO-net blocked: zerocopy-derive proc macro incompatível com MinGW toolchain (Windows).
-# Alternativa: implementar driver VirtIO manual sem o crate. Pendente.
-# virtio-drivers = { version = "0.13", default-features = false, features = ["alloc"] }
+# VirtIO driver manual sem dependências externas (ver virtio_net.rs)
 
 [build-dependencies]
 bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }

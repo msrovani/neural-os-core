@@ -10,6 +10,7 @@ pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
 pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
 pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
+pub static VIRTIO_DEV: spin::Mutex<Option<crate::virtio_net::VirtIoDevice>> = spin::Mutex::new(None);
 pub static NETSTACK: spin::Mutex<Option<NetStack>> = spin::Mutex::new(None);
 
 pub struct NetConfig {

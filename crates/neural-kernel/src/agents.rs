@@ -651,7 +651,9 @@ impl Agent for NetDriverAgent {
     fn manifest(&self) -> &AgentManifest { &NETDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         unsafe {
-            if crate::net::init_driver_rtl8139() {
+            if crate::virtio_net::init_driver_virtio() {
+                serial_println!("[NET] VirtIO-net OK.");
+            } else if crate::net::init_driver_rtl8139() {
                 serial_println!("[NET] RTL8139 OK.");
             } else {
                 serial_println!("[NET] Sem hardware de rede. Modo offline.");
