@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-26 (Seção 6 — Sprint Planning, 7 blocos futuros, 55 itens 🟡)  
+**Última atualização:** 2026-06-27 (Seção 6 reconsolidada — 5 blocos, 47 itens 🟡, 336 totais)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -667,8 +667,8 @@ O `AgentScheduler` substitui o `NeuralExecutor`:
 | Self-Healing Kernel (Sprints 32-37) | 6 | 6 | 0 | 0 | 0 | 0 |
 | Agent/Skill-First Architecture | 20 | 0 | 20 | 0 | 0 | 0 |
 | Bugfix Estrutural (Sprint 45) | 6 | 5 | 1 | 0 | 0 | 0 |
-| Sprint Planning (Seção 6) | 55 | 0 | 55 | 0 | 0 | 0 |
-| **Total** | **336** | **73 (22%)** | **172 (51%)** | **76 (23%)** | **9 (3%)** | **6 (2%)** |
+| Sprint Planning (Seção 6) | 47 | 0 | 47 | 0 | 0 | 0 |
+| **Total** | **336** | **73 (22%)** | **164 (49%)** | **84 (25%)** | **9 (3%)** | **6 (2%)** |
 
 ---
 
@@ -991,25 +991,29 @@ MVPs ─── B1(PCI) ─── B2(SMP) ─── B3(Chat) ─── B4(MLP) �
 
 ---
 
-## Seção 6 — Sprint Planning (itens 🟡 agendados, consolidados por bloco)
+## Seção 6 — Sprint Planning (itens 🟡 remanescentes, consolidados por bloco)
 
-Blocos futuros gerados por análise de afinidade: cada bloco agrupa itens 🟡 de seções diferentes que compartilham o mesmo foco. Blocos com menos de 3 itens foram fundidos em blocos adjacentes.
+Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Blocos com afinidade de assunto foram fundidos.
 
-### Bloco 12 — Network Evolution (Sprints 43-44)
-**Foco:** DHCP dinâmico, VirtIO-net, HTTP fetch avançado, MCP externo
+### Bloco 12 — Network + Platform Drivers (fundido com Bloco 18)
+**Foco:** MCP Server, Cron Scheduler, PCI bridges, Huge Pages, x2APIC
 
 | Item | O que | LOC |
 |---|---|---|
-| #251 | DHCP timer-based wait (hlt ao invés de spin) | ~80 |
-| #252 | ARP não-bloqueante com retry por timer ticks | ~60 |
-| #73 | VirtIO-net driver (PCI 1AF4:1041) | ~400 |
-| #122 | Skill manifest field `requires_network: bool` | ~20 |
 | #172 | MCP Server support via EventBus + JSON-RPC | ~400 |
 | #236 | Plugin Hub / MCP Index com AI security scan | ~400 |
 | #232 | Cron Scheduler baseado em LAPIC timer | ~350 |
-| | **Total bloco** | **~1710 LOC** |
+| #18 | x2APIC mode (MSR-based, sem MMIO) | ~100 |
+| #34 | acpi crate para parser MADT/PPTT | ~200 |
+| #35 | raw-cpuid crate (features de CPU) | ~100 |
+| #70 | PCI bridges (hierarquia multi-barramento) | ~100 |
+| #92 | Huge Pages 2 MiB | ~200 |
+| #93 | Huge Pages 1 GiB | ~100 |
+| | **Total bloco** | **~1950 LOC** |
 
-### Bloco 13 — Trust & Security (Sprint 45)
+**Itens do Bloco 12 original já implementados:** DHCP (#251), ARP (#252), VirtIO-net (#73), requires_network (#122).
+
+### Bloco 13 — Trust & Security
 **Foco:** Upgrade do TrustCache, identidade criptográfica, pipeline de segurança
 
 | Item | O que | LOC |
@@ -1024,8 +1028,8 @@ Blocos futuros gerados por análise de afinidade: cada bloco agrupa itens 🟡 d
 | #260 | Event→Detector→Response Pipeline (5 detectores) | ~200 |
 | | **Total bloco** | **~930 LOC** |
 
-### Bloco 14 — Hermes Cognitive (Sprint 46)
-**Foco:** Upgrade do HermesAgent — reasoning visível, loop ReAct 7 fases, identidade
+### Bloco 14 — Hermes Cognitive + Self-Optimization (fundido com Bloco 16)
+**Foco:** HermesAgent upgrade, ReAct 7 fases, Usage Pattern Analyzer, scheduler adaptativo
 
 | Item | O que | LOC |
 |---|---|---|
@@ -1033,14 +1037,21 @@ Blocos futuros gerados por análise de afinidade: cada bloco agrupa itens 🟡 d
 | #190 | Algorithm loop 7 fases (THINK→PLAN→BUILD→EXECUTE→VERIFY→LEARN) | ~300 |
 | #191 | Council skill (3 vozes Otimista/Cético/Pragmático votam) | ~150 |
 | #193 | Bitter Pill Engineering (força cargo check antes de deploy) | ~100 |
-| #194 | ISA como formato de sprint | ~200 |
 | #184 | Intent Transparency (mostrar confidence, alternatives) | ~200 |
 | #203 | Context Fencing + Streaming Scrubber | ~150 |
 | #180 | DA Identity Layer (SOUL.md para Hermes) | ~100 |
-| | **Total bloco** | **~1280 LOC** |
+| #157 | Usage Pattern Analyzer (LLM detecta workflow) | ~250 |
+| #158 | Workflow Predictor (pré-carrega MHI por hora/padrão) | ~200 |
+| #160 | Dynamic Resource Scaling (MHI auto-ajuste) | ~200 |
+| #161 | Self-Optimizing Scheduler (prioriza por workflow) | ~300 |
+| #163 | Hardware Config Learning (SystemArchitecture evolve) | ~150 |
+| #135 | LLM decide hardware arch (substitui heurística) | ~100 |
+| #136 | LLM decide memory tier (roteia alocações) | ~100 |
+| #139 | Reflex MLP threshold tuning (bypassa LLM se >0.9) | ~80 |
+| | **Total bloco** | **~2460 LOC** |
 
-### Bloco 15 — Memory Systems (Sprints 47-48)
-**Foco:** Memória persistente, dedup, decay Ebbinghaus, grafo de conhecimento
+### Bloco 15 — Memory Systems + Semantic Snapshot
+**Foco:** Memória persistente, Ebbinghaus decay, grafo de conhecimento, CDC+XDI já base
 
 | Item | O que | LOC |
 |---|---|---|
@@ -1050,28 +1061,14 @@ Blocos futuros gerados por análise de afinidade: cada bloco agrupa itens 🟡 d
 | #219 | Ebbinghaus Decay para TrustCache | ~120 |
 | #217 | Hybrid Search (BM25 + MLP) para intent routing | ~200 |
 | #218 | 4-Tier Memory Consolidation (Working→Episodic→Semantic→Procedural) | ~400 |
-| #220 | Session Replay (eventos atômicos para debug) | ~200 |
 | #222 | Metacognitive Guard (verifica erros passados antes de skill) | ~300 |
 | #223 | Draft→Review→Merge Memory (workflow de aprovação) | ~350 |
 | #224 | Atkinson-Shiffrin 3-tier (Sensory→STM→LTM) | ~800 |
-| | **Total bloco** | **~2700 LOC** |
+| | **Total bloco** | **~2500 LOC** |
 
-### Bloco 16 — Self-Optimization (Sprint 49)
-**Foco:** LLM observa padrões de uso, pré-carrega recursos, scheduler adaptativo
+**Base já implementada:** CDC Rabin chunking (`chunker.rs`), XOR Delta (`delta.rs`), Semantic Snapshot via `SelfHeal::semantic_snapshot()`.
 
-| Item | O que | LOC |
-|---|---|---|
-| #157 | Usage Pattern Analyzer (LLM detecta workflow) | ~250 |
-| #158 | Workflow Predictor (pré-carrega MHI por hora/padrão) | ~200 |
-| #160 | Dynamic Resource Scaling (MHI auto-ajuste) | ~200 |
-| #161 | Self-Optimizing Scheduler (prioriza por workflow) | ~300 |
-| #163 | Hardware Config Learning (SystemArchitecture evolve) | ~150 |
-| #135 | LLM decide hardware arch (substitui heurística) | ~100 |
-| #136 | LLM decide memory tier (roteia alocações) | ~100 |
-| #139 | Reflex MLP threshold tuning (bypassa LLM se >0.9) | ~80 |
-| | **Total bloco** | **~1380 LOC** |
-
-### Bloco 17 — Cortex LLM v2 (Sprint 50)
+### Bloco 17 — Cortex LLM v2
 **Foco:** Modelo maior, sampling, codebook compression, update HTTP
 
 | Item | O que | LOC |
@@ -1084,40 +1081,23 @@ Blocos futuros gerados por análise de afinidade: cada bloco agrupa itens 🟡 d
 | #170 | KV Cache Codebook (VQ no cache de atenção) | ~200 |
 | | **Total bloco** | **~830 LOC + Python** |
 
-### Bloco 18 — Platform & Drivers (Sprint 51)
-**Foco:** x2APIC, PCI bridges, Huge Pages, UEFI framebuffer
+### Resumo dos 5 blocos reconsolidados
 
-| Item | O que | LOC |
-|---|---|---|
-| #18 | x2APIC mode (MSR-based, sem MMIO) | ~100 |
-| #34 | acpi crate para parser MADT/PPTT | ~200 |
-| #35 | raw-cpuid crate (features de CPU) | ~100 |
-| #70 | PCI bridges (hierarquia multi-barramento) | ~100 |
-| #92 | Huge Pages 2 MiB | ~200 |
-| #93 | Huge Pages 1 GiB | ~100 |
-| #79 | UEFI framebuffer (BGRA32 writer) | ~300 |
-| #80 | Font rendering para alta resolução | ~200 |
-| | **Total bloco** | **~1300 LOC** |
-
-### Resumo dos 7 blocos
-
-| Bloco | Sprints | Foco | LOC estimado | Itens 🟡 |
-|---|---|---|---|---|
-| 12 | 43-44 | Network Evolution | ~1710 | 7 |
-| 13 | 45 | Trust & Security | ~930 | 8 |
-| 14 | 46 | Hermes Cognitive | ~1280 | 8 |
-| 15 | 47-48 | Memory Systems | ~2700 | 10 |
-| 16 | 49 | Self-Optimization | ~1380 | 8 |
-| 17 | 50 | Cortex LLM v2 | ~830 | 6 |
-| 18 | 51 | Platform & Drivers | ~1300 | 8 |
-| | **Total** | | **~10130 LOC** | **55** |
+| Bloco | Foco | LOC estimado | Itens 🟡 |
+|---|---|---|---|
+| 12 (fundido) | Network + Platform | ~1950 | 9 |
+| 13 | Trust & Security | ~930 | 8 |
+| 14 (fundido) | Hermes Cognitive + Self-Opt | ~2460 | 15 |
+| 15 | Memory Systems | ~2500 | 9 |
+| 17 | Cortex LLM v2 | ~830 | 6 |
+| | **Total** | **~8670 LOC** | **47** |
 
 ### Notas
 
-1. **Ordem executável:** Blocos 12 → 13 → 14 → 15 → 16 → 17 → 18 (cada bloco pode ser implementado independentemente)
-2. **Dependências entre blocos:** Block 16 (Self-Optimization) depende de Block 14 (Hermes Cognitive) para o Usage Pattern Analyzer. Block 17 depende de Block 12 (Network) para model update via HTTP.
-3. **Bloco 18 fica por último** por ter menor impacto funcional — x2APIC e Huge Pages são otimizações, framebuffer é upgrade visual.
-4. **Sprints 39-42 (Bloco 11)** já foram implementados: SkillLoader, Agent trait, AgentRegistry, 8 agentes nativos, SystemAgent como prova.
+1. **Blocos 12, 14, 15 fundidos** — redução de 7 para 5 blocos, eliminando redundância entre Bloco 16 (Self-Optimization) e Bloco 14 (Hermes Cognitive), e entre Bloco 12 (Network) e Bloco 18 (Platform).
+2. **Bloco 13 mantido separado** — Trust & Security é autocontido e não depende de outros blocos.
+3. **Bloco 17 mantido separado** — depende do ecossistema Python para treino do modelo 1.5B.
+4. **Base para Bloco 15 já existe** — CDC Rabin, XOR Delta e Semantic Snapshot implementados em v0.47.0.
 
 ---
 

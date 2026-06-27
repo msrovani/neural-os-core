@@ -1,131 +1,165 @@
-# Neural OS Hermes ⚡ — v0.45.0 — AGENT/SKILL-FIRST + VIRTIO-GPU + BUGFIX 🏆
+# Neural OS Hermes ⚡ — v0.47.0
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
 ```
-"We don't need an OS that runs AI.
- We need an OS that IS AI."
+"We don't need an OS that runs AI. We need an OS that IS AI."
 ```
 
-## 🔥 O que o torna único
-
-### 0. Tudo é Agente ou Skill
-**Bloco 11 (Sprints 39-42 consolidado):** Não existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade é um **Agente** com manifesto, ScheduleKind e ciclo de vida. Habilidades (**Skills**) são a interface de requisição-resposta.
-
-16 agentes nativos (v0.45.0):
-| Código | Agente | Tipo | Driver/Driver manual |
-|---|---|---|---|
-| A-001 | SystemAgent | System | Init, EchoSkill |
-| A-002 | MonitorAgent | System | SYSTEM_READY |
-| A-003 | HwBridgeAgent | Router | IRQ bridge |
-| A-004 | NetAgent | Network | smoltcp poll |
-| A-005 | InputAgent | Console | Keyboard |
-| A-006 | CortexAgent | Inference | LLM transformer |
-| A-007 | HermesAgent | Router | Intent + skills |
-| A-008 | **DisplayAgent** | Console | **Framebuffer BGRA32** |
-| A-009 | NetDriverAgent | Driver | RTL8139 + VirtIO-net |
-| A-010 | UsbDriverAgent | Driver | xHCI USB |
-| A-011–A-016 | Boot agents | System/Driver | PCI, SMP, Trust, GPU |
-
-### 1. Kernel que SE CURA
-Quando um erro ocorre (Page Fault, GPF, OOM), o kernel não dá BSOD:
-```
-[PANIC] → FailureClass::classify() → SelfHeal::analyze() → RecoveryAction
-  → restart_daemon | create_skill | log_and_continue
-  → KERNEL_ERROR no EventBus → LLM analisa → sugere correção
-  → Se falhar: lessons.push() → próxima tenta estratégia DIFERENTE
-```
-
-### 2. LLM que entende HARDWARE
-Modelo treinado na GTX 1050 com **66.780 pares**:
-```
-PCI IDs (23.858) + USB IDs (23.963) + SMBIOS + Kernel + Git
-+ Capabilities (25) + Error Recovery (16) + Learning (5)
-```
-
-### 3. Skills em Runtime (não compile-time)
-Skills são carregadas em runtime via `SKILL_STORAGE` global. Usuário pode criar skills digitando `/add_skill <nome> <desc>` — a LLM gera automaticamente a skill em formato SKILL.md.
-
-### 4. Skills editáveis sem recompilar
-```
-/show_skills      → lista skills ativas
-/add_skill nome   → LLM gera skill baseada na descrição
-/rm_skill nome    → remove skill
-/reload_skills    → recarrega do seed
-```
-
-## 🧠 Self-Healing Architecture
+## Architecture at a Glance
 
 ```
-ERRO OCORRE (Ring 0/1/2)
-  ↓
-FailureClass::classify()
-  ├── MemoryFault     (Page Fault, OOM)
-  ├── ExecutionFault  (GPF, Double Fault)
-  ├── ResourceFault   (skill not found, timeout)
-  ├── LogicFault      (assertion failed)
-  ├── ExternalFault   (network, device)
-  └── UnknownFault    (LLM consultado)
-  ↓
-SelfHeal::analyze(ctx, recover=true)
-  ├── already_tried()? → estratégia ALTERNATIVA
-  ├── RestartDaemon    → respawn da task
-  ├── CreateSkill      → skill sob demanda
-  └── LogAndContinue   → não fatal, segue
-  ↓
-KERNEL_ERROR → EventBus → LLM_REQUEST → LLM analisa
-  ↓
-SelfHeal::record_failure() → lessons.push()
-  → Próximo erro similar: already_tried()=true → action DIFERENTE
+                     ┌──────────────────────────────────────┐
+                     │           AgentRegistry              │
+                     │  ┌──────────────────────────────┐   │
+                     │  │  8 Boot Agents (Oneshot)     │   │
+                     │  │  Platform→Memory→SelfHeal→  │   │
+                     │  │  Trust→NetDriver→USB→GPU→    │   │
+                     │  │  HwDetect                    │   │
+                     │  └──────────────────────────────┘   │
+                     │  ┌──────────────────────────────┐   │
+                     │  │  8 Runtime Agents (Poll)     │   │
+                     │  │  System→Monitor→HwBridge→    │   │
+                     │  │  Net→Input→Cortex→Hermes→   │   │
+                     │  │  Display                     │   │
+                     │  └──────────────────────────────┘   │
+                     └──────────────────────────────────────┘
 ```
 
-## 🏗️ O que foi construído (45 sprints / 13 blocos)
+## What Makes It Unique
 
-| Bloco | Sprints | v | O que |
-|---|---|---|---|
-| Chassi | 1-17 | 0.1–0.12 | VGA, heap, EventBus, IPC, SMP, APIC |
-| Discovery | 18-22 | 0.13–0.17 | PCI, ACPI, MHI, Trust, LAPIC |
-| Rede | 23-24 | 0.23–0.24 | RTL8139, smoltcp |
-| Transformer | 26-27 | 0.26–0.27 | Attention BitNet |
-| HW-Aware LLM | 28-30 | 0.28–0.30 | PCI+USB training |
-| Capabilities | 31 | 0.31 | HW mapping |
-| Self-Healing | 32-37 | 0.32–0.37 | Failure taxonomy |
-| Agent/Skill-First | 39-42 | 0.39–0.40 | Agent trait, 15 agentes |
-| Network Evo | 43-44 | 0.41–0.42 | DHCP, ARP, VirtIO-net, NetPhy |
-| **Display+Bugfix** | **45** | **0.43–0.45** | **Framebuffer, VirtIO-GPU, 5 bugs** |
+### 1. Everything is an Agent or Skill
+No tasks, no services, no standalone drivers. **16 native Agent instances** with manifests, capabilities, and lifecycle. Skills are request-response interfaces owned by agents.
 
-## 🔬 Sources de conhecimento do LLM
+### 2. Bare-Metal Transformer LLM
+4-layer BitNet with ternary weights (ADD/SUB only, zero multiplications). 272K params in 68KB. Char-level tokenizer. Autoregressive generation via `generate_text()`. Model file `.bitnet` format.
 
-| Fonte | Pares | O que aprendeu |
-|---|---|---|
-| PCI IDs | 23.858 | "8086:1237 → Intel 82441FX PMC" |
-| USB IDs | 23.963 | "0781:5581 → SanDisk Ultra Fit" |
-| SMBIOS | 21 | "SeaBIOS rel-1.16" |
-| Kernel code | 31 | "O que é o executor?" |
-| Git history | 100 | "Commit 8bedc80: smoltcp integrado" |
-| Capabilities | 25 | "USB class 08 → Mass Storage, MHI HDD" |
-| Error recovery | 16 | "Page Fault → compactar heap, restart daemon" |
-| Learning | 5 | "feedback loop → already_tried → alternativa" |
+### 3. Self-Healing Kernel
+When a Page Fault, Double Fault, or GPF occurs:
+```
+error → FailureClass::classify() → SelfHeal::analyze() → RecoveryAction
+  → RestartDaemon | CreateSkill | LogAndContinue
+  → LLM_REQUEST com contexto de erro → LLM sugere recuperação
+  → lessons.push() → already_tried() → estratégia alternativa
+  → Checkpoint restore on Double Fault
+```
 
-## 📚 Module Map
+### 4. Semantic Snapshot with CDC + XOR Delta
+Checkpoint system uses **Rabin fingerprint chunking** to split the 128KB allocator bitmap into variable-sized content-defined chunks, and **XOR delta** to store only modified chunks between saves. First bare-metal implementation of semantic compression in a kernel.
 
-| Módulo | Linhas | Função |
-|---|---|---|
-| `cortex.rs` | 360 | Transformer 4 layers, generate_text(), Tokenizer, model loader |
-| `netstack.rs` | 321 | smoltcp Device trait, HTTP non-blocking, DNS resolve |
-| `rtl8139.rs` | 250 | RTL8139 driver via I/O ports |
-| `xhci.rs` | 118 | xHCI USB port scan, speed detection |
-| `self_heal.rs` | 100 | FailureClass, SelfHeal, RecoveryAction, lessons |
-| `memory.rs` | 253 | BitmapFrameAllocator, page table walk |
-| `apic.rs` | 316 | LAPIC timer, IOAPIC, SMP IPI |
-| `conversation.rs` | 79 | EventLog com KernelError |
+### 5. IRQ-Safe Locks
+`IrqSafeLock<T>` disables interrupts on acquire, restores on release — preventing deadlocks in exception handlers. `TicketLock` FIFO prevents starvation in 7 global mutexes.
 
-## 🛠️ Quick Start
+### 6. Multi-NIC Support
+RTL8139 (I/O ports) + VirtIO-net (manual driver, 0 external deps) unified via `NetPhy`. DHCP auto-config via `smoltcp::socket::dhcpv4`. Fallback to static IP.
+
+### 7. VirtIO-GPU (95%)
+PCI capabilities parser → MMIO mapping → queue setup → feature negotiation. Manual driver without `virtio-drivers` crate (blocked by `zerocopy-derive` + MinGW). GET_DISPLAY_INFO pending.
+
+### 8. CDC Rabin Chunking + XOR Delta
+`chunker.rs` — rolling hash polynomial for content-defined chunk split. `delta.rs` — bit-exact archive of `PackedTernaryTensor` via XOR residual. Foundation for semantic memory compression.
+
+## Quick Start
 
 ```powershell
+# Build
 cargo bootimage --release
+
+# Run in QEMU (RTL8139 NIC)
 qemu-system-x86_64 -m 2G -serial stdio -nic user,model=rtl8139 `
-  -drive format=raw,file=bootimage-neural-kernel.bin -no-reboot -smp 2 -nographic
+  -drive format=raw,file=target\x86_64-unknown-none\release\bootimage-neural-kernel.bin `
+  -no-reboot -smp 2 -nographic
+
+# Or with VirtIO-GPU
+qemu-system-x86_64 -m 2G -serial stdio -device virtio-gpu-pci `
+  -drive format=raw,file=target\x86_64-unknown-none\release\bootimage-neural-kernel.bin `
+  -no-reboot -smp 2 -nographic
 ```
 
-## ⚡ License — MIT
+## Module Map (v0.47.0, ~5000 LOC kernel)
+
+| Module | LOC | Function |
+|---|---|---|
+| `agent-core/` | 210 | Agent trait, AgentRegistry, AgentScheduler + watchdog |
+| `display/` | 400 | Framebuffer BGRA32, DrawTarget, NeuralConsole, DisplayAgent |
+| `virtio_net.rs` | 344 | VirtIO-net driver manual (I/O ports, descriptors) |
+| `virtio_gpu.rs` | 420 | VirtIO-GPU PCI caps + MMIO + control queue (95%) |
+| `rtl8139.rs` | 246 | RTL8139 driver via I/O ports |
+| `cortex.rs` | 366 | Transformer 4 layers, BitNet, generate_text() |
+| `interrupts.rs` | 235 | IDT full coverage 0-31, PIC/APIC EOI, 32 handlers |
+| `apic.rs` | 364 | LAPIC/IOAPIC, SVR, SMP IPI, map_mmio_page |
+| `pci.rs` | 198 | PCI scan, capabilities parser (VirtIO), BAR reader |
+| `self_heal.rs` | 220 | FailureClass, Checkpoint, SelfHeal, semantic_snapshot |
+| `chunker.rs` | 110 | CDC Rabin rolling hash, chunk_data/merge_chunks |
+| `delta.rs` | 130 | XOR delta, ArchiveTensor, reconstruct |
+| `dma.rs` | 60 | DmaBuf alloc/free with UC pages |
+| `sync/irq_lock.rs` | 105 | IrqSafeLock<T> — cli/sti wrapper over TicketLock |
+| `sync/ticket_lock.rs` | 55 | Re-export from ticket-lock crate |
+| `network_agent.rs` | 110 | DHCP + DNS + HTTP state machine |
+| `netstack.rs` | 350 | smoltcp interface, NetPhy unified NIC |
+
+## Agent Landscape
+
+| Code | Agent | Type | Schedule | Function |
+|---|---|---|---|---|
+| A-001 | **SystemAgent** | System | Oneshot | SYSTEM_READY, EchoSkill |
+| A-002 | MonitorAgent | System | Oneshot | Publica SYSTEM_READY |
+| A-003 | HwBridgeAgent | Router | Continuous | Scancode IRQ → EventBus |
+| A-004 | NetAgent | Network | Continuous | smoltcp poll + HTTP |
+| A-005 | InputAgent | Console | Continuous | Keyboard → USER_INTENT |
+| A-006 | **CortexAgent** | Inference | Continuous | LLM generate_text() |
+| A-007 | HermesAgent | Router | Continuous | Intent routing + skills |
+| A-008 | **DisplayAgent** | Console | Continuous | VGA + framebuffer output |
+| A-009 | NetDriverAgent | Driver | Oneshot | RTL8139 init |
+| A-010 | UsbDriverAgent | Driver | Oneshot | xHCI port scan |
+| A-011 | BootSelfHealAgent | System | Oneshot | SelfHeal init |
+| A-012 | BootTrustAgent | System | Oneshot | TrustCache init |
+| A-013 | PlatformAgent | System | Oneshot | PCI+ACPI+APIC+SMP |
+| A-014 | MemoryAgent | System | Oneshot | MHI + Arch inference |
+| A-015 | **GpuDriverAgent** | Driver | Oneshot | VirtIO-GPU detection |
+| A-016 | HwDetectAgent | System | Oneshot | HwIdentifySkill |
+
+## Dependencies
+
+| Crate | Version | Purpose |
+|---|---|---|
+| bootloader | 0.9.34 | UEFI/BIOS handoff, map_physical_memory |
+| x86_64 | 0.14.13 | IDT, GDT, TSS, paging, ports, MSR |
+| smoltcp | 0.13 | TCP/IP stack, DHCP, DNS |
+| embedded-graphics | 0.8.2 | DrawTarget for framebuffer |
+| spin | 0.9 | Mutex (being replaced by TicketLock) |
+| ticket-lock | workspace | FIFO TicketLock |
+| event-bus | workspace | IPC publish/subscribe |
+| skill-registry | workspace | Skill trait + MCP |
+| libm | 0.2 | expf, sqrtf for neural net |
+| pic8259 | 0.10 | ChainedPics (fallback) |
+
+## Builds
+
+- `v0.47.0+build77` — CDC Rabin + XOR Delta + Semantic Snapshot + IrqSafeLock + DmaBuf
+- `v0.46.0+build76` — IrqSafeLock, TicketLock generalization, watchdog, DmaBuf
+- `v0.45.0+build75` — Bugfix H3-H12, VirtIO-GPU PCI caps, DisplayAgent
+- `v0.44.0+build74` — VirtIO-GPU PCI capabilities + MMIO + queue setup
+- `v0.43.0+build73` — DisplayAgent + Framebuffer + embedded-graphics + font
+- `v0.42.0+build72` — VirtIO-GPU detection + MMIO + GpuDriverAgent
+- `v0.41.0+build71` — VirtIO-net manual driver, NetPhy unified
+- `v0.41.0+build70` — DHCP, ARP, requires_network
+
+## Custom Commands (Hermes Chat)
+
+```
+/status              → System status (memory, agents)
+/echo <text>         → Reverse text
+/hw                  → Hardware info
+/netdiag             → Network diagnostics
+/fetch http://ip/p   → HTTP GET
+/ping <ip>           → ICMP echo
+/add_skill <n> <d>   → LLM gera skill
+/show_skills         → Lista skills ativas
+/rm_skill <n>        → Remove skill
+/reload_skills       → Recarrega seed
+/trust allow <t> <s> → Autoriza token
+/trust deny <t> <s>  → Revoga token
+```
+
+## License — MIT

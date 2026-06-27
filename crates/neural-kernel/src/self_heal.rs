@@ -4,6 +4,8 @@ use alloc::format;
 use core::sync::atomic::Ordering;
 use crate::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
 use crate::serial_println;
+use crate::chunker;
+use crate::delta;
 
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
@@ -119,8 +121,39 @@ impl SelfHeal {
             .map_or(0, |m| m.tiers[0].capacity_bytes as u64);
         self.checkpoint.tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
         self.checkpoint.valid = true;
-        serial_println!("[CHECKPOINT] Salvo @ tick {} — {} frames alocados",
-            self.checkpoint.tick, self.checkpoint.allocated_count);
+        serial_println!("[CHECKPOINT] Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
+            self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
+    }
+
+    /// Snapshot semântico: aplica CDC Rabin no bitmap para chunking.
+    /// Retorna (chunks_completos, chunks_delta_modificados).
+    /// `prev_bitmap` = bitmap anterior (vazio [] se primeiro snapshot).
+    pub fn semantic_snapshot(&mut self, prev_bitmap: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        use crate::delta::xor_buffers;
+        use crate::memory::BITMAP_SIZE;
+
+        // Copia o bitmap atual para análise fora do lock
+        let current_bmp = {
+            let guard = GLOBAL_ALLOCATOR.lock();
+            guard.as_ref().map_or([0u8; BITMAP_SIZE], |a| a.bitmap)
+        };
+
+        if prev_bitmap.is_empty() || prev_bitmap.len() != BITMAP_SIZE {
+            let chunks = chunker::chunk_data(&current_bmp);
+            serial_println!("[SNAPSHOT] Primeiro: {} chunks CDC", chunks.len());
+            return (chunks, Vec::new());
+        }
+
+        let delta_data = xor_buffers(&current_bmp, prev_bitmap);
+        let delta_chunks = chunker::chunk_data(&delta_data);
+        let nonzero: Vec<Vec<u8>> = delta_chunks.into_iter()
+            .filter(|c| c.iter().any(|&b| b != 0))
+            .collect();
+
+        serial_println!("[SNAPSHOT] Delta: {}/{} chunks modificados",
+            nonzero.len(), chunker::chunk_data(&current_bmp).len());
+
+        (chunker::chunk_data(&current_bmp), nonzero)
     }
 
     pub fn restore_checkpoint(&mut self) -> bool {
