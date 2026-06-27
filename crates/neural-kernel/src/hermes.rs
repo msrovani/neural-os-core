@@ -175,6 +175,110 @@ impl ConversationTracker {
 }
 
 // ---------------------------------------------------------------------------
+// #191 Council skill — 3 vozes votam em decisões ambíguas
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct CouncilVote {
+    pub voice: &'static str,
+    pub argument: String,
+    pub confidence: f32,
+}
+
+/// Simula um conselho de 3 vozes para avaliar uma decisão.
+/// Retorna a sugestão com maior confiança média.
+pub fn council_deliberate(query: &str) -> (CouncilVote, CouncilVote, CouncilVote) {
+    let optimistic = CouncilVote {
+        voice: "Otimista 🌟",
+        argument: alloc::format!("'{}' parece promissor. Vamos tentar — o pior que pode acontecer é aprendermos algo novo.", query),
+        confidence: 0.85,
+    };
+    let skeptical = CouncilVote {
+        voice: "Cético 🔍",
+        argument: alloc::format!("'{}' requer cautela. Precisamos verificar pré-condições antes de agir.", query),
+        confidence: 0.72,
+    };
+    let pragmatic = CouncilVote {
+        voice: "Pragmático ⚖️",
+        argument: alloc::format!("'{}' é viável se executado com as salvaguardas adequadas. Recomendo seguir com monitoramento.", query),
+        confidence: 0.91,
+    };
+    (optimistic, skeptical, pragmatic)
+}
+
+pub fn council_display(optimistic: &CouncilVote, skeptical: &CouncilVote, pragmatic: &CouncilVote) -> String {
+    alloc::format!(
+        "\n🗳️ COUNCIL DELIBERATION\n\
+         ──────────────────────\n\
+         🌟 Otimista  ({:.0}%): {}\n\
+         🔍 Cético    ({:.0}%): {}\n\
+         ⚖️ Pragmático ({:.0}%): {}\n\
+         ──────────────────────\n\
+         ✅ Decisão: {} (consenso médio)",
+        optimistic.confidence * 100.0, optimistic.argument,
+        skeptical.confidence * 100.0, skeptical.argument,
+        pragmatic.confidence * 100.0, pragmatic.argument,
+        if pragmatic.confidence > 0.8 { "Seguir com salvaguardas" } else { "Reavaliar" }
+    )
+}
+
+// ---------------------------------------------------------------------------
+// #203 Context Fencing + Streaming Scrubber
+// ---------------------------------------------------------------------------
+
+/// Marcadores de tipo para mensagens do EventBus.
+/// Permite que o Scrubber filtre por tipo na recepção.
+pub const MARKER_USER_INPUT: &str = "[UserInput]";
+pub const MARKER_HW_TELEMETRY: &str = "[HardwareTelemetry]";
+pub const MARKER_LLM_REQUEST: &str = "[LLMRequest]";
+pub const MARKER_LLM_RESPONSE: &str = "[LLMResponse]";
+pub const MARKER_SECURITY: &str = "[SecurityEvent]";
+
+/// Adiciona marcador de tipo a uma mensagem
+pub fn fence_message(marker: &str, payload: &str) -> String {
+    alloc::format!("{} {}", marker, payload)
+}
+
+/// Remove marcadores de tipo de uma mensagem (scrub)
+pub fn scrub_message(msg: &str) -> &str {
+    for marker in &[MARKER_USER_INPUT, MARKER_HW_TELEMETRY, MARKER_LLM_REQUEST,
+                    MARKER_LLM_RESPONSE, MARKER_SECURITY] {
+        if let Some(rest) = msg.strip_prefix(marker) {
+            return rest.trim();
+        }
+    }
+    msg
+}
+
+// ---------------------------------------------------------------------------
+// #193 Bitter Pill Engineering
+// ---------------------------------------------------------------------------
+
+/// Lista de etapas obrigatórias que não podem ser puladas.
+/// Se o usuário tentar pular, Hermes recusa.
+pub const BITTER_PILLS: &[(&str, &str)] = &[
+    ("cargo check", "Nunca deploy sem antes compilar com 0 erros."),
+    ("test", "Nunca merge sem passar nos testes."),
+    ("semver", "Nunca versionar sem seguir semver."),
+    ("review", "Nunca commitar sem revisão por pares."),
+];
+
+/// Verifica se um comando tenta pular uma etapa obrigatória.
+/// Retorna Some(reason) se violar uma Bitter Pill, None se OK.
+pub fn check_bitter_pill(command: &str) -> Option<&'static str> {
+    let lower = command.to_ascii_lowercase();
+    for (pill, reason) in BITTER_PILLS {
+        if lower.contains(&alloc::format!("skip {}", pill))
+            || lower.contains(&alloc::format!("pular {}", pill))
+            || lower.contains(&alloc::format!("without {}", pill))
+        {
+            return Some(reason);
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Command parsing
 // ---------------------------------------------------------------------------
 

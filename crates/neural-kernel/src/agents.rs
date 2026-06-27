@@ -416,6 +416,23 @@ impl Agent for HermesAgent {
             serial_println!("{}", intent_info.display());
             self.show_sdd(intent_name);
 
+            // #191: Council deliberation para comandos ambíguos (ex: Chat)
+            if matches!(cmd, hermes::Command::Chat(_)) {
+                let (opt, skep, prag) = crate::hermes::council_deliberate(text);
+                serial_println!("{}", crate::hermes::council_display(&opt, &skep, &prag));
+            }
+
+            // #193: Bitter Pill check
+            if let Some(reason) = crate::hermes::check_bitter_pill(text) {
+                serial_println!("[HERMES] 🛑 Bitter Pill: {}", reason);
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                    payload: alloc::format!("[Hermes] 🛑 Não posso pular: {}", reason).into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                return agent_core::AgentTickResult::Pending;
+            }
+
             let response = match cmd {
                 hermes::Command::Status => {
                     self.log_phase(crate::hermes::ReActPhase::Execute, "status skill");
