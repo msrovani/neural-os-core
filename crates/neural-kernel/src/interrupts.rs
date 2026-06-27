@@ -1,3 +1,5 @@
+//! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
+
 use crate::{println, serial_println};
 use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
@@ -5,7 +7,7 @@ use pic8259::ChainedPics;
 use spin::Mutex;
 use x86_64::instructions::segmentation::Segment;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
-use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
+use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 
@@ -49,130 +51,108 @@ struct Selectors {
     tss_selector: SegmentSelector,
 }
 
-lazy_static! {
-    static ref IDT: InterruptDescriptorTable = {
-        let mut idt = InterruptDescriptorTable::new();
-        idt.breakpoint.set_handler_fn(breakpoint_handler);
-        unsafe {
-            idt.double_fault
-                .set_handler_fn(double_fault_handler)
-                .set_stack_index(DOUBLE_FAULT_IST_INDEX);
-        }
-        idt.page_fault.set_handler_fn(page_fault_handler);
-        idt.general_protection_fault.set_handler_fn(gpf_handler);
-        idt.stack_segment_fault.set_handler_fn(stack_segment_handler);
-        idt.segment_not_present.set_handler_fn(segment_not_present_handler);
-        idt.invalid_tss.set_handler_fn(invalid_tss_handler);
-        idt.alignment_check.set_handler_fn(alignment_check_handler);
-        idt[32].set_handler_fn(timer_handler);
-        idt[33].set_handler_fn(keyboard_interrupt_handler);
-        for i in 34..=255usize {
-            idt[i].set_handler_fn(unhandled_interrupt_handler);
-        }
-        idt
-    };
+// --------------------------------------------------------------------------
+// Generic exception handler — dumps frame + error code + CPU state
+// --------------------------------------------------------------------------
+
+fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
+    serial_println!("[EXCEPTION] {} ip={:#x} cs={:#x} flags={:#x} stack={:#x}",
+        name,
+        stack_frame.instruction_pointer.as_u64(),
+        stack_frame.code_segment,
+        stack_frame.cpu_flags,
+        stack_frame.stack_pointer.as_u64(),
+    );
+    if let Some(code) = error_code {
+        serial_println!("[EXCEPTION] {} err={:#x}", name, code);
+    }
+    println!("[EXCEPTION] {} (detalhes no serial)", name);
 }
 
-extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {
-    println!("[EXCEPTION] Breakpoint Detectado");
-    serial_println!("[EXCEPTION] Breakpoint Detectado");
-}
+extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { dump_exception("#DB", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("#NMI", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn breakpoint_handler(f: InterruptStackFrame) { serial_println!("[EXCEPTION] #BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
+extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { dump_exception("#UD", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn device_not_available_handler(f: InterruptStackFrame) { dump_exception("#NM", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn coprocessor_segment_overrun_handler(f: InterruptStackFrame) { dump_exception("#MF", &f, None); loop { x86_64::instructions::hlt(); } }
 
-extern "x86-interrupt" fn double_fault_handler(
-    _stack_frame: InterruptStackFrame,
-    error_code: u64,
-) -> ! {
-    serial_println!("[EXCEPTION] DOUBLE FAULT (err={})", error_code);
-    println!("[EXCEPTION] DOUBLE FAULT (err={})", error_code);
-    use crate::self_heal::FailureClass;
-    let class = FailureClass::classify("DoubleFault", "");
-    serial_println!("[SELF-HEAL] {:?}: tentando restore de checkpoint...", class);
+extern "x86-interrupt" fn invalid_tss_handler(f: InterruptStackFrame, code: u64) { dump_exception("#TS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn segment_not_present_handler(f: InterruptStackFrame, code: u64) { dump_exception("#NP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn stack_segment_handler(f: InterruptStackFrame, code: u64) { dump_exception("#SS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) { dump_exception("#GP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn alignment_check_handler(f: InterruptStackFrame, code: u64) { dump_exception("#AC", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn security_exception_handler(f: InterruptStackFrame, code: u64) { dump_exception("#CP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+
+extern "x86-interrupt" fn machine_check_handler(f: InterruptStackFrame) -> ! { dump_exception("#MC", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn fpu_error_handler(f: InterruptStackFrame) { dump_exception("#MF", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn simd_fp_exception_handler(f: InterruptStackFrame) { dump_exception("#XM", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn virtualization_handler(f: InterruptStackFrame) { dump_exception("#VE", &f, None); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn reserved_handler(f: InterruptStackFrame) { dump_exception("#RSVD", &f, None); loop { x86_64::instructions::hlt(); } }
+
+extern "x86-interrupt" fn double_fault_handler(f: InterruptStackFrame, code: u64) -> ! {
+    dump_exception("#DF", &f, Some(code));
+    serial_println!("[SELF-HEAL] DF: tentando restore de checkpoint...");
     let restored = crate::SELF_HEAL.lock().restore_checkpoint();
     if restored {
-        serial_println!("[SELF-HEAL] Checkpoint restaurado! O sistema pode continuar instavel.");
-        serial_println!("[SELF-HEAL] Recomendado: reiniciar daemons afetados via RESPAWN_QUEUE.");
+        serial_println!("[SELF-HEAL] Checkpoint restaurado!");
+        serial_println!("[SELF-HEAL] Recomendado: reiniciar daemons via RESPAWN_QUEUE.");
     } else {
-        serial_println!("[SELF-HEAL] Nenhum checkpoint disponivel. Halt.");
+        serial_println!("[SELF-HEAL] Nenhum checkpoint. Halt.");
     }
     loop { x86_64::instructions::hlt(); }
 }
 
-extern "x86-interrupt" fn page_fault_handler(
-    _stack_frame: InterruptStackFrame,
-    error_code: x86_64::structures::idt::PageFaultErrorCode,
-) {
+extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageFaultErrorCode) {
     let addr = x86_64::registers::control::Cr2::read();
-    serial_println!("[SECURITY] Page Fault em {:?}. Error: {:?}", addr, error_code);
-    println!("[SECURITY] Page Fault em {:?}.", addr);
-    let class = crate::self_heal::FailureClass::classify("PageFault", "");
-    serial_println!("[SELF-HEAL] Page Fault: {:?} em {:?}. {}", class, addr, class.default_recovery());
-    // Map the faulting page if possible
-    if error_code.contains(x86_64::structures::idt::PageFaultErrorCode::CAUSED_BY_WRITE)
-        && !error_code.contains(x86_64::structures::idt::PageFaultErrorCode::MALFORMED_TABLE)
-    {
-        serial_println!("[SELF-HEAL] Tentando remediar page fault...");
-        // Just log and continue (actual recovery requires page table changes)
-    }
+    dump_exception("#PF", &f, Some(code.bits() as u64));
+    serial_println!("[SECURITY] CR2={:#x} flags={:?}", addr, code);
     loop { x86_64::instructions::hlt(); }
 }
 
-fn send_eoi() {
+// --------------------------------------------------------------------------
+// EOI — PIC com duplo EQI para escravo
+// --------------------------------------------------------------------------
+
+fn send_eoi(vector: u8) {
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
         unsafe { crate::apic::apic_eoi(); }
     } else {
         unsafe {
+            // Sempre envia EOI ao mestre
             core::arch::asm!("out 0x20, al", in("al") 0x20u8, options(nostack, preserves_flags));
+            // Se a interrupção veio do escravo (vetores >= 40), EOI também no escravo
+            if vector >= PIC_2_OFFSET {
+                core::arch::asm!("out 0xA0, al", in("al") 0x20u8, options(nostack, preserves_flags));
+            }
         }
     }
 }
 
-extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
+// --------------------------------------------------------------------------
+// IRQ handlers (hardware)
+// --------------------------------------------------------------------------
+
+extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     if ticks < 5 {
         serial_println!("[TIMER] Interrupt fired! tick={}", ticks);
     }
-    send_eoi();
+    send_eoi(32);
 }
 
-extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn keyboard_interrupt_handler(stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
     let mut data_port = Port::<u8>::new(0x60);
     let scancode: u8 = unsafe { data_port.read() };
     LAST_SCANCODE.store(scancode, Ordering::Release);
-    send_eoi();
+    send_eoi(33);
 }
 
-extern "x86-interrupt" fn gpf_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
-    serial_println!("[EXCEPTION] General Protection Fault (err={}) HALT", error_code);
-    println!("[EXCEPTION] General Protection Fault (err={}) HALT", error_code);
-    loop { x86_64::instructions::hlt(); }
-}
-
-extern "x86-interrupt" fn stack_segment_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
-    serial_println!("[EXCEPTION] Stack Segment Fault (err={}) HALT", error_code);
-    println!("[EXCEPTION] Stack Segment Fault (err={}) HALT", error_code);
-    loop { x86_64::instructions::hlt(); }
-}
-
-extern "x86-interrupt" fn segment_not_present_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
-    serial_println!("[EXCEPTION] Segment Not Present (err={}) HALT", error_code);
-    println!("[EXCEPTION] Segment Not Present (err={}) HALT", error_code);
-    loop { x86_64::instructions::hlt(); }
-}
-
-extern "x86-interrupt" fn invalid_tss_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
-    serial_println!("[EXCEPTION] Invalid TSS (err={}) HALT", error_code);
-    println!("[EXCEPTION] Invalid TSS (err={}) HALT", error_code);
-    loop { x86_64::instructions::hlt(); }
-}
-
-extern "x86-interrupt" fn alignment_check_handler(_stack_frame: InterruptStackFrame, error_code: u64) {
-    serial_println!("[EXCEPTION] Alignment Check (err={}) HALT", error_code);
-    println!("[EXCEPTION] Alignment Check (err={}) HALT", error_code);
-    loop { x86_64::instructions::hlt(); }
-}
-
-extern "x86-interrupt" fn unhandled_interrupt_handler(_stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStackFrame) {
+    serial_println!("[IRQ] Interrupção não tratada ip={:#x}", stack_frame.instruction_pointer.as_u64());
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
         unsafe { crate::apic::apic_eoi(); }
     } else {
@@ -183,6 +163,53 @@ extern "x86-interrupt" fn unhandled_interrupt_handler(_stack_frame: InterruptSta
     }
 }
 
+// --------------------------------------------------------------------------
+// IDT init — cobertura total de 0 a 31 + hardware + syscall
+// --------------------------------------------------------------------------
+
+lazy_static! {
+    static ref IDT: InterruptDescriptorTable = {
+        let mut idt = InterruptDescriptorTable::new();
+
+        // Exceções CPU 0-19 — campos nomeados
+        idt.divide_error.set_handler_fn(divide_error_handler);
+        idt.debug.set_handler_fn(debug_handler);
+        idt.non_maskable_interrupt.set_handler_fn(nmi_handler);
+        idt.breakpoint.set_handler_fn(breakpoint_handler);
+        idt.overflow.set_handler_fn(overflow_handler);
+        idt.bound_range_exceeded.set_handler_fn(bound_range_handler);
+        idt.invalid_opcode.set_handler_fn(invalid_opcode_handler);
+        idt.device_not_available.set_handler_fn(device_not_available_handler);
+        unsafe { idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(DOUBLE_FAULT_IST_INDEX); }
+        idt[9].set_handler_fn(coprocessor_segment_overrun_handler);
+        idt.invalid_tss.set_handler_fn(invalid_tss_handler);
+        idt.segment_not_present.set_handler_fn(segment_not_present_handler);
+        idt.stack_segment_fault.set_handler_fn(stack_segment_handler);
+        idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
+        idt.page_fault.set_handler_fn(page_fault_handler);
+        idt.x87_floating_point.set_handler_fn(fpu_error_handler);
+        idt.alignment_check.set_handler_fn(alignment_check_handler);
+        idt.machine_check.set_handler_fn(machine_check_handler);
+        idt.simd_floating_point.set_handler_fn(simd_fp_exception_handler);
+        idt.virtualization.set_handler_fn(virtualization_handler);
+        idt.security_exception.set_handler_fn(security_exception_handler);
+
+        // Vetores 20-31 (Reserved) via index
+        for i in 20..=31usize { idt[i].set_handler_fn(reserved_handler); }
+
+        // Hardware IRQs
+        idt[32].set_handler_fn(timer_handler);
+        idt[33].set_handler_fn(keyboard_interrupt_handler);
+
+        // Demais vetores (34-255)
+        for i in 34..=255usize { idt[i].set_handler_fn(unhandled_interrupt_handler); }
+
+        idt
+    };
+    // Fim do lazy_static IDT
+}
+
+/// Carrega GDT + TSS + IDT
 pub fn init_idt() {
     GDT.0.load();
     unsafe {
@@ -190,14 +217,13 @@ pub fn init_idt() {
         x86_64::instructions::tables::load_tss(GDT.1.tss_selector);
     }
     IDT.load();
+    serial_println!("[IDT] IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.");
 }
 
 pub fn init_pics() {
-    unsafe {
-        PICS.lock().initialize();
-    }
+    unsafe { PICS.lock().initialize(); }
     serial_println!("[PIC] 8259A remapeado: PIC1 offset 32, PIC2 offset 40.");
-    println!("[PIC] 8259A remapeado: PIC1 offset 32, PIC2 offset 40.");
+    println!("[PIC] 8259A remapeado.");
 }
 
 pub fn enable_interrupts() {
