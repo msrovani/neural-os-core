@@ -62,6 +62,7 @@ mod proto;
 mod rtl8139;
 mod safety;
 mod security;
+mod usb_msc;
 mod virtio_net;
 mod virtio_gpu;
 
@@ -446,8 +447,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     *ATA_DRIVER.lock() = ata;
 
-    // Inicializa xHCI USB (teclado HID)
+    // Inicializa xHCI USB (teclado HID + mass storage)
     unsafe { crate::xhci::init_xhci(); }
+
+    // Probes USB Mass Storage (fallback para ATA)
+    let usb_msc = crate::usb_msc::UsbMassStorage::probe();
+    if usb_msc.is_some() {
+        serial_println!("[USB-MSC] Pendente: driver BOT para escrita de log.");
+    }
 
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
