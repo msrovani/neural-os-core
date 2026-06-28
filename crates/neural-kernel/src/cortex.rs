@@ -85,6 +85,23 @@ pub struct TransformerModel {
     pub layers: Vec<LayerWeights>,
     pub rms_final: f32,
     pub unembed: PackedTernaryTensor,
+    pub medusa_heads: Vec<MedusaHead>,
+}
+
+const MEDUSA_HEADS: usize = 3;
+
+pub struct MedusaHead {
+    pub w: PackedTernaryTensor,
+}
+
+impl MedusaHead {
+    pub fn new_random(seed: &mut u32) -> Self {
+        MedusaHead { w: random_ternary(seed, HIDDEN, VOCAB_SIZE as usize) }
+    }
+
+    pub fn forward(&self, hidden: &Tensor) -> Tensor {
+        self.w.matmul_hybrid(hidden).unwrap()
+    }
 }
 
 fn random_ternary(seed: &mut u32, rows: usize, cols: usize) -> PackedTernaryTensor {
@@ -125,11 +142,13 @@ impl TransformerModel {
                 down: random_ternary(&mut seed, FFN_DIM, HIDDEN),
             });
         }
+        let medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed)).collect();
         TransformerModel {
             embed: random_embed(&mut seed, VOCAB_SIZE as usize, HIDDEN),
             layers,
             rms_final: 1.0,
             unembed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
+            medusa_heads,
         }
     }
 
@@ -146,7 +165,7 @@ impl TransformerModel {
         t
     }
 
-    pub fn forward(&self, tokens: &[u16]) -> Tensor {
+    pub fn forward_hidden(&self, tokens: &[u16]) -> (Tensor, Tensor) {
         let seq_len = tokens.len().min(MAX_SEQ);
         let mut x = Tensor::new((seq_len, HIDDEN));
         for (i, &t) in tokens.iter().enumerate().take(seq_len) {
@@ -202,7 +221,11 @@ impl TransformerModel {
         let last_hidden = Tensor::from_row_major((1, HIDDEN),
             final_norm.data[(seq_len - 1) * HIDDEN..seq_len * HIDDEN].to_vec()).unwrap();
         let logits = self.unembed.matmul_hybrid(&last_hidden).unwrap();
-        logits
+        (last_hidden, logits)
+    }
+
+    pub fn forward(&self, tokens: &[u16]) -> Tensor {
+        self.forward_hidden(tokens).1
     }
 
     pub fn generate_next(&self, tokens: &[u16]) -> u16 {
@@ -257,14 +280,19 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let mut off = 0;
     let magic = read_u32(data, &mut off);
     if magic != 0xBE11BE11 { return None; }
-    let _version = read_u16(data, &mut off);
+    let version = read_u16(data, &mut off);
     let _num_params = read_u32(data, &mut off);
     let _hidden = read_u16(data, &mut off) as usize;
     let _layers = read_u16(data, &mut off) as usize;
     let _heads = read_u16(data, &mut off) as usize;
     let _vocab = read_u16(data, &mut off) as usize;
     let _max_seq = read_u16(data, &mut off);
-    off += 4;
+    let mut num_medusa = 0usize;
+    if version >= 2 {
+        num_medusa = data[off] as usize; off += 4;  // u8 medusa_heads + 3 padding
+    } else {
+        off += 4;
+    }
 
     let embed = read_f32_tensor(data, &mut off, _vocab, _hidden);
     let mut layers = Vec::with_capacity(_layers);
@@ -283,19 +311,76 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     }
     let unembed = read_ternary_tensor(data, &mut off, _hidden, _vocab);
 
-    Some(TransformerModel { embed, layers, rms_final: 1.0, unembed })
+    let mut medusa_heads = Vec::with_capacity(num_medusa);
+    for _ in 0..num_medusa {
+        let w = read_ternary_tensor(data, &mut off, _hidden, _vocab);
+        medusa_heads.push(MedusaHead { w });
+    }
+    if medusa_heads.is_empty() {
+        let mut seed: u32 = 42;
+        medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed)).collect();
+    }
+
+    Some(TransformerModel { embed, layers, rms_final: 1.0, unembed, medusa_heads })
 }
 
-pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
+fn argmax_row(logits: &Tensor, row: usize) -> u16 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let mut best = 0u16;
+    let mut best_val = NEG_INFINITY;
+    for j in 0..cols {
+        let v = logits.data[start + j];
+        if v > best_val { best_val = v; best = j as u16; }
+    }
+    if best >= VOCAB_SIZE { EOS } else { best }
+}
+
+pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
     let mut tokens = Tokenizer::encode(prompt);
     for _ in 0..32 {
         if tokens.len() >= MAX_SEQ { break; }
-        let next = model.generate_next(&tokens);
-        tokens.push(next);
-        if next == EOS { break; }
+        let (last_hidden, _) = model.forward_hidden(&tokens);
+
+        let mut draft = Vec::with_capacity(MEDUSA_HEADS);
+        for head in &model.medusa_heads {
+            let logits = head.forward(&last_hidden);
+            let tok = argmax_row(&logits, 0);
+            draft.push(tok);
+        }
+
+        let mut candidates = tokens.clone();
+        for &d in &draft {
+            candidates.push(d);
+            if candidates.len() >= MAX_SEQ { break; }
+        }
+
+        let cand_logits = model.forward(&candidates);
+        let base_pos = tokens.len() - 1;
+        let mut accept = 0usize;
+        for (i, &d) in draft.iter().enumerate() {
+            let pos = base_pos + 1 + i;
+            if pos >= cand_logits.shape.0 { break; }
+            if argmax_row(&cand_logits, pos) == d { accept += 1; } else { break; }
+        }
+
+        tokens.push(argmax_row(&cand_logits, base_pos));
+        for &d in draft.iter().take(accept) { tokens.push(d); }
+
+        let new_tok = if accept < MEDUSA_HEADS {
+            let pos = base_pos + 1 + accept;
+            if pos < cand_logits.shape.0 { Some(argmax_row(&cand_logits, pos)) } else { None }
+        } else { None };
+        if let Some(t) = new_tok { tokens.push(t); }
+
+        if *tokens.last().unwrap_or(&0) == EOS { break; }
     }
     let gen = &tokens[Tokenizer::encode(prompt).len()..];
     Tokenizer::decode(gen)
+}
+
+pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
+    generate_speculative(model, prompt)
 }
 
 pub struct Cortex {
