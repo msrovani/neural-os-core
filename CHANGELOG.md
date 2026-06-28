@@ -30,6 +30,28 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.57.1] — 2026-06-27 — Consolidation: Plugin Hub + x2APIC + Ed25519 + SMP stacks
+
+### Added
+- **Plugin Hub** (#236) — `plugin_hub.rs`: install/remove/scan_risk/discover de plugins
+  remotos com AI security scan (10-level risk scoring por nome de skill)
+- **x2APIC ativado** — CPUID leaf 1 ECX[21] detecta suporte, MSR IA32_APIC_BASE[10]
+  habilita modo MSR-based. Fallback MMIO se TCG nao suportar.
+- **Ed25519 real** — `ed25519-compact` crate (2.3.1, no_std, sem SIMD) substitui stub.
+  `verify_signature()` usa `PublicKey::from_slice` + `verify`. TRUSTED_PUBLIC_KEYS array.
+
+### Fixed
+- **SMP per-AP stacks**: cada AP agora tem stack de 64KB dedicada no heap,
+  em vez de compartilhar topo do heap entre todos os cores. Previne corrupção de pilha.
+- **x2APIC CPUID**: substitui inline asm com `out("ebx")` (conflito LLVM/MinGW)
+  por `core::arch::x86_64::__cpuid()`. Compila em x86_64-unknown-none.
+
+### Aprendizados
+- `ed25519-compact` é no_std puro (sem SIMD, sem bindings C) — roda em qualquer target
+- `core::arch::x86_64::__cpuid` retorna `CpuidResult` (não Result) — API infalível
+- SMP precisa de stacks separadas por AP: 64KB × 4 cores = 256KB do heap
+- Plugin Hub com risk scoring de skills cabe em ~200 LOC
+
 ## [0.57.0] — 2026-06-27 — Bloco 15+16+17: Memory Systems + Ecosystem + LLM v2 🧠🏁
 
 ### Added — Bloco 15: Memory Systems (completo)
