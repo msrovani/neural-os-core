@@ -4,17 +4,20 @@
 
 **Visao:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferencia neural. O LLM identifica hardware, decide alocacao no MHI, e se recupera de erros automaticamente.
 
-**Estado atual (v0.55.0):** 19 agentes rodando. Transformer 4 layers BitNet (~272K params) treinado na GTX 1050 com 66.780 pares. Hermes Cognitive com SDD + ReAct 7 fases + Council skill. Self-Healing com FailureClass taxonomy + checkpoint. Trust & Security com Ed25519 identity + Security Pipeline + Safety Interceptor (Asimov 4 Laws). Self-Optimization com Usage Analyzer + Workflow Predictor + Config Learner.
+**Estado atual (v0.56.0):** 20 agentes rodando. Transformer 4 layers BitNet (~272K params) + Medusa 3-head speculative decoding. Pipeline manifest, Memory Tree (hierarchical chunks), Knowledge Graph (agent/skill/hardware nodes). Hermes Cognitive com SDD + ReAct 7 fases + Council skill. Self-Healing com FailureClass taxonomy + checkpoint. Trust & Security com Ed25519 identity + Security Pipeline + Safety Interceptor (Asimov 4 Laws). Self-Optimization com Usage Analyzer + Workflow Predictor + Config Learner.
 
 **Arquitetura chave:**
-- 18 agentes nativos (Agent trait, AgentRegistry, AgentScheduler)
+- 20 agentes nativos (Agent trait, AgentRegistry, AgentScheduler)
 - Ring 0: NPU (Intent routing), Ring 1: GPU, Ring 2: CPU (agents/skills)
+- Pipeline manifest com scored provider selection + fallback
+- Memory Tree: hierarchical summaries + importance pruning + scouting
+- Knowledge Graph: Node+Edge indexado, query por relação/vizinhança
 - TicketLock FIFO + IrqSafeLock para SMP sem deadlock
 - Memory Hierarchy Index: alloc_by_tier(Dram|Vram|Nvme|Hdd)
 - Zero-trust: CapabilityToken com suporte Ed25519
 - Safety Interceptor: Asimov 4 Laws no Ring 0
 
-**Blocos completos (14 blocos, 55 sprints):**
+**Blocos completos (15 blocos, 56 sprints):**
 1. Chassi — VGA, heap, EventBus, SMP, APIC
 2. Discovery — PCI, ACPI, MHI, Trust
 3. Rede — RTL8139, smoltcp, DHCP, VirtIO-net
@@ -29,6 +32,7 @@
 12. Network+Platform — x2APIC, Huge Pages, PCI bridges, Cron, MCP
 13. Trust & Security — Ed25519, Security Pipeline, Mask Secrets
 14. Hermes Cognitive — SDD, ReAct, Council, Self-Optimization
+15. **Medusa+Ecosystem** — **Spec decode, Pipeline, MemTree, KG, DAG, Dashboard**
 
 **Para IA que vai me editar:**
 1. Leia `docs/memory/IDEA_BANK.md` — 336+ ideias catalogadas com status

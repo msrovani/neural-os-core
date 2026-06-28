@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.50.0 🏆
-#   AGENT/SKILL-FIRST + BLOCOS 12+13 COMPLETOS
-#   Tudo é agente ou skill. Drivers manuais sem dependências externas.
+#   PLANO DIRETOR — neural-os-core v0.56.0 🏆
+#   MEDUSA + PIPELINE + MEMORY TREE + KNOWLEDGE GRAPH
+#   Tudo é agente ou skill. Padrões de ecossistema portados.
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -39,7 +39,7 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
-# Current Agent Landscape (v0.50.0 — 18 agents — Block 11+12+13)
+# Current Agent Landscape (v0.56.0 — 20 agents — Block 11+12+13+14+Ecosystem)
 
 | Código | Agente | Status | Tipo | Função |
 |---|---|---|---|---|
@@ -48,7 +48,7 @@ TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(toke
 | A-003 | HwBridgeAgent | ✅ Agent | Router (Continuous) | Scancode IRQ bridge |
 | A-004 | NetAgent | ✅ Agent | Network (Continuous) | smoltcp poll + HTTP |
 | A-005 | InputAgent | ✅ Agent | Console (Continuous) | Keyboard buffer |
-| A-006 | CortexAgent | ✅ Agent | Inference (Continuous) | LLM generate_text() |
+| A-006 | CortexAgent | ✅ Agent | Inference (Continuous) | LLM generate_text() + Medusa |
 | A-007 | HermesAgent | ✅ Agent | Router (Continuous) | Intent routing + skills |
 | A-008 | **DisplayAgent** | ✅ Agent | Console (Continuous) | **Framebuffer BGRA32** |
 | A-009 | NetDriverAgent | ✅ Agent | Driver (Oneshot) | RTL8139 + VirtIO-net |
@@ -61,6 +61,14 @@ TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(toke
 | A-016 | **HwDetectAgent** | ✅ Agent | System (Oneshot) | HwIdentifySkill |
 | A-017 | **CronAgent** | ✅ Agent | System (Continuous) | Cron Scheduler (#232) |
 | A-018 | **SecurityAgent** | ✅ Agent | System (Continuous) | Security Pipeline (#260) |
+| A-019 | **SafetyAgent** | ✅ Agent | System (Continuous) | Safety Interceptor (#270) |
+| A-020 | **OptimizerAgent** | ✅ Agent | System (Continuous) | Self-Optimization |
+
+**Bloco 11 (Sprints 39-42):** Bloco único consolidado. Agent/Skill-First completo.
+**Bloco 12 (Sprints 43-44):** Network Evolution — DHCP, ARP, VirtIO-net manual, NetPhy unificada.
+**Sprint 45 (v0.43-0.45):** Display subsystem + VirtIO-GPU + bugfix estrutural (H3-H12).
+**Bloco 12v2 (Sprint 48):** x2APIC, Huge Pages, PCI bridges, Cron Scheduler, MCP Server.
+**Bloco 13 (Sprints 49-50):** Trust & Security — Ed25519, Security Pipeline, Mask Secrets.
 
 Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo existente, 🟡 wrapper = LegacyTaskAgent (migrar), 📝 = módulo avulso
 

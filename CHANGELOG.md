@@ -30,6 +30,65 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.56.0] — 2026-06-27 — Medusa Speculative Decoding + Pipeline + Memory Tree + KG 🚀
+
+### Added — Medusa Speculative Decoding (cortex.rs)
+- **3 Medusa heads**: cada head `PackedTernaryTensor(HIDDEN, VOCAB_SIZE)` prediz token futuro
+- **`generate_speculative()`**: draft 3 tokens, verify em 1 forward pass, aceita prefixo
+- **Ganho teórico**: até 4 tokens/forward pass quando heads treinadas (~2-3× em prática)
+- **`forward_hidden()`**: retorna hidden state + logits (refatorado do forward())
+
+### Added — Pipeline Manifest (agent-core/pipeline.rs)
+- **Stage + Provider**: scored selection com fallback. Provider tem `score: u8` + `activate: fn() -> bool`
+- **Pipeline runner**: executa stages em ordem, fallback automático se provider principal falha
+- **Substitui boot sequence fixo** por pipeline declarativa
+
+### Added — Memory Tree (event-bus/memory_tree.rs)
+- **MemNode**: `{ summary, data, children, importance }` — chunks hierárquicos ≤512 bytes
+- **Scout**: percorre árvore até depth N, retorna `(idx, summary, importance)` para contexto
+- **Prune**: poda nós com importância < threshold, base para TTL/eviction
+- **Base do Bloco 15 Memory Systems**: Atkinson-Shiffrin, Ebbinghaus decay, 4-tier consolidation
+
+### Added — Knowledge Graph (event-bus/kgraph.rs)
+- **KNode + KEdge**: nós (Agent/Skill/Hardware/Event) + arestas com relação nomeada
+- **label_map**: índice por label para lookup O(1)
+- **neighbors()**: consulta de vizinhança (source ou target)
+- **query(relation)**: busca todas as arestas com relação específica
+- **Base para correlação de eventos de segurança + trust graph**
+
+### Added — DAG Scheduler (agent-core/dagsched.rs)
+- **DagScheduler**: dependências nomeadas entre agentes/stages, topological sort
+- **resolve()**: ordenação topológica com detecção de ciclos
+- **run()**: executa agentes na ordem resolvida
+
+### Added — Dashboard (agent-core/dashboard.rs)
+- **Metric + Alert**: structs para relatórios estruturados de health status
+- **Dashboard::render()**: saída textual formatada para SystemAgent/CronAgent
+
+### Added — Pipeline de Treino v2 (tools/train_hw_model.py)
+- **Muon optimizer** (opt-in --muon): Newton-Schulz 3rd order orthogonalization
+- **Data augmentation**: 4 query variants por exemplo (~4× dataset)
+- **Medusa heads treináveis**: loss auxiliar `0.3 × medusa_loss / 3`
+- **Export .bitnet v2**: u8 num_medusa_heads + 3 padding + head weights
+- **Speculative generation no Python**: testável durante treino
+
+### Added — Ecosystem Analysis (16 repos)
+- Alta aderência: OpenMontage (pipeline), OpenHuman (Memory Tree), codebase-memory-mcp (KG)
+- Média aderência: Rinne (DAG), daily_stock (Dashboard), ComPilot (closed-loop), Cybersecurity Skills (frontmatter)
+- Baixa aderência: design.md (tokens), Agent-Reach (channel), Voicebox (MCP), Penpot (design)
+
+### Fixed
+- `CUDA_VISIBLE_DEVICES=1` no ambiente escondia GTX 1050 — fix: sobrescrever com '0'
+- Muon SVD causava timeout — substituído por Newton-Schulz 3rd order (~4× mais rápido)
+- Muon produzia NaN com gradientes pequenos — adicionado clamp + NaN guard
+
+### Aprendizados
+- `torch.linald` é `torch.linalg` (typo que quebrou primeiro build)
+- NS iteration precisa de NaN guard + shape-aware (matrizes retangulares m≠n)
+- Memory Tree com summary hierárquico cabe em ~200 LOC no_std
+- Knowledge Graph com label_map index cabe em ~200 LOC no_std
+- Pipeline manifest com fallback scored cabe em ~200 LOC no_std
+
 ## [0.55.0] — 2026-06-27 — Bloco 14 completo: Hermes Cognitive + Self-Optimization 🧠🏁
 ### Added — Self-Optimization (fase 4/4)
 - **Self-Optimizing Scheduler** (#161) — `get_agent_priority()` com 13 níveis. `suggest_schedule(workflow)` adapta prioridades baseado no workflow detectado
