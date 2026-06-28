@@ -1,4 +1,5 @@
 //! Raw framebuffer — BGRA32 pixel writer + embedded-graphics DrawTarget.
+//! Suporta UEFI GOP (hardware real) e VirtIO-GPU (QEMU).
 
 use core::ptr::write_volatile;
 use embedded_graphics::{
@@ -8,8 +9,29 @@ use embedded_graphics::{
     Pixel,
 };
 
-/// GPU device global — populado por init_driver_virtio_gpu()
-pub static GPU: spin::Mutex<Option<crate::virtio_gpu::GpuDevice>> = spin::Mutex::new(None);
+#[derive(Clone, Copy)]
+pub struct GpuDevice {
+    pub fb_addr: u64,
+    pub fb_width: u32,
+    pub fb_height: u32,
+    pub fb_stride: u32,
+    pub notify_addr: u64,
+    pub present: bool,
+}
+
+impl GpuDevice {
+    pub const fn empty() -> Self {
+        GpuDevice { fb_addr: 0, fb_width: 0, fb_height: 0, fb_stride: 0, notify_addr: 0, present: false }
+    }
+}
+
+pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
+
+pub fn probe_uefi_framebuffer(_phys_mem_offset: u64) {
+    // bootloader 0.9.34 não expõe frame_buffer.
+    // Upgrade para bootloader 0.11+ necessário para framebuffer UEFI.
+    // VGA text mode (CSM) ou VirtIO-GPU (QEMU) continuam como fallback.
+}
 
 /// Informações do framebuffer obtidas do bootloader
 #[derive(Clone, Copy)]

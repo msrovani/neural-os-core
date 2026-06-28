@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use x86_64::instructions::port::Port;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
+use crate::display::fb::GpuDevice;
 use crate::{serial_println};
 
 pub const VIRTIO_GPU_TRANS: u16 = 0x1045; // transitional (legacy I/O + modern MMIO)
@@ -140,12 +141,6 @@ unsafe fn setup_q(io: &Regs, idx: u16, sz: u16) -> Option<u64> {
         io.w16(io.ro.qe, 1);
     }
     Some(pa)
-}
-
-pub struct GpuDevice {
-    pub fb_addr: u64, pub fb_width: u32, pub fb_height: u32, pub fb_stride: u32,
-    pub notify_addr: u64, // MMIO address for queue notify
-    pub present: bool,
 }
 
 impl GpuDevice {

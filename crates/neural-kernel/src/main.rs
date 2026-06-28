@@ -442,6 +442,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         slab_metrics.0, slab_metrics.1);
 
     // Boot phase agents — cada um é um Agent Oneshot que executa init
+    // Tenta detectar framebuffer UEFI (hardware real)
+    display::fb::probe_uefi_framebuffer(boot_info.physical_memory_offset);
+
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
     registry.register(Box::new(agents::MemoryAgent::new()));
