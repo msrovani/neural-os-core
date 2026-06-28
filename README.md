@@ -1,4 +1,4 @@
-﻿# Neural OS Hermes v0.55.0 - HERMES COGNITIVE + SELF-OPTIMIZATION
+﻿# Neural OS Hermes v0.56.0 - MEDUSA + PIPELINE + MEMORY TREE + KNOWLEDGE GRAPH
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -12,8 +12,8 @@
 ### 0. Tudo ├® Agente ou Skill
 **Bloco 11 (Sprints 39-42 consolidado):** N├úo existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade ├® um **Agente** com manifesto, ScheduleKind e ciclo de vida. Habilidades (**Skills**) s├úo a interface de requisi├º├úo-resposta.
 
-16 agentes nativos (v0.55.0):
-| C├│digo | Agente | Tipo | Driver/Driver manual |
+16 agentes nativos (v0.56.0):
+| Código | Agente | Tipo | Função |
 |---|---|---|---|
 | A-001 | SystemAgent | System | Init, EchoSkill |
 | A-002 | MonitorAgent | System | SYSTEM_READY |
@@ -22,10 +22,19 @@
 | A-005 | InputAgent | Console | Keyboard |
 | A-006 | CortexAgent | Inference | LLM transformer |
 | A-007 | HermesAgent | Router | Intent + skills |
-| A-008 | **DisplayAgent** | Console | **Framebuffer BGRA32** |
+| A-008 | DisplayAgent | Console | Framebuffer BGRA32 |
 | A-009 | NetDriverAgent | Driver | RTL8139 + VirtIO-net |
 | A-010 | UsbDriverAgent | Driver | xHCI USB |
-| A-011ÔÇôA-016 | Boot agents | System/Driver | PCI, SMP, Trust, GPU |
+| A-011 | BootSelfHealAgent | System | SelfHeal init |
+| A-012 | BootTrustAgent | System | TrustCache init |
+| A-013 | PlatformAgent | System | PCI+ACPI+APIC+SMP |
+| A-014 | MemoryAgent | System | MHI + Arch inference |
+| A-015 | GpuDriverAgent | Driver | VirtIO-GPU detection |
+| A-016 | HwDetectAgent | System | HwIdentifySkill |
+| A-017 | CronAgent | System | Cron Scheduler |
+| A-018 | SecurityAgent | System | Security Pipeline |
+| A-019 | SafetyAgent | System | Asimov 4 Laws |
+| A-020 | OptimizerAgent | System | Self-Optimization |
 
 ### 1. Kernel que SE CURA
 Quando um erro ocorre (Page Fault, GPF, OOM), o kernel n├úo d├í BSOD:
@@ -79,20 +88,25 @@ SelfHeal::record_failure() ÔåÆ lessons.push()
   ÔåÆ Pr├│ximo erro similar: already_tried()=true ÔåÆ action DIFERENTE
 ```
 
-## ­ƒÅù´©Å O que foi constru├¡do (45 sprints / 13 blocos)
+## O que foi construído (14 blocos, 55+ sprints)
 
 | Bloco | Sprints | v | O que |
 |---|---|---|---|
-| Chassi | 1-17 | 0.1ÔÇô0.12 | VGA, heap, EventBus, IPC, SMP, APIC |
-| Discovery | 18-22 | 0.13ÔÇô0.17 | PCI, ACPI, MHI, Trust, LAPIC |
-| Rede | 23-24 | 0.23ÔÇô0.24 | RTL8139, smoltcp |
-| Transformer | 26-27 | 0.26ÔÇô0.27 | Attention BitNet |
-| HW-Aware LLM | 28-30 | 0.28ÔÇô0.30 | PCI+USB training |
+| Chassi | 1-17 | 0.1-0.12 | VGA, heap, EventBus, IPC, SMP, APIC |
+| Discovery | 18-22 | 0.13-0.17 | PCI, ACPI, MHI, Trust, LAPIC |
+| Rede | 23-24 | 0.23-0.24 | RTL8139, smoltcp |
+| Transformer | 26-27 | 0.26-0.27 | Attention BitNet |
+| HW-Aware LLM | 28-30 | 0.28-0.30 | PCI+USB training |
 | Capabilities | 31 | 0.31 | HW mapping |
-| Self-Healing | 32-37 | 0.32ÔÇô0.37 | Failure taxonomy |
-| Agent/Skill-First | 39-42 | 0.39ÔÇô0.40 | Agent trait, 15 agentes |
-| Network Evo | 43-44 | 0.41ÔÇô0.42 | DHCP, ARP, VirtIO-net, NetPhy |
-| **Display+Bugfix** | **45** | **0.43ÔÇô0.45** | **Framebuffer, VirtIO-GPU, 5 bugs** |
+| Self-Healing | 32-37 | 0.32-0.37 | Failure taxonomy |
+| Agent/Skill-First | 39-42 | 0.39-0.40 | Agent trait, 18 agentes |
+| Network Evo | 43-44 | 0.41-0.42 | DHCP, VirtIO-net, NetPhy |
+| Display+Bugfix | 45 | 0.43-0.45 | Framebuffer, VirtIO-GPU, 5 bugs |
+| CDC+Delta+Locks | 46-47 | 0.46-0.47 | IrqSafeLock, DmaBuf, Rabin |
+| Network+Platform | 48 | 0.48 | x2APIC, Huge Pages, PCI bridges |
+| Trust & Security | 49-50 | 0.49-0.50 | Ed25519, Security Pipeline |
+| Hermes Cognitive | 51-55 | 0.51-0.55 | SDD, ReAct, Council, Self-Opt |
+| **Medusa+Ecosystem** | **56** | **0.56** | **Spec decode, Pipeline, MemTree, KG** |
 
 ## ­ƒö¼ Sources de conhecimento do LLM
 
@@ -124,16 +138,18 @@ Unico bypass: invasao alienigena interestelar. Ate la, imutavel.
 
 Module Map
 
-| M├│dulo | Linhas | Fun├º├úo |
+| Módulo | Linhas | Função |
 |---|---|---|
-| `cortex.rs` | 360 | Transformer 4 layers, generate_text(), Tokenizer, model loader |
-| `netstack.rs` | 321 | smoltcp Device trait, HTTP non-blocking, DNS resolve |
+| `cortex.rs` | 400+ | Transformer 4 layers, Medusa 3 heads, speculative decode |
+| `netstack.rs` | 321 | smoltcp Device trait, HTTP non-blocking |
 | `rtl8139.rs` | 250 | RTL8139 driver via I/O ports |
 | `xhci.rs` | 118 | xHCI USB port scan, speed detection |
 | `self_heal.rs` | 100 | FailureClass, SelfHeal, RecoveryAction, lessons |
 | `memory.rs` | 253 | BitmapFrameAllocator, page table walk |
 | `apic.rs` | 316 | LAPIC timer, IOAPIC, SMP IPI |
-| `conversation.rs` | 79 | EventLog com KernelError |
+| `agent-core/` | 420+ | Agent trait, Pipeline, DAG, Dashboard |
+| `event-bus/` | 260+ | EventBus, Memory Tree, Knowledge Graph |
+| `skill-registry/` | ~200 | Skill trait, MCP layer, token validation |
 
 ## ­ƒøá´©Å Quick Start
 
