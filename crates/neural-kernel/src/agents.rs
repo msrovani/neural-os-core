@@ -183,14 +183,24 @@ impl InputAgent {
         }
     }
     fn handle_cad(&self) {
-        serial_println!("[SYS] Ctrl+Alt+Del. Salvando log e desligando...");
-        // Exibe ultimas linhas do boot log no serial
+        serial_println!("[SYS] Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
         let log = crate::serial::BOOT_LOG.lock();
-        serial_println!("[SYS] Boot log (ultimos 512 bytes):");
         let dump = log.dump();
-        let start = if dump.len() > 512 { dump.len() - 512 } else { 0 };
-        if let Ok(s) = core::str::from_utf8(&dump[start..]) {
-            for line in s.lines().filter(|l| !l.is_empty()) { serial_println!("[LOG] {}", line); }
+        if !dump.is_empty() {
+            serial_println!("[SYS] Log: {} bytes capturados.", dump.len());
+            // Write log to SDHC via ATA
+            let ata = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata {
+                if dump.len() <= 512 {
+                    let mut sector = [0u8; 512];
+                    sector[..dump.len()].copy_from_slice(dump);
+                    if unsafe { ata.write_sectors(crate::LOG_SECTOR, &sector, 1) } {
+                        serial_println!("[SYS] Log escrito no setor LBA {} (512 bytes).", crate::LOG_SECTOR);
+                    } else { serial_println!("[SYS] Falha ao escrever log no SDHC."); }
+                } else {
+                    serial_println!("[SYS] Log grande demais para 1 setor (512B). Usar serial.");
+                }
+            } else { serial_println!("[SYS] ATA nao disponivel. Log nao salvo."); }
         }
         drop(log);
         serial_println!("[SYS] Power off via PS/2 reset...");

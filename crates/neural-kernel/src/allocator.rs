@@ -6,12 +6,32 @@ use x86_64::VirtAddr;
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 4 * 1024 * 1024;
+pub const HEAP_SIZE: usize = 16 * 1024 * 1024;
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
 pub const LARGE_HEAP_START: usize = HEAP_START + SLAB_SIZE;
 pub const LARGE_HEAP_SIZE: usize = HEAP_SIZE - SLAB_SIZE;
+
+pub fn try_alloc_check() -> bool {
+    let heap = ALLOCATOR.lock();
+    heap.size() > 0
+}
+
+#[alloc_error_handler]
+fn oom(_: core::alloc::Layout) -> ! {
+    // OOM sem alocar — serial + VGA direto, depois hlt
+    use core::fmt::Write;
+    {
+        let mut w = crate::vga_buffer::WRITER.lock();
+        if let Some(ref mut w) = *w { let _ = write!(w, "[OOM] sem memoria"); }
+    }
+    {
+        let mut s = crate::serial::SERIAL.lock();
+        let _ = write!(s, "[OOM] sem memoria. Aumente HEAP_SIZE.\n");
+    }
+    loop { x86_64::instructions::hlt(); }
+}
 
 pub fn init_heap(
     mapper: &mut impl Mapper<Size4KiB>,

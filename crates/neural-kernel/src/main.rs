@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt)]
+#![feature(alloc_error_handler)]
 
 extern crate alloc;
 
@@ -21,6 +22,7 @@ mod acpi;
 mod agents;
 mod allocator;
 mod apic;
+mod ata;
 mod cortex;
 mod cron;
 mod display;
@@ -63,6 +65,12 @@ mod virtio_net;
 mod virtio_gpu;
 
 use lazy_static::lazy_static;
+
+/// Log buffer sector no SDHC (LBA 2048 = 1MB, depois da bootimage de 606KB)
+pub const LOG_SECTOR: u32 = 2048;
+
+/// ATA driver global para escrita de log no SDHC
+pub static ATA_DRIVER: spin::Mutex<Option<ata::AtaDriver>> = spin::Mutex::new(None);
 
 struct EchoSkill;
 
@@ -267,58 +275,40 @@ impl Agent for SystemAgent {
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
-    println!("[PANIC] {}", info);
-    serial_println!("[PANIC] {}", info);
-
-    let msg = alloc::format!("{}", info);
-    let kind = if msg.contains("PageFault") { "PageFault" } else if msg.contains("DoubleFault") { "DoubleFault" } else { "Panic" };
-
-    let class = self_heal::FailureClass::classify(kind, &msg);
-    serial_println!("[SELF-HEAL] Class: {:?} — {}", class, class.default_recovery());
-
-    let ctx = self_heal::ErrorContext {
-        kind, message: msg.clone(),
-        file: String::from(info.location().map_or("?", |l| l.file())),
-        line: info.location().map_or(0, |l| l.line()),
-        ring: 0, daemon: String::from("kernel"),
-        tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
-    };
-    let mut heal = SELF_HEAL.lock();
-    let action = heal.analyze(&ctx, true);
-    match action {
-        self_heal::RecoveryAction::LogAndContinue => serial_println!("[SELF-HEAL] Continuando..."),
-        self_heal::RecoveryAction::RestartDaemon(ref n) => {
-            serial_println!("[SELF-HEAL] Respawning daemon '{}'...", n);
-            RESPAWN_QUEUE.lock().push(n.clone());
-        }
-        self_heal::RecoveryAction::CreateSkill(ref n, ref f) => {
-            serial_println!("[SELF-HEAL] Skill '{}': {}", n, f);
-            heal.pending_fixes.push((n.clone(), f.clone()));
-        }
-        _ => {}
+    use core::fmt::Write;
+    // Safe path: VGA + serial sem alocar
+    {
+        let mut writer = crate::vga_buffer::WRITER.lock();
+        if let Some(ref mut w) = *writer { let _ = write!(w, "[PANIC] {}", info); }
     }
-    drop(heal);
+    {
+        let mut serial = crate::serial::SERIAL.lock();
+        let _ = write!(serial, "[PANIC] {}", info);
+    }
 
-    // Corrective prompting: LLM analisa o erro
-    let llm_prompt = alloc::format!("Erro no kernel: {} em {}. Classificado como {:?}. {:?}. O que fazer? {}",
-        msg, ctx.file, class, action, class.default_recovery());
-    let _ = EVENT_BUS.publish(crate::Event {
-        id: 0,
-        topic: alloc::string::String::from(cortex::TOPIC_LLM_REQUEST),
-        payload: llm_prompt.into_bytes(),
-        token: crate::CapabilityToken::Legacy(1),
-    });
+    // Tentative path: SelfHeal + LLM (pode falhar se OOM)
+    let alloc_ok = crate::allocator::try_alloc_check();
+    if alloc_ok {
+        let msg = alloc::format!("{}", info);
+        let kind = if msg.contains("PageFault") { "PageFault" }
+            else if msg.contains("DoubleFault") { "DoubleFault" } else { "Panic" };
+        let class = self_heal::FailureClass::classify(kind, &msg);
+        serial_println!("[SELF-HEAL] Class: {:?} — {}", class, class.default_recovery());
+        let ctx = self_heal::ErrorContext {
+            kind, message: msg.clone(), file: String::from(info.location().map_or("?", |l| l.file())),
+            line: info.location().map_or(0, |l| l.line()), ring: 0,
+            daemon: String::from("kernel"),
+            tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
+        };
+        let mut heal = SELF_HEAL.lock();
+        let action = heal.analyze(&ctx, true);
+        drop(heal);
+        serial_println!("[PANIC] SelfHeal acionado. {:?}", action);
+    } else {
+        serial_println!("[PANIC] OOM detectado — SelfHeal ignorado (sem memoria).");
+        serial_println!("[PANIC] Aumente HEAP_SIZE em allocator.rs ou reduza alocacoes no boot.");
+    }
 
-    let msg_bytes = msg.clone().into_bytes();
-    let _ = EVENT_BUS.publish(crate::Event {
-        id: 0,
-        topic: alloc::string::String::from(cortex::TOPIC_KERNEL_ERROR),
-        payload: msg_bytes,
-        token: crate::CapabilityToken::Legacy(1),
-    });
-    EVENT_LOG.lock().push(conversation::EventKind::KernelError, msg.into_bytes(),
-        crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64);
-    for _ in 0..100000 { core::hint::spin_loop(); }
     loop { x86_64::instructions::hlt(); }
 }
 
@@ -444,6 +434,16 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Boot phase agents — cada um é um Agent Oneshot que executa init
     // Tenta detectar framebuffer UEFI (hardware real)
     display::fb::probe_uefi_framebuffer(boot_info.physical_memory_offset);
+
+    // Probe ATA (SDHC interno) para escrita de log
+    let ata = unsafe { ata::AtaDriver::probe() };
+    if ata.is_some() {
+        serial_println!("[ATA] Controladora ATA/SATA detectada para escrita de log.");
+        serial_println!("[ATA] Boot log sera escrito no setor LBA {} do SDHC.", LOG_SECTOR);
+    } else {
+        serial_println!("[ATA] Nenhuma controladora ATA via PCI. Log via serial apenas.");
+    }
+    *ATA_DRIVER.lock() = ata;
 
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
