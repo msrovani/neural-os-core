@@ -155,8 +155,7 @@ impl Agent for InputAgent {
 
 impl InputAgent {
     fn poll_usb_keyboard(&self) -> Option<u8> {
-        // xHCI poll via driver global (inicializado uma vez no boot)
-        None
+        unsafe { crate::xhci::poll_keyboard() }
     }
     fn process_scancode(&mut self, scancode: u8) {
         let pressed = scancode < 0x80;
@@ -813,18 +812,7 @@ const USBDRIVER_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for UsbDriverAgent {
     fn manifest(&self) -> &AgentManifest { &USBDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        unsafe {
-            let pci_devices = crate::pci::scan_pci();
-            for dev in &pci_devices {
-                if dev.class == 0x0C && dev.subclass == 0x03 {
-                    if let Some(xhci) = crate::xhci::XhciDriver::new(dev) {
-                        xhci.init();
-                        let usb_devices = xhci.port_scan();
-                        serial_println!("[USB] {} dispositivo(s) conectado(s)", usb_devices.len());
-                    }
-                }
-            }
-        }
+        serial_println!("[USB] Inicializado via init_xhci().");
         AgentTickResult::Done
     }
 }
