@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 ticket-lock = { path = "../ticket-lock" }
+libm = "0.2"
