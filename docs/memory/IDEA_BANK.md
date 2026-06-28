@@ -1076,8 +1076,12 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 
 **Base já implementada:** CDC Rabin chunking (`chunker.rs`), XOR Delta (`delta.rs`), Semantic Snapshot via `SelfHeal::semantic_snapshot()`.
 
+**✅ Implementado em v0.56.0:** SHA-256 Dedup (#214), Privacy Filter (#215), Memory TTL/Eviction (#216), Hybrid Search (#217), 4-Tier Consolidation (#218), Ebbinghaus Decay (#219), Metacognitive Guard (#222), Draft→Review→Merge (#223), Atkinson-Shiffrin (#224).
+
 ### Bloco 17 — Cortex LLM v2
 **Foco:** Modelo maior, sampling, codebook compression, update HTTP
+
+**✅ Implementado em v0.56.0:** Sampling (#148), Codebook VQ (#169), MODEL_UPDATE topic (#134).
 
 | Item | O que | LOC |
 |---|---|---|
@@ -1096,8 +1100,8 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 12 (fundido) | Network + Platform | ~1950 | 9 |
 | 13 | Trust & Security | ~930 | 8 |
 | 14 (fundido) | Hermes Cognitive + Self-Opt | ~2460 | 15 |
-| 15 | Memory Systems | ~2500 | 9 |
-| 17 | Cortex LLM v2 | ~830 | 6 |
+| 15 | Memory Systems | ~2500 | 0 |
+| 17 | Cortex LLM v2 | ~830 | 0 |
 | | **Total** | **~8670 LOC** | **47** |
 
 ### Notas

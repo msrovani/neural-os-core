@@ -30,6 +30,37 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.57.0] — 2026-06-27 — Bloco 15+16+17: Memory Systems + Ecosystem + LLM v2 🧠🏁
+
+### Added — Bloco 15: Memory Systems (completo)
+- **MemoryTree v2** (`event-bus/memory_tree.rs`) — TTL/Eviction por nó, Ebbinghaus decay (`ebbinghaus_strength()`), 4-Tier Consolidation (`Working→Episodic→Semantic→Procedural`), promoção automática por access_count
+- **SHA-256 Dedup** (`dedup.rs`) — FNV rolling hash, sliding window de 300 ticks, 64 entradas máximas
+- **Privacy Filter** (`privacy.rs`) — 14 padrões de secrets (API_KEY, sk-, ghp_, password, bearer, etc), substitui por `[REDACTED]`
+- **Hybrid Search** (`hybrid_search.rs`) — TF-score + MLP score fusion, RRF-style ranking, top-10
+- **Metacognitive Guard** (`metacognitive.rs`) — Histórico de 64 erros, `check(skill, type)` retorna fix conhecido
+- **Draft→Review→Merge** (`draft_review.rs`) — 5 estados (Draft→Review→Approved→Rejected→Merged), `pending()` para HermesAgent
+- **Atkinson-Shiffrin 3-tier** (`atkinson.rs`) — Sensory register (48h TTL, 64 items) → STM (working memory tree) → LTM (semantic tree), `attend()` promove sensory→STM, `promote_to_ltm()` STM→LTM
+
+### Added — Bloco 16: Ecosystem Integration
+- **SuperContext** (`supercontext.rs`) — Integra MemoryTree + KG num scout unificado, `ingest()` registra agent→skill edges + memória
+- **SkillIndex** (`skill_index.rs`) — Progressive disclosure: frontmatter-only scan, `scan(query)` retorna top-5 por domínio
+- **TokenJuice** (`tokenjuice.rs`) — HTML tag stripping, URL shortening (>60 chars→`[URL]`), whitespace dedup
+
+### Added — Bloco 17: Cortex LLM v2
+- **Sampling** (`cortex.rs::sample()`) — `top_k` (nucleus filtering), `temperature` scaling, softmax normalização, deterministic fallback
+- **Model update topic** — `MODEL_UPDATE` EventBus topic para hot-swap de pesos .bitnet via HTTP download
+- **Codebook VQ** (`tensor.rs::CodebookVQ`) — 16-centroid treino por uniform sampling, compressão 4:1, decompress lossy
+
+### Fixed
+- `memory_tree.rs` — borrow checker em `consolidate_inner()` resolvido com escopo de leitura antes de mutação
+
+### Aprendizados
+- Bloco 15 (Memory Systems) foi o maior: ~450 LOC em 7 novos módulos
+- MemoryTree com Ebbinghaus + 4-tier cabe em ~200 LOC no_std com safe borrows
+- Atkinson-Shiffrin 3-tier复用 MemoryTree como base — STM e LTM são MemoryTree instances
+- `select_nth_unstable_by` existe em no_std para sampling top-k
+- Codebook VQ com 16 centroids dá ~4:1 compressão para tensores f32
+
 ## [0.56.0] — 2026-06-27 — Medusa Speculative Decoding + Pipeline + Memory Tree + KG 🚀
 
 ### Added — Medusa Speculative Decoding (cortex.rs)
