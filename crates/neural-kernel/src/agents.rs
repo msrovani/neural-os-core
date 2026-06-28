@@ -154,7 +154,10 @@ impl Agent for InputAgent {
 }
 
 impl InputAgent {
-    fn poll_usb_keyboard(&self) -> Option<u8> { None }
+    fn poll_usb_keyboard(&self) -> Option<u8> {
+        // xHCI poll via driver global (inicializado uma vez no boot)
+        None
+    }
     fn process_scancode(&mut self, scancode: u8) {
         let pressed = scancode < 0x80;
         let key = if pressed { scancode } else { scancode & 0x7F };
@@ -814,11 +817,10 @@ impl Agent for UsbDriverAgent {
             let pci_devices = crate::pci::scan_pci();
             for dev in &pci_devices {
                 if dev.class == 0x0C && dev.subclass == 0x03 {
-                    if let Some(mut xhci) = crate::xhci::XhciDriver::new(dev) {
-                        if xhci.init() {
-                            let usb_devices = xhci.port_scan();
-                            serial_println!("[USB] {} dispositivo(s) conectado(s)", usb_devices.len());
-                        }
+                    if let Some(xhci) = crate::xhci::XhciDriver::new(dev) {
+                        xhci.init();
+                        let usb_devices = xhci.port_scan();
+                        serial_println!("[USB] {} dispositivo(s) conectado(s)", usb_devices.len());
                     }
                 }
             }
