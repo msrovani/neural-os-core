@@ -1,21 +1,25 @@
 use alloc::vec::Vec;
-use crate::pci::PciDevice;
-use crate::memory::{PHYS_MEM_OFFSET};
-use crate::serial_println;
 use core::sync::atomic::Ordering;
+use crate::pci::PciDevice;
+use crate::memory::{PHYS_MEM_OFFSET, GLOBAL_ALLOCATOR};
+use crate::serial_println;
 
-pub struct UsbDevice {
+#[derive(Debug)]
+pub struct XhciDev {
     pub port: u8,
+    pub slot: u8,
     pub speed: u8,
-    pub vendor_id: u16,
-    pub product_id: u16,
+    pub is_keyboard: bool,
+    pub last_report: [u8; 8],
 }
 
+fn mmio32(base: u64, off: u64) -> *mut u32 { (base as *mut u32).wrapping_add(off as usize / 4) }
+unsafe fn r32(base: u64, off: u64) -> u32 { mmio32(base, off).read_volatile() }
+unsafe fn w32(base: u64, off: u64, v: u32) { mmio32(base, off).write_volatile(v) }
+
 pub struct XhciDriver {
-    op: u64,
-    mmio: u64,
+    base: u64,
     capl: u64,
-    db: u64,
     pub ports: u8,
     pub slots: u8,
 }
@@ -24,36 +28,40 @@ impl XhciDriver {
     pub unsafe fn new(dev: &PciDevice) -> Option<Self> {
         if dev.class != 0x0C || dev.subclass != 0x03 { return None; }
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-        let mmio = ((dev.bar0 & !0xF) as u64) + pmoff;
-        let capl = core::ptr::read_volatile(mmio as *const u8) as u64;
-        let op = mmio + capl;
-        let db_off = (core::ptr::read_volatile((mmio + 0x14) as *const u32) as u64) & !0x3;
-        let hcs1 = core::ptr::read_volatile((mmio + 4) as *const u32);
-        serial_println!("[XHCI] capl={} db_off=0x{:x} mmio=0x{:x}", capl, db_off, mmio);
-        Some(XhciDriver { op, mmio, capl, db: mmio + db_off, ports: (hcs1 & 0xFF) as u8, slots: ((hcs1 >> 8) & 0xFF) as u8 })
+        let mmio_base = (dev.bar0 & !0xF) as u64;
+        crate::apic::set_page_uc(mmio_base, pmoff);
+        let base = mmio_base + pmoff;
+        let cap = r32(base, 0) as u64 & 0xFF;
+        let hcs1 = r32(base + cap, 4);
+        let ports = (hcs1 & 0xFF) as u8;
+        let slots = ((hcs1 >> 8) & 0xFF) as u8;
+        serial_println!("[XHCI] Init: {} portas, {} slots, base={:#x}", ports, slots, base);
+        Some(XhciDriver { base, capl: cap, ports, slots })
     }
 
-    pub unsafe fn init(&mut self) -> bool {
-        // Map MMIO as uncacheable to prevent GPF on doorbell access
-        crate::apic::set_page_uc(self.mmio - PHYS_MEM_OFFSET.load(Ordering::Relaxed), PHYS_MEM_OFFSET.load(Ordering::Relaxed));
-        serial_println!("[XHCI] Init OK: {} portas, {} slots, db=0x{:x}", self.ports, self.slots, self.db);
+    pub unsafe fn init(&self) -> bool {
+        let usbcmd = r32(self.base, 0x00);
+        w32(self.base, 0x00, usbcmd & !0x01);
+        for _ in 0..1000 { if r32(self.base, 0x00) & 0x01 == 0 { break; } core::hint::spin_loop(); }
+        w32(self.base, 0x38, self.slots as u32);
+        w32(self.base, 0x00, usbcmd | 0x01);
+        for _ in 0..1000 { if r32(self.base, 0x00) & 0x01 != 0 { break; } core::hint::spin_loop(); }
         true
     }
 
-    pub unsafe fn port_scan(&self) -> Vec<UsbDevice> {
-        let mut devices = Vec::new();
-        for port in 0..self.ports.min(8) {
-            let portsc = core::ptr::read_volatile((self.op + 0x400 + port as u64 * 0x10) as *const u32);
+    pub unsafe fn port_scan(&self) -> Vec<XhciDev> {
+        let mut found = Vec::new();
+        for p in 0..self.ports.min(8) {
+            let portsc = r32(self.base, 0x400 + p as u64 * 0x10);
             if portsc & 0x01 == 0 { continue; }
             let speed = ((portsc >> 20) & 0x0F) as u8;
-            let desc = self.speed_name(speed);
-            serial_println!("[USB] Porta {}: {} conectado (speed={})", port, desc, speed);
-            devices.push(UsbDevice { port, speed, vendor_id: 0, product_id: 0 });
+            serial_println!("[XHCI] Porta {}: device connected, speed={}", p, speed);
+            found.push(XhciDev { port: p, slot: 0, speed, is_keyboard: true, last_report: [0; 8] });
         }
-        devices
+        found
     }
 
-    fn speed_name(&self, speed: u8) -> &'static str {
-        match speed { 1 => "Low 1.5M", 2 => "Full 12M", 3 => "High 480M", 4 => "Super 5G", 5 => "Super+ 10G", _ => "Unknown" }
+    pub unsafe fn poll_keyboard(&self) -> Option<u8> {
+        None
     }
 }
