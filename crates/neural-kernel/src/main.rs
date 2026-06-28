@@ -24,6 +24,7 @@ mod allocator;
 mod apic;
 mod ata;
 mod cortex;
+mod fat;
 mod cron;
 mod display;
 mod hermes;
