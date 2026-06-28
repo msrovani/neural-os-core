@@ -30,6 +30,64 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.58.0] — 2026-06-28 — 🏆 MARCO: Boot em Hardware Real + USB Keyboard + FAT12 Log 🏆
+
+### 🏆 MARCO HISTÓRICO: Neural OS Hermes boota em hardware real!
+
+Pela primeira vez, o Neural OS Hermes bootou em um **notebook físico** (x86-64 real) via **SDHC USB**. O kernel saiu do QEMU e rodou em silício real. As conquistas:
+
+- **Boot completo**: VGA text mode funcional, PCI/ACPI/APIC/SMP todos operacionais
+- **Hermes Cognitive**: ReAct loop rodando estável (7 fases: OBSERVE→THINK→PLAN→BUILD→EXECUTE→VERIFY→LEARN)
+- **Zero panics** após correção do OOM (heap 4MB→16MB)
+
+### Added — xHCI USB HID Keyboard Driver (completo)
+- **Driver HID Boot Protocol** completo: `init_xhci()` global + `poll_keyboard()` com Event Ring parsing
+- **Tabela HID→PS/2**: 68 teclas mapeadas (A-Z, 0-9, símbolos, ENTER, BACKSPACE, DELETE)
+- **CAD via USB**: detecta LCtrl + LAlt + Delete no HID report (byte 0 modifiers + byte 2 usage)
+- **64KB de hastes de Ebbinghaus**: integrado com InputAgent (poll a cada 5 ticks)
+- **Driver persistente**: XhciState global inicializado uma vez no boot, não recriado a cada poll
+
+### Added — MBR + FAT12 Partition Recognition (PERMANENTE)
+- **MBR parser** (`fat.rs::read_mbr()`): lê tabela de partições do setor 0 via ATA PIO
+- **FAT12 BPB reader**: detecta qualquer partição FAT12 no disco
+- **Fat12Writer**: `append_log()` escreve no arquivo BOOT.LOG via ATA read/write
+- Reconhecimento de partições é **permanente** — o kernel sempre enxerga o layout do disco
+
+### Added — FAT12 Boot Log Partition (temporário)
+- **`tools/patch_image.py`**: script Python que adiciona partição FAT12 de 2MB ao final da bootimage
+- **BOOT.LOG** visível no Windows Explorer após boot + CAD
+- **Timestamps**: cada linha do log prefixada com `[T+SSS.mmm]` (segundos.millis desde o boot)
+- **Buffer 64KB**: circular, sem alocação de heap, timestamp via aritmética u8
+
+### Added — ATA PIO Driver completo
+- **`AtaDriver`**: probe via PCI (class 0x01), `read_sectors()` + `write_sectors()` com wait_bsy/wait_drq
+- Cache flush via comando 0xE7 após writes
+- Fallback silencioso se nenhum controlador ATA presente
+
+### Fixed — OOM em Hardware Real
+- **HEAP_SIZE**: 4MB → **16MB** (4096 páginas mapeadas)
+- **`serial_println!`**: removido `alloc::format!` — escreve direto no serial via `write_fmt`
+- **Panic handler**: safe path sem alocação (`write!` direto para VGA/serial); tentative path com `try_alloc_check()`
+- **`#[alloc_error_handler]`**: diagnostico OOM sem alocar memória
+- **`LogBuf`**: implementação própria de `fmt::Write` em buffer stack de 256 bytes
+
+### Fixed — VGA Scrolling em Hardware Real
+- **Row tracking**: cursor real que incrementa a cada newline, scroll só quando atinge BUFFER_HEIGHT-1
+- **`new_line()`**: agora sobe linhas corretamente sem truncar para a última linha
+
+### Added — Ctrl+Alt+Del com log dump
+- **Detecção**: PS/2 (IRQ1) + USB HID (LCtrl+LAlt+DEL)
+- **Ação**: serial log dump + FAT12 ATA write + PS/2 8042 reset + hlt
+- Log escrito no setor LBA 0 + partição FAT12
+
+### Aprendizados (Hardware Real vs QEMU)
+1. **OOM**: QEMU tolera heap 4MB; HW real precisa de 16MB. `alloc::format!` dentro de `serial_println!` causava OOM recursivo no panic handler.
+2. **VGA buffer**: `write_byte` sempre escrevia na última linha (`BUFFER_HEIGHT-1`). Novo cursor real corrige scroll.
+3. **PS/2 vs USB**: Notebooks modernos não têm controlador PS/2. Teclado USB só funciona via xHCI HID Boot Protocol.
+4. **ATA vs USB storage**: Leitor de SDHC interno geralmente está em SATA/PCI. USB mass storage é mais complexo.
+5. **FAT12 vs RAW**: Partição FAT12 é reconhecida pelo Windows Explorer imediatamente. RAW sector precisa de HxD/PowerShell.
+6. **MBR signature 55AA**: Sempre verificar — bootloader pode ou não preservar o MBR original.
+
 ## [0.57.1] — 2026-06-27 — Consolidation: Plugin Hub + x2APIC + Ed25519 + SMP stacks
 
 ### Added
