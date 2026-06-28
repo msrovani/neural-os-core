@@ -17,9 +17,7 @@ skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4", "socket-dns", "proto-dns"] }
 agent-core = { path = "../agent-core" }
-# Ed25519: curve25519-dalek SIMD incompativel com x86_64-unknown-none.
-# Pendente: usar ed25519-compact ou implementacao manual.
-# ed25519-dalek = { version = "2.2", default-features = false }
+ed25519-compact = { version = "2", default-features = false }
 # VirtIO driver manual sem dependências externas (ver virtio_net.rs)
 embedded-graphics = { version = "0.8.2", default-features = false }
 # noto-sans-mono-bitmap — nightly incompatibility (zero-variant enum repr)
