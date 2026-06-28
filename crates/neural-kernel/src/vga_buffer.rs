@@ -4,37 +4,28 @@ use spin::Mutex;
 const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 
+unsafe fn set_cursor(pos: u16) {
+    core::arch::asm!("out dx, al", in("dx") 0x3D4u16, in("al") 0x0Eu8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos >> 8) as u8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0x3D4u16, in("al") 0x0Fu8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos & 0xFF) as u8, options(nostack, preserves_flags));
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Color {
-    Black = 0, Blue = 1, Green = 2, Cyan = 3,
-    Red = 4, Magenta = 5, Brown = 6, LightGray = 7,
-    DarkGray = 8, LightBlue = 9, LightGreen = 10,
-    LightCyan = 11, LightRed = 12, Pink = 13,
-    Yellow = 14, White = 15,
-}
+pub enum Color { Black = 0, Blue = 1, Green = 2, Cyan = 3, Red = 4, Magenta = 5, Brown = 6, LightGray = 7, DarkGray = 8, LightBlue = 9, LightGreen = 10, LightCyan = 11, LightRed = 12, Pink = 13, Yellow = 14, White = 15 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(transparent)]
 struct ColorCode(u8);
-
-impl ColorCode {
-    fn new(foreground: Color, background: Color) -> Self {
-        ColorCode((background as u8) << 4 | (foreground as u8))
-    }
-}
+impl ColorCode { fn new(fg: Color, bg: Color) -> Self { ColorCode((bg as u8) << 4 | (fg as u8)) } }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct ScreenChar {
-    character: u8,
-    color_code: ColorCode,
-}
+struct ScreenChar { character: u8, color_code: ColorCode }
 
 #[repr(transparent)]
-struct VgaBuffer {
-    chars: [[ScreenChar; BUFFER_WIDTH]; BUFFER_HEIGHT],
-}
+struct VgaBuffer { chars: [[ScreenChar; BUFFER_WIDTH]; BUFFER_HEIGHT] }
 
 pub struct Writer {
     column_position: usize,
@@ -47,6 +38,10 @@ impl Writer {
         Writer { column_position: 0, color_code: ColorCode::new(Color::White, Color::Black), buffer: unsafe { &mut *addr.cast() } }
     }
 
+    fn update_cursor(&self) {
+        unsafe { set_cursor(((BUFFER_HEIGHT - 1) * BUFFER_WIDTH + self.column_position) as u16); }
+    }
+
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
@@ -56,6 +51,7 @@ impl Writer {
                 self.column_position += 1;
             }
         }
+        self.update_cursor();
     }
 
     pub fn write_string(&mut self, s: &str) {
@@ -76,9 +72,7 @@ impl Writer {
     }
 }
 
-impl fmt::Write for Writer {
-    fn write_str(&mut self, s: &str) -> fmt::Result { self.write_string(s); Ok(()) }
-}
+impl fmt::Write for Writer { fn write_str(&mut self, s: &str) -> fmt::Result { self.write_string(s); Ok(()) } }
 
 pub static WRITER: Mutex<Option<Writer>> = Mutex::new(None);
 
