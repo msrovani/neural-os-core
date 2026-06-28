@@ -2,6 +2,8 @@
 extern crate alloc;
 
 pub mod pipeline;
+pub mod dagsched;
+pub mod dashboard;
 
 use alloc::boxed::Box;
 use alloc::string::String;
