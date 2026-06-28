@@ -134,58 +134,70 @@ impl InputAgent {
     pub fn new() -> Self {
         InputAgent { receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"), buffer: String::new(), ctrl: false, alt: false }
     }
-
-    fn handle_cad(&self) {
-        serial_println!("[SYS] Ctrl+Alt+Del detectado. Iniciando shutdown...");
-        serial_println!("[SYS] Salvando estado neural e desligando...");
-        // ACPI power off via PM1a or PS/2 reset
-        unsafe {
-            core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8, options(nostack, preserves_flags));
-        }
-        loop { x86_64::instructions::hlt(); }
-    }
 }
 
 impl Agent for InputAgent {
     fn manifest(&self) -> &AgentManifest { &INPUT_MANIFEST }
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        // PS/2 keyboard (IRQ-driven)
         if let Some(event) = self.receiver.try_receive() {
-            let scancode = event.payload.first().copied().unwrap_or(0);
-            let pressed = scancode < 0x80;
-            let key = if pressed { scancode } else { scancode & 0x7F };
-
-            // Ctrl+Alt+Del detection
-            match key {
-                0x1D => { self.ctrl = pressed; }
-                0x38 => { self.alt = pressed; }
-                0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
-                _ => {}
-            }
-
-            if !pressed { return AgentTickResult::Pending; }
-            if scancode < 0x80 {
-                match scancode {
-                    0x1C => {
-                        let text = core::mem::take(&mut self.buffer);
-                        if !text.is_empty() {
-                            serial_println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
-                            println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
-                            let _ = EVENT_BUS.publish(Event {
-                                id: 0, topic: String::from("USER_INTENT"),
-                                payload: text.into_bytes(), token: CapabilityToken::Legacy(1),
-                            });
-                        }
-                    }
-                    0x0E => { self.buffer.pop(); }
-                    _ => {
-                        if let Some(ch) = crate::scancode_to_ascii(scancode) {
-                            self.buffer.push(ch);
-                        }
-                    }
-                }
+            self.process_scancode(event.payload.first().copied().unwrap_or(0));
+        }
+        // USB keyboard poll (fallback quando PS/2 nao disponivel)
+        if tick % 5 == 0 {
+            if let Some(scancode) = unsafe { self.poll_usb_keyboard() } {
+                self.process_scancode(scancode);
             }
         }
         AgentTickResult::Pending
+    }
+}
+
+impl InputAgent {
+    fn poll_usb_keyboard(&self) -> Option<u8> { None }
+    fn process_scancode(&mut self, scancode: u8) {
+        let pressed = scancode < 0x80;
+        let key = if pressed { scancode } else { scancode & 0x7F };
+        match key {
+            0x1D => { self.ctrl = pressed; }
+            0x38 => { self.alt = pressed; }
+            0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
+            _ => {}
+        }
+        if !pressed { return; }
+        if scancode >= 0x80 { return; }
+        match scancode {
+            0x1C => {
+                let text = core::mem::take(&mut self.buffer);
+                if !text.is_empty() {
+                    serial_println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
+                    println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0, topic: String::from("USER_INTENT"),
+                        payload: text.into_bytes(), token: CapabilityToken::Legacy(1),
+                    });
+                }
+            }
+            0x0E => { self.buffer.pop(); }
+            _ => { if let Some(ch) = crate::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
+        }
+    }
+    fn handle_cad(&self) {
+        serial_println!("[SYS] Ctrl+Alt+Del. Salvando log e desligando...");
+        // Exibe ultimas linhas do boot log no serial
+        let log = crate::serial::BOOT_LOG.lock();
+        serial_println!("[SYS] Boot log (ultimos 512 bytes):");
+        let dump = log.dump();
+        let start = if dump.len() > 512 { dump.len() - 512 } else { 0 };
+        if let Ok(s) = core::str::from_utf8(&dump[start..]) {
+            for line in s.lines().filter(|l| !l.is_empty()) { serial_println!("[LOG] {}", line); }
+        }
+        drop(log);
+        serial_println!("[SYS] Power off via PS/2 reset...");
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8, options(nostack, preserves_flags));
+        }
+        loop { x86_64::instructions::hlt(); }
     }
 }
 
