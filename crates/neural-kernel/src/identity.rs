@@ -1,25 +1,13 @@
-//! #176 Ed25519 Cryptographic Identity — CapabilityToken com assinatura.
-//!
-//! NOTA: A implementacao real depende de `curve25519-dalek` (incompativel com
-//! x86_64-unknown-none devido ao backend SIMD). Enquanto isso, o modulo
-//! mantem a estrutura do `IdentityToken` e `CapabilityToken` enum, com
-//! verificacao via stub (sempre retorna true para tokens Ed25519).
-//!
-//! Para ativar: `cargo add ed25519-dalek --no-default-features` em Cargo.toml
-//! e descomentar o codigo real em `verify_signature()`.
-
 use alloc::string::String;
 use alloc::vec::Vec;
 
 pub const PUBLIC_KEY_LEN: usize = 32;
 pub const SIGNATURE_LEN: usize = 64;
 
-/// Chave publica padrao (stub)
 const TRUSTED_PUBLIC_KEYS: &[[u8; PUBLIC_KEY_LEN]] = &[
-    [0u8; 32], // placeholder
+    [0u8; 32],
 ];
 
-/// Mensagem de desafio para handshake
 pub fn challenge_message(agent: &str, tick: u64) -> Vec<u8> {
     let mut msg = Vec::with_capacity(agent.len() + 8);
     msg.extend_from_slice(agent.as_bytes());
@@ -27,19 +15,20 @@ pub fn challenge_message(agent: &str, tick: u64) -> Vec<u8> {
     msg
 }
 
-/// Verifica assinatura — STUB: quando ed25519-dalek estiver disponivel,
-/// substituir por verificacao real.
-pub fn verify_signature(_public_key: &[u8; PUBLIC_KEY_LEN], _message: &[u8], _signature: &[u8; SIGNATURE_LEN]) -> bool {
-    // TODO: usar ed25519-dalek::VerifyingKey::verify() quando o crate for compativel
-    true
+pub fn verify_signature(public_key: &[u8; PUBLIC_KEY_LEN], message: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
+    use ed25519_compact::*;
+    let pk = match PublicKey::from_slice(public_key) { Ok(p) => p, _ => return false };
+    let sig = match Signature::from_slice(signature) { Ok(s) => s, _ => return false };
+    pk.verify(message, &sig).is_ok()
 }
 
-/// Verifica assinatura contra chaves confiaveis (stub)
-pub fn verify_trusted(_message: &[u8], _signature: &[u8; SIGNATURE_LEN]) -> bool {
-    true
+pub fn verify_trusted(message: &[u8], signature: &[u8; SIGNATURE_LEN]) -> bool {
+    for key in TRUSTED_PUBLIC_KEYS {
+        if verify_signature(key, message, signature) { return true; }
+    }
+    false
 }
 
-/// IdentityToken struct mantida para compatibilidade
 #[derive(Debug, Clone)]
 pub struct IdentityToken {
     pub public_key: [u8; PUBLIC_KEY_LEN],
@@ -55,7 +44,6 @@ impl IdentityToken {
     }
 }
 
-/// Converte token legado para chave (compatibilidade)
 pub fn legacy_token_to_identity(token: u64) -> [u8; PUBLIC_KEY_LEN] {
     let mut key = [0u8; PUBLIC_KEY_LEN];
     let bytes = token.to_le_bytes();

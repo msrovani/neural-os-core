@@ -73,10 +73,11 @@ pub unsafe fn init_smp() {
     serial_println!("[SMP] Trampoline page em 0x{:x}", tramp_phys);
     println!("[SMP] Trampoline page em low memory.");
 
-    // 32-bit stack: top of trampoline page (identity-mapped low 2MB)
-    // 64-bit stack: top of heap (mapped via PML4 offset)
-    let _stack_32_top = tramp_phys + 4096;
-    let stack_64_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64 - 0x1000;
+    let heap_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
+    let ap_count = percpu::CPU_COUNT.load(Ordering::Relaxed) as u64 + 1;
+    let stack_per_ap: u64 = AP_STACK_SIZE * 4;
+    let ap_base = heap_top - (ap_count * stack_per_ap);
+    let stack_64_top = ap_base + (percpu::CPU_COUNT.load(Ordering::Relaxed) as u64) * stack_per_ap;
 
     // Identity-map trampoline page (VA 0x40000 -> PA tramp_phys)
     // Use OffsetPageTable to handle 2MB/1GB huge pages correctly
