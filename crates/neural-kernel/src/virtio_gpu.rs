@@ -310,10 +310,10 @@ impl GpuDevice {
                 io.w16(io.ro.qn, 0);
             }
 
-            // Poll for completion (used ring idx at offset +2 from page 2)
-            for _ in 0..1000000 {
-                core::hint::spin_loop();
+            // Poll for completion with HLT yield
+            for _ in 0..2000 {
                 if *((qpa + 8192 + off + 2) as *const u16) > 0 { break; }
+                core::arch::asm!("sti; hlt", options(nomem, nostack));
             }
 
             let resp_type = *((cva + 0x100) as *const u32);
@@ -412,11 +412,12 @@ unsafe fn submit_q(io: &Regs, qpa: u64, cpa: u64, cmd_len: usize, off: u64, noti
     }
 }
 
+/// Poll with HLT yield — QEMU TCG precisa de VM exit para processar VirtIO
 unsafe fn poll_q(qpa: u64, off: u64) -> bool {
-    // Used ring at page 2: flags at +0, idx at +2
-    for _ in 0..2000000 {
-        if *((qpa + 8192 + off + 2) as *const u16) > 0 { return true; }
-        core::hint::spin_loop();
+    let used_idx = (qpa + 8192 + off + 2) as *const u16;
+    for _ in 0..2000 {
+        if used_idx.read_volatile() > 0 { return true; }
+        core::arch::asm!("sti; hlt", options(nomem, nostack));
     }
     false
 }
