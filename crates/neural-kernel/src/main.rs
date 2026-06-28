@@ -445,6 +445,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     *ATA_DRIVER.lock() = ata;
 
+    // Inicializa xHCI USB (teclado HID)
+    unsafe { crate::xhci::init_xhci(); }
+
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
     registry.register(Box::new(agents::MemoryAgent::new()));
