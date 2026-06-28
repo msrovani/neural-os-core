@@ -1,245 +1,150 @@
-# Roadmap — neural-os-core (Superseded)
+# Roadmap — neural-os-core v0.58.0 🏆
 
-**Última atualização:** 2026-06-25  
-**⚠️ Este documento está superseded pela ADR-0015** (`docs/architecture/0015-curso-correcao-mvp.md`).
+**Última atualização:** 2026-06-28
 
-A nova rota é a **chain de 6 blocos** que leva ao MVP Neural OS Hermes — ISO bootável x86-64 UEFI com chat neural, auto-detecção de hardware, Memory Hierarchy Index, e skills de sistema. Consulte a **ADR-0015** para o plano diretor completo, e o **IDEA_BANK.md** para o inventário vivo de **267 ideias** catalogadas (Tiers 0-5, 141 repos analisados).
+## 🏆 Marco Conquistado: Boot em Hardware Real!
 
-**ADR-0025 (Tier 3 Security Patterns):** 5 novos repositórios analisados (InnerWarden 159★, ai-jail 595★, vexfs 24★, Chisel 12★, cori-kernel 17★). 12 padrões portáveis extraídos, 7 implementáveis Sprints 24-27 (~1310 LOC), 3 futuros Sprint 28+, 6 descartados.
+Pela primeira vez, o Neural OS Hermes bootou em **hardware real** (notebook físico x86-64) via SDHC USB. VGA, PCI, ACPI, APIC, SMP, Hermes Cognitive — todos operacionais fora do QEMU.
 
-**Documento histórico:** Alinhado ao ADR-0010 (Estratégico), ADR-0013 (Estado da Arte 2026) e ADR-0013 (Design System). Mantido para referência de fases 3–7 originais.
+## Blocos Completos (16 blocos, 58 sprints)
 
-A ordem de engenharia abaixo segue a dependência física do bare-metal: primeiro a memória, depois o kernel, depois a comunicação entre agentes, depois o runtime de skills, e por último o planejador cognitivo.
-
-> **Nota:** Sprints 11–15 concluídos. Phase 1 (Bitmap Allocator) e Phase 2 (Async Executor) entregues. Phase 3 (EventBus IPC), Phase 4 (Skill Registry) e Phase 2.5 (Hardware Neural Routing) adiantados.
-
----
-
-## Sprints 24-28 — Security & Sandbox (Tier 3 Patterns)
-
-Baseado na análise ADR-0025 (InnerWarden, ai-jail, vexfs, Chisel, cori-kernel).
-
-### Sprint 24 — Path Confinement & Enforcement (~230 LOC)
-
-| Item | LOC | Fonte | Descrição |
+| Bloco | Sprints | v | Status |
 |---|---|---|---|
-| #256 Path Confinement | ~60 | Chisel + ai-jail | SkillRegistry verifica allowlist de paths por token |
-| #257 Mask Secrets | ~50 | ai-jail `--mask` | TrustCache mascara paths/env vars sensíveis |
-| #258 Graduated Enforcement | ~80 | InnerWarden | PolicyState machine: Observe→Warn→Contain→Enforce |
-| #259 Posture-Aware Alerting | ~40 | InnerWarden | Skills verificam hardware antes de agir |
+| 1. Chassi | 1-17 | 0.1–0.12 | ✅ VGA, heap, EventBus, IPC, SMP, APIC |
+| 2. Discovery | 18-22 | 0.13–0.17 | ✅ PCI, ACPI, MHI, Trust, LAPIC |
+| 3. Rede | 23-24 | 0.23–0.24 | ✅ RTL8139, smoltcp |
+| 4. Transformer | 26-27 | 0.26–0.27 | ✅ Attention BitNet 272K |
+| 5. HW-Aware LLM | 28-30 | 0.28–0.30 | ✅ PCI+USB training (66K pairs) |
+| 6. Capabilities | 31 | 0.31 | ✅ HW→skill mapping |
+| 7. Self-Healing | 32-37 | 0.32–0.37 | ✅ Failure taxonomy, checkpoint |
+| 8. Agent/Skill-First | 39-42 | 0.39–0.40 | ✅ Agent trait, 18 agentes |
+| 9. Network Evolution | 43-44 | 0.41–0.42 | ✅ DHCP, VirtIO-net, NetPhy |
+| 10. Display+Bugfix | 45 | 0.43–0.45 | ✅ Framebuffer, VirtIO-GPU, 5 bugs |
+| 11. CDC+Delta+Locks | 46-47 | 0.46–0.47 | ✅ IrqSafeLock, DmaBuf, Rabin |
+| 12. Network+Platform | 48 | 0.48 | ✅ x2APIC, Huge Pages, PCI bridges, Cron |
+| 13. Trust & Security | 49-50 | 0.49–0.50 | ✅ Ed25519, Security Pipeline |
+| 14. Hermes Cognitive | 51-55 | 0.51–0.55 | ✅ SDD, ReAct, Council, Self-Opt |
+| 15. Memory+Ecosystem | 56 | 0.56–0.57 | ✅ Medusa, Pipeline, MemTree, KG |
+| **16. HW Real + USB** | **58** | **0.58** | **🏆 Boot HW real, xHCI HID, FAT12, ATA, CAD** |
 
-### Sprint 25 — Detection Pipeline & Audit (~380 LOC)
+## Funcionalidades por Camada
 
-| Item | LOC | Fonte | Descrição |
+### ✅ Kernel Base
+- `no_std` Rust, `x86_64-unknown-none`, nightly
+- VGA text mode (80×25, scroll, cores)
+- Serial (COM1 115200 baud)
+- IDT 0-31, PIC/APIC dual EOI
+- Bitmap Frame Allocator (4GB)
+- Heap 16MB (LockedHeap + Slab)
+- FPU/SSE, Tensor f32, matmul
+- BitNet 1.58-bit (ADD/SUB kernel)
+- Transformer 4 layers, Attention, 272K params
+
+### ✅ Hardware Discovery
+- PCI scan (CF8/CFC, 256 bus, capabilities, bridges)
+- ACPI (RSDP/RSDT/XSDT/MADT)
+- APIC (LAPIC, IOAPIC, x2APIC)
+- SMP (INIT-SIPI-SIPI, PerCpu, stacks)
+- WHPX acceleration
+- Memory Hierarchy Index (Dram/Vram/Nvme/Hdd)
+
+### ✅ Rede
+- RTL8139 driver (I/O ports)
+- smoltcp 0.13 (TCP/IP, DHCP, HTTP)
+- VirtIO-net manual
+- NetPhy unificada
+
+### ✅ Input
+- PS/2 keyboard (IRQ1, scancode set 1)
+- **xHCI USB HID keyboard** (Boot Protocol, 68 teclas)
+- Ctrl+Alt+Del (PS/2 + USB) com shutdown+FAT12 dump
+
+### ✅ Display
+- VGA text mode buffer (0xB8000)
+- **UEFI framebuffer** (preparado, aguarda bootloader 0.11+)
+- VirtIO-GPU (QEMU)
+- Console multi-região, fonte VGA 8×16
+
+### ✅ Agentes (20 agentes)
+| Código | Agente | Tipo | Função |
 |---|---|---|---|
-| #260 Event→Detector→Response Pipeline | ~200 | InnerWarden (core) | Novo crate `security-pipeline`. 5 detectores iniciais |
-| #261 Decision Review + Human Escalation | ~120 | InnerWarden | NEEDS_REVIEW com timeout, auto-resolve |
-| #262 Hash Chain Audit Trail | ~60 | InnerWarden | SHA-256 chain no EventLog #231 |
-
-### Sprint 26-27 — Knowledge Graph & Correlation (~700 LOC)
-
-| Item | LOC | Fonte | Descrição |
-|---|---|---|---|
-| #263 Knowledge Graph (6 nodes, ~20 relations) | ~400 | InnerWarden | Grafo em memória para correlação de eventos |
-| #264 Cross-Layer Correlation Rules (5 regras) | ~300 | InnerWarden | Multi-estágio: ARP Spoof → Scan → Exfil |
-
-### Sprint 28+ — Filesystem & Vector Search (~800+ LOC)
-
-| Item | LOC | Fonte | Depende de |
-|---|---|---|---|
-| #265 Filesystem como Vector Search | ~300+ | vexfs | SFS implementado |
-| #266 Multi-dialect Vector API | ~300+ | vexfs (ChromaDB) | MemPalace ou SFS |
-| #267 OverlayFS Copy-on-Write | ~200+ | ai-jail | VFS implementada |
-
-### Descartados (6 padrões)
-
-eBPF, Seccomp-bpf, Kernel module, FUSE, XDP, Namespace isolation — todos requerem Linux kernel ou não aplicam a bare-metal.
-
----
-
-## 1. Memória Física e Virtual (Bitmap Allocator & Huge Pages)
-
-**Sprints:** 11–13  
-**Target:** Q3 2026  
-**Depende de:** Fase 2 (OffsetPageTable, BootInfoFrameAllocator)
-
-### Justificativa
-
-Sem um alocador de frames não-monotônico, não podemos reutilizar memória física. Sem Huge Pages (2 MiB / 1 GiB), o TLB será saturado pelas sessões de inferência longas do BitNet.
-
-### Metas
-
-- [ ] **Bitmap Frame Allocator** — alocação/liberação O(1) com bitmap de 4 KiB frames. Substitui `BootInfoFrameAllocator` monotônico e `EmptyFrameDeallocator` stub.
-- [ ] **Suporte a Huge Pages (2 MiB)** — mapper no `OffsetPageTable` para `PageSize::Size2MiB`. Redução de TLB misses em ~512× vs 4 KiB pages.
-- [ ] **Suporte a Huge Pages (1 GiB)** — para sessões de inferência que exigem >512 MiB contíguos. Opcional: verificar suporte via CPUID.
-- [ ] **Slab Allocator para heap** — reduzir fragmentação do `LockedHeap` (100 KB fixo). Alocar `Vec`, `Tensor` e `Message` em slabs de tamanho fixo.
-
-### Alinhamento SotA
-
-- MerlionOS: mapeamento de GGUF diretamente em Huge Pages confirmou redução de TLB misses em 40% durante inferência.
-- FairyFuse: TL/I2_S exige DWORD-aligned weight buffers (32 bits) — Huge Pages eliminam fragmentação externa.
-
----
-
-## 2. Kernel Abstraction (Async Neural Executor)
-
-**Sprints:** 12  
-**Target:** Q3 2026  
-**Depende de:** Fase 1 (Bitmap Allocator)
-
-### Metas
-
-- [x] **`NeuralExecutor`** — `VecDeque<AgentTask>` cooperative polling com `DummyWaker` (`RawWakerVTable` em `no_std`)
-- [x] **`AgentTask`** — `{ id: u64, future: Pin<Box<dyn Future>> }` com `AtomicU64` ID generation
-- [ ] **Agent Scheduler** — round-robin com prioridade. A cada tick, percorre a lista de agentes e chama `tick()`. O scheduler consulta o Intent Router (MLP) para decisões de prioridade.
-- [ ] **Budget de execução** — limite de `tokens_consumed` por agente por ciclo.
-
----
-
-## 2.5. Hardware Neural Routing
-
-**Sprint:** 15  
-**Target:** Q3 2026  
-**Depende de:** Phase 3 (EventBus), Phase 2 (Executor)
-
-### Justificativa
-
-Antes de construir um scheduler completo, precisamos provar que o kernel pode rotear I/O de hardware bruta para agentes via EventBus — validando a arquitetura Top-Half/Bottom-Half e a segregação Ring 0/Ring 2.
-
-### Metas
-
-- [x] **`keyboard_interrupt_handler` (IDT[33])** — Top-Half: lê porta 0x60 via `x86_64::Port`, armazena em `LAST_SCANCODE: AtomicU8` (Release), EOI raw (`out 0x20, 0x20`). Sem alocações, sem spinlocks.
-- [x] **`hw_bridge_daemon`** — Bottom-Half: `swap(0, Acquire)` do atômico → `EventBus::publish("RAW_HW_IRQ1", [scancode])`. Executa em contexto normal (user).
-- [x] **`input_daemon`** — Subscribe "RAW_HW_IRQ1" → log scancode → infer key (0x1E = 'A').
-- [x] **Validação QEMU** — 4 tasks spawnadas, 500+ ticks PIT sem Double Fault. ADR-0013 validado: kernel roteia bytes, daemons interpretam.
-
-### Arquitetura
-
-```
-Interrupt HW → Top-Half (µs) → AtomicU8 → Bottom-Half (Daemon) → EventBus → Agent
-```
-
-### Alinhamento SotA
-
-- ASA / Microkernel design: separação entre mechanism (interrupt → atomic) e policy (daemon → EventBus → agent).
-
----
-
-## 2. Kernel Abstraction (Agent Scheduler — futuro)
-
-**Sprints:** 16–17  
-**Target:** Q4 2026  
-**Depende de:** Fase 1 (slabs), Fase 2.5 (HW routing)
-
-### Justificativa
-
-O `loop { hlt() }` atual não escala. Precisamos de um scheduler que gerencie múltiplos `AgentProcess`, cada um com seu contexto, prioridade e fila de skills.
-
-### Metas
-
-- [ ] **`AgentProcess` trait + struct** — id, priority, embedding, skill_queue, tick()
-- [ ] **Agent Scheduler** — round-robin com prioridade. A cada tick, percorre a lista de agentes e chama `tick()`. O scheduler consulta o Intent Router (MLP) para decisões de prioridade.
-- [ ] **Criação/Destruição de agentes via EventBus** — `Topic::AgentCreated`, `Topic::AgentDestroyed`
-- [ ] **Budget de execução** — limite de `tokens_consumed` por agente por ciclo. Agentes que excedem são rebaixados de prioridade.
-
-### Alinhamento SotA
-
-- ASA / Neural eBPF: validam que ML leve (MLP 4→2) para decisões de scheduler sub-µs é viável e superior a heurísticas fixas.
-- Mixture-of-Schedulers: nosso Intent Router (MLP 3→2) evolui para rotear políticas de sistema em tempo real.
-
----
-
-## 3. Event Bus & IPC (Capability Tokens)
-
-**Sprints:** 13  
-**Target:** Q3 2026  
-**Depende de:** Fase 2 (Async Executor)
-
-### Justificativa
-
-O sistema não pode ter syscalls tradicionais. Toda comunicação entre Ring 0, Ring 1 e Ring 2 passa pelo `EventBus` com tokens de capacidade verificados em cada mensagem.
-
-### Metas
-
-- [x] **`EventBus` struct** — `BTreeMap<String, Vec<Arc<Mutex<VecDeque<Event>>>>>`, publish/subscribe com `Receiver`
-- [x] **`CapabilityToken(pub u64)`** — validação `is_valid()` (token > 0), verificado no `publish()`
-- [x] **`Event` struct** — `{ id: u64, topic: String, payload: Vec<u8>, token: CapabilityToken }`, ID gerado automaticamente
-- [x] **IPC Flow** — `hardware_monitor_daemon` publish → `system_daemon` receive → EchoSkill execute → complete
-- [ ] **`Topic` enum completo** — AgentCreated, AgentDestroyed, SkillRequest, SkillOutput, CortexDecision, WatchdogTick, MemoryPressure
-- [ ] **Roteamento baseado em ML** — para tópicos de alta frequência, EventBus consulta Intent Router para filtrar assinantes
-
-### Alinhamento SotA
-
-- Capability-based IPC é padrão em seL4 e Fuchsia. Nosso diferencial: o token é avaliado pelo MLP, não por ACL estática.
-- Zero-copy entre Ring 0 e Ring 2: mensagens são `&[u8]` fat pointers sobre páginas compartilhadas (preparação para SFS Fase 4).
-
----
-
-## 4. Skill Registry & MCP
-
-**Sprints:** 14  
-**Target:** Q3 2026  
-**Depende de:** Fase 3 (EventBus)
-
-### Justificativa
-
-Agentes precisam de habilidades executáveis. Em vez de syscalls, skills são módulos WASM carregados sob demanda, com ciclo de vida gerenciado pelo `SkillRegistry`.
-
-### Metas
-
-- [x] **`Skill` trait (Send+Sync)** — `manifest() -> McpManifest`, `execute(&[u8]) -> Result<Vec<u8>>`
-- [x] **`McpManifest` struct** — `{ name, description, required_tokens }`
-- [x] **`SkillRegistry`** — `BTreeMap<String, Box<dyn Skill>>`, register + `execute_skill` com Zero-Trust `CapabilityToken` validation
-- [x] **`EchoSkill`** — skill de demonstração (reversão de payload), registrada no boot
-- [x] **Invocation flow** — `system_daemon` recebe SYSTEM_READY via EventBus → `SkillRegistry::execute_skill("echo", ...)` → output `[3,2,1]` confirmado em QEMU
-- [ ] **WASM embedder (`wasmi`)** — runtime WASM em `no_std`. Host functions: `tensor.matmul`, `nn.silu`, `sfs.read`.
-- [ ] **Linear memory pool** — slabs pré-alocados de 256 KB por skill.
-
-### Alinhamento SotA
-
-- WASM Component Model: skills como módulos efêmeros, sem instalação persistente.
-- MCP: skills se comunicam com o Córtex via mensagens no EventBus (não syscalls diretos).
-
----
-
-## 5. Cognitive Runtime (Intent Planner)
-
-**Sprints:** 21–23  
-**Target:** Q3 2027  
-**Depende de:** Fase 4 (Skill Registry), Fase 3 (EventBus)
-
-### Justificativa
-
-O Intent Router atual (MLP 3→2) decide apenas a próxima ação imediata. O Cognitive Runtime mantém um plano de múltiplas etapas — uma sequência de skills a executar para satisfazer a intenção do usuário.
-
-### Metas
-
-- [ ] **Intent Planner** — recebe uma embedding de intenção e produz uma sequência de `SkillCommand`s. Usa o MLP atual como política gulosa, evoluindo para beam search.
-- [ ] **Success Engine** — feedback loop: se uma skill retorna `success: false`, o planner ajusta a política (pesos do MLP) online.
-- [ ] **Neural Cache** — cache de decisões do planner com ~50 ns de latência para intenções repetidas. Implementado como lookup table em Huge Pages.
-- [ ] **MatMul-free LM (meta futura)** — substituir self-attention por pooling ternário ou estados recorrentes (RWKV, Mamba). Eliminar **todas** as multiplicações FPU do pipeline.
-
-### Alinhamento SotA
-
-- ASA: scheduling adaptativo com ML. O Cognitive Runtime leva o conceito ao nível de planejamento de intenções.
-- Neural Kernel (eBPF + RL): políticas de kernel aprendidas online. Nosso Success Engine faz o mesmo com feedback de execução de skills.
-
----
-
-## Timeline Consolidada
-
-| Ordem | Componente | Sprints | Target | Status |
-|---|---|---|---|---|
-| 1 | Memória (Bitmap Allocator) | 11 | Q3 2026 | ✅ Concluído |
-| 2 | Kernel — Async Neural Executor | 12 | Q3 2026 | ✅ Concluído |
-| 3 | Event Bus & IPC (Capability Tokens) | 13 | Q3 2026 | ✅ Concluído |
-| 4 | Skill Registry & MCP Layer | 14 | Q3 2026 | ✅ Concluído |
-| 2.5 | Hardware Neural Routing (IRQ1 → EventBus) | 15 | Q3 2026 | ✅ Concluído |
-| 5 | Memória — Slab Allocator | 16 | Q4 2026 | Pendente |
-| 6 | Agent Scheduler (Round-Robin) | 17 | Q4 2026 | Depende de Slab |
-| 7 | Cognitive Runtime (Intent Planner) | 18+ | Q1 2027+ | Depende de Agent Scheduler |
-| — | MatMul-free LM (meta futura) | 19+ | Q2 2027+ | Fase 5+ |
-
----
-
-*Consulte ADR-0010 (Strategic Roadmap) e ADR-0013 (Executive Summary / Estado da Arte 2026 + Design System) para fundamentação arquitetural completa.*
+| A-001 | SystemAgent | System | Init, EchoSkill |
+| A-002 | MonitorAgent | System | SYSTEM_READY |
+| A-003 | HwBridgeAgent | Router | IRQ bridge |
+| A-004 | NetAgent | Network | smoltcp poll |
+| A-005 | InputAgent | Console | Keyboard (PS/2 + USB) |
+| A-006 | CortexAgent | Inference | LLM transformer + Medusa |
+| A-007 | HermesAgent | Router | Intent routing, ReAct, Council |
+| A-008 | DisplayAgent | Console | Framebuffer + VGA |
+| A-009 | NetDriverAgent | Driver | RTL8139 + VirtIO-net |
+| A-010 | UsbDriverAgent | Driver | xHCI init |
+| A-011 | BootSelfHealAgent | System | SelfHeal init |
+| A-012 | BootTrustAgent | System | TrustCache init |
+| A-013 | PlatformAgent | System | PCI+ACPI+APIC+SMP |
+| A-014 | MemoryAgent | System | MHI + Arch |
+| A-015 | GpuDriverAgent | Driver | VirtIO-GPU |
+| A-016 | HwDetectAgent | System | HwIdentifySkill |
+| A-017 | CronAgent | System | Cron Scheduler |
+| A-018 | SecurityAgent | System | Security Pipeline |
+| A-019 | SafetyAgent | System | Asimov 4 Laws |
+| A-020 | OptimizerAgent | System | Self-Optimization |
+
+### ✅ Trust & Security
+- TrustCache (allow/deny/TTL/denylist)
+- Ed25519 via `ed25519-compact`
+- CapabilityToken enum (Legacy + Ed25519)
+- 5 detectores (PortScan, ArpSpoof, etc)
+- Path Confinement, Mask Secrets
+- Graduated Enforcement (Observe→Warn→Contain→Enforce)
+- Safety Interceptor (Asimov 4 Laws)
+
+### ✅ Self-Healing
+- FailureClass taxonomy (Memory/Execution/Resource/Logic/External)
+- SelfHeal analyze + RecoveryAction
+- Exception handlers (Page Fault, Double Fault, GPF)
+- RESPAWN_QUEUE + corrective prompting
+- CDC Rabin chunking + XOR Delta snapshot
+
+### ✅ Hermes Cognitive
+- DA Identity Layer (nome/versão/lema)
+- Runtime SDD (goal/context/plan/rollback)
+- ReAct 7 fases (OBSERVE→THINK→PLAN→BUILD→EXECUTE→VERIFY→LEARN)
+- Council skill (3 vozes)
+- Intent Transparency, Context Fencing
+- Bitter Pill Engineering
+- Usage Pattern Analyzer, Workflow Predictor
+- Dynamic Resource Scaling, Reflex Threshold
+- Self-Optimizing Scheduler
+
+### ✅ Storage (novo em v0.58)
+- **ATA PIO driver** (read/write via PCI class 0x01)
+- **MBR parser** (tabela de 4 partições)
+- **FAT12 filesystem** (BPB, root dir, append file)
+- **patch_image.py** (cria partição FAT12 na imagem)
+
+### ✅ Boot Hardware Real
+- **primeiro boot em notebook físico** via SDHC USB
+- VGA text mode funcional
+- Hermes Cognitive rodando (ReAct)
+- USB keyboard via xHCI
+- Ctrl+Alt+Del com dump FAT12 + shutdown
+- BOOT.LOG visível no Windows Explorer
+
+## Pendências Técnicas
+
+| Item | Esforço | Depende de |
+|---|---|---|
+| Prompt interativo `>` para chat | ~50 LOC | Nada |
+| Framebuffer UEFI (bootloader 0.11+) | ~500 LOC | Upgrade bootloader |
+| VirtIO-GPU GET_DISPLAY_INFO | Debug | QEMU TCG |
+| SMP `-smp 2` sem WHPX | Debug | TCG atomicidade |
+| Driver e1000/r8169 (rede real) | ~300 LOC | Teste HW |
+| WASM sandbox (`wasmi`) | ~1500 LOC | Fase 5+ |
+| Modelo 1.5B params (treino) | Python | GPU |
+| Plugin Hub MCP Index | ~400 LOC | #236 |
+
+## Prioridades Imediatas (v0.59)
+1. **Prompt `>`** — Hermes aguarda input do usuário
+2. **Completar call de funções** — Hermes executa skills via teclado
+3. **Testar teclado USB no notebook** — driver já implementado
+4. **Upgrade bootloader 0.11+** — framebuffer UEFI GOP
