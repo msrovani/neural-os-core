@@ -1,4 +1,12 @@
-﻿# Neural OS Hermes v0.56.0 - MEDUSA + PIPELINE + MEMORY TREE + KNOWLEDGE GRAPH
+﻿# Neural OS Hermes v0.58.0 - 🏆 BOOT EM HARDWARE REAL 🏆
+
+**The first AI-native operating system. Booted on real x86-64 hardware from USB.**
+
+```
+🎉 28/06/2026 — Neural OS Hermes bootou em notebook físico!
+    VGA ✅  PCI ✅  ACPI ✅  APIC ✅  Hermes ✅
+    Próximo: teclado USB + prompt interativo
+```
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 

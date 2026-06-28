@@ -4,7 +4,7 @@
 
 **Visao:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferencia neural. O LLM identifica hardware, decide alocacao no MHI, e se recupera de erros automaticamente.
 
-**Estado atual (v0.56.0):** 20 agentes rodando. Transformer 4 layers BitNet (~272K params) + Medusa 3-head speculative decoding. Pipeline manifest, Memory Tree (hierarchical chunks), Knowledge Graph (agent/skill/hardware nodes). Hermes Cognitive com SDD + ReAct 7 fases + Council skill. Self-Healing com FailureClass taxonomy + checkpoint. Trust & Security com Ed25519 identity + Security Pipeline + Safety Interceptor (Asimov 4 Laws). Self-Optimization com Usage Analyzer + Workflow Predictor + Config Learner.
+**Estado atual (v0.58.0):** 20 agentes rodando. **Boot em hardware real confirmado!** Transformer 4 layers BitNet (~272K params) + Medusa 3-head speculative decoding. Pipeline manifest, Memory Tree, Knowledge Graph. xHCI USB HID keyboard driver (teclado USB funcionando). MBR+FAT12 partition recognition. ATA PIO driver para escrita de log. Ctrl+Alt+Del com dump FAT12. Self-Healing, Trust & Security, Hermes Cognitive completos.
 
 **Arquitetura chave:**
 - 20 agentes nativos (Agent trait, AgentRegistry, AgentScheduler)
