@@ -76,20 +76,27 @@ def patch_bootimage(bootimage_path, output_path, log_size_mb=2):
     out[:len(data)] = data
     out += fat_img
 
-    # MBR partition table
+    # PRESERVA o setor 0 original (bootloader first stage)!
+    # Apenas adiciona entrada de partição FAT12 no slot 2 da tabela.
     mbr = bytearray(512)
-    struct.pack_into('<B', mbr, 0x1BE, 0x80)  # bootable
-    mbr[0x1BF] = 0x00; mbr[0x1C0] = 0x02; mbr[0x1C1] = 0x00  # CHS
-    mbr[0x1C2] = 0x01  # FAT12
-    mbr[0x1C3] = 0xFF; mbr[0x1C4] = 0xFF; mbr[0x1C5] = 0xFF
-    struct.pack_into('<I', mbr, 0x1C6, 0)           # LBA start = 0
-    struct.pack_into('<I', mbr, 0x1CA, kernel_sectors)  # size
+    mbr[:] = out[:512]                         # copia setor 0 original (boot code + tabela existente)
 
-    struct.pack_into('<B', mbr, 0x1CE, 0)  # non-bootable
-    mbr[0x1D2] = 0x01                       # FAT12
-    struct.pack_into('<I', mbr, 0x1D6, kernel_sectors)  # LBA start
-    struct.pack_into('<I', mbr, 0x1DA, fat_sectors)     # size
-    mbr[0x1FE:0x200] = b'\x55\xAA'
+    # Encontra primeiro slot livre na tabela de partições
+    slot_found = False
+    for i in range(4):
+        off = 0x1BE + i * 16
+        if mbr[off + 4] == 0x00:               # tipo 0 = slot vazio
+            mbr[off] = 0x00                     # não bootável
+            mbr[off + 4] = 0x01                 # FAT12
+            struct.pack_into('<I', mbr, off + 8, kernel_sectors)
+            struct.pack_into('<I', mbr, off + 12, fat_sectors)
+            slot_found = True
+            break
+    if not slot_found:
+        print("[ERROR] Nenhum slot livre na tabela de particoes MBR")
+        sys.exit(1)
+
+    mbr[0x1FE:0x200] = b'\x55\xAA'             # garante assinatura
     out[:512] = mbr
 
     with open(output_path, 'wb') as f:
