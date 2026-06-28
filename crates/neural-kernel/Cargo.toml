@@ -27,4 +27,4 @@ embedded-graphics = { version = "0.8.2", default-features = false }
 bootloader = { version = "0.9", default-features = false, features = ["binary", "map_physical_memory"] }
 
 [package.metadata.bootimage]
-run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139"]
+run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139", "-smp", "2", "-accel", "whpx"]

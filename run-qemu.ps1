@@ -18,19 +18,11 @@ if (-not (Test-Path $bootImg)) {
 }
 
 # Check if WHPX is available (Windows Hypervisor Platform)
-$accel = ""
-if (-not $NoAccel) {
-    # Test WHPX by trying to initialize with a real machine type
-    $test = qemu-system-x86_64 -accel whpx -M pc -S 2>&1 | Select-String -SimpleMatch "not found"
-    if (-not $test) {
-        $accel = "whpx"
-    } else {
-        $testHax = qemu-system-x86_64 -accel hax -M pc -S 2>&1 | Select-String -SimpleMatch "not found"
-        if (-not $testHax) {
-            $accel = "hax"
-        }
+    $accel = ""
+    if (-not $NoAccel) {
+        $test = qemu-system-x86_64 -accel whpx -M pc -S 2>&1 | Select-String -SimpleMatch "No accelerator found"
+        if (-not $test) { $accel = "whpx" }
     }
-}
 
 $qemuArgs = @(
     "-m", "${Memory}M",
@@ -57,7 +49,7 @@ if ($DebugInt) {
 }
 
 Write-Host "[QEMU] Boot log -> $logFile"
-Write-Host "[QEMU] Starting Neural OS Hermes v0.55.0..."
+Write-Host "[QEMU] Starting Neural OS Hermes v0.57.1..."
 Write-Host ""
 
 # Run QEMU
