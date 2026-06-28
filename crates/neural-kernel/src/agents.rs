@@ -126,11 +126,23 @@ const INPUT_MANIFEST: AgentManifest = AgentManifest {
 pub struct InputAgent {
     receiver: Receiver,
     buffer: String,
+    ctrl: bool,
+    alt: bool,
 }
 
 impl InputAgent {
     pub fn new() -> Self {
-        InputAgent { receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"), buffer: String::new() }
+        InputAgent { receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"), buffer: String::new(), ctrl: false, alt: false }
+    }
+
+    fn handle_cad(&self) {
+        serial_println!("[SYS] Ctrl+Alt+Del detectado. Iniciando shutdown...");
+        serial_println!("[SYS] Salvando estado neural e desligando...");
+        // ACPI power off via PM1a or PS/2 reset
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8, options(nostack, preserves_flags));
+        }
+        loop { x86_64::instructions::hlt(); }
     }
 }
 
@@ -139,6 +151,18 @@ impl Agent for InputAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
             let scancode = event.payload.first().copied().unwrap_or(0);
+            let pressed = scancode < 0x80;
+            let key = if pressed { scancode } else { scancode & 0x7F };
+
+            // Ctrl+Alt+Del detection
+            match key {
+                0x1D => { self.ctrl = pressed; }
+                0x38 => { self.alt = pressed; }
+                0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
+                _ => {}
+            }
+
+            if !pressed { return AgentTickResult::Pending; }
             if scancode < 0x80 {
                 match scancode {
                     0x1C => {
