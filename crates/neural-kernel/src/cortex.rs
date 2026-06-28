@@ -5,6 +5,7 @@ use core::f32::NEG_INFINITY;
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
 pub const TOPIC_LLM_RESPONSE: &str = "LLM_RESPONSE";
 pub const TOPIC_KERNEL_ERROR: &str = "KERNEL_ERROR";
+pub const TOPIC_MODEL_UPDATE: &str = "MODEL_UPDATE";
 use crate::nn::{silu, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
@@ -228,18 +229,31 @@ impl TransformerModel {
         self.forward_hidden(tokens).1
     }
 
-    pub fn generate_next(&self, tokens: &[u16]) -> u16 {
-        let logits = self.forward(tokens);
-        let mut best = 0u16;
-        let mut best_val = NEG_INFINITY;
-        for (i, &v) in logits.data.iter().enumerate() {
-            if v > best_val {
-                best_val = v;
-                best = i as u16;
-            }
-        }
-        if best >= VOCAB_SIZE { EOS } else { best }
+pub fn generate_next(&self, tokens: &[u16]) -> u16 {
+    let logits = self.forward(tokens);
+    argmax_row(&logits, 0)
+}
+
+pub fn sample(&self, tokens: &[u16], top_k: usize, temperature: f32) -> u16 {
+    let logits = self.forward(tokens);
+    let mut probs: Vec<(usize, f32)> = logits.data.iter().enumerate()
+        .map(|(i, &v)| (i, v / temperature.max(0.01))).collect();
+
+    if top_k > 0 && top_k < probs.len() {
+        probs.select_nth_unstable_by(top_k - 1, |a, b| b.1.partial_cmp(&a.1).unwrap());
+        probs.truncate(top_k);
     }
+    let max_logit = probs.iter().map(|(_, v)| *v).fold(NEG_INFINITY, |a, b| a.max(b));
+    let mut sum = 0.0f32;
+    for (_, v) in probs.iter_mut() { *v = libm::expf(*v - max_logit); sum += *v; }
+    let mut r = (sum * 0.5 + 0.5).max(0.0).min(sum); // deterministic for no_std
+    for &(idx, prob) in &probs {
+        let p = prob / sum;
+        r -= p;
+        if r <= 0.0 { return idx as u16; }
+    }
+    argmax_row(&logits, 0)
+}
 }
 
 fn read_f32(data: &[u8], offset: &mut usize) -> f32 {

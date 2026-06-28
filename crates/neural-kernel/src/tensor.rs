@@ -210,6 +210,52 @@ impl PackedTernaryTensor {
     }
 }
 
+const CODEBOOK_SIZE: usize = 16;
+
+pub struct CodebookVQ {
+    pub codebook: Vec<f32>,
+    pub codes: Vec<u8>,
+}
+
+impl CodebookVQ {
+    pub fn train(data: &[f32], size: usize) -> Vec<f32> {
+        let mut cb = vec![0.0f32; size];
+        let step = data.len() / size;
+        for i in 0..size {
+            let start = i * step;
+            let end = (i + 1) * step;
+            cb[i] = data[start..end.min(data.len())].iter().sum::<f32>() / (end - start).max(1) as f32;
+        }
+        cb
+    }
+
+    pub fn new(data: &[f32]) -> Self {
+        let codebook = Self::train(data, CODEBOOK_SIZE);
+        let mut codes = Vec::with_capacity(data.len());
+        for &v in data {
+            let mut best = 0;
+            let mut best_d = (v - codebook[0]).abs();
+            for (j, &c) in codebook.iter().enumerate().skip(1) {
+                let d = (v - c).abs();
+                if d < best_d { best_d = d; best = j; }
+            }
+            codes.push(best as u8);
+        }
+        CodebookVQ { codebook, codes }
+    }
+
+    pub fn compress(&self) -> &[u8] { &self.codes }
+
+    pub fn decompress(&self) -> Vec<f32> {
+        self.codes.iter().map(|&c| self.codebook[c as usize]).collect()
+    }
+
+    pub fn ratio(&self) -> f32 {
+        (self.codes.len() as f32 * core::mem::size_of::<u8>() as f32)
+            / (self.codes.len() as f32 * core::mem::size_of::<f32>() as f32)
+    }
+}
+
 pub fn quantize_to_packed(tensor: &Tensor, threshold: f32) -> PackedTernaryTensor {
     let mut ternary = Vec::with_capacity(tensor.data.len());
     for &val in tensor.data.iter() {
