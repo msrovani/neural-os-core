@@ -23,6 +23,17 @@ extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
     drop(_lock);
 
+    // Initialize AP's LAPIC — necessário para evitar GPF em spurious interrupts
+    unsafe {
+        let base = crate::apic::LAPIC_VIRT_BASE.load(Ordering::Acquire);
+        if base > 0 {
+            // SVR: vetor espúrio = 0xFF, bit 8 = enable
+            let svr = core::ptr::read_volatile((base + 0xF0) as *const u32);
+            core::ptr::write_volatile((base + 0xF0) as *mut u32, (svr & 0xFFFFFF00) | 0xFF | 0x100);
+            core::ptr::write_volatile((base + 0x80) as *mut u32, 0u32); // TPR = 0
+        }
+    }
+
     unsafe { apic::apic_eoi(); }
 
     AP_ENTRY_COUNTER.fetch_add(1, Ordering::SeqCst);

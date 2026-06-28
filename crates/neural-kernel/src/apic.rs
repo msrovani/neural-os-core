@@ -7,7 +7,7 @@ use x86_64::VirtAddr;
 
 pub static USING_APIC: AtomicBool = AtomicBool::new(false);
 pub static USING_X2APIC: AtomicBool = AtomicBool::new(false);
-static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
+pub(crate) static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 
