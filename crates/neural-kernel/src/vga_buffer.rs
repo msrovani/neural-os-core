@@ -4,9 +4,6 @@ use spin::Mutex;
 const BUFFER_HEIGHT: usize = 25;
 const BUFFER_WIDTH: usize = 80;
 
-static CURSOR_ROW: spin::Mutex<usize> = spin::Mutex::new(0);
-
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color {
@@ -41,58 +38,34 @@ struct VgaBuffer {
 
 pub struct Writer {
     column_position: usize,
-    row: usize,
     color_code: ColorCode,
     buffer: &'static mut VgaBuffer,
 }
 
 impl Writer {
     fn new(addr: *mut u8) -> Self {
-        let row = *CURSOR_ROW.lock();
-        Writer {
-            column_position: 0,
-            row: row.min(BUFFER_HEIGHT - 1),
-            color_code: ColorCode::new(Color::White, Color::Black),
-            buffer: unsafe { &mut *addr.cast() },
-        }
+        Writer { column_position: 0, color_code: ColorCode::new(Color::White, Color::Black), buffer: unsafe { &mut *addr.cast() } }
     }
 
     pub fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
             byte => {
-                if self.column_position >= BUFFER_WIDTH {
-                    self.new_line();
-                }
-                let c = ScreenChar { character: byte, color_code: self.color_code };
-                unsafe {
-                    core::ptr::write_volatile(&mut self.buffer.chars[self.row][self.column_position], c);
-                }
+                if self.column_position >= BUFFER_WIDTH { self.new_line(); }
+                unsafe { core::ptr::write_volatile(&mut self.buffer.chars[BUFFER_HEIGHT - 1][self.column_position], ScreenChar { character: byte, color_code: self.color_code }); }
                 self.column_position += 1;
             }
         }
     }
 
     pub fn write_string(&mut self, s: &str) {
-        for byte in s.bytes() {
-            match byte { 0x20..=0x7E | b'\n' => self.write_byte(byte), _ => self.write_byte(0xFE) }
-        }
+        for byte in s.bytes() { match byte { 0x20..=0x7E | b'\n' => self.write_byte(byte), _ => self.write_byte(0xFE) } }
     }
 
     fn new_line(&mut self) {
-        if self.row < BUFFER_HEIGHT - 1 {
-            self.row += 1;
-            self.column_position = 0;
-            return;
-        }
         for row in 1..BUFFER_HEIGHT {
             for col in 0..BUFFER_WIDTH {
-                unsafe {
-                    core::ptr::write_volatile(
-                        &mut self.buffer.chars[row - 1][col],
-                        self.buffer.chars[row][col],
-                    );
-                }
+                unsafe { core::ptr::write_volatile(&mut self.buffer.chars[row - 1][col], self.buffer.chars[row][col]); }
             }
         }
         let blank = ScreenChar { character: b' ', color_code: self.color_code };
@@ -116,12 +89,9 @@ pub fn init(physical_memory_offset: u64) {
 
 pub fn _print(args: fmt::Arguments) {
     use fmt::Write;
-    let mut writer = WRITER.lock();
-    if let Some(ref mut w) = *writer { w.write_fmt(args).unwrap(); }
+    let mut w = WRITER.lock();
+    if let Some(ref mut w) = *w { w.write_fmt(args).unwrap(); }
 }
 
-#[macro_export]
-macro_rules! print { ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*))); }
-
-#[macro_export]
-macro_rules! println { () => ($crate::print!("\n")); ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*))); }
+#[macro_export] macro_rules! print { ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*))); }
+#[macro_export] macro_rules! println { () => ($crate::print!("\n")); ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*))); }
