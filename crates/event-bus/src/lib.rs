@@ -4,6 +4,8 @@ extern crate alloc;
 pub mod bus;
 pub mod capability;
 pub mod event;
+pub mod memory_tree;
+pub mod kgraph;
 
 pub use bus::{EventBus, Receiver};
 pub use capability::CapabilityToken;

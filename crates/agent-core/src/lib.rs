@@ -1,6 +1,8 @@
 #![no_std]
 extern crate alloc;
 
+pub mod pipeline;
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
