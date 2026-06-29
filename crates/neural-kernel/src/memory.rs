@@ -1,4 +1,4 @@
-use bootloader::bootinfo::{MemoryMap, MemoryRegionType};
+use bootloader_api::info::MemoryRegionKind;
 use ticket_lock::TicketLock;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB};
 use x86_64::PhysAddr;
@@ -44,18 +44,18 @@ impl BitmapFrameAllocator {
 
     /// Varre o mapa de memória UEFI e marca como ocupados apenas os frames
     /// que NÃO são `Usable`. Frames utilizáveis ficam com bit = 0 (livre).
-    pub fn init(&mut self, memory_map: &MemoryMap) {
+    pub fn init(&mut self, memory_regions: &bootloader_api::info::MemoryRegions) {
         self.bitmap = [0xFFu8; BITMAP_SIZE];
         let mut last_end: u64 = 0;
         let mut usable_count: usize = 0;
 
-        for region in memory_map.iter() {
-            if region.region_type == MemoryRegionType::Usable {
+        for region in memory_regions.iter() {
+            if region.kind == MemoryRegionKind::Usable {
                 let start_frame = PhysFrame::<Size4KiB>::containing_address(
-                    PhysAddr::new(region.range.start_addr()),
+                    PhysAddr::new(region.start),
                 );
                 let end_frame = PhysFrame::<Size4KiB>::containing_address(
-                    PhysAddr::new(region.range.end_addr() - 1),
+                    PhysAddr::new(region.end - 1),
                 );
                 let start_idx = start_frame.start_address().as_u64() / FRAME_SIZE;
                 let end_idx = end_frame.start_address().as_u64() / FRAME_SIZE;
@@ -66,7 +66,7 @@ impl BitmapFrameAllocator {
                         usable_count += 1;
                     }
                 }
-                last_end = region.range.end_addr();
+                last_end = region.end;
             }
         }
 
