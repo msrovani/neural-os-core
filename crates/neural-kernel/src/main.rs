@@ -314,9 +314,20 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop { x86_64::instructions::hlt(); }
 }
 
-bootloader_api::entry_point!(kernel_main);
+bootloader_api::entry_point!(kernel_main, config = &CONFIG);
+
+/// Bootloader config: mapeamento de memoria fisica para acesso a VGA/APIC
+const CONFIG: bootloader_api::BootloaderConfig = {
+    let mut config = bootloader_api::BootloaderConfig::new_default();
+    config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
+    config.kernel_stack_size = 512 * 1024;
+    config
+};
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    // Debug: write to serial immediately
+    unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'K', options(nostack, preserves_flags)); }
+    
     vga_buffer::init(boot_info.physical_memory_offset.into_option().unwrap_or(0));
     interrupts::init_idt();
 
