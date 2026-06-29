@@ -83,6 +83,8 @@ pub fn init(physical_memory_offset: u64) {
 
 pub fn _print(args: fmt::Arguments) {
     use fmt::Write;
+    // Se framebuffer estiver ativo, nao escreve no VGA text mode
+    if crate::display::fb::GPU.lock().is_some() { return; }
     let mut w = WRITER.lock();
     if let Some(ref mut w) = *w { w.write_fmt(args).unwrap(); }
 }

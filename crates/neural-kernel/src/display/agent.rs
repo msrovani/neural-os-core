@@ -48,7 +48,10 @@ impl Agent for DisplayAgent {
                     gpu_dev.fb_width as usize,
                     gpu_dev.fb_height as usize,
                     gpu_dev.fb_stride as usize,
+                    gpu_dev.fb_bpp as usize,
                 );
+                serial_println!("[DISPLAY] Framebuffer {}x{} bpp={} @{:x}",
+                    gpu_dev.fb_width, gpu_dev.fb_height, gpu_dev.fb_bpp, gpu_dev.fb_addr);
                 self.console = Some(NeuralConsole::new(fb));
                 serial_println!("[DISPLAY] Framebuffer {}x{} @{:x}",
                     gpu_dev.fb_width, gpu_dev.fb_height, gpu_dev.fb_addr);

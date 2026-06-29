@@ -15,34 +15,40 @@ pub struct GpuDevice {
     pub fb_width: u32,
     pub fb_height: u32,
     pub fb_stride: u32,
+    pub fb_bpp: u32,
     pub notify_addr: u64,
     pub present: bool,
 }
 
 impl GpuDevice {
     pub const fn empty() -> Self {
-        GpuDevice { fb_addr: 0, fb_width: 0, fb_height: 0, fb_stride: 0, notify_addr: 0, present: false }
+        GpuDevice { fb_addr: 0, fb_width: 0, fb_height: 0, fb_stride: 0, fb_bpp: 4, notify_addr: 0, present: false }
     }
 }
 
 pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
 
 pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
-    // bootloader 0.11+ expõe framebuffer UEFI via BootInfo
-    // acesso direto via &boot_info.framebuffer (Option<&mut FrameBuffer>)
     if let Some(fb) = boot_info.framebuffer.as_ref().and_then(|f| Some(f)) {
         let info = fb.info();
+        let bpp = match info.pixel_format {
+            bootloader_api::info::PixelFormat::Bgr => 3u32,
+            bootloader_api::info::PixelFormat::Rgb => 3u32,
+            _ => 4u32,
+        };
+        let fb_stride = info.stride as u32 * bpp;
         let gpu = GpuDevice {
             fb_addr: fb.buffer().as_ptr() as u64,
             fb_width: info.width as u32,
             fb_height: info.height as u32,
-            fb_stride: info.stride as u32,
+            fb_stride,
+            fb_bpp: bpp,
             notify_addr: 0,
             present: true,
         };
         *GPU.lock() = Some(gpu);
-        crate::serial_println!("[DISPLAY] UEFI framebuffer: {}x{} stride={} @{:x}",
-            gpu.fb_width, gpu.fb_height, gpu.fb_stride, gpu.fb_addr);
+        crate::serial_println!("[DISPLAY] UEFI framebuffer: {}x{} bpp={} stride={} @{:x}",
+            gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
     } else {
         crate::serial_println!("[DISPLAY] Sem framebuffer UEFI — VGA text mode.");
     }
@@ -55,6 +61,7 @@ pub struct FramebufferInfo {
     pub width: usize,
     pub height: usize,
     pub stride: usize,
+    pub bpp: usize, // bytes per pixel (3 for BGR, 4 for BGRA32)
 }
 
 /// Framebuffer BGRA32 — implementa DrawTarget<Rgb888>
@@ -63,21 +70,20 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
-    pub fn new(addr: usize, width: usize, height: usize, stride: usize) -> Self {
-        Framebuffer {
-            info: FramebufferInfo { addr, width, height, stride },
-        }
+    pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize) -> Self {
+        Framebuffer { info: FramebufferInfo { addr, width, height, stride, bpp } }
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
         if x >= self.info.width || y >= self.info.height { return; }
-        let offset = y * self.info.stride + x * 4;
+        let bpp = self.info.bpp;
+        let offset = y * self.info.stride + x * bpp;
         unsafe {
             let ptr = self.info.addr as *mut u8;
             write_volatile(ptr.wrapping_add(offset + 0), b);
             write_volatile(ptr.wrapping_add(offset + 1), g);
             write_volatile(ptr.wrapping_add(offset + 2), r);
-            write_volatile(ptr.wrapping_add(offset + 3), 0xFF);
+            if bpp > 3 { write_volatile(ptr.wrapping_add(offset + 3), 0xFF); }
         }
     }
 
@@ -133,19 +139,20 @@ impl DrawTarget for Framebuffer {
     {
         let addr = self.info.addr;
         let stride = self.info.stride;
+        let bpp = self.info.bpp;
         let w = self.info.width;
         let h = self.info.height;
         for Pixel(coord, color) in pixels.into_iter() {
             let x = coord.x as usize;
             let y = coord.y as usize;
             if x < w && y < h {
-                let offset = y * stride + x * 4;
+                let offset = y * stride + x * bpp;
                 unsafe {
                     let ptr = addr as *mut u8;
                     write_volatile(ptr.wrapping_add(offset + 0), color.b());
                     write_volatile(ptr.wrapping_add(offset + 1), color.g());
                     write_volatile(ptr.wrapping_add(offset + 2), color.r());
-                    write_volatile(ptr.wrapping_add(offset + 3), 0xFF);
+                    if bpp > 3 { write_volatile(ptr.wrapping_add(offset + 3), 0xFF); }
                 }
             }
         }
@@ -155,6 +162,7 @@ impl DrawTarget for Framebuffer {
     fn fill_solid(&mut self, area: &embedded_graphics::primitives::Rectangle, color: Self::Color) -> Result<(), Self::Error> {
         let addr = self.info.addr;
         let stride = self.info.stride;
+        let bpp = self.info.bpp;
         let width = self.info.width;
         let height = self.info.height;
         let x0 = area.top_left.x.max(0) as usize;
@@ -163,13 +171,13 @@ impl DrawTarget for Framebuffer {
         let y1 = ((area.top_left.y + area.size.height as i32).min(height as i32)).max(0) as usize;
         for y in y0..y1 {
             for x in x0..x1 {
-                let offset = y * stride + x * 4;
+                let offset = y * stride + x * bpp;
                 unsafe {
                     let ptr = addr as *mut u8;
                     write_volatile(ptr.wrapping_add(offset + 0), color.b());
                     write_volatile(ptr.wrapping_add(offset + 1), color.g());
                     write_volatile(ptr.wrapping_add(offset + 2), color.r());
-                    write_volatile(ptr.wrapping_add(offset + 3), 0xFF);
+                    if bpp > 3 { write_volatile(ptr.wrapping_add(offset + 3), 0xFF); }
                 }
             }
         }
