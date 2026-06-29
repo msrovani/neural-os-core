@@ -215,6 +215,9 @@ pub fn init_idt() {
     unsafe {
         x86_64::instructions::segmentation::CS::set_reg(GDT.1.code_selector);
         x86_64::instructions::tables::load_tss(GDT.1.tss_selector);
+        // Recarrega SS com um seletor nulo (evita #GP no iretq quando
+        // o bootloader usa seletor diferente do nosso GDT)
+        core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
     }
     IDT.load();
     serial_println!("[IDT] IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.");

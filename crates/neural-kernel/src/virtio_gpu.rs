@@ -372,7 +372,7 @@ unsafe fn init_framebuffer(io: &Regs, qpa: u64, cpa: u64, off: u64, width: u32, 
 
     serial_println!("[VGPU] VirtIO-GPU OK: {}x{} fb={:#x}", width, height, fb_pa);
 
-    Some(GpuDevice { fb_addr: fb_pa, fb_width: width, fb_height: height, fb_stride: width*4, notify_addr, present: true })
+    Some(GpuDevice { fb_addr: fb_pa, fb_width: width, fb_height: height, fb_stride: width*4, fb_bpp: 4, notify_addr, present: true })
 }
 
 unsafe fn submit_q(io: &Regs, qpa: u64, cpa: u64, cmd_len: usize, off: u64, notify_addr: u64) {
