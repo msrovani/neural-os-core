@@ -9,7 +9,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use bootloader::bootinfo::BootInfo;
+use bootloader_api::BootInfo;
 use core::sync::atomic::Ordering;
 use core::task::{Context, Poll};
 use event_bus::{CapabilityToken, Event, Receiver};
@@ -314,17 +314,17 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     loop { x86_64::instructions::hlt(); }
 }
 
-bootloader::entry_point!(kernel_main);
+bootloader_api::entry_point!(kernel_main);
 
-fn kernel_main(boot_info: &'static BootInfo) -> ! {
-    vga_buffer::init(boot_info.physical_memory_offset);
+fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    vga_buffer::init(boot_info.physical_memory_offset.into_option().unwrap_or(0));
     interrupts::init_idt();
 
-    let mut frame_allocator = BitmapFrameAllocator::empty();
-    frame_allocator.init(&boot_info.memory_map);
+    let mut frame_allocator = memory::BitmapFrameAllocator::empty();
+    frame_allocator.init(&boot_info.memory_regions);
 
     {
-        let mut mapper = unsafe { memory::init_memory(boot_info.physical_memory_offset) };
+        let mut mapper = unsafe { memory::init_memory(boot_info.physical_memory_offset.into_option().unwrap_or(0)) };
         allocator::init_heap(&mut mapper, &mut frame_allocator)
             .expect("heap initialization failed");
     }
@@ -435,7 +435,7 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
 
     // Boot phase agents — cada um é um Agent Oneshot que executa init
     // Tenta detectar framebuffer UEFI (hardware real)
-    display::fb::probe_uefi_framebuffer(boot_info.physical_memory_offset);
+    display::fb::probe_uefi_framebuffer(boot_info);
 
     // Probe ATA (SDHC interno) para escrita de log
     let ata = unsafe { ata::AtaDriver::probe() };

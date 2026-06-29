@@ -27,10 +27,25 @@ impl GpuDevice {
 
 pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
 
-pub fn probe_uefi_framebuffer(_phys_mem_offset: u64) {
-    // bootloader 0.9.34 não expõe frame_buffer.
-    // Upgrade para bootloader 0.11+ necessário para framebuffer UEFI.
-    // VGA text mode (CSM) ou VirtIO-GPU (QEMU) continuam como fallback.
+pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
+    // bootloader 0.11+ expõe framebuffer UEFI via BootInfo
+    // acesso direto via &boot_info.framebuffer (Option<&mut FrameBuffer>)
+    if let Some(fb) = boot_info.framebuffer.as_ref().and_then(|f| Some(f)) {
+        let info = fb.info();
+        let gpu = GpuDevice {
+            fb_addr: fb.buffer().as_ptr() as u64,
+            fb_width: info.width as u32,
+            fb_height: info.height as u32,
+            fb_stride: info.stride as u32,
+            notify_addr: 0,
+            present: true,
+        };
+        *GPU.lock() = Some(gpu);
+        crate::serial_println!("[DISPLAY] UEFI framebuffer: {}x{} stride={} @{:x}",
+            gpu.fb_width, gpu.fb_height, gpu.fb_stride, gpu.fb_addr);
+    } else {
+        crate::serial_println!("[DISPLAY] Sem framebuffer UEFI — VGA text mode.");
+    }
 }
 
 /// Informações do framebuffer obtidas do bootloader
