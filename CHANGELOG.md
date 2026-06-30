@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.62.3] — 2026-06-30 — Display layout fix + pos-tarefas
+
+### Fixed
+- **Status bar height**: `fill_rect` usava `status_y + ch + 2` (22px) em vez de `ch + 3` (19px) — invadia area de conversa
+- **Prompt height**: `fill_rect` usava `prompt_y + ch + 1` (737px!) em vez de `ch + 3` (19px)
+- **conv_y**: realinhado para comecar logo apos a status bar (sem overlap)
+- ConsoleAgent: removeu `println!` (VGA) — display framebuffer e suficiente
+- DisplayAgent: filtro de mensagens — apenas `[Hermes]`, `Hermes v`, `>`, `/` aparecem
+
 ## [0.62.2] — 2026-06-30 — InferenceFS, HermesFS, RamFS, MHI Scheduler
 
 ### Added
