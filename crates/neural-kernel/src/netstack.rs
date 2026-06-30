@@ -65,8 +65,11 @@ impl Device for NetPhy {
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        let data = unsafe { nic_recv() }?;
-        Some((PhyToken(data), PhyToken(vec![])))
+        let data = unsafe { nic_recv() };
+        if data.is_some() {
+            unsafe { crate::serial_println!("[NET-RX] {} bytes", data.as_ref().unwrap().len()); }
+        }
+        data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
@@ -135,14 +138,29 @@ impl NetStack {
 
     pub fn poll(&mut self, now_ms: i64) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-        iface.poll(Instant::from_millis(now_ms), phy, sockets);
+        let now = Instant::from_millis(now_ms);
+        // Poll in tight loop until no more work — required for DHCP multi-step
+        loop {
+            let _ = iface.poll(now, phy, sockets);
+            match iface.poll_delay(now, sockets) {
+                Some(smoltcp::time::Duration::ZERO) => continue,
+                _ => break,
+            }
+        }
     }
 
-    /// Poll DHCP - must be called each tick until dhcp_done = true
-    /// Returns (gateway_ip, dns_ip) when configured
+    /// Poll DHCP — multi-step DISCOVER→OFFER→REQUEST→ACK
     pub fn dhcp_poll(&mut self, now_ms: i64) -> (bool, [u8; 4], [u8; 4]) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, ref mut dhcp_done, .. } = self;
-        iface.poll(Instant::from_millis(now_ms), phy, sockets);
+        let now = Instant::from_millis(now_ms);
+        // Tight poll loop
+        loop {
+            let _ = iface.poll(now, phy, sockets);
+            match iface.poll_delay(now, sockets) {
+                Some(smoltcp::time::Duration::ZERO) => continue,
+                _ => break,
+            }
+        }
 
         let dhcp = sockets.get_mut::<DhcpSocket>(self.dhcp_handle);
         if let Some(event) = dhcp.poll() {

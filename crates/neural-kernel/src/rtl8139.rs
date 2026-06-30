@@ -25,10 +25,10 @@ const CR_TXE: u8 = 0x04;
 const TSD_TOK: u32 = 0x0000_8000;
 const TSD_TABT: u32 = 0x0000_2000;
 const TSD_TUN: u32 = 0x0000_4000;
-const TSD_SIZE_SHIFT: u32 = 16;
+const TSD_SIZE_SHIFT: u32 = 0;
 
 const TX_BUF_SIZE: usize = 4096;
-const RX_BUF_SIZE: usize = 32768 + 16;
+const RX_BUF_SIZE: usize = 4096 + 16;
 
 pub struct Rtl8139Driver {
     io_base: u16,
@@ -88,6 +88,16 @@ impl Rtl8139Driver {
         }
     }
 
+    fn alloc_pages(n: usize) -> u64 {
+        let mut guard = GLOBAL_ALLOCATOR.lock();
+        let allocator = guard.as_mut().unwrap();
+        let frame = allocator.allocate_contiguous(n);
+        match frame {
+            Some(f) => f.start_address().as_u64(),
+            None => 0,
+        }
+    }
+
     pub unsafe fn init(&mut self) -> bool {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
 
@@ -106,7 +116,7 @@ impl Rtl8139Driver {
 
         self.write32(REG_RCR, 0x0F);
 
-        let rx_paddr = Self::alloc_page();
+        let rx_paddr = Self::alloc_page(); // 4KB RX buffer
         if rx_paddr == 0 {
             serial_println!("[RTL8139] RX buffer alloc failed");
             return false;
@@ -132,6 +142,9 @@ impl Rtl8139Driver {
 
         self.write16(REG_IMR, 0x0000);
         self.write8(REG_CR, CR_RXE | CR_TXE);
+
+        // Sync RX state — iPXE pode ter preenchido o buffer de recepcao
+        self.rx_offset = unsafe { self.read16(REG_CAPR) % (RX_BUF_SIZE - 16) as u16 };
 
         serial_println!(
             "[RTL8139] Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]",
@@ -168,8 +181,10 @@ impl Rtl8139Driver {
 
         let tx0 = idx;
         if tx0 < 4 {
-            let tsd = self.read32(tsd_reg);
-            serial_println!("[RTL8139] TX{} len={} tsd=0x{:x}", tx0, data.len(), tsd);
+            let tsad_val = self.read32(REG_TSAD0 + idx as u16 * 4);
+            let tsd_val = self.read32(tsd_reg);
+            serial_println!("[RTL8139] TX{} len={} tsd={:#x} tsad={:#x} paddr={:#x}",
+                tx0, data.len(), tsd_val, tsad_val, self.tx_buf_paddrs[idx]);
         }
 
         for _ in 0..100_000 {
@@ -202,6 +217,8 @@ impl Rtl8139Driver {
             rx_virt.add(off + 2).read_volatile(),
             rx_virt.add(off + 3).read_volatile(),
         ]);
+
+        serial_println!("[RTL8139] RX off={} capr={} status={:#06x} len={}", off, capr, status, pkt_len);
 
         if status & 0x0001 == 0 || pkt_len < 64 || pkt_len > 1536 {
             self.rx_offset = capr;
