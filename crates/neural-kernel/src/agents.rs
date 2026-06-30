@@ -184,6 +184,12 @@ impl InputAgent {
             0x0E => { self.buffer.pop(); }
             _ => { if let Some(ch) = crate::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
         }
+        // Echo tecla para o display em tempo real
+        let _ = EVENT_BUS.publish(Event {
+            id: 0, topic: String::from("KEYBOARD_ECHO"),
+            payload: self.buffer.clone().into_bytes(),
+            token: CapabilityToken::Legacy(1),
+        });
     }
     fn handle_cad(&self) {
         serial_println!("[SYS] Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");

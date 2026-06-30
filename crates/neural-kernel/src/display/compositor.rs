@@ -219,12 +219,12 @@ impl Compositor {
         }
     }
 
-    fn draw_rect(fb: &mut DoubleBuffer, x: i32, y: i32, w: u32, h: u32, color: (u8,u8,u8)) {
+    pub fn draw_rect(fb: &mut DoubleBuffer, x: i32, y: i32, w: u32, h: u32, color: (u8,u8,u8)) {
         if x < 0 || y < 0 { return; }
         fb.fill_rect(x as usize, y as usize, w as usize, h as usize, color.0, color.1, color.2);
     }
 
-    fn draw_text(fb: &mut DoubleBuffer, x: i32, y: i32, text: &str, fg: (u8,u8,u8), bg: (u8,u8,u8)) {
+    pub fn draw_text(fb: &mut DoubleBuffer, x: i32, y: i32, text: &str, fg: (u8,u8,u8), bg: (u8,u8,u8)) {
         let mut cx = x.max(0) as usize;
         let cy = y.max(0) as usize;
         for c in text.chars() {
