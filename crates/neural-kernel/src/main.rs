@@ -77,6 +77,7 @@ mod wasm;
 mod tv_dsl;
 mod gguf;
 mod vfs;
+mod fs;
 
 use lazy_static::lazy_static;
 
@@ -518,6 +519,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let vfs_guard = crate::vfs::VFS.lock();
     let mcount = vfs_guard.as_ref().map_or(0, |v| v.mount_table().len());
     crate::serial_println!("[VFS] Init OK. {} mounts.", mcount);
+
+    // Init Filesystem Agents
+    crate::fs::init_fs_agents();
 
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
