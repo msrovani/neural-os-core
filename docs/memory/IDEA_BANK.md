@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-27 (Seção 6 reconsolidada — 5 blocos, 47 itens 🟡, 336 totais)  
+**Última atualização:** 2026-06-29 (Ecosystem Batch 3 — 12 repos portados, #280, 348 totais)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -65,7 +65,23 @@ Nada é descartado sem registro. Ideias podem ser:
 | 279e | v86 browser demo (WebAssembly x86 emulator) | 🟡 Futuro | v0.64+ | Bootar no navegador |
 | 279f | App SDK via trait + registry (JA TEMOS!) | ✅ Confirmado | — | Nosso Agent trait + AgentRegistry validado |
 
-### 1.4. USB
+### 1.4. Ecosystem Batch 3 — 12 Repos Portados (IDEA #280)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 280a | redox-os/redox: SchemeHandler trait (scheme.rs) | ✅ v0.59.2 | v0.59.2 | Namespace I/O: gpu://, usb:// |
+| 280b | theseus-os/Theseus: TypedAgent<Boot\|Running\|Faulted> (state.rs) | ✅ v0.59.2 | v0.59.2 | Type-safe lifecycle transitions |
+| 280c | embassy-rs/embassy: TimerWheel 64-slot (timer_wheel.rs) | ✅ v0.59.2 | v0.59.2 | Agendamento eficiente de wake-ups |
+| 280d | openai/swarm: Handoff enum (SwitchTo/Escalate/Delegate) | ✅ v0.59.2 | v0.59.2 | Agent handoff protocol |
+| 280e | tock/tock: Register<T> + RegisterField (mmio.rs) | ✅ v0.59.2 | v0.59.2 | Typed MMIO sem unsafe manual |
+| 280f | raga-ai-hub/Catalyst: Span tracer 256-entry (tracer.rs) | ✅ v0.59.2 | v0.59.2 | Tracing de spans de agentes |
+| 280g | kyegomez/swarms: Orchestrator decompose+assign | ✅ v0.59.2 | v0.59.2 | Task decomposition por keywords |
+| 280h | TransformerOptimus/SuperAGI: SkillScore scoring | ✅ v0.59.2 | v0.59.2 | Skill performance ranking |
+| 280i | VRSEN/agency-swarm: SpecialistAgent (ja tinhamos!) | ✅ Confirmado | v0.59.1 | 147 agentes em 12 divisões |
+| 280j | browser-use: HwRegistry device tree (ja tinhamos!) | ✅ Confirmado | v0.59.1 | HW context para LLM |
+| 280k | micro/go-micro: endpoints discovery (ja tinhamos!) | ✅ Confirmado | v0.55.0 | AgentManifest extensivel |
+| 280l | pydantic-ai: SkillManifest derive macro (conceitual) | 🟡 Futuro | v0.61+ | Proc-macro para manifests |
+
+### 1.5. USB
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
@@ -1167,6 +1183,7 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-06-27 | **Bloco 12 implementado:** x2APIC, Huge Pages, PCI bridges recursivo, Cron Scheduler, MCP Server (#18, #70, #92, #93, #172, #232). | Dev + IDA IA |
 | 2026-06-27 | **Bloco 13 implementado:** Multi-mode Trust, Path Confinement, Mask Secrets, Graduated Enforcement, Posture-Aware, Boot Policy, Security Pipeline, Ed25519 identity (#166, #176, #198, #256-260). | Dev + IDA IA |
 | 2026-06-27 | **Bloco 14 implementado:** Hermes Cognitive completo — Identidade (#180), SDD (#178), ReAct (#190), Transparency (#184), Council (#191), Bitter Pill (#193), Context Fencing (#203), Usage Analyzer (#157), Workflow Predictor (#158), Dynamic Scaling (#160), Reflex Threshold (#139), Self-Scheduler (#161), Config Learner (#163), LLM arch/tier (#135/#136). | Dev + IDA IA |
+| 2026-06-29 | **Ecosystem Batch 3 (IDEA #280):** 12 repos portados (redox, Theseus, Embassy, Tock, Swarm, RagaAI, Swarms, SuperAGI). 8 arquivos, 601 LOC. `cargo check --release`: 0 errors. | Dev + IDA IA |
 | 2026-06-29 | **The Agency port (IDEA #277):** HwRegistry + HwAgent por dispositivo PCI. Agency struct com 12 divisoes, 30+ agentes especializados. LLM-aware: "quero video chamada" → ativa mic+camera+display+net. | Dev + IDA IA |
 | 2026-06-29 | **GGUF loader research (IDEA #278):** Formato GGUF documentado. Portavel (~500 LOC) mas modelos 9B+ exigem heap >5GB. Alternativa: expandir .bitnet v3. | Dev + IDA IA |
 | 2026-06-29 | **SmileyOS patterns (IDEA #279):** 11 padrões identificados — compositor multi-window, filesystem proprio, app SDK via trait, temas, v86 browser demo, shell 40+ comandos. Prioritario: temas + shell expandida. | Dev + IDA IA |

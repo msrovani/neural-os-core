@@ -1,7 +1,8 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.56.0 🏆
-#   MEDUSA + PIPELINE + MEMORY TREE + KNOWLEDGE GRAPH
-#   Tudo é agente ou skill. Padrões de ecossistema portados.
+#   PLANO DIRETOR — neural-os-core v0.59.2 🏆
+#   ECOSYSTEM BATCH 3 — 12 REPOS PORTADOS, 173 AGENTES
+#   Bootloader 0.11 + Framebuffer 1280×720
+#   HW Agents + The Agency (147 agents)
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -39,7 +40,7 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
-# Current Agent Landscape (v0.56.0 — 20 agents — Block 11+12+13+14+Ecosystem)
+# Current Agent Landscape (v0.59.2 — 173 agents — HW Agents + The Agency)
 
 | Código | Agente | Status | Tipo | Função |
 |---|---|---|---|---|
@@ -69,14 +70,17 @@ TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(toke
 **Sprint 45 (v0.43-0.45):** Display subsystem + VirtIO-GPU + bugfix estrutural (H3-H12).
 **Bloco 12v2 (Sprint 48):** x2APIC, Huge Pages, PCI bridges, Cron Scheduler, MCP Server.
 **Bloco 13 (Sprints 49-50):** Trust & Security — Ed25519, Security Pipeline, Mask Secrets.
+**Bloco 14 (Sprint 51+):** Hermes Cognitive + Self-Optimization — SDD, ReAct, Council, Usage Analyzer, Dynamic Scaling.
+**Bloco 15 (Sprint 52+):** Memory Systems — MemoryTree v2, Dedup, Privacy, Hybrid Search, Atkinson-Shiffrin.
+**Bloco 16 (Sprint 53+):** Ecosystem Integration — SuperContext, SkillIndex, TokenJuice.
+**Bloco 17 (Sprint 54+):** Cortex LLM v2 — Sampling, Codebook VQ, Medusa speculative decode.
+**Bloco 18 (Sprint 55+):** Ecosystem Batch — Pipeline, DAG, Dashboard.
+**Bloco 19 (Sprint 56+):** HW Real — Boot HW, USB xHCI, FAT12, ATA.
+**Bloco 20 (Sprint 57+):** Bootloader 0.11 + Framebuffer UEFI.
+**Bloco 21 (Sprint 58):** The Agency (147 agents) + HW Agents.
+**Bloco 22 (Sprint 59):** Ecosystem Batch 3 — 12 repos portados (redox, Theseus, Embassy, Tock, Swarm, Swarms, SuperAGI, RagaAI).
 
 Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo existente, 🟡 wrapper = LegacyTaskAgent (migrar), 📝 = módulo avulso
-
-**Bloco 11 (Sprints 39-42):** Bloco único consolidado. Agent/Skill-First completo.
-**Bloco 12 (Sprints 43-44):** Network Evolution — DHCP, ARP, VirtIO-net manual, NetPhy unificada.
-**Sprint 45 (v0.43-0.45):** Display subsystem + VirtIO-GPU + bugfix estrutural (H3-H12).
-**Bloco 12v2 (Sprint 48):** x2APIC, Huge Pages, PCI bridges, Cron Scheduler, MCP Server.
-**Bloco 13 (Sprints 49-50):** Trust & Security — Ed25519, Security Pipeline, Mask Secrets.
 
 # Operational Rules & Guardrails
 - **Zero Hallucination Policy:** State explicitly if you don't know a low-level hardware interaction. Do not invent `no_std`-incompatible crates.
@@ -151,43 +155,46 @@ Panic handler → FailureClass::classify() → SelfHeal::analyze() → RecoveryA
 
 ## Boot Sequence
 ```
-cargo run → bootloader → kernel_main
-  ├─ vga_buffer::init(offset)
-  ├─ interrupts::init_idt()       (GDT + TSS + IDT — 32 handlers 0-31)
-  ├─ memory::init_memory(offset)  (OffsetPageTable)
+cargo build --release → python tools/build_image.py --bios → qemu-system-x86_64
+  └─ bootloader 0.11 → kernel_main
+  ├─ serial::probe_port()        (tenta 0x3F8 → 0x2F8 → 0x3E8 → 0x2E8)
+  ├─ fb::probe_bootloader_fb()   (BootInfo.framebuffer, 1280×720)
+  ├─ interrupts::init_idt()      (GDT + TSS + IDT — 32 handlers 0-31)
+  ├─ memory::init_memory(offset) (OffsetPageTable)
   ├─ BootInfoFrameAllocator::init
-  ├─ allocator::init_heap()       (LockedHeap 100 KB)
-  ├─ simd::enable_simd()          (CR0/CR4)
-  ├─ int3() → Breakpoint handler
-  ├─ Box/Vec/Tensor/SiLU/RMSNorm tests
-  ├─ Intent Router: Linear → SiLU → argmax
-  ├─ BitNet: quantize_to_packed() → BitLinear 2-bit forward
-  ├─ 1000x frame stress test
-  ├─ init_global_allocator()
-  ├── AgentRegistry::init_phase()  (8 boot agents):
-  │    PlatformAgent   → PCI + ACPI + APIC + SMP
-  │    MemoryAgent     → Arch + MHI
+  ├─ allocator::init_heap()      (LockedHeap 16MB)
+  ├─ simd::enable_simd()         (CR0/CR4)
+  ├─ AgentRegistry::init_phase() (8 boot agents):
+  │    PlatformAgent    → PCI + ACPI + APIC + SMP + x2APIC
+  │    MemoryAgent      → Arch + MHI
   │    BootSelfHealAgent
-  │    BootTrustAgent
-  │    NetDriverAgent  → VirtIO-net → RTL8139
-  │    UsbDriverAgent  → xHCI
-  │    GpuDriverAgent  → VirtIO-GPU (PCI caps)
-  │    HwDetectAgent   → HwIdentifySkill
-  └── AgentRegistry::run()         (8 runtime agents):
-       SystemAgent      → SYSTEM_READY + EchoSkill
-       MonitorAgent     → (oneshot, já foi)
-       HwBridgeAgent    → scancode bridge
-       NetAgent         → DHCP + smoltcp poll
-       InputAgent       → keyboard buffer
-       CortexAgent      → LLM inference
-       HermesAgent      → intent routing + skills
-       DisplayAgent     → VGA + framebuffer output
+  │    BootTrustAgent   → Ed25519 keys
+  │    NetDriverAgent   → VirtIO-net → RTL8139
+  │    UsbDriverAgent   → xHCI (USB HID)
+  │    GpuDriverAgent   → VirtIO-GPU (PCI caps)
+  │    HwDetectAgent    → HwIdentifySkill
+  ├── AgentRegistry::register_agency_agents() → +147 agents
+  ├── AgentRegistry::register_hw_agents()     → +6 HW agents
+  └── AgentRegistry::run() (16+ runtime agents):
+       SystemAgent       → SYSTEM_READY + EchoSkill
+       HwBridgeAgent     → scancode bridge
+       NetAgent          → DHCP + smoltcp poll (RTL8139)
+       InputAgent        → keyboard (PS/2 + USB xHCI)
+       CortexAgent       → LLM transformer + Medusa speculative
+       HermesAgent       → intent routing + ReAct + Council + Handoff
+       DisplayAgent      → Framebuffer NeuralConsole 1280×720
+       CronAgent         → Cron Scheduler
+       SecurityAgent     → Security Pipeline
+       SafetyAgent       → Asimov 4 Laws interceptor
+       OptimizerAgent    → Self-Optimization
+       + The Agency (147 specialist agents, passive)
+       + HW agents (~6, activate_for_intent)
 ```
 
 ## Active Dependencies (neural-kernel)
 | Crate | Version |
 |---|---|
-| bootloader | 0.9.34 (map_physical_memory) |
+| bootloader | 0.11.15 (bootloader_api) |
 | spin | 0.9 |
 | lazy_static | 1.4 (spin_no_std) |
 | uart_16550 | 0.2 |
@@ -196,7 +203,7 @@ cargo run → bootloader → kernel_main
 | libm | 0.2 |
 | pic8259 | 0.10 |
 | smoltcp | 0.13 (alloc, medium-ethernet, proto-ipv4, socket-tcp, socket-udp) |
-| ed25519-dalek | 2.2 (default-features=false) |
+| ed25519-compact | 2.3.1 (no_std puro) |
 | embedded-graphics | 0.8 |
 | event-bus | workspace (path) |
 | skill-registry | workspace (path) |
@@ -205,23 +212,24 @@ cargo run → bootloader → kernel_main
 ## Workspace Crates
 | Crate | Status |
 |---|---|
-| `neural-kernel` | v0.50.0 — kernel bare-metal + SMP + Hermes Chat + RTL8139 + smoltcp + SelfHeal + skills.md |
-| `agent-core` | v0.1.0 — Agent trait, AgentRegistry, AgentScheduler, watchdog |
+| `neural-kernel` | v0.59.2 — kernel bare-metal + framebuffer + 173 agents + RTL8139 + smoltcp + SelfHeal |
+| `agent-core` | v0.1.0 — Agent trait, AgentRegistry, AgentScheduler, Pipeline, DAG, Dashboard, TimerWheel, TypedAgent |
 | `skill-registry` | v0.1.0 — MCP Layer: Skill trait, McpManifest, Registry com validação de token |
-| `event-bus` | v0.1.0 — IPC publish/subscribe |
+| `event-bus` | v0.1.0 — IPC publish/subscribe + MemoryTree + KnowledgeGraph + Scheme + Ecosystem (dedup, privacy, hybrid, metacognitive, supercontext, skill_index, tokenjuice) |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Bloco 14 — Hermes Cognitive + Self-Optimization)
-Runtime SDD (#178), Algorithm ReAct 7 fases (#190), Council skill (#191), Usage Pattern Analyzer (#157), Dynamic Resource Scaling (#160). Ver IDEA_BANK.md Seção 6.
+## Next Sprint (Bloco 23 — Ecosystem Polishing)
+GGUF loader (#278) research, SmileyOS shell + temas (#279), double buffering framebuffer (anti-cintilação),
+USB-MSC BOT driver (~400 LOC) para FAT12 log persistente.
 
 ## Network Strategy (ADR-0016)
-Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP.
+Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. HW real: planejar e1000/r8169 (~300 LOC).
 
 ## Monorepo Structure
-- `crates/neural-kernel/` — kernel bare-metal (bootloader, VGA, serial, IDT, memory, SIMD, tensor, NN, async executor)
-- `crates/agent-core/` — AgentProcess trait + scheduler (stub — PRÓXIMO SPRINT)
+- `crates/neural-kernel/` — kernel bare-metal (bootloader 0.11, VGA, serial, framebuffer, IDT, memory, SIMD, tensor, NN, async executor, xHCI, FAT12, ATA, The Agency, HW Agents)
+- `crates/agent-core/` — AgentProcess trait + scheduler + Pipeline + DAG + Dashboard + TimerWheel + TypedAgent
 - `crates/skill-registry/` — Skill trait + MCP Layer (Skill, McpManifest, SkillRegistry com validação Zero-Trust)
-- `crates/event-bus/` — EventBus IPC + CapabilityToken (publish/subscribe implementado)
+- `crates/event-bus/` — EventBus IPC + CapabilityToken + MemoryTree + KG + Scheme + Ecosystem
 - `crates/ticket-lock/` — TicketLock FIFO (AtomicUsize ticket/serving, spin loop justo)
 
 ## Roadmap
@@ -230,7 +238,10 @@ See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, Ma
 ## References
 - ADR-0013: Executive Summary / Estado da Arte 2026 (MerlionOS, FairyFuse/Bitnet.cpp, ASA/eBPF)
 - ADR-0014: Ideias de Evolução de Hardware (SMP, APIC, USB neural, AI-driven arch)
-- IDEA_BANK.md Section 1.28: Agent/Skill-First Architecture (275 items total)
+- ADR-0016: Network Strategy
+- ADR-0025: Tier 3 Security Patterns
+- ADR-0026: Ecosystem Batch 3 Analysis
+- IDEA_BANK.md Section 1.28: Agent/Skill-First Architecture (280+ items total)
 
 <!-- context7 -->
 ## Rust Crate Ecosystem — Always Use Context7 + crates.io
