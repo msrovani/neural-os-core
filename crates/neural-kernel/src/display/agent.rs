@@ -1,9 +1,13 @@
+//! DisplayAgent — renderiza o desktop (Compositor) com dock + cursor + apps.
+//! Keyboard echo em tempo real via KEYBOARD_ECHO topic.
+
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::hermes;
 use crate::interrupts::TIMER_TICKS;
 use crate::serial_println;
 use crate::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
+use crate::display::compositor::COMPOSITOR;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -15,7 +19,8 @@ const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
 
 pub struct DisplayAgent {
     receiver: crate::Receiver,
-    console: Option<NeuralConsole>,
+    echo_receiver: crate::Receiver,
+    fb: Option<DoubleBuffer>,
     gpu_inited: bool,
     input_buffer: alloc::string::String,
 }
@@ -24,14 +29,13 @@ impl DisplayAgent {
     pub fn new() -> Self {
         DisplayAgent {
             receiver: EVENT_BUS.subscribe(hermes::TOPIC_HERMES_RESPONSE),
-            console: None,
+            echo_receiver: EVENT_BUS.subscribe("KEYBOARD_ECHO"),
+            fb: None,
             gpu_inited: false,
             input_buffer: alloc::string::String::new(),
         }
     }
 }
-
-use crate::display::console::NeuralConsole;
 
 impl Agent for DisplayAgent {
     fn manifest(&self) -> &AgentManifest { &DISPLAY_MANIFEST }
@@ -47,35 +51,37 @@ impl Agent for DisplayAgent {
                     gpu_dev.fb_stride as usize,
                     gpu_dev.fb_bpp as usize,
                 );
-                serial_println!("[DISPLAY] DoubleBuffer {}x{} bpp={} @{:x}",
-                    gpu_dev.fb_width, gpu_dev.fb_height, gpu_dev.fb_bpp, gpu_dev.fb_addr);
-                self.console = Some(NeuralConsole::new(fb));
+                serial_println!("[DISPLAY] Framebuffer {}x{} @{:x}",
+                    gpu_dev.fb_width, gpu_dev.fb_height, gpu_dev.fb_addr);
+                self.fb = Some(fb);
             }
             self.gpu_inited = true;
         }
 
-        while let Some(event) = self.receiver.try_receive() {
-            let text = core::str::from_utf8(&event.payload).unwrap_or("(bytes)");
-            if let Some(ref mut console) = self.console {
-                // So mostra respostas Hermes + saudacao no display
-                if text.starts_with("[Hermes]") || text.starts_with("Hermes v")
-                    || text.starts_with(">") || text.starts_with("/")
-                {
-                    console.push_line(text);
-                    console.set_prompt_visible(true);
-                }
-            } else {
-                crate::serial_println!("[Hermes] {}", text);
-                crate::print!("> ");
-                crate::serial_print!("> ");
-            }
+        // Keyboard echo em tempo real
+        while let Some(ev) = self.echo_receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            self.input_buffer = alloc::string::String::from(text);
         }
 
-        if let Some(ref mut console) = self.console {
-            let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let mem = crate::memory::global_hardware_context();
-            console.set_input_buffer(&self.input_buffer);
-            console.render(tick as u64, 8, mem[0], false, false);
+        // Render Desktop (Compositor)
+        if let Some(ref mut fb) = self.fb {
+            if let Some(ref mut comp) = *COMPOSITOR.lock() {
+                comp.poll_mouse();
+                let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                comp.render(fb, tick);
+                // Desenha input_buffer no dock (ultima linha da dock)
+                if !self.input_buffer.is_empty() {
+                    let w = fb.info.width;
+                    let h = fb.info.height;
+                    let dock_y = h.saturating_sub(36);
+                    let t = crate::display::theme::current();
+                    crate::display::compositor::Compositor::draw_text(
+                        fb, 4, (dock_y - 18) as i32, &self.input_buffer, t.fg, t.bg
+                    );
+                }
+                fb.swap();
+            }
         }
 
         AgentTickResult::Pending
