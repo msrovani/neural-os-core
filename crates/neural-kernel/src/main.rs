@@ -67,6 +67,10 @@ mod security;
 mod usb_msc;
 mod virtio_net;
 mod virtio_gpu;
+mod mmio;
+mod tracer;
+mod orchestrator;
+mod skill_market;
 
 use lazy_static::lazy_static;
 
