@@ -521,8 +521,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::CortexAgent::new()));
     registry.register(Box::new(agents::HermesAgent::new()));
     
-    // The Agency: 30+ agentes especialistas registrados como SpecialistAgent
+    // The Agency: 30+ agentes especialistas
     agents::register_agency_agents(&mut registry);
+    
+    // HW Agents: um agente por dispositivo PCI
+    agents::register_hw_agents(&mut registry);
     
     // DisplayAgent
     serial_println!("[DISPLAY] Inicializando DisplayAgent.");

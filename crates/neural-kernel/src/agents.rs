@@ -920,8 +920,43 @@ pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
             registry.register(Box::new(agent));
         }
     }
-    serial_println!("[AGENCY] {} agentes registrados via SpecialistAgent",
-        agency.divisions.iter().map(|d| d.agents.len()).sum::<usize>());
+    let count: usize = agency.divisions.iter().map(|d| d.agents.len()).sum();
+    serial_println!("[AGENCY] {} agentes registrados via SpecialistAgent", count);
+}
+
+/// Registra HwAgents como agentes nativos (um por dispositivo PCI)
+pub fn register_hw_agents(registry: &mut agent_core::AgentRegistry) {
+    let mut hw = crate::hw_agents::HwRegistry::new();
+    unsafe { hw.detect_all(); }
+    for hw_agent in &hw.agents {
+        let name = Box::leak(hw_agent.name.clone().into_boxed_str());
+        let manifest = AgentManifest { name, kind: AgentKind::Driver, schedule: ScheduleKind::Oneshot, auto_start: true, persist: false };
+        let payload = alloc::format!("{} caps={:?}", hw_agent.device_id, hw_agent.capabilities);
+        registry.register(Box::new(HwSpecialistAgent { manifest, device_id: hw_agent.device_id.clone(), payload }));
+    }
+    serial_println!("[HW-AGENTS] {} agentes de hardware registrados", hw.agents.len());
+}
+
+// ---------------------------------------------------------------------------
+// HwSpecialistAgent — um agente por dispositivo PCI detectado
+// ---------------------------------------------------------------------------
+
+pub struct HwSpecialistAgent {
+    manifest: AgentManifest,
+    device_id: String,
+    payload: String,
+}
+
+impl Agent for HwSpecialistAgent {
+    fn manifest(&self) -> &AgentManifest { &self.manifest }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        let _ = EVENT_BUS.publish(Event {
+            id: 0, topic: alloc::format!("HW_DEVICE_{}", self.device_id),
+            payload: self.payload.as_bytes().to_vec(),
+            token: CapabilityToken::Legacy(1),
+        });
+        AgentTickResult::Done
+    }
 }
 
 impl Agent for HwDetectAgent {
