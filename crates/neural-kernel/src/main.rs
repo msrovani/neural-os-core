@@ -495,6 +495,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     display::fb::probe_uefi_framebuffer(boot_info);
     crate::serial_println!("[DBG7] framebuffer probe done");
     
+    // Init RTL8139 early — frame allocator minimamente fragmentado = 32KB RX OK
+    unsafe { crate::net::init_driver_rtl8139(); }
+    
     let ata = unsafe { ata::AtaDriver::probe() };
     *ATA_DRIVER.lock() = ata;
     crate::serial_println!("[DBG8] ATA probe done");
