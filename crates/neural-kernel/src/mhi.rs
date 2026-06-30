@@ -129,7 +129,7 @@ pub fn arc_suggest_tier(profile: &AllocProfile, now: u64, profile_weight: f32) -
 // ---------------------------------------------------------------------------
 
 pub struct MhiRegistry {
-    allocations: BTreeMap<u64, AllocProfile>, // PhysAddr.as_u64() -> profile
+    pub allocations: BTreeMap<u64, AllocProfile>, // PhysAddr.as_u64() -> profile
     next_id: u64,
 }
 
