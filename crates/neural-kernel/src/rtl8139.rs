@@ -28,7 +28,7 @@ const TSD_TUN: u32 = 0x0000_4000;
 const TSD_SIZE_SHIFT: u32 = 0;
 
 const TX_BUF_SIZE: usize = 4096;
-const RX_BUF_SIZE: usize = 4096 + 16;
+const RX_BUF_SIZE: usize = 32768 + 16;
 
 pub struct Rtl8139Driver {
     io_base: u16,
@@ -116,7 +116,7 @@ impl Rtl8139Driver {
 
         self.write32(REG_RCR, 0x0F);
 
-        let rx_paddr = Self::alloc_page(); // 4KB RX buffer
+        let rx_paddr = Self::alloc_pages(8); // 32KB para RX ring (precisa de alloc cedo no boot)
         if rx_paddr == 0 {
             serial_println!("[RTL8139] RX buffer alloc failed");
             return false;
@@ -179,12 +179,12 @@ impl Rtl8139Driver {
 
         self.write32(tsd_reg, (data.len() as u32) << TSD_SIZE_SHIFT);
 
-        let tx0 = idx;
-        if tx0 < 4 {
-            let tsad_val = self.read32(REG_TSAD0 + idx as u16 * 4);
+        // Debug TX na primeira ocorrencia
+        let tx_dbg = idx;
+        if tx_dbg < 4 && self.tx_cur == 0 {
             let tsd_val = self.read32(tsd_reg);
-            serial_println!("[RTL8139] TX{} len={} tsd={:#x} tsad={:#x} paddr={:#x}",
-                tx0, data.len(), tsd_val, tsad_val, self.tx_buf_paddrs[idx]);
+            serial_println!("[RTL8139] TX{} len={} tsd={:#x} tsad={:#x}",
+                tx_dbg, data.len(), tsd_val, self.tx_buf_paddrs[idx]);
         }
 
         for _ in 0..100_000 {
@@ -218,9 +218,7 @@ impl Rtl8139Driver {
             rx_virt.add(off + 3).read_volatile(),
         ]);
 
-        serial_println!("[RTL8139] RX off={} capr={} status={:#06x} len={}", off, capr, status, pkt_len);
-
-        if status & 0x0001 == 0 || pkt_len < 64 || pkt_len > 1536 {
+        if status & 0x0001 == 0 || pkt_len < 60 || pkt_len > 1536 {
             self.rx_offset = capr;
             self.write16(REG_CBR, capr.wrapping_sub(16));
             return None;

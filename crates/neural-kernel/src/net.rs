@@ -51,6 +51,8 @@ pub fn wait_ticks(ticks: usize) {
 }
 
 pub unsafe fn init_driver_rtl8139() -> bool {
+    // Ja inicializado? (ex: chamado em kernel_main antes dos agentes)
+    if RTL8139.lock().is_some() { return true; }
     let pci_devices = crate::pci::scan_pci();
     let mut dev_opt = None;
     for dev in &pci_devices {
