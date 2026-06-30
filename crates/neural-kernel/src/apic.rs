@@ -277,6 +277,80 @@ pub(crate) unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     x86_64::instructions::tlb::flush(virt);
 }
 
+/// Mapa uma pagina de 4KB para MMIO no endereco fisico `phys_addr`,
+/// criando entradas de tabela se necessario, e marca como NO_CACHE + WRITE_THROUGH.
+/// Se uma huge page (2MB/1GB) ja cobrir o endereco, modifica as flags diretamente.
+pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
+    use x86_64::structures::paging::PageTable;
+    use x86_64::VirtAddr;
+    use x86_64::PhysAddr;
+
+    let virt = VirtAddr::new(phys_addr + phys_mem_offset);
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let base = VirtAddr::new(phys_mem_offset);
+    let l4_virt = base + l4_frame.start_address().as_u64();
+    let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+
+    // L4 → L3
+    let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
+        let frame = alloc_mmio_frame(base);
+        l3_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    } else if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut f = l3_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l3_entry.set_flags(f);
+        x86_64::instructions::tlb::flush(virt); return;
+    }
+    let l3_virt = base + l3_entry.addr().as_u64();
+    let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+
+    // L3 → L2
+    let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) {
+        let frame = alloc_mmio_frame(base);
+        l2_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    } else if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut f = l2_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l2_entry.set_flags(f);
+        x86_64::instructions::tlb::flush(virt); return;
+    }
+    let l2_virt = base + l2_entry.addr().as_u64();
+    let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+
+    // L2 → L1
+    let l1_entry = &mut l2_table[usize::from(virt.p2_index())];
+    if !l1_entry.flags().contains(PageTableFlags::PRESENT) {
+        let frame = alloc_mmio_frame(base);
+        l1_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    } else if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut f = l1_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l1_entry.set_flags(f);
+        x86_64::instructions::tlb::flush(virt); return;
+    }
+    let l1_virt = base + l1_entry.addr().as_u64();
+    let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+
+    // L1 → 4KB page
+    let pte = &mut l1_table[usize::from(virt.p1_index())];
+    pte.set_addr(PhysAddr::new(phys_addr),
+        PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+        | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+
+    x86_64::instructions::tlb::flush(virt);
+}
+
+fn alloc_mmio_frame(base: VirtAddr) -> u64 {
+    use x86_64::structures::paging::FrameAllocator;
+    let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+    if let Some(alloc) = guard.as_mut() {
+        if let Some(frame) = alloc.allocate_frame() {
+            let pa = frame.start_address().as_u64();
+            let v = base + pa;
+            unsafe { core::ptr::write_bytes(v.as_mut_ptr::<u8>(), 0, 4096); }
+            return pa;
+        }
+    }
+    crate::serial_println!("[PAGING] No frame for MMIO mapping!");
+    0
+}
+
 pub unsafe fn init_apic(info: &AcpiInfo) {
     serial_println!("[APIC] Inicializando APIC...");
     println!("[APIC] Inicializando APIC...");
