@@ -54,12 +54,13 @@ impl NeuralConsole {
             self.fb.set_pixel(x, 1, r/2, g/2, 15);
         }
 
-        // Status bar
+        // Status bar — fundo ocupa apenas a altura do texto + padding 2px
         let status_y = 4;
         let ch = font::CHAR_H;
         let cw = font::CHAR_W;
+        let sb_h = ch + 3; // altura real da status bar
 
-        self.fb.fill_rect(0, status_y - 1, w, status_y + ch + 2, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
+        self.fb.fill_rect(0, status_y - 1, w, sb_h, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
 
         let llm_str = if llm_busy { "LLM:gen" } else { "LLM:idle" };
         let net_str = if net_online { "NET:on" } else { "NET:off" };
@@ -70,9 +71,9 @@ impl NeuralConsole {
             profile_icon, profile_name, tick, agent_count, mem_str, llm_str, net_str);
         self.draw_text(2, status_y, &status, accent);
 
-        // Conversation area
-        let conv_y = status_y + ch + 4;
-        let max_lines = (h - conv_y - 4) / ch;
+        // Conversation area — comeca logo apos a status bar
+        let conv_y = status_y + sb_h;
+        let max_lines = (h.saturating_sub(conv_y + ch + 2)) / ch;
         let lines: alloc::vec::Vec<(String, (u8,u8,u8))> = self.conv_lines.iter()
             .skip(self.conv_lines.len().saturating_sub(max_lines))
             .map(|line| (line.clone(), self.color_for_line(line)))
@@ -86,7 +87,7 @@ impl NeuralConsole {
         if self.show_prompt {
             let prompt_y = h - ch - 2;
             let prompt_text = alloc::format!("> {}", self.input_buffer);
-            self.fb.fill_rect(0, prompt_y - 1, w, prompt_y + ch + 1, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
+            self.fb.fill_rect(0, prompt_y - 1, w, ch + 3, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
             self.draw_text(2, prompt_y, &prompt_text, fg_user);
         }
 
