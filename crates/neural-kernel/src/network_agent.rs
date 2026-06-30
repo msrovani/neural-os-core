@@ -23,33 +23,17 @@ struct NetState {
 
 static NET_STATE: Mutex<NetState> = Mutex::new(NetState { tick: 0, phase: 0, http: None, target_ip: [0; 4], dns_tries: 0 });
 
-/// Non-async tick function for NetAgent — uses persistent internal state
 pub fn network_agent_tick() {
     let mut s = NET_STATE.lock();
     let tick = s.tick;
     s.tick = tick.wrapping_add(1);
+    let ms = tick * 55;
 
+    // Poll interface
     if let Some(ref mut ns) = *NETSTACK.lock() {
-        ns.poll(tick as i64);
-
-        // Phase 0.5: DHCP auto-config (poll each tick until done)
-        if s.phase == 0 && !ns.dhcp_done {
-            let (done, gw, dns_srv) = ns.dhcp_poll(tick as i64);
-            if done {
-                NET_CONFIG.lock().gateway_ip = gw;
-                NET_CONFIG.lock().dns_ip = dns_srv;
-                NET_CONFIG.lock().configured = true;
-                NET_CONFIG.lock().online = true;
-                log(tick, &alloc::format!("DHCP OK: gw={}.{}.{}.{} dns={}.{}.{}.{}",
-                    gw[0], gw[1], gw[2], gw[3],
-                    dns_srv[0], dns_srv[1], dns_srv[2], dns_srv[3]));
-                s.phase = 1;
-            }
-        }
-
-        // HTTP polling (phase 2+)
+        ns.poll(ms as i64);
         if let Some(ref mut c) = s.http {
-            ns.http_poll(c, tick);
+            ns.http_poll(c, ms as u64);
             match &c.state {
                 HttpState::Done(data) => {
                     let text = core::str::from_utf8(data).unwrap_or("<binary>");
@@ -69,29 +53,30 @@ pub fn network_agent_tick() {
         }
     }
 
-    // Timeout: if DHCP doesn't complete within 200 ticks, use static IP
-    if s.phase == 0 && tick > 200 && !s.http.is_some() {
-        log(tick, "DHCP timeout. Using static IP 10.0.2.15");
-        let mac = NET_CONFIG.lock().mac;
-        if mac != [0; 6] {
-            if NETSTACK.lock().is_none() {
-                init_netstack(mac);
-            }
-            NET_CONFIG.lock().configured = true;
-            NET_CONFIG.lock().online = true;
-            s.phase = 1;
-        }
-    }
-
     match s.phase {
+        // Phase 0: init netstack + apply static IP when MAC is known
         0 => {
-            // Init netstack if NIC ready
-            if tick >= 10 && NET_CONFIG.lock().mac != [0; 6] {
-                init_netstack(NET_CONFIG.lock().mac);
+            if tick >= 10 {
+                let mac = NET_CONFIG.lock().mac;
+                if mac != [0; 6] {
+                    init_netstack(mac);
+                    // Apply static IP on next tick (phase 1)
+                    s.phase = 1;
+                }
             }
         }
+        // Phase 1: set static IP + DNS/HTTP
         1 => {
-            // DNS query after DHCP (up to 3 tries)
+            // Set static IP once
+            if let Some(ref mut ns) = *NETSTACK.lock() {
+                if !ns.has_static_ip {
+                    ns.set_static_ip();
+                    NET_CONFIG.lock().configured = true;
+                    NET_CONFIG.lock().online = true;
+                    log(tick, "Static IP: 10.0.2.15/24 gw=10.0.2.2");
+                }
+            }
+            // DNS
             if tick >= 20 && !s.http.is_some() && s.dns_tries < 3 {
                 if let Some(ref mut ns) = *NETSTACK.lock() {
                     s.dns_tries += 1;
@@ -118,6 +103,7 @@ pub fn network_agent_tick() {
                 }
             }
         }
+        // Health
         _ => {
             if tick % 200 == 0 && NET_CONFIG.lock().configured {
                 log(tick, "Health");

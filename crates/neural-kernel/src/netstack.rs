@@ -7,8 +7,7 @@ use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, Ip
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
 use smoltcp::socket::udp as udp_socket;
 use smoltcp::socket::dhcpv4::{self, Event as DhcpEvent, Socket as DhcpSocket};
-
-use crate::net::{RTL8139, VIRTIO_DEV};
+use crate::net::VIRTIO_DEV;
 
 pub struct PhyToken(pub Vec<u8>);
 
@@ -30,7 +29,9 @@ impl TxToken for PhyToken {
 }
 
 unsafe fn nic_send(data: Vec<u8>) {
-    if let Some(ref mut nic) = *RTL8139.lock() {
+    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
+        nic.send(&data);
+    } else if let Some(ref mut nic) = *crate::net::E1000.lock() {
         nic.send(&data);
     } else if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         nic.send(&data);
@@ -38,7 +39,10 @@ unsafe fn nic_send(data: Vec<u8>) {
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
-    if let Some(ref mut nic) = *RTL8139.lock() {
+    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    if let Some(ref mut nic) = *crate::net::E1000.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
@@ -94,6 +98,7 @@ pub struct NetStack {
     phy: NetPhy,
     dhcp_handle: SocketHandle,
     pub dhcp_done: bool,
+    pub has_static_ip: bool,
 }
 
 fn ip_to_u32(ip: [u8; 4]) -> u32 {
@@ -113,19 +118,31 @@ impl NetStack {
         let dhcp = DhcpSocket::new();
         let dhcp_handle = sockets.add(dhcp);
 
-        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false }
+        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false }
     }
 
-    pub fn poll(&mut self, tick: i64) {
+    /// Configura IP estatico para QEMU user-mode (10.0.2.15/24)
+    pub fn set_static_ip(&mut self) {
+        let ip = Ipv4Address::new(10, 0, 2, 15);
+        let cidr = IpCidr::new(IpAddress::Ipv4(ip), 24);
+        self.iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
+        let gw = Ipv4Address::new(10, 0, 2, 2);
+        self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
+        self.dhcp_done = true;
+        self.has_static_ip = true;
+        crate::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2");
+    }
+
+    pub fn poll(&mut self, now_ms: i64) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-        iface.poll(Instant::from_millis(tick), phy, sockets);
+        iface.poll(Instant::from_millis(now_ms), phy, sockets);
     }
 
-    /// Poll DHCP — must be called each tick until dhcp_done = true
+    /// Poll DHCP - must be called each tick until dhcp_done = true
     /// Returns (gateway_ip, dns_ip) when configured
-    pub fn dhcp_poll(&mut self, tick: i64) -> (bool, [u8; 4], [u8; 4]) {
+    pub fn dhcp_poll(&mut self, now_ms: i64) -> (bool, [u8; 4], [u8; 4]) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, ref mut dhcp_done, .. } = self;
-        iface.poll(Instant::from_millis(tick), phy, sockets);
+        iface.poll(Instant::from_millis(now_ms), phy, sockets);
 
         let dhcp = sockets.get_mut::<DhcpSocket>(self.dhcp_handle);
         if let Some(event) = dhcp.poll() {
