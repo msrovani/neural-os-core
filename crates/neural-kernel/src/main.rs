@@ -71,6 +71,7 @@ mod mmio;
 mod tracer;
 mod orchestrator;
 mod skill_market;
+mod profile;
 
 use lazy_static::lazy_static;
 

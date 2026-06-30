@@ -1,5 +1,6 @@
 //! Raw framebuffer — BGRA32 pixel writer + embedded-graphics DrawTarget.
 //! Suporta UEFI GOP (hardware real) e VirtIO-GPU (QEMU).
+//! Double buffering: todas as operacoes vao para back buffer, swap() copia para tela.
 
 use core::ptr::write_volatile;
 use embedded_graphics::{
@@ -8,6 +9,7 @@ use embedded_graphics::{
     pixelcolor::{Rgb888, RgbColor},
     Pixel,
 };
+use alloc::vec::Vec;
 
 #[derive(Clone, Copy)]
 pub struct GpuDevice {
@@ -54,17 +56,100 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
     }
 }
 
-/// Informações do framebuffer obtidas do bootloader
 #[derive(Clone, Copy)]
 pub struct FramebufferInfo {
     pub addr: usize,
     pub width: usize,
     pub height: usize,
     pub stride: usize,
-    pub bpp: usize, // bytes per pixel (3 for BGR, 4 for BGRA32)
+    pub bpp: usize,
 }
 
-/// Framebuffer BGRA32 — implementa DrawTarget<Rgb888>
+/// Framebuffer com double buffering interno.
+/// Todas as operacoes de pixel vao para o back buffer (Vec<u8> em heap).
+/// swap() copia back → front em um unico loop, eliminando cintilacao.
+pub struct DoubleBuffer {
+    pub info: FramebufferInfo,
+    back: Vec<u8>,
+}
+
+impl DoubleBuffer {
+    pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize) -> Self {
+        let size = height * stride;
+        DoubleBuffer {
+            info: FramebufferInfo { addr, width, height, stride, bpp },
+            back: alloc::vec![0u8; size],
+        }
+    }
+
+    pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
+        if x >= self.info.width || y >= self.info.height { return; }
+        let bpp = self.info.bpp;
+        let offset = y * self.info.stride + x * bpp;
+        if offset + (bpp - 1) >= self.back.len() { return; }
+        self.back[offset + 0] = b;
+        self.back[offset + 1] = g;
+        self.back[offset + 2] = r;
+        if bpp > 3 { self.back[offset + 3] = 0xFF; }
+    }
+
+    pub fn clear(&mut self, r: u8, g: u8, b: u8) {
+        let bpp = self.info.bpp;
+        let stride = self.info.stride;
+        for y in 0..self.info.height {
+            for x in 0..self.info.width {
+                let offset = y * stride + x * bpp;
+                if offset + (bpp - 1) >= self.back.len() { continue; }
+                self.back[offset + 0] = b;
+                self.back[offset + 1] = g;
+                self.back[offset + 2] = r;
+                if bpp > 3 { self.back[offset + 3] = 0xFF; }
+            }
+        }
+    }
+
+    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
+        for dy in 0..h {
+            for dx in 0..w {
+                self.set_pixel(x + dx, y + dy, r, g, b);
+            }
+        }
+    }
+
+    pub fn draw_char(&mut self, x: usize, y: usize, char_data: &[u8], cw: usize, ch: usize, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
+        for dy in 0..ch {
+            for dx in 0..cw {
+                let alpha = char_data[dy * cw + dx];
+                if alpha > 128 {
+                    self.set_pixel(x + dx, y + dy, fg.0, fg.1, fg.2);
+                } else if alpha > 0 {
+                    let bg_alpha = 255 - alpha;
+                    let rr = (fg.0 as u16 * alpha as u16 + bg.0 as u16 * bg_alpha as u16) / 255;
+                    let gg = (fg.1 as u16 * alpha as u16 + bg.1 as u16 * bg_alpha as u16) / 255;
+                    let bb = (fg.2 as u16 * alpha as u16 + bg.2 as u16 * bg_alpha as u16) / 255;
+                    self.set_pixel(x + dx, y + dy, rr as u8, gg as u8, bb as u8);
+                } else {
+                    self.set_pixel(x + dx, y + dy, bg.0, bg.1, bg.2);
+                }
+            }
+        }
+    }
+
+    /// Copia back buffer para o framebuffer fisico (sem cintilacao).
+    /// Otimizado: escreve apenas linhas modificadas se dirty tracking for implementado.
+    pub fn swap(&mut self) {
+        let addr = self.info.addr;
+        let len = self.back.len();
+        unsafe {
+            let ptr = addr as *mut u8;
+            for i in 0..len {
+                write_volatile(ptr.add(i), self.back[i]);
+            }
+        }
+    }
+}
+
+/// Framebuffer BGRA32 (single buffer, legado) — implementa DrawTarget<Rgb888>
 pub struct Framebuffer {
     pub info: FramebufferInfo,
 }
