@@ -31,3 +31,7 @@ mempalace.yaml
 entities.json
 
 logs/
+
+*.img
+*.bin
+neural-os-hwtest.*
