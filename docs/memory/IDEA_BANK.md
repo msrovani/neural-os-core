@@ -42,7 +42,30 @@ Nada é descartado sem registro. Ideias podem ser:
 
 ## Seção 1 — Master Registry (Inventário Completo)
 
-### 1.1. USB
+### 1.1. The Agency — HW Agents + User Agents (IDEA #277)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | 🟡 Futuro | v0.60+ | LLM pergunta "o que tem de HW" → ativa agentes |
+| 277b | Agency: 12 divisões, 30+ agentes especializados | 🟡 Futuro | v0.60+ | Port do The Agency (50K★) para nosso ecossistema |
+| 277c | LLM-aware hardware activation por intent | 🟡 Futuro | v0.60+ | "quero video chamada" → mic+camera+display+net |
+
+### 1.2. GGUF Format Support (IDEA #278)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 278a | Loader GGUF mínimo para kernels no_std (~500 LOC) | 🟡 Futuro | v0.61+ | Modelos maiores (9B+ via GGUF Q4) |
+| 278b | .bitnet v3: header extensível com metadata | 🟡 Futuro | v0.61+ | Alternativa mais leve que GGUF |
+
+### 1.3. SmileyOS Patterns (IDEA #279)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 279a | Shell com 40+ comandos (ls, cat, ps, uptime, theme) | 🟡 Futuro | v0.60+ | Port da UX do SmileyOS (~90K LOC Rust) |
+| 279b | Sistema de temas (5+ cores, hot-swap) | 🟡 Futuro | v0.60+ | theme list + theme <name> |
+| 279c | Filesystem proprio com permissoes | 🟡 Futuro | v0.62+ | Substituir FAT12 mínimo |
+| 279d | Compositor multi-window (dock, menus, drag) | 🟡 Futuro | v0.63+ | DisplayAgent atual é single-tela |
+| 279e | v86 browser demo (WebAssembly x86 emulator) | 🟡 Futuro | v0.64+ | Bootar no navegador |
+| 279f | App SDK via trait + registry (JA TEMOS!) | ✅ Confirmado | — | Nosso Agent trait + AgentRegistry validado |
+
+### 1.4. USB
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
@@ -1144,3 +1167,6 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-06-27 | **Bloco 12 implementado:** x2APIC, Huge Pages, PCI bridges recursivo, Cron Scheduler, MCP Server (#18, #70, #92, #93, #172, #232). | Dev + IDA IA |
 | 2026-06-27 | **Bloco 13 implementado:** Multi-mode Trust, Path Confinement, Mask Secrets, Graduated Enforcement, Posture-Aware, Boot Policy, Security Pipeline, Ed25519 identity (#166, #176, #198, #256-260). | Dev + IDA IA |
 | 2026-06-27 | **Bloco 14 implementado:** Hermes Cognitive completo — Identidade (#180), SDD (#178), ReAct (#190), Transparency (#184), Council (#191), Bitter Pill (#193), Context Fencing (#203), Usage Analyzer (#157), Workflow Predictor (#158), Dynamic Scaling (#160), Reflex Threshold (#139), Self-Scheduler (#161), Config Learner (#163), LLM arch/tier (#135/#136). | Dev + IDA IA |
+| 2026-06-29 | **The Agency port (IDEA #277):** HwRegistry + HwAgent por dispositivo PCI. Agency struct com 12 divisoes, 30+ agentes especializados. LLM-aware: "quero video chamada" → ativa mic+camera+display+net. | Dev + IDA IA |
+| 2026-06-29 | **GGUF loader research (IDEA #278):** Formato GGUF documentado. Portavel (~500 LOC) mas modelos 9B+ exigem heap >5GB. Alternativa: expandir .bitnet v3. | Dev + IDA IA |
+| 2026-06-29 | **SmileyOS patterns (IDEA #279):** 11 padrões identificados — compositor multi-window, filesystem proprio, app SDK via trait, temas, v86 browser demo, shell 40+ comandos. Prioritario: temas + shell expandida. | Dev + IDA IA |
