@@ -1,7 +1,7 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
 
 use crate::{println, serial_println};
-use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
@@ -16,6 +16,7 @@ pub const PIC_2_OFFSET: u8 = 40;
 
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
+pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
 
 lazy_static! {
     static ref PICS: Mutex<ChainedPics> =
@@ -151,6 +152,18 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(stack_frame: InterruptStack
     send_eoi(33);
 }
 
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    use x86_64::instructions::port::Port;
+    // Read 3 mouse bytes from PS/2 port 0x60
+    let mut data_port = Port::<u8>::new(0x60);
+    let b0: u8 = unsafe { data_port.read() };
+    let b1: u8 = unsafe { data_port.read() };
+    let b2: u8 = unsafe { data_port.read() };
+    let packet = (b0 as u32) | ((b1 as u32) << 8) | ((b2 as u32) << 16);
+    LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+    send_eoi(44);
+}
+
 extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStackFrame) {
     serial_println!("[IRQ] Interrupção não tratada ip={:#x}", stack_frame.instruction_pointer.as_u64());
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
@@ -200,6 +213,7 @@ lazy_static! {
         // Hardware IRQs
         idt[32].set_handler_fn(timer_handler);
         idt[33].set_handler_fn(keyboard_interrupt_handler);
+        idt[44].set_handler_fn(mouse_interrupt_handler);
 
         // Demais vetores (34-255)
         for i in 34..=255usize { idt[i].set_handler_fn(unhandled_interrupt_handler); }
