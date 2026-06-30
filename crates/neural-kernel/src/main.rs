@@ -25,6 +25,8 @@ mod apic;
 mod ata;
 mod cortex;
 mod fat;
+mod hw_agents;
+mod agency;
 mod cron;
 mod display;
 mod hermes;
