@@ -11,6 +11,10 @@ use spin::Mutex;
 pub mod ata_agent;
 pub mod dev_fs_agent;
 pub mod proc_fs_agent;
+pub mod inference_fs_agent;
+pub mod hermes_fs_agent;
+pub mod ram_fs_agent;
+pub mod mhi_scheduler;
 
 pub trait FilesystemAgent: Send {
     fn name(&self) -> &str;
@@ -113,4 +117,7 @@ pub fn init_fs_agents() {
     register_fs_agent(Box::new(ata_agent::AtaAgent::new()));
     register_fs_agent(Box::new(dev_fs_agent::DevFsAgent::new()));
     register_fs_agent(Box::new(proc_fs_agent::ProcFsAgent::new()));
+    register_fs_agent(Box::new(inference_fs_agent::InferenceFsAgent::new()));
+    register_fs_agent(Box::new(hermes_fs_agent::HermesFsAgent::new()));
+    register_fs_agent(Box::new(ram_fs_agent::RamFsAgent::new()));
 }

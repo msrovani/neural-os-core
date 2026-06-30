@@ -257,6 +257,9 @@ impl Agent for OptimizerAgent {
             serial_println!("{}", self.analyzer.report());
         }
 
+        // MHI Scheduler: promove/demove tiers por padrao de acesso
+        crate::fs::mhi_scheduler::mhi_scheduler_tick(self.tick_counter);
+
         // #163: Snapshot de config a cada 1000 ticks
         if self.tick_counter % 1000 == 0 {
             self.config_learner.snapshot();
