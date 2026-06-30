@@ -76,6 +76,7 @@ mod profile;
 mod wasm;
 mod tv_dsl;
 mod gguf;
+mod vfs;
 
 use lazy_static::lazy_static;
 
@@ -505,6 +506,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     unsafe { crate::xhci::init_xhci(); }
     let usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
     crate::serial_println!("[DBG9] init done. Starting agents...");
+
+    // Init VFS + mounts
+    {
+        use crate::vfs::VfsRegistry;
+        let vfs = VfsRegistry::new();
+        *crate::vfs::VFS.lock() = Some(vfs);
+        // Mount points are registered at boot by each agent
+        crate::vfs::init_standard_mounts();
+    }
+    let vfs_guard = crate::vfs::VFS.lock();
+    let mcount = vfs_guard.as_ref().map_or(0, |v| v.mount_table().len());
+    crate::serial_println!("[VFS] Init OK. {} mounts.", mcount);
 
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
