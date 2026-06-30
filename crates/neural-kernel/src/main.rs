@@ -285,7 +285,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     }
     {
         let mut serial = crate::serial::SERIAL.lock();
-        let _ = write!(serial, "[PANIC] {}", info);
+        if let Some(ref mut s) = *serial { let _ = write!(s, "[PANIC] {}", info); }
     }
 
     // Tentative path: SelfHeal + LLM (pode falhar se OOM)
@@ -325,29 +325,44 @@ const CONFIG: bootloader_api::BootloaderConfig = {
 };
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'K', options(nostack, preserves_flags)); }
-    
-    // DEBUG: dump boot info
-    let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
-    unsafe {
-        core::arch::asm!("mov dx, 0x3F8; mov al, 0x30; out dx, al"); // '0'
-        // Write pm_offset as ASCII hex digits
-        let mut v = pm_offset;
-        for _ in 0..16 {
-            let hex = (v >> 60) as u8;
-            let c = if hex < 10 { hex + b'0' } else { hex - 10 + b'A' };
-            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") c, options(nostack, preserves_flags));
-            v <<= 4;
-        }
-        core::arch::asm!("mov dx, 0x3F8; mov al, 0x0D; out dx, al"); // \r
-        core::arch::asm!("mov dx, 0x3F8; mov al, 0x0A; out dx, al"); // \n
+    // Probe serial port (sem lazy_static, funciona antes do heap)
+    let serial_exists = unsafe { crate::serial::probe_port(0x3F8) };
+    if serial_exists {
+        unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'K', options(nostack, preserves_flags)); }
     }
     
+    let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
     vga_buffer::init(pm_offset);
-    crate::serial_println!("[DBG0] pm_offset={:#x}", pm_offset);
+    
+    // Se nao tem serial, tenta escrever no framebuffer (bootloader ja mapeou)
+    if !serial_exists {
+        if let Some(fb) = boot_info.framebuffer.as_ref() {
+            let info = fb.info();
+            let bpp = match info.pixel_format { _ => 3 };
+            let stride = info.stride as usize * bpp;
+            let buf = fb.buffer();
+            if !buf.is_empty() {
+                // Escreve "BOOT" no canto superior esquerdo
+                let msg = b"[BOOT] Kernel started";
+                let addr = buf.as_ptr() as usize;
+                for (i, &b) in msg.iter().enumerate() {
+                    for dy in 0..16 {
+                        let off = dy * stride + i * 8 * 4;
+                        if off + 3 < buf.len() {
+                            unsafe { core::ptr::write_volatile((addr + off) as *mut u8, 0xFFu8); } // B
+                            unsafe { core::ptr::write_volatile((addr + off + 1) as *mut u8, 0xFFu8); } // G
+                            unsafe { core::ptr::write_volatile((addr + off + 2) as *mut u8, 0xFFu8); } // R
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    crate::serial_println!("[BOOT] Kernel started. Serial:{} pm_offset={:#x}", serial_exists, pm_offset);
     
     interrupts::init_idt();
-    crate::serial_println!("[DBG1] IDT loaded");
+    crate::serial_println!("[BOOT] IDT loaded");
     
     let mut frame_allocator = memory::BitmapFrameAllocator::empty();
     frame_allocator.init(&boot_info.memory_regions);

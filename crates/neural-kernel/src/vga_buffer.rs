@@ -82,11 +82,73 @@ pub fn init(physical_memory_offset: u64) {
 }
 
 pub fn _print(args: fmt::Arguments) {
+    // Tenta framebuffer primeiro
+    if fb_print(args) { return; }
+    // Fallback: VGA text mode
     use fmt::Write;
-    // Se framebuffer estiver ativo, nao escreve no VGA text mode
-    if crate::display::fb::GPU.lock().is_some() { return; }
     let mut w = WRITER.lock();
     if let Some(ref mut w) = *w { w.write_fmt(args).unwrap(); }
+}
+
+/// Escreve no framebuffer. Retorna true se conseguiu.
+pub fn fb_print(args: fmt::Arguments) -> bool {
+    use fmt::Write;
+    let gpu = crate::display::fb::GPU.lock();
+    if let Some(ref fb_gpu) = *gpu {
+        let w = fb_gpu.fb_width as usize;
+        let h = fb_gpu.fb_height as usize;
+        let stride = fb_gpu.fb_stride as usize;
+        let addr = fb_gpu.fb_addr as usize;
+        if addr > 0 && w > 0 && h > 0 {
+            let mut buf = [0u8; 128];
+            let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
+            let n = buf.iter().position(|&b| b == 0).unwrap_or(128);
+            if n > 0 {
+                let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
+                fb_write_text(addr, w, h, stride, text);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Escreve texto no framebuffer (fallback quando serial inexistente)
+fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, text: &str) {
+    static mut LINE: usize = 0;
+    let ch = 16usize; // font height
+    let cw = 8usize;  // font width
+    let max_lines = height / ch;
+    let line = unsafe { LINE = (LINE + 1) % max_lines; LINE };
+    let y = line * ch;
+    let mut x = 2usize;
+    for c in text.chars() {
+        if x + cw > width { x = 2; }
+        if let Some(bitmap) = crate::display::font::get_char_bitmap(c) {
+            for dy in 0..ch.min(16) {
+                let row = bitmap[dy];
+                for dx in 0..cw.min(8) {
+                    let off = (y + dy) * stride + (x + dx) * 4;
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        unsafe { core::ptr::write_volatile((fb_addr + off) as *mut u8, 0xCC); }
+                        unsafe { core::ptr::write_volatile((fb_addr + off + 1) as *mut u8, 0xCC); }
+                        unsafe { core::ptr::write_volatile((fb_addr + off + 2) as *mut u8, 0xFF); }
+                    }
+                }
+            }
+        }
+        x += cw;
+    }
+}
+
+struct LogBuf<'a>(&'a mut [u8], usize);
+impl<'a> fmt::Write for LogBuf<'a> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let n = s.as_bytes().len().min(self.0.len().saturating_sub(self.1));
+        self.0[self.1..self.1 + n].copy_from_slice(&s.as_bytes()[..n]);
+        self.1 += n;
+        Ok(())
+    }
 }
 
 #[macro_export] macro_rules! print { ($($arg:tt)*) => ($crate::vga_buffer::_print(format_args!($($arg)*))); }
