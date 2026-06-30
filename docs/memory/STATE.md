@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.62.1 🏆
+#   PLANO DIRETOR — neural-os-core v0.62.2 🏆
 #   VFS + MHI BRIDGE + STORAGE AGENTS (ATA, DEV, PROC)
 #   8 VFS mounts, ARC-style tiering, 96 arquivos Rust
 # ════════════════════════════════════════════════════════
