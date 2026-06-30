@@ -199,11 +199,11 @@
 |---|---|---|---|---|
 | 60.1 | Double buffer + Prompt | ~200 | 🔴 Crítica | ✅ |
 | 60.2 | Security Pipeline + Path | ~270 | 🟡 Alta | ✅ |
-| 60.3 | e1000 + USB-MSC BOT | ~700 | 🟡 Alta | 🟡 Médio |
-| 60.4 | WHPX + AVX2 BitNet | ~160 | 🟢 Normal | 🟡 Médio |
-| 60.5 | Model Training 100M/1.5B | ~300 Python | 🟢 Normal | ⚫ Bloqueado |
-| 60.6 | GGUF + Heap 5GB | ~550 | 🟢 Normal | 🔴 Pesado |
-| 60.7 | WASM stub + TV-DSL | ~350 | 🟢 Normal | 🟡 Médio |
+| 60.3 | e1000 + USB-MSC BOT | ~700 | 🟡 Alta | ✅ |
+| 60.4 | WHPX + AVX2 BitNet | ~160 | 🟢 Normal | ✅ |
+| 60.5 | Model Training 100M/1.5B | ~300 Python | 🟢 Normal | ⚫ GPU |
+| 60.6 | GGUF + Heap 5GB | ~550 | 🟢 Normal | ✅ |
+| 60.7 | WASM stub + TV-DSL | ~350 | 🟢 Normal | ✅ |
 | 60.8 | MHI LLM-Otimizado | ~350 | 🟡 Alta | ✅ |
 | **60.9** | **UserProfile System** | **~260** | **🟡 Alta** | **✅** |
-| **Total** | **17 items** | **~3.140 LOC** | | **6 ✅ / 4 🟡 / 2 🔴 / 1 ⚫** |
+| **Total** | **17 items** | **~3.140 LOC** | | **16 ✅ / 1 ⚫** |
