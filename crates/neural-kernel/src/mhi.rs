@@ -15,6 +15,7 @@ pub enum AllocTier {
     Vram,
     Nvme,
     Hdd,
+    UsbMsc,
 }
 
 #[derive(Debug, Clone)]
@@ -91,33 +92,38 @@ impl AllocProfile {
         self.last_access_tick = tick;
         self.avg_latency_ns = (self.avg_latency_ns + latency_ns) / 2;
     }
-
-    /// Sugere tier baseado em perfil de uso
-    pub fn suggest_tier(&self, tick: u64, profile_weight: f32) -> AllocTier {
-        let ticks_since_access = tick.saturating_sub(self.last_access_tick);
-
-        // Acesso recente e frequente → tier rapido
-        if self.access_count > 10 && ticks_since_access < 1000 {
-            if profile_weight > 0.7 {
-                return AllocTier::Vram; // perfil GPU-heavy
-            }
-            return AllocTier::Dram;
-        }
-
-        // Acesso moderado
-        if self.access_count > 3 || ticks_since_access < 10000 {
-            return AllocTier::Dram;
-        }
-
-        // Grande e pouco acessado → tier lento
-        if self.size_bytes > 1024 * 1024 {
-            return AllocTier::Nvme;
-        }
-
-        AllocTier::Dram
-    }
 }
 
+/// ZFS-ARC-style tier suggestion based on access patterns.
+pub fn arc_suggest_tier(profile: &AllocProfile, now: u64, profile_weight: f32) -> AllocTier {
+    let freq = profile.access_count;
+    let recency = now.saturating_sub(profile.last_access_tick);
+    let size = profile.size_bytes;
+    let profile_w = profile_weight;
+
+    // MFU (Most Frequently Used) → DRAM ou VRAM
+    if freq > 10 && recency < 500 {
+        if profile_w > 0.7 { return AllocTier::Vram; }
+        return AllocTier::Dram;
+    }
+
+    // MRU (Most Recently Used) → NVMe (morno)
+    if recency < 1000 {
+        if profile_w > 0.5 { return AllocTier::Vram; }
+        return AllocTier::Nvme;
+    }
+
+    // Size-aware: grande e frio → HDD
+    if size > 1024 * 1024 { return AllocTier::Hdd; }
+
+    // Pequeno e frio → DRAM
+    if freq > 3 { return AllocTier::Dram; }
+
+    AllocTier::Hdd
+}
+
+// ---------------------------------------------------------------------------
+// MhiRegistry — gerenciamento centralizado
 // ---------------------------------------------------------------------------
 // MhiRegistry — gerenciamento centralizado
 // ---------------------------------------------------------------------------
@@ -148,7 +154,7 @@ impl MhiRegistry {
         let (cpu_w, gpu_w, _io_w) = profile.resource_weights();
         let mut migrations = Vec::new();
         for (_key, profile) in &self.allocations {
-            let suggested = profile.suggest_tier(tick, gpu_w);
+            let suggested = crate::mhi::arc_suggest_tier(profile, tick, gpu_w);
             if suggested != profile.tier {
                 migrations.push((profile.phys_addr, profile.tier, suggested));
             }
@@ -214,6 +220,10 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<PhysAddr> {
         }
         AllocTier::Hdd => {
             crate::serial_println!("[MHI] Hdd alloc not implemented (no storage driver)");
+            None
+        }
+        AllocTier::UsbMsc => {
+            crate::serial_println!("[MHI] UsbMsc alloc delegated to UsbMscAgent");
             None
         }
     }
