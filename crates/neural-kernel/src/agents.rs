@@ -308,6 +308,7 @@ const HERMES_MANIFEST: AgentManifest = AgentManifest {
 pub struct HermesAgent {
     user_receiver: Receiver,
     llm_receiver: Receiver,
+    security_receiver: Receiver,
     cortex: crate::cortex::Cortex,
     state: HermesState,
     status_skill: String,
@@ -324,6 +325,7 @@ impl HermesAgent {
         HermesAgent {
             user_receiver: EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT),
             llm_receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE),
+            security_receiver: EVENT_BUS.subscribe("SECURITY_ALERT"),
             cortex: crate::cortex::Cortex::new(),
             state: HermesState::Idle,
             status_skill: String::from("system_status"),
@@ -429,6 +431,17 @@ impl Agent for HermesAgent {
             }
         }
 
+        // Check security alerts
+        if let Some(event) = self.security_receiver.try_receive() {
+            let text = core::str::from_utf8(&event.payload).unwrap_or("");
+            serial_println!("[SECURITY] {}", text);
+            // Republish as Hermes response (for display)
+            let _ = EVENT_BUS.publish(Event {
+                id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                payload: text.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
+            });
+        }
+
         // Handle user input (if not awaiting LLM or responded)
         if let Some(event) = self.user_receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
@@ -454,6 +467,7 @@ impl Agent for HermesAgent {
                 hermes::Command::AddSkill(_, _) => "AddSkill",
                 hermes::Command::RmSkill(_) => "RmSkill",
                 hermes::Command::ReloadSkills => "ReloadSkills",
+                hermes::Command::Profile => "Profile",
                 hermes::Command::Chat(_) => "Chat",
             };
             let intent_info = crate::hermes::IntentInfo {
@@ -615,6 +629,36 @@ impl Agent for HermesAgent {
                     let mut storage = SKILL_STORAGE.lock();
                     *storage = crate::skill_loader::load_embedded_skills();
                     alloc::format!("Skills recarregadas: {} skills.", storage.skills.len())
+                }
+                hermes::Command::Profile => {
+                    let profile = crate::profile::ProfileManager::get();
+                    let profiles = crate::profile::ProfileManager::list();
+                    let parts: alloc::vec::Vec<&str> = text.splitn(2, |c: char| c.is_whitespace()).collect();
+                    let change_msg = if parts.len() > 1 {
+                        let desired = parts[1].trim();
+                        let mut found_name = String::new();
+                        for (p, _desc) in &profiles {
+                            if p.name().eq_ignore_ascii_case(desired) {
+                                crate::profile::ProfileManager::set(*p);
+                                found_name = alloc::format!("{} {}", p.icon(), p.name());
+                                break;
+                            }
+                        }
+                        if found_name.is_empty() {
+                            alloc::format!("Perfil '{}' nao encontrado.\n\n", desired)
+                        } else {
+                            alloc::format!("Perfil alterado para: {}\n", found_name)
+                        }
+                    } else { String::new() };
+
+                    let mut msg = change_msg;
+                    msg.push_str(&alloc::format!("Perfil atual: {} {}\n\nPerfis disponiveis:\n", profile.icon(), profile.name()));
+                    for (p, desc) in &profiles {
+                        let marker = if *p == profile { ">" } else { " " };
+                        msg.push_str(&alloc::format!("{} {} {} — {}\n", marker, p.icon(), p.name(), desc));
+                    }
+                    msg.push_str("\nUse /profile <nome> para alterar.");
+                    msg
                 }
                 hermes::Command::Chat(ref msg) => {
                     let intent = self.cortex.think(msg);

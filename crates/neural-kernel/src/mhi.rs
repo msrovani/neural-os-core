@@ -1,3 +1,9 @@
+//! Memory Hierarchy Index — alocacao inteligente por tier.
+//! Suporta DRAM, VRAM (stub), NVMe (stub), HDD (stub).
+//! Perfil de uso por AllocProfile: acesso, latencia, tamanho.
+//! Auto-migracao entre tiers baseada em padroes de uso.
+
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use x86_64::PhysAddr;
@@ -51,6 +57,124 @@ fn estimate_total_ram() -> u64 {
     guard.as_ref().map_or(0, |a| a.usable_memory_bytes())
 }
 
+// ---------------------------------------------------------------------------
+// AllocProfile — metadados por alocacao
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct AllocProfile {
+    pub phys_addr: PhysAddr,
+    pub size_bytes: usize,
+    pub tier: AllocTier,
+    pub access_count: u64,
+    pub last_access_tick: u64,
+    pub avg_latency_ns: u32,
+    pub owner: String,
+}
+
+impl AllocProfile {
+    pub fn new(addr: PhysAddr, size: usize, tier: AllocTier, owner: &str) -> Self {
+        AllocProfile {
+            phys_addr: addr,
+            size_bytes: size,
+            tier,
+            access_count: 0,
+            last_access_tick: 0,
+            avg_latency_ns: 0,
+            owner: String::from(owner),
+        }
+    }
+
+    /// Registra um acesso e atualiza metadados
+    pub fn record_access(&mut self, tick: u64, latency_ns: u32) {
+        self.access_count += 1;
+        self.last_access_tick = tick;
+        self.avg_latency_ns = (self.avg_latency_ns + latency_ns) / 2;
+    }
+
+    /// Sugere tier baseado em perfil de uso
+    pub fn suggest_tier(&self, tick: u64, profile_weight: f32) -> AllocTier {
+        let ticks_since_access = tick.saturating_sub(self.last_access_tick);
+
+        // Acesso recente e frequente → tier rapido
+        if self.access_count > 10 && ticks_since_access < 1000 {
+            if profile_weight > 0.7 {
+                return AllocTier::Vram; // perfil GPU-heavy
+            }
+            return AllocTier::Dram;
+        }
+
+        // Acesso moderado
+        if self.access_count > 3 || ticks_since_access < 10000 {
+            return AllocTier::Dram;
+        }
+
+        // Grande e pouco acessado → tier lento
+        if self.size_bytes > 1024 * 1024 {
+            return AllocTier::Nvme;
+        }
+
+        AllocTier::Dram
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MhiRegistry — gerenciamento centralizado
+// ---------------------------------------------------------------------------
+
+pub struct MhiRegistry {
+    allocations: BTreeMap<u64, AllocProfile>, // PhysAddr.as_u64() -> profile
+    next_id: u64,
+}
+
+impl MhiRegistry {
+    pub const fn new() -> Self {
+        MhiRegistry { allocations: BTreeMap::new(), next_id: 0 }
+    }
+
+    pub fn register(&mut self, addr: PhysAddr, size: usize, tier: AllocTier, owner: &str) {
+        let profile = AllocProfile::new(addr, size, tier, owner);
+        self.allocations.insert(addr.as_u64(), profile);
+    }
+
+    pub fn record_access(&mut self, addr: PhysAddr, tick: u64, latency_ns: u32) {
+        if let Some(profile) = self.allocations.get_mut(&addr.as_u64()) {
+            profile.record_access(tick, latency_ns);
+        }
+    }
+
+    pub fn suggest_migration(&self, tick: u64) -> Vec<(PhysAddr, AllocTier, AllocTier)> {
+        let profile = crate::profile::ProfileManager::get();
+        let (cpu_w, gpu_w, _io_w) = profile.resource_weights();
+        let mut migrations = Vec::new();
+        for (_key, profile) in &self.allocations {
+            let suggested = profile.suggest_tier(tick, gpu_w);
+            if suggested != profile.tier {
+                migrations.push((profile.phys_addr, profile.tier, suggested));
+            }
+        }
+        migrations
+    }
+
+    pub fn len(&self) -> usize {
+        self.allocations.len()
+    }
+
+    /// Resumo para display
+    pub fn summary(&self) -> String {
+        let mut s = String::from("MHI Registry:\n");
+        for (_key, p) in &self.allocations {
+            s.push_str(&alloc::format!("  {:?} @{:x} size={} acessos={} dono={}\n",
+                p.tier, p.phys_addr.as_u64(), p.size_bytes, p.access_count, p.owner));
+        }
+        s
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Alloc by tier
+// ---------------------------------------------------------------------------
+
 pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<PhysAddr> {
     match tier {
         AllocTier::Dram => {
@@ -66,13 +190,11 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<PhysAddr> {
             if let Some(frame) = contiguous {
                 return Some(frame.start_address());
             }
-            // Fallback: allocate non-contiguous frames, free on failure
             let mut frames = alloc::vec::Vec::new();
             for _ in 0..num_frames {
                 match alloc.allocate_frame() {
                     Some(f) => frames.push(f),
                     None => {
-                        // Free already-allocated frames
                         for f in frames {
                             unsafe { alloc.deallocate_frame(f); }
                         }
@@ -96,3 +218,8 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<PhysAddr> {
         }
     }
 }
+
+// Global registry
+use spin::Mutex;
+
+pub static MHI_REGISTRY: Mutex<MhiRegistry> = Mutex::new(MhiRegistry::new());

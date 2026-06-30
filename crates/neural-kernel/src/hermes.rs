@@ -282,10 +282,11 @@ pub fn check_bitter_pill(command: &str) -> Option<&'static str> {
 // Command parsing
 // ---------------------------------------------------------------------------
 
-const VOCAB: [&str; 16] = [
+const VOCAB: [&str; 17] = [
     "status", "memory", "ram", "cpu", "system",
     "info", "show", "echo", "reverse", "hello",
     "hi", "help", "test", "run", "what", "who",
+    "profile",
 ];
 
 #[derive(Debug)]
@@ -294,6 +295,7 @@ pub enum Command {
     Fetch(String), Ping(String), TrustAllow(u64, String), TrustDeny(u64, String),
     Usage, Conversation, Chat(String),
     ShowSkills, AddSkill(String, String), RmSkill(String), ReloadSkills,
+    Profile,
 }
 
 pub fn parse_command(line: &str) -> Command {
@@ -356,6 +358,9 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("reload_skills") || name.eq_ignore_ascii_case("reset_skills") {
             return Command::ReloadSkills;
+        }
+        if name.eq_ignore_ascii_case("profile") || name.eq_ignore_ascii_case("perfil") {
+            return Command::Profile;
         }
     }
     Command::Chat(trimmed.to_string())
