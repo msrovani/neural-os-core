@@ -8,6 +8,11 @@ static ALLOCATOR: LockedHeap = LockedHeap::empty();
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 16 * 1024 * 1024;
 
+/// Para modelos GGUF grandes (>1GB), expandir HEAP_SIZE para 5GB+.
+/// QEMU precisa de `-m 6G` no minimo.
+/// Ativar via cargo feature `gguf-large` ou manualmente.
+// pub const GGUF_HEAP_SIZE: usize = 5 * 1024 * 1024 * 1024; // 5 GB
+
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
 pub const LARGE_HEAP_START: usize = HEAP_START + SLAB_SIZE;
