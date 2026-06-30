@@ -325,19 +325,40 @@ const CONFIG: bootloader_api::BootloaderConfig = {
 };
 
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    // Debug: write to serial immediately
     unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'K', options(nostack, preserves_flags)); }
     
-    vga_buffer::init(boot_info.physical_memory_offset.into_option().unwrap_or(0));
+    // DEBUG: dump boot info
+    let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+    unsafe {
+        core::arch::asm!("mov dx, 0x3F8; mov al, 0x30; out dx, al"); // '0'
+        // Write pm_offset as ASCII hex digits
+        let mut v = pm_offset;
+        for _ in 0..16 {
+            let hex = (v >> 60) as u8;
+            let c = if hex < 10 { hex + b'0' } else { hex - 10 + b'A' };
+            core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") c, options(nostack, preserves_flags));
+            v <<= 4;
+        }
+        core::arch::asm!("mov dx, 0x3F8; mov al, 0x0D; out dx, al"); // \r
+        core::arch::asm!("mov dx, 0x3F8; mov al, 0x0A; out dx, al"); // \n
+    }
+    
+    vga_buffer::init(pm_offset);
+    crate::serial_println!("[DBG0] pm_offset={:#x}", pm_offset);
+    
     interrupts::init_idt();
-
+    crate::serial_println!("[DBG1] IDT loaded");
+    
     let mut frame_allocator = memory::BitmapFrameAllocator::empty();
     frame_allocator.init(&boot_info.memory_regions);
+    crate::serial_println!("[DBG2] Memory regions init: {} regions", boot_info.memory_regions.len());
 
     {
-        let mut mapper = unsafe { memory::init_memory(boot_info.physical_memory_offset.into_option().unwrap_or(0)) };
+        let mut mapper = unsafe { memory::init_memory(pm_offset) };
+        crate::serial_println!("[DBG3] init_memory OK");
         allocator::init_heap(&mut mapper, &mut frame_allocator)
             .expect("heap initialization failed");
+        crate::serial_println!("[DBG4] heap init OK");
     }
 
     simd::enable_simd();
@@ -439,33 +460,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         ram_tensor[0], ram_tensor[1]);
 
     memory::init_global_allocator(frame_allocator);
-
+    crate::serial_println!("[DBG5] global alloc init OK");
+    
     let slab_metrics = { let s = crate::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
-    serial_println!("[SLAB] Alocador slab operacional. Allocs: {}, Deallocs: {}",
-        slab_metrics.0, slab_metrics.1);
-
-    // Boot phase agents — cada um é um Agent Oneshot que executa init
-    // Tenta detectar framebuffer UEFI (hardware real)
+    crate::serial_println!("[DBG6] slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
+    
+    // Boot phase agents
     display::fb::probe_uefi_framebuffer(boot_info);
-
-    // Probe ATA (SDHC interno) para escrita de log
+    crate::serial_println!("[DBG7] framebuffer probe done");
+    
     let ata = unsafe { ata::AtaDriver::probe() };
-    if ata.is_some() {
-        serial_println!("[ATA] Controladora ATA/SATA detectada para escrita de log.");
-        serial_println!("[ATA] Boot log sera escrito no setor LBA {} do SDHC.", LOG_SECTOR);
-    } else {
-        serial_println!("[ATA] Nenhuma controladora ATA via PCI. Log via serial apenas.");
-    }
     *ATA_DRIVER.lock() = ata;
-
-    // Inicializa xHCI USB (teclado HID + mass storage)
+    crate::serial_println!("[DBG8] ATA probe done");
+    
     unsafe { crate::xhci::init_xhci(); }
-
-    // Probes USB Mass Storage (fallback para ATA)
     let usb_msc = crate::usb_msc::UsbMassStorage::probe();
-    if usb_msc.is_some() {
-        serial_println!("[USB-MSC] Pendente: driver BOT para escrita de log.");
-    }
+    crate::serial_println!("[DBG9] init done. Starting agents...");
 
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
