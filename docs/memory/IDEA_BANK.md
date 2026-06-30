@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-29 (Ecosystem Batch 3 — 12 repos portados, #280, 348 totais)  
+**Última atualização:** 2026-06-30 (Sprint 62 — VFS + MHI Bridge, #281-#282, 360 totais)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -80,6 +80,26 @@ Nada é descartado sem registro. Ideias podem ser:
 | 280j | browser-use: HwRegistry device tree (ja tinhamos!) | ✅ Confirmado | v0.59.1 | HW context para LLM |
 | 280k | micro/go-micro: endpoints discovery (ja tinhamos!) | ✅ Confirmado | v0.55.0 | AgentManifest extensivel |
 | 280l | pydantic-ai: SkillManifest derive macro (conceitual) | 🟡 Futuro | v0.61+ | Proc-macro para manifests |
+
+### 1.6. VFS + MHI Bridge (IDEA #281)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 281a | VfsRegistry: mount table + resolve + lookup | ✅ v0.62.0 | v0.62.0 | Foundation para todo FS |
+| 281b | VfsNode: arvore de diretorios com FileMode | ✅ v0.62.0 | v0.62.0 | Mount points + virtual files |
+| 281c | Path utils: canonicalize, split, join, parent | ✅ v0.62.0 | v0.62.0 | Processamento de paths |
+| 281d | MHI ARC-style suggest_tier (ZFS-inspired) | ✅ v0.62.0 | v0.62.0 | MFU→Dram, MRU→Nvme, cold→Hdd |
+
+### 1.7. Storage Agents (IDEA #282)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 282a | FilesystemAgent trait + VFS bridge | ✅ v0.62.1 | v0.62.1 | Interface padrao FS agents |
+| 282b | AtaAgent: /mnt/hdd/ + block R/W | ✅ v0.62.1 | v0.62.1 | ATA via DriverAgent |
+| 282c | DevFsAgent: /dev/pci/ + NIC + USB + mem | ✅ v0.62.1 | v0.62.1 | Hardware como arquivos |
+| 282d | ProcFsAgent: /proc/agent/mem/uptime/cpu | ✅ v0.62.1 | v0.62.1 | Sistema como arquivos |
+| 282e | InferenceFsAgent: /inference/ com LLM | 🟡 Futuro | v0.62.2+ | LLM gera arquivos |
+| 282f | HermesFsAgent: /chat/send + /chat/history | 🟡 Futuro | v0.62.2+ | Chat como FS |
+| 282g | RamFsAgent: /mnt/ram/ cache DRAM | 🟡 Futuro | v0.62.2+ | Cache tiers inferiores |
+| 282h | Auto tier migration via MhiScheduler | 🟡 Futuro | v0.62.2+ | Promove/demove por acesso |
 
 ### 1.5. USB
 
@@ -1187,3 +1207,5 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-06-29 | **The Agency port (IDEA #277):** HwRegistry + HwAgent por dispositivo PCI. Agency struct com 12 divisoes, 30+ agentes especializados. LLM-aware: "quero video chamada" → ativa mic+camera+display+net. | Dev + IDA IA |
 | 2026-06-29 | **GGUF loader research (IDEA #278):** Formato GGUF documentado. Portavel (~500 LOC) mas modelos 9B+ exigem heap >5GB. Alternativa: expandir .bitnet v3. | Dev + IDA IA |
 | 2026-06-29 | **SmileyOS patterns (IDEA #279):** 11 padrões identificados — compositor multi-window, filesystem proprio, app SDK via trait, temas, v86 browser demo, shell 40+ comandos. Prioritario: temas + shell expandida. | Dev + IDA IA |
+| 2026-06-30 | **VFS Layer + MHI ARC (IDEA #281):** VfsRegistry com mount table, resolve, lookup. MHI arc_suggest_tier() ZFS-inspired (MFU→Dram, MRU→Nvme, cold→Hdd). 8 mounts padrao. Path utils. | Dev + IDA IA |
+| 2026-06-30 | **Storage Agents (IDEA #282):** FilesystemAgent trait. AtaAgent (/mnt/hdd/), DevFsAgent (/dev/), ProcFsAgent (/proc/). VFS bridge: read_vfs/write_vfs/list_vfs. | Dev + IDA IA |

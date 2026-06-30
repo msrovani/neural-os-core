@@ -1,8 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.59.2 🏆
-#   ECOSYSTEM BATCH 3 — 12 REPOS PORTADOS, 173 AGENTES
-#   Bootloader 0.11 + Framebuffer 1280×720
-#   HW Agents + The Agency (147 agents)
+#   PLANO DIRETOR — neural-os-core v0.62.1 🏆
+#   VFS + MHI BRIDGE + STORAGE AGENTS (ATA, DEV, PROC)
+#   8 VFS mounts, ARC-style tiering, 96 arquivos Rust
 # ════════════════════════════════════════════════════════
 
 ## 🏆 Marcos Acumulados
@@ -12,66 +11,66 @@
 - **v0.58.0** — 🏆 Boot em Hardware Real (SDHC USB) + xHCI + FAT12 + ATA + CAD
 - **v0.59.0** — 🏆 Bootloader 0.11.15 + Framebuffer 1280×720 UEFI
 - **v0.59.1** — The Agency (147 agents) + HW Agents
-- **v0.59.2** — Ecosystem Batch 3: 12 repos portados (redox, Theseus, Embassy, Tock, Swarm, RagaAI, Swarms, SuperAGI)
+- **v0.59.2** — Ecosystem Batch 3: 12 repos portados
+- **v0.60.0** — Double buffer + Security Pipeline + MHI + UserProfile
+- **v0.60.1** — WASM+TV-DSL+AVX2+e1000+Heap
+- **v0.60.2** — WHPX+USB-MSC BOT+GGUF loader
+- **v0.60.3** — e1000 fix (map_page_uc + mmio_virt)
+- **v0.60.4** — RTL8139 TX fix (TSD shift + iPXE sync)
+- **v0.60.5** — RTL8139 early init 32KB RX
+- **v0.62.0** — 🏆 **VFS Layer + MHI ARC-style tier suggestion**
+- **v0.62.1** — **Storage Agents: AtaAgent, DevFsAgent, ProcFsAgent**
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
-173+ agentes: 20 nativos + 147 The Agency + ~6 HW agents.
+173+ agentes: 20 nativos + 147 The Agency + ~6 HW + 3 FS.
 Bootloader 0.11.15 com `bootloader_api`. Framebuffer 1280×720.
 Build via `cargo build --release` + `tools/build_image.py`.
 
-## Agent Landscape (173+ agentes — v0.59.2)
-| Código | Agente | Tipo | Função |
-|---|---|---|---|
-| A-001 | SystemAgent | System (Oneshot) | Init, EchoSkill |
-| A-002 | MonitorAgent | System (Oneshot) | SYSTEM_READY |
-| A-003 | HwBridgeAgent | Router (Continuous) | Scancode IRQ bridge |
-| A-004 | NetAgent | Network (Continuous) | smoltcp poll (RTL8139) |
-| A-005 | InputAgent | Console (Continuous) | Keyboard (PS/2 + USB xHCI) |
-| A-006 | CortexAgent | Inference (Continuous) | LLM transformer + Medusa speculative |
-| A-007 | HermesAgent | Router (Continuous) | Intent routing + ReAct + Council + Handoff |
-| A-008 | DisplayAgent | Console (Continuous) | Framebuffer NeuralConsole 1280×720 |
-| A-009 | NetDriverAgent | Driver (Oneshot) | RTL8139 + VirtIO-net |
-| A-010 | UsbDriverAgent | Driver (Oneshot) | xHCI init |
-| A-011 | BootSelfHealAgent | System (Oneshot) | SelfHeal init |
-| A-012 | BootTrustAgent | System (Oneshot) | TrustCache Ed25519 |
-| A-013 | PlatformAgent | System (Oneshot) | PCI+ACPI+APIC+SMP+x2APIC |
-| A-014 | MemoryAgent | System (Oneshot) | MHI + Arch |
-| A-015 | GpuDriverAgent | Driver (Oneshot) | VirtIO-GPU + framebuffer |
-| A-016 | HwDetectAgent | System (Oneshot) | HwIdentifySkill |
-| A-017 | CronAgent | System (Continuous) | Cron Scheduler |
-| A-018 | SecurityAgent | System (Continuous) | Security Pipeline |
-| A-019 | SafetyAgent | System (Continuous) | Asimov 4 Laws |
-| A-020 | OptimizerAgent | System (Continuous) | Self-Optimization |
-| A-021+ | The Agency (147) | Specialist (Passive) | 12 divisões, por demanda |
-| A-168+ | HW Agents (~6) | HwSpecialist (Passive) | Por dispositivo PCI, activate_for_intent |
+## VFS Architecture
+```
+VFS path → MHI tier → StorageAgent → Block device
+    ↑
+MHI Registry (AllocProfile + arc_suggest_tier + auto-migration)
+```
 
-## Blocos Completos (22 blocos, 59 sprints)
-| Bloco | Sprints | v | Foco |
+| Mount | Agent | Tier | Driver |
 |---|---|---|---|
-| 1-14 | 1-51 | 0.1-0.55 | Todo desenvolvimento ate Hermes Cognitive |
-| 15 | 52-54 | 0.57 | Memory Systems (Dedup, Privacy, Atkinson-Shiffrin) |
-| 16 | 55 | 0.57 | Ecosystem Integration (SuperContext, SkillIndex) |
-| 17 | 56 | 0.57 | Cortex LLM v2 (Sampling, Codebook VQ, Medusa) |
-| 18 | 57 | 0.56 | Ecosystem Batch (Pipeline, DAG, Dashboard) |
-| **19. HW Real** | **58** | **0.58** | **Boot HW real, xHCI, FAT12, ATA, CAD** |
-| **20. Bootloader 0.11** | **59** | **0.59** | **Framebuffer UEFI, bootloader 0.11** |
-| **21. The Agency** | **59** | **0.59.1** | **147 agents + HW Agents** |
-| **22. Ecosystem Batch 3** | **59** | **0.59.2** | **12 repos portados** |
+| /mnt/hdd/ | AtaAgent | HDD | ATA PIO ✅ |
+| /mnt/sdhc/ | UsbMscAgent | USB-MSC | BOT (stub) |
+| /mnt/ram/ | RamFsAgent | DRAM | heap |
+| /chat/ | HermesFsAgent | Virtual | Hermes |
+| /dev/ | DevFsAgent | Virtual | PCI scan ✅ |
+| /proc/ | ProcFsAgent | Virtual | AgentRegistry ✅ |
+| /inference/ | InferenceFsAgent | LLM | Cortex+KG |
+| /system/ | SysFsAgent | Virtual | System |
 
-## Aprendizados Chave (Bootloader 0.11)
-1. BootloaderConfig necessario para physical_memory e stack size
-2. Stack probe de 256KB exige kernel_stack_size >= 512KB
-3. SS precisa ser recarregado apos init_idt() (evita #GP no iretq)
-4. Framebuffer stride em PIXELS (multiplicar por bpp)
-5. Pixel format BGR (3 bytes) vs BGRA32 (4 bytes)
-6. build_image.py substitui bootimage tool
-7. MinGW + caminho com acentos = linker failure
+## Blocos Completos (25+ blocos, 62+ sprints)
+| Bloco | v | Foco |
+|---|---|---|
+| 1-14 | 0.1-0.55 | OS+Neural+SelfHeal+Hermes Cognitive |
+| 15-17 | 0.57 | Memory Systems + Ecosystem + LLM v2 |
+| 18 | 0.56 | Ecosystem Batch (Pipeline, DAG) |
+| 19 | 0.58 | HW Real (USB, FAT12, ATA) |
+| 20 | 0.59 | Bootloader 0.11 + Framebuffer |
+| 21 | 0.59.1 | The Agency (147 agents) |
+| 22 | 0.59.2 | Ecosystem Batch 3 |
+| 23 | 0.60 | Correção Estrutural (Buffer, Security, MHI, Profile) |
+| 24 | 0.61 | WASM+TV-DSL+AVX2+GGUF+Heap |
+| 25 | 0.62 | **VFS + MHI + Storage Agents** |
+
+## Aprendizados Chave (Sprint 60-62)
+1. **RTL8139 TSD_SIZE_SHIFT** = 0 (SIZE em bits 0-12, não 16-27)
+2. **iPXE preenche RX buffer** — CAPR avança antes do kernel
+3. **map_page_uc()** — criar page table entries para PCI MMIO (set_page_uc só modifica)
+4. **e1000 TX non-blocking** — QEMU TCG não processa TX while guest spinning
+5. **Frame allocator fragmenta** — alocar buffers grandes cedo no boot
+6. **VFS + MHI fundidos** — cada VfsMount tem AllocTier, ARC-style tier suggestion
 
 ## Pendente Técnico
-- **Cintilação no framebuffer**: NeuralConsole limpa tela inteira a cada tick (double buffering)
-- **VGA scroll em HW real**: Notebook moderno sem CSM (framebuffer deve resolver)
-- **FAT12 log via USB Mass Storage**: stub `usb_msc.rs` precisa de driver BOT/UFI (~400 LOC)
-- **Rede real**: apenas RTL8139 (QEMU), falta e1000/r8169 (~300 LOC)
-- **GGUF loader**: modelos 9B+ precisam de heap >5GB
-- **SmileyOS shell**: port de 40+ comandos (ls, cat, ps, uptime, theme)
+- **Rede RX**: QEMU SLiRP não roteia sem DHCP
+- **InferenceFsAgent**: /inference/ com LLM
+- **HermesFsAgent**: /chat/ como filesystem
+- **RamFsAgent + Auto Tier Migration**
+- **USB-MSC BOT**: bulk endpoints xHCI
+- **e1000/r8169**: HW real NIC
