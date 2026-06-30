@@ -14,3 +14,4 @@ pub mod font;
 pub mod agent;
 pub mod theme;
 pub mod compositor;
+pub mod icons;

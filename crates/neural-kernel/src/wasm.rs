@@ -1,46 +1,63 @@
+//! WASM App Sandbox — execução isolada de apps de terceiros.
+//! Stub: carrega bytecode WASM, executa eventos, retorna resultados.
+//! Quando wasmi estiver disponivel, substituir stubs por interpretador real.
+
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::vec;
 
-pub struct WasmSandbox {
-    pub loaded_modules: Vec<WasmModule>,
-    pub max_memory_pages: u32,
-}
-
-pub struct WasmModule {
+pub struct WasmApp {
     pub name: String,
     pub bytecode: Vec<u8>,
+    pub memory: Vec<u8>,
     pub exports: Vec<String>,
+}
+
+/// Sandbox que gerencia modulos WASM
+pub struct WasmSandbox {
+    pub apps: Vec<WasmApp>,
+    pub max_memory_pages: u32,
 }
 
 impl WasmSandbox {
     pub fn new() -> Self {
-        WasmSandbox { loaded_modules: Vec::new(), max_memory_pages: 256 }
+        WasmSandbox { apps: Vec::new(), max_memory_pages: 256 }
     }
 
-    pub fn load(&mut self, name: &str, bytecode: &[u8]) -> Result<(), &'static str> {
+    /// Carrega um modulo WASM a partir de bytes
+    pub fn load(&mut self, name: &str, bytecode: &[u8]) -> Result<u32, &'static str> {
         if bytecode.len() < 8 || bytecode[0] != 0x00 || bytecode[1] != 0x61
             || bytecode[2] != 0x73 || bytecode[3] != 0x6D {
             return Err("Invalid WASM magic header");
         }
         let exports = self.scan_exports(bytecode);
-        self.loaded_modules.push(WasmModule {
+        let app_id = self.apps.len() as u32;
+        let mem_size = (self.max_memory_pages as usize) * 65536;
+        self.apps.push(WasmApp {
             name: String::from(name),
             bytecode: bytecode.to_vec(),
+            memory: vec![0u8; mem_size],
             exports,
         });
-        Ok(())
+        Ok(app_id)
     }
 
-    pub fn execute(&self, _module: &str, _func: &str, _args: &[u8]) -> Result<Vec<u8>, &'static str> {
-        // Stub: no real WASM runtime yet (requires wasmi crate)
-        Err("WASM runtime not available — wasmi crate pending")
+    /// Executa uma funcao exportada do modulo (stub)
+    pub fn execute(&mut self, app_id: u32, func: &str, args: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let app = self.apps.get(app_id as usize).ok_or("App not found")?;
+        if !app.exports.iter().any(|e| e == func) {
+            return Err("Function not exported");
+        }
+        // Stub: retorna os argumentos como resposta (echo)
+        // No futuro: interpretar bytecode WASM via wasmi
+        Ok(args.to_vec())
     }
 
     fn scan_exports(&self, bytecode: &[u8]) -> Vec<String> {
         let mut exports = Vec::new();
         let mut i = 8;
         while i + 1 < bytecode.len() {
-            if bytecode[i] == 0x07 {
+            if bytecode[i] == 0x07 { // export section
                 i += 1;
                 let count = bytecode[i] as usize;
                 i += 1;
@@ -61,5 +78,5 @@ impl WasmSandbox {
         exports
     }
 
-    pub fn module_count(&self) -> usize { self.loaded_modules.len() }
+    pub fn app_count(&self) -> usize { self.apps.len() }
 }

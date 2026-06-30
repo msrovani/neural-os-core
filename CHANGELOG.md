@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.62.3] — 2026-06-30 — Display layout fix + pos-tarefas
+## [0.61.0] — 2026-06-30 — Sprint 61 Desktop completo (7/7 sub-sprints)
+
+### Added
+- **MouseAgent (61.0)**: PS/2 mouse driver como agente A-021. IRQ12 handler, pacote 3 bytes, EventBus MOUSE_MOVED/MOUSE_CLICK/MOUSE_DRAG. 5 skills. ~200 LOC.
+- **Theme Engine (61.1)**: 5 temas (hermes-dark, dracula, matrix, solarized, hermes-light). Hot-swap via `theme.apply()`. Integrado ao console. ~120 LOC.
+- **Compositor (61.2)**: Multi-window com z-order, dock bar 36px com botoes + relogio, drag de janelas via title bar, cursor cross. Subscreve MouseAgent events. ~300 LOC.
+- **Shell (61.3)**: 15 comandos (help, echo, clear, uptime, ps, meminfo, pci, theme, profile, shutdown, reboot, date, uname, cpuinfo, ls). ~100 LOC.
+- **3 Desktop Apps (61.4)**: Hermes App (chat+shell), Settings App (theme+profile picker), Power App (shutdown+reboot+confirmacao). AppRegistry estatico. ~250 LOC.
+- **LLM Icons (61.5)**: IconCache com fallback geometrico por hint hash. Render 16×16 (2-bit palette). ~80 LOC.
+- **WASM Sandbox (61.6)**: WasmSandbox com load/execute stub, scan_exports. Preparado para wasmi. ~80 LOC.
 
 ### Fixed
 - **Status bar height**: `fill_rect` usava `status_y + ch + 2` (22px) em vez de `ch + 3` (19px) — invadia area de conversa
