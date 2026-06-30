@@ -10,7 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use crate::display::fb::DoubleBuffer;
 use crate::display::font;
-use crate::profile::ProfileManager;
+use crate::display::theme;
 
 const COL_BG: (u8, u8, u8) = (10, 10, 20);
 const COL_FG: (u8, u8, u8) = (200, 200, 220);
@@ -39,39 +39,36 @@ impl NeuralConsole {
     pub fn render(&mut self, tick: u64, agent_count: usize, mem_pct: f32, llm_busy: bool, net_online: bool) {
         let w = self.fb.info.width;
         let h = self.fb.info.height;
+        let ch = font::CHAR_H;
 
-        let profile = ProfileManager::get();
-        let (bg, accent, fg_user) = profile.theme_colors();
+        let t = theme::current();
+        let (bg, fg, accent) = (t.bg, t.fg, t.accent);
 
+        // Clear screen com cor do tema
         self.fb.fill_rect(0, 0, w, h, bg.0, bg.1, bg.2);
 
-        // Tensor strip (topo 4px)
+        // Tensor strip (topo 2px)
         for x in 0..w {
-            let t = (x as f32 / w as f32);
-            let r = (30.0 + t * mem_pct * 200.0) as u8;
-            let g = (10.0 + (1.0 - t) * 60.0) as u8;
-            self.fb.set_pixel(x, 0, r, g, 30 + (t * 150.0) as u8);
+            let t2 = (x as f32 / w as f32);
+            let r = (30.0 + t2 * mem_pct * 200.0) as u8;
+            let g = (10.0 + (1.0 - t2) * 60.0) as u8;
+            self.fb.set_pixel(x, 0, r, g, 30 + (t2 * 150.0) as u8);
             self.fb.set_pixel(x, 1, r/2, g/2, 15);
         }
 
-        // Status bar — fundo ocupa apenas a altura do texto + padding 2px
+        // Status bar
         let status_y = 4;
-        let ch = font::CHAR_H;
-        let cw = font::CHAR_W;
-        let sb_h = ch + 3; // altura real da status bar
-
+        let sb_h = ch + 3;
         self.fb.fill_rect(0, status_y - 1, w, sb_h, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
 
-        let llm_str = if llm_busy { "LLM:gen" } else { "LLM:idle" };
-        let net_str = if net_online { "NET:on" } else { "NET:off" };
-        let mem_str = alloc::format!("{:.0}%", mem_pct * 100.0);
-        let profile_icon = profile.icon();
-        let profile_name = profile.name();
-        let status = alloc::format!("{} {} t:{} ag:{} mem:{} {} {}",
-            profile_icon, profile_name, tick, agent_count, mem_str, llm_str, net_str);
+        let status = alloc::format!("t:{} ag:{} mem:{:.0}% {} {}  [{}]",
+            tick, agent_count, mem_pct * 100.0,
+            if llm_busy { "LLM:gen" } else { "LLM:idle" },
+            if net_online { "NET:on" } else { "NET:off" },
+            t.name);
         self.draw_text(2, status_y, &status, accent);
 
-        // Conversation area — comeca logo apos a status bar
+        // Conversation area
         let conv_y = status_y + sb_h;
         let max_lines = (h.saturating_sub(conv_y + ch + 2)) / ch;
         let lines: alloc::vec::Vec<(String, (u8,u8,u8))> = self.conv_lines.iter()
@@ -79,8 +76,7 @@ impl NeuralConsole {
             .map(|line| (line.clone(), self.color_for_line(line)))
             .collect();
         for (i, (line, color)) in lines.iter().enumerate() {
-            let y = conv_y + i * ch;
-            self.draw_text(2, y, line, *color);
+            self.draw_text(2, conv_y + i * ch, line, *color);
         }
 
         // Prompt area (ultima linha)
@@ -88,7 +84,7 @@ impl NeuralConsole {
             let prompt_y = h - ch - 2;
             let prompt_text = alloc::format!("> {}", self.input_buffer);
             self.fb.fill_rect(0, prompt_y - 1, w, ch + 3, COL_STATUS_BG.0, COL_STATUS_BG.1, COL_STATUS_BG.2);
-            self.draw_text(2, prompt_y, &prompt_text, fg_user);
+            self.draw_text(2, prompt_y, &prompt_text, fg);
         }
 
         // Bottom separator
@@ -96,7 +92,7 @@ impl NeuralConsole {
             self.fb.set_pixel(0, h - 3, accent.0/2, accent.1/2, accent.2/2);
         }
 
-        // Swap buffers — elimina cintilacao
+        // Swap buffers
         self.fb.swap();
     }
 

@@ -1,6 +1,8 @@
 //! Native Agent implementations — Block 11 (Sprints 39-42)
 //! Cada struct implementa agent_core::Agent. Substituem as 7 async fn legacy.
 
+pub mod mouse_agent;
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;

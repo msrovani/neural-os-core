@@ -570,6 +570,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(security::SecurityAgent::new()));
     registry.register(Box::new(safety::SafetyAgent::new()));
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
+    registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
@@ -594,6 +595,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 "security" => Some(Box::new(security::SecurityAgent::new())),
                 "safety" => Some(Box::new(safety::SafetyAgent::new())),
                 "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())),
+                "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
                 _ => None,
             };
             agent

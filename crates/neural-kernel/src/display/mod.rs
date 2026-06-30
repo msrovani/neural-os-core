@@ -9,6 +9,7 @@
 //! O QEMU padrão usa resolução 1024x768, BGRA32 (4 bytes/pixel).
 
 pub mod fb;
-pub mod font;
 pub mod console;
+pub mod font;
 pub mod agent;
+pub mod theme;
