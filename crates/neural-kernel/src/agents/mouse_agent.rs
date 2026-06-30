@@ -7,6 +7,7 @@ use crate::interrupts::LAST_MOUSE_PACKET;
 use crate::EVENT_BUS;
 use crate::{Event, CapabilityToken, serial_println};
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 
 pub const TOPIC_MOUSE_MOVED: &str = "MOUSE_MOVED";

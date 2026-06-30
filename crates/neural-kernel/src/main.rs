@@ -78,6 +78,8 @@ mod tv_dsl;
 mod gguf;
 mod vfs;
 mod fs;
+mod shell;
+mod apps;
 
 use lazy_static::lazy_static;
 
