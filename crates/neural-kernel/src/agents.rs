@@ -105,7 +105,6 @@ impl Agent for ConsoleAgent {
         if let Some(event) = self.receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("(bytes)");
             serial_println!("[Hermes] {}", text);
-            println!("[Hermes] {}", text);
         }
         AgentTickResult::Pending
     }

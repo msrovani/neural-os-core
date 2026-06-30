@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.62.2] — 2026-06-30 — InferenceFS, HermesFS, RamFS, MHI Scheduler
+
+### Added
+- **InferenceFsAgent**: `/inference/` — arquivos gerados sob demanda via LLM, buffer de treino
+- **HermesFsAgent**: `/chat/` — send (write→LLM), last_response, history, clear, count
+- **RamFsAgent**: `/mnt/ram/` — cache DRAM com quota 1MB, LRU eviction
+- **MhiScheduler**: scan MHI_REGISTRY a cada 1000 ticks, promove/demove tiers por acesso
+- MhiScheduler integrado ao OptimizerAgent.tick()
+- AllocTier::UsbMsc adicionado ao mhi.rs
+
 ## [0.62.1] — 2026-06-30 — Storage Agents: Ata, DevFs, ProcFs
 
 ### Added

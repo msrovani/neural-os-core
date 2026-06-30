@@ -57,8 +57,13 @@ impl Agent for DisplayAgent {
         while let Some(event) = self.receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("(bytes)");
             if let Some(ref mut console) = self.console {
-                console.push_line(text);
-                console.set_prompt_visible(true);
+                // So mostra respostas Hermes + saudacao no display
+                if text.starts_with("[Hermes]") || text.starts_with("Hermes v")
+                    || text.starts_with(">") || text.starts_with("/")
+                {
+                    console.push_line(text);
+                    console.set_prompt_visible(true);
+                }
             } else {
                 crate::serial_println!("[Hermes] {}", text);
                 crate::print!("> ");

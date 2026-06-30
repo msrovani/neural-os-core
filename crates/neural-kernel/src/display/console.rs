@@ -106,7 +106,7 @@ impl NeuralConsole {
         } else {
             self.conv_lines.push_back(String::from(line));
         }
-        if self.conv_lines.len() > 500 {
+        if self.conv_lines.len() > 2000 {
             self.conv_lines.pop_front();
         }
     }
