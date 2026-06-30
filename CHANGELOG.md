@@ -6,7 +6,100 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.47.0] — 2026-06-27 — CDC Rabin + XOR Delta + Semantic Snapshot + Bugfix final
+## [0.59.2] — 2026-06-29 — Ecosystem Batch 3 — 12 Repos Portados
+
+### Added
+- **Ecosystem Batch 3 (12 repos, 8 arquivos, 601 LOC)**:
+  - redox-os/redox (16.4k★) → `scheme.rs`: SchemeHandler trait para namespace I/O
+  - theseus-os/Theseus (3.2k★) → `state.rs`: TypedAgent<Boot|Running|Faulted|Done>
+  - embassy-rs/embassy (9.5k★) → `timer_wheel.rs`: 64-slot TimerWheel
+  - openai/swarm (21.8k★) → HermesAgent: Handoff enum (SwitchTo/Escalate/Delegate)
+  - tock/tock (5.3k★) → `mmio.rs`: Register<T> + RegisterField<OFFSET,WIDTH>
+  - raga-ai-hub/RagaAI-Catalyst (16k★) → `tracer.rs`: 256-span ring buffer
+  - kyegomez/swarms (6.9k★) → `orchestrator.rs`: task decomposition
+  - TransformerOptimus/SuperAGI (16k★) → `skill_market.rs`: SkillScore scoring table
+- `cargo check --release`: 0 errors ✅
+
+## [0.59.1] — 2026-06-29 — HW Agents + The Agency (147 agents)
+
+### Added
+- **HW Agents**: `hw_agents.rs` — HwRegistry por PCI, HwAgent por dispositivo, `class_to_capabilities()`, `activate_for_intent()`
+- **The Agency (147 agentes)**: `agency.rs` — 12 divisões (engineering, design, product, qa, support, marketing, infra, data-science, creative, legal, spatial, research)
+- **SpecialistAgent** struct genérica com missão, skills, entregável
+- `register_agency_agents()` registra todos no boot
+
+## [0.59.0] — 2026-06-29 — 🏆 Bootloader 0.11 + Framebuffer UEFI + Hermes Gráfico
+
+### Added
+- **Bootloader 0.11.15**: `bootloader_api` substitui `bootloader::bootinfo`, `BootloaderConfig` com `physical_memory=Dynamic`, stack 512KB
+- **Framebuffer 1280×720**: `probe_uefi_framebuffer()` via `BootInfo::framebuffer`, BGR pixel suporte, stride em BYTES
+- **Serial Fallback**: `Mutex<Option<SerialPort>>`, `probe_port()` em 4 endereços (0x3F8/0x2F8/0x3E8/0x2E8)
+- `fb_print()` escreve no framebuffer quando serial ausente
+- DisplayAgent renderiza NeuralConsole com framebuffer ativo
+- `tools/build_image.py` via `bootloader::BiosBoot` + BIOS/UEFI modes
+
+### Changed
+- Branch `test-bootloader-0.11` promovida a `main` (force push)
+- `kernel_stack_size=512KB` previne triple fault no stack probe
+- `mov ss, 0` após init_idt() evita #GP no breakpoint handler
+- `vga_buffer::_print()` pula VGA quando framebuffer ativo
+- `.cargo/config.toml`: rustflags `[]` (sem relocation-model=static)
+
+### Fixed
+- #GP no breakpoint handler: SS não era recarregado após GDT
+- Triple fault: stack 256KB → 512KB
+- Serial detection: porta 0x3F8 falha em notebooks modernos → fallback 0x2F8/0x3E8/0x2E8
+
+## [0.58.0] — 2026-06-28 — 🏆 Boot em Hardware Real + USB + FAT12 + ATA
+
+### Added
+- **🏆 Primeiro boot do Neural OS Hermes em notebook físico via SDHC USB** (2.7MB imagem, Rufus DD+MBR+CSM)
+- **xHCI USB HID Keyboard Driver**: `init_xhci()`, `poll_keyboard()` com Event Ring, HID→PS/2 scancode (68 teclas), CAD via USB
+- **MBR+FAT12 Partition Recognition (PERMANENTE)**: `fat.rs::read_mbr()`, `Fat12Writer::append_log()` via ATA PIO
+- **FAT12 Boot Log Partition**: `tools/patch_image.py` adiciona 2MB FAT12, BOOT.LOG visível no Windows
+- **ATA PIO Driver**: `AtaDriver::probe()` + `read_sectors()`/`write_sectors()` LBA28 com wait_bsy+wait_drq
+- **Ctrl+Alt+Del Log Dump**: `handle_cad()` grava log no FAT12, reset 8042, hlt
+
+### Fixed
+- **OOM em HW real**: HEAP_SIZE 4MB→16MB, `serial_println!` sem alloc, `#[alloc_error_handler]` seguro
+- **VGA Scrolling**: Cursor via portas 0x3D4/0x3D5, new_line() sempre na última linha
+
+## [0.57.1] — 2026-06-27 — Consolidation: Plugin Hub + x2APIC + Ed25519 + SMP Stacks
+
+### Added
+- **Plugin Hub (#236)**: PluginManager trait + PluginRegistry
+- **x2APIC**: ativado via `core::arch::x86_64::__cpuid()`, substitui APIC regs por MSR
+- **Ed25519 real**: `ed25519-compact` crate substitui stub (trust_cache.rs)
+- **SMP per-AP stacks 64KB**: cada AP tem stack isolado
+- **VirtIO-GPU poll fix**: `sti;hlt` loop (evita VM exit no QEMU TCG)
+
+## [0.57.0] — 2026-06-27 — Bloco 15+16+17: Memory + Ecosystem + LLM v2
+
+### Added
+- **MemoryTree v2**: TTL/Eviction, Ebbinghaus decay, 4-Tier consolidation (event-bus)
+- **SHA-256 Dedup (#214)**: `dedup.rs` com content-based hash
+- **Privacy Filter (#215)**: `privacy.rs` com regex patterns
+- **Hybrid Search (#218)**: `hybrid_search.rs` (embedding + keyword)
+- **Metacognitive Guard (#220)**: `metacognitive.rs` confidence threshold
+- **Draft→Review→Merge (#221)**: `draft_review.rs` 3-phase write pipeline
+- **Atkinson-Shiffrin 3-tier (#224)**: `atkinson.rs` Sensory→STM→LTM
+- **SuperContext**: memory+KG scout (event-bus)
+- **SkillIndex**: progressive disclosure (event-bus)
+- **TokenJuice**: HTML strip + URL shorten (event-bus)
+- **Sampling**: top-k, temperature (cortex.rs)
+- **Codebook VQ (#165)**: quantize em tensor.rs
+- `generate_speculative()` funcional (Medusa 3-head)
+
+## [0.56.0] — 2026-06-26 — Medusa + Pipeline + Memory Tree + Knowledge Graph
+
+### Added
+- **Medusa 3-head speculative decoding** (cortex.rs)
+- **Pipeline manifest** (agent-core): `Pipeline::new()` + `Sequence::linear()`
+- **Memory Tree** (event-bus): `MemoryTree::insert()` + `recall()`
+- **Knowledge Graph** (event-bus): `KnowledgeGraph`, `add_triple()`, `query()`
+- **DAG scheduler** (agent-core): `DagScheduler` topological sort
+- **Dashboard** (agent-core): DashboardPanel trait  
+- **Ecosystem Analysis**: OpenMontage, OpenHuman, codebase-memory-mcp, Rinne, daily_stock, ComPilot
 
 ### Added
 - **CDC Rabin Chunking** (`chunker.rs`) — Content-Defined Chunking via rolling hash polinomial de 64 bits. Divide bitmaps e buffers em chunks de tamanho variável baseado no conteúdo. `chunk_data()` → `merge_chunks()` round-trip testado.
