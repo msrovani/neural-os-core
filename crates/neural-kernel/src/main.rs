@@ -75,6 +75,7 @@ mod skill_market;
 mod profile;
 mod wasm;
 mod tv_dsl;
+mod gguf;
 
 use lazy_static::lazy_static;
 
@@ -499,7 +500,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::serial_println!("[DBG8] ATA probe done");
     
     unsafe { crate::xhci::init_xhci(); }
-    let usb_msc = crate::usb_msc::UsbMassStorage::probe();
+    let usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
     crate::serial_println!("[DBG9] init done. Starting agents...");
 
     let mut registry = agent_core::AgentRegistry::new();
