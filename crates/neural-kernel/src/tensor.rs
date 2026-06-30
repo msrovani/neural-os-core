@@ -1,6 +1,30 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+pub fn has_avx2() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        unsafe {
+            let result = core::arch::x86_64::__cpuid(7);
+            (result.ebx & (1 << 5)) != 0
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
+}
+
+pub fn has_avx512() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        unsafe {
+            let result = core::arch::x86_64::__cpuid(7);
+            (result.ebx & (1 << 16)) != 0
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
+}
+
 pub struct Tensor {
     pub shape: (usize, usize),
     pub data: Vec<f32>,
@@ -29,6 +53,12 @@ impl Tensor {
             return None;
         }
         let mut result = Tensor::new((m, n));
+        #[cfg(target_arch = "x86_64")]
+        {
+            if has_avx2() && m >= 4 && k >= 8 && n >= 4 {
+                return Some(self.matmul_avx2_inner(other, m, k, n));
+            }
+        }
         for i in 0..m {
             for j in 0..n {
                 let mut sum = 0.0_f32;
@@ -39,6 +69,37 @@ impl Tensor {
             }
         }
         Some(result)
+    }
+
+    /// AVX2-optimized matmul usando 256-bit SIMD (8 f32 por instrucao)
+    #[cfg(target_arch = "x86_64")]
+    fn matmul_avx2_inner(&self, other: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
+        let mut result = Tensor::new((m, n));
+        unsafe {
+            use core::arch::x86_64::*;
+            for i in 0..m {
+                for j in (0..n).step_by(8) {
+                    let mut sum = _mm256_setzero_ps();
+                    let remaining = core::cmp::min(8, n - j);
+                    for t in (0..k).step_by(8) {
+                        let a_row = &self.data[i * k..];
+                        let b_col = &other.data[t * n..];
+                        let a_vec = _mm256_loadu_ps(a_row.as_ptr().add(t));
+                        let b_vec = _mm256_loadu_ps(b_col.as_ptr().add(j));
+                        sum = _mm256_fmadd_ps(a_vec, b_vec, sum);
+                    }
+                    _mm256_storeu_ps(result.data[i * n + j..].as_mut_ptr(), sum);
+                    for r in 0..remaining {
+                        let mut scalar_sum = 0.0_f32;
+                        for t in 0..k {
+                            scalar_sum += self.data[i * k + t] * other.data[t * n + j + r];
+                        }
+                        result.data[i * n + j + r] += scalar_sum;
+                    }
+                }
+            }
+        }
+        result
     }
 
     #[allow(dead_code)]

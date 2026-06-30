@@ -394,7 +394,16 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
 }
 
 pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
-    generate_speculative(model, prompt)
+    let raw = generate_speculative(model, prompt);
+    // Check for TV-DSL tags in output and execute them
+    if raw.contains("[TV-DSL: ") {
+        match crate::tv_dsl::scan_and_execute(&raw) {
+            Ok(processed) => processed,
+            Err(_) => raw,
+        }
+    } else {
+        raw
+    }
 }
 
 pub struct Cortex {

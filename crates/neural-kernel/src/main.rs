@@ -62,6 +62,7 @@ mod network_agent;
 mod optimizer;
 mod proto;
 mod rtl8139;
+mod e1000;
 mod safety;
 mod security;
 mod usb_msc;
@@ -72,6 +73,8 @@ mod tracer;
 mod orchestrator;
 mod skill_market;
 mod profile;
+mod wasm;
+mod tv_dsl;
 
 use lazy_static::lazy_static;
 
