@@ -157,6 +157,15 @@ impl ProfileManager {
         }
     }
 
+    pub fn set_from_name(name: &str) {
+        for p in &ALL_PROFILES {
+            if p.name().eq_ignore_ascii_case(name) {
+                Self::set(*p);
+                return;
+            }
+        }
+    }
+
     pub fn list() -> Vec<(UserProfile, &'static str)> {
         ALL_PROFILES.iter().map(|p| (*p, p.description())).collect()
     }

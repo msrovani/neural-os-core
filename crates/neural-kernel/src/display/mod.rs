@@ -13,3 +13,4 @@ pub mod console;
 pub mod font;
 pub mod agent;
 pub mod theme;
+pub mod compositor;
