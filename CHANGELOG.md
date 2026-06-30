@@ -6,7 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.59.2] — 2026-06-29 — Ecosystem Batch 3 — 12 Repos Portados
+## [0.62.1] — 2026-06-30 — Storage Agents: Ata, DevFs, ProcFs
+
+### Added
+- **AtaAgent**: `/mnt/hdd/sda` — ATA block device como arquivo
+- **DevFsAgent**: `/dev/pci/list`, `/dev/pci/<vid:did>`, `/dev/rtl8139`, `/dev/xhci`, `/dev/mem`
+- **ProcFsAgent**: `/proc/agents`, `/proc/meminfo`, `/proc/uptime`, `/proc/cpuinfo`, `/proc/version`, `/proc/profile`, `/proc/mhi`
+- **FilesystemAgent trait**: `read()`, `write()`, `list()`, `mount_point()` — interface padrao para FS agents
+- **VFS bridge**: `read_vfs()`, `write_vfs()`, `list_vfs()` — resolve mount e delega ao agente
+- VFS init + 8 mounts no boot: `/`, `/mnt/ram`, `/mnt/hdd`, `/mnt/sdhc`, `/chat`, `/dev`, `/proc`, `/system`, `/inference`
+
+## [0.62.0] — 2026-06-30 — VFS Layer + MHI ARC-style Tier Suggestion
+
+### Added
+- **VFS Layer**: `VfsRegistry` (mount, resolve, lookup, list_dir), `VfsNode` (arvore de diretorios), `VfsMount`
+- **Path utils**: `canonicalize()`, `split()`, `join()`, `filename()`, `parent()`, `match_mount()`
+- **MHI ARC-style**: `arc_suggest_tier()` — ZFS-ARC-inspired (MFU→Dram, MRU→Nvme, cold→Hdd)
+- **AllocTier::UsbMsc**: novo tier para USB Mass Storage
+- Sprint plan atualizado: `docs/sprint-062-fs.md` com MHI+VFS+StorageAgents unificado
+
+## [0.60.5] — 2026-06-30 — RTL8139 early init 32KB RX
+
+### Fixed
+- RTL8139 init movido para kernel_main (antes da fragmentacao do frame allocator)
+- `alloc_pages(8)` para RX buffer de 32KB contiguo
+- `init_driver_rtl8139()` idempotente (chamado 2x: boot + NetDriverAgent)
+
+## [0.60.4] — 2026-06-30 — RTL8139 TX + iPXE buffer sync
+
+### Fixed
+- **TSD_SIZE_SHIFT 16→0**: SIZE nos bits 0-12 (correto). TX funcionando com TOK=1
+- **iPXE RX buffer**: `rx_offset = CAPR` apos init — pula dados do bootloader
+- **smoltcp tight poll**: loop `poll_delay()` para DHCP multi-step
+- **IP estatico imediato**: 10.0.2.15/24 no tick 11 (bypass DHCP)
+
+### Added
+- Plano Desktop: `docs/sprint-061-desktop.md` (6 sub-sprints, ~2800 LOC)
+- Plano FS: `docs/sprint-062-fs.md` (6 sub-sprints, ~2700 LOC)
+- Plano WWW: `docs/sprint-063-www.md` (7 sub-sprints, ~2600 LOC)
+
+## [0.60.3] — 2026-06-30 — e1000 TX non-blocking + mmio_virt + map_page_uc
+
+### Fixed
+- **e1000 Page Fault**: `map_page_uc()` mapeia PCI MMIO (cria page table entries)
+- **e1000 TX non-blocking**: TDT=(idx+1)%64, sem wait loop (QEMU TCG nao processa TX while spinning)
+
 
 ### Added
 - **Ecosystem Batch 3 (12 repos, 8 arquivos, 601 LOC)**:

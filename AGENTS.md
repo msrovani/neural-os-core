@@ -1,8 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.59.2 🏆
-#   ECOSYSTEM BATCH 3 — 12 REPOS PORTADOS, 173 AGENTES
-#   Bootloader 0.11 + Framebuffer 1280×720
-#   HW Agents + The Agency (147 agents)
+#   PLANO DIRETOR — neural-os-core v0.62.1 🏆
+#   VFS + MHI BRIDGE + STORAGE AGENTS
+#   ARC-style tiering (ZFS-inspired), 96 arquivos Rust
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
