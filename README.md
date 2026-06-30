@@ -1,11 +1,11 @@
-﻿# Neural OS Hermes v0.58.0 - 🏆 BOOT EM HARDWARE REAL 🏆
+﻿# Neural OS Hermes v0.59.0 - 🏆 FRAMEBUFFER UEFI + BOOTLOADER 0.11 🏆
 
 **The first AI-native operating system. Booted on real x86-64 hardware from USB.**
 
 ```
-🎉 28/06/2026 — Neural OS Hermes bootou em notebook físico!
-    VGA ✅  PCI ✅  ACPI ✅  APIC ✅  Hermes ✅
-    Próximo: teclado USB + prompt interativo
+🎉 28/06/2026 — Boot em hardware real (SDHC USB)
+🎉 29/06/2026 — Framebuffer UEFI 1280x720 + bootloader 0.11
+    Hermes Cognitive rodando com display grafico
 ```
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
