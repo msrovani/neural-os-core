@@ -14,6 +14,8 @@ use crate::display::theme;
 pub const DOCK_H: u32 = 36;
 pub const TITLE_H: u32 = 20;
 
+pub static COMPOSITOR: Mutex<Option<Compositor>> = Mutex::new(None);
+
 #[derive(Debug, Clone)]
 pub struct Window {
     pub id: u32,

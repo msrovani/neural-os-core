@@ -525,6 +525,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Init Filesystem Agents
     crate::fs::init_fs_agents();
 
+    // Init Desktop Apps
+    crate::apps::init_apps();
+
+    // Init Compositor
+    *crate::display::compositor::COMPOSITOR.lock() = Some(crate::display::compositor::Compositor::new());
+    crate::serial_println!("[COMPOSITOR] Inicializado.");
+
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
     registry.register(Box::new(agents::MemoryAgent::new()));
