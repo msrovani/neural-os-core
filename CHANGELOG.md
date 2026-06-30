@@ -30,6 +30,42 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Bug H11 (PCI multi-function) — header_type bit 7 verificado.
 - Bug H12 (IOAPIC mask) — RTEs não usadas mascaradas.
 
+## [0.59.0] — 2026-06-29 — 🏆 Bootloader 0.11 + Framebuffer UEFI + Hermes Grafico 🏆
+
+### Breaking: Bootloader 0.9.34 → 0.11.15
+- **bootloader_api** substitui `bootloader::bootinfo::BootInfo`
+- `BootloaderConfig` com `physical_memory = Dynamic` (substitui `map_physical_memory`)
+- `kernel_stack_size = 512KB` (stack probe de 256KB exigido pelo kernel)
+- Build via `tools/build_image.py` (cria imagem BIOS com `bootloader::BiosBoot`)
+- Branch antiga `main-bootloader-0.9` mantida como referencia
+
+### Added — Framebuffer UEFI (bootloader 0.11)
+- `BootInfo::framebuffer` detectado em `probe_uefi_framebuffer()`
+- GpuDevice ganhou `fb_bpp: u32` (bytes per pixel)
+- `FramebufferInfo.bpp`: suporta BGR (3 bytes) e BGRA32 (4 bytes)
+- Stride convertido de pixels para bytes (info.stride * bpp)
+- `vga_buffer::_print()` pula escrita VGA quando framebuffer ativo
+- DisplayAgent renderiza NeuralConsole no framebuffer 1280×720
+
+### Fixed — #GP no breakpoint handler
+- **Causa**: bootloader 0.11 usa GDT diferente → SS=0x10 = TSS selector
+- **Fix**: `mov ss, ax` com seletor nulo (0) apos carregar GDT
+- Sintoma: `[EXCEPTION] #GP ip=breakpoint_handler cs=0x8 err=0x10` no iretq
+
+### Fixed — Triple fault silencioso
+- **Causa**: kernel faz stack probe de 256KB, bootloader so alocava 128KB default
+- **Fix**: `kernel_stack_size = 512 * 1024` no BootloaderConfig
+- Sintoma: bootloader log mostra "Jumping to kernel entry point" mas nenhum output
+
+### Aprendizados (Bootloader 0.11 vs 0.9.34)
+1. **BootloaderConfig** obrigatorio — sem ele, physical_memory=None, stack=80KB
+2. **Stack probe**: Rust gera codigo que testa N paginas de stack no entry point. Se o bootloader nao alocar suficiente → triple fault silencioso
+3. **GDT/SS incompativel**: bootloader 0.11 usa GDT propria. Ao carregar nossa GDT, SS fica invalido → #GP no iretq
+4. **Framebuffer stride**: bootloader 0.11 reporta stride em PIXELS, nao bytes. Multiplicar por bytes_per_pixel
+5. **Pixel format BGR**: framebuffer UEFI usa 3 bytes/pixel (BGR), nao 4 (BGRA32). set_pixel precisa escrever so 3 bytes
+6. **Build process**: bootimage tool v0.10 nao suporta bootloader 0.11. Precisa de build.rs ou script externo
+7. **MinGW + caminho com acentos**: linker MinGW falha com caracteres especiais no path (Área de Trabalho). Solucao: mover projeto para C:\dev\
+
 ## [0.58.0] — 2026-06-28 — 🏆 MARCO: Boot em Hardware Real + USB Keyboard + FAT12 Log 🏆
 
 ### 🏆 MARCO HISTÓRICO: Neural OS Hermes boota em hardware real!

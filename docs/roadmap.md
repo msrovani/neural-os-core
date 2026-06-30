@@ -1,12 +1,14 @@
-# Roadmap — neural-os-core v0.58.0 🏆
+# Roadmap — neural-os-core v0.59.0 🏆
 
-**Última atualização:** 2026-06-28
+**Última atualização:** 2026-06-29
 
-## 🏆 Marco Conquistado: Boot em Hardware Real!
+## 🏆 Marco Conquistado: Bootloader 0.11 + Framebuffer UEFI!
 
-Pela primeira vez, o Neural OS Hermes bootou em **hardware real** (notebook físico x86-64) via SDHC USB. VGA, PCI, ACPI, APIC, SMP, Hermes Cognitive — todos operacionais fora do QEMU.
+Bootloader 0.9.34 → 0.11.15. Framebuffer 1280×720 com Hermes grafico.
+DisplayAgent renderiza NeuralConsole no framebuffer do bootloader.
+20 agentes rodando, Hermes Cognitive completo.
 
-## Blocos Completos (16 blocos, 58 sprints)
+## Blocos Completos (17 blocos, 59 sprints)
 
 | Bloco | Sprints | v | Status |
 |---|---|---|---|
@@ -24,8 +26,9 @@ Pela primeira vez, o Neural OS Hermes bootou em **hardware real** (notebook fís
 | 12. Network+Platform | 48 | 0.48 | ✅ x2APIC, Huge Pages, PCI bridges, Cron |
 | 13. Trust & Security | 49-50 | 0.49–0.50 | ✅ Ed25519, Security Pipeline |
 | 14. Hermes Cognitive | 51-55 | 0.51–0.55 | ✅ SDD, ReAct, Council, Self-Opt |
-| 15. Memory+Ecosystem | 56 | 0.56–0.57 | ✅ Medusa, Pipeline, MemTree, KG |
-| **16. HW Real + USB** | **58** | **0.58** | **🏆 Boot HW real, xHCI HID, FAT12, ATA, CAD** |
+| 15. Memory+Ecosystem | 56-57 | 0.56–0.57 | ✅ Medusa, Pipeline, MemTree, KG |
+| **16. HW Real + USB** | **58** | **0.58** | **✅ Boot HW real, xHCI HID, FAT12, ATA, CAD** |
+| **17. Bootloader 0.11** | **59** | **0.59** | **✅ Framebuffer UEFI 1280×720, bootloader 0.11, Hermes grafico** |
 
 ## Funcionalidades por Camada
 
