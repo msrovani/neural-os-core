@@ -1,6 +1,5 @@
 use core::fmt;
 
-/// Boot log circular buffer — com timestamps
 pub struct BootLog {
     buf: [u8; 65536],
     pos: usize,
@@ -26,33 +25,47 @@ impl BootLog {
             (b'0' + (millis % 10) as u8),
             b']', b' ',
         ];
-        for &b in ts {
-            self.buf[self.pos % self.buf.len()] = b; self.pos += 1;
-        }
-        for &b in data {
-            self.buf[self.pos % self.buf.len()] = b; self.pos += 1;
-        }
+        for &b in ts { self.buf[self.pos % self.buf.len()] = b; self.pos += 1; }
+        for &b in data { self.buf[self.pos % self.buf.len()] = b; self.pos += 1; }
     }
     pub fn dump(&self) -> &[u8] {
         if self.pos < self.buf.len() { &self.buf[..self.pos] }
-        else {
-            let start = self.pos % self.buf.len();
-            &self.buf[start..]
-        }
+        else { &self.buf[self.pos % self.buf.len()..] }
     }
 }
 
 pub static BOOT_LOG: spin::Mutex<BootLog> = spin::Mutex::new(BootLog { buf: [0u8; 65536], pos: 0, start_tick: 0 });
+
+/// Probes serial port: writes scratch reg, reads back. Returns true if port exists.
+pub unsafe fn probe_port(port: u16) -> bool {
+    let lsr: u8;
+    core::arch::asm!("in al, dx", out("al") lsr, in("dx") (port + 5), options(nostack, preserves_flags, readonly));
+    if lsr == 0xFF { return false; }
+    core::arch::asm!("out dx, al", in("dx") (port + 7), in("al") 0x5Au8, options(nostack, preserves_flags));
+    let mut check: u8;
+    core::arch::asm!("in al, dx", out("al") check, in("dx") (port + 7), options(nostack, preserves_flags, readonly));
+    check == 0x5A
+}
 
 use lazy_static::lazy_static;
 use spin::Mutex;
 use uart_16550::SerialPort;
 
 lazy_static! {
-    pub static ref SERIAL: Mutex<SerialPort> = {
-        let mut serial = unsafe { SerialPort::new(0x3F8) };
-        serial.init();
-        Mutex::new(serial)
+    pub static ref SERIAL: Mutex<Option<SerialPort>> = {
+        let mut port = None;
+        unsafe {
+            let addrs = [0x3F8u16, 0x2F8, 0x3E8, 0x2E8];
+            for &addr in &addrs {
+                if probe_port(addr) {
+                    let mut s = SerialPort::new(addr);
+                    s.init();
+                    port = Some(s);
+                    break;
+                }
+            }
+        }
+        Mutex::new(port)
     };
 }
 
@@ -71,7 +84,13 @@ impl<'a> fmt::Write for LogBuf<'a> {
 
 pub fn _print(args: fmt::Arguments) {
     use fmt::Write;
-    let _ = SERIAL.lock().write_fmt(args);
+    // Tenta serial
+    let serial_avail = {
+        let mut serial = SERIAL.lock();
+        if let Some(ref mut s) = *serial { let _ = s.write_fmt(args); true }
+        else { false }
+    };
+    // Se serial nao disponivel, registra no boot log (display via VGA/fb)
     let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     let mut log = BOOT_LOG.lock();
     if log.start_tick == 0 { log.start_tick = tick; }
@@ -79,9 +98,15 @@ pub fn _print(args: fmt::Arguments) {
     let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
     let n = buf.iter().position(|&b| b == 0).unwrap_or(256);
     log.write(&buf[..n], tick);
+    // Se nao tem serial, tenta display via VGA/framebuffer
+    if !serial_avail {
+        let _ = crate::vga_buffer::fb_print(args);
+    }
 }
 
-#[macro_export]
-macro_rules! serial_print { ($($arg:tt)*) => ($crate::serial::_print(format_args!($($arg)*))); }
-#[macro_export]
-macro_rules! serial_println { () => ($crate::serial_print!("\n")); ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*))); }
+pub fn serial_available() -> bool {
+    SERIAL.lock().is_some()
+}
+
+#[macro_export] macro_rules! serial_print { ($($arg:tt)*) => ($crate::serial::_print(format_args!($($arg)*))); }
+#[macro_export] macro_rules! serial_println { () => ($crate::serial_print!("\n")); ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*))); }

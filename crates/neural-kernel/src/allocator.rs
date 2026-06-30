@@ -28,7 +28,7 @@ fn oom(_: core::alloc::Layout) -> ! {
     }
     {
         let mut s = crate::serial::SERIAL.lock();
-        let _ = write!(s, "[OOM] sem memoria. Aumente HEAP_SIZE.\n");
+        if let Some(ref mut s) = *s { let _ = write!(s, "[OOM] sem memoria. Aumente HEAP_SIZE.\n"); }
     }
     loop { x86_64::instructions::hlt(); }
 }
