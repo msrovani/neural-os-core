@@ -1,5 +1,6 @@
 use crate::netstack::NetStack;
 use crate::rtl8139::Rtl8139Driver;
+use crate::e1000::E1000Driver;
 use crate::{println, serial_println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
@@ -10,6 +11,7 @@ pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
 pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
 pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
+pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
 pub static VIRTIO_DEV: spin::Mutex<Option<crate::virtio_net::VirtIoDevice>> = spin::Mutex::new(None);
 pub static NETSTACK: spin::Mutex<Option<NetStack>> = spin::Mutex::new(None);
 
@@ -87,6 +89,41 @@ pub unsafe fn init_driver_rtl8139() -> bool {
     };
     let _ = crate::EVENT_BUS.publish(hw_event);
     true
+}
+
+/// Inicializa driver e1000e (Intel Gigabit Ethernet).
+/// Tentado como fallback se RTL8139 nao for encontrado.
+pub unsafe fn init_driver_e1000() -> bool {
+    let pci_devices = crate::pci::scan_pci();
+    for dev in &pci_devices {
+        if dev.vendor_id == 0x8086 {
+            let valid_devices = [0x100E, 0x10D3, 0x1502];
+            if valid_devices.contains(&dev.device_id) {
+                serial_println!("[NET] e1000 detectado: {:02x}:{:02x}.{:02x} device={:#06x}",
+                    dev.bus, dev.device, dev.function, dev.device_id);
+                let mut driver = E1000Driver::new(dev).unwrap();
+                if driver.init() {
+                    let mac = driver.mac();
+                    NET_CONFIG.lock().mac = mac;
+                    *E1000.lock() = Some(driver);
+
+                    serial_println!("[NET] e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                    println!("[NET] e1000 iniciado.");
+
+                    let _ = crate::EVENT_BUS.publish(crate::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("HW_NET_E1000"),
+                        payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
+                        token: crate::CapabilityToken::Legacy(1),
+                    });
+                    return true;
+                }
+            }
+        }
+    }
+    serial_println!("[NET] e1000 nao encontrado.");
+    false
 }
 
 pub unsafe fn http_get(_host: [u8; 4], _port: u16, _path: &str) -> Option<Vec<u8>> { None }

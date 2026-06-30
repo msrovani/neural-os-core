@@ -89,6 +89,7 @@ struct RxDesc {
 
 pub struct E1000Driver {
     mmio_base: u64,
+    mmio_virt: u64,
     mac_addr: [u8; 6],
     tx_ring_paddr: u64,
     rx_ring_paddr: u64,
@@ -109,11 +110,15 @@ impl E1000Driver {
         }
 
         let mmio_base = (dev.bar0 & !0xF) as u64;
-        serial_println!("[E1000] Detectado vendor={:#06x} device={:#06x} MMIO={:#010x}",
-            dev.vendor_id, dev.device_id, mmio_base);
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let mmio_virt = mmio_base + pmoff;
+
+        serial_println!("[E1000] Detectado vendor={:#06x} device={:#06x} MMIO={:#010x} virt={:#010x}",
+            dev.vendor_id, dev.device_id, mmio_base, mmio_virt);
 
         Some(E1000Driver {
             mmio_base,
+            mmio_virt,
             mac_addr: [0; 6],
             tx_ring_paddr: 0,
             rx_ring_paddr: 0,
@@ -125,12 +130,12 @@ impl E1000Driver {
     }
 
     unsafe fn read32(&self, reg: u64) -> u32 {
-        let ptr = (self.mmio_base + reg) as *mut u32;
+        let ptr = (self.mmio_virt + reg) as *mut u32;
         core::ptr::read_volatile(ptr)
     }
 
     unsafe fn write32(&self, reg: u64, val: u32) {
-        let ptr = (self.mmio_base + reg) as *mut u32;
+        let ptr = (self.mmio_virt + reg) as *mut u32;
         core::ptr::write_volatile(ptr, val);
     }
 
@@ -158,6 +163,11 @@ impl E1000Driver {
     }
 
     pub unsafe fn init(&mut self) -> bool {
+        // Map MMIO region as uncacheable + create page table entries if needed
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        crate::apic::map_page_uc(self.mmio_base, pmoff);
+        crate::apic::map_page_uc(self.mmio_base + 0x1000, pmoff); // covers 8KB for registers
+
         // Reset
         self.write32(REG_CTRL, CTRL_RST);
         for _ in 0..100_000 {

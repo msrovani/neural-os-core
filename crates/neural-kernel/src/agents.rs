@@ -834,6 +834,8 @@ impl Agent for NetDriverAgent {
                 serial_println!("[NET] VirtIO-net OK.");
             } else if crate::net::init_driver_rtl8139() {
                 serial_println!("[NET] RTL8139 OK.");
+            } else if crate::net::init_driver_e1000() {
+                serial_println!("[NET] e1000 OK.");
             } else {
                 serial_println!("[NET] Sem hardware de rede. Modo offline.");
             }
