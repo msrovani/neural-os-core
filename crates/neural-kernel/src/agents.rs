@@ -868,6 +868,62 @@ const HWDETECT_MANIFEST: AgentManifest = AgentManifest {
     persist: false,
 };
 
+// ---------------------------------------------------------------------------
+// SpecialistAgent — agente generico que executa baseado em AgentSpec
+// Usado pelos agentes do The Agency (12 divisoes, 30+ especialistas)
+// ---------------------------------------------------------------------------
+
+pub struct SpecialistAgent {
+    manifest: AgentManifest,
+    spec: crate::agency::AgentSpec,
+}
+
+impl SpecialistAgent {
+    pub fn new(spec: crate::agency::AgentSpec) -> Self {
+        let kind = match spec.division.as_str() {
+            "engineering" | "research" => AgentKind::System,
+            "design" | "creative" => AgentKind::Console,
+            "qa" | "legal" => AgentKind::Skill,
+            "support" | "marketing" => AgentKind::Console,
+            "infrastructure" | "data-science" | "spatial" => AgentKind::System,
+            _ => AgentKind::Skill,
+        };
+        // Use &'static str for the name - we leak it to make it static
+        let name = Box::leak(spec.name.clone().into_boxed_str());
+        SpecialistAgent {
+            manifest: AgentManifest { name, kind, schedule: ScheduleKind::Continuous, auto_start: true, persist: true },
+            spec,
+        }
+    }
+}
+
+impl Agent for SpecialistAgent {
+    fn manifest(&self) -> &AgentManifest { &self.manifest }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Cria skill sob demanda e publica no EventBus
+        // Ex: "driver-engineer" publica DRIVER_ENGINEER_REQUEST
+        let topic = alloc::format!("AGENCY_{}", self.spec.name.to_ascii_uppercase());
+        let _ = EVENT_BUS.publish(Event {
+            id: 0, topic, payload: self.spec.skills.join(",").into_bytes(),
+            token: CapabilityToken::Legacy(1),
+        });
+        AgentTickResult::Pending
+    }
+}
+
+/// Registra todos os agentes do The Agency no registry
+pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
+    let agency = crate::agency::Agency::new();
+    for div in &agency.divisions {
+        for spec in &div.agents {
+            let agent = SpecialistAgent::new(spec.clone());
+            registry.register(Box::new(agent));
+        }
+    }
+    serial_println!("[AGENCY] {} agentes registrados via SpecialistAgent",
+        agency.divisions.iter().map(|d| d.agents.len()).sum::<usize>());
+}
+
 impl Agent for HwDetectAgent {
     fn manifest(&self) -> &AgentManifest { &HWDETECT_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {

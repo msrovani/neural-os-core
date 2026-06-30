@@ -503,6 +503,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::UsbDriverAgent));
     registry.register(Box::new(agents::GpuDriverAgent));
     registry.register(Box::new(agents::HwDetectAgent));
+    
+    // HwRegistry: detecta hardware e cria HwAgents
+    let mut hw_reg = crate::hw_agents::HwRegistry::new();
+    unsafe { hw_reg.detect_all(); }
+    serial_println!("[HW-AGENTS] {} dispositivos detectados como HwAgents.", hw_reg.agents.len());
+    
     serial_println!("[BOOT] {} boot agents registrados. Executando init_phase...", registry.agents.len());
     registry.init_phase();
 
@@ -514,7 +520,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::InputAgent::new()));
     registry.register(Box::new(agents::CortexAgent::new()));
     registry.register(Box::new(agents::HermesAgent::new()));
-    // DisplayAgent — gerencia framebuffer (se disponível) ou VGA
+    
+    // The Agency: 30+ agentes especialistas registrados como SpecialistAgent
+    agents::register_agency_agents(&mut registry);
+    
+    // DisplayAgent
     serial_println!("[DISPLAY] Inicializando DisplayAgent.");
     // Nota: framebuffer via bootloader depende da versão. 
     // bootloader 0.9+ expõe BootInfo::frame_buffer (Option<FrameBuffer>).
