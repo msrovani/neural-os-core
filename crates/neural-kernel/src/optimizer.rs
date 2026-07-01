@@ -280,6 +280,20 @@ impl Agent for OptimizerAgent {
             }
         }
 
+        // B-28: Auto-skill a cada 500 ticks — tenta gerar skill de padrões com 3+ usos
+        if self.tick_counter % 500 == 0 {
+            if let Some(predicted) = self.analyzer.predict_next_skill() {
+                if let Some(skill_md) = crate::skill_gen::maybe_auto_skill(&predicted) {
+                    serial_println!("[AUTO-SKILL] Generated skill '{}' (3+ uses)", predicted);
+                    crate::skill_observer::watch_correction(
+                        &predicted, "Auto-detected pattern", &skill_md,
+                        "Repeated patterns should become reusable skills",
+                        self.tick_counter,
+                    );
+                }
+            }
+        }
+
         AgentTickResult::Pending
     }
 }

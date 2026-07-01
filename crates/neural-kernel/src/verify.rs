@@ -79,6 +79,20 @@ pub fn verify_skill(name: &str, code: &[OpCode]) -> Result<VerifiedProgram, &'st
     })
 }
 
+/// Completion contract: verifica se a output de uma skill atende ao esperado
+pub fn completion_check(output: &[u8], expected_prefix: &[u8]) -> VerifyResult {
+    if output.len() < expected_prefix.len() {
+        return VerifyResult::Fail("Output shorter than expected");
+    }
+    if &output[..expected_prefix.len()] != expected_prefix {
+        return VerifyResult::Fail("Output prefix mismatch");
+    }
+    if output.is_empty() {
+        return VerifyResult::Fail("Empty output (no evidence)");
+    }
+    VerifyResult::Pass
+}
+
 /// Executa um programa verificado (interpretador minimal)
 pub fn execute_verified(prog: &VerifiedProgram, input: &[u8]) -> Result<Vec<u8>, &'static str> {
     let mut stack = vec![0u8; prog.stack_size as usize];
