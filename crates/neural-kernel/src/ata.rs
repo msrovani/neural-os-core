@@ -52,6 +52,40 @@ impl AtaDriver {
         write_io(self.io_base + 7, cmd);
     }
 
+    /// ATA IDENTIFY — obtem informacoes do disco
+    unsafe fn identify(&self) -> Option<[u16; 256]> {
+        self.wait_bsy();
+        use x86_64::instructions::port::Port;
+        // Comando IDENTIFY
+        write_io(self.io_base + 6, 0xA0);
+        write_io(self.io_base + 2, 0);
+        write_io(self.io_base + 3, 0);
+        write_io(self.io_base + 4, 0);
+        write_io(self.io_base + 5, 0);
+        write_io(self.io_base + 7, 0xEC);
+        let st = read_io(self.io_base + 7);
+        if st == 0 { return None; }
+        self.wait_bsy();
+        if !self.wait_drq() { return None; }
+        let mut data = [0u16; 256];
+        for i in 0..256 {
+            let lo: u8; let hi: u8;
+            core::arch::asm!("in al, dx", out("al") lo, in("dx") self.io_base, options(nostack, preserves_flags));
+            core::arch::asm!("in al, dx", out("al") hi, in("dx") (self.io_base + 1), options(nostack, preserves_flags));
+            data[i] = (lo as u16) | ((hi as u16) << 8);
+        }
+        Some(data)
+    }
+
+    /// Total de setores do disco (via IDENTIFY word 60-61)
+    pub unsafe fn total_sectors(&self) -> Option<u64> {
+        let id = self.identify()?;
+        let lo = id[60] as u64;
+        let hi = id[61] as u64;
+        let total = lo | (hi << 16);
+        if total > 0 { Some(total) } else { None }
+    }
+
     pub unsafe fn read_sectors(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
         self.cmd(lba, count, 0x20);
         for s in 0..count as usize {
