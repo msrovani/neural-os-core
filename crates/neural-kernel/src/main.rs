@@ -65,6 +65,7 @@ mod rtl8139;
 mod e1000;
 mod safety;
 mod security;
+mod skill_observer;
 mod usb_msc;
 mod virtio_net;
 mod virtio_gpu;
