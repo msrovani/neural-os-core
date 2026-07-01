@@ -27,6 +27,7 @@ mod cortex;
 mod fat;
 mod hw_agents;
 mod agency;
+mod agency_importer;
 mod cron;
 mod display;
 mod hermes;

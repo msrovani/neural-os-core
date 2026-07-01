@@ -40,6 +40,10 @@ impl Agency {
         d.push(d_legal());
         d.push(d_spatial());
         d.push(d_research());
+        // Importa divisões do agency-agents (msitarzewski, MIT, 123k★)
+        for import_div in crate::agency_importer::import_divisions() {
+            d.push(import_div);
+        }
         d
     }
 
