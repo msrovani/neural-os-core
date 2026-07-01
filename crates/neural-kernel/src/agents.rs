@@ -365,17 +365,17 @@ impl HermesAgent {
     fn execute_skill(&self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
         let token_val = token.as_legacy();
         let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        // Lock order: SKILL_REGISTRY → TRUST_CACHE (consistente em todo codigo)
+        let reg = SKILL_REGISTRY.lock();
         {
             let mut tc = TRUST_CACHE.lock();
             if !tc.is_trusted(token_val, name, now) {
-                let reg = SKILL_REGISTRY.lock();
                 if !reg.validate_token(name, token) {
                     return Err("token nao autorizado");
                 }
                 tc.check_or_cache(token_val, name, now, 360);
             }
         }
-        let reg = SKILL_REGISTRY.lock();
         reg.execute_skill_unchecked(name, payload)
     }
 }

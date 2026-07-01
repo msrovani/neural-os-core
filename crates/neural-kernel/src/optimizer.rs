@@ -172,16 +172,13 @@ impl ConfigLearner {
 
     /// Tira um snapshot da configuração atual de hardware
     pub fn snapshot(&mut self) {
-        let arch = crate::SYSTEM_ARCH.lock();
         let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-        let snap = HardwareConfigSnapshot {
-            tick,
-            ring0_mode: arch.as_ref().map_or(0, |a| a.ring0_mode),
-            heap_mb: arch.as_ref().map_or(0, |a| a.heap_size_mb as u64),
-            gpu_present: crate::display::fb::GPU.lock().is_some(),
-            net_online: crate::net::NET_CONFIG.lock().online,
-        };
-        drop(arch);
+        // Locks individuais (sem aninhamento) para evitar deadlock
+        let gpu_present = crate::display::fb::GPU.lock().is_some();
+        let net_online = crate::net::NET_CONFIG.lock().online;
+        let ring0_mode = crate::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.ring0_mode);
+        let heap_mb = crate::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.heap_size_mb as u64);
+        let snap = HardwareConfigSnapshot { tick, ring0_mode, heap_mb, gpu_present, net_online };
         self.snapshots.push(snap);
         if self.snapshots.len() > 20 { self.snapshots.remove(0); }
     }
