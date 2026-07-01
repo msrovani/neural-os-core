@@ -271,6 +271,15 @@ impl Agent for OptimizerAgent {
             }
         }
 
+        // Skill Observer: captura padrões de task para auto-skill
+        if self.tick_counter % 300 == 0 {
+            let pending = crate::skill_observer::pending_observations();
+            if !pending.is_empty() {
+                let report = crate::skill_observer::report();
+                serial_println!("[OBSERVER] {} pending observations\n{}", pending.len(), report);
+            }
+        }
+
         AgentTickResult::Pending
     }
 }

@@ -54,7 +54,29 @@ impl CronAgent {
     pub fn init_defaults(&mut self) {
         self.schedule("health", 200, "CRON_HEALTH", "Health check");
         self.schedule("memory_report", 500, "CRON_REPORT", "Memory report");
+        self.schedule("skill_review", 3000, "SKILL_REVIEW", "Comprehensive skill review");
         serial_println!("[CRON] {} jobs default registrados", self.jobs.len());
+    }
+
+    /// Executa revisão comprehensive de observações (função livre, sem borrow)
+    pub fn run_review() {
+        let pending = crate::skill_observer::pending_observations();
+        let count = pending.len();
+        if count == 0 { return; }
+
+        serial_println!("[REVIEW] Running comprehensive review ({} open observations)", count);
+        for obs in &pending {
+            // Tenta auto-skill se for candidato a nova skill
+            if obs.skill.starts_with("New skill candidate:") {
+                let name = obs.skill.trim_start_matches("New skill candidate:");
+                let skill_md = crate::skill_gen::generate_skill(name.trim());
+                if let Some(_md) = skill_md {
+                    serial_println!("[REVIEW] Generated skill '{}' from observation #{}", name.trim(), obs.number);
+                    crate::skill_observer::mark_actioned(obs.number);
+                }
+            }
+        }
+        serial_println!("[REVIEW] Review complete. {} observations processed.", count);
     }
 }
 
@@ -68,6 +90,13 @@ impl Agent for CronAgent {
             if now >= job.last_run + job.interval {
                 job.last_run = now;
                 serial_println!("[CRON] Job '{}' disparado @ tick {}", job.name, now);
+
+                // Skill review é executado inline, não via EventBus
+                if job.name == "skill_review" {
+                    Self::run_review();
+                    continue;
+                }
+
                 let _ = EVENT_BUS.publish(crate::Event {
                     id: 0,
                     topic: job.topic.clone(),
