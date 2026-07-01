@@ -80,6 +80,7 @@ mod vfs;
 mod fs;
 mod shell;
 mod apps;
+mod skill_gen;
 
 use lazy_static::lazy_static;
 

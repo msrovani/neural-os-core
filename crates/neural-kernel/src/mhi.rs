@@ -233,3 +233,36 @@ pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<PhysAddr> {
 use spin::Mutex;
 
 pub static MHI_REGISTRY: Mutex<MhiRegistry> = Mutex::new(MhiRegistry::new());
+
+// ---------------------------------------------------------------------------
+// MegaTrain — CPU↔GPU streaming + pipelined prefetch
+// ---------------------------------------------------------------------------
+
+pub struct PrefetchRequest {
+    pub tier_from: AllocTier,
+    pub tier_to: AllocTier,
+    pub phys_addr: u64,
+    pub size: usize,
+    pub owner: String,
+}
+
+pub static MEGATRAIN_QUEUE: Mutex<Vec<PrefetchRequest>> = Mutex::new(Vec::new());
+
+/// Enfileira prefetch entre tiers (ex: HDD → DRAM)
+pub fn enqueue_prefetch(from: AllocTier, to: AllocTier, addr: u64, size: usize, owner: &str) {
+    MEGATRAIN_QUEUE.lock().push(PrefetchRequest {
+        tier_from: from, tier_to: to,
+        phys_addr: addr, size, owner: String::from(owner),
+    });
+}
+
+/// Executa 1 prefetch por tick (MegaTrain: overlap I/O + compute)
+pub fn megatrain_tick() {
+    let mut q = MEGATRAIN_QUEUE.lock();
+    if let Some(req) = q.pop() {
+        crate::serial_println!("[MEGATRAIN] Prefetch {:?}→{:?} ({}b) {}",
+            req.tier_from, req.tier_to, req.size, req.owner);
+        let mut reg = MHI_REGISTRY.lock();
+        reg.register(x86_64::PhysAddr::new(req.phys_addr), req.size, req.tier_to, &req.owner);
+    }
+}

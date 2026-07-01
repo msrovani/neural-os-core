@@ -260,6 +260,9 @@ impl Agent for OptimizerAgent {
         // MHI Scheduler: promove/demove tiers por padrao de acesso
         crate::fs::mhi_scheduler::mhi_scheduler_tick(self.tick_counter);
 
+        // MegaTrain: prefetch overlap I/O + compute
+        crate::mhi::megatrain_tick();
+
         // #163: Snapshot de config a cada 1000 ticks
         if self.tick_counter % 1000 == 0 {
             self.config_learner.snapshot();
