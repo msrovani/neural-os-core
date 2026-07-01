@@ -342,6 +342,47 @@ pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     x86_64::instructions::tlb::flush(virt);
 }
 
+/// Mapa uma regiao de memoria fisica usando Huge Pages de 2MB para MMIO.
+/// Muito mais rapido que map_page_uc() para grandes regioes (ex: 8GB VRAM).
+/// Retorna o numero de entradas L2 configuradas.
+pub unsafe fn map_region_uc_2mb(phys_start: u64, size_bytes: u64, phys_mem_offset: u64) -> usize {
+    use x86_64::structures::paging::{PageTable, PageTableFlags};
+    use x86_64::VirtAddr;
+    use x86_64::PhysAddr;
+
+    let mut mapped = 0;
+    let mut offset = 0u64;
+    while offset < size_bytes {
+        let phys = phys_start + offset;
+        let virt = VirtAddr::new(phys + phys_mem_offset);
+        let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+        let base = VirtAddr::new(phys_mem_offset);
+        let l4_virt = base + l4_frame.start_address().as_u64();
+        let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+
+        let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
+        if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
+            let frame = alloc_mmio_frame(base);
+            l3_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+        }
+        let l3_virt = base + l3_entry.addr().as_u64();
+        let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+
+        // L2 entry with HUGE_PAGE (2MB)
+        let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
+        // Alinhar phys ao boundary de 2MB
+        let aligned_phys = phys & !((1 << 21) - 1);
+        l2_entry.set_addr(PhysAddr::new(aligned_phys),
+            PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+            | PageTableFlags::HUGE_PAGE | PageTableFlags::NO_CACHE
+            | PageTableFlags::WRITE_THROUGH);
+        x86_64::instructions::tlb::flush(virt);
+        mapped += 1;
+        offset += 1 << 21; // 2MB
+    }
+    mapped
+}
+
 fn alloc_mmio_frame(base: VirtAddr) -> u64 {
     use x86_64::structures::paging::FrameAllocator;
     let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
