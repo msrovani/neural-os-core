@@ -56,6 +56,9 @@ impl IntelRing {
             core::ptr::write_volatile((mmio + RENDER_RING_TAIL) as *mut u32, 0);
         }
 
+        // Inicializa GTT para que a GPU enxergue o ring buffer em RAM
+        unsafe { init_gtt(mmio, ring_pa, 4); }
+
         let gen = match gpu.arch {
             GpuArch::IntelGen9 => 9,
             GpuArch::IntelGen12 | GpuArch::IntelXe => 12,
@@ -144,6 +147,33 @@ impl IntelRing {
         self.submit();
         self.wait_idle(1000000)
     }
+}
+
+// GTT (Graphics Translation Table) — GPU MMU que mapeia RAM do sistema.
+// GMADR base tipicamente em 0x100000. GTT entries = primeiros 2MB da GMADR.
+const GMADR_BASE: u64 = 0x100000;
+const GFX_FLSH_CNTL: u64 = 0x101008;
+const GTT_ENTRY_COUNT: usize = 512; // 512 entradas × 8 bytes = 4KB
+
+/// Inicializa GTT para que a GPU enxergue paginas de RAM do sistema.
+/// Escreve entradas GTT para o ring buffer e batch buffers.
+pub unsafe fn init_gtt(mmio: u64, ring_pa: u64, ring_size_pages: u32) -> bool {
+    // GTT entries ficam no inicio da GMADR (primeiros 4KB = 512 entradas × 8 bytes)
+    let gtt_base = mmio + GMADR_BASE;
+
+    // Cada entrada GTT = 8 bytes: bits 0-39 = addr >> 12, bit 0 = PRESENT
+    for i in 0..ring_size_pages {
+        let pa = ring_pa + (i as u64) * 4096;
+        let entry: u64 = (pa >> 12) << 2 | 0x1; // PFN << 2 | PRESENT (formato Gen9+)
+        core::ptr::write_volatile((gtt_base + (i as u64) * 8) as *mut u64, entry);
+    }
+
+    // Flush GTT
+    core::ptr::write_volatile((mmio + GFX_FLSH_CNTL) as *mut u32, 0);
+
+    serial_println!("[GTT] {} entradas escritas @ {:#x} para ring {:#x}",
+        ring_size_pages, gtt_base, ring_pa);
+    true
 }
 
 // BCS (Blitter Command Streamer) ring — engine dedicado para blit.
