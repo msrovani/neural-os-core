@@ -3,6 +3,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 const MAX_EVENTS: usize = 256;
+/// Curated memory budget: quanto contexto é SEMPRE carregado (Anatomy gap)
+const CURATED_MEMORY_BUDGET: usize = 4096; // ~4KB de contexto sempre disponível
 
 #[derive(Clone, Debug)]
 pub enum EventKind {
@@ -76,5 +78,29 @@ impl EventLog {
             total, user_count, resp_count, skill_count,
             self.events.back().map_or(0, |e| e.timestamp),
         )
+    }
+
+    /// Curated context: retorna sempre ≤ CURATED_MEMORY_BUDGET bytes
+    /// Prioriza: últimos inputs + respostas recentes, descarta o resto
+    pub fn curated_context(&self) -> String {
+        let mut ctx = String::new();
+        // Sempre inclui os últimos 3 exchanges
+        for ev in self.events.iter().rev().take(6) {
+            let prefix = match ev.kind {
+                EventKind::UserInput => "User: ",
+                EventKind::HermesResponse => "Hermes: ",
+                _ => "",
+            };
+            if !prefix.is_empty() {
+                if let Ok(text) = core::str::from_utf8(&ev.payload) {
+                    ctx.push_str(prefix);
+                    ctx.push_str(text);
+                    ctx.push('\n');
+                }
+            }
+            if ctx.len() > CURATED_MEMORY_BUDGET { break; }
+        }
+        ctx.truncate(CURATED_MEMORY_BUDGET);
+        ctx
     }
 }

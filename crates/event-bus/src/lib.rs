@@ -16,6 +16,7 @@ pub mod supercontext;
 pub mod skill_index;
 pub mod tokenjuice;
 pub mod scheme;
+pub mod kanerva;
 
 pub use bus::{EventBus, Receiver};
 pub use capability::CapabilityToken;

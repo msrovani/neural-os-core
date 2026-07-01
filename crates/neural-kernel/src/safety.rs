@@ -1,4 +1,5 @@
 //! Safety Interceptor — Asimov's Four Laws embedadas no kernel.
+//! Hard Blocklist: comandos que NUNCA rodam, nem em YOLO mode.
 //!
 //! Layers:
 //!   0 — Systemic Cosmic Law:  nenhuma ação que ameace a humanidade
@@ -167,8 +168,35 @@ impl Agent for SafetyAgent {
                     payload: b"ALLOW".to_vec(),
                     token: crate::CapabilityToken::Legacy(1),
                 });
-            }
+    }
+}
+
+/// Hard blocklist: comandos que NUNCA rodam, mesmo se o modelo pedir
+const HARD_BLOCKLIST: &[&str] = &[
+    "rm -rf /", "rm -rf /*",
+    "dd if=/dev/zero of=/dev/sd", "dd if=/dev/random of=/dev/sd",
+    "mkfs.", "format",
+    ":(){ :|:& };:",  // fork bomb
+    "chmod -R 000 /", "chown -R 0:0 /",
+    "curl * | sh", "wget * | sh",
+    "bash -c ", "eval $(", "`rm ",
+];
+
+pub fn check_command(cmd: &str) -> Result<(), &'static str> {
+    let lower = cmd.to_ascii_lowercase();
+    for &blocked in HARD_BLOCKLIST {
+        if lower.contains(blocked) {
+            crate::serial_println!("[SAFETY] Blocked: {}", blocked);
+            return Err("Hard blocklist violation");
         }
+    }
+    if lower.contains("weapon") || lower.contains("wmd") || lower.contains("cyberwar")
+        || lower.contains("nuclear") || lower.contains("biological") {
+        crate::serial_println!("[SAFETY] Layer 0 violation!");
+        return Err("Layer 0: Systemic Cosmic Law");
+    }
+    Ok(())
+}
         AgentTickResult::Pending
     }
 }
