@@ -17,6 +17,10 @@ pub const PIC_2_OFFSET: u8 = 40;
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
+static MOUSE_PHASE: AtomicU8 = AtomicU8::new(0);
+static MOUSE_B0: AtomicU8 = AtomicU8::new(0);
+static MOUSE_B1: AtomicU8 = AtomicU8::new(0);
+static MOUSE_B2: AtomicU8 = AtomicU8::new(0);
 
 lazy_static! {
     static ref PICS: Mutex<ChainedPics> =
@@ -154,13 +158,23 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(stack_frame: InterruptStack
 
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
-    // Read 3 mouse bytes from PS/2 port 0x60
+    // Mouse envia 1 byte por IRQ (3 bytes por pacote)
+    // Usamos uma fase global para montar o pacote
     let mut data_port = Port::<u8>::new(0x60);
-    let b0: u8 = unsafe { data_port.read() };
-    let b1: u8 = unsafe { data_port.read() };
-    let b2: u8 = unsafe { data_port.read() };
-    let packet = (b0 as u32) | ((b1 as u32) << 8) | ((b2 as u32) << 16);
-    LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+    let byte: u8 = unsafe { data_port.read() };
+    let phase = MOUSE_PHASE.fetch_add(1, Ordering::Relaxed) % 3;
+    match phase {
+        0 => MOUSE_B0.store(byte, Ordering::Release),
+        1 => MOUSE_B1.store(byte, Ordering::Release),
+        2 => {
+            MOUSE_B2.store(byte, Ordering::Release);
+            let packet = MOUSE_B0.load(Ordering::Acquire) as u32
+                | ((MOUSE_B1.load(Ordering::Acquire) as u32) << 8)
+                | ((byte as u32) << 16);
+            LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+        }
+        _ => {}
+    }
     send_eoi(44);
 }
 
