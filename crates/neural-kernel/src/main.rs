@@ -86,6 +86,7 @@ mod browser_agent;
 mod verify;
 mod hal;
 mod bench;
+mod gpu;
 
 use lazy_static::lazy_static;
 

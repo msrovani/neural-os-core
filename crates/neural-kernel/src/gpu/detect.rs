@@ -1,6 +1,5 @@
 //! GPU Detection — scan PCI class 0x03, identifica fabricante + modelo + VRAM.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 use crate::pci::PciDevice;
 use crate::serial_println;
@@ -9,6 +8,7 @@ pub const VENDOR_INTEL: u16 = 0x8086;
 pub const VENDOR_NVIDIA: u16 = 0x10DE;
 pub const VENDOR_AMD: u16 = 0x1002;
 pub const VENDOR_VIRTIO: u16 = 0x1AF4;
+pub const VENDOR_UNKNOWN: u16 = 0xFFFF;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GpuVendor { Intel, Nvidia, Amd, VirtIo, Unknown }
@@ -50,26 +50,28 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
         if dev.class != 0x03 { continue; } // Display controller
 
         let vendor = match dev.vendor_id {
-            0x8086 => GpuVendor::Intel,
-            0x10DE => GpuVendor::Nvidia,
-            0x1002 => GpuVendor::Amd,
-            0x1AF4 => GpuVendor::VirtIo,
+            VENDOR_INTEL => GpuVendor::Intel,
+            VENDOR_NVIDIA => GpuVendor::Nvidia,
+            VENDOR_AMD => GpuVendor::Amd,
+            VENDOR_VIRTIO => GpuVendor::VirtIo,
             _ => GpuVendor::Unknown,
         };
 
         let (arch, name, vram_size) = identify_gpu(dev);
-        let is_intel_igpu = dev.vendor_id == 0x8086 && (dev.subclass == 0x00 || dev.device_id == 0x5916);
+        // Intel iGPU = Intel + sem VRAM dedicada (vram_size == 0)
+        // Intel dGPU (Arc) tem VRAM dedicada (vram_size > 0)
+        let is_intel_igpu = dev.vendor_id == VENDOR_INTEL && vram_size == 0;
 
-        // BAR0 = MMIO registers
-        let bar0 = (dev.bar0 as u64) | ((dev.bar1 as u64) << 32);
-        // BAR2 = VRAM (NVIDIA/AMD) ou BAR0 continuacao (Intel)
-        let (bar2, vram_bytes) = if dev.vendor_id == 0x8086 {
-            // Intel iGPU: VRAM = DRAM compartilhada (sem BAR2 dedicada)
-            // Detecta via stolen memory ou assume 0
-            (0u64, 0u64) // iGPU usa DRAM do sistema
+        // BAR0 = MMIO registers (memory BAR, bits 0-3 indicam tipo)
+        let bar0_raw = (dev.bar0 as u64) | ((dev.bar1 as u64) << 32);
+        let bar0 = if dev.bar0 & 1 == 0 { bar0_raw & !0xF } else { bar0_raw & 0xFFFF };
+        // BAR2 = VRAM (NVIDIA/AMD) ou Intel Arc dGPU
+        let (bar2, vram_bytes) = if is_intel_igpu {
+            (0u64, 0u64)
         } else {
-            let bar2_val = (dev.bar2 as u64) | ((dev.bar3 as u64) << 32);
-            (bar2_val, vram_size)
+            let bar2_raw = (dev.bar2 as u64) | ((dev.bar3 as u64) << 32);
+            let bar2 = if dev.bar2 & 1 == 0 { bar2_raw & !0xF } else { bar2_raw & 0xFFFF };
+            (bar2, vram_size)
         };
 
         let gpu = GpuInfo {
