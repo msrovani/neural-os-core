@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.65.0] — 2026-06-30 — COSMIC UI Patterns + AxiomOS Verifier + HAL + Bench
+
+### Added
+- **Workspace manager** (COSMIC): `display/workspace.rs` — 3 workspaces, LayoutMode (Floating/Tiled/Grid/Maximized)
+- **Notification overlay** (COSMIC): `display/notifications.rs` — temporárias, 3 severidades, expire
+- **Auto-tiling layout** (COSMIC): `display/layout.rs` — Tile, Grid, Maximize, Floating
+- **Skill verifier** (AxiomOS): `verify.rs` — eBPF-style opcodes, verify_skill(), execute_verified()
+- **HAL trait** (AxiomOS): `hal.rs` — `trait Architecture` + impl X86_64
+- **Benchmark framework** (AxiomOS): `bench.rs` — start/end_bench, alloc_throughput
+
+## [0.64.0] — 2026-06-30 — Voice skill + Gbrain reranker + BrowserAgent
+
+### Added
+- **Voice skill**: `voice_skill.rs` — speak(text, profile), 8 preset voices, display fallback
+- **Gbrain reranker**: `kgraph.rs` — `ranked_query()` combina label match + edge scores
+- **BrowserAgent**: `browser_agent.rs` — fetch_page, extract_text (HTML tag-stripper), PageViewerApp, cache
+- PageViewerApp: janela no compositor que mostra conteúdo de páginas web
+
+## [0.63.1] — 2026-06-30 — MegaTrain patterns + Self-skill generation
+
+### Added
+- **MegaTrain streaming**: `mhi.rs` — MEGATRAIN_QUEUE, enqueue_prefetch(), megatrain_tick()
+- **Self-skill generation**: `skill_gen.rs` — TaskPattern registry, generate_skill(), auto após 3 usos
+
+## [0.63.0] — 2026-06-30 — Cortex Evolution + PTRM + Kanerva + Anatomy
+
+### Added
+- **Model trait**: `cortex.rs` — `pub trait Model: Send`, `set_model()`, `generate_via_model()`
+- **PTRM**: `cortex.rs` — `gaussian_noise()`, `ptrm_generate()`, Q-head, 3 trajetórias
+- **Kanerva Memory**: `kanerva.rs` — sparse_read, distributed_write, bayesian_update, hamming_distance
+- **Hard blocklist**: `safety.rs` — 12 comandos que NUNCA rodam, check_command()
+- **Curated memory**: `conversation.rs` — curated_context() com budget 4KB
+
 ## [0.61.0] — 2026-06-30 — Sprint 61 Desktop completo (7/7 sub-sprints)
 
 ### Added
