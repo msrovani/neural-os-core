@@ -258,78 +258,80 @@ pub fn sample(&self, tokens: &[u16], top_k: usize, temperature: f32) -> u16 {
 }
 }
 
-fn read_f32(data: &[u8], offset: &mut usize) -> f32 {
-    let bytes = data[*offset..*offset + 4].try_into().unwrap();
+fn read_f32(data: &[u8], offset: &mut usize) -> Option<f32> {
+    if *offset + 4 > data.len() { return None; }
+    let bytes = data[*offset..*offset + 4].try_into().ok()?;
     *offset += 4;
-    f32::from_le_bytes(bytes)
+    Some(f32::from_le_bytes(bytes))
 }
 
-fn read_u16(data: &[u8], offset: &mut usize) -> u16 {
-    let bytes = data[*offset..*offset + 2].try_into().unwrap();
+fn read_u16(data: &[u8], offset: &mut usize) -> Option<u16> {
+    if *offset + 2 > data.len() { return None; }
+    let bytes = data[*offset..*offset + 2].try_into().ok()?;
     *offset += 2;
-    u16::from_le_bytes(bytes)
+    Some(u16::from_le_bytes(bytes))
 }
 
-fn read_u32(data: &[u8], offset: &mut usize) -> u32 {
-    let bytes = data[*offset..*offset + 4].try_into().unwrap();
+fn read_u32(data: &[u8], offset: &mut usize) -> Option<u32> {
+    if *offset + 4 > data.len() { return None; }
+    let bytes = data[*offset..*offset + 4].try_into().ok()?;
     *offset += 4;
-    u32::from_le_bytes(bytes)
+    Some(u32::from_le_bytes(bytes))
 }
 
-fn read_ternary_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> PackedTernaryTensor {
+fn read_ternary_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<PackedTernaryTensor> {
     let count = (rows * cols + 3) / 4;
+    if *offset + count > data.len() { return None; }
     let packed = data[*offset..*offset + count].to_vec();
     *offset += count;
-    PackedTernaryTensor { shape: (rows, cols), packed_data: packed }
+    Some(PackedTernaryTensor { shape: (rows, cols), packed_data: packed })
 }
 
-fn read_f32_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Tensor {
-    let count = rows * cols * 4;
-    let mut raw = Vec::with_capacity(rows * cols);
-    for _ in 0..rows * cols {
-        raw.push(read_f32(data, offset));
+fn read_f32_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<Tensor> {
+    let count = rows * cols;
+    if *offset + count * 4 > data.len() { return None; }
+    let mut raw = Vec::with_capacity(count);
+    for _ in 0..count {
+        raw.push(read_f32(data, offset)?);
     }
-    Tensor::from_row_major((rows, cols), raw).unwrap()
+    Tensor::from_row_major((rows, cols), raw)
 }
 
 pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let mut off = 0;
-    let magic = read_u32(data, &mut off);
+    let magic = read_u32(data, &mut off)?;
     if magic != 0xBE11BE11 { return None; }
-    let version = read_u16(data, &mut off);
-    let _num_params = read_u32(data, &mut off);
-    let _hidden = read_u16(data, &mut off) as usize;
-    let _layers = read_u16(data, &mut off) as usize;
-    let _heads = read_u16(data, &mut off) as usize;
-    let _vocab = read_u16(data, &mut off) as usize;
-    let _max_seq = read_u16(data, &mut off);
+    let _version = read_u16(data, &mut off)?;
+    let _num_params = read_u32(data, &mut off)?;
+    let _hidden = read_u16(data, &mut off)? as usize;
+    let _layers = read_u16(data, &mut off)? as usize;
+    let _heads = read_u16(data, &mut off)? as usize;
+    let _vocab = read_u16(data, &mut off)? as usize;
+    let _max_seq = read_u16(data, &mut off)?;
     let mut num_medusa = 0usize;
-    if version >= 2 {
-        num_medusa = data[off] as usize; off += 4;  // u8 medusa_heads + 3 padding
-    } else {
-        off += 4;
-    }
+    if off + 4 > data.len() { return None; }
+    num_medusa = data[off] as usize; off += 4;
 
-    let embed = read_f32_tensor(data, &mut off, _vocab, _hidden);
+    let embed = read_f32_tensor(data, &mut off, _vocab, _hidden)?;
     let mut layers = Vec::with_capacity(_layers);
     for _ in 0.._layers {
         layers.push(LayerWeights {
-            rms_attn: read_f32(data, &mut off),
-            q: read_ternary_tensor(data, &mut off, _hidden, _hidden),
-            k: read_ternary_tensor(data, &mut off, _hidden, _hidden),
-            v: read_ternary_tensor(data, &mut off, _hidden, _hidden),
-            o: read_ternary_tensor(data, &mut off, _hidden, _hidden),
-            rms_ffn: read_f32(data, &mut off),
-            gate: read_ternary_tensor(data, &mut off, _hidden, _hidden * 2),
-            up: read_ternary_tensor(data, &mut off, _hidden, _hidden * 2),
-            down: read_ternary_tensor(data, &mut off, _hidden * 2, _hidden),
+            rms_attn: read_f32(data, &mut off)?,
+            q: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
+            k: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
+            v: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
+            o: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
+            rms_ffn: read_f32(data, &mut off)?,
+            gate: read_ternary_tensor(data, &mut off, _hidden, _hidden * 2)?,
+            up: read_ternary_tensor(data, &mut off, _hidden, _hidden * 2)?,
+            down: read_ternary_tensor(data, &mut off, _hidden * 2, _hidden)?,
         });
     }
-    let unembed = read_ternary_tensor(data, &mut off, _hidden, _vocab);
+    let unembed = read_ternary_tensor(data, &mut off, _hidden, _vocab)?;
 
     let mut medusa_heads = Vec::with_capacity(num_medusa);
     for _ in 0..num_medusa {
-        let w = read_ternary_tensor(data, &mut off, _hidden, _vocab);
+        let w = read_ternary_tensor(data, &mut off, _hidden, _vocab)?;
         medusa_heads.push(MedusaHead { w });
     }
     if medusa_heads.is_empty() {

@@ -31,10 +31,9 @@ extern "C" fn ap_entry(_cpu_id: u64) -> ! {
             let svr = core::ptr::read_volatile((base + 0xF0) as *const u32);
             core::ptr::write_volatile((base + 0xF0) as *mut u32, (svr & 0xFFFFFF00) | 0xFF | 0x100);
             core::ptr::write_volatile((base + 0x80) as *mut u32, 0u32); // TPR = 0
+            apic::apic_eoi();
         }
     }
-
-    unsafe { apic::apic_eoi(); }
 
     AP_ENTRY_COUNTER.fetch_add(1, Ordering::SeqCst);
 
