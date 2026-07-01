@@ -546,6 +546,24 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Init Desktop Apps (criam janelas no compositor)
     crate::apps::init_apps();
 
+    // GPU: detecta hardware e inicializa backend
+    unsafe {
+        let gpus = crate::gpu::detect::detect_all();
+        if !gpus.is_empty() {
+            if let Some(g) = crate::gpu::detect::best_compute_gpu(&gpus) {
+                crate::gpu::vram::init_vram_tier(g);
+            }
+            crate::gpu::backend::init_backend(&gpus);
+            serial_println!("[GPU] {} GPU(s) detectadas. Backend: {}",
+                gpus.len(), crate::gpu::backend::gpu_status());
+        } else {
+            serial_println!("[GPU] Nenhuma GPU detectada.");
+        }
+    }
+
+    // Skill Observer: registra observação inicial
+    crate::skill_observer::watch_task("boot", &["PCI scan", "GPU init", "Agent registry"], 0);
+
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
     registry.register(Box::new(agents::MemoryAgent::new()));

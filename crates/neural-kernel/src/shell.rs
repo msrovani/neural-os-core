@@ -91,10 +91,32 @@ pub fn execute(cmd: &str) -> String {
                 String::from("VFS not initialized\n")
             }
         }
+        "learn" => {
+            if args.is_empty() {
+                String::from("Usage: learn <pattern-name>\n")
+            } else {
+                let smd = crate::skill_gen::generate_skill(args);
+                match smd {
+                    Some(md) => {
+                        crate::skill_observer::mark_actioned(0); // marca observações pendentes
+                        alloc::format!("Skill '{}' generated:\n{}\n", args, md)
+                    }
+                    None => alloc::format!("Pattern '{}' not found. Use it 3+ times first.\n", args)
+                }
+            }
+        }
+        "observations" => {
+            let report = crate::skill_observer::report();
+            if report.is_empty() {
+                String::from("No open observations.\n")
+            } else {
+                report
+            }
+        }
         _ => alloc::format!("Unknown: {}. Try help\n", name),
     }
 }
 
 fn help(_args: &str) -> String {
-    String::from("Commands: help echo clear uptime ps meminfo pci theme profile shutdown reboot date uname cpuinfo ls\n")
+    String::from("Commands: help echo clear uptime ps meminfo pci theme profile shutdown reboot date uname cpuinfo ls learn observations\n")
 }
