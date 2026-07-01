@@ -3,6 +3,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 
+pub const EMBED_DIM: usize = 16; // CodebookVQ embedding size (leve)
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum NodeKind {
     Agent, Skill, Hardware, Event, Unknown,
@@ -72,5 +74,41 @@ impl Graph {
             .filter(|e| e.relation == relation)
             .map(|e| (e.source, e.target))
             .collect()
+    }
+
+    /// Gbrain-style reranker: combina score de relacionamento + frequencia
+    pub fn ranked_query(&self, query: &str) -> Vec<(usize, String, f32)> {
+        let mut scores: BTreeMap<usize, f32> = BTreeMap::new();
+
+        // Score por match de label
+        for node in &self.nodes {
+            let label_lower = node.label.to_ascii_lowercase();
+            let query_lower = query.to_ascii_lowercase();
+            if label_lower.contains(&query_lower) {
+                let score = 1.0 + (label_lower.len() as f32).recip();
+                *scores.entry(node.id).or_insert(0.0) += score;
+            }
+        }
+
+        // Score por relacao com nodes matchados
+        let matched: Vec<usize> = scores.keys().cloned().collect();
+        for &id in &matched {
+            for edge in &self.edges {
+                if edge.source == id || edge.target == id {
+                    let other = if edge.source == id { edge.target } else { edge.source };
+                    *scores.entry(other).or_insert(0.0) += 0.5;
+                }
+            }
+        }
+
+        // Ordena por score
+        let mut result: Vec<(usize, String, f32)> = scores.into_iter()
+            .filter_map(|(id, score)| {
+                self.nodes.get(id).map(|n| (id, n.label.clone(), score))
+            })
+            .collect();
+        result.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(core::cmp::Ordering::Equal));
+        result.truncate(10);
+        result
     }
 }
