@@ -531,6 +531,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Init Filesystem Agents
     crate::fs::init_fs_agents();
 
+    // Detect + mount disk partitions (SDHC, USB, HD)
+    if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
+        unsafe { crate::fat::mount_partitions(ata); }
+    }
+
     // Init Compositor FIRST (apps precisam de janelas)
     *crate::display::compositor::COMPOSITOR.lock() = Some(crate::display::compositor::Compositor::new());
     crate::serial_println!("[COMPOSITOR] Inicializado.");
