@@ -146,6 +146,82 @@ impl IntelRing {
     }
 }
 
+// BCS (Blitter Command Streamer) ring — engine dedicado para blit.
+// Register base em 0x22000, layout identico ao RCS.
+const BCS_RING_BASE: u64 = 0x220000;
+const BCS_RING_HEAD: u64 = 0x220034;
+const BCS_RING_TAIL: u64 = 0x220038;
+const BCS_RING_CTL: u64 = 0x22003C;
+
+pub struct BcsRing {
+    pub mmio: u64,
+    pub ring_pa: u64,
+    pub ring_va: *mut u32,
+    pub ring_size: u32,
+    pub tail: u32,
+}
+
+impl BcsRing {
+    pub fn probe(mmio_base: u64) -> Option<Self> {
+        let mmio = mmio_base;
+        let (ring_pa, ring_va) = unsafe { alloc_ring_buffer(4)? };
+
+        unsafe {
+            core::ptr::write_bytes(ring_va, 0, 16384);
+            core::ptr::write_volatile((mmio + BCS_RING_BASE) as *mut u64, ring_pa);
+            core::ptr::write_volatile((mmio + BCS_RING_CTL) as *mut u32, 4096);
+            core::ptr::write_volatile((mmio + BCS_RING_HEAD) as *mut u32, 0);
+            core::ptr::write_volatile((mmio + BCS_RING_TAIL) as *mut u32, 0);
+        }
+        serial_println!("[BCS] Blitter ring at {:#x} size 4096 dw", ring_pa);
+        Some(BcsRing { mmio, ring_pa, ring_va, ring_size: 4096, tail: 0 })
+    }
+
+    pub fn write(&mut self, cmd: &[u32]) {
+        let len = cmd.len().min(self.ring_size as usize);
+        for i in 0..len {
+            unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+        }
+        self.tail = (self.tail + len as u32) % self.ring_size;
+    }
+
+    pub fn submit(&mut self) {
+        unsafe {
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            core::ptr::write_volatile((self.mmio + BCS_RING_TAIL) as *mut u32, self.tail);
+        }
+    }
+
+    pub fn wait_idle(&self, timeout: u32) -> bool {
+        for _ in 0..timeout {
+            let head = unsafe { core::ptr::read_volatile((self.mmio + BCS_RING_HEAD) as *const u32) };
+            if head == self.tail { return true; }
+            core::hint::spin_loop();
+        }
+        false
+    }
+
+    /// Executa blit no BCS ring (XY_SRC_COPY_BLT)
+    pub fn blit(&mut self, src: u64, dst: u64, w: u32, h: u32, bpp: u32) -> bool {
+        let pitch = w * bpp;
+        let cmd = [
+            0x41000000 | (3 << 24) | (pitch << 0),
+            (0xCC << 16) | (h << 0),
+            (0 << 16) | (w << 0),
+            (dst & 0xFFFFFFFF) as u32,
+            ((dst >> 32) & 0xFFFFFFFF) as u32,
+            (src & 0xFFFFFFFF) as u32,
+            ((src >> 32) & 0xFFFFFFFF) as u32,
+            MI_BATCH_BUFFER_END,
+        ];
+        self.write(&cmd);
+        self.submit();
+        self.wait_idle(1000000)
+    }
+}
+
+unsafe impl Send for BcsRing {}
+
 unsafe fn alloc_ring_buffer(pages: usize) -> Option<(u64, *mut u32)> {
     
     let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
