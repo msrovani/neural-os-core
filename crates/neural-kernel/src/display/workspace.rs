@@ -71,3 +71,5 @@ impl WorkspaceManager {
     pub fn current_workspace(&self) -> &Workspace { &self.workspaces[self.current] }
     pub fn current_workspace_mut(&mut self) -> &mut Workspace { &mut self.workspaces[self.current] }
 }
+
+pub static WORKSPACE_MANAGER: spin::Mutex<Option<WorkspaceManager>> = spin::Mutex::new(None);
