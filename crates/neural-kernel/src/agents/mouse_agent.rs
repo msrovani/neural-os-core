@@ -7,7 +7,6 @@ use crate::interrupts::LAST_MOUSE_PACKET;
 use crate::EVENT_BUS;
 use crate::{Event, CapabilityToken, serial_println};
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 pub const TOPIC_MOUSE_MOVED: &str = "MOUSE_MOVED";
@@ -102,8 +101,8 @@ impl Agent for MouseAgent {
         let dy = dy / 2;
 
         // Update position (clamped to screen)
-        let old_x = self.x;
-        let old_y = self.y;
+        let _old_x = self.x;
+        let _old_y = self.y;
         self.x = (self.x as i32 + dx as i32).max(0).min(1279) as u16;
         self.y = (self.y as i32 + dy as i32).max(0).min(719) as u16;
 

@@ -475,7 +475,7 @@ pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
             if t.len() >= MAX_SEQ { break; }
 
             // Forward + noise injection
-            let (hidden, logits) = model.forward_hidden(&t);
+            let (_hidden, logits) = model.forward_hidden(&t);
 
             // Q-head: confidence score (max logit)
             let q = (0..logits.shape.1).fold(0.0f32, |max, i| {

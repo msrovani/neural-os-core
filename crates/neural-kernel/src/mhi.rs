@@ -151,7 +151,7 @@ impl MhiRegistry {
 
     pub fn suggest_migration(&self, tick: u64) -> Vec<(PhysAddr, AllocTier, AllocTier)> {
         let profile = crate::profile::ProfileManager::get();
-        let (cpu_w, gpu_w, _io_w) = profile.resource_weights();
+        let (_cpu_w, gpu_w, _io_w) = profile.resource_weights();
         let mut migrations = Vec::new();
         for (_key, profile) in &self.allocations {
             let suggested = crate::mhi::arc_suggest_tier(profile, tick, gpu_w);

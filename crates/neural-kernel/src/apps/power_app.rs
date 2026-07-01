@@ -1,5 +1,4 @@
 use alloc::string::String;
-use alloc::vec::Vec;
 use crate::apps::App;
 
 pub struct PowerApp {

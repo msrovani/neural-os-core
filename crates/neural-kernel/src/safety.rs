@@ -16,7 +16,6 @@ use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::{serial_println, println};
 use crate::EVENT_BUS;
-use crate::hermes;
 
 const SAFETY_MANIFEST: AgentManifest = AgentManifest {
     name: "safety",

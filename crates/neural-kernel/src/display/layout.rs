@@ -1,15 +1,14 @@
 //! Auto-tiling layout engine — estilo COSMIC.
 //! Organiza janelas em grid/tile automaticamente.
 
-use alloc::vec;
 use alloc::vec::Vec;
-use crate::display::compositor::{Compositor, Window};
+use crate::display::compositor::Compositor;
 use crate::display::workspace::LayoutMode;
 
 /// Aplica layout automatico nas janelas do workspace atual
 pub fn apply_layout(comp: &mut Compositor, mode: LayoutMode, screen_w: u32, screen_h: u32) {
     let dock_h = 36;
-    let title_h = 20;
+    let _title_h = 20;
     let avail_w = screen_w as i32;
     let avail_h = (screen_h - dock_h) as i32;
 

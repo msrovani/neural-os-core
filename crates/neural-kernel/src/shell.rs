@@ -1,5 +1,4 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 
 /// Executa comando shell e retorna output
@@ -7,7 +6,7 @@ pub fn execute(cmd: &str) -> String {
     let cmd = cmd.trim();
     if cmd.is_empty() { return String::new(); }
 
-    let mut parts: Vec<&str> = cmd.splitn(2, |c: char| c.is_whitespace()).collect();
+    let parts: Vec<&str> = cmd.splitn(2, |c: char| c.is_whitespace()).collect();
     let name = if parts.is_empty() { "" } else { parts[0] };
     let args = if parts.len() > 1 { parts[1].trim() } else { "" };
 

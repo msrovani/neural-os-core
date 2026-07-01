@@ -6,7 +6,6 @@
 
 use crate::serial_println;
 use crate::xhci;
-use alloc::vec::Vec;
 
 // CBW — Command Block Wrapper (31 bytes)
 #[repr(C, packed)]
@@ -132,7 +131,7 @@ impl UsbMassStorage {
     }
 
     /// Escreve 1 setor (512 bytes) via SCSI WRITE10
-    pub unsafe fn write_sector(&mut self, lba: u32, data: &[u8; 512]) -> bool {
+    pub unsafe fn write_sector(&mut self, lba: u32, _data: &[u8; 512]) -> bool {
         if self.max_lba > 0 && lba >= self.max_lba { return false; }
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_WRITE10;

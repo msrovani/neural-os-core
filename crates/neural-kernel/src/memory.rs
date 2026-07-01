@@ -184,7 +184,7 @@ impl BitmapFrameAllocator {
             return self.allocate_contiguous(count);
         }
         // Tenta alocar blocos de 512 frames alinhados a 2 MiB
-        let huge_count = count / 512;
+        let _huge_count = count / 512;
         for h in 0.. {
             let start_bit = self.next_free_bit + h * 512;
             // Verifica alinhamento a 2 MiB

@@ -4,7 +4,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
-use alloc::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
 pub struct Workspace {

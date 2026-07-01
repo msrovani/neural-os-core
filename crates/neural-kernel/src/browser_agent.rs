@@ -6,12 +6,10 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::boxed::Box;
-use alloc::vec;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::serial_println;
-use spin::Mutex;
 
 pub const TOPIC_FETCH_REQUEST: &str = "FETCH_REQUEST";
 pub const TOPIC_FETCH_RESPONSE: &str = "FETCH_RESPONSE";
@@ -193,7 +191,7 @@ impl PageViewerApp {
     }
 
     pub fn render(&self) {
-        let t = theme::current();
+        let _t = theme::current();
         if let Some(ref mut comp) = *COMPOSITOR.lock() {
             if let Some(wid) = self.window_id {
                 if let Some(win) = comp.windows.iter_mut().find(|w| w.id == wid) {

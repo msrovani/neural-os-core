@@ -1,8 +1,6 @@
 //! Theme Engine — sistema de temas com 5 esquemas de cor.
 //! Hot-swap via /theme <nome>. Persiste via BootTrustAgent.
 
-use alloc::collections::BTreeMap;
-use alloc::string::String;
 use alloc::vec::Vec;
 use spin::Mutex;
 

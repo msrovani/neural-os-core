@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::interrupts::TIMER_TICKS;
-use crate::{serial_println, println};
+use crate::serial_println;
 use crate::EVENT_BUS;
 use crate::{Event, CapabilityToken};
 

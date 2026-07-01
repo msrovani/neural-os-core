@@ -2,8 +2,6 @@
 //! Leve: apenas texto-para-display (sem TTS pesado, sem Whisper).
 
 use alloc::string::String;
-use alloc::string::ToString;
-use alloc::vec::Vec;
 use spin::Mutex;
 
 /// Voz sintetizada (display ou futura integracao MCP)

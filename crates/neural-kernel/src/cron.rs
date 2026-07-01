@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::interrupts::TIMER_TICKS;
-use crate::{serial_println, println};
+use crate::serial_println;
 use crate::EVENT_BUS;
 
 const CRON_MANIFEST: AgentManifest = AgentManifest {
@@ -30,7 +30,7 @@ pub struct CronAgent {
 
 impl CronAgent {
     pub fn new() -> Self {
-        let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let _tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         CronAgent {
             jobs: Vec::new(),
         }

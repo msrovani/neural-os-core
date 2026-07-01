@@ -1,9 +1,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::vec;
 use alloc::format;
 use crate::serial_println;
-use crate::cortex;
 
 #[derive(Clone, Debug)]
 pub struct SkillManifest {

@@ -92,7 +92,7 @@ pub fn _print(args: fmt::Arguments) {
 
 /// Escreve no framebuffer. Retorna true se conseguiu.
 pub fn fb_print(args: fmt::Arguments) -> bool {
-    use fmt::Write;
+    
     let gpu = crate::display::fb::GPU.lock();
     if let Some(ref fb_gpu) = *gpu {
         let w = fb_gpu.fb_width as usize;

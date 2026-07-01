@@ -15,7 +15,6 @@
 //! Status: DETECTADO ✅ → INIT ⏳ (requer parser PCI cap)
 
 extern crate alloc;
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use x86_64::instructions::port::Port;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
@@ -115,7 +114,7 @@ impl Regs {
 }
 
 unsafe fn alloc_pages(n: usize) -> Option<(u64, *mut u8)> {
-    use x86_64::structures::paging::FrameAllocator;
+    
     let mut g = GLOBAL_ALLOCATOR.lock(); let a = (*g).as_mut()?;
     let f = a.allocate_contiguous(n)?; let pa = f.start_address().as_u64();
     Some((pa, (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8))

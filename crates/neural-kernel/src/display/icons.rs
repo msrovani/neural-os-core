@@ -3,7 +3,6 @@
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
-use alloc::vec::Vec;
 use spin::Mutex;
 
 pub type Icon = [u8; 64]; // 16×16 com 4 paletas (2 bits por pixel)
@@ -25,7 +24,7 @@ fn generate_geometric(hint: &str) -> Icon {
 
     // Deterministic color based on hint hash
     let color = hint.as_bytes().iter().fold(0u8, |a, b| a.wrapping_add(*b));
-    let palette = [
+    let _palette = [
         (10u8, 10u8, 20u8),        // 00: background (theme bg)
         (color, 128, 255 - color),   // 01: primary
         (color / 2, 200, 128),       // 10: secondary

@@ -3,7 +3,6 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use crate::tensor::Tensor;
 
 pub const TOPIC_USER_INTENT: &str = "USER_INTENT";
 pub const TOPIC_HERMES_RESPONSE: &str = "HERMES_RESPONSE";

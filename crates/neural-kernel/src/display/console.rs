@@ -7,7 +7,6 @@
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
-use alloc::vec::Vec;
 use crate::display::fb::DoubleBuffer;
 use crate::display::font;
 use crate::display::theme;
@@ -49,7 +48,7 @@ impl NeuralConsole {
 
         // Tensor strip (topo 2px)
         for x in 0..w {
-            let t2 = (x as f32 / w as f32);
+            let t2 = x as f32 / w as f32;
             let r = (30.0 + t2 * mem_pct * 200.0) as u8;
             let g = (10.0 + (1.0 - t2) * 60.0) as u8;
             self.fb.set_pixel(x, 0, r, g, 30 + (t2 * 150.0) as u8);

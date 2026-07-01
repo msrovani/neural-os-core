@@ -10,11 +10,8 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use bootloader_api::BootInfo;
-use core::sync::atomic::Ordering;
-use core::task::{Context, Poll};
 use event_bus::{CapabilityToken, Event, Receiver};
 use skill_registry::{McpManifest, Skill, SkillRegistry};
-use memory::BitmapFrameAllocator;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
@@ -369,7 +366,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 // Escreve "BOOT" no canto superior esquerdo
                 let msg = b"[BOOT] Kernel started";
                 let addr = buf.as_ptr() as usize;
-                for (i, &b) in msg.iter().enumerate() {
+                for (i, &_b) in msg.iter().enumerate() {
                     for dy in 0..16 {
                         let off = dy * stride + i * 8 * 4;
                         if off + 3 < buf.len() {
@@ -516,7 +513,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::serial_println!("[DBG8] ATA probe done");
     
     unsafe { crate::xhci::init_xhci(); }
-    let usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+    let _usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
     crate::serial_println!("[DBG9] init done. Starting agents...");
 
     // Init VFS + mounts

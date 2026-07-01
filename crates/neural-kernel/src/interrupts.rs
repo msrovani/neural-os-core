@@ -1,7 +1,7 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
 
 use crate::{println, serial_println};
-use core::sync::atomic::{AtomicU8, AtomicU16, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use spin::Mutex;
@@ -77,7 +77,7 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { dump_exception("#DB", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("#NMI", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn breakpoint_handler(f: InterruptStackFrame) { serial_println!("[EXCEPTION] #BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
+extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { serial_println!("[EXCEPTION] #BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
 extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { dump_exception("#UD", &f, None); loop { x86_64::instructions::hlt(); } }
@@ -140,7 +140,7 @@ fn send_eoi(vector: u8) {
 // IRQ handlers (hardware)
 // --------------------------------------------------------------------------
 
-extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     if ticks < 5 {
         serial_println!("[TIMER] Interrupt fired! tick={}", ticks);
@@ -148,7 +148,7 @@ extern "x86-interrupt" fn timer_handler(stack_frame: InterruptStackFrame) {
     send_eoi(32);
 }
 
-extern "x86-interrupt" fn keyboard_interrupt_handler(stack_frame: InterruptStackFrame) {
+extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
     let mut data_port = Port::<u8>::new(0x60);
     let scancode: u8 = unsafe { data_port.read() };

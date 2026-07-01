@@ -11,13 +11,12 @@
 //! A NetPhy unificada em netstack.rs tenta RTL8139 e VirtIO.
 
 extern crate alloc;
-use alloc::boxed::Box;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::Ordering;
 use x86_64::instructions::port::Port;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
-use crate::{serial_println, println};
+use crate::serial_println;
 
 pub const VIRTIO_VENDOR: u16 = 0x1AF4;
 pub const VIRTIO_NET_TRANSITIONAL: u16 = 0x1041; // transitional (legacy + modern)
@@ -73,7 +72,7 @@ struct UsedRing {
 
 /// Aloca N páginas físicas contíguas, retorna (phys_addr, virt_addr)
 unsafe fn alloc_pages(n: usize) -> Option<(u64, *mut u8)> {
-    use x86_64::structures::paging::FrameAllocator;
+    
     let mut guard = GLOBAL_ALLOCATOR.lock();
     let alloc = (*guard).as_mut()?;
     let frame = alloc.allocate_contiguous(n)?;
@@ -84,7 +83,7 @@ unsafe fn alloc_pages(n: usize) -> Option<(u64, *mut u8)> {
 
 /// Desaloca N páginas a partir de phys_addr
 unsafe fn dealloc_pages(pa: u64, n: usize) {
-    use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size4KiB};
+    use x86_64::structures::paging::{FrameDeallocator, PhysFrame, Size4KiB};
     let mut guard = GLOBAL_ALLOCATOR.lock();
     if let Some(alloc) = (*guard).as_mut() {
         let start = PhysFrame::<Size4KiB>::containing_address(
