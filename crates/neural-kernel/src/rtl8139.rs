@@ -146,7 +146,9 @@ impl Rtl8139Driver {
         self.write8(REG_CR, CR_RXE | CR_TXE);
 
         // Sync RX state — iPXE pode ter preenchido o buffer de recepcao
-        self.rx_offset = unsafe { self.read16(REG_CAPR) % (RX_BUF_SIZE - 16) as u16 };
+        let capr_init = unsafe { self.read16(REG_CAPR) };
+        self.rx_offset = capr_init % (RX_BUF_SIZE - 16) as u16;
+        serial_println!("[RTL8139] RX init: CAPR={:#06x} rx_offset={:#06x}", capr_init, self.rx_offset);
 
         serial_println!(
             "[RTL8139] Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]",
@@ -221,6 +223,8 @@ impl Rtl8139Driver {
         ]);
 
         if status & 0x0001 == 0 || pkt_len < 60 || pkt_len > 1536 {
+            serial_println!("[RTL8139-RX] skip: capr={:#06x} rx_off={:#06x} status={:#06x} len={}",
+                capr, self.rx_offset, status, pkt_len);
             self.rx_offset = capr;
             self.write16(REG_CAPR, capr.wrapping_sub(16));
             return None;
