@@ -26,8 +26,9 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     let vram_phys = gpu.bar2;
     let vram_size = gpu.vram_size;
 
-    crate::apic::map_page_uc(vram_phys, pmoff);
-    crate::apic::map_page_uc(vram_phys + 0x1000, pmoff);
+    // Mapeia VRAM com Huge Pages 2MB (muito mais rapido que 4KB)
+    let pages = unsafe { crate::apic::map_region_uc_2mb(vram_phys, vram_size, pmoff) };
+    serial_println!("[VRAM] Mapeados {} x 2MB pages para VRAM", pages);
 
     let test_addr = vram_phys + pmoff;
     let test_val: u32 = 0xDEADBEEF;
