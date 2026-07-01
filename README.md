@@ -240,7 +240,19 @@ qemu-system-x86_64 -m 4G -serial stdio -nic user,model=rtl8139 `
 
 ## License
 
-MIT
+**GNU Affero General Public License v3.0 (AGPLv3)** with **Commercial Exception**.
+
+| Use | License |
+|---|---|
+| Personal / Educational / Research / Open-source | ✅ **Free** under AGPLv3 |
+| Proprietary product / SaaS / Embedded | 💰 **Commercial license required** — see [COMMERCIAL.md](COMMERCIAL.md) |
+
+**Disclaimer:** This software is provided "AS IS" without warranty of any kind (AGPLv3 §15-16). If it breaks your business, that's your problem, not ours.
+
+---
+> *"We don't need an OS that runs AI. We need an OS that IS AI."*
+>
+> Neural OS Hermes — msrovani + IDA IA (OpenCode), 2026
 
 ---
 
