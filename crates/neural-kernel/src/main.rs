@@ -83,6 +83,9 @@ mod apps;
 mod skill_gen;
 mod voice_skill;
 mod browser_agent;
+mod verify;
+mod hal;
+mod bench;
 
 use lazy_static::lazy_static;
 

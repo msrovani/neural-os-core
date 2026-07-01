@@ -15,3 +15,6 @@ pub mod agent;
 pub mod theme;
 pub mod compositor;
 pub mod icons;
+pub mod workspace;
+pub mod notifications;
+pub mod layout;
