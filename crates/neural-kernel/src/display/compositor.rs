@@ -202,14 +202,27 @@ impl Compositor {
         let dock_y = (h as i32).saturating_sub(DOCK_H as i32);
         Self::draw_rect(fb, 0, dock_y, w as u32, DOCK_H, t.secondary);
 
+        // Workspace indicator (COSMIC-style)
+        let ws_indicator = alloc::format!("WS:{}", 
+            if crate::display::workspace::WORKSPACE_MANAGER.lock().is_some() {
+                let wm = crate::display::workspace::WORKSPACE_MANAGER.lock();
+                let ws = wm.as_ref().unwrap();
+                ws.current + 1
+            } else { 1 }
+        );
+        Self::draw_text(fb, 4, dock_y + DOCK_H as i32 / 2 - 4, &ws_indicator, t.accent, t.bg);
+
         for (i, win) in self.windows.iter().enumerate() {
             let label: String = win.title.chars().take(6).collect();
             let col = if Some(win.id) == self.focus { t.accent } else { t.fg };
-            Self::draw_text(fb, (i * 64) as i32, dock_y + DOCK_H as i32 / 2 - 4, &label, col, t.bg);
+            Self::draw_text(fb, (i * 64 + 60) as i32, dock_y + DOCK_H as i32 / 2 - 4, &label, col, t.bg);
         }
 
-        // Clock
-        let clock = alloc::format!("{:02}:{:02}", (tick / 1080) % 24, (tick / 18) % 60);
+        // Clock — minutos reais (tick / 18 = segundos)
+        let total_sec = tick / 18;
+        let hrs = (total_sec / 3600) % 24;
+        let mins = (total_sec / 60) % 60;
+        let clock = alloc::format!("{:02}:{:02}", hrs, mins);
         Self::draw_text(fb, (w as i32) - 64, dock_y + DOCK_H as i32 / 2 - 4, &clock, t.fg, t.bg);
 
         // Keyboard input buffer — mostra digitacao acima da dock

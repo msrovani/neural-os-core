@@ -101,7 +101,11 @@ Nada é descartado sem registro. Ideias podem ser:
 | 282g | RamFsAgent: /mnt/ram/ cache DRAM | 🟡 Futuro | v0.62.2+ | Cache tiers inferiores |
 | 282h | Auto tier migration via MhiScheduler | 🟡 Futuro | v0.62.2+ | Promove/demove por acesso |
 
-### 1.5. USB
+### 1.8. Desktop Cube (IDEA #283)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 283a | Workspace Cube 3D com rotação via GPU (VirtIO-GPU) | 🟡 Pós VirtIO-GPU | v0.70+ | 3 workspaces (main/dev/chat) como faces de cubo giratório |
+| 283b | Transição crossfade entre workspaces (fallback sem GPU) | 🟡 Alternativa leve | v0.66+ | Efeito moderno sem 3D, ~100 LOC |
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
