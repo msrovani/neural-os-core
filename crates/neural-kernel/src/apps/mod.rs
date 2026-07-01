@@ -27,8 +27,12 @@ pub static APP_REGISTRY: Mutex<BTreeMap<&'static str, AppEntry>> = Mutex::new(BT
 
 pub fn register_app(name: &'static str, app: Box<dyn App>) {
     let (ww, wh) = app.window_size();
-    // Compositor access via static would need init first — skip window creation here
-    APP_REGISTRY.lock().insert(name, AppEntry { app, window_id: None });
+    // Try to create a window in the compositor
+    let wid = {
+        let mut comp = crate::display::compositor::COMPOSITOR.lock();
+        comp.as_mut().map(|c| c.create_window(name, ww, wh))
+    };
+    APP_REGISTRY.lock().insert(name, AppEntry { app, window_id: wid });
 }
 
 pub fn app_names() -> Vec<&'static str> {
@@ -40,5 +44,6 @@ pub fn init_apps() {
     register_app("settings", Box::new(settings_app::SettingsApp::new()));
     register_app("power", Box::new(power_app::PowerApp::new()));
     let names = app_names();
-    crate::serial_println!("[APPS] {} apps registrados.", names.len());
+    let wcount = crate::display::compositor::COMPOSITOR.lock().as_ref().map_or(0, |c| c.windows.len());
+    crate::serial_println!("[APPS] {} apps, {} windows no compositor.", names.len(), wcount);
 }

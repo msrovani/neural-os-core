@@ -51,6 +51,7 @@ pub struct Compositor {
     drag_win: Option<u32>,
     drag_off_x: i32, drag_off_y: i32,
     pub focus: Option<u32>,
+    pub input_text: String,
     mouse_receiver: crate::Receiver,
     click_receiver: crate::Receiver,
     clock_ticks: u64,
@@ -64,6 +65,7 @@ impl Compositor {
             mouse_x: 640, mouse_y: 360,
             drag_win: None, drag_off_x: 0, drag_off_y: 0,
             focus: None,
+            input_text: String::new(),
             mouse_receiver: crate::EVENT_BUS.subscribe(crate::agents::mouse_agent::TOPIC_MOUSE_MOVED),
             click_receiver: crate::EVENT_BUS.subscribe(crate::agents::mouse_agent::TOPIC_MOUSE_CLICK),
             clock_ticks: 0,
@@ -209,6 +211,12 @@ impl Compositor {
         // Clock
         let clock = alloc::format!("{:02}:{:02}", (tick / 1080) % 24, (tick / 18) % 60);
         Self::draw_text(fb, (w as i32) - 64, dock_y + DOCK_H as i32 / 2 - 4, &clock, t.fg, t.bg);
+
+        // Keyboard input buffer — mostra digitacao acima da dock
+        if !self.input_text.is_empty() {
+            let input_y = dock_y - 20;
+            Self::draw_text(fb, 4, input_y, &alloc::format!("> {}", self.input_text), t.accent, t.bg);
+        }
 
         // Cursor
         let cx = self.mouse_x as usize;

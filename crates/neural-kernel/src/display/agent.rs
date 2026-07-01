@@ -69,17 +69,9 @@ impl Agent for DisplayAgent {
             if let Some(ref mut comp) = *COMPOSITOR.lock() {
                 comp.poll_mouse();
                 let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                // Atualiza input buffer no compositor
+                comp.input_text = self.input_buffer.clone();
                 comp.render(fb, tick);
-                // Desenha input_buffer no dock (ultima linha da dock)
-                if !self.input_buffer.is_empty() {
-                    let w = fb.info.width;
-                    let h = fb.info.height;
-                    let dock_y = h.saturating_sub(36);
-                    let t = crate::display::theme::current();
-                    crate::display::compositor::Compositor::draw_text(
-                        fb, 4, (dock_y - 18) as i32, &self.input_buffer, t.fg, t.bg
-                    );
-                }
                 fb.swap();
             }
         }
