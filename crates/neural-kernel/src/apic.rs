@@ -148,7 +148,13 @@ impl IoApic {
         serial_println!("[APIC] IOAPIC verificado: kbd GSI {} (0x{:02x}:0x{:08x})",
             kbd_gsi, v1_high, v1_low);
         serial_println!("[APIC] Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.");
-        println!("[APIC] IOAPIC configurado: keyboard->vec33, demais IRQs mascarados.");
+        println!("[APIC] IOAPIC configurado: keyboard->vec33, mouse->vec44.");
+
+        // Mouse (IRQ12) → vetor 44, desmascarado
+        self.redirect_gsi(12, 44, 0);
+        let reg_mouse = 0x10 + 12 * 2;
+        self.write(reg_mouse, self.read(reg_mouse) & !0x10000);
+        serial_println!("[APIC] Mouse (IRQ12) redirecionado para vetor 44.");
     }
 }
 
