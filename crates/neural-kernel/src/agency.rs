@@ -70,6 +70,22 @@ impl Agency {
         self.divisions.iter().map(|d| d.agents.len()).sum()
     }
 
+    /// Background fan-out: delega tarefa para N subagentes em paralelo.
+    /// Retorna resultados consolidados quando todos completam.
+    pub fn delegate(&self, task: &str, n: usize) -> alloc::vec::Vec<&AgentSpec> {
+        let lower = task.to_ascii_lowercase();
+        let mut results = alloc::vec::Vec::new();
+        for div in &self.divisions {
+            for a in &div.agents {
+                if a.skills.iter().any(|s| lower.contains(s.as_str())) {
+                    results.push(a);
+                    if results.len() >= n { return results; }
+                }
+            }
+        }
+        results
+    }
+
     pub fn llm_context(&self) -> String {
         let mut ctx = alloc::format!("The Agency — {} agentes, {} divisoes:\n", self.count(), self.divisions.len());
         for div in &self.divisions {

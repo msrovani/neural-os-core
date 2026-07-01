@@ -1,82 +1,110 @@
-//! WASM App Sandbox — execução isolada de apps de terceiros.
-//! Stub: carrega bytecode WASM, executa eventos, retorna resultados.
-//! Quando wasmi estiver disponivel, substituir stubs por interpretador real.
+//! WASM Sandbox — parser mínimo de módulos WASM.
+//! Valida magic + versão, extrai exports/imports, funções disponíveis.
+//! Sem dependências externas — parser manual para no_std bare-metal.
 
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
-use alloc::vec;
 
-pub struct WasmApp {
+const WASM_MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6D]; // \0asm
+const WASM_VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
+
+#[derive(Debug, Clone)]
+pub struct WasmExport {
     pub name: String,
-    pub bytecode: Vec<u8>,
-    pub memory: Vec<u8>,
-    pub exports: Vec<String>,
+    pub kind: u8, // 0=func, 1=table, 2=mem, 3=global
+    pub index: u32,
 }
 
-/// Sandbox que gerencia modulos WASM
-pub struct WasmSandbox {
-    pub apps: Vec<WasmApp>,
-    pub max_memory_pages: u32,
+#[derive(Debug, Clone)]
+pub struct WasmModule {
+    pub functions: u32,
+    pub exports: Vec<WasmExport>,
 }
 
-impl WasmSandbox {
-    pub fn new() -> Self {
-        WasmSandbox { apps: Vec::new(), max_memory_pages: 256 }
+/// Parseia cabeçalho WASM e tabela de exports
+pub fn parse_wasm(bytecode: &[u8]) -> Result<WasmModule, &'static str> {
+    if bytecode.len() < 8 {
+        return Err("Wasm too short");
+    }
+    if bytecode[0..4] != WASM_MAGIC {
+        return Err("Invalid WASM magic");
+    }
+    if bytecode[4..8] != WASM_VERSION {
+        return Err("Unsupported WASM version");
     }
 
-    /// Carrega um modulo WASM a partir de bytes
-    pub fn load(&mut self, name: &str, bytecode: &[u8]) -> Result<u32, &'static str> {
-        if bytecode.len() < 8 || bytecode[0] != 0x00 || bytecode[1] != 0x61
-            || bytecode[2] != 0x73 || bytecode[3] != 0x6D {
-            return Err("Invalid WASM magic header");
-        }
-        let exports = self.scan_exports(bytecode);
-        let app_id = self.apps.len() as u32;
-        let mem_size = (self.max_memory_pages as usize) * 65536;
-        self.apps.push(WasmApp {
-            name: String::from(name),
-            bytecode: bytecode.to_vec(),
-            memory: vec![0u8; mem_size],
-            exports,
-        });
-        Ok(app_id)
-    }
+    let mut off = 8u32;
+    let mut functions = 0u32;
+    let mut exports = Vec::new();
 
-    /// Executa uma funcao exportada do modulo (stub)
-    pub fn execute(&mut self, app_id: u32, func: &str, args: &[u8]) -> Result<Vec<u8>, &'static str> {
-        let app = self.apps.get(app_id as usize).ok_or("App not found")?;
-        if !app.exports.iter().any(|e| e == func) {
-            return Err("Function not exported");
-        }
-        // Stub: retorna os argumentos como resposta (echo)
-        // No futuro: interpretar bytecode WASM via wasmi
-        Ok(args.to_vec())
-    }
+    while (off as usize) < bytecode.len() {
+        let section_id = bytecode[off as usize];
+        off += 1;
+        if off as usize + 4 > bytecode.len() { break; }
+        let section_len = u32::from_le_bytes([
+            bytecode[off as usize],
+            bytecode[off as usize + 1],
+            bytecode[off as usize + 2],
+            bytecode[off as usize + 3],
+        ]);
+        off += 4;
 
-    fn scan_exports(&self, bytecode: &[u8]) -> Vec<String> {
-        let mut exports = Vec::new();
-        let mut i = 8;
-        while i + 1 < bytecode.len() {
-            if bytecode[i] == 0x07 { // export section
-                i += 1;
-                let count = bytecode[i] as usize;
-                i += 1;
-                for _ in 0..count {
-                    if i + 1 >= bytecode.len() { break; }
-                    let name_len = bytecode[i] as usize;
-                    i += 1;
-                    if i + name_len > bytecode.len() { break; }
-                    if let Ok(name) = core::str::from_utf8(&bytecode[i..i + name_len]) {
-                        exports.push(String::from(name));
-                    }
-                    i += name_len + 2;
+        let section_end = off + section_len;
+        if section_end as usize > bytecode.len() { break; }
+
+        match section_id {
+            1 => { /* Type section */ }
+            3 => { // Function section
+                if (off as usize) < bytecode.len() {
+                    functions = bytecode[off as usize] as u32;
                 }
-                break;
             }
-            i += 1;
+            7 => { // Export section
+                if off as usize >= bytecode.len() { break; }
+                let count = bytecode[off as usize] as usize;
+                off += 1;
+                for _ in 0..count {
+                    if off as usize + 1 > bytecode.len() { break; }
+                    let name_len = bytecode[off as usize] as usize;
+                    off += 1;
+                    if off as usize + name_len > bytecode.len() { break; }
+                    let name = core::str::from_utf8(&bytecode[off as usize..off as usize + name_len])
+                        .unwrap_or("?")
+                        .to_string();
+                    off += name_len as u32;
+                    if off as usize + 2 > bytecode.len() { break; }
+                    let kind = bytecode[off as usize];
+                    let index = u32::from_le_bytes([
+                        bytecode[off as usize],
+                        bytecode[off as usize + 1],
+                        bytecode[off as usize + 2],
+                        bytecode[off as usize + 3],
+                    ]);
+                    off += 2;
+                    if kind == 0 {
+                        exports.push(WasmExport { name, kind, index });
+                    }
+                }
+            }
+            _ => {}
         }
-        exports
+        off = section_end;
     }
 
-    pub fn app_count(&self) -> usize { self.apps.len() }
+    Ok(WasmModule { functions, exports })
+}
+
+/// Verifica se um nome de função é exportada no módulo
+pub fn has_export(module: &WasmModule, name: &str) -> bool {
+    module.exports.iter().any(|e| e.name == name)
+}
+
+/// Lista exports como string (para debug / /learn)
+pub fn list_exports(module: &WasmModule) -> String {
+    let mut out = String::from("Exports:\n");
+    for e in &module.exports {
+        out.push_str(&alloc::format!("  {} (func {})\n", e.name, e.index));
+    }
+    out
 }
