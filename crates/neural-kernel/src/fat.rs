@@ -2,6 +2,7 @@
 //! Monta particoes detectadas no VFS, cria particao de dados em espaco livre.
 
 use alloc::boxed::Box;
+use alloc::vec;
 use alloc::vec::Vec;
 use crate::ata::AtaDriver;
 use crate::serial_println;
@@ -81,6 +82,13 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
             0x01 | 0x06 | 0x0B | 0x0C => "vfat",
             0x07 => "ntfs", 0x83 => "ext3", 0x20 => "oem", _ => "unknown",
         };
+        // Tenta abrir como FAT32 (type 0x0B ou 0x0C)
+        if part.type_code == 0x0B || part.type_code == 0x0C {
+            if let Some(fat32) = Fat32Reader::new(ata, part) {
+                let root_list = unsafe { fat32.list_root() };
+                serial_println!("[FAT32] Root contents:\n{}", root_list);
+            }
+        }
         let mount_point = alloc::format!("/mnt/sdhc/p{}", i+1);
         if let Some(ref mut vfs) = *crate::vfs::VFS.lock() {
             vfs.mount(Box::leak(mount_point.clone().into_boxed_str()), fs_name);
@@ -105,6 +113,151 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
         } else if free_size > 2048 && !is_usb {
             serial_println!("[DISK] HD com {} MB livres. Ignorado (requer confirmacao).", free_mb);
         }
+    }
+}
+
+// ── FAT32 Reader ──────────────────────────────────────────────
+// FAT32 usa 28-bit clusters, root dir como cluster chain, BPB extendido.
+
+pub struct Fat32Reader<'a> {
+    ata: &'a AtaDriver,
+    pub lba_start: u32,
+    pub sectors_per_cluster: u8,
+    pub bytes_per_sector: u16,
+    reserved_sectors: u16,
+    fat_count: u8,
+    sectors_per_fat32: u32,
+    root_cluster: u32,
+    fat_lba: u32,
+    data_lba: u32,
+}
+
+impl<'a> Fat32Reader<'a> {
+    /// Tenta abrir particao FAT32 (type 0x0B ou 0x0C)
+    pub unsafe fn new(ata: &'a AtaDriver, part: &Partition) -> Option<Self> {
+        if part.type_code != 0x0B && part.type_code != 0x0C { return None; }
+        let mut bpb = [0u8; 512];
+        if !ata.read_sectors(part.lba_start, &mut bpb, 1) { return None; }
+
+        let bytes_per_sector = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]);
+        let sectors_per_cluster = bpb[0x0D];
+        let reserved_sectors = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]);
+        let fat_count = bpb[0x10];
+        let sectors_per_fat32 = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
+        let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
+
+        if bytes_per_sector == 0 || sectors_per_cluster == 0 { return None; }
+
+        let fat_lba = part.lba_start + reserved_sectors as u32;
+        let data_lba = fat_lba + fat_count as u32 * sectors_per_fat32;
+
+        serial_println!("[FAT32] BPB: bps={} spc={} fats={} spf={} root_cluster={}",
+            bytes_per_sector, sectors_per_cluster, fat_count, sectors_per_fat32, root_cluster);
+        serial_println!("[FAT32] fat_lba={} data_lba={}", fat_lba, data_lba);
+
+        Some(Fat32Reader { ata, lba_start: part.lba_start, sectors_per_cluster, bytes_per_sector,
+            reserved_sectors, fat_count, sectors_per_fat32, root_cluster, fat_lba, data_lba })
+    }
+
+    /// Le o valor da FAT para um cluster (cada entrada tem 28 bits)
+    unsafe fn read_fat_entry(&self, cluster: u32) -> u32 {
+        let fat_offset = cluster * 4; // cada entrada = 4 bytes
+        let fat_sector = self.fat_lba + fat_offset / self.bytes_per_sector as u32;
+        let mut sector = [0u8; 512];
+        if !self.ata.read_sectors(fat_sector, &mut sector, 1) { return 0xFFF_FFFF; }
+        let byte_off = (fat_offset % self.bytes_per_sector as u32) as usize;
+        let val = u32::from_le_bytes([
+            sector[byte_off], sector[byte_off+1],
+            sector[byte_off+2], sector[byte_off+3],
+        ]);
+        val & 0x0FFF_FFFF // 28-bit cluster value
+    }
+
+    /// LBA do primeiro setor de um cluster
+    fn cluster_lba(&self, cluster: u32) -> u32 {
+        self.data_lba + (cluster - 2) as u32 * self.sectors_per_cluster as u32
+    }
+
+    /// Le o diretorio root FAT32 (cluster chain) e lista arquivos
+    pub unsafe fn list_root(&self) -> alloc::string::String {
+        let mut out = alloc::string::String::from("FAT32 Root:\n");
+        let mut cluster = self.root_cluster;
+
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.cluster_lba(cluster);
+            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
+            for i in 0..self.sectors_per_cluster as u32 {
+                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+
+            for i in 0..buf.len() / 32 {
+                let off = i * 32;
+                let first_byte = buf[off];
+                if first_byte == 0 { break; } // fim
+                if first_byte == 0xE5 { continue; } // deletado
+                if buf[off + 11] & 0x08 != 0 { continue; } // volume label / long name
+
+                let name = core::str::from_utf8(&buf[off..off+11]).unwrap_or("???????????");
+                let size = u32::from_le_bytes([buf[off+28], buf[off+29], buf[off+30], buf[off+31]]);
+                let attr = buf[off+11];
+                let dir_flag = if attr & 0x10 != 0 { 'd' } else { '-' };
+                out.push_str(&alloc::format!("  {} {:11} {} bytes\n", dir_flag, name, size));
+            }
+
+            cluster = self.read_fat_entry(cluster);
+        }
+        out
+    }
+
+    /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain)
+    pub unsafe fn read_file(&self, name: &str) -> Option<Vec<u8>> {
+        let mut cluster = self.root_cluster;
+        let name_upper = name.to_ascii_uppercase();
+
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.cluster_lba(cluster);
+            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
+            for i in 0..self.sectors_per_cluster as u32 {
+                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 { break; }
+                if first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x08 != 0 { continue; }
+
+                let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
+                let trimmed = entry_name.trim_end();
+                if trimmed != name_upper { continue; }
+
+                let file_size = u32::from_le_bytes([
+                    buf[entry_off+28], buf[entry_off+29],
+                    buf[entry_off+30], buf[entry_off+31],
+                ]) as usize;
+                let start_cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
+                let start_cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
+                let start_cluster = ((start_cluster_hi as u32) << 16) | start_cluster_lo as u32;
+
+                let mut data = Vec::with_capacity(file_size);
+                let mut fc = start_cluster;
+                while fc < 0x0FFF_FFF8 && fc >= 2 {
+                    let clba = self.cluster_lba(fc);
+                    let mut chunk = [0u8; 512];
+                    for i in 0..self.sectors_per_cluster as u32 {
+                        if data.len() >= file_size { break; }
+                        self.ata.read_sectors(clba + i, &mut chunk, 1);
+                        let remaining = file_size - data.len();
+                        let copy_end = remaining.min(512);
+                        data.extend_from_slice(&chunk[..copy_end]);
+                    }
+                    fc = self.read_fat_entry(fc);
+                }
+                return Some(data);
+            }
+            cluster = self.read_fat_entry(cluster);
+        }
+        None
     }
 }
 
