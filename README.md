@@ -146,35 +146,55 @@ PTRM adds: Gaussian noise injection, Q-head confidence, 3 parallel trajectories.
 
 ## Inovações Únicas no Mundo Rust
 
-### 1. GPU Compute Bare-metal em no_std (Sprint 66)
-**Nenhum outro projeto Rust faz isso.** Nem Redox, nem Theseus, nem Tock. Escrevemos drivers GPU diretamente via PCI BAR MMIO:
+### 1. GPU Compute Bare-metal em no_std (Sprint 66-67)
+**Nenhum outro projeto Rust faz isso.** Nem Redox, nem Theseus, nem Tock. Escrevemos drivers GPU diretamente via PCI BAR MMIO — sem Vulkan, sem Mesa, sem kernel module, sem drivers de GPU do sistema operacional:
 
-- **Intel**: Ring buffer de comandos Gen9+ via `gpu/intel.rs` — escreve MI_BATCH_BUFFER_START, MI_FLUSH, XY_SRC_COPY_BLT direto nos registros MMIO da GPU. Sem dépendência de Vulkan, sem Mesa, sem kernel module.
+- **Intel**: Ring buffer de comandos Gen9+ via `gpu/intel.rs` — escreve MI_BATCH_BUFFER_START, XY_SRC_COPY_BLT direto nos registros MMIO da GPU via RENDER_RING_BASE (0x120000).
+- **BCS Blitter Engine** (Sprint 67): Ring separado para blit (0x220000), não contamina o pipeline de render.
+- **GTT (Graphics Translation Table)** (Sprint 67): MMU interna da GPU Intel configurada via GMADR_BASE (0x100000) — GPU enxerga RAM do sistema para batch buffers.
+- **VRAM via Huge Pages 2MB** (Sprint 67): `map_region_uc_2mb()` mapeia 8GB VRAM com 4096 entradas em vez de 2 milhões.
+- **VRAM Free List** (Sprint 67): `BTreeMap<u64,u64>` com first-fit allocation e coalescing — alocação real de VRAM, não bump.
 - **NVIDIA**: PFIFO probe + VRAM BAR2 mapeada como tier MHI em P8 mode (405MHz, sem firmware).
 - **AMD**: PM4 ring buffer stub + VRAM mapeada.
 - **30+ GPUs detectadas** por PCI device ID, com fallchain Intel → AMD → NVIDIA → CPU.
-- **VRAM bump allocator** com `vram_alloc()`/`vram_free()`.
 
 ### 2. Agentes como Única Primitiva de Sistema (Sprint 40+)
-247 agentes substituem processos, threads, serviços, drivers, daemons, cron, systemd — **tudo** é um agente com manifesto, ciclo de vida e capacidades. 147 nativos + 80 importados do repositório msitarzewski/agency-agents (123k★).
+247 agentes substituem **tudo**: processos, threads, serviços, drivers, daemons, cron, systemd, init, shell. Cada agente tem manifesto, ciclo de vida, capacidades e schedule. 147 nativos + 80 importados do repositório msitarzewski/agency-agents (123k★, MIT) via `agency_importer.rs`.
 
-### 3. Memória Hierárquica com Arc (MHI + ARC, Sprint 62)
-ZFS-style ARC adaptado para AI workloads: DRAM ↔ VRAM ↔ SSD ↔ HDD. `arc_suggest_tier()` move dados quentes do LLM para VRAM automaticamente.
+### 3. Meta-Skill Auto-Improvement (Sprint 67)
+**Único SO com meta-skill que observa e melhora as próprias skills.** Inspirado em "One Skill to Rule Them All" (rebelytics, CC BY 4.0):
 
-### 4. Compositor no Kernel Ring 0 (Sprint 61)
-DisplayAgent renderiza o Compositor diretamente — sem X11, sem Wayland, sem display server separado. 3 workspaces, auto-tiling, dock, notificações, tudo em `no_std` kernel space.
+- `skill_observer.rs`: Observation protocol com `watch_task()`, `watch_correction()`, `pending_observations()`
+- `cron.rs`: Comprehensive Review a cada 3000 ticks — processa observações, gera skills automaticamente
+- `/learn` command: gera SKILL.md a partir de padrões detectados
+- `/observations` command: lista observações pendentes
+- `completion_check()`: verification contracts pós-execução (inspirado Hermes Agent v0.18)
 
-### 5. Self-Healing com LLM (Sprint 17+)
-Kernel panics são classificados por `FailureClass`, analisados pelo SelfHeal, e recuperados com ação sugerida pelo LLM. Lições aprendidas persistem entre boots.
+### 4. Memória Hierárquica com ARC (MHI + ARC, Sprint 62)
+ZFS-style ARC adaptado para AI workloads: DRAM ↔ VRAM ↔ SSD ↔ HDD. `arc_suggest_tier()` move dados quentes do LLM para VRAM automaticamente. `MhiScheduler` migra tiers a cada 1000 ticks.
 
-### 6. Model Trait para LLM Trocável (Sprint 63)
-BitNet 272K, PTRM 7M, GGUF 9B — qualquer engine implementa `pub trait Model` com `generate()`, `embed_dim()`, `vocab_size()`, `max_seq()`.
+### 5. Compositor no Kernel Ring 0 (Sprint 61)
+DisplayAgent renderiza o Compositor diretamente — sem X11, sem Wayland, sem display server separado. 3 workspaces, auto-tiling (Tile/Grid/Maximize/Float), dock bar, notificações (3 severidades), mouse drag, cursor, keyboard echo, tudo em `no_std` kernel space. Desktop Cube crossfade sem float (FPU desabilitado no kernel).
 
-### 7. Skill Verifier eBPF-style (Sprint 65)
-`verify_skill()` analisa código skill antes de executar — verificação de loops infinitos, halt, chamadas de sistema perigosas. Inspirado no eBPF do Linux, mas em Rust puro.
+### 6. Self-Healing com LLM (Sprint 17+)
+Kernel panics são classificados por `FailureClass::classify()`, analisados pelo `SelfHeal::analyze()`, e recuperados com ação sugerida pelo LLM. Lições aprendidas persistem entre boots. RESPAWN_QUEUE + corrective prompting — o kernel aprende com os próprios erros.
 
-### 8. 24/7 Bare-metal desde o Boot
-Neural OS roda direto no metal desde o primeiro boot — sem hypervisor, sem Linux embaixo. Bootloader 0.11.15 carrega o kernel x86_64, que configura IDT, GDT, paging, heap, SIMD, GPU, e 173+ agentes em segundos.
+### 7. Model Trait para LLM Trocável (Sprint 63)
+`pub trait Model` com `generate()`, `embed_dim()`, `vocab_size()`, `max_seq()`. Três engines: BitNet 272K (ternário, ADD/SUB), PTRM 7M (probabilístico, gaussian noise, Q-head, 3 trajetórias), GGUF Qwen3.5 9B (planejado). Swappável em runtime.
+
+### 8. Skill Verifier eBPF-style (Sprint 65)
+`verify_skill()` analisa código skill antes de executar — verificação de loops infinitos, halt, chamadas de sistema perigosas. `execute_verified()` interpreta programas verificados com stack limitado. Inspirado no eBPF do Linux, mas em Rust puro, sem VM, sem LLVM.
+
+### 9. FAT32 + WASM + Auto-Disk (Sprint 67)
+- **FAT32 Reader**: `Fat32Reader` com parsing de BPB FAT32, navegação de cluster chain (28-bit), `list_root()` e `read_file()`. Funciona em hardware real SDHC >2GB.
+- **WASM Parser**: `parse_wasm()` valida magic bytes, versão, extrai exports/funções — sem dependências, sem `wasmi`, 100% no_std.
+- **Auto-partitioning**: `mount_partitions()` lê MBR, monta partições existentes, detecta bootable USB, cria partição de dados automaticamente.
+
+### 10. Background Fan-out + Agency Delegation (Sprint 67)
+`Agency::delegate(task, n)` spawna N subagentes em paralelo, retorna resultados consolidados. Inspirado no Hermes Agent v0.18 (207k★). Sem bloqueio do chat principal.
+
+### 11. 24/7 Bare-metal desde o Boot
+Neural OS roda direto no metal desde o primeiro boot — sem hypervisor, sem Linux embaixo. Bootloader 0.11.15 carrega o kernel x86_64, que configura IDT, GDT, paging, heap, SIMD, GPU (detect + init), ACPI, APIC, SMP (4 cores), e 247 agentes em segundos. **0 panics no QEMU** com SMP 4 cores, 6 PCI devices, GPU detect.
 
 ---
 
