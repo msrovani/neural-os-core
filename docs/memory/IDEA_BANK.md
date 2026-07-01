@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-06-30 (Sprint 62 — VFS + MHI Bridge, #281-#282, 360 totais)  
+**Última atualização:** 2026-07-01 (Sprint 66 — GPU, #283-#287, 366 totais)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1213,3 +1213,9 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-06-29 | **SmileyOS patterns (IDEA #279):** 11 padrões identificados — compositor multi-window, filesystem proprio, app SDK via trait, temas, v86 browser demo, shell 40+ comandos. Prioritario: temas + shell expandida. | Dev + IDA IA |
 | 2026-06-30 | **VFS Layer + MHI ARC (IDEA #281):** VfsRegistry com mount table, resolve, lookup. MHI arc_suggest_tier() ZFS-inspired (MFU→Dram, MRU→Nvme, cold→Hdd). 8 mounts padrao. Path utils. | Dev + IDA IA |
 | 2026-06-30 | **Storage Agents (IDEA #282):** FilesystemAgent trait. AtaAgent (/mnt/hdd/), DevFsAgent (/dev/), ProcFsAgent (/proc/). VFS bridge: read_vfs/write_vfs/list_vfs. | Dev + IDA IA |
+| 2026-07-01 | **GPU Detection + VRAM Tier (IDEA #283):** PCI scan class 0x03, 30+ GPUs detectadas por device ID, BAR0/BAR2 mapping, VRAM bump allocator com next_offset, DEADBEEF test. GpuInfo com vendor/arch/vram/display/compute. | Dev + IDA IA |
+| 2026-07-01 | **Intel Ring Buffer Compute (IDEA #284):** Intel Gen9+ ring buffer init, write/submit/wait_idle, exec_batch, gpu_blit (XY_SRC_COPY_BLT). MI_BATCH_BUFFER_START/END. unsafe impl Send para Mutex. | Dev + IDA IA |
+| 2026-07-01 | **GPU Backend Selector (IDEA #285):** GpuAccel enum (Intel/CpuOnly), Mutex-safe, auto-select Intel→AMD→NVIDIA→CPU. gpu_matmul() com fallback CPU. | Dev + IDA IA |
+| 2026-07-01 | **Desktop Cube Crossfade (IDEA #286):** Transicao entre workspaces sem float (FPU desabilitado). Inteiros step 0..50, AtomicBool em vez de static mut, split animado com fill_rect. | Dev + IDA IA |
+| 2026-07-01 | **Bughunt GPU Sprint 66:** 24 bugs corrigidos (3 crit, 8 high, 6 med, 7 low). Destaques: vec! sem alloc, gpu_blit morto, vram_alloc sem bump, static mut UB, float sem FPU, BAR sem validacao, mod gpu ausente. commit 1d66a17. | Dev + IDA IA |
+| 2026-07-01 | **TODO.md mestre:** docs/TODO.md com 28 pendências catalogadas, sub-itens, dificuldades, travas, fontes, esforço. Para qualquer AI DEV localizar e contribuir. | Dev + IDA IA |
