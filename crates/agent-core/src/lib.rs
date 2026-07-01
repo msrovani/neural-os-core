@@ -130,21 +130,20 @@ impl AgentRegistry {
             let sched = self.agents[i].schedule;
             if sched != ScheduleKind::Oneshot { i += 1; continue; }
             if !self.agents[i].agent.manifest().auto_start { i += 1; continue; }
-            // Use raw pointer to bypass borrow checker for synchronous boot init
-            let ptr: *mut AgentInstance = &mut self.agents[i];
-            unsafe {
-                (*ptr).state = AgentState::Active;
-                (*ptr).agent.on_activate();
-                loop {
-                    let result = (*ptr).agent.tick(0, (*ptr).tick_counter + 1);
-                    (*ptr).tick_counter += 1;
-                    match result {
-                        AgentTickResult::Done => { (*ptr).state = AgentState::Done; break; }
-                        AgentTickResult::Crashed => { (*ptr).state = AgentState::Crashed; break; }
-                        AgentTickResult::Pending => {}
-                    }
+            // Extrai o agente temporariamente para evitar raw pointer aliasing
+            let mut agent = self.agents.remove(i);
+            agent.state = AgentState::Active;
+            agent.agent.on_activate();
+            loop {
+                let result = agent.agent.tick(0, agent.tick_counter + 1);
+                agent.tick_counter += 1;
+                match result {
+                    AgentTickResult::Done => { agent.state = AgentState::Done; break; }
+                    AgentTickResult::Crashed => { agent.state = AgentState::Crashed; break; }
+                    AgentTickResult::Pending => {}
                 }
             }
+            self.agents.insert(i, agent);
             i += 1;
         }
     }
