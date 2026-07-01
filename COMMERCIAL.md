@@ -29,13 +29,26 @@ A Commercial License exempts you from AGPLv3's copyleft requirements — you can
 
 ## Pricing
 
-| Tier | Annual Revenue | Price / Year |
-|---|---|---|
-| **Startup** | < $1M | $1,000 |
-| **Growth** | $1M – $10M | $5,000 |
-| **Mid-Market** | $10M – $50M | $15,000 |
-| **Enterprise** | $50M+ | $50,000 |
-| **Support 24/7 SLA** | any | +50% |
+### Monthly
+
+| Tier | Annual Revenue | USD/mo | BRL/mo |
+|---|---|---|---|
+| **Startup** | < $1M | $50 | R$ 50 |
+| **Growth** | $1M – $10M | $500 | R$ 500 |
+| **Mid-Market** | $10M – $50M | $5,000 | R$ 5.000 |
+| **Enterprise** | $50M+ | $50,000 | R$ 50.000 |
+| **Support 24/7 SLA** | any | +50% | +50% |
+
+Brazilian customers may pay in BRL at the listed rate.
+
+## Full Acquisition
+
+| Scenario | Price (USD) |
+|---|---|
+| **Now** (early stage, technology only, no paying customers) | $100k – $500k |
+| **With recurring revenue** (paying customers, proven model) | $2M – $10M |
+
+Full acquisition transfers all copyright and IP rights. Includes transition support, knowledge transfer, and training. NDA required for negotiations.
 
 ## Warranty and Liability
 
