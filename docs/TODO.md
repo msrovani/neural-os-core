@@ -14,12 +14,57 @@ Cada item segue o formato:
 [B-#] Prioridade | Título
 ├── Goal:          O que queremos alcançar
 ├── Por que:       Por que é necessário
+├── Bloqueia:      Quais itens dependem deste
 ├── Sub-itens:     Passos concretos (checkboxes)
 ├── Dificuldades:  O que torna este item difícil
 ├── Travas:        O que impede o item de começar
 ├── Arquivos:      Onde mexer
 ├── Fontes:        Onde aprender mais
 └── Esforço:       Estimativa de LOC/tempo
+```
+
+---
+
+## 🧩 Mapa de Dependências (DAG)
+
+O gráfico abaixo mostra QUEM BLOQUEIA QUEM. Só implemente um item se TODOS os seus pais (↑) estiverem resolvidos.
+
+```
+LAN / DHCP ──┬──→ B-11 (WWW Infra) ──┬──→ B-12 (Browser Agent)
+             │                        ├──→ B-13 (MCP TCP)
+             │                        ├──→ B-17 (WWW restantes: Email, RSS, Download, WS)
+             │                        └──→ B-27 (Plugin Hub)
+             ├──→ B-18 (DHCP refactor)
+             └──→ (silenciosamente bloqueia browser_agent.rs real)
+
+GTT ───────────→ B-02 (Intel GEN shader)
+
+B-11 (WWW Infra) ──→ B-12, B-13, B-17, B-27
+
+GPU probe (existe) ──→ B-05 (integrar no boot)
+                      └──→ B-02, B-03, B-04 (shaders)
+
+HW real ────────→ B-03 (NVIDIA), B-04 (AMD), B-21 (teste HW)
+                └──→ B-10 (e1000/r8169)
+```
+
+### Legenda
+```
+A ──→ B    = "A bloqueia B" (B não pode começar sem A)
+(A)        = item já existe / está implementado
+```
+
+### Ordem Topológica (qual fazer primeiro)
+
+```
+Fase 0 (já existe):  GPU probe, RTL8139 TX, PCI scan, display
+Fase 1 (Sprint 67):  B-05 ──→ B-26 ──→ B-28     (sem dependências)
+Fase 2 (Sprint 68):  B-01 ──→ B-18               (rede)
+Fase 3 (Sprint 69):  B-01 → B-11 → B-12 → B-13  (WWW chain)
+Fase 4 (Sprint 70):  B-07 → B-02                 (GPU compute Intel)
+Fase 5 (Sprint 71):  B-03, B-04                  (GPU NVIDIA/AMD)
+Fase 6 (Sprint 72):  B-06, B-14, B-09            (USB, WASM, VRAM)
+Backlog:              B-08, B-10, B-15 .. B-27
 ```
 
 ---
@@ -34,6 +79,8 @@ Cada item segue o formato:
 **Goal:** smoltcp DHCP obtém IP, DNS resolve nomes, HTTP faz GET/POST. Sem isso, todos os WWW Agents (Browser, Email, Search, RSS, Download, WebSocket) estão bloqueados.
 
 **Por que:** A stack de rede existe (RTL8139 TX confirmado funcionando, smoltcp 0.13 integrado) mas DHCP falha. QEMU SLiRP com `-nic user` espera DHCP request do guest, mas smoltcp não completa o handshake. Sem IP, não há rota, não há DNS, não há HTTP.
+
+**Bloqueia:** B-11 (WWW Infra), B-12 (Browser Agent), B-13 (MCP TCP), B-17 (Email/Search/RSS/Download/WS), B-18 (DHCP refactor), B-27 (Plugin Hub) — **6 itens bloqueados** (toda a cadeia WWW)
 
 **Sub-itens:**
 - [ ] Debug smoltcp DHCP: descobrir por que `dhcp_poll()` nunca retorna `Configured`
@@ -69,6 +116,8 @@ Cada item segue o formato:
 
 **Por que:** A GPU sprint (66) implementou o ring buffer e a submissão de comandos, mas o kernel real do compute é o shader. Sem shader, é CPU fallback. O ganho esperado é 3-35× sobre CPU.
 
+**Bloqueia:** Nenhum — é folha na DAG (só depende de B-07)
+
 **Sub-itens:**
 - [ ] Pesquisar formato de shader GEN (EU assembly, GRF registers, send messages)
 - [ ] Implementar matmul como shader GEN: load A e B da VRAM, MAC, store em VRAM
@@ -102,6 +151,8 @@ Cada item segue o formato:
 **Goal:** `NvidiaGpu::submit_kernel()` escreve PUSH_BUFFER no PFIFO ring, FALCON microcontrolador executa shader CUDA-style na VRAM.
 
 **Por que:** NVIDIA é a GPU mais comum em desktops. Sem suporte NVIDIA, perdemos 70%+ dos hardwares. P8 mode (405MHz) é o mínimo — com firmware extraído, a GPU opera em P0 (full clock, >1.8GHz).
+
+**Bloqueia:** Nenhum (folha na DAG — depende de HW real)
 
 **Sub-itens:**
 - [ ] Extrair firmware FALCON do driver NVIDIA (nv-kernel.o ou nvidia.ko)
@@ -234,6 +285,8 @@ if !gpus.is_empty() {
 
 **Por que:** Intel GPU não acessa RAM do sistema diretamente — ela usa GTT, uma tabela de páginas interna da GPU. Sem GTT, a GPU não consegue ler os batch buffers que escrevemos no ring buffer. Atualmente o `gpu_blit()` e `exec_batch()` escrevem comandos na RAM, mas a GPU não consegue executá-los em HW real (em QEMU sem GPU real, isso nunca é testado).
 
+**Bloqueia:** B-02 (Intel GEN shader) — shader precisa de batch buffer na RAM visível pela GPU
+
 **Sub-itens:**
 - [ ] Localizar registers GTT na GPU Intel: `GFX_FLSH_CNTL` (0x101008), `PPGTT` registers
 - [ ] Alocar página para GTT (Global GTT = 2MB, suporta 512 entradas de 4KB cada)
@@ -332,6 +385,8 @@ if !gpus.is_empty() {
 **Goal:** ConnectionPool + HttpClient + URL parser — base para todos os WWW Agents.
 
 **Por que:** Sem essa camada, BrowserAgent (B-12) e os outros 5 WWW Agents não podem ser construídos. Conexão TCP, DNS, HTTP GET/POST são blocos fundamentais.
+
+**Bloqueia:** B-12 (Browser Agent), B-13 (MCP TCP), B-17 (Email/Search/RSS/Download/WS), B-27 (Plugin Hub) — **4 itens**
 
 **Sub-itens:**
 - [ ] `ConnectionPool`: gerenciar até 16 sockets TCP concorrentes
