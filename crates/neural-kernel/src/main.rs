@@ -525,12 +525,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Init Filesystem Agents
     crate::fs::init_fs_agents();
 
-    // Init Desktop Apps
-    crate::apps::init_apps();
-
-    // Init Compositor
+    // Init Compositor FIRST (apps precisam de janelas)
     *crate::display::compositor::COMPOSITOR.lock() = Some(crate::display::compositor::Compositor::new());
     crate::serial_println!("[COMPOSITOR] Inicializado.");
+
+    // Init Desktop Apps (criam janelas no compositor)
+    crate::apps::init_apps();
 
     let mut registry = agent_core::AgentRegistry::new();
     registry.register(Box::new(agents::PlatformAgent::new()));
