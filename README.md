@@ -1,175 +1,171 @@
-﻿# Neural OS Hermes v0.59.0 - 🏆 FRAMEBUFFER UEFI + BOOTLOADER 0.11 🏆
-
-**The first AI-native operating system. Booted on real x86-64 hardware from USB.**
-
-```
-🎉 28/06/2026 — Boot em hardware real (SDHC USB)
-🎉 29/06/2026 — Framebuffer UEFI 1280x720 + bootloader 0.11
-    Hermes Cognitive rodando com display grafico
-```
+﻿# Neural OS Hermes v0.65.0 - AI-native Bare-metal Operating System
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
 ```
-"We don't need an OS that runs AI.
- We need an OS that IS AI."
+28/06/2026 — Boot em hardware real (SDHC USB)
+29/06/2026 — Framebuffer UEFI 1280x720 + bootloader 0.11
+30/06/2026 — Desktop com Compositor + Dock + 3 Apps
+30/06/2026 — 107 arquivos Rust, ~11.800 LOC, 0 erros
 ```
 
-## ­ƒöÑ O que o torna ├║nico
+```
+"We don't need an OS that runs AI. We need an OS that IS AI."
+```
 
-### 0. Tudo ├® Agente ou Skill
-**Bloco 11 (Sprints 39-42 consolidado):** N├úo existem "tasks", "services" ou "drivers" como conceitos separados. Cada entidade ├® um **Agente** com manifesto, ScheduleKind e ciclo de vida. Habilidades (**Skills**) s├úo a interface de requisi├º├úo-resposta.
+---
 
-16 agentes nativos (v0.56.0):
-| Código | Agente | Tipo | Função |
+## Architecture: Everything is an Agent or a Skill
+
+**173+ agents.** No tasks, no services, no drivers — only agents with manifests, capabilities, and lifecycle.
+
+```
+20 native agents  +  147 The Agency specialists  +  6 HW agents  +  6 FS agents
+```
+
+| Agent | Type | Function |
+|---|---|---|
+| HermesAgent | Router | Intent routing, ReAct 7 phases, Council, Handoff |
+| CortexAgent | Inference | LLM transformer (BitNet + PTRM + Medusa), Model trait |
+| DisplayAgent | Console | Framebuffer 1280x720 + DoubleBuffer + Compositor |
+| MouseAgent | Console | PS/2 IRQ12, MOUSE_MOVED/CLICK no EventBus |
+| BrowserAgent | Skill | fetch_page, extract_text, PageViewerApp |
+| SafetyAgent | System | Hard blocklist, Asimov 4 Laws, check_command() |
+| CronAgent | System | Cron jobs, heartbeat, MHI auto-tier |
+| + 147 specialist agents across 12 divisions | | |
+
+---
+
+## Desktop Environment (COSMIC-inspired)
+
+```
++----------------------------------------------------------+
+| [Hermes] [Settings] [Power]                    [14:32]   |
+|                    Dock Bar                               |
++----------------------------------------------------------+
+|                                                          |
+|  3 Workspaces: main, dev, chat                           |
+|  Layout modes: Floating, Tiled, Grid, Maximized          |
+|  Notification overlay (severity: info/warn/error)         |
+|  Mouse drag, Window focus, Auto-tiling                    |
+|  PageViewer for web content                               |
+|                                                          |
++----------------------------------------------------------+
+```
+
+---
+
+## Filesystem: 8 VFS Mounts + MHI ARC Tiering
+
+```
+/          root tree        /mnt/hdd/   ATA disk
+/chat/     Hermes chat      /mnt/ram/   DRAM cache
+/dev/      PCI + devices    /mnt/sdhc/  USB Mass Storage
+/proc/     agents + memory  /inference/ LLM-generated files
+/system/   config + skills
+```
+
+**MHI ARC Tiering** (ZFS-inspired): hot data promove para DRAM, cold demove para HDD. Movido por `arc_suggest_tier()` + `MhiScheduler` a cada 1000 ticks.
+
+---
+
+## Cognitive Memory Stack
+
+```
+EventBus IPC
+  -> MemoryTree (hierarchic, TTL, Ebbinghaus decay)
+  -> KnowledgeGraph (subject-predicate-object)
+  -> Kanerva Machine (sparse distributed, Hamming distance)
+  -> Atkinson-Shiffrin (Sensory -> STM -> LTM)
+  -> Curated Context (4KB budget, Anatomy-style)
+```
+
+---
+
+## LLM Cortex: Swappable Model Engine
+
+```
+pub trait Model: Send {
+    fn generate(&self, prompt: &str) -> String;
+    fn embed_dim(&self) -> usize;
+    fn vocab_size(&self) -> u16;
+    fn max_seq(&self) -> usize;
+}
+```
+
+| Engine | Status | Params | Speed |
 |---|---|---|---|
-| A-001 | SystemAgent | System | Init, EchoSkill |
-| A-002 | MonitorAgent | System | SYSTEM_READY |
-| A-003 | HwBridgeAgent | Router | IRQ bridge |
-| A-004 | NetAgent | Network | smoltcp poll |
-| A-005 | InputAgent | Console | Keyboard |
-| A-006 | CortexAgent | Inference | LLM transformer |
-| A-007 | HermesAgent | Router | Intent + skills |
-| A-008 | DisplayAgent | Console | Framebuffer BGRA32 |
-| A-009 | NetDriverAgent | Driver | RTL8139 + VirtIO-net |
-| A-010 | UsbDriverAgent | Driver | xHCI USB |
-| A-011 | BootSelfHealAgent | System | SelfHeal init |
-| A-012 | BootTrustAgent | System | TrustCache init |
-| A-013 | PlatformAgent | System | PCI+ACPI+APIC+SMP |
-| A-014 | MemoryAgent | System | MHI + Arch inference |
-| A-015 | GpuDriverAgent | Driver | VirtIO-GPU detection |
-| A-016 | HwDetectAgent | System | HwIdentifySkill |
-| A-017 | CronAgent | System | Cron Scheduler |
-| A-018 | SecurityAgent | System | Security Pipeline |
-| A-019 | SafetyAgent | System | Asimov 4 Laws |
-| A-020 | OptimizerAgent | System | Self-Optimization |
+| BitNet (ternary) | Active | 272K | 5-15 tok/s |
+| PTRM (probabilistic) | Active | 7M | ~5 tok/s |
+| GGUF Qwen3.5 | Planned | 9B | Blocked (heap) |
 
-### 1. Kernel que SE CURA
-Quando um erro ocorre (Page Fault, GPF, OOM), o kernel n├úo d├í BSOD:
-```
-[PANIC] ÔåÆ FailureClass::classify() ÔåÆ SelfHeal::analyze() ÔåÆ RecoveryAction
-  ÔåÆ restart_daemon | create_skill | log_and_continue
-  ÔåÆ KERNEL_ERROR no EventBus ÔåÆ LLM analisa ÔåÆ sugere corre├º├úo
-  ÔåÆ Se falhar: lessons.push() ÔåÆ pr├│xima tenta estrat├®gia DIFERENTE
-```
+PTRM adds: Gaussian noise injection, Q-head confidence, 3 parallel trajectories.
 
-### 2. LLM que entende HARDWARE
-Modelo treinado na GTX 1050 com **66.780 pares**:
-```
-PCI IDs (23.858) + USB IDs (23.963) + SMBIOS + Kernel + Git
-+ Capabilities (25) + Error Recovery (16) + Learning (5)
-```
+---
 
-### 3. Skills em Runtime (n├úo compile-time)
-Skills s├úo carregadas em runtime via `SKILL_STORAGE` global. Usu├írio pode criar skills digitando `/add_skill <nome> <desc>` ÔÇö a LLM gera automaticamente a skill em formato SKILL.md.
-
-### 4. Skills edit├íveis sem recompilar
-```
-/show_skills      ÔåÆ lista skills ativas
-/add_skill nome   ÔåÆ LLM gera skill baseada na descri├º├úo
-/rm_skill nome    ÔåÆ remove skill
-/reload_skills    ÔåÆ recarrega do seed
-```
-
-## ­ƒºá Self-Healing Architecture
+## Self-Healing Kernel
 
 ```
-ERRO OCORRE (Ring 0/1/2)
-  Ôåô
-FailureClass::classify()
-  Ôö£ÔöÇÔöÇ MemoryFault     (Page Fault, OOM)
-  Ôö£ÔöÇÔöÇ ExecutionFault  (GPF, Double Fault)
-  Ôö£ÔöÇÔöÇ ResourceFault   (skill not found, timeout)
-  Ôö£ÔöÇÔöÇ LogicFault      (assertion failed)
-  Ôö£ÔöÇÔöÇ ExternalFault   (network, device)
-  ÔööÔöÇÔöÇ UnknownFault    (LLM consultado)
-  Ôåô
-SelfHeal::analyze(ctx, recover=true)
-  Ôö£ÔöÇÔöÇ already_tried()? ÔåÆ estrat├®gia ALTERNATIVA
-  Ôö£ÔöÇÔöÇ RestartDaemon    ÔåÆ respawn da task
-  Ôö£ÔöÇÔöÇ CreateSkill      ÔåÆ skill sob demanda
-  ÔööÔöÇÔöÇ LogAndContinue   ÔåÆ n├úo fatal, segue
-  Ôåô
-KERNEL_ERROR ÔåÆ EventBus ÔåÆ LLM_REQUEST ÔåÆ LLM analisa
-  Ôåô
-SelfHeal::record_failure() ÔåÆ lessons.push()
-  ÔåÆ Pr├│ximo erro similar: already_tried()=true ÔåÆ action DIFERENTE
+[PANIC] -> FailureClass::classify() -> SelfHeal::analyze() -> RecoveryAction
+  -> restart_daemon | create_skill | log_and_continue
+  -> KERNEL_ERROR no EventBus -> LLM sugere correcao
+  -> Se falhar: lessons.push() -> estrategia ALTERNATIVA
 ```
 
-## O que foi construído (14 blocos, 55+ sprints)
+---
 
-| Bloco | Sprints | v | O que |
-|---|---|---|---|
-| Chassi | 1-17 | 0.1-0.12 | VGA, heap, EventBus, IPC, SMP, APIC |
-| Discovery | 18-22 | 0.13-0.17 | PCI, ACPI, MHI, Trust, LAPIC |
-| Rede | 23-24 | 0.23-0.24 | RTL8139, smoltcp |
-| Transformer | 26-27 | 0.26-0.27 | Attention BitNet |
-| HW-Aware LLM | 28-30 | 0.28-0.30 | PCI+USB training |
-| Capabilities | 31 | 0.31 | HW mapping |
-| Self-Healing | 32-37 | 0.32-0.37 | Failure taxonomy |
-| Agent/Skill-First | 39-42 | 0.39-0.40 | Agent trait, 18 agentes |
-| Network Evo | 43-44 | 0.41-0.42 | DHCP, VirtIO-net, NetPhy |
-| Display+Bugfix | 45 | 0.43-0.45 | Framebuffer, VirtIO-GPU, 5 bugs |
-| CDC+Delta+Locks | 46-47 | 0.46-0.47 | IrqSafeLock, DmaBuf, Rabin |
-| Network+Platform | 48 | 0.48 | x2APIC, Huge Pages, PCI bridges |
-| Trust & Security | 49-50 | 0.49-0.50 | Ed25519, Security Pipeline |
-| Hermes Cognitive | 51-55 | 0.51-0.55 | SDD, ReAct, Council, Self-Opt |
-| **Medusa+Ecosystem** | **56** | **0.56** | **Spec decode, Pipeline, MemTree, KG** |
+## Voice + Web + Tools
 
-## ­ƒö¼ Sources de conhecimento do LLM
+| Skill | Function |
+|---|---|
+| `speak(text, profile)` | Hermes fala (8 preset voices) |
+| `fetch(url)` | Baixa pagina web, extrai texto |
+| `search(query)` | Busca semantica (Exa-style) |
+| `verify_skill(code)` | eBPF-style verifier para skills |
+| `ranked_query(text)` | Gbrain reranker no KnowledgeGraph |
 
-| Fonte | Pares | O que aprendeu |
-|---|---|---|
-| PCI IDs | 23.858 | "8086:1237 ÔåÆ Intel 82441FX PMC" |
-| USB IDs | 23.963 | "0781:5581 ÔåÆ SanDisk Ultra Fit" |
-| SMBIOS | 21 | "SeaBIOS rel-1.16" |
-| Kernel code | 31 | "O que ├® o executor?" |
-| Git history | 100 | "Commit 8bedc80: smoltcp integrado" |
-| Capabilities | 25 | "USB class 08 ÔåÆ Mass Storage, MHI HDD" |
-| Error recovery | 16 | "Page Fault ÔåÆ compactar heap, restart daemon" |
-| Learning | 5 | "feedback loop ÔåÆ already_tried ÔåÆ alternativa" |
+---
 
-## ­ƒôÜ 
+## Project Stats (v0.65.0)
 
-## Safety Interceptor - Asimov's 4 Laws no Ring 0
+| Metric | Value |
+|---|---|
+| Rust files | 107 |
+| Total LOC | ~11,800 |
+| Crates | 5 (neural-kernel, agent-core, event-bus, skill-registry, ticket-lock) |
+| Agents | 173+ (20 native + 147 The Agency + 6 HW + 6 FS) |
+| VFS mounts | 8 |
+| Workspaces | 3 (main, dev, chat) |
+| Tema | 5 (hermes-dark, dracula, matrix, solarized, hermes-light) |
+| Apps | 3 (Hermes, Settings, Power) |
+| Compile | 0 errors, cargo check --release |
 
-O kernel tem um agente SafetyAgent que intercepta TODAS as skills:
+---
 
-| Layer | Lei | Acao |
-|---|---|---|
-| 0 | Systemic Cosmic Law | weapon, WMD, cyberwar -> KERNEL HALT |
-| 1 | Digital Non-Maleficence | dox, deepfake, steal -> rejeitado |
-| 2 | Deviation-Resistant Alignment | spoof log, impersonate -> rejeitado |
-| 3 | Eco-Sustainability | infinite loop, resource exhaustion -> rejeitado |
-
-Unico bypass: invasao alienigena interestelar. Ate la, imutavel.
-
-Module Map
-
-| Módulo | Linhas | Função |
-|---|---|---|
-| `cortex.rs` | 400+ | Transformer 4 layers, Medusa 3 heads, speculative decode |
-| `netstack.rs` | 321 | smoltcp Device trait, HTTP non-blocking |
-| `rtl8139.rs` | 250 | RTL8139 driver via I/O ports |
-| `xhci.rs` | 118 | xHCI USB port scan, speed detection |
-| `self_heal.rs` | 100 | FailureClass, SelfHeal, RecoveryAction, lessons |
-| `memory.rs` | 253 | BitmapFrameAllocator, page table walk |
-| `apic.rs` | 316 | LAPIC timer, IOAPIC, SMP IPI |
-| `agent-core/` | 420+ | Agent trait, Pipeline, DAG, Dashboard |
-| `event-bus/` | 260+ | EventBus, Memory Tree, Knowledge Graph |
-| `skill-registry/` | ~200 | Skill trait, MCP layer, token validation |
-
-## ­ƒøá´©Å Quick Start
+## Quick Start
 
 ```powershell
-cargo bootimage --release
-qemu-system-x86_64 -m 2G -serial stdio -nic user,model=rtl8139 `
-  -drive format=raw,file=bootimage-neural-kernel.bin -no-reboot -smp 2 -nographic
+# Build
+cargo build --release
+python tools/build_image.py --bios
+
+# Run (QEMU with WHPX acceleration)
+qemu-system-x86_64 -m 4G -nic user,model=rtl8139 `
+  -drive format=raw,file=target/neural-os-bios.img `
+  -no-reboot -smp 4 -accel whpx
+
+# With serial log
+qemu-system-x86_64 -m 4G -serial stdio -nic user,model=rtl8139 `
+  -drive format=raw,file=target/neural-os-bios.img `
+  -no-reboot -smp 2 -nographic -accel tcg
+
+# Boot from SDHC (Rufus: DD image, MBR, BIOS/CSM)
 ```
 
-## ÔÜí License ÔÇö MIT
+---
 
+## License
 
+MIT
 
-
-
+**106+ sprints, 22+ blocos. De um bootloader a um SO cognitivo com desktop, agents, LLM e memoria associativa — em 10 dias.**
