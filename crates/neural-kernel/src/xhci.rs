@@ -104,7 +104,10 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
     // Se primeiro poll, configura HID boot
     if state.last_report[0] == 0 && state.slot > 0 {
         // Setup device context slot
-        let ctx_phys = alloc_phys(2).unwrap();
+        let ctx_phys = match alloc_phys(2) {
+            Some(c) => c,
+            None => { return None; }
+        };
         core::ptr::write_bytes(ctx_phys.1, 0, 8192);
         let dcbaa = state.dcbaa_va as *mut u64;
         dcbaa.add(state.slot as usize).write_volatile(ctx_phys.0);
