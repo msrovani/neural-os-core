@@ -1,5 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use alloc::string::String;
+use alloc::boxed::Box;
 use core::f32::NEG_INFINITY;
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
@@ -395,7 +397,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
 
 pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
     let raw = generate_speculative(model, prompt);
-    // Check for TV-DSL tags in output and execute them
+    // TV-DSL determinism
     if raw.contains("[TV-DSL: ") {
         match crate::tv_dsl::scan_and_execute(&raw) {
             Ok(processed) => processed,
@@ -404,6 +406,114 @@ pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::S
     } else {
         raw
     }
+}
+
+// ---------------------------------------------------------------------------
+// Model trait — engine de LLM plugável (BitNet / GGUF / PTRM)
+// ---------------------------------------------------------------------------
+
+pub trait Model: Send {
+    fn generate(&self, prompt: &str) -> String;
+    fn embed_dim(&self) -> usize;
+    fn vocab_size(&self) -> u16;
+    fn max_seq(&self) -> usize;
+}
+
+static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+
+pub fn set_model(model: Box<dyn Model>) {
+    *CURRENT_MODEL.lock() = Some(model);
+    crate::serial_println!("[CORTEX] Model swapped.");
+}
+
+pub fn generate_via_model(prompt: &str) -> String {
+    let guard = CURRENT_MODEL.lock();
+    match guard.as_ref() {
+        Some(m) => m.generate(prompt),
+        None => String::from("[CORTEX] No model loaded"),
+    }
+}
+
+// Wrap TransformerModel as Model
+impl Model for TransformerModel {
+    fn generate(&self, prompt: &str) -> String { generate_text(self, prompt) }
+    fn embed_dim(&self) -> usize { HIDDEN }
+    fn vocab_size(&self) -> u16 { VOCAB_SIZE }
+    fn max_seq(&self) -> usize { MAX_SEQ }
+}
+
+// ---------------------------------------------------------------------------
+// PTRM — Probabilistic Tiny Recursive Model (±300 LOC)
+// Gaussian noise + Q-head + parallel trajectories
+// ---------------------------------------------------------------------------
+
+/// Box-Muller transform for Gaussian noise (no_std, using libm)
+pub fn gaussian_noise(mean: f32, std: f32) -> f32 {
+    // Use a simple LCG + Box-Muller
+    static SEED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(42);
+    let s = SEED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let u1 = (s as f32) / 4294967296.0;
+    let u2 = ((s as u64).wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407) as f32) / 4294967296.0;
+    let r = unsafe { libm::sqrtf(-2.0 * libm::logf(u1.max(0.0001))) };
+    let theta = 6.283185307 * u2;
+    mean + std * r * unsafe { libm::cosf(theta) }
+}
+
+/// PTRM: gera texto com ruído + trajetórias paralelas + Q-head
+pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
+    let tokens = Tokenizer::encode(prompt);
+    let mut best_text = alloc::string::String::new();
+    let mut best_score = -1000.0f32;
+
+    for _traj in 0..3 {
+        let mut t = tokens.clone();
+        let mut traj_text = alloc::string::String::new();
+
+        for _step in 0..16 {
+            if t.len() >= MAX_SEQ { break; }
+
+            // Forward + noise injection
+            let (hidden, logits) = model.forward_hidden(&t);
+
+            // Q-head: confidence score (max logit)
+            let q = (0..logits.shape.1).fold(0.0f32, |max, i| {
+                let v = logits.data[i];
+                if v > max { v } else { max }
+            });
+
+            // Sample com ruído (exploração)
+            let mut noisy_logits = logits.data.clone();
+            for v in &mut noisy_logits {
+                *v += gaussian_noise(0.0, 0.05);
+            }
+
+            let next = argmax_from_slice(&noisy_logits, 0);
+
+            if next == EOS || next >= VOCAB_SIZE { break; }
+            t.push(next);
+            traj_text.push(Tokenizer::decode_char(next).unwrap_or('?'));
+
+            // Atualiza best score
+            if q > best_score && traj_text.len() > 3 {
+                best_score = q;
+                best_text = traj_text.clone();
+            }
+        }
+    }
+
+    if best_text.is_empty() { Tokenizer::decode(&tokens) } else { best_text }
+}
+
+fn argmax_from_slice(data: &[f32], row: usize) -> u16 {
+    let cols = data.len().max(1);
+    let start = row * cols;
+    let end = core::cmp::min(start + cols, data.len());
+    if start >= end { return EOS; }
+    let mut best = start;
+    for i in start..end {
+        if data[i] > data[best] { best = i; }
+    }
+    ((best - start) as u16).min(VOCAB_SIZE - 1)
 }
 
 pub struct Cortex {
