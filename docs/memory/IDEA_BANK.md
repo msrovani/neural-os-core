@@ -1219,3 +1219,4 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-01 | **Desktop Cube Crossfade (IDEA #286):** Transicao entre workspaces sem float (FPU desabilitado). Inteiros step 0..50, AtomicBool em vez de static mut, split animado com fill_rect. | Dev + IDA IA |
 | 2026-07-01 | **Bughunt GPU Sprint 66:** 24 bugs corrigidos (3 crit, 8 high, 6 med, 7 low). Destaques: vec! sem alloc, gpu_blit morto, vram_alloc sem bump, static mut UB, float sem FPU, BAR sem validacao, mod gpu ausente. commit 1d66a17. | Dev + IDA IA |
 | 2026-07-01 | **TODO.md mestre:** docs/TODO.md com 28 pendências catalogadas, sub-itens, dificuldades, travas, fontes, esforço. Para qualquer AI DEV localizar e contribuir. | Dev + IDA IA |
+| 2026-07-01 | **WiFi (B-29):** Intel Wireless / Atheros / Realtek 802.11. Scan, association, WPA2/WPA3. Thread: firmware loading, crypto, frame format. Bloqueado por B-01 (rede). | Dev + IDA IA |
