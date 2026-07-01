@@ -5,7 +5,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
-use alloc::boxed::Box;
 use spin::Mutex;
 use crate::display::fb::DoubleBuffer;
 use crate::display::font;

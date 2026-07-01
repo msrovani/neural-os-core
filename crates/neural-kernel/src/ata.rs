@@ -1,5 +1,4 @@
 use crate::pci::scan_pci;
-use crate::serial_println;
 
 pub struct AtaDriver {
     pub io_base: u16,
@@ -55,7 +54,7 @@ impl AtaDriver {
     /// ATA IDENTIFY — obtem informacoes do disco
     unsafe fn identify(&self) -> Option<[u16; 256]> {
         self.wait_bsy();
-        use x86_64::instructions::port::Port;
+        
         // Comando IDENTIFY
         write_io(self.io_base + 6, 0xA0);
         write_io(self.io_base + 2, 0);

@@ -1,6 +1,4 @@
-use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
-use crate::pci::PciDevice;
 use crate::memory::{PHYS_MEM_OFFSET, GLOBAL_ALLOCATOR};
 use crate::serial_println;
 
@@ -63,7 +61,7 @@ pub unsafe fn init_xhci() {
         let capl = r32(base, 0) as u64 & 0xFF;
         let op = base + capl;
         let hcc1 = r32(base + capl, 8);
-        let db_off = ((hcc1 >> 16) as u64 & !0x3);
+        let db_off = (hcc1 >> 16) as u64 & !0x3 ;
 
         w32(op, 0, r32(op, 0) & !0x01);
         for _ in 0..1000 { if r32(op, 0) & 0x01 == 0 { break; } core::hint::spin_loop(); }
@@ -135,7 +133,7 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
     // Ler Event Ring para completions
     let evt = state.er_va as *const u64;
     let ctrl = state.er_va as *const u32;
-    let cycle = ctrl.add(3).read_volatile() & 0x01;
+    let _cycle = ctrl.add(3).read_volatile() & 0x01;
 
     for i in 0..8u16 {
         let trb = evt.add(i as usize * 4);
@@ -168,7 +166,7 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
 }
 
 unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {
-    use x86_64::structures::paging::FrameAllocator;
+    
     let mut g = GLOBAL_ALLOCATOR.lock();
     let a = (*g).as_mut()?;
     let f = a.allocate_contiguous(n)?;

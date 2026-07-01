@@ -5,7 +5,6 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use spin::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VerifyResult {

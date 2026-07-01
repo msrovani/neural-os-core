@@ -25,7 +25,7 @@ pub fn dma_alloc(size: usize) -> Option<DmaBuf> {
     let pages = (size + 4095) / 4096;
     if pages == 0 { return None; }
     let pa = unsafe {
-        use x86_64::structures::paging::FrameAllocator;
+        
         let mut guard = GLOBAL_ALLOCATOR.lock();
         let alloc = (*guard).as_mut()?;
         let frame = alloc.allocate_contiguous(pages)?;

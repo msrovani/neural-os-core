@@ -3,11 +3,8 @@
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
-use alloc::vec;
-use alloc::vec::Vec;
 use crate::display::fb::DoubleBuffer;
 use crate::display::theme;
-use crate::display::font;
 
 #[derive(Debug, Clone)]
 pub struct Notification {

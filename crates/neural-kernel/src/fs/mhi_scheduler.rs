@@ -4,8 +4,6 @@
 //! Aquecimento (promocao): access_count > 5 em 500 ticks → HDD→DRAM
 //! Resfriamento (democao): sem acesso por 5000 ticks → DRAM→HDD
 
-use alloc::vec;
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 const PROMOTE_ACCESS_THRESHOLD: u64 = 5;
@@ -23,12 +21,12 @@ pub fn mhi_scheduler_tick(tick: u64) {
 
     let reg = crate::mhi::MHI_REGISTRY.lock();
     let mut promotions = 0u64;
-    let demotions = 0u64;
+    let _demotions = 0u64;
 
     for (_addr, profile) in reg.allocations.iter() {
         let freq = profile.access_count;
         let idle = tick.saturating_sub(profile.last_access_tick);
-        let (cpu_w, gpu_w, _io_w) = crate::profile::ProfileManager::get().resource_weights();
+        let (_cpu_w, gpu_w, _io_w) = crate::profile::ProfileManager::get().resource_weights();
         let profile_weight = gpu_w;
         let suggested = crate::mhi::arc_suggest_tier(profile, tick, profile_weight);
 

@@ -6,7 +6,7 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, IpCidr};
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
 use smoltcp::socket::udp as udp_socket;
-use smoltcp::socket::dhcpv4::{self, Event as DhcpEvent, Socket as DhcpSocket};
+use smoltcp::socket::dhcpv4::{Event as DhcpEvent, Socket as DhcpSocket};
 use crate::net::VIRTIO_DEV;
 
 pub struct PhyToken(pub Vec<u8>);

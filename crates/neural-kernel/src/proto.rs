@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 use alloc::vec::Vec;
-use crate::serial_println;
 
 pub fn eth_broadcast() -> [u8; 6] { [0xFF; 6] }
 pub fn eth_type_ipv4() -> u16 { 0x0800 }

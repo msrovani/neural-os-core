@@ -147,7 +147,7 @@ impl IntelRing {
 }
 
 unsafe fn alloc_ring_buffer(pages: usize) -> Option<(u64, *mut u32)> {
-    use x86_64::structures::paging::FrameAllocator;
+    
     let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
     let a = g.as_mut()?;
     let f = a.allocate_contiguous(pages)?;

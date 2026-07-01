@@ -7,9 +7,7 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::pin::Pin;
-use core::task::{Context, Poll};
-use event_bus::{CapabilityToken, Event, EventBus, Receiver};
+use event_bus::{CapabilityToken, Event, Receiver};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::cortex;
 use crate::hermes;
@@ -702,7 +700,7 @@ impl Agent for HermesAgent {
             let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
             // If we already have a response (e.g., LLM skill creation), use responded
-            let final_response = if !responded.is_empty() {
+            let _final_response = if !responded.is_empty() {
                 &responded
             } else {
                 &response

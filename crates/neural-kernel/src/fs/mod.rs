@@ -4,7 +4,6 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
 use spin::Mutex;
 
@@ -37,7 +36,7 @@ pub fn register_fs_agent(agent: Box<dyn FilesystemAgent>) {
     crate::serial_println!("[FS] Agent '{}' registrado em {}", name, mp);
 }
 
-pub fn agent_for_mount(mount_point: &str) -> Option<&'static mut Box<dyn FilesystemAgent>> {
+pub fn agent_for_mount(_mount_point: &str) -> Option<&'static mut Box<dyn FilesystemAgent>> {
     // This would need interior mutability — simplified for now
     None
 }

@@ -3,7 +3,6 @@
 //! Arquivos: /dev/pci/NNNN:NNNN, /dev/rtl8139/, /dev/xhci/
 
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 use crate::fs::FilesystemAgent;

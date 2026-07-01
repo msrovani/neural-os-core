@@ -2,7 +2,6 @@
 //! Isola arquitetura x86_64 por tras de traits, permitindo
 //! futuramente portar para aarch64 (RPi5) e riscv64.
 
-use alloc::string::String;
 
 /// Informacoes de deteccao de hardware
 #[derive(Debug, Clone)]

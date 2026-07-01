@@ -42,7 +42,7 @@ pub fn render_crossfade(fb: &mut DoubleBuffer, _tick: u64) {
     // Linha de separacao animada = split_x = w * step / CUBE_STEPS
     let split_x = (w as u32 * step) / CUBE_STEPS;
     if split_x < w as u32 {
-        fb.fill_rect(split_x as usize, 0, (w - split_x as usize), h,
+        fb.fill_rect(split_x as usize, 0, w - split_x as usize, h,
             t.accent.0, t.accent.1, t.accent.2);
         fb.fill_rect(0, 0, split_x as usize, h,
             t.bg.0, t.bg.1, t.bg.2);

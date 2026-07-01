@@ -1,7 +1,5 @@
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::VecDeque;
-use spin::Mutex;
 use crate::apps::App;
 
 /// Hermes App — chatbot + shell em janela

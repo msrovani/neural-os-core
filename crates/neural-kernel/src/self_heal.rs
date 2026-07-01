@@ -5,7 +5,6 @@ use core::sync::atomic::Ordering;
 use crate::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
 use crate::serial_println;
 use crate::chunker;
-use crate::delta;
 
 #[derive(Clone, Debug)]
 pub struct Checkpoint {

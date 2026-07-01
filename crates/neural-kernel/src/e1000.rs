@@ -4,7 +4,7 @@
 //! Baseado na Intel Gigabit Ethernet Controller datasheet.
 
 use alloc::vec::Vec;
-use x86_64::instructions::port::Port; // kept for potential I/O bar fallback
+ // kept for potential I/O bar fallback
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
 use crate::serial_println;

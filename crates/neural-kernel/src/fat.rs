@@ -2,7 +2,6 @@
 //! Monta particoes detectadas no VFS, cria particao de dados em espaco livre.
 
 use alloc::boxed::Box;
-use alloc::string::String;
 use alloc::vec::Vec;
 use crate::ata::AtaDriver;
 use crate::serial_println;
