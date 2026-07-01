@@ -1,58 +1,50 @@
 //! Desktop Cube — transicao crossfade entre workspaces.
 //! Fallback CPU quando GPU blitter nao disponivel.
+//! Usa inteiros em vez de float para evitar FPU sem init.
 
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::display::fb::DoubleBuffer;
 use crate::display::theme;
-use crate::display::workspace::LayoutMode;
 
-static mut CUBE_ACTIVE: bool = false;
-static mut CUBE_PROGRESS: f32 = 0.0;
-static mut CUBE_FROM_WS: usize = 0;
-static mut CUBE_TO_WS: usize = 0;
+static CUBE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CUBE_PROGRESS: AtomicU32 = AtomicU32::new(0); // 0..50
+static CUBE_FROM_WS: AtomicU32 = AtomicU32::new(0);
+static CUBE_TO_WS: AtomicU32 = AtomicU32::new(0);
+const CUBE_STEPS: u32 = 50;
 
 pub fn start_transition(from: usize, to: usize) {
-    unsafe {
-        CUBE_ACTIVE = true;
-        CUBE_PROGRESS = 0.0;
-        CUBE_FROM_WS = from;
-        CUBE_TO_WS = to;
-    }
+    CUBE_ACTIVE.store(true, Ordering::SeqCst);
+    CUBE_PROGRESS.store(0, Ordering::SeqCst);
+    CUBE_FROM_WS.store(from as u32, Ordering::SeqCst);
+    CUBE_TO_WS.store(to as u32, Ordering::SeqCst);
 }
 
 pub fn is_transitioning() -> bool {
-    unsafe { CUBE_ACTIVE }
+    CUBE_ACTIVE.load(Ordering::SeqCst)
 }
 
-/// Renderiza transicao crossfade entre dois workspaces
-pub fn render_crossfade(fb: &mut DoubleBuffer, tick: u64) {
-    unsafe {
-        if !CUBE_ACTIVE { return; }
-        CUBE_PROGRESS += 0.02; // 50 ticks para completar (~2.7s)
-        if CUBE_PROGRESS >= 1.0 {
-            CUBE_ACTIVE = false;
-            CUBE_PROGRESS = 1.0;
-            return;
-        }
-        // Crossfade: alpha blend entre workspace atual e proximo
-        // Em producao: renderizar os dois workspaces em buffers separados e blend
-        let t = theme::current();
-        let alpha = CUBE_PROGRESS;
-        let inv = 1.0 - alpha;
-        let w = fb.info.width;
-        let h = fb.info.height;
-        // Linha de separacao animada (simula rotacao)
-        let split_x = (w as f32 * alpha) as usize;
-        if split_x < w {
-            // Area direita = workspace destino (cor do tema)
-            fb.fill_rect(split_x, 0, w - split_x, h,
-                (t.accent.0 as f32 * alpha) as u8,
-                (t.accent.1 as f32 * alpha) as u8,
-                (t.accent.2 as f32 * alpha) as u8);
-            // Area esquerda = workspace origem (cor de fundo)
-            fb.fill_rect(0, 0, split_x, h,
-                (t.bg.0 as f32 * inv) as u8,
-                (t.bg.1 as f32 * inv) as u8,
-                (t.bg.2 as f32 * inv) as u8);
-        }
+/// Renderiza transicao crossfade entre dois workspaces (sem float)
+pub fn render_crossfade(fb: &mut DoubleBuffer, _tick: u64) {
+    if !CUBE_ACTIVE.load(Ordering::SeqCst) { return; }
+
+    let step = CUBE_PROGRESS.load(Ordering::SeqCst);
+    if step >= CUBE_STEPS {
+        CUBE_ACTIVE.store(false, Ordering::SeqCst);
+        return;
+    }
+    CUBE_PROGRESS.store(step + 1, Ordering::SeqCst);
+
+    // Crossfade via inteiros: alpha = step*255 / CUBE_STEPS
+    let t = theme::current();
+    let w = fb.info.width;
+    let h = fb.info.height;
+
+    // Linha de separacao animada = split_x = w * step / CUBE_STEPS
+    let split_x = (w as u32 * step) / CUBE_STEPS;
+    if split_x < w as u32 {
+        fb.fill_rect(split_x as usize, 0, (w - split_x as usize), h,
+            t.accent.0, t.accent.1, t.accent.2);
+        fb.fill_rect(0, 0, split_x as usize, h,
+            t.bg.0, t.bg.1, t.bg.2);
     }
 }
