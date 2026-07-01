@@ -1,6 +1,7 @@
 //! VRAM Tier — mapeia BAR2 da GPU como AllocTier::Vram.
-//! Toda GPU com BAR2 mapeavel tem sua VRAM disponivel como tier MHI.
+//! Free list allocator com first-fit e coalescing de blocos adjacentes.
 
+use alloc::collections::BTreeMap;
 use crate::gpu::detect::GpuInfo;
 use crate::serial_println;
 
@@ -10,7 +11,7 @@ pub struct GpuVram {
     pub base: u64,
     pub size: u64,
     pub gpu: GpuInfo,
-    pub next_offset: u64, // bump allocator offset
+    pub free_blocks: BTreeMap<u64, u64>, // start → size
     pub page_map: fn(u64) -> Option<u64>,
 }
 
@@ -22,7 +23,6 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     }
 
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-
     let vram_phys = gpu.bar2;
     let vram_size = gpu.vram_size;
 
@@ -31,40 +31,90 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
 
     let test_addr = vram_phys + pmoff;
     let test_val: u32 = 0xDEADBEEF;
-    unsafe { core::ptr::write_volatile(test_addr as *mut u32, test_val); }
-    let read_back = unsafe { core::ptr::read_volatile(test_addr as *const u32) };
+    core::ptr::write_volatile(test_addr as *mut u32, test_val);
+    let read_back = core::ptr::read_volatile(test_addr as *const u32);
 
     if read_back != test_val {
         serial_println!("[VRAM] {}: teste de escrita/leitura falhou (endereco {:#x})", gpu.name, vram_phys);
         return false;
     }
 
+    let mut free_blocks = BTreeMap::new();
+    free_blocks.insert(vram_phys + (1 << 20), vram_size - (1 << 20)); // reserva 1MB inicial
+
     *VRAM_STATE.lock() = Some(GpuVram {
         base: vram_phys,
         size: vram_size,
         gpu: gpu.clone(),
-        next_offset: 0,
+        free_blocks,
         page_map: |_| None,
     });
 
-    serial_println!("[VRAM] {} mapeado: {:#x} ({} MB)", gpu.name, vram_phys, vram_size / (1024*1024));
+    serial_println!("[VRAM] {} mapeado: {:#x} ({} MB) free list ativa", gpu.name, vram_phys, vram_size / (1024*1024));
     true
 }
 
-/// Aloca na VRAM (bump allocator simples)
+/// Aloca na VRAM (first-fit free list)
 pub fn vram_alloc(size: usize) -> Option<u64> {
     let mut guard = VRAM_STATE.lock();
     let vram = guard.as_mut()?;
     let aligned = (size as u64 + 0xFFF) & !0xFFF;
-    if vram.next_offset + aligned > vram.size {
-        serial_println!("[VRAM] alloc {} bytes falhou: sem espaco (usado={}/{})",
-            size, vram.next_offset, vram.size);
-        return None;
+
+    // First-fit: busca o primeiro bloco livre com tamanho suficiente
+    let mut found_start = None;
+    for (&start, &block_size) in &vram.free_blocks {
+        if block_size >= aligned {
+            found_start = Some(start);
+            break;
+        }
     }
-    let addr = vram.base + vram.next_offset;
-    vram.next_offset += aligned;
-    Some(addr)
+
+    let start = found_start?;
+    let block_size = vram.free_blocks.remove(&start).unwrap();
+
+    if block_size > aligned {
+        vram.free_blocks.insert(start + aligned, block_size - aligned);
+    }
+
+    serial_println!("[VRAM] alloc {} bytes @ {:#x} (restam {} blocos livres)", size, start, vram.free_blocks.len());
+    Some(start)
 }
 
-/// Libera endereco na VRAM (stub — sem free list ainda)
-pub fn vram_free(_addr: u64) {}
+/// Libera endereco na VRAM com coalescing de adjacentes
+pub fn vram_free(addr: u64, size: usize) {
+    let mut guard = VRAM_STATE.lock();
+    let vram = guard.as_mut().expect("VRAM not initialized");
+    let aligned = (size as u64 + 0xFFF) & !0xFFF;
+
+    // Coalesce com bloco anterior (addr_prev + size_prev == addr)
+    let prev = vram.free_blocks.range(..addr).last().map(|(&k, &v)| (k, v));
+    let merged_start = if let Some((prev_start, prev_size)) = prev {
+        if prev_start + prev_size == addr {
+            vram.free_blocks.remove(&prev_start);
+            prev_start
+        } else { addr }
+    } else { addr };
+
+    // Coalesce com próximo bloco (addr + aligned == next_start)
+    let merged_size = if let Some((&next_start, &next_size)) = vram.free_blocks.range(addr..).next() {
+        if addr + aligned == next_start {
+            vram.free_blocks.remove(&next_start);
+            aligned + next_size
+        } else { aligned }
+    } else { aligned };
+
+    vram.free_blocks.insert(merged_start, merged_size);
+    serial_println!("[VRAM] free {:#x} ({}) -> merged @ {:#x} size {}", addr, size, merged_start, merged_size);
+}
+
+/// Status da VRAM para debug
+pub fn vram_status() -> alloc::string::String {
+    let guard = VRAM_STATE.lock();
+    if let Some(vram) = guard.as_ref() {
+        let used = vram.size - vram.free_blocks.values().sum::<u64>();
+        alloc::format!("VRAM: {}/{} MB used, {} free blocks",
+            used / (1024*1024), vram.size / (1024*1024), vram.free_blocks.len())
+    } else {
+        alloc::string::String::from("VRAM: not initialized")
+    }
+}
