@@ -58,13 +58,14 @@ A ──→ B    = "A bloqueia B" (B não pode começar sem A)
 
 ```
 Fase 0 (já existe):  GPU probe, RTL8139 TX, PCI scan, display
-Fase 1 (Sprint 67):  B-05 ──→ B-26 ──→ B-28     (sem dependências)
-Fase 2 (Sprint 68):  B-01 ──→ B-18               (rede)
-Fase 3 (Sprint 69):  B-01 → B-11 → B-12 → B-13  (WWW chain)
-Fase 4 (Sprint 70):  B-07 → B-02                 (GPU compute Intel)
-Fase 5 (Sprint 71):  B-03, B-04                  (GPU NVIDIA/AMD)
-Fase 6 (Sprint 72):  B-06, B-14, B-09            (USB, WASM, VRAM)
-Backlog:              B-08, B-10, B-15 .. B-27
+Fase 1 (Sprint 67):  S67.0+S67.1+B-05+B-28      ✅ (meta-skill, agency, GPU boot)
+Fase 2 (GPU fix):    B-24, B-09, B-08, B-22, B-07, B-14, B-25  ✅
+Fase 3 (Rede):       B-01 (RX fix) ──→ B-18 (DHCP fallback)
+Fase 4 (WWW):        B-11 (WWW Infra) ──→ B-12 (Browser), B-13 (MCP), B-17, B-27
+Fase 5 (GPU Intel):  B-02 (GEN shader) ←── B-07 ✅
+Fase 6 (HW real):    B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
+Fase 7 (WiFi):       B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
+Backlog:              B-06, B-15, B-16, B-19, B-20
 ```
 
 ---
@@ -763,6 +764,33 @@ if !gpus.is_empty() {
 **Arquivos:** `crates/neural-kernel/src/plugin_hub.rs` (já existe stub)
 
 **Esforço:** 🟡 ~400 LOC, 1 semana
+
+---
+
+### B-29: WiFi — Intel Wireless / Atheros / Realtek
+
+**Goal:** Conectar a redes WiFi 802.11, WPA2/WPA3, scan de redes, DHCP sobre WiFi.
+
+**Por que:** Sem WiFi, o Hermes só funciona com cabo Ethernet. Para ser um SO mobile/desktop completo, WiFi é essencial.
+
+**Sub-itens:**
+- [ ] Pesquisar chipsets WiFi suportados em bare-metal (Intel, Atheros, Realtek)
+- [ ] Implementar PCI detection de wireless cards
+- [ ] 802.11 scan + association (management frames)
+- [ ] WPA2/WPA3 handshake (PSK, EAP)
+- [ ] Bridge entre WiFi e smoltcp (NetPhy WiFi)
+
+**Dificuldades:**
+- Firmware loading (Intel iwlwifi, Atheros ath9k)
+- 802.11 frame format é diferente de Ethernet
+- WPA2 cryptography (CCMP/AES) requer crypto em no_std
+- Firmware licensing pode ser problemática (Intel é NDA)
+
+**Travas:** B-01 (rede funcional) — sem IP stack testada, WiFi não tem onde se apoiar
+
+**Arquivos:** `crates/neural-kernel/src/wifi/` (novo módulo)
+
+**Esforço:** 🔴 ~2000 LOC, 4-8 semanas
 
 ---
 

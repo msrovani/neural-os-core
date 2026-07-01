@@ -14,7 +14,9 @@ const REG_TSAD0: u16 = 0x20;
 const REG_RBSTART: u16 = 0x30;
 const REG_CR: u16 = 0x37;
 const REG_CAPR: u16 = 0x38;
-const REG_CBR: u16 = 0x3A;
+// CBR (0x3A) = Current Buffer Address (read-only, NIC escreve onde esta)
+// CAPR (0x38) = Current Address of Packet Read (escrita = "host ja leu ate aqui")
+// BUG FIX: o codigo anterior escrevia em CBR (read-only) em vez de CAPR
 const REG_RCR: u16 = 0x44;
 const REG_IMR: u16 = 0x3C;
 
@@ -220,7 +222,7 @@ impl Rtl8139Driver {
 
         if status & 0x0001 == 0 || pkt_len < 60 || pkt_len > 1536 {
             self.rx_offset = capr;
-            self.write16(REG_CBR, capr.wrapping_sub(16));
+            self.write16(REG_CAPR, capr.wrapping_sub(16));
             return None;
         }
 
@@ -234,12 +236,12 @@ impl Rtl8139Driver {
         let consumed = ((4 + data_len + 4 + 3) / 4) * 4;
         self.rx_offset = ((off + consumed) % (RX_BUF_SIZE - 16)) as u16;
 
-        let cbr = if self.rx_offset < 16 {
+        let capr = if self.rx_offset < 16 {
             (RX_BUF_SIZE - 16) as u16 + self.rx_offset - 16
         } else {
             self.rx_offset - 16
         };
-        self.write16(REG_CBR, cbr);
+        self.write16(REG_CAPR, capr);
 
         Some(buf)
     }
