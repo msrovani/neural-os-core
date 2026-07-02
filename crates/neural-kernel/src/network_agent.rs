@@ -32,6 +32,10 @@ pub fn network_agent_tick() {
     // Poll interface
     if let Some(ref mut ns) = *NETSTACK.lock() {
         ns.poll(ms as i64);
+        if tick % 50 == 0 {
+            log(tick, &alloc::format!("poll: tx={} rx={}",
+                crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+        }
         if let Some(ref mut c) = s.http {
             ns.http_poll(c, ms as u64);
             match &c.state {

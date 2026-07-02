@@ -1,7 +1,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+
+static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
+static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
+pub fn net_tx_count() -> u64 { NET_TX_COUNT.load(Ordering::Relaxed) }
+pub fn net_rx_count() -> u64 { NET_RX_COUNT.load(Ordering::Relaxed) }
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, IpCidr};
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
@@ -14,6 +20,7 @@ pub struct PhyToken(pub Vec<u8>);
 impl RxToken for PhyToken {
     fn consume<R, F>(self, f: F) -> R
     where F: FnOnce(&[u8]) -> R {
+        NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
         f(&self.0)
     }
 }
@@ -21,6 +28,7 @@ impl RxToken for PhyToken {
 impl TxToken for PhyToken {
     fn consume<R, F>(self, len: usize, f: F) -> R
     where F: FnOnce(&mut [u8]) -> R {
+        NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
         let mut buf = vec![0u8; len];
         let r = f(&mut buf);
         unsafe { nic_send(buf) };
@@ -102,6 +110,8 @@ pub struct NetStack {
     dhcp_handle: SocketHandle,
     pub dhcp_done: bool,
     pub has_static_ip: bool,
+    pub tx_count: u64,
+    pub rx_count: u64,
 }
 
 fn ip_to_u32(ip: [u8; 4]) -> u32 {
@@ -121,7 +131,7 @@ impl NetStack {
         let dhcp = DhcpSocket::new();
         let dhcp_handle = sockets.add(dhcp);
 
-        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false }
+        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0 }
     }
 
     /// Configura IP estatico para QEMU user-mode (10.0.2.15/24)
