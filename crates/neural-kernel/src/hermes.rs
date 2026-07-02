@@ -1,4 +1,5 @@
 //! Hermes Cognitive — identidade, SDD, transparência, ReAct 7 fases.
+//! IntentCache e WorkflowEngine para otimização de rotas e execução multi-passo.
 
 use alloc::string::String;
 use alloc::string::ToString;
@@ -288,13 +289,148 @@ const VOCAB: [&str; 17] = [
     "profile",
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Command {
     Status, Echo(String), Help, HardwareInfo, NetDiag,
     Fetch(String), Ping(String), TrustAllow(u64, String), TrustDeny(u64, String),
     Usage, Conversation, Chat(String),
     ShowSkills, AddSkill(String, String), RmSkill(String), ReloadSkills,
     Profile,
+}
+
+// ---------------------------------------------------------------------------
+// IntentCache — cacheia intents para evitar re-classificacao via Cortex
+// ---------------------------------------------------------------------------
+
+use alloc::collections::BTreeMap;
+
+const INTENT_CACHE_MAX: usize = 64;
+
+pub struct IntentCache {
+    cache: BTreeMap<u64, (Command, u64)>, // hash(input) → (command, tick_cached)
+    hits: u64,
+    misses: u64,
+}
+
+impl IntentCache {
+    pub fn new() -> Self {
+        IntentCache {
+            cache: BTreeMap::new(),
+            hits: 0,
+            misses: 0,
+        }
+    }
+
+    fn hash(input: &str) -> u64 {
+        let mut h: u64 = 5381;
+        for b in input.bytes() { h = h.wrapping_mul(33).wrapping_add(b as u64); }
+        h
+    }
+
+    pub fn get(&mut self, input: &str, now: u64) -> Option<Command> {
+        let key = Self::hash(input);
+        if let Some((cmd, cached_at)) = self.cache.get(&key).cloned() {
+            if now - cached_at < 1000 { // 1000 ticks de TTL
+                self.hits += 1;
+                return Some(cmd);
+            }
+        }
+        self.misses += 1;
+        None
+    }
+
+    pub fn set(&mut self, input: &str, cmd: Command, now: u64) {
+        let key = Self::hash(input);
+        if self.cache.len() >= INTENT_CACHE_MAX {
+            // LRU simples: remove o primeiro
+            if let Some(k) = self.cache.keys().next().cloned() {
+                self.cache.remove(&k);
+            }
+        }
+        self.cache.insert(key, (cmd, now));
+    }
+
+    pub fn stats(&self) -> (u64, u64) {
+        (self.hits, self.misses)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WorkflowEngine — execucao multi-passo com THINK→PLAN→EXECUTE→VERIFY→REFINE
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WorkflowPhase {
+    Idle,
+    Think,
+    Plan,
+    Execute,
+    Verify,
+    Refine,
+    Done,
+}
+
+pub struct WorkflowEngine {
+    pub phase: WorkflowPhase,
+    pub retries: u8,
+    pub max_retries: u8,
+}
+
+impl WorkflowEngine {
+    pub fn new() -> Self {
+        WorkflowEngine {
+            phase: WorkflowPhase::Idle,
+            retries: 0,
+            max_retries: 3,
+        }
+    }
+
+    pub fn start(&mut self) {
+        self.phase = WorkflowPhase::Think;
+        self.retries = 0;
+    }
+
+    /// Avanca para a proxima fase. Retorna true se o workflow terminou.
+    pub fn advance(&mut self, success: bool) -> bool {
+        match self.phase {
+            WorkflowPhase::Think => {
+                self.phase = WorkflowPhase::Plan;
+                false
+            }
+            WorkflowPhase::Plan => {
+                self.phase = WorkflowPhase::Execute;
+                false
+            }
+            WorkflowPhase::Execute => {
+                self.phase = WorkflowPhase::Verify;
+                false
+            }
+            WorkflowPhase::Verify => {
+                if success {
+                    self.phase = WorkflowPhase::Done;
+                    true
+                } else {
+                    self.retries += 1;
+                    if self.retries >= self.max_retries {
+                        self.phase = WorkflowPhase::Done;
+                        true
+                    } else {
+                        self.phase = WorkflowPhase::Refine;
+                        false
+                    }
+                }
+            }
+            WorkflowPhase::Refine => {
+                self.phase = WorkflowPhase::Execute;
+                false
+            }
+            WorkflowPhase::Done | WorkflowPhase::Idle => true,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.phase != WorkflowPhase::Idle && self.phase != WorkflowPhase::Done
+    }
 }
 
 pub fn parse_command(line: &str) -> Command {

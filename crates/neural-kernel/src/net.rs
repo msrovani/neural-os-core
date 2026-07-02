@@ -192,6 +192,10 @@ impl crate::Skill for NetDiagnosticSkill {
             name: alloc::string::String::from("net_diag"),
             description: alloc::string::String::from("Network diagnostics and AI analysis of connectivity"),
             required_tokens: alloc::vec![1],
+            preconditions: alloc::vec![],
+            context_links: alloc::vec![],
+            output_schema: crate::OutputSchema::Any,
+            idempotent: true,
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {

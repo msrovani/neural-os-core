@@ -11,7 +11,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use bootloader_api::BootInfo;
 use event_bus::{CapabilityToken, Event, Receiver};
-use skill_registry::{McpManifest, Skill, SkillRegistry};
+use skill_registry::{McpManifest, Skill, SkillRegistry, OutputSchema};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
@@ -105,6 +105,10 @@ impl Skill for EchoSkill {
             name: String::from("echo"),
             description: String::from("Reverses the input payload bytes as a demonstration skill"),
             required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::Any,
+            idempotent: true,
         }
     }
     fn execute(&self, payload: &[u8]) -> Result<Vec<u8>, &'static str> {
@@ -121,6 +125,10 @@ impl Skill for SystemStatusSkill {
             name: String::from("system_status"),
             description: String::from("Reports RAM free/total per MHI tier and CPU status"),
             required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::Any,
+            idempotent: true,
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
@@ -155,6 +163,10 @@ impl Skill for HardwareInfoSkill {
             name: String::from("hardware_info"),
             description: String::from("Reports hardware inventory and system architecture"),
             required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::Any,
+            idempotent: true,
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
@@ -190,6 +202,10 @@ impl Skill for HwIdentifySkill {
             name: String::from("hw_identify"),
             description: String::from("Identifies all PCI hardware using the Cortex LLM"),
             required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::Any,
+            idempotent: false,
         }
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {

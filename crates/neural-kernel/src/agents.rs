@@ -1053,7 +1053,7 @@ impl Agent for GpuDriverAgent {
 // que estavam no boot flow procedural. SystemAgent executa esta skill
 // durante a fase de Diagnostics, publicando resultados no EventBus.
 
-use skill_registry::{Skill, McpManifest};
+use skill_registry::{Skill, McpManifest, OutputSchema};
 
 pub struct DiagnosticSkill;
 
@@ -1067,6 +1067,10 @@ impl Skill for DiagnosticSkill {
             name: alloc::string::String::from("diagnostic"),
             description: alloc::string::String::from("Run-time diagnostics: alloc, tensor, MLP, BitNet"),
             required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::Any,
+            idempotent: true,
         }
     }
 

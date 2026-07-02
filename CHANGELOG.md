@@ -20,11 +20,24 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - `AgentInstance` ganha campo `crew: CrewManifest`
 - `AgentRegistry::run()` suporta FlowTrigger e StateGraph como alternativas ao round-robin
 
-### Planned (remaining items)
-- 72.2 — TaskSchema + JobPreconditions (skill-registry)
-- 72.3 — IntentCache + OutputCache
-- 72.4 — WorkflowEngine + SelfCritique
-- 72.6 — SkillIndex + MCP Catalog
+### Added (skill-registry)
+- **OutputSchema** (`mcp.rs`): enum `Any, String, Json(Vec<String>)` com validação de output de skills. `McpManifest` ganha `preconditions` (caminhos VFS para contexto), `context_links` (skills relacionadas), `output_schema`, `idempotent` (cacheável).
+- **OutputCache** (`cache.rs`): Cache de outputs de skills idempotentes com hash(input) e TTL. Evita re-execução de `system_status`, `echo`, etc. Suporta `get()`, `set()`, `evict_expired()`.
+- **SkillIndex** (`index.rs`): Catálogo de skills por domínio (`by_domain`) e capacidade (`by_capability`). `relevant(capabilities)` para progressive disclosure via Hermes.
+
+### Added (neural-kernel/hermes)
+- **IntentCache** (`hermes.rs`): Cacheia intents (hash do input → Command) com TTL de 1000 ticks. HermesAgent consulta antes de chamar `cortex.think()`. Evita re-classificação de comandos repetidos.
+- **WorkflowEngine** (`hermes.rs`): Máquina de estados THINK→PLAN→EXECUTE→VERIFY→REFINE→DONE. Suporta retry com `max_retries`. Usado por HermesAgent para workflows multi-passo.
+
+### Changed
+- Todas as 6 implementações de `Skill` atualizadas para os novos campos `McpManifest`.
+- `Command` agora é `Clone` (necessário para IntentCache).
+
+### Sources
+- CrewAI (link 5): TaskSchema + OutputSchema
+- AI Memory Vault (link 8): JobPreconditions, context_links
+- Hermes Agent 10x (link 10): IntentCache, OutputCache, WorkflowEngine
+- MCP Catalog (link 4): SkillIndex por domínio/capacidade
 
 ## [0.71.1] — 2026-07-02 — 🏆 Xuvisco exterminado: 3 bugs em cascata corrigidos
 
