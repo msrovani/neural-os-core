@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.71.1] — 2026-07-02 — 🏆 Xuvisco exterminado: 3 bugs em cascata corrigidos
+
+### Fixed
+- **Xuvisco (causa raiz #3 — framebuffer race)**: `_print()` agora verifica se o compositor está ativo antes de chamar `fb_write_text()`. Quando o DisplayAgent está rodando, apenas o compositor escreve no framebuffer via `DoubleBuffer::swap()`. Elimina a briga entre `println!` (texto amarelo) e o compositor (tela completa) que causava flicker e sobreposição.
+- **VGA text mode totalmente desligado com framebuffer**: Quando o framebuffer da UEFI está disponível, `vga_buffer::init()` NÃO é chamado. Zero escritas em 0xB8000, zero toques nos registros VGA CRTC (0x3D4/0x3D5). A camada de texto VGA não é mais ativada.
+- **`_print()` seguro sem Writer**: `write_fmt()` usa `let _ = ...` em vez de `.unwrap()` para evitar panic se o Writer VGA não foi inicializado.
+
+### Changed
+- **`vga_buffer::_print()`**: Só chama `fb_print()` quando o compositor NÃO está ativo. Com compositor ativo, todo output de tela passa pelo DisplayAgent.
+- **`main.rs`**: `vga_buffer::init()` condicional — só executado se não há framebuffer.
+
 ## [0.71.0] — 2026-07-02 — 🏆 Boot Bughunt: Agent-First + DiagnosticSkill + FAT12 Log + Xuvisco Fix
 
 ### Fixed

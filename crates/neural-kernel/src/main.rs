@@ -360,12 +360,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // VGA CRTC (0x3D4/0x3D5) em hardware Intel 6xx com UEFI GOP, o que causa xuvisco.
     display::fb::probe_uefi_framebuffer(boot_info);
     
-    // VGA text mode init (apenas se nao houver framebuffer — fallback)
+    // Se framebuffer disponivel, NAO inicializa VGA text mode.
+    // A camada de texto VGA (0xB8000) fica overlaid sobre o framebuffer
+    // em QEMU -vga std e Intel 6xx, causando xuvisco.
+    // _print() usa fb_print() primeiro; fallback VGA soh sem framebuffer.
     let has_fb = crate::display::fb::GPU.lock().is_some();
-    vga_buffer::init(pm_offset);
-    
-    if has_fb {
-        crate::serial_println!("[BOOT] FB disponivel desde o inicio — pulando VGA text mode.");
+    if !has_fb {
+        vga_buffer::init(pm_offset);
+        crate::serial_println!("[BOOT] Sem framebuffer — usando VGA text mode.");
+    } else {
+        crate::serial_println!("[BOOT] FB ativo — VGA text mode desligado.");
     }
     
     crate::serial_println!("[BOOT] Kernel started. Serial:{} pm_offset={:#x}", serial_exists, pm_offset);

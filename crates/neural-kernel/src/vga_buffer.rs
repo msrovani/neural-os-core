@@ -11,6 +11,32 @@ unsafe fn set_cursor(pos: u16) {
     core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos & 0xFF) as u8, options(nostack, preserves_flags));
 }
 
+/// Esconde o cursor de texto VGA (desativa a scanline do cursor).
+/// Deve ser chamado quando o framebuffer esta ativo para evitar que
+/// o cursor VGA apareca sobreposto ao framebuffer.
+pub unsafe fn hide_cursor() {
+    // Register 0x0A = Cursor Start (bit 5 desliga o cursor)
+    core::arch::asm!("out dx, al", in("dx") 0x3D4u16, in("al") 0x0Au8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") 0x20u8, options(nostack, preserves_flags));
+}
+
+/// Limpa o buffer VGA (escreve espacos pretos em todas as posicoes).
+/// Quando o framebuffer esta ativo, a camada de texto VGA ainda pode
+/// estar visivel (ex: QEMU -vga std mostra ambas as camadas).
+/// Limpar o buffer VGA elimina o texto branco sobreposto ao framebuffer.
+pub fn clear_vga_buffer() {
+    let mut writer = WRITER.lock();
+    if let Some(ref mut w) = *writer {
+        let blank = ScreenChar { character: b' ', color_code: ColorCode::new(Color::Black, Color::Black) };
+        for row in 0..BUFFER_HEIGHT {
+            for col in 0..BUFFER_WIDTH {
+                unsafe { core::ptr::write_volatile(&mut w.buffer.chars[row][col], blank); }
+            }
+        }
+    }
+    drop(writer);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Color { Black = 0, Blue = 1, Green = 2, Cyan = 3, Red = 4, Magenta = 5, Brown = 6, LightGray = 7, DarkGray = 8, LightBlue = 9, LightGreen = 10, LightCyan = 11, LightRed = 12, Pink = 13, Yellow = 14, White = 15 }
@@ -82,12 +108,17 @@ pub fn init(physical_memory_offset: u64) {
 }
 
 pub fn _print(args: fmt::Arguments) {
-    // Tenta framebuffer primeiro
-    if fb_print(args) { return; }
-    // Fallback: VGA text mode
+    // Se o compositor esta ativo, nao escreve no framebuffer
+    // (o compositor gerencia a tela via DoubleBuffer::swap).
+    // So escreve via fb_print quando nao ha compositor.
+    let comp_active = crate::display::compositor::COMPOSITOR.lock().is_some();
+    if !comp_active {
+        if fb_print(args) { return; }
+    }
+    // Fallback: VGA text mode (se inicializado)
     use fmt::Write;
     let mut w = WRITER.lock();
-    if let Some(ref mut w) = *w { w.write_fmt(args).unwrap(); }
+    if let Some(ref mut w) = *w { let _ = w.write_fmt(args); }
 }
 
 /// Escreve no framebuffer. Retorna true se conseguiu.
@@ -98,14 +129,15 @@ pub fn fb_print(args: fmt::Arguments) -> bool {
         let w = fb_gpu.fb_width as usize;
         let h = fb_gpu.fb_height as usize;
         let stride = fb_gpu.fb_stride as usize;
+        let bpp = fb_gpu.fb_bpp as usize;
         let addr = fb_gpu.fb_addr as usize;
-        if addr > 0 && w > 0 && h > 0 {
+        if addr > 0 && w > 0 && h > 0 && bpp > 0 {
             let mut buf = [0u8; 128];
             let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
             let n = buf.iter().position(|&b| b == 0).unwrap_or(128);
             if n > 0 {
                 let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
-                fb_write_text(addr, w, h, stride, text);
+                fb_write_text(addr, w, h, stride, bpp, text);
                 return true;
             }
         }
@@ -114,12 +146,12 @@ pub fn fb_print(args: fmt::Arguments) -> bool {
 }
 
 /// Escreve texto no framebuffer (fallback quando serial inexistente)
-fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, text: &str) {
+fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, bpp: usize, text: &str) {
     static mut LINE: usize = 0;
     let ch = 16usize; // font height
     let cw = 8usize;  // font width
     let max_lines = height / ch;
-    if max_lines == 0 { return; }
+    if max_lines == 0 || bpp == 0 { return; }
     let line = unsafe { let l = LINE; LINE = (LINE + 1) % max_lines; l };
     let y = line * ch;
     let mut x = 2usize;
@@ -129,8 +161,8 @@ fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, tex
             for dy in 0..ch.min(16) {
                 let row = bitmap[dy];
                 for dx in 0..cw.min(8) {
-                    let off = (y + dy) * stride + (x + dx) * 4;
-                    // Bounds check: 3 bytes por pixel (BGR), evitar escrita fora do buffer
+                    // Stride ja esta em bytes. Usar bpp para offset horizontal.
+                    let off = (y + dy) * stride + (x + dx) * bpp;
                     if off + 2 >= height * stride { continue; }
                     if (row >> (7 - dx)) & 1 == 1 {
                         unsafe { core::ptr::write_volatile((fb_addr + off) as *mut u8, 0xCC); }
