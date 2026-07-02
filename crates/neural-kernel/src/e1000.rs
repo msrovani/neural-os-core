@@ -217,10 +217,11 @@ impl E1000Driver {
         self.write32(REG_RAH, rah_val);
         serial_println!("[E1000] MAC re-written: RAL={:#010x} RAH={:#010x}", ral_val, rah_val);
 
-        // Allocate TX ring
+        // Allocate TX ring + mapear como uncacheable
         let tx_ring = Self::alloc_frame();
         if tx_ring == 0 { return false; }
         self.tx_ring_paddr = tx_ring;
+        crate::apic::map_page_uc(tx_ring, pmoff);
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let tx_virt = (tx_ring + pmoff) as *mut u8;
         for i in 0..4096 { tx_virt.add(i).write_volatile(0); }
@@ -231,13 +232,14 @@ impl E1000Driver {
         self.write32(REG_TDH, 0);
         self.write32(REG_TDT, 0);
 
-        // Allocate TX buffers
+        // Allocate TX buffers + uncacheable
         let s_tx = core::mem::size_of::<TxDesc>();
         let s_rx = core::mem::size_of::<RxDesc>();
         for i in 0..TX_DESC_COUNT {
             let buf = Self::alloc_frame();
             if buf == 0 { return false; }
             self.tx_buf_paddrs[i] = buf;
+            crate::apic::map_page_uc(buf, pmoff);
             let offset = tx_ring + pmoff + (i as u64 * s_tx as u64);
             let desc = offset as *mut TxDesc;
             (*desc).addr = buf;
@@ -246,10 +248,11 @@ impl E1000Driver {
             (*desc).status = 0;
         }
 
-        // Allocate RX ring
+        // Allocate RX ring + uncacheable
         let rx_ring = Self::alloc_frame();
         if rx_ring == 0 { return false; }
         self.rx_ring_paddr = rx_ring;
+        crate::apic::map_page_uc(rx_ring, pmoff);
         let rx_virt = (rx_ring + pmoff) as *mut u8;
         for i in 0..4096 { rx_virt.add(i).write_volatile(0); }
 
@@ -258,11 +261,12 @@ impl E1000Driver {
         self.write32(REG_RDLEN, (s_rx * RX_DESC_COUNT) as u32);
         self.write32(REG_RDH, 0);
 
-        // Allocate RX buffers (antes de RDT para NIC ver endereços válidos)
+        // Allocate RX buffers + uncacheable
         for i in 0..RX_DESC_COUNT {
             let buf = Self::alloc_frame();
             if buf == 0 { return false; }
             self.rx_buf_paddrs[i] = buf;
+            crate::apic::map_page_uc(buf, pmoff);
             let offset = rx_ring + pmoff + (i as u64 * s_rx as u64);
             let desc = offset as *mut RxDesc;
             (*desc).addr = buf;
