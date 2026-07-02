@@ -397,9 +397,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         allocator::init_heap(&mut mapper, &mut frame_allocator)
             .expect("heap initialization failed");
         crate::serial_println!("[DBG4] heap init OK");
+        crate::boot_logger::log("BOOT: Heap init OK");
     }
 
     simd::enable_simd();
+    crate::boot_logger::log("BOOT: SIMD enabled");
 
     println!("[SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.");
     serial_println!("[SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.");
@@ -506,17 +508,35 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Boot phase agents
     display::fb::probe_uefi_framebuffer(boot_info);
     crate::serial_println!("[DBG7] framebuffer probe done");
+    {
+        let gpu = crate::display::fb::GPU.lock();
+        if let Some(ref g) = *gpu {
+            crate::boot_logger::log(&alloc::format!("BOOT: FB {}x{} bpp={} stride={} @{:x}",
+                g.fb_width, g.fb_height, g.fb_bpp, g.fb_stride, g.fb_addr));
+        } else {
+            crate::boot_logger::log("BOOT: FB not found");
+        }
+    }
     
     // Init RTL8139 early — frame allocator minimamente fragmentado = 32KB RX OK
     unsafe { crate::net::init_driver_rtl8139(); }
+    crate::boot_logger::log("BOOT: RTL8139 init");
 
     // Init e1000 early (fallback se RTL8139 nao encontrado)
     if crate::net::RTL8139.lock().is_none() {
         unsafe { crate::net::init_driver_e1000(); }
+        crate::boot_logger::log("BOOT: E1000 init");
+    } else {
+        crate::boot_logger::log("BOOT: RTL8139 found, E1000 skipped");
     }
     
-    let ata = unsafe { ata::AtaDriver::probe() };
-    *ATA_DRIVER.lock() = ata;
+    let ata_found = {
+        let ata_dev = unsafe { ata::AtaDriver::probe() };
+        let is_some = ata_dev.is_some();
+        *ATA_DRIVER.lock() = ata_dev;
+        is_some
+    };
+    crate::boot_logger::log(&alloc::format!("BOOT: ATA probe={}", if ata_found { "found" } else { "none" }));
     crate::serial_println!("[DBG8] ATA probe done");
     
     unsafe { crate::xhci::init_xhci(); }
@@ -555,6 +575,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Detect + mount disk partitions (SDHC, USB, HD)
     if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
         unsafe { crate::fat::mount_partitions(ata); }
+    } else {
+        crate::boot_logger::log("BOOT: No ATA device for partitions");
     }
     crate::boot_logger::log("BOOT: Partitions mounted");
 

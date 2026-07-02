@@ -1,26 +1,52 @@
-use crate::ata::AtaDriver;
-use crate::fat::{Partition, write_boot_log};
-use crate::serial_println;
+use alloc::vec::Vec;
+use alloc::string::String;
+use spin::Mutex;
 
-static LOG_FILE: spin::Mutex<Option<alloc::string::String>> = spin::Mutex::new(None);
+static PRE_ATA_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static READY: Mutex<bool> = Mutex::new(false);
 
-pub fn init(ata: &AtaDriver, parts: &[Partition]) {
-    let name = alloc::format!("B{:07X}.LOG", 0u64);
-    *LOG_FILE.lock() = Some(name);
+pub fn init(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Partition]) {
+    // Flush pre-ATA buffer para disco
+    let buf = PRE_ATA_BUF.lock();
+    let msgs = buf.clone();
+    drop(buf);
+
+    for msg in &msgs {
+        unsafe { write_disk(ata, parts, msg); }
+    }
+
+    PRE_ATA_BUF.lock().clear();
+    *READY.lock() = true;
 }
 
 pub fn log(msg: &str) {
-    serial_println!("[LOG] {}", msg);
-    unsafe {
-        let ata_guard = crate::ATA_DRIVER.lock();
-        if let Some(ref ata) = *ata_guard {
-            let parts = crate::fat::read_mbr(ata);
-            for part in &parts {
-                if part.type_code == 0x0B || part.type_code == 0x0C {
-                    write_boot_log(ata, part, msg);
-                    break;
+    crate::serial_println!("[LOG] {}", msg);
+
+    if *READY.lock() {
+        // ATA ja disponivel — escreve direto
+        unsafe {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata_guard {
+                let parts = crate::fat::read_mbr(ata);
+                for part in &parts {
+                    if part.type_code == 0x0B || part.type_code == 0x0C {
+                        crate::fat::write_boot_log(ata, part, msg);
+                        break;
+                    }
                 }
             }
+        }
+    } else {
+        // Pre-ATA: bufferizar em memoria
+        PRE_ATA_BUF.lock().push(String::from(msg));
+    }
+}
+
+unsafe fn write_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Partition], msg: &str) {
+    for part in parts {
+        if part.type_code == 0x0B || part.type_code == 0x0C {
+            crate::fat::write_boot_log(ata, part, msg);
+            break;
         }
     }
 }
