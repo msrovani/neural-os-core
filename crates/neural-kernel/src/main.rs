@@ -507,6 +507,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     
     // Init RTL8139 early — frame allocator minimamente fragmentado = 32KB RX OK
     unsafe { crate::net::init_driver_rtl8139(); }
+
+    // Init e1000 early (fallback se RTL8139 nao encontrado)
+    if crate::net::RTL8139.lock().is_none() {
+        unsafe { crate::net::init_driver_e1000(); }
+    }
     
     let ata = unsafe { ata::AtaDriver::probe() };
     *ATA_DRIVER.lock() = ata;

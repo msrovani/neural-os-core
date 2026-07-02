@@ -1,6 +1,7 @@
 use crate::netstack::NetStack;
 use crate::rtl8139::Rtl8139Driver;
 use crate::e1000::E1000Driver;
+use crate::e1000;
 use crate::{println, serial_println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
