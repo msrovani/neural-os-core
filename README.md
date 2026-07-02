@@ -1,4 +1,4 @@
-﻿# Neural OS Hermes v0.66.0 — AI-native Bare-metal Operating System
+﻿# Neural OS Hermes v0.68.3 — AI-native Bare-metal Operating System
 
 **The first AI-native operating system. Bare-metal Rust. No Linux. No POSIX. No legacy.**
 
@@ -8,6 +8,9 @@
 30/06/2026 — Desktop com Compositor + Dock + 3 Apps
 30/06/2026 — GPU detection + VRAM tier + Intel ring buffer
 30/06/2026 — 122 arquivos Rust, ~12.500 LOC, 0 erros
+02/07/2026 — **E1000 RX functional!** 169 pacotes recebidos em bridge mode.
+             DMA fix: páginas Uncacheable (PWT|PCD) nos buffers.
+             "Vencemos uma batalha... agora temos as armas para avançar sobre a internet!"
 ```
 
 ```
