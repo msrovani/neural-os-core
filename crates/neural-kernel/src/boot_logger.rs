@@ -5,18 +5,18 @@ use spin::Mutex;
 static PRE_ATA_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static READY: Mutex<bool> = Mutex::new(false);
 
-pub fn init(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Partition]) {
-    // Flush pre-ATA buffer para disco
-    let buf = PRE_ATA_BUF.lock();
-    let msgs = buf.clone();
-    drop(buf);
-
-    for msg in &msgs {
-        unsafe { write_disk(ata, parts, msg); }
+pub fn init(ata: Option<&crate::ata::AtaDriver>, parts: &[crate::fat::Partition]) {
+    if let Some(a) = ata {
+        let buf = PRE_ATA_BUF.lock();
+        let msgs = buf.clone();
+        drop(buf);
+        for msg in &msgs {
+            unsafe { write_disk(a, parts, msg); }
+        }
+        PRE_ATA_BUF.lock().clear();
+        *READY.lock() = true;
     }
-
-    PRE_ATA_BUF.lock().clear();
-    *READY.lock() = true;
+    // Se ATA nao disponivel, mantem bufferizado — BootLogAgent tenta depois
 }
 
 pub fn log(msg: &str) {

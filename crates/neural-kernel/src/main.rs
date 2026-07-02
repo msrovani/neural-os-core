@@ -548,8 +548,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         let ata_guard = crate::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {
             let parts = crate::fat::read_mbr(ata);
-            crate::boot_logger::init(ata, &parts);
+            crate::boot_logger::init(Some(ata), &parts);
             drop(parts);
+        } else {
+            crate::boot_logger::init(None, &[]);
         }
         drop(ata_guard);
         crate::boot_logger::log("BOOT: ATA+FAT init OK");
