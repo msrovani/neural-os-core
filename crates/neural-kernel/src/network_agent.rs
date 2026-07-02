@@ -72,7 +72,7 @@ pub fn network_agent_tick() {
                 }
             }
         }
-        // Phase 1: DHCP → DNS → HTTP
+        // Phase 1: DHCP → DNS → HTTP (fallback static IP se DHCP timeout)
         1 => {
             // DHCP poll ate conseguir lease
             let dhcp_done = {
@@ -93,9 +93,18 @@ pub fn network_agent_tick() {
                     ns.dhcp_done
                 } else { false }
             };
-            // Se DHCP ainda nao completo, nao tenta DNS/HTTP
-            if !dhcp_done { return; }
-            if tick >= 20 && !s.http.is_some() && s.dns_tries < 3 {
+            // Fallback: static IP se DHCP timeout (~30s = 600 ticks)
+            if !dhcp_done && tick >= 600 {
+                if let Some(ref mut ns) = *NETSTACK.lock() {
+                    ns.set_static_ip();
+                    NET_CONFIG.lock().configured = true;
+                    NET_CONFIG.lock().online = true;
+                    log(tick, "DHCP timeout, using static IP 10.0.2.15/24");
+                }
+            }
+            // Se DHCP (ou static fallback) ainda nao configurou, espera
+            if !NETSTACK.lock().as_ref().map_or(false, |ns| ns.dhcp_done) { return; }
+            if tick >= 40 && !s.http.is_some() && s.dns_tries < 3 {
                 if let Some(ref mut ns) = *NETSTACK.lock() {
                     s.dns_tries += 1;
                     let dns_srv = NET_CONFIG.lock().dns_ip;
