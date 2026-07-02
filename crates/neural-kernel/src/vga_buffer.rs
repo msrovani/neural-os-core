@@ -119,7 +119,8 @@ fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, tex
     let ch = 16usize; // font height
     let cw = 8usize;  // font width
     let max_lines = height / ch;
-    let line = unsafe { LINE = (LINE + 1) % max_lines; LINE };
+    if max_lines == 0 { return; }
+    let line = unsafe { let l = LINE; LINE = (LINE + 1) % max_lines; l };
     let y = line * ch;
     let mut x = 2usize;
     for c in text.chars() {
@@ -129,6 +130,8 @@ fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, tex
                 let row = bitmap[dy];
                 for dx in 0..cw.min(8) {
                     let off = (y + dy) * stride + (x + dx) * 4;
+                    // Bounds check: 3 bytes por pixel (BGR), evitar escrita fora do buffer
+                    if off + 2 >= height * stride { continue; }
                     if (row >> (7 - dx)) & 1 == 1 {
                         unsafe { core::ptr::write_volatile((fb_addr + off) as *mut u8, 0xCC); }
                         unsafe { core::ptr::write_volatile((fb_addr + off + 1) as *mut u8, 0xCC); }

@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-07-01 (Sprint 66 — GPU, #283-#287, 366 totais)  
+**Última atualização:** 2026-07-02 (Sprint 71 — Boot Bughunt, #300-#304, 371 totais)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1220,3 +1220,4 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-01 | **Bughunt GPU Sprint 66:** 24 bugs corrigidos (3 crit, 8 high, 6 med, 7 low). Destaques: vec! sem alloc, gpu_blit morto, vram_alloc sem bump, static mut UB, float sem FPU, BAR sem validacao, mod gpu ausente. commit 1d66a17. | Dev + IDA IA |
 | 2026-07-01 | **TODO.md mestre:** docs/TODO.md com 28 pendências catalogadas, sub-itens, dificuldades, travas, fontes, esforço. Para qualquer AI DEV localizar e contribuir. | Dev + IDA IA |
 | 2026-07-01 | **WiFi (B-29):** Intel Wireless / Atheros / Realtek 802.11. Scan, association, WPA2/WPA3. Thread: firmware loading, crypto, frame format. Bloqueado por B-01 (rede). | Dev + IDA IA |
+| 2026-07-02 | **Boot Bughunt Sprint 71 (IDEA #300-#304):** Boot refatorado para agent-first com 8 fases (BOOT_PHASE events). DiagnosticSkill substitui 90+ linhas de teste inline. CortexAgent acorda antes do HW discovery. Xuvisco corrigido (framebuffer antes de VGA CRTC). FAT12 log finalmente funcional (boot_logger + BootLogAgent). `cargo check --release`: 0 errors. | Dev + IDA IA |

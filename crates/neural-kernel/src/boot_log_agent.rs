@@ -4,9 +4,9 @@ use crate::serial_println;
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
-    schedule: ScheduleKind::EventDriven,
-    auto_start: false,
-    persist: false,
+    schedule: ScheduleKind::Continuous,
+    auto_start: true,
+    persist: true,
 };
 
 pub struct BootLogAgent;
@@ -15,48 +15,73 @@ impl BootLogAgent {
     pub fn new() -> Self { BootLogAgent }
 
     /// Le o ultimo log de boot e retorna como string para o Cortex
+    /// Suporta FAT12 (BOOT.LOG) e FAT32 (B<TICK>.LOG)
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
         let ata_guard = crate::ATA_DRIVER.lock();
         let ata = (*ata_guard).as_ref()?;
         let parts = unsafe { crate::fat::read_mbr(ata) };
         for part in &parts {
-            if part.type_code != 0x0B && part.type_code != 0x0C { continue; }
-            if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
-                // Procura o arquivo B<...>.LOG mais recente (maior tick)
-                let mut best_name = alloc::string::String::new();
-                let mut best_tick = 0u64;
-                let mut cluster = fat32.get_root_cluster();
-                while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-                    let lba = fat32.cluster_lba(cluster);
-                    let cs = fat32.sectors_per_cluster as usize * fat32.bytes_per_sector as usize;
-                    let mut buf = alloc::vec![0u8; cs];
-                    for i in 0..fat32.sectors_per_cluster as u32 {
-                        unsafe { ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1); }
-                    }
-                    for entry_off in (0..buf.len()).step_by(32) {
-                        let first = buf[entry_off];
-                        if first == 0 || first == 0xE5 { continue; }
-                        if buf[entry_off + 11] & 0x08 != 0 { continue; }
-                        let name_bytes = &buf[entry_off..entry_off+11];
-                        let name_str = core::str::from_utf8(name_bytes).unwrap_or("");
-                        if name_str.starts_with("B") && name_str.len() >= 8 {
-                            // Extrai tick do nome: B<TICK>.LOG
-                            let tick_str = &name_str[1..8];
-                            if let Ok(tick) = u64::from_str_radix(tick_str, 16) {
-                                if tick > best_tick {
-                                    best_tick = tick;
-                                    best_name = alloc::string::String::from(name_str);
-                                }
+            match part.type_code {
+                0x01 => {
+                    // FAT12: ler BOOT.LOG fixo
+                    if let Some(fat12) = unsafe { crate::fat::Fat12Writer::new(ata, part) } {
+                        let root_lba = fat12.root_lba();
+                        let mut root = [0u8; 512];
+                        unsafe { ata.read_sectors(root_lba, &mut root, 1); }
+                        for i in 0..16 {
+                            if &root[i*32..i*32+11] == b"BOOT    LOG" {
+                                let size = u32::from_le_bytes(root[i*32+28..i*32+32].try_into().ok()?);
+                                if size == 0 { return None; }
+                                let cluster = u16::from_le_bytes([root[i*32+26], root[i*32+27]]) as u32;
+                                let data_lba = fat12.data_lba();
+                                let lba = data_lba + (cluster - 2);
+                                let mut buf = alloc::vec![0u8; size as usize];
+                                let sectors = ((size as usize + 511) / 512) as u8;
+                                unsafe { ata.read_sectors(lba, &mut buf, sectors); }
+                                return core::str::from_utf8(&buf[..size as usize]).ok().map(|s| alloc::string::String::from(s));
                             }
                         }
                     }
-                    cluster = unsafe { fat32.read_fat_entry(cluster) }
                 }
-                if !best_name.is_empty() {
-                    if let Some(data) = unsafe { fat32.read_file(best_name.trim_end()) } {
-                        return core::str::from_utf8(&data).ok().map(|s| alloc::string::String::from(s));
+                0x0B | 0x0C => {
+                    // FAT32: procurar B<TICK>.LOG mais recente
+                    if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
+                        let mut best_name = alloc::string::String::new();
+                        let mut best_tick = 0u64;
+                        let mut cluster = fat32.get_root_cluster();
+                        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+                            let lba = fat32.cluster_lba(cluster);
+                            let cs = fat32.sectors_per_cluster as usize * fat32.bytes_per_sector as usize;
+                            let mut buf = alloc::vec![0u8; cs];
+                            for i in 0..fat32.sectors_per_cluster as u32 {
+                                unsafe { ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1); }
+                            }
+                            for entry_off in (0..buf.len()).step_by(32) {
+                                let first = buf[entry_off];
+                                if first == 0 || first == 0xE5 { continue; }
+                                if buf[entry_off + 11] & 0x08 != 0 { continue; }
+                                let name_bytes = &buf[entry_off..entry_off+11];
+                                let name_str = core::str::from_utf8(name_bytes).unwrap_or("");
+                                if name_str.starts_with("B") && name_str.len() >= 8 {
+                                    let tick_str = &name_str[1..8];
+                                    if let Ok(tick) = u64::from_str_radix(tick_str, 16) {
+                                        if tick > best_tick {
+                                            best_tick = tick;
+                                            best_name = alloc::string::String::from(name_str);
+                                        }
+                                    }
+                                }
+                            }
+                            cluster = unsafe { fat32.read_fat_entry(cluster) }
+                        }
+                        if !best_name.is_empty() {
+                            if let Some(data) = unsafe { fat32.read_file(best_name.trim_end()) } {
+                                return core::str::from_utf8(&data).ok().map(|s| alloc::string::String::from(s));
+                            }
+                        }
                     }
                 }
+                _ => {}
             }
         }
         None

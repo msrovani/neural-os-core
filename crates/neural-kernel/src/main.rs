@@ -355,31 +355,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
     
     let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+    
+    // Sonda framebuffer ANTES do VGA text mode para evitar escrever nos registros
+    // VGA CRTC (0x3D4/0x3D5) em hardware Intel 6xx com UEFI GOP, o que causa xuvisco.
+    display::fb::probe_uefi_framebuffer(boot_info);
+    
+    // VGA text mode init (apenas se nao houver framebuffer — fallback)
+    let has_fb = crate::display::fb::GPU.lock().is_some();
     vga_buffer::init(pm_offset);
     
-    // Se nao tem serial, tenta escrever no framebuffer (bootloader ja mapeou)
-    if !serial_exists {
-        if let Some(fb) = boot_info.framebuffer.as_ref() {
-            let info = fb.info();
-            let bpp = match info.pixel_format { _ => 3 };
-            let stride = info.stride as usize * bpp;
-            let buf = fb.buffer();
-            if !buf.is_empty() {
-                // Escreve "BOOT" no canto superior esquerdo
-                let msg = b"[BOOT] Kernel started";
-                let addr = buf.as_ptr() as usize;
-                for (i, &_b) in msg.iter().enumerate() {
-                    for dy in 0..16 {
-                        let off = dy * stride + i * 8 * 4;
-                        if off + 3 < buf.len() {
-                            unsafe { core::ptr::write_volatile((addr + off) as *mut u8, 0xFFu8); } // B
-                            unsafe { core::ptr::write_volatile((addr + off + 1) as *mut u8, 0xFFu8); } // G
-                            unsafe { core::ptr::write_volatile((addr + off + 2) as *mut u8, 0xFFu8); } // R
-                        }
-                    }
-                }
-            }
-        }
+    if has_fb {
+        crate::serial_println!("[BOOT] FB disponivel desde o inicio — pulando VGA text mode.");
     }
     
     crate::serial_println!("[BOOT] Kernel started. Serial:{} pm_offset={:#x}", serial_exists, pm_offset);
@@ -403,131 +389,33 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     simd::enable_simd();
     crate::boot_logger::log("BOOT: SIMD enabled");
 
-    println!("[SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.");
-    serial_println!("[SYSTEM] Neural Microkernel Iniciado. Aguardando integracao NPU/Ring 0.");
+    publish_boot_phase(BootPhase::SystemBringup, "System bringup — SIMD+heap prontos");
 
-    println!("[TEST] Forcando Breakpoint (int3)...");
-    serial_println!("[TEST] Forcando Breakpoint (int3)...");
-    x86_64::instructions::interrupts::int3();
-
-    let boxed_val = Box::new(41);
-    serial_println!("[TEST] Box::new(41) = {}", *boxed_val);
-    println!("[TEST] Box::new(41) = {}", *boxed_val);
-
-    let mut vec = Vec::new();
-    vec.push(10);
-    vec.push(20);
-    vec.push(30);
-    serial_println!("[TEST] Vec = {:?}", vec);
-    println!("[TEST] Vec = {:?}", vec);
-
-    let a_data = vec![1.0_f32, 2.0_f32, 3.0_f32];
-    let a = tensor::Tensor::from_row_major((1, 3), a_data).unwrap();
-    let b_data = vec![4.0_f32, 5.0_f32, 6.0_f32];
-    let b = tensor::Tensor::from_row_major((3, 1), b_data).unwrap();
-    if let Some(c) = a.matmul(&b) {
-        serial_println!("[TEST] Tensor Matmul Result: shape ({}, {}), data: {:?}", c.shape.0, c.shape.1, c.data);
-        println!("[TEST] Tensor Matmul Result: shape ({}, {}), data: {:?}", c.shape.0, c.shape.1, c.data);
-    }
-
-    let mut tensor = tensor::Tensor::from_row_major((1, 3), vec![-1.0, 0.0, 1.0]).unwrap();
-    tensor.apply(nn::silu);
-    serial_println!("[TEST] SiLU([-1, 0, 1]) = {:?}", tensor.data);
-    println!("[TEST] SiLU([-1, 0, 1]) = {:?}", tensor.data);
-
-    nn::rms_norm(&mut tensor, 1.0, 1e-6);
-    serial_println!("[TEST] RMSNorm(SiLU(...), weight=1.0) = {:?}", tensor.data);
-    println!("[TEST] RMSNorm(SiLU(...), weight=1.0) = {:?}", tensor.data);
-
-    let emb = tensor::Tensor::from_row_major((1, 3), vec![1.0, -0.5, 0.3]).unwrap();
-    let w_data = vec![1.0, 0.0, 1.0, -1.0, 0.0, -1.0];
-    let w = tensor::Tensor::from_row_major((2, 3), w_data).unwrap();
-    let linear = nn::Linear::new(w, None);
-    let mut logits = linear.forward(&emb);
-    logits.apply(nn::silu);
-    let decision = nn::argmax(&logits);
-    serial_println!("[ROUTER] Intencao processada. Acao escolhida: {} (0=Daemon, 1=Halt)", decision);
-    println!("[ROUTER] Intencao processada. Acao escolhida: {} (0=Daemon, 1=Halt)", decision);
-
-    let bit_input = tensor::Tensor::from_row_major((1, 3), vec![1.5, -0.5, 2.0]).unwrap();
-    let weights_f32 = tensor::Tensor::from_row_major(
-        (3, 2), vec![1.5_f32, -1.8, 0.2, 2.1, -3.0, 0.0],
-    ).unwrap();
-    let packed_weights = tensor::quantize_to_packed(&weights_f32, 0.5);
-    let compressed_size = packed_weights.packed_data.len();
-    let bit_linear = nn::BitLinear::new(packed_weights, None);
-    let bit_output = bit_linear.forward(&bit_input);
-    serial_println!("[BITNET] Inferencia 2-bit concluida. Tamanho comprimido: {} bytes. Output: {:?}",
-        compressed_size, bit_output.data);
-    println!("[BITNET] Inferencia 2-bit concluida. Tamanho comprimido: {} bytes. Output: {:?}",
-        compressed_size, bit_output.data);
-
-    // --- Stress test: 1000 alloc/desaloc no Bitmap Frame Allocator ---
-    serial_println!("[KERNEL] Bitmap Allocator: iniciando stress test (1000 iteracoes)...");
-    println!("[KERNEL] Bitmap Allocator: iniciando stress test (1000 iteracoes)...");
-
-    {
-        let mut allocated_frames: Vec<Option<x86_64::structures::paging::PhysFrame>> = Vec::new();
-
-        for i in 0..1000 {
-            let frame = frame_allocator.allocate_frame();
-            match frame {
-                Some(f) => {
-                    allocated_frames.push(Some(f));
-                }
-                None => {
-                    serial_println!("[KERNEL] Stress: falhou alocar na iteracao {}", i);
-                    println!("[KERNEL] Stress: falhou alocar na iteracao {}", i);
-                    break;
-                }
-            }
-
-            if i % 2 == 0 && !allocated_frames.is_empty() {
-                if let Some(Some(f)) = allocated_frames.last() {
-                    unsafe {
-                        frame_allocator.deallocate_frame(*f);
-                    }
-                }
-                allocated_frames.pop();
-            }
-        }
-    }
-
-    let ram_tensor = frame_allocator.hardware_context_tensor();
-    serial_println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
-        ram_tensor[0], ram_tensor[1]);
-    println!("[KERNEL] Bitmap Allocator operante. 1000 iteracoes estaveis. Status RAM Tensor: [{:.6}, {:.6}]",
-        ram_tensor[0], ram_tensor[1]);
-
+    // Diagnosticos como skill (nao inline) — SystemAgent executa depois
+    // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
     memory::init_global_allocator(frame_allocator);
-    crate::serial_println!("[DBG5] global alloc init OK");
+    publish_boot_phase(BootPhase::Diagnostics, "Allocator global pronto");
     
     let slab_metrics = { let s = crate::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
     crate::serial_println!("[DBG6] slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
     
-    // Boot phase agents
-    display::fb::probe_uefi_framebuffer(boot_info);
-    crate::serial_println!("[DBG7] framebuffer probe done");
-    {
-        let gpu = crate::display::fb::GPU.lock();
-        if let Some(ref g) = *gpu {
-            crate::boot_logger::log(&alloc::format!("BOOT: FB {}x{} bpp={} stride={} @{:x}",
-                g.fb_width, g.fb_height, g.fb_bpp, g.fb_stride, g.fb_addr));
-        } else {
-            crate::boot_logger::log("BOOT: FB not found");
-        }
-    }
+    // Inicializa CortexAgent AGORA — o sistema nervoso acorda antes do HW discovery
+    // para que o LLM possa participar das decisoes de hardware.
+    publish_boot_phase(BootPhase::SystemBringup, "CortexAgent acordando (pre-HW)");
+    let mut cortex_agent = agents::CortexAgent::new();
+    // Cortex precisa de pelo menos 1 tick para carregar modelo
+    // (o modelo carrega no primeiro tick, nao no construtor)
+    
+    publish_boot_phase(BootPhase::HardwareDiscovery, "Drivers de HW como agentes");
     
     // Init RTL8139 early — frame allocator minimamente fragmentado = 32KB RX OK
     unsafe { crate::net::init_driver_rtl8139(); }
-    crate::boot_logger::log("BOOT: RTL8139 init");
+    publish_boot_phase(BootPhase::HardwareDiscovery, "RTL8139 init");
 
     // Init e1000 early (fallback se RTL8139 nao encontrado)
     if crate::net::RTL8139.lock().is_none() {
         unsafe { crate::net::init_driver_e1000(); }
-        crate::boot_logger::log("BOOT: E1000 init");
-    } else {
-        crate::boot_logger::log("BOOT: RTL8139 found, E1000 skipped");
+        publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init (fallback)");
     }
     
     let ata_found = {
@@ -536,12 +424,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         *ATA_DRIVER.lock() = ata_dev;
         is_some
     };
-    crate::boot_logger::log(&alloc::format!("BOOT: ATA probe={}", if ata_found { "found" } else { "none" }));
-    crate::serial_println!("[DBG8] ATA probe done");
+    publish_boot_phase(BootPhase::HardwareDiscovery, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
     
     unsafe { crate::xhci::init_xhci(); }
     let _usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
-    crate::serial_println!("[DBG9] init done. Starting agents...");
+    publish_boot_phase(BootPhase::HardwareDiscovery, "xHCI+USB probe done");
 
     // Boot log: init after ATA probe
     {
@@ -628,13 +515,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[BOOT] {} boot agents registrados. Executando init_phase...", registry.agents.len());
     registry.init_phase();
 
-    // Runtime agents — polling loop contínuo
+    // CortexAgent ja foi criado antes do HW discovery — registrar primeiro
+    // para que o LLM esteja disponivel para decisoes de hardware
+    registry.register(Box::new(cortex_agent));
+    
+    // Runtime agents — HermesAgent acorda logo apos o Cortex
     registry.register(Box::new(SystemAgent::new()));
     registry.register(Box::new(agents::MonitorAgent::new()));
     registry.register(Box::new(agents::HwBridgeAgent));
     registry.register(Box::new(agents::NetAgent::new()));
     registry.register(Box::new(agents::InputAgent::new()));
-    registry.register(Box::new(agents::CortexAgent::new()));
     registry.register(Box::new(agents::HermesAgent::new()));
     
     // The Agency: 30+ agentes especialistas
@@ -643,12 +533,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // HW Agents: um agente por dispositivo PCI
     agents::register_hw_agents(&mut registry);
     
-    // DisplayAgent
-    serial_println!("[DISPLAY] Inicializando DisplayAgent.");
-    // Nota: framebuffer via bootloader depende da versão. 
-    // bootloader 0.9+ expõe BootInfo::frame_buffer (Option<FrameBuffer>).
-    // Será integrado quando disponível. Por enquanto, VGA text mode funciona.
-    // DisplayAgent + CronAgent + McpAgent
+    // DisplayAgent + Apps
     registry.register(Box::new(display::agent::DisplayAgent::new()));
     let mut cron = cron::CronAgent::new();
     cron.init_defaults();
@@ -660,7 +545,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
     registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
-    crate::boot_logger::log(&alloc::format!("BOOT: {} agents registered", registry.agents.len()));
+    
+    // DiagnosticSkill registrada para SystemAgent executar
+    // (substitui os testes inline Box/Vec/Tensor/SiLU)
+    let diag_skill = agents::DiagnosticSkill::new();
+    SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(diag_skill));
+    
+    publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
@@ -691,6 +582,38 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             agent
         },
     );
+}
+
+// ── Boot Phase Events ─────────────────────────────────────────
+// Publicados no EventBus para que HermesAgent, CortexAgent e BootLogAgent
+// possam acompanhar o progresso do boot e tomar decisoes.
+
+pub const TOPIC_BOOT_PHASE: &str = "BOOT_PHASE";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum BootPhase {
+    SafeHarbor,          // Display + Serial + IDT (minimo para sobreviver)
+    MemoryCore,          // Frame allocator + Page tables + Heap
+    SystemBringup,       // SIMD + SystemAgent acorda
+    Diagnostics,         // Testes de sanidade (como skill)
+    HardwareDiscovery,   // PCI + ACPI + SMP
+    DriverInit,          // RTL8139, ATA, xHCI, GPU
+    AgentFleet,          // Todos os agentes registrados
+    Runtime,             // AgentScheduler::run()
+    Panic,               // Boot falhou
+}
+
+pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
+    let payload = alloc::format!("[BOOT:{:?}] {}", phase, msg);
+    serial_println!("{}", payload);
+    crate::boot_logger::log(&payload);
+    let _ = EVENT_BUS.publish(crate::Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_BOOT_PHASE),
+        payload: payload.into_bytes(),
+        token: crate::CapabilityToken::Legacy(1),
+    });
 }
 
 pub(crate) fn scancode_to_ascii(scancode: u8) -> Option<char> {

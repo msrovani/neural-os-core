@@ -1,8 +1,8 @@
-# 📋 TODO/Checklist — neural-os-core v0.66.0
+# 📋 TODO/Checklist — neural-os-core v0.71.0
 
-**Data:** 2026-07-01  
+**Data:** 2026-07-02  
 **Propósito:** Lista mestra de todas as pendências técnicas do projeto, para qualquer AI DEV (humano ou IA) localizar e contribuir.  
-**Total de itens:** 28 (6 🔴 bloqueantes, 8 🟠 alta, 6 🟡 média, 8 🟢 leve)
+**Total de itens:** 30 (6 🔴 bloqueantes, 8 🟠 alta, 7 🟡 média, 9 🟢 leve)
 
 ---
 
@@ -58,13 +58,13 @@ A ──→ B    = "A bloqueia B" (B não pode começar sem A)
 
 ```
 Fase 0 (já existe):  GPU probe, RTL8139 TX, PCI scan, display
-Fase 1 (Sprint 67):  S67.0+S67.1+B-05+B-28      ✅ (meta-skill, agency, GPU boot)
-Fase 2 (GPU fix):    B-24, B-09, B-08, B-22, B-07, B-14, B-25  ✅
-Fase 3 (Rede):       B-01 (RX fix) ──→ B-18 (DHCP fallback)
-Fase 4 (WWW):        B-11 (WWW Infra) ──→ B-12 (Browser), B-13 (MCP), B-17, B-27
-Fase 5 (GPU Intel):  B-02 (GEN shader) ←── B-07 ✅
-Fase 6 (HW real):    B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
-Fase 7 (WiFi):       B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
+Fase 1 (Sprint 67-70): S67.0+S67.1+B-05+B-28+B-24 ✅ (meta-skill, agency, GPU boot, bugs)
+Fase 2 (Sprint 71):   B-31, B-32, B-33, B-34        ✅ (boot bug hunt)
+Fase 3 (Rede):        B-01 (RX fix) ──→ B-18 (DHCP fallback)
+Fase 4 (WWW):         B-11 (WWW Infra) ──→ B-12 (Browser), B-13 (MCP), B-17, B-27
+Fase 5 (GPU Intel):   B-02 (GEN shader) ←── B-07 ✅
+Fase 6 (HW real):     B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
+Fase 7 (WiFi):        B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
 Backlog:              B-06, B-15, B-16, B-19, B-20
 ```
 
@@ -811,6 +811,74 @@ if !gpus.is_empty() {
 **Arquivos:** `crates/neural-kernel/src/skill_gen.rs`, `optimizer.rs` ou `cron.rs`
 
 **Esforço:** 🟢 ~30 LOC
+
+---
+
+### B-31: VGA CRTC + UEFI GOP — verificar xuvisco fix em HW Intel 6xx
+
+**Goal:** Confirmar que o framebuffer sondado antes do VGA init elimina o xuvisco em notebook Intel 6xx.
+
+**Por que:** O fix moveu `probe_uefi_framebuffer()` para antes de `vga_buffer::init()`, mas só teste em HW real confirma.
+
+**Sub-itens:**
+- [ ] Boot em notebook Intel 6xx com imagem v0.71.0
+- [ ] Verificar se display não fica garbled
+- [ ] Se ainda falhar: tentar desabilitar completamente VGA text mode quando framebuffer presente
+
+**Arquivos:** `crates/neural-kernel/src/main.rs`, `vga_buffer.rs`
+
+**Esforço:** 🔴 Teste HW, ~1 dia
+
+---
+
+### B-32: DiagnosticSkill — testes extensivos
+
+**Goal:** DiagnosticSkill executa testes de estresse de alocador, tensor matmul, BitNet MLP e publica resultados.
+
+**Por que:** Substitui os testes inline que estavam no boot. SystemAgent executa na fase Diagnostics.
+
+**Sub-itens:**
+- [ ] Verificar se DiagnosticSkill roda corretamente durante boot
+- [ ] Verificar se resultados são publicados no EventBus
+- [ ] Adicionar mais testes (estresse de heap, page table walk)
+
+**Arquivos:** `crates/neural-kernel/src/agents.rs` (DiagnosticSkill)
+
+**Esforço:** 🟢 ~30 LOC
+
+---
+
+### B-33: Boot phase events — Hermes mostrar progresso
+
+**Goal:** HermesAgent mostra o progresso do boot no display à medida que cada fase `BOOT_PHASE` é publicada.
+
+**Por que:** O usuário vê o sistema acordando fase por fase.
+
+**Sub-itens:**
+- [ ] HermesAgent subscrever `TOPIC_BOOT_PHASE`
+- [ ] Mostrar fase atual no canto do display
+- [ ] BootLogAgent logar cada fase
+
+**Arquivos:** `crates/neural-kernel/src/hermes.rs`, `boot_log_agent.rs`
+
+**Esforço:** 🟢 ~50 LOC
+
+---
+
+### B-34: FAT12 log — validar leitura/escrita
+
+**Goal:** Garantir que `boot_logger::log()` escreve no FAT12 e `BootLogAgent::read_last_boot_log()` consegue ler.
+
+**Por que:** O boot log é o mecanismo de auto-diagnóstico do Cortex.
+
+**Sub-itens:**
+- [ ] Boot com patched image → verificar se BOOT.LOG é criado
+- [ ] BootLogAgent ler e publicar análise
+- [ ] Cortex usar log para auto-correção
+
+**Arquivos:** `crates/neural-kernel/src/boot_logger.rs`, `fat.rs`, `boot_log_agent.rs`
+
+**Esforço:** 🟡 ~100 LOC
 
 ---
 

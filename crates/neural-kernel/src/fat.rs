@@ -490,49 +490,24 @@ impl<'a> Fat32Writer<'a> {
 // Persiste log de boot na particao FAT32 para debug pos-crash.
 
 /// Escreve mensagem no arquivo de log do boot atual.
-/// Cria arquivo com nome baseado no tick de boot: B<TICK>.LOG
+/// Suporta FAT12 (BOOT.LOG fixo) e FAT32 (B<TICK>.LOG).
 pub unsafe fn write_boot_log(ata: &AtaDriver, part: &Partition, msg: &str) -> bool {
-    let writer = match Fat32Writer::new(ata, part) { Some(w) => w, None => return false };
-
-    // Nome do arquivo: B<TICK7>.LOG (8.3, tick em hex, 7 chars)
     let boot_tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    let mut name = alloc::format!("B{:07X}.LOG", boot_tick);
-    // So 8.3: truncar para 11 chars
-    name.truncate(11);
-
-    // Formatar mensagem com timestamp
     let tick_sec = boot_tick * 55 / 1000;
     let log_line = alloc::format!("[T+{}.{:03}] {}\n", tick_sec / 1000, tick_sec % 1000, msg);
 
-    if let Some((_, _, _)) = writer.find_entry(&name) {
-        // Arquivo existe: append
-        if let Some((_, _, first_cluster)) = writer.find_entry(&name) {
-            let old_size = {
-                // Ler tamanho atual
-                let mut cluster = writer.reader.root_cluster;
-                let name_upper = name.to_ascii_uppercase();
-                let mut name_bytes = [0u8; 11];
-                let bytes = name_upper.as_bytes();
-                for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
-                let mut size = 0u32;
-                while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-                    let lba = writer.reader.cluster_lba(cluster);
-                    let cluster_bytes = writer.reader.sectors_per_cluster as usize * writer.reader.bytes_per_sector as usize;
-                    let mut buf = vec![0u8; cluster_bytes];
-                    for i in 0..writer.reader.sectors_per_cluster as u32 {
-                        writer.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-                    }
-                    for entry_off in (0..buf.len()).step_by(32) {
-                        if &buf[entry_off..entry_off+11] == &name_bytes {
-                            size = u32::from_le_bytes([buf[entry_off+28], buf[entry_off+29], buf[entry_off+30], buf[entry_off+31]]);
-                            break;
-                        }
-                    }
-                    cluster = writer.reader.read_fat_entry(cluster);
-                }
-                size as usize
-            };
-            // Ler dados existentes + novos
+    if part.type_code == 0x01 {
+        // FAT12: usar Fat12Writer com BOOT.LOG fixo
+        let writer = match Fat12Writer::new(ata, part) { Some(w) => w, None => return false };
+        writer.append_log(log_line.as_bytes())
+    } else {
+        // FAT32 (0x0B, 0x0C): usar Fat32Writer com nome B<TICK>.LOG
+        let writer = match Fat32Writer::new(ata, part) { Some(w) => w, None => return false };
+
+        let mut name = alloc::format!("B{:07X}.LOG", boot_tick);
+        name.truncate(11); // 8.3 format
+
+        if writer.find_entry(&name).is_some() {
             if let Some(existing) = writer.reader.read_file(&name) {
                 let mut new_data = existing;
                 new_data.extend_from_slice(log_line.as_bytes());
@@ -540,10 +515,9 @@ pub unsafe fn write_boot_log(ata: &AtaDriver, part: &Partition, msg: &str) -> bo
             } else {
                 writer.write_file(&name, log_line.as_bytes())
             }
-        } else { false }
-    } else {
-        // Criar arquivo novo
-        writer.write_file(&name, log_line.as_bytes())
+        } else {
+            writer.write_file(&name, log_line.as_bytes())
+        }
     }
 }
 
@@ -569,8 +543,8 @@ impl<'a> Fat12Writer<'a> {
         })
     }
 
-    fn root_lba(&self) -> u32 { self.lba_start + self.bpb.reserved as u32 + self.bpb.fat_count as u32 * self.bpb.sectors_per_fat as u32 }
-    fn data_lba(&self) -> u32 { self.root_lba() + (self.bpb.root_entries as u32 * 32 + 511) / 512 }
+    pub fn root_lba(&self) -> u32 { self.lba_start + self.bpb.reserved as u32 + self.bpb.fat_count as u32 * self.bpb.sectors_per_fat as u32 }
+    pub fn data_lba(&self) -> u32 { self.root_lba() + (self.bpb.root_entries as u32 * 32 + 511) / 512 }
 
     pub unsafe fn append_log(&self, data: &[u8]) -> bool {
         if data.len() > 500 { return false; }

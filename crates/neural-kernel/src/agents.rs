@@ -1047,3 +1047,70 @@ impl Agent for GpuDriverAgent {
         AgentTickResult::Done
     }
 }
+
+// ── DiagnosticSkill ─────────────────────────────────────────────
+// Substitui os testes inline de Box/Vec/Tensor/SiLU/RMSNorm/BitNet
+// que estavam no boot flow procedural. SystemAgent executa esta skill
+// durante a fase de Diagnostics, publicando resultados no EventBus.
+
+use skill_registry::{Skill, McpManifest};
+
+pub struct DiagnosticSkill;
+
+impl DiagnosticSkill {
+    pub fn new() -> Self { DiagnosticSkill }
+}
+
+impl Skill for DiagnosticSkill {
+    fn manifest(&self) -> McpManifest {
+        McpManifest {
+            name: alloc::string::String::from("diagnostic"),
+            description: alloc::string::String::from("Run-time diagnostics: alloc, tensor, MLP, BitNet"),
+            required_tokens: vec![1],
+        }
+    }
+
+    fn execute(&self, _payload: &[u8]) -> Result<alloc::vec::Vec<u8>, &'static str> {
+        use alloc::boxed::Box;
+        use alloc::vec::Vec;
+        let mut report = alloc::string::String::new();
+
+        // 1. Box/Alloc test
+        let boxed_val = Box::new(41);
+        report.push_str(&alloc::format!("[DIAG] Box::new(41) = {}\n", *boxed_val));
+
+        // 2. Vec test
+        let mut vec = Vec::new();
+        vec.push(10); vec.push(20); vec.push(30);
+        report.push_str(&alloc::format!("[DIAG] Vec = {:?}\n", vec));
+
+        // 3. Tensor matmul
+        let a_data = vec![1.0_f32, 2.0_f32, 3.0_f32];
+        let a = crate::tensor::Tensor::from_row_major((1, 3), a_data).unwrap();
+        let b_data = vec![4.0_f32, 5.0_f32, 6.0_f32];
+        let b = crate::tensor::Tensor::from_row_major((3, 1), b_data).unwrap();
+        if let Some(c) = a.matmul(&b) {
+            report.push_str(&alloc::format!("[DIAG] Matmul: ({}, {}) {:?}\n", c.shape.0, c.shape.1, c.data));
+        }
+
+        // 4. SiLU + RMSNorm
+        let mut tensor = crate::tensor::Tensor::from_row_major((1, 3), vec![-1.0, 0.0, 1.0]).unwrap();
+        tensor.apply(crate::nn::silu);
+        crate::nn::rms_norm(&mut tensor, 1.0, 1e-6);
+        report.push_str(&alloc::format!("[DIAG] SiLU+RMSNorm = {:?}\n", tensor.data));
+
+        // 5. BitNet 2-bit inference
+        let bit_input = crate::tensor::Tensor::from_row_major((1, 3), vec![1.5, -0.5, 2.0]).unwrap();
+        let weights_f32 = crate::tensor::Tensor::from_row_major(
+            (3, 2), vec![1.5_f32, -1.8, 0.2, 2.1, -3.0, 0.0],
+        ).unwrap();
+        let packed_weights = crate::tensor::quantize_to_packed(&weights_f32, 0.5);
+        let bit_linear = crate::nn::BitLinear::new(packed_weights, None);
+        let bit_output = bit_linear.forward(&bit_input);
+        report.push_str(&alloc::format!("[DIAG] BitNet output = {:?}\n", bit_output.data));
+
+        crate::serial_println!("{}", report);
+        crate::println!("{}", report);
+        Ok(report.into_bytes())
+    }
+}

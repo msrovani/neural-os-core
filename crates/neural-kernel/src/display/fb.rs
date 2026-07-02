@@ -38,25 +38,24 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             bootloader_api::info::PixelFormat::Rgb => 3u32,
             _ => 4u32,
         };
-        let mut fb_stride = info.stride as u32 * bpp;
-        let mut fb_width = info.width as u32;
-        let mut fb_height = info.height as u32;
+        // Stride da UEFI em bytes (= pixels por linha * bytes por pixel)
+        let fb_stride = info.stride as u32 * bpp;
+        let fb_width = info.width as u32;
+        let fb_height = info.height as u32;
+        let fb_buf_len = fb.buffer().len();
 
-        // VGA FIX: validar resolucao e stride para Intel 6xx
-        // Resolucoes nao padrao (ex: 1270) causam "xuvisco" por stride mal alinhado
-        if fb_width % 8 != 0 {
-            let corrected = fb_width + (8 - fb_width % 8);
-            crate::serial_println!("[DISPLAY] VGA FIX: width {} nao multiplo de 8 → {} (stride {}→{})",
-                fb_width, corrected, fb_stride, corrected as u32 * bpp);
-            fb_width = corrected;
-            fb_stride = corrected * bpp;
+        // Validacao: stride original vs tamanho real do buffer
+        let expected_min = (fb_height as usize).saturating_sub(1) * fb_stride as usize
+            + fb_width as usize * bpp as usize;
+        if expected_min > fb_buf_len {
+            crate::serial_println!("[DISPLAY] ALERTA: stride {} pode exceder buffer ({} bytes, esperado min {})",
+                fb_stride, fb_buf_len, expected_min);
         }
-        // Stride deve ser multiplo de 64 bytes para Intel display engine
-        if fb_stride % 64 != 0 {
-            let old_stride = fb_stride;
-            fb_stride = (fb_stride + 63) & !63;
-            crate::serial_println!("[DISPLAY] VGA FIX: stride {} → {} (alinhado 64 bytes)", old_stride, fb_stride);
-        }
+
+        // Log das resolucoes suportadas pelo hardware (Intel 6xx Gen9):
+        // 1920x1080, 1366x768, 1280x720, 1024x768, 800x600
+        crate::serial_println!("[DISPLAY] UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
+            fb_width, fb_height, bpp, fb_stride, info.stride, fb_buf_len, fb.buffer().as_ptr() as u64);
 
         let gpu = GpuDevice {
             fb_addr: fb.buffer().as_ptr() as u64,
@@ -68,7 +67,7 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             present: true,
         };
         *GPU.lock() = Some(gpu);
-        crate::serial_println!("[DISPLAY] UEFI framebuffer: {}x{} bpp={} stride={} @{:x}",
+        crate::serial_println!("[DISPLAY] UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}",
             gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
     } else {
         crate::serial_println!("[DISPLAY] Sem framebuffer UEFI — VGA text mode.");

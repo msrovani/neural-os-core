@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.71.0] — 2026-07-02 — 🏆 Boot Bughunt: Agent-First + DiagnosticSkill + FAT12 Log + Xuvisco Fix
+
+### Fixed
+- **Xuvisco (VGA CRTC corruption em Intel 6xx)**: `probe_uefi_framebuffer()` movido para ANTES do VGA text mode init. `println!` não escreve mais nos registros VGA CRTC (0x3D4/0x3D5) em modo UEFI GOP, eliminando a corrupção do display no boot.
+- **FAT12 log não era gravado**: `boot_logger.rs` só aceitava FAT32 (type_code 0x0B/0x0C). Adicionado suporte a FAT12 (type_code 0x01). `write_boot_log()` agora usa `Fat12Writer` para FAT12, `Fat32Writer` para FAT32.
+- **BootLogAgent ignorava FAT12**: `read_last_boot_log()` só procurava B<TICK>.LOG em FAT32. Agora lê BOOT.LOG de partições FAT12 também.
+- **fb_write_text sem bounds check**: Adicionada verificação de limite do buffer para evitar escrita fora do framebuffer.
+- **fb_write_text division by zero**: `max_lines == 0` tratado para evitar panic em resoluções muito baixas.
+- **fb_write_text LINE wrap**: `static mut LINE` agora incrementa corretamente sem pular a linha 0.
+
+### Changed
+- **Boot vira sequência de agentes**: `BOOT_PHASE` events publicados no EventBus (SafeHarbor→MemoryCore→SystemBringup→Diagnostics→HardwareDiscovery→DriverInit→AgentFleet→Runtime). HermesAgent, CortexAgent e BootLogAgent podem subscrever.
+- **90+ linhas de teste inline → DiagnosticSkill**: Box/Vec/Tensor/SiLU/RMSNorm/BitNet movidos para `DiagnosticSkill` em `agents.rs`. SystemAgent executa durante fase Diagnostics.
+- **CortexAgent acorda antes do HW discovery**: Modelo LLM carregado e agente instanciado antes do PCI scan, RTL8139, ATA, xHCI. O sistema nervoso participa das decisões de hardware.
+- **BootLogAgent agora contínuo**: `auto_start=true`, `persist=true`, `ScheduleKind::Continuous`. Monitora boot logs em tempo real.
+- **`Fat12Writer::root_lba()` e `data_lba()` agora pub**: Para BootLogAgent acessar a geometria da partição.
+- **`display/fb.rs`**: Removido VGA FIX que modificava stride do framebuffer (causava mismatch). Stride original da UEFI é preservado.
+- **`vga_buffer.rs`**: `fb_write_text()` com bounds check e divisão por zero tratada.
+
+### Added
+- **`BootPhase` enum + `publish_boot_phase()`**: 8 fases de boot com eventos no EventBus.
+- **`DiagnosticSkill`**: Skill de diagnóstico que substitui os testes inline. SystemAgent executa na fase Diagnostics.
+- **`TOPIC_BOOT_PHASE`**: Constante do tópico EventBus para fases de boot.
+
 ## [0.65.0] — 2026-06-30 — COSMIC UI Patterns + AxiomOS Verifier + HAL + Bench
 
 ### Added

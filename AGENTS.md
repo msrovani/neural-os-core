@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.62.1 🏆
-#   VFS + MHI BRIDGE + STORAGE AGENTS
-#   ARC-style tiering (ZFS-inspired), 96 arquivos Rust
+#   PLANO DIRETOR — neural-os-core v0.71.0 🏆
+#   BOOT BUGHUNT: AGENT-FIRST BOOT + DIAGNOSTIC SKILL + FAT12 LOG + XUVISCO FIX
+#   126 arquivos Rust, ~13.800 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -21,16 +21,20 @@ Toda entidade executante é um `Agent`. Drivers (rtl8139, xhci) viram `DriverAge
 ### 2. Manifesto Explícito
 Cada agente declara: nome, tipo (System/Driver/Inference/Router/Console/Network/Skill), capacidades, schedule, trust tokens. Nada é implícito.
 
-### 3. Boot = Agent Activation Chain
+### 3. Boot = Agent Activation Chain (8 fases, event-driven)
 ```
 bootloader → kernel_main
-  ConsoleAgent (VGA+Serial)
-  → SystemAgent (IDT+GDT+heap+SIMD)
-  → PCIAgent (PCI scan) → ACPIAgent (MADT) → SMPAgent (AP boot)
-  → HwDiscoverAgent (inventário) → NetDriverAgent | UsbDriverAgent
-  → HermesAgent (input+intent+output)
-  → CortexAgent (LLM transformer)
-  → AgentScheduler::run()
+  Phase 0: SafeHarbor → Serial + Framebuffer + IDT (display sem VGA CRTC)
+  Phase 1: MemoryCore → Frame allocator + Page tables + Heap + SIMD
+  Phase 2: SystemBringup → CortexAgent ACORDA (pre-HW)
+  Phase 3: Diagnostics → DiagnosticSkill (testes do sistema nervoso)
+  Phase 4: HardwareDiscovery → PCIAgent → ACPIAgent → SMPAgent → GPU detect
+  Phase 5: DriverInit → NetDriverAgent | UsbDriverAgent | AtaAgent
+  Phase 6: AgentFleet → Todos os 247+ agentes registrados
+  Phase 7: Runtime → HermesAgent (input+intent+output) + AgentScheduler::run()
+
+Cada fase publica BOOT_PHASE no EventBus. Cortex observa, Hermes gerencia,
+BootLogAgent persiste em FAT12 para auto-diagnóstico no próximo boot.
 ```
 
 ### 4. Skills Pertencem a Agentes
