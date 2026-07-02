@@ -72,18 +72,29 @@ pub fn network_agent_tick() {
                 }
             }
         }
-        // Phase 1: set static IP + DNS/HTTP
+        // Phase 1: DHCP → DNS → HTTP
         1 => {
-            // Set static IP once
-            if let Some(ref mut ns) = *NETSTACK.lock() {
-                if !ns.has_static_ip {
-                    ns.set_static_ip();
-                    NET_CONFIG.lock().configured = true;
-                    NET_CONFIG.lock().online = true;
-                    log(tick, "Static IP: 10.0.2.15/24 gw=10.0.2.2");
-                }
-            }
-            // DNS
+            // DHCP poll ate conseguir lease
+            let dhcp_done = {
+                let mut ns_guard = NETSTACK.lock();
+                if let Some(ref mut ns) = *ns_guard {
+                    if !ns.dhcp_done {
+                        let (got, gw, dns) = ns.dhcp_poll(ms as i64);
+                        if got {
+                            NET_CONFIG.lock().configured = true;
+                            NET_CONFIG.lock().online = true;
+                            NET_CONFIG.lock().dns_ip = dns;
+                            NET_CONFIG.lock().gateway_ip = gw;
+                            log(tick, &alloc::format!("DHCP OK. gw={}.{}.{}.{} dns={}.{}.{}.{}",
+                                gw[0], gw[1], gw[2], gw[3],
+                                dns[0], dns[1], dns[2], dns[3]));
+                        }
+                    }
+                    ns.dhcp_done
+                } else { false }
+            };
+            // Se DHCP ainda nao completo, nao tenta DNS/HTTP
+            if !dhcp_done { return; }
             if tick >= 20 && !s.http.is_some() && s.dns_tries < 3 {
                 if let Some(ref mut ns) = *NETSTACK.lock() {
                     s.dns_tries += 1;
