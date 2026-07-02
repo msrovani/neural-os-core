@@ -143,12 +143,17 @@ impl Rtl8139Driver {
         }
 
         self.write16(REG_IMR, 0x0000);
+
+        // Configura RCR (Receive Configuration Register): aceitar ALL packets
+        // bits: AAP=1, APM=1, AM=1, AB=1, AR=1, WRAP=1, RX buffer = 32K+16
+        self.write32(REG_RCR, 0xCC0E);
+
         self.write8(REG_CR, CR_RXE | CR_TXE);
 
         // Reset RX state: zera CAPR para que o NIC escreva do inicio do buffer
         self.write16(REG_CAPR, 0);
         self.rx_offset = 0;
-        serial_println!("[RTL8139] RX init: CAPR reset to 0, rx_offset=0");
+        serial_println!("[RTL8139] RX init: CAPR=0 RCR=0xCC0E");
 
         serial_println!(
             "[RTL8139] Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]",
