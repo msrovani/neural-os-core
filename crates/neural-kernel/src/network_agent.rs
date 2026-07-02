@@ -36,6 +36,9 @@ pub fn network_agent_tick() {
             log(tick, &alloc::format!("poll: tx={} rx={}",
                 crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
         }
+        if tick % 100 == 0 {
+            unsafe { crate::net::dump_e1000_status(); }
+        }
         if let Some(ref mut c) = s.http {
             ns.http_poll(c, ms as u64);
             match &c.state {

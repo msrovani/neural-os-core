@@ -44,7 +44,7 @@ pub(crate) unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset
     value
 }
 
-unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
+pub(crate) unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
     let dword = read_config_dword(bus, device, function, offset & 0xFC);
     ((dword >> ((offset as u32 & 2) * 8)) & 0xFFFF) as u16
 }
@@ -192,6 +192,42 @@ pub unsafe fn read_bar_value(bus: u8, device: u8, function: u8, bar_index: u8) -
         (low & !0xF) as u64 | (high << 32)
     } else {
         (low & !0xF) as u64
+    }
+}
+
+pub(crate) unsafe fn write_config_dword(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
+    let address = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((function as u32) << 8)
+        | (offset as u32 & 0xFC);
+    core::arch::asm!(
+        "out dx, eax",
+        in("dx") CONFIG_ADDRESS,
+        in("eax") address,
+        options(nostack, preserves_flags)
+    );
+    core::arch::asm!(
+        "out dx, eax",
+        in("dx") CONFIG_DATA,
+        in("eax") value,
+        options(nostack, preserves_flags)
+    );
+}
+
+/// Habilita Bus Master + Memory Space + I/O Space no PCI command register.
+pub(crate) unsafe fn enable_pci_bus_master(dev: &PciDevice) {
+    enable_pci_bus_master_unsafe(dev.bus, dev.device, dev.function);
+}
+
+pub(crate) unsafe fn enable_pci_bus_master_unsafe(bus: u8, device: u8, function: u8) {
+    let cmd = read_config_word(bus, device, function, 0x04);
+    let new_cmd = cmd | 0x07;
+    if new_cmd != cmd {
+        write_config_dword(bus, device, function, 0x04, new_cmd as u32);
+        let verify = read_config_word(bus, device, function, 0x04);
+        serial_println!("[PCI] BusMaster enabled for {:02x}:{:02x}.{:02x}: cmd={:#06x}->{:#06x}",
+            bus, device, function, cmd, verify);
     }
 }
 

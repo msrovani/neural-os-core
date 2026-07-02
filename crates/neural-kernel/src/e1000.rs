@@ -16,10 +16,12 @@ pub const E1000_DEVICE_82579LM: u16 = 0x1502;
 
 // Register offsets (MMIO)
 const REG_CTRL: u64 = 0x0000;
-const REG_STATUS: u64 = 0x0008;
+pub const REG_STATUS: u64 = 0x0008;
 const REG_EEPROM: u64 = 0x0014;
 const REG_CTRL_EXT: u64 = 0x0018;
+const REG_ICR: u64 = 0x00C0;
 const REG_IMASK: u64 = 0x00D0;
+const REG_IMC: u64 = 0x00D8;
 const REG_RCTRL: u64 = 0x0100;
 const REG_TCTRL: u64 = 0x0400;
 const REG_TDBAL: u64 = 0x0420;
@@ -30,11 +32,12 @@ const REG_TDT: u64 = 0x0438;
 const REG_RDBAL: u64 = 0x2800;
 const REG_RDBAH: u64 = 0x2804;
 const REG_RDLEN: u64 = 0x2808;
-const REG_RDH: u64 = 0x2810;
-const REG_RDT: u64 = 0x2818;
+pub const REG_RDH: u64 = 0x2810;
+pub const REG_RDT: u64 = 0x2818;
 const REG_RAL: u64 = 0x5400;
 const REG_RAH: u64 = 0x5404;
 const REG_MTA: u64 = 0x5200;
+const REG_RXDCTL: u64 = 0x3828;
 const REG_IPAV: u64 = 0x00C0;
 
 // CTRL bits
@@ -51,6 +54,8 @@ const RCTL_UPE: u32 = 0x00000008;
 const RCTL_MPE: u32 = 0x00000010;
 const RCTL_LPE: u32 = 0x00000020;
 const RCTL_LBM_NONE: u32 = 0x00000000;
+const RCTL_LBM_MAC: u32 = 0x00000100;
+const RCTL_LBM_PHY: u32 = 0x00000200;
 const RCTL_RDMTS_HALF: u32 = 0x00000000;
 const RCTL_BAM: u32 = 0x00008000;
 const RCTL_BSIZE_2048: u32 = 0x00000000;
@@ -91,6 +96,9 @@ pub struct E1000Driver {
     mmio_base: u64,
     mmio_virt: u64,
     mac_addr: [u8; 6],
+    pci_bus: u8,
+    pci_device: u8,
+    pci_func: u8,
     tx_ring_paddr: u64,
     rx_ring_paddr: u64,
     tx_buf_paddrs: [u64; TX_DESC_COUNT],
@@ -116,10 +124,16 @@ impl E1000Driver {
         serial_println!("[E1000] Detectado vendor={:#06x} device={:#06x} MMIO={:#010x} virt={:#010x}",
             dev.vendor_id, dev.device_id, mmio_base, mmio_virt);
 
+        // Garantir PCI Bus Master + Memory Space habilitados para DMA
+        crate::pci::enable_pci_bus_master(dev);
+
         Some(E1000Driver {
             mmio_base,
             mmio_virt,
             mac_addr: [0; 6],
+            pci_bus: dev.bus,
+            pci_device: dev.device,
+            pci_func: dev.function,
             tx_ring_paddr: 0,
             rx_ring_paddr: 0,
             tx_buf_paddrs: [0; TX_DESC_COUNT],
@@ -129,7 +143,7 @@ impl E1000Driver {
         })
     }
 
-    unsafe fn read32(&self, reg: u64) -> u32 {
+    pub(crate) unsafe fn read32(&self, reg: u64) -> u32 {
         let ptr = (self.mmio_virt + reg) as *mut u32;
         core::ptr::read_volatile(ptr)
     }
@@ -176,6 +190,15 @@ impl E1000Driver {
         }
         serial_println!("[E1000] Reset OK");
 
+        // Re-check PCI Bus Master after reset (CTRL_RST pode ter limpado)
+        let cmd = crate::pci::read_config_word(self.pci_bus, self.pci_device, self.pci_func, 0x04);
+        if cmd & 0x04 == 0 {
+            serial_println!("[E1000] Bus Master lost after reset! Re-enabling...");
+            crate::pci::enable_pci_bus_master_unsafe(self.pci_bus, self.pci_device, self.pci_func);
+        } else {
+            serial_println!("[E1000] Bus Master OK after reset: cmd={:#06x}", cmd);
+        }
+
         // Read MAC
         self.mac_addr = self.read_mac();
         serial_println!("[E1000] MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
@@ -184,6 +207,15 @@ impl E1000Driver {
 
         // Link up
         self.write32(REG_CTRL, self.read32(REG_CTRL) | CTRL_SLU);
+
+        // Re-write MAC address into RAL/RAH with AV bit (some emulations need this)
+        let mac = self.mac_addr;
+        let rah_val = (mac[5] as u32) << 8 | (mac[4] as u32) | 0x80000000; // AV=1
+        let ral_val = (mac[3] as u32) << 24 | (mac[2] as u32) << 16 |
+                      (mac[1] as u32) << 8 | (mac[0] as u32);
+        self.write32(REG_RAL, ral_val);
+        self.write32(REG_RAH, rah_val);
+        serial_println!("[E1000] MAC re-written: RAL={:#010x} RAH={:#010x}", ral_val, rah_val);
 
         // Allocate TX ring
         let tx_ring = Self::alloc_frame();
@@ -225,9 +257,8 @@ impl E1000Driver {
         self.write32(REG_RDBAH, (rx_ring >> 32) as u32);
         self.write32(REG_RDLEN, (s_rx * RX_DESC_COUNT) as u32);
         self.write32(REG_RDH, 0);
-        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
 
-        // Allocate RX buffers
+        // Allocate RX buffers (antes de RDT para NIC ver endereços válidos)
         for i in 0..RX_DESC_COUNT {
             let buf = Self::alloc_frame();
             if buf == 0 { return false; }
@@ -240,22 +271,74 @@ impl E1000Driver {
             for j in 0..2048 { virt.add(j).write_volatile(0); }
         }
 
-        // Enable RX/TX
+        // RDT=0 primeiro para esvaziar o ring (Linux faz isso)
+        self.write32(REG_RDT, 0);
+
+        // RXDCTL: enable RX descriptor fetching (bit 25 = QUEUE_ENABLE)
+        self.write32(REG_RXDCTL, 0x02000000);
+
+        // Clear MTA (multicast array) — Linux sempre limpa
+        for mta_idx in 0..128 {
+            self.write32(REG_MTA + (mta_idx as u64 * 4), 0);
+        }
+
+        // Enable RX/TX — Rx habilita PRIMEIRO, depois RDT (ordem do Linux)
         self.write32(REG_RCTRL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
         self.write32(REG_TCTRL, TCTL_EN | TCTL_PSP | (0x10 << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT));
 
-        // Mask all interrupts (polling mode)
+        // RDT só DEPOIS de habilitar o receiver — NIC precisa ver RDT válido após enable
+        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
+
+        // Mask all interrupts via IMC + IMASK (redundante pra garantir)
+        self.write32(REG_IMC, 0xFFFF_FFFF);
         self.write32(REG_IMASK, 0);
+        Self::fence_write();
 
         serial_println!("[E1000] Init OK. TX descs={} RX descs={}", TX_DESC_COUNT, RX_DESC_COUNT);
+
         true
+    }
+
+    /// Mini-driver: ARP Request → SLIRP → ARP Reply (força RX real)
+    unsafe fn fence_write() {
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+    }
+
+    unsafe fn fence_read() {
+        core::arch::asm!("lfence", options(nostack, preserves_flags));
+    }
+
+    /// Escreve TX descriptor via raw ptr (sem packed struct ref).
+    unsafe fn write_tx_desc(ring_virt: *mut u8, idx: usize, len: u16, cmd_byte: u8) {
+        let desc = ring_virt.add(idx * core::mem::size_of::<TxDesc>());
+        // addr já foi setado no init; escrever length, cso, cmd, status, css, vlan
+        (desc.add(8) as *mut u16).write_volatile(len);   // length
+        (desc.add(10) as *mut u8).write_volatile(0);      // cso
+        (desc.add(11) as *mut u8).write_volatile(cmd_byte); // cmd
+        (desc.add(12) as *mut u8).write_volatile(0);      // status
+        (desc.add(13) as *mut u8).write_volatile(0);      // css
+        (desc.add(14) as *mut u16).write_volatile(0);     // vlan
+    }
+
+    /// Lê DD bit do RX descriptor via raw ptr.
+    unsafe fn read_rx_dd(ring_virt: *const u8, idx: usize) -> bool {
+        let desc = ring_virt.add(idx * core::mem::size_of::<RxDesc>());
+        Self::fence_read();
+        (desc.add(12) as *const u8).read_volatile() & 0x01 != 0
+    }
+
+    /// Lê length do RX descriptor via raw ptr.
+    unsafe fn read_rx_len(ring_virt: *const u8, idx: usize) -> u16 {
+        let desc = ring_virt.add(idx * core::mem::size_of::<RxDesc>());
+        Self::fence_read();
+        (desc.add(8) as *const u16).read_volatile()
     }
 
     pub unsafe fn send(&mut self, data: &[u8]) -> bool {
         if data.is_empty() || data.len() > 2048 { return false; }
 
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-        let tx_ring_virt = (self.tx_ring_paddr + pmoff) as *mut TxDesc;
+        let tx_ring_virt = (self.tx_ring_paddr + pmoff) as *mut u8;
         let idx = self.tx_cur;
 
         // Copy data into TX buffer
@@ -264,33 +347,30 @@ impl E1000Driver {
             buf_virt.add(i).write_volatile(data[i]);
         }
 
-        let desc = &mut *tx_ring_virt.add(idx);
-        desc.length = data.len() as u16;
-        desc.cmd = 0x0B; // RS | EOP | IFCS
-        desc.status = 0;
+        // Write TX descriptor via raw ptr + sfence
+        Self::write_tx_desc(tx_ring_virt, idx, data.len() as u16, 0x0B);
+        Self::fence_write();
 
-        // Advance TDT — tell NIC new descriptors are available
+        // Advance TDT
         let next = (idx + 1) % TX_DESC_COUNT;
         self.tx_cur = next;
         self.write32(REG_TDT, next as u32);
 
-        // Don't wait for completion — QEMU TCG precisa de yield para processar TX.
-        // O status sera verificado na proxima send().
         true
     }
 
     pub unsafe fn recv(&mut self) -> Option<Vec<u8>> {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-        let rx_ring_virt = (self.rx_ring_paddr + pmoff) as *const RxDesc;
+        let rx_ring_virt = (self.rx_ring_paddr + pmoff) as *const u8;
         let idx = self.rx_cur;
 
-        let desc = &*rx_ring_virt.add(idx);
-        if desc.status & 0x01 == 0 { return None; }
+        if !Self::read_rx_dd(rx_ring_virt, idx) { return None; }
 
-        let len = desc.length as usize;
+        let len = Self::read_rx_len(rx_ring_virt, idx) as usize;
         if len < 14 || len > 2048 {
-            let d = &mut *(rx_ring_virt.add(idx) as *mut RxDesc);
-            d.status = 0;
+            // Mark descriptor as available again via raw ptr
+            let desc = (self.rx_ring_paddr + pmoff) as *mut u8;
+            (desc.add(idx * core::mem::size_of::<RxDesc>() + 12) as *mut u8).write_volatile(0);
             self.rx_cur = (idx + 1) % RX_DESC_COUNT;
             self.write32(REG_RDT, self.rx_cur as u32);
             return None;
@@ -302,8 +382,10 @@ impl E1000Driver {
             buf.push(data_virt.add(i).read_volatile());
         }
 
-        let d = &mut *(rx_ring_virt.add(idx) as *mut RxDesc);
-        d.status = 0;
+        // Mark descriptor as processed
+        let desc = (self.rx_ring_paddr + pmoff) as *mut u8;
+        (desc.add(idx * core::mem::size_of::<RxDesc>() + 12) as *mut u8).write_volatile(0);
+        Self::fence_write();
         self.rx_cur = (idx + 1) % RX_DESC_COUNT;
         self.write32(REG_RDT, self.rx_cur as u32);
 
@@ -311,4 +393,73 @@ impl E1000Driver {
     }
 
     pub fn mac(&self) -> [u8; 6] { self.mac_addr }
+    pub unsafe fn read_e1000_rdh(&self) -> u32 { self.read32(REG_RDH) }
+    pub fn rx_cur_val(&self) -> usize { self.rx_cur }
+
+    /// Kick RX engine: disable Rx, drain ring, re-enable, THEN set RDT.
+    /// Ordem Linux: enable receiver FIRST, THEN set RDT=N-1.
+    pub unsafe fn kick_rx(&mut self) {
+        // Disable receiver
+        self.write32(REG_RCTRL, 0);
+        // Empty ring: writing RDT=0 esvazia
+        self.write32(REG_RDT, 0);
+        // Re-enable receiver PRIMEIRO (Linux ordem)
+        self.write32(REG_RCTRL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
+        // RDT só DEPOIS de habilitar
+        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
+        serial_println!("[E1000] RX kick: Rx enabled -> RDT={}", RX_DESC_COUNT - 1);
+    }
+
+    pub unsafe fn dump_status(&mut self) {
+        let ctrl = self.read32(REG_CTRL);
+        let status = self.read32(REG_STATUS);
+        let rdh = self.read32(REG_RDH);
+        let rdt = self.read32(REG_RDT);
+        let tdh = self.read32(REG_TDH);
+        let tdt = self.read32(REG_TDT);
+        let rctrl = self.read32(REG_RCTRL);
+        let rah = self.read32(REG_RAH);
+        let rdbal = self.read32(REG_RDBAL);
+        let rdbah = self.read32(REG_RDBAH);
+        let rdlen = self.read32(REG_RDLEN);
+        let icr = self.read32(REG_ICR);
+        // Read first RX descriptor status from descriptor ring in RAM
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let desc0_virt = (self.rx_ring_paddr + pmoff) as *const RxDesc;
+        let desc0_status = (*desc0_virt).status;
+        let desc0_len = (*desc0_virt).length;
+        serial_println!("[E1000] CTRL={:#010x} STATUS={:#010x} link={} speed={} AV={}",
+            ctrl, status,
+            if status & 0x02 != 0 { "UP" } else { "DOWN" },
+            match (status >> 6) & 0x03 {
+                0 => "10Mb", 1 => "100Mb", 2 => "1000Mb", _ => "?"
+            },
+            if rah & 0x80000000 != 0 { "1" } else { "0" });
+        serial_println!("[E1000] RDH={} RDT={} TDH={} TDT={} RCTRL={:#010x} RAH={:#010x}",
+            rdh, rdt, tdh, tdt, rctrl, rah);
+        serial_println!("[E1000] RDBAL={:#010x} RDBAH={:#010x} RDLEN={} ICR={:#010x}",
+            rdbal, rdbah, rdlen, icr);
+        let desc0_addr = (*desc0_virt).addr;
+        // Raw bytes of descriptor 0 (read as u8 array to verify exact format)
+        let raw = desc0_virt as *const u8;
+        serial_println!("[E1000] desc0 status={:#04x} len={} dd={} addr={:#010x}",
+            desc0_status, desc0_len, if desc0_status & 0x01 != 0 { "1" } else { "0" }, desc0_addr);
+        serial_println!("[E1000] desc0 raw: {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} {:02x}{:02x}|{:02x}{:02x}|{:02x}{:02x}{:02x}{:02x}",
+            core::ptr::read_volatile(raw.add(0)),
+            core::ptr::read_volatile(raw.add(1)),
+            core::ptr::read_volatile(raw.add(2)),
+            core::ptr::read_volatile(raw.add(3)),
+            core::ptr::read_volatile(raw.add(4)),
+            core::ptr::read_volatile(raw.add(5)),
+            core::ptr::read_volatile(raw.add(6)),
+            core::ptr::read_volatile(raw.add(7)),
+            core::ptr::read_volatile(raw.add(8)),
+            core::ptr::read_volatile(raw.add(9)),
+            core::ptr::read_volatile(raw.add(10)),
+            core::ptr::read_volatile(raw.add(11)),
+            core::ptr::read_volatile(raw.add(12)),
+            core::ptr::read_volatile(raw.add(13)),
+            core::ptr::read_volatile(raw.add(14)),
+            core::ptr::read_volatile(raw.add(15)));
+    }
 }

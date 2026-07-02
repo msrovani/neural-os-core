@@ -1,7 +1,6 @@
 use crate::netstack::NetStack;
 use crate::rtl8139::Rtl8139Driver;
-use crate::e1000::E1000Driver;
-use crate::e1000;
+use crate::e1000::{E1000Driver, REG_STATUS, REG_RDH};
 use crate::{println, serial_println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
@@ -97,6 +96,7 @@ pub unsafe fn init_driver_rtl8139() -> bool {
 /// Inicializa driver e1000e (Intel Gigabit Ethernet).
 /// Tentado como fallback se RTL8139 nao for encontrado.
 pub unsafe fn init_driver_e1000() -> bool {
+    if E1000.lock().is_some() { return true; }
     let pci_devices = crate::pci::scan_pci();
     for dev in &pci_devices {
         if dev.vendor_id == 0x8086 {
@@ -127,6 +127,25 @@ pub unsafe fn init_driver_e1000() -> bool {
     }
     serial_println!("[NET] e1000 nao encontrado.");
     false
+}
+
+/// Track last known link state for RX kick logic
+static mut E1000_LINK_WAS_UP: bool = false;
+
+pub unsafe fn dump_e1000_status() {
+    let mut guard = E1000.lock();
+    if let Some(ref mut nic) = *guard {
+        nic.dump_status();
+        // Read current link state from STATUS register
+        let status = nic.read32(REG_STATUS);
+        let link_up = status & 0x02 != 0;
+        let rdh = nic.read32(REG_RDH);
+        // If link just came up or RDH never moved, kick RX
+        if (link_up && !E1000_LINK_WAS_UP) || (link_up && rdh == 0) {
+            nic.kick_rx();
+        }
+        E1000_LINK_WAS_UP = link_up;
+    }
 }
 
 pub unsafe fn http_get(_host: [u8; 4], _port: u16, _path: &str) -> Option<Vec<u8>> { None }
