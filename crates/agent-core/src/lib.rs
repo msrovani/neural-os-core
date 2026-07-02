@@ -6,11 +6,17 @@ pub mod dagsched;
 pub mod dashboard;
 pub mod state;
 pub mod timer_wheel;
+pub mod crew;
+pub mod flow;
+pub mod state_graph;
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
+use crate::crew::CrewPool;
+use crate::state_graph::StateGraph;
+use crate::flow::should_poll_flow;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AgentKind {
@@ -29,6 +35,20 @@ pub enum ScheduleKind {
     Continuous,
     PollEvery(u64),
     EventDriven,
+}
+
+/// FlowTrigger define quando um agente acorda.
+/// Substitui ScheduleKind puro por eventos semanticos.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FlowTrigger {
+    /// Agenda tradicional (compatibilidade)
+    Schedule(ScheduleKind),
+    /// Acorda no boot (equivalente a Schedule(Oneshot) + auto_start)
+    Start,
+    /// Acorda quando um topico do EventBus tem mensagem
+    Listen(&'static str),
+    /// Acorda, le o payload do topico, roteia para handler baseado no conteudo
+    Router(&'static str),
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +82,32 @@ pub trait Agent: Send {
     fn on_deactivate(&mut self) {}
 }
 
+/// Extensao opcional do AgentManifest para suporte a Crew/Flow.
+/// Nao modifica AgentManifest original (evita quebrar 24+ const definitions).
+#[derive(Clone, Debug)]
+pub struct CrewManifest {
+    pub role: &'static str,
+    pub goal: &'static str,
+    pub backstory: &'static str,
+    pub flow: FlowTrigger,
+    pub crew_id: Option<u16>,
+}
+
+impl CrewManifest {
+    pub const fn empty() -> Self {
+        CrewManifest {
+            role: "", goal: "", backstory: "",
+            flow: FlowTrigger::Schedule(ScheduleKind::Continuous),
+            crew_id: None,
+        }
+    }
+}
+
+/// Agente que tambem implementa CrewManifest (role, goal, flow)
+pub trait CrewAgent: Agent {
+    fn crew_manifest(&self) -> &CrewManifest;
+}
+
 pub struct AgentInstance {
     pub agent: Box<dyn Agent>,
     pub state: AgentState,
@@ -69,6 +115,7 @@ pub struct AgentInstance {
     pub tick_counter: u64,
     pub schedule: ScheduleKind,
     pub consecutive_pending: u64,  // watchdog: ticks consecutivos sem Done
+    pub crew: CrewManifest,
 }
 
 impl AgentInstance {
@@ -81,6 +128,7 @@ impl AgentInstance {
             tick_counter: 0,
             schedule,
             consecutive_pending: 0,
+            crew: CrewManifest::empty(),
         }
     }
 }
@@ -88,11 +136,38 @@ impl AgentInstance {
 pub struct AgentRegistry {
     pub agents: Vec<AgentInstance>,
     pub skill_map: BTreeMap<String, usize>,
+    pub crews: CrewPool,
+    pub graph: Option<StateGraph>,
 }
 
 impl AgentRegistry {
     pub fn new() -> Self {
-        AgentRegistry { agents: Vec::new(), skill_map: BTreeMap::new() }
+        AgentRegistry {
+            agents: Vec::new(), skill_map: BTreeMap::new(),
+            crews: CrewPool::new(), graph: None,
+        }
+    }
+
+    /// Cria um crew e retorna seu ID
+    pub fn create_crew(&mut self, name: &str, goal: &str, process: crew::ProcessType) -> crew::CrewId {
+        self.crews.create(name, goal, process)
+    }
+
+    /// Associa um agente a um crew
+    pub fn assign_to_crew(&mut self, crew_id: crew::CrewId, agent_idx: usize) {
+        self.crews.assign_to_crew(crew_id, agent_idx);
+        if let Some(crew) = self.crews.get_mut(crew_id) {
+            for agent in self.agents.iter_mut() {
+                if agent.crew.crew_id.is_none() {
+                    agent.crew.crew_id = Some(crew_id);
+                }
+            }
+        }
+    }
+
+    /// Inicializa StateGraph (substitui scheduler round-robin)
+    pub fn init_graph(&mut self, graph: StateGraph) {
+        self.graph = Some(graph);
     }
 
     pub fn register(&mut self, agent: Box<dyn Agent>) -> usize {
@@ -177,19 +252,46 @@ impl AgentRegistry {
                     self.agents[idx].agent.on_activate();
                 }
             }
+            // Se StateGraph ativo, usa ele para decidir qual agente pollar
+            if let Some(ref mut graph) = self.graph {
+                let node_idx = graph.advance();
+                if node_idx < self.agents.len() {
+                    let i = node_idx;
+                    self.agents[i].last_poll = tick_id;
+                    self.agents[i].tick_counter += 1;
+                    let tc = self.agents[i].tick_counter;
+                    let result = self.agents[i].agent.tick(tick_id, tc);
+                    match result {
+                        AgentTickResult::Pending => {
+                            self.agents[i].consecutive_pending += 1;
+                            if self.agents[i].consecutive_pending > 10000 {
+                                self.agents[i].state = AgentState::Crashed;
+                            }
+                        }
+                        AgentTickResult::Done => {
+                            self.agents[i].consecutive_pending = 0;
+                            if self.agents[i].schedule == ScheduleKind::Oneshot {
+                                self.agents[i].state = AgentState::Done;
+                            }
+                        }
+                        AgentTickResult::Crashed => {
+                            self.agents[i].state = AgentState::Crashed;
+                        }
+                        _ => {}
+                    }
+                }
+                halt();
+                continue;
+            }
+            // Scheduler round-robin padrao (com FlowTrigger support)
             for i in 0..self.agents.len() {
                 let state = self.agents[i].state;
                 if state != AgentState::Active {
                     continue;
                 }
-                let schedule = self.agents[i].schedule;
-                let last = self.agents[i].last_poll;
-                let should_poll = match schedule {
-                    ScheduleKind::Continuous => true,
-                    ScheduleKind::PollEvery(n) => last == 0 || tick_id - last >= n,
-                    ScheduleKind::Oneshot => true,  // poll every tick until Done/Crashed
-                    ScheduleKind::EventDriven => false,
-                };
+                let flow = &self.agents[i].crew.flow;
+                let has_event = false; // EventDriven agents check their receiver
+                let should_poll = should_poll_flow(flow, tick_id, self.agents[i].last_poll, has_event);
                 if !should_poll {
                     continue;
                 }
@@ -207,14 +309,14 @@ impl AgentRegistry {
                     }
                     AgentTickResult::Done => {
                         self.agents[i].consecutive_pending = 0;
-                        if schedule == ScheduleKind::Oneshot {
+                        if self.agents[i].schedule == ScheduleKind::Oneshot {
                             self.agents[i].state = AgentState::Done;
                         }
                     }
                     AgentTickResult::Crashed => {
                         self.agents[i].state = AgentState::Crashed;
                     }
-                    AgentTickResult::Pending => {}
+                    _ => {}
                 }
             }
             halt();

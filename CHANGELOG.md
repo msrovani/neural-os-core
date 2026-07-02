@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.72.0] — 2026-07-02 — 🏆 Evolução Agêntica: Crew + FlowTrigger + StateGraph
+
+### Added (agent-core)
+- **Crew** (`crew.rs`): `Crew`, `CrewPool`, `ScheduledTask`, `OutputSchema`, `ProcessType` (Sequential/Hierarchical). Times de agentes com objetivo comum, tasks com dependências, kickoff/delegation pattern (CrewAI-inspired).
+- **FlowTrigger** (`flow.rs`): `FlowTrigger::Start/Listen/Router` — quando e como um agente acorda. `RouterRegistry` para roteamento baseado em payload do EventBus. `should_poll_flow()` substitui `match schedule` no scheduler.
+- **StateGraph** (`state_graph.rs`): `StateGraph` com nós (agentes) e arestas (condições de transição). Substitui scheduler round-robin por grafo de estados (LangGraph-inspired).
+- **CrewManifest**: Extensão opcional do `AgentManifest` com `role`, `goal`, `backstory`, `flow`, `crew_id`. Sem modificar o struct original (evita quebrar 24+ const definitions).
+- **CrewAgent trait**: Agente que implementa role semantics.
+- **AgentRegistry**: `create_crew()`, `assign_to_crew()`, `init_graph()` — integração com CrewPool + StateGraph.
+
+### Changed
+- `AgentInstance` ganha campo `crew: CrewManifest`
+- `AgentRegistry::run()` suporta FlowTrigger e StateGraph como alternativas ao round-robin
+
+### Planned (remaining items)
+- 72.2 — TaskSchema + JobPreconditions (skill-registry)
+- 72.3 — IntentCache + OutputCache
+- 72.4 — WorkflowEngine + SelfCritique
+- 72.6 — SkillIndex + MCP Catalog
+
 ## [0.71.1] — 2026-07-02 — 🏆 Xuvisco exterminado: 3 bugs em cascata corrigidos
 
 ### Fixed
