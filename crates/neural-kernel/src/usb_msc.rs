@@ -35,11 +35,13 @@ const SCSI_READ10: u8 = 0x28;
 const SCSI_WRITE10: u8 = 0x2A;
 
 pub struct UsbMassStorage {
-    // Bulk endpoints da configuracao xHCI
     bulk_in: u8,
     bulk_out: u8,
     tag: u32,
     max_lba: u32,
+    slot: u8,
+    tr_in_pa: u64,
+    tr_out_pa: u64,
 }
 
 impl UsbMassStorage {
@@ -57,13 +59,20 @@ impl UsbMassStorage {
         // 2. Configurar EP1 IN (bulk) e EP2 OUT (bulk)
         // 3. Alocar transfer rings para bulk
 
-        serial_println!("[USB-MSC] Mass storage detectado. Pendente: bulk endpoint config.");
-        Some(UsbMassStorage {
-            bulk_in: 1,  // EP1 IN
-            bulk_out: 2, // EP2 OUT
-            tag: 1,
-            max_lba: 0,
-        })
+        // Configurar bulk endpoints via xHCI
+        let slot = 2; // slot 1 = keyboard, slot 2 = MSC
+        let max_packet = 512; // USB high-speed
+        if let Some((tr_in, tr_out)) = unsafe { crate::xhci::configure_msc_endpoints(slot, max_packet) } {
+            serial_println!("[USB-MSC] Bulk endpoints OK. tr_in={:#x} tr_out={:#x}", tr_in, tr_out);
+            Some(UsbMassStorage {
+                bulk_in: 1, bulk_out: 2,
+                tag: 1, max_lba: 0,
+                slot, tr_in_pa: tr_in, tr_out_pa: tr_out,
+            })
+        } else {
+            serial_println!("[USB-MSC] Falha ao configurar bulk endpoints");
+            None
+        }
     }
 
     /// Envia comando SCSI e interpreta resposta
@@ -106,16 +115,33 @@ impl UsbMassStorage {
         true
     }
 
-    /// Stub: bulk write via xHCI (implementar com transfer ring)
-    unsafe fn bulk_write(&self, _data: &[u8]) {
-        // TODO: programar TRB normal no transfer ring do bulk OUT endpoint
-        //       e ring doorbell
+    /// Bulk write via xHCI
+    unsafe fn bulk_write(&self, data: &[u8]) {
+        let data_pa = match Self::alloc_phys_for(data.len()) { Some(p) => p, None => return };
+        let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let data_va = (data_pa + pmoff) as *mut u8;
+        core::ptr::copy_nonoverlapping(data.as_ptr(), data_va, data.len());
+        crate::xhci::bulk_transfer(self.slot, self.bulk_out, self.tr_out_pa, data_pa, data.len() as u32, 0);
     }
 
-    /// Stub: bulk read via xHCI
-    unsafe fn bulk_read(&self, _buf: &mut [u8]) {
-        // TODO: programar TRB normal no transfer ring do bulk IN endpoint
-        //       esperar completion no event ring
+    /// Bulk read via xHCI
+    unsafe fn bulk_read(&self, buf: &mut [u8]) {
+        let data_pa = match Self::alloc_phys_for(buf.len()) { Some(p) => p, None => return };
+        let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        if crate::xhci::bulk_transfer(self.slot, self.bulk_in, self.tr_in_pa, data_pa, buf.len() as u32, 1) {
+            let data_va = (data_pa + pmoff) as *const u8;
+            for i in 0..buf.len() {
+                buf[i] = data_va.add(i).read_volatile();
+            }
+        }
+    }
+
+    unsafe fn alloc_phys_for(size: usize) -> Option<u64> {
+        let pages = (size + 4095) / 4096;
+        let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
+        let a = g.as_mut()?;
+        let f = a.allocate_contiguous(pages)?;
+        Some(f.start_address().as_u64())
     }
 
     /// Le 1 setor (512 bytes) do SDHC via SCSI READ10

@@ -173,3 +173,91 @@ unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {
     let pa = f.start_address().as_u64();
     Some((pa, (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8))
 }
+
+// ── USB Mass Storage Bulk Transfers ────────────────────────────
+// Suporte a bulk IN/OUT via xHCI para leitura/escrita em SDHC/USB.
+
+/// Configura bulk endpoints (EP1 IN, EP2 OUT) para USB MSC
+pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(u64, u64)> {
+    let state = XHCI_STATE.lock();
+    let st = state.as_ref()?;
+
+    // Alocar transfer rings para bulk IN e OUT (1 pagina cada)
+    let tr_in = alloc_phys(1)?;
+    let tr_out = alloc_phys(1)?;
+    core::ptr::write_bytes(tr_in.1, 0, 4096);
+    core::ptr::write_bytes(tr_out.1, 0, 4096);
+
+    // Alocar device context + input control
+    let ctx = alloc_phys(2)?;
+    core::ptr::write_bytes(ctx.1, 0, 8192);
+    let dcbaa = st.dcbaa_va as *mut u64;
+    dcbaa.add(slot as usize).write_volatile(ctx.0);
+
+    // Input Control Context: A=1 (slot), add=2 (EP1 OUT + EP1 IN)
+    let icc = ctx.1 as *mut u32;
+    icc.add(0).write_volatile(0x03);     // A0=1, A1=1
+    icc.add(1).write_volatile(0x06);     // add EP1 OUT(2) + EP1 IN(3)
+
+    // Slot context
+    icc.add(2).write_volatile(0x20);     // context_entries=2
+    icc.add(4).write_volatile((slot as u32) << 24);
+
+    // EP1 OUT context (bulk, d2h=0)
+    let ep1_out = ctx.1.add(32 + 32) as *mut u32;
+    let tr_out_pa_lo = tr_out.0 as u32;
+    let tr_out_pa_hi = (tr_out.0 >> 32) as u32;
+    ep1_out.add(0).write_volatile(0x0002_0802); // EP type=bulk(2), max pkt, CERR=3
+    ep1_out.add(1).write_volatile(tr_out_pa_lo); // TR dequeue pointer low
+    ep1_out.add(2).write_volatile(tr_out_pa_hi | 0x01); // TR dequeue hi + DCS=1
+    ep1_out.add(3).write_volatile(0x0000_0000);
+    ((ctx.1.add(32 + 32 + 8)) as *mut u16).write_volatile(max_packet); // max packet size
+
+    // EP1 IN context (bulk, d2h=1)
+    let ep1_in = ctx.1.add(32 + 64) as *mut u32;
+    let tr_in_pa_lo = tr_in.0 as u32;
+    let tr_in_pa_hi = (tr_in.0 >> 32) as u32;
+    ep1_in.add(0).write_volatile(0x0006_0802); // EP type=bulk(2) | d2h=1(4)=6
+    ep1_in.add(1).write_volatile(tr_in_pa_lo);
+    ep1_in.add(2).write_volatile(tr_in_pa_hi | 0x01);
+    ep1_in.add(3).write_volatile(0x0000_0000);
+    ((ctx.1.add(32 + 64 + 8)) as *mut u16).write_volatile(max_packet);
+
+    // Doorbell 0 (control endpoint) para avaliar contexto
+    // (na pratica: xHC ja deve ter aceito via Address Device)
+    serial_println!("[XHCI] Bulk endpoints configurados. slot={} tr_in={:#x} tr_out={:#x}", slot, tr_in.0, tr_out.0);
+    Some((tr_in.0, tr_out.0))
+}
+
+/// Executa transferencia bulk: escreve Normal TRB no transfer ring e ring doorbell.
+/// direction: 0=OUT (host→device), 1=IN (device→host)
+pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, trb_pa: u64, data_pa: u64, len: u32, direction: u8) -> bool {
+    let state = XHCI_STATE.lock();
+    let st = match state.as_ref() { Some(s) => s, None => return false };
+
+    // TRB: ponteiro para dados + comprimento + flags
+    let trb_va = (trb_pa + st.pmoff) as *mut u32;
+    trb_va.add(0).write_volatile(data_pa as u32);
+    trb_va.add(1).write_volatile((data_pa >> 32) as u32);
+    trb_va.add(2).write_volatile(len | 0x0001_0000); // TD size=1, IOC=0
+    trb_va.add(3).write_volatile(0x0000_0001); // Normal TRB (type=1), cycle=1
+
+    // Ring doorbell
+    let db_off = st.db_off + (slot as u64 * 2 + endpoint as u64) * 4;
+    let db_val = if direction == 0 { 2u32 } else { 3u32 };
+    w32(st.base, db_off, db_val);
+
+    // Aguardar completion no event ring (spin ~1ms)
+    for _ in 0..1000000 {
+        let evt = st.er_va as *const u32;
+        let flags = (evt.add(2 + 3).read_volatile() >> 24) as u8; // event ring dequeue pointer
+        if flags & 0x20 != 0 { // Transfer event
+            let comp = evt.add(2 + 2).read_volatile() & 0xFF;
+            if comp == 0 { return true; } // Success
+            if comp != 0 { serial_println!("[XHCI] Bulk TRB error: completion={}", comp); return false; }
+        }
+        core::hint::spin_loop();
+    }
+    serial_println!("[XHCI] Bulk TRB timeout");
+    false
+}
