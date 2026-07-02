@@ -261,6 +261,289 @@ impl<'a> Fat32Reader<'a> {
     }
 }
 
+// ── FAT32 Writer ──────────────────────────────────────────────
+// Suporta escrita de arquivos no root, alocacao de clusters, atualizacao FAT.
+// Usado pelo boot_logger para persistir log de boot em disco.
+
+pub struct Fat32Writer<'a> {
+    reader: Fat32Reader<'a>,
+}
+
+impl<'a> Fat32Writer<'a> {
+    pub unsafe fn new(ata: &'a AtaDriver, part: &Partition) -> Option<Self> {
+        Fat32Reader::new(ata, part).map(|reader| Fat32Writer { reader })
+    }
+
+    /// Le entrada de diretorio pelo nome (formato 8.3 uppercase)
+    unsafe fn find_entry(&self, name: &str) -> Option<(u32, u32, u32)> {
+        let name_upper = name.to_ascii_uppercase();
+        let mut name_bytes = [0u8; 11];
+        let bytes = name_upper.as_bytes();
+        for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+
+        let mut cluster = self.reader.root_cluster;
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.reader.cluster_lba(cluster);
+            let cluster_bytes = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+            let mut buf = vec![0u8; cluster_bytes];
+            for i in 0..self.reader.sectors_per_cluster as u32 {
+                self.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 || first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x08 != 0 { continue; }
+                if &buf[entry_off..entry_off+11] == &name_bytes {
+                    let size = u32::from_le_bytes([buf[entry_off+28], buf[entry_off+29], buf[entry_off+30], buf[entry_off+31]]);
+                    let cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
+                    let cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
+                    let start_cluster = ((cluster_hi as u32) << 16) | cluster_lo as u32;
+                    return Some((entry_off as u32, lba, start_cluster));
+                }
+            }
+            cluster = self.reader.read_fat_entry(cluster);
+        }
+        None
+    }
+
+    /// Escreve entrada FAT para um cluster
+    unsafe fn write_fat_entry(&self, cluster: u32, value: u32) -> bool {
+        let fat_offset = cluster * 4;
+        let fat_sector = self.reader.fat_lba + fat_offset / self.reader.bytes_per_sector as u32;
+        let byte_off = (fat_offset % self.reader.bytes_per_sector as u32) as usize;
+        let mut sector = [0u8; 512];
+        if !self.reader.ata.read_sectors(fat_sector, &mut sector, 1) { return false; }
+        let val = value & 0x0FFF_FFFF;
+        sector[byte_off..byte_off+4].copy_from_slice(&val.to_le_bytes());
+        self.reader.ata.write_sectors(fat_sector, &sector, 1)
+    }
+
+    /// Varre a FAT por N clusters livres consecutivos
+    unsafe fn find_free_clusters(&self, count: u32) -> Option<Vec<u32>> {
+        let fat_sectors = self.reader.sectors_per_fat32;
+        let total_clusters = (fat_sectors as u64 * self.reader.bytes_per_sector as u64 / 4) as u32;
+        let mut result = Vec::new();
+        for c in 2..total_clusters {
+            if result.len() >= count as usize { break; }
+            let val = unsafe { self.reader.read_fat_entry(c) };
+            if val == 0 { result.push(c); } // FREE
+        }
+        if result.len() >= count as usize { Some(result) } else { None }
+    }
+
+    /// Cria entrada de diretorio 8.3 no root
+    unsafe fn create_entry(&self, name: &str, first_cluster: u32, file_size: u32) -> bool {
+        let mut name_bytes = [0x20u8; 11];
+        let bytes = name.to_ascii_uppercase().as_bytes().to_vec();
+        for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+
+        let mut cluster = self.reader.root_cluster;
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.reader.cluster_lba(cluster);
+            let cluster_bytes = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+            let mut buf = vec![0u8; cluster_bytes];
+            for i in 0..self.reader.sectors_per_cluster as u32 {
+                self.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 || first == 0xE5 {
+                    // Slot livre! Preencher entrada
+                    buf[entry_off..entry_off+11].copy_from_slice(&name_bytes);
+                    buf[entry_off+11] = 0x20; // attr: archive
+                    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u16;
+                    let time = ((now / 3600) as u16) << 11 | (((now % 3600) / 60) as u16) << 5 | (now as u16 % 60) / 2;
+                    let date = ((2026 - 1980) as u16) << 9 | (7 << 5) | 2; // 2026-07-02 fixo
+                    buf[entry_off+14..entry_off+16].copy_from_slice(&time.to_le_bytes());
+                    buf[entry_off+16..entry_off+18].copy_from_slice(&date.to_le_bytes());
+                    let cluster_lo = first_cluster as u16;
+                    let cluster_hi = (first_cluster >> 16) as u16;
+                    buf[entry_off+20..entry_off+22].copy_from_slice(&cluster_hi.to_le_bytes());
+                    buf[entry_off+26..entry_off+28].copy_from_slice(&cluster_lo.to_le_bytes());
+                    buf[entry_off+28..entry_off+32].copy_from_slice(&file_size.to_le_bytes());
+                    // Escrever cluster de diretorio de volta
+                    for i in 0..self.reader.sectors_per_cluster as u32 {
+                        let off = i as usize * 512;
+                        self.reader.ata.write_sectors(lba + i, &buf[off..off+512], 1);
+                    }
+                    return true;
+                }
+            }
+            cluster = self.reader.read_fat_entry(cluster);
+        }
+        false
+    }
+
+    /// Escreve dados em um cluster chain, alocando FAT entries
+    unsafe fn write_cluster_chain(&self, start_cluster: u32, data: &[u8]) -> bool {
+        let spc = self.reader.sectors_per_cluster as u32;
+        let bps = self.reader.bytes_per_sector as usize;
+        let cluster_size = spc as usize * bps;
+        let num_clusters = (data.len() + cluster_size - 1) / cluster_size;
+
+        let clusters = match self.find_free_clusters(num_clusters as u32) {
+            Some(c) => c,
+            None => { crate::serial_println!("[FAT32] Sem clusters livres!"); return false; }
+        };
+        let mut written = 0usize;
+        for (i, &c) in clusters.iter().enumerate() {
+            let lba = self.reader.cluster_lba(c);
+            let chunk = &data[written..written + cluster_size.min(data.len() - written)];
+            for s in 0..spc {
+                let off = s as usize * bps;
+                let end = off + bps;
+                let sector_data = if end <= chunk.len() { &chunk[off..end] } else { &chunk[off..] };
+                let mut sector = [0u8; 512];
+                sector[..sector_data.len()].copy_from_slice(sector_data);
+                self.reader.ata.write_sectors(lba + s, &sector, 1);
+            }
+            written += cluster_size;
+            // FAT entry: aponta para proximo cluster ou EOC
+            let next = if i + 1 < clusters.len() { clusters[i+1] } else { 0x0FFF_FFF8 };
+            if !self.write_fat_entry(c, next) { return false; }
+        }
+        true
+    }
+
+    /// Escreve arquivo completo no root (cria ou substitui)
+    pub unsafe fn write_file(&self, name: &str, data: &[u8]) -> bool {
+        let cluster_size = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+        let num_clusters = (data.len() + cluster_size - 1) / cluster_size;
+
+        // Se arquivo ja existe, reusa primeiro cluster
+        if let Some((_off, _lba, first_cluster)) = self.find_entry(name) {
+            // Sobrescrever: reutilizar cluster inicial, alocar mais se necessario
+            let existing_clusters = (0u32..).scan(first_cluster, |c, _| {
+                if *c < 2 || *c >= 0x0FFF_FFF8 { return None; }
+                let cur = *c;
+                *c = unsafe { self.reader.read_fat_entry(cur) };
+                Some(cur)
+            }).count();
+
+            if existing_clusters >= num_clusters {
+                // Clusters existentes sao suficientes — soh escrever dados
+                return self.write_cluster_chain(first_cluster, data);
+            }
+            // Precisamos liberar clusters antigos e alocar novos
+            // Simplificacao: usar write_cluster_chain com novos clusters
+            // (deixamos clusters antigos orfaos — GC em proximo boot)
+            // Marcar antigo cluster como free
+            let mut c = first_cluster;
+            while c >= 2 && c < 0x0FFF_FFF8 {
+                let next = unsafe { self.reader.read_fat_entry(c) };
+                unsafe { self.write_fat_entry(c, 0); }
+                c = next;
+            }
+            // Alocar novos e escrever
+            if !self.write_cluster_chain(first_cluster, data) { return false; }
+            // Atualizar tamanho na entrada
+            self.update_file_size(name, data.len() as u32)
+        } else {
+            // Arquivo novo: alocar clusters e criar entrada
+            let clusters = match self.find_free_clusters(num_clusters as u32) {
+                Some(c) => c,
+                None => { crate::serial_println!("[FAT32] Sem clusters livres!"); return false; }
+            };
+            if !self.write_cluster_chain(clusters[0], data) { return false; }
+            self.create_entry(name, clusters[0], data.len() as u32)
+        }
+    }
+
+    /// Atualiza tamanho do arquivo na entrada de diretorio
+    unsafe fn update_file_size(&self, name: &str, size: u32) -> bool {
+        let name_upper = name.to_ascii_uppercase();
+        let mut name_bytes = [0u8; 11];
+        let bytes = name_upper.as_bytes();
+        for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+
+        let mut cluster = self.reader.root_cluster;
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.reader.cluster_lba(cluster);
+            let cluster_bytes = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+            let mut buf = vec![0u8; cluster_bytes];
+            for i in 0..self.reader.sectors_per_cluster as u32 {
+                self.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 || first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x08 != 0 { continue; }
+                if &buf[entry_off..entry_off+11] == &name_bytes {
+                    buf[entry_off+28..entry_off+32].copy_from_slice(&size.to_le_bytes());
+                    for i in 0..self.reader.sectors_per_cluster as u32 {
+                        let off = i as usize * 512;
+                        self.reader.ata.write_sectors(lba + i, &buf[off..off+512], 1);
+                    }
+                    return true;
+                }
+            }
+            cluster = self.reader.read_fat_entry(cluster);
+        }
+        false
+    }
+}
+
+// ── Boot Logger ────────────────────────────────────────────────
+// Persiste log de boot na particao FAT32 para debug pos-crash.
+
+/// Escreve mensagem no arquivo de log do boot atual.
+/// Cria arquivo com nome baseado no tick de boot: B<TICK>.LOG
+pub unsafe fn write_boot_log(ata: &AtaDriver, part: &Partition, msg: &str) -> bool {
+    let writer = match Fat32Writer::new(ata, part) { Some(w) => w, None => return false };
+
+    // Nome do arquivo: B<TICK7>.LOG (8.3, tick em hex, 7 chars)
+    let boot_tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    let mut name = alloc::format!("B{:07X}.LOG", boot_tick);
+    // So 8.3: truncar para 11 chars
+    name.truncate(11);
+
+    // Formatar mensagem com timestamp
+    let tick_sec = boot_tick * 55 / 1000;
+    let log_line = alloc::format!("[T+{}.{:03}] {}\n", tick_sec / 1000, tick_sec % 1000, msg);
+
+    if let Some((_, _, _)) = writer.find_entry(&name) {
+        // Arquivo existe: append
+        if let Some((_, _, first_cluster)) = writer.find_entry(&name) {
+            let old_size = {
+                // Ler tamanho atual
+                let mut cluster = writer.reader.root_cluster;
+                let name_upper = name.to_ascii_uppercase();
+                let mut name_bytes = [0u8; 11];
+                let bytes = name_upper.as_bytes();
+                for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+                let mut size = 0u32;
+                while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+                    let lba = writer.reader.cluster_lba(cluster);
+                    let cluster_bytes = writer.reader.sectors_per_cluster as usize * writer.reader.bytes_per_sector as usize;
+                    let mut buf = vec![0u8; cluster_bytes];
+                    for i in 0..writer.reader.sectors_per_cluster as u32 {
+                        writer.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+                    }
+                    for entry_off in (0..buf.len()).step_by(32) {
+                        if &buf[entry_off..entry_off+11] == &name_bytes {
+                            size = u32::from_le_bytes([buf[entry_off+28], buf[entry_off+29], buf[entry_off+30], buf[entry_off+31]]);
+                            break;
+                        }
+                    }
+                    cluster = writer.reader.read_fat_entry(cluster);
+                }
+                size as usize
+            };
+            // Ler dados existentes + novos
+            if let Some(existing) = writer.reader.read_file(&name) {
+                let mut new_data = existing;
+                new_data.extend_from_slice(log_line.as_bytes());
+                writer.write_file(&name, &new_data)
+            } else {
+                writer.write_file(&name, log_line.as_bytes())
+            }
+        } else { false }
+    } else {
+        // Criar arquivo novo
+        writer.write_file(&name, log_line.as_bytes())
+    }
+}
+
 pub struct Fat12Writer<'a> {
     ata: &'a AtaDriver, pub lba_start: u32, bpb: FatBpb,
 }

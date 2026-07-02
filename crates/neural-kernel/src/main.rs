@@ -86,6 +86,7 @@ mod verify;
 mod hal;
 mod bench;
 mod gpu;
+mod boot_logger;
 
 use lazy_static::lazy_static;
 
@@ -521,6 +522,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
     crate::serial_println!("[DBG9] init done. Starting agents...");
 
+    // Boot log: init after ATA probe
+    {
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat::read_mbr(ata);
+            crate::boot_logger::init(ata, &parts);
+            drop(parts);
+        }
+        drop(ata_guard);
+        crate::boot_logger::log("BOOT: ATA+FAT init OK");
+    }
+
     // Init VFS + mounts
     {
         use crate::vfs::VfsRegistry;
@@ -532,21 +545,26 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let vfs_guard = crate::vfs::VFS.lock();
     let mcount = vfs_guard.as_ref().map_or(0, |v| v.mount_table().len());
     crate::serial_println!("[VFS] Init OK. {} mounts.", mcount);
+    crate::boot_logger::log(&alloc::format!("BOOT: VFS {} mounts", mcount));
 
     // Init Filesystem Agents
     crate::fs::init_fs_agents();
+    crate::boot_logger::log("BOOT: FS agents OK");
 
     // Detect + mount disk partitions (SDHC, USB, HD)
     if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
         unsafe { crate::fat::mount_partitions(ata); }
     }
+    crate::boot_logger::log("BOOT: Partitions mounted");
 
     // Init Compositor FIRST (apps precisam de janelas)
     *crate::display::compositor::COMPOSITOR.lock() = Some(crate::display::compositor::Compositor::new());
     crate::serial_println!("[COMPOSITOR] Inicializado.");
+    crate::boot_logger::log("BOOT: Compositor OK");
 
     // Init Desktop Apps (criam janelas no compositor)
     crate::apps::init_apps();
+    crate::boot_logger::log("BOOT: Desktop apps OK");
 
     // GPU: detecta hardware e inicializa backend
     unsafe {
@@ -558,6 +576,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             crate::gpu::backend::init_backend(&gpus);
             serial_println!("[GPU] {} GPU(s) detectadas. Backend: {}",
                 gpus.len(), crate::gpu::backend::gpu_status());
+            crate::boot_logger::log(&alloc::format!("BOOT: GPU {} backend", gpus.len()));
         } else {
             serial_println!("[GPU] Nenhuma GPU detectada.");
         }
@@ -615,6 +634,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
+    crate::boot_logger::log(&alloc::format!("BOOT: {} agents registered", registry.agents.len()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(
         || { x86_64::instructions::hlt(); },
