@@ -87,6 +87,7 @@ mod hal;
 mod bench;
 mod gpu;
 mod boot_logger;
+mod boot_log_agent;
 
 use lazy_static::lazy_static;
 
@@ -634,6 +635,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
+    registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
     crate::boot_logger::log(&alloc::format!("BOOT: {} agents registered", registry.agents.len()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(

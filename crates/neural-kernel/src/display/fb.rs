@@ -38,11 +38,30 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             bootloader_api::info::PixelFormat::Rgb => 3u32,
             _ => 4u32,
         };
-        let fb_stride = info.stride as u32 * bpp;
+        let mut fb_stride = info.stride as u32 * bpp;
+        let mut fb_width = info.width as u32;
+        let mut fb_height = info.height as u32;
+
+        // VGA FIX: validar resolucao e stride para Intel 6xx
+        // Resolucoes nao padrao (ex: 1270) causam "xuvisco" por stride mal alinhado
+        if fb_width % 8 != 0 {
+            let corrected = fb_width + (8 - fb_width % 8);
+            crate::serial_println!("[DISPLAY] VGA FIX: width {} nao multiplo de 8 → {} (stride {}→{})",
+                fb_width, corrected, fb_stride, corrected as u32 * bpp);
+            fb_width = corrected;
+            fb_stride = corrected * bpp;
+        }
+        // Stride deve ser multiplo de 64 bytes para Intel display engine
+        if fb_stride % 64 != 0 {
+            let old_stride = fb_stride;
+            fb_stride = (fb_stride + 63) & !63;
+            crate::serial_println!("[DISPLAY] VGA FIX: stride {} → {} (alinhado 64 bytes)", old_stride, fb_stride);
+        }
+
         let gpu = GpuDevice {
             fb_addr: fb.buffer().as_ptr() as u64,
-            fb_width: info.width as u32,
-            fb_height: info.height as u32,
+            fb_width,
+            fb_height,
             fb_stride,
             fb_bpp: bpp,
             notify_addr: 0,

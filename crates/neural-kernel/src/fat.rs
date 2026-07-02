@@ -120,7 +120,7 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
 // FAT32 usa 28-bit clusters, root dir como cluster chain, BPB extendido.
 
 pub struct Fat32Reader<'a> {
-    ata: &'a AtaDriver,
+    pub ata: &'a AtaDriver,
     pub lba_start: u32,
     pub sectors_per_cluster: u8,
     pub bytes_per_sector: u16,
@@ -159,8 +159,11 @@ impl<'a> Fat32Reader<'a> {
             reserved_sectors, fat_count, sectors_per_fat32, root_cluster, fat_lba, data_lba })
     }
 
+    /// Retorna o cluster raiz do diretorio FAT32 (pub para boot_log_agent)
+    pub fn get_root_cluster(&self) -> u32 { self.root_cluster }
+
     /// Le o valor da FAT para um cluster (cada entrada tem 28 bits)
-    unsafe fn read_fat_entry(&self, cluster: u32) -> u32 {
+    pub unsafe fn read_fat_entry(&self, cluster: u32) -> u32 {
         let fat_offset = cluster * 4; // cada entrada = 4 bytes
         let fat_sector = self.fat_lba + fat_offset / self.bytes_per_sector as u32;
         let mut sector = [0u8; 512];
@@ -174,7 +177,7 @@ impl<'a> Fat32Reader<'a> {
     }
 
     /// LBA do primeiro setor de um cluster
-    fn cluster_lba(&self, cluster: u32) -> u32 {
+    pub fn cluster_lba(&self, cluster: u32) -> u32 {
         self.data_lba + (cluster - 2) as u32 * self.sectors_per_cluster as u32
     }
 

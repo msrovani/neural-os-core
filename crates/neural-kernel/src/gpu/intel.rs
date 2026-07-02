@@ -123,9 +123,11 @@ impl IntelRing {
         self.wait_idle(1000000)
     }
 
-    /// Matmul via GPU (stub — shader GEN em GEN assembly)
-    pub fn gpu_matmul(&mut self, _a: &crate::tensor::Tensor, _b: &crate::tensor::Tensor) -> Option<crate::tensor::Tensor> {
-        None
+    /// Matmul via GPU: GEN compute shader (producao futura — placeholder CPU).
+    pub fn gpu_matmul(&mut self, a: &crate::tensor::Tensor, b: &crate::tensor::Tensor) -> Option<crate::tensor::Tensor> {
+        // Por enquanto: fallback CPU matmul, infra GPU preparada
+        crate::serial_println!("[INTEL-MATMUL] GEN compute stub — usando fallback CPU");
+        a.matmul(b)
     }
 
     /// Blitter: copia de VRAM para framebuffer (usado pelo Desktop Cube)
