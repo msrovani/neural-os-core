@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.75.6 🏆
-#   TPM TIS DRIVER + PARTITION MASK 0x1C + FAT32-ONLY + DISKINTELLIGENCEAGENT + SMART + NVMe + CACHE
-#   131 arquivos Rust, ~15.100 LOC, 0 erros
+#   PLANO DIRETOR — neural-os-core v0.76.1 🏆
+#   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + AIOS ROADMAP
+#   132 arquivos Rust, ~15.500 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
