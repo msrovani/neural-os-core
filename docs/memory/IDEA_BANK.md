@@ -470,6 +470,16 @@ Nada é descartado sem registro. Ideias podem ser:
 | 311f | **On-demand training** — "quero pilotar helicóptero" → manual → .bitnet → skill | ⏳ Pós-MVP | v0.80+ | Pipeline treino |
 | 311g | **Generator 1.5B (375MB)** — tool-use: expert classifica, generator explica | 🟡 Sprint 77 | Sprint 77 | GGUF loader |
 
+### 1.27. TrainingAgent — On-Device + GPU Learning (IDEA #312)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 312a | **GPU detection for training** — MemoryAgent already detects GPU + VRAM. If VRAM > 4GB → full training viable. If < 4GB → fine-tuning only | ✅ v0.75.1 | v0.75.1 | GPU detect exists |
+| 312b | **Fine-tuning (CPU, ADD/SUB kernel)** — 100 exemplos, 50 iterações, ~2 segundos. BitNet ternário usa só ADD/SUB, sem FPU. On-device sempre disponível | 🟡 Sprint 77 | Sprint 77 | ~300 LOC kernel |
+| 312c | **Transfer learning (CPU/GPU)** — 1000 exemplos, adapta modelo existente para novo domínio. Ex: disk_diag → net_diag (adapta padrões SMART para padrões de rede) | 🟡 Sprint 78 | Sprint 78 | ~200 LOC |
+| 312d | **Full training (GPU, internet)** — 100K+ exemplos. Equivalente ao gen_micro_model.py rodando como agente. Pipeline: fetch data via HTTP → train PyTorch → export .bitnet → load no kernel. Só viável com B-01 + GPU ≥ 4GB VRAM | ⏳ Pós-MVP | v0.81+ | Depende de B-01 (rede) |
+| 312e | **TrainingAgent** — agente que detecta GPU, escolhe modo (fine-tune/transfer/full), coleta dados do FS ou internet, executa treino, registra modelo no Trinity Hub | 🟡 Sprint 78 | Sprint 78 | ~500 LOC |
+| 312f | **Federated learning** — múltiplos AIOS compartilham gradientes (não dados). Agregador central (Hermes Master) combina updates → modelo global melhor | ⏳ Pós-MVP | v0.85+ | Depende de B-01 + MCP |
+
 ### 1.29. Bugfix Estrutural (Sprint 45) — H3 a H12
 
 | # | Item | Destino | Target | Motivação |
@@ -1269,3 +1279,4 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-03 | **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras (ATA, USB, NVMe), 10+ FS probes (FAT32 a ReFS), GPT, SED/OPAL, S.M.A.R.T., I/O Scheduler, ARC cache 1MB, tier migration MHI. ~2.400 LOC. 0 erros. | Dev + IDA IA |
 | 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
 | 2026-07-03 | **ADR-0031: AIOS Evolution Research** — análise completa (self-update A/B dual-slot, WASM wasmi runtime + WASI mapping, J.A.R.V.I.S. conversational layer, hybrid kernel/WASM agent architecture). Viability scores, LOC estimates, dependency chain, recommended sprint order. `docs/architecture/0031-aios-self-update-wasm-jarvis.md` | Dev + IDA IA |
+| 2026-07-03 | **312** | **TrainingAgent — On-Device + GPU Learning** — 3 modos: Fine-tuning (CPU ADD/SUB, 100ex, ~2s), Transfer (1000ex, adapta dominio), Full (GPU+internet, 100K+ex). Fontes: FS local, HTTP (B-01), Federated. Pipeline: GPU detect → collect → train → .bitnet → Trinity Hub register. | 🟡 Sprint 78 | Sprint 78 | ~500 LOC + B-01 |
