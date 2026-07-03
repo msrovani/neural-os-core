@@ -565,6 +565,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
     registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
+    registry.register(Box::new(agents::log_analyst_agent::LogAnalystAgent::new()));
     
     // DiagnosticSkill registrada para SystemAgent executar
     // (substitui os testes inline Box/Vec/Tensor/SiLU)

@@ -25,6 +25,7 @@ pub fn init_standard_mounts() {
         v.mount("/proc", "procfs");
         v.mount("/system", "sysfs");
         v.mount("/inference", "inference");
+        v.mount("/logs", "logfs");
     }
 }
 

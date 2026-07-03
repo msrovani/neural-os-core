@@ -94,6 +94,10 @@ impl SkillRegistry {
         skill.execute(payload)
     }
 
+    pub fn skill_count(&self) -> usize {
+        self.skills.len()
+    }
+
     pub fn list_skills(&self) -> Vec<(String, ToolPolicy)> {
         let mut result = Vec::new();
         for (name, skill) in &self.skills {

@@ -2,6 +2,7 @@
 //! Cada struct implementa agent_core::Agent. Substituem as 7 async fn legacy.
 
 pub mod mouse_agent;
+pub mod log_analyst_agent;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -323,6 +324,14 @@ pub struct HermesAgent {
     boot_greeted: bool,
     react_phase: crate::hermes::ReActPhase,
     sdd_counter: u64,
+    consciousness: crate::cortex::Consciousness,
+    sil: crate::cortex::SelfImprovementLoop,
+    con_skills_ok: u64,
+    con_skills_total: u64,
+    con_errors: u64,
+    con_errors_resolved: u64,
+    con_anomaly_count: u64,
+    con_memories_total: usize,
 }
 
 impl HermesAgent {
@@ -340,6 +349,14 @@ impl HermesAgent {
             boot_greeted: false,
             react_phase: crate::hermes::ReActPhase::Observe,
             sdd_counter: 0,
+            consciousness: crate::cortex::Consciousness::new(),
+            sil: crate::cortex::SelfImprovementLoop::new(),
+            con_skills_ok: 0,
+            con_skills_total: 0,
+            con_errors: 0,
+            con_errors_resolved: 0,
+            con_anomaly_count: 0,
+            con_memories_total: 0,
         }
     }
 
@@ -399,6 +416,39 @@ impl Agent for HermesAgent {
         // #190: Avança no ciclo ReAct
         self.react_phase = self.react_phase.next();
         self.log_phase(self.react_phase, "ciclo contínuo de cognição");
+
+        // Atualiza métricas de consciência
+        let skills_total = SKILL_REGISTRY.lock().skill_count() as u64;
+        self.consciousness.tick(
+            _tick,
+            self.con_skills_ok, skills_total,
+            0, 0, // agents_active/total sem acesso global
+            self.con_errors, self.con_errors_resolved,
+            self.con_memories_total, self.con_anomaly_count,
+            self.boot_greeted,
+        );
+        if !self.consciousness.critical_metrics().is_empty() {
+            serial_println!("[HERMES] Metricas criticas: {:?}",
+                self.consciousness.critical_metrics());
+            let _ = log_analyst_agent::write_log("hermes",
+                &alloc::format!("Metricas criticas: {:?}", self.consciousness.critical_metrics()));
+        }
+
+        // Self-Improvement Loop: periodicamente inicia ciclo
+        if !self.sil.is_active() && _tick % 1000 == 0 {
+            self.sil.start(_tick);
+        }
+        if self.sil.needs_research() {
+            log_analyst_agent::write_log("sil", "Research phase");
+            self.sil.advance(true);
+        }
+
+        // Consciousness report periodico a cada 2000 ticks
+        if _tick > 0 && _tick % 2000 == 0 {
+            let report = self.consciousness.report();
+            serial_println!("{}", report);
+            log_analyst_agent::write_log("consciousness", &report);
+        }
 
         // Check LLM response first (if awaiting)
         let mut responded = String::new();

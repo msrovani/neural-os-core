@@ -565,6 +565,234 @@ pub enum Intent {
     Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat,
 }
 
+// ── M2: Consciência — Métricas Cognitivas ─────────────────────
+// 10 métricas que medem a saúde do sistema nervoso do AIOS.
+// Cada metrica tem valor 0-10000, target, e evolucao percentual.
+// CortexAgent atualiza a cada N ticks. Se alguma cai abaixo do
+// threshold, HermesAgent e informado para auto-recuperacao.
+
+#[derive(Debug, Clone, Copy)]
+pub struct CognitiveMetric {
+    pub value: u16,         // 0..10000
+    pub previous: u16,
+    pub target: u16,        // valor ideal (ex: 8000 = 80%)
+    pub evolution: i16,     // percentual * 100 (ex: +250 = +2.5%)
+}
+
+impl CognitiveMetric {
+    pub const fn new(target: u16) -> Self {
+        CognitiveMetric { value: 5000, previous: 5000, target, evolution: 0 }
+    }
+
+    pub fn update(&mut self, new_value: u16) {
+        self.previous = self.value;
+        self.value = new_value.min(10000);
+        if self.previous > 0 {
+            let diff = (self.value as i32 - self.previous as i32) * 10000 / self.previous as i32;
+            self.evolution = diff as i16;
+        }
+    }
+
+    pub fn health(&self) -> f32 {
+        self.value as f32 / self.target as f32
+    }
+}
+
+pub struct Consciousness {
+    pub metrics: [CognitiveMetric; 10],
+    pub tick_interval: u64,
+    pub last_tick: u64,
+}
+
+impl Consciousness {
+    pub fn new() -> Self {
+        Consciousness {
+            metrics: [
+                CognitiveMetric::new(9000), // 0: cognitive_coherence
+                CognitiveMetric::new(7000), // 1: learning_rate
+                CognitiveMetric::new(8500), // 2: error_resolution_rate
+                CognitiveMetric::new(6000), // 3: response_latency (invertido: menor=melhor)
+                CognitiveMetric::new(8000), // 4: tool_utilization
+                CognitiveMetric::new(7500), // 5: memory_cohesion
+                CognitiveMetric::new(9000), // 6: anomaly_detection_rate
+                CognitiveMetric::new(9500), // 7: boot_stability
+                CognitiveMetric::new(8500), // 8: skill_success_rate
+                CognitiveMetric::new(9000), // 9: agent_health
+            ],
+            tick_interval: 200,
+            last_tick: 0,
+        }
+    }
+
+    /// Atualiza metricas baseadas em dados do sistema.
+    /// Chamado pelo CortexAgent a cada tick_interval ticks.
+    pub fn tick(&mut self, tick: u64, skills_ok: u64, skills_total: u64,
+                agents_active: usize, agents_total: usize,
+                errors_recent: u64, errors_resolved: u64,
+                memories_total: usize, anomaly_count: u64, boot_ok: bool) {
+        if tick - self.last_tick < self.tick_interval { return; }
+        self.last_tick = tick;
+
+        // 0: cognitive_coherence — consistencia das decisoes do Cortex
+        // Quanto menos mudancas de intent entre ticks similares, melhor
+        // (medido externamente pelo HermesAgent, aqui usamos proxy)
+        // 1: learning_rate — novos padroes por janela
+        // Proxy: skills_total crescendo
+        let learning = if skills_total > 0 { skills_ok * 10000 / skills_total } else { 5000 };
+        self.metrics[1].update(learning as u16);
+
+        // 2: error_resolution_rate — auto-recuperacao
+        if errors_recent > 0 {
+            let rate = errors_resolved * 10000 / errors_recent;
+            self.metrics[2].update(rate as u16);
+        }
+
+        // 3: response_latency — ticks entre intent e resposta
+        // Medido pelo HermesAgent externamente, proxy aqui
+
+        // 4: tool_utilization — diversidade de skills usadas
+        let util = if skills_total > 0 { skills_ok.min(skills_total as u64) as u16 } else { 0 };
+        self.metrics[4].update(util.min(10000));
+
+        // 5: memory_cohesion — quantas memorias tem conexoes
+        // Proxy: quanto mais memorias, mais coeso (ate um limite)
+        let cohesion = (memories_total.min(100) as u16) * 100;
+        self.metrics[5].update(cohesion);
+
+        // 6: anomaly_detection_rate — seguranca
+        // Proxy: anomalias detectadas (invertido: muitas anomalias = bom)
+        let anomaly_val = if anomaly_count > 100 { 10000u16 } else { (anomaly_count as u16) * 100 };
+        self.metrics[6].update(anomaly_val);
+
+        // 7: boot_stability — fases de boot completas
+        self.metrics[7].update(if boot_ok { 10000 } else { 1000 });
+
+        // 8: skill_success_rate — skills que completam sem erro
+        if skills_total > 0 {
+            let rate = skills_ok * 10000 / skills_total;
+            self.metrics[8].update(rate as u16);
+        }
+
+        // 9: agent_health — agentes ativos vs total
+        if agents_total > 0 {
+            let health = agents_active * 10000 / agents_total;
+            self.metrics[9].update(health as u16);
+        }
+    }
+
+    /// Retorna metricas que estao abaixo do threshold (saude < 0.5)
+    pub fn critical_metrics(&self) -> Vec<usize> {
+        let mut critical = Vec::new();
+        for (i, m) in self.metrics.iter().enumerate() {
+            if m.health() < 0.5 {
+                critical.push(i);
+            }
+        }
+        critical
+    }
+
+    pub fn report(&self) -> alloc::string::String {
+        use alloc::format;
+        let names = [
+            "coherence", "learning", "error_resolution", "latency",
+            "tool_util", "memory", "anomaly", "boot", "skill_success", "agent_health",
+        ];
+        let mut r = alloc::string::String::from("[CONSCIOUSNESS] Metrics:\n");
+        for (i, m) in self.metrics.iter().enumerate() {
+            let pct = m.value as f32 / 100.0;
+            let evo = if m.evolution >= 0 {
+                format!("+{:.2}%", m.evolution as f32 / 100.0)
+            } else {
+                format!("{:.2}%", m.evolution as f32 / 100.0)
+            };
+            r.push_str(&format!("  {}: {:.1}% ({}) target={}%\n",
+                names[i], pct, evo, m.target as f32 / 100.0));
+        }
+        r
+    }
+}
+
+// ── M3: Self-Improvement Loop ──────────────────────────────────
+// Ciclo ativo de auto-melhoria do HermesAgent.
+// Depois do ReAct::Learn, se detecta oportunidade, inicia:
+// Research → Create → Improve → Verify
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SilPhase {
+    Idle,
+    Research,
+    Create,
+    Improve,
+    Verify,
+}
+
+pub struct SelfImprovementLoop {
+    pub phase: SilPhase,
+    pub retries: u8,
+    pub max_retries: u8,
+    pub cooldown_ticks: u64,
+    pub last_run: u64,
+    pub improvements: u32,
+}
+
+impl SelfImprovementLoop {
+    pub fn new() -> Self {
+        SelfImprovementLoop {
+            phase: SilPhase::Idle,
+            retries: 0,
+            max_retries: 3,
+            cooldown_ticks: 500,
+            last_run: 0,
+            improvements: 0,
+        }
+    }
+
+    /// Inicia o ciclo. Retorna true se comecou.
+    pub fn start(&mut self, tick: u64) -> bool {
+        if self.phase != SilPhase::Idle { return false; }
+        if tick - self.last_run < self.cooldown_ticks { return false; }
+        self.phase = SilPhase::Research;
+        self.retries = 0;
+        true
+    }
+
+    /// Avanca o ciclo. Retorna true se terminou.
+    /// `research_found`: o Cortex identificou padrao de melhoria?
+    /// `create_success`: a nova skill foi criada?
+    /// `improve_success`: a melhoria foi aplicada?
+    /// `verify_success`: a verificacao passou?
+    pub fn advance(&mut self, success: bool) -> bool {
+        match self.phase {
+            SilPhase::Research if success => { self.phase = SilPhase::Create; false }
+            SilPhase::Research => { self.phase = SilPhase::Idle; true } // nada a melhorar
+            SilPhase::Create if success => { self.phase = SilPhase::Improve; false }
+            SilPhase::Create => { self.phase = SilPhase::Idle; true } // falhou criar
+            SilPhase::Improve if success => { self.phase = SilPhase::Verify; false }
+            SilPhase::Improve => { self.retries += 1;
+                if self.retries >= self.max_retries { self.phase = SilPhase::Idle; true }
+                else { self.phase = SilPhase::Create; false }
+            }
+            SilPhase::Verify if success => {
+                self.improvements += 1;
+                self.phase = SilPhase::Idle;
+                self.last_run = 0; // reseta cooldown
+                true
+            }
+            SilPhase::Verify => { self.phase = SilPhase::Idle; true }
+            SilPhase::Idle => true,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.phase != SilPhase::Idle
+    }
+
+    pub fn needs_research(&self) -> bool { self.phase == SilPhase::Research }
+    pub fn needs_create(&self) -> bool { self.phase == SilPhase::Create }
+    pub fn needs_improve(&self) -> bool { self.phase == SilPhase::Improve }
+    pub fn needs_verify(&self) -> bool { self.phase == SilPhase::Verify }
+}
+
 impl Intent {
     pub fn skill_name(&self) -> &'static str {
         match self {
