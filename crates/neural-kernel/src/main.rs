@@ -91,6 +91,7 @@ mod boot_log_agent;
 mod shutdown;
 mod tpm;
 mod disk_agent;
+mod memory_agent;
 
 use lazy_static::lazy_static;
 
@@ -551,6 +552,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::MemoryAgent::new()));
     registry.register(Box::new(agents::BootSelfHealAgent));
     registry.register(Box::new(agents::BootTrustAgent));
+    registry.register(Box::new(crate::memory_agent::MemoryAgent::new()));
     registry.register(Box::new(agents::NetDriverAgent));
     registry.register(Box::new(agents::UsbDriverAgent));
     registry.register(Box::new(agents::GpuDriverAgent));

@@ -8,6 +8,8 @@ pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
 pub const TOPIC_LLM_RESPONSE: &str = "LLM_RESPONSE";
 pub const TOPIC_KERNEL_ERROR: &str = "KERNEL_ERROR";
 pub const TOPIC_MODEL_UPDATE: &str = "MODEL_UPDATE";
+
+pub static GLOBAL_MODEL_PARAMS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 use crate::nn::{silu, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 

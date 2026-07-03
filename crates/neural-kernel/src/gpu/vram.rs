@@ -5,7 +5,7 @@ use alloc::collections::BTreeMap;
 use crate::gpu::detect::GpuInfo;
 use crate::serial_println;
 
-static VRAM_STATE: spin::Mutex<Option<GpuVram>> = spin::Mutex::new(None);
+pub(crate) static VRAM_STATE: spin::Mutex<Option<GpuVram>> = spin::Mutex::new(None);
 
 pub struct GpuVram {
     pub base: u64,
