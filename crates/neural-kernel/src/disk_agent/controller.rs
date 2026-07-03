@@ -12,6 +12,7 @@ pub trait StorageController: Send {
     fn probe_disks(&mut self) -> Vec<RawDisk>;
     fn read_blocks(&self, disk: u8, lba: u64, buf: &mut [u8], blocks: usize) -> bool;
     fn write_blocks(&self, disk: u8, lba: u64, data: &[u8], blocks: usize) -> bool;
+    fn read_smart(&self, _disk: u8) -> Option<SmartData> { None }
     fn measure_bandwidth(&self, disk: u8) -> u32 {
         let mut buf = alloc::vec![0u8; 512 * 256];
         let start = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
@@ -65,6 +66,7 @@ impl StorageController for AtaCtrl {
             rotational: true,
             partitions: Vec::new(),
             volume_groups: Vec::new(),
+            smart: None,
         };
         self.disks.push(raw);
         self.disks.clone()
@@ -76,5 +78,135 @@ impl StorageController for AtaCtrl {
 
     fn write_blocks(&self, _disk: u8, lba: u64, data: &[u8], blocks: usize) -> bool {
         unsafe { self.ata.write_sectors(lba as u32, data, blocks as u8) }
+    }
+
+    fn read_smart(&self, _disk: u8) -> Option<SmartData> {
+        unsafe { self.ata_read_smart() }
+    }
+}
+
+impl AtaCtrl {
+    unsafe fn ata_enable_smart(&self) -> bool {
+        let io = self.ata.io_base;
+        let status = |io: u16| -> u8 { core::arch::asm!("in al, dx", out("al") _, in("dx") io + 7, options(nostack, preserves_flags, readonly)); 0 };
+        let wait = |io: u16| -> bool {
+            for _ in 0..10000 {
+                let s: u8; core::arch::asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+                if s & 0x80 == 0 { return true; }
+                core::hint::spin_loop();
+            }
+            false
+        };
+        if !wait(io) { return false; }
+        core::arch::asm!("out dx, al", in("dx") io + 6, in("al") 0xE0u8, options(nostack, preserves_flags)); // master
+        core::arch::asm!("out dx, al", in("dx") io + 1, in("al") 0xD8u8, options(nostack, preserves_flags)); // SMART ENABLE
+        core::arch::asm!("out dx, al", in("dx") io + 2, in("al") 0x01u8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") io + 3, in("al") 0x4Fu8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") io + 4, in("al") 0xC2u8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") io + 5, in("al") 0x00u8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") io + 7, in("al") 0xB0u8, options(nostack, preserves_flags)); // SMART CMD
+        for _ in 0..10000 {
+            let s: u8; core::arch::asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+            if s & 0x80 == 0 { let _ = s; break; }
+            if s & 0x01 != 0 { return false; } // error
+            core::hint::spin_loop();
+        }
+        true
+    }
+
+    unsafe fn ata_read_smart(&self) -> Option<SmartData> {
+        use core::arch::asm;
+        let io = self.ata.io_base;
+        let wait_not_busy = || -> bool {
+            for _ in 0..100000 {
+                let s: u8; asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+                if s & 0x80 == 0 { return true; }
+                core::hint::spin_loop();
+            }
+            false
+        };
+        if !wait_not_busy() { return None; }
+
+        // Select master
+        asm!("out dx, al", in("dx") io + 6, in("al") 0xE0u8, options(nostack, preserves_flags));
+
+        // Try ENABLE SMART first (some drives need this once per power cycle)
+        asm!("out dx, al", in("dx") io + 1, in("al") 0xD8u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 2, in("al") 0x01u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 3, in("al") 0x4Fu8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 4, in("al") 0xC2u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 5, in("al") 0x00u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 7, in("al") 0xB0u8, options(nostack, preserves_flags));
+        if !wait_not_busy() { return None; }
+
+        // Check for error (error bit might be set for unsupported SMART on some QEMU configs)
+        let st: u8; asm!("in al, dx", out("al") st, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+        if st & 0x01 != 0 {
+            // SMART not supported or disabled — not an error, just no data
+            return None;
+        }
+
+        // SMART READ DATA (0xD0)
+        if !wait_not_busy() { return None; }
+        asm!("out dx, al", in("dx") io + 1, in("al") 0xD0u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 2, in("al") 0x01u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 3, in("al") 0x4Fu8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 4, in("al") 0xC2u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 5, in("al") 0x00u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 7, in("al") 0xB0u8, options(nostack, preserves_flags));
+
+        // Wait DRQ
+        for _ in 0..100000 {
+            let s: u8; asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+            if s & 0x08 != 0 { break; } // DRQ
+            if s & 0x01 != 0 { return None; } // error
+            if s & 0x80 == 0 {} // not busy
+            core::hint::spin_loop();
+        }
+
+        let mut data = [0u16; 256];
+        for word in &mut data {
+            asm!("in ax, dx", out("ax") *word, in("dx") io, options(nostack, preserves_flags));
+        }
+
+        // Parse SMART data
+        let bytes: &[u8; 512] = core::mem::transmute(&data);
+
+        let revision = u16::from_be_bytes([bytes[0], bytes[1]]);
+        if revision == 0 || revision > 16 { return None; } // invalid revision
+
+        let mut temp_c = 0u16;
+        let mut power_on_hours = 0u32;
+        let mut realloc_sectors = 0u32;
+        let mut pending_sectors = 0u32;
+        let mut crc_errors = 0u32;
+        let mut wear_level = None;
+
+        // Parse 30 vendor-specific attributes (each 12 bytes starting at offset 2)
+        for i in 0..30 {
+            let off = 2 + i * 12;
+            let attr_id = bytes[off];
+            if attr_id == 0 { continue; }
+            let raw = u64::from_le_bytes([
+                bytes[off + 5], bytes[off + 6], bytes[off + 7],
+                bytes[off + 8], bytes[off + 9], bytes[off + 10], 0, 0,
+            ]);
+            let current_val = bytes[off + 3];
+
+            match attr_id {
+                0x05 => realloc_sectors = raw as u32,
+                0x09 => power_on_hours = raw as u32,
+                0xC2 => temp_c = raw as u16,
+                0xC5 => pending_sectors = raw as u32,
+                0xC7 => crc_errors = raw as u32,
+                0xE8 => wear_level = Some(current_val), // SSD endurance
+                0xE7 => wear_level = Some(current_val), // SSD remaining life
+                _ => {}
+            }
+        }
+
+        let healthy = realloc_sectors < 100 && pending_sectors < 10 && crc_errors < 1000;
+
+        Some(SmartData { healthy, temp_c, power_on_hours, realloc_sectors, pending_sectors, crc_errors, wear_level })
     }
 }

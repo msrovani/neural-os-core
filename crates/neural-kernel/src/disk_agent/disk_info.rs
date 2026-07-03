@@ -69,6 +69,17 @@ pub struct PartitionInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct SmartData {
+    pub healthy: bool,
+    pub temp_c: u16,
+    pub power_on_hours: u32,
+    pub realloc_sectors: u32,
+    pub pending_sectors: u32,
+    pub crc_errors: u32,
+    pub wear_level: Option<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct RawDisk {
     pub name: String,
     pub controller: String,
@@ -85,4 +96,5 @@ pub struct RawDisk {
     pub rotational: bool,
     pub partitions: Vec<PartitionInfo>,
     pub volume_groups: Vec<VolumeGroup>,
+    pub smart: Option<SmartData>,
 }

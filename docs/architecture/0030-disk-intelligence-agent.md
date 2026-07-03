@@ -449,7 +449,76 @@ Políticas:
 - **USB:** write-through (nunca cacheia escrita em volátil)
 - **Coerência:** se `DISK_DETACHED`, descarta cache sujo
 
-## 13. Boot Path (Tier 0) vs Agent (Tier 1/2)
+## 13. S.M.A.R.T. — Self-Monitoring, Analysis and Reporting Technology
+
+Detecção precoce de falha de disco via leitura de atributos S.M.A.R.T.
+
+### Comandos por controladora
+
+| Controladora | Comando | Dados obtidos |
+|---|---|---|
+| **ATA** | SMART READ DATA (0xB0 + 0xD0) | 512 bytes, 30 atributos de 12B |
+| **NVMe** | Get Log Page 0x02 (SMART/Health) | 512 bytes, wear+temp+errors |
+| **USB-MSC** | SAT ATA PASS-THROUGH (0x85) ou SCSI READ DEFECT | via ATA/SCSI translation |
+| **AHCI** | Mesmo ATA SMART via PRD DMA | idem ATA |
+
+### Atributos críticos monitorados
+
+| ID | Atributo | Threshold típico | Ação do agente |
+|---|---|---|---|
+| 0x05 | Reallocated Sectors Count | > 100 | Log alerta, EventBus DISK_HEALTH |
+| 0x09 | Power-On Hours | N/A (informativo) | Log periódico |
+| 0xC2 | Temperature Celsius | > 60°C | Alerta de superaquecimento |
+| 0xC5 | Current Pending Sector | > 10 | Risco iminente de perda de dados |
+| 0xC6 | Uncorrectable Sector Count | > 0 | Dados perdidos — urgente |
+| 0xC7 | UltraDMA CRC Errors | > 1000 | Problema de cabo/interface |
+| 0xE8/0xE7 | SSD Endurance / Remaining Life | < 10% | Substituir SSD |
+
+### Estrutura de dados
+
+```rust
+pub struct SmartData {
+    pub healthy: bool,
+    pub temp_c: u16,
+    pub power_on_hours: u32,
+    pub realloc_sectors: u32,
+    pub pending_sectors: u32,
+    pub crc_errors: u32,
+    pub wear_level: Option<u8>,
+}
+```
+
+### Integração com o agente
+
+- **No probe:** lê SMART de cada disco, loga estado
+- **No tick (a cada ~1000 ticks = ~1 min):** re-lê SMART disco por disco
+- **Se threshold excedido:** publica `DISK_HEALTH_ALERT` no EventBus, gera insight para Cortex
+- **Log self-heal:** integrado com `boot_log_agent` para análise pós-crash
+- **Se crítico (pending > 50 ou temp > 70°C):** sugere migração MHI imediata
+
+### Integração com Self-Heal
+
+```
+[SMART] sda: healthy, 42°C, 1234h on, realloc=5, pending=0
+[SMART] sdb: ⚠ UNHEALTHY, 55°C, 9876h on, realloc=47, pending=3
+
+EventBus → SELF-HEAL:
+  "Disk sdb: realloc_sectors=47/100, pending=3/10.
+   Risco de falha — migrar dados para nvme0n1."
+
+Cortex:
+  "O disco sdb está com 47 setores realocados e 3 pendentes.
+   Temperatura elevada (55°C). Recomendo substituição embreve."
+```
+
+### Implementação atual (v0.75.2)
+
+- `disk_info.rs`: `SmartData` struct + `smart` field em `RawDisk`
+- `controller.rs`: `StorageController::read_smart()` (default impl = `None`)
+- `AtaCtrl::read_smart()`: ATA SMART READ DATA via PIO, parse 30 atributos
+- `DiskIntelligenceAgent::probe_all()`: lê SMART, loga, alerta se unhealthy
+
+## 14. Boot Path (Tier 0) vs Agent (Tier 1/2)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -498,7 +567,7 @@ Políticas:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## 14. Arquivos Novo/Modificados
+## 15. Arquivos Novo/Modificados
 
 | Arquivo | Ação | LOC est. | Sprint |
 |---|---|---|---|
@@ -517,7 +586,7 @@ Políticas:
 | `src/mhi.rs` | **Modificado** — query + update methods | +40 | 75.1 |
 | **Total** | | **~2.400 LOC** | |
 
-## 15. Roteiro de Implementação
+## 16. Roteiro de Implementação
 
 ### Sprint 75.1 — Estrutura Base + ATA + MBR + FAT32 + MHI
 
@@ -578,7 +647,7 @@ Políticas:
 - NVDIMM (ACPI NFIT)
 - RAID HW: MegaRAID MPT3, Intel VMD
 
-## 16. Tecnologias Consideradas e Descartadas
+## 17. Tecnologias Consideradas e Descartadas
 
 | Tecnologia | Motivo do descarte |
 |---|---|

@@ -62,6 +62,20 @@ impl DiskIntelligenceAgent {
                 crate::serial_println!("[DISK]  Controller: {} ({:?})", ctrl_name, ctrl_type);
                 let disks = ctrl.probe_disks();
                 for mut disk in disks {
+                    // S.M.A.R.T. probe
+                    disk.smart = self.controllers[ctrl_idx].read_smart(0);
+                    if let Some(ref smart) = disk.smart {
+                        let status = if smart.healthy { "healthy" } else { "⚠ UNHEALTHY" };
+                        crate::serial_println!("[SMART] {}: {}, {}°C, {}h on, realloc={}, pending={}",
+                            disk.name, status, smart.temp_c, smart.power_on_hours,
+                            smart.realloc_sectors, smart.pending_sectors);
+                        if !smart.healthy {
+                            crate::serial_println!("[SMART] *** {} HEALTH ALERT: atributos criticos! ***", disk.name);
+                        }
+                    } else {
+                        crate::serial_println!("[SMART] {}: S.M.A.R.T. nao disponivel", disk.name);
+                    }
+
                     self.read_partitions(&mut disk, ctrl_idx);
                     self.detect_fs(&mut disk, ctrl_idx);
                     self.detect_volume_mgrs(&mut disk, ctrl_idx);
