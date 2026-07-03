@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-07-03 (Sprint 74 — TPM + Partition + Shutdown, #305-implementado, 374 totais)  
+**Última atualização:** 2026-07-03 (ADR-0031 research: Self-Update + WASM + J.A.R.V.I.S. + Hybrid Agents, #306-#310 detailed)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -431,6 +431,33 @@ Nada é descartado sem registro. Ideias podem ser:
 | 176 | **Ed25519 Cryptographic Identity for TrustCache** — substitui `CapabilityToken(u64)` estático por assinatura Ed25519; Token vira chave pública + assinatura da requisição; Zero-Trust real em nível de kernel | 🟡 Baixa | Sprint 27 | Crom-meueu: identidade criptográfica Ed25519 portada para bare-metal `no_std`. ~300 LOC usando `ed25519-dalek` (sem std) ou implementação custom. Depende de #166 (Multi-mode Trust) como camada de permissão sobre a identidade. |
 
 **ADR-0020:** `docs/architecture/0020-crom-ecosystem-analysis.md` — Análise de viabilidade Rust com código modelo para 9 features (#164-175). Item #176 (Ed25519) adicionado posteriormente.
+
+### 1.24. DiskIntelligenceAgent (IDEA #303 expandido)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 303a | DiskIntelligenceAgent com StorageController trait | ✅ v0.75.1 | v0.75.1 | "Mestre dos discos" — 6 controladoras, 10+ FS probes, MHI, VFS |
+| 303b | S.M.A.R.T. monitoring com self-heal alert | ✅ v0.75.2 | v0.75.2 | Detecção precoce de falha de disco |
+| 303c | GPT probe + SED/OPAL + EROFS/ReFS | ✅ v0.75.3 | v0.75.3 | Tabela GPT, Self-Encrypting Drives, mais FS |
+| 303d | USB-MSC bulk fix + BOT protocol | ✅ v0.75.4 | v0.75.4 | xHCI IOC+ring+ERDP, SCSI INQUIRY/READ/WRITE |
+| 303e | NVMe driver (Admin queue + Identify + I/O) | ✅ v0.75.5 | v0.75.5 | PCI 0x01/0x08, PRP1, SQ/CQ doorbell |
+| 303f | ARC cache + tier migration | ✅ v0.75.6 | v0.75.6 | 1MB DRAM cache, write-back, MHI update |
+
+### 1.25. AIOS Cross-OS Compatibility + WASM + J.A.R.V.I.S. (IDEA #306-#310)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 306a | **Windows binary compat** — PE32+ loader + syscall translation (NT→AIOS). DLL loader stub, SEH handler, PEB emulação | ⏳ Pós-MVP | v0.80+ | Rodar .exe nativos sem emulação |
+| 306b | **Linux ELF compat** — ELF x86-64 loader + syscall translation (open/read/write/mmap/clone → agent skills) | ⏳ Pós-MVP | v0.80+ | Aproveitar ecossistema Linux |
+| 306c | **macOS/iOS Mach-O compat** — Mach-O loader + XNU syscall translation. Desafio: APIs Cocoa/AppKit fechadas | ⏳ Pós-MVP | v0.85+ | Apps nativos Apple |
+| 306d | **Android APK compat** — ART runtime como skill, Binder IPC → agentes. Desafio: framework Java → tradução | ⏳ Pós-MVP | v0.85+ | 3M+ apps Android no AIOS |
+| 307 | **Syscall-to-Skill Translation Layer** — Camada única: syscall (NT/Linux/XNU) → skill request → agent.response. "abrir /etc/passwd" → DiskAgent.read() | ⏳ Pós-MVP | v0.80+ | Base p/ compatibilidade cross-OS |
+| 308a | **Update/Upgrade Agent** — Dual Kernel Slot A/B no FAT32. Baixa novo kernel via smoltcp HTTP GET, verifica Ed25519 + SHA-256, escreve KERNEL~2, switch BOOTCFG.JSON, reboot | 🟡 Pós-MVP | v0.80+ | ~500 LOC. Viability 9/10. Bloqueado por B-01 (rede). ADR-0031 |
+| 308b | **Update channels** — stable (Sprint), nightly (HEAD), security (hotfix). Channel manifesto via HTTP GET de update-server. Poll 3600s/600s/60s | 🟡 Pós-MVP | v0.80+ | ~200 LOC. ADR-0031 |
+| 308c | **Rollback automático** — BootSelfHealAgent detecta crash pós-update → restaura BOOTCFG.JSON → last_good slot. Três falhas seguidas → rollback forçado | 🟡 Pós-MVP | v0.80+ | ~100 LOC. ADR-0031 |
+| 309a | **WASM Skill Runtime (wasmi)** — wasmi v0.42+ intérprete no_std. Cada .wasm vira agente com sandbox, 256KB linear memory, fuel metering (100k/tick), capability tokens | 🟡 Pós-MVP | v0.75+ | ~800 LOC. Viability 8/10. WASI→agent skill mapping (20 syscalls). ADR-0031 |
+| 309b | **IDE Agent (BitNet IDE)** — IDE no-navegador no AIOS, assistida por Cortex LLM BitNet. Escreve, debuga, compila para WASM | ⏳ Pós-MVP | v0.85+ | ~2000 LOC. Requer WASM + Cortex 1.5B + J.A.R.V.I.S. ADR-0031 |
+| 309c | **Agentes: kernel vs WASM (Hybrid)** — Tier 0-2 kernel (boot, HW, runtime crítico). Tier 3 WASM (user-extensible). Tier 4 external MCP. 20 agentes kernel, ∞ WASM | 🟡 Pós-MVP | v0.80+ | ~100 LOC (policy config). Viability 9/10. ADR-0031 |
+| 310a | **J.A.R.V.I.S. Layer** — Camada de persona acima do Hermes: SOUL.md, contexto persistente (MemoryTree+KG), notificações proativas (NotificationGate), conversation engine (greetings, mood, task decomposition) | 🟡 Pós-MVP | v0.80+ | ~1.150 LOC (text-only). Viability 8/10. Limitado por Cortex 272K params. ADR-0031 |
+| 310b | **Stack final:** Boot → Kernel → Cortex/LLM → Hermes → J.A.R.V.I.S. — Ver diagrama ADR-0031. Boot minimalista. Kernel acorda Cortex (BitNet). Cortex alimenta Hermes (intent). Hermes delega para J.A.R.V.I.S. (UI conversacional WASM). Tudo agentes, tudo skills | 🟡 Pós-MVP | v0.80+ | ADR-0031 |
 
 ### 1.29. Bugfix Estrutural (Sprint 45) — H3 a H12
 
@@ -1224,3 +1251,7 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-03 | **305** | **TPM 2.0 Measured Boot (v0.74.1)** — TIS MMIO driver (279 LOC), SHA256 embedded, PCI config 0xFED40000 probe, locality 0 request, FIFO send/recv, PCR[8] extend com kernel hash. Fallback silencioso se TPM ausente. Depende de Ed25519 kernel signing. | ✅ v0.74.1 | v0.74.1 | 279 LOC for TIS driver + SHA256 |
 | 2026-07-03 | **Sprint 74 (v0.74.0-0.74.2):** Seguranca — particao FAT mascarada como 0x1C (Hidden FAT32 LBA, bootloader aceita via mbr_nostd), assinatura Ed25519 do kernel com auto-verificacao, TPM 2.0 TIS driver (probe+fallback+PCA extend). Shutdown tracking (4 causas, persistencia FAT12+VFS, BootSelfHealAgent analisa). | Dev + IDA IA |
 | 2026-07-03 | **Particao FAT 0x1C (v0.74.2):** Mascara tipo 0x0C→0x1C (Hidden FAT32 LBA) via build scripts (offset 0x1D2). Bootloader aceita (mbr_nostd 0.1.0 mapeia 0x1C como PartitionType::Fat32). Kernel aceita 0x1C em todos os checks. Fallback 0x73 mantido. QEMU boot OK, VB OK. | Dev + IDA IA |
+| 2026-07-03 | **FAT32-only (v0.75.0):** Fat12Writer removido. write_boot_log, boot_log_agent, boot_logger, shutdown usam apenas FAT32. 102 LOC removidos. | Dev + IDA IA |
+| 2026-07-03 | **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras (ATA, USB, NVMe), 10+ FS probes (FAT32 a ReFS), GPT, SED/OPAL, S.M.A.R.T., I/O Scheduler, ARC cache 1MB, tier migration MHI. ~2.400 LOC. 0 erros. | Dev + IDA IA |
+| 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
+| 2026-07-03 | **ADR-0031: AIOS Evolution Research** — análise completa (self-update A/B dual-slot, WASM wasmi runtime + WASI mapping, J.A.R.V.I.S. conversational layer, hybrid kernel/WASM agent architecture). Viability scores, LOC estimates, dependency chain, recommended sprint order. `docs/architecture/0031-aios-self-update-wasm-jarvis.md` | Dev + IDA IA |
