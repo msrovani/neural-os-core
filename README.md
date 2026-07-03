@@ -1,14 +1,15 @@
-﻿# Neural OS Hermes v0.71.0 — AI-native Bare-metal Operating System
+﻿# Neural OS Hermes v0.76.1 — AI-native Bare-metal Operating System
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
 
 ```
-02/07/2026 — Boot Bughunt: Agent-First refactoring completo.
-              Boot vira sequencia de 8 fases com eventos no EventBus.
-              Cortex acorda ANTES do hardware discovery.
-              Xuvisco corrigido (VGA CRTC + Intel 6xx UEFI GOP).
-              FAT12 log funcional pela primeira vez — boot.log persistente.
-              247+ agentes, 126 arquivos Rust, ~13.800 LOC, 0 erros.
+03/07/2026 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + Dynamic Tick.
+              Particion FAT32 mascarada (Hidden 0x1C), Ed25519 kernel signing.
+              DiskIntelligenceAgent: 6 controladoras, 10+ FS probes, ARC cache.
+              NVMe driver, USB-MSC BOT, GPT, SED/OPAL, I/O scheduler.
+              MemoryAgent: heap dinamico, orcamento AI, clock calibration.
+              Hermes event-driven: 84 linhas/seg → silencio ate ter trabalho.
+              247+ agentes, 132 arquivos Rust, ~15.500 LOC, 0 erros.
 ```
 
 ```
@@ -101,17 +102,96 @@ Session checkpoint salva bitmap do alocador + MHI a cada 100 ticks. Double Fault
 
 ---
 
-## Project Stats (v0.71.0)
+## The Tick-Tock System — How Time Works
+
+The Neural AIOS doesn't use Unix-style `jiffies` or epoch timestamps. Time is measured in **ticks** — hardware interrupts from the LAPIC (Local APIC) timer.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│              SYSTEM CLOCKS                                │
+│                                                           │
+│  CPU Core (3-5 GHz)  ───┤                               │
+│  RAM (DDR4 3200 MT/s) ───┤   NÃO controlam o tick        │
+│  VRAM (25 GB/s)       ───┤                                │
+│                                                           │
+│  BCLK (100 MHz) ─── LAPIC Timer ─── TICKS (12-192/s)    │
+│                                                           │
+│  Cada TICK = 1 interrupcao de hardware                   │
+│  → timer_handler() → TIMER_TICKS += 1                    │
+│  → AgentScheduler chama agent.tick()                     │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Static tick (antes):** `init_count = 8,388,608` → 12 ticks/s → latência 84ms.
+
+**Dynamic tick (v0.76.1):** O `MemoryAgent` mede a CPU real via `rdtsc()`, conta agentes ativos, e calibra:
+
+```
+Agentes ativos → Tick rate → Latencia
+     0-5       →  192 t/s  →  5ms     (modo interativo)
+     6-10      →   96 t/s  → 10ms
+    11-20      →   48 t/s  → 21ms     (modo normal)
+    21-50      →   24 t/s  → 42ms
+    51+        →   12 t/s  → 84ms     (modo economia)
+```
+
+**Conversão tick → tempo real (12 t/s base):**
+
+| Ticks | Real time |
+|---|---|
+| 12 | ~1 segundo |
+| 720 | ~1 minuto |
+| 5000 | ~7 minutos |
+| 43000 | ~1 hora |
+
+**O que acontece em 1 tick (84ms):**
+
+| Recurso | Em 1 tick |
+|---|---|
+| CPU (3 GHz) | **252 milhões de instruções** |
+| RAM (DDR4) | **2.1 GB transferidos** |
+| NVMe (7 GB/s) | **588 MB lidos** |
+| LLM BitNet 1.5B | **3-4 tokens** (CPU) ou **100+ tokens** (GPU) |
+
+**Hermes é event-driven:** Só avança o ciclo ReAct quando há entrada real — evento do EventBus, comando do usuário, ou alerta do sistema. Sem trabalho → silêncio. Sem 84 linhas de log por segundo.
+
+### Agent Tier Classification (Premissa v0.76.1)
+
+Todo agente **deve declarar seu `AgentTier`** no manifesto. Sem tier → fallback para `Learning`, analisado por 5000 ticks de uso e oficializado.
+
+| Tier | Schedule | Exemplos | Critério |
+|---|---|---|---|
+| **Permanent** | `Continuous` | Hermes, Display, HwBridge | Essencial — sistema falha sem ele |
+| **System-demand** | `EventDriven` | DiskAgent, Cortex, Net, Security | Acorda com evento do kernel |
+| **User-demand** | `EventDriven` | Skill agents, Apps, Plugins | Acorda com invocação do usuário |
+| **Periodic** | `PollEvery(N)` | Cron, Observer, Optimizer | Roda em intervalo fixo |
+| **Learning** (fallback) | `PollEvery(2000)` | Agentes novos não-classificados | Analisado → promovido ao tier real |
+
+```rust
+pub enum AgentTier {
+    Permanent,      // must run always — system fails without it
+    SystemDemand,   // wakes on kernel events
+    UserDemand,     // wakes on user/agent skill invocation
+    Periodic(u64),  // wakes every N ticks
+    Learning(u64),  // unclassified — analyzed then promoted
+}
+```
+
+---
+
+## Project Stats (v0.76.1)
 
 | Metric | Value |
 |---|---|
-| Rust files | **126** |
-| Total LOC | **~13,800** |
+| Rust files | **132** |
+| Total LOC | **~15,500** |
 | Crates | **5** (neural-kernel, agent-core, event-bus, skill-registry, ticket-lock) |
 | Agents | **247+** (20 nativos + 147 The Agency + 80 importados + ~6 HW + ~6 FS) |
-| GPU drivers | **3** (Intel, NVIDIA, AMD) + GTT + BCS + VRAM fl + Huge Pages |
+| Controllers | **6** (ATA, AHCI stub, NVMe, USB-MSC, SCSI stub, VirtIO stub) |
+| FS probes | **10+** (FAT32, NTFS, EXT4, XFS, ISO9660, exFAT, Btrfs, HFS+, EROFS, ReFS) |
+| Technologies | **10+** (GPT, SMART, SED/OPAL, TRIM, ARC cache, I/O scheduler, adaptive heap) |
 | Boot phases | **8** agent-driven com eventos EventBus |
-| Compile | **0 errors, ~423 warnings** (expected per policy) |
+| Compile | **0 errors** (warnings per policy) |
 | License | **AGPLv3** com exceção comercial |
 
 ---
@@ -165,9 +245,9 @@ We are building the future of operating systems. **Not an OS that runs AI — an
 >
 > Neural OS Hermes — msrovani + IDA IA (OpenCode), 2026
 >
-> *106+ sprints, 27+ blocos, ~13.800 LOC, 0 erros, 0 panics no QEMU.*
-> *De um bootloader a um SO cognitivo com 247 agentes, GPU bare-metal, 
-> 30+ GPUs detectadas, ring buffer Intel, VRAM free list, GTT, FAT32, 
-> WASM parser, auto-skills, agency import, completion contracts, 
-> boot agent-first com cortex pre-HW, e 0 panics no QEMU.*
+> *109+ sprints, 27+ blocos, ~15.500 LOC, 0 erros, 0 panics no QEMU.*
+> *De um bootloader a um SO cognitivo com 247 agentes, DiskIntelligenceAgent,*
+> *NVMe bare-metal, SMART, GPT, ARC cache, adaptive heap, dynamic tick,*
+> *10+ filesystem probes, 6 storage controllers, I/O scheduler,*
+> *boot agent-first com cortex pre-HW, e 0 panics no QEMU.*
 > *— em Rust no_std. Sem Linux. Sem POSIX. Sem legado.*
