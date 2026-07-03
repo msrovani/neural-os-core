@@ -23,7 +23,7 @@ impl SkillLoader {
 
     /// Parse a skill markdown file, validate security, and add to registry
     pub fn register_skill(&mut self, content: &str) -> Result<(), &'static str> {
-        // Extract frontmatter (between --- markers)
+        let content = content.replace("\r\n", "\n");
         let parts: Vec<&str> = content.splitn(3, "---\n").collect();
         if parts.len() < 3 {
             return Err("Skill: formato invalido (sem frontmatter)");

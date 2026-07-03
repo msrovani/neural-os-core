@@ -95,10 +95,10 @@ fn auto_scale_memory() {
     let mem = crate::memory::global_hardware_context();
     let occupancy = mem[0];
     if occupancy > 0.85 {
-        serial_println!("[OPTIMIZER] ⚠️ Memória acima de 85% ({:.0}%). Compactando...", occupancy * 100.0);
-        // Sugestão: compactar heap, liberar caches
+        serial_println!("[OPTIMIZER] ⚠️ Memória acima de 85% ({:.0}% ocupada). Compactando...", occupancy * 100.0);
     } else if occupancy < 0.30 {
-        serial_println!("[OPTIMIZER] ✅ Memória folgada ({:.0}%). Pode expandir cache.", occupancy * 100.0);
+        let free = (1.0 - occupancy) * 100.0;
+        serial_println!("[OPTIMIZER] ✅ Memória folgada ({:.0}% livre). Pode expandir cache.", free);
     }
 }
 

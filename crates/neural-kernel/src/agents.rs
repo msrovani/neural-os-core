@@ -285,6 +285,9 @@ impl Agent for CortexAgent {
             let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
             let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
             let output = crate::cortex::generate_text(&self.model, &full_prompt);
+            let output = if output.trim().is_empty() {
+                alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
+            } else { output };
             serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
