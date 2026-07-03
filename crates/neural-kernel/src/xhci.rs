@@ -175,89 +175,124 @@ unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {
 }
 
 // ── USB Mass Storage Bulk Transfers ────────────────────────────
-// Suporte a bulk IN/OUT via xHCI para leitura/escrita em SDHC/USB.
+// Suporte a bulk IN/OUT via xHCI com gerenciamento de ring.
+
+/// Estado de um transfer ring bulk (IN ou OUT)
+pub struct BulkEndpoint {
+    pub trb_pa: u64,
+    pub trb_va: *mut u32,
+    pub enqueue_idx: u16,
+    pub cycle: bool,
+    pub max_entries: u16,
+}
+
+unsafe impl Send for BulkEndpoint {}
+unsafe impl Sync for BulkEndpoint {}
 
 /// Configura bulk endpoints (EP1 IN, EP2 OUT) para USB MSC
-pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(u64, u64)> {
+pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(BulkEndpoint, BulkEndpoint)> {
     let state = XHCI_STATE.lock();
     let st = state.as_ref()?;
 
-    // Alocar transfer rings para bulk IN e OUT (1 pagina cada)
     let tr_in = alloc_phys(1)?;
     let tr_out = alloc_phys(1)?;
     core::ptr::write_bytes(tr_in.1, 0, 4096);
     core::ptr::write_bytes(tr_out.1, 0, 4096);
 
-    // Alocar device context + input control
     let ctx = alloc_phys(2)?;
     core::ptr::write_bytes(ctx.1, 0, 8192);
     let dcbaa = st.dcbaa_va as *mut u64;
     dcbaa.add(slot as usize).write_volatile(ctx.0);
 
-    // Input Control Context: A=1 (slot), add=2 (EP1 OUT + EP1 IN)
     let icc = ctx.1 as *mut u32;
-    icc.add(0).write_volatile(0x03);     // A0=1, A1=1
-    icc.add(1).write_volatile(0x06);     // add EP1 OUT(2) + EP1 IN(3)
+    icc.add(0).write_volatile(0x03);
+    icc.add(1).write_volatile(0x06);
 
-    // Slot context
-    icc.add(2).write_volatile(0x20);     // context_entries=2
+    icc.add(2).write_volatile(0x20);
     icc.add(4).write_volatile((slot as u32) << 24);
 
-    // EP1 OUT context (bulk, d2h=0)
-    let ep1_out = ctx.1.add(32 + 32) as *mut u32;
-    let tr_out_pa_lo = tr_out.0 as u32;
-    let tr_out_pa_hi = (tr_out.0 >> 32) as u32;
-    ep1_out.add(0).write_volatile(0x0002_0802); // EP type=bulk(2), max pkt, CERR=3
-    ep1_out.add(1).write_volatile(tr_out_pa_lo); // TR dequeue pointer low
-    ep1_out.add(2).write_volatile(tr_out_pa_hi | 0x01); // TR dequeue hi + DCS=1
-    ep1_out.add(3).write_volatile(0x0000_0000);
-    ((ctx.1.add(32 + 32 + 8)) as *mut u16).write_volatile(max_packet); // max packet size
+    let max_entries = 256u16; // 4096 bytes / 16 bytes per TRB
 
-    // EP1 IN context (bulk, d2h=1)
+    // EP1 OUT context (bulk, host→device)
+    let ep1_out = ctx.1.add(32 + 32) as *mut u32;
+    ep1_out.add(0).write_volatile(0x0002_0802);
+    ep1_out.add(1).write_volatile(tr_out.0 as u32);
+    ep1_out.add(2).write_volatile((tr_out.0 >> 32) as u32 | 0x01);
+    ep1_out.add(3).write_volatile(0x0000_0000);
+    ((ctx.1.add(32 + 32 + 8)) as *mut u16).write_volatile(max_packet);
+
+    // EP1 IN context (bulk, device→host)
     let ep1_in = ctx.1.add(32 + 64) as *mut u32;
-    let tr_in_pa_lo = tr_in.0 as u32;
-    let tr_in_pa_hi = (tr_in.0 >> 32) as u32;
-    ep1_in.add(0).write_volatile(0x0006_0802); // EP type=bulk(2) | d2h=1(4)=6
-    ep1_in.add(1).write_volatile(tr_in_pa_lo);
-    ep1_in.add(2).write_volatile(tr_in_pa_hi | 0x01);
+    ep1_in.add(0).write_volatile(0x0006_0802);
+    ep1_in.add(1).write_volatile(tr_in.0 as u32);
+    ep1_in.add(2).write_volatile((tr_in.0 >> 32) as u32 | 0x01);
     ep1_in.add(3).write_volatile(0x0000_0000);
     ((ctx.1.add(32 + 64 + 8)) as *mut u16).write_volatile(max_packet);
 
-    // Doorbell 0 (control endpoint) para avaliar contexto
-    // (na pratica: xHC ja deve ter aceito via Address Device)
-    serial_println!("[XHCI] Bulk endpoints configurados. slot={} tr_in={:#x} tr_out={:#x}", slot, tr_in.0, tr_out.0);
-    Some((tr_in.0, tr_out.0))
+    serial_println!("[XHCI] Bulk endpoints OK. slot={} tr_in={:#x} tr_out={:#x}", slot, tr_in.0, tr_out.0);
+
+    Some((
+        BulkEndpoint { trb_pa: tr_in.0, trb_va: tr_in.1 as *mut u32, enqueue_idx: 0, cycle: true, max_entries },
+        BulkEndpoint { trb_pa: tr_out.0, trb_va: tr_out.1 as *mut u32, enqueue_idx: 0, cycle: true, max_entries },
+    ))
 }
 
-/// Executa transferencia bulk: escreve Normal TRB no transfer ring e ring doorbell.
+/// Executa transferencia bulk com gerenciamento de ring + IOC + ERDP advance.
 /// direction: 0=OUT (host→device), 1=IN (device→host)
-pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, trb_pa: u64, data_pa: u64, len: u32, direction: u8) -> bool {
+pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, ep: &mut BulkEndpoint, data_pa: u64, len: u32, direction: u8) -> bool {
     let state = XHCI_STATE.lock();
     let st = match state.as_ref() { Some(s) => s, None => return false };
 
-    // TRB: ponteiro para dados + comprimento + flags
-    let trb_va = (trb_pa + st.pmoff) as *mut u32;
-    trb_va.add(0).write_volatile(data_pa as u32);
-    trb_va.add(1).write_volatile((data_pa >> 32) as u32);
-    trb_va.add(2).write_volatile(len | 0x0001_0000); // TD size=1, IOC=0
-    trb_va.add(3).write_volatile(0x0000_0001); // Normal TRB (type=1), cycle=1
+    let idx = ep.enqueue_idx as usize;
+    let max = ep.max_entries as usize;
+
+    // Write TRB at current enqueue position
+    let trb = ep.trb_va.add(idx * 4);
+    trb.add(0).write_volatile(data_pa as u32);
+    trb.add(1).write_volatile((data_pa >> 32) as u32);
+    // IOC=1 (bit 5), TD size=1 (bits 17-31), chain=0
+    trb.add(2).write_volatile(len | (1u32 << 5) | (1u32 << 17));
+    // Normal TRB (type=1), cycle=ep.cycle
+    trb.add(3).write_volatile(if ep.cycle { 0x0000_0001u32 } else { 0x0000_0000u32 });
+
+    // Fence write before doorbell
+    core::arch::asm!("sfence", options(nostack, preserves_flags));
+
+    // Advance enqueue pointer
+    let next = (idx + 1) % max;
+    // If next is the last slot, write Link TRB to wrap
+    if next == max - 1 {
+        let link = ep.trb_va.add((max - 1) * 4);
+        link.add(0).write_volatile(ep.trb_pa as u32);
+        link.add(1).write_volatile((ep.trb_pa >> 32) as u32);
+        link.add(2).write_volatile(0);
+        // Link TRB (type=6), cycle=ep.cycle, Toggle Cycle=1
+        link.add(3).write_volatile(if ep.cycle { 0x0000_0026u32 } else { 0x0000_0006u32 });
+    }
+    ep.enqueue_idx = if next == max - 1 { 0 } else { next as u16 };
+    if next == max - 1 { ep.cycle = !ep.cycle; }
 
     // Ring doorbell
     let db_off = st.db_off + (slot as u64 * 2 + endpoint as u64) * 4;
     let db_val = if direction == 0 { 2u32 } else { 3u32 };
     w32(st.base, db_off, db_val);
 
-    // Aguardar completion no event ring (spin ~1ms)
-    for _ in 0..1000000 {
+    // Wait for completion event (poll ER with timeout)
+    for _ in 0..2_000_000 {
         let evt = st.er_va as *const u32;
-        let flags = (evt.add(2 + 3).read_volatile() >> 24) as u8; // event ring dequeue pointer
-        if flags & 0x20 != 0 { // Transfer event
-            let comp = evt.add(2 + 2).read_volatile() & 0xFF;
-            if comp == 0 { return true; } // Success
-            if comp != 0 { serial_println!("[XHCI] Bulk TRB error: completion={}", comp); return false; }
+        let flags = (evt.add(11).read_volatile() >> 24) as u8;
+        if flags & 0x20 != 0 {
+            let comp = evt.add(10).read_volatile() & 0xFF;
+            // Advance ERDP to acknowledge the event
+            let erdp_phys = st.er_va - st.pmoff;
+            w32(st.base + st.capl, 0x38, erdp_phys as u32);
+            w32(st.base + st.capl, 0x3C, (erdp_phys >> 32) as u32 | 0x01);
+            if comp == 0 { return true; }
+            serial_println!("[XHCI] Bulk err: comp={}", comp);
+            return false;
         }
         core::hint::spin_loop();
     }
-    serial_println!("[XHCI] Bulk TRB timeout");
+    serial_println!("[XHCI] Bulk timeout");
     false
 }

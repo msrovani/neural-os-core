@@ -504,6 +504,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     } else {
         crate::boot_logger::log("BOOT: No ATA device for DiskAgent");
     }
+    if let Some(msc) = unsafe { crate::usb_msc::UsbMassStorage::probe() } {
+        let ctrl = crate::disk_agent::controller::UsbMscCtrl::new(msc);
+        disk_agent.register_controller(Box::new(ctrl));
+        crate::boot_logger::log("BOOT: DiskAgent USB-MSC controller registered");
+    }
     let disk_agent_box = Box::new(disk_agent);
 
     crate::boot_logger::log("BOOT: DiskAgent ready");

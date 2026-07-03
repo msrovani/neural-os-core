@@ -1,8 +1,10 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::cell::UnsafeCell;
 use crate::ata::AtaDriver;
 use crate::mhi::AllocTier;
+use crate::usb_msc::UsbMassStorage;
 use super::disk_info::*;
 
 pub trait StorageController: Send {
@@ -251,5 +253,81 @@ impl AtaCtrl {
         let _security_enabled = (word91 & (1 << 0)) != 0;
         let security_frozen = (word91 & (1 << 1)) != 0;
         (is_opal, security_frozen)
+    }
+}
+
+// ── UsbMscCtrl ─────────────────────────────────────────────
+pub struct UsbMscCtrl {
+    msc: UnsafeCell<UsbMassStorage>,
+    probed: bool,
+    disks: Vec<RawDisk>,
+}
+
+impl UsbMscCtrl {
+    pub fn new(msc: UsbMassStorage) -> Self {
+        UsbMscCtrl { msc: UnsafeCell::new(msc), probed: false, disks: Vec::new() }
+    }
+}
+
+impl StorageController for UsbMscCtrl {
+    fn name(&self) -> &str { "usb0" }
+    fn controller_type(&self) -> ControllerType { ControllerType::Usb }
+    fn pci_bdf(&self) -> Option<(u8, u8, u8)> { None }
+
+    fn probe_disks(&mut self) -> Vec<RawDisk> {
+        if self.probed { return self.disks.clone(); }
+        self.probed = true;
+        let msc = unsafe { &mut *self.msc.get() };
+        if msc.max_lba == 0 { return Vec::new(); }
+        let bw = self.measure_bandwidth(0);
+
+        let raw = RawDisk {
+            name: alloc::format!("sdb"),
+            controller: self.name().into(),
+            pci_bdf: None,
+            capacity_bytes: msc.max_lba * msc.sector_size as u64,
+            sector_size: msc.sector_size,
+            interface: InterfaceType::Usb3,
+            is_removable: true,
+            is_volatile: true,
+            model: core::str::from_utf8(&msc.model[8..32]).unwrap_or("USB").trim().into(),
+            serial: String::new(),
+            firmware_rev: String::new(),
+            max_read_bw_mbs: bw,
+            rotational: false,
+            partitions: Vec::new(),
+            volume_groups: Vec::new(),
+            smart: None,
+            is_opal: false,
+            security_frozen: false,
+        };
+        self.disks.push(raw);
+        self.disks.clone()
+    }
+
+    fn read_blocks(&self, _disk: u8, lba: u64, buf: &mut [u8], blocks: usize) -> bool {
+        let msc = unsafe { &mut *self.msc.get() };
+        for i in 0..blocks {
+            let mut sector = [0u8; 512];
+            if !unsafe { msc.read_sector(lba + i as u64, &mut sector) } { return false; }
+            let offset = i * 512;
+            if offset + 512 <= buf.len() {
+                buf[offset..offset + 512].copy_from_slice(&sector);
+            }
+        }
+        true
+    }
+
+    fn write_blocks(&self, _disk: u8, lba: u64, data: &[u8], blocks: usize) -> bool {
+        let msc = unsafe { &mut *self.msc.get() };
+        for i in 0..blocks {
+            let offset = i * 512;
+            let mut sector = [0u8; 512];
+            if offset + 512 <= data.len() {
+                sector.copy_from_slice(&data[offset..offset + 512]);
+            }
+            if !unsafe { msc.write_sector(lba + i as u64, &sector) } { return false; }
+        }
+        true
     }
 }
