@@ -1,61 +1,51 @@
-# Roadmap — neural-os-core v0.59.0 🏆
+# Roadmap — neural-os-core v0.76.1 🏆
 
-**Última atualização:** 2026-06-29
+**Última atualização:** 2026-07-03
 
-## 🏆 Marco Conquistado: Bootloader 0.11 + Framebuffer UEFI!
-
-Bootloader 0.9.34 → 0.11.15. Framebuffer 1280×720 com Hermes grafico.
-DisplayAgent renderiza NeuralConsole no framebuffer do bootloader.
-20 agentes rodando, Hermes Cognitive completo.
-
-## Blocos Completos (17 blocos, 59 sprints)
+## Blocos Completos (19 blocos, 76 sprints)
 
 | Bloco | Sprints | v | Status |
 |---|---|---|---|
-| 1. Chassi | 1-17 | 0.1–0.12 | ✅ VGA, heap, EventBus, IPC, SMP, APIC |
-| 2. Discovery | 18-22 | 0.13–0.17 | ✅ PCI, ACPI, MHI, Trust, LAPIC |
-| 3. Rede | 23-24 | 0.23–0.24 | ✅ RTL8139, smoltcp |
-| 4. Transformer | 26-27 | 0.26–0.27 | ✅ Attention BitNet 272K |
-| 5. HW-Aware LLM | 28-30 | 0.28–0.30 | ✅ PCI+USB training (66K pairs) |
-| 6. Capabilities | 31 | 0.31 | ✅ HW→skill mapping |
-| 7. Self-Healing | 32-37 | 0.32–0.37 | ✅ Failure taxonomy, checkpoint |
-| 8. Agent/Skill-First | 39-42 | 0.39–0.40 | ✅ Agent trait, 18 agentes |
-| 9. Network Evolution | 43-44 | 0.41–0.42 | ✅ DHCP, VirtIO-net, NetPhy |
-| 10. Display+Bugfix | 45 | 0.43–0.45 | ✅ Framebuffer, VirtIO-GPU, 5 bugs |
-| 11. CDC+Delta+Locks | 46-47 | 0.46–0.47 | ✅ IrqSafeLock, DmaBuf, Rabin |
-| 12. Network+Platform | 48 | 0.48 | ✅ x2APIC, Huge Pages, PCI bridges, Cron |
-| 13. Trust & Security | 49-50 | 0.49–0.50 | ✅ Ed25519, Security Pipeline |
-| 14. Hermes Cognitive | 51-55 | 0.51–0.55 | ✅ SDD, ReAct, Council, Self-Opt |
-| 15. Memory+Ecosystem | 56-57 | 0.56–0.57 | ✅ Medusa, Pipeline, MemTree, KG |
+| 1-15. Foundation | 1-57 | 0.1–0.57 | ✅ Kernel, PCI, Rede, Transformer, Self-Heal, Agents |
 | **16. HW Real + USB** | **58** | **0.58** | **✅ Boot HW real, xHCI HID, FAT12, ATA, CAD** |
-| **17. Bootloader 0.11** | **59** | **0.59** | **✅ Framebuffer UEFI 1280×720, bootloader 0.11, Hermes grafico** |
+| **17. Bootloader 0.11** | **59** | **0.59** | **✅ Framebuffer UEFI 1280×720, bootloader 0.11** |
+| **18. Security** | **74** | **0.74.x** | **✅ TPM TIS, Ed25519 signing, Partition mask 0x1C** |
+| **19. Disk Intelligence** | **75** | **0.75.x** | **✅ DiskAgent, NVMe, SMART, ARC cache, GPT** |
+| **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
 
 ## Funcionalidades por Camada
 
 ### ✅ Kernel Base
 - `no_std` Rust, `x86_64-unknown-none`, nightly
-- VGA text mode (80×25, scroll, cores)
-- Serial (COM1 115200 baud)
+- Framebuffer UEFI 1280×720
 - IDT 0-31, PIC/APIC dual EOI
-- Bitmap Frame Allocator (4GB)
-- Heap 16MB (LockedHeap + Slab)
+- Bitmap Frame Allocator (dynamic sizing)
+- **Adaptive Heap** (16 MB → resize para modelo AI, via frame allocator)
 - FPU/SSE, Tensor f32, matmul
 - BitNet 1.58-bit (ADD/SUB kernel)
 - Transformer 4 layers, Attention, 272K params
 
-### ✅ Hardware Discovery
-- PCI scan (CF8/CFC, 256 bus, capabilities, bridges)
-- ACPI (RSDP/RSDT/XSDT/MADT)
-- APIC (LAPIC, IOAPIC, x2APIC)
-- SMP (INIT-SIPI-SIPI, PerCpu, stacks)
-- WHPX acceleration
-- Memory Hierarchy Index (Dram/Vram/Nvme/Hdd)
+### ✅ Storage
+- **DiskIntelligenceAgent** (6 controladoras, 10+ FS probes)
+- NVMe driver (Admin queue + Identify + I/O Read)
+- USB-MSC bulk fix (xHCI IOC+ring+ERDP + BOT protocol)
+- S.M.A.R.T. monitoring (ATA 0xB0+0xD0, health alerts)
+- GPT partition table, SED/OPAL detection
+- ARC cache 1MB DRAM + tier migration MHI
+- FAT32-only (Fat12Writer removido, 102 LOC eliminated)
 
-### ✅ Rede
-- RTL8139 driver (I/O ports)
-- smoltcp 0.13 (TCP/IP, DHCP, HTTP)
-- VirtIO-net manual
-- NetPhy unificada
+### ✅ Security
+- TPM 2.0 TIS driver (SHA256 embedded, PCR[8] extend, fallback)
+- Ed25519 kernel signing + auto-verification
+- Partition mask 0x1C (Hidden FAT32 LBA, bootloader-compatible)
+- Shutdown tracking (4 causas, FAT32 persistence)
+
+### ✅ Agent Runtime
+- **Dynamic tick** (12-192 ticks/s, calibrado por workload)
+- **Hermes event-driven** (silêncio sem trabalho real)
+- **AgentTier classification** (Permanent/SystemDemand/UserDemand/Periodic/Learning)
+- EventDriven scheduler fix (has_event=true, has_pending early-return)
+- MemoryAgent com clock calibration via rdtsc
 
 ### ✅ Input
 - PS/2 keyboard (IRQ1, scancode set 1)

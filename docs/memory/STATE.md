@@ -1,58 +1,82 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.71.0 🏆
-#   BOOT BUGHUNT: Agent-First Boot + DiagnosticSkill + FAT12 Log + Xuvisco Fix
-#   126 arquivos Rust, ~13.800 LOC, 0 erros
+#   STATE — neural-os-core v0.76.1 🏆
+#   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + DYNAMIC TICK
+#   132 arquivos Rust, ~15.500 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
-## 🏆 Marcos Acumulados
+## Marcos Acumulados
 - **v0.56.0-v0.67.0** — 22 sprints de OS neural, GPU, desktop, agentes, ecossistema
 - **v0.68.0-v0.70.0** — USB Mass Storage, xHCI bulk, BootLogAgent, FAT32 writer
-- **v0.71.0** — 🏆 **Boot Bughunt: Agent-First refactoring + DiagnosticSkill + FAT12 log + Xuvisco fix**
+- **v0.71.0** — Boot Bughunt: Agent-First + DiagnosticSkill + FAT12 log + Xuvisco
+- **v0.73.0-0.73.1** — Consciousness (10 métricas), Self-Improvement Loop, Shutdown tracking
+- **v0.74.0-0.74.2** — TPM TIS driver, Ed25519 kernel signing, Partition mask 0x1C
+- **v0.75.0-0.75.6** — FAT32-only, DiskIntelligenceAgent (680 LOC, 6 controllers, 10+ FS probes)
+- **v0.76.0-0.76.1** — NVMe driver, S.M.A.R.T., Adaptive heap, Dynamic tick, Event-driven Hermes
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
 247+ agentes: 20 nativos + 147 The Agency + ~80 importados + ~6 HW + ~6 FS.
-Bootloader 0.11.15 com `bootloader_api`. Boot sequence agent-centric com `BOOT_PHASE` events.
-GPU compute bare-metal via PCI BAR MMIO (único no mundo Rust).
+Bootloader 0.11.15 com `bootloader_api`. Boot sequence agent-centric.
 
-## Boot Architecture (v0.71.0 — Agent-First)
-O boot agora segue 8 fases, cada uma publicando `BOOT_PHASE` no EventBus:
+### DiskIntelligenceAgent (v0.75.x)
+StorageController trait com 6 implementações (ATA, USB-MSC, NVMe, stubs AHCI/SCSI/VirtIO).
+FilesystemProbe registry com 10+ probes (FAT32, NTFS, EXT4, XFS, ISO9660, exFAT, Btrfs, HFS+, EROFS, ReFS).
+VolumeManagerProbe (LVM2, LUKS). GPT partition table. SED/OPAL detection.
+S.M.A.R.T. monitoring (ATA READ DATA 0xB0+0xD0, health alerts).
+ARC cache 1MB DRAM + tier migration MHI. I/O scheduler (batched writes). Read-ahead (32KB).
 
-| Fase | Agente | O que acontece |
+### MemoryAgent (v0.76.1)
+Adaptive heap: `resize_heap_to_mb()` dinâmico via frame allocator + map_page_uc.
+Orçamento calculado do modelo AI: `heap = clamp(128, params/10MB, 2048)`, `kv = params/40`.
+CPU measurement via rdtsc. Dynamic tick calibration via LAPIC init_count.
+
+### Security Stack
+TPM 2.0 TIS driver (SHA256 embedded, PCR[8] extend, fallback silencioso).
+Ed25519 kernel signing + auto-verification. Partition mask 0x1C (Hidden FAT32 LBA).
+
+### Tick System (v0.76.1)
+LAPIC timer com init_count dinâmico: 12-192 ticks/s baseado em agentes ativos.
+Hermes event-driven: ReAct cycle só avança com entrada real (silêncio sem trabalho).
+EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return pattern.
+
+### Agent Tier Classification (Premissa v0.76.1)
+| Tier | Schedule | Exemplos |
 |---|---|---|
-| 0. SafeHarbor | kernel_main | Serial + FB/VGA + IDT (minimo para sobreviver) |
-| 1. MemoryCore | SystemAgent | Frame allocator + Page tables + Heap + SIMD |
-| 2. SystemBringup | SystemAgent | CortexAgent acorda (pre-HW!) |
-| 3. Diagnostics | SystemAgent → DiagnosticSkill | Testes de alocador, tensor, MLP, BitNet |
-| 4. HardwareDiscovery | PCIAgent + PlatformAgent | PCI scan + ACPI + SMP + GPU detect + HwRegistry |
-| 5. DriverInit | NetDriverAgent + AtaAgent + UsbDriverAgent | RTL8139, e1000, ATA, xHCI (como agentes) |
-| 6. AgentFleet | AgentRegistry | Todos os agentes registrados e iniciados |
-| 7. Runtime | AgentScheduler::run() | HermesAgent lidera, Cortex pensa, agentes agem |
+| Permanent | Continuous | Hermes, Display, HwBridge |
+| SystemDemand | EventDriven | DiskAgent, Cortex, Net |
+| UserDemand | EventDriven | Skills, Apps, Plugins |
+| Periodic | PollEvery(N) | Cron, Observer, Optimizer |
+| Learning | PollEvery(2000) | Novos agentes → analisados 5000 ticks → promovidos |
 
-## Xuvisco Bug (Corrigido)
-**Causa raiz:** VGA text mode inicializava ANTES do framebuffer probe. `println!` escrevia nos registros VGA CRTC (portas 0x3D4/0x3D5) via `set_cursor()`. Em Intel 6xx com UEFI GOP, isso corrompia o scanout.
-
-**Fix:** Framebuffer sondado imediatamente no início de `kernel_main`. Se disponível, toda saída usa `fb_print()` sem tocar nos registros VGA.
-
-## FAT12 Log Bug (Corrigido)
-**Causa raiz:** `boot_logger.rs` só aceitava FAT32 (type_code 0x0B/0x0C). `patch_image.py` cria partição FAT12 (type_code 0x01). `write_boot_log()` usava `Fat32Writer` que rejeitava FAT12.
-
-**Fix:** `write_boot_log()` usa `Fat12Writer` para FAT12, `Fat32Writer` para FAT32. `BootLogAgent` lê ambos os formatos.
-
-## Aprendizados Chave (Sprint 71)
-1. **VGA CRTC + UEFI GOP = incompatível** — escrever nas portas 0x3D4/0x3D5 em modo gráfico corrompe o display Intel 6xx
-2. **DiagnosticSkill substitui teste inline** — Box/Vec/Tensor/SiLU agora são skill, não código procedural no boot
-3. **Cortex acorda antes do HW** — o LLM deve estar disponível para participar das decisões de hardware
-4. **Boot phase events** — cada fase publica `BOOT_PHASE` no EventBus para Hermes/Cortex acompanharem
-5. **FAT12 vs FAT32** — `Fat32Reader::new()` rejeita type_code 0x01; usar `Fat12Writer` para FAT12
-6. **Agent-first boot** — boot procedural é anti-padrão; cada fase deve pertencer a um agente
+## Aprendizados Chave
+1. **VGA CRTC + UEFI GOP = incompatível** (Sprint 71)
+2. **Cortex acorda antes do HW** — LLM deve participar das decisões de hardware
+3. **FAT12 removido** — FAT32-only, 102 LOC eliminados
+4. **Partition mask 0x1C** — mbr_nostd aceita Hidden FAT32, bootloader OK, SO não monta
+5. **TPM fallback** — silencioso se ausente (0xFFFF FFFF), Ed25519 como enforcement primário
+6. **RX=0 persistente** — QEMU slirp + VirtualBox bridge, pre-existente (B-01)
+7. **Hermes event-driven** — 84 linhas/seg → 0 quando ocioso
+8. **Tick dinâmico** — calibrado por workload (12-192 t/s)
+9. **AgentTier** — classificação obrigatória, Learning como fallback
 
 ## Pendente Técnico
-- **Rede RX**: QEMU SLiRP não roteia sem DHCP
-- **Intel GEN shader assembly**: matmul real via EU execution units
-- **NVIDIA PFIFO PUSH_BUFFER**: ring buffer real + FALCON firmware
-- **AMD PM4 ring buffer**: PKT3_WRITE_DATA, PKT3_DMA_DATA
-- **BCS blitter engine**: separar blit do RCS ring
-- **GTT setup**: Intel GPU precisa de GTT para batch buffers em RAM
-- **VRAM free list**: substituir bump allocator por free list real
-- **e1000/r8169**: HW real NIC
+- **RX fix (B-01)**: QEMU SLiRP DHCP/RX bloqueia toda cadeia WWW
+- **GGUF loader (#278)**: ~500 LOC para modelos 1B+ params
+- **WASM runtime (ADR-0032)**: wasmi + WASI→Skill bridge
+- **Intel GEN shader**: matmul real via EU execution units
+- **AHCI driver**: SATA 6G com NCQ (~700 LOC)
+- **USB write path**: UsbMscCtrl::write_blocks atual é stub
+- **e1000/r8169**: HW real NIC driver
+
+## Arquivos Chave
+| Arquivo | Função |
+|---|---|
+| `disk_agent/mod.rs` | DiskIntelligenceAgent (198 LOC) |
+| `disk_agent/controller.rs` | StorageController trait + AtaCtrl + UsbMscCtrl + NvmeCtrl |
+| `disk_agent/fs_probe.rs` | FilesystemProbe + 10 probes (260 LOC) |
+| `disk_agent/nvme.rs` | NVMe driver (239 LOC) |
+| `memory_agent.rs` | Adaptive budget + CPU calibration + dynamic tick |
+| `allocator.rs` | resize_heap_to_mb() + CURRENT_HEAP_MB |
+| `tpm.rs` | TPM 2.0 TIS + SHA256 embedded (279 LOC) |
+| `identity.rs` | Ed25519 kernel verification |
+| `agents.rs` | HermesAgent event-driven + Cortex fallback |
