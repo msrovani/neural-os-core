@@ -89,6 +89,7 @@ mod gpu;
 mod boot_logger;
 mod boot_log_agent;
 mod shutdown;
+mod tpm;
 
 use lazy_static::lazy_static;
 
@@ -97,6 +98,8 @@ pub const LOG_SECTOR: u32 = 2048;
 
 /// ATA driver global para escrita de log no SDHC
 pub static ATA_DRIVER: spin::Mutex<Option<ata::AtaDriver>> = spin::Mutex::new(None);
+
+
 
 struct EchoSkill;
 
@@ -414,6 +417,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     simd::enable_simd();
     crate::boot_logger::log("BOOT: SIMD enabled");
 
+    tpm::init_tpm(pm_offset);
+    crate::boot_logger::log("BOOT: TPM probe done");
+
     publish_boot_phase(BootPhase::SystemBringup, "System bringup — SIMD+heap prontos");
 
     // Diagnosticos como skill (nao inline) — SystemAgent executa depois
@@ -680,6 +686,7 @@ fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Par
                         loop { core::hint::spin_loop() }
                     } else {
                         crate::serial_println!("[SEC] Assinatura do kernel OK.");
+                        crate::tpm::tpm_extend_pcr(crate::tpm::TPM_PCR_KERNEL, &data);
                     }
                     return;
                 }
