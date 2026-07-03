@@ -43,8 +43,8 @@ impl BootLogAgent {
                         }
                     }
                 }
-                0x0B | 0x0C => {
-                    // FAT32: procurar B<TICK>.LOG mais recente
+                0x0B | 0x0C | 0x73 => {
+                    // FAT32 (ou mascarado): ler B<TICK>.LOG mais recente
                     if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
                         let mut best_name = alloc::string::String::new();
                         let mut best_tick = 0u64;

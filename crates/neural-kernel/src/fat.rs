@@ -79,11 +79,11 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
 
     for (i, part) in parts.iter().enumerate() {
         let fs_name = match part.type_code {
-            0x01 | 0x06 | 0x0B | 0x0C => "vfat",
+            0x01 | 0x06 | 0x0B | 0x0C | 0x73 => "vfat",
             0x07 => "ntfs", 0x83 => "ext3", 0x20 => "oem", _ => "unknown",
         };
         // Tenta abrir como FAT32 (type 0x0B ou 0x0C)
-        if part.type_code == 0x0B || part.type_code == 0x0C {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x73 {
             if let Some(fat32) = Fat32Reader::new(ata, part) {
                 let root_list = unsafe { fat32.list_root() };
                 serial_println!("[FAT32] Root contents:\n{}", root_list);

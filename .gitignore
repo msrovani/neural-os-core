@@ -35,3 +35,6 @@ logs/
 *.img
 *.bin
 neural-os-hwtest.*
+
+# Chave privada de assinatura do kernel
+keys/kernel_secret.key

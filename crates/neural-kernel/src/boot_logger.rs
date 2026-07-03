@@ -29,7 +29,7 @@ pub fn log(msg: &str) {
             if let Some(ref ata) = *ata_guard {
                 let parts = crate::fat::read_mbr(ata);
                 for part in &parts {
-                    if part.type_code == 0x01 || part.type_code == 0x0B || part.type_code == 0x0C {
+                    if part.type_code == 0x01 || part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x73 {
                         crate::fat::write_boot_log(ata, part, msg);
                         break;
                     }
@@ -44,7 +44,7 @@ pub fn log(msg: &str) {
 
 unsafe fn write_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Partition], msg: &str) {
     for part in parts {
-        if part.type_code == 0x01 || part.type_code == 0x0B || part.type_code == 0x0C {
+        if part.type_code == 0x01 || part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x73 {
             crate::fat::write_boot_log(ata, part, msg);
             break;
         }
