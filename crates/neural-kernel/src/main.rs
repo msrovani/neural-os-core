@@ -88,6 +88,7 @@ mod bench;
 mod gpu;
 mod boot_logger;
 mod boot_log_agent;
+mod shutdown;
 
 use lazy_static::lazy_static;
 
@@ -326,6 +327,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
         let mut serial = crate::serial::SERIAL.lock();
         if let Some(ref mut s) = *serial { let _ = write!(s, "[PANIC] {}", info); }
     }
+
+    // Registrar causa inesperada e tentar salvar no boot log
+    crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Unexpected);
+    crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Unexpected);
 
     // Tentative path: SelfHeal + LLM (pode falhar se OOM)
     let alloc_ok = crate::allocator::try_alloc_check();

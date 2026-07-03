@@ -191,6 +191,8 @@ impl InputAgent {
         });
     }
     fn handle_cad(&self) {
+        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
+        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
         serial_println!("[SYS] Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
         let log = crate::serial::BOOT_LOG.lock();
         let dump = log.dump();
@@ -934,6 +936,45 @@ impl Agent for BootSelfHealAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         crate::SELF_HEAL.lock();
         serial_println!("[AGENT] SelfHealAgent pronto.");
+
+        // Verifica causa do ultimo desligamento
+        let last_cause = crate::shutdown::read_last_shutdown_from_boot_log();
+        match last_cause {
+            Some(crate::shutdown::ShutdownCause::Unexpected) => {
+                serial_println!("[SELF-HEAL] *** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
+                serial_println!("[SELF-HEAL] Analisando boot log para possiveis erros...");
+                let _ = log_analyst_agent::write_log("self_heal",
+                    "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
+                if let Some(log) = crate::boot_log_agent::BootLogAgent::read_last_boot_log() {
+                    let diagnostics = crate::boot_log_agent::BootLogAgent::analyze_log(&log);
+                    for (kind, msg) in &diagnostics {
+                        serial_println!("[SELF-HEAL] Diagnostico: {} — {}", kind, msg);
+                        let _ = log_analyst_agent::write_log("self_heal",
+                            &alloc::format!("Diagnostico: {} — {}", kind, msg));
+                        if *kind == "PANIC" || *kind == "GPU_HUNG" {
+                            let ctx = crate::self_heal::ErrorContext {
+                                kind, message: msg.clone(),
+                                file: alloc::string::String::from("boot_log"),
+                                line: 0, ring: 0,
+                                daemon: alloc::string::String::from("boot_self_heal"),
+                                tick: _tick,
+                            };
+                            let mut heal = crate::SELF_HEAL.lock();
+                            heal.analyze(&ctx, true);
+                        }
+                    }
+                } else {
+                    serial_println!("[SELF-HEAL] Boot log nao disponivel para analise.");
+                }
+            }
+            Some(cause) => {
+                serial_println!("[SELF-HEAL] Ultimo desligamento: {} (ok)", crate::shutdown::label(cause));
+            }
+            None => {
+                serial_println!("[SELF-HEAL] Primeiro boot ou sem registro de desligamento.");
+            }
+        }
+
         AgentTickResult::Done
     }
 }

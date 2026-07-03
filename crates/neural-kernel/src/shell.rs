@@ -1,5 +1,6 @@
 use alloc::string::String;
 use alloc::vec::Vec;
+use crate::hal::Architecture;
 
 /// Executa comando shell e retorna output
 pub fn execute(cmd: &str) -> String {
@@ -59,10 +60,16 @@ pub fn execute(cmd: &str) -> String {
         }
         "shutdown" => {
             crate::serial_println!("[SHELL] Shutdown requested.");
+            crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
+            crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
+            crate::hal::ARCH.poweroff();
             alloc::format!("Shutting down...\n")
         }
         "reboot" => {
             crate::serial_println!("[SHELL] Reboot requested.");
+            crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Scheduled);
+            crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Scheduled);
+            crate::hal::ARCH.reboot();
             alloc::format!("Rebooting...\n")
         }
         "date" => {

@@ -53,11 +53,14 @@ impl Architecture for X86_64 {
     }
 
     fn reboot(&self) {
+        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
+        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
         unsafe { x86_64::instructions::port::Port::new(0x64u16).write(0xFEu8); }
     }
 
     fn poweroff(&self) {
-        // ACPI shutdown
+        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Expected);
+        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Expected);
         unsafe { core::arch::asm!("out dx, al", in("dx") 0x604u16, in("al") 0x10u8, options(nostack)); }
     }
 

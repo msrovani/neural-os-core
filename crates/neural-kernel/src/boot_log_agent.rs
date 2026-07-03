@@ -97,6 +97,9 @@ impl BootLogAgent {
         if log.contains("FAIL") || log.contains("fail") {
             issues.push(("FAILURE", alloc::string::String::from("Falha detectada no boot")));
         }
+        if log.contains("SHUTDOWN:U") {
+            issues.push(("UNEXPECTED_SHUTDOWN", alloc::string::String::from("Desligamento inesperado detectado no ultimo boot")));
+        }
         if log.contains("GPU") && log.contains("nao respondeu") {
             issues.push(("GPU_HUNG", alloc::string::String::from("GPU nao respondeu FORCE_WAKEUP")));
         }
@@ -104,7 +107,7 @@ impl BootLogAgent {
             issues.push(("FB_OK", alloc::string::String::from("Framebuffer detectado OK")));
         }
         // Contar erros
-        let error_count = log.lines().filter(|l| l.contains("error") || l.contains("Error") || l.contains("FAIL")).count();
+        let error_count = log.lines().filter(|l| l.contains("error") || l.contains("Error") || l.contains("FAIL") || l.contains("SHUTDOWN:U")).count();
         if error_count > 0 {
             issues.push(("ERROR_COUNT", alloc::format!("{} erros no log", error_count)));
         }
