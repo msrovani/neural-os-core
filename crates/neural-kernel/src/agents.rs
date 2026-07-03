@@ -418,20 +418,18 @@ impl Agent for HermesAgent {
             self.boot_greeted = true;
         }
 
-        // #190: Avança no ciclo ReAct
-        self.react_phase = self.react_phase.next();
-        self.log_phase(self.react_phase, "ciclo contínuo de cognição");
-
-        // Atualiza métricas de consciência
+        // Atualiza métricas de consciência (sempre, leve)
         let skills_total = SKILL_REGISTRY.lock().skill_count() as u64;
         self.consciousness.tick(
             _tick,
             self.con_skills_ok, skills_total,
-            0, 0, // agents_active/total sem acesso global
+            0, 0,
             self.con_errors, self.con_errors_resolved,
             self.con_memories_total, self.con_anomaly_count,
             self.boot_greeted,
         );
+
+        // Métricas críticas só reportam se houver anomalia
         if !self.consciousness.critical_metrics().is_empty() {
             serial_println!("[HERMES] Metricas criticas: {:?}",
                 self.consciousness.critical_metrics());
@@ -439,51 +437,39 @@ impl Agent for HermesAgent {
                 &alloc::format!("Metricas criticas: {:?}", self.consciousness.critical_metrics()));
         }
 
-        // Self-Improvement Loop: periodicamente inicia ciclo
-        if !self.sil.is_active() && _tick % 1000 == 0 {
-            self.sil.start(_tick);
-        }
-        if self.sil.needs_research() {
-            log_analyst_agent::write_log("sil", "Research phase");
-            self.sil.advance(true);
-        }
+        // Self-Improvement Loop: periódico
+        if !self.sil.is_active() && _tick % 1000 == 0 { self.sil.start(_tick); }
+        if self.sil.needs_research() { log_analyst_agent::write_log("sil", "Research phase"); self.sil.advance(true); }
 
-        // Consciousness report periodico a cada 2000 ticks
+        // Consciousness report periódico
         if _tick > 0 && _tick % 2000 == 0 {
             let report = self.consciousness.report();
             serial_println!("{}", report);
             log_analyst_agent::write_log("consciousness", &report);
         }
 
-        // Check LLM response first (if awaiting)
+        // ── Processamento de eventos (o trabalho real) ──
+        let mut had_work = false;
         let mut responded = String::new();
         let mut awaiting = matches!(self.state, HermesState::AwaitingLLM);
 
+        // Check LLM response
         if awaiting {
             if let Some(event) = self.llm_receiver.try_receive() {
-                awaiting = false;
+                had_work = true; awaiting = false;
                 self.state = HermesState::Idle;
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
                 serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-
-                // Check if this is a skill creation response
                 let pending = PENDING_SKILL.lock().take();
                 if let Some((name, desc)) = pending {
                     let mut storage = SKILL_STORAGE.lock();
                     match storage.register_skill(text) {
-                        Ok(()) => {
-                            let msg = alloc::format!("[Hermes] Skill '{}' criada via LLM! Instrucoes: {}", name, desc);
-                            serial_println!("[SKILL-LLM] Skill '{}' gerada ({} bytes)", name, text.len());
-                            responded = msg;
-                        }
-                        Err(e) => {
-                            let msg = alloc::format!("[Hermes] Erro ao criar skill '{}': {}", name, e);
-                            responded = msg;
-                        }
+                        Ok(()) => { serial_println!("[SKILL-LLM] Skill '{}' gerada ({} bytes)", name, text.len());
+                            responded = alloc::format!("[Hermes] Skill '{}' criada via LLM!", name); }
+                        Err(e) => { responded = alloc::format!("[Hermes] Erro ao criar skill '{}': {}", name, e); }
                     }
                 } else {
-                    // Normal chat response
                     EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
                     CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
                     responded = alloc::format!("[Hermes] {}", text);
@@ -493,17 +479,18 @@ impl Agent for HermesAgent {
 
         // Check security alerts
         if let Some(event) = self.security_receiver.try_receive() {
+            had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             serial_println!("[SECURITY] {}", text);
-            // Republish as Hermes response (for display)
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
                 payload: text.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
             });
         }
 
-        // Handle user input (if not awaiting LLM or responded)
+        // Check user input / intent
         if let Some(event) = self.user_receiver.try_receive() {
+            had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             serial_println!("[CORTEX] Texto: \"{}\"", text);
             println!("[CORTEX] Texto: \"{}\"", text);
@@ -779,6 +766,13 @@ impl Agent for HermesAgent {
                 EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);
             }
         }
+
+        // 🔧 Event-driven: só avança ReAct quando houve trabalho real
+        if had_work {
+            self.react_phase = self.react_phase.next();
+            self.log_phase(self.react_phase, "processando entrada");
+        }
+        // Se nada foi observado, Hermes permanece em silêncio — sem log inútil
 
         AgentTickResult::Pending
     }
