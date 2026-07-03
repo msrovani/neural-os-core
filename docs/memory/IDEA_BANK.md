@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-07-02 (Sprint 71 — Boot Bughunt, #300-#304, 371 totais)  
+**Última atualização:** 2026-07-03 (Sprint 74 — TPM + Partition + Shutdown, #305-implementado, 374 totais)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -1221,5 +1221,6 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-01 | **TODO.md mestre:** docs/TODO.md com 28 pendências catalogadas, sub-itens, dificuldades, travas, fontes, esforço. Para qualquer AI DEV localizar e contribuir. | Dev + IDA IA |
 | 2026-07-01 | **WiFi (B-29):** Intel Wireless / Atheros / Realtek 802.11. Scan, association, WPA2/WPA3. Thread: firmware loading, crypto, frame format. Bloqueado por B-01 (rede). | Dev + IDA IA |
 | 2026-07-02 | **Boot Bughunt Sprint 71 (IDEA #300-#304):** Boot refatorado para agent-first com 8 fases (BOOT_PHASE events). DiagnosticSkill substitui 90+ linhas de teste inline. CortexAgent acorda antes do HW discovery. Xuvisco corrigido (framebuffer antes de VGA CRTC). FAT12 log finalmente funcional (boot_logger + BootLogAgent). `cargo check --release`: 0 errors. | Dev + IDA IA |
-| - | **305** | **TPM 2.0 Measured Boot** — PCR measurements: firmware → stage1 → stage2 → kernel. Remote attestation proves system integrity. Requires TPM 2.0 hardware (all PCs post-2016). Dependent on #2 (Ed25519 kernel signing) as first step. | ?? Futuro | v0.80+ | ~800 LOC for TIS/CRB driver + PCR extend + event log |
-| 2026-07-03 | **Sprint 74 (IDEA #305?):** Seguranca — particao FAT mascarada (0x73), assinatura Ed25519 do kernel com auto-verificacao, TPM 2.0 no roadmap. | Dev + IDA IA |
+| 2026-07-03 | **305** | **TPM 2.0 Measured Boot (v0.74.1)** — TIS MMIO driver (279 LOC), SHA256 embedded, PCI config 0xFED40000 probe, locality 0 request, FIFO send/recv, PCR[8] extend com kernel hash. Fallback silencioso se TPM ausente. Depende de Ed25519 kernel signing. | ✅ v0.74.1 | v0.74.1 | 279 LOC for TIS driver + SHA256 |
+| 2026-07-03 | **Sprint 74 (v0.74.0-0.74.2):** Seguranca — particao FAT mascarada como 0x1C (Hidden FAT32 LBA, bootloader aceita via mbr_nostd), assinatura Ed25519 do kernel com auto-verificacao, TPM 2.0 TIS driver (probe+fallback+PCA extend). Shutdown tracking (4 causas, persistencia FAT12+VFS, BootSelfHealAgent analisa). | Dev + IDA IA |
+| 2026-07-03 | **Particao FAT 0x1C (v0.74.2):** Mascara tipo 0x0C→0x1C (Hidden FAT32 LBA) via build scripts (offset 0x1D2). Bootloader aceita (mbr_nostd 0.1.0 mapeia 0x1C como PartitionType::Fat32). Kernel aceita 0x1C em todos os checks. Fallback 0x73 mantido. QEMU boot OK, VB OK. | Dev + IDA IA |

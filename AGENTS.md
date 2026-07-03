@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.71.0 🏆
-#   BOOT BUGHUNT: AGENT-FIRST BOOT + DIAGNOSTIC SKILL + FAT12 LOG + XUVISCO FIX
-#   126 arquivos Rust, ~13.800 LOC, 0 erros
+#   PLANO DIRETOR — neural-os-core v0.74.2 🏆
+#   TPM TIS DRIVER + PARTITION MASK 0x1C + ED25519 SIGNING
+#   126 arquivos Rust, ~14.100 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -330,4 +330,12 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - #229 Usage Tracker (~50 LOC) — metrics accumulator for hardware_context_tensor()
 - #230 Auto-Compact Hermes Buffer (~60 LOC) — summarize_context after 3+ cycles
 - #231 Event-Sourced Conversation (~100 LOC) — VecDeque<ConversationEvent>
+
+## Session: v0.74.1-0.74.2 — TPM TIS Driver + Partition Mask 0x1C (2026-07-03)
+- **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend com kernel hash via `tpm_extend_pcr()`. Fallback silencioso se TPM ausente (0xFFFF FFFF). `init_tpm()` early boot (heap+SIMD+IDT pronto, antes de ATA). 0 erros.
+- **Partition mask 0x1C (v0.74.2):** FAT type patcheado para 0x1C (Hidden FAT32 LBA) via build scripts (offset 0x1D2 = segunda entrada MBR). `mbr_nostd 0.1.0` aceita 0x1C como `PartitionType::Fat32`. Windows/Linux não montam automaticamente. Kernel aceita 0x1C em todos os 10 checks.
+- **Testes:** QEMU boot OK (245 agents, Hermes cíclico, sem panics). VirtualBox bridge OK (e1000 detectado, boot completo). **RX=0 pre-existente** em ambos (não causado pelas mudanças).
+- **IDEA_BANK #305 implementado** — TPM 2.0 TIS driver como primeiro passo para measured boot.
+- **IDEA_BANK #305 atualizado** de "?? Futuro v0.80+" para "✅ v0.74.1".
+- **Shutdown tracking** (v0.73.1): código completo (set_cause + write_persistent + read_last + BootSelfHealAgent analysis), ciclo shutdown→reboot→verify pendente de teste.
 <!-- context7 -->

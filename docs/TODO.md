@@ -65,6 +65,7 @@ Fase 4 (WWW):         B-11 (WWW Infra) ──→ B-12 (Browser), B-13 (MCP), B-1
 Fase 5 (GPU Intel):   B-02 (GEN shader) ←── B-07 ✅
 Fase 6 (HW real):     B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
 Fase 7 (WiFi):        B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
+**Fase 8 (FS):        B-25 (FAT32) + B-34 (log) ✅ — FAT12 removido**
 Backlog:              B-06, B-15, B-16, B-19, B-20
 ```
 
