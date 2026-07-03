@@ -518,7 +518,316 @@ Cortex:
 - `AtaCtrl::read_smart()`: ATA SMART READ DATA via PIO, parse 30 atributos
 - `DiskIntelligenceAgent::probe_all()`: lê SMART, loga, alerta se unhealthy
 
-## 14. Boot Path (Tier 0) vs Agent (Tier 1/2)
+## 14. Tecnologias Emergentes
+
+### 14.1 GPT (GUID Partition Table)
+
+Obrigatório para discos >2TB. O agente precisa de um probe ao lado do MBR:
+
+```rust
+fn probe_gpt(&self, read_fn: &dyn Fn(u64, &mut [u8]) -> bool) -> Option<Vec<PartitionInfo>> {
+    // LBA 0: verifica se MBR tem partition type 0xEE (GPT protective)
+    // LBA 1: GPT header — magic "EFI PART" @ 0x00, revision @ 0x08
+    //         MyLBA @ 0x18, entries start LBA @ 0x48, count @ 0x50
+    // LBA 2..33: 128 entries × 128 bytes = 16KB
+    //   type_guid[16] @ 0x00, part_guid[16] @ 0x10, LBA_start @ 0x20,
+    //   LBA_end @ 0x28, flags @ 0x38, name (36 UTF16LE) @ 0x48
+}
+```
+
+GUIDs conhecidos mapeados pelo agente:
+
+| GUID | Tipo |
+|---|---|
+| `C12A7328-F81F-11D2-BA4B-00A0C93EC93B` | EFI System |
+| `EBD0A0A2-B9E5-4433-87C0-68B6B72699C7` | Microsoft Data (NTFS) |
+| `0FC63DAF-8483-4772-8E79-3D69D8477DE4` | Linux Filesystem (EXT4) |
+| `E6D6D379-F507-44C2-A23C-238F2A3DF928` | Linux LVM |
+| `CA7D7CCB-63ED-4C53-861C-1742536059CC` | Linux Swap |
+| `4FBD7E29-9D25-41B8-AFD0-5EC2BA6E8A10` | Android SPI |
+| `48465300-0000-11AA-AA11-00306543ECAC` | Apple APFS |
+| `6A82CB45-1DD2-11B2-99A6-080020736631` | Apple HFS+ |
+
+O agente **prefere GPT** quando presente (se MBR tem tipo 0xEE, ignora MBR).
+
+### 14.2 TRIM / Discard (SSD)
+
+Sem TRIM, SSD degrada 30%+ após 6 meses. O agente gerencia:
+
+```rust
+trait StorageController: Send {
+    fn trim(&self, disk: u8, lba: u64, blocks: u32) -> bool { false } // default: no-op
+}
+```
+
+Comandos por interface:
+
+| Interface | Comando |
+|---|---|
+| **ATA** | DATA SET MANAGEMENT (0x06): Features=1 (TRIM), setor LBA, count=blocks |
+| **NVMe** | Deallocate bit no Write Zeroes command |
+| **AHCI** | Mesmo ATA via PRD de 512B com TRIM descriptor |
+| **USB-MSC** | SCSI UNMAP (0x42): parameter list com LBA+blocks |
+
+O agente mantém `TrimQueue`:
+
+```rust
+pub struct TrimQueue {
+    pending: Vec<(u8, u64, u32)>, // (disk, lba, blocks)
+    flush_interval: u64,           // ticks entre flushes
+    last_flush: u64,
+}
+
+impl TrimQueue {
+    fn enqueue(&mut self, disk: u8, lba: u64, blocks: u32);
+    fn flush(&mut self, controllers: &[Box<dyn StorageController>]);
+    // Acumula blocos, coalesce adjacentes, envia comando a cada N ticks
+}
+```
+
+Chamado por:
+- `DiskAgent::tick()`: flush periódico
+- `delete_file()` via VFS: enfileira blocos do arquivo deletado
+- `format_partition()`: enfileira partição inteira
+
+### 14.3 Write Cache + Flush
+
+Discos têm cache onboard volátil. O agente gerencia:
+
+```rust
+trait StorageController: Send {
+    fn set_write_cache(&self, disk: u8, enable: bool) -> bool { true }
+    fn flush_cache(&self, disk: u8) -> bool { true }
+}
+```
+
+- **Enable/Disable:** ATA SET FEATURES (0xEF)
+  - Enable: subcmd 0x02, count=0xAA, LBA mid=0x00
+  - Disable: subcmd 0x82, count=0x55, LBA mid=0x00
+- **Flush:** ATA FLUSH CACHE (0xE7) ou FLUSH CACHE EXT (0xEA)
+- **Safe removal:** USB → disable write cache, flush, depois remove
+- **Crash recovery:** no boot, verifica se write cache estava enabled → se sim, flush
+
+### 14.4 Bad Block Table (Flash)
+
+Para SD/MMC, USB flash, SSD NAND. O agente gerencia em DRAM:
+
+```rust
+pub struct BadBlockTable {
+    blocks: BTreeMap<(u8, u64), u64>, // (disk, bad_lba) → replacement_lba
+    replacement_pool: BTreeMap<(u8, u64), bool>, // (disk, lba) → available
+}
+```
+
+- **Detecção:** `read_blocks()` retorna erro → marca LBA como bad
+- **Remapeamento:** procura block reserva, atualiza tabela
+- **Persistência:** salva tabela em FAT32 (`B${boot_tick}.BLK`)
+- **Recuperação:** carrega tabela no próximo boot
+- **Prevenção:** se bad blocks > 1% da capacidade total → alerta self-heal
+
+### 14.5 Performance Profiling (IOPS + Latência)
+
+Além de bandwidth, o agente mede perfil completo:
+
+```rust
+pub struct PerfProfile {
+    pub seq_read_mbs: u32,
+    pub seq_write_mbs: u32,
+    pub rand_read_4k_iops: u32,
+    pub rand_write_4k_iops: u32,
+    pub latency_p99_us: u32,
+    pub queue_depth: u8,
+    pub measured_at_tick: u64,
+}
+```
+
+O agente executa benchmark no probe e re-mede a cada 10000 ticks:
+- 1MB sequential read → MB/s
+- 4K random read × 256 → IOPS
+- Cronometra latência p99
+
+**Uso:** detectar degradação:
+```
+[PERF] sda: seq 420→380 MB/s (-9.5%) em 24h — verificar SMART?
+```
+
+### 14.6 Formatação de Filesystem (Criação)
+
+O agente pode **criar** filesystems em software:
+
+```rust
+fn format_partition(ctrl_idx: u8, disk: u8, part: &PartitionInfo, fs: FilesystemType) -> bool;
+```
+
+| FS | Complexidade | O que escreve |
+|---|---|---|
+| **FAT32** | ~200 LOC | BPB, 2 FATS vazias, root dir cluster |
+| **ext4** | ~300 LOC | Superblock + GDT + inode table + journal |
+| **NTFS** | ~400 LOC | VBR + MFT + Bitmap + $Volume |
+
+Exposto via VFS:
+```
+echo "fat32" > /dev/sdb1/format
+```
+
+### 14.7 LUKS Unlock (Criptografia)
+
+Fluxo do agente:
+
+1. **Detecta:** VolMgrProbe → LUKS → `VolumeGroup { tech: LUKS1 }`
+2. **Publica:** `LUKS_DETECTED { disk: "sdb", part: 1 }` no EventBus
+3. **Cortex:** pergunta ao usuário "Senha da partição criptografada?"
+4. **Agente:** tenta `luksOpen(senha)`:
+   - Lê header LUKS (cipher, MK digest)
+   - Deriva chave via PBKDF2 (software)
+   - Tenta decriptografar Master Key com cada keyslot
+5. **Se OK:** expõe volume decriptografado como `RawDisk` virtual
+6. **Se falha:** publica `LUKS_FAILED`, tenta próximo keyslot ou senha alternativa
+
+### 14.8 ATA Security (Sanitização)
+
+Comandos de segurança ATA:
+
+```rust
+fn security_freeze_lock(disk: u8) -> bool;  // 0xF5
+fn security_erase_unit(disk: u8, password: &[u8]) -> bool; // 0xF4
+fn security_set_password(disk: u8, password: &[u8]) -> bool; // 0xF1
+```
+
+O agente expõe como skills:
+- `"travar disco sda"` → SECURITY FREEZE LOCK
+- `"apagar disco sdb com seguranca"` → SECURITY ERASE UNIT
+- `"sanitizar nvme0n1"` → NVMe Format NVM
+
+### 14.9 Detecção de Tecnologias Específicas
+
+| Tecnologia | Detecção | Ação do agente |
+|---|---|---|
+| **Intel Optane** | PCI vendor 0x8086, class memory | Registra como `AllocTier::Nvme` com flag `optane=true` |
+| **Apple Fusion** | CoreStorage detecta SSD+HDD pair | Cria volume lógico híbrido (tier=Hdd com cache=Nvme) |
+| **Storage Spaces** | GPT GUID `E75CAF8F...` (Microsoft) | Pool de discos Windows → expõe volumes virtuais |
+| **bcache/dm-cache** | Superblock no cache device | Cria device virtual com cache SSD + backing HDD |
+| **ZFS special vdev** | Label zpool + allocation class | Metadata em SSD, dados em HDD → tier otimizado |
+
+### 14.10 SED / OPAL (Self-Encrypting Drives)
+
+SSDs modernos têm AES-256 no hardware — criptografia com custo ZERO de CPU.
+
+```rust
+trait StorageController: Send {
+    fn detect_sed(&self, disk: u8) -> (bool, bool); // (is_opal, security_frozen)
+}
+```
+
+O agente:
+1. **IDENTIFY DEVICE** → word 82 bit 5 = Security Feature Set
+2. Se suportado, lê word 91 (security status: locked/frozen/enabled)
+3. Publica `SED_DETECTED { disk, frozen }` no EventBus
+4. Cortex pergunta: "Senha do disco sda?"
+5. Agente envia `SECURITY UNLOCK (0xF2)` com senha
+6. Disco decriptografa em hardware — CPU livre
+
+| Plataforma | Tecnologia | Detectamos | Desbloqueamos |
+|---|---|---|---|
+| Windows | eDrive (BitLocker + OPAL) | ✅ | ❌ (sem chave) |
+| Linux | sedutil | ✅ | ✅ (via agente) |
+| macOS | Apple T2/Mx inline AES | ❌ (não ATA) | — |
+
+### 14.11 Compactação Transparente (LZ4)
+
+LZ4 é no_std-friendly e faz >400 MB/s. O agente acopla ao VFS:
+
+```rust
+// Couple comp/decomp ao VFS write/read
+fn vfs_write_compressed(path: &str, data: &[u8]) {
+    let compressed = lz4_compress(&data); // LZ4 block format
+    // store compressed ao invés de raw
+}
+```
+
+**Onde aplicar:**
+| Caminho VFS | Ganho típico | Prioridade |
+|---|---|---|
+| `/inference/` (resultados Cortex) | 3:1 | Alta |
+| `/logs/` (logs históricos) | 10:1 | Média |
+| `/system/` (serialized state) | 2:1 | Baixa |
+
+Implementação: crate `lz4-compress` (MIT, no_std) ou codificação manual LZ4 block (~200 LOC).
+
+### 14.12 I/O Scheduler + Read-ahead
+
+O agente implementa scheduling simples:
+
+```rust
+pub struct IoRequest {
+    ctrl_idx: u8, disk: u8, lba: u64,
+    data: Vec<u8>, // write data, ou vazio para read
+    priority: u8,  // 0=read (alta), 1=write (baixa)
+}
+```
+
+**Regras:**
+- Reads têm prioridade (bloqueiam o chamador)
+- Writes batelam (flush a cada 32 requests ou 1000 ticks)
+- Read-ahead: detecta acesso sequencial → prefetch 32KB
+- Coalesce: requisições adjacentes de mesmo disco → merge
+
+**Status atual:** implementado como stub (io_queue + readahead_cache em DiskAgent).
+
+### 14.13 Block-Level Dedup
+
+SHA256 de cada bloco de 4KB → se hash já existe, reusa bloco:
+
+```rust
+pub struct DedupTable {
+    blocks: BTreeMap<[u8; 32], (u8, u64)>, // hash → (disk, lba)
+    refcounts: BTreeMap<(u8, u64), u32>,    // (disk, lba) → refs
+}
+```
+
+**Ganho:** logs de boot repetitivos → 50%+ economia em SSD.
+**Risco:** CPU extra para SHA256 por block. Viável só para setores grandes (>4KB).
+
+### 14.14 Comparação com OS Existentes
+
+| Tecnologia | Linux | Windows | macOS/iOS | Android | **Nosso Agente** |
+|---|---|---|---|---|---|
+| **Cripto disco** | LUKS (dm-crypt) | BitLocker (AES-XTS) | FileVault 2 (AES-XTS) | fscrypt / dm-crypt | Detecta ambos via superblock |
+| **Cripto HW** | OPAL / sedutil | eDrive (BitLocker+OPAL) | Apple T2/Mx inline | UFS inline? | Detecta SED via IDENTIFY |
+| **Compressão FS** | Btrfs zstd, ZFS lz4, F2FS lz4 | NTFS LZNT1, CompactOS LZX | APFS LZFSE | EROFS lz4, F2FS lz4 | Planejado LZ4 (inference FS) |
+| **Dedup** | ZFS, VDO, duperemove | ReFS chunk store | APFS clone | — | BlockStore (planejado) |
+| **TRIM** | fstrim (cron/systemd) | Optimize-Volume | NVMe built-in | fstrim / F2FS | TrimQueue ✅ |
+| **S.M.A.R.T.** | smartd / systemd-smartd | WMI / chkdsk | — | — | ✅ lê + alerta |
+| **I/O Scheduler** | BFQ / Kyber / mq-deadline | StorPort | I/O Kit | CFQ (legacy) | Stub (prioridade read) |
+| **Read-ahead** | page cache readahead | Prefetch / SysMain | APFS preheat | F2FS readahead | Stub (32KB prefetch) |
+| **Integridade** | dm-verity, ZFS checksum | ReFS integrity streams | APFS checksum | dm-verity (boot) | Detecta dm-verity |
+| **GPT** | sim | sim | sim | sim | ✅ implementado |
+| **Formatação** | mkfs.* | format.com | Disk Utility | makefs | Planejado (FAT32+EXT4) |
+| **Hotplug** | udev / systemd | PnP manager | I/O Kit | vold | Stub (poll a cada 100 ticks) |
+
+### 14.15 Compatibilidade Alvo
+
+```
+Mount do OS vizinho:     Nosso agente lê:        Não lê (mas detecta):
+──────────────────────   ──────────────────      ──────────────────────────
+Linux LUKS + EXT4        Partição detectada      Dados (sem senha LUKS)
+Windows BitLocker+NTFS   Partição detectada      Dados (sem chave BitLocker)
+Windows ReFS             Partição + "ReFS"       Dados (sem doc pública)
+macOS APFS               Partição + label + FS   Dados (sem chave FileVault)
+Android FBE + EROFS      Partição + EROFS files  Dados (cada app tem chave)
+Android FBE + fscrypt    Partição detectada      Dados (chave por app)
+```
+
+### 14.16 Integração no Roteiro
+
+```
+Sprint 75.3:  GPT + TRIM queue + Write Cache mgmt
+Sprint 75.4:  Bad Block Table + Performance Profiling
+Sprint 75.5:  LUKS unlock + ATA Security + Format FS
+Sprint 75.6:  Fusion Drive + Storage Spaces + Optane
+```
+
+## 15. Boot Path (Tier 0) vs Agent (Tier 1/2)
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -567,7 +876,7 @@ Cortex:
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-## 15. Arquivos Novo/Modificados
+## 16. Arquivos Novo/Modificados
 
 | Arquivo | Ação | LOC est. | Sprint |
 |---|---|---|---|
@@ -586,7 +895,7 @@ Cortex:
 | `src/mhi.rs` | **Modificado** — query + update methods | +40 | 75.1 |
 | **Total** | | **~2.400 LOC** | |
 
-## 16. Roteiro de Implementação
+## 17. Roteiro de Implementação
 
 ### Sprint 75.1 — Estrutura Base + ATA + MBR + FAT32 + MHI
 
@@ -647,7 +956,7 @@ Cortex:
 - NVDIMM (ACPI NFIT)
 - RAID HW: MegaRAID MPT3, Intel VMD
 
-## 17. Tecnologias Consideradas e Descartadas
+## 18. Tecnologias Consideradas e Descartadas
 
 | Tecnologia | Motivo do descarte |
 |---|---|

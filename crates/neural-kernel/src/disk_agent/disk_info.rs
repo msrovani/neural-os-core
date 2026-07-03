@@ -24,6 +24,7 @@ pub enum FilesystemType {
     Ubifs, Jffs2, Yaffs2, Logfs,
     BeFs, Qnx4, Qnx6, Sysv, Xenix,
     Vmfs, Plan9,
+    ErOfs, // EROFS (Android)
     Unknown,
 }
 
@@ -97,4 +98,6 @@ pub struct RawDisk {
     pub partitions: Vec<PartitionInfo>,
     pub volume_groups: Vec<VolumeGroup>,
     pub smart: Option<SmartData>,
+    pub is_opal: bool,
+    pub security_frozen: bool,
 }

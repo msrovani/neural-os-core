@@ -23,6 +23,8 @@ impl FsProbeRegistry {
         reg.register(Box::new(BtrfsProbe));      // "_BHRfS_M" — specific
         reg.register(Box::new(Iso9660Probe));    // "CD001" — specific
         reg.register(Box::new(HfsPlusProbe));    // "H+" / "HX"
+        reg.register(Box::new(ErOfsProbe));       // EROFS (Android)
+        reg.register(Box::new(ReFsProbe));         // ReFS (Windows)
         reg.register(Box::new(Fat32Probe));       // BPB + OEM string
         reg.register(Box::new(ExFatProbe));       // "EXFAT   "
         reg
@@ -210,5 +212,52 @@ impl FilesystemProbe for HfsPlusProbe {
         Some(FsInfo { fs_type: FilesystemType::HfsPlus, label: String::new(), uuid: String::new(),
             total_bytes: blocks as u64 * block_size as u64, free_bytes: None,
             block_size, is_writeable: true })
+    }
+}
+
+// ── EROFS (Android) ─────────────────────────────────────────
+pub struct ErOfsProbe;
+impl FilesystemProbe for ErOfsProbe {
+    fn fs_type(&self) -> FilesystemType { FilesystemType::ErOfs }
+    fn priority(&self) -> u8 { 70 }
+    fn probe(&self, read_fn: &dyn Fn(u64, &mut [u8]) -> bool, _ml: u64) -> Option<FsInfo> {
+        let mut sb = [0u8; 512];
+        if !read_fn(0, &mut sb) { return None; }
+        if &sb[0..5] != b"EROFS" { return None; }
+        let version = sb[5];
+        if version < 1 { return None; }
+        let block_size = 1024u32; // EROFS uses 1K blocks typically
+        let blocks = u64::from_le_bytes([sb[0x1C], sb[0x1D], sb[0x1E], sb[0x1F],
+            sb[0x20], sb[0x21], sb[0x22], sb[0x23]]);
+        let label = if version >= 1 {
+            core::str::from_utf8(&sb[0x38..0x48]).unwrap_or("").trim_end().into()
+        } else { String::new() };
+        Some(FsInfo { fs_type: FilesystemType::ErOfs, label, uuid: String::new(),
+            total_bytes: blocks as u64 * block_size as u64, free_bytes: None,
+            block_size, is_writeable: false })
+    }
+}
+
+// ── ReFS (Windows Server) ──────────────────────────────────
+pub struct ReFsProbe;
+impl FilesystemProbe for ReFsProbe {
+    fn fs_type(&self) -> FilesystemType { FilesystemType::ReFs }
+    fn priority(&self) -> u8 { 65 }
+    fn probe(&self, read_fn: &dyn Fn(u64, &mut [u8]) -> bool, _ml: u64) -> Option<FsInfo> {
+        let mut vbr = [0u8; 512];
+        if !read_fn(0, &mut vbr) { return None; }
+        if &vbr[3..11] == b"NTFS    " { return None; } // not ReFS, it's NTFS
+        // ReFS has no NTFS-like OEM string. Check for partition type 0x07 elimination.
+        // ReFS superblock signature: "ReFS" at various offsets depending on version
+        if &vbr[0..4] != b"ReFS" && &vbr[0x10..0x14] != b"ReFS" {
+            // Also check for "FSRS" (ReFS v3+)
+            if &vbr[0..8] != b"FSRS\0\0\0\0" && &vbr[0x10..0x18] != b"FSRS\0\0\0\0" {
+                return None;
+            }
+        }
+        let total_bytes = u64::from_le_bytes([vbr[0x20], vbr[0x21], vbr[0x22], vbr[0x23],
+            vbr[0x24], vbr[0x25], vbr[0x26], vbr[0x27]]);
+        Some(FsInfo { fs_type: FilesystemType::ReFs, label: String::new(), uuid: String::new(),
+            total_bytes, free_bytes: None, block_size: 4096, is_writeable: false })
     }
 }

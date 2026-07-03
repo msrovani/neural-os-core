@@ -49,6 +49,7 @@ impl StorageController for AtaCtrl {
 
         let bw = self.measure_bandwidth(0);
         let interface = if bw > 200 { InterfaceType::Sata } else { InterfaceType::Pata };
+        let (is_opal, security_frozen) = unsafe { self.ata_detect_security() };
 
         let raw = RawDisk {
             name: alloc::format!("sda"),
@@ -67,6 +68,8 @@ impl StorageController for AtaCtrl {
             partitions: Vec::new(),
             volume_groups: Vec::new(),
             smart: None,
+            is_opal,
+            security_frozen,
         };
         self.disks.push(raw);
         self.disks.clone()
@@ -208,5 +211,45 @@ impl AtaCtrl {
         let healthy = realloc_sectors < 100 && pending_sectors < 10 && crc_errors < 1000;
 
         Some(SmartData { healthy, temp_c, power_on_hours, realloc_sectors, pending_sectors, crc_errors, wear_level })
+    }
+
+    /// Detecta SED (Self-Encrypting Drive / OPAL) via ATA IDENTIFY word 82
+    unsafe fn ata_detect_security(&self) -> (bool, bool) {
+        use core::arch::asm;
+        let io = self.ata.io_base;
+        let wait = || -> bool {
+            for _ in 0..100000 {
+                let s: u8; asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+                if s & 0x80 == 0 { return true; }
+                core::hint::spin_loop();
+            }
+            false
+        };
+        if !wait() { return (false, false); }
+        asm!("out dx, al", in("dx") io + 6, in("al") 0xE0u8, options(nostack, preserves_flags));
+        // IDENTIFY DEVICE (0xEC)
+        asm!("out dx, al", in("dx") io + 2, in("al") 0x00u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 3, in("al") 0x00u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 4, in("al") 0x00u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 5, in("al") 0x00u8, options(nostack, preserves_flags));
+        asm!("out dx, al", in("dx") io + 7, in("al") 0xECu8, options(nostack, preserves_flags));
+        for _ in 0..100000 {
+            let s: u8; asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));
+            if s & 0x08 != 0 { break; } // DRQ
+            if s & 0x01 != 0 { return (false, false); }
+            core::hint::spin_loop();
+        }
+        let mut data = [0u16; 256];
+        for word in &mut data {
+            asm!("in ax, dx", out("ax") *word, in("dx") io, options(nostack, preserves_flags));
+        }
+        // Word 82 bits: bit 5 = Security Feature Set supported
+        let word82 = data[82];
+        let is_opal = (word82 & (1 << 5)) != 0;
+        // Word 91 bits: bit 0 = Security enabled (locked), bit 1 = Security frozen
+        let word91 = data[91];
+        let _security_enabled = (word91 & (1 << 0)) != 0;
+        let security_frozen = (word91 & (1 << 1)) != 0;
+        (is_opal, security_frozen)
     }
 }

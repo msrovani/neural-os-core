@@ -24,6 +24,8 @@ pub struct DiskIntelligenceAgent {
     vol_registry: VolMgrRegistry,
     tick_run: bool,
     tick_count: u64,
+    io_queue: Vec<(u8, u8, u64, Vec<u8>)>, // (ctrl_idx, disk, lba, data)
+    readahead_cache: Vec<(u64, u64, Vec<u8>)>, // (disk_key, lba, data)
 }
 
 impl DiskIntelligenceAgent {
@@ -42,6 +44,8 @@ impl DiskIntelligenceAgent {
             vol_registry: VolMgrRegistry::new(),
             tick_run: false,
             tick_count: 0,
+            io_queue: Vec::new(),
+            readahead_cache: Vec::new(),
         }
     }
 
@@ -89,33 +93,137 @@ impl DiskIntelligenceAgent {
         DISK_AGENT_INIT.store(true, Ordering::Release);
     }
 
+    fn io_scheduler_enqueue(&mut self, ctrl_idx: u8, disk: u8, lba: u64, data: Vec<u8>) {
+        self.io_queue.push((ctrl_idx, disk, lba, data));
+        if self.io_queue.len() >= 32 { self.io_scheduler_flush(); }
+    }
+
+    fn io_scheduler_flush(&mut self) {
+        if self.io_queue.is_empty() { return; }
+        let batch = core::mem::take(&mut self.io_queue);
+        for (ctrl_idx, disk, lba, data) in batch {
+            if (ctrl_idx as usize) < self.controllers.len() {
+                self.controllers[ctrl_idx as usize].write_blocks(disk, lba, &data, (data.len() + 511) / 512);
+            }
+        }
+    }
+
+    fn readahead_hint(&mut self, ctrl_idx: u8, disk: u8, lba: u64, count: u64) {
+        let key = ((disk as u64) << 56) | (ctrl_idx as u64) << 48 | lba;
+        if self.readahead_cache.iter().any(|(k, _, _)| *k == key) { return; }
+        let prefetch_blocks = 32usize.min(4096 / 512);
+        let mut buf = alloc::vec![0u8; prefetch_blocks * 512];
+        if (ctrl_idx as usize) < self.controllers.len() {
+            self.controllers[ctrl_idx as usize].read_blocks(disk, lba + count, &mut buf, prefetch_blocks);
+        }
+        self.readahead_cache.push((key, lba + count, buf));
+        if self.readahead_cache.len() > 64 { self.readahead_cache.remove(0); }
+    }
+
     fn read_partitions(&self, disk: &mut RawDisk, ctrl_idx: usize) {
         let read_fn = |lba: u64, buf: &mut [u8]| -> bool {
             if ctrl_idx < self.controllers.len() {
                 self.controllers[ctrl_idx].read_blocks(0, lba, buf, (buf.len() + 511) / 512)
             } else { false }
         };
+
+        // Try GPT first (priority over MBR)
+        if let Some(gpt_parts) = self.probe_gpt(&read_fn, disk.max_read_bw_mbs) {
+            disk.partitions = gpt_parts;
+            return;
+        }
+
+        // Fallback to MBR
+        self.probe_mbr(disk, &read_fn);
+    }
+
+    fn probe_gpt(&self, read_fn: &dyn Fn(u64, &mut [u8]) -> bool, bw_mbs: u32) -> Option<Vec<PartitionInfo>> {
+        // Check MBR protective entry
+        let mut mbr = [0u8; 512];
+        if !read_fn(0, &mut mbr) { return None; }
+        if mbr[510] != 0x55 || mbr[511] != 0xAA { return None; }
+
+        // MBR partition type 0xEE = GPT protective (must be at entry 0 or entry matching all-zeros area)
+        let has_protective = (0..4).any(|i| mbr[0x1BE + i * 16 + 4] == 0xEE);
+        if !has_protective { return None; }
+
+        // Read GPT header at LBA 1
+        let mut hdr = [0u8; 512];
+        if !read_fn(1, &mut hdr) { return None; }
+        if &hdr[0..8] != b"EFI PART" { return None; }
+
+        let revision = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]);
+        if revision < 0x00010000 { return None; } // need at least rev 1.0
+
+        let entries_lba = u64::from_le_bytes([hdr[72], hdr[73], hdr[74], hdr[75], hdr[76], hdr[77], hdr[78], hdr[79]]);
+        let entry_count = u32::from_le_bytes([hdr[80], hdr[81], hdr[82], hdr[83]]);
+        let entry_size = u32::from_le_bytes([hdr[84], hdr[85], hdr[86], hdr[87]]);
+        if entry_count > 128 || entry_size != 128 { return None; }
+
+        // Read partition entries (typically LBA 2-33)
+        let entries_per_block = 512 / entry_size as usize; // typically 4 per sector
+        let total_blocks = (entry_count as usize + entries_per_block - 1) / entries_per_block;
+        let mut parts = Vec::new();
+        for blk in 0..total_blocks {
+            let mut buf = [0u8; 512];
+            if !read_fn(entries_lba + blk as u64, &mut buf) { break; }
+            for ent in 0..entries_per_block {
+                let off = ent * entry_size as usize;
+                let type_guid = &buf[off..off+16];
+                if type_guid.iter().all(|&b| b == 0) { continue; }
+                let lba_start = u64::from_le_bytes([buf[off+32], buf[off+33], buf[off+34], buf[off+35],
+                    buf[off+36], buf[off+37], buf[off+38], buf[off+39]]);
+                let lba_end = u64::from_le_bytes([buf[off+40], buf[off+41], buf[off+42], buf[off+43],
+                    buf[off+44], buf[off+45], buf[off+46], buf[off+47]]);
+                let attrs = u64::from_le_bytes([buf[off+56], buf[off+57], buf[off+58], buf[off+59],
+                    buf[off+60], buf[off+61], buf[off+62], buf[off+63]]);
+                let name_utf16 = &buf[off+64..off+108];
+                let name = String::from_utf16le(name_utf16).unwrap_or(String::new());
+                let name_str = name.trim_end_matches('\0');
+
+                let mbr_type = match type_guid {
+                    g if g == &[0x28,0x73,0x2A,0xC1,0x1F,0xF8,0xD2,0x11,0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B] => 0xEF, // ESP
+                    g if g == &[0xA2,0xA0,0xD0,0xEB,0xE5,0xB9,0x33,0x44,0x87,0xC0,0x68,0xB6,0xB7,0x26,0x99,0xC7] => 0x07, // NTFS
+                    g if g == &[0xAF,0x3D,0xC6,0x0F,0x83,0x84,0x72,0x47,0x8E,0x79,0x3D,0x69,0xD8,0x47,0x7D,0xE4] => 0x83, // Linux
+                    g if g == &[0x79,0xD3,0xD6,0xE6,0xF5,0x07,0x44,0xC2,0xA2,0x3C,0x23,0x8F,0x2A,0x3D,0xF9,0x28] => 0x8E, // LVM
+                    _ => 0xEE, // unknown GPT type
+                };
+                let tier = AllocTier::from_usb_bw(bw_mbs);
+
+                parts.push(PartitionInfo {
+                    index: parts.len() as u8,
+                    lba_start,
+                    lba_end,
+                    sector_count: lba_end - lba_start,
+                    mbr_type,
+                    fs_info: None,
+                    is_bootable: attrs & 0x0000000000000004 == 0, // bit 2 = no auto mount
+                    mhi_tier: tier,
+                    mount_point: None,
+                });
+            }
+        }
+        if parts.is_empty() { None } else { Some(parts) }
+    }
+
+    fn probe_mbr(&self, disk: &mut RawDisk, read_fn: &dyn Fn(u64, &mut [u8]) -> bool) {
         let mut mbr = [0u8; 512];
         if !read_fn(0, &mut mbr) { return; }
         if mbr[510] != 0x55 || mbr[511] != 0xAA { return; }
         for i in 0..4 {
             let off = 0x1BE + i * 16;
             let ptype = mbr[off + 4];
-            if ptype == 0x00 { continue; }
+            if ptype == 0x00 || ptype == 0xEE { continue; }
             let lba_start = u32::from_le_bytes([mbr[off+8], mbr[off+9], mbr[off+10], mbr[off+11]]);
             let count = u32::from_le_bytes([mbr[off+12], mbr[off+13], mbr[off+14], mbr[off+15]]);
             if count == 0 { continue; }
             let tier = AllocTier::from_usb_bw(disk.max_read_bw_mbs);
             disk.partitions.push(PartitionInfo {
-                index: i as u8,
-                lba_start: lba_start as u64,
+                index: i as u8, lba_start: lba_start as u64,
                 lba_end: lba_start as u64 + count as u64,
-                sector_count: count as u64,
-                mbr_type: ptype,
-                fs_info: None,
-                is_bootable: mbr[off] == 0x80,
-                mhi_tier: tier,
-                mount_point: None,
+                sector_count: count as u64, mbr_type: ptype,
+                fs_info: None, is_bootable: mbr[off] == 0x80,
+                mhi_tier: tier, mount_point: None,
             });
         }
     }
