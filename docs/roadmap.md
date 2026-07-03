@@ -12,6 +12,7 @@
 | **18. Security** | **74** | **0.74.x** | **✅ TPM TIS, Ed25519 signing, Partition mask 0x1C** |
 | **19. Disk Intelligence** | **75** | **0.75.x** | **✅ DiskAgent, NVMe, SMART, ARC cache, GPT** |
 | **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
+| **21. Trinity MoE** | **77** | **0.77.x** | **🟡 GGUF loader, MoE Router, rust_coder, WASM runtime** |
 
 ## Funcionalidades por Camada
 

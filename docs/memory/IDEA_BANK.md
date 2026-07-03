@@ -459,6 +459,17 @@ Nada é descartado sem registro. Ideias podem ser:
 | 310a | **J.A.R.V.I.S. Layer** — Camada de persona acima do Hermes: SOUL.md, contexto persistente (MemoryTree+KG), notificações proativas (NotificationGate), conversation engine (greetings, mood, task decomposition) | 🟡 Pós-MVP | v0.80+ | ~1.150 LOC (text-only). Viability 8/10. Limitado por Cortex 272K params. ADR-0031 |
 | 310b | **Stack final:** Boot → Kernel → Cortex/LLM → Hermes → J.A.R.V.I.S. — Ver diagrama ADR-0031. Boot minimalista. Kernel acorda Cortex (BitNet). Cortex alimenta Hermes (intent). Hermes delega para J.A.R.V.I.S. (UI conversacional WASM). Tudo agentes, tudo skills | 🟡 Pós-MVP | v0.80+ | ADR-0031 |
 
+### 1.26. Trinity Model Hub — Mixture of Experts (IDEA #311)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 311a | **Router BitNet (68KB)** — classifica intenção e roteia para expert correto | 🟡 Sprint 77 | Sprint 77 | 5-10 classes de intenção |
+| 311b | **hw_identify (68KB, ✅ existente)** — 66K pares PCI/USB, 99% precisão | ✅ v0.30 | Sprint 30 | Kernel mode |
+| 311c | **rust_coder (125KB)** — gera código Rust no_std + WASM. "crie app jogo da velha" → .wasm → agent ativo | 🟡 Sprint 77 | Sprint 77 | Dataset skills curado |
+| 311d | **disk_diag (50KB)** — padrões SMART + erros de disco. Diagnóstico + ação sugerida | 🟡 Sprint 78 | Sprint 78 | Self-heal logs |
+| 311e | **security (50KB)** — assinaturas de ataque + CVE patterns | 🟡 Sprint 78 | Sprint 78 | CVE + InnerWarden |
+| 311f | **On-demand training** — "quero pilotar helicóptero" → manual → .bitnet → skill | ⏳ Pós-MVP | v0.80+ | Pipeline treino |
+| 311g | **Generator 1.5B (375MB)** — tool-use: expert classifica, generator explica | 🟡 Sprint 77 | Sprint 77 | GGUF loader |
+
 ### 1.29. Bugfix Estrutural (Sprint 45) — H3 a H12
 
 | # | Item | Destino | Target | Motivação |
@@ -1252,6 +1263,9 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-03 | **Sprint 74 (v0.74.0-0.74.2):** Seguranca — particao FAT mascarada como 0x1C (Hidden FAT32 LBA, bootloader aceita via mbr_nostd), assinatura Ed25519 do kernel com auto-verificacao, TPM 2.0 TIS driver (probe+fallback+PCA extend). Shutdown tracking (4 causas, persistencia FAT12+VFS, BootSelfHealAgent analisa). | Dev + IDA IA |
 | 2026-07-03 | **Particao FAT 0x1C (v0.74.2):** Mascara tipo 0x0C→0x1C (Hidden FAT32 LBA) via build scripts (offset 0x1D2). Bootloader aceita (mbr_nostd 0.1.0 mapeia 0x1C como PartitionType::Fat32). Kernel aceita 0x1C em todos os checks. Fallback 0x73 mantido. QEMU boot OK, VB OK. | Dev + IDA IA |
 | 2026-07-03 | **FAT32-only (v0.75.0):** Fat12Writer removido. write_boot_log, boot_log_agent, boot_logger, shutdown usam apenas FAT32. 102 LOC removidos. | Dev + IDA IA |
+| 2026-07-03 | **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras (ATA, USB, NVMe), 10+ FS probes (FAT32 a ReFS), GPT, SED/OPAL, S.M.A.R.T., I/O Scheduler, ARC cache 1MB, tier migration MHI. ~2.400 LOC. 0 erros. | Dev + IDA IA |
+| 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
+| 2026-07-03 | **311** | **Trinity Model Hub (MoE — Mixture of Experts)** — Múltiplos modelos microscópicos especializados (<150KB cada): `hw_identify` (68KB), `rust_coder` (125KB), `disk_diag` (50KB), `security` (50KB). Router BitNet (68KB) classifica a intenção e roteia para o expert correto. Modelo generativo 1.5B recebe output do expert como contexto. Self-hosting: "crie um app jogo da velha" → rust_coder gera código → cargo build → .wasm → agent ativo. Novos experts treinados on-demand: "quero aprender a pilotar helicóptero" → download manual → treino .bitnet → Trinity sobe o modelo → skill "pilotar" disponível. ~340KB total para 5 experts + 375MB generator. | 🟡 Sprint 77+ | Sprint 77 | 500 LOC router + tool-use dispatch |
 | 2026-07-03 | **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras (ATA, USB, NVMe), 10+ FS probes (FAT32 a ReFS), GPT, SED/OPAL, S.M.A.R.T., I/O Scheduler, ARC cache 1MB, tier migration MHI. ~2.400 LOC. 0 erros. | Dev + IDA IA |
 | 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
 | 2026-07-03 | **ADR-0031: AIOS Evolution Research** — análise completa (self-update A/B dual-slot, WASM wasmi runtime + WASI mapping, J.A.R.V.I.S. conversational layer, hybrid kernel/WASM agent architecture). Viability scores, LOC estimates, dependency chain, recommended sprint order. `docs/architecture/0031-aios-self-update-wasm-jarvis.md` | Dev + IDA IA |

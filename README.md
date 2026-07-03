@@ -153,7 +153,33 @@ Agentes ativos → Tick rate → Latencia
 | NVMe (7 GB/s) | **588 MB lidos** |
 | LLM BitNet 1.5B | **3-4 tokens** (CPU) ou **100+ tokens** (GPU) |
 
-**Hermes é event-driven:** Só avança o ciclo ReAct quando há entrada real — evento do EventBus, comando do usuário, ou alerta do sistema. Sem trabalho → silêncio. Sem 84 linhas de log por segundo.
+**Hermes é event-driven:** Só avança o ciclo ReAct quando há entrada real.
+
+### Trinity Model Hub — MoE (v0.77 target)
+
+Mixture of Experts no kernel. Modelos microscópicos (<150KB cada) especializados:
+
+```
+"crie um app jogo da velha"
+        │
+        ▼
+┌──────────┐    ┌───────────┐    ┌──────────┐    ┌────────────┐
+│ Router   │───▶│ rust_coder│───▶│  cargo   │───▶│ tictactoe  │
+│ 68KB     │    │ 125KB     │    │  build   │    │ .wasm 48KB │
+└──────────┘    └───────────┘    └──────────┘    └────────────┘
+                                               ▶ AgentRegistry.load()
+```
+
+| Expert | Tamanho | Função |
+|---|---|---|
+| **hw_identify** | 68KB | ✅ PCI/USB detection (99% precision) |
+| **rust_coder** | 125KB | 🟡 Gera código Rust no_std + WASM |
+| **disk_diag** | 50KB | 🟡 Diagnóstico SMART + erros |
+| **security** | 50KB | 🟡 Assinaturas de ataque + CVE |
+| **Generator** | 375MB | 🟡 1.5B params — respostas fluentes |
+| **On-demand** | N KB | ⏳ "Quero pilotar helicóptero" → .bitnet → skill |
+
+**Total experts:** 340KB. Generator: 375MB. **Matrix-style learning: download → train → use.**
 
 ### Agent Tier Classification (Premissa v0.76.1)
 
