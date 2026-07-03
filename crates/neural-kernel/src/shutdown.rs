@@ -63,7 +63,7 @@ pub fn write_persistent_shutdown_log(cause: ShutdownCause) {
     let ata = match *ata_guard { Some(ref a) => a, None => return };
     let parts = unsafe { crate::fat::read_mbr(ata) };
     for part in &parts {
-        if part.type_code == 0x01 || part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x73 {
+        if part.type_code == 0x01 || part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
             unsafe { crate::fat::write_boot_log(ata, part, &msg); }
         }
     }

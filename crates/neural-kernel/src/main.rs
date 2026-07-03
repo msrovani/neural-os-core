@@ -677,7 +677,7 @@ pub(crate) fn scancode_to_ascii(scancode: u8) -> Option<char> {
 
 fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Partition]) {
     for part in parts {
-        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x73 {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
             if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
                 if let Some(data) = unsafe { fat32.read_file("KERNEL~1") } {
                     if !crate::identity::verify_kernel_signature(&data) {

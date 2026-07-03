@@ -66,7 +66,7 @@ pub fn find_free_space(parts: &[Partition], total_sectors: u64) -> (u32, u32) {
 
 /// Detecta se e um pendrive bootavel (poucas particoes conhecidas)
 pub fn is_bootable_usb(parts: &[Partition]) -> bool {
-    let kernel = parts.iter().filter(|p| p.type_code == 0x0C || p.type_code == 0x20).count();
+    let kernel = parts.iter().filter(|p| p.type_code == 0x0C || p.type_code == 0x1C || p.type_code == 0x20).count();
     kernel >= 1 && parts.len() <= 3
 }
 
@@ -79,11 +79,11 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
 
     for (i, part) in parts.iter().enumerate() {
         let fs_name = match part.type_code {
-            0x01 | 0x06 | 0x0B | 0x0C | 0x73 => "vfat",
+            0x01 | 0x06 | 0x0B | 0x0C | 0x1C | 0x73 => "vfat",
             0x07 => "ntfs", 0x83 => "ext3", 0x20 => "oem", _ => "unknown",
         };
         // Tenta abrir como FAT32 (type 0x0B ou 0x0C)
-        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x73 {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
             if let Some(fat32) = Fat32Reader::new(ata, part) {
                 let root_list = unsafe { fat32.list_root() };
                 serial_println!("[FAT32] Root contents:\n{}", root_list);
@@ -133,9 +133,9 @@ pub struct Fat32Reader<'a> {
 }
 
 impl<'a> Fat32Reader<'a> {
-    /// Tenta abrir particao FAT32 (type 0x0B ou 0x0C)
+    /// Tenta abrir particao FAT32 (type 0x0B, 0x0C ou 0x1C)
     pub unsafe fn new(ata: &'a AtaDriver, part: &Partition) -> Option<Self> {
-        if part.type_code != 0x0B && part.type_code != 0x0C { return None; }
+        if part.type_code != 0x0B && part.type_code != 0x0C && part.type_code != 0x1C { return None; }
         let mut bpb = [0u8; 512];
         if !ata.read_sectors(part.lba_start, &mut bpb, 1) { return None; }
 
