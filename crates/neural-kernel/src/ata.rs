@@ -1,17 +1,25 @@
 use crate::pci::scan_pci;
 
+#[derive(Clone)]
 pub struct AtaDriver {
     pub io_base: u16,
+    pub pci_bus: u8,
+    pub pci_device: u8,
+    pub pci_func: u8,
 }
 
 impl AtaDriver {
+    pub fn pci_bdf(&self) -> Option<(u8, u8, u8)> {
+        Some((self.pci_bus, self.pci_device, self.pci_func))
+    }
+
     pub unsafe fn probe() -> Option<Self> {
         let devs = scan_pci();
         for d in &devs {
             if d.class == 0x01 && (d.subclass == 0x01 || d.subclass == 0x06) {
                 let io = (d.bar0 as u16) & 0xFFF0;
                 if io == 0 || io == 0xFFFF { continue; }
-                if Self::detect(io) { return Some(AtaDriver { io_base: io }); }
+                if Self::detect(io) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function }); }
             }
         }
         None

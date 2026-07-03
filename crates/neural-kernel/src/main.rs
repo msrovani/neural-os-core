@@ -90,6 +90,7 @@ mod boot_logger;
 mod boot_log_agent;
 mod shutdown;
 mod tpm;
+mod disk_agent;
 
 use lazy_static::lazy_static;
 
@@ -494,13 +495,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::fs::init_fs_agents();
     crate::boot_logger::log("BOOT: FS agents OK");
 
-    // Detect + mount disk partitions (SDHC, USB, HD)
+    // Init DiskIntelligenceAgent (substitui mount_partitions manual)
+    let mut disk_agent = crate::disk_agent::DiskIntelligenceAgent::new();
     if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
-        unsafe { crate::fat::mount_partitions(ata); }
+        let ctrl = crate::disk_agent::controller::AtaCtrl::new(ata.clone());
+        disk_agent.register_controller(Box::new(ctrl));
+        crate::boot_logger::log("BOOT: DiskAgent ATA controller registered");
     } else {
-        crate::boot_logger::log("BOOT: No ATA device for partitions");
+        crate::boot_logger::log("BOOT: No ATA device for DiskAgent");
     }
-    crate::boot_logger::log("BOOT: Partitions mounted");
+    let disk_agent_box = Box::new(disk_agent);
+
+    crate::boot_logger::log("BOOT: DiskAgent ready");
 
     // Init Compositor FIRST (apps precisam de janelas)
     *crate::display::compositor::COMPOSITOR.lock() = Some(crate::display::compositor::Compositor::new());
@@ -539,6 +545,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::UsbDriverAgent));
     registry.register(Box::new(agents::GpuDriverAgent));
     registry.register(Box::new(agents::HwDetectAgent));
+    registry.register(disk_agent_box);
     
     // HwRegistry: detecta hardware e cria HwAgents
     let mut hw_reg = crate::hw_agents::HwRegistry::new();

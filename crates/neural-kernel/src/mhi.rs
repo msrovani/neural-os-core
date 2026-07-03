@@ -18,6 +18,14 @@ pub enum AllocTier {
     UsbMsc,
 }
 
+impl AllocTier {
+    pub fn from_usb_bw(bw_mbs: u32) -> Self {
+        if bw_mbs > 2000 { AllocTier::Nvme }
+        else if bw_mbs > 100 { AllocTier::Hdd }
+        else { AllocTier::UsbMsc }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MemoryTier {
     pub kind: AllocTier,
