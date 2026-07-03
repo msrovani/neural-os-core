@@ -17,6 +17,10 @@ impl Receiver {
     pub fn try_receive(&self) -> Option<Event> {
         self.queue.lock().pop_front()
     }
+    
+    pub fn has_pending(&self) -> bool {
+        !self.queue.lock().is_empty()
+    }
 }
 
 pub struct EventBus {

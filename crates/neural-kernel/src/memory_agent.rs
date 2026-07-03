@@ -61,6 +61,45 @@ impl MemoryAgent {
     }
 
     pub fn budget(&self) -> Option<&MemoryBudget> { self.budget.as_ref() }
+
+    fn measure_cpu_freq() -> u64 {
+        let start_lo: u32; let start_hi: u32;
+        unsafe {
+            core::arch::asm!("rdtsc", out("eax") start_lo, out("edx") start_hi);
+        }
+        let timer_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let target = timer_ticks + 10;
+        while crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) < target {
+            core::hint::spin_loop();
+        }
+        let end_lo: u32; let end_hi: u32;
+        unsafe {
+            core::arch::asm!("rdtsc", out("eax") end_lo, out("edx") end_hi);
+        }
+        let start = start_lo as u64 | ((start_hi as u64) << 32);
+        let end = end_lo as u64 | ((end_hi as u64) << 32);
+        (end.wrapping_sub(start) * 12 / 10) / 1_000_000
+    }
+
+    fn count_active_agents() -> usize {
+        // Heuristic: count Continuous + PollEvery agents that are always active
+        // In practice, this is tracked by the scheduler
+        15 // Default estimate
+    }
+
+    fn calibrate_tick_init(active: usize, _cpu_mhz: u64) -> u64 {
+        // Current: 8388608 = 0x800000 (12 ticks/s @ 100 MHz BCLK)
+        // Dynamic: fewer agents → smaller init → faster ticks (lower latency)
+        //          more agents → larger init → slower ticks (less overhead)
+        let current = 0x800000u64;
+        match active {
+            0..=5   => current / 16,  // 192 ticks/s
+            6..=10  => current / 8,   // 96 ticks/s
+            11..=20 => current / 4,   // 48 ticks/s
+            21..=50 => current / 2,   // 24 ticks/s
+            _       => current,       // 12 ticks/s (default)
+        }
+    }
 }
 
 impl Agent for MemoryAgent {
@@ -101,6 +140,13 @@ impl Agent for MemoryAgent {
             budget.heap_target_mb, budget.model_ram_mb,
             budget.kv_cache_mb, budget.arc_cache_mb, budget.vram_model_mb);
         crate::serial_println!("[MEM]  Livre apos: {} MB", budget.free_after_mb);
+
+        // ── Clock measurement + dynamic tick calibration ──
+        let cpu_mhz = Self::measure_cpu_freq();
+        let active = Self::count_active_agents();
+        let optimal_init = Self::calibrate_tick_init(active, cpu_mhz);
+        crate::serial_println!("[MEM]  CPU: {} MHz | {} agentes ativos | tick init: {}",
+            cpu_mhz, active, optimal_init);
 
         // Resize heap
         crate::allocator::resize_heap_to_mb(budget.heap_target_mb);

@@ -290,7 +290,10 @@ impl AgentRegistry {
                     continue;
                 }
                 let flow = &self.agents[i].crew.flow;
-                let has_event = false; // EventDriven agents check their receiver
+                // EventDriven agents: called every cycle, but tick() should return
+                // early if no events (has_pending pattern). This avoids the
+                // complexity of scheduler knowing about agent-specific receivers.
+                let has_event = true;
                 let should_poll = should_poll_flow(flow, tick_id, self.agents[i].last_poll, has_event);
                 if !should_poll {
                     continue;
