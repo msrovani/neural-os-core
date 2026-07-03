@@ -1,6 +1,7 @@
 pub mod controller;
 pub mod disk_info;
 pub mod fs_probe;
+pub mod nvme;
 pub mod vol_mgr;
 
 use alloc::boxed::Box;

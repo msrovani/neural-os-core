@@ -509,6 +509,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         disk_agent.register_controller(Box::new(ctrl));
         crate::boot_logger::log("BOOT: DiskAgent USB-MSC controller registered");
     }
+    if let Some(nvme) = unsafe { crate::disk_agent::nvme::NvmeDriver::probe() } {
+        let ctrl = crate::disk_agent::controller::NvmeCtrl::new(nvme);
+        disk_agent.register_controller(Box::new(ctrl));
+        crate::boot_logger::log("BOOT: DiskAgent NVMe controller registered");
+    }
     let disk_agent_box = Box::new(disk_agent);
 
     crate::boot_logger::log("BOOT: DiskAgent ready");
