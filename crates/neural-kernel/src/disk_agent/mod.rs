@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod controller;
 pub mod disk_info;
 pub mod fs_probe;
@@ -9,6 +10,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
+use cache::ArcCache;
 use controller::StorageController;
 use disk_info::*;
 use fs_probe::FsProbeRegistry;
@@ -25,8 +27,10 @@ pub struct DiskIntelligenceAgent {
     vol_registry: VolMgrRegistry,
     tick_run: bool,
     tick_count: u64,
-    io_queue: Vec<(u8, u8, u64, Vec<u8>)>, // (ctrl_idx, disk, lba, data)
-    readahead_cache: Vec<(u64, u64, Vec<u8>)>, // (disk_key, lba, data)
+    io_queue: Vec<(u8, u8, u64, Vec<u8>)>,
+    readahead_cache: Vec<(u64, u64, Vec<u8>)>,
+    cache: ArcCache,
+    last_migration_tick: u64,
 }
 
 impl DiskIntelligenceAgent {
@@ -47,6 +51,8 @@ impl DiskIntelligenceAgent {
             tick_count: 0,
             io_queue: Vec::new(),
             readahead_cache: Vec::new(),
+            cache: ArcCache::new(1024), // 1MB cache
+            last_migration_tick: 0,
         }
     }
 
@@ -303,6 +309,30 @@ impl Agent for DiskIntelligenceAgent {
             AgentTickResult::Done
         } else {
             self.tick_count += 1;
+
+            // I/O scheduler flush (a cada 10 ticks)
+            if self.tick_count % 10 == 0 {
+                self.io_scheduler_flush();
+            }
+
+            // Cache write-back flush (a cada 100 ticks)
+            if self.tick_count % 100 == 0 {
+                let ctrl_idx = 0;
+                let mut flush_fn = |lba: u64, data: &[u8]| {
+                    if ctrl_idx < self.controllers.len() {
+                        self.controllers[ctrl_idx].write_blocks(0, lba, data, (data.len() + 511) / 512);
+                    }
+                };
+                self.cache.tick(&mut flush_fn);
+            }
+
+            // MHI tier migration + hotplug (a cada 1000 ticks)
+            if self.tick_count % 1000 == 0 {
+                self.last_migration_tick = self.tick_count;
+                self.run_tier_migration();
+            }
+
+            // Hotplug scan (a cada 100 ticks)
             if self.tick_count % 100 == 0 {
                 for ctrl_idx in 0..self.controllers.len() {
                     if self.controllers[ctrl_idx].controller_type() == ControllerType::Usb {
@@ -315,7 +345,28 @@ impl Agent for DiskIntelligenceAgent {
                     }
                 }
             }
+
             AgentTickResult::Done
         }
+    }
+}
+
+impl DiskIntelligenceAgent {
+    fn run_tier_migration(&mut self) {
+        let tick = self.tick_count;
+        for disk in &self.disks {
+            for part in &disk.partitions {
+                let ideal = AllocTier::from_usb_bw(disk.max_read_bw_mbs);
+                if part.mhi_tier != ideal {
+                    let phys = part.lba_start * disk.sector_size as u64;
+                    let size = part.sector_count * disk.sector_size as u64;
+                    crate::mhi::MHI_REGISTRY.lock().register(
+                        x86_64::PhysAddr::new(phys), size as usize, ideal, &disk.name);
+                    crate::serial_println!("[MHI] Tier migration: {} p{} {:?}→{:?} @ tick {}",
+                        disk.name, part.index, part.mhi_tier, ideal, tick);
+                }
+            }
+        }
+            crate::serial_println!("[MHI] {} allocations", crate::mhi::MHI_REGISTRY.lock().allocations.len());
     }
 }
