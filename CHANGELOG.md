@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.78.1] — 2026-07-04 — 🧹 Code Review: Dead Modules Audit
+
+### Added
+- `#![allow(dead_code)]` + `@dead` annotations em 8 módulos mortos (shell, voice_skill, bench, verify, orchestrator, tracer, skill_market, hal) — cada um documentado com motivo e sprint futuro alvo
+- Seção "DEAD MODULES" em `main.rs` com tabela de referência para IA devs
+
+### Changed
+- 36 warnings eliminados (426→390) nos 8 módulos anotados
+- Política confirmada: `#[allow(dead_code)]` só em módulos mortos conhecidos; código em desenvolvimento mantém warnings como esperado
+
 ## [0.78.0] — 2026-07-04 — 🏆 Sprint 78: Agentic Evolution
 
 ### Added (neural-kernel)

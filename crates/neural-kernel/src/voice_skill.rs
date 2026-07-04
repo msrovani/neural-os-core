@@ -1,3 +1,8 @@
+//! @dead — sem hardware de áudio no kernel bare-metal.
+//! Mantido para sprint futuro de Voice/MCP-TTS.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! Voice skill — Hermes fala com o usuario via MCP externo ou terminal.
 //! Leve: apenas texto-para-display (sem TTS pesado, sem Whisper).
 

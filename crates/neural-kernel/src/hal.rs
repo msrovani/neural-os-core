@@ -1,3 +1,8 @@
+//! @dead — HAL só usado por `shell.rs` (também dead).
+//! Mantido para sprint futuro de portabilidade aarch64/riscv64.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! HAL — Hardware Abstraction Layer (AxiomOS-inspired).
 //! Isola arquitetura x86_64 por tras de traits, permitindo
 //! futuramente portar para aarch64 (RPi5) e riscv64.

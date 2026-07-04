@@ -1,3 +1,8 @@
+//! @dead — ToT decomposition nunca instanciado (FanOutPool substituiu).
+//! Mantido para sprint futuro de Multi-Agent Task Orchestration.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! OrchestratorAgent — Tree-of-Thought task decomposition.
 //! Swarms-inspired: quebra tarefas em sub-tarefas, coleta resultados.
 use alloc::string::String;

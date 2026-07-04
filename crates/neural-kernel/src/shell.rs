@@ -1,3 +1,8 @@
+//! @dead — shell substituído por Hermes Agent (HermesApp).
+//! Mantido como referência para sprint futuro de CLI/TUI.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::hal::Architecture;

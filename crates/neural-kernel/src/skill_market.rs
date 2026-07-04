@@ -1,3 +1,8 @@
+//! @dead — skill scoring nunca instanciado (SkillRegistry + IntentCache substituiram).
+//! Mantido para sprint futuro de Skill Reputation System.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! SkillMarket — scoring e selecao de skills por performance.
 //! SuperAGI-inspired: cada skill tem avg_ticks, success_rate.
 use alloc::collections::BTreeMap;

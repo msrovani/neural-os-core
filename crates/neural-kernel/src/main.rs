@@ -15,6 +15,28 @@ use skill_registry::{McpManifest, Skill, SkillRegistry, OutputSchema};
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
+// ═══════════════════════════════════════════════════════════════════
+// DEAD MODULES — mantidos como referência para sprints futuros.
+// Cada módulo tem `#![allow(dead_code)]` e comentário `// @dead — motivo`.
+// =================================================================
+// shell          — @dead: substituído por HermesApp (Hermes Agent).
+//                  Futuro: CLI/TUI (Sprint ~90+).
+// voice_skill    — @dead: sem hardware de áudio.
+//                  Futuro: Voice MCP TTS (Sprint ~95+).
+// bench          — @dead: benchmark framework nunca integrado.
+//                  Futuro: Performance Profiling (Sprint ~85+).
+// verify         — @dead: OpCode VM substituído por WASM.
+//                  Futuro: Skill Sandbox eBPF-style (Sprint ~90+).
+// orchestrator   — @dead: ToT substituído por FanOutPool.
+//                  Futuro: Multi-Agent Orchestration (Sprint ~85+).
+// tracer         — @dead: span tracing substituído por SelfCritique.
+//                  Futuro: Distributed Tracing (Sprint ~90+).
+// skill_market   — @dead: substituído por SkillRegistry + IntentCache.
+//                  Futuro: Skill Reputation System (Sprint ~90+).
+// hal            — @dead: só usado por shell.rs (também dead).
+//                  Futuro: portabilidade aarch64/riscv64 (Sprint ~95+).
+// ═══════════════════════════════════════════════════════════════════
+
 mod acpi;
 mod agents;
 mod allocator;

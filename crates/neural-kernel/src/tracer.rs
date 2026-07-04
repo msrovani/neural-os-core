@@ -1,3 +1,8 @@
+//! @dead — span tracer nunca instanciado (SelfCritique substituiu).
+//! Mantido para sprint futuro de Distributed Tracing.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! Span tracing — execution graph do Hermes Cognitive.
 //! RagaAI Catalyst-inspired: cada skill call vira um span.
 use alloc::string::String;

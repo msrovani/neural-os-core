@@ -1,3 +1,8 @@
+//! @dead — OpCode VM verifier nunca invocado (WASM substituiu).
+//! Mantido para sprint futuro de Skill Sandbox (eBPF-style).
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! Skill Verifier — verificacao de bytecode de skills estilo eBPF.
 //! AxiomOS-inspired: prova que uma skill e segura antes de executar.
 //! Verifica: bounds de loops, acesso a memoria, comandos bloqueados.

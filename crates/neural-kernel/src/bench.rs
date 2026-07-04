@@ -1,3 +1,8 @@
+//! @dead — benchmark framework nunca integrado ao scheduler.
+//! Mantido para sprint futuro de performance profiling.
+//! Veja `main.rs` seção "DEAD MODULES" para contexto.
+#![allow(dead_code)]
+
 //! Benchmarks — framework de benchmarking estilo AxiomOS.
 //! Mede: boot time, tick latency, alloc throughput, render FPS.
 
