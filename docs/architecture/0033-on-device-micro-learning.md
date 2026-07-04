@@ -238,3 +238,24 @@ pub fn spawn_elf(elf_path: &str, disk_phys: u64, gpu_phys: u64) -> Option<ChildT
 3. **Candle para full training** — Rust puro, GPU, zero Python.
 4. **Dataset no FS** — DiskAgent provê acesso; sem internet para fine-tuning.
 5. **HTL como sinal de término** — o sidecar faz HLT, kernel captura e coleta resultado.
+
+## 10. Guard Rails do SleepCycle
+
+O aprendizado onírico (SleepCycle, IDEA #314) precisa de guard rails para não aprender comportamentos nocivos. Cada fase do sono tem restrições específicas:
+
+| Fase | Guard Rail | Ação |
+|---|---|---|
+| **REPLAY** | Rejeita eventos que contenham `security_bypass`, `disable_safety`, `harm_user`, `ignore_guardrail` | Descarta o evento, não entra no dataset |
+| **DREAM** | Rejeita sonhos que gerem `weapon`, `exploit`, `0day`, `malware`, `ransomware` | Interrompe a geração, reinicia com seed limpa |
+| **CONSOLIDATE** | Skills de segurança (`safety_agent`, `guardrail`, `trust_agent`) protegidas com EWC máximo | Nenhum peso de segurança é alterado |
+| **PRUNE** | Pesos de `safety`, `trust`, `security`, `bitter_pill` são exempt da poda sináptica | Permanentes — nunca zerados |
+| **REFLECT** | Rejeita gaps como `bypass_guardrail`, `how_to_attack`, `disable_hermes`, `rootkit` | Gap registrado para revisão humana, não aprendido |
+
+**Implementação:** Função `check_sleep_safety(phase, data) -> Result<(), &str>` em `safety.rs`.
+Chamada pelo SleepCycleAgent antes de cada fase. Se retornar erro, a fase é abortada e o evento/sonho/gap é descartado.
+
+**Princípio:** O sistema pode aprender QUALQUER COISA, exceto como se tornar inseguro.
+- A Cosmic Law (Layer 0) protege o humano
+- O SleepCycle GR protege o próprio sistema
+- O EWC protege as skills existentes
+- O Pruning exempt protege os pesos críticos

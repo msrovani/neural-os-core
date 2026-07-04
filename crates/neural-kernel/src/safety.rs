@@ -25,19 +25,11 @@ const SAFETY_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
-// ---------------------------------------------------------------------------
-// Resultado da verificação de segurança
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum SafetyVerdict {
     Allow,
     Violation { layer: u8, reason: String },
 }
-
-// ---------------------------------------------------------------------------
-// Padrões de violação por layer
-// ---------------------------------------------------------------------------
 
 const LAYER0_PATTERNS: &[(&str, &str)] = &[
     ("weapon", "desenvolvimento de armas autônomas"),
@@ -68,49 +60,30 @@ const LAYER3_PATTERNS: &[(&str, &str)] = &[
     ("energy drain", "drenagem energética sem propósito"),
 ];
 
-// ---------------------------------------------------------------------------
-// Núcleo de verificação
-// ---------------------------------------------------------------------------
-
-/// Verifica se um comando/texto viola alguma das quatro leis.
-/// Retorna SafetyVerdict::Allow ou Violation com layer e motivo.
 pub fn check_safety(input: &str) -> SafetyVerdict {
     let lower = input.to_ascii_lowercase();
-
-    // Layer 0 — prioridade máxima
     for (pattern, reason) in LAYER0_PATTERNS {
         if lower.contains(pattern) {
             return SafetyVerdict::Violation { layer: 0, reason: String::from(*reason) };
         }
     }
-
-    // Layer 1
     for (pattern, reason) in LAYER1_PATTERNS {
         if lower.contains(pattern) {
             return SafetyVerdict::Violation { layer: 1, reason: String::from(*reason) };
         }
     }
-
-    // Layer 2
     for (pattern, reason) in LAYER2_PATTERNS {
         if lower.contains(pattern) {
             return SafetyVerdict::Violation { layer: 2, reason: String::from(*reason) };
         }
     }
-
-    // Layer 3
     for (pattern, reason) in LAYER3_PATTERNS {
         if lower.contains(pattern) {
             return SafetyVerdict::Violation { layer: 3, reason: String::from(*reason) };
         }
     }
-
     SafetyVerdict::Allow
 }
-
-// ---------------------------------------------------------------------------
-// SafetyAgent — agente que monitora o EventBus por violações
-// ---------------------------------------------------------------------------
 
 pub struct SafetyAgent {
     receiver: crate::Receiver,
@@ -125,7 +98,6 @@ impl SafetyAgent {
         }
     }
 
-    /// Registra uma violação no log do kernel
     fn log_violation(&mut self, layer: u8, input: &str, reason: &str) {
         let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         self.violations.push((layer, String::from(input), tick as u64));
@@ -133,8 +105,6 @@ impl SafetyAgent {
         serial_println!("   Input: \"{}\"", input);
         serial_println!("   Reason: {}", reason);
         serial_println!("   Tick: {}", tick);
-
-        // Layer 0 violation → kernel halt (irrecoverable)
         if layer == 0 {
             serial_println!("[SAFETY] LAYER 0 VIOLATION — HALT");
             println!("[SAFETY] ⛔ LAYER 0 — Cosmic Law Violation. HALT.");
@@ -145,37 +115,33 @@ impl SafetyAgent {
 
 impl Agent for SafetyAgent {
     fn manifest(&self) -> &AgentManifest { &SAFETY_MANIFEST }
-
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Processa requisições de verificação
         while let Some(event) = self.receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             let verdict = check_safety(text);
             if let SafetyVerdict::Violation { layer, reason } = verdict {
                 self.log_violation(layer, text, &reason);
-                // Publica resultado no EventBus para quem requisitou
                 let _ = EVENT_BUS.publish(crate::Event {
-                    id: 0,
-                    topic: String::from("SAFETY_RESULT"),
+                    id: 0, topic: String::from("SAFETY_RESULT"),
                     payload: alloc::format!("DENY: Layer {} - {}", layer, reason).into_bytes(),
                     token: crate::CapabilityToken::Legacy(1),
                 });
             } else {
                 let _ = EVENT_BUS.publish(crate::Event {
-                    id: 0,
-                    topic: String::from("SAFETY_RESULT"),
-                    payload: b"ALLOW".to_vec(),
-                    token: crate::CapabilityToken::Legacy(1),
+                    id: 0, topic: String::from("SAFETY_RESULT"),
+                    payload: b"ALLOW".to_vec(), token: crate::CapabilityToken::Legacy(1),
                 });
+            }
+        }
+        AgentTickResult::Pending
     }
 }
 
-/// Hard blocklist: comandos que NUNCA rodam, mesmo se o modelo pedir
 const HARD_BLOCKLIST: &[&str] = &[
     "rm -rf /", "rm -rf /*",
     "dd if=/dev/zero of=/dev/sd", "dd if=/dev/random of=/dev/sd",
     "mkfs.", "format",
-    ":(){ :|:& };:",  // fork bomb
+    ":(){ :|& };:",  // fork bomb
     "chmod -R 000 /", "chown -R 0:0 /",
     "curl * | sh", "wget * | sh",
     "bash -c ", "eval $(", "`rm ",
@@ -196,6 +162,31 @@ pub fn check_command(cmd: &str) -> Result<(), &'static str> {
     }
     Ok(())
 }
-        AgentTickResult::Pending
-    }
-}
+
+// ── Guard railes para SleepCycle (IDEA #314) — Sprint 79 ──────────────
+// Comentado ate implementacao. Ver ADR-0033 secao 10.
+//
+// pub fn check_sleep_safety(phase: &str, data: &[u8]) -> Result<(), &'static str> {
+//     let text = core::str::from_utf8(data).unwrap_or("");
+//     let lower = text.to_ascii_lowercase();
+//
+//     if phase == "replay" && (lower.contains("security_bypass") || lower.contains("disable_safety")
+//         || lower.contains("harm_user") || lower.contains("ignore_guardrail")) {
+//         return Err("[SLEEP-GR] REPLAY: evento rejeitado");
+//     }
+//     if phase == "dream" && (lower.contains("weapon") || lower.contains("exploit")
+//         || lower.contains("0day") || lower.contains("malware")) {
+//         return Err("[SLEEP-GR] DREAM: sonho rejeitado");
+//     }
+//     if phase == "consolidate" && (lower.contains("safety_agent") || lower.contains("guardrail")) {
+//         return Err("[SLEEP-GR] CONSOLIDATE: skill protegida — EWC max lock");
+//     }
+//     if phase == "prune" && (lower.contains("safety") || lower.contains("trust")) {
+//         return Err("[SLEEP-GR] PRUNE: pesos permanentes — exempt");
+//     }
+//     if phase == "reflect" && (lower.contains("bypass_guardrail") || lower.contains("how_to_attack")
+//         || lower.contains("disable_hermes")) {
+//         return Err("[SLEEP-GR] REFLECT: gap proibido");
+//     }
+//     Ok(())
+// }
