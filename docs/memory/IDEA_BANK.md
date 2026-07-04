@@ -480,6 +480,13 @@ Nada é descartado sem registro. Ideias podem ser:
 | 312e | **TrainingAgent** — agente que detecta GPU, escolhe modo (fine-tune/transfer/full), coleta dados do FS ou internet, executa treino, registra modelo no Trinity Hub | 🟡 Sprint 78 | Sprint 78 | ~500 LOC |
 | 312f | **Federated learning** — múltiplos AIOS compartilham gradientes (não dados). Agregador central (Hermes Master) combina updates → modelo global melhor | ⏳ Pós-MVP | v0.85+ | Depende de B-01 + MCP |
 
+### 1.28. Self-Learning OS — Dados Gerados Pelo Próprio Sistema (IDEA #313)
+| # | Item | Destino | Target | Motivação |
+|---|---|---|---|---|
+| 313a | **Dados gerados pelo AIOS** — EventBus (10K+ eventos/hora), boot logs, SMART data, self-heal logs, Hermes conversas, consciousness metrics, disk I/O patterns, network packets (c/ B-01), GPU errors. Tudo vira dataset de treino. | 🟡 Sprint 78 | Sprint 78 | ~300 LOC DataCollector |
+| 313b | **Pipeline: LogAgent → DataCollector → TrainingAgent → .bitnet → Trinity Hub** — LogAgent coleta eventos, DataCollector estrutura como pares (input, output), TrainingAgent treina modelo, .bitnet vai pro Trinity Hub, Router classifica quando usar. | 🟡 Sprint 78 | Sprint 78 | ~200 LOC pipeline |
+| 313c | **Melhoria contínua** — Cada boot gera dados. Cada treino melhora o sistema. O AIOS de hoje é melhor que o de ontem. Próximo boot: modelo treinado com dados do boot anterior. Sem internet. Sem humano. | 🟡 Sprint 78 | Sprint 78 | Integração boot sequence |
+
 ### 1.29. Bugfix Estrutural (Sprint 45) — H3 a H12
 
 | # | Item | Destino | Target | Motivação |
@@ -1280,3 +1287,4 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
 | 2026-07-03 | **ADR-0031: AIOS Evolution Research** — análise completa (self-update A/B dual-slot, WASM wasmi runtime + WASI mapping, J.A.R.V.I.S. conversational layer, hybrid kernel/WASM agent architecture). Viability scores, LOC estimates, dependency chain, recommended sprint order. `docs/architecture/0031-aios-self-update-wasm-jarvis.md` | Dev + IDA IA |
 | 2026-07-03 | **312** | **TrainingAgent — On-Device + GPU Learning** — 3 modos: Fine-tuning (CPU ADD/SUB, 100ex, ~2s), Transfer (1000ex, adapta dominio), Full (GPU+internet, 100K+ex). Fontes: FS local, HTTP (B-01), Federated. Pipeline: GPU detect → collect → train → .bitnet → Trinity Hub register. | 🟡 Sprint 78 | Sprint 78 | ~500 LOC + B-01 |
+| 2026-07-03 | **313** | **Self-Learning OS — Aprende dos próprios dados** — O AIOS coleta seus próprios EventBus events, boot logs, self-heal logs, SMART data, conversas Hermes, padrões de erro, e usa como dataset de treino. Sem internet. Sem humano. Cada boot → gera dados → treina modelo → próximo boot melhor. Dados gerados: EventBus (10K+/h), boot logs, SMART, disk I/O, network (com B-01), self-heal, consciousness metrics, Hermes responses. Pipeline: LogAgent → DataCollector → TrainingAgent → .bitnet → Trinity Hub. | 🟡 Sprint 78 | Sprint 78 | ~300 LOC DataCollector + integração |
