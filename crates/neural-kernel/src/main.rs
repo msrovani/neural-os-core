@@ -523,10 +523,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::apps::init_apps();
     crate::boot_logger::log("BOOT: Desktop apps OK");
 
-    // Init Desktop Apps (criam janelas no compositor)
-    crate::apps::init_apps();
-    crate::boot_logger::log("BOOT: Desktop apps OK");
-
     // GPU: detecta hardware e inicializa backend
     unsafe {
         let gpus = crate::gpu::detect::detect_all();

@@ -772,10 +772,9 @@ impl Agent for HermesAgent {
             self.react_phase = self.react_phase.next();
             self.log_phase(self.react_phase, "processando entrada");
         }
-        // Heartbeat a cada 5000 ticks (~5 min) para debug — mostra que Hermes está vivo
-        if _tick % 5000 == 0 {
-            serial_println!("[HERMES] ♥ heartbeat — {} ticks, {} eventos processados",
-                _tick, self.con_skills_ok);
+        // Heartbeat a cada 250 ticks (~3s) — mostra que Hermes esta vivo
+        if _tick % 250 == 0 {
+            serial_println!("[HERMES] \u{1f4a4} escutando... (tick {})", _tick);
         }
 
         AgentTickResult::Pending
