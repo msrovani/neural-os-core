@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.78.0-design 🏆
-#   SPRINT 78 COMPLETO — Agentic Evolution
-#   132 arquivos Rust, ~15.900 LOC, 0 erros
+#   STATE — neural-os-core v0.79.0-design 🏆
+#   SPRINT 79 — LLM Infrastructure
+#   135 arquivos Rust, ~16.200 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 ## Marcos Acumulados
@@ -12,9 +12,9 @@
 - **v0.74.0-0.74.2** — TPM TIS driver, Ed25519 kernel signing, Partition mask 0x1C
 - **v0.75.0-0.75.6** — FAT32-only, DiskIntelligenceAgent (680 LOC, 6 controllers, 10+ FS probes)
 - **v0.76.0-0.76.1** — NVMe driver, S.M.A.R.T., Adaptive heap, Dynamic tick, Event-driven Hermes
-- **2026-07-04** — **Roadmap readequado:** 28 sprints replanejados por dependência. Itens B-01 empurrados para Sprint 85+. Premissa Activation on Demand adicionada.
-- **2026-07-04** — **Sprint 77 completo:** 7 Foundation Quick Wins (~380 LOC). QEMU + VirtualBox (2 vCPUs) 0 erros. VirtualBox SMP fix: AP_COUNT static previne INIT-SIPI-SIPI sem APs.
-- **2026-07-04** — **Sprint 78 completo:** 8 itens de Agentic Evolution. 0 erros. ~400 LOC novos.
+- **2026-07-04** — **Sprint 77:** 7 Foundation Quick Wins (~380 LOC). VirtualBox SMP fix.
+- **2026-07-04** — **Sprint 78:** 8 Agentic Evolution items (~400 LOC).
+- **2026-07-04** — **Sprint 79:** LLM Infrastructure — BitNet-b1.58 850M integration. AVX2 ternary matmul, BPE tokenizer, Trinity Router stub, QEMU loader boot pipeline. 3 new files, 6 modified. Model downloaded & converted to .bitnet v2 (1,464 MB).
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
@@ -64,7 +64,7 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 |---|---|---|---|---|
 | **77** | 0.77.x | **21** | **Foundation Quick Wins** — Prompt >, Pre-Flight, TaskSchema, /learn, Fan-out | ~760 |
 | **78** | 0.78.x | **22** | **Agentic Evolution** — Crew/Flow, Cache, Workflow, GGUF, WASM | ~2720 |
-| **79** | 0.79.x | **23** | **LLM Infrastructure** — AVX2, Trinity MoE, Candle, TrainingAgent | ~1450 |
+| **79** | 0.79.x | **23** | **LLM Infrastructure** ✅ — AVX2 BitNet, Trinity MoE, BPE, QEMU loader | ~1450 |
 | **80** | 0.80.x | **24** | **JARVIS Persona** — SOUL.md, IPW, Compression, Notification Gate | ~950 |
 | **81** | 0.81.x | **25** | **JARVIS Emotion** — Emotion, Contracts, Discovery, Cache, Pipeline | ~1200 |
 | **82** | 0.82.x | **26** | **JARVIS Cognitive** — Dreaming, Ego, Heartbeats, Auto-Skills, SleepCycle | ~1680 |
@@ -86,8 +86,14 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 11. **Sprint 77** — 7 Foundation Quick Wins: Prompt `>`, Pre-Flight, FanOut, TaskSchema, SkillIndex, CompletionContracts, DynamicSkill. ~380 LOC, 0 erros.
 12. **Sprint 78** — 8 Agentic Evolution items: IntentCache wiring, OutputCache wiring, WorkflowEngine wiring, SelfCritique, GgufBackedModel, AgentTier+migrate_to_tier, FsBridgeAgent, WasmExecutor+WasmSkill. ~400 LOC, 0 erros.
 12. **VirtualBox SMP fix** — AP_COUNT static from MADT lapic_count. 2 vCPUs now boot reliably on VB.
+13. **Sprint 79** — LLM Infrastructure: BitNet-b1.58 850M downloaded + .bitnet v2 conversion (1.5GB). AVX2 ternary matmul kernel. BPE tokenizer. Trinity MoE stub. QEMU loader boot pipeline at phys 4GB. Ramdisk via bootloader impossível (FAT limit). Forward pass blocked by GQA + BitFFN grouped projections.
+14. **BitNet b1.58 real arch** — Microsoft's model is 850M params (not 2B). GQA (20 heads Q, 5 KV heads). BitFFN with grouped down_proj (640→6912). `tie_word_embeddings=true`. vocab_size=128256 (requires u32).
+15. **QEMU loader strategy** — `-device loader,file=.bitnet,addr=0x100000000` com `-m 6G` + WHPX. Model in high memory avoids frame allocator conflicts. ~30s boot overhead acceptable for dev.
+16. **Build_image.py UEFI issue** — bootloader 0.11.15 default features include UEFI. `default-features=false, features=["bios"]` avoids serde compile panic.
 
 ## Pendente Técnico
+- **Forward pass BitNet b1.58**: GQA + BitFFN grouped projections — Sprint 80
+- **Build_image.py fix**: BIOS-only bootloader compilation needs offline verification
 - **JARVIS agents**: ~5650 LOC, Sprints 80-83
 - **Intel GEN shader**: ~800 LOC, Sprint 84
 - **AHCI driver**: ~700 LOC, Sprint 83

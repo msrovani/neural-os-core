@@ -38,3 +38,6 @@ neural-os-hwtest.*
 
 # Chave privada de assinatura do kernel
 keys/kernel_secret.key
+
+tools/model_cache/
+tools/debug_build.py

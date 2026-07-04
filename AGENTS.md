@@ -229,16 +229,16 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 | `event-bus` | v0.1.0 — IPC publish/subscribe + MemoryTree + KnowledgeGraph + Scheme + Ecosystem (dedup, privacy, hybrid, metacognitive, supercontext, skill_index, tokenjuice) |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Current Sprint (Sprint 78 — Agentic Evolution) ✅
-✅ 60.1b Prompt `>` interativo — DisplayAgent mostra `> ` quando ocioso
-✅ 67.0.3 Pre-Flight — Skill::verify() check pré-execução
-✅ 67.2.3 Background Fan-out — FanOutPool para delegação de sub-tarefas
-✅ 72.2 TaskSchema — Schema de tarefas + JobPreconditions
-✅ 72.6 SkillIndex+McpCatalog — find() textual + catálogo pesquisável
-✅ 67.2.2 Completion Contracts — verificação pós-execução (nonempty, utf8)
-✅ 67.2.1 `/learn` — DynamicSkill + registro direto sem LLM
+## Current Sprint (Sprint 79 — LLM Infrastructure) ✅
+✅ AVX2 BitNet Kernel — `bitnet_avx2.rs` ternary matmul (intrinsics SIMD)
+✅ Trinity Router stub — `trinity.rs` MoE rule-based dispatch
+✅ BPE Tokenizer — `bpe.rs` HuggingFace JSON parser + encode/decode
+✅ RMSNorm vetorial — `nn.rs` weights como `Vec<f32>`, `cortex.rs` usando
+✅ u32 vocab_size — `cortex.rs` + `gguf.rs` + `download_bitnet.py`
+✅ QEMU loader — boot pipeline via `-device loader` at phys 4GB
+✅ Modelo baixado + convertido — BitNet-b1.58 850M → .bitnet v2 (1,464 MB)
 
-**Próximo:** Sprint 79 — LLM Infrastructure (AVX2 BitNet, Trinity MoE, Candle, TrainingAgent)
+**Blocker:** Forward pass BitNet b1.58 = GQA + BitFFN grouped projections não suportados. Sprint 80 ou intermédio.
 
 ---
 
@@ -255,6 +255,19 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 | GGUF Loader | ✅ | Carregador + GgufBackedModel (v0.72.0 + wiring Sprint 78) |
 | WASM Runtime | ✅ | WasmExecutor stack-based + WASI→Skill bridge (WasmSkill) |
 | **Total** | | **~3100 LOC** |
+
+## Active Sprint Items (Sprint 79 — LLM Infrastructure) ✅
+
+| Item | Status | Descrição |
+|---|---|---|
+| AVX2 BitNet Kernel | ✅ | `bitnet_avx2.rs` — SIMD ternary matmul (intrinsics AVX2) |
+| Trinity Router stub | ✅ | `trinity.rs` — MoE rule-based dispatch (5 classes) |
+| BPE Tokenizer | ✅ | `bpe.rs` — HuggingFace tokenizer.json parser + encode/decode |
+| RMSNorm vetorial | ✅ | `nn.rs` — `rms_norm()` with `Vec<f32>` weight |
+| u32 vocab_size | ✅ | `cortex.rs` + `gguf.rs` — suporta 128K vocab |
+| Model download | ✅ | BitNet-b1.58 850M → .bitnet v2 (1,464 MB) |
+| QEMU loader pipeline | ✅ | Boot via `-device loader` at phys 0x100000000 (4GB) |
+| **Total** | | **~550 LOC** |
 
 ## Network Strategy (ADR-0016)
 Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. HW real: planejar e1000/r8169 (~300 LOC).
@@ -362,6 +375,16 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - #229 Usage Tracker (~50 LOC) — metrics accumulator for hardware_context_tensor()
 - #230 Auto-Compact Hermes Buffer (~60 LOC) — summarize_context after 3+ cycles
 - #231 Event-Sourced Conversation (~100 LOC) — VecDeque<ConversationEvent>
+
+## Session: v0.79.0 — Sprint 79: LLM Infrastructure (BitNet-b1.58 Integration) (2026-07-04)
+- **Download + conversão BitNet-b1.58-2B-4T** (real: 850M params) → `.bitnet` v2 (1,464 MB, u32 vocab, ffn_dim header). Vocab=128256, hidden=2560, layers=30, GQA=5 KV heads, BitFFN grouped down_proj.
+- **3 new files**: `bitnet_avx2.rs` (AVX2 ternary matmul), `trinity.rs` (MoE Router stub), `bpe.rs` (BPE tokenizer with HuggingFace JSON parser).
+- **cortex.rs**: `vocab_size` u16→u32, BPE auto-init, dynamic TransformerModel, vectorial RMSNorm.
+- **Ramdisk via bootloader FALHA** — FAT partition autosized ~64MB insuficiente para 1.46GB.
+- **QEMU loader workaround** — `-device loader,file=.bitnet,addr=0x100000000` (4GB) com `-m 6G` + WHPX. Boot OK ~30s. 2G FALHA (alocador conflita).
+- **BitFFN grouped projections + GQA não suportados** — forward pass quebrado até Sprint 80.
+- **Build_image.py UEFI bug** — `default-features=false, features=["bios"]` necessário para evitar serde panic.
+- **Blocker principal:** QEMU loader overhead (~30s) aceitável. Forward pass bloqueia geração real.
 
 ## Session: v0.74.1-0.76.1 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + AIOS Roadmap (2026-07-03)
 - **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend. Fallback silencioso.

@@ -115,6 +115,8 @@ mod shutdown;
 mod tpm;
 mod disk_agent;
 mod memory_agent;
+mod bitnet_avx2;
+mod trinity;
 
 use lazy_static::lazy_static;
 
@@ -672,7 +674,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             }
         }
         bootloader_api::info::Optional::None => {
-            serial_println!("[RAMDISK] No ramdisk — using embedded micro.bitnet.");
+            // Try QEMU generic loader at known physical address (0x20000000 = 512MB)
+            // Launch QEMU with: -device loader,file=bitnet-1.5b.bitnet,addr=0x20000000
+            let load_addr: u64 = 0x100000000; // 4GB — above 32-bit range, safe from early alloc
+            let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+            let probe_ptr = (load_addr + pm_offset) as *const u8;
+            let magic_bytes = unsafe { core::slice::from_raw_parts(probe_ptr, 4) };
+            if magic_bytes == b"\xBE\x11\xBE\x11" {
+                serial_println!("[RAMDISK] QEMU loader: found .bitnet at phys 0x{load_addr:x}. Loading...");
+                // Map up to 2GB — load_model will read until it hits the end of model data
+                let max_model: usize = (1536 * 1024 * 1024) as usize; // 1.5GB
+                let full_data = unsafe { core::slice::from_raw_parts(probe_ptr, max_model) };
+                if let Some(big_model) = crate::cortex::load_model(full_data) {
+                    crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                    serial_println!("[RAMDISK] Model loaded from QEMU loader!");
+                    crate::boot_logger::log("BOOT: QEMU loader model OK");
+                } else {
+                    serial_println!("[RAMDISK] QEMU loader: .bitnet magic OK but load FAILED.");
+                }
+            } else {
+                serial_println!("[RAMDISK] No model at phys 0x{load_addr:x} — using embedded micro.bitnet.");
+            }
             crate::boot_logger::log("BOOT: No ramdisk, micro.bitnet active");
         }
     }

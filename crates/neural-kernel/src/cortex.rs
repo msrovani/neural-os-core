@@ -92,7 +92,7 @@ pub struct TransformerModel {
     pub rms_final: Vec<f32>,
     pub unembed: PackedTernaryTensor,
     pub medusa_heads: Vec<MedusaHead>,
-    pub vocab_size: u16,
+    pub vocab_size: u32,
     pub hidden: usize,
     pub num_layers: usize,
     pub max_seq: usize,
@@ -160,7 +160,7 @@ impl TransformerModel {
             rms_final: rms_default,
             unembed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
             medusa_heads,
-            vocab_size: VOCAB_SIZE,
+            vocab_size: VOCAB_SIZE as u32,
             hidden: HIDDEN,
             num_layers: NUM_LAYERS,
             max_seq: MAX_SEQ,
@@ -328,7 +328,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let hidden = read_u16(data, &mut off)? as usize;
     let num_layers = read_u16(data, &mut off)? as usize;
     let _heads = read_u16(data, &mut off)? as usize;
-    let vocab_size = read_u16(data, &mut off)?;
+    let vocab_size = read_u32(data, &mut off)?;
     let max_seq = read_u16(data, &mut off)?;
     let ffn_dim = if version >= 2 {
         read_u16(data, &mut off)? as usize
@@ -341,11 +341,19 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         n = data[off] as usize; off += 4;
         n
     };
-    // v2: skip tokenizer metadata in header (loaded separately)
+    // v2: extract tokenizer data and initialize BPE
     if version >= 2 {
         let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
         let tok_len = read_u32(data, &mut off)? as usize;
-        off += tok_len; // skip tokenizer data (loaded by BpeTokenizer)
+        if tok_len > 0 && off + tok_len <= data.len() {
+            let tok_data = &data[off..off + tok_len];
+            if crate::bpe::init_from_json(tok_data).is_ok() {
+                crate::serial_println!("[BPE] Tokenizer loaded from .bitnet ({tok_len} bytes)");
+            } else {
+                crate::serial_println!("[BPE] Failed to parse tokenizer from .bitnet");
+            }
+        }
+        off += tok_len;
     }
 
     let embed = read_f32_tensor(data, &mut off, vocab_size as usize, hidden)?;
@@ -479,7 +487,7 @@ pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::S
 pub trait Model: Send {
     fn generate(&self, prompt: &str) -> String;
     fn embed_dim(&self) -> usize;
-    fn vocab_size(&self) -> u16;
+    fn vocab_size(&self) -> u32;
     fn max_seq(&self) -> usize;
 }
 
@@ -502,7 +510,7 @@ pub fn generate_via_model(prompt: &str) -> String {
 impl Model for TransformerModel {
     fn generate(&self, prompt: &str) -> String { generate_text(self, prompt) }
     fn embed_dim(&self) -> usize { self.hidden }
-    fn vocab_size(&self) -> u16 { self.vocab_size }
+    fn vocab_size(&self) -> u32 { self.vocab_size }
     fn max_seq(&self) -> usize { self.max_seq }
 }
 

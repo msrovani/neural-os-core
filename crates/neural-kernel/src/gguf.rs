@@ -413,7 +413,7 @@ impl GgufBackedModel {
             rms_final,
             unembed,
             medusa_heads: Vec::new(),
-            vocab_size: crate::cortex::VOCAB_SIZE,
+            vocab_size: crate::cortex::VOCAB_SIZE as u32,
             hidden: self.hidden_dim,
             num_layers: self.n_layers,
             max_seq: crate::cortex::MAX_SEQ,
@@ -438,8 +438,8 @@ impl Model for GgufBackedModel {
         self.hidden_dim
     }
 
-    fn vocab_size(&self) -> u16 {
-        crate::cortex::VOCAB_SIZE
+    fn vocab_size(&self) -> u32 {
+        crate::cortex::VOCAB_SIZE as u32
     }
 
     fn max_seq(&self) -> usize {

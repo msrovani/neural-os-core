@@ -247,27 +247,7 @@ impl PackedTernaryTensor {
     }
 
     pub fn matmul_hybrid(&self, input: &Tensor) -> Option<Tensor> {
-        let (k, n) = self.shape;
-        let (m, k2) = input.shape;
-        if k != k2 {
-            return None;
-        }
-        let mut result = Tensor::new((m, n));
-        for i in 0..m {
-            for j in 0..n {
-                let mut sum = 0.0_f32;
-                for t in 0..k {
-                    let w = self.get_weight(t * n + j);
-                    match w {
-                        1 => sum += input.data[i * k + t],
-                        -1 => sum -= input.data[i * k + t],
-                        _ => {}
-                    }
-                }
-                result.data[i * n + j] = sum;
-            }
-        }
-        Some(result)
+        crate::bitnet_avx2::ternary_matmul(self, input)
     }
 }
 

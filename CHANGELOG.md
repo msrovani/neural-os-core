@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.79.0] — 2026-07-04 — 🏆 Sprint 79: LLM Infrastructure (BitNet-b1.58 Integration)
+
+### Added (neural-kernel)
+- **`bitnet_avx2.rs`** — AVX2 ternary matmul kernel (`ternary_matmul()`) with scalar fallback. Unpacks 2-bit packed ternary → `_mm256_cvtepi8_epi32` → `_mm256_cvtepi32_ps` → FMA. Called by `PackedTernaryTensor::matmul_hybrid()`.
+- **`trinity.rs`** — `TrinityRouter` MoE stub. `register_expert()` adds named experts; `classify_intent()` rule-based dispatch across 5 classes (code/hw/chat/file/system). Real ML router deferred.
+- **`bpe.rs`** — `BpeTokenizer` with JSON parser for HuggingFace `tokenizer.json`. `encode()`/`decode()`/`init_from_json()` global functions. Subword tokenization with BPE merge rules.
+
+### Changed (neural-kernel)
+- **`cortex.rs`** — `vocab_size` migrated from `u16` to `u32` (supports vocab 128K). `load_model()` v2: initializes BPE tokenizer automatically via `bpe::init_from_json()`. `TransformerModel` with dynamic `hidden`, `num_layers`, `max_seq`, `vocab_size: u32`. `LayerWeights.rms_attn/rms_ffn` as `Vec<f32>` (vectorial RMSNorm). `generate_speculative()` uses `model.max_seq` and BPE when loaded.
+- **`gguf.rs`** — `vocab_size()` returns `u32`. Field `vocab_size` as `u32` in constructor.
+- **`tensor.rs`** — Removed inline scalar matmul fallback; `matmul_hybrid()` delegates exclusively to `bitnet_avx2::ternary_matmul()`.
+- **`main.rs`** — `mod bitnet_avx2`, `mod trinity`. Ramdisk loading section: checks `boot_info.ramdisk_addr` for bootloader ramdisk. QEMU loader fallback: probes physical address `0x100000000` (4GB) for `.bitnet` magic. Maps up to 1.5GB and calls `load_model()` if found.
+
+### Changed (tools)
+- **`download_bitnet.py`** — Header `.bitnet` v2 fixed: `vocab_size` as u32 (u16 overflowed at 128K). `ffn_dim` field added. `tok_type`/`tok_len` for BPE tokenizer embedding. BPE `tokenizer.json` extracted alongside `.bitnet`.
+- **`build_image.py`** — Simplified: removed LBA append logic (provisional). Changed bootloader dependency to `default-features=false, features=["bios"]` to avoid UEFI compile error.
+
+### Model
+- Downloaded `microsoft/BitNet-b1.58-2B-4T` (real: 850M params). Converted to `.bitnet` v2: 1,464 MB, magic `0xBE11BE11`. Architecture: hidden=2560, layers=30, heads=20 (GQA=5 KV), vocab=128256, intermediate=6912.
+- `micro.bitnet` (71KB) synthetic model preserved as fallback.
+
+### Fixed
+- `#[allow(dead_code)]` policy confirmed for production code (399 expected warnings)
+- `mod shell` remains dead with `@dead` annotation (prevents accidental revival)
+
+### Known Issues
+- Forward pass broken for BitNet b1.58: GQA (20→5 KV heads) + BitFFN grouped down_proj (640→6912) not supported by standard FFN path. Sprint 80 needed.
+- QEMU loader requires 6GB RAM + WHPX. 2GB fails (model at 512MB conflicts with boot allocator).
+- Ramdisk via bootloader impossible for 1.46GB (FAT partition ~64MB). QEMU loader at 4GB is workaround.
+
 ## [0.78.1] — 2026-07-04 — 🧹 Code Review: Dead Modules Audit
 
 ### Added
