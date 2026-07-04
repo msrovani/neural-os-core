@@ -19,6 +19,7 @@ impl SettingsApp {
 
 impl App for SettingsApp {
     fn name(&self) -> &str { "settings" }
+    fn description(&self) -> &str { "System settings: theme, profile, preferences" }
     fn icon_hint(&self) -> &str { "gear sliders config" }
     fn window_size(&self) -> (u32, u32) { (380, 320) }
 

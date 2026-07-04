@@ -1,4 +1,5 @@
-//! App trait + AppRegistry — ciclo de vida de aplicativos desktop.
+//! App trait + AppRegistry — sistema de comandos do Hermes Chat.
+//! Sem multi-window — apps expõem comandos via Hermes.
 
 use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
@@ -12,27 +13,21 @@ pub mod power_app;
 
 pub trait App: Send {
     fn name(&self) -> &str;
-    fn icon_hint(&self) -> &str;
-    fn on_click(&mut self, x: i32, y: i32) -> Option<String>;
-    fn render(&self) -> &[u8];
-    fn window_size(&self) -> (u32, u32);
+    fn description(&self) -> &str;
+    fn icon_hint(&self) -> &str { "" }
+    fn window_size(&self) -> (u32, u32) { (400, 300) }
+    fn on_click(&mut self, _x: i32, _y: i32) -> Option<String> { None }
+    fn render(&self) -> &[u8] { &[] }
 }
 
 pub struct AppEntry {
     pub app: Box<dyn App>,
-    pub window_id: Option<u32>,
 }
 
 pub static APP_REGISTRY: Mutex<BTreeMap<&'static str, AppEntry>> = Mutex::new(BTreeMap::new());
 
 pub fn register_app(name: &'static str, app: Box<dyn App>) {
-    let (ww, wh) = app.window_size();
-    // Try to create a window in the compositor
-    let wid = {
-        let mut comp = crate::display::compositor::COMPOSITOR.lock();
-        comp.as_mut().map(|c| c.create_window(name, ww, wh))
-    };
-    APP_REGISTRY.lock().insert(name, AppEntry { app, window_id: wid });
+    APP_REGISTRY.lock().insert(name, AppEntry { app });
 }
 
 pub fn app_names() -> Vec<&'static str> {
@@ -44,6 +39,5 @@ pub fn init_apps() {
     register_app("settings", Box::new(settings_app::SettingsApp::new()));
     register_app("power", Box::new(power_app::PowerApp::new()));
     let names = app_names();
-    let wcount = crate::display::compositor::COMPOSITOR.lock().as_ref().map_or(0, |c| c.windows.len());
-    crate::serial_println!("[APPS] {} apps, {} windows no compositor.", names.len(), wcount);
+    crate::serial_println!("[APPS] {} apps registrados no Hermes Chat.", names.len());
 }

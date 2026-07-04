@@ -519,10 +519,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     crate::boot_logger::log("BOOT: DiskAgent ready");
 
-    // Init Compositor FIRST (apps precisam de janelas)
-    *crate::display::compositor::COMPOSITOR.lock() = Some(crate::display::compositor::Compositor::new());
-    crate::serial_println!("[COMPOSITOR] Inicializado.");
-    crate::boot_logger::log("BOOT: Compositor OK");
+    // Init Desktop Apps
+    crate::apps::init_apps();
+    crate::boot_logger::log("BOOT: Desktop apps OK");
 
     // Init Desktop Apps (criam janelas no compositor)
     crate::apps::init_apps();

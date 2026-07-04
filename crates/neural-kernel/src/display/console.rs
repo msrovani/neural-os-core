@@ -25,7 +25,7 @@ pub struct NeuralConsole {
     pub fb: DoubleBuffer,
     conv_lines: VecDeque<String>,
     _tensor_value: f32,
-    input_buffer: String,
+    pub input_buffer: String,
     show_prompt: bool,
 }
 

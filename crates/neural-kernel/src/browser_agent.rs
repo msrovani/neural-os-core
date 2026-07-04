@@ -154,17 +154,13 @@ impl Agent for BrowserAgent {
 }
 
 // ---------------------------------------------------------------------------
-// PageViewerApp — visualizador de paginas no compositor
+// PageViewerApp — visualizador de paginas (simplificado, sem compositor)
 // ---------------------------------------------------------------------------
-
-use crate::display::compositor::COMPOSITOR;
-use crate::display::theme;
 
 pub struct PageViewerApp {
     pub url: String,
     pub title: String,
     pub content: String,
-    pub window_id: Option<u32>,
 }
 
 impl PageViewerApp {
@@ -173,7 +169,6 @@ impl PageViewerApp {
             url: String::new(),
             title: String::from("Page Viewer"),
             content: String::new(),
-            window_id: None,
         }
     }
 
@@ -181,26 +176,11 @@ impl PageViewerApp {
         self.url = String::from(url);
         self.content = String::from(content);
         self.title = String::from(title);
-
-        if self.window_id.is_none() {
-            if let Some(ref mut comp) = *COMPOSITOR.lock() {
-                let wid = comp.create_window(&alloc::format!("Page: {}", title), 600, 400);
-                self.window_id = Some(wid);
-            }
-        }
+        crate::serial_println!("[BROWSER] Page loaded: {} ({} bytes)", url, content.len());
     }
 
     pub fn render(&self) {
-        let _t = theme::current();
-        if let Some(ref mut comp) = *COMPOSITOR.lock() {
-            if let Some(wid) = self.window_id {
-                if let Some(win) = comp.windows.iter_mut().find(|w| w.id == wid) {
-                    // Store page content in window title (simplificado)
-                    let preview = self.content.chars().take(80).collect::<String>();
-                    win.title = alloc::format!("{} | {}", self.title, preview);
-                }
-            }
-        }
+        // No-op: rendering goes through Hermes Chat Console
     }
 }
 

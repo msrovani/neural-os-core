@@ -11,6 +11,7 @@ impl PowerApp {
 
 impl App for PowerApp {
     fn name(&self) -> &str { "power" }
+    fn description(&self) -> &str { "Shutdown, reboot, and power management" }
     fn icon_hint(&self) -> &str { "power button circle" }
     fn window_size(&self) -> (u32, u32) { (300, 160) }
 

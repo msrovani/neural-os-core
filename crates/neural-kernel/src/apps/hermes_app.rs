@@ -17,6 +17,7 @@ impl HermesApp {
 
 impl App for HermesApp {
     fn name(&self) -> &str { "hermes" }
+    fn description(&self) -> &str { "Hermes chat console — command-line interface" }
     fn icon_hint(&self) -> &str { "chat bubble neural" }
     fn window_size(&self) -> (u32, u32) { (500, 400) }
 

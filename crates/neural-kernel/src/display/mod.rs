@@ -1,12 +1,12 @@
-//! Display subsystem — framebuffer + embedded-graphics + neural console.
+//! Display subsystem — framebuffer + embedded-graphics + Hermes Chat Console.
 //!
 //! ## Architecture
-//! - `Framebuffer` — raw BGRA32 pixel writer, implements embedded_graphics::DrawTarget
-//! - `ConsoleRegion` — multi-region text layout sobre o framebuffer
+//! - `Framebuffer` — raw BGRA32 pixel writer
+//! - `NeuralConsole` — Hermes Chat Console com histórico + input
 //! - `DisplayAgent` — agent que subscreve HERMES_RESPONSE e renderiza o console
 //!
 //! O framebuffer é obtido via BootInfo::framebuffer (já mapeado pelo bootloader).
-//! O QEMU padrão usa resolução 1024x768, BGRA32 (4 bytes/pixel).
+//! Interface simplificada (NousResearch-style, sem multi-window compositor).
 
 pub mod fb;
 pub mod console;
@@ -14,7 +14,3 @@ pub mod font;
 pub mod agent;
 pub mod theme;
 pub mod compositor;
-pub mod icons;
-pub mod workspace;
-pub mod notifications;
-pub mod layout;
