@@ -434,6 +434,57 @@ impl WorkflowEngine {
     }
 }
 
+// ---------------------------------------------------------------------------
+// SelfCritique — auto-verificação pós-workflow
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CritiqueVerdict {
+    Approved,
+    Rejected(&'static str),
+    NeedsRefinement(&'static str),
+}
+
+pub struct SelfCritique;
+
+impl SelfCritique {
+    /// Verifica se o output de um workflow é válido
+    pub fn evaluate(output: &str, goal: &str) -> CritiqueVerdict {
+        if output.is_empty() {
+            return CritiqueVerdict::Rejected("output vazio");
+        }
+        if output.contains("Error") || output.contains("erro") || output.contains("Erro") {
+            return CritiqueVerdict::NeedsRefinement("output contem erro");
+        }
+        if output == "..." {
+            return CritiqueVerdict::NeedsRefinement("workflow incompleto (placeholder)");
+        }
+        if !goal.is_empty() && !output.contains(goal) && output.len() < 10 {
+            return CritiqueVerdict::NeedsRefinement("output muito curto para o objetivo");
+        }
+        CritiqueVerdict::Approved
+    }
+
+    /// Verifica se um comando produziu um resultado satisfatório
+    pub fn check_command(cmd: &Command, response: &str) -> CritiqueVerdict {
+        match cmd {
+            Command::Status => {
+                if response.contains("Erro") { CritiqueVerdict::NeedsRefinement("status falhou") }
+                else { CritiqueVerdict::Approved }
+            }
+            Command::Fetch(_) => {
+                if response.contains("Fetch OK") || response.len() > 20 { CritiqueVerdict::Approved }
+                else { CritiqueVerdict::NeedsRefinement("fetch nao retornou dados") }
+            }
+            Command::Ping(_) => {
+                if response.contains("Pong") { CritiqueVerdict::Approved }
+                else { CritiqueVerdict::NeedsRefinement("ping falhou") }
+            }
+            _ => CritiqueVerdict::Approved,
+        }
+    }
+}
+
 pub fn parse_command(line: &str) -> Command {
     let trimmed = line.trim();
     if let Some(cmd) = trimmed.strip_prefix('/') {

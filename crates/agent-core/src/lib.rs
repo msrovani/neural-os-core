@@ -19,6 +19,32 @@ use crate::state_graph::StateGraph;
 use crate::flow::should_poll_flow;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AgentTier {
+    /// Agentes do sistema (nunca suspensos)
+    Permanent,
+    /// Agentes ativados sob demanda do sistema (PCI, ACPI)
+    System,
+    /// Agentes ativados por demanda do usuario
+    User,
+    /// Agentes com schedule periodico (baixa prioridade)
+    Periodic,
+    /// Agentes de aprendizado (mínima prioridade, executa quando idle)
+    Learning,
+}
+
+impl AgentTier {
+    pub fn priority(&self) -> u8 {
+        match self {
+            AgentTier::Permanent => 0,
+            AgentTier::System => 1,
+            AgentTier::User => 2,
+            AgentTier::Periodic => 3,
+            AgentTier::Learning => 4,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AgentKind {
     System,
     Driver,
@@ -116,6 +142,7 @@ pub struct AgentInstance {
     pub schedule: ScheduleKind,
     pub consecutive_pending: u64,  // watchdog: ticks consecutivos sem Done
     pub crew: CrewManifest,
+    pub tier: AgentTier,
 }
 
 impl AgentInstance {
@@ -129,6 +156,7 @@ impl AgentInstance {
             schedule,
             consecutive_pending: 0,
             crew: CrewManifest::empty(),
+            tier: AgentTier::Permanent,
         }
     }
 }
@@ -194,6 +222,33 @@ impl AgentRegistry {
 
     pub fn active_count(&self) -> usize {
         self.agents.iter().filter(|a| a.state == AgentState::Active).count()
+    }
+
+    /// Migra um agente para um novo tier. Learning/Periodic ganham menos ticks.
+    pub fn migrate_to_tier(&mut self, idx: usize, new_tier: AgentTier) -> Result<(), &'static str> {
+        if idx >= self.agents.len() {
+            return Err("migrate_to_tier: indice invalido");
+        }
+        self.agents[idx].tier = new_tier;
+        Ok(())
+    }
+
+    /// Migra um agente por nome
+    pub fn migrate_to_tier_by_name(&mut self, name: &str, new_tier: AgentTier) -> Result<(), &'static str> {
+        if let Some(inst) = self.agents.iter_mut().find(|a| a.agent.manifest().name == name) {
+            inst.tier = new_tier;
+            Ok(())
+        } else {
+            Err("migrate_to_tier_by_name: agente nao encontrado")
+        }
+    }
+
+    /// Filtra agentes por tier
+    pub fn agents_by_tier(&self, tier: AgentTier) -> Vec<usize> {
+        self.agents.iter().enumerate()
+            .filter(|(_, a)| a.tier == tier)
+            .map(|(i, _)| i)
+            .collect()
     }
 }
 

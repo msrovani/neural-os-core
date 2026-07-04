@@ -576,6 +576,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::NetDriverAgent));
     registry.register(Box::new(agents::UsbDriverAgent));
     registry.register(Box::new(agents::GpuDriverAgent));
+    registry.register(Box::new(agents::FsBridgeAgent::new()));
     registry.register(Box::new(agents::HwDetectAgent));
     registry.register(disk_agent_box);
     

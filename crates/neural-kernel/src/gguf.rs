@@ -4,9 +4,10 @@
 //!
 //! Formato: https://github.com/ggerganov/ggml/blob/master/docs/gguf.md
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::tensor::Tensor;
+use crate::tensor::{PackedTernaryTensor, Tensor};
 use crate::serial_println;
 
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
@@ -304,6 +305,148 @@ pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
     }
 
     Tensor::from_row_major((rows, cols), tensor_data)
+}
+
+// ---------------------------------------------------------------------------
+// GgufBackedModel — implementa Model trait usando pesos GGUF
+// ---------------------------------------------------------------------------
+
+use crate::cortex::Model;
+
+/// Converte um tensor f32 para PackedTernaryTensor via limiar
+fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
+    let mut vals = Vec::with_capacity(rows * cols);
+    for &v in data.iter().take(rows * cols) {
+        vals.push(if v > 0.1 { 1 } else if v < -0.1 { -1 } else { 0 });
+    }
+    let packed = PackedTernaryTensor::pack_weights(&vals);
+    PackedTernaryTensor { shape: (rows, cols), packed_data: packed }
+}
+
+/// Dequantiza o primeiro tensor encontrado pelo nome que contém `name_hint`
+fn dequantize_tensor_by_name(file: &GgufFile, name_hint: &str) -> Option<(Vec<f32>, usize, usize)> {
+    for t in &file.tensors {
+        if t.name.contains(name_hint) {
+            let start = t.offset as usize;
+            let end = start + (t.dims.iter().product::<u64>() as usize) * 4;
+            if end > file.data.len() { return None; }
+            let raw = &file.data[start..end];
+            let rows = t.dims[0] as usize;
+            let cols = if t.n_dims > 1 { t.dims[1] as usize } else { 1 };
+            return match t.tensor_type {
+                GgufType::F32 => {
+                    let mut vals = Vec::with_capacity(rows * cols);
+                    for i in 0..rows * cols {
+                        if i * 4 + 4 <= raw.len() {
+                            vals.push(f32::from_le_bytes([raw[i*4], raw[i*4+1], raw[i*4+2], raw[i*4+3]]));
+                        }
+                    }
+                    Some((vals, cols, rows))
+                }
+                GgufType::Q4_0 => {
+                    crate::gguf::dequantize_q4_0(raw, rows, cols)
+                        .map(|t| (t.data, cols, rows))
+                }
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+/// Modelo alimentado por GGUF. Tenta converter pesos GGUF para TransformerModel.
+pub struct GgufBackedModel {
+    file: GgufFile,
+    n_layers: usize,
+    hidden_dim: usize,
+}
+
+impl GgufBackedModel {
+    pub fn new(file: GgufFile) -> Self {
+        let n_layers = file.metadata.iter()
+            .find(|m| m.key.contains("block_count") || m.key.contains("n_layers"))
+            .and_then(|m| m.value.parse().ok())
+            .unwrap_or(4);
+        let hidden_dim = dequantize_tensor_by_name(&file, "token_embd")
+            .map(|(_, cols, _)| cols)
+            .unwrap_or(64);
+        GgufBackedModel { file, n_layers, hidden_dim }
+    }
+
+    fn try_build_transformer(&self) -> Option<crate::cortex::TransformerModel> {
+        let (vals, cols, rows) = dequantize_tensor_by_name(&self.file, "token_embd")?;
+        let embed = Tensor::from_row_major((rows, cols), vals)?;
+        let mut layers = Vec::with_capacity(self.n_layers);
+        for i in 0..self.n_layers {
+            let hint = |s| alloc::format!("blk.{}.{}", i, s);
+            let (q, qc, qr) = dequantize_tensor_by_name(&self.file, &hint("attn_q"))?;
+            let (k, kc, kr) = dequantize_tensor_by_name(&self.file, &hint("attn_k"))?;
+            let (v, vc, vr) = dequantize_tensor_by_name(&self.file, &hint("attn_v"))?;
+            let (o, oc, or_) = dequantize_tensor_by_name(&self.file, &hint("attn_output"))?;
+            let (gate, gc, gr) = dequantize_tensor_by_name(&self.file, &hint("ffn_gate"))?;
+            let (up, uc, ur) = dequantize_tensor_by_name(&self.file, &hint("ffn_up"))?;
+            let (down, dc, dr) = dequantize_tensor_by_name(&self.file, &hint("ffn_down"))?;
+            layers.push(crate::cortex::LayerWeights {
+                rms_attn: 1.0,
+                q: f32_to_ternary_packed(&q, qr, qc),
+                k: f32_to_ternary_packed(&k, kr, kc),
+                v: f32_to_ternary_packed(&v, vr, vc),
+                o: f32_to_ternary_packed(&o, or_, oc),
+                rms_ffn: 1.0,
+                gate: f32_to_ternary_packed(&gate, gr, gc),
+                up: f32_to_ternary_packed(&up, ur, uc),
+                down: f32_to_ternary_packed(&down, dr, dc),
+            });
+        }
+        let unembed = dequantize_tensor_by_name(&self.file, "output.weight")
+            .or_else(|| dequantize_tensor_by_name(&self.file, "token_embd"))
+            .map(|(data, c, r)| f32_to_ternary_packed(&data, r, c))
+            .unwrap_or_else(|| {
+                let mut seed = 42u32;
+                crate::cortex::random_ternary(&mut seed, self.hidden_dim, crate::cortex::VOCAB_SIZE as usize)
+            });
+        Some(crate::cortex::TransformerModel {
+            embed,
+            layers,
+            rms_final: 1.0,
+            unembed,
+            medusa_heads: Vec::new(),
+        })
+    }
+}
+
+impl Model for GgufBackedModel {
+    fn generate(&self, prompt: &str) -> String {
+        if let Some(model) = self.try_build_transformer() {
+            crate::cortex::generate_text(&model, prompt)
+        } else {
+            let summary = gguf_summary(&self.file);
+            alloc::format!("[GGUF] Modelo carregado. {} camadas, {} hidden.\n\
+                Aviso: conversao de pesos nao disponivel para este formato.\n\
+                Use generacao fallback.\n{}\nPrompt: {}",
+                self.n_layers, self.hidden_dim, summary, prompt)
+        }
+    }
+
+    fn embed_dim(&self) -> usize {
+        self.hidden_dim
+    }
+
+    fn vocab_size(&self) -> u16 {
+        crate::cortex::VOCAB_SIZE
+    }
+
+    fn max_seq(&self) -> usize {
+        crate::cortex::MAX_SEQ
+    }
+}
+
+/// Carrega modelo GGUF e registra como modelo ativo via set_model()
+pub fn load_gguf_model(data: &[u8]) -> Result<(), &'static str> {
+    let file = load_gguf(data)?;
+    let model = GgufBackedModel::new(file);
+    crate::cortex::set_model(Box::new(model));
+    Ok(())
 }
 
 /// Summary do modelo GGUF para debug

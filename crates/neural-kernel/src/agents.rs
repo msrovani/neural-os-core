@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use event_bus::{CapabilityToken, Event, Receiver};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::cortex;
-use crate::hermes;
+use crate::hermes::{self, IntentCache, WorkflowEngine};
 use crate::conversation;
 use crate::{serial_println, println};
 use crate::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
@@ -337,6 +337,9 @@ pub struct HermesAgent {
     con_errors_resolved: u64,
     con_anomaly_count: u64,
     con_memories_total: usize,
+    intent_cache: IntentCache,
+    output_cache: skill_registry::OutputCache,
+    workflow_engine: WorkflowEngine,
 }
 
 impl HermesAgent {
@@ -362,6 +365,9 @@ impl HermesAgent {
             con_errors_resolved: 0,
             con_anomaly_count: 0,
             con_memories_total: 0,
+            intent_cache: IntentCache::new(),
+            output_cache: skill_registry::OutputCache::new(500),
+            workflow_engine: WorkflowEngine::new(),
         }
     }
 
@@ -382,9 +388,13 @@ impl HermesAgent {
         serial_println!("{}", sdd.display());
     }
 
-    fn execute_skill(&self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
+    fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
         let token_val = token.as_legacy();
         let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        // Sprint 78: OutputCache — skills idempotentes usam cache
+        if let Some(cached) = self.output_cache.get(name, payload, now) {
+            return Ok(cached.to_vec());
+        }
         // Lock order: SKILL_REGISTRY → TRUST_CACHE (consistente em todo codigo)
         let reg = SKILL_REGISTRY.lock();
         {
@@ -396,7 +406,11 @@ impl HermesAgent {
                 tc.check_or_cache(token_val, name, now, 360);
             }
         }
-        reg.execute_skill_unchecked(name, payload)
+        let result = reg.execute_skill_unchecked(name, payload);
+        if let Ok(ref output) = result {
+            self.output_cache.set(name, payload, output.clone(), now, None);
+        }
+        result
     }
 }
 
@@ -458,6 +472,13 @@ impl Agent for HermesAgent {
             if let Some(event) = self.llm_receiver.try_receive() {
                 had_work = true; awaiting = false;
                 self.state = HermesState::Idle;
+                // Sprint 78: WorkflowEngine — avança ao receber LLM response
+                if self.workflow_engine.is_active() {
+                    let done = self.workflow_engine.advance(true);
+                    if done {
+                        serial_println!("[WORKFLOW] LLM workflow completo.");
+                    }
+                }
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
                 serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
@@ -488,6 +509,20 @@ impl Agent for HermesAgent {
             });
         }
 
+        // Sprint 78: WorkflowEngine — se workflow ativo, avança fases
+        if self.workflow_engine.is_active() {
+            had_work = true;
+            let phase = self.workflow_engine.phase.clone();
+            serial_println!("[WORKFLOW] Fase: {:?}", phase);
+            let done = self.workflow_engine.advance(true);
+            if done {
+                serial_println!("[WORKFLOW] Completo.");
+                responded = String::from("[Hermes] Workflow concluído.");
+            } else {
+                responded = alloc::format!("[Hermes] Workflow → {:?}", self.workflow_engine.phase);
+            }
+        }
+
         // Check user input / intent
         if let Some(event) = self.user_receiver.try_receive() {
             had_work = true;
@@ -495,7 +530,15 @@ impl Agent for HermesAgent {
             serial_println!("[CORTEX] Texto: \"{}\"", text);
             println!("[CORTEX] Texto: \"{}\"", text);
 
-            let cmd = hermes::parse_command(text);
+            // Sprint 78: IntentCache — evita re-classificação
+            let now_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let cmd = if let Some(cached) = self.intent_cache.get(text, now_ticks) {
+                cached
+            } else {
+                let parsed = hermes::parse_command(text);
+                self.intent_cache.set(text, parsed.clone(), now_ticks);
+                parsed
+            };
 
             // #178: SDD + #184: Intent Transparency antes de executar
             let intent_name = match cmd {
@@ -546,13 +589,15 @@ impl Agent for HermesAgent {
             let response = match cmd {
                 hermes::Command::Status => {
                     self.log_phase(crate::hermes::ReActPhase::Execute, "status skill");
-                    match self.execute_skill(&self.status_skill, &event.payload, &event.token) {
+                    let skill_name = self.status_skill.clone();
+                    match self.execute_skill(&skill_name, &event.payload, &event.token) {
                         Ok(_) => String::from("System status report executado."),
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
                 hermes::Command::Echo(ref arg) => {
-                    match self.execute_skill(&self.echo_skill, arg.as_bytes(), &event.token) {
+                    let skill_name = self.echo_skill.clone();
+                    match self.execute_skill(&skill_name, arg.as_bytes(), &event.token) {
                         Ok(output) => {
                             let rev = core::str::from_utf8(&output).unwrap_or("(bytes)");
                             alloc::format!("Echo reverso: \"{}\"", rev)
@@ -561,13 +606,15 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::HardwareInfo => {
-                    match self.execute_skill(&self.hw_skill, &event.payload, &event.token) {
+                    let skill_name = self.hw_skill.clone();
+                    match self.execute_skill(&skill_name, &event.payload, &event.token) {
                         Ok(output) => String::from(core::str::from_utf8(&output).unwrap_or("(binary)")),
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
                 }
                 hermes::Command::NetDiag => {
-                    match self.execute_skill(&self.net_diag_skill, &event.payload, &event.token) {
+                    let skill_name = self.net_diag_skill.clone();
+                    match self.execute_skill(&skill_name, &event.payload, &event.token) {
                         Ok(output) => String::from(core::str::from_utf8(&output).unwrap_or("(binary)")),
                         Err(e) => alloc::format!("Erro: {}", e),
                     }
@@ -725,6 +772,7 @@ impl Agent for HermesAgent {
                     match intent {
                         cortex::Intent::Greeting | cortex::Intent::Chat => {
                             serial_println!("[CORTEX-LLM] Enviando: \"{}\"", msg);
+                            self.workflow_engine.start();
                             let _ = EVENT_BUS.publish(Event {
                                 id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
                                 payload: msg.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
@@ -759,7 +807,13 @@ impl Agent for HermesAgent {
                 &response
             };
 
+            // Sprint 78: SelfCritique — avalia resposta antes de publicar
             if !matches!(self.state, HermesState::AwaitingLLM) {
+                let critique = hermes::SelfCritique::check_command(&cmd, &response);
+                if let hermes::CritiqueVerdict::NeedsRefinement(reason) = critique {
+                    serial_println!("[CRITIQUE] {}: {}", reason, &response[..core::cmp::min(60, response.len())]);
+                }
+
                 USAGE_TRACKER.lock().record_call("intent_router", 1);
                 EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);
                 EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, response.as_bytes().to_vec(), now);
@@ -1126,6 +1180,69 @@ impl Agent for HwDetectAgent {
             serial_println!("[HW-SCAN] Dispositivos detectados:\n{}", text);
         }
         AgentTickResult::Done
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FsBridgeAgent — ponte entre VFS e MHI para migração de dados entre tiers
+// ---------------------------------------------------------------------------
+
+const FSBRIDGE_MANIFEST: AgentManifest = AgentManifest {
+    name: "fs_bridge",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::PollEvery(500),
+    auto_start: true,
+    persist: true,
+};
+
+pub struct FsBridgeAgent {
+    last_scan: u64,
+}
+
+impl FsBridgeAgent {
+    pub fn new() -> Self { FsBridgeAgent { last_scan: 0 } }
+
+    fn execute_migration(&mut self, _tick: u64) {
+        let suggestions: Vec<(u64, u64)> = {
+            let reg = crate::mhi::MHI_REGISTRY.lock();
+            reg.allocations.iter()
+                .filter(|(_, p)| {
+                    let idle = _tick.saturating_sub(p.last_access_tick);
+                    p.access_count > 5 && idle < 500
+                        && p.tier != crate::mhi::AllocTier::Dram
+                })
+                .map(|(&addr, p)| (addr, p.last_access_tick))
+                .collect()
+        };
+        for (addr, last_access) in &suggestions {
+            let path = alloc::format!("/mhi/{:x}", addr);
+            match crate::fs::read_vfs(&path) {
+                Ok(data) => {
+                    let phys = x86_64::PhysAddr::new(*addr);
+                    let size = data.len();
+                    if let Some(dram_addr) = crate::mhi::alloc_by_tier(crate::mhi::AllocTier::Dram, size) {
+                        let dst = dram_addr.as_u64() as *mut u8;
+                        unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, size); }
+                        let mut reg = crate::mhi::MHI_REGISTRY.lock();
+                        reg.register(phys, size, crate::mhi::AllocTier::Dram, "fs_bridge");
+                        reg.record_access(phys, _tick, 0);
+                        serial_println!("[FS-BRIDGE] Migrado {:?} → DRAM ({} bytes, idle={})",
+                            phys, size, _tick.saturating_sub(*last_access));
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+    }
+}
+
+impl Agent for FsBridgeAgent {
+    fn manifest(&self) -> &AgentManifest { &FSBRIDGE_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        if _tick - self.last_scan < 500 { return AgentTickResult::Pending; }
+        self.last_scan = _tick;
+        self.execute_migration(_tick);
+        AgentTickResult::Pending
     }
 }
 

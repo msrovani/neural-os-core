@@ -229,7 +229,7 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 | `event-bus` | v0.1.0 — IPC publish/subscribe + MemoryTree + KnowledgeGraph + Scheme + Ecosystem (dedup, privacy, hybrid, metacognitive, supercontext, skill_index, tokenjuice) |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Current Sprint (Sprint 77 — Foundation Quick Wins) 🟡
+## Current Sprint (Sprint 78 — Agentic Evolution) ✅
 ✅ 60.1b Prompt `>` interativo — DisplayAgent mostra `> ` quando ocioso
 ✅ 67.0.3 Pre-Flight — Skill::verify() check pré-execução
 ✅ 67.2.3 Background Fan-out — FanOutPool para delegação de sub-tarefas
@@ -238,7 +238,23 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 ✅ 67.2.2 Completion Contracts — verificação pós-execução (nonempty, utf8)
 ✅ 67.2.1 `/learn` — DynamicSkill + registro direto sem LLM
 
-**Próximo:** Sprint 78 — Agentic Evolution (Crew/Flow, Cache, GGUF, WASM)
+**Próximo:** Sprint 79 — LLM Infrastructure (AVX2 BitNet, Trinity MoE, Candle, TrainingAgent)
+
+---
+
+## Active Sprint Items (Sprint 78 — Agentic Evolution) ✅ ✅
+
+| Item | Status | Descrição |
+|---|---|---|
+| FlowTrigger + CrewPool | ✅ | Flow-based agent activation + crew orchestration (v0.72.0) |
+| IntentCache + OutputCache | ✅ | Cache de intents + outputs de skills (v0.72.0 + wiring Sprint 78) |
+| WorkflowEngine + SelfCritique | ✅ | Multi-step workflow + auto-verificação pós-execução |
+| StateGraph Scheduler | ✅ | Estado-grafo substitui round-robin no scheduler (v0.72.0) |
+| migrate_to_tier() | ✅ | AgentTier migration: Permanent/System/User/Periodic/Learning |
+| MHI + FS Bridge | ✅ | FsBridgeAgent — ponte MHI↔VFS para migração entre tiers |
+| GGUF Loader | ✅ | Carregador + GgufBackedModel (v0.72.0 + wiring Sprint 78) |
+| WASM Runtime | ✅ | WasmExecutor stack-based + WASI→Skill bridge (WasmSkill) |
+| **Total** | | **~3100 LOC** |
 
 ## Network Strategy (ADR-0016)
 Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. HW real: planejar e1000/r8169 (~300 LOC).

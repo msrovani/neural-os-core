@@ -109,7 +109,7 @@ impl MedusaHead {
     }
 }
 
-fn random_ternary(seed: &mut u32, rows: usize, cols: usize) -> PackedTernaryTensor {
+pub fn random_ternary(seed: &mut u32, rows: usize, cols: usize) -> PackedTernaryTensor {
     let mut vals = Vec::with_capacity(rows * cols);
     for _ in 0..rows * cols {
         *seed = seed.wrapping_mul(1103515245).wrapping_add(12345);

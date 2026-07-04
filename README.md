@@ -155,7 +155,7 @@ Agentes ativos → Tick rate → Latencia
 
 **Hermes é event-driven:** Só avança o ciclo ReAct quando há entrada real.
 
-### Trinity Model Hub — MoE (v0.77 target)
+### Trinity Model Hub — MoE (v0.79 target)
 
 Mixture of Experts no kernel. Modelos microscópicos (<150KB cada) especializados:
 
@@ -286,8 +286,8 @@ Roadmap reestruturado por dependências evolutivas. Itens B-01 (LAN) empurrados 
 Ativação sob demanda: agentes só acordam quando necessário (não congestionam o tick-tock).
 
 ```
-Sprint 77 🟡  FOUNDATION       — Prompt >, Pre-Flight, TaskSchema, /learn, Fan-out
-Sprint 78 🟡  AGENTIC EVOLUTION — Crew/Flow, Cache, Workflow, GGUF, WASM
+Sprint 77 ✅  FOUNDATION       — Prompt >, Pre-Flight, TaskSchema, /learn, Fan-out
+Sprint 78 ✅  AGENTIC EVOLUTION — Crew/Flow, Cache, Workflow, GGUF, WASM
 Sprint 79 🟡  LLM INFRASTRUCTURE — AVX2 BitNet, Trinity MoE, Candle, TrainingAgent
 Sprint 80 🟡  JARVIS PERSONA    — SOUL.md, IPW, Compression, Notification Gate
 Sprint 81 🟡  JARVIS EMOTION    — Emotion, Contracts, Discovery, Cache, Pipeline
@@ -299,8 +299,10 @@ Sprint 85+ 🔴 AIOS EVOLUTION   — WWW Agents, Voice, Update, SKYNET (pós B-0
 
 | Dimension | Value |
 |---|---|
-| Done | **20 completed blocks** (v0.1 → v0.76.1) |
-| In progress | **Sprint 77** — Foundation Quick Wins (~760 LOC) |
-| Next | Sprints 78-84 — Agentic → LLM → JARVIS → GPU (~12.700 LOC) |
+| Done | **22 completed blocks** (v0.1 → v0.78.0) |
+| Done (v0.77.0) | **Sprint 77** — Foundation Quick Wins (~380 LOC) ✅ |
+| Done (v0.78.0) | **Sprint 78** — Agentic Evolution (~400 LOC) ✅ |
+| In progress | **Sprint 79** — LLM Infrastructure (~1200 LOC) 🟡 |
+| Next | Sprints 80-84 — JARVIS → GPU (~8.800 LOC) |
 | Deferred (B-01) | **Sprint 85+** — AIOS Evolution (~7.500 LOC) |
 | Blockers | **B-01 (RX fix)** blocks 6 WWW agents + Voice + SKYNET |

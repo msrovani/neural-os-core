@@ -1,8 +1,8 @@
-# 📋 TODO/Checklist — neural-os-core v0.77.0
+# 📋 TODO/Checklist — neural-os-core v0.79.0
 
-**Data:** 2026-07-03  
+**Data:** 2026-07-04  
 **Propósito:** Lista mestra de todas as pendências técnicas do projeto, para qualquer AI DEV (humano ou IA) localizar e contribuir.  
-**Total de itens:** 34 (7 🔴 bloqueantes, 8 🟠 alta, 10 🟡 média, 9 🟢 leve)
+**Total de itens:** 27 (7 🔴 bloqueantes, 8 🟠 alta, 7 🟡 média, 5 🟢 leve)
 
 ---
 
@@ -66,10 +66,10 @@ Fase 5 (GPU Intel):   B-02 (GEN shader) ←── B-07 ✅
 Fase 6 (HW real):     B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
 Fase 7 (WiFi):        B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
 **Fase 8 (FS):        B-25 (FAT32) + B-34 (log) ✅ — FAT12 removido**
-**Fase 9 — Sprint 77 (Trinity MoE):  GGUF loader + WASM runtime + SleepCycle + Candle**
-**Fase 10 — Sprint 78 (Learning):    TrainingAgent + rust_coder + Self-Learning + AHCI**
-**Fase 11 — Sprint 79 (GPU+Rede):    GEN shader + B-01 RX fix + e1000**
-**Fase 12 — Sprint 80 (AIOS Evol):   WWW Agents + J.A.R.V.I.S. + Update Agent**
+**Fase 9 — Sprint 77 (Foundation Quick Wins):  Prompt >, Pre-Flight, TaskSchema, FanOut, /learn, SkillIndex, Contracts ✅**
+**Fase 10 — Sprint 78 (Agentic Evolution):     Crew/Flow, Cache, Workflow, GGUF, WASM ✅**
+**Fase 11 — Sprint 79 (LLM Infrastructure):     AVX2 BitNet, Trinity MoE, Candle, TrainingAgent**
+**Fase 12 — Sprint 80 (JARVIS Persona):         SOUL.md, IPW, Session Compression, Notification Gate**
 ```
 
 ---
@@ -731,22 +731,13 @@ if !gpus.is_empty() {
 
 ### B-26: Prompt interativo `>`
 
+**Status:** ✅ Implementado em Sprint 77
+
 **Goal:** Hermes exibe prompt `>` e aguarda input do usuário via teclado.
 
-**Por que:** Atualmente o Hermes inicializa e imprime mensagens, mas não há cursor piscando ou prompt esperando input. O usuário não sabe que pode digitar.
+**Implementação:** `display/console.rs` — `show_prompt` default alterado para `true`. NeuralConsole renderiza `> {input}` na última linha. Input echo via `KEYBOARD_ECHO` topic.
 
-**Sub-itens:**
-- [ ] Adicionar `>` no final do output do DisplayAgent
-- [ ] Cursor piscando (alternar a cada 500ms)
-- [ ] Input echo: teclas digitadas aparecem no prompt
-
-**Dificuldades:** Nenhuma — mudança cosmética
-
-**Travas:** Nenhuma
-
-**Arquivos:** `crates/neural-kernel/src/display/agent.rs`
-
-**Esforço:** 🟢 ~30 LOC
+**Arquivos:** `crates/neural-kernel/src/display/console.rs`
 
 ---
 
@@ -892,20 +883,22 @@ if !gpus.is_empty() {
 |---|---|---|
 | 🔴 Bloqueante | 7 | ~3.300 LOC, 8-18 semanas |
 | 🟠 Alta | 8 | ~3.550 LOC, 8-20 semanas |
-| 🟡 Média | 10 | ~1.800 LOC, 4-10 semanas |
-| 🟢 Leve | 9 | ~700 LOC, 1-3 semanas |
-| **Total** | **34** | **~9.350 LOC, 6-14 meses** |
+| 🟡 Média | 4 | ~800 LOC, 2-6 semanas |
+| 🟢 Leve | 8 | ~670 LOC, 1-3 semanas |
+| **Total** | **27** | **~8.320 LOC, 6-14 meses** |
 
 ### Ordem sugerida de implementação
 
 ```
-Fase 1 (Sprint 67):  B-05 (GPU boot), B-26 (prompt >), B-28 (auto-skill)
-Fase 2 (Sprint 68):  B-01 (rede), B-18 (DHCP fallback)
-Fase 3 (Sprint 69):  B-11 (WWW infra), B-12 (Browser Agent)
-Fase 4 (Sprint 70):  B-07 (GTT), B-09 (VRAM free list), B-08 (BCS)
-Fase 5 (Sprint 71+):  B-02/B-03/B-04 (GPU compute), B-06 (USB-MSC)
-Fase 6 (Sprint 72+):  B-14 (WASM), B-17 (WWW restantes)
-Backlog:              B-15 a B-27
+Sprint 77 (Foundation Quick Wins):      ✅ Prompt >, Pre-Flight, FanOut, TaskSchema, Contracts, /learn, SkillIndex
+Sprint 78 (Agentic Evolution):          ✅ Crew/Flow, Cache, WorkflowEngine, GGUF, WASM, MHI-FS Bridge
+Sprint 79 (LLM Infrastructure):          AVX2 BitNet, Trinity MoE, TrainingAgent, Self-Learning
+Sprint 80 (JARVIS Persona):              SOUL.md, IPW, Session Compression, Notification Gate, Sessionless
+Sprint 81 (JARVIS Emotion):              Emotion Analysis, Contracts, Discovery, Cache, Pipeline
+Sprint 82 (JARVIS Cognitive):            Dreaming, Ego, Heartbeats, Auto-Skills, SleepCycle
+Sprint 83 (JARVIS Security + AHCI):      Fail-Closed, Merkle, Fluid Persona, SATA
+Sprint 84 (GPU Compute):                 Intel GEN shader (matmul via EU)
+Sprint 85+ (AIOS Evolution):             WWW Agents, Voice, SKYNET, WiFi (pós B-01)
 ```
 
 ---
@@ -917,7 +910,7 @@ Backlog:              B-15 a B-27
 - **WASM:** `docs/architecture/0010-strategic-roadmap-and-innovations.md` (Phase 5)
 - **Memória:** `docs/memory/SESSION_*.md`, `IDEA_BANK.md`
 - **Plano diretor:** `docs/memory/STATE.md`
-- **Última sessão:** `docs/memory/SESSION_066.md`
+- **Última sessão:** `docs/sprint-078-agentic-evolution.md`
 
 ---
 

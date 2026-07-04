@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.77.0-design 🏆
-#   ROADMAP READEQUADO — Foundation Quick Wins + JARVIS Evolution
-#   132 arquivos Rust, ~15.500 LOC, 0 erros
+#   STATE — neural-os-core v0.78.0-design 🏆
+#   SPRINT 78 COMPLETO — Agentic Evolution
+#   132 arquivos Rust, ~15.900 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 ## Marcos Acumulados
@@ -14,6 +14,7 @@
 - **v0.76.0-0.76.1** — NVMe driver, S.M.A.R.T., Adaptive heap, Dynamic tick, Event-driven Hermes
 - **2026-07-04** — **Roadmap readequado:** 28 sprints replanejados por dependência. Itens B-01 empurrados para Sprint 85+. Premissa Activation on Demand adicionada.
 - **2026-07-04** — **Sprint 77 completo:** 7 Foundation Quick Wins (~380 LOC). QEMU + VirtualBox (2 vCPUs) 0 erros. VirtualBox SMP fix: AP_COUNT static previne INIT-SIPI-SIPI sem APs.
+- **2026-07-04** — **Sprint 78 completo:** 8 itens de Agentic Evolution. 0 erros. ~400 LOC novos.
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
@@ -82,12 +83,11 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 8. **RX=0 persistente** — QEMU slirp + VirtualBox bridge, pre-existente (B-01)
 9. **Hermes event-driven** — 84 linhas/seg → 0 quando ocioso
 10. **Tick dinâmico** — calibrado por workload (12-192 t/s)
-11. **Sprint 77** — 7 Foudation Quick Wins: Prompt `>`, Pre-Flight, FanOut, TaskSchema, SkillIndex, CompletionContracts, DynamicSkill. ~380 LOC, 0 erros.
+11. **Sprint 77** — 7 Foundation Quick Wins: Prompt `>`, Pre-Flight, FanOut, TaskSchema, SkillIndex, CompletionContracts, DynamicSkill. ~380 LOC, 0 erros.
+12. **Sprint 78** — 8 Agentic Evolution items: IntentCache wiring, OutputCache wiring, WorkflowEngine wiring, SelfCritique, GgufBackedModel, AgentTier+migrate_to_tier, FsBridgeAgent, WasmExecutor+WasmSkill. ~400 LOC, 0 erros.
 12. **VirtualBox SMP fix** — AP_COUNT static from MADT lapic_count. 2 vCPUs now boot reliably on VB.
 
 ## Pendente Técnico
-- **GGUF loader**: ~500 LOC, Sprint 78
-- **WASM runtime (wasmi)**: ~800 LOC, Sprint 78
 - **JARVIS agents**: ~5650 LOC, Sprints 80-83
 - **Intel GEN shader**: ~800 LOC, Sprint 84
 - **AHCI driver**: ~700 LOC, Sprint 83

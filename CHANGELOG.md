@@ -6,6 +6,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.78.0] — 2026-07-04 — 🏆 Sprint 78: Agentic Evolution
+
+### Added (neural-kernel)
+- **IntentCache wiring** (`agents.rs`): HermesAgent now instantiates `IntentCache`, checks cache before `parse_command()`, and caches results. LRU with 64-entry limit.
+- **OutputCache wiring** (`agents.rs`): `execute_skill()` checks `OutputCache` before calling `SkillRegistry::execute_skill_unchecked()`. Skills marked `idempotent: true` have outputs cached.
+- **WorkflowEngine wiring** (`agents.rs`): HermesAgent field + tick loop checks `is_active()` and advances phases. Started for Chat→LLM commands and advanced on LLM response.
+- **SelfCritique** (`hermes.rs`): `SelfCritique::evaluate()` e `SelfCritique::check_command()` — verifica output vazio, erros, placeholders, respostas curtas.
+- **GgufBackedModel** (`gguf.rs`): Implementa `cortex::Model` trait. Converte pesos GGUF (FP32/Q4_0) para `TransformerModel` via `try_build_transformer()`. Suporta busca de tensores por nome (blk.N.attn_q, ffn_gate etc.).
+- **FsBridgeAgent** (`agents.rs`): Agente `PollEvery(500)` que escaneia `MHI_REGISTRY` por alocações candidatas à promoção (access_count > 5, idle < 500) e executa migração HDD→DRAM via VFS.
+- **WasmExecutor** (`wasm.rs`): Interpretador stack-based com suporte a i32.const/add/sub/mul/eqz/load/store, block/loop/if/else/end, br/br_if, call, select, memory.size/grow. 35+ opcodes WASM.
+- **WasmSkill** (`wasm.rs`): Implementa `Skill` trait. `verify()` parseia bytecode, `execute()` carrega e executa função exportada (main/_start). WASI stub para bridge futura.
+- **register_wasm_skill()** (`wasm.rs`): Registra uma skill WASM no SkillRegistry a partir de bytecode.
+
+### Added (agent-core)
+- **AgentTier** (`lib.rs`): Enum com `Permanent/System/User/Periodic/Learning`, cada um com `priority()`.
+- **AgentInstance.tier**: Campo `tier: AgentTier` default `Permanent`.
+- **migrate_to_tier()**: `AgentRegistry::migrate_to_tier(idx, new_tier)` e `migrate_to_tier_by_name(name, new_tier)`.
+- **agents_by_tier()**: Filtra agentes por tier.
+
+### Fixed
+- **execute_skill** borrow fix: Mudança de `&self` para `&mut self` para permitir cache writes. Clona skill_names antes de chamar.
+
+### Sources
+- Sprint 78 plan (8 items: Flow/Crew, Cache, Workflow, StateGraph, Tier, MHI-FS, GGUF, WASM)
+- v0.72.0 base (Crew, FlowTrigger, StateGraph, IntentCache, OutputCache, WorkflowEngine, GGUF parser)
+
+---
+
+## [0.77.0] — 2026-07-04 — 🏆 Sprint 77: Foundation Quick Wins
+
+### Added (skill-registry)
+- **Skill::verify()** (`skill.rs`): Pre-flight verification trait method. Skills podem checar precondições antes de executar. `SystemStatusSkill` verifica MHI, `HardwareInfoSkill` verifica SystemArchitecture.
+- **CompletionContract** (`contract.rs`): `CONTRACT_NONEMPTY` e `CONTRACT_UTF8` com validação pós-execução. Suporta `WarnOnly`, `RejectOutput`, `RetrySkill`.
+- **TaskSchema** (`task.rs`): `TaskSchema`, `JobPreconditions`, `TaskStatus` — tipos para schema de tarefas estruturadas com precondições, timeout, retries.
+- **DynamicSkill** (`dynskill.rs`): Skill registrável em runtime via `/learn`. Implementa `Skill` trait diretamente, sem LLM.
+- **FanOutPool** (`fanout.rs`): Pool de sub-tarefas assíncronas. `spawn()`/`poll_all()`/`take_result()`. Sub-tasks como `Box<dyn FnOnce + Send>`.
+- **SkillIndex.find()** (`index.rs`): Busca textual por nome/desc/capabilities.
+- **McpCatalog** (`index.rs`): Catálogo público de skills com `search()`, `register()`, `CatalogEntry`.
+
+### Changed
+- `McpManifest` ganha campo `contracts: Vec<&'static CompletionContract>`
+- `SkillRegistry::execute_skill()` e `execute_skill_unchecked()` chamam `verify()` + contratos pós-exec
+- Todas as 7 implementações de `Skill` ganham `verify()` e `contracts: Vec::new()`
+- `Command::Learn` separado de `Command::AddSkill` — registro direto sem LLM
+
+### Fixed
+- **VirtualBox SMP**: Novo `AP_COUNT` static lido do MADT `lapic_count`. Se 0 APs, `init_smp()` retorna sem INIT-SIPI-SIPI. 2 vCPUs no VBox agora bootam confiavelmente.
+
+### Added (neural-kernel/hermes)
+- **60.1b**: Prompt `>` interativo — `show_prompt` default `true` no NeuralConsole
+- **67.2.1**: `/learn <nome> <desc>` cria `DynamicSkill` + registra em SkillRegistry + SkillLoader
+- **72.6**: `McpCatalog` populado via `SkillRegistry.list_skills()`
+
+### Deprecated
+- N/A
+
+### Sources
+- Sprint 60, 67, 72 plans
+- ADR-0036 (JARVIS)
+
+---
+
 ## [0.72.0] — 2026-07-02 — 🏆 Evolução Agêntica: Crew + FlowTrigger + StateGraph
 
 ### Added (agent-core)
