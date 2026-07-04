@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.76.1 🏆
-#   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + DYNAMIC TICK
+#   STATE — neural-os-core v0.77.0-design 🏆
+#   ROADMAP READEQUADO — Foundation Quick Wins + JARVIS Evolution
 #   132 arquivos Rust, ~15.500 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
@@ -12,11 +12,20 @@
 - **v0.74.0-0.74.2** — TPM TIS driver, Ed25519 kernel signing, Partition mask 0x1C
 - **v0.75.0-0.75.6** — FAT32-only, DiskIntelligenceAgent (680 LOC, 6 controllers, 10+ FS probes)
 - **v0.76.0-0.76.1** — NVMe driver, S.M.A.R.T., Adaptive heap, Dynamic tick, Event-driven Hermes
+- **2026-07-04** — **Roadmap readequado:** 28 sprints replanejados por dependência. Itens B-01 empurrados para Sprint 85+. Premissa Activation on Demand adicionada.
+- **2026-07-04** — **Sprint 77 completo:** 7 Foundation Quick Wins (~380 LOC). QEMU + VirtualBox (2 vCPUs) 0 erros. VirtualBox SMP fix: AP_COUNT static previne INIT-SIPI-SIPI sem APs.
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
 247+ agentes: 20 nativos + 147 The Agency + ~80 importados + ~6 HW + ~6 FS.
 Bootloader 0.11.15 com `bootloader_api`. Boot sequence agent-centric.
+
+### Activation on Demand
+Agentes só congestionam o tick-tock quando necessário.
+- Apenas Hermes, Display, HwBridge usam `Continuous`
+- Todo agente importado declara `on_demand: true` no manifesto
+- AgentScheduler não polla sem evento pendente
+- Penalidade: Continuous não-essencial >5% ticks → rebaixado para EventDriven
 
 ### DiskIntelligenceAgent (v0.75.x)
 StorageController trait com 6 implementações (ATA, USB-MSC, NVMe, stubs AHCI/SCSI/VirtIO).
@@ -39,7 +48,7 @@ LAPIC timer com init_count dinâmico: 12-192 ticks/s baseado em agentes ativos.
 Hermes event-driven: ReAct cycle só avança com entrada real (silêncio sem trabalho).
 EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return pattern.
 
-### Agent Tier Classification (Premissa v0.76.1)
+### Agent Tier Classification
 | Tier | Schedule | Exemplos |
 |---|---|---|
 | Permanent | Continuous | Hermes, Display, HwBridge |
@@ -48,25 +57,41 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 | Periodic | PollEvery(N) | Cron, Observer, Optimizer |
 | Learning | PollEvery(2000) | Novos agentes → analisados 5000 ticks → promovidos |
 
+## Roadmap Readequado (Sprints 77-84)
+
+| Sprint | v | Bloco | Foco | LOC |
+|---|---|---|---|---|
+| **77** | 0.77.x | **21** | **Foundation Quick Wins** — Prompt >, Pre-Flight, TaskSchema, /learn, Fan-out | ~760 |
+| **78** | 0.78.x | **22** | **Agentic Evolution** — Crew/Flow, Cache, Workflow, GGUF, WASM | ~2720 |
+| **79** | 0.79.x | **23** | **LLM Infrastructure** — AVX2, Trinity MoE, Candle, TrainingAgent | ~1450 |
+| **80** | 0.80.x | **24** | **JARVIS Persona** — SOUL.md, IPW, Compression, Notification Gate | ~950 |
+| **81** | 0.81.x | **25** | **JARVIS Emotion** — Emotion, Contracts, Discovery, Cache, Pipeline | ~1200 |
+| **82** | 0.82.x | **26** | **JARVIS Cognitive** — Dreaming, Ego, Heartbeats, Auto-Skills, SleepCycle | ~1680 |
+| **83** | 0.83.x | **27** | **JARVIS Security + AHCI** — Fail-Closed, Merkle, Fluid, AHCI | ~1200 |
+| **84** | 0.84.x | **28** | **GPU Compute** — Intel GEN shader | ~800 |
+| **85+** | 0.85.x+ | **29+** | **AIOS Evolution** — WWW, Voice, SKYNET (pós B-01) | ~7500 |
+
 ## Aprendizados Chave
-1. **VGA CRTC + UEFI GOP = incompatível** (Sprint 71)
-2. **Cortex acorda antes do HW** — LLM deve participar das decisões de hardware
-3. **FAT12 removido** — FAT32-only, 102 LOC eliminados
-4. **Partition mask 0x1C** — mbr_nostd aceita Hidden FAT32, bootloader OK, SO não monta
-5. **TPM fallback** — silencioso se ausente (0xFFFF FFFF), Ed25519 como enforcement primário
-6. **RX=0 persistente** — QEMU slirp + VirtualBox bridge, pre-existente (B-01)
-7. **Hermes event-driven** — 84 linhas/seg → 0 quando ocioso
-8. **Tick dinâmico** — calibrado por workload (12-192 t/s)
-9. **AgentTier** — classificação obrigatória, Learning como fallback
+1. **Roadmap readequado 2026-07-04:** Reorganização completa por dependências. Itens independentes primeiro (Foundation → Agentic → LLM → JARVIS → GPU). B-01 e dependentes no final.
+2. **Activation on Demand:** Só Hermes/Display/HwBridge usam Continuous. O resto dorme até ter trabalho.
+3. **VGA CRTC + UEFI GOP = incompatível** (Sprint 71)
+4. **Cortex acorda antes do HW** — LLM deve participar das decisões de hardware
+5. **FAT12 removido** — FAT32-only, 102 LOC eliminados
+6. **Partition mask 0x1C** — mbr_nostd aceita Hidden FAT32, bootloader OK, SO não monta
+7. **TPM fallback** — silencioso se ausente (0xFFFF FFFF), Ed25519 como enforcement primário
+8. **RX=0 persistente** — QEMU slirp + VirtualBox bridge, pre-existente (B-01)
+9. **Hermes event-driven** — 84 linhas/seg → 0 quando ocioso
+10. **Tick dinâmico** — calibrado por workload (12-192 t/s)
+11. **Sprint 77** — 7 Foudation Quick Wins: Prompt `>`, Pre-Flight, FanOut, TaskSchema, SkillIndex, CompletionContracts, DynamicSkill. ~380 LOC, 0 erros.
+12. **VirtualBox SMP fix** — AP_COUNT static from MADT lapic_count. 2 vCPUs now boot reliably on VB.
 
 ## Pendente Técnico
-- **RX fix (B-01)**: QEMU SLiRP DHCP/RX bloqueia toda cadeia WWW
-- **GGUF loader (#278)**: ~500 LOC para modelos 1B+ params
-- **WASM runtime (ADR-0032)**: wasmi + WASI→Skill bridge
-- **Intel GEN shader**: matmul real via EU execution units
-- **AHCI driver**: SATA 6G com NCQ (~700 LOC)
-- **USB write path**: UsbMscCtrl::write_blocks atual é stub
-- **e1000/r8169**: HW real NIC driver
+- **GGUF loader**: ~500 LOC, Sprint 78
+- **WASM runtime (wasmi)**: ~800 LOC, Sprint 78
+- **JARVIS agents**: ~5650 LOC, Sprints 80-83
+- **Intel GEN shader**: ~800 LOC, Sprint 84
+- **AHCI driver**: ~700 LOC, Sprint 83
+- **B-01 RX fix**: ~500 LOC, Sprint 85+ (bloqueador)
 
 ## Arquivos Chave
 | Arquivo | Função |

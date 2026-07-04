@@ -43,6 +43,14 @@ Cada skill tem `agent` field — o dono. SkillRegistry vira catálogo indexado d
 ### 5. Trust é por Agente
 TrustAgent centraliza autorização. `(token, agent, skill)` — não só `(token, skill)`. Um agente pode executar skills de outro agente só se autorizado.
 
+### 6. Activation on Demand — Agentes Só Acordam Quando Necessário
+Agentes não congestionam o tick-tock sem motivo. Regras:
+- **Nenhum agente usa `Continuous` a menos que seja essencial** — apenas Hermes, Display, HwBridge.
+- **Todo agente importado/especialista** (The Agency 147, HW Agents, FS Agents) deve declarar `on_demand: true` no manifesto, usando `EventDriven` ou `UserDemand` como schedule.
+- **AgentScheduler não polla agentes sem evento pendente** — `FlowTrigger::Listen(topic)` ou `has_event` gate.
+- **Exceção:** Agentes do sistema (BootSelfHeal, Platform, Memory) são `Oneshot` — executam uma vez e morrem.
+- **Penalidade automática:** Se um `Continuous` não-essencial consumir >5% dos ticks sem produzir eventos por 1000 ticks consecutivos, o SafetyAgent o rebaixa para `EventDriven`.
+
 # Current Agent Landscape (v0.59.2 — 173 agents — HW Agents + The Agency)
 
 | Código | Agente | Status | Tipo | Função |
@@ -221,9 +229,16 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 | `event-bus` | v0.1.0 — IPC publish/subscribe + MemoryTree + KnowledgeGraph + Scheme + Ecosystem (dedup, privacy, hybrid, metacognitive, supercontext, skill_index, tokenjuice) |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Next Sprint (Bloco 23 — Ecosystem Polishing)
-GGUF loader (#278) research, SmileyOS shell + temas (#279), double buffering framebuffer (anti-cintilação),
-USB-MSC BOT driver (~400 LOC) para FAT12 log persistente.
+## Current Sprint (Sprint 77 — Foundation Quick Wins) 🟡
+✅ 60.1b Prompt `>` interativo — DisplayAgent mostra `> ` quando ocioso
+✅ 67.0.3 Pre-Flight — Skill::verify() check pré-execução
+✅ 67.2.3 Background Fan-out — FanOutPool para delegação de sub-tarefas
+✅ 72.2 TaskSchema — Schema de tarefas + JobPreconditions
+✅ 72.6 SkillIndex+McpCatalog — find() textual + catálogo pesquisável
+✅ 67.2.2 Completion Contracts — verificação pós-execução (nonempty, utf8)
+✅ 67.2.1 `/learn` — DynamicSkill + registro direto sem LLM
+
+**Próximo:** Sprint 78 — Agentic Evolution (Crew/Flow, Cache, GGUF, WASM)
 
 ## Network Strategy (ADR-0016)
 Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. HW real: planejar e1000/r8169 (~300 LOC).
@@ -244,6 +259,7 @@ See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, Ma
 - ADR-0016: Network Strategy
 - ADR-0025: Tier 3 Security Patterns
 - ADR-0026: Ecosystem Batch 3 Analysis
+- ADR-0036: J.A.R.V.I.S. Unified Interaction Layer (substitui ADR-0034 + ADR-0035, 28 features, 5-layer architecture, Sprints 77-80 + N+1 + N+2)
 - IDEA_BANK.md Section 1.28: Agent/Skill-First Architecture (280+ items total)
 
 <!-- context7 -->
@@ -344,6 +360,10 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **ADR-0031:** AIOS Evolution (Cross-OS WASM-first, Self-Update A/B, J.A.R.V.I.S., Hybrid Agents).
 - **ADR-0032:** WASM Agent Apps — developer contract, 15 skills, marketplace.
 - **ADR-0033:** On-Device Micro-Learning — Self-training MoE via Candle sidecar + BitNet ADD/SUB.
+- **ADR-0034:** J.A.R.V.I.S. Conscious Interaction Layer — SOUL.md persona, emotion analysis, session compression, IPW monitoring, capability contracts, skill discovery, notification gate.
+- **ADR-0035:** J.A.R.V.I.S. Deep Research — Ecosystem Convergence (6 own repos + 27 open-source projects + 20+ arXiv papers). 28 features to adopt across Sprints 77-80 (~3550 LOC). SKYNET mesh integration (Sprint N+2). Fail-closed safety kernel, Merkle audit trail, fluid persona, dreaming/ego layers from mem0-supabase 12-layer architecture. Batch 2: NabaOS validates architecture (Rust OS for AI agents, 5-tier cache routing 97.5% cost reduction), Moltis (2.8K★ single-binary Rust agent server), consent-gated tools, auto-skill generation, Babel-Index entropy monitoring, Wyoming Protocol IPC, Persona Pipeline 16 stages.
 - **IDEA #305:** TPM implemented. **IDEA #311:** Trinity Model Hub (MoE). **IDEA #312:** TrainingAgent (on-device + GPU).
-- **Sprint 77 Target:** GGUF loader + WASM runtime + Trinity MoE + Candle Trainer.
+- **Sprint 80 Target:** JARVIS Persona (SOUL.md) + IPW Monitoring + Session Compression + Notification Gate + Sessionless Thread (~950 LOC). See ADR-0036.
+- **Sprint 77 Complete (2026-07-04):** 7 Foundation Quick Wins implemented: Prompt `>`, Skill::verify(), FanOutPool, TaskSchema, SkillIndex+Catalog, CompletionContracts, DynamicSkill+/learn. ~380 LOC across skill-registry 3 new modules. Both QEMU (WHPX) and VirtualBox (2 vCPUs) verified — 0 errors.
+- **VirtualBox SMP fix:** AP_COUNT static prevents INIT-SIPI-SIPI when MADT shows 0 APs. VirtualBox 2 vCPUs now boots reliably (1 AP woken).
 <!-- context7 -->

@@ -280,21 +280,27 @@ We are building the future of operating systems. **Not an OS that runs AI — an
 
 ---
 
-## Unified Roadmap
+## Unified Roadmap — Readequado 2026-07-04
+
+Roadmap reestruturado por dependências evolutivas. Itens B-01 (LAN) empurrados para Sprint 85+.
+Ativação sob demanda: agentes só acordam quando necessário (não congestionam o tick-tock).
 
 ```
-Sprint 77 🟡  TRINITY MoE     — GGUF loader + WASM runtime + SleepCycle + Candle
-Sprint 78 🟡  SELF-LEARNING   — TrainingAgent + rust_coder + AHCI + Experts
-Sprint 79 🟡  GPU+NETWORK     — GEN shader + RX fix + e1000/r8169
-Sprint 80+ 🟡 AIOS EVOLUTION  — WWW Agents + J.A.R.V.I.S. + Update + Marketplace
-
-Backlog: Cross-OS compat, BitNet IDE, NVIDIA/AMD GPU, WiFi, Federated Learning
+Sprint 77 🟡  FOUNDATION       — Prompt >, Pre-Flight, TaskSchema, /learn, Fan-out
+Sprint 78 🟡  AGENTIC EVOLUTION — Crew/Flow, Cache, Workflow, GGUF, WASM
+Sprint 79 🟡  LLM INFRASTRUCTURE — AVX2 BitNet, Trinity MoE, Candle, TrainingAgent
+Sprint 80 🟡  JARVIS PERSONA    — SOUL.md, IPW, Compression, Notification Gate
+Sprint 81 🟡  JARVIS EMOTION    — Emotion, Contracts, Discovery, Cache, Pipeline
+Sprint 82 🟡  JARVIS COGNITIVE  — Dreaming, Ego, Heartbeats, Auto-Skills, SleepCycle
+Sprint 83 🟡  JARVIS SECURITY   — Fail-Closed, Merkle, Fluid Persona + AHCI
+Sprint 84 🟡  GPU COMPUTE       — Intel GEN shader (matmul via EU)
+Sprint 85+ 🔴 AIOS EVOLUTION   — WWW Agents, Voice, Update, SKYNET (pós B-01)
 ```
 
 | Dimension | Value |
 |---|---|
 | Done | **20 completed blocks** (v0.1 → v0.76.1) |
-| In progress | **Sprint 77** — Trinity MoE (GGUF, WASM, SleepCycle) |
-| Next | Sprints 78-80 — Self-Learning, GPU, AIOS Evolution |
-| Total LOC pending | **~9.350 LOC** across 34 tracked items |
-| Blockers | **B-01 (RX fix)** blocks 6 WWW items. **HW real** blocks GPU drivers |
+| In progress | **Sprint 77** — Foundation Quick Wins (~760 LOC) |
+| Next | Sprints 78-84 — Agentic → LLM → JARVIS → GPU (~12.700 LOC) |
+| Deferred (B-01) | **Sprint 85+** — AIOS Evolution (~7.500 LOC) |
+| Blockers | **B-01 (RX fix)** blocks 6 WWW agents + Voice + SKYNET |

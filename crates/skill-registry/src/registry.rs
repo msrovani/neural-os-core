@@ -72,7 +72,25 @@ impl SkillRegistry {
         if !self.is_enabled(name) {
             return Err("skill desabilitada por politica");
         }
-        skill.execute(payload)
+        skill.verify(payload)?;
+        let output = skill.execute(payload)?;
+        let manifest = skill.manifest();
+        for contract in &manifest.contracts {
+            if let Err(reason) = contract.verify(&output) {
+                match contract.on_failure {
+                    crate::contract::ContractAction::WarnOnly => {
+                        // Log warning, continue
+                    }
+                    crate::contract::ContractAction::RejectOutput => {
+                        return Err(reason);
+                    }
+                    crate::contract::ContractAction::RetrySkill => {
+                        return Err("contrato nao cumprido: retentar");
+                    }
+                }
+            }
+        }
+        Ok(output)
     }
 
     pub fn execute_skill(
@@ -91,7 +109,19 @@ impl SkillRegistry {
                 return Err("token de capacidade nao autorizado para esta skill");
             }
         }
-        skill.execute(payload)
+        skill.verify(payload)?;
+        let output = skill.execute(payload)?;
+        let manifest = skill.manifest();
+        for contract in &manifest.contracts {
+            if let Err(reason) = contract.verify(&output) {
+                match contract.on_failure {
+                    crate::contract::ContractAction::WarnOnly => {}
+                    crate::contract::ContractAction::RejectOutput => return Err(reason),
+                    crate::contract::ContractAction::RetrySkill => return Err("contrato nao cumprido: retentar"),
+                }
+            }
+        }
+        Ok(output)
     }
 
     pub fn skill_count(&self) -> usize {

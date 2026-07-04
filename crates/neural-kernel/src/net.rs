@@ -196,7 +196,11 @@ impl crate::Skill for NetDiagnosticSkill {
             context_links: alloc::vec![],
             output_schema: crate::OutputSchema::Any,
             idempotent: true,
+            contracts: Vec::new(),
         }
+    }
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        Ok(())
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let report = run_network_diagnostics();

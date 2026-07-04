@@ -13,6 +13,8 @@ use spin::Mutex;
 
 static AP_BOOT_LOCK: Mutex<()> = Mutex::new(());
 static AP_ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// Set by PlatformAgent before calling init_smp().
+pub static AP_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 #[allow(dead_code)]
 const AP_STACK_SIZE: u64 = 16384;
 
@@ -72,6 +74,13 @@ pub unsafe fn init_smp() {
     serial_println!("[SMP] BSP PerCpu inicializado. LAPIC ID: {}", bsp_lapic_id);
     println!("[SMP] BSP PerCpu inicializado.");
 
+    let ap_expected = AP_COUNT.load(Ordering::Relaxed);
+    if ap_expected == 0 {
+        serial_println!("[SMP] Nenhum AP detectado (MADT: {} LAPICs). SMP ignorado.", ap_expected);
+        println!("[SMP] Sem APs — modo single-core.");
+        return;
+    }
+
     let tramp_phys = {
         let mut guard = memory::GLOBAL_ALLOCATOR.lock();
         let alloc = guard.as_mut().expect("Frame allocator not initialized");
@@ -84,9 +93,9 @@ pub unsafe fn init_smp() {
     println!("[SMP] Trampoline page em low memory.");
 
     let heap_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
-    let ap_count = percpu::CPU_COUNT.load(Ordering::Relaxed) as u64 + 1;
+    let cpu_total = percpu::CPU_COUNT.load(Ordering::Relaxed) as u64 + 1;
     let stack_per_ap: u64 = AP_STACK_SIZE * 4;
-    let ap_base = heap_top - (ap_count * stack_per_ap);
+    let ap_base = heap_top - (cpu_total * stack_per_ap);
     let stack_64_top = ap_base + (percpu::CPU_COUNT.load(Ordering::Relaxed) as u64) * stack_per_ap;
 
     // Identity-map trampoline page (VA 0x40000 -> PA tramp_phys)
@@ -146,10 +155,10 @@ pub unsafe fn init_smp() {
     // Wait ~50ms for APs to finish booting
     busy_wait_us(50000);
 
-    let ap_count = AP_ENTRY_COUNTER.load(Ordering::Relaxed);
+    let ap_woke = AP_ENTRY_COUNTER.load(Ordering::Relaxed);
     serial_println!(
         "[SMP] APs acordados: {}",
-        ap_count
+        ap_woke
     );
     println!("[SMP] INIT-SIPI-SIPI concluido.");
 }

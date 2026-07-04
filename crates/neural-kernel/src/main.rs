@@ -115,7 +115,11 @@ impl Skill for EchoSkill {
             context_links: Vec::new(),
             output_schema: OutputSchema::Any,
             idempotent: true,
+            contracts: Vec::new(),
         }
+    }
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        Ok(())
     }
     fn execute(&self, payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let reversed: Vec<u8> = payload.iter().rev().copied().collect();
@@ -135,7 +139,15 @@ impl Skill for SystemStatusSkill {
             context_links: Vec::new(),
             output_schema: OutputSchema::Any,
             idempotent: true,
+            contracts: Vec::new(),
         }
+    }
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        let mhi_guard = crate::MEMORY_HIERARCHY.lock();
+        if mhi_guard.as_ref().is_none() {
+            return Err("MHI nao inicializado");
+        }
+        Ok(())
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let mhi_guard = MEMORY_HIERARCHY.lock();
@@ -173,7 +185,15 @@ impl Skill for HardwareInfoSkill {
             context_links: Vec::new(),
             output_schema: OutputSchema::Any,
             idempotent: true,
+            contracts: Vec::new(),
         }
+    }
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        let arch = SYSTEM_ARCH.lock();
+        if arch.as_ref().is_none() {
+            return Err("SystemArchitecture nao inicializada");
+        }
+        Ok(())
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let arch = SYSTEM_ARCH.lock();
@@ -212,7 +232,11 @@ impl Skill for HwIdentifySkill {
             context_links: Vec::new(),
             output_schema: OutputSchema::Any,
             idempotent: false,
+            contracts: Vec::new(),
         }
+    }
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        Ok(())
     }
     fn execute(&self, _payload: &[u8]) -> Result<Vec<u8>, &'static str> {
         let devices = unsafe { crate::pci::scan_pci() };
@@ -268,6 +292,7 @@ lazy_static! {
         ticket_lock::TicketLock::new(loader)
     };
     static ref PENDING_SKILL: crate::sync::irq_lock::IrqSafeLock<Option<(alloc::string::String, alloc::string::String)>> = crate::sync::irq_lock::IrqSafeLock::new(None);
+    static ref FANOUT_POOL: ticket_lock::TicketLock<skill_registry::FanOutPool> = ticket_lock::TicketLock::new(skill_registry::FanOutPool::new());
 }
 
 // ---------------------------------------------------------------------------

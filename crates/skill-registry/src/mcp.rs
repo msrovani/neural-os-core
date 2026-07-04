@@ -33,4 +33,6 @@ pub struct McpManifest {
     pub output_schema: OutputSchema,
     /// Se true, output pode ser cacheado
     pub idempotent: bool,
+    /// Contratos de completude para verificar apos execucao
+    pub contracts: Vec<&'static crate::contract::CompletionContract>,
 }

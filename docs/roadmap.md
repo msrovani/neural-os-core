@@ -1,8 +1,10 @@
-# Roadmap — neural-os-core v0.76.1 🏆
+# Roadmap — neural-os-core v0.77.0-design 🏆
 
-**Última atualização:** 2026-07-03
+**Última atualização:** 2026-07-04 — **Readequação do Roadmap**
+**Mudança:** Reorganização evolutiva por dependências. Sprint 77 = Foundation Quick Wins.
+Itens B-01 (LAN) empurrados para Sprint 85+.
 
-## Blocos Completos (19 blocos, 76 sprints)
+## Blocos Completos (20 blocos, 76 sprints)
 
 | Bloco | Sprints | v | Status |
 |---|---|---|---|
@@ -12,10 +14,117 @@
 | **18. Security** | **74** | **0.74.x** | **✅ TPM TIS, Ed25519 signing, Partition mask 0x1C** |
 | **19. Disk Intelligence** | **75** | **0.75.x** | **✅ DiskAgent, NVMe, SMART, ARC cache, GPT** |
 | **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
-| **21. Trinity MoE** | **77** | **0.77.x** | **🟡 GGUF loader, WASM runtime, SleepCycle, Candle trainer** |
-| **22. Self-Learning** | **78** | **0.78.x** | **🟡 TrainingAgent, rust_coder expert, Self-Learning OS, AHCI** |
-| **23. GPU+Rede** | **79** | **0.79.x** | **🟡 GEN shader, B-01 RX fix, e1000/r8169** |
-| **24. AIOS Evolution** | **80+** | **0.80.x** | **🟡 WWW Agents, J.A.R.V.I.S., Update Agent, Marketplace** |
+
+## Próximos Blocos (Sprints 77-86, reestruturados)
+
+### 🟡 Bloco 21 — Foundation Quick Wins (Sprint 77)
+**Itens independentes dos sprints 60/67/72 — sem dependências entre si**
+
+| Item | Origem | O que | LOC |
+|---|---|---|---|
+| 60.1b | Sprint 60 | Prompt `>` interativo (Hermes aguarda input) | ~30 |
+| 67.0.3 | Sprint 67 | Pre-Flight Principle (Skill::verify pré-execução) | ~80 |
+| 67.2.3 | Sprint 67 | Background Fan-out (delegação automática) | ~80 |
+| 72.2 | Sprint 72 | TaskSchema + JobPreconditions (schema de tarefas) | ~200 |
+| 72.6 | Sprint 72 | SkillIndex + MCP Catalog (índice + catálogo) | ~150 |
+| 67.2.2 | Sprint 67 | Completion Contracts (verificação pós-skill) | ~100 |
+| 67.2.1 | Sprint 67 | `/learn` command (SKILL.md generator) | ~120 |
+| | | **Total bloco** | **~760 LOC** |
+
+### 🟡 Bloco 22 — Agentic Evolution + Memory Systems (Sprint 78)
+**Completa Agentic Evolution (72) + Memory bridge + Loaders**
+
+| Item | Origem | O que | LOC |
+|---|---|---|---|
+| 72.1 | Sprint 72 | Crew + FlowTrigger (orquestração multi-agente) | ~300 |
+| 72.3 | Sprint 72 | IntentCache + OutputCache (cache de intenção/saída) | ~200 |
+| 72.4 | Sprint 72 | WorkflowEngine + SelfCritique (engine de workflow) | ~250 |
+| 72.5 | Sprint 72 | StateGraph Scheduler (agendamento por grafo) | ~200 |
+| 60.8c | Sprint 60 | migrate_to_tier() (page table manipulation MHI) | ~170 |
+| 62.2 | Sprint 62 | MHI+FS Bridge (suggest_tier_for_path) | ~300 |
+| — | Sprint 77 old | GGUF Loader (modelos 1B+ params) | ~500 |
+| — | Sprint 77 old | WASM Runtime (wasmi + WASI→Skill bridge) | ~800 |
+| | | **Total bloco** | **~2720 LOC** |
+
+### 🟡 Bloco 23 — LLM Infrastructure + MoE (Sprint 79)
+**Model loading, router MoE, training infrastructure**
+
+| Item | O que | LOC |
+|---|---|---|
+| AVX2 BitNet Kernel (intrinsics SIMD) | ~150 |
+| Trinity Router (MoE — classifica intenção, roteia expert) | ~500 |
+| Candle sidecar (training em Rust puro com GPU) | ~300 |
+| TrainingAgent (fine-tune/transfer/full on-device) | ~500 |
+| | **Total bloco** | **~1450 LOC** |
+
+### 🟡 Bloco 24 — JARVIS Core Persona (Sprint 80)
+**SOUL.md + IPW + Compression + Notifications + Sessionless**
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.1 SOUL.md Personality Engine | ~300 |
+| #315.2 IPW Monitor (RAPL MSR 0x610) | ~150 |
+| #315.3 Session Compression (4 strategies) | ~200 |
+| #315.4 Notification Gate (4 urgency levels) | ~200 |
+| #315.5 Sessionless Thread | ~100 |
+| | **Total bloco** | **~950 LOC** |
+
+### 🟡 Bloco 25 — JARVIS Emotion + Cache + Pipeline (Sprint 81)
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.6 Emotion Analysis (BitNet classifier 7 emoções) | ~250 |
+| #315.7 Capability Contracts + Consent Gates (Safe/Moderate/Dangerous) | ~200 |
+| #315.8 Skill Discovery (DSPy/ACE pipeline) | ~300 |
+| #315.9 ADE Pipeline (Spec→Execute→Review→Recover) | ~200 |
+| #315.10 Semantic Cache (5-tier routing, 97.5% reduction) | ~150 |
+| #315.11 Persona Pipeline (16 stages OVOS-inspired) | ~100 |
+| | **Total bloco** | **~1200 LOC** |
+
+### 🟡 Bloco 26 — JARVIS Cognitive Memory (Sprint 82)
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.12 Dreaming/Consolidation (CronAgent noturno) | ~200 |
+| #315.13 Ego Layer (self-model, confidence tracking) | ~250 |
+| #315.14 Proactive Heartbeats (JARVIS inicia conversa) | ~100 |
+| #315.15 Tool-State Save Game (snapshot + rollback) | ~100 |
+| #315.16 Auto-Skill Generation (watch→pattern→propose→generate) | ~150 |
+| #315.17 Babel-Index (entropy + contradiction + staleness) | ~100 |
+| SleepCycle Agent (5 fases: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT) | ~780 |
+| | **Total bloco** | **~1680 LOC** |
+
+### 🟡 Bloco 27 — JARVIS Security + AHCI (Sprint 83)
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.18 Fail-Closed Safety Invariant (SMT-proof, 4 invariants) | ~200 |
+| #315.19 Merkle Audit Trail (Ed25519 signed, ring buffer 4096) | ~200 |
+| #315.20 Fluid Persona (context-adaptive, coach/tutor/tool) | ~100 |
+| AHCI driver (SATA 6G NCQ) | ~700 |
+| | **Total bloco** | **~1200 LOC** |
+
+### 🟡 Bloco 28 — GPU Compute (Sprint 84)
+
+| Item | O que | LOC |
+|---|---|---|
+| Intel GEN shader (matmul via EU execution units) | ~800 |
+| | **Total bloco** | **~800 LOC** |
+
+### 🔴 Bloco 29+ — AIOS Evolution (Sprint 85+, pós B-01)
+**Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
+
+| Item | LOC | Bloqueador |
+|---|---|---|
+| B-01 RX fix (RTL8139 DHCP/RX) | ~500 | 🔴 QEMU SLiRP |
+| WWW Agents (Browser, Email, RSS, Search, Download, WS) | ~2600 | 🔴 B-01 |
+| Self-Update Agent (A/B slots + rollback) | ~800 | 🔴 B-01 |
+| Plugin Hub + Marketplace | ~400 | 🔴 B-01 |
+| Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | 🔴 B-01 |
+| Multi-device sync (CRDT) | ~300 | 🔴 B-01 |
+| SKYNET Mesh Node | ~300 | 🔴 B-01 |
+| WiFi (Intel/Atheros/Realtek 802.11) | ~1000 | 🔴 B-01 |
+| | **Total** | **~7500 LOC** |
 
 ## Funcionalidades por Camada
 
@@ -48,32 +157,77 @@
 - **Dynamic tick** (12-192 ticks/s, calibrado por workload)
 - **Hermes event-driven** (silêncio sem trabalho real)
 - **AgentTier classification** (Permanent/SystemDemand/UserDemand/Periodic/Learning)
+- **Activation on Demand** — só agentes essenciais usam Continuous
 - EventDriven scheduler fix (has_event=true, has_pending early-return)
 - MemoryAgent com clock calibration via rdtsc
 
-### 🟡 Trinity MoE (Sprint 77)
-- GGUF loader — modelos 1B+ params (~500 LOC)
-- WASM runtime — wasmi + WASI→Skill bridge (~800 LOC)
-- SleepCycle — 5 fases de aprendizado onírico (~780 LOC)
-- Candle sidecar — training em Rust puro com GPU (~300 LOC)
-- Trinity Router — classifica intenção, roteia para expert correto
+### 🟡 Foundation Quick Wins (Sprint 77)
+- Prompt `>` interativo — Hermes aguarda input do usuário
+- Pre-Flight Principle — Skill::verify() valida antes de executar
+- Background Fan-out — delegação automática para sub-agentes
+- TaskSchema + JobPreconditions — schema de tarefas estruturadas
+- SkillIndex + MCP Catalog — índice pesquisável de skills
+- Completion Contracts — verificação pós-execução de skills
+- `/learn` command — geração automática de SKILL.md
 
-### 🟡 Self-Learning (Sprint 78)
-- TrainingAgent — fine-tuning/transfer/full training on-device
-- Session: rust_coder, disk_diag, security experts
-- Self-Learning OS — aprende dos próprios dados que gera
-- AHCI driver — SATA 6G com NCQ (~700 LOC)
+### 🟡 Agentic Evolution (Sprint 78)
+- Crew + FlowTrigger — orquestração multi-agente
+- IntentCache + OutputCache — cache inteligente
+- WorkflowEngine + SelfCritique — engine de workflow
+- StateGraph Scheduler — agendamento por grafo de estado
+- migrate_to_tier() — page table manipulation MHI
+- MHI+FS Bridge — suggest_tier_for_path integrado ao VFS
+- GGUF Loader — modelos 1B+ params
+- WASM Runtime — wasmi + WASI→Skill bridge
 
-### 🟡 GPU+Rede (Sprint 79)
+### 🟡 LLM Infrastructure (Sprint 79)
+- AVX2 BitNet Kernel — SIMD intrinsics
+- Trinity Router (MoE) — classifica intenção, roteia expert
+- Candle sidecar — training em Rust puro com GPU
+- TrainingAgent — fine-tuning/transfer/full on-device
+
+### 🟡 JARVIS Persona (Sprint 80)
+- SOUL.md Personality Engine — persona JARVIS
+- IPW Monitor — Intelligence Per Watt via RAPL MSR
+- Session Compression — 4 estratégias
+- Notification Gate — 4 níveis de urgência
+- Sessionless Thread — conversa contínua sem reset
+
+### 🟡 JARVIS Emotion + Cache (Sprint 81)
+- Emotion Analysis — BitNet classifier 7 emoções
+- Capability Contracts + Consent Gates — 3 níveis de risco
+- Skill Discovery — DSPy/ACE pipeline
+- ADE Pipeline — Spec→Execute→Review→Recover
+- Semantic Cache — 5-tier routing (97.5% reduction)
+- Persona Pipeline — 16 stages OVOS-inspired
+
+### 🟡 JARVIS Cognitive Memory (Sprint 82)
+- Dreaming/Consolidation — memória sintética noturna
+- Ego Layer — self-model, confidence tracking
+- Proactive Heartbeats — JARVIS inicia conversa
+- Tool-State Save Game — snapshot + rollback
+- Auto-Skill Generation — watch→pattern→propose→generate
+- Babel-Index — entropia + contradição + staleness
+- SleepCycle Agent — 5 fases de aprendizado onírico
+
+### 🟡 JARVIS Security + AHCI (Sprint 83)
+- Fail-Closed Safety Invariant — SMT-proof, 4 invariants
+- Merkle Audit Trail — Ed25519 signed chain
+- Fluid Persona — context-adaptive coach/tutor/tool
+- AHCI driver — SATA 6G com NCQ
+
+### 🟡 GPU Compute (Sprint 84)
 - Intel GEN shader — matmul via EU execution units
-- B-01 RX fix — RTL8139 DHCP/RX
-- e1000/r8169 — driver real de NIC
 
-### 🟡 AIOS Evolution (Sprint 80+)
+### 🔴 AIOS Evolution (Sprint 85+, pós B-01)
+- B-01 RX fix — RTL8139 DHCP/RX
 - WWW Infrastructure + Agents (Browser, Email, RSS, Search, Download, WS)
-- J.A.R.V.I.S. conversational layer
 - Self-Update Agent (A/B slots + rollback)
 - Plugin Hub + Marketplace
+- Voice Pipeline (Piper TTS, Vosk STT, Wake Word, Wyoming)
+- Multi-device sync (CRDT)
+- SKYNET Mesh Node
+- WiFi
 
 ### ✅ Input
 - PS/2 keyboard (IRQ1, scancode set 1)
@@ -153,19 +307,23 @@
 
 ## Pendências Técnicas
 
-| Item | Esforço | Depende de |
+| Item | Esforço | Bloco |
 |---|---|---|
-| Prompt interativo `>` para chat | ~50 LOC | Nada |
+| Prompt `>` interativo | ~30 LOC | 21 (Sprint 77) |
+| WASM sandbox (`wasmi`) | ~800 LOC | 22 (Sprint 78) |
+| AHCI driver (SATA 6G NCQ) | ~700 LOC | 27 (Sprint 83) |
+| Intel GEN shader | ~800 LOC | 28 (Sprint 84) |
+| B-01 RX fix | ~500 LOC | 29+ (Sprint 85+) |
+| Modelo 1.5B params (treino) | Python | 29+ |
 | Framebuffer UEFI (bootloader 0.11+) | ~500 LOC | Upgrade bootloader |
 | VirtIO-GPU GET_DISPLAY_INFO | Debug | QEMU TCG |
 | SMP `-smp 2` sem WHPX | Debug | TCG atomicidade |
 | Driver e1000/r8169 (rede real) | ~300 LOC | Teste HW |
-| WASM sandbox (`wasmi`) | ~1500 LOC | Fase 5+ |
-| Modelo 1.5B params (treino) | Python | GPU |
-| Plugin Hub MCP Index | ~400 LOC | #236 |
 
-## Prioridades Imediatas (v0.59)
-1. **Prompt `>`** — Hermes aguarda input do usuário
-2. **Completar call de funções** — Hermes executa skills via teclado
-3. **Testar teclado USB no notebook** — driver já implementado
-4. **Upgrade bootloader 0.11+** — framebuffer UEFI GOP
+## Activation on Demand — Filosofia
+
+Todo agente importado (The Agency 147, HW Agents, FS Agents) deve declarar `on_demand: true`
+no manifesto, usando `EventDriven` ou `UserDemand`. O AgentScheduler só polla agentes
+quando há evento pendente. Agentes `Continuous` são exclusivos dos essenciais: Hermes,
+Display e HwBridge. Se um `Continuous` não-essencial consumir >5% dos ticks sem produzir
+eventos por 1000 ticks, o SafetyAgent o rebaixa para `EventDriven`.

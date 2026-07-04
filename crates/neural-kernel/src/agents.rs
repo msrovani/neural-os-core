@@ -512,6 +512,7 @@ impl Agent for HermesAgent {
                 hermes::Command::Help => "Help",
                 hermes::Command::ShowSkills => "ShowSkills",
                 hermes::Command::AddSkill(_, _) => "AddSkill",
+                hermes::Command::Learn(_, _) => "Learn",
                 hermes::Command::RmSkill(_) => "RmSkill",
                 hermes::Command::ReloadSkills => "ReloadSkills",
                 hermes::Command::Profile => "Profile",
@@ -665,6 +666,16 @@ impl Agent for HermesAgent {
                     self.state = HermesState::AwaitingLLM;
                     String::from("...")
                 }
+                hermes::Command::Learn(ref name, ref desc) => {
+                    let instructions = alloc::format!("Skill gerada via /learn: {}", desc);
+                    let skill = skill_registry::DynamicSkill::new(name, desc, &instructions);
+                    SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(skill));
+                    let mut storage = SKILL_STORAGE.lock();
+                    storage.register_skill(&alloc::format!(
+                        "---\nname: {}\ndescription: {}\n---\n{}\n", name, desc, instructions
+                    )).ok();
+                    alloc::format!("Skill '{}' aprendida! Descricao: {}", name, desc)
+                }
                 hermes::Command::RmSkill(ref name) => {
                     if SKILL_STORAGE.lock().remove_skill(name) {
                         alloc::format!("Skill '{}' removida.", name)
@@ -816,6 +827,11 @@ impl Agent for PlatformAgent {
                 let acpi_info = unsafe { crate::acpi::init_acpi(phys_off) };
                 if let Some(ref info) = acpi_info {
                     unsafe { crate::apic::init_apic(info); }
+                    // Store expected AP count (LAPICs minus BSP)
+                    let lapic_count = info.lapic_count;
+                    if lapic_count > 1 {
+                        crate::smp::AP_COUNT.store(lapic_count - 1, core::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 self.phase = 2;
                 AgentTickResult::Pending
@@ -1162,7 +1178,12 @@ impl Skill for DiagnosticSkill {
             context_links: Vec::new(),
             output_schema: OutputSchema::Any,
             idempotent: true,
+            contracts: Vec::new(),
         }
+    }
+
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        Ok(())
     }
 
     fn execute(&self, _payload: &[u8]) -> Result<alloc::vec::Vec<u8>, &'static str> {

@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-07-03 (ADR-0031 research: Self-Update + WASM + J.A.R.V.I.S. + Hybrid Agents, #306-#310 detailed)  
+**Última atualização:** 2026-07-04 — Roadmap readequado (Foundation Quick Wins + Agentic Evolution + LLM Infra + JARVIS Sprints 80-83 + GPU + AIOS 85+)  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -456,8 +456,8 @@ Nada é descartado sem registro. Ideias podem ser:
 | 309a | **WASM Skill Runtime (wasmi)** — wasmi v0.42+ intérprete no_std. Cada .wasm vira agente com sandbox, 256KB linear memory, fuel metering (100k/tick), capability tokens | 🟡 Pós-MVP | v0.75+ | ~800 LOC. Viability 8/10. WASI→agent skill mapping (20 syscalls). ADR-0031 |
 | 309b | **IDE Agent (BitNet IDE)** — IDE no-navegador no AIOS, assistida por Cortex LLM BitNet. Escreve, debuga, compila para WASM | ⏳ Pós-MVP | v0.85+ | ~2000 LOC. Requer WASM + Cortex 1.5B + J.A.R.V.I.S. ADR-0031 |
 | 309c | **Agentes: kernel vs WASM (Hybrid)** — Tier 0-2 kernel (boot, HW, runtime crítico). Tier 3 WASM (user-extensible). Tier 4 external MCP. 20 agentes kernel, ∞ WASM | 🟡 Pós-MVP | v0.80+ | ~100 LOC (policy config). Viability 9/10. ADR-0031 |
-| 310a | **J.A.R.V.I.S. Layer** — Camada de persona acima do Hermes: SOUL.md, contexto persistente (MemoryTree+KG), notificações proativas (NotificationGate), conversation engine (greetings, mood, task decomposition) | 🟡 Pós-MVP | v0.80+ | ~1.150 LOC (text-only). Viability 8/10. Limitado por Cortex 272K params. ADR-0031 |
-| 310b | **Stack final:** Boot → Kernel → Cortex/LLM → Hermes → J.A.R.V.I.S. — Ver diagrama ADR-0031. Boot minimalista. Kernel acorda Cortex (BitNet). Cortex alimenta Hermes (intent). Hermes delega para J.A.R.V.I.S. (UI conversacional WASM). Tudo agentes, tudo skills | 🟡 Pós-MVP | v0.80+ | ADR-0031 |
+| 310a | **J.A.R.V.I.S. Layer** — Camada de persona acima do Hermes: SOUL.md, contexto persistente (MemoryTree+KG), notificações proativas (NotificationGate), conversation engine (greetings, mood, task decomposition) | 🟡 Sprint 77 | Sprint 77 | ~950 LOC (Sprint 77). Substituído pelo ADR-0036 detalhado (#315) |
+| 310b | **Stack final:** Boot → Kernel → Cortex/LLM → Hermes → J.A.R.V.I.S. — Ver diagrama ADR-0036. Boot minimalista. Kernel acorda Cortex (BitNet). Cortex alimenta Hermes (intent). Hermes delega para J.A.R.V.I.S. (persona). Tudo agentes, tudo skills | 🟡 Sprint 77 | Sprint 77 | ADR-0036 |
 
 ### 1.26. Trinity Model Hub — Mixture of Experts (IDEA #311)
 | # | Item | Destino | Target | Motivação |
@@ -497,6 +497,42 @@ Nada é descartado sem registro. Ideias podem ser:
 | 314e | **Metacognitive Reflection** — Confidence tracking. Amostra interações com baixa confiança, gera micro-lessons corretivas, treina. | 🟡 Sprint 77 | Sprint 77 | ~250 LOC |
 | 314f | **SleepCycle Agent** — CronAgent dispara a cada período de idle. 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT. Ao final: modelo .bitnet atualizado no Trinity Hub. | 🟡 Sprint 77 | Sprint 77 | ~50 LOC scheduler |
 | 314g | **Pioneirismo** — NENHUM sistema bare-metal implementa ciclo de sono/aprendizado. Neural AIOS seria o primeiro no mundo. | ✅ Conceito | — | Fato |
+
+### 1.31. J.A.R.V.I.S. Unified Interaction Layer — Persona + Memória Cognitiva (IDEA #315)
+**28 features, 5-layer architecture, Sprints 77-80+N+1+N+2. ADR-0036 substitui ADR-0034 + ADR-0035.**
+
+| # | Item | Destino | Sprint | LOC | Fonte |
+|---|---|---|---|---|---|
+| 315.1 | **SOUL.md Personality Engine** — Parser markdown minimalista \| nome, tom, humor_level, formality, empathy, greetings, farewell, notification rules. Adapta tom por contexto (Fluid Personality paper) | 🟡 Sprint 77 | 77 | ~300 | JARVIS C# + BeFree JARBAS |
+| 315.2 | **IPW Monitor (RAPL MSR 0x610)** — Intelligence Per Watt. Mede energia via PKG_ENERGY_STATUS, calcula tokens/watt, cache hit/miss ratio. Acoplado ao MemoryAgent | 🟡 Sprint 77 | 77 | ~150 | OpenJarvis Stanford |
+| 315.3 | **Session Compression (4 strategies)** — Summarize (BitNet), DropLowest (importance), MergeSimilar (embedding), SegmentMeans (SKYNET). Mantém últimas N mensagens literais | 🟡 Sprint 77 | 77 | ~200 | OpenJarvis + SKYNET |
+| 315.4 | **Notification Gate (4 urgency levels)** — Critical (imediato), High (30s), Medium (idle), Low (log). Rate limiting, dedup, startup grace period. Regras do SOUL.md | 🟡 Sprint 77 | 77 | ~200 | JARVIS C# + BeFree |
+| 315.5 | **Sessionless Thread** — Modo de conversa contínua sem reset de contexto. JARVIS mantém thread ativa entre comandos, sem perder estado | 🟡 Sprint 77 | 77 | ~100 | Residuum |
+| 315.6 | **Emotion Analysis (BitNet classifier)** — 7 emoções (Joy/Sadness/Anger/Fear/Surprise/Disgust/Neutral), intensidade 0-1, sarcasmo, urgência. Expert Trinity (~50KB). Ajusta tom da resposta | 🟡 Sprint 78 | 78 | ~250 | JARVIS C# |
+| 315.7 | **Capability Contract + Consent Gates** — 3 níveis (Safe/Moderate/Dangerous). SkillRegistry + SafetyAgent validam antes de executar. Baseado em terminal-jarvis + Moltis | 🟡 Sprint 78 | 78 | ~200 | terminal-jarvis + Moltis |
+| 315.8 | **Skill Discovery (DSPy/ACE)** — SkillObserver monitora padrões de uso, sugere novas skills. Pipeline: observe → analyze → propose → generate | 🟡 Sprint 78 | 78 | ~300 | OpenJarvis + SynkraAI |
+| 315.9 | **ADE Pipeline (Spec→Execute→Review→Recover)** — 4 fases: Specification (SDD-style), Execution (AgentScheduler), Review (verification contracts), Recover (self-heal fallback) | 🟡 Sprint 78 | 78 | ~200 | SynkraAI |
+| 315.10 | **Semantic Cache (5-tier routing)** — Tier 1: SHA-256 exact \| Tier 2: embedding similarity >0.95 \| Tier 3: pattern (intent+entities) \| Tier 4: fallback round-robin \| Tier 5: cold start. 97.5% reduction (NabaOS) | 🟡 Sprint 78 | 78 | ~150 | NabaOS |
+| 315.11 | **Persona Pipeline (16 stages)** — SafetyCheck→StopHandler→Converse→SkillHigh→Persona→SkillMedium→CommonQA→FallbackLow→Reflexive→Dreaming→EgoUpdate→SessionCompress→NotificationGate→Heartbeat→BabelIndex→AuditLog. OVOS-inspired | 🟡 Sprint 78 | 78 | ~100 | OVOS |
+| 315.12 | **Dreaming/Consolidation** — CronAgent noturno: agrupa memórias similares, gera insights sintéticos (BitNet), remove contradições, promove frequentes para LTM, Ebbinghaus decay | 🟡 Sprint 79 | 79 | ~200 | mem0-supabase Layer 6 |
+| 315.13 | **Ego Layer (self-model)** — Meta-cognitive identity synthesis. JARVIS sabe o que sabe/não sabe. Confidence tracking por domínio. Atualiza auto-modelo por interação. Twin Agents paper | 🟡 Sprint 79 | 79 | ~250 | mem0-supabase Layer 12 |
+| 315.14 | **Proactive Heartbeats** — JARVIS inicia conversa proativamente: "Disk 90% full, sir." Baseado em eventos do EventBus + regras do NotificationGate | 🟡 Sprint 79 | 79 | ~100 | mem0-supabase Layer 12 |
+| 315.15 | **Tool-State Save Game** — Snapshot do estado das ferramentas/agentes antes de executar skill. Rollback automático se skill falhar | 🟡 Sprint 79 | 79 | ~100 | mem0-supabase Layer 9 |
+| 315.16 | **Auto-Skill Generation** — Cratos-inspired: observa interações, gera SKILL.md com padrões detectados. Pipeline: watch → pattern → propose → generate → register | 🟡 Sprint 79 | 79 | ~150 | Cratos |
+| 315.17 | **Babel-Index (entropy monitoring)** — Monitora entropia, contradiction rate, staleness index da memória. Prevê colapso de coerência → dispara consolidação automática | 🟡 Sprint 79 | 79 | ~100 | NEOTH |
+| 315.18 | **Fail-Closed Safety Invariant** — SafetyAgent sempre nega por padrão. Toda skill precisa autorização explícita. SMT-proof (Z3-style): 4 invariants: process separation, pre-action, fail-closed, signed evidence | 🟡 Sprint 80 | 80 | ~200 | Unfireable Safety Kernel paper |
+| 315.19 | **Merkle Audit Trail (Ed25519 signed)** — Chain de audit entries: tick, agent, action, payload_hash, prev_hash, Ed25519 signature. Verificação de integridade a cada entry. Ring buffer 4096 | 🟡 Sprint 80 | 80 | ~200 | PunkGo + NEOTH |
+| 315.20 | **Fluid Persona (context-adaptive)** — Persona muda por contexto: urgente→preciso, triste→empático, irritado→formal. 3 eixos: persona metafórica (coach/tutor/tool) + intensidade (low/med/high) + traits do usuário | 🟡 Sprint 80 | 80 | ~100 | Fluid Personality paper |
+| 315.21 | **Piper TTS Integration** — Neural TTS local (C++ binary, 11.2K★, 100+ voices). Chamado via WASM host function. Pós B-01 (rede) | 🔴 Pós B-01 | N+1 | ~100 | Piper |
+| 315.22 | **Vosk/Whisper STT** — Speech-to-text local. Vosk para offline, Whisper.cpp para GPU-accelerated. Pós B-01 | 🔴 Pós B-01 | N+1 | ~400 | Priler/jarvis |
+| 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | 🔴 Pós B-01 | N+1 | ~100 | Priler/jarvis |
+| 315.24 | **Wyoming Protocol IPC** — Protocolo padronizado para voice pipeline (Rhasspy3). 8 domínios: Mic→Wake→ASR→VAD→Intent→Handle→TTS→Snd. Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | Rhasspy3 |
+| 315.25 | **Voice Pipeline (8-domain)** — Pipeline completo de áudio: mic→wake→asr→vad→intent→handle→tts→snd. Wyoming Protocol como backbone. Pós B-01 | 🔴 Pós B-01 | N+1 | ~200 | Rhasspy3 |
+| 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | SKYNET + BeFree |
+| 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | 🔴 Pós B-01 | N+2 | ~300 | SKYNET |
+| 315.28 | **Gamification** — Recompensas, streaks, achievements para interação com JARVIS. OptimizerAgent + CronAgent | 🟢 Futuro | N+1 | ~200 | Jotape |
+
+**Total:** ~5650 LOC (Sprints 77-80: ~3550, N+1: ~1600, N+2: ~500). ADR-0036.
 
 ### 1.30. Bugfix Estrutural (Sprint 45) — H3 a H12
 
@@ -1222,23 +1258,142 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | #170 | KV Cache Codebook (VQ no cache de atenção) | ~200 |
 | | **Total bloco** | **~830 LOC + Python** |
 
-### Resumo dos 5 blocos reconsolidados
+### Bloco 21 — Foundation Quick Wins (Sprint 77)
+**Itens independentes dos sprints 60/67/72 — sem dependências entre si**
 
-| Bloco | Foco | LOC estimado | Itens 🟡 |
+| Item | Origem | O que | LOC |
 |---|---|---|---|
-| 12 (fundido) | Network + Platform | ~1950 | 9 |
-| 13 | Trust & Security | ~930 | 8 |
-| 14 (fundido) | Hermes Cognitive + Self-Opt | ~2460 | 15 |
-| 15 | Memory Systems | ~2500 | 0 |
-| 17 | Cortex LLM v2 | ~830 | 0 |
-| | **Total** | **~8670 LOC** | **47** |
+| 60.1b | Sprint 60 | Prompt `>` interativo (Hermes aguarda input) | ~30 |
+| 67.0.3 | Sprint 67 | Pre-Flight Principle (Skill::verify pré-execução) | ~80 |
+| 67.2.3 | Sprint 67 | Background Fan-out (delegação automática) | ~80 |
+| 72.2 | Sprint 72 | TaskSchema + JobPreconditions (schema de tarefas) | ~200 |
+| 72.6 | Sprint 72 | SkillIndex + MCP Catalog (índice + catálogo) | ~150 |
+| 67.2.2 | Sprint 67 | Completion Contracts (verificação pós-skill) | ~100 |
+| 67.2.1 | Sprint 67 | `/learn` command (SKILL.md generator) | ~120 |
+| | | **Total bloco** | **~760 LOC** |
+
+### Bloco 22 — Agentic Evolution + Memory Systems (Sprint 78)
+**Completa Agentic Evolution (72) + Memory bridge + Loaders**
+
+| Item | Origem | O que | LOC |
+|---|---|---|---|
+| 72.1 | Sprint 72 | Crew + FlowTrigger (orquestração multi-agente) | ~300 |
+| 72.3 | Sprint 72 | IntentCache + OutputCache (cache de intenção/saída) | ~200 |
+| 72.4 | Sprint 72 | WorkflowEngine + SelfCritique (engine de workflow) | ~250 |
+| 72.5 | Sprint 72 | StateGraph Scheduler (agendamento por grafo) | ~200 |
+| 60.8c | Sprint 60 | migrate_to_tier() (page table manipulation MHI) | ~170 |
+| 62.2 | Sprint 62 | MHI+FS Bridge (suggest_tier_for_path) | ~300 |
+| #278 | GGUF Loader (modelos 1B+ params) | ~500 |
+| #306 | WASM Runtime (wasmi + WASI→Skill bridge) | ~800 |
+| | | **Total bloco** | **~2720 LOC** |
+
+### Bloco 23 — LLM Infrastructure + MoE (Sprint 79)
+**Model loading, router MoE, training infrastructure**
+
+| Item | O que | LOC |
+|---|---|---|
+| #311 | Trinity Router (MoE — classifica intenção, roteia expert) | ~500 |
+| #312 | TrainingAgent (fine-tune/transfer/full on-device) | ~500 |
+| #313 | Self-Learning OS (DataCollector dos próprios logs) | ~300 |
+| — | AVX2 BitNet Kernel (intrinsics SIMD) | ~150 |
+| | **Total bloco** | **~1450 LOC** |
+
+### Bloco 24 — JARVIS Core Persona (Sprint 80)
+**Foco:** SOUL.md personality engine, IPW monitoring, session compression, notification gate, sessionless thread
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.1 | SOUL.md Personality Engine — parser + persona + adaptive tone | ~300 |
+| #315.2 | IPW Monitor — RAPL MSR 0x610, tokens/watt, cache ratio | ~150 |
+| #315.3 | Session Compression — Summarize/DropLowest/MergeSimilar/SegmentMeans | ~200 |
+| #315.4 | Notification Gate — 4 urgency levels, rate limiting, dedup | ~200 |
+| #315.5 | Sessionless Thread — conversa contínua sem reset | ~100 |
+| | **Total bloco** | **~950 LOC** |
+
+### Bloco 25 — JARVIS Emotion + Cache + Pipeline (Sprint 81)
+**Foco:** Emotion analysis, capability contracts, skill discovery, semantic cache, persona pipeline
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.6 | Emotion Analysis — BitNet classifier 7 emoções + adjust_tone | ~250 |
+| #315.7 | Capability Contract + Consent Gates — 3 níveis de risco | ~200 |
+| #315.8 | Skill Discovery — DSPy/ACE pipeline observe→analyze→propose | ~300 |
+| #315.9 | ADE Pipeline — Spec→Execute→Review→Recover | ~200 |
+| #315.10 | Semantic Cache — 5-tier routing (NabaOS-inspired) 97.5% reduction | ~150 |
+| #315.11 | Persona Pipeline — 16 stages (OVOS-inspired) | ~100 |
+| | **Total bloco** | **~1200 LOC** |
+
+### Bloco 26 — JARVIS Cognitive Memory (Sprint 82)
+**Foco:** Dreaming/consolidation, ego layer, proactive heartbeats, auto-skill generation, Babel-Index, SleepCycle
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.12 | Dreaming/Consolidation — CronAgent noturno, memória sintética | ~200 |
+| #315.13 | Ego Layer — self-model, confidence tracking, can_answer() | ~250 |
+| #315.14 | Proactive Heartbeats — JARVIS inicia conversa | ~100 |
+| #315.15 | Tool-State Save Game — snapshot + rollback de skills | ~100 |
+| #315.16 | Auto-Skill Generation — watch→pattern→propose→generate | ~150 |
+| #315.17 | Babel-Index — entropy + contradiction + staleness monitoring | ~100 |
+| #314 | SleepCycle Agent — 5 fases: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT | ~780 |
+| | **Total bloco** | **~1680 LOC** |
+
+### Bloco 27 — JARVIS Security + AHCI (Sprint 83)
+**Foco:** Fail-closed safety, Merkle audit trail, fluid persona, SATA driver
+
+| Item | O que | LOC |
+|---|---|---|
+| #315.18 | Fail-Closed Safety Invariant — SMT-proof, 4 invariants | ~200 |
+| #315.19 | Merkle Audit Trail — Ed25519 signed chain, ring buffer 4096 | ~200 |
+| #315.20 | Fluid Persona — context-adaptive, coach/tutor/tool modes | ~100 |
+| — | AHCI driver (SATA 6G NCQ) | ~700 |
+| | **Total bloco** | **~1200 LOC** |
+
+### Bloco 28 — GPU Compute (Sprint 84)
+**Foco:** Intel GEN shader matmul via EU execution units
+
+| Item | O que | LOC |
+|---|---|---|
+| #284 | Intel Ring Buffer Compute — exec_batch, gpu_blit, MI_BATCH_BUFFER | ~800 |
+| | **Total bloco** | **~800 LOC** |
+
+### Bloco 29+ — AIOS Evolution (Sprint 85+, pós B-01)
+**Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
+
+| Item | O que | LOC | Bloqueador |
+|---|---|---|---|
+| B-01 | RX fix (RTL8139 DHCP/RX) | ~500 | 🔴 QEMU SLiRP |
+| #307 | WWW Agents (Browser, Email, RSS, Search, Download, WS) | ~2600 | 🔴 B-01 |
+| #306b | Self-Update Agent (A/B slots + rollback) | ~800 | 🔴 B-01 |
+| #236 | Plugin Hub + Marketplace | ~400 | 🔴 B-01 |
+| #315.N+1 | Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | 🔴 B-01 |
+| #315.N+1b | Multi-device sync (CRDT) | ~300 | 🔴 B-01 |
+| #315.N+2 | SKYNET Mesh Node | ~300 | 🔴 B-01 |
+| B-29 | WiFi (Intel/Atheros/Realtek 802.11) | ~1000 | 🔴 B-01 |
+| | | **~7500 LOC** | |
+
+### Resumo dos 10 blocos futuros (Sprints 77-86)
+
+| Bloco | Sprint | Foco | LOC estimado | Itens 🟡 |
+|---|---|---|---|---|
+| **21** | **77** | **Foundation Quick Wins** | **~760** | **7** |
+| **22** | **78** | **Agentic Evolution** | **~2720** | **8** |
+| **23** | **79** | **LLM Infrastructure + MoE** | **~1450** | **4** |
+| **24** | **80** | **JARVIS Persona + IPW** | **~950** | **5** |
+| **25** | **81** | **JARVIS Emotion + Cache** | **~1200** | **6** |
+| **26** | **82** | **JARVIS Cognitive Memory** | **~1680** | **7** |
+| **27** | **83** | **JARVIS Security + AHCI** | **~1200** | **4** |
+| **28** | **84** | **GPU Compute** | **~800** | **1** |
+| **29+** | **85+** | **AIOS Evolution** | **~7500** | **8** |
+| | | **Total** | **~20.260 LOC** | **50** |
 
 ### Notas
 
-1. **Blocos 12, 14, 15 fundidos** — redução de 7 para 5 blocos, eliminando redundância entre Bloco 16 (Self-Optimization) e Bloco 14 (Hermes Cognitive), e entre Bloco 12 (Network) e Bloco 18 (Platform).
-2. **Bloco 13 mantido separado** — Trust & Security é autocontido e não depende de outros blocos.
-3. **Bloco 17 mantido separado** — depende do ecossistema Python para treino do modelo 1.5B.
-4. **Base para Bloco 15 já existe** — CDC Rabin, XOR Delta e Semantic Snapshot implementados em v0.47.0.
+1. **Readequação 2026-07-04:** Roadmap reorganizado por dependência evolutiva. Foundation → Agentic → LLM → JARVIS → GPU → AIOS.
+2. **Blocos 21-23 novos:** Itens independentes dos sprints 60/67/72 que não dependem de B-01.
+3. **Blocos 24-27:** JARVIS features reordenadas de Sprints 77-80 para Sprints 80-83.
+4. **Bloco 28 (GPU):** Sprint 84, depende de Integrated GPU em HW real.
+5. **Bloco 29+ (AIOS):** Sprint 85+, tudo bloqueado por B-01. Sem previsão.
+6. **Blocos legacy (12-17)** mantidos como estão — implementados ou com itens 🟡 independentes.
 
 ---
 
@@ -1293,10 +1448,13 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-03 | **FAT32-only (v0.75.0):** Fat12Writer removido. write_boot_log, boot_log_agent, boot_logger, shutdown usam apenas FAT32. 102 LOC removidos. | Dev + IDA IA |
 | 2026-07-03 | **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras (ATA, USB, NVMe), 10+ FS probes (FAT32 a ReFS), GPT, SED/OPAL, S.M.A.R.T., I/O Scheduler, ARC cache 1MB, tier migration MHI. ~2.400 LOC. 0 erros. | Dev + IDA IA |
 | 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
-| 2026-07-03 | **311** | **Trinity Model Hub (MoE — Mixture of Experts)** — Múltiplos modelos microscópicos especializados (<150KB cada): `hw_identify` (68KB), `rust_coder` (125KB), `disk_diag` (50KB), `security` (50KB). Router BitNet (68KB) classifica a intenção e roteia para o expert correto. Modelo generativo 1.5B recebe output do expert como contexto. Self-hosting: "crie um app jogo da velha" → rust_coder gera código → cargo build → .wasm → agent ativo. Novos experts treinados on-demand: "quero aprender a pilotar helicóptero" → download manual → treino .bitnet → Trinity sobe o modelo → skill "pilotar" disponível. ~340KB total para 5 experts + 375MB generator. | 🟡 Sprint 77+ | Sprint 77 | 500 LOC router + tool-use dispatch |
+| 2026-07-03 | **311** | **Trinity Model Hub (MoE — Mixture of Experts)** — Múltiplos modelos microscópicos especializados (<150KB cada): `hw_identify` (68KB), `rust_coder` (125KB), `disk_diag` (50KB), `security` (50KB). Router BitNet (68KB) classifica a intenção e roteia para o expert correto. Modelo generativo 1.5B recebe output do expert como contexto. Self-hosting: "crie um app jogo da velha" → rust_coder gera código → cargo build → .wasm → agent ativo. Novos experts treinados on-demand: "quero aprender a pilotar helicóptero" → download manual → treino .bitnet → Trinity sobe o modelo → skill "pilotar" disponível. ~340KB total para 5 experts + 375MB generator. | 🟡 Sprint 79 | Sprint 79 | 500 LOC router + tool-use dispatch |
 | 2026-07-03 | **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras (ATA, USB, NVMe), 10+ FS probes (FAT32 a ReFS), GPT, SED/OPAL, S.M.A.R.T., I/O Scheduler, ARC cache 1MB, tier migration MHI. ~2.400 LOC. 0 erros. | Dev + IDA IA |
 | 2026-07-03 | **IDEA #306-#310:** AIOS Evolution — compatibilidade cross-OS (PE/ELF/Mach-O/APK + syscall-to-skill), Update/Upgrade Agent com rollback, WASM Skill Runtime + BitNet IDE, J.A.R.V.I.S. Layer, stack final Boot→Kernel→Cortex→Hermes→J.A.R.V.I.S. | Dev + IDA IA |
 | 2026-07-03 | **ADR-0031: AIOS Evolution Research** — análise completa (self-update A/B dual-slot, WASM wasmi runtime + WASI mapping, J.A.R.V.I.S. conversational layer, hybrid kernel/WASM agent architecture). Viability scores, LOC estimates, dependency chain, recommended sprint order. `docs/architecture/0031-aios-self-update-wasm-jarvis.md` | Dev + IDA IA |
-| 2026-07-03 | **312** | **TrainingAgent — On-Device + GPU Learning** — 3 modos: Fine-tuning (CPU ADD/SUB, 100ex, ~2s), Transfer (1000ex, adapta dominio), Full (GPU+internet, 100K+ex). Fontes: FS local, HTTP (B-01), Federated. Pipeline: GPU detect → collect → train → .bitnet → Trinity Hub register. | 🟡 Sprint 78 | Sprint 78 | ~500 LOC + B-01 |
+| 2026-07-03 | **312** | **TrainingAgent — On-Device + GPU Learning** — 3 modos: Fine-tuning (CPU ADD/SUB, 100ex, ~2s), Transfer (1000ex, adapta dominio), Full (GPU+internet, 100K+ex). Fontes: FS local, HTTP (B-01), Federated. Pipeline: GPU detect → collect → train → .bitnet → Trinity Hub register. | 🟡 Sprint 79 | Sprint 79 | ~500 LOC + B-01 |
 | 2026-07-03 | **313** | **Self-Learning OS — Aprende dos próprios dados** — O AIOS coleta seus próprios EventBus events, boot logs, self-heal logs, SMART data, conversas Hermes, padrões de erro, e usa como dataset de treino. Sem internet. Sem humano. Pipeline: LogAgent → DataCollector → TrainingAgent → .bitnet → Trinity Hub. | 🟡 Sprint 78 | Sprint 78 | ~300 LOC DataCollector + integração |
-| 2026-07-03 | **314** | **SleepCycle Agent — Aprendizado inspirado no sono humano** — 5 fases: REPLAY (reproduz eventos recentes) → DREAM (BitNet gera variações sintéticas) → CONSOLIDATE (EWC protege skills existentes) → PRUNE (zera pesos fracos, ~18% redução) → REFLECT (confidence tracking, preenche gaps). Guard rails por fase: REPLAY filtra eventos maliciosos, DREAM rejeita sonhos perigosos, CONSOLIDATE protege skills de segurança c/ EWC max, PRUNE exempt pesos críticos, REFLECT roteia gaps proibidos pra humano. Agendado pelo CronAgent em períodos idle. NENHUM sistema bare-metal implementa isso. Neural AIOS seria pionero. | 🟡 Sprint 77 | Sprint 77 | ~1280 LOC + guard rails |
+| 2026-07-03 | **314** | **SleepCycle Agent — Aprendizado inspirado no sono humano** — 5 fases: REPLAY (reproduz eventos recentes) → DREAM (BitNet gera variações sintéticas) → CONSOLIDATE (EWC protege skills existentes) → PRUNE (zera pesos fracos, ~18% redução) → REFLECT (confidence tracking, preenche gaps). Guard rails por fase: REPLAY filtra eventos maliciosos, DREAM rejeita sonhos perigosos, CONSOLIDATE protege skills de segurança c/ EWC max, PRUNE exempt pesos críticos, REFLECT roteia gaps proibidos pra humano. Agendado pelo CronAgent em períodos idle. NENHUM sistema bare-metal implementa isso. Neural AIOS seria pionero. | 🟡 Sprint 82 | Sprint 82 | ~1280 LOC + guard rails |
+| 2026-07-04 | **ADR-0036** | **J.A.R.V.I.S. Unified Interaction Layer** — ADR-0036 criado, unifica ADR-0034 + ADR-0035. 28 features, 5-layer architecture (Boot→Kernel→Cortex→Hermes→JARVIS), Sprints 77-80+N+1+N+2, ~5650 LOC total. JARVIS = persona do Hermes, não camada separada. Rust no_std com código de referência para todos os componentes. | ✅ Aceito | — | 1126 lines ADR |
+| 2026-07-04 | **315** | **J.A.R.V.I.S. Unified Interaction Layer (IDEA #315)** — 28 features catalogadas de ADR-0036. Sprint 80: SOUL.md, IPW, Session Compression, Notification Gate, Sessionless Thread (~950 LOC). Sprint 81: Emotion, Contracts, Discovery, Cache, Pipeline (~1200 LOC). Sprint 82: Dreaming, Ego, Heartbeats, Auto-Skills, Babel-Index, SleepCycle (~1680 LOC). Sprint 83: Fail-Closed, Merkle, Fluid Persona, AHCI (~1200 LOC). N+1 (Sprint 85+): Voice, CRDT, Gamification (~1600 LOC). N+2 (Sprint 85+): SKYNET Mesh (~500 LOC). Substitui 310a/b (JARVIS Layer original). | 🟡 Sprint 80 | Sprint 80 | ~5650 LOC total |
+| 2026-07-04 | **Roadmap readequado** | IDEA_BANK.md reorganizado: Blocos 21-24 → 21-30. Foundation Quick Wins (Sprint 77), Agentic Evolution (Sprint 78), LLM Infrastructure (Sprint 79), JARVIS reordenado para Sprints 80-83, GPU (Sprint 84), AIOS (Sprint 85+). #311/#314 sprint numbers corrigidos. Activation on Demand premise adicionada ao AGENTS.md. roadma p.md + README.md + STATE.md sincronizados. | IDA IA |

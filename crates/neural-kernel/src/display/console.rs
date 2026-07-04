@@ -31,7 +31,7 @@ pub struct NeuralConsole {
 
 impl NeuralConsole {
     pub fn new(fb: DoubleBuffer) -> Self {
-        NeuralConsole { fb, conv_lines: VecDeque::new(), _tensor_value: 0.0, input_buffer: String::new(), show_prompt: false }
+        NeuralConsole { fb, conv_lines: VecDeque::new(), _tensor_value: 0.0, input_buffer: String::new(), show_prompt: true }
     }
 
     /// Renderiza um frame completo no back buffer, depois faz swap

@@ -78,4 +78,56 @@ impl SkillIndex {
     pub fn len(&self) -> usize {
         self.all.len()
     }
+
+    /// Busca textual simples: skills cujo nome ou descricao contem a query.
+    pub fn find(&self, query: &str) -> Vec<&SkillRef> {
+        let q = query.to_ascii_lowercase();
+        self.all.iter().filter(|s| {
+            s.name.to_ascii_lowercase().contains(&q)
+                || s.description.to_ascii_lowercase().contains(&q)
+                || s.capabilities.iter().any(|c| c.to_ascii_lowercase().contains(&q))
+        }).collect()
+    }
+}
+
+/// MCP Catalog — catalogo publico de skills com metadados para descoberta.
+#[derive(Debug, Clone)]
+pub struct CatalogEntry {
+    pub name: String,
+    pub description: String,
+    pub domain: String,
+    pub capabilities: Vec<String>,
+    pub required_tokens: Vec<u64>,
+    pub idempotent: bool,
+}
+
+pub struct McpCatalog {
+    entries: Vec<CatalogEntry>,
+}
+
+impl McpCatalog {
+    pub fn new() -> Self {
+        McpCatalog { entries: Vec::new() }
+    }
+
+    pub fn register(&mut self, entry: CatalogEntry) {
+        self.entries.push(entry);
+    }
+
+    pub fn search(&self, query: &str) -> Vec<&CatalogEntry> {
+        let q = query.to_ascii_lowercase();
+        self.entries.iter().filter(|e| {
+            e.name.to_ascii_lowercase().contains(&q)
+                || e.description.to_ascii_lowercase().contains(&q)
+                || e.capabilities.iter().any(|c| c.to_ascii_lowercase().contains(&q))
+        }).collect()
+    }
+
+    pub fn all(&self) -> &[CatalogEntry] {
+        &self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
