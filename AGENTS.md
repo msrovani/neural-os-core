@@ -331,11 +331,19 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - #230 Auto-Compact Hermes Buffer (~60 LOC) — summarize_context after 3+ cycles
 - #231 Event-Sourced Conversation (~100 LOC) — VecDeque<ConversationEvent>
 
-## Session: v0.74.1-0.75.0 — TPM TIS + Partition Mask 0x1C + FAT32-only + DiskAgent Design (2026-07-03)
-- **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend com kernel hash via `tpm_extend_pcr()`. Fallback silencioso se TPM ausente (0xFFFF FFFF). `init_tpm()` early boot (heap+SIMD+IDT pronto, antes de ATA). 0 erros.
-- **Partition mask 0x1C (v0.74.2):** FAT type patcheado para 0x1C (Hidden FAT32 LBA) via build scripts (offset 0x1D2 = segunda entrada MBR). `mbr_nostd 0.1.0` aceita 0x1C como `PartitionType::Fat32`. Windows/Linux não montam automaticamente. Kernel aceita 0x1C em todos os checks.
-- **FAT32-only (v0.75.0):** Fat12Writer removido. `write_boot_log`, boot_log_agent, boot_logger, shutdown usam apenas FAT32. 102 LOC removidos, 458 restantes em fat.rs.
-- **DiskIntelligenceAgent design (ADR-0030):** Arquitetura completa do "mestre dos discos". StorageController trait (6+ controladoras), FilesystemProbe (35+ FS signatures), VolumeManagerProbe (LVM, LUKS, BitLocker...), StorageProvider (iSCSI, NVMe-oF, NBD, Ceph), ArcCache, hotplug, boot vs agent boundary. ~2.400 LOC estimados, 4 sprints (75.1-75.4).
-- **Testes:** QEMU boot OK (245 agents, Hermes cíclico, sem panics). VirtualBox bridge OK (e1000 detectado, boot completo). **RX=0 pre-existente** em ambos (não causado pelas mudanças).
-- **IDEA_BANK #305 implementado** — TPM 2.0 TIS driver como primeiro passo para measured boot.
+## Session: v0.74.1-0.76.1 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + AIOS Roadmap (2026-07-03)
+- **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend. Fallback silencioso.
+- **Partition mask 0x1C (v0.74.2):** Hidden FAT32 LBA, bootloader-compatible.
+- **FAT32-only (v0.75.0):** Fat12Writer removido, 102 LOC eliminados.
+- **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras, 10+ FS probes, SMART, GPT, SED, NVMe, ARC cache, tier migration. ~2.400 LOC.
+- **Adaptive Heap + MemoryAgent (v0.76.1):** resize_heap_to_mb(), orçamento AI via model_params, CPU measurement via rdtsc.
+- **Dynamic Tick:** LAPIC init_count calibrado por workload (12-192 t/s via MemoryAgent).
+- **Event-Driven Hermes:** ReAct cycle só avança com entrada real. has_event fix no scheduler.
+- **AgentTier Premise:** Permanent/SystemDemand/UserDemand/Periodic/Learning.
+- **ADR-0030:** DiskIntelligenceAgent design (35+ FS, volume managers, cloud providers).
+- **ADR-0031:** AIOS Evolution (Cross-OS WASM-first, Self-Update A/B, J.A.R.V.I.S., Hybrid Agents).
+- **ADR-0032:** WASM Agent Apps — developer contract, 15 skills, marketplace.
+- **ADR-0033:** On-Device Micro-Learning — Self-training MoE via Candle sidecar + BitNet ADD/SUB.
+- **IDEA #305:** TPM implemented. **IDEA #311:** Trinity Model Hub (MoE). **IDEA #312:** TrainingAgent (on-device + GPU).
+- **Sprint 77 Target:** GGUF loader + WASM runtime + Trinity MoE + Candle Trainer.
 <!-- context7 -->
