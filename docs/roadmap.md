@@ -12,7 +12,10 @@
 | **18. Security** | **74** | **0.74.x** | **✅ TPM TIS, Ed25519 signing, Partition mask 0x1C** |
 | **19. Disk Intelligence** | **75** | **0.75.x** | **✅ DiskAgent, NVMe, SMART, ARC cache, GPT** |
 | **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
-| **21. Trinity MoE** | **77** | **0.77.x** | **🟡 GGUF loader, MoE Router, rust_coder, WASM runtime** |
+| **21. Trinity MoE** | **77** | **0.77.x** | **🟡 GGUF loader, WASM runtime, SleepCycle, Candle trainer** |
+| **22. Self-Learning** | **78** | **0.78.x** | **🟡 TrainingAgent, rust_coder expert, Self-Learning OS, AHCI** |
+| **23. GPU+Rede** | **79** | **0.79.x** | **🟡 GEN shader, B-01 RX fix, e1000/r8169** |
+| **24. AIOS Evolution** | **80+** | **0.80.x** | **🟡 WWW Agents, J.A.R.V.I.S., Update Agent, Marketplace** |
 
 ## Funcionalidades por Camada
 
@@ -47,6 +50,30 @@
 - **AgentTier classification** (Permanent/SystemDemand/UserDemand/Periodic/Learning)
 - EventDriven scheduler fix (has_event=true, has_pending early-return)
 - MemoryAgent com clock calibration via rdtsc
+
+### 🟡 Trinity MoE (Sprint 77)
+- GGUF loader — modelos 1B+ params (~500 LOC)
+- WASM runtime — wasmi + WASI→Skill bridge (~800 LOC)
+- SleepCycle — 5 fases de aprendizado onírico (~780 LOC)
+- Candle sidecar — training em Rust puro com GPU (~300 LOC)
+- Trinity Router — classifica intenção, roteia para expert correto
+
+### 🟡 Self-Learning (Sprint 78)
+- TrainingAgent — fine-tuning/transfer/full training on-device
+- Session: rust_coder, disk_diag, security experts
+- Self-Learning OS — aprende dos próprios dados que gera
+- AHCI driver — SATA 6G com NCQ (~700 LOC)
+
+### 🟡 GPU+Rede (Sprint 79)
+- Intel GEN shader — matmul via EU execution units
+- B-01 RX fix — RTL8139 DHCP/RX
+- e1000/r8169 — driver real de NIC
+
+### 🟡 AIOS Evolution (Sprint 80+)
+- WWW Infrastructure + Agents (Browser, Email, RSS, Search, Download, WS)
+- J.A.R.V.I.S. conversational layer
+- Self-Update Agent (A/B slots + rollback)
+- Plugin Hub + Marketplace
 
 ### ✅ Input
 - PS/2 keyboard (IRQ1, scancode set 1)

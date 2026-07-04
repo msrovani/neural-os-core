@@ -1,8 +1,8 @@
-# 📋 TODO/Checklist — neural-os-core v0.71.0
+# 📋 TODO/Checklist — neural-os-core v0.77.0
 
-**Data:** 2026-07-02  
+**Data:** 2026-07-03  
 **Propósito:** Lista mestra de todas as pendências técnicas do projeto, para qualquer AI DEV (humano ou IA) localizar e contribuir.  
-**Total de itens:** 30 (6 🔴 bloqueantes, 8 🟠 alta, 7 🟡 média, 9 🟢 leve)
+**Total de itens:** 34 (7 🔴 bloqueantes, 8 🟠 alta, 10 🟡 média, 9 🟢 leve)
 
 ---
 
@@ -66,8 +66,10 @@ Fase 5 (GPU Intel):   B-02 (GEN shader) ←── B-07 ✅
 Fase 6 (HW real):     B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
 Fase 7 (WiFi):        B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
 **Fase 8 (FS):        B-25 (FAT32) + B-34 (log) ✅ — FAT12 removido**
-**Fase 9 (Trinity):   GGUF loader + MoE Router + rust_coder + WASM runtime**
-Backlog:              B-06, B-15, B-16, B-19, B-20
+**Fase 9 — Sprint 77 (Trinity MoE):  GGUF loader + WASM runtime + SleepCycle + Candle**
+**Fase 10 — Sprint 78 (Learning):    TrainingAgent + rust_coder + Self-Learning + AHCI**
+**Fase 11 — Sprint 79 (GPU+Rede):    GEN shader + B-01 RX fix + e1000**
+**Fase 12 — Sprint 80 (AIOS Evol):   WWW Agents + J.A.R.V.I.S. + Update Agent**
 ```
 
 ---
@@ -888,11 +890,11 @@ if !gpus.is_empty() {
 
 | Prioridade | Qtd | Esforço total estimado |
 |---|---|---|
-| 🔴 Bloqueante | 6 | ~3.100 LOC, 8-18 semanas |
+| 🔴 Bloqueante | 7 | ~3.300 LOC, 8-18 semanas |
 | 🟠 Alta | 8 | ~3.550 LOC, 8-20 semanas |
-| 🟡 Média | 6 | ~800 LOC, 4-8 semanas |
-| 🟢 Leve | 8 | ~700 LOC, 1-3 semanas |
-| **Total** | **28** | **~8.150 LOC, 4-12 meses** |
+| 🟡 Média | 10 | ~1.800 LOC, 4-10 semanas |
+| 🟢 Leve | 9 | ~700 LOC, 1-3 semanas |
+| **Total** | **34** | **~9.350 LOC, 6-14 meses** |
 
 ### Ordem sugerida de implementação
 
