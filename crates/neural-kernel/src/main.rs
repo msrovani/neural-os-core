@@ -100,6 +100,7 @@ mod gguf;
 mod vfs;
 mod fs;
 mod shell;
+mod bpe;
 mod apps;
 mod skill_gen;
 mod voice_skill;
@@ -482,7 +483,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Inicializa CortexAgent AGORA — o sistema nervoso acorda antes do HW discovery
     // para que o LLM possa participar das decisoes de hardware.
     publish_boot_phase(BootPhase::SystemBringup, "CortexAgent acordando (pre-HW)");
-    let mut cortex_agent = agents::CortexAgent::new();
+    let cortex_agent = agents::CortexAgent::new();
     // Cortex precisa de pelo menos 1 tick para carregar modelo
     // (o modelo carrega no primeiro tick, nao no construtor)
     
@@ -647,6 +648,35 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let diag_skill = agents::DiagnosticSkill::new();
     SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(diag_skill));
     
+    // Ramdisk: carrega modelo .bitnet grande se disponivel
+    match boot_info.ramdisk_addr {
+        bootloader_api::info::Optional::Some(addr) => {
+            let len = boot_info.ramdisk_len as usize;
+            if len > 1024 {
+                let data = unsafe { core::slice::from_raw_parts(addr as *const u8, len) };
+                let magic = &data[..4];
+                if magic == b"\xBE\x11\xBE\x11" {
+                    serial_println!("[RAMDISK] .bitnet model found ({} bytes). Loading...", len);
+                    if let Some(big_model) = crate::cortex::load_model(data) {
+                        crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                        serial_println!("[RAMDISK] Big model loaded. CortexAgent upgraded.");
+                        crate::boot_logger::log("BOOT: Ramdisk .bitnet model loaded");
+                    } else {
+                        serial_println!("[RAMDISK] .bitnet load FAILED — keeping micro model.");
+                    }
+                } else {
+                    serial_println!("[RAMDISK] Unknown magic {:02X?} — skipping model load.", &magic);
+                }
+            } else {
+                serial_println!("[RAMDISK] Ramdisk too small ({} bytes) — keeping micro.bitnet.", len);
+            }
+        }
+        bootloader_api::info::Optional::None => {
+            serial_println!("[RAMDISK] No ramdisk — using embedded micro.bitnet.");
+            crate::boot_logger::log("BOOT: No ramdisk, micro.bitnet active");
+        }
+    }
+
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     registry.run(

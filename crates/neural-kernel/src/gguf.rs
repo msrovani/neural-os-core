@@ -386,13 +386,14 @@ impl GgufBackedModel {
             let (gate, gc, gr) = dequantize_tensor_by_name(&self.file, &hint("ffn_gate"))?;
             let (up, uc, ur) = dequantize_tensor_by_name(&self.file, &hint("ffn_up"))?;
             let (down, dc, dr) = dequantize_tensor_by_name(&self.file, &hint("ffn_down"))?;
+            let rms_default = alloc::vec![1.0f32; self.hidden_dim];
             layers.push(crate::cortex::LayerWeights {
-                rms_attn: 1.0,
+                rms_attn: rms_default.clone(),
                 q: f32_to_ternary_packed(&q, qr, qc),
                 k: f32_to_ternary_packed(&k, kr, kc),
                 v: f32_to_ternary_packed(&v, vr, vc),
                 o: f32_to_ternary_packed(&o, or_, oc),
-                rms_ffn: 1.0,
+                rms_ffn: rms_default,
                 gate: f32_to_ternary_packed(&gate, gr, gc),
                 up: f32_to_ternary_packed(&up, ur, uc),
                 down: f32_to_ternary_packed(&down, dr, dc),
@@ -405,12 +406,17 @@ impl GgufBackedModel {
                 let mut seed = 42u32;
                 crate::cortex::random_ternary(&mut seed, self.hidden_dim, crate::cortex::VOCAB_SIZE as usize)
             });
+        let rms_final = alloc::vec![1.0f32; self.hidden_dim];
         Some(crate::cortex::TransformerModel {
             embed,
             layers,
-            rms_final: 1.0,
+            rms_final,
             unembed,
             medusa_heads: Vec::new(),
+            vocab_size: crate::cortex::VOCAB_SIZE,
+            hidden: self.hidden_dim,
+            num_layers: self.n_layers,
+            max_seq: crate::cortex::MAX_SEQ,
         })
     }
 }

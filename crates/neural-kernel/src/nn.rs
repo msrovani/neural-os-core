@@ -52,12 +52,13 @@ pub fn silu(x: f32) -> f32 {
     x / (1.0 + libm::expf(-x))
 }
 
-pub fn rms_norm(tensor: &mut Tensor, weight: f32, eps: f32) {
+pub fn rms_norm(tensor: &mut Tensor, weight: &[f32], eps: f32) {
     let len = tensor.data.len() as f32;
     let sq_sum: f32 = tensor.data.iter().map(|x| x * x).sum();
     let rms = libm::sqrtf(sq_sum / len + eps);
-    for x in tensor.data.iter_mut() {
-        *x = *x / rms * weight;
+    for (i, x) in tensor.data.iter_mut().enumerate() {
+        let w = weight[i % weight.len()];
+        *x = *x / rms * w;
     }
 }
 

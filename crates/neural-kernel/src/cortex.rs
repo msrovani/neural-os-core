@@ -2,6 +2,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::boxed::Box;
+use crate::bpe;
 use core::f32::NEG_INFINITY;
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
@@ -74,12 +75,12 @@ fn softmax_inplace(logits: &mut [f32]) {
 }
 
 pub struct LayerWeights {
-    pub rms_attn: f32,
+    pub rms_attn: Vec<f32>,
     pub q: PackedTernaryTensor,
     pub k: PackedTernaryTensor,
     pub v: PackedTernaryTensor,
     pub o: PackedTernaryTensor,
-    pub rms_ffn: f32,
+    pub rms_ffn: Vec<f32>,
     pub gate: PackedTernaryTensor,
     pub up: PackedTernaryTensor,
     pub down: PackedTernaryTensor,
@@ -88,9 +89,13 @@ pub struct LayerWeights {
 pub struct TransformerModel {
     pub embed: Tensor,
     pub layers: Vec<LayerWeights>,
-    pub rms_final: f32,
+    pub rms_final: Vec<f32>,
     pub unembed: PackedTernaryTensor,
     pub medusa_heads: Vec<MedusaHead>,
+    pub vocab_size: u16,
+    pub hidden: usize,
+    pub num_layers: usize,
+    pub max_seq: usize,
 }
 
 const MEDUSA_HEADS: usize = 3;
@@ -100,8 +105,8 @@ pub struct MedusaHead {
 }
 
 impl MedusaHead {
-    pub fn new_random(seed: &mut u32) -> Self {
-        MedusaHead { w: random_ternary(seed, HIDDEN, VOCAB_SIZE as usize) }
+    pub fn new_random(seed: &mut u32, hidden: usize, vocab: usize) -> Self {
+        MedusaHead { w: random_ternary(seed, hidden, vocab) }
     }
 
     pub fn forward(&self, hidden: &Tensor) -> Tensor {
@@ -134,49 +139,55 @@ impl TransformerModel {
     pub fn new() -> Self {
         let mut seed: u32 = 42;
         let mut layers = Vec::with_capacity(NUM_LAYERS);
+        let rms_default: Vec<f32> = vec![1.0; HIDDEN];
         for _ in 0..NUM_LAYERS {
             layers.push(LayerWeights {
-                rms_attn: 1.0,
+                rms_attn: rms_default.clone(),
                 q: random_ternary(&mut seed, HIDDEN, HIDDEN),
                 k: random_ternary(&mut seed, HIDDEN, HIDDEN),
                 v: random_ternary(&mut seed, HIDDEN, HIDDEN),
                 o: random_ternary(&mut seed, HIDDEN, HIDDEN),
-                rms_ffn: 1.0,
+                rms_ffn: rms_default.clone(),
                 gate: random_ternary(&mut seed, HIDDEN, FFN_DIM),
                 up: random_ternary(&mut seed, HIDDEN, FFN_DIM),
                 down: random_ternary(&mut seed, FFN_DIM, HIDDEN),
             });
         }
-        let medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed)).collect();
+        let medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed, HIDDEN, VOCAB_SIZE as usize)).collect();
         TransformerModel {
             embed: random_embed(&mut seed, VOCAB_SIZE as usize, HIDDEN),
             layers,
-            rms_final: 1.0,
+            rms_final: rms_default,
             unembed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
             medusa_heads,
+            vocab_size: VOCAB_SIZE,
+            hidden: HIDDEN,
+            num_layers: NUM_LAYERS,
+            max_seq: MAX_SEQ,
         }
     }
 
     fn embed_lookup(&self, token: u16) -> Tensor {
         let idx = (token as usize).min(self.embed.shape.0 - 1);
-        let start = idx * HIDDEN;
-        let data = self.embed.data[start..start + HIDDEN].to_vec();
-        Tensor::from_row_major((1, HIDDEN), data).unwrap()
+        let start = idx * self.hidden;
+        let data = self.embed.data[start..start + self.hidden].to_vec();
+        Tensor::from_row_major((1, self.hidden), data).unwrap()
     }
 
-    fn rms_norm_tensor(&self, x: &Tensor, weight: f32) -> Tensor {
+    fn rms_norm_tensor(&self, x: &Tensor, weight: &[f32]) -> Tensor {
         let mut t = Tensor::from_row_major(x.shape, x.data.clone()).unwrap();
         rms_norm(&mut t, weight, 1e-6);
         t
     }
 
     pub fn forward_hidden(&self, tokens: &[u16]) -> (Tensor, Tensor) {
-        let seq_len = tokens.len().min(MAX_SEQ);
-        let mut x = Tensor::new((seq_len, HIDDEN));
+        let seq_len = tokens.len().min(self.max_seq);
+        let head_dim = self.hidden / (self.layers.first().map_or(4, |_| self.hidden.max(1) / 64));
+        let mut x = Tensor::new((seq_len, self.hidden));
         for (i, &t) in tokens.iter().enumerate().take(seq_len) {
             let emb = self.embed_lookup(t);
-            for j in 0..HIDDEN {
-                x.data[i * HIDDEN + j] = emb.data[j];
+            for j in 0..self.hidden {
+                x.data[i * self.hidden + j] = emb.data[j];
             }
         }
 
@@ -189,7 +200,7 @@ impl TransformerModel {
         let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap();
 
         for layer in &self.layers {
-            let norm = self.rms_norm_tensor(&x, layer.rms_attn);
+            let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
             let q = layer.q.matmul_hybrid(&norm).unwrap();
             let k = layer.k.matmul_hybrid(&norm).unwrap();
@@ -197,7 +208,7 @@ impl TransformerModel {
 
             let k_t = k.transposed();
             let mut scores = q.matmul(&k_t).unwrap();
-            let scale = 1.0 / libm::sqrtf(HEAD_DIM as f32);
+            let scale = 1.0 / libm::sqrtf(head_dim as f32);
             for s in scores.data.iter_mut() { *s *= scale; }
             for i in 0..seq_len {
                 for j in 0..seq_len {
@@ -212,7 +223,7 @@ impl TransformerModel {
             let proj = layer.o.matmul_hybrid(&attn_out).unwrap();
             x = x.add(&proj).unwrap();
 
-            let norm2 = self.rms_norm_tensor(&x, layer.rms_ffn);
+            let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
             let gate = layer.gate.matmul_hybrid(&norm2).unwrap();
             let mut gate_act = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
             for g in gate_act.data.iter_mut() { *g = silu(*g); }
@@ -222,9 +233,9 @@ impl TransformerModel {
             x = x.add(&down).unwrap();
         }
 
-        let final_norm = self.rms_norm_tensor(&x, self.rms_final);
-        let last_hidden = Tensor::from_row_major((1, HIDDEN),
-            final_norm.data[(seq_len - 1) * HIDDEN..seq_len * HIDDEN].to_vec()).unwrap();
+        let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
+        let last_hidden = Tensor::from_row_major((1, self.hidden),
+            final_norm.data[(seq_len - 1) * self.hidden..seq_len * self.hidden].to_vec()).unwrap();
         let logits = self.unembed.matmul_hybrid(&last_hidden).unwrap();
         (last_hidden, logits)
     }
@@ -299,49 +310,94 @@ fn read_f32_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) ->
     Tensor::from_row_major((rows, cols), raw)
 }
 
+fn read_f32_vec(data: &[u8], offset: &mut usize, n: usize) -> Option<Vec<f32>> {
+    if *offset + n * 4 > data.len() { return None; }
+    let mut v = Vec::with_capacity(n);
+    for _ in 0..n {
+        v.push(read_f32(data, offset)?);
+    }
+    Some(v)
+}
+
 pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let mut off = 0;
     let magic = read_u32(data, &mut off)?;
     if magic != 0xBE11BE11 { return None; }
-    let _version = read_u16(data, &mut off)?;
+    let version = read_u16(data, &mut off)?;
     let _num_params = read_u32(data, &mut off)?;
-    let _hidden = read_u16(data, &mut off)? as usize;
-    let _layers = read_u16(data, &mut off)? as usize;
+    let hidden = read_u16(data, &mut off)? as usize;
+    let num_layers = read_u16(data, &mut off)? as usize;
     let _heads = read_u16(data, &mut off)? as usize;
-    let _vocab = read_u16(data, &mut off)? as usize;
-    let _max_seq = read_u16(data, &mut off)?;
-    let mut num_medusa = 0usize;
-    if off + 4 > data.len() { return None; }
-    num_medusa = data[off] as usize; off += 4;
+    let vocab_size = read_u16(data, &mut off)?;
+    let max_seq = read_u16(data, &mut off)?;
+    let ffn_dim = if version >= 2 {
+        read_u16(data, &mut off)? as usize
+    } else {
+        hidden * 2
+    };
+    let num_medusa = {
+        let mut n = 0usize;
+        if off + 4 > data.len() { return None; }
+        n = data[off] as usize; off += 4;
+        n
+    };
+    // v2: skip tokenizer metadata in header (loaded separately)
+    if version >= 2 {
+        let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
+        let tok_len = read_u32(data, &mut off)? as usize;
+        off += tok_len; // skip tokenizer data (loaded by BpeTokenizer)
+    }
 
-    let embed = read_f32_tensor(data, &mut off, _vocab, _hidden)?;
-    let mut layers = Vec::with_capacity(_layers);
-    for _ in 0.._layers {
+    let embed = read_f32_tensor(data, &mut off, vocab_size as usize, hidden)?;
+    let mut layers = Vec::with_capacity(num_layers);
+    for _ in 0..num_layers {
+        let rms_attn = if version >= 2 {
+            read_f32_vec(data, &mut off, hidden)?
+        } else {
+            let s = read_f32(data, &mut off)?;
+            vec![s; hidden]
+        };
+        let rms_ffn = if version >= 2 {
+            read_f32_vec(data, &mut off, hidden)?
+        } else {
+            let s = read_f32(data, &mut off)?;
+            vec![s; hidden]
+        };
         layers.push(LayerWeights {
-            rms_attn: read_f32(data, &mut off)?,
-            q: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
-            k: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
-            v: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
-            o: read_ternary_tensor(data, &mut off, _hidden, _hidden)?,
-            rms_ffn: read_f32(data, &mut off)?,
-            gate: read_ternary_tensor(data, &mut off, _hidden, _hidden * 2)?,
-            up: read_ternary_tensor(data, &mut off, _hidden, _hidden * 2)?,
-            down: read_ternary_tensor(data, &mut off, _hidden * 2, _hidden)?,
+            rms_attn,
+            q: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+            k: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+            v: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+            o: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+            rms_ffn,
+            gate: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
+            up: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
+            down: read_ternary_tensor(data, &mut off, hidden, ffn_dim)?,
         });
     }
-    let unembed = read_ternary_tensor(data, &mut off, _hidden, _vocab)?;
+    let rms_final = if version >= 2 {
+        read_f32_vec(data, &mut off, hidden)?
+    } else {
+        vec![1.0; hidden]
+    };
+    let unembed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
 
     let mut medusa_heads = Vec::with_capacity(num_medusa);
     for _ in 0..num_medusa {
-        let w = read_ternary_tensor(data, &mut off, _hidden, _vocab)?;
+        let w = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
         medusa_heads.push(MedusaHead { w });
     }
-    if medusa_heads.is_empty() {
+    if medusa_heads.is_empty() && MEDUSA_HEADS > 0 {
         let mut seed: u32 = 42;
-        medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed)).collect();
+        medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed, hidden, vocab_size as usize)).collect();
     }
 
-    Some(TransformerModel { embed, layers, rms_final: 1.0, unembed, medusa_heads })
+    let model = TransformerModel {
+        embed, layers, rms_final, unembed, medusa_heads,
+        vocab_size, hidden, num_layers, max_seq: max_seq as usize,
+    };
+    GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
+    Some(model)
 }
 
 fn argmax_row(logits: &Tensor, row: usize) -> u16 {
@@ -353,13 +409,16 @@ fn argmax_row(logits: &Tensor, row: usize) -> u16 {
         let v = logits.data[start + j];
         if v > best_val { best_val = v; best = j as u16; }
     }
-    if best >= VOCAB_SIZE { EOS } else { best }
+    best
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
-    let mut tokens = Tokenizer::encode(prompt);
-    for _ in 0..32 {
-        if tokens.len() >= MAX_SEQ { break; }
+    let max_seq = model.max_seq;
+    let use_bpe = crate::bpe::is_loaded();
+    let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
+    let prompt_len = tokens.len();
+    for _ in 0..max_seq.saturating_sub(prompt_len).min(64) {
+        if tokens.len() >= max_seq { break; }
         let (last_hidden, _) = model.forward_hidden(&tokens);
 
         let mut draft = Vec::with_capacity(MEDUSA_HEADS);
@@ -372,7 +431,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
         let mut candidates = tokens.clone();
         for &d in &draft {
             candidates.push(d);
-            if candidates.len() >= MAX_SEQ { break; }
+            if candidates.len() >= max_seq { break; }
         }
 
         let cand_logits = model.forward(&candidates);
@@ -393,10 +452,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
         } else { None };
         if let Some(t) = new_tok { tokens.push(t); }
 
-        if *tokens.last().unwrap_or(&0) == EOS { break; }
+        let eos = if use_bpe { 2u16 } else { EOS };
+        if *tokens.last().unwrap_or(&0) == eos { break; }
     }
-    let gen = &tokens[Tokenizer::encode(prompt).len()..];
-    Tokenizer::decode(gen)
+    let gen = &tokens[prompt_len..];
+    if use_bpe { crate::bpe::decode(gen) } else { Tokenizer::decode(gen) }
 }
 
 pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
@@ -441,9 +501,9 @@ pub fn generate_via_model(prompt: &str) -> String {
 // Wrap TransformerModel as Model
 impl Model for TransformerModel {
     fn generate(&self, prompt: &str) -> String { generate_text(self, prompt) }
-    fn embed_dim(&self) -> usize { HIDDEN }
-    fn vocab_size(&self) -> u16 { VOCAB_SIZE }
-    fn max_seq(&self) -> usize { MAX_SEQ }
+    fn embed_dim(&self) -> usize { self.hidden }
+    fn vocab_size(&self) -> u16 { self.vocab_size }
+    fn max_seq(&self) -> usize { self.max_seq }
 }
 
 // ---------------------------------------------------------------------------

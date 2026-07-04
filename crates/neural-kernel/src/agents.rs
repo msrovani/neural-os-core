@@ -260,7 +260,6 @@ const CORTEX_MANIFEST: AgentManifest = AgentManifest {
 };
 
 pub struct CortexAgent {
-    model: crate::cortex::TransformerModel,
     receiver: Receiver,
 }
 
@@ -272,7 +271,8 @@ impl CortexAgent {
             crate::cortex::TransformerModel::new()
         });
         serial_println!("[CORTEX-LLM] Transformer loaded. Skills via SKILL_STORAGE.");
-        CortexAgent { model, receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST) }
+        crate::cortex::set_model(alloc::boxed::Box::new(model));
+        CortexAgent { receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST) }
     }
 }
 
@@ -284,8 +284,8 @@ impl Agent for CortexAgent {
             serial_println!("[CORTEX-LLM] Generating for: \"{}\"", user_text);
             let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
             let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
-            let output = crate::cortex::generate_text(&self.model, &full_prompt);
-            let output = if output.trim().is_empty() {
+            let output = crate::cortex::generate_via_model(&full_prompt);
+            let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
                 alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
             } else { output };
             serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
@@ -1329,7 +1329,7 @@ impl Skill for DiagnosticSkill {
         // 4. SiLU + RMSNorm
         let mut tensor = crate::tensor::Tensor::from_row_major((1, 3), vec![-1.0, 0.0, 1.0]).unwrap();
         tensor.apply(crate::nn::silu);
-        crate::nn::rms_norm(&mut tensor, 1.0, 1e-6);
+        crate::nn::rms_norm(&mut tensor, &[1.0], 1e-6);
         report.push_str(&alloc::format!("[DIAG] SiLU+RMSNorm = {:?}\n", tensor.data));
 
         // 5. BitNet 2-bit inference
