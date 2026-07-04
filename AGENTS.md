@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.76.1 🏆
+#   PLANO DIRETOR — neural-os-core v0.77.0-design 🏆
 #   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + AIOS ROADMAP
 #   132 arquivos Rust, ~15.500 LOC, 0 erros
 # ════════════════════════════════════════════════════════

@@ -277,3 +277,24 @@ We are building the future of operating systems. **Not an OS that runs AI — an
 > *10+ filesystem probes, 6 storage controllers, I/O scheduler,*
 > *boot agent-first com cortex pre-HW, e 0 panics no QEMU.*
 > *— em Rust no_std. Sem Linux. Sem POSIX. Sem legado.*
+
+---
+
+## Unified Roadmap
+
+```
+Sprint 77 🟡  TRINITY MoE     — GGUF loader + WASM runtime + SleepCycle + Candle
+Sprint 78 🟡  SELF-LEARNING   — TrainingAgent + rust_coder + AHCI + Experts
+Sprint 79 🟡  GPU+NETWORK     — GEN shader + RX fix + e1000/r8169
+Sprint 80+ 🟡 AIOS EVOLUTION  — WWW Agents + J.A.R.V.I.S. + Update + Marketplace
+
+Backlog: Cross-OS compat, BitNet IDE, NVIDIA/AMD GPU, WiFi, Federated Learning
+```
+
+| Dimension | Value |
+|---|---|
+| Done | **20 completed blocks** (v0.1 → v0.76.1) |
+| In progress | **Sprint 77** — Trinity MoE (GGUF, WASM, SleepCycle) |
+| Next | Sprints 78-80 — Self-Learning, GPU, AIOS Evolution |
+| Total LOC pending | **~9.350 LOC** across 34 tracked items |
+| Blockers | **B-01 (RX fix)** blocks 6 WWW items. **HW real** blocks GPU drivers |
