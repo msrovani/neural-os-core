@@ -437,4 +437,12 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **Forward pass BitNet b1.58 sob WHPX:** ~2.2s/layer = ~60s/forward pass (64 tokens × 30 layers). Generate 8 tokens: ~6h. Inviável sem KV cache ou bare metal.
 - **Sprint 80-81 realocado:** JARVIS Persona moveu para Sprint 81. Sprint 80 focou em debugar AVX2 e forward pass.
 - **Key file:** `bitnet_avx2.rs` (+42/-18), `tensor.rs` (+10/-4), `cortex.rs` (+30/-1), `agents.rs` (+6/-1).
+
+## Session: v0.80.1 — KV Cache (2026-07-05)
+- **`KvCache` struct** — per-layer `Vec<f32>` para K e V, cresce por append sem realocar Tensor intermediário
+- **`forward_with_kv()`** — processa SÓ tokens novos dado cache existente; atenção GQA usa K/V concatenados (cache + novo)
+- **`generate_speculative` refatorado** — prompt usa `forward_with_kv` (preenche cache), cada step gera 1 token e processa só ele via cache
+- **Ganho estimado:** sem KV cache = ~60s/passo × 8 passos = ~6h; com KV cache = 60s (prompt) + 8×3s (steps) = ~84s (200x+ speedup)
+- **Eficiência:** O(N²) → O(N) por step de geração; FFN gate+up (52% do tempo) só executa para 1 token por step
+- **Build:** 0 erros, +210/-36 LOC em `cortex.rs`
 <!-- context7 -->
