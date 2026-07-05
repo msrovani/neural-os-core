@@ -104,6 +104,9 @@ Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo exi
 - Maintain `/docs/memory/STATE.md` with current kernel state.
 - `/docs/memory/IDEA_BANK.md` is the project cerebellum — 275 items cataloged, each with status. **Consult it before any architectural decision.**
 
+# Premissa: Benchmark em Hardware Real
+Toda métrica de performance (AVX2, forward pass, latência, throughput) deve ser **avaliada em hardware real x86-64**, não sob QEMU+WHPX ou VirtualBox. QEMU e VirtualBox são ambientes de desenvolvimento e debug, não de benchmark. WHPX emula VEX/AVX2 como VM exits. TCG não tem AVX2. VirtualBox tem overhead de virtualização. O critério de aceite para toda otimização SIMD/AVX2 é a performance em bare metal — os ganhos em emulação são irrelevantes (e frequentemente negativos, como visto com WHPX+AVX2 = 2x mais lento que scalar).
+
 # Premissa: Ciclo de Progresso Pós-Tarefa
 Após cada rodada de tarefas com sucesso:
 1. **Aprenda** — Documente dificuldades, erros, correções, lateralizações.
