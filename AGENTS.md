@@ -392,7 +392,7 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **`fb::probe_uefi_framebuffer()`** — agora limpa framebuffer para preto imediatamente após detectar GOP, eliminando artefatos do bootloader.
 - **`main.rs`** — chama `clear_physical_buffer(pm_offset)` quando framebuffer presente, antes de qualquer mensagem de boot.
 - **Zero writes a CRTC registers (0x3D4/0x3D5)** — compatibilidade Intel 6xx preservada.
-- **`cargo check --release`: 0 errors. commit: `396c98b` (v0.79.1).**
+- **`cargo check --release`: 0 errors. commit: `419321b` (v0.79.1).**
 
 ## Session: v0.74.1-0.76.1 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + AIOS Roadmap (2026-07-03)
 - **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend. Fallback silencioso.
