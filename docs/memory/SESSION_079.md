@@ -1,6 +1,6 @@
-# SESSION_079 — LLM Infrastructure: BitNet-b1.58 850M Integration
+# SESSION_079 — Sprint 79: LLM Infrastructure + Display Xuvisco Fix
 
-**Data:** 2026-07-04 | **Sprint:** 79 — Bloco 23 | **v0.79.0**
+**Data:** 2026-07-04 | **Sprint:** 79 — Bloco 23 | **v0.79.0–v0.79.1**
 
 ## Objective
 Integrate Microsoft BitNet-b1.58-2B-4T (real: 850M params) as primary Cortex LLM — RMSNorm vetorial, BPE tokenizer, AVX2 ternary matmul, MoE Trinity Router stub, QEMU loader boot pipeline.
@@ -48,6 +48,69 @@ Integrate Microsoft BitNet-b1.58-2B-4T (real: 850M params) as primary Cortex LLM
 2. Verificar cargo build + boot image
 3. QEMU boot test: WHPX + 6G + loader at 4GB, provar pipeline
 4. Sprint 80: JARVIS Persona (SOUL.md, IPW, Compression, Notification Gate)
+
+---
+
+## v0.79.1 — Display Xuvisco Fix (2026-07-05)
+
+### Problem
+Between bootloader `Jumping to kernel entry` and the first `println!` (RTL8139 detect), the display shows garbage artifacts and the line `[BOOT] FB ativo — VGA text mode desligado` was deceptive — no actual VGA disable occurred.
+
+### Root Cause Analysis
+Two display layers were active and dirty during transition:
+
+1. **VGA text buffer (0xB8000)** never cleared — bootloader left its last messages there. On QEMU `-vga std`, the VGA text overlays the GOP framebuffer causing "texto pula pro topo". On Intel 6xx, the VGA plane still active corrupts the display pipe (xuvisco).
+
+2. **UEFI GOP framebuffer** never cleared — bootloader artifacts persisted until the first framebuffer write (`println!` at RTL8139 detection). 27+ serial-only log lines scrolled with no display update.
+
+3. **`hide_cursor()` and `clear_vga_buffer()`** were defined in `vga_buffer.rs` but **NEVER called** anywhere in the codebase — both orphaned since Sprint 71 when CRTC access was banned.
+
+4. **Previous fix (Sprint 71):** Moved `probe_uefi_framebuffer()` before `vga_buffer::init()` to avoid CRTC writes on Intel 6xx. However, it went too far — never touched VGA CRTC at all, even to clear the text buffer.
+
+### Fix
+Three changes, ~10 LOC total:
+
+**`fb.rs:71-75`** — Clear framebuffer to black immediately after GOP probe:
+```rust
+let fb_size = gpu.fb_height as usize * gpu.fb_stride as usize;
+if fb_size > 0 {
+    unsafe { core::ptr::write_bytes(gpu.fb_addr as *mut u8, 0x00, fb_size); }
+}
+```
+
+**`vga_buffer.rs:14-19`** — New `clear_physical_buffer()`:
+```rust
+pub fn clear_physical_buffer(phys_offset: u64) {
+    let vga = (0xB8000 + phys_offset) as *mut u8;
+    unsafe { core::ptr::write_bytes(vga, 0x00, 4000); }
+}
+```
+Writes 4000 zeros directly to VGA text memory — **no CRTC I/O**. Safe for Intel 6xx.
+
+**`main.rs:448`** — Call in framebuffer branch:
+```rust
+vga_buffer::clear_physical_buffer(pm_offset);
+```
+
+### What was NOT changed
+- `hide_cursor()` remains unused (writes to CRTC 0x3D4/0x3D5 — unsafe on Intel 6xx)
+- No CRTC registers touched — zero xuvisco risk
+- Boot order preserved: framebuffer probe first, VGA init only in `else` branch
+
+### Files Changed
+| File | Change |
+|---|---|
+| `crates/neural-kernel/src/display/fb.rs` | +7 LOC — framebuffer clear after probe |
+| `crates/neural-kernel/src/vga_buffer.rs` | +7 LOC — new `clear_physical_buffer()` |
+| `crates/neural-kernel/src/main.rs` | +1 LOC — call `clear_physical_buffer()` |
+
+### Verification
+`cargo check --release`: **0 errors.** Expected warnings: 73 (dead code per policy).
+
+### Key Lesson
+"When printing 'X is disabled', actually disable X." The root cause was not a complicated hardware quirk — it was a misleading log message that created a false sense of correctness for 4 sprints.
+
+---
 
 ## Appendix: BitNet-b1.58 Real Architecture
 | Field | Value |

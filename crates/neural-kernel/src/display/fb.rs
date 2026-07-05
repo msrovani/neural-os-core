@@ -67,6 +67,13 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             present: true,
         };
         *GPU.lock() = Some(gpu);
+
+        // Limpa framebuffer para preto — elimina artefatos do bootloader
+        let fb_size = gpu.fb_height as usize * gpu.fb_stride as usize;
+        if fb_size > 0 {
+            unsafe { core::ptr::write_bytes(gpu.fb_addr as *mut u8, 0x00, fb_size); }
+        }
+
         crate::serial_println!("[DISPLAY] UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}",
             gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
     } else {

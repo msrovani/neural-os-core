@@ -386,6 +386,14 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **Build_image.py UEFI bug** — `default-features=false, features=["bios"]` necessário para evitar serde panic.
 - **Blocker principal:** QEMU loader overhead (~30s) aceitável. Forward pass bloqueia geração real.
 
+## Session: v0.79.1 — Display Xuvisco Fix (VGA buffer + framebuffer clear) (2026-07-05)
+- **Root cause:** `[BOOT] FB ativo — VGA text mode desligado` era mentira — nunca limpava 0xB8000 nem desligava VGA CRTC. Framebuffer UEFI GOP mantinha artefatos do bootloader. Em QEMU `-vga std`, VGA text overlay causava "texto pula pro topo". Em Intel 6xx, VGA plane ativo corrompia display pipe.
+- **`vga_buffer::clear_physical_buffer()`** — nova função que limpa 0xB8000 via `write_bytes` (sem I/O a CRTC). Segura para Intel 6xx com UEFI GOP.
+- **`fb::probe_uefi_framebuffer()`** — agora limpa framebuffer para preto imediatamente após detectar GOP, eliminando artefatos do bootloader.
+- **`main.rs`** — chama `clear_physical_buffer(pm_offset)` quando framebuffer presente, antes de qualquer mensagem de boot.
+- **Zero writes a CRTC registers (0x3D4/0x3D5)** — compatibilidade Intel 6xx preservada.
+- **`cargo check --release`: 0 errors. commit: `396c98b` (v0.79.1).**
+
 ## Session: v0.74.1-0.76.1 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + AIOS Roadmap (2026-07-03)
 - **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend. Fallback silencioso.
 - **Partition mask 0x1C (v0.74.2):** Hidden FAT32 LBA, bootloader-compatible.

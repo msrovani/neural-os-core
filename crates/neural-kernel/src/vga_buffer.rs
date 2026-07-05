@@ -11,6 +11,13 @@ unsafe fn set_cursor(pos: u16) {
     core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos & 0xFF) as u8, options(nostack, preserves_flags));
 }
 
+/// Limpa o buffer fisico VGA (0xB8000) escrevendo zeros diretamente,
+/// sem acessar registros CRTC. Seguro para Intel 6xx com UEFI GOP.
+pub fn clear_physical_buffer(phys_offset: u64) {
+    let vga = (0xB8000 + phys_offset) as *mut u8;
+    unsafe { core::ptr::write_bytes(vga, 0x00, 4000); }
+}
+
 /// Esconde o cursor de texto VGA (desativa a scanline do cursor).
 /// Deve ser chamado quando o framebuffer esta ativo para evitar que
 /// o cursor VGA apareca sobreposto ao framebuffer.

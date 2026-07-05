@@ -24,7 +24,7 @@ Thumbs.db
 .DS_Store
 
 # QEMU debug logs (use target/qemu-logs/)
-qemu_*.log
+qemu*.log
 
 # MemPalace per-project files (issue #185)
 mempalace.yaml
@@ -41,3 +41,4 @@ keys/kernel_secret.key
 
 tools/model_cache/
 tools/debug_build.py
+tools/__pycache__/

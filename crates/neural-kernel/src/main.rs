@@ -445,6 +445,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         vga_buffer::init(pm_offset);
         crate::serial_println!("[BOOT] Sem framebuffer — usando VGA text mode.");
     } else {
+        vga_buffer::clear_physical_buffer(pm_offset);
         crate::serial_println!("[BOOT] FB ativo — VGA text mode desligado.");
     }
     
@@ -651,50 +652,84 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(diag_skill));
     
     // Ramdisk: carrega modelo .bitnet grande se disponivel
-    match boot_info.ramdisk_addr {
+    // Se o ramdisk estiver vazio/pequeno, tenta QEMU loader em 4GB
+    let mut model_loaded = false;
+    let ramdisk_data_opt = match boot_info.ramdisk_addr {
         bootloader_api::info::Optional::Some(addr) => {
             let len = boot_info.ramdisk_len as usize;
             if len > 1024 {
-                let data = unsafe { core::slice::from_raw_parts(addr as *const u8, len) };
-                let magic = &data[..4];
-                if magic == b"\xBE\x11\xBE\x11" {
-                    serial_println!("[RAMDISK] .bitnet model found ({} bytes). Loading...", len);
-                    if let Some(big_model) = crate::cortex::load_model(data) {
-                        crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                        serial_println!("[RAMDISK] Big model loaded. CortexAgent upgraded.");
-                        crate::boot_logger::log("BOOT: Ramdisk .bitnet model loaded");
-                    } else {
-                        serial_println!("[RAMDISK] .bitnet load FAILED — keeping micro model.");
-                    }
-                } else {
-                    serial_println!("[RAMDISK] Unknown magic {:02X?} — skipping model load.", &magic);
-                }
+                Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
             } else {
-                serial_println!("[RAMDISK] Ramdisk too small ({} bytes) — keeping micro.bitnet.", len);
+                serial_println!("[RAMDISK] Ramdisk too small ({} bytes) — trying QEMU loader.", len);
+                None
             }
         }
-        bootloader_api::info::Optional::None => {
-            // Try QEMU generic loader at known physical address (0x20000000 = 512MB)
-            // Launch QEMU with: -device loader,file=bitnet-1.5b.bitnet,addr=0x20000000
-            let load_addr: u64 = 0x100000000; // 4GB — above 32-bit range, safe from early alloc
-            let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+        _ => None,
+    };
+    if let Some(data) = ramdisk_data_opt {
+        let mut m = [0u8; 4]; m.copy_from_slice(&data[..4]);
+        let magic = u32::from_le_bytes(m);
+        if magic == 0xBE11BE11 {
+            serial_println!("[RAMDISK] .bitnet model found ({} bytes). Loading...", data.len());
+            if let Some(big_model) = crate::cortex::load_model(data) {
+                crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                serial_println!("[RAMDISK] Big model loaded. CortexAgent upgraded.");
+                crate::boot_logger::log("BOOT: Ramdisk .bitnet model loaded");
+                model_loaded = true;
+            } else {
+                serial_println!("[RAMDISK] .bitnet load FAILED — keeping micro model.");
+            }
+        } else {
+            serial_println!("[RAMDISK] Unknown magic {:02X?} — skipping model load.", &magic);
+        }
+    }
+    if !model_loaded {
+        // Try QEMU generic loader at known physical address (0x100000000 = 4GB)
+        // Launch QEMU with: -device loader,file=bitnet-1.5b.bitnet,addr=0x100000000 -m 6G
+        let load_addr: u64 = 0x100000000;
+        let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+        // Check if 4GB is within bootloader-mapped memory by scanning memory_regions
+        let mem_has_4gb = boot_info.memory_regions.iter().any(|r| r.start <= load_addr && r.end > load_addr);
+        if mem_has_4gb {
             let probe_ptr = (load_addr + pm_offset) as *const u8;
-            let magic_bytes = unsafe { core::slice::from_raw_parts(probe_ptr, 4) };
-            if magic_bytes == b"\xBE\x11\xBE\x11" {
-                serial_println!("[RAMDISK] QEMU loader: found .bitnet at phys 0x{load_addr:x}. Loading...");
-                // Map up to 2GB — load_model will read until it hits the end of model data
-                let max_model: usize = (1536 * 1024 * 1024) as usize; // 1.5GB
-                let full_data = unsafe { core::slice::from_raw_parts(probe_ptr, max_model) };
-                if let Some(big_model) = crate::cortex::load_model(full_data) {
-                    crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                    serial_println!("[RAMDISK] Model loaded from QEMU loader!");
-                    crate::boot_logger::log("BOOT: QEMU loader model OK");
+            let raw0 = unsafe { core::ptr::read_volatile(probe_ptr) };
+            let raw1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
+            let raw2 = unsafe { core::ptr::read_volatile(probe_ptr.add(2)) };
+            let raw3 = unsafe { core::ptr::read_volatile(probe_ptr.add(3)) };
+            serial_println!("[RAMDISK] Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
+            let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
+            if qemu_magic == 0xBE11BE11 {
+                // load_model() will auto-expand heap based on header
+                serial_println!("[RAMDISK] QEMU loader: .bitnet v3 OK, loading model...");
+                // Now load model using full memory region slice
+                let mut model_len = 0usize;
+                for r in boot_info.memory_regions.iter() {
+                    if r.start <= load_addr && r.end > load_addr {
+                        model_len = (r.end - load_addr) as usize;
+                        break;
+                    }
+                }
+                if model_len > 1024 {
+                    let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
+                    serial_println!("[RAMDISK] QEMU loader: attempting to load {} MB model...", model_len / (1024*1024));
+                    if let Some(big_model) = crate::cortex::load_model(model_data) {
+                        crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                        serial_println!("[RAMDISK] QEMU loader: Big model loaded. CortexAgent upgraded.");
+                        crate::boot_logger::log("BOOT: QEMU loader .bitnet model loaded");
+                        model_loaded = true;
+                    } else {
+                        serial_println!("[RAMDISK] QEMU loader: .bitnet load FAILED — keeping micro model.");
+                    }
                 } else {
-                    serial_println!("[RAMDISK] QEMU loader: .bitnet magic OK but load FAILED.");
+                    serial_println!("[RAMDISK] QEMU loader: model region too small ({model_len} bytes)");
                 }
             } else {
                 serial_println!("[RAMDISK] No model at phys 0x{load_addr:x} — using embedded micro.bitnet.");
             }
+        } else {
+            serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — using embedded micro.bitnet.");
+        }
+        if !model_loaded {
             crate::boot_logger::log("BOOT: No ramdisk, micro.bitnet active");
         }
     }
@@ -811,3 +846,4 @@ fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Par
 }
 
 // All old async fn daemons removed — migrated to native agents in agents.rs
+

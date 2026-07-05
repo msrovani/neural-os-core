@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.79.1] — 2026-07-05 — 🐛 Display Xuvisco Fix (VGA buffer + framebuffer clear)
+
+### Fixed (neural-kernel)
+- **`display/fb.rs`** — Framebuffer é limpo para preto imediatamente após `probe_uefi_framebuffer()`, eliminando artefatos do bootloader na tela.
+- **`vga_buffer.rs`** — Nova função `clear_physical_buffer()` que limpa 0xB8000 (4000 bytes) via `write_bytes` sem acessar registros CRTC (0x3D4/0x3D5). Segura para Intel 6xx com UEFI GOP.
+- **`main.rs`** — `vga_buffer::clear_physical_buffer(pm_offset)` chamado quando framebuffer presente, antes de qualquer mensagem de boot.
+
+### Root Cause
+`[BOOT] FB ativo — VGA text mode desligado` nunca executava VGA disable real: `hide_cursor()` e `clear_vga_buffer()` estavam definidos mas nunca chamados (orfãos desde Sprint 71). VGA text overlay e framebuffer sujo coexistiam, causando xuvisco em QEMU e hardware real.
+
 ## [0.79.0] — 2026-07-04 — 🏆 Sprint 79: LLM Infrastructure (BitNet-b1.58 Integration)
 
 ### Added (neural-kernel)

@@ -811,18 +811,17 @@ if !gpus.is_empty() {
 
 ### B-31: VGA CRTC + UEFI GOP — verificar xuvisco fix em HW Intel 6xx
 
-**Goal:** Confirmar que o framebuffer sondado antes do VGA init elimina o xuvisco em notebook Intel 6xx.
+**Goal:** Confirmar que o VGA buffer clear (v0.79.1) resolve xuvisco em notebook Intel 6xx.
 
-**Por que:** O fix moveu `probe_uefi_framebuffer()` para antes de `vga_buffer::init()`, mas só teste em HW real confirma.
+**Por que:** Sprint 71 moveu `probe_uefi_framebuffer()` antes de `vga_buffer::init()` mas nunca limpava 0xB8000. v0.79.1 adiciona `clear_physical_buffer()` que zera VGA text buffer sem tocar CRTC. Resta testar HW real.
 
 **Sub-itens:**
-- [ ] Boot em notebook Intel 6xx com imagem v0.71.0
+- [ ] Boot em notebook Intel 6xx com imagem v0.79.1
 - [ ] Verificar se display não fica garbled
-- [ ] Se ainda falhar: tentar desabilitar completamente VGA text mode quando framebuffer presente
 
-**Arquivos:** `crates/neural-kernel/src/main.rs`, `vga_buffer.rs`
+**Arquivos:** `crates/neural-kernel/src/vga_buffer.rs:14-19`, `crates/neural-kernel/src/display/fb.rs:71-75`
 
-**Esforço:** 🔴 Teste HW, ~1 dia
+**Status:** ✅ Código corrigido (v0.79.1). Teste HW pendente.
 
 ---
 
