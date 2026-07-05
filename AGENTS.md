@@ -107,6 +107,9 @@ Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo exi
 # Premissa: Benchmark em Hardware Real
 Toda métrica de performance (AVX2, forward pass, latência, throughput) deve ser **avaliada em hardware real x86-64**, não sob QEMU+WHPX ou VirtualBox. QEMU e VirtualBox são ambientes de desenvolvimento e debug, não de benchmark. WHPX emula VEX/AVX2 como VM exits. TCG não tem AVX2. VirtualBox tem overhead de virtualização. O critério de aceite para toda otimização SIMD/AVX2 é a performance em bare metal — os ganhos em emulação são irrelevantes (e frequentemente negativos, como visto com WHPX+AVX2 = 2x mais lento que scalar).
 
+# Premissa: Testes em QEMU e VirtualBox
+Testes funcionais e de integração rodam em QEMU (WHPX ou TCG) e VirtualBox. Estou autorizado a alterar configurações de ambos (flags de VM, aceleração, memória, CPUs, dispositivos, rede) conforme necessário para cada sprint. Toda alteração de configuração deve ser registrada — seja no SESSION_NNN.md, seja em script/config versionado. O objetivo é ter rastreabilidade: saber exatamente qual combinação de flags produziu cada resultado.
+
 # Premissa: Ciclo de Progresso Pós-Tarefa
 Após cada rodada de tarefas com sucesso:
 1. **Aprenda** — Documente dificuldades, erros, correções, lateralizações.
