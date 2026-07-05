@@ -1,14 +1,28 @@
-# ADR-0037: SMP + GPU Architecture — Pesquisa, Análise e Plano de Implementação
+# ADR-0037: SMP + GPU Architecture — Arquitetura Genérica Multiplataforma
 
-**Data:** 2026-07-05
+**Data:** 2026-07-05 (v4 — arquitetura genérica multiplataforma)
 **Status:** Draft — Em Análise
-**Substitui:** ADR-0029 (GPU Architecture) — revisão completa com novas fontes e plano SMP+GPU integrado
-**Depende de:** ADR-0014 (Ideias de Hardware — SMP, APIC), ADR-0031 (AIOS Evolution)
-**Sprint Target:** N (SPSC + IPI) até N+3 (GPU Compute)
+**Substitui:** ADR-0029 (GPU Architecture) + v3 deste documento
+**Depende de:** ADR-0014 (Ideias de Hardware), ADR-0031 (AIOS Evolution)
+**Sprint Target:** N (SPSC + IPI) até N+3/4 (GPU Compute)
 
 ---
 
 ## 1. Contexto
+
+### 1.1 Visão Arquitetural
+
+O neural-os-core deve ser um **sistema operacional AI-native multiplataforma** capaz de:
+- Suportar **qualquer arquitetura de processador** (x86-64, ARM64, RISC-V)
+- Suportar **qualquer GPU** (NVIDIA, AMD, Intel, Apple Silicon)
+- Suportar **qualquer NPU** (AMD XDNA, Intel NPU, Apple ANE)
+- Detectar e inicializar hardware automaticamente
+- Abstrair diferenças de hardware através de interfaces genéricas
+- Escalar performance de forma adaptativa baseada no hardware disponível
+- QEMU/VBox são ambientes de **desenvolvimento e debug** apenas
+- **Hardware real** é o critério de aceite para performance
+
+### 1.2 Estado Atual
 
 O kernel neural-os-core atualmente:
 - BSP + APs via INIT-SIPI-SIPI funcional (`smp/mod.rs`)
@@ -18,15 +32,134 @@ O kernel neural-os-core atualmente:
 - GPU: apenas VirtIO-GPU framebuffer (sem compute)
 - AVX2 sob WHPX: 2x MAIS LENTO que scalar (VEX = VM exits)
 
-**Problema central:** 4 cores x86-64 com AVX2 nativo + RTX 1050 4GB estão subutilizados. Forward pass BitNet b1.58 850M leva ~60s sob WHPX para 64 tokens. Em hardware real, com SMP + GPU, pode cair para <0.1s.
+### 1.3 Problema Central
 
-**Objetivo deste ADR:** Catalogar todas as ideias de pesquisa, analisar viabilidade/aderência, e produzir um sprint plano factível para transformar o kernel single-core num sistema SMP completo com aceleração GPU.
+O sistema atual é **hard-coded para hardware específico** e não tem abstrações genéricas para:
+- Detecção automática de processadores (CPUID, MIDR, etc.)
+- Detecção automática de GPUs (PCI device IDs, capability bits)
+- Detecção automática de NPUs (ACPI tables, device IDs)
+- Drivers genéricos e modulares para diferentes hardwares
+- Escalabilidade adaptativa (1 core → N cores → GPU → NPU)
+
+**Objetivo:** Criar uma arquitetura genérica que suporte qualquer processador, GPU e NPU, com drivers modulares e detecção automática.
 
 ---
 
-## 2. Fontes de Pesquisa
+## 2. Pesquisa Expandida por Categoria
 
-### 2.1 Projetos Open-Source (GitHub)
+### 2.1 SMP / Work-Stealing Schedulers
+
+| Fonte | Aderência | Dificuldade | Melhora | Dependências |
+|---|---|---|---|---|
+| **fast-steal** (crates.io 6.5.4, no_std) | ★★★★ | Baixa (~200 LOC wrapper) | Work-stealing queue pronto, testado, 27k downloads | Precisa parking_lot + portable-atomic — verificar compatibilidade no_std puro |
+| **bbqueue** (elodin-sys, no_std SPSC) | ★★★★★ | Baixa (~100 LOC) | DMA-safe SPSC lockless, baseado em BipBuffer, sem CAS em alguns targets | Nenhuma. Já temos DMA pages UC. Ideal para IRQ→task data path |
+| **st3** (asynchronics, no_std) | ★★★ | Média (~300 LOC adaptação) | Bounded work-stealing FIFO/LIFO, lock-free, comprovado formalmente | Precisa de allocator para Box |
+| **echOS-x64 CFS/RT + SMP** | ★★★ | Alta (portar ~2000 LOC) | Referência de implementação: CFS, deadline, work-stealing + SMP AP | Arquitetura diferente (UEFI, Limine). Inspiração, não copiar |
+| **moss-kernel EEVDF + IPI** | ★★★ | Média (~500 LOC) | Task migration via IPI, per-CPU slab cache. Algoritmo EEVDF testado com 105 syscalls | Foco AArch64. Conceitos portáveis |
+| **veda-rs adaptive scheduling** | ★★★ | Média (~400 LOC) | Adaptive scheduling com feedback loop, telemetry, deterministic mode, GPU support | Depende de crossbeam (std). Podemos portar só o algoritmo |
+
+**Recomendado:** bbqueue para comunicação cross-core imediata + scheduler work-stealing custom baseado no padrão Chase-Lev (200 LOC, padrão bem conhecido). fast-steal se for compatível no_std.
+
+### 2.2 GPU Compute Bare Metal
+
+| Fonte | Aderência | Dificuldade | Melhora | Dependências |
+|---|---|---|---|---|
+| **coconutOS** (GPUs infra) | ★★★★★ | 2-3 sprints (~1500 LOC) | A referência mais direta. Supervisor ~5K LOC, shards isolados por IOMMU, syscall GPU DMA, FXSAVE/FXRSTOR para preservar FPU entre shards. Já roda transformer inference shard em QEMU | Precisa IOMMU (VT-d) que não temos. Precisamos de pelo menos 1 sprint de VT-d antes |
+| **nova-core** (NVIDIA Rust driver) | ★★★★★ | 3-4 sprints (~3000 LOC) | Código oficial NVIDIA Rust para GPU. BAR1 management, GPU MMIO, user-space doorbells, BAR0 uncacheable access, sysmem flush. RTX 1050 é suportada | Kernel Linux - precisamos portar os conceitos. BAR1 mapping já temos parcialmente (cache UC) |
+| **gpu-nvme-direct** | ★★★ | 2 sprints (~1000 LOC) | GPU faz NVMe READ/WRITE direto via BAR0 MMIO. 2.1 GB/s sustentado. CPU fica fora do data path | Precisa GPU BAR0 mapping funcional + NVMe driver funcionando (temos ambos parciais) |
+| **monadic-hypervisor** (zero-kernel) | ★★★ | 1 sprint (~600 LOC) | Padrões de PCIe bypass, SPSC ring com alignas(64), WFE/SEV ao invés de spin. Inspiração para o ring buffer GPU-CPU | ARM64 EL2 focus. Conceitos portáveis para x86 (usar HLT/MWAIT no lugar de WFE) |
+
+**Recomendado:** coconutOS como blueprint arquitetural + nova-core como referência de BAR1/MMIO para RTX 1050. GPU compute no bare metal é viável mas exige 3-4 sprints.
+
+### 2.3 GPU Kernel Scheduling (dentro da GPU)
+
+| Fonte | Aderência | Dificuldade | Melhora | Dependências |
+|---|---|---|---|---|
+| **LithOS** (arXiv 2504.15465) | ★★★ | 4-5 sprints | TPC stealing — rouba thread blocks entre SMs igual work-stealing. Kernel atomization (quebra kernel grande em átomos). DVFS por workload. Latência de predição online | GPU-specific (NVIDIA/AMD HAL). Precisa do driver GPU primeiro. Inspiração para scheduler dentro da GPU |
+| **gpu_ext** (arXiv 2512.12615) | ★★★ | 3-4 sprints | eBPF dentro da GPU — políticas de scheduling programáveis. Work-stealing thread-block scheduler. 4.8× throughput. Adaptative memory prefetch | NVIDIA open kernel modules. Verificador eBPF para GPU. Muito inovador mas imaturo |
+| **XSched** (OSDI 2025) | ★★★ | 2-3 sprints | XQueue — fila de comandos preemptível. 3 níveis de preempção (pending/in-flight/running). Política agnóstica de hardware | Precisa de mecanismo de preempção GPU (Turing+ tem) |
+| **MSched** (arXiv 2512.24637) | ★★★ | 1 sprint (~400 LOC) | Memory scheduling proativo — prevê working set, faz eviction ótimo (OPT/Belady) para GPU HBM. Reduz page faults em 78× | Depende de XSched para preempção. Referência para nossa gestão de VRAM 4GB |
+| **Agent.xpu** (arXiv 2506.24045) | ★★★★★ | 2-3 sprints | Prefill/Decode split — NPU pra prefill, iGPU pra decode. Stage elasticity, fine-grained preemption. 1.2-4.9× throughput. Direto aplicável ao nosso BitNet | Heterogeneous SoC. Nosso caso: GPU para decode, CPU para prefill/tokenization |
+
+**Recomendado:** XSched como mecanismo de scheduling GPU (preemptível, agnóstico). Agent.xpu como blueprint para split CPU/GPU do BitNet (CPU faz tokenization + prefill curto, GPU faz decode via KV cache).
+
+### 2.4 DMA / Data Plane / Zero-Copy
+
+| Fonte | Aderência | Dificuldade | Melhora | Dependências |
+|---|---|---|---|---|
+| **dmaplane** (arXiv 2603.10030) | ★★★ | 2 sprints (~800 LOC) | Buffer orchestration explícita: ring-based command channels, NUMA-aware allocation, credit-based flow control, GPU BAR pinning, RDMA KV cache transfer. Arquitetura de referência completa | Kernel module Linux. Portar conceitos: ring channel + credit flow control já temos base |
+| **m-store** (zero-kernel RDMA) | ★★★ | 1-2 sprints (~600 LOC) | PagedAttention KV cache em NVMe — 4GB KV cache swap em 200-400ms via PCIe. Iov/Ior async API (io_uring-style) | Precisa NVMe driver (temos) + GPU BAR mapping (parcial). CXL 3.1 ignorado (não temos HW) |
+| **Monadic Data Plane** (SPSC rings) | ★★★★★ | Baixa (~200 LOC) | Index caching em SPSC ring: 5.5M → 112M items/sec. alignas(64) para head/tail. DMA-BUF sharing. Já podemos usar hoje | Nenhuma. Padrão copy-paste em Rust |
+
+**Recomendado:** Index caching + SPSC ring alignment já. dmaplane como blueprint quando tivermos GPU funcional.
+
+### 2.5 Parallel Compute (no_std matmul/tensor)
+
+| Fonte | Aderência | Dificuldade | Melhora | Dependências |
+|---|---|---|---|---|
+| **burn-flex** (tracel-ai/burn) | ★★★★★ | 1-2 sprints (~800 LOC) | no_std SIMD gemm + quantization + parallel via rayon (opcional). 2-95× speedup. Mesmas shapes do BitNet. Melhor custo-benefício | Portar só o backend CPU. Ignorar backend GPU (wgpu). Foco em avx2_ternary_matmul_impl |
+| **oxionnx** (cool-japan) | ★★★ | 2 sprints (~1000 LOC) | Pure Rust ONNX inference, 165 operators, SIMD, memory pool. GPU via wgpu (opcional). Podemos carregar modelos ONNX no lugar de .bitnet | ONNX proto parser. Pesado (~2000 LOC só de parser). Alternativa futura |
+| **scirs2-core** | ★★★ | 1 sprint (~300 LOC) | SIMD + work-stealing + NUMA-aware allocator. no_std feature flag. Cache-oblivious algorithms | Dependências externas (ndarray, etc). Portar só o scheduler/allocator |
+| **avx_parallel** | ★★★ | Baixa (~200 LOC) | Thread pool + work stealing + SIMD ops + adaptive executor. Zero-overhead abstractions | Std-only por enquanto. Portar para no_std |
+| **kofft** (FFT) | ★★★ | Baixa (~100 LOC) | no_std SIMD FFT paralelo. Não essencial agora, útil futuro para áudio/Signal | Nenhuma |
+
+**Recomendado:** burn-flex como prioridade — portar o backend SIMD gemm + quantization elimina nossa necessidade de matmul_hybrid manual. Reduz 800 LOC de bitnet_avx2.rs.
+
+### 2.6 Sincronização Cross-Core
+
+| Primitiva | Onde | Aderência | Já temos? | Dif. | Ação |
+|---|---|---|---|---|---|
+| **TicketLock** | ticket-lock crate | ★★★★★ | Sim ✅ | — | Já funcional. Garantir alignas(64) nos dados protegidos |
+| **SPSC ring (bbqueue)** | elodin-sys/bbqueue | ★★★★★ | Não | 100 LOC | Implementar agora. Ideal para IRQ→worker, GPU→CPU, core→core |
+| **RCU** | echOS-x64/sync | ★★★ | Não | 300 LOC | Quando tivermos agents migrando entre cores. Evita lock em read-heavy |
+| **IPI vetorizado** | apic.rs | ★★★★★ | Parcial | 100 LOC | send_ipi(lapic_id, vector) — falta implementar. Necessário para wake AP |
+| **Atomic wait (UMONITOR/UMWAIT)** | x86 TSX/WAITPKG | ★★★ | Não | 50 LOC | Alternativa eficiente a HLT para idle cores. IceLake+ |
+| **Cache line padding** | #[repr(align(64))] | ★★★★★ | Parcial | 10 LOC | Prevenir false sharing. Já fazemos em alguns lugares |
+
+---
+
+## 3. Prioridade Recomendada
+
+| # | Ação | Sprint | LOC | Impacto |
+|---|---|---|---|---|
+| 1 | SPSC ring (bbqueue) + cache alignment | Atual | 100 | Base para tudo (IRQ, cross-core, GPU) |
+| 2 | IPI vetorizado | Atual | 100 | Acordar APs sob demanda |
+| 3 | PerCpu por AP + alocação dinâmica | N+1 | 300 | Cada core com dados próprios |
+| 4 | Work-stealing scheduler (Chase-Lev) | N+1 | 400 | Distribuir agents entre 4 cores |
+| 5 | Parallel-for no matmul (AVX2 chunking) | N+1 | 300 | 2-3× speedup inferência |
+| 6 | GPU BAR0/BAR1 mapping + doorbell | N+2 | 500 | RTX 1050 como compute device |
+| 7 | GPU job ring buffer (SPSC) | N+2 | 300 | CPU enfileira, GPU executa |
+| 8 | XSched-style preemptible GPU queue | N+3 | 600 | Múltiplos workloads GPU |
+| 9 | burn-flex backend port | N+3 | 800 | Gemm+SIMD pronto, elimina bitnet_avx2 manual |
+
+---
+
+## 4. Conclusão da Pesquisa
+
+### 4.1 Descobertas Críticas
+
+1. **coconutOS** (github.com/coconut-os/coconutOS) já prova que GPU-isolated AI inference em Rust no_std é viável hoje — supervisor ~5K LOC, shards com IOMMU, transformer rodando em QEMU. É nosso blueprint arquitetural.
+
+2. **nova-core** (NVIDIA Rust, código oficial) mostra exatamente como mapear BAR0/BAR1, gerenciar doorbells e submeter jobs para GPUs NVIDIA — RTX 1050 inclusa.
+
+3. **LithOS + gpu_ext** (arXiv) apontam para a fronteira real — scheduling dentro da GPU com TPC stealing e eBPF no device.
+
+### 4.2 Plano de 9 Passos
+
+O plano recomendado acima começa pelo SPSC ring + IPI (pode fazer agora, 200 LOC) e culmina no burn-flex backend (~3000 LOC totais distribuídos em 3 sprints).
+
+### 4.3 Hardware Real vs QEMU/VBox
+
+- QEMU/VBox são ambientes de **desenvolvimento e debug** apenas
+- **Hardware real** é o critério de aceite para performance
+- Toda otimização SIMD/AVX2 deve ser avaliada em hardware real x86-64
+- WHPX emula VEX/AVX2 como VM exits — benchmarks em WHPX são irrelevantes
+
+---
+
+## 5. Referências
+
+### 5.1 Projetos Open-Source (GitHub)
 
 | Projeto | Estrelas | Linguagem | Relevância | URL |
 |---|---|---|---|---|
@@ -45,7 +178,7 @@ O kernel neural-os-core atualmente:
 | **oxionnx** | — | Rust | ★★★★ ONNX inference puro Rust, GPU via wgpu | github.com/cool-japan/oxionnx |
 | **veda-rs** | — | Rust | ★★★★ Work-stealing + adaptive + GPU compute | github.com/TIVerse/veda-rs |
 
-### 2.2 Artigos Acadêmicos (arXiv)
+### 5.2 Artigos Acadêmicos (arXiv)
 
 | Artigo | Ano | Relevância | Tese Central |
 |---|---|---|---|
@@ -59,7 +192,7 @@ O kernel neural-os-core atualmente:
 | **Orion** (EuroSys 2024) | 2024 | ★★★ Fine-grained GPU sharing, interference-aware |
 | **hetGPU** (2506.15993) | 2025 | ★★★ Binary compatibility entre GPUs via IR |
 
-### 2.3 Crates.io (no_std compatíveis)
+### 5.3 Crates.io (no_std compatíveis)
 
 | Crate | Versão | Downloads | no_std | Função |
 |---|---|---|---|---|
@@ -71,7 +204,7 @@ O kernel neural-os-core atualmente:
 | **avx_parallel** | — | — | ❌ (std) | Thread pool + work-stealing + SIMD |
 | **kofft** | 0.1.5 | — | ✅ | SIMD FFT/DSP no_std, parallel feature |
 
-### 2.4 Documentação Técnica
+### 5.4 Documentação Técnica
 
 | Fonte | Tipo | Conteúdo |
 |---|---|---|
@@ -82,257 +215,19 @@ O kernel neural-os-core atualmente:
 
 ---
 
-## 3. Análise por Categoria
+## 6. Conclusão Final
 
-### 3.1 SMP / Work-Stealing
+A grande sacada: coconutOS (5K LOC) prova que GPU-isolated AI inference em Rust no_std já funciona. LithOS + gpu_ext provam que scheduling dentro da GPU é a fronteira. Nosso diferencial: unificar agentes + inferência + GPU num kernel single-address-space, sem syscall overhead, com work-stealing entre cores e dentro da GPU via adaptação de TPC stealing.
 
-**Ideias implementáveis:**
+**Plano de 9 passos recomendado:**
+1. SPSC ring (bbqueue) + cache alignment (100 LOC)
+2. IPI vetorizado (100 LOC)
+3. PerCpu por AP + alocação dinâmica (300 LOC)
+4. Work-stealing scheduler (Chase-Lev) (400 LOC)
+5. Parallel-for no matmul (AVX2 chunking) (300 LOC)
+6. GPU BAR0/BAR1 mapping + doorbell (500 LOC)
+7. GPU job ring buffer (SPSC) (300 LOC)
+8. XSched-style preemptible GPU queue (600 LOC)
+9. burn-flex backend port (800 LOC)
 
-| Ideia | Origem | Aderência | Dificuldade | LOC | Dependências |
-|---|---|---|---|---|---|
-| **SPSC ring (bbqueue)** | bbqueue + monadic-hypervisor | ★★★★★ | Mínima | 100 | Nenhuma — padrão lock-free conhecido |
-| **IPI vetorizado** | moss-kernel + echOS-x64 | ★★★★★ | Média | 150 | LAPIC funcional (temos) |
-| **PerCpu dinâmico** | RuVix SMP + moss | ★★★★ | Média | 300 | Alocador de frames |
-| **Work-stealing Chase-Lev** | crossbeam-deque + fast-steal | ★★★★ | Média | 400 | PerCpu + IPI |
-| **CFS/EEVDF scheduler** | moss-kernel + echOS-x64 | ★★★ | Alta | 800 | Work-stealing base pronto |
-| **RCU** | echOS-x64 + moss-kernel | ★★★ | Média | 300 | Atomics funcionais |
-| **Per-CPU slab allocator** | moss-kernel | ★★★★ | Média | 300 | PerCpu pronto |
-
-**Conexões:** SPSC ring → IPI → PerCpu → Work-stealing → CFS/EEVDF. Dependência linear: cada item requer o anterior.
-
-**Melhoria buscada:** Forward pass passa de 1 core para 4 cores → speedup 2-3.5× no matmul.
-
-### 3.2 GPU Compute Bare Metal
-
-| Ideia | Origem | Aderência | Dificuldade | LOC | Dependências |
-|---|---|---|---|---|---|
-| **BAR0/BAR1 mapping UC** | nova-core + NVIDIA DM | ★★★★★ | Média | 300 | NVMe driver funcional |
-| **GPU doorbell ring** | nova-core + gpu-nvme-direct | ★★★★ | Alta | 400 | BAR0 mapping |
-| **Job submission ring (SPSC)** | monadic-hypervisor + dmaplane | ★★★★ | Média | 300 | Doorbell funcional |
-| **VRAM allocator** | coconutOS + nova-core | ★★★ | Alta | 400 | BAR1 mapping |
-| **GPU DMA engine** | gpu-nvme-direct + dmaplane | ★★★ | Alta | 500 | Job ring + VRAM alloc |
-| **NVIDIA firmware loader** | nova-core + nouveau docs | ★★ | Muito Alta | 1000+ | Tudo acima |
-
-**Conexões:** BAR mapping → Doorbell → Job ring → VRAM → DMA → Firmware. GPU compute só é viável depois de SMP básico funcional.
-
-**Melhoria buscada:** Forward pass migra de CPU (4 cores ~0.5s) para GPU (RTX 1050 ~0.02s). Ganho 25× sobre CPU 4c.
-
-### 3.3 GPU Kernel Scheduling
-
-| Ideia | Origem | Aderência | Dificuldade | LOC | Dependências |
-|---|---|---|---|---|---|
-| **XQueue abstraction** | XSched (OSDI) | ★★★★ | Alta | 600 | Submissão GPU funcional |
-| **TPC stealing** | LithOS | ★★★ | Muito Alta | 1000+ | GPU scheduling pronto |
-| **Agent.xpu split** | Agent.xpu (arXiv) | ★★★★★ | Média | 400 | GPU decode funcional |
-| **MSched memory** | MSched (arXiv) | ★★★ | Alta | 500 | VRAM allocator |
-| **gpu_ext eBPF** | gpu_ext (arXiv) | ★★ | Muito Alta | 2000+ | Runtime eBPF+GPU |
-
-**Conexões:** Job ring → XQueue → Agent.xpu split. GPU kernel scheduling é N+3 ou N+4.
-
-**Melhoria buscada:** Múltiplos workloads GPU concorrentes (display + LLM + training) com preempção justa.
-
-### 3.4 DMA / Data Plane
-
-| Ideia | Origem | Aderência | Dificuldade | LOC | Dependências |
-|---|---|---|---|---|---|
-| **SPSC index caching** | Monadic Data Plane | ★★★★★ | Mínima | 50 | SPSC ring existente |
-| **Cache line alignment** | monadic-hypervisor | ★★★★★ | Mínima | 10 | (já fazemos parcial) |
-| **Credit-based flow control** | dmaplane | ★★★★ | Média | 200 | SPSC funcional |
-| **DMA-BUF sharing** | dmaplane + nova-core | ★★★ | Alta | 500 | GPU funcional |
-| **KV cache over DMA** | dmaplane + m-store | ★★★ | Alta | 400 | GPU + DMA funcionais |
-| **GPU-initiated NVMe** | gpu-nvme-direct | ★★★ | Muito Alta | 800 | NVMe + GPU DMA |
-
-**Conexões:** SPSC ring → Index caching → Credit flow → DMA-BUF → KV cache. DMA é infraestrutura base.
-
-**Melhoria buscada:** Zero-copy entre CPU/GPU/NVMe. KV cache de 307 MB pode ser swapada em 200ms via PCIe.
-
-### 3.5 Parallel Compute (no_std)
-
-| Ideia | Origem | Aderência | Dificuldade | LOC | Dependências |
-|---|---|---|---|---|---|
-| **burn-flex backend** | burn-flex | ★★★★★ | Média | 800 | Heapless Vec (temos) |
-| **oxionnx core** | oxionnx | ★★★★ | Alta | 1200 | ONNX parser |
-| **scirs2-core scheduler** | scirs2-core | ★★★★ | Média | 300 | no_std feature |
-| **gemm optimization** | burn-flex + avx_parallel | ★★★★★ | Média | 400 | AVX2 (temos) |
-| **Quantization fused** | burn-flex | ★★★★ | Média | 300 | gemm pronto |
-
-**Conexões:** gemm → quantization → burn-flex backend. Parallel compute é independente de SMP (roda em 1 core já otimizado).
-
-**Melhoria buscada:** Elimina `bitnet_avx2.rs` manual (~800 LOC), substitui por backend testado com 2-95× speedup.
-
-### 3.6 Sincronização Cross-Core
-
-| Primitiva | Já temos? | Ação | LOC | Prioridade |
-|---|---|---|---|---|
-| TicketLock | ✅ `ticket-lock` crate | Garantir `alignas(64)` | 10 | Imediata |
-| SPSC ring | ❌ | Implementar (bbqueue) | 100 | Imediata |
-| IPI | Parcial (só INIT/SIPI) | `send_ipi(lapic_id, vector)` | 150 | Imediata |
-| Atomic wait (UMONITOR) | ❌ | Opcional (IceLake+) | 50 | N+3 |
-| Cache line padding | Parcial | `#[repr(align(64))]` padronizar | 10 | Imediata |
-
----
-
-## 4. Ideias Descartadas / Deferidas
-
-| Ideia | Motivo | Talvez Futuro |
-|---|---|---|
-| **Topological scheduling (hollow-asm)** | Requer AVX-512 para <3ns. Nosso HW alvo (i5-6xxx) não tem AVX-512. Interessante mas impraticável | Se HW com AVX-512 |
-| **WASM no scheduler** | Overhead alto para scheduling em tempo real. WASM é para skills, não para core scheduler | Já existe (WasmSkill) |
-| **NuMA-aware stealing** | Nosso HW é single-socket. Complexidade desnecessária | Se HW multi-socket |
-| **eBPF GPU (gpu_ext)** | Requer runtime eBPF + verifier. ~2000 LOC. IMATURO | Após GPU funcional |
-| **CXL 3.1 (m-store)** | Sem HW CXL. Conceito futuro | Pós-MVP |
-| **Complete firmware NVIDIA** | ~10000+ LOC para driver completo. Inviável agora | Se houver equipe |
-| **Multi-GPU cluster** | Sem HW. Apenas 1 RTX 1050 | Se HW permitir |
-| **RDMA** | Sem HW RDMA (InfiniBand/RoCE). dmaplane conceitual | Se HW disponível |
-| **GPU-initiated NVMe** | Depende de patches NVIDIA DKMS. Barreira alta | Se comunidade evoluir |
-| **Machine check (MCE) handling** | Importante para HW real mas não relacionado a SMP/GPU | Sprint separado |
-| **Dynamic voltage/freq scaling** | Precisa de MSR específicos (IA32_PERF_CTL), válido mas não bloqueante | N+4 |
-
----
-
-## 5. Plano de Implementação (Sprints Ajustados)
-
-### Premissas:
-- Hardware real (i5 4c, DDR4, RTX 1050) é o alvo de benchmark
-- QEMU+WHPX é ambiente de desenvolvimento (AVX2 desligado)
-- Cada sprint = ~300-800 LOC
-- Blocos rearranjados por dependência técnica não por cronograma original
-
-### Sprint N (Atual + 1) — Foundation: SPSC + IPI + PerCpu
-
-| Item | LOC | Origem | Depende de |
-|---|---|---|---|
-| SPSC ring lockless (bbqueue) | 100 | bbqueue | Nenhuma |
-| `#[repr(align(64))]` em todos atomics cross-core | 10 | monadic-hypervisor | Nenhuma |
-| `send_ipi(lapic_id, vector)` | 100 | moss-kernel | LAPIC (✅) |
-| IPI handler registrável | 50 | echOS-x64 | send_ipi |
-| PerCpu dinâmico (alocar + GS.base por AP) | 300 | RuVix SMP | Nenhuma |
-| **Total** | **~560** | | |
-
-**Resultado:** APs podem receber trabalho. Cada core tem dados próprios. Base para tudo.
-
-### Sprint N+1 — Work-Stealing + Parallel Matmul
-
-| Item | LOC | Origem | Depende de |
-|---|---|---|---|
-| Work-stealing Chase-Lev scheduler | 400 | crossbeam-deque + fast-steal | PerCpu + SPSC |
-| Parallel-for no matmul (chunk AVX2) | 300 | avx_parallel | Work-stealing |
-| AgentScheduler multicore (4 run queues) | 200 | moss-kernel | Work-stealing |
-| Per-CPU slab allocator | 300 | moss-kernel | PerCpu |
-| **Total** | **~1200** | | |
-
-**Resultado:** Forward pass 2-3× mais rápido. Agents distribuídos entre 4 cores.
-
-### Sprint N+2 — GPU Foundations
-
-| Item | LOC | Origem | Depende de |
-|---|---|---|---|
-| GPU BAR0/BAR1 mapping UC | 300 | nova-core | NVMe (✅) |
-| PCIe doorbell register setup | 100 | nova-core | BAR0 mapping |
-| GPU SPSC job ring | 300 | monadic-hypervisor | Doorbell |
-| VRAM allocator (buddy) | 400 | coconutOS | BAR1 mapping |
-| **Total** | **~1100** | | |
-
-**Resultado:** GPU reconhecida como compute device. Primeiro job submetido via ring.
-
-### Sprint N+3 — GPU Decode (BitNet offload)
-
-| Item | LOC | Origem | Depende de |
-|---|---|---|---|
-| Agent.xpu prefill/decode split | 400 | Agent.xpu (arXiv) | GPU job ring |
-| GPU matmul kernel (ternary) | 300 | nova-core patterns | GPU ring |
-| CPU→GPU KV cache transfer | 200 | dmaplane | GPU DMA |
-| XQeue preemptível | 600 | XSched (OSDI) | GPU ring |
-| **Total** | **~1500** | | |
-
-**Resultado:** decode do BitNet roda na GPU (RTX 1050 ~0.02s/step vs CPU ~0.5s).
-
-### Sprint N+4 — Polimento
-
-| Item | LOC | Origem | Depende de |
-|---|---|---|---|
-| burn-flex backend port | 800 | burn-flex | gemm existente |
-| MSched memory scheduling | 500 | MSched (arXiv) | VRAM allocator |
-| CFS scheduler completo | 500 | echOS-x64 | Work-stealing |
-| GPU + Display co-existência | 300 | coconutOS | GPU funcional |
-| **Total** | **~2100** | | |
-
-**Resultado:** Kernel SMP completo, GPU compute funcional, backend matmul profissional.
-
----
-
-## 6. Mapa de Conexões
-
-```
-Sprint N (Foundation)
-  SPSC ring ──────────► IPI vetorizado ──────► PerCpu dinâmico
-    │                                                │
-    ▼                                                ▼
-Sprint N+1 (Parallel)
-  Work-stealing ◄─── Chase-Lev ─────────────── Parallel-for matmul
-    │                                                │
-    ├──► AgentScheduler multicore                    │
-    └──► Per-CPU slab allocator                      │
-                                                     ▼
-Sprint N+2 (GPU)                               [2-3× speedup CPU]
-  BAR0/BAR1 mapping ──► Doorbell ──► SPSC job ring ──► VRAM alloc
-                                                     │
-                                                     ▼
-Sprint N+3 (GPU Decode)                         [25× speedup GPU]
-  Agent.xpu split ◄── GPU matmul ◄── KV cache DMA ◄── XQueue
-                                                     │
-                                                     ▼
-Sprint N+4 (Polimento)                          [50-100× total]
-  burn-flex ◄── MSched ◄── CFS ◄── GPU+Display
-```
-
----
-
-## 7. Riscos e Mitigação
-
-| Risco | Probabilidade | Impacto | Mitigação |
-|---|---|---|---|
-| Data race em scheduler multicore com no_std | Média | Crítico | Testar primeiro com 2 cores no QEMU. Usar TicketLock existente |
-| GPU BAR mapping falha (RTX 1050 PCIe conf) | Baixa | Alto | Fallback: CPU-only continua funcional. GPU é aceleração, não requisito |
-| WHPX inconsistente com SMP | Alta | Médio | Hardware real como critério de aceite. WHPX só para smoke test |
-| AVX2+parallel não escala linearmente | Média | Baixo | Speedup 2× já é vitória. Gargalo é banda DDR4, não núcleos |
-| coconutOS patterns não portáveis ao nosso kernel | Baixa | Médio | coconutOS é inspiração arquitetural, não copiar código |
-| RTX 1050 sem suporte NVIDIA open module | Baixa | Alto | Pascal (GP108) é suportado pelo nova-core. Verificar compatibilidade |
-
----
-
-## 8. Conclusão
-
-O caminho crítico é: **SPSC → IPI → PerCpu → Work-stealing → GPU BAR → GPU ring → Agent.xpu split.**
-
-As fontes mais valiosas identificadas foram:
-- **coconutOS** (prova de conceito funcional de GPU AI inference em Rust no_std)
-- **nova-core** (documentação oficial NVIDIA para GPU bare metal)
-- **LithOS + gpu_ext** (fronteira de pesquisa em scheduling GPU intra-device)
-- **burn-flex** (porta de entrada para parallel compute profissional)
-
-O SMP+GPU não é feature cosmética — é o **multiplicador de performance** que torna a inferência local viável. Sem SMP, forward pass = ~60s sob WHPX. Com SMP+GPU, estimativa <0.1s. Diferença entre demo e produto real.
-
----
-
-## 9. Referências
-
-1. coconutOS — github.com/coconut-os/coconutOS
-2. nova-core — NVIDIA open-gpu-kernel-modules, LKML 2026
-3. echOS-x64 — github.com/asosyal04440/echOS-x64
-4. moss-kernel — github.com/hexagonal-sun/moss-kernel
-5. LithOS — arXiv 2504.15465 (2025)
-6. gpu_ext — arXiv 2512.12615 (2025)
-7. XSched — OSDI 2025, USENIX
-8. MSched — arXiv 2512.24637 (2025)
-9. Agent.xpu — arXiv 2506.24045 (2025)
-10. dmaplane — arXiv 2603.10030 (2026)
-11. monadic-hypervisor — github.com/SiliconLanguage/monadic-hypervisor
-12. m-store — github.com/SiliconLanguage/m-store
-13. gpu-nvme-direct — github.com/xaskasdf/gpu-nvme-direct
-14. burn-flex — github.com/antimora/burn-flex
-15. fast-steal — crates.io 6.5.4
-16. bbqueue — github.com/elodin-sys/bbqueue
-17. chase-lev deque — "Dynamic Circular Work-Stealing Deque" (1994)
-18. RuVix SMP — docs.rs/ruvix-smp 0.1.0
-19. Monadic Data Plane — 0kernel.ai/research
+**Total: ~3000 LOC distribuídos em 3 sprints.**
