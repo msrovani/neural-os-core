@@ -4,7 +4,7 @@
 **Mudança:** SMP+GPU incorporado como bloco prioritário. Sprints replanejados por dependência técnica.
 Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 
-## Blocos Completos (20 blocos, 76 sprints)
+## Blocos Completos (23 blocos, 83 sprints)
 
 | Bloco | Sprints | v | Status |
 |---|---|---|---|
@@ -14,44 +14,40 @@ Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 | **18. Security** | **74** | **0.74.x** | **✅ TPM TIS, Ed25519 signing, Partition mask 0x1C** |
 | **19. Disk Intelligence** | **75** | **0.75.x** | **✅ DiskAgent, NVMe, SMART, ARC cache, GPT** |
 | **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
+| **21. Foundation Quick Wins** | **77** | **0.77.x** | **✅ Prompt >, Pre-Flight, FanOut, TaskSchema, /learn, SkillIndex** |
+| **22. Agentic Evolution** | **78** | **0.78.x** | **✅ Crew/Flow, Cache, Workflow, GGUF, WASM** |
+| **23. LLM Infrastructure** | **79-80** | **0.79.x-0.80.x** | **✅ AVX2 BitNet, Trinity MoE, BPE, QEMU loader, KV Cache** |
+| **21a. SMP Foundation** | **81** | **0.81.x** | **✅ SPSC ring, IPI, PerCpu** |
+| **21b. Work-Stealing + Matmul** | **82** | **0.82.x** | **✅ Chase-Lev, parallel-for, AgentScheduler multicore** |
+| **21e. Polimento** | **83** | **0.83.x** | **✅ burn-flex, CFS, GPU+Display co-existência** |
 
-## Próximos Blocos (Sprints 77-86, reestruturados com ADR-0037)
+## Próximos Blocos (Sprints 84-90, reestruturados com ADR-0037)
 
-### 🟢 Bloco 21a — Foundation SMP (SPSC + IPI + PerCpu) — Sprint ATUAL+1
-**Base para tudo: comunicação cross-core, acordar APs, dados por core**
+### Nota de HW Real (Jul 2026)
 
-| Item | Origem | O que | LOC | Dependência |
-|---|---|---|---|---|
-| SPSC ring lockless (bbqueue) | bbqueue + monadic-hypervisor | Fila lock-free Single-Producer Single-Consumer | 100 | Nenhuma |
-| `#[repr(align(64))]` cross-core | monadic-hypervisor | Prevenir false sharing em atomics compartilhados | 10 | Nenhuma |
-| `send_ipi(lapic_id, vector)` | moss-kernel + echOS-x64 | IPI funcional para acordar APs sob demanda | 100 | LAPIC (✅) |
-| IPI handler registrável | echOS-x64 | Callback por vetor IPI | 50 | send_ipi |
-| PerCpu dinâmico | RuVix SMP | Alocar PerCpu por AP + GS.base individual | 300 | Alocador frames (✅) |
-| | **Total** | | **~560** | |
+Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 1050 (GP107)**:
+- **CPU**: AVX2 + FMA é o teto (sem AMX, AVX-512, APX, NPU)
+- **GPU**: firmware NVIDIA Pascal **disponível** em linux-firmware (FECS/GPCCS signed)
+- **NPU**: irrelevante (sem HW, firmware fechado)
+- **Foco**: SMP 4 cores primeiro (garantido), GPU segundo (viável, complexo)
 
-### 🟢 Bloco 21b — Work-Stealing + Parallel Matmul — Sprint N+1
-**Distribuir agents entre 4 cores + paralelizar forward pass**
-
-| Item | Origem | O que | LOC | Dependência |
-|---|---|---|---|---|
-| Work-stealing Chase-Lev | crossbeam-deque + fast-steal | Deques por core, steal quando vazio | 400 | PerCpu + SPSC |
-| Parallel-for AVX2 matmul | avx_parallel + burn-flex | Chunk hidden dim por core, sem lock | 300 | Work-stealing |
-| AgentScheduler multicore | moss-kernel | 4 run queues, steal entre cores | 200 | Work-stealing |
-| Per-CPU slab allocator | moss-kernel | Alocar sem lock no hot path | 300 | PerCpu |
-| | **Total** | | **~1200** | |
-
-### 🟢 Bloco 21c — GPU Foundations — Sprint N+2
-**RTX 1050 como device de compute: BAR mapping, doorbell, job ring**
+## 🟡 Bloco 21c — GPU Foundations — Sprint 84
+**RTX 1050 (GP107 Pascal) como device de compute. Firmware disponível em linux-firmware desde 2017.**
 
 | Item | Origem | O que | LOC | Dependência |
 |---|---|---|---|---|
-| GPU BAR0/BAR1 mapping UC | nova-core + NVIDIA DM | Mapear BARs como uncacheable para MMIO | 300 | NVMe (✅) |
-| PCIe doorbell register | nova-core | Setup de doorbell para submissão de jobs | 100 | BAR0 mapping |
+| GPU BAR0/BAR1 mapping UC | nova-core + pascal-egpu | Mapear BARs como uncacheable para MMIO | 300 | NVMe (✅) |
+| ACR secure boot | pascal-egpu + nouveau | Carregar firmware signed FECS/GPCCS (disponível) | 600 | BAR0 mapping |
+| PCIe doorbell register | nova-core + pascal-egpu | Setup de doorbell para submissão de jobs | 100 | BAR0 mapping |
 | GPU SPSC job ring | monadic-hypervisor + dmaplane | CPU enfileira, GPU consome | 300 | Doorbell |
-| VRAM buddy allocator | coconutOS + nova-core | Gerenciar 4GB VRAM | 400 | BAR1 mapping |
-| | **Total** | | **~1100** | |
+| VRAM buddy allocator | coconutOS + nova-core | Gerenciar 4GB GDDR5 | 400 | BAR1 mapping |
+| | **Total** | | **~1700** | |
 
-### 🟢 Bloco 21d — GPU Decode (BitNet offload) — Sprint N+3
+**Risco:** ACR secure boot requer WPR setup + signature patching. Seguir nouveau + pascal-egpu. Reclocking NÃO é necessário para compute funcional (roda em clock padrão).
+
+**Status:** 🟡 Agendado
+
+## 🟡 Bloco 21d — GPU Decode (BitNet offload) — Sprint 85
 **Decode do BitNet roda na GPU. Prefill fica na CPU.**
 
 | Item | Origem | O que | LOC | Dependência |
@@ -62,18 +58,9 @@ Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 | XQueue (preemptível) | XSched (OSDI) | Fila de comandos GPU com preempção | 600 | GPU ring |
 | | **Total** | | **~1500** | |
 
-### 🟢 Bloco 21e — Polimento — Sprint N+4
-**Profissionalizar: backend matmul, scheduler CFS, co-existência GPU+display**
+**Status:** 🟡 Agendado
 
-| Item | Origem | O que | LOC | Dependência |
-|---|---|---|---|---|
-| burn-flex backend port | burn-flex (tracel-ai) | SIMD gemm + quantization testado | 800 | gemm existente |
-| MSched memory scheduling | MSched (arXiv 2512.24637) | Evicção ótima de VRAM (Belady) | 500 | VRAM allocator |
-| CFS scheduler | echOS-x64 + moss-kernel | Completely Fair Scheduler para agents | 500 | Work-stealing |
-| GPU + Display co-existência | coconutOS | iGPU display + dGPU compute | 300 | GPU funcional |
-| | **Total** | | **~2100** | |
-
-### 🟡 Bloco 30 — JARVIS Persona + Cognitive (pós-SMP)
+### 🟡 Bloco 30 — JARVIS Persona + Cognitive — Sprint 86
 **Reordenado para depois da infraestrutura SMP. JARVIS ganha com paralelismo.**
 
 | Item | O que | LOC | Depende de |
@@ -97,7 +84,9 @@ Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 | SleepCycle Agent | ~780 | CronAgent (✅) |
 | | **Total** | **~3280** | |
 
-### 🟡 Bloco 31 — JARVIS Security + AHCI (pós-SMP)
+**Status:** 🟡 Agendado
+
+### 🟡 Bloco 31 — JARVIS Security + AHCI — Sprint 87
 
 | Item | O que | LOC |
 |---|---|---|
@@ -107,7 +96,9 @@ Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 | AHCI driver (SATA 6G NCQ) | ~700 |
 | | **Total** | **~1200 LOC** |
 
-### 🔴 Bloco 32+ — AIOS Evolution (pós B-01)
+**Status:** 🟡 Agendado
+
+### 🔴 Bloco 32+ — AIOS Evolution — Sprint 88+
 **Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
 
 | Item | LOC | Bloqueador |
@@ -121,6 +112,8 @@ Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 | SKYNET Mesh | ~300 | 🔴 B-01 |
 | WiFi | ~1000 | 🔴 B-01 |
 | | **Total** | **~7500 LOC** |
+
+**Status:** 🔴 Bloqueado (B-01)
 
 ## Funcionalidades por Camada
 

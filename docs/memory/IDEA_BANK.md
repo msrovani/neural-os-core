@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-07-05 — ADR-0037 SMP+GPU Research (30 fontes, 5 sprints, 19 novas ideias #318-#337)  
+**Última atualização:** 2026-07-05 — ADR-0037 v4 Pesquisa Expandida AMD+Intel+NPU+Apple+NVIDIA (50+ fontes, 5 vendors, 37 novas ideias #318-#354, Matriz de Decisão por HW Real). Bloco 21a/21b/21e completos (SMP Foundation, Work-Stealing, Polimento).  
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -131,71 +131,78 @@ Nada é descartado sem registro. Ideias podem ser:
 |---|---|---|---|---|
 | 16 | APIC Local (LAPIC) init no BSP | ✅ Block 1 | Sprint 18 | Implementado: SVR, TPR, timer masked. |
 | 17 | IOAPIC init (roteamento IRQ externo) | ✅ Block 1 | Sprint 18 | Implementado: timer→vec32, keyboard→vec33. |
-| 18 | x2APIC mode (MSR-based, sem MMIO) | 🟡 Sprint 18+ | Sprint 18+ | MSR APIC_BASE lido. x2APIC enable postergado para SMP. |
+| 18 | x2APIC mode (MSR-based, sem MMIO) | ✅ Bloco 21a | Sprint 81 | x2APIC enable implementado no SMP Foundation. |
 | 19 | MADT parsing (ACPI → LAPIC list) | ✅ Block 1 | Sprint 18 | Implementado: type 0 (LAPIC), type 1 (IOAPIC), type 2 (x2APIC). |
 | 20 | CPUID leaf 0x1A (P-core / E-core detection) | ✅ Block 2 | Sprint 19 | Essencial para CorePools inteligente. |
 | 21 | CPUID leaf 0x0B (Extended Topology) | ✅ Block 2 | Sprint 19 | Necessário para distinguir HT de cores físicos. |
 | 22 | CorePools / ComputePools (P→Ring0/1, E→Ring2) | ✅ Block 2 | Sprint 19 | Atribuição por tipo de core + fallback homogêneo. |
 | 23 | Algoritmo `assign_cores()` — P/E-aware + N+1 + fallback | ✅ Block 2 | Sprint 19 | Adicionado ao Block 2 após cross-ref. |
-| 24 | PerCpu struct (core_id, lapic_id, core_type, ring, stack, queue) | ✅ Block 2 | Sprint 19 | Essencial para APs saberem quem são. |
-| 25 | GS.base segment register per-core | ✅ Block 2 | Sprint 19 | Mecanismo de acesso ao PerCpu. |
-| 26 | INIT-SIPI-SIPI via LAPIC ICR | ✅ Block 2 | Sprint 19 | Protocolo Intel de wake. |
+| 24 | PerCpu struct (core_id, lapic_id, core_type, ring, stack, queue) | ✅ Bloco 21a | Sprint 81 | PerCpu dinâmico implementado no SMP Foundation. |
+| 25 | GS.base segment register per-core | ✅ Bloco 21a | Sprint 81 | GS.base individual por AP implementado. |
+| 26 | INIT-SIPI-SIPI via LAPIC ICR | ✅ Bloco 21a | Sprint 81 | IPI funcional para acordar APs sob demanda. |
 | 27 | Trampoline assembly (16→32→PAE→64→Rust) | ✅ Block 2 | Sprint 19 | Ponte entre modo real e long mode. |
-| 28 | AP startup IPI (BSP → INIT → SIPI → SIPI) | ✅ Block 2 | Sprint 19 | Depende do trampoline + alloc_below_1mb. |
-| 29 | Stack separada por core (64 KB cada) | ✅ Block 2 | Sprint 19 | Essencial para APs não compartilharem stack. |
+| 28 | AP startup IPI (BSP → INIT → SIPI → SIPI) | ✅ Bloco 21a | Sprint 81 | AP startup implementado no SMP Foundation. |
+| 29 | Stack separada por core (64 KB cada) | ✅ Bloco 21a | Sprint 81 | Stack separada por AP implementada. |
 | 30 | Regras de escalonamento por pool | ✅ Block 2 | Sprint 19 | Tabela: qual trabalho → qual pool. |
 | 31 | "Se só E-cores, tudo roda em E-cores mais lentos" | ✅ Block 2 | Sprint 19 | Caso de borda documentado. |
 | 32 | "Se 1 core apenas (QEMU -smp 1), tudo no mesmo core" | ✅ Block 2 | Sprint 19 | Caso de borda documentado. |
 | 33 | "HT: 1 thread por core físico no Ring 0/1, restante no Ring 2" | ✅ Block 2 | Sprint 19 | Regra de atribuição incluída. |
 | 34 | `acpi` crate para parser MADT/PPTT | 🟡 Sprint 18+ | Sprint 18+ | Parser ACPI mínimo implementado (sem crate externo). |
 | 35 | `raw-cpuid` crate para detecção de features | 🟡 Block 2 | Sprint 19 | No MVP, CPUID inline assembly. |
+| 36 | SPSC ring lockless (bbqueue) | ✅ Bloco 21a | Sprint 81 | Fila lock-free Single-Producer Single-Consumer implementada. |
+| 37 | `#[repr(align(64))]` cross-core | ✅ Bloco 21a | Sprint 81 | Prevenção de false sharing em atomics compartilhados. |
+| 38 | IPI handler registrável | ✅ Bloco 21a | Sprint 81 | Callback por vetor IPI implementado. |
+| 39 | Work-stealing Chase-Lev | ✅ Bloco 21b | Sprint 82 | Deques por core, steal quando vazio implementado. |
+| 40 | Parallel-for AVX2 matmul | ✅ Bloco 21b | Sprint 82 | Chunk hidden dim por core, sem lock implementado. |
+| 41 | AgentScheduler multicore | ✅ Bloco 21b | Sprint 82 | 4 run queues, steal entre cores implementado. |
+| 42 | Per-CPU slab allocator | ✅ Bloco 21b | Sprint 82 | Alocar sem lock no hot path implementado. |
 
 ### 1.3. NPU (AMD XDNA)
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 36 | `Npu` struct + `try_init()` via PCI scan | 💰 Sponsor | Sprint 25+ | Requer AMD APU real (XDNA) ou QEMU com NPU virtual. |
-| 37 | `Accelerator::XDNA(Npu)` / `Accelerator::Software` enum | 💰 Sponsor | Sprint 25+ | Depende de #36. |
-| 38 | Command queue circular + doorbell write | 💰 Sponsor | Sprint 25+ | Requer documentação do XDNA. |
-| 39 | Overlay loading via MMIO | 💰 Sponsor | Sprint 25+ | Vendor-specific. AMD Vitis AI compiler. |
-| 40 | MSI-X interrupt registration | 💰 Sponsor | Sprint 25+ | Depende de #36 + IOAPIC/MSI. |
-| 41 | Fallback automático: init_npu() → se falha → Software | ✅ Block 4 | Sprint 21 | Se NPU ausente, cai para software. |
-| 42 | 3 cenários: QEMU / APU sem driver / APU com driver | 🟡 Block 4 | Sprint 21 | Lógica de fallback documentada. |
-| 43 | Cadeia de programação: Modelo → Overlay → DRAM | 💰 Sponsor | Sprint 25+ | Requer toolchain AMD Vitis. |
-| 44 | Ring 0 MLP NÃO precisa do NPU — 20 pesos rodam em 1 core | ✅ Block 4 | Sprint 21 | Premissa arquitetural adotada. |
-| 45 | Caminho de migração: QEMU → APU f1 → f2 → f3 | 💰 Sponsor | Sprint 25+ | Depende de patrocínio/hardware. |
+| 43 | `Npu` struct + `try_init()` via PCI scan | 💰 Sponsor | Sprint 25+ | Requer AMD APU real (XDNA) ou QEMU com NPU virtual. |
+| 44 | `Accelerator::XDNA(Npu)` / `Accelerator::Software` enum | 💰 Sponsor | Sprint 25+ | Depende de #43. |
+| 45 | Command queue circular + doorbell write | 💰 Sponsor | Sprint 25+ | Requer documentação do XDNA. |
+| 46 | Overlay loading via MMIO | 💰 Sponsor | Sprint 25+ | Vendor-specific. AMD Vitis AI compiler. |
+| 47 | MSI-X interrupt registration | 💰 Sponsor | Sprint 25+ | Depende de #43 + IOAPIC/MSI. |
+| 48 | Fallback automático: init_npu() → se falha → Software | ✅ Block 4 | Sprint 21 | Se NPU ausente, cai para software. |
+| 49 | 3 cenários: QEMU / APU sem driver / APU com driver | 🟡 Block 4 | Sprint 21 | Lógica de fallback documentada. |
+| 50 | Cadeia de programação: Modelo → Overlay → DRAM | 💰 Sponsor | Sprint 25+ | Requer toolchain AMD Vitis. |
+| 51 | Ring 0 MLP NÃO precisa do NPU — 20 pesos rodam em 1 core | ✅ Block 4 | Sprint 21 | Premissa arquitetural adotada. |
+| 52 | Caminho de migração: QEMU → APU f1 → f2 → f3 | 💰 Sponsor | Sprint 25+ | Depende de patrocínio/hardware. |
 
 ### 1.4. AI-Driven Hardware Detection
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 46 | `HardwareInventory::collect()` | ✅ Block 4 | Sprint 21 | Coração do Block 4. |
-| 47 | `cortex::infer_architecture(&inventory)` | ✅ Block 4 | Sprint 21 | MLP 512→256→64→9 ternário. |
-| 48 | MLP 512→256→64→9 ternário (~37 KB, pesos embutidos) | ✅ Block 4 | Sprint 21 | ~150k pesos ternários em .rodata. |
-| 49 | `SystemArchitecture` struct (12 saídas categóricas) | ✅ Block 4 | Sprint 21 | ring0, ring1, ring2, heap, sfs, trust, power, tiers. |
-| 50 | Boot flow adaptativo: collect → infer → init | ✅ Block 4 | Sprint 21 | Substitui boot sequence fixo atual. |
-| 51 | Treinamento offline do MLP (10k hardware profiles) | ⏳ Pós-MVP | Sprint 21+ | Pesos iniciais heurísticos. Treinamento real depois. |
-| 52 | Atualização do MLP via skill WASM | ⏳ Pós-MVP | Sprint 25+ | Requer WASM embedder. |
-| 53 | Fallback seguro: MLP absurdo → valores default clamped | ✅ Block 4 | Sprint 21 | Heap mínimo 64 KB, ring0 sempre fallback software. |
-| 54 | "MLP cabe no kernel — 37 KB no .rodata" | ✅ Block 4 | Sprint 21 | Premissa verificada. |
-| 55 | "Inferência é rápida — µs" | ✅ Block 4 | Sprint 21 | MLP ternário em 1 core = microssegundos. |
+| 53 | `HardwareInventory::collect()` | ✅ Block 4 | Sprint 21 | Coração do Block 4. |
+| 54 | `cortex::infer_architecture(&inventory)` | ✅ Block 4 | Sprint 21 | MLP 512→256→64→9 ternário. |
+| 55 | MLP 512→256→64→9 ternário (~37 KB, pesos embutidos) | ✅ Block 4 | Sprint 21 | ~150k pesos ternários em .rodata. |
+| 56 | `SystemArchitecture` struct (12 saídas categóricas) | ✅ Block 4 | Sprint 21 | ring0, ring1, ring2, heap, sfs, trust, power, tiers. |
+| 57 | Boot flow adaptativo: collect → infer → init | ✅ Block 4 | Sprint 21 | Substitui boot sequence fixo atual. |
+| 58 | Treinamento offline do MLP (10k hardware profiles) | ⏳ Pós-MVP | Sprint 21+ | Pesos iniciais heurísticos. Treinamento real depois. |
+| 59 | Atualização do MLP via skill WASM | ⏳ Pós-MVP | Sprint 25+ | Requer WASM embedder. |
+| 60 | Fallback seguro: MLP absurdo → valores default clamped | ✅ Block 4 | Sprint 21 | Heap mínimo 64 KB, ring0 sempre fallback software. |
+| 61 | "MLP cabe no kernel — 37 KB no .rodata" | ✅ Block 4 | Sprint 21 | Premissa verificada. |
+| 62 | "Inferência é rápida — µs" | ✅ Block 4 | Sprint 21 | MLP ternário em 1 core = microssegundos. |
 
 ### 1.5. Memory Hierarchy Index (MHI)
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 56 | `struct MemoryTier { device, kind, capacity, bandwidth, latency }` | ✅ Block 4 | Sprint 21 | Adicionado ao MVP (cross-ref). |
-| 57 | `struct MemoryHierarchy { tiers: Vec<MemoryTier> }` ordenado | ✅ Block 4 | Sprint 21 | Adicionado ao MVP. |
-| 58 | `enum AllocTier { Dram, Vram, Nvme, Hdd }` | ✅ Block 4 | Sprint 21 | Adicionado ao MVP. |
-| 59 | `fn alloc_by_tier(tier, size) -> Option<PhysAddr>` | ✅ Block 4 | Sprint 21 | Dram implementado. Vram/Nvme → None com diagnóstico. |
-| 60 | `AllocTier::Vram` → alocar no BAR da GPU | ⏳ Pós-MVP | Sprint 23+ | Requer driver GPU + BAR mapeado. |
-| 61 | `AllocTier::Nvme` → alocar no NVMe via SFS | ⏳ Pós-MVP | Sprint 24+ | Requer NVMe driver + SFS. |
-| 62 | `AllocTier::Hdd` → cold storage | ⏳ Pós-MVP | Sprint 24+ | Requer SFS + driver ATA/NVMe. |
-| 63 | MLP saídas: heap_tier, tensor_tier, kv_cache_tier, sfs_active_tier | ✅ Block 4 | Sprint 21 | 4 tiers de saída no MLP do MVP. |
-| 64 | MLP saídas opcionais: sfs_cold_tier, tensor_swap_tier, skill_heap_tier | 🟡 Block 4 | Sprint 21 | Campos opcionais no SystemArchitecture. |
-| 65 | Exemplo real: notebook i5 + GTX 1050 + NVMe + HDD | ✅ Doc | README | Caso de uso documentado. |
-| 66 | Exemplo real: Xeon 6900 (1 TB RAM, NVMe RAID) | ✅ Doc | ADR-0015 | Caso de uso documentado. |
-| 67 | Exemplo real: AMD APU Strix Point (unified memory) | ✅ Doc | ADR-0015 | Caso de uso documentado. |
+| 63 | `struct MemoryTier { device, kind, capacity, bandwidth, latency }` | ✅ Block 4 | Sprint 21 | Adicionado ao MVP (cross-ref). |
+| 64 | `struct MemoryHierarchy { tiers: Vec<MemoryTier> }` ordenado | ✅ Block 4 | Sprint 21 | Adicionado ao MVP. |
+| 65 | `enum AllocTier { Dram, Vram, Nvme, Hdd }` | ✅ Block 4 | Sprint 21 | Adicionado ao MVP. |
+| 66 | `fn alloc_by_tier(tier, size) -> Option<PhysAddr>` | ✅ Block 4 | Sprint 21 | Dram implementado. Vram/Nvme → None com diagnóstico. |
+| 67 | `AllocTier::Vram` → alocar no BAR da GPU | 🟡 Bloco 21c | Sprint 84 | Requer driver GPU + BAR mapeado. |
+| 68 | `AllocTier::Nvme` → alocar no NVMe via SFS | ⏳ Pós-MVP | Sprint 24+ | Requer NVMe driver + SFS. |
+| 69 | `AllocTier::Hdd` → cold storage | ⏳ Pós-MVP | Sprint 24+ | Requer SFS + driver ATA/NVMe. |
+| 70 | MLP saídas: heap_tier, tensor_tier, kv_cache_tier, sfs_active_tier | ✅ Block 4 | Sprint 21 | 4 tiers de saída no MLP do MVP. |
+| 71 | MLP saídas opcionais: sfs_cold_tier, tensor_swap_tier, skill_heap_tier | 🟡 Block 4 | Sprint 21 | Campos opcionais no SystemArchitecture. |
+| 72 | Exemplo real: notebook i5 + GTX 1050 + NVMe + HDD | ✅ Doc | README | Caso de uso documentado. |
+| 73 | Exemplo real: Xeon 6900 (1 TB RAM, NVMe RAID) | ✅ Doc | ADR-0015 | Caso de uso documentado. |
+| 74 | Exemplo real: AMD APU Strix Point (unified memory) | ✅ Doc | ADR-0015 | Caso de uso documentado. |
 
 ### 1.6. Periféricos (PCI, NVMe, VirtIO)
 
@@ -1479,4 +1486,21 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-05 | **334** | **MSched evicção VRAM** — Belady (OPT) eviction policy para VRAM. Prediz working set do próximo kernel GPU, pré-carrega de DRAM, evicção ótima. Referência: arXiv 2512.24637. | 🟡 Bloco 29 | Sprint N+4 | ~500 LOC |
 | 2026-07-05 | **335** | **CFS scheduler (Completely Fair)** — Substituir round-robin do AgentScheduler por CFS baseado em vruntime. Fairness entre agents. Referência: echOS-x64 + moss-kernel. | 🟡 Bloco 29 | Sprint N+4 | ~500 LOC |
 | 2026-07-05 | **336** | **GPU + Display co-existência** — iGPU (Intel) faz display (framebuffer), dGPU (NVIDIA) faz compute. Quando só dGPU existe, time-sharing via XQueue. Referência: coconutOS. | 🟡 Bloco 29 | Sprint N+4 | ~300 LOC |
-| 2026-07-05 | **337** | **SMP+GPU Research (ADR-0037)** — 30 fontes analisadas (arXiv, GitHub, crates.io, listas kernel). coconutOS identificado como blueprint. nova-core como referência BAR1/MMIO. burn-flex como backend matmul futuro. LithOS/Agent.xpu como fronteira de GPU scheduling. Plano 5 sprints SPSC→IPI→PerCpu→Work-stealing→GPU. | ✅ ADR-0037 | N | ~900 LOC ADR |
+| 2026-07-05 | **337** | **SMP+GPU Research (ADR-0037 v1)** — 30 fontes analisadas (arXiv, GitHub, crates.io, listas kernel). | ✅ ADR-0037 | N | ~900 LOC ADR |
+| 2026-07-05 | **338** | **Pesquisa Expandida AMD+Intel+NPU+Apple+NVIDIA bare-metal** — ADR-0037 v2 expandido. Cobertura completa: AMD ROCm/KFD/TrustOS, Intel Level Zero/Xe, NPU XDNA+Intel NPU, Apple Silicon honeycrisp/aruminium/metaltile, processadores modernos AMX/AVX-512/APX, abordagens multiplataforma Rust GPU. Matriz de decisão por HW real. **Descoberta crítica:** firmware NVIDIA Pascal GP107 está disponível em linux-firmware desde 2017, desbloqueando ACR secure boot para RTX 1050. | ✅ ADR-0037 v2 | N | +300 LOC ADR |
+| 2026-07-05 | **339** | **TrustOS (nathan237) — Blueprint bare-metal AMD GPU em Rust** — 264K LOC, zero blobs. AMD GPU bring-up do zero: SDMA engine, ring buffer, firmware loading no RX 580X (Polaris 10). Root cause de 14 iterações: Graphics Memory Controller desinicializado. Prova que bare-metal GPU em Rust no_std é VIÁVEL. | 🔵 Referência | — | ADR-0037 |
+| 2026-07-05 | **340** | **pascal-egpu (TheTom) — Blueprint NVIDIA Pascal GPU do zero** — GTX 1060 (mesma arquitetura GP107 da RTX 1050) via BAR MMIO. ✅ BAR0 acesso ✅ PMC_BOOT_0 ✅ PTIMER. Plano 8 fases: PCIe → BAR → ACR → FIFO → GR → Compute. Firmware signed disponível em linux-firmware. **Referência primária para GPU compute no neural-os-core.** | 🔵 Referência | — | ADR-0037 |
+| 2026-07-05 | **341** | **folkering-os — AI-native OS similar ao nosso** — SMP 4 cores, AVX2+FMA, VirtIO-GPU, WASM JIT, smoltcp, lock-free telemetry ring, self-healing, capability tokens. 4 meses de desenvolvimento solo. Prova que nossa arquitetura (Rust no_std, SMP, AVX2, WASM, AI-native) é viável em timeline curta. | 🔵 Referência | — | ADR-0037 |
+| 2026-07-05 | **342** | **honeycrisp (cyberia-to) — Apple Silicon GPU/NEON/AMX/ANE bare-metal Rust** — Quatro crates: unimem (memória compartilhada), acpu (NEON+AMX), aruminium (Metal GPU puro Rust, 1.79× faster), rane (ANE). Prova que acesso bare-metal a todos compute units Apple é possível. | 🔵 Referência futuro (ARM64) | — | ADR-0037 |
+| 2026-07-05 | **343** | **AMD ROCm + KFD — Compute via Linux kernel** — RDNA2/3 suportado via /dev/kfd. T0-GPU (50K LOC Rust) prova AMD compute em Rust via KFD. TheRock (AMD) tem pure-Python KFD driver. **Não bare-metal** — depende de Linux. | ❌ Descartado (nosso HW NVIDIA) | — | ADR-0037 |
+| 2026-07-05 | **344** | **Intel Level Zero + Xe GPU Compute** — Intel Compute Runtime suporta Tiger Lake+ (Gen12+). **Skylake (i5-6400) NÃO é suportado** (Gen9 mínimo). Intel HD Graphics 530 não tem Level Zero, XMX, nem compute capability. | ❌ Descartado (incompatível HW) | — | ADR-0037 |
+| 2026-07-05 | **345** | **NPU AMD XDNA — Spatial dataflow accelerator** — Firmware fechado, toolchain offline (MLIR-AIE/IRON/Triton-XDNA), sem programabilidade geral. XDNA1 abandonado pela AMD no Linux. XDNA2 suportado via Ryzen AI Software. Performance máxima: ~68 GFLOPS (512³ int16) no XDNA1. | ❌ Descartado (sem HW, firmware fechado) | — | ADR-0037 |
+| 2026-07-05 | **346** | **NPU Intel — LEON RT + NCE tiles** — Firmware fechado, OpenVINO+Level Zero, offline compile. NPU 3720 (Meteor Lake) 9.5 TOPS, NPU 4000 (Lunar Lake) 48 TOPS. **Nosso i5-6400 não tem NPU.** | ❌ Descartado (sem HW) | — | ADR-0037 |
+| 2026-07-05 | **347** | **AMX/AVX-512/APX — Feature set moderno** — AMX em Sapphire Rapids+ (Xeon 2023). AVX-512 em Skylake-SP (Xeon) e Rocket Lake (2021). APX em Nova Lake+ (2026+). P-cores/E-cores em Alder Lake+ (2021). **i5-6400 (Skylake client) não tem nenhum.** AVX2+FMA é o máximo disponível. | ❌ Descartado (HW incompatível) | — | ADR-0037 |
+| 2026-07-05 | **348** | **any-gpu (cochranblock) — Tensor engine wgpu multi-GPU** — CausalLM, SDPA, GQA, LayerPager. Roda em qualquer GPU via wgpu (Vulkan/Metal/DX12). 309 testes. **Não bare-metal** — depende de driver gráfico do SO. Inspiração para design de API. | 🔵 Referência arquitetural | — | ADR-0037 |
+| 2026-07-05 | **349** | **NVIDIA firmware Pascal GP107 — Signed FECS+GPCCS em linux-firmware** — Descoberta crítica: firmware signed para Pascal GP102/GP104/GP106/GP107 disponível desde março 2017 (Phoronix). Blobs: fecs_bl, fecs_data, fecs_inst, fecs_sig, gpccs_bl, gpccs_data, gpccs_inst, gpccs_sig, sw_bundle_init, sw_ctx. **Freely distributable.** Isto desbloqueia ACR secure boot para RTX 1050. | ✅ FIRMWARE DISPONÍVEL | N+2 | ADR-0037 |
+| 2026-07-05 | **350** | **nova-core (NVIDIA/KHaddock) — Driver NVIDIA oficial em Rust** — Em desenvolvimento no LKML (2025-2026). Suporta Ampere+ (GSP). Pascal NÃO é target (Pascal usa Falcon, não GSP). **Referência arquitetural:** estrutura de driver GPU profissional em Rust, BAR mapping, doorbell, channel management. | 🔵 Referência arquitetural | — | ADR-0037 |
+| 2026-07-05 | **351** | **Matriz de Decisão por HW Real (i5-6400 + RTX 1050)** — Pesquisa expandida conclui: para nosso HW, APENAS SMP 4 cores (AVX2+FMA) e NVIDIA Pascal GPU compute são viáveis. Todo o resto (AMD GPU, Intel compute, NPU, AMX, AVX-512, Apple) é irrelevante. Prioridade: SMP (garantido) → GPU (viável, blocker ACR mitigado). | ✅ ADR-0037 v2 | N | ADR-0037 |
+| 2026-07-05 | **352** | **ACR Secure Boot — Pipeline para RTX 1050** — Implementar ACR (Authenticated Code Radix) seguindo nouveau + pascal-egpu: (1) Carregar FECS blobs do linux-firmware, (2) WPR setup em VRAM, (3) Carregar LS ucode no GR engine falcon, (4) Verificar signature. Pipe: linux-firmware → kernel → BAR0 → SEC2 → PMU → GR. | 🟡 Bloco 27 (GPU Foundations) | Sprint N+2 | ~600 LOC |
+| 2026-07-05 | **353** | **GPU Compute Pipeline completo (RTX 1050)** — Pipeline de submissão: BAR0 MMIO → PMC BOOT → DEVINIT → FB init → MMU v2 → ACR → PFIFO → GR init → Compute dispatch. Pipeline de execução: CPU prepara QMD → pushbuffer → GPFIFO entry → doorbell → GPU executa → completion notificação. | 🟡 Bloco 27-28 | Sprint N+2 a N+3 | ~2500 LOC total |
+| 2026-07-05 | **354** | **TrustOS lessons para GPU bare-metal** — Lições chave de TrustOS: (1) GMC (Graphics Memory Controller) e VM são a causa raiz de falhas — não registros, não PCIe link; (2) Ring buffer precisa estar em GART (Graphics Aperture Remap Table); (3) RPTR/WPTR avançando = firmware responsivo; (4) Firmware loading é sequencial e frágil — um passo errado e tudo aborta. | 🔵 Referência arquitetural | — | ADR-0037 |
