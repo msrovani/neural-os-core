@@ -106,9 +106,45 @@ pub fn _print(args: fmt::Arguments) {
     let n = buf.iter().position(|&b| b == 0).unwrap_or(256);
     log.write(&buf[..n], tick);
 
-    // Se nao tem serial, tenta display via VGA/framebuffer
-    if !serial_avail {
+    if serial_avail {
+        // Serial presente — log ja foi escrito acima
+    } else {
+        // Sem serial (HW real): escreve no disco FAT32 + fallback framebuffer
         let _ = crate::vga_buffer::fb_print(args);
+        write_to_disk_journal(&buf[..n], tick);
+    }
+}
+
+/// Tenta escrever no arquivo de sessao no disco FAT32 (HW real sem serial)
+fn write_to_disk_journal(data: &[u8], tick: u64) {
+    use alloc::vec;
+    let sfn = {
+        let g = crate::boot_logger::SESSION_FILENAME.lock();
+        g.clone()
+    };
+    if let Some(ref name) = sfn {
+        unsafe {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata_guard {
+                let parts = crate::fat::read_mbr(ata);
+                for part in &parts {
+                    if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+                        let writer = crate::fat::Fat32Writer::new(ata, part);
+                        if let Some(w) = writer {
+                            if let Some(existing) = w.reader.read_file(name) {
+                                let mut new_data = existing;
+                                let ts = alloc::format!("[T+{}] ", tick);
+                                new_data.extend_from_slice(ts.as_bytes());
+                                new_data.extend_from_slice(data);
+                                if !data.ends_with(b"\n") { new_data.push(b'\n'); }
+                                w.write_file(name, &new_data);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 

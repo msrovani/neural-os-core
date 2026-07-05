@@ -269,7 +269,7 @@ impl<'a> Fat32Reader<'a> {
 // Usado pelo boot_logger para persistir log de boot em disco.
 
 pub struct Fat32Writer<'a> {
-    reader: Fat32Reader<'a>,
+    pub reader: Fat32Reader<'a>,
 }
 
 impl<'a> Fat32Writer<'a> {
