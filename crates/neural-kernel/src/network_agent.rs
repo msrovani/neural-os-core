@@ -19,9 +19,10 @@ struct NetState {
     http: Option<HttpConn>,
     target_ip: [u8; 4],
     dns_tries: u32,
+    dev_env_detected: bool,
 }
 
-static NET_STATE: Mutex<NetState> = Mutex::new(NetState { tick: 0, phase: 0, http: None, target_ip: [0; 4], dns_tries: 0 });
+static NET_STATE: Mutex<NetState> = Mutex::new(NetState { tick: 0, phase: 0, http: None, target_ip: [0; 4], dns_tries: 0, dev_env_detected: false });
 
 pub fn network_agent_tick() {
     let mut s = NET_STATE.lock();
@@ -61,51 +62,76 @@ pub fn network_agent_tick() {
     }
 
     match s.phase {
-        // Phase 0: init netstack + apply static IP when MAC is known
+        // Phase 0: init netstack + detect dev env
         0 => {
             if tick >= 10 {
                 let mac = NET_CONFIG.lock().mac;
                 if mac != [0; 6] {
                     init_netstack(mac);
-                    // Apply static IP on next tick (phase 1)
+                    // Detect dev environment (QEMU/VBox vs HW real)
+                    if !s.dev_env_detected {
+                        let is_dev = crate::net::detect_dev_env();
+                        NET_CONFIG.lock().is_dev_env = is_dev;
+                        s.dev_env_detected = true;
+                        if is_dev {
+                            log(tick, "Dev environment detected (QEMU/VBox) - will use static IP");
+                        } else {
+                            log(tick, "HW real detected - will use DHCP");
+                        }
+                    }
                     s.phase = 1;
                 }
             }
         }
-        // Phase 1: DHCP → DNS → HTTP (fallback static IP se DHCP timeout)
+        // Phase 1: DHCP (HW real) or static IP (dev env) → DNS → HTTP
         1 => {
-            // DHCP poll ate conseguir lease
-            let dhcp_done = {
-                let mut ns_guard = NETSTACK.lock();
-                if let Some(ref mut ns) = *ns_guard {
-                    if !ns.dhcp_done {
-                        let (got, gw, dns) = ns.dhcp_poll(ms as i64);
-                        if tick % 50 == 0 {
-                            log(tick, &alloc::format!("DHCP poll: got={} tx={} rx={}",
-                                got, crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
-                        }
-                        if got {
-                            NET_CONFIG.lock().configured = true;
-                            NET_CONFIG.lock().online = true;
-                            NET_CONFIG.lock().dns_ip = dns;
-                            NET_CONFIG.lock().gateway_ip = gw;
-                            log(tick, &alloc::format!("DHCP OK. gw={}.{}.{}.{} dns={}.{}.{}.{}",
-                                gw[0], gw[1], gw[2], gw[3],
-                                dns[0], dns[1], dns[2], dns[3]));
-                        }
+            let is_dev = NET_CONFIG.lock().is_dev_env;
+            
+            // Dev environment: use static IP immediately
+            if is_dev {
+                if !NETSTACK.lock().as_ref().map_or(false, |ns| ns.dhcp_done) {
+                    if let Some(ref mut ns) = *NETSTACK.lock() {
+                        ns.set_static_ip();
+                        NET_CONFIG.lock().configured = true;
+                        NET_CONFIG.lock().online = true;
+                        log(tick, "Dev env: using static IP 10.0.2.15/24");
                     }
-                    ns.dhcp_done
-                } else { false }
-            };
-            // Fallback: static IP se DHCP timeout (~30s = 600 ticks)
-            if !dhcp_done && tick >= 600 {
-                if let Some(ref mut ns) = *NETSTACK.lock() {
-                    ns.set_static_ip();
-                    NET_CONFIG.lock().configured = true;
-                    NET_CONFIG.lock().online = true;
-                    log(tick, "DHCP timeout, using static IP 10.0.2.15/24");
+                }
+            } else {
+                // HW real: try DHCP first
+                let dhcp_done = {
+                    let mut ns_guard = NETSTACK.lock();
+                    if let Some(ref mut ns) = *ns_guard {
+                        if !ns.dhcp_done {
+                            let (got, gw, dns) = ns.dhcp_poll(ms as i64);
+                            if tick % 50 == 0 {
+                                log(tick, &alloc::format!("DHCP poll: got={} tx={} rx={}",
+                                    got, crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+                            }
+                            if got {
+                                NET_CONFIG.lock().configured = true;
+                                NET_CONFIG.lock().online = true;
+                                NET_CONFIG.lock().dns_ip = dns;
+                                NET_CONFIG.lock().gateway_ip = gw;
+                                log(tick, &alloc::format!("DHCP OK. gw={}.{}.{}.{} dns={}.{}.{}.{}",
+                                    gw[0], gw[1], gw[2], gw[3],
+                                    dns[0], dns[1], dns[2], dns[3]));
+                            }
+                        }
+                        ns.dhcp_done
+                    } else { false }
+                };
+                // Fallback: static IP se DHCP timeout (~30s = 600 ticks)
+                if !dhcp_done && tick >= 600 {
+                    if let Some(ref mut ns) = *NETSTACK.lock() {
+                        ns.set_static_ip();
+                        NET_CONFIG.lock().configured = true;
+                        NET_CONFIG.lock().online = true;
+                        log(tick, "DHCP timeout, using static IP 10.0.2.15/24");
+                    }
                 }
             }
+            
             // Se DHCP (ou static fallback) ainda nao configurou, espera
             if !NETSTACK.lock().as_ref().map_or(false, |ns| ns.dhcp_done) { return; }
             if tick >= 40 && !s.http.is_some() && s.dns_tries < 3 {

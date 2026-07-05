@@ -24,6 +24,7 @@ pub struct NetConfig {
     pub gateway_mac: [u8; 6],
     pub configured: bool,
     pub online: bool,
+    pub is_dev_env: bool,  // QEMU/VBox dev/debug environment
 }
 
 pub static NET_CONFIG: spin::Mutex<NetConfig> = spin::Mutex::new(NetConfig {
@@ -35,6 +36,7 @@ pub static NET_CONFIG: spin::Mutex<NetConfig> = spin::Mutex::new(NetConfig {
     gateway_mac: [0; 6],
     configured: false,
     online: false,
+    is_dev_env: false,
 });
 
 pub fn wait_ticks(ticks: usize) {
@@ -47,6 +49,48 @@ pub fn wait_ticks(ticks: usize) {
         if guard >= 100_000_000 { break; }
         guard += 1;
         x86_64::instructions::hlt();
+    }
+}
+
+/// Detecta se estamos rodando em ambiente dev/debug (QEMU/VBox)
+/// Usa CPUID hypervisor bit e hypervisor name
+pub fn detect_dev_env() -> bool {
+    unsafe {
+        // CPUID leaf 0x1: ECX bit 31 indica presença de hypervisor
+        let leaf1 = core::arch::x86_64::__cpuid(1);
+        let has_hypervisor = (leaf1.ecx & (1 << 31)) != 0;
+        
+        if has_hypervisor {
+            // Hypervisor detectado, verificar nome
+            let hv = core::arch::x86_64::__cpuid(0x40000000);
+            let max_leaf = hv.eax;
+            
+            if max_leaf >= 0x40000000 {
+                let vendor_ebx = hv.ebx;
+                let vendor_ecx = hv.ecx;
+                let vendor_edx = hv.edx;
+                
+                let mut hypervisor_name = [0u8; 13];
+                let ebx_bytes = vendor_ebx.to_le_bytes();
+                let ecx_bytes = vendor_ecx.to_le_bytes();
+                let edx_bytes = vendor_edx.to_le_bytes();
+                hypervisor_name[0..4].copy_from_slice(&ebx_bytes);
+                hypervisor_name[4..8].copy_from_slice(&ecx_bytes);
+                hypervisor_name[8..12].copy_from_slice(&edx_bytes);
+                
+                let name = core::str::from_utf8(&hypervisor_name).unwrap_or("unknown");
+                serial_println!("[NET] Hypervisor detected: {}", name.trim_end_matches('\0'));
+                
+                // QEMU, KVM, VBox, VMware sao ambientes dev
+                let name_lower = name.to_ascii_lowercase();
+                return name_lower.contains("qemu") || 
+                       name_lower.contains("kvm") || 
+                       name_lower.contains("vbox") || 
+                       name_lower.contains("vmware");
+            }
+        }
+        
+        false
     }
 }
 
