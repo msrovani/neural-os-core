@@ -30,6 +30,11 @@ pub fn network_agent_tick() {
     s.tick = tick.wrapping_add(1);
     let ms = tick * 55;
 
+    // Debug inicial
+    if tick == 0 {
+        log(tick, "NetAgent tick started");
+    }
+
     // Poll interface
     if let Some(ref mut ns) = *NETSTACK.lock() {
         ns.poll(ms as i64);
@@ -58,6 +63,10 @@ pub fn network_agent_tick() {
                 }
                 _ => {}
             }
+        }
+    } else {
+        if tick % 50 == 0 {
+            log(tick, "NETSTACK not initialized");
         }
     }
 
