@@ -437,15 +437,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     display::fb::probe_uefi_framebuffer(boot_info);
     
     // Se framebuffer disponivel, NAO inicializa VGA text mode.
-    // A camada de texto VGA (0xB8000) fica overlaid sobre o framebuffer
-    // em QEMU -vga std e Intel 6xx, causando xuvisco.
+    // Desliga o VGA plane via sequenciador (0x3C4/0x3C5) em vez de
+    // limpar 0xB8000 — o bootloader nao mapeia o VGA text buffer, e
+    // escrever la causa page fault ANTES da IDT estar pronta.
     // _print() usa fb_print() primeiro; fallback VGA soh sem framebuffer.
     let has_fb = crate::display::fb::GPU.lock().is_some();
     if !has_fb {
         vga_buffer::init(pm_offset);
         crate::serial_println!("[BOOT] Sem framebuffer — usando VGA text mode.");
     } else {
-        vga_buffer::clear_physical_buffer(pm_offset);
+        vga_buffer::disable_vga_plane();
         crate::serial_println!("[BOOT] FB ativo — VGA text mode desligado.");
     }
     

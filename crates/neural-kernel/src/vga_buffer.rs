@@ -11,6 +11,18 @@ unsafe fn set_cursor(pos: u16) {
     core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos & 0xFF) as u8, options(nostack, preserves_flags));
 }
 
+/// Desliga o VGA plane via sequenciador (porta 0x3C4/0x3C5, NÃO CRTC).
+/// Seguro para Intel 6xx com UEFI GOP — não acessa CRTC (0x3D4/0x3D5) nem
+/// memoria VGA (0xB8000 pode estar desmapeada pelo bootloader).
+pub fn disable_vga_plane() {
+    unsafe {
+        // Sequencer index 0x01 = Clocking Mode Register
+        core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
+        // Set bit 5 (Screen Off) + bit 0 (8 dot font) = 0x21
+        core::arch::asm!("out dx, al", in("dx") 0x3C5u16, in("al") 0x21u8, options(nostack, preserves_flags));
+    }
+}
+
 /// Limpa o buffer fisico VGA (0xB8000) escrevendo zeros diretamente,
 /// sem acessar registros CRTC. Seguro para Intel 6xx com UEFI GOP.
 pub fn clear_physical_buffer(phys_offset: u64) {
