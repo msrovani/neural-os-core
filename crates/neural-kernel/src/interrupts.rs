@@ -22,6 +22,11 @@ static MOUSE_B0: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B1: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B2: AtomicU8 = AtomicU8::new(0);
 
+// IPI handlers para SMP
+pub static IPI_RESCHEDULE: AtomicUsize = AtomicUsize::new(0);
+pub static IPI_HALT: AtomicUsize = AtomicUsize::new(0);
+pub static IPI_CALL_FUNCTION: AtomicUsize = AtomicUsize::new(0);
+
 lazy_static! {
     static ref PICS: Mutex<ChainedPics> =
         Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
@@ -190,6 +195,26 @@ extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStac
     }
 }
 
+// IPI handlers para SMP
+extern "x86-interrupt" fn ipi_reschedule_handler(_stack_frame: InterruptStackFrame) {
+    IPI_RESCHEDULE.fetch_add(1, Ordering::Relaxed);
+    serial_println!("[IPI] Reschedule received on CPU {}", crate::smp::percpu::cpu_id());
+    unsafe { crate::apic::apic_eoi(); }
+}
+
+extern "x86-interrupt" fn ipi_halt_handler(_stack_frame: InterruptStackFrame) {
+    IPI_HALT.fetch_add(1, Ordering::Relaxed);
+    serial_println!("[IPI] Halt received on CPU {}", crate::smp::percpu::cpu_id());
+    unsafe { crate::apic::apic_eoi(); }
+    loop { x86_64::instructions::hlt(); }
+}
+
+extern "x86-interrupt" fn ipi_call_function_handler(_stack_frame: InterruptStackFrame) {
+    IPI_CALL_FUNCTION.fetch_add(1, Ordering::Relaxed);
+    serial_println!("[IPI] Call function received on CPU {}", crate::smp::percpu::cpu_id());
+    unsafe { crate::apic::apic_eoi(); }
+}
+
 // --------------------------------------------------------------------------
 // IDT init — cobertura total de 0 a 31 + hardware + syscall
 // --------------------------------------------------------------------------
@@ -229,8 +254,18 @@ lazy_static! {
         idt[33].set_handler_fn(keyboard_interrupt_handler);
         idt[44].set_handler_fn(mouse_interrupt_handler);
 
-        // Demais vetores (34-255)
-        for i in 34..=255usize { idt[i].set_handler_fn(unhandled_interrupt_handler); }
+        // IPI handlers para SMP (vetores 0x80-0x82)
+        idt[0x80].set_handler_fn(ipi_reschedule_handler);
+        idt[0x81].set_handler_fn(ipi_halt_handler);
+        idt[0x82].set_handler_fn(ipi_call_function_handler);
+
+        // Demais vetores (34-255, exceto IPI)
+        for i in 34..=255usize {
+            if i == 0x80 || i == 0x81 || i == 0x82 {
+                continue; // IPI handlers já configurados
+            }
+            idt[i].set_handler_fn(unhandled_interrupt_handler);
+        }
 
         idt
     };

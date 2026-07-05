@@ -18,6 +18,16 @@ pub const MI_BATCH_BUFFER_START: u32 = 0x31A00000;
 pub const MI_BATCH_BUFFER_END: u32 = 0x00500000;
 pub const MI_NOOP: u32 = 0x00000000;
 
+// MEDIA_OBJECT — submete compute shader para Execution Units
+pub const MEDIA_OBJECT: u32 = 0x2A000000;
+
+// PIPELINE_SELECT — alterna entre render e compute pipelines
+pub const PIPELINE_SELECT: u32 = 0x30000000;
+const PIPELINE_SELECT_MEDIA: u32 = 0x00000001;
+
+// STATE_BASE_ADDRESS — configura endereços base de estado
+pub const STATE_BASE_ADDRESS: u32 = 0x31000000;
+
 pub struct IntelRing {
     pub mmio: u64,           // BAR0 virtual
     pub ring_pa: u64,        // ring buffer physical address
@@ -26,6 +36,8 @@ pub struct IntelRing {
     pub tail: u32,
     pub has_render: bool,
     pub gen: u32,
+    pub shader_pa: u64,      // Physical address of loaded shader
+    pub shader_loaded: bool,
 }
 
 // IntelRing so contem um raw pointer + integers. Seguro para enviar entre cores.
@@ -67,7 +79,7 @@ impl IntelRing {
         };
 
         serial_println!("[INTEL] Ring buffer OK: {} (Gen{}) mmio={:#x} ring={:#x}", gpu.name, gen, mmio, ring_pa);
-        Some(IntelRing { mmio, ring_pa, ring_va, ring_size: 4096, tail: 0, has_render: true, gen })
+        Some(IntelRing { mmio, ring_pa, ring_va, ring_size: 4096, tail: 0, has_render: true, gen, shader_pa: 0, shader_loaded: false })
     }
 
     /// Escreve comandos no ring buffer e avanca tail
@@ -125,9 +137,71 @@ impl IntelRing {
 
     /// Matmul via GPU: GEN compute shader (producao futura — placeholder CPU).
     pub fn gpu_matmul(&mut self, a: &crate::tensor::Tensor, b: &crate::tensor::Tensor) -> Option<crate::tensor::Tensor> {
+        // Verifica se shader está carregado, senão carrega
+        if !self.shader_loaded {
+            if let Some(shader_pa) = self.load_gen_matmul_shader() {
+                self.shader_pa = shader_pa;
+                self.shader_loaded = true;
+                serial_println!("[INTEL-MATMUL] GEN matmul shader carregado @ {:#x}", shader_pa);
+            } else {
+                serial_println!("[INTEL-MATMUL] Falha ao carregar shader GEN — usando fallback CPU");
+                return a.matmul(b);
+            }
+        }
+
+        // TODO: Implementar execução real do shader via MEDIA_OBJECT
         // Por enquanto: fallback CPU matmul, infra GPU preparada
-        crate::serial_println!("[INTEL-MATMUL] GEN compute stub — usando fallback CPU");
+        serial_println!("[INTEL-MATMUL] GEN compute stub — usando fallback CPU");
         a.matmul(b)
+    }
+
+    /// Carrega shader GEN para matmul na VRAM (stub preparado para shader real)
+    /// Retorna physical address do shader ou None em caso de erro
+    fn load_gen_matmul_shader(&mut self) -> Option<u64> {
+        // Aloca 1 página para o shader (4KB suficiente para matmul simples)
+        let (shader_pa, shader_va) = unsafe { alloc_ring_buffer(1)? };
+
+        // TODO: Escrever shader GEN assembly real aqui
+        // Documentação GEN assembly é NDA da Intel, requer engenharia reversa
+        // do i915 driver ou uso de assembler externo
+        //
+        // Estrutura esperada do shader GEN:
+        // - MEDIA_INTERFACE_DESCRIPTOR_LOAD
+        // - MEDIA_VFE_STATE
+        // - MEDIA_CURBE_LOAD
+        // - MEDIA_OBJECT com instruções de compute (load, mul, add, store)
+        //
+        // Por enquanto, escreve um stub de NOOPs para testar alocação
+        unsafe {
+            let shader_dwords = shader_va as *mut u32;
+            for i in 0..1024 {
+                shader_dwords.add(i).write_volatile(MI_NOOP);
+            }
+        }
+
+        // Adiciona shader ao GTT para que a GPU enxergue
+        unsafe { init_gtt(self.mmio, shader_pa, 1); }
+
+        Some(shader_pa)
+    }
+
+    /// Executa shader GEN via MEDIA_OBJECT (infraestrutura preparada)
+    fn execute_gen_shader(&mut self, a_pa: u64, b_pa: u64, c_pa: u64, m: u32, n: u32, k: u32) -> bool {
+        if !self.shader_loaded {
+            serial_println!("[INTEL] Shader nao carregado — execute_gen_shader falhou");
+            return false;
+        }
+
+        // TODO: Implementar MEDIA_OBJECT para submeter shader aos EU
+        // Estrutura do batch buffer:
+        // 1. PIPELINE_SELECT (media)
+        // 2. STATE_BASE_ADDRESS (shader, surface, dynamic)
+        // 3. MEDIA_OBJECT (dispatch shader)
+        //
+        // Por enquanto, stub retorna true para não quebrar compilação
+        serial_println!("[INTEL] execute_gen_shader stub: a={:#x} b={:#x} c={:#x} {}x{}x{}",
+            a_pa, b_pa, c_pa, m, n, k);
+        true
     }
 
     /// Blitter: copia de VRAM para framebuffer (usado pelo Desktop Cube)

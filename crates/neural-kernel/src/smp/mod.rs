@@ -1,5 +1,6 @@
 pub mod percpu;
 pub mod trampoline;
+pub mod spsc;
 
 use crate::apic;
 use crate::memory;

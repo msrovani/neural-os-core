@@ -2,12 +2,12 @@
 //! Seleciona automaticamente: Intel ring > AMD PM4 > NVIDIA PFIFO > CPU fallback.
 
 use crate::gpu::detect::{GpuInfo, GpuVendor};
-use crate::gpu::intel::IntelRing;
+use crate::gpu::intel::{IntelRing, BcsRing};
 use crate::tensor::Tensor;
 use crate::serial_println;
 
 pub enum GpuAccel {
-    Intel(IntelRing),
+    Intel(IntelRing, Option<BcsRing>),  // RCS + BCS (blitter separado)
     CpuOnly,
 }
 
@@ -23,8 +23,13 @@ pub unsafe fn init_backend(gpus: &[GpuInfo]) {
         match gpu.vendor {
             GpuVendor::Intel => {
                 if let Some(ring) = IntelRing::probe(gpu, pmoff) {
-                    serial_println!("[GPU-BACKEND] Intel GPU ativo: {}", gpu.name);
-                    *CURRENT_BACKEND.lock() = Some(GpuAccel::Intel(ring));
+                    serial_println!("[GPU-BACKEND] Intel GPU RCS ativo: {}", gpu.name);
+                    // Tenta inicializar BCS ring (blitter separado)
+                    let bcs = BcsRing::probe(gpu.bar0 + pmoff);
+                    if bcs.is_some() {
+                        serial_println!("[GPU-BACKEND] Intel GPU BCS ativo: {}", gpu.name);
+                    }
+                    *CURRENT_BACKEND.lock() = Some(GpuAccel::Intel(ring, bcs));
                     return; // prioridade 1: Intel ring
                 }
             }
@@ -43,9 +48,9 @@ pub unsafe fn init_backend(gpus: &[GpuInfo]) {
 
 /// Matmul acelerado por GPU (ou fallback CPU)
 pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
-    let guard = CURRENT_BACKEND.lock();
-    let result = match guard.as_ref() {
-        Some(GpuAccel::Intel(_)) => None, // stub: Intel matmul retorna None → fallback CPU
+    let mut guard = CURRENT_BACKEND.lock();
+    let result = match guard.as_mut() {
+        Some(GpuAccel::Intel(ring, _)) => ring.gpu_matmul(a, b),
         _ => None,
     };
     drop(guard);
@@ -65,7 +70,13 @@ pub fn gpu_forward(_model: &crate::cortex::TransformerModel, _tokens: &[u16]) ->
 pub fn gpu_status() -> &'static str {
     let guard = CURRENT_BACKEND.lock();
     match guard.as_ref() {
-        Some(GpuAccel::Intel(_)) => "Intel iGPU ring buffer",
+        Some(GpuAccel::Intel(_, bcs)) => {
+            if bcs.is_some() {
+                "Intel iGPU RCS + BCS ring buffer"
+            } else {
+                "Intel iGPU RCS ring buffer"
+            }
+        }
         Some(GpuAccel::CpuOnly) => "CPU fallback",
         None => "Nao inicializado",
     }

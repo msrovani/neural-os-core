@@ -560,3 +560,54 @@ pub fn lapic_id() -> u8 {
         }
     }
 }
+
+/// Envia IPI de reschedule para todas as APs
+pub unsafe fn send_ipi_reschedule() {
+    icr_wait_idle();
+
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        // x2APIC: ICR 64-bit, delivery=Fixed(0), shorthand=all_excl_self(0x180000), vector=0x80
+        let icr_val: u64 = (3u64 << 18) | 0x80u64;
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+        let icr_val = (0 << 8) | (1 << 14) | (1 << 15) | (3 << 18) | 0x80u32;
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
+
+/// Envia IPI de halt para todas as APs
+pub unsafe fn send_ipi_halt() {
+    icr_wait_idle();
+
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        // x2APIC: ICR 64-bit, delivery=Fixed(0), shorthand=all_excl_self(0x180000), vector=0x81
+        let icr_val: u64 = (3u64 << 18) | 0x81u64;
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+        let icr_val = (0 << 8) | (1 << 14) | (1 << 15) | (3 << 18) | 0x81u32;
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
+
+/// Envia IPI de call function para todas as APs
+pub unsafe fn send_ipi_call_function() {
+    icr_wait_idle();
+
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        // x2APIC: ICR 64-bit, delivery=Fixed(0), shorthand=all_excl_self(0x180000), vector=0x82
+        let icr_val: u64 = (3u64 << 18) | 0x82u64;
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
+        let icr_val = (0 << 8) | (1 << 14) | (1 << 15) | (3 << 18) | 0x82u32;
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
