@@ -157,7 +157,7 @@ impl WasmExecutor {
     /// Localiza o offset de uma função pelo índice
     fn find_func(&self, func_idx: u32) -> Option<usize> {
         let mut off = 8usize;
-        let mut seen_funcs = 0u32;
+        let _seen_funcs = 0u32;
         let mut body_offsets: Vec<usize> = Vec::new();
         while off < self.bytecode.len() {
             let section_id = self.bytecode[off];
@@ -240,7 +240,7 @@ impl WasmExecutor {
                 // global.get / global.set
                 0x23 => { let idx = self.bytecode[self.pc] as usize; self.pc += 1;
                     if idx < self.locals.len() { self.stack.push(self.locals[idx]); } }
-                0x24 => { let idx = self.bytecode[self.pc] as usize; self.pc += 1; let _ = self.stack.pop(); }
+                0x24 => { let _idx = self.bytecode[self.pc] as usize; self.pc += 1; let _ = self.stack.pop(); }
 
                 // i32.load / i32.store
                 0x28 => { let align = self.bytecode[self.pc]; self.pc += 1; let _offset = self.bytecode[self.pc] as i32 as i64; self.pc += 1;
@@ -380,7 +380,7 @@ impl WasmExecutor {
         self.locals.clear();
         for arg in args { self.stack.push(*arg); }
         // Os primeiros N args da stack viram locals 0..N
-        let mut new_locals: Vec<i64> = args.to_vec();
+        let new_locals: Vec<i64> = args.to_vec();
         self.locals = new_locals;
         self.pc = body_off;
         self.run_bytecode()?;

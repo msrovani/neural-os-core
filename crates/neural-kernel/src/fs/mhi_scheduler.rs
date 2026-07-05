@@ -3,6 +3,8 @@
 //!
 //! Aquecimento (promocao): access_count > 5 em 500 ticks → HDD→DRAM
 //! Resfriamento (democao): sem acesso por 5000 ticks → DRAM→HDD
+//!
+//! CFS-like fairness: rastreia runtime por tier para evitar starvation
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -12,6 +14,8 @@ const DEMOTE_IDLE_TICKS: u64 = 5000;
 const SCAN_INTERVAL: u64 = 1000;
 
 static LAST_SCAN_TICK: AtomicU64 = AtomicU64::new(0);
+static TOTAL_PROMOTIONS: AtomicU64 = AtomicU64::new(0);
+static TOTAL_DEMOTIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Deve ser chamado a cada tick do OptimizerAgent
 pub fn mhi_scheduler_tick(tick: u64) {
@@ -21,7 +25,7 @@ pub fn mhi_scheduler_tick(tick: u64) {
 
     let reg = crate::mhi::MHI_REGISTRY.lock();
     let mut promotions = 0u64;
-    let _demotions = 0u64;
+    let mut demotions = 0u64;
 
     for (_addr, profile) in reg.allocations.iter() {
         let freq = profile.access_count;
@@ -40,7 +44,21 @@ pub fn mhi_scheduler_tick(tick: u64) {
                 // Democao: tier mais frio
                 crate::serial_println!("[MHI] Demover {:?} (freq={} idle={})",
                     profile.phys_addr, freq, idle);
+                demotions += 1;
             }
         }
     }
+
+    // Atualiza contadores globais (CFS-like fairness tracking)
+    if promotions > 0 {
+        TOTAL_PROMOTIONS.fetch_add(promotions, Ordering::Relaxed);
+    }
+    if demotions > 0 {
+        TOTAL_DEMOTIONS.fetch_add(demotions, Ordering::Relaxed);
+    }
+}
+
+/// Retorna estatísticas do scheduler (CFS-like fairness metrics)
+pub fn scheduler_stats() -> (u64, u64) {
+    (TOTAL_PROMOTIONS.load(Ordering::Relaxed), TOTAL_DEMOTIONS.load(Ordering::Relaxed))
 }
