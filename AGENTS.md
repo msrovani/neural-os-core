@@ -445,4 +445,17 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **Ganho estimado:** sem KV cache = ~60s/passo × 8 passos = ~6h; com KV cache = 60s (prompt) + 8×3s (steps) = ~84s (200x+ speedup)
 - **Eficiência:** O(N²) → O(N) por step de geração; FFN gate+up (52% do tempo) só executa para 1 token por step
 - **Build:** 0 erros, +210/-36 LOC em `cortex.rs`
+
+## Session: ADR-0037 — SMP+GPU Architecture Research (2026-07-05)
+- **30 fontes analisadas** (arXiv, GitHub, crates.io, listas kernel, papers OSDI)
+- **coconutOS** (github.com/coconut-os/coconutOS) identificado como **blueprint arquitetural** — microkernel Rust com GPU-isolated AI inference, IOMMU, VRAM carving, shards, 5K LOC supervisor. Já roda transformer inference shard em QEMU.
+- **nova-core** (NVIDIA Rust driver oficial) como referência de BAR0/BAR1 mapping, doorbell registers, GPU MMIO. RTX 1050 (GP108) suportada.
+- **burn-flex** (tracel-ai/burn, no_std SIMD gemm + quantization) como backend matmul futuro — elimina bitnet_avx2 manual (~800 LOC).
+- **LithOS + gpu_ext** (arXiv) como fronteira de pesquisa: scheduling DENTRO da GPU via TPC stealing e eBPF no device.
+- **fast-steal** (crates.io, no_std, 27k downloads) para work-stealing queue pronto.
+- **bbqueue** (elodin-sys, no_std SPSC lockless) para comunicação cross-core.
+- **Ideias descartadas:** topological scheduling (AVX-512), eBPF GPU (imatura), CXL 3.1 (sem HW), firmware NVIDIA completo (10K+ LOC), GPU-initiated NVMe (depende de patches NVIDIA).
+- **Plano 5 sprints (N a N+4):** SPSC→IPI→PerCpu→Work-stealing→GPU BAR→GPU ring→Agent.xpu split→burn-flex.
+- **ADR-0037** em `docs/architecture/0037-smp-gpu-architecture.md` com análise completa de 6 categorias, 30+ ideias, mapa de conexões e riscos.
+- **Roadmap reestruturado** em `docs/roadmap.md` com blocos 25-32 reorganizados por dependência técnica.
 <!-- context7 -->

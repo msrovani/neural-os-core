@@ -1,8 +1,8 @@
-# Roadmap — neural-os-core v0.77.0-design 🏆
+# Roadmap — neural-os-core v0.80.1-design 🏆
 
-**Última atualização:** 2026-07-04 — **Readequação do Roadmap**
-**Mudança:** Reorganização evolutiva por dependências. Sprint 77 = Foundation Quick Wins.
-Itens B-01 (LAN) empurrados para Sprint 85+.
+**Última atualização:** 2026-07-05 — **Readequação do Roadmap com ADR-0037 (SMP+GPU)**
+**Mudança:** SMP+GPU incorporado como bloco prioritário. Sprints replanejados por dependência técnica.
+Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 
 ## Blocos Completos (20 blocos, 76 sprints)
 
@@ -15,115 +15,111 @@ Itens B-01 (LAN) empurrados para Sprint 85+.
 | **19. Disk Intelligence** | **75** | **0.75.x** | **✅ DiskAgent, NVMe, SMART, ARC cache, GPT** |
 | **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
 
-## Próximos Blocos (Sprints 77-86, reestruturados)
+## Próximos Blocos (Sprints 77-86, reestruturados com ADR-0037)
 
-### 🟡 Bloco 21 — Foundation Quick Wins (Sprint 77)
-**Itens independentes dos sprints 60/67/72 — sem dependências entre si**
+### 🟢 Bloco 21a — Foundation SMP (SPSC + IPI + PerCpu) — Sprint ATUAL+1
+**Base para tudo: comunicação cross-core, acordar APs, dados por core**
 
-| Item | Origem | O que | LOC |
+| Item | Origem | O que | LOC | Dependência |
+|---|---|---|---|---|
+| SPSC ring lockless (bbqueue) | bbqueue + monadic-hypervisor | Fila lock-free Single-Producer Single-Consumer | 100 | Nenhuma |
+| `#[repr(align(64))]` cross-core | monadic-hypervisor | Prevenir false sharing em atomics compartilhados | 10 | Nenhuma |
+| `send_ipi(lapic_id, vector)` | moss-kernel + echOS-x64 | IPI funcional para acordar APs sob demanda | 100 | LAPIC (✅) |
+| IPI handler registrável | echOS-x64 | Callback por vetor IPI | 50 | send_ipi |
+| PerCpu dinâmico | RuVix SMP | Alocar PerCpu por AP + GS.base individual | 300 | Alocador frames (✅) |
+| | **Total** | | **~560** | |
+
+### 🟢 Bloco 21b — Work-Stealing + Parallel Matmul — Sprint N+1
+**Distribuir agents entre 4 cores + paralelizar forward pass**
+
+| Item | Origem | O que | LOC | Dependência |
+|---|---|---|---|---|
+| Work-stealing Chase-Lev | crossbeam-deque + fast-steal | Deques por core, steal quando vazio | 400 | PerCpu + SPSC |
+| Parallel-for AVX2 matmul | avx_parallel + burn-flex | Chunk hidden dim por core, sem lock | 300 | Work-stealing |
+| AgentScheduler multicore | moss-kernel | 4 run queues, steal entre cores | 200 | Work-stealing |
+| Per-CPU slab allocator | moss-kernel | Alocar sem lock no hot path | 300 | PerCpu |
+| | **Total** | | **~1200** | |
+
+### 🟢 Bloco 21c — GPU Foundations — Sprint N+2
+**RTX 1050 como device de compute: BAR mapping, doorbell, job ring**
+
+| Item | Origem | O que | LOC | Dependência |
+|---|---|---|---|---|
+| GPU BAR0/BAR1 mapping UC | nova-core + NVIDIA DM | Mapear BARs como uncacheable para MMIO | 300 | NVMe (✅) |
+| PCIe doorbell register | nova-core | Setup de doorbell para submissão de jobs | 100 | BAR0 mapping |
+| GPU SPSC job ring | monadic-hypervisor + dmaplane | CPU enfileira, GPU consome | 300 | Doorbell |
+| VRAM buddy allocator | coconutOS + nova-core | Gerenciar 4GB VRAM | 400 | BAR1 mapping |
+| | **Total** | | **~1100** | |
+
+### 🟢 Bloco 21d — GPU Decode (BitNet offload) — Sprint N+3
+**Decode do BitNet roda na GPU. Prefill fica na CPU.**
+
+| Item | Origem | O que | LOC | Dependência |
+|---|---|---|---|---|
+| Agent.xpu prefill/decode split | Agent.xpu (arXiv 2506.24045) | CPU faz prefill, GPU faz decode | 400 | GPU job ring |
+| GPU matmul kernel (ternary) | nova-core patterns | Matmul BitNet na GPU via shader | 300 | GPU ring |
+| CPU→GPU KV cache DMA | dmaplane | Transferir KV cache por DMA | 200 | GPU DMA |
+| XQueue (preemptível) | XSched (OSDI) | Fila de comandos GPU com preempção | 600 | GPU ring |
+| | **Total** | | **~1500** | |
+
+### 🟢 Bloco 21e — Polimento — Sprint N+4
+**Profissionalizar: backend matmul, scheduler CFS, co-existência GPU+display**
+
+| Item | Origem | O que | LOC | Dependência |
+|---|---|---|---|---|
+| burn-flex backend port | burn-flex (tracel-ai) | SIMD gemm + quantization testado | 800 | gemm existente |
+| MSched memory scheduling | MSched (arXiv 2512.24637) | Evicção ótima de VRAM (Belady) | 500 | VRAM allocator |
+| CFS scheduler | echOS-x64 + moss-kernel | Completely Fair Scheduler para agents | 500 | Work-stealing |
+| GPU + Display co-existência | coconutOS | iGPU display + dGPU compute | 300 | GPU funcional |
+| | **Total** | | **~2100** | |
+
+### 🟡 Bloco 30 — JARVIS Persona + Cognitive (pós-SMP)
+**Reordenado para depois da infraestrutura SMP. JARVIS ganha com paralelismo.**
+
+| Item | O que | LOC | Depende de |
 |---|---|---|---|
-| 60.1b | Sprint 60 | Prompt `>` interativo (Hermes aguarda input) | ~30 |
-| 67.0.3 | Sprint 67 | Pre-Flight Principle (Skill::verify pré-execução) | ~80 |
-| 67.2.3 | Sprint 67 | Background Fan-out (delegação automática) | ~80 |
-| 72.2 | Sprint 72 | TaskSchema + JobPreconditions (schema de tarefas) | ~200 |
-| 72.6 | Sprint 72 | SkillIndex + MCP Catalog (índice + catálogo) | ~150 |
-| 67.2.2 | Sprint 67 | Completion Contracts (verificação pós-skill) | ~100 |
-| 67.2.1 | Sprint 67 | `/learn` command (SKILL.md generator) | ~120 |
-| | | **Total bloco** | **~760 LOC** |
+| SOUL.md Personality Engine | ~300 | SMP base |
+| IPW Monitor (RAPL MSR 0x610) | ~150 | PerCpu |
+| Session Compression | ~200 | Nenhuma |
+| Notification Gate | ~200 | Nenhuma |
+| Sessionless Thread | ~100 | Nenhuma |
+| Emotion Analysis (BitNet 7 emoções) | ~250 | BitNet (✅) |
+| Capability Contracts + Consent Gates | ~200 | Nenhuma |
+| Skill Discovery (DSPy/ACE) | ~300 | SkillIndex (✅) |
+| ADE Pipeline | ~200 | Nenhuma |
+| Semantic Cache (5-tier) | ~150 | Nenhuma |
+| Dreaming/Consolidation | ~200 | CronAgent (✅) |
+| Ego Layer | ~250 | BitNet (✅) |
+| Proactive Heartbeats | ~100 | Nenhuma |
+| Tool-State Save Game | ~100 | Nenhuma |
+| Auto-Skill Generation | ~150 | Nenhuma |
+| Babel-Index | ~100 | Nenhuma |
+| SleepCycle Agent | ~780 | CronAgent (✅) |
+| | **Total** | **~3280** | |
 
-### 🟡 Bloco 22 — Agentic Evolution + Memory Systems (Sprint 78)
-**Completa Agentic Evolution (72) + Memory bridge + Loaders**
-
-| Item | Origem | O que | LOC |
-|---|---|---|---|
-| 72.1 | Sprint 72 | Crew + FlowTrigger (orquestração multi-agente) | ~300 |
-| 72.3 | Sprint 72 | IntentCache + OutputCache (cache de intenção/saída) | ~200 |
-| 72.4 | Sprint 72 | WorkflowEngine + SelfCritique (engine de workflow) | ~250 |
-| 72.5 | Sprint 72 | StateGraph Scheduler (agendamento por grafo) | ~200 |
-| 60.8c | Sprint 60 | migrate_to_tier() (page table manipulation MHI) | ~170 |
-| 62.2 | Sprint 62 | MHI+FS Bridge (suggest_tier_for_path) | ~300 |
-| — | Sprint 77 old | GGUF Loader (modelos 1B+ params) | ~500 |
-| — | Sprint 77 old | WASM Runtime (wasmi + WASI→Skill bridge) | ~800 |
-| | | **Total bloco** | **~2720 LOC** |
-
-### 🟡 Bloco 23 — LLM Infrastructure + MoE (Sprint 79)
-**Model loading, router MoE, training infrastructure**
+### 🟡 Bloco 31 — JARVIS Security + AHCI (pós-SMP)
 
 | Item | O que | LOC |
 |---|---|---|
-| AVX2 BitNet Kernel (intrinsics SIMD) | ~150 |
-| Trinity Router (MoE — classifica intenção, roteia expert) | ~500 |
-| Candle sidecar (training em Rust puro com GPU) | ~300 |
-| TrainingAgent (fine-tune/transfer/full on-device) | ~500 |
-| | **Total bloco** | **~1450 LOC** |
-
-### 🟡 Bloco 24 — JARVIS Core Persona (Sprint 80)
-**SOUL.md + IPW + Compression + Notifications + Sessionless**
-
-| Item | O que | LOC |
-|---|---|---|
-| #315.1 SOUL.md Personality Engine | ~300 |
-| #315.2 IPW Monitor (RAPL MSR 0x610) | ~150 |
-| #315.3 Session Compression (4 strategies) | ~200 |
-| #315.4 Notification Gate (4 urgency levels) | ~200 |
-| #315.5 Sessionless Thread | ~100 |
-| | **Total bloco** | **~950 LOC** |
-
-### 🟡 Bloco 25 — JARVIS Emotion + Cache + Pipeline (Sprint 81)
-
-| Item | O que | LOC |
-|---|---|---|
-| #315.6 Emotion Analysis (BitNet classifier 7 emoções) | ~250 |
-| #315.7 Capability Contracts + Consent Gates (Safe/Moderate/Dangerous) | ~200 |
-| #315.8 Skill Discovery (DSPy/ACE pipeline) | ~300 |
-| #315.9 ADE Pipeline (Spec→Execute→Review→Recover) | ~200 |
-| #315.10 Semantic Cache (5-tier routing, 97.5% reduction) | ~150 |
-| #315.11 Persona Pipeline (16 stages OVOS-inspired) | ~100 |
-| | **Total bloco** | **~1200 LOC** |
-
-### 🟡 Bloco 26 — JARVIS Cognitive Memory (Sprint 82)
-
-| Item | O que | LOC |
-|---|---|---|
-| #315.12 Dreaming/Consolidation (CronAgent noturno) | ~200 |
-| #315.13 Ego Layer (self-model, confidence tracking) | ~250 |
-| #315.14 Proactive Heartbeats (JARVIS inicia conversa) | ~100 |
-| #315.15 Tool-State Save Game (snapshot + rollback) | ~100 |
-| #315.16 Auto-Skill Generation (watch→pattern→propose→generate) | ~150 |
-| #315.17 Babel-Index (entropy + contradiction + staleness) | ~100 |
-| SleepCycle Agent (5 fases: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT) | ~780 |
-| | **Total bloco** | **~1680 LOC** |
-
-### 🟡 Bloco 27 — JARVIS Security + AHCI (Sprint 83)
-
-| Item | O que | LOC |
-|---|---|---|
-| #315.18 Fail-Closed Safety Invariant (SMT-proof, 4 invariants) | ~200 |
-| #315.19 Merkle Audit Trail (Ed25519 signed, ring buffer 4096) | ~200 |
-| #315.20 Fluid Persona (context-adaptive, coach/tutor/tool) | ~100 |
+| Fail-Closed Safety Invariant | ~200 |
+| Merkle Audit Trail | ~200 |
+| Fluid Persona | ~100 |
 | AHCI driver (SATA 6G NCQ) | ~700 |
-| | **Total bloco** | **~1200 LOC** |
+| | **Total** | **~1200 LOC** |
 
-### 🟡 Bloco 28 — GPU Compute (Sprint 84)
-
-| Item | O que | LOC |
-|---|---|---|
-| Intel GEN shader (matmul via EU execution units) | ~800 |
-| | **Total bloco** | **~800 LOC** |
-
-### 🔴 Bloco 29+ — AIOS Evolution (Sprint 85+, pós B-01)
+### 🔴 Bloco 32+ — AIOS Evolution (pós B-01)
 **Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
 
 | Item | LOC | Bloqueador |
 |---|---|---|
 | B-01 RX fix (RTL8139 DHCP/RX) | ~500 | 🔴 QEMU SLiRP |
-| WWW Agents (Browser, Email, RSS, Search, Download, WS) | ~2600 | 🔴 B-01 |
-| Self-Update Agent (A/B slots + rollback) | ~800 | 🔴 B-01 |
+| WWW Agents | ~2600 | 🔴 B-01 |
+| Self-Update Agent | ~800 | 🔴 B-01 |
 | Plugin Hub + Marketplace | ~400 | 🔴 B-01 |
-| Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | 🔴 B-01 |
-| Multi-device sync (CRDT) | ~300 | 🔴 B-01 |
-| SKYNET Mesh Node | ~300 | 🔴 B-01 |
-| WiFi (Intel/Atheros/Realtek 802.11) | ~1000 | 🔴 B-01 |
+| Voice Pipeline | ~1600 | 🔴 B-01 |
+| Multi-device sync | ~300 | 🔴 B-01 |
+| SKYNET Mesh | ~300 | 🔴 B-01 |
+| WiFi | ~1000 | 🔴 B-01 |
 | | **Total** | **~7500 LOC** |
 
 ## Funcionalidades por Camada
@@ -161,73 +157,70 @@ Itens B-01 (LAN) empurrados para Sprint 85+.
 - EventDriven scheduler fix (has_event=true, has_pending early-return)
 - MemoryAgent com clock calibration via rdtsc
 
-### 🟡 Foundation Quick Wins (Sprint 77)
-- Prompt `>` interativo — Hermes aguarda input do usuário
-- Pre-Flight Principle — Skill::verify() valida antes de executar
-- Background Fan-out — delegação automática para sub-agentes
-- TaskSchema + JobPreconditions — schema de tarefas estruturadas
-- SkillIndex + MCP Catalog — índice pesquisável de skills
-- Completion Contracts — verificação pós-execução de skills
-- `/learn` command — geração automática de SKILL.md
+### ✅ Foundation Quick Wins (Sprint 77) ✅
+- Prompt `>` interativo — Hermes aguarda input do usuário ✅
+- Pre-Flight Principle — Skill::verify() valida antes de executar ✅
+- Background Fan-out — delegação automática para sub-agentes ✅
+- TaskSchema + JobPreconditions — schema de tarefas estruturadas ✅
+- SkillIndex + MCP Catalog — índice pesquisável de skills ✅
+- Completion Contracts — verificação pós-execução de skills ✅
+- `/learn` command — geração automática de SKILL.md ✅
 
-### 🟡 Agentic Evolution (Sprint 78)
-- Crew + FlowTrigger — orquestração multi-agente
-- IntentCache + OutputCache — cache inteligente
-- WorkflowEngine + SelfCritique — engine de workflow
-- StateGraph Scheduler — agendamento por grafo de estado
-- migrate_to_tier() — page table manipulation MHI
-- MHI+FS Bridge — suggest_tier_for_path integrado ao VFS
-- GGUF Loader — modelos 1B+ params
-- WASM Runtime — wasmi + WASI→Skill bridge
+### ✅ Agentic Evolution (Sprint 78) ✅
+- Crew + FlowTrigger — orquestração multi-agente ✅
+- IntentCache + OutputCache — cache inteligente ✅
+- WorkflowEngine + SelfCritique — engine de workflow ✅
+- StateGraph Scheduler — agendamento por grafo de estado ✅
+- migrate_to_tier() — page table manipulation MHI ✅
+- MHI+FS Bridge — suggest_tier_for_path integrado ao VFS ✅
+- GGUF Loader — modelos 1B+ params ✅
+- WASM Runtime — wasmi + WASI→Skill bridge ✅
 
-### 🟡 LLM Infrastructure (Sprint 79)
-- AVX2 BitNet Kernel — SIMD intrinsics
-- Trinity Router (MoE) — classifica intenção, roteia expert
-- Candle sidecar — training em Rust puro com GPU
-- TrainingAgent — fine-tuning/transfer/full on-device
+### ✅ LLM Infrastructure (Sprint 79-80) ✅
+- AVX2 BitNet Kernel — SIMD intrinsics ✅
+- BPE Tokenizer (HuggingFace JSON parser) ✅
+- KV Cache (v0.80.1) — geração autoregressiva ✅
+- Trinity Router (MoE) — stub funcional ✅
+- QEMU loader pipeline BitNet-b1.58 850M ✅
 
-### 🟡 JARVIS Persona (Sprint 80)
-- SOUL.md Personality Engine — persona JARVIS
-- IPW Monitor — Intelligence Per Watt via RAPL MSR
-- Session Compression — 4 estratégias
-- Notification Gate — 4 níveis de urgência
-- Sessionless Thread — conversa contínua sem reset
+### 🟢 SMP Foundation — SPSC + IPI + PerCpu (Bloco 25)
+- SPSC ring lockless (bbqueue) para comunicação cross-core, IRQ→task, GPU→CPU
+- IPI vetorizado para acordar APs sob demanda + TLB shootdown
+- PerCpu dinâmico — alocar struct por AP + GS.base individual
+- `#[repr(align(64))]` padronizado para false sharing prevention
 
-### 🟡 JARVIS Emotion + Cache (Sprint 81)
-- Emotion Analysis — BitNet classifier 7 emoções
-- Capability Contracts + Consent Gates — 3 níveis de risco
-- Skill Discovery — DSPy/ACE pipeline
-- ADE Pipeline — Spec→Execute→Review→Recover
-- Semantic Cache — 5-tier routing (97.5% reduction)
-- Persona Pipeline — 16 stages OVOS-inspired
+### 🟢 Parallel — Work-Stealing + Matmul (Bloco 26)
+- Work-stealing Chase-Lev entre 4 cores (deques lock-free)
+- Parallel-for no matmul AVX2 (chunk hidden dim)
+- AgentScheduler multicore (4 run queues + steal)
+- Per-CPU slab allocator (alocação local sem lock)
 
-### 🟡 JARVIS Cognitive Memory (Sprint 82)
-- Dreaming/Consolidation — memória sintética noturna
-- Ego Layer — self-model, confidence tracking
-- Proactive Heartbeats — JARVIS inicia conversa
-- Tool-State Save Game — snapshot + rollback
-- Auto-Skill Generation — watch→pattern→propose→generate
-- Babel-Index — entropia + contradição + staleness
-- SleepCycle Agent — 5 fases de aprendizado onírico
+### 🟢 GPU Compute Foundations (Bloco 27)
+- GPU BAR0/BAR1 mapping UC (MMIO para RTX 1050)
+- PCIe doorbell register setup
+- GPU SPSC job ring (CPU enfileira, GPU consome)
+- VRAM buddy allocator (4GB)
 
-### 🟡 JARVIS Security + AHCI (Sprint 83)
-- Fail-Closed Safety Invariant — SMT-proof, 4 invariants
-- Merkle Audit Trail — Ed25519 signed chain
-- Fluid Persona — context-adaptive coach/tutor/tool
-- AHCI driver — SATA 6G com NCQ
+### 🟢 GPU Decode (Bloco 28)
+- Agent.xpu prefill/decode split (CPU prefill, GPU decode)
+- GPU matmul kernel ternário (BitNet na GPU)
+- CPU→GPU KV cache DMA
+- XQueue preemptível (múltiplos workloads GPU)
 
-### 🟡 GPU Compute (Sprint 84)
-- Intel GEN shader — matmul via EU execution units
+### 🟢 Polimento (Bloco 29)
+- burn-flex backend port (gemm profissional, elimina bitnet_avx2 manual)
+- MSched evicção ótima de VRAM (Belady)
+- CFS scheduler para agents (fairness)
+- GPU + Display co-existência
 
-### 🔴 AIOS Evolution (Sprint 85+, pós B-01)
-- B-01 RX fix — RTL8139 DHCP/RX
-- WWW Infrastructure + Agents (Browser, Email, RSS, Search, Download, WS)
-- Self-Update Agent (A/B slots + rollback)
-- Plugin Hub + Marketplace
-- Voice Pipeline (Piper TTS, Vosk STT, Wake Word, Wyoming)
-- Multi-device sync (CRDT)
-- SKYNET Mesh Node
-- WiFi
+### 🟡 JARVIS Persona + Cognitive (Bloco 30, pós-SMP)
+- SOUL.md, IPW Monitor, Session Compression, Notification Gate
+- Emotion Analysis, Capability Contracts, Skill Discovery
+- Semantic Cache, Dreaming/Consolidation, Ego Layer
+- SleepCycle Agent (780 LOC)
+
+### 🔴 AIOS Evolution (Bloco 32+, pós B-01)
+- B-01 RX fix, WWW Agents, Self-Update, Voice Pipeline, WiFi
 
 ### ✅ Input
 - PS/2 keyboard (IRQ1, scancode set 1)
@@ -305,20 +298,30 @@ Itens B-01 (LAN) empurrados para Sprint 85+.
 - Ctrl+Alt+Del com dump FAT12 + shutdown
 - BOOT.LOG visível no Windows Explorer
 
-## Pendências Técnicas
+## Pendências Técnicas (Atualizado ADR-0037)
 
-| Item | Esforço | Bloco |
-|---|---|---|
-| Prompt `>` interativo | ~30 LOC | 21 (Sprint 77) |
-| WASM sandbox (`wasmi`) | ~800 LOC | 22 (Sprint 78) |
-| AHCI driver (SATA 6G NCQ) | ~700 LOC | 27 (Sprint 83) |
-| Intel GEN shader | ~800 LOC | 28 (Sprint 84) |
-| B-01 RX fix | ~500 LOC | 29+ (Sprint 85+) |
-| Modelo 1.5B params (treino) | Python | 29+ |
-| Framebuffer UEFI (bootloader 0.11+) | ~500 LOC | Upgrade bootloader |
-| VirtIO-GPU GET_DISPLAY_INFO | Debug | QEMU TCG |
-| SMP `-smp 2` sem WHPX | Debug | TCG atomicidade |
-| Driver e1000/r8169 (rede real) | ~300 LOC | Teste HW |
+| Item | Esforço | Bloco | Prioridade |
+|---|---|---|---|
+| SPSC ring lockless | ~100 LOC | 25 (SMP Foundation) | 🔴 Crítica — base cross-core |
+| IPI vetorizado | ~150 LOC | 25 (SMP Foundation) | 🔴 Crítica — acordar APs |
+| PerCpu dinâmico | ~300 LOC | 25 (SMP Foundation) | 🔴 Crítica — dados por core |
+| Work-stealing scheduler | ~400 LOC | 26 (Parallel) | 🟡 Alta — distribuir carga |
+| Parallel-for AVX2 matmul | ~300 LOC | 26 (Parallel) | 🟡 Alta — 2-3× speedup |
+| AgentScheduler multicore | ~200 LOC | 26 (Parallel) | 🟡 Alta — 4 run queues |
+| Per-CPU slab allocator | ~300 LOC | 26 (Parallel) | 🟡 Média — alocação local |
+| GPU BAR mapping | ~300 LOC | 27 (GPU Found.) | 🟡 Média — RTX 1050 compute |
+| GPU doorbell + job ring | ~400 LOC | 27 (GPU Found.) | 🟡 Média — submissão GPU |
+| VRAM allocator (buddy) | ~400 LOC | 27 (GPU Found.) | 🟡 Média — 4GB VRAM |
+| Agent.xpu prefill/decode split | ~400 LOC | 28 (GPU Decode) | 🟢 Baixa — após GPU pronta |
+| GPU matmul ternário | ~300 LOC | 28 (GPU Decode) | 🟢 Baixa — BitNet offload |
+| KV cache DMA CPU↔GPU | ~200 LOC | 28 (GPU Decode) | 🟢 Baixa — zero copy |
+| XQueue preemptível | ~600 LOC | 28 (GPU Decode) | 🟢 Baixa — scheduling GPU |
+| burn-flex backend | ~800 LOC | 29 (Polimento) | 🟢 Baixa — gemm profissional |
+| MSched evicção VRAM | ~500 LOC | 29 (Polimento) | 🟢 Baixa — memória GPU |
+| CFS scheduler | ~500 LOC | 29 (Polimento) | 🟢 Baixa — fairness |
+| JARVIS Persona (17 itens) | ~3280 LOC | 30 (JARVIS) | 🟢 Baixa — pós-SMP |
+| AHCI driver | ~700 LOC | 31 (Security) | 🟢 Baixa |
+| B-01 RX fix | ~500 LOC | 32+ (AIOS) | 🔴 Bloqueado (QEMU) |
 
 ## Activation on Demand — Filosofia
 

@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.80.0-design 🏆
-#   SPRINT 80 — AVX2 Debug + WHPX Detection + Forward Pass
-#   135 arquivos Rust, ~16.300 LOC, 0 erros
+#   STATE — neural-os-core v0.80.1-design 🏆
+#   SPRINT 80 — KV Cache + ADR-0037 SMP/GPU Research
+#   135 arquivos Rust, ~16.500 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 ## Marcos Acumulados
@@ -14,10 +14,10 @@
 - **v0.76.0-0.76.1** — NVMe driver, S.M.A.R.T., Adaptive heap, Dynamic tick, Event-driven Hermes
 - **2026-07-04** — **Sprint 77:** 7 Foundation Quick Wins (~380 LOC). VirtualBox SMP fix.
 - **2026-07-04** — **Sprint 78:** 8 Agentic Evolution items (~400 LOC).
-- **2026-07-04** — **Sprint 79:** LLM Infrastructure — BitNet-b1.58 850M integration. AVX2 ternary matmul, BPE tokenizer, Trinity Router stub, QEMU loader boot pipeline. 3 new files, 6 modified. Model downloaded & converted to .bitnet v2 (1,464 MB).
-- **2026-07-05** — **v0.79.1:** Display Xuvisco Fix — `vga_buffer::clear_physical_buffer()` limpa 0xB8000 sem tocar CRTC. `fb::probe_uefi_framebuffer()` limpa FB para preto. Zero I/O a 0x3D4/0x3D5.
-- **2026-07-05** — **v0.79.2:** Xuvisco v2 fix — `clear_physical_buffer()` causava page fault (0xB8000 não mapeado no UEFI memory map) antes da IDT → triple fault. Substituído por `disable_vga_plane()` via sequenciador VGA (0x3C4/0x3C5) — I/O ports seguros sem IDT.
-- **2026-07-05** — **v0.80.0:** AVX2 Debug + WHPX Detection — 3 correções AVX2: tail handling (não múltiplo de 8), broadcast-per-t (corrigido outer product bug), `TernaryTensor::matmul_hybrid` AVX2 dispatch (era scalar). WHPX detection via CPUID 0x40000000 — avx2 disponível mas emulado lentamente (2x MAIS LENTO que scalar). Row buffer substitui `unpack_all` 17.7 MB. Instrumentação de timing por layer + operação. `generate_speculative` limitado a 8 tokens.
+- **2026-07-04** — **Sprint 79:** LLM Infrastructure — BitNet-b1.58 850M integration.
+- **2026-07-05** — **v0.80.0:** AVX2 Debug + WHPX Detection + Row buffer + Per-layer timing
+- **2026-07-05** — **v0.80.1:** KV Cache (KvCache struct, forward_with_kv, generate_speculative refatorado). 200x+ speedup estimado. +210/-36 LOC.
+- **2026-07-05** — **ADR-0037:** Pesquisa SMP+GPU (30 fontes: arXiv, GitHub, crates.io). coconutOS (GPU AI inference microkernel) identificado como blueprint. nova-core (NVIDIA Rust driver) como referência de BAR1/MMIO. burn-flex como backend matmul futuro. Plano de 5 sprints (N a N+4) para SMP+GPU completo.
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
