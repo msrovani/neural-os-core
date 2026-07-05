@@ -1,6 +1,8 @@
 pub mod percpu;
 pub mod trampoline;
 pub mod spsc;
+pub mod work_stealing;
+pub mod parallel_matmul;
 
 use crate::apic;
 use crate::memory;
