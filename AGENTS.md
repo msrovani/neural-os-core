@@ -110,6 +110,9 @@ Toda métrica de performance (AVX2, forward pass, latência, throughput) deve se
 # Premissa: Testes em QEMU e VirtualBox
 Testes funcionais e de integração rodam em QEMU (WHPX ou TCG) e VirtualBox. Estou autorizado a alterar configurações de ambos (flags de VM, aceleração, memória, CPUs, dispositivos, rede) conforme necessário para cada sprint. Toda alteração de configuração deve ser registrada — seja no SESSION_NNN.md, seja em script/config versionado. O objetivo é ter rastreabilidade: saber exatamente qual combinação de flags produziu cada resultado.
 
+# Premissa: Logs com Timestamp + Análise Obrigatória
+Toda saída serial tem timestamp `[T+<tick>] ` desde o primeiro `serial_println!` do boot, usando o contador `TIMER_TICKS` do APIC timer. Isso permite medir tempo entre eventos sem depender de clocks externos. Quando logs estiverem disponíveis (sempre devem estar), é **mandatório** analisá-los em busca de erros e warnings — mesmo que disfarçados (ex.: timeouts sem mensagem de erro, stalls, padrões de repetição). A análise deve ser registrada no SESSION_NNN.md correspondente.
+
 # Premissa: Ciclo de Progresso Pós-Tarefa
 Após cada rodada de tarefas com sucesso:
 1. **Aprenda** — Documente dificuldades, erros, correções, lateralizações.

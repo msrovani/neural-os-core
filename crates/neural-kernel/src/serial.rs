@@ -84,24 +84,48 @@ impl<'a> fmt::Write for LogBuf<'a> {
 
 pub fn _print(args: fmt::Arguments) {
     use fmt::Write;
-    // Tenta serial
+    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+
+    // Tenta serial com timestamp
     let serial_avail = {
         let mut serial = SERIAL.lock();
-        if let Some(ref mut s) = *serial { let _ = s.write_fmt(args); true }
-        else { false }
+        if let Some(ref mut s) = *serial {
+            let mut ts_buf = [0u8; 24];
+            let ts_len = format_timestamp_into(&mut ts_buf, tick);
+            let _ = s.write_str(core::str::from_utf8(&ts_buf[..ts_len]).unwrap_or("[T+?] "));
+            let _ = s.write_fmt(args);
+            true
+        } else { false }
     };
-    // Se serial nao disponivel, registra no boot log (display via VGA/fb)
-    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+
+    // Registra no boot log (com timestamp proprio do BootLog)
     let mut log = BOOT_LOG.lock();
     if log.start_tick == 0 { log.start_tick = tick; }
     let mut buf = [0u8; 256];
     let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
     let n = buf.iter().position(|&b| b == 0).unwrap_or(256);
     log.write(&buf[..n], tick);
+
     // Se nao tem serial, tenta display via VGA/framebuffer
     if !serial_avail {
         let _ = crate::vga_buffer::fb_print(args);
     }
+}
+
+fn format_timestamp_into(buf: &mut [u8; 24], tick: u64) -> usize {
+    buf[0] = b'['; buf[1] = b'T'; buf[2] = b'+';
+    let mut pos = 3;
+    let mut n = tick;
+    let mut digits = [0u8; 20];
+    let mut nd = 0;
+    if n == 0 { digits[0] = b'0'; nd = 1; }
+    else { while n > 0 { digits[nd] = (n % 10) as u8 + b'0'; nd += 1; n /= 10; } }
+    // reverse digits
+    let mut di = nd;
+    while di > 0 { di -= 1; buf[pos] = digits[di]; pos += 1; }
+    buf[pos] = b']'; pos += 1;
+    buf[pos] = b' '; pos += 1;
+    pos
 }
 
 pub fn serial_available() -> bool {
