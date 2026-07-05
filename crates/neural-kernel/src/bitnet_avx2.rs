@@ -3,30 +3,56 @@ use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
 use alloc::vec::Vec;
 
-fn unpack_ternary_row(packed: &PackedTernaryTensor, row: usize, n: usize) -> Vec<i8> {
-    let mut out = vec![0i8; n];
-    let row_start = row * n;
-    for j in 0..n {
-        out[j] = packed.get_weight(row_start + j);
+/// Unpack one row of a PackedTernaryTensor into an i8 buffer.
+/// Packed format: byte = [elem0(bits 0-1), elem1(bits 2-3), elem2(bits 4-5), elem3(bits 6-7)]
+/// Decode: 0b00→0, 0b01→1, 0b10→-1
+fn unpack_row_into(packed: &PackedTernaryTensor, row: usize, n: usize, buf: &mut [i8]) {
+    let packed_row_words = n.div_ceil(4);
+    let row_start = row * packed_row_words;
+    for pw in 0..packed_row_words {
+        let p = packed.packed_data[row_start + pw];
+        let base = pw * 4;
+        // elem0 = bits 0-1
+        if base < n { buf[base] = match p & 3 { 0 => 0, 1 => 1, _ => -1 }; }
+        // elem1 = bits 2-3
+        if base + 1 < n { buf[base + 1] = match (p >> 2) & 3 { 0 => 0, 1 => 1, _ => -1 }; }
+        // elem2 = bits 4-5
+        if base + 2 < n { buf[base + 2] = match (p >> 4) & 3 { 0 => 0, 1 => 1, _ => -1 }; }
+        // elem3 = bits 6-7
+        if base + 3 < n { buf[base + 3] = match (p >> 6) & 3 { 0 => 0, 1 => 1, _ => -1 }; }
     }
-    out
-}
-
-fn unpack_all(packed: &PackedTernaryTensor) -> Vec<i8> {
-    let (k, n) = packed.shape;
-    let mut out = vec![0i8; k * n];
-    for i in 0..k * n {
-        out[i] = packed.get_weight(i);
-    }
-    out
 }
 
 #[cfg(target_arch = "x86_64")]
 fn avx2_available() -> bool {
+    #[cfg(target_arch = "x86_64")]
     unsafe {
-        let result = core::arch::x86_64::__cpuid(7);
-        (result.ebx & (1 << 5)) != 0
+        // CPUID leaf 1, ECX bit 31 = hypervisor present
+        let leaf1 = core::arch::x86_64::__cpuid(1);
+        let has_hypervisor = (leaf1.ecx & (1 << 31)) != 0;
+
+        // CPUID leaf 7, EBX bit 5 = AVX2
+        let leaf7 = core::arch::x86_64::__cpuid(7);
+        let has_avx2 = (leaf7.ebx & (1 << 5)) != 0;
+        if !has_avx2 { return false; }
+
+        if has_hypervisor {
+            // Leia o vendor string do hypervisor (leaf 0x40000000)
+            let hv = core::arch::x86_64::__cpuid(0x40000000);
+            let vendor_ebx = hv.ebx;
+            let vendor_ecx = hv.ecx;
+            let vendor_edx = hv.edx;
+
+            let is_whpx = vendor_ebx == 0x7263694D; // "Micr" (Microsoft Hv)
+            if is_whpx {
+                return false;
+            }
+        }
+
+        true
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    { false }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -67,41 +93,33 @@ fn scalar_ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize,
 unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     use core::arch::x86_64::*;
 
-    let unpacked = unpack_all(weight);
+    if k % 8 != 0 || n % 8 != 0 {
+        return scalar_ternary_matmul(weight, input, m, k, n).unwrap();
+    }
+
     let mut result = Tensor::new((m, n));
+    // unpack one row at a time into a reusable buffer (n bytes, not k*n)
+    let mut row_buf = vec![0i8; n];
 
     for i in 0..m {
         let inp_row = &input.data[i * k..];
         let out_row = &mut result.data[i * n..];
 
-        for j in (0..n).step_by(8) {
-            let remaining = core::cmp::min(8, n - j);
-            let mut acc = _mm256_setzero_ps();
+        // zero out output row
+        for j in 0..n { out_row[j] = 0.0; }
 
-            for t in 0..k {
-                let input_val = _mm256_set1_ps(inp_row[t]);
+        for t in 0..k {
+            unpack_row_into(weight, t, n, &mut row_buf);
 
-                let w_ptr = unpacked.as_ptr().add(t * n + j) as *const __m128i;
+            let a = _mm256_set1_ps(inp_row[t]);
+            for j in (0..n).step_by(8) {
+                let w_ptr = row_buf.as_ptr().add(j) as *const __m128i;
                 let w_i8 = _mm_loadl_epi64(w_ptr);
                 let w_i32 = _mm256_cvtepi8_epi32(w_i8);
                 let w_f32 = _mm256_cvtepi32_ps(w_i32);
-
-                acc = _mm256_fmadd_ps(input_val, w_f32, acc);
-            }
-
-            _mm256_storeu_ps(out_row.as_mut_ptr().add(j), acc);
-
-            for r in 0..remaining {
-                let mut sum = 0.0f32;
-                for t in 0..k {
-                    let w = unpacked[t * n + j + r] as i8;
-                    match w {
-                        1 => sum += inp_row[t],
-                        -1 => sum -= inp_row[t],
-                        _ => {}
-                    }
-                }
-                out_row[j + r] += sum;
+                let prev = _mm256_loadu_ps(out_row.as_mut_ptr().add(j));
+                let updated = _mm256_fmadd_ps(a, w_f32, prev);
+                _mm256_storeu_ps(out_row.as_mut_ptr().add(j), updated);
             }
         }
     }

@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.79.2-design 🏆
-#   SPRINT 79 — LLM Infrastructure + Display Xuvisco Fix
-#   135 arquivos Rust, ~16.210 LOC, 0 erros
+#   STATE — neural-os-core v0.80.0-design 🏆
+#   SPRINT 80 — AVX2 Debug + WHPX Detection + Forward Pass
+#   135 arquivos Rust, ~16.300 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 ## Marcos Acumulados
@@ -17,6 +17,7 @@
 - **2026-07-04** — **Sprint 79:** LLM Infrastructure — BitNet-b1.58 850M integration. AVX2 ternary matmul, BPE tokenizer, Trinity Router stub, QEMU loader boot pipeline. 3 new files, 6 modified. Model downloaded & converted to .bitnet v2 (1,464 MB).
 - **2026-07-05** — **v0.79.1:** Display Xuvisco Fix — `vga_buffer::clear_physical_buffer()` limpa 0xB8000 sem tocar CRTC. `fb::probe_uefi_framebuffer()` limpa FB para preto. Zero I/O a 0x3D4/0x3D5.
 - **2026-07-05** — **v0.79.2:** Xuvisco v2 fix — `clear_physical_buffer()` causava page fault (0xB8000 não mapeado no UEFI memory map) antes da IDT → triple fault. Substituído por `disable_vga_plane()` via sequenciador VGA (0x3C4/0x3C5) — I/O ports seguros sem IDT.
+- **2026-07-05** — **v0.80.0:** AVX2 Debug + WHPX Detection — 3 correções AVX2: tail handling (não múltiplo de 8), broadcast-per-t (corrigido outer product bug), `TernaryTensor::matmul_hybrid` AVX2 dispatch (era scalar). WHPX detection via CPUID 0x40000000 — avx2 disponível mas emulado lentamente (2x MAIS LENTO que scalar). Row buffer substitui `unpack_all` 17.7 MB. Instrumentação de timing por layer + operação. `generate_speculative` limitado a 8 tokens.
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
@@ -67,7 +68,8 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 | **77** | 0.77.x | **21** | **Foundation Quick Wins** — Prompt >, Pre-Flight, TaskSchema, /learn, Fan-out | ~760 |
 | **78** | 0.78.x | **22** | **Agentic Evolution** — Crew/Flow, Cache, Workflow, GGUF, WASM | ~2720 |
 | **79** | 0.79.x | **23** | **LLM Infrastructure** ✅ — AVX2 BitNet, Trinity MoE, BPE, QEMU loader | ~1450 |
-| **80** | 0.80.x | **24** | **JARVIS Persona** — SOUL.md, IPW, Compression, Notification Gate | ~950 |
+| **80** | 0.80.x | **24** | **AVX2 Debug + WHPX Detection** ✅ — AVX2 tail, WHPX fallback, timing | ~550 |
+| **81** | 0.81.x | **25** | **JARVIS Persona** — SOUL.md, IPW, Compression, Notification Gate | ~950 |
 | **81** | 0.81.x | **25** | **JARVIS Emotion** — Emotion, Contracts, Discovery, Cache, Pipeline | ~1200 |
 | **82** | 0.82.x | **26** | **JARVIS Cognitive** — Dreaming, Ego, Heartbeats, Auto-Skills, SleepCycle | ~1680 |
 | **83** | 0.83.x | **27** | **JARVIS Security + AHCI** — Fail-Closed, Merkle, Fluid, AHCI | ~1200 |
@@ -94,17 +96,18 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 16. **Build_image.py UEFI issue** — bootloader 0.11.15 default features include UEFI. `default-features=false, features=["bios"]` avoids serde compile panic.
 17. **VGA buffer clear fix (v0.79.1):** `[BOOT] FB ativo — VGA text mode desligado` agora é verdade. 0xB8000 limpo via `write_bytes` sem CRTC I/O. Framebuffer limpo para preto imediatamente no probe.
 18. **VGA sequencer fix (v0.79.2):** `clear_physical_buffer()` write a 0xB8000 causa page fault pre-IDT. UEFI/OVMF não mapeia legacy VGA hole. Solução: VGA sequencer I/O (0x3C4/0x3C5) Screen Off bit — zero acesso a memória desmapeada.
+19. **WHPX emula AVX2/VEX lentamente (v0.80.0):** CPUID mostra AVX2=disponível, mas cada instrução VEX causa VM exit (~10k+ ciclos). Scalar GP instructions rodam nativos. `has_avx2()` deve detectar WHPX via CPUID 0x40000000 e retornar false. AVX2 sob WHPX = 4443 ticks/layer vs scalar = 2218 ticks/layer (~2.2s/layer, ~60s/forward pass).
+20. **`unpack_all()` não é o gargalo (v0.80.0):** Substituir alocação de 17.7 MB por row buffer de 6.9 KB não acelerou o forward pass — o gargalo real é a emulação VEX + WHPX memory virtualization. Operações aritméticas dominam, não alocação.
+21. **Forward pass BitNet b1.58 sob WHPX:** ~60s para 64 tokens × 30 layers. Generate_speculative de 8 tokens levaria ~6h. Inviável sem KV cache ou bare metal.
 
-## Pendente Técnico
-- **Teste QEMU WHXP + VGA sequencer**: rebuildar boot image e verificar se xuvisco sumiu
-- **Teste Intel 6xx real**: confirmação final do fix
-- **Forward pass BitNet b1.58**: GQA + BitFFN grouped projections — Sprint 80
-- **Forward pass BitNet b1.58**: GQA + BitFFN grouped projections — Sprint 80
+## Pendente Técnico (atualizado v0.80.0)
+- **Forward pass BitNet b1.58**: ~60s sob WHPX. Bare metal ou QEMU+KVM necessários para velocidade real.
+- **KV cache**: Elimina reprocessamento de tokens anteriores — essencial para autogeneração sob WHPX.
 - **Build_image.py fix**: BIOS-only bootloader compilation needs offline verification
-- **JARVIS agents**: ~5650 LOC, Sprints 80-83
-- **Intel GEN shader**: ~800 LOC, Sprint 84
-- **AHCI driver**: ~700 LOC, Sprint 83
-- **B-01 RX fix**: ~500 LOC, Sprint 85+ (bloqueador)
+- **JARVIS agents**: ~5650 LOC, Sprints 81-84
+- **Intel GEN shader**: ~800 LOC, Sprint 85
+- **AHCI driver**: ~700 LOC, Sprint 84
+- **B-01 RX fix**: ~500 LOC, Sprint 86+ (bloqueador)
 
 ## Arquivos Chave
 | Arquivo | Função |

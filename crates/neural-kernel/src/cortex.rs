@@ -234,13 +234,19 @@ impl TransformerModel {
         }
         let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap();
 
-        for layer in &self.layers {
+        let layer_count = self.layers.len();
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let lt0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
             // QKV projections with GQA dimensions
+            let t_q0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let q = layer.q.matmul_hybrid(&norm).unwrap();  // (seq, kv_dim)
+            let t_q1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let k = layer.k.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
+            let t_k1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let v = layer.v.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
+            let t_v1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
             // GQA attention: each KV head serves q_group_size query heads
             // q: (seq, kv_dim) where kv_dim = num_heads * qk_head_dim
@@ -304,14 +310,18 @@ impl TransformerModel {
                 }
             }
 
+            let t_attn1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+
             let attn_out = Tensor::from_row_major((seq_len, kv_dim), attn_out_data).unwrap();
             let proj = layer.o.matmul_hybrid(&attn_out).unwrap();  // (seq, kv_dim) @ (kv_dim, hidden) = (seq, hidden)
             x = x.add(&proj).unwrap();
+            let t_proj1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
             // BitFFN
             let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
             let gate = layer.gate.matmul_hybrid(&norm2).unwrap();  // (seq, ffn_group_size)
             let up = layer.up.matmul_hybrid(&norm2).unwrap();      // (seq, ffn_group_size)
+            let t_ffn1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let ffn_group = gate.shape.1;
             let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
             for (i, g) in gated.data.iter_mut().enumerate() {
@@ -341,16 +351,30 @@ impl TransformerModel {
                     x.data[s * self.hidden + d] += down.data[s * down_out + d];
                 }
             }
+
+            let lt1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            if layer_idx == 0 {
+                crate::serial_println!("[FWD] L0 qkv:{} attn:{} proj:{} ffn_gateup:{} down:{} total:{}",
+                    t_q1 - t_q0, t_attn1 - t_v1, t_proj1 - t_attn1, t_ffn1 - t_proj1, lt1 - t_ffn1, lt1 - lt0);
+            }
+            if lt1 - lt0 > 5 || layer_idx == 0 || layer_idx + 1 == layer_count {
+                crate::serial_println!("[FWD] layer {}/{}: {} ticks", layer_idx + 1, layer_count, lt1 - lt0);
+            }
         }
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let last_hidden = Tensor::from_row_major((1, self.hidden),
             final_norm.data[(seq_len - 1) * self.hidden..seq_len * self.hidden].to_vec()).unwrap();
+        let t_unembed0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         let logits = if self.tie_embeddings {
             self.embed.matmul_hybrid(&last_hidden).unwrap()
         } else {
             self.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
+        let t_unembed1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        if t_unembed1 - t_unembed0 > 10 {
+            crate::serial_println!("[FWD] unembed: {} ticks", t_unembed1 - t_unembed0);
+        }
         (last_hidden, logits)
     }
 
@@ -759,9 +783,15 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     let use_bpe = crate::bpe::is_loaded();
     let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
     let prompt_len = tokens.len();
-    for _ in 0..max_seq.saturating_sub(prompt_len).min(64) {
+    crate::serial_println!("[GEN] prompt_len={}, max_seq={}", prompt_len, max_seq);
+    for step in 0..max_seq.saturating_sub(prompt_len).min(8) {
         if tokens.len() >= max_seq { break; }
+        let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         let (last_hidden, _) = model.forward_hidden(&tokens);
+        let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        if step % 8 == 0 || t1 - t0 > 10 {
+            crate::serial_println!("[GEN] step={} fwd_hidden: {} ticks (ctx={} tok)", step, t1 - t0, tokens.len());
+        }
 
         let mut draft = Vec::with_capacity(MEDUSA_HEADS);
         for head in &model.medusa_heads {

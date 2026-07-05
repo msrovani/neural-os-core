@@ -470,6 +470,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     simd::enable_simd();
     crate::boot_logger::log("BOOT: SIMD enabled");
+    #[cfg(target_arch = "x86_64")]
+    {
+        let avx = crate::tensor::has_avx2();
+        serial_println!("[SIMD] AVX2: {}", if avx { "SIM ✅" } else { "NAO ❌" });
+    }
 
     tpm::init_tpm(pm_offset);
     crate::boot_logger::log("BOOT: TPM probe done");

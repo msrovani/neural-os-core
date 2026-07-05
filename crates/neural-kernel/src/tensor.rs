@@ -5,8 +5,16 @@ pub fn has_avx2() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
         unsafe {
-            let result = core::arch::x86_64::__cpuid(7);
-            (result.ebx & (1 << 5)) != 0
+            let leaf1 = core::arch::x86_64::__cpuid(1);
+            let has_hypervisor = (leaf1.ecx & (1 << 31)) != 0;
+            let leaf7 = core::arch::x86_64::__cpuid(7);
+            let has_avx2 = (leaf7.ebx & (1 << 5)) != 0;
+            if !has_avx2 { return false; }
+            if has_hypervisor {
+                let hv = core::arch::x86_64::__cpuid(0x40000000);
+                if hv.ebx == 0x7263694D { return false; } // "Micr" = WHPX
+            }
+            true
         }
     }
     #[cfg(not(target_arch = "x86_64"))]
@@ -55,7 +63,7 @@ impl Tensor {
         let mut result = Tensor::new((m, n));
         #[cfg(target_arch = "x86_64")]
         {
-            if has_avx2() && m >= 4 && k >= 8 && n >= 4 {
+            if has_avx2() && k >= 8 && n >= 8 {
                 return Some(self.matmul_avx2_inner(other, m, k, n));
             }
         }
@@ -71,32 +79,60 @@ impl Tensor {
         Some(result)
     }
 
-    /// AVX2-optimized matmul usando 256-bit SIMD (8 f32 por instrucao)
+    /// AVX2 matmul: broadcast 1 input × 8 weights, soma em j-blocks.
+    /// Só executa quando k%8==0 e n%8==0; caso contrário usa scalar.
     #[cfg(target_arch = "x86_64")]
     fn matmul_avx2_inner(&self, other: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
         let mut result = Tensor::new((m, n));
-        unsafe {
-            use core::arch::x86_64::*;
-            for i in 0..m {
-                for j in (0..n).step_by(8) {
-                    let mut sum = _mm256_setzero_ps();
-                    let remaining = core::cmp::min(8, n - j);
-                    for t in (0..k).step_by(8) {
-                        let a_row = &self.data[i * k..];
-                        let b_col = &other.data[t * n..];
-                        let a_vec = _mm256_loadu_ps(a_row.as_ptr().add(t));
-                        let b_vec = _mm256_loadu_ps(b_col.as_ptr().add(j));
-                        sum = _mm256_fmadd_ps(a_vec, b_vec, sum);
-                    }
-                    _mm256_storeu_ps(result.data[i * n + j..].as_mut_ptr(), sum);
-                    for r in 0..remaining {
-                        let mut scalar_sum = 0.0_f32;
+        let avx_cols = if k >= 8 { (n / 8) * 8 } else { 0 };
+        if avx_cols > 0 {
+            unsafe {
+                use core::arch::x86_64::*;
+                for i in 0..m {
+                    // AVX2: blocos completos de 8 colunas
+                    for j in (0..avx_cols).step_by(8) {
+                        let mut sum = _mm256_setzero_ps();
                         for t in 0..k {
-                            scalar_sum += self.data[i * k + t] * other.data[t * n + j + r];
+                            let a = _mm256_set1_ps(self.data[i * k + t]);
+                            let b = _mm256_loadu_ps(other.data[t * n + j..].as_ptr());
+                            sum = _mm256_fmadd_ps(a, b, sum);
                         }
-                        result.data[i * n + j + r] += scalar_sum;
+                        _mm256_storeu_ps(result.data[i * n + j..].as_mut_ptr(), sum);
+                    }
+                    // Tail scalar
+                    for j in avx_cols..n {
+                        let mut s = 0.0f32;
+                        for t in 0..k {
+                            s += self.data[i * k + t] * other.data[t * n + j];
+                        }
+                        result.data[i * n + j] = s;
                     }
                 }
+            }
+        } else {
+            // k < 8: scalar puro
+            for i in 0..m {
+                for j in 0..n {
+                    let mut s = 0.0f32;
+                    for t in 0..k {
+                        s += self.data[i * k + t] * other.data[t * n + j];
+                    }
+                    result.data[i * n + j] = s;
+                }
+            }
+        }
+        result
+    }
+
+    fn matmul_scalar(&self, other: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
+        let mut result = Tensor::new((m, n));
+        for i in 0..m {
+            for j in 0..n {
+                let mut s = 0.0f32;
+                for t in 0..k {
+                    s += self.data[i * k + t] * other.data[t * n + j];
+                }
+                result.data[i * n + j] = s;
             }
         }
         result
@@ -187,6 +223,12 @@ impl TernaryTensor {
             return None;
         }
         let mut result = Tensor::new((m, n));
+        #[cfg(target_arch = "x86_64")]
+        {
+            if has_avx2() && k >= 8 {
+                return Some(self.matmul_hybrid_avx2(input, m, k, n));
+            }
+        }
         for i in 0..m {
             for j in 0..n {
                 let mut sum = 0.0_f32;
@@ -201,6 +243,61 @@ impl TernaryTensor {
             }
         }
         Some(result)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn matmul_hybrid_avx2(&self, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
+        let mut result = Tensor::new((m, n));
+        unsafe {
+            use core::arch::x86_64::*;
+            for i in 0..m {
+                let avx_cols = if k >= 8 { (n / 8) * 8 } else { 0 };
+                // AVX2 bloco 8 colunas
+                for j in (0..avx_cols).step_by(8) {
+                    let mut sum = _mm256_setzero_ps();
+                    for t in 0..k {
+                        let a = _mm256_set1_ps(input.data[i * k + t]);
+                        let w_ptr = self.data.as_ptr().add(t * n + j) as *const i8;
+                        let w_i8 = _mm_loadl_epi64(w_ptr as *const __m128i);
+                        let w_i32 = _mm256_cvtepi8_epi32(w_i8);
+                        let b = _mm256_cvtepi32_ps(w_i32);
+                        sum = _mm256_fmadd_ps(a, b, sum);
+                    }
+                    _mm256_storeu_ps(result.data[i * n + j..].as_mut_ptr(), sum);
+                }
+                // Tail scalar (colunas restantes)
+                for j in avx_cols..n {
+                    let mut s = 0.0f32;
+                    for t in 0..k {
+                        match self.data[t * n + j] {
+                            1 => s += input.data[i * k + t],
+                            -1 => s -= input.data[i * k + t],
+                            _ => {}
+                        }
+                    }
+                    result.data[i * n + j] = s;
+                }
+            }
+        }
+        result
+    }
+
+    fn matmul_hybrid_scalar(&self, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
+        let mut result = Tensor::new((m, n));
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = 0.0_f32;
+                for t in 0..k {
+                    match self.data[t * n + j] {
+                        1 => sum += input.data[i * k + t],
+                        -1 => sum -= input.data[i * k + t],
+                        _ => {}
+                    }
+                }
+                result.data[i * n + j] = sum;
+            }
+        }
+        result
     }
 }
 

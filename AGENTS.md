@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.79.2-design 🏆
+#   PLANO DIRETOR — neural-os-core v0.80.0-design 🏆
 #   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + AIOS ROADMAP + LLM INFRA
 #   135 arquivos Rust, ~16.210 LOC, 0 erros
 # ════════════════════════════════════════════════════════
@@ -419,4 +419,13 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **Code Review v0.78.1 (2026-07-04):** 8 dead modules annotated with `#![allow(dead_code)]` + `@dead` comments: shell, voice_skill, bench, verify, orchestrator, tracer, skill_market, hal. DEAD MODULES section added to main.rs. 36 warnings eliminated.
 - **VirtualBox SMP fix:** AP_COUNT static prevents INIT-SIPI-SIPI when MADT shows 0 APs. VirtualBox 2 vCPUs now boots reliably (1 AP woken).
 - **Dead Modules Convention:** Modules marked `@dead` in their doc comment have `#![allow(dead_code)]` and a reference in `main.rs` "DEAD MODULES" section. They are kept for future sprints (not deleted). IA devs should check `main.rs:18-40` before adding new implementations — prefer extending active code over reviving dead modules.
+
+## Session: v0.80.0 — Sprint 80: AVX2 Debug + WHPX Detection + Forward Pass (2026-07-05)
+- **3 AVX2 bugs corrigidos:** `matmul_hybrid` para TernaryTensor era scalar puro (Q/K/V/O sem AVX2). Tail handling adicionado para n não múltiplo de 8 (K/V têm n=100). `avx2_ternary_matmul_impl` revertido de outer product (step_by(8) incorreto) para broadcast-per-t. Gate `m >= 4` removido — tokens únicos usam AVX2.
+- **WHPX detection cruicial:** AVX2 sob WHPX emula cada VEX instruction como VM exit → **2x MAIS LENTO que scalar**. `has_avx2()` agora detecta "Microsoft Hv" via CPUID 0x40000000 e retorna false. Scalar GP instructions rodam nativos sob WHPX.
+- **Row buffer substitui `unpack_all`:** PackedTernaryTensor matmul agora descompacta 1 linha por vez (6.9 KB) em vez de alocar Vec de 17.7 MB por chamada. **Não acelerou** — gargalo real é emulação VEX, não alocação.
+- **Per-layer timing:** `[FWD] L0 qkv:180 attn:12 proj:186 ffn_gateup:1148 down:591 total:2218`. FFN gate+up = 52% (1148 de 2218 ticks).
+- **Forward pass BitNet b1.58 sob WHPX:** ~2.2s/layer = ~60s/forward pass (64 tokens × 30 layers). Generate 8 tokens: ~6h. Inviável sem KV cache ou bare metal.
+- **Sprint 80-81 realocado:** JARVIS Persona moveu para Sprint 81. Sprint 80 focou em debugar AVX2 e forward pass.
+- **Key file:** `bitnet_avx2.rs` (+42/-18), `tensor.rs` (+10/-4), `cortex.rs` (+30/-1), `agents.rs` (+6/-1).
 <!-- context7 -->

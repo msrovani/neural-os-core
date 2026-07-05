@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.80.0] — 2026-07-05 — 🏆 Sprint 80: AVX2 Debug + WHPX Detection + Forward Pass
+
+### Added (neural-kernel)
+- **`bitnet_avx2.rs`** — `unpack_row_into()`: descompacta 1 linha de PackedTernaryTensor em buffer i8 reutilizável (n bytes em vez de k*n). WHPX detection via CPUID leaf 0x40000000: vendor "Microsoft Hv" → `avx2_available()` retorna false. `avx2_ternary_matmul_impl()` reescrito: row buffer + acumulação direta.
+- **`tensor.rs`** — `has_avx2()` com WHPX detection (hypervisor bit + vendor string check).
+- **`cortex.rs`** — Per-layer timing: `[FWD] L0 qkv:... attn:... proj:... ffn_gateup:... down:... total:...`. Unembed timing. `generate_speculative()` limitado a 8 tokens (antes 64).
+- **`agents.rs`** — Timing em `generate_via_model()`: `[CORTEX-LLM] generate_via_model took X ticks (~Ys)`.
+
+### Fixed
+- **AVX2 `matmul_hybrid` para TernaryTensor (Q,K,V,O):** era scalar puro — agora usa AVX2 dispatch quando disponível (`matmul_hybrid_avx2`).
+- **Tail handling AVX2:** K/V têm n=100 (não múltiplo de 8). `matmul_hybrid_avx2` e `matmul_avx2_inner` processam blocos de 8 com AVX2 e colunas restantes com scalar.
+- **`avx2_ternary_matmul_impl`:** Revertido broadcast-per-t (correto para matmul) — outer product com `step_by(8)` estava incorreto.
+- **Removido gate `m >= 4`:** tokens únicos (m=1) agora usam AVX2 via `tensor.matmul()`.
+- **`unpack_all()` removido:** substituído por `unpack_row_into()` que aloca apenas n bytes (6.9 KB) em vez de k*n bytes (17.7 MB) por matmul.
+
+### Performance (WHPX, 2.4B model, seq_len=64)
+
+| Modo | ticks/layer | tempo/layer | 30 layers |
+|---|---|---|---|
+| AVX2 (VEX emulado) | ~4443 | ~4.4s | ~132s |
+| **Scalar puro** | **~2218** | **~2.2s** | **~66s** |
+
+### Lessons
+- **WHPX + AVX2 = pior performance:** WHPX emula cada VEX instruction como VM exit. Scalar GP instructions rodam nativos. AVX2 sob WHPX é 2x MAIS LENTO que scalar.
+- **`has_avx2()` detection:** CPUID leaf 0x40000000 vendor string "Microsoft Hv" identifica WHPX. Hypervisor presente check (CPUID leaf 1, ECX bit 31) como pré-requisito.
+- **`unpack_all` não era o gargalo:** 17.7 MB allocation é barata comparada a 17M operações de bit unpacking + matmul.
+- **Forward pass BitNet b1.58 sob WHPX:** ~60s para 64 tokens × 30 layers. Inviável para autogeneração sem KV cache ou bare metal.
+
+### Known Issues
+- Forward pass BitNet b1.58 sob WHPX: ~2.2s/layer = ~60s/forward pass. Generate 8 tokens: ~6h.
+- Solução: KV cache + bare metal ou QEMU+KVM.
+
 ## [0.79.2] — 2026-07-05 — 🐛 Xuvisco v2: VGA Sequencer Screen Off (0x3C4/0x3C5)
 
 ### Fixed (neural-kernel)

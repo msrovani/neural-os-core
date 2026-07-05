@@ -284,7 +284,11 @@ impl Agent for CortexAgent {
             serial_println!("[CORTEX-LLM] Generating for: \"{}\"", user_text);
             let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
             let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
+            serial_println!("[CORTEX-LLM] Calling generate_via_model...");
+            let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let output = crate::cortex::generate_via_model(&full_prompt);
+            let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            serial_println!("[CORTEX-LLM] generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
                 alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
             } else { output };
