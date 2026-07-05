@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.77.0-design 🏆
-#   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + AIOS ROADMAP
-#   132 arquivos Rust, ~15.500 LOC, 0 erros
+#   PLANO DIRETOR — neural-os-core v0.79.2-design 🏆
+#   TPM + DISK AGENT + NVMe + SMART + ADAPTIVE HEAP + AIOS ROADMAP + LLM INFRA
+#   135 arquivos Rust, ~16.210 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -387,12 +387,16 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - **Blocker principal:** QEMU loader overhead (~30s) aceitável. Forward pass bloqueia geração real.
 
 ## Session: v0.79.1 — Display Xuvisco Fix (VGA buffer + framebuffer clear) (2026-07-05)
-- **Root cause:** `[BOOT] FB ativo — VGA text mode desligado` era mentira — nunca limpava 0xB8000 nem desligava VGA CRTC. Framebuffer UEFI GOP mantinha artefatos do bootloader. Em QEMU `-vga std`, VGA text overlay causava "texto pula pro topo". Em Intel 6xx, VGA plane ativo corrompia display pipe.
-- **`vga_buffer::clear_physical_buffer()`** — nova função que limpa 0xB8000 via `write_bytes` (sem I/O a CRTC). Segura para Intel 6xx com UEFI GOP.
-- **`fb::probe_uefi_framebuffer()`** — agora limpa framebuffer para preto imediatamente após detectar GOP, eliminando artefatos do bootloader.
-- **`main.rs`** — chama `clear_physical_buffer(pm_offset)` quando framebuffer presente, antes de qualquer mensagem de boot.
-- **Zero writes a CRTC registers (0x3D4/0x3D5)** — compatibilidade Intel 6xx preservada.
-- **`cargo check --release`: 0 errors. commit: `419321b` (v0.79.1).**
+- **Root cause:** `[BOOT] FB ativo — VGA text mode desligado` era mentira — nunca limpava 0xB8000 nem desligava VGA CRTC.
+- **`vga_buffer::clear_physical_buffer()`** — limpa 0xB8000 via `write_bytes` (sem CRTC). **FALHOU** — 0xB8000 não mapeado pelo bootloader UEFI/OVMF no memory map.
+- **`fb::probe_uefi_framebuffer()`** — limpa framebuffer GOP para preto. ✅ Mantido.
+
+## Session: v0.79.2 — Xuvisco v2: VGA Sequencer Screen Off (2026-07-05)
+- **Regression v0.79.1:** `clear_physical_buffer()` write a 0xB8000 → page fault ANTES da IDT (linha 448 < 454) → triple fault → reset → xuvisco.
+- **`vga_buffer::disable_vga_plane()`** — substitui `clear_physical_buffer()`. Usa VGA sequencer port 0x3C4/0x3C5 (Clocking Mode bit 5 = Screen Off). Zero acesso a memória desmapeada, zero CRTC I/O. Seguro pre-IDT.
+- **`main.rs`** — chama `disable_vga_plane()` em vez de `clear_physical_buffer()`.
+- **Key lesson:** UEFI/OVMF não mapeia legacy VGA hole (0xA0000-0xBFFFF). I/O ports (0x3C4/0x3C5) são a única via segura de controlar VGA antes da IDT.
+- **`cargo clean + cargo build --release`: 0 errors. commit: `87fafea` (v0.79.2).**
 
 ## Session: v0.74.1-0.76.1 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + AIOS Roadmap (2026-07-03)
 - **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend. Fallback silencioso.

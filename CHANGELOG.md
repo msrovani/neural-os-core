@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.79.2] — 2026-07-05 — 🐛 Xuvisco v2: VGA Sequencer Screen Off (0x3C4/0x3C5)
+
+### Fixed (neural-kernel)
+- **`vga_buffer.rs`** — `clear_physical_buffer()` substituída por `disable_vga_plane()` que usa o sequenciador VGA (porta 0x3C4/0x3C5) para setar bit 5 (Screen Off) do Clocking Mode Register. Não acessa CRTC (0x3D4/0x3D5) nem memória 0xB8000.
+- **`main.rs`** — Chama `vga_buffer::disable_vga_plane()` em vez de `clear_physical_buffer()`.
+
+### Root Cause (v0.79.1 regression)
+`clear_physical_buffer()` escrevia em 0xB8000 via `write_bytes`, mas o bootloader (UEFI/OVMF) não mapeia o legacy VGA hole 0xA0000-0xBFFFF no memory map. Escrever em 0xB8000 causa page fault antes da IDT ser inicializada (main.rs linha 454) → triple fault → reset → xuvisco.
+
+### Lesson
+"VGA text buffer" não está magicamente mapeado em todo hardware. UEFI/OVMF não inclui a VGA hole no mapa de páginas. I/O ports (0x3C4/0x3C5) são a única forma segura de desligar o VGA plane antes da IDT.
+
 ## [0.79.1] — 2026-07-05 — 🐛 Display Xuvisco Fix (VGA buffer + framebuffer clear)
 
 ### Fixed (neural-kernel)

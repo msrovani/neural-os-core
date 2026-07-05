@@ -112,6 +112,38 @@ vga_buffer::clear_physical_buffer(pm_offset);
 
 ---
 
+---
+
+## v0.79.2 — Xuvisco v2: VGA Sequencer Screen Off (2026-07-05)
+
+### Problem (v0.79.1 regression)
+After v0.79.1 fix (clear 0xB8000 via `write_bytes`), xuvisco persisted. The write to 0xB8000 caused a page fault — the UEFI/OVMF bootloader maps only the GOP framebuffer, NOT the legacy VGA hole 0xA0000-0xBFFFF. Since the write happened **before** `init_idt()` (line 448 vs 454), the page fault handler wasn't installed → triple fault → system reset → same xuvisco appearance.
+
+### Root Cause
+`clear_physical_buffer()` assumed 0xB8000 was always readable/writable. Reality: UEFI/OVMF does not map legacy VGA memory. `write_bytes` on unmapped virtual address = #PF before IDT = triple fault.
+
+### New Fix
+**`vga_buffer::disable_vga_plane()`** — uses VGA sequencer port 0x3C4 (index 0x01) / 0x3C5 (data) to set Clocking Mode Register bit 5 (Screen Off). Two `out` instructions, no memory access, no CRTC I/O.
+
+```
+out 0x3C4, 0x01    ; sequencer index = Clocking Mode
+out 0x3C5, 0x21    ; bit 5 (Screen Off) + bit 0 (8 dot font)
+```
+
+Callable before IDT — I/O ports don't require page table mappings. Safe on Intel 6xx (no CRTC touch).
+
+### Key Lesson
+Memory-mapped I/O (0xB8000) requires page table entries. If the bootloader doesn't map it, accessing it = page fault. I/O ports (0x3C4/0x3C5) are the only way to control VGA before IDT init.
+
+### Files Changed
+| File | Change |
+|---|---|
+| `crates/neural-kernel/src/vga_buffer.rs` | `clear_physical_buffer()` → `disable_vga_plane()` |
+| `crates/neural-kernel/src/main.rs` | Call updated + comments |
+
+### Verification
+`cargo clean` (680 MB) + `cargo build --release`: **0 errors.**
+
 ## Appendix: BitNet-b1.58 Real Architecture
 | Field | Value |
 |---|---|

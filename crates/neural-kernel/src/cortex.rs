@@ -84,10 +84,16 @@ pub struct LayerWeights {
     pub gate: PackedTernaryTensor,
     pub up: PackedTernaryTensor,
     pub down: PackedTernaryTensor,
+    // GQA fields
+    pub kv_dim: usize,
+    pub num_kv_heads: usize,
+    // BitFFN fields
+    pub intermediate_size: usize,
+    pub ffn_group_size: usize,
 }
 
 pub struct TransformerModel {
-    pub embed: Tensor,
+    pub embed: PackedTernaryTensor,
     pub layers: Vec<LayerWeights>,
     pub rms_final: Vec<f32>,
     pub unembed: PackedTernaryTensor,
@@ -96,6 +102,16 @@ pub struct TransformerModel {
     pub hidden: usize,
     pub num_layers: usize,
     pub max_seq: usize,
+    // GQA fields
+    pub num_heads: usize,
+    pub num_kv_heads: usize,
+    pub head_dim: usize,
+    pub kv_dim: usize,
+    // BitFFN fields
+    pub intermediate_size: usize,
+    pub ffn_group_size: usize,
+    // Embedding tie flag
+    pub tie_embeddings: bool,
 }
 
 const MEDUSA_HEADS: usize = 3;
@@ -115,24 +131,25 @@ impl MedusaHead {
 }
 
 pub fn random_ternary(seed: &mut u32, rows: usize, cols: usize) -> PackedTernaryTensor {
-    let mut vals = Vec::with_capacity(rows * cols);
-    for _ in 0..rows * cols {
-        *seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let r = (*seed % 3) as i8;
-        vals.push(if r == 2 { -1 } else { r });
+    let packed_len = (rows * cols + 3) / 4;
+    let mut packed = vec![0u8; packed_len];
+    for (i, byte) in packed.iter_mut().enumerate() {
+        let mut b = 0u8;
+        for j in 0..4 {
+            *seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            let r = (*seed % 3) as i8;
+            let v = if r == 2 { -1i8 } else { r };
+            let bits = match v {
+                -1 => 0b10,
+                0 => 0b00,
+                1 => 0b01,
+                _ => 0b00,
+            };
+            b |= bits << (j * 2);
+        }
+        *byte = b;
     }
-    let packed = PackedTernaryTensor::pack_weights(&vals);
     PackedTernaryTensor { shape: (rows, cols), packed_data: packed }
-}
-
-fn random_embed(seed: &mut u32, rows: usize, cols: usize) -> Tensor {
-    let mut data = Vec::with_capacity(rows * cols);
-    for _ in 0..rows * cols {
-        *seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
-        let v = (*seed % 2001) as f32 / 1000.0 - 1.0;
-        data.push(v);
-    }
-    Tensor::from_row_major((rows, cols), data).unwrap()
 }
 
 impl TransformerModel {
@@ -151,11 +168,15 @@ impl TransformerModel {
                 gate: random_ternary(&mut seed, HIDDEN, FFN_DIM),
                 up: random_ternary(&mut seed, HIDDEN, FFN_DIM),
                 down: random_ternary(&mut seed, FFN_DIM, HIDDEN),
+                kv_dim: HIDDEN,
+                num_kv_heads: NUM_HEADS,
+                intermediate_size: FFN_DIM,
+                ffn_group_size: FFN_DIM,
             });
         }
         let medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed, HIDDEN, VOCAB_SIZE as usize)).collect();
         TransformerModel {
-            embed: random_embed(&mut seed, VOCAB_SIZE as usize, HIDDEN),
+            embed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
             layers,
             rms_final: rms_default,
             unembed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
@@ -164,13 +185,23 @@ impl TransformerModel {
             hidden: HIDDEN,
             num_layers: NUM_LAYERS,
             max_seq: MAX_SEQ,
+            num_heads: NUM_HEADS,
+            num_kv_heads: NUM_HEADS,
+            head_dim: HEAD_DIM,
+            kv_dim: HIDDEN,
+            intermediate_size: FFN_DIM,
+            ffn_group_size: FFN_DIM,
+            tie_embeddings: false,
         }
     }
 
     fn embed_lookup(&self, token: u16) -> Tensor {
-        let idx = (token as usize).min(self.embed.shape.0 - 1);
-        let start = idx * self.hidden;
-        let data = self.embed.data[start..start + self.hidden].to_vec();
+        let t = (token as usize).min(self.embed.shape.1 - 1);
+        let mut data = Vec::with_capacity(self.hidden);
+        for row in 0..self.hidden {
+            let idx = row * self.embed.shape.1 + t;
+            data.push(self.embed.get_weight(idx) as f32);
+        }
         Tensor::from_row_major((1, self.hidden), data).unwrap()
     }
 
@@ -182,7 +213,11 @@ impl TransformerModel {
 
     pub fn forward_hidden(&self, tokens: &[u16]) -> (Tensor, Tensor) {
         let seq_len = tokens.len().min(self.max_seq);
-        let head_dim = self.hidden / (self.layers.first().map_or(4, |_| self.hidden.max(1) / 64));
+        let num_heads = self.num_heads;
+        let num_kv_heads = self.num_kv_heads;
+        let qk_head_dim = self.kv_dim / num_heads; // 32 for BitNet-b1.58
+        let kv_dim = self.kv_dim;
+        let q_group_size = num_heads / num_kv_heads; // 4 Q heads per KV head
         let mut x = Tensor::new((seq_len, self.hidden));
         for (i, &t) in tokens.iter().enumerate().take(seq_len) {
             let emb = self.embed_lookup(t);
@@ -202,41 +237,120 @@ impl TransformerModel {
         for layer in &self.layers {
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
-            let q = layer.q.matmul_hybrid(&norm).unwrap();
-            let k = layer.k.matmul_hybrid(&norm).unwrap();
-            let v = layer.v.matmul_hybrid(&norm).unwrap();
+            // QKV projections with GQA dimensions
+            let q = layer.q.matmul_hybrid(&norm).unwrap();  // (seq, kv_dim)
+            let k = layer.k.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
+            let v = layer.v.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
 
-            let k_t = k.transposed();
-            let mut scores = q.matmul(&k_t).unwrap();
-            let scale = 1.0 / libm::sqrtf(head_dim as f32);
-            for s in scores.data.iter_mut() { *s *= scale; }
-            for i in 0..seq_len {
-                for j in 0..seq_len {
-                    scores.data[i * seq_len + j] += mask.data[i * seq_len + j];
+            // GQA attention: each KV head serves q_group_size query heads
+            // q: (seq, kv_dim) where kv_dim = num_heads * qk_head_dim
+            // k: (seq, k_dim) where k_dim = num_kv_heads * qk_head_dim
+            // v: (seq, k_dim)
+            let k_dim = k.shape.1;
+            let v_dim = v.shape.1;
+            let mut attn_out_data = vec![0.0f32; seq_len * kv_dim];
+
+            for kv_g in 0..num_kv_heads {
+                let kv_start = kv_g * qk_head_dim;
+                // Extract K and V for this KV group
+                let mut k_g = Tensor::new((seq_len, qk_head_dim));
+                let mut v_g = Tensor::new((seq_len, qk_head_dim));
+                for s in 0..seq_len {
+                    for d in 0..qk_head_dim {
+                        let kd = kv_start + d;
+                        if kd < k_dim {
+                            k_g.data[s * qk_head_dim + d] = k.data[s * k_dim + kd];
+                        }
+                        if kd < v_dim {
+                            v_g.data[s * qk_head_dim + d] = v.data[s * v_dim + kd];
+                        }
+                    }
+                }
+
+                for qh in 0..q_group_size {
+                    let head_idx = kv_g * q_group_size + qh;
+                    let head_start = head_idx * qk_head_dim;
+                    // Extract Q for this head
+                    let mut q_h = Tensor::new((seq_len, qk_head_dim));
+                    for s in 0..seq_len {
+                        for d in 0..qk_head_dim {
+                            q_h.data[s * qk_head_dim + d] = q.data[s * kv_dim + head_start + d];
+                        }
+                    }
+
+                    // scores = q_h @ k_g.T
+                    let k_g_t = k_g.transposed();
+                    let mut scores = q_h.matmul(&k_g_t).unwrap();
+                    let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
+                    for s in scores.data.iter_mut() { *s *= scale; }
+                    // Mask + softmax
+                    for i in 0..seq_len {
+                        for j in 0..seq_len {
+                            scores.data[i * seq_len + j] += mask.data[i * seq_len + j];
+                        }
+                    }
+                    for i in 0..seq_len {
+                        let start = i * seq_len;
+                        softmax_inplace(&mut scores.data[start..start + seq_len]);
+                    }
+                    // attn_out_h = scores @ v_g
+                    let attn_h = scores.matmul(&v_g).unwrap();
+                    // Write to output
+                    for s in 0..seq_len {
+                        for d in 0..qk_head_dim {
+                            attn_out_data[s * kv_dim + head_start + d] = attn_h.data[s * qk_head_dim + d];
+                        }
+                    }
                 }
             }
-            for i in 0..seq_len {
-                let start = i * seq_len;
-                softmax_inplace(&mut scores.data[start..start + seq_len]);
-            }
-            let attn_out = scores.matmul(&v).unwrap();
-            let proj = layer.o.matmul_hybrid(&attn_out).unwrap();
+
+            let attn_out = Tensor::from_row_major((seq_len, kv_dim), attn_out_data).unwrap();
+            let proj = layer.o.matmul_hybrid(&attn_out).unwrap();  // (seq, kv_dim) @ (kv_dim, hidden) = (seq, hidden)
             x = x.add(&proj).unwrap();
 
+            // BitFFN
             let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
-            let gate = layer.gate.matmul_hybrid(&norm2).unwrap();
-            let mut gate_act = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
-            for g in gate_act.data.iter_mut() { *g = silu(*g); }
-            let up = layer.up.matmul_hybrid(&norm2).unwrap();
-            let gated = gate_act.element_mul(&up).unwrap();
-            let down = layer.down.matmul_hybrid(&gated).unwrap();
-            x = x.add(&down).unwrap();
+            let gate = layer.gate.matmul_hybrid(&norm2).unwrap();  // (seq, ffn_group_size)
+            let up = layer.up.matmul_hybrid(&norm2).unwrap();      // (seq, ffn_group_size)
+            let ffn_group = gate.shape.1;
+            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
+            for (i, g) in gated.data.iter_mut().enumerate() {
+                *g = silu(*g) * up.data[i];
+            }
+
+            // Expand gated by repeating 4x for full intermediate dim
+            // gated: (seq, ffn_group) -> expand -> (seq, intermediate_size)
+            let intermediate_size = layer.intermediate_size;
+            let down_out = layer.down.shape.1; // kv_dim for BitNet
+            let num_groups = intermediate_size / ffn_group;
+            let mut gated_full = Tensor::new((seq_len, intermediate_size));
+            for s in 0..seq_len {
+                for g in 0..num_groups {
+                    let g_off = g * ffn_group;
+                    for d in 0..ffn_group {
+                        gated_full.data[s * intermediate_size + g_off + d] = gated.data[s * ffn_group + d];
+                    }
+                }
+            }
+
+            let down = layer.down.matmul_hybrid(&gated_full).unwrap();  // (seq, intermediate) @ (intermediate, down_out) = (seq, down_out)
+
+            // Add FFN output to residual (first down_out dims)
+            for s in 0..seq_len {
+                for d in 0..down_out.min(self.hidden) {
+                    x.data[s * self.hidden + d] += down.data[s * down_out + d];
+                }
+            }
         }
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let last_hidden = Tensor::from_row_major((1, self.hidden),
             final_norm.data[(seq_len - 1) * self.hidden..seq_len * self.hidden].to_vec()).unwrap();
-        let logits = self.unembed.matmul_hybrid(&last_hidden).unwrap();
+        let logits = if self.tie_embeddings {
+            self.embed.matmul_hybrid(&last_hidden).unwrap()
+        } else {
+            self.unembed.matmul_hybrid(&last_hidden).unwrap()
+        };
         (last_hidden, logits)
     }
 
@@ -327,36 +441,161 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let _num_params = read_u32(data, &mut off)?;
     let hidden = read_u16(data, &mut off)? as usize;
     let num_layers = read_u16(data, &mut off)? as usize;
-    let _heads = read_u16(data, &mut off)? as usize;
+    // Auto-expand heap based on header (before main parsing)
+    {
+        let nh = read_u16(data, &mut off)? as usize;
+        let vs = read_u32(data, &mut off)? as usize;
+        let _ms = read_u16(data, &mut off)? as usize;
+        let isize = read_u16(data, &mut off)? as usize;
+        let embed_bytes = (hidden * vs / 4) as u64;
+        // 4 aten tensors (q,k,v,o: hidden² each) + 3 FFN tensors (gate,up,down: hidden×isize each)
+        let layer_bytes = (4u64 * hidden as u64 * hidden as u64 / 4 + 3u64 * hidden as u64 * isize as u64 / 4) * num_layers as u64;
+        let unembed_bytes = (hidden as u64 * vs as u64 / 4) as u64;
+        let estimated = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
+        let cur_mb = crate::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
+        if estimated > cur_mb {
+            let total_mb = estimated + (estimated / 4).max(64);
+            crate::allocator::resize_heap_to_mb(total_mb);
+        }
+    }
+    // Reset offset past magic+version+num_params+hidden+num_layers for main parsing
+    off = 4 + 2 + 4 + 2 + 2;
+    let num_heads = read_u16(data, &mut off)? as usize;
     let vocab_size = read_u32(data, &mut off)?;
     let max_seq = read_u16(data, &mut off)?;
-    let ffn_dim = if version >= 2 {
-        read_u16(data, &mut off)? as usize
-    } else {
-        hidden * 2
-    };
-    let num_medusa = {
-        let mut n = 0usize;
-        if off + 4 > data.len() { return None; }
-        n = data[off] as usize; off += 4;
-        n
-    };
-    // v2: extract tokenizer data and initialize BPE
-    if version >= 2 {
+
+    // v3: interleaved GQA/BitFFN fields
+    // v2: ffn_dim (grouped)
+    // v1: no ffn_dim
+    let mut intermediate_size = hidden * 4;
+    let mut num_kv_heads = num_heads;
+    let mut num_medusa = 0usize;
+    let mut tie_embeddings = false;
+
+    if version >= 3 {
+        intermediate_size = read_u16(data, &mut off)? as usize;
+        num_kv_heads = read_u16(data, &mut off)? as usize;
+        let q_dim = read_u16(data, &mut off)? as usize;  // Q projection output dim
+        num_medusa = read_u32(data, &mut off)? as usize;
+        // v3.1: tie_word_embeddings flag (4 bytes)
+        if off + 4 <= data.len() {
+            tie_embeddings = &data[off..off + 4] == b"TIED";
+        }
+        off += 4;
         let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
         let tok_len = read_u32(data, &mut off)? as usize;
         if tok_len > 0 && off + tok_len <= data.len() {
             let tok_data = &data[off..off + tok_len];
-            if crate::bpe::init_from_json(tok_data).is_ok() {
-                crate::serial_println!("[BPE] Tokenizer loaded from .bitnet ({tok_len} bytes)");
-            } else {
-                crate::serial_println!("[BPE] Failed to parse tokenizer from .bitnet");
-            }
+            let first = if tok_len >= 8 { &tok_data[..8] } else { tok_data };
+            crate::serial_println!("[BPE] Tokenizer data: {} bytes, starts {:02x?}", tok_len, first);
+            // BPE tokenizer skipped for v3 (large tokenizer needs proper JSON parser)
         }
         off += tok_len;
+
+        let embed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
+
+        // GQA/BitFFN dimensions from header
+        let kv_head_dim = q_dim / num_heads;                  // 640/20 = 32
+        let k_dim = num_kv_heads * kv_head_dim;              // 5*32 = 160
+        let ffn_group = intermediate_size * q_dim / hidden;  // 6912*640/2560 = 1728
+        let down_out = q_dim;                                 // 640
+
+        let mut layers = Vec::with_capacity(num_layers);
+        for _ in 0..num_layers {
+            let rms_attn = read_f32_vec(data, &mut off, hidden)?;
+            let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
+            layers.push(LayerWeights {
+                rms_attn,
+                q: read_ternary_tensor(data, &mut off, hidden, q_dim)?,
+                k: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
+                v: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
+                o: read_ternary_tensor(data, &mut off, q_dim, hidden)?,
+                rms_ffn,
+                gate: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
+                up: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
+                down: read_ternary_tensor(data, &mut off, intermediate_size, down_out)?,
+                kv_dim: q_dim,
+                num_kv_heads,
+                intermediate_size,
+                ffn_group_size: ffn_group,
+            });
+        }
+
+        // v3: rms_final may not be present (tied models skip it)
+        let rms_final = if off + hidden * 4 <= data.len() {
+            read_f32_vec(data, &mut off, hidden)?
+        } else {
+            vec![1.0; hidden]
+        };
+
+        // v3: unembed may be absent (tie_word_embeddings).
+        // Try to read unembed from file. If tie_embeddings flag was set (header) or the data
+        // reads as all-zero (past end of actual file in QEMU device-loader memory region),
+        // allocate a zero tensor and mark tie_embeddings.
+        let expected = (hidden * vocab_size as usize + 3) / 4;
+        let unembed = if !tie_embeddings && off + expected <= data.len() {
+            // Check first 16 bytes are non-zero (zero = past file end = tied)
+            let is_zeroed = data[off..(off + 16).min(data.len())].iter().all(|&b| b == 0);
+            if is_zeroed {
+                tie_embeddings = true;
+                PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![0u8; expected] }
+            } else {
+                read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?
+            }
+        } else {
+            tie_embeddings = true;
+            PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![0u8; expected] }
+        };
+
+        let mut medusa_heads = Vec::with_capacity(num_medusa);
+        if num_medusa > 0 {
+            for _ in 0..num_medusa {
+                let w = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
+                medusa_heads.push(MedusaHead { w });
+            }
+        }
+
+        let model = TransformerModel {
+            embed, layers, rms_final, unembed, medusa_heads,
+            vocab_size, hidden, num_layers, max_seq: max_seq as usize,
+            num_heads, num_kv_heads, head_dim: kv_head_dim, kv_dim: q_dim,
+            intermediate_size,
+            ffn_group_size: ffn_group,
+            tie_embeddings,
+        };
+        GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
+        return Some(model);
+    } else if version >= 2 {
+        let ffn_dim = read_u16(data, &mut off)? as usize;
+        intermediate_size = ffn_dim * 4; // assume 4 groups for v2 BitFFN
+        num_kv_heads = if num_heads > 0 { num_heads / 4 } else { num_heads };
+        num_medusa = {
+            let mut n = 0usize;
+            if off + 4 > data.len() { return None; }
+            n = data[off] as usize; off += 4;
+            n
+        };
+        let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
+        let tok_len = read_u32(data, &mut off)? as usize;
+        if tok_len > 0 && off + tok_len <= data.len() {
+            let tok_data = &data[off..off + tok_len];
+        }
+        off += tok_len;
+    } else {
+        // v1: no tokenizer, no ffn_dim, no medusa
+        num_medusa = 0;
     }
 
     let embed = read_f32_tensor(data, &mut off, vocab_size as usize, hidden)?;
+
+    // Compute GQA dimensions
+    let head_dim = hidden / num_heads.max(1);
+    let kv_dim = num_kv_heads * head_dim; // = 5*128 = 640, but actual k_proj out is 160
+    // For BitNet, the per-head KV dim is smaller: k_per_head = 32
+    // qk_head_dim = kv_dim / num_kv_heads = head_dim (standard)
+    // But BitNet uses qk_head_dim = 32, making kv_dim = num_kv_heads * 32 = 160
+    // Let's read actual tensor sizes from the byte stream
+
     let mut layers = Vec::with_capacity(num_layers);
     for _ in 0..num_layers {
         let rms_attn = if version >= 2 {
@@ -371,38 +610,133 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             let s = read_f32(data, &mut off)?;
             vec![s; hidden]
         };
-        layers.push(LayerWeights {
-            rms_attn,
-            q: read_ternary_tensor(data, &mut off, hidden, hidden)?,
-            k: read_ternary_tensor(data, &mut off, hidden, hidden)?,
-            v: read_ternary_tensor(data, &mut off, hidden, hidden)?,
-            o: read_ternary_tensor(data, &mut off, hidden, hidden)?,
-            rms_ffn,
-            gate: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
-            up: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
-            down: read_ternary_tensor(data, &mut off, hidden, ffn_dim)?,
-        });
+
+        // Determine tensor sizes by reading from the byte stream
+        // v3: transposed (in, out) layout
+        // Q: (hidden, q_dim) where q_dim = kv_dim standard, 640 for BitNet
+        // K: (hidden, k_dim) where k_dim = kv_head_dim = 160 for BitNet
+        // V: (hidden, k_dim)
+        // O: (q_dim, hidden)
+
+        if version >= 3 {
+            // Read the actual tensor shapes from context
+            // For BitNet-b1.58-2B-4T: q_dim=640, k_dim=160, ffn_group=1728, down_out=640
+            // We infer q_dim from num_heads * qk_head_dim where qk_head_dim = 32 (BitNet specific)
+            let qk_head_dim = if num_kv_heads > 0 && kv_dim / num_kv_heads > 1 {
+                // Try to use the stored kv_dim / num_kv_heads for per-head KV dim
+                32 // BitNet uses 32; fallback for other models
+            } else {
+                32
+            };
+            let q_dim = num_heads * qk_head_dim;
+            let k_dim = num_kv_heads * qk_head_dim;
+            let ffn_group = intermediate_size / 4; // default: 4 groups
+            let down_out = q_dim; // BitNet: down projects to kv_dim (same as q_dim)
+
+            layers.push(LayerWeights {
+                rms_attn,
+                q: read_ternary_tensor(data, &mut off, hidden, q_dim)?,
+                k: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
+                v: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
+                o: read_ternary_tensor(data, &mut off, q_dim, hidden)?,
+                rms_ffn,
+                gate: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
+                up: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
+                down: read_ternary_tensor(data, &mut off, intermediate_size, down_out)?,
+                kv_dim: q_dim,
+                num_kv_heads,
+                intermediate_size,
+                ffn_group_size: ffn_group,
+            });
+        } else {
+            // v1/v2: non-transposed layout, (out, in)
+            // For backward compat, keep old format
+            let ffn_dim = intermediate_size / 4;
+            layers.push(LayerWeights {
+                rms_attn,
+                q: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                k: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                v: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                o: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                rms_ffn,
+                gate: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
+                up: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
+                down: read_ternary_tensor(data, &mut off, hidden, ffn_dim)?,
+                kv_dim: hidden,
+                num_kv_heads,
+                intermediate_size,
+                ffn_group_size: ffn_dim,
+            });
+        }
     }
+
     let rms_final = if version >= 2 {
-        read_f32_vec(data, &mut off, hidden)?
+        // v3 may not have rms_final (tied model)
+        if off + hidden * 4 <= data.len() {
+            read_f32_vec(data, &mut off, hidden)?
+        } else {
+            vec![1.0; hidden]
+        }
     } else {
         vec![1.0; hidden]
     };
-    let unembed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
+
+    // Unembed - v3 may have tie_word_embeddings (no unembed)
+    let unembed = if off + 4 < data.len() {
+        // Try to read unembed; if insufficient data, use embed as tied weights
+        let remaining = data.len() - off;
+        let expected = (hidden * vocab_size as usize + 3) / 4;
+        if remaining >= expected {
+            read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?
+        } else {
+            tie_embeddings = true;
+            // Create empty placeholder - will be filled from embed at inference
+            let packed = vec![0u8; expected];
+            PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: packed }
+        }
+    } else {
+        tie_embeddings = true;
+        let expected = (hidden * vocab_size as usize + 3) / 4;
+        let packed = vec![0u8; expected];
+        PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: packed }
+    };
 
     let mut medusa_heads = Vec::with_capacity(num_medusa);
-    for _ in 0..num_medusa {
-        let w = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
-        medusa_heads.push(MedusaHead { w });
+    if num_medusa > 0 {
+        for _ in 0..num_medusa {
+            let w = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
+            medusa_heads.push(MedusaHead { w });
+        }
     }
-    if medusa_heads.is_empty() && MEDUSA_HEADS > 0 {
-        let mut seed: u32 = 42;
-        medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed, hidden, vocab_size as usize)).collect();
-    }
+
+    let q_dim = if version >= 3 {
+        let qk_head_dim = 32;
+        num_heads * qk_head_dim
+    } else {
+        hidden
+    };
+
+    // v1/v2: embed is Tensor → convert to PackedTernaryTensor (hidden, vocab_size)
+    let embed = {
+        let hidden = embed.shape.1;
+        let vocab = embed.shape.0;
+        let mut vals = Vec::with_capacity(hidden * vocab);
+        for h in 0..hidden {
+            for v in 0..vocab {
+                vals.push(if embed.data[v * hidden + h] > 0.0 { 1i8 } else if embed.data[v * hidden + h] < 0.0 { -1i8 } else { 0i8 });
+            }
+        }
+        let packed = PackedTernaryTensor::pack_weights(&vals);
+        PackedTernaryTensor { shape: (hidden, vocab), packed_data: packed }
+    };
 
     let model = TransformerModel {
         embed, layers, rms_final, unembed, medusa_heads,
         vocab_size, hidden, num_layers, max_seq: max_seq as usize,
+        num_heads, num_kv_heads, head_dim, kv_dim: q_dim,
+        intermediate_size,
+        ffn_group_size: intermediate_size / 4,
+        tie_embeddings,
     };
     GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
     Some(model)

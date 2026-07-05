@@ -374,8 +374,16 @@ impl GgufBackedModel {
     }
 
     fn try_build_transformer(&self) -> Option<crate::cortex::TransformerModel> {
-        let (vals, cols, rows) = dequantize_tensor_by_name(&self.file, "token_embd")?;
-        let embed = Tensor::from_row_major((rows, cols), vals)?;
+        let (vals, hidden, vocab) = dequantize_tensor_by_name(&self.file, "token_embd")?;
+        let embed = {
+            let mut vals_t = Vec::with_capacity(hidden * vocab);
+            for h in 0..hidden {
+                for v in 0..vocab {
+                    vals_t.push(vals[v * hidden + h]);
+                }
+            }
+            f32_to_ternary_packed(&vals_t, hidden, vocab)
+        };
         let mut layers = Vec::with_capacity(self.n_layers);
         for i in 0..self.n_layers {
             let hint = |s| alloc::format!("blk.{}.{}", i, s);
@@ -387,6 +395,7 @@ impl GgufBackedModel {
             let (up, uc, ur) = dequantize_tensor_by_name(&self.file, &hint("ffn_up"))?;
             let (down, dc, dr) = dequantize_tensor_by_name(&self.file, &hint("ffn_down"))?;
             let rms_default = alloc::vec![1.0f32; self.hidden_dim];
+            let ffn_dim = gc.max(gr) / 4 * 4; // approximate FFN intermediate dim
             layers.push(crate::cortex::LayerWeights {
                 rms_attn: rms_default.clone(),
                 q: f32_to_ternary_packed(&q, qr, qc),
@@ -397,6 +406,10 @@ impl GgufBackedModel {
                 gate: f32_to_ternary_packed(&gate, gr, gc),
                 up: f32_to_ternary_packed(&up, ur, uc),
                 down: f32_to_ternary_packed(&down, dr, dc),
+                kv_dim: self.hidden_dim,
+                num_kv_heads: self.hidden_dim / 64,
+                intermediate_size: ffn_dim,
+                ffn_group_size: ffn_dim,
             });
         }
         let unembed = dequantize_tensor_by_name(&self.file, "output.weight")
@@ -417,6 +430,13 @@ impl GgufBackedModel {
             hidden: self.hidden_dim,
             num_layers: self.n_layers,
             max_seq: crate::cortex::MAX_SEQ,
+            num_heads: self.hidden_dim / 64,
+            num_kv_heads: self.hidden_dim / 64,
+            head_dim: 64,
+            kv_dim: self.hidden_dim,
+            intermediate_size: self.hidden_dim * 4,
+            ffn_group_size: self.hidden_dim,
+            tie_embeddings: false,
         })
     }
 }

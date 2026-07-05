@@ -1,6 +1,7 @@
 use linked_list_allocator::LockedHeap;
 use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB};
-use x86_64::VirtAddr;
+use x86_64::structures::paging::PageTable;
+use x86_64::{VirtAddr, PhysAddr};
 
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
@@ -21,17 +22,19 @@ pub fn try_alloc_check() -> bool {
 }
 
 /// Expande o heap dinamicamente baseado no tamanho do modelo AI.
-/// Usa frame allocator global + map_page_uc para mapear novas paginas.
+/// Usa frame allocator global + mapeamento direto nas pagetables.
 /// Thread-safe: so cresce, nunca encolhe.
 pub fn resize_heap_to_mb(target_mb: usize) {
     let current = CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::SeqCst);
     if target_mb <= current { return; }
     let diff_pages = (target_mb - current) * 256;
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    let base = VirtAddr::new(pmoff);
     let start_virt = HEAP_START as u64 + (current as u64 * 1024 * 1024);
 
     let mut allocated = 0usize;
-    for i in 0..diff_pages {
+    let total_pages = diff_pages;
+    for i in 0..total_pages {
         let phys = {
             let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
             match g.as_mut().and_then(|a| a.allocate_frame()) {
@@ -39,17 +42,50 @@ pub fn resize_heap_to_mb(target_mb: usize) {
                 None => break,
             }
         };
-        let virt = start_virt + (i as u64 * 4096);
+        let virt = VirtAddr::new(start_virt + (i as u64 * 4096));
         unsafe {
-            crate::apic::map_page_uc(phys, pmoff);
-            ALLOCATOR.lock().extend(4096);
+            let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+            let l4_virt = base + l4_frame.start_address().as_u64();
+            let l4_tbl = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+            let e3 = &mut l4_tbl[virt.p4_index()];
+            if !e3.flags().contains(PageTableFlags::PRESENT) { let f = alloc_pt_frame(base); e3.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE); }
+            let l3_virt = base + e3.addr().as_u64();
+            let l3_tbl = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+            let e2 = &mut l3_tbl[virt.p3_index()];
+            if !e2.flags().contains(PageTableFlags::PRESENT) { let f = alloc_pt_frame(base); e2.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE); }
+            let l2_virt = base + e2.addr().as_u64();
+            let l2_tbl = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+            let e1 = &mut l2_tbl[virt.p2_index()];
+            if !e1.flags().contains(PageTableFlags::PRESENT) { let f = alloc_pt_frame(base); e1.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE); }
+            let l1_virt = base + e1.addr().as_u64();
+            let l1_tbl = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+            l1_tbl[virt.p1_index()].set_addr(PhysAddr::new(phys), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+            x86_64::instructions::tlb::flush(virt);
         }
         allocated += 1;
+    }
+
+    // Single extend — avoids 200K+ tiny free blocks that fragment the heap
+    if allocated > 0 {
+        unsafe { ALLOCATOR.lock().extend(allocated * 4096); }
     }
 
     let new_mb = current + allocated / 256;
     CURRENT_HEAP_MB.store(new_mb, core::sync::atomic::Ordering::SeqCst);
     crate::serial_println!("[HEAP] {} MB → {} MB ({} pages added)", current, new_mb, allocated);
+}
+
+unsafe fn alloc_pt_frame(base: VirtAddr) -> u64 {
+    use x86_64::structures::paging::FrameAllocator;
+    let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
+    if let Some(alloc) = g.as_mut() {
+        if let Some(frame) = alloc.allocate_frame() {
+            let pa = frame.start_address().as_u64();
+            core::ptr::write_bytes((base + pa).as_mut_ptr::<u8>(), 0, 4096);
+            return pa;
+        }
+    }
+    0
 }
 
 pub fn heap_stats() -> (usize, usize) {

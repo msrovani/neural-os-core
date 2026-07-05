@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.79.1-design 🏆
+#   STATE — neural-os-core v0.79.2-design 🏆
 #   SPRINT 79 — LLM Infrastructure + Display Xuvisco Fix
 #   135 arquivos Rust, ~16.210 LOC, 0 erros
 # ════════════════════════════════════════════════════════
@@ -16,6 +16,7 @@
 - **2026-07-04** — **Sprint 78:** 8 Agentic Evolution items (~400 LOC).
 - **2026-07-04** — **Sprint 79:** LLM Infrastructure — BitNet-b1.58 850M integration. AVX2 ternary matmul, BPE tokenizer, Trinity Router stub, QEMU loader boot pipeline. 3 new files, 6 modified. Model downloaded & converted to .bitnet v2 (1,464 MB).
 - **2026-07-05** — **v0.79.1:** Display Xuvisco Fix — `vga_buffer::clear_physical_buffer()` limpa 0xB8000 sem tocar CRTC. `fb::probe_uefi_framebuffer()` limpa FB para preto. Zero I/O a 0x3D4/0x3D5.
+- **2026-07-05** — **v0.79.2:** Xuvisco v2 fix — `clear_physical_buffer()` causava page fault (0xB8000 não mapeado no UEFI memory map) antes da IDT → triple fault. Substituído por `disable_vga_plane()` via sequenciador VGA (0x3C4/0x3C5) — I/O ports seguros sem IDT.
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
@@ -92,8 +93,12 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 15. **QEMU loader strategy** — `-device loader,file=.bitnet,addr=0x100000000` com `-m 6G` + WHPX. Model in high memory avoids frame allocator conflicts. ~30s boot overhead acceptable for dev.
 16. **Build_image.py UEFI issue** — bootloader 0.11.15 default features include UEFI. `default-features=false, features=["bios"]` avoids serde compile panic.
 17. **VGA buffer clear fix (v0.79.1):** `[BOOT] FB ativo — VGA text mode desligado` agora é verdade. 0xB8000 limpo via `write_bytes` sem CRTC I/O. Framebuffer limpo para preto imediatamente no probe.
+18. **VGA sequencer fix (v0.79.2):** `clear_physical_buffer()` write a 0xB8000 causa page fault pre-IDT. UEFI/OVMF não mapeia legacy VGA hole. Solução: VGA sequencer I/O (0x3C4/0x3C5) Screen Off bit — zero acesso a memória desmapeada.
 
 ## Pendente Técnico
+- **Teste QEMU WHXP + VGA sequencer**: rebuildar boot image e verificar se xuvisco sumiu
+- **Teste Intel 6xx real**: confirmação final do fix
+- **Forward pass BitNet b1.58**: GQA + BitFFN grouped projections — Sprint 80
 - **Forward pass BitNet b1.58**: GQA + BitFFN grouped projections — Sprint 80
 - **Build_image.py fix**: BIOS-only bootloader compilation needs offline verification
 - **JARVIS agents**: ~5650 LOC, Sprints 80-83
