@@ -227,6 +227,12 @@ impl Rtl8139Driver {
             rx_virt.add(off + 3).read_volatile(),
         ]);
 
+        // Debug RX na primeira ocorrencia
+        if self.rx_offset == 0 {
+            serial_println!("[RTL8139-RX] first packet: capr={:#06x} rx_off={:#06x} status={:#06x} len={}",
+                capr, self.rx_offset, status, pkt_len);
+        }
+
         if status & 0x0001 == 0 || pkt_len < 60 || pkt_len > 1536 {
             serial_println!("[RTL8139-RX] skip: capr={:#06x} rx_off={:#06x} status={:#06x} len={}",
                 capr, self.rx_offset, status, pkt_len);

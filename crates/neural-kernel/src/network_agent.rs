@@ -80,6 +80,10 @@ pub fn network_agent_tick() {
                 if let Some(ref mut ns) = *ns_guard {
                     if !ns.dhcp_done {
                         let (got, gw, dns) = ns.dhcp_poll(ms as i64);
+                        if tick % 50 == 0 {
+                            log(tick, &alloc::format!("DHCP poll: got={} tx={} rx={}",
+                                got, crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+                        }
                         if got {
                             NET_CONFIG.lock().configured = true;
                             NET_CONFIG.lock().online = true;

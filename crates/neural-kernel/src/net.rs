@@ -29,7 +29,7 @@ pub struct NetConfig {
 pub static NET_CONFIG: spin::Mutex<NetConfig> = spin::Mutex::new(NetConfig {
     mac: [0; 6],
     ip: [0; 4],
-    gateway_ip: [10, 0, 2, 1],
+    gateway_ip: [10, 0, 2, 2],  // QEMU SLiRP gateway is 10.0.2.2, not 10.0.2.1
     subnet_mask: [255, 255, 255, 0],
     dns_ip: [10, 0, 2, 3],
     gateway_mac: [0; 6],
