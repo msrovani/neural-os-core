@@ -45,24 +45,24 @@ Nada é descartado sem registro. Ideias podem ser:
 ### 1.1. The Agency — HW Agents + User Agents (IDEA #277)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | 🟡 Futuro | v0.60+ | LLM pergunta "o que tem de HW" → ativa agentes |
-| 277b | Agency: 12 divisões, 30+ agentes especializados | 🟡 Futuro | v0.60+ | Port do The Agency (50K★) para nosso ecossistema |
-| 277c | LLM-aware hardware activation por intent | 🟡 Futuro | v0.60+ | "quero video chamada" → mic+camera+display+net |
+| 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | 🟡 Sprint 92+ | v0.92+ | LLM pergunta "o que tem de HW" → ativa agentes |
+| 277b | Agency: 12 divisões, 30+ agentes especializados | 🟡 Sprint 92+ | v0.92+ | Port do The Agency (50K★) para nosso ecossistema |
+| 277c | LLM-aware hardware activation por intent | 🟡 Sprint 92+ | v0.92+ | "quero video chamada" → mic+camera+display+net |
 
 ### 1.2. GGUF Format Support (IDEA #278)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 278a | Loader GGUF mínimo para kernels no_std (~500 LOC) | 🟡 Futuro | v0.61+ | Modelos maiores (9B+ via GGUF Q4) |
-| 278b | .bitnet v3: header extensível com metadata | 🟡 Futuro | v0.61+ | Alternativa mais leve que GGUF |
+| 278a | Loader GGUF mínimo para kernels no_std (~500 LOC) | 🟡 Sprint 92+ | v0.92+ | Modelos maiores (9B+ via GGUF Q4) |
+| 278b | .bitnet v3: header extensível com metadata | 🟡 Sprint 92+ | v0.92+ | Alternativa mais leve que GGUF |
 
 ### 1.3. SmileyOS Patterns (IDEA #279)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 279a | Shell com 40+ comandos (ls, cat, ps, uptime, theme) | 🟡 Futuro | v0.60+ | Port da UX do SmileyOS (~90K LOC Rust) |
-| 279b | Sistema de temas (5+ cores, hot-swap) | 🟡 Futuro | v0.60+ | theme list + theme <name> |
-| 279c | Filesystem proprio com permissoes | 🟡 Futuro | v0.62+ | Substituir FAT12 mínimo |
-| 279d | Compositor multi-window (dock, menus, drag) | 🟡 Futuro | v0.63+ | DisplayAgent atual é single-tela |
-| 279e | v86 browser demo (WebAssembly x86 emulator) | 🟡 Futuro | v0.64+ | Bootar no navegador |
+| 279a | Shell com 40+ comandos (ls, cat, ps, uptime, theme) | 🟡 Sprint 91 | v0.91+ | Port da UX do SmileyOS (~90K LOC Rust) |
+| 279b | Sistema de temas (5+ cores, hot-swap) | 🟡 Sprint 91 | v0.91+ | theme list + theme <name> |
+| 279c | Filesystem proprio com permissoes | 🟡 Sprint 91 | v0.91+ | Substituir FAT12 mínimo |
+| 279d | Compositor multi-window (dock, menus, drag) | 🟡 Sprint 92+ | v0.92+ | DisplayAgent atual é single-tela |
+| 279e | v86 browser demo (WebAssembly x86 emulator) | 🟡 Sprint 92+ | v0.92+ | Bootar no navegador |
 | 279f | App SDK via trait + registry (JA TEMOS!) | ✅ Confirmado | — | Nosso Agent trait + AgentRegistry validado |
 
 ### 1.4. Ecosystem Batch 3 — 12 Repos Portados (IDEA #280)
@@ -79,7 +79,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 280i | VRSEN/agency-swarm: SpecialistAgent (ja tinhamos!) | ✅ Confirmado | v0.59.1 | 147 agentes em 12 divisões |
 | 280j | browser-use: HwRegistry device tree (ja tinhamos!) | ✅ Confirmado | v0.59.1 | HW context para LLM |
 | 280k | micro/go-micro: endpoints discovery (ja tinhamos!) | ✅ Confirmado | v0.55.0 | AgentManifest extensivel |
-| 280l | pydantic-ai: SkillManifest derive macro (conceitual) | 🟡 Futuro | v0.61+ | Proc-macro para manifests |
+| 280l | pydantic-ai: SkillManifest derive macro (conceitual) | 🟡 Sprint 91 | v0.91+ | Proc-macro para manifests |
 
 ### 1.6. VFS + MHI Bridge (IDEA #281)
 | # | Item | Destino | Target | Motivação |
@@ -96,16 +96,16 @@ Nada é descartado sem registro. Ideias podem ser:
 | 282b | AtaAgent: /mnt/hdd/ + block R/W | ✅ v0.62.1 | v0.62.1 | ATA via DriverAgent |
 | 282c | DevFsAgent: /dev/pci/ + NIC + USB + mem | ✅ v0.62.1 | v0.62.1 | Hardware como arquivos |
 | 282d | ProcFsAgent: /proc/agent/mem/uptime/cpu | ✅ v0.62.1 | v0.62.1 | Sistema como arquivos |
-| 282e | InferenceFsAgent: /inference/ com LLM | 🟡 Futuro | v0.62.2+ | LLM gera arquivos |
-| 282f | HermesFsAgent: /chat/send + /chat/history | 🟡 Futuro | v0.62.2+ | Chat como FS |
-| 282g | RamFsAgent: /mnt/ram/ cache DRAM | 🟡 Futuro | v0.62.2+ | Cache tiers inferiores |
-| 282h | Auto tier migration via MhiScheduler | 🟡 Futuro | v0.62.2+ | Promove/demove por acesso |
+| 282e | InferenceFsAgent: /inference/ com LLM | 🟡 Sprint 92+ | v0.92+ | LLM gera arquivos |
+| 282f | HermesFsAgent: /chat/send + /chat/history | 🟡 Sprint 92+ | v0.92+ | Chat como FS |
+| 282g | RamFsAgent: /mnt/ram/ cache DRAM | 🟡 Sprint 92+ | v0.92+ | Cache tiers inferiores |
+| 282h | Auto tier migration via MhiScheduler | 🟡 Sprint 92+ | v0.92+ | Promove/demove por acesso |
 
 ### 1.8. Desktop Cube (IDEA #283)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 283a | Workspace Cube 3D com rotação via GPU (VirtIO-GPU) | 🟡 Pós VirtIO-GPU | v0.70+ | 3 workspaces (main/dev/chat) como faces de cubo giratório |
-| 283b | Transição crossfade entre workspaces (fallback sem GPU) | 🟡 Alternativa leve | v0.66+ | Efeito moderno sem 3D, ~100 LOC |
+| 283a | Workspace Cube 3D com rotação via GPU (VirtIO-GPU) | 🟡 Sprint 91 | v0.91+ | 3 workspaces (main/dev/chat) como faces de cubo giratório |
+| 283b | Transição crossfade entre workspaces (fallback sem GPU) | 🟡 Sprint 91 | v0.91+ | Efeito moderno sem 3D, ~100 LOC |
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
@@ -1355,13 +1355,29 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | — | AHCI driver (SATA 6G NCQ) | ~700 |
 | | **Total bloco** | **~1200 LOC** |
 
-### Bloco 28 — GPU Compute (Sprint 84)
-**Foco:** Intel GEN shader matmul via EU execution units
+### Bloco 21c — GPU Foundations (Sprint 84)
+**Foco:** GPU BAR mapping, secure boot (ACR/PSP/GuC), doorbell, SPSC job ring, VRAM allocator. NVIDIA/AMD/Intel.
 
 | Item | O que | LOC |
 |---|---|---|
-| #284 | Intel Ring Buffer Compute — exec_batch, gpu_blit, MI_BATCH_BUFFER | ~800 |
-| | **Total bloco** | **~800 LOC** |
+| #67 | AllocTier::Vram — alocar no BAR da GPU | ~50 |
+| #326 | GPU BAR0/BAR1 mapping UC (NVIDIA/AMD/Intel) | ~300 |
+| #327 | GPU doorbell + SPSC job ring | ~400 |
+| #328 | VRAM buddy allocator | ~400 |
+| #352 | Secure Boot GPU — ACR/PSP/GuC pipeline | ~600 |
+| #353 | GPU Compute Pipeline — submissão genérica | ~300 |
+| | **Total bloco** | **~1700 LOC** |
+
+### Bloco 21d — GPU Decode (Sprint 85)
+**Foco:** BitNet decode na GPU. Prefill CPU, decode GPU.
+
+| Item | O que | LOC |
+|---|---|---|
+| #329 | Agent.xpu prefill/decode split | ~400 |
+| #330 | GPU matmul kernel ternário (PTX/AQL/GEN) | ~300 |
+| #331 | CPU→GPU KV cache DMA | ~200 |
+| #332 | XQueue preemptível (XSched, 3 níveis) | ~600 |
+| | **Total bloco** | **~1500 LOC** |
 
 ### Bloco 29+ — AIOS Evolution (Sprint 85+, pós B-01)
 **Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
@@ -1389,8 +1405,15 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | **25** | **81** | **JARVIS Emotion + Cache** | **~1200** | **6** |
 | **26** | **82** | **JARVIS Cognitive Memory** | **~1680** | **7** |
 | **27** | **83** | **JARVIS Security + AHCI** | **~1200** | **4** |
-| **28** | **84** | **GPU Compute** | **~800** | **1** |
-| **29+** | **85+** | **AIOS Evolution** | **~7500** | **8** |
+| **21c** | **84** | **GPU Foundations** | **~1700** | **6** |
+| **21d** | **85** | **GPU Decode** | **~1500** | **4** |
+| **30** | **86** | **JARVIS Persona** | **~950** | **5** |
+| **31** | **87** | **JARVIS Security+AHCI** | **~1200** | **4** |
+| **32** | **88** | **JARVIS Emotion+Cache** | **~1200** | **6** |
+| **33** | **89** | **SleepCycle+Memory** | **~2500** | **11** |
+| **34** | **90** | **JARVIS Deep Cognitive** | **~1200** | **6** |
+| **35** | **91** | **Polimento+Ecosystem** | **~2500** | **10** |
+| **36+** | **92+** | **AIOS Evolution** | **~15000** | **25+** |
 | | | **Total** | **~20.260 LOC** | **50** |
 
 ### Notas
@@ -1398,8 +1421,10 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 1. **Readequação 2026-07-04:** Roadmap reorganizado por dependência evolutiva. Foundation → Agentic → LLM → JARVIS → GPU → AIOS.
 2. **Blocos 21-23 novos:** Itens independentes dos sprints 60/67/72 que não dependem de B-01.
 3. **Blocos 24-27:** JARVIS features reordenadas de Sprints 77-80 para Sprints 80-83.
-4. **Bloco 28 (GPU):** Sprint 84, depende de Integrated GPU em HW real.
-5. **Bloco 29+ (AIOS):** Sprint 85+, tudo bloqueado por B-01. Sem previsão.
+4. **Bloco 21c (GPU Foundations):** Sprint 84, NVIDIA/AMD/Intel. HW real com GPU.
+5. **Bloco 21d (GPU Decode):** Sprint 85, BitNet offload. Depende de Bloco 21c.
+6. **Blocos 30-35 (JARVIS + Memory + Polimento):** Sprints 86-91, independentes de HW.
+7. **Bloco 36+ (AIOS Evolution):** Sprint 92+, 🔴 bloqueado por B-01.
 6. **Blocos legacy (12-17)** mantidos como estão — implementados ou com itens 🟡 independentes.
 
 ---
@@ -1475,11 +1500,11 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-05 | **323** | **Parallel-for AVX2 matmul** — Chunk hidden dimension (2560) em 4 partes, cada core processa um chunk, barreira atômica (AtomicU32 spin). Sem lock — só barreira. Speedup estimado: 2-3.5× sobre single-core. | 🟡 Bloco 26 | Sprint N+1 | ~300 LOC |
 | 2026-07-05 | **324** | **AgentScheduler multicore** — 4 run queues (uma por core), steal entre cores quando queue local vazia. AgentTier define affinity: Permanent→core fixo, UserDemand→work-stealing. RebalanceAgent monitora carga e move agents. | 🟡 Bloco 26 | Sprint N+1 | ~200 LOC |
 | 2026-07-05 | **325** | **Per-CPU slab allocator** — Alocar sem lock no hot path. Slab local por core, lote de 64 frames quando vazio (lock curto no allocator global). Reduz contenção no LockedHeap compartilhado. | 🟡 Bloco 26 | Sprint N+1 | ~300 LOC |
-| 2026-07-05 | **326** | **GPU BAR0/BAR1 mapping UC** — Mapear PCI BARs da RTX 1050 como uncacheable (PWT|PCD) para MMIO direto. BAR0 = register file (~256MB), BAR1 = VRAM aperture (~4GB). Referência: nova-core (NVIDIA Rust driver). | 🟡 Bloco 27 | Sprint N+2 | ~300 LOC |
+| 2026-07-05 | **326** | **GPU BAR0/BAR1 mapping UC** — Mapear PCI BARs da GPU como uncacheable (PWT|PCD) para MMIO direto. BAR0 = register file, BAR1 = VRAM aperture. Genérico: NVIDIA (nova-core), AMD (amdgpu), Intel (i915). | 🟡 Bloco 27 | Sprint N+2 | ~300 LOC |
 | 2026-07-05 | **327** | **GPU doorbell + SPSC job ring** — CPU escreve job descriptor no ring buffer, escreve doorbell register (BAR0 offset), GPU lê doorbell, executa job, atualiza tail. Ring com `alignas(64)` head/tail para false sharing prevention. | 🟡 Bloco 27 | Sprint N+2 | ~400 LOC |
-| 2026-07-05 | **328** | **VRAM buddy allocator** — Gerenciar 4GB VRAM da RTX 1050. Alocação contígua para kernels GPU. Free list com coalescing. Base para MSched evicção ótima (Belady) futura. | 🟡 Bloco 27 | Sprint N+2 | ~400 LOC |
+| 2026-07-05 | **328** | **VRAM buddy allocator** — Gerenciar VRAM da GPU (GDDR NVIDIA/AMD, DRAM carveout Intel). Alocação contígua para kernels GPU. Free list com coalescing. Base para MSched evicção ótima (Belady) futura. | 🟡 Bloco 27 | Sprint N+2 | ~400 LOC |
 | 2026-07-05 | **329** | **Agent.xpu prefill/decode split** — Prefill (processamento do prompt completo) fica na CPU (4 cores paralelos). Decode (geração token a token) vai para GPU via job ring. CPU faz tokenization + embedding, GPU faz matmul. Referência: arXiv 2506.24045. | 🟡 Bloco 28 | Sprint N+3 | ~400 LOC |
-| 2026-07-05 | **330** | **GPU matmul kernel ternário** — BitNet ADD/SUB matmul implementado como compute shader para GPU. NVIDIA PTX ou CUDA minimal. 25× speedup estimado sobre CPU 4c (RTX 1050 GDDR5 112GB/s vs DDR4 20GB/s). | 🟡 Bloco 28 | Sprint N+3 | ~300 LOC |
+| 2026-07-05 | **330** | **GPU matmul kernel ternário** — BitNet ADD/SUB matmul implementado como compute shader para GPU. NVIDIA PTX, AMD AQL, Intel GEN assembly. Speedup estimado: 10-25× sobre CPU (VRAM bandwidth vs DDR). | 🟡 Bloco 28 | Sprint N+3 | ~300 LOC |
 | 2026-07-05 | **331** | **CPU→GPU KV cache DMA** — Transferir KV cache de 307 MB entre RAM e VRAM via DMA engine. Estimado 200-400ms para swap completo (PCIe 3.0 x16 = ~16GB/s). Referência: dmaplane (arXiv 2603.10030). | 🟡 Bloco 28 | Sprint N+3 | ~200 LOC |
 | 2026-07-05 | **332** | **XQueue preemptível (XSched)** — Fila de comandos GPU com 3 níveis de preempção: pending (não submetido), in-flight (submetido mas não executando), running (em execução). Política agnóstica de hardware. Referência: XSched (OSDI 2025). | 🟡 Bloco 28 | Sprint N+3 | ~600 LOC |
 | 2026-07-05 | **333** | **burn-flex backend port** — Portar o backend CPU do burn-flex (tracel-ai/burn) para nosso kernel. SIMD gemm + quantization + fused ops. Elimina bitnet_avx2 manual (~800 LOC). 2-95× speedup documentado. Referência: github.com/antimora/burn-flex. | 🟡 Bloco 29 | Sprint N+4 | ~800 LOC |
@@ -1487,9 +1512,9 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-05 | **335** | **CFS scheduler (Completely Fair)** — Substituir round-robin do AgentScheduler por CFS baseado em vruntime. Fairness entre agents. Referência: echOS-x64 + moss-kernel. | 🟡 Bloco 29 | Sprint N+4 | ~500 LOC |
 | 2026-07-05 | **336** | **GPU + Display co-existência** — iGPU (Intel) faz display (framebuffer), dGPU (NVIDIA) faz compute. Quando só dGPU existe, time-sharing via XQueue. Referência: coconutOS. | 🟡 Bloco 29 | Sprint N+4 | ~300 LOC |
 | 2026-07-05 | **337** | **SMP+GPU Research (ADR-0037 v1)** — 30 fontes analisadas (arXiv, GitHub, crates.io, listas kernel). | ✅ ADR-0037 | N | ~900 LOC ADR |
-| 2026-07-05 | **338** | **Pesquisa Expandida AMD+Intel+NPU+Apple+NVIDIA bare-metal** — ADR-0037 v2 expandido. Cobertura completa: AMD ROCm/KFD/TrustOS, Intel Level Zero/Xe, NPU XDNA+Intel NPU, Apple Silicon honeycrisp/aruminium/metaltile, processadores modernos AMX/AVX-512/APX, abordagens multiplataforma Rust GPU. Matriz de decisão por HW real. **Descoberta crítica:** firmware NVIDIA Pascal GP107 está disponível em linux-firmware desde 2017, desbloqueando ACR secure boot para RTX 1050. | ✅ ADR-0037 v2 | N | +300 LOC ADR |
+| 2026-07-05 | **338** | **Pesquisa Expandida AMD+Intel+NPU+Apple+NVIDIA bare-metal** — ADR-0037 v2 expandido. Cobertura completa: AMD ROCm/KFD/TrustOS, Intel Level Zero/Xe, NPU XDNA+Intel NPU, Apple Silicon honeycrisp/aruminium/metaltile, processadores modernos AMX/AVX-512/APX, abordagens multiplataforma Rust GPU. Matriz de decisão por HW real. | ✅ ADR-0037 v2 | N | +300 LOC ADR |
 | 2026-07-05 | **339** | **TrustOS (nathan237) — Blueprint bare-metal AMD GPU em Rust** — 264K LOC, zero blobs. AMD GPU bring-up do zero: SDMA engine, ring buffer, firmware loading no RX 580X (Polaris 10). Root cause de 14 iterações: Graphics Memory Controller desinicializado. Prova que bare-metal GPU em Rust no_std é VIÁVEL. | 🔵 Referência | — | ADR-0037 |
-| 2026-07-05 | **340** | **pascal-egpu (TheTom) — Blueprint NVIDIA Pascal GPU do zero** — GTX 1060 (mesma arquitetura GP107 da RTX 1050) via BAR MMIO. ✅ BAR0 acesso ✅ PMC_BOOT_0 ✅ PTIMER. Plano 8 fases: PCIe → BAR → ACR → FIFO → GR → Compute. Firmware signed disponível em linux-firmware. **Referência primária para GPU compute no neural-os-core.** | 🔵 Referência | — | ADR-0037 |
+| 2026-07-05 | **340** | **pascal-egpu (TheTom) — Blueprint NVIDIA Pascal GPU do zero** — GTX 1060 via BAR MMIO. Plano 8 fases: PCIe → BAR → ACR → FIFO → GR → Compute. **Referência NVIDIA.** Para AMD: amdgpu Linux driver + GPUOpen docs. Para Intel: i915 Linux driver. | 🔵 Referência | — | ADR-0037 |
 | 2026-07-05 | **341** | **folkering-os — AI-native OS similar ao nosso** — SMP 4 cores, AVX2+FMA, VirtIO-GPU, WASM JIT, smoltcp, lock-free telemetry ring, self-healing, capability tokens. 4 meses de desenvolvimento solo. Prova que nossa arquitetura (Rust no_std, SMP, AVX2, WASM, AI-native) é viável em timeline curta. | 🔵 Referência | — | ADR-0037 |
 | 2026-07-05 | **342** | **honeycrisp (cyberia-to) — Apple Silicon GPU/NEON/AMX/ANE bare-metal Rust** — Quatro crates: unimem (memória compartilhada), acpu (NEON+AMX), aruminium (Metal GPU puro Rust, 1.79× faster), rane (ANE). Prova que acesso bare-metal a todos compute units Apple é possível. | 🔵 Referência futuro (ARM64) | — | ADR-0037 |
 | 2026-07-05 | **343** | **AMD ROCm + KFD — Compute via Linux kernel** — RDNA2/3 suportado via /dev/kfd. T0-GPU (50K LOC Rust) prova AMD compute em Rust via KFD. TheRock (AMD) tem pure-Python KFD driver. **Não bare-metal** — depende de Linux. | ❌ Descartado (nosso HW NVIDIA) | — | ADR-0037 |
@@ -1498,9 +1523,9 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-05 | **346** | **NPU Intel — LEON RT + NCE tiles** — Firmware fechado, OpenVINO+Level Zero, offline compile. NPU 3720 (Meteor Lake) 9.5 TOPS, NPU 4000 (Lunar Lake) 48 TOPS. **Nosso i5-6400 não tem NPU.** | ❌ Descartado (sem HW) | — | ADR-0037 |
 | 2026-07-05 | **347** | **AMX/AVX-512/APX — Feature set moderno** — AMX em Sapphire Rapids+ (Xeon 2023). AVX-512 em Skylake-SP (Xeon) e Rocket Lake (2021). APX em Nova Lake+ (2026+). P-cores/E-cores em Alder Lake+ (2021). **i5-6400 (Skylake client) não tem nenhum.** AVX2+FMA é o máximo disponível. | ❌ Descartado (HW incompatível) | — | ADR-0037 |
 | 2026-07-05 | **348** | **any-gpu (cochranblock) — Tensor engine wgpu multi-GPU** — CausalLM, SDPA, GQA, LayerPager. Roda em qualquer GPU via wgpu (Vulkan/Metal/DX12). 309 testes. **Não bare-metal** — depende de driver gráfico do SO. Inspiração para design de API. | 🔵 Referência arquitetural | — | ADR-0037 |
-| 2026-07-05 | **349** | **NVIDIA firmware Pascal GP107 — Signed FECS+GPCCS em linux-firmware** — Descoberta crítica: firmware signed para Pascal GP102/GP104/GP106/GP107 disponível desde março 2017 (Phoronix). Blobs: fecs_bl, fecs_data, fecs_inst, fecs_sig, gpccs_bl, gpccs_data, gpccs_inst, gpccs_sig, sw_bundle_init, sw_ctx. **Freely distributable.** Isto desbloqueia ACR secure boot para RTX 1050. | ✅ FIRMWARE DISPONÍVEL | N+2 | ADR-0037 |
+| 2026-07-05 | **349** | **Firmware GPU disponível em linux-firmware** — NVIDIA Pascal (FECS+GPCCS signed), AMD RDNA (PSP MIT license), Intel Gen6+ (GuC/HuC open). Todos disponíveis para download e redistribuição. Documentação: nouveau, amdgpu, i915. | ✅ FIRMWARE DISPONÍVEL | N+2 | ADR-0037 |
 | 2026-07-05 | **350** | **nova-core (NVIDIA/KHaddock) — Driver NVIDIA oficial em Rust** — Em desenvolvimento no LKML (2025-2026). Suporta Ampere+ (GSP). Pascal NÃO é target (Pascal usa Falcon, não GSP). **Referência arquitetural:** estrutura de driver GPU profissional em Rust, BAR mapping, doorbell, channel management. | 🔵 Referência arquitetural | — | ADR-0037 |
-| 2026-07-05 | **351** | **Matriz de Decisão por HW Real (i5-6400 + RTX 1050)** — Pesquisa expandida conclui: para nosso HW, APENAS SMP 4 cores (AVX2+FMA) e NVIDIA Pascal GPU compute são viáveis. Todo o resto (AMD GPU, Intel compute, NPU, AMX, AVX-512, Apple) é irrelevante. Prioridade: SMP (garantido) → GPU (viável, blocker ACR mitigado). | ✅ ADR-0037 v2 | N | ADR-0037 |
-| 2026-07-05 | **352** | **ACR Secure Boot — Pipeline para RTX 1050** — Implementar ACR (Authenticated Code Radix) seguindo nouveau + pascal-egpu: (1) Carregar FECS blobs do linux-firmware, (2) WPR setup em VRAM, (3) Carregar LS ucode no GR engine falcon, (4) Verificar signature. Pipe: linux-firmware → kernel → BAR0 → SEC2 → PMU → GR. | 🟡 Bloco 27 (GPU Foundations) | Sprint N+2 | ~600 LOC |
-| 2026-07-05 | **353** | **GPU Compute Pipeline completo (RTX 1050)** — Pipeline de submissão: BAR0 MMIO → PMC BOOT → DEVINIT → FB init → MMU v2 → ACR → PFIFO → GR init → Compute dispatch. Pipeline de execução: CPU prepara QMD → pushbuffer → GPFIFO entry → doorbell → GPU executa → completion notificação. | 🟡 Bloco 27-28 | Sprint N+2 a N+3 | ~2500 LOC total |
+| 2026-07-05 | **351** | **Matriz de Decisão Multi-Vendor** — O neural-os-core deve suportar qualquer HW detectado. Prioridade de implementação: NVIDIA (primeiro, firmware + docs mais acessíveis) → AMD (segundo, GPUOpen) → Intel (terceiro, i915 público) → NPU (futuro). SMP é pré-requisito para todos. | ✅ ADR-0037 v2 | N | ADR-0037 |
+| 2026-07-05 | **352** | **Secure Boot GPU — Pipeline multi-vendor** — NVIDIA ACR: FECS blobs → WPR → LS ucode → signature. AMD PSP: firmware MIT → PM4 init ring. Intel GuC: firmware open → HuC auth → submission. Pipe: linux-firmware → kernel → BAR0 → GPU engine. | 🟡 Bloco 27 (GPU Foundations) | Sprint N+2 | ~600 LOC |
+| 2026-07-05 | **353** | **GPU Compute Pipeline completo** — Pipeline de submissão genérico: BAR0 MMIO → GPU boot (ACR/PSP/GuC) → command ring init → compute dispatch. Implementação por vendor: NVIDIA (PFIFO + PUSH_BUFFER), AMD (PM4 ring), Intel (GEN ring buffer). Pipeline de execução: CPU prepara comando → ring entry → doorbell → GPU executa → completion. | 🟡 Bloco 27-28 | Sprint N+2 a N+3 | ~2500 LOC total |
 | 2026-07-05 | **354** | **TrustOS lessons para GPU bare-metal** — Lições chave de TrustOS: (1) GMC (Graphics Memory Controller) e VM são a causa raiz de falhas — não registros, não PCIe link; (2) Ring buffer precisa estar em GART (Graphics Aperture Remap Table); (3) RPTR/WPTR avançando = firmware responsivo; (4) Firmware loading é sequencial e frágil — um passo errado e tudo aborta. | 🔵 Referência arquitetural | — | ADR-0037 |

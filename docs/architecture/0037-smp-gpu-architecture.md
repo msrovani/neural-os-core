@@ -65,11 +65,11 @@ O sistema atual é **hard-coded para hardware específico** e não tem abstraç�
 | Fonte | Aderência | Dificuldade | Melhora | Dependências |
 |---|---|---|---|---|
 | **coconutOS** (GPUs infra) | ★★★★★ | 2-3 sprints (~1500 LOC) | A referência mais direta. Supervisor ~5K LOC, shards isolados por IOMMU, syscall GPU DMA, FXSAVE/FXRSTOR para preservar FPU entre shards. Já roda transformer inference shard em QEMU | Precisa IOMMU (VT-d) que não temos. Precisamos de pelo menos 1 sprint de VT-d antes |
-| **nova-core** (NVIDIA Rust driver) | ★★★★★ | 3-4 sprints (~3000 LOC) | Código oficial NVIDIA Rust para GPU. BAR1 management, GPU MMIO, user-space doorbells, BAR0 uncacheable access, sysmem flush. RTX 1050 é suportada | Kernel Linux - precisamos portar os conceitos. BAR1 mapping já temos parcialmente (cache UC) |
+| **nova-core** (NVIDIA Rust driver) | ★★★★★ | 3-4 sprints (~3000 LOC) | Código oficial NVIDIA Rust para GPU. BAR1 management, GPU MMIO, user-space doorbells, BAR0 uncacheable access, sysmem flush. RTX 1050 é um exemplo — design genérico para GPUs NVIDIA Pascal+ | Kernel Linux - precisamos portar os conceitos. BAR1 mapping já temos parcialmente (cache UC) |
 | **gpu-nvme-direct** | ★★★ | 2 sprints (~1000 LOC) | GPU faz NVMe READ/WRITE direto via BAR0 MMIO. 2.1 GB/s sustentado. CPU fica fora do data path | Precisa GPU BAR0 mapping funcional + NVMe driver funcionando (temos ambos parciais) |
 | **monadic-hypervisor** (zero-kernel) | ★★★ | 1 sprint (~600 LOC) | Padrões de PCIe bypass, SPSC ring com alignas(64), WFE/SEV ao invés de spin. Inspiração para o ring buffer GPU-CPU | ARM64 EL2 focus. Conceitos portáveis para x86 (usar HLT/MWAIT no lugar de WFE) |
 
-**Recomendado:** coconutOS como blueprint arquitetural + nova-core como referência de BAR1/MMIO para RTX 1050. GPU compute no bare metal é viável mas exige 3-4 sprints.
+**Recomendado:** coconutOS como blueprint arquitetural + nova-core (NVIDIA), amdgpu (AMD), i915 (Intel) como referências de BAR1/MMIO. GPU compute no bare metal é viável mas exige 3-4 sprints.
 
 ### 2.3 GPU Kernel Scheduling (dentro da GPU)
 
@@ -127,7 +127,7 @@ O sistema atual é **hard-coded para hardware específico** e não tem abstraç�
 | 3 | PerCpu por AP + alocação dinâmica | N+1 | 300 | Cada core com dados próprios |
 | 4 | Work-stealing scheduler (Chase-Lev) | N+1 | 400 | Distribuir agents entre 4 cores |
 | 5 | Parallel-for no matmul (AVX2 chunking) | N+1 | 300 | 2-3× speedup inferência |
-| 6 | GPU BAR0/BAR1 mapping + doorbell | N+2 | 500 | RTX 1050 como compute device |
+| 6 | GPU BAR0/BAR1 mapping + doorbell | N+2 | 500 | GPU como compute device (NVIDIA/AMD/Intel) |
 | 7 | GPU job ring buffer (SPSC) | N+2 | 300 | CPU enfileira, GPU executa |
 | 8 | XSched-style preemptible GPU queue | N+3 | 600 | Múltiplos workloads GPU |
 | 9 | burn-flex backend port | N+3 | 800 | Gemm+SIMD pronto, elimina bitnet_avx2 manual |
@@ -138,9 +138,12 @@ O sistema atual é **hard-coded para hardware específico** e não tem abstraç�
 
 ### 4.1 Descobertas Críticas
 
-1. **coconutOS** (github.com/coconut-os/coconutOS) já prova que GPU-isolated AI inference em Rust no_std é viável hoje — supervisor ~5K LOC, shards com IOMMU, transformer rodando em QEMU. É nosso blueprint arquitetural.
+1. **coconutOS** (github.com/coconut-os/coconutOS) já prova que GPU-isolated AI inference em Rust no_std é viável hoje — supervisor ~5K LOC, shards com IOMMU, transformer rodando. É nosso blueprint arquitetural.
 
-2. **nova-core** (NVIDIA Rust, código oficial) mostra exatamente como mapear BAR0/BAR1, gerenciar doorbells e submeter jobs para GPUs NVIDIA — RTX 1050 inclusa.
+2. **nova-core** (NVIDIA Rust, código oficial) mostra como mapear BAR0/BAR1, gerenciar doorbells e submeter jobs para GPUs NVIDIA.
+   **amdgpu** (Linux) documenta PM4 packet ring buffer para AMD RDNA.
+   **i915** (Linux) descreve GuC/HuC firmware + ring buffer protocol para Intel Gen6+.
+   A combinação destas 3 fontes cobre todo o espectro GPU.
 
 3. **LithOS + gpu_ext** (arXiv) apontam para a fronteira real — scheduling dentro da GPU com TPC stealing e eBPF no device.
 
@@ -148,12 +151,13 @@ O sistema atual é **hard-coded para hardware específico** e não tem abstraç�
 
 O plano recomendado acima começa pelo SPSC ring + IPI (pode fazer agora, 200 LOC) e culmina no burn-flex backend (~3000 LOC totais distribuídos em 3 sprints).
 
-### 4.3 Hardware Real vs QEMU/VBox
+### 4.3 HW Real como Critério de Aceite
 
-- QEMU/VBox são ambientes de **desenvolvimento e debug** apenas
 - **Hardware real** é o critério de aceite para performance
-- Toda otimização SIMD/AVX2 deve ser avaliada em hardware real x86-64
-- WHPX emula VEX/AVX2 como VM exits — benchmarks em WHPX são irrelevantes
+- QEMU/VBox são ambientes de desenvolvimento e debug apenas
+- Toda otimização SIMD/AVX2 deve ser avaliada em hardware real
+- Emulação distorce métricas: WHPX emula VEX como VM exits, TCG não tem AVX2
+- Drivers GPU validados apenas em HW real (QEMU não emula NVIDIA/AMD/Intel compute)
 
 ---
 

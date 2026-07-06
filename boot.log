@@ -1,0 +1,222 @@
+c[?7l[2J[0mSeaBIOS (version rel-1.17.0-0-gb52ca86e094d-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+BEFD1F90+BEF31F90 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from Hard Disk...
+ -> SECOND STAGE
+stage 3 loaded at 0x00100000
+stage 4 loaded at 0x00130000
+loading kernel...
+kernel loaded at 0x01000000
+Loading ramdisk...
+No ramdisk found, skipping.
+[E820MemoryRegion { start_addr: 0, len: 9fc00, region_type: 1, acpi_extended_att
+ributes: 0 }, E820MemoryRegion { start_addr: 9fc00, len: 400, region_type: 2, ac
+pi_extended_attributes: 0 }, E820MemoryRegion { start_addr: f0000, len: 10000, r
+egion_type: 2, acpi_extended_attributes: 0 }, E820MemoryRegion { start_addr: 100
+000, len: bfee0000, region_type: 1, acpi_extended_attributes: 0 }, E820MemoryReg
+ion { start_addr: bffe0000, len: 20000, region_type: 2, acpi_extended_attributes
+: 0 }, E820MemoryRegion { start_addr: fffc0000, len: 40000, region_type: 2, acpi
+_extended_attributes: 0 }, E820MemoryRegion { start_addr: 100000000, len: 400000
+00, region_type: 1, acpi_extended_attributes: 0 }, E820MemoryRegion { start_addr
+: fd00000000, len: 300000000, region_type: 2, acpi_extended_attributes: 0 }]
+VESA MODE: 1280x720[01;01HINFO : Framebuffer info: FrameBufferInfo { byte_len: 2764800, width: 1280, height: 720, pixel_format: Bgr, bytes_per_pixel: 3, stride: 1280 }
+INFO : 4th Stage
+INFO : BiosInfo { stage_4: Region { start: 130000, len: 24540 }, kernel: Region { start: 1000000, len: 143ec0 }, ramdisk: Region { start: 1144000, len: 0 }, config_file: Region { start: 1144000, len: 0 }, last_used_addr: 1143fff, framebuffer: BiosFramebufferInfo { region: Region { start: fd000000, len: 2a3000 }, width: 500, height: 2d0, bytes_per_pixel: 3, stride: 500, pixel_format: Bgr }, memory_map_addr: 11eb0, memory_map_len: 8 }
+INFO : BIOS boot
+INFO : Elf file loaded at Pointer {
+    addr: 0x0000000001000000,
+    metadata: 1326784,
+}
+INFO : virtual_address_offset: 0x10000000000
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(4), offset: 0, virtual_addr: 0, physical_addr: 0, file_size: 354dc, mem_size: 354dc, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(5), offset: 36000, virtual_addr: 37000, physical_addr: 37000, file_size: d36bb, mem_size: d36bb, align: 1000 })
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 1096c0, virtual_addr: 10b6c0, physical_addr: 10b6c0, file_size: 9938, mem_size: 9940, align: 1000 })
+INFO : Mapping bss section
+INFO : Handling Segment: Ph64(ProgramHeader64 { type_: Ok(Load), flags: Flags(6), offset: 112ff8, virtual_addr: 115ff8, physical_addr: 115ff8, file_size: 5d8, mem_size: 57210, align: 1000 })
+INFO : Mapping bss section
+INFO : Entry point at: 0x10000057de0
+INFO : Creating GDT at PhysAddr(0x1230000)
+INFO : Map framebuffer
+INFO : Map physical memory
+INFO : Allocate bootinfo
+INFO : Create Memory Map
+INFO : Create bootinfo
+INFO : Jumping to kernel entry point at VirtAddr(0x10000057de0)
+K[T+0] [DISPLAY] UEFI fb: 1280x720 bpp=3 stride=3840(1280px) buf=2764800 @20000000000
+[T+0] [DISPLAY] UEFI framebuffer configurado: 1280x720 bpp=3 stride=3840 @20000000000
+[T+0] [BOOT] FB ativo — VGA text mode desligado.
+[T+0] [BOOT] Kernel started. Serial:true pm_offset=0x28000000000
+[T+0] [IDT] IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.
+[T+0] [BOOT] IDT loaded
+[T+0] [DBG2] Memory regions init: 11 regions
+[T+0] [DBG3] init_memory OK
+[T+0] [DBG4] heap init OK
+[T+0] [LOG] BOOT: Heap init OK
+[T+0] [LOG] BOOT: SIMD enabled
+[T+0] [SIMD] AVX2: NAO ❌
+[T+0] [TPM] ausente (0xFFFF FFFF ou 0x0000 0000).
+[T+0] [LOG] BOOT: TPM probe done
+[T+0] [BOOT:SystemBringup] System bringup — SIMD+heap prontos
+[T+0] [LOG] [BOOT:SystemBringup] System bringup — SIMD+heap prontos
+[T+0] [BOOT:Diagnostics] Allocator global pronto
+[T+0] [LOG] [BOOT:Diagnostics] Allocator global pronto
+[T+0] [DBG6] slab metrics: 0 0
+[T+0] [BOOT:SystemBringup] CortexAgent acordando (pre-HW)
+[T+0] [LOG] [BOOT:SystemBringup] CortexAgent acordando (pre-HW)
+[T+0] [HEAP] 16 MB → 192 MB (45056 pages added)
+[T+0] [CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.
+[T+0] [CORTEX-LLM] Transformer loaded. Skills via SKILL_STORAGE.
+[T+0] [CORTEX] Model swapped.
+[T+0] [BOOT:HardwareDiscovery] Drivers de HW como agentes
+[T+0] [LOG] [BOOT:HardwareDiscovery] Drivers de HW como agentes
+[T+0] [NET] RTL8139 detectado: 00:03.00
+[T+0] [RTL8139] Reset OK. MAC: 52:54:00:12:34:56
+[T+0] [RTL8139] RX init: CAPR=0 RCR=0xCC0E
+[T+0] [RTL8139] Init OK. rx_buf=0xc7a2000 tx_bufs=[0xc7aa000,...]
+[T+0] [NET] RTL8139 iniciado. MAC: 52:54:00:12:34:56
+[T+0] [BOOT:HardwareDiscovery] RTL8139 init
+[T+0] [LOG] [BOOT:HardwareDiscovery] RTL8139 init
+[T+0] [BOOT:HardwareDiscovery] ATA probe=none
+[T+0] [LOG] [BOOT:HardwareDiscovery] ATA probe=none
+[T+0] [BOOT:HardwareDiscovery] xHCI+USB probe done
+[T+0] [LOG] [BOOT:HardwareDiscovery] xHCI+USB probe done
+[T+0] [LOG] BOOT: ATA+FAT init OK
+[T+0] [VFS] Init OK. 9 mounts.
+[T+0] [LOG] BOOT: VFS 9 mounts
+[T+0] [FS] Agent 'ata' registrado em /mnt/hdd
+[T+0] [FS] Agent 'devfs' registrado em /dev
+[T+0] [FS] Agent 'procfs' registrado em /proc
+[T+0] [INFERENCE-FS] /inference/ pronto.
+[T+0] [FS] Agent 'inference' registrado em /inference
+[T+0] [CHAT-FS] /chat/ pronto.
+[T+0] [FS] Agent 'hermes' registrado em /chat
+[T+0] [RAM-FS] /mnt/ram/ pronto. Max: 1048576 bytes
+[T+0] [FS] Agent 'ramfs' registrado em /mnt/ram
+[T+0] [LOG-FS] /logs/ pronto. Max: 262144 bytes (ring)
+[T+0] [FS] Agent 'logfs' registrado em /logs
+[T+0] [LOG] BOOT: FS agents OK
+[T+0] [LOG] BOOT: No ATA device for DiskAgent
+[T+0] [LOG] BOOT: DiskAgent ready
+[T+0] [APPS] 3 apps registrados no Hermes Chat.
+[T+0] [LOG] BOOT: Desktop apps OK
+[T+0] [GPU] Unknown GPU: 1234:1111 arch=Unknown bar0=0xfd000000 bar2=0xfebd0000 vram=0MB display=true
+[T+0] [VRAM] Unknown GPU: sem BAR2 mapeavel (usando DRAM compartilhada)
+[T+0] [GPU-BACKEND] Sem GPU acelerada. Fallback CPU.
+[T+0] [GPU] 1 GPU(s) detectadas. Backend: CPU fallback
+[T+0] [LOG] BOOT: GPU 1 backend
+[T+0] [HW-AGENTS] 6 dispositivos detectados como HwAgents.
+[T+0] [BOOT] 11 boot agents registrados. Executando init_phase...
+[T+0] [PCI] Scan concluido: 6 dispositivos encontrados.
+[T+0] [PCI] 00:00.00 8086:1237 class=06 subclass=00
+[T+0] [PCI] 00:01.00 8086:7000 class=06 subclass=01
+[T+0] [PCI] 00:01.01 8086:7010 class=06 subclass=01
+[T+0] [PCI] 00:01.03 8086:7113 class=06 subclass=01
+[T+0] [PCI] 00:02.00 1234:1111 class=03 subclass=00
+[T+0] [PCI] 00:03.00 10ec:8139 class=02 subclass=00
+[T+0] [ACPI] RSDP encontrado em 0xf52c0. Revisao: 0. RSDT/XSDT em 0xbffe2328
+[T+0] [ACPI] Tabela RSDT/XSDT: 52 bytes, 4 entradas (4 bytes cada).
+[T+0] [ACPI] MADT encontrado em 0xbffe2250
+[T+0] [ACPI] IOAPIC ID 0 em 0xfec00000
+[T+0] [ACPI] ISO: source=0 gsi=2 flags=0x0000
+[T+0] [ACPI] ISO: source=5 gsi=5 flags=0x000d
+[T+0] [ACPI] ISO: source=9 gsi=9 flags=0x000d
+[T+0] [ACPI] ISO: source=10 gsi=10 flags=0x000d
+[T+0] [ACPI] ISO: source=11 gsi=11 flags=0x000d
+[T+0] [ACPI] MADT: LAPIC base 0xfee00000, IOAPIC base 0xfec00000, LAPICs: 1, IOAPICs: 1
+[T+0] [APIC] Inicializando APIC...
+[T+0] [APIC] IOAPIC/LAPIC pages mapped uncacheable.
+[T+0] [APIC] LAPIC base via MSR: 0xfee00000
+[T+0] [APIC] LAPIC inicializado. Base: 0x280fee00000
+[T+0] [APIC] PIC 8259 desabilitado (mascara todos IRQs).
+[T+0] [PIT] Canal 0 programado: modo 3, divisor 65536 (18.2 Hz).
+[T+0] [APIC] IOAPIC em 0x280fec00000. Max redirecionamentos: 23
+[T+0] [APIC] IOAPIC verificado: kbd GSI 1 (0x00:0x00000021)
+[T+0] [APIC] Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.
+[T+0] [APIC] Mouse (IRQ12) redirecionado para vetor 44.
+[T+0] [APIC] LAPIC timer iniciado: vetor 32, count=8388608, div=1.
+[T+0] [APIC] APIC operacional. x2APIC=false
+[T+0] [SMP] Inicializando SMP...
+[T+0] [SMP] BSP PerCpu inicializado. LAPIC ID: 0
+[T+0] [SMP] Nenhum AP detectado (MADT: 0 LAPICs). SMP ignorado.
+[T+0] [ARCH] System architecture: ring0=0 ring1=1 heap=2048MB trust=1 power=0 tensor=0
+[T+0] [MHI] 1 tier(s). Best: Dram (3214798848 bytes avail)
+[T+0] [AGENT] SelfHealAgent pronto.
+[T+0] [SELF-HEAL] Primeiro boot ou sem registro de desligamento.
+[T+1] [TIMER] Interrupt fired! tick=0
+[T+1] [AGENT] TrustAgent pronto.
+[T+1] [MEM] Orcamento adaptativo de memoria
+[T+1] [MEM]  RAM: 4096 MB | VRAM: 0 MB | Modelo: 0 params
+[T+1] [MEM]  Heap:128MB Model:0MB KV:0MB ARC:64MB Vram:0MB
+[T+1] [MEM]  Livre apos: 3904 MB
+[T+2] [TIMER] Interrupt fired! tick=1
+[T+3] [TIMER] Interrupt fired! tick=2
+[T+4] [TIMER] Interrupt fired! tick=3
+[T+5] [TIMER] Interrupt fired! tick=4
+[T+11] [MEM]  CPU: 235 MHz | 15 agentes ativos | tick init: 2097152
+[T+11] [VIRTIO] Nenhum dispositivo VirtIO-net encontrado.
+[T+11] [NET] RTL8139 OK.
+[T+11] [USB] Inicializado via init_xhci().
+[T+13] [HW-ID] 6 dispositivos encontrados. Enviando para LLM...
+[T+13] [HW-SCAN] Dispositivos detectados:
+00:00.0 8086:1237 class=06/00 Host Bridge
+00:01.0 8086:7000 class=06/01 Bridge
+00:01.1 8086:7010 class=06/01 Bridge
+00:01.3 8086:7113 class=06/01 Bridge
+00:02.0 1234:1111 class=03/00 VGA Controller
+00:03.0 10ec:8139 class=02/00 Network
+
+[T+13] [DISK] DiskIntelligenceAgent: probing storage...
+[T+13] [DISK] === Topology ===
+[T+13] [DISK] === End Topology ===
+[T+15] [AGENCY] 214 agentes registrados via SpecialistAgent
+[T+16] [HW-AGENTS] 6 agentes de hardware registrados
+[T+16] [CRON] Job 'health' agendado: a cada 200 ticks
+[T+16] [CRON] Job 'memory_report' agendado: a cada 500 ticks
+[T+16] [CRON] Job 'skill_review' agendado: a cada 3000 ticks
+[T+16] [CRON] 3 jobs default registrados
+[T+16] [MOUSE] PS/2 mouse enabled.
+[T+16] [LOG-ANALYST] /logs/ analyst ativo.
+[T+16] [RAMDISK] Probe 4GB: raw=[0x00,0x00,0x00,0x00]
+[T+16] [RAMDISK] No model at phys 0x100000000 — using embedded micro.bitnet.
+[T+16] [LOG] BOOT: No ramdisk, micro.bitnet active
+[T+16] [BOOT:AgentFleet] 248 agents + DiagnosticSkill registrados
+[T+16] [LOG] [BOOT:AgentFleet] 248 agents + DiagnosticSkill registrados
+[T+16] [SCHEDULER] 248 runtime agents. Iniciando scheduler...
+[T+16] [CORTEX-LLM] Generating for: "Identifique este hardware e explique o que posso fazer com cada dispositivo:
+8086:1237 class 06/00
+8086:7000 class 06/01
+8086:7010 class 06/01
+8086:7113 class 06/01
+1234:1111 class 03/00
+10ec:8139 class 02/00
+"
+[T+17] [SKILL] Registrada: 'hw_identify' — Identifica dispositivos de hardware por PCI/USB ID (1 tokens, 670 bytes)
+[T+17] [SKILL] Registrada: 'self_heal' — Analisa erros do kernel e sugere acao de recuperacao (1 tokens, 621 bytes)
+[T+17] [SKILL] 2 skill(s) carregadas, prompt de 1510 bytes
+[T+17] [CORTEX-LLM] Calling generate_via_model...
+[T+18] [GEN] prompt_len=64, max_seq=64
+[T+18] [CORTEX-LLM] generate_via_model took 0 ticks (~0s)
+[T+18] [CORTEX-LLM] Generated: "(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)"
+[T+18] [AGENT] SystemAgent ativo. Aguardando SYSTEM_READY...
+[T+18] [MONITOR] Evento SYSTEM_READY publicado.
+[T+18] 
+╔══════════════════════════════════╗
+║  Hermes vNeural OS v0.51                ║
+║  "Thoughtful. Precise. Alive."          ║
+╚══════════════════════════════════╝
+[T+19] [DISPLAY] Hermes Chat 1280x720 @20000000000
+[T+20] [AGENT] EchoSkill: [3, 2, 1]
+[T+20] [AGENT] SystemAgent: SYSTEM_READY confirmado. Concluido.
+[T+61] [RTL8139] TX0 len=304 tsd=0xa130 tsad=0xc7aa000
+[T+212] [NET @t=50] poll: tx=1 rx=0
+[T+218] [CRON] Job 'health' disparado @ tick 218
+[T+389] [NET @t=100] poll: tx=1 rx=0
+[T+420] [CRON] Job 'health' disparado @ tick 420
+[T+520] [CRON] Job 'memory_report' disparado @ tick 520
+[T+585] [NET @t=150] poll: tx=1 rx=0
+[T+620] [CRON] Job 'health' disparado @ tick 620
+[T+781] [HERMES] Metricas criticas: [1, 4, 5, 6, 8]

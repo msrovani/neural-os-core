@@ -13,7 +13,7 @@ We are building "neural-os-core", an AI Operating System (AIOS) from scratch. Th
 - **Target:** `x86_64-unknown-none` — a bare-metal target with no underlying OS.
 - **Bootloader:** `bootloader` crate v0.9 — handles UEFI/BIOS handoff, enters long mode, and jumps to our `_start` entry point.
 - **Boot image tool:** `bootimage` — combines bootloader + kernel into a bootable disk image.
-- **Emulator:** QEMU (`qemu-system-x86_64`) — primary test harness before physical AMD APU deployment.
+- **Emulator:** QEMU (`qemu-system-x86_64`) — desenvolvimento e debug. HW real é o alvo primário de deployment.
 
 ### Microkernel Entry Point
 - `src/main.rs` defines `#![no_std]` and `#![no_main]`.

@@ -39,6 +39,7 @@ impl MemoryAgent {
     }
 
     pub fn calculate_budget(model_params: u64, total_ram_mb: u64, total_vram_mb: u64) -> MemoryBudget {
+        crate::serial_println!("[MEM] Calculando budget: params={} ram={} vram={}", model_params, total_ram_mb, total_vram_mb);
         let model_gb: f64 = model_params as f64 / 1_000_000_000.0;
         let model_mb = (model_params * 2 / 8 / 1024 / 1024) as usize;
 
@@ -50,6 +51,12 @@ impl MemoryAgent {
 
         let used = (heap_mb + model_mb + kv_mb + arc_mb) as u64;
         let free = total_ram_mb.saturating_sub(used);
+
+        crate::serial_println!("[MEM]  RAM: {} MB | VRAM: {} MB | Modelo: {} params",
+            total_ram_mb, total_vram_mb, model_params);
+        crate::serial_println!("[MEM]  Heap:{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
+            heap_mb, model_mb, kv_mb, arc_mb, vram_mb);
+        crate::serial_println!("[MEM]  Livre apos: {} MB", free);
 
         MemoryBudget {
             total_ram_mb, total_vram_mb,

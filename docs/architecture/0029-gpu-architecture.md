@@ -9,8 +9,11 @@
 1. **iGPU display, dGPU compute** — quando ambos presentes, o iGPU (Intel/AMD) cuida da tela, o dGPU (NVIDIA/AMD) faz computação da LLM
 2. **VRAM como tier MHI** — toda GPU com BAR2 tem sua memória mapeada como `AllocTier::Vram`
 3. **Display sem GPU** — framebuffer UEFI ou VirtIO-GPU funcionam sem aceleração 3D
-4. **GPU única** — quando não há iGPU, a própria dGPU faz display + compute (via VBIOS)
-5. **Firmware extraction** — detecta e extrai firmware do driver NVIDIA instalado pelo usuário
+4. **GPU única** — quando não há iGPU, a própria dGPU faz display + compute (via VBIOS/UEFI GOP)
+5. **Firmware loading** — carrega firmware de linux-firmware para cada vendor:
+   - NVIDIA: FECS/GPCCS via ACR (extraído do driver ou linux-firmware)
+   - AMD: PSP firmware (MIT license, disponível em linux-firmware)
+   - Intel: GuC/HuC firmware (open, disponível em linux-firmware)
 
 ---
 
@@ -218,9 +221,9 @@ pub fn model_swap(path: &str) -> bool {
 │                                                           │
 ├──────────────────────────────────────────────────────────┤
 │            Hardware Layer                                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────┐  │
-│  │ Intel HD │ │ NVIDIA   │ │ AMD      │ │ VirtIO-GPU  │  │
-│  │ 620      │ │ GTX 1050 │ │ Radeon   │ │ (QEMU)      │  │
+│  ┌────────────┐ ┌──────────┐ ┌──────────┐ ┌─────────────┐  │
+│  │ Intel      │ │ NVIDIA   │ │ AMD      │ │ VirtIO-GPU  │  │
+│  │ (Gen6+)    │ │ (Pascal+)│ │ (RDNA+)  │ │ (QEMU dev)  │  │
 │  └──────────┘ └──────────┘ └──────────┘ └─────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -231,10 +234,13 @@ pub fn model_swap(path: &str) -> bool {
 
 | Hardware | Display | Compute | VRAM | LLM Inference |
 |---|---|---|---|---|
-| Intel HD 620 + GTX 1050 | Intel ✅ | NVIDIA PFIFO | VRAM 2GB | 10× CPU |
-| Intel HD 620 só | Intel ✅ | Intel Ring | DRAM | 3× CPU |
-| AMD iGPU + NVIDIA | AMD ✅ | NVIDIA PFIFO | VRAM | 10× CPU |
-| Só NVIDIA | NVIDIA VBIOS | NVIDIA PFIFO | VRAM | 10× CPU |
-| Só AMD | AMD DCN | AMD PM4 | VRAM | 15× CPU |
-| QEMU (VirtIO) | Framebuffer UEFI | VirtIO virgl | DRAM | 1× CPU |
+| Intel iGPU + NVIDIA dGPU | Intel ✅ | NVIDIA PFIFO | VRAM GDDR | 10× CPU |
+| Intel iGPU + AMD dGPU | Intel ✅ | AMD PM4 | VRAM GDDR | 15× CPU |
+| Intel iGPU só | Intel ✅ | Intel Ring (GuC) | DRAM carveout | 3× CPU |
+| AMD iGPU + NVIDIA | AMD ✅ | NVIDIA PFIFO | VRAM GDDR | 10× CPU |
+| AMD iGPU + AMD dGPU | AMD ✅ | AMD PM4 | VRAM GDDR | 15× CPU |
+| Só NVIDIA | NVIDIA VBIOS | NVIDIA PFIFO | VRAM GDDR | 10× CPU |
+| Só AMD | AMD DCN | AMD PM4 | VRAM GDDR | 15× CPU |
+| Só Intel dGPU (Arc) | Intel ✅ | Intel Ring (GuC) | VRAM GDDR | 3-5× CPU |
+| QEMU (VirtIO) | Framebuffer UEFI | VirtIO virgl | DRAM | 1× CPU (dev) |
 | Sem GPU | UEFI | N/A | N/A | BitNet CPU |

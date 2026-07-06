@@ -44,7 +44,7 @@
 **Impacto nas Sprints:**
 - Bloco 21a (SMP Foundation) — SPSC ring, IPI, PerCpu
 - Bloco 21b (Work-Stealing + Matmul) — Chase-Lev, parallel-for, AgentScheduler multicore
-- Bloco 21c (GPU Foundations) — GPU BAR mapping, ACR secure boot, job ring, VRAM allocator
+- Bloco 21c (GPU Foundations) — GPU BAR mapping, secure boot, job ring, VRAM allocator
 - Bloco 21d (GPU Decode) — Agent.xpu split, GPU matmul, KV cache DMA, XQueue
 
 ### ADR-0030: Disk Intelligence Agent
@@ -105,11 +105,11 @@
 ### Sprint 84 — Bloco 21c: GPU Foundations
 **Origem:** ADR-0037 (item 5-9 do plano de 9 passos)  
 **IDEA_BANK:** #67 (AllocTier::Vram)  
-**TODO:** B-03 (NVIDIA PFIFO), B-04 (AMD PM4)
+**TODO:** B-03 (NVIDIA PFIFO), B-04 (AMD PM4), B-34 (Intel GuC)
 
 **Itens:**
-- GPU BAR0/BAR1 mapping UC (~300 LOC)
-- ACR secure boot (~600 LOC)
+- GPU BAR0/BAR1 mapping UC (~300 LOC) — NVIDIA/AMD/Intel
+- Secure boot (ACR/PSP/GuC) (~600 LOC)
 - PCIe doorbell register (~100 LOC)
 - GPU SPSC job ring (~300 LOC)
 - VRAM buddy allocator (~400 LOC)
@@ -174,7 +174,7 @@
 **TODO:** B-01 (DHCP/DNS/HTTP), B-11 (WWW Infrastructure), B-12 (Browser Agent), B-13 (MCP TCP), B-17 (WWW Agents restantes), B-27 (Plugin Hub)
 
 **Itens:**
-- B-01 RX fix (RTL8139 DHCP/RX) (~500 LOC) 🔴 bloqueador
+- B-01 RX fix (RTL8139 DHCP/RX) (~500 LOC) — 🔴 **buscar na internet** por soluções
 - WWW Agents (~2600 LOC) 🔴 depende de B-01
 - Self-Update Agent (~800 LOC) 🔴 depende de B-01
 - Plugin Hub + Marketplace (~400 LOC) 🔴 depende de B-01
@@ -189,25 +189,35 @@
 
 ## TODO (Tarefas Concretas)
 
-### 🔴 Bloqueantes (3 itens)
+### 🔴 Bloqueantes (3 itens) — Todos exigem busca ativa na internet
 
 **B-01: DHCP/DNS/HTTP — Rede funcional**
 - **Origem:** ADR-0016 (Network Strategy)
 - **IDEA_BANK:** #250-255 (Arquitetura Neural de Rede)
 - **Bloqueia:** B-11, B-12, B-13, B-17, B-27 (toda cadeia WWW)
-- **Esforço:** 🔴 3-7 dias (incerto — depende do diagnóstico)
+- **Esforço:** 🔴 3-7 dias
+- **Ação imediata:** Buscar na internet: smoltcp DHCP debug, RTL8139 RX datasheet, testes em HW real
 
 **B-03: NVIDIA PFIFO PUSH_BUFFER + FALCON firmware**
 - **Origem:** ADR-0029 (GPU Architecture)
 - **IDEA_BANK:** N/A (nova funcionalidade)
 - **Bloqueia:** Nenhum (folha na DAG)
 - **Esforço:** 🔴 ~1500 LOC, 3-6 semanas
+- **Ação imediata:** Buscar na internet: nouveau driver, nvgpu (NVIDIA open kernel), pascal-egpu
 
 **B-04: AMD PM4 ring buffer real**
 - **Origem:** ADR-0029 (GPU Architecture)
 - **IDEA_BANK:** N/A (nova funcionalidade)
 - **Bloqueia:** Nenhum (folha na DAG)
 - **Esforço:** 🔴 ~500 LOC, 2-4 semanas
+- **Ação imediata:** Buscar na internet: AMD GPUOpen docs, amdgpu Linux driver, PM4 packet format
+
+**B-34: Intel GuC/HuC firmware loading**
+- **Origem:** ADR-0037 (SMP+GPU Architecture)
+- **IDEA_BANK:** N/A (nova funcionalidade)
+- **Bloqueia:** Nenhum (folha na DAG)
+- **Esforço:** 🔴 ~400 LOC, 2-3 semanas
+- **Ação imediata:** Buscar na internet: i915 Linux driver, Intel GFX docs, GuC firmware ABI
 
 ### 🟠 Alta (4 itens)
 
@@ -240,11 +250,11 @@
 ## Matriz de Rastreabilidade
 
 | ADR | IDEA_BANK | Sprint | TODO |
-|-----|-----------|--------|------|
+|---|---|---|---|
 | ADR- #18 (SMP/APIC) | #16-42 | 81-82 | N/A (completo) |
 | ADR- #19 (Disk Intelligence) | #63-74 | 75 | N/A (completo) |
 | ADR- #18 (Security Pipeline) | #256-267 | 74 | N/A (completo) |
-| ADR- #37 (SMP+GPU) | #67 (Vram) | 84-85 | B-03, B-04 |
+| ADR- #37 (SMP+GPU) | #67 (Vram) | 84-85 | B-03, B-04, B-34 |
 | ADR- #34 (JARVIS) | N/A | 86 | N/A (novo bloco) |
 | ADR- #18 (Security) + #30 (Disk) | N/A | 87 | N/A (novo bloco) |
 | ADR- #31 (AIOS Evolution) | N/A | 88+ | B-01, B-11, B-12, B-13, B-17, B-27 |
@@ -255,7 +265,7 @@
 ## Resumo de Esforço
 
 | Categoria | LOC | Status |
-|-----------|-----|--------|
+|---|---|---|
 | Bloco 21a/21b/21e (completos) | ~3.860 | ✅ |
 | Bloco 21c (GPU Foundations) | ~1.700 | 🟡 Agendado |
 | Bloco 21d (GPU Decode) | ~1.500 | 🟡 Agendado |
@@ -268,9 +278,9 @@
 
 ## Próximos Passos
 
-1. **Sprint 84 (Bloco 21c):** GPU Foundations — RTX 1050 (GP107 Pascal)
-   - Começar com GPU BAR0/BAR1 mapping UC
-   - Depois ACR secure boot
+1. **Sprint 84 (Bloco 21c):** GPU Foundations — NVIDIA PFIFO, AMD PM4, Intel GuC
+   - Começar com GPU BAR0/BAR1 mapping UC (genérico)
+   - Depois secure boot por vendor (ACR/PSP/GuC)
    - Depois PCIe doorbell register
    - Depois GPU SPSC job ring
    - Finalmente VRAM buddy allocator
@@ -292,5 +302,5 @@
    - AHCI driver
 
 5. **Sprint 88+ (Bloco 32+):** AIOS Evolution
-   - Depende de B-01 (DHCP/DNS/HTTP)
+   - 🔴 Depende de B-01 — **buscar ativamente na internet** por soluções de DHCP+RTL8139
    - WWW Agents, Self-Update, Voice Pipeline, WiFi

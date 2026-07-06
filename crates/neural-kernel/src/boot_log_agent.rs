@@ -15,8 +15,9 @@ impl BootLogAgent {
     pub fn new() -> Self { BootLogAgent }
 
     /// Le o ultimo log de boot e retorna como string para o Cortex
-    /// Suporta FAT12 (BOOT.LOG) e FAT32 (B<TICK>.LOG)
+    /// Suporta FAT12 (BOOT.LOG), FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
+        // Tenta ler do disco ATA primeiro
         let ata_guard = crate::ATA_DRIVER.lock();
         let ata = (*ata_guard).as_ref()?;
         let parts = unsafe { crate::fat::read_mbr(ata) };
@@ -63,7 +64,55 @@ impl BootLogAgent {
                 _ => {}
             }
         }
+        // Fallback: ler do LogFsAgent (memoria)
+        if let Some(ref vfs) = *crate::vfs::VFS.lock() {
+            let files = vfs.list_dir("/logs");
+            for file in files {
+                if file.starts_with("boot_") && file.ends_with(".log") {
+                    let path = alloc::format!("/logs/{}", file);
+                    let (mount, rel_path, agent_name) = vfs.resolve(&path);
+                    if let Some("logfs") = agent_name {
+                        // Usar LogFsAgent diretamente via FilesystemAgent trait
+                        use crate::fs::FilesystemAgent;
+                        let logfs = crate::fs::log_fs_agent::LogFsAgent::new();
+                        if let Ok(data) = logfs.read(rel_path) {
+                            return core::str::from_utf8(&data).ok().map(|s| alloc::string::String::from(s));
+                        }
+                    }
+                }
+            }
+        }
         None
+    }
+
+    /// Escreve log de boot para persistencia
+    /// Tenta disco ATA, fallback para LogFsAgent
+    pub fn write_boot_log(tick: u64, content: &str) -> Result<(), &'static str> {
+        let filename = alloc::format!("B{:07X}.LOG", tick);
+        
+        // Tenta escrever no disco ATA
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ata) = (*ata_guard).as_ref() {
+            let parts = unsafe { crate::fat::read_mbr(ata) };
+            for part in &parts {
+                match part.type_code {
+                    0x0B | 0x0C | 0x1C | 0x73 => {
+                        if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
+                            let data = content.as_bytes();
+                            // Simplificado: escrever direto no cluster (requer implementacao completa)
+                            // Por enquanto, fallback para LogFsAgent
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Fallback: escrever no LogFsAgent
+        let log_path = alloc::format!("boot_{:07X}.log", tick);
+        use crate::fs::FilesystemAgent;
+        let mut logfs = crate::fs::log_fs_agent::LogFsAgent::new();
+        logfs.write(&log_path, content.as_bytes()).map_err(|_| "logfs write failed")
     }
 
     /// Analisa o log e retorna diagnostics para o Cortex

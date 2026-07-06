@@ -1,4 +1,5 @@
 # Sprint Plan 84-90 — neural-os-core v0.84.x-0.90.x
+# 🔴 ARQUIVO LEGADO — VEJA sprint-plan-84-95.md PARA VERSÃO COMPLETA COM TODOS OS ITENS DO IDEA_BANK
 
 **Data:** 2026-07-05  
 **Contexto:** Bloco 21a/21b/21e completos (SMP Foundation, Work-Stealing, Polimento). Próximos blocos focados em GPU Foundations, GPU Decode, JARVIS Persona, Security e AIOS Evolution.
@@ -7,28 +8,30 @@
 
 ## Sprint 84 — Bloco 21c: GPU Foundations
 
-**Objetivo:** RTX 1050 (GP107 Pascal) como device de compute. Firmware disponível em linux-firmware desde 2017.
+**Objetivo:** GPUs NVIDIA, AMD e Intel como devices de compute. Firmware disponível em linux-firmware e documentação pública (GPUOpen, Intel Gen, nouveau).
 
 **Itens:**
 - GPU BAR0/BAR1 mapping UC (~300 LOC)
-  - Mapear BARs como uncacheable para MMIO
+  - Mapear BARs como uncacheable para MMIO (genérico: NVIDIA, AMD, Intel)
   - Dependência: NVMe (✅)
-- ACR secure boot (~600 LOC)
-  - Carregar firmware signed FECS/GPCCS (disponível)
+- ACR secure boot / PSP init / GuC loading (~600 LOC)
+  - NVIDIA: FECS/GPCCS signed firmware via ACR
+  - AMD: PSP firmware init para RDNA (licença MIT)
+  - Intel: GuC/HuC firmware loading para Gen9+
   - Dependência: BAR0 mapping
 - PCIe doorbell register (~100 LOC)
-  - Setup de doorbell para submissão de jobs
+  - Setup de doorbell para submissão de jobs (genérico: qualquer GPU)
   - Dependência: BAR0 mapping
 - GPU SPSC job ring (~300 LOC)
-  - CPU enfileira, GPU consome
+  - CPU enfileira, GPU consome (padrão comum a NVIDIA/AMD/Intel)
   - Dependência: Doorbell
 - VRAM buddy allocator (~400 LOC)
-  - Gerenciar 4GB GDDR5
+  - Gerenciar VRAM: GDDR (NVIDIA/AMD) + DRAM carveout (Intel)
   - Dependência: BAR1 mapping
 
 **Total:** ~1700 LOC
 
-**Risco:** ACR secure boot requer WPR setup + signature patching. Seguir nouveau + pascal-egpu. Reclocking NÃO é necessário para compute funcional (roda em clock padrão).
+**Risco:** Secure boot varia por vendor — NVIDIA ACR requer WPR + signature patching, AMD PSP tem firmware MIT, Intel GuC é aberto mas requires minidump. Documentação: nouveau + amdgpu + i915 Linux drivers como referência. Reclocking NÃO é necessário para compute funcional (roda em clock padrão).
 
 **Status:** 🟡 Agendado
 
@@ -43,7 +46,7 @@
   - CPU faz prefill, GPU faz decode
   - Dependência: GPU job ring
 - GPU matmul kernel (ternário) (~300 LOC)
-  - Matmul BitNet na GPU via shader
+  - Matmul BitNet na GPU via shader (NVIDIA CUDA-style, AMD AQL, Intel GEN)
   - Dependência: GPU ring
 - CPU→GPU KV cache DMA (~200 LOC)
   - Transferir KV cache por DMA
@@ -126,7 +129,7 @@
 
 **Itens:**
 - B-01 RX fix (RTL8139 DHCP/RX) (~500 LOC)
-  - Bloqueador: 🔴 QEMU SLiRP
+  - 🔴 Buscar na internet: smoltcp DHCP debug, RTL8139 RX datasheet, testes em HW real com roteador físico
 - WWW Agents (~2600 LOC)
   - Bloqueador: 🔴 B-01
 - Self-Update Agent (~800 LOC)
@@ -144,7 +147,7 @@
 
 **Total:** ~7500 LOC
 
-**Status:** 🔴 Bloqueado (B-01)
+**Status:** 🔴 Bloqueado — primeiro passo: **buscar na internet** diagnósticos, patches e soluções para DHCP+RTL8139+smoltcp em bare-metal e QEMU
 
 ---
 
@@ -163,11 +166,12 @@
 
 ## Nota de HW Real
 
-Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 1050 (GP107)**:
-- **CPU**: AVX2 + FMA é o teto (sem AMX, AVX-512, APX, NPU)
-- **GPU**: firmware NVIDIA Pascal **disponível** em linux-firmware (FECS/GPCCS signed)
-- **NPU**: irrelevante (sem HW, firmware fechado)
-- **Foco**: SMP 4 cores primeiro (garantido), GPU segundo (viável, complexo)
+O sistema visa hardware real, geral e moderno:
+- **CPU**: Qualquer x86-64 (AVX2, AVX-512) ou ARM64. Nossa máquina de teste atual tem i5-6400 (AVX2 + FMA, sem AMX/APX/NPU).
+- **GPU**: NVIDIA (qualquer modelo com BAR0/BAR1 + firmware), AMD (RDNA+ com PM4), Intel (Gen6+ com ring buffer). Firmware disponível em linux-firmware desde 2017.
+- **NPU**: Detecção ACPI/PCI futura para AMD XDNA, Intel NPU, Apple ANE.
+- **AVX-512**: Suportado quando disponível (Ice Lake+), com fallpath AVX2 para CPUs sem.
+- **Foco**: SMP primeiro (garantido em qualquer multi-core), GPU segundo (viável, complexo), NPU terceiro (futuro).
 
 ---
 
@@ -177,4 +181,4 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 - Bloco 21d depende de Bloco 21c
 - Bloco 30 depende de SMP base (✅)
 - Bloco 31 depende de Nenhuma
-- Bloco 32+ depende de B-01 (🔴 bloqueado)
+- Bloco 32+ depende de B-01 (🔴 bloqueado — buscar solução na internet)

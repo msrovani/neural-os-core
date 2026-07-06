@@ -30,9 +30,9 @@ pub fn network_agent_tick() {
     s.tick = tick.wrapping_add(1);
     let ms = tick * 55;
 
-    // Debug inicial
-    if tick == 0 {
-        log(tick, "NetAgent tick started");
+    // Debug inicial - mais frequente
+    if tick == 0 || tick == 1 || tick == 2 || tick == 5 || tick == 10 {
+        log(tick, &alloc::format!("NetAgent tick started (tick={})", tick));
     }
 
     // Poll interface
@@ -65,7 +65,7 @@ pub fn network_agent_tick() {
             }
         }
     } else {
-        if tick % 50 == 0 {
+        if tick % 10 == 0 {
             log(tick, "NETSTACK not initialized");
         }
     }

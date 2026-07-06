@@ -16,34 +16,34 @@ Itens B-01 (LAN) e JARVIS Persona movidos para pós-infraestrutura SMP.
 | **20. Memory + Tick** | **76** | **0.76.x** | **✅ Adaptive heap, Dynamic tick, Event-driven Hermes** |
 | **21. Foundation Quick Wins** | **77** | **0.77.x** | **✅ Prompt >, Pre-Flight, FanOut, TaskSchema, /learn, SkillIndex** |
 | **22. Agentic Evolution** | **78** | **0.78.x** | **✅ Crew/Flow, Cache, Workflow, GGUF, WASM** |
-| **23. LLM Infrastructure** | **79-80** | **0.79.x-0.80.x** | **✅ AVX2 BitNet, Trinity MoE, BPE, QEMU loader, KV Cache** |
+| **23. LLM Infrastructure** | **79-80** | **0.79.x-0.80.x** | **✅ AVX2 BitNet, Trinity MoE, BPE, KV Cache** |
 | **21a. SMP Foundation** | **81** | **0.81.x** | **✅ SPSC ring, IPI, PerCpu** |
 | **21b. Work-Stealing + Matmul** | **82** | **0.82.x** | **✅ Chase-Lev, parallel-for, AgentScheduler multicore** |
 | **21e. Polimento** | **83** | **0.83.x** | **✅ burn-flex, CFS, GPU+Display co-existência** |
 
-## Próximos Blocos (Sprints 84-90, reestruturados com ADR-0037)
+## Próximos Blocos (Sprints 84-90)
 
 ### Nota de HW Real (Jul 2026)
 
-Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 1050 (GP107)**:
-- **CPU**: AVX2 + FMA é o teto (sem AMX, AVX-512, APX, NPU)
-- **GPU**: firmware NVIDIA Pascal **disponível** em linux-firmware (FECS/GPCCS signed)
-- **NPU**: irrelevante (sem HW, firmware fechado)
-- **Foco**: SMP 4 cores primeiro (garantido), GPU segundo (viável, complexo)
+O neural-os-core é um sistema **hardware-agnóstico** que suporta:
+- **CPU**: Qualquer x86-64 (AVX2, AVX-512) ou ARM64. Nosso HW de teste: i5-6400 (AVX2 + FMA, sem AMX/APX/NPU).
+- **GPU**: NVIDIA (qualquer modelo com BAR0/BAR1), AMD (RDNA+ PM4), Intel (Gen6+ ring buffer). Firmware disponível em linux-firmware + documentação pública.
+- **NPU**: AMD XDNA, Intel NPU, Apple ANE — detecção futura via ACPI/PCI.
+- **Foco**: SMP 4 cores primeiro (garantido), GPU segundo (viável, complexo), NPU terceiro (futuro).
 
 ## 🟡 Bloco 21c — GPU Foundations — Sprint 84
-**RTX 1050 (GP107 Pascal) como device de compute. Firmware disponível em linux-firmware desde 2017.**
+**GPUs NVIDIA/AMD/Intel como devices de compute. Firmware disponível em linux-firmware.**
 
 | Item | Origem | O que | LOC | Dependência |
 |---|---|---|---|---|
-| GPU BAR0/BAR1 mapping UC | nova-core + pascal-egpu | Mapear BARs como uncacheable para MMIO | 300 | NVMe (✅) |
-| ACR secure boot | pascal-egpu + nouveau | Carregar firmware signed FECS/GPCCS (disponível) | 600 | BAR0 mapping |
-| PCIe doorbell register | nova-core + pascal-egpu | Setup de doorbell para submissão de jobs | 100 | BAR0 mapping |
+| GPU BAR0/BAR1 mapping UC | nova-core + amdgpu + i915 | Mapear BARs como uncacheable para MMIO (NVIDIA/AMD/Intel) | 300 | NVMe (✅) |
+| Secure boot (ACR/PSP/GuC) | nouveau + amdgpu + i915 | Carregar firmware signed (FECS/GPCCS, PSP, GuC/HuC) | 600 | BAR0 mapping |
+| PCIe doorbell register | nova-core + amdgpu | Setup de doorbell para submissão de jobs | 100 | BAR0 mapping |
 | GPU SPSC job ring | monadic-hypervisor + dmaplane | CPU enfileira, GPU consome | 300 | Doorbell |
-| VRAM buddy allocator | coconutOS + nova-core | Gerenciar 4GB GDDR5 | 400 | BAR1 mapping |
+| VRAM buddy allocator | coconutOS + nova-core | Gerenciar VRAM GDDR5/6 + DRAM carveout | 400 | BAR1 mapping |
 | | **Total** | | **~1700** | |
 
-**Risco:** ACR secure boot requer WPR setup + signature patching. Seguir nouveau + pascal-egpu. Reclocking NÃO é necessário para compute funcional (roda em clock padrão).
+**Risco:** Secure boot varia por vendor. Seguir nouveau + amdgpu + i915. Reclocking NÃO é necessário para compute funcional (roda em clock padrão).
 
 **Status:** 🟡 Agendado
 
@@ -53,7 +53,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 | Item | Origem | O que | LOC | Dependência |
 |---|---|---|---|---|
 | Agent.xpu prefill/decode split | Agent.xpu (arXiv 2506.24045) | CPU faz prefill, GPU faz decode | 400 | GPU job ring |
-| GPU matmul kernel (ternary) | nova-core patterns | Matmul BitNet na GPU via shader | 300 | GPU ring |
+| GPU matmul kernel (ternary) | nova-core + amdgpu + i915 patterns | Matmul BitNet na GPU via shader | 300 | GPU ring |
 | CPU→GPU KV cache DMA | dmaplane | Transferir KV cache por DMA | 200 | GPU DMA |
 | XQueue (preemptível) | XSched (OSDI) | Fila de comandos GPU com preempção | 600 | GPU ring |
 | | **Total** | | **~1500** | |
@@ -99,11 +99,11 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 **Status:** 🟡 Agendado
 
 ### 🔴 Bloco 32+ — AIOS Evolution — Sprint 88+
-**Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
+**Tudo que depende de rede (LAN) — B-01 é o gatekeeper. 🔴 Buscar ativamente na internet por soluções.**
 
 | Item | LOC | Bloqueador |
 |---|---|---|
-| B-01 RX fix (RTL8139 DHCP/RX) | ~500 | 🔴 QEMU SLiRP |
+| B-01 RX fix (RTL8139 DHCP/RX) | ~500 | 🔴 Buscar na internet: smoltcp DHCP debug, HW real, datasheets |
 | WWW Agents | ~2600 | 🔴 B-01 |
 | Self-Update Agent | ~800 | 🔴 B-01 |
 | Plugin Hub + Marketplace | ~400 | 🔴 B-01 |
@@ -113,7 +113,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 | WiFi | ~1000 | 🔴 B-01 |
 | | **Total** | **~7500 LOC** |
 
-**Status:** 🔴 Bloqueado (B-01)
+**Status:** 🔴 Bloqueado (B-01) — **primeira ação: buscar na internet** diagnósticos smoltcp DHCP, RTL8139 RX em HW real, patches conhecidos
 
 ## Funcionalidades por Camada
 
@@ -174,7 +174,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 - BPE Tokenizer (HuggingFace JSON parser) ✅
 - KV Cache (v0.80.1) — geração autoregressiva ✅
 - Trinity Router (MoE) — stub funcional ✅
-- QEMU loader pipeline BitNet-b1.58 850M ✅
+- BitNet-b1.58 850M model pipeline ✅
 
 ### 🟢 SMP Foundation — SPSC + IPI + PerCpu (Bloco 25)
 - SPSC ring lockless (bbqueue) para comunicação cross-core, IRQ→task, GPU→CPU
@@ -189,10 +189,10 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 - Per-CPU slab allocator (alocação local sem lock)
 
 ### 🟢 GPU Compute Foundations (Bloco 27)
-- GPU BAR0/BAR1 mapping UC (MMIO para RTX 1050)
+- GPU BAR0/BAR1 mapping UC (MMIO para NVIDIA/AMD/Intel)
 - PCIe doorbell register setup
 - GPU SPSC job ring (CPU enfileira, GPU consome)
-- VRAM buddy allocator (4GB)
+- VRAM buddy allocator
 
 ### 🟢 GPU Decode (Bloco 28)
 - Agent.xpu prefill/decode split (CPU prefill, GPU decode)
@@ -223,7 +223,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 ### ✅ Display
 - VGA text mode buffer (0xB8000)
 - **UEFI framebuffer** (preparado, aguarda bootloader 0.11+)
-- VirtIO-GPU (QEMU)
+- VirtIO-GPU (QEMU — dev apenas)
 - Console multi-região, fonte VGA 8×16
 
 ### ✅ Agentes (20 agentes)
@@ -243,7 +243,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 | A-012 | BootTrustAgent | System | TrustCache init |
 | A-013 | PlatformAgent | System | PCI+ACPI+APIC+SMP |
 | A-014 | MemoryAgent | System | MHI + Arch |
-| A-015 | GpuDriverAgent | Driver | VirtIO-GPU |
+| A-015 | GpuDriverAgent | Driver | GPU detect (NVIDIA/AMD/Intel) |
 | A-016 | HwDetectAgent | System | HwIdentifySkill |
 | A-017 | CronAgent | System | Cron Scheduler |
 | A-018 | SecurityAgent | System | Security Pipeline |
@@ -291,7 +291,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 - Ctrl+Alt+Del com dump FAT12 + shutdown
 - BOOT.LOG visível no Windows Explorer
 
-## Pendências Técnicas (Atualizado ADR-0037)
+## Pendências Técnicas
 
 | Item | Esforço | Bloco | Prioridade |
 |---|---|---|---|
@@ -302,9 +302,9 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 | Parallel-for AVX2 matmul | ~300 LOC | 26 (Parallel) | 🟡 Alta — 2-3× speedup |
 | AgentScheduler multicore | ~200 LOC | 26 (Parallel) | 🟡 Alta — 4 run queues |
 | Per-CPU slab allocator | ~300 LOC | 26 (Parallel) | 🟡 Média — alocação local |
-| GPU BAR mapping | ~300 LOC | 27 (GPU Found.) | 🟡 Média — RTX 1050 compute |
+| GPU BAR mapping (NVIDIA/AMD/Intel) | ~300 LOC | 27 (GPU Found.) | 🟡 Média — compute GPU |
 | GPU doorbell + job ring | ~400 LOC | 27 (GPU Found.) | 🟡 Média — submissão GPU |
-| VRAM allocator (buddy) | ~400 LOC | 27 (GPU Found.) | 🟡 Média — 4GB VRAM |
+| VRAM allocator (buddy) | ~400 LOC | 27 (GPU Found.) | 🟡 Média — VRAM |
 | Agent.xpu prefill/decode split | ~400 LOC | 28 (GPU Decode) | 🟢 Baixa — após GPU pronta |
 | GPU matmul ternário | ~300 LOC | 28 (GPU Decode) | 🟢 Baixa — BitNet offload |
 | KV cache DMA CPU↔GPU | ~200 LOC | 28 (GPU Decode) | 🟢 Baixa — zero copy |
@@ -314,7 +314,7 @@ Após pesquisa expandida (ADR-0037 v4), confirmado para **nosso i5-6400 + RTX 10
 | CFS scheduler | ~500 LOC | 29 (Polimento) | 🟢 Baixa — fairness |
 | JARVIS Persona (17 itens) | ~3280 LOC | 30 (JARVIS) | 🟢 Baixa — pós-SMP |
 | AHCI driver | ~700 LOC | 31 (Security) | 🟢 Baixa |
-| B-01 RX fix | ~500 LOC | 32+ (AIOS) | 🔴 Bloqueado (QEMU) |
+| B-01 RX fix | ~500 LOC | 32+ (AIOS) | 🔴 Buscar na internet |
 
 ## Activation on Demand — Filosofia
 

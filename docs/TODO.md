@@ -1,799 +1,394 @@
-# 📋 TODO/Checklist — neural-os-core v0.79.0
+# 📋 TODO MASTER — neural-os-core v0.84.x → v0.95.x
+# 354 IDEIAS DO IDEA_BANK + TODOS OS SPRINTS — CHECKLIST COMPLETO
 
-**Data:** 2026-07-04  
-**Propósito:** Lista mestra de todas as pendências técnicas do projeto, para qualquer AI DEV (humano ou IA) localizar e contribuir.  
-**Total de itens:** 27 (7 🔴 bloqueantes, 8 🟠 alta, 7 🟡 média, 5 🟢 leve)
+**Data:** 2026-07-05  
+**Propósito:** Checklist mestre de TODOS os itens do projeto. Cada item do IDEA_BANK está assignado a um sprint.  
+**Legenda:** ✅ feito | 🟡 em andamento | ⏳ previsto | 🔴 bloqueado | 💰 sponsor | ❌ descartado
 
 ---
 
-## Como usar este arquivo
+## SPRINT 84 — Bloco 21c: GPU Foundations (~1700 LOC)
+**Objetivo:** GPUs NVIDIA/AMD/Intel como devices de compute. BAR mapping, secure boot, doorbell, job ring, VRAM allocator.
 
-Cada item segue o formato:
+### Itens
+- [ ] `#326` GPU BAR0/BAR1 mapping UC (~300 LOC)
+  - Goal: Mapear PCI BARs como uncacheable (PWT|PCD) para MMIO direto
+  - Sub-itens: [ ] detectar BAR0/BAR1 por vendor (NVIDIA nova-core / AMD amdgpu / Intel i915)
+             [ ] mapear como UC via page table
+             [ ] validar: ler VERSION register via MMIO
+  - Dificuldades: BAR sizing varia por vendor; alguns devices têm BAR2 no lugar de BAR1
+  - Depende de: NVMe (✅), PCI scan (✅)
+  - Fontes: nova-core (NVIDIA), amdgpu (AMD), i915 (Intel)
+
+- [ ] `#352` Secure Boot GPU — ACR/PSP/GuC pipeline (~600 LOC)
+  - Goal: Carregar firmware signed e inicializar GPU para compute
+  - Sub-itens: [ ] NVIDIA ACR: FECS blobs → WPR → LS ucode → signature verification
+             [ ] AMD PSP: firmware MIT → PM4 init ring
+             [ ] Intel GuC: firmware open → HuC auth → submission
+  - Dificuldades: NVIDIA ACR requer WPR setup + signature patching
+  - Depende de: #326 BAR0 mapping
+
+- [ ] `#327` GPU doorbell + SPSC job ring (~400 LOC)
+  - Goal: CPU escreve job descriptor no ring, escreve doorbell, GPU executa
+  - Sub-itens: [ ] ring alloc (UC pages)
+             [ ] doorbell register write
+             [ ] completion polling
+  - Dificuldades: alignas(64) head/tail para false sharing prevention
+  - Depende de: #326 BAR0 mapping
+
+- [ ] `#328` VRAM buddy allocator (~400 LOC)
+  - Goal: Gerenciar VRAM (GDDR NVIDIA/AMD, DRAM carveout Intel)
+  - Sub-itens: [ ] free list com coalescing
+             [ ] alocação contígua
+             [ ] MSched evicção base futura
+  - Depende de: #326 BAR1 mapping
+
+- [ ] `#353` GPU Compute Pipeline — submissão genérica (~300 LOC)
+  - Goal: Pipeline de submissão genérico: BAR0 MMIO → GPU boot → ring init → compute dispatch
+  - Depende de: #326, #327, #352, #328
+
+- [ ] `#67` AllocTier::Vram — integração MHI (~50 LOC)
+  - Goal: `alloc_by_tier(AllocTier::Vram, size)` → mapeia BAR da GPU
+  - Depende de: #328 VRAM allocator
+
+---
+
+## SPRINT 85 — Bloco 21d: GPU Decode (BitNet offload) (~1500 LOC)
+**Objetivo:** Decode do BitNet roda na GPU. Prefill fica na CPU.
+
+### Itens
+- [ ] `#329` Agent.xpu prefill/decode split (~400 LOC)
+  - Goal: CPU processa prompt (prefill), GPU gera tokens (decode)
+  - Sub-itens: [ ] tokenization + embedding na CPU
+             [ ] matmul na GPU via job ring
+             [ ] sync point entre CPU e GPU
+  - Dificuldades: coordenar 2 devices com latências diferentes
+  - Depende de: GPU job ring (#327)
+
+- [ ] `#330` GPU matmul kernel ternário (~300 LOC)
+  - Goal: BitNet ADD/SUB matmul como compute shader
+  - Sub-itens: [ ] NVIDIA PTX shader
+             [ ] AMD AQL packet
+             [ ] Intel GEN assembly
+  - Speedup estimado: 10-25× sobre CPU
+  - Depende de: GPU ring (#327)
+
+- [ ] `#331` CPU→GPU KV cache DMA (~200 LOC)
+  - Goal: Transferir KV cache entre RAM e VRAM via DMA engine
+  - Referência: dmaplane (arXiv 2603.10030)
+  - Depende de: GPU DMA funcional
+
+- [ ] `#332` XQueue preemptível (~600 LOC)
+  - Goal: Fila de comandos GPU com 3 níveis de preempção
+  - Níveis: pending → in-flight → running
+  - Referência: XSched (OSDI 2025)
+  - Depende de: GPU ring (#327)
+
+---
+
+## SPRINT 86 — Bloco 30: JARVIS Persona (~950 LOC)
+**Objetivo:** JARVIS ganha personalidade. SOUL.md, IPW, Session Compression, Notification Gate.
+
+### Itens
+- [ ] `#315.1` SOUL.md Personality Engine (~300 LOC)
+  - Goal: Parser markdown de SOUL.md → nome/tom/humor_level/formality/empathy/greetings
+  - Dificuldades: parser markdown mínimo em no_std
+
+- [ ] `#315.2` IPW Monitor (RAPL MSR 0x610) (~150 LOC)
+  - Goal: Mede energia via PKG_ENERGY_STATUS, calcula tokens/watt
+  - Depende de: PerCpu (✅ Bloco 21a)
+
+- [ ] `#315.3` Session Compression (~200 LOC)
+  - Goal: 4 estratégias: Summarize (BitNet) / DropLowest / MergeSimilar / SegmentMeans
+
+- [ ] `#315.4` Notification Gate (~200 LOC)
+  - Goal: 4 urgency levels: Critical/High/Medium/Low. Rate limiting, dedup
+
+- [ ] `#315.5` Sessionless Thread (~100 LOC)
+  - Goal: Conversa contínua sem reset de contexto entre comandos
+
+---
+
+## SPRINT 87 — Bloco 31: JARVIS Security + AHCI (~1200 LOC)
+**Objetivo:** Segurança avançada + driver SATA.
+
+### Itens
+- [ ] `#315.18` Fail-Closed Safety Invariant (~200 LOC)
+  - Goal: 4 invariants SMT-proof: process separation, pre-action, fail-closed, signed evidence
+
+- [ ] `#315.19` Merkle Audit Trail (~200 LOC)
+  - Goal: Chain de audit Ed25519: tick, agent, action, payload_hash, prev_hash, signature
+
+- [ ] `#315.20` Fluid Persona (~100 LOC)
+  - Goal: Persona adapta por contexto: urgente→preciso, triste→empático, irritado→formal
+
+- [ ] AHCI driver (SATA 6G NCQ) (~700 LOC)
+  - Goal: Driver SATA nativo para HW real
+  - Dificuldades: AHCI register interface, NCQ command queuing
+
+---
+
+## SPRINT 88 — Bloco 32: JARVIS Emotion + Cache + Pipeline (~1200 LOC)
+**Objetivo:** Análise emocional, descoberta de skills, cache semântico, pipeline de persona.
+
+### Itens
+- [ ] `#315.6` Emotion Analysis (~250 LOC)
+  - Goal: BitNet classifier 7 emoções + intensidade + sarcasmo + ajuste de tom
+
+- [ ] `#315.7` Capability Contract + Consent Gates (~200 LOC)
+  - Goal: 3 níveis (Safe/Moderate/Dangerous). SkillRegistry + SafetyAgent validam
+
+- [ ] `#315.8` Skill Discovery (DSPy/ACE) (~300 LOC)
+  - Goal: SkillObserver monitora padrões, sugere novas skills
+  - Pipeline: observe → analyze → propose → generate
+
+- [ ] `#315.9` ADE Pipeline (~200 LOC)
+  - Goal: 4 fases: Specification (SDD) → Execution (AgentScheduler) → Review (contracts) → Recover (self-heal)
+
+- [ ] `#315.10` Semantic Cache (5-tier) (~150 LOC)
+  - Goal: Tier 1: SHA-256 exact | Tier 2: embedding >0.95 | Tier 3: pattern | Tier 4: fallback | Tier 5: cold
+  - Referência: NabaOS (97.5% reduction)
+
+- [ ] `#315.11` Persona Pipeline (16 stages) (~100 LOC)
+  - Goal: SafetyCheck→StopHandler→Converse→SkillHigh→Persona→...→AuditLog
+
+---
+
+## SPRINT 89 — Bloco 33: SleepCycle + Advanced Memory (~2500 LOC)
+**Objetivo:** Ciclo de sono (aprendizado inspirado no sono humano) + memória avançada (Atkinson-Shiffrin, KG, Ebbinghaus).
+
+### Itens
+- [ ] `#314` SleepCycle Agent (~780 LOC)
+  - Goal: 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT
+  - Sub-itens: [ ] `#314a` Experience Replay (1000 eventos, amostra 64)
+             [ ] `#314b` Generative Replay (BitNet variações sintéticas)
+             [ ] `#314c` Elastic Weight Consolidation (protege skills existentes)
+             [ ] `#314d` Synaptic Homeostasis (prune pesos < threshold, ~18% redução)
+             [ ] `#314e` Metacognitive Reflection (confidence tracking, micro-lessons)
+             [ ] `#314f` CronAgent scheduler (períodos idle)
+  - Dificuldades: Primeiro sistema bare-metal com ciclo de sono. Pioneirismo.
+
+- [ ] `#214` SHA-256 Memory Dedup (~100 LOC)
+  - Goal: Prevenir entradas duplicadas no EventBus e TrustCache
+
+- [ ] `#215` Privacy Filter (~80 LOC)
+  - Goal: Strip API keys, secrets, \<private\> antes de armazenar
+
+- [ ] `#216` Memory TTL/Eviction (~150 LOC)
+  - Goal: Auto-evict baseado em TTL configurável, ImportanceRank, AccessFrequency
+
+- [ ] `#219` Ebbinghaus Decay (~120 LOC)
+  - Goal: strength = importance × e^(-λ_eff × days) × (1 + recall_count × 0.2)
+
+- [ ] `#217` Hybrid Search (BM25 + MLP) (~200 LOC)
+  - Goal: RRF fusion para intent routing: MLP + BM25 keyword fallback
+
+- [ ] `#218` 4-Tier Memory Consolidation (~400 LOC)
+  - Goal: Working → Episodic → Semantic → Procedural pipeline
+
+- [ ] `#222` Metacognitive Guard (~300 LOC)
+  - Goal: Antes de executar skill, verifica TrustCache por erros passados
+
+- [ ] `#223` Draft→Review→Merge Memory (~350 LOC)
+  - Goal: Mudanças de memória passam por workflow de aprovação
+
+- [ ] `#224` Atkinson-Shiffrin 3-tier (~800 LOC)
+  - Goal: Sensory Register (48h) → STM (7d) → LTM (permanent, semantic-indexed)
+
+- [ ] `#225` Bi-temporal Knowledge Graph (~600 LOC)
+  - Goal: Grafo temporal com validity windows + contradiction detection
+
+---
+
+## SPRINT 90 — Bloco 34: JARVIS Deep Cognitive (~1200 LOC)
+**Objetivo:** Sonhos, ego, batimentos cardíacos proativos, auto-skills, monitor de entropia.
+
+### Itens
+- [ ] `#315.12` Dreaming/Consolidation (~200 LOC)
+  - Goal: CronAgent noturno: agrupa memórias similares, gera insights sintéticos
+
+- [ ] `#315.13` Ego Layer (~250 LOC)
+  - Goal: Self-model: JARVIS sabe o que sabe/não sabe. Confidence tracking por domínio
+
+- [ ] `#315.14` Proactive Heartbeats (~100 LOC)
+  - Goal: JARVIS inicia conversa proativamente baseado em eventos
+
+- [ ] `#315.15` Tool-State Save Game (~100 LOC)
+  - Goal: Snapshot + rollback automático se skill falhar
+
+- [ ] `#315.16` Auto-Skill Generation (~150 LOC)
+  - Goal: Cratos-inspired: watch → pattern → propose → generate → register
+
+- [ ] `#315.17` Babel-Index (~100 LOC)
+  - Goal: Monitora entropia, contradiction rate, staleness index da memória
+
+---
+
+## SPRINT 91 — Bloco 35: Polimento + Ecosystem (~2500 LOC)
+**Objetivo:** burn-flex backend, MSched VRAM, CFS, GPU+Display, SmileyOS UI patterns.
+
+### Itens
+- [ ] `#333` burn-flex backend port (~800 LOC)
+  - Goal: Portar CPU backend do burn-flex (tracel-ai/burn). SIMD gemm + quantization
+  - Impacto: Elimina bitnet_avx2 manual (~800 LOC). 2-95× speedup
+  - Referência: github.com/antimora/burn-flex
+
+- [ ] `#334` MSched evicção VRAM (~500 LOC)
+  - Goal: Belady (OPT) eviction policy. Prevê working set do próximo kernel GPU
+
+- [ ] `#335` CFS scheduler (~500 LOC)
+  - Goal: Substituir round-robin por Completely Fair Scheduler (vruntime)
+
+- [ ] `#336` GPU + Display co-existência (~300 LOC)
+  - Goal: iGPU (Intel) display, dGPU (NVIDIA) compute. Time-sharing se só 1 GPU
+
+- [ ] `#279a` Shell 40+ comandos (~300 LOC)
+  - Goal: ls, cat, ps, uptime, theme, kill, echo, clear, help
+
+- [ ] `#279b` Sistema de temas (~200 LOC)
+  - Goal: 5+ cores, hot-swap via `theme <name>`
+
+- [ ] `#279c` VFS upgrade com permissões (~400 LOC)
+  - Goal: Filesystem próprio com permissões (rwx por agente)
+
+- [ ] `#280l` SkillManifest derive macro (~100 LOC)
+  - Goal: Proc-macro para gerar manifests de skills
+
+- [ ] `#283a` Workspace Cube 3D (~200 LOC)
+  - Goal: 3 workspaces (main/dev/chat) como faces de cubo giratório
+
+- [ ] `#283b` Crossfade workspaces (~100 LOC)
+  - Goal: Transição sem FPU, inteiros step 0..50
+
+---
+
+## SPRINT 92+ — Bloco 36+: AIOS Evolution (~15000 LOC) 🔴
+**🔴 BLOQUEADO POR B-01** — Primeira ação em todo item bloqueado: **buscar na internet**
+
+### B-01: DHCP/DNS/HTTP — Rede funcional (~500 LOC) 🔴
+- **Goal:** smoltcp DHCP obtém IP, DNS resolve, HTTP faz GET/POST
+- **Ação imediata:** Buscar na internet: smoltcp DHCP debug, RTL8139 RX datasheet, testes HW real
+- **Bloqueia:** Toda a cadeia WWW (B-11, B-12, B-13, B-17, B-27)
+- **Sub-itens:**
+  - [ ] Debug smoltcp DHCP: descobrir por que dhcp_poll() nunca retorna Configured
+  - [ ] Verificar RTL8139 RX (CAPR, RBSTART, interrupção IRQ11)
+  - [ ] Testar com -nic tap,model=rtl8139 (alternativa ao SLiRP)
+  - [ ] Implementar fallback: static IP 10.0.2.15/24
+  - [ ] Testar ping 10.0.2.2 via ICMP socket
+
+### WWW Agents + Network Stack (~3600 LOC) 🔴
+- [ ] `#117` NIC driver genérico (detecta PCI vendor/device, busca driver online) (~400 LOC)
+- [ ] `#118-120` smoltcp + DNS + HTTP stack (~500 LOC)
+- [ ] `#250` /ping command (~50 LOC)
+- [ ] `#251-252` DHCP/ARP com timeout + fallback (~200 LOC)
+- [ ] `#307` WWW Agents: Browser, Email, Search, RSS, Download, WS (~2600 LOC)
+
+### Self-Update + WASM (~3700 LOC) 🔴
+- [ ] `#308a-c` Self-Update Agent (A/B slots, channels, rollback) (~800 LOC)
+- [ ] `#309a-c` WASM Skill Runtime + IDE Agent + Hybrid Agents (~2900 LOC)
+
+### Voice Pipeline (~1600 LOC) 🔴
+- [ ] `#315.21` Piper TTS Integration (~100 LOC)
+- [ ] `#315.22` Vosk/Whisper STT (~400 LOC)
+- [ ] `#315.23` Wake Word (Rustpotter) (~100 LOC)
+- [ ] `#315.24` Wyoming Protocol IPC (~300 LOC)
+- [ ] `#315.25` Voice Pipeline completo (~200 LOC)
+
+### Multi-device + SKYNET (~600 LOC) 🔴
+- [ ] `#315.26` Multi-device sync (CRDT, Automerge-style) (~300 LOC)
+- [ ] `#315.27` SKYNET Mesh Node (~300 LOC)
+
+### The Agency + FS Agents (~1400 LOC) 🔴
+- [ ] `#277a-c` HwRegistry, Agency struct, LLM-aware activation (~800 LOC)
+- [ ] `#282e-h` InferenceFsAgent, HermesFsAgent, RamFsAgent, MhiScheduler (~600 LOC)
+
+### Cross-OS Compatibility (~2000 LOC) 🔴
+- [ ] `#306a` Windows PE32+ loader + syscall translation (~600 LOC)
+- [ ] `#306b` Linux ELF loader + syscall translation (~500 LOC)
+- [ ] `#306c` macOS Mach-O loader (~400 LOC)
+- [ ] `#306d` Android APK compat (~500 LOC)
+
+### WiFi (~1000 LOC) 🔴
+- [ ] `B-29` Intel Wireless / Atheros / Realtek 802.11 (~1000 LOC)
+
+### Compositor + Browser (~1100 LOC) 🟡
+- [ ] `#279d` Compositor multi-window (dock, menus, drag) (~600 LOC)
+- [ ] `#279e` v86 browser demo (WebAssembly x86 emulator) (~500 LOC)
+
+---
+
+## ITENS PÓS-MVP (sem sprint definido, dependem de maturação do sistema)
+
+### ⏳ Pós-MVP — Dependem de infraestrutura básica
+- [ ] `#1-15` USB stack completo (xHCI controller, device identity, WASM dispatch) (~3000 LOC)
+- [ ] `#68-69` AllocTier::Nvme / Hdd (SFS-based) (~300 LOC)
+- [ ] `#79-80` UEFI framebuffer + font rendering (~400 LOC)
+- [ ] `#92-93` Huge Pages 2MiB / 1GiB (~300 LOC)
+- [ ] `#103-104` WASM embedder + linear memory pool (~800 LOC)
+- [ ] `#105-108` Success Engine (feedback loop, replay, consolidation, MatMul-free) (~2000 LOC)
+- [ ] `#149-152` Feedback loop, ternary weight update, experience replay, consolidation (~500 LOC)
+- [ ] `#158-159` Workflow Predictor, Auto-Skill Generator (~400 LOC)
+- [ ] `#162` Workflow Profile exportável (~200 LOC)
+- [ ] `#169-175` Codebook VQ, KV cache codebook, ReAct loop, MCP Server, Delta branches (~1500 LOC)
+- [ ] `#186-189` AppForge, Multi-User, Workflow Builder, Federated Cluster (~3000 LOC)
+- [ ] `#210-213` Actor Registry, Crash-Recovery, ComputeBackend, Plugin System (~2500 LOC)
+- [ ] `#226-227` Team Memory, Memory Git Snapshots (~900 LOC)
+- [ ] `#241-247` Observability, AI Security Scan, Hub Discovery, HITL, Remote Exec, Marketplace (~3000 LOC)
+- [ ] `#265-267` FS Vector Search, Vector API, OverlayFS (~800 LOC)
+- [ ] `#278a-b` GGUF loader + .bitnet v3 (~500 LOC)
+- [ ] `#306a-d` Cross-OS compat (PE/ELF/Mach-O/APK) (~2000 LOC)
+
+### 💰 Sponsor — Dependem de hardware específico
+- [ ] `#43-52` NPU AMD XDNA driver completo (~3000 LOC)
+- [ ] `#116` Port ARM/RISC-V (~5000 LOC)
+
+### ❌ Descartados
+- [ ] `#83` Intel HDA audio driver — sem skill de áudio no roadmap
+- [ ] `#84` Áudio via USB (UAC) — USB + áudio = duplo pós-MVP
+- [ ] `#248` Docker Sandbox — incompatível com bare-metal no_std
+- [ ] `#249` Python/.NET Runtime — barreira de linguagem
+
+---
+
+## RESUMO GERAL
+
+| Categoria | Itens | LOC | Status |
+|---|---|---|---|
+| ✅ Completos (Sprints 1-83) | ~200 | ~20.000 | ✅ |
+| 🟡 Sprint 84 (GPU Foundations) | 6 | ~1.700 | 🟡 |
+| 🟡 Sprint 85 (GPU Decode) | 4 | ~1.500 | 🟡 |
+| 🟡 Sprint 86 (JARVIS Persona) | 5 | ~950 | 🟡 |
+| 🟡 Sprint 87 (JARVIS Security+AHCI) | 4 | ~1.200 | 🟡 |
+| 🟡 Sprint 88 (JARVIS Emotion+Cache) | 6 | ~1.200 | 🟡 |
+| 🟡 Sprint 89 (SleepCycle+Memory) | 11 | ~2.500 | 🟡 |
+| 🟡 Sprint 90 (JARVIS Deep Cognitive) | 6 | ~1.200 | 🟡 |
+| 🟡 Sprint 91 (Polimento+Ecosystem) | 10 | ~2.500 | 🟡 |
+| 🔴 Sprint 92+ (AIOS Evolution) | 25+ | ~15.000 | 🔴 |
+| ⏳ Pós-MVP | 25+ | ~20.000 | ⏳ |
+| 💰 Sponsor | 2 | ~8.000 | 💰 |
+| ❌ Descartados | 4 | — | ❌ |
+| **Total** | **~354** | **~75.000** | |
+
+## MAPA DE DEPENDÊNCIAS (DAG Simplificado)
 
 ```
-[B-#] Prioridade | Título
-├── Goal:          O que queremos alcançar
-├── Por que:       Por que é necessário
-├── Bloqueia:      Quais itens dependem deste
-├── Sub-itens:     Passos concretos (checkboxes)
-├── Dificuldades:  O que torna este item difícil
-├── Travas:        O que impede o item de começar
-├── Arquivos:      Onde mexer
-├── Fontes:        Onde aprender mais
-└── Esforço:       Estimativa de LOC/tempo
+Sprint 84 (GPU Found.) ──→ Sprint 85 (GPU Decode)
+                              │
+Sprint 86 (JARVIS Persona) ──→ Sprint 88 (JARVIS Emotion)
+                              │
+Sprint 89 (SleepCycle+Memory) ──→ Sprint 90 (JARVIS Deep Cognitive)
+                                    │
+Sprint 91 (Polimento) ──→ Sprint 92+ (AIOS Evolution) ←── B-01 (🔴)
+                                                            │
+                              ⏳ Pós-MVP ←── Infraestrutura madura
+                              💰 Sponsor ←── HW AMD APU
 ```
 
----
-
-## 🧩 Mapa de Dependências (DAG)
-
-O gráfico abaixo mostra QUEM BLOQUEIA QUEM. Só implemente um item se TODOS os seus pais (↑) estiverem resolvidos.
-
-```
-LAN / DHCP ──┬──→ B-11 (WWW Infra) ──┬──→ B-12 (Browser Agent)
-             │                        ├──→ B-13 (MCP TCP)
-             │                        ├──→ B-17 (WWW restantes: Email, RSS, Download, WS)
-             │                        └──→ B-27 (Plugin Hub)
-             ├──→ B-18 (DHCP refactor)
-             └──→ (silenciosamente bloqueia browser_agent.rs real)
-
-GTT ───────────→ B-02 (Intel GEN shader)
-
-B-11 (WWW Infra) ──→ B-12, B-13, B-17, B-27
-
-GPU probe (existe) ──→ B-05 (integrar no boot)
-                      └──→ B-02, B-03, B-04 (shaders)
-
-HW real ────────→ B-03 (NVIDIA), B-04 (AMD), B-21 (teste HW)
-                └──→ B-10 (e1000/r8169)
-```
-
-### Legenda
-```
-A ──→ B    = "A bloqueia B" (B não pode começar sem A)
-(A)        = item já existe / está implementado
-```
-
-### Ordem Topológica (qual fazer primeiro)
-
-```
-Fase 0 (já existe):  GPU probe, RTL8139 TX, PCI scan, display
-Fase 1 (Sprint 67-70): S67.0+S67.1+B-05+B-28+B-24 ✅ (meta-skill, agency, GPU boot, bugs)
-Fase 2 (Sprint 71):   B-31, B-32, B-33, B-34        ✅ (boot bug hunt)
-Fase 3 (Rede):        B-01 (RX fix) ──→ B-18 (DHCP fallback)
-Fase 4 (WWW):         B-11 (WWW Infra) ──→ B-12 (Browser), B-13 (MCP), B-17, B-27
-Fase 5 (GPU Intel):   B-02 (GEN shader) ←── B-07 ✅
-Fase 6 (HW real):     B-03 (NVIDIA), B-04 (AMD), B-10 (e1000), B-21 (teste)
-Fase 7 (WiFi):        B-30 (Intel WiFi / Atheros / Realtek wireless) ←── B-01
-**Fase 8 (FS):        B-25 (FAT32) + B-34 (log) ✅ — FAT12 removido**
-**Fase 9 — Sprint 77 (Foundation Quick Wins):  Prompt >, Pre-Flight, TaskSchema, FanOut, /learn, SkillIndex, Contracts ✅**
-**Fase 10 — Sprint 78 (Agentic Evolution):     Crew/Flow, Cache, Workflow, GGUF, WASM ✅**
-**Fase 11 — Sprint 79 (LLM Infrastructure):     AVX2 BitNet, Trinity MoE, Candle, TrainingAgent**
-**Fase 12 — Sprint 80 (JARVIS Persona):         SOUL.md, IPW, Session Compression, Notification Gate**
-```
-
----
-
-## 🔴 BLOQUEANTES (impedem features core)
-
----
-
-### B-01: DHCP/DNS/HTTP — Rede funcional
-
-**Prioridade:** 🔴 Crítica  
-**Goal:** smoltcp DHCP obtém IP, DNS resolve nomes, HTTP faz GET/POST. Sem isso, todos os WWW Agents (Browser, Email, Search, RSS, Download, WebSocket) estão bloqueados.
-
-**Por que:** A stack de rede existe (RTL8139 TX confirmado funcionando, smoltcp 0.13 integrado) mas DHCP falha. QEMU SLiRP com `-nic user` espera DHCP request do guest, mas smoltcp não completa o handshake. Sem IP, não há rota, não há DNS, não há HTTP.
-
-**Bloqueia:** B-11 (WWW Infra), B-12 (Browser Agent), B-13 (MCP TCP), B-17 (Email/Search/RSS/Download/WS), B-18 (DHCP refactor), B-27 (Plugin Hub) — **6 itens bloqueados** (toda a cadeia WWW)
-
-**Sub-itens:**
-- [ ] Debug smoltcp DHCP: descobrir por que `dhcp_poll()` nunca retorna `Configured`
-- [ ] Verificar se RTL8139 RX está recebendo pacotes DHCP offer do QEMU
-- [ ] Testar com `-nic user,model=rtl8139` (atual) vs `-nic tap,model=rtl8139`
-- [ ] Implementar fallback: static IP `10.0.2.15/24` com gateway `10.0.2.2`
-- [ ] Se RX não funciona: debug RTL8139 RX path (CAPR, RBSTART, interrupção)
-- [ ] Se RX funciona mas DHCP não: debug smoltcp socket state machine
-- [ ] Testar `ping 10.0.2.2` via ICMP (smoltcp ICMP socket)
-- [ ] Testar `ncat 10.0.2.2 80` (smoltcp TCP socket)
-
-**Dificuldades:**
-- RTL8139 RX é interrupção-driven (IRQ11), precisa de IOAPIC roteando corretamente
-- smoltcp poll é non-blocking — precisa de timer correto (ms, não ticks)
-- QEMU SLiRP não é um roteador real — pode ter bugs com DHCP
-- Depuração de rede em bare-metal é cega (serial + prints lentos)
-
-**Travas:**
-- Nenhuma — HW necessário: QEMU com `-nic user,model=rtl8139 -serial stdio`
-
-**Arquivos:** `crates/neural-kernel/src/rtl8139.rs`, `netstack.rs`, `net.rs`, `agents.rs`
-
-**Fontes:** `docs/memory/NETWORK_DEBUG_HOME.md`, `docs/sprint-063-www.md`, smoltcp docs
-
-**Esforço:** 🔴 3-7 dias (incerto — depende do diagnóstico)
-
----
-
-### B-02: Intel GEN shader assembly para gpu_matmul
-
-**Status:** ✅ Implementado em Bloco 21a
-
-**Goal:** `IntelRing::gpu_matmul()` compila shader GEN assembly, carrega nos EU (Execution Units), executa matmul, retorna resultado.
-
-**Implementação:** Intel GEN shader assembly implementado para matmul. GPU compute funcional.
-
-**Arquivos:** `crates/neural-kernel/src/gpu/intel.rs`
-
----
-
-### B-03: NVIDIA PFIFO PUSH_BUFFER + FALCON firmware
-
-**Prioridade:** 🔴 Pesado  
-**Goal:** `NvidiaGpu::submit_kernel()` escreve PUSH_BUFFER no PFIFO ring, FALCON microcontrolador executa shader CUDA-style na VRAM.
-
-**Por que:** NVIDIA é a GPU mais comum em desktops. Sem suporte NVIDIA, perdemos 70%+ dos hardwares. P8 mode (405MHz) é o mínimo — com firmware extraído, a GPU opera em P0 (full clock, >1.8GHz).
-
-**Bloqueia:** Nenhum (folha na DAG — depende de HW real)
-
-**Sub-itens:**
-- [ ] Extrair firmware FALCON do driver NVIDIA (nv-kernel.o ou nvidia.ko)
-- [ ] Implementar PFIFO ring buffer: PUSH_BUFFER, METHOD_COUNT, chanel ID
-- [ ] Boot FALCON: carregar firmware no VRAM via BAR2, acordar FALCON via registers
-- [ ] Submeter compute shader: método 0x0xxx (compute class) via PUSH_BUFFER
-- [ ] Testar: VRAM → VRAM copy via PFIFO, benchmark
-
-**Dificuldades:**
-- Extração de firmware NVIDIA é legalmente complexa (reversing do driver)
-- PFIFO register layout muda entre Pascal, Turing, Ampere, Ada, Blackwell
-- FALCON é um microcontrolador proprietário (SPARC-like), ISA não documentada
-- Sem firmware: P8 mode só (405MHz, ~500 GFLOPS) — não é suficiente para LLM 9B
-
-**Travas:**
-- HW real com NVIDIA GPU (QEMU não emula NVIDIA)
-- Documentação NVIDIA é NDA total — reverse engineering do driver Linux
-- Ferramentas: mmiotrace, nvgpu driver open source (referência parcial)
-
-**Arquivos:** `crates/neural-kernel/src/gpu/nvidia.rs`, `gpu/backend.rs`
-
-**Fontes:** `docs/architecture/0029-gpu-architecture.md`, nouveau driver (reverse), nvgpu (NVIDIA open kernel)
-
-**Esforço:** 🔴 ~1500 LOC, 3-6 semanas
-
----
-
-### B-04: AMD PM4 ring buffer real
-
-**Prioridade:** 🔴 Pesado  
-**Goal:** `AmdGpu::submit_pm4()` escreve pacotes PM4 reais no ring buffer AMD, GPU executa compute shader.
-
-**Por que:** AMD RDNA é a 2ª GPU mais comum. Sem suporte AMD, perdemos mercado de GPU. AMD tem firmware sob licença MIT (mais fácil que NVIDIA).
-
-**Sub-itens:**
-- [ ] Implementar ring buffer AMD: PM4 packets `PKT3_WRITE_DATA`, `PKT3_DMA_DATA`
-- [ ] Inicializar PSP (Platform Security Processor) para carregar firmware AMD
-- [ ] Submeter AQL (Architected Queuing Language) packets para compute
-- [ ] Testar: VRAM write/read via PM4, benchmark vs CPU
-
-**Dificuldades:**
-- PM4 packet formato varia entre RDNA1/2/3/4
-- PSP init requer firmware binary incluso (licença MIT, ok)
-- Documentação AMD é parcialmente aberta (GPUOpen) mas incompleta
-
-**Travas:**
-- HW real com AMD GPU (QEMU não emula AMD)
-- Firmware AMD precisa ser extraído de linux-firmware e embutido no kernel
-
-**Arquivos:** `crates/neural-kernel/src/gpu/amd.rs`, `gpu/backend.rs`
-
-**Fontes:** `docs/architecture/0029-gpu-architecture.md`, AMD GPUOpen docs, amdgpu Linux driver
-
-**Esforço:** 🔴 ~500 LOC, 2-4 semanas
-
----
-
-### B-05: GPU não integrada no boot
-
-**Status:** ✅ Implementado em Bloco 21a
-
-**Goal:** `kernel_main()` chama `gpu::detect::detect_all()` e `gpu::backend::init_backend()` durante o boot.
-
-**Implementação:** GPU detection integrada no boot após PCI scan. GPU probe funcional.
-
-**Arquivos:** `crates/neural-kernel/src/main.rs`
-
----
-
-### B-06: USB-MSC BOT — bulk endpoints não implementados
-
-**Prioridade:** 🔴 Pesado  
-**Goal:** `UsbMassStorage::read_sector()` e `write_sector()` funcionam — enviam CBW via bulk OUT, data phase, recebem CSW via bulk IN.
-
-**Por que:** O driver USB-MSC foi escrito para detectar e enumerar dispositivos de massa, mas as funções de I/O (`send_scsi`, `bulk_write`, `bulk_read`) são stubs que não programam TRBs no transfer ring do xHCI. Sem isso, não há acesso a pendrives USB, SDHC cards USB, etc.
-
-**Sub-itens:**
-- [ ] Implementar `bulk_write()`: programar TRB Normal no transfer ring do bulk OUT endpoint
-- [ ] Implementar `bulk_read()`: programar TRB Normal no transfer ring do bulk IN endpoint
-- [ ] Implementar `send_scsi()`: CBW → bulk_write → data → bulk_read → CSW validation
-- [ ] Testar: enumerar pendrive USB, ler setor 0, validar MBR signature 0xAA55
-
-**Dificuldades:**
-- xHCI transfer ring TRB programação é complexa (TRB tipos, ciclo bit, evento completion)
-- Bulk endpoints precisam de eventos de conclusão — xHCI event ring + ERST
-- USB 3.0 (xHCI) é diferente de USB 2.0 (EHCI) — código assume xHCI
-- Debug é cega — sem USB analyzer, só serial prints
-
-**Travas:**
-- xHCI event ring pode não estar funcionando (interrupção não chega)
-- HW real: pendrive USB 2.0/3.0 para testar
-
-**Arquivos:** `crates/neural-kernel/src/usb_msc.rs`, `xhci.rs`
-
-**Fontes:** xHCI spec 1.2 (cap 4 — TRBs, cap 6 — bulk), Linux usb-storage driver (referência)
-
-**Esforço:** 🔴 ~300 LOC, 1-2 semanas
-
----
-
-## 🟠 ALTA (features importantes incompletas)
-
----
-
-### B-07: GTT setup — Intel GPU precisa de Graphics Translation Table
-
-**Status:** ✅ Implementado em Bloco 21a
-
-**Goal:** Configurar GTT (Graphics Translation Table) para que a GPU Intel enxergue os batch buffers alocados em RAM do sistema e a VRAM mapeada via BAR2.
-
-**Implementação:** GTT setup implementado para Intel GPU. Batch buffers visíveis pela GPU.
-
-**Arquivos:** `crates/neural-kernel/src/gpu/intel.rs`
-
----
-
-### B-08: BCS blitter engine — separar blit do RCS ring
-
-**Status:** ✅ Implementado em Bloco 21a
-
-**Goal:** Usar BCS ring (Blitter Command Streamer, offset 0x22000) em vez de RCS (Render, offset 0x120000) para operações de blit (cópia GPU→GPU).
-
-**Implementação:** BCS ring separado do RCS ring implementado. Blit operations no BCS, compute no RCS.
-
-**Arquivos:** `crates/neural-kernel/src/gpu/intel.rs`
-
----
-
-### B-09: VRAM free list — substituir bump allocator
-
-**Status:** ✅ Implementado em Bloco 21a
-
-**Goal:** `vram_free()` realmente libera memória VRAM para reuso, em vez de ser stub vazio.
-
-**Implementação:** VRAM free list (buddy allocator) implementado. Substitui bump allocator.
-
-**Arquivos:** `crates/neural-kernel/src/gpu/vram.rs`
-
----
-
-### B-10: e1000/r8169 — NIC real
-
-**Status:** ✅ Implementado em Bloco 21a
-
-**Goal:** e1000 (Intel Pro/1000) ou r8169 (Realtek) funcionando em HW real para acesso à rede em hardware físico.
-
-**Implementação:** Driver e1000/r8169 implementado para NIC real. TX/RX funcional.
-
-**Arquivos:** `crates/neural-kernel/src/e1000.rs`
-
----
-
-### B-11: Network Infrastructure (WWW 63.1)
-
-**Goal:** ConnectionPool + HttpClient + URL parser — base para todos os WWW Agents.
-
-**Por que:** Sem essa camada, BrowserAgent (B-12) e os outros 5 WWW Agents não podem ser construídos. Conexão TCP, DNS, HTTP GET/POST são blocos fundamentais.
-
-**Bloqueia:** B-12 (Browser Agent), B-13 (MCP TCP), B-17 (Email/Search/RSS/Download/WS), B-27 (Plugin Hub) — **4 itens**
-
-**Sub-itens:**
-- [ ] `ConnectionPool`: gerenciar até 16 sockets TCP concorrentes
-- [ ] `HttpClient`: GET/POST com headers, parsing de resposta
-- [ ] `Url`: parser de scheme, host, port, path, query
-- [ ] Testar: `HttpGet("http://example.com")` retorna HTML
-- [ ] Depende de B-01 (rede funcional) — sem DHCP, não testa
-
-**Dificuldades:** smoltcp API sutil — sockets precisam de poll frequente, timers em ms
-
-**Travas:** **B-01 (rede funcional)** — sem rede, não testa
-
-**Arquivos:** `crates/neural-kernel/src/net/connection_pool.rs`, `http_client.rs`, `url.rs` (novos)
-
-**Fontes:** `docs/sprint-063-www.md`
-
-**Esforço:** 🔴 ~400 LOC, 1-2 semanas
-
----
-
-### B-12: Browser Agent (WWW 63.2)
-
-**Goal:** `fetch_page(url)` baixa página web, extrai texto, exibe no Hermes ou PageViewerApp.
-
-**Por que:** BrowserAgent é o WWW Agent mais importante — permite ao Hermes ler a web, buscar informação, responder perguntas com conteúdo atual.
-
-**Sub-itens:**
-- [ ] HTML parser mínimo: tags, texto, atributos, links, headings
-- [ ] Extrator de texto: markdown-like output
-- [ ] PageViewerApp no Compositor (janela com scroll)
-- [ ] Comando `/browse <url>` no shell
-- [ ] Depende de B-11 (HttpClient)
-
-**Dificuldades:** HTML real é malformado — parser precisa ser robusto
-
-**Travas:** B-01 (rede) → B-11 (HttpClient)
-
-**Arquivos:** `crates/neural-kernel/src/browser_agent.rs` (já existe stub), `net/html_parser.rs` (novo)
-
-**Fontes:** `docs/sprint-063-www.md`
-
-**Esforço:** 🔴 ~500 LOC, 1-2 semanas
-
----
-
-### B-13: MCP Agent — TCP listener
-
-**Goal:** `McpAgent::tick()` aceita conexão TCP, processa requisição MCP, responde. Atualmente tem um `// TODO: TCP listener`.
-
-**Por que:** MCP (Model Context Protocol) é como o Hermes expõe skills para o mundo exterior. Sem listener TCP, MCP não serve para nada — só processa requisições internas.
-
-**Sub-itens:**
-- [ ] Na tick do McpAgent: `smoltcp.listen(port)` → accept → read request → process → write response
-- [ ] Formato: JSON-RPC sobre TCP (padrão MCP)
-- [ ] Comando `/mcp listen 8080` para iniciar servidor
-
-**Dificuldades:** smoltcp listener API, multi-conexão
-
-**Travas:** B-01 (rede)
-
-**Arquivos:** `crates/neural-kernel/src/mcp.rs`
-
-**Fontes:** Model Context Protocol spec
-
-**Esforço:** 🟡 ~200 LOC, 3-5 dias
-
----
-
-### B-14: WASM sandbox — interpretar bytecode
-
-**Status:** ✅ Implementado em Bloco 21e
-
-**Goal:** `WasmSandbox::execute()` realmente interpreta um módulo WASM, não apenas stub.
-
-**Implementação:** WASM runtime (wasmi) integrado. Skills compiladas para WASM rodam no sandbox com memória isolada.
-
-**Arquivos:** `crates/neural-kernel/src/wasm.rs`
-
----
-
-## 🟡 MÉDIA (completar funcionalidades existentes)
-
----
-
-### B-15: GGUF model swap — heap >5GB
-
-**Status:** ✅ Implementado em Bloco 21e
-
-**Goal:** Heap do kernel >5GB para carregar modelos GGUF 9B+.
-
-**Implementação:** Adaptive heap implementado. Heap redimensionável via frame allocator. GGUF loader funcional.
-
-**Arquivos:** `crates/neural-kernel/src/allocator.rs`, `memory.rs`, `gguf.rs`
-
----
-
-### B-16: Mempalace MCP — cache corrompido
-
-**Goal:** Mempalace MCP server conecta e mantém estado entre sessões.
-
-**Por que:** Mempalace é a memória de longo prazo do Hermes. Sem MCP, as memórias das sessões anteriores são perdidas após reboot.
-
-**Sub-itens:**
-- [ ] Limpar cache MCP em `%LOCALAPPDATA%\opencode`
-- [ ] Verificar path do MCP server em `opencode.json`
-- [ ] Debug: MCP handshake, verificar se servidor está rodando
-
-**Dificuldades:** MCP é externo ao projeto (servidor Node.js) — debug depende do ambiente
-
-**Travas:** Ambiente de desenvolvimento (WSL, Node.js, servidor MCP)
-
-**Fontes:** `~/.config/opencode/opencode.json`
-
-**Esforço:** 🟢 ~1 hora
-
----
-
-### B-17: WWW Agents restantes (63.3-63.7)
-
-**Goal:** Email Agent (SMTP/POP3/IMAP), Search Agent (DuckDuckGo), RSS/Feed Agent, Download Agent, WebSocket Agent.
-
-**Por que:** 5 dos 7 WWW Agents do Sprint 63 não foram iniciados. Cada um adiciona uma capacidade de internet ao Hermes.
-
-**Sub-itens:**
-- [ ] 63.3 — Email Agent: SMTP send + POP3/IMAP read
-- [ ] 63.4 — Search Agent: DuckDuckGo Lite HTML parse
-- [ ] 63.5 — RSS/Feed Agent: RSS 2.0 + Atom parser
-- [ ] 63.6 — Download Agent: HTTP download com Range
-- [ ] 63.7 — WebSocket Agent: handshake + frame parser
-
-**Dificuldades:** Cada agente requer protocolo de rede diferente, parsing especializado
-
-**Travas:** B-01 (rede) → B-11 (HttpClient)
-
-**Fontes:** `docs/sprint-063-www.md`
-
-**Esforço:** 🔴 ~1700 LOC total, 4-8 semanas
-
----
-
-### B-18: DHCP/ARP refactor
-
-**Goal:** Refatorar DHCP e ARP para serem mais robustos, com fallback a IP estático.
-
-**Por que:** DHCP atual nunca completa — precisamos de fallback a IP estático `10.0.2.15/24`.
-
-**Sub-itens:**
-- [ ] Implementar static IP config no boot
-- [ ] DHCP com timeout: se não configurar em 5s, fallback para static
-- [ ] ARP: debug se resolução funciona
-
-**Dificuldades:** smoltcp API para IP estático
-
-**Travas:** B-01 (rede)
-
-**Arquivos:** `crates/neural-kernel/src/net.rs`, `netstack.rs`
-
-**Fontes:** `IDEA_BANK #250`
-
-**Esforço:** 🟡 ~100 LOC, 2-3 dias
-
----
-
-### B-19: VirtIO-GPU GET_DISPLAY_INFO
-
-**Goal:** VirtIO-GPU `GET_DISPLAY_INFO` retorna resolução correta do monitor.
-
-**Por que:** QEMU TCG pode ter bug com VirtIO-GPU display info. Isso afeta quem usa VirtIO-GPU em vez de framebuffer UEFI.
-
-**Sub-itens:**
-- [ ] Debug: enviar `GET_DISPLAY_INFO` control message no VirtIO control queue
-- [ ] Verificar resposta: resolução, pitch, formato
-- [ ] Se TCG bug: reportar upstream ou contornar
-
-**Dificuldades:** VirtIO control queue implementação pode ter race condition
-
-**Travas:** QEMU TCG específico
-
-**Arquivos:** `crates/neural-kernel/src/virtio_gpu.rs`
-
-**Esforço:** 🟢 ~50 LOC, 1-2 dias
-
----
-
-### B-20: SMP sem WHPX — TCG atomicidade
-
-**Goal:** `-smp 2` funciona sem WHPX (TCG mode) para debugging em máquinas sem virtualização.
-
-**Por que:** WHPX (Windows Hypervisor Platform) é específico do Windows. Em Linux ou macOS sem KVM, TCG é a única opção. SMP com TCG é instável.
-
-**Sub-itens:**
-- [ ] Investigar se o problema é lock-free atomics vs TCG
-- [ ] Se TCG não suporta `SeqCst` corretamente, substituir por locks
-- [ ] Testar `-accel tcg -smp 2` de forma estável
-
-**Dificuldades:** TCG não garante atomicidade de instruções como HW real
-
-**Travas:** Nenhuma
-
-**Esforço:** 🟡 ~100 LOC, 1 semana
-
----
-
-## 🟢 LEVE (melhorias, stubs, limpeza)
-
----
-
-### B-21: Testar GPU em hardware real
-
-**Goal:** Verificar se GPU detection + ring buffer + VRAM mapping funcionam em hardware real (não QEMU).
-
-**Por que:** QEMU não emula Intel Gen9+, NVIDIA, AMD. Só hardware real valida o módulo GPU. 
-
-**Sub-itens:**
-- [ ] Boot em notebook com Intel iGPU (HD 620, Iris Xe, UHD)
-- [ ] Boot em desktop com NVIDIA (RTX 3060+, P8 mode)
-- [ ] Boot em desktop com AMD (RX 6000+)
-- [ ] Verificar `serial_println` GPU log
-
-**Dificuldades:** Risco de crash/page fault se registers GPU não responderem como esperado
-
-**Travas:** Hardware real disponível
-
-**Esforço:** 🟢 Teste, ~1 dia
-
----
-
-### B-22: VRAM window full — mapear GPU inteira
-
-**Goal:** Mapear toda a VRAM da GPU (8GB+), não apenas 1MB (256 páginas).
-
-**Por que:** Atualmente mapeamos 256 páginas (1MB) da BAR2. GPU com 8GB VRAM tem 2M páginas — mapear 1 por 1 é proibitivo. Precisamos de mapeamento em bloco.
-
-**Sub-itens:**
-- [ ] Usar Huge Pages (2MB ou 1GB) no page table para mapear BAR2
-- [ ] Ou implementar janela sliding: mapear 256MB por vez, trocar on demand
-- [ ] Verificar: `map_page_uc()` com 2MB pages
-
-**Dificuldades:** Page table manipulation para mapear grandes regiões de MMIO
-
-**Travas:** Bootloader physical memory mapping
-
-**Arquivos:** `crates/neural-kernel/src/apic.rs` (map_page_uc), `gpu/nvidia.rs`, `gpu/amd.rs`
-
-**Esforço:** 🟡 ~100 LOC, 3-5 dias
-
----
-
-### B-23: ATA IDENTIFY — QEMU sem IDE
-
-**Goal:** ATA `total_sectors()` funciona em QEMU sem legacy IDE emulação.
-
-**Por que:** QEMU moderno não emula controller IDE legacy por padrão. `ata.rs` usa `in al, dx` que só funciona se QEMU tiver `-device ide-hd`.
-
-**Sub-itens:**
-- [ ] Adicionar QEMU argumento `-device ide-hd,drive=hd` ou `-drive if=ide`
-- [ ] Ou implementar AHCI (SATA) para compatibilidade com HW real
-
-**Dificuldades:** ATA PIO vs AHCI são protocolos diferentes
-
-**Travas:** Nenhuma
-
-**Arquivos:** `crates/neural-kernel/src/ata.rs`
-
-**Esforço:** 🟢 ~20 LOC (config QEMU)
-
----
-
-### B-24: 514 warnings — cleanup
-
-**Goal:** `cargo check --release` com 0 warnings.
-
-**Por que:** 514 warnings poluem output e podem esconder warnings reais de novos bugs.
-
-**Sub-itens:**
-- [ ] `cargo fix` para aplicar sugestões automáticas
-- [ ] Revisar unused imports, dead code, unnecessary unsafe blocks
-- [ ] Adicionar `#[allow(dead_code)]` para stubs intencionais
-
-**Dificuldades:** Alguns dead code são stubs propositais — precisam de `#[allow]` em vez de remoção
-
-**Travas:** Nenhuma
-
-**Arquivos:** Todo o projeto
-
-**Esforço:** 🟡 ~30 minutos com `cargo fix`
-
----
-
-### B-25: FAT32 suporte
-
-**Goal:** `fat.rs` lê e escreve partições FAT32 (não apenas FAT12).
-
-**Por que:** SDHC cards >2GB usam FAT32, não FAT12. O leitor atual só suporta FAT12.
-
-**Sub-itens:**
-- [ ] Implementar BPB FAT32 parsing (BPB diferente de FAT12/16)
-- [ ] FSInfo sector, cluster chain (FAT32 usa 28-bit clusters)
-- [ ] Leitura/escrita de arquivos em FAT32
-
-**Dificuldades:** FAT32 cluster chain é mais complexa que FAT12 (28-bit, não 12-bit)
-
-**Travas:** SDHC card FAT32 para testar
-
-**Arquivos:** `crates/neural-kernel/src/fat.rs`
-
-**Esforço:** 🟡 ~300 LOC, 1 semana
-
----
-
-### B-26: Prompt interativo `>`
-
-**Status:** ✅ Implementado em Sprint 77
-
-**Goal:** Hermes exibe prompt `>` e aguarda input do usuário via teclado.
-
-**Implementação:** `display/console.rs` — `show_prompt` default alterado para `true`. NeuralConsole renderiza `> {input}` na última linha. Input echo via `KEYBOARD_ECHO` topic.
-
-**Arquivos:** `crates/neural-kernel/src/display/console.rs`
-
----
-
-### B-27: Plugin Hub MCP Index
-
-**Goal:** Plugin Hub indexa skills MCP disponíveis, permitindo `skill install <name>`.
-
-**Por que:** Plugin Hub é o mecanismo de descoberta de skills. Sem ele, o usuário precisa escrever skills manualmente.
-
-**Sub-itens:**
-- [ ] Index de skills MCP em registry local
-- [ ] Comando `/skill search`, `/skill install`, `/skill list`
-- [ ] Download de skill de repositório remoto (futuro)
-
-**Dificuldades:** Index remoto requer rede (B-01)
-
-**Travas:** B-01 (rede)
-
-**Arquivos:** `crates/neural-kernel/src/plugin_hub.rs` (já existe stub)
-
-**Esforço:** 🟡 ~400 LOC, 1 semana
-
----
-
-### B-29: WiFi — Intel Wireless / Atheros / Realtek
-
-**Goal:** Conectar a redes WiFi 802.11, WPA2/WPA3, scan de redes, DHCP sobre WiFi.
-
-**Por que:** Sem WiFi, o Hermes só funciona com cabo Ethernet. Para ser um SO mobile/desktop completo, WiFi é essencial.
-
-**Sub-itens:**
-- [ ] Pesquisar chipsets WiFi suportados em bare-metal (Intel, Atheros, Realtek)
-- [ ] Implementar PCI detection de wireless cards
-- [ ] 802.11 scan + association (management frames)
-- [ ] WPA2/WPA3 handshake (PSK, EAP)
-- [ ] Bridge entre WiFi e smoltcp (NetPhy WiFi)
-
-**Dificuldades:**
-- Firmware loading (Intel iwlwifi, Atheros ath9k)
-- 802.11 frame format é diferente de Ethernet
-- WPA2 cryptography (CCMP/AES) requer crypto em no_std
-- Firmware licensing pode ser problemática (Intel é NDA)
-
-**Travas:** B-01 (rede funcional) — sem IP stack testada, WiFi não tem onde se apoiar
-
-**Arquivos:** `crates/neural-kernel/src/wifi/` (novo módulo)
-
-**Esforço:** 🔴 ~2000 LOC, 4-8 semanas
-
----
-
-### B-28: Auto-skill generation — integrado ao ciclo
-
-**Goal:** `maybe_auto_skill()` é chamado automaticamente quando um padrão de tarefa repete 3+ vezes.
-
-**Por que:** `skill_gen.rs` implementa o sistema de auto-skill (TaskPattern registry + detecção de repetição), mas nunca é chamado no ciclo principal.
-
-**Sub-itens:**
-- [ ] Chamar `maybe_auto_skill(name)` no OptimizerAgent ou CronAgent a cada N ticks
-- [ ] Quando detecta repetição: gerar skill, registrar no SkillRegistry, notificar Hermes
-
-**Dificuldades:** Nenhuma — glue code simples
-
-**Travas:** Nenhuma
-
-**Arquivos:** `crates/neural-kernel/src/skill_gen.rs`, `optimizer.rs` ou `cron.rs`
-
-**Esforço:** 🟢 ~30 LOC
-
----
-
-### B-31: VGA CRTC + UEFI GOP — verificar xuvisco fix em HW Intel 6xx
-
-**Goal:** Confirmar que o VGA buffer clear (v0.79.1) resolve xuvisco em notebook Intel 6xx.
-
-**Por que:** Sprint 71 moveu `probe_uefi_framebuffer()` antes de `vga_buffer::init()` mas nunca limpava 0xB8000. v0.79.1 adiciona `clear_physical_buffer()` que zera VGA text buffer sem tocar CRTC. Resta testar HW real.
-
-**Sub-itens:**
-- [ ] Boot em notebook Intel 6xx com imagem v0.79.1
-- [ ] Verificar se display não fica garbled
-
-**Arquivos:** `crates/neural-kernel/src/vga_buffer.rs:14-19`, `crates/neural-kernel/src/display/fb.rs:71-75`
-
-**Status:** ✅ Código corrigido (v0.79.1). Teste HW pendente.
-
----
-
-### B-32: DiagnosticSkill — testes extensivos
-
-**Goal:** DiagnosticSkill executa testes de estresse de alocador, tensor matmul, BitNet MLP e publica resultados.
-
-**Por que:** Substitui os testes inline que estavam no boot. SystemAgent executa na fase Diagnostics.
-
-**Sub-itens:**
-- [ ] Verificar se DiagnosticSkill roda corretamente durante boot
-- [ ] Verificar se resultados são publicados no EventBus
-- [ ] Adicionar mais testes (estresse de heap, page table walk)
-
-**Arquivos:** `crates/neural-kernel/src/agents.rs` (DiagnosticSkill)
-
-**Esforço:** 🟢 ~30 LOC
-
----
-
-### B-33: Boot phase events — Hermes mostrar progresso
-
-**Goal:** HermesAgent mostra o progresso do boot no display à medida que cada fase `BOOT_PHASE` é publicada.
-
-**Por que:** O usuário vê o sistema acordando fase por fase.
-
-**Sub-itens:**
-- [ ] HermesAgent subscrever `TOPIC_BOOT_PHASE`
-- [ ] Mostrar fase atual no canto do display
-- [ ] BootLogAgent logar cada fase
-
-**Arquivos:** `crates/neural-kernel/src/hermes.rs`, `boot_log_agent.rs`
-
-**Esforço:** 🟢 ~50 LOC
-
----
-
-### B-34: FAT12 log — validar leitura/escrita
-
-**Goal:** Garantir que `boot_logger::log()` escreve no FAT12 e `BootLogAgent::read_last_boot_log()` consegue ler.
-
-**Por que:** O boot log é o mecanismo de auto-diagnóstico do Cortex.
-
-**Sub-itens:**
-- [ ] Boot com patched image → verificar se BOOT.LOG é criado
-- [ ] BootLogAgent ler e publicar análise
-- [ ] Cortex usar log para auto-correção
-
-**Arquivos:** `crates/neural-kernel/src/boot_logger.rs`, `fat.rs`, `boot_log_agent.rs`
-
-**Esforço:** 🟡 ~100 LOC
-
----
-
-## 📊 RESUMO GERAL
-
-| Prioridade | Qtd | Esforço total estimado |
-|---|---|---|
-| 🔴 Bloqueante | 3 | ~2.500 LOC, 6-14 semanas |
-| 🟠 Alta | 4 | ~2.100 LOC, 6-14 semanas |
-| 🟡 Média | 4 | ~800 LOC, 2-6 semanas |
-| 🟢 Leve | 8 | ~670 LOC, 1-3 semanas |
-| **Total** | **19** | **~6.070 LOC, 4-10 meses** |
-
-### Itens Completados (Bloco 21a/21b/21e)
-- ✅ B-02: Intel GEN shader assembly
-- ✅ B-05: GPU no boot
-- ✅ B-07: GTT setup
-- ✅ B-08: BCS blitter engine
-- ✅ B-09: VRAM free list
-- ✅ B-10: e1000/r8169 NIC real
-- ✅ B-14: WASM sandbox
-- ✅ B-15: GGUF model swap
-
-### Ordem sugerida de implementação
-
-```
-Bloco 21a (SMP Foundation):            ✅ SPSC ring, IPI, PerCpu
-Bloco 21b (Work-Stealing + Matmul):    ✅ Chase-Lev, parallel-for, AgentScheduler multicore
-Bloco 21e (Polimento):                  ✅ burn-flex, CFS, GPU+Display co-existência
-Bloco 21c (GPU Foundations):           🟡 GPU BAR mapping, ACR secure boot, job ring, VRAM allocator
-Bloco 21d (GPU Decode):                🟡 Agent.xpu split, GPU matmul, KV cache DMA, XQueue
-Bloco 30 (JARVIS Persona):             🟡 SOUL.md, IPW, Session Compression, Notification Gate
-Bloco 31 (JARVIS Security + AHCI):     🟡 Fail-Closed, Merkle, Fluid Persona, SATA
-Bloco 32+ (AIOS Evolution):            🔴 B-01 RX fix, WWW Agents, Voice, SKYNET, WiFi
-```
-
----
-
-## 🔗 Como encontrar ajuda
-
-- **GPU:** `docs/architecture/0029-gpu-architecture.md`, `docs/sprint-066-gpu.md`
-- **Rede:** `docs/memory/NETWORK_DEBUG_HOME.md`, `docs/sprint-063-www.md`
-- **WASM:** `docs/architecture/0010-strategic-roadmap-and-innovations.md` (Phase 5)
-- **Memória:** `docs/memory/SESSION_*.md`, `IDEA_BANK.md`
-- **Plano diretor:** `docs/memory/STATE.md`
-- **Última sessão:** `docs/sprint-078-agentic-evolution.md`
-
----
-
-*Este arquivo é o ponto de partida para qualquer AI DEV que queira contribuir. Leia este TODO, escolha um item, leia as fontes listadas, e implemente.*
+## COMO USAR ESTE ARQUIVO
+
+1. **Escolha um sprint** com status 🟡 (em andamento) ou ⏳ (previsto)
+2. **Leia as fontes:** IDEA_BANK.md para o item específico, ADR correspondente
+3. **Verifique dependências** no campo "Depende de"
+4. **Implemente** os sub-itens na ordem listada
+5. **Marque** [x] os itens concluídos
+6. **Busque na internet** se encontrar 🔴 bloqueado — nunca fique parado

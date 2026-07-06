@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.84.0-design] — 2026-07-05 — 📚 Documentação Reestruturada: HW Real First + Multi-Vendor + Sprint Plan 84-95
+
+### Added
+- **`docs/sprint-plan-84-95.md`** — Plano mestre de 9 sprints (84-95). Todos os 354+ items do IDEA_BANK assignados a sprints/blocos. HW Real, multi-vendor GPU/NVIDIA/AMD/Intel, busca ativa na internet para bloqueios.
+- **`docs/memory/SESSION_INDEX.md`** — Catálogo de 43 sessões com títulos, sprints, descobertas. Seção "Lições Críticas (NÃO REPETIR)" com 10 dead-ends documentados.
+- **`docs/TODO.md`** — Reescrito como checklist multissprint. Cada sprint com checkboxes, goals, sub-itens, dificuldades, dependências, fontes. Status flags: ✅ 🟡 ⏳ 🔴 💰 ❌.
+
+### Changed (docs)
+- **`docs/memory/STATE.md`** — Roadmap expandido para 84-95 (9 sprints). Seção "Navegação Rápida para AI DEVs". Pendentes por sprint com #ID do IDEA_BANK.
+- **`docs/memory/IDEA_BANK.md`** — 9 items orphan atualizados com sprints específicos. Seção 6 expandida: Bloco 28 desmembrado em 21c+21d.
+- **`docs/roadmap.md`** — Multi-vendor GPU/NPU, firmware ACR/PSP/GuC, QEMU loader removido, bloqueios com busca na internet.
+- **`docs/architecture/0037-smp-gpu-architecture.md`** — GTX 1050→genérico NVIDIA/AMD/Intel. QEMU/VBox→HW Real.
+- **`docs/architecture/0029-gpu-architecture.md`** — Tabela HW expandida, firmware multi-vendor, hardware layer genérico.
+- **`docs/architecture/0016-network-strategy.md`** — RTL8139 dev + e1000/r8169 HW real + busca por NIC.
+- **`docs/architecture/0001-initial-architecture-and-toolchain.md`** — QEMU→dev/debug.
+
+### Changed (root)
+- **`AGENTS.md`** — HW Real First (princípio #4). Busca ativa na internet para bloqueios. Navegação rápida AI-first. ~200 linhas de sessões históricas inline removidas (apontam para SESSION_*.md). MemPalace integration. Sprint: 84.
+
+## [0.81.0] — 2026-07-05 — 🏆 Sprint 81: SMP Foundation + GPU Improvements
+
+### Added (neural-kernel)
+- **`smp/spsc.rs`** — SPSC (Single Producer Single Consumer) queue lock-free para comunicação entre cores. Baseado em MPMC de Dmitry Vyukov, simplificado para SPSC. Capacidade potência de 2, atomic head/tail.
+- **`smp/mod.rs`** — Adiciona módulo `spsc` ao SMP.
+- **`interrupts.rs`** — IPI handlers para SMP: `ipi_reschedule_handler` (vetor 0x80), `ipi_halt_handler` (vetor 0x81), `ipi_call_function_handler` (vetor 0x82). Contadores globais `IPI_RESCHEDULE`, `IPI_HALT`, `IPI_CALL_FUNCTION`.
+- **`apic.rs`** — Funções de envio de IPI: `send_ipi_reschedule()`, `send_ipi_halt()`, `send_ipi_call_function()`. Compatível xAPIC/x2APIC. Shorthand=all_excl_self (0x180000).
+- **`gpu/intel.rs`** — Infraestrutura para Intel GEN shader assembly: constantes `MEDIA_OBJECT`, `PIPELINE_SELECT`, `STATE_BASE_ADDRESS`. Campos `shader_pa` e `shader_loaded` em `IntelRing`. Funções `load_gen_matmul_shader()` e `execute_gen_shader()` (stubs preparados para shader real NDA Intel).
+- **`gpu/backend.rs`** — Separa BCS Blitter do RCS ring: `GpuAccel::Intel(IntelRing, Option<BcsRing>)`. `init_backend()` inicializa BCS ring se disponível. `gpu_status()` reflete estado RCS+BCS. `gpu_matmul()` usa `as_mut()` para ring mutável.
+
+### Changed
+- **`gpu/backend.rs`** — `gpu_matmul()` agora usa `as_mut()` para permitir mutação do ring durante matmul.
+
+### Tasks Completadas
+- B-05: Integrar GPU no boot (já existia em main.rs)
+- B-07: Implementar GTT setup para Intel GPU (já existia em intel.rs)
+- B-02: Implementar Intel GEN shader assembly para matmul (infraestrutura + stub)
+- B-08: Separar BCS Blitter do RCS ring
+- B-09: Implementar VRAM Free List (já existia em vram.rs)
+- B-10: Implementar driver e1000/r8169 para NIC real (e1000 já existia)
+- B-14: Implementar WASM Sandbox (já existia em wasm.rs)
+- B-15: Implementar GGUF Model Swap (já existia em gguf.rs)
+- Bloco 21a: SMP Foundation (SPSC + IPI + PerCpu)
+
+### Notes
+- GEN assembly é NDA da Intel. `load_gen_matmul_shader()` aloca 1 página e escreve NOOPs como stub. Shader real requer engenharia reversa do i915 driver ou assembler externo.
+- IPI handlers configurados nos vetores 0x80-0x82. PerCpu já existia com GS.base e `cpu_id()`.
+- SPSC queue usa atomic head/tail com memory ordering Acquire/Release.
+
 ## [0.80.0] — 2026-07-05 — 🏆 Sprint 80: AVX2 Debug + WHPX Detection + Forward Pass
 
 ### Added (neural-kernel)

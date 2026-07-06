@@ -28,7 +28,7 @@
 
 | Camada | Solução | Crate | Status no ecossistema |
 |---|---|---|---|
-| Driver NIC | VirtIO-net (PCI 1AF4:1041) | `virtio-drivers` (rcore-os) | ✅ no_std, PCI MMIO, suporta net |
+| Driver NIC | RTL8139 (I/O ports) + VirtIO-net (PCI) + e1000/r8169 (HW real) | Custom + `virtio-drivers` | ✅ no_std, PCI MMIO, I/O ports. Para HW real: buscar driver por PCI ID |
 | TCP/IP | smoltcp v0.13+ | `smoltcp` | ✅ no_std, 0BSD, ~41K SLoC, ARP/IP/TCP/UDP/DNS |
 | HTTP cliente | Mínimo (~200 LOC) sobre smoltcp TCP | Custom | Precisamos escrever (ou usar `embedded-nal`) |
 | DNS | smoltcp `dns` feature | `smoltcp` | ✅ nativo |
@@ -54,34 +54,30 @@
 
 ## 2. Roadmap Proposto — Fases de Rede
 
-### Fase N1 — VirtIO-net Driver (Sprint 23, pós-MVP Hermes)
+### Fase N1 — RTL8139 + e1000/r8169 Driver
 
-Dependências: PCI (Block 1) + MSI/MSI-X ou IOAPIC (Block 1)
+Dependências: PCI scan + I/O ports
 
-- Criar `crates/virtio-net/` — driver VirtIO-net puro sobre PCI BARs
-- Implementar `virtio-drivers::Hal` para nosso PCI (CF8/CFC + memory map)
-- Virtqueues: RX + TX, driver-init, device-ACK
-- Test: ping (ARP reply) from QEMU user-mode network (`-netdev user`)
-- Entregável: interface de rede responde a ARP, transmite/recebe frames Ethernet
+- RTL8139 via I/O ports (já existe, precisa debug RX)
+- e1000/r8169 para HW real (buscar documentação na internet)
+- Para NICs não suportadas: buscar driver por PCI vendor/device ID no Linux kernel, nouveau, ou datasheets
 
-### Fase N2 — smoltcp TCP/IP Stack (Sprint 23, mesmo bloco)
+### Fase N2 — smoltcp TCP/IP Stack
 
-Dependências: N1, heap allocator
+Dependências: NIC driver, heap allocator
 
 - Integrar `smoltcp = "0.13"` como dependência
-- `NetworkInterface` com smoltcp sobre our virtio-net device
+- `NetworkInterface` com smoltcp sobre nosso device
 - ARP resolution + IPv4 + TCP
-- Test: nc (netcat) conecta ao Hermes via QEMU `-nic user,hostfwd=...`
-- Entregável: Hermes pode abrir socket TCP, receber conexão
+- Test: ping resposta, nc conecta
 
-### Fase N3 — DNS + HTTP Client (Sprint 23, mesmo bloco)
+### Fase N3 — DNS + HTTP Client
 
 Dependências: N2
 
 - DNS resolver via smoltcp `dns` feature
 - HTTP GET client mínimo (~200 LOC) sobre smoltcp TCP
-- Test: Hermes baixa um arquivo de um servidor HTTP no host
-- Entregável: `hermes> /fetch http://host/weights.bin` funciona
+- Test: Hermes baixa um arquivo de um servidor HTTP
 
 ### Fase N4 — TLS + HTTPS (Pós-MVP, Sprint 25+)
 
@@ -110,8 +106,8 @@ Isso significa que Sprint 23 (MVP+1) é o **Network Sprint** — adicionamos um 
 
 ## 4. Decisões Arquiteturais
 
-### 4.1. VirtIO-net como primeiro driver NIC
-**Motivo:** QEMU suporta nativamente. Hardware real (e1000, RTL8139) pode ser adicionado depois. VirtIO tem spec simples, registers MMIO, e ring-based.
+### 4.1. RTL8139 como driver NIC primário para dev, e1000/r8169 para HW real
+**Motivo:** RTL8139 é compatível com QEMU e VirtualBox. Para HW real, e1000 (Intel) e r8169 (Realtek) são os NICs mais comuns. Se o NIC detectado não tem driver, **buscar na internet** por documentação de registers e implementar. VirtIO-net (QEMU) como alternativa dev.
 
 ### 4.2. smoltcp como stack TCP/IP
 **Motivo:** Único crate no_std maduro com ARP/IP/TCP/UDP/DNS. 0BSD license (sem restrições). Usado pelo Redox OS. Sem heap requirement.

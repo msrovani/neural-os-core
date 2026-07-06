@@ -291,6 +291,10 @@ impl AgentRegistry {
             }
             if self.agents[i].agent.manifest().auto_start {
                 self.agents[i].state = AgentState::Active;
+                let name = self.agents[i].agent.manifest().name;
+                // Debug: log activation
+                #[cfg(feature = "kernel")]
+                crate::serial_println!("[SCHEDULER] Activating agent: {}", name);
                 self.agents[i].agent.on_activate();
             }
         }

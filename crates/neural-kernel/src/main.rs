@@ -625,27 +625,44 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(cortex_agent));
     
     // Runtime agents — HermesAgent acorda logo apos o Cortex
+    serial_println!("[BOOT] Registering SystemAgent...");
     registry.register(Box::new(SystemAgent::new()));
+    serial_println!("[BOOT] Registering MonitorAgent...");
     registry.register(Box::new(agents::MonitorAgent::new()));
+    serial_println!("[BOOT] Registering HwBridgeAgent...");
     registry.register(Box::new(agents::HwBridgeAgent));
-    registry.register(Box::new(agents::NetAgent::new()));
+    serial_println!("[BOOT] Registering NetAgent...");
+    let net_agent = Box::new(agents::NetAgent::new());
+    serial_println!("[BOOT] NetAgent manifest: name={}, auto_start={}, schedule={:?}",
+        net_agent.manifest().name, net_agent.manifest().auto_start, net_agent.manifest().schedule);
+    registry.register(net_agent);
+    serial_println!("[BOOT] Registering InputAgent...");
     registry.register(Box::new(agents::InputAgent::new()));
+    serial_println!("[BOOT] Registering HermesAgent...");
     registry.register(Box::new(agents::HermesAgent::new()));
     
     // The Agency: 30+ agentes especialistas
+    serial_println!("[BOOT] Registering agency agents...");
     agents::register_agency_agents(&mut registry);
     
     // HW Agents: um agente por dispositivo PCI
+    serial_println!("[BOOT] Registering HW agents...");
     agents::register_hw_agents(&mut registry);
     
     // DisplayAgent + Apps
+    serial_println!("[BOOT] Registering DisplayAgent...");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
+    serial_println!("[BOOT] Registering CronAgent...");
     let mut cron = cron::CronAgent::new();
     cron.init_defaults();
     registry.register(Box::new(cron));
+    serial_println!("[BOOT] Registering McpAgent...");
     registry.register(Box::new(mcp::McpAgent::new()));
+    serial_println!("[BOOT] Registering SecurityAgent...");
     registry.register(Box::new(security::SecurityAgent::new()));
+    serial_println!("[BOOT] Registering SafetyAgent...");
     registry.register(Box::new(safety::SafetyAgent::new()));
+    serial_println!("[BOOT] Registering OptimizerAgent...");
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
@@ -742,6 +759,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
+    serial_println!("[SCHEDULER] DEBUG: About to call registry.run()");
     registry.run(
         || { x86_64::instructions::hlt(); },
         || {

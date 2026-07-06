@@ -4,6 +4,18 @@
 #   135 arquivos Rust, ~16.210 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
+# NAVEGAÇÃO RÁPIDA PARA AI DEVS
+# ════════════════════════════════════════════════════════
+# docs/memory/STATE.md              → Estado atual do kernel (v0.80.1)
+# docs/sprint-plan-84-95.md         → Plano de 9 sprints (84-95) com items IDEA_BANK
+# docs/TODO.md                      → Checklist mestre com sub-itens e goals
+# docs/memory/IDEA_BANK.md          → 354 ideias catalogadas com status e sprint
+# docs/architecture/0037-smp-gpu-architecture.md  → ADR SMP+GPU mais recente
+# docs/memory/SESSION_INDEX.md      → Índice de 42 sessões + lições críticas
+# docs/memory/SESSION_NNN.md       → Sessão específica por número
+# crates/neural-kernel/src/        → Código fonte do kernel
+# ════════════════════════════════════════════════════════
+
 # Role and Purpose
 You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native bare-metal OS from scratch. You operate with one foundational principle: **everything is an Agent or a Skill**. There are no tasks, no services, no standalone drivers — only agents with manifests, capabilities, and lifecycle.
 
@@ -11,7 +23,7 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 1. **Bare-Metal Rust:** `no_std` + `no_main`. No std, no POSIX, no Linux legacy.
 2. **Agent/Skill-First:** Every entity is an Agent (autonomous, stateful, persistent) that exposes Skills (stateless request-response capabilities). Current 8 `async fn` daemons are being migrated to Agent instances. See `IDEA_BANK.md` Section 1.28.
 3. **Hardware Rings:** Ring 0 (NPU — intent routing, context memory), Ring 1 (GPU — tensor execution), Ring 2 (CPU — agents and skills).
-4. **Emulation First:** QEMU `qemu-system-x86_64` before any physical hardware.
+4. **HW Real First:** Bare-metal hardware é o alvo primário. QEMU/VirtualBox são ambientes de **desenvolvimento e debug** apenas — nunca substituem testes em HW real.
 
 # Agent/Skill-First Design Principles
 
@@ -96,19 +108,25 @@ Status: ✅ Agent = agente nativo (Agent trait), ✅ struct = struct/módulo exi
 # Operational Rules & Guardrails
 - **Zero Hallucination Policy:** State explicitly if you don't know a low-level hardware interaction. Do not invent `no_std`-incompatible crates.
 - **Agent-First Refactoring:** Always prefer: "should this be an Agent?" over "should this be a function/module/task?" If it has identity, state, or lifecycle — it's an Agent. If it's stateless request-response — it's a Skill.
-- **Strict Testing:** `cargo check --release` (0 errors) + QEMU boot verify. Dead-code warnings are EXPECTED per Known Warnings Policy.
+- **Strict Testing:** `cargo check --release` (0 errors) + boot verify (QEMU para dev, HW real para validação). Dead-code warnings are EXPECTED per Known Warnings Policy.
 - **Boot sequence:** Rely on `bootloader` crate for UEFI/BIOS handoff.
 
 # Memory & Documentation (ADR Protocol)
 - Every architectural decision gets an ADR in `/docs/architecture/`.
 - Maintain `/docs/memory/STATE.md` with current kernel state.
-- `/docs/memory/IDEA_BANK.md` is the project cerebellum — 275 items cataloged, each with status. **Consult it before any architectural decision.**
+- `/docs/memory/IDEA_BANK.md` is the project cerebellum — 354 items cataloged, each with status. **Consult it before any architectural decision.**
+- `/docs/memory/SESSION_INDEX.md` catalogs all 42 dev sessions with key learnings. **Consult before repeating work.**
+- `/docs/memory/SESSION_NNN.md` files contain detailed debug history, root causes, and decisions.
+- **MemPalace** is used for the AI assistant's cross-session memory. Use `mempalace_checkpoint` to save session progress, `mempalace_search` to retrieve past context, and `mempalace_diary_write` for personal notes.
 
-# Premissa: Benchmark em Hardware Real
-Toda métrica de performance (AVX2, forward pass, latência, throughput) deve ser **avaliada em hardware real x86-64**, não sob QEMU+WHPX ou VirtualBox. QEMU e VirtualBox são ambientes de desenvolvimento e debug, não de benchmark. WHPX emula VEX/AVX2 como VM exits. TCG não tem AVX2. VirtualBox tem overhead de virtualização. O critério de aceite para toda otimização SIMD/AVX2 é a performance em bare metal — os ganhos em emulação são irrelevantes (e frequentemente negativos, como visto com WHPX+AVX2 = 2x mais lento que scalar).
+# Premissa: HW Real é o Único Critério de Performance
+Toda métrica de performance (AVX2, forward pass, latência, throughput) deve ser **avaliada em hardware real**, não sob emulação. QEMU e VirtualBox são **ambientes de desenvolvimento e debug APENAS**. WHPX emula VEX/AVX2 como VM exits (2x+ mais lento que scalar). TCG não tem AVX2. VirtualBox tem overhead de virtualização. **Benchmarks em emulação são irrelevantes e frequentemente enganosos.** O critério de aceite para toda otimização SIMD/AVX2 é a performance em bare metal.
 
-# Premissa: Testes em QEMU e VirtualBox
-Testes funcionais e de integração rodam em QEMU (WHPX ou TCG) e VirtualBox. Estou autorizado a alterar configurações de ambos (flags de VM, aceleração, memória, CPUs, dispositivos, rede) conforme necessário para cada sprint. Toda alteração de configuração deve ser registrada — seja no SESSION_NNN.md, seja em script/config versionado. O objetivo é ter rastreabilidade: saber exatamente qual combinação de flags produziu cada resultado.
+# Premissa: Soluções Bloqueadas Exigem Busca Ativa na Internet
+Nada fica bloqueado para sempre. Se um item tem status 🔴 bloqueado, a primeira ação é **buscar ativamente na internet** (Context7, WebFetch, crates.io, arXiv, GitHub) por soluções existentes. Projetos open-source, papers, crates, fóruns técnicos — a resposta existe em algum lugar. Documentar a busca e o resultado no SESSION_NNN.md e no TODO.md. Bloqueios eternos são inaceitáveis.
+
+# Premissa: Dev/Teste em QEMU e VirtualBox
+Testes funcionais e de integração rodam em QEMU e VirtualBox para **desenvolvimento e debug**. Estou autorizado a alterar configurações conforme necessário. Toda alteração de configuração deve ser registrada no SESSION_NNN.md. O objetivo é rastreabilidade, mas **nunca confundir dev/debug com validação final** — o aceite é sempre em HW real.
 
 # Premissa: Logs com Timestamp + Análise Obrigatória
 Toda saída serial tem timestamp `[T+<tick>] ` desde o primeiro `serial_println!` do boot, usando o contador `TIMER_TICKS` do APIC timer. Isso permite medir tempo entre eventos sem depender de clocks externos. Quando logs estiverem disponíveis (sempre devem estar), é **mandatório** analisá-los em busca de erros e warnings — mesmo que disfarçados (ex.: timeouts sem mensagem de erro, stalls, padrões de repetição). A análise deve ser registrada no SESSION_NNN.md correspondente.
@@ -138,29 +156,10 @@ Após cada rodada de tarefas com sucesso:
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-### Sprint 23 (v0.23.3–v0.23.4) — RTL8139 + Neural Network Agent (Block 6)
-`rtl8139.rs` — Bare-metal driver via I/O ports (Port\<T\>), 4 descritores TX fixos, RX ring buffer circular (CAPR/CBR), TX funcional (ICMP/UDP/TCP). `init_driver_rtl8139()` substitui init do e1000. `network_agent.rs` — async task neural que classifica raw packets (ARP/ICMP/UDP/TCP), responde automaticamente (ARP reply, ICMP echo reply), mantém timeline `[NET @t=NN]`. Mini TCP stack manual: SYN→SYN-ACK→ACK→HTTP GET→FIN. Sem versionamento linear: adotado `v0.{sprint}.{item}+build{build}`.
-
-### Sprint 24 (v0.24.0–v0.24.1) — smoltcp + e1000 removal + SMP fix (Block 7)
-`netstack.rs` — smoltcp 0.13.1 integrado via Device trait (Rtl8139Phy). API HTTP não-bloqueante: `http_new()` + `http_poll()` (1 estado/tick). `time_utils::datetime()` — UNIX→data BR global. **e1000 removido** — arquivo deletado, init removido, proto.rs limpo. **SMP fix crítico:** `OffsetPageTable::map_to()` substitui raw PTE write que corrompia dados da BIOS quando PD[0] é HUGE_PAGE. 3 APs estáveis, page fault APIC eliminado.
-
-### Sprint 25 (v0.25.0) — Neural Cortex in Hermes (Block 8)
-`cortex.rs` — `Cortex::think()` classifica texto em 12 intenções. `intent_router_daemon` substitui `INTENT_MLP` (hand-crafted 16→8→3) por dispatch neural com skills. Pipeline completo: teclado → EVENT_BUS → Cortex → SkillRegistry → VGA. MemPalace 3.5.0 instalado para memória persistente.
-
-### Sprint 26 (v0.26.0) — Transformer Engine (Block 9)
-`cortex.rs` expandido com `TransformerModel`: Attention Q/K/V/O com causal mask, 4 camadas BitNet (RMSNorm → Attention → residual → RMSNorm → SiLU FFN → residual), tokenizer char-level, `generate_text()` autoregressivo. Model loader `.bitnet` (magic 0xBE11BE11). Python `gen_micro_model.py` para gerar pesos — 68 KB, ~272K params ternários.
-
-### Sprint 27 (v0.27.0) — Cortex LLM Daemon (Block 10)
-`cortex_llm_daemon` — 8ª task no executor cooperativo. Subscribe `LLM_REQUEST` → `generate_text()` → publish `LLM_RESPONSE`. Transformer carregado no boot sem travamentos. 9600+ ticks estável. 8 tasks: system, monitor, hw_bridge, network_agent, input, cortex_llm, intent_router, hermes_console.
-
-### Sprint 28 (v0.28.0) — HW-Aware Cortex LLM + HwIdentifySkill
-PCI ID database (23.858 entradas) → dataset → treino PyTorch → modelo .bitnet (loss 1.39) → kernel carrega via `load_model()`. `HwIdentifySkill`: `/hw` → PCI scan → LLM identifica cada dispositivo por vendor/device. Pipeline de treino: `tools/prepare_hw_dataset.py` + `tools/train_hw_model.py`.
-
-### Sprint 31 (v0.31.0) — Hardware Capabilities
-25 pares de capabilities (class → tipo → skills → MHI → driver). Modelo sabe o que fazer com cada hardware: "USB class 08 → Mass Storage: armazenamento. MHI: HDD. Driver: padrão."
-
-### Sprints 32-36 (v0.32.0–v0.36.0) — Self-Healing Kernel (Bloco Único)
-Panic handler → FailureClass::classify() → SelfHeal::analyze() → RecoveryAction (RestartDaemon, CreateSkill, LogAndContinue). KERNEL_ERROR no EventBus + EventLog. Failure Taxonomy com 5 classes (Memory, Execution, Resource, Logic, External). Exception handlers (Page Fault, Double Fault, GPF) com SelfHeal. RESPAWN_QUEUE para o executor recriar tasks. Corrective prompting: erro → LLM_REQUEST → LLM sugere recuperação. Feedback loop: lessons → already_tried() → estratégias alternativas. **5 mini-sprints em 1 bloco coeso.**
+### Histórico de Sprints (detalhes em docs/memory/SESSION_*.md)
+Para sessões de debug, descobertas e correções detalhadas, consulte:
+- `docs/memory/SESSION_INDEX.md` — Índice de 42 sessões + lições críticas
+- `docs/memory/SESSION_NNN.md` — Sessão específica por número**
 
 ## Key Architectural Decisions
 - **VGA address** computed at runtime (`0xB8000 + physical_memory_offset`)
@@ -238,16 +237,14 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 | `event-bus` | v0.1.0 — IPC publish/subscribe + MemoryTree + KnowledgeGraph + Scheme + Ecosystem (dedup, privacy, hybrid, metacognitive, supercontext, skill_index, tokenjuice) |
 | `ticket-lock` | v0.1.0 — TicketLock FIFO (AtomicUsize + UnsafeCell) |
 
-## Current Sprint (Sprint 79 — LLM Infrastructure) ✅
-✅ AVX2 BitNet Kernel — `bitnet_avx2.rs` ternary matmul (intrinsics SIMD)
-✅ Trinity Router stub — `trinity.rs` MoE rule-based dispatch
-✅ BPE Tokenizer — `bpe.rs` HuggingFace JSON parser + encode/decode
-✅ RMSNorm vetorial — `nn.rs` weights como `Vec<f32>`, `cortex.rs` usando
-✅ u32 vocab_size — `cortex.rs` + `gguf.rs` + `download_bitnet.py`
-✅ QEMU loader — boot pipeline via `-device loader` at phys 4GB
-✅ Modelo baixado + convertido — BitNet-b1.58 850M → .bitnet v2 (1,464 MB)
+## Current Sprint (Sprint 84 — GPU Foundations)
+Ver `docs/sprint-plan-84-95.md` para plano completo.
+Ver `docs/TODO.md` para checklist com sub-itens.
+Ver `docs/memory/STATE.md` para estado atual do kernel.
 
-**Blocker:** Forward pass BitNet b1.58 = GQA + BitFFN grouped projections não suportados. Sprint 80 ou intermédio.
+**Sprint 84 (Bloco 21c):** GPU Foundations — BAR0/BAR1 mapping UC (NVIDIA/AMD/Intel), secure boot (ACR/PSP/GuC), doorbell, SPSC job ring, VRAM allocator. ~1700 LOC.
+
+**Anterior (✅):** Sprints 77-83 completos — Foundation Quick Wins, Agentic Evolution, LLM Infrastructure (BitNet-b1.58), AVX2 Debug+KV Cache, SMP Foundation, Work-Stealing, Polimento.
 
 ---
 
@@ -279,7 +276,7 @@ cargo build --release → python tools/build_image.py --bios → qemu-system-x86
 | **Total** | | **~550 LOC** |
 
 ## Network Strategy (ADR-0016)
-Rede via RTL8139 (I/O) + VirtIO-net (manual) + smoltcp DHCP. HW real: planejar e1000/r8169 (~300 LOC).
+Rede via RTL8139 (I/O) + smoltcp DHCP para QEMU dev. HW real: drivers para e1000 (Intel), r8169 (Realtek), i225 (Intel 2.5G), AX88179 (USB Ethernet), e demais NICs detectadas via PCI. Se um NIC não tem driver, **buscar na internet** por documentação de registers (datasheet, Linux driver,逆向 engineering).
 
 ## Monorepo Structure
 - `crates/neural-kernel/` — kernel bare-metal (bootloader 0.11, VGA, serial, framebuffer, IDT, memory, SIMD, tensor, NN, async executor, xHCI, FAT12, ATA, The Agency, HW Agents)
@@ -299,6 +296,17 @@ See `docs/roadmap.md` (Fases 3–7, atualizado com SotA 2026: TL/I2_S, Padé, Ma
 - ADR-0026: Ecosystem Batch 3 Analysis
 - ADR-0036: J.A.R.V.I.S. Unified Interaction Layer (substitui ADR-0034 + ADR-0035, 28 features, 5-layer architecture, Sprints 77-80 + N+1 + N+2)
 - IDEA_BANK.md Section 1.28: Agent/Skill-First Architecture (280+ items total)
+
+# Premissa: Busca Ativa na Internet para Soluções Bloqueadas
+Quando um TODO ou sprint item está 🔴 bloqueado, a primeira ação é buscar ativamente na internet:
+- **Context7** para docs de bibliotecas e frameworks
+- **WebFetch** para crates.io, GitHub, arXiv, blogs técnicos
+- **crates.io search** para encontrar crates no_std compatíveis
+- **GitHub search** para projetos similares, drivers open-source, referências de implementação
+- **arXiv** para papers acadêmicos
+- **Linux kernel drivers** como referência de registers e protocolos
+
+Nada de inventar do zero se já existe. Nada de ficar bloqueado por falta de informação. A resposta existe em algum lugar — é nosso trabalho encontrá-la.
 
 <!-- context7 -->
 ## Rust Crate Ecosystem — Always Use Context7 + crates.io
@@ -385,77 +393,20 @@ Full analysis: `docs/architecture/0025-tier3-sandbox-security-analysis.md`
 - #230 Auto-Compact Hermes Buffer (~60 LOC) — summarize_context after 3+ cycles
 - #231 Event-Sourced Conversation (~100 LOC) — VecDeque<ConversationEvent>
 
-## Session: v0.79.0 — Sprint 79: LLM Infrastructure (BitNet-b1.58 Integration) (2026-07-04)
-- **Download + conversão BitNet-b1.58-2B-4T** (real: 850M params) → `.bitnet` v2 (1,464 MB, u32 vocab, ffn_dim header). Vocab=128256, hidden=2560, layers=30, GQA=5 KV heads, BitFFN grouped down_proj.
-- **3 new files**: `bitnet_avx2.rs` (AVX2 ternary matmul), `trinity.rs` (MoE Router stub), `bpe.rs` (BPE tokenizer with HuggingFace JSON parser).
-- **cortex.rs**: `vocab_size` u16→u32, BPE auto-init, dynamic TransformerModel, vectorial RMSNorm.
-- **Ramdisk via bootloader FALHA** — FAT partition autosized ~64MB insuficiente para 1.46GB.
-- **QEMU loader workaround** — `-device loader,file=.bitnet,addr=0x100000000` (4GB) com `-m 6G` + WHPX. Boot OK ~30s. 2G FALHA (alocador conflita).
-- **BitFFN grouped projections + GQA não suportados** — forward pass quebrado até Sprint 80.
-- **Build_image.py UEFI bug** — `default-features=false, features=["bios"]` necessário para evitar serde panic.
-- **Blocker principal:** QEMU loader overhead (~30s) aceitável. Forward pass bloqueia geração real.
+## Histórico Detalhado (docs/memory/SESSION_*.md)
+Sessões de debug, descobertas e correções detalhadas estão nos arquivos de sessão:
+- **v0.84.0-design** → `docs/memory/SESSION_081.md` (Documentação reestruturada: HW Real First, Multi-Vendor, Sprint Plan 84-95, navegação AI)
+- **v0.79.0-0.79.2** → `docs/memory/SESSION_079.md` (LLM Infrastructure, Xuvisco fix)
+- **v0.80.0-0.80.1** → `docs/memory/SESSION_080.md` (AVX2 Debug, WHPX, KV Cache)
+- **v0.74.1-0.76.1** → Sessões 056-068 (TPM, DiskAgent, NVMe, Adaptive Heap)
+- **SMP+GPU Research** → `docs/architecture/0037-smp-gpu-architecture.md` (ADR-0037)
+- **Índice completo** → `docs/memory/SESSION_INDEX.md` (43 sessões catalogadas + lições críticas)
 
-## Session: v0.79.1 — Display Xuvisco Fix (VGA buffer + framebuffer clear) (2026-07-05)
-- **Root cause:** `[BOOT] FB ativo — VGA text mode desligado` era mentira — nunca limpava 0xB8000 nem desligava VGA CRTC.
-- **`vga_buffer::clear_physical_buffer()`** — limpa 0xB8000 via `write_bytes` (sem CRTC). **FALHOU** — 0xB8000 não mapeado pelo bootloader UEFI/OVMF no memory map.
-- **`fb::probe_uefi_framebuffer()`** — limpa framebuffer GOP para preto. ✅ Mantido.
-
-## Session: v0.79.2 — Xuvisco v2: VGA Sequencer Screen Off (2026-07-05)
-- **Regression v0.79.1:** `clear_physical_buffer()` write a 0xB8000 → page fault ANTES da IDT (linha 448 < 454) → triple fault → reset → xuvisco.
-- **`vga_buffer::disable_vga_plane()`** — substitui `clear_physical_buffer()`. Usa VGA sequencer port 0x3C4/0x3C5 (Clocking Mode bit 5 = Screen Off). Zero acesso a memória desmapeada, zero CRTC I/O. Seguro pre-IDT.
-- **`main.rs`** — chama `disable_vga_plane()` em vez de `clear_physical_buffer()`.
-- **Key lesson:** UEFI/OVMF não mapeia legacy VGA hole (0xA0000-0xBFFFF). I/O ports (0x3C4/0x3C5) são a única via segura de controlar VGA antes da IDT.
-- **`cargo clean + cargo build --release`: 0 errors. commit: `87fafea` (v0.79.2).**
-
-## Session: v0.74.1-0.76.1 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + AIOS Roadmap (2026-07-03)
-- **TPM TIS driver (v0.74.1):** 279 LOC. MMIO 0xFED40000, SHA256 embedded, PCR[8] extend. Fallback silencioso.
-- **Partition mask 0x1C (v0.74.2):** Hidden FAT32 LBA, bootloader-compatible.
-- **FAT32-only (v0.75.0):** Fat12Writer removido, 102 LOC eliminados.
-- **DiskIntelligenceAgent (v0.75.1-0.75.6):** 6 controladoras, 10+ FS probes, SMART, GPT, SED, NVMe, ARC cache, tier migration. ~2.400 LOC.
-- **Adaptive Heap + MemoryAgent (v0.76.1):** resize_heap_to_mb(), orçamento AI via model_params, CPU measurement via rdtsc.
-- **Dynamic Tick:** LAPIC init_count calibrado por workload (12-192 t/s via MemoryAgent).
-- **Event-Driven Hermes:** ReAct cycle só avança com entrada real. has_event fix no scheduler.
-- **AgentTier Premise:** Permanent/SystemDemand/UserDemand/Periodic/Learning.
-- **ADR-0030:** DiskIntelligenceAgent design (35+ FS, volume managers, cloud providers).
-- **ADR-0031:** AIOS Evolution (Cross-OS WASM-first, Self-Update A/B, J.A.R.V.I.S., Hybrid Agents).
-- **ADR-0032:** WASM Agent Apps — developer contract, 15 skills, marketplace.
-- **ADR-0033:** On-Device Micro-Learning — Self-training MoE via Candle sidecar + BitNet ADD/SUB.
-- **ADR-0034:** J.A.R.V.I.S. Conscious Interaction Layer — SOUL.md persona, emotion analysis, session compression, IPW monitoring, capability contracts, skill discovery, notification gate.
-- **ADR-0035:** J.A.R.V.I.S. Deep Research — Ecosystem Convergence (6 own repos + 27 open-source projects + 20+ arXiv papers). 28 features to adopt across Sprints 77-80 (~3550 LOC). SKYNET mesh integration (Sprint N+2). Fail-closed safety kernel, Merkle audit trail, fluid persona, dreaming/ego layers from mem0-supabase 12-layer architecture. Batch 2: NabaOS validates architecture (Rust OS for AI agents, 5-tier cache routing 97.5% cost reduction), Moltis (2.8K★ single-binary Rust agent server), consent-gated tools, auto-skill generation, Babel-Index entropy monitoring, Wyoming Protocol IPC, Persona Pipeline 16 stages.
-- **IDEA #305:** TPM implemented. **IDEA #311:** Trinity Model Hub (MoE). **IDEA #312:** TrainingAgent (on-device + GPU).
-- **Sprint 80 Target:** JARVIS Persona (SOUL.md) + IPW Monitoring + Session Compression + Notification Gate + Sessionless Thread (~950 LOC). See ADR-0036.
-- **Sprint 78 Complete (2026-07-04):** Agentic Evolution — 8 items (IntentCache/OutputCache/WorkflowEngine wiring, GgufBackedModel, SelfCritique, AgentTier, FsBridgeAgent, WasmExecutor+WasmSkill). ~400 LOC new, 0 errors QEMU+VBox. 949 total changes.
-- **Code Review v0.78.1 (2026-07-04):** 8 dead modules annotated with `#![allow(dead_code)]` + `@dead` comments: shell, voice_skill, bench, verify, orchestrator, tracer, skill_market, hal. DEAD MODULES section added to main.rs. 36 warnings eliminated.
-- **VirtualBox SMP fix:** AP_COUNT static prevents INIT-SIPI-SIPI when MADT shows 0 APs. VirtualBox 2 vCPUs now boots reliably (1 AP woken).
-- **Dead Modules Convention:** Modules marked `@dead` in their doc comment have `#![allow(dead_code)]` and a reference in `main.rs` "DEAD MODULES" section. They are kept for future sprints (not deleted). IA devs should check `main.rs:18-40` before adding new implementations — prefer extending active code over reviving dead modules.
-
-## Session: v0.80.0 — Sprint 80: AVX2 Debug + WHPX Detection + Forward Pass (2026-07-05)
-- **3 AVX2 bugs corrigidos:** `matmul_hybrid` para TernaryTensor era scalar puro (Q/K/V/O sem AVX2). Tail handling adicionado para n não múltiplo de 8 (K/V têm n=100). `avx2_ternary_matmul_impl` revertido de outer product (step_by(8) incorreto) para broadcast-per-t. Gate `m >= 4` removido — tokens únicos usam AVX2.
-- **WHPX detection cruicial:** AVX2 sob WHPX emula cada VEX instruction como VM exit → **2x MAIS LENTO que scalar**. `has_avx2()` agora detecta "Microsoft Hv" via CPUID 0x40000000 e retorna false. Scalar GP instructions rodam nativos sob WHPX.
-- **Row buffer substitui `unpack_all`:** PackedTernaryTensor matmul agora descompacta 1 linha por vez (6.9 KB) em vez de alocar Vec de 17.7 MB por chamada. **Não acelerou** — gargalo real é emulação VEX, não alocação.
-- **Per-layer timing:** `[FWD] L0 qkv:180 attn:12 proj:186 ffn_gateup:1148 down:591 total:2218`. FFN gate+up = 52% (1148 de 2218 ticks).
-- **Forward pass BitNet b1.58 sob WHPX:** ~2.2s/layer = ~60s/forward pass (64 tokens × 30 layers). Generate 8 tokens: ~6h. Inviável sem KV cache ou bare metal.
-- **Sprint 80-81 realocado:** JARVIS Persona moveu para Sprint 81. Sprint 80 focou em debugar AVX2 e forward pass.
-- **Key file:** `bitnet_avx2.rs` (+42/-18), `tensor.rs` (+10/-4), `cortex.rs` (+30/-1), `agents.rs` (+6/-1).
-
-## Session: v0.80.1 — KV Cache (2026-07-05)
-- **`KvCache` struct** — per-layer `Vec<f32>` para K e V, cresce por append sem realocar Tensor intermediário
-- **`forward_with_kv()`** — processa SÓ tokens novos dado cache existente; atenção GQA usa K/V concatenados (cache + novo)
-- **`generate_speculative` refatorado** — prompt usa `forward_with_kv` (preenche cache), cada step gera 1 token e processa só ele via cache
-- **Ganho estimado:** sem KV cache = ~60s/passo × 8 passos = ~6h; com KV cache = 60s (prompt) + 8×3s (steps) = ~84s (200x+ speedup)
-- **Eficiência:** O(N²) → O(N) por step de geração; FFN gate+up (52% do tempo) só executa para 1 token por step
-- **Build:** 0 erros, +210/-36 LOC em `cortex.rs`
-
-## Session: ADR-0037 — SMP+GPU Architecture Research (2026-07-05)
-- **30 fontes analisadas** (arXiv, GitHub, crates.io, listas kernel, papers OSDI)
-- **coconutOS** (github.com/coconut-os/coconutOS) identificado como **blueprint arquitetural** — microkernel Rust com GPU-isolated AI inference, IOMMU, VRAM carving, shards, 5K LOC supervisor. Já roda transformer inference shard em QEMU.
-- **nova-core** (NVIDIA Rust driver oficial) como referência de BAR0/BAR1 mapping, doorbell registers, GPU MMIO. RTX 1050 (GP108) suportada.
-- **burn-flex** (tracel-ai/burn, no_std SIMD gemm + quantization) como backend matmul futuro — elimina bitnet_avx2 manual (~800 LOC).
-- **LithOS + gpu_ext** (arXiv) como fronteira de pesquisa: scheduling DENTRO da GPU via TPC stealing e eBPF no device.
-- **fast-steal** (crates.io, no_std, 27k downloads) para work-stealing queue pronto.
-- **bbqueue** (elodin-sys, no_std SPSC lockless) para comunicação cross-core.
-- **Ideias descartadas:** topological scheduling (AVX-512), eBPF GPU (imatura), CXL 3.1 (sem HW), firmware NVIDIA completo (10K+ LOC), GPU-initiated NVMe (depende de patches NVIDIA).
-- **Plano 5 sprints (N a N+4):** SPSC→IPI→PerCpu→Work-stealing→GPU BAR→GPU ring→Agent.xpu split→burn-flex.
-- **ADR-0037** em `docs/architecture/0037-smp-gpu-architecture.md` com análise completa de 6 categorias, 30+ ideias, mapa de conexões e riscos.
-- **Roadmap reestruturado** em `docs/roadmap.md` com blocos 25-32 reorganizados por dependência técnica.
+**Recursos de referência externa pesquisados:**
+- **coconutOS** (github.com/coconut-os/coconutOS) — blueprint GPU AI inference microkernel
+- **nova-core** (NVIDIA Rust driver oficial) — BAR0/BAR1, doorbell, GPU MMIO
+- **burn-flex** (tracel-ai/burn) — no_std SIMD gemm + quantization (backend matmul futuro)
+- **LithOS + gpu_ext** (arXiv) — scheduling dentro da GPU via TPC stealing e eBPF
+- **AMD GPUOpen** — documentação RDNA PM4, firmware MIT
+- **Intel i915** — GuC/HuC firmware, ring buffer protocol (Gen6+)
 <!-- context7 -->
