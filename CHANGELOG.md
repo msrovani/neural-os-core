@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.86.0-jarvis] — 2026-07-06 — 🏆 JARVIS Avatar + Cognição (port do .NET MAUI)
+
+### Added
+- **`display/avatar.rs`** — JARVIS Avatar com partículas animadas, 4 estados (Idle/Listening/Processing/Speaking), port do `AvatarDrawable.cs` do .NET MAUI. Renderiza sobre framebuffer via `DoubleBuffer::set_pixel()`.
+- **`jarvis.rs`** — JARVIS Engine unificada: personalidade (`JarvisPersonality`), análise emocional (`detect_emotion` com 7 emoções + sarcasmo), memória contextual (`JarvisMemory` com ring buffer 256), avatar state machine. Port dos conceitos `TextProcessor`, `EmotionalAnalysisService`, `VectorStorageService`, `UserProfile` do .NET MAUI.
+- **`display/agent.rs`** — DisplayAgent integra JARVIS avatar + engine + Hermes Chat Console.
+
+### Arquitetura JARVIS (port .NET MAUI → bare-metal)
+| Conceito .NET MAUI | Equivalente Rust | Arquivo |
+|---|---|---|
+| AvatarDrawable (SkiaSharp) | JarvisAvatar + Particle | `display/avatar.rs` |
+| EmotionalAnalysisService | `detect_emotion()` (BitNet fallback) | `jarvis.rs` |
+| VectorStorageService + SQLite | JarvisMemory (ring buffer) | `jarvis.rs` |
+| UserProfile | JarvisPersonality (aprendizado contínuo) | `jarvis.rs` |
+| Semantic Kernel | Hermes Cognitive + ReAct | (existente) |
+| MainPage (Avatar+Chat) | DisplayAgent + NeuralConsole | `display/agent.rs` |
+| VoiceService | Piper + Vosk (pós B-01) | (futuro) |
+
 ## [0.85.0-design] — 2026-07-06 — 🏆 Sprint 85: GPU Decode (XPU split + DMA + XQueue)
 
 ### Added

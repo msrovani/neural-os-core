@@ -1,13 +1,15 @@
-//! DisplayAgent — renderiza Hermes Chat Console (NousResearch-style).
-//! Substitui o compositor multi-window bugado.
+//! DisplayAgent — renderiza JARVIS Avatar + Hermes Chat Console.
+//! Port do JARVIS .NET MAUI para bare-metal: partículas, emoção, personalidade.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::hermes;
+use crate::jarvis::{JarvisEngine, AvatarState};
 use crate::serial_println;
 use crate::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::COMPOSITOR;
 use crate::display::console::NeuralConsole;
+use crate::display::avatar::JarvisAvatar;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -22,6 +24,11 @@ pub struct DisplayAgent {
     echo_receiver: crate::Receiver,
     gpu_inited: bool,
     input_buffer: alloc::string::String,
+    avatar: Option<JarvisAvatar>,
+    engine: Option<JarvisEngine>,
+    last_response: alloc::string::String,
+    is_thinking: bool,
+    is_speaking: bool,
 }
 
 impl DisplayAgent {
@@ -31,6 +38,11 @@ impl DisplayAgent {
             echo_receiver: EVENT_BUS.subscribe("KEYBOARD_ECHO"),
             gpu_inited: false,
             input_buffer: alloc::string::String::new(),
+            avatar: None,
+            engine: Some(JarvisEngine::new()),
+            last_response: alloc::string::String::new(),
+            is_thinking: false,
+            is_speaking: false,
         }
     }
 }
@@ -38,7 +50,7 @@ impl DisplayAgent {
 impl Agent for DisplayAgent {
     fn manifest(&self) -> &AgentManifest { &DISPLAY_MANIFEST }
 
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
         if !self.gpu_inited {
             let gpu = GPU.lock();
             if let Some(ref gpu_dev) = *gpu {
@@ -48,8 +60,11 @@ impl Agent for DisplayAgent {
                     gpu_dev.fb_bpp as usize,
                 );
                 *COMPOSITOR.lock() = Some(NeuralConsole::new(fb));
-                serial_println!("[DISPLAY] Hermes Chat {}x{} @{:x}",
-                    gpu_dev.fb_width, gpu_dev.fb_height, gpu_dev.fb_addr);
+
+                // Inicializa avatar JARVIS
+                self.avatar = Some(JarvisAvatar::new(gpu_dev));
+                serial_println!("[JARVIS] Avatar iniciado @ {}x{}",
+                    gpu_dev.fb_width, gpu_dev.fb_height);
             }
             self.gpu_inited = true;
             return AgentTickResult::Pending;
@@ -60,13 +75,42 @@ impl Agent for DisplayAgent {
             self.input_buffer = core::str::from_utf8(&ev.payload).unwrap_or("").into();
         }
 
-        // Renderiza Hermes Chat Console
+        // Hermes response — processa emoção + atualiza avatar
+        while let Some(ev) = self.receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            self.last_response = alloc::string::String::from(text);
+            self.is_speaking = true;
+
+            // Engine JARVIS processa a resposta
+            if let Some(ref mut engine) = self.engine {
+                engine.process_input(text);
+            }
+        }
+
+        // Renderiza JARVIS Avatar + Hermes Chat Console
         if let Some(ref mut console) = *COMPOSITOR.lock() {
             console.input_buffer = self.input_buffer.clone();
-            let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+
+            // Determina estado do avatar
+            let avatar_state = self.engine.as_ref().map_or(AvatarState::Idle, |e| {
+                e.avatar_state_for(self.is_thinking, self.is_speaking)
+            });
+
+            // Atualiza e renderiza avatar
+            if let Some(ref mut avatar) = self.avatar {
+                avatar.set_state(avatar_state);
+                avatar.render(&mut console.fb);
+            }
+
+            // Renderiza console (texto + métricas)
             let mem = crate::memory::global_hardware_context();
             console.render(tick, 0, mem[0], false, false);
+            console.fb.swap();
         }
+
+        // Reseta flags
+        if tick % 10 == 0 { self.is_speaking = false; }
+        if tick % 5 == 0 { self.is_thinking = false; }
 
         AgentTickResult::Pending
     }

@@ -117,6 +117,7 @@ mod disk_agent;
 mod memory_agent;
 mod bitnet_avx2;
 mod trinity;
+mod jarvis;
 
 use lazy_static::lazy_static;
 
