@@ -1,9 +1,10 @@
 # Sprint Plan 92-99 — neural-os-core v0.92.x-0.99.x
-# TODAS AS 406+ IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
+# TODAS AS 408+ IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
 
 **Data:** 2026-07-06  
 **Contexto:** Sprints 1-91 completos (~35.000 LOC). 46 novas ideias (#361-#406) extraídas de ADRs.  
-**Premissa:** Toda ideia do IDEA_BANK tem sprint definido. Nada de "futuro" sem destino.
+**Premissa:** Toda ideia do IDEA_BANK tem sprint definido. Nada de "futuro" sem destino.  
+**Nota:** Sprint Sound adicionado (audio drivers + voice pipeline) — #83 e #84 restaurados do descarte.
 
 ---
 
@@ -63,19 +64,29 @@
 
 ---
 
-## Sprint 94 — Bloco Voice + Vision: TTS/STT/Camera (~3000 LOC)
-**IDEA_BANK:** #315.21-25, #360, #79-82  
-**Depende de:** B-01 (download de modelos), B-01 (STT cloud)  
-**Foco:** Kokoro TTS, Vosk STT, wake word, Wyoming pipeline, camera
+## Sprint Sound — Bloco Audio: Drivers + Voice Pipeline (~3500 LOC)
+**IDEA_BANK:** #83, #84, #315.21-25, #360  
+**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado)  
+**Foco:** JARVIS ouvir e falar. Intel HDA, USB Audio, Kokoro TTS, Vosk STT, wake word
+
+| IDEA | Item | LOC | Depende |
+|---|---|---|---|
+| **#83** | **Intel HDA audio driver** — PCI HDA controller. DMA engine, codec detection, PCM playback/capture. Port do driver Linux HDA. | 800 | PCI scan |
+| **#84** | **USB Audio Class (UAC) driver** — Fones/microfone USB via xHCI isochronous transfers. Alternativa ao HDA. | 600 | xHCI |
+| #315.21 | Kokoro-82M TTS Integration (ONNX→.bitnet já pronto) | 100 | B-01 |
+| #315.22 | Vosk/Whisper STT | 400 | B-01 |
+| #315.23 | Wake Word (Rustpotter) | 100 | B-01 |
+| #315.24 | Wyoming Protocol IPC | 300 | B-01 |
+| #315.25 | Voice Pipeline (8-domain: Mic→Wake→ASR→VAD→Intent→Handle→TTS→Snd) | 800 | B-01 + HDA |
+| #360 | Kokoro-82M download + conversão | 300 | B-01 |
+
+## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC)
+**IDEA_BANK:** #79-82  
+**Depende de:** Nada  
+**Foco:** USB camera, framebuffer rendering, tensor viz
 
 | IDEA | Item | LOC |
 |---|---|---|
-| #315.21 | Kokoro-82M TTS Integration (ONNX→.bitnet já pronto) | 100 |
-| #315.22 | Vosk/Whisper STT | 400 |
-| #315.23 | Wake Word (Rustpotter) | 100 |
-| #315.24 | Wyoming Protocol IPC | 300 |
-| #315.25 | Voice Pipeline (8-domain) | 200 |
-| #360 | Kokoro-82M download + conversão | 300 |
 | #79 | UEFI framebuffer renderização de fontes | 200 |
 | #80 | Font rendering para alta resolução | 200 |
 | #81 | VirtIO-GPU 2D/3D acelerado | 400 |
@@ -213,8 +224,6 @@
 ## ❌ Descartados
 | IDEA | Item | Motivo |
 |---|---|---|
-| #83 | Intel HDA audio driver | Sem skill de áudio no roadmap |
-| #84 | Áudio via USB (UAC) | USB + áudio = duplo pós-MVP |
 | #116 | Port ARM/RISC-V | Fora do escopo x86-64 atual |
 | #248 | Docker Sandbox | Incompatível com bare-metal no_std |
 | #249 | Python/.NET Runtime | Barreira de linguagem |
@@ -228,7 +237,8 @@
 |---|---|---|---|
 | 92 | LAN: Rede + Dependências | ~3000 | — |
 | 93 | WASM: Runtime + Skills | ~4000 | B-01 |
-| 94 | Voice + Vision | ~3000 | B-01 |
+| Sound | Audio: Drivers + Voice | ~3500 | B-01 + PCI |
+| 94 | Vision: Camera + Display | ~1500 | — |
 | 95 | Cognitive: Aprendizado | ~3000 | — |
 | 96 | Self-Heal + Security | ~2500 | — |
 | 97 | AIOS: Cross-OS + Update | ~3000 | B-01 + WASM |

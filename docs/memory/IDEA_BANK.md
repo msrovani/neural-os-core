@@ -237,8 +237,8 @@ Nada é descartado sem registro. Ideias podem ser:
 | 80 | Font rendering para alta resolução | ⏳ Pós-MVP | Sprint 23+ | Depende de #79. |
 | 81 | VirtIO-GPU 2D/3D acelerado | ⏳ Pós-MVP | Sprint 24+ | Requer VirtIO. |
 | 82 | Tensor visualization no framebuffer | ⏳ Pós-MVP | Fase 5+ | Depende de #79 + #81. |
-| 83 | Intel HDA audio driver | ❌ Descartado | — | Nenhuma skill de áudio no roadmap. |
-| 84 | Áudio via USB (UAC) | ❌ Descartado | — | USB + áudio = duplo pós-MVP. |
+| 83 | Intel HDA audio driver — Áudio via PCI HDA controller. Essencial para TTS/STT do JARVIS sem depender de USB. | 🟡 Sprint Sound | Sprint Sound | JARVIS precisa ouvir e falar. Port do driver Linux HDA. |
+| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | 🟡 Sprint Sound | Sprint Sound | JARVIS voice I/O via USB. |
 
 ### 1.8. Princípios Arquiteturais
 
