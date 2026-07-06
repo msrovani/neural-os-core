@@ -1,6 +1,24 @@
-﻿# Neural OS Hermes v0.76.1 — AI-native Bare-metal Operating System
+﻿# Neural OS Hermes v0.86.3 — AI-native Bare-metal Operating System 🏆
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
+
+```
+╔══════════════════════════════════╗
+║  J.A.R.V.I.S. vNeural OS v0.86 ║
+║  "Thoughtful. Precise. Alive."  ║
+╚══════════════════════════════════╝
+
+  ✦ Partículas animadas no framebuffer
+  ✦ Análise emocional (7 emoções + sarcasmo)
+  ✦ Personalidade adaptativa (SOUL.md)
+  ✦ Memória contextual (256 interações)
+  ✦ Avatar com estados: ● Idle ◉ Listening ◎ Processing ◉ Speaking
+  ✦ Voz: Kokoro-82M TTS (pós B-01)
+  ✦ Embedding: BGE-Small-EN-v1.5 (Sprint 89)
+
+  → Port do JARVIS .NET MAUI para bare-metal Rust
+  → github.com/msrovani/jarvis (app original)
+```
 
 ```
 03/07/2026 — TPM + DiskAgent + NVMe + SMART + Adaptive Heap + Dynamic Tick.
