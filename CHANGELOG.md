@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.89.0-memory] — 2026-07-06 — 🧠 Sprint 89: SleepCycle + Advanced Memory + BGE
+
+### Added
+- **#314 SleepCycle Agent** — 5 fases: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT, agendado por tick
+- **#214 SHA-256 Memory Dedup** — Sliding window 5min, SHA-256 hash check
+- **#215 Privacy Filter** — Strip API keys, secrets, tokens antes de armazenar
+- **#216 Memory TTL/Eviction** — Auto-evict por TTL + importância, fallback LRU
+- **#219 Ebbinghaus Decay** — `strength = importance × e^(-λ·days) × (1 + recall_count × 0.2)`
+- **#217 Hybrid Search (BM25 + MLP)** — BM25 score com RRF fusion, avg_len normalizado
+- **#218 4-Tier Memory Consolidation** — Working→Episodic→Semantic→Procedural pipeline
+- **#222 Metacognitive Guard** — Verifica erros passados antes de executar skill
+- **#223 Draft→Review→Merge Memory** — Workflow de aprovação de memória
+- **#224 Atkinson-Shiffrin 3-tier** — Sensory Register (48h) → STM (7d) → LTM (permanent)
+- **#225 Bi-temporal Knowledge Graph** — Triplas (sujeito, predicado, objeto) com validade temporal
+- **#359 BGE-Small-EN-v1.5** — Embedding stub 384-dim (ONNX→.bitnet pendente)
+
+### New File
+- `memory_systems.rs` — Todos os 12 itens em um módulo coeso (~470 LOC)
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics, 248 agents, JARVIS avatar OK
+
 ## [0.88.0-emotion] — 2026-07-06 — 🎭 Sprint 88: JARVIS Emotion + Cache + Pipeline + DHCP
 
 ### Added

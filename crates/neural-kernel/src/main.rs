@@ -122,6 +122,7 @@ mod alloc_adapter;
 mod audit;
 mod ahci;
 mod dhcp;
+mod memory_systems;
 
 use lazy_static::lazy_static;
 
