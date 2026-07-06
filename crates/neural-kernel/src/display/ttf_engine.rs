@@ -1,0 +1,143 @@
+//! TrueType Font Engine — Fontes pré-rasterizadas via Python converter.
+//! As fontes são convertidas com tools/convert_ttf_to_bitmap.py em tempo de
+//! build e embutidas como arrays Rust. Zero parsing TTF em runtime.
+//!
+//! Uso: python tools/convert_ttf_to_bitmap.py DejaVuSans.ttf --size 16
+//! Depois: include_bytes!("../../target/dejavu.rs") no kernel.
+
+use alloc::vec::Vec;
+use alloc::vec;
+use alloc::string::String;
+use alloc::collections::BTreeMap;
+
+use crate::display::fb::DoubleBuffer;
+use crate::serial_println;
+
+/// Um glyph rasterizado: bitmap em grayscale + métricas
+pub struct RasterGlyph {
+    pub w: u16, pub h: u16,
+    pub x: i16, pub y: i16,
+    pub pixels: Vec<u8>,
+}
+
+/// Fonte TTF pré-rasterizada
+pub struct TtfRasterFont {
+    pub name: String,
+    pub size: u16,
+    glyphs: BTreeMap<char, RasterGlyph>,
+}
+
+impl TtfRasterFont {
+    pub fn new(name: &str, size: u16) -> Self {
+        TtfRasterFont { name: String::from(name), size, glyphs: BTreeMap::new() }
+    }
+
+    pub fn add_glyph(&mut self, c: char, w: u16, h: u16, x: i16, y: i16, pixels: &[u8]) {
+        self.glyphs.insert(c, RasterGlyph { w, h, x, y, pixels: pixels.to_vec() });
+    }
+
+    pub fn has_glyph(&self, c: char) -> bool { self.glyphs.contains_key(&c) }
+    pub fn glyph_count(&self) -> usize { self.glyphs.len() }
+
+    /// Carrega de um array flat (formato do conversor Python)
+    pub fn load_from_bytes(&mut self, data: &[u8]) {
+        if data.len() < 8 { return; }
+        let count = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+        let _size = u16::from_le_bytes(data[4..6].try_into().unwrap());
+        let mut offset = 8;
+        for _ in 0..count {
+            if offset + 20 > data.len() { break; }
+            let codepoint = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
+            let w = u32::from_le_bytes(data[offset+4..offset+8].try_into().unwrap()) as u16;
+            let h = u32::from_le_bytes(data[offset+8..offset+12].try_into().unwrap()) as u16;
+            let x = i32::from_le_bytes(data[offset+12..offset+16].try_into().unwrap()) as i16;
+            let y = i32::from_le_bytes(data[offset+16..offset+20].try_into().unwrap()) as i16;
+            offset += 20;
+            let pixels_size = w as usize * h as usize;
+            if offset + pixels_size > data.len() { break; }
+            let c = char::from_u32(codepoint).unwrap_or('\0');
+            self.add_glyph(c, w, h, x, y, &data[offset..offset + pixels_size]);
+            offset += pixels_size;
+        }
+        serial_println!("[TTF] '{}' carregada: {} glyphs @ {}px", self.name, self.glyph_count(), self.size);
+    }
+
+    /// Desenha texto no framebuffer
+    pub fn draw_text(&self, fb: &mut DoubleBuffer, mut x: usize, y: usize, text: &str, r: u8, g: u8, b: u8, scr_w: usize) {
+        for c in text.chars() {
+            if x + self.size as usize > scr_w { break; }
+            if let Some(glyph) = self.glyphs.get(&c) {
+                for dy in 0..glyph.h as usize {
+                    for dx in 0..glyph.w as usize {
+                        let alpha = glyph.pixels[dy * glyph.w as usize + dx];
+                        if alpha > 0 {
+                            let rx = (x as i32 + dx as i32 + glyph.x as i32) as usize;
+                            let ry = (y as i32 + dy as i32 + glyph.y as i32) as usize;
+                            if rx < fb.info.width && ry < fb.info.height {
+                                let blend = |bg: u8, fg: u8, a: u8| -> u8 {
+                                    ((bg as u32 * (255 - a as u32) + fg as u32 * a as u32) / 255) as u8
+                                };
+                                let (br, bg, bb) = (10u8, 10u8, 15u8); // background color
+                                fb.set_pixel(rx, ry, blend(br, r, alpha), blend(bg, g, alpha), blend(bb, b, alpha));
+                            }
+                        }
+                    }
+                }
+                x += glyph.w as usize + 2;
+            } else {
+                // Fallback: VGA bitmap
+                if let Some(bitmap) = crate::display::font::get_char_bitmap(c) {
+                    for dy in 0..16 {
+                        let row = bitmap[dy];
+                        for dx in 0..8 {
+                            if (row >> (7 - dx)) & 1 == 1 { fb.set_pixel(x + dx, y + dy + 4, r, g, b); }
+                        }
+                    }
+                    x += 10;
+                }
+            }
+        }
+    }
+}
+
+/// Gerenciador de fontes
+pub struct FontManager {
+    pub fonts: BTreeMap<String, TtfRasterFont>,
+    pub active: String,
+    pub use_ttf: bool,
+}
+
+impl FontManager {
+    pub fn new() -> Self {
+        FontManager { fonts: BTreeMap::new(), active: String::from("vga"), use_ttf: false }
+    }
+
+    pub fn register(&mut self, name: &str, size: u16, data: &[u8]) {
+        let mut font = TtfRasterFont::new(name, size);
+        font.load_from_bytes(data);
+        self.fonts.insert(String::from(name), font);
+    }
+
+    pub fn activate(&mut self, name: &str) {
+        if name == "vga" { self.use_ttf = false; self.active = String::from("vga"); }
+        else if self.fonts.contains_key(name) { self.use_ttf = true; self.active = String::from(name); }
+    }
+
+    pub fn list(&self) -> Vec<String> {
+        let mut list = vec![String::from("vga (bitmap)")];
+        list.extend(self.fonts.keys().cloned());
+        list
+    }
+
+    pub fn draw_text(&self, fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, r: u8, g: u8, b: u8) {
+        if self.use_ttf {
+            if let Some(font) = self.fonts.get(&self.active) {
+                font.draw_text(fb, x, y, text, r, g, b, scr_w);
+                return;
+            }
+        }
+        crate::display::font::draw_text_scaled(fb, x, y, text, 1, scr_w, r, g, b);
+    }
+}
+
+pub static FONT_MANAGER: spin::Mutex<Option<FontManager>> = spin::Mutex::new(None);

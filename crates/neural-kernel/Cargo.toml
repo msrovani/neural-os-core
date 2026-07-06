@@ -21,6 +21,9 @@ agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
 embedded-graphics = { version = "0.8.2", default-features = false }
 edge-dhcp = "0.1"
+# ttf-parser não é compatível com no_std puro.
+# Usamos ferramenta Python tools/convert_ttf_to_bitmap.py para converter TTF
+# em arrays Rust embutidos, sem runtime parsing.
 
 [build-dependencies]
 # bootloader 0.11 gere o build via disco virtual (.UEFI/.BIOS)
