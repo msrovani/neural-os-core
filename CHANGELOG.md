@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.90.0-cognitive] — 2026-07-06 — 🧠 Sprint 90: JARVIS Deep Cognitive
+
+### Added
+- **#315.12 Dreaming/Consolidation** — `DreamEngine`: insights sintéticos, agrupamento por tópico
+- **#315.13 Ego Layer** — `EgoLayer`: confidence tracking por domínio, `can_answer()`
+- **#315.14 Proactive Heartbeats** — `Heartbeat`: JARVIS alerta proativamente (disk, mem, net)
+- **#315.15 Tool-State Save Game** — `ToolState`: snapshot + rollback de ferramentas
+- **#315.16 Auto-Skill Generation** — `AutoSkillGen`: gera skill ao detectar padrão ≥3 repetições
+- **#315.17 Babel-Index** — `BabelIndex`: monitora entropia, contradictions, staleness
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics, 248 agents, JARVIS cognitive engine OK
+
 ## [0.89.0-memory] — 2026-07-06 — 🧠 Sprint 89: SleepCycle + Advanced Memory + BGE
 
 ### Added

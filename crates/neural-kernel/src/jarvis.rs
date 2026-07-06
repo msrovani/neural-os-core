@@ -297,6 +297,137 @@ impl SessionlessThread {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// #315.12 Dreaming/Consolidation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub struct DreamEngine {
+    pub insights: Vec<String>,
+    pub last_dream_tick: u64,
+}
+impl DreamEngine {
+    pub fn new() -> Self { DreamEngine { insights: Vec::new(), last_dream_tick: 0 } }
+    pub fn tick(&mut self, tick: u64, memories: &[String]) {
+        if tick.wrapping_sub(self.last_dream_tick) < 500 { return; }
+        self.last_dream_tick = tick;
+        // Agrupa memórias similares, gera insight sintético
+        let mut groups: BTreeMap<String, u32> = BTreeMap::new();
+        for m in memories { *groups.entry(m.chars().take(10).collect()).or_insert(0) += 1; }
+        let most_common = groups.iter().max_by_key(|(_,c)| *c).map(|(k,_)| k.clone());
+        if let Some(topic) = most_common {
+            self.insights.push(alloc::format!("[DREAM] insight: voce fala muito sobre '{}'", topic));
+            if self.insights.len() > 20 { self.insights.remove(0); }
+        }
+    }
+    pub fn status(&self) -> String { alloc::format!("[DREAM] {} insights", self.insights.len()) }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// #315.13 Ego Layer — self-model, confidence tracking
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub struct EgoLayer {
+    pub confidence: BTreeMap<String, f32>, // domain → confidence
+    pub interactions: u64,
+}
+impl EgoLayer {
+    pub fn new() -> Self { EgoLayer { confidence: BTreeMap::new(), interactions: 0 } }
+    pub fn learn(&mut self, domain: &str, success: bool) {
+        let c = self.confidence.entry(String::from(domain)).or_insert(0.5);
+        *c = (*c * 0.9) + (if success { 0.1 } else { -0.1 });
+        *c = c.max(0.0).min(1.0);
+        self.interactions += 1;
+    }
+    pub fn can_answer(&self, domain: &str) -> bool {
+        self.confidence.get(domain).copied().unwrap_or(0.0) > 0.3
+    }
+    pub fn status(&self) -> String { alloc::format!("[EGO] {} dominios, {} interacoes", self.confidence.len(), self.interactions) }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// #315.14 Proactive Heartbeats
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub struct Heartbeat {
+    pub last_beat: u64,
+    pub messages: Vec<String>,
+}
+impl Heartbeat {
+    pub fn new() -> Self { Heartbeat { last_beat: 0, messages: Vec::new() } }
+    pub fn tick(&mut self, tick: u64, disk_pct: f32, mem_pct: f32, net_online: bool) {
+        if tick.wrapping_sub(self.last_beat) < 200 { return; }
+        self.last_beat = tick;
+        if disk_pct > 0.9 { self.messages.push(alloc::format!("[JARVIS] Disk {:.0}% full, sir.", disk_pct * 100.0)); }
+        if mem_pct > 0.85 { self.messages.push(alloc::format!("[JARVIS] Memory at {:.0}%, sir.", mem_pct * 100.0)); }
+        if !net_online { self.messages.push(String::from("[JARVIS] Network is offline, sir.")); }
+        while self.messages.len() > 10 { self.messages.remove(0); }
+    }
+    pub fn status(&self) -> String { alloc::format!("[HB] {} proactive messages", self.messages.len()) }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// #315.15 Tool-State Save Game
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub struct ToolState {
+    snapshots: Vec<(String, Vec<u8>)>,
+}
+impl ToolState {
+    pub fn new() -> Self { ToolState { snapshots: Vec::new() } }
+    pub fn snapshot(&mut self, key: &str, data: &[u8]) { self.snapshots.push((String::from(key), data.to_vec())); }
+    pub fn restore(&mut self, key: &str) -> Option<Vec<u8>> {
+        let pos = self.snapshots.iter().position(|(k,_)| k == key)?;
+        let data = Some(self.snapshots[pos].1.clone());
+        self.snapshots.remove(pos);
+        data
+    }
+    pub fn status(&self) -> String { alloc::format!("[SAVE] {} snapshots", self.snapshots.len()) }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// #315.16 Auto-Skill Generation
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub struct AutoSkillGen {
+    pub patterns: BTreeMap<String, u32>,
+    pub generated: Vec<String>,
+}
+impl AutoSkillGen {
+    pub fn new() -> Self { AutoSkillGen { patterns: BTreeMap::new(), generated: Vec::new() } }
+    pub fn observe(&mut self, task: &str) {
+        *self.patterns.entry(String::from(task)).or_insert(0) += 1;
+        if self.patterns.get(task) == Some(&3) {
+            let skill = alloc::format!("auto_{}", task.replace(' ', "_"));
+            self.generated.push(skill.clone());
+            self.patterns.insert(String::from(task), 0);
+        }
+    }
+    pub fn status(&self) -> String { alloc::format!("[AUTO-SKILL] {} generated, {} patterns", self.generated.len(), self.patterns.len()) }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// #315.17 Babel-Index — entropia + contradiction + staleness monitor
+// ═══════════════════════════════════════════════════════════════════════════════
+
+pub struct BabelIndex {
+    pub entropy: f32,
+    pub contradictions: u32,
+    pub staleness: u32,
+    last_check: u64,
+}
+impl BabelIndex {
+    pub fn new() -> Self { BabelIndex { entropy: 0.5, contradictions: 0, staleness: 0, last_check: 0 } }
+    pub fn tick(&mut self, tick: u64, session_len: usize) {
+        if tick.wrapping_sub(self.last_check) < 300 { return; }
+        self.last_check = tick;
+        self.entropy = (session_len as f32 / 256.0).min(1.0);
+        self.staleness = if session_len == 0 { 0 } else { (tick as u32) % 100 };
+        if self.entropy > 0.8 { self.contradictions += 1; }
+    }
+    pub fn needs_consolidation(&self) -> bool { self.entropy > 0.7 || self.contradictions > 5 }
+    pub fn status(&self) -> String { alloc::format!("[BABEL] ent={:.2} cont={} stale={}", self.entropy, self.contradictions, self.staleness) }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // JARVIS Engine Unificada
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -310,6 +441,13 @@ pub struct JarvisEngine {
     pub consent: ConsentGate,
     pub discovery: SkillDiscovery,
     pub cache: SemanticCache,
+    // Sprint 90
+    pub dream: DreamEngine,
+    pub ego: EgoLayer,
+    pub heartbeat: Heartbeat,
+    pub tool_state: ToolState,
+    pub auto_skill: AutoSkillGen,
+    pub babel: BabelIndex,
     pub avatar_state: AvatarState,
 }
 
@@ -325,6 +463,8 @@ impl JarvisEngine {
             session: SessionHistory::new(256), notifications: NotificationGate::new(),
             thread: SessionlessThread::new(500), emotion: EmotionAnalysis::analyze(""),
             consent, discovery: SkillDiscovery::new(), cache: SemanticCache::new(),
+            dream: DreamEngine::new(), ego: EgoLayer::new(), heartbeat: Heartbeat::new(),
+            tool_state: ToolState::new(), auto_skill: AutoSkillGen::new(), babel: BabelIndex::new(),
             avatar_state: AvatarState::Idle,
         }
     }
@@ -336,6 +476,10 @@ impl JarvisEngine {
         self.session.push(text, dominant);
         self.thread.feed();
         self.discovery.observe(text);
+        self.auto_skill.observe(text);
+        // Ego: aprende confiança por domínio
+        let domain = text.split_whitespace().next().unwrap_or("general");
+        self.ego.learn(domain, true);
         self.avatar_state = match dominant {
             Emotion::Joy | Emotion::Surprise => AvatarState::Listening,
             Emotion::Sadness | Emotion::Fear => AvatarState::Speaking,
@@ -347,6 +491,11 @@ impl JarvisEngine {
     pub fn tick(&mut self, tick: u64) {
         self.ipw.sample(tick, 1);
         if tick % 100 == 0 { self.session.compress("drop_lowest"); }
+        // Sprint 90 ticks
+        let mems: Vec<String> = self.session.entries.iter().map(|e| e.text.clone()).collect();
+        self.dream.tick(tick, &mems);
+        self.heartbeat.tick(tick, 0.5, 0.3, false);
+        self.babel.tick(tick, self.session.entries.len());
     }
 
     pub fn avatar_state_for(&self, thinking: bool, speaking: bool) -> AvatarState {
@@ -354,8 +503,10 @@ impl JarvisEngine {
     }
 
     pub fn status(&self) -> String {
-        alloc::format!("JARVIS: {} {} {} {} {} {} {}",
+        alloc::format!("JARVIS: {} {} {} {} {} {} {} {} {} {} {} {}",
             self.emotion.describe(), self.soul.describe(), self.ipw.efficiency(),
-            self.consent.status(), self.cache.status(), self.discovery.status(), self.notifications.status())
+            self.consent.status(), self.cache.status(), self.discovery.status(),
+            self.dream.status(), self.ego.status(), self.heartbeat.status(),
+            self.tool_state.status(), self.auto_skill.status(), self.babel.status())
     }
 }
