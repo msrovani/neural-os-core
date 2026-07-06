@@ -1,7 +1,7 @@
-# 📋 TODO MASTER — neural-os-core v0.84.x → v0.95.x
-# 354 IDEIAS DO IDEA_BANK + TODOS OS SPRINTS — CHECKLIST COMPLETO
+# 📋 TODO MASTER — neural-os-core v0.84.x → v0.97.x
+# ~360 IDEIAS DO IDEA_BANK + TODOS OS SPRINTS — CHECKLIST COMPLETO
 
-**Data:** 2026-07-05  
+**Data:** 2026-07-06  
 **Propósito:** Checklist mestre de TODOS os itens do projeto. Cada item do IDEA_BANK está assignado a um sprint.  
 **Legenda:** ✅ feito | 🟡 em andamento | ⏳ previsto | 🔴 bloqueado | 💰 sponsor | ❌ descartado
 
@@ -369,6 +369,81 @@
 | ❌ Descartados | 4 | — | ❌ |
 | **Total** | **~354** | **~75.000** | |
 
+---
+
+## SPRINT 95 — Bloco 40: Cognitive Engine (~510 LOC) ✅
+**Objetivo:** Motor cognitivo completo — planejamento, aprendizado, cache, VQ, ReAct, MCP.
+**Status:** ✅ Completo (v0.95.0-cog) — `cognitive.rs` 86→510 LOC.
+
+### Itens
+- [x] `#105` IntentPlanner — SkillSteps com params, goal-based plan generation
+- [x] `#106` SuccessEngine — win/loss streak, recent_rate 64-window
+- [x] `#107` NeuralCache — TTL + LRU evicção max 4096
+- [x] `#108` MatMulFreeLM — RWKV-style WKV forward
+- [x] `#149` FeedbackLoop — rating 0-10 + comment
+- [x] `#150` TernaryUpdate — gradiente→{-1,0,+1}
+- [x] `#151` ReplayBuffer — ring buffer 10K
+- [x] `#152` WeightConsolidation — snapshot + metadata
+- [x] `#158` WorkflowPredictor — confidence scoring
+- [x] `#159` AutoSkillGen — WASM templates
+- [x] `#160` DynamicScaler — heap_target por pressure
+- [x] `#161` SelfOptScheduler — timeslice por latência
+- [x] `#162` WorkflowProfile — JSON export
+- [x] `#169` CodebookVQ — 256 codes × 64 dim nearest-neighbor
+- [x] `#170` KV Cache Codebook — compress/decompress
+- [x] `#171` ReActLoop — Thought→Action→Observation
+- [x] `#172` McpServer — tools/list, tools/call
+- [x] `#173` CodebookFinetune — centroid adjustment
+- [x] `#174` DeltaBranches — speculative draft/verify
+- [x] `#175` WorkspaceIsolation — sandbox heap per agent
+- [x] M2 EpisodicMemory — ring buffer 1000
+- [x] M37 SleepCycleGuard — blocked words per phase
+- [x] M38 BitNetTrainer — train_step + ternary_update
+- [x] M39 CandleSidecar — stub connect/train/loss
+- [x] M40 TaskSpawner — max 16 children
+- [x] M41 ThreeDataSources — replay, feedback, episodic
+
+---
+
+## SPRINT 96 — Bloco 41: Self-Healing Avançado (~350 LOC) ✅
+**Objetivo:** Sistema de auto-recuperação, VFS vetorial, taxonomia de falhas, notification gate.
+**Status:** ✅ Completo (v0.96.0-heal)
+
+### Itens
+- [x] `#226-227` TeamMemory + snapshot versioning
+- [x] `#265-266` VectorFs + Vector API (384-dim dot product)
+- [x] `#267` OverlayFS — multi-layer mount
+- [x] M1 ZeroCopySfs — slice refs, 256-byte dir index
+- [x] M3 SkillModule — fn ptr import + version
+- [x] M6-M14 FailureTaxonomy (5 classes), ExceptionSelfHeal, CorrectivePrompting, Verifier, EventLog, BudgetedRecovery, SilentFailureDetector, MultiLevelFailure, FailurePrediction
+- [x] M29 NotificationGate — allow list + block/deliver counters
+
+### Runtime Fixes
+- [x] RTL8139 RX debug rate-limited (1/100 chamadas)
+- [x] Scheduler skipa agentes passivos (>50 consecutive Pending → 80% skip)
+- [x] `has_event` depende de `ScheduleKind` real, não hardcoded
+
+---
+
+## SPRINT 97 — Bloco 42: JARVIS Desktop + Memory Systems (~1200 LOC) 🟡
+**Objetivo:** Finalizar desktop multi-window, temas, crossfade + sistemas de memória avançados.
+**Dependências:** Nenhuma (independe de B-01/hardware)
+
+### Itens
+- [ ] `#279d` Compositor multi-window (dock, menus, drag) ~300 LOC
+- [ ] `#279b` Sistema de temas (5+ cores) ~200 LOC
+- [ ] `#283b` Crossfade workspaces ~100 LOC
+- [ ] `#214` SHA-256 Memory Dedup (5min sliding window) ~100 LOC
+- [ ] `#215` Privacy Filter (strip secrets) ~80 LOC
+- [ ] `#216` Memory TTL/Eviction (TTL, ImportanceRank, AccessFreq) ~150 LOC
+- [ ] `#219` Ebbinghaus Decay for TrustCache ~120 LOC
+- [ ] `#222` Metacognitive Guard (check past mistakes) ~300 loc
+- [ ] `#224` Atkinson-Shiffrin 3-tier memory (Sensory→STM→LTM) ~300 LOC
+- [ ] `#225` Bi-temporal Knowledge Graph (append-only, validity windows) ~200 LOC
+- [ ] Scheduler: StateGraph init + event-based activation ~200 LOC
+
+---
+
 ## MAPA DE DEPENDÊNCIAS (DAG Simplificado)
 
 ```
@@ -382,6 +457,14 @@ Sprint 91 (Polimento) ──→ Sprint 92+ (AIOS Evolution) ←── B-01 (🔴
                                                             │
                               ⏳ Pós-MVP ←── Infraestrutura madura
                               💰 Sponsor ←── HW AMD APU
+
+                            ═══ NOVOS (Sprints 95-97) ═══
+
+Sprint 95 (Cognitive Engine) ✅ ──→ Sprint 96 (Self-Healing) ✅
+                                                            │
+                            Sprint 97 (Desktop + Memory) 🟡 ←──╯
+                                                            │
+                              ⏳ Pós-MVP / HW real ←── infraestrutura madura
 ```
 
 ## COMO USAR ESTE ARQUIVO

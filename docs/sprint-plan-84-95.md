@@ -1,5 +1,5 @@
-# Sprint Plan 84-95 — neural-os-core v0.84.x-0.95.x
-# TODAS AS 358 IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
+# Sprint Plan 84-97 — neural-os-core v0.84.x-0.97.x
+# TODAS AS IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
 
 **Data:** 2026-07-06 (v2 — ADR-0038: Otimização do Ecossistema)  
 **Contexto:** Bloco 21a/21b/21e completos (SMP Foundation, Work-Stealing, Polimento).  
@@ -202,7 +202,7 @@
 
 ---
 
-## Resumo de Esforço (Sprints 84-95)
+## Resumo de Esforço (Sprints 84-97)
 
 | Sprint | Bloco | Foco | LOC | Status |
 |---|---|---|---|---|
@@ -215,6 +215,103 @@
 | 90 | 34 | JARVIS Deep Cognitive | ~1200 | 🟡 |
 | 91 | 35 | Polimento + Ecosystem | ~2500 | 🟡 |
 | 92+ | 36+ | AIOS Evolution | ~15000 | 🔴 |
-| | | **Total sprints** | **~28.250 LOC** | |
+| **95** | **40** | **Cognitive Engine** | **~510** | **✅** |
+| **96** | **41** | **Self-Healing** | **~350** | **✅** |
+| **97** | **42** | **JARVIS Desktop + Memory** | **~1200** | **🟡** |
+| | | **Total sprints** | **~33.060 LOC** | |
 
 **Nota:** Itens 💰 Sponsor ou ⏳ Pós-MVP não contam no total — serão ativados quando HW ou dependências estiverem disponíveis.
+
+---
+
+## Sprint 95 — Bloco 40: Cognitive Engine (~510 LOC) ✅
+**IDEA_BANK:** #105, #106, #107, #108, #149, #150, #151, #152, #158, #159, #160, #161, #162, #169, #170, #171, #172, #173, #174, #175, M2, M37-M41  
+**ADR:** 0038 (Ecosystem Optimization)  
+**Foco:** Motor cognitivo completo: planejamento, aprendizado, cache, predição, VQ, ReAct  
+**Status:** ✅ Completo (v0.95.0-cog)
+
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #105 | IntentPlanner — SkillSteps com params, goal-based plan | 30 | ✅ |
+| #106 | SuccessEngine — win/loss streak, recent_rate 64-window | 25 | ✅ |
+| #107 | NeuralCache — TTL + LRU evicção max 4096 | 35 | ✅ |
+| #108 | MatMulFreeLM — RWKV-style WKV forward | 25 | ✅ |
+| #149 | FeedbackLoop — rating 0-10 + comment | 15 | ✅ |
+| #150 | TernaryUpdate — gradiente→{-1,0,+1} com threshold | 20 | ✅ |
+| #151 | ReplayBuffer — ring buffer 10K | 25 | ✅ |
+| #152 | WeightConsolidation — snapshot + metadata | 20 | ✅ |
+| #158 | WorkflowPredictor — confidence scoring | 20 | ✅ |
+| #159 | AutoSkillGen — WASM templates | 25 | ✅ |
+| #160 | DynamicScaler — heap_target por pressure | 20 | ✅ |
+| #161 | SelfOptScheduler — timeslice por latência | 25 | ✅ |
+| #162 | WorkflowProfile — JSON export | 15 | ✅ |
+| #169 | CodebookVQ — 256 codes × 64 dim | 30 | ✅ |
+| #170 | KV Cache Codebook — compress/decompress | 25 | ✅ |
+| #171 | ReActLoop — Thought→Action→Observation | 25 | ✅ |
+| #172 | McpServer — tools/list, tools/call | 30 | ✅ |
+| #173 | CodebookFinetune — centroid adjustment | 20 | ✅ |
+| #174 | DeltaBranches — speculative draft/verify | 20 | ✅ |
+| #175 | WorkspaceIsolation — sandbox heap per agent | 20 | ✅ |
+| M2 | EpisodicMemory — ring buffer 1000 | 15 | ✅ |
+| M37 | SleepCycleGuard — blocked words per phase | 15 | ✅ |
+| M38 | BitNetTrainer — train_step + ternary_update | 25 | ✅ |
+| M39 | CandleSidecar — stub connect/train/loss | 15 | ✅ |
+| M40 | TaskSpawner — max 16 children | 15 | ✅ |
+| M41 | ThreeDataSources — replay, feedback, episodic | 15 | ✅ |
+
+---
+
+## Sprint 96 — Bloco 41: Self-Healing Avançado (~350 LOC) ✅
+**IDEA_BANK:** #226, #227, #265, #266, #267, M1, M3, M6-M14, M29  
+**ADR:** 0025 (Tier 3 Security), 0038  
+**Foco:** Sistema de auto-recuperação, VFS vetorial, taxonomia de falhas  
+**Status:** ✅ Completo (v0.96.0-heal)
+
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #226 | TeamMemory — BTreeMap compartilhado | 25 | ✅ |
+| #227 | Memory Snapshots — versioning | 20 | ✅ |
+| #265 | VectorFs — dot product search 384-dim | 40 | ✅ |
+| #266 | Vector API (KNN) | 20 | ✅ |
+| #267 | OverlayFS — multi-layer mount | 30 | ✅ |
+| M1 | ZeroCopySfs — slice refs, 256-byte dir index | 25 | ✅ |
+| M3 | SkillModule — fn ptr import + version | 15 | ✅ |
+| M6 | FailureTaxonomy — 5 classes | 15 | ✅ |
+| M7 | ExceptionSelfHeal — auto analyze/recover | 20 | ✅ |
+| M8 | CorrectivePrompting — context + escalation | 15 | ✅ |
+| M9 | Verifier — fn check→bool | 10 | ✅ |
+| M10 | EventLog — format + persist stub | 15 | ✅ |
+| M11 | BudgetedRecovery — attempts/daemon per window | 20 | ✅ |
+| M12 | SilentFailureDetector — heartbeat + threshold | 20 | ✅ |
+| M13 | MultiLevelFailure — Ok/Warning/Error/Critical | 15 | ✅ |
+| M14 | FailurePrediction — trend via window diff | 15 | ✅ |
+| M29 | NotificationGate — allow list + counters | 20 | ✅ |
+
+### Runtime Fixes (Sprint 95/96)
+- RTL8139 RX debug rate-limited (1/100 chamadas)
+- Scheduler skipa agentes passivos (>50 consecutive Pending → 80% skip)
+- `has_event` depende de `ScheduleKind` real, não hardcoded
+
+---
+
+## Sprint 97 — Bloco 42: JARVIS Desktop + Memory Systems (~1200 LOC)
+**IDEA_BANK:** #279a-e, #283a-b, #214, #215, #216, #217, #218, #219, #222, #223, #224, #225  
+**ADR:** 0036 (JARVIS), 0023 (Memory Systems)  
+**Foco:** Finalizar desktop (multi-window, temas, crossfade) + sistemas de memória avançados (Ebbinghaus, Atkinson-Shiffrin, dedup, KG)
+
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #279d | Compositor multi-window (dock, menus, drag) | 300 | 🟡 |
+| #279b | Sistema de temas (5+ cores) | 200 | 🟡 |
+| #283b | Crossfade workspaces | 100 | 🟡 |
+| #214 | SHA-256 Memory Dedup (5min sliding window) | 100 | 🟡 |
+| #215 | Privacy Filter (strip secrets before memory) | 80 | 🟡 |
+| #216 | Memory TTL/Eviction (TTL, ImportanceRank, AccessFreq) | 150 | 🟡 |
+| #219 | Ebbinghaus Decay for TrustCache | 120 | 🟡 |
+| #222 | Metacognitive Guard (check past mistakes) | 300 | 🟡 |
+| #224 | Atkinson-Shiffrin 3-tier memory | 300 | 🟡 |
+| #225 | Bi-temporal Knowledge Graph | 200 | 🟡 |
+| — | Scheduler: StateGraph init + event-based activation | 200 | 🟡 |
+
+**Dependências:** Nenhuma (tudo independe de B-01/hardware).  
+**Foco:** Polir desktop visual + implementar sistemas de memória real para melhorar a cognição do Hermes Agent.

@@ -88,8 +88,10 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 | **90** | 0.90.x | **34** | JARVIS Deep Cognitive | ~1200 | 🟡 |
 | **91** | 0.91.x | **35** | Polimento + Ecosystem | ~2500 | 🟡 |
 | **92+** | 0.92.x+ | **36+** | AIOS Evolution | ~15000 | 🔴 |
+| **95** | 0.95.x | **40** | Cognitive Engine | ~510 | ✅ |
+| **96** | 0.96.x | **41** | Self-Healing | ~350 | ✅ |
 
-**Total restante:** ~28.250 LOC (sprints 84-91) + ~15.000 LOC (sprint 92+, bloqueado B-01).
+**Total restante:** ~28.250 LOC (sprints 84-91) + ~15.000 LOC (sprint 92+, bloqueado B-01). Sprints 95-96 concluídos: ~860 LOC.
 
 **Ver também:** `docs/sprint-plan-84-95.md` para detalhes de cada sprint com items do IDEA_BANK.
 
@@ -159,6 +161,17 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 
 ### 🔴 Sprint 92+ — AIOS Evolution
 - Bloqueado por B-01. 25+ items (~15000 LOC)
+
+### ✅ Sprint 95 — Cognitive Engine (completo)
+- `#105-162, #169-175, M2, M37-M41` — IntentPlanner, SuccessEngine, NeuralCache, MatMulFreeLM, FeedbackLoop, TernaryUpdate, ReplayBuffer, WorkflowPredictor, AutoSkillGen, DynamicScaler, SelfOptScheduler, CodebookVQ, KV Codebook, ReActLoop, McpServer, CodebookFinetune, DeltaBranches, WorkspaceIsolation, EpisodicMemory, SleepCycleGuard, BitNetTrainer, CandleSidecar, TaskSpawner, ThreeDataSources. ~510 LOC.
+
+### ✅ Sprint 96 — Self-Healing (completo)
+- `#226-227, #265-267, M1-M29` — TeamMemory, VectorFs, OverlayFS, ZeroCopySfs, SkillModule, FailureTaxonomy (5 classes), ExceptionSelfHeal, CorrectivePrompting, Verifier, EventLog, BudgetedRecovery, SilentFailureDetector, FailurePrediction, NotificationGate. ~350 LOC.
+
+### ✅ Scheduler performance fix (Sprint 95/96 runtime)
+- RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado
+- Scheduler skipa agentes passivos (>50 consecutive Pending → 80% skip)
+- `has_event` agora depende de `ScheduleKind` real, não hardcoded `true`
 
 ## Arquivos Chave
 | Arquivo | Função |

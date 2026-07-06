@@ -349,10 +349,13 @@ impl AgentRegistry {
                     continue;
                 }
                 let flow = &self.agents[i].crew.flow;
-                // EventDriven agents: called every cycle, but tick() should return
-                // early if no events (has_pending pattern). This avoids the
-                // complexity of scheduler knowing about agent-specific receivers.
-                let has_event = true;
+                // Rate-limiting: passive agents (Pending >50x consec) skipped 80% of ticks
+                let consecutive = self.agents[i].consecutive_pending;
+                if consecutive > 50 && tick_id % 5 != 0 {
+                    continue;
+                }
+                let schedule = self.agents[i].schedule;
+                let has_event = schedule != ScheduleKind::EventDriven || consecutive < 20;
                 let should_poll = should_poll_flow(flow, tick_id, self.agents[i].last_poll, has_event);
                 if !should_poll {
                     continue;

@@ -46,6 +46,7 @@ pub struct Rtl8139Driver {
     tx_buf_paddrs: [u64; 4],
     rx_buf_paddr: u64,
     rx_offset: u16,
+    debug_count: u64,
 }
 
 impl Rtl8139Driver {
@@ -65,6 +66,7 @@ impl Rtl8139Driver {
             tx_buf_paddrs: [0; 4],
             rx_buf_paddr: 0,
             rx_offset: 0,
+            debug_count: 0,
         })
     }
 
@@ -230,6 +232,7 @@ impl Rtl8139Driver {
     }
 
     pub unsafe fn recv(&mut self) -> Option<Vec<u8>> {
+        self.debug_count += 1;
         // Verifica RX_BUF_EMPTY no CR antes de ler (padrão do driver ref)
         let cr = self.read8(REG_CR);
         if cr & CR_RE != 0 {
@@ -262,15 +265,15 @@ impl Rtl8139Driver {
         // Frame length INCLUDES the 4-byte header
         let total_len = pkt_len as usize;
 
-        // Debug primeira leitura
-        if self.rx_offset == 0 {
+        // Debug primeira leitura (a cada 100 chamadas para evitar flooding)
+        if self.rx_offset == 0 && self.debug_count % 100 == 0 {
             serial_println!("[RTL8139-RX] first: rx_off={:#06x} status={:#06x} len={} cr={:#04x}",
                 self.rx_offset, status, total_len, cr);
         }
 
         // Se status não tem bit 0 (ROK) ou len < 64 ou len inválido
         if status & 0x0001 == 0 || total_len < 64 || total_len > RX_BUF_WRAP + 14 {
-            if status & 0x0001 == 0 {
+            if status & 0x0001 == 0 && self.debug_count % 100 == 0 {
                 serial_println!("[RTL8139-RX] !ROK: rx_off={:#06x} status={:#06x} len={} cr={:#04x}",
                     self.rx_offset, status, total_len, cr);
             }
@@ -284,7 +287,9 @@ impl Rtl8139Driver {
         // Nós queremos os dados (ethernet frame) = total_len - 4 (CRC).
         let data_len = total_len.saturating_sub(4);
         if data_len < 14 || data_len > RX_BUF_WRAP {
-            serial_println!("[RTL8139-RX] bad data_len={} total_len={}", data_len, total_len);
+            if self.debug_count % 100 == 0 {
+                serial_println!("[RTL8139-RX] bad data_len={} total_len={}", data_len, total_len);
+            }
             return None;
         }
 
