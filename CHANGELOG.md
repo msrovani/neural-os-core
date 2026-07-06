@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.86.1-ecosystem] — 2026-07-06 — 📊 ADR-0038: Otimização do Ecossistema (Hugging Bay + crates.io)
+
+### Added
+- **ADR-0038** — `docs/architecture/0038-ecosystem-optimization.md`: Decisões de substituição baseadas em pesquisa Hugging Bay + crates.io.
+- **IDEA_BANK:** #355 (buddy-slab-allocator), #356 (edge-dhcp), #357 (khal-std), #358 (ruvix-net)
+- **`tools/huggingbay_search.py`** — Busca no Hugging Bay por artefatos AI.
+- **`tools/huggingbay_item.py`** — Detalhes de artefato por ID.
+
+### Changed
+- **`docs/sprint-plan-84-95.md`** — Sprint 86 expandido (+buddy-slab-allocator), Sprint 88 expandido (+edge-dhcp).
+- **`docs/memory/IDEA_BANK.md`** — +4 ideias (#355-#358), total 358.
+
+### Decisions (ADR-0038)
+| Tecnologia | Ação | Sprint | Motivo |
+|---|---|---|---|
+| buddy-slab-allocator | Substituir slab.rs + vram.rs backend | 86 | 30K downloads, no_std, per-CPU slab, ArceOS |
+| edge-dhcp (edge-net) | Fallback DHCP p/ B-01 | 88 | no_std + no-alloc, 225★ GitHub |
+| khal-std | ❌ Inviável (requer wgpu/std) | — | Inspiração arquitetural apenas |
+| ruvix-net | 🔵 Referência | — | Kernel cognitivo similar |
+
 ## [0.86.0-jarvis] — 2026-07-06 — 🏆 JARVIS Avatar + Cognição (port do .NET MAUI)
 
 ### Added

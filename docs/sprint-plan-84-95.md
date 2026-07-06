@@ -1,9 +1,10 @@
 # Sprint Plan 84-95 — neural-os-core v0.84.x-0.95.x
-# TODAS AS 354 IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
+# TODAS AS 358 IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
 
-**Data:** 2026-07-05  
+**Data:** 2026-07-06 (v2 — ADR-0038: Otimização do Ecossistema)  
 **Contexto:** Bloco 21a/21b/21e completos (SMP Foundation, Work-Stealing, Polimento).  
-**Próximos blocos:** GPU Foundations (84) → GPU Decode (85) → JARVIS Persona (86) → Security+AHCI (87) → JARVIS Emotion+Cache (88) → SleepCycle+Memory (89) → JARVIS Deep Cognitive (90) → Polimento (91) → AIOS Evolution (92+).  
+**Próximos blocos:** GPU Foundations (84) ✅ → GPU Decode (85) ✅ → JARVIS Persona+Alloc (86) → Security+AHCI (87) → JARVIS Emotion+Cache+DHCP (88) → SleepCycle+Memory (89) → JARVIS Deep Cognitive (90) → Polimento (91) → AIOS Evolution (92+).  
+**Novo:** Sprint 86 incorpora #355 buddy-slab-allocator. Sprint 88 incorpora #356 edge-dhcp (B-01).  
 **Premissa:** HW real é o único critério. QEMU/VBox são dev/debug. Toda solução bloqueada exige busca ativa na internet.
 
 ---
@@ -40,18 +41,19 @@
 
 ---
 
-## Sprint 86 — Bloco 30: JARVIS Persona (~950 LOC)
-**IDEA_BANK:** #315.1, #315.2, #315.3, #315.4, #315.5  
-**ADR:** 0036 (JARVIS Unified Layer)  
-**Foco:** SOUL.md, IPW Monitor, Session Compression, Notification Gate, Sessionless Thread
+## Sprint 86 — Bloco 30: JARVIS Persona + Alocador Otimizado (~1300 LOC)
+**IDEA_BANK:** #315.1, #315.2, #315.3, #315.4, #315.5, #355  
+**ADR:** 0036 (JARVIS Unified Layer), 0038 (Ecosystem Optimization)  
+**Foco:** SOUL.md, IPW Monitor, Session Compression, Notification Gate, Sessionless Thread, **buddy-slab-allocator integration**
 
 | IDEA | Item | LOC | Status |
-|---|---|---|---|
+|---|---|---|---|---|
 | #315.1 | SOUL.md Personality Engine | 300 | 🟡 |
 | #315.2 | IPW Monitor (RAPL MSR 0x610) | 150 | 🟡 |
 | #315.3 | Session Compression (4 strategies) | 200 | 🟡 |
 | #315.4 | Notification Gate (4 urgency levels) | 200 | 🟡 |
 | #315.5 | Sessionless Thread | 100 | 🟡 |
+| #355 | buddy-slab-allocator integration (substitui slab.rs + vram.rs backend) | 300 | 🟡 |
 
 ---
 
@@ -69,10 +71,10 @@
 
 ---
 
-## Sprint 88 — Bloco 32: JARVIS Emotion + Cache + Pipeline (~1200 LOC)
-**IDEA_BANK:** #315.6, #315.7, #315.8, #315.9, #315.10, #315.11  
-**ADR:** 0036  
-**Foco:** Emotion analysis (BitNet 7 emoções), Capability contracts, Skill discovery, ADE pipeline, Semantic cache, Persona pipeline
+## Sprint 88 — Bloco 32: JARVIS Emotion + Cache + Pipeline + DHCP (~1400 LOC)
+**IDEA_BANK:** #315.6, #315.7, #315.8, #315.9, #315.10, #315.11, #356  
+**ADR:** 0036, 0038 (Ecosystem Optimization)  
+**Foco:** Emotion analysis, Capability contracts, Skill discovery, ADE pipeline, Semantic cache, Persona pipeline, **edge-dhcp integration (B-01)**
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
@@ -82,6 +84,7 @@
 | #315.9 | ADE Pipeline (Spec→Execute→Review→Recover) | 200 | 🟡 |
 | #315.10 | Semantic Cache (5-tier routing, 97.5% reduction) | 150 | 🟡 |
 | #315.11 | Persona Pipeline (16 stages, OVOS-inspired) | 100 | 🟡 |
+| #356 | edge-dhcp integration — DHCP no_std + no-alloc como fallback B-01 | 200 | 🟡 |
 
 ---
 
@@ -201,9 +204,9 @@
 |---|---|---|---|---|
 | 84 | 21c | GPU Foundations | ~1700 | 🟡 |
 | 85 | 21d | GPU Decode | ~1500 | 🟡 |
-| 86 | 30 | JARVIS Persona | ~950 | 🟡 |
+| 86 | 30 | JARVIS Persona + Alloc | ~1300 | 🟡 |
 | 87 | 31 | JARVIS Security + AHCI | ~1200 | 🟡 |
-| 88 | 32 | JARVIS Emotion + Cache | ~1200 | 🟡 |
+| 88 | 32 | JARVIS Emotion + Cache + DHCP | ~1400 | 🟡 |
 | 89 | 33 | SleepCycle + Memory | ~2500 | 🟡 |
 | 90 | 34 | JARVIS Deep Cognitive | ~1200 | 🟡 |
 | 91 | 35 | Polimento + Ecosystem | ~2500 | 🟡 |

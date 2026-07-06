@@ -91,20 +91,21 @@ impl Agent for DisplayAgent {
         if let Some(ref mut console) = *COMPOSITOR.lock() {
             console.input_buffer = self.input_buffer.clone();
 
+            // Renderiza console primeiro (preenche fundo + texto)
+            let mem = crate::memory::global_hardware_context();
+            console.render_content(tick, 0, mem[0], false, false);
+
             // Determina estado do avatar
             let avatar_state = self.engine.as_ref().map_or(AvatarState::Idle, |e| {
                 e.avatar_state_for(self.is_thinking, self.is_speaking)
             });
 
-            // Atualiza e renderiza avatar
+            // Renderiza avatar SOBRE o console (overlay)
             if let Some(ref mut avatar) = self.avatar {
                 avatar.set_state(avatar_state);
                 avatar.render(&mut console.fb);
             }
 
-            // Renderiza console (texto + métricas)
-            let mem = crate::memory::global_hardware_context();
-            console.render(tick, 0, mem[0], false, false);
             console.fb.swap();
         }
 

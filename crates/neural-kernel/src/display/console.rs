@@ -35,7 +35,8 @@ impl NeuralConsole {
     }
 
     /// Renderiza um frame completo no back buffer, depois faz swap
-    pub fn render(&mut self, tick: u64, agent_count: usize, mem_pct: f32, llm_busy: bool, net_online: bool) {
+    /// Renderiza conteudo (sem swap) — permite overlay do avatar antes do swap
+    pub fn render_content(&mut self, tick: u64, agent_count: usize, mem_pct: f32, llm_busy: bool, net_online: bool) {
         let w = self.fb.info.width;
         let h = self.fb.info.height;
         let ch = font::CHAR_H;
@@ -91,7 +92,11 @@ impl NeuralConsole {
             self.fb.set_pixel(0, h - 3, accent.0/2, accent.1/2, accent.2/2);
         }
 
-        // Swap buffers
+    }
+
+    /// Renderiza com swap (compatibilidade)
+    pub fn render(&mut self, tick: u64, agent_count: usize, mem_pct: f32, llm_busy: bool, net_online: bool) {
+        self.render_content(tick, agent_count, mem_pct, llm_busy, net_online);
         self.fb.swap();
     }
 
