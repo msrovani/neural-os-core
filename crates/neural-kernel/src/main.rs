@@ -129,6 +129,7 @@ mod multi_user;
 mod workflow;
 mod hub;
 mod elf_loader;
+mod wasm_rt;
 
 use lazy_static::lazy_static;
 

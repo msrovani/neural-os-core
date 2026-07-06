@@ -54,6 +54,7 @@ impl Agent for DisplayAgent {
                 desktop.register_app(AppId::HermesChat, "Hermes Chat");
                 desktop.register_app(AppId::Settings, "Settings");
                 desktop.register_app(AppId::Power, "Power");
+                desktop.register_app(AppId::Ide, "BitNet IDE");
                 desktop.toggle_app(AppId::HermesChat);
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(JarvisAvatar::new(gpu_dev));
@@ -83,6 +84,32 @@ impl Agent for DisplayAgent {
         if self.input_buffer.contains("[F1]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::HermesChat); }}
         if self.input_buffer.contains("[F2]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Settings); }}
         if self.input_buffer.contains("[F3]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Power); }}
+        if self.input_buffer.contains("[F4]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Ide); }}
+
+        // IDE: Generate WASM skill
+        if self.input_buffer.contains("[GEN]") {
+            let skill_name = {
+                let mut comp = COMPOSITOR.lock();
+                let mut name = alloc::string::String::new();
+                if let Some(ref mut d) = *comp {
+                    if let Some(ide) = d.apps.iter_mut().find(|a| a.id == AppId::Ide) {
+                        name = alloc::string::String::from(ide.data.trim());
+                        ide.data.clear();
+                    }
+                }
+                drop(comp);
+                name
+            };
+            if !skill_name.is_empty() {
+                let mut comp2 = COMPOSITOR.lock();
+                if let Some(ref mut d2) = *comp2 {
+                    d2.publish_wasm_skill(&skill_name, &alloc::format!("WASM: {}", skill_name));
+                    if let Some(chat) = d2.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                        chat.data.push_str(&alloc::format!("[IDE] WASM '{}' published! Icon on desktop.\n", skill_name));
+                    }
+                }
+            }
+        }
 
         // Render desktop
         let mut comp = COMPOSITOR.lock();
