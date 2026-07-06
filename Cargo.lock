@@ -13,6 +13,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "ax-crate-interface"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf15768c43061f501f803de42ac83af3abe9c2b04f56360060e591997be1d964"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "ax-kernel-guard"
+version = "0.3.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcdd992ed9aa73efc8240b84bb973e3a960c1f62504d3fc21aaabcdbbe6ddd2d"
+dependencies = [
+ "ax-crate-interface",
+ "cfg-if",
+]
+
+[[package]]
+name = "ax-kspin"
+version = "0.3.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f9dbddc23f015e06e43346a8c83e07f4d4962fe44e371544e12f74add31c129"
+dependencies = [
+ "ax-kernel-guard",
+ "cfg-if",
+]
+
+[[package]]
 name = "az"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -41,6 +72,16 @@ name = "bootloader_api"
 version = "0.11.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c074a3d1075b26ed77e502d6af8ab1263abbdc3d026c166e46480f973287293"
+
+[[package]]
+name = "buddy-slab-allocator"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e11e6f39e0f51f7a74df9a46d04cfbf1eb05ea2d47b6114e7eed3c8311852efe"
+dependencies = [
+ "ax-kspin",
+ "log",
+]
 
 [[package]]
 name = "byteorder"
@@ -194,6 +235,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "log"
+version = "0.4.33"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+
+[[package]]
 name = "managed"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -211,6 +258,7 @@ version = "0.59.0-test"
 dependencies = [
  "agent-core",
  "bootloader_api",
+ "buddy-slab-allocator",
  "ed25519-compact",
  "embedded-graphics",
  "event-bus",

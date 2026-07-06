@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.86.3-persona] — 2026-07-06 — 🧑 Sprint 86: JARVIS Persona + Alloc Adapter
+
+### Added
+- **#315.1 SOUL.md** — `SoulProfile` com name/tone/humor/formality/empathy, parser markdown
+- **#315.2 IPW Monitor** — `IpwMonitor` lê RAPL MSR 0x610 (PKG_ENERGY_STATUS), calcula tokens/watt
+- **#315.3 Session Compression** — `SessionHistory` com 4 estratégias (summarize/drop_lowest/merge_similar/segment_means)
+- **#315.4 Notification Gate** — `NotificationGate` com 4 urgency levels, dedup, rate limit
+- **#315.5 Sessionless Thread** — `SessionlessThread` conversa contínua sem reset, stale detection
+- **#355 Alloc Adapter** — `alloc_adapter.rs` ponte para buddy-slab-allocator (feature opcional)
+- **`jarvis.rs`** — Engine unificada integra todos os 5 componentes + tick loop
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics, JARVIS avatar + Hermes Chat OK
+
 ## [0.86.2-embedding] — 2026-07-06 — 🧠 ADR-0038 v2: BGE Embedding + Kokoro TTS
 
 ### Added
