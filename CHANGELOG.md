@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
-## [0.84.0-design] — 2026-07-06 — 🏆 Sprint 84: GPU Foundations (BAR mapping + Job Ring + VRAM Buddy + Secure Boot)
+## [0.85.0-design] — 2026-07-06 — 🏆 Sprint 85: GPU Decode (XPU split + DMA + XQueue)
+
+### Added
+- **`gpu/xpu.rs`** — Agent.xpu prefill/decode split (#329, ~90 LOC): CPU prefill via forward_with_kv, GPU decode stub, generate() com timing. Referência arXiv 2506.24045.
+- **`gpu/kv_dma.rs`** — CPU→GPU KV cache DMA (#331, ~90 LOC): KvDmaTransfer, kv_transfer_layer(). Copia KV cache entre RAM e VRAM com sfence. Referência dmaplane.
+- **`gpu/xqueue.rs`** — XQueue preemptível 3 níveis (#332, ~125 LOC): pending/in-flight/running com timeout. Preempt rebaixa in-flight para pending. Referência XSched (OSDI 2025).
+
+### Changed
+- **`gpu/mod.rs`** — Adicionado `pub mod xpu`, `pub mod kv_dma`, `pub mod xqueue`.
+
+### Tested
+- QEMU (-smp 2, WHPX): 0 panics, 0 errors. GPU-BACKEND, SECURE-BOOT, Hermes Chat OK.
+- VirtualBox (1 CPU, VirtIO-net): 0 panics, 0 errors. Hermes Chat OK.
+
+### Sprint 85 Total: ~305 LOC (4 itens, est. 1500 LOC — stubs para quando GPU compute estiver pronto)
+
+## [0.84.1-gpu] — 2026-07-06 — 🏆 Sprint 84: GPU Foundations (BAR mapping + Job Ring + VRAM Buddy + Secure Boot)
 
 ### Added
 - **`gpu/ring.rs`** — SPSC job ring genérico para 3 vendors (Intel RENDER_RING_TAIL, NVIDIA PFIFO, AMD PM4). Doorbell, push, poll, submit_and_wait. Ring buffer em páginas UC.

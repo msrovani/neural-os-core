@@ -9,4 +9,7 @@ pub mod backend;
 pub mod cube;
 pub mod ring;
 pub mod firmware;
+pub mod xqueue;
+pub mod kv_dma;
+pub mod xpu;
 
