@@ -86,9 +86,41 @@ Revisão sistemática do ecossistema Rust bare-metal via Hugging Bay e crates.io
 
 ---
 
-## 5. Recursos
+## 5. Modelos de Embedding e TTS — Expansão (v2)
+
+### 5.1 BAAI/bge-small-en-v1.5 — Embedding Semântico (Sprint 89)
+
+**Decisão:** Incorporar como skill de busca semântica no HermesAgent. Converter pesos ONNX → `.bitnet` v3 e carregar no kernel.
+
+**Motivo:** 33.4M params, 384-dim embeddings, MTEB 62.17. Arquitetura BERT-small compatível com nossa engine de transformers. MIT license. 62M downloads/mês.
+
+**Pipeline de conversão:**
+```
+ONNX (bge-small-en-v1.5) → Python converter → .bitnet v3 → load_model() → Hermes semantic_search()
+```
+
+**Prazo:** Sprint 89 (Bloco 33 — Advanced Memory), junto com Hybrid Search (#217) e Atkinson-Shiffrin (#224).
+
+### 5.2 Kokoro-82M — Text-to-Speech (Sprint 92+, pós B-01)
+
+**Decisão:** Incorporar como skill TTS. Converter ONNX → `.bitnet` e carregar no kernel para síntese de voz local.
+
+**Motivo:** 82M params, 24kHz, 28 vozes, Apache-2.0. Único modelo TTS viável para bare-metal (86 MB Q8). Substitui Piper como TTS padrão.
+
+**Pipeline:**
+```
+ONNX (Kokoro-82M) → Python converter → .bitnet v3 → load_model() → Hermes TTS skill
+```
+
+**Prazo:** Sprint 92+ (Bloco 36+ — AIOS Evolution), depende de B-01 para download do modelo.
+
+---
+
+## 6. Recursos
 
 - `buddy-slab-allocator`: https://github.com/arceos-hypervisor/buddy-slab-allocator
 - `edge-net`: https://github.com/sysgrok/edge-net
 - `khal-std`: https://github.com/dimforge/khal
 - `ruvix-net`: https://crates.io/crates/ruvix-net
+- `bge-small-en-v1.5`: https://huggingface.co/BAAI/bge-small-en-v1.5
+- `Kokoro-82M-ONNX`: https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX

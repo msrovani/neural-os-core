@@ -88,10 +88,10 @@
 
 ---
 
-## Sprint 89 — Bloco 33: SleepCycle + Advanced Memory (~2500 LOC)
-**IDEA_BANK:** #314, #214, #215, #216, #219, #217, #218, #222, #223, #224, #225  
-**ADR:** 0023 (Memory Systems)  
-**Foco:** Experiências de aprendizado onírico e memória avançada
+## Sprint 89 — Bloco 33: SleepCycle + Advanced Memory + Embedding (~2800 LOC)
+**IDEA_BANK:** #314, #214, #215, #216, #219, #217, #218, #222, #223, #224, #225, #359  
+**ADR:** 0023 (Memory Systems), 0038 (Ecosystem Optimization)  
+**Foco:** Experiências de aprendizado onírico e memória avançada, **BGE-Small-EN-v1.5 embedding**
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
@@ -106,6 +106,7 @@
 | #223 | Draft→Review→Merge Memory (approval workflow) | 350 | 🟡 |
 | #224 | Atkinson-Shiffrin 3-tier (Sensory Register 48h→STM 7d→LTM permanent) | 800 | 🟡 |
 | #225 | Bi-temporal Knowledge Graph (append-only, validity windows) | 600 | 🟡 |
+| #359 | BGE-Small-EN-v1.5 embedding — converter ONNX→.bitnet, skill semantic_search | 300 | 🟡 |
 
 ---
 
@@ -160,7 +161,8 @@
 | #307 | WWW Agents (Browser, Email, Search, RSS, Download, WS) | 2600 | 🔴 B-01 |
 | #308a-c | Self-Update Agent (A/B slots + rollback) | 800 | 🔴 B-01 |
 | #309a-c | WASM Skill Runtime + IDE Agent + Hybrid Agents | 2900 | 🔴 B-01 |
-| #315.21-25 | Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | 1600 | 🔴 B-01 |
+| #315.21-25 | Voice Pipeline (Kokoro-82M TTS + Vosk STT + Wake Word + Wyoming) | 1600 | 🔴 B-01 |
+| #360 | Kokoro-82M TTS — converter ONNX→.bitnet, substitui Piper | 300 | 🔴 B-01 |
 | #315.26 | Multi-device sync (CRDT, Automerge-style) | 300 | 🔴 B-01 |
 | #315.27 | SKYNET Mesh Node (speculative decoding distribuído) | 300 | 🔴 B-01 |
 | #277a-c | The Agency — HwRegistry, Agency struct, LLM-aware activation | 800 | 🔴 B-01 |

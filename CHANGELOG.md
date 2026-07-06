@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.86.2-embedding] — 2026-07-06 — 🧠 ADR-0038 v2: BGE Embedding + Kokoro TTS
+
+### Added
+- **ADR-0038 v2** — Seção 5: Modelos de Embedding e TTS. BGE-Small-EN-v1.5 (Sprint 89) e Kokoro-82M (Sprint 92+).
+- **IDEA_BANK:** #359 (BGE-Small-EN-v1.5), #360 (Kokoro-82M TTS)
+- **Sprint 89 expandido:** +300 LOC para BGE embedding → busca semântica real no Hermes
+- **Sprint 92+ expandido:** Kokoro-82M substitui Piper como TTS padrão (82M params vs 300M+)
+
+### Viability
+| Modelo | Params | Licença | Tamanho | Uso | Sprint |
+|--------|--------|---------|---------|-----|--------|
+| BGE-Small-EN-v1.5 | 33.4M | MIT | 33 MB | Embedding semântico | 89 |
+| Kokoro-82M-ONNX | 82M | Apache-2.0 | 86 MB Q8 | TTS | 92+ |
+
 ## [0.86.1-ecosystem] — 2026-07-06 — 📊 ADR-0038: Otimização do Ecossistema (Hugging Bay + crates.io)
 
 ### Added
