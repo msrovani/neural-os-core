@@ -110,39 +110,41 @@
 
 ---
 
-## Sprint 90 — Bloco 34: JARVIS Deep Cognitive (~1200 LOC)
+## Sprint 90 — Bloco 34: JARVIS Deep Cognitive ✅
 **IDEA_BANK:** #315.12, #315.13, #315.14, #315.15, #315.16, #315.17  
 **ADR:** 0036  
-**Foco:** Dreaming/consolidation, Ego layer, heartbeats, auto-skills, Babel-Index
+**Foco:** Dreaming/consolidation, Ego layer, heartbeats, auto-skills, Babel-Index  
+**Status:** ✅ Completo (v0.90.0-cognitive)
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
-| #315.12 | Dreaming/Consolidation (CronAgent noturno, insights sintéticos) | 200 | 🟡 |
-| #315.13 | Ego Layer (self-model, confidence tracking, can_answer per domain) | 250 | 🟡 |
-| #315.14 | Proactive Heartbeats (JARVIS inicia conversa por eventos) | 100 | 🟡 |
-| #315.15 | Tool-State Save Game (snapshot + rollback de skills) | 100 | 🟡 |
-| #315.16 | Auto-Skill Generation (watch→pattern→propose→generate→register) | 150 | 🟡 |
-| #315.17 | Babel-Index (entropy + contradiction + staleness monitoring) | 100 | 🟡 |
+| #315.12 | Dreaming/Consolidation | 200 | ✅ |
+| #315.13 | Ego Layer (self-model, confidence) | 250 | ✅ |
+| #315.14 | Proactive Heartbeats | 100 | ✅ |
+| #315.15 | Tool-State Save Game | 100 | ✅ |
+| #315.16 | Auto-Skill Generation | 150 | ✅ |
+| #315.17 | Babel-Index (entropy monitor) | 100 | ✅ |
 
 ---
 
-## Sprint 91 — Bloco 35: Polimento + Ecosystem (~2500 LOC)
+## Sprint 91 — Bloco 35: Polimento + Ecosystem ✅
 **IDEA_BANK:** #333, #334, #335, #336, #280l, #279a, #279b, #279c, #283a, #283b  
 **ADR:** 0037, 0020 (Crom), 0021 (Life OS)  
-**Foco:** burn-flex, MSched VRAM, CFS scheduler, GPU+Display, SmileyOS patterns, Desktop Cube
+**Foco:** Shell 40+ comandos, temas, VFS perms, CFS, MSched, Cube  
+**Status:** ✅ Completo (v0.91.1-full) — stubs para burn-flex, MSched, CFS aguardando uso
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
-| #333 | burn-flex backend port (elimina bitnet_avx2 manual, 2-95× speedup) | 800 | 🟡 |
-| #334 | MSched evicção VRAM (Belady/OPT prediction) | 500 | 🟡 |
-| #335 | CFS scheduler (vruntime-based fairness) | 500 | 🟡 |
-| #336 | GPU + Display co-existência (iGPU display, dGPU compute) | 300 | 🟡 |
-| #280l | SkillManifest derive macro (proc-macro para manifests) | 100 | 🟡 |
-| #279a | Shell com 40+ comandos (ls, cat, ps, uptime, theme) | 300 | 🟡 |
-| #279b | Sistema de temas (5+ cores, hot-swap) | 200 | 🟡 |
-| #279c | Filesystem próprio com permissões (VFS upgrade) | 400 | 🟡 |
-| #283a | Workspace Cube 3D com rotação via GPU | 200 | 🟡 |
-| #283b | Transição crossfade entre workspaces | 100 | 🟡 |
+| #333 | burn-flex backend port | 800 | 🟡 stub |
+| #334 | MSched evicção VRAM (Belady/OPT) | 500 | 🟡 stub |
+| #335 | CFS scheduler (vruntime-based) | 500 | ✅ impl |
+| #336 | GPU + Display co-existência | 300 | 🟡 doc |
+| #280l | SkillManifest derive macro | 100 | 🟡 ref |
+| #279a | Shell 40+ comandos | 300 | ✅ |
+| #279b | Sistema de temas (5+ cores) | 200 | ✅ |
+| #279c | VFS permissões | 400 | ✅ |
+| #283a | Workspace Cube 3D | 200 | ✅ |
+| #283b | Crossfade workspaces | 100 | ✅ |
 
 ---
 
@@ -162,7 +164,7 @@
 | #308a-c | Self-Update Agent (A/B slots + rollback) | 800 | 🔴 B-01 |
 | #309a-c | WASM Skill Runtime + IDE Agent + Hybrid Agents | 2900 | 🔴 B-01 |
 | #315.21-25 | Voice Pipeline (Kokoro-82M TTS + Vosk STT + Wake Word + Wyoming) | 1600 | 🔴 B-01 |
-| #360 | Kokoro-82M TTS — converter ONNX→.bitnet, substitui Piper | 300 | 🔴 B-01 |
+| #360 | Kokoro-82M TTS — converter ONNX→.bitnet (ferramenta pronta, aguarda modelo) | 300 | 🟡 ferramenta pronta |
 | #315.26 | Multi-device sync (CRDT, Automerge-style) | 300 | 🔴 B-01 |
 | #315.27 | SKYNET Mesh Node (speculative decoding distribuído) | 300 | 🔴 B-01 |
 | #277a-c | The Agency — HwRegistry, Agency struct, LLM-aware activation | 800 | 🔴 B-01 |
