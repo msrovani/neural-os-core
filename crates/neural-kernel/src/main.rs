@@ -133,7 +133,7 @@ mod wasm_rt;
 mod cognitive;
 
 use lazy_static::lazy_static;
-use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ};
+use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ, ReActLoop, McpServer, AutoSkillGen, DynamicScaler, SelfOptScheduler, ReplayBuffer, BitNetTrainer, EpisodicMemory, TaskSpawner, WorkspaceIsolation, DeltaBranch, MatMulFreeLM};
 
 /// Log buffer sector no SDHC (LBA 2048 = 1MB, depois da bootimage de 606KB)
 pub const LOG_SECTOR: u32 = 2048;
@@ -340,6 +340,18 @@ lazy_static! {
     static ref FEEDBACK_LOOP: ticket_lock::TicketLock<FeedbackLoop> = ticket_lock::TicketLock::new(FeedbackLoop::new());
     static ref WORKFLOW_PREDICTOR: ticket_lock::TicketLock<WorkflowPredictor> = ticket_lock::TicketLock::new(WorkflowPredictor::new());
     static ref CODEBOOK_VQ: ticket_lock::TicketLock<CodebookVQ> = ticket_lock::TicketLock::new(CodebookVQ::new(256, 64));
+    static ref REACT_LOOP: ticket_lock::TicketLock<ReActLoop> = ticket_lock::TicketLock::new(ReActLoop::new(10));
+    static ref MCP_SERVER: ticket_lock::TicketLock<McpServer> = ticket_lock::TicketLock::new(McpServer::new());
+    static ref AUTOSKILL_GEN: ticket_lock::TicketLock<AutoSkillGen> = ticket_lock::TicketLock::new(AutoSkillGen::new());
+    static ref DYNAMIC_SCALER: ticket_lock::TicketLock<DynamicScaler> = ticket_lock::TicketLock::new(DynamicScaler::new());
+    static ref SCHED_OPT: ticket_lock::TicketLock<SelfOptScheduler> = ticket_lock::TicketLock::new(SelfOptScheduler::new());
+    static ref REPLAY_BUF: ticket_lock::TicketLock<ReplayBuffer> = ticket_lock::TicketLock::new(ReplayBuffer::new(10000));
+    static ref BITNET_TRAINER: ticket_lock::TicketLock<BitNetTrainer> = ticket_lock::TicketLock::new(BitNetTrainer::new());
+    static ref EPISODIC_MEM: ticket_lock::TicketLock<EpisodicMemory> = ticket_lock::TicketLock::new(EpisodicMemory::new(1000));
+    static ref TASK_SPAWNER: ticket_lock::TicketLock<TaskSpawner> = ticket_lock::TicketLock::new(TaskSpawner::new());
+    static ref WORKSPACE_ISO: ticket_lock::TicketLock<WorkspaceIsolation> = ticket_lock::TicketLock::new(WorkspaceIsolation::new());
+    static ref DELTA_BRANCH: ticket_lock::TicketLock<DeltaBranch> = ticket_lock::TicketLock::new(DeltaBranch::new());
+    static ref MATMUL_FREE_LM: ticket_lock::TicketLock<MatMulFreeLM> = ticket_lock::TicketLock::new(MatMulFreeLM::new());
     static ref TEAM_MEMORY: ticket_lock::TicketLock<crate::memory_systems::TeamMemory> = ticket_lock::TicketLock::new(crate::memory_systems::TeamMemory::new());
     static ref VECTOR_FS: ticket_lock::TicketLock<crate::vfs::VectorFs> = ticket_lock::TicketLock::new(crate::vfs::VectorFs::new(384));
 }
@@ -790,6 +802,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[COG] {}", NEURAL_CACHE.lock().status());
     serial_println!("[COG] {}", WORKFLOW_PREDICTOR.lock().status());
     serial_println!("[COG] {}", CODEBOOK_VQ.lock().status());
+    serial_println!("[COG] {}", REACT_LOOP.lock().status());
+    serial_println!("[COG] {}", MCP_SERVER.lock().status());
+    serial_println!("[COG] {}", AUTOSKILL_GEN.lock().status());
+    serial_println!("[COG] {}", DYNAMIC_SCALER.lock().status());
+    serial_println!("[COG] {}", SCHED_OPT.lock().status());
+    serial_println!("[COG] {}", REPLAY_BUF.lock().status());
+    serial_println!("[COG] {}", BITNET_TRAINER.lock().status());
+    serial_println!("[COG] {}", EPISODIC_MEM.lock().status());
+    serial_println!("[COG] {}", TASK_SPAWNER.lock().status());
+    serial_println!("[COG] {}", WORKSPACE_ISO.lock().status());
+    serial_println!("[COG] {}", DELTA_BRANCH.lock().status());
+    serial_println!("[COG] {}", MATMUL_FREE_LM.lock().status());
     serial_println!("[COG] {}", TEAM_MEMORY.lock().status());
     serial_println!("[COG] {}", VECTOR_FS.lock().status());
     serial_println!("[COG] {}", crate::memory_systems::bge_status());

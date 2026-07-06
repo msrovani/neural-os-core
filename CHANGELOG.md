@@ -8,25 +8,57 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 
 ## [0.95.0-cog+v0.96.0-heal] — 2026-07-06 — 🧠🛡️ Sprints 95+96: Cognitive + Self-Heal
 
-### Added
-- **#105 Intent Planner** — `cognitive::IntentPlanner` — goal-based plan generation
-- **#106 Success Engine** — `cognitive::SuccessEngine` — online feedback tracking
-- **#107 Neural Cache** — `cognitive::NeuralCache` — BTreMap-based activation cache
-- **#108 MatMul-free LM** — `cognitive::MatMulFreeLM` — stub for RWKV/Mamba
-- **#149 Feedback Loop** — `cognitive::FeedbackLoop` — user rating (0-10) collection
-- **#158 Workflow Predictor** — `cognitive::WorkflowPredictor` — pattern prediction
-- **#169-170 Codebook VQ** — `cognitive::CodebookVQ` — vector quantization (256 codes, 64-dim)
-- **#226-227 Team Memory + Snapshots** — `memory_systems::TeamMemory` — agent-shared memory with snapshots
-- **#265-266 Vector FS + Vector API** — `vfs::VectorFs` — semantic file search via embeddings
-- **#267 OverlayFS** — `vfs::VfsRegistry::mount_overlay()` — multi-layer VFS
-- **M6-M14 Self-Healing** — `self_heal::classify_by_code()`, `corrective_prompt()`, `assess_failure()`, `predict_failure()`
-- **M37 SleepCycle Guard Rails** — `cognitive::sleep_guard_allowed()` — blocks dangerous content per phase
+### Sprint 95 — Cognitive Engine (510+ LOC, 25 structs/funcs)
+- **#105 Intent Planner** — SkillSteps com params, goal-based plan generation
+- **#106 Success Engine** — win/loss tracking, streak, recent_rate (64-window)
+- **#107 Neural Cache** — TTL, LRU evicção (max 4096), hit/miss tracking
+- **#108 MatMul-Free LM** — RWKV-style WKV forward sem multiplicação de matrizes
+- **#149 Feedback Loop** — rating (0-10) + comment attachment
+- **#150 Ternary Weight Update** — gradiente → {-1,0,+1} com threshold lr
+- **#151 Experience Replay Buffer** — ring buffer (10K cap), sample por index
+- **#152 Weight Consolidation** — snapshot export com metadata
+- **#158 Workflow Predictor** — confidence scoring por task, top prediction
+- **#159 Auto-Skill Generator** — WASM templates (echo, hello), generate bytes
+- **#160 Dynamic Resource Scaling** — heap_target ajustável por pressure
+- **#161 Self-Optimizing Scheduler** — timeslice dinâmico baseado em latência
+- **#162 Workflow Profile** — JSON export com steps + avg_duration
+- **#169 Codebook VQ** — nearest-neighbor quantization (256 codes × 64 dim)
+- **#170 KV Cache Codebook** — compress/decompress KV cache via codebook
+- **#171 ReAct Loop** — Thought → Action → Observation, max_iter guard
+- **#172 MCP Server** — tools/list, tools/call, session tracking
+- **#173 Codebook Finetune** — centroid adjustment via learning rate
+- **#174 Delta Branches** — speculative decode draft/verify, acceptance rate
+- **#175 Workspace Isolation** — sandbox heap per agent (BTreeMap alloc)
+- **M2 Episodic Memory** — ring buffer (max 1000), replay API
+- **M37 SleepCycle Guard Rails** — blocked words per phase (replay/dream)
+- **M38 BitNetTrainer** — train_step com ternary_update, loss tracking
+- **M39 Candle Trainer sidecar** — stub com connect/train/loss
+- **M40 Task Spawner** — spawn tracking (max 16 children)
+- **M41 Three Data Sources** — replay_buffer, user_feedback, episodic_memory
+
+### Sprint 96 — Self-Healing Avançado (~350 LOC em self_heal.rs + vfs + memory)
+- **#226-227 Team Memory + Snapshots** — agent-shared BTreeMap com versionamento
+- **#265-266 Vector FS** — VectorFs com dot product search (384-dim)
+- **#267 OverlayFS** — VfsRegistry::mount_overlay() multi-layer
+- **M1 Zero-Copy SFS** — slice references, directory index em 256 bytes
+- **M3 Skills-as-Modules** — fn pointer import + version control
+- **M6 Failure Taxonomy** — classify_by_code (5 classes + range mapping)
+- **M7 Exception Self-Heal** — auto recovery via SelfHeal::analyze()
+- **M8 Corrective Prompting** — context-aware suggestion with escalation
+- **M9 Verifier Pós-Recovery** — fn check: bool, label reporting
+- **M10 Erros no EventLog** — format + persist stub
+- **M11 Budgeted Recovery** — attempts/daemon com max per window
+- **M12 Silent Failure Detection** — heartbeat + threshold detection
+- **M13 Multi-level Failure Assessment** — Ok/Warning/Error/Critical
+- **M14 Failure Prediction** — trend analysis via window diff
+- **M29 Notification Gate** — allow list por agent + type, block/deliver counters
 
 ### Changed
-- `self_heal.rs` — Sprint 96 failure prediction infrastructure
+- `cognitive.rs` — reescrito de 86 LOC para 510+ LOC com todos os 25+ itens
+- `self_heal.rs` — Sprint 96 completo: M1-M29, ZeroCopySfs, SkillModule, BudgetedRecovery, SilentFailureDetector, NotificationGate
 - `memory_systems.rs` — Team memory with snapshot versioning
 - `vfs/mod.rs` — Vector FS semantic search + OverlayFS mount
-- `main.rs` — 8 new `lazy_static` instances for cognitive/memory modules
+- `main.rs` — 22 new `lazy_static` instances para cognitive + self-heal modules
 - `fs/ata_agent.rs` — Fixed pre-existing unreachable match arm bug
 
 ## [0.94.0-vision] — 2026-07-06 — 👁️ Sprint 94: Vision + Display

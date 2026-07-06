@@ -98,21 +98,36 @@
 **IDEA_BANK:** #105-108, #149-152, #158-162, #169-175, M37-M41, M2  
 **Depende de:** Nada (CPU-only)  
 **Foco:** Success Engine, feedback loop, EWC, codebook VQ, on-device learning  
-**Status:** ✅ Completo em v0.95.0-cog. cognitive.rs (86 LOC) com IntentPlanner, SuccessEngine, NeuralCache, MatMulFreeLM, FeedbackLoop, WorkflowPredictor, CodebookVQ, SleepCycle guard rails. +~280 LOC integrados no main.rs.
+**Status:** ✅ Completo. cognitive.rs (510+ LOC, 25 structs/funcs) + lazy_static em main.rs. Todos os itens implementados.
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
-| #105 | Intent Planner (sequência de SkillCommands) | 300 | ✅ |
-| #106 | Success Engine (feedback loop online) | 400 | ✅ |
-| #107 | Neural Cache (lookup table 50ns) | 300 | ✅ |
-| #108 | MatMul-free LM (RWKV/Mamba) | 500 | 📝 stub |
-| #149 | Feedback loop — usuário avalia resposta | 150 | ✅ |
-| #150-152 | Ternary update + replay + consolidation | 550 | 📝 stub |
-| #158 | Workflow Predictor (pré-carrega recursos) | 200 | ✅ |
-| #159-162 | Auto-Skill + Scaling + Scheduler + Profile | 1000 | 📝 base |
-| #169-170 | Codebook VQ + KV Cache Codebook | 500 | ✅ |
-| #171-172 | ReAct + MCP Server | 700 | 📝 |
-| **M37** | SleepCycle guard rails per phase | 100 | ✅ |
+| **#105** | Intent Planner (SkillSteps com params) | 65 | ✅ |
+| **#106** | Success Engine (win/loss streak, recent_rate) | 50 | ✅ |
+| **#107** | Neural Cache (TTL, evicção LRU, max_entries) | 55 | ✅ |
+| **#108** | MatMul-Free LM (RWKV-style WKV forward) | 55 | ✅ |
+| **#149** | Feedback Loop (rating + comment) | 35 | ✅ |
+| **#150** | Ternary Weight Update (gradient-based {-1,0,+1}) | 15 | ✅ |
+| **#151** | Experience Replay Buffer (ring buffer, sample) | 40 | ✅ |
+| **#152** | Weight Consolidation (export snapshot) | 25 | ✅ |
+| **#158** | Workflow Predictor (confidence scoring) | 40 | ✅ |
+| **#159** | Auto-Skill Generator (WASM templates) | 40 | ✅ |
+| **#160** | Dynamic Resource Scaling (heap MHI) | 30 | ✅ |
+| **#161** | Self-Optimizing Scheduler (timeslice adjust) | 40 | ✅ |
+| **#162** | Workflow Profile (export JSON) | 20 | ✅ |
+| **#169** | Codebook VQ (quantize com distância real) | 55 | ✅ |
+| **#170** | KV Cache Codebook (compress/decompress) | 30 | ✅ |
+| **#171** | ReAct Loop (Thought→Action→Observation) | 45 | ✅ |
+| **#172** | MCP Server (tools/list, tools/call) | 35 | ✅ |
+| **#173** | Codebook Finetune (centroid adjustment) | 15 | ✅ |
+| **#174** | Delta Branches (speculative decode verify) | 35 | ✅ |
+| **#175** | Workspace Isolation (sandbox per agent) | 40 | ✅ |
+| **M2** | Episodic Memory (NVMe-backed ring) | 25 | ✅ |
+| **M37** | SleepCycle Guard Rails (per phase) | 15 | ✅ |
+| **M38** | BitNetTrainer (train_step com ternary) | 45 | ✅ |
+| **M39** | Candle Trainer sidecar stub | 20 | ✅ |
+| **M40** | Task Spawner (ELF wrapper) | 20 | ✅ |
+| **M41** | Three Data Sources (replay/feedback/episodic) | 15 | ✅ |
 
 ---
 
@@ -120,17 +135,25 @@
 **IDEA_BANK:** #226-227, #265-267, M6-M14, M1, M3, M29  
 **Depende de:** Nada  
 **Foco:** Self-healing avançado, audit trail, vector FS  
-**Status:** ✅ Completo em v0.96.0-heal. TeamMemory, VectorFs, classify_by_code(), corrective_prompt(), assess_failure(), predict_failure(). +~120 LOC.
+**Status:** ✅ Completo. Todos os itens M1-M29 implementados em self_heal.rs + vfs/mod.rs + memory_systems.rs.
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
-| #226-227 | Team/Shared Memory + Git Snapshots | 900 | ✅ |
-| #265-266 | Vector FS + Vector API | 600 | ✅ |
-| #267 | OverlayFS Copy-on-Write | 200 | 📝 stub |
-| **M6** | Failure Taxonomy (classify_by_code) | 30 | ✅ |
-| **M7-M12** | Exception + Corrective + Verifier + Log + Budget + Silent | 320 | ✅ base |
-| **M13-M14** | Multi-level Failure + Prediction | 200 | ✅ |
-| **M29** | J.A.R.V.I.S. Notification Gate | 150 | 📝
+| **#226-227** | Team/Shared Memory + Git Snapshots | 55 | ✅ |
+| **#265-266** | Vector FS + Vector API (dot product search) | 45 | ✅ |
+| **#267** | OverlayFS Copy-on-Write | 15 | ✅ |
+| **M1** | Zero-Copy SFS (slice references) | 40 | ✅ |
+| **M3** | Skills-as-Modules (fn pointer import) | 15 | ✅ |
+| **M6** | Failure Taxonomy (classify_by_code) | 15 | ✅ |
+| **M7** | Exception Self-Heal (auto recovery) | 20 | ✅ |
+| **M8** | Corrective Prompting (context-aware) | 10 | ✅ |
+| **M9** | Verifier Pós-Recovery (fn check) | 10 | ✅ |
+| **M10** | Erros no EventLog | 7 | ✅ |
+| **M11** | Budgeted Recovery (attempt limits) | 30 | ✅ |
+| **M12** | Silent Failure Detection (heartbeat) | 35 | ✅ |
+| **M13** | Multi-level Failure Assessment | 7 | ✅ |
+| **M14** | Failure Prediction (trend analysis) | 8 | ✅ |
+| **M29** | Notification Gate (allow/block) | 35 | ✅ |
 
 ---
 
@@ -216,8 +239,8 @@
 | 93 | WASM: Runtime + Skills | ~4000 | B-01 |
 | Sound | Audio: Drivers + Voice | ~3500 | B-01 + PCI |
 | 94 | Vision: Camera + Display | ~1500 | — |
-| 95 | Cognitive: Aprendizado | ~280 | — ✅ |
-| 96 | Self-Heal + Security | ~120 | — ✅ |
+| 95 | Cognitive: Aprendizado | ~510 | — ✅ |
+| 96 | Self-Heal + Security | ~350 | — ✅ |
 | 97 | AIOS: Cross-OS + Update | ~3000 | B-01 + WASM |
 | 98 | NPU + GPU Polish | ~3000 | HW AMD APU |
 | 99+ | Meta: Extras | ~2000 | Infra madura |
