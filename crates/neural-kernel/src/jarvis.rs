@@ -225,6 +225,40 @@ impl SessionlessThread {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// #315.20 Fluid Persona — Personalidade Adaptativa por Contexto
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PersonaMode { Coach, Tutor, Tool }
+
+impl SoulProfile {
+    /// Ajusta persona conforme emoção detectada e urgência
+    pub fn fluid_update(&mut self, emotion: Emotion, urgency: u8) {
+        match emotion {
+            Emotion::Sadness | Emotion::Fear => { self.empathy = (self.empathy + 0.1).min(1.0); self.formality = 0.6; }
+            Emotion::Anger => { self.formality = (self.formality + 0.2).min(1.0); self.tone = String::from("formal"); }
+            Emotion::Joy => { self.humor_level = (self.humor_level + 0.1).min(1.0); self.tone = String::from("casual"); }
+            _ => {}
+        }
+        if urgency > 3 {
+            self.tone = String::from("precise");
+            self.humor_level = 0.1;
+        }
+    }
+
+    pub fn mode(&self) -> PersonaMode {
+        if self.empathy > 0.7 { PersonaMode::Coach }
+        else if self.formality > 0.6 { PersonaMode::Tool }
+        else { PersonaMode::Tutor }
+    }
+
+    pub fn describe(&self) -> alloc::string::String {
+        alloc::format!("[PERSONA] mode={:?} tone={} humor={:.1} formality={:.1} empathy={:.1}",
+            self.mode(), self.tone, self.humor_level, self.formality, self.empathy)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Análise Emocional
 // ═══════════════════════════════════════════════════════════════════════════════
 

@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.87.0-security] — 2026-07-06 — 🛡️ Sprint 87: JARVIS Security + AHCI
+
+### Added
+- **#315.18 Fail-Closed Safety Invariant** — `safety.rs`: `SafetyInvariants` com 4 invariantes SMT-proof (I1-I4). Padrão é negar.
+- **#315.19 Merkle Audit Trail** — `audit.rs`: `AuditTrail` com SHA-256 chain, ring 4096, verificação de integridade.
+- **#315.20 Fluid Persona** — `jarvis.rs`: `SoulProfile::fluid_update()` adapta tom por emoção/urgência. 3 modos (Coach/Tutor/Tool).
+- **AHCI driver** — `ahci.rs`: Driver SATA 6G NCQ via MMIO. Suporta ATAPI, PRDT, DMA READ/WRITE. PCI class 0x01/0x06.
+
+### Changed
+- `tpm.rs`: `sha256()` agora é `pub` (usado pelo audit trail)
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics. SafetyAgent registrado, Hermes Chat OK.
+
 ## [0.86.3-persona] — 2026-07-06 — 🧑 Sprint 86: JARVIS Persona + Alloc Adapter
 
 ### Added

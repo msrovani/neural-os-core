@@ -119,6 +119,8 @@ mod bitnet_avx2;
 mod trinity;
 mod jarvis;
 mod alloc_adapter;
+mod audit;
+mod ahci;
 
 use lazy_static::lazy_static;
 
