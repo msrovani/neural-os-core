@@ -1534,4 +1534,50 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-06 | **357** | **khal-std (dimforge/khal)** — GPU compute shaders Rust→SPIR-V/PTX/CPU. **Não viável diretamente** (requer wgpu/std), mas arquitetura inspira nossa futura GPU compute. | ❌ Inviável (std) | — | ADR-0038 |
 | 2026-07-06 | **358** | **ruvix-net (ruvnet/ruvector)** — Kernel cognitivo Rust bare-metal similar ao nosso. Stack de rede mínima para "RuVix Cognition Kernel". Referência arquitetural. | 🔵 Referência | — | ADR-0038 |
 | 2026-07-06 | **359** | **BGE-Small-EN-v1.5 Embedding (BAAI)** — Modelo de embedding semântico 33.4M params, 384-dim, ONNX, MIT license. Converter para .bitnet e integrar como skill semantic_search no HermesAgent. MTEB 62.17, 62M downloads/mês. | 🟡 Sprint 89 | Sprint 89 | ADR-0038 v2 |
-| 2026-07-06 | **360** | **Kokoro-82M TTS (ONNX Community)** — Modelo TTS 82M params, 24kHz, 28 vozes, Apache-2.0. Formato ONNX com quantizações (86 MB Q8). Converter para .bitnet e integrar como skill TTS. Único modelo TTS viável para bare-metal. | 🟡 Sprint 92+ | Sprint 92+ | ADR-0038 v2 |
+| 2026-07-06 | **360** | **Kokoro-82M TTS (ONNX Community)** — Modelo TTS 82M params, 24kHz, 28 vozes, Apache-2.0. Formato ONNX com quantizações (86 MB Q8). Converter para .bitnet e integrar como skill TTS. Único modelo TTS viável para bare-metal. | 🟡 Sprint 94 | Sprint 94 | ADR-0038 v2 |
+| 2026-07-06 | **361** | Zero-Copy SFS via zerocopy crate — Transmuting &[u8] ↔ &Tensor sobre páginas NVMe mapeadas. Serialização sem serde, sem alocação. | 🟡 Sprint 96 | Sprint 96 | ADR-0010 |
+| 2026-07-06 | **362** | Episodic memory via battery-backed NVMe — KV-cache persistida entre reboots. Páginas físicas mantidas via NVMe battery-backed ou S3 sleep. | 🟡 Sprint 95 | Sprint 95 | ADR-0010 |
+| 2026-07-06 | **363** | Skills-as-Modules capability import — Allowlist-based validação (nn:silu, tensor:matmul como imports declarados por skill). | 🟡 Sprint 96 | Sprint 96 | ADR-0010 |
+| 2026-07-06 | **364** | Zero-Trust Syscall Categories — 4 classes: Read-only (always allow), Ephemeral allocate (budget), Persistent write (Cortex eval), Hardware access (always deny). | 🟡 Sprint 92 | Sprint 92 | ADR-0010 |
+| 2026-07-06 | **365** | Neural Cache decisions per token — Cache de avaliações LLM por capability token para evitar latência repetida. | 🟡 Sprint 92 | Sprint 92 | ADR-0010 |
+| 2026-07-06 | **366** | Failure Taxonomy Enum — FailureClass::MemoryFault, ExecutionFault, ResourceFault, LogicFault, ExternalFault. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **367** | Exception Handlers + SelfHeal — Page fault e GPF handlers: coletam contexto, publicam KERNEL_ERROR, chamam SelfHeal::analyze(), tentam recovery. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **368** | Corrective Prompting — Erro → consulta LLM com contexto + histórico + lições. "Erro X no daemon Y. Qual melhor estratégia?" | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **369** | Verifier Pós-Recovery — Verifica recovery: task completou 1 tick sem panic? Skill registrada no SKILL_REGISTRY? Se falhou, próxima estratégia. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **370** | Erros no EventLog (EventKind::KernelError) — Nova variante no EventLog para publicar erros de kernel. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **371** | Budgeted Recovery — Tentativas limitadas por budget durante self-healing. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **372** | Silent Failure Detection — LLM verifica se output está correto mesmo sem erro explícito. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **373** | Multi-level Failure Architecture — Supervisionado (classificação) + não-supervisionado (anomalias) para detecção de falhas. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **374** | Failure Prediction — Predizer falhas antes de ocorrerem baseado em tendências. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
+| 2026-07-06 | **375** | GGUF phased implementation (Phase 1-3) — P1: parser header+metadata (150 LOC), P2: Q4_0 dequantization (200 LOC), P3: streaming ATA/USB (150 LOC). | 🟡 Sprint 99+ | Sprint 99+ | ADR-0028 |
+| 2026-07-06 | **376** | f16_to_f32() manual conversion — u16 + função manual para dequantização GGUF Q4_0. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0028 |
+| 2026-07-06 | **377** | GGUF streaming from ATA/USB — Page table mapping para modelos >4GB, streaming blocks on demand. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0028 |
+| 2026-07-06 | **378** | Per-vendor GPU driver LOC breakdown — intel.rs (~700), nvidia.rs (~1500), amd.rs (~2000), virtio.rs (~400). | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
+| 2026-07-06 | **379** | NVIDIA Pascal Push Buffer channel layout — Register map: PUSH_BUFFER 0x002000, size 0x002004, tail 0x002008. | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
+| 2026-07-06 | **380** | AMD RDNA PM4 packet types — PKT3_WRITE_DATA, PKT3_ACQUIRE_MEM, PKT3_DMA_DATA, PKT3_RELEASE_MEM, PKT3_SET_BASE. | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
+| 2026-07-06 | **381** | Model swap flow (/model \<path.gguf\>) — Detecta GPU, checa VRAM, carrega modelo se couber, fallback DRAM. | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
+| 2026-07-06 | **382** | iGPU display + dGPU compute architecture — iGPU display, dGPU compute. GPU única faz ambos via VBIOS/UEFI GOP. | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
+| 2026-07-06 | **383** | Detalhado WASI→Skill mapping (20 syscalls) — fd_read→FileAgent, clock_time_get→TimeAgent, poll_oneoff→EventBusAgent. | 🟡 Sprint 97 | Sprint 97 | ADR-0031 |
+| 2026-07-06 | **384** | Tier 0-4 Agent Classification — Core, Hardware, Runtime, WASM, External MCP. | 🟡 Sprint 97 | Sprint 97 | ADR-0031 |
+| 2026-07-06 | **385** | WASM Host Function Interface signatures — vfs_read, skill_invoke, clock_time, http_get, event_publish, agent_yield. | 🟡 Sprint 93 | Sprint 93 | ADR-0031 |
+| 2026-07-06 | **386** | Performance budget table (kernel vs WASM) — vfs_read 50µs kernel vs 500µs WASM = 10x overhead. | 🟡 Sprint 93 | Sprint 93 | ADR-0031 |
+| 2026-07-06 | **387** | ChromeOS A/B update reference architecture — GPT partition attributes, dm-verity Merkle tree, Omaha protocol. | 🟡 Sprint 97 | Sprint 97 | ADR-0031 |
+| 2026-07-06 | **388** | J.A.R.V.I.S. Context Window Manager — Cortex (LLM) + Hermes (orchestrator) + Kernel (execution). JARVIS persona com proactive notification bus. | 🟡 Sprint 97 | Sprint 97 | ADR-0031 |
+| 2026-07-06 | **389** | J.A.R.V.I.S. Notification Gate rules — Startup grace 60s, dedup 30s, priority queue Critical>High>Info>Debug, interrupt gate. | 🟡 Sprint 96 | Sprint 96 | ADR-0031 |
+| 2026-07-06 | **390** | Update channel strategy — Stable (3600s), nightly (600s), security (60s). | 🟡 Sprint 97 | Sprint 97 | ADR-0031 |
+| 2026-07-06 | **391** | AgentManifest JSON format specification — name, kind, schedule, auto_start, persist, description, required_tokens, version, author, icon. | 🟡 Sprint 93 | Sprint 93 | ADR-0032 |
+| 2026-07-06 | **392** | Developer contract for WASM agents — manifest(), tick(tick, tick_count) → u32, teardown(). | 🟡 Sprint 93 | Sprint 93 | ADR-0032 |
+| 2026-07-06 | **393** | 15 specific WASI→skill mappings for WASM agents — disk_read/write, net_http_get/post, time_now/sleep, publish/subscribe events. | 🟡 Sprint 93 | Sprint 93 | ADR-0032 |
+| 2026-07-06 | **394** | BitNet IDE with HOWTO feature — IDE rodando no AIOS com Cortex-assisted code generation. Editor + Cortex Panel. | 🟡 Sprint 93 | Sprint 93 | ADR-0032 |
+| 2026-07-06 | **395** | Marketplace/App Store agent — HTTP agent: search, install, Ed25519 verification, versioning, ratings. | 🟡 Sprint 93 | Sprint 93 | ADR-0032 |
+| 2026-07-06 | **396** | DiskMonitor example agent — 48 KB WASM agent: manifest(), tick() checando SMART a cada 1000 ticks, publish_event(). | 🟡 Sprint 93 | Sprint 93 | ADR-0032 |
+| 2026-07-06 | **397** | SleepCycle guard rails per phase — REPLAY rejeita security_bypass, DREAM rejeita weapon/exploit, CONSOLIDATE protege safety skills. | 🟡 Sprint 95 | Sprint 95 | ADR-0033 |
+| 2026-07-06 | **398** | BitNetTrainer implementation — PackedTernaryWeights, train_step() com STE, signum() gradient update, clamp(-1,1). | 🟡 Sprint 95 | Sprint 95 | ADR-0033 |
+| 2026-07-06 | **399** | Candle Trainer sidecar — ELF binary com candle crate. Kernel carrega ELF, aloca stack+heap, mapeia segments, executa treino GPU. | 🟡 Sprint 95 | Sprint 95 | ADR-0033 |
+| 2026-07-06 | **400** | Task Spawner (ELF loader) — spawn_elf() com goblin::elf::Elf::parse(), allocate_contiguous_pages(), map_elf_segment(), TSS stack. | 🟡 Sprint 95 | Sprint 95 | ADR-0033 |
+| 2026-07-06 | **401** | Three data sources for on-device training — Local FS (SMART logs, self-heal), Pre-loaded (/data/rust_training/), Internet (crawl). | 🟡 Sprint 95 | Sprint 95 | ADR-0033 |
+| 2026-07-06 | **402** | WASM linear memory pool (256 KB per skill) — 64-page slabs pre-alocadas por skill, alocadas do heap. | 🟡 Sprint 93 | Sprint 93 | ADR-0010 |
+| 2026-07-06 | **403** | Skill ABI design — Como skills comunicam resultado ao Cortex: tensor return path, logging, completion signaling. | 🟡 Sprint 93 | Sprint 93 | ADR-0010 |
+| 2026-07-06 | **404** | NVMe submission/completion queue architecture — Submission/completion queues, MSI-X, PRP lists, SGL. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0010 |
+| 2026-07-06 | **405** | Capability token cryptographically signed — Skill recebe contexto com token criptografado scoped a operações permitidas, verificado pelo kernel. | 🟡 Sprint 93 | Sprint 93 | ADR-0010 |
+| 2026-07-06 | **406** | VirtIO-GPU GET_DISPLAY_INFO pending fix — Bug do QEMU TCG onde GET_DISPLAY_INFO retorna 0x0. | 🟡 Sprint 97 | Sprint 97 | ADR-0029 |
