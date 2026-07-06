@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.91.0-ui] — 2026-07-06 — 🖥️ Sprint 91: JARVIS Desktop UI
+
+### Added
+- **JarvisDesktop** — Compositor multi-window com status bar + app switcher
+- **Hermes Chat App** — Janela de chat com histórico de comandos
+- **Settings App** — Configurações: tema, voz, memória, avatar, rede
+- **Power App** — Shutdown, Reboot, Hibernate, Sleep
+- **JARVIS avatar overlay** — Canto inferior direito com pulso animado
+- **`display/compositor.rs`** — Reescrito: `JarvisDesktop` + `draw_text()` + `render_app_content()`
+
+### Changed
+- `display/agent.rs` — DisplayAgent agora gerencia Desktop + apps + avatar
+- `compositor.rs` — Substitui wrapper NeuralConsole por JarvisDesktop completo
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics, Desktop 1280×720, 248 agents
+
 ## [0.90.0-cognitive] — 2026-07-06 — 🧠 Sprint 90: JARVIS Deep Cognitive
 
 ### Added

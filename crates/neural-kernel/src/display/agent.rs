@@ -1,5 +1,5 @@
-//! DisplayAgent — renderiza JARVIS Avatar + Hermes Chat Console.
-//! Port do JARVIS .NET MAUI para bare-metal: partículas, emoção, personalidade.
+//! DisplayAgent — JARVIS Desktop com compositor multi-app.
+//! Hermes Chat + Settings + Power + JARVIS avatar overlay.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::hermes;
@@ -7,8 +7,7 @@ use crate::jarvis::{JarvisEngine, AvatarState};
 use crate::serial_println;
 use crate::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::COMPOSITOR;
-use crate::display::console::NeuralConsole;
+use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId};
 use crate::display::avatar::JarvisAvatar;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
@@ -25,10 +24,6 @@ pub struct DisplayAgent {
     gpu_inited: bool,
     input_buffer: alloc::string::String,
     avatar: Option<JarvisAvatar>,
-    engine: Option<JarvisEngine>,
-    last_response: alloc::string::String,
-    is_thinking: bool,
-    is_speaking: bool,
 }
 
 impl DisplayAgent {
@@ -39,10 +34,6 @@ impl DisplayAgent {
             gpu_inited: false,
             input_buffer: alloc::string::String::new(),
             avatar: None,
-            engine: Some(JarvisEngine::new()),
-            last_response: alloc::string::String::new(),
-            is_thinking: false,
-            is_speaking: false,
         }
     }
 }
@@ -59,12 +50,14 @@ impl Agent for DisplayAgent {
                     gpu_dev.fb_height as usize, gpu_dev.fb_stride as usize,
                     gpu_dev.fb_bpp as usize,
                 );
-                *COMPOSITOR.lock() = Some(NeuralConsole::new(fb));
-
-                // Inicializa avatar JARVIS
+                let mut desktop = JarvisDesktop::new(fb);
+                desktop.register_app(AppId::HermesChat, "Hermes Chat");
+                desktop.register_app(AppId::Settings, "Settings");
+                desktop.register_app(AppId::Power, "Power");
+                desktop.toggle_app(AppId::HermesChat);
+                *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(JarvisAvatar::new(gpu_dev));
-                serial_println!("[JARVIS] Avatar iniciado @ {}x{}",
-                    gpu_dev.fb_width, gpu_dev.fb_height);
+                serial_println!("[JARVIS] Desktop iniciado @ {}x{}", gpu_dev.fb_width, gpu_dev.fb_height);
             }
             self.gpu_inited = true;
             return AgentTickResult::Pending;
@@ -75,44 +68,33 @@ impl Agent for DisplayAgent {
             self.input_buffer = core::str::from_utf8(&ev.payload).unwrap_or("").into();
         }
 
-        // Hermes response — processa emoção + atualiza avatar
+        // Hermes response
         while let Some(ev) = self.receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            self.last_response = alloc::string::String::from(text);
-            self.is_speaking = true;
-
-            // Engine JARVIS processa a resposta
-            if let Some(ref mut engine) = self.engine {
-                engine.process_input(text);
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                    chat.data.push_str(text);
+                    chat.data.push('\n');
+                }
             }
         }
 
-        // Renderiza JARVIS Avatar + Hermes Chat Console
-        if let Some(ref mut console) = *COMPOSITOR.lock() {
-            console.input_buffer = self.input_buffer.clone();
+        // App switching via keyboard commands
+        if self.input_buffer.contains("[F1]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::HermesChat); }}
+        if self.input_buffer.contains("[F2]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Settings); }}
+        if self.input_buffer.contains("[F3]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Power); }}
 
-            // Renderiza console primeiro (preenche fundo + texto)
-            let mem = crate::memory::global_hardware_context();
-            console.render_content(tick, 0, mem[0], false, false);
-
-            // Determina estado do avatar
-            let avatar_state = self.engine.as_ref().map_or(AvatarState::Idle, |e| {
-                e.avatar_state_for(self.is_thinking, self.is_speaking)
-            });
-
-            // Renderiza avatar SOBRE o console (overlay)
+        // Render desktop
+        let mut comp = COMPOSITOR.lock();
+        if let Some(ref mut desktop) = *comp {
             if let Some(ref mut avatar) = self.avatar {
-                avatar.set_state(avatar_state);
-                avatar.render(&mut console.fb);
+                avatar.render(&mut desktop.fb);
             }
-
-            console.fb.swap();
+            desktop.render(tick);
         }
+        drop(comp);
 
-        // Reseta flags
-        if tick % 10 == 0 { self.is_speaking = false; }
-        if tick % 5 == 0 { self.is_thinking = false; }
-
+        self.input_buffer.clear();
         AgentTickResult::Pending
     }
 }
