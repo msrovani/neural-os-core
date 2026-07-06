@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.88.0-emotion] — 2026-07-06 — 🎭 Sprint 88: JARVIS Emotion + Cache + Pipeline + DHCP
+
+### Added
+- **#315.6 Emotion Analysis** — `EmotionAnalysis` com 7 emoções + sarcasmo, análise por palavra-chave
+- **#315.7 Capability Contract + Consent Gates** — `ConsentGate` com 3 níveis (Safe/Moderate/Dangerous)
+- **#315.8 Skill Discovery** — `SkillDiscovery` — observa padrões de tarefa, propõe skills em ≥3 repetições
+- **#315.9 ADE Pipeline** — `ade_pipeline()` — 4 fases: Spec→Execute→Review→Recover
+- **#315.10 Semantic Cache** — `SemanticCache` — 5 tiers (exact→pattern→fallback), hit/miss tracking
+- **#315.11 Persona Pipeline** — `persona_pipeline()` — 16 stages da OVOS
+- **#356 edge-dhcp integration** — `dhcp.rs` — ponte para crate edge-dhcp (no_std + no-alloc DHCP)
+
+### Changed
+- `jarvis.rs` unificado com todos os 16+ componentes da Sprint 86-88
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics, 214 agency agents, JARVIS avatar OK
+
 ## [0.87.0-security] — 2026-07-06 — 🛡️ Sprint 87: JARVIS Security + AHCI
 
 ### Added

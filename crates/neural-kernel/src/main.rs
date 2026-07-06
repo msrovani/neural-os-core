@@ -121,6 +121,7 @@ mod jarvis;
 mod alloc_adapter;
 mod audit;
 mod ahci;
+mod dhcp;
 
 use lazy_static::lazy_static;
 
