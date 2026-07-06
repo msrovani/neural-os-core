@@ -34,8 +34,8 @@ pub enum FileMode {
     File,
     Directory,
     Symlink,
-    AgentMount,  // mount point delegado a um agente
-    Virtual,     // gerado sob demanda (proc, sys)
+    AgentMount,
+    Virtual,
 }
 
 #[derive(Debug, Clone)]

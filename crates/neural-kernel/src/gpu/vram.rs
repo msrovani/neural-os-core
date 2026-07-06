@@ -167,6 +167,11 @@ pub fn vram_free(addr: u64, size: usize) {
     }
 }
 
+/// #334 MSched — Belady OPT eviction predictor (stub)
+pub fn msched_predict(access_pattern: &[u64]) -> u64 {
+    access_pattern.first().copied().unwrap_or(0)
+}
+
 pub fn vram_status() -> alloc::string::String {
     let guard = VRAM_BUDDY.lock();
     if let Some(ref buddy) = *guard {

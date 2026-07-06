@@ -168,7 +168,7 @@ impl E1000Driver {
 
     fn alloc_frame() -> u64 {
         let mut guard = GLOBAL_ALLOCATOR.lock();
-        let alloc = guard.as_mut().unwrap();
+        let alloc = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized in alloc_frame");
         let frame = alloc.allocate_contiguous(1);
         match frame {
             Some(f) => f.start_address().as_u64(),

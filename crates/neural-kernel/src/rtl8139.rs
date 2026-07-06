@@ -89,7 +89,7 @@ impl Rtl8139Driver {
 
     fn alloc_page() -> u64 {
         let mut guard = GLOBAL_ALLOCATOR.lock();
-        let allocator = guard.as_mut().unwrap();
+        let allocator = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized in alloc_page");
         let frame = allocator.allocate_contiguous(1);
         match frame {
             Some(f) => f.start_address().as_u64(),
@@ -99,7 +99,7 @@ impl Rtl8139Driver {
 
     fn alloc_pages(n: usize) -> u64 {
         let mut guard = GLOBAL_ALLOCATOR.lock();
-        let allocator = guard.as_mut().unwrap();
+        let allocator = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized in alloc_pages");
         let frame = allocator.allocate_contiguous(n);
         match frame {
             Some(f) => f.start_address().as_u64(),

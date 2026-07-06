@@ -123,6 +123,7 @@ mod audit;
 mod ahci;
 mod dhcp;
 mod memory_systems;
+mod cfs;
 
 use lazy_static::lazy_static;
 
