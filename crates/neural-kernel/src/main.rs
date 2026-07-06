@@ -124,6 +124,11 @@ mod ahci;
 mod dhcp;
 mod memory_systems;
 mod cfs;
+mod app_store;
+mod multi_user;
+mod workflow;
+mod hub;
+mod elf_loader;
 
 use lazy_static::lazy_static;
 
