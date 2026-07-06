@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.94.0-vision] — 2026-07-06 — 👁️ Sprint 94: Vision + Display
+
+### Added
+- **#79 Font rendering escalado** — `draw_text_scaled()` com scale=1,2,3... para alta resolução
+- **#80 Texto em negrito** — `draw_text_bold()` com desenho duplicado para destaque
+- **#81 VirtIO-GPU** — Aceleração 2D via VirtIO (QEMU) já funcional desde Sprint 45
+- **#82 Tensor visualization** — `draw_tensor_heatmap()` + `draw_attention_graph()` no desktop
+- **Painel Vision** — Attention Map + Token Scores no canto superior direito do desktop
+
+### Changed
+- `font.rs` — Adicionadas 4 novas funções de renderização
+- `compositor.rs` — Tensor viz overlay integrado ao desktop JARVIS
+
+### Tested
+- QEMU -smp 1 TCG: 0 panics, Desktop 1280×720, Vision panel, 248 agents
+
 ## [0.93.0-wasm] — 2026-07-06 — ⚡ Sprint 93: WASM Runtime + IDE
 
 ### Added

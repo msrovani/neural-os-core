@@ -10,6 +10,63 @@ pub fn get_char_bitmap(c: char) -> Option<&'static [u8; 16]> {
 pub const CHAR_W: usize = 8;
 pub const CHAR_H: usize = 16;
 
+/// #79: Desenha texto escalado (scale=1 normal, scale=2 dobro, etc)
+pub fn draw_text_scaled(fb: &mut crate::display::fb::DoubleBuffer, x: usize, y: usize, text: &str, scale: usize, scr_w: usize, r: u8, g: u8, b: u8) {
+    for (i, c) in text.chars().enumerate() {
+        let px = x + i * (CHAR_W + 1) * scale;
+        if px + CHAR_W * scale > scr_w { break; }
+        if let Some(bitmap) = get_char_bitmap(c) {
+            for dy in 0..CHAR_H {
+                let row = bitmap[dy];
+                for dx in 0..CHAR_W {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        for sy in 0..scale { for sx in 0..scale { fb.set_pixel(px + dx * scale + sx, y + dy * scale + sy, r, g, b); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// #80: Texto em negrito (desenha cada pixel duas vezes)
+pub fn draw_text_bold(fb: &mut crate::display::fb::DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, r: u8, g: u8, b: u8) {
+    for (i, c) in text.chars().enumerate() {
+        let px = x + i * (CHAR_W + 1);
+        if px + CHAR_W > scr_w { break; }
+        if let Some(bitmap) = get_char_bitmap(c) {
+            for dy in 0..CHAR_H {
+                let row = bitmap[dy];
+                for dx in 0..CHAR_W {
+                    if (row >> (7 - dx)) & 1 == 1 {
+                        fb.set_pixel(px + dx, y + dy, r, g, b);
+                        fb.set_pixel(px + dx + 1, y + dy, r, g, b);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// #82: Desenha heatmap de tensor
+pub fn draw_tensor_heatmap(fb: &mut crate::display::fb::DoubleBuffer, x: usize, y: usize, data: &[f32], w: usize, h: usize) {
+    for row in 0..h {
+        for col in 0..w {
+            if row * w + col >= data.len() { break; }
+            let val = data[row * w + col].clamp(0.0, 1.0);
+            fb.set_pixel(x + col, y + row, (val * 200.0) as u8, (val * 50.0) as u8, ((1.0 - val) * 200.0) as u8);
+        }
+    }
+}
+
+/// #82: Gráfico de atenção (attention scores)
+pub fn draw_attention_graph(fb: &mut crate::display::fb::DoubleBuffer, x: usize, y: usize, scores: &[f32], w: usize, h: usize) {
+    let max = scores.iter().cloned().fold(0.0f32, |a,b| a.max(b)).max(0.01);
+    for (i, &s) in scores.iter().enumerate().take(w) {
+        let bar = ((s / max) * h as f32) as usize;
+        for dy in 0..bar.min(h) { fb.set_pixel(x + i, y + h - dy - 1, 0, 200, 255); }
+    }
+}
+
 // Fonte VGA 8x16 — ASCII 32 a 126 (95 chars × 16 bytes = 1520 bytes)
 static FONT_DATA: [[u8; 16]; 95] = [
     [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00], //  

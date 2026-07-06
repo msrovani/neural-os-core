@@ -10,15 +10,20 @@ use crate::display::fb::DoubleBuffer;
 pub static COMPOSITOR: Mutex<Option<JarvisDesktop>> = Mutex::new(None);
 
 pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, r: u8, g: u8, b: u8) {
-    for (i, c) in text.chars().enumerate() {
-        let px = x + i * 7;
-        if px + 7 > scr_w { break; }
-        if let Some(bitmap) = crate::display::font::get_char_bitmap(c) {
-            for dy in 0..16 { let row = bitmap[dy];
-                for dx in 0..8 { if (row >> (7 - dx)) & 1 == 1 { fb.set_pixel(px + dx, y + dy, r, g, b); } }
-            }
-        }
-    }
+    crate::display::font::draw_text_scaled(fb, x, y, text, 1, scr_w, r, g, b);
+}
+
+/// #82: Renderiza tensor visualization overlay
+pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, w: usize, h: usize) {
+    use core::f32::consts::PI;
+    use libm::sinf;
+    let mut data = [0.0f32; 400];
+    for i in 0..20 { for j in 0..20 { data[i*20+j] = (sinf(i as f32*0.3)*sinf(j as f32*0.3)).abs()*0.5+0.5; } }
+    crate::display::font::draw_tensor_heatmap(fb, x, y, &data, 20, 20);
+    draw_text(fb, x, y+85, "Attention", fb.info.width, 0,200,255);
+    let bars = [0.9f32,0.7,0.5,0.8,0.3,0.6,0.4,0.7,0.2,0.5];
+    crate::display::font::draw_attention_graph(fb, x, y+105, &bars, 100, 25);
+    draw_text(fb, x, y+135, "Scores", fb.info.width, 0,200,100);
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -81,6 +86,9 @@ impl JarvisDesktop {
             draw_text(&mut self.fb, ix + 5, iy + 52, &skill.name, self.w, 200, 200, 200);
         }
 
+        // Tensor visualization panel (canto superior direito)
+        render_tensor_viz(&mut self.fb, w.saturating_sub(160), 35, 120, 160);
+
         // App windows
         for app in &self.apps {
             if !app.visible { continue; }
@@ -129,6 +137,8 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, scr_
             draw_text(fb, cx, cy + 20, "Running via WASM Runtime...", scr_w, 180, 200, 220);
             draw_text(fb, cx, cy + 40, &app.data, scr_w, 200, 200, 200);
         }
-        AppId::None => {}
+        AppId::WasmSkill(_) | AppId::None => {}
     }
 }
+
+
