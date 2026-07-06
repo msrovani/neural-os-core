@@ -295,7 +295,7 @@ impl KnowledgeGraph {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// #359 BGE Embedding stub — converter ONNX->.bitnet
+// #359 BGE Embedding — converter ONNX->.bitnet via tools/convert_onnx_to_bitnet.py
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct BgeEmbedding {
