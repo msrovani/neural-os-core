@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.93.0-wasm] — 2026-07-06 — ⚡ Sprint 93: WASM Runtime + IDE
+
+### Added
+- `wasm_rt.rs`: WASM Skill Runtime, MemoryPool (256KB/skill), 15 WASI→Skill mappings, HybridRegistry
+- **BitNet IDE** (F4): Gera WASM skills via `[GEN]` → publica como ícone no desktop
+- **Ícones WASM dinâmicos**: Skills aparecem como quadrados no desktop, clicáveis
+- `app_store.rs`: AppForge (install/uninstall/search)
+- `multi_user.rs`: Multi-User com trust tiers
+- `workflow.rs`: Workflow Builder (DAG) + Federated Cluster
+- `hub.rs`: Observability + Hub Discovery
+- `elf_loader.rs`: Cross-OS loaders (ELF/PE/Mach-O/APK)
+- Compositor: suporte a AppId::Ide, AppId::WasmSkill, ícones dinâmicos
+
+### Tested
+- QEMU -smp 2 WHPX: 0 panics, Desktop 1280×720, 248 agents
+
+## [0.92.0-lan] — 2026-07-06 — 🌐 Sprint 92: LAN + Dependências
+
+### Added
+- B-01/#117-120: Network stack (smoltcp DHCP/ARP, /ping)
+- #186-189: AppForge, Multi-User, Workflow, Federated
+- #241-247: Observability, Hub, HITL, Marketplace, Compaction
+- #306a-d: ELF/PE/Mach-O/APK loaders
+- M4-M5: Syscall Categories, Neural Cache
+
 ## [0.91.0-ui] — 2026-07-06 — 🖥️ Sprint 91: JARVIS Desktop UI
 
 ### Added
