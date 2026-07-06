@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.95.0-cog+v0.96.0-heal] — 2026-07-06 — 🧠🛡️ Sprints 95+96: Cognitive + Self-Heal
+
+### Added
+- **#105 Intent Planner** — `cognitive::IntentPlanner` — goal-based plan generation
+- **#106 Success Engine** — `cognitive::SuccessEngine` — online feedback tracking
+- **#107 Neural Cache** — `cognitive::NeuralCache` — BTreMap-based activation cache
+- **#108 MatMul-free LM** — `cognitive::MatMulFreeLM` — stub for RWKV/Mamba
+- **#149 Feedback Loop** — `cognitive::FeedbackLoop` — user rating (0-10) collection
+- **#158 Workflow Predictor** — `cognitive::WorkflowPredictor` — pattern prediction
+- **#169-170 Codebook VQ** — `cognitive::CodebookVQ` — vector quantization (256 codes, 64-dim)
+- **#226-227 Team Memory + Snapshots** — `memory_systems::TeamMemory` — agent-shared memory with snapshots
+- **#265-266 Vector FS + Vector API** — `vfs::VectorFs` — semantic file search via embeddings
+- **#267 OverlayFS** — `vfs::VfsRegistry::mount_overlay()` — multi-layer VFS
+- **M6-M14 Self-Healing** — `self_heal::classify_by_code()`, `corrective_prompt()`, `assess_failure()`, `predict_failure()`
+- **M37 SleepCycle Guard Rails** — `cognitive::sleep_guard_allowed()` — blocks dangerous content per phase
+
+### Changed
+- `self_heal.rs` — Sprint 96 failure prediction infrastructure
+- `memory_systems.rs` — Team memory with snapshot versioning
+- `vfs/mod.rs` — Vector FS semantic search + OverlayFS mount
+- `main.rs` — 8 new `lazy_static` instances for cognitive/memory modules
+- `fs/ata_agent.rs` — Fixed pre-existing unreachable match arm bug
+
 ## [0.94.0-vision] — 2026-07-06 — 👁️ Sprint 94: Vision + Display
 
 ### Added

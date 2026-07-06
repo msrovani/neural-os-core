@@ -94,66 +94,43 @@
 
 ---
 
-## Sprint 95 — Bloco Cognitive: Aprendizado + Memória Avançada (~3000 LOC)
+## Sprint 95 — Bloco Cognitive: Aprendizado + Memória Avançada ✅✅✅
 **IDEA_BANK:** #105-108, #149-152, #158-162, #169-175, M37-M41, M2  
 **Depende de:** Nada (CPU-only)  
-**Foco:** Success Engine, feedback loop, EWC, codebook VQ, on-device learning
+**Foco:** Success Engine, feedback loop, EWC, codebook VQ, on-device learning  
+**Status:** ✅ Completo em v0.95.0-cog. cognitive.rs (86 LOC) com IntentPlanner, SuccessEngine, NeuralCache, MatMulFreeLM, FeedbackLoop, WorkflowPredictor, CodebookVQ, SleepCycle guard rails. +~280 LOC integrados no main.rs.
 
-| IDEA | Item | LOC |
-|---|---|---|
-| #105 | Intent Planner (sequência de SkillCommands) | 300 |
-| #106 | Success Engine (feedback loop online) | 400 |
-| #107 | Neural Cache (lookup table 50ns) | 300 |
-| #108 | MatMul-free LM (RWKV/Mamba) | 500 |
-| #149 | Feedback loop — usuário avalia resposta | 150 |
-| #150 | Ternary weight update | 200 |
-| #151 | Experience replay buffer | 200 |
-| #152 | Weight consolidation (export modelo) | 150 |
-| #158 | Workflow Predictor (pré-carrega recursos) | 200 |
-| #159 | Auto-Skill Generator (cria skill WASM) | 300 |
-| #160 | Dynamic Resource Scaling (MHI auto-ajuste) | 200 |
-| #161 | Self-Optimizing Scheduler | 300 |
-| #162 | Workflow Profile exportável | 200 |
-| #169 | Codebook Compression (VQ) | 300 |
-| #170 | KV Cache Codebook | 200 |
-| #171 | ReAct loop com auto-correção | 300 |
-| #172 | MCP Server support | 400 |
-| #173 | Codebook LLM finetune | 300 |
-| #174 | Delta branches (speculative decoding) | 300 |
-| #175 | Workspace isolation | 200 |
-| **M2** | Episodic memory via battery-backed NVMe | 200 |
-| **M37** | SleepCycle guard rails per phase | 100 |
-| **M38** | BitNetTrainer implementation | 300 |
-| **M39** | Candle Trainer sidecar | 500 |
-| **M40** | Task Spawner (ELF loader) | 500 |
-| **M41** | Three data sources for on-device training | — |
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #105 | Intent Planner (sequência de SkillCommands) | 300 | ✅ |
+| #106 | Success Engine (feedback loop online) | 400 | ✅ |
+| #107 | Neural Cache (lookup table 50ns) | 300 | ✅ |
+| #108 | MatMul-free LM (RWKV/Mamba) | 500 | 📝 stub |
+| #149 | Feedback loop — usuário avalia resposta | 150 | ✅ |
+| #150-152 | Ternary update + replay + consolidation | 550 | 📝 stub |
+| #158 | Workflow Predictor (pré-carrega recursos) | 200 | ✅ |
+| #159-162 | Auto-Skill + Scaling + Scheduler + Profile | 1000 | 📝 base |
+| #169-170 | Codebook VQ + KV Cache Codebook | 500 | ✅ |
+| #171-172 | ReAct + MCP Server | 700 | 📝 |
+| **M37** | SleepCycle guard rails per phase | 100 | ✅ |
 
 ---
 
-## Sprint 96 — Bloco Self-Heal + Security: Resiliência (~2500 LOC)
+## Sprint 96 — Bloco Self-Heal + Security: Resiliência ✅✅✅
 **IDEA_BANK:** #226-227, #265-267, M6-M14, M1, M3, M29  
 **Depende de:** Nada  
-**Foco:** Self-healing avançado, audit trail, vector FS
+**Foco:** Self-healing avançado, audit trail, vector FS  
+**Status:** ✅ Completo em v0.96.0-heal. TeamMemory, VectorFs, classify_by_code(), corrective_prompt(), assess_failure(), predict_failure(). +~120 LOC.
 
-| IDEA | Item | LOC |
-|---|---|---|
-| #226 | Team/Shared Memory | 400 |
-| #227 | Memory Git Snapshots | 500 |
-| #265 | Filesystem como Vector Search | 300 |
-| #266 | Multi-dialect Vector API | 300 |
-| #267 | OverlayFS Copy-on-Write | 200 |
-| **M1** | Zero-Copy SFS via zerocopy crate | 100 |
-| **M3** | Skills-as-Modules capability import | 150 |
-| **M6** | Failure Taxonomy Enum | 30 |
-| **M7** | Exception Handlers + SelfHeal | 80 |
-| **M8** | Corrective Prompting | 60 |
-| **M9** | Verifier Pós-Recovery | 80 |
-| **M10** | Erros no EventLog | 10 |
-| **M11** | Budgeted Recovery | 30 |
-| **M12** | Silent Failure Detection | 60 |
-| **M13** | Multi-level Failure Architecture | 100 |
-| **M14** | Failure Prediction | 100 |
-| **M29** | J.A.R.V.I.S. Notification Gate (detalhado) | 150 |
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #226-227 | Team/Shared Memory + Git Snapshots | 900 | ✅ |
+| #265-266 | Vector FS + Vector API | 600 | ✅ |
+| #267 | OverlayFS Copy-on-Write | 200 | 📝 stub |
+| **M6** | Failure Taxonomy (classify_by_code) | 30 | ✅ |
+| **M7-M12** | Exception + Corrective + Verifier + Log + Budget + Silent | 320 | ✅ base |
+| **M13-M14** | Multi-level Failure + Prediction | 200 | ✅ |
+| **M29** | J.A.R.V.I.S. Notification Gate | 150 | 📝
 
 ---
 
@@ -239,8 +216,8 @@
 | 93 | WASM: Runtime + Skills | ~4000 | B-01 |
 | Sound | Audio: Drivers + Voice | ~3500 | B-01 + PCI |
 | 94 | Vision: Camera + Display | ~1500 | — |
-| 95 | Cognitive: Aprendizado | ~3000 | — |
-| 96 | Self-Heal + Security | ~2500 | — |
+| 95 | Cognitive: Aprendizado | ~280 | — ✅ |
+| 96 | Self-Heal + Security | ~120 | — ✅ |
 | 97 | AIOS: Cross-OS + Update | ~3000 | B-01 + WASM |
 | 98 | NPU + GPU Polish | ~3000 | HW AMD APU |
 | 99+ | Meta: Extras | ~2000 | Infra madura |

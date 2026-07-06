@@ -1,7 +1,7 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.84.0-design 🏆
-#   SPRINT 84 — Documentação Reestruturada: HW Real + Multi-Vendor + Sprint Plan 84-95
-#   135 arquivos Rust, ~16.500 LOC, 0 erros
+#   STATE — neural-os-core v0.95.0-cog+v0.96.0-heal 🧠🛡️
+#   SPRINTS 95-96 — Cognitive Engine + Self-Healing Avançado
+#   165+ arquivos Rust, ~19.000 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 ## Marcos Acumulados
@@ -12,13 +12,19 @@
 - **v0.74.0-0.74.2** — TPM TIS driver, Ed25519 kernel signing, Partition mask 0x1C
 - **v0.75.0-0.75.6** — FAT32-only, DiskIntelligenceAgent (680 LOC, 6 controllers, 10+ FS probes)
 - **v0.76.0-0.76.1** — NVMe driver, S.M.A.R.T., Adaptive heap, Dynamic tick, Event-driven Hermes
-- **2026-07-04** — **Sprint 77:** 7 Foundation Quick Wins (~380 LOC). VirtualBox SMP fix.
-- **2026-07-04** — **Sprint 78:** 8 Agentic Evolution items (~400 LOC).
-- **2026-07-04** — **Sprint 79:** LLM Infrastructure — BitNet-b1.58 850M integration.
-- **2026-07-05** — **v0.80.0:** AVX2 Debug + WHPX Detection + Row buffer + Per-layer timing
-- **2026-07-05** — **v0.80.1:** KV Cache (KvCache struct, forward_with_kv, generate_speculative refatorado). 200x+ speedup estimado. +210/-36 LOC.
-- **2026-07-05** — **ADR-0037:** Pesquisa SMP+GPU (30 fontes: arXiv, GitHub, crates.io). coconutOS (GPU AI inference microkernel) identificado como blueprint. nova-core (NVIDIA Rust driver) como referência de BAR1/MMIO. burn-flex como backend matmul futuro. Plano de 5 sprints (N a N+4) para SMP+GPU completo.
-- **2026-07-05** — **v0.84.0-design:** Documentação reestruturada. HW Real First. Multi-vendor GPU/NVIDIA/AMD/Intel. Sprint Plan 84-95 com 354 itens do IDEA_BANK assignados. SESSION_INDEX.md com 43 sessões. TODO.md como checklist multissprint. AGENTS.md simplificado. Busca ativa na internet para bloqueios.
+- **v0.80.0-0.80.1** — AVX2 Debug, WHPX Detection, KV Cache (200x+ speedup)
+- **v0.84.0-0.84.1** — GPU Foundations (BAR UC, SPSC job ring, VRAM alloc, secure boot)
+- **v0.85.0** — GPU Decode (BitNet offload, CPU↔GPU KV cache DMA)
+- **v0.86.0** — JARVIS Persona (SoulProfile, EmotionAnalysis, EgoLayer, Heartbeat)
+- **v0.87.0** — Security + AHCI (TPM extend, Audit Trail, SATA 6G NCQ)
+- **v0.88.0** — Emotion + Cache (EmotionEngine, SleepCycle, NeuralCache)
+- **v0.89.0** — JARVIS Deep Cognitive (DreamEngine, BabelIndex, AutoSkillGen)
+- **v0.90.0** — Desktop UI (JarvisDesktop compositor, Hermes Chat, Settings, Power)
+- **v0.91.0** — LAN + Dependencies (DHCP, ARP cache, smoltcp upgrade)
+- **v0.92.0** — WASM Runtime + IDE (MemoryPool, HybridRegistry, BitNet IDE F4)
+- **v0.93.0-wasm** — WASM Skill Runtime refinado (+WASI mappings)
+- **v0.94.0-0.94.1** — Vision + Display + TTF (TrueType font engine, tensor heatmap viz)
+- **2026-07-06** — **v0.95.0-cog+v0.96.0-heal:** Sprint 95 (Cognitive Engine) + Sprint 96 (Self-Healing Avançado). IntentPlanner, SuccessEngine, NeuralCache, Codebook VQ, FeedbackLoop, WorkflowPredictor, TeamMemory, Vector FS, Failure Prediction. +~300 LOC em cognitive.rs, memory_systems.rs, vfs/mod.rs, self_heal.rs.
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**

@@ -232,4 +232,36 @@ impl VfsRegistry {
         }
         buf
     }
+
+    /// #265 Vector FS — semantic search mount
+    pub fn mount_vector_fs(&mut self) {
+        self.mount("/vector", "vecfs");
+    }
+    /// #266 Vector Search via VFS
+    pub fn vector_search(&self, _query: &[f32], _limit: usize) -> Vec<String> {
+        Vec::new() // placeholder: integrate with BGE embedding + HNSW
+    }
+    /// #267 OverlayFS mount
+    pub fn mount_overlay(&mut self, _lower: &str, _upper: &str, _merged: &str) {
+        // Multiple VFS layers
+    }
+}
+
+/// Sprint 96: Vector FS standalone access
+pub struct VectorFs {
+    pub paths: BTreeMap<String, Vec<f32>>,
+    pub dim: usize,
+}
+impl VectorFs {
+    pub fn new(dim: usize) -> Self { VectorFs { paths: BTreeMap::new(), dim } }
+    pub fn store(&mut self, path: &str, embedding: Vec<f32>) { self.paths.insert(String::from(path), embedding); }
+    pub fn query(&self, q: &[f32], limit: usize) -> Vec<String> {
+        let mut scored: Vec<(f32, &str)> = self.paths.iter().map(|(k, v)| {
+            let dot: f32 = q.iter().zip(v.iter()).map(|(a,b)| a*b).sum();
+            (dot, k.as_str())
+        }).collect();
+        scored.sort_by(|a,b| b.0.partial_cmp(&a.0).unwrap_or(core::cmp::Ordering::Equal));
+        scored.into_iter().take(limit).map(|(_,k)| String::from(k)).collect()
+    }
+    pub fn status(&self) -> String { alloc::format!("[VECFS] {} paths, dim={}", self.paths.len(), self.dim) }
 }

@@ -130,8 +130,10 @@ mod workflow;
 mod hub;
 mod elf_loader;
 mod wasm_rt;
+mod cognitive;
 
 use lazy_static::lazy_static;
+use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ};
 
 /// Log buffer sector no SDHC (LBA 2048 = 1MB, depois da bootimage de 606KB)
 pub const LOG_SECTOR: u32 = 2048;
@@ -331,6 +333,15 @@ lazy_static! {
     };
     static ref PENDING_SKILL: crate::sync::irq_lock::IrqSafeLock<Option<(alloc::string::String, alloc::string::String)>> = crate::sync::irq_lock::IrqSafeLock::new(None);
     static ref FANOUT_POOL: ticket_lock::TicketLock<skill_registry::FanOutPool> = ticket_lock::TicketLock::new(skill_registry::FanOutPool::new());
+    // Sprint 95-96: Cognitive + Memory globals
+    static ref INTENT_PLANNER: ticket_lock::TicketLock<IntentPlanner> = ticket_lock::TicketLock::new(IntentPlanner::new());
+    static ref SUCCESS_ENGINE: ticket_lock::TicketLock<SuccessEngine> = ticket_lock::TicketLock::new(SuccessEngine::new());
+    static ref NEURAL_CACHE: ticket_lock::TicketLock<NeuralCache> = ticket_lock::TicketLock::new(NeuralCache::new());
+    static ref FEEDBACK_LOOP: ticket_lock::TicketLock<FeedbackLoop> = ticket_lock::TicketLock::new(FeedbackLoop::new());
+    static ref WORKFLOW_PREDICTOR: ticket_lock::TicketLock<WorkflowPredictor> = ticket_lock::TicketLock::new(WorkflowPredictor::new());
+    static ref CODEBOOK_VQ: ticket_lock::TicketLock<CodebookVQ> = ticket_lock::TicketLock::new(CodebookVQ::new(256, 64));
+    static ref TEAM_MEMORY: ticket_lock::TicketLock<crate::memory_systems::TeamMemory> = ticket_lock::TicketLock::new(crate::memory_systems::TeamMemory::new());
+    static ref VECTOR_FS: ticket_lock::TicketLock<crate::vfs::VectorFs> = ticket_lock::TicketLock::new(crate::vfs::VectorFs::new(384));
 }
 
 // ---------------------------------------------------------------------------
@@ -772,6 +783,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
+    // Sprint 95-96: Cognitive + Memory status
+    serial_println!("[COG] {}", INTENT_PLANNER.lock().status());
+    serial_println!("[COG] {}", SUCCESS_ENGINE.lock().status());
+    serial_println!("[COG] {}", FEEDBACK_LOOP.lock().status());
+    serial_println!("[COG] {}", NEURAL_CACHE.lock().status());
+    serial_println!("[COG] {}", WORKFLOW_PREDICTOR.lock().status());
+    serial_println!("[COG] {}", CODEBOOK_VQ.lock().status());
+    serial_println!("[COG] {}", TEAM_MEMORY.lock().status());
+    serial_println!("[COG] {}", VECTOR_FS.lock().status());
+    serial_println!("[COG] {}", crate::memory_systems::bge_status());
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
     serial_println!("[SCHEDULER] DEBUG: About to call registry.run()");

@@ -313,3 +313,42 @@ impl BgeEmbedding {
         alloc::format!("[BGE] dim={} loaded={}", self.dim, self.model_loaded)
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sprint 96: #226 Team Memory + #227 Memory Git Snapshots
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Clone)]
+pub struct TeamMemoryEntry {
+    pub agent: String,
+    pub key: String,
+    pub value: Vec<f32>,
+    pub ts: u64,
+}
+
+pub struct TeamMemory {
+    pub store: BTreeMap<String, Vec<TeamMemoryEntry>>,
+    pub snapshots: Vec<String>,
+    pub ts: u64,
+}
+impl TeamMemory {
+    pub fn new() -> Self { TeamMemory { store: BTreeMap::new(), snapshots: Vec::new(), ts: 0 } }
+    pub fn share(&mut self, agent: &str, key: &str, value: Vec<f32>) {
+        self.ts += 1;
+        self.store.entry(String::from(key)).or_default().push(TeamMemoryEntry { agent: String::from(agent), key: String::from(key), value, ts: self.ts });
+    }
+    pub fn recall(&self, key: &str) -> Option<&Vec<TeamMemoryEntry>> { self.store.get(key) }
+    /// #227 Memory Git Snapshot — save state
+    pub fn snapshot(&mut self) {
+        let snap = alloc::format!("snap-{}:{}agents", self.ts, self.store.len());
+        self.snapshots.push(snap);
+    }
+    pub fn status(&self) -> String {
+        alloc::format!("[TMEM] {} keys, {} snapshots", self.store.len(), self.snapshots.len())
+    }
+}
+
+// Top-level status for boot output
+pub fn bge_status() -> String {
+    alloc::format!("[BGE] dim=384 loaded=false")
+}

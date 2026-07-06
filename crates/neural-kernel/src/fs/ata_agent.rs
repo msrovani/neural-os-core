@@ -77,11 +77,11 @@ impl FilesystemAgent for AtaAgent {
 
     fn list(&self, path: &str) -> Result<Vec<String>, &str> {
         match path.trim_matches('/') {
-            "" | "sda" | "sda/" => Ok(vec![
-                String::from("raw"), String::from("info"),
-            ]),
             "" => Ok(vec![
                 String::from("sda"), String::from("sda1"), String::from("info"),
+            ]),
+            "sda" | "sda/" => Ok(vec![
+                String::from("raw"), String::from("info"),
             ]),
             _ => Err("Diretorio nao encontrado"),
         }

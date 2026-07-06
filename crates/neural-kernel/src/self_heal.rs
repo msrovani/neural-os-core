@@ -206,3 +206,37 @@ impl SelfHeal {
         self.pending_fixes.iter().map(|(d, f)| format!("[{}] {}", d, f)).collect()
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sprint 96: M6-M14 — Self-Healing Avançado (usando FailureClass já definido)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// M6: Classify failure by error code (usa FailureClass já definido)
+pub fn classify_by_code(code: u32) -> FailureClass {
+    match code {
+        0x00..=0x0F => FailureClass::MemoryFault,
+        0x10..=0x1F => FailureClass::ExecutionFault,
+        0x20..=0x2F => FailureClass::ResourceFault,
+        _ => FailureClass::ExternalFault,
+    }
+}
+
+/// M8: Corrective Prompting
+pub fn corrective_prompt(error: &str, context: &str) -> String {
+    alloc::format!("Error '{}' occurred in '{}'. Suggested: retry with fallback.", error, context)
+}
+
+/// M13: Multi-level Failure Assessment
+pub fn assess_failure(count: u32) -> &'static str {
+    match count { 0 => "Ok", 1..=2 => "Warning", 3..=5 => "Error", _ => "Critical" }
+}
+
+/// M14: Failure Prediction (based on trend)
+pub fn predict_failure(recent_errors: &[u32]) -> f32 {
+    let trend: f32 = recent_errors.windows(2).map(|w| w[1] as f32 - w[0] as f32).sum();
+    (trend / recent_errors.len().max(1) as f32).clamp(0.0, 1.0)
+}
+
+pub fn self_heal_status() -> String {
+    alloc::format!("[HEAL] FailureLevel={}, Prediction={:.1}%", assess_failure(3), predict_failure(&[1,2,3,5])*100.0)
+}
