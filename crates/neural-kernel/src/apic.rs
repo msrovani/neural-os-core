@@ -406,6 +406,17 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     set_page_uc(0xFEE0_0000, info.phys_mem_offset);
     serial_println!("[APIC] IOAPIC/LAPIC pages mapped uncacheable.");
 
+    // SVR deve ser escrito IMEDIATAMENTE após mapear as páginas,
+    // ANTES de habilitar x2APIC ou qualquer outra operação APIC.
+    // Caso contrário, interrupções espúrias podem chegar com vetor 0
+    // (valor padrão de reset) causando "Ignoring request for interrupt vector 0" no QEMU.
+    let lapic_virt_base = info.lapic_base + info.phys_mem_offset;
+    LAPIC_VIRT_BASE.store(lapic_virt_base, Ordering::Release);
+    let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
+    let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
+    write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
+    serial_println!("[APIC] SVR set early: {:#x}", svr_fixed_early);
+
     let _msr_base = read_lapic_base_msr();
 
     let mut x2apic_supported = false;
@@ -417,8 +428,6 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
         }
     }
 
-    let lapic_virt_base = info.lapic_base + info.phys_mem_offset;
-    LAPIC_VIRT_BASE.store(lapic_virt_base, Ordering::Release);
     let lapic = Lapic::new(if x2apic_supported { 0 } else { lapic_virt_base });
     if x2apic_supported {
         // Enable x2APIC: set IA32_APIC_BASE[10]

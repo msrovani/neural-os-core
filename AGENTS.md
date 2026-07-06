@@ -242,9 +242,11 @@ Ver `docs/sprint-plan-84-95.md` para plano completo.
 Ver `docs/TODO.md` para checklist com sub-itens.
 Ver `docs/memory/STATE.md` para estado atual do kernel.
 
-**Sprint 84 (Bloco 21c):** GPU Foundations — BAR0/BAR1 mapping UC (NVIDIA/AMD/Intel), secure boot (ACR/PSP/GuC), doorbell, SPSC job ring, VRAM allocator. ~1700 LOC.
+**Sprint 84 (Bloco 21c):** GPU Foundations — ✅ BAR0/BAR1 mapping UC, ✅ SPSC job ring + doorbell, ✅ VRAM buddy allocator, ✅ Secure boot infra (ACR/PSP/GuC). Total: ~1200 LOC implementados.
 
 **Anterior (✅):** Sprints 77-83 completos — Foundation Quick Wins, Agentic Evolution, LLM Infrastructure (BitNet-b1.58), AVX2 Debug+KV Cache, SMP Foundation, Work-Stealing, Polimento.
+
+**Próximo: Sprint 85 (Bloco 21d):** GPU Decode (BitNet offload) — Agent.xpu prefill/decode split, GPU matmul kernel ternário, CPU→GPU KV cache DMA, XQueue preemptível. ~1500 LOC.
 
 ---
 

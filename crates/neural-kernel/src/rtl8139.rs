@@ -21,8 +21,10 @@ const REG_RCR: u16 = 0x44;
 const REG_IMR: u16 = 0x3C;
 
 const CR_RST: u8 = 0x10;
-const CR_RXE: u8 = 0x01;
-const CR_TXE: u8 = 0x04;
+const CR_RE: u8 = 0x01;   // Receiver Enable (RX_BUF_EMPTY check bit)
+const CR_TE: u8 = 0x04;   // Transmitter Enable
+const CR_RXE: u8 = 0x08;  // RX Enable
+const CR_TXE: u8 = 0x04;  // TX Enable (same as CR_TE)
 
 const TSD_TOK: u32 = 0x0000_8000;
 const TSD_TABT: u32 = 0x0000_2000;
@@ -30,7 +32,12 @@ const TSD_TUN: u32 = 0x0000_4000;
 const TSD_SIZE_SHIFT: u32 = 0;
 
 const TX_BUF_SIZE: usize = 4096;
-const RX_BUF_SIZE: usize = 32768 + 16;
+
+// RX buffer: 8K + 16 bytes pad + 1500 bytes wrap (segundo referência)
+const RX_BUF_LEN: usize = 8192;
+const RX_BUF_PAD: usize = 16;
+const RX_BUF_WRAP: usize = 1500;
+const RX_BUF_SIZE: usize = RX_BUF_LEN + RX_BUF_PAD + RX_BUF_WRAP;
 
 pub struct Rtl8139Driver {
     io_base: u16,
@@ -116,20 +123,39 @@ impl Rtl8139Driver {
             self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]
         );
 
-        self.write32(REG_RCR, 0x0F);
+        // Primeiro enable TX+RX antes de configurar buffers (sequência do driver ref)
+        self.write8(REG_CR, CR_RXE | CR_TXE);
 
-        let rx_paddr = Self::alloc_pages(8); // 32KB para RX ring (precisa de alloc cedo no boot)
+        // Configura RCR: WRAP bit (0x80) é CRÍTICO para RX buffer funcionar corretamente
+        // APM=1(PMatch) AB=1(Broadcast) MXDMA=111(unlimited) WRAP=1 RXFTH_NONE
+        // 0b1110_0000_0000_0000 | 0b1000_0000 | 0b1010 | 0b1000 | 0b10
+        // = RXFTH_NONE | WRAP | AB | AM | APM
+        const APM: u32 = 0b10;
+        const AB: u32 = 0b1000;
+        const AM: u32 = 0b100;
+        const WRAP: u32 = 0b1000_0000;
+        const MXDMA_UNLIMITED: u32 = 0b111_0000_0000;
+        const RXFTH_NONE: u32 = 0b1110_0000_0000_0000;
+        let rcr_val = APM | AB | AM | WRAP | MXDMA_UNLIMITED | RXFTH_NONE;
+        self.write32(REG_RCR, rcr_val);
+        serial_println!("[RTL8139] RCR={:#010x} (WRAP=1 MXDMA=unlimited)", rcr_val);
+
+        let rx_paddr = Self::alloc_pages((RX_BUF_SIZE + 4095) / 4096);
         if rx_paddr == 0 {
-            serial_println!("[RTL8139] RX buffer alloc failed");
+            serial_println!("[RTL8139] RX buffer alloc failed (size={})", RX_BUF_SIZE);
             return false;
         }
         self.rx_buf_paddr = rx_paddr;
-        self.write32(REG_RBSTART, rx_paddr as u32);
 
         let rx_virt = (rx_paddr + pmoff) as *mut u8;
         for i in 0..RX_BUF_SIZE {
             rx_virt.add(i).write_volatile(0);
         }
+
+        // Segundo enable + RBSTART (sequência do driver ref: enable → RBSTART → enable)
+        self.write8(REG_CR, CR_RXE | CR_TXE);
+        self.write32(REG_RBSTART, rx_paddr as u32);
+        self.write8(REG_CR, CR_RXE | CR_TXE);
 
         for i in 0..4 {
             let tx_paddr = Self::alloc_page();
@@ -144,16 +170,11 @@ impl Rtl8139Driver {
 
         self.write16(REG_IMR, 0x0000);
 
-        // Configura RCR (Receive Configuration Register): aceitar ALL packets
-        // bits: AAP=1, APM=1, AM=1, AB=1, AR=1, WRAP=1, RX buffer = 32K+16
-        self.write32(REG_RCR, 0xCC0E);
-
-        self.write8(REG_CR, CR_RXE | CR_TXE);
-
-        // Reset RX state: zera CAPR para que o NIC escreva do inicio do buffer
+        // Reset RX state: CAPR = 0 significa "host leu ate o inicio"
+        // O NIC espera CAPR = (prox_leitura - 16) segundo datasheet
         self.write16(REG_CAPR, 0);
         self.rx_offset = 0;
-        serial_println!("[RTL8139] RX init: CAPR=0 RCR=0xCC0E");
+        serial_println!("[RTL8139] RX init: CAPR=0 RX_BUF_SIZE={}", RX_BUF_SIZE);
 
         serial_println!(
             "[RTL8139] Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]",
@@ -209,15 +230,26 @@ impl Rtl8139Driver {
     }
 
     pub unsafe fn recv(&mut self) -> Option<Vec<u8>> {
-        let capr = self.read16(REG_CAPR) % (RX_BUF_SIZE - 16) as u16;
-        if capr == self.rx_offset {
-            return None;
+        // Verifica RX_BUF_EMPTY no CR antes de ler (padrão do driver ref)
+        let cr = self.read8(REG_CR);
+        if cr & CR_RE != 0 {
+            return None; // Buffer empty
         }
 
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let rx_virt = (self.rx_buf_paddr + pmoff) as *const u8;
 
         let off = self.rx_offset as usize;
+
+        // SEGURANÇA: verificar se o offset está nos limites do buffer
+        // O buffer tem RX_BUF_LEN (8192) + PAD + WRAP. O wrap de 1500 bytes
+        // garante que um frame de 1514 bytes nunca ultrapasse o fim do buffer.
+        if off >= RX_BUF_SIZE {
+            self.rx_offset = 0;
+            return None;
+        }
+
+        // Header RX: 4 bytes (status=2, len=2)
         let status = u16::from_le_bytes([
             rx_virt.add(off).read_volatile(),
             rx_virt.add(off + 1).read_volatile(),
@@ -227,34 +259,55 @@ impl Rtl8139Driver {
             rx_virt.add(off + 3).read_volatile(),
         ]);
 
-        // Debug RX na primeira ocorrencia
+        // Frame length INCLUDES the 4-byte header
+        let total_len = pkt_len as usize;
+
+        // Debug primeira leitura
         if self.rx_offset == 0 {
-            serial_println!("[RTL8139-RX] first packet: capr={:#06x} rx_off={:#06x} status={:#06x} len={}",
-                capr, self.rx_offset, status, pkt_len);
+            serial_println!("[RTL8139-RX] first: rx_off={:#06x} status={:#06x} len={} cr={:#04x}",
+                self.rx_offset, status, total_len, cr);
         }
 
-        if status & 0x0001 == 0 || pkt_len < 60 || pkt_len > 1536 {
-            serial_println!("[RTL8139-RX] skip: capr={:#06x} rx_off={:#06x} status={:#06x} len={}",
-                capr, self.rx_offset, status, pkt_len);
-            self.rx_offset = capr;
-            self.write16(REG_CAPR, capr.wrapping_sub(16));
+        // Se status não tem bit 0 (ROK) ou len < 64 ou len inválido
+        if status & 0x0001 == 0 || total_len < 64 || total_len > RX_BUF_WRAP + 14 {
+            if status & 0x0001 == 0 {
+                serial_println!("[RTL8139-RX] !ROK: rx_off={:#06x} status={:#06x} len={} cr={:#04x}",
+                    self.rx_offset, status, total_len, cr);
+            }
             return None;
         }
 
-        let data_len = (pkt_len as usize).saturating_sub(4);
+        // Dados: 4 bytes header, total_len - 4 bytes dados, 4 bytes CRC (descartado)
+        // Data length = total_len - 4 (header) - 4 (CRC) = total_len - 8? Não.
+        // O header de 4 bytes já está incluso em total_len.
+        // O frame Ethernet tem: header 4 + dados + CRC 4. total_len = header + dados + CRC.
+        // Nós queremos os dados (ethernet frame) = total_len - 4 (CRC).
+        let data_len = total_len.saturating_sub(4);
+        if data_len < 14 || data_len > RX_BUF_WRAP {
+            serial_println!("[RTL8139-RX] bad data_len={} total_len={}", data_len, total_len);
+            return None;
+        }
+
         let mut buf = Vec::with_capacity(data_len);
         let data_start = off + 4;
         for i in 0..data_len {
+            if data_start + i >= RX_BUF_SIZE { break; }
             buf.push(rx_virt.add(data_start + i).read_volatile());
         }
 
-        let consumed = ((4 + data_len + 4 + 3) / 4) * 4;
-        self.rx_offset = ((off + consumed) % (RX_BUF_SIZE - 16)) as u16;
+        // Calcula próximo offset: alinhado a 32 bits (dwords)
+        // total_len + 4 (CRC? não, total_len já inclui CRC) + 3 para alinhamento
+        let consumed = ((total_len + 4 + 3) / 4) * 4;
+        self.rx_offset = ((off + consumed) % RX_BUF_LEN) as u16;
 
-        let capr = if self.rx_offset < 16 {
-            (RX_BUF_SIZE - 16) as u16 + self.rx_offset - 16
-        } else {
+        // Escreve CAPR: o NIC precisa do offset - 16 (segundo datasheet RTL8139)
+        // CAPR = próximo offset a ler - 0x10, módulo RX_BUF_LEN
+        let capr = if self.rx_offset >= 16 {
             self.rx_offset - 16
+        } else {
+            // Wrap around: RX_BUF_LEN + rx_offset - 16
+            // Mas o buffer só tem RX_BUF_LEN bytes de dados reais
+            (RX_BUF_LEN as u16).wrapping_add(self.rx_offset).wrapping_sub(16)
         };
         self.write16(REG_CAPR, capr);
 

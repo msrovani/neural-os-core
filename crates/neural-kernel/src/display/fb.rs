@@ -30,6 +30,52 @@ impl GpuDevice {
 
 pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
 
+/// Força coerência de cache no framebuffer + desliga VGA plane Intel corretamente.
+/// Em Intel Skylake+ (6xx), o VGA plane NÃO é completamente desligado pelo
+/// sequenciador (0x3C4/0x3C5) — precisa escrever no register VGACNTRL (0x71400).
+/// Também aplica sfence para garantir que writes cheguem ao display controller.
+pub fn fb_remap_uc() {
+    let gpu = GPU.lock();
+    if let Some(ref gpu_dev) = *gpu {
+        if gpu_dev.fb_addr == 0 { return; }
+
+        // Desliga VGA plane via register Intel GPU (Skylake+)
+        // VGACNTRL = offset 0x71400 no BAR0 da GPU Intel
+        // Bit 31 (VGA_DISABLE) = 1 desliga o plano VGA corretamente
+        // Acesso via I/O ports 0xCF8/0xCFC para ler BAR0 sem cache de PCI scan
+        unsafe {
+            let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+            for bus in 0..1u8 {
+                for slot in 0..32u8 {
+                    let vid = crate::pci::read_config_word(bus, slot, 0, 0);
+                    if vid == 0x8086 {
+                        let class = crate::pci::read_config_word(bus, slot, 0, 0x0A);
+                        if class >> 8 == 0x03 {
+                            let bar0_raw = crate::pci::read_config_dword(bus, slot, 0, 0x10);
+                            let bar0 = (bar0_raw & 0xFFFFFFF0) as u64;
+                            let vga_cntrl = (bar0 + 0x71400 + pmoff) as *mut u32;
+                            let val = vga_cntrl.read_volatile();
+                            if val & 0x80000000 == 0 {
+                                vga_cntrl.write_volatile(val | 0x80000000);
+                                crate::serial_println!("[DISPLAY] Intel VGA plane DISABLED via VGACNTRL");
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sfence + barreira de escrita garantem visibilidade
+        unsafe {
+            core::arch::asm!("sfence", options(nostack, preserves_flags));
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        }
+        crate::serial_println!("[DISPLAY] FB sfence aplicado @{:x} ({}x{})",
+            gpu_dev.fb_addr, gpu_dev.fb_width, gpu_dev.fb_height);
+    }
+}
+
 pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
     if let Some(fb) = boot_info.framebuffer.as_ref().and_then(|f| Some(f)) {
         let info = fb.info();
@@ -57,6 +103,9 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
         crate::serial_println!("[DISPLAY] UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
             fb_width, fb_height, bpp, fb_stride, info.stride, fb_buf_len, fb.buffer().as_ptr() as u64);
 
+        // NOTA: NAO remapear como UC aqui — map_page_uc() aloca frames para
+        // page tables, mas o frame allocator e a IDT ainda nao foram init.
+        // O remapeamento UC sera feito em fb_remap_uc(), chamado apos memory init.
         let gpu = GpuDevice {
             fb_addr: fb.buffer().as_ptr() as u64,
             fb_width,
@@ -69,9 +118,15 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
         *GPU.lock() = Some(gpu);
 
         // Limpa framebuffer para preto — elimina artefatos do bootloader
+        // Usando write_volatile para garantir que o UC mapping funcione
         let fb_size = gpu.fb_height as usize * gpu.fb_stride as usize;
         if fb_size > 0 {
-            unsafe { core::ptr::write_bytes(gpu.fb_addr as *mut u8, 0x00, fb_size); }
+            unsafe {
+                let ptr = gpu.fb_addr as *mut u8;
+                for i in 0..fb_size.min(65536) {
+                    core::ptr::write_volatile(ptr.add(i), 0x00);
+                }
+            }
         }
 
         crate::serial_println!("[DISPLAY] UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}",

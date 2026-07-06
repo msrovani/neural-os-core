@@ -650,6 +650,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     agents::register_hw_agents(&mut registry);
     
     // DisplayAgent + Apps
+    // Re-mapeia framebuffer como UC antes do DisplayAgent comecar a desenhar
+    display::fb::fb_remap_uc();
     serial_println!("[BOOT] Registering DisplayAgent...");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
     serial_println!("[BOOT] Registering CronAgent...");

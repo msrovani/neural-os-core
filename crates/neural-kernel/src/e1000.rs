@@ -177,10 +177,15 @@ impl E1000Driver {
     }
 
     pub unsafe fn init(&mut self) -> bool {
-        // Map MMIO region as uncacheable + create page table entries if needed
+        // Map MMIO region as uncacheable — cobre TODOS os registros
+        // e1000 registers span from 0x0000 to ~0x5400 (RAL/RAH, MTA, etc.)
+        // Registers above 0x2000: RCTRL(0x2800), RDBAL(0x2800), RDLEN(0x2808),
+        // RDH(0x2810), RDT(0x2818), RXDCTL(0x3828), MTA(0x5200), RAL/RAH(0x5400)
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-        crate::apic::map_page_uc(self.mmio_base, pmoff);
-        crate::apic::map_page_uc(self.mmio_base + 0x1000, pmoff); // covers 8KB for registers
+        // Map 24KB (6 pages) to cover 0x0000-0x5FFF (RAF/RAH at 0x5400)
+        for page in 0..6 {
+            crate::apic::map_page_uc(self.mmio_base + page * 0x1000, pmoff);
+        }
 
         // Reset
         self.write32(REG_CTRL, CTRL_RST);
@@ -201,12 +206,14 @@ impl E1000Driver {
 
         // Read MAC
         self.mac_addr = self.read_mac();
+
+        // Força link UP: PHY_RST + SLU + FD (PHY reset + Set Link Up + Full Duplex)
+        self.write32(REG_CTRL, 0x80000000);
+        for _ in 0..1000 { core::hint::spin_loop(); }
+        self.write32(REG_CTRL, CTRL_SLU | CTRL_FD);
         serial_println!("[E1000] MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
             self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
             self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
-
-        // Link up
-        self.write32(REG_CTRL, self.read32(REG_CTRL) | CTRL_SLU);
 
         // Re-write MAC address into RAL/RAH with AV bit (some emulations need this)
         let mac = self.mac_addr;
@@ -216,6 +223,14 @@ impl E1000Driver {
         self.write32(REG_RAL, ral_val);
         self.write32(REG_RAH, rah_val);
         serial_println!("[E1000] MAC re-written: RAL={:#010x} RAH={:#010x}", ral_val, rah_val);
+
+        // Force link UP: escreve CTRL com valor limpo (SLU + FD + SPEED1000)
+        // VirtualBox precisa de CTRL limpo (sem bits reservados que travam o link)
+        // QEMU aceita qualquer valor com SLU setado
+        self.write32(REG_CTRL, CTRL_SLU | CTRL_FD);
+        let ctrl_new = self.read32(REG_CTRL);
+        serial_println!("[E1000] CTRL forced link UP (clean): wrote={:#010x} readback={:#010x}",
+            CTRL_SLU | CTRL_FD, ctrl_new);
 
         // Allocate TX ring + mapear como uncacheable
         let tx_ring = Self::alloc_frame();

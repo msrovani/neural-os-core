@@ -121,9 +121,8 @@ impl Agent for MemoryAgent {
             guard.as_ref().map(|a| (a.total_frames as u64 * 4096) / (1024*1024)).unwrap_or(0)
         };
 
-        // VRAM: via GPU detection
         let total_vram = {
-            let vram = crate::gpu::vram::VRAM_STATE.lock();
+            let vram = crate::gpu::vram::VRAM_BUDDY.lock();
             vram.as_ref().map(|v| v.size / (1024*1024)).unwrap_or(0)
         };
 
@@ -158,9 +157,8 @@ impl Agent for MemoryAgent {
         // Resize heap
         crate::allocator::resize_heap_to_mb(budget.heap_target_mb);
 
-        // Register VRAM in MHI
         if budget.vram_model_mb > 0 {
-            if let Some(ref vram) = *crate::gpu::vram::VRAM_STATE.lock() {
+            if let Some(ref vram) = *crate::gpu::vram::VRAM_BUDDY.lock() {
                 crate::mhi::MHI_REGISTRY.lock().register(
                     x86_64::PhysAddr::new(vram.base),
                     budget.vram_model_mb * 1024 * 1024,

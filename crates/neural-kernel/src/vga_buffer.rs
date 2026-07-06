@@ -134,7 +134,12 @@ pub fn _print(args: fmt::Arguments) {
     if !comp_active {
         if fb_print(args) { return; }
     }
-    // Fallback: VGA text mode (se inicializado)
+    // Se framebuffer ativo e WRITER nunca foi init, VGA nao existe
+    // (vga_buffer::init() nao foi chamado) — evita fallback para
+    // VGA text buffer sem WRITER, prevenindo escritas fantasma em 0xB8000.
+    let fb_active = crate::display::fb::GPU.lock().is_some();
+    if fb_active { return; }
+    // Fallback: VGA text mode (se inicializado e sem framebuffer)
     use fmt::Write;
     let mut w = WRITER.lock();
     if let Some(ref mut w) = *w { let _ = w.write_fmt(args); }

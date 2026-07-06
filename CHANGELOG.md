@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.84.0-design] — 2026-07-06 — 🏆 Sprint 84: GPU Foundations (BAR mapping + Job Ring + VRAM Buddy + Secure Boot)
+
+### Added
+- **`gpu/ring.rs`** — SPSC job ring genérico para 3 vendors (Intel RENDER_RING_TAIL, NVIDIA PFIFO, AMD PM4). Doorbell, push, poll, submit_and_wait. Ring buffer em páginas UC.
+- **`gpu/firmware.rs`** — Secure boot GPU: NVIDIA ACR, AMD PSP, Intel GuC. Pipeline: linux-firmware → kernel → BAR0 → GPU engine. Blobs stub (firmware disponível em linux-firmware, loading futuro).
+- **`gpu/vram.rs`** — Upgrade para buddy allocator power-of-2 (4KB a 4GB). Splitting/merging de blocos. Substitui first-fit BTreeMap.
+
+### Changed
+- **`gpu/backend.rs`** — `init_backend()` agora: (1) mapeia BARs UC, (2) valida BAR0, (3) cria SPSC job ring, (4) secure boot, (5) vendor init.
+- **`gpu/mod.rs`** — Adicionado `pub mod ring` e `pub mod firmware`.
+- **`memory_agent.rs`** — `VRAM_STATE` → `VRAM_BUDDY` (novo allocator).
+
+### Tested
+- QEMU (-smp 2, WHPX): boot OK, GPU-BAR mapping, SECURE-BOOT, CPU fallback. ✅
+- VirtualBox (1 CPU, VirtIO-net): boot OK, Hermes Chat, GPU-BACKEND. ✅
+- 0 erros, 446 warnings (dead code esperados).
+
 ## [0.84.0-design] — 2026-07-05 — 📚 Documentação Reestruturada: HW Real First + Multi-Vendor + Sprint Plan 84-95
 
 ### Added

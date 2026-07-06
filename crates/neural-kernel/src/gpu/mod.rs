@@ -7,4 +7,6 @@ pub mod nvidia;
 pub mod amd;
 pub mod backend;
 pub mod cube;
+pub mod ring;
+pub mod firmware;
 

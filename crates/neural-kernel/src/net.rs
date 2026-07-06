@@ -81,14 +81,21 @@ pub fn detect_dev_env() -> bool {
                 let name = core::str::from_utf8(&hypervisor_name).unwrap_or("unknown");
                 serial_println!("[NET] Hypervisor detected: {}", name.trim_end_matches('\0'));
                 
-                // QEMU, KVM, VBox, VMware sao ambientes dev
+                // QEMU, KVM, VBox, VMware, WHPX sao ambientes dev
                 let name_lower = name.to_ascii_lowercase();
                 return name_lower.contains("qemu") || 
                        name_lower.contains("kvm") || 
                        name_lower.contains("vbox") || 
-                       name_lower.contains("vmware");
+                       name_lower.contains("vmware") ||
+                       name_lower.contains("micr"); // Microsoft Hv = WHPX
             }
         }
+        
+        // Fallback: verificar MAC address (VirtualBox = 08:00:27, QEMU = 52:54:00)
+        // Isso detecta VirtualBox mesmo SEM hypervisor visivel (ex: sem VT-x)
+        let mac = NET_CONFIG.lock().mac;
+        if mac[0] == 0x08 && mac[1] == 0x00 && mac[2] == 0x27 { return true; } // VBox
+        if mac[0] == 0x52 && mac[1] == 0x54 && mac[2] == 0x00 { return true; } // QEMU
         
         false
     }
