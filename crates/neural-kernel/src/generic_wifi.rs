@@ -15,7 +15,10 @@ use core::sync::atomic::{AtomicBool, Ordering};
 pub trait WifiChipset {
     fn init(&mut self) -> Result<(), &'static str>;
     fn send_packet(&mut self, packet: &[u8]) -> Result<(), &'static str>;
-    fn poll_receive(&mut self) -> Option<&[u8]>;
+    /// Recebe um pacote. Preenche buffer[0..n] com dados recebidos, retorna n.
+    /// Retorna Ok(0) se nenhum pacote disponivel.
+    /// Compatível com smoltcp::phy::Device via bridge WifiPhyDevice.
+    fn receive_packet(&mut self, buffer: &mut [u8]) -> Result<usize, &'static str>;
 }
 
 // ── 2. DRIVERS ESPECIFICOS ─────────────────────────────────────
@@ -34,7 +37,7 @@ impl WifiChipset for RealtekRtl8188 {
         if !self.tx_ready { return Err("Realtek TX Busy"); }
         Ok(())
     }
-    fn poll_receive(&mut self) -> Option<&[u8]> { None }
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> { Ok(0) }
 }
 
 pub struct IntelAx200 {
@@ -47,7 +50,7 @@ impl WifiChipset for IntelAx200 {
         Ok(())
     }
     fn send_packet(&mut self, _p: &[u8]) -> Result<(), &'static str> { Ok(()) }
-    fn poll_receive(&mut self) -> Option<&[u8]> { None }
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> { Ok(0) }
 }
 
 pub struct AtherosAth9k {
@@ -62,7 +65,7 @@ impl WifiChipset for AtherosAth9k {
         Ok(())
     }
     fn send_packet(&mut self, _p: &[u8]) -> Result<(), &'static str> { Ok(()) }
-    fn poll_receive(&mut self) -> Option<&[u8]> { None }
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> { Ok(0) }
 }
 
 pub struct BroadcomBcm4360 {
@@ -71,7 +74,7 @@ pub struct BroadcomBcm4360 {
 impl WifiChipset for BroadcomBcm4360 {
     fn init(&mut self) -> Result<(), &'static str> { Ok(()) }
     fn send_packet(&mut self, _p: &[u8]) -> Result<(), &'static str> { Ok(()) }
-    fn poll_receive(&mut self) -> Option<&[u8]> { None }
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> { Ok(0) }
 }
 
 pub struct FallbackEthernet {
@@ -96,8 +99,8 @@ impl WifiChipset for FallbackEthernet {
         // nic_send() em netstack.rs ja tenta RTL8139/E1000/VirtIO primeiro
         Ok(())
     }
-    fn poll_receive(&mut self) -> Option<&[u8]> {
-        None // nic_recv() em netstack.rs ja polla os NICs
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> {
+        Ok(0) // nic_recv() em netstack.rs ja polla os NICs
     }
 }
 
@@ -222,3 +225,6 @@ pub fn detect() -> bool {
     }
     false
 }
+
+
+

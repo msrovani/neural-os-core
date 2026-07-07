@@ -64,16 +64,21 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
-    // Generic WiFi driver (FallbackEthernet retorna None — nic_recv() real via RTL8139)
+    // Generic WiFi driver — bridge formal smoltcp::phy::Device via WifiChipset trait
+    let mut wifi_pkt: Option<Vec<u8>> = None;
     crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
         if let Some(wifi) = driver {
-            if let Some(_pkt) = wifi.poll_receive() {
-                // poll_receive retorna Option<&[u8]> — nao podemos emprestar para fora do lock.
-                // O driver WiFi real precisara copiar para um buffer.
-                // Por enquanto, FallbackEthernet retorna None.
+            let mut rx_buf = [0u8; 1518];
+            if let Ok(n) = wifi.receive_packet(&mut rx_buf) {
+                if n > 0 {
+                    wifi_pkt = Some(rx_buf[..n].to_vec());
+                }
             }
         }
     });
+    if let Some(pkt) = wifi_pkt {
+        return Some(pkt);
+    }
     None
 }
 
