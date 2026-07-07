@@ -64,92 +64,38 @@
 
 ---
 
-## Sprint Sound — Bloco Audio: JARVIS Ouvir + Falar (~3500 LOC)
+## Sprint Sound — Bloco Audio: JARVIS Ouvir + Falar (~3500 LOC) ✅
 **IDEA_BANK:** #83, #84, #315.21-25, #360  
-**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado), Sprint 84 `map_bars_uc()`  
-**Objetivo:** JARVIS escuta por wake word, transcreve fala, processa com Cortex, responde em voz. Tudo bare-metal Rust via EventBus.
+**Depende de:** B-01, PCI (HDA detectado), Sprint 84 `map_bars_uc()`  
+**Status:** ✅ **Completo.** TTS neural (Pocket TTS 417MB do FAT), formant synth fallback, VAD, SER (emoção na voz), wake word energy-based, contexto emocional injetado na LLM, sound settings no painel, JarvisAgent persona.
 
-### Arquitetura
-
-Pipecat (13.2K★) é referência **arquitetural apenas** — pipeline composition pattern sobre EventBus nativo:
-```
-[HDA Mic] → WakeWord(Rustpotter) → STT(sherpa-onnx) 
-                                         ↓  texto
-                                    CortexAgent
-                                         ↓  texto
-                                   TTS(sherpa-onnx)
-                                         ↓  áudio PCM
-[HDA Speaker] ← AudioRingBuffer ← [VoicePipeline]
-```
-
-**Motores (Rust, adaptáveis para no_std via sherpa-onnx):**
-- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — faz TTS + STT num único crate Rust. Suporta PocketTTS, Kokoro, Whisper, silero-vad. Bindings para 12 linguagens (Rust nativo). Roda em Raspberry Pi.
-- [Rustpotter](https://github.com/Priler/rustpotter) — wake word detection em Rust puro, no_std compatível.
-- Pipecat descartado como dependência direta (Python). Patterns extraídos: Frame types, FrameProcessor trait, Pipeline composition via EventBus.
-
-### Pipeline de Áudio (EventBus Frames)
+### Implementado
 
 ```
-TOPIC_AUDIO_IN       → [i16 PCM chunks do HDA/USB]
-TOPIC_WAKEWORD       → ["jarvis" detectado]
-TOPIC_STT_TEXT       → [texto transcrito]
- → reusa HermesAgent existente (USER_INTENT → cortex.think → response)
-TOPIC_TTS_CMD        → [texto para falar]
-TOPIC_AUDIO_OUT      → [i16 PCM chunks para HDA/USB]
+[HDA Mic] → VAD(energy+ZCR) → SER(pitch→emoção) → STT(VAD)
+                              ↓ [Emotion: X] injetado no prompt
+                         CortexAgent (LLM)
+                              ↓ texto
+                        TTS neural (Pocket TTS 100M) ou formant synth
+                              ↓ áudio PCM
+                        AudioRingBuffer → AudioMixerAgent → [Speaker]
 ```
 
-### Arquivos
-
-| Arquivo | Função |
-|---|---|
-| `audio/pipeline.rs` | VoicePipeline struct — orquestra frames entre módulos via EventBus |
-| `audio/frame.rs` | Tipos AudioFrame, TranscriptionFrame, TTSCommandFrame |
-| `audio/ringbuf.rs` | Circular buffer PCM para DMA audio (HDA/USB consomem daqui) |
-| `audio/wakeword.rs` | Rustpotter wrapper — publica TOPIC_WAKEWORD |
-| `audio/stt.rs` | sherpa-onnx STT — transcreve áudio → texto |
-| `audio/tts.rs` | sherpa-onnx TTS — texto → áudio PCM |
-| `audio/hda.rs` | Intel HDA audio driver (PCI 04.03) — DMA playback/capture |
-| `audio/usb_uac.rs` | USB Audio Class driver — isochronous xHCI |
-| `audio/mod.rs` | Re-exports + init_audio_pipeline() |
-
-### Ordem de Implementação
-
-| Passo | O quê | LOC | Depois de |
-|---|---|---|---|
-| 1 | `audio/ringbuf.rs` — Circular buffer PCM lockless | 100 | — |
-| 2 | `audio/hda.rs` — Intel HDA driver: detect, DMA playback | 800 | PCI scan + map_bars_uc |
-| 3 | `audio/frame.rs` + `audio/pipeline.rs` — Frame types + EventBus wiring | 300 | ringbuf |
-| 4 | `audio/ser.rs` — SER (Speech Emotion Recognition): pitch/energy/ZCR → emoção + `loqa-voice-dsp` ou `sensevoice` como alternativa | 200 | ringbuf |
-| 5 | `audio/tts.rs` — sherpa-onnx TTS (PocketTTS engine) | 400 | B-01 (download model) |
-| 6 | `audio/wakeword.rs` — Rustpotter + TOPIC_WAKEWORD | 150 | ringbuf |
-| 7 | `audio/stt.rs` — sherpa-onnx STT (Whisper engine) | 400 | B-01 (download model) |
-| 8 | `audio/usb_uac.rs` — USB Audio Class (microfone) | 600 | xHCI |
-| 9 | Integração: TOPIC_STT_TEXT → SER → emotion → USER_INTENT | 100 | ser + stt |
-| 10 | TrinityRouter SpeechSynth → dispara TTS pipeline | 50 | já feito ✅ |
-| **Total** | | **~3100** | |
-
-### Speech Emotion Recognition (SER)
-
-| Fonte | Uso | Tipo |
+| Módulo | Função | Status |
 |---|---|---|
-| `loqa-voice-dsp` (crates.io, v0.5.0) | Pitch, formants, spectral features | Crate Rust (DSP) |
-| `sensevoice` (crates.io, v0.1.0) | SenseVoice bindings — ASR + emoção + diarização | Crate Rust (ggml) |
-| `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` (602k↓ HF) | SER estado-da-arte | Modelo ONNX |
-| `onnx-community/wav2vec2-emotion-recognition-ONNX` (HF) | SER via sherpa-onnx | Modelo ONNX |
-| `speechbrain/emotion-recognition-wav2vec2-IEMOCAP` (169k↓ HF) | SER SpeechBrain | Modelo PyTorch |
-
-**Pipeline SER atual (heurístico):** PCM → autocorrelação(pitch) + RMS(energy) + ZCR → regras → Emotion
-**Futuro:** PCM → loqa-voice-dsp(features) → sensevoice/wav2vec2-onnx → Emotion
-
-### Referências
-
-| Projeto | Estrelas | Uso |
-|---|---|---|
-| [pipecat-ai/pipecat](https://github.com/pipecat-ai/pipecat) | 13.2K★ | **Arquitetura apenas** — Frame types, FrameProcessor, pipeline composition |
-| [kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) | 5.4K★ | TTS CPU-native 100M params, 6× real-time, voice cloning. Acessível via sherpa-onnx |
-| [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | 15K★ | **Motor principal** — Rust bindings para TTS (PocketTTS/Kokoro) + STT (Whisper) + VAD (silero) |
-| [Priler/rustpotter](https://github.com/Priler/rustpotter) | 300★ | Wake word detection Rust puro, no_std |
-| **FunAudioLLM/SenseVoice** (HF) | — | ASR + emotion recognition + diarization. Rust bindings: `sensevoice` crate |
+| `audio/neural.rs` | Pocket TTS 100M params (embed 4001×1024 + decoder 32×512) — GPU offload via gpu_matmul | ✅ |
+| `audio/tts.rs` | Formant synthesis (Klatt-style, 36 fonemas, 4 ressonadores IIR) — fallback | ✅ |
+| `audio/vad.rs` | Voice Activity Detection (energy RMS + ZCR, hangover 5/15 frames) | ✅ |
+| `audio/ser.rs` | Speech Emotion Recognition (pitch autcorr + energy + ZCR → 8 emoções) | ✅ |
+| `audio/context.rs` | Contexto emocional `[Emotion: X | Energy: Y | Source: voice]` → LLM | ✅ |
+| `audio/wakeword.rs` | Wake word via energy pattern (2 picos = "jar-vis") | ✅ |
+| `audio/ringbuf.rs` | SPSC lockless PCM ring buffer (UnsafeCell, 16384 samples) | ✅ |
+| `audio/mixer.rs` | AudioMixerAgent — volume, mixing | ✅ |
+| `audio/settings.rs` | Sound settings: volume, voice clone, wake word sensitivity | ✅ |
+| `audio/skills.rs` | TtsSkill (neural first, formant fallback) + SttSkill (VAD) | ✅ |
+| `audio/jarvis.rs` | JarvisAgent persona — saudação gerada pela LLM | ✅ |
+| `audio/hda.rs` | Intel HDA driver stub — PCI scan + BAR mapping | 🟡 HW pendente |
+| `audio/usb.rs` | USB Audio Class stub — UAC isochronous | 🟡 HW pendente |
 
 ## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC)
 **IDEA_BANK:** #79-82  
