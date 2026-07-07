@@ -110,6 +110,7 @@ mod bench;
 mod gpu;
 mod wifi_agent;
 mod generic_wifi;
+mod wifi_protocol;
 mod boot_logger;
 mod boot_log_agent;
 mod shutdown;
