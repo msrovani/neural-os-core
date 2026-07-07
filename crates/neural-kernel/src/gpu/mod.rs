@@ -12,4 +12,6 @@ pub mod firmware;
 pub mod xqueue;
 pub mod kv_dma;
 pub mod xpu;
+pub mod msched;
+pub mod display_coex;
 

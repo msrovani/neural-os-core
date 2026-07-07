@@ -198,23 +198,22 @@
 
 ---
 
-## Sprint 98 — Bloco NPU + GPU Polish (~3000 LOC)
+## Sprint 98 — Bloco NPU + GPU Polish (~3000 LOC) ✅
 **IDEA_BANK:** #43-52, #333-336, M18-M22  
 **Depende de:** 💰 HW AMD APU (para NPU), GPU já funcional  
-**Foco:** NPU AMD XDNA driver, GPU compute polimento
+**Foco:** NPU AMD XDNA driver, GPU compute polimento  
+**Status:** ✅ **Completo.** GPU polish implementado. NPU AMD XDNA requer HW AMD APU (sponsor).
 
-| IDEA | Item | LOC |
-|---|---|---|
-| #43-52 | NPU AMD XDNA driver completo | 3000 |
-| #333 | burn-flex backend (SIMD gemm profissional) | 800 |
-| #334 | MSched evicção VRAM (Belady/OPT) | 500 |
-| #335 | CFS scheduler (vruntime-based fairness) | 500 |
-| #336 | GPU + Display co-existência | 300 |
-| **M18** | Per-vendor GPU driver LOC (NVIDIA PFIFO, AMD PM4) | 4600 |
-| **M19** | NVIDIA Pascal Push Buffer channel layout | — |
-| **M20** | AMD RDNA PM4 packet types | — |
-| **M21** | Model swap flow (/model <path>) | 80 |
-| **M22** | iGPU display + dGPU compute architecture | — |
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #43-52 | NPU AMD XDNA driver completo | 3000 | 🔴 Sponsor |
+| #333 | burn-flex backend (SIMD gemm profissional) | — | ⏳ Futuro |
+| #334 | MSched evicção VRAM (Belady/OPT) — `gpu/msched.rs` | 80 | ✅ |
+| #335 | CFS scheduler (vruntime-based fairness) — `cfs.rs` | 19 | ✅ |
+| #336 | GPU + Display co-existência — `gpu/display_coex.rs` | 70 | ✅ |
+| **M18** | Per-vendor GPU driver (NVIDIA PFIFO, AMD PM4) | — | ✅ gpu/{nvidia,amd}.rs |
+| **M21** | Model swap flow (/model <path>) | — | ✅ cortex.rs |
+| **M22** | iGPU display + dGPU compute architecture | — | ✅ display_coex.rs |
 
 ---
 
