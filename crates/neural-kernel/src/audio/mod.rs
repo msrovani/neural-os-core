@@ -8,6 +8,9 @@
 
 pub mod frame;
 pub mod ringbuf;
+pub mod vad;
+pub mod tts;
+pub mod ser;
 pub mod voice;
 pub mod skills;
 pub mod settings;

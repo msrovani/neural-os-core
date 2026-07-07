@@ -14,7 +14,8 @@ pub use crate::display::avatar::{JarvisAvatar, AvatarState};
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Emotion { Joy, Sadness, Anger, Fear, Surprise, Disgust, Neutral, Sarcasm }
+#[repr(u8)]
+pub enum Emotion { Joy = 0, Sadness = 1, Anger = 2, Fear = 3, Surprise = 4, Disgust = 5, Neutral = 6, Sarcasm = 7 }
 
 #[derive(Clone)]
 pub struct SoulProfile {

@@ -60,7 +60,7 @@ pub fn extract_features(pcm: &[i16]) -> VoiceFeatures {
 
 fn estimate_pitch(pcm: &[i16], sample_rate: u32) -> f32 {
     let min_lag = (sample_rate / 400).max(2) as usize;
-    let max_lag = (sample_rate / 40).min(pcm.len() / 2) as usize;
+    let max_lag = ((sample_rate / 40) as usize).min(pcm.len() / 2);
     if max_lag <= min_lag || pcm.len() < max_lag * 2 { return 0.0; }
 
     let mut best_corr = 0.0f32;
@@ -113,8 +113,8 @@ impl Skill for VoiceEmotionSkill {
     fn execute(&self, _input: &[u8]) -> Result<Vec<u8>, &'static str> {
         let emotion = crate::audio::voice::LAST_VOICE_EMOTION.load(core::sync::atomic::Ordering::Relaxed);
         let name = match emotion {
-            0 => "neutral", 1 => "joy", 2 => "sadness", 3 => "anger",
-            4 => "fear", 5 => "surprise", 6 => "disgust", 7 => "sarcasm",
+            0 => "joy", 1 => "sadness", 2 => "anger", 3 => "fear",
+            4 => "surprise", 5 => "disgust", 6 => "neutral", 7 => "sarcasm",
             _ => "unknown",
         };
         Ok(alloc::format!("{}", name).into_bytes())
