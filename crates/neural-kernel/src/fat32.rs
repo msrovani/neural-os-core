@@ -143,6 +143,11 @@ impl<'a> Fat32Reader<'a> {
         let sectors_per_cluster = bpb[0x0D];
         let reserved_sectors = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]);
         let fat_count = bpb[0x10];
+        let root_entry_count = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
+
+        // Rejeita FAT12/FAT16 — so FAT32 (root_entry_count == 0)
+        if root_entry_count > 0 { return None; }
+
         let sectors_per_fat32 = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
         let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
 
