@@ -15,7 +15,7 @@ use crate::hermes::{self, IntentCache, WorkflowEngine};
 use crate::conversation;
 use crate::{serial_println, println};
 use crate::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
-            CONVERSATION_TRACKER, PENDING_SKILL};
+            CONVERSATION_TRACKER, PENDING_SKILL, TRINITY};
 
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
@@ -770,9 +770,19 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
+                    // Fast-path: TrinityRouter classifica sem LLM
+                    let trinity_guard = TRINITY.lock();
+                    let trinity_expert = trinity_guard.classify_intent(msg);
+                    let expert_name = trinity_expert.name;
+                    drop(trinity_guard);
+                    if expert_name == "speech_synth" {
+                        serial_println!("[TRINITY] SpeechSynth: \"{}\"", msg);
+                        let response = alloc::format!("[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)", msg);
+                        response
+                    } else {
                     let intent = self.cortex.think(msg);
                     let intent_name = intent.skill_name();
-                    serial_println!("[CORTEX] Intent: {} = {:?}", intent_name, intent);
+                    serial_println!("[CORTEX] Intent: {} = {:?} (trinity: {})", intent_name, intent, expert_name);
                     match intent {
                         cortex::Intent::Greeting | cortex::Intent::Chat => {
                             serial_println!("[CORTEX-LLM] Enviando: \"{}\"", msg);
@@ -800,7 +810,9 @@ impl Agent for HermesAgent {
                         }
                     }
                 }
-            };
+            }
+        };
+    
 
             let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 

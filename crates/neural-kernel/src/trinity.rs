@@ -9,6 +9,7 @@ pub enum ExpertKind {
     DiskDiag,
     Security,
     Generator,
+    SpeechSynth,
     Unknown,
 }
 
@@ -69,6 +70,15 @@ impl TrinityRouter {
                         return expert;
                     }
                 }
+                ExpertKind::SpeechSynth => {
+                    if lower.contains("fale") || lower.contains("speak") || lower.contains("diga")
+                        || lower.contains("say") || lower.contains("tts")
+                        || lower.contains("pronuncie") || lower.contains("pronounce")
+                        || lower.contains("audio") || lower.contains("voz") || lower.contains("voice")
+                    {
+                        return expert;
+                    }
+                }
                 ExpertKind::Generator | ExpertKind::Unknown => {}
             }
         }
@@ -76,4 +86,33 @@ impl TrinityRouter {
     }
 
     pub fn agent_count(&self) -> usize { self.experts.len() }
+}
+
+pub fn init_trinity() -> TrinityRouter {
+    let mut router = TrinityRouter::new();
+    router.register_expert(Expert {
+        kind: ExpertKind::HwIdentify, name: "hw_identify",
+        description: "Identifica dispositivos de hardware por PCI ID", weight: None,
+    });
+    router.register_expert(Expert {
+        kind: ExpertKind::RustCoder, name: "rust_coder",
+        description: "Gera codigo Rust sob demanda", weight: None,
+    });
+    router.register_expert(Expert {
+        kind: ExpertKind::DiskDiag, name: "disk_diag",
+        description: "Diagnostico de disco e armazenamento", weight: None,
+    });
+    router.register_expert(Expert {
+        kind: ExpertKind::Security, name: "security",
+        description: "Analise de seguranca e vulnerabilidades", weight: None,
+    });
+    router.register_expert(Expert {
+        kind: ExpertKind::SpeechSynth, name: "speech_synth",
+        description: "Sintese de fala — TTS, voz, audio", weight: None,
+    });
+    router.register_expert(Expert {
+        kind: ExpertKind::Generator, name: "generator",
+        description: "Geracao generica de texto e respostas", weight: None,
+    });
+    router
 }
