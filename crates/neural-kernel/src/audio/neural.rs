@@ -143,18 +143,19 @@ fn gelu_gpu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
 
 /// Carrega Pocket TTS do FAT32 (HW real). Sem fallback QEMU loader.
 pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
-    let ata_guard = crate::ATA_DRIVER.lock();
-    if let Some(ref ata) = *ata_guard {
-        let parts = crate::fat::read_mbr(ata);
-        for p in &parts {
-            if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
-                let fs = crate::fat::FatFilesystem::new(ata.clone(), p);
-                if let Some(data) = unsafe { fs.read_file("POCKETTTS.BIN") } {
-                    drop(ata_guard);
-                    let mut eng = PocketTtsEngine::new();
-                    if eng.load(&data) {
-                        crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from FAT! GPU offload ativo");
-                        return Some(eng);
+    unsafe {
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                if let Some(fs) = crate::fat::Fat32Reader::new(ata, p) {
+                    if let Some(data) = fs.read_file("POCKETTTS.BIN") {
+                        let mut eng = PocketTtsEngine::new();
+                        if eng.load(&data) {
+                            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from FAT! GPU offload ativo");
+                            return Some(eng);
+                        }
                     }
                 }
             }
@@ -163,3 +164,6 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     crate::serial_println!("[TTS-NEURAL] POCKETTTS.BIN nao encontrado no FAT — formant synth ativo");
     None
 }
+
+
+
