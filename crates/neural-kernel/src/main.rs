@@ -849,7 +849,23 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     serial_println!("[RAMDISK] QEMU loader: model region too small ({model_len} bytes)");
                 }
             } else {
-                serial_println!("[RAMDISK] No model at phys 0x{load_addr:x} — using embedded micro.bitnet.");
+                serial_println!("[RAMDISK] No model at phys 0x{load_addr:x} — trying 0x120000000...");
+                // Try alternative QEMU loader address (BitNet @ 4.5GB)
+                let load_addr2: u64 = 0x120000000;
+                let mem_has = boot_info.memory_regions.iter().any(|r| r.start <= load_addr2 && r.end > load_addr2);
+                if mem_has {
+                    let probe2 = (load_addr2 + pm_offset) as *const u32;
+                    let magic2 = unsafe { core::ptr::read_volatile(probe2) };
+                    if magic2 == 0xBE11BE11 {
+                        let model_len2 = 250usize * 1024 * 1024;
+                        let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
+                        if let Some(big_model) = crate::cortex::load_model(model_data2) {
+                            crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                            serial_println!("[RAMDISK] BitNet model loaded from 0x120000000! CortexAgent upgraded.");
+                            model_loaded = true;
+                        }
+                    }
+                }
             }
         } else {
             serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — using embedded micro.bitnet.");

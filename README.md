@@ -23,6 +23,9 @@
   ✦ Merkle Audit Trail (SHA-256 chain, ring 4096)
   ✦ AHCI driver (SATA 6G NCQ)
   ✦ GPU Foundations: BAR mapping, SPSC job ring, VRAM buddy allocator
+  ✦ WiFi: Generic driver via union+MaybeUninit+CriticalSectionMutex (Abordagem C)
+     Tabela massiva de ~50 PCI IDs, FallbackEthernet (RTL8139/E1000/VirtIO),
+     bridge smoltcp::phy::Device via WifiChipset trait.
   ✦ WASM Runtime: MemoryPool (256KB/skill), 15 WASI→Skill mappings
   ✦ Voz: Kokoro-82M TTS (ferramenta de conversão ONNX→.bitnet pronta)
   ✦ Embedding: BGE-Small-EN-v1.5 (384-dim, convertido para .bitnet)

@@ -142,7 +142,7 @@ fn gelu_gpu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
 }
 
 /// Carrega Pocket TTS do FAT32 (HW real). Sem fallback QEMU loader.
-pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
+fn try_load_fat(filename: &str) -> Option<alloc::vec::Vec<u8>> {
     unsafe {
         let ata_guard = crate::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {
@@ -150,18 +150,47 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
             for p in &parts {
                 if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
                 if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                    if let Some(data) = fs.read_file("POCKETTTS.BIN") {
-                        let mut eng = PocketTtsEngine::new();
-                        if eng.load(&data) {
-                            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from FAT! GPU offload ativo");
-                            return Some(eng);
-                        }
+                    if let Some(data) = fs.read_file(filename) {
+                        return Some(data);
                     }
                 }
             }
         }
     }
-    crate::serial_println!("[TTS-NEURAL] POCKETTTS.BIN nao encontrado no FAT — formant synth ativo");
+    None
+}
+
+fn try_load_qemu(addr: u64, max_mb: usize) -> Option<alloc::vec::Vec<u8>> {
+    let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    unsafe {
+        let probe = (addr + pm) as *const u32;
+        if core::ptr::read_volatile(probe) == 0xBE11BE11 {
+            let data = core::slice::from_raw_parts(probe as *const u8, max_mb * 1024 * 1024);
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS encontrado em QEMU loader 0x{:x}", addr);
+            return Some(data.to_vec());
+        }
+    }
+    None
+}
+
+pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
+    // Tenta FAT (HW real) primeiro
+    if let Some(data) = try_load_fat("POCKETTTS.BIN") {
+        let mut eng = PocketTtsEngine::new();
+        if eng.load(&data) {
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from FAT! GPU offload ativo");
+            return Some(eng);
+        }
+    }
+    // Fallback: QEMU loader (dev)
+    if let Some(data) = try_load_qemu(0x100000000, 420) {
+        let mut eng = PocketTtsEngine::new();
+        if eng.load(&data) {
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from QEMU loader! GPU offload ativo");
+            return Some(eng);
+        }
+    }
+    crate::serial_println!("[TTS-NEURAL] Pocket TTS ausente — formant synth ativo");
     None
 }
 
