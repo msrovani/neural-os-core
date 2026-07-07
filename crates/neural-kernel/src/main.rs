@@ -766,8 +766,28 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
     if !model_loaded {
-        // Try QEMU generic loader at known physical address (0x100000000 = 4GB)
-        // Launch QEMU with: -device loader,file=bitnet-1.5b.bitnet,addr=0x100000000 -m 6G
+        // Try FAT filesystem first (HW real: modelo no FAT32 da imagem de boot)
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat::read_mbr(ata);
+            for p in &parts {
+                if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
+                    let fs = crate::fat::FatFilesystem::new(ata.clone(), p);
+                    if let Some(fat_data) = unsafe { fs.read_file("BITNET.BIN") } {
+                        if let Some(big_model) = crate::cortex::load_model(&fat_data) {
+                            crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                            serial_println!("[FAT] BitNet model loaded from FAT! CortexAgent upgraded.");
+                            crate::boot_logger::log("BOOT: FAT BitNet model loaded");
+                            model_loaded = true;
+                        }
+                    }
+                }
+            }
+        }
+        drop(ata_guard);
+    }
+    if !model_loaded {
+        // Try QEMU generic loader (dev apenas)
         let load_addr: u64 = 0x100000000;
         let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
         // Check if 4GB is within bootloader-mapped memory by scanning memory_regions

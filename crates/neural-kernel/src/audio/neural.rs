@@ -1,6 +1,6 @@
 //! Neural TTS engine — Pocket TTS (CALM) inference usando pesos reais.
-//! Usa embedding table do modelo real + decoder simplificado.
-//! GPU offload via gpu_matmul() nas 3 camadas do decoder MLP.
+//! Modelo carregado do FAT32 (HW real) — sem dependencia de QEMU loader.
+//! GPU offload via gpu_matmul() nas camadas do decoder MLP.
 
 use alloc::vec::Vec;
 use alloc::vec;
@@ -11,7 +11,7 @@ const SAMPLE_RATE: u32 = 16000;
 
 pub struct PocketTtsEngine {
     loaded: bool,
-    embed_w: Option<Tensor>,      // flow_lm.conditioner.embed.weight
+    embed_w: Option<Tensor>,
     dw1: Option<Tensor>, db1: Option<Tensor>,
     dw2: Option<Tensor>, db2: Option<Tensor>,
     dw3: Option<Tensor>, db3: Option<Tensor>,
@@ -38,7 +38,6 @@ impl PocketTtsEngine {
             core::slice::from_raw_parts(data.as_ptr() as *const f32, data.len() / 4)
         };
 
-        // Parse header entries
         let mut entries: Vec<(alloc::vec::Vec<u8>, usize, usize)> = Vec::new();
         for i in 0..nparts {
             let base = 16 + i * 40;
@@ -49,7 +48,6 @@ impl PocketTtsEngine {
             entries.push((name, off, cnt));
         }
 
-        // Mapeia nomes do modelo real Pocket TTS para nossos slots
         for i in 0..entries.len() {
             let off = entries[i].1;
             let cnt = entries[i].2;
@@ -59,55 +57,33 @@ impl PocketTtsEngine {
             let mut f = vec![0.0f32; cnt];
             f.copy_from_slice(&floats[off..off+cnt]);
 
-            // Embedding table
             if n.contains("embed.weigh") && cnt > 1000 {
                 self.hidden = if cnt >= 4000000 { 1024 } else { 256 };
                 self.embed_w = Tensor::from_row_major((cnt / self.hidden, self.hidden), f);
-                crate::serial_println!("[TTS-NEURAL] embed '{}' {}x{}", n, cnt/self.hidden, self.hidden);
                 continue;
             }
-
-            // Mimi decoder final conv weight
-            if n.contains("odel.11.conv.weigh") {
-                crate::serial_println!("[TTS-NEURAL] dw1 '{}'", n);
-                self.dw1 = Tensor::from_row_major((1, cnt), f.clone());
-                continue;
-            }
-            if n.contains("odel.11.conv.bia") {
-                crate::serial_println!("[TTS-NEURAL] db1 '{}'", n);
-                self.db1 = Tensor::from_row_major((1, cnt), f.clone());
-                continue;
-            }
-
-            // Quantizer output projection (truncado: utput_proj.weig — 31 chars, sem "h" final)
-            // Nota: so existe weight (16384), nao tem bias separado
+            if n.contains("odel.11.conv.weigh") { self.dw1 = Tensor::from_row_major((1, cnt), f.clone()); continue; }
+            if n.contains("odel.11.conv.bia") { self.db1 = Tensor::from_row_major((1, cnt), f.clone()); continue; }
             if n.contains("utput_proj") && cnt > 1000 && n.contains("weig") {
-                crate::serial_println!("[TTS-NEURAL] dw3 '{}' {} cols={}", n, cnt, cnt/512);
                 self.audio_cols = cnt / 512;
                 self.dw3 = Tensor::from_row_major((self.audio_cols, 512), f.clone());
                 continue;
             }
-            // Usa upsample como db3 fallback
-            if n.contains("upsample") && cnt > 1000 && n.contains("weig") && self.dw3.is_some() {
+            if n.contains("upsample") && cnt > 1000 && n.contains("weig") && self.dw3.is_some() && self.db3.is_none() {
                 let cols = cnt / 512;
                 self.db3 = Some(Tensor::new((1, cols)));
-                crate::serial_println!("[TTS-NEURAL] db3 fallback '{}'", n);
                 continue;
             }
         }
 
-        // db3 pode ser None (sem bias no quantizer) — usa zero nesse caso
         self.loaded = self.embed_w.is_some() && self.dw3.is_some();
         if self.loaded {
             if self.db3.is_none() {
                 let cols = self.dw3.as_ref().unwrap().shape.1;
                 self.db3 = Some(Tensor::new((1, cols)));
-                crate::serial_println!("[TTS-NEURAL] db3 criado como zero (sem bias no modelo)");
             }
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS real loaded: embed={:?}, decoder={:?}x{:?}x{:?}",
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS loaded: embed={:?}, decoder={:?}",
                 self.embed_w.as_ref().map(|t| t.shape),
-                self.dw1.as_ref().map(|t| t.shape),
-                self.dw2.as_ref().map(|t| t.shape),
                 self.dw3.as_ref().map(|t| t.shape));
         }
         self.loaded
@@ -117,25 +93,19 @@ impl PocketTtsEngine {
 
     pub fn generate(&self, text: &str) -> Vec<i16> {
         if !self.loaded { return crate::audio::tts::synthesize(text); }
-
         let tokens = crate::bpe::encode(text);
         if tokens.is_empty() { return vec![0i16; SAMPLE_RATE as usize / 10]; }
 
         let embed = self.embed_w.as_ref().unwrap();
         let h = self.hidden;
         let ntok = tokens.len().max(1) as f32;
-
-        // Média dos embeddings = latent vector
         let mut latent = Tensor::new((1, h));
         for &tok in &tokens {
             let idx = (tok as usize) % embed.shape.0;
             let s = idx * h;
-            for j in 0..h {
-                latent.data[j] += embed.data[s + j] / ntok;
-            }
+            for j in 0..h { latent.data[j] += embed.data[s + j] / ntok; }
         }
 
-        // Decoder neural: se dw1 existe, usa 2 layers; caso contrario, 1 layer
         let features = if let (Some(w1), Some(b1)) = (self.dw1.as_ref(), self.db1.as_ref()) {
             let h1 = gelu_gpu(&latent, w1, b1);
             if let (Some(w2), Some(b2)) = (self.dw2.as_ref(), self.db2.as_ref()) {
@@ -148,7 +118,6 @@ impl PocketTtsEngine {
         let w3t = w3.transposed();
         let raw = crate::gpu::backend::gpu_matmul(&features, &w3t).unwrap();
         let cols = raw.shape.1;
-
         let len = SAMPLE_RATE as usize;
         let mut audio = vec![0i16; len];
         for i in 0..len {
@@ -164,9 +133,7 @@ impl PocketTtsEngine {
 fn gelu_gpu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
     let wt = w.transposed();
     let mut out = crate::gpu::backend::gpu_matmul(input, &wt).unwrap();
-    for i in 0..out.shape.1 {
-        out.data[i] += b.data[i % b.shape.1];
-    }
+    for i in 0..out.shape.1 { out.data[i] += b.data[i % b.shape.1]; }
     for x in out.data.iter_mut() {
         let xf = *x;
         *x = 0.5 * xf * (1.0 + tanhf(0.79788456 * (xf + 0.044715 * xf * xf * xf)));
@@ -174,22 +141,25 @@ fn gelu_gpu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
     out
 }
 
+/// Carrega Pocket TTS do FAT32 (HW real). Sem fallback QEMU loader.
 pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
-    let load_addr: u64 = 0x100000000;
-    let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-    let probe = (load_addr + pm) as *const u32;
-    let magic = unsafe { core::ptr::read_volatile(probe) };
-    crate::serial_println!("[TTS-NEURAL] Probe 0x{:x}: magic=0x{:08x}", load_addr, magic);
-    if magic == 0xBE11BE11 {
-        let mut eng = PocketTtsEngine::new();
-        let data = unsafe { core::slice::from_raw_parts(probe as *const u8, 420 * 1024 * 1024) };
-        if eng.load(data) {
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded! GPU offload ativo");
-            return Some(eng);
-        } else {
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS load FAILED — nomes nao encontrados");
+    let ata_guard = crate::ATA_DRIVER.lock();
+    if let Some(ref ata) = *ata_guard {
+        let parts = crate::fat::read_mbr(ata);
+        for p in &parts {
+            if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
+                let fs = crate::fat::FatFilesystem::new(ata.clone(), p);
+                if let Some(data) = unsafe { fs.read_file("POCKETTTS.BIN") } {
+                    drop(ata_guard);
+                    let mut eng = PocketTtsEngine::new();
+                    if eng.load(&data) {
+                        crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from FAT! GPU offload ativo");
+                        return Some(eng);
+                    }
+                }
+            }
         }
     }
-    crate::serial_println!("[TTS-NEURAL] Pocket TTS ausente — formant synth ativo");
+    crate::serial_println!("[TTS-NEURAL] POCKETTTS.BIN nao encontrado no FAT — formant synth ativo");
     None
 }
