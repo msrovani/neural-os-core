@@ -1581,3 +1581,7 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | 2026-07-06 | **404** | NVMe submission/completion queue architecture — Submission/completion queues, MSI-X, PRP lists, SGL. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0010 |
 | 2026-07-06 | **405** | Capability token cryptographically signed — Skill recebe contexto com token criptografado scoped a operações permitidas, verificado pelo kernel. | 🟡 Sprint 93 | Sprint 93 | ADR-0010 |
 | 2026-07-06 | **406** | VirtIO-GPU GET_DISPLAY_INFO pending fix — Bug do QEMU TCG onde GET_DISPLAY_INFO retorna 0x0. | 🟡 Sprint 97 | Sprint 97 | ADR-0029 |
+| 2026-07-07 | **407** | WiFi SoftMAC firmware loading — Carregar blob iwlwifi.ucode via PCIe DMA para chips Intel AX200/AX210. Requer DMA ring + firmware loader da flash FAT. | 🔴 Pós B-01 | N+2 | ~800 | generic_wifi.rs |
+| 2026-07-07 | **408** | Async executor bare-metal x86_64 — Port do Embassy para x86_64 (APIC timer + MSI-X como drivers de temporizador/interrupção). Necessário para SoftMAC (ACK 802.11 em ~10µs). | 🔴 Pós B-01 | N+2 | ~1500 | embassy-rs + generic_wifi.rs |
+| 2026-07-07 | **409** | USB CDC ECM driver — Driver USB Ethernet Control Model para dongles WiFi HardMAC (Realtek RTL8188/RTL8192). Comunicação via xHCI isochronous + bulk. | 🔴 Pós B-01 | N+2 | ~500 | xHCI + generic_wifi.rs |
+| 2026-07-07 | **410** | Bridge smoltcp::phy::Device para WifiChipset — Implementar trait Device do smoltcp sobre a trait WifiChipset do generic_wifi para unificar o path de pacotes. | 🟡 Sprint atual | Atual | ~50 | generic_wifi.rs + netstack.rs |
