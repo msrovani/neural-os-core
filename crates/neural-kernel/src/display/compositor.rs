@@ -119,8 +119,25 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, scr_
             draw_text(fb, cx, cy + (app.h - 40) / 16, "> ", scr_w, 0, 255, 100);
         }
         AppId::Settings => {
-            let items = ["[1] Theme", "[2] Voice: Kokoro", "[3] Memory: BGE", "[4] Avatar", "[5] Network"];
+            let items = ["[1] Theme", "[2] Sound", "[3] Memory: BGE", "[4] Avatar", "[5] Network"];
             for (i, item) in items.iter().enumerate() { draw_text(fb, cx, cy + i * 16, item, scr_w, 180, 200, 220); }
+            if app.data.contains("[2]") || app.data.contains("sound") || app.data.contains("som") {
+                let vol = crate::audio::settings::AUDIO_VOLUME.load(core::sync::atomic::Ordering::Relaxed);
+                let clone = if crate::audio::settings::VOICE_CLONE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) { "ON" } else { "OFF" };
+                let voice = crate::audio::settings::CURRENT_VOICE.lock();
+                let voice_name = voice.as_deref().unwrap_or("default");
+                let sound_items = [
+                    &alloc::format!("   Volume: [{}%]  [+]/[-]", vol),
+                    &alloc::format!("   Voice: {}", voice_name),
+                    &alloc::format!("   Voice Clone: {}", clone),
+                    &alloc::format!("   Wake Word: Jarvis"),
+                    "   [B]ack to Settings",
+                ];
+                for (i, item) in sound_items.iter().enumerate() {
+                    let color = if i == 0 { (0u8, 255u8, 100u8) } else { (180u8, 200u8, 220u8) };
+                    draw_text(fb, cx, cy + (i + 5) * 16, item, scr_w, color.0, color.1, color.2);
+                }
+            }
         }
         AppId::Power => {
             let items = ["[1] Shutdown", "[2] Reboot", "[3] Hibernate"];

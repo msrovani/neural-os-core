@@ -1,28 +1,26 @@
 //! Audio subsystem — JARVIS voice pipeline (Sprint Sound)
 //!
-//! ## Arquitetura Agent/Skill-First
-//!
-//! JarvisVoiceAgent (ouvidos + boca):
-//!   - TOPIC_AUDIO_IN  ← HdaAudioAgent/USB (PCM chunks)
-//!       → wake word (Rustpotter stub)
-//!       → texto (sherpa-onnx STT stub)
-//!       → USER_INTENT → HermesAgent (delibera) → Cortex (processa)
-//!   - HERMES_RESPONSE ← HermesAgent
-//!       → texto → TTS (sherpa-onnx stub)
-//!       → TOPIC_AUDIO_OUT → HdaAudioAgent (PCM playback)
-//!
-//! HdaAudioAgent  → DriverAgent (Oneshot): init Intel HDA controller
-//! UsbAudioAgent  → DriverAgent (Oneshot): init USB Audio Class
-//! TtsSkill       → Skill: text→audio PCM via sherpa-onnx PocketTTS
-//! SttSkill       → Skill: audio PCM→text via sherpa-onnx Whisper
+//! JarvisAgent: persona que conversa com o usuario
+//!   - USER_INTENT  → processa → LLM_REQUEST → LLM_RESPONSE → HERMES_RESPONSE + TTS
+//! JarvisVoiceAgent: ouvidos + boca (somente I/O de audio)
+//! AudioMixerAgent: volume, mixing
+//! Skills: TtsSkill, SttSkill, AudioGetSettingsSkill, AudioSetVolumeSkill
 
 pub mod frame;
 pub mod ringbuf;
 pub mod voice;
 pub mod skills;
+pub mod settings;
+pub mod mixer;
+pub mod jarvis;
 pub mod wakeword;
 pub mod hda;
 pub mod usb;
+
+pub fn init_audio() {
+    crate::audio::settings::init_audio_settings();
+    crate::serial_println!("[AUDIO] Configuracoes de audio inicializadas");
+}
 
 pub const TOPIC_AUDIO_IN: &str = "AUDIO_IN";
 pub const TOPIC_AUDIO_OUT: &str = "AUDIO_OUT";

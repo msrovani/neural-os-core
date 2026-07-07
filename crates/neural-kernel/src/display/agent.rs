@@ -82,9 +82,39 @@ impl Agent for DisplayAgent {
 
         // App switching via keyboard commands
         if self.input_buffer.contains("[F1]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::HermesChat); }}
-        if self.input_buffer.contains("[F2]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Settings); }}
+        if self.input_buffer.contains("[F2]") {
+            if let Some(ref mut d) = *COMPOSITOR.lock() {
+                d.toggle_app(AppId::Settings);
+                if let Some(s) = d.apps.iter_mut().find(|a| a.id == AppId::Settings) { s.data.clear(); }
+            }
+        }
         if self.input_buffer.contains("[F3]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Power); }}
         if self.input_buffer.contains("[F4]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Ide); }}
+
+        // Settings navigation
+        if self.input_buffer.contains("[2]") || self.input_buffer.contains("sound") || self.input_buffer.contains("som") {
+            if let Some(ref mut d) = *COMPOSITOR.lock() {
+                if let Some(s) = d.apps.iter_mut().find(|a| a.id == AppId::Settings) {
+                    s.data = alloc::string::String::from("[2] sound");
+                }
+            }
+        }
+        if self.input_buffer.contains("[B]") || self.input_buffer.contains("back") {
+            if let Some(ref mut d) = *COMPOSITOR.lock() {
+                if let Some(s) = d.apps.iter_mut().find(|a| a.id == AppId::Settings) {
+                    s.data.clear();
+                }
+            }
+        }
+        // Volume controls
+        if self.input_buffer.contains("+") {
+            let v = crate::audio::settings::AUDIO_VOLUME.load(core::sync::atomic::Ordering::Relaxed);
+            crate::audio::settings::AUDIO_VOLUME.store((v + 5).min(100), core::sync::atomic::Ordering::Relaxed);
+        }
+        if self.input_buffer.contains("-") {
+            let v = crate::audio::settings::AUDIO_VOLUME.load(core::sync::atomic::Ordering::Relaxed);
+            crate::audio::settings::AUDIO_VOLUME.store(v.saturating_sub(5), core::sync::atomic::Ordering::Relaxed);
+        }
 
         // IDE: Generate WASM skill
         if self.input_buffer.contains("[GEN]") {

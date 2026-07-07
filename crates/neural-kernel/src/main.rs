@@ -320,6 +320,9 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(HwIdentifySkill));
         reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
         reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));
+        reg.register(alloc::boxed::Box::new(audio::settings::AudioGetSettingsSkill));
+        reg.register(alloc::boxed::Box::new(audio::settings::AudioSetVolumeSkill));
+        reg.register(alloc::boxed::Box::new(audio::settings::AudioToggleVoiceCloneSkill));
         reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         ticket_lock::TicketLock::new(reg)
     };
@@ -621,6 +624,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::apps::init_apps();
     crate::boot_logger::log("BOOT: Desktop apps OK");
 
+    // Audio: inicializa configuracoes de som
+    audio::init_audio();
+
     // GPU: detecta hardware e inicializa backend
     unsafe {
         let gpus = crate::gpu::detect::detect_all();
@@ -697,8 +703,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     display::fb::fb_remap_uc();
     serial_println!("[BOOT] Registering DisplayAgent...");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
+    serial_println!("[BOOT] Registering JarvisAgent...");
+    registry.register(Box::new(audio::jarvis::JarvisAgent::new()));
     serial_println!("[BOOT] Registering JarvisVoiceAgent...");
     registry.register(Box::new(audio::voice::JarvisVoiceAgent::new()));
+    serial_println!("[BOOT] Registering AudioMixerAgent...");
+    registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
     serial_println!("[BOOT] Registering CronAgent...");
     let mut cron = cron::CronAgent::new();
     cron.init_defaults();
