@@ -9,7 +9,7 @@ static ALLOCATOR: LockedHeap = LockedHeap::empty();
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 512 * 1024 * 1024;
 
-pub static CURRENT_HEAP_MB: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(16);
+pub static CURRENT_HEAP_MB: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(512);
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
