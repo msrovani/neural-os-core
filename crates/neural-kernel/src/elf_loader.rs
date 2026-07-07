@@ -1,8 +1,6 @@
 //! Cross-OS Loaders — #306a-d: PE32+ (Windows), ELF (Linux), Mach-O (macOS), APK (Android).
 //! Syscall-to-Skill Translation Layer (#307).
 
-use alloc::vec::Vec;
-use alloc::vec;
 use alloc::string::String;
 
 pub enum BinaryFormat { Elf, Pe, MachO, Apk, Unknown }

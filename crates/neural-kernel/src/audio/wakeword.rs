@@ -5,7 +5,7 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event, Receiver};
-use crate::audio::vad::{VAD, VadTransition, VAD_ACTIVE};
+use crate::audio::vad::{VAD, VadTransition};
 use crate::audio::TOPIC_WAKEWORD;
 use crate::serial_println;
 

@@ -3,7 +3,6 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::hermes;
-use crate::jarvis::{JarvisEngine, AvatarState};
 use crate::serial_println;
 use crate::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};

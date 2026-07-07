@@ -1,6 +1,4 @@
-use crate::tensor::{PackedTernaryTensor, Tensor};
-use alloc::boxed::Box;
-use alloc::string::String;
+use crate::tensor::PackedTernaryTensor;
 use alloc::vec::Vec;
 
 pub enum ExpertKind {

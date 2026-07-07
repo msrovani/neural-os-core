@@ -43,7 +43,7 @@ impl XpuEngine {
     /// Decode: gera 1 token (sempre CPU por enquanto — GPU é stub futuro)
     pub fn decode(&mut self, model: &TransformerModel, ctx: &[u16], cache: &mut KvCache, tick_start: u64) -> u16 {
         let token = if self.config.use_gpu_decode {
-            let (logits, _) = model.forward_with_kv(&[ctx[ctx.len().saturating_sub(1)]], cache);
+            let (_logits, _) = model.forward_with_kv(&[ctx[ctx.len().saturating_sub(1)]], cache);
             model.sample(ctx, 5, 0.8)
         } else {
             model.generate_next(ctx)

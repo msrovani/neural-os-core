@@ -2,7 +2,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::boxed::Box;
-use crate::bpe;
 use core::f32::NEG_INFINITY;
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
@@ -227,7 +226,7 @@ impl MedusaHead {
 pub fn random_ternary(seed: &mut u32, rows: usize, cols: usize) -> PackedTernaryTensor {
     let packed_len = (rows * cols + 3) / 4;
     let mut packed = vec![0u8; packed_len];
-    for (i, byte) in packed.iter_mut().enumerate() {
+    for (_i, byte) in packed.iter_mut().enumerate() {
         let mut b = 0u8;
         for j in 0..4 {
             *seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
@@ -337,7 +336,7 @@ impl TransformerModel {
         }
         let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
 
-        let layer_count = self.layers.len();
+        let _layer_count = self.layers.len();
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
@@ -497,7 +496,7 @@ impl TransformerModel {
             let mut q = layer.q.matmul_hybrid(&norm).unwrap();  // (seq, kv_dim)
             let t_q1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let mut k = layer.k.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
-            let t_k1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let _t_k1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let v = layer.v.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
             let t_v1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
@@ -732,7 +731,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let num_layers = read_u16(data, &mut off)? as usize;
     // Auto-expand heap based on header (before main parsing)
     {
-        let nh = read_u16(data, &mut off)? as usize;
+        let _nh = read_u16(data, &mut off)? as usize;
         let vs = read_u32(data, &mut off)? as usize;
         let _ms = read_u16(data, &mut off)? as usize;
         let isize = read_u16(data, &mut off)? as usize;
@@ -894,7 +893,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
         let tok_len = read_u32(data, &mut off)? as usize;
         if tok_len > 0 && off + tok_len <= data.len() {
-            let tok_data = &data[off..off + tok_len];
+            let _tok_data = &data[off..off + tok_len];
         }
         off += tok_len;
     } else {

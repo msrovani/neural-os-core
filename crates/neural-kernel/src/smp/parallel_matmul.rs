@@ -5,7 +5,6 @@
 
 use alloc::vec::Vec;
 use crate::tensor::Tensor;
-use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Matmul paralela simples usando chunking (sem work-stealing complexo)
 pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {

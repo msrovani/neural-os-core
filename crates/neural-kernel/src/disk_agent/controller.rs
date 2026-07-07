@@ -1,9 +1,7 @@
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cell::UnsafeCell;
 use crate::ata::AtaDriver;
-use crate::mhi::AllocTier;
 use crate::usb_msc::UsbMassStorage;
 use super::disk_info::*;
 use super::nvme::NvmeDriver;
@@ -94,7 +92,7 @@ impl StorageController for AtaCtrl {
 impl AtaCtrl {
     unsafe fn ata_enable_smart(&self) -> bool {
         let io = self.ata.io_base;
-        let status = |io: u16| -> u8 { core::arch::asm!("in al, dx", out("al") _, in("dx") io + 7, options(nostack, preserves_flags, readonly)); 0 };
+        let _status = |io: u16| -> u8 { core::arch::asm!("in al, dx", out("al") _, in("dx") io + 7, options(nostack, preserves_flags, readonly)); 0 };
         let wait = |io: u16| -> bool {
             for _ in 0..10000 {
                 let s: u8; core::arch::asm!("in al, dx", out("al") s, in("dx") io + 7, options(nostack, preserves_flags, readonly));

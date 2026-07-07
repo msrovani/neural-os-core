@@ -49,7 +49,7 @@ impl Agent for JarvisAgent {
                 let g = crate::memory::GLOBAL_ALLOCATOR.lock();
                 g.as_ref().map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024)).unwrap_or(0)
             };
-            let tick_rate = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let _tick_rate = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let cpu_count = crate::smp::percpu::CPU_COUNT.load(core::sync::atomic::Ordering::Relaxed);
             let agent_count = {
                 let tr = crate::TRINITY.lock();

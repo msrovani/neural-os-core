@@ -186,7 +186,7 @@ impl DiskIntelligenceAgent {
                     buf[off+60], buf[off+61], buf[off+62], buf[off+63]]);
                 let name_utf16 = &buf[off+64..off+108];
                 let name = String::from_utf16le(name_utf16).unwrap_or(String::new());
-                let name_str = name.trim_end_matches('\0');
+                let _name_str = name.trim_end_matches('\0');
 
                 let mbr_type = match type_guid {
                     g if g == &[0x28,0x73,0x2A,0xC1,0x1F,0xF8,0xD2,0x11,0xBA,0x4B,0x00,0xA0,0xC9,0x3E,0xC9,0x3B] => 0xEF, // ESP

@@ -106,7 +106,7 @@ fn cat(args: &str) -> String {
 fn learn(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: learn <pattern-name>\n"); }
     match crate::skill_gen::generate_skill(args) {
-        Some(md) => { crate::skill_observer::mark_actioned(0); alloc::format!("Skill '{}' generated\n", args) }
+        Some(_md) => { crate::skill_observer::mark_actioned(0); alloc::format!("Skill '{}' generated\n", args) }
         None => alloc::format!("Pattern '{}' not found. Use it 3+ times first.\n", args)
     }
 }

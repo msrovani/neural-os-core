@@ -3,7 +3,7 @@
 //! Head = onde a GPU leu ate (GPU atualiza), Tail = onde CPU escreveu (CPU atualiza).
 
 use crate::gpu::detect::{GpuInfo, GpuVendor};
-use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
+use crate::memory::GLOBAL_ALLOCATOR;
 use crate::serial_println;
 use core::sync::atomic::{fence, Ordering};
 

@@ -184,7 +184,7 @@ impl AhciDriver {
         core::ptr::write_volatile((ct_va + 0x09) as *mut u8, ((lba >> 32) & 0xFF) as u8);
         core::ptr::write_volatile((ct_va + 0x0A) as *mut u8, ((lba >> 40) & 0xFF) as u8);
         core::ptr::write_volatile((ct_va + 0x0B) as *mut u8, 0);     // Features ext
-        core::ptr::write_volatile((ct_va + 0x0C) as *mut u16, (count as u16)); // Sector count
+        core::ptr::write_volatile((ct_va + 0x0C) as *mut u16, count as u16); // Sector count
         core::ptr::write_volatile((ct_va + 0x0E) as *mut u8, 0);     // Control
 
         // Issue command via PXCI

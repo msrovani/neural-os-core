@@ -21,7 +21,7 @@ static JOB_RINGS: Mutex<Vec<GpuJobRing>> = Mutex::new(Vec::new());
 /// Deve ser chamado antes de vendor-specific init.
 pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-    let vram_pages = ((gpu.vram_size.max(4096) + 4095) / 4096) as usize;
+    let _vram_pages = ((gpu.vram_size.max(4096) + 4095) / 4096) as usize;
 
     // BAR0 inteiro como UC — necessário para TODOS os registers MMIO, não só o primeiro page.
     // Intel Gen9: VGACNTRL(0x71400), RENDER_RING_BASE(0x120000), FORCE_WAKEUP(0xA278)

@@ -288,7 +288,7 @@ pub fn corrective_prompt(error: &str, context: &str) -> String {
 }
 
 /// M9: Verifier Pós-Recovery — valida se o recovery foi bem-sucedido
-pub fn verify_recovery(check: fn() -> bool, label: &str) -> bool {
+pub fn verify_recovery(check: fn() -> bool, _label: &str) -> bool {
     let ok = check();
     if !ok {
         // Log verification failure — would go to EventLog in production

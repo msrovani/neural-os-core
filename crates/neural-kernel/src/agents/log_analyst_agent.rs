@@ -5,7 +5,6 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use alloc::string::String;
-use alloc::vec::Vec;
 use crate::serial_println;
 
 const LOG_ANALYST_MANIFEST: AgentManifest = AgentManifest {

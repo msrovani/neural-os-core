@@ -6,7 +6,6 @@
 //!
 //! Policy: modelo X params -> heap = X/10 MB, cache = heap/2, KV = X/40
 
-use alloc::string::String;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
 pub struct MemoryBudget {

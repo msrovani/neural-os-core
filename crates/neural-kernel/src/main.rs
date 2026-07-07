@@ -12,7 +12,6 @@ use alloc::vec::Vec;
 use bootloader_api::BootInfo;
 use event_bus::{CapabilityToken, Event, Receiver};
 use skill_registry::{McpManifest, Skill, SkillRegistry, OutputSchema};
-use x86_64::structures::paging::{FrameAllocator, FrameDeallocator};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
 // ═══════════════════════════════════════════════════════════════════

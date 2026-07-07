@@ -2,7 +2,7 @@
 //! Usa DMA engine da GPU ou cópia via BAR1 quando DMA não disponível.
 //! Referência: dmaplane (arXiv 2603.10030).
 
-use crate::gpu::detect::{GpuInfo, GpuVendor};
+use crate::gpu::detect::GpuInfo;
 use crate::gpu::vram::vram_alloc;
 use crate::serial_println;
 
@@ -19,7 +19,7 @@ pub struct KvDmaTransfer {
 }
 
 impl KvDmaTransfer {
-    pub fn new(cpu_paddr: u64, size: u64, dir: DmaDir, gpu: &GpuInfo) -> Option<Self> {
+    pub fn new(cpu_paddr: u64, size: u64, dir: DmaDir, _gpu: &GpuInfo) -> Option<Self> {
         let pmoff = unsafe { crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed) };
         let gpu_paddr = vram_alloc(size as usize)?;
 
@@ -56,8 +56,8 @@ pub fn kv_transfer_layer(
     let k_gpu = vram_alloc(layer_bytes)?;
     let v_gpu = vram_alloc(layer_bytes)?;
 
-    let k_cpu_paddr = layer_k_cpu.as_ptr() as u64 - pmoff;
-    let v_cpu_paddr = layer_v_cpu.as_ptr() as u64 - pmoff;
+    let _k_cpu_paddr = layer_k_cpu.as_ptr() as u64 - pmoff;
+    let _v_cpu_paddr = layer_v_cpu.as_ptr() as u64 - pmoff;
 
     unsafe {
         core::ptr::copy_nonoverlapping(

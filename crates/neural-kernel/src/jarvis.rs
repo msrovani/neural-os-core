@@ -7,7 +7,7 @@ use alloc::string::String;
 use core::sync::atomic::Ordering;
 use alloc::collections::BTreeMap;
 
-pub use crate::display::avatar::{JarvisAvatar, AvatarState};
+pub use crate::display::avatar::AvatarState;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // #315.1 SOUL.md
@@ -40,7 +40,7 @@ impl EmotionAnalysis {
     pub fn analyze(text: &str) -> Self {
         let lower = text.to_ascii_lowercase();
         let words: Vec<&str> = lower.split_whitespace().collect();
-        let total = words.len().max(1) as f32;
+        let _total = words.len().max(1) as f32;
         let mut r = EmotionAnalysis { joy: 0.0, sadness: 0.0, anger: 0.0, fear: 0.0,
             surprise: 0.0, disgust: 0.0, neutral: 0.7, sarcasm: 0.0 };
         for w in words {
@@ -185,7 +185,7 @@ impl SemanticCache {
 // #315.11 Persona Pipeline (16 stages)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn persona_pipeline(text: &str) -> String {
+pub fn persona_pipeline(_text: &str) -> String {
     // 16 stages: SafetyCheck→StopHandler→Converse→SkillHigh→Persona→SkillMedium→CommonQA→FallbackLow→Reflexive→Dreaming→EgoUpdate→SessionCompress→NotificationGate→Heartbeat→BabelIndex→AuditLog
     let stages = ["safety", "stop", "converse", "skill_high", "persona", "skill_med", "qa", "fallback",
         "reflex", "dream", "ego", "compress", "notify", "heartbeat", "babel", "audit"];

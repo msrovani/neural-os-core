@@ -71,10 +71,10 @@ impl VramBuddy {
         let oi = order_found?;
         // Remove bloco da free list
         let addr = self.free[oi - MIN_ORDER as usize].pop()?;
-        let block_size = 1u64 << oi;
+        let _block_size = 1u64 << oi;
 
         // Split até o order requisitado
-        let mut current = addr;
+        let current = addr;
         let mut current_order = oi as u32;
         while current_order > o {
             current_order -= 1;

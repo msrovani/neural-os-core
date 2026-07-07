@@ -10,7 +10,6 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use alloc::boxed::Box;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // #105 Intent Planner — goal → skill sequence
@@ -150,7 +149,7 @@ impl NeuralCache {
 
     pub fn status(&self) -> String {
         alloc::format!("[NCACHE] {} entries, {:.0}% hit, ttl={}", self.cache.len(),
-            if self.hits+self.misses>0{ (self.hits as f32/(self.hits+self.misses)as f32*100.0)}else{0.0}, self.ttl)
+            if self.hits+self.misses>0{ self.hits as f32/(self.hits+self.misses)as f32*100.0}else{0.0}, self.ttl)
     }
 }
 
@@ -606,7 +605,7 @@ pub struct TaskSpawner {
 }
 impl TaskSpawner {
     pub fn new() -> Self { TaskSpawner { spawned: 0, max_children: 16 } }
-    pub fn spawn(&mut self, name: &str, entry: u64, stack: u64) -> u64 {
+    pub fn spawn(&mut self, _name: &str, _entry: u64, _stack: u64) -> u64 {
         self.spawned += 1;
         // No bare-metal, spawn = registra agente filho
         self.spawned

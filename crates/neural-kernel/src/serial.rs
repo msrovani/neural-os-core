@@ -117,7 +117,7 @@ pub fn _print(args: fmt::Arguments) {
 
 /// Tenta escrever no arquivo de sessao no disco FAT32 (HW real sem serial)
 fn write_to_disk_journal(data: &[u8], tick: u64) {
-    use alloc::vec;
+    
     let sfn = {
         let g = crate::boot_logger::SESSION_FILENAME.lock();
         g.clone()

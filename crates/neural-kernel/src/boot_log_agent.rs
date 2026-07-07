@@ -70,7 +70,7 @@ impl BootLogAgent {
             for file in files {
                 if file.starts_with("boot_") && file.ends_with(".log") {
                     let path = alloc::format!("/logs/{}", file);
-                    let (mount, rel_path, agent_name) = vfs.resolve(&path);
+                    let (_mount, rel_path, agent_name) = vfs.resolve(&path);
                     if let Some("logfs") = agent_name {
                         // Usar LogFsAgent diretamente via FilesystemAgent trait
                         use crate::fs::FilesystemAgent;
@@ -88,7 +88,7 @@ impl BootLogAgent {
     /// Escreve log de boot para persistencia
     /// Tenta disco ATA, fallback para LogFsAgent
     pub fn write_boot_log(tick: u64, content: &str) -> Result<(), &'static str> {
-        let filename = alloc::format!("B{:07X}.LOG", tick);
+        let _filename = alloc::format!("B{:07X}.LOG", tick);
         
         // Tenta escrever no disco ATA
         let ata_guard = crate::ATA_DRIVER.lock();
@@ -97,8 +97,8 @@ impl BootLogAgent {
             for part in &parts {
                 match part.type_code {
                     0x0B | 0x0C | 0x1C | 0x73 => {
-                        if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
-                            let data = content.as_bytes();
+                        if let Some(_fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
+                            let _data = content.as_bytes();
                             // Simplificado: escrever direto no cluster (requer implementacao completa)
                             // Por enquanto, fallback para LogFsAgent
                         }

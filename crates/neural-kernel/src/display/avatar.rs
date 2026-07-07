@@ -6,7 +6,6 @@
 use core::f32::consts::PI;
 use libm::{sinf, cosf, sqrtf};
 use crate::display::fb::{DoubleBuffer, GpuDevice};
-use crate::serial_println;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AvatarState { Idle, Listening, Processing, Speaking }
@@ -103,7 +102,7 @@ impl JarvisAvatar {
         self.update_particles(dt);
         for i in 0..self.particle_count {
             let p = &self.particles[i];
-            let alpha = (p.a as f32 * p.life / 100.0) as u8;
+            let _alpha = (p.a as f32 * p.life / 100.0) as u8;
             let size = p.size.max(1.0) as usize;
             for dy in 0..size {
                 for dx in 0..size {

@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
-use alloc::vec::Vec;
 
 /// Unpack one row of a PackedTernaryTensor into an i8 buffer.
 /// Packed format: byte = [elem0(bits 0-1), elem1(bits 2-3), elem2(bits 4-5), elem3(bits 6-7)]
@@ -40,8 +39,8 @@ fn avx2_available() -> bool {
             // Leia o vendor string do hypervisor (leaf 0x40000000)
             let hv = core::arch::x86_64::__cpuid(0x40000000);
             let vendor_ebx = hv.ebx;
-            let vendor_ecx = hv.ecx;
-            let vendor_edx = hv.edx;
+            let _vendor_ecx = hv.ecx;
+            let _vendor_edx = hv.edx;
 
             let is_whpx = vendor_ebx == 0x7263694D; // "Micr" (Microsoft Hv)
             if is_whpx {

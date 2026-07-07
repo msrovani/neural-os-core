@@ -8,7 +8,7 @@
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::vec;
-use libm::{sinf, expf, sqrtf, cosf, floorf, powf};
+use libm::{sinf, expf, cosf, powf};
 
 const SAMPLE_RATE: u32 = 16000;
 

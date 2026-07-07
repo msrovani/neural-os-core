@@ -14,8 +14,8 @@ pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: u
 }
 
 /// #82: Renderiza tensor visualization overlay
-pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, w: usize, h: usize) {
-    use core::f32::consts::PI;
+pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, _w: usize, _h: usize) {
+    
     use libm::sinf;
     let mut data = [0.0f32; 400];
     for i in 0..20 { for j in 0..20 { data[i*20+j] = (sinf(i as f32*0.3)*sinf(j as f32*0.3)).abs()*0.5+0.5; } }
@@ -110,7 +110,7 @@ impl JarvisDesktop {
     }
 }
 
-fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, scr_h: usize) {
+fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr_h: usize) {
     let cx = app.x + 4; let cy = app.y + 28;
     match app.id {
         AppId::HermesChat => {

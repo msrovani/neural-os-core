@@ -29,7 +29,7 @@ impl BpeTokenizer {
     pub fn load_from_json(&mut self, data: &[u8]) -> Result<(), &'static str> {
         // Minimal JSON parser for tokenizer.json
         // This parser handles the HuggingFace tokenizer.json format
-        let text = core::str::from_utf8(data).map_err(|_| "tokenizer not utf8")?;
+        let _text = core::str::from_utf8(data).map_err(|_| "tokenizer not utf8")?;
 
         // Quick and dirty: extract vocab and merges
         // We look for "model" section with "vocab" and "merges"

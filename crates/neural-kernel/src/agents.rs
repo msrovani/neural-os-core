@@ -487,7 +487,7 @@ impl Agent for HermesAgent {
                 serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 let pending = PENDING_SKILL.lock().take();
-                if let Some((name, desc)) = pending {
+                if let Some((name, _desc)) = pending {
                     let mut storage = SKILL_STORAGE.lock();
                     match storage.register_skill(text) {
                         Ok(()) => { serial_println!("[SKILL-LLM] Skill '{}' gerada ({} bytes)", name, text.len());

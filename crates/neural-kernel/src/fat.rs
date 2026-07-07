@@ -297,7 +297,7 @@ impl<'a> Fat32Writer<'a> {
                 if first == 0 || first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
                 if &buf[entry_off..entry_off+11] == &name_bytes {
-                    let size = u32::from_le_bytes([buf[entry_off+28], buf[entry_off+29], buf[entry_off+30], buf[entry_off+31]]);
+                    let _size = u32::from_le_bytes([buf[entry_off+28], buf[entry_off+29], buf[entry_off+30], buf[entry_off+31]]);
                     let cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
                     let cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
                     let start_cluster = ((cluster_hi as u32) << 16) | cluster_lo as u32;
@@ -378,7 +378,7 @@ impl<'a> Fat32Writer<'a> {
     }
 
     /// Escreve dados em um cluster chain, alocando FAT entries
-    unsafe fn write_cluster_chain(&self, start_cluster: u32, data: &[u8]) -> bool {
+    unsafe fn write_cluster_chain(&self, _start_cluster: u32, data: &[u8]) -> bool {
         let spc = self.reader.sectors_per_cluster as u32;
         let bps = self.reader.bytes_per_sector as usize;
         let cluster_size = spc as usize * bps;

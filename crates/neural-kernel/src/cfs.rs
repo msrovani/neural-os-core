@@ -14,6 +14,6 @@ impl CfsScheduler {
         self.total_weight += weight;
         self.min_vruntime + 1000 / weight
     }
-    pub fn update(&mut self, vruntime: u64, weight: u64) { self.min_vruntime = self.min_vruntime.min(vruntime); }
+    pub fn update(&mut self, vruntime: u64, _weight: u64) { self.min_vruntime = self.min_vruntime.min(vruntime); }
     pub fn status(&self) -> alloc::string::String { alloc::format!("[CFS] {} weight, min_v={}", self.total_weight, self.min_vruntime) }
 }
