@@ -42,7 +42,7 @@ mod allocator;
 mod apic;
 mod ata;
 mod cortex;
-mod fat;
+mod fat32;
 mod hw_agents;
 mod agency;
 mod agency_importer;
@@ -568,7 +568,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     {
         let ata_guard = crate::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {
-            let parts = crate::fat::read_mbr(ata);
+            let parts = crate::fat32::read_mbr(ata);
             crate::boot_logger::init(Some(ata), &parts);
             // Verificar assinatura do kernel (l� KERNEL~1 do FAT)
             verify_kernel_from_disk(ata, &parts);
@@ -632,10 +632,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     unsafe {
         let ata_guard = crate::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {
-            let parts = crate::fat::read_mbr(ata);
+            let parts = crate::fat32::read_mbr(ata);
             for p in &parts {
                 if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                if let Some(fs) = crate::fat::Fat32Reader::new(ata, p) {
+                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                     if let Some(bge_data) = fs.read_file("BGE.BIN") {
                         if crate::memory_systems::load_bge(&bge_data) {
                             serial_println!("[BGE] Embedding model loaded from FAT!");
@@ -788,10 +788,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
-                let parts = crate::fat::read_mbr(ata);
+                let parts = crate::fat32::read_mbr(ata);
                 for p in &parts {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                    if let Some(fs) = crate::fat::Fat32Reader::new(ata, p) {
+                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         if let Some(fat_data) = fs.read_file("BITNET.BIN") {
                             if let Some(big_model) = crate::cortex::load_model(&fat_data) {
                                 crate::cortex::set_model(alloc::boxed::Box::new(big_model));
@@ -968,10 +968,10 @@ pub(crate) fn scancode_to_ascii(scancode: u8) -> Option<char> {
     }
 }
 
-fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Partition]) {
+fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat32::Partition]) {
     for part in parts {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-            if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
+            if let Some(fat32) = unsafe { crate::fat32::Fat32Reader::new(ata, part) } {
                 if let Some(data) = unsafe { fat32.read_file("KERNEL~1") } {
                     if !crate::identity::verify_kernel_signature(&data) {
                         crate::serial_println!("[SEC] *** ASSINATURA DO KERNEL INVALIDA! ***");
@@ -990,6 +990,8 @@ fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat::Par
 }
 
 // All old async fn daemons removed — migrated to native agents in agents.rs
+
+
 
 
 

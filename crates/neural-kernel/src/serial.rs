@@ -126,10 +126,10 @@ fn write_to_disk_journal(data: &[u8], tick: u64) {
         unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
-                let parts = crate::fat::read_mbr(ata);
+                let parts = crate::fat32::read_mbr(ata);
                 for part in &parts {
                     if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-                        let writer = crate::fat::Fat32Writer::new(ata, part);
+                        let writer = crate::fat32::Fat32Writer::new(ata, part);
                         if let Some(w) = writer {
                             if let Some(existing) = w.reader.read_file(name) {
                                 let mut new_data = existing;
@@ -170,3 +170,4 @@ pub fn serial_available() -> bool {
 
 #[macro_export] macro_rules! serial_print { ($($arg:tt)*) => ($crate::serial::_print(format_args!($($arg)*))); }
 #[macro_export] macro_rules! serial_println { () => ($crate::serial_print!("\n")); ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*))); }
+

@@ -47,7 +47,7 @@ pub fn label(cause: ShutdownCause) -> &'static str {
     }
 }
 
-/// Tenta escrever shutdown cause no boot log persistente (FAT12/32)
+/// Tenta escrever shutdown cause no boot log persistente (FAT32)
 pub fn write_persistent_shutdown_log(cause: ShutdownCause) {
     let msg = alloc::format!("SHUTDOWN:{} tick={}",
         match cause {
@@ -61,10 +61,10 @@ pub fn write_persistent_shutdown_log(cause: ShutdownCause) {
 
     let ata_guard = crate::ATA_DRIVER.lock();
     let ata = match *ata_guard { Some(ref a) => a, None => return };
-    let parts = unsafe { crate::fat::read_mbr(ata) };
+    let parts = unsafe { crate::fat32::read_mbr(ata) };
     for part in &parts {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-            unsafe { crate::fat::write_boot_log(ata, part, &msg); }
+            unsafe { crate::fat32::write_boot_log(ata, part, &msg); }
         }
     }
 }
@@ -86,3 +86,5 @@ pub fn read_last_shutdown_from_boot_log() -> Option<ShutdownCause> {
     }
     None
 }
+
+

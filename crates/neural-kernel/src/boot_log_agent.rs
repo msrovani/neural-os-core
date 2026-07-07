@@ -15,17 +15,17 @@ impl BootLogAgent {
     pub fn new() -> Self { BootLogAgent }
 
     /// Le o ultimo log de boot e retorna como string para o Cortex
-    /// Suporta FAT12 (BOOT.LOG), FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
+    /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
         // Tenta ler do disco ATA primeiro
         let ata_guard = crate::ATA_DRIVER.lock();
         let ata = (*ata_guard).as_ref()?;
-        let parts = unsafe { crate::fat::read_mbr(ata) };
+        let parts = unsafe { crate::fat32::read_mbr(ata) };
         for part in &parts {
             match part.type_code {
                 0x0B | 0x0C | 0x1C | 0x73 => {
                     // FAT32 (ou mascarado): ler B<TICK>.LOG mais recente
-                    if let Some(fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
+                    if let Some(fat32) = unsafe { crate::fat32::Fat32Reader::new(ata, part) } {
                         let mut best_name = alloc::string::String::new();
                         let mut best_tick = 0u64;
                         let mut cluster = fat32.get_root_cluster();
@@ -93,11 +93,11 @@ impl BootLogAgent {
         // Tenta escrever no disco ATA
         let ata_guard = crate::ATA_DRIVER.lock();
         if let Some(ata) = (*ata_guard).as_ref() {
-            let parts = unsafe { crate::fat::read_mbr(ata) };
+            let parts = unsafe { crate::fat32::read_mbr(ata) };
             for part in &parts {
                 match part.type_code {
                     0x0B | 0x0C | 0x1C | 0x73 => {
-                        if let Some(_fat32) = unsafe { crate::fat::Fat32Reader::new(ata, part) } {
+                        if let Some(_fat32) = unsafe { crate::fat32::Fat32Reader::new(ata, part) } {
                             let _data = content.as_bytes();
                             // Simplificado: escrever direto no cluster (requer implementacao completa)
                             // Por enquanto, fallback para LogFsAgent
@@ -175,3 +175,6 @@ impl Agent for BootLogAgent {
         AgentTickResult::Pending
     }
 }
+
+
+

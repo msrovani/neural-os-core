@@ -146,10 +146,10 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     unsafe {
         let ata_guard = crate::ATA_DRIVER.lock();
         if let Some(ref ata) = *ata_guard {
-            let parts = crate::fat::read_mbr(ata);
+            let parts = crate::fat32::read_mbr(ata);
             for p in &parts {
                 if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                if let Some(fs) = crate::fat::Fat32Reader::new(ata, p) {
+                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                     if let Some(data) = fs.read_file("POCKETTTS.BIN") {
                         let mut eng = PocketTtsEngine::new();
                         if eng.load(&data) {
@@ -164,6 +164,7 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     crate::serial_println!("[TTS-NEURAL] POCKETTTS.BIN nao encontrado no FAT — formant synth ativo");
     None
 }
+
 
 
 
