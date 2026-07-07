@@ -323,6 +323,7 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(audio::settings::AudioGetSettingsSkill));
         reg.register(alloc::boxed::Box::new(audio::settings::AudioSetVolumeSkill));
         reg.register(alloc::boxed::Box::new(audio::settings::AudioToggleVoiceCloneSkill));
+        reg.register(alloc::boxed::Box::new(audio::context::EmotionalContextSkill));
         reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         ticket_lock::TicketLock::new(reg)
     };

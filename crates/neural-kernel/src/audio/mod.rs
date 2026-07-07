@@ -11,6 +11,7 @@ pub mod ringbuf;
 pub mod vad;
 pub mod tts;
 pub mod ser;
+pub mod context;
 pub mod voice;
 pub mod skills;
 pub mod settings;
