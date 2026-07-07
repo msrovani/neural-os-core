@@ -66,12 +66,13 @@
 
 ## Sprint Sound — Bloco Audio: Drivers + Voice Pipeline (~3500 LOC)
 **IDEA_BANK:** #83, #84, #315.21-25, #360  
-**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado)  
+**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado), Sprint 84 `map_bars_uc()` (BAR0 full UC mapping)
 **Foco:** JARVIS ouvir e falar. Intel HDA, USB Audio, Kokoro TTS, Vosk STT, wake word
+**Pré-requisito:** `map_bars_uc()` do Sprint 84 (BAR0 mapeado UC completo) — HDA controller usa PCI BAR MMIO, mesma exigência de uncacheable que GPU. Sem isso, writes no HDA register set ficam presos no cache.
 
 | IDEA | Item | LOC | Depende |
 |---|---|---|---|
-| **#83** | **Intel HDA audio driver** — PCI HDA controller. DMA engine, codec detection, PCM playback/capture. Port do driver Linux HDA. | 800 | PCI scan |
+| **#83** | **Intel HDA audio driver** — PCI HDA controller. DMA engine, codec detection, PCM playback/capture. Port do driver Linux HDA. | 800 | PCI scan + BAR0 UC mapping |
 | **#84** | **USB Audio Class (UAC) driver** — Fones/microfone USB via xHCI isochronous transfers. Alternativa ao HDA. | 600 | xHCI |
 | #315.21 | Kokoro-82M TTS Integration (ONNX→.bitnet já pronto) | 100 | B-01 |
 | #315.22 | Vosk/Whisper STT | 400 | B-01 |
