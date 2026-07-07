@@ -108,6 +108,7 @@ mod verify;
 mod hal;
 mod bench;
 mod gpu;
+mod wifi_agent;
 mod boot_logger;
 mod boot_log_agent;
 mod shutdown;
@@ -743,6 +744,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
+    registry.register(Box::new(wifi_agent::WifiAgent::new()));
+    serial_println!("[BOOT] Registering WifiAgent...");
     registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
     registry.register(Box::new(agents::log_analyst_agent::LogAnalystAgent::new()));
     
