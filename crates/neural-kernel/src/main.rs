@@ -113,6 +113,7 @@ mod generic_wifi;
 mod wifi_protocol;
 mod hw_rng;
 mod wifi_msix;
+mod link_watcher;
 mod boot_logger;
 mod boot_log_agent;
 mod shutdown;
