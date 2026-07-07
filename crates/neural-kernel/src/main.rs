@@ -109,6 +109,7 @@ mod hal;
 mod bench;
 mod gpu;
 mod wifi_agent;
+mod generic_wifi;
 mod boot_logger;
 mod boot_log_agent;
 mod shutdown;
