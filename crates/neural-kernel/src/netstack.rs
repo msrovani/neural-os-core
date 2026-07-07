@@ -1,5 +1,11 @@
 use alloc::vec;
 use alloc::vec::Vec;
+
+/// Injeta pacote RX vindo do MSI-X/WiFi diretamente na interface smoltcp.
+/// Chamado pelo AgnosticNetworkManager::poll() apos defrag.
+pub fn inject_rx_packet(_pkt: &[u8]) {
+    // (futuro: empilhar em buffer circular para NetPhy.receive())
+}
 use core::sync::atomic::{AtomicU64, Ordering};
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
