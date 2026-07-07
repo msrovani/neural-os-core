@@ -38,12 +38,20 @@ impl TxToken for PhyToken {
 
 unsafe fn nic_send(data: Vec<u8>) {
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
-        nic.send(&data);
-    } else if let Some(ref mut nic) = *crate::net::E1000.lock() {
-        nic.send(&data);
-    } else if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
-        nic.send(&data);
+        nic.send(&data); return;
     }
+    if let Some(ref mut nic) = *crate::net::E1000.lock() {
+        nic.send(&data); return;
+    }
+    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
+        nic.send(&data); return;
+    }
+    // Generic WiFi driver (FallbackEthernet ou WiFi futuro)
+    crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
+        if let Some(wifi) = driver {
+            let _ = wifi.send_packet(&data);
+        }
+    });
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
@@ -56,6 +64,16 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
+    // Generic WiFi driver (FallbackEthernet retorna None — nic_recv() real via RTL8139)
+    crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
+        if let Some(wifi) = driver {
+            if let Some(_pkt) = wifi.poll_receive() {
+                // poll_receive retorna Option<&[u8]> — nao podemos emprestar para fora do lock.
+                // O driver WiFi real precisara copiar para um buffer.
+                // Por enquanto, FallbackEthernet retorna None.
+            }
+        }
+    });
     None
 }
 
