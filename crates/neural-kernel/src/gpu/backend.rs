@@ -21,11 +21,19 @@ static JOB_RINGS: Mutex<Vec<GpuJobRing>> = Mutex::new(Vec::new());
 /// Deve ser chamado antes de vendor-specific init.
 pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-    let pages = ((gpu.vram_size.max(4096) + 4095) / 4096) as usize;
+    let vram_pages = ((gpu.vram_size.max(4096) + 4095) / 4096) as usize;
 
+    // BAR0 inteiro como UC — necessário para TODOS os registers MMIO, não só o primeiro page.
+    // Intel Gen9: VGACNTRL(0x71400), RENDER_RING_BASE(0x120000), FORCE_WAKEUP(0xA278)
+    // NVIDIA: PFIFO(0x2000), DISPLAY(0x1000), RAMIN(0x8000)
+    // AMD: RCC_CONFIG(0x2000), PM4 doorbell(0x1B0)
     if gpu.bar0 > 0 {
-        crate::apic::map_page_uc(gpu.bar0, pmoff);
-        serial_println!("[GPU-BAR] BAR0 mapeado UC: {:#x}", gpu.bar0);
+        let bar0_size = gpu.bar0_size();
+        let pages = ((bar0_size + 4095) / 4096) as usize;
+        for i in 0..pages {
+            crate::apic::map_page_uc(gpu.bar0 + (i as u64) * 4096, pmoff);
+        }
+        serial_println!("[GPU-BAR] BAR0 mapeado UC: {:#x} ({} KB, {} paginas)", gpu.bar0, bar0_size / 1024, pages);
     }
     if gpu.bar2 > 0 && gpu.vram_size > 0 {
         crate::apic::map_region_uc_2mb(gpu.bar2, gpu.vram_size, pmoff);

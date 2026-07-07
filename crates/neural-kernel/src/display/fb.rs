@@ -33,37 +33,38 @@ pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
 /// Força coerência de cache no framebuffer + desliga VGA plane Intel corretamente.
 /// Em Intel Skylake+ (6xx), o VGA plane NÃO é completamente desligado pelo
 /// sequenciador (0x3C4/0x3C5) — precisa escrever no register VGACNTRL (0x71400).
+/// Usa o resultado de detect_all() em vez de re-escanear PCI manualmente.
+/// NOTA: map_bars_uc() já mapeou BAR0 inteiro como UC antes desta função ser chamada.
 /// Também aplica sfence para garantir que writes cheguem ao display controller.
 pub fn fb_remap_uc() {
     let gpu = GPU.lock();
     if let Some(ref gpu_dev) = *gpu {
         if gpu_dev.fb_addr == 0 { return; }
 
-        // Desliga VGA plane via register Intel GPU (Skylake+)
-        // VGACNTRL = offset 0x71400 no BAR0 da GPU Intel
-        // Bit 31 (VGA_DISABLE) = 1 desliga o plano VGA corretamente
-        // Acesso via I/O ports 0xCF8/0xCFC para ler BAR0 sem cache de PCI scan
-        unsafe {
-            let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-            for bus in 0..1u8 {
-                for slot in 0..32u8 {
-                    let vid = crate::pci::read_config_word(bus, slot, 0, 0);
-                    if vid == 0x8086 {
-                        let class = crate::pci::read_config_word(bus, slot, 0, 0x0A);
-                        if class >> 8 == 0x03 {
-                            let bar0_raw = crate::pci::read_config_dword(bus, slot, 0, 0x10);
-                            let bar0 = (bar0_raw & 0xFFFFFFF0) as u64;
-                            let vga_cntrl = (bar0 + 0x71400 + pmoff) as *mut u32;
-                            let val = vga_cntrl.read_volatile();
-                            if val & 0x80000000 == 0 {
-                                vga_cntrl.write_volatile(val | 0x80000000);
-                                crate::serial_println!("[DISPLAY] Intel VGA plane DISABLED via VGACNTRL");
-                            }
-                            break;
-                        }
-                    }
+        // Usa o detect module para encontrar Intel GPU com display engine
+        // (em vez de re-escanear PCI via CF8/CFC manualmente)
+        let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let intel_gpu = unsafe {
+            crate::gpu::detect::detect_all().into_iter()
+                .find(|g| g.vendor == crate::gpu::detect::GpuVendor::Intel && g.has_display_engine)
+        };
+
+        if let Some(ref igpu) = intel_gpu {
+            // VGACNTRL = offset 0x71400 no BAR0 da GPU Intel
+            // Bit 31 (VGA_DISABLE) = 1 desliga o plano VGA corretamente
+            let vga_cntrl = (igpu.bar0 + 0x71400 + pmoff) as *mut u32;
+            unsafe {
+                let val = vga_cntrl.read_volatile();
+                if val & 0x80000000 == 0 {
+                    vga_cntrl.write_volatile(val | 0x80000000);
+                    crate::serial_println!("[DISPLAY] Intel VGA plane DISABLED via VGACNTRL ({}:{}.{})",
+                        igpu.pci_bus, igpu.pci_dev, igpu.pci_fn);
+                } else {
+                    crate::serial_println!("[DISPLAY] Intel VGA plane ja desligado");
                 }
             }
+        } else {
+            crate::serial_println!("[DISPLAY] Intel GPU com display nao encontrada - VGACNTRL nao escrito");
         }
 
         // Sfence + barreira de escrita garantem visibilidade

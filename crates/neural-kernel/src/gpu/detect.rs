@@ -39,6 +39,16 @@ pub struct GpuInfo {
 
 impl GpuInfo {
     pub fn vram_mb(&self) -> u64 { self.vram_size / (1024 * 1024) }
+
+    pub fn bar0_size(&self) -> u64 {
+        match self.vendor {
+            GpuVendor::Intel => 0x1000000,   // 16 MB — Gen9+ MMIO
+            GpuVendor::Nvidia => 0x1000000,  // 16 MB — Pascal+ PFIFO
+            GpuVendor::Amd => 0x400000,      // 4 MB  — RDNA+
+            GpuVendor::VirtIo => 0x1000,     // 4 KB  — só capability
+            GpuVendor::Unknown => 0x100000,  // 1 MB  — fallback
+        }
+    }
 }
 
 /// Detecta todas as GPUs no sistema

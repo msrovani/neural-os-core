@@ -48,8 +48,8 @@ impl IntelRing {
     pub fn probe(gpu: &GpuInfo, pmoff: u64) -> Option<Self> {
         if gpu.vendor != GpuVendor::Intel { return None; }
         let mmio = gpu.bar0 + pmoff;
-
-        unsafe { crate::apic::map_page_uc(gpu.bar0, pmoff); }
+        // NOTA: map_bars_uc() já mapeou BAR0 inteiro como UC antes deste probe.
+        // Acessar MMIO diretamente via pm_offset é seguro porque o PTE já é UC.
 
         let test_val = unsafe { core::ptr::read_volatile((mmio + FORCE_WAKEUP) as *const u32) };
         if test_val == 0xFFFFFFFF || test_val == 0 {
