@@ -31,7 +31,7 @@ O neural-os-core é um sistema **hardware-agnóstico** que suporta:
 - **NPU**: AMD XDNA, Intel NPU, Apple ANE — detecção futura via ACPI/PCI.
 - **Foco**: SMP 4 cores primeiro (garantido), GPU segundo (viável, complexo), NPU terceiro (futuro).
 
-## 🟡 Bloco 21c — GPU Foundations — Sprint 84
+## ✅ Bloco 21c — GPU Foundations — Sprint 84 ✅
 **GPUs NVIDIA/AMD/Intel como devices de compute. Firmware disponível em linux-firmware.**
 
 | Item | Origem | O que | LOC | Dependência |

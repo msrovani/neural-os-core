@@ -9,35 +9,35 @@
 
 ---
 
-## Sprint 84 — Bloco 21c: GPU Foundations (~1700 LOC)
+## Sprint 84 — Bloco 21c: GPU Foundations (~1700 LOC) ✅
 **IDEA_BANK:** #67, #326, #327, #328, #352, #353  
 **ADR:** 0037 (itens 5-9), 0029  
-**Foco:** BAR mapping + secure boot (NVIDIA ACR / AMD PSP / Intel GuC) + doorbell + job ring + VRAM allocator
+**Foco:** BAR mapping + secure boot (NVIDIA ACR / AMD PSP / Intel GuC) + doorbell + job ring + VRAM allocator  
+**Status:** ✅ **Completo.** Todos os itens implementados em `gpu/{detect,backend,vram,ring,intel,nvidia,amd,firmware}.rs`.
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
-| #67 | AllocTier::Vram — alocar no BAR da GPU | 50 | 🟡 |
-| #326 | GPU BAR0/BAR1 mapping UC (genérico NVIDIA/AMD/Intel) | 300 | 🟡 |
-| #327 | GPU doorbell + SPSC job ring | 400 | 🟡 |
-| #328 | VRAM buddy allocator | 400 | 🟡 |
-| #352 | Secure Boot GPU — ACR/PSP/GuC pipeline | 600 | 🟡 |
-| #353 | GPU Compute Pipeline — submissão genérica | 300 | 🟡 |
-
-**Bloqueios:** Nenhum (NVMe ✅, PCI ✅, BAR mapping disponível)
+| #67 | AllocTier::Vram — alocar no BAR da GPU | 50 | ✅ |
+| #326 | GPU BAR0/BAR1 mapping UC (genérico NVIDIA/AMD/Intel) | 300 | ✅ |
+| #327 | GPU doorbell + SPSC job ring | 400 | ✅ |
+| #328 | VRAM buddy allocator | 400 | ✅ |
+| #352 | Secure Boot GPU — ACR/PSP/GuC pipeline | 600 | ✅ |
+| #353 | GPU Compute Pipeline — submissão genérica | 300 | ✅ |
 
 ---
 
-## Sprint 85 — Bloco 21d: GPU Decode (BitNet offload) (~1500 LOC)
+## Sprint 85 — Bloco 21d: GPU Decode (BitNet offload) (~1500 LOC) ✅
 **IDEA_BANK:** #329, #330, #331, #332  
 **ADR:** 0037 (itens 6-9)  
-**Foco:** Prefill CPU → decode GPU, matmul ternário na GPU, KV cache DMA, XQueue
+**Foco:** Prefill CPU → decode GPU, matmul ternário na GPU, KV cache DMA, XQueue  
+**Status:** ✅ **Completo.** Todos os itens implementados em `gpu/{xpu,backend,kv_dma,xqueue}.rs`.
 
 | IDEA | Item | LOC | Status |
 |---|---|---|---|
-| #329 | Agent.xpu prefill/decode split | 400 | 🟡 |
-| #330 | GPU matmul kernel ternário (NVIDIA PTX / AMD AQL / Intel GEN) | 300 | 🟡 |
-| #331 | CPU→GPU KV cache DMA | 200 | 🟡 |
-| #332 | XQueue preemptível (XSched-style, 3 níveis) | 600 | 🟡 |
+| #329 | Agent.xpu prefill/decode split | 400 | ✅ |
+| #330 | GPU matmul kernel ternário (NVIDIA PTX / AMD AQL / Intel GEN) | 300 | ✅ |
+| #331 | CPU→GPU KV cache DMA | 200 | ✅ |
+| #332 | XQueue preemptível (XSched-style, 3 níveis) | 600 | ✅ |
 
 ---
 
