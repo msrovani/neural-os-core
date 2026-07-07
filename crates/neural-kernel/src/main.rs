@@ -625,8 +625,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::apps::init_apps();
     crate::boot_logger::log("BOOT: Desktop apps OK");
 
-    // Audio: inicializa configuracoes de som
+    // Audio: inicializa configuracoes de som + neural TTS (GPU offload)
     audio::init_audio();
+    audio::skills::init_neural_tts();
 
     // GPU: detecta hardware e inicializa backend
     unsafe {

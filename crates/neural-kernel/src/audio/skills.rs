@@ -1,7 +1,16 @@
 use alloc::vec::Vec;
 use alloc::string::String;
 use skill_registry::{Skill, McpManifest, OutputSchema};
+use spin;
 use crate::audio::vad::{VAD, VadTransition};
+use crate::audio::neural::PocketTtsEngine;
+
+static TTS_ENGINE: spin::Mutex<Option<PocketTtsEngine>> = spin::Mutex::new(None);
+
+pub fn init_neural_tts() {
+    let engine = crate::audio::neural::try_load_pocket_tts();
+    *TTS_ENGINE.lock() = engine;
+}
 
 pub struct TtsSkill;
 
@@ -9,7 +18,7 @@ impl Skill for TtsSkill {
     fn manifest(&self) -> McpManifest {
         McpManifest {
             name: String::from("tts_speak"),
-            description: String::from("Sintetiza texto em audio PCM via sintese formant (Klatt)"),
+            description: String::from("Sintetiza texto em audio PCM (neural GPU ou formant CPU)"),
             required_tokens: Vec::new(), preconditions: Vec::new(), context_links: Vec::new(),
             output_schema: OutputSchema::Any, idempotent: false, contracts: Vec::new(),
         }
@@ -17,8 +26,21 @@ impl Skill for TtsSkill {
 
     fn execute(&self, input: &[u8]) -> Result<Vec<u8>, &'static str> {
         let text = core::str::from_utf8(input).map_err(|_| "UTF-8 invalido")?;
-        let pcm = crate::audio::tts::synthesize(text);
-        crate::serial_println!("[TTS] Sintetizado: \"{}\" ({} samples)", text, pcm.len());
+        let pcm = {
+            let guard = TTS_ENGINE.lock();
+            match guard.as_ref() {
+                Some(engine) if engine.is_loaded() => {
+                    let audio = engine.generate(text);
+                    crate::serial_println!("[TTS] Neural (GPU): \"{}\" ({} samples, gpu_matmul ativo)", text, audio.len());
+                    audio
+                }
+                _ => {
+                    let audio = crate::audio::tts::synthesize(text);
+                    crate::serial_println!("[TTS] Formant (CPU): \"{}\" ({} samples)", text, audio.len());
+                    audio
+                }
+            }
+        };
         Ok(pcm.iter().flat_map(|s| s.to_le_bytes()).collect())
     }
 }
