@@ -396,6 +396,8 @@ impl GgufBackedModel {
             let (down, dc, dr) = dequantize_tensor_by_name(&self.file, &hint("ffn_down"))?;
             let rms_default = alloc::vec![1.0f32; self.hidden_dim];
             let ffn_dim = gc.max(gr) / 4 * 4; // approximate FFN intermediate dim
+            let rms_inner_attn = alloc::vec![1.0f32; self.hidden_dim];
+            let rms_ffn_norm = alloc::vec![1.0f32; ffn_dim];
             layers.push(crate::cortex::LayerWeights {
                 rms_attn: rms_default.clone(),
                 q: f32_to_ternary_packed(&q, qr, qc),
@@ -403,6 +405,8 @@ impl GgufBackedModel {
                 v: f32_to_ternary_packed(&v, vr, vc),
                 o: f32_to_ternary_packed(&o, or_, oc),
                 rms_ffn: rms_default,
+                rms_inner_attn,
+                rms_ffn_norm,
                 gate: f32_to_ternary_packed(&gate, gr, gc),
                 up: f32_to_ternary_packed(&up, ur, uc),
                 down: f32_to_ternary_packed(&down, dr, dc),
@@ -437,6 +441,9 @@ impl GgufBackedModel {
             intermediate_size: self.hidden_dim * 4,
             ffn_group_size: self.hidden_dim,
             tie_embeddings: false,
+            rope_theta: 10000.0,
+            rope_cos: alloc::vec![],
+            rope_sin: alloc::vec![],
         })
     }
 }

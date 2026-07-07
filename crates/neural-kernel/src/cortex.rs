@@ -74,6 +74,43 @@ fn softmax_inplace(logits: &mut [f32]) {
     for v in logits.iter_mut() { *v *= inv; }
 }
 
+fn rope_precompute(max_seq: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Vec<f32>) {
+    let half = head_dim / 2;
+    let n = max_seq * half;
+    let mut cos_table = vec![0.0f32; n];
+    let mut sin_table = vec![0.0f32; n];
+    for pos in 0..max_seq {
+        for d in 0..half {
+            let inv_freq = libm::powf(theta, -2.0 * d as f32 / head_dim as f32);
+            let val = pos as f32 * inv_freq;
+            cos_table[pos * half + d] = libm::cosf(val);
+            sin_table[pos * half + d] = libm::sinf(val);
+        }
+    }
+    (cos_table, sin_table)
+}
+
+fn rope_apply_heads(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usize,
+                    cos: &[f32], sin: &[f32], start_pos: usize) {
+    let half = head_dim / 2;
+    for s in 0..seq_len {
+        let pos = start_pos + s;
+        let base = s * num_heads * head_dim;
+        let rope_off = pos * half;
+        for h in 0..num_heads {
+            let off = base + h * head_dim;
+            for d in 0..half {
+                let x = data[off + 2 * d];
+                let y = data[off + 2 * d + 1];
+                let c = cos[rope_off + d];
+                let si = sin[rope_off + d];
+                data[off + 2 * d] = x * c - y * si;
+                data[off + 2 * d + 1] = x * si + y * c;
+            }
+        }
+    }
+}
+
 pub struct LayerWeights {
     pub rms_attn: Vec<f32>,
     pub q: PackedTernaryTensor,
@@ -81,6 +118,8 @@ pub struct LayerWeights {
     pub v: PackedTernaryTensor,
     pub o: PackedTernaryTensor,
     pub rms_ffn: Vec<f32>,
+    pub rms_inner_attn: Vec<f32>,
+    pub rms_ffn_norm: Vec<f32>,
     pub gate: PackedTernaryTensor,
     pub up: PackedTernaryTensor,
     pub down: PackedTernaryTensor,
@@ -112,6 +151,10 @@ pub struct TransformerModel {
     pub ffn_group_size: usize,
     // Embedding tie flag
     pub tie_embeddings: bool,
+    // RoPE
+    pub rope_theta: f32,
+    pub rope_cos: Vec<f32>,
+    pub rope_sin: Vec<f32>,
 }
 
 /// Cache de Key/Value para geracao autoregressiva.
@@ -136,16 +179,29 @@ impl KvCache {
     pub fn append(&mut self, layer: usize, k_new: &Tensor, v_new: &Tensor) {
         self.k[layer].extend_from_slice(&k_new.data);
         self.v[layer].extend_from_slice(&v_new.data);
-        self.len += k_new.shape.0;
+    }
+
+    pub fn advance(&mut self, n: usize) {
+        self.len += n;
     }
 
     pub fn k_all(&self, layer: usize, seq_len: usize) -> Tensor {
         let data = self.k[layer].clone();
+        let expected = seq_len * self.k_dim;
+        if data.len() != expected {
+            crate::serial_println!("[KV] k_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
+                layer, data.len(), expected, seq_len, self.k_dim);
+        }
         Tensor::from_row_major((seq_len, self.k_dim), data).unwrap()
     }
 
     pub fn v_all(&self, layer: usize, seq_len: usize) -> Tensor {
         let data = self.v[layer].clone();
+        let expected = seq_len * self.k_dim;
+        if data.len() != expected {
+            crate::serial_println!("[KV] v_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
+                layer, data.len(), expected, seq_len, self.k_dim);
+        }
         Tensor::from_row_major((seq_len, self.k_dim), data).unwrap()
     }
 
@@ -203,6 +259,8 @@ impl TransformerModel {
                 v: random_ternary(&mut seed, HIDDEN, HIDDEN),
                 o: random_ternary(&mut seed, HIDDEN, HIDDEN),
                 rms_ffn: rms_default.clone(),
+                rms_inner_attn: rms_default.clone(),
+                rms_ffn_norm: vec![1.0; FFN_DIM * 2],
                 gate: random_ternary(&mut seed, HIDDEN, FFN_DIM),
                 up: random_ternary(&mut seed, HIDDEN, FFN_DIM),
                 down: random_ternary(&mut seed, FFN_DIM, HIDDEN),
@@ -212,6 +270,7 @@ impl TransformerModel {
                 ffn_group_size: FFN_DIM,
             });
         }
+        let (rope_cos, rope_sin) = rope_precompute(MAX_SEQ, HEAD_DIM, 10000.0);
         let medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed, HIDDEN, VOCAB_SIZE as usize)).collect();
         TransformerModel {
             embed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
@@ -230,6 +289,9 @@ impl TransformerModel {
             intermediate_size: FFN_DIM,
             ffn_group_size: FFN_DIM,
             tie_embeddings: false,
+            rope_theta: 10000.0,
+            rope_cos,
+            rope_sin,
         }
     }
 
@@ -280,12 +342,24 @@ impl TransformerModel {
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
             // QKV for new tokens
-            let q = layer.q.matmul_hybrid(&norm).unwrap();
-            let k = layer.k.matmul_hybrid(&norm).unwrap();
+            let mut q = layer.q.matmul_hybrid(&norm).unwrap();
+            let mut k = layer.k.matmul_hybrid(&norm).unwrap();
             let v = layer.v.matmul_hybrid(&norm).unwrap();
 
-            // Append new K,V to cache
+            // RoPE on Q and K before cache storage
+            let qk_head_dim = self.kv_dim / self.num_heads;
+            rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+            rope_apply_heads(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+
+            // Append new K,V to cache (K is RoPE-rotated)
             cache.append(layer_idx, &k, &v);
+
+            // Advance cache.len only once after all layers
+            if layer_idx + 1 == self.layers.len() {
+                cache.advance(new_len);
+            }
 
             // Full K,V from cache for attention
             let total_k = cache.k_all(layer_idx, total_seq);
@@ -294,7 +368,6 @@ impl TransformerModel {
             // GQA attention
             let num_heads = self.num_heads;
             let num_kv_heads = self.num_kv_heads;
-            let qk_head_dim = self.kv_dim / num_heads;
             let kv_dim = self.kv_dim;
             let q_group_size = num_heads / num_kv_heads;
             let k_dim = total_k.shape.1;
@@ -346,7 +419,8 @@ impl TransformerModel {
             }
 
             let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap();
-            let proj = layer.o.matmul_hybrid(&attn_out).unwrap();
+            let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
+            let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap();
             x = x.add(&proj).unwrap();
 
             // BitFFN
@@ -370,7 +444,8 @@ impl TransformerModel {
                 }
             }
 
-            let down = layer.down.matmul_hybrid(&gated_full).unwrap();
+            let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
+            let down = layer.down.matmul_hybrid(&gated_norm).unwrap();
             for s in 0..new_len {
                 for d in 0..down_out.min(self.hidden) {
                     x.data[s * self.hidden + d] += down.data[s * down_out + d];
@@ -419,17 +494,20 @@ impl TransformerModel {
 
             // QKV projections with GQA dimensions
             let t_q0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let q = layer.q.matmul_hybrid(&norm).unwrap();  // (seq, kv_dim)
+            let mut q = layer.q.matmul_hybrid(&norm).unwrap();  // (seq, kv_dim)
             let t_q1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let k = layer.k.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
+            let mut k = layer.k.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
             let t_k1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let v = layer.v.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
             let t_v1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
+            // RoPE on Q and K
+            rope_apply_heads(&mut q.data, seq_len, num_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, 0);
+            rope_apply_heads(&mut k.data, seq_len, num_kv_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, 0);
+
             // GQA attention: each KV head serves q_group_size query heads
-            // q: (seq, kv_dim) where kv_dim = num_heads * qk_head_dim
-            // k: (seq, k_dim) where k_dim = num_kv_heads * qk_head_dim
-            // v: (seq, k_dim)
             let k_dim = k.shape.1;
             let v_dim = v.shape.1;
             let mut attn_out_data = vec![0.0f32; seq_len * kv_dim];
@@ -491,7 +569,8 @@ impl TransformerModel {
             let t_attn1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
             let attn_out = Tensor::from_row_major((seq_len, kv_dim), attn_out_data).unwrap();
-            let proj = layer.o.matmul_hybrid(&attn_out).unwrap();  // (seq, kv_dim) @ (kv_dim, hidden) = (seq, hidden)
+            let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
+            let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap();  // (seq, kv_dim) @ (kv_dim, hidden) = (seq, hidden)
             x = x.add(&proj).unwrap();
             let t_proj1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
@@ -521,7 +600,8 @@ impl TransformerModel {
                 }
             }
 
-            let down = layer.down.matmul_hybrid(&gated_full).unwrap();  // (seq, intermediate) @ (intermediate, down_out) = (seq, down_out)
+            let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
+            let down = layer.down.matmul_hybrid(&gated_norm).unwrap();  // (seq, intermediate) @ (intermediate, down_out) = (seq, down_out)
 
             // Add FFN output to residual (first down_out dims)
             for s in 0..seq_len {
@@ -599,6 +679,13 @@ fn read_u16(data: &[u8], offset: &mut usize) -> Option<u16> {
     let bytes = data[*offset..*offset + 2].try_into().ok()?;
     *offset += 2;
     Some(u16::from_le_bytes(bytes))
+}
+
+fn read_u8(data: &[u8], offset: &mut usize) -> Option<u8> {
+    if *offset + 1 > data.len() { return None; }
+    let v = data[*offset];
+    *offset += 1;
+    Some(v)
 }
 
 fn read_u32(data: &[u8], offset: &mut usize) -> Option<u32> {
@@ -694,6 +781,12 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         }
         off += tok_len;
 
+        // v4: layer_features byte (bit 0 = inner_attn_ln, bit 1 = ffn_layernorm, bit 2 = RoPE)
+        let layer_features = if version >= 4 { read_u8(data, &mut off)? } else { 0u8 };
+        let has_inner_attn_ln = (layer_features & 0x01) != 0;
+        let has_ffn_layernorm = (layer_features & 0x02) != 0;
+        let has_rope = (layer_features & 0x04) != 0;
+
         let embed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
 
         // GQA/BitFFN dimensions from header
@@ -706,6 +799,16 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         for _ in 0..num_layers {
             let rms_attn = read_f32_vec(data, &mut off, hidden)?;
             let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
+            let rms_inner_attn = if has_inner_attn_ln {
+                read_f32_vec(data, &mut off, kv_head_dim * num_heads)?
+            } else {
+                vec![1.0; kv_head_dim * num_heads]
+            };
+            let rms_ffn_norm = if has_ffn_layernorm {
+                read_f32_vec(data, &mut off, intermediate_size)?
+            } else {
+                vec![1.0; intermediate_size]
+            };
             layers.push(LayerWeights {
                 rms_attn,
                 q: read_ternary_tensor(data, &mut off, hidden, q_dim)?,
@@ -713,6 +816,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 v: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
                 o: read_ternary_tensor(data, &mut off, q_dim, hidden)?,
                 rms_ffn,
+                rms_inner_attn,
+                rms_ffn_norm,
                 gate: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
                 up: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
                 down: read_ternary_tensor(data, &mut off, intermediate_size, down_out)?,
@@ -757,6 +862,13 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             }
         }
 
+        let (rope_cos, rope_sin) = if has_rope {
+            let rope_theta_val = read_f32(data, &mut off)?;
+            rope_precompute(max_seq as usize, kv_head_dim, rope_theta_val)
+        } else {
+            (vec![], vec![])
+        };
+
         let model = TransformerModel {
             embed, layers, rms_final, unembed, medusa_heads,
             vocab_size, hidden, num_layers, max_seq: max_seq as usize,
@@ -764,6 +876,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             intermediate_size,
             ffn_group_size: ffn_group,
             tie_embeddings,
+            rope_theta: 10000.0,
+            rope_cos, rope_sin,
         };
         GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
         return Some(model);
@@ -835,6 +949,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             let ffn_group = intermediate_size / 4; // default: 4 groups
             let down_out = q_dim; // BitNet: down projects to kv_dim (same as q_dim)
 
+            let rms_inner_attn = vec![1.0; q_dim];
+            let rms_ffn_norm = vec![1.0; intermediate_size];
             layers.push(LayerWeights {
                 rms_attn,
                 q: read_ternary_tensor(data, &mut off, hidden, q_dim)?,
@@ -842,6 +958,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 v: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
                 o: read_ternary_tensor(data, &mut off, q_dim, hidden)?,
                 rms_ffn,
+                rms_inner_attn,
+                rms_ffn_norm,
                 gate: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
                 up: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
                 down: read_ternary_tensor(data, &mut off, intermediate_size, down_out)?,
@@ -854,6 +972,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             // v1/v2: non-transposed layout, (out, in)
             // For backward compat, keep old format
             let ffn_dim = intermediate_size / 4;
+            let rms_inner_attn = vec![1.0; hidden];
+            let rms_ffn_norm = vec![1.0; ffn_dim * 4];
             layers.push(LayerWeights {
                 rms_attn,
                 q: read_ternary_tensor(data, &mut off, hidden, hidden)?,
@@ -861,6 +981,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 v: read_ternary_tensor(data, &mut off, hidden, hidden)?,
                 o: read_ternary_tensor(data, &mut off, hidden, hidden)?,
                 rms_ffn,
+                rms_inner_attn,
+                rms_ffn_norm,
                 gate: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
                 up: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
                 down: read_ternary_tensor(data, &mut off, hidden, ffn_dim)?,
@@ -939,6 +1061,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         intermediate_size,
         ffn_group_size: intermediate_size / 4,
         tie_embeddings,
+        rope_theta: 10000.0,
+        rope_cos: vec![],
+        rope_sin: vec![],
     };
     GLOBAL_MODEL_PARAMS.store(_num_params as u64, core::sync::atomic::Ordering::Relaxed);
     Some(model)
@@ -964,8 +1089,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     crate::serial_println!("[GEN] prompt_len={}, max_seq={}", prompt_len, max_seq);
 
     // Inicializa KV cache com dimensoes do modelo
-    let k_dim = model.num_kv_heads * model.head_dim;
-    let kv_dim = model.num_heads * model.head_dim;
+    // Use model.kv_dim (Q output dim) for kv_dim, and infer k_dim from first layer's K projection
+    let kv_dim = model.kv_dim;
+    let k_dim = if model.layers.is_empty() { kv_dim } else {
+        model.layers[0].k.shape.1 // actual K projection output dimension
+    };
     let mut cache = KvCache::new(model.layers.len(), k_dim, kv_dim);
 
     // Processa o prompt completo (preenche cache)

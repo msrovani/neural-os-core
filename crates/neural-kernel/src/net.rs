@@ -87,6 +87,7 @@ pub fn detect_dev_env() -> bool {
                        name_lower.contains("kvm") || 
                        name_lower.contains("vbox") || 
                        name_lower.contains("vmware") ||
+                       name_lower.contains("tcg") ||  // QEMU TCG puro
                        name_lower.contains("micr"); // Microsoft Hv = WHPX
             }
         }

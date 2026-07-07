@@ -131,6 +131,7 @@ mod hub;
 mod elf_loader;
 mod wasm_rt;
 mod cognitive;
+mod audio;
 
 use lazy_static::lazy_static;
 use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ, ReActLoop, McpServer, AutoSkillGen, DynamicScaler, SelfOptScheduler, ReplayBuffer, BitNetTrainer, EpisodicMemory, TaskSpawner, WorkspaceIsolation, DeltaBranch, MatMulFreeLM};
@@ -317,6 +318,8 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
         reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
         reg.register(alloc::boxed::Box::new(HwIdentifySkill));
+        reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
+        reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));
         reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
         ticket_lock::TicketLock::new(reg)
     };
@@ -645,6 +648,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(crate::memory_agent::MemoryAgent::new()));
     registry.register(Box::new(agents::NetDriverAgent));
     registry.register(Box::new(agents::UsbDriverAgent));
+    registry.register(Box::new(audio::hda::HdaAudioAgent::new()));
+    registry.register(Box::new(audio::usb::UsbAudioAgent::new()));
     registry.register(Box::new(agents::GpuDriverAgent));
     registry.register(Box::new(agents::FsBridgeAgent::new()));
     registry.register(Box::new(agents::HwDetectAgent));
@@ -692,6 +697,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     display::fb::fb_remap_uc();
     serial_println!("[BOOT] Registering DisplayAgent...");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
+    serial_println!("[BOOT] Registering JarvisVoiceAgent...");
+    registry.register(Box::new(audio::voice::JarvisVoiceAgent::new()));
     serial_println!("[BOOT] Registering CronAgent...");
     let mut cron = cron::CronAgent::new();
     cron.init_defaults();
