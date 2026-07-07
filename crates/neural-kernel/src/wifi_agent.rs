@@ -43,14 +43,15 @@ impl WifiAgent {
 
     fn do_detect(&mut self) {
         self.state = WifiState::Detecting;
-        self.publish("Escaneando hardware de rede...");
+        self.publish("Escaneando redes WiFi...");
 
-        if generic_wifi::detect() {
+        if generic_wifi::detect_wifi() {
             self.state = WifiState::WaitingSSID;
-            self.publish("Hardware detectado. Digite o SSID da rede:");
+            self.publish("WiFi detectado. Digite o SSID da rede:");
         } else {
             self.state = WifiState::Failed;
-            self.publish("Nenhum hardware de rede encontrado.");
+            // Ethernet ja esta ativa via smoltcp — nenhuma acao necessaria.
+            self.publish("Sem WiFi. Ethernet cabeada ativa.");
         }
     }
 

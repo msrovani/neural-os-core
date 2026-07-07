@@ -211,11 +211,12 @@ fn is_ethernet(vendor: u16, device: u16) -> bool {
         (0x1AF4, 0x1000) | (0x1AF4, 0x1041))
 }
 
-/// Detecta via PCI scan e faz probe do primeiro adaptador de rede.
-pub fn detect() -> bool {
+/// Detecta adaptador WiFi (class 02/80 = wireless). Fallback Ethernet ja ativo via smoltcp.
+pub fn detect_wifi() -> bool {
     let devices = unsafe { crate::pci::scan_pci() };
     for dev in &devices {
-        if dev.class == 0x02 {
+        // So procura wireless (subclass 0x80). Ethernet ja funciona via smoltcp/RTL8139.
+        if dev.class == 0x02 && dev.subclass == 0x80 {
             let bar_raw = (dev.bar0 as u64) | ((dev.bar1 as u64) << 32);
             let bar = (bar_raw & !0xF) as usize;
             if unsafe { runtime_probe_and_bind(dev.vendor_id, dev.device_id, bar).is_ok() } {
@@ -223,6 +224,9 @@ pub fn detect() -> bool {
             }
         }
     }
+    // Nenhum WiFi encontrado — Ethernet cabeada ja esta ativa via smoltcp/DHCP.
+    // Nao criar FallbackEthernet, nao pedir SSID ao usuario.
+    crate::serial_println!("[WIFI] Nenhum adaptador wireless — usando Ethernet existente.");
     false
 }
 
