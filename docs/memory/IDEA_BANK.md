@@ -534,7 +534,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 315.22 | **Vosk/Whisper STT** — Speech-to-text local. Vosk para offline, Whisper.cpp para GPU-accelerated. Pós B-01 | 🔴 Pós B-01 | N+1 | ~400 | Priler/jarvis |
 | 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | 🔴 Pós B-01 | N+1 | ~100 | Priler/jarvis |
 | 315.24 | **Wyoming Protocol IPC** — Protocolo padronizado para voice pipeline (Rhasspy3). 8 domínios: Mic→Wake→ASR→VAD→Intent→Handle→TTS→Snd. Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | Rhasspy3 |
-| 315.25 | **Voice Pipeline (8-domain)** — Pipeline completo de áudio: mic→wake→asr→vad→intent→handle→tts→snd. Wyoming Protocol como backbone. Pós B-01 | 🔴 Pós B-01 | N+1 | ~200 | Rhasspy3 |
+| 315.25 | **Voice Pipeline (8-domain)** — Pipeline completo de áudio: mic→wake→asr→vad→intent→handle→tts→snd. Wyoming Protocol como backbone. Pós B-01. **Ref:** pipecat-ai/pipecat (13.2K★) — pipeline composition pattern (frame transformers encadeados), Kokoro TTS, STT, handoff multi-agent. | 🔴 Pós B-01 | Sprint Sound | ~800 | Rhasspy3 + pipecat-ai/pipecat |
 | 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | SKYNET + BeFree |
 | 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | 🔴 Pós B-01 | N+2 | ~300 | SKYNET |
 | 315.28 | **Gamification** — Recompensas, streaks, achievements para interação com JARVIS. OptimizerAgent + CronAgent | 🟢 Futuro | N+1 | ~200 | Jotape |

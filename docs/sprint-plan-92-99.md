@@ -66,19 +66,20 @@
 
 ## Sprint Sound — Bloco Audio: Drivers + Voice Pipeline (~3500 LOC)
 **IDEA_BANK:** #83, #84, #315.21-25, #360  
-**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado), Sprint 84 `map_bars_uc()` (BAR0 full UC mapping)
-**Foco:** JARVIS ouvir e falar. Intel HDA, USB Audio, Kokoro TTS, Vosk STT, wake word
+**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado), Sprint 84 `map_bars_uc()` (BAR0 full UC mapping)  
+**Referência externa:** [pipecat-ai/pipecat](https://github.com/pipecat-ai/pipecat) (13.2K★) — framework Python para agentes de voz multimodais em tempo real. Kokoro TTS, pipeline composition, multi-agent handoff. Arquitetura de pipeline portável para nosso VoicePipeline em Rust.  
+**Foco:** JARVIS ouvir e falar. Intel HDA, USB Audio, Kokoro TTS, Vosk STT, wake word  
 **Pré-requisito:** `map_bars_uc()` do Sprint 84 (BAR0 mapeado UC completo) — HDA controller usa PCI BAR MMIO, mesma exigência de uncacheable que GPU. Sem isso, writes no HDA register set ficam presos no cache.
 
 | IDEA | Item | LOC | Depende |
 |---|---|---|---|
 | **#83** | **Intel HDA audio driver** — PCI HDA controller. DMA engine, codec detection, PCM playback/capture. Port do driver Linux HDA. | 800 | PCI scan + BAR0 UC mapping |
 | **#84** | **USB Audio Class (UAC) driver** — Fones/microfone USB via xHCI isochronous transfers. Alternativa ao HDA. | 600 | xHCI |
-| #315.21 | Kokoro-82M TTS Integration (ONNX→.bitnet já pronto) | 100 | B-01 |
-| #315.22 | Vosk/Whisper STT | 400 | B-01 |
-| #315.23 | Wake Word (Rustpotter) | 100 | B-01 |
+| #315.21 | Kokoro-82M TTS Integration (ONNX→.bitnet já pronto). Ref: pipecat Kokoro TTS service binding. | 100 | B-01 |
+| #315.22 | Vosk/Whisper STT. Ref: pipecat STT services (Whisper, Deepgram, AssemblyAI). | 400 | B-01 |
+| #315.23 | Wake Word (Rustpotter). Ref: pipecat Silero VAD. | 100 | B-01 |
 | #315.24 | Wyoming Protocol IPC | 300 | B-01 |
-| #315.25 | Voice Pipeline (8-domain: Mic→Wake→ASR→VAD→Intent→Handle→TTS→Snd) | 800 | B-01 + HDA |
+| #315.25 | Voice Pipeline (8-domain: Mic→Wake→ASR→VAD→Intent→Handle→TTS→Snd). Portar padrão de pipeline composition do pipecat (frame transformers encadeados). | 800 | B-01 + HDA |
 | #360 | Kokoro-82M download + conversão | 300 | B-01 |
 
 ## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC)
