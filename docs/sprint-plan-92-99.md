@@ -64,25 +64,77 @@
 
 ---
 
-## Sprint Sound — Bloco Audio: Drivers + Voice Pipeline (~3500 LOC)
+## Sprint Sound — Bloco Audio: JARVIS Ouvir + Falar (~3500 LOC)
 **IDEA_BANK:** #83, #84, #315.21-25, #360  
-**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado), Sprint 84 `map_bars_uc()` (BAR0 full UC mapping)  
-**Referências externas:**  
-- [pipecat-ai/pipecat](https://github.com/pipecat-ai/pipecat) (13.2K★) — framework Python para agentes de voz multimodais. Pipeline composition pattern.  
-- [kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) (5.4K★) — TTS CPU-native, 100M params, ~200ms latência, 6× real-time, voice cloning, 6 idiomas, MIT. **Tem Rust ports:** `pocket-tts-xn` (XN), `pocket-tts-candle` (Candle+WASM), `sherpa-onnx` (bindings Rust). Preferível a Kokoro-82M por ter ecossistema Rust e voice cloning.  
-**Foco:** JARVIS ouvir e falar. Intel HDA, USB Audio, Pocket TTS (TTS principal), Kokoro TTS (alternativa), Vosk STT, wake word  
-**Pré-requisito:** `map_bars_uc()` do Sprint 84 (BAR0 mapeado UC completo) — HDA controller usa PCI BAR MMIO, mesma exigência de uncacheable que GPU. Sem isso, writes no HDA register set ficam presos no cache.
+**Depende de:** B-01 (download modelos TTS/STT), PCI (HDA detectado), Sprint 84 `map_bars_uc()`  
+**Objetivo:** JARVIS escuta por wake word, transcreve fala, processa com Cortex, responde em voz. Tudo bare-metal Rust via EventBus.
 
-| IDEA | Item | LOC | Depende |
+### Arquitetura
+
+Pipecat (13.2K★) é referência **arquitetural apenas** — pipeline composition pattern sobre EventBus nativo:
+```
+[HDA Mic] → WakeWord(Rustpotter) → STT(sherpa-onnx) 
+                                         ↓  texto
+                                    CortexAgent
+                                         ↓  texto
+                                   TTS(sherpa-onnx)
+                                         ↓  áudio PCM
+[HDA Speaker] ← AudioRingBuffer ← [VoicePipeline]
+```
+
+**Motores (Rust, adaptáveis para no_std via sherpa-onnx):**
+- [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) — faz TTS + STT num único crate Rust. Suporta PocketTTS, Kokoro, Whisper, silero-vad. Bindings para 12 linguagens (Rust nativo). Roda em Raspberry Pi.
+- [Rustpotter](https://github.com/Priler/rustpotter) — wake word detection em Rust puro, no_std compatível.
+- Pipecat descartado como dependência direta (Python). Patterns extraídos: Frame types, FrameProcessor trait, Pipeline composition via EventBus.
+
+### Pipeline de Áudio (EventBus Frames)
+
+```
+TOPIC_AUDIO_IN       → [i16 PCM chunks do HDA/USB]
+TOPIC_WAKEWORD       → ["jarvis" detectado]
+TOPIC_STT_TEXT       → [texto transcrito]
+ → reusa HermesAgent existente (USER_INTENT → cortex.think → response)
+TOPIC_TTS_CMD        → [texto para falar]
+TOPIC_AUDIO_OUT      → [i16 PCM chunks para HDA/USB]
+```
+
+### Arquivos
+
+| Arquivo | Função |
+|---|---|
+| `audio/pipeline.rs` | VoicePipeline struct — orquestra frames entre módulos via EventBus |
+| `audio/frame.rs` | Tipos AudioFrame, TranscriptionFrame, TTSCommandFrame |
+| `audio/ringbuf.rs` | Circular buffer PCM para DMA audio (HDA/USB consomem daqui) |
+| `audio/wakeword.rs` | Rustpotter wrapper — publica TOPIC_WAKEWORD |
+| `audio/stt.rs` | sherpa-onnx STT — transcreve áudio → texto |
+| `audio/tts.rs` | sherpa-onnx TTS — texto → áudio PCM |
+| `audio/hda.rs` | Intel HDA audio driver (PCI 04.03) — DMA playback/capture |
+| `audio/usb_uac.rs` | USB Audio Class driver — isochronous xHCI |
+| `audio/mod.rs` | Re-exports + init_audio_pipeline() |
+
+### Ordem de Implementação
+
+| Passo | O quê | LOC | Depois de |
 |---|---|---|---|
-| **#83** | **Intel HDA audio driver** — PCI HDA controller. DMA engine, codec detection, PCM playback/capture. Port do driver Linux HDA. | 800 | PCI scan + BAR0 UC mapping |
-| **#84** | **USB Audio Class (UAC) driver** — Fones/microfone USB via xHCI isochronous transfers. Alternativa ao HDA. | 600 | xHCI |
-| #315.21 | **Pocket TTS** (TTS principal) — Port do `pocket-tts-xn` (XN Rust) ou `sherpa-onnx` para no_std. 100M params, voice cloning, 6 idiomas. Alternativa: Kokoro-82M (ONNX→.bitnet). | 400 | B-01 |
-| #315.22 | Vosk/Whisper STT. Ref: pipecat STT services (Whisper, Deepgram, AssemblyAI). | 400 | B-01 |
-| #315.23 | Wake Word (Rustpotter). Ref: pipecat Silero VAD. | 100 | B-01 |
-| #315.24 | Wyoming Protocol IPC. Ref: pocket-tts-wyoming (docker) — protocolo padronizado. | 300 | B-01 |
-| #315.25 | Voice Pipeline (8-domain: Mic→Wake→ASR→VAD→Intent→Handle→TTS→Snd). Portar pipeline composition do pipecat (frame transformers) + pocket-tts como engine TTS. | 800 | B-01 + HDA |
-| #360 | Kokoro-82M download + conversão (alternativa se Pocket TTS port falhar) | 300 | B-01 |
+| 1 | `audio/ringbuf.rs` — Circular buffer PCM lockless | 100 | — |
+| 2 | `audio/hda.rs` — Intel HDA driver: detect, DMA playback | 800 | PCI scan + map_bars_uc |
+| 3 | `audio/frame.rs` + `audio/pipeline.rs` — Frame types + EventBus wiring | 300 | ringbuf |
+| 4 | `audio/tts.rs` — sherpa-onnx TTS (PocketTTS engine) | 400 | B-01 (download model) |
+| 5 | `audio/wakeword.rs` — Rustpotter + TOPIC_WAKEWORD | 150 | ringbuf |
+| 6 | `audio/stt.rs` — sherpa-onnx STT (Whisper engine) | 400 | B-01 (download model) |
+| 7 | `audio/usb_uac.rs` — USB Audio Class (microfone) | 600 | xHCI |
+| 8 | Integração com HermesAgent — TOPIC_STT_TEXT → USER_INTENT | 100 | stt + hermes |
+| 9 | TrinityRouter SpeechSynth → dispara TTS pipeline | 50 | já feito ✅ |
+| **Total** | | **~2900** | |
+
+### Referências
+
+| Projeto | Estrelas | Uso |
+|---|---|---|
+| [pipecat-ai/pipecat](https://github.com/pipecat-ai/pipecat) | 13.2K★ | **Arquitetura apenas** — Frame types, FrameProcessor, pipeline composition |
+| [kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) | 5.4K★ | TTS CPU-native 100M params, 6× real-time, voice cloning. Acessível via sherpa-onnx |
+| [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | 15K★ | **Motor principal** — Rust bindings para TTS (PocketTTS/Kokoro) + STT (Whisper) + VAD (silero) |
+| [Priler/rustpotter](https://github.com/Priler/rustpotter) | 300★ | Wake word detection Rust puro, no_std |
 
 ## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC)
 **IDEA_BANK:** #79-82  
