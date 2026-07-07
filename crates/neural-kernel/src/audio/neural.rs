@@ -1,17 +1,9 @@
-//! Neural TTS engine — Pocket TTS (CALM) inference usando nossos tensor ops.
-//! FlowLM Transformer + Mimi Decoder (matmul + GELU).
-//! 3 matmuls do decoder (256x512, 512x1024, 1024x320) rodam na GPU
-//! via gpu_matmul() quando disponivel (Intel Gen9+, NVIDIA, AMD).
-
 use alloc::vec::Vec;
 use alloc::vec;
-use alloc::string::String;
 use crate::tensor::Tensor;
 use libm::{tanhf};
 
 const SAMPLE_RATE: u32 = 16000;
-const HIDDEN: usize = 256;
-const AUDIO_FRAME: usize = 320;
 
 pub struct PocketTtsEngine {
     loaded: bool,
@@ -19,6 +11,7 @@ pub struct PocketTtsEngine {
     dw1: Option<Tensor>, db1: Option<Tensor>,
     dw2: Option<Tensor>, db2: Option<Tensor>,
     dw3: Option<Tensor>, db3: Option<Tensor>,
+    audio_cols: usize,
 }
 
 impl PocketTtsEngine {
@@ -29,55 +22,63 @@ impl PocketTtsEngine {
             dw1: None, db1: None,
             dw2: None, db2: None,
             dw3: None, db3: None,
+            audio_cols: 320,
         }
     }
 
     pub fn load(&mut self, data: &[u8]) -> bool {
         if data.len() < 16 { return false; }
-        let magic = u32::from_le_bytes(data[..4].try_into().unwrap_or([0; 4]));
-        if magic != 0xBE11BE11 { return false; }
-
+        let hdr = |off: usize| -> u32 {
+            u32::from_le_bytes(data[off..off+4].try_into().unwrap_or([0; 4]))
+        };
+        if hdr(0) != 0xBE11BE11 { return false; }
+        let num_parts = hdr(12) as usize;
         let floats: &[f32] = unsafe {
             core::slice::from_raw_parts(data.as_ptr() as *const f32, data.len() / 4)
         };
-        if floats.len() < 1000 { return false; }
 
-        let mut off = 0;
-        let vocab = 32000usize.min((floats.len() - off) / HIDDEN);
-        if vocab > 0 {
-            let n = vocab * HIDDEN;
-            let mut d = vec![0.0f32; n];
-            d.copy_from_slice(&floats[off..off + n]);
-            self.embed_w = Tensor::from_row_major((vocab, HIDDEN), d);
-            off += n;
+        // Parse header entries: name(32B) + offset(4B) + count(4B)
+        let mut entries: Vec<(&[u8], usize, usize)> = Vec::new();
+        for i in 0..num_parts {
+            let base = 16 + i * 40;
+            if base + 40 > data.len() { break; }
+            let name = &data[base..base+32];
+            let off = hdr(base + 32) as usize;
+            let cnt = hdr(base + 36) as usize;
+            entries.push((name, off, cnt));
         }
 
-        let layers = [
-            (HIDDEN, 512, 512),
-            (512, 1024, 1024),
-            (1024, AUDIO_FRAME, AUDIO_FRAME),
-        ];
-        let slots: [&mut Option<Tensor>; 6] = [
-            &mut self.dw1, &mut self.db1,
-            &mut self.dw2, &mut self.db2,
-            &mut self.dw3, &mut self.db3,
-        ];
-
-        for (li, &(rows, cols, blen)) in layers.iter().enumerate() {
-            let wlen = rows * cols;
-            if off + wlen + blen > floats.len() { break; }
-            let mut wd = vec![0.0f32; wlen];
-            let mut bd = vec![0.0f32; blen];
-            wd.copy_from_slice(&floats[off..off + wlen]);
-            bd.copy_from_slice(&floats[off + wlen..off + wlen + blen]);
-            *slots[li * 2] = Tensor::from_row_major((rows, cols), wd);
-            *slots[li * 2 + 1] = Tensor::from_row_major((1, blen), bd);
-            off += wlen + blen;
+        for i in 0..entries.len() {
+            let (name_bytes, _off, _cnt) = &entries[i];
+            let off = *_off;
+            let cnt = *_cnt;
+            if off + cnt > floats.len() { continue; }
+            let mut f = alloc::vec![0.0f32; cnt];
+            f.copy_from_slice(&floats[off..off+cnt]);
+            // Compara os primeiros bytes do nome
+            let is = |s: &str| -> bool {
+                let b = s.as_bytes();
+                name_bytes.len() >= b.len() && &name_bytes[..b.len()] == b
+            };
+            if is("embed") { self.embed_w = Tensor::from_row_major((cnt / 256, 256), f); }
+            else if is("dw1_w") { let cols = cnt / 256; self.dw1 = Tensor::from_row_major((256, cols), f); }
+            else if is("dw1_b") { self.db1 = Tensor::from_row_major((1, cnt), f); }
+            else if is("dw2_w") { let rows = self.dw1.as_ref().map_or(128, |t| t.shape.1); let cols = cnt / rows; self.dw2 = Tensor::from_row_major((rows, cols), f); }
+            else if is("dw2_b") { self.db2 = Tensor::from_row_major((1, cnt), f); }
+            else if is("dw3_w") { let rows = self.dw2.as_ref().map_or(256, |t| t.shape.1); self.audio_cols = cnt / rows; self.dw3 = Tensor::from_row_major((rows, self.audio_cols), f); }
+            else if is("dw3_b") { self.db3 = Tensor::from_row_major((1, cnt), f); }
         }
 
-        self.loaded = true;
-        crate::serial_println!("[TTS-NEURAL] Pocket TTS: {} floats, {} layers", off, layers.len());
-        true
+        self.loaded = self.embed_w.is_some() && self.dw3.is_some();
+        if self.loaded {
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS loaded: embed={:?}, dw1={:?}, dw2={:?}, dw3={:?}, audio={}cols",
+                self.embed_w.as_ref().map(|t| t.shape),
+                self.dw1.as_ref().map(|t| t.shape),
+                self.dw2.as_ref().map(|t| t.shape),
+                self.dw3.as_ref().map(|t| t.shape),
+                self.audio_cols);
+        }
+        self.loaded
     }
 
     pub fn is_loaded(&self) -> bool { self.loaded }
@@ -96,34 +97,36 @@ impl PocketTtsEngine {
         let w3 = self.dw3.as_ref().unwrap();
         let b3 = self.db3.as_ref().unwrap();
 
+        let hidden = embed.shape.1;
         let ntok = tokens.len().max(1) as f32;
-        let mut latent = Tensor::new((1, HIDDEN));
+        let mut latent = Tensor::new((1, hidden));
         for &tok in &tokens {
             let idx = (tok as usize) % embed.shape.0;
-            let s = idx * HIDDEN;
-            for j in 0..HIDDEN {
+            let s = idx * hidden;
+            for j in 0..hidden {
                 latent.data[j] += embed.data[s + j] / ntok;
             }
         }
 
-        // Decoder: 3 camadas lineares com GELU (GPU via gpu_matmul)
-        let h1 = neural_gelu(&latent, w1, b1);
-        let h2 = neural_gelu(&h1, w2, b2);
+        let h1 = gelu_gpu(&latent, w1, b1);
+        let h2 = gelu_gpu(&h1, w2, b2);
         let w3t = w3.transposed();
         let raw = crate::gpu::backend::gpu_matmul(&h2, &w3t).unwrap();
         let cols = raw.shape.1;
-        let mut audio = vec![0i16; SAMPLE_RATE as usize];
-        for i in 0..audio.len() {
+        let len = SAMPLE_RATE as usize;
+        let mut audio = vec![0i16; len];
+        for i in 0..len {
             let src = i % cols;
             let val = raw.data[src] + b3.data[src % b3.shape.1];
-            let env = libm::sinf(core::f32::consts::PI * i as f32 / audio.len() as f32).max(0.3) * 0.7 + 0.3;
+            let t = i as f32 / len as f32;
+            let env = libm::sinf(core::f32::consts::PI * t).max(0.3) * 0.7 + 0.3;
             audio[i] = (val * env * 8000.0) as i16;
         }
         audio
     }
 }
 
-fn neural_gelu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
+fn gelu_gpu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
     let wt = w.transposed();
     let mut out = crate::gpu::backend::gpu_matmul(input, &wt).unwrap();
     let cols = out.shape.1;
@@ -137,18 +140,20 @@ fn neural_gelu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
     out
 }
 
-/// Tenta carregar Pocket TTS do QEMU loader em 0x200000000.
 pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
-    let load_addr: u64 = 0x200000000;
+    let load_addr: u64 = 0x100000000;
     let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     let probe = (load_addr + pm) as *const u32;
     let magic = unsafe { core::ptr::read_volatile(probe) };
+    crate::serial_println!("[TTS-NEURAL] Probe 0x{:x}+{:#x}: magic=0x{:08x}", load_addr, pm, magic);
     if magic == 0xBE11BE11 {
         let mut eng = PocketTtsEngine::new();
-        let data = unsafe { core::slice::from_raw_parts(probe as *const u8, 100 * 1024 * 1024) };
+        let data = unsafe { core::slice::from_raw_parts(probe as *const u8, 20 * 1024 * 1024) };
         if eng.load(data) {
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS @ 0x{load_addr:x} (GPU offload disponivel)");
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS @ 0x{:x} (GPU offload via gpu_matmul)", load_addr);
             return Some(eng);
+        } else {
+            crate::serial_println!("[TTS-NEURAL] Pocket TTS load FAILED");
         }
     }
     crate::serial_println!("[TTS-NEURAL] Pocket TTS ausente — formant synth ativo");
