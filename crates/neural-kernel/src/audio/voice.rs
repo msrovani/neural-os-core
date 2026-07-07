@@ -1,9 +1,11 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event, Receiver};
+use core::sync::atomic::{AtomicU8, Ordering};
 use crate::audio::ringbuf::AudioRingBuffer;
 use crate::serial_println;
 
 pub static AUDIO_RING: AudioRingBuffer = AudioRingBuffer::new();
+pub static LAST_VOICE_EMOTION: AtomicU8 = AtomicU8::new(0);
 
 const VOICE_MANIFEST: AgentManifest = AgentManifest {
     name: "jarvis_voice",

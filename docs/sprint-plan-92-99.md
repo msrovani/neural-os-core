@@ -119,13 +119,27 @@ TOPIC_AUDIO_OUT      → [i16 PCM chunks para HDA/USB]
 | 1 | `audio/ringbuf.rs` — Circular buffer PCM lockless | 100 | — |
 | 2 | `audio/hda.rs` — Intel HDA driver: detect, DMA playback | 800 | PCI scan + map_bars_uc |
 | 3 | `audio/frame.rs` + `audio/pipeline.rs` — Frame types + EventBus wiring | 300 | ringbuf |
-| 4 | `audio/tts.rs` — sherpa-onnx TTS (PocketTTS engine) | 400 | B-01 (download model) |
-| 5 | `audio/wakeword.rs` — Rustpotter + TOPIC_WAKEWORD | 150 | ringbuf |
-| 6 | `audio/stt.rs` — sherpa-onnx STT (Whisper engine) | 400 | B-01 (download model) |
-| 7 | `audio/usb_uac.rs` — USB Audio Class (microfone) | 600 | xHCI |
-| 8 | Integração com HermesAgent — TOPIC_STT_TEXT → USER_INTENT | 100 | stt + hermes |
-| 9 | TrinityRouter SpeechSynth → dispara TTS pipeline | 50 | já feito ✅ |
-| **Total** | | **~2900** | |
+| 4 | `audio/ser.rs` — SER (Speech Emotion Recognition): pitch/energy/ZCR → emoção + `loqa-voice-dsp` ou `sensevoice` como alternativa | 200 | ringbuf |
+| 5 | `audio/tts.rs` — sherpa-onnx TTS (PocketTTS engine) | 400 | B-01 (download model) |
+| 6 | `audio/wakeword.rs` — Rustpotter + TOPIC_WAKEWORD | 150 | ringbuf |
+| 7 | `audio/stt.rs` — sherpa-onnx STT (Whisper engine) | 400 | B-01 (download model) |
+| 8 | `audio/usb_uac.rs` — USB Audio Class (microfone) | 600 | xHCI |
+| 9 | Integração: TOPIC_STT_TEXT → SER → emotion → USER_INTENT | 100 | ser + stt |
+| 10 | TrinityRouter SpeechSynth → dispara TTS pipeline | 50 | já feito ✅ |
+| **Total** | | **~3100** | |
+
+### Speech Emotion Recognition (SER)
+
+| Fonte | Uso | Tipo |
+|---|---|---|
+| `loqa-voice-dsp` (crates.io, v0.5.0) | Pitch, formants, spectral features | Crate Rust (DSP) |
+| `sensevoice` (crates.io, v0.1.0) | SenseVoice bindings — ASR + emoção + diarização | Crate Rust (ggml) |
+| `audeering/wav2vec2-large-robust-12-ft-emotion-msp-dim` (602k↓ HF) | SER estado-da-arte | Modelo ONNX |
+| `onnx-community/wav2vec2-emotion-recognition-ONNX` (HF) | SER via sherpa-onnx | Modelo ONNX |
+| `speechbrain/emotion-recognition-wav2vec2-IEMOCAP` (169k↓ HF) | SER SpeechBrain | Modelo PyTorch |
+
+**Pipeline SER atual (heurístico):** PCM → autocorrelação(pitch) + RMS(energy) + ZCR → regras → Emotion
+**Futuro:** PCM → loqa-voice-dsp(features) → sensevoice/wav2vec2-onnx → Emotion
 
 ### Referências
 
@@ -135,6 +149,7 @@ TOPIC_AUDIO_OUT      → [i16 PCM chunks para HDA/USB]
 | [kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) | 5.4K★ | TTS CPU-native 100M params, 6× real-time, voice cloning. Acessível via sherpa-onnx |
 | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | 15K★ | **Motor principal** — Rust bindings para TTS (PocketTTS/Kokoro) + STT (Whisper) + VAD (silero) |
 | [Priler/rustpotter](https://github.com/Priler/rustpotter) | 300★ | Wake word detection Rust puro, no_std |
+| **FunAudioLLM/SenseVoice** (HF) | — | ASR + emotion recognition + diarization. Rust bindings: `sensevoice` crate |
 
 ## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC)
 **IDEA_BANK:** #79-82  
