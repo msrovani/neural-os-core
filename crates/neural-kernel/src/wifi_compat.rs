@@ -1,8 +1,9 @@
-//! OS-Emulation compat layer — mutex cooperativo + rdtsc para firmware blobs.
-//! Engana blobs fechados de chips WiFi que exigem API de SO.
+//! OS-Emulation compat layer — mutex cooperativo + rdtsc calibrado para firmware blobs.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::arch::asm;
+
+pub static TSC_PER_MS: AtomicU64 = AtomicU64::new(2400); // fallback, calibrado no boot
 
 #[repr(C)]
 pub struct HalideMutex { pub locked: AtomicBool }
@@ -28,5 +29,7 @@ pub unsafe extern "C" fn wifi_os_mutex_unlock(m: *mut HalideMutex) {
 pub extern "C" fn wifi_os_get_time_ms() -> u64 {
     let lo: u32; let hi: u32;
     unsafe { asm!("rdtsc", out("eax") lo, out("edx") hi); }
-    ((hi as u64) << 32 | lo as u64) / 2_400_000
+    let tsc = ((hi as u64) << 32 | lo as u64);
+    let freq = TSC_PER_MS.load(Ordering::Relaxed);
+    if freq == 0 { tsc / 2400 } else { tsc / freq }
 }

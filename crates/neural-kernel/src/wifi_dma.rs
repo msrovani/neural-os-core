@@ -1,5 +1,5 @@
-//! DMA infrastructure — PhysicalBuffer alinhado a 4K, clflush, IOMMU compat.
-//! Garante coerencia de cache entre CPU e chips WiFi via PCIe.
+//! DMA infrastructure — PhysicalBuffer alinhado a 4K, clflushopt + sfence.
+//! clflushopt e assincrono e permite paralelismo no cache flushing.
 
 use core::arch::asm;
 
@@ -19,9 +19,9 @@ impl<const N: usize> PhysicalBuffer<N> {
         let mut addr = self.data.as_ptr() as usize;
         let end = addr + N;
         while addr < end {
-            asm!("clflush [{0}]", in(reg) addr, options(nostack, preserves_flags));
+            asm!("clflushopt [{0}]", in(reg) addr, options(nostack, preserves_flags));
             addr += 64;
         }
-        asm!("mfence", options(nostack, preserves_flags));
+        asm!("sfence", options(nostack, preserves_flags));
     }
 }

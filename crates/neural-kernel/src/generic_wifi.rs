@@ -267,7 +267,12 @@ pub struct CriticalSectionMutex<T> { data: RefCell<T> }
 impl<T> CriticalSectionMutex<T> {
     pub const fn new(v: T) -> Self { Self { data: RefCell::new(v) } }
     pub fn lock<F, R>(&self, f: F) -> R where F: FnOnce(&mut T) -> R {
+        // Desabilita interrupcoes para evitar data race com ISRs MSI-X
+        let flags: u64;
+        unsafe { core::arch::asm!("pushfq; pop {0}; cli", out(reg) flags, options(nostack)); }
         let r = f(&mut *self.data.borrow_mut());
+        // Restaura flags originais (reabilita se estava ativo)
+        unsafe { core::arch::asm!("push {0}; popfq", in(reg) flags, options(nostack, preserves_flags)); }
         r
     }
 }

@@ -5,6 +5,22 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use spin::Mutex;
 use core::sync::atomic::{AtomicBool, Ordering};
+use core::fmt::Write;
+
+struct StackBuf { buf: [u8; 256], pos: usize }
+impl StackBuf {
+    fn new() -> Self { Self { buf: [0; 256], pos: 0 } }
+    fn as_str(&self) -> &str { core::str::from_utf8(&self.buf[..self.pos]).unwrap_or("") }
+}
+impl Write for StackBuf {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let b = s.as_bytes();
+        if self.pos + b.len() > self.buf.len() { return Err(core::fmt::Error); }
+        self.buf[self.pos..self.pos + b.len()].copy_from_slice(b);
+        self.pos += b.len();
+        Ok(())
+    }
+}
 
 pub static SESSION_FILENAME: Mutex<Option<String>> = Mutex::new(None);
 pub static FAT_READY: AtomicBool = AtomicBool::new(false);
@@ -70,11 +86,13 @@ pub fn log(msg: &str) {
         return;
     }
 
-    // Anexa ao arquivo de sessao no FAT
+    // Anexa ao arquivo de sessao no FAT (sem alloc)
     let sfn_guard = SESSION_FILENAME.lock();
     if let Some(ref name) = *sfn_guard {
         let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-        let log_line = alloc::format!("[T+{}] [LOG] {}\n", tick, msg);
+        let mut sb = StackBuf::new();
+        let _ = write!(sb, "[T+{}] [LOG] {}\n", tick, msg);
+        let log_line = sb.as_str();
         unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
