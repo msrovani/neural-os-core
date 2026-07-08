@@ -73,6 +73,8 @@ Todos os sprints de 84 a 103 foram implementados e verificados. Detalhes em `doc
 | **66** Intel GEN shader matmul | 20% | ~300 LOC | GPU matmul via shader assembly | `gpu/intel.rs` |
 | **67** Agency Importer (147 agents) | 30% | ~600 LOC | Parser .md → AgentManifest completo | `agency.rs` |
 | **67** Observation Protocol persist | 40% | ~200 LOC | skill_observer com log persistente | `skill_observer.rs` |
+| **ADR-0019** RoPE + inner_attn_ln | 30% | ~300 LOC | BitNet v3.1 features (cos/sin table, layernorms) | `cortex.rs` |
+| **ADR-0028** GGUF v3 streaming | 20% | ~500 LOC | Streaming ATA/USB para modelos 9B+, heap >5GB | `gguf.rs` |
 
 ---
 
