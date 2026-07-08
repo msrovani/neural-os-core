@@ -110,7 +110,7 @@ Todos os sprints de 84 a 103 foram implementados e verificados. Detalhes em `doc
 | NPU AMD XDNA driver (#43-52) | ~2.000 | NPU on-chip (+ sponsor) |
 | ARM/RISC-V port (#116) | ~5.000 | Portabilidade cross-arch |
 | **#279e** v86 browser demo | ~500 LOC | Emulador x86 em WASM |
-| **#283a+b** Workspace Cube 3D + crossfade | ~200 LOC | Transições 3D GPU (#283a) + fallback sem FPU (#283b fallback não-GPU do cube) |
+| **#283a+b** Workspace Cube 3D + crossfade | ~200 LOC | Transições 3D GPU + fallback sem FPU (#283b é o crossfade não-GPU, vinculado ao cube) |
 
 ---
 
