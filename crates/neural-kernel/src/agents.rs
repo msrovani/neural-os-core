@@ -770,28 +770,7 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
-                    let rust_response = {
-                        let trinity_guard = TRINITY.lock();
-                        let trinity_expert = trinity_guard.classify_intent(msg);
-                        let expert_name = trinity_expert.name;
-                        drop(trinity_guard);
-                        if expert_name == "rust_coder" {
-                            serial_println!("[TRINITY] RustCoder: \"{}\"", msg);
-                            let r = crate::cortex::generate_via_rustcoder(&alloc::format!(
-                                "{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}\n{}\n", msg));
-                            if !r.starts_with("[RUSTCODER]") { Some(r) } else { None }
-                        } else if expert_name == "hw_identify" {
-                            serial_println!("[TRINITY] HWExpert: \"{}\"", msg);
-                            let r = crate::cortex::generate_via_hwexpert(&alloc::format!(
-                                "identifique hardware {}", msg));
-                            if !r.starts_with("[HWEXPERT]") { Some(r) } else { None }
-                        } else { None }
-                    };
-                    if let Some(rust_gen) = rust_response {
-                        serial_println!("[RUSTCODER] Gerado: \"{}\"", rust_gen);
-                        alloc::format!("[RustCoder] {}", rust_gen)
-                    } else {
-                    // Fast-path: SpeechSynth
+                    // Fast-path: SpeechSynth (nao passa pelo LLM)
                     let trinity_guard = TRINITY.lock();
                     let trinity_expert = trinity_guard.classify_intent(msg);
                     let expert_name = trinity_expert.name;
@@ -800,6 +779,7 @@ impl Agent for HermesAgent {
                         serial_println!("[TRINITY] SpeechSynth: \"{}\"", msg);
                         alloc::format!("[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)", msg)
                     } else {
+                    // Demais intents: generate_via_model faz MoE routing interno
                     let intent = self.cortex.think(msg);
                     let intent_name = intent.skill_name();
                     serial_println!("[CORTEX] Intent: {} = {:?} (trinity: {})", intent_name, intent, expert_name);

@@ -1176,6 +1176,32 @@ pub fn set_hwexpert_model(model: Box<dyn Model>) {
 }
 
 pub fn generate_via_model(prompt: &str) -> String {
+    // MoE routing: Trinity classifica intencao, roteia para expert se disponivel
+    let expert_name = {
+        let trinity = crate::TRINITY.lock();
+        let expert = trinity.classify_intent(prompt);
+        let name = expert.name;
+        drop(trinity);
+        name
+    };
+    // Tenta expert RustCoder
+    if expert_name == "rust_coder" {
+        let guard = RUSTCODER_MODEL.lock();
+        if let Some(m) = guard.as_ref() {
+            crate::serial_println!("[TRINITY] MoE routing: RustCoder expert");
+            return m.generate(&alloc::format!(
+                "{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}\n{}\n", prompt));
+        }
+    }
+    // Tenta expert HW Identify
+    if expert_name == "hw_identify" {
+        let guard = HWEXPERT_MODEL.lock();
+        if let Some(m) = guard.as_ref() {
+            crate::serial_println!("[TRINITY] MoE routing: HWIdentify expert");
+            return m.generate(&alloc::format!("identifique hardware {}", prompt));
+        }
+    }
+    // Fallback: modelo principal (BitNet LLM)
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
