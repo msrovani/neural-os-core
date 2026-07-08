@@ -1,73 +1,30 @@
-# SESSION INDEX — neural-os-core (42 sessões)
+# SESSION INDEX — neural-os-core
 
-**Propósito:** Catálogo de todas as sessões de desenvolvimento. Cada sessão documenta o que foi feito, descobertas, decisões e bloqueios.  
-**Uso:** Consulte este índice antes de iniciar qualquer trabalho para saber se um caminho já foi trilhado.  
-**Formato:** `SESSION_NNN.md — Título | Sprint | Principais descobertas | Lições aprendidas`
+**Propósito:** Catálogo de sessões. Sessions de Sprints 1-68 foram arquivadas (conhecimento consolidado no código e neste índice). Sessions de Sprint 79+ mantidas individualmente.
 
 ---
 
-## Sessões Recentes (Sprints 79-83)
+## Sessões Mantidas (Sprint 79+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
-| 080 | 80 | 24 | AVX2 Debug + WHPX Detection | WHPX emula VEX como VM exits (2x+ lento). `has_avx2()` detecta hypervisor via CPUID. Row buffer substitui unpack_all (17MB→6.9KB). FFN gate+up = 52% do tempo. |
-| 082 | 97 | — | RustCoder Expert + Trinity MoE | Expert Rust treinado (hidden=128, 6L, 1.6M params) com 41.200 amostras na GTX 1050 (loss 0.34). RUSTCODER_MODEL global. Fast-path no HermesAgent. Loading da FAT32. |
-| 083 | 86-87 | 30-31 | JARVIS Persona + Security | SOUL.md FAT32, 4 compressoes, Notification 4 urgencias, SlabBuddy. I1-I4 completos, AUDIT_TRAIL global, AHCI instanciado. |
-| 089 | 88-89 | 32-33 | JARVIS Emotion + Cache + SleepCycle+mbedding | ADE real, Pipeline 16 stages wireados, edge-dhcp fix. SleepCycle 5 fases, KG bitemporal, BGE semantic_search, burn-flex. |
-| 079 | 79 | 23 | LLM Infrastructure + Xuvisco | BitNet-b1.58 850M integrado. BPE tokenizer. QEMU loader a 4GB. Xuvisco fix: VGA sequencer I/O (0x3C4/0x3C5) ao invés de write a 0xB8000. **ATENÇÃO:** 0xB8000 não mapeado pelo bootloader UEFI/OVMF. |
+| 079 | 79 | 23 | LLM Infrastructure | BitNet-b1.58 850M, BPE, Trinity MoE, QEMU loader, Xuvisco fix |
+| 080 | 80 | 24 | AVX2 Debug + WHPX | WHPX emula VEX como VM exits. has_avx2() detecta hypervisor via CPUID. KV Cache 200× speedup |
+| 081 | 81-83 | 21a/b/e | SMP + GPU Research | SPSC ring, IPI, PerCpu, Work-Stealing, GPU architecture |
+| 082 | 97 | — | RustCoder Expert | Expert Rust (1.6M params) treinado com 41.2K amostras |
+| 083 | 86-87 | 30-31 | JARVIS Persona+Security | SOUL.md, I1-I4, AUDIT_TRAIL, AHCI |
+| 089 | 88-89 | 32-33 | JARVIS Emotion+Cache+SleepCycle | ADE, Pipeline 16 stages, KG bitemporal, BGE |
+| 093 | 93+ | — | SDIO Pipeline | 45 packs, 95.812 entradas, loss 0.38 |
 
-## Sessões SMP + GPU Research (Sprint 81-83)
+## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 
-| Sessão | Sprint | Bloco | Título | Principais Descobertas |
-|--------|--------|-------|--------|----------------------|
-| (ADR-0037) | 81-83 | 21a/b/e | SMP Foundation + Work-Stealing + Polimento | SPSC ring (bbqueue), IPI vetorizado, PerCpu, Chase-Lev work-stealing, parallel-for AVX2, AgentScheduler multicore, per-CPU slab. ✅ Completos. |
+Conhecimento consolidado no código-fonte e no `SESSION_INDEX.md` abaixo. Arquivos individuais removidos.
 
-## Sessões Anteriores (Sprints 1-78)
-
-| Sessão | Sprint | Título | Tópicos Chave |
-|--------|--------|--------|---------------|
-| 001 | 1 | Initial Setup | Toolchain, bootloader, primeira compilação |
-| 002 | 2 | VGA + Serial | VGA text mode, serial logging |
-| 003 | 3 | IDT Setup | Interrupt Descriptor Table, handlers |
-| 004 | 4 | Memory + Paging | Page tables, OffsetPageTable, heap init |
-| 005 | 5 | SIMD + FPU | SSE/AVX enablement, CR0/CR4 |
-| 006 | 6 | Neural Primitives | Tensor, matmul, libm |
-| 007 | 7 | Intent Router MLP | MLP 16→8→3, classification |
-| 008 | 8 | PIC + Watchdog | PIC remap, watchdog timer |
-| 009 | 9 | Page Fault Handler | Page fault recovery, self-heal |
-| 010 | 10 | SMP + APIC | APIC init, SMP bootstrap |
-| 011 | 11 | BitLinear | BitLinear layer, ternary weights |
-| 012 | 12 | 2-bit Packing | quantize_to_packed, packing format |
-| 013 | 13 | Executive Summary | Estado da arte 2026, roadmap |
-| 019 | 19 | PCI + ACPI + SMP | PCI scan, MADT parser, SMP boot |
-| 021 | 21 | ATA + NVMe | ATA PIO, NVMe driver |
-| 022 | 22 | FAT12 + USB | FAT12 filesystem, USB xHCI |
-| 023 | 23 | RTL8139 + Network | RTL8139 driver, smoltcp integração |
-| 024 | 24 | Network Fixes | e1000 TDT fix, DHCP, ARP |
-| 025 | 25 | Neural Cortex | Cortex::think(), 12 intenções |
-| 026 | 26 | Transformer Engine | Attention, BitNet 4 layers |
-| 027 | 27 | Cortex LLM Daemon | LLM_REQUEST/LLM_RESPONSE, 9600+ ticks |
-| 028 | 28 | HW-Aware LLM | HwIdentifySkill, 23K PCI IDs |
-| 029 | 29 | USB xHCI Driver | xHCI port scan, HID boot |
-| 030 | 30 | USB HID | Keyboard via xHCI |
-| 031 | 31 | Hardware Capabilities | 25 pares capability→class→driver |
-| 032 | 32 | Self-Healing Init | FailureClass, SelfHeal::analyze() |
-| 033 | 33 | Exception Handlers | Page Fault, Double Fault, GPF com SelfHeal |
-| 034 | 34 | Respawn Queue | RESPAWN_QUEUE, corrective prompting |
-| 035 | 35 | Feedback Loop | lessons, already_tried(), alternativas |
-| 036 | 36 | Boot Refactor | 5 mini-sprints em 1 bloco |
-| 037 | 37 | Agent/Skill-First | Paradigma: tudo é agente ou skill |
-| 038 | 38 | Migration | 8 tasks → 8 agents |
-| 056 | 56 | FAT32 + HW Real | Boot em notebook físico, FAT32 |
-| 059 | 59 | Bootloader 0.11 | UEFI framebuffer 1280×720 |
-| 061 | 61 | Desktop | DisplayAgent, framebuffer console |
-| 062 | 62 | Filesystem | VFS Layer, MHI ARC bridge |
-| 065 | 65 | Network Evolution | DHCP, ARP, VirtIO-net |
-| 066 | 66 | GPU Architecture | GPU detection, VRAM tier, Intel ring |
-| 067 | 67 | Auto-Skills | Skill generation, TaskPattern |
-| 068 | 68 | USB Mass Storage | USB-MSC bulk, BOT protocol |
-| 079 | 79 | LLM Infrastructure | BitNet-b1.58, BPE, AVX2, Trinity MoE |
-| 080 | 80 | AVX2 Debug | WHPX detection, KV Cache, timing |
+| Sprints | Tópicos Chave |
+|---------|---------------|
+| 1-13 | Toolchain, VGA, IDT, Memory, SIMD, Tensor, BitLinear, 2-bit Packing, PIC, SMP |
+| 19-38 | PCI, ACPI, ATA, FAT12, RTL8139, e1000, Neural Cortex, Transformer, xHCI, Self-Healing |
+| 56-68 | FAT32, Bootloader 0.11, DisplayAgent, VFS, GPU Architecture, Auto-Skills, USB-MSC |
 
 ---
 
