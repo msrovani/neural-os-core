@@ -51,30 +51,38 @@ Todos os sprints de 84 a 103 foram implementados e verificados. Detalhes em `doc
 
 ---
 
-## 🟡 SPRINT 92 — Itens não bloqueados por B-01 (~3.200 LOC)
+## 🟡 SPRINT 92 — Itens não bloqueados por B-01 (~4.700 LOC)
 
 | Item | % | Esforço | Descrição | Arquivo |
 |------|---|---------|-----------|---------|
-| Wake Word ML | 90% | ~100 LOC | Substituir heurística por modelo simples (energy→classificador) | `audio/wakeword.rs` |
-| burn-flex Backend trait | 70% | ~300 LOC | Integrar FlexBackend com burn::backend::Backend trait | `burn_flex.rs` |
+| Wake Word ML | 90% | ~100 LOC | Substituir heurística por modelo simples | `audio/wakeword.rs` |
+| burn-flex Backend trait | 70% | ~300 LOC | Integrar FlexBackend com burn::Backend trait | `burn_flex.rs` |
 | MSched VRAM scheduling | 70% | ~200 LOC | Conectar predictor Belady ao scheduler GPU real | `gpu/msched.rs` |
-| GPU Display time-sharing | 70% | ~200 LOC | Implementar context switch entre iGPU e dGPU | `gpu/display_coex.rs` |
-| BGE HNSW index | 60% | ~400 LOC | Substituir busca linear por HNSW approximate nearest neighbor | `memory_systems.rs` |
-| **#279e** v86 browser | 0% | ~500 LOC | Emulador x86 em WASM para demonstração | Novo |
-| Desktop Cube 3D + crossfade | 50% | ~200 LOC | Transições 3D entre workspaces com GPU | `gpu/cube.rs` |
-| BitNet IDE avançado | 40% | ~500 LOC | Debug WASM, preview ao vivo, syntax highlight | `wasm_rt.rs` |
-| Skill Market / Plugin Hub | 0% | ~500 LOC | Marketplace de skills com instalação 1-click | Novo |
-| **60.5** Train 100M/1.5B params | 0% | ~800 LOC | Treino on-device com GPU física | `tools/train_*.py` |
-| **61.5** LLM Icons | 50% | ~200 LOC | Geração de ícones via HWEXPERT_MODEL | `display/compositor.rs` |
-| **61.6** WASM App Sandbox | 40% | ~400 LOC | Sandbox completo com fuel/perm/cap | `wasm_rt.rs` |
-| **62.2-6** MHI+FS Bridge | 30% | ~600 LOC | Integração VFS ↔ MHI completa | `vfs/`, `fs/mhi_scheduler.rs` |
-| **63** GGUF model swap (heap >5GB) | 20% | ~500 LOC | Modelos 9B+ com heap dinâmico | `gguf.rs` |
-| **66** AMD PM4 / NVIDIA PFIFO full | 30% | ~400 LOC | GPU ring buffer completo por vendor | `gpu/{nvidia,amd}.rs` |
-| **66** Intel GEN shader matmul | 20% | ~300 LOC | GPU matmul via shader assembly | `gpu/intel.rs` |
-| **67** Agency Importer (147 agents) | 30% | ~600 LOC | Parser .md → AgentManifest completo | `agency.rs` |
-| **67** Observation Protocol persist | 40% | ~200 LOC | skill_observer com log persistente | `skill_observer.rs` |
-| **ADR-0019** RoPE + inner_attn_ln | 30% | ~300 LOC | BitNet v3.1 features (cos/sin table, layernorms) | `cortex.rs` |
-| **ADR-0028** GGUF v3 streaming | 20% | ~500 LOC | Streaming ATA/USB para modelos 9B+, heap >5GB | `gguf.rs` |
+| GPU Display time-sharing | 70% | ~200 LOC | Context switch iGPU/dGPU | `gpu/display_coex.rs` |
+| BGE HNSW index | 60% | ~400 LOC | HNSW approximate nearest neighbor | `memory_systems.rs` |
+| BitNet IDE avançado | 40% | ~500 LOC | Debug WASM, preview, syntax highlight | `wasm_rt.rs` |
+| Skill Market / Plugin Hub | 0% | ~500 LOC | Marketplace de skills 1-click | Novo |
+| **60.5** Train 100M/1.5B params | 0% | ~800 LOC | Treino on-device GPU física | `tools/train_*.py` |
+| **61.5** LLM Icons | 50% | ~200 LOC | Ícones via HWEXPERT_MODEL | `display/compositor.rs` |
+| **61.6** WASM App Sandbox | 40% | ~400 LOC | Sandbox fuel/perm/cap | `wasm_rt.rs` |
+| **62.2-6** MHI+FS Bridge | 30% | ~600 LOC | Integração VFS↔MHI completa | `vfs/`, `fs/` |
+| **63** GGUF model swap | 20% | ~500 LOC | Modelos 9B+ heap dinâmico | `gguf.rs` |
+| **66** AMD PM4 / NVIDIA PFIFO | 30% | ~400 LOC | GPU ring buffer por vendor | `gpu/{nvidia,amd}.rs` |
+| **66** Intel GEN shader matmul | 20% | ~300 LOC | GPU matmul via shader | `gpu/intel.rs` |
+| **67** Agency Importer | 30% | ~600 LOC | Parser .md→AgentManifest | `agency.rs` |
+| **67** Observation Protocol | 40% | ~200 LOC | skill_observer persistente | `skill_observer.rs` |
+| **ADR-0019** RoPE + inner_attn_ln | 30% | ~300 LOC | BitNet v3.1 features | `cortex.rs` |
+| **ADR-0028** GGUF v3 streaming | 20% | ~500 LOC | Streaming ATA/USB 9B+ | `gguf.rs` |
+| **#364** Zero-Trust Syscall | 0% | ~200 LOC | 4 classes de syscall c/ budget | `trust.rs` |
+| **#365** Neural Cache per token | 0% | ~150 LOC | Cache avaliações LLM por capability | `cognitive.rs` |
+| **#405** Capability token crypto | 0% | ~200 LOC | Token criptografado scoped | `trust.rs` |
+| **#406** VirtIO-GPU fix | 0% | ~100 LOC | GET_DISPLAY_INFO QEMU TCG | `virtio_gpu.rs` |
+| **#277a** HwRegistry+LLM | 60% | ~200 LOC | PCI→HwAgent→LLM activation | `hw_agents.rs` |
+| **#279d** Compositor drag/menus | 60% | ~300 LOC | Drag, close btn, dock bar refinar | `display/compositor.rs` |
+| **#282e** InferenceFsAgent | 40% | ~100 LOC | LLM gera arquivos | `vfs/` |
+| **#282f** HermesFsAgent | 40% | ~100 LOC | Chat como FS | `vfs/` |
+| **#282g** RamFsAgent | 40% | ~100 LOC | Cache DRAM | `vfs/` |
+| **#282h** Auto tier migration | 20% | ~200 LOC | MHI promove/demove | `vfs/` |
 
 ---
 
@@ -101,6 +109,16 @@ Todos os sprints de 84 a 103 foram implementados e verificados. Detalhes em `doc
 | GGUF v3 loader (#278) | ~500 LOC | Modelos 9B+ com heap >5GB |
 | NPU AMD XDNA driver (#43-52) | ~2.000 | NPU on-chip (+ sponsor) |
 | ARM/RISC-V port (#116) | ~5.000 | Portabilidade cross-arch |
+| **#279e** v86 browser demo | ~500 LOC | Emulador x86 em WASM |
+| **#283a+b** Workspace Cube 3D + crossfade | ~200 LOC | Transições 3D GPU (#283a) + fallback sem FPU (#283b fallback não-GPU do cube) |
+
+---
+
+## ❌ SUBSTITUÍDOS / SUPERSEDED
+
+| Item | Motivo |
+|------|--------|
+| **#360** Kokoro-82M TTS | Substituído pelo Pocket TTS 100M implementado em `audio/neural.rs` (GPU offload, loss 0.38) |
 
 ---
 
