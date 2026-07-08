@@ -54,6 +54,8 @@ impl Agent for DisplayAgent {
                 desktop.register_app(AppId::Settings, "Settings");
                 desktop.register_app(AppId::Power, "Power");
                 desktop.register_app(AppId::Ide, "BitNet IDE");
+                desktop.register_app(AppId::Camera, "Camera");
+                desktop.register_app(AppId::AudioViz, "Audio Visualizer");
                 desktop.toggle_app(AppId::HermesChat);
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(JarvisAvatar::new(gpu_dev));
@@ -89,6 +91,8 @@ impl Agent for DisplayAgent {
         }
         if self.input_buffer.contains("[F3]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Power); }}
         if self.input_buffer.contains("[F4]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Ide); }}
+        if self.input_buffer.contains("[F10]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Camera); }}
+        if self.input_buffer.contains("[F11]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::AudioViz); }}
 
         // Settings navigation
         if self.input_buffer.contains("[2]") || self.input_buffer.contains("sound") || self.input_buffer.contains("som") {

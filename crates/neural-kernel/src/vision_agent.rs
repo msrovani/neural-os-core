@@ -31,7 +31,6 @@ impl VisionAgent {
     }
 
     fn process_frame(&mut self, frame: &[u8]) -> String {
-        // Analise simples baseada em histograma e bordas
         let w = self.width as usize;
         let h = self.height as usize;
         if frame.len() < w * h { return String::from("frame pequeno"); }
@@ -51,6 +50,17 @@ impl VisionAgent {
         let total = (w * h) as u64;
         let avg_bright = brightness / total / 3;
         let avg_edge = edges / total;
+
+        // Atualiza CameraApp no compositor
+        if let Some(ref mut desk) = *crate::display::compositor::COMPOSITOR.lock() {
+            if let Some(cam) = desk.apps.iter_mut().find(|a| a.id == crate::display::compositor::AppId::Camera) {
+                let desc = if avg_edge > 80 { "Objeto/texto detectado" }
+                    else if avg_bright > 180 { "Ambiente claro" }
+                    else if avg_bright < 60 { "Ambiente escuro" }
+                    else { "Cena media" };
+                cam.data = alloc::format!("{}\n{}x{} brilho={} bordas={}", desc, w, h, avg_bright, avg_edge);
+            }
+        }
 
         if avg_edge > 80 { String::from("cena com bordas nítidas — possivel objeto/texto") }
         else if avg_bright > 180 { String::from("cena clara — ambiente bem iluminado") }

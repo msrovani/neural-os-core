@@ -27,7 +27,7 @@ pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, _w: usize, _
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum AppId { HermesChat, Settings, Power, Ide, WasmSkill(usize), None }
+pub enum AppId { HermesChat, Settings, Power, Ide, WasmSkill(usize), Camera, AudioViz, None }
 
 pub struct AppWindow { pub id: AppId, pub title: String, pub x: usize, pub y: usize, pub w: usize, pub h: usize, pub visible: bool, pub data: String }
 
@@ -76,7 +76,7 @@ impl JarvisDesktop {
 
         // Status bar
         self.fb.fill_rect(0, 0, w, 28, 20, 25, 35);
-        draw_text(&mut self.fb, 6, 4, &alloc::format!("J.A.R.V.I.S.  t:{}  [F1]Chat [F2]Settings [F3]Power [F4]IDE", tick), self.w, 180, 190, 210);
+        draw_text(&mut self.fb, 6, 4, &alloc::format!("J.A.R.V.I.S.  t:{}  [F1]Chat [F2]Settings [F3]Power [F4]IDE [F10]Cam [F11]Mic", tick), self.w, 180, 190, 210);
 
         // Desktop icons for WASM skills
         for (i, skill) in self.wasm_skills.iter().enumerate() {
@@ -153,6 +153,29 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr
             draw_text(fb, cx, cy, &alloc::format!("WASM Skill #{}", idx), scr_w, 0, 200, 255);
             draw_text(fb, cx, cy + 20, "Running via WASM Runtime...", scr_w, 180, 200, 220);
             draw_text(fb, cx, cy + 40, &app.data, scr_w, 200, 200, 200);
+        }
+        AppId::Camera => {
+            // Preview da camera (simulado)
+            fb.fill_rect(cx, cy, 200, 150, 30, 35, 40);
+            draw_text(fb, cx + 4, cy + 4, "[CAM]", scr_w, 0, 200, 100);
+            draw_text(fb, cx + 4, cy + 140, "[F10] Stop capture", scr_w, 200, 100, 100);
+            if let Some(desc) = app.data.split('\n').next() {
+                draw_text(fb, cx + 60, cy + 70, &desc, scr_w, 180, 200, 200);
+            }
+        }
+        AppId::AudioViz => {
+            // Espectroscopio de audio (barras FFT simuladas)
+            fb.fill_rect(cx, cy, 200, 120, 20, 25, 30);
+            draw_text(fb, cx + 4, cy + 4, "[MIC]", scr_w, 0, 200, 100);
+            let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let bars: [usize; 16] = core::array::from_fn(|i| {
+                let v = libm::sinf((tick as f32 * 0.02) + (i as f32 * 2.5)) * 0.5 + 0.5 + (i as f32 * 0.03);
+                (v.min(1.0).max(0.1) * 40.0) as usize
+            });
+            for (i, &h) in bars.iter().enumerate() {
+                fb.fill_rect(cx + 8 + i * 12, cy + 90usize.saturating_sub(h), 8, h, 0, 200, 100);
+            }
+            draw_text(fb, cx + 4, cy + 108, "[F11] Mute", scr_w, 200, 100, 100);
         }
         AppId::WasmSkill(_) | AppId::None => {}
     }
