@@ -479,3 +479,33 @@ kernel panic (qualquer causa)
 | `agents.rs` | 3b | HwDetectAgent + AutoLearnAgent |
 | `agent-core/src/lib.rs:285` | 3c | registry.run() → main loop |
 | `shutdown.rs` | — | Shutdown tracking + persist |
+| `cortex.rs` | 3c | generate_via_model() — **síncrono, bloqueante** |
+
+## 12. STUTTERING DA INFERÊNCIA — Problema Conhecido
+
+### O Problema
+O scheduler é **cooperativo round-robin**. `generate_via_model()` executa a inferência completa de forma **síncrona e bloqueante**. No QEMU, uma geração de 64 tokens leva ~60s — o sistema inteiro congela.
+
+### Impacto
+| Serviço | Efeito |
+|---------|--------|
+| NetAgent | Pacotes IP perdidos |
+| DisplayAgent | Tela congela |
+| HermesAgent | Sem resposta ao usuário |
+| InputAgent | Teclado não responde |
+| WifiAgent | Beacons 802.11 perdidos |
+
+### Solução Planejada: Inferência Fatiada (Tick-Sliced)
+```
+CortexAgent.tick():
+├── Estado "idle": aguarda LLM_REQUEST
+├── Estado "processing":
+│   ├── Executa 1 forward pass (N tokens) por tick
+│   ├── Retorna Pending → scheduler continua
+│   ├── Próximo tick: continua de onde parou
+│   └── Complete → publica LLM_RESPONSE
+└── Retorna Pending se idle
+```
+
+### Status
+Atualmente `generate_via_model()` é síncrono/bloqueante. A versão tick-sliced está pendente de implementação. Pós B-01, com rede funcional, o stuttering se torna mais crítico (perda de pacotes).
