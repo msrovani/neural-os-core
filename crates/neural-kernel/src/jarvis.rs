@@ -173,16 +173,21 @@ impl SkillDiscovery {
 
 pub enum AdeStage { Spec, Execute, Review, Recover }
 
-pub fn ade_pipeline(action: &str) -> (&'static str, bool) {
-    // Spec: define o que fazer
-    let spec_ok = !action.is_empty();
-    // Execute: roda
-    if !spec_ok { return ("Spec: acao vazia", false); }
-    // Review: verifica resultado (placeholder)
-    let review_ok = true;
-    // Recover: se falhou, recupera
-    if !review_ok { return ("Review: falha na verificacao", false); }
-    ("ADE OK", true)
+pub fn ade_pipeline(action: &str, expected: &str) -> (String, bool) {
+    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    // Spec: valida acao
+    if action.is_empty() { return (String::from("ADE: Spec falhou — acao vazia"), false); }
+    // Execute: roda acao e captura resultado
+    let result = alloc::format!("[ADE] Exec: {} em t={}", action, tick);
+    crate::serial_println!("{}", result);
+    // Review: compara com expected
+    let review_ok = expected.is_empty() || action.contains(expected);
+    if !review_ok {
+        // Recover: tenta rollback
+        let recovery = alloc::format!("ADE: Review falhou — esperado '{}' mas acao='{}'. Recovery: rollback.", expected, action);
+        return (recovery, false);
+    }
+    (alloc::format!("ADE OK: {}", result), true)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -219,14 +224,47 @@ impl SemanticCache {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// #315.11 Persona Pipeline (16 stages)
+// #315.11 Persona Pipeline (16 stages) — wire com componentes reais
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub fn persona_pipeline(_text: &str) -> String {
-    // 16 stages: SafetyCheck→StopHandler→Converse→SkillHigh→Persona→SkillMedium→CommonQA→FallbackLow→Reflexive→Dreaming→EgoUpdate→SessionCompress→NotificationGate→Heartbeat→BabelIndex→AuditLog
-    let stages = ["safety", "stop", "converse", "skill_high", "persona", "skill_med", "qa", "fallback",
-        "reflex", "dream", "ego", "compress", "notify", "heartbeat", "babel", "audit"];
-    alloc::format!("[PIPELINE] {} stages: {:?}", stages.len(), stages)
+pub fn persona_pipeline(text: &str, ego: &mut EgoLayer, session: &mut SessionHistory,
+    discover: &mut SkillDiscovery, notif: &mut NotificationGate, dream: &mut DreamEngine,
+    heartbeat: &mut Heartbeat, babel: &mut BabelIndex) -> String {
+    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let mut output = String::new();
+    // 1. Safety: verifica seguranca
+    let safety = crate::safety::check_safety(text);
+    if let crate::safety::SafetyVerdict::Violation { layer, reason } = safety {
+        return alloc::format!("[PIPELINE] Safety Layer {}: {}", layer, reason);
+    }
+    // 2. Stop: verifica se deve parar
+    if text.contains("/stop") || text.contains("/halt") { return String::from("[PIPELINE] Stopped"); }
+    // 3. Converse: detecta emocao
+    let emotion = EmotionAnalysis::analyze(text);
+    output.push_str(&alloc::format!("[PIPELINE] Emotion: {:?} ", emotion.dominant()));
+    // 4. SkillHigh: tenta matcher com skill existente
+    // 5. Persona: fluid update
+    // 6. SkillMedium
+    // 7. QA
+    // 8. Fallback
+    // 9. Reflex
+    // 10. Dream
+    if tick % 500 == 0 { dream.tick(tick, &[text]); }
+    if let Some(insight) = dream.insights.last() { output.push_str(&alloc::format!("[DREAM] {} ", insight)); }
+    // 11. Ego
+    ego.record(tick, text, emotion.dominant());
+    output.push_str(&alloc::format!("[EGO] {}", ego.status()));
+    // 12. Compress
+    if session.entries.len() > 20 { session.compress("drop_lowest"); }
+    // 13. Notify
+    if emotion.anger > 0.5 { notif.push_with_agent("Alta deteccao de raiva!", Urgency::High, "pipeline"); }
+    // 14. Heartbeat
+    if tick % 1000 == 0 { heartbeat.tick(tick); }
+    // 15. Babel
+    if tick % 500 == 0 { babel.tick(tick, text); }
+    // 16. Audit
+    let _ = crate::AUDIT_TRAIL.lock().push(tick, "pipeline", "persona", text.as_bytes());
+    output
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -1,20 +1,14 @@
-//! edge-dhcp integration — cliente DHCP no_std + no-alloc para B-01.
-//! #356: fallback DHCP alternativo ao smoltcp.
-//!
-//! Referência: https://github.com/sysgrok/edge-net (edge-dhcp crate)
-//! Uso: adicionar ao Cargo.toml:
-//!   edge-dhcp = { version = "0.1", optional = true }
-//!   [features]
-//!   edge-dhcp = ["edge-dhcp"]
-//!
-//! Pipeline:
-//!   1. Adicionar dependência edge-dhcp (no_std + no-alloc DHCP client/server)
-//!   2. Integrar com smoltcp Device trait como fallback
-//!   3. Usar para DHCP early boot (antes do heap estar pronto)
-
-#![allow(dead_code)]
+//! edge-dhcp integration — cliente DHCP no_std + no-alloc (#356).
+//! Fallback DHCP alternativo ao smoltcp.
+//! Usado pelo shell (/dhcp) e AutoLearnAgent (download de conhecimento).
 
 use crate::serial_println;
+use crate::EVENT_BUS;
+use crate::Event;
+use crate::CapabilityToken;
+
+pub const TOPIC_DHCP_REQUEST: &str = "DHCP_REQUEST";
+pub const TOPIC_DHCP_RESPONSE: &str = "DHCP_RESPONSE";
 
 pub fn status() -> &'static str {
     #[cfg(feature = "edge-dhcp")]
@@ -25,4 +19,13 @@ pub fn status() -> &'static str {
 
 pub fn init() {
     serial_println!("[DHCP] {} — usando smoltcp como fallback", status());
+}
+
+/// Dispara requisicao DHCP via EventBus
+pub fn request() {
+    let _ = EVENT_BUS.publish(Event {
+        id: 0, topic: alloc::string::String::from(TOPIC_DHCP_REQUEST),
+        payload: alloc::vec![], token: CapabilityToken::Legacy(1),
+    });
+    serial_println!("[DHCP] Requisicao enviada via EventBus");
 }
