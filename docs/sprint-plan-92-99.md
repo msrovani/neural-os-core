@@ -97,17 +97,20 @@
 | `audio/hda.rs` | Intel HDA driver stub — PCI scan + BAR mapping | 🟡 HW pendente |
 | `audio/usb.rs` | USB Audio Class stub — UAC isochronous | 🟡 HW pendente |
 
-## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC)
+## Sprint 94 — Bloco Vision: Camera + Display (~1500 LOC) ✅
 **IDEA_BANK:** #79-82  
 **Depende de:** Nada  
-**Foco:** USB camera, framebuffer rendering, tensor viz
+**Foco:** USB camera, framebuffer rendering, tensor viz  
+**Status:** ✅ **Completo.** VisionAgent + UvcDriverAgent + tensor viz + font rendering.
 
-| IDEA | Item | LOC |
-|---|---|---|
-| #79 | UEFI framebuffer renderização de fontes | 200 |
-| #80 | Font rendering para alta resolução | 200 |
-| #81 | VirtIO-GPU 2D/3D acelerado | 400 |
-| #82 | Tensor visualization no framebuffer | 300 |
+| IDEA | Item | LOC | Status |
+|---|---|---|---|
+| #79 | UEFI framebuffer renderização de fontes — `display/font.rs` | 200 | ✅ |
+| #80 | Font rendering para alta resolução — `display/ttf_engine.rs` | 200 | ✅ |
+| #81 | VirtIO-GPU 2D/3D acelerado — `virtio_gpu.rs` | 400 | ✅ |
+| #82 | Tensor visualization — `compositor.rs:render_tensor_viz()` | 300 | ✅ |
+| — | **VisionAgent** — processa frames camera, histograma, bordas, descreve cena | 100 | ✅ |
+| — | **UvcDriverAgent** — detecta xHCI, configura camera, publica CAMERA_FRAME | 80 | ✅ |
 
 ---
 

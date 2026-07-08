@@ -111,6 +111,8 @@ mod gpu;
 mod wifi_agent;
 mod generic_wifi;
 mod wifi_protocol;
+mod vision_agent;
+mod uvc_driver;
 mod hw_rng;
 mod wifi_msix;
 mod link_watcher;
@@ -690,6 +692,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::UsbDriverAgent));
     registry.register(Box::new(audio::hda::HdaAudioAgent::new()));
     registry.register(Box::new(audio::usb::UsbAudioAgent::new()));
+    registry.register(Box::new(uvc_driver::UvcDriverAgent::new()));
     registry.register(Box::new(agents::GpuDriverAgent));
     registry.register(Box::new(agents::FsBridgeAgent::new()));
     registry.register(Box::new(agents::HwDetectAgent));
@@ -737,6 +740,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     display::fb::fb_remap_uc();
     serial_println!("[BOOT] Registering DisplayAgent...");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
+    serial_println!("[BOOT] Registering VisionAgent...");
+    registry.register(Box::new(vision_agent::VisionAgent::new()));
     serial_println!("[BOOT] Registering JarvisAgent...");
     registry.register(Box::new(audio::jarvis::JarvisAgent::new()));
     serial_println!("[BOOT] Registering JarvisVoiceAgent...");
