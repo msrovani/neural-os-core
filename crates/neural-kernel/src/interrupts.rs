@@ -120,14 +120,14 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     let addr = x86_64::registers::control::Cr2::read();
     dump_exception("#PF", &f, Some(code.bits() as u64));
     serial_println!("[SECURITY] CR2={:#x} flags={:?}", addr, code);
-    // Tenta continuar — se o PF foi por MMIO nao mapeado,
-    // a instrucao que causou o PF sera reexecutada ao retornar
-    // Se persistir, o contador de PF eventualmente trava o sistema
+    // PF handler: SEM alloc, SEM EventBus (contexto de interrupcao)
+    // Tenta retornar (iret) — se o PF persistir, o contador eventualmente halt
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    if count > 10 {
-        serial_println!("[SECURITY] Page faults>10 — HALT");
-        loop { x86_64::instructions::hlt(); }
+    if count <= 10 {
+        return;
     }
+    serial_println!("[SECURITY] Page faults > 10 — HALT");
+    loop { x86_64::instructions::hlt(); }
 }
 
 // --------------------------------------------------------------------------
