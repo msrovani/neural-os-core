@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.97.0-rustcoder] — 2026-07-08 — 🦀 Sprint 97: RustCoder Expert + Trinity MoE
+
+### Sprint 97 — RustCoder Expert (~300 LOC, 3 arquivos alterados)
+- **Treino**: Expert Rust (hidden=128, 6 layers, 1.6M params) treinado com 41.200 amostras de código Rust na GTX 1050 (loss 0.34)
+- **tools/finetune_rust_llm.py**: Script de fine-tuning completo com export bitnet v2
+- **tools/rust_coder.bitnet**: Modelo exportado em 444 KB
+- **RUSTCODER_MODEL**: Nova static global em cortex.rs — `set_rustcoder_model()` + `generate_via_rustcoder()`
+- **Fast-path HermesAgent**: Trinity classifica "rust_coder" → geração direta pelo expert sem LLM principal
+- **Fallback silencioso**: Se RUSTCDR.BITNET não existir na FAT32, usa LLM principal normalmente
+- **Boot FAT32**: Kernel carrega RUSTCDR.BITNET da partição FAT32 durante boot
+- **build_image.py**: Copia rust_coder.bitnet → RUSTCDR.BITNET na imagem HW
+- **Aprendizado chave**: bitnet v2 (packed ternary) é o formato correto para load_model() do kernel
+
 ## [0.95.0-cog+v0.96.0-heal] — 2026-07-06 — 🧠🛡️ Sprints 95+96: Cognitive + Self-Heal
 
 ### Sprint 95 — Cognitive Engine (510+ LOC, 25 structs/funcs)

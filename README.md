@@ -1,4 +1,4 @@
-﻿# Neural OS Hermes v0.93.0 — AI-native Bare-metal Operating System 🏆
+﻿# Neural OS Hermes v0.97.0-rustcoder — AI-native Bare-metal Operating System 🏆
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
 
@@ -38,8 +38,8 @@
 
 | Métrica | Valor |
 |---------|-------|
-| Versão | v0.93.0-wasm |
-| Sprints completos | **93** (1-93) |
+| Versão | v0.97.0-rustcoder |
+| Sprints completos | **97** (1-97) |
 | Arquivos Rust | ~200 |
 | LOC total | ~42.000 |
 | Agentes | 248+ |
@@ -109,6 +109,7 @@ Panics são classificados, analisados e recuperados com ação sugerida pelo LLM
 | 92 | LAN + Dependências | ✅ |
 | 93 | WASM Runtime + IDE | ✅ |
 | **94+** | Voice, Vision, NPU, AIOS | 🟡 |
+| **97** | RustCoder Expert + Trinity MoE | ✅ |
 
 **Plano completo:** `docs/sprint-plan-92-99.md`
 

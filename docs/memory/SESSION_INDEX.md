@@ -11,6 +11,7 @@
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
 | 080 | 80 | 24 | AVX2 Debug + WHPX Detection | WHPX emula VEX como VM exits (2x+ lento). `has_avx2()` detecta hypervisor via CPUID. Row buffer substitui unpack_all (17MB→6.9KB). FFN gate+up = 52% do tempo. |
+| 082 | 97 | — | RustCoder Expert + Trinity MoE | Expert Rust treinado (hidden=128, 6L, 1.6M params) com 41.200 amostras na GTX 1050 (loss 0.34). RUSTCODER_MODEL global. Fast-path no HermesAgent. Loading da FAT32. |
 | 079 | 79 | 23 | LLM Infrastructure + Xuvisco | BitNet-b1.58 850M integrado. BPE tokenizer. QEMU loader a 4GB. Xuvisco fix: VGA sequencer I/O (0x3C4/0x3C5) ao invés de write a 0xB8000. **ATENÇÃO:** 0xB8000 não mapeado pelo bootloader UEFI/OVMF. |
 
 ## Sessões SMP + GPU Research (Sprint 81-83)

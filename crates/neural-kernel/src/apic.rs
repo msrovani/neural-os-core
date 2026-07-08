@@ -201,7 +201,7 @@ pub(crate) unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
     let l3_entry = &mut l4_table[l3_idx];
     if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
         // Allocate a page for L3 table
-        let new_frame = { let mut g = crate::memory::GLOBAL_ALLOCATOR.lock(); (*g).as_mut().unwrap().allocate_frame().unwrap() };
+        let new_frame = { let mut g = crate::memory::GLOBAL_ALLOCATOR.lock(); (*g).as_mut().expect("GLOBAL_ALLOCATOR not initialized in map_page_uc L3").allocate_frame().expect("Failed to allocate frame for L3 page table") };
         let new_virt = base + new_frame.start_address().as_u64();
         core::ptr::write_bytes(new_virt.as_mut_ptr::<u8>(), 0, 4096);
         l3_entry.set_addr(new_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
@@ -212,7 +212,7 @@ pub(crate) unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
     let l2_idx = page.p3_index();
     let l2_entry = &mut l3_table[l2_idx];
     if !l2_entry.flags().contains(PageTableFlags::PRESENT) {
-        let new_frame = { let mut g = crate::memory::GLOBAL_ALLOCATOR.lock(); (*g).as_mut().unwrap().allocate_frame().unwrap() };
+        let new_frame = { let mut g = crate::memory::GLOBAL_ALLOCATOR.lock(); (*g).as_mut().expect("GLOBAL_ALLOCATOR not initialized in map_page_uc L2").allocate_frame().expect("Failed to allocate frame for L2 page table") };
         let new_virt = base + new_frame.start_address().as_u64();
         core::ptr::write_bytes(new_virt.as_mut_ptr::<u8>(), 0, 4096);
         l2_entry.set_addr(new_frame.start_address(), PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);

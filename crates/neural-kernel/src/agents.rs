@@ -770,15 +770,30 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
-                    // Fast-path: TrinityRouter classifica sem LLM
+                    let rust_response = {
+                        let trinity_guard = TRINITY.lock();
+                        let trinity_expert = trinity_guard.classify_intent(msg);
+                        let expert_name = trinity_expert.name;
+                        drop(trinity_guard);
+                        if expert_name == "rust_coder" {
+                            serial_println!("[TRINITY] RustCoder: \"{}\"", msg);
+                            let r = crate::cortex::generate_via_rustcoder(&alloc::format!(
+                                "{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}\n{}\n", msg));
+                            if !r.starts_with("[RUSTCODER]") { Some(r) } else { None }
+                        } else { None }
+                    };
+                    if let Some(rust_gen) = rust_response {
+                        serial_println!("[RUSTCODER] Gerado: \"{}\"", rust_gen);
+                        alloc::format!("[RustCoder] {}", rust_gen)
+                    } else {
+                    // Fast-path: SpeechSynth
                     let trinity_guard = TRINITY.lock();
                     let trinity_expert = trinity_guard.classify_intent(msg);
                     let expert_name = trinity_expert.name;
                     drop(trinity_guard);
                     if expert_name == "speech_synth" {
                         serial_println!("[TRINITY] SpeechSynth: \"{}\"", msg);
-                        let response = alloc::format!("[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)", msg);
-                        response
+                        alloc::format!("[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)", msg)
                     } else {
                     let intent = self.cortex.think(msg);
                     let intent_name = intent.skill_name();
@@ -811,7 +826,7 @@ impl Agent for HermesAgent {
                     }
                 }
             }
-        };
+        }
     
 
             let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;

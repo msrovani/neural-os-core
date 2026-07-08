@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.95.0-cog+v0.96.0-heal 🧠🛡️
-#   SPRINTS 95-96 — Cognitive Engine + Self-Healing Avançado
+#   STATE — neural-os-core v0.97.0-rustcoder 🦀🧠
+#   SPRINT 97 — RustCoder Expert + Trinity MoE Inference
 #   165+ arquivos Rust, ~19.000 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
@@ -90,8 +90,9 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 | **92+** | 0.92.x+ | **36+** | AIOS Evolution | ~15000 | 🔴 |
 | **95** | 0.95.x | **40** | Cognitive Engine | ~510 | ✅ |
 | **96** | 0.96.x | **41** | Self-Healing | ~350 | ✅ |
+| **97** | 0.97.x | **42** | RustCoder Expert + Trinity MoE | ~300 | ✅ |
 
-**Total restante:** ~28.250 LOC (sprints 84-91) + ~15.000 LOC (sprint 92+, bloqueado B-01). Sprints 95-96 concluídos: ~860 LOC.
+**Total restante:** ~28.250 LOC (sprints 84-91) + ~15.000 LOC (sprint 92+, bloqueado B-01). Sprints 95-97 concluídos: ~1160 LOC.
 
 **Ver também:** `docs/sprint-plan-84-95.md` para detalhes de cada sprint com items do IDEA_BANK.
 
@@ -167,6 +168,15 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 
 ### ✅ Sprint 96 — Self-Healing (completo)
 - `#226-227, #265-267, M1-M29` — TeamMemory, VectorFs, OverlayFS, ZeroCopySfs, SkillModule, FailureTaxonomy (5 classes), ExceptionSelfHeal, CorrectivePrompting, Verifier, EventLog, BudgetedRecovery, SilentFailureDetector, FailurePrediction, NotificationGate. ~350 LOC.
+
+### ✅ Sprint 97 — RustCoder Expert + Trinity MoE (completo)
+- **Treino**: 41.200 amostras Rust (Rust-Coder 10.800 + Code-Suite 30.400), hidden=128, 6 layers, loss 0.34, GTX 1050
+- **Modelo**: `tools/rust_coder.bitnet` (444 KB, bitnet v2, 1.6M params)
+- **RUSTCODER_MODEL**: static global em cortex.rs — `set_rustcoder_model()` + `generate_via_rustcoder()`
+- **Fast-path HermesAgent**: Trinity classifica "rust_coder" → generate_via_rustcoder → resposta direta
+- **Fallback silencioso**: se RUSTCDR.BITNET não existe na FAT32, cai no LLM principal
+- **build_image.py**: copia rust_coder.bitnet → RUSTCDR.BITNET na partição FAT32
+- **Aprendizado**: export bitnet v2 compatível com kernel (não usar v4 com tensores nomeados)
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
 - RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado

@@ -103,8 +103,8 @@ impl Device for NetPhy {
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
-        if data.is_some() {
-            unsafe { crate::serial_println!("[NET-RX] {} bytes", data.as_ref().unwrap().len()); }
+        if let Some(ref d) = data {
+            unsafe { crate::serial_println!("[NET-RX] {} bytes", d.len()); }
         }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }

@@ -1,39 +1,51 @@
-# SESSION_082 — Sprint 84: GPU Foundations (BAR mapping + Job Ring + VRAM Buddy + Secure Boot)
+# SESSION 082 — RustCoder Expert: Treino + Integração Trinity MoE
 
-**Data:** 2026-07-06 | **Sprint:** 84 — Bloco 21c | **v0.84.0-design**
+**Data:** 2026-07-08
+**Sprint:** 97
+**Objetivo:** Treinar modelo expert Rust (hidden=128, 6 layers) com 60.8K amostras de código Rust e integrar como expert carregável no TrinityRouter.
 
-## Objective
-Implementar 4 itens do Bloco 21c (GPU Foundations):
-1. #326 GPU BAR0/BAR1 mapping UC ✅
-2. #327 GPU doorbell + SPSC job ring ✅
-3. #328 VRAM buddy allocator ✅
-4. #352 Secure Boot GPU (ACR/PSP/GuC) ✅
+## Resumo
+- **41.200 amostras** carregadas (Rust-Coder: 10.800 + Rust-Code-Suite: 30.400)
+- **1.599.872 parâmetros**, hidden=128, 6 layers, 8 heads, FFN=512, vocab=99
+- **Loss 1.40 → 0.34** em 10 épocas na GTX 1050
+- Modelo exportado como `tools/rust_coder.bitnet` (444 KB, formato bitnet v2)
 
-## Created Files
-- **`gpu/ring.rs`** (+135 LOC) — SPSC job ring genérico: `GpuJobRing`, `GpuJob`, doorbells para Intel/NVIDIA/AMD/VirtIO, push/ring_doorbell/poll_head/submit_and_wait.
-- **`gpu/firmware.rs`** (+95 LOC) — Secure boot GPU: `SecureBootResult`, `FirmwareBlob`, `nvidia_acr_load()`, `amd_psp_load()`, `intel_guc_load()`, `secure_boot_gpu()`.
+## Dificuldades
 
-## Modified Files
-- **`gpu/vram.rs`** — Upgrade para buddy allocator power-of-2 (4KB-4GB). Substitui first-fit BTreeMap. `VramBuddy` struct com splitting/merging. `vram_alloc()`/`vram_free()`/`vram_status()` mantidos.
-- **`gpu/backend.rs`** — `init_backend()` expandido: BAR UC mapping → validate → job ring → secure boot → vendor init.
-- **`gpu/mod.rs`** — `pub mod ring` + `pub mod firmware`.
-- **`memory_agent.rs`** — `VRAM_STATE` → `VRAM_BUDLY`.
+### 1. CUDA + Python 3.14 incompatível
+PyTorch não tem wheels oficiais para Python 3.14 (muito recente). Solução: usar nightly `torch-2.9.0+cu126` que tem build cp314. `CUDA_VISIBLE_DEVICES='0'` necessário explicitamente.
 
-## Test Results
-| Platform | Result | Key Logs |
-|----------|--------|----------|
-| QEMU -smp 2 WHPX | ✅ OK | BAR0 UC, SECURE-BOOT (no firmware), CPU fallback |
-| VirtualBox 1 CPU | ✅ OK | Hermes Chat, GPU-BACKEND, no panic |
+### 2. Compute Capability GTX 1050 (sm_61)
+Nightly `cu128` dropou suporte para sm_61. `torch-2.9.0+cu126` ainda suporta Pascal.
 
-## Total LOC (Sprint 84)
-| Item | LOC | Status |
-|------|-----|--------|
-| #326 GPU BAR0/BAR1 mapping UC | ~300 | ✅ |
-| #327 GPU doorbell + SPSC job ring | ~135 | ✅ |
-| #328 VRAM buddy allocator | ~150 | ✅ |
-| #352 Secure Boot GPU | ~95 | ✅ |
-| **Total** | **~680** | ✅ |
+### 3. Export format incompatível
+Primeira versão do script exportava v4 com tensores nomeados — formato incompatível com o kernel. Solução: reescrever export para v2 puro (igual train_hw_model.py). 444 KB.
+
+### 4. Mask device no forward pass
+`torch.triu` criava mask na CPU, mas tensores estavam na CUDA → RuntimeError. Solução: `device=x.device` no mask creation.
+
+### 5. Dataset encoding
+Arquivo JSONL tem caracteres não-UTF-8. Solução: `open(..., encoding='utf-8', errors='replace')`.
+
+## Decisões Arquiteturais
+
+### RUSTCODER_MODEL global
+Nova static `RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>>` em cortex.rs — separada do CURRENT_MODEL principal. Expert não substitui o LLM geral, apenas complementa para consultas de código Rust.
+
+### Fast-path no HermesAgent
+Quando Trinity classifica como "rust_coder", HermesAgent tenta `generate_via_rustcoder()` primeiro. Se o modelo não estiver carregado (None), cai no fluxo normal do cortex.think().
+
+### Loading da FAT32
+Kernel lê `RUSTCDR.BITNET` da partição FAT32 durante boot, logo após carregar BITNET.BIN. Fallback silencioso se arquivo não existir.
+
+## Arquivos Alterados
+- `cortex.rs`: RUSTCODER_MODEL + set/generate functions
+- `agents.rs`: Fast-path RustCoder no HermesAgent
+- `main.rs`: Loading RUSTCDR.BITNET da FAT32
+- `build_image.py`: Copia rust_coder.bitnet → RUSTCDR.BITNET
+- `finetune_rust_llm.py`: Script de treino completo (reescrito do zero)
 
 ## Próximos Passos
-- Sprint 85 (Bloco 21d): GPU Decode — Agent.xpu split, matmul ternário, KV cache DMA, XQueue
-- Ou B-01 (RX fix) em HW real
+- [ ] Treino completo com 60.800 amostras (hoje 41.200 — dataset de 50K não carregou completamente)
+- [ ] Adicionar mais experts: disk_diag, security, hw_identify com modelos especializados
+- [ ] Trinity com router_weight real (ML-based routing em vez de keyword matching)
