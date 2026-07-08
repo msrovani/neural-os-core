@@ -205,6 +205,11 @@ impl GpuDevice {
         let io = Regs::new(io_base, mmio_base, is_mmio);
 
         unsafe {
+            // Testa acesso MMIO antes de usar — evita PF que trava boot
+            let test_ptr = io.mmio_ptr(io.ro.st) as *mut u32;
+            let test_val = core::ptr::read_volatile(test_ptr);
+            serial_println!("[VGPU] MMIO test read={:#x}", test_val);
+
             // Reset
             io.w8(io.ro.st, 0);
             for _ in 0..1000 { core::hint::spin_loop(); if io.r8(io.ro.st) == 0 { break; } }

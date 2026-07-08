@@ -43,6 +43,10 @@ impl Graph {
 
     pub fn set_tick(&mut self, tick: u64) { self.tick = tick; }
 
+    pub fn get(&self, label: &str) -> Option<&KNode> {
+        self.label_map.get(label).and_then(|&id| self.nodes.get(id))
+    }
+
     pub fn add_node(&mut self, kind: NodeKind, label: &str) -> usize {
         if let Some(&id) = self.label_map.get(label) { return id; }
         let id = self.nodes.len();
