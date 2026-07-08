@@ -1326,6 +1326,7 @@ impl AutoLearnAgent {
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {
         let fname = alloc::format!("{}.BIN", topic.to_uppercase());
+        // Tenta FAT32 primeiro
         unsafe {
             let ata = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata {
@@ -1334,14 +1335,34 @@ impl AutoLearnAgent {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         if let Some(data) = fs.read_file(&fname) {
-                            serial_println!("[TRINITY-Learn] {} carregado: {} bytes", fname, data.len());
+                            serial_println!("[TRINITY-Learn] {} carregado via FAT32: {} bytes", fname, data.len());
                             return data;
                         }
                     }
                 }
             }
         }
+        // Tenta rede (HTTP GET de repositorio online) se DHCP estiver ativo
+        if let Some(data) = self.download_knowledge(topic) {
+            return data;
+        }
         Vec::new()
+    }
+
+    fn download_knowledge(&self, topic: &str) -> Option<Vec<u8>> {
+        // Usa browser_agent ou http_get para baixar de repositorio online
+        let url = alloc::format!("http://repository.neuralos.local/{}.BIN", topic);
+        serial_println!("[TRINITY-Learn] Tentando download: {}", url);
+        // Tenta via browser_agent (que usa smoltcp)
+        let _ = crate::EVENT_BUS.publish(Event {
+            id: 0, topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
+            payload: url.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
+        });
+        // Por enquanto, http_get retorna None ate B-01 ser resolvido
+        // Quando DHCP funcionar, baixara automaticamente de:
+        // huggingface.co/datasets/neural-os/hardware-moe-dataset/resolve/main/
+        serial_println!("[TRINITY-Learn] Rede indisponivel (B-01). Coloque {} na FAT32.", url);
+        None
     }
 }
 

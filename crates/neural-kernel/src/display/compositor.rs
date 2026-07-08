@@ -1,5 +1,29 @@
-//! JARVIS Desktop — compositor multi-window + app icons + WASM skill launcher.
+//! JARVIS Desktop — compositor multi-window + app icons + WASM skill launcher + LLM icons.
 //! Port da UI do SmileyOS + JARVIS .NET MAUI.
+
+/// Gera um icone (padrao 8x8) via IA a partir de uma descricao.
+/// Usa o HWEXPERT_MODEL para sintetizar um pequeno bitmap.
+pub fn generate_llm_icon(description: &str) -> [u8; 64] {
+    let mut icon = [0u8; 64];
+    if let Some(ref model) = *crate::cortex::HWEXPERT_MODEL.lock() {
+        let prompt = alloc::format!("gere icone 8x8 para: {}", description);
+        let resp = model.generate(&prompt);
+        // Parseia resposta como numeros 0-255
+        let nums: Vec<u8> = resp.bytes().filter(|b| b.is_ascii_digit()).collect();
+        for (i, &b) in nums.iter().enumerate().take(64) {
+            icon[i] = b;
+        }
+    }
+    // Se falhou, gera padrao geometrico baseado no hash da descricao
+    if icon.iter().all(|&b| b == 0) {
+        let hash = description.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
+        for i in 0..64 {
+            let bit = (hash >> (i % 64)) & 1;
+            icon[i] = if bit == 1 { 200 } else { 30 };
+        }
+    }
+    icon
+}
 
 use alloc::vec::Vec;
 use alloc::string::String;
@@ -56,11 +80,9 @@ impl JarvisDesktop {
         self.apps.push(AppWindow { id, title: String::from(title), x: ax, y: ay, w: aw, h: ah, visible: false, data: String::new() });
     }
 
-    /// Cria um novo ícone WASM no desktop. Quando clicado, roda o runtime.
     pub fn publish_wasm_skill(&mut self, name: &str, description: &str) {
         let idx = self.wasm_skills.len();
         self.wasm_skills.push(WasmIcon { name: String::from(name), description: String::from(description), idx });
-        // Cria uma janela de app para o WASM skill
         let id = AppId::WasmSkill(idx);
         let (aw, ah) = (self.w * 3 / 5, self.h * 2 / 5);
         self.apps.push(AppWindow { id, title: alloc::format!("⚡ {}", name), x: 60, y: 60, w: aw, h: ah, visible: false, data: String::new() });
@@ -68,6 +90,55 @@ impl JarvisDesktop {
 
     pub fn toggle_app(&mut self, id: AppId) {
         if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) { app.visible = !app.visible; self.active = if app.visible { id } else { AppId::None }; }
+    }
+
+    /// Arrasta janela: atualiza posicao se arrastando pela title bar
+    pub fn drag_window(&mut self, id: AppId, dx: isize, dy: isize) {
+        if let Some(app) = self.apps.iter_mut().find(|a| a.id == id && a.visible) {
+            let nx = (app.x as isize + dx).max(0) as usize;
+            let ny = (app.y as isize + dy).max(28) as usize; // nao encobre status bar
+            app.x = nx.min(self.w.saturating_sub(100));
+            app.y = ny.min(self.h.saturating_sub(100));
+        }
+    }
+
+    /// Redimensiona janela: ajusta tamanho a partir do canto inferior direito
+    pub fn resize_window(&mut self, id: AppId, dw: isize, dh: isize) {
+        if let Some(app) = self.apps.iter_mut().find(|a| a.id == id && a.visible) {
+            let nw = (app.w as isize + dw).max(160) as usize;
+            let nh = (app.h as isize + dh).max(80) as usize;
+            app.w = nw.min(self.w - app.x);
+            app.h = nh.min(self.h - app.y);
+        }
+    }
+
+    /// Fecha janela (toggle off)
+    pub fn close_window(&mut self, id: AppId) {
+        if let Some(app) = self.apps.iter_mut().find(|a| a.id == id) {
+            app.visible = false;
+            self.active = AppId::None;
+        }
+    }
+
+    /// Dock: retorna lista de apps visiveis para a dock bar
+    pub fn dock_apps(&self) -> Vec<(AppId, &str)> {
+        let mut v = Vec::new();
+        for app in &self.apps {
+            if app.visible {
+                let name = match app.id {
+                    AppId::HermesChat => "Chat",
+                    AppId::Settings => "Settings",
+                    AppId::Power => "Power",
+                    AppId::Ide => "IDE",
+                    AppId::Camera => "Camera",
+                    AppId::AudioViz => "Audio",
+                    AppId::WasmSkill(_) => "WASM",
+                    AppId::None => "",
+                };
+                v.push((app.id, name));
+            }
+        }
+        v
     }
 
     pub fn render(&mut self, tick: u64) {
@@ -92,10 +163,39 @@ impl JarvisDesktop {
         // App windows
         for app in &self.apps {
             if !app.visible { continue; }
+            // Borda da janela
+            self.fb.fill_rect(app.x.saturating_sub(1), app.y.saturating_sub(1), app.w + 2, app.h + 2, 40, 50, 65);
             self.fb.fill_rect(app.x, app.y, app.w, app.h, 15, 18, 25);
+            // Title bar
             self.fb.fill_rect(app.x, app.y, app.w, 24, 30, 40, 55);
             draw_text(&mut self.fb, app.x + 6, app.y + 4, &app.title, self.w, 200, 210, 230);
+            // Close button [X]
+            self.fb.fill_rect(app.x + app.w - 20, app.y + 3, 16, 16, 200, 50, 50);
+            draw_text(&mut self.fb, app.x + app.w - 18, app.y + 4, "X", self.w, 255, 255, 255);
+            // Resize handle (canto inferior direito)
+            self.fb.fill_rect(app.x + app.w - 10, app.y + app.h - 10, 10, 10, 60, 70, 85);
             render_app_content(&mut self.fb, app, self.w, self.h);
+        }
+
+        // Dock bar inferior
+        let dock_y = h.saturating_sub(36);
+        self.fb.fill_rect(0, dock_y, w, 36, 20, 25, 35);
+        let mut dx = 10;
+        for app in &self.apps {
+            if !app.visible { continue; }
+            let name = match app.id {
+                AppId::HermesChat => "Chat",
+                AppId::Settings => "Set",
+                AppId::Power => "Pwr",
+                AppId::Ide => "IDE",
+                AppId::Camera => "Cam",
+                AppId::AudioViz => "Aud",
+                AppId::WasmSkill(_) => "Sk",
+                AppId::None => "",
+            };
+            self.fb.fill_rect(dx, dock_y + 3, 60, 30, 40, 55, 75);
+            draw_text(&mut self.fb, dx + 6, dock_y + 8, name, self.w, 200, 210, 230);
+            dx += 66;
         }
 
         // JARVIS avatar

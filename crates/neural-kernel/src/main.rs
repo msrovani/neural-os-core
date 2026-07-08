@@ -283,6 +283,7 @@ mod hub;
 mod elf_loader;
 
 mod wasm_rt;
+mod wasm_exec;
 
 mod cognitive;
 
