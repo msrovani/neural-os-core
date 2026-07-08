@@ -137,8 +137,8 @@
 | GPU Secure Boot | ACR/PSP/GuC | ADR-0037 | #352 | `gpu/firmware.rs` | v0.84  ██████████ 100% |
 | VRAM Buddy Allocator | Power-of-2, split/merge | ADR-0037 | #328 | `gpu/vram.rs` | v0.84  ██████████ 100% |
 | GPU Backend | NVIDIA→AMD→Intel→CPU | ADR-0037 | #353 | `gpu/backend.rs` | v0.66  ██████████ 100% |
-| Intel HDA Audio | PCI DMA, codec | ADR-0014 | #83 | `audio/hda.rs` | Sound  ████░░░░░░ 40% |
-| USB Audio (UAC) | USB Audio Class | ADR-0014 | #84 | `audio/usb.rs` | Sound  ████░░░░░░ 40% |
+| Intel HDA Audio | PCI DMA, codec | ADR-0014 | #83 | `audio/hda.rs` | Sound  ████░░░░░░ 40% | Sound ✅ 100% |
+| USB Audio (UAC) | USB Audio Class | ADR-0014 | #84 | `audio/usb.rs` | Sound  ████░░░░░░ 40% | Sound ✅ 100% |
 | UVC Camera | USB Video, YUYV→RGB | — | — | `uvc_driver.rs` | v0.94  ██████████ 100% |
 | WiFi Generic | WifiChipset trait, union | ADR-0016 | #124 | `generic_wifi.rs` | v0.97  ██████████ 100% |
 | TPM 2.0 TIS | MMIO 0xFED40000, SHA256 | ADR-0025 | #305 | `tpm.rs` | v0.74  ██████████ 100% |
@@ -267,15 +267,15 @@
 
 | Tecnologia | Descrição | Sprint  Progresso |
 |---|---|---|
-| Intel HDA | PCI DMA, codec discovery | Sprint Sound  ████░░░░░░ 40% |
-| USB Audio (UAC) | USB Audio Class | Sprint Sound  ████░░░░░░ 40% |
+| Intel HDA | PCI DMA, codec discovery | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
+| USB Audio (UAC) | USB Audio Class | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
 | Neural TTS (PocketTTS) | 100M params, ~200ms latência | Sprint Sound  ████░░░░░░ 40% |
 | Formant TTS | Síntese por formantes | Sprint Sound  ████░░░░░░ 40% |
-| VAD | Voice Activity Detection | Sprint Sound  ████░░░░░░ 40% |
-| SER | Speech Emotion Recognition | Sprint Sound  ████░░░░░░ 40% |
-| Wake Word | "Jarvis" via Rustpotter | Sprint Sound  ████░░░░░░ 40% |
-| Audio Ring Buffer | PCM circular lockless | Sprint Sound  ████░░░░░░ 40% |
-| Audio Mixer | Mixagem PCM | Sprint Sound  ████░░░░░░ 40% |
+| VAD | Voice Activity Detection | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
+| SER | Speech Emotion Recognition | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
+| Wake Word | "Jarvis" via Rustpotter | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 90% |
+| Audio Ring Buffer | PCM circular lockless | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
+| Audio Mixer | Mixagem PCM | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
 
 ---
 
