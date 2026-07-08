@@ -311,7 +311,15 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             |(0x14E4,0x4488)|(0x14E4,0x4425) => (BROADCOM_MAP, "Broadcom WiFi"),
             // Ethernet fallback
             (_, _) if is_ethernet(vid, did) => (ETH_FALLBACK_MAP, "Ethernet"),
-            _ => return Err("nao suportado")
+            _ => {
+                // Tenta sintese via IA se mapa fixo nao existe
+                let hw_map = crate::cortex::generate_register_map(vid, did);
+                if let Some(ai_map) = hw_map {
+                    (ai_map, "Sintetizado-IA")
+                } else {
+                    return Err("nao suportado")
+                }
+            }
         };
         let engine = AgnosticWifiEngine::new(bar, map);
         let r = match name {
@@ -324,6 +332,9 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             "Broadcom WiFi" => { (*ptr).broadcom = ManuallyDrop::new(BroadcomBcm4360(engine));
                 *active = Some(&mut *(*ptr).broadcom as &mut dyn WifiChipset); }
             "Ethernet" => { (*ptr).ethernet = ManuallyDrop::new(FallbackEthernet(engine));
+                *active = Some(&mut *(*ptr).ethernet as &mut dyn WifiChipset); }
+            "Sintetizado-IA" => {
+                (*ptr).ethernet = ManuallyDrop::new(FallbackEthernet(engine));
                 *active = Some(&mut *(*ptr).ethernet as &mut dyn WifiChipset); }
             _ => return Err("nome desconhecido"),
         };

@@ -1209,6 +1209,93 @@ pub fn generate_via_model(prompt: &str) -> String {
     }
 }
 
+/// Sintetiza um HardwareRegisterMap para um dispositivo PCI.
+/// Estrategia hierarquica com 3 niveis:
+///   1. Tenta mapa direto por HWID (tabela conhecida)
+///   2. Usa IA para identificar familia do chip e aplicar mapa correspondente
+///   3. Heuristica por vendor (fallback)
+pub fn generate_register_map(vid: u16, did: u16) -> Option<crate::generic_wifi::HardwareRegisterMap> {
+    use crate::generic_wifi::HardwareRegisterMap as Hm;
+
+    // Nivel 1: mapa direto por HWID (da tabela conhecida)
+    let direct = match (vid, did) {
+        // Intel WiFi
+        (0x8086, 0x08B1)|(0x8086,0x08B2)|(0x8086,0x24F3)|(0x8086,0x24F4)
+        |(0x8086,0x24F5)|(0x8086,0x24F6)|(0x8086,0x24FD)|(0x8086,0x2526)
+        |(0x8086,0x2527)|(0x8086,0x2723)|(0x8086,0x2725)|(0x8086,0x2726)
+        |(0x8086,0x3165)|(0x8086,0x3166)|(0x8086,0x06F0)|(0x8086,0x02F0)
+            => Some(Hm { tx_ring_low:0x1000, rx_ring_low:0x1004, rx_control:0x0008,
+                        doorbell_tx:0x2000, doorbell_rx:0x2004, cmd_start_rx:0x0001,
+                        ring_size:64, rx_buf_len:2048 }),
+        // Realtek WiFi
+        (0x0BDA,_)|(0x10EC,0x8176)|(0x10EC,0x8179)|(0x10EC,0x8812)
+            => Some(Hm { tx_ring_low:0x00A0, rx_ring_low:0x00A4, rx_control:0x002C,
+                        doorbell_tx:0x00D0, doorbell_rx:0x00D4, cmd_start_rx:0x8002,
+                        ring_size:16, rx_buf_len:2048 }),
+        // Atheros/Qualcomm WiFi
+        (0x168C,_) => Some(Hm { tx_ring_low:0x0800, rx_ring_low:0x0804, rx_control:0x0010,
+                                doorbell_tx:0x0C00, doorbell_rx:0x0C04, cmd_start_rx:0x0001,
+                                ring_size:32, rx_buf_len:2048 }),
+        // Broadcom WiFi
+        (0x14E4,_) => Some(Hm { tx_ring_low:0x0500, rx_ring_low:0x0504, rx_control:0x0020,
+                                doorbell_tx:0x0600, doorbell_rx:0x0604, cmd_start_rx:0x0100,
+                                ring_size:32, rx_buf_len:2048 }),
+        _ => None,
+    };
+    if let Some(m) = direct { return Some(m); }
+
+    // Nivel 2: IA identifica familia. HWExpert model classifica o chip.
+    if let Some(ref model) = *HWEXPERT_MODEL.lock() {
+        let hwid = alloc::format!("PCI\\VEN_{:04X}&DEV_{:04X}", vid, did);
+        let resp = model.generate(&alloc::format!(
+            "classifique {} em: IntelWiFi RealtekWiFi AtherosWiFi BroadcomWiFi Otro", hwid));
+        let lower = resp.to_lowercase();
+        let family_map = if lower.contains("intel") {
+            Some(Hm { tx_ring_low:0x1000, rx_ring_low:0x1004, rx_control:0x0008,
+                      doorbell_tx:0x2000, doorbell_rx:0x2004, cmd_start_rx:0x0001,
+                      ring_size:64, rx_buf_len:2048 })
+        } else if lower.contains("realtek") {
+            Some(Hm { tx_ring_low:0x00A0, rx_ring_low:0x00A4, rx_control:0x002C,
+                      doorbell_tx:0x00D0, doorbell_rx:0x00D4, cmd_start_rx:0x8002,
+                      ring_size:16, rx_buf_len:2048 })
+        } else if lower.contains("atheros") || lower.contains("qualcomm") {
+            Some(Hm { tx_ring_low:0x0800, rx_ring_low:0x0804, rx_control:0x0010,
+                      doorbell_tx:0x0C00, doorbell_rx:0x0C04, cmd_start_rx:0x0001,
+                      ring_size:32, rx_buf_len:2048 })
+        } else if lower.contains("broadcom") {
+            Some(Hm { tx_ring_low:0x0500, rx_ring_low:0x0504, rx_control:0x0020,
+                      doorbell_tx:0x0600, doorbell_rx:0x0604, cmd_start_rx:0x0100,
+                      ring_size:32, rx_buf_len:2048 })
+        } else { None };
+        if let Some(m) = family_map {
+            crate::serial_println!("[AI-MAP] {} classificado como {}, mapa aplicado", hwid, lower.split_whitespace().next().unwrap_or("?"));
+            return Some(m);
+        }
+    }
+
+    // Nivel 3: heuristica por vendor ID
+    let vendor_map = match vid {
+        0x8086 => Some(Hm { tx_ring_low:0x1000, rx_ring_low:0x1004, rx_control:0x0008,
+                            doorbell_tx:0x2000, doorbell_rx:0x2004, cmd_start_rx:0x0001,
+                            ring_size:32, rx_buf_len:2048 }),
+        0x10EC|0x0BDA => Some(Hm { tx_ring_low:0x00A0, rx_ring_low:0x00A4, rx_control:0x002C,
+                                    doorbell_tx:0x00D0, doorbell_rx:0x00D4, cmd_start_rx:0x8002,
+                                    ring_size:16, rx_buf_len:2048 }),
+        0x168C => Some(Hm { tx_ring_low:0x0800, rx_ring_low:0x0804, rx_control:0x0010,
+                            doorbell_tx:0x0C00, doorbell_rx:0x0C04, cmd_start_rx:0x0001,
+                            ring_size:32, rx_buf_len:2048 }),
+        0x14E4 => Some(Hm { tx_ring_low:0x0500, rx_ring_low:0x0504, rx_control:0x0020,
+                            doorbell_tx:0x0600, doorbell_rx:0x0604, cmd_start_rx:0x0100,
+                            ring_size:32, rx_buf_len:2048 }),
+        _ => None,
+    };
+    if let Some(m) = vendor_map {
+        crate::serial_println!("[AI-MAP] Heuristica vendor {:#06x}: mapa generico aplicado", vid);
+        return Some(m);
+    }
+    None
+}
+
 pub fn generate_via_rustcoder(prompt: &str) -> String {
     let guard = RUSTCODER_MODEL.lock();
     match guard.as_ref() {
