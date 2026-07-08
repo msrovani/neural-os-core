@@ -156,7 +156,18 @@ Após cada rodada de tarefas com sucesso:
 - **Zero-warning policy is NOT a goal.** These will resolve naturally when downstream consumers are implemented. Suppressing them with `#[allow(dead_code)]` would hide useful reminders of what needs wiring.
 - **`#[allow(dead_code)]` is used only when Rust would warn on inherently unused statics** (e.g., `AP_ONLINE`, `CPU_TYPE_E_CORE`, `ap_entry_count()`) to avoid noise without suppressing legitimate warnings.
 
-### Histórico de Sprints (detalhes em docs/memory/SESSION_*.md)
+### Manutenção do Catálogo de Tecnologias
+# ════════════════════════════════════════════════════════
+# docs/TECNOLOGIAS.md cataloga TODAS as tecnologias do sistema.
+# Regras de atualização:
+# 1. SEMPRE que uma tecnologia for criada, adicione uma linha no TECNOLOGIAS.md
+# 2. Quando uma tecnologia avançar (ex: 🟡→✅), atualize a barra de progresso
+# 3. A barra de progresso usa heurística automática via tools/update_tecnologias.py
+# 4. Rode periodicamente: python tools/update_tecnologias.py
+# 5. Toda tecnologia deve ter: ADR, IDEA_ID (se existir), arquivo fonte, sprint
+# 6. Ao final de cada sessão, verifique TECNOLOGIAS.md está atualizado
+
+# Histórico de Sprints (detalhes em docs/memory/SESSION_*.md)
 Para sessões de debug, descobertas e correções detalhadas, consulte:
 - `docs/memory/SESSION_INDEX.md` — Índice de 42 sessões + lições críticas
 - `docs/memory/SESSION_NNN.md` — Sessão específica por número**
