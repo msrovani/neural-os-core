@@ -1085,7 +1085,8 @@ impl Agent for BootTrustAgent {
     }
 }
 
-/// HwDetectAgent — HwIdentifySkill scan + LLM query
+/// HwDetectAgent — HwIdentifySkill scan + IA device tree + register map synthesis.
+/// Salto 3: PCI scan → HWExpert identifica → gera mapa de registradores → LLM tree.
 pub struct HwDetectAgent;
 
 const HWDETECT_MANIFEST: AgentManifest = AgentManifest {
@@ -1190,11 +1191,50 @@ impl Agent for HwSpecialistAgent {
 impl Agent for HwDetectAgent {
     fn manifest(&self) -> &AgentManifest { &HWDETECT_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        let reg = crate::SKILL_REGISTRY.lock();
-        if let Ok(output) = reg.execute_skill_unchecked("hw_identify", &[]) {
-            let text = core::str::from_utf8(&output).unwrap_or("(error)");
-            serial_println!("[HW-SCAN] Dispositivos detectados:\n{}", text);
+        // Fase 1: PCI scan usando HwRegistry
+        let mut hw = crate::hw_agents::HwRegistry::new();
+        unsafe { hw.detect_all(); }
+
+        // Fase 2: Para cada dispositivo, tenta identificar com IA e gerar mapa
+        let mut device_tree = alloc::string::String::new();
+        device_tree.push_str("Dispositivos detectados:\n");
+        for agent in &hw.agents {
+            // Extrai vendor:device do device_id
+            let parts: Vec<&str> = agent.device_id.split(':').collect();
+            let dev_line = alloc::format!("  {} — {}\n", agent.device_id, agent.description);
+            device_tree.push_str(&dev_line);
+
+            if parts.len() == 2 {
+                if let (Ok(vid), Ok(did)) = (u16::from_str_radix(parts[0], 16), u16::from_str_radix(parts[1], 16)) {
+                    // Tenta identificar com IA via HWExpert
+                    let ai_name = crate::cortex::generate_via_hwexpert(
+                        &alloc::format!("identifique PCI\\VEN_{:04X}&DEV_{:04X}", vid, did));
+                    if !ai_name.starts_with("[HWEXPERT]") {
+                        // IA identificou! Usa o nome real.
+                        device_tree.push_str(&alloc::format!("    → IA: {}\n", ai_name));
+                    }
+
+                    // Tenta gerar mapa de registradores (para WiFi/network)
+                    if agent.class == 0x02 || agent.class == 0x0D {
+                        if let Some(map) = crate::cortex::generate_register_map(vid, did) {
+                            device_tree.push_str(&alloc::format!(
+                                "    → RegMap: tx={:#x} rx={:#x} doorbell={:#x}/{:x} ring={}\n",
+                                map.tx_ring_low, map.rx_ring_low,
+                                map.doorbell_tx, map.doorbell_rx, map.ring_size));
+                        }
+                    }
+                }
+            }
         }
+
+        serial_println!("[HW-AI] Arvore de dispositivos:\n{}", device_tree);
+
+        // Fase 3: Publica para o LLM como contexto enriquecido
+        let _ = EVENT_BUS.publish(Event {
+            id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
+            payload: device_tree.into_bytes(), token: CapabilityToken::Legacy(1),
+        });
+
         AgentTickResult::Done
     }
 }
