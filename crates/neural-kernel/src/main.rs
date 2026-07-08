@@ -657,10 +657,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    // GPU: detecta hardware e inicializa backend
+    // GPU: detecta hardware, separa display/compute, inicializa backend
     unsafe {
         let gpus = crate::gpu::detect::detect_all();
         if !gpus.is_empty() {
+            // Separa iGPU (display) de dGPU (compute) para qualquer combinacao
+            let plan = crate::gpu::display_coex::plan_assignment(&gpus);
+            serial_println!("{}", crate::gpu::display_coex::assignment_status(&plan, &gpus));
+            crate::boot_logger::log(&alloc::format!("BOOT: GPU plan — {:?}", plan));
             if let Some(g) = crate::gpu::detect::best_compute_gpu(&gpus) {
                 crate::gpu::vram::init_vram_tier(g);
             }

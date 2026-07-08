@@ -5,6 +5,7 @@
 use alloc::string::String;
 use crate::gpu::detect::GpuInfo;
 
+#[derive(Debug)]
 pub enum GpuAssignment {
     /// iGPU display, dGPU compute (ideal)
     IgpuDisplayDgpuCompute { display: usize, compute: usize },
