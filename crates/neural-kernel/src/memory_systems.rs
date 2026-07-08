@@ -95,11 +95,42 @@ pub fn bge_embed(text: &str) -> Vec<f32> {
 
 pub fn bge_status() -> String {
     if BGE_LOADED.load(Ordering::Relaxed) {
-        alloc::format!("[BGE] {} dim, loaded=true",
-            unsafe { BGE_HIDDEN })
+        alloc::format!("[BGE] {} dim, loaded=true", unsafe { BGE_HIDDEN })
     } else {
         String::from("[BGE] ausente — use build_image.py --all")
     }
+}
+
+/// Registro de embedding para busca semântica
+pub struct EmbeddingEntry {
+    pub label: String,
+    pub embedding: Vec<f32>,
+}
+
+static EMBED_INDEX: spin::Mutex<Vec<EmbeddingEntry>> = spin::Mutex::new(Vec::new());
+
+/// Indexa um texto para busca semântica futura
+pub fn index_embedding(label: &str, text: &str) {
+    let emb = bge_embed(text);
+    if emb.is_empty() { return; }
+    EMBED_INDEX.lock().push(EmbeddingEntry { label: String::from(label), embedding: emb });
+}
+
+/// Busca semântica: top-k por similaridade cosseno
+pub fn semantic_search(query: &str, top_k: usize) -> Vec<(String, f32)> {
+    let q_emb = bge_embed(query);
+    if q_emb.is_empty() { return Vec::new(); }
+    let index = EMBED_INDEX.lock();
+    let mut results: Vec<(String, f32)> = index.iter().map(|entry| {
+        let dot: f32 = entry.embedding.iter().zip(q_emb.iter()).map(|(a,b)| a*b).sum();
+        let norm_a = (entry.embedding.iter().map(|v| v*v).sum::<f32>() + 1e-8).sqrt();
+        let norm_b = (q_emb.iter().map(|v| v*v).sum::<f32>() + 1e-8).sqrt();
+        let sim = dot / (norm_a * norm_b);
+        (entry.label.clone(), sim)
+    }).collect();
+    results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+    results.truncate(top_k);
+    results
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

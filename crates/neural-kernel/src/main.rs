@@ -284,6 +284,7 @@ mod elf_loader;
 
 mod wasm_rt;
 mod wasm_exec;
+mod burn_flex;
 
 mod cognitive;
 
@@ -1395,6 +1396,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     registry.register(Box::new(agents::HwDetectAgent));
     registry.register(Box::new(agents::AutoLearnAgent::new()));
+    registry.register(Box::new(agents::SleepCycleAgent::new()));
 
     registry.register(disk_agent_box);
 

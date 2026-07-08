@@ -1402,6 +1402,62 @@ pub fn report_unmatched_intent(text: &str) {
 }
 
 // ---------------------------------------------------------------------------
+// SleepCycleAgent — #314: 5 fases de aprendizado REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT
+// ---------------------------------------------------------------------------
+
+const SLEEPCYCLE_MANIFEST: AgentManifest = AgentManifest {
+    name: "sleep_cycle",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::PollEvery(1000),
+    auto_start: true,
+    persist: true,
+};
+
+pub struct SleepCycleAgent {
+    phase: u8, cycle_count: u64, phase_tick: u64, insights: Vec<String>,
+}
+
+impl SleepCycleAgent {
+    pub fn new() -> Self { SleepCycleAgent { phase: 0, cycle_count: 0, phase_tick: 0, insights: Vec::new() } }
+    fn phase_name(&self) -> &'static str { match self.phase {1=>"REPLAY",2=>"DREAM",3=>"CONSOLIDATE",4=>"PRUNE",5=>"REFLECT",_=>"IDLE"} }
+    fn execute_phase(&mut self) {
+        let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        match self.phase {
+            1 => {
+                let mut t = crate::BITNET_TRAINER.lock();
+                let (w,i,o) = (alloc::vec![0i8;64], alloc::vec![1.0f32;64], alloc::vec![1.0f32;64]);
+                let loss = t.train_step(&w, &i, &o);
+                serial_println!("[SLEEP] REPLAY: loss={:.4} step={}", loss, t.trained);
+            }
+            2 => { self.insights.push(alloc::format!("[DREAM] ciclo #{} insight sintetico", self.cycle_count)); serial_println!("[SLEEP] DREAM"); }
+            3 => { serial_println!("[SLEEP] CONSOLIDATE"); }
+            4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } serial_println!("[SLEEP] PRUNE: {} insights", self.insights.len()); }
+            5 => {
+                serial_println!("[SLEEP] REFLECT: ciclo #{} completo (KG disponivel via event-bus)", self.cycle_count);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Agent for SleepCycleAgent {
+    fn manifest(&self) -> &AgentManifest { &SLEEPCYCLE_MANIFEST }
+    fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
+        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        if self.phase == 0 {
+            if self.cycle_count == 0 || now > self.phase_tick + 5000 { self.phase = 1; self.phase_tick = now; }
+            return AgentTickResult::Pending;
+        }
+        if now < self.phase_tick + 200 { return AgentTickResult::Pending; }
+        self.execute_phase();
+        self.phase_tick = now;
+        if self.phase >= 5 { self.phase = 0; self.cycle_count += 1; }
+        else { self.phase += 1; }
+        AgentTickResult::Pending
+    }
+}
+
+// ---------------------------------------------------------------------------
 // FsBridgeAgent — ponte entre VFS e MHI para migração de dados entre tiers
 // ---------------------------------------------------------------------------
 
