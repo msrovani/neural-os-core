@@ -16,6 +16,34 @@ pub struct SkillLoader {
     pub skills: Vec<SkillManifest>,
 }
 
+/// Macro para declarar skill manifest estaticamente (#280l)
+#[macro_export]
+macro_rules! skill_manifest {
+    ($name:expr, $desc:expr, $tokens:expr, $instr:expr, $net:expr) => {
+        $crate::skill_loader::SkillManifest {
+            name: $crate::alloc::string::String::from($name),
+            description: $crate::alloc::string::String::from($desc),
+            required_tokens: $tokens.to_vec(),
+            instructions: $crate::alloc::string::String::from($instr),
+            requires_network: $net,
+        }
+    };
+    ($name:expr, $desc:expr) => {
+        $crate::skill_manifest!($name, $desc, &[1], "", false)
+    };
+}
+
+/// Converte manifest para formato SKILL.md
+impl SkillManifest {
+    pub fn to_skill_md(&self) -> String {
+        let tokens = self.required_tokens.iter()
+            .map(|t| t.to_string()).collect::<Vec<_>>().join(",");
+        alloc::format!(
+            "---\nname: {}\ndescription: {}\nrequired_tokens: [{}]\n---\n\n{}\n",
+            self.name, self.description, tokens, self.instructions)
+    }
+}
+
 impl SkillLoader {
     pub const fn new() -> Self {
         SkillLoader { skills: Vec::new() }
