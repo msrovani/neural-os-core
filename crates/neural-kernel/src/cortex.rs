@@ -1202,6 +1202,13 @@ pub fn generate_via_model(prompt: &str) -> String {
         }
     }
     // Fallback: modelo principal (BitNet LLM)
+    // Reporta intent nao classificado para AutoLearnAgent (Trinity learn cycle)
+    if expert_name == "generator" {
+        let _ = crate::EVENT_BUS.publish(Event {
+            id: 0, topic: alloc::string::String::from("TRINITY_UNMATCHED"),
+            payload: prompt.as_bytes().to_vec(), token: crate::CapabilityToken::Legacy(1),
+        });
+    }
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),

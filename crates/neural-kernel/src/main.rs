@@ -1393,6 +1393,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::FsBridgeAgent::new()));
 
     registry.register(Box::new(agents::HwDetectAgent));
+    registry.register(Box::new(agents::AutoLearnAgent::new()));
 
     registry.register(disk_agent_box);
 

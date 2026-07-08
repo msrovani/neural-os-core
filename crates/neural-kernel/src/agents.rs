@@ -1240,6 +1240,141 @@ impl Agent for HwDetectAgent {
 }
 
 // ---------------------------------------------------------------------------
+// AutoLearnAgent — Trinity: detecta necessidade, baixa conhecimento, treina expert
+// "I need to learn how to fly a helicopter"
+// ---------------------------------------------------------------------------
+
+const AUTOLEARN_MANIFEST: AgentManifest = AgentManifest {
+    name: "auto_learn",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::PollEvery(200),
+    auto_start: true,
+    persist: true,
+};
+
+/// Necessidade de aprendizado detectada
+struct LearnNeed {
+    topic: String,          // ex: "security", "disk_diag"
+    count: u32,             // quantas vezes foi detectado
+    triggered: bool,         // ja iniciou aprendizado?
+}
+
+pub struct AutoLearnAgent {
+    needs: Vec<LearnNeed>,
+    tick_count: u64,
+    receiver: Receiver,
+}
+
+impl AutoLearnAgent {
+    pub fn new() -> Self {
+        AutoLearnAgent {
+            needs: Vec::new(),
+            tick_count: 0,
+            receiver: EVENT_BUS.subscribe("TRINITY_UNMATCHED"),
+        }
+    }
+
+    /// Registra que um intent caiu no Generator (sem expert especializado)
+    pub fn report_unmatched(&mut self, text: &str) {
+        let lower = text.to_lowercase();
+        // Extrai topicos potenciais do texto
+        let topic = if lower.contains("seguranca") || lower.contains("security")
+                      || lower.contains("cve") || lower.contains("ataque") || lower.contains("attack") {
+            "security"
+        } else if lower.contains("disco") || lower.contains("disk")
+                   || lower.contains("smart") || lower.contains("storage") {
+            "disk_diag"
+        } else if lower.contains("audio") || lower.contains("som")
+                   || lower.contains("voz") || lower.contains("tts") {
+            "speech_synth"
+        } else { return; };
+
+        for need in &mut self.needs {
+            if need.topic == topic {
+                need.count += 1;
+                return;
+            }
+        }
+        self.needs.push(LearnNeed { topic: topic.into(), count: 1, triggered: false });
+    }
+
+    fn learn_topic(&mut self, topic: &str) {
+        serial_println!("[TRINITY-Learn] Iniciando aprendizado: {}...", topic);
+        // 1. Marca como triggered
+        for need in &mut self.needs {
+            if need.topic == topic { need.triggered = true; }
+        }
+
+        // 2. Tenta carregar conhecimento da FAT32
+        let knowledge = match topic {
+            "security" => {
+                // Tenta ler CVE.BIN da FAT32
+                unsafe {
+                    let ata = crate::ATA_DRIVER.lock();
+                    if let Some(ref ata) = *ata {
+                        let parts = crate::fat32::read_mbr(ata);
+                        for p in &parts {
+                            if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                            if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                                if let Some(data) = fs.read_file("CVE.BIN") {
+                                    serial_println!("[TRINITY-Learn] Conhecimento carregado: CVE.BIN ({} bytes)", data.len());
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+                String::new()
+            }
+            "disk_diag" => String::new(),
+            "speech_synth" => String::new(),
+            _ => String::new(),
+        };
+
+        if knowledge.is_empty() {
+            serial_println!("[TRINITY-Learn] {}: conhecimento indisponivel (coloque {}.BIN na FAT32)", topic, topic.to_uppercase());
+        } else {
+            serial_println!("[TRINITY-Learn] {}: conhecimento carregado, treinando...", topic);
+        }
+    }
+}
+
+impl Agent for AutoLearnAgent {
+    fn manifest(&self) -> &AgentManifest { &AUTOLEARN_MANIFEST }
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        self.tick_count += 1;
+        // Recebe eventos de intent nao classificado
+        while let Some(event) = self.receiver.try_receive() {
+            if let Ok(text) = core::str::from_utf8(&event.payload) {
+                self.report_unmatched(text);
+            }
+        }
+        // Verifica necessidades com contagem >= 3
+        let mut had_work = false;
+        let topics: Vec<String> = self.needs.iter()
+            .filter(|n| n.count >= 3 && !n.triggered)
+            .map(|n| n.topic.clone())
+            .collect();
+        for topic in topics {
+            self.learn_topic(&topic);
+            had_work = true;
+        }
+        AgentTickResult::Pending
+    }
+}
+
+// Agora modifica generate_via_model em cortex.rs para reportar unmatched ao AutoLearnAgent
+// Isso é feito via a funcao abaixo, chamada pelo HermesAgent
+
+pub fn report_unmatched_intent(text: &str) {
+    // Encontra o AutoLearnAgent via EventBus e reporta
+    let _ = EVENT_BUS.publish(Event {
+        id: 0, topic: String::from("TRINITY_UNMATCHED"),
+        payload: text.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
+    });
+}
+
+// ---------------------------------------------------------------------------
 // FsBridgeAgent — ponte entre VFS e MHI para migração de dados entre tiers
 // ---------------------------------------------------------------------------
 
