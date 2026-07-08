@@ -25,6 +25,43 @@ pub struct SoulProfile {
 
 impl SoulProfile {
     pub fn default_jarvis() -> Self { SoulProfile { name: String::from("JARVIS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
+
+    /// Carrega SOUL.md da FAT32: arquivo texto com perfil da personalidade
+    pub fn load_from_fat32() -> Self {
+        let mut profile = Self::default_jarvis();
+        unsafe {
+            let ata = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata {
+                let parts = crate::fat32::read_mbr(ata);
+                for p in &parts {
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        if let Some(data) = fs.read_file("SOUL.MD") {
+                            let text = core::str::from_utf8(&data).unwrap_or("");
+                            // Parse markdown simples: "name: JARVIS" ou "name=JARVIS"
+                            for line in text.lines() {
+                                let l = line.trim();
+                                if let Some(val) = l.strip_prefix("name:") { profile.name = val.trim().into(); }
+                                else if let Some(val) = l.strip_prefix("name=") { profile.name = val.trim().into(); }
+                                else if let Some(val) = l.strip_prefix("tone:") { profile.tone = val.trim().into(); }
+                                else if let Some(val) = l.strip_prefix("tone=") { profile.tone = val.trim().into(); }
+                                else if let Some(val) = l.strip_prefix("humor:") { if let Ok(v) = val.trim().parse::<f32>() { profile.humor_level = v; } }
+                                else if let Some(val) = l.strip_prefix("humor=") { if let Ok(v) = val.trim().parse::<f32>() { profile.humor_level = v; } }
+                                else if let Some(val) = l.strip_prefix("formality:") { if let Ok(v) = val.trim().parse::<f32>() { profile.formality = v; } }
+                                else if let Some(val) = l.strip_prefix("formality=") { if let Ok(v) = val.trim().parse::<f32>() { profile.formality = v; } }
+                                else if let Some(val) = l.strip_prefix("empathy:") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
+                                else if let Some(val) = l.strip_prefix("empathy=") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
+                            }
+                            crate::serial_println!("[SOUL] Perfil carregado: {} ({})", profile.name, profile.tone);
+                            return profile;
+                        }
+                    }
+                }
+            }
+        }
+        crate::serial_println!("[SOUL] SOUL.MD nao encontrado. Usando perfil padrao.");
+        profile
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -272,22 +309,101 @@ impl SessionHistory {
     }
     pub fn compress(&mut self, strategy: &str) {
         match strategy {
-            "drop_lowest" => { self.entries.sort_by(|a,b| a.importance.cmp(&b.importance)); self.entries.drain(0..self.entries.len().saturating_sub(self.max/2)); }
+            "drop_lowest" => {
+                self.entries.sort_by(|a,b| a.importance.cmp(&b.importance));
+                self.entries.drain(0..self.entries.len().saturating_sub(self.max/2));
+            }
+            "summarize" => {
+                // Mantem apenas entradas com importância > 50
+                self.entries.retain(|e| e.importance > 50);
+                if self.entries.len() > self.max / 2 {
+                    self.entries.drain(self.max/2..);
+                }
+            }
+            "merge_similar" => {
+                // Agrupa por emoção, mantém a mais recente de cada grupo
+                let mut seen: Vec<Emotion> = Vec::new();
+                self.entries.retain(|e| {
+                    if seen.contains(&e.emotion) { false }
+                    else { seen.push(e.emotion); true }
+                });
+            }
+            "segment_means" => {
+                // Divide em segmentos, média de importância por segmento
+                let len = self.entries.len();
+                if len > self.max / 2 {
+                    let keep = self.max / 2;
+                    let seg_size = len / keep.max(1);
+                    let mut kept = Vec::with_capacity(keep);
+                    for i in 0..keep {
+                        let start = i * seg_size;
+                        let end = core::cmp::min(start + seg_size, len);
+                        if start < len {
+                            let avg_imp = self.entries[start..end].iter().map(|e| e.importance).sum::<u32>() / (end - start) as u32;
+                            let mut e = self.entries[start].clone();
+                            e.importance = avg_imp;
+                            kept.push(e);
+                        }
+                    }
+                    self.entries = kept;
+                }
+            }
             _ => {}
         }
     }
 }
 
-pub struct NotificationGate { queue: Vec<(String, u8)>, last_dedup: String, last_tick: u64 }
+/// Niveis de urgencia do Notification Gate (#315.4)
+#[derive(Clone, Copy, PartialEq)]
+pub enum Urgency { Critical = 3, High = 2, Medium = 1, Low = 0 }
+
+pub struct NotificationGate {
+    queue: Vec<(String, Urgency)>,
+    last_dedup: String, last_tick: u64,
+    rate_count: BTreeMap<String, u32>,  // agente -> contagem
+    rate_window: u64,
+}
+
 impl NotificationGate {
-    pub fn new() -> Self { NotificationGate { queue: Vec::new(), last_dedup: String::new(), last_tick: 0 } }
-    pub fn push(&mut self, text: &str, urgency: u8) {
+    pub fn new() -> Self {
+        NotificationGate {
+            queue: Vec::new(), last_dedup: String::new(), last_tick: 0,
+            rate_count: BTreeMap::new(), rate_window: 200,
+        }
+    }
+
+    /// Push com nivel de urgencia nominal
+    pub fn push(&mut self, text: &str, urgency: Urgency) {
+        self.push_with_agent(text, urgency, "system")
+    }
+
+    /// Push com rate limiting por agente: max 5 notifs por janela
+    pub fn push_with_agent(&mut self, text: &str, urgency: Urgency, agent: &str) {
         let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        // Dedup: mesma mensagem dentro de 50 ticks
         if text == self.last_dedup && tick.wrapping_sub(self.last_tick) < 50 { return; }
         self.last_dedup = String::from(text); self.last_tick = tick;
+        // Rate limit: max 5 notificacoes por agente por janela
+        let count = self.rate_count.get(agent).copied().unwrap_or(0);
+        if count >= 5 { return; }
+        self.rate_count.insert(String::from(agent), count + 1);
+        // Limpa rate counters a cada window ticks
+        if tick % self.rate_window == 0 { self.rate_count.clear(); }
+        // Fila com prioridade por urgencia
         self.queue.push((String::from(text), urgency));
+        self.queue.sort_by(|a, b| (b.1 as u8).cmp(&(a.1 as u8)));
     }
-    pub fn status(&self) -> String { alloc::format!("[NOTIF] {} pending", self.queue.len()) }
+
+    pub fn pop(&mut self) -> Option<(String, Urgency)> {
+        if self.queue.is_empty() { return None; }
+        Some(self.queue.remove(0))
+    }
+
+    pub fn status(&self) -> String {
+        let crit = self.queue.iter().filter(|(_,u)| *u == Urgency::Critical).count();
+        let high = self.queue.iter().filter(|(_,u)| *u == Urgency::High).count();
+        alloc::format!("[NOTIF] {} pending ({} critical, {} high)", self.queue.len(), crit, high)
+    }
 }
 
 pub struct SessionlessThread { pub last_interaction: u64, pub count: u64, threshold: u64 }
