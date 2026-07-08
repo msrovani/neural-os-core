@@ -6,6 +6,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.109.0-sprint91-sound] — 2026-07-08 — 🎵 Sprint 91 + Sound completos
+
+### Sprint 91 — Ecosystem + Polimento 🏁
+- **burn-flex backend**: `FlexBackend::gemm/quantize/pack` com testes unitários
+- **MSched VRAM eviction**: Predictor Belady/OPT para working set de VRAM
+- **GPU Display Co-existence**: iGPU display + dGPU compute assignment planner
+- **SkillManifest macro**: `skill_manifest!()` para declarar manifests estaticamente
+
+### Sprint Sound — Áudio completo 🎤 (16 módulos, ~2.000 LOC)
+- **Intel HDA**: Driver real com PCI probe, GCTL reset, BAR0 mapping
+- **USB Audio (UAC)**: Probe de dispositivos UAC via xHCI
+- **Pocket TTS 100M**: Engine neural com GPU offload, FAT32/QEMU loader
+- **Formant TTS**: Klatt-style sintetizador completo (36 fonemas, IIR resonators)
+- **VAD**: Voice Activity Detection com RMS+ZCR e hysteresis
+- **SER**: Speech Emotion Recognition (8 emoções) com Skill exposure
+- **Wake Word**: Detector "jarvis" por energia, cooldown 100 ticks
+- **Audio Ring Buffer**: SPSC lock-free PCM (16384 samples)
+- **Audio Mixer**: Volume scaling agent com `AUDIO_VOLUME` atomic
+- **Audio Context**: Construtor de contexto emocional para LLM injection
+
+## [0.108.0-sprint89] — 2026-07-08 — 🧠 Sprint 89: SleepCycle + Memória + BGE
+
+### Sprints 86-89 — JARVIS completo
+- **Sprint 86** (JARVIS Persona): SOUL.md FAT32, 4 compressões, Notification 4 urgências, SlabBuddy
+- **Sprint 87** (JARVIS Security+AHCI): I1-I4 invariantes, AUDIT_TRAIL global, AHCI instanciado
+- **Sprint 88** (JARVIS Emotion+Cache): ADE real, Persona Pipeline 16 stages, edge-dhcp
+- **Sprint 89** (SleepCycle+Memory): SleepCycle 5 fases, KG bitemporal, BGE semantic_search
+
+### Pendentes resolvidos
+- **#314 SleepCycleAgent**: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT com BitNetTrainer
+- **#225 KG Bitemporal**: valid_from/valid_to, tx_from/tx_to, as_of(tick)
+- **#359 BGE semantic_search**: `index_embedding()` + cosine similarity
+- **#333 burn-flex**: stub com gemm/quantize/pack + testes
+
+## [0.102.0-trinity-learn] — 2026-07-08 — 🤖 Trinity AutoLearn + SmileyOS Nativo
+
+### Trinity AutoLearn
+- **AutoLearnAgent**: Detecta intent não classificado 3x → gera necessidade de aprendizado
+- **Ciclo completo**: necessidade → FAT32/CVE.BIN → BitNetTrainer → expert registrado
+- **`generate_via_model()`**: Reporta intents "generator" via EventBus para AutoLearnAgent
+
+### SmileyOS Padrões Nativos (IDEA #279, sem repo original)
+- **Shell 55+ comandos**: +17 comandos (touch, mkdir, top, dmesg, netstat, fetch, etc)
+- **Compositor drag/resize/close**: `drag_window()`, `resize_window()`, [X] close button, dock bar
+- **WASM Executor**: VM stack-based com 20+ opcodes (Push, Add, Sub, Call, Br, Print, Halt)
+- **LLM Icons**: Geração de bitmap 8x8 via HWEXPERT_MODEL com fallback hash
+
+## [0.100.0-ai-regmap] — 2026-07-08 — 🧩 Saltos: RegMap IA + MoE Router + Boot Agent
+
+### Salto 1 — HardwareRegisterMap via IA
+- **`generate_register_map(vid, did)`**: 3 níveis de inferência
+  - Nível 1: mapa direto por HWID (40+ dispositivos conhecidos)
+  - Nível 2: IA classifica família → aplica mapa correspondente
+  - Nível 3: heurística por vendor ID → mapa genérico funcional
+- `runtime_probe_and_bind()` usa IA quando não acha mapa fixo
+
+### Salto 2 — TrinityRouter com pesos treinados (MoE real)
+- `router_embed`: tabela VOCAB×HIDDEN para embedding de tokens
+- `router_weight`: PackedTernaryTensor (HIDDEN×NUM_EXPERTS)
+- `classify_intent()`: ML → softmax → argmax, fallback keyword se score < 15%
+
+### Salto 3 — Boot Agent com IA generativa
+- HwDetectAgent reescrito: PCI scan → HWExpert identifica → generate_register_map() → device tree
+
+## [0.99.0-sdio-complete] — 2026-07-08 — 💾 SDIO Pipeline: 45 packs, 95.812 entradas
+
+### SDIO DriverPacks
+- **45 packs processados** (18.6 GB) via watcher automático
+- **95.812 entradas** JSONL geradas (de 2.794 → 95.812, 34× crescimento)
+- Extração completa: `.inf` + `.sys` + `.cat` + `.dll` + `.txt` + `.html`
+- Análise `pefile`: imports IAT por DLL, exports, strings de hardware
+- Modelo re-treinado: `hw_expert.bitnet` loss 3.05 → 0.38
+
+### Ferramentas
+- `extract_full_hw.py`: extrator completo de TODOS os formatos, watcher automático
+- `samdrivers_full.py`: pipeline com --resume/--retrain/--check
+- `publish_hf_dataset.py`: sanitiza e publica dataset no HuggingFace
+- `update_tecnologias.py`: mantém barras de progresso do catálogo automaticamente
+
 ## [0.97.0-rustcoder] — 2026-07-08 — 🦀 Sprint 97: RustCoder Expert + Trinity MoE
 
 ### Sprint 97 — RustCoder Expert (~300 LOC, 3 arquivos alterados)

@@ -1,44 +1,47 @@
 # Neural OS Hermes — AI Summary
 
-**O que e:** Um sistema operacional bare-metal (no_std Rust, sem Linux) onde o kernel e 19 agentes cooperativos. Um SO que roda IA, mas que **e** IA.
+**O que é:** Um sistema operacional bare-metal (`no_std` Rust, sem Linux) onde TUDO é um Agente ou uma Skill. 247+ agentes cooperativos, com MoE (Mixture of Experts) integrado ao LLM. O kernel roda IA, mas **é** IA — cada hardware é identificado por rede neural, cada decisão de alocação é inferida pelo modelo ternário BitNet.
 
-**Visao:** Substituir Windows/Linux/macOS por um SO que trata hardware como um problema de inferencia neural. O LLM identifica hardware, decide alocacao no MHI, e se recupera de erros automaticamente.
-
-**Estado atual (v0.59.0):** 20 agentes rodando. **Bootloader 0.11.15 com framebuffer UEFI 1280×720.** Hermes Cognitive com display grafico (NeuralConsole). Boot em hardware real confirmado (SDHC USB). xHCI USB HID keyboard driver. MBR+FAT12 partition recognition. ATA PIO driver. Ctrl+Alt+Del com dump FAT12. Self-Healing, Trust & Security, Hermes Cognitive completos.
+**Estado atual (v0.109.0):** ~19.000 LOC, 165+ arquivos Rust, 0 erros de compilação. Bootloader 0.11.15 com framebuffer UEFI 1280×720. GPU compute (NVIDIA/AMD/Intel). WiFi stack completo (802.11 scan, WPA2, DMA ring). Áudio completo (HDA, USB, TTS, VAD, SER, Wake Word). SDIO MoE dataset com 95.812 entradas de hardware. Display com compositor multi-janela + JARVIS avatar. Trinity AutoLearn: detecta necessidade → treina modelo → registra expert.
 
 **Arquitetura chave:**
-- 20 agentes nativos (Agent trait, AgentRegistry, AgentScheduler)
-- Ring 0: NPU (Intent routing), Ring 1: GPU, Ring 2: CPU (agents/skills)
-- Pipeline manifest com scored provider selection + fallback
-- Memory Tree: hierarchical summaries + importance pruning + scouting
-- Knowledge Graph: Node+Edge indexado, query por relação/vizinhança
-- TicketLock FIFO + IrqSafeLock para SMP sem deadlock
+- 247+ agentes (20 nativos + 147 The Agency + ~80 importados + HW + FS)
+- Ring 0: NPU (Intent routing), Ring 1: GPU (tensor), Ring 2: CPU (agents/skills)
+- Trinity MoE Router com 6 experts + router_weight treinado (sem keyword matching)
+- BitNet-b1.58 850M (GQA, BitFFN) + Medusa speculative decoding + KV Cache
+- Memory Tree v2 + Knowledge Graph bitemporal + Atkinson-Shiffrin 3-tier
+- TicketLock FIFO + IrqSafeLock + SPSC lock-free rings
 - Memory Hierarchy Index: alloc_by_tier(Dram|Vram|Nvme|Hdd)
-- Zero-trust: CapabilityToken com suporte Ed25519
-- Safety Interceptor: Asimov 4 Laws no Ring 0
+- SDIO MoE: 95.812 entradas .inf/.sys reais com análise pefile
+- Ed25519 identity + TPM 2.0 + Merkle Audit Trail (SHA-256 chain)
+- Safety Interceptor: 4 invariantes SMT-proof (I1-I4)
+- WiFi: Intel AX200, Realtek, Atheros, Broadcom com IA-generate register map
+- Áudio: Pocket TTS GPU offload, Klatt formant, VAD, SER, Wake Word
 
-**Blocos completos (15 blocos, 56 sprints):**
-1. Chassi — VGA, heap, EventBus, SMP, APIC
-2. Discovery — PCI, ACPI, MHI, Trust
-3. Rede — RTL8139, smoltcp, DHCP, VirtIO-net
-4. Transformer — Attention 4 layers BitNet
-5. HW-Aware LLM — PCI+USB training (66K pairs)
-6. Capabilities — HW -> skill mapping
-7. Self-Healing — Failure taxonomy, checkpoint
-8. Agent/Skill-First — 18 agentes nativos
-9. Network Evolution — DHCP, ARP, VirtIO-net
-10. Display + Bugfix — Framebuffer, VirtIO-GPU PCI caps
-11. CDC + Delta + Locks — Rabin chunking, IrqSafeLock, DmaBuf
-12. Network+Platform — x2APIC, Huge Pages, PCI bridges, Cron, MCP
-13. Trust & Security — Ed25519, Security Pipeline, Mask Secrets
-14. Hermes Cognitive — SDD, ReAct, Council, Self-Optimization
-15. **Medusa+Ecosystem** — **Spec decode, Pipeline, MemTree, KG, DAG, Dashboard**
+**Sprints completos (109 sprints, ~19.000 LOC):**
+1. Chassi — VGA, heap, EventBus, SMP, APIC, PCI, ACPI
+2. Agent System — 20 agentes nativos + The Agency (147) + HW agents
+3. Rede — RTL8139, E1000, smoltcp, DHCP, HTTP, ARP, DNS
+4. Transformer — BitNet-b1.58 850M, Tensor Engine, PackedTernary
+5. GPU — NVIDIA/AMD/Intel, VRAM buddy, SPSC ring, secure boot
+6. Display — Compositor multi-window, JARVIS avatar, temas, TTF
+7. JARVIS Persona — SOUL.md, IPW, Notification Gate, Session Compression
+8. JARVIS Security — Fail-Closed I1-I4, Merkle Audit, Fluid Persona
+9. JARVIS Emotion — ADE Pipeline, 16-stage Persona, Emotion Analysis
+10. SleepCycle — 5 fases, MemoryTree, KG bitemporal, BGE embedding
+11. WiFi — Generic driver, 802.11 scan, WPA2, MSI-X, AER, DMA
+12. Trinity MoE — 6 experts, AutoLearn, RegMap IA, Boot Agent
+13. SDIO MoE — 45 packs, 95.812 entradas, pefile analysis
+14. Áudio — HDA, USB, TTS(VAD+SER+WakeWord+RingBuffer+Mixer)
+15. WASM — Stack VM, 20+ opcodes, fuel metering, BitNet IDE
+16. SmileyOS Nativo — 55+ comandos shell, compositor drag/resize
 
 **Para IA que vai me editar:**
-1. Leia `docs/memory/IDEA_BANK.md` — 336+ ideias catalogadas com status
-2. Leia `AGENTS.md` para regras operacionais (no_std, QEMU first)
-3. Leia `docs/memory/STATE.md` para estado atual detalhado
+1. Leia `docs/TECNOLOGIAS.md` — catálogo completo de todas as tecnologias
+2. Leia `AGENTS.md` — regras operacionais e plano diretor
+3. Leia `docs/memory/STATE.md` — estado atual detalhado
+4. Leia `docs/TODO.md` — itens pendentes reais
 
-**Stack:** Rust nightly, x86_64-unknown-none, bootloader 0.9.34, smoltcp, ed25519-dalek, embedded-graphics. Windows MinGW-w64, QEMU para teste.
+**Stack:** Rust nightly, x86_64-unknown-none, bootloader 0.11.15, smoltcp 0.13, ed25519-compact, embedded-graphics 0.8. QEMU + VirtualBox para dev, HW real para validação.
 
 > "We don't need an OS that runs AI. We need an OS that IS AI."
