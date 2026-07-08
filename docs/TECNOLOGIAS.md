@@ -273,7 +273,7 @@
 | Formant TTS | Síntese por formantes | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
 | VAD | Voice Activity Detection | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
 | SER | Speech Emotion Recognition | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
-| Wake Word | "Jarvis" via Rustpotter | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 90% | Sprint Sound ✅ 90% |
+| Wake Word | "Jarvis" via Rustpotter | Sprint Sound ✅ 90% |
 | Audio Ring Buffer | PCM circular lockless | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
 | Audio Mixer | Mixagem PCM | Sprint Sound  ████░░░░░░ 40% | Sprint Sound ✅ 100% |
 
