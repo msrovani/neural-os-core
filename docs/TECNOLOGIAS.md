@@ -8,41 +8,41 @@
 
 ## 1. KERNEL CORE — Fundação do Sistema
 
-| Tecnologia | Descrição | Sprint | Commit |
-|---|---|---|---|
-| Bootloader 0.11.15 | UEFI/BIOS handoff, framebuffer, 512KB stack | v0.59 | `8ac5ac7` |
-| VGA Text Mode 80×25 | 16 cores, scroll, VGA sequencer screen-off (0x3C4/0x3C5) | v0.02 | `46d391d` |
-| Serial 16550 | 4-port probe (3F8/2F8/3E8/2E8), `serial_println!` | v0.02 | `46d391d` |
-| IDT (32 handlers) | Double Fault IST, Breakpoint, GPF, Page Fault, `abi_x86_interrupt` | v0.03 | `19bbd0e` |
-| GDT/TSS | Kernel segments, IST stacks, double fault handling | v0.03 | `19bbd0e` |
-| OffsetPageTable | CR3-based page table walker, physical memory offset | v0.04 | `44de89f` |
-| Bitmap Frame Allocator | 128KB bitmap 4GB, allocate_contiguous() | v0.11 | `4d3f1a0` |
-| LockedHeap 16MB | linked_list_allocator, heap em 0x4444_4444_0000 | v0.04 | `44de89f` |
-| Slab Allocator | 8 buckets (32-4096), per-CPU, free list | v0.14 | `f2b4c11` |
-| Adaptive Heap | resize_heap_to_mb(), budget por modelo AI | v0.76 | `9a3b7c0` |
-| SIMD/FPU (SSE/AVX/FMA) | CR0/CR4 enablement, `#[deny(fpu)]` | v0.05 | `5ef42af` |
-| PIC 8259A | Remap vec32/40, dual EOI, fallback | v0.08 | `a1b2c3d` |
-| PIT Timer | IRQ0 watchdog, atomic TIMER_TICKS | v0.08 | `a1b2c3d` |
-| LAPIC Timer | Tick dinâmico 12-192 t/s, IPI, init_count | v0.16 | `e4f5g6h` |
-| IOAPIC | IRQ routing, RTE masking | v0.16 | `e4f5g6h` |
-| x2APIC | MSR-based, CPUID ECX[21], IA32_APIC_BASE[10] | v0.48 | `h7i8j9k` |
-| SMP Multi-Core | INIT-SIPI-SIPI, trampoline (16→32→PAE→64→Rust) | v0.14 | `f2b4c11` |
-| PerCpu Struct | GS.base, cpu_id, lapic_id, core_type | v0.81 | `l0m1n2o` |
-| SPSC Lock-Free Ring | Atomic head/tail, Acquire/Release | v0.81 | `l0m1n2o` |
-| IPI Handlers | 3 vetores: reschedule(0x80), halt(0x81), call(0x82) | v0.81 | `l0m1n2o` |
-| Work-Stealing Chase-Lev | Deques per core, steal when empty | v0.82 | `p3q4r5s` |
-| Parallel AVX2 Matmul | Chunk hidden dim per core, atomic barrier | v0.82 | `p3q4r5s` |
-| Huge Pages 2MiB/1GiB | allocate_huge_2mb(), allocate_huge_1gb() | v0.48 | `h7i8j9k` |
-| PCI Scan CF8/CFC | 256 bus × 32 device, BAR0-5, bridges, multi-func | v0.13 | `t6u7v8w` |
-| ACPI Parser | RSDP, RSDT/XSDT, MADT (LAPIC/IOAPIC/x2APIC) | v0.13 | `t6u7v8w` |
-| MMIO Typed Registers | Register<T> + RegisterField (Tock OS port) | v0.59 | `x9y0z1a` |
-| TicketLock FIFO | AtomicUsize ticket/serving, spin justo | v0.13 | `t6u7v8w` |
-| IrqSafeLock | cli/RFLAGS.IF restore, deadlock-free em ISR | v0.47 | `b2c3d4e` |
-| DmaBuf | dma_alloc() → pages NO_CACHE|WRITE_THROUGH | v0.47 | `b2c3d4e` |
-| Async Neural Executor | Cooperative polling, AgentTask, DummyWaker | v0.12 | `f5g6h7i` |
-| CFS Scheduler | vruntime-based, fairness entre agentes | v0.82 | `p3q4r5s` |
-| Dynamic Tick | LAPIC init_count calibrado, 12-192 t/s | v0.76 | `9a3b7c0` |
-| EventBus IPC | Publish/subscribe, CapabilityToken, BTreeMap | v0.12 | `f5g6h7i` |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| Bootloader 0.11.15 | UEFI/BIOS handoff, framebuffer, 512KB stack | ADR-0001 | — | `main.rs` | v0.59 |
+| VGA Text Mode 80×25 | 16 cores, scroll, VGA sequencer screen-off | ADR-0002 | #316 | `vga_buffer.rs` | v0.02 |
+| Serial 16550 | 4-port probe, `serial_println!` | ADR-0002 | — | `serial.rs` | v0.02 |
+| IDT 32 handlers | Double Fault IST, Breakpoint, GPF, Page Fault | ADR-0003 | — | `interrupts.rs` | v0.03 |
+| GDT/TSS | Kernel segments, IST stacks | ADR-0003 | — | `interrupts.rs` | v0.03 |
+| OffsetPageTable | CR3 page table walker | ADR-0004 | #91, #94 | `memory.rs` | v0.04 |
+| Bitmap Frame Allocator | 128KB bitmap 4GB | ADR-0004 | #91, #94 | `memory.rs` | v0.11 |
+| LockedHeap 16MB | linked_list_allocator, 0x4444_4444_0000 | ADR-0004 | #91, #94 | `allocator.rs` | v0.04 |
+| Slab Allocator | 8 buckets, per-CPU, free list | ADR-0004 | — | `slab.rs` | v0.14 |
+| Adaptive Heap | resize_heap_to_mb(), AI budget | ADR-0004 | — | `memory_agent.rs` | v0.76 |
+| SIMD/FPU SSE/AVX/FMA | CR0/CR4, `#[deny(fpu)]` | ADR-0005 | — | `simd.rs` | v0.05 |
+| PIC 8259A | Remap vec32/40, dual EOI | ADR-0009 | #367 | `interrupts.rs` | v0.08 |
+| PIT Timer | IRQ0 watchdog, TIMER_TICKS | ADR-0009 | #367 | `interrupts.rs` | v0.08 |
+| LAPIC Timer | Tick 12-192 t/s, IPI, init_count | ADR-0037 | #16-42 | `apic.rs` | v0.16 |
+| IOAPIC | IRQ routing, RTE masking | ADR-0037 | #16-42 | `apic.rs` | v0.16 |
+| x2APIC | MSR-based, IA32_APIC_BASE | ADR-0037 | #16-42 | `apic.rs` | v0.48 |
+| SMP Multi-Core | INIT-SIPI-SIPI, trampoline | ADR-0037 | #16-42 | `smp/mod.rs` | v0.14 |
+| PerCpu | GS.base, cpu_id, lapic_id, core_type | ADR-0037 | #36 | `smp/percpu.rs` | v0.81 |
+| SPSC Lock-Free Ring | Atomic head/tail | ADR-0037 | #36, #319 | `smp/spsc.rs` | v0.81 |
+| IPI Handlers | 3 vetores (reschedule/halt/call) | ADR-0037 | #16-42 | `interrupts.rs` | v0.81 |
+| Work-Stealing | Chase-Lev deques | ADR-0037 | #39, #322 | `smp/work_stealing.rs` | v0.82 |
+| Parallel AVX2 Matmul | Chunk dim per core | ADR-0037 | #323 | `smp/parallel_matmul.rs` | v0.82 |
+| Huge Pages 2MiB/1GiB | allocate_huge_2mb() | ADR-0037 | — | `memory.rs` | v0.48 |
+| PCI CF8/CFC | 256 bus, BAR0-5, bridges | ADR-0014 | #68-70 | `pci.rs` | v0.13 |
+| ACPI Parser | RSDP, RSDT/XSDT, MADT | ADR-0037 | #19, #34 | `acpi.rs` | v0.13 |
+| MMIO Typed Registers | Register\<T\> (Tock port) | ADR-0026 | #280 | `mmio.rs` | v0.59 |
+| TicketLock FIFO | AtomicUsize ticket/serving | — | — | `ticket-lock/` | v0.13 |
+| IrqSafeLock | cli/RFLAGS.IF, deadlock-free ISR | — | — | `sync/irq_lock.rs` | v0.47 |
+| DmaBuf | dma_alloc() → UC pages | — | — | `dma.rs` | v0.47 |
+| Async Executor | Cooperative AgentTask, DummyWaker | — | — | `task/` | v0.12 |
+| CFS Scheduler | vruntime-based fairness | ADR-0037 | — | `cfs.rs` | v0.82 |
+| Dynamic Tick | LAPIC init_count calibrado | — | — | `memory_agent.rs` | v0.76 |
+| EventBus IPC | Publish/subscribe, CapabilityToken | ADR-0024 | #99-101 | `event-bus/` | v0.12 |
 
 ---
 
@@ -115,136 +115,134 @@
 
 ## 3. HARDWARE DRIVERS — 25+ Drivers
 
-| Tecnologia | Descrição | Sprint |
-|---|---|---|
-| PCI Config (CF8/CFC) | 256 bus × 32 device, BAR0-5, bridges | v0.13 |
-| ACPI (RSDP/MADT/RSDT) | Tabelas ACPI, LAPIC/IOAPIC/x2APIC | v0.13 |
-| LAPIC/IOAPIC | Timer, IPI, IRQ routing, x2APIC | v0.13 |
-| RTL8139 | I/O ports, 4 TX desc, RX ring | v0.23 |
-| E1000 (82540EM) | MMIO, TDT protocol, 48 RX desc | v0.20 |
-| VirtIO-net | PCI legacy, desc, MSI-X | v0.42 |
-| VirtIO-GPU | PCI caps, MMIO, queue setup, 2D | v0.45 |
-| xHCI USB | Port scan, speed detect, HID boot, BOT | v0.29 |
-| USB HID Keyboard | 68 keys scancode table | v0.58 |
-| USB Mass Storage (BOT) | SCSI INQUIRY/READ/WRITE | v0.68 |
-| ATA PIO | read_sectors, write_sectors, wait_bsy | v0.58 |
-| AHCI SATA 6G NCQ | MMIO, PRDT, DMA, ATAPI | v0.87 |
-| NVMe | Admin queue, Identify, PRP1, SQ/CQ | v0.75 |
-| Intel GPU (Gen Ring) | MI_BATCH_BUFFER, BCS Blitter | v0.66 |
-| NVIDIA GPU (Pascal) | Push Buffer 0x002000, ACR | v0.84 |
-| AMD GPU (RDNA) | PM4 packets, PSP firmware | v0.84 |
-| SPSC GPU Job Ring | Doorbell vendor-generic, submit_and_wait | v0.84 |
-| GPU Secure Boot | ACR/PSP/GuC pipeline | v0.84 |
-| VRAM Buddy Allocator | Power-of-2 (4KB-4GB), split/merge | v0.84 |
-| GPU Backend | Auto-select NVIDIA→AMD→Intel→CPU | v0.66 |
-| Intel HDA Audio | PCI HDA, DMA engine, codec | Sprint Sound |
-| USB Audio (UAC) | USB Audio Class | Sprint Sound |
-| UVC Camera | USB Video Class, YUYV→RGB | v0.94 |
-| WiFi Generic Driver | WifiChipset trait, union storage, probe table | v0.97 |
-| TPM 2.0 TIS | MMIO 0xFED40000, SHA256, PCR[8] | v0.74 |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| PCI CF8/CFC | 256 bus, BAR0-5, bridges | ADR-0014 | #68-70 | `pci.rs` | v0.13 |
+| ACPI | RSDP/MADT/RSDT | ADR-0037 | #19, #34 | `acpi.rs` | v0.13 |
+| LAPIC/IOAPIC | Timer, IPI, IRQ, x2APIC | ADR-0037 | #16-42 | `apic.rs` | v0.13 |
+| RTL8139 | I/O ports, 4 TX desc, RX ring | ADR-0016 | #124 | `rtl8139.rs` | v0.23 |
+| E1000 (82540EM) | MMIO, TDT, 48 RX desc | ADR-0016 | #250-255 | `e1000.rs` | v0.20 |
+| VirtIO-net | PCI legacy, desc, MSI-X | ADR-0016 | #73, #117 | `virtio_net.rs` | v0.42 |
+| VirtIO-GPU | PCI caps, MMIO, 2D | ADR-0029 | #74, #273 | `virtio_gpu.rs` | v0.45 |
+| xHCI USB | Port scan, HID boot, BOT | ADR-0026 | #1-15 | `xhci.rs` | v0.29 |
+| USB HID Keyboard | 68 keys scancode | — | — | `xhci.rs` | v0.58 |
+| USB Mass Storage BOT | SCSI READ/WRITE | ADR-0030 | — | `usb_msc.rs` | v0.68 |
+| ATA PIO | read_sectors, wait_bsy | ADR-0030 | #282b | `ata.rs` | v0.58 |
+| AHCI SATA NCQ | MMIO, PRDT, DMA | ADR-0030 | — | `ahci.rs` | v0.87 |
+| NVMe | Admin queue, SQ/CQ | ADR-0030 | #71, #303e | `disk_agent/nvme.rs` | v0.75 |
+| Intel GPU (Gen Ring) | MI_BATCH_BUFFER, BCS | ADR-0029 | #326-332 | `gpu/intel.rs` | v0.66 |
+| NVIDIA GPU (Pascal) | Push Buffer 0x002000 | ADR-0037 | #326-332 | `gpu/nvidia.rs` | v0.84 |
+| AMD GPU (RDNA) | PM4 packets, PSP | ADR-0037 | #326-332 | `gpu/amd.rs` | v0.84 |
+| SPSC GPU Job Ring | Doorbell generico | ADR-0037 | #327 | `gpu/ring.rs` | v0.84 |
+| GPU Secure Boot | ACR/PSP/GuC | ADR-0037 | #352 | `gpu/firmware.rs` | v0.84 |
+| VRAM Buddy Allocator | Power-of-2, split/merge | ADR-0037 | #328 | `gpu/vram.rs` | v0.84 |
+| GPU Backend | NVIDIA→AMD→Intel→CPU | ADR-0037 | #353 | `gpu/backend.rs` | v0.66 |
+| Intel HDA Audio | PCI DMA, codec | ADR-0014 | #83 | `audio/hda.rs` | Sound |
+| USB Audio (UAC) | USB Audio Class | ADR-0014 | #84 | `audio/usb.rs` | Sound |
+| UVC Camera | USB Video, YUYV→RGB | — | — | `uvc_driver.rs` | v0.94 |
+| WiFi Generic | WifiChipset trait, union | ADR-0016 | #124 | `generic_wifi.rs` | v0.97 |
+| TPM 2.0 TIS | MMIO 0xFED40000, SHA256 | ADR-0025 | #305 | `tpm.rs` | v0.74 |
 
 ---
 
 ## 4. AI / ML — Inteligência Artificial
 
-| Tecnologia | Descrição | Sprint |
-|---|---|---|
-| **Tensor Engine** | Tensor (shape+data), matmul, apply, transposed | v0.05 |
-| **PackedTernaryTensor** | 2-bit/weight, 4 weights/byte, matmul_hybrid | v0.11 |
-| **BitNet AVX2 Kernel** | _mm256_cvtepi8_epi32, FMA, row buffer 6.9KB | v0.79 |
-| **BitNet-b1.58 850M** | Microsoft, GQA (20→5 KV), BitFFN, 30 layers | v0.79 |
-| **Transformer Engine** | Q/K/V/O, causal mask, softmax, RMSNorm | v0.26 |
-| **Cortex LLM** | generate_text(), autoregressive, 9600+ ticks | v0.27 |
-| **KV Cache** | 200× speedup (6h→84s) | v0.80 |
-| **BPE Tokenizer** | HuggingFace tokenizer.json, encode/decode | v0.79 |
-| **Medusa Speculative** | 3 heads, draft→verify, 4 tokens/pass | v0.56 |
-| **Trinity MoE Router** | 6 experts, keyword + router_weight treinado | v0.79 |
-| **RustCoder Expert** | hidden=128, 6L, 1.6M params, 444KB | v0.97 |
-| **HWExpert (SDIO MoE)** | 213K HWIDs, 2.794 entradas INF, 72KB | v0.97 |
-| **BGE Embedding** | 33.4M params, 384-dim, ONNX→.bitnet | v0.89 |
-| **GGUF Loader** | Q4_0 dequant, tensor search, Model trait | v0.78 |
-| **Codebook VQ** | 256×64, nearest-neighbor, 4:1 compress | v0.89 |
-| **MatMul-Free LM** | RWKV-style WKV forward | v0.95 |
-| **PTRM** | Gaussian noise + Q-head + 3 trajetórias | v0.63 |
-| **Kanerva Memory** | Sparse distributed, hamming distance | v0.63 |
-| **BitNetTrainer** | on-device ADD/SUB, STE, fine-tuning ~2s | v0.95 |
-| **Trinity AutoLearn** | Detecta necessidade → treina → registra expert | v0.102 |
-| **HW Register Map Synthesis** | 3 níveis: HWID→IA→Heurística | v0.100 |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| Tensor Engine | Tensor shape+data, matmul, apply | ADR-0006 | — | `tensor.rs` | v0.05 |
+| PackedTernaryTensor | 2-bit/weight, matmul_hybrid | ADR-0011 | — | `tensor.rs` | v0.11 |
+| BitNet AVX2 Kernel | _mm256_cvtepi8_epi32, FMA | ADR-0019 | #323 | `bitnet_avx2.rs` | v0.79 |
+| BitNet-b1.58 850M | Microsoft GQA, BitFFN, 30L | ADR-0019 | #126-156 | `cortex.rs` | v0.79 |
+| Transformer Engine | QKV causal, softmax, RMSNorm | ADR-0019 | #126-148 | `cortex.rs` | v0.26 |
+| Cortex LLM | generate_text(), autoregressive | ADR-0019 | #126-148 | `cortex.rs` | v0.27 |
+| KV Cache | 200× speedup (6h→84s) | ADR-0019 | #170 | `cortex.rs` | v0.80 |
+| BPE Tokenizer | HuggingFace tokenizer.json | ADR-0019 | #127 | `bpe.rs` | v0.79 |
+| Medusa Speculative | 3 heads, draft→verify | ADR-0019 | #140 | `cortex.rs` | v0.56 |
+| Trinity MoE Router | 6 experts, keyword + ML router | ADR-0033 | #311 | `trinity.rs` | v0.79 |
+| RustCoder Expert | hidden=128, 6L, 1.6M | — | #311c | `tools/rust_coder.bitnet` | v0.97 |
+| HWExpert SDIO MoE | 213K HWIDs, 2.794 INF | ADR-0033 | #311b | `tools/hw_expert.bitnet` | v0.97 |
+| BGE Embedding | 33.4M, 384-dim, ONNX→bitnet | ADR-0023 | — | `tools/convert_onnx` | v0.89 |
+| GGUF Loader | Q4_0 dequant, Model trait | ADR-0028 | #278 | `gguf.rs` | v0.78 |
+| Codebook VQ | 256×64, nearest-neighbor | — | #169 | `cognitive.rs` | v0.89 |
+| MatMul-Free LM | RWKV-style WKV forward | — | #108 | `cognitive.rs` | v0.95 |
+| PTRM | Gaussian + Q-head + 3 trajetórias | — | — | `cortex.rs` | v0.63 |
+| Kanerva Memory | Sparse distributed hamming | — | — | `kanerva.rs` | v0.63 |
+| BitNetTrainer | On-device ADD/SUB, STE | ADR-0033 | #312 | `cognitive.rs` | v0.95 |
+| Trinity AutoLearn | Detecta→treina→registra expert | ADR-0033 | #311f | `agents.rs` | v0.102 |
+| HW Register Map IA | 3 niveis HWID→IA→Heuristica | — | — | `cortex.rs` | v0.100 |
 
 ---
 
 ## 5. REDE — Conectividade
 
-| Tecnologia | Descrição | Sprint |
-|---|---|---|
-| smoltcp Integration | Device trait, Interface poll, TCP/UDP/ARP/DNS | v0.24 |
-| DHCP (smoltcp) | socket-dhcpv4, auto IP, timeout→static | v0.42 |
-| DHCP (edge-dhcp) | no_std + no-alloc, alternativa | v0.88 |
-| ARP | Delegado ao smoltcp, gateway hardcoded | v0.42 |
-| HTTP Client | State machine: Connecting→Sending→Done | v0.24 |
-| ICMP Ping | Echo Request/Reply | v0.20 |
-| IP Static Fallback | 10.0.2.15/24 quando DHCP falha | v0.60 |
-| DNS | Via smoltcp | v0.24 |
-| NetPhy Unified | RTL8139→VirtIO fallback | v0.42 |
-| WiFi Agent | Scan, select, password, dual-network | v0.97 |
-| Link Watcher | Ethernet+WiFi failover com hysteresis | v0.97 |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| smoltcp Integration | Device trait, TCP/UDP/ARP/DNS | ADR-0016 | #117-124 | `netstack.rs` | v0.24 |
+| DHCP (smoltcp) | socket-dhcpv4, auto IP | ADR-0016 | #251 | `dhcp.rs` | v0.42 |
+| ARP | smoltcp + gateway hardcoded | ADR-0016 | — | `netstack.rs` | v0.42 |
+| HTTP Client | Connecting→Sending→Done | ADR-0016 | — | `netstack.rs` | v0.24 |
+| ICMP Ping | Echo Request/Reply | ADR-0016 | — | `net.rs` | v0.20 |
+| IP Static Fallback | 10.0.2.15/24 | ADR-0016 | — | `network_agent.rs` | v0.60 |
+| DNS | Via smoltcp | ADR-0016 | — | `netstack.rs` | v0.24 |
+| NetPhy Unified | RTL8139→VirtIO fallback | ADR-0016 | — | `netstack.rs` | v0.42 |
+| WiFi Agent | Scan, select, dual-network | ADR-0016 | #124 | `wifi_agent.rs` | v0.97 |
+| Link Watcher | Ethernet+WiFi failover | — | — | `link_watcher.rs` | v0.97 |
 
 ---
 
 ## 6. DISPLAY / UI — Interface Visual
 
-| Tecnologia | Descrição | Sprint |
-|---|---|---|
-| UEFI Framebuffer | BGRA32, 1280×720, pixel format detect | v0.59 |
-| NeuralConsole | Texto no framebuffer, scroll, cores | v0.59 |
-| JarvisDesktop Compositor | Multi-window, dock, drag, resize, [X] close | v0.61 |
-| Theme Engine | 5 temas (dark/dracula/matrix/solarized/light) | v0.61 |
-| Font Engine | VGA 8×16 + scaling + TTF | v0.94 |
-| JARVIS Avatar | Partículas, 4 estados animados | v0.86 |
-| Tensor Viz | Heatmap + attention graph | v0.94 |
-| WS Cube | 3D rotation, crossfade | v0.66 |
-| WASM Icons | Skills no desktop, clique executa | v0.93 |
-| **LLM Icons** | Gera bitmap 8x8 via HWEXPERT_MODEL | v0.103 |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| UEFI Framebuffer | BGRA32, 1280×720 | ADR-0014 | #79-82 | `display/fb.rs` | v0.59 |
+| NeuralConsole | Texto, scroll, cores | ADR-0014 | #79-82 | `display/console.rs` | v0.59 |
+| JarvisDesktop | Multi-window, dock, drag, close | ADR-0036 | #315 | `display/compositor.rs` | v0.61 |
+| Theme Engine | 5 temas hot-swap | — | #279b | `display/theme.rs` | v0.61 |
+| Font Engine | VGA 8×16 + TTF | — | — | `display/font.rs` | v0.94 |
+| JARVIS Avatar | Particulas 4 estados | ADR-0036 | #315 | `display/avatar.rs` | v0.86 |
+| Tensor Viz | Heatmap + attention | — | — | `display/compositor.rs` | v0.94 |
+| Desktop Cube | 3D rotation crossfade | ADR-0029 | #283, #286 | `gpu/cube.rs` | v0.66 |
+| WASM Icons | Skills no desktop | ADR-0032 | #309 | `display/compositor.rs` | v0.93 |
+| LLM Icons | Bitmap 8×8 via HWEXPERT | — | — | `display/compositor.rs` | v0.103 |
 
 ---
 
 ## 7. MEMÓRIA E ARMAZENAMENTO
 
-| Tecnologia | Descrição | Sprint |
-|---|---|---|
-| MHI (Memory Hierarchy Index) | MemoryTier, AllocTier (Dram/Vram/Nvme/Hdd) | v0.21 |
-| ARC Cache | 1MB DRAM, write-back, MFU/MRU | v0.75 |
-| MemoryTree v2 | MemNode, TTL, Ebbinghaus decay | v0.56 |
-| Knowledge Graph | KNode+KEdge, query(relation) | v0.56 |
-| SHA-256 Dedup | Sliding window 5min | v0.89 |
-| Hybrid Search (BM25+MLP) | TF-score + MLP, RRF | v0.89 |
-| 4-Tier Consolidation | Working→Episodic→Semantic→Procedural | v0.89 |
-| Atkinson-Shiffrin | Sensory→STM→LTM (48h→7d→permanent) | v0.89 |
-| Ebbinghaus Decay | strength = importance × e^(-λ·days) | v0.89 |
-| VFS Layer | Mount, resolve, lookup, list_dir | v0.62 |
-| FAT32 | Read/write, clusters, diretórios | v0.75 |
-| FAT12 Boot Log | BOOT.LOG no kernel | v0.58 |
-| OverlayFS | Multi-layer, Copy-on-Write | v0.96 |
-| Zero-Copy SFS | Slice references, dir index 256B | v0.96 |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| MHI | MemoryTier, AllocTier | ADR-0014 | #63-67 | `mhi.rs` | v0.21 |
+| ARC Cache | 1MB DRAM, MFU/MRU | ADR-0030 | — | `disk_agent/cache.rs` | v0.75 |
+| MemoryTree v2 | MemNode, TTL, Ebbinghaus | ADR-0023 | #214-227 | `event-bus/memory_tree.rs` | v0.56 |
+| Knowledge Graph | KNode+KEdge | ADR-0023 | #221 | `event-bus/kgraph.rs` | v0.56 |
+| SHA-256 Dedup | Sliding window 5min | ADR-0023 | #214 | `event-bus/dedup.rs` | v0.89 |
+| Hybrid Search | BM25+MLP, RRF | ADR-0023 | #217 | `event-bus/hybrid_search.rs` | v0.89 |
+| 4-Tier Consolidation | Working→Episodic→Semantic→Procedural | ADR-0023 | #218 | `event-bus/atkinson.rs` | v0.89 |
+| Atkinson-Shiffrin | Sensory→STM→LTM | ADR-0023 | #224 | `event-bus/atkinson.rs` | v0.89 |
+| Ebbinghaus Decay | strength = I×e^(-λ·days) | ADR-0023 | #219 | `event-bus/metacognitive.rs` | v0.89 |
+| VFS Layer | Mount, resolve, lookup | ADR-0030 | #281 | `vfs/mod.rs` | v0.62 |
+| FAT32 | Read/write, clusters | ADR-0030 | — | `fat32.rs` | v0.75 |
+| OverlayFS | Multi-layer, CoW | — | — | `vfs/` | v0.96 |
+| Zero-Copy SFS | Slice references | — | — | `self_heal.rs` | v0.96 |
 
 ---
 
 ## 8. SEGURANÇA
 
-| Tecnologia | Descrição | Sprint |
-|---|---|---|
-| Ed25519 Identity | verify_signature(), chave pública array | v0.50 |
-| TPM 2.0 | SHA256, PCR[8] extend, FIFO MMIO | v0.74 |
-| TrustCache | Token→skill, deny list, TTL, permission | v0.17 |
-| Security Agent | 5 detectores: PortScan, ARP, Ping, DHCP, Timer | v0.50 |
-| Safety Interceptor | 4 Asimov Leis, Layer 0=halt | v0.51 |
-| Merkle Audit Trail | SHA-256 chain, ring 4096, Ed25519 | v0.87 |
-| Fail-Closed | 4 invariantes SMT-proof, default deny | v0.87 |
-| Path Confinement | PathRule + check_path() | v0.49 |
-| Mask Secrets | 12 padrões → [REDACTED] | v0.49 |
-| SelfHeal | FailureClass, RecoveryAction, lessons | v0.32 |
-| Failure Taxonomy | 5 classes + range mapping | v0.96 |
-| Corrective Prompting | Error→LLM→recovery | v0.96 |
+| Tecnologia | Descrição | ADR | IDEA | Arquivo | Sprint |
+|---|---|---|---|---|---|
+| Ed25519 Identity | verify_signature() bare-metal | ADR-0020 | #166, #176 | `identity.rs` | v0.50 |
+| TPM 2.0 | SHA256, PCR[8], FIFO | ADR-0025 | #305 | `tpm.rs` | v0.74 |
+| TrustCache | Token→skill, deny, TTL | ADR-0025 | — | `trust.rs` | v0.17 |
+| Security Agent | 5 detectores | ADR-0025 | #256-264 | `security.rs` | v0.50 |
+| Safety Interceptor | 4 Asimov Leis, halt | ADR-0025 | — | `safety.rs` | v0.51 |
+| Merkle Audit Trail | SHA-256 chain, Ed25519 | ADR-0025 | — | `audit.rs` | v0.87 |
+| Fail-Closed | 4 invariantes SMT-proof | ADR-0025 | — | `safety.rs` | v0.87 |
+| Path Confinement | PathRule + check_path() | ADR-0025 | — | `trust.rs` | v0.49 |
+| Mask Secrets | 12 padrões→REDACTED | ADR-0025 | — | `trust.rs` | v0.49 |
+| SelfHeal | FailureClass, RecoveryAction | ADR-0027 | #366-374 | `self_heal.rs` | v0.32 |
+| Failure Taxonomy | 5 classes | — | — | `self_heal.rs` | v0.96 |
+| Corrective Prompting | Error→LLM→recovery | — | — | `self_heal.rs` | v0.96 |
 
 ---
 
