@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core
 
-**Última atualização:** 2026-07-05 — ADR-0037 v4 Pesquisa Expandida AMD+Intel+NPU+Apple+NVIDIA (50+ fontes, 5 vendors, 37 novas ideias #318-#354, Matriz de Decisão por HW Real). Bloco 21a/21b/21e completos (SMP Foundation, Work-Stealing, Polimento).  
+**Última atualização:** 2026-07-08 — ~410 ideias catalogadas (#1-#408 + letras). Consolidado após verificação cruzada com TECNOLOGIAS.md e TODO.md.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -33,6 +33,7 @@ Nada é descartado sem registro. Ideias podem ser:
 |---|---|---|
 | ✅ Block N | Implementado no bloco N da chain MVP | ✅ Block 2 |
 | 🟡 Sprint N | Agendado para sprint específica | 🟡 Sprint 19 |
+| 🔴 Bloqueado | Bloqueado por dependência externa (ex: B-01) | 🔴 B-01 |
 | ⏳ Pós-MVP | Adiado, ver Seção 3 para dependências | ⏳ Pós-MVP |
 | 💰 Sponsor | Requer hardware/parceria | 💰 Sponsor |
 | ❌ Descartado | Não será feito, com motivo | ❌ Descartado |
@@ -1428,6 +1429,36 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 6. **Blocos legacy (12-17)** mantidos como estão — implementados ou com itens 🟡 independentes.
 
 ---
+
+
+## Seção 1.9 — Itens Catalogados (#355-#408)
+
+Itens adicionados via changelog (2026-07-06 a 2026-07-07).
+
+| # | Item | Destino | Status |
+|---|------|---------|--------|
+| 355 | buddy-slab-allocator | Sprint 86 | ✅ |
+| 356 | edge-dhcp | Sprint 88 | ✅ |
+| 357 | khal-std | -- | ❌ |
+| 358 | ruvix-net | -- | 🔵 |
+| 359 | BGE Embedding | Sprint 89 | ✅ |
+| 360 | Kokoro-82M TTS | Sprint 94 | 🟡 |
+| 361 | Zero-Copy SFS | Sprint 96 | ✅ |
+| 362 | Episodic memory NVMe | Sprint 95 | ✅ |
+| 363 | Skills-as-Modules | Sprint 96 | ✅ |
+| 364 | Zero-Trust Syscall | Sprint 92 | 🟡 |
+| 365 | Neural Cache decisions | Sprint 92 | 🟡 |
+| 366-374 | Self-Healing (9 itens) | Sprint 96 | ✅ |
+| 375-377 | GGUF phased (3 itens) | Sprint 99+ | 🟡 |
+| 378-382 | GPU Architecture (5 itens) | Sprint 98 | ✅ |
+| 383-390 | AIOS Evolution (8 itens) | Sprint 93-97 | ✅ |
+| 391-396 | WASM Apps (6 itens) | Sprint 93 | ✅ |
+| 397-401 | Micro-Learning (5 itens) | Sprint 95 | ✅ |
+| 402-403 | WASM pool + ABI | Sprint 93 | ✅ |
+| 404 | NVMe SQ/CQ | Sprint 99+ | ✅ |
+| 405 | Capability token crypto | Sprint 93 | 🟡 |
+| 406 | VirtIO-GPU fix | Sprint 97 | 🟡 |
+| 407-408 | WiFi SoftMAC + Async | Pos B-01 | 🔴 |
 
 ## Seção 5 — Changelog do Idea Bank
 
