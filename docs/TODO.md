@@ -51,42 +51,55 @@ Todos os sprints de 84 a 103 foram implementados e verificados. Detalhes em `doc
 
 ---
 
-## 🟡 PARCIAL — Itens com implementação parcial
+## 🟡 SPRINT 92 — Itens não bloqueados por B-01 (~3.200 LOC)
 
-| Item | % | Descrição | Arquivo |
-|------|---|-----------|---------|
-| Wake Word "Jarvis" | 90% | Heurístico (energia), sem ML | `audio/wakeword.rs` |
-| burn-flex backend | 70% | Stub funcional, sem integração com burn::Backend trait | `burn_flex.rs` |
-| MSched VRAM eviction | 70% | Predictor Belady/OPT, sem scheduling real | `gpu/msched.rs` |
-| GPU Display Co-existence | 70% | Planner, sem time-sharing real | `gpu/display_coex.rs` |
-| BGE Embedding semantic_search | 60% | index_embedding + cosine, sem HNSW index real | `memory_systems.rs` |
+| Item | % | Esforço | Descrição | Arquivo |
+|------|---|---------|-----------|---------|
+| Wake Word ML | 90% | ~100 LOC | Substituir heurística por modelo simples (energy→classificador) | `audio/wakeword.rs` |
+| burn-flex Backend trait | 70% | ~300 LOC | Integrar FlexBackend com burn::backend::Backend trait | `burn_flex.rs` |
+| MSched VRAM scheduling | 70% | ~200 LOC | Conectar predictor Belady ao scheduler GPU real | `gpu/msched.rs` |
+| GPU Display time-sharing | 70% | ~200 LOC | Implementar context switch entre iGPU e dGPU | `gpu/display_coex.rs` |
+| BGE HNSW index | 60% | ~400 LOC | Substituir busca linear por HNSW approximate nearest neighbor | `memory_systems.rs` |
+| **#279e** v86 browser | 0% | ~500 LOC | Emulador x86 em WASM para demonstração | Novo |
+| Desktop Cube 3D + crossfade | 50% | ~200 LOC | Transições 3D entre workspaces com GPU | `gpu/cube.rs` |
+| BitNet IDE avançado | 40% | ~500 LOC | Debug WASM, preview ao vivo, syntax highlight | `wasm_rt.rs` |
+| Skill Market / Plugin Hub | 0% | ~500 LOC | Marketplace de skills com instalação 1-click | Novo |
 
 ---
 
-## ⏳ PÓS-MVP — Planejados mas não priorizados
+## 🔴 BLOQUEADO — B-01 DHCP/RX (dependem de rede funcional)
 
 | Item | Esforço | Descrição |
 |------|---------|-----------|
-| **#279e** v86 browser demo | ~500 LOC | Emulador x86 em WASM |
+| **B-01** DHCP/DNS/HTTP funcional | ~500 LOC | smoltcp DHCP nunca completa. RX fix RTL8139/E1000 |
+| WWW Agents (Email, Search, RSS, Download) | ~2.600 | Dependem de rede funcional |
+| Self-Update Agent (A/B slots, channels) | ~800 | Depende de download |
+| Cross-OS compat (PE/ELF/Mach-O/APK) | ~2.000 | Depende de download de amostras |
+| Federated Cluster / Mesh | ~300 | Depende de rede |
+| Multi-device sync (CRDT) | ~300 | Depende de rede |
+| AppForge / Multi-User | ~3.000 | Depende de coordenação em rede |
+| Actor Registry | ~1.000 | Depende de comunicação entre nós |
+| Observability (tracing/metrics) | ~1.500 | Depende de exportação via rede |
+
+---
+
+## ⏳ PÓS-MVP — Itens sem bloqueio mas não priorizados
+
+| Item | Esforço | Descrição |
+|------|---------|-----------|
+| GGUF v3 loader (#278) | ~500 LOC | Modelos 9B+ com heap >5GB |
 | NPU AMD XDNA driver (#43-52) | ~2.000 | NPU on-chip (+ sponsor) |
 | ARM/RISC-V port (#116) | ~5.000 | Portabilidade cross-arch |
-| AppForge / Multi-User (#186-189) | ~3.000 | Ambiente de apps multi-usuário |
-| Actor Registry (#210-227) | ~1.000 | Framework de atores concorrentes |
-| Observability (#241-247) | ~1.500 | Tracing, metrics, logging avançado |
-| GGUF v3 loader (#278) | ~500 | Modelos 9B+ com heap >5GB |
-| Skill Market / Plugin Hub | ~1.000 | Marketplace de skills | 
-| Desktop Cube 3D + crossfade | ~200 | GPU workspace transitions |
-| BitNet IDE avançado | ~500 | IDE WASM com debug + preview |
 
 ---
 
-## 💰 SPONSOR — Itens que dependem de financiamento
+## 💰 SPONSOR
 
-| Item | Esforço | Descrição |
-|------|---------|-----------|
-| NPU AMD XDNA driver | ~2.000 LOC | Driver para NPU on-chip |
-| Cross-arch (ARM/RISC-V) | ~5.000 LOC | Portabilidade |
-| Federated learning | ~1.000 LOC | Gradientes compartilhados entre AIOS |
+| Item | Esforço |
+|------|---------|
+| NPU AMD XDNA driver | ~2.000 LOC |
+| Cross-arch (ARM/RISC-V) | ~5.000 LOC |
+| Federated learning | ~1.000 LOC |
 
 ---
 
