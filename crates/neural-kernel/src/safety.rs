@@ -52,7 +52,12 @@ impl SafetyInvariants {
         SafetyInvariants { i1_process_sep: true, i2_pre_action: true, i3_fail_closed: true, i4_signed: true }
     }
     /// Verifica os 4 invariants para uma ação. Retorna SafetyVerdict.
-    pub fn check(&self, action: &str, _agent: &str, skill_name: &str) -> SafetyVerdict {
+    pub fn check(&self, action: &str, agent: &str, skill_name: &str) -> SafetyVerdict {
+        // I1: Process separation — nenhum agente acessa memória de outro
+        if self.i1_process_sep && (action.contains("read_mem_") || action.contains("write_mem_")
+            || action.contains("inspect_agent")) {
+            return SafetyVerdict::Violation { layer: 1, reason: String::from("I1 violado: acesso a memória de outro processo") };
+        }
         // I3: Fail-Closed — padrão é negar
         if !self.i3_fail_closed {
             return SafetyVerdict::Violation { layer: 3, reason: String::from("I3 Fail-Closed violado: safety não está ativo") };
@@ -60,6 +65,12 @@ impl SafetyInvariants {
         // I2: Pre-action — skill verificada antes
         if !self.i2_pre_action {
             return SafetyVerdict::Violation { layer: 2, reason: String::from("I2 Pre-Action violado: skill não verificada") };
+        }
+        // I4: Signed evidence — registra no Merkle Audit Trail
+        if self.i4_signed {
+            let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let msg = alloc::format!("{}:{}:{}", action, agent, skill_name);
+            crate::AUDIT_TRAIL.lock().push(tick, agent, "safety_check", msg.as_bytes());
         }
         // Hard blocklist + Layer 0 (patterns)
         for (pattern, reason) in LAYER0_PATTERNS.iter() {

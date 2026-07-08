@@ -310,6 +310,10 @@ pub const LOG_SECTOR: u32 = 2048;
 
 pub static ATA_DRIVER: spin::Mutex<Option<ata::AtaDriver>> = spin::Mutex::new(None);
 
+/// Merkle Audit Trail global (#315.19)
+
+pub static AUDIT_TRAIL: spin::Mutex<crate::audit::AuditTrail> = spin::Mutex::new(crate::audit::AuditTrail::new());
+
 
 
 
@@ -1146,7 +1150,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     publish_boot_phase(BootPhase::HardwareDiscovery, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
-    
+    // AHCI probe (SATA 6G NCQ)
+    if let Some(ahci) = unsafe { crate::ahci::AhciDriver::new() } {
+        crate::serial_println!("[AHCI] SATA controller init: {} ports", ahci.port_count());
+        // AHCI fica disponivel como driver global
+    } else {
+        crate::serial_println!("[AHCI] Nenhum controlador SATA AHCI encontrado");
+    }
 
     unsafe { crate::xhci::init_xhci(); }
 
