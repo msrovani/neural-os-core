@@ -64,6 +64,15 @@ Todos os sprints de 84 a 103 foram implementados e verificados. Detalhes em `doc
 | Desktop Cube 3D + crossfade | 50% | ~200 LOC | Transições 3D entre workspaces com GPU | `gpu/cube.rs` |
 | BitNet IDE avançado | 40% | ~500 LOC | Debug WASM, preview ao vivo, syntax highlight | `wasm_rt.rs` |
 | Skill Market / Plugin Hub | 0% | ~500 LOC | Marketplace de skills com instalação 1-click | Novo |
+| **60.5** Train 100M/1.5B params | 0% | ~800 LOC | Treino on-device com GPU física | `tools/train_*.py` |
+| **61.5** LLM Icons | 50% | ~200 LOC | Geração de ícones via HWEXPERT_MODEL | `display/compositor.rs` |
+| **61.6** WASM App Sandbox | 40% | ~400 LOC | Sandbox completo com fuel/perm/cap | `wasm_rt.rs` |
+| **62.2-6** MHI+FS Bridge | 30% | ~600 LOC | Integração VFS ↔ MHI completa | `vfs/`, `fs/mhi_scheduler.rs` |
+| **63** GGUF model swap (heap >5GB) | 20% | ~500 LOC | Modelos 9B+ com heap dinâmico | `gguf.rs` |
+| **66** AMD PM4 / NVIDIA PFIFO full | 30% | ~400 LOC | GPU ring buffer completo por vendor | `gpu/{nvidia,amd}.rs` |
+| **66** Intel GEN shader matmul | 20% | ~300 LOC | GPU matmul via shader assembly | `gpu/intel.rs` |
+| **67** Agency Importer (147 agents) | 30% | ~600 LOC | Parser .md → AgentManifest completo | `agency.rs` |
+| **67** Observation Protocol persist | 40% | ~200 LOC | skill_observer com log persistente | `skill_observer.rs` |
 
 ---
 
