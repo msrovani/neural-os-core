@@ -1669,6 +1669,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                             crate::boot_logger::log("BOOT: RustCoder expert loaded");
                         }
                     }
+                    if let Some(hw_data) = fs.read_file("HWEXPRT.BIN") {
+                        if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
+                            crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
+                            serial_println!("[FAT] HW Expert model loaded (213K HWIDs)!");
+                            crate::boot_logger::log("BOOT: HW Expert loaded");
+                        }
+                    }
                 }
             }
         }

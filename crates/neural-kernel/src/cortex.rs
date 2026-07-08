@@ -1158,6 +1158,7 @@ pub trait Model: Send {
 
 static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 
 pub fn set_model(model: Box<dyn Model>) {
     *CURRENT_MODEL.lock() = Some(model);
@@ -1167,6 +1168,11 @@ pub fn set_model(model: Box<dyn Model>) {
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
     *RUSTCODER_MODEL.lock() = Some(model);
     crate::serial_println!("[CORTEX] RustCoder expert model loaded.");
+}
+
+pub fn set_hwexpert_model(model: Box<dyn Model>) {
+    *HWEXPERT_MODEL.lock() = Some(model);
+    crate::serial_println!("[CORTEX] HW Expert model loaded (SDIO MoE).");
 }
 
 pub fn generate_via_model(prompt: &str) -> String {
@@ -1182,6 +1188,14 @@ pub fn generate_via_rustcoder(prompt: &str) -> String {
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
         None => String::from("[RUSTCODER] No expert model loaded"),
+    }
+}
+
+pub fn generate_via_hwexpert(prompt: &str) -> String {
+    let guard = HWEXPERT_MODEL.lock();
+    match guard.as_ref() {
+        Some(m) => m.generate(prompt),
+        None => String::from("[HWEXPERT] No HW expert model loaded"),
     }
 }
 
