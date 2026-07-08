@@ -5,7 +5,7 @@
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
 # ════════════════════════════════════════════════════════
-# docs/TECNOLOGIAS.md          → Catálogo completo de todas as tecnologias (100+)
+# TECNOLOGIAS.md               → Catálogo completo de todas as tecnologias (100+)
 # docs/TODO.md                 → Único bloqueador real: B-01 (DHCP/RX)
 # docs/memory/STATE.md         → Estado atual do kernel
 # docs/memory/IDEA_BANK.md     → 410+ ideias catalogadas com status
