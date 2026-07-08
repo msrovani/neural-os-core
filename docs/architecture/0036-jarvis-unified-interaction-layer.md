@@ -5,6 +5,7 @@
 **Substitui:** ADR-0034 (JARVIS Conscious Interaction Layer) + ADR-0035 (JARVIS Deep Research)
 **Sprint Target:** 77-80 (JARVIS Core) + N+1 (Voice) + N+2 (Mesh)
 **Depende de:** ADR-0031 (AIOS Evolution), ADR-0032 (WASM Agent Apps), ADR-0033 (On-Device Micro-Learning)
+**Pesquisa de validação:** `docs/research/jarvis-features-for-aios.md` (11 projetos, 2026-07-03). Todos os itens "O que ADOTAR" implementados: IPW, Session Compression, Skill Discovery, CapabilityContract, MCP Layer. Ver `docs/TECNOLOGIAS.md` seção 9 para estado atual.
 
 ---
 
