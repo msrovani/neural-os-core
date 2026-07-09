@@ -1,3 +1,5 @@
+
+
 use crate::pci::scan_pci;
 
 #[derive(Clone)]
@@ -14,19 +16,27 @@ impl AtaDriver {
     }
 
     pub unsafe fn probe() -> Option<Self> {
+        // 1. Tenta PCI class 0x01 com BARs validos
         let devs = scan_pci();
         for d in &devs {
             if d.class == 0x01 && (d.subclass == 0x01 || d.subclass == 0x06) {
                 let io = (d.bar0 as u16) & 0xFFF0;
                 if io == 0 || io == 0xFFFF { continue; }
-                if Self::detect(io) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function }); }
+                if Self::detect(io, 0xA0) || Self::detect(io, 0xB0) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function }); }
+            }
+        }
+        // 2. Fallback: portas legadas ISA (PIIX3 legacy mode - BARs zerados)
+        for &base in &[0x1F0u16, 0x170u16] {
+            if Self::detect(base, 0xA0) || Self::detect(base, 0xB0) {
+                return Some(AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0 });
             }
         }
         None
     }
 
-    unsafe fn detect(io: u16) -> bool {
-        write_io(io + 6, 0xA0);
+    unsafe fn detect(io: u16, sel: u8) -> bool {
+        write_io(io + 6, sel);
+        core::arch::asm!("out 0x80, al", in("al") 0u8, options(nostack));
         let st = read_io(io + 7);
         st != 0 && st != 0xFF
     }

@@ -94,12 +94,16 @@ unsafe fn scan_bus(bus: u8, visited: &mut alloc::vec::Vec<u8>) -> alloc::vec::Ve
                 let vf = read_config_word(bus, device, function, 0x00);
                 if vf != 0xFFFF && vf != 0x0000 {
                     let df = read_config_word(bus, device, function, 0x02);
-                    let bar0 = read_bar(bus, device, function, 0);
-                    let bar1 = read_bar(bus, device, function, 1);
+                    let cr = read_config_word(bus, device, function, 0x0A);
+                    let cl = (cr >> 8) as u8;
+                    let sc = (cr & 0xFF) as u8;
+                    let pi = (read_config_word(bus, device, function, 0x08) >> 8) as u8;
+                    let b0 = read_bar(bus, device, function, 0);
+                    let b1 = read_bar(bus, device, function, 1);
                     devices.push(PciDevice {
                         bus, device, function,
-                        vendor_id: vf, device_id: df, class, subclass, prog_if,
-                        bar0, bar1, bar2: 0, bar3: 0, bar4: 0, bar5: 0,
+                        vendor_id: vf, device_id: df, class: cl, subclass: sc, prog_if: pi,
+                        bar0: b0, bar1: b1, bar2: 0, bar3: 0, bar4: 0, bar5: 0,
                     });
                 }
             }
@@ -113,6 +117,44 @@ unsafe fn scan_bus(bus: u8, visited: &mut alloc::vec::Vec<u8>) -> alloc::vec::Ve
         }
     }
     devices
+}
+
+/// Varre barramento PCI com zero alocação, executando callback para cada device.
+/// Retorna true se o callback abortou a varredura (early exit).
+pub unsafe fn scan_pci_cb<F: FnMut(u8, u8, u8, u16, u16) -> bool>(mut cb: F) -> bool {
+    for bus in 0..=255u8 {
+        for slot in 0..=31u8 {
+            let vid = read_config_word(bus, slot, 0, 0x00);
+            if vid == 0xFFFF || vid == 0x0000 { continue; }
+            let did = read_config_word(bus, slot, 0, 0x02);
+            if cb(bus, slot, 0, vid, did) { return true; }
+            let htype = read_config_byte(bus, slot, 0, 0x0E);
+            if (htype & 0x80) == 0 { continue; }
+            for func in 1..=7u8 {
+                let vf = read_config_word(bus, slot, func, 0x00);
+                if vf == 0xFFFF || vf == 0x0000 { continue; }
+                let df = read_config_word(bus, slot, func, 0x02);
+                if cb(bus, slot, func, vf, df) { return true; }
+            }
+        }
+    }
+    false
+}
+
+/// Busca o primeiro dispositivo PCI por class/subclass (zero alocação).
+/// Retorna (bus, device, function, vendor_id, device_id) se encontrado.
+pub unsafe fn find_device_by_class(class: u8, subclass: u8) -> Option<(u8, u8, u8, u16, u16)> {
+    let mut result = None;
+    scan_pci_cb(|bus, slot, func, vid, did| {
+        let c = read_config_word(bus, slot, func, 0x0A);
+        if (c >> 8) as u8 == class && (c & 0xFF) as u8 == subclass {
+            result = Some((bus, slot, func, vid, did));
+            true
+        } else {
+            false
+        }
+    });
+    result
 }
 
 pub unsafe fn scan_pci() -> Vec<PciDevice> {

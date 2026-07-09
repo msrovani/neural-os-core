@@ -124,6 +124,7 @@ Ver `docs/TODO.md` para detalhes. Os 9 itens de Sprint 92 não dependem de B-01.
 
 # Bloqueador Único: B-01 — DHCP/RX nunca completa
 ~18.000 LOC de sprints 92+ dependem de rede funcional. Enquanto não resolvido, focar em itens não bloqueados.
+**Status v0.109.2**: Causa raiz do RX=0 no RTL8139 encontrada — bit CR_RE (0x01) nunca setado no Command Register. MAC da Realtek ficava desligado. Correção aplicada em todas as 3 escritas do CR. Pendente: teste em QEMU com boot longo para confirmar `rx>0`.
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

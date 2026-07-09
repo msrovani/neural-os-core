@@ -125,8 +125,9 @@ impl Rtl8139Driver {
             self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]
         );
 
-        // Primeiro enable TX+RX antes de configurar buffers (sequência do driver ref)
-        self.write8(REG_CR, CR_RXE | CR_TXE);
+        // Primeiro enable RE (Receiver MAC) + RXE (RX DMA) + TXE (TX DMA)
+        // RE bit (0x01) é CRÍTICO — sem ele o receptor MAC fica desligado e rx=0 sempre
+        self.write8(REG_CR, CR_RE | CR_RXE | CR_TXE);
 
         // Configura RCR: WRAP bit (0x80) é CRÍTICO para RX buffer funcionar corretamente
         // APM=1(PMatch) AB=1(Broadcast) MXDMA=111(unlimited) WRAP=1 RXFTH_NONE
@@ -154,10 +155,10 @@ impl Rtl8139Driver {
             rx_virt.add(i).write_volatile(0);
         }
 
-        // Segundo enable + RBSTART (sequência do driver ref: enable → RBSTART → enable)
-        self.write8(REG_CR, CR_RXE | CR_TXE);
+        // Segundo enable + RBSTART (RE+RXE+TXE em todas as writes do CR)
+        self.write8(REG_CR, CR_RE | CR_RXE | CR_TXE);
         self.write32(REG_RBSTART, rx_paddr as u32);
-        self.write8(REG_CR, CR_RXE | CR_TXE);
+        self.write8(REG_CR, CR_RE | CR_RXE | CR_TXE);
 
         for i in 0..4 {
             let tx_paddr = Self::alloc_page();

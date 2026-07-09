@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.109.2-rtl8139-rx-fix] — 2026-07-08 — 🐛🔧 RTL8139 RE bit + AHCI BlockDevice
+
+### Raiz do B-01 (RX=0) encontrada — RTL8139 CR_RE bit ausente
+- **Bug**: `const CR_RE: u8 = 0x01` (Receiver Enable) nunca era escrito no registrador CR (offset 0x37). O MAC da Realtek ficava desligado — pacotes descartados na borda do chip antes do DMA.
+- **Log confirmou**: `cr=0x0c` (só RXE+TXE), bit 0 (RE) = 0.
+- **Correção**: todas as 3 escritas do CR agora usam `CR_RE | CR_RXE | CR_TXE` (0x0D).
+- **E1000** funciona porque tem registradores diferentes — não depende desse bit.
+- **Aprendizado**: dumps brutos de registradores na telemetria salvam dias de debug.
+
+### scan_pci_cb() — Scanner PCI zero-allocation com callback
+- `scan_pci_cb(cb)`: varre 256 buses × 32 slots com Header Type optimization, executa callback `(bus,slot,func,vid,did) → bool`, zero alocação.
+- `find_device_by_class(class, subclass)`: busca early-return por class/subclass.
+- AHCI probe em `main.rs` refatorado de `scan_pci()` (Vec heap) para `scan_pci_cb()` (zero alloc).
+
+### AHCI + BlockDevice trait — Integração com pipeline FAT32
+- `block_dev.rs`: trait `BlockDevice` com `read_sectors(lba, buf)`, implementada para `AtaDriver` e `AhciDriver`.
+- `AHCI_DRIVER` global: armazena driver AHCI encontrado.
+- Model loading tenta AHCI primeiro, fallback ATA legado.
+- QEMU sem disco SATA anexado → `[BOOT] No storage device found` (esperado).
+
+### SkillOpt viability analysis
+- Paper Microsoft Research analisado: SkillOpt como optimizer de skills em espaço textual.
+- Viabilidade confirmada para neural-os-core (~145 LOC, sem dependências externas).
+- Recomendado para Sprint 99.
+
 ## [0.109.1-compilation-fix] — 2026-07-08 — ✅ 32 erros de compilação eliminados
 
 ### Correção em massa — cache incremental mascarava 32 erros

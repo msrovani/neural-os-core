@@ -84,6 +84,8 @@ mod apic;
 
 mod ata;
 
+mod block_dev;
+
 mod cortex;
 
 mod fat32;
@@ -309,6 +311,10 @@ pub const LOG_SECTOR: u32 = 2048;
 /// ATA driver global para escrita de log no SDHC
 
 pub static ATA_DRIVER: spin::Mutex<Option<ata::AtaDriver>> = spin::Mutex::new(None);
+
+/// Unidade de armazenamento primária (AHCI ou ATA) para FAT32
+
+pub static AHCI_DRIVER: spin::Mutex<Option<crate::ahci::AhciDriver>> = spin::Mutex::new(None);
 
 /// Merkle Audit Trail global (#315.19)
 
@@ -1150,15 +1156,34 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     publish_boot_phase(BootPhase::HardwareDiscovery, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
-    // AHCI probe (SATA 6G NCQ)
+    // AHCI probe (SATA 6G NCQ) — zero alocação via callback
     {
-        let ahci_devs = unsafe { crate::pci::scan_pci() };
-        let found = ahci_devs.iter().find(|d| d.class == 0x01 && d.subclass == 0x06);
-        if let Some(dev) = found {
-            if let Some(ahci) = unsafe { crate::ahci::AhciDriver::new(dev) } {
-                crate::serial_println!("[AHCI] SATA controller init: {} ports", ahci.ports.len());
-            }
-        } else {
+        let mut ahci_init = false;
+        unsafe {
+            crate::pci::scan_pci_cb(|bus, slot, func, vid, did| {
+                let cr = crate::pci::read_config_word(bus, slot, func, 0x0A);
+                if (cr >> 8) as u8 == 0x01 && (cr & 0xFF) as u8 == 0x06 {
+                    let pi = (crate::pci::read_config_word(bus, slot, func, 0x08) >> 8) as u8;
+                    let bar0_val = crate::pci::read_bar_value(bus, slot, func, 0) as u32;
+                    let bar5_val = crate::pci::read_bar_value(bus, slot, func, 5) as u32;
+                    let dev = crate::pci::PciDevice {
+                        bus, device: slot, function: func,
+                        vendor_id: vid, device_id: did,
+                        class: 0x01, subclass: 0x06, prog_if: pi,
+                        bar0: bar0_val, bar1: 0, bar2: 0, bar3: 0, bar4: 0, bar5: bar5_val,
+                    };
+                    if let Some(ahci) = crate::ahci::AhciDriver::new(&dev) {
+                        crate::serial_println!("[AHCI] SATA controller init: {} ports", ahci.ports.len());
+                        *crate::AHCI_DRIVER.lock() = Some(ahci);
+                        ahci_init = true;
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        if !ahci_init {
             crate::serial_println!("[AHCI] Nenhum controlador SATA AHCI encontrado");
         }
     }
@@ -1299,40 +1324,124 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 
-    // Carrega modelos do FAT32: BGE.BIN
+    // Carrega modelos do FAT32: BGE.BIN — tenta AHCI primeiro, fallback ATA
+    unsafe fn read_file_from_dev(dev: &mut dyn crate::block_dev::BlockDevice, name: &str) -> Option<alloc::vec::Vec<u8>> {
+        // Le MBR
+        let mut mbr = [0u8; 512];
+        if !dev.read_sectors(0, &mut mbr) { return None; }
+        if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA { return None; }
+        // Varre particoes FAT32
+        for i in 0..4 {
+            let off = 0x1BE + i * 16;
+            let type_code = mbr[off + 4];
+            if type_code != 0x0B && type_code != 0x0C && type_code != 0x1C { continue; }
+            let lba_start = u32::from_le_bytes([mbr[off+8], mbr[off+9], mbr[off+10], mbr[off+11]]);
+            // Le BPB
+            let mut bpb = [0u8; 512];
+            if !dev.read_sectors(lba_start as u64, &mut bpb) { continue; }
+            let bps = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]);
+            let spc = bpb[0x0D];
+            let reserved = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]);
+            let fat_count = bpb[0x10];
+            let root_entries = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
+            if root_entries > 0 { continue; }
+            let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
+            let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
+            if bps == 0 || spc == 0 { continue; }
+            let fat_lba = lba_start + reserved as u32;
+            let data_lba = fat_lba + fat_count as u32 * spf;
+
+            // Procura arquivo no diretorio root
+            let name_upper = name.to_ascii_uppercase();
+            let mut cluster = root_cluster;
+            while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+                let clba = data_lba + (cluster - 2) as u32 * spc as u32;
+                let mut buf = vec![0u8; spc as usize * bps as usize];
+                for s in 0..spc as u32 {
+                    let start = s as usize * bps as usize;
+                    if start + bps as usize <= buf.len() {
+                        dev.read_sectors((clba + s) as u64, &mut buf[start..start + bps as usize]);
+                    }
+                }
+                for entry in (0..buf.len()).step_by(32) {
+                    let first = buf[entry];
+                    if first == 0 || first == 0xE5 { continue; }
+                    if buf[entry + 11] & 0x08 != 0 { continue; }
+                    let fname = core::str::from_utf8(&buf[entry..entry+11]).unwrap_or("").trim_end();
+                    if !fname.eq_ignore_ascii_case(name_upper.as_str()) { continue; }
+                    let fsize = u32::from_le_bytes([buf[entry+28], buf[entry+29], buf[entry+30], buf[entry+31]]) as usize;
+                    let fc_lo = u16::from_le_bytes([buf[entry+26], buf[entry+27]]);
+                    let fc_hi = u16::from_le_bytes([buf[entry+20], buf[entry+21]]);
+                    let start_cluster = ((fc_hi as u32) << 16) | fc_lo as u32;
+                    let mut data = Vec::with_capacity(fsize);
+                    let mut fc = start_cluster;
+                    while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < fsize {
+                        let fc_lba = data_lba + (fc - 2) as u32 * spc as u32;
+                        for s in 0..spc as u32 {
+                            if data.len() >= fsize { break; }
+                            let mut chunk = [0u8; 512];
+                            dev.read_sectors((fc_lba + s) as u64, &mut chunk);
+                            let rem = fsize - data.len();
+                            data.extend_from_slice(&chunk[..rem.min(512)]);
+                        }
+                        // Le proximo cluster da FAT
+                        let fat_off = fc as usize * 4;
+                        let fat_sec = fat_lba + (fat_off / bps as usize) as u32;
+                        let mut fsector = [0u8; 512];
+                        dev.read_sectors(fat_sec as u64, &mut fsector);
+                        let boff = fat_off % bps as usize;
+                        fc = u32::from_le_bytes([fsector[boff], fsector[boff+1], fsector[boff+2], fsector[boff+3]]) & 0x0FFF_FFFF;
+                    }
+                    return Some(data);
+                }
+                // Proximo cluster FAT
+                let fat_off = cluster as usize * 4;
+                let fat_sec = fat_lba + (fat_off / bps as usize) as u32;
+                let mut fsector = [0u8; 512];
+                dev.read_sectors(fat_sec as u64, &mut fsector);
+                let boff = fat_off % bps as usize;
+                cluster = u32::from_le_bytes([fsector[boff], fsector[boff+1], fsector[boff+2], fsector[boff+3]]) & 0x0FFF_FFFF;
+            }
+        }
+        None
+    }
 
     unsafe {
-
-        let ata_guard = crate::ATA_DRIVER.lock();
-
-        if let Some(ref ata) = *ata_guard {
-
-            let parts = crate::fat32::read_mbr(ata);
-
-            for p in &parts {
-
-                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-
-                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-
-                    if let Some(bge_data) = fs.read_file("BGE.BIN") {
-
-                        if crate::memory_systems::load_bge(&bge_data) {
-
-                            serial_println!("[BGE] Embedding model loaded from FAT!");
-
-                            crate::boot_logger::log("BOOT: BGE embedding loaded");
-
-                        }
-
-                    }
-
+        let mut loaded = false;
+        // Tenta AHCI primeiro
+        let mut ahci_guard = crate::AHCI_DRIVER.lock();
+        if let Some(ref mut ahci) = *ahci_guard {
+            if let Some(bge_data) = read_file_from_dev(ahci, "BGE.BIN") {
+                if crate::memory_systems::load_bge(&bge_data) {
+                    serial_println!("[BGE] Embedding model loaded from AHCI FAT!");
+                    crate::boot_logger::log("BOOT: BGE embedding loaded");
+                    loaded = true;
                 }
-
             }
-
         }
-
+        drop(ahci_guard);
+        // Fallback ATA
+        if !loaded {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata_guard {
+                let parts = crate::fat32::read_mbr(ata);
+                for p in &parts {
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        if let Some(bge_data) = fs.read_file("BGE.BIN") {
+                            if crate::memory_systems::load_bge(&bge_data) {
+                                serial_println!("[BGE] Embedding model loaded from FAT (ATA)!");
+                                crate::boot_logger::log("BOOT: BGE embedding loaded");
+                                loaded = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !loaded {
+                serial_println!("[BOOT] No storage device found for model loading");
+            }
+        }
     }
 
 
