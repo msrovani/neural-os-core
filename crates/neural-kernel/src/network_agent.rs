@@ -103,6 +103,12 @@ pub fn network_agent_tick() {
                         ns.set_static_ip();
                         NET_CONFIG.lock().configured = true;
                         NET_CONFIG.lock().online = true;
+                        // Serial tunnel: DNS precisa ser real (8.8.8.8), nao 10.0.2.3
+                        if crate::env::is_sandbox() {
+                            NET_CONFIG.lock().dns_ip = [8, 8, 8, 8];
+                            NET_CONFIG.lock().gateway_ip = [8, 8, 8, 8];
+                            log(tick, "Sandbox serial: DNS set to 8.8.8.8");
+                        }
                         log(tick, "Dev env: using static IP 10.0.2.15/24");
                     }
                 }
@@ -169,10 +175,18 @@ pub fn network_agent_tick() {
                 }
             }
         }
-        // Health
+        // Health + resultados
         _ => {
             if tick % 200 == 0 && NET_CONFIG.lock().configured {
-                log(tick, "Health");
+                log(tick, &alloc::format!("Health TX={} RX={}",
+                    crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+            }
+            // Mostra diagnostico completo quando HTTP termina
+            if tick == 300 || tick == 500 {
+                let report = crate::netdiag::run_network_test();
+                for line in report.lines() {
+                    serial_println!("{}", line);
+                }
             }
         }
     }
