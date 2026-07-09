@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.109.1-compilation-fix] — 2026-07-08 — ✅ 32 erros de compilação eliminados
+
+### Correção em massa — cache incremental mascarava 32 erros
+- `cargo clean -p neural-kernel` revelou 32 erros que o build incremental escondia por meses
+- **Causa raiz**: múltiplos imports faltando (`alloc::vec`, `Vec`, `String`, `ToString`), APIs trocadas (slab, VFS, jarvis), format string não escapada
+- **shell.rs**: commas faltando, VFS methods inexistentes → `lookup`/`list_dir`, `current_dir` removido
+- **cortex.rs**: `{` não escapado no `format!`; `Event` → `crate::Event`
+- **agents.rs**: `}` extra pós-match arm; `train_step` esperava `&mut [i8]` não `&[i8]`
+- **alloc_adapter.rs**: `SlabAllocator::new()` → `::empty()`, `allocate` → `slab_alloc` (retorna `*mut u8`)
+- **burn_flex.rs**: `matmul_hybrid` (TernaryTensor) → `matmul` (Tensor); imports faltando
+- **trinity.rs / memory_systems.rs**: `.sqrt()` → `libm::sqrtf()` (sem trait F32Ext em no_std)
+- **jarvis.rs**: 4 APIs erradas (dream, ego, heartbeat, babel)
+- **main.rs**: `AuditTrail::new()` não-const → `const fn` c/ `Vec::new()`; AHCI com PCI scan
+- **Aprendizado chave**: `cargo clean -p neural-kernel` antes de `cargo check --release` é obrigatório quando erros somem misteriosamente
+
 ## [0.109.0-sprint91-sound] — 2026-07-08 — 🎵 Sprint 91 + Sound completos
 
 ### Sprint 91 — Ecosystem + Polimento 🏁

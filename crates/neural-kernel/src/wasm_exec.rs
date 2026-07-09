@@ -2,6 +2,7 @@
 //! Opcodes simples: push, pop, add, sub, load, store, call, br, ret.
 //! no_std, sem alocação dinâmica no hot path.
 
+use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::boxed::Box;

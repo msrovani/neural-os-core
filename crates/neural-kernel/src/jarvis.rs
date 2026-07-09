@@ -249,19 +249,19 @@ pub fn persona_pipeline(text: &str, ego: &mut EgoLayer, session: &mut SessionHis
     // 8. Fallback
     // 9. Reflex
     // 10. Dream
-    if tick % 500 == 0 { dream.tick(tick, &[text]); }
+    if tick % 500 == 0 { dream.tick(tick, &[String::from(text)]); }
     if let Some(insight) = dream.insights.last() { output.push_str(&alloc::format!("[DREAM] {} ", insight)); }
     // 11. Ego
-    ego.record(tick, text, emotion.dominant());
+    ego.learn("persona", emotion.dominant() != crate::jarvis::Emotion::Neutral);
     output.push_str(&alloc::format!("[EGO] {}", ego.status()));
     // 12. Compress
     if session.entries.len() > 20 { session.compress("drop_lowest"); }
     // 13. Notify
     if emotion.anger > 0.5 { notif.push_with_agent("Alta deteccao de raiva!", Urgency::High, "pipeline"); }
     // 14. Heartbeat
-    if tick % 1000 == 0 { heartbeat.tick(tick); }
+    if tick % 1000 == 0 { heartbeat.tick(tick, 0.0, 0.0, true); }
     // 15. Babel
-    if tick % 500 == 0 { babel.tick(tick, text); }
+    if tick % 500 == 0 { babel.tick(tick, text.len()); }
     // 16. Audit
     let _ = crate::AUDIT_TRAIL.lock().push(tick, "pipeline", "persona", text.as_bytes());
     output

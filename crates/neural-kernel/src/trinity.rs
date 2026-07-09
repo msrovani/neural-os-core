@@ -85,7 +85,7 @@ impl TrinityRouter {
                     }
                 }
                 // Normaliza
-                let norm = (embedding.iter().map(|v| v * v).sum::<f32>() + 1e-8).sqrt();
+                let norm = libm::sqrtf(embedding.iter().map(|v| v * v).sum::<f32>() + 1e-8);
                 for v in embedding.iter_mut() { *v /= norm; }
 
                 // Router weight: (HIDDEN, num_experts) ternary → scores

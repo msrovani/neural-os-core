@@ -1151,11 +1151,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     publish_boot_phase(BootPhase::HardwareDiscovery, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
     // AHCI probe (SATA 6G NCQ)
-    if let Some(ahci) = unsafe { crate::ahci::AhciDriver::new() } {
-        crate::serial_println!("[AHCI] SATA controller init: {} ports", ahci.port_count());
-        // AHCI fica disponivel como driver global
-    } else {
-        crate::serial_println!("[AHCI] Nenhum controlador SATA AHCI encontrado");
+    {
+        let ahci_devs = unsafe { crate::pci::scan_pci() };
+        let found = ahci_devs.iter().find(|d| d.class == 0x01 && d.subclass == 0x06);
+        if let Some(dev) = found {
+            if let Some(ahci) = unsafe { crate::ahci::AhciDriver::new(dev) } {
+                crate::serial_println!("[AHCI] SATA controller init: {} ports", ahci.ports.len());
+            }
+        } else {
+            crate::serial_println!("[AHCI] Nenhum controlador SATA AHCI encontrado");
+        }
     }
 
     unsafe { crate::xhci::init_xhci(); }

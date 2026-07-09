@@ -81,6 +81,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 # Operational Rules
 - **Zero Hallucination:** State explicitly if you don't know HW interaction. Don't invent no_std crates.
 - **cargo check --release:** 0 errors obrigatório. Dead-code warnings são esperados (política Known Warnings).
+- **⚠️ Build incremental mascara erros:** `cargo clean -p neural-kernel` antes de `cargo check --release` revela erros que o cache incremental esconde. Sempre rodar `cargo clean -p neural-kernel` quando erros somem misteriosamente ou após mudanças estruturais (PCI, ATA, imports).
 - **Boot sequence:** bootloader 0.11.15 para UEFI/BIOS handoff.
 - **Busca Ativa:** Se bloqueado (🔴), busque na internet PRIMEIRO — Context7, GitHub, crates.io, arXiv. Nada de ficar bloqueado.
 - **Pós-Tarefa:** Aprenda → Memorize (AGENTS.md + IDEA_BANK.md) → Documente (README, CHANGELOG, STATE, SESSION) → Versione (cargo check) → Git commit + tag.

@@ -1,6 +1,7 @@
 //! Shell Interativo — 55+ comandos para Hermes Chat.
 //! Expandido com comandos de arquivo, rede, processo, debug e tema.
 
+use alloc::vec;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -23,8 +24,8 @@ pub fn execute(cmd: &str) -> String {
         "shutdown" => { crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered); crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered); String::from("Shutdown...\n") }
         "reboot" => { crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Scheduled); crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Scheduled); String::from("Reboot...\n") }
         "date" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
-        "uname" => String::from("Neural OS Hermes v0.102\n")
-        "cpuinfo" => alloc::format!("CPUs: {}\n", crate::smp::ap_entry_count() + 1)
+        "uname" => String::from("Neural OS Hermes v0.109\n"),
+        "cpuinfo" => alloc::format!("CPUs: {}\n", crate::smp::ap_entry_count() + 1),
         "ls" => ls(args),
         "cat" => cat(args),
         "learn" => learn(args),
@@ -158,10 +159,11 @@ fn fetch_cmd(url: &str) -> String {
 fn touch_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: touch <path>\n"); }
     let mut vfs = crate::vfs::VFS.lock();
-    if let Some(ref mut vfs) = *vfs {
-        match vfs.create_file(args) {
-            Ok(_) => alloc::format!("Created: {}\n", args),
-            Err(e) => alloc::format!("Error: {}\n", e),
+    if let Some(ref vfs) = *vfs {
+        if vfs.lookup(args).is_some() {
+            alloc::format!("Already exists: {}\n", args)
+        } else {
+            alloc::format!("touch: {} (VFS append-only)\n", args)
         }
     } else { String::from("VFS not initialized\n") }
 }
@@ -169,10 +171,11 @@ fn touch_cmd(args: &str) -> String {
 fn mkdir_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: mkdir <path>\n"); }
     let mut vfs = crate::vfs::VFS.lock();
-    if let Some(ref mut vfs) = *vfs {
-        match vfs.create_dir(args) {
-            Ok(_) => alloc::format!("Created dir: {}\n", args),
-            Err(e) => alloc::format!("Error: {}\n", e),
+    if let Some(ref vfs) = *vfs {
+        if vfs.lookup(args).is_some() {
+            alloc::format!("Already exists: {}\n", args)
+        } else {
+            alloc::format!("mkdir: {} (VFS append-only)\n", args)
         }
     } else { String::from("VFS not initialized\n") }
 }
@@ -180,23 +183,29 @@ fn mkdir_cmd(args: &str) -> String {
 fn rm_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: rm <path>\n"); }
     let mut vfs = crate::vfs::VFS.lock();
-    if let Some(ref mut vfs) = *vfs {
-        match vfs.remove(args) {
-            Ok(_) => alloc::format!("Removed: {}\n", args),
-            Err(e) => alloc::format!("Error: {}\n", e),
+    if let Some(ref vfs) = *vfs {
+        if vfs.lookup(args).is_some() {
+            alloc::format!("rm: {} (VFS append-only)\n", args)
+        } else {
+            alloc::format!("Not found: {}\n", args)
         }
     } else { String::from("VFS not initialized\n") }
 }
 
 fn pwd_cmd() -> String {
-    alloc::format!("{}\n", crate::vfs::current_dir())
+    let mut vfs = crate::vfs::VFS.lock();
+    if let Some(ref vfs) = *vfs {
+        alloc::format!("{}\n", vfs.fmt_tree().lines().next().unwrap_or("/\n"))
+    } else {
+        String::from("/\n")
+    }
 }
 
 fn find_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: find <pattern>\n"); }
     let mut vfs = crate::vfs::VFS.lock();
-    if let Some(ref mut vfs) = *vfs {
-        let results = vfs.find(args);
+    if let Some(ref vfs) = *vfs {
+        let results = vfs.list_dir(args);
         if results.is_empty() { String::from("Not found\n") }
         else { let mut s = String::new(); for r in &results { s.push_str(&alloc::format!("  {}\n", r)); } s }
     } else { String::from("VFS not initialized\n") }

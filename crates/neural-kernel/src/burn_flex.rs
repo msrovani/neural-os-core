@@ -2,6 +2,8 @@
 //! Adapta Tensor e PackedTernaryTensor para interface burn.
 //! WIP: stub funcional, integracao com burn::backend::Backend futura.
 
+use alloc::vec::Vec;
+use alloc::string::String;
 use crate::tensor::{Tensor, PackedTernaryTensor};
 
 /// Tipo de dados do backend
@@ -21,7 +23,7 @@ impl FlexBackend {
     /// GEMM: C = A @ B usando o melhor backend disponivel
     pub fn gemm(a: &Tensor, b: &Tensor) -> Option<Tensor> {
         // Tenta GPU primeiro, fallback CPU AVX2, fallback scalar
-        a.matmul_hybrid(b)
+        a.matmul(b)
     }
 
     /// GEMM ternario: pesos {-1,0,+1} @ ativacoes f32

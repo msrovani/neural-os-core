@@ -1190,7 +1190,7 @@ pub fn generate_via_model(prompt: &str) -> String {
         if let Some(m) = guard.as_ref() {
             crate::serial_println!("[TRINITY] MoE routing: RustCoder expert");
             return m.generate(&alloc::format!(
-                "{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}\n{}\n", prompt));
+                "{{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}}\n{}\n", prompt));
         }
     }
     // Tenta expert HW Identify
@@ -1204,7 +1204,7 @@ pub fn generate_via_model(prompt: &str) -> String {
     // Fallback: modelo principal (BitNet LLM)
     // Reporta intent nao classificado para AutoLearnAgent (Trinity learn cycle)
     if expert_name == "generator" {
-        let _ = crate::EVENT_BUS.publish(Event {
+        let _ = crate::EVENT_BUS.publish(crate::Event {
             id: 0, topic: alloc::string::String::from("TRINITY_UNMATCHED"),
             payload: prompt.as_bytes().to_vec(), token: crate::CapabilityToken::Legacy(1),
         });

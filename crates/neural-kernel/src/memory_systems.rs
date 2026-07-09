@@ -123,8 +123,8 @@ pub fn semantic_search(query: &str, top_k: usize) -> Vec<(String, f32)> {
     let index = EMBED_INDEX.lock();
     let mut results: Vec<(String, f32)> = index.iter().map(|entry| {
         let dot: f32 = entry.embedding.iter().zip(q_emb.iter()).map(|(a,b)| a*b).sum();
-        let norm_a = (entry.embedding.iter().map(|v| v*v).sum::<f32>() + 1e-8).sqrt();
-        let norm_b = (q_emb.iter().map(|v| v*v).sum::<f32>() + 1e-8).sqrt();
+        let norm_a = libm::sqrtf(entry.embedding.iter().map(|v| v*v).sum::<f32>() + 1e-8);
+        let norm_b = libm::sqrtf(q_emb.iter().map(|v| v*v).sum::<f32>() + 1e-8);
         let sim = dot / (norm_a * norm_b);
         (entry.label.clone(), sim)
     }).collect();

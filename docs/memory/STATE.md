@@ -1,10 +1,11 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.97.0-rustcoder 🦀🧠
-#   SPRINT 97 — RustCoder Expert + Trinity MoE Inference
+#   STATE — neural-os-core v0.109.1-compilation-fix ✅
+#   PÓS-CORREÇÃO: 32 erros de compilação eliminados
 #   165+ arquivos Rust, ~19.000 LOC, 0 erros
 # ════════════════════════════════════════════════════════
 
 ## Marcos Acumulados
+- **v0.109.1** — Correção em massa: 32 erros de compilação mascarados pelo cache incremental. `cargo clean -p neural-kernel` revelou imports faltando, APIs trocadas, format string.
 - **v0.56.0-v0.67.0** — 22 sprints de OS neural, GPU, desktop, agentes, ecossistema
 - **v0.68.0-v0.70.0** — USB Mass Storage, xHCI bulk, BootLogAgent, FAT32 writer
 - **v0.71.0** — Boot Bughunt: Agent-First + DiagnosticSkill + FAT12 log + Xuvisco
@@ -119,6 +120,7 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 19. **WHPX emula AVX2/VEX lentamente (v0.80.0):** CPUID mostra AVX2=disponível, mas cada instrução VEX causa VM exit (~10k+ ciclos). Scalar GP instructions rodam nativos. `has_avx2()` deve detectar WHPX via CPUID 0x40000000 e retornar false. AVX2 sob WHPX = 4443 ticks/layer vs scalar = 2218 ticks/layer (~2.2s/layer, ~60s/forward pass).
 20. **`unpack_all()` não é o gargalo (v0.80.0):** Substituir alocação de 17.7 MB por row buffer de 6.9 KB não acelerou o forward pass — o gargalo real é a emulação VEX + WHPX memory virtualization. Operações aritméticas dominam, não alocação.
 21. **Forward pass BitNet b1.58 sob WHPX:** ~60s para 64 tokens × 30 layers. Generate_speculative de 8 tokens levaria ~6h. Inviável sem KV cache ou bare metal.
+22. **Build incremental mascara erros de compilação (v0.109.1):** `cargo clean -p neural-kernel` revelou 32 erros que o cache incremental escondia por meses. Causas comuns: imports faltando (`alloc::vec`, `Vec`, `String`, `ToString`), APIs que mudaram de nome (slab, VFS, jarvis), format string não escapada, `.sqrt()` sem trait `F32Ext`.
 
 ## Pendente Técnico (atualizado v0.84 — ver sprint-plan-84-95.md para detalhes)
 

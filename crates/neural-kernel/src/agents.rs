@@ -808,11 +808,10 @@ impl Agent for HermesAgent {
                                 false => alloc::format!("Hermes: sem skill para '{}'. /help", intent_name)
                             }
                         }
-                    }
                 }
             }
         }
-    
+    };
 
             let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
@@ -1426,7 +1425,8 @@ impl SleepCycleAgent {
             1 => {
                 let mut t = crate::BITNET_TRAINER.lock();
                 let (w,i,o) = (alloc::vec![0i8;64], alloc::vec![1.0f32;64], alloc::vec![1.0f32;64]);
-                let loss = t.train_step(&w, &i, &o);
+                let mut w_mut = w.clone();
+                let loss = t.train_step(&mut w_mut, &i, &o);
                 serial_println!("[SLEEP] REPLAY: loss={:.4} step={}", loss, t.trained);
             }
             2 => { self.insights.push(alloc::format!("[DREAM] ciclo #{} insight sintetico", self.cycle_count)); serial_println!("[SLEEP] DREAM"); }

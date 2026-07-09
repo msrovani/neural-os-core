@@ -33,8 +33,8 @@ pub struct AuditTrail {
 }
 
 impl AuditTrail {
-    pub fn new() -> Self {
-        AuditTrail { ring: Vec::with_capacity(AUDIT_RING_SIZE), head: 0, count: 0 }
+    pub const fn new() -> Self {
+        AuditTrail { ring: Vec::new(), head: 0, count: 0 }
     }
 
     pub fn push(&mut self, tick: u64, agent: &str, action: &str, payload: &[u8]) {
