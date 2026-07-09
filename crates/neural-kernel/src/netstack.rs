@@ -70,8 +70,13 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     let cs = ip_checksum(&ip);
     ip[10..12].copy_from_slice(&cs.to_be_bytes());
 
-    // 5. Build full frame and send
-    let mut frame = Vec::with_capacity(20 + udp_data.len());
+    // 5. Build Ethernet frame: dst MAC (bridge) + src MAC (fake) + EtherType (IPv4)
+    let fake_src_mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0xFE]; // kernel MAC
+    let fake_dst_mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0xFF]; // bridge MAC
+    let mut frame = Vec::with_capacity(14 + 20 + udp_data.len());
+    frame.extend_from_slice(&fake_dst_mac);
+    frame.extend_from_slice(&fake_src_mac);
+    frame.extend_from_slice(&[0x08, 0x00]); // EtherType IPv4
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
 
