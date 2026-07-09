@@ -1142,6 +1142,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     }
 
+    // Ultimo recurso: serial tunnel (SLIP) via COM2
+
+    if crate::net::E1000.lock().is_none() && crate::net::RTL8139.lock().is_none() {
+
+        unsafe { crate::net::init_serial_tunnel(); }
+
+        publish_boot_phase(BootPhase::HardwareDiscovery, "Serial tunnel (SLIP) ativo");
+
+    }
+
     
 
     let ata_found = {

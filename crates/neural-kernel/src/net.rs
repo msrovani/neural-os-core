@@ -181,6 +181,17 @@ pub unsafe fn init_driver_e1000() -> bool {
     false
 }
 
+/// Inicializa serial tunnel (SLIP) como fallback quando nenhuma NIC existe.
+pub unsafe fn init_serial_tunnel() -> bool {
+    serial_println!("[NET] Inicializando serial tunnel (COM2 bypass)...");
+    let mac = [0x02, 0x00, 0x00, 0x00, 0x00, 0xFE];
+    NET_CONFIG.lock().mac = mac;
+    serial_println!("[NET] Serial tunnel ativo. Fake MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    serial_println!("[NET] Modo offline — aguardando trafego via serial tunnel.");
+    true
+}
+
 /// Track last known link state for RX kick logic
 static mut E1000_LINK_WAS_UP: bool = false;
 
