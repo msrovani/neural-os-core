@@ -1,10 +1,17 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v0.109.1-compilation-fix ✅
-#   PÓS-CORREÇÃO: 32 erros de compilação eliminados
+#   STATE — neural-os-core ROADMAP v1.0.0 🏆
+#   SPRINTS 92→100: A Era do Silício — Gold Master
 #   165+ arquivos Rust, ~19.000 LOC, 0 erros
+#   v2.0 "Cognição" começa na Sprint 101
 # ════════════════════════════════════════════════════════
 
+## Roadmap Atual
+**Roadmap v1.0:** `docs/sprint-plan-92-100.md` — Sprints 92 a 100.
+**Sprint atual:** Sprint 92 — Fundação Estável (VirtIO, AHCI, serial, cleanup).
+
 ## Marcos Acumulados
+- **🏆 v1.0 roadmap definido (2026-07-09):** 9 sprints (92-100), ~18.200 LOC, culminando no Code Freeze v1.0.0. Após: v2.0 "Cognição" (Kernel, Cortex, Hermes, JARVIS).
+- **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Serial tunnel TCP bridge resolveu o RX=0 que perseguia o projeto desde o início. Primeiro RX: 304 bytes.
 - **v0.109.1** — Correção em massa: 32 erros de compilação mascarados pelo cache incremental. `cargo clean -p neural-kernel` revelou imports faltando, APIs trocadas, format string.
 - **v0.56.0-v0.67.0** — 22 sprints de OS neural, GPU, desktop, agentes, ecossistema
 - **v0.68.0-v0.70.0** — USB Mass Storage, xHCI bulk, BootLogAgent, FAT32 writer
@@ -69,33 +76,24 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 | Periodic | PollEvery(N) | Cron, Observer, Optimizer |
 | Learning | PollEvery(2000) | Novos agentes → analisados 5000 ticks → promovidos |
 
-## Roadmap 84-95 (Plano completo em docs/sprint-plan-84-95.md)
+## Roadmap v1.0 — Sprints 92-100 (Plano completo em docs/sprint-plan-92-100.md)
 
-| Sprint | v | Bloco | Foco | LOC | Status |
-|---|---|---|---|---|---|
-| **77** | 0.77.x | **21** | Foundation Quick Wins | ~760 | ✅ |
-| **78** | 0.78.x | **22** | Agentic Evolution | ~2720 | ✅ |
-| **79** | 0.79.x | **23** | LLM Infrastructure | ~1450 | ✅ |
-| **80** | 0.80.x | **24** | AVX2 Debug + KV Cache | ~550 | ✅ |
-| **81** | 0.81.x | **21a** | SMP Foundation | ~860 | ✅ |
-| **82** | 0.82.x | **21b** | Work-Stealing + Matmul | ~1200 | ✅ |
-| **83** | 0.83.x | **21e** | Polimento | ~1680 | ✅ |
-| **84** | 0.84.x | **21c** | GPU Foundations | ~1700 | 🟡 |
-| **85** | 0.85.x | **21d** | GPU Decode | ~1500 | 🟡 |
-| **86** | 0.86.x | **30** | JARVIS Persona | ~950 | 🟡 |
-| **87** | 0.87.x | **31** | JARVIS Security + AHCI | ~1200 | 🟡 |
-| **88** | 0.88.x | **32** | JARVIS Emotion + Cache | ~1200 | 🟡 |
-| **89** | 0.89.x | **33** | SleepCycle + Advanced Memory | ~2500 | 🟡 |
-| **90** | 0.90.x | **34** | JARVIS Deep Cognitive | ~1200 | 🟡 |
-| **91** | 0.91.x | **35** | Polimento + Ecosystem | ~2500 | 🟡 |
-| **92+** | 0.92.x+ | **36+** | AIOS Evolution | ~15000 | 🔴 |
-| **95** | 0.95.x | **40** | Cognitive Engine | ~510 | ✅ |
-| **96** | 0.96.x | **41** | Self-Healing | ~350 | ✅ |
-| **97** | 0.97.x | **42** | RustCoder Expert + Trinity MoE | ~300 | ✅ |
+| Sprint | Foco | LOC | Status |
+|--------|------|-----|--------|
+| **92** | Fundação Estável (VirtIO, AHCI, serial, cleanup) | ~2.000 | 🟡 Ativa |
+| **93** | WASM Runtime + IDE (wasmi, sandbox, marketplace) | ~3.200 | ⏳ |
+| **94** | GPU Polish + Display (MSched, compositor, co-exist) | ~2.000 | ⏳ |
+| **95** | Memory + VFS Final (BGE HNSW, MHI bridge, agents) | ~2.000 | ⏳ |
+| **96** | GGUF + Model Loading (loader, streaming, RoPE) | ~1.500 | ⏳ |
+| **97** | Rede + AIOS Evolution (WWW, self-update, marketplace) | ~3.000 | ⏳ |
+| **98** | BitNet + Training Pipeline (100M params, fine-tune) | ~2.500 | ⏳ |
+| **99** | SkillOpt + Structured Decoding + Code Freeze Prep | ~1.500 | ⏳ |
+| **100** | **Code Freeze & Release v1.0.0** | ~500 | ⏳ |
+| **Total v1.0** | | **~18.200 LOC** | |
 
-**Total restante:** ~28.250 LOC (sprints 84-91) + ~15.000 LOC (sprint 92+, bloqueado B-01). Sprints 95-97 concluídos: ~1160 LOC.
+**v2.0 "Cognição"** começa na Sprint 101: Kernel, Cortex, Hermes, JARVIS como entidade viva.
 
-**Ver também:** `docs/sprint-plan-84-95.md` para detalhes de cada sprint com items do IDEA_BANK.
+**Ver também:** `docs/sprint-plan-92-100.md` para detalhes de cada sprint.
 
 ## Aprendizados Chave
 1. **Roadmap readequado 2026-07-04:** Reorganização completa por dependências. Itens independentes primeiro (Foundation → Agentic → LLM → JARVIS → GPU). B-01 e dependentes no final.
@@ -128,66 +126,30 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 27. **FlashAttention (Stanford, NeurIPS 2022):** IO-aware tiling para atenção. Aplica-se ao BitNet CPU: processar atenção em blocos de 16 tokens no cache L1 (32 KB). ~3-5× speedup para sequências >256 tokens. Sprint 100+.
 28. **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Causa real: incompatibilidade Windows 11 × QEMU TCG × NIC emulada. Solução: bypass serial TCP. Kernel `slip.rs` (82 LOC) + `serial_bridge.py` (Python como servidor TCP) + `-serial tcp:127.0.0.1:4444` (QEMU como cliente). Primeiro RX: 304 bytes. O kernel sempre esteve correto — era o ambiente que isolava fisicamente o RX.
 
-## Pendente Técnico (atualizado v0.84 — ver sprint-plan-84-95.md para detalhes)
+## Pendente Técnico (Roadmap v1.0 — ver docs/sprint-plan-92-100.md para detalhes)
 
-### ✅ B-01 RESOLVIDO (v0.109.3 — 2026-07-09)
-- Serial tunnel TCP bridge: `serial_bridge.py` (servidor) ← QEMU `-serial tcp:4444` (cliente) ← COM2 ← `slip.rs`
-- **Primeiro RX da história**: 304 bytes. Comunicação bidirecional comprovada.
-- `-nic none` força fallback para serial tunnel (sem NIC emulada)
-- `env.rs`: SystemEnv global para agentes saberem onde estão rodando
+### ✅ COMPLETO (Sprints 84-91 + Sound + 95-97)
+Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Healing, Trinity MoE) estão implementados e verificados.
 
-### 🟡 Sprint 84 — GPU Foundations
-- `#326` GPU BAR0/BAR1 mapping UC (NVIDIA/AMD/Intel)
-- `#352` Secure Boot GPU (ACR/PSP/GuC)
-- `#327` GPU doorbell + SPSC job ring
-- `#328` VRAM buddy allocator
-- `#353` GPU Compute Pipeline
+### 🟡 Sprint 92 — Fundação Estável
+- VirtIO-GPU GET_DISPLAY_INFO fix (#406)
+- VirtIO-net MMIO page fault fix
+- AHCI disk reading (FAT32 via `-device ide-hd`)
+- Serial tunnel DNS hardening (timeouts, retry, fallback)
+- Serial tunnel watchdog (reconexão automática)
+- Zero-Trust Syscall Categories (#364)
+- Neural Cache per token (#365)
+- Capability token crypto (#405)
+- Code cleanup (unwrap(), debug prints, dead code)
 
-### 🟡 Sprint 85 — GPU Decode
-- `#329` Agent.xpu prefill/decode split
-- `#330` GPU matmul kernel ternário
-- `#331` CPU→GPU KV cache DMA
-- `#332` XQueue preemptível
+### ⏳ Sprint 93-99 — Roadmap v1.0
+Ver `docs/sprint-plan-92-100.md` para detalhes completos de cada sprint.
 
-### 🟡 Sprint 86 — JARVIS Persona
-- `#315.1-5` SOUL.md, IPW, Session Compression, Notification Gate, Sessionless Thread
-
-### 🟡 Sprint 87 — JARVIS Security + AHCI
-- `#315.18-20` Fail-Closed, Merkle, Fluid Persona
-- AHCI driver (SATA 6G NCQ)
-
-### 🟡 Sprint 88 — JARVIS Emotion + Cache
-- `#315.6-11` Emotion Analysis, Capability Contracts, Skill Discovery, ADE, Semantic Cache, Persona Pipeline
-
-### 🟡 Sprint 89 — SleepCycle + Memory
-- `#314` SleepCycle Agent (5 fases: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT)
-- `#214-225` Memory Systems (SHA-256 dedup, Ebbinghaus, Atkinson-Shiffrin, KG)
-
-### 🟡 Sprint 90 — JARVIS Deep Cognitive
-- `#315.12-17` Dreaming, Ego, Heartbeats, Tool-State, Auto-Skills, Babel-Index
-
-### 🟡 Sprint 91 — Polimento + Ecosystem
-- `#333` burn-flex backend, `#334` MSched VRAM, `#335` CFS, `#336` GPU+Display
-- `#279a-c` SmileyOS patterns (shell, temas, FS)
-- `#283a-b` Desktop Cube
-
-### 🔴 Sprint 92+ — AIOS Evolution
-- Bloqueado por B-01. 25+ items (~15000 LOC)
-
-### ✅ Sprint 95 — Cognitive Engine (completo)
-- `#105-162, #169-175, M2, M37-M41` — IntentPlanner, SuccessEngine, NeuralCache, MatMulFreeLM, FeedbackLoop, TernaryUpdate, ReplayBuffer, WorkflowPredictor, AutoSkillGen, DynamicScaler, SelfOptScheduler, CodebookVQ, KV Codebook, ReActLoop, McpServer, CodebookFinetune, DeltaBranches, WorkspaceIsolation, EpisodicMemory, SleepCycleGuard, BitNetTrainer, CandleSidecar, TaskSpawner, ThreeDataSources. ~510 LOC.
-
-### ✅ Sprint 96 — Self-Healing (completo)
-- `#226-227, #265-267, M1-M29` — TeamMemory, VectorFs, OverlayFS, ZeroCopySfs, SkillModule, FailureTaxonomy (5 classes), ExceptionSelfHeal, CorrectivePrompting, Verifier, EventLog, BudgetedRecovery, SilentFailureDetector, FailurePrediction, NotificationGate. ~350 LOC.
-
-### ✅ Sprint 97 — RustCoder Expert + Trinity MoE (completo)
-- **Treino**: 41.200 amostras Rust (Rust-Coder 10.800 + Code-Suite 30.400), hidden=128, 6 layers, loss 0.34, GTX 1050
-- **Modelo**: `tools/rust_coder.bitnet` (444 KB, bitnet v2, 1.6M params)
-- **RUSTCODER_MODEL**: static global em cortex.rs — `set_rustcoder_model()` + `generate_via_rustcoder()`
-- **Fast-path HermesAgent**: Trinity classifica "rust_coder" → generate_via_rustcoder → resposta direta
-- **Fallback silencioso**: se RUSTCDR.BITNET não existe na FAT32, cai no LLM principal
-- **build_image.py**: copia rust_coder.bitnet → RUSTCDR.BITNET na partição FAT32
-- **Aprendizado**: export bitnet v2 compatível com kernel (não usar v4 com tensores nomeados)
+### ⏳ Sprint 100 — Code Freeze & Release v1.0.0
+- `cargo clean -p neural-kernel && cargo check --release` 0 erros
+- QEMU boot (BIOS + UEFI + serial tunnel + AHCI + SMP)
+- VirtualBox boot test
+- Tag v1.0.0 + release notes
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
 - RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado

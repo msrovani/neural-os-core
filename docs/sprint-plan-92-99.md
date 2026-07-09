@@ -1,4 +1,11 @@
-# Sprint Plan 92-99 — neural-os-core v0.92.x-0.99.x
+# ⚠️ ARQUIVO SUBSTITUÍDO — Ver docs/sprint-plan-92-100.md
+
+Este plano foi substituído pelo **Roadmap v1.0 Gold Master** (Sprints 92-100).
+O novo documento está em: **`docs/sprint-plan-92-100.md`**
+
+---
+
+# Sprint Plan 92-99 — neural-os-core v0.92.x-0.99.x (ARQUIVO LEGADO)
 # TODAS AS 408+ IDEIAS DO IDEA_BANK ASSIGNADAS A SPRINTS
 
 **Data:** 2026-07-06  

@@ -1,13 +1,15 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.109.3 🏆🔥
+#   PLANO DIRETOR — neural-os-core v1.0.0 ROADMAP 🏆
 #   ~19.000 LOC, 165+ arquivos Rust, 247+ agentes, 0 erros
-#   🏆 B-01 RESOLVIDO — Serial tunnel TCP bridge
+#   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício
+#   Sprints 101+: v2.0 "Cognição" — Kernel, Cortex, Hermes, JARVIS
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
 # ════════════════════════════════════════════════════════
+# docs/sprint-plan-92-100.md    → Roadmap v1.0 completo (Sprints 92-100)
 # TECNOLOGIAS.md               → Catálogo completo de todas as tecnologias (100+)
-# docs/TODO.md                 → Proximos passos (B-01 resolvido!)
+# docs/TODO.md                 → Roadmap v1.0 + checklist
 # docs/memory/STATE.md         → Estado atual do kernel
 # docs/memory/IDEA_BANK.md     → 415+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
@@ -120,24 +122,28 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 
-# Current Sprint: Sprint 92 — Itens não bloqueados (~3.200 LOC)
-Ver `docs/TODO.md` para detalhes. Os 9 itens de Sprint 92 não dependem de B-01.
+# Current Sprint: Sprint 92 — Fundação Estável (~2.000 LOC)
+**Roadmap v1.0:** Sprints 92→100 = Gold Master. Ver `docs/sprint-plan-92-100.md`.
 
-# 🏆 B-01 RESOLVIDO (v0.109.3)
-**Sprint 92+ desbloqueado.** O bloqueador de 18 sprints caiu em 2026-07-09.
+## Sprints 92→100 — v1.0 "Gold Master" (A Era do Silício)
+| Sprint | Foco | LOC |
+|--------|------|-----|
+| **92** | Fundação Estável (VirtIO, AHCI, serial, cleanup) | ~2.000 |
+| **93** | WASM Runtime + IDE (wasmi, sandbox, marketplace) | ~3.200 |
+| **94** | GPU Polish + Display (MSched, compositor, co-exist) | ~2.000 |
+| **95** | Memory + VFS Final (BGE HNSW, MHI bridge, agents) | ~2.000 |
+| **96** | GGUF + Model Loading (loader, streaming, RoPE) | ~1.500 |
+| **97** | Rede + AIOS Evolution (WWW, self-update, marketplace) | ~3.000 |
+| **98** | BitNet + Training Pipeline (100M params, fine-tune) | ~2.500 |
+| **99** | SkillOpt + Structured Decoding + Code Freeze Prep | ~1.500 |
+| **100** | **Code Freeze & Release v1.0.0** | ~500 |
 
-**Causa real**: Incompatibilidade Windows 11 × QEMU TCG × NIC emulada. O kernel sempre esteve correto — TX funcionava, RX=0 por isolamento físico do ambiente.
-
-**Solução**: Bypass serial TCP. `-serial tcp:127.0.0.1:4444` (QEMU como cliente) + `serial_bridge.py` (Python como servidor) + `slip.rs` (driver COM2 no kernel). O primeiro RX veio: 304 bytes.
-
-**Pipeline atual**:
-```
-E1000 (primário) → RTL8139 (fallback) → VirtIO → WiFi → Serial COM2 (bypass universal)
-```
-
-# Sprint 99 Planejado: SkillOpt + Structured Decoding (~265 LOC)
-- **SkillOpt** (MS Research, maio/2026): Optimizer model (BitNet) gera add/delete/replace edits no SKILL.md, aceitos só com validação. SleepCycleAgent como scheduler. ~145 LOC.
-- **Structured Decoding** (SGLang, Stanford/Berkeley, 2023): FSM comprimido para geração constraint (JSON/SKILL.md/shell). Mascara logits no BitNet decoder para tokens válidos. ~120 LOC.
+# Sprint 100 — Code Freeze v1.0.0
+- `cargo clean -p neural-kernel && cargo check --release` — 0 erros
+- QEMU boot limpo (BIOS + UEFI + serial tunnel + AHCI + SMP)
+- VirtualBox boot test
+- Tag `v1.0.0` + release notes
+- **Fim da v1.0. v2.0 "Cognição" começa na Sprint 101.**
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer
