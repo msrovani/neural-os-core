@@ -162,6 +162,8 @@ mod slip;
 
 mod env;
 
+mod netdiag;
+
 mod network_agent;
 
 mod optimizer;
