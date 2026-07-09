@@ -42,3 +42,5 @@ keys/kernel_secret.key
 tools/model_cache/
 tools/debug_build.py
 tools/__pycache__/
+tools/*.jsonl
+tools/*.pcap
