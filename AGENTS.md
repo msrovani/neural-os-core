@@ -1,14 +1,15 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v0.109.0 🏆
+#   PLANO DIRETOR — neural-os-core v0.109.3 🏆🔥
 #   ~19.000 LOC, 165+ arquivos Rust, 247+ agentes, 0 erros
+#   🏆 B-01 RESOLVIDO — Serial tunnel TCP bridge
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
 # ════════════════════════════════════════════════════════
 # TECNOLOGIAS.md               → Catálogo completo de todas as tecnologias (100+)
-# docs/TODO.md                 → Único bloqueador real: B-01 (DHCP/RX)
+# docs/TODO.md                 → Proximos passos (B-01 resolvido!)
 # docs/memory/STATE.md         → Estado atual do kernel
-# docs/memory/IDEA_BANK.md     → 410+ ideias catalogadas com status
+# docs/memory/IDEA_BANK.md     → 415+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
 # docs/CHANGELOG.md            → Histórico de versões
 # crates/neural-kernel/src/    → Código fonte do kernel
