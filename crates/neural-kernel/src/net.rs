@@ -52,6 +52,19 @@ pub fn wait_ticks(ticks: usize) {
     }
 }
 
+/// Retorna nome do hypervisor detectado via CPUID
+pub fn detect_hypervisor_name() -> alloc::string::String {
+    unsafe {
+        let hv = core::arch::x86_64::__cpuid(0x40000000);
+        let mut name = [0u8; 13];
+        name[0..4].copy_from_slice(&hv.ebx.to_le_bytes());
+        name[4..8].copy_from_slice(&hv.ecx.to_le_bytes());
+        name[8..12].copy_from_slice(&hv.edx.to_le_bytes());
+        let s = core::str::from_utf8(&name).unwrap_or("unknown");
+        alloc::string::String::from(s.trim_end_matches('\0'))
+    }
+}
+
 /// Detecta se estamos rodando em ambiente dev/debug (QEMU/VBox)
 /// Usa CPUID hypervisor bit e hypervisor name
 pub fn detect_dev_env() -> bool {

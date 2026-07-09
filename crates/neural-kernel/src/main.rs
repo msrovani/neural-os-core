@@ -160,6 +160,8 @@ mod netstack;
 
 mod slip;
 
+mod env;
+
 mod network_agent;
 
 mod optimizer;
@@ -1124,33 +1126,51 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
+    // Detecta ambiente: QEMU sandbox vs HW real
+    let is_sandbox = crate::net::detect_dev_env();
+    if is_sandbox {
+        let hv_name = crate::net::detect_hypervisor_name();
+        if hv_name.contains("vbox") {
+            crate::env::set(crate::env::SystemEnv::VBoxSandbox);
+        } else {
+            crate::env::set(crate::env::SystemEnv::QemuSandbox);
+        }
+        serial_println!("[ENV] Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
+    }
+
     // Init E1000 primeiro (driver mais confiável, RX comprovado)
-
     unsafe { crate::net::init_driver_e1000(); }
-
     publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init (primary)");
 
-
-
     // Fallback: RTL8139 se E1000 não encontrado
-
     if crate::net::E1000.lock().is_none() {
-
         unsafe { crate::net::init_driver_rtl8139(); }
-
         publish_boot_phase(BootPhase::HardwareDiscovery, "RTL8139 init (fallback)");
-
     }
 
-    // Ultimo recurso: serial tunnel (SLIP) via COM2
-
-    if crate::net::E1000.lock().is_none() && crate::net::RTL8139.lock().is_none() {
-
+    // Decisão final: se NIC real encontrada → HW real. Se não → sandbox ou offline.
+    let nic_found = crate::net::E1000.lock().is_some() || crate::net::RTL8139.lock().is_some();
+    if nic_found {
+        if !is_sandbox {
+            crate::env::set(crate::env::SystemEnv::HwReal);
+            serial_println!("[ENV] HW real detectado — NIC fisica presente");
+        }
+    } else if crate::env::get() == crate::env::SystemEnv::Unknown {
+        crate::env::set(crate::env::SystemEnv::Offline);
+        serial_println!("[ENV] Offline — nenhuma rede disponivel");
+        // Apenas em sandbox: ativa serial tunnel como bypass
+        if is_sandbox {
+            unsafe { crate::net::init_serial_tunnel(); }
+            publish_boot_phase(BootPhase::HardwareDiscovery, "Serial tunnel (SLIP) ativo");
+        }
+    } else {
+        // Sandbox sem NIC: serial tunnel
         unsafe { crate::net::init_serial_tunnel(); }
-
         publish_boot_phase(BootPhase::HardwareDiscovery, "Serial tunnel (SLIP) ativo");
-
     }
+
+    serial_println!("[ENV] Sistema: {} | Rede: {}", crate::env::name(),
+        if nic_found { "fisica" } else if crate::env::is_sandbox() { "serial tunnel" } else { "offline" });
 
     
 
