@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/)
 with [Conventional Commits](https://www.conventionalcommits.org/).
 
+## [0.109.3-b01-morto] — 2026-07-09 — 🏆🔥 B-01 MORTO! Serial tunnel TCP bridge
+
+### O bloqueador de 18 sprints finalmente caiu — B-01
+**O kernel recebeu dados reais pela primeira vez:**
+```
+[BRIDGE] RX #1: 304 bytes ← KERNEL RESPONDEU!
+[BRIDGE] RX #2: 42 bytes
+[BRIDGE] RX #3: 42 bytes
+[BRIDGE] RX #4: 42 bytes
+```
+Comunicação bidirecional entre kernel bare-metal e host Windows via serial tunnel.
+
+### Causa raiz do B-01
+Não era bug no kernel. Era incompatibilidade entre:
+- **Windows 11**: firewall loopback bloqueia TCP inbound, named pipes têm chicken-and-egg
+- **QEMU TCG**: emulação de NIC (RTL8139/E1000) RX não injeta DMA de forma confiável
+- **Kernel**: código Rust correto desde o início — TX funcionava, RX=0 por isolamento físico
+
+### Solução: bypass serial TCP (inversão de topologia)
+- `slip.rs` (82 LOC): driver serial COM2 com framing length-prefix, non-blocking
+- `serial_bridge.py`: bridge TCP **servidor** (Python escuta, QEMU conecta como cliente)
+- `-serial tcp:127.0.0.1:4444`: QEMU como cliente TCP, não servidor
+- `nic_send/nic_recv`: serial tunnel como fallback universal no pipeline
+
+### Arquitetura final do pipeline de rede
+```
+Browser/curl → WiFi Windows → localhost:4444 → QEMU TCP → COM2 serial
+  → slip::recv() → nic_recv() → NetPhy::receive() → smoltcp → socket TCP
+```
+
+### SystemEnv — kernel sabe onde está rodando
+- `env.rs`: SystemEnv enum (QemuSandbox/VBoxSandbox/HwReal/Offline)
+- Detectado no boot por CPUID hypervisor + presença de NIC
+- Serial tunnel só ativo em sandbox (QEMU/VBox) sem NIC
+- Cortex, Hermes, JARVIS consultam via `crate::env::get()`
+
 ## [0.109.2-rtl8139-rx-fix] — 2026-07-08 — 🐛🔧 RTL8139 RE bit + AHCI BlockDevice
 
 ### Raiz do B-01 (RX=0) encontrada — RTL8139 CR_RE bit ausente

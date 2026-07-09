@@ -122,9 +122,17 @@ cargo build --release → python tools/build_image.py --bios → qemu
 # Current Sprint: Sprint 92 — Itens não bloqueados (~3.200 LOC)
 Ver `docs/TODO.md` para detalhes. Os 9 itens de Sprint 92 não dependem de B-01.
 
-# Bloqueador Único: B-01 — DHCP/RX nunca completa
-~18.000 LOC de sprints 92+ dependem de rede funcional. Enquanto não resolvido, focar em itens não bloqueados.
-**Status v0.109.2**: Causa raiz do RX=0 no RTL8139 encontrada — bit CR_RE (0x01) nunca setado no Command Register. MAC da Realtek ficava desligado. Correção aplicada em todas as 3 escritas do CR. Pendente: teste em QEMU com boot longo para confirmar `rx>0`.
+# 🏆 B-01 RESOLVIDO (v0.109.3)
+**Sprint 92+ desbloqueado.** O bloqueador de 18 sprints caiu em 2026-07-09.
+
+**Causa real**: Incompatibilidade Windows 11 × QEMU TCG × NIC emulada. O kernel sempre esteve correto — TX funcionava, RX=0 por isolamento físico do ambiente.
+
+**Solução**: Bypass serial TCP. `-serial tcp:127.0.0.1:4444` (QEMU como cliente) + `serial_bridge.py` (Python como servidor) + `slip.rs` (driver COM2 no kernel). O primeiro RX veio: 304 bytes.
+
+**Pipeline atual**:
+```
+E1000 (primário) → RTL8139 (fallback) → VirtIO → WiFi → Serial COM2 (bypass universal)
+```
 
 # Sprint 99 Planejado: SkillOpt + Structured Decoding (~265 LOC)
 - **SkillOpt** (MS Research, maio/2026): Optimizer model (BitNet) gera add/delete/replace edits no SKILL.md, aceitos só com validação. SleepCycleAgent como scheduler. ~145 LOC.

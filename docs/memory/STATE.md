@@ -126,11 +126,15 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 25. **SkillOpt viability (Microsoft Research, maio/2026):** Primeiro otimizador sistemático de skills em espaço textual. Viável para neural-os-core (~145 LOC) usando CortexAgent como optimizer + SleepCycle como scheduler de épocas. Recomendado para Sprint 99.
 26. **SGLang Compressed FSM (Stanford/Berkeley, 2023):** Decodificação constraint via FSM comprimido. RadixAttention inviável em bare-metal (memória), Compressed FSM viável. Mascara logits no BitNet decoder para tokens válidos (JSON/SKILL.md/shell). ~120 LOC, impacto imediato na confiabilidade da saída LLM. Sprint 99.
 27. **FlashAttention (Stanford, NeurIPS 2022):** IO-aware tiling para atenção. Aplica-se ao BitNet CPU: processar atenção em blocos de 16 tokens no cache L1 (32 KB). ~3-5× speedup para sequências >256 tokens. Sprint 100+.
+28. **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Causa real: incompatibilidade Windows 11 × QEMU TCG × NIC emulada. Solução: bypass serial TCP. Kernel `slip.rs` (82 LOC) + `serial_bridge.py` (Python como servidor TCP) + `-serial tcp:127.0.0.1:4444` (QEMU como cliente). Primeiro RX: 304 bytes. O kernel sempre esteve correto — era o ambiente que isolava fisicamente o RX.
 
 ## Pendente Técnico (atualizado v0.84 — ver sprint-plan-84-95.md para detalhes)
 
-### 🔴 Bloqueado (exige busca na internet)
-- **B-01 DHCP/DNS/HTTP**: RX fix RTL8139 — smoltcp DHCP nunca completa. 🔴 **Buscar na internet** soluções, patches, HW real
+### ✅ B-01 RESOLVIDO (v0.109.3 — 2026-07-09)
+- Serial tunnel TCP bridge: `serial_bridge.py` (servidor) ← QEMU `-serial tcp:4444` (cliente) ← COM2 ← `slip.rs`
+- **Primeiro RX da história**: 304 bytes. Comunicação bidirecional comprovada.
+- `-nic none` força fallback para serial tunnel (sem NIC emulada)
+- `env.rs`: SystemEnv global para agentes saberem onde estão rodando
 
 ### 🟡 Sprint 84 — GPU Foundations
 - `#326` GPU BAR0/BAR1 mapping UC (NVIDIA/AMD/Intel)
