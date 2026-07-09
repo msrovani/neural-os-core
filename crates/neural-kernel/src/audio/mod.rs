@@ -21,6 +21,8 @@ pub mod jarvis;
 pub mod wakeword;
 pub mod hda;
 pub mod usb;
+pub mod pipeline;
+pub mod token;
 
 pub fn init_audio() {
     crate::audio::settings::init_audio_settings();

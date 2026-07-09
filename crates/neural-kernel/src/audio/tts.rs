@@ -157,6 +157,111 @@ fn text_to_phonemes(text: &str) -> Vec<(&'static str, &'static Phoneme)> {
     result
 }
 
+pub const TTS_FRAME_MS: u32 = 80;
+pub const TTS_FRAME_RATE: u32 = 1000 / TTS_FRAME_MS; // 12.5 Hz
+pub const TTS_FRAME_SAMPLES: usize = SAMPLE_RATE as usize / 1000 * TTS_FRAME_MS as usize; // 1280
+
+pub struct AudioFrame {
+    pub pcm: [i16; TTS_FRAME_SAMPLES],
+}
+
+impl AudioFrame {
+    pub fn silence() -> Self {
+        AudioFrame { pcm: [0i16; TTS_FRAME_SAMPLES] }
+    }
+}
+
+pub struct FrameProcessor {
+    phoneme_idx: usize,
+    pub phonemes: Vec<(&'static str, &'static Phoneme)>,
+    sample_pos: usize,
+    total_samples: usize,
+    pulse: PulseGen,
+    noise: NoiseGen,
+    r1: Resonator, r2: Resonator, r3: Resonator, r4: Resonator,
+    current_phoneme_samples: usize,
+    current_f0_start: f32, current_f0_end: f32,
+    current_amp_start: f32, current_amp_end: f32,
+    current_amplitude: f32, current_voiced: bool,
+}
+
+impl FrameProcessor {
+    pub fn new(text: &str) -> Self {
+        let phonemes = text_to_phonemes(text);
+        let total: usize = phonemes.iter().map(|(_, p)| (p.duration_ms as u64 * SAMPLE_RATE as u64 / 1000) as usize).sum();
+        let sr = SAMPLE_RATE as f32;
+        FrameProcessor {
+            phoneme_idx: 0,
+            phonemes,
+            sample_pos: 0,
+            total_samples: total,
+            pulse: PulseGen::new(),
+            noise: NoiseGen::new(),
+            r1: Resonator::new(500.0, 80.0, sr),
+            r2: Resonator::new(1500.0, 100.0, sr),
+            r3: Resonator::new(2500.0, 120.0, sr),
+            r4: Resonator::new(3400.0, 150.0, sr),
+            current_phoneme_samples: 0,
+            current_f0_start: 0.0, current_f0_end: 0.0,
+            current_amp_start: 0.0, current_amp_end: 0.0,
+            current_amplitude: 0.0, current_voiced: false,
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.phoneme_idx >= self.phonemes.len()
+    }
+
+    pub fn estimated_frames(&self) -> usize {
+        let samples: usize = self.phonemes.iter().map(|(_, p)| (p.duration_ms as u64 * SAMPLE_RATE as u64 / 1000) as usize).sum();
+        samples / TTS_FRAME_SAMPLES + 1
+    }
+
+    pub fn generate_frame(&mut self) -> AudioFrame {
+        let mut frame = AudioFrame::silence();
+        let sr = SAMPLE_RATE as f32;
+        for s in 0..TTS_FRAME_SAMPLES {
+            if self.phoneme_idx >= self.phonemes.len() { break; }
+            if self.current_phoneme_samples == 0 {
+                let (_, p) = self.phonemes[self.phoneme_idx];
+                self.current_phoneme_samples = (p.duration_ms as u32 * SAMPLE_RATE / 1000) as usize;
+                self.current_f0_start = p.f0 * 0.9;
+                self.current_f0_end = p.f0 * 1.1;
+                self.current_amp_start = 0.1;
+                self.current_amp_end = 1.0;
+                self.current_amplitude = p.amplitude;
+                self.current_voiced = p.voiced;
+                self.r1 = Resonator::new(p.f1, p.bw1, sr);
+                self.r2 = Resonator::new(p.f2, p.bw2, sr);
+                self.r3 = Resonator::new(p.f3, p.bw3, sr);
+                self.r4 = Resonator::new(p.f4, p.bw4, sr);
+            }
+            let remaining = self.current_phoneme_samples;
+            let t = 1.0 - (remaining as f32 / (remaining as f32 + 1.0));
+            let f0_cur = self.current_f0_start + (self.current_f0_end - self.current_f0_start) * t;
+            let amp_cur = self.current_amplitude * (self.current_amp_start + (self.current_amp_end - self.current_amp_start) * t);
+            let fade = if t < 0.05 { t / 0.05 } else if t > 0.95 { (1.0 - t) / 0.05 } else { 1.0 };
+            let source = if self.current_voiced && f0_cur > 10.0 {
+                self.pulse.tick(f0_cur, sr) * amp_cur * 0.5 + self.noise.tick() * 0.02
+            } else {
+                self.noise.tick() * amp_cur * 0.3
+            };
+            let y = self.r1.tick(source);
+            let y = self.r2.tick(y);
+            let y = self.r3.tick(y);
+            let y = self.r4.tick(y);
+            let sample = (y * fade * 8000.0) as i16;
+            frame.pcm[s] = sample;
+            self.current_phoneme_samples -= 1;
+            self.sample_pos += 1;
+            if self.current_phoneme_samples == 0 {
+                self.phoneme_idx += 1;
+            }
+        }
+        frame
+    }
+}
+
 /// Sintetiza texto em audio PCM i16 mono 16kHz.
 /// Usa sintese formant Klatt-style: pulse train → 4 ressonadores IIR.
 pub fn synthesize(text: &str) -> Vec<i16> {
