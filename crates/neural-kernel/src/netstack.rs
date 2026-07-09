@@ -194,6 +194,11 @@ impl NetStack {
                 _ => break,
             }
         }
+        // Fast-path para serial tunnel: se COM2 tem dados, poll novamente imediatamente
+        // Isso evita o delay de 1 tick (~55ms) entre a chegada do dado e o processamento
+        if crate::env::is_sandbox() && unsafe { crate::slip::has_data() } {
+            let _ = iface.poll(now, phy, sockets);
+        }
     }
 
     /// Poll DHCP — multi-step DISCOVER→OFFER→REQUEST→ACK
