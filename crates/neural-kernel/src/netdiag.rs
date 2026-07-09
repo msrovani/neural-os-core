@@ -37,8 +37,10 @@ pub fn run_network_test() -> String {
     // 4. Estatisticas de TX/RX
     let tx = crate::netstack::net_tx_count();
     let rx = crate::netstack::net_rx_count();
-    report.push_str(&alloc::format!("TX total: {}\n", tx));
-    report.push_str(&alloc::format!("RX total: {}\n", rx));
+    report.push_str(&alloc::format!("TX total (NET): {}\n", tx));
+    report.push_str(&alloc::format!("RX total (NET): {}\n", rx));
+    let slip_tx = crate::slip::slip_tx_count();
+    report.push_str(&alloc::format!("SLIP TX total: {}\n", slip_tx));
 
     // 5. Teste de resolucao DNS (usa smoltcp internamente)
     report.push_str("\n--- Teste DNS ---\n");

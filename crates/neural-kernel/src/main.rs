@@ -1139,19 +1139,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         serial_println!("[ENV] Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
     }
-
-    // Init E1000 primeiro (driver mais confiável, RX comprovado)
+    // Init E1000 primeiro
     unsafe { crate::net::init_driver_e1000(); }
-    publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init (primary)");
+    publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init");
 
-    // Fallback: RTL8139 se E1000 não encontrado
+    // Fallback: RTL8139
     if crate::net::E1000.lock().is_none() {
         unsafe { crate::net::init_driver_rtl8139(); }
         publish_boot_phase(BootPhase::HardwareDiscovery, "RTL8139 init (fallback)");
     }
 
     // Decisão final: se NIC real encontrada → HW real. Se não → sandbox ou offline.
-    let nic_found = crate::net::E1000.lock().is_some() || crate::net::RTL8139.lock().is_some();
+    let nic_found = crate::net::E1000.lock().is_some()
+        || crate::net::RTL8139.lock().is_some();
     if nic_found {
         if !is_sandbox {
             crate::env::set(crate::env::SystemEnv::HwReal);

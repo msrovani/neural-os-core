@@ -96,8 +96,10 @@ unsafe fn dealloc_pages(pa: u64, n: usize) {
 
 pub struct VirtIoDevice {
     io_base: u16,
-    rx_queue_pa: u64,   // phys base of RX descriptor page
-    tx_queue_pa: u64,   // phys base of TX descriptor page
+    mmio_base: u64,
+    is_mmio: bool,
+    rx_queue_pa: u64,
+    tx_queue_pa: u64,
     rx_avail_idx: u16,
     tx_avail_idx: u16,
     rx_used_last: u16,
@@ -105,14 +107,28 @@ pub struct VirtIoDevice {
     pub present: bool,
 }
 
+use crate::apic::map_page_uc;
+
 impl VirtIoDevice {
     pub fn new(dev: &PciDevice) -> Option<Self> {
-        // BAR0 deve ser I/O (bit 0 = 1)
-        let io_base = if dev.bar0 & 1 == 1 { (dev.bar0 & !0xFF) as u16 } else { return None; };
-        if io_base == 0 { return None; }
+        let (io_base, mmio_base, is_mmio) = if dev.bar0 & 1 == 1 {
+            ((dev.bar0 & !0xFF) as u16, 0u64, false)
+        } else {
+            let mmio = (dev.bar0 & !0xF) as u64;
+            let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+            // Map 2 pages for register access
+            unsafe { map_page_uc(mmio, pmoff); }
+            unsafe { map_page_uc(mmio + 0x1000, pmoff); }
+            (0u16, mmio, true)
+        };
 
+        // Use the send/recv notify method
         unsafe {
-            let io = IoPorts::new(io_base);
+            let io = if is_mmio {
+                VirtioIo::new_mmio(mmio_base)
+            } else {
+                VirtioIo::new(io_base)
+            };
 
             // Reset
             io.write8(REG_STATUS, 0);
@@ -151,7 +167,7 @@ impl VirtIoDevice {
             let tx_pa = setup_virtqueue(&io, 1, QUEUE_NUM)?;
 
             // Pre-allocate RX buffers
-            prealloc_rx_buffers(rx_pa, io_base);
+            prealloc_rx_buffers(rx_pa, io_base, is_mmio, mmio_base);
 
             // DRIVER_OK
             io.add_status(STATUS_DRIVER_OK);
@@ -161,14 +177,28 @@ impl VirtIoDevice {
 
             Some(VirtIoDevice {
                 io_base,
+                mmio_base,
+                is_mmio,
                 rx_queue_pa: rx_pa,
                 tx_queue_pa: tx_pa,
-                rx_avail_idx: QUEUE_NUM,   // all initially in avail ring
+                rx_avail_idx: QUEUE_NUM,
                 tx_avail_idx: 0,
                 rx_used_last: 0,
                 mac,
                 present: true,
             })
+        }
+    }
+
+    fn notify_queue(&self, queue: u16) {
+        if self.is_mmio {
+            unsafe {
+                let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+                let reg = (self.mmio_base + pmoff + REG_QUEUE_NOTIFY as u64) as *mut u16;
+                reg.write_volatile(queue);
+            }
+        } else {
+            unsafe { Port::new(self.io_base + REG_QUEUE_NOTIFY).write(queue); }
         }
     }
 
@@ -203,7 +233,7 @@ impl VirtIoDevice {
             (*avail).idx = avail_idx.wrapping_add(1);
 
             // Notify device
-            Port::new(self.io_base + REG_QUEUE_NOTIFY).write(1u16);
+            self.notify_queue(1);
 
             self.tx_avail_idx = idx.wrapping_add(1);
 
@@ -250,7 +280,7 @@ impl VirtIoDevice {
             core::sync::atomic::fence(Ordering::SeqCst);
             (*avail).idx = avail_idx.wrapping_add(1);
 
-            Port::new(self.io_base + REG_QUEUE_NOTIFY).write(0u16);
+            self.notify_queue(0);
 
             self.rx_used_last = self.rx_used_last.wrapping_add(1);
             Some(data)
@@ -262,20 +292,52 @@ impl VirtIoDevice {
 // helpers
 // ---------------------------------------------------------------------------
 
-struct IoPorts(u16);
-impl IoPorts {
-    fn new(base: u16) -> Self { IoPorts(base) }
-    fn read8(&self, reg: u16) -> u8 { unsafe { Port::new(self.0 + reg).read() } }
-    fn write8(&self, reg: u16, v: u8) { unsafe { Port::new(self.0 + reg).write(v); } }
-    fn read16(&self, reg: u16) -> u16 { unsafe { Port::new(self.0 + reg).read() } }
-    fn write16(&self, reg: u16, v: u16) { unsafe { Port::new(self.0 + reg).write(v); } }
-    fn read32(&self, reg: u16) -> u32 { unsafe { Port::new(self.0 + reg).read() } }
-    fn write32(&self, reg: u16, v: u32) { unsafe { Port::new(self.0 + reg).write(v); } }
+struct VirtioIo {
+    /// Se true, usa MMIO (mmio_base). Se false, usa port I/O (port_base).
+    is_mmio: bool,
+    port_base: u16,
+    mmio_base: u64,
+    pmoff: u64,
+}
+impl VirtioIo {
+    fn new(port: u16) -> Self {
+        VirtioIo { is_mmio: false, port_base: port, mmio_base: 0, pmoff: 0 }
+    }
+    fn new_mmio(mmio: u64) -> Self {
+        VirtioIo { is_mmio: true, port_base: 0, mmio_base: mmio, pmoff: PHYS_MEM_OFFSET.load(Ordering::Relaxed) }
+    }
+    fn reg_ptr(&self, reg: u16) -> *mut u8 {
+        (self.mmio_base + self.pmoff + reg as u64) as *mut u8
+    }
+    fn read8(&self, reg: u16) -> u8 {
+        if self.is_mmio { unsafe { self.reg_ptr(reg).read_volatile() } }
+        else { unsafe { Port::new(self.port_base + reg).read() } }
+    }
+    fn write8(&self, reg: u16, v: u8) {
+        if self.is_mmio { unsafe { self.reg_ptr(reg).write_volatile(v); } }
+        else { unsafe { Port::new(self.port_base + reg).write(v); } }
+    }
+    fn read16(&self, reg: u16) -> u16 {
+        if self.is_mmio { unsafe { (self.reg_ptr(reg) as *mut u16).read_volatile() } }
+        else { unsafe { Port::new(self.port_base + reg).read() } }
+    }
+    fn write16(&self, reg: u16, v: u16) {
+        if self.is_mmio { unsafe { (self.reg_ptr(reg) as *mut u16).write_volatile(v); } }
+        else { unsafe { Port::new(self.port_base + reg).write(v); } }
+    }
+    fn read32(&self, reg: u16) -> u32 {
+        if self.is_mmio { unsafe { (self.reg_ptr(reg) as *mut u32).read_volatile() } }
+        else { unsafe { Port::new(self.port_base + reg).read() } }
+    }
+    fn write32(&self, reg: u16, v: u32) {
+        if self.is_mmio { unsafe { (self.reg_ptr(reg) as *mut u32).write_volatile(v); } }
+        else { unsafe { Port::new(self.port_base + reg).write(v); } }
+    }
     fn add_status(&self, bits: u8) { self.write8(REG_STATUS, self.read8(REG_STATUS) | bits); }
 }
 
 /// Configura uma virtqueue. Retorna phys_addr da página do descritor.
-unsafe fn setup_virtqueue(io: &IoPorts, queue_idx: u16, size: u16) -> Option<u64> {
+unsafe fn setup_virtqueue(io: &VirtioIo, queue_idx: u16, size: u16) -> Option<u64> {
     io.write16(REG_QUEUE_SEL, queue_idx);
     let max_size: u16 = io.read16(REG_QUEUE_SIZE);
     if max_size < size { return None; }
@@ -291,7 +353,7 @@ unsafe fn setup_virtqueue(io: &IoPorts, queue_idx: u16, size: u16) -> Option<u64
 }
 
 /// Pre-allocate RX buffers into the available ring
-unsafe fn prealloc_rx_buffers(queue_pa: u64, io_base: u16) {
+unsafe fn prealloc_rx_buffers(queue_pa: u64, io_base: u16, is_mmio: bool, mmio_base: u64) {
     let offset = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let desc = (queue_pa + offset) as *mut Desc;
     let avail = ((queue_pa + 4096) + offset) as *mut AvailRing;
@@ -316,7 +378,13 @@ unsafe fn prealloc_rx_buffers(queue_pa: u64, io_base: u16) {
     (*avail).idx = QUEUE_NUM;
 
     // Notify device about RX queue
-    Port::new(io_base + REG_QUEUE_NOTIFY).write(0u16);
+    if is_mmio {
+        let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        let notify_reg = (mmio_base + pmoff + REG_QUEUE_NOTIFY as u64) as *mut u16;
+        notify_reg.write_volatile(0u16);
+    } else {
+        Port::new(io_base + REG_QUEUE_NOTIFY).write(0u16);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -39,8 +39,9 @@ pub fn network_agent_tick() {
     if let Some(ref mut ns) = *NETSTACK.lock() {
         ns.poll(ms as i64);
         if tick % 50 == 0 {
-            log(tick, &alloc::format!("poll: tx={} rx={}",
-                crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+            log(tick, &alloc::format!("poll: tx={} rx={} slip_tx={} slip_rx={}",
+                crate::netstack::net_tx_count(), crate::netstack::net_rx_count(),
+                crate::slip::slip_tx_count(), crate::slip::slip_rx_count()));
         }
         if tick % 100 == 0 {
             unsafe { crate::net::dump_e1000_status(); }

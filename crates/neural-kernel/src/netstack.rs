@@ -43,35 +43,31 @@ impl TxToken for PhyToken {
 }
 
 unsafe fn nic_send(data: Vec<u8>) {
-    // E1000 first (driver mais confiavel)
+    // VirtIO-Net (mais rapido em QEMU)
+    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
+        nic.send(&data); return;
+    }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
         nic.send(&data); return;
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         nic.send(&data); return;
     }
-    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
-        nic.send(&data); return;
-    }
-    // Generic WiFi driver (FallbackEthernet ou WiFi futuro)
     crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
-        if let Some(wifi) = driver {
-            let _ = wifi.send_packet(&data);
-        }
+        if let Some(wifi) = driver { let _ = wifi.send_packet(&data); }
     });
-    // Serial tunnel (SLIP) — tenta sempre como fallback universal
     crate::slip::send(&data);
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
-    // E1000 first (driver mais confiavel)
+    // VirtIO-Net first (mais rapido em QEMU)
+    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
-        if let Some(pkt) = nic.recv() { return Some(pkt); }
-    }
-    if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     // Generic WiFi driver — bridge formal smoltcp::phy::Device via WifiChipset trait
@@ -366,12 +362,14 @@ impl NetStack {
         {
             let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
             let _ = udp.bind(54321);
-            let _ = udp.send_slice(&query, dns_server_addr);
+            if udp.send_slice(&query, dns_server_addr).is_err() {
+                crate::serial_println!("[DNS] send_slice falhou");
+            }
         }
 
-        for _ in 0..100 {
+        for i in 0..500 {
             let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-            iface.poll(Instant::from_millis(0), phy, sockets);
+            iface.poll(Instant::from_millis(i as i64 * 5), phy, sockets);
 
             let payload = {
                 let udp = sockets.get_mut::<udp_socket::Socket>(handle);
