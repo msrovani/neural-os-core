@@ -126,6 +126,10 @@ Ver `docs/TODO.md` para detalhes. Os 9 itens de Sprint 92 não dependem de B-01.
 ~18.000 LOC de sprints 92+ dependem de rede funcional. Enquanto não resolvido, focar em itens não bloqueados.
 **Status v0.109.2**: Causa raiz do RX=0 no RTL8139 encontrada — bit CR_RE (0x01) nunca setado no Command Register. MAC da Realtek ficava desligado. Correção aplicada em todas as 3 escritas do CR. Pendente: teste em QEMU com boot longo para confirmar `rx>0`.
 
+# Sprint 99 Planejado: SkillOpt + Structured Decoding (~265 LOC)
+- **SkillOpt** (MS Research, maio/2026): Optimizer model (BitNet) gera add/delete/replace edits no SKILL.md, aceitos só com validação. SleepCycleAgent como scheduler. ~145 LOC.
+- **Structured Decoding** (SGLang, Stanford/Berkeley, 2023): FSM comprimido para geração constraint (JSON/SKILL.md/shell). Mascara logits no BitNet decoder para tokens válidos. ~120 LOC.
+
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer
 - ADR-0037: SMP+GPU Architecture (multi-vendor)

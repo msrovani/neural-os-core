@@ -31,6 +31,12 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Viabilidade confirmada para neural-os-core (~145 LOC, sem dependências externas).
 - Recomendado para Sprint 99.
 
+### SGLang Structured Decoding viability analysis
+- Paper Stanford/Berkeley analisado: FSM comprimido para geração constraint.
+- RadixAttention inviável (memória), PrefixCache parcial viável (~80 LOC).
+- **Compressed FSM**: viável e alto impacto (~120 LOC) — máscara logits no BitNet decoder para JSON/SKILL.md/shell.
+- Recomendado para Sprint 99 (junto com SkillOpt).
+
 ## [0.109.1-compilation-fix] — 2026-07-08 — ✅ 32 erros de compilação eliminados
 
 ### Correção em massa — cache incremental mascarava 32 erros
