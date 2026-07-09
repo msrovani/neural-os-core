@@ -43,10 +43,11 @@ impl TxToken for PhyToken {
 }
 
 unsafe fn nic_send(data: Vec<u8>) {
-    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
+    // E1000 first (driver mais confiavel)
+    if let Some(ref mut nic) = *crate::net::E1000.lock() {
         nic.send(&data); return;
     }
-    if let Some(ref mut nic) = *crate::net::E1000.lock() {
+    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         nic.send(&data); return;
     }
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
@@ -58,13 +59,16 @@ unsafe fn nic_send(data: Vec<u8>) {
             let _ = wifi.send_packet(&data);
         }
     });
+    // Serial tunnel (SLIP) — tenta sempre como fallback universal
+    crate::slip::send(&data);
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
-    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
+    // E1000 first (driver mais confiavel)
+    if let Some(ref mut nic) = *crate::net::E1000.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
-    if let Some(ref mut nic) = *crate::net::E1000.lock() {
+    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
@@ -83,6 +87,10 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
         }
     });
     if let Some(pkt) = wifi_pkt {
+        return Some(pkt);
+    }
+    // Serial tunnel (SLIP) — tenta sempre como fallback universal
+    if let Some(pkt) = crate::slip::recv() {
         return Some(pkt);
     }
     None

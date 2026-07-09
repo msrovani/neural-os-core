@@ -158,6 +158,8 @@ mod net;
 
 mod netstack;
 
+mod slip;
+
 mod network_agent;
 
 mod optimizer;
@@ -1122,21 +1124,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
-    // Init RTL8139 early — frame allocator minimamente fragmentado = 32KB RX OK
+    // Init E1000 primeiro (driver mais confiável, RX comprovado)
 
-    unsafe { crate::net::init_driver_rtl8139(); }
+    unsafe { crate::net::init_driver_e1000(); }
 
-    publish_boot_phase(BootPhase::HardwareDiscovery, "RTL8139 init");
+    publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init (primary)");
 
 
 
-    // Init e1000 early (fallback se RTL8139 nao encontrado)
+    // Fallback: RTL8139 se E1000 não encontrado
 
-    if crate::net::RTL8139.lock().is_none() {
+    if crate::net::E1000.lock().is_none() {
 
-        unsafe { crate::net::init_driver_e1000(); }
+        unsafe { crate::net::init_driver_rtl8139(); }
 
-        publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init (fallback)");
+        publish_boot_phase(BootPhase::HardwareDiscovery, "RTL8139 init (fallback)");
 
     }
 
