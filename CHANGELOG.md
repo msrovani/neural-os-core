@@ -43,6 +43,12 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - Ganho marginal para single-user (sem batch de LLM).
 - Recomendado para Sprint 100+, após SkillOpt + FSM.
 
+### FlashAttention viability analysis
+- Paper Stanford (NeurIPS 2022): IO-aware exact attention com tiling no cache L1.
+- Aplica-se ao BitNet CPU: blocos de 16 tokens cabem no L1 (32 KB).
+- ~3-5× speedup para sequências >256 tokens.
+- Recomendado para Sprint 100+, ~100 LOC em cortex.rs.
+
 ## [0.109.1-compilation-fix] — 2026-07-08 — ✅ 32 erros de compilação eliminados
 
 ### Correção em massa — cache incremental mascarava 32 erros
