@@ -173,11 +173,13 @@ impl Rtl8139Driver {
 
         self.write16(REG_IMR, 0x0000);
 
-        // Reset RX state: CAPR = 0 significa "host leu ate o inicio"
-        // O NIC espera CAPR = (prox_leitura - 16) segundo datasheet
-        self.write16(REG_CAPR, 0);
+        // CAPR inicial = RX_BUF_LEN - 16 = 8176 (datasheet RTL8139).
+        // Se CAPR == CBR (ambos 0), o QEMU entende buffer cheio e descarta pacotes.
+        // Com CAPR = 8176, CBR = 0, o NIC tem 8176 bytes livres para escrever.
+        let capr_init = (RX_BUF_LEN as u16).wrapping_sub(16);
+        self.write16(REG_CAPR, capr_init);
         self.rx_offset = 0;
-        serial_println!("[RTL8139] RX init: CAPR=0 RX_BUF_SIZE={}", RX_BUF_SIZE);
+        serial_println!("[RTL8139] RX init: CAPR={} RX_BUF_SIZE={}", capr_init, RX_BUF_SIZE);
 
         serial_println!(
             "[RTL8139] Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]",
