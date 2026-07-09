@@ -156,7 +156,12 @@ pub fn network_agent_tick() {
                     let dns_srv = NET_CONFIG.lock().dns_ip;
                     log(tick, &alloc::format!("DNS resolve google.com (try {}) via {}.{}.{}.{}",
                         s.dns_tries, dns_srv[0], dns_srv[1], dns_srv[2], dns_srv[3]));
-                    if let Some(ip) = ns.dns_resolve("google.com", dns_srv) {
+                    let resolved = if crate::env::is_sandbox() {
+                        crate::netstack::dns_resolve_manual("google.com", dns_srv)
+                    } else {
+                        ns.dns_resolve("google.com", dns_srv)
+                    };
+                    if let Some(ip) = resolved {
                         s.target_ip = ip;
                         log(tick, &alloc::format!("DNS OK: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
                         s.http = Some(ns.http_new(ip, 80, "/"));

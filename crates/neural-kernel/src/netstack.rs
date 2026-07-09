@@ -2,11 +2,124 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 /// Injeta pacote RX vindo do MSI-X/WiFi diretamente na interface smoltcp.
-/// Chamado pelo AgnosticNetworkManager::poll() apos defrag.
 pub fn inject_rx_packet(_pkt: &[u8]) {
-    // (futuro: empilhar em buffer circular para NetPhy.receive())
 }
 use core::sync::atomic::{AtomicU64, Ordering};
+use crate::slip;
+
+fn ip_checksum(data: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    for chunk in data.chunks(2) {
+        let word = u16::from_le_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
+        sum = sum.wrapping_add(word as u32);
+    }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
+}
+
+/// DNS resolve MANUAL — bypassa smoltcp, envia raw UDP/IP via serial tunnel.
+/// Pipelines de ataque: constroi frame IPv4+UDP+DNS e envia via slip::send().
+pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
+    let hostname = hostname.trim_end_matches('.');
+    if hostname.is_empty() { return None; }
+
+    // 1. DNS name encoding
+    let mut qname = Vec::new();
+    for part in hostname.split('.') {
+        qname.push(part.len() as u8);
+        qname.extend_from_slice(part.as_bytes());
+    }
+    qname.push(0);
+
+    // 2. DNS query payload (header 12B + question)
+    let txid: u16 = 0x1234;
+    let mut dns = Vec::with_capacity(12 + qname.len() + 4);
+    dns.extend_from_slice(&txid.to_be_bytes());     // TXID
+    dns.extend_from_slice(&[0x01, 0x00]);             // flags: standard query
+    dns.extend_from_slice(&[0x00, 0x01]);             // QDCOUNT: 1 question
+    dns.extend_from_slice(&[0x00, 0x00]);             // ANCOUNT
+    dns.extend_from_slice(&[0x00, 0x00]);             // NSCOUNT
+    dns.extend_from_slice(&[0x00, 0x00]);             // ARCOUNT
+    dns.extend_from_slice(&qname);                     // question name
+    dns.extend_from_slice(&[0x00, 0x01]);             // QTYPE: A
+    dns.extend_from_slice(&[0x00, 0x01]);             // QCLASS: IN
+
+    // 3. UDP header (8B) + DNS payload
+    let src_port: u16 = 54321;
+    let dst_port: u16 = 53;
+    let udp_len_u16 = (8 + dns.len()) as u16;
+    let mut udp_data = Vec::with_capacity(udp_len_u16 as usize);
+    udp_data.extend_from_slice(&src_port.to_be_bytes());
+    udp_data.extend_from_slice(&dst_port.to_be_bytes());
+    udp_data.extend_from_slice(&udp_len_u16.to_be_bytes());
+    udp_data.extend_from_slice(&[0x00, 0x00]); // checksum = 0
+    udp_data.extend_from_slice(&dns);
+
+    // 4. IP header (20B)
+    let total_len = 20 + udp_data.len();
+    let mut ip = [0u8; 20];
+    ip[0] = 0x45;
+    ip[1] = 0;
+    ip[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+    ip[4..8].copy_from_slice(&[0, 0, 0x40, 0x00]); // ID + flags/frag
+    ip[8] = 64;                                     // TTL
+    ip[9] = 17;                                     // UDP
+    ip[10..12].copy_from_slice(&[0, 0]);            // checksum placeholder
+    ip[12..16].copy_from_slice(&[10, 0, 2, 15]); // src IP
+    ip[16..20].copy_from_slice(&dns_server);       // dst IP
+    let cs = ip_checksum(&ip);
+    ip[10..12].copy_from_slice(&cs.to_be_bytes());
+
+    // 5. Build full frame and send
+    let mut frame = Vec::with_capacity(20 + udp_data.len());
+    frame.extend_from_slice(&ip);
+    frame.extend_from_slice(&udp_data);
+
+    crate::serial_println!("[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
+        hostname, dns_server[0], dns_server[1], dns_server[2], dns_server[3], frame.len());
+
+    unsafe { slip::send(&frame); }
+
+    // 6. Poll for response (até ~200 iterações)
+    for i in 0..200 {
+        if let Some(resp) = unsafe { slip::recv() } {
+            if resp.len() >= 42 { // IP(20) + UDP(8) + DNS header(12) + answer
+                let dns_offset = 20 + 8; // skip IP + UDP
+                let resp_txid = u16::from_be_bytes([resp[dns_offset], resp[dns_offset + 1]]);
+                if resp_txid == txid {
+                    let flags = u16::from_be_bytes([resp[dns_offset + 2], resp[dns_offset + 3]]);
+                    if flags & 0x8000 != 0 {
+                        let ancount = u16::from_be_bytes([resp[dns_offset + 6], resp[dns_offset + 7]]);
+                        if ancount > 0 {
+                            // Skip question section to find answer
+                            let mut pos = dns_offset + 12;
+                            while pos < resp.len() && resp[pos] != 0 {
+                                if resp[pos] & 0xC0 == 0xC0 { pos += 2; break; }
+                                pos += 1 + resp[pos] as usize;
+                            }
+                            if pos < resp.len() { pos += 5; } // null term + type + class + TTL
+                            if pos + 10 <= resp.len() {
+                                let rdlen = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+                                if rdlen == 4 && pos + 12 <= resp.len() {
+                                    let ip = [resp[pos + 10], resp[pos + 11], resp[pos + 12], resp[pos + 13]];
+                                    crate::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
+                                        ip[0], ip[1], ip[2], ip[3]);
+                                    return Some(ip);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if i % 50 == 0 {
+            // Re-send query every 50 iterations (in case lost)
+            unsafe { slip::send(&frame); }
+        }
+    }
+    crate::serial_println!("[DNS-MANUAL] Timeout");
+    None
+}
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 

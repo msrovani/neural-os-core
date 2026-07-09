@@ -398,6 +398,24 @@ pub unsafe fn init_driver_virtio() -> bool {
            (dev.device_id == VIRTIO_NET_TRANSITIONAL || dev.device_id == VIRTIO_NET_MODERN) {
             serial_println!("[VIRTIO] Detectado: {:02x}:{:02x}.{:02x}",
                 dev.bus, dev.device, dev.function);
+
+            // Diagnostico dos 6 BARs
+            let read_bar = |idx: u8| -> u32 {
+                crate::pci::read_config_dword(dev.bus, dev.device, dev.function, 0x10 + idx * 4)
+            };
+            for i in 0..6u8 {
+                let bar = read_bar(i);
+                if bar == 0 { continue; }
+                if bar & 1 == 1 {
+                    serial_println!("[VIRTIO]  BAR{} = {:#010x} (I/O Port {:#06x})", i, bar, bar & !3);
+                } else {
+                    let phys = bar & !0xF;
+                    let is64 = (bar >> 1) & 3 == 2;
+                    serial_println!("[VIRTIO]  BAR{} = {:#010x} (MMIO {}b addr={:#010x})",
+                        i, bar, if is64 { 64 } else { 32 }, phys);
+                }
+            }
+
             if let Some(virtio) = VirtIoDevice::new(dev) {
                 let mac = virtio.mac;
                 crate::net::NET_CONFIG.lock().mac = mac;
