@@ -37,6 +37,12 @@ with [Conventional Commits](https://www.conventionalcommits.org/).
 - **Compressed FSM**: viável e alto impacto (~120 LOC) — máscara logits no BitNet decoder para JSON/SKILL.md/shell.
 - Recomendado para Sprint 99 (junto com SkillOpt).
 
+### vLLM PagedAttention viability analysis
+- Paper UC Berkeley (SOSP 2023): KV cache paginado com COW entre prefixos.
+- Conceito implementável com frame allocator + page table existentes (~100 LOC).
+- Ganho marginal para single-user (sem batch de LLM).
+- Recomendado para Sprint 100+, após SkillOpt + FSM.
+
 ## [0.109.1-compilation-fix] — 2026-07-08 — ✅ 32 erros de compilação eliminados
 
 ### Correção em massa — cache incremental mascarava 32 erros
