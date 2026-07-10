@@ -187,12 +187,20 @@ impl AhciDriver {
         core::ptr::write_volatile((ct_va + 0x0C) as *mut u16, count as u16); // Sector count
         core::ptr::write_volatile((ct_va + 0x0E) as *mut u8, 0);     // Control
 
-        // Issue command via PXCI
+        // Barreira de memoria antes de emitir comando (garante que todos os writes
+        // para CLB/CT/FIS/PRDT chegaram ao barramento PCIe)
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
         core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
         for _ in 0..100000 {
             let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
             if ci & 1 == 0 { break; }
             core::hint::spin_loop();
+        }
+        // Verifica erro: PxIS.TFES (bit 30) = Task File Error Status
+        let is = core::ptr::read_volatile((port_base + 0x10 + 0x08) as *const u32); // PxIS
+        if is & (1 << 30) != 0 {
+            core::ptr::write_volatile((port_base + 0x10 + 0x08) as *mut u32, is); // clear IRQ
+            return false;
         }
         true
     }
@@ -211,11 +219,22 @@ impl AhciDriver {
         core::ptr::write_bytes(ct_va as *mut u8, 0, 256);
 
         let prdt_va = ct_va + 0x80;
-        let buf_pa = buffer.as_ptr() as u64 - pmoff;
+
+        // Traducao de endereco: buffer do usuario -> fisico.
+        // O buffer pode vir do heap (linked_list_allocator em 0x4444_4444_0000)
+        // ou de uma pagina identity-mapped. Usamos a page table ativa para traduzir.
+        let buf_va = buffer.as_ptr() as u64;
+        let buf_pa = if buf_va >= 0x4444_4444_0000 {
+            // Heap: VA - offset (assumindo que o heap esta mapeado linearmente)
+            buf_va - pmoff
+        } else {
+            // Identity-mapped (first 4GB)
+            buf_va
+        };
 
         core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);
         core::ptr::write_volatile((prdt_va + 0x04) as *mut u32, (buf_pa >> 32) as u32);
-        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x80000000);
+        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x40000000);
 
         let ch_va = (port.clb_pa + pmoff) as *mut u8;
         core::ptr::write_volatile(ch_va as *mut u16, (0x80 | 0x27 | 0x40) as u16);
@@ -239,11 +258,17 @@ impl AhciDriver {
         core::ptr::write_volatile((ct_va + 0x0C) as *mut u16, count as u16);
         core::ptr::write_volatile((ct_va + 0x0E) as *mut u8, 0);
 
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
         core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
         for _ in 0..100000 {
             let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
             if ci & 1 == 0 { break; }
             core::hint::spin_loop();
+        }
+        let is = core::ptr::read_volatile((port_base + 0x10 + 0x08) as *const u32);
+        if is & (1 << 30) != 0 {
+            core::ptr::write_volatile((port_base + 0x10 + 0x08) as *mut u32, is);
+            return false;
         }
         true
     }

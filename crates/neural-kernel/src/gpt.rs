@@ -6,6 +6,19 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use crate::block_dev::BlockDevice;
 
+/// CRC32C (Castagnoli) — polinomio 0x1EDC6F41
+fn crc32c(data: &[u8]) -> u32 {
+    let poly: u32 = 0x82F63B78;
+    let mut crc = !0u32;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            if crc & 1 != 0 { crc = (crc >> 1) ^ poly; } else { crc >>= 1; }
+        }
+    }
+    !crc
+}
+
 #[derive(Debug, Clone)]
 pub struct GptPartition {
     pub index: u32,
@@ -104,29 +117,44 @@ pub fn gpt_format_single(dev: &mut dyn BlockDevice, total_lba: u64, type_guid: &
     hdr[56..64].copy_from_slice(&2u64.to_le_bytes()); // partition entries LBA
     hdr[64..68].copy_from_slice(&128u32.to_le_bytes()); // number of entries
     hdr[68..72].copy_from_slice(&128u32.to_le_bytes()); // entry size
-    // CRC32 da tabela de entrada é calculado sobre o array vazio (0 entradas além desta)
-    hdr[16..20].copy_from_slice(&0u32.to_le_bytes()); // placeholder CRC
-    if !dev.write_sectors(1, &hdr) { return false; }
-
-    // Cria entrada de partição no LBA 2
+    // CRC32 da entrada de partição (calculado sobre a entrada que escrevemos no LBA 2)
     let mut entry = [0u8; 512];
     entry[0..16].copy_from_slice(type_guid);
-    // Unique GUID: hash simples do label
     let mut ug = [0u8; 16];
     for (i, b) in label.bytes().enumerate() { ug[i % 16] ^= b; }
     entry[16..32].copy_from_slice(&ug);
-    entry[32..40].copy_from_slice(&2048u64.to_le_bytes()); // LBA start (alinhado 1MB)
-    entry[40..48].copy_from_slice(&lba_end.to_le_bytes()); // LBA end
-    entry[48..56].copy_from_slice(&0u64.to_le_bytes()); // attrs
-    // Nome em UTF-16LE
+    entry[32..40].copy_from_slice(&2048u64.to_le_bytes()); // LBA start
+    entry[40..48].copy_from_slice(&lba_end.to_le_bytes());
     let label_u16: Vec<u16> = label.encode_utf16().collect();
     for (i, &c) in label_u16.iter().enumerate().take(36) {
         entry[56 + i * 2] = (c & 0xFF) as u8;
         entry[57 + i * 2] = (c >> 8) as u8;
     }
+    let partition_crc = crc32c(&entry[0..128]);
+    hdr[88..92].copy_from_slice(&partition_crc.to_le_bytes()); // CRC of partition entries
+    // CRC32 do cabeçalho (bytes 0-91, com campo CRC zerado)
+    hdr[16..20].copy_from_slice(&0u32.to_le_bytes()); // zera CRC para o cálculo
+    let header_crc = crc32c(&hdr[0..92]);
+    hdr[16..20].copy_from_slice(&header_crc.to_le_bytes());
+    if !dev.write_sectors(1, &hdr) { return false; }
+
+    // Escreve entrada de partição no LBA 2
     if !dev.write_sectors(2, &entry) { return false; }
 
-    // Limpa primeiro setor da partição (vbr será escrito pelo formatador)
+    // Backup GPT: escreve entrada no final do disco
+    let backup_entries_lba = total_lba - 33;
+    if !dev.write_sectors(backup_entries_lba, &entry) { return false; }
+
+    // Backup GPT header no ultimo LBA
+    hdr[24..32].copy_from_slice(&total_lba.to_le_bytes()); // this LBA = last
+    hdr[32..40].copy_from_slice(&1u64.to_le_bytes()); // primary LBA = 1
+    hdr[40..48].copy_from_slice(&2u64.to_le_bytes()); // first usable = 2
+    hdr[48..56].copy_from_slice(&backup_entries_lba.to_le_bytes()); // entries LBA
+    let header_crc2 = crc32c(&hdr[0..92]);
+    hdr[16..20].copy_from_slice(&header_crc2.to_le_bytes());
+    if !dev.write_sectors(total_lba - 1, &hdr) { return false; }
+
+    // Limpa primeiro setor da partição
     let zero = [0u8; 512];
     dev.write_sectors(2048, &zero);
 

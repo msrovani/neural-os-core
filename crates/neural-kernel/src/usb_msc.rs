@@ -128,12 +128,12 @@ impl UsbMassStorage {
         self.bot_transfer(&cmd, true, data)
     }
 
-    pub unsafe fn write_sector(&mut self, lba: u64, _data: &[u8; 512]) -> bool {
+    pub unsafe fn write_sector(&mut self, lba: u64, data: &[u8; 512]) -> bool {
         let mut cmd = [0u8; 16];
         cmd[0] = SCSI_WRITE10;
         cmd[2..6].copy_from_slice(&(lba as u32).to_be_bytes());
         cmd[8] = 1;
-        self.bot_transfer(&cmd, false, &mut [])
+        self.bot_transfer(&cmd, false, &mut data.to_vec())
     }
 
     unsafe fn scsi_inquiry(&mut self) -> Option<[u8; 36]> {

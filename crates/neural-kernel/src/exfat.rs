@@ -7,9 +7,8 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use crate::block_dev::BlockDevice;
 
-const EBPB_SIGNATURE: [u8; 11] = *b"EXFAT      ";
+const EBPB_SIGNATURE: [u8; 8] = *b"EXFAT   ";
 const BYTES_PER_SECTOR: u64 = 512;
-const BYTES_PER_CLUSTER: u64 = 4096; // default
 
 pub struct ExfatReader<'a> {
     dev: &'a mut dyn BlockDevice,
@@ -26,7 +25,8 @@ impl<'a> ExfatReader<'a> {
     pub fn new(dev: &'a mut dyn BlockDevice, start_lba: u64) -> Option<Self> {
         let mut vbr = [0u8; 512];
         if !dev.read_sectors(start_lba, &mut vbr) { return None; }
-        if &vbr[3..14] != &EBPB_SIGNATURE[..] { return None; }
+        // Assinatura exFAT: bytes 3-10 = "EXFAT   " (8 bytes), byte 11 = 0x00
+        if &vbr[3..11] != &EBPB_SIGNATURE[..] || vbr[11] != 0x00 { return None; }
 
         let total_sectors = u64::from_le_bytes([
             vbr[56], vbr[57], vbr[58], vbr[59],
@@ -40,9 +40,13 @@ impl<'a> ExfatReader<'a> {
         let bytes_per_cluster = 512u64 << (bytes_per_cluster_shift as u64);
 
         let mut label = String::new();
-        for i in 0..11 {
-            let c = vbr[114 + i] as char;
-            if c != '\0' { label.push(c); }
+        // Volume label em UTF-16LE no offset 114, ate 11 caracteres (22 bytes)
+        for i in (0..22).step_by(2) {
+            let lo = vbr[114 + i] as u16;
+            let hi = vbr[114 + i + 1] as u16;
+            let cp = lo | (hi << 8);
+            if cp == 0 { break; }
+            if let Some(c) = core::char::from_u32(cp as u32) { label.push(c); }
         }
 
         let fat_lba = start_lba + fat_offset as u64;
