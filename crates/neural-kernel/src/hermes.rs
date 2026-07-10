@@ -297,6 +297,7 @@ pub enum Command {
     ShowSkills, AddSkill(String, String), RmSkill(String), ReloadSkills,
     Profile,
     Learn(String, String),
+    ModelSwap(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +517,9 @@ pub fn parse_command(line: &str) -> Command {
                     return Command::TrustDeny(token, sub_parts.next().unwrap_or("").to_string());
                 }
             }
+        }
+        if name.eq_ignore_ascii_case("model") || name.eq_ignore_ascii_case("swap") {
+            return Command::ModelSwap(parts.next().unwrap_or("").trim().to_string());
         }
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {
             return Command::Fetch(parts.next().unwrap_or("").trim().to_string());

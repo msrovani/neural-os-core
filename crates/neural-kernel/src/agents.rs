@@ -564,6 +564,7 @@ impl Agent for HermesAgent {
                 hermes::Command::ReloadSkills => "ReloadSkills",
                 hermes::Command::Profile => "Profile",
                 hermes::Command::Chat(_) => "Chat",
+                hermes::Command::ModelSwap(_) => "ModelSwap",
             };
             let intent_info = crate::hermes::IntentInfo {
                 intent_name: String::from(intent_name),
@@ -738,6 +739,26 @@ impl Agent for HermesAgent {
                     let mut storage = SKILL_STORAGE.lock();
                     *storage = crate::skill_loader::load_embedded_skills();
                     alloc::format!("Skills recarregadas: {} skills.", storage.skills.len())
+                }
+                hermes::Command::ModelSwap(ref path) => {
+                    let mut msg = alloc::format!("[MODEL] Swapping to: {}\n", path);
+                    if let Ok(data) = crate::fs::read_vfs(path) {
+                        if !data.is_empty() {
+                            if let Some(model) = crate::cortex::load_model(&data) {
+                                crate::cortex::set_model(alloc::boxed::Box::new(model));
+                                msg.push_str("[MODEL] Model loaded and activated.\n");
+                                crate::kjson!("MODEL", "SWAP", "ok", "path", path);
+                            } else {
+                                msg.push_str("[MODEL] Failed to parse model file.\n");
+                            }
+                        } else { msg.push_str("[MODEL] Empty file.\n"); }
+                    } else if let Some(model) = crate::gguf::load_gguf_model_from_disk(path) {
+                        msg.push_str("[MODEL] GGUF model loaded from disk.\n");
+                    } else {
+                        msg.push_str("[MODEL] GGUF header NOTICE: streaming not yet supported.\n");
+                        msg.push_str(&crate::gguf::print_supported_formats());
+                    }
+                    msg
                 }
                 hermes::Command::Profile => {
                     let profile = crate::profile::ProfileManager::get();

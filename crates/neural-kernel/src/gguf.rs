@@ -496,3 +496,34 @@ pub fn gguf_summary(file: &GgufFile) -> String {
     }
     s
 }
+
+/// Tenta carregar modelo GGUF diretamente do disco (ATA/FAT32)
+pub fn load_gguf_model_from_disk(path: &str) -> Option<GgufBackedModel> {
+    let name = path.trim().to_uppercase();
+    let ata = crate::ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    for part in &parts {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+            let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part)? };
+            let data = unsafe { fs.read_file(&name)? };
+            let file = load_gguf(&data).ok()?;
+            return Some(GgufBackedModel::new(file));
+        }
+    }
+    None
+}
+
+/// Lista formatos GGUF suportados
+pub fn print_supported_formats() -> String {
+    alloc::format!(
+        "Supported GGUF formats:\n\
+         Q4_0: 4-bit block quantization (5 bpw)\n\
+         Q8_0: 8-bit block quantization (9 bpw)\n\
+         F16: 16-bit float\n\
+         F32: 32-bit float\n\
+         Tensor types: {}\n\
+         Use: /model <path> to load from FAT32",
+         "Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, F16, F32"
+    )
+}
