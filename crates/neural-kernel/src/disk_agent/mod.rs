@@ -20,6 +20,18 @@ use crate::mhi::AllocTier;
 
 pub static DISK_AGENT_INIT: AtomicBool = AtomicBool::new(false);
 
+/// Historico SMART para alerta preditivo
+#[derive(Debug, Clone)]
+pub struct SmartHistoryEntry {
+    pub tick: u64,
+    pub temp_c: u16,
+    pub realloc_sectors: u32,
+    pub pending_sectors: u32,
+    pub power_on_hours: u32,
+}
+
+const SMART_HISTORY_MAX: usize = 64;
+
 pub struct DiskIntelligenceAgent {
     manifest: AgentManifest,
     controllers: Vec<Box<dyn StorageController>>,
@@ -32,6 +44,7 @@ pub struct DiskIntelligenceAgent {
     readahead_cache: Vec<(u64, u64, Vec<u8>)>,
     cache: ArcCache,
     last_migration_tick: u64,
+    smart_history: Vec<SmartHistoryEntry>,
 }
 
 impl DiskIntelligenceAgent {
@@ -52,8 +65,9 @@ impl DiskIntelligenceAgent {
             tick_count: 0,
             io_queue: Vec::new(),
             readahead_cache: Vec::new(),
-            cache: ArcCache::new(1024), // 1MB cache
+            cache: ArcCache::new(1024),
             last_migration_tick: 0,
+            smart_history: Vec::new(),
         }
     }
 
@@ -61,7 +75,40 @@ impl DiskIntelligenceAgent {
         self.controllers.push(ctrl);
     }
 
-    pub fn probe_all(&mut self) {
+    /// Registra entrada no historico SMART para alerta preditivo
+    fn record_smart(&mut self, disk: &RawDisk) {
+        if let Some(ref smart) = disk.smart {
+            let entry = SmartHistoryEntry {
+                tick: self.tick_count,
+                temp_c: smart.temp_c,
+                realloc_sectors: smart.realloc_sectors,
+                pending_sectors: smart.pending_sectors,
+                power_on_hours: smart.power_on_hours,
+            };
+            let realloc = entry.realloc_sectors;
+            let pending = entry.pending_sectors;
+            let disk_name = alloc::string::String::from(&disk.name[..]);
+            self.smart_history.push(entry);
+            if self.smart_history.len() > SMART_HISTORY_MAX {
+                self.smart_history.remove(0);
+            }
+            // Alerta preditivo: realloc cresceu desde a ultima medicao
+            if self.smart_history.len() >= 2 {
+                let prev = &self.smart_history[self.smart_history.len() - 2];
+                if realloc > prev.realloc_sectors + 5 {
+                    crate::serial_println!("[SMART] ⚠ ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
+                        disk_name, realloc - prev.realloc_sectors,
+                        prev.tick);
+                }
+                if pending > 10 {
+                    crate::serial_println!("[SMART] ⚠ ALERTA: {} tem {} setores pendentes — disco pode estar falhando!",
+                        disk_name, pending);
+                }
+            }
+        }
+    }
+
+    fn probe_all(&mut self) {
         crate::serial_println!("[DISK] DiskIntelligenceAgent: probing storage...");
         let ctrl_count = self.controllers.len();
         for ctrl_idx in 0..ctrl_count {

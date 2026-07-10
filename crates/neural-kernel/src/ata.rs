@@ -120,6 +120,30 @@ impl AtaDriver {
         true
     }
 
+    /// Envia comando DATA SET MANAGEMENT (TRIM) para range de LBAs.
+    /// Usa o DSM TRIM bit (word 0, bit 0) via buffer de 512 bytes com ranges.
+    pub unsafe fn trim(&self, lba_start: u32, count: u32) -> bool {
+        if count == 0 || lba_start == 0 { return false; }
+        let mut buf = [0u8; 512];
+        // Range descriptor: 8 bytes LBA + 2 bytes count + 6 bytes reserved
+        buf[0..4].copy_from_slice(&lba_start.to_le_bytes());
+        buf[4..8].copy_from_slice(&0u32.to_le_bytes()); // LBA high (LBA48)
+        buf[8..10].copy_from_slice(&(count as u16).to_le_bytes());
+        self.cmd(lba_start, 1, 0x06); // DATA SET MANAGEMENT
+        self.wait_bsy();
+        if !self.wait_drq() { return false; }
+        for i in 0..256 {
+            let lo = buf[i * 2];
+            let hi = buf[i * 2 + 1];
+            core::arch::asm!("out dx, al", in("dx") self.io_base, in("al") lo, options(nostack, preserves_flags));
+            core::arch::asm!("out dx, al", in("dx") (self.io_base + 1), in("al") hi, options(nostack, preserves_flags));
+        }
+        self.wait_bsy();
+        write_io(self.io_base + 7, 0xE7);
+        self.wait_bsy();
+        true
+    }
+
     pub unsafe fn write_sectors(&self, lba: u32, data: &[u8], count: u8) -> bool {
         if count == 0 { return false; }
         self.cmd(lba, count, 0x30);

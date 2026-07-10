@@ -12,6 +12,8 @@ const ADMIN_IDENTIFY: u8 = 0x06;
 const ADMIN_CREATE_SQ: u8 = 0x01;
 const ADMIN_CREATE_CQ: u8 = 0x05;
 const IO_READ: u8 = 0x02;
+const IO_WRITE: u8 = 0x01;
+const IO_DSM: u8 = 0x09;
 
 pub struct NvmeDriver {
     mmio: *mut u32,
@@ -228,7 +230,38 @@ impl NvmeDriver {
         Some(QueueMem { phys, virt })
     }
 
-    unsafe fn alloc_dma(pages: usize) -> Option<(u64, *mut u8)> {
+    /// Envia comando Dataset Management (TRIM/deallocate) para um range de LBAs.
+    /// NVMe DSM com atributo Deallocate (bit 0 do range type).
+    pub unsafe fn deallocate(&mut self, lba: u64, count: u64) -> bool {
+        if count == 0 { return true; }
+        let (buf_pa, buf_va) = match NvmeDriver::alloc_dma(1) { Some(v) => v, None => return false };
+        core::ptr::write(buf_va as *mut u64, lba);
+        core::ptr::write(buf_va.add(8) as *mut u32, count as u32);
+        core::ptr::write_volatile(buf_va.add(12) as *mut u32, 0u32);
+
+        let cmd_phys = self.io_sq.phys + 64; // slot 1
+        let cmd_virt = (cmd_phys + self.pmoff) as *mut u32;
+        core::ptr::write_bytes(cmd_virt, 0, 64);
+
+        let cdw10 = (1 << 0) | ((self.qdepth & 0xFF) << 16); // deallocate + nr ranges
+        core::ptr::write_volatile(cmd_virt.add(0) as *mut u32, (IO_DSM as u32) | (self.nsid << 16));
+        core::ptr::write_volatile(cmd_virt.add(1) as *mut u32, cdw10);
+        core::ptr::write_volatile(cmd_virt.add(6) as *mut u32, buf_pa as u32);
+        core::ptr::write_volatile(cmd_virt.add(7) as *mut u32, (buf_pa >> 32) as u32);
+
+        let sq_tdb = self.mmio.add(0x1000) as *mut u32; // SQ0 doorbell
+        core::ptr::write_volatile(sq_tdb, 1);
+        // Poll completion
+        let cq_va = (self.io_cq.phys + self.pmoff) as *mut u32;
+        for _ in 0..100000 {
+            let _status = core::ptr::read_volatile(cq_va.add(3)) >> 1;
+            if core::ptr::read_volatile(cq_va) == (1 << 16) { break; }
+            core::hint::spin_loop();
+        }
+        true
+    }
+
+    pub unsafe fn alloc_dma(pages: usize) -> Option<(u64, *mut u8)> {
         let mut g = GLOBAL_ALLOCATOR.lock();
         let a = g.as_mut()?;
         let f = a.allocate_contiguous(pages)?;
