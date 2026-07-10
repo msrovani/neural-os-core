@@ -1,51 +1,38 @@
 //! Inode — metadados de arquivos e diretorios NeuralFS.
-//! 128 bytes cada, armazenados na inode tree como key(object_id, Inode, 0).
+//! 128 bytes. Armazenado em bloco dedicado, referenciado por key na inode tree.
 
+use super::btree::Key;
 
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
 pub struct Inode {
-    pub mode: u16,        // S_IFREG(0100000) | S_IFDIR(0040000) | permissoes
-    pub owner: u16,       // uid (reservado)
-    pub size: u64,        // tamanho em bytes
-    pub ctime: u64,       // criacao (ticks)
-    pub mtime: u64,       // modificacao (ticks)
-    pub block_count: u64, // blocos alocados
-    pub link_count: u32,  // hard links
-    pub flags: u32,       // flags (compactado, imutavel, etc)
-    pub reserved: [u64; 4], // 32 bytes reservados
+    pub mode: u16,
+    pub owner: u16,
+    pub size: u64,
+    pub ctime: u64,
+    pub mtime: u64,
+    pub block_count: u64,
+    pub link_count: u32,
+    pub flags: u32,
 }
 
 impl Inode {
-    pub const SIZE: usize = 128;
+    pub const BLOCK_SIZE: usize = 4096; // um bloco inteiro por inode
+
     pub const S_IFREG: u16 = 0x8000;
     pub const S_IFDIR: u16 = 0x4000;
 
     pub fn new_file() -> Self {
         Inode {
             mode: Inode::S_IFREG | 0o644,
-            owner: 0,
-            size: 0,
-            ctime: 0,
-            mtime: 0,
-            block_count: 0,
-            link_count: 1,
-            flags: 0,
-            reserved: [0; 4],
+            owner: 0, size: 0, ctime: 0, mtime: 0,
+            block_count: 0, link_count: 1, flags: 0,
         }
     }
 
     pub fn new_dir() -> Self {
         Inode {
             mode: Inode::S_IFDIR | 0o755,
-            owner: 0,
-            size: 0,
-            ctime: 0,
-            mtime: 0,
-            block_count: 0,
-            link_count: 2,
-            flags: 0,
-            reserved: [0; 4],
+            owner: 0, size: 0, ctime: 0, mtime: 0,
+            block_count: 0, link_count: 2, flags: 0,
         }
     }
 
@@ -72,10 +59,13 @@ impl Inode {
             block_count: u64::from_le_bytes([b[28], b[29], b[30], b[31], b[32], b[33], b[34], b[35]]),
             link_count: u32::from_le_bytes([b[36], b[37], b[38], b[39]]),
             flags: u32::from_le_bytes([b[40], b[41], b[42], b[43]]),
-            reserved: [0; 4],
         }
     }
 
     pub fn is_dir(&self) -> bool { self.mode & Inode::S_IFDIR != 0 }
     pub fn is_file(&self) -> bool { self.mode & Inode::S_IFREG != 0 }
+
+    pub fn make_key(inode_id: u64) -> Key {
+        Key { object_id: inode_id, item_type: super::btree::ItemType::Inode, offset: 0 }
+    }
 }

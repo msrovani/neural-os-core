@@ -29,7 +29,7 @@ impl DirEntry {
         b[0..8].copy_from_slice(&self.name_hash.to_le_bytes());
         b[8..16].copy_from_slice(&self.inode.to_le_bytes());
         let name_bytes = self.name.as_bytes();
-        let len = name_bytes.len().min(240);
+        let len = name_bytes.len().min(239);
         b[16] = len as u8;
         b[17..17 + len].copy_from_slice(&name_bytes[..len]);
         b
@@ -39,8 +39,8 @@ impl DirEntry {
         if b.len() < 16 { return None; }
         let hash = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
         let inode = u64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
-        let name_len = b[16] as usize;
-        let name = core::str::from_utf8(&b[17..17 + name_len.min(240)]).unwrap_or("").to_string();
+        let name_len = (b[16] as usize).min(239);
+        let name = core::str::from_utf8(&b[17..17 + name_len]).unwrap_or("").to_string();
         Some(DirEntry { name_hash: hash, inode, name })
     }
 
