@@ -281,6 +281,7 @@ mod tpm;
 mod exfat;
 mod gpt;
 mod neural_fs;
+mod fs_driver;
 
 mod disk_agent;
 

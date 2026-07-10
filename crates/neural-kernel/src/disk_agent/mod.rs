@@ -65,7 +65,7 @@ impl DiskIntelligenceAgent {
             tick_count: 0,
             io_queue: Vec::new(),
             readahead_cache: Vec::new(),
-            cache: ArcCache::new(1024),
+            cache: ArcCache::new(1024, "hdd"),
             last_migration_tick: 0,
             smart_history: Vec::new(),
         }
