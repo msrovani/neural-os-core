@@ -13,7 +13,7 @@ pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
 pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
 pub static VIRTIO_DEV: spin::Mutex<Option<crate::virtio_net::VirtIoDevice>> = spin::Mutex::new(None);
-pub static NETSTACK: spin::Mutex<Option<NetStack>> = spin::Mutex::new(None);
+pub static NETSTACK: spin::Mutex<Option<crate::netstack::NetStack>> = spin::Mutex::new(None);
 
 pub struct NetConfig {
     pub mac: [u8; 6],
@@ -224,7 +224,25 @@ pub unsafe fn dump_e1000_status() {
     }
 }
 
-pub unsafe fn http_get(_host: [u8; 4], _port: u16, _path: &str) -> Option<Vec<u8>> { None }
+/// HTTP GET real via netstack. Usa o socket TCP do smoltcp.
+/// HTTP GET real via NetStack::http_new + http_poll + http_close
+pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
+    let mut stack_guard = NETSTACK.lock();
+    let stack = stack_guard.as_mut()?;
+    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+
+    let mut conn = stack.http_new(host, port, path);
+    for _ in 0..2000 {
+        stack.http_poll(&mut conn, now as u64);
+        match conn.state {
+            crate::netstack::HttpState::Done(ref data) => { return Some(data.clone()); }
+            crate::netstack::HttpState::Failed => { break; }
+            _ => { core::hint::spin_loop(); }
+        }
+    }
+    None
+}
+
 pub unsafe fn ping(_target_ip: [u8; 4]) -> Option<u64> { None }
 
 pub fn run_network_diagnostics() -> crate::String {

@@ -290,6 +290,10 @@ mod hub;
 mod approval;
 mod actor_registry;
 mod hnsw;
+mod search_agent;
+mod self_update;
+mod context_window;
+mod plugin_hub;
 
 mod elf_loader;
 
@@ -1668,6 +1672,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Re-mapeia framebuffer como UC antes do DisplayAgent comecar a desenhar
 
     display::fb::fb_remap_uc();
+
+    kjson!("BOOT", "AGENTS", "www", "search", 1);
 
     serial_println!("[BOOT] Registering DisplayAgent...");
 
