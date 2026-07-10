@@ -20,6 +20,28 @@ impl DmaBuf {
     pub unsafe fn as_mut_slice(&mut self) -> &mut [u8] { core::slice::from_raw_parts_mut(self.virt, self.size) }
 }
 
+/// Aloca páginas de DMA coalescentes (contíguas) para burst máximo PCIe.
+/// Usa allocate_contiguous() para frames contíguos → permite burst DMA sem gaps.
+pub fn dma_alloc_coalesced(size: usize) -> Option<DmaBuf> {
+    let pages = (size + 4095) / 4096;
+    if pages == 0 { return None; }
+    let pa = unsafe {
+        let mut guard = GLOBAL_ALLOCATOR.lock();
+        let alloc = (*guard).as_mut()?;
+        let frame = alloc.allocate_contiguous(pages)?;
+        let pa = frame.start_address().as_u64();
+        // Mapa páginas coalescentes como UC (uncacheable) para DMA
+        for i in 0..pages {
+            crate::apic::set_page_uc(pa + i as u64 * 4096, PHYS_MEM_OFFSET.load(Ordering::Relaxed));
+        }
+        let va = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
+        core::ptr::write_bytes(va, 0, pages * 4096);
+        pa
+    };
+    let virt = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
+    Some(DmaBuf { phys: pa, virt, size: pages * 4096 })
+}
+
 /// Aloca páginas de DMA uncacheable. Usa `set_page_uc` do apic para marcar cada página.
 pub fn dma_alloc(size: usize) -> Option<DmaBuf> {
     let pages = (size + 4095) / 4096;

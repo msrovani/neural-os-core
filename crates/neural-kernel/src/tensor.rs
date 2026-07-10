@@ -26,6 +26,58 @@ pub fn has_avx2() -> bool {
     { false }
 }
 
+/// Detecta tamanho do cache L1 Data via CPUID leaf 0x04 (Intel) ou 0x8000_001D (AMD).
+/// Retorna bytes do cache de data do nivel especificado (0=L1D, 1=L1I, 2=L2, 3=L3).
+pub fn cache_size(level: usize) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        // Tenta Intel leaf 0x04 (com subleaf)
+        let info = core::arch::x86_64::__cpuid_count(0x04, level as u32);
+        if info.eax & 0x1F != 0 {
+            let ways: u32 = ((info.ebx >> 22) & 0x3FF) + 1;
+            let partitions: u32 = ((info.ebx >> 12) & 0x3FF) + 1;
+            let line_size: u32 = (info.ebx & 0xFFF) + 1;
+            let sets: u32 = info.ecx + 1;
+            return (ways * partitions * line_size * sets) as usize;
+        }
+        // Fallback: AMD leaf 0x8000_001D
+        let amd = core::arch::x86_64::__cpuid_count(0x8000_001D, level as u32);
+        if amd.eax & 0x1F != 0 {
+            let ways: u32 = ((amd.ebx >> 22) & 0x3FF) + 1;
+            let partitions: u32 = ((amd.ebx >> 12) & 0x3FF) + 1;
+            let line_size: u32 = (amd.ebx & 0xFFF) + 1;
+            let sets: u32 = amd.ecx + 1;
+            return (ways * partitions * line_size * sets) as usize;
+        }
+    }
+    // Fallback seguro: assume L1D=32KB, L2=256KB, L3=4MB
+    match level {
+        0 => 32768,
+        2 => 262144,
+        3 => 4194304,
+        _ => 32768,
+    }
+}
+
+/// Calcula block size otimo para FlashAttention baseado no cache L1/L2 detectado.
+/// block_size = quantos tokens cabem no cache sem estourar
+pub fn optimal_attention_block(hidden: usize) -> usize {
+    // Prioriza L1 data cache
+    let l1 = cache_size(0);
+    let qk_bytes = hidden * 2 * 4; // Q e K em f32
+    // Precisamos de espaco para Q(block) + K(block) + resultado(block^2)
+    let needed_per_token = qk_bytes + 4; // overhead resultado
+    let block_by_l1 = l1 / needed_per_token;
+
+    if block_by_l1 >= 4 {
+        return block_by_l1.min(64);
+    }
+    // Se L1 for muito pequeno, usa L2
+    let l2 = cache_size(2);
+    let block_by_l2 = l2 / needed_per_token;
+    block_by_l2.min(128).max(4)
+}
+
 pub fn has_avx512() -> bool {
     #[cfg(target_arch = "x86_64")]
     {
@@ -306,6 +358,7 @@ impl TernaryTensor {
     }
 }
 
+#[repr(C, align(64))]
 pub struct PackedTernaryTensor {
     pub shape: (usize, usize),
     pub packed_data: Vec<u8>,
