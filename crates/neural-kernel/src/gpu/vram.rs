@@ -167,9 +167,28 @@ pub fn vram_free(addr: u64, size: usize) {
     }
 }
 
-/// #334 MSched — Belady OPT eviction predictor (stub)
-pub fn msched_predict(access_pattern: &[u64]) -> u64 {
-    access_pattern.first().copied().unwrap_or(0)
+/// #334 MSched — Belady OPT eviction predictor (conectado ao MschedPredictor)
+use crate::gpu::msched::MschedPredictor;
+
+static MSCHED: spin::Mutex<Option<MschedPredictor>> = spin::Mutex::new(None);
+
+pub fn msched_init() {
+    *MSCHED.lock() = Some(MschedPredictor::new(1024));
+    crate::kjson!("VRAM", "MSCHED", "init", "window", 1024);
+}
+
+pub fn msched_record(addr: u64) {
+    if let Some(ref mut m) = *MSCHED.lock() {
+        m.record_access(addr);
+    }
+}
+
+pub fn msched_predict(working_set: &[u64]) -> u64 {
+    MSCHED.lock().as_ref().and_then(|m| m.predict_evict(working_set)).unwrap_or(0)
+}
+
+pub fn msched_status() -> alloc::string::String {
+    MSCHED.lock().as_ref().map(|m| m.status()).unwrap_or_default()
 }
 
 pub fn vram_status() -> alloc::string::String {

@@ -250,9 +250,18 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr
             draw_text(fb, cx, cy + 60, "[Enter] Generate WASM skill", scr_w, 100, 200, 100);
         }
         AppId::WasmSkill(idx) => {
-            draw_text(fb, cx, cy, &alloc::format!("WASM Skill #{}", idx), scr_w, 0, 200, 255);
-            draw_text(fb, cx, cy + 20, "Running via WASM Runtime...", scr_w, 180, 200, 220);
-            draw_text(fb, cx, cy + 40, &app.data, scr_w, 200, 200, 200);
+            draw_text(fb, cx, cy, &alloc::format!("WASM #{}", idx), scr_w, 0, 200, 255);
+            let skills = crate::wasm_rt::init_wasm_runtime();
+            let names = skills.list_skills();
+            if let Some(&name) = names.get(idx % names.len().max(1)) {
+                let mut rt = crate::wasm_rt::init_wasm_runtime();
+                match rt.execute(name) {
+                    Ok(val) => { draw_text(fb, cx, cy + 20, &alloc::format!("= {}", val), scr_w, 0, 255, 0); }
+                    Err(e) => { draw_text(fb, cx, cy + 20, &alloc::format!("ERR: {}", e), scr_w, 255, 50, 50); }
+                }
+            } else {
+                draw_text(fb, cx, cy + 20, "No WASM skills loaded", scr_w, 180, 180, 180);
+            }
         }
         AppId::Camera => {
             // Preview da camera (simulado)

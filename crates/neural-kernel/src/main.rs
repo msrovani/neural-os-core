@@ -287,6 +287,8 @@ mod multi_user;
 mod workflow;
 
 mod hub;
+mod approval;
+mod actor_registry;
 
 mod elf_loader;
 
