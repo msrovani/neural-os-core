@@ -4,3 +4,9 @@
 pub mod checksum;
 pub mod superblock;
 pub mod btree;
+pub mod inode;
+pub mod dir;
+pub mod extent;
+pub mod checksum_tree;
+pub mod journal;
+pub mod volume;
