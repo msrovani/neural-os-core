@@ -19,7 +19,7 @@ use core::sync::atomic::Ordering;
 use x86_64::instructions::port::Port;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::display::fb::GpuDevice;
-use crate::{serial_println};
+use crate::{serial_println, kjson};
 
 pub const VIRTIO_GPU_TRANS: u16 = 0x1045; // transitional (legacy I/O + modern MMIO)
 pub const VIRTIO_GPU_MODERN: u16 = 0x1050; // modern only (MMIO)
@@ -162,37 +162,26 @@ impl GpuDevice {
             }
         }
 
-        // Para VirtIO moderno (0x1050), o MMIO base está em capabilities PCI,
-        // não nas BARs padrão. Usamos read_virtio_cap + read_bar_value.
+        // VirtIO moderno (0x1050): MMIO via PCI capability vendor-specific
+        // VirtIO transitional (0x1045): I/O ports legacy ou MMIO via capability
         let (io_base, mmio_base, is_mmio) = unsafe {
-            if dev.bar0 & 1 == 1 {
+            if let Some(cap) = crate::pci::read_virtio_cap(dev.bus, dev.device, dev.function, 1) {
+                let bar_addr = crate::pci::read_bar_value(dev.bus, dev.device, dev.function, cap.bar);
+                let base = bar_addr + cap.offset as u64;
+                let test_virt = base.wrapping_add(phys_mem_offset);
+                if test_virt >> 47 != 0 && test_virt >> 47 != 0x1FFFF {
+                    kjson!("VGPU", "MMIO", "err", "msg", format_args!("\"BAR {:#x} not mappable\"", base));
+                    return None;
+                }
+                crate::apic::map_mmio_page(base, phys_mem_offset);
+                kjson!("VGPU", "MMIO", "ready", "bar", cap.bar, "off", cap.offset, "base", base);
+                (0u16, base, true)
+            } else if dev.bar0 & 1 == 1 {
+                // Legacy I/O
                 ((dev.bar0 & !0xFF) as u16, 0u64, false)
             } else {
-                // Tenta encontrar o MMIO via VirtIO PCI capability (cfg_type=0 = common)
-                    let cap = crate::pci::read_virtio_cap(dev.bus, dev.device, dev.function, 1);
-                if let Some(cap) = cap {
-                    let bar_addr = crate::pci::read_bar_value(dev.bus, dev.device, dev.function, cap.bar);
-                    let base = bar_addr + cap.offset as u64;
-                    // Verifica se endereço é mapeável
-                    let test_virt = base.wrapping_add(phys_mem_offset);
-                    if test_virt >> 47 != 0 && test_virt >> 47 != 0x1FFFF {
-                        serial_println!("[VGPU] BAR {:x} não mapeável", base);
-                        return None;
-                    }
-                    // Mapeia como uncacheable
-                    crate::apic::map_mmio_page(base, phys_mem_offset);
-                    serial_println!("[VGPU] VirtIO cap: bar={} off={:#x} len={:#x} base={:#x}",
-                        cap.bar, cap.offset, cap.length, base);
-                    (0u16, base, true)
-                } else {
-                    // Fallback: legacy I/O? Verifica BAR0 I/O bit
-                    if dev.bar0 & 1 == 1 {
-                        ((dev.bar0 & !0xFF) as u16, 0u64, false)
-                    } else {
-                        serial_println!("[VGPU] Sem capability VirtIO");
-                        return None;
-                    }
-                }
+                kjson!("VGPU", "MMIO", "err", "msg", "\"no VirtIO cap, no I/O BAR\"");
+                return None;
             }
         };
 
@@ -309,16 +298,20 @@ impl GpuDevice {
                 io.w16(io.ro.qn, 0);
             }
 
-            // Poll for completion with HLT yield
-            for _ in 0..2000 {
-                if *((qpa + 8192 + off + 2) as *const u16) > 0 { break; }
-                core::arch::asm!("sti; hlt", options(nomem, nostack));
+            // Poll for completion (WHXP pode ser mais lento que TCG)
+            let poll_max = if crate::simd::has_whpx() { 20000 } else { 2000 };
+            let mut completed = false;
+            for i in 0..poll_max {
+                if *((qpa + 8192 + off + 2) as *const u16) > 0 { completed = true; break; }
+                if i % 1000 == 999 { core::arch::asm!("sti; hlt", options(nomem, nostack)); }
+                else { core::hint::spin_loop(); }
             }
 
             let resp_type = *((cva + 0x100) as *const u32);
-            if resp_type != 0x1100 {
-                serial_println!("[VGPU] GET_DISPLAY resp={:#x}", resp_type);
+            kjson!("VGPU", "GET_DISPLAY", "resp", "code", resp_type, "poll", completed as u32);
+            if resp_type != 0x1100 || !completed {
                 let (fw, fh) = (1024u32, 768u32);
+                kjson!("VGPU", "GET_DISPLAY", "fallback", "w", fw, "h", fh);
                 return init_framebuffer(&io, qpa, cpa, off, fw, fh, notify_addr);
             }
 
