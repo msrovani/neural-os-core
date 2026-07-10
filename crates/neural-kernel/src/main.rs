@@ -292,6 +292,7 @@ mod actor_registry;
 mod hnsw;
 mod search_agent;
 mod self_update;
+mod structured_decode;
 mod context_window;
 mod plugin_hub;
 mod training_agent;
@@ -1387,8 +1388,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // WASM Runtime (Sprint 93): embedder + IDE + Plugin Hub
 
     let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
+    let _skillopt = crate::structured_decode::SkillOptimizer::new();
 
     kjson!("BOOT", "WASM", "runtime", "skills", 2);
+    kjson!("BOOT", "DECODE", "structured", "ready", 1);
 
 
 
