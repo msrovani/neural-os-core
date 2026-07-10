@@ -196,6 +196,57 @@ impl AhciDriver {
         }
         true
     }
+
+    /// Escreve setores via DMA (WRITE_DMA_EXT)
+    pub unsafe fn write(&mut self, port_idx: usize, lba: u64, count: usize, buffer: &[u8]) -> bool {
+        if port_idx >= self.ports.len() { return false; }
+        let port = &self.ports[port_idx];
+        if !port.present { return false; }
+        let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        let port_base = port.mmio_virt;
+
+        let ct_pa = alloc_ahci_page();
+        if ct_pa == 0 { return false; }
+        let ct_va = ct_pa + pmoff;
+        core::ptr::write_bytes(ct_va as *mut u8, 0, 256);
+
+        let prdt_va = ct_va + 0x80;
+        let buf_pa = buffer.as_ptr() as u64 - pmoff;
+
+        core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);
+        core::ptr::write_volatile((prdt_va + 0x04) as *mut u32, (buf_pa >> 32) as u32);
+        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x80000000);
+
+        let ch_va = (port.clb_pa + pmoff) as *mut u8;
+        core::ptr::write_volatile(ch_va as *mut u16, (0x80 | 0x27 | 0x40) as u16);
+        core::ptr::write_volatile(ch_va.add(0x04) as *mut u16, 1);
+        core::ptr::write_volatile(ch_va.add(0x08) as *mut u32, ct_pa as u32);
+        core::ptr::write_volatile(ch_va.add(0x0C) as *mut u32, (ct_pa >> 32) as u32);
+        core::ptr::write_volatile(ch_va.add(0x10) as *mut u32, 0);
+
+        core::ptr::write_volatile((ct_va + 0x00) as *mut u8, 0x27);
+        core::ptr::write_volatile((ct_va + 0x01) as *mut u8, 0x80);
+        core::ptr::write_volatile((ct_va + 0x02) as *mut u8, 0x35);
+        core::ptr::write_volatile((ct_va + 0x03) as *mut u8, 0);
+        core::ptr::write_volatile((ct_va + 0x04) as *mut u8, (lba & 0xFF) as u8);
+        core::ptr::write_volatile((ct_va + 0x05) as *mut u8, ((lba >> 8) & 0xFF) as u8);
+        core::ptr::write_volatile((ct_va + 0x06) as *mut u8, ((lba >> 16) & 0xFF) as u8);
+        core::ptr::write_volatile((ct_va + 0x07) as *mut u8, 0x40);
+        core::ptr::write_volatile((ct_va + 0x08) as *mut u8, ((lba >> 24) & 0xFF) as u8);
+        core::ptr::write_volatile((ct_va + 0x09) as *mut u8, ((lba >> 32) & 0xFF) as u8);
+        core::ptr::write_volatile((ct_va + 0x0A) as *mut u8, ((lba >> 40) & 0xFF) as u8);
+        core::ptr::write_volatile((ct_va + 0x0B) as *mut u8, 0);
+        core::ptr::write_volatile((ct_va + 0x0C) as *mut u16, count as u16);
+        core::ptr::write_volatile((ct_va + 0x0E) as *mut u8, 0);
+
+        core::ptr::write_volatile((port_base + PXCI) as *mut u32, 1);
+        for _ in 0..100000 {
+            let ci = core::ptr::read_volatile((port_base + PXCI) as *const u32);
+            if ci & 1 == 0 { break; }
+            core::hint::spin_loop();
+        }
+        true
+    }
 }
 
 fn alloc_ahci_page() -> u64 {

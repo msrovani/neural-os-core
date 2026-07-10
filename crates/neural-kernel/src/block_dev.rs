@@ -3,12 +3,17 @@ use crate::ahci::AhciDriver;
 
 pub trait BlockDevice {
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool;
+    fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool;
 }
 
 impl BlockDevice for AtaDriver {
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool {
         let count = (buf.len() / 512).min(255) as u8;
         unsafe { crate::ata::AtaDriver::read_sectors(self, lba as u32, buf, count) }
+    }
+    fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
+        let count = (buf.len() / 512).min(255) as u8;
+        unsafe { crate::ata::AtaDriver::write_sectors(self, lba as u32, buf, count) }
     }
 }
 
@@ -17,5 +22,10 @@ impl BlockDevice for AhciDriver {
         let count = buf.len() / 512;
         if count == 0 { return false; }
         unsafe { self.read(0, lba, count, buf) }
+    }
+    fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
+        let count = buf.len() / 512;
+        if count == 0 { return false; }
+        unsafe { self.write(0, lba, count, buf) }
     }
 }
