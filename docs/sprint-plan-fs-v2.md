@@ -15,31 +15,34 @@ Precisamos que o kernel entenda, gerencie e mova dados entre **todos eles**, com
 
 ---
 
-## Subsprint FS-a: Fundação Multi-FS (~1.550 LOC)
+## Subsprint FS-a: Fundação Multi-FS (~2.050 LOC)
 
 **Foco:** exFAT, escrita em todos os drivers, agente de storage inteligente
 
 | Item | IDEIA | LOC | Descrição | Depende de |
 |------|-------|:---:|-----------|------------|
 | **exFAT leitura/escrita** | #417 | ~400 | Driver exFAT via `hadris-fat` ou `exfat-slim`. Cluster bitmap, diretórios, arquivos >4GB, FAT sub-allocation | — |
-| **BlockDevice+ com write** | #417 | ~150 | `write_sectors()` no trait + DMA coalescing + alinhamento 4K. ATA, AHCI, NVMe, USB-MSC implementam | — |
+| **BlockDevice+ com write** | #417 | ~62 ✅ | `write_sectors()` no trait + DMA AHCI/ATA. **Já implementado** | — |
 | **USB-MSC multisector** | #417 | ~200 | BOT com READ10/WRITE10 múltiplos setores. Sem single-sector lento | — |
 | **DiskIntelligenceAgent v2** | #418 | ~800 | Reescrita do agente: probe real de exFAT/NTFS/EXT com mount. Benchmark bandwidth/latência. Hotplug USB/SDHC via EventBus. SMART preventivo com SelfHeal. ARC cache dinâmico (MB-GB). I/O scheduler com deadline + CFQ-like | BlockDevice+ |
 | **GPT escrita** | — | ~150 | `gpt_write()` para criar/modificar partições. Necessário para instalação e formatação | — |
 | **Sector size 4Kn** | — | ~100 | Detecção de setor físico 512 vs 4096. Alinhamento de partição automático. TRIM/discard para SSD/NVMe | BlockDevice+ |
-| | | **~1.800 LOC** | | |
+| | | **~1.712 LOC** | | |
 
-## Subsprint FS-b: Acessando HDs do Usuário (~1.200 LOC)
+## Subsprint FS-b: Acessando HDs do Usuário + NeuralFS (~1.200 + 3.500 LOC)
 
-**Foco:** Ler HDs NTFS/EXT do usuário, gerenciar partições, monitorar saúde
+**Foco:** Ler HDs NTFS/EXT do usuário, NeuralFS nativo CoW
 
 | Item | IDEIA | LOC | Descrição | Depende de |
 |------|-------|:---:|-----------|------------|
 | **EXT2 leitura** | — | ~400 | Inode bitmap, block groups, diretórios, symlinks. Base para EXT3/4 | FS-a |
 | **NTFS leitura** | — | ~800 | `$MFT` parsing, atributos residentes/não-residentes, diretórios, streams alternados, ACLs básicas | FS-a |
-| **SMART longo + histórico** | — | ~200 | Teste SMART extended (leituras destrutivas). Log de histórica de realocados, temperatura, taxa de erro. Alerta preditivo: "este HD vai morrer em ~30 dias" | FS-a |
-| **Bad block management** | — | ~200 | Detecção de bad blocks em tempo real (ATA REALLOCATE, NVMe e média). Mapa de setores realocados. Notificação ao SelfHealAgent | FS-b |
-| | | **~1.600 LOC** | | |
+| **Integrar suhteevah ext4/ntfs/btrfs** | — | ~100 | Wrapper sobre crates prontos (0★ GitHub). Acelera NTFS/EXT em ~1.200 LOC | FS-a |
+| **NeuralFS nativo (CoW)** | #422 | ~3.500 | FS próprio no_std: CoW B-tree, CRC32C blocos, journal recovery, extent allocation. Inspirado no BAFS (cl8dep/bazzulto-bafs). Substitui FAT32 como FS do sistema | FS-a |
+| **SMART longo + histórico** | — | ~200 | Teste SMART extended. Log de realocados, temperatura, taxa de erro. Alerta preditivo | FS-a |
+| **Bad block management** | — | ~200 | Detecção + realocação ATA/NVMe. Mapa de setores realocados | FS-b |
+| **TRIM/discard automático** | — | ~200 | NVMe deallocate + ATA TRIM após deleção. Essencial para SSD longevity | FS-a |
+| | | **~5.400 LOC** | | |
 
 ## Subsprint FS-c: MHI Ativo + App Gestão (~1.400 LOC)
 
@@ -54,9 +57,9 @@ Precisamos que o kernel entenda, gerencie e mova dados entre **todos eles**, com
 | **Instalador Neural com IA** | #421 | ~400 | App SysInstaller. Detecta discos. LLM sugere: "nvme0p1: 32GB EXT2 para sistema, nvme0p2: resto para dados". Usuário confirma. Kernel: GPT, format exFAT/EXT2, copia BITNET.BIN + HWEXPRT.BIN + CONFIG + SKILLS/, configura bootloader | FS-c |
 | | | **~1.800 LOC** | | |
 
-## Subsprint FS-d: Rede + Proteção + NTFS escrita (~2.000 LOC)
+## Subsprint FS-d: Rede + Proteção + GPU Direct Storage + NTFS escrita (~2.500 LOC)
 
-**Foco:** Storage em rede, filesystem resilience, escrita em HDs Windows/Linux
+**Foco:** Storage em rede, filesystem resilience, GPU Direct Storage, escrita em HDs Windows/Linux
 
 | Item | IDEIA | LOC | Descrição | Depende de |
 |------|-------|:---:|-----------|------------|
@@ -65,6 +68,7 @@ Precisamos que o kernel entenda, gerencie e mova dados entre **todos eles**, com
 | **Filesystem SelfHeal** | — | ~300 | Checksum em cada leitura. Se corrompido, tenta recovery (journal EXT3, $LogFile NTFS). Fallback para snapshot automático. Quarentena de bad blocks | FS-c |
 | **NTFS escrita** | — | ~800 | Criar/modificar arquivos em NTFS. Suporta $MFT growth, non-resident attributes, compressed files. Crítico para HDs Windows do usuário | FS-b |
 | **EXT3/4 journal + escrita** | — | ~600 | Journal replay, extents, criação de arquivos. Para HDs Linux do usuário | FS-b |
+| **GPU Direct Storage (Tutti-style)** | #423 | ~300 | KV cache em NVMe com GPU io_uring. CPU fora do caminho de dados. MHI: VRAM↔NVMe direto sem stall de GPU. Baseado em arXiv 2605.03375 | FS-c |
 | **Disk power management** | — | ~200 | Spin-down de HDDs após N minutos inativos (ATA IDLE). NVMe PS (power state) dinâmico. SSD APC (Aggressive Power Control) | FS-c |
 | | | **~2.600 LOC** | | |
 
@@ -74,11 +78,11 @@ Precisamos que o kernel entenda, gerencie e mova dados entre **todos eles**, com
 
 | Subsprint | Foco | LOC | Itens |
 |:---------:|------|:---:|:-----:|
-| **FS-a** | Fundação Multi-FS | ~1.800 | 6 |
-| **FS-b** | HDs do Usuário | ~1.600 | 4 |
+| **FS-a** | Fundação Multi-FS | ~1.712 | 5 (1 OK ✅) |
+| **FS-b** | HDs do Usuário + NeuralFS | ~5.400 | 7 |
 | **FS-c** | MHI Ativo + App | ~1.800 | 6 |
-| **FS-d** | Rede + Proteção | ~2.600 | 7 |
-| | **Total** | **~7.800** | **23** |
+| **FS-d** | Rede + Proteção + GPU Direct | ~2.800 | 8 |
+| | **Total** | **~11.712** | **26** |
 
 ---
 
