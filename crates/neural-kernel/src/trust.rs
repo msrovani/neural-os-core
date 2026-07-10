@@ -172,7 +172,7 @@ impl TrustCache {
             self.escalation_log.push(
                 alloc::format!("token={} skill={} escalated to {:?}", token, skill, entry.state)
             );
-            serial_println!("[TRUST] Violation: {}", self.escalation_log.last().unwrap());
+            if let Some(last) = self.escalation_log.last() { serial_println!("[TRUST] Violation: {}", last); }
         }
     }
 
@@ -218,5 +218,43 @@ impl TrustCache {
 
     pub fn mask_sensitive(&self, data: &str) -> String {
         mask_secrets(data)
+    }
+
+    /// #364: Zero-Trust Syscall — avalia permissão por classe
+    pub fn check_syscall(&self, token: u64, skill: &str, class: SyscallClass) -> bool {
+        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        match class {
+            SyscallClass::ReadOnly => true,
+            SyscallClass::Ephemeral => self.is_trusted(token, skill, now as u64),
+            SyscallClass::Persistent => self.is_exempt(token),
+            SyscallClass::Hardware => false,
+        }
+    }
+}
+
+/// #364: Quatro classes de syscall zero-trust
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SyscallClass {
+    /// Leitura de dados — sempre permitido (sem efeito colateral)
+    ReadOnly,
+    /// Alocação efêmera — permitido com budget
+    Ephemeral,
+    /// Escrita persistente — requer autorização explícita
+    Persistent,
+    /// Acesso a hardware — sempre negado por padrão
+    Hardware,
+}
+
+impl SyscallClass {
+    pub fn name(&self) -> &'static str {
+        match self {
+            SyscallClass::ReadOnly => "read",
+            SyscallClass::Ephemeral => "ephemeral",
+            SyscallClass::Persistent => "persistent",
+            SyscallClass::Hardware => "hardware",
+        }
+    }
+    pub fn requires_approval(&self) -> bool {
+        matches!(self, SyscallClass::Persistent | SyscallClass::Hardware)
     }
 }

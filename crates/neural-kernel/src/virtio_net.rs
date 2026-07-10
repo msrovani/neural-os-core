@@ -16,7 +16,7 @@ use core::sync::atomic::Ordering;
 use x86_64::instructions::port::Port;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
-use crate::serial_println;
+use crate::{serial_println, kjson};
 
 pub const VIRTIO_VENDOR: u16 = 0x1AF4;
 pub const VIRTIO_NET_TRANSITIONAL: u16 = 0x1041; // transitional (legacy + modern)
@@ -111,15 +111,28 @@ use crate::apic::map_page_uc;
 
 impl VirtIoDevice {
     pub fn new(dev: &PciDevice) -> Option<Self> {
-        let (io_base, mmio_base, is_mmio) = if dev.bar0 & 1 == 1 {
-            ((dev.bar0 & !0xFF) as u16, 0u64, false)
-        } else {
-            let mmio = (dev.bar0 & !0xF) as u64;
-            let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-            // Map 2 pages for register access
-            unsafe { map_page_uc(mmio, pmoff); }
-            unsafe { map_page_uc(mmio + 0x1000, pmoff); }
-            (0u16, mmio, true)
+        let (io_base, mmio_base, is_mmio) = unsafe {
+            // Tenta VirtIO PCI capability (cfg_type=1 = common)
+            if let Some(cap) = crate::pci::read_virtio_cap(dev.bus, dev.device, dev.function, 1) {
+                let bar_addr = crate::pci::read_bar_value(dev.bus, dev.device, dev.function, cap.bar);
+                let base = bar_addr + cap.offset as u64;
+                let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+                let test_virt = base.wrapping_add(pmoff);
+                if test_virt >> 47 != 0 && test_virt >> 47 != 0x1FFFF {
+                    kjson!("VIRTIO", "MMIO", "err", "msg", format_args!("\"BAR {:#x} not mappable\"", base));
+                    return None;
+                }
+                unsafe { map_page_uc(base, pmoff); }
+                unsafe { map_page_uc(base + 0x1000, pmoff); }
+                kjson!("VIRTIO", "MMIO", "ready", "bar", cap.bar, "off", cap.offset, "base", base);
+                (0u16, base, true)
+            } else if dev.bar0 & 1 == 1 {
+                // Legacy I/O
+                ((dev.bar0 & !0xFF) as u16, 0u64, false)
+            } else {
+                kjson!("VIRTIO", "MMIO", "err", "msg", "\"no VirtIO cap, no I/O\"");
+                return None;
+            }
         };
 
         // Use the send/recv notify method

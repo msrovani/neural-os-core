@@ -838,7 +838,11 @@ impl Agent for SystemAgent {
 
         }
 
-        if let Some(event) = self.receiver.as_mut().unwrap().try_receive() {
+        let rx = match self.receiver {
+            Some(ref mut r) => r,
+            None => return AgentTickResult::Pending,
+        };
+        if let Some(event) = rx.try_receive() {
 
             let reg = SKILL_REGISTRY.lock();
 
@@ -867,7 +871,6 @@ impl Agent for SystemAgent {
         }
 
     }
-
 }
 
 
@@ -1208,8 +1211,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         class: 0x01, subclass: 0x06, prog_if: pi,
                         bar0: bar0_val, bar1: 0, bar2: 0, bar3: 0, bar4: 0, bar5: bar5_val,
                     };
-                    if let Some(ahci) = crate::ahci::AhciDriver::new(&dev) {
-                        crate::serial_println!("[AHCI] SATA controller init: {} ports", ahci.ports.len());
+                    if let Some(mut ahci) = crate::ahci::AhciDriver::new(&dev) {
+                        let port_count = ahci.ports.len();
+                        crate::serial_println!("[AHCI] SATA controller init: {} ports", port_count);
+                        // Testa leitura do primeiro setor via AHCI
+                        for (pi, p) in ahci.ports.iter().enumerate() {
+                            if p.present {
+                                let mut buf = [0u8; 512];
+                                if unsafe { ahci.read(pi, 0, 1, &mut buf) } {
+                                    let magic = &buf[0x1FE..=0x1FF];
+                                    let sig = core::str::from_utf8(&buf[3..7]).unwrap_or("????");
+                                    kjson!("AHCI", "DISK", "probe", "port", pi, "sig", format_args!("\"{}\"", sig), "magic", format_args!("\"{:02x}{:02x}\"", magic[0], magic[1]));
+                                }
+                                break;
+                            }
+                        }
                         *crate::AHCI_DRIVER.lock() = Some(ahci);
                         ahci_init = true;
                     }

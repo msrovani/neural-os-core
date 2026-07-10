@@ -124,7 +124,7 @@ pub unsafe fn init_driver_rtl8139() -> bool {
         if dev.vendor_id == 0x10EC && dev.device_id == 0x8139 {
             serial_println!("[NET] RTL8139 detectado: {:02x}:{:02x}.{:02x}", dev.bus, dev.device, dev.function);
             println!("[NET] RTL8139 detectado.");
-            let mut driver = Rtl8139Driver::new(dev).unwrap();
+            let mut driver = match Rtl8139Driver::new(dev) { Some(d) => d, None => { serial_println!("[NET] RTL8139 new() falhou"); return false; } };
             if driver.init() {
                 dev_opt = Some(driver);
             }
@@ -169,7 +169,7 @@ pub unsafe fn init_driver_e1000() -> bool {
             if valid_devices.contains(&dev.device_id) {
                 serial_println!("[NET] e1000 detectado: {:02x}:{:02x}.{:02x} device={:#06x}",
                     dev.bus, dev.device, dev.function, dev.device_id);
-                let mut driver = E1000Driver::new(dev).unwrap();
+                let mut driver = match E1000Driver::new(dev) { Some(d) => d, None => { serial_println!("[NET] E1000 new() falhou"); return false; } };
                 if driver.init() {
                     let mac = driver.mac();
                     NET_CONFIG.lock().mac = mac;
