@@ -13,6 +13,7 @@ pub enum Op {
     Push(u32),     // empilha constante
     Pop,           // desempilha
     Dup,           // duplica topo
+    Dup2,          // duplica dois topo (a,b -> a,b,a,b)
     Add, Sub, Mul, // aritmética
     And, Or, Xor,  // bitwise
     Eq, Lt, Gt,    // comparação
@@ -53,6 +54,7 @@ impl WasmExec {
             Op::Push(v) => self.stack.push(*v),
             Op::Pop => { self.stack.pop().ok_or("empty stack")?; }
             Op::Dup => { let v = self.stack.last().ok_or("empty stack")?.clone(); self.stack.push(v); }
+            Op::Dup2 => { let a = self.stack.pop().ok_or("stack underflow")?; let b = self.stack.last().ok_or("empty stack")?.clone(); self.stack.push(a); self.stack.push(b); self.stack.push(a); }
             Op::Add => { let b = self.stack.pop().ok_or("stack underflow")?; let a = self.stack.pop().ok_or("stack underflow")?; self.stack.push(a.wrapping_add(b)); }
             Op::Sub => { let b = self.stack.pop().ok_or("stack underflow")?; let a = self.stack.pop().ok_or("stack underflow")?; self.stack.push(a.wrapping_sub(b)); }
             Op::Mul => { let b = self.stack.pop().ok_or("stack underflow")?; let a = self.stack.pop().ok_or("stack underflow")?; self.stack.push(a.wrapping_mul(b)); }
