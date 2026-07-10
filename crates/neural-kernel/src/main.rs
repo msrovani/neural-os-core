@@ -294,6 +294,7 @@ mod search_agent;
 mod self_update;
 mod context_window;
 mod plugin_hub;
+mod training_agent;
 
 mod elf_loader;
 

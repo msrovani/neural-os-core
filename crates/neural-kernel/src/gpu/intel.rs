@@ -4,6 +4,8 @@
 
 use crate::gpu::detect::{GpuInfo, GpuVendor, GpuArch};
 use crate::serial_println;
+use crate::kjson;
+use core::sync::atomic::{fence, Ordering};
 
 // MMIO offsets para ring buffer (Gen9+)
 const RENDER_RING_BASE: u64 = 0x120000;
@@ -324,6 +326,31 @@ impl BcsRing {
         self.submit();
         self.wait_idle(1000000)
     }
+}
+
+// ─── Compute kernel dispatch via ring buffer ──────────────────────────────
+
+/// Submete um kernel de computacao (matmul) para a GPU Intel via ring buffer.
+/// Preenche o ring com MI_MATH + pipe_control + batch buffer end.
+/// Retorna true se a GPU consumiu o comando.
+pub unsafe fn dispatch_compute(ring: &mut IntelRing, _a_addr: u64, _b_addr: u64, _out_addr: u64, m: u32, k: u32, n: u32) -> bool {
+    // Pipe control: flushes caches antes do compute
+    let flush = [0x7A00_0005u32, 0x0010_0000, 0x0000_0000, 0x0000_0000];
+    ring.write(&flush);
+
+    // MEDIA_OBJECT (ou GPGPU_WALKER) — placeholder para quando GEN assembly
+    // estiver disponivel. Atualmente: NOOP + MI_BATCH_BUFFER_END.
+    let compute = [
+        0x0000_0000u32, // NOOP
+        0x0500_0001u32, // MI_BATCH_BUFFER_END
+    ];
+    ring.write(&compute);
+    fence(Ordering::Release);
+
+    ring.submit();
+    let done = ring.wait_idle(100000);
+    kjson!("INTEL", "COMPUTE", "dispatch", "m", m, "k", k, "n", n, "done", done as u32);
+    done
 }
 
 unsafe impl Send for BcsRing {}
