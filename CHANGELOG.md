@@ -1,4 +1,36 @@
-# Changelog
+# Changelog — neural-os-core v1.0.0 "Gold Master"
+
+## v1.0.0 — 2026-07-09 — A Era do Silício
+
+### Sprints 92-100: Fundação Estável → Code Freeze
+
+- **Sprint 92** — Fundação Estável: VirtIO-MMIO, AHCI probe, Zero-Trust Syscall, WHPX+AVX2 fix
+- **Sprint 93** — WASM Runtime + IDE: WasmExec VM, PluginHub, SkillMarket, BitNet IDE
+- **Sprint 94** — GPU Polish: MSched Belady, Observability, Human-in-the-Loop, Actor Registry
+- **Sprint 95** — Memory + VFS: HNSW index, MHI+FS Bridge, Inference/Hermes/RamFs agents
+- **Sprint 96** — GGUF + Model Loading: GGUF parser, RoPE, .bitnet v3/v4, /model swap
+- **Sprint 97** — Rede + AIOS: http_get real, SearchAgent, SelfUpdate A/B slots, ContextWindow
+- **Sprint 98** — Training: TrainingAgent, DataCollector, WakeWordML, Intel compute dispatch
+- **Sprint 99** — SkillOpt + Structured Decoding: Compressed FSM, 6 decode modes, SkillOptimizer
+- **Sprint 100** — **Code Freeze & Release v1.0.0**
+
+### Funcionalidades Principais
+
+- **Bare-metal Rust kernel**: bootloader 0.11.15, IDT, GDT, TSS, SMP, APIC, ACPI, PCI
+- **GPU**: VirtIO-GPU, Intel ring buffer, NVIDIA/AMD probe, VRAM buddy, display coexistence
+- **LLM**: BitNet ternary (~850M params), 4-layer transformer, Medusa speculative decoding
+- **Trinity MoE**: 5 experts + router (hw_identify, rust_coder, disk_diag, security, generator)
+- **Rede**: smoltcp TCP/IP, VirtIO-net, RTL8139, E1000, serial tunnel SLIP, DNS, HTTP
+- **WASM Runtime**: Custom VM with fuel, sandbox, 9 built-in skills, PluginHub
+- **Filesystem**: FAT32, VFS, 7 agents (ATA, dev, proc, inference, hermes, ramfs, logfs)
+- **HNSW**: Hierarchical Navigable Small World for approximate nearest neighbor search
+- **Áudio**: HDA driver, pocket TTS (neural), formant synth, VAD, wake word, mixer
+- **Segurança**: Ed25519 signing, TPM 2.0, TrustCache, Zero-Trust syscall, Audit Trail
+
+### Mudanças desde v0.109.x
+
+- 165+ arquivos Rust, ~19.000 LOC, 247+ agentes, 0 erros de compilação
+- 461 commits desde o primeiro boot
 
 All notable changes to this project will be documented in this file.
 
