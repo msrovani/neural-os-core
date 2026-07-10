@@ -64,9 +64,10 @@ pub struct WakeWordAgent {
 
 impl WakeWordAgent {
     pub fn new() -> Self {
+        let vad = VAD::new(300.0, 16000); // mesmo threshold do JarvisVoiceAgent
         WakeWordAgent {
             receiver: crate::EVENT_BUS.subscribe(TOPIC_AUDIO_IN),
-            vad: VAD::new(0.02, 16000),
+            vad,
             energy_history: [0.0; 64],
             history_idx: 0,
             cooldown: 0,

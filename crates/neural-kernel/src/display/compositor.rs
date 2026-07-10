@@ -212,13 +212,19 @@ impl JarvisDesktop {
             dx += 66;
         }
 
-        // JARVIS avatar
+        // JARVIS avatar — orb pulsante 60-100px, acima da dock bar
         if self.avatar_visible {
-            let ax = w.saturating_sub(110); let ay = h.saturating_sub(110);
-            self.fb.fill_rect(ax, ay, 100, 100, 10, 15, 20);
-            let pulse = 30 + (sinf(tick as f32 * 0.05) * 10.0) as u32;
-            self.fb.fill_rect(ax + 50 - pulse as usize / 2, ay + 50 - pulse as usize / 2, pulse as usize, pulse as usize, 0, 150 + pulse as u8, 255);
-            draw_text(&mut self.fb, ax + 20, ay + 85, "JARVIS", self.w, 0, 200, 255);
+            let orb = 60 + (sinf(tick as f32 * 0.04) * 20.0) as u32; // 40-80px
+            let ax = w.saturating_sub(orb as usize + 30);
+            let ay = h.saturating_sub(orb as usize + 60); // acima da dock (h-36)
+            // Fundo escuro
+            self.fb.fill_rect(ax.saturating_sub(5), ay.saturating_sub(5), orb as usize + 10, orb as usize + 30, 10, 15, 20);
+            // Glow externo
+            self.fb.fill_rect(ax.saturating_sub(3), ay.saturating_sub(3), orb as usize + 6, orb as usize + 6, 0, 40, 70);
+            // Orb central com brilho pulsante
+            let bri = 130 + (sinf(tick as f32 * 0.05) * 40.0) as u8;
+            self.fb.fill_rect(ax, ay, orb as usize, orb as usize, 0, bri, 255);
+            draw_text(&mut self.fb, ax + orb as usize / 2 - 20, ay + orb as usize + 5, "JARVIS", self.w, 0, 200, 255);
         }
         self.fb.swap();
     }

@@ -1,6 +1,5 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use event_bus::Receiver;
-use crate::audio::ringbuf::AudioRingBuffer;
+use event_bus::{Receiver, Event, CapabilityToken};
 use crate::audio::vad::VAD;
 use crate::audio::tts::FrameProcessor;
 use crate::serial_println;
@@ -18,7 +17,6 @@ const PIPELINE_MANIFEST: AgentManifest = AgentManifest {
 
 pub struct AudioPipelineAgent {
     llm_receiver: Receiver,
-    tts_out: &'static AudioRingBuffer,
     active_frame: Option<FrameProcessor>,
     pending_text: alloc::vec::Vec<alloc::string::String>,
     vad: VAD,
@@ -29,7 +27,6 @@ impl AudioPipelineAgent {
     pub fn new() -> Self {
         AudioPipelineAgent {
             llm_receiver: crate::EVENT_BUS.subscribe("LLM_RESPONSE"),
-            tts_out: &crate::audio::voice::AUDIO_RING,
             active_frame: None,
             pending_text: alloc::vec::Vec::new(),
             vad: VAD::new(500.0, 16000),
@@ -62,7 +59,15 @@ impl Agent for AudioPipelineAgent {
         if self.active_frame.is_some() {
             if let Some(ref mut fp) = self.active_frame {
                 let frame = fp.generate_frame();
-                self.tts_out.push(&frame.pcm);
+                // Publica no EVENT_BUS em vez de push direto — AudioMixerAgent faz o push
+                let payload: alloc::vec::Vec<u8> = frame.pcm.iter()
+                    .flat_map(|s| s.to_le_bytes()).collect();
+                let _ = crate::EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: alloc::string::String::from("AUDIO_OUT"),
+                    payload,
+                    token: CapabilityToken::Legacy(1),
+                });
                 if fp.is_done() {
                     self.active_frame = None;
                     serial_println!("[PIPELINE] TTS frame stream complete");
@@ -77,10 +82,14 @@ impl Agent for AudioPipelineAgent {
         }
 
         if self.frame_counter % 10 == 0 {
-            let mic_samples = [0i16; 256];
-            let (_, _, _is_speech, transition) = self.vad.process_frame(&mic_samples);
-            if transition == crate::audio::vad::VadTransition::SpeechStart {
-                BARGE_IN.store(true, Ordering::Relaxed);
+            // Barge-in real: le do ring buffer de entrada (microfone) em vez de zeros
+            let mut mic_samples = [0i16; 256];
+            let read = crate::audio::voice::AUDIO_RING.pop(&mut mic_samples);
+            if read > 0 {
+                let (_, _, _is_speech, transition) = self.vad.process_frame(&mic_samples);
+                if transition == crate::audio::vad::VadTransition::SpeechStart {
+                    BARGE_IN.store(true, Ordering::Relaxed);
+                }
             }
         }
 

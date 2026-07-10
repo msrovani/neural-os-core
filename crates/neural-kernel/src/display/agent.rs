@@ -47,7 +47,7 @@ impl Agent for DisplayAgent {
                 let fb = DoubleBuffer::new(
                     gpu_dev.fb_addr as usize, gpu_dev.fb_width as usize,
                     gpu_dev.fb_height as usize, gpu_dev.fb_stride as usize,
-                    gpu_dev.fb_bpp as usize,
+                    gpu_dev.fb_bpp as usize, gpu_dev.rgb_order,
                 );
                 let mut desktop = JarvisDesktop::new(fb);
                 desktop.register_app(AppId::HermesChat, "Hermes Chat");

@@ -20,11 +20,12 @@ pub struct GpuDevice {
     pub fb_bpp: u32,
     pub notify_addr: u64,
     pub present: bool,
+    pub rgb_order: bool,
 }
 
 impl GpuDevice {
     pub const fn empty() -> Self {
-        GpuDevice { fb_addr: 0, fb_width: 0, fb_height: 0, fb_stride: 0, fb_bpp: 4, notify_addr: 0, present: false }
+        GpuDevice { fb_addr: 0, fb_width: 0, fb_height: 0, fb_stride: 0, fb_bpp: 4, notify_addr: 0, present: false, rgb_order: false }
     }
 }
 
@@ -104,6 +105,12 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
         crate::serial_println!("[DISPLAY] UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
             fb_width, fb_height, bpp, fb_stride, info.stride, fb_buf_len, fb.buffer().as_ptr() as u64);
 
+        // Detecta ordem de bytes: PixelFormat::Rgb = R primeiro, Bgr = B primeiro
+        let rgb_order = match info.pixel_format {
+            bootloader_api::info::PixelFormat::Rgb => true,
+            _ => false,
+        };
+
         // NOTA: NAO remapear como UC aqui — map_page_uc() aloca frames para
         // page tables, mas o frame allocator e a IDT ainda nao foram init.
         // O remapeamento UC sera feito em fb_remap_uc(), chamado apos memory init.
@@ -115,6 +122,7 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             fb_bpp: bpp,
             notify_addr: 0,
             present: true,
+            rgb_order,
         };
         *GPU.lock() = Some(gpu);
 
@@ -124,8 +132,16 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
         if fb_size > 0 {
             unsafe {
                 let ptr = gpu.fb_addr as *mut u8;
-                for i in 0..fb_size.min(65536) {
-                    core::ptr::write_volatile(ptr.add(i), 0x00);
+                let clear_size = fb_size.min(1024 * 1024); // limpa ate 1MB (1920x1080x4 = 8.3MB)
+                // Preenche com preto usando write_volatile em bursts de 8 bytes
+                let mut i = 0usize;
+                while i + 8 <= clear_size {
+                    core::ptr::write_volatile(ptr.add(i) as *mut u64, 0);
+                    i += 8;
+                }
+                while i < clear_size {
+                    core::ptr::write_volatile(ptr.add(i), 0);
+                    i += 1;
                 }
             }
         }
@@ -144,6 +160,7 @@ pub struct FramebufferInfo {
     pub height: usize,
     pub stride: usize,
     pub bpp: usize,
+    pub rgb_order: bool, // true = R em offset+0 (PixelFormat::Rgb), false = B em offset+0 (Bgr)
 }
 
 /// Framebuffer com double buffering interno.
@@ -155,10 +172,10 @@ pub struct DoubleBuffer {
 }
 
 impl DoubleBuffer {
-    pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize) -> Self {
+    pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize, rgb_order: bool) -> Self {
         let size = height * stride;
         DoubleBuffer {
-            info: FramebufferInfo { addr, width, height, stride, bpp },
+            info: FramebufferInfo { addr, width, height, stride, bpp, rgb_order },
             back: alloc::vec![0u8; size],
         }
     }
@@ -168,9 +185,15 @@ impl DoubleBuffer {
         let bpp = self.info.bpp;
         let offset = y * self.info.stride + x * bpp;
         if offset + (bpp - 1) >= self.back.len() { return; }
-        self.back[offset + 0] = b;
-        self.back[offset + 1] = g;
-        self.back[offset + 2] = r;
+        if self.info.rgb_order {
+            self.back[offset + 0] = r;
+            self.back[offset + 1] = g;
+            self.back[offset + 2] = b;
+        } else {
+            self.back[offset + 0] = b;
+            self.back[offset + 1] = g;
+            self.back[offset + 2] = r;
+        }
         if bpp > 3 { self.back[offset + 3] = 0xFF; }
     }
 
@@ -181,9 +204,15 @@ impl DoubleBuffer {
             for x in 0..self.info.width {
                 let offset = y * stride + x * bpp;
                 if offset + (bpp - 1) >= self.back.len() { continue; }
-                self.back[offset + 0] = b;
-                self.back[offset + 1] = g;
-                self.back[offset + 2] = r;
+                if self.info.rgb_order {
+                    self.back[offset + 0] = r;
+                    self.back[offset + 1] = g;
+                    self.back[offset + 2] = b;
+                } else {
+                    self.back[offset + 0] = b;
+                    self.back[offset + 1] = g;
+                    self.back[offset + 2] = r;
+                }
                 if bpp > 3 { self.back[offset + 3] = 0xFF; }
             }
         }
@@ -237,7 +266,7 @@ pub struct Framebuffer {
 
 impl Framebuffer {
     pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize) -> Self {
-        Framebuffer { info: FramebufferInfo { addr, width, height, stride, bpp } }
+        Framebuffer { info: FramebufferInfo { addr, width, height, stride, bpp, rgb_order: false } }
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
