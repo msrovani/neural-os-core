@@ -64,10 +64,21 @@ impl Tokenizer {
 
 fn softmax_inplace(logits: &mut [f32]) {
     let max = logits.iter().fold(NEG_INFINITY, |a, &b| a.max(b));
+    // Protecao contra NaN: se max for NaN, distribui uniformemente
+    if max.is_nan() {
+        let inv = 1.0 / logits.len() as f32;
+        for v in logits.iter_mut() { *v = inv; }
+        return;
+    }
     let mut sum = 0.0;
     for v in logits.iter_mut() {
         *v = libm::expf(*v - max);
         sum += *v;
+    }
+    if sum.is_nan() || sum == 0.0 {
+        let inv = 1.0 / logits.len() as f32;
+        for v in logits.iter_mut() { *v = inv; }
+        return;
     }
     let inv = 1.0 / sum;
     for v in logits.iter_mut() { *v *= inv; }
@@ -340,10 +351,10 @@ impl TransformerModel {
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
-            // QKV for new tokens
-            let mut q = layer.q.matmul_hybrid(&norm).unwrap();
-            let mut k = layer.k.matmul_hybrid(&norm).unwrap();
-            let v = layer.v.matmul_hybrid(&norm).unwrap();
+            // QKV for new tokens — fallback silencioso se matmul falhar
+            let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+            let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            let v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
 
             // RoPE on Q and K before cache storage
             let qk_head_dim = self.kv_dim / self.num_heads;

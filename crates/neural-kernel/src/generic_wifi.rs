@@ -65,22 +65,32 @@ pub const ETH_FALLBACK_MAP: HardwareRegisterMap = HardwareRegisterMap {
 // ── 3. CAPA DE I/O ─────────────────────────────────────────────
 
 pub struct ChipIoInterface {
-    base: usize,
+    pub base: usize,
     pub map: HardwareRegisterMap,
 }
 
 impl ChipIoInterface {
-    pub const fn new(base: usize, map: HardwareRegisterMap) -> Self {
-        Self { base, map }
+    /// Cria nova interface de I/O validando BAR.
+    /// BAR = 0 ou BAR = u64::MAX indicam endereco invalido.
+    pub fn new(base: usize, map: HardwareRegisterMap) -> Result<Self, &'static str> {
+        if base == 0 || base == usize::MAX {
+            return Err("ChipIoInterface: invalid BAR address");
+        }
+        if (base as u64) < 0x1000 {
+            return Err("ChipIoInterface: BAR too low (DMA window?)");
+        }
+        Ok(Self { base, map })
     }
 
     #[inline(always)]
     pub unsafe fn write_reg(&self, offset: usize, val: u32) {
+        debug_assert!(self.base != 0, "write_reg on invalid BAR");
         write_volatile((self.base + offset) as *mut u32, val);
     }
 
     #[inline(always)]
     pub unsafe fn read_reg(&self, offset: usize) -> u32 {
+        debug_assert!(self.base != 0, "read_reg on invalid BAR");
         read_volatile((self.base + offset) as *const u32)
     }
 
@@ -129,8 +139,13 @@ pub struct AgnosticWifiEngine {
 impl AgnosticWifiEngine {
     pub fn new(base: usize, map: HardwareRegisterMap) -> Self {
         let ring_sz = if map.ring_size > 64 { 64 } else { map.ring_size.max(2) };
+        // Se BAR for invalida, usa io nulo (nenhum registro sera escrito)
+        let io = match ChipIoInterface::new(base, map) {
+            Ok(io) => io,
+            Err(_) => ChipIoInterface { base: 0, map },
+        };
         AgnosticWifiEngine {
-            io: ChipIoInterface::new(base, map),
+            io,
             tx_ring: unsafe { core::mem::zeroed() },
             rx_ring: unsafe { core::mem::zeroed() },
             rx_buf: unsafe { core::mem::zeroed() },

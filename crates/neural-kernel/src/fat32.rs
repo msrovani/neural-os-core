@@ -252,7 +252,9 @@ impl<'a> Fat32Reader<'a> {
                 let mut data = Vec::with_capacity(actual_size);
                 let mut fc = start_cluster;
                 let mut pos = 0usize;
-                while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < actual_size {
+                let max_clusters = (file_size / self.bytes_per_sector as usize).max(1) * 2; // safety bound
+                let mut cluster_iter = 0usize;
+                while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < actual_size && cluster_iter < max_clusters {
                     let clba = self.cluster_lba(fc);
                     let cluster_bytes = self.sectors_per_cluster as usize * self.bytes_per_sector as usize;
                     for si in 0..self.sectors_per_cluster as u32 {
@@ -269,6 +271,10 @@ impl<'a> Fat32Reader<'a> {
                     }
                     pos += cluster_bytes;
                     fc = self.read_fat_entry(fc);
+                    cluster_iter += 1;
+                }
+                if data.len() < actual_size {
+                    return None; // FAT cluster chain corrupted or truncated
                 }
                 return Some(data);
             }

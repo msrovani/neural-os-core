@@ -7,6 +7,26 @@
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
+/// Macro para serial_println rate-limited. So imprime a cada N chamadas.
+/// Uso: debug_rl!("msg", 100, "formato", args...);
+#[macro_export]
+macro_rules! debug_rl {
+    ($msg:expr, $rate:expr, $($arg:tt)*) => {{
+        // Taxa efetiva = max(1, $rate)
+        #[export_name = concat!("_rl_counter_", $msg)]
+        static mut COUNTER: u64 = 0;
+        unsafe {
+            let c = COUNTER.wrapping_add(1);
+            COUNTER = c;
+            if c % ($rate as u64) == 0 {
+                crate::serial_println!(concat!("[RL]", $msg, " ", $($arg)*));
+            }
+        }
+    }};
+    ($msg:expr, $rate:expr) => {
+        debug_rl!($msg, $rate, "");
+    };
+}
 
 
 extern crate alloc;

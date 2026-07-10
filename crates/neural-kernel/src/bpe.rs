@@ -3,7 +3,6 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
-use alloc::format;
 
 pub struct BpeTokenizer {
     vocab: BTreeMap<u16, String>,   // id → text
@@ -39,40 +38,42 @@ impl BpeTokenizer {
         return Err("tokenizer too large, using char-level fallback");
     }
 
-    pub fn encode(&self, text: &str) -> Vec<u16> {
+    pub fn encode(&self, text: &str) -> Result<Vec<u16>, &'static str> {
         if text.is_empty() {
-            return vec![self.bos, self.eos];
+            return Ok(vec![self.bos, self.eos]);
         }
 
-        // Check cache
         if let Some(cached) = self.cache.get(text) {
-            return cached.clone();
+            return Ok(cached.clone());
         }
 
-        // BPE encode
+        let max_tokens: usize = 1024; // safety limit, matches max_seq do modelo
         let mut tokens = Vec::new();
         tokens.push(self.bos);
 
-        // Split into words (by whitespace) then BPE each word
         for word in text.split(char::is_whitespace).filter(|w| !w.is_empty()) {
-            // If word is in vocab directly, use it
+            if tokens.len() >= max_tokens {
+                tokens.push(self.eos);
+                self.cache_entry(text, tokens.clone());
+                return Ok(tokens);
+            }
+
             if let Some(&id) = self.rev_vocab.get(word) {
                 tokens.push(id);
                 continue;
             }
 
-            // Character-level fallback: use byte encoding if available
             for &b in word.as_bytes() {
-                let key = format!("<0x{:02X}>", b);
+                if tokens.len() >= max_tokens { break; }
+                let key = alloc::format!("<0x{:02X}>", b);
                 if let Some(&id) = self.rev_vocab.get(&key) {
                     tokens.push(id);
                 } else if b < 128 {
-                    // Try single char
-                    let c_buf = &[b];
-                    let c_str = core::str::from_utf8(c_buf).unwrap_or("");
+                    let buf = [b];
+                    let c_str = core::str::from_utf8(&buf).unwrap_or("");
                     if let Some(&id) = self.rev_vocab.get(c_str) {
                         tokens.push(id);
-                    } else if let Some(&id) = self.rev_vocab.get(&format!("Ġ{}", c_str)) {
+                    } else if let Some(&id) = self.rev_vocab.get(&alloc::format!("Ġ{}", c_str)) {
                         tokens.push(id);
                     }
                 }
@@ -81,7 +82,7 @@ impl BpeTokenizer {
 
         tokens.push(self.eos);
         self.cache_entry(text, tokens.clone());
-        tokens
+        Ok(tokens)
     }
 
     fn cache_entry(&self, _text: &str, _tokens: Vec<u16>) {
@@ -133,9 +134,8 @@ pub fn init_from_json(data: &[u8]) -> Result<(), &'static str> {
 pub fn encode(text: &str) -> Vec<u16> {
     let guard = BPE.lock();
     match guard.as_ref() {
-        Some(tok) => tok.encode(text),
+        Some(tok) => tok.encode(text).unwrap_or_else(|_| crate::cortex::Tokenizer::encode(text)),
         None => {
-            // Fallback to char-level
             crate::cortex::Tokenizer::encode(text)
         }
     }
