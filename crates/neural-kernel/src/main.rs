@@ -284,6 +284,8 @@ mod neural_fs;
 mod fs_driver;
 mod ntfs_reader;
 mod ext2_reader;
+mod io_scheduler;
+mod storage_manager;
 
 mod disk_agent;
 
