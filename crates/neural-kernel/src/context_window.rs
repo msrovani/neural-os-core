@@ -4,7 +4,6 @@
 
 use alloc::collections::VecDeque;
 use alloc::string::String;
-use alloc::vec::Vec;
 use crate::kjson;
 
 const MAX_TOKENS: usize = 4096;

@@ -2,7 +2,6 @@
 //! Skills perigosas requerem confirmacao do usuario antes de executar.
 //! Gate unico: request_approval() bloqueia, wait_approval() decide.
 
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::kjson;

@@ -7,9 +7,7 @@
 //!   → parse_80211_beacon() → WirelessNetwork
 //!   → derive_wpa2_pmk(pass, ssid) → hardware crypto registers
 
-use alloc::vec;
 use alloc::vec::Vec;
-use crate::generic_wifi::HardwareRegisterMap;
 
 // ── 1. TIPOS DE REDE 802.11 ──────────────────────────────────
 
@@ -90,7 +88,7 @@ pub fn parse_beacon(frame: &[u8]) -> Option<WirelessNetwork> {
     let mut ssid_len = 0;
     let mut security = SecurityType::Open;
     let mut channel = 1u8;
-    let mut signal = -60i8;
+    let signal = -60i8;
 
     // Varre Information Elements (Tag ID, Length, Value)
     let mut pos = 24 + if frame[0] & 0x80 != 0 { 4 } else { 0 }; // +HT control
@@ -148,7 +146,7 @@ pub fn scan_networks<D: crate::generic_wifi::WifiChipset>(
     driver: &mut D, results: &mut Vec<WirelessNetwork>) -> Result<usize, &'static str> {
     let mut found = 0;
     // Canais 2.4GHz: 1-11
-    for ch in 1..=11 {
+    for _ch in 1..=11 {
         // Monta Probe Request frame (802.11 management)
         let probe = alloc::vec![
             0x40, 0x00, 0x00, 0x00,  // Frame Control: Probe Request

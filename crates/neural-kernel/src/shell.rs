@@ -158,7 +158,7 @@ fn fetch_cmd(url: &str) -> String {
 
 fn touch_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: touch <path>\n"); }
-    let mut vfs = crate::vfs::VFS.lock();
+    let vfs = crate::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         if vfs.lookup(args).is_some() {
             alloc::format!("Already exists: {}\n", args)
@@ -170,7 +170,7 @@ fn touch_cmd(args: &str) -> String {
 
 fn mkdir_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: mkdir <path>\n"); }
-    let mut vfs = crate::vfs::VFS.lock();
+    let vfs = crate::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         if vfs.lookup(args).is_some() {
             alloc::format!("Already exists: {}\n", args)
@@ -182,7 +182,7 @@ fn mkdir_cmd(args: &str) -> String {
 
 fn rm_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: rm <path>\n"); }
-    let mut vfs = crate::vfs::VFS.lock();
+    let vfs = crate::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         if vfs.lookup(args).is_some() {
             alloc::format!("rm: {} (VFS append-only)\n", args)
@@ -193,7 +193,7 @@ fn rm_cmd(args: &str) -> String {
 }
 
 fn pwd_cmd() -> String {
-    let mut vfs = crate::vfs::VFS.lock();
+    let vfs = crate::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         alloc::format!("{}\n", vfs.fmt_tree().lines().next().unwrap_or("/\n"))
     } else {
@@ -203,7 +203,7 @@ fn pwd_cmd() -> String {
 
 fn find_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: find <pattern>\n"); }
-    let mut vfs = crate::vfs::VFS.lock();
+    let vfs = crate::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         let results = vfs.list_dir(args);
         if results.is_empty() { String::from("Not found\n") }

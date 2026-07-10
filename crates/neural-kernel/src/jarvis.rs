@@ -228,7 +228,7 @@ impl SemanticCache {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub fn persona_pipeline(text: &str, ego: &mut EgoLayer, session: &mut SessionHistory,
-    discover: &mut SkillDiscovery, notif: &mut NotificationGate, dream: &mut DreamEngine,
+    _discover: &mut SkillDiscovery, notif: &mut NotificationGate, dream: &mut DreamEngine,
     heartbeat: &mut Heartbeat, babel: &mut BabelIndex) -> String {
     let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     let mut output = String::new();

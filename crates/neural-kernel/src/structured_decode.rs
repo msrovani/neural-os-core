@@ -261,7 +261,7 @@ impl SkillOptimizer {
     }
 
     /// Gera nova versao de skill com parametros ajustados
-    pub fn optimize_skill(&self, name: &str, old_ticks: u64, success_rate: f32) -> (u64, f32) {
+    pub fn optimize_skill(&self, _name: &str, old_ticks: u64, success_rate: f32) -> (u64, f32) {
         // Otimizacao heuristica: reduz fuel se taxa alta, aumenta se baixa
         let new_fuel = if success_rate > 0.9 {
             (old_ticks as f32 * 0.8) as u64

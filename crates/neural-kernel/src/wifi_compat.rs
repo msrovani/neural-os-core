@@ -29,7 +29,7 @@ pub unsafe extern "C" fn wifi_os_mutex_unlock(m: *mut HalideMutex) {
 pub extern "C" fn wifi_os_get_time_ms() -> u64 {
     let lo: u32; let hi: u32;
     unsafe { asm!("rdtsc", out("eax") lo, out("edx") hi); }
-    let tsc = ((hi as u64) << 32 | lo as u64);
+    let tsc = (hi as u64) << 32 | lo as u64;
     let freq = TSC_PER_MS.load(Ordering::Relaxed);
     if freq == 0 { tsc / 2400 } else { tsc / freq }
 }

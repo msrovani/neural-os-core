@@ -4,7 +4,6 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event};
 use alloc::vec::Vec;
-use crate::serial_println;
 
 const UVC_MANIFEST: AgentManifest = AgentManifest {
     name: "uvc_driver",

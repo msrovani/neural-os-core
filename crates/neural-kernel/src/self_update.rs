@@ -2,7 +2,6 @@
 //! Boot slot A (KERNEL~1) e slot B (KERNEL~2). BOOTCFG.JSON aponta qual usar.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 use crate::ATA_DRIVER;
 use crate::kjson;
 

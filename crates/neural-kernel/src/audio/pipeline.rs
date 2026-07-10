@@ -1,8 +1,8 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use event_bus::{CapabilityToken, Event, Receiver};
+use event_bus::Receiver;
 use crate::audio::ringbuf::AudioRingBuffer;
-use crate::audio::vad::{VAD, VAD_ACTIVE};
-use crate::audio::tts::{FrameProcessor, TTS_FRAME_SAMPLES, AudioFrame};
+use crate::audio::vad::VAD;
+use crate::audio::tts::FrameProcessor;
 use crate::serial_println;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -78,7 +78,7 @@ impl Agent for AudioPipelineAgent {
 
         if self.frame_counter % 10 == 0 {
             let mic_samples = [0i16; 256];
-            let (_, _, is_speech, transition) = self.vad.process_frame(&mic_samples);
+            let (_, _, _is_speech, transition) = self.vad.process_frame(&mic_samples);
             if transition == crate::audio::vad::VadTransition::SpeechStart {
                 BARGE_IN.store(true, Ordering::Relaxed);
             }

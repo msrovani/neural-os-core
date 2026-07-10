@@ -1,9 +1,8 @@
 #![no_std]
-
 #![no_main]
-
+#![allow(dead_code)]
+#![allow(static_mut_refs)]
 #![feature(abi_x86_interrupt)]
-
 #![feature(alloc_error_handler)]
 
 

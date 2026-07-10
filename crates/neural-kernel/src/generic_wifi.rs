@@ -322,7 +322,7 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             }
         };
         let engine = AgnosticWifiEngine::new(bar, map);
-        let r = match name {
+        let _r = match name {
             "Realtek WiFi" => { (*ptr).realtek = ManuallyDrop::new(RealtekRtl8188(engine));
                 *active = Some(&mut *(*ptr).realtek as &mut dyn WifiChipset); }
             "Intel WiFi" => { (*ptr).intel = ManuallyDrop::new(IntelAx200(engine));

@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 use alloc::string::String;
 use core::sync::atomic::Ordering;
 
@@ -62,7 +61,7 @@ pub fn run_network_test() -> String {
         let target_ip = [142, 250, 80, 110]; // google.com IP fixo como fallback
         let mut conn = netstack.http_new(target_ip, 80, "/");
         let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
-        let timeout = start.wrapping_add(200); // ~10 segundos
+        let _timeout = start.wrapping_add(200); // ~10 segundos
         loop {
             let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
             if now.wrapping_sub(start) > 200 { break; }

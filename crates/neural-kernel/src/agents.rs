@@ -752,7 +752,7 @@ impl Agent for HermesAgent {
                                 msg.push_str("[MODEL] Failed to parse model file.\n");
                             }
                         } else { msg.push_str("[MODEL] Empty file.\n"); }
-                    } else if let Some(model) = crate::gguf::load_gguf_model_from_disk(path) {
+                    } else if let Some(_model) = crate::gguf::load_gguf_model_from_disk(path) {
                         msg.push_str("[MODEL] GGUF model loaded from disk.\n");
                     } else {
                         msg.push_str("[MODEL] GGUF header NOTICE: streaming not yet supported.\n");
@@ -1441,7 +1441,7 @@ impl SleepCycleAgent {
     pub fn new() -> Self { SleepCycleAgent { phase: 0, cycle_count: 0, phase_tick: 0, insights: Vec::new() } }
     fn phase_name(&self) -> &'static str { match self.phase {1=>"REPLAY",2=>"DREAM",3=>"CONSOLIDATE",4=>"PRUNE",5=>"REFLECT",_=>"IDLE"} }
     fn execute_phase(&mut self) {
-        let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let _tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         match self.phase {
             1 => {
                 let mut t = crate::BITNET_TRAINER.lock();

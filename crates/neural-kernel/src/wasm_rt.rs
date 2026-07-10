@@ -7,7 +7,6 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use alloc::boxed::Box;
 use crate::wasm_exec::{WasmExec, Op};
 use crate::kjson;
 

@@ -5,7 +5,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
-use alloc::boxed::Box;
 
 /// Opcodes da VM simplificada
 #[derive(Debug, Clone, Copy, PartialEq)]

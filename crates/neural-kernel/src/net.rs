@@ -1,4 +1,3 @@
-use crate::netstack::NetStack;
 use crate::rtl8139::Rtl8139Driver;
 use crate::e1000::{E1000Driver, REG_STATUS, REG_RDH};
 use crate::{println, serial_println};
