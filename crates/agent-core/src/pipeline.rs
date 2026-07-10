@@ -20,7 +20,7 @@ impl Stage {
     pub fn run(&self) -> bool {
         let mut best: Option<&Provider> = None;
         for p in &self.providers {
-            if best.is_none() || p.score > best.unwrap().score {
+            if best.map_or(true, |current| p.score > current.score) {
                 best = Some(p);
             }
         }

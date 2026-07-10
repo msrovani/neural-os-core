@@ -23,9 +23,10 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     let hostname = hostname.trim_end_matches('.');
     if hostname.is_empty() { return None; }
 
-    // 1. DNS name encoding
+    // 1. DNS name encoding with validation
     let mut qname = Vec::new();
     for part in hostname.split('.') {
+        if part.is_empty() || part.len() > 63 { return None; }
         qname.push(part.len() as u8);
         qname.extend_from_slice(part.as_bytes());
     }
@@ -47,8 +48,9 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     // 3. UDP header (8B) + DNS payload
     let src_port: u16 = 54321;
     let dst_port: u16 = 53;
-    let udp_len_u16 = (8 + dns.len()) as u16;
-    let mut udp_data = Vec::with_capacity(udp_len_u16 as usize);
+    let udp_len = 8usize.checked_add(dns.len())?;
+    let udp_len_u16 = u16::try_from(udp_len).ok()?;
+    let mut udp_data = Vec::with_capacity(udp_len);
     udp_data.extend_from_slice(&src_port.to_be_bytes());
     udp_data.extend_from_slice(&dst_port.to_be_bytes());
     udp_data.extend_from_slice(&udp_len_u16.to_be_bytes());
@@ -56,11 +58,12 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     udp_data.extend_from_slice(&dns);
 
     // 4. IP header (20B)
-    let total_len = 20 + udp_data.len();
+    let total_len = 20usize.checked_add(udp_data.len())?;
+    let total_len_u16 = u16::try_from(total_len).ok()?;
     let mut ip = [0u8; 20];
     ip[0] = 0x45;
     ip[1] = 0;
-    ip[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
+    ip[2..4].copy_from_slice(&total_len_u16.to_be_bytes());
     ip[4..8].copy_from_slice(&[0, 0, 0x40, 0x00]); // ID + flags/frag
     ip[8] = 64;                                     // TTL
     ip[9] = 17;                                     // UDP
@@ -80,40 +83,59 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
 
     unsafe { slip::send(&frame); }
 
-    // 6. Poll for response (até ~200 iterações)
+    // 6. Poll for response (multi-answer parser)
     for i in 0..200 {
         if let Some(resp) = unsafe { slip::recv() } {
-            if resp.len() >= 42 { // IP(20) + UDP(8) + DNS header(12) + answer
-                let dns_offset = 20 + 8; // skip IP + UDP
-                let resp_txid = u16::from_be_bytes([resp[dns_offset], resp[dns_offset + 1]]);
-                if resp_txid == txid {
-                    let flags = u16::from_be_bytes([resp[dns_offset + 2], resp[dns_offset + 3]]);
-                    if flags & 0x8000 != 0 {
-                        let ancount = u16::from_be_bytes([resp[dns_offset + 6], resp[dns_offset + 7]]);
-                        if ancount > 0 {
-                            // Skip question section to find answer
-                            let mut pos = dns_offset + 12;
-                            while pos < resp.len() && resp[pos] != 0 {
-                                if resp[pos] & 0xC0 == 0xC0 { pos += 2; break; }
-                                pos += 1 + resp[pos] as usize;
-                            }
-                            if pos < resp.len() { pos += 5; } // null term + type + class + TTL
-                            if pos + 10 <= resp.len() {
-                                let rdlen = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
-                                if rdlen == 4 && pos + 12 <= resp.len() {
-                                    let ip = [resp[pos + 10], resp[pos + 11], resp[pos + 12], resp[pos + 13]];
-                                    crate::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
-                                        ip[0], ip[1], ip[2], ip[3]);
-                                    return Some(ip);
-                                }
-                            }
-                        }
+            if resp.len() < 42 { continue; }
+            let dns_offset = 20 + 8; // skip IP + UDP
+            let resp_txid = u16::from_be_bytes([resp[dns_offset], resp[dns_offset + 1]]);
+            if resp_txid != txid { continue; }
+            let flags = u16::from_be_bytes([resp[dns_offset + 2], resp[dns_offset + 3]]);
+            if flags & 0x8000 == 0 { continue; }
+            let ancount = u16::from_be_bytes([resp[dns_offset + 6], resp[dns_offset + 7]]);
+            if ancount == 0 { continue; }
+
+            // Skip question section
+            let mut pos = dns_offset + 12;
+            while pos < resp.len() && resp[pos] != 0 {
+                if resp[pos] & 0xC0 == 0xC0 { pos += 2; break; }
+                let step = 1usize.saturating_add(resp[pos] as usize);
+                pos = pos.saturating_add(step);
+            }
+            if pos >= resp.len() { continue; }
+            pos += 5; // null term + QTYPE + QCLASS
+
+            // Parse answers
+            for _ in 0..ancount {
+                if pos >= resp.len() { break; }
+                // Name field (can be pointer or sequence)
+                if resp[pos] & 0xC0 == 0xC0 {
+                    pos = pos.saturating_add(2);
+                } else {
+                    while pos < resp.len() && resp[pos] != 0 {
+                        let step = 1usize.saturating_add(resp[pos] as usize);
+                        let Some(next) = pos.checked_add(step) else { break; };
+                        pos = next;
                     }
+                    pos = pos.saturating_add(1);
                 }
+                if pos + 10 > resp.len() { break; }
+                let rr_type = u16::from_be_bytes([resp[pos], resp[pos + 1]]);
+                let _rr_class = u16::from_be_bytes([resp[pos + 2], resp[pos + 3]]);
+                let rdlen = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+                pos += 10;
+                let Some(rdata_end) = pos.checked_add(rdlen) else { break; };
+                if rdata_end > resp.len() { break; }
+                if rr_type == 1 && rdlen == 4 {
+                    let ip = [resp[pos], resp[pos + 1], resp[pos + 2], resp[pos + 3]];
+                    crate::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
+                        ip[0], ip[1], ip[2], ip[3]);
+                    return Some(ip);
+                }
+                pos = rdata_end;
             }
         }
         if i % 50 == 0 {
-            // Re-send query every 50 iterations (in case lost)
             unsafe { slip::send(&frame); }
         }
     }
