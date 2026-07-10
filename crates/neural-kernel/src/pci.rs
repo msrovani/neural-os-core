@@ -1,4 +1,4 @@
-use crate::{println, serial_println};
+use crate::{serial_println, kjson};
 use alloc::vec::Vec;
 
 const CONFIG_ADDRESS: u16 = 0xCF8;
@@ -169,14 +169,11 @@ pub unsafe fn scan_pci() -> Vec<PciDevice> {
 
 pub unsafe fn init_pci() -> Vec<PciDevice> {
     let devices = scan_pci();
-    serial_println!("[PCI] Scan concluido: {} dispositivos encontrados.", devices.len());
-    println!("[PCI] Scan concluido: {} dispositivos encontrados.", devices.len());
-    for dev in &devices {
-        serial_println!(
-            "[PCI] {:02x}:{:02x}.{:02x} {:04x}:{:04x} class={:02x} subclass={:02x}",
-            dev.bus, dev.device, dev.function,
-            dev.vendor_id, dev.device_id, dev.class, dev.subclass
-        );
+    kjson!("BOOT", "PCI", "scan", "n", devices.len());
+    for (i, dev) in devices.iter().enumerate() {
+        kjson!("PCI", "DEV", "found", "idx", i,
+            "bus", dev.bus, "dev", dev.device, "fn", dev.function,
+            "vid", dev.vendor_id, "did", dev.device_id, "class", dev.class);
     }
     devices
 }

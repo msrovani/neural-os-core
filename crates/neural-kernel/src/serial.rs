@@ -171,3 +171,40 @@ pub fn serial_available() -> bool {
 #[macro_export] macro_rules! serial_print { ($($arg:tt)*) => ($crate::serial::_print(format_args!($($arg)*))); }
 #[macro_export] macro_rules! serial_println { () => ($crate::serial_print!("\n")); ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*))); }
 
+/// Log estruturado para debug IA e re-aprendizado da LLM.
+/// Formato: [T+123][NIVEL][AGENTE][EVENTO] mensagem
+#[macro_export]
+macro_rules! klog {
+    ($agent:expr, $event:expr, $fmt:tt $(,$arg:expr)*) => {
+        $crate::serial::_print(format_args!(
+            concat!("[{}][{}] ", $fmt, "\n"),
+            $agent, $event $(,$arg)*
+        ))
+    };
+}
+
+/// Compacto: [T+123][LVL][AGT][EVT] msg (cabe em 80 colunas)
+#[macro_export]
+macro_rules! klogc {
+    ($lvl:expr, $agent:expr, $event:expr, $fmt:tt $(,$arg:expr)*) => {
+        $crate::serial::_print(format_args!(
+            concat!("[{}][{}][{}] ", $fmt, "\n"),
+            $lvl, $agent, $event $(,$arg)*
+        ))
+    };
+}
+
+/// Log em JSON. Parseavel por scripts, jq, IDEs, e pela LLM.
+/// Uso: kjson!("BOOT","DISPLAY","fb","w",1280,"h",720,"bpp",3)
+/// Output: J{"t":0,"l":"BOOT","a":"DISPLAY","e":"fb","w":1280,"h":720,"bpp":3}
+/// Prefixo "J" permite filtrar linhas JSON do resto do log.
+#[macro_export]
+macro_rules! kjson {
+    ($lvl:expr, $agent:expr, $event:expr $(, $k:expr, $v:expr)*) => {{
+        let tick = $crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        $crate::serial::_print(format_args!("J{{\"t\":{},\"l\":\"{}\",\"a\":\"{}\",\"e\":\"{}\"", tick, $lvl, $agent, $event));
+        $($crate::serial::_print(format_args!(",\"{}\":{}", $k, $v));)*
+        $crate::serial::_print(format_args!("}}\n"));
+    }}
+}
+

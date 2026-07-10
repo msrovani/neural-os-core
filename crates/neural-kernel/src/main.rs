@@ -1026,19 +1026,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         vga_buffer::disable_vga_plane();
 
-        crate::serial_println!("[BOOT] FB ativo — VGA text mode desligado.");
+        let g = crate::display::fb::GPU.lock();
+        let (fw, fh, fb) = g.as_ref().map(|d| (d.fb_width, d.fb_height, d.fb_bpp)).unwrap_or((0,0,0));
+        kjson!("BOOT", "DISPLAY", "fb", "w", fw, "h", fh, "bpp", fb);
 
     }
 
     
 
-    crate::serial_println!("[BOOT] Kernel started. Serial:{} pm_offset={:#x}", serial_exists, pm_offset);
+    kjson!("BOOT", "KERNEL", "start", "serial", serial_exists as u32, "pm_off", pm_offset);
 
     
 
     interrupts::init_idt();
 
-    crate::serial_println!("[BOOT] IDT loaded");
+    kjson!("BOOT", "IDT", "ready", "vecs", 256);
 
     
 
@@ -1046,7 +1048,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     frame_allocator.init(&boot_info.memory_regions);
 
-    crate::serial_println!("[DBG2] Memory regions init: {} regions", boot_info.memory_regions.len());
+    kjson!("DBG", "MEM", "regions", "n", boot_info.memory_regions.len());
 
 
 
@@ -1570,7 +1572,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
-    serial_println!("[BOOT] {} boot agents registrados. Executando init_phase...", registry.agents.len());
+    klogc!("BOOT", "AGENTS", "registered", "{} agents", registry.agents.len());
 
     registry.init_phase();
 

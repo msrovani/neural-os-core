@@ -13,7 +13,7 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use crate::cortex;
 use crate::hermes::{self, IntentCache, WorkflowEngine};
 use crate::conversation;
-use crate::{serial_println, println};
+use crate::{serial_println, println, kjson};
 use crate::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
             CONVERSATION_TRACKER, PENDING_SKILL, TRINITY};
 
@@ -1020,7 +1020,7 @@ impl Agent for BootSelfHealAgent {
     fn manifest(&self) -> &AgentManifest { &SELFHEAL_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         crate::SELF_HEAL.lock();
-        serial_println!("[AGENT] SelfHealAgent pronto.");
+        kjson!("AGENT", "SelfHeal", "ready", "tick", _tick);
 
         // Verifica causa do ultimo desligamento
         let last_cause = crate::shutdown::read_last_shutdown_from_boot_log();
@@ -1079,7 +1079,7 @@ impl Agent for BootTrustAgent {
     fn manifest(&self) -> &AgentManifest { &TRUST_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         crate::TRUST_CACHE.lock();
-        serial_println!("[AGENT] TrustAgent pronto.");
+        kjson!("AGENT", "Trust", "ready", "tick", _tick);
         AgentTickResult::Done
     }
 }
