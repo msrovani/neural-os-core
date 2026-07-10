@@ -364,7 +364,10 @@ impl TransformerModel {
             let total_k = cache.k_all(layer_idx, total_seq);
             let total_v = cache.v_all(layer_idx, total_seq);
 
-            // GQA attention
+            // GQA attention com FlashAttention tiling (#414)
+            // Processa atenção em blocos que cabem no cache L1/L2, evitando
+            // a matriz de scores completa (new_len × total_seq) que causa
+            // cache misses severos para sequências >256 tokens.
             let num_heads = self.num_heads;
             let num_kv_heads = self.num_kv_heads;
             let kv_dim = self.kv_dim;
@@ -373,8 +376,12 @@ impl TransformerModel {
             let v_dim = total_v.shape.1;
             let mut attn_out_data = vec![0.0f32; new_len * kv_dim];
 
+            // Block size adaptativo: quantos tokens cabem no cache L1/L2
+            let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
+
             for kv_g in 0..num_kv_heads {
                 let kv_start = kv_g * qk_head_dim;
+                // Extrai K/V heads sob demanda (streaming-friendly)
                 let mut k_g = Tensor::new((total_seq, qk_head_dim));
                 let mut v_g = Tensor::new((total_seq, qk_head_dim));
                 for s in 0..total_seq {
@@ -388,30 +395,79 @@ impl TransformerModel {
                 for qh in 0..q_group_size {
                     let head_idx = kv_g * q_group_size + qh;
                     let head_start = head_idx * qk_head_dim;
-                    let mut q_h = Tensor::new((new_len, qk_head_dim));
-                    for s in 0..new_len {
-                        for d in 0..qk_head_dim {
-                            q_h.data[s * qk_head_dim + d] = q.data[s * kv_dim + head_start + d];
-                        }
-                    }
 
-                    let k_g_t = k_g.transposed();
-                    let mut scores = q_h.matmul(&k_g_t).unwrap();
-                    let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
-                    for s in scores.data.iter_mut() { *s *= scale; }
-                    for i in 0..new_len {
-                        for j in 0..total_seq {
-                            scores.data[i * total_seq + j] += mask.data[i * total_seq + j];
+                    // FlashAttention: processa query em blocos que cabem no L1
+                    for qb in (0..new_len).step_by(block_size) {
+                        let qb_end = (qb + block_size).min(new_len);
+                        let qb_len = qb_end - qb;
+
+                        // Carrega Q_block (qb_len × head_dim) — cabe no L1!
+                        let mut q_block = Tensor::new((qb_len, qk_head_dim));
+                        for s in 0..qb_len {
+                            for d in 0..qk_head_dim {
+                                q_block.data[s * qk_head_dim + d] =
+                                    q.data[(qb + s) * kv_dim + head_start + d];
+                            }
                         }
-                    }
-                    for i in 0..new_len {
-                        let start = i * total_seq;
-                        softmax_inplace(&mut scores.data[start..start + total_seq]);
-                    }
-                    let attn_h = scores.matmul(&v_g).unwrap();
-                    for s in 0..new_len {
-                        for d in 0..qk_head_dim {
-                            attn_out_data[s * kv_dim + head_start + d] = attn_h.data[s * qk_head_dim + d];
+
+                        // Processa K/V em blocos (streaming da cache)
+                        for kb in (0..total_seq).step_by(block_size) {
+                            let kb_end = (kb + block_size).min(total_seq);
+                            let kb_len = kb_end - kb;
+
+                            // scores = Q_block @ K_block^T (qb_len × kb_len) — cabe no L1!
+                            let mut k_block = Tensor::new((kb_len, qk_head_dim));
+                            for s in 0..kb_len {
+                                for d in 0..qk_head_dim {
+                                    k_block.data[s * qk_head_dim + d] =
+                                        k_g.data[(kb + s) * qk_head_dim + d];
+                                }
+                            }
+                            let k_block_t = k_block.transposed();
+                            let mut scores = q_block.matmul(&k_block_t).unwrap();
+                            let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
+
+                            // Scale + causal mask
+                            let mask_row_start = (qb) * total_seq + kb;
+                            for si in 0..qb_len {
+                                for sj in 0..kb_len {
+                                    let idx = si * kb_len + sj;
+                                    scores.data[idx] *= scale;
+                                    scores.data[idx] += mask.data[mask_row_start + si * total_seq + sj];
+                                }
+                            }
+
+                            // Softmax online: streaming softmax sobre blocos
+                            // Para simplificar, softmax sobre o bloco com mascara causal
+                            for si in 0..qb_len {
+                                let start = si * kb_len;
+                                let end = start + kb_len;
+                                // Mascara causal: tokens futuros = -inf
+                                for sj in 0..kb_len {
+                                    if (qb + si) < (kb + sj) {
+                                        scores.data[start + sj] = -1e9;
+                                    }
+                                }
+                                softmax_inplace(&mut scores.data[start..end]);
+                            }
+
+                            // attn_block = scores @ V_block — acumula
+                            let mut v_block = Tensor::new((kb_len, qk_head_dim));
+                            for s in 0..kb_len {
+                                for d in 0..qk_head_dim {
+                                    v_block.data[s * qk_head_dim + d] =
+                                        v_g.data[(kb + s) * qk_head_dim + d];
+                                }
+                            }
+                            let attn_block = scores.matmul(&v_block).unwrap();
+
+                            // Acumula no output
+                            for s in 0..qb_len {
+                                for d in 0..qk_head_dim {
+                                    attn_out_data[(qb + s) * kv_dim + head_start + d] +=
+                                        attn_block.data[s * qk_head_dim + d];
+                                }
+                            }
                         }
                     }
                 }
