@@ -3,13 +3,13 @@
 //! Plugin Hub, Skill Marketplace, hybrid kernel/WASM agents.
 //! Zero stubs — toda funcao e 100% funcional.
 
-use alloc::vec::Vec;
-use alloc::vec;
-use alloc::string::String;
-use alloc::collections::BTreeMap;
-use alloc::boxed::Box;
-use crate::wasm_exec::{WasmExec, Op};
 use crate::kjson;
+use crate::wasm_exec::{Op, WasmExec};
+use alloc::boxed::Box;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 
 // ─── #104: Linear Memory Pool (256 KB per skill) ──────────────────────────
 
@@ -19,13 +19,20 @@ pub struct MemoryPool {
 }
 impl MemoryPool {
     pub fn new(max_size: usize) -> Self {
-        MemoryPool { pools: BTreeMap::new(), max_size }
+        MemoryPool {
+            pools: BTreeMap::new(),
+            max_size,
+        }
     }
     pub fn alloc(&mut self, skill: &str) -> &mut [u8] {
         if !self.pools.contains_key(skill) {
-            self.pools.insert(String::from(skill), vec![0u8; self.max_size]);
+            self.pools
+                .insert(String::from(skill), vec![0u8; self.max_size]);
         }
-        self.pools.get_mut(skill).map(|v| v.as_mut_slice()).unwrap_or(&mut [])
+        self.pools
+            .get_mut(skill)
+            .map(|v| v.as_mut_slice())
+            .unwrap_or(&mut [])
     }
     pub fn snapshot(&self, skill: &str) -> Option<Vec<u8>> {
         self.pools.get(skill).cloned()
@@ -33,9 +40,15 @@ impl MemoryPool {
     pub fn restore(&mut self, skill: &str, data: Vec<u8>) {
         self.pools.insert(String::from(skill), data);
     }
-    pub fn free(&mut self, skill: &str) { self.pools.remove(skill); }
+    pub fn free(&mut self, skill: &str) {
+        self.pools.remove(skill);
+    }
     pub fn status(&self) -> String {
-        alloc::format!("[WASM-MEM] {} skills, {} KB each", self.pools.len(), self.max_size / 1024)
+        alloc::format!(
+            "[WASM-MEM] {} skills, {} KB each",
+            self.pools.len(),
+            self.max_size / 1024
+        )
     }
 }
 
@@ -54,7 +67,10 @@ impl WasmSkillManifest {
     pub fn to_json(&self) -> String {
         alloc::format!(
             "{{\"n\":\"{}\",\"k\":\"{}\",\"v\":\"{}\",\"a\":\"{}\",\"desc\":\"{}\",\"tokens\":{}}}",
-            self.name, self.kind, self.version, self.author,
+            self.name,
+            self.kind,
+            self.version,
+            self.author,
             self.description.replace('"', "'"),
             self.required_tokens.len()
         )
@@ -65,16 +81,23 @@ impl WasmSkillManifest {
 
 pub fn wasi_to_skill(wasi: &str) -> &'static str {
     match wasi {
-        "fd_read" => "FileAgent.read", "fd_write" => "FileAgent.write",
-        "fd_close" => "FileAgent.close", "fd_seek" => "FileAgent.seek",
-        "path_open" => "FileAgent.open", "path_stat" => "FileAgent.stat",
+        "fd_read" => "FileAgent.read",
+        "fd_write" => "FileAgent.write",
+        "fd_close" => "FileAgent.close",
+        "fd_seek" => "FileAgent.seek",
+        "path_open" => "FileAgent.open",
+        "path_stat" => "FileAgent.stat",
         "path_readlink" => "FileAgent.readlink",
-        "clock_time_get" => "TimeAgent.now", "clock_res_get" => "TimeAgent.resolution",
-        "random_get" => "SystemAgent.random", "proc_exit" => "SystemAgent.exit",
-        "environ_get" => "SystemAgent.env", "args_get" => "SystemAgent.args",
-        "poll_oneoff" => "EventBusAgent.poll", "sched_yield" => "SchedulerAgent.yield",
+        "clock_time_get" => "TimeAgent.now",
+        "clock_res_get" => "TimeAgent.resolution",
+        "random_get" => "SystemAgent.random",
+        "proc_exit" => "SystemAgent.exit",
+        "environ_get" => "SystemAgent.env",
+        "args_get" => "SystemAgent.args",
+        "poll_oneoff" => "EventBusAgent.poll",
+        "sched_yield" => "SchedulerAgent.yield",
         "fd_write" => "ConsoleAgent.write",
-        _ => "Unknown"
+        _ => "Unknown",
     }
 }
 
@@ -89,8 +112,12 @@ pub struct WasmCapability {
 }
 impl WasmCapability {
     pub fn can_execute(&self, skill: &str, required_tokens: &[u64]) -> bool {
-        if !self.skills_allowed.iter().any(|s| s == skill) { return false; }
-        required_tokens.iter().all(|t| *t == self.token || self.token == 0)
+        if !self.skills_allowed.iter().any(|s| s == skill) {
+            return false;
+        }
+        required_tokens
+            .iter()
+            .all(|t| *t == self.token || self.token == 0)
     }
     pub fn from_token(token: u64) -> Self {
         WasmCapability {
@@ -124,13 +151,20 @@ pub struct HybridRegistry {
     agents: Vec<HybridAgent>,
 }
 impl HybridRegistry {
-    pub fn new() -> Self { HybridRegistry { agents: Vec::new() } }
+    pub fn new() -> Self {
+        HybridRegistry { agents: Vec::new() }
+    }
     pub fn register(&mut self, name: &str, origin: AgentOrigin, manifest: WasmSkillManifest) {
-        if self.by_name(name).is_some() { return; }
+        if self.by_name(name).is_some() {
+            return;
+        }
         self.agents.push(HybridAgent {
-            name: String::from(name), origin,
-            fuel: 100_000, max_fuel: 100_000,
-            manifest, installs: 0,
+            name: String::from(name),
+            origin,
+            fuel: 100_000,
+            max_fuel: 100_000,
+            manifest,
+            installs: 0,
         });
     }
     pub fn by_name(&self, name: &str) -> Option<&HybridAgent> {
@@ -142,7 +176,9 @@ impl HybridRegistry {
     pub fn list(&self) -> Vec<&str> {
         self.agents.iter().map(|a| a.name.as_str()).collect()
     }
-    pub fn count(&self) -> usize { self.agents.len() }
+    pub fn count(&self) -> usize {
+        self.agents.len()
+    }
     pub fn status(&self) -> String {
         alloc::format!("[HYBRID] {} agents", self.agents.len())
     }
@@ -157,7 +193,7 @@ pub fn wasm_overhead(syscall: &str) -> &'static str {
         "http_get" => "kernel 100us vs WASM 800us (8x)",
         "event_publish" => "kernel 5us vs WASM 80us (16x)",
         "clock_time" => "kernel 1us vs WASM 10us (10x)",
-        _ => "WASM overhead ~10x for most syscalls"
+        _ => "WASM overhead ~10x for most syscalls",
     }
 }
 
@@ -170,7 +206,14 @@ fn parse_description(desc: &str) -> (Vec<Op>, String) {
 
     let code = if d.contains("echo") || d.contains("hello") {
         out = String::from("echoes input, prints Hello!");
-        vec![Push(0x216f6c6c), Push(0x6548), Print, Push(0x0a), Print, Halt]
+        vec![
+            Push(0x216f6c6c),
+            Push(0x6548),
+            Print,
+            Push(0x0a),
+            Print,
+            Halt,
+        ]
     } else if d.contains("add") || d.contains("sum") || d.contains("calc") || d.contains("calc") {
         out = String::from("adds 10 + 32, prints result");
         vec![Push(10), Push(32), Add, Dup, Print, Halt]
@@ -184,41 +227,66 @@ fn parse_description(desc: &str) -> (Vec<Op>, String) {
         out = String::from("counts 0 to 9, prints each");
         let mut code = Vec::new();
         code.push(Push(0)); // counter
-        // loop start (addr 1)
+                            // loop start (addr 1)
         code.push(Dup);
         code.push(Push(10));
         code.push(Lt);
         code.push(BrIf(8)); // jump to end if counter >= 10
         code.push(Dup);
-        code.push(Print);   // print counter
+        code.push(Print); // print counter
         code.push(Push(1));
-        code.push(Add);     // counter++
-        code.push(Br(1));   // loop back
+        code.push(Add); // counter++
+        code.push(Br(1)); // loop back
         code.push(Halt);
         code
     } else if d.contains("fib") || d.contains("fibonacci") {
         out = String::from("fibonacci(10), prints result");
         vec![
-            Push(0), Push(1), Push(10), // a=0, b=1, i=10
-            Dup, Push(0), Gt,
+            Push(0),
+            Push(1),
+            Push(10), // a=0, b=1, i=10
+            Dup,
+            Push(0),
+            Gt,
             BrIf(12), // if i>0 jump forward
             // loop body
-            Dup2, Add,  // a+b
-            Store(0), Load(0), // swap via mem
-            Push(1), Sub, // i--
+            Dup2,
+            Add, // a+b
+            Store(0),
+            Load(0), // swap via mem
+            Push(1),
+            Sub,   // i--
             Br(5), // loop
             Halt,
         ]
     } else if d.contains("fact") || d.contains("factorial") {
         out = String::from("factorial(6), prints result");
-        vec![Push(6), Push(1), // n, result
-            Dup2, Push(1), Sub, Store(0), // n-1
-            Load(0), Push(0), Gt, BrIf(9), // if n>0 continue
+        vec![
+            Push(6),
+            Push(1), // n, result
+            Dup2,
+            Push(1),
+            Sub,
+            Store(0), // n-1
+            Load(0),
+            Push(0),
+            Gt,
+            BrIf(9), // if n>0 continue
             Halt,
         ]
     } else if d.contains("max") || d.contains("min") || d.contains("cmp") {
         out = String::from("compares 42 and 99, prints max");
-        vec![Push(42), Push(99), Gt, BrIf(6), Push(99), Br(7), Push(42), Print, Halt]
+        vec![
+            Push(42),
+            Push(99),
+            Gt,
+            BrIf(6),
+            Push(99),
+            Br(7),
+            Push(42),
+            Print,
+            Halt,
+        ]
     } else if d.contains("mem") || d.contains("storage") || d.contains("save") {
         out = String::from("stores 1234 to memory offset 0, reads back");
         vec![Push(1234), Push(0), Store(0), Push(0), Load(0), Print, Halt]
@@ -260,7 +328,10 @@ pub struct PluginHub {
 }
 impl PluginHub {
     pub fn new() -> Self {
-        let mut hub = PluginHub { local: Vec::new(), remote: Vec::new() };
+        let mut hub = PluginHub {
+            local: Vec::new(),
+            remote: Vec::new(),
+        };
         hub.register("echo", "Echoes Hello World", "1.0", "builtin");
         hub.register("calc", "Adds two numbers (10+32)", "1.0", "builtin");
         hub.register("counter", "Counts 0 to 9", "1.0", "builtin");
@@ -270,23 +341,34 @@ impl PluginHub {
         hub.register("mem", "Memory store/load demo", "1.0", "builtin");
         // Remote catalog (disponiveis para install)
         hub.remote.push(PluginEntry {
-            name: "timer".into(), description: "LAPIC timer demo".into(),
-            version: "1.0".into(), source: "remote".into(),
-            verified: true, installs: 0,
+            name: "timer".into(),
+            description: "LAPIC timer demo".into(),
+            version: "1.0".into(),
+            source: "remote".into(),
+            verified: true,
+            installs: 0,
         });
         hub.remote.push(PluginEntry {
-            name: "pci-scan".into(), description: "PCI device scanner".into(),
-            version: "1.0".into(), source: "remote".into(),
-            verified: true, installs: 0,
+            name: "pci-scan".into(),
+            description: "PCI device scanner".into(),
+            version: "1.0".into(),
+            source: "remote".into(),
+            verified: true,
+            installs: 0,
         });
         hub
     }
     pub fn register(&mut self, name: &str, desc: &str, ver: &str, src: &str) {
-        if self.local.iter().any(|p| p.name == name) { return; }
+        if self.local.iter().any(|p| p.name == name) {
+            return;
+        }
         self.local.push(PluginEntry {
-            name: String::from(name), description: String::from(desc),
-            version: String::from(ver), source: String::from(src),
-            verified: true, installs: 0,
+            name: String::from(name),
+            description: String::from(desc),
+            version: String::from(ver),
+            source: String::from(src),
+            verified: true,
+            installs: 0,
         });
     }
     pub fn install(&mut self, name: &str) -> bool {
@@ -297,26 +379,41 @@ impl PluginHub {
             entry.installs += 1;
             self.local.push(entry);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
     pub fn remove(&mut self, name: &str) -> bool {
         let idx = self.local.iter().position(|p| p.name == name);
         if let Some(i) = idx {
             self.local.remove(i);
             true
-        } else { false }
+        } else {
+            false
+        }
     }
     pub fn search(&self, q: &str) -> Vec<&PluginEntry> {
         let q = q.to_lowercase();
-        self.local.iter().chain(self.remote.iter())
-            .filter(|p| p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q))
+        self.local
+            .iter()
+            .chain(self.remote.iter())
+            .filter(|p| {
+                p.name.to_lowercase().contains(&q) || p.description.to_lowercase().contains(&q)
+            })
             .collect()
     }
     pub fn by_name(&self, name: &str) -> Option<&PluginEntry> {
-        self.local.iter().chain(self.remote.iter()).find(|p| p.name == name)
+        self.local
+            .iter()
+            .chain(self.remote.iter())
+            .find(|p| p.name == name)
     }
     pub fn status(&self) -> String {
-        alloc::format!("[PLUGIN] {}/{} local/remote", self.local.len(), self.remote.len())
+        alloc::format!(
+            "[PLUGIN] {}/{} local/remote",
+            self.local.len(),
+            self.remote.len()
+        )
     }
 }
 
@@ -334,10 +431,17 @@ pub struct SkillMarket {
     scores: BTreeMap<String, SkillScore>,
 }
 impl SkillMarket {
-    pub fn new() -> Self { SkillMarket { scores: BTreeMap::new() } }
+    pub fn new() -> Self {
+        SkillMarket {
+            scores: BTreeMap::new(),
+        }
+    }
     pub fn record(&mut self, name: &str, ticks: u64, ok: bool) {
         let entry = self.scores.entry(String::from(name)).or_insert(SkillScore {
-            skill: String::from(name), avg_ticks: 0, success_rate: 1.0, calls: 0,
+            skill: String::from(name),
+            avg_ticks: 0,
+            success_rate: 1.0,
+            calls: 0,
         });
         let n = entry.calls as f32;
         entry.avg_ticks = ((entry.avg_ticks as f32 * n + ticks as f32) / (n + 1.0)) as u64;
@@ -346,15 +450,23 @@ impl SkillMarket {
     }
     pub fn top(&self, n: usize) -> Vec<&SkillScore> {
         let mut v: Vec<_> = self.scores.values().collect();
-        v.sort_by(|a, b| b.success_rate.partial_cmp(&a.success_rate).unwrap());
+        v.sort_by(|a, b| b.success_rate.total_cmp(&a.success_rate));
         v.truncate(n);
         v
     }
     pub fn report(&self) -> String {
         let mut out = String::from("Skill Market Scoreboard:\n");
         for s in self.scores.values() {
-            let _ = core::fmt::write(&mut out, format_args!("  {}: {} ticks {}% ({})\n",
-                s.skill, s.avg_ticks, (s.success_rate * 100.0) as u8, s.calls));
+            let _ = core::fmt::write(
+                &mut out,
+                format_args!(
+                    "  {}: {} ticks {}% ({})\n",
+                    s.skill,
+                    s.avg_ticks,
+                    (s.success_rate * 100.0) as u8,
+                    s.calls
+                ),
+            );
         }
         out
     }
@@ -390,15 +502,20 @@ impl WasmSkillRuntime {
     }
 
     pub fn load_skill(&mut self, name: &str, bytecode: Vec<Op>, manifest: WasmSkillManifest) {
-        if self.manifests.contains_key(name) { return; }
+        if self.manifests.contains_key(name) {
+            return;
+        }
         self.pool.alloc(name);
-        self.registry.register(name, AgentOrigin::Wasm(bytecode), manifest.clone());
+        self.registry
+            .register(name, AgentOrigin::Wasm(bytecode), manifest.clone());
         self.manifests.insert(String::from(name), manifest);
         kjson!("WASM", "RT", "load", "name", name);
     }
 
     pub fn create_skill(&mut self, description: &str, name: &str) {
-        if self.manifests.contains_key(name) { return; }
+        if self.manifests.contains_key(name) {
+            return;
+        }
         let (code, manifest) = generate_skill_wasm(description, name);
         self.hub.register(name, description, "1.0", "ide");
         self.load_skill(name, code, manifest);
@@ -471,7 +588,9 @@ impl WasmSkillRuntime {
     pub fn report(&self) -> String {
         alloc::format!(
             "[WASM-RT] {} skills loaded, {}, {}\n{}",
-            self.manifests.len(), self.pool.status(), self.hub.status(),
+            self.manifests.len(),
+            self.pool.status(),
+            self.hub.status(),
             self.market.report()
         )
     }

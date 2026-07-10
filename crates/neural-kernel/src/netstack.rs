@@ -2,18 +2,19 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 /// Injeta pacote RX vindo do MSI-X/WiFi diretamente na interface smoltcp.
-pub fn inject_rx_packet(_pkt: &[u8]) {
-}
-use core::sync::atomic::{AtomicU64, Ordering};
+pub fn inject_rx_packet(_pkt: &[u8]) {}
 use crate::slip;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 fn ip_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
     for chunk in data.chunks(2) {
-        let word = u16::from_le_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
+        let word = u16::from_be_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
         sum = sum.wrapping_add(word as u32);
     }
-    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
     !(sum as u16)
 }
 
@@ -21,7 +22,9 @@ fn ip_checksum(data: &[u8]) -> u16 {
 /// Pipelines de ataque: constroi frame IPv4+UDP+DNS e envia via slip::send().
 pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
     let hostname = hostname.trim_end_matches('.');
-    if hostname.is_empty() { return None; }
+    if hostname.is_empty() {
+        return None;
+    }
 
     // 1. DNS name encoding
     let mut qname = Vec::new();
@@ -34,15 +37,15 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     // 2. DNS query payload (header 12B + question)
     let txid: u16 = 0x1234;
     let mut dns = Vec::with_capacity(12 + qname.len() + 4);
-    dns.extend_from_slice(&txid.to_be_bytes());     // TXID
-    dns.extend_from_slice(&[0x01, 0x00]);             // flags: standard query
-    dns.extend_from_slice(&[0x00, 0x01]);             // QDCOUNT: 1 question
-    dns.extend_from_slice(&[0x00, 0x00]);             // ANCOUNT
-    dns.extend_from_slice(&[0x00, 0x00]);             // NSCOUNT
-    dns.extend_from_slice(&[0x00, 0x00]);             // ARCOUNT
-    dns.extend_from_slice(&qname);                     // question name
-    dns.extend_from_slice(&[0x00, 0x01]);             // QTYPE: A
-    dns.extend_from_slice(&[0x00, 0x01]);             // QCLASS: IN
+    dns.extend_from_slice(&txid.to_be_bytes()); // TXID
+    dns.extend_from_slice(&[0x01, 0x00]); // flags: standard query
+    dns.extend_from_slice(&[0x00, 0x01]); // QDCOUNT: 1 question
+    dns.extend_from_slice(&[0x00, 0x00]); // ANCOUNT
+    dns.extend_from_slice(&[0x00, 0x00]); // NSCOUNT
+    dns.extend_from_slice(&[0x00, 0x00]); // ARCOUNT
+    dns.extend_from_slice(&qname); // question name
+    dns.extend_from_slice(&[0x00, 0x01]); // QTYPE: A
+    dns.extend_from_slice(&[0x00, 0x01]); // QCLASS: IN
 
     // 3. UDP header (8B) + DNS payload
     let src_port: u16 = 54321;
@@ -62,53 +65,75 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     ip[1] = 0;
     ip[2..4].copy_from_slice(&(total_len as u16).to_be_bytes());
     ip[4..8].copy_from_slice(&[0, 0, 0x40, 0x00]); // ID + flags/frag
-    ip[8] = 64;                                     // TTL
-    ip[9] = 17;                                     // UDP
-    ip[10..12].copy_from_slice(&[0, 0]);            // checksum placeholder
+    ip[8] = 64; // TTL
+    ip[9] = 17; // UDP
+    ip[10..12].copy_from_slice(&[0, 0]); // checksum placeholder
     ip[12..16].copy_from_slice(&[10, 0, 2, 15]); // src IP
-    ip[16..20].copy_from_slice(&dns_server);       // dst IP
+    ip[16..20].copy_from_slice(&dns_server); // dst IP
     let cs = ip_checksum(&ip);
     ip[10..12].copy_from_slice(&cs.to_be_bytes());
 
-    // 5. Build Ethernet frame: dst MAC (bridge) + src MAC (fake) + EtherType (IPv4)
-    let fake_src_mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0xFE]; // kernel MAC
-    let fake_dst_mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0xFF]; // bridge MAC
-    let mut frame = Vec::with_capacity(14 + 20 + udp_data.len());
-    frame.extend_from_slice(&fake_dst_mac);
-    frame.extend_from_slice(&fake_src_mac);
-    frame.extend_from_slice(&[0x08, 0x00]); // EtherType IPv4
+    // 5. Serial SLIP tunnel carries raw IPv4 packets, not Ethernet frames.
+    let mut frame = Vec::with_capacity(20 + udp_data.len());
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
 
-    crate::serial_println!("[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
-        hostname, dns_server[0], dns_server[1], dns_server[2], dns_server[3], frame.len());
+    crate::serial_println!(
+        "[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
+        hostname,
+        dns_server[0],
+        dns_server[1],
+        dns_server[2],
+        dns_server[3],
+        frame.len()
+    );
 
-    unsafe { slip::send(&frame); }
+    unsafe {
+        slip::send(&frame);
+    }
 
     // 6. Poll for response (até ~200 iterações)
     for i in 0..200 {
         if let Some(resp) = unsafe { slip::recv() } {
-            if resp.len() >= 42 { // IP(20) + UDP(8) + DNS header(12) + answer
+            if resp.len() >= 42 {
+                // IP(20) + UDP(8) + DNS header(12) + answer
                 let dns_offset = 20 + 8; // skip IP + UDP
                 let resp_txid = u16::from_be_bytes([resp[dns_offset], resp[dns_offset + 1]]);
                 if resp_txid == txid {
                     let flags = u16::from_be_bytes([resp[dns_offset + 2], resp[dns_offset + 3]]);
                     if flags & 0x8000 != 0 {
-                        let ancount = u16::from_be_bytes([resp[dns_offset + 6], resp[dns_offset + 7]]);
+                        let ancount =
+                            u16::from_be_bytes([resp[dns_offset + 6], resp[dns_offset + 7]]);
                         if ancount > 0 {
                             // Skip question section to find answer
                             let mut pos = dns_offset + 12;
                             while pos < resp.len() && resp[pos] != 0 {
-                                if resp[pos] & 0xC0 == 0xC0 { pos += 2; break; }
+                                if resp[pos] & 0xC0 == 0xC0 {
+                                    pos += 2;
+                                    break;
+                                }
                                 pos += 1 + resp[pos] as usize;
                             }
-                            if pos < resp.len() { pos += 5; } // null term + type + class + TTL
+                            if pos < resp.len() {
+                                pos += 5;
+                            } // null term + type + class + TTL
                             if pos + 10 <= resp.len() {
-                                let rdlen = u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
-                                if rdlen == 4 && pos + 12 <= resp.len() {
-                                    let ip = [resp[pos + 10], resp[pos + 11], resp[pos + 12], resp[pos + 13]];
-                                    crate::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
-                                        ip[0], ip[1], ip[2], ip[3]);
+                                let rdlen =
+                                    u16::from_be_bytes([resp[pos + 8], resp[pos + 9]]) as usize;
+                                if rdlen == 4 && pos + 14 <= resp.len() {
+                                    let ip = [
+                                        resp[pos + 10],
+                                        resp[pos + 11],
+                                        resp[pos + 12],
+                                        resp[pos + 13],
+                                    ];
+                                    crate::serial_println!(
+                                        "[DNS-MANUAL] OK: {}.{}.{}.{}",
+                                        ip[0],
+                                        ip[1],
+                                        ip[2],
+                                        ip[3]
+                                    );
                                     return Some(ip);
                                 }
                             }
@@ -119,31 +144,39 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
         }
         if i % 50 == 0 {
             // Re-send query every 50 iterations (in case lost)
-            unsafe { slip::send(&frame); }
+            unsafe {
+                slip::send(&frame);
+            }
         }
     }
     crate::serial_println!("[DNS-MANUAL] Timeout");
     None
 }
-use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
+use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 
 static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
 static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
-pub fn net_tx_count() -> u64 { NET_TX_COUNT.load(Ordering::Relaxed) }
-pub fn net_rx_count() -> u64 { NET_RX_COUNT.load(Ordering::Relaxed) }
-use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, IpCidr};
-use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
-use smoltcp::socket::udp as udp_socket;
-use smoltcp::socket::dhcpv4::{Event as DhcpEvent, Socket as DhcpSocket};
+pub fn net_tx_count() -> u64 {
+    NET_TX_COUNT.load(Ordering::Relaxed)
+}
+pub fn net_rx_count() -> u64 {
+    NET_RX_COUNT.load(Ordering::Relaxed)
+}
 use crate::net::VIRTIO_DEV;
+use smoltcp::socket::dhcpv4::{Event as DhcpEvent, Socket as DhcpSocket};
+use smoltcp::socket::tcp::{self, Socket as TcpSocket, State as TcpState};
+use smoltcp::socket::udp as udp_socket;
+use smoltcp::time::Instant;
+use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
 pub struct PhyToken(pub Vec<u8>);
 
 impl RxToken for PhyToken {
     fn consume<R, F>(self, f: F) -> R
-    where F: FnOnce(&[u8]) -> R {
+    where
+        F: FnOnce(&[u8]) -> R,
+    {
         NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
         f(&self.0)
     }
@@ -151,7 +184,9 @@ impl RxToken for PhyToken {
 
 impl TxToken for PhyToken {
     fn consume<R, F>(self, len: usize, f: F) -> R
-    where F: FnOnce(&mut [u8]) -> R {
+    where
+        F: FnOnce(&mut [u8]) -> R,
+    {
         NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
         let mut buf = vec![0u8; len];
         let r = f(&mut buf);
@@ -163,16 +198,21 @@ impl TxToken for PhyToken {
 unsafe fn nic_send(data: Vec<u8>) {
     // VirtIO-Net (mais rapido em QEMU)
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
-        nic.send(&data); return;
+        nic.send(&data);
+        return;
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
-        nic.send(&data); return;
+        nic.send(&data);
+        return;
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
-        nic.send(&data); return;
+        nic.send(&data);
+        return;
     }
     crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
-        if let Some(wifi) = driver { let _ = wifi.send_packet(&data); }
+        if let Some(wifi) = driver {
+            let _ = wifi.send_packet(&data);
+        }
     });
     crate::slip::send(&data);
 }
@@ -180,13 +220,19 @@ unsafe fn nic_send(data: Vec<u8>) {
 unsafe fn nic_recv() -> Option<Vec<u8>> {
     // VirtIO-Net first (mais rapido em QEMU)
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
-        if let Some(pkt) = nic.recv() { return Some(pkt); }
+        if let Some(pkt) = nic.recv() {
+            return Some(pkt);
+        }
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
-        if let Some(pkt) = nic.recv() { return Some(pkt); }
+        if let Some(pkt) = nic.recv() {
+            return Some(pkt);
+        }
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
-        if let Some(pkt) = nic.recv() { return Some(pkt); }
+        if let Some(pkt) = nic.recv() {
+            return Some(pkt);
+        }
     }
     // Generic WiFi driver — bridge formal smoltcp::phy::Device via WifiChipset trait
     let mut wifi_pkt: Option<Vec<u8>> = None;
@@ -226,7 +272,9 @@ impl Device for NetPhy {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
         if let Some(ref d) = data {
-            unsafe { crate::serial_println!("[NET-RX] {} bytes", d.len()); }
+            unsafe {
+                crate::serial_println!("[NET-RX] {} bytes", d.len());
+            }
         }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
@@ -282,23 +330,42 @@ impl NetStack {
         let dhcp = DhcpSocket::new();
         let dhcp_handle = sockets.add(dhcp);
 
-        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0 }
+        NetStack {
+            iface,
+            sockets,
+            phy,
+            dhcp_handle,
+            dhcp_done: false,
+            has_static_ip: false,
+            tx_count: 0,
+            rx_count: 0,
+        }
     }
 
     /// Configura IP estatico para QEMU user-mode (10.0.2.15/24)
     pub fn set_static_ip(&mut self) {
         let ip = Ipv4Address::new(10, 0, 2, 15);
         let cidr = IpCidr::new(IpAddress::Ipv4(ip), 24);
-        self.iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
+        self.iface.update_ip_addrs(|addrs| {
+            addrs.push(cidr).ok();
+        });
         let gw = Ipv4Address::new(10, 0, 2, 2);
-        self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
+        self.iface
+            .routes_mut()
+            .add_default_ipv4_route(gw.into())
+            .ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
         crate::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2");
     }
 
     pub fn poll(&mut self, now_ms: i64) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+        let Self {
+            ref mut iface,
+            ref mut phy,
+            ref mut sockets,
+            ..
+        } = self;
         let now = Instant::from_millis(now_ms);
         // Poll in tight loop until no more work — required for DHCP multi-step
         loop {
@@ -317,7 +384,13 @@ impl NetStack {
 
     /// Poll DHCP — multi-step DISCOVER→OFFER→REQUEST→ACK
     pub fn dhcp_poll(&mut self, now_ms: i64) -> (bool, [u8; 4], [u8; 4]) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets, ref mut dhcp_done, .. } = self;
+        let Self {
+            ref mut iface,
+            ref mut phy,
+            ref mut sockets,
+            ref mut dhcp_done,
+            ..
+        } = self;
         let now = Instant::from_millis(now_ms);
         // Tight poll loop
         loop {
@@ -334,13 +407,22 @@ impl NetStack {
                 DhcpEvent::Configured(config) => {
                     // Apply IP address from DHCP
                     let cidr = smoltcp::wire::IpCidr::Ipv4(config.address);
-                    iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
+                    iface.update_ip_addrs(|addrs| {
+                        addrs.push(cidr).ok();
+                    });
                     // Apply default route via DHCP router
                     if let Some(router) = config.router {
-                        iface.routes_mut().add_default_ipv4_route(router.into()).ok();
+                        iface
+                            .routes_mut()
+                            .add_default_ipv4_route(router.into())
+                            .ok();
                     }
                     let gw = config.router.map(|r| r.octets()).unwrap_or([0; 4]);
-                    let dns = config.dns_servers.first().map(|s| s.octets()).unwrap_or([10, 0, 2, 3]);
+                    let dns = config
+                        .dns_servers
+                        .first()
+                        .map(|s| s.octets())
+                        .unwrap_or([10, 0, 2, 3]);
                     *dhcp_done = true;
                     return (true, gw, dns);
                 }
@@ -365,7 +447,11 @@ impl NetStack {
 
         let request = alloc::format!(
             "GET {} HTTP/1.1\r\nHost: {}.{}.{}.{}\r\nConnection: close\r\n\r\n",
-            path, host[0], host[1], host[2], host[3]
+            path,
+            host[0],
+            host[1],
+            host[2],
+            host[3]
         );
 
         HttpConn {
@@ -379,7 +465,12 @@ impl NetStack {
     }
 
     pub fn http_poll(&mut self, conn: &mut HttpConn, now: u64) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+        let Self {
+            ref mut iface,
+            ref mut phy,
+            ref mut sockets,
+            ..
+        } = self;
         iface.poll(Instant::from_millis(now as i64), phy, sockets);
 
         conn.timeout = conn.timeout.wrapping_add(1);
@@ -444,7 +535,12 @@ impl NetStack {
     }
 
     pub fn http_close(&mut self, conn: &mut HttpConn) {
-        let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+        let Self {
+            ref mut iface,
+            ref mut phy,
+            ref mut sockets,
+            ..
+        } = self;
         let tcp = sockets.get_mut::<TcpSocket>(conn.handle);
         tcp.close();
         iface.poll(Instant::from_millis(0), phy, sockets);
@@ -466,12 +562,17 @@ impl NetStack {
         query.extend_from_slice(&[0x00, 0x01]);
         query.extend_from_slice(&[0x00, 0x01]);
 
-        let dns_server_addr = (IpAddress::v4(dns_server[0], dns_server[1], dns_server[2], dns_server[3]), 53u16);
+        let dns_server_addr = (
+            IpAddress::v4(dns_server[0], dns_server[1], dns_server[2], dns_server[3]),
+            53u16,
+        );
 
-        let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
+        let meta =
+            vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
         let payload = vec![0u8; 512];
         let buf_rx = udp_socket::PacketBuffer::new(meta, payload);
-        let meta2 = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
+        let meta2 =
+            vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
         let payload2 = vec![0u8; 512];
         let buf_tx = udp_socket::PacketBuffer::new(meta2, payload2);
         let socket = udp_socket::Socket::new(buf_rx, buf_tx);
@@ -486,7 +587,12 @@ impl NetStack {
         }
 
         for i in 0..500 {
-            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+            let Self {
+                ref mut iface,
+                ref mut phy,
+                ref mut sockets,
+                ..
+            } = self;
             iface.poll(Instant::from_millis(i as i64 * 5), phy, sockets);
 
             let payload = {
@@ -495,13 +601,21 @@ impl NetStack {
             };
 
             if let Some(ref data) = payload {
-                if data.len() < 12 { break; }
+                if data.len() < 12 {
+                    break;
+                }
                 let resp_txid = u16::from_be_bytes([data[0], data[1]]);
-                if resp_txid != txid { continue; }
+                if resp_txid != txid {
+                    continue;
+                }
                 let flags = u16::from_be_bytes([data[2], data[3]]);
-                if flags & 0x8000 == 0 { continue; }
+                if flags & 0x8000 == 0 {
+                    continue;
+                }
                 let ancount = u16::from_be_bytes([data[6], data[7]]);
-                if ancount == 0 { break; }
+                if ancount == 0 {
+                    break;
+                }
 
                 let (mut pos, _) = Self::parse_dns_name(data, 12);
                 pos += 4;
@@ -511,7 +625,12 @@ impl NetStack {
                     pos = new_pos;
                     let rtype = u16::from_be_bytes([data[pos], data[pos + 1]]);
                     let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
-                    let _ttl = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
+                    let _ttl = u32::from_be_bytes([
+                        data[pos + 4],
+                        data[pos + 5],
+                        data[pos + 6],
+                        data[pos + 7],
+                    ]);
                     let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
                     pos += 10;
 
@@ -546,7 +665,9 @@ impl NetStack {
         while pos < pkt.len() {
             let b = pkt[pos];
             if b & 0xC0 == 0xC0 {
-                if !jumped { end = pos + 2; }
+                if !jumped {
+                    end = pos + 2;
+                }
                 pos = ((b as usize & 0x3F) << 8) | (pkt[pos + 1] as usize);
                 jumped = true;
             } else if b == 0 {

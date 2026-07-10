@@ -23,13 +23,20 @@ pub struct SkillMarket {
 }
 
 impl SkillMarket {
-    pub fn new() -> Self { SkillMarket { scores: BTreeMap::new() } }
+    pub fn new() -> Self {
+        SkillMarket {
+            scores: BTreeMap::new(),
+        }
+    }
 
     pub fn record(&mut self, agent: &str, skill: &str, ticks: u64, ok: bool) {
         let key = (String::from(agent), String::from(skill));
         let entry = self.scores.entry(key).or_insert(SkillScore {
-            agent: String::from(agent), skill: String::from(skill),
-            avg_ticks: 0, success_rate: 1.0, calls: 0,
+            agent: String::from(agent),
+            skill: String::from(skill),
+            avg_ticks: 0,
+            success_rate: 1.0,
+            calls: 0,
         });
         let n = entry.calls as f32;
         entry.avg_ticks = ((entry.avg_ticks as f32 * n + ticks as f32) / (n + 1.0)) as u64;
@@ -38,15 +45,16 @@ impl SkillMarket {
     }
 
     pub fn best_agent(&self, skill: &str) -> Option<&str> {
-        self.scores.iter()
+        self.scores
+            .iter()
             .filter(|((_, s), _)| s == skill)
-            .max_by(|a, b| a.1.success_rate.partial_cmp(&b.1.success_rate).unwrap())
+            .max_by(|a, b| a.1.success_rate.total_cmp(&b.1.success_rate))
             .map(|((a, _), _)| a.as_str())
     }
 
     pub fn top_skills(&self, n: usize) -> Vec<&SkillScore> {
         let mut v: Vec<_> = self.scores.values().collect();
-        v.sort_by(|a, b| b.success_rate.partial_cmp(&a.success_rate).unwrap());
+        v.sort_by(|a, b| b.success_rate.total_cmp(&a.success_rate));
         v.truncate(n);
         v
     }
@@ -54,8 +62,17 @@ impl SkillMarket {
     pub fn report(&self) -> String {
         let mut out = String::from("Skill Market Report:\n");
         for s in self.scores.values() {
-            let _ = core::fmt::write(&mut out, format_args!("  {}:{} {} ticks {}% ({})\n",
-                s.agent, s.skill, s.avg_ticks, (s.success_rate * 100.0) as u8, s.calls));
+            let _ = core::fmt::write(
+                &mut out,
+                format_args!(
+                    "  {}:{} {} ticks {}% ({})\n",
+                    s.agent,
+                    s.skill,
+                    s.avg_ticks,
+                    (s.success_rate * 100.0) as u8,
+                    s.calls
+                ),
+            );
         }
         out
     }

@@ -1,9 +1,9 @@
 //! HNSW (Hierarchical Navigable Small World) index para busca aproximada.
 //! Multi-layer graph, O(log N) search. Baseado em Malkov & Yashunin (2016).
 
-use alloc::vec::Vec;
-use alloc::vec;
 use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 const ML: f32 = 0.7;
@@ -29,7 +29,9 @@ impl Ord for Candidate {
     }
 }
 impl PartialOrd for Candidate {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 pub struct HnswIndex {
@@ -42,11 +44,21 @@ pub struct HnswIndex {
 
 impl HnswIndex {
     pub fn new(dim: usize) -> Self {
-        HnswIndex { nodes: Vec::new(), dim, max_level: 0, enter_point: None, dist_calls: 0 }
+        HnswIndex {
+            nodes: Vec::new(),
+            dim,
+            max_level: 0,
+            enter_point: None,
+            dist_calls: 0,
+        }
     }
 
-    pub fn len(&self) -> usize { self.nodes.len() }
-    pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
 
     fn random_level() -> usize {
         let r = crate::hw_rng::HardwareRandom::next_u64_retry(5).unwrap_or(42);
@@ -63,7 +75,13 @@ impl HnswIndex {
         d
     }
 
-    fn search_layer(&mut self, query: &[f32], entry: u32, level: usize, ef: usize) -> Vec<(f32, u32)> {
+    fn search_layer(
+        &mut self,
+        query: &[f32],
+        entry: u32,
+        level: usize,
+        ef: usize,
+    ) -> Vec<(f32, u32)> {
         let n = self.nodes.len();
         let mut visited = vec![false; n];
         let mut candidates = Vec::new();
@@ -77,12 +95,18 @@ impl HnswIndex {
 
         while let Some(Candidate(d, node_id)) = candidates.pop() {
             let farthest = results.last().map(|c| c.0).unwrap_or(f32::MAX);
-            if d > farthest { break; }
+            if d > farthest {
+                break;
+            }
             let conns: Vec<u32> = if level < self.nodes[node_id as usize].connections.len() {
                 self.nodes[node_id as usize].connections[level].clone()
-            } else { Vec::new() };
+            } else {
+                Vec::new()
+            };
             for &neighbor in &conns {
-                if visited[neighbor as usize] { continue; }
+                if visited[neighbor as usize] {
+                    continue;
+                }
                 visited[neighbor as usize] = true;
                 let dist = self.l2_dist(query, &self.nodes[neighbor as usize].vector);
                 self.dist_calls += 1;
@@ -91,7 +115,9 @@ impl HnswIndex {
                     candidates.push(Candidate(dist, neighbor));
                     results.push(Candidate(dist, neighbor));
                     results.sort();
-                    while results.len() > ef { results.pop(); }
+                    while results.len() > ef {
+                        results.pop();
+                    }
                 }
             }
         }
@@ -101,7 +127,12 @@ impl HnswIndex {
 
     pub fn insert(&mut self, id: u32, vector: Vec<f32>) {
         let level = Self::random_level();
-        let node = HnswNode { id, vector, level, connections: Vec::new() };
+        let node = HnswNode {
+            id,
+            vector,
+            level,
+            connections: Vec::new(),
+        };
         self.nodes.push(node);
         let node_idx = (self.nodes.len() - 1) as u32;
 
@@ -116,13 +147,17 @@ impl HnswIndex {
             return;
         }
 
-        let ep = self.enter_point.unwrap();
+        let Some(ep) = self.enter_point else {
+            return;
+        };
         let mut curr_entry = ep;
         let query_vec = self.nodes[node_idx as usize].vector.clone();
 
         for l in (level + 1..=self.max_level).rev() {
             let result = self.search_layer(&query_vec, curr_entry, l, 1);
-            if let Some(&(_, next)) = result.first() { curr_entry = next; }
+            if let Some(&(_, next)) = result.first() {
+                curr_entry = next;
+            }
         }
 
         for l in (0..=level.min(self.max_level)).rev() {
@@ -143,42 +178,68 @@ impl HnswIndex {
                     self.shrink_connections(neighbor, l);
                 }
             }
-            if !candidates.is_empty() { curr_entry = candidates[0].1; }
+            if !candidates.is_empty() {
+                curr_entry = candidates[0].1;
+            }
         }
 
-        if level > self.max_level { self.max_level = level; self.enter_point = Some(node_idx); }
+        if level > self.max_level {
+            self.max_level = level;
+            self.enter_point = Some(node_idx);
+        }
     }
 
     fn shrink_connections(&mut self, node_id: u32, level: usize) {
         let max_conn = if level == 0 { M0 } else { M };
         let neighbors = self.nodes[node_id as usize].connections[level].clone();
-        let mut scored: Vec<(f32, u32)> = neighbors.iter()
+        let mut scored: Vec<(f32, u32)> = neighbors
+            .iter()
             .map(|&n| {
-                let d = self.l2_dist(&self.nodes[node_id as usize].vector, &self.nodes[n as usize].vector);
+                let d = self.l2_dist(
+                    &self.nodes[node_id as usize].vector,
+                    &self.nodes[n as usize].vector,
+                );
                 (d, n)
-            }).collect();
+            })
+            .collect();
         self.dist_calls += neighbors.len() as u64;
-        scored.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        self.nodes[node_id as usize].connections[level] = scored.iter().take(max_conn).map(|&(_, n)| n).collect();
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+        self.nodes[node_id as usize].connections[level] =
+            scored.iter().take(max_conn).map(|&(_, n)| n).collect();
     }
 
     pub fn search(&mut self, query: &[f32], k: usize) -> Vec<(f32, u32)> {
-        if self.is_empty() { return Vec::new(); }
-        let ep = self.enter_point.unwrap();
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let Some(ep) = self.enter_point else {
+            return Vec::new();
+        };
         let mut curr_entry = ep;
         for l in (1..=self.max_level).rev() {
             let result = self.search_layer(query, curr_entry, l, 1);
-            if let Some(&(_, next)) = result.first() { curr_entry = next; }
+            if let Some(&(_, next)) = result.first() {
+                curr_entry = next;
+            }
         }
         let candidates = self.search_layer(query, curr_entry, 0, EF_SEARCH);
         let mut results: Vec<(f32, u32)> = candidates.into_iter().take(k).collect();
-        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        results.sort_by(|a, b| a.0.total_cmp(&b.0));
         results
     }
 
     pub fn stats(&self) -> String {
-        let total: usize = self.nodes.iter().map(|n| n.connections.iter().map(|c| c.len()).sum::<usize>()).sum();
-        alloc::format!("[HNSW] {} nodes, {} lvls, {} conns, {} dist",
-            self.nodes.len(), self.max_level + 1, total, self.dist_calls)
+        let total: usize = self
+            .nodes
+            .iter()
+            .map(|n| n.connections.iter().map(|c| c.len()).sum::<usize>())
+            .sum();
+        alloc::format!(
+            "[HNSW] {} nodes, {} lvls, {} conns, {} dist",
+            self.nodes.len(),
+            self.max_level + 1,
+            total,
+            self.dist_calls
+        )
     }
 }

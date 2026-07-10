@@ -20,15 +20,20 @@ impl Stage {
     pub fn run(&self) -> bool {
         let mut best: Option<&Provider> = None;
         for p in &self.providers {
-            if best.is_none() || p.score > best.unwrap().score {
-                best = Some(p);
+            match best {
+                Some(current) if current.score >= p.score => {}
+                _ => best = Some(p),
             }
         }
         if let Some(p) = best {
-            if (p.activate)() { return true; }
+            if (p.activate)() {
+                return true;
+            }
         }
         for p in &self.providers {
-            if (p.activate)() { return true; }
+            if (p.activate)() {
+                return true;
+            }
         }
         !self.required
     }
@@ -39,13 +44,19 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub const fn new() -> Self { Pipeline { stages: Vec::new() } }
+    pub const fn new() -> Self {
+        Pipeline { stages: Vec::new() }
+    }
 
-    pub fn add(&mut self, stage: Stage) { self.stages.push(stage); }
+    pub fn add(&mut self, stage: Stage) {
+        self.stages.push(stage);
+    }
 
     pub fn run(&mut self) -> bool {
         for s in &self.stages {
-            if !s.run() { return false; }
+            if !s.run() {
+                return false;
+            }
         }
         true
     }
