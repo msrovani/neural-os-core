@@ -1376,6 +1376,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 
+    // WASM Runtime (Sprint 93): embedder + IDE + Plugin Hub
+
+    let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
+
+    kjson!("BOOT", "WASM", "runtime", "skills", 2);
+
+
+
     // Carrega modelos do FAT32: BGE.BIN — tenta AHCI primeiro, fallback ATA
     unsafe fn read_file_from_dev(dev: &mut dyn crate::block_dev::BlockDevice, name: &str) -> Option<alloc::vec::Vec<u8>> {
         // Le MBR
