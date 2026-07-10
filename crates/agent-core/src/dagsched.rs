@@ -1,7 +1,6 @@
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
-use crate::pipeline::{Pipeline, Stage, Provider};
 
 pub struct DagScheduler {
     pub deps: BTreeMap<&'static str, Vec<&'static str>>,

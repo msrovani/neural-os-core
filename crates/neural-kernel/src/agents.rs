@@ -469,12 +469,12 @@ impl Agent for HermesAgent {
         // ── Processamento de eventos (o trabalho real) ──
         let mut had_work = false;
         let mut responded = String::new();
-        let mut awaiting = matches!(self.state, HermesState::AwaitingLLM);
+        let awaiting = matches!(self.state, HermesState::AwaitingLLM);
 
         // Check LLM response
         if awaiting {
             if let Some(event) = self.llm_receiver.try_receive() {
-                had_work = true; awaiting = false;
+                had_work = true;
                 self.state = HermesState::Idle;
                 // Sprint 78: WorkflowEngine — avança ao receber LLM response
                 if self.workflow_engine.is_active() {
@@ -563,6 +563,9 @@ impl Agent for HermesAgent {
                 hermes::Command::RmSkill(_) => "RmSkill",
                 hermes::Command::ReloadSkills => "ReloadSkills",
                 hermes::Command::Profile => "Profile",
+                hermes::Command::Approve(_) => "Approve",
+                hermes::Command::Deny(_) => "Deny",
+                hermes::Command::PendingApprovals => "PendingApprovals",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
@@ -687,6 +690,42 @@ impl Agent for HermesAgent {
                 hermes::Command::TrustDeny(token, ref skill) => {
                     TRUST_CACHE.lock().trust_deny(token, skill);
                     alloc::format!("Trust revogado: token {} -> skill '{}'", token, skill)
+                }
+                hermes::Command::Approve(id) => {
+                    if crate::APPROVAL_GATE.lock().resolve(id, true) {
+                        alloc::format!("Requisicao #{} aprovada.", id)
+                    } else {
+                        alloc::format!("Requisicao #{} nao encontrada ou ja resolvida.", id)
+                    }
+                }
+                hermes::Command::Deny(id) => {
+                    if crate::APPROVAL_GATE.lock().resolve(id, false) {
+                        alloc::format!("Requisicao #{} negada.", id)
+                    } else {
+                        alloc::format!("Requisicao #{} nao encontrada ou ja resolvida.", id)
+                    }
+                }
+                hermes::Command::PendingApprovals => {
+                    let pending = {
+                        let gate = crate::APPROVAL_GATE.lock();
+                        gate.pending().iter().map(|r| (
+                            r.id, r.skill.clone(), r.agent.clone(), r.reason.clone(),
+                            alloc::string::String::from(r.required_level.name())
+                        )).collect::<Vec<_>>()
+                    };
+                    if pending.is_empty() {
+                        String::from("Nenhuma requisicao pendente.")
+                    } else {
+                        let mut msg = String::from("Requisicoes pendentes:\n");
+                        for (id, skill, agent, reason, level) in &pending {
+                            msg.push_str(&alloc::format!(
+                                "  #{}: '{}' por '{}' - {} (nivel: {})\n",
+                                id, skill, agent, reason, level
+                            ));
+                        }
+                        msg.push_str("Use /approve <id> ou /deny <id>");
+                        msg
+                    }
                 }
                 hermes::Command::Help => {
                     String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill <nome> <desc>, /rm_skill <name>, /reload_skills, /help")
@@ -1397,14 +1436,12 @@ impl Agent for AutoLearnAgent {
             }
         }
         // Verifica necessidades com contagem >= 3
-        let mut had_work = false;
         let topics: Vec<String> = self.needs.iter()
             .filter(|n| n.count >= 3 && !n.triggered)
             .map(|n| n.topic.clone())
             .collect();
         for topic in topics {
             self.learn_topic(&topic);
-            had_work = true;
         }
         AgentTickResult::Pending
     }

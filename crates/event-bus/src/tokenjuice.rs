@@ -1,4 +1,3 @@
-use alloc::string::String;
 use alloc::vec::Vec;
 
 pub struct TokenJuice;
@@ -28,7 +27,7 @@ impl TokenJuice {
         out
     }
 
-    fn skip_tag(s: &str, mut i: usize, closer: &str) -> usize {
+    fn skip_tag(s: &str, i: usize, closer: &str) -> usize {
         if let Some(end) = s[i..].find(closer) { i + end + closer.len() } else { s.len() }
     }
 }

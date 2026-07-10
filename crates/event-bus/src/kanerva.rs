@@ -5,9 +5,8 @@
 //! - Distributed write (espalha por múltiplos endereços)
 
 use alloc::vec::Vec;
-use alloc::vec;
 use alloc::string::String;
-use crate::memory_tree::{MemoryTree, MemNode, MemTier};
+use crate::memory_tree::{MemoryTree, MemTier};
 use core::cmp::Ordering;
 
 /// Dimensão do endereço sparse (bits)

@@ -7,7 +7,7 @@ use x86_64::VirtAddr;
 /// Número de bytes no bitmap para cobrir 4 GB de memória física.
 /// Cada frame de 4 KiB = 1 bit. 1 byte = 8 frames = 32 KiB cobertos por byte.
 /// 131072 bytes × 8 bits × 4096 bytes = 4 GiB.
-pub const BITMAP_SIZE: usize = 131072;
+pub const BITMAP_SIZE: usize = 262144; // 256KB cobre 8GB fisicos
 const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 

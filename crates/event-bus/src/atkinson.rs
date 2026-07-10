@@ -1,7 +1,6 @@
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
-use crate::memory_tree::{MemoryTree, MemTier, MemNode};
+use crate::memory_tree::{MemoryTree, MemTier};
 
 pub struct AtkinsonShiffrin {
     pub sensory: Vec<SensoryItem>,
@@ -58,7 +57,7 @@ impl AtkinsonShiffrin {
         self.ltm.add(self.ltm.root, summary, &data, imp, MemTier::Semantic, LTM_HALF_LIFE)
     }
 
-    pub fn recall(&self, query: &str) -> Vec<&str> {
+    pub fn recall(&self, _query: &str) -> Vec<&str> {
         let mut results = Vec::new();
         for (_, s, _, _) in self.ltm.scout(self.ltm.root, 3) { results.push(s); }
         for (_, s, _, _) in self.stm.scout(self.stm.root, 2) { results.push(s); }

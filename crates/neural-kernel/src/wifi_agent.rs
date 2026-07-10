@@ -7,7 +7,7 @@ use event_bus::{CapabilityToken, Event, Receiver};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
-use crate::generic_wifi::{self, WifiChipset, ACTIVE_DRIVER};
+use crate::generic_wifi::{self, ACTIVE_DRIVER};
 use crate::serial_println;
 
 const WIFI_MANIFEST: AgentManifest = AgentManifest {

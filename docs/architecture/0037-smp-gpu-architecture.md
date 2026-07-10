@@ -1,10 +1,10 @@
 # ADR-0037: SMP + GPU Architecture — Arquitetura Genérica Multiplataforma
 
-**Data:** 2026-07-05 (v4 — arquitetura genérica multiplataforma)
-**Status:** Draft — Em Análise
+**Data:** 2026-07-05 (v5 — 2026-07-10: marcado como implementado)
+**Status:** Implementado
 **Substitui:** ADR-0029 (GPU Architecture) + v3 deste documento
 **Depende de:** ADR-0014 (Ideias de Hardware), ADR-0031 (AIOS Evolution)
-**Sprint Target:** N (SPSC + IPI) até N+3/4 (GPU Compute)
+**Sprint Target:** Completado — SPSC, IPI, PerCpu, work-stealing, GPU detect/ring/doorbell/VRAM todos implementados. Pendente: burn-flex backend full.
 
 ---
 

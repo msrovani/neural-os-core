@@ -185,7 +185,7 @@ impl AgentRegistry {
     /// Associa um agente a um crew
     pub fn assign_to_crew(&mut self, crew_id: crew::CrewId, agent_idx: usize) {
         self.crews.assign_to_crew(crew_id, agent_idx);
-        if let Some(crew) = self.crews.get_mut(crew_id) {
+        if let Some(_crew) = self.crews.get_mut(crew_id) {
             for agent in self.agents.iter_mut() {
                 if agent.crew.crew_id.is_none() {
                     agent.crew.crew_id = Some(crew_id);
@@ -283,6 +283,7 @@ impl AgentRegistry {
     /// `halt()`: called when no agent needs CPU (platform-specific hlt)
     /// `check_respawns(): returns names of agents to re-create (e.g., from RESPAWN_QUEUE)`
     /// `spawn_agent(name): creates a new Agent by name`
+    #[allow(unreachable_code, unreachable_patterns)]
     pub fn run<H: Fn(), C: FnMut() -> Vec<String>, S: Fn(&str) -> Option<Box<dyn Agent>>>(
         &mut self, halt: H, mut check_respawns: C, spawn_agent: S,
     ) -> ! {
@@ -292,10 +293,6 @@ impl AgentRegistry {
             }
             if self.agents[i].agent.manifest().auto_start {
                 self.agents[i].state = AgentState::Active;
-                let name = self.agents[i].agent.manifest().name;
-                // Debug: log activation
-                #[cfg(feature = "kernel")]
-                crate::serial_println!("[SCHEDULER] Activating agent: {}", name);
                 self.agents[i].agent.on_activate();
             }
         }

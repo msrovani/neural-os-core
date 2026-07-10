@@ -12,6 +12,12 @@
 - **Sprint 97** — Rede + AIOS: http_get real, SearchAgent, SelfUpdate A/B slots, ContextWindow
 - **Sprint 98** — Training: TrainingAgent, DataCollector, WakeWordML, Intel compute dispatch
 - **Sprint 99** — SkillOpt + Structured Decoding: Compressed FSM, 6 decode modes, SkillOptimizer
+- **Sprint 92b** — Code Cleanup + ZT Syscall: 94 warnings→0, check_syscall() wireado, serial bridge watchdog
+- **Sprint 93b** — WASM refinements: parse_description refatorado, auto-rollback via snapshot
+- **Sprint 94b** — LLM Icons + Human-in-the-Loop: generate_llm_icon() integrado, /approve/deny/pending
+- **Sprint 96b** — GGUF Streaming + FAT32 chunked: load_gguf_header_from_disk(), read_file_range()
+- **Sprint 97b** — RssAgent + EmailAgent: RSS/Atom parse + SMTP via http_get_raw()
+- **Sprint 98b** — HW Expert GPU Training: 43.339 PCI+USB devices, loss 0.097, 95.4% accuracy
 - **Sprint 100** — **Code Freeze & Release v1.0.0**
 
 ### Funcionalidades Principais

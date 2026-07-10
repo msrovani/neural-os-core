@@ -57,10 +57,8 @@ pub fn run_all_benches() -> Vec<Benchmark> {
 
     // Alloc throughput
     start_bench("alloc_throughput");
-    let mut allocs = 0u64;
     for _ in 0..1000 {
         let _v = alloc::vec![0u8; 64];
-        allocs += 1;
     }
     let b = end_bench("alloc_throughput");
     results.push(b);

@@ -1,6 +1,6 @@
 //! Trust & Security — TrustCache, PermissionMode, MaskSecrets, Graduated Enforcement.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::serial_println;
@@ -100,6 +100,7 @@ pub struct TrustCache {
     denylist: BTreeMap<(u64, String), ()>,
     pub global_policy: PolicyState,
     escalation_log: Vec<String>,
+    exempt_tokens: BTreeSet<u64>,
 }
 
 impl TrustCache {
@@ -109,6 +110,7 @@ impl TrustCache {
             denylist: BTreeMap::new(),
             global_policy: PolicyState::Observe,
             escalation_log: Vec::new(),
+            exempt_tokens: BTreeSet::new(),
         }
     }
 
@@ -148,7 +150,11 @@ impl TrustCache {
     }
 
     fn is_exempt(&self, token: u64) -> bool {
-        token == 0 || token == 1
+        token == 0 || token == 1 || self.exempt_tokens.contains(&token)
+    }
+
+    pub fn add_exempt_token(&mut self, token: u64) {
+        self.exempt_tokens.insert(token);
     }
 
     pub fn check_or_cache(&mut self, token: u64, skill: &str, now: u64, ttl: u64) -> bool {
@@ -230,6 +236,7 @@ impl TrustCache {
             SyscallClass::Hardware => false,
         }
     }
+
 }
 
 /// #364: Quatro classes de syscall zero-trust

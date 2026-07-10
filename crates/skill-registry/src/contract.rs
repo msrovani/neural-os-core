@@ -1,4 +1,3 @@
-use alloc::vec::Vec;
 
 pub type ValidationFn = fn(&[u8]) -> Result<(), &'static str>;
 

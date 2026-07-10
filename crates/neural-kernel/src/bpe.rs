@@ -36,10 +36,7 @@ impl BpeTokenizer {
         // BPE tokenizer parsing is skipped for large tokenizers (>1MB) due to
         // the complexity of JSON parsing (brace-depth tracking over 9M chars is too slow
         // in QEMU, and simple pattern search is fragile with vocab entries containing }, .
-        // Fallback to char-level tokenizer works for basic use.
         return Err("tokenizer too large, using char-level fallback");
-
-        Ok(())
     }
 
     pub fn encode(&self, text: &str) -> Vec<u16> {

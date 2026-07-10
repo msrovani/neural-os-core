@@ -41,7 +41,6 @@ pub struct VerifiedProgram {
 pub fn verify_skill(name: &str, code: &[OpCode]) -> Result<VerifiedProgram, &'static str> {
     let mut max_loops = 0u16;
     let mut stack_size = 0u16;
-    let mut has_halt = false;
     let mut visited = vec![false; code.len()];
 
     for (i, op) in code.iter().enumerate() {
@@ -58,13 +57,12 @@ pub fn verify_skill(name: &str, code: &[OpCode]) -> Result<VerifiedProgram, &'st
                 if *offset > stack_size { return Err("Read beyond stack boundary"); }
             }
             OpCode::Call { skill_id } => {
-                // Skill ID 0 = reserved (blocked)
                 if *skill_id == 0 { return Err("Call to blocked skill (id=0)"); }
             }
             OpCode::Jump { target } => {
                 if *target as usize >= code.len() { return Err("Jump target out of bounds"); }
             }
-            OpCode::Halt => { has_halt = true; }
+            OpCode::Halt => {}
             _ => {}
         }
         visited[i] = true;

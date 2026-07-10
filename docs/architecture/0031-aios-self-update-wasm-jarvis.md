@@ -1,9 +1,10 @@
 # ADR-0031: AIOS Evolution — Self-Update, WASM, J.A.R.V.I.S. & Hybrid Agent Architecture
 
-**Status:** Research  
-**Date:** 2026-07-03  
+**Status:** Implementado (com desvios do plano original)  
+**Date:** 2026-07-03 (revisao: 2026-07-10)  
 **Author:** IDA IA + Dev  
 **Ref:** IDEA_BANK #306–#310  
+**Nota:** O plano original recomendava `wasmi` como runtime WASM. A implementacao real usa um bytecode VM custom (`wasm_exec.rs`) com `Op` enum proprio, mais leve e sem dependencia externa. WASI-to-skill mappings, MemoryPool, fuel metering, e capability tokens foram mantidos conforme o plano.  
 
 ## Executive Summary
 

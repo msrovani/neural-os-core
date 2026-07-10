@@ -27,6 +27,7 @@ pub fn generate_llm_icon(description: &str) -> [u8; 64] {
 
 use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::collections::BTreeMap;
 use spin::Mutex;
 use libm::sinf;
 use crate::display::fb::DoubleBuffer;
@@ -65,12 +66,13 @@ pub struct JarvisDesktop {
     pub active: AppId,
     pub avatar_visible: bool,
     pub w: usize, pub h: usize, pub tick: u64,
+    icon_cache: BTreeMap<String, [u8; 64]>,
 }
 
 impl JarvisDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
-        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0 }
+        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new() }
     }
 
     pub fn register_app(&mut self, id: AppId, title: &str) {
@@ -149,11 +151,23 @@ impl JarvisDesktop {
         self.fb.fill_rect(0, 0, w, 28, 20, 25, 35);
         draw_text(&mut self.fb, 6, 4, &alloc::format!("J.A.R.V.I.S.  t:{}  [F1]Chat [F2]Settings [F3]Power [F4]IDE [F10]Cam [F11]Mic", tick), self.w, 180, 190, 210);
 
-        // Desktop icons for WASM skills
+        // Desktop icons for WASM skills (com LLM icons via HWEXPERT_MODEL)
         for (i, skill) in self.wasm_skills.iter().enumerate() {
             let ix = 20 + (i % 6) * 100; let iy = 40 + (i / 6) * 90;
-            self.fb.fill_rect(ix, iy, 80, 70, 30, 40, 55); // icon bg
-            self.fb.fill_rect(ix + 20, iy + 5, 40, 40, 60, 120, 200); // icon square
+            self.fb.fill_rect(ix, iy, 80, 70, 30, 40, 55);
+
+            // Gera/carrega icone LLM (8x8) e renderiza como 40x40
+            let icon = self.icon_cache.entry(skill.description.clone())
+                .or_insert_with(|| generate_llm_icon(&skill.description));
+            for row in 0..8 {
+                for col in 0..8 {
+                    let p = icon[row * 8 + col];
+                    let r = p.saturating_mul(2).min(255) as u8;
+                    let g = (p / 2) as u8;
+                    let b = (255 - p / 3) as u8;
+                    self.fb.fill_rect(ix + 20 + col * 5, iy + 5 + row * 5, 5, 5, r, g, b);
+                }
+            }
             draw_text(&mut self.fb, ix + 5, iy + 52, &skill.name, self.w, 200, 200, 200);
         }
 

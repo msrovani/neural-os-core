@@ -460,6 +460,11 @@ impl NetStack {
         }
     }
 
+    /// Envia dados brutos via TCP (nao HTTP) — usado por SMTP
+    pub fn http_send_raw(&mut self, conn: &mut HttpConn, data: &[u8]) {
+        conn.request = alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""));
+    }
+
     pub fn http_close(&mut self, conn: &mut HttpConn) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         let tcp = sockets.get_mut::<TcpSocket>(conn.handle);

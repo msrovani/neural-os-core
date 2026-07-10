@@ -1,5 +1,4 @@
 use alloc::collections::VecDeque;
-use alloc::vec::Vec;
 
 const WINDOW_TICKS: u64 = 300;
 const MAX_HASHES: usize = 64;

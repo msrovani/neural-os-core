@@ -1,8 +1,9 @@
-# ADR-0039: Fluxo Completo de Boot — neural-os-core v0.109.0
+# ADR-0039: Fluxo Completo de Boot — neural-os-core v1.0.0
 
-**Data:** 2026-07-08
+**Data:** 2026-07-08 (última revisão: 2026-07-10)
 **Status:** Accepted
 **Propósito:** Documentar exaustivamente o fluxo de boot do kernel, todas as fases, pontos de decisão, fallbacks e onde cada serviço de IA entra.
+**Nota:** O código atual implementa 8 fases (BootPhase: SafeHarbor, MemoryCore, SystemBringup, Diagnostics, HardwareDiscovery, DriverInit, AgentFleet, Runtime). As referencias a numeros de linha neste documento estao defasadas — consultar `main.rs` para localizacoes exatas.
 
 ---
 

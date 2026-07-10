@@ -3,7 +3,6 @@ use core::ptr;
 use core::sync::atomic::Ordering;
 
 global_asm!(
-    ".intel_syntax noprefix",
     ".section .text.trampoline, \"ax\"",
     ".balign 4096",
 

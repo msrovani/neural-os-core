@@ -29,8 +29,6 @@ pub fn load_bge(data: &[u8]) -> bool {
     if off + 4 > data.len() { return false; }
     let ntensors = r4(off - 4) as usize;
 
-    let mut embed_weight: Option<Vec<f32>> = None;
-
     let mut pos = off;
     for _ in 0..ntensors {
         if pos + 64 + 8 > data.len() { break; }
@@ -42,17 +40,15 @@ pub fn load_bge(data: &[u8]) -> bool {
         let f32_bytes = n_orig * 4;
         pos += 64 + 8;
 
-        // Embedding weight: carrega como f32 (nao quantizado para precisao)
         if name.contains("word_embeddings_weight") {
             if pos + f32_bytes <= data.len() {
                 let floats: &[f32] = unsafe {
                     core::slice::from_raw_parts(data[pos..].as_ptr() as *const f32, n_orig)
                 };
-                embed_weight = Some(floats.to_vec());
                 unsafe {
                     BGE_VOCAB = n_orig / hidden;
                     BGE_HIDDEN = hidden;
-                    BGE_WEIGHTS = embed_weight.clone();
+                    BGE_WEIGHTS = Some(floats.to_vec());
                 }
             }
         }

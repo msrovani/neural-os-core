@@ -217,6 +217,66 @@ impl<'a> Fat32Reader<'a> {
         out
     }
 
+    /// Le um range de bytes de um arquivo pelo nome (streaming).
+    /// Retorna bytes de `offset` ate `offset + size` do arquivo.
+    pub unsafe fn read_file_range(&self, name: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
+        let name_upper = name.to_ascii_uppercase();
+        let mut cluster = self.root_cluster;
+
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.cluster_lba(cluster);
+            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
+            for i in 0..self.sectors_per_cluster as u32 {
+                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 { break; }
+                if first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x08 != 0 { continue; }
+                let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
+                if entry_name.trim_end() != name_upper { continue; }
+
+                let file_size = u32::from_le_bytes([
+                    buf[entry_off+28], buf[entry_off+29],
+                    buf[entry_off+30], buf[entry_off+31],
+                ]) as usize;
+                let start_cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
+                let start_cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
+                let start_cluster = ((start_cluster_hi as u32) << 16) | start_cluster_lo as u32;
+
+                let end = (offset + size).min(file_size);
+                if offset >= file_size { return None; }
+                let actual_size = end - offset;
+
+                let mut data = Vec::with_capacity(actual_size);
+                let mut fc = start_cluster;
+                let mut pos = 0usize;
+                while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < actual_size {
+                    let clba = self.cluster_lba(fc);
+                    let cluster_bytes = self.sectors_per_cluster as usize * self.bytes_per_sector as usize;
+                    for si in 0..self.sectors_per_cluster as u32 {
+                        if data.len() >= actual_size { break; }
+                        let sector_start = pos + si as usize * 512;
+                        if sector_start + 512 <= offset {
+                            continue; // skip sectors before offset
+                        }
+                        let mut chunk = [0u8; 512];
+                        self.ata.read_sectors(clba + si, &mut chunk, 1);
+                        let copy_start = if sector_start < offset { offset - sector_start } else { 0 };
+                        let copy_end = 512.min(actual_size - data.len() + copy_start);
+                        data.extend_from_slice(&chunk[copy_start..copy_end]);
+                    }
+                    pos += cluster_bytes;
+                    fc = self.read_fat_entry(fc);
+                }
+                return Some(data);
+            }
+            cluster = self.read_fat_entry(cluster);
+        }
+        None
+    }
+
     /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain)
     pub unsafe fn read_file(&self, name: &str) -> Option<Vec<u8>> {
         let mut cluster = self.root_cluster;

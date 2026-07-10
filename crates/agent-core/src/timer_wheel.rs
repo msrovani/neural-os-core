@@ -1,5 +1,4 @@
 use alloc::collections::VecDeque;
-use alloc::vec;
 use alloc::vec::Vec;
 
 const WHEEL_SLOTS: usize = 64;

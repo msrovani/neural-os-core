@@ -2,6 +2,8 @@
 #![no_main]
 #![allow(dead_code)]
 #![allow(static_mut_refs)]
+#![allow(unused_unsafe)]
+#![allow(unreachable_patterns)]
 #![feature(abi_x86_interrupt)]
 #![feature(alloc_error_handler)]
 
@@ -719,6 +721,8 @@ lazy_static! {
     static ref SELF_HEAL: crate::sync::irq_lock::IrqSafeLock<self_heal::SelfHeal> = crate::sync::irq_lock::IrqSafeLock::new(self_heal::SelfHeal::new());
 
     static ref RESPAWN_QUEUE: crate::sync::irq_lock::IrqSafeLock<alloc::vec::Vec<alloc::string::String>> = crate::sync::irq_lock::IrqSafeLock::new(alloc::vec::Vec::new());
+
+    static ref APPROVAL_GATE: ticket_lock::TicketLock<crate::approval::ApprovalGate> = ticket_lock::TicketLock::new(crate::approval::ApprovalGate::new());
 
     static ref SKILL_STORAGE: ticket_lock::TicketLock<skill_loader::SkillLoader> = {
 

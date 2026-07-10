@@ -165,67 +165,39 @@ pub fn wasm_overhead(syscall: &str) -> &'static str {
 fn parse_description(desc: &str) -> (Vec<Op>, String) {
     use Op::*;
     let d = desc.to_lowercase();
-    let mut out = String::new();
 
-    let code = if d.contains("echo") || d.contains("hello") {
-        out = String::from("echoes input, prints Hello!");
-        vec![Push(0x216f6c6c), Push(0x6548), Print, Push(0x0a), Print, Halt]
-    } else if d.contains("add") || d.contains("sum") || d.contains("calc") || d.contains("calc") {
-        out = String::from("adds 10 + 32, prints result");
-        vec![Push(10), Push(32), Add, Dup, Print, Halt]
+    let (code, summary): (Vec<Op>, &str) = if d.contains("echo") || d.contains("hello") {
+        (vec![Push(0x216f6c6c), Push(0x6548), Print, Push(0x0a), Print, Halt],
+         "echoes input, prints Hello!")
+    } else if d.contains("add") || d.contains("sum") || d.contains("calc") {
+        (vec![Push(10), Push(32), Add, Dup, Print, Halt],
+         "adds 10 + 32, prints result")
     } else if d.contains("mul") || d.contains("multiply") || d.contains("times") {
-        out = String::from("multiplies 7 * 6, prints result");
-        vec![Push(7), Push(6), Mul, Dup, Print, Halt]
+        (vec![Push(7), Push(6), Mul, Dup, Print, Halt],
+         "multiplies 7 * 6, prints result")
     } else if d.contains("sub") || d.contains("subtract") || d.contains("minus") {
-        out = String::from("subtracts 5 from 100, prints result");
-        vec![Push(100), Push(5), Sub, Dup, Print, Halt]
+        (vec![Push(100), Push(5), Sub, Dup, Print, Halt],
+         "subtracts 5 from 100, prints result")
     } else if d.contains("count") || d.contains("inc") || d.contains("loop") {
-        out = String::from("counts 0 to 9, prints each");
-        let mut code = Vec::new();
-        code.push(Push(0)); // counter
-        // loop start (addr 1)
-        code.push(Dup);
-        code.push(Push(10));
-        code.push(Lt);
-        code.push(BrIf(8)); // jump to end if counter >= 10
-        code.push(Dup);
-        code.push(Print);   // print counter
-        code.push(Push(1));
-        code.push(Add);     // counter++
-        code.push(Br(1));   // loop back
-        code.push(Halt);
-        code
+        (vec![Push(0), Dup, Push(10), Lt, BrIf(8), Dup, Print, Push(1), Add, Br(1), Halt],
+         "counts 0 to 9, prints each")
     } else if d.contains("fib") || d.contains("fibonacci") {
-        out = String::from("fibonacci(10), prints result");
-        vec![
-            Push(0), Push(1), Push(10), // a=0, b=1, i=10
-            Dup, Push(0), Gt,
-            BrIf(12), // if i>0 jump forward
-            // loop body
-            Dup2, Add,  // a+b
-            Store(0), Load(0), // swap via mem
-            Push(1), Sub, // i--
-            Br(5), // loop
-            Halt,
-        ]
+        (vec![Push(0), Push(1), Push(10), Dup, Push(0), Gt, BrIf(12), Dup2, Add, Store(0), Load(0), Push(1), Sub, Br(5), Halt],
+         "fibonacci(10), prints result")
     } else if d.contains("fact") || d.contains("factorial") {
-        out = String::from("factorial(6), prints result");
-        vec![Push(6), Push(1), // n, result
-            Dup2, Push(1), Sub, Store(0), // n-1
-            Load(0), Push(0), Gt, BrIf(9), // if n>0 continue
-            Halt,
-        ]
+        (vec![Push(6), Push(1), Dup2, Push(1), Sub, Store(0), Load(0), Push(0), Gt, BrIf(9), Halt],
+         "factorial(6), prints result")
     } else if d.contains("max") || d.contains("min") || d.contains("cmp") {
-        out = String::from("compares 42 and 99, prints max");
-        vec![Push(42), Push(99), Gt, BrIf(6), Push(99), Br(7), Push(42), Print, Halt]
+        (vec![Push(42), Push(99), Gt, BrIf(6), Push(99), Br(7), Push(42), Print, Halt],
+         "compares 42 and 99, prints max")
     } else if d.contains("mem") || d.contains("storage") || d.contains("save") {
-        out = String::from("stores 1234 to memory offset 0, reads back");
-        vec![Push(1234), Push(0), Store(0), Push(0), Load(0), Print, Halt]
+        (vec![Push(1234), Push(0), Store(0), Push(0), Load(0), Print, Halt],
+         "stores 1234 to memory offset 0, reads back")
     } else {
-        out = String::from("default: pushes 42 as answer");
-        vec![Push(42), Dup, Print, Halt]
+        (vec![Push(42), Dup, Print, Halt],
+         "default: pushes 42 as answer")
     };
-    (code, out)
+    (code, String::from(summary))
 }
 
 pub fn generate_skill_wasm(description: &str, name: &str) -> (Vec<Op>, WasmSkillManifest) {
@@ -412,6 +384,17 @@ impl WasmSkillRuntime {
             _ => return Err("not a WASM agent"),
         };
         let fuel = agent.max_fuel;
+
+        // #244: Human-in-the-Loop — verifica se skill requer aprovacao
+        {
+            let gate = &mut *crate::APPROVAL_GATE.lock();
+            if !gate.can_execute(name) {
+                let level = crate::approval::ApprovalGate::classify(name);
+                let id = gate.request(name, "wasm", "skill execution", level);
+                crate::kjson!("APPROVAL", "WASM", "blocked", "id", id, "skill", name);
+                return Err("skill pending approval");
+            }
+        }
         let memory = self.pool.alloc(name);
         let mem_snap = memory.to_vec();
 

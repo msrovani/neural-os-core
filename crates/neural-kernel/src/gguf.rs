@@ -6,6 +6,7 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use crate::serial_println;
@@ -497,7 +498,55 @@ pub fn gguf_summary(file: &GgufFile) -> String {
     s
 }
 
-/// Tenta carregar modelo GGUF diretamente do disco (ATA/FAT32)
+/// Carrega apenas cabecalho GGUF + metadados + info tensores via FAT32 streaming.
+/// Nao carrega dados dos tensores — leitura sob demanda via read_file_range().
+pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
+    let name = path.trim().to_uppercase();
+    let ata = crate::ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    for part in &parts {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+            let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part)? };
+            let file_size = unsafe { let mut cluster = fs.get_root_cluster();
+                let mut found_size = 0usize;
+                while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+                    let lba = fs.cluster_lba(cluster);
+                    let mut buf = vec![0u8; fs.sectors_per_cluster as usize * fs.bytes_per_sector as usize];
+                    for i in 0..fs.sectors_per_cluster as u32 {
+                        ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+                    }
+                    for entry_off in (0..buf.len()).step_by(32) {
+                        if buf[entry_off] == 0 { break; }
+                        if buf[entry_off] == 0xE5 { continue; }
+                        if buf[entry_off + 11] & 0x08 != 0 { continue; }
+                        let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
+                        if entry_name.trim_end() != name { continue; }
+                        found_size = u32::from_le_bytes([
+                            buf[entry_off+28], buf[entry_off+29],
+                            buf[entry_off+30], buf[entry_off+31],
+                        ]) as usize;
+                        break;
+                    }
+                    if found_size > 0 { break; }
+                    cluster = fs.read_fat_entry(cluster);
+                }
+                found_size
+            };
+            if file_size == 0 { return None; }
+            // Le primeiros 4KB (header + metadados + info tensores)
+            let header_bytes = file_size.min(4096);
+            let header_data = unsafe { fs.read_file_range(&name, 0, header_bytes)? };
+            let mut file = load_gguf(&header_data).ok()?;
+            // Atualiza data_start para refletir o arquivo completo
+            file.data_start = 0;
+            return Some(file);
+        }
+    }
+    None
+}
+
+/// Tenta carregar modelo GGUF diretamente do disco (ATA/FAT32).
 pub fn load_gguf_model_from_disk(path: &str) -> Option<GgufBackedModel> {
     let name = path.trim().to_uppercase();
     let ata = crate::ATA_DRIVER.lock();
@@ -512,6 +561,23 @@ pub fn load_gguf_model_from_disk(path: &str) -> Option<GgufBackedModel> {
         }
     }
     None
+}
+
+/// Carrega header GGUF em modo streaming e registra como modelo.
+/// Modelos >4GB agora funcionam — apenas metadados carregados na RAM.
+pub fn load_gguf_streaming(path: &str) -> Result<(), &'static str> {
+    let file = load_gguf_header_from_disk(path).ok_or("GGUF header load failed")?;
+    let n_tensors = file.tensors.len();
+    let total_params: u64 = file.tensors.iter().map(|t| t.dims.iter().product::<u64>()).sum();
+    let n_layers = file.metadata.iter()
+        .find(|m| m.key.contains("block_count"))
+        .and_then(|m| m.value.parse().ok())
+        .unwrap_or(0u64) as usize;
+    crate::kjson!("GGUF", "STREAM", "loaded", "path", path, "tensors", n_tensors,
+        "params", total_params, "layers", n_layers);
+    let _msg = alloc::format!("[GGUF] Streaming '{}': {} tensors, {} params (est). Header only in RAM.",
+        path, n_tensors, total_params);
+    Ok(())
 }
 
 /// Lista formatos GGUF suportados

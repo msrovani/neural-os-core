@@ -10,7 +10,7 @@ use crate::chunker;
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     pub valid: bool,
-    pub bitmap: [u8; 131072],
+    pub bitmap: [u8; crate::memory::BITMAP_SIZE],
     pub next_free_bit: usize,
     pub total_frames: usize,
     pub usable_frames: usize,
@@ -22,7 +22,7 @@ pub struct Checkpoint {
 impl Checkpoint {
     pub const fn empty() -> Self {
         Checkpoint {
-            valid: false, bitmap: [0; 131072],
+            valid: false, bitmap: [0; crate::memory::BITMAP_SIZE],
             next_free_bit: 0, total_frames: 0,
             usable_frames: 0, allocated_count: 0,
             mhi_dram_bytes: 0, tick: 0,

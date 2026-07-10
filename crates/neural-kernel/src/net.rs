@@ -242,6 +242,25 @@ pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> 
     None
 }
 
+/// Envia dados brutos via TCP e recebe resposta (usado por SMTP, etc)
+pub unsafe fn http_get_raw(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<u8>> {
+    let mut stack_guard = NETSTACK.lock();
+    let stack = stack_guard.as_mut()?;
+    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+
+    let mut conn = stack.http_new(host, port, "/");
+    stack.http_send_raw(&mut conn, data);
+    for _ in 0..2000 {
+        stack.http_poll(&mut conn, now as u64);
+        match conn.state {
+            crate::netstack::HttpState::Done(ref d) => { return Some(d.clone()); }
+            crate::netstack::HttpState::Failed => { break; }
+            _ => { core::hint::spin_loop(); }
+        }
+    }
+    None
+}
+
 pub unsafe fn ping(_target_ip: [u8; 4]) -> Option<u64> { None }
 
 pub fn run_network_diagnostics() -> crate::String {

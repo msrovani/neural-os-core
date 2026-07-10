@@ -2,11 +2,8 @@
 //! Um Crew é um time orquestrado: agentes colaboram, tasks sao delegadas,
 //! resultados sao consolidados. HermesAgent atua como ManagerAgent.
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
-use crate::{Agent, AgentInstance, AgentState, AgentTickResult, ScheduleKind};
 
 pub type CrewId = u16;
 

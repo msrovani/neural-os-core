@@ -298,6 +298,7 @@ pub enum Command {
     Profile,
     Learn(String, String),
     ModelSwap(String),
+    Approve(u64), Deny(u64), PendingApprovals,
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +558,19 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("profile") || name.eq_ignore_ascii_case("perfil") {
             return Command::Profile;
+        }
+        if name.eq_ignore_ascii_case("approve") {
+            if let Ok(id) = parts.next().unwrap_or("0").trim().parse::<u64>() {
+                return Command::Approve(id);
+            }
+        }
+        if name.eq_ignore_ascii_case("deny") {
+            if let Ok(id) = parts.next().unwrap_or("0").trim().parse::<u64>() {
+                return Command::Deny(id);
+            }
+        }
+        if name.eq_ignore_ascii_case("pending") || name.eq_ignore_ascii_case("approvals") {
+            return Command::PendingApprovals;
         }
     }
     Command::Chat(trimmed.to_string())

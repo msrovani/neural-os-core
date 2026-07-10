@@ -1,7 +1,8 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v1.0.0 ROADMAP 🏆
+#   PLANO DIRETOR — neural-os-core v1.0.0 🏆
 #   ~19.000 LOC, 165+ arquivos Rust, 247+ agentes, 0 erros
-#   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício
+#   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
+#   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101+: v2.0 "Cognição" — Kernel, Cortex, Hermes, JARVIS
 # ════════════════════════════════════════════════════════
 
@@ -9,13 +10,13 @@
 # ════════════════════════════════════════════════════════
 # docs/sprint-plan-92-100.md    → Roadmap v1.0 completo (Sprints 92-100)
 # TECNOLOGIAS.md               → Catálogo completo de todas as tecnologias (100+)
-# docs/TODO.md                 → Roadmap v1.0 + checklist
+# docs/sprint-plan-92-99.md    → Roadmap v1.0 legado
 # docs/memory/STATE.md         → Estado atual do kernel
-# docs/memory/IDEA_BANK.md     → 415+ ideias catalogadas com status
+# docs/memory/IDEA_BANK.md     → 416+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
-# docs/CHANGELOG.md            → Histórico de versões
+# CHANGELOG.md                 → Histórico de versões
 # crates/neural-kernel/src/    → Código fonte do kernel
-# tools/update_tecnologias.py  → Mantém TECNOLOGIAS.md atualizado
+# tools/                       → Scripts Python (treino, extração SDIO, bridge)
 # ════════════════════════════════════════════════════════
 
 # Role and Purpose
@@ -155,6 +156,14 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - VirtualBox boot test
 - Tag `v1.0.0` + release notes
 - **Fim da v1.0. v2.0 "Cognição" começa na Sprint 101.**
+
+# Lições Críticas Aprendidas
+- **Extração SDIO**: Sempre usar `7z x -r *.inf` (não sem `-r`), verificar se extraiu >0 arquivos ANTES de apagar o .7z
+- **HW Expert treinado**: 95.4% com 43K devices PCI+USB. .bitnet v4 com header proprio (vocab=64, hidden=32, 4 layers)
+- **.bitnet export bug**: vocab_size (u32) e num_medusa (u32) sao 4 bytes, nao 2 como os outros campos u16
+- **GPU underutilization**: modelo com hidden=32 da 5% GPU. hidden=128 com batch=4096 satura a GTX 1050
+- **Cargo fix**: `cargo fix --release --allow-dirty` resolve imports nao usados automaticamente
+- **Cargo clean**: `cargo clean -p neural-kernel` as vezes nao limpa tudo. Usar `Remove-Item -Recurse -Force target`
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

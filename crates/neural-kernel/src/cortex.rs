@@ -757,7 +757,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     // v1: no ffn_dim
     let mut intermediate_size = hidden * 4;
     let mut num_kv_heads = num_heads;
-    let mut num_medusa = 0usize;
+    let num_medusa;
     let mut tie_embeddings = false;
 
     if version >= 3 {
@@ -885,10 +885,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         intermediate_size = ffn_dim * 4; // assume 4 groups for v2 BitFFN
         num_kv_heads = if num_heads > 0 { num_heads / 4 } else { num_heads };
         num_medusa = {
-            let mut n = 0usize;
             if off + 4 > data.len() { return None; }
-            n = data[off] as usize; off += 4;
-            n
+            let v = data[off] as usize; off += 4;
+            v
         };
         let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
         let tok_len = read_u32(data, &mut off)? as usize;

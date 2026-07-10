@@ -1,33 +1,28 @@
-﻿# Neural OS Hermes v0.97.0-rustcoder — AI-native Bare-metal Operating System 🏆
+﻿# Neural OS Hermes v1.0.0 — AI-native Bare-metal Operating System 🏆
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
 
 ```
 ╔══════════════════════════════════╗
-║  J.A.R.V.I.S. vNeural OS v0.93 ║
-║  "Thoughtful. Precise. Alive."  ║
+║  Neural OS Hermes v1.0.0        ║
+║  "Gold Master — A Era do Silício"║
 ╚══════════════════════════════════╝
 
-  ✦ JARVIS Desktop: multi-window, status bar, F1-F4 app switcher
-  ✦ BitNet IDE (F4): gera WASM skills → ícones dinâmicos no desktop
-  ✦ Avatar com partículas + 4 estados (Idle/Listening/Processing/Speaking)
-  ✦ Análise emocional (7 emoções + sarcasmo)
-  ✦ Personalidade adaptativa (SOUL.md + Fluid Persona)
-  ✦ Memória contextual (256 interações + Atkinson-Shiffrin 3-tier)
-  ✦ SleepCycle (5 fases: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT)
-  ✦ Ego Layer (confidence tracking por domínio)
-  ✦ Proactive Heartbeats (alertas de disk/mem/net)
-  ✦ Auto-Skill Generation (observa padrões, gera skills)
-  ✦ Babel-Index (monitor de entropia da memória)
-  ✦ Fail-Closed Safety (4 invariantes SMT-proof)
-  ✦ Merkle Audit Trail (SHA-256 chain, ring 4096)
-  ✦ AHCI driver (SATA 6G NCQ)
-  ✦ GPU Foundations: BAR mapping, SPSC job ring, VRAM buddy allocator
-  ✦ WiFi: Generic driver via union+MaybeUninit+CriticalSectionMutex (Abordagem C)
-     Tabela massiva de ~50 PCI IDs, FallbackEthernet (RTL8139/E1000/VirtIO),
-     bridge smoltcp::phy::Device via WifiChipset trait.
-  ✦ WASM Runtime: MemoryPool (256KB/skill), 15 WASI→Skill mappings
-  ✦ Voz: Kokoro-82M TTS (ferramenta de conversão ONNX→.bitnet pronta)
+  ✦ v1.0.0 Code Freeze — 0 erros, 0 warnings
+  ✦ HW Expert GPU (95.4% accuracy, 43K devices)
+  ✦ HW Register Map predictor (8 families: IntelWiFi, Realtek, Atheros, Broadcom...)
+  ✦ LLM Icons via HWEXPERT_MODEL no compositor
+  ✦ Human-in-the-Loop (/approve, /deny, /pending)
+  ✦ Zero-Trust Syscall Categories (ReadOnly/Ephemeral/Persistent/Hardware)
+  ✦ GGUF streaming (>4GB models via chunky FAT32 read)
+  ✦ RssAgent + EmailAgent (WWW agents via HTTP + SMTP)
+  ✦ Serial bridge com watchdog + DNS healthcheck
+  ✦ Frame allocator 8GB (bitmap estendido)
+  ✦ GPU compute: Intel ring, NVIDIA PFIFO, AMD PM4, VirtIO-GPU
+  ✦ WASM Runtime: bytecode VM, PluginHub, SkillMarket, fuel metering
+  ✦ JARVIS: sleep cycle, ego layer, emoção, memória episódica
+  ✦ SkillOpt + Structured Decoding (compressed FSM)
+  ✦ Self-Update A/B slots + rollback
   ✦ Embedding: BGE-Small-EN-v1.5 (384-dim, convertido para .bitnet)
 
   → Port do JARVIS .NET MAUI para bare-metal Rust
