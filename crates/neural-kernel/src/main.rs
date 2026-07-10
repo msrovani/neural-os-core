@@ -286,6 +286,8 @@ mod ntfs_reader;
 mod ext2_reader;
 mod io_scheduler;
 mod storage_manager;
+mod netfs;
+mod disk_power;
 
 mod disk_agent;
 
