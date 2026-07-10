@@ -6,18 +6,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use crate::block_dev::BlockDevice;
 
-/// CRC32C (Castagnoli) — polinomio 0x1EDC6F41
-fn crc32c(data: &[u8]) -> u32 {
-    let poly: u32 = 0x82F63B78;
-    let mut crc = !0u32;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            if crc & 1 != 0 { crc = (crc >> 1) ^ poly; } else { crc >>= 1; }
-        }
-    }
-    !crc
-}
+use crate::neural_fs::checksum::crc32c;
 
 #[derive(Debug, Clone)]
 pub struct GptPartition {

@@ -76,9 +76,12 @@ impl NeuralVolume {
         self.journal.begin_tx(self.tx_id);
     }
 
-    pub fn commit_tx(&mut self, _dev: &mut dyn BlockDevice) -> bool {
-        // Placeholder: escrita do journal + superblock sera implementada
+    pub fn commit_tx(&mut self, dev: &mut dyn BlockDevice) -> bool {
         self.sb.last_tx_id = self.tx_id;
+        // Escreve blocos sujos no journal
+        if !self.journal.commit(dev, self.start_lba, &self.sb) { return false; }
+        // Atualiza superbloco com nova raiz e tx_id
+        if !self.sb.write(dev, self.start_lba) { return false; }
         true
     }
 }
