@@ -36,14 +36,16 @@ fn avx2_available() -> bool {
         if !has_avx2 { return false; }
 
         if has_hypervisor {
-            // Leia o vendor string do hypervisor (leaf 0x40000000)
+            // So bloqueia AVX2 se hypervisor = TCG (QEMU sem accel)
+            // TCG emula cada VEX como VM exit (~10k ciclos)
+            // WHPX/KVM com -cpu host executa AVX2 nativo
             let hv = core::arch::x86_64::__cpuid(0x40000000);
-            let vendor_ebx = hv.ebx;
-            let _vendor_ecx = hv.ecx;
-            let _vendor_edx = hv.edx;
-
-            let is_whpx = vendor_ebx == 0x7263694D; // "Micr" (Microsoft Hv)
-            if is_whpx {
+            let vendor: [u8; 12] = [
+                (hv.ebx >> 0) as u8, (hv.ebx >> 8) as u8, (hv.ebx >> 16) as u8, (hv.ebx >> 24) as u8,
+                (hv.ecx >> 0) as u8, (hv.ecx >> 8) as u8, (hv.ecx >> 16) as u8, (hv.ecx >> 24) as u8,
+                (hv.edx >> 0) as u8, (hv.edx >> 8) as u8, (hv.edx >> 16) as u8, (hv.edx >> 24) as u8,
+            ];
+            if &vendor[..9] == b"TCGTCGTCG" {
                 return false;
             }
         }

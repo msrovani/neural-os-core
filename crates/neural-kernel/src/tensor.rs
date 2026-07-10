@@ -12,7 +12,12 @@ pub fn has_avx2() -> bool {
             if !has_avx2 { return false; }
             if has_hypervisor {
                 let hv = core::arch::x86_64::__cpuid(0x40000000);
-                if hv.ebx == 0x7263694D { return false; } // "Micr" = WHPX
+                let vendor: [u8; 12] = [
+                    (hv.ebx >> 0) as u8, (hv.ebx >> 8) as u8, (hv.ebx >> 16) as u8, (hv.ebx >> 24) as u8,
+                    (hv.ecx >> 0) as u8, (hv.ecx >> 8) as u8, (hv.ecx >> 16) as u8, (hv.ecx >> 24) as u8,
+                    (hv.edx >> 0) as u8, (hv.edx >> 8) as u8, (hv.edx >> 16) as u8, (hv.edx >> 24) as u8,
+                ];
+                if &vendor[..9] == b"TCGTCGTCG" { return false; } // Só bloqueia TCG puro
             }
             true
         }

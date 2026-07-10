@@ -121,6 +121,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - Trinity MoE: LLM + 6 experts + router_weight treinável
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
+- **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 
 # Current Sprint: Sprint 92 — Fundação Estável (~2.000 LOC)
 **Roadmap v1.0:** Sprints 92→100 = Gold Master. Ver `docs/sprint-plan-92-100.md`.
@@ -137,6 +138,16 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **98** | BitNet + Training Pipeline (100M params, fine-tune) | ~2.500 |
 | **99** | SkillOpt + Structured Decoding + Code Freeze Prep | ~1.500 |
 | **100** | **Code Freeze & Release v1.0.0** | ~500 |
+
+# QEMU Launch (WHPX + VirtIO optimizado)
+```powershell
+.\run-qemu-whpx.ps1              # Boot normal
+.\run-qemu-whpx.ps1 -debug       # Aguarda GDB (-s -S)
+python serial_bridge.py          # Tunnel SLIP (outro terminal)
+```
+
+Config: WHPX accel, `-cpu host`, VirtIO-GPU, VirtIO-net, 2× serial (stdio + tcp tunnel).
+Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 
 # Sprint 100 — Code Freeze v1.0.0
 - `cargo clean -p neural-kernel && cargo check --release` — 0 erros
