@@ -10,3 +10,5 @@ pub mod extent;
 pub mod checksum_tree;
 pub mod journal;
 pub mod volume;
+pub mod neural_fs_agent;
+// Testes em neural_fs/tests.rs — ativar quando houver lib target
