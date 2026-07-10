@@ -278,6 +278,8 @@ mod boot_log_agent;
 mod shutdown;
 
 mod tpm;
+mod exfat;
+mod gpt;
 
 mod disk_agent;
 

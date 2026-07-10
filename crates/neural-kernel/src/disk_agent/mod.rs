@@ -5,6 +5,7 @@ pub mod fs_probe;
 pub mod nvme;
 pub mod vol_mgr;
 
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -244,6 +245,23 @@ impl DiskIntelligenceAgent {
                 } else { false }
             };
             part.fs_info = self.fs_registry.detect(&read_fn, part.sector_count);
+
+            // V2: tenta montar exFAT se FAT32 nao for detectado
+            if part.fs_info.is_none() && ctrl_idx < self.controllers.len() {
+                let mut temp_buf = [0u8; 512];
+                if read_fn(0, &mut temp_buf) && &temp_buf[3..14] == b"EXFAT   " {
+                    part.fs_info = Some(disk_info::FsInfo {
+                        fs_type: disk_info::FilesystemType::ExFat,
+                        label: alloc::format!("exFAT"),
+                        uuid: alloc::string::String::new(),
+                        total_bytes: 0,
+                        free_bytes: None,
+                        block_size: 512,
+                        is_writeable: true,
+                    });
+                    crate::serial_println!("[DISK]  Partition {}: exFAT detectado em {}", part.index, disk.name);
+                }
+            }
         }
     }
 
