@@ -280,6 +280,7 @@ mod shutdown;
 mod tpm;
 mod exfat;
 mod gpt;
+mod neural_fs;
 
 mod disk_agent;
 
