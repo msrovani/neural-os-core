@@ -282,6 +282,8 @@ mod exfat;
 mod gpt;
 mod neural_fs;
 mod fs_driver;
+mod ntfs_reader;
+mod ext2_reader;
 
 mod disk_agent;
 
