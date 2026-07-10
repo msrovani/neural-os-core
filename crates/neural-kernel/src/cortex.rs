@@ -584,38 +584,72 @@ impl TransformerModel {
                     }
                 }
 
+                // FlashAttention tiling adaptativo (#414)
+                let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
                 for qh in 0..q_group_size {
                     let head_idx = kv_g * q_group_size + qh;
                     let head_start = head_idx * qk_head_dim;
-                    // Extract Q for this head
-                    let mut q_h = Tensor::new((seq_len, qk_head_dim));
-                    for s in 0..seq_len {
-                        for d in 0..qk_head_dim {
-                            q_h.data[s * qk_head_dim + d] = q.data[s * kv_dim + head_start + d];
-                        }
-                    }
 
-                    // scores = q_h @ k_g.T
-                    let k_g_t = k_g.transposed();
-                    let mut scores = q_h.matmul(&k_g_t).unwrap();
-                    let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
-                    for s in scores.data.iter_mut() { *s *= scale; }
-                    // Mask + softmax
-                    for i in 0..seq_len {
-                        for j in 0..seq_len {
-                            scores.data[i * seq_len + j] += mask.data[i * seq_len + j];
+                    for qb in (0..seq_len).step_by(block_size) {
+                        let qb_end = (qb + block_size).min(seq_len);
+                        let qb_len = qb_end - qb;
+
+                        let mut q_block = Tensor::new((qb_len, qk_head_dim));
+                        for s in 0..qb_len {
+                            for d in 0..qk_head_dim {
+                                q_block.data[s * qk_head_dim + d] =
+                                    q.data[(qb + s) * kv_dim + head_start + d];
+                            }
                         }
-                    }
-                    for i in 0..seq_len {
-                        let start = i * seq_len;
-                        softmax_inplace(&mut scores.data[start..start + seq_len]);
-                    }
-                    // attn_out_h = scores @ v_g
-                    let attn_h = scores.matmul(&v_g).unwrap();
-                    // Write to output
-                    for s in 0..seq_len {
-                        for d in 0..qk_head_dim {
-                            attn_out_data[s * kv_dim + head_start + d] = attn_h.data[s * qk_head_dim + d];
+
+                        for kb in (0..seq_len).step_by(block_size) {
+                            let kb_end = (kb + block_size).min(seq_len);
+                            let kb_len = kb_end - kb;
+
+                            let mut k_block = Tensor::new((kb_len, qk_head_dim));
+                            for s in 0..kb_len {
+                                for d in 0..qk_head_dim {
+                                    k_block.data[s * qk_head_dim + d] =
+                                        k_g.data[(kb + s) * qk_head_dim + d];
+                                }
+                            }
+                            let k_block_t = k_block.transposed();
+                            let mut scores = q_block.matmul(&k_block_t).unwrap();
+                            let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
+
+                            for si in 0..qb_len {
+                                for sj in 0..kb_len {
+                                    let idx = si * kb_len + sj;
+                                    scores.data[idx] *= scale;
+                                    scores.data[idx] += mask.data[(qb + si) * seq_len + kb + sj];
+                                }
+                            }
+
+                            for si in 0..qb_len {
+                                let start = si * kb_len;
+                                for sj in 0..kb_len {
+                                    if (qb + si) < (kb + sj) {
+                                        scores.data[start + sj] = -1e9;
+                                    }
+                                }
+                                softmax_inplace(&mut scores.data[start..start + kb_len]);
+                            }
+
+                            let mut v_block = Tensor::new((kb_len, qk_head_dim));
+                            for s in 0..kb_len {
+                                for d in 0..qk_head_dim {
+                                    v_block.data[s * qk_head_dim + d] =
+                                        v_g.data[(kb + s) * qk_head_dim + d];
+                                }
+                            }
+                            let attn_block = scores.matmul(&v_block).unwrap();
+
+                            for s in 0..qb_len {
+                                for d in 0..qk_head_dim {
+                                    attn_out_data[(qb + s) * kv_dim + head_start + d] +=
+                                        attn_block.data[s * qk_head_dim + d];
+                                }
+                            }
                         }
                     }
                 }
