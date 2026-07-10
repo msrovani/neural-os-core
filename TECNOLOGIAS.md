@@ -222,8 +222,17 @@
 | Ebbinghaus Decay | strength = I×e^(-λ·days) | ADR-0023 | #219 | `event-bus/metacognitive.rs` | v0.89  ██████████ 100% |
 | VFS Layer | Mount, resolve, lookup | ADR-0030 | #281 | `vfs/mod.rs` | v0.62  ██████████ 100% |
 | FAT32 | Read/write, clusters | ADR-0030 | — | `fat32.rs` | v0.75  ██████████ 100% |
+| exFAT | Leitura de pendrives/SDHC >4GB. Cluster bitmap, FAT chain, volume label UTF-16 | ADR-0040 | #417 | `exfat.rs` | FS-a  ██████████ 100% |
+| GPT escrita | Criar tabela GPT com CRC32C, backup GPT, MBR protetiva. Formatação de partição única | ADR-0040 | — | `gpt.rs` | FS-a  ██████████ 100% |
+| BlockDevice+ | Trait BlockDevice com write_sectors(). ATA PIO + AHCI DMA + sfence + erro checking | ADR-0040 | #417 | `block_dev.rs` | FS-a  ██████████ 100% |
 | OverlayFS | Multi-layer, CoW | — | — | `vfs/` | v0.96  ██████████ 100% |
 | Zero-Copy SFS | Slice references | — | — | `self_heal.rs` | v0.96  ██████████ 100% |
+| NVMe TRIM | Dataset Management (Deallocate) para SSD NVMe. Comando DSM com range descriptor | ADR-0040 | — | `disk_agent/nvme.rs` | FS-b  ██████████ 100% |
+| ATA TRIM | DATA SET MANAGEMENT via PIO. Range descriptor 8+2 bytes. Cache FLUSH apos comando | ADR-0040 | — | `ata.rs` | FS-b  ██████████ 100% |
+| SMART Historico | SmartHistoryEntry ring buffer (64 entradas). Alerta preditivo se realocacao acelerar ou setores pendentes >10 | ADR-0040 | — | `disk_agent/mod.rs` | FS-b  ██████████ 100% |
+| NeuralFS CRC32C | CRC32C Castagnoli com lookup table. Polinomio 0x1EDC6F41. 256 entradas pre-computadas. ~20x mais rapido que bit-a-bit | ADR-0040 | #422 | `neural_fs/checksum.rs` | FS-b  ████████░░ 80% |
+| NeuralFS Superblock | Magic b\"NEURALFS\", version=1. 512 bytes, backup no bloco 2. Campos: total/free blocks, inodes, B-tree roots, journal, uuid, label, next_cow_block | ADR-0040 | #422 | `neural_fs/superblock.rs` | FS-b  ████████░░ 80% |
+| NeuralFS B-tree | B-tree CoW unificada: keys de 17 bytes (object_id+item_type+offset), nos de 4096 com CRC32C, ordem 32, busca binaria. Suporta inodes, diretorios, extents, checksums | ADR-0040 | #422 | `neural_fs/btree.rs` | FS-b  ████████░░ 80% |
 
 ---
 
