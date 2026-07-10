@@ -13,6 +13,20 @@ use alloc::collections::BTreeMap;
 use crate::display::fb::DoubleBuffer;
 use crate::serial_println;
 
+fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
+    let bytes = data.get(offset..offset.checked_add(4)?)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_i32_le(data: &[u8], offset: usize) -> Option<i32> {
+    read_u32_le(data, offset).map(|v| v as i32)
+}
+
+fn read_u16_le(data: &[u8], offset: usize) -> Option<u16> {
+    let bytes = data.get(offset..offset.checked_add(2)?)?;
+    Some(u16::from_le_bytes([bytes[0], bytes[1]]))
+}
+
 /// Um glyph rasterizado: bitmap em grayscale + métricas
 pub struct RasterGlyph {
     pub w: u16, pub h: u16,
@@ -42,21 +56,26 @@ impl TtfRasterFont {
     /// Carrega de um array flat (formato do conversor Python)
     pub fn load_from_bytes(&mut self, data: &[u8]) {
         if data.len() < 8 { return; }
-        let count = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
-        let _size = u16::from_le_bytes(data[4..6].try_into().unwrap());
+        let Some(count) = read_u32_le(data, 0).map(|v| v as usize) else { return; };
+        let _size = read_u16_le(data, 4).unwrap_or(self.size);
         let mut offset = 8;
         for _ in 0..count {
             if offset + 20 > data.len() { break; }
-            let codepoint = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
-            let w = u32::from_le_bytes(data[offset+4..offset+8].try_into().unwrap()) as u16;
-            let h = u32::from_le_bytes(data[offset+8..offset+12].try_into().unwrap()) as u16;
-            let x = i32::from_le_bytes(data[offset+12..offset+16].try_into().unwrap()) as i16;
-            let y = i32::from_le_bytes(data[offset+16..offset+20].try_into().unwrap()) as i16;
+            let Some(codepoint) = read_u32_le(data, offset) else { break; };
+            let Some(w_raw) = read_u32_le(data, offset + 4) else { break; };
+            let Some(h_raw) = read_u32_le(data, offset + 8) else { break; };
+            let Some(x_raw) = read_i32_le(data, offset + 12) else { break; };
+            let Some(y_raw) = read_i32_le(data, offset + 16) else { break; };
+            let w = w_raw.min(u16::MAX as u32) as u16;
+            let h = h_raw.min(u16::MAX as u32) as u16;
+            let x = x_raw.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+            let y = y_raw.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
             offset += 20;
-            let pixels_size = w as usize * h as usize;
-            if offset + pixels_size > data.len() { break; }
+            let Some(pixels_size) = (w as usize).checked_mul(h as usize) else { break; };
+            let Some(end) = offset.checked_add(pixels_size) else { break; };
+            if end > data.len() { break; }
             let c = char::from_u32(codepoint).unwrap_or('\0');
-            self.add_glyph(c, w, h, x, y, &data[offset..offset + pixels_size]);
+            self.add_glyph(c, w, h, x, y, &data[offset..end]);
             offset += pixels_size;
         }
         serial_println!("[TTF] '{}' carregada: {} glyphs @ {}px", self.name, self.glyph_count(), self.size);

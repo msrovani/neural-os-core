@@ -10,7 +10,7 @@ use crate::slip;
 fn ip_checksum(data: &[u8]) -> u16 {
     let mut sum = 0u32;
     for chunk in data.chunks(2) {
-        let word = u16::from_le_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
+        let word = u16::from_be_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
         sum = sum.wrapping_add(word as u32);
     }
     while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
@@ -70,13 +70,8 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     let cs = ip_checksum(&ip);
     ip[10..12].copy_from_slice(&cs.to_be_bytes());
 
-    // 5. Build Ethernet frame: dst MAC (bridge) + src MAC (fake) + EtherType (IPv4)
-    let fake_src_mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0xFE]; // kernel MAC
-    let fake_dst_mac = [0x02u8, 0x00, 0x00, 0x00, 0x00, 0xFF]; // bridge MAC
-    let mut frame = Vec::with_capacity(14 + 20 + udp_data.len());
-    frame.extend_from_slice(&fake_dst_mac);
-    frame.extend_from_slice(&fake_src_mac);
-    frame.extend_from_slice(&[0x08, 0x00]); // EtherType IPv4
+    // 5. Serial SLIP tunnel carries raw IP (no Ethernet header)
+    let mut frame = Vec::with_capacity(20 + udp_data.len());
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
 

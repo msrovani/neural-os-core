@@ -40,13 +40,13 @@ impl SkillMarket {
     pub fn best_agent(&self, skill: &str) -> Option<&str> {
         self.scores.iter()
             .filter(|((_, s), _)| s == skill)
-            .max_by(|a, b| a.1.success_rate.partial_cmp(&b.1.success_rate).unwrap())
+            .max_by(|a, b| a.1.success_rate.total_cmp(&b.1.success_rate))
             .map(|((a, _), _)| a.as_str())
     }
 
     pub fn top_skills(&self, n: usize) -> Vec<&SkillScore> {
         let mut v: Vec<_> = self.scores.values().collect();
-        v.sort_by(|a, b| b.success_rate.partial_cmp(&a.success_rate).unwrap());
+        v.sort_by(|a, b| b.success_rate.total_cmp(&a.success_rate));
         v.truncate(n);
         v
     }

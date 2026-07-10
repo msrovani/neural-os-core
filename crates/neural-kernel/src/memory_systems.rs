@@ -73,9 +73,7 @@ pub fn load_bge(data: &[u8]) -> bool {
 pub fn bge_embed(text: &str) -> Vec<f32> {
     if !BGE_LOADED.load(Ordering::Relaxed) { return Vec::new(); }
     let hidden = unsafe { BGE_HIDDEN };
-    let weights = unsafe { BGE_WEIGHTS.as_ref() };
-    if weights.is_none() { return Vec::new(); }
-    let weights = weights.unwrap();
+    let Some(weights) = (unsafe { BGE_WEIGHTS.as_ref() }) else { return Vec::new(); };
     let vocab = unsafe { BGE_VOCAB };
 
     let tokens = crate::bpe::encode(text);
