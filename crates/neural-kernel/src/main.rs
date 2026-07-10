@@ -289,6 +289,7 @@ mod workflow;
 mod hub;
 mod approval;
 mod actor_registry;
+mod hnsw;
 
 mod elf_loader;
 

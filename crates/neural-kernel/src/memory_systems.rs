@@ -107,7 +107,7 @@ pub struct EmbeddingEntry {
     pub embedding: Vec<f32>,
 }
 
-static EMBED_INDEX: spin::Mutex<Vec<EmbeddingEntry>> = spin::Mutex::new(Vec::new());
+pub(crate) static EMBED_INDEX: spin::Mutex<Vec<EmbeddingEntry>> = spin::Mutex::new(Vec::new());
 
 /// Indexa um texto para busca semântica futura
 pub fn index_embedding(label: &str, text: &str) {

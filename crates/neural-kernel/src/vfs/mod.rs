@@ -237,9 +237,25 @@ impl VfsRegistry {
     pub fn mount_vector_fs(&mut self) {
         self.mount("/vector", "vecfs");
     }
-    /// #266 Vector Search via VFS
-    pub fn vector_search(&self, _query: &[f32], _limit: usize) -> Vec<String> {
-        Vec::new() // placeholder: integrate with BGE embedding + HNSW
+    /// #266 Vector Search via VFS (HNSW-backed)
+    pub fn vector_search(&self, query: &[f32], limit: usize) -> Vec<String> {
+        // Collect data outside lock
+        let entries: Vec<(String, Vec<f32>)> = {
+            let idx = crate::memory_systems::EMBED_INDEX.lock();
+            idx.iter().map(|e| (e.label.clone(), e.embedding.clone())).collect()
+        };
+        if entries.is_empty() { return Vec::new(); }
+        let dim = query.len();
+        let mut hnsw = crate::hnsw::HnswIndex::new(dim);
+        for (i, (_, emb)) in entries.iter().enumerate() {
+            let mut v = emb.clone();
+            if v.len() != dim { v.resize(dim, 0.0); }
+            hnsw.insert(i as u32, v);
+        }
+        let ids: Vec<String> = hnsw.search(query, limit).iter()
+            .filter_map(|&(_, id)| entries.get(id as usize).map(|(l,_)| l.clone()))
+            .collect();
+        ids
     }
     /// #267 OverlayFS mount
     pub fn mount_overlay(&mut self, _lower: &str, _upper: &str, _merged: &str) {
