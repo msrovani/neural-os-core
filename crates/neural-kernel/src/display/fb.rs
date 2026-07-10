@@ -81,10 +81,15 @@ pub fn fb_remap_uc() {
 pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
     if let Some(fb) = boot_info.framebuffer.as_ref().and_then(|f| Some(f)) {
         let info = fb.info();
+        let pixel_name = match info.pixel_format {
+            bootloader_api::info::PixelFormat::Bgr => "BGR",
+            bootloader_api::info::PixelFormat::Rgb => "RGB",
+            _ => "OTHER",
+        };
         let bpp = match info.pixel_format {
-            bootloader_api::info::PixelFormat::Bgr => 3u32,
-            bootloader_api::info::PixelFormat::Rgb => 3u32,
-            _ => 4u32,
+            bootloader_api::info::PixelFormat::Bgr => { crate::serial_println!("[DISPLAY] PixelFormat: Bgr (B primeiro)"); 3u32 },
+            bootloader_api::info::PixelFormat::Rgb => { crate::serial_println!("[DISPLAY] PixelFormat: Rgb (R primeiro) — invertendo canais!"); 3u32 },
+            _ => { crate::serial_println!("[DISPLAY] PixelFormat: {} — assumindo 4 bytes/pixel", pixel_name); 4u32 },
         };
         // Stride da UEFI em bytes (= pixels por linha * bytes por pixel)
         let fb_stride = info.stride as u32 * bpp;

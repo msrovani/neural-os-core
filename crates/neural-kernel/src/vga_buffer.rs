@@ -15,12 +15,23 @@ unsafe fn set_cursor(pos: u16) {
 /// Seguro para Intel 6xx com UEFI GOP — não acessa CRTC (0x3D4/0x3D5) nem
 /// memoria VGA (0xB8000 pode estar desmapeada pelo bootloader).
 pub fn disable_vga_plane() {
+    crate::serial_println!("[VGA] Desabilitando VGA plane via sequenciador (0x3C4:0x01 = 0x21)...");
     unsafe {
-        // Sequencer index 0x01 = Clocking Mode Register
+        let orig_idx: u8;
+        let orig_val: u8;
+        // Le registro atual do sequencer
         core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
+        core::arch::asm!("in al, dx", out("al") orig_val, in("dx") 0x3C5u16, options(nostack, preserves_flags));
+        crate::serial_println!("[VGA] Sequencer 0x01 antes: 0x{:02X}", orig_val);
         // Set bit 5 (Screen Off) + bit 0 (8 dot font) = 0x21
+        core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
         core::arch::asm!("out dx, al", in("dx") 0x3C5u16, in("al") 0x21u8, options(nostack, preserves_flags));
+        // Le de volta para confirmar
+        core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
+        core::arch::asm!("in al, dx", out("al") orig_idx, in("dx") 0x3C5u16, options(nostack, preserves_flags));
+        crate::serial_println!("[VGA] Sequencer 0x01 depois: 0x{:02X} (bit5=1=screen off)", orig_idx);
     }
+    crate::serial_println!("[VGA] VGA plane desabilitado.");
 }
 
 /// Limpa o buffer fisico VGA (0xB8000) escrevendo zeros diretamente,

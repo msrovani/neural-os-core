@@ -22,30 +22,29 @@ print(f"[TRAIN] Device: {DEVICE}")
 
 # ─── Geracao de dados sinteticos ───────────────────────────────────────
 
-def generate_jarvis_pattern(energy_len=16):
-    """Gera padrao de energia para 'jar-vis': 2 picos separados por ~200ms."""
-    pattern = [random.uniform(0.01, 0.05) for _ in range(energy_len)]  # noise floor
-    # Primeiro pico (jar-)
-    p1_pos = random.randint(1, 5)
-    p1_amp = random.uniform(0.6, 1.0)
-    pattern[p1_pos] = p1_amp
-    pattern[p1_pos + 1] = p1_amp * random.uniform(0.5, 0.8)
+def generate_wakeword_pattern(word="jarvis", energy_len=16):
+    """Gera padrao de energia para wake word de 2 silabas.
+    'jar-vis': picos mais proximos (3-6 samples), acento na 1a silaba.
+    'jar-bas': picos mais distantes (4-7 samples), acento mais forte na 1a."""
+    pattern = [random.uniform(0.01, 0.05) for _ in range(energy_len)]
+    first_amp = random.uniform(0.6, 1.0)
+    first_pos = random.randint(1, 5)
+    pattern[first_pos] = first_amp
+    pattern[first_pos + 1] = first_amp * random.uniform(0.5, 0.8)
 
-    # Segundo pico (-vis)
-    p2_pos = p1_pos + random.randint(3, 6)  # 3-6 samples apart = ~200-400ms
-    if p2_pos < energy_len - 1:
-        p2_amp = random.uniform(0.5, 0.9)
-        pattern[p2_pos] = p2_amp
-        pattern[p2_pos + 1] = p2_amp * random.uniform(0.5, 0.8)
+    gap = (4, 7) if "bas" in word else (3, 6)  # jarbas tem silabas mais separadas
+    second_amp = random.uniform(0.5, 0.9)
+    second_pos = first_pos + random.randint(*gap)
+    if second_pos < energy_len - 1:
+        pattern[second_pos] = second_amp
+        pattern[second_pos + 1] = second_amp * random.uniform(0.5, 0.8)
 
-    # Adiciona ruido
     for i in range(energy_len):
         pattern[i] += random.uniform(-0.03, 0.03)
         pattern[i] = max(0.0, min(1.0, pattern[i]))
-
     return pattern
 
-def generate_non_jarvis(energy_len=16):
+def generate_non_wakeword(energy_len=16):
     """Gera padrao sem wake word (ruido, fala continua, toque unico)."""
     pattern_type = random.choice(["noise", "continuous", "single_peak", "multi_peak", "silence"])
 
@@ -69,13 +68,14 @@ def generate_non_jarvis(energy_len=16):
     else:  # silence
         return [random.uniform(0.0, 0.02) for _ in range(energy_len)]
 
-def generate_dataset(n_pos=2000, n_neg=8000):
-    """Gera dataset balanceado de padroes de energia."""
+def generate_dataset(n_pos=4000, n_neg=8000):
+    """Gera dataset balanceado: 2000 jarvis + 2000 jarbas + 8000 negativos."""
     data = []
-    for _ in range(n_pos):
-        data.append((generate_jarvis_pattern(), 1.0))
+    for _ in range(n_pos // 2):
+        data.append((generate_wakeword_pattern("jarvis"), 1.0))
+        data.append((generate_wakeword_pattern("jarbas"), 1.0))
     for _ in range(n_neg):
-        data.append((generate_non_jarvis(), 0.0))
+        data.append((generate_non_wakeword(), 0.0))
     random.shuffle(data)
     return data
 
