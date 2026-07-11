@@ -104,13 +104,10 @@ def populate(path):
     files = [
         ("MICRO.BITNET", find_file("micro.bitnet")),
         ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin")),
+        ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
+        ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet")),
+        ("BITNET-2B.BITNET", find_file("bitnet_2B.bitnet") or find_file("BITNET-2B.BITNET") or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet")),
     ]
-    # Use hw_expert_tf.bitnet as HW_EXPERT.BITNET
-    hw_src = find_file("hw_expert_tf.bitnet")
-    if hw_src: files.append(("HW_EXPERT.BITNET", hw_src))
-    # Check for 1.5B model
-    model15 = find_file("bitnet-BitNet-b1_58-2B-4T.bitnet") or find_file("BITNET-2B.BITNET")
-    if model15: files.append(("BITNET-2B.BITNET", model15))
     # CONFIG.TXT
     config_content = b"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\nLOG_TO_FAT32=1\n"
     files.append(("CONFIG.TXT", config_content))
@@ -198,7 +195,7 @@ if __name__ == "__main__":
         disks = [os.path.join(ROOT, "tools", "disk_qemu.raw"),
                  os.path.join(ROOT, "tools", "disk_hw.raw")]
     for d in disks:
-        sz = size_mb if "hw" in os.path.basename(d) else 64
+        sz = size_mb
         print(f"\n=== {os.path.basename(d)} ({sz}MB) ===")
         if os.path.exists(d): os.remove(d)
         create_fat32(d, sz, args.label)
