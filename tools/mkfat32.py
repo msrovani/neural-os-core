@@ -93,6 +93,11 @@ def create_fat32(path, size_mb, label):
             struct.pack_into("<I", fat, 0, 0x0FFFFF8)
             struct.pack_into("<I", fat, 4, 0x0FFFFFF)
             f.write(fat)
+        # Zero root directory cluster (cluster 2)
+        root_lba = 2048 + data_start + (2 - 2) * spc
+        f.seek(root_lba * 512)
+        f.write(b'\x00' * spc * bps)
+        # Zero FSInfo backup
         print(f"[OK] {path}: {size_mb}MB, {total_clusters} clusters, FAT {fat_sectors}s x {fat_count}")
 
 def populate(path):
@@ -159,8 +164,14 @@ def populate(path):
             struct.pack_into("<I", entry_data, 28, len(data))
             struct.pack_into("<H", entry_data, 26, free[0] & 0xFFFF)
             struct.pack_into("<H", entry_data, 20, (free[0] >> 16) & 0xFFFF)
-            # Find slot in root dir cluster
+            # Ensure root dir cluster 2 is zeroed
             root_lba = data_lba + (root_cluster - 2) * spc
+            for sec in range(spc):
+                f.seek((root_lba + sec) * 512)
+                if f.read(1) != b'\x00':
+                    f.seek((root_lba + sec) * 512)
+                    f.write(b'\x00' * bps)
+            # Find slot in root dir cluster
             placed = False
             for offs in range(0, spc * bps, 32):
                 f.seek((root_lba + offs // bps) * 512 + offs % bps)
