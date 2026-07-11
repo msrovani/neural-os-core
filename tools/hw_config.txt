@@ -1,0 +1,3 @@
+BOOT_MODE=hw
+PLATFORM=baremetal-i5-6400
+GPU=GTX1050

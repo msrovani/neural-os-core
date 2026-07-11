@@ -1,0 +1,2 @@
+BOOT_MODE=qemu
+PLATFORM=virtio-whpx

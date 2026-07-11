@@ -2072,6 +2072,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
 
+    // LLM test: generate one response to confirm model works at runtime
+    {
+        let prompt = "hello";
+        let response = crate::cortex::generate_via_model(prompt);
+        serial_println!("[LLM-TEST] prompt='{}' response='{}'", prompt, response);
+    }
+
     // ponytail: allocate heap stack, switch to it, then call raw_sched_run (never returns)
     unsafe {
         let heap_stack = alloc::boxed::Box::new([0u8; 65536]);

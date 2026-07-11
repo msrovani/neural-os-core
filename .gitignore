@@ -44,3 +44,7 @@ tools/debug_build.py
 tools/__pycache__/
 tools/*.jsonl
 tools/*.pcap
+
+tools/disk_*
+MICRO.BITNET
+tools/MICRO.BITNET
