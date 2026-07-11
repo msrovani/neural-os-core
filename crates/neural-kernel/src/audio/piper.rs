@@ -4,8 +4,7 @@
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
-use crate::tensor::Tensor;
-use libm::{tanhf, sinf};
+use libm::sinf;
 
 const SAMPLE_RATE: u32 = 22050;
 
