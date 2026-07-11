@@ -235,3 +235,61 @@ vs BAFS original ~3.500 LOC (diferença: BAFS tem kernel adapter + error.rs + ba
 | Journal overflow em write massivo | Journal de 1% do disco. Para v1, transação única não pode exceder journal. Em v2, journal circular. |
 | Deadlock com `Mutex<BafsVolume>` | NeuralFS agent expõe operações atômicas (read/write por path). Uma transação por chamada. |
 | Integração com VFS atual (que resolve por agente) | `NeuralFsAgent` implementa `FilesystemAgent` trait existente. Zero mudança no VFS. |
+
+
+---
+
+## 11. Sprint FS-v2 � Ecossistema de Armazenamento Completo
+
+A Sprint FS-v2 implementou todo o ecossistema de armazenamento em 4 subsprints, ~3.884 LOC, 0 erros.
+
+### FS-a: Funda\u00e7\u00e3o Multi-FS (1.712 LOC)
+
+| Item | Arquivo | Descri\u00e7\u00e3o |
+|------|---------|-----------|
+| BlockDevice+ write | `block_dev.rs` | `write_sectors()` no trait. ATA PIO (0x30) + AHCI DMA (0x35) com sfence + erro checking |
+| exFAT driver | `exfat.rs` | Leitura de pendrives/SDHC >4GB. VBR, cluster bitmap, FAT chain, volume label UTF-16 |
+| GPT escrita | `gpt.rs` | Criar tabela GPT com CRC32C, backup GPT, MBR protetiva. `gpt_format_single()` |
+| DiskIntelligenceAgent v2 | `disk_agent/mod.rs` | Probe real de exFAT/NTFS/EXT. SMART, hotplug, MHI registration, VFS mount, ARC cache |
+| USB-MSC fix | `usb_msc.rs` | `write_sector()` agora passa dados reais (n\u00e3o &mut[]) |
+
+### FS-b: NeuralFS + HDs do Usu\u00e1rio (1.357 LOC)
+
+| Item | Arquivo | Descri\u00e7\u00e3o |
+|------|---------|-----------|
+| NeuralFS (F1-F8) | `neural_fs/` (12 arquivos) | FS nativo CoW: CRC32C, superblock, B-tree, inode, dir, extent, journal WAL, volume, agente VFS. ~1.119 LOC. 11 DATA_LOSS bugs corrigidos via ponytail audit |
+| NVMe TRIM | `disk_agent/nvme.rs` | Dataset Management (Deallocate) para SSD. Range descriptor 8+4+4 bytes |
+| ATA TRIM | `ata.rs` | DATA SET MANAGEMENT via PIO. Cache FLUSH ap\u00f3s comando |
+| SMART hist\u00f3rico | `disk_agent/mod.rs` | SmartHistoryEntry ring buffer (64). Alerta preditivo se realoca\u00e7\u00e3o acelerar |
+| Bad block | `self_heal.rs` | Detec\u00e7\u00e3o via SMART pending/reallocated sectors + read/write retry |
+| NTFS leitura | `ntfs_reader.rs` | Parse $MFT, $Volume, FILE records, atributos residentes. Detecta label, mount via FilesystemDriver trait |
+| EXT2 leitura | `ext2_reader.rs` | Parse superblock, block group descriptors, inode table. Detecta label, mount via FilesystemDriver trait |
+
+### FS-c: MHI Ativo + Apps (+315 LOC)
+
+| Item | Arquivo | Descri\u00e7\u00e3o |
+|------|---------|-----------|
+| ARC cache din\u00e2mico | `disk_agent/cache.rs` | Configur\u00e1vel por tier, write-back coalescing (100 tick janela), LFU + rec\u00eancia eviction |
+| MHI Ativo | `mhi.rs` | `mhi_tick()` executa 1 migra\u00e7\u00e3o/tick via DMA ring. MegaTrain queue. `arc_suggest_tier()` real |
+| FilesystemDriver trait | `fs_driver.rs` | Trait unificado: detect, mount, read, write, list, free_space. Todos os FS implementam |
+| I/O Scheduler | `io_scheduler.rs` | Deadline: 4 filas (Critical > Read > Write > Idle). Write coalescing, batch flush, merge requisi\u00e7\u00f5es |
+| Storage Manager | `storage_manager.rs` | App: /storage, /smart, /mount, /format. Relat\u00f3rio de MHI, VFS mounts, discos |
+
+### FS-d: Rede + Prote\u00e7\u00e3o (+500 LOC)
+
+| Item | Arquivo | Descri\u00e7\u00e3o |
+|------|---------|-----------|
+| Network mounts | `netfs.rs` + `tools/netfs_bridge.py` | Protocolo serial tunnel (porta 4446). Backends WebDAV/NFS/S3/dummy. READ/WRITE/LIST via TCP |
+| Filesystem SelfHeal | `self_heal.rs` | `BAD_BLOCKS` global. `verify_block()` CRC32C. `read_with_retry()` / `write_with_retry()` 3 tentativas |
+| Disk Power Mgmt | `disk_power.rs` | ATA IDLE (spin-down config). NVMe PS0-PS5. Pol\u00edtica autom\u00e1tica SSD vs HDD |
+
+### Deferidos (read-only j\u00e1 atende)
+
+| Item | LOC | Motivo |
+|------|:---:|--------|
+| NTFS escrita | ~800 | Risco de corromper discos Windows. Postecipado |
+| EXT3/4 journal | ~600 | Journal replay complexo sem HW real para testar |
+| S3 Cloud Storage | ~300 | Parcialmente coberto pelo netfs_bridge.py |
+| GPU Direct Storage | ~300 | Requer GPU compute maduro (futuro) |
+
+### 0 erros, 0 warnings em todos os crates.
