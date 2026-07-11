@@ -34,12 +34,26 @@ lazy_static! {
 }
 
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;
+const PAGE_FAULT_IST_INDEX: u16 = 1;
+const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 
 lazy_static! {
     static ref TSS: TaskStateSegment = {
         let mut tss = TaskStateSegment::new();
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             const STACK_SIZE: usize = 4096 * 5;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
+        tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 4;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
+        tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 4;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
             let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
             stack_start + STACK_SIZE
@@ -66,18 +80,28 @@ struct Selectors {
 // Generic exception handler — dumps frame + error code + CPU state
 // --------------------------------------------------------------------------
 
-fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
-    serial_println!("[EXCEPTION] {} ip={:#x} cs={:#x} flags={:#x} stack={:#x}",
-        name,
-        stack_frame.instruction_pointer.as_u64(),
-        stack_frame.code_segment,
-        stack_frame.cpu_flags,
-        stack_frame.stack_pointer.as_u64(),
-    );
-    if let Some(code) = error_code {
-        serial_println!("[EXCEPTION] {} err={:#x}", name, code);
+// ponytail: lock-free serial write for exception context (avoids #DF cascade)
+fn putc(c: u8) {
+    unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") c, options(nostack, preserves_flags)); }
+}
+fn puts(s: &[u8]) { for &c in s { putc(c); } }
+fn puthex(mut n: u64) {
+    putc(b'0'); putc(b'x');
+    for _ in 0..16 {
+        let d = (n >> 60) as u8;
+        putc(if d < 10 { b'0' + d } else { b'a' + d - 10 });
+        n <<= 4;
     }
-    println!("[EXCEPTION] {} (detalhes no serial)", name);
+}
+
+fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
+    puts(b"[EXC] ");
+    puts(name.as_bytes());
+    puts(b" ip="); puthex(stack_frame.instruction_pointer.as_u64());
+    puts(b" fl="); puthex(stack_frame.cpu_flags as u64);
+    puts(b" sp="); puthex(stack_frame.stack_pointer.as_u64());
+    if let Some(code) = error_code { puts(b" err="); puthex(code); }
+    putc(b'\n');
 }
 
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
@@ -105,28 +129,18 @@ extern "x86-interrupt" fn reserved_handler(f: InterruptStackFrame) { dump_except
 
 extern "x86-interrupt" fn double_fault_handler(f: InterruptStackFrame, code: u64) -> ! {
     dump_exception("#DF", &f, Some(code));
-    serial_println!("[SELF-HEAL] DF: tentando restore de checkpoint...");
-    let restored = crate::SELF_HEAL.lock().restore_checkpoint();
-    if restored {
-        serial_println!("[SELF-HEAL] Checkpoint restaurado!");
-        serial_println!("[SELF-HEAL] Recomendado: reiniciar daemons via RESPAWN_QUEUE.");
-    } else {
-        serial_println!("[SELF-HEAL] Nenhum checkpoint. Halt.");
-    }
+    puts(b"[SELF-HEAL] Halt (lock-free).\n");
     loop { x86_64::instructions::hlt(); }
 }
 
 extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageFaultErrorCode) {
-    let addr = x86_64::registers::control::Cr2::read();
+    let cr2 = x86_64::registers::control::Cr2::read();
     dump_exception("#PF", &f, Some(code.bits() as u64));
-    serial_println!("[SECURITY] CR2={:#x} flags={:?}", addr, code);
-    // PF handler: SEM alloc, SEM EventBus (contexto de interrupcao)
-    // Tenta retornar (iret) — se o PF persistir, o contador eventualmente halt
+    puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 10 {
         return;
     }
-    serial_println!("[SECURITY] Page faults > 10 — HALT");
     loop { x86_64::instructions::hlt(); }
 }
 
@@ -245,8 +259,8 @@ lazy_static! {
         idt.invalid_tss.set_handler_fn(invalid_tss_handler);
         idt.segment_not_present.set_handler_fn(segment_not_present_handler);
         idt.stack_segment_fault.set_handler_fn(stack_segment_handler);
-        idt.general_protection_fault.set_handler_fn(general_protection_fault_handler);
-        idt.page_fault.set_handler_fn(page_fault_handler);
+        unsafe { idt.general_protection_fault.set_handler_fn(general_protection_fault_handler).set_stack_index(GENERAL_PROTECTION_IST_INDEX); }
+        unsafe { idt.page_fault.set_handler_fn(page_fault_handler).set_stack_index(PAGE_FAULT_IST_INDEX); }
         idt.x87_floating_point.set_handler_fn(fpu_error_handler);
         idt.alignment_check.set_handler_fn(alignment_check_handler);
         idt.machine_check.set_handler_fn(machine_check_handler);

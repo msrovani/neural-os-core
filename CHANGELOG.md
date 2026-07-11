@@ -1,6 +1,6 @@
 # Changelog — neural-os-core v1.0.0 "Gold Master"
 
-## v1.0.0 — 2026-07-09 — A Era do Silício
+## v1.0.0 — 2026-07-11 — A Era do Silício
 
 ### Sprints 92-100: Fundação Estável → Code Freeze
 
@@ -18,6 +18,7 @@
 - **Sprint 96b** — GGUF Streaming + FAT32 chunked: load_gguf_header_from_disk(), read_file_range()
 - **Sprint 97b** — RssAgent + EmailAgent: RSS/Atom parse + SMTP via http_get_raw()
 - **Sprint 98b** — HW Expert GPU Training: 43.339 PCI+USB devices, loss 0.097, 95.4% accuracy
+- **Sprint 99b** — Ponytail Audit: removed 19 dead files (~500 LOC), 3 dead deps (edge-dhcp, embedded-graphics, buddy-alloc), ~32 transitive crate nodes cleaned
 - **Sprint 100** — **Code Freeze & Release v1.0.0**
 
 ### Funcionalidades Principais

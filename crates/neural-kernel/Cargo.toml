@@ -15,22 +15,17 @@ pic8259 = "0.10"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
-buddy-alloc = "0.6"
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4", "socket-dns", "proto-dns"] }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
-embedded-graphics = { version = "0.8.2", default-features = false }
-edge-dhcp = "0.1"
 # ttf-parser não é compatível com no_std puro.
 # Usamos ferramenta Python tools/convert_ttf_to_bitmap.py para converter TTF
 # em arrays Rust embutidos, sem runtime parsing.
 
-[build-dependencies]
-# bootloader 0.11 gere o build via disco virtual (.UEFI/.BIOS)
-# Nao precisa mais de build-dependency bootloader
+
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("edge-dhcp"))', 'cfg(feature, values("kernel"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }
 
 [package.metadata.bootimage]
 run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139", "-smp", "2", "-accel", "whpx"]

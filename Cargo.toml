@@ -6,8 +6,9 @@ members = [
     "crates/agent-core",
     "crates/skill-registry",
     "crates/event-bus",
+    "crates/boot",
 ]
-default-members = ["crates/neural-kernel"]
+default-members = ["crates/boot"]
 
 [profile.dev]
 panic = "abort"

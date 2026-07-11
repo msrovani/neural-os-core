@@ -146,9 +146,13 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - **HW Expert GPU**: 43.339 dispositivos, loss 0.097, acurácia 95.4%
 - **Tag v1.0.0**: Criada e pushada
 
-### 🔴 Sprint 100 — Testes de boot pendentes
-- ~~`cargo clean -p neural-kernel && cargo check --release` 0 erros~~ ✅ Ok
-- QEMU boot (BIOS + UEFI + serial tunnel + AHCI + SMP) — manual
+### ✅ Sprint 100 — Code Freeze v1.0.0
+- ~~`cargo clean -p neural-kernel && cargo check --release` 0 erros~~ ✅
+- ~~QEMU UEFI boot (OVMF + TCG) — kernel init até runtime/scheduler~~ ✅
+- ~~Bootloader v0.11: BIOS image não funciona (triple fault), UEFI funciona~~ ✅
+- ~~Ponytail Audit: -19 arquivos, -500 LOC, -3 deps, -32 transitive crates~~ ✅
+- **🔴 Conhecido**: #PF no scheduler (`CR2=0x18000000xxx` — stack top boundary) — bootloader v0.11 UEFI não mapeia pilha corretamente. Workaround parcial: skip `init_phase()`.
+- **🔴 Conhecido**: WHPX crasha com SMP ("Unexpected VP exit code 4") — usar TCG.
 - VirtualBox boot test — manual
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)

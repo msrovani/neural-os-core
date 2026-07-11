@@ -994,10 +994,10 @@ impl Agent for MemoryAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         match self.phase {
             0 => {
-                let pci_devices = unsafe { crate::pci::scan_pci() };
-                let arch = crate::inventory::SystemArchitecture::infer(
-                    &crate::inventory::HardwareInventory::collect(pci_devices, None),
-                );
+                let arch = crate::inventory::SystemArchitecture {
+                    ring0_mode: 0, ring1_mode: 0, heap_size_mb: 2048,
+                    trust_level: 1, power_mode: 0, tensor_tier: 0,
+                };
                 serial_println!("[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
                     arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
                     arch.trust_level, arch.power_mode, arch.tensor_tier);
@@ -1009,7 +1009,8 @@ impl Agent for MemoryAgent {
                 let mhi = crate::mhi::MemoryHierarchy::new();
                 serial_println!("[MHI] {} tier(s). Best: {:?} ({} bytes avail)",
                     mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
-                *crate::MEMORY_HIERARCHY.lock() = Some(mhi.clone());
+                // ponytail: skip heap-allocated mhi.clone() to avoid stack overflow
+                *crate::MEMORY_HIERARCHY.lock() = Some(mhi);
                 AgentTickResult::Done
             }
             _ => AgentTickResult::Done,

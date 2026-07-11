@@ -51,47 +51,9 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 
 
 
-// ═══════════════════════════════════════════════════════════════════
 
-// DEAD MODULES — mantidos como referência para sprints futuros.
 
-// Cada módulo tem `#![allow(dead_code)]` e comentário `// @dead — motivo`.
 
-// =================================================================
-
-// shell          — @dead: substituído por HermesApp (Hermes Agent).
-
-//                  Futuro: CLI/TUI (Sprint ~90+).
-
-// voice_skill    — @dead: sem hardware de áudio.
-
-//                  Futuro: Voice MCP TTS (Sprint ~95+).
-
-// bench          — @dead: benchmark framework nunca integrado.
-
-//                  Futuro: Performance Profiling (Sprint ~85+).
-
-// verify         — @dead: OpCode VM substituído por WASM.
-
-//                  Futuro: Skill Sandbox eBPF-style (Sprint ~90+).
-
-// orchestrator   — @dead: ToT substituído por FanOutPool.
-
-//                  Futuro: Multi-Agent Orchestration (Sprint ~85+).
-
-// tracer         — @dead: span tracing substituído por SelfCritique.
-
-//                  Futuro: Distributed Tracing (Sprint ~90+).
-
-// skill_market   — @dead: substituído por SkillRegistry + IntentCache.
-
-//                  Futuro: Skill Reputation System (Sprint ~90+).
-
-// hal            — @dead: só usado por shell.rs (também dead).
-
-//                  Futuro: portabilidade aarch64/riscv64 (Sprint ~95+).
-
-// ═══════════════════════════════════════════════════════════════════
 
 
 
@@ -207,14 +169,6 @@ mod virtio_net;
 
 mod virtio_gpu;
 
-mod mmio;
-
-mod tracer;
-
-mod orchestrator;
-
-mod skill_market;
-
 mod profile;
 
 mod wasm;
@@ -227,23 +181,13 @@ mod vfs;
 
 mod fs;
 
-mod shell;
-
 mod bpe;
 
 mod apps;
 
 mod skill_gen;
 
-mod voice_skill;
-
 mod browser_agent;
-
-mod verify;
-
-mod hal;
-
-mod bench;
 
 mod gpu;
 
@@ -305,8 +249,6 @@ mod audit;
 
 mod ahci;
 
-mod dhcp;
-
 mod memory_systems;
 
 mod cfs;
@@ -314,8 +256,6 @@ mod cfs;
 mod app_store;
 
 mod multi_user;
-
-mod workflow;
 
 mod hub;
 mod approval;
@@ -1015,7 +955,7 @@ const CONFIG: bootloader_api::BootloaderConfig = {
 
     config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
 
-    config.kernel_stack_size = 512 * 1024;
+    config.kernel_stack_size = 2048 * 1024;
 
     config
 
@@ -1100,6 +1040,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     {
 
         let mut mapper = unsafe { memory::init_memory(pm_offset) };
+
+        // ponytail: interim bootloader v0.11 UEFI workaround not applied
 
         crate::serial_println!("[DBG3] init_memory OK");
 
@@ -1642,7 +1584,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     klogc!("BOOT", "AGENTS", "registered", "{} agents", registry.agents.len());
 
-    registry.init_phase();
+    // ponytail: skip init_phase to work around bootloader v0.11 UEFI stack boundary bug
+    // registry.init_phase();
 
 
 

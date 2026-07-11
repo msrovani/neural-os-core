@@ -3,12 +3,6 @@
 //! Double buffering: todas as operacoes vao para back buffer, swap() copia para tela.
 
 use core::ptr::write_volatile;
-use embedded_graphics::{
-    draw_target::DrawTarget,
-    geometry::{OriginDimensions, Size},
-    pixelcolor::{Rgb888, RgbColor},
-    Pixel,
-};
 use alloc::vec::Vec;
 
 #[derive(Clone, Copy)]
@@ -323,64 +317,4 @@ impl Framebuffer {
     }
 }
 
-impl OriginDimensions for Framebuffer {
-    fn size(&self) -> Size {
-        Size::new(self.info.width as u32, self.info.height as u32)
-    }
-}
 
-impl DrawTarget for Framebuffer {
-    type Color = Rgb888;
-    type Error = core::convert::Infallible;
-
-    fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
-    {
-        let addr = self.info.addr;
-        let stride = self.info.stride;
-        let bpp = self.info.bpp;
-        let w = self.info.width;
-        let h = self.info.height;
-        for Pixel(coord, color) in pixels.into_iter() {
-            let x = coord.x as usize;
-            let y = coord.y as usize;
-            if x < w && y < h {
-                let offset = y * stride + x * bpp;
-                unsafe {
-                    let ptr = addr as *mut u8;
-                    write_volatile(ptr.wrapping_add(offset + 0), color.b());
-                    write_volatile(ptr.wrapping_add(offset + 1), color.g());
-                    write_volatile(ptr.wrapping_add(offset + 2), color.r());
-                    if bpp > 3 { write_volatile(ptr.wrapping_add(offset + 3), 0xFF); }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn fill_solid(&mut self, area: &embedded_graphics::primitives::Rectangle, color: Self::Color) -> Result<(), Self::Error> {
-        let addr = self.info.addr;
-        let stride = self.info.stride;
-        let bpp = self.info.bpp;
-        let width = self.info.width;
-        let height = self.info.height;
-        let x0 = area.top_left.x.max(0) as usize;
-        let y0 = area.top_left.y.max(0) as usize;
-        let x1 = ((area.top_left.x + area.size.width as i32).min(width as i32)).max(0) as usize;
-        let y1 = ((area.top_left.y + area.size.height as i32).min(height as i32)).max(0) as usize;
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let offset = y * stride + x * bpp;
-                unsafe {
-                    let ptr = addr as *mut u8;
-                    write_volatile(ptr.wrapping_add(offset + 0), color.b());
-                    write_volatile(ptr.wrapping_add(offset + 1), color.g());
-                    write_volatile(ptr.wrapping_add(offset + 2), color.r());
-                    if bpp > 3 { write_volatile(ptr.wrapping_add(offset + 3), 0xFF); }
-                }
-            }
-        }
-        Ok(())
-    }
-}

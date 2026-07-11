@@ -3,7 +3,6 @@
 extern crate alloc;
 
 pub mod pipeline;
-pub mod dagsched;
 pub mod dashboard;
 pub mod state;
 pub mod timer_wheel;
@@ -128,11 +127,6 @@ impl CrewManifest {
             crew_id: None,
         }
     }
-}
-
-/// Agente que tambem implementa CrewManifest (role, goal, flow)
-pub trait CrewAgent: Agent {
-    fn crew_manifest(&self) -> &CrewManifest;
 }
 
 pub struct AgentInstance {

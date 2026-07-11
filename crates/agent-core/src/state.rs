@@ -7,10 +7,6 @@ pub struct AgentRunning;
 pub struct AgentFaulted;
 pub struct AgentDone;
 
-pub trait IntoAgent<State> {
-    fn name(&self) -> &str;
-}
-
 pub struct TypedAgent<State> {
     pub name: &'static str,
     pub id: u64,
