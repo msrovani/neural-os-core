@@ -62,8 +62,11 @@ impl AtaDriver {
 
     unsafe fn cmd(&self, lba: u32, count: u8, cmd: u8) {
         self.wait_bsy();
+        // Select drive: 0xE0 = master+LBA, 0xF0 = slave+LBA
         let head = if self.slave { 0xF0u8 } else { 0xE0u8 };
         write_io(self.io_base + 6, head | ((lba >> 24) as u8));
+        core::arch::asm!("out 0x80, al", in("al") 0u8, options(nostack)); // small delay
+        write_io(self.io_base + 6, head | ((lba >> 24) as u8)); // select again
         write_io(self.io_base + 1, 0);
         write_io(self.io_base + 2, count);
         write_io(self.io_base + 3, (lba & 0xFF) as u8);
@@ -146,6 +149,14 @@ impl AtaDriver {
         write_io(self.io_base + 7, 0xE7);
         self.wait_bsy();
         true
+    }
+
+    /// Try master then slave. Returns true on first successful read.
+    pub unsafe fn read_any(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
+        let m = AtaDriver { io_base: self.io_base, pci_bus: 0, pci_device: 0, pci_func: 0, slave: false };
+        if m.read_sectors(lba, buf, count) { return true; }
+        let s = AtaDriver { io_base: self.io_base, pci_bus: 0, pci_device: 0, pci_func: 0, slave: true };
+        s.read_sectors(lba, buf, count)
     }
 
     pub unsafe fn write_sectors(&self, lba: u32, data: &[u8], count: u8) -> bool {
