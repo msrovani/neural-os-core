@@ -20,6 +20,7 @@
 - **Sprint 98b** — HW Expert GPU Training: 43.339 PCI+USB devices, loss 0.097, 95.4% accuracy
 - **Sprint 99b** — Ponytail Audit: removed 19 dead files (~500 LOC), 3 dead deps (edge-dhcp, embedded-graphics, buddy-alloc), ~32 transitive crate nodes cleaned
 - **Sprint 100** — **Code Freeze & Release v1.0.0**
+- **Sprint 101** — **v2.0 Cognição**: Piper TTS VITS multilíngue, STT CTC engine, HDA audio DMA, NVIDIA PUSH_BUFFER GPU, ATA slave, RustCoder treinado
 
 ### Funcionalidades Principais
 

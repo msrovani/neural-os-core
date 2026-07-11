@@ -151,9 +151,19 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - ~~QEMU UEFI boot (OVMF + TCG) — kernel init até runtime/scheduler~~ ✅
 - ~~Bootloader v0.11: BIOS image não funciona (triple fault), UEFI funciona~~ ✅
 - ~~Ponytail Audit: -19 arquivos, -500 LOC, -3 deps, -32 transitive crates~~ ✅
-- **🔴 Conhecido**: #PF no scheduler (`CR2=0x18000000xxx` — stack top boundary) — bootloader v0.11 UEFI não mapeia pilha corretamente. Workaround parcial: skip `init_phase()`.
+- ~~**🔴 Conhecido**: #PF no scheduler — resolvido via heap stack switch~~ ✅
 - **🔴 Conhecido**: WHPX crasha com SMP ("Unexpected VP exit code 4") — usar TCG.
 - VirtualBox boot test — manual
+
+### 🟢 Sprint 101 — v2.0 Cognição (07/2026)
+- ~~Piper TTS VITS multilíngue (PT-BR+EN): 366 tensors, 15.6M params~~ ✅
+- ~~STT CTC engine: 55K params, MFCC→LSTM→CTC decode~~ ✅
+- ~~HDA audio capture: CORB/RIRB, DMA buffer, SD0 48kHz mono~~ ✅
+- ~~NVIDIA PUSH_BUFFER GPU compute: GPFIFO doorbell, DMA cmdbuf~~ ✅
+- ~~ATA slave: read_any() master+slave fallback~~ ✅
+- ~~RustCoder treinado: 263KB, loss=2.79~~ ✅
+- ~~BitNet 2B: baixado do HF, convertido para .bitnet (202MB)~~ ✅
+- **🔴 Pendente**: DHCP/Rede nativa (e1000 sem serial tunnel)
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
 - RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado
