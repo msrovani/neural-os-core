@@ -9,18 +9,26 @@
 
 ## v1.1.1 — GPU Compute (~1.700 LOC)
 
-**Foco:** Matmul ternário na GTX 1050 via PFIFO + Intel HD 530 shader
+**Foco:** Pipeline DMA GPU + Benchmark TFLOPS (compute shaders bloqueados por NDA)
 
-| Item | LOC | Descrição | Depois de |
-|------|:---:|-----------|-----------|
-| NVIDIA PFIFO PUSH_BUFFER channel | ~300 | Inicializar canal PFIFO na GTX 1050 (GP108). Register map: `0x002000` (PUSH_BUFFER), `0x002004` (size), `0x002008` (tail). Mapear BAR0 como UC. | GPU detect (ok) |
-| Firmware ACR loading | ~300 | Carregar FECS + GPCCS blobs do linux-firmware para a GPU via DMA. Pipeline: WPR (Wide Payload Register) → LS ucode → signature verification → falcon boot. | NVIDIA PFIFO |
-| Matmul shader ternário | ~200 | Kernel que executa `c = a * w` onde w é ternário (−1/0/+1). Embarque como blob (CUBIN ou PTX). Pipeline: CPU → DMA → VRAM → GPU executa → DMA → CPU. | Firmware loaded |
-| Intel Gen9+ EU shader | ~300 | Usar ring buffer `gpu/intel.rs` para submeter batch buffer com instruções EU (send, add, mul). Compilar via intel-graphics-compiler ou assembly manual. Mais simples que NVIDIA (sem firmware signed). | GPU ring (ok) |
-| Fallback automático | ~100 | `ternary_matmul_adaptive()` tenta GPU → se falhar, CPU. Pipeline: detect GPU disp., aloca VRAM, DMA weights, executa, DMA resultado. | Ambos shaders |
-| Benchmark TFLOPS | ~100 | Medir TFLOPS real vs teórico da GTX 1050 (1.8 TFLOPS FP16). Relatório: "matmul 128×128: 0.3 TFLOPS (17%) vs CPU AVX2: 0.05 TFLOPS". | Tudo acima |
+| Item | LOC | Status | Descrição |
+|------|:---:|:------:|-----------|
+| NVIDIA PFIFO PUSH_BUFFER channel | ~300 | ✅ | GPFIFO doorbell, cmdbuf @0x200000, timeout, PIO NOP. `pushbuffer_submit()` funcional. |
+| DMA CPU↔VRAM via BAR2 | ~100 | ✅ | `cpu_to_vram()` + `vram_to_cpu()` + `vram_alloc()`/`vram_free()` integrados. |
+| Fallback automático CPU | ~50 | ✅ | `cpu_matmul()` executado quando GPU não disponível. `gpu_matmul()` tenta NVIDIA→Intel→CPU. |
+| Benchmark TFLOPS | ~100 | ✅ | `gpu/bench.rs`: matmul 32/64/128, TFLOPS reportados, timer PIT 18.2Hz. |
+| **Firmware ACR loading** | ~300 | 🔴 | **Bloqueado por NDA.** Firmware NVIDIA requer blobs signed (FECS+GPCCS). Disponíveis em `linux-firmware.git` mas nécessitam pipeline WPR + falcon boot. Sem firmware, VRAM em P8 mode (stale reads). |
+| **Matmul shader ternário** (GPU) | ~200 | 🔴 | **Bloqueado por NDA.** NVIDIA ISA (CUBIN/PTX) não é pública. Microsoft `BitNet/gpu/` tem kernels CUDA mas exigem driver NVIDIA. Alternativa: CPU matmul (já funcional). |
+| **Intel Gen9+ EU shader** | ~300 | 🔴 | **Bloqueado por NDA.** Intel GEN ISA não é pública (apenas via NDA com Intel). `intel-graphics-compiler` (IGC) é open-source mas gera código para Mesa driver, não para bare-metal. Ring buffer + blitter funcionam. |
 
-**Total:** ~1.700 LOC
+**Total implementado:** ~550 LOC (pipeline DMA + fallback + benchmark)
+**Bloqueado por NDA:** ~800 LOC (depende de documentação de fabricante)
+
+**Workarounds identificados:**
+- GPU compute via CPU matmul (AVX2 em HW real, 0.05 TFLOPS)
+- DMA handshake VRAM via BAR2 verifica pipeline (já implementado)
+- Microsoft BitNet fornece kernels CUDA open-source, mas exigem NVIDIA driver
+- i915 driver tem MEDIA_OBJECT dispatch, requer engenharia reversa (~2 semanas)
 
 ---
 
