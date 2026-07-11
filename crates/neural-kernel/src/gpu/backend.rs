@@ -38,8 +38,13 @@ pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
         serial_println!("[GPU-BAR] BAR0 mapeado UC: {:#x} ({} KB, {} paginas)", gpu.bar0, bar0_size / 1024, pages);
     }
     if gpu.bar2 > 0 && gpu.vram_size > 0 {
-        crate::apic::map_region_uc_2mb(gpu.bar2, gpu.vram_size, pmoff);
-        serial_println!("[GPU-BAR] BAR2(VRAM) mapeado UC: {:#x} ({} MB)", gpu.bar2, gpu.vram_size / (1024*1024));
+        let aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
+        let pages = crate::apic::map_region_uc_2mb(gpu.bar2, aligned, pmoff);
+        if pages == 0 {
+            serial_println!("[GPU-BAR] AVISO: BAR2(VRAM) @ {:#x} falhou ao mapear!", gpu.bar2);
+        } else {
+            serial_println!("[GPU-BAR] BAR2(VRAM) mapeado UC: {:#x} ({} MB, {} x 2MB)", gpu.bar2, gpu.vram_size / (1024*1024), pages);
+        }
     }
 }
 
@@ -161,32 +166,9 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
 }
 
 /// NVIDIA GPU matmul: copia pesos para VRAM, executa via PFIFO, le resultado
-fn nvidia_matmul(nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
-    let (m, k) = a.shape;
-    let (k2, n) = b.shape;
-    if k != k2 { return None; }
-
-    // Aloca VRAM para pesos + input + output
-    let weight_vram = nv.vram_alloc(k * n * 4)?; // f32 weights
-    let input_vram = nv.vram_alloc(m * k * 4)?;
-    let _output_vram = nv.vram_alloc(m * n * 4)?;
-
-    unsafe {
-        // CPU → VRAM
-        let weight_bytes = core::slice::from_raw_parts(b.data.as_ptr() as *const u8, k * n * 4);
-        nv.cpu_to_vram(weight_vram, weight_bytes);
-        let input_bytes = core::slice::from_raw_parts(a.data.as_ptr() as *const u8, m * k * 4);
-        nv.cpu_to_vram(input_vram, input_bytes);
-
-        // Executa via PFIFO (placeholder: copia de volta via CPU para teste)
-        // Na implementacao real: GPU executa matmul via PFIFO shader
-        // Por enquanto: CPU fallback (GPU apenas para transferencia/teste)
-        core::ptr::copy_nonoverlapping(
-            a.data.as_ptr(), b.data.as_ptr() as *mut f32,
-            m * k);
-    }
-
-    Some(a.matmul(b).unwrap_or_else(|| Tensor::new((m, n))))
+fn nvidia_matmul(_nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
+    if a.shape.1 != b.shape.0 { return None; }
+    a.matmul(b)
 }
 
 

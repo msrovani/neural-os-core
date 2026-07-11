@@ -89,23 +89,28 @@ impl BTreeNode {
     }
 
     pub fn read(dev: &mut dyn BlockDevice, start_lba: u64, block_addr: u64) -> Option<Self> {
+        let block_lba = block_addr.checked_mul(8)?;
         let mut node = BTreeNode { block_addr, data: [0u8; 4096] };
         for i in 0..8usize {
-            let lba = start_lba + block_addr * 8 + i as u64;
+            let lba = start_lba.checked_add(block_lba.checked_add(i as u64)?)?;
             let off = i * 512;
             if !dev.read_sectors(lba, &mut node.data[off..off + 512]) {
                 return None;
             }
         }
+        // Valida CRC do no; se falhar, retorna None
+        if !crate::neural_fs::checksum::verify_block(&node.data) {
+            return None;
+        }
         Some(node)
     }
 
-    pub fn write(&self, dev: &mut dyn BlockDevice, start_lba: u64) -> bool {
+    pub fn write(&mut self, dev: &mut dyn BlockDevice, start_lba: u64) -> bool {
+        self.write_checksum();
         for i in 0..8usize {
             let lba = start_lba + self.block_addr * 8 + i as u64;
             let off = i * 512;
-            let sector: &[u8] = &self.data[off..off + 512];
-            if !dev.write_sectors(lba, sector) {
+            if !dev.write_sectors(lba, &self.data[off..off + 512]) {
                 return false;
             }
         }
@@ -116,17 +121,16 @@ impl BTreeNode {
     pub fn get_item(&self, idx: usize) -> Option<&[u8]> {
         let count = self.item_count() as usize;
         if idx >= count { return None; }
-        // Items no header (leaf): key(17) + value(15) = 32 bytes cada
-        // Internal: key(17) + child_ptr(8) + child_gen(8) = 33 bytes cada
         let item_size: usize = if self.level() == 0 { 32 } else { 33 };
-        let off = 24 + idx * item_size;
+        let off = 24usize.checked_add(idx.checked_mul(item_size)?)?;
+        if off + item_size > 4096 { return None; }
         Some(&self.data[off..off + item_size])
     }
 
     pub fn find_key(&self, key: &Key) -> Result<usize, usize> {
         let count = self.item_count() as usize;
         for i in 0..count {
-            let item = self.get_item(i).unwrap();
+            let item = match self.get_item(i) { Some(x) => x, None => return Err(i) };
             let k = Key::from_bytes(item);
             match k.cmp(key) {
                 core::cmp::Ordering::Equal => return Ok(i),

@@ -46,11 +46,19 @@ impl Inode {
         b[28..36].copy_from_slice(&self.block_count.to_le_bytes());
         b[36..40].copy_from_slice(&self.link_count.to_le_bytes());
         b[40..44].copy_from_slice(&self.flags.to_le_bytes());
+        // CRC32C nos bytes 44-48 (cobre bytes 0-44)
+        let crc = crate::neural_fs::checksum::crc32c(&b[0..44]);
+        b[44..48].copy_from_slice(&crc.to_le_bytes());
         b
     }
 
-    pub fn from_bytes(b: &[u8]) -> Self {
-        Inode {
+    pub fn from_bytes(b: &[u8]) -> Option<Self> {
+        if b.len() < 48 { return None; }
+        // Verifica CRC32C
+        let stored_crc = u32::from_le_bytes([b[44], b[45], b[46], b[47]]);
+        let computed_crc = crate::neural_fs::checksum::crc32c(&b[0..44]);
+        if stored_crc != computed_crc { return None; }
+        Some(Inode {
             mode: u16::from_le_bytes([b[0], b[1]]),
             owner: u16::from_le_bytes([b[2], b[3]]),
             size: u64::from_le_bytes([b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11]]),
@@ -59,7 +67,7 @@ impl Inode {
             block_count: u64::from_le_bytes([b[28], b[29], b[30], b[31], b[32], b[33], b[34], b[35]]),
             link_count: u32::from_le_bytes([b[36], b[37], b[38], b[39]]),
             flags: u32::from_le_bytes([b[40], b[41], b[42], b[43]]),
-        }
+        })
     }
 
     pub fn is_dir(&self) -> bool { self.mode & Inode::S_IFDIR != 0 }

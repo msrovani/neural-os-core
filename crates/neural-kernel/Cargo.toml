@@ -1,6 +1,6 @@
 [package]
 name = "neural-kernel"
-version = "0.59.0-test"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]

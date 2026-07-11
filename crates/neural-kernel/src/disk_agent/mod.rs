@@ -249,7 +249,7 @@ impl DiskIntelligenceAgent {
                     index: parts.len() as u8,
                     lba_start,
                     lba_end,
-                    sector_count: lba_end - lba_start,
+                    sector_count: lba_end - lba_start + 1,
                     mbr_type,
                     fs_info: None,
                     is_bootable: attrs & 0x0000000000000004 == 0, // bit 2 = no auto mount

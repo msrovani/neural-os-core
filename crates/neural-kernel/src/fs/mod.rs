@@ -59,10 +59,10 @@ pub fn read_vfs(path: &str) -> Result<Vec<u8>, &'static str> {
         if entry.agent.name() == agent_name {
             let data = entry.agent.read(&rel_path).unwrap_or_else(|_| Vec::new());
             drop(guard);
-            if data.is_empty() { return Err("Read failed"); }
             return Ok(data);
         }
     }
+    drop(guard);
     Err("Agent not found")
 }
 

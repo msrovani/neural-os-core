@@ -29,18 +29,31 @@ impl DirEntry {
         b[0..8].copy_from_slice(&self.name_hash.to_le_bytes());
         b[8..16].copy_from_slice(&self.inode.to_le_bytes());
         let name_bytes = self.name.as_bytes();
-        let len = name_bytes.len().min(239);
-        b[16] = len as u8;
-        b[17..17 + len].copy_from_slice(&name_bytes[..len]);
+        if name_bytes.len() > 239 {
+            return Vec::new(); // nome muito longo, falha
+        }
+        b[16] = name_bytes.len() as u8;
+        b[17..17 + name_bytes.len()].copy_from_slice(&name_bytes);
+        let crc = crate::neural_fs::checksum::crc32c(&b[0..248]);
+        b[248..252].copy_from_slice(&crc.to_le_bytes());
         b
     }
 
     pub fn from_bytes(b: &[u8]) -> Option<Self> {
-        if b.len() < 16 { return None; }
+        if b.len() < 252 { return None; }
+        let stored_crc = u32::from_le_bytes([b[248], b[249], b[250], b[251]]);
+        let computed_crc = crate::neural_fs::checksum::crc32c(&b[0..248]);
+        if stored_crc != computed_crc { return None; }
         let hash = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]);
         let inode = u64::from_le_bytes([b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]]);
         let name_len = (b[16] as usize).min(239);
-        let name = core::str::from_utf8(&b[17..17 + name_len]).unwrap_or("").to_string();
+        if name_len == 0 { return Some(DirEntry { name_hash: hash, inode, name: String::new() }); }
+        let name = core::str::from_utf8(&b[17..17 + name_len])
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| {
+                // Fallback: substitui UTF-8 invalido por replacement character
+                alloc::string::String::from_utf8_lossy(&b[17..17 + name_len]).into_owned()
+            });
         Some(DirEntry { name_hash: hash, inode, name })
     }
 

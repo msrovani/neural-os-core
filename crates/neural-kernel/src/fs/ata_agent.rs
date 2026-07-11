@@ -42,12 +42,18 @@ impl FilesystemAgent for AtaAgent {
                 }
             }
             "sda1" => {
-                let mut buf = [0u8; 512];
-                if unsafe { ata.read_sectors(63, &mut buf, 1) } {
-                    Ok(buf.to_vec())
-                } else {
-                    Err("Falha ao ler setor 63")
+                // Le primeiro setor da particao 1 via MBR
+                let mbr_lba = 0u32;
+                let mut mbr = [0u8; 512];
+                if !unsafe { ata.read_sectors(mbr_lba, &mut mbr, 1) } { return Err("Falha ao ler MBR"); }
+                if mbr[510] == 0x55 && mbr[511] == 0xAA {
+                    let p1_lba = u32::from_le_bytes([mbr[0x1BE+8], mbr[0x1BE+9], mbr[0x1BE+10], mbr[0x1BE+11]]);
+                    if p1_lba > 0 {
+                        let mut buf = [0u8; 512];
+                        if unsafe { ata.read_sectors(p1_lba, &mut buf, 1) } { return Ok(buf.to_vec()); }
+                    }
                 }
+                Err("Particao 1 nao encontrada")
             }
             "info" => {
                 let info = alloc::format!("ATA disk. IO base: {:#06x}\n", 

@@ -57,6 +57,7 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 
 
 
+
 mod acpi;
 
 mod agents;
@@ -1041,7 +1042,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         let mut mapper = unsafe { memory::init_memory(pm_offset) };
 
-        // ponytail: interim bootloader v0.11 UEFI workaround not applied
+        // ponytail: stack boundary fix deferred — needs proper P3/P2 page table from end-of-RAM frames
 
         crate::serial_println!("[DBG3] init_memory OK");
 

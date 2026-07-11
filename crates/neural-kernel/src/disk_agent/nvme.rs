@@ -36,6 +36,7 @@ struct QueueMem {
 }
 
 unsafe impl Send for NvmeDriver {}
+unsafe impl Sync for NvmeDriver {}
 
 impl NvmeDriver {
     pub unsafe fn probe() -> Option<Self> {
@@ -211,10 +212,11 @@ impl NvmeDriver {
     }
 
     unsafe fn ring_db(&self, qid: u32, count: u32) {
+        // sfence ANTES do doorbell: garante que command data esta visivel via DMA
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
         let stride = 1 << (self.dstrd + 2);
         let db = self.mmio.add((0x1000 + qid as usize * stride as usize) / 4);
         db.write_volatile(count);
-        core::arch::asm!("sfence", options(nostack, preserves_flags));
     }
 
     unsafe fn alloc_q(entries: u32) -> Option<QueueMem> {

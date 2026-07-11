@@ -72,15 +72,15 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
         // Intel dGPU (Arc) tem VRAM dedicada (vram_size > 0)
         let is_intel_igpu = dev.vendor_id == VENDOR_INTEL && vram_size == 0;
 
-        // BAR0 = MMIO registers (memory BAR, bits 0-3 indicam tipo)
+        // BAR0 = MMIO registers
         let bar0_raw = (dev.bar0 as u64) | ((dev.bar1 as u64) << 32);
-        let bar0 = if dev.bar0 & 1 == 0 { bar0_raw & !0xF } else { bar0_raw & 0xFFFF };
+        let bar0 = if dev.bar0 & 1 == 0 { bar0_raw & !0xF } else { bar0_raw & 0xFFFC };
         // BAR2 = VRAM (NVIDIA/AMD) ou Intel Arc dGPU
         let (bar2, vram_bytes) = if is_intel_igpu {
             (0u64, 0u64)
         } else {
             let bar2_raw = (dev.bar2 as u64) | ((dev.bar3 as u64) << 32);
-            let bar2 = if dev.bar2 & 1 == 0 { bar2_raw & !0xF } else { bar2_raw & 0xFFFF };
+            let bar2 = if dev.bar2 & 1 == 0 { bar2_raw & !0xF } else { bar2_raw & 0xFFFC };
             (bar2, vram_size)
         };
 

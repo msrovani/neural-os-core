@@ -36,10 +36,14 @@ impl Extent {
 }
 
 /// Aloca blocos da free-extent tree (last-fit)
+/// Retorna (start_block, allocated_extent, optional_remainder_extent).
 pub fn alloc_from_free_tree(tree_entries: &[Extent], count: u64) -> Option<(u64, Extent, Option<Extent>)> {
+    if count == 0 || tree_entries.is_empty() { return None; }
     let largest = tree_entries.iter().max_by_key(|e| e.block_count)?;
     if largest.block_count < count { return None; }
-    let start = largest.start_block + largest.block_count - count;
+    // Protecao contra overflow: start_block + block_count deve ser valido
+    let end = largest.start_block.checked_add(largest.block_count)?;
+    let start = end.checked_sub(count)?;
     let allocated = Extent::new(start, count);
     let remainder = if largest.block_count > count {
         Some(Extent::new(largest.start_block, largest.block_count - count))

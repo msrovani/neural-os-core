@@ -41,13 +41,8 @@ impl XpuEngine {
     }
 
     /// Decode: gera 1 token (sempre CPU por enquanto — GPU é stub futuro)
-    pub fn decode(&mut self, model: &TransformerModel, ctx: &[u16], cache: &mut KvCache, tick_start: u64) -> u16 {
-        let token = if self.config.use_gpu_decode {
-            let (_logits, _) = model.forward_with_kv(&[ctx[ctx.len().saturating_sub(1)]], cache);
-            model.sample(ctx, 5, 0.8)
-        } else {
-            model.generate_next(ctx)
-        };
+    pub fn decode(&mut self, model: &TransformerModel, ctx: &[u16], _cache: &mut KvCache, tick_start: u64) -> u16 {
+        let token = model.generate_next(ctx);
         self.total_tokens = self.total_tokens.wrapping_add(1);
         self.decode_ticks += now_ticks().wrapping_sub(tick_start);
         token
@@ -66,7 +61,7 @@ impl XpuEngine {
             if tok == 0 || tok == 2 { break; }
             output.push(tok);
             ctx.push(tok);
-            if ctx.len() > 512 { ctx.drain(0..ctx.len().saturating_sub(256)); }
+            if ctx.len() > 512 { ctx.drain(0..ctx.len() - 256); }
         }
         let elapsed = now_ticks().wrapping_sub(t0);
         serial_println!("[XPU] {} tokens em {} ticks", output.len() - prompt.len(), elapsed);

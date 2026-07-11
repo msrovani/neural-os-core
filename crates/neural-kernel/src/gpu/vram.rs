@@ -61,26 +61,26 @@ impl VramBuddy {
         let req = size.max(4096);
         let o = order(req);
         // Busca do order requisitado até MAX_ORDER
-        let mut order_found = None;
-        for oi in (o as usize)..=(MAX_ORDER - MIN_ORDER) as usize {
-            if !self.free[oi].is_empty() {
-                order_found = Some(oi + MIN_ORDER as usize);
+        let mut found_idx: Option<usize> = None;
+        for idx in (o - MIN_ORDER) as usize..NUM_ORDERS {
+            if !self.free[idx].is_empty() {
+                found_idx = Some(idx);
                 break;
             }
         }
-        let oi = order_found?;
+        let idx = found_idx?;
+        let found_order = idx + MIN_ORDER as usize;
         // Remove bloco da free list
-        let addr = self.free[oi - MIN_ORDER as usize].pop()?;
-        let _block_size = 1u64 << oi;
+        let addr = self.free[idx].pop()?;
 
-        // Split até o order requisitado
+        // Split ate o order requisitado
         let current = addr;
-        let mut current_order = oi as u32;
+        let mut current_order = found_order as u32;
         while current_order > o {
             current_order -= 1;
             let half = 1u64 << current_order;
-            let buddy = current ^ half;
-            self.free[(current_order - MIN_ORDER) as usize].push(buddy);
+            let b = current ^ half;
+            self.free[(current_order - MIN_ORDER) as usize].push(b);
         }
 
         self.total_allocated += req;
@@ -135,6 +135,10 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     let vram_size = gpu.vram_size;
 
     let pages = crate::apic::map_region_uc_2mb(vram_phys, vram_size, pmoff);
+    if pages == 0 {
+        serial_println!("[VRAM] {}: falha ao mapear VRAM @ {:#x}!", gpu.name, vram_phys);
+        return false;
+    }
     serial_println!("[VRAM] Mapeados {} x 2MB pages para VRAM @ {:#x}", pages, vram_phys);
 
     let test_addr = vram_phys + pmoff;

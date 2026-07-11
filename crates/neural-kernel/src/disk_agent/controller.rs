@@ -77,10 +77,12 @@ impl StorageController for AtaCtrl {
     }
 
     fn read_blocks(&self, _disk: u8, lba: u64, buf: &mut [u8], blocks: usize) -> bool {
+        if blocks > 255 { return false; }
         unsafe { self.ata.read_sectors(lba as u32, buf, blocks as u8) }
     }
 
     fn write_blocks(&self, _disk: u8, lba: u64, data: &[u8], blocks: usize) -> bool {
+        if blocks > 255 { return false; }
         unsafe { self.ata.write_sectors(lba as u32, data, blocks as u8) }
     }
 

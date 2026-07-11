@@ -8,10 +8,12 @@ pub trait BlockDevice {
 
 impl BlockDevice for AtaDriver {
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool {
+        if lba > 0x0FFFFFFF { return false; } // LBA48 not yet implemented
         let count = (buf.len() / 512).min(255) as u8;
         unsafe { crate::ata::AtaDriver::read_sectors(self, lba as u32, buf, count) }
     }
     fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool {
+        if lba > 0x0FFFFFFF { return false; } // LBA48 not yet implemented
         let count = (buf.len() / 512).min(255) as u8;
         unsafe { crate::ata::AtaDriver::write_sectors(self, lba as u32, buf, count) }
     }

@@ -101,13 +101,15 @@ impl GpuJobRing {
 
     /// Adiciona um job ao ring (CPU side, producer)
     pub fn push(&mut self, job: &GpuJob) -> bool {
-        let idx = self.tail as usize;
-        if idx + 4 > RING_SIZE_DWORDS as usize {
-            serial_println!("[GPU-RING] ring full (tail={}, head={})", self.tail, self.head);
+        let h = self.head_reg() as usize;
+        let t = self.tail as usize;
+        let space = if t >= h { RING_SIZE_DWORDS as usize - (t - h) } else { h - t };
+        if space < 4 {
+            serial_println!("[GPU-RING] ring full (tail={}, head={}, space={})", self.tail, self.head_reg(), space);
             return false;
         }
+        let idx = self.tail as usize;
         unsafe {
-            self.ring_va.add(idx).write_volatile(job.cmd);
             self.ring_va.add(idx + 1).write_volatile(job.arg0);
             self.ring_va.add(idx + 2).write_volatile(job.arg1);
             self.ring_va.add(idx + 3).write_volatile(job.arg2);
@@ -123,14 +125,27 @@ impl GpuJobRing {
         (self.doorbell)(self.bar0_virt, self.tail);
     }
 
+    /// Lê o register HEAD do vendor especifico
+    fn head_reg(&self) -> u32 {
+        unsafe {
+            fence(Ordering::Acquire);
+            match self.gpu_vendor {
+                crate::gpu::detect::GpuVendor::Intel =>
+                    core::ptr::read_volatile((self.bar0_virt + 0x120034) as *const u32),
+                crate::gpu::detect::GpuVendor::Nvidia =>
+                    core::ptr::read_volatile((self.bar0_virt + 0x002004) as *const u32),
+                crate::gpu::detect::GpuVendor::Amd =>
+                    core::ptr::read_volatile((self.bar0_virt + 0x1B4) as *const u32),
+                _ => 0,
+            }
+        }
+    }
+
     /// Polla head avancar (GPU consumiu jobs)
     pub fn poll_head(&self, timeout: u32) -> bool {
         let target = self.tail;
         for _ in 0..timeout {
-            let h = unsafe {
-                fence(Ordering::Acquire);
-                core::ptr::read_volatile((self.bar0_virt + 0x120034) as *const u32)
-            };
+            let h = self.head_reg();
             if h == target { return true; }
             core::hint::spin_loop();
         }

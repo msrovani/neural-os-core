@@ -5,6 +5,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::collections::BTreeSet;
 use crate::block_dev::BlockDevice;
 
 const EBPB_SIGNATURE: [u8; 8] = *b"EXFAT   ";
@@ -81,12 +82,16 @@ impl<'a> ExfatReader<'a> {
         let mut data = Vec::with_capacity(size);
         let mut cluster = first_cluster;
         let cluster_bytes = self.bytes_per_cluster as usize;
+        let mut visited = BTreeSet::new();
         while cluster >= 2 && cluster < 0xFFFF_FFF0 && data.len() < size {
+            // Detecta loops na FAT chain
+            if !visited.insert(cluster) { return None; }
+
             let lba = self.cluster_to_lba(cluster);
             let mut buf = vec![0u8; cluster_bytes];
             for i in 0..cluster_bytes / 512 {
                 if data.len() + i * 512 >= size { break; }
-                if !self.dev.read_sectors(lba + i as u64, &mut buf[i * 512..(i+1) * 512]) { break; }
+                if !self.dev.read_sectors(lba + i as u64, &mut buf[i * 512..(i+1) * 512]) { return None; }
             }
             let remaining = size - data.len();
             let copy_end = remaining.min(cluster_bytes);

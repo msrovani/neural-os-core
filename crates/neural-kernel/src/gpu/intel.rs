@@ -239,10 +239,11 @@ pub unsafe fn init_gtt(mmio: u64, ring_pa: u64, ring_size_pages: u32) -> bool {
     // GTT entries ficam no inicio da GMADR (primeiros 4KB = 512 entradas × 8 bytes)
     let gtt_base = mmio + GMADR_BASE;
 
-    // Cada entrada GTT = 8 bytes: bits 0-39 = addr >> 12, bit 0 = PRESENT
+    // Cada entrada GTT = 8 bytes: bits 63:12 = PFN (pa >> 12), bit 0 = PRESENT
+    // Formato Gen9+: entry = pa | PRESENT. PA ja alinhado, bits 11:0 = 0.
     for i in 0..ring_size_pages {
         let pa = ring_pa + (i as u64) * 4096;
-        let entry: u64 = (pa >> 12) << 2 | 0x1; // PFN << 2 | PRESENT (formato Gen9+)
+        let entry: u64 = pa | 0x1; // PFN bits 60:12 + PRESENT bit 0
         core::ptr::write_volatile((gtt_base + (i as u64) * 8) as *mut u64, entry);
     }
 
@@ -287,8 +288,19 @@ impl BcsRing {
 
     pub fn write(&mut self, cmd: &[u32]) {
         let len = cmd.len().min(self.ring_size as usize);
-        for i in 0..len {
-            unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+        let wrap = (self.tail as usize + len).saturating_sub(self.ring_size as usize);
+        if wrap > 0 {
+            let first = len - wrap;
+            for i in 0..first {
+                unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+            }
+            for i in 0..wrap {
+                unsafe { self.ring_va.add(i).write_volatile(cmd[first + i]); }
+            }
+        } else {
+            for i in 0..len {
+                unsafe { self.ring_va.add(self.tail as usize + i).write_volatile(cmd[i]); }
+            }
         }
         self.tail = (self.tail + len as u32) % self.ring_size;
     }

@@ -36,11 +36,11 @@ impl NvidiaGpu {
             gpu.name, version, gpu.bar0, gpu.bar2);
         if version == 0xFFFFFFFF || version == 0 { return None; }
 
-        // Mapeia BAR2 (VRAM): pagina inicial de 4MB
-        let vram_window = gpu.vram_size.min(4 * 1024 * 1024);
-        let pages = (vram_window / 4096) as usize;
-        for i in 0..pages.min(64) { // 64 paginas = 256KB iniciais
-            unsafe { crate::apic::map_page_uc(gpu.bar2 + (i as u64) * 4096, pmoff); }
+        // Mapeia BAR2 (VRAM) via 2MB pages para acesso completo
+        if gpu.vram_size > 0 {
+            let vram_aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
+            let mapped = unsafe { crate::apic::map_region_uc_2mb(gpu.bar2, vram_aligned, pmoff) };
+            serial_println!("[NVIDIA] {} VRAM {} MB mapeado ({} x 2MB pages)", gpu.name, gpu.vram_mb(), mapped);
         }
 
         let vram_ptr = gpu.bar2 + pmoff;
@@ -70,13 +70,14 @@ impl NvidiaGpu {
             serial_println!("[NVIDIA] PFIFO: PUT={:#x} GET={:#x}", put, get);
             if put == 0xFFFFFFFF && get == 0xFFFFFFFF { return false; }
 
+            // sfence ANTES do doorbell: garante que command data esta visivel via DMA
+            core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
             // Submete NOP via PIO: method 0x00 com subchannel 0
             let method = Self::METHOD_NOP | Self::SUBCH_0;
-            let arg = 0u32; // NOP argument (ignored)
+            let arg = 0u32;
             core::ptr::write_volatile((mmio + Self::PFIFO_BASE + 0x0000) as *mut u32, method);
             core::ptr::write_volatile((mmio + Self::PFIFO_BASE + 0x0004) as *mut u32, arg);
-            core::ptr::write_volatile((mmio + Self::PFIFO_BASE + 0x0008) as *mut u32, 1); // kick
-            core::arch::asm!("sfence", options(nostack, preserves_flags));
+            core::ptr::write_volatile((mmio + Self::PFIFO_BASE + 0x0008) as *mut u32, 1);
 
             // Verifica se GET avancou (PFIFO consumiu o NOP)
             let get2 = core::ptr::read_volatile((mmio + Self::PFIFO_GET) as *const u32);
@@ -89,10 +90,10 @@ impl NvidiaGpu {
 
     /// Submete um metodo via PIO com argumento
     pub unsafe fn pio_method(&self, method: u32, arg: u32) {
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
         core::ptr::write_volatile((self.mmio + Self::PFIFO_BASE + 0x0000) as *mut u32, method);
         core::ptr::write_volatile((self.mmio + Self::PFIFO_BASE + 0x0004) as *mut u32, arg);
         core::ptr::write_volatile((self.mmio + Self::PFIFO_BASE + 0x0008) as *mut u32, 1);
-        core::arch::asm!("sfence", options(nostack, preserves_flags));
     }
 
     /// Aloca bloco na VRAM via BAR2 (mapeamento direto)
@@ -100,19 +101,29 @@ impl NvidiaGpu {
         crate::gpu::vram::vram_alloc(size)
     }
 
-    /// Copia dados CPU->VRAM via BAR2 UC write
+    /// Copia dados CPU->VRAM via BAR2 UC write (usando palavras de 32 bits)
     pub unsafe fn cpu_to_vram(&self, vram_off: u64, data: &[u8]) {
-        let dst = (self.vram_bar2 + vram_off) as *mut u8;
-        for i in 0..data.len() {
-            core::ptr::write_volatile(dst.add(i), data[i]);
+        let dst = (self.vram_bar2 + vram_off) as *mut u32;
+        let words = data.len() / 4;
+        for i in 0..words {
+            let val = u32::from_le_bytes([data[i*4], data[i*4+1], data[i*4+2], data[i*4+3]]);
+            core::ptr::write_volatile(dst.add(i), val);
+        }
+        for i in (words * 4)..data.len() {
+            core::ptr::write_volatile((self.vram_bar2 + vram_off + i as u64) as *mut u8, data[i]);
         }
     }
 
-    /// Copia dados VRAM->CPU via BAR2 UC read
+    /// Copia dados VRAM->CPU via BAR2 UC read (usando palavras de 32 bits)
     pub unsafe fn vram_to_cpu(&self, vram_off: u64, buf: &mut [u8]) {
-        let src = (self.vram_bar2 + vram_off) as *const u8;
-        for i in 0..buf.len() {
-            buf[i] = core::ptr::read_volatile(src.add(i));
+        let src = (self.vram_bar2 + vram_off) as *const u32;
+        let words = buf.len() / 4;
+        for i in 0..words {
+            let val = core::ptr::read_volatile(src.add(i));
+            buf[i*4..i*4+4].copy_from_slice(&val.to_le_bytes());
+        }
+        for i in (words * 4)..buf.len() {
+            buf[i] = core::ptr::read_volatile((self.vram_bar2 + vram_off + i as u64) as *const u8);
         }
     }
 

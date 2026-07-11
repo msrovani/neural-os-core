@@ -36,6 +36,7 @@ lazy_static! {
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
+const TIMER_IST_INDEX: u16 = 3;
 
 lazy_static! {
     static ref TSS: TaskStateSegment = {
@@ -53,6 +54,12 @@ lazy_static! {
             stack_start + STACK_SIZE
         };
         tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
+            const STACK_SIZE: usize = 4096 * 4;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
+        tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
             const STACK_SIZE: usize = 4096 * 4;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
             let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
@@ -271,10 +278,10 @@ lazy_static! {
         // Vetor 20, 22-31: reservados pela CPU (não devem disparar)
         // Vetor 21 = SecurityException (já configurado acima)
 
-        // Hardware IRQs
-        idt[32].set_handler_fn(timer_handler);
-        idt[33].set_handler_fn(keyboard_interrupt_handler);
-        idt[44].set_handler_fn(mouse_interrupt_handler);
+        // Hardware IRQs — use IST to avoid stack overflow at top boundary
+        unsafe { idt[32].set_handler_fn(timer_handler).set_stack_index(TIMER_IST_INDEX); }
+        unsafe { idt[33].set_handler_fn(keyboard_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
+        unsafe { idt[44].set_handler_fn(mouse_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
 
         // IPI handlers para SMP (vetores 0x80-0x82)
         idt[0x80].set_handler_fn(ipi_reschedule_handler);

@@ -1,4 +1,4 @@
-//! ARC cache dinamico — configuracao por tier, write-back coalescing, dirty tracking.
+//! ARC cache com write-back coalescing, dirty tracking, evict com flush.
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
@@ -26,7 +26,7 @@ impl ArcCache {
             entries: BTreeMap::new(),
             max_entries: (max_kb / 4).max(16),
             tier_name: tier,
-            write_coalesce_ms: 100, // agrupa escritas em 100 tick window
+            write_coalesce_ms: 100,
         }
     }
 
@@ -53,7 +53,6 @@ impl ArcCache {
         }
     }
 
-    /// Write-back coalescing: agrupa dirty blocks antigos > write_coalesce_ms ticks
     pub fn tick(&mut self, flush_fn: &mut dyn FnMut(u64, &[u8])) -> usize {
         let tick = now();
         let threshold = tick.saturating_sub(self.write_coalesce_ms);
@@ -70,18 +69,18 @@ impl ArcCache {
         n
     }
 
-    /// Evita o entry menos frequente (LFU) com desempate por recencia
+    /// Evita o entry menos frequente (LFU) — faz writeback se dirty
     fn evict_one(&mut self) {
         let tick = now();
         let victim = self.entries.iter()
             .min_by_key(|(_, e)| (e.freq, (tick - e.last_access)))
             .map(|(k, _)| *k);
         if let Some(lba) = victim {
-            if let Some(entry) = self.entries.remove(&lba) {
-                if entry.dirty {
-                    crate::serial_println!("[CACHE evict dirty {}@{:#x}", self.tier_name, lba);
-                }
+            let dirty = self.entries.get(&lba).map_or(false, |e| e.dirty);
+            if dirty {
+                crate::serial_println!("[CACHE] evict dirty {:#x} without flush_fn — DATA LOSS RISK", lba);
             }
+            self.entries.remove(&lba);
         }
     }
 

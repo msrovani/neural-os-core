@@ -21,12 +21,10 @@ impl AmdGpu {
             return None;
         }
 
-        if gpu.bar2 > 0 {
-            let pages = (gpu.vram_size.min(1024 * 1024) / 4096) as usize;
-            for i in 0..pages {
-                unsafe { crate::apic::map_page_uc(gpu.bar2 + (i as u64) * 4096, pmoff); }
-            }
-            serial_println!("[AMD] {} VRAM {} MB mapeada ({} paginas).", gpu.name, gpu.vram_mb(), pages);
+        if gpu.bar2 > 0 && gpu.vram_size > 0 {
+            let aligned = gpu.vram_size.next_power_of_two().min(256 * 1024 * 1024);
+            let pages = unsafe { crate::apic::map_region_uc_2mb(gpu.bar2, aligned, pmoff) };
+            serial_println!("[AMD] {} VRAM {} MB mapeada ({} x 2MB pages).", gpu.name, gpu.vram_mb(), pages);
         }
 
         serial_println!("[AMD] PM4 compute futuro.");

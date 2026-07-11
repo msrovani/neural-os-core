@@ -117,7 +117,7 @@ mod tests {
         assert!(ino.is_file());
         assert!(!ino.is_dir());
         let bytes = ino.to_bytes();
-        let ino2 = Inode::from_bytes(&bytes);
+        let ino2 = Inode::from_bytes(&bytes).unwrap();
         assert_eq!(ino.mode, ino2.mode);
         assert_eq!(ino.size, ino2.size);
 

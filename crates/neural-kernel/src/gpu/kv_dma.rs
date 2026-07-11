@@ -11,7 +11,7 @@ pub enum DmaDir { CpuToGpu, GpuToCpu }
 
 /// Transferência DMA de KV cache entre CPU RAM e GPU VRAM
 pub struct KvDmaTransfer {
-    pub cpu_paddr: u64,       // physical address in CPU RAM
+    pub cpu_paddr: u64,       // virtual address in CPU RAM
     pub gpu_paddr: u64,       // physical address in GPU VRAM
     pub size: u64,            // bytes
     pub dir: DmaDir,
@@ -19,26 +19,27 @@ pub struct KvDmaTransfer {
 }
 
 impl KvDmaTransfer {
-    pub fn new(cpu_paddr: u64, size: u64, dir: DmaDir, _gpu: &GpuInfo) -> Option<Self> {
-        let pmoff = unsafe { crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed) };
+    pub fn new(cpu_vaddr: u64, size: u64, dir: DmaDir, _gpu: &GpuInfo) -> Option<Self> {
         let gpu_paddr = vram_alloc(size as usize)?;
 
         if dir as u32 == 0 { // CpuToGpu
-            let src = (cpu_paddr + pmoff) as *const u8;
-            let dst = (gpu_paddr + pmoff) as *mut u8;
-            unsafe { core::ptr::copy_nonoverlapping(src, dst, size as usize); }
-            // Sfence para garantir visibilidade para GPU
+            let src = cpu_vaddr as *const u8;
+            let dst_pa = (gpu_paddr + crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed)) as *mut u8;
+            unsafe { core::ptr::copy_nonoverlapping(src, dst_pa, size as usize); }
             unsafe { core::arch::asm!("sfence", options(nostack, preserves_flags)); }
         } else {
-            let src = (gpu_paddr + pmoff) as *const u8;
-            let dst = (cpu_paddr + pmoff) as *mut u8;
-            unsafe { core::ptr::copy_nonoverlapping(src, dst, size as usize); }
+            let src_pa = (gpu_paddr + crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed)) as *const u8;
+            let dst = cpu_vaddr as *mut u8;
+            unsafe {
+                core::ptr::copy_nonoverlapping(src_pa, dst, size as usize);
+                core::arch::asm!("sfence", options(nostack, preserves_flags));
+            }
         }
 
-        serial_println!("[KV-DMA] {} -> {} ({} bytes) dir={:?}",
-            cpu_paddr, gpu_paddr, size, dir);
+        serial_println!("[KV-DMA] cpu_vaddr={:#x} gpu_paddr={:#x} ({} bytes) dir={:?}",
+            cpu_vaddr, gpu_paddr, size, dir);
 
-        Some(KvDmaTransfer { cpu_paddr, gpu_paddr, size, dir, done: true })
+        Some(KvDmaTransfer { cpu_paddr: cpu_vaddr, gpu_paddr, size, dir, done: true })
     }
 
     pub fn wait(&mut self) { while !self.done { core::hint::spin_loop(); } }
@@ -56,10 +57,8 @@ pub fn kv_transfer_layer(
     let k_gpu = vram_alloc(layer_bytes)?;
     let v_gpu = vram_alloc(layer_bytes)?;
 
-    let _k_cpu_paddr = layer_k_cpu.as_ptr() as u64 - pmoff;
-    let _v_cpu_paddr = layer_v_cpu.as_ptr() as u64 - pmoff;
-
     unsafe {
+        // CPU virtual addr → GPU VRAM (via BAR2 UC mapping)
         core::ptr::copy_nonoverlapping(
             layer_k_cpu.as_ptr(),
             (k_gpu + pmoff) as *mut f32,
