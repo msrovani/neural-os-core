@@ -8,6 +8,7 @@ pub struct AtaDriver {
     pub pci_bus: u8,
     pub pci_device: u8,
     pub pci_func: u8,
+    pub slave: bool,
 }
 
 impl AtaDriver {
@@ -22,14 +23,15 @@ impl AtaDriver {
             if d.class == 0x01 && (d.subclass == 0x01 || d.subclass == 0x06) {
                 let io = (d.bar0 as u16) & 0xFFF0;
                 if io == 0 || io == 0xFFFF { continue; }
-                if Self::detect(io, 0xA0) || Self::detect(io, 0xB0) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function }); }
+                // Try master then slave
+                if Self::detect(io, 0xA0) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function, slave: false }); }
+                if Self::detect(io, 0xB0) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function, slave: true }); }
             }
         }
         // 2. Fallback: portas legadas ISA (PIIX3 legacy mode - BARs zerados)
         for &base in &[0x1F0u16, 0x170u16] {
-            if Self::detect(base, 0xA0) || Self::detect(base, 0xB0) {
-                return Some(AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0 });
-            }
+            if Self::detect(base, 0xA0) { return Some(AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave: false }); }
+            if Self::detect(base, 0xB0) { return Some(AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave: true }); }
         }
         None
     }
@@ -60,7 +62,8 @@ impl AtaDriver {
 
     unsafe fn cmd(&self, lba: u32, count: u8, cmd: u8) {
         self.wait_bsy();
-        write_io(self.io_base + 6, 0xE0 | ((lba >> 24) as u8));
+        let head = if self.slave { 0xF0u8 } else { 0xE0u8 };
+        write_io(self.io_base + 6, head | ((lba >> 24) as u8));
         write_io(self.io_base + 1, 0);
         write_io(self.io_base + 2, count);
         write_io(self.io_base + 3, (lba & 0xFF) as u8);
@@ -73,8 +76,9 @@ impl AtaDriver {
     unsafe fn identify(&self) -> Option<[u16; 256]> {
         self.wait_bsy();
         
-        // Comando IDENTIFY
-        write_io(self.io_base + 6, 0xA0);
+        // Comando IDENTIFY — select master (0xA0) or slave (0xB0)
+        let sel = if self.slave { 0xB0u8 } else { 0xA0u8 };
+        write_io(self.io_base + 6, sel);
         write_io(self.io_base + 2, 0);
         write_io(self.io_base + 3, 0);
         write_io(self.io_base + 4, 0);
