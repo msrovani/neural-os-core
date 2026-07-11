@@ -1892,6 +1892,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
+    // LLM test with micro model (before 2B loads — micro is instant)
+    if !model_loaded {
+        let prompt_micro = "hello";
+        let resp_micro = crate::cortex::generate_via_model(prompt_micro);
+        serial_println!("[LLM-TEST] micro prompt='{}' response='{}'", prompt_micro, resp_micro);
+    }
+
     if !model_loaded {
 
         // Try QEMU generic loader (dev apenas)
@@ -2072,12 +2079,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
 
-    // LLM test: generate one response to confirm model works at runtime
-    {
-        let prompt = "hello";
-        let response = crate::cortex::generate_via_model(prompt);
-        serial_println!("[LLM-TEST] prompt='{}' response='{}'", prompt, response);
-    }
+    // ponytail: 2B model inferencia lenta em TCG — skip LLM test, scheduler assume
 
     // ponytail: allocate heap stack, switch to it, then call raw_sched_run (never returns)
     unsafe {
