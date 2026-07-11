@@ -48,3 +48,4 @@ tools/*.pcap
 tools/disk_*
 MICRO.BITNET
 tools/MICRO.BITNET
+pipenv
