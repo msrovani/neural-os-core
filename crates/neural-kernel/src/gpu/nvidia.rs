@@ -127,6 +127,52 @@ impl NvidiaGpu {
         }
     }
 
+    /// Submete PUSH_BUFFER via GPFIFO entry (DMA). Buffer deve estar em phys mem visivel.
+    /// `buf_phys`: endereço físico do buffer de comandos.
+    /// `num_methods`: número de métodos no buffer (cada método = 2 words: method+arg).
+    pub unsafe fn pushbuffer_submit(&self, buf_phys: u64, num_methods: u32) -> bool {
+        if !self.pfifo_ready { return false; }
+        // Escreve GPFIFO entry: { address, size, control }
+        let entries = (num_methods + 1) / 2; // 2 methods per GPFIFO entry
+        core::ptr::write_volatile((self.mmio + Self::PFIFO_BASE + 0x0000) as *mut u32, buf_phys as u32);
+        core::ptr::write_volatile((self.mmio + Self::PFIFO_BASE + 0x0004) as *mut u32, (buf_phys >> 32) as u32);
+        core::ptr::write_volatile((self.mmio + Self::PFIFO_BASE + 0x0008) as *mut u32, entries);
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+        // Doorbell: increment PUT
+        let put = core::ptr::read_volatile((self.mmio + Self::PFIFO_PUT) as *const u32);
+        core::ptr::write_volatile((self.mmio + Self::PFIFO_PUT) as *mut u32, put + 1);
+        // Aguarda GPU processar (GET alcanca PUT)
+        for _ in 0..1000000 {
+            core::hint::spin_loop();
+            let get = core::ptr::read_volatile((self.mmio + Self::PFIFO_GET) as *const u32);
+            if get >= put + 1 { return true; }
+        }
+        serial_println!("[NVIDIA] PUSH_BUFFER timeout: PUT={} GET={}", put + 1,
+            core::ptr::read_volatile((self.mmio + Self::PFIFO_GET) as *const u32));
+        false
+    }
+
+    /// Monta buffer de comandos para matmul: copia pesos da VRAM → sistema → CPU
+    pub unsafe fn dma_matmul_test(&self, vram_src: u64, sys_dst: u64, words: u32) -> bool {
+        // Cria buffer de comandos: DMA COPY method
+        let mut cmdbuf = [0u32; 16];
+        cmdbuf[0] = 0x00000002; // METHOD_DMA
+        cmdbuf[1] = vram_src as u32;
+        cmdbuf[2] = 0x00000002;
+        cmdbuf[3] = (vram_src >> 32) as u32;
+        cmdbuf[4] = 0x00000002;
+        cmdbuf[5] = sys_dst as u32;
+        cmdbuf[6] = 0x00000002;
+        cmdbuf[7] = (sys_dst >> 32) as u32;
+        cmdbuf[8] = 0x00000000; // NOP
+        cmdbuf[9] = words;
+        // Copia buffer para phys addr baixo (0x200000) via DMA visivel
+        let cmdbuf_phys = 0x200000u64;
+        let ptr = (cmdbuf_phys + crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed)) as *mut u32;
+        for i in 0..10 { core::ptr::write_volatile(ptr.add(i), cmdbuf[i]); }
+        self.pushbuffer_submit(cmdbuf_phys, 10)
+    }
+
     pub fn status(&self) -> alloc::string::String {
         alloc::format!("NVIDIA PFIFO: {} | VRAM: {} MB | PIO: {}",
             if self.channel_active { "ativo" } else { "inativo" },
