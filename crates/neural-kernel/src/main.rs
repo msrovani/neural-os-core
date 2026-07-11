@@ -964,6 +964,39 @@ const CONFIG: bootloader_api::BootloaderConfig = {
 
 
 
+// ponytail: runs scheduler on heap-allocated stack (avoids bootloader v0.11 stack boundary #PF)
+fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
+    registry.run(
+        || { x86_64::instructions::hlt(); },
+        || {
+            let q = RESPAWN_QUEUE.lock().clone();
+            if !q.is_empty() { RESPAWN_QUEUE.lock().clear(); }
+            q
+        },
+        |name| {
+            serial_println!("[SCHEDULER] Respawning agent '{}'...", name);
+            let agent: Option<Box<dyn Agent>> = match name {
+                "monitor" => Some(Box::new(agents::MonitorAgent::new())),
+                "hw_bridge" => Some(Box::new(agents::HwBridgeAgent)),
+                "network_agent" => Some(Box::new(agents::NetAgent::new())),
+                "input" => Some(Box::new(agents::InputAgent::new())),
+                "cortex_llm" => Some(Box::new(agents::CortexAgent::new())),
+                "intent_router" => Some(Box::new(agents::HermesAgent::new())),
+                "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
+                "display" => Some(Box::new(display::agent::DisplayAgent::new())),
+                "cron" => Some(Box::new(cron::CronAgent::new())),
+                "mcp" => Some(Box::new(mcp::McpAgent::new())),
+                "security" => Some(Box::new(security::SecurityAgent::new())),
+                "safety" => Some(Box::new(safety::SafetyAgent::new())),
+                "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())),
+                "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
+                _ => None,
+            };
+            agent
+        },
+    );
+}
+
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Probe serial port (sem lazy_static, funciona antes do heap)
@@ -2039,65 +2072,23 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
 
-    serial_println!("[SCHEDULER] DEBUG: About to call registry.run()");
-
-    registry.run(
-
-        || { x86_64::instructions::hlt(); },
-
-        || {
-
-            let q = RESPAWN_QUEUE.lock().clone();
-
-            if !q.is_empty() { RESPAWN_QUEUE.lock().clear(); }
-
-            q
-
-        },
-
-        |name| {
-
-            serial_println!("[SCHEDULER] Respawning agent '{}'...", name);
-
-            let agent: Option<Box<dyn Agent>> = match name {
-
-                "monitor" => Some(Box::new(agents::MonitorAgent::new())),
-
-                "hw_bridge" => Some(Box::new(agents::HwBridgeAgent)),
-
-                "network_agent" => Some(Box::new(agents::NetAgent::new())),
-
-                "input" => Some(Box::new(agents::InputAgent::new())),
-
-                "cortex_llm" => Some(Box::new(agents::CortexAgent::new())),
-
-                "intent_router" => Some(Box::new(agents::HermesAgent::new())),
-
-                "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
-
-                "display" => Some(Box::new(display::agent::DisplayAgent::new())),
-
-                "cron" => Some(Box::new(cron::CronAgent::new())),
-
-                "mcp" => Some(Box::new(mcp::McpAgent::new())),
-
-                "security" => Some(Box::new(security::SecurityAgent::new())),
-
-                "safety" => Some(Box::new(safety::SafetyAgent::new())),
-
-                "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())),
-
-                "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
-
-                _ => None,
-
-            };
-
-            agent
-
-        },
-
-    );
+    // ponytail: allocate heap stack, switch to it, then call raw_sched_run (never returns)
+    unsafe {
+        let heap_stack = alloc::boxed::Box::new([0u8; 65536]);
+        let sp = heap_stack.as_ptr() as u64 + 65536;
+        core::mem::forget(heap_stack);
+        let reg = &mut registry as *mut agent_core::AgentRegistry;
+        core::arch::asm!(
+            "mov rsp, {sp}",
+            "mov rdi, {reg}",
+            "jmp {run}",
+            sp = in(reg) sp,
+            reg = in(reg) reg,
+            run = sym raw_sched_run,
+            clobber_abi("C"),
+            options(noreturn)
+        );
+    }
 
 }
 
