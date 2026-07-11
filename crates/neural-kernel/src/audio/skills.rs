@@ -3,13 +3,61 @@ use alloc::string::String;
 use skill_registry::{Skill, McpManifest, OutputSchema};
 use spin;
 use crate::audio::vad::{VAD, VadTransition};
-use crate::audio::neural::PocketTtsEngine;
+use crate::audio::piper::PiperEngine;
 
-static TTS_ENGINE: spin::Mutex<Option<PocketTtsEngine>> = spin::Mutex::new(None);
+static TTS_ENGINE: spin::Mutex<Option<PiperEngine>> = spin::Mutex::new(None);
 
 pub fn init_neural_tts() {
-    let engine = crate::audio::neural::try_load_pocket_tts();
+    let engine = try_load_piper();
     *TTS_ENGINE.lock() = engine;
+}
+
+fn try_load_piper() -> Option<PiperEngine> {
+    unsafe {
+        // Try both master and slave ATA devices
+        for try_slave in &[false, true] {
+            let mut tmp = crate::ATA_DRIVER.lock();
+            if let Some(ref mut ata) = *tmp {
+                // Temporarily switch slave flag and try reading
+                let orig = ata.slave;
+                ata.slave = *try_slave;
+                let parts = crate::fat32::read_mbr(ata);
+                for p in &parts {
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        for name in &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"] {
+                            if let Some(data) = fs.read_file(name) {
+                                let mut eng = PiperEngine::new();
+                                if eng.load(&data) {
+                                    crate::serial_println!("[PIPER] Piper TTS loaded from FAT ({}): {}", if *try_slave {"slave"} else {"master"}, name);
+                                    ata.slave = orig;
+                                    return Some(eng);
+                                }
+                            }
+                        }
+                    }
+                }
+                ata.slave = orig;
+            }
+        }
+    }
+    // Try QEMU loader fallback
+    let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    for &addr in &[0x110000000u64, 0x120000000u64] {
+        unsafe {
+            let probe = (addr + pm) as *const u32;
+            if core::ptr::read_volatile(probe) == 0xBE11BE11 {
+                let data = core::slice::from_raw_parts(probe as *const u8, 70 * 1024 * 1024);
+                let mut eng = PiperEngine::new();
+                if eng.load(data) {
+                    crate::serial_println!("[PIPER] Piper TTS loaded from QEMU loader @{:x}", addr);
+                    return Some(eng);
+                }
+            }
+        }
+    }
+    crate::serial_println!("[PIPER] Piper TTS ausente — formant synth ativo");
+    None
 }
 
 pub struct TtsSkill;
@@ -31,7 +79,7 @@ impl Skill for TtsSkill {
             match guard.as_ref() {
                 Some(engine) if engine.is_loaded() => {
                     let audio = engine.generate(text);
-                    crate::serial_println!("[TTS] Neural (GPU): \"{}\" ({} samples, gpu_matmul ativo)", text, audio.len());
+                    crate::serial_println!("[TTS] Piper (neural): \"{}\" ({} samples, multi-lang PT-BR+EN)", text, audio.len());
                     audio
                 }
                 _ => {

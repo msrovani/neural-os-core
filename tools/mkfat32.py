@@ -107,6 +107,8 @@ def populate(path):
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet")),
         ("BITNET-2B.BITNET", find_file("bitnet_2B.bitnet") or find_file("BITNET-2B.BITNET") or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet")),
+        ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN")),
+        ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
     ]
     # CONFIG.TXT
     config_content = b"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\nLOG_TO_FAT32=1\n"
