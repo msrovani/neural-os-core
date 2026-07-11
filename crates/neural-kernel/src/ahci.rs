@@ -276,7 +276,7 @@ impl AhciDriver {
 
 fn alloc_ahci_page() -> u64 {
     let mut guard = GLOBAL_ALLOCATOR.lock();
-    let alloc = guard.as_mut().unwrap();
+    let alloc = match guard.as_mut() { Some(a) => a, None => return 0 };
     match alloc.allocate_contiguous(1) {
         Some(f) => f.start_address().as_u64(),
         None => 0,

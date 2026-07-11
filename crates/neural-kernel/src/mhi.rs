@@ -102,9 +102,9 @@ pub struct MigrationRequest {
     pub owner: String,
 }
 
-use spin::Mutex;
-pub static MHI_REGISTRY: Mutex<MhiRegistry> = Mutex::new(MhiRegistry::new());
-pub static MIGRATION_QUEUE: Mutex<Vec<MigrationRequest>> = Mutex::new(Vec::new());
+use crate::sync::irq_lock::IrqSafeLock;
+pub static MHI_REGISTRY: IrqSafeLock<MhiRegistry> = IrqSafeLock::new(MhiRegistry::new());
+pub static MIGRATION_QUEUE: IrqSafeLock<Vec<MigrationRequest>> = IrqSafeLock::new(Vec::new());
 
 // ─── Compatibilidade com codigo existente ─────────────────────────────
 
