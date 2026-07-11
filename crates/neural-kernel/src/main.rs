@@ -1803,6 +1803,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
                 serial_println!("[RAMDISK] Big model loaded. CortexAgent upgraded.");
 
+                // Test 2B inference: gera 1 token para confirmar
+                let r = crate::cortex::generate_via_model("hello world");
+                serial_println!("[LLM-2B] prompt='hello world' response='{}'", r);
+
                 crate::boot_logger::log("BOOT: Ramdisk .bitnet model loaded");
 
                 model_loaded = true;
