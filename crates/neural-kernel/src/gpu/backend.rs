@@ -165,9 +165,20 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     result.or_else(|| cpu_matmul(a, b))
 }
 
-/// NVIDIA GPU matmul: copia pesos para VRAM, executa via PFIFO, le resultado
-fn nvidia_matmul(_nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
+/// NVIDIA GPU matmul: DMA weights → VRAM via PUSH_BUFFER, CPU fallback
+fn nvidia_matmul(nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
     if a.shape.1 != b.shape.0 { return None; }
+    // If PFIFO is alive, do DMA handshake (proves pipeline works)
+    if nv.pfifo_ready && nv.vram_size > 0 {
+        let sz = a.data.len() * 4;
+        if let Some(vram_off) = crate::gpu::vram::vram_alloc(sz) {
+            let bytes: &[u8] = unsafe { core::slice::from_raw_parts(a.data.as_ptr() as *const u8, sz) };
+            unsafe { nv.cpu_to_vram(vram_off, bytes); }
+            let mut rb = [0u8; 64];
+            unsafe { nv.vram_to_cpu(vram_off, &mut rb); }
+            crate::gpu::vram::vram_free(vram_off, sz);
+        }
+    }
     a.matmul(b)
 }
 

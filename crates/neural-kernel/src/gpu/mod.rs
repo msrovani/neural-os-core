@@ -14,4 +14,5 @@ pub mod kv_dma;
 pub mod xpu;
 pub mod msched;
 pub mod display_coex;
+pub mod bench;
 
