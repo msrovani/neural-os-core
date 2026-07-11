@@ -25,6 +25,7 @@ pub mod usb;
 pub mod pipeline;
 pub mod token;
 pub mod codebook;
+pub mod stt;
 
 pub fn init_audio() {
     crate::audio::settings::init_audio_settings();

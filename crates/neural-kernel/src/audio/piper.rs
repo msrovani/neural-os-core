@@ -50,7 +50,7 @@ impl PiperEngine {
                 (128, 128 * k)
             } else {
                 // Conv or linear: try to determine rows/cols
-                let r = if cnt > 100000 { 384 } else if nm.contains("conv_pre") { 256 }
+                let _r = if cnt > 100000 { 384 } else if nm.contains("conv_pre") { 256 }
                        else if nm.contains("proj.") { 192 } else if nm.contains("pre.") { 192 }
                        else if nm.contains("convs_1x1") { 192 }
                        else if nm.contains("weight") && cnt > 1000 {
@@ -121,17 +121,6 @@ impl PiperEngine {
                 }
             }
         }
-        (out, out_len)
-    }
-
-    // Residual block: conv1 → relu → conv1 → residual add
-    fn resblock(&self, input: &[f32], ch: usize, len: usize, w0: &W, w1: &W, k0: usize, k1: usize) -> (Vec<f32>, usize) {
-        let (mut r, rl) = self.conv1d(input, ch, len, w0, k0, ch, 1);
-        for x in r.iter_mut() { *x = x.max(0.0); }
-        let (r2, _) = self.conv1d(&r, ch, rl, w1, k1, ch, 1);
-        let out_len = r2.len() / ch;
-        let mut out = vec![0.0f32; ch * out_len];
-        for i in 0..ch * out_len.min(input.len()) { out[i] = input[i] + r2[i]; }
         (out, out_len)
     }
 
