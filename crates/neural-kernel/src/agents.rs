@@ -324,6 +324,7 @@ pub struct HermesAgent {
     user_receiver: Receiver,
     llm_receiver: Receiver,
     security_receiver: Receiver,
+    health_receiver: Receiver,
     cortex: crate::cortex::Cortex,
     state: HermesState,
     status_skill: String,
@@ -352,6 +353,7 @@ impl HermesAgent {
             user_receiver: EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT),
             llm_receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE),
             security_receiver: EVENT_BUS.subscribe("SECURITY_ALERT"),
+            health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
             cortex: crate::cortex::Cortex::new(),
             state: HermesState::Idle,
             status_skill: String::from("system_status"),
@@ -510,6 +512,19 @@ impl Agent for HermesAgent {
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
                 payload: text.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
+            });
+        }
+
+        // Check health issues (firmware/skill ausentes)
+        if let Some(event) = self.health_receiver.try_receive() {
+            had_work = true;
+            let text = core::str::from_utf8(&event.payload).unwrap_or("");
+            serial_println!("[HEALTH] {}", text);
+            // Health issues viram intent para o LLM resolver
+            let _ = EVENT_BUS.publish(Event {
+                id: 0, topic: String::from(hermes::TOPIC_USER_INTENT),
+                payload: alloc::format!("diagnostique e corrija: {}", text).into_bytes(),
+                token: CapabilityToken::Legacy(1),
             });
         }
 

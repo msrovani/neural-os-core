@@ -101,9 +101,63 @@ pub struct SelfHeal {
     pub checkpoint: Checkpoint,
 }
 
+/// Invariantes de hardware: I3 (firmware) e I4 (skill)
+const FW_KNOWN_VIDS: &[(u16, u16, &str, &str)] = &[
+    (0x10DE, 0x03, "nvidia/gp108", "FECS+GPCCS"),
+    (0x8086, 0x03, "i915/skl+kbl", "GuC+HuC+DMC"),
+    (0x10EC, 0x02, "rtl_nic", "rtl8168*"),
+    (0x10EC, 0x0D, "rtl_nic", "rtl8168*"),
+    (0x8086, 0x02, "intel/iwlwifi", "AX200/AX210"),
+    (0x8086, 0x0D, "intel/iwlwifi", "AX200/AX210"),
+];
+
 impl SelfHeal {
     pub const fn new() -> Self {
         SelfHeal { pending_fixes: Vec::new(), lessons: Vec::new(), checkpoint: Checkpoint::empty() }
+    }
+
+    /// I3: Verifica se um dispositivo conhecido tem firmware carregado.
+    /// Se nao tiver, registra pendencia e publica HEALTH_ISSUE.
+    pub fn check_device_firmware(&mut self, vid: u16, did: u16, class: u8) -> bool {
+        let needs_fw = FW_KNOWN_VIDS.iter().any(|(v, c, _, _)| *v == vid && *c == class as u16);
+        if !needs_fw { return true; }
+        // Verifica se firmware ja foi carregado (via test_load_firmware log)
+        let loaded = match (vid, class) {
+            (0x10DE, 0x03) => unsafe { crate::gpu::firmware::nvidia_acr_load_available() },
+            _ => false, // outros ainda nao tem check
+        };
+        if !loaded {
+            let dev = alloc::format!("{:04X}:{:04X} class={}", vid, did, class);
+            self.pending_fixes.push((dev.clone(),
+                alloc::format!("firmware ausente para VID={:04X} DID={:04X}", vid, did)));
+            let msg = alloc::format!("HEALTH_ISSUE:I3:{}:firmware_ausente", dev);
+            let _ = crate::EVENT_BUS.publish(crate::Event {
+                id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
+                payload: msg.into_bytes(), token: crate::CapabilityToken::Legacy(1),
+            });
+            serial_println!("[SELFHEAL] I3: {} precisa de firmware", dev);
+            return false;
+        }
+        true
+    }
+
+    /// I4: Verifica se existe skill para um dispositivo sem driver.
+    pub fn check_device_skill(&mut self, vid: u16, did: u16, class: u8, desc: &str) -> bool {
+        let skill_name = alloc::format!("driver_{:04X}_{:04X}", vid, did);
+        let has_skill = crate::SKILL_REGISTRY.lock().has_skill(&skill_name);
+        if !has_skill && class != 0x03 && class != 0x06 {
+            // Classes 03 (VGA) e 06 (ISA) tem drivers nativos; outras podem precisar skill
+            self.pending_fixes.push((skill_name.clone(),
+                alloc::format!("skill ausente para {} ({:04X}:{:04X}:{:02X})", desc, vid, did, class)));
+            let msg = alloc::format!("HEALTH_ISSUE:I4:{}:skill_ausente:{:04X}:{:04X}", desc, vid, did);
+            let _ = crate::EVENT_BUS.publish(crate::Event {
+                id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
+                payload: msg.into_bytes(), token: crate::CapabilityToken::Legacy(1),
+            });
+            serial_println!("[SELFHEAL] I4: {} sem skill '{}'", desc, skill_name);
+            return false;
+        }
+        true
     }
 
     pub fn save_checkpoint(&mut self) {

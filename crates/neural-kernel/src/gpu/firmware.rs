@@ -174,6 +174,32 @@ pub unsafe fn intel_guc_load(_gpu: &GpuInfo, _pmoff: u64) -> SecureBootResult {
     SecureBootResult::NoFirmware
 }
 
+/// Verifica se firmware NVIDIA ACR esta disponivel (sem carregar).
+pub fn nvidia_acr_load_available() -> bool {
+    load_firmware_file("fecs_bl.bin").is_some()
+}
+
+/// Carrega firmware para qualquer dispositivo baseado em VID/DID/classe.
+/// Usado pelo SelfHealAgent para hot-load apos download.
+pub fn hot_load_firmware(vid: u16, _did: u16, class: u8) -> SecureBootResult {
+    match (vid, class) {
+        (0x10DE, 0x03) => {
+            // Tenta NVIDIA ACR loading via GPU detectado
+            unsafe {
+                let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+                let gpus = crate::gpu::detect::detect_all();
+                for gpu in &gpus {
+                    if gpu.vendor == crate::gpu::detect::GpuVendor::Nvidia {
+                        return nvidia_acr_load(gpu, pmoff);
+                    }
+                }
+            }
+            SecureBootResult::NoFirmware
+        }
+        _ => SecureBootResult::NoFirmware,
+    }
+}
+
 /// Teste de firmware — carrega e valida todos os blobs NVIDIA sem GPU.
 /// Chamado no boot para debug, mesmo sem GPU NVIDIA presente.
 pub fn test_load_firmware() -> bool {
