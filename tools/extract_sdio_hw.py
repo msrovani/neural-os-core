@@ -15,6 +15,8 @@ try:
 except ImportError:
     py7zr = None
 
+SEVENZ_EXE = r"C:\Program Files\7-Zip\7z.exe"
+
 HWID_RE = re.compile(
     r'(?:PCI|VEN|DEV|SUBSYS|REV|CC)'
     r'|USB\\VID_\w{4}&PID_\w{4}'
@@ -87,28 +89,40 @@ def parse_inf_sections(text):
     return entries
 
 def extract_from_7z(path, max_files=500):
-    if py7zr is None:
-        return set(), 0
     all_hwids = set()
     count = 0
     try:
-        with py7zr.SevenZipFile(path, mode='r') as z:
-            all_names = z.getnames()
-            inf_names = [n for n in all_names if n.lower().endswith('.inf')][:max_files]
-            import tempfile, os
-            tmpdir = tempfile.mkdtemp(prefix="sdio_")
-            for inf_name in inf_names:
+        import tempfile, shutil, subprocess
+        tmpdir = tempfile.mkdtemp(prefix="sdio_")
+        # Use 7z CLI (suporta BCJ2 que py7zr nao suporta)
+        r = subprocess.run([SEVENZ_EXE, "x", str(path), f"-o{tmpdir}", "-y", "-aoa"],
+                          capture_output=True, text=True, timeout=180)
+        if r.returncode != 0 and r.returncode != 1:  # 1 = warnings (non-fatal)
+            if "Wrong password" in r.stderr or "Can not open" in r.stderr:
+                raise Exception(r.stderr[:200])
+        # Walk extracted tree for .inf files
+        inf_count = 0
+        for root, dirs, fnames in os.walk(tmpdir):
+            for name in fnames:
+                if not name.lower().endswith('.inf'):
+                    continue
+                if inf_count >= max_files:
+                    break
+                fpath = os.path.join(root, name)
                 try:
-                    z.extract(path=tmpdir, targets=[inf_name])
-                    fpath = os.path.join(tmpdir, inf_name)
-                    if os.path.exists(fpath):
-                        with open(fpath, 'r', errors='replace') as fh:
-                            text = fh.read()
-                        hwids = parse_inf_hwids(text)
-                        all_hwids.update(hwids)
-                        count += 1
+                    with open(fpath, 'r', errors='replace') as fh:
+                        text = fh.read()
+                    hwids = parse_inf_hwids(text)
+                    all_hwids.update(hwids)
+                    count += 1
+                    inf_count += 1
                 except:
                     pass
+            if inf_count >= max_files:
+                break
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    except subprocess.TimeoutExpired:
+        print(f"  [TIMEOUT] {path.name}")
     except Exception as e:
         print(f"  [ERRO] {path.name}: {e}")
     return all_hwids, count
@@ -177,6 +191,7 @@ def main():
     parser.add_argument("--dir", default=SDIO_PATH)
     parser.add_argument("--dry-run", action="store_true", help="So conta, nao extrai")
     parser.add_argument("--train-only", action="store_true", help="So treina com cache existente")
+    parser.add_argument("--extract-only", action="store_true", help="So extrai, nao treina")
     parser.add_argument("--max-packs", type=int, default=999)
     parser.add_argument("--epochs", type=int, default=50)
     args = parser.parse_args()
@@ -208,33 +223,23 @@ def main():
         t0 = time.time()
 
         for i, pack in enumerate(packs):
-            print(f"  [{i+1}/{len(packs)}] {pack.name}...", end="", flush=True)
+            gb = pack.stat().st_size / (1024**3)
+            print(f"  [{i+1}/{len(packs)}] {pack.name} ({gb:.1f}GB)...", end="", flush=True)
             hwids, n_inf = extract_from_7z(pack)
             cat = cat_from_name(pack.name)
             all_hwids.update(hwids)
             total_inf += n_inf
             print(f"  {len(hwids)} HWIDs, {n_inf} .inf files", flush=True)
 
-        # Salva cache
-        hwids_list = [{"hwid": h, "class": cat_from_name("")} for h in all_hwids]
-        # Melhor: salva com categoria
-        hwids_by_pack = {}
-        for pack in packs:
-            cat = cat_from_name(pack.name)
-            hwids_by_pack[pack.name] = cat
-
-        structured = []
-        for hwid in all_hwids:
-            structured.append({
-                "hwid": hwid,
-                "class": "unknown"
-            })
-
+        structured = [{"hwid": h, "class": "unknown"} for h in all_hwids]
         with open(cache_file, "w") as f:
             json.dump(structured, f)
 
         elapsed = time.time() - t0
         print(f"\n  [OK] {len(all_hwids)} HWIDs unicos de {total_inf} .inf files em {elapsed:.0f}s")
+
+        if args.extract_only:
+            return
     else:
         print(f"[TRAIN] Usando cache existente: {cache_file}")
 
@@ -243,7 +248,6 @@ def main():
     print("  Treinando HW Expert com dados SDIO + PCI")
     print("=" * 65)
 
-    # Merge SDIO + PCI data
     sdio_data = []
     if cache_file.exists():
         with open(cache_file) as f:
