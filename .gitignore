@@ -33,8 +33,10 @@ entities.json
 logs/
 
 *.img
-*.bin
 neural-os-hwtest.*
+
+# keep firmware/ tracked (MIT blobs needed for WPR boot)
+!firmware/**
 
 # Chave privada de assinatura do kernel
 keys/kernel_secret.key

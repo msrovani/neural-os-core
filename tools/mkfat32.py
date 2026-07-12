@@ -6,7 +6,8 @@ import os, struct, sys, argparse
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 def find_file(name):
-    for d in [ROOT, os.path.join(ROOT, "target"), os.path.join(ROOT, "crates/neural-kernel"), os.path.join(ROOT, "tools/target")]:
+    for d in [ROOT, os.path.join(ROOT, "target"), os.path.join(ROOT, "firmware"),
+              os.path.join(ROOT, "crates/neural-kernel"), os.path.join(ROOT, "tools/target")]:
         p = os.path.join(d, name)
         if os.path.exists(p): return p
     return None
@@ -111,6 +112,13 @@ def populate(path):
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
     ]
+    # GPU firmware blobs (WPR secure boot)
+    fw_dir = os.path.join(ROOT, "firmware", "nvidia", "gp108")
+    if os.path.isdir(fw_dir):
+        for name in os.listdir(fw_dir):
+            if name.endswith(".bin"):
+                fw_name = "FW_" + name.upper().replace(".", "_")
+                files.append((fw_name, find_file(os.path.join("nvidia", "gp108", name))))
     # CONFIG.TXT
     config_content = b"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\nLOG_TO_FAT32=1\n"
     files.append(("CONFIG.TXT", config_content))
