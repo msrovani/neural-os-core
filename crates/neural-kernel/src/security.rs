@@ -130,7 +130,26 @@ impl SecurityAgent {
         }
     }
 
-    fn detect_dhcp_starvation(&mut self, _tick: u64) {}
+    fn detect_dhcp_starvation(&mut self, tick: u64) {
+        // Monitora taxa de renovacao DHCP — picos indicam starvation
+        let ns = unsafe { crate::net::NETSTACK.lock() };
+        if let Some(ref netstack) = *ns {
+            let rx = netstack.rx_count;
+            let tx = netstack.tx_count;
+            drop(ns);
+            // Se tx >>> rx por periodo prolongado, pode ser flood DHCP
+            if tx > 1000 && rx < 10 && tx % 100 == 0 {
+                let event = SecurityEvent {
+                    detector: "DHCPStarvation",
+                    severity: 3,
+                    description: alloc::format!("Tx={} Rx={} — possivel ataque DHCP", tx, rx),
+                    tick,
+                };
+                self.publish_alert(&event);
+                self.events.push(event);
+            }
+        } else { drop(ns); }
+    }
 
     fn detect_timer_anomaly(&mut self, tick: u64) {
         if tick > 1000 && tick % 1000 == 0 {

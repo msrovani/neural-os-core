@@ -45,8 +45,13 @@ impl Agent for AudioMixerAgent {
                 scaled.push((s as f32 * vol) as i16);
             }
             let written = self.out_ring.push(&scaled);
-            let avail = self.out_ring.available();
-            serial_println!("[MIXER] {} samples -> ring (vol={}%, ring={} avail)", written, (vol * 100.0) as u8, avail);
+            serial_println!("[MIXER] {} samples -> ring (vol={}%)", written, (vol * 100.0) as u8);
+        }
+        // Drena o ring buffer para o HDA playback (auto-falante)
+        let mut hda_buf = [0i16; 1024];
+        let n = self.out_ring.pop(&mut hda_buf);
+        if n > 0 {
+            crate::audio::hda::write_hda_playback(&hda_buf[..n]);
         }
         AgentTickResult::Pending
     }

@@ -1,5 +1,5 @@
 //! Intel HDA Audio Driver — captura + playback via DMA ring buffer.
-//! Suporta QEMU -audiodev + HW real (Intel 6xx/7xx HDA).
+//! SD0 = captura (microfone), SD1 = playback (auto-falante).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::serial_println;
@@ -8,31 +8,45 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const HDA_GCTL: u64 = 0x08;
 const HDA_GCTL_RESET: u32 = 0x01;
-const HDA_STATESTS: u64 = 0x0E;
 const HDA_INTCTL: u64 = 0x20;
 const HDA_INTSTS: u64 = 0x24;
-const HDA_CORB_BASE: u64 = 0x40;    // CORB base address (4KB aligned)
-const HDA_CORB_WP: u64 = 0x48;      // CORB write pointer
-const HDA_CORB_RP: u64 = 0x4A;      // CORB read pointer
-const HDA_CORB_CTL: u64 = 0x4C;     // CORB control
-const HDA_RIRB_BASE: u64 = 0x50;    // RIRB base address
-const HDA_RIRB_WP: u64 = 0x58;      // RIRB write pointer
-const HDA_RIRB_CTL: u64 = 0x5C;     // RIRB control
-const HDA_SD0_CTL: u64 = 0x80;      // Stream Descriptor 0 control
-const HDA_SD0_STS: u64 = 0x84;      // SD status
-const HDA_SD0_BDL: u64 = 0xA0;      // SD Buffer Descriptor List addr (8KB aligned)
-const HDA_SD0_CBL: u64 = 0x98;      // SD Cyclic Buffer Length
-const HDA_SD0_LVI: u64 = 0x96;      // SD Last Valid Index
-const HDA_SD0_FIFOS: u64 = 0x94;    // SD FIFO size
-const HDA_SD0_FORMAT: u64 = 0x92;   // SD format
-const HDA_SD0_BDLPL: u64 = 0xA0;    // SD BDL pointer low
-const HDA_SD0_BDLPU: u64 = 0xA4;    // SD BDL pointer upper
+const HDA_CORB_BASE: u64 = 0x40;
+const HDA_CORB_WP: u64 = 0x48;
+const HDA_CORB_RP: u64 = 0x4A;
+const HDA_CORB_CTL: u64 = 0x4C;
+const HDA_RIRB_BASE: u64 = 0x50;
+const HDA_RIRB_WP: u64 = 0x58;
+const HDA_RIRB_CTL: u64 = 0x5C;
+const HDA_ICW: u64 = 0x60;
+const HDA_ICR: u64 = 0x64;
 
-const HDA_ICW: u64 = 0x60;          // Immediate Command Write
-const HDA_ICR: u64 = 0x64;          // Immediate Command Response
+// SD0 = capture (microfone)
+const SD0_CTL: u64 = 0x80;
+const SD0_STS: u64 = 0x84;
+const SD0_FIFOS: u64 = 0x94;
+const SD0_LVI: u64 = 0x96;
+const SD0_CBL: u64 = 0x98;
+const SD0_FORMAT: u64 = 0x92;
+const SD0_BDLPL: u64 = 0xA0;
+const SD0_BDLPU: u64 = 0xA4;
+
+// SD1 = playback (auto-falante)
+const SD1_CTL: u64 = 0xA0;
+const SD1_STS: u64 = 0xA4;
+const SD1_FIFOS: u64 = 0xB4;
+const SD1_LVI: u64 = 0xB6;
+const SD1_CBL: u64 = 0xB8;
+const SD1_FORMAT: u64 = 0xB2;
+const SD1_BDLPL: u64 = 0xC0;
+const SD1_BDLPU: u64 = 0xC4;
 
 static HDA_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static HDA_BAR: AtomicU64 = AtomicU64::new(0);
+
+// Buffer fisico: 0x103000 = capture, 0x104000 = playback
+const CAPTURE_BUF: u64 = 0x100000 + 0x3000;
+const PLAYBACK_BUF: u64 = 0x100000 + 0x4000;
+const BUF_SIZE: u32 = 16384;
 
 const HDA_MANIFEST: AgentManifest = AgentManifest {
     name: "hda_audio", kind: AgentKind::Driver,
@@ -49,7 +63,7 @@ impl Agent for HdaAudioAgent {
     fn manifest(&self) -> &AgentManifest { &HDA_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
         if unsafe { init_hda() } {
-            serial_println!("[HDA] Intel HDA ativo — audio via DMA ring buffer");
+            serial_println!("[HDA] Intel HDA ativo — captura SD0 + playback SD1");
         } else {
             serial_println!("[HDA] Nenhum controlador Intel HDA encontrado");
         }
@@ -69,49 +83,51 @@ unsafe fn init_hda() -> bool {
             let bar = (dev.bar0 as u64 & !0xF) + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
             serial_println!("[HDA] Intel HDA: {:04x}:{:04x} BAR0={:#x}", dev.vendor_id, dev.device_id, dev.bar0);
 
-            // Reset HDA controller
             w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) | HDA_GCTL_RESET);
             for _ in 0..100 { core::hint::spin_loop(); }
             w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) & !HDA_GCTL_RESET);
             for _ in 0..200 { core::hint::spin_loop(); }
 
-            // Initialize CORB (Command Output Ring Buffer)
-            let corb_phys = 0x100000 + 0x2000; // DMA buffer at phys 0x102000
-            w32(bar, HDA_CORB_BASE, corb_phys as u32);
+            // CORB
+            w32(bar, HDA_CORB_BASE, (0x100000 + 0x2000) as u32);
             w32(bar, HDA_CORB_BASE + 4, 0u32);
             w32(bar, HDA_CORB_WP, 0);
             w32(bar, HDA_CORB_RP, 0);
-            w32(bar, HDA_CORB_CTL, 0x8002); // CORB enable + 2 entry
+            w32(bar, HDA_CORB_CTL, 0x8002);
 
-            // Initialize RIRB (Response Input Ring Buffer)
-            let rirb_phys = 0x100000 + 0x2800;
-            w32(bar, HDA_RIRB_BASE, rirb_phys as u32);
+            // RIRB
+            w32(bar, HDA_RIRB_BASE, (0x100000 + 0x2800) as u32);
             w32(bar, HDA_RIRB_BASE + 4, 0u32);
-            w32(bar, HDA_RIRB_CTL, 0x8002); // RIRB enable + 2 entry
+            w32(bar, HDA_RIRB_CTL, 0x8002);
 
-            // Try to read codec via immediate command
             for cad in 0..8u32 {
-                w32(bar, HDA_ICW, (cad << 28) | (0x0F << 20) | 0xF00); // GET_PARAMETER, VENDOR_ID
+                w32(bar, HDA_ICW, (cad << 28) | (0x0F << 20) | 0xF00);
                 for _ in 0..5000 { core::hint::spin_loop(); if r32(bar, HDA_ICW) & 0x80000000 != 0 { break; } }
                 let resp = r32(bar, HDA_ICR);
                 if resp != 0 && resp != 0xFFFFFFFF {
                     serial_println!("[HDA] Codec {}: vendor={:#08x}", cad, resp);
-                    // Set stream format: 16-bit, 48kHz, mono
-                    let stream = 1u32;
-                    w32(bar, HDA_ICW, (cad << 28) | (1 << 20) | 0x200); // SET_STREAM_FORMAT
-                    for _ in 0..5000 { core::hint::spin_loop(); if r32(bar, HDA_ICW) & 0x80000000 != 0 { break; } }
-                    // Configure SD0 for capture: buffer at phys 0x103000
-                    let buf_phys = 0x100000 + 0x3000;
-                    w32(bar, HDA_SD0_BDLPL, buf_phys as u32);
-                    w32(bar, HDA_SD0_BDLPU, 0u32);
-                    w32(bar, HDA_SD0_CBL, 16384); // 16KB buffer
-                    w32(bar, HDA_SD0_LVI, 0);     // 1 buffer entry
-                    w32(bar, HDA_SD0_FORMAT, 0x0021); // 16-bit, 48kHz, mono
-                    w32(bar, HDA_SD0_CTL, 0x02);  // SD reset
-                    for _ in 0..100 { core::hint::spin_loop(); }
-                    w32(bar, HDA_SD0_CTL, 0x82);  // SD run + DMA enable
 
-                    serial_println!("[HDA] Captura iniciada: buf=0x{:x}, stream={}", buf_phys, stream);
+                    // SD0: Capture
+                    w32(bar, SD0_BDLPL, CAPTURE_BUF as u32);
+                    w32(bar, SD0_BDLPU, 0u32);
+                    w32(bar, SD0_CBL, BUF_SIZE);
+                    w32(bar, SD0_LVI, 0);
+                    w32(bar, SD0_FORMAT, 0x0021);
+                    w32(bar, SD0_CTL, 0x02);
+                    for _ in 0..100 { core::hint::spin_loop(); }
+                    w32(bar, SD0_CTL, 0x82);
+
+                    // SD1: Playback (mesmo formato: 16-bit, 48kHz, mono)
+                    w32(bar, SD1_BDLPL, PLAYBACK_BUF as u32);
+                    w32(bar, SD1_BDLPU, 0u32);
+                    w32(bar, SD1_CBL, BUF_SIZE);
+                    w32(bar, SD1_LVI, 0);
+                    w32(bar, SD1_FORMAT, 0x0021);
+                    w32(bar, SD1_CTL, 0x02);
+                    for _ in 0..100 { core::hint::spin_loop(); }
+                    w32(bar, SD1_CTL, 0x82);
+
+                    serial_println!("[HDA] Capture SD0 @ 0x{:x} + Playback SD1 @ 0x{:x}", CAPTURE_BUF, PLAYBACK_BUF);
                     HDA_BAR.store(bar, Ordering::Relaxed);
                 }
             }
@@ -122,27 +138,42 @@ unsafe fn init_hda() -> bool {
     false
 }
 
-/// Le audio capturado do buffer DMA HDA e publica no EventBus.
+/// Le audio capturado do buffer DMA HDA SD0 e publica no EventBus.
 pub fn poll_hda_audio() {
     if !HDA_INIT_DONE.load(Ordering::Relaxed) { return; }
     let bar = HDA_BAR.load(Ordering::Relaxed);
     if bar == 0 { return; }
-    let sts = unsafe { r32(bar, HDA_SD0_STS) };
-    if sts & 0x04 != 0 { // Buffer Completion Interrupt
-        unsafe { w32(bar, HDA_SD0_STS, sts | 0x04); } // clear
-        // Read from DMA buffer at phys 0x103000
-        let buf_ptr = (0x100000 + 0x3000 + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *const i16;
-        let samples = 8192; // half buffer
+    let sts = unsafe { r32(bar, SD0_STS) };
+    if sts & 0x04 != 0 {
+        unsafe { w32(bar, SD0_STS, sts | 0x04); }
+        let buf_ptr = (CAPTURE_BUF + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *const i16;
+        let samples = 8192;
         let mut audio_buf = alloc::vec::Vec::with_capacity(samples * 2);
         for i in 0..samples {
             let sample = unsafe { core::ptr::read_volatile(buf_ptr.add(i)) };
             audio_buf.extend_from_slice(&sample.to_le_bytes());
         }
-        // Publica no EventBus para WakeWordAgent / JarvisVoiceAgent
         let _ = crate::EVENT_BUS.publish(crate::Event {
             id: 0, topic: alloc::string::String::from("AUDIO_IN"),
-            payload: audio_buf,
-            token: crate::CapabilityToken::Legacy(1),
+            payload: audio_buf, token: crate::CapabilityToken::Legacy(1),
         });
+    }
+}
+
+/// Escreve audio no buffer DMA SD1 para reproducao.
+/// Chamado pelo AudioMixerAgent quando ha dados no AUDIO_RING.
+pub fn write_hda_playback(samples: &[i16]) {
+    if !HDA_INIT_DONE.load(Ordering::Relaxed) { return; }
+    let bar = HDA_BAR.load(Ordering::Relaxed);
+    if bar == 0 { return; }
+    let sts = unsafe { r32(bar, SD1_STS) };
+    // Só escreve se o buffer anterior ja foi consumido (BCI = buffer complete)
+    if sts & 0x04 != 0 {
+        unsafe { w32(bar, SD1_STS, sts | 0x04); }
+        let count = samples.len().min(BUF_SIZE as usize / 2);
+        let buf_ptr = (PLAYBACK_BUF + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut i16;
+        for i in 0..count {
+            unsafe { core::ptr::write_volatile(buf_ptr.add(i), samples[i]); }
+        }
     }
 }

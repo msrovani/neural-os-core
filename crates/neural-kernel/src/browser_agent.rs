@@ -45,15 +45,46 @@ impl BrowserAgent {
         }
     }
 
-    /// Fetch uma pagina web via HTTP (bloqueante, simplificado)
+    /// Fetch uma pagina web via HTTP real (smoltcp TCP)
     fn fetch_page(url: &str) -> Result<(String, Vec<u8>), &'static str> {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             return Err("Invalid URL");
         }
-        // Simplificado: retorna placeholder
-        // Em producao: smoltcp HTTP GET + parse response
-        let body = alloc::format!("<html><head><title>{}</title></head><body><p>Page content for {}</p></body></html>", url, url);
-        Ok((String::from(url), body.into_bytes()))
+        let url_clean = url.trim_start_matches("https://").trim_start_matches("http://");
+        let (host, path) = if let Some(pos) = url_clean.find('/') {
+            (&url_clean[..pos], &url_clean[pos..])
+        } else {
+            (url_clean, "/")
+        };
+        let host_clean = host.trim_end_matches(':').split(':').next().unwrap_or(host);
+        let port: u16 = 80;
+
+        // Resolve DNS
+        let ip = unsafe {
+            let mut stack = crate::net::NETSTACK.lock();
+            if let Some(ref mut ns) = *stack {
+                ns.dns_resolve(host_clean, [8, 8, 8, 8])
+            } else { None }
+        };
+        let host_ip = match ip {
+            Some(ip) => ip,
+            None => {
+                serial_println!("[BROWSER] DNS resolve falhou para {}", host_clean);
+                return Err("DNS resolve failed");
+            }
+        };
+
+        serial_println!("[BROWSER] HTTP GET {:?}:{}{}", host_ip, port, path);
+        match unsafe { crate::net::http_get(host_ip, port, path) } {
+            Some(response) => {
+                serial_println!("[BROWSER] {} bytes de {}", response.len(), host_clean);
+                Ok((String::from(url), response))
+            }
+            None => {
+                serial_println!("[BROWSER] Falha ao buscar {}", url);
+                Err("HTTP GET failed")
+            }
+        }
     }
 
     /// Extrai texto puro de HTML (regex-free, tag-stripping simples)
