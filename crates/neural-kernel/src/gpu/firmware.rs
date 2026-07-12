@@ -174,6 +174,45 @@ pub unsafe fn intel_guc_load(_gpu: &GpuInfo, _pmoff: u64) -> SecureBootResult {
     SecureBootResult::NoFirmware
 }
 
+/// Teste de firmware — carrega e valida todos os blobs NVIDIA sem GPU.
+/// Chamado no boot para debug, mesmo sem GPU NVIDIA presente.
+pub fn test_load_firmware() -> bool {
+    use crate::serial_println;
+    let names = [
+        ("fecs_bl.bin",    576usize),
+        ("fecs_data.bin",  2248),
+        ("fecs_inst.bin",  21161),
+        ("fecs_sig.bin",   192),
+        ("gpccs_bl.bin",   576),
+        ("gpccs_data.bin", 2092),
+        ("gpccs_inst.bin", 13095),
+        ("gpccs_sig.bin",  192),
+    ];
+    serial_println!("[FW-TEST] NVIDIA GP108 firmware check:");
+    let mut ok = true;
+    for (name, exp) in &names {
+        match load_firmware_file(name) {
+            Some(data) if data.len() == *exp => {
+                serial_println!("  [OK] {} ({}B)", name, data.len());
+            }
+            Some(data) => {
+                serial_println!("  [SZ] {}: {}B (esperado {}B)", name, data.len(), exp);
+                ok = false;
+            }
+            None => {
+                serial_println!("  [--] {} NAO ENCONTRADO", name);
+                ok = false;
+            }
+        }
+    }
+    if ok {
+        serial_println!("[FW-TEST] ✅ Todos os 8 blobs NVIDIA OK");
+    } else {
+        serial_println!("[FW-TEST] ❌ Firmware NVIDIA incompleto");
+    }
+    ok
+}
+
 pub unsafe fn secure_boot_gpu(gpu: &GpuInfo, pmoff: u64) -> SecureBootResult {
     serial_println!("[SECURE-BOOT] {}: iniciando...", gpu.name);
     let result = match gpu.vendor {

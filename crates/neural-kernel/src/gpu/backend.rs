@@ -111,7 +111,10 @@ pub unsafe fn init_backend(gpus: &[GpuInfo]) {
             serial_println!("[GPU-BACKEND] {}: SPSC job ring criado", gpu.name);
         }
 
-        // 4. Secure boot (ACR/PSP/GuC) — carrega firmware se disponivel
+        // 4. Teste de firmware (valida blobs no FAT32 mesmo sem GPU NVIDIA)
+        crate::gpu::firmware::test_load_firmware();
+
+        // 5. Secure boot (ACR/PSP/GuC) — carrega firmware na GPU se disponivel
         let _sb_result = crate::gpu::firmware::secure_boot_gpu(gpu, pmoff);
 
         // 5. Inicializa backend especifico do vendor
