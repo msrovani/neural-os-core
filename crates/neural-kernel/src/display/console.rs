@@ -20,6 +20,14 @@ const COL_RED: (u8, u8, u8) = (220, 50, 50);
 const COL_CYAN: (u8, u8, u8) = (0, 200, 200);
 const COL_BLUE: (u8, u8, u8) = (80, 130, 220);
 
+/// Armazena as ultimas linhas do console para o overlay Hermes
+use spin::Mutex;
+pub static OVERLAY_TEXT: Mutex<alloc::string::String> = Mutex::new(alloc::string::String::new());
+
+pub fn get_overlay_text() -> alloc::string::String {
+    OVERLAY_TEXT.lock().clone()
+}
+
 /// Console neural multi-região com double buffering
 pub struct NeuralConsole {
     pub fb: DoubleBuffer,
@@ -109,6 +117,16 @@ impl NeuralConsole {
         }
         if self.conv_lines.len() > 2000 {
             self.conv_lines.pop_front();
+        }
+        // Atualiza overlay text para o compositor
+        let mut overlay = OVERLAY_TEXT.lock();
+        overlay.clear();
+        let start = self.conv_lines.len().saturating_sub(8);
+        for i in start..self.conv_lines.len() {
+            if let Some(l) = self.conv_lines.get(i) {
+                overlay.push_str(l);
+                overlay.push('\n');
+            }
         }
     }
 

@@ -57,6 +57,8 @@ impl Agent for JarvisVoiceAgent {
                     ev.payload.len() / 2,
                 )
             };
+            // FFT audio: processa energia espectral para o orbe
+            crate::display::avatar::process_audio_fft(pcm);
 
             let frame_size = 320; // 20ms @ 16kHz
             for chunk in pcm.chunks(frame_size) {

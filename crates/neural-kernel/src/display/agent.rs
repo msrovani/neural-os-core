@@ -6,7 +6,7 @@ use crate::hermes;
 use crate::serial_println;
 use crate::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId};
+use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS};
 use crate::display::avatar::JarvisAvatar;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
@@ -20,9 +20,15 @@ const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
 pub struct DisplayAgent {
     receiver: crate::Receiver,
     echo_receiver: crate::Receiver,
+    mouse_receiver: crate::Receiver,
+    click_receiver: crate::Receiver,
     gpu_inited: bool,
     input_buffer: alloc::string::String,
     avatar: Option<JarvisAvatar>,
+    dragging: bool,
+    drag_id: AppId,
+    drag_off_x: isize,
+    drag_off_y: isize,
 }
 
 impl DisplayAgent {
@@ -30,9 +36,15 @@ impl DisplayAgent {
         DisplayAgent {
             receiver: EVENT_BUS.subscribe(hermes::TOPIC_HERMES_RESPONSE),
             echo_receiver: EVENT_BUS.subscribe("KEYBOARD_ECHO"),
+            mouse_receiver: EVENT_BUS.subscribe(crate::agents::mouse_agent::TOPIC_MOUSE_MOVED),
+            click_receiver: EVENT_BUS.subscribe(crate::agents::mouse_agent::TOPIC_MOUSE_CLICK),
             gpu_inited: false,
             input_buffer: alloc::string::String::new(),
             avatar: None,
+            dragging: false,
+            drag_id: AppId::None,
+            drag_off_x: 0,
+            drag_off_y: 0,
         }
     }
 }
@@ -50,13 +62,13 @@ impl Agent for DisplayAgent {
                     gpu_dev.fb_bpp as usize, gpu_dev.rgb_order,
                 );
                 let mut desktop = JarvisDesktop::new(fb);
-                desktop.register_app(AppId::HermesChat, "Hermes Chat");
-                desktop.register_app(AppId::Settings, "Settings");
-                desktop.register_app(AppId::Power, "Power");
-                desktop.register_app(AppId::Ide, "BitNet IDE");
-                desktop.register_app(AppId::Camera, "Camera");
-                desktop.register_app(AppId::AudioViz, "Audio Visualizer");
-                desktop.toggle_app(AppId::HermesChat);
+                desktop.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
+                desktop.register_app(AppId::Settings, "Settings", Layer::AppWindows);
+                desktop.register_app(AppId::Power, "Power", Layer::AppWindows);
+                desktop.register_app(AppId::Ide, "BitNet IDE", Layer::AppWindows);
+                desktop.register_app(AppId::Camera, "Camera", Layer::AppWindows);
+                desktop.register_app(AppId::AudioViz, "Audio Visualizer", Layer::AppWindows);
+                desktop.ensure_hermes_overlay();
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(JarvisAvatar::new(gpu_dev));
                 serial_println!("[JARVIS] Desktop iniciado @ {}x{}", gpu_dev.fb_width, gpu_dev.fb_height);
@@ -140,6 +152,77 @@ impl Agent for DisplayAgent {
                     if let Some(chat) = d2.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
                         chat.data.push_str(&alloc::format!("[IDE] WASM '{}' published! Icon on desktop.\n", skill_name));
                     }
+                }
+            }
+        }
+
+        // ── Mouse input: atualiza cursor e processa clique ──
+        while let Some(ev) = self.mouse_receiver.try_receive() {
+            if ev.payload.len() >= 4 {
+                let mx = u16::from_le_bytes([ev.payload[0], ev.payload[1]]) as usize;
+                let my = u16::from_le_bytes([ev.payload[2], ev.payload[3]]) as usize;
+                *MOUSE_X.lock() = mx;
+                *MOUSE_Y.lock() = my;
+            }
+        }
+        while let Some(ev) = self.click_receiver.try_receive() {
+            if ev.payload.len() >= 3 {
+                let btn = ev.payload[0];
+                let cx = u16::from_le_bytes([ev.payload[1], ev.payload[2]]) as usize;
+                let cy = if ev.payload.len() >= 5 {
+                    u16::from_le_bytes([ev.payload[3], ev.payload[4]]) as usize
+                } else { 0 };
+                *MOUSE_BUTTONS.lock() = btn;
+
+                let mut comp = COMPOSITOR.lock();
+                if let Some(ref mut desktop) = *comp {
+                    let apps_clone = desktop.apps.clone();
+                    // Click na dock bar: toggle app
+                    let dock_y = desktop.h.saturating_sub(36);
+                    if cy >= dock_y {
+                        for (idx, app) in apps_clone.iter().enumerate() {
+                            if app.visible {
+                                let rx = 10 + idx * 66;
+                                if cx >= rx && cx <= rx + 60 {
+                                    desktop.toggle_app(app.id);
+                                }
+                            }
+                        }
+                    } else if btn == 1 { // Left click — check close buttons
+                        for app in &apps_clone {
+                            if !app.visible { continue; }
+                            let cx_btn = app.x + app.w - 20;
+                            if cx >= cx_btn && cx <= cx_btn + 16 && cy >= app.y + 3 && cy <= app.y + 19 {
+                                desktop.close_window(app.id);
+                                break;
+                            }
+                            if cx >= app.x && cx <= app.x + app.w && cy >= app.y && cy <= app.y + 24 {
+                                self.dragging = true;
+                                self.drag_id = app.id;
+                                self.drag_off_x = cx as isize - app.x as isize;
+                                self.drag_off_y = cy as isize - app.y as isize;
+                                break;
+                            }
+                        }
+                    }
+                }
+                drop(comp);
+            }
+        }
+        // Handle drag continuacao (enquanto mouse move sem novo clique)
+        if self.dragging {
+            let mx = *MOUSE_X.lock();
+            let my = *MOUSE_Y.lock();
+            let mut comp = COMPOSITOR.lock();
+            if let Some(ref mut desktop) = *comp {
+                let app = desktop.apps.iter_mut().find(|a| a.id == self.drag_id && a.visible);
+                if let Some(a) = app {
+                    let nx = (mx as isize - self.drag_off_x).max(0) as usize;
+                    let ny = (my as isize - self.drag_off_y).max(28) as usize;
+                    a.x = nx.min(desktop.w.saturating_sub(100));
+                    a.y = ny.min(desktop.h.saturating_sub(100));
+                } else {
+                    self.dragging = false;
                 }
             }
         }

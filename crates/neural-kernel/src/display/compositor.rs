@@ -54,7 +54,20 @@ pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, _w: usize, _
 #[derive(Clone, Copy, PartialEq)]
 pub enum AppId { HermesChat, Settings, Power, Ide, WasmSkill(usize), Camera, AudioViz, None }
 
-pub struct AppWindow { pub id: AppId, pub title: String, pub x: usize, pub y: usize, pub w: usize, pub h: usize, pub visible: bool, pub data: String }
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Layer { OrbBackground, HermesOverlay, AppWindows, DockBar }
+
+#[derive(Clone)]
+pub struct AppWindow { pub id: AppId, pub title: String, pub x: usize, pub y: usize, pub w: usize, pub h: usize, pub visible: bool, pub data: String, pub z: Layer }
+
+// Estado global do mouse para o compositor
+pub static MOUSE_X: spin::Mutex<usize> = spin::Mutex::new(640);
+pub static MOUSE_Y: spin::Mutex<usize> = spin::Mutex::new(360);
+pub static MOUSE_BUTTONS: spin::Mutex<u8> = spin::Mutex::new(0);
+
+// Timing de frame para FPS control
+pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+pub const TARGET_FRAME_TICKS: u64 = 3; // ~60 FPS (assumindo ~5ms/tick)
 
 #[derive(Clone)]
 pub struct WasmIcon { pub name: String, pub description: String, pub idx: usize }
@@ -75,11 +88,25 @@ impl JarvisDesktop {
         JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new() }
     }
 
-    pub fn register_app(&mut self, id: AppId, title: &str) {
+    pub fn register_app(&mut self, id: AppId, title: &str, z: Layer) {
         if self.apps.iter().any(|a| a.id == id) { return; }
         let (aw, ah) = (self.w * 4 / 5, self.h * 3 / 5);
         let ax = (self.w - aw) / 2; let ay = (self.h - ah) / 2;
-        self.apps.push(AppWindow { id, title: String::from(title), x: ax, y: ay, w: aw, h: ah, visible: false, data: String::new() });
+        self.apps.push(AppWindow { id, title: String::from(title), x: ax, y: ay, w: aw, h: ah, visible: false, data: String::new(), z });
+    }
+
+    /// Retorna o overlay Hermes (cria se nao existe)
+    pub fn ensure_hermes_overlay(&mut self) -> usize {
+        let w = self.w * 2 / 5; let h = self.h / 3;
+        for (i, app) in self.apps.iter().enumerate() {
+            if app.id == AppId::HermesChat { return i; }
+        }
+        self.apps.push(AppWindow {
+            id: AppId::HermesChat, title: String::from("Hermes"),
+            x: self.w.saturating_sub(w + 10), y: 35,
+            w, h, visible: true, data: String::new(), z: Layer::HermesOverlay,
+        });
+        self.apps.len() - 1
     }
 
     pub fn publish_wasm_skill(&mut self, name: &str, description: &str) {
@@ -87,7 +114,7 @@ impl JarvisDesktop {
         self.wasm_skills.push(WasmIcon { name: String::from(name), description: String::from(description), idx });
         let id = AppId::WasmSkill(idx);
         let (aw, ah) = (self.w * 3 / 5, self.h * 2 / 5);
-        self.apps.push(AppWindow { id, title: alloc::format!("⚡ {}", name), x: 60, y: 60, w: aw, h: ah, visible: false, data: String::new() });
+        self.apps.push(AppWindow { id, title: alloc::format!("⚡ {}", name), x: 60, y: 60, w: aw, h: ah, visible: false, data: String::new(), z: Layer::AppWindows });
     }
 
     pub fn toggle_app(&mut self, id: AppId) {
@@ -145,87 +172,99 @@ impl JarvisDesktop {
 
     pub fn render(&mut self, tick: u64) {
         self.tick = tick; let (w, h) = (self.w, self.h);
+
+        // ── FPS control: skip frame se estiver muito rapido ──
+        let last = LAST_FRAME_TICK.load(core::sync::atomic::Ordering::Relaxed);
+        if tick.wrapping_sub(last) < TARGET_FRAME_TICKS { return; }
+        LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
+
+        // ═══════════════════════════════════════════════════════
+        // LAYER 0: Fundo + Orb (mais profundo)
+        // ═══════════════════════════════════════════════════════
         self.fb.fill_rect(0, 0, w, h, 10, 10, 15);
 
-        // Status bar
-        self.fb.fill_rect(0, 0, w, 28, 20, 25, 35);
-        draw_text(&mut self.fb, 6, 4, &alloc::format!("J.A.R.V.I.S.  t:{}  [F1]Chat [F2]Settings [F3]Power [F4]IDE [F10]Cam [F11]Mic", tick), self.w, 180, 190, 210);
-
-        // Desktop icons for WASM skills (com LLM icons via HWEXPERT_MODEL)
-        for (i, skill) in self.wasm_skills.iter().enumerate() {
-            let ix = 20 + (i % 6) * 100; let iy = 40 + (i / 6) * 90;
-            self.fb.fill_rect(ix, iy, 80, 70, 30, 40, 55);
-
-            // Gera/carrega icone LLM (8x8) e renderiza como 40x40
-            let icon = self.icon_cache.entry(skill.description.clone())
-                .or_insert_with(|| generate_llm_icon(&skill.description));
-            for row in 0..8 {
-                for col in 0..8 {
-                    let p = icon[row * 8 + col];
-                    let r = p.saturating_mul(2).min(255) as u8;
-                    let g = (p / 2) as u8;
-                    let b = (255 - p / 3) as u8;
-                    self.fb.fill_rect(ix + 20 + col * 5, iy + 5 + row * 5, 5, 5, r, g, b);
-                }
-            }
-            draw_text(&mut self.fb, ix + 5, iy + 52, &skill.name, self.w, 200, 200, 200);
+        // Orb JARVIS como layer de fundo (centro, pulsante)
+        if self.avatar_visible {
+            let orb = 60 + (sinf(tick as f32 * 0.04) * 20.0) as u32;
+            let ax = (w - orb as usize) / 2;
+            let ay = (h - orb as usize) / 2;
+            // Glow
+            self.fb.fill_rect(ax.saturating_sub(10), ay.saturating_sub(10), orb as usize + 20, orb as usize + 20, 0, 20, 40);
+            // Orb com FFT audio (se disponivel) ou pulsacao padrao
+            let fft_energy = crate::display::avatar::read_audio_energy();
+            let bri = if fft_energy > 0.0 {
+                130 + (fft_energy.min(1.0) * 100.0) as u8
+            } else {
+                130 + (sinf(tick as f32 * 0.05) * 40.0) as u8
+            };
+            let _g = if fft_energy > 0.5 { bri / 2 } else { bri / 3 };
+            self.fb.fill_rect(ax, ay, orb as usize, orb as usize, 0, bri, 255);
+            draw_text(&mut self.fb, ax + orb as usize / 2 - 20, ay + orb as usize + 5, "JARVIS", self.w, 0, 200, 255);
         }
 
-        // Tensor visualization panel (canto superior direito)
-        render_tensor_viz(&mut self.fb, w.saturating_sub(160), 35, 120, 160);
+        // ═══════════════════════════════════════════════════════
+        // LAYER 1: Hermes CLI Overlay (semi-transparente, canto)
+        // ═══════════════════════════════════════════════════════
+        let overlay_w = w * 2 / 5;
+        let overlay_h = h / 3;
+        let ox = w.saturating_sub(overlay_w + 10);
+        let oy = 35;
+        // Fundo semi-transparente (alpha simulado com cor escura)
+        self.fb.fill_rect(ox, oy, overlay_w, overlay_h, 8, 10, 15);
+        // Borda sutil
+        self.fb.fill_rect(ox.saturating_sub(1), oy.saturating_sub(1), overlay_w + 2, overlay_h + 2, 20, 25, 35);
+        // Label Hermes
+        draw_text(&mut self.fb, ox + 4, oy + 2, "[Hermes Console]", self.w, 0, 200, 255);
+        // Conteudo do overlay: ultimas linhas do chat
+        let cli_content = crate::display::console::get_overlay_text();
+        let lines: Vec<&str> = cli_content.lines().collect();
+        let start = lines.len().saturating_sub(((overlay_h - 24) / 16).max(1));
+        for (i, line) in lines.iter().enumerate().skip(start).take((overlay_h - 24) / 16) {
+            draw_text(&mut self.fb, ox + 4, oy + 22 + (i - start) * 16, line, self.w, 150, 200, 220);
+        }
 
-        // App windows
-        for app in &self.apps {
-            if !app.visible { continue; }
-            // Borda da janela
+        // ═══════════════════════════════════════════════════════
+        // LAYER 2: App Windows (ordenado por z_index)
+        // ═══════════════════════════════════════════════════════
+        let mut sorted: Vec<&AppWindow> = self.apps.iter().filter(|a| a.visible).collect();
+        sorted.sort_by_key(|a| a.z);
+        for app in &sorted {
             self.fb.fill_rect(app.x.saturating_sub(1), app.y.saturating_sub(1), app.w + 2, app.h + 2, 40, 50, 65);
             self.fb.fill_rect(app.x, app.y, app.w, app.h, 15, 18, 25);
-            // Title bar
             self.fb.fill_rect(app.x, app.y, app.w, 24, 30, 40, 55);
             draw_text(&mut self.fb, app.x + 6, app.y + 4, &app.title, self.w, 200, 210, 230);
-            // Close button [X]
+            // Close button
             self.fb.fill_rect(app.x + app.w - 20, app.y + 3, 16, 16, 200, 50, 50);
             draw_text(&mut self.fb, app.x + app.w - 18, app.y + 4, "X", self.w, 255, 255, 255);
-            // Resize handle (canto inferior direito)
             self.fb.fill_rect(app.x + app.w - 10, app.y + app.h - 10, 10, 10, 60, 70, 85);
             render_app_content(&mut self.fb, app, self.w, self.h);
         }
 
-        // Dock bar inferior
+        // ═══════════════════════════════════════════════════════
+        // LAYER 3: Dock Bar + Cursor do Mouse
+        // ═══════════════════════════════════════════════════════
         let dock_y = h.saturating_sub(36);
         self.fb.fill_rect(0, dock_y, w, 36, 20, 25, 35);
         let mut dx = 10;
         for app in &self.apps {
             if !app.visible { continue; }
             let name = match app.id {
-                AppId::HermesChat => "Chat",
-                AppId::Settings => "Set",
-                AppId::Power => "Pwr",
-                AppId::Ide => "IDE",
-                AppId::Camera => "Cam",
-                AppId::AudioViz => "Aud",
-                AppId::WasmSkill(_) => "Sk",
-                AppId::None => "",
+                AppId::HermesChat => "Chat", AppId::Settings => "Set",
+                AppId::Power => "Pwr", AppId::Ide => "IDE",
+                AppId::Camera => "Cam", AppId::AudioViz => "Aud",
+                AppId::WasmSkill(_) => "Sk", AppId::None => "",
             };
             self.fb.fill_rect(dx, dock_y + 3, 60, 30, 40, 55, 75);
             draw_text(&mut self.fb, dx + 6, dock_y + 8, name, self.w, 200, 210, 230);
             dx += 66;
         }
 
-        // JARVIS avatar — orb pulsante 60-100px, acima da dock bar
-        if self.avatar_visible {
-            let orb = 60 + (sinf(tick as f32 * 0.04) * 20.0) as u32; // 40-80px
-            let ax = w.saturating_sub(orb as usize + 30);
-            let ay = h.saturating_sub(orb as usize + 60); // acima da dock (h-36)
-            // Fundo escuro
-            self.fb.fill_rect(ax.saturating_sub(5), ay.saturating_sub(5), orb as usize + 10, orb as usize + 30, 10, 15, 20);
-            // Glow externo
-            self.fb.fill_rect(ax.saturating_sub(3), ay.saturating_sub(3), orb as usize + 6, orb as usize + 6, 0, 40, 70);
-            // Orb central com brilho pulsante
-            let bri = 130 + (sinf(tick as f32 * 0.05) * 40.0) as u8;
-            self.fb.fill_rect(ax, ay, orb as usize, orb as usize, 0, bri, 255);
-            draw_text(&mut self.fb, ax + orb as usize / 2 - 20, ay + orb as usize + 5, "JARVIS", self.w, 0, 200, 255);
-        }
+        // Cursor do mouse (cruz 7x7)
+        let mx = *MOUSE_X.lock();
+        let my = *MOUSE_Y.lock();
+        self.fb.fill_rect(mx.saturating_sub(3), my, 7, 1, 255, 255, 255);
+        self.fb.fill_rect(mx, my.saturating_sub(3), 1, 7, 255, 255, 255);
+
         self.fb.swap();
     }
 }
