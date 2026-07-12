@@ -112,13 +112,21 @@ def populate(path):
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
     ]
-    # GPU firmware blobs (WPR secure boot)
-    fw_dir = os.path.join(ROOT, "firmware", "nvidia", "gp108")
-    if os.path.isdir(fw_dir):
-        for name in os.listdir(fw_dir):
-            if name.endswith(".bin"):
-                fw_path = os.path.join(fw_dir, name)
-                fw_name = "FW_" + name.upper().replace(".", "_")
+    # Firmware blobs (todos os grupos)
+    fw_root = os.path.join(ROOT, "firmware")
+    if os.path.isdir(fw_root):
+        for root, dirs, fnames in os.walk(fw_root):
+            for name in fnames:
+                ext = os.path.splitext(name)[1].lower()
+                if ext not in (".bin", ".fw"): continue
+                rel = os.path.relpath(root, fw_root)
+                prefix = rel.upper().replace("\\", "_").replace("/", "_")
+                fw_path = os.path.join(root, name)
+                # NVIDIA GP108 mantém nome curto (FW_FECS_BL_BIN) p/ compatibilidade
+                if prefix == "NVIDIA_GP108":
+                    fw_name = "FW_" + name.upper().replace(".", "_")
+                else:
+                    fw_name = f"FW_{prefix}_{name.upper().replace('.', '_')}"
                 files.append((fw_name, fw_path))
     # CONFIG.TXT
     config_content = b"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\nLOG_TO_FAT32=1\n"
