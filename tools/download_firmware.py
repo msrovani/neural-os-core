@@ -2,18 +2,18 @@
 """Baixa firmwares GPU do linux-firmware.git para secure boot.
 Uso: python tools/download_firmware.py
 
-Os blobs são MIT license, redistribuíveis, disponíveis desde 2017.
-Kernel.org bloqueia HTTP direto (403) — usa git clone.
+Os blobs são MIT license, redistribuíveis.
+Usa GitLab mirror (kernel.org gitweb bloqueia scrape, clone lento).
 
 Firmwares necessários por GPU:
-  NVIDIA GP108 (GTX 1050): fecs_*.bin + gpccs_*.bin (~80KB)
+  NVIDIA GP108 (GTX 1050): fecs_*.bin + gpccs_*.bin (~40KB)
   Intel Gen9+ (HD 530):      GuC + HuC (~500KB)
 """
 import os, subprocess, sys, shutil
 from pathlib import Path
 
 TARGET = Path(__file__).parent.parent / "target" / "firmware"
-GIT_URL = "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git"
+GIT_URL = "https://gitlab.com/kernel-firmware/linux-firmware.git"
 GIT_DIR = TARGET / "linux-firmware"
 
 NVIDIA_BLOBS = [
