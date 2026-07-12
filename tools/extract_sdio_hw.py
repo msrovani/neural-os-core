@@ -87,22 +87,23 @@ def parse_inf_sections(text):
     return entries
 
 def extract_from_7z(path, max_files=500):
-    """Extrai HWIDs de um arquivo .7z DriverPack."""
     if py7zr is None:
         return set(), 0
-
     all_hwids = set()
     count = 0
     try:
-        with py7zr.SevenZipFile(path, mode='r', dereference=True) as z:
-            names = list(z.getnames())[:max_files]
-            inf_names = [n for n in names if n.lower().endswith('.inf')]
-
-            for inf_name in inf_names[:200]:  # max 200 .inf por pack
+        with py7zr.SevenZipFile(path, mode='r') as z:
+            all_names = z.getnames()
+            inf_names = [n for n in all_names if n.lower().endswith('.inf')][:max_files]
+            import tempfile, os
+            tmpdir = tempfile.mkdtemp(prefix="sdio_")
+            for inf_name in inf_names:
                 try:
-                    data = z.read([inf_name])
-                    if inf_name in data:
-                        text = data[inf_name].read().decode("utf-8", errors="replace")
+                    z.extract(path=tmpdir, targets=[inf_name])
+                    fpath = os.path.join(tmpdir, inf_name)
+                    if os.path.exists(fpath):
+                        with open(fpath, 'r', errors='replace') as fh:
+                            text = fh.read()
                         hwids = parse_inf_hwids(text)
                         all_hwids.update(hwids)
                         count += 1
@@ -110,7 +111,6 @@ def extract_from_7z(path, max_files=500):
                     pass
     except Exception as e:
         print(f"  [ERRO] {path.name}: {e}")
-
     return all_hwids, count
 
 def parse_hwid_to_parts(hwid):
@@ -174,7 +174,7 @@ def write_jsonl(dataset, path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dir", default=IMPORT_PATH)
+    parser.add_argument("--dir", default=SDIO_PATH)
     parser.add_argument("--dry-run", action="store_true", help="So conta, nao extrai")
     parser.add_argument("--train-only", action="store_true", help="So treina com cache existente")
     parser.add_argument("--max-packs", type=int, default=999)
