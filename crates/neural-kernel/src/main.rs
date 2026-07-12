@@ -213,6 +213,7 @@ mod wifi_dma;
 mod wifi_compat;
 
 mod wifi_aer;
+mod wifi_iwlwifi;
 
 mod wifi_apic;
 
