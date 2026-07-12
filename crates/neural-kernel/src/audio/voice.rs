@@ -46,6 +46,9 @@ impl Agent for JarvisVoiceAgent {
     fn manifest(&self) -> &AgentManifest { &VOICE_MANIFEST }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Poll HDA DMA para capturar novo audio do microfone
+        crate::audio::hda::poll_hda_audio();
+
         // ── Ouvidos: processa audio do microfone ──────────────
         while let Some(ev) = self.audio_in.try_receive() {
             let pcm: &[i16] = unsafe {

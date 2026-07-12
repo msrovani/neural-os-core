@@ -1283,6 +1283,19 @@ impl Agent for HwDetectAgent {
                                 map.doorbell_tx, map.doorbell_rx, map.ring_size));
                         }
                     }
+
+                    // Log de firmware disponivel baseado em VID/DID
+                    let fw_available = match (vid, agent.class) {
+                        (0x10DE, 0x03) => Some("nvidia/gp108 (FECS+GPCCS)"),
+                        (0x8086, 0x03) => Some("i915/skl+kbl (GuC+HuC+DMC)"),
+                        (0x10EC, 0x02) | (0x10EC, 0x0D) => Some("rtl_nic/rtl8168*"),
+                        (0x8086, 0x02) | (0x8086, 0x0D) => Some("intel/iwlwifi*"),
+                        _ => None,
+                    };
+                    if let Some(fw) = fw_available {
+                        serial_println!("[HW] Firmware disponivel: {} para {:04X}:{:04X}", fw, vid, did);
+                        device_tree.push_str(&alloc::format!("    → Firmware: {}\n", fw));
+                    }
                 }
             }
         }

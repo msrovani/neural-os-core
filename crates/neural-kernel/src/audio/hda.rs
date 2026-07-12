@@ -122,7 +122,7 @@ unsafe fn init_hda() -> bool {
     false
 }
 
-/// Le audio capturado do buffer DMA HDA e publica no ring buffer.
+/// Le audio capturado do buffer DMA HDA e publica no EventBus.
 pub fn poll_hda_audio() {
     if !HDA_INIT_DONE.load(Ordering::Relaxed) { return; }
     let bar = HDA_BAR.load(Ordering::Relaxed);
@@ -133,8 +133,16 @@ pub fn poll_hda_audio() {
         // Read from DMA buffer at phys 0x103000
         let buf_ptr = (0x100000 + 0x3000 + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *const i16;
         let samples = 8192; // half buffer
+        let mut audio_buf = alloc::vec::Vec::with_capacity(samples * 2);
         for i in 0..samples {
-            let _sample = unsafe { core::ptr::read_volatile(buf_ptr.add(i)) };
+            let sample = unsafe { core::ptr::read_volatile(buf_ptr.add(i)) };
+            audio_buf.extend_from_slice(&sample.to_le_bytes());
         }
+        // Publica no EventBus para WakeWordAgent / JarvisVoiceAgent
+        let _ = crate::EVENT_BUS.publish(crate::Event {
+            id: 0, topic: alloc::string::String::from("AUDIO_IN"),
+            payload: audio_buf,
+            token: crate::CapabilityToken::Legacy(1),
+        });
     }
 }
