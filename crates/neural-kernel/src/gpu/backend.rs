@@ -165,10 +165,20 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     result.or_else(|| cpu_matmul(a, b))
 }
 
-/// NVIDIA GPU matmul: DMA weights → VRAM via PUSH_BUFFER, CPU fallback
+/// NVIDIA GPU matmul: DMA pipeline + CPU fallback.
+/// Estado atual:
+/// - ✅ DMA handshake VRAM via PUSH_BUFFER (prova que canal PCIe funciona)
+/// - ✅ CPU matmul (sempre funcional, usa AVX2 em HW real via tensor.rs)
+/// - ❌ GPU compute shader (bloqueado por NDA — ISA NVIDIA não é pública)
+/// - ❌ ACR firmware loading (bloqueado — signed blobs necessários)
+/// 
+/// Para desbloquear GPU compute real:
+///   1. Baixar firmware de linux-firmware.git (MIT): fecs_*.bin + gpccs_*.bin
+///   2. Implementar WPR loading (~150 LOC, documentado em nouveau driver)
+///   3. Compilar shader ternário (exige documentação ISA ou CUDA → CUBIN)
+///   Alternativa: usar CPU com AVX2 (2-6× speedup, já integrado via tensor.rs)
 fn nvidia_matmul(nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
     if a.shape.1 != b.shape.0 { return None; }
-    // If PFIFO is alive, do DMA handshake (proves pipeline works)
     if nv.pfifo_ready && nv.vram_size > 0 {
         let sz = a.data.len() * 4;
         if let Some(vram_off) = crate::gpu::vram::vram_alloc(sz) {
@@ -182,7 +192,12 @@ fn nvidia_matmul(nv: &NvidiaGpu, a: &Tensor, b: &Tensor) -> Option<Tensor> {
     a.matmul(b)
 }
 
-
+/// CPU matmul — fallback universal. Roda em qualquer CPU.
+/// Em HW real com AVX2, `Tensor::matmul()` desvia automaticamente para
+/// `matmul_avx2_inner()` em tensor.rs (speedup 2-6× sobre scalar).
+/// Sem AVX2 (QEMU TCG), usa loop triplo scalar.
+/// Este é o único caminho funcional para GPU compute até firmwares e shaders
+/// estarem disponíveis (ver CRM-001 em docs/dead-ends.md).
 fn cpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     a.matmul(b)
 }

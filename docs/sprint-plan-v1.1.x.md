@@ -25,10 +25,13 @@
 **Bloqueado por NDA:** ~800 LOC (depende de documentação de fabricante)
 
 **Workarounds identificados:**
-- GPU compute via CPU matmul (AVX2 em HW real, 0.05 TFLOPS)
+- GPU compute via CPU matmul (AVX2 em HW real, 2-6× speedup via `tensor.rs`)
 - DMA handshake VRAM via BAR2 verifica pipeline (já implementado)
 - Microsoft BitNet fornece kernels CUDA open-source, mas exigem NVIDIA driver
 - i915 driver tem MEDIA_OBJECT dispatch, requer engenharia reversa (~2 semanas)
+
+**Documentação completa dos bloqueios:** `docs/dead-ends.md` (CRM-001)
+**Download firmware:** `python tools/download_firmware.py` (usa git clone)
 
 ---
 
