@@ -1,9 +1,10 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v1.0.0 🏆
-#   ~19.000 LOC, 165+ arquivos Rust, 247+ agentes, 0 erros
+#   PLANO DIRETOR — neural-os-core v1.1.5 🏆
+#   ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101+: v2.0 "Cognição" — Kernel, Cortex, Hermes, JARVIS
+#   v1.1.x: GPU Compute + WiFi + Visual 3-camadas + SelfHealing
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -173,6 +174,15 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - **HW Expert WPR loading**: pipeline implementado em `firmware.rs` (231 LOC). WPR 2MB no topo da VRAM, upload FECS+GPCCS via BAR2, Falcon boot. Só testável em HW real (QEMU não emula NVIDIA).
 - **regulatory.db**: wireless regdb (174 países, 5.4KB). Download de `https://kernel.org/pub/software/network/wireless-regdb/`.
 - **Firmware metadata extraction**: `extract_firmware_metadata.py` extrai de TODOS os diretórios do linux-firmware (headers .h, WHENCE, READMEs, configs, scripts) — 1207 records, 199KB JSON.
+- **HDA playback (SD1)**: HDA tem 4 stream descriptors (SD0-SD3). SD0=capture @0x80, SD1=playback @0xA0. Cada SD ocupa 0x20 bytes. `write_hda_playback()` escreve samples no DMA buffer e o codec reproduz.
+- **BrowserAgent real**: `fetch_page()` agora faz HTTP GET via smoltcp TCP com DNS resolve. Antes retornava placeholder HTML. A `net::http_get()` raw existe e funciona desde v1.1.0, mas BrowserAgent não chamava.
+- **DHCP starvation detection**: SecurityAgent monitora tx_count/rx_count. Se tx >> rx por período prolongado, dispara alerta. Antes era função vazia `{}`.
+- **WiFi iwlwifi CSR/HBUS**: Registradores iwlwifi reais: CSR (0x000-0x07F), HBUS (0x200-0x29C), SRAM (0x400+). ucode loading: wake_ucode() → reset → upload seções (addr+len+data) → alive check → doorbell NMI. Scan via comando 0x34 no SRAM.
+- **IwlWifi struct**: `bar` + `pmoff` para MMIO, `sram_write()`/`sram_read()` via HBUS_TARG_MEM_*, `send_cmd()` escreve SRAM + force NMI. Firmware blobs AX200 (cc-a0), AX201 (so-a0-gf), AX210 (so-a0-hr), AX211 (ty-a0-gf), AX101 (Qu-b0-hr) em `firmware/intel/iwlwifi/`.
+- **Firmware total**: 116 blobs de firmware em `firmware/` (NVIDIA + Intel i915 + Realtek NIC/WiFi + Intel WiFi), ~12MB, todos MIT license do linux-firmware.git.
+- **3 camadas visuais**: Z-order com Layer enum (OrbBackground < HermesOverlay < AppWindows < DockBar). FPS control a 60Hz. Orb reage a FFT audio (16 bins Goertzel). Hermes CLI overlay semi-transparente. Mouse PS/2 integrado (clique dock, close, drag).
+- **SelfHealing I3/I4**: SelfHealAgent detecta firmware ausente e skill ausente. Publica HEALTH_ISSUE → Hermes → LLM diagnostica → NetAgent HTTP GET → firmware carregado hot. Pipeline universal pra GPU, NIC, WiFi, qualquer HW.
+- **Skills a quente via LLM**: Nenhum skill é hardcoded. O LLM gera skills sob demanda e o SkillObserver registra. Ex: "grava video", "imprime formulario" viram skills gerados pelo LLM, não por enum Rust.
 
 # Lições Críticas Aprendidas
 - **Extração SDIO**: Sempre usar `7z x -r *.inf` (não sem `-r`), verificar se extraiu >0 arquivos ANTES de apagar o .7z
