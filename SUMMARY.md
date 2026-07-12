@@ -2,7 +2,7 @@
 
 **O que é:** Um sistema operacional bare-metal (`no_std` Rust, sem Linux) onde TUDO é um Agente ou uma Skill. 247+ agentes cooperativos, com MoE (Mixture of Experts) integrado ao LLM. O kernel roda IA, mas **é** IA — cada hardware é identificado por rede neural, cada decisão de alocação é inferida pelo modelo ternário BitNet.
 
-**Estado atual (v0.109.0):** ~19.000 LOC, 165+ arquivos Rust, 0 erros de compilação. Bootloader 0.11.15 com framebuffer UEFI 1280×720. GPU compute (NVIDIA/AMD/Intel). WiFi stack completo (802.11 scan, WPA2, DMA ring). Áudio completo (HDA, USB, TTS, VAD, SER, Wake Word). SDIO MoE dataset com 95.812 entradas de hardware. Display com compositor multi-janela + JARVIS avatar. Trinity AutoLearn: detecta necessidade → treina modelo → registra expert.
+**Estado atual (v1.1.5):** ~26.000 LOC, 180+ arquivos Rust, 0 erros. Firmware NVIDIA + Intel + Realtek + WiFi (116 blobs, ~12MB). HW Expert v3: 61.453 VID/DID. SelfHealing I3/I4: firmware/skill ausente → download → hot-load. WiFi Intel AX200 com ucode loading real. 3 camadas visuais: Orbe (FFT audio) + Hermes CLI overlay + Window Manager. HDA capture+playback. BrowserAgent real HTTP GET.
 
 **Arquitetura chave:**
 - 247+ agentes (20 nativos + 147 The Agency + ~80 importados + HW + FS)

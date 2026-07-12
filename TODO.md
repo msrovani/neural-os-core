@@ -1,8 +1,8 @@
-# 📋 TODO MASTER — neural-os-core v1.0.0 Gold Master
+# 📋 TODO MASTER — neural-os-core v1.1.5
 
-**Data:** 2026-07-09  
-**Propósito:** Checklist mestre do roadmap v1.0 (Sprints 92-100).  
-**Documento oficial:** `docs/sprint-plan-92-100.md`  
+**Data:** 2026-07-12  
+**Propósito:** Checklist mestre do roadmap v1.1.x.  
+**Documento oficial:** `docs/sprint-plan-v1.1.x.md`  
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
 
 ---

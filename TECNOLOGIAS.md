@@ -392,8 +392,13 @@
 | 101 | 0.101.x | Saltos 2+3: Router + Boot Agent | ~130 | `4933f00` |
 | 102 | 0.102.x | Trinity AutoLearn | ~170 | `f8edd70` |
 | 103 | 0.103.x | SmileyOS Nativo (55+ cmd, drag, wasm, icons) | ~450 | `f94dc48` |
+| 104 | 1.1.1 | GPU + Firmware + HW Expert v3 | ~1.200 | `af892f6` |
+| 105 | 1.1.2 | SelfHealing I3/I4 + HWID datasets | ~800 | `b1d2e63` |
+| 106 | 1.1.3 | Visual 3-camadas + Audio + Browser | ~600 | `64162b0` |
+| 107 | 1.1.4 | WiFi Intel AX200 ucode loading | ~260 | `ea61aa4` |
+| 108 | 1.1.5 | Integração + Documentação | ~50 | `3eeb6d1` |
 
 ---
 
-> **Total: ~19.000 LOC, 165+ Rust files, 247+ agentes, 39 ADRs, 500+ commits, 0 erros.**
-> De um microkernel bare-metal a um sistema operacional neural com IA, GPU, rede, áudio e aprendizado on-device.
+> **Total: ~26.000 LOC, 180+ Rust files, 247+ agentes, 39 ADRs, 500+ commits, 0 erros.**
+> De um microkernel bare-metal a um sistema operacional neural com IA, GPU, WiFi, áudio, visão 3-camadas e auto-recuperação.

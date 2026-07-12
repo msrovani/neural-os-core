@@ -1,7 +1,7 @@
-# Roadmap — neural-os-core v0.109.0 🏆
+# Roadmap — neural-os-core v1.1.5 🏆
 
-**Última atualização:** 2026-07-08
-**Estado:** ~19.000 LOC, 165+ arquivos Rust, 247+ agentes, 0 erros
+**Última atualização:** 2026-07-12
+**Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros
 
 ---
 
@@ -41,8 +41,13 @@
 | 45. Trinity AutoLearn | 102 | 0.102.x | Detecta→treina→registra expert on-device | ✅ |
 | 46. SmileyOS Nativo | 103 | 0.103.x | 55+ cmd, drag, resize, wasm exec, llm icons | ✅ |
 | —. Sprint Sound | — | — | HDA, USB, TTS, VAD, SER, Wake Word, Mixer | ✅ |
+| 47. v1.1.1 GPU+Firmware+HW Expert | 104 | 1.1.1 | ACR WPR, 61K VID/DID, firmware loading | ✅ |
+| 48. v1.1.2 SelfHealing | 105 | 1.1.2 | I3/I4, hot_load_firmware, HEALTH_ISSUE | ✅ |
+| 49. v1.1.3 Visual+Audio | 106 | 1.1.3 | 3 layers, HDA playback, BrowserAgent | ✅ |
+| 50. v1.1.4 WiFi AX200 | 107 | 1.1.4 | iwlwifi ucode loading, CSR/HBUS/SRAM | ✅ |
+| 51. v1.1.5 Integração | 108 | 1.1.5 | Docs, release, sprint plan final | ✅ |
 
-## 🔵 Sprint 92 — Itens Não Bloqueados (~3.200 LOC)
+## 🔵 Próximos Passos — Boot HW Real + v2.0
 
 | Item | % | Esforço | Descrição |
 |------|---|---------|-----------|

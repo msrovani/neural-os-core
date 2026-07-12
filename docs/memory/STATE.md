@@ -1,15 +1,16 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core ROADMAP v1.0.0 🏆
-#   SPRINTS 92→100: A Era do Silício — Gold Master
-#   165+ arquivos Rust, ~19.000 LOC, 0 erros
-#   v2.0 "Cognição" começa na Sprint 101
+#   STATE — neural-os-core v1.1.5 🏆
+#   SPRINTS v1.1.x: Silicon Afterlife
+#   180+ arquivos Rust, ~26.000 LOC, 0 erros
+#   v1.1.5 finalizada — Boot HW Real é o próximo marco
 # ════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Roadmap v1.0:** `docs/sprint-plan-92-100.md` — Sprints 92 a 100.
-**Sprint atual:** Sprint 100 — Code Freeze & Release v1.0.0.
+**Roadmap v1.1.x:** `docs/sprint-plan-v1.1.x.md` — v1.1.1 a v1.1.5.
+**Última versão:** v1.1.5 (2026-07-12).
 
 ## Marcos Acumulados
+- **🏆 v1.1.5 (2026-07-12):** 0 erros, ~26.000 LOC, 116 firmwares. HW Expert v3 (61.453 VID/DID), SelfHealing I3/I4, WiFi Intel AX200 ucode loading, 3 camadas visuais (Orb + Hermes CLI + WM), HDA playback, BrowserAgent real, FFT audio.
 - **🏆 v1.0 code freeze (2026-07-10):** 0 erros, 0 warnings. HW Expert GPU treinado (95.4%, 43K devices). GGUF streaming implementado. LLM Icons + Human-in-the-Loop + ZT Syscall + RssAgent + EmailAgent. Frame allocator 8GB.
 - **🏆 v1.0 roadmap definido (2026-07-09):** 9 sprints (92-100), ~18.200 LOC, culminando no Code Freeze v1.0.0. Após: v2.0 "Cognição" (Kernel, Cortex, Hermes, JARVIS).
 - **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Serial tunnel TCP bridge resolveu o RX=0 que perseguia o projeto desde o início. Primeiro RX: 304 bytes.

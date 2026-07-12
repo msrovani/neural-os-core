@@ -1,4 +1,47 @@
-# Changelog — neural-os-core v1.0.0 "Gold Master"
+# Changelog — neural-os-core v1.1.5 "Silicon Afterlife"
+
+## v1.1.5 — 2026-07-12 — Silicon Afterlife
+
+### Sprints v1.1.x: GPU Compute + WiFi + Visual 3-Camadas + SelfHealing
+
+- **v1.1.1 — GPU + Firmware + HW Expert v3** (1.200 LOC)
+  - Firmware ACR loading: pipeline WPR implementado, blobs NVIDIA GP108 em firmware/
+  - HW Expert v3 treinado: 61.453 VID/DID únicos (SDIO + pci.ids + usb.ids + kernel)
+  - Modelo 128h/6L/8heads, 1M params, 259KB, loss 0.389
+  - 171.003 HWIDs SDIO de 65 DriverPacks, 20.054 .inf
+  - 48.346 registros oficiais pci-ids + usb-ids + kernel PCI tables
+  - Firmware metadata: WHENCE (998) + headers + AMD ucode (64 patches)
+  - regulatory.db: 174 países WiFi
+
+- **v1.1.2 — SelfHealing + HWID Datasets** (800 LOC)
+  - SelfHeal I3: firmware ausente → HEALTH_ISSUE
+  - SelfHeal I4: skill ausente → HEALTH_ISSUE  
+  - firmware.rs: hot_load_firmware(vid, did, class) universal
+  - HermesAgent: inscrito em HEALTH_ISSUE → LLM diagnostica
+  - mkfat32.py: firmware incluso como FW_* no FAT32
+
+- **v1.1.3 — 3 Camadas Visuais + Audio + Rede** (600 LOC)
+  - Z-order real: Layer enum (OrbBackground < HermesOverlay < AppWindows < DockBar)
+  - FPS control a 60Hz (LAST_FRAME_TICK)
+  - Hermes CLI overlay semi-transparente sempre visível
+  - FFT audio (Goertzel 16 bins) → animação do Orbe
+  - Mouse PS/2 integrado: dock bar, close, drag
+  - HDA playback (SD1): TTS finalmente chega ao auto-falante
+  - BrowserAgent real: HTTP GET via smoltcp TCP com DNS resolve
+  - DHCP starvation detection (SecurityAgent)
+
+- **v1.1.4 — WiFi Intel AX200** (260 LOC)
+  - iwlwifi CSR/HBUS/SRAM registers (0x000-0x29C)
+  - ucode loading pipeline: wake → reset → seções → alive
+  - Command/response via SRAM + doorbell NMI
+  - Scan via comando 0x34
+  - 5 firmware blobs: cc-a0 (AX200), Qu (AX101), so-a0-gf/hr (AX201/210), ty-a0-gf (AX211)
+  - ~7.5MB firmware Intel WiFi em firmware/intel/iwlwifi/
+
+- **v1.1.5 — Integração + Documentação** (50 LOC)
+  - Sprint plan atualizado com progresso real
+  - AGENTS.md expandido com lições v1.1.x
+  - Build release: 0 erros, ~26.000 LOC, 180+ arquivos
 
 ## v1.0.0 — 2026-07-11 — A Era do Silício
 

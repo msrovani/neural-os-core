@@ -1,18 +1,21 @@
-﻿# Neural OS Hermes v1.0.0 — AI-native Bare-metal Operating System 🏆
+﻿# Neural OS Hermes v1.1.5 — AI-native Bare-metal Operating System 🏆
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
 
 ```
 ╔══════════════════════════════════╗
-║  Neural OS Hermes v1.0.0        ║
-║  "Gold Master — A Era do Silício"║
+║  Neural OS Hermes v1.1.5        ║
+║  "Silicon Afterlife"            ║
 ╚══════════════════════════════════╝
 
-  ✦ v1.0.0 Code Freeze — 0 erros, 0 warnings
-  ✦ HW Expert GPU (95.4% accuracy, 43K devices)
-  ✦ HW Register Map predictor (8 families: IntelWiFi, Realtek, Atheros, Broadcom...)
-  ✦ LLM Icons via HWEXPERT_MODEL no compositor
-  ✦ Human-in-the-Loop (/approve, /deny, /pending)
+  ✦ v1.1.5 — 0 erros, ~26.000 LOC
+  ✦ HW Expert v3 (61.453 VID/DID, 1M params)
+  ✦ SelfHealing Firmware Pipeline (I3/I4)
+  ✦ WiFi Intel AX200/AX210 com ucode loading real
+  ✦ 3 camadas visuais: Orb + Hermes CLI + Window Manager
+  ✦ HDA capture + playback (microfone + auto-falante)
+  ✦ BrowserAgent real: HTTP GET via smoltcp TCP
+  ✦ FFT audio → animação do Orbe em tempo real
   ✦ Zero-Trust Syscall Categories (ReadOnly/Ephemeral/Persistent/Hardware)
   ✦ GGUF streaming (>4GB models via chunky FAT32 read)
   ✦ RssAgent + EmailAgent (WWW agents via HTTP + SMTP)
