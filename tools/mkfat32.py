@@ -117,8 +117,9 @@ def populate(path):
     if os.path.isdir(fw_dir):
         for name in os.listdir(fw_dir):
             if name.endswith(".bin"):
+                fw_path = os.path.join(fw_dir, name)
                 fw_name = "FW_" + name.upper().replace(".", "_")
-                files.append((fw_name, find_file(os.path.join("nvidia", "gp108", name))))
+                files.append((fw_name, fw_path))
     # CONFIG.TXT
     config_content = b"BOOT_MODE=hw\nPLATFORM=baremetal\nGPU=auto\nLOG_TO_FAT32=1\n"
     files.append(("CONFIG.TXT", config_content))

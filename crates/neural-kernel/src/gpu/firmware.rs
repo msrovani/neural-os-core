@@ -1,13 +1,18 @@
 //! GPU Secure Boot — firmware loading para NVIDIA ACR, AMD PSP, Intel GuC.
 //!
 //! # Estado (v1.1.1)
-//! Pipeline WPR implementado. Firmware blobs necessários (MIT, linux-firmware.git).
+//! Pipeline WPR implementado. Firmware blobs em firmware/ (git-tracked, MIT).
 //!
-//! # Para ativar GPU compute real:
-//!   1. `python tools/download_firmware.py` — baixa blobs do linux-firmware
-//!   2. Ou copiar manualmente de /lib/firmware/nvidia/gp108/ (Linux existente)
-//!   3. Firmware dir: target/firmware/nvidia/gp108/*.bin
-//!   4. WPR loading automático no próximo boot com GPU NVIDIA
+//! # Fonte dos firmwares
+//! GitLab mirror: https://gitlab.com/kernel-firmware/linux-firmware.git
+//! (kernel.org git clone lento/inestável, HTTP 403)
+//!
+//! GitHub mirror (alternativa): https://github.com/linux-firmware/linux-firmware
+//!
+//! # Como incluir no boot
+//!   `python tools/download_firmware.py` → target/firmware/
+//!   Ou: firmware/*.bin são copiados pelo mkfat32.py para o FAT32 como FW_*.
+//!   WPR loading automático no boot com GPU NVIDIA
 
 use crate::gpu::detect::{GpuInfo, GpuVendor};
 use crate::serial_println;

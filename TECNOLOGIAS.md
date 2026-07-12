@@ -142,6 +142,7 @@
 | UVC Camera | USB Video, YUYV→RGB | — | — | `uvc_driver.rs` | v0.94  ██████████ 100% |
 | WiFi Generic | WifiChipset trait, union | ADR-0016 | #124 | `generic_wifi.rs` | v0.97  ██████████ 100% |
 | TPM 2.0 TIS | MMIO 0xFED40000, SHA256 | ADR-0025 | #305 | `tpm.rs` | v0.74  ██████████ 100% |
+| GPU Firmware (linux-firmware) | GitLab mirror `kernel-firmware/linux-firmware` | ADR-0037 | #357 | `firmware/` | v1.1.1 ✅ | |
 
 ---
 

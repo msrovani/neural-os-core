@@ -28,7 +28,7 @@ Executar `C = A × B` (matmul ternário) na GPU NVIDIA via PFIFO channel.
 
 | Fonte | Resultado |
 |-------|-----------|
-| `linux-firmware.git` | Blobs FECS+GPCCS disponíveis desde 2017, MIT license (~100KB cada). Download via `git clone`, não HTTP (kernel.org bloqueia). |
+| `linux-firmware.git` | Blobs FECS+GPCCS disponíveis desde 2017, MIT license (~100KB cada). Download via `git clone` do GitLab mirror: `https://gitlab.com/kernel-firmware/linux-firmware.git` (kernel.org HTTP bloqueia, git clone lento/inestável). |
 | Driver nouveau (Linux) | Implementa WPR loading completo. Código aberto em `drivers/gpu/drm/nouveau/nvkm/subdev/acr/`. ~150 LOC relevantes. |
 | Microsoft `BitNet/gpu/` | Kernels CUDA open-source para BitNet b1.58. Exigem NVIDIA driver + CUDA runtime — não rodam em bare-metal. |
 | `microsoft/BitNet-b1.58-2B-4T-gguf` | Modelo em formato GGUF. Kernel tem `GgufBackedModel` que potencialmente carrega. |
@@ -46,9 +46,22 @@ Executar `C = A × B` (matmul ternário) na GPU NVIDIA via PFIFO channel.
 
 **Prioridade 1 (firmware):**
 ```bash
-git clone --depth 1 https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git
-# Firmwares: nvidia/gp108/acr/fecs_*.bin + gpccs_*.bin (~80KB total)
-cp linux-firmware/nvidia/gp108/acr/*.bin target/firmware/nvidia/
+# Fonte primária (GitLab mirror, confiável):
+git clone --depth 1 https://gitlab.com/kernel-firmware/linux-firmware.git
+# Firmwares: nvidia/gp108/gr/fecs_*.bin + gpccs_*.bin (~40KB total)
+# OBS: linux-firmware reorganizou — blobs estão em nvidia/gp108/gr/ (não acr/)
+cp target/firmware/linux-firmware/nvidia/gp108/gr/*.bin target/firmware/nvidia/gp108/
+
+# Alternativa (automatizado):
+python tools/download_firmware.py  # já usa GitLab mirror
+
+# Firmware incluído no repositório (git-tracked):
+#   firmware/nvidia/gp108/*.bin  (8 blobs, 39 KB)
+#   firmware/i915/*.bin          (24 blobs, Intel GuC/HuC SKL+KBL)
+#   firmware/rtl_nic/*.fw        (41 blobs, Realtek NIC)
+#   firmware/rtlwifi/*.bin       (38 blobs, Realtek WiFi)
+
+# Disk image FAT32 (mkfat32.py) inclui firmware como FW_FECS_BL_BIN etc.
 ```
 Depois: implementar WPR loading em `gpu/firmware.rs` (~150 LOC, baseado no nouveau).
 Resultado: VRAM funcional, PFIFO pode executar comandos.
