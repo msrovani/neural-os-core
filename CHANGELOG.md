@@ -1,4 +1,35 @@
-# Changelog — neural-os-core v1.2.0 "ATA Liberation"
+# Changelog — neural-os-core v1.5.2 "Ring Buffer Refactor"
+
+## v1.5.2 — 2026-07-13 — Ring Buffer Refactor
+
+### Refactor
+- **`RingBufStore` extraído** em `fs/mod.rs` — tipo genérico com evicção FIFO por quota
+- **`ram_fs_agent.rs`** delegado para `RingBufStore::new(1MB)` — ~40 LOC eliminados
+- **`log_fs_agent.rs`** delegado para `RingBufStore::new(256KB)` — ~50 LOC eliminados
+- **`hermes/src/fs/`** também atualizado com `RingBufStore` (consistency com monólito)
+
+### Safety
+- **`LEGACY/v1.5-neural-kernel-src/`** — snapshot de todo `crates/neural-kernel/src/` antes da migração v2.0
+- Nada foi deletado — refactor puro por extração
+
+# Changelog — neural-os-core v1.5.1 "Ponytail Audit"
+
+## v1.5.1 — 2026-07-13 — Ponytail Audit
+
+### Cleanup (600 LOC removidos, 11 dep entries)
+- **Deps removidas:** `pic8259` de 4 Cargo.tomls; `ed25519-compact`, `linked_list_allocator`, `bootloader_api` de crates que não usam
+- **smoltcp features podadas:** `socket-dns`, `proto-dns` removidas (nunca usadas — DNS via UDP raw)
+- **6 arquivos deletados:** `cfs.rs`, `hal.rs`, `time_utils.rs`, `wifi_aer.rs`, `wifi_dma.rs`, `wifi_apic.rs` — todos `#[allow(dead_code)]` sem chamadores
+- **3 funções mortas removidas:** `ram_used_bytes()`, `agent_for_mount()` (stub), `scheduler_stats()` (stub)
+- **14 branches `#[cfg(not(target_arch = "x86_64"))]` removidos** de `tensor.rs`, `simd.rs`, `bitnet_avx2.rs` — portabilidade especulativa para arquiteturas inexistentes
+- **Trait `Architecture` + static `ARCH` removidos** de `hal.rs` — marcado `@dead` pelo autor, zero chamadores
+- **`PICS` lazy_static + `init_pics()` removidos** de `interrupts.rs` — kernel só usa APIC
+
+### K²CHJ Workspace Migration (v1.5.0)
+- Monólito `neural-kernel` → 5 crates (k_nano, cortex, hermes, k_ia, jarvis)
+- `tools/migrate_k2chj.py`: 193 arquivos mapeados, 79 refs cross-crate corrigidas
+- k_nano compila independentemente (0 erros)
+- neural-kernel intacto como bin crate (build 0 erros)
 
 ## v1.2.0 — 2026-07-12 — ATA Liberation
 
