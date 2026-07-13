@@ -10,6 +10,9 @@ New-Item -ItemType Directory -Force -Path "C:\DEV\neural-os-core\logs" | Out-Nul
 Write-Host "=== NEURAL-OS-CORE (UEFI) ==="
 Write-Host "RAM: 6G | CPU: 2 cores (TCG) | NIC: e1000"
 Write-Host "Serial log: $logfile"
-$args = @("-m","6G","-smp","2","-accel","tcg","-drive","format=raw,file=$uefi,if=ide","-drive","if=pflash,format=raw,file=$ovmf,readonly=on","-serial","file:$logfile","-serial","tcp:127.0.0.1:4444,server=on,wait=off","-nic","user,model=e1000,hostfwd=tcp::4444-:4444,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446")
+$disk = "C:\DEV\neural-os-core\target\disk_qemu.raw"
+if (!(Test-Path $disk)) { Write-Host "Disk image not found. Run: python tools/build_image.py"; $disk = $null }
+$diskArg = if ($disk) { @("-drive","format=raw,file=$disk,if=ide,index=1") } else { @() }
+$args = @("-m","6G","-smp","2","-accel","tcg","-drive","format=raw,file=$uefi,if=ide,index=0") + $diskArg + @("-drive","if=pflash,format=raw,file=$ovmf,readonly=on","-serial","file:$logfile","-serial","tcp:127.0.0.1:4444,server=on,wait=off","-nic","user,model=e1000,hostfwd=tcp::4444-:4444,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446")
 if ($Window) { & "C:\Program Files\qemu\qemu-system-x86_64.exe" @args -vga std }
 else { & "C:\Program Files\qemu\qemu-system-x86_64.exe" @args -vga none -display none -nographic }
