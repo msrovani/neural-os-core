@@ -3,8 +3,7 @@
 use crate::{println, serial_println};
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
-use pic8259::ChainedPics;
-use spin::Mutex;
+// ponytail: PICS/pic8259 removed — kernel só usa APIC
 use x86_64::instructions::segmentation::Segment;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
@@ -28,10 +27,6 @@ pub static IPI_RESCHEDULE: AtomicUsize = AtomicUsize::new(0);
 pub static IPI_HALT: AtomicUsize = AtomicUsize::new(0);
 pub static IPI_CALL_FUNCTION: AtomicUsize = AtomicUsize::new(0);
 
-lazy_static! {
-    static ref PICS: Mutex<ChainedPics> =
-        Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
-}
 
 const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const PAGE_FAULT_IST_INDEX: u16 = 1;
@@ -315,11 +310,7 @@ pub fn init_idt() {
     serial_println!("[IDT] IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.");
 }
 
-pub fn init_pics() {
-    unsafe { PICS.lock().initialize(); }
-    serial_println!("[PIC] 8259A remapeado: PIC1 offset 32, PIC2 offset 40.");
-    println!("[PIC] 8259A remapeado.");
-}
+// ponytail: init_pics removed — kernel só usa APIC
 
 pub fn enable_interrupts() {
     x86_64::instructions::interrupts::enable();

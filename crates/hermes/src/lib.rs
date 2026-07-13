@@ -47,10 +47,8 @@ pub mod link_watcher;
 pub mod generic_wifi;
 pub mod wifi_agent;
 pub mod wifi_protocol;
-pub mod wifi_aer;
-pub mod wifi_apic;
 pub mod wifi_compat;
-pub mod wifi_dma;
+// ponytail: wifi_aer/dma/apic.rs moved to LEGACY/v1.5-dead-k2chj/hermes/ (dead code)
 pub mod wifi_iwlwifi;
 pub mod wifi_msix;
 pub mod voice_skill;

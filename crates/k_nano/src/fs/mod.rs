@@ -30,9 +30,7 @@ pub fn register_fs_agent(agent: Box<dyn FilesystemAgent>) {
     crate::serial_println!("[FS] Agent '{}' registrado em {}", name, mp);
 }
 
-pub fn agent_for_mount(_mount_point: &str) -> Option<&'static mut Box<dyn FilesystemAgent>> {
-    None
-}
+// ponytail: agent_for_mount stub removed (dead code, preserved in LEGACY/v1.5-neural-kernel-src/)
 
 pub fn read_vfs(path: &str) -> Result<Vec<u8>, &'static str> {
     let agent_name;
