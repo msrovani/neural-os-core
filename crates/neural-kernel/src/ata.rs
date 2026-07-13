@@ -1,6 +1,7 @@
 
 
 use crate::pci::scan_pci;
+use crate::serial_println;
 
 #[derive(Clone)]
 pub struct AtaDriver {
@@ -17,23 +18,50 @@ impl AtaDriver {
     }
 
     pub unsafe fn probe() -> Option<Self> {
-        // 1. Tenta PCI class 0x01 com BARs validos
-        let devs = scan_pci();
-        for d in &devs {
-            if d.class == 0x01 && (d.subclass == 0x01 || d.subclass == 0x06) {
-                let io = (d.bar0 as u16) & 0xFFF0;
-                if io == 0 || io == 0xFFFF { continue; }
-                // Try master then slave
-                if Self::detect(io, 0xA0) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function, slave: false }); }
-                if Self::detect(io, 0xB0) { return Some(AtaDriver { io_base: io, pci_bus: d.bus, pci_device: d.device, pci_func: d.function, slave: true }); }
+        let mut best: Option<AtaDriver> = None;
+        let mut best_type: u8 = 0;
+        for &base in &[0x1F0u16, 0x170u16] {
+            for &slave in &[false, true] {
+                if !Self::detect(base, if slave { 0xB0 } else { 0xA0 }) { continue; }
+                let mut drv = AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave };
+                if let Some(id) = drv.identify() {
+                    let total = (id[60] as u64) | ((id[61] as u64) << 16);
+                    if total > 0 && total < 0xFFFFFFFF {
+                        serial_println!("[ATA] ISA {}: {} {} setores", base, if slave { "slave" } else { "master" }, total);
+                        write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
+                        for _ in 0..1000 { core::hint::spin_loop(); }
+                        if drv.has_mbr() {
+                            let mut mbr = [0u8; 512];
+                            if drv.read_sectors(0, &mut mbr, 1) {
+                                for i in 0..4 {
+                                    let off = 0x1BE + i * 16;
+                                    let t = mbr[off + 4];
+                                    if t == 0x0B || t == 0x0C || t == 0x1C {
+                                        serial_println!("[ATA] ISA {}: {} FAT32! (type={:#x})", base, if slave { "slave" } else { "master" }, t);
+                                        return Some(drv);
+                                    }
+                                    if t == 0xEE && best.is_none() { best = Some(drv.clone()); best_type = t; }
+                                    if best.is_none() { best = Some(drv.clone()); best_type = t; }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
-        // 2. Fallback: portas legadas ISA (PIIX3 legacy mode - BARs zerados)
-        for &base in &[0x1F0u16, 0x170u16] {
-            if Self::detect(base, 0xA0) { return Some(AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave: false }); }
-            if Self::detect(base, 0xB0) { return Some(AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave: true }); }
+        if best.is_some() { serial_println!("[ATA] Usando fallback type={:#x}", best_type); }
+        best
+    }
+
+    unsafe fn has_mbr(&self) -> bool {
+        let mut buf = [0u8; 512];
+        if !self.read_sectors(0, &mut buf, 1) {
+            serial_println!("[ATA] has_mbr: read_sectors falhou para slave={}", self.slave);
+            return false;
         }
-        None
+        let ok = buf[0x1FE] == 0x55 && buf[0x1FF] == 0xAA;
+        serial_println!("[ATA] has_mbr: slave={} 55AA={} bytes510={:02X}511={:02X}", self.slave, ok, buf[0x1FE], buf[0x1FF]);
+        ok
     }
 
     unsafe fn detect(io: u16, sel: u8) -> bool {
@@ -62,16 +90,19 @@ impl AtaDriver {
 
     unsafe fn cmd(&self, lba: u32, count: u8, cmd: u8) {
         self.wait_bsy();
-        // Select drive: 0xE0 = master+LBA, 0xF0 = slave+LBA
         let head = if self.slave { 0xF0u8 } else { 0xE0u8 };
+        // Delay apos wait_bsy
+        for _ in 0..100 { core::hint::spin_loop(); }
         write_io(self.io_base + 6, head | ((lba >> 24) as u8));
-        core::arch::asm!("out 0x80, al", in("al") 0u8, options(nostack)); // small delay
-        write_io(self.io_base + 6, head | ((lba >> 24) as u8)); // select again
+        for _ in 0..100 { core::hint::spin_loop(); }
+        write_io(self.io_base + 6, head | ((lba >> 24) as u8));
+        for _ in 0..100 { core::hint::spin_loop(); }
         write_io(self.io_base + 1, 0);
         write_io(self.io_base + 2, count);
         write_io(self.io_base + 3, (lba & 0xFF) as u8);
         write_io(self.io_base + 4, ((lba >> 8) & 0xFF) as u8);
         write_io(self.io_base + 5, ((lba >> 16) & 0xFF) as u8);
+        for _ in 0..100 { core::hint::spin_loop(); }
         write_io(self.io_base + 7, cmd);
     }
 
@@ -93,10 +124,9 @@ impl AtaDriver {
         if !self.wait_drq() { return None; }
         let mut data = [0u16; 256];
         for i in 0..256 {
-            let lo: u8; let hi: u8;
-            core::arch::asm!("in al, dx", out("al") lo, in("dx") self.io_base, options(nostack, preserves_flags));
-            core::arch::asm!("in al, dx", out("al") hi, in("dx") (self.io_base + 1), options(nostack, preserves_flags));
-            data[i] = (lo as u16) | ((hi as u16) << 8);
+            let w: u16;
+            core::arch::asm!("in ax, dx", out("ax") w, in("dx") self.io_base, options(nostack, preserves_flags));
+            data[i] = w;
         }
         Some(data)
     }
@@ -112,16 +142,20 @@ impl AtaDriver {
 
     pub unsafe fn read_sectors(&self, lba: u32, buf: &mut [u8], count: u8) -> bool {
         self.cmd(lba, count, 0x20);
+        // Pequena pausa para o comando ser processado
+        for _ in 0..10000 { core::hint::spin_loop(); }
         for s in 0..count as usize {
             self.wait_bsy();
-            if !self.wait_drq() { return false; }
+            if !self.wait_drq() {
+                serial_println!("[ATA] read: DRQ nao pronto LBA={} s={}/{} slave={}", lba, s, count, self.slave);
+                return false;
+            }
             for i in 0..256 {
-                let lo: u8; let hi: u8;
-                core::arch::asm!("in al, dx", out("al") lo, in("dx") self.io_base, options(nostack, preserves_flags));
-                core::arch::asm!("in al, dx", out("al") hi, in("dx") (self.io_base + 1), options(nostack, preserves_flags));
+                let w: u16;
+                core::arch::asm!("in ax, dx", out("ax") w, in("dx") self.io_base, options(nostack, preserves_flags));
                 let off = s * 512 + i * 2;
-                if off < buf.len() { buf[off] = lo; }
-                if off + 1 < buf.len() { buf[off + 1] = hi; }
+                if off < buf.len() { buf[off] = w as u8; }
+                if off + 1 < buf.len() { buf[off + 1] = (w >> 8) as u8; }
             }
         }
         true
@@ -140,10 +174,8 @@ impl AtaDriver {
         self.wait_bsy();
         if !self.wait_drq() { return false; }
         for i in 0..256 {
-            let lo = buf[i * 2];
-            let hi = buf[i * 2 + 1];
-            core::arch::asm!("out dx, al", in("dx") self.io_base, in("al") lo, options(nostack, preserves_flags));
-            core::arch::asm!("out dx, al", in("dx") (self.io_base + 1), in("al") hi, options(nostack, preserves_flags));
+            let w = (buf[i * 2] as u16) | ((buf[i * 2 + 1] as u16) << 8);
+            core::arch::asm!("out dx, ax", in("dx") self.io_base, in("ax") w, options(nostack, preserves_flags));
         }
         self.wait_bsy();
         write_io(self.io_base + 7, 0xE7);
