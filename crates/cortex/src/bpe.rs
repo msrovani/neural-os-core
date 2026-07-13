@@ -134,9 +134,9 @@ pub fn init_from_json(data: &[u8]) -> Result<(), &'static str> {
 pub fn encode(text: &str) -> Vec<u16> {
     let guard = BPE.lock();
     match guard.as_ref() {
-        Some(tok) => tok.encode(text).unwrap_or_else(|_| crate::Tokenizer::encode(text)),
+        Some(tok) => tok.encode(text).unwrap_or_else(|_| crate::cortex::Tokenizer::encode(text)),
         None => {
-            crate::Tokenizer::encode(text)
+            crate::cortex::Tokenizer::encode(text)
         }
     }
 }
@@ -145,7 +145,7 @@ pub fn decode(tokens: &[u16]) -> String {
     let guard = BPE.lock();
     match guard.as_ref() {
         Some(tok) => tok.decode(tokens),
-        None => crate::Tokenizer::decode(tokens),
+        None => crate::cortex::Tokenizer::decode(tokens),
     }
 }
 

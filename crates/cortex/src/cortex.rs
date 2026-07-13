@@ -1276,39 +1276,7 @@ pub fn set_hwexpert_model(model: Box<dyn Model>) {
 }
 
 pub fn generate_via_model(prompt: &str) -> String {
-    // MoE routing: Trinity classifica intencao, roteia para expert se disponivel
-    let expert_name = {
-        let trinity = k_nano::TRINITY.lock();
-        let expert = trinity.classify_intent(prompt);
-        let name = expert.name;
-        drop(trinity);
-        name
-    };
-    // Tenta expert RustCoder
-    if expert_name == "rust_coder" {
-        let guard = RUSTCODER_MODEL.lock();
-        if let Some(m) = guard.as_ref() {
-            k_nano::serial_println!("[TRINITY] MoE routing: RustCoder expert");
-            return m.generate(&alloc::format!(
-                "{{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}}\n{}\n", prompt));
-        }
-    }
-    // Tenta expert HW Identify
-    if expert_name == "hw_identify" {
-        let guard = HWEXPERT_MODEL.lock();
-        if let Some(m) = guard.as_ref() {
-            k_nano::serial_println!("[TRINITY] MoE routing: HWIdentify expert");
-            return m.generate(&alloc::format!("identifique hardware {}", prompt));
-        }
-    }
-    // Fallback: modelo principal (BitNet LLM)
-    // Reporta intent nao classificado para AutoLearnAgent (Trinity learn cycle)
-    if expert_name == "generator" {
-        let _ = k_nano::EVENT_BUS.publish(crate::Event {
-            id: 0, topic: alloc::string::String::from("TRINITY_UNMATCHED"),
-            payload: prompt.as_bytes().to_vec(), token: crate::CapabilityToken::Legacy(1),
-        });
-    }
+    // ponytail: pure inference — Trinity routing lives in neural-kernel
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
