@@ -1,18 +1,21 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.2.0 🏆
-#   SPRINTS v1.1.x + ATA PIO Fix
+#   STATE — neural-os-core v1.5.3 🏆
+#   SPRINTS v1.5.x — K²CHJ + Ponytail Audit + Refactor
 #   180+ arquivos Rust, ~26.000 LOC, 0 erros
-#   v1.2.0: ATA PIO bug corrigido — disco lê corretamente
+#   v1.5.3: Ponytail audit corrections concluídas
 # ════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Roadmap v1.1.x:** `docs/sprint-plan-v1.1.x.md` — v1.1.1 a v1.1.5.
-**Última versão:** v1.2.0 (2026-07-12) — **ATA PIO bug fix crítico**.
+**Roadmap v1.5.x:** K²CHJ workspace migration gradual + ponytail cleanup.
+**Última versão:** v1.5.3 (2026-07-13) — **Ponytail audit concluído**.
 
 ## Marcos Acumulados
+- **🏆 v1.5.3 (2026-07-13):** 0 erros. 6 dead files movidos de K²CHJ crates para LEGACY/v1.5-dead-k2chj/. PICS removido de k_nano. Dead stubs removidos. hermes FS synced com RingBufStore. **Ponytail audit 100% implementado.**
+- **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
+- **🏆 v1.5.1 (2026-07-13):** 0 erros. ~600 LOC removidos, 11 dep entries eliminados. 6 dead files movidos do neural-kernel para K²CHJ crates. pic8259 eliminado. #[cfg(not(x86_64))] branches removidos. Architecture trait removido.
+- **🏆 v1.5.0 (2026-07-13):** 0 erros. K²CHJ workspace migration: monólito → 5 crates (k_nano, cortex, k_ia, hermes, jarvis). Dep chain linear. k_nano compila independentemente. migrate_k2chj.py (193 files, 79 refs).
+- **🏆 v1.2.0 (2026-07-12):** ATA PIO bug fix crítico — READ_SECTORS e IDENTIFY usavam `in al, dx+1` para byte alto (lendo FEATURES/ERROR). Fix: `in ax, dx`. TODO acesso a disco desde o início do projeto era lixo.
 - **🏆 v1.1.5 (2026-07-12):** 0 erros, ~26.000 LOC, 116 firmwares. HW Expert v3 (61.453 VID/DID), SelfHealing I3/I4, WiFi Intel AX200 ucode loading, 3 camadas visuais (Orb + Hermes CLI + WM), HDA playback, BrowserAgent real, FFT audio.
-- **🏆 v1.0 code freeze (2026-07-10):** 0 erros, 0 warnings. HW Expert GPU treinado (95.4%, 43K devices). GGUF streaming implementado. LLM Icons + Human-in-the-Loop + ZT Syscall + RssAgent + EmailAgent. Frame allocator 8GB.
-- **🏆 v1.0 roadmap definido (2026-07-09):** 9 sprints (92-100), ~18.200 LOC, culminando no Code Freeze v1.0.0. Após: v2.0 "Cognição" (Kernel, Cortex, Hermes, JARVIS).
 - **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Serial tunnel TCP bridge resolveu o RX=0 que perseguia o projeto desde o início. Primeiro RX: 304 bytes.
 - **v0.109.1** — Correção em massa: 32 erros de compilação mascarados pelo cache incremental. `cargo clean -p neural-kernel` revelou imports faltando, APIs trocadas, format string.
 - **v0.56.0-v0.67.0** — 22 sprints de OS neural, GPU, desktop, agentes, ecossistema
@@ -128,7 +131,7 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 27. **FlashAttention (Stanford, NeurIPS 2022):** IO-aware tiling para atenção. Aplica-se ao BitNet CPU: processar atenção em blocos de 16 tokens no cache L1 (32 KB). ~3-5× speedup para sequências >256 tokens. Sprint 100+.
 28. **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Causa real: incompatibilidade Windows 11 × QEMU TCG × NIC emulada. Solução: bypass serial TCP. Kernel `slip.rs` (82 LOC) + `serial_bridge.py` (Python como servidor TCP) + `-serial tcp:127.0.0.1:4444` (QEMU como cliente). Primeiro RX: 304 bytes. O kernel sempre esteve correto — era o ambiente que isolava fisicamente o RX.
 
-## Pendente Técnico (Roadmap v1.0 — ver docs/sprint-plan-92-100.md para detalhes)
+## Pendente Técnico (Roadmap v1.5.x → v2.0)
 
 ### ✅ COMPLETO (Sprints 84-91 + Sound + 95-97)
 Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Healing, Trinity MoE) estão implementados e verificados.
@@ -148,23 +151,25 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - **Tag v1.0.0**: Criada e pushada
 
 ### ✅ Sprint 100 — Code Freeze v1.0.0
-- ~~`cargo clean -p neural-kernel && cargo check --release` 0 erros~~ ✅
-- ~~QEMU UEFI boot (OVMF + TCG) — kernel init até runtime/scheduler~~ ✅
-- ~~Bootloader v0.11: BIOS image não funciona (triple fault), UEFI funciona~~ ✅
-- ~~Ponytail Audit: -19 arquivos, -500 LOC, -3 deps, -32 transitive crates~~ ✅
-- ~~**🔴 Conhecido**: #PF no scheduler — resolvido via heap stack switch~~ ✅
+- `cargo clean -p neural-kernel && cargo check --release` 0 erros ✅
+- QEMU UEFI boot (OVMF + TCG) — kernel init até runtime/scheduler ✅
+- Bootloader v0.11: BIOS image não funciona (triple fault), UEFI funciona ✅
+- Ponytail Audit: -19 arquivos, -500 LOC, -3 deps, -32 transitive crates ✅
+- #PF no scheduler resolvido via heap stack switch ✅
 - **🔴 Conhecido**: WHPX crasha com SMP ("Unexpected VP exit code 4") — usar TCG.
 - VirtualBox boot test — manual
 
-### 🟢 Sprint 101 — v2.0 Cognição (07/2026)
-- ~~Piper TTS VITS multilíngue (PT-BR+EN): 366 tensors, 15.6M params~~ ✅
-- ~~STT CTC engine: 55K params, MFCC→LSTM→CTC decode~~ ✅
-- ~~HDA audio capture: CORB/RIRB, DMA buffer, SD0 48kHz mono~~ ✅
-- ~~NVIDIA PUSH_BUFFER GPU compute: GPFIFO doorbell, DMA cmdbuf~~ ✅
-- ~~ATA slave: read_any() master+slave fallback~~ ✅
-- ~~RustCoder treinado: 263KB, loss=2.79~~ ✅
-- ~~BitNet 2B: baixado do HF, convertido para .bitnet (202MB)~~ ✅
-- **🔴 Pendente**: DHCP/Rede nativa (e1000 sem serial tunnel)
+### ✅ Sprint 101-105 — v2.0 Fundação
+- Piper TTS, STT, HDA capture, NVIDIA GPU compute ✅
+- K²CHJ workspace migration (5 crates, dep chain) ✅
+- Ponytail audit (600 LOC, 11 deps) ✅
+- RingBufStore refactor + LEGACY snapshot ✅
+
+### ⏳ Sprint 106+ — v2.0 Cognição Plena
+- LLM Agent 24/7 multi-turn conversation ⏳
+- Voice I/O pipeline (TTS→STT→LLM→TTS) ⏳
+- Self-evolving agents (auto-skill generation) ⏳
+- DHCP/Rede nativa (e1000 sem serial tunnel) 🔴
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
 - RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado

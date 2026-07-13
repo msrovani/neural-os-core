@@ -1,4 +1,4 @@
-# 📋 TODO MASTER — neural-os-core v1.5.1
+# 📋 TODO MASTER — neural-os-core v1.5.3
 
 **Data:** 2026-07-13  
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.  
@@ -7,7 +7,7 @@
 
 ---
 
-## ✅ SPRINTS 1-91 + SOUND — COMPLETOS (~19.000 LOC)
+## ✅ SPRINTS 1-105 — COMPLETOS
 
 | Sprint | v | Foco | LOC | Status |
 |--------|---|------|-----|--------|
@@ -16,13 +16,8 @@
 | 102 | v1.1.x | GPU Compute, HW Expert v3, Firmware Pipeline, WiFi | ~1.500 | ✅ |
 | 103-104 | v1.5.0 | K²CHJ Workspace Migration (5 crates) | ~500 | ✅ |
 | 105 | v1.5.1 | Ponytail Audit: ~600 LOC removidos, 11 deps eliminadas | ~100 | ✅ |
-
----
-
-## ✅ SPRINT 92-100 — v1.0 Gold Master (já entregue, mantido como referência)
-
-Todo o conteúdo das Sprints 92-100 foi concluído e entregue na v1.0.0 (2026-07-11).  
-Ver `AGENTS.md` seção "Sprints 92→100" e `CHANGELOG.md` v1.0.0.
+| 105b | v1.5.2 | RingBufStore refactor + LEGACY snapshot | ~50 | ✅ |
+| 105c | v1.5.3 | K²CHJ crate dead code cleanup + PICS fix | ~50 | ✅ |
 
 ---
 
@@ -63,7 +58,7 @@ Ver `AGENTS.md` seção "Sprints 92→100" e `CHANGELOG.md` v1.0.0.
 | 101 | TTS+STT+ATA fix+NVIDIA GPU | ~2.000 | ✅ |
 | 102 | GPU Compute + HW Expert v3 + Firmware | ~1.500 | ✅ |
 | 103-104 | K²CHJ Workspace Migration | ~500 | ✅ |
-| 105 | Ponytail Audit + v1.5.1 | ~100 | ✅ |
+| 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
 | 106 | LLM Agent 24/7 multi-turn | ~2.000 | ⏳ |
 | 107 | Voice I/O Pipeline (TTS→STT→LLM→TTS) | ~1.500 | ⏳ |
 | 108 | Self-Evolving Agents | ~1.600 | ⏳ |
