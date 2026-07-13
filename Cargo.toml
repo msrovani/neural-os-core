@@ -7,6 +7,11 @@ members = [
     "crates/skill-registry",
     "crates/event-bus",
     "crates/boot",
+    "crates/k_nano",
+    "crates/k_ia",
+    "crates/cortex",
+    "crates/hermes",
+    "crates/jarvis",
 ]
 default-members = ["crates/boot"]
 

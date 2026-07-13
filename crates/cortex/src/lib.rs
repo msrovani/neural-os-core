@@ -1,0 +1,34 @@
+#![no_std]
+#![allow(dead_code)]
+#![allow(static_mut_refs)]
+#![allow(unused_unsafe)]
+
+extern crate alloc;
+
+// ─── cortex: BitNet Engine ───
+// Pure neural inference engine: tensor ops, transformer layers, tokenization
+// No hardware dependencies beyond memory allocation.
+// Shared register map type used by HW identification (generate_register_map)
+
+#[derive(Clone, Copy, Debug)]
+pub struct HardwareRegisterMap {
+    pub tx_ring_low: usize,
+    pub rx_ring_low: usize,
+    pub rx_control: usize,
+    pub doorbell_tx: usize,
+    pub doorbell_rx: usize,
+    pub cmd_start_rx: u32,
+    pub ring_size: usize,
+    pub rx_buf_len: usize,
+}
+
+pub mod bitnet_avx2;
+pub mod bpe;
+pub mod burn_flex;
+pub mod cortex;
+pub mod delta;
+pub mod nn;
+pub mod parallel_matmul;
+pub mod tensor;
+pub mod trinity;
+pub mod tv_dsl;

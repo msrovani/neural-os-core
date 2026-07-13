@@ -1,11 +1,13 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v1.2.0 🏆
+#   PLANO DIRETOR — neural-os-core v1.5.0 🏆
 #   ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
-#   Sprints 101+: v2.0 "Cognição" — Kernel, Cortex, Hermes, JARVIS
+#   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
+#   Sprints 106+: v2.0 cognição plena — LLM agent 24/7, multi-turn, voice I/O
 #   v1.1.x: GPU Compute + WiFi + Visual 3-camadas + SelfHealing
 #   v1.2.0: ATA PIO Bug Fix — disco finalmente lê corretamente
+#   v1.5.0 (Jul 2026): K²CHJ Workspace Migration — monólito → 5 crates
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -17,7 +19,12 @@
 # docs/memory/IDEA_BANK.md     → 416+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
 # CHANGELOG.md                 → Histórico de versões
-# crates/neural-kernel/src/    → Código fonte do kernel
+# crates/neural-kernel/src/    → Código fonte do kernel (crate bin — monólito compilável)
+# crates/k_nano/src/           → Foundation crate (HAL, drivers, PCI, memory)
+# crates/cortex/src/           → Intelligence crate (LLM, BitNet, BPE, MoE)
+# crates/hermes/src/           → Orchestration crate (intent, agents, net)
+# crates/k_ia/src/             → Autonomy crate (self-heal, trust, security)
+# crates/jarvis/src/           → Interaction crate (display, audio, CLI)
 # tools/                       → Scripts Python (treino, extração SDIO, bridge)
 # ════════════════════════════════════════════════════════
 
@@ -100,6 +107,31 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **Consultar SESSION_INDEX.md antes de repetir trabalho.**
 - **Consultar TODO.md antes de iniciar nova sprint.**
 
+# K²CHJ Workspace Structure (v1.5.0+)
+# ═══════════════════════════════════════════════════════════════
+# Monolith → 5 crates (gradual migration):
+#   k_nano  ← cortex ← k_ia ← hermes ← jarvis   (dep chain, no cycles)
+#   neural-kernel (bin) = integration hub with all globals
+# ═══════════════════════════════════════════════════════════════
+# Crate       | Files | Function
+# ────────────|───────|──────────────────────────────────────
+# k_nano      |  73   | Foundation: HAL, drivers, PCI, memory, interrupts,
+#             |       | console, timer, ATA, RTC, ACPI, SMP, APIC, VGA,
+#             |       | serial, VGA, AHCI, NVMe, xHCI, RDTSC, simd
+# cortex      |  13   | Intelligence: LLM inference, BitNet, BPE, tensor ops,
+#             |       | attention, Trinity MoE, DeltaNet, TV DSL, transformer,
+#             |       | burn_flex, nn, tokenizer, medusa, reasoning
+# k_ia        |  40   | Autonomy: self-heal, trust, safety, optimizer,
+#             |       | boot agents (12x), security (5 detectores),
+#             |       | audit, sleep cycle, auto-learn, shutdown, hal
+# hermes      |  28   | Orchestration: intent routing, ReAct, skills (47),
+#             |       | agents (12 FS + 6 HW + 40 repo), event bus,
+#             |       | netstack, HTTP, DHCP, DNS, cron, wifi
+# jarvis      |  28   | Interaction: display compositor, HDA audio, framebuffer,
+#             |       | Hermes CLI, wake word, visual 3-camadas, font,
+#             |       | VirtIO-GPU, shell
+# ═══════════════════════════════════════════════════════════════
+
 # Active Dependencies (neural-kernel)
 | Crate | Versão |
 |---|---|
@@ -126,21 +158,19 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 
-# Current Sprint: Sprint 92 — Fundação Estável (~2.000 LOC)
-**Roadmap v1.0:** Sprints 92→100 = Gold Master. Ver `docs/sprint-plan-92-100.md`.
+# Current Sprint: Sprint 105 — v2.0 Cognição Plena
 
-## Sprints 92→100 — v1.0 "Gold Master" (A Era do Silício)
-| Sprint | Foco | LOC |
-|--------|------|-----|
-| **92** | Fundação Estável (VirtIO, AHCI, serial, cleanup) | ~2.000 |
-| **93** | WASM Runtime + IDE (wasmi, sandbox, marketplace) | ~3.200 |
-| **94** | GPU Polish + Display (MSched, compositor, co-exist) | ~2.000 |
-| **95** | Memory + VFS Final (BGE HNSW, MHI bridge, agents) | ~2.000 |
-| **96** | GGUF + Model Loading (loader, streaming, RoPE) | ~1.500 |
-| **97** | Rede + AIOS Evolution (WWW, self-update, marketplace) | ~3.000 |
-| **98** | BitNet + Training Pipeline (100M params, fine-tune) | ~2.500 |
-| **99** | SkillOpt + Structured Decoding + Code Freeze Prep | ~1.500 |
-| **100** | **Code Freeze & Release v1.0.0** | ~500 |
+## Roadmap v2.0 "Cognição"
+| Sprint | Foco | Status |
+|--------|------|--------|
+| **100** | **Code Freeze** Release v1.0.0 | ✅ |
+| **101** | Piper TTS + STT + HDA Capture + ATA fix | ✅ |
+| **102** | GPU Compute (NVIDIA) + HW Expert v3 + Firmware | ✅ |
+| **103–104** | K²CHJ Workspace Migration (5 crates) | ✅ |
+| **105** | **v1.5.0 Release** — Crates + Imagens + Docs | ▶️ |
+| **106** | v2.0 "Cognição" — LLM agent 24/7, multi-turn | ⏳ |
+| **107** | v2.0 — Voice I/O pipeline (TTS→STT→LLM→TTS) | ⏳ |
+| **108** | v2.0 — Self-evolving agents (auto-skill generation) | ⏳ |
 
 # QEMU Launch (WHPX + VirtIO optimizado)
 ```powershell
@@ -158,6 +188,16 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - VirtualBox boot test
 - Tag `v1.0.0` + release notes
 - **Fim da v1.0. v2.0 "Cognição" começa na Sprint 101.**
+
+# Sprint v1.5.0 (Jul 2026) — K²CHJ Workspace Migration
+- **Crate taxonomy**: Monólito `neural-kernel` → 5 crates especializados (k_nano, k_ia, cortex, hermes, jarvis)
+- **Migration tool**: `tools/migrate_k2chj.py` — mapeia 193 arquivos para crates, corrige 79 refs cross-crate
+- **Dep chain**: k_nano (foundation, 73 files) → cortex (intelligence, 13) → hermes (orchestration, 28) → k_ia (autonomy, 40) → jarvis (interaction, 28)
+- **k_nano compile**: crate independente — 0 erros (HAL, drivers, PCI, memory, interrupts)
+- **Neural-kernel intact**: monólito compila com 0 erros, integra todos os globals via `pub use`
+- **Release v1.5.0**: tag git + imagens bootáveis `disk_qemu.raw` (256MB) + `disk_hw.raw` (64MB)
+- **Workspace members**: 11 crates (ticket-lock, event-bus, skill-registry, agent-core, boot, neural-kernel + 5 K²CHJ)
+- **Gradual migration**: arquivos permanecem no monólito até que main.rs use explicitamente as crates externas
 
 # Sprint v1.2 — ATA PIO Bug + Release Final
 - **ATA PIO read bug** (v0.1 → v1.1.5): `read_sectors()` e `identify()` usavam `in al, dx` + `in al, dx+1` para ler palavras de 16 bits do disco ATA. O registrador `io_base+1` NÃO é o segundo byte do dado — é o registrador FEATURES/ERROR. **Todo dado lido de disco desde o início do projeto era lixo.** Fix: `in ax, dx` (16-bit) lê a palavra completa do registrador de dados.

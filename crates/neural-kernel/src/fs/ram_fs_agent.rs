@@ -66,8 +66,3 @@ impl FilesystemAgent for RamFsAgent {
         }
     }
 }
-
-/// Return total bytes used in RAM FS
-pub fn ram_used_bytes() -> u64 {
-    RAM_BYTES.load(Ordering::Relaxed)
-}

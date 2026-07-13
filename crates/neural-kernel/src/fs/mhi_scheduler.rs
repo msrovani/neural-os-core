@@ -58,7 +58,4 @@ pub fn mhi_scheduler_tick(tick: u64) {
     }
 }
 
-/// Retorna estatísticas do scheduler (CFS-like fairness metrics)
-pub fn scheduler_stats() -> (u64, u64) {
-    (TOTAL_PROMOTIONS.load(Ordering::Relaxed), TOTAL_DEMOTIONS.load(Ordering::Relaxed))
-}
+

@@ -39,8 +39,8 @@ impl Architecture for X86_64 {
     fn detect(&self) -> HalInfo {
         #[cfg(target_arch = "x86_64")]
         {
-            let aps = crate::smp::ap_entry_count();
-            let mem = crate::memory::global_hardware_context();
+            let aps = k_nano::smp::ap_entry_count();
+            let mem = k_nano::memory::global_hardware_context();
             HalInfo {
                 arch: "x86_64",
                 cpu_count: aps + 1,
@@ -58,20 +58,20 @@ impl Architecture for X86_64 {
     }
 
     fn reboot(&self) {
-        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
-        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
+        k_ia::shutdown::set_cause(k_ia::shutdown::ShutdownCause::Triggered);
+        k_ia::shutdown::write_persistent_shutdown_log(k_ia::shutdown::ShutdownCause::Triggered);
         unsafe { x86_64::instructions::port::Port::new(0x64u16).write(0xFEu8); }
     }
 
     fn poweroff(&self) {
-        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Expected);
-        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Expected);
+        k_ia::shutdown::set_cause(k_ia::shutdown::ShutdownCause::Expected);
+        k_ia::shutdown::write_persistent_shutdown_log(k_ia::shutdown::ShutdownCause::Expected);
         unsafe { core::arch::asm!("out dx, al", in("dx") 0x604u16, in("al") 0x10u8, options(nostack)); }
     }
 
     fn read_timestamp(&self) -> u64 {
         #[cfg(target_arch = "x86_64")]
-        { crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 }
+        { k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 }
         #[cfg(not(target_arch = "x86_64"))]
         { 0 }
     }

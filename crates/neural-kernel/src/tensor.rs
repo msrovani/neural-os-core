@@ -22,8 +22,6 @@ pub fn has_avx2() -> bool {
             true
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    { false }
 }
 
 /// Detecta tamanho do cache L1 Data via CPUID leaf 0x04 (Intel) ou 0x8000_001D (AMD).
@@ -79,15 +77,10 @@ pub fn optimal_attention_block(hidden: usize) -> usize {
 }
 
 pub fn has_avx512() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        unsafe {
-            let result = core::arch::x86_64::__cpuid(7);
-            (result.ebx & (1 << 16)) != 0
-        }
+    unsafe {
+        let result = core::arch::x86_64::__cpuid(7);
+        (result.ebx & (1 << 16)) != 0
     }
-    #[cfg(not(target_arch = "x86_64"))]
-    { false }
 }
 
 pub struct Tensor {

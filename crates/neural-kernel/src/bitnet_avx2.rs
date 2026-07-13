@@ -10,7 +10,6 @@ use alloc::vec;
 
 // ─── HW Detection ───────────────────────────────────────────────────────
 
-#[cfg(target_arch = "x86_64")]
 fn avx2_available() -> bool {
     unsafe {
         let leaf1 = core::arch::x86_64::__cpuid(1);
@@ -30,8 +29,6 @@ fn avx2_available() -> bool {
         true
     }
 }
-#[cfg(not(target_arch = "x86_64"))]
-fn avx2_available() -> bool { false }
 
 // ─── Main Dispatch ──────────────────────────────────────────────────────
 

@@ -124,8 +124,6 @@ mod task;
 
 mod tensor;
 
-mod time_utils;
-
 mod usage;
 
 mod chunker;
@@ -208,14 +206,9 @@ mod wifi_msix;
 
 mod link_watcher;
 
-mod wifi_dma;
-
 mod wifi_compat;
 
-mod wifi_aer;
 mod wifi_iwlwifi;
-
-mod wifi_apic;
 
 mod boot_logger;
 
@@ -252,8 +245,6 @@ mod audit;
 mod ahci;
 
 mod memory_systems;
-
-mod cfs;
 
 mod app_store;
 

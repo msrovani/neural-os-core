@@ -37,11 +37,6 @@ pub fn register_fs_agent(agent: Box<dyn FilesystemAgent>) {
     crate::serial_println!("[FS] Agent '{}' registrado em {}", name, mp);
 }
 
-pub fn agent_for_mount(_mount_point: &str) -> Option<&'static mut Box<dyn FilesystemAgent>> {
-    // This would need interior mutability — simplified for now
-    None
-}
-
 /// Find agent by name and call a read operation
 pub fn read_vfs(path: &str) -> Result<Vec<u8>, &'static str> {
     let agent_name;
