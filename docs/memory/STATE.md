@@ -1,13 +1,13 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.1.5 🏆
-#   SPRINTS v1.1.x: Silicon Afterlife
+#   STATE — neural-os-core v1.2.0 🏆
+#   SPRINTS v1.1.x + ATA PIO Fix
 #   180+ arquivos Rust, ~26.000 LOC, 0 erros
-#   v1.1.5 finalizada — Boot HW Real é o próximo marco
+#   v1.2.0: ATA PIO bug corrigido — disco lê corretamente
 # ════════════════════════════════════════════════════════
 
 ## Roadmap Atual
 **Roadmap v1.1.x:** `docs/sprint-plan-v1.1.x.md` — v1.1.1 a v1.1.5.
-**Última versão:** v1.1.5 (2026-07-12).
+**Última versão:** v1.2.0 (2026-07-12) — **ATA PIO bug fix crítico**.
 
 ## Marcos Acumulados
 - **🏆 v1.1.5 (2026-07-12):** 0 erros, ~26.000 LOC, 116 firmwares. HW Expert v3 (61.453 VID/DID), SelfHealing I3/I4, WiFi Intel AX200 ucode loading, 3 camadas visuais (Orb + Hermes CLI + WM), HDA playback, BrowserAgent real, FFT audio.

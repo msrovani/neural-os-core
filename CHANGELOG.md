@@ -1,4 +1,13 @@
-# Changelog — neural-os-core v1.1.5 "Silicon Afterlife"
+# Changelog — neural-os-core v1.2.0 "ATA Liberation"
+
+## v1.2.0 — 2026-07-12 — ATA Liberation
+
+### ATA PIO Bug Fix (crítico — afeta v0.1 até v1.1.5)
+
+- **Root cause:** `read_sectors()` e `identify()` usavam `in al, dx` + `in al, dx+1` para ler palavras de 16 bits do disco ATA. O port `io_base+1` não contém o segundo byte do dado — é o registrador FEATURES/ERROR. Correção: usar `in ax, dx` para ler a palavra completa do registrador de dados.
+- **Impacto:** TODO acesso a disco desde o início do projeto (v0.1, 2026-05) era lixo. MBR, FAT32, modelos .bitnet, firmwares, credenciais WiFi — nada era lido corretamente. Apenas discos detectados como "presentes" mas dados corrompidos.
+- **Probe ATA:** Agora prefere disco com partição FAT32 (type 0x0B/0x0C) sobre GPT (type 0xEE). Antes escolhia o primeiro com MBR — que era o bootloader (uefi.img), nunca o disco de dados.
+- **Log QEMU confirmado:** `[ATA] ISA 496: slave FAT32! (type=0xc)` + `[FAT32] BPB: bps=512 spc=1`
 
 ## v1.1.5 — 2026-07-12 — Silicon Afterlife
 

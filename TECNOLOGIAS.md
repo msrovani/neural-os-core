@@ -397,8 +397,9 @@
 | 106 | 1.1.3 | Visual 3-camadas + Audio + Browser | ~600 | `64162b0` |
 | 107 | 1.1.4 | WiFi Intel AX200 ucode loading | ~260 | `ea61aa4` |
 | 108 | 1.1.5 | Integração + Documentação | ~50 | `3eeb6d1` |
+| 109 | **1.2.0** | **ATA PIO bug fix** — disco lê pela 1ª vez | ~60 | `65d3b44` |
 
 ---
 
 > **Total: ~26.000 LOC, 180+ Rust files, 247+ agentes, 39 ADRs, 500+ commits, 0 erros.**
-> De um microkernel bare-metal a um sistema operacional neural com IA, GPU, WiFi, áudio, visão 3-camadas e auto-recuperação.
+> De um microkernel bare-metal a um sistema operacional neural com IA, GPU, WiFi, áudio, visão 3-camadas, auto-recuperação e ATA funcional.

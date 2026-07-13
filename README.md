@@ -1,14 +1,15 @@
-﻿# Neural OS Hermes v1.1.5 — AI-native Bare-metal Operating System 🏆
+﻿# Neural OS Hermes v1.2.0 — AI-native Bare-metal Operating System 🏆
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
 
 ```
 ╔══════════════════════════════════╗
-║  Neural OS Hermes v1.1.5        ║
-║  "Silicon Afterlife"            ║
+║  Neural OS Hermes v1.2.0        ║
+║  "ATA Liberation"               ║
 ╚══════════════════════════════════╝
 
-  ✦ v1.1.5 — 0 erros, ~26.000 LOC
+  ✦ v1.2.0 — 0 erros, ~26.000 LOC
+  ✦ ATA PIO bug CORRIGIDO — disco finalmente lê!
   ✦ HW Expert v3 (61.453 VID/DID, 1M params)
   ✦ SelfHealing Firmware Pipeline (I3/I4)
   ✦ WiFi Intel AX200/AX210 com ucode loading real
