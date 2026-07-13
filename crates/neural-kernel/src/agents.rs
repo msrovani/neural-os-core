@@ -1556,12 +1556,10 @@ const FSBRIDGE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
-pub struct FsBridgeAgent {
-    last_scan: u64,
-}
+pub struct FsBridgeAgent;
 
 impl FsBridgeAgent {
-    pub fn new() -> Self { FsBridgeAgent { last_scan: 0 } }
+    pub fn new() -> Self { FsBridgeAgent }
 
     fn execute_migration(&mut self, _tick: u64) {
         let suggestions: Vec<(u64, u64)> = {
@@ -1600,8 +1598,7 @@ impl FsBridgeAgent {
 impl Agent for FsBridgeAgent {
     fn manifest(&self) -> &AgentManifest { &FSBRIDGE_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        if _tick - self.last_scan < 500 { return AgentTickResult::Pending; }
-        self.last_scan = _tick;
+        // ponytail: scheduler já garante PollEvery(500), sem rate-limiting interno
         self.execute_migration(_tick);
         AgentTickResult::Pending
     }

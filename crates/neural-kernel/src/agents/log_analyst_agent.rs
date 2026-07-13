@@ -23,14 +23,12 @@ pub fn write_log(agent: &str, msg: &str) {
     let _ = crate::fs::write_vfs(&path, payload.as_bytes());
 }
 
-pub struct LogAnalystAgent {
-    last_scan_tick: u64,
-}
+pub struct LogAnalystAgent;
 
 impl LogAnalystAgent {
     pub fn new() -> Self {
         serial_println!("[LOG-ANALYST] /logs/ analyst ativo.");
-        LogAnalystAgent { last_scan_tick: 0 }
+        LogAnalystAgent
     }
 
     /// Le logs recentes e usa o Cortex para analisar
@@ -79,10 +77,8 @@ impl LogAnalystAgent {
 impl Agent for LogAnalystAgent {
     fn manifest(&self) -> &AgentManifest { &LOG_ANALYST_MANIFEST }
 
-    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        // Analisa logs a cada 500 ticks
-        if tick - self.last_scan_tick < 500 { return AgentTickResult::Pending; }
-        self.last_scan_tick = tick;
+    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // ponytail: scheduler já garante PollEvery(500), sem rate-limiting interno
         self.analyze_logs();
         AgentTickResult::Pending
     }
