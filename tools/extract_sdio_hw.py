@@ -110,8 +110,12 @@ def extract_from_7z(path, max_files=500):
                     break
                 fpath = os.path.join(root, name)
                 try:
-                    with open(fpath, 'r', errors='replace') as fh:
-                        text = fh.read()
+                    raw = open(fpath, 'rb').read()
+                    # Detect UTF-16LE (Windows .inf files)
+                    if raw[:2] == b'\xff\xfe' or (b'\x00' in raw[:512] and b'\\\x00' in raw[:512]):
+                        text = raw.decode('utf-16-le', errors='replace')
+                    else:
+                        text = raw.decode('utf-8', errors='replace')
                     hwids = parse_inf_hwids(text)
                     all_hwids.update(hwids)
                     count += 1
