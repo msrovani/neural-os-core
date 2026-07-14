@@ -1,49 +1,45 @@
-# ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v2.0.0 🏆
-#   SPRINT 106 — K²CHJ Ecossistema de Anéis Lógicos
+# ═════════════════════════════════════════════════════════
+#   STATE — neural-os-core v2.0.1 🏆
+#   SPRINT 107 — Capability ladder (ADR-0041 P0–P9) + Voice I/O
 #   180+ arquivos Rust, ~26.000 LOC, 0 erros
-#   v2.0.0: Sprint 106 concluída (10/10 sub-sprints)
-# ════════════════════════════════════════════════════════
+#   v2.0.0: Sprint 106 · v2.0.1: boot A/B + capability PoC P0–P9
+# ═════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Roadmap v2.0 "Cognição":** Ecossistema de anéis lógicos (k_nano, k_ai, cortex, hermes, jarbas) operacional.
-**Última versão:** v2.0.0 (2026-07-14) — **Sprint 106 concluída**.
-**Próximo:** Sprint 107 — Voice I/O Pipeline (TTS→STT→LLM→TTS).
+**Roadmap v2.0 "Cognição":** Anéis lógicos operacionais; escada capability P0–P9 em PoC no monólito.
+**Última versão:** v2.0.1 (2026-07-14) — ADR-0041 P0–P9 ✅ (`9bb1382`…`49c4301`).
+**Próximo foco produto:** Sprint 107 Voice I/O (TTS→STT→LLM→TTS).  
+**Próximo foco capability:** SFI Hermes (#426) · ELF usermode · QUEUE_NOTIFY · I/O seguro no #PF.
 
-**Nota ops (2026-07-14):** Builds isolados padronizados sob `target/` (`target/agent-*`, `target/check-*`, `target/s106`). Leftover legado `target-s106/` ainda na raiz — **em uso** por processos `cargo` (rename negado); mover para `target/s106` quando idle.
+**Nota ops (2026-07-14):** Builds isolados sob `target/` (`target/agent-*`, `target/check-*`, `target/s106`). Leftover `target-s106/` — mover quando idle.
 
 ### Boot endurecido + Capability Rings (2026-07-14)
 | Pacote | Conteúdo | Status |
 |--------|----------|--------|
-| **A** | STI+PIC, stack heap ≥2MB, `init_phase` RR, `BOOT_PHASE`+consumer, DiagnosticSkill, logs/docs heap | ✅ |
-| **B** | `init_platform_sync` antes dos drivers; Platform/NetDriver idempotente; Agency SpecialistAgent → EventDriven | ✅ |
-| **MVP C** | ADR-0041: 2 AS + CR3 switch + SPSC shared + `Cap` + `int 0x90` + demo boot non-fatal | ✅ PoC Ring0↔Ring0 |
+| **A** | STI+PIC, stack heap ≥2MB, `init_phase` RR, `BOOT_PHASE`+consumer, DiagnosticSkill | ✅ |
+| **B** | `init_platform_sync` antes dos drivers; Platform/NetDriver idempotente; Agency → EventDriven | ✅ |
+| **MVP C→P9** | ADR-0041: AS/CR3/SPSC/Cap/`int 0x90` + CapGate + FB + DMA/mmap + Ring3 + #PF + vring + GGUF | ✅ PoC |
 
-### K²CHJ Capability Rings — prioridades (ADR-0041)
-| Pri | Item | Status |
-|-----|------|--------|
-| **P0** | Gap analysis documentado | ✅ ADR-0041 |
-| **P1** | ADR alvo + non-goals | ✅ |
-| **P2** | **MVP C:** 2 AS + CR3 + SPSC + Cap + `int 0x90` + demo non-fatal | ✅ PoC |
-| **P3** | Hermes WASM host-functions por Cap | ✅ CapGate (`capability_gate.rs`) |
-| **P4** | JARBAS FB MMIO + double-buffer | ✅ PoC (`jarbas_fb.rs`, Cap MAP/WRITE_FB) |
-| **P5** | K-IA DMA pin + Cortex mmap pesos | ✅ PoC (`k_ia_dma.rs`, `cortex_mmap.rs`) |
-| **P6** | Ring3 user-mode real (`iretq`) | ✅ PoC (`user_mode.rs`, GDT user + TSS.RSP0) |
-| **P7** | Demand-paging via #PF (lazy weights) | ✅ PoC (`demand_page.rs`, `mmap_weights_lazy`) |
-| **P8** | VirtIO vring sobre DMA pin | ✅ PoC (`virtio_vring.rs`, Cap VRING_SETUP) |
-| **P9** | GGUF/FAT file-backed mmap | ✅ PoC (`gguf_mmap.rs`, Cap MAP_FILE) |
+### Real vs stub (pós P0–P9)
+| Peça | Real | Stub / limite |
+|------|------|----------------|
+| 2 AS + CR3 + SPSC + Cap + `int 0x90` | ✅ | Shallow L4 (PTs kernel compartilhadas) |
+| CapGate Hermes (`aios_*`) | ✅ | Sem AS separado / SFI pleno (#426 🟡) |
+| JARBAS FB map + present | ✅ | VSync stub; path = bootloader FB |
+| DMA pin + weight mmap | ✅ | Pesos simulados no eager path |
+| Ring3 `iretq` + stub | ✅ código | **Untested QEMU estável**; `TRY_ENTER_RING3`; sem ELF/preempt |
+| Demand-page #PF | ✅ | Frames pré-alocados; **sem I/O no fault** |
+| VirtIO vring | ✅ layout+pin | **Sem QUEUE_NOTIFY**; NIC live observe-only |
+| GGUF/FAT mmap | ✅ pré-fill 1–4 pág. | Prefixo só; fallback `NFIL`; sem streaming 8GB |
 
-**Arquivos MVP C:** `address_space.rs`, `syscall.rs`, `ipc/{mod,ring_buffer}.rs` + hooks `main.rs` / IDT `0x90`.  
-**Arquivos P4:** `jarbas_fb.rs` + `Cap::{MAP_FB,WRITE_FB}` em `syscall.rs` + CapGate host names + demo em `main.rs`.  
-**Arquivos P5:** `k_ia_dma.rs` + `cortex_mmap.rs` + `Cap::{PIN_DMA,MAP_DMA,MAP_WEIGHTS}` + demos non-fatal em `main.rs`.  
-**Arquivos P6:** `user_mode.rs` + GDT user/TSS.RSP0 em `interrupts.rs` + `Cap::ENTER_USER` / `SYS_EXIT_USER` + `map_user_page` + demo non-fatal.  
-**Arquivos P7:** `demand_page.rs` + `reserve_page` / `install_present_leaf_current` + Cap `DEMAND_PAGE` + `#PF` cure + demo non-fatal.  
-**Arquivos P8:** `virtio_vring.rs` + Cap `VRING_SETUP` / `SYS_VRING_SETUP` + pin 4 pages + demo non-fatal (NIC untouched).  
-**Arquivos P9:** `gguf_mmap.rs` + Cap `MAP_FILE` / `SYS_MAP_FILE` + FAT `read_file_range` pré-fill + demand-page + demo non-fatal.
+### K²CHJ Capability Rings — P0–P9 (ADR-0041) — todos ✅ PoC
+P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 · P7 #PF · P8 vring · P9 GGUF/FAT.  
+**Módulos:** `address_space`, `syscall`, `ipc/*`, `capability_gate`, `jarbas_fb`, `k_ia_dma`, `cortex_mmap`, `user_mode`, `demand_page`, `virtio_vring`, `gguf_mmap` + demos non-fatal em `main.rs`.
 
-**Riscos residuais:** P6 PoC sem ELF/preempt; P8 = layout-only (sem QUEUE_NOTIFY); P9 = prefixo FAT apenas (não streaming 8GB); Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
+**Riscos / follow-ups:** Ring3 untested em QEMU; VirtIO sem QUEUE_NOTIFY; #PF sem I/O; Agency EventDriven ociosa sem eventos (intencional); crate `hermes/` ≠ bin até wiring explícito.
 
 ## Marcos Acumulados
+- **🏆 v2.0.1 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
 - **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.

@@ -162,9 +162,9 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
-- **Capability MVP (ADR-0041):** Anéis lógicos K²CHJ; PoC = 2 AS + CR3 + SPSC + `Cap` + `int 0x90` + P6 Ring3 (`iretq`/stub/`Cap::ENTER_USER`). Boot: platform sync **antes** drivers. Demos capability **non-fatal**. crate `hermes/` ≠ binário até wiring explícito.
+- **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: Sprint 107 — v2.0 Voice I/O Pipeline
+# Current Sprint: Sprint 107 — v2.0 Voice I/O Pipeline (+ capability ladder PoC fechada)
 
 ## Roadmap v2.0 "Cognição"
 | Sprint | Foco | Status |

@@ -19,7 +19,7 @@
 | 095 | 106 | — | Sprint 106: Ecossistema de Anéis Lógicos | k_ia→k_ai, jarvis→jarbas, VFS, MicroPython/WASM, SkillOpt |
 | 106.3 | 106-3 | — | SOUL.md parser fix | jarbas usa `neural_kernel::fs::read_vfs()`, 0 refs ATA_DRIVER |
 | 106.5 | 106-5 | — | RustPython viabilidade | Não no_std nativo — rota WASM (106-6) é principal |
-| 107 | 107 | — | Boot A/B + MVP C capability | STI/stack/BOOT_PHASE; platform-before-drivers; ADR-0041 CR3+SPSC+Cap; P3–P5 pendentes |
+| 107 | 107 | — | Boot A/B + ADR-0041 P0–P9 | A/B boot; CR3+SPSC+Cap→CapGate→FB→DMA/mmap→Ring3→#PF→vring→GGUF; PoC non-fatal (`9bb1382`…`49c4301`) |
 
 ## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 
@@ -67,7 +67,7 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 
 15. **Sprint 106-7: Page faults (2026-07-13):** Ordem correta: allocator → events → agents. lazy_init!() para agentes dependentes de heap. **Inicialização deve seguir ordem estrita.**
 
-16. **Capability MVP C (2026-07-14):** Platform sync ANTES dos drivers. Demo CR3/ring/Cap é **non-fatal**. Não inventar Ring3/`iretq` estável sem prova QEMU UEFI. Syscall soft = `int 0x90` (não 0x80).
+16. **Capability ADR-0041 P0–P9 (2026-07-14):** Platform sync ANTES dos drivers. Toda demo Cap é **non-fatal**. Ring3 PoC existe (`iretq`/stub) mas **não inventar usermode pleno** sem prova QEMU UEFI. VirtIO vring = layout+pin **sem QUEUE_NOTIFY**. #PF = PRESENT only (**sem I/O no fault**). Syscall soft = `int 0x90` (não 0x80).
 
 ---
 

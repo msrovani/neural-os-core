@@ -1,6 +1,8 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
-## [Unreleased] — 2026-07-14 — Boot A/B + MVP C Capability Rings
+## [2.0.1] — 2026-07-14 — Boot A/B + ADR-0041 Capability Ladder P0–P9
+
+PoC capability no monólito `neural-kernel` (commits `9bb1382`…`49c4301`). Package Cargo permanece `1.0.0` (hábito do repo); release via CHANGELOG + tag git.
 
 ### Pacote A — Boot endurecido
 - STI/PIC, stack heap ≥2MB, `init_phase` round-robin, `BOOT_PHASE` + consumer, DiagnosticSkill, logs/docs de heap

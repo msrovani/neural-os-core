@@ -1,7 +1,7 @@
 # ADR-0041: K²CHJ Capability-Based Rings + SFI
 
 **Data:** 2026-07-14  
-**Status:** Accepted (direção) / In Progress (MVP C)  
+**Status:** Accepted — P0–P9 PoC complete (monólito; non-fatal demos)  
 **Sprint:** 107+ (capability microkernel)  
 **Propósito:** Formalizar a visão de anéis por capability (K-Nano / K-IA / Cortex / Hermes / JARBAS), o estado real (monólito Ring 0) e o roadmap incremental sem desfazer Pacotes A/B.
 
@@ -159,3 +159,29 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 - Positivo: prova hardware-level de isolamento de página + IPC shared-memory sem reinventar drivers.
 - Negativo: shallow-copy L4 compartilha PageTables inferiores do kernel — AS ainda não é isolamento forte contra o kernel (intencional no PoC).
 - EventBus continua pub/sub in-process até migração gradual para rings cross-AS.
+
+---
+
+## 7. Real vs stub (checklist operacional)
+
+| Peça | Real | Stub / limite |
+|------|------|----------------|
+| Pacotes A+B boot | ✅ | — |
+| P0–P2 AS/CR3/SPSC/Cap/int 0x90 | ✅ | Shallow L4 |
+| P3 CapGate | ✅ | SFI/AS WASM pleno = #426 |
+| P4 JARBAS FB | ✅ | VSync stub; bootloader FB |
+| P5 DMA + mmap | ✅ | Pesos eager simulados |
+| P6 Ring3 iretq | ✅ código | Untested QEMU estável; sem ELF/preempt |
+| P7 demand-page #PF | ✅ | Sem I/O no fault |
+| P8 VirtIO vring | ✅ layout+pin | Sem QUEUE_NOTIFY; NIC untouched |
+| P9 GGUF/FAT mmap | ✅ pré-fill | Prefixo 1–4 pág.; sem streaming |
+
+**Checklist P0–P9:** todos ✅ PoC.
+
+## 8. Próximos
+
+1. Validar Ring3 em QEMU UEFI (TRY_ENTER_RING3).
+2. SFI WASM + Cap contract (#426).
+3. QUEUE_NOTIFY VirtIO real (path paralelo seguro).
+4. On-fault I/O seguro / streaming GGUF > prefixo.
+5. ELF usermode / preempt (após Ring3 estável).
