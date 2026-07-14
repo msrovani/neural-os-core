@@ -288,6 +288,7 @@ mod capability_gate;
 mod jarbas_fb;
 mod k_ia_dma;
 mod cortex_mmap;
+mod user_mode;
 
 
 
@@ -1662,6 +1663,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[P5] WARN mmap: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P5 mmap WARN (non-fatal)");
+        }
+    }
+
+    // P6 (ADR-0041): Ring3 real via iretq — non-fatal
+    match crate::user_mode::demo_ring3() {
+        Ok(()) => {
+            serial_println!("[P6] Ring3 user-mode demo OK");
+            crate::boot_logger::log("BOOT: P6 Ring3 OK");
+        }
+        Err(e) => {
+            serial_println!("[P6] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P6 Ring3 WARN (non-fatal)");
         }
     }
 

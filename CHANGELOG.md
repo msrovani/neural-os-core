@@ -34,6 +34,12 @@
 - `cortex_mmap.rs`: mmap N páginas peso simuladas em `CORTEX_WEIGHT_VA` (eager), Cap `MAP_WEIGHTS`; demand-paging/GGUF TODO
 - Demo boot non-fatal pós-P4; falha frame alloc → Cap-only / WARN, sem panic
 
+### P6 — Ring3 user-mode real (ADR-0041)
+- GDT user code/data + TSS RSP0; IDT `int 0x90` DPL=3
+- `user_mode.rs`: `enter_user_mode` via `iretq`, stub USER (marker + EXIT), return jmp kernel; Cap `ENTER_USER`
+- `map_user_page` com USER em toda a cadeia PT; demo boot non-fatal pós-P5; #GP/#PF abort durante demo
+- Flag `TRY_ENTER_RING3` para disable se necessário
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

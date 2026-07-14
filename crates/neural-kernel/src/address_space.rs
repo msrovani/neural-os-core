@@ -56,47 +56,50 @@ impl AddressSpace {
     }
 
     /// Garante entrada de nível intermediário privada (aloca ou CoW se já PRESENT).
+    /// `user`: propaga USER_ACCESSIBLE em todos os níveis (obrigatório p/ CPL=3).
     unsafe fn ensure_owned_child(
         entry: &mut x86_64::structures::paging::page_table::PageTableEntry,
+        user: bool,
     ) -> Result<PhysFrame<Size4KiB>, &'static str> {
         if entry.flags().contains(PageTableFlags::HUGE_PAGE) {
             return Err("mvp-c: huge page no caminho");
         }
+        let mut parent = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+        if user {
+            parent.insert(PageTableFlags::USER_ACCESSIBLE);
+        }
         if !entry.flags().contains(PageTableFlags::PRESENT) {
             let f = alloc_zeroed_frame().ok_or("mvp-c: sem frame PT")?;
-            entry.set_addr(
-                f.start_address(),
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
-            );
+            entry.set_addr(f.start_address(), parent);
             return Ok(f);
         }
         // CoW: clona PT compartilhada (ou já presente) antes de mutar folhas.
         let old = PhysFrame::<Size4KiB>::containing_address(entry.addr());
         let owned = clone_table(old)?;
         let mut f = entry.flags();
-        f.insert(PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+        f.insert(parent);
         entry.set_addr(owned.start_address(), f);
         Ok(owned)
     }
 
-    /// Mapeia `virt` → `frame` sem mutar page tables compartilhadas do kernel.
-    pub unsafe fn map_page(
+    unsafe fn map_page_inner(
         &mut self,
         virt: VirtAddr,
         frame: PhysFrame<Size4KiB>,
         flags: PageTableFlags,
+        user: bool,
     ) -> Result<(), &'static str> {
         let l4 = &mut *frame_as_table(self.l4_frame);
         let e3 = &mut l4[virt.p4_index()];
-        let p3_frame = Self::ensure_owned_child(e3)?;
+        let p3_frame = Self::ensure_owned_child(e3, user)?;
 
         let l3 = &mut *frame_as_table(p3_frame);
         let e2 = &mut l3[virt.p3_index()];
-        let p2_frame = Self::ensure_owned_child(e2)?;
+        let p2_frame = Self::ensure_owned_child(e2, user)?;
 
         let l2 = &mut *frame_as_table(p2_frame);
         let e1 = &mut l2[virt.p2_index()];
-        let p1_frame = Self::ensure_owned_child(e1)?;
+        let p1_frame = Self::ensure_owned_child(e1, user)?;
 
         let l1 = &mut *frame_as_table(p1_frame);
         let leaf = &mut l1[virt.p1_index()];
@@ -106,6 +109,28 @@ impl AddressSpace {
         leaf.set_addr(frame.start_address(), flags);
         x86_64::instructions::tlb::flush(virt);
         Ok(())
+    }
+
+    /// Mapeia `virt` → `frame` sem mutar page tables compartilhadas do kernel.
+    pub unsafe fn map_page(
+        &mut self,
+        virt: VirtAddr,
+        frame: PhysFrame<Size4KiB>,
+        flags: PageTableFlags,
+    ) -> Result<(), &'static str> {
+        self.map_page_inner(virt, frame, flags, false)
+    }
+
+    /// Mapeia página acessível em CPL=3 (USER em toda a cadeia PT).
+    pub unsafe fn map_user_page(
+        &mut self,
+        virt: VirtAddr,
+        frame: PhysFrame<Size4KiB>,
+        flags: PageTableFlags,
+    ) -> Result<(), &'static str> {
+        let mut f = flags;
+        f.insert(PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE);
+        self.map_page_inner(virt, frame, f, true)
     }
 
     pub unsafe fn activate(&self) {
@@ -130,7 +155,17 @@ pub fn alloc_frame() -> Result<PhysFrame<Size4KiB>, &'static str> {
     alloc_zeroed_frame().ok_or("mvp-c: sem frame fisico")
 }
 
-/// Flags RW (dados). USER_ACCESSIBLE / NX ficam para TODO Ring3.
+/// Flags RW kernel (dados). Sem USER — heap/kernel permanece inacessível a CPL=3.
 pub fn rw_flags() -> PageTableFlags {
     PageTableFlags::PRESENT | PageTableFlags::WRITABLE
+}
+
+/// Flags código user (RX lógico; NX não forçado no PoC).
+pub fn user_code_flags() -> PageTableFlags {
+    PageTableFlags::PRESENT | PageTableFlags::USER_ACCESSIBLE
+}
+
+/// Flags stack/dados user RW.
+pub fn user_data_flags() -> PageTableFlags {
+    PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE
 }

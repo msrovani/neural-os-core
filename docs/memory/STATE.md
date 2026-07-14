@@ -28,12 +28,14 @@
 | **P3** | Hermes WASM host-functions por Cap | ✅ CapGate (`capability_gate.rs`) |
 | **P4** | JARBAS FB MMIO + double-buffer | ✅ PoC (`jarbas_fb.rs`, Cap MAP/WRITE_FB) |
 | **P5** | K-IA DMA pin + Cortex mmap pesos | ✅ PoC (`k_ia_dma.rs`, `cortex_mmap.rs`) |
+| **P6** | Ring3 user-mode real (`iretq`) | ✅ PoC (`user_mode.rs`, GDT user + TSS.RSP0) |
 
 **Arquivos MVP C:** `address_space.rs`, `syscall.rs`, `ipc/{mod,ring_buffer}.rs` + hooks `main.rs` / IDT `0x90`.  
 **Arquivos P4:** `jarbas_fb.rs` + `Cap::{MAP_FB,WRITE_FB}` em `syscall.rs` + CapGate host names + demo em `main.rs`.  
-**Arquivos P5:** `k_ia_dma.rs` + `cortex_mmap.rs` + `Cap::{PIN_DMA,MAP_DMA,MAP_WEIGHTS}` + demos non-fatal em `main.rs`.
+**Arquivos P5:** `k_ia_dma.rs` + `cortex_mmap.rs` + `Cap::{PIN_DMA,MAP_DMA,MAP_WEIGHTS}` + demos non-fatal em `main.rs`.  
+**Arquivos P6:** `user_mode.rs` + GDT user/TSS.RSP0 em `interrupts.rs` + `Cap::ENTER_USER` / `SYS_EXIT_USER` + `map_user_page` + demo non-fatal.
 
-**Riscos residuais:** Ring3 user-mode (`iretq`) TODO; VirtIO ring DMA real e GGUF/FAT mmap = follow-up; Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
+**Riscos residuais:** P6 PoC sem ELF/preempt; VirtIO ring DMA real e GGUF/FAT mmap + demand-paging = follow-up; Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
 
 ## Marcos Acumulados
 - **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**

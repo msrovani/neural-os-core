@@ -1,0 +1,243 @@
+//! P6 — Ring3 user-mode real (ADR-0041): GDT user + iretq + stub + return via int 0x90.
+//! Demo boot non-fatal; Cap::ENTER_USER gated. Só páginas USER dedicadas (não o heap).
+
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use x86_64::registers::control::Cr3Flags;
+use x86_64::structures::paging::{PhysFrame, Size4KiB};
+use x86_64::VirtAddr;
+
+use crate::address_space::{self, AddressSpace};
+use crate::interrupts::{user_code_selector, user_data_selector};
+use crate::serial_println;
+use crate::syscall::{self, Cap, SYS_EXIT_USER};
+
+/// Região user isolada (após Cortex weights VA).
+pub const USER_CODE_VA: u64 = 0x0000_7000_0030_0000;
+pub const USER_STACK_VA: u64 = 0x0000_7000_0030_1000;
+pub const USER_MARKER_VA: u64 = 0x0000_7000_0030_2000;
+/// Marcador escrito pelo stub em CPL=3.
+pub const RING3_MAGIC: u64 = 0x0033_5249_4E47_0001;
+
+static DEMO_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// 1=ok 2=cap-deny-on-exit 3=fault 0=unset
+static EXIT_OK: AtomicU64 = AtomicU64::new(0);
+static SAVED_CR3: AtomicU64 = AtomicU64::new(0);
+static SAVED_CR3_FLAGS: AtomicU64 = AtomicU64::new(0);
+
+// Continuação kernel (CLI; single-threaded na demo P6).
+static mut SAVED_RIP: u64 = 0;
+static mut SAVED_RSP: u64 = 0;
+
+/// Feature: tentar `iretq` real. Desligar se WHPX/QEMU instável.
+pub const TRY_ENTER_RING3: bool = true;
+
+#[inline]
+pub fn demo_active() -> bool {
+    DEMO_ACTIVE.load(Ordering::SeqCst)
+}
+
+/// Abort non-fatal de #GP/#PF durante a demo — restaura kernel e continua boot.
+pub fn fault_abort(msg: &'static str) -> ! {
+    serial_println!("[P6] WARN fault: {}", msg);
+    EXIT_OK.store(3, Ordering::SeqCst);
+    unsafe { jump_back_to_kernel() }
+}
+
+/// Retorno do int 0x90 (SYS_EXIT_USER) — nunca volta ao epílogo de interrupt.
+pub fn return_from_user(ok: bool) -> ! {
+    EXIT_OK.store(if ok { 1 } else { 2 }, Ordering::SeqCst);
+    unsafe { jump_back_to_kernel() }
+}
+
+unsafe fn jump_back_to_kernel() -> ! {
+    DEMO_ACTIVE.store(false, Ordering::SeqCst);
+    let cr3_addr = SAVED_CR3.load(Ordering::SeqCst);
+    let cr3_flags = SAVED_CR3_FLAGS.load(Ordering::SeqCst);
+    if cr3_addr != 0 {
+        let frame = PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(cr3_addr));
+        let flags = Cr3Flags::from_bits_truncate(cr3_flags);
+        address_space::restore_cr3(frame, flags);
+    }
+    let rip = SAVED_RIP;
+    let rsp = SAVED_RSP;
+    core::arch::asm!(
+        "xor ax, ax",
+        "mov ds, ax",
+        "mov es, ax",
+        "mov ss, ax",
+        "mov rsp, {rsp}",
+        "jmp {rip}",
+        rsp = in(reg) rsp,
+        rip = in(reg) rip,
+        options(noreturn)
+    );
+}
+
+/// Enter CPL=3 via `iretq`. Exige Cap::ENTER_USER. Retorna após SYS_EXIT_USER ou fault.
+pub unsafe fn enter_user_mode(
+    entry: u64,
+    user_stack: u64,
+    user_l4: PhysFrame<Size4KiB>,
+    held: Cap,
+) -> Result<(), &'static str> {
+    if !held.contains(Cap::ENTER_USER) {
+        serial_println!("[CapGate] DENY ENTER_USER held=0x{:x}", held.bits());
+        return Err("EPERM: Cap::ENTER_USER");
+    }
+    if !TRY_ENTER_RING3 {
+        return Err("P6: TRY_ENTER_RING3=false");
+    }
+
+    let (k_l4, k_flags) = address_space::kernel_cr3();
+    SAVED_CR3.store(k_l4.start_address().as_u64(), Ordering::SeqCst);
+    SAVED_CR3_FLAGS.store(k_flags.bits(), Ordering::SeqCst);
+    EXIT_OK.store(0, Ordering::SeqCst);
+
+    syscall::stage_syscall(SYS_EXIT_USER, 0, Cap::ENTER_USER);
+
+    let ucs = user_code_selector().0 as u64;
+    let uds = user_data_selector().0 as u64;
+
+    let mut rflags: u64;
+    core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack));
+    rflags &= !0x200; // IF=0; int software ainda funciona
+
+    DEMO_ACTIVE.store(true, Ordering::SeqCst);
+    address_space::restore_cr3(user_l4, Cr3Flags::empty());
+
+    let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
+    let rsp_ptr = core::ptr::addr_of_mut!(SAVED_RSP);
+
+    core::arch::asm!(
+        "lea {tmp}, [rip + 2f]",
+        "mov qword ptr [{rip_ptr}], {tmp}",
+        "mov qword ptr [{rsp_ptr}], rsp",
+        "mov ax, {uds:x}",
+        "mov ds, ax",
+        "mov es, ax",
+        "push {uds}",
+        "push {stack}",
+        "push {rflags}",
+        "push {ucs}",
+        "push {entry}",
+        "iretq",
+        "2:",
+        tmp = out(reg) _,
+        rip_ptr = in(reg) rip_ptr,
+        rsp_ptr = in(reg) rsp_ptr,
+        uds = in(reg) uds,
+        ucs = in(reg) ucs,
+        stack = in(reg) user_stack,
+        rflags = in(reg) rflags,
+        entry = in(reg) entry,
+    );
+
+    DEMO_ACTIVE.store(false, Ordering::SeqCst);
+    address_space::restore_cr3(k_l4, k_flags);
+    core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
+
+    match EXIT_OK.load(Ordering::SeqCst) {
+        1 => Ok(()),
+        2 => Err("EPERM: Cap::ENTER_USER (exit)"),
+        3 => Err("P6: fault during Ring3"),
+        _ => Err("P6: enter_user sem EXIT"),
+    }
+}
+
+fn write_stub(code: PhysFrame<Size4KiB>) {
+    // movabs rax, MARKER; movabs rcx, MAGIC; mov [rax], rcx; int 0x90; hlt
+    let mut buf = [0u8; 40];
+    let mut o = 0usize;
+    buf[o] = 0x48;
+    buf[o + 1] = 0xB8;
+    o += 2;
+    buf[o..o + 8].copy_from_slice(&USER_MARKER_VA.to_le_bytes());
+    o += 8;
+    buf[o] = 0x48;
+    buf[o + 1] = 0xB9;
+    o += 2;
+    buf[o..o + 8].copy_from_slice(&RING3_MAGIC.to_le_bytes());
+    o += 8;
+    buf[o] = 0x48;
+    buf[o + 1] = 0x89;
+    buf[o + 2] = 0x08;
+    o += 3;
+    buf[o] = 0xCD;
+    buf[o + 1] = 0x90;
+    o += 2;
+    buf[o] = 0xF4;
+    o += 1;
+    let dst = address_space::hhdm_mut::<u8>(code);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o);
+    }
+}
+
+/// Demo non-fatal: deny Cap → map stub USER → iretq → marker → EXIT → SUCCESS.
+pub fn demo_ring3() -> Result<(), &'static str> {
+    serial_println!("[P6] Ring3 user-mode demo");
+
+    let deny = unsafe {
+        enter_user_mode(
+            USER_CODE_VA,
+            USER_STACK_VA + 0x1000,
+            address_space::kernel_cr3().0,
+            Cap::EMPTY,
+        )
+    };
+    if deny.is_ok() {
+        return Err("P6: Cap vazia nao deveria entrar");
+    }
+    serial_println!("[P6] Cap::ENTER_USER deny OK");
+
+    if !TRY_ENTER_RING3 {
+        serial_println!("[P6] stub path ready; TRY_ENTER_RING3=false — skip iretq");
+        return Ok(());
+    }
+
+    let mut as_user = AddressSpace::clone_current()?;
+    let code_frame = address_space::alloc_frame()?;
+    let stack_frame = address_space::alloc_frame()?;
+    let marker_frame = address_space::alloc_frame()?;
+
+    write_stub(code_frame);
+    unsafe {
+        as_user.map_user_page(
+            VirtAddr::new(USER_CODE_VA),
+            code_frame,
+            address_space::user_code_flags(),
+        )?;
+        as_user.map_user_page(
+            VirtAddr::new(USER_STACK_VA),
+            stack_frame,
+            address_space::user_data_flags(),
+        )?;
+        as_user.map_user_page(
+            VirtAddr::new(USER_MARKER_VA),
+            marker_frame,
+            address_space::user_data_flags(),
+        )?;
+        address_space::hhdm_mut::<u64>(marker_frame).write_volatile(0);
+    }
+
+    let stack_top = USER_STACK_VA + 0x1000;
+    x86_64::instructions::interrupts::without_interrupts(|| unsafe {
+        enter_user_mode(
+            USER_CODE_VA,
+            stack_top,
+            as_user.l4_frame,
+            Cap::ENTER_USER,
+        )
+    })?;
+
+    let marker = unsafe { address_space::hhdm_mut::<u64>(marker_frame).read_volatile() };
+    if marker != RING3_MAGIC {
+        return Err("P6: marker Ring3 nao escrito");
+    }
+
+    serial_println!(
+        "[P6] SUCCESS iretq+CPL3 marker={:x} Cap::ENTER_USER",
+        marker
+    );
+    Ok(())
+}

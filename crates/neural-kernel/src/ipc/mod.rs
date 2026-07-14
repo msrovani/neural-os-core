@@ -100,6 +100,6 @@ pub fn demo_two_spaces() -> Result<(), &'static str> {
         "[MVP-C] SUCCESS cr3-switch + shared-ring + Cap::PING (count={})",
         syscall::ping_count()
     );
-    // TODO Ring3: stub user + iretq; PoC atual e Ring0↔Ring0 com CR3 distintos.
+    // Ring3 real: ver user_mode::demo_ring3 (P6).
     Ok(())
 }

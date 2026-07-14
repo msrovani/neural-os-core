@@ -162,7 +162,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
-- **Capability MVP (ADR-0041):** Anéis lógicos K²CHJ; PoC = 2 AS + CR3 + SPSC + `Cap` + `int 0x90`. Boot: platform sync **antes** drivers. Demo capability **non-fatal**. Sem Ring3 inventado; crate `hermes/` ≠ binário até wiring explícito.
+- **Capability MVP (ADR-0041):** Anéis lógicos K²CHJ; PoC = 2 AS + CR3 + SPSC + `Cap` + `int 0x90` + P6 Ring3 (`iretq`/stub/`Cap::ENTER_USER`). Boot: platform sync **antes** drivers. Demos capability **non-fatal**. crate `hermes/` ≠ binário até wiring explícito.
 
 # Current Sprint: Sprint 107 — v2.0 Voice I/O Pipeline
 

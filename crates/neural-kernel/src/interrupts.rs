@@ -1,4 +1,5 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
+//! P6: segmentos user (Ring3) + TSS.RSP0 para trap de CPL=3.
 
 use crate::{println, serial_println};
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
@@ -8,7 +9,7 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
 use x86_64::structures::tss::TaskStateSegment;
-use x86_64::VirtAddr;
+use x86_64::{PrivilegeLevel, VirtAddr};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
@@ -34,6 +35,13 @@ const TIMER_IST_INDEX: u16 = 3;
 lazy_static! {
     static ref TSS: TaskStateSegment = {
         let mut tss = TaskStateSegment::new();
+        // RSP0: stack kernel ao trapear de CPL=3 (int 0x90 / exceções)
+        tss.privilege_stack_table[0] = {
+            const STACK_SIZE: usize = 4096 * 4;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
+            stack_start + STACK_SIZE
+        };
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             const STACK_SIZE: usize = 4096 * 5;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
@@ -65,15 +73,51 @@ lazy_static! {
 lazy_static! {
     static ref GDT: (GlobalDescriptorTable, Selectors) = {
         let mut gdt = GlobalDescriptorTable::new();
+        // GDT max 8 slots: null + 4 usersegs + TSS(2) = 7
         let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
+        let data_selector = gdt.add_entry(Descriptor::kernel_data_segment());
+        let user_code_selector = gdt.add_entry(Descriptor::user_code_segment());
+        let user_data_selector = gdt.add_entry(Descriptor::user_data_segment());
         let tss_selector = gdt.add_entry(Descriptor::tss_segment(&TSS));
-        (gdt, Selectors { code_selector, tss_selector })
+        (
+            gdt,
+            Selectors {
+                code_selector,
+                data_selector,
+                user_code_selector,
+                user_data_selector,
+                tss_selector,
+            },
+        )
     };
 }
 
 struct Selectors {
     code_selector: SegmentSelector,
+    data_selector: SegmentSelector,
+    user_code_selector: SegmentSelector,
+    user_data_selector: SegmentSelector,
     tss_selector: SegmentSelector,
+}
+
+/// Seletor CS Ring0 (P6 / enter_user_mode).
+pub fn kernel_code_selector() -> SegmentSelector {
+    GDT.1.code_selector
+}
+
+/// Seletor DS Ring0.
+pub fn kernel_data_selector() -> SegmentSelector {
+    GDT.1.data_selector
+}
+
+/// Seletor CS Ring3 (RPL=3 já embutido via DPL).
+pub fn user_code_selector() -> SegmentSelector {
+    GDT.1.user_code_selector
+}
+
+/// Seletor DS/SS Ring3.
+pub fn user_data_selector() -> SegmentSelector {
+    GDT.1.user_data_selector
 }
 
 // --------------------------------------------------------------------------
@@ -117,7 +161,16 @@ extern "x86-interrupt" fn coprocessor_segment_overrun_handler(f: InterruptStackF
 extern "x86-interrupt" fn invalid_tss_handler(f: InterruptStackFrame, code: u64) { dump_exception("#TS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn segment_not_present_handler(f: InterruptStackFrame, code: u64) { dump_exception("#NP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn stack_segment_handler(f: InterruptStackFrame, code: u64) { dump_exception("#SS", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) { dump_exception("#GP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
+extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFrame, code: u64) {
+    if crate::user_mode::demo_active() {
+        dump_exception("#GP", &f, Some(code));
+        crate::user_mode::fault_abort("P6 #GP in Ring3 demo");
+    }
+    dump_exception("#GP", &f, Some(code));
+    loop {
+        x86_64::instructions::hlt();
+    }
+}
 extern "x86-interrupt" fn alignment_check_handler(f: InterruptStackFrame, code: u64) { dump_exception("#AC", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn security_exception_handler(f: InterruptStackFrame, code: u64) { dump_exception("#CP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 
@@ -137,6 +190,9 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     let cr2 = x86_64::registers::control::Cr2::read();
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
+    if crate::user_mode::demo_active() {
+        crate::user_mode::fault_abort("P6 #PF in Ring3 demo");
+    }
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 10 {
         return;
@@ -281,8 +337,10 @@ lazy_static! {
         idt[0x81].set_handler_fn(ipi_halt_handler);
         idt[0x82].set_handler_fn(ipi_call_function_handler);
 
-        // MVP C: soft-syscall (0x90) — Cap gate / ADR-0041
-        idt[0x90].set_handler_fn(crate::syscall::syscall_int_handler);
+        // MVP C / P6: soft-syscall (0x90) — Cap gate; DPL=3 para int de Ring3
+        idt[0x90]
+            .set_handler_fn(crate::syscall::syscall_int_handler)
+            .set_privilege_level(PrivilegeLevel::Ring3);
 
         // Demais vetores (34-255, exceto IPI + syscall)
         for i in 34..=255usize {

@@ -35,9 +35,10 @@ A visão-alvo é um **capability microkernel** onde:
 ### Non-goals desta sprint / MVP C
 
 - Separar binários por crate K²CHJ
-- User-mode Ring 3 estável (jump `iret`/sysret) — bônus; stub Ring0↔Ring0 + CR3 OK
-- Hermes WASM SFI completo; Ring3 user-mode estável; VirtIO ring DMA real; GGUF/FAT mmap real
+- Hermes WASM SFI completo; VirtIO ring DMA real; GGUF/FAT mmap + demand-paging
 - Reescrever Agency / drivers / Pacotes A+B
+
+**Nota P6:** user-mode Ring 3 via `iretq` + stub + `SYS_EXIT_USER` é PoC boot non-fatal (não scheduler multi-task).
 
 ---
 
@@ -54,10 +55,11 @@ A visão-alvo é um **capability microkernel** onde:
 | IPC só ring lock-free entre AS | **Fictício** → **MVP C parcial** | EventBus in-process; MVP C: SPSC shared pages | M | Baixo se isolado |
 | Capability autoritativa por operação | **Parcial** | EventBus `CapabilityToken`; MVP C: `Cap` bitflags + syscall | P | Baixo |
 | Dois address spaces + CR3 switch | **Fictício** → **MVP C** | Novo: `address_space.rs` | M | Médio (mitigado: non-fatal) |
+| Ring3 CPL=3 real (`iretq`) | **Fictício** → **P6 PoC** | GDT user + TSS.RSP0 + `user_mode.rs` | G | Médio (non-fatal + fault abort) |
 
 ---
 
-## 4. Prioridades P0 → P5
+## 4. Prioridades P0 → P6
 
 | Pri | Item | Status pós-MVP C |
 |-----|------|------------------|
@@ -67,8 +69,10 @@ A visão-alvo é um **capability microkernel** onde:
 | **P3** | Hermes WASM host-functions por Cap (sem AS full) | ✅ CapGate + SEND_TCP/WRITE_RING |
 | **P4** | JARBAS FB MMIO capability + double-buffer contract | ✅ PoC |
 | **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ✅ PoC |
+| **P6** | Ring3 user-mode real (`iretq` + stub USER + Cap::ENTER_USER + return) | ✅ PoC |
 
-Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap** — P0–P5 concluídos (PoC).
+Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap → Ring3** — P0–P6 concluídos (PoC).  
+Próximos: demand-paging #PF; VirtIO vring; GGUF/FAT mmap.
 
 ---
 
@@ -79,7 +83,7 @@ Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap** — P0�
 - Página compartilhada com `SpscRing`; escrita num AS, leitura no outro.
 - `Cap::{PING, WRITE_RING, READ_RING}` + `syscall::dispatch` via `int 0x90` (ABI staging via atomics).
 - Demo após DriverInit; erro → serial WARN, boot segue.
-- **TODO Ring3:** entrada user-mode real (stub code page + `iretq`) quando estável no QEMU UEFI.
+- **P6 Ring3:** ver aceite abaixo (`user_mode.rs`).
 
 ### P3 — aceite (parcial → done mínimo)
 
@@ -105,6 +109,16 @@ Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap** — P0�
 - Demand-paging (#PF first touch) e mmap GGUF/FAT = TODO documentado; PoC = memória simulada.
 - Demo boot non-fatal pós-P4: deny → pin+map DMA → mmap pesos + touch → restore CR3; falha frame alloc → Cap-only SUCCESS / WARN.
 - `SYS_PIN_DMA` / `SYS_MAP_DMA` / `SYS_MAP_WEIGHTS` em `syscall.rs`.
+
+### P6 — aceite (Ring3 user-mode real)
+
+- GDT: `kernel_data` + `user_code` + `user_data` (DPL=3); TSS `privilege_stack_table[0]` (RSP0).
+- IDT `int 0x90` com DPL=3; `Cap::ENTER_USER` + `SYS_EXIT_USER`.
+- `address_space::map_user_page` propaga `USER_ACCESSIBLE` em toda a cadeia PT.
+- `user_mode.rs`: stub (marker + `int 0x90`) em páginas USER dedicadas; `enter_user_mode` via `iretq` (IF=0); return salva RIP/RSP e `jmp` kernel; deny sem Cap.
+- Demo boot non-fatal pós-P5; #GP/#PF durante demo → WARN + restore (não halt).
+- Flag `TRY_ENTER_RING3` para disable se WHPX/QEMU instável (🟡 parcial).
+- Limitação: PoC single-threaded; sem ELF loader / preemptive usermode; shallow L4 ainda compartilha PTs do kernel.
 
 ---
 

@@ -1,5 +1,6 @@
 //! Syscall / trap mínimo — int 0x90 + Cap bitflags (MVP C / ADR-0041).
 //! Vetores 0x80–0x82 ficam com IPI SMP; ABI staging via atomics até Ring3.
+//! P6: Cap::ENTER_USER + SYS_EXIT_USER para retorno CPL=3 → kernel.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::structures::idt::InterruptStackFrame;
@@ -21,6 +22,8 @@ pub const SYS_PIN_DMA: u64 = 7;
 pub const SYS_MAP_DMA: u64 = 8;
 /// Cortex: mmap páginas de peso LLM (ADR-0041 P5).
 pub const SYS_MAP_WEIGHTS: u64 = 9;
+/// P6: stub user → kernel (após marcador / Cap check).
+pub const SYS_EXIT_USER: u64 = 10;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +46,8 @@ impl Cap {
     pub const MAP_DMA: Cap = Cap(1 << 7);
     /// Cortex: mapear páginas de pesos LLM (mmap PoC).
     pub const MAP_WEIGHTS: Cap = Cap(1 << 8);
+    /// P6: permitir enter_user_mode / trap de volta do stub Ring3.
+    pub const ENTER_USER: Cap = Cap(1 << 9);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -74,6 +79,14 @@ static SYS_STATUS: AtomicU64 = AtomicU64::new(0); // 0=ok, 1=err
 
 pub fn ping_count() -> u64 {
     PING_COUNT.load(Ordering::Relaxed)
+}
+
+/// Pré-carrega átomos do trap (kernel prepara antes do `iretq` para o stub).
+pub fn stage_syscall(nr: u64, arg: u64, cap: Cap) {
+    SYS_NR.store(nr, Ordering::SeqCst);
+    SYS_ARG.store(arg, Ordering::SeqCst);
+    SYS_CAP.store(cap.bits(), Ordering::SeqCst);
+    SYS_STATUS.store(0, Ordering::SeqCst);
 }
 
 /// Despacho capability-gated (chamável direto ou via int 0x90).
@@ -133,16 +146,19 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
             }
             Ok(0)
         }
+        SYS_EXIT_USER => {
+            if !cap.contains(Cap::ENTER_USER) {
+                return Err("EPERM: Cap::ENTER_USER");
+            }
+            Ok(0)
+        }
         _ => Err("ENOSYS"),
     }
 }
 
 /// Invoca o trap `int 0x90` (prova de gate no IDT).
 pub fn soft_syscall(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
-    SYS_NR.store(nr, Ordering::SeqCst);
-    SYS_ARG.store(arg, Ordering::SeqCst);
-    SYS_CAP.store(cap.bits(), Ordering::SeqCst);
-    SYS_STATUS.store(0, Ordering::SeqCst);
+    stage_syscall(nr, arg, cap);
     unsafe {
         core::arch::asm!("int 0x90", options(nostack));
     }
@@ -157,6 +173,22 @@ pub extern "x86-interrupt" fn syscall_int_handler(_stack: InterruptStackFrame) {
     let nr = SYS_NR.load(Ordering::SeqCst);
     let arg = SYS_ARG.load(Ordering::SeqCst);
     let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
+
+    // P6: retorno do stub Ring3 — abandona frame de interrupt e jmp kernel.
+    if nr == SYS_EXIT_USER && crate::user_mode::demo_active() {
+        match dispatch(nr, arg, cap) {
+            Ok(v) => {
+                SYS_RESULT.store(v, Ordering::SeqCst);
+                SYS_STATUS.store(0, Ordering::SeqCst);
+                crate::user_mode::return_from_user(true);
+            }
+            Err(_) => {
+                SYS_STATUS.store(1, Ordering::SeqCst);
+                crate::user_mode::return_from_user(false);
+            }
+        }
+    }
+
     match dispatch(nr, arg, cap) {
         Ok(v) => {
             SYS_RESULT.store(v, Ordering::SeqCst);
