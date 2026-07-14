@@ -50,6 +50,11 @@
 - `Desc.addr` aponta para página pinnada (zero-copy); path paralelo — NIC live observe-only
 - Sem VirtIO device → layout-only SUCCESS; demo boot non-fatal pós-P7
 
+### P9 — GGUF/FAT file-backed mmap (ADR-0041)
+- `gguf_mmap.rs`: pré-lê 1–4 páginas de `BITNET.BIN`/`HWEXPRT.BIN`/… via FAT `read_file_range`; Cap `MAP_FILE`
+- Frames pré-preenchidos + `demand_page::register_lazy` (`FILE_WEIGHT_VA`); #PF só PRESENT (sem I/O no fault)
+- Fallback stub `NFIL` se arquivo ausente; demo boot non-fatal pós-P8 (deny → mmap → touch magic → restore)
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

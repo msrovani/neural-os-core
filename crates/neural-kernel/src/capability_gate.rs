@@ -23,6 +23,8 @@ pub const HOST_FN_MAP_WEIGHTS: &str = "aios_map_weights";
 pub const HOST_FN_DEMAND_PAGE: &str = "aios_demand_page";
 /// P8 VirtIO vring setup.
 pub const HOST_FN_VRING_SETUP: &str = "aios_vring_setup";
+/// P9 GGUF/FAT file-backed mmap.
+pub const HOST_FN_MAP_FILE: &str = "aios_map_file";
 
 /// Cap exigida por nome de host-function.
 pub fn required_cap(host_fn: &str) -> Option<Cap> {
@@ -38,6 +40,7 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
         HOST_FN_MAP_WEIGHTS | "map_weights" => Some(Cap::MAP_WEIGHTS),
         HOST_FN_DEMAND_PAGE | "demand_page" => Some(Cap::DEMAND_PAGE),
         HOST_FN_VRING_SETUP | "vring_setup" => Some(Cap::VRING_SETUP),
+        HOST_FN_MAP_FILE | "map_file" => Some(Cap::MAP_FILE),
         _ => None,
     }
 }

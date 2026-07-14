@@ -35,12 +35,13 @@ A visão-alvo é um **capability microkernel** onde:
 ### Non-goals desta sprint / MVP C
 
 - Separar binários por crate K²CHJ
-- Hermes WASM SFI completo; VirtIO ring DMA real; GGUF/FAT mmap real
+- Hermes WASM SFI completo; VirtIO ring DMA real (QUEUE_NOTIFY); streaming GGUF >RAM
 - Reescrever Agency / drivers / Pacotes A+B
 
 **Nota P6:** user-mode Ring 3 via `iretq` + stub + `SYS_EXIT_USER` é PoC boot non-fatal (não scheduler multi-task).  
-**Nota P7:** demand-paging #PF cura lazy weights (frames pré-alocados); GGUF/FAT ainda TODO.  
-**Nota P8:** VirtIO vring layout-compatible sobre DMA pin; NIC live observe-only (path paralelo).
+**Nota P7:** demand-paging #PF cura lazy weights (frames pré-alocados); GGUF/FAT = **P9**.  
+**Nota P8:** VirtIO vring layout-compatible sobre DMA pin; NIC live observe-only (path paralelo).  
+**Nota P9:** GGUF/FAT file-backed mmap — pré-fill frames no register; #PF só PRESENT (sem I/O no fault).
 
 ---
 
@@ -51,7 +52,7 @@ A visão-alvo é um **capability microkernel** onde:
 | K-Nano Ring 0 exclusivo CR3/GDT/IDT | **Parcial** | `memory.rs` CR3 único; `interrupts.rs` GDT/IDT globais | G | Alto se CR3 errar |
 | Slab / lock-free scheduling, sem heap no path crítico | **Parcial** | `slab.rs`, `agent-core` RR; heap ainda no boot path | M | Médio |
 | K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Parcial** (P5+P8 PoC) | `k_ia_dma` + `virtio_vring` + Cap PIN/MAP_DMA/VRING_SETUP; live NIC untouched | G | Médio |
-| Cortex Ring 3 + mmap pesos | **Parcial** (P5 eager + P7 demand-page) | `cortex_mmap` + `demand_page` + Cap MAP_WEIGHTS/DEMAND_PAGE; GGUF/FAT = TODO | G | Baixo |
+| Cortex Ring 3 + mmap pesos | **Parcial** (P5+P7+P9) | `cortex_mmap` + `demand_page` + `gguf_mmap`; Cap MAP_WEIGHTS/DEMAND_PAGE/MAP_FILE; FAT pré-fill | G | Baixo |
 | Hermes WASM SFI + host caps | **Parcial** | `wasm*.rs`, `trust::check_syscall` — sem AS separado | M | Baixo |
 | JARBAS Ring 3 + FB MMIO + VSync | **Parcial** (P4 PoC Ring0+AS) | `jarbas_fb.rs` + Cap MAP/WRITE_FB | G | Médio |
 | IPC só ring lock-free entre AS | **Fictício** → **MVP C parcial** | EventBus in-process; MVP C: SPSC shared pages | M | Baixo se isolado |
@@ -61,7 +62,7 @@ A visão-alvo é um **capability microkernel** onde:
 
 ---
 
-## 4. Prioridades P0 → P8
+## 4. Prioridades P0 → P9
 
 | Pri | Item | Status pós-MVP C |
 |-----|------|------------------|
@@ -74,9 +75,10 @@ A visão-alvo é um **capability microkernel** onde:
 | **P6** | Ring3 user-mode real (`iretq` + stub USER + Cap::ENTER_USER + return) | ✅ PoC |
 | **P7** | Demand-paging via #PF (lazy Cortex weights) | ✅ PoC |
 | **P8** | VirtIO vring wiring sobre DMA pin | ✅ PoC |
+| **P9** | GGUF/FAT file-backed mmap sobre demand-paging | ✅ PoC |
 
-Roadmap explícito: **MVP C → … → Ring3 → demand-paging → VirtIO vring** — P0–P8 concluídos (PoC).  
-Próximo: GGUF/FAT mmap.
+Roadmap explícito: **MVP C → … → Ring3 → demand-paging → VirtIO vring → GGUF/FAT mmap** — P0–P9 concluídos (PoC).  
+Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 
 ---
 
@@ -140,6 +142,15 @@ Próximo: GGUF/FAT mmap.
 - Path paralelo: se `VIRTIO_DEV` presente, loga `rx/tx_queue_phys` **sem mutar** filas live (NIC intacto).
 - Sem device VirtIO: PoC layout-only ainda = SUCCESS documentado.
 - Demo boot non-fatal pós-P7: deny Cap → pin+setup SUCCESS → log phys/indices; falha frame → Cap-only / WARN.
+
+### P9 — aceite (GGUF/FAT file-backed mmap)
+
+- `gguf_mmap.rs`: localiza blob no FAT (`BITNET.BIN`/`HWEXPRT.BIN`/…); pré-lê 1–4 páginas via `read_file_range` em frames alocados **antes** do #PF.
+- Cap `MAP_FILE` (+ `MAP_WEIGHTS|DEMAND_PAGE`) / `SYS_MAP_FILE`; deny sem Cap; CapGate `aios_map_file`.
+- Integra `demand_page::register_lazy` em `FILE_WEIGHT_VA` — leaf NOT PRESENT; first-touch só instala PRESENT (sem I/O no fault path).
+- Fallback documentado se arquivo ausente: stub magic `NFIL` + WARN (non-fatal) ou Cap-only SUCCESS.
+- Demo boot non-fatal pós-P8: deny → mmap → touch → verify magic GGUF/`0xBE11BE11`/fallback → restore CR3.
+- Limitação: PoC = prefixo do arquivo (não streaming 8GB); parser GGUF completo permanece em `gguf.rs`.
 
 ---
 

@@ -291,6 +291,7 @@ mod cortex_mmap;
 mod demand_page;
 mod user_mode;
 mod virtio_vring;
+mod gguf_mmap;
 
 
 
@@ -1701,6 +1702,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[P8] WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P8 vring WARN (non-fatal)");
+        }
+    }
+
+    // P9 (ADR-0041): GGUF/FAT file-backed mmap + demand-paging — non-fatal
+    match crate::gguf_mmap::demo_gguf_mmap() {
+        Ok(()) => {
+            serial_println!("[P9] GGUF/FAT mmap demo OK");
+            crate::boot_logger::log("BOOT: P9 gguf-mmap OK");
+        }
+        Err(e) => {
+            serial_println!("[P9] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P9 gguf-mmap WARN (non-fatal)");
         }
     }
 
