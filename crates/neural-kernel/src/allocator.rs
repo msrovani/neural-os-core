@@ -6,7 +6,7 @@ use x86_64::{VirtAddr, PhysAddr};
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::empty();
 
-pub const HEAP_START: usize = 0x_4444_4444_0000;
+pub const HEAP_START: usize = 0x_4000_0000_0000; // 1TB - mais seguro para HW real
 pub const HEAP_SIZE: usize = 512 * 1024 * 1024;
 
 pub static CURRENT_HEAP_MB: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(512);

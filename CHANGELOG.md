@@ -1,3 +1,80 @@
+# Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
+
+## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
+
+### Sprint 106-11: Correção de boot em HW real
+- **Heap address:** Alterado de `0x4444_4444_0000` para `0x4000_0000_0000` (1TB) — endereço mais seguro para hardware real
+- **AHCI/SATA:** Verificado suporte AHCI já implementado em `ahci.rs` — sistema suporta tanto ISA ATA quanto SATA AHCI
+- **Display/Framebuffer:** Sistema requer UEFI GOP ativo para framebuffer gráfico. Sem GOP, fallback para VGA text mode (80x25)
+- **Diagnóstico vídeo:** Logs mostram "Sem framebuffer UEFI — VGA text mode" em QEMU. Bootloader 0.11 não expõe configuração de framebuffer via API. GOP depende do firmware UEFI/OVMF.
+- **Solução:** Para HW real, garantir UEFI GOP ativo no firmware. Para QEMU, usar OVMF com `-vga std` para framebuffer gráfico.
+- **Validação:** `cargo check --release` com 0 erros (2 warnings menores em ata.rs, não críticos)
+- **Motivo:** Endereço de heap muito alto (0x4444_4444_0000) pode causar problemas de mapeamento de memória em hardware real
+
+### ADR v2.0 — Refatoração para Workspace Estrito
+- **workspace Cargo:** 11 membros (ticket-lock, neural-kernel, agent-core, skill-registry, event-bus, boot, k_nano, k_ai, cortex, hermes, jarbas) com `resolver = "2"`
+- **Rename:** k_ia → k_ai (Ring 1 Lógico), jarvis → jarbas (Ring 2 HCI)
+- **Backups:** Pastas antigas preservadas (LEGACY/k_ia, LEGACY/jarvis)
+
+### Sprint 106-1: Estruturar Cargo workspace estrito
+- **Cargo.toml raiz:** `members = ["crates/k_nano", "crates/k_ai", "crates/cortex", "crates/hermes", "crates/jarbas"]` + dependências auxiliares
+- **Isolamento:** Dependências não vazam entre camadas lógicas
+- **Cargo.lock:** Regenerado com resolver = "2" para dependências transativas
+- **Validação:** `cargo check --release` com 0 erros
+
+### Sprint 106-2: Cargo clean + Workspace Sanity Check
+- **cargo clean -p neural-kernel:** Build artifacts removidos (target/), código fonte preservado
+- **cargo check --release:** Validado 0 erros (2 warnings menores em ata.rs, não críticos)
+- **Preservação:** Nenhum arquivo fonte deletado — apenas build cache
+
+### Sprint 106-3: Corrigir SOUL.md parser (dependência ring2→ring0)
+- **Cargo.toml jarbas:** adicionado `neural-kernel = { path = "../neural-kernel" }`
+- **jarvis.rs:** `load_from_fat32()` usa `neural_kernel::fs::read_vfs("/SOUL.MD")` em vez de `k_nano::ATA_DRIVER.lock()` + `crate::fat32::Fat32Reader`
+- **Isolamento:** jarbas (ring2) não acessa mais k_nano (ring0) diretamente para hardware — apenas serviços comuns (serial_println, EVENT_BUS, AUDIT_TRAIL)
+- **Validação:** `cargo check --release` com 0 erros
+
+### Sprint 106-4: Corrigir Trinity MoE Router
+- **Investigação:** `trinity.rs` usa apenas `k_nano::serial_println!()` para logging (aceitável)
+- **ExpertKind enum:** Simples, sem dependências externas
+- **Trinity Router:** Classifica intents via ML/keyword matching — **não roteia para hardware específico**
+- **Validação:** Build com 0 erros, nenhuma dependência circular detectada
+
+### Sprint 106-5: RustPython no_std (Rota Nativa)
+- **Viabilidade investigada:** RustPython **NÃO é no_std nativo** — depende de `std` para alocação dinâmica
+- **Rota principal WASM (106-6):** Compilar RustPython para .wasm via `cargo build --target wasm32-wasip1`
+- **Alternativa documentada:** Bridge C via `abi_x86_interrupt` exigiria portar RustPython para no_std (trabalho enorme)
+
+### Sprint 106-6: MicroPython via WASM (Rota Sandbox)
+- **Compilação:** MicroPython para .wasm
+- **Sandbox:** Hermes executor com isolamento
+
+### Sprint 106-7: Corrigir page faults (ordem de inicialização)
+- **Ordem correta:** allocator → events → agents
+- **lazy_init!():** Macro para agentes dependentes de heap
+- **Validado:** `cargo run --release` sem page faults
+
+### Sprint 106-8: AIOS API para Python (RAG + System Prompt)
+- **Bibliotecas:** aios_net, aios_fs
+- **Injeção:** Via RAG/System Prompt no RustPython
+
+### Sprint 106-9: Escalonamento Evolutivo de Código (JIT Cognitivo)
+- **SkillOpt + Knowledge Graph:** Python efêmero → WASM cravado em pedra
+- **Evolução:** Código evolve de JIT para JIT Cognitivo
+
+### Sprint 106-10: SkillOpt - Tradução Python→Rust no_std
+- **Geração:** Rust no_std a partir de Python via Cortex LLM
+- **Automatizado:** Pipeline de tradução integrado
+
+### Refactor
+- **`RingBufStore` extraído** em `fs/mod.rs` — tipo genérico com evicção FIFO por quota
+- **`ram_fs_agent.rs`** delegado para `RingBufStore::new(1MB)` — ~40 LOC eliminados
+- **`log_fs_agent.rs`** delegado para `RingBufStore::new(256KB)` — ~50 LOC eliminados
+- **`hermes/src/fs/`** também atualizado com `RingBufStore` (consistency com monólito)
+
+### Safety
+- **`LEGACY/v1.5-neural-kernel-src/`** — snapshot de todo `crates/neural-kernel/src/` antes da migração v2.0
+- Nada foi deletado — refactor puro por extração
+
 # Changelog — neural-os-core v1.5.2 "Ring Buffer Refactor"
 
 ## v1.5.2 — 2026-07-13 — Ring Buffer Refactor
