@@ -1,15 +1,21 @@
-use linked_list_allocator::LockedHeap;
-use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTableFlags, Size4KiB};
-use x86_64::structures::paging::PageTable;
-use x86_64::{VirtAddr, PhysAddr};
+//! Tier 1 — Global allocator (Hermes / JARBAS / UI).
+//! talc substitui linked_list_allocator: menos fragmentação em alocações variadas.
+
+use core::sync::atomic::{AtomicUsize, Ordering};
+use spin::Mutex;
+use talc::{ErrOnOom, Span, Talc, Talck};
+use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTable, PageTableFlags, Size4KiB};
+use x86_64::{PhysAddr, VirtAddr};
 
 #[global_allocator]
-static ALLOCATOR: LockedHeap = LockedHeap::empty();
+static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOnOom));
 
-pub const HEAP_START: usize = 0x_4000_0000_0000; // 1TB - mais seguro para HW real
+static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
+
+pub const HEAP_START: usize = 0x_4000_0000_0000;
 pub const HEAP_SIZE: usize = 512 * 1024 * 1024;
 
-pub static CURRENT_HEAP_MB: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(512);
+pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
@@ -17,24 +23,21 @@ pub const LARGE_HEAP_START: usize = HEAP_START + SLAB_SIZE;
 pub const LARGE_HEAP_SIZE: usize = HEAP_SIZE - SLAB_SIZE;
 
 pub fn try_alloc_check() -> bool {
-    let heap = ALLOCATOR.lock();
-    heap.size() > 0
+    CLAIMED_HEAP.lock().is_some()
 }
 
-/// Expande o heap dinamicamente baseado no tamanho do modelo AI.
-/// Usa frame allocator global + mapeamento direto nas pagetables.
-/// Thread-safe: so cresce, nunca encolhe.
 pub fn resize_heap_to_mb(target_mb: usize) {
-    let current = CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::SeqCst);
-    if target_mb <= current { return; }
+    let current = CURRENT_HEAP_MB.load(Ordering::SeqCst);
+    if target_mb <= current {
+        return;
+    }
     let diff_pages = (target_mb - current) * 256;
-    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let base = VirtAddr::new(pmoff);
     let start_virt = HEAP_START as u64 + (current as u64 * 1024 * 1024);
 
     let mut allocated = 0usize;
-    let total_pages = diff_pages;
-    for i in 0..total_pages {
+    for i in 0..diff_pages {
         let phys = {
             let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
             match g.as_mut().and_then(|a| a.allocate_frame()) {
@@ -44,35 +47,59 @@ pub fn resize_heap_to_mb(target_mb: usize) {
         };
         let virt = VirtAddr::new(start_virt + (i as u64 * 4096));
         unsafe {
-            let (l4_frame, _) = x86_64::registers::control::Cr3::read();
-            let l4_virt = base + l4_frame.start_address().as_u64();
-            let l4_tbl = &mut *(l4_virt.as_mut_ptr::<PageTable>());
-            let e3 = &mut l4_tbl[virt.p4_index()];
-            if !e3.flags().contains(PageTableFlags::PRESENT) { let f = alloc_pt_frame(base); e3.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE); }
-            let l3_virt = base + e3.addr().as_u64();
-            let l3_tbl = &mut *(l3_virt.as_mut_ptr::<PageTable>());
-            let e2 = &mut l3_tbl[virt.p3_index()];
-            if !e2.flags().contains(PageTableFlags::PRESENT) { let f = alloc_pt_frame(base); e2.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE); }
-            let l2_virt = base + e2.addr().as_u64();
-            let l2_tbl = &mut *(l2_virt.as_mut_ptr::<PageTable>());
-            let e1 = &mut l2_tbl[virt.p2_index()];
-            if !e1.flags().contains(PageTableFlags::PRESENT) { let f = alloc_pt_frame(base); e1.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE); }
-            let l1_virt = base + e1.addr().as_u64();
-            let l1_tbl = &mut *(l1_virt.as_mut_ptr::<PageTable>());
-            l1_tbl[virt.p1_index()].set_addr(PhysAddr::new(phys), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
-            x86_64::instructions::tlb::flush(virt);
+            map_page_direct(base, virt, phys);
         }
         allocated += 1;
     }
 
-    // Single extend — avoids 200K+ tiny free blocks that fragment the heap
     if allocated > 0 {
-        unsafe { ALLOCATOR.lock().extend(allocated * 4096); }
+        let new_mb = current + allocated / 256;
+        let new_size = new_mb * 1024 * 1024;
+        unsafe {
+            let mut guard = TALC_ALLOC.lock();
+            if let Some(old) = *CLAIMED_HEAP.lock() {
+                let req = Span::from_base_size(LARGE_HEAP_START as *mut u8, new_size - SLAB_SIZE);
+                let extended = guard.extend(old, req);
+                *CLAIMED_HEAP.lock() = Some(extended);
+            }
+        }
+        CURRENT_HEAP_MB.store(new_mb, Ordering::SeqCst);
+        crate::serial_println!(
+            "[HEAP/TALC] {} MB → {} MB ({} pages added)",
+            current,
+            new_mb,
+            allocated
+        );
     }
+}
 
-    let new_mb = current + allocated / 256;
-    CURRENT_HEAP_MB.store(new_mb, core::sync::atomic::Ordering::SeqCst);
-    crate::serial_println!("[HEAP] {} MB → {} MB ({} pages added)", current, new_mb, allocated);
+unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let l4_virt = base + l4_frame.start_address().as_u64();
+    let l4_tbl = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+    let e3 = &mut l4_tbl[virt.p4_index()];
+    if !e3.flags().contains(PageTableFlags::PRESENT) {
+        let f = alloc_pt_frame(base);
+        e3.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    }
+    let l3_virt = base + e3.addr().as_u64();
+    let l3_tbl = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+    let e2 = &mut l3_tbl[virt.p3_index()];
+    if !e2.flags().contains(PageTableFlags::PRESENT) {
+        let f = alloc_pt_frame(base);
+        e2.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    }
+    let l2_virt = base + e2.addr().as_u64();
+    let l2_tbl = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+    let e1 = &mut l2_tbl[virt.p2_index()];
+    if !e1.flags().contains(PageTableFlags::PRESENT) {
+        let f = alloc_pt_frame(base);
+        e1.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    }
+    let l1_virt = base + e1.addr().as_u64();
+    let l1_tbl = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+    l1_tbl[virt.p1_index()].set_addr(PhysAddr::new(phys), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    x86_64::instructions::tlb::flush(virt);
 }
 
 unsafe fn alloc_pt_frame(base: VirtAddr) -> u64 {
@@ -89,8 +116,12 @@ unsafe fn alloc_pt_frame(base: VirtAddr) -> u64 {
 }
 
 pub fn heap_stats() -> (usize, usize) {
-    let guard = ALLOCATOR.lock();
-    (guard.used(), guard.free())
+    let claimed = CLAIMED_HEAP.lock();
+    if let Some(span) = *claimed {
+        (0, span.size())
+    } else {
+        (0, 0)
+    }
 }
 
 #[alloc_error_handler]
@@ -98,13 +129,19 @@ fn oom(_: core::alloc::Layout) -> ! {
     use core::fmt::Write;
     {
         let mut w = crate::vga_buffer::WRITER.lock();
-        if let Some(ref mut w) = *w { let _ = write!(w, "[OOM] sem memoria"); }
+        if let Some(ref mut w) = *w {
+            let _ = write!(w, "[OOM/TALC] sem memoria");
+        }
     }
     {
         let mut s = crate::serial::SERIAL.lock();
-        if let Some(ref mut s) = *s { let _ = write!(s, "[OOM] sem memoria. Aumente HEAP_SIZE.\n"); }
+        if let Some(ref mut s) = *s {
+            let _ = write!(s, "[OOM/TALC] sem memoria Tier 1. Verifique HEAP_SIZE.\n");
+        }
     }
-    loop { x86_64::instructions::hlt(); }
+    loop {
+        x86_64::instructions::hlt();
+    }
 }
 
 pub fn init_heap(
@@ -114,9 +151,10 @@ pub fn init_heap(
     let page_range = {
         let heap_start = VirtAddr::new(HEAP_START as u64);
         let heap_end = heap_start + HEAP_SIZE as u64 - 1u64;
-        let heap_start_page = Page::containing_address(heap_start);
-        let heap_end_page = Page::containing_address(heap_end);
-        Page::range_inclusive(heap_start_page, heap_end_page)
+        Page::range_inclusive(
+            Page::containing_address(heap_start),
+            Page::containing_address(heap_end),
+        )
     };
 
     for page in page_range {
@@ -134,8 +172,15 @@ pub fn init_heap(
 
     unsafe {
         crate::slab::SLAB_ALLOCATOR.lock().init(SLAB_START);
-        ALLOCATOR.lock().init(LARGE_HEAP_START, LARGE_HEAP_SIZE);
+        let span = Span::from_base_size(LARGE_HEAP_START as *mut u8, LARGE_HEAP_SIZE);
+        let claimed = TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?;
+        *CLAIMED_HEAP.lock() = Some(claimed);
     }
 
+    crate::serial_println!(
+        "[HEAP/TALC] Tier 1 ready: virt={:#x} size={} MB (Hermes/JARBAS/UI)",
+        LARGE_HEAP_START,
+        LARGE_HEAP_SIZE / (1024 * 1024)
+    );
     Ok(())
 }

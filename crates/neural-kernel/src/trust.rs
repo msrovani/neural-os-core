@@ -55,18 +55,50 @@ const SECRET_PATTERNS: &[&str] = &[
     "sk-", "ghp_", "gho_", "ghu_", "xoxb-", "xoxp-",
 ];
 
-/// Substitui padrões sensíveis por "[REDACTED]" em uma string.
+/// Substitui padrões sensíveis por "*" (UTF-8 safe).
 pub fn mask_secrets(input: &str) -> String {
-    let mut result = String::from(input);
-    for pattern in SECRET_PATTERNS {
-        let mut pos = 0;
-        while let Some(idx) = result[pos..].to_ascii_lowercase().find(&pattern.to_ascii_lowercase()) {
-            let start = pos + idx;
-            let end = core::cmp::min(start + 32, result.len());
-            for _ in start..end {
-                result.replace_range(start..start+1, "*");
+    let lower = input.to_ascii_lowercase();
+    let mut result = String::with_capacity(input.len());
+    let mut i = 0;
+    let bytes = input.as_bytes();
+    let lower_bytes = lower.as_bytes();
+    while i < bytes.len() {
+        let mut matched = None;
+        for pattern in SECRET_PATTERNS {
+            let p = pattern.to_ascii_lowercase();
+            let pb = p.as_bytes();
+            if i + pb.len() <= lower_bytes.len() && &lower_bytes[i..i + pb.len()] == pb {
+                matched = Some(pb.len().max(8).min(32));
+                break;
             }
-            pos = end;
+        }
+        if let Some(redact_len) = matched {
+            let end = core::cmp::min(i + redact_len, bytes.len());
+            let mut j = i;
+            while j < end {
+                let ch_len = match bytes[j] {
+                    b if b & 0x80 == 0 => 1,
+                    b if b & 0xE0 == 0xC0 => 2,
+                    b if b & 0xF0 == 0xE0 => 3,
+                    _ => 4,
+                };
+                result.push('*');
+                j += ch_len;
+                if j > end { break; }
+            }
+            i = j;
+        } else {
+            let ch_len = match bytes[i] {
+                b if b & 0x80 == 0 => 1,
+                b if b & 0xE0 == 0xC0 => 2,
+                b if b & 0xF0 == 0xE0 => 3,
+                _ => 4,
+            };
+            let take = ch_len.min(bytes.len() - i);
+            if let Ok(s) = core::str::from_utf8(&bytes[i..i + take]) {
+                result.push_str(s);
+            }
+            i += ch_len;
         }
     }
     result
@@ -150,24 +182,29 @@ impl TrustCache {
     }
 
     fn is_exempt(&self, token: u64) -> bool {
-        token == 0 || token == 1 || self.exempt_tokens.contains(&token)
+        self.exempt_tokens.contains(&token)
     }
 
     pub fn add_exempt_token(&mut self, token: u64) {
         self.exempt_tokens.insert(token);
+        serial_println!("[TRUST] exempt token={} (sistema)", token);
     }
 
-    pub fn check_or_cache(&mut self, token: u64, skill: &str, now: u64, ttl: u64) -> bool {
+    /// NÃO auto-concede TotalAccess. Observe/Warn: transitório. Contain/Enforce: nega.
+    pub fn check_or_cache(&mut self, token: u64, skill: &str, now: u64, _ttl: u64) -> bool {
         if self.is_trusted(token, skill, now) { return true; }
         let key = (token, String::from(skill));
         if self.denylist.contains_key(&key) { return false; }
-        self.entries.insert(key, TrustEntry {
-            granted_at_ticks: now, ttl_ticks: ttl,
-            mode: PermissionMode::TotalAccess,
-            state: self.global_policy,
-            path_rule: None,
-        });
-        true
+        match self.global_policy {
+            PolicyState::Observe | PolicyState::Warn => {
+                serial_println!("[TRUST] transient allow ({:?}): token={} skill={}", self.global_policy, token, skill);
+                true
+            }
+            PolicyState::Contain | PolicyState::Enforce => {
+                serial_println!("[TRUST] DENY uncached ({:?}): token={} skill={}", self.global_policy, token, skill);
+                false
+            }
+        }
     }
 
     /// #258: escalona política automaticamente baseado em frequência de violação

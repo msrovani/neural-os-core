@@ -1,16 +1,41 @@
 # ════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.5.3 🏆
-#   SPRINTS v1.5.x — K²CHJ + Ponytail Audit + Refactor
+#   STATE — neural-os-core v2.0.0 🏆
+#   SPRINT 106 — K²CHJ Ecossistema de Anéis Lógicos
 #   180+ arquivos Rust, ~26.000 LOC, 0 erros
-#   v1.5.3: Ponytail audit corrections concluídas
+#   v2.0.0: Sprint 106 concluída (10/10 sub-sprints)
 # ════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Roadmap v1.5.x:** K²CHJ workspace migration gradual + ponytail cleanup.
-**Última versão:** v1.5.3 (2026-07-13) — **Ponytail audit concluído**.
+**Roadmap v2.0 "Cognição":** Ecossistema de anéis lógicos (k_nano, k_ai, cortex, hermes, jarbas) operacional.
+**Última versão:** v2.0.0 (2026-07-14) — **Sprint 106 concluída**.
+**Próximo:** Sprint 107 — Voice I/O Pipeline (TTS→STT→LLM→TTS).
+
+**Nota ops (2026-07-14):** Builds isolados padronizados sob `target/` (`target/agent-*`, `target/check-*`, `target/s106`). Leftover legado `target-s106/` ainda na raiz — **em uso** por processos `cargo` (rename negado); mover para `target/s106` quando idle.
+
+### Boot endurecido + Capability Rings (2026-07-14)
+| Pacote | Conteúdo | Status |
+|--------|----------|--------|
+| **A** | STI+PIC, stack heap ≥2MB, `init_phase` RR, `BOOT_PHASE`+consumer, DiagnosticSkill, logs/docs heap | ✅ |
+| **B** | `init_platform_sync` antes dos drivers; Platform/NetDriver idempotente; Agency SpecialistAgent → EventDriven | ✅ |
+| **MVP C** | ADR-0041: 2 AS + CR3 switch + SPSC shared + `Cap` + `int 0x90` + demo boot non-fatal | ✅ PoC Ring0↔Ring0 |
+
+### K²CHJ Capability Rings — prioridades (ADR-0041)
+| Pri | Item | Status |
+|-----|------|--------|
+| **P0** | Gap analysis documentado | ✅ ADR-0041 |
+| **P1** | ADR alvo + non-goals | ✅ |
+| **P2** | **MVP C:** 2 AS + CR3 + SPSC + Cap + `int 0x90` + demo non-fatal | ✅ PoC |
+| **P3** | Hermes WASM host-functions por Cap | ⏳ próximo |
+| **P4** | JARBAS FB MMIO + double-buffer | ⏳ |
+| **P5** | K-IA DMA pin + Cortex mmap pesos | ⏳ |
+
+**Arquivos MVP C:** `address_space.rs`, `syscall.rs`, `ipc/{mod,ring_buffer}.rs` + hooks `main.rs` / IDT `0x90`.
+
+**Riscos residuais:** Ring3 user-mode (`iretq`) TODO; Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
 
 ## Marcos Acumulados
-- **🏆 v1.5.3 (2026-07-13):** 0 erros. 6 dead files movidos de K²CHJ crates para LEGACY/v1.5-dead-k2chj/. PICS removido de k_nano. Dead stubs removidos. hermes FS synced com RingBufStore. **Ponytail audit 100% implementado.**
+- **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**
+- **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
 - **🏆 v1.5.1 (2026-07-13):** 0 erros. ~600 LOC removidos, 11 dep entries eliminados. 6 dead files movidos do neural-kernel para K²CHJ crates. pic8259 eliminado. #[cfg(not(x86_64))] branches removidos. Architecture trait removido.
 - **🏆 v1.5.0 (2026-07-13):** 0 erros. K²CHJ workspace migration: monólito → 5 crates (k_nano, cortex, k_ia, hermes, jarvis). Dep chain linear. k_nano compila independentemente. migrate_k2chj.py (193 files, 79 refs).
@@ -102,7 +127,7 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 
 ## Aprendizados Chave
 1. **Roadmap readequado 2026-07-04:** Reorganização completa por dependências. Itens independentes primeiro (Foundation → Agentic → LLM → JARVIS → GPU). B-01 e dependentes no final.
-2. **Activation on Demand:** Só Hermes/Display/HwBridge usam Continuous. O resto dorme até ter trabalho.
+2. **Activation on Demand:** Hermes/Display/HwBridge (+ nativos Net/Input/Cortex…) Continuous; Agency SpecialistAgent → EventDriven (Pacote B).
 3. **VGA CRTC + UEFI GOP = incompatível** (Sprint 71)
 4. **Cortex acorda antes do HW** — LLM deve participar das decisões de hardware
 5. **FAT12 removido** — FAT32-only, 102 LOC eliminados
@@ -155,7 +180,8 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - QEMU UEFI boot (OVMF + TCG) — kernel init até runtime/scheduler ✅
 - Bootloader v0.11: BIOS image não funciona (triple fault), UEFI funciona ✅
 - Ponytail Audit: -19 arquivos, -500 LOC, -3 deps, -32 transitive crates ✅
-- #PF no scheduler resolvido via heap stack switch ✅
+- #PF no scheduler resolvido via heap stack switch (Pacote A: stack ≥2MB via Vec heap) ✅
+- **Pacote B (boot):** `init_platform_sync` (PCI+ACPI+APIC+SMP) antes dos drivers; PlatformAgent/NetDriverAgent idempotentes; Agency SpecialistAgent Continuous→EventDriven ✅
 - **🔴 Conhecido**: WHPX crasha com SMP ("Unexpected VP exit code 4") — usar TCG.
 - VirtualBox boot test — manual
 
@@ -165,10 +191,20 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - Ponytail audit (600 LOC, 11 deps) ✅
 - RingBufStore refactor + LEGACY snapshot ✅
 
-### ⏳ Sprint 106+ — v2.0 Cognição Plena
-- LLM Agent 24/7 multi-turn conversation ⏳
+### ✅ Sprint 106 — v2.0 Ecossistema de Anéis Lógicos (10/10)
+- Cargo workspace estrito (k_nano, k_ai, cortex, hermes, jarbas) ✅
+- Rename k_ia→k_ai, jarvis→jarbas ✅
+- SOUL.md parser via VFS (4 arquivos jarbas corrigidos) ✅
+- Trinity MoE router (classifica intents, não roteia hardware) ✅
+- MicroPython/WASM sandbox + WASI→Skill bridge (20+ mapeamentos) ✅
+- Page faults fix (allocator → events → agents) ✅
+- AIOS API (aios_net, aios_fs) + SkillOpt (Python→Rust no_std) ✅
+- Heap address HW real (`0x4000_0000_0000`) ✅
+
+### ⏳ Sprint 107+ — v2.0 Cognição Plena
 - Voice I/O pipeline (TTS→STT→LLM→TTS) ⏳
 - Self-evolving agents (auto-skill generation) ⏳
+- LLM Agent 24/7 multi-turn conversation ⏳
 - DHCP/Rede nativa (e1000 sem serial tunnel) 🔴
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
@@ -195,18 +231,19 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ```
 📁 docs/                         → Toda a documentação
-├── 📄 sprint-plan-84-95.md      → PLANO: 9 sprints com todos os items do IDEA_BANK
-├── 📄 TODO.md                   → CHECKLIST: sub-itens, goals, dificuldades por sprint
-├── 📄 roadmap.md                → VISÃO GERAL: blocos completos e futuros
-├── 📄 integration-adrs-idea-bank-sprints-todo.md  → RASTREABILIDADE ADR×IDEA×SPRINT
-├── 📁 architecture/             → ADRs: decisões arquiteturais (38 documentos)
-│   └── 📄 0037-smp-gpu-architecture.md  → ADR mais recente: SMP+GPU multi-vendor
+├── 📄 SPRINT-106.md             → Detalhes Sprint 106 (10 sub-sprints)
+├── 📄 SPRINT-106-STATUS.md      → Status consolidado v2.0
+├── 📄 sprint-plan-92-100.md     → Plano v1.0 Gold Master
+├── 📁 architecture/             → ADRs: decisões arquiteturais (40 documentos)
+│   └── 📄 0039-boot-flow.md     → Boot sequence agent-centric
 ├── 📁 memory/                   → Estado, ideias, sessões
 │   ├── 📄 STATE.md              → ⭐ COMEÇE AQUI: estado atual do kernel
-│   ├── 📄 IDEA_BANK.md          → 354 ideias catalogadas
-│   ├── 📄 SESSION_INDEX.md      → Índice de 42 sessões + lições críticas
-│   └── 📄 SESSION_NNN.md       → Sessões individuais com debug e descobertas
-└── 📁 research/                 → Pesquisas de ecossistema
+│   ├── 📄 IDEA_BANK.md          → 416+ ideias catalogadas
+│   ├── 📄 SESSION_INDEX.md      → Índice de sessões + lições críticas
+│   └── 📄 SESSION_NNN.md        → Sessões individuais com debug e descobertas
 📄 AGENTS.md                     → ⭐ POLÍTICAS: regras de engenharia, premissas
-📄 crates/neural-kernel/         → CÓDIGO FONTE (kernel bare-metal)
+📄 ROADMAP.md                    → Roadmap v1.0 → v2.0
+📄 TODO.md                       → Checklist mestre
+📄 crates/k_nano/ … jarbas/      → 5 crates K²CHJ (v2.0)
+📄 crates/neural-kernel/         → Bin de integração
 ```

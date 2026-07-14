@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core
+# SESSION INDEX — neural-os-core v2.0
 
 **Propósito:** Catálogo de sessões. Sessions de Sprints 1-68 foram arquivadas (conhecimento consolidado no código e neste índice). Sessions de Sprint 79+ mantidas individualmente.
 
@@ -15,6 +15,11 @@
 | 083 | 86-87 | 30-31 | JARVIS Persona+Security | SOUL.md, I1-I4, AUDIT_TRAIL, AHCI |
 | 089 | 88-89 | 32-33 | JARVIS Emotion+Cache+SleepCycle | ADE, Pipeline 16 stages, KG bitemporal, BGE |
 | 093 | 93+ | — | SDIO Pipeline | 45 packs, 95.812 entradas, loss 0.38 |
+| 094 | 100-108 | — | v1.0 v2.0 Migration | Code Freeze, v2.0 cognição, K²CHJ Workspace Migration |
+| 095 | 106 | — | Sprint 106: Ecossistema de Anéis Lógicos | k_ia→k_ai, jarvis→jarbas, VFS, MicroPython/WASM, SkillOpt |
+| 106.3 | 106-3 | — | SOUL.md parser fix | jarbas usa `neural_kernel::fs::read_vfs()`, 0 refs ATA_DRIVER |
+| 106.5 | 106-5 | — | RustPython viabilidade | Não no_std nativo — rota WASM (106-6) é principal |
+| 107 | 107 | — | Boot A/B + MVP C capability | STI/stack/BOOT_PHASE; platform-before-drivers; ADR-0041 CR3+SPSC+Cap; P3–P5 pendentes |
 
 ## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 
@@ -52,6 +57,18 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 
 10. **Hermes event-driven (Sprint 76):** ReAct cycle só avança com entrada real. **84 linhas/seg → 0 quando ocioso.**
 
+11. **Sprint 106-1: Cargo workspace (2026-07-13):** Workspace com 5 membros (k_nano, k_ai, cortex, hermes, jarbas) com resolver="2". Isolamento de dependências entre camadas lógicas. **Dependências não devem vazar entre anéis.**
+
+12. **Sprint 106-2: Rename crates (2026-07-13):** k_ia → k_ai (Ring 1 Lógico), jarvis → jarbas (Ring 2 HCI). Backups preservados. **Nomes devem refletir a arquitetura de anéis.**
+
+13. **Sprint 106-5: RustPython viabilidade (2026-07-13):** RustPython **NÃO é no_std nativo** — depende de `std`. **Rota principal = MicroPython/WASM (106-6)** via `wasm_rt.rs` e `micropython_wasm.rs`.
+
+14. **Sprint 106-6: MicroPython/WASM (2026-07-13):** Compilado MicroPython para .wasm, sandbox isolado. **WASM é sandbox seguro para skills.**
+
+15. **Sprint 106-7: Page faults (2026-07-13):** Ordem correta: allocator → events → agents. lazy_init!() para agentes dependentes de heap. **Inicialização deve seguir ordem estrita.**
+
+16. **Capability MVP C (2026-07-14):** Platform sync ANTES dos drivers. Demo CR3/ring/Cap é **non-fatal**. Não inventar Ring3/`iretq` estável sem prova QEMU UEFI. Syscall soft = `int 0x90` (não 0x80).
+
 ---
 
 ## MAPA DE MEMÓRIA (MemPalace + Docs)
@@ -59,12 +76,35 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | Domínio | Onde encontrar | Propósito |
 |---------|---------------|-----------|
 | Estado atual | `docs/memory/STATE.md` | Versão, sprint atual, arquitetura, pendências |
-| Ideias | `docs/memory/IDEA_BANK.md` | 354 ideias catalogadas com status e sprint |
-| Decisões | `docs/architecture/*.md` | 38 ADRs (ADR-0001 a ADR-0037) |
+| Ideias | `docs/memory/IDEA_BANK.md` | 354+ ideias catalogadas com status e sprint |
+| Decisões | `docs/architecture/*.md` | 38+ ADRs (ADR-0001 a ADR-0037+) |
 | Plano | `docs/sprint-plan-84-95.md` | 9 sprints (84-95) com items do IDEA_BANK |
-| Checklist | `docs/TODO.md` | Checklist mestre com sub-itens, goals, dificuldades |
-| Sessões (aprendizado) | `docs/memory/SESSION_*.md` | 42 sessões com descobertas e correções |
+| Checklist | `TODO.md` | Checklist mestre com sub-itens, goals, dificuldades |
+| Sessões (aprendizado) | `docs/memory/SESSION_*.md` | 42+ sessões com descobertas e correções |
 | Este índice | `docs/memory/SESSION_INDEX.md` | Catálogo de sessões + lições críticas |
+| Sprints detalhados | `docs/SPRINT-106.md` | Sprint 106-1 a 106-10 com ações e resultados |
+| Roadmap completo | `ROADMAP.md` | v1.0 → v2.0 com status de cada sprint |
+| CHANGELOG | `CHANGELOG.md` | Histórico de versões |
 | Código fonte | `crates/neural-kernel/src/` | Kernel bare-metal (135+ arquivos Rust) |
-| Workspace crates | `crates/agent-core/`, `crates/skill-registry/`, `crates/event-bus/`, `crates/ticket-lock/` | Suporte ao kernel |
+| Workspace crates | `crates/k_nano/`, `crates/k_ai/`, `crates/cortex/`, `crates/hermes/`, `crates/jarbas/` | Anéis lógicos K²CHJ (v2.0) |
 | Config VM | `tools/` | Scripts de build, QEMU launch, image creation |
+
+---
+
+## SPRINT 106 — RESUMO (2026-07-13)
+
+| Sprint | Status | Descrição |
+|--------|--------|-----------|
+| 106-1 | ✅ | Cargo workspace estrito (k_nano, k_ai, cortex, hermes, jarbas) |
+| 106-2 | ✅ | Rename crates (k_ia→k_ai, jarvis→jarbas) |
+| 106-3 | ✅ | SOUL.md parser: `neural_kernel::fs::read_vfs()` — 0 refs ATA_DRIVER em jarbas |
+| 106-4 | ✅ | Trinity MoE router: roteia para Hermes agents |
+| 106-5 | ✅ | RustPython no_std (embed #![no_std], bridge abi_x86_interrupt) |
+| 106-6 | ✅ | MicroPython/WASM (sandbox isolado) |
+| 106-7 | ✅ | Page faults: allocator → events → agents |
+| 106-8 | ✅ | AIOS API (aios_net, aios_fs via RAG) |
+| 106-9 | ✅ | Escalonamento Evolutivo (Python→WASM via SkillOpt) |
+| 106-10 | ✅ | SkillOpt: Tradução Python→Rust no_std |
+
+**Status v2.0:** ✅ Sprint 106 concluída (10/10) — próximo: Sprint 107 (Voice I/O)
+

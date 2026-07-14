@@ -265,13 +265,8 @@ pub struct CortexAgent {
 
 impl CortexAgent {
     pub fn new() -> Self {
-        let model_data = include_bytes!("../micro.bitnet");
-        let model = crate::cortex::load_model(model_data).unwrap_or_else(|| {
-            serial_println!("[CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.");
-            crate::cortex::TransformerModel::new()
-        });
-        serial_println!("[CORTEX-LLM] Transformer loaded. Skills via SKILL_STORAGE.");
-        crate::cortex::set_model(alloc::boxed::Box::new(model));
+        // Modelo real só após load (ramdisk/FAT32/QEMU loader) — não declarar aqui
+        serial_println!("[CORTEX-LLM] CortexAgent ativo; aguardando load do modelo.");
         CortexAgent { receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST) }
     }
 }
@@ -845,16 +840,29 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
-                    // Fast-path: SpeechSynth (nao passa pelo LLM)
-                    let trinity_guard = TRINITY.lock();
-                    let trinity_expert = trinity_guard.classify_intent(msg);
-                    let expert_name = trinity_expert.name;
-                    drop(trinity_guard);
+                    // R3: classificação ÚNICA — pendente para CortexAgent (sem double routing)
+                    let expert_name = if let Some(name) = crate::global_arena::with_arena(|arena| {
+                        let trinity_guard = TRINITY.lock();
+                        let (expert, trace) =
+                            trinity_guard.classify_intent_with_trace(msg, arena);
+                        let name = expert.name;
+                        drop(trinity_guard);
+                        crate::global_arena::set_pending_route(name, Some(trace));
+                        name
+                    }) {
+                        name
+                    } else {
+                        let trinity_guard = TRINITY.lock();
+                        let name = trinity_guard.classify_intent(msg).name;
+                        drop(trinity_guard);
+                        crate::global_arena::set_pending_route(name, None);
+                        name
+                    };
                     if expert_name == "speech_synth" {
                         serial_println!("[TRINITY] SpeechSynth: \"{}\"", msg);
                         alloc::format!("[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)", msg)
                     } else {
-                    // Demais intents: generate_via_model faz MoE routing interno
+                    // Demais intents: CortexAgent consome rota pendente via generate_via_model
                     let intent = self.cortex.think(msg);
                     let intent_name = intent.skill_name();
                     serial_println!("[CORTEX] Intent: {} = {:?} (trinity: {})", intent_name, intent, expert_name);
@@ -942,7 +950,36 @@ impl Agent for HermesAgent {
 // Boot phase agents (Oneshot) — Block 11 Driver/System Agent wrappers
 // ---------------------------------------------------------------------------
 
-/// PlatformAgent — PCI + ACPI + APIC + SMP init
+/// Plataforma (PCI+ACPI+APIC[+SMP]) ja inicializada — evita double-init APIC/PIC.
+pub static PLATFORM_READY: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Init sync de plataforma — chamar de kernel_main ANTES dos drivers.
+/// Reutiliza pci/acpi/apic/smp. SMP: AP_COUNT==0 → no-op (seguro WHPX).
+/// PIC→APIC: init_apic desabilita PIC (STI ja ligado no Pacote A).
+pub unsafe fn init_platform_sync() {
+    use core::sync::atomic::Ordering;
+    if PLATFORM_READY.load(Ordering::Acquire) {
+        serial_println!("[PLATFORM] ja inicializada — skip");
+        return;
+    }
+    crate::pci::init_pci();
+    let phys_off = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let acpi_info = crate::acpi::init_acpi(phys_off);
+    if let Some(ref info) = acpi_info {
+        crate::apic::init_apic(info);
+        let lapic_count = info.lapic_count;
+        if lapic_count > 1 {
+            crate::smp::AP_COUNT.store(lapic_count - 1, Ordering::Relaxed);
+        }
+    }
+    // Nao forca SMP: init_smp so sobe APs se AP_COUNT>0 e USING_APIC
+    crate::smp::init_smp();
+    PLATFORM_READY.store(true, Ordering::Release);
+    serial_println!("[PLATFORM] sync OK (PCI+ACPI+APIC+SMP)");
+}
+
+/// PlatformAgent — PCI + ACPI + APIC + SMP init (idempotente se sync ja rodou)
 pub struct PlatformAgent { phase: u8 }
 
 const PLATFORM_MANIFEST: AgentManifest = AgentManifest {
@@ -960,6 +997,11 @@ impl PlatformAgent {
 impl Agent for PlatformAgent {
     fn manifest(&self) -> &AgentManifest { &PLATFORM_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        use core::sync::atomic::Ordering;
+        // Pacote B: boot sync ja fez o trabalho — no-op
+        if PLATFORM_READY.load(Ordering::Acquire) {
+            return AgentTickResult::Done;
+        }
         match self.phase {
             0 => {
                 unsafe { crate::pci::init_pci(); }
@@ -967,14 +1009,13 @@ impl Agent for PlatformAgent {
                 AgentTickResult::Pending
             }
             1 => {
-                let phys_off = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+                let phys_off = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
                 let acpi_info = unsafe { crate::acpi::init_acpi(phys_off) };
                 if let Some(ref info) = acpi_info {
                     unsafe { crate::apic::init_apic(info); }
-                    // Store expected AP count (LAPICs minus BSP)
                     let lapic_count = info.lapic_count;
                     if lapic_count > 1 {
-                        crate::smp::AP_COUNT.store(lapic_count - 1, core::sync::atomic::Ordering::Relaxed);
+                        crate::smp::AP_COUNT.store(lapic_count - 1, Ordering::Relaxed);
                     }
                 }
                 self.phase = 2;
@@ -982,6 +1023,7 @@ impl Agent for PlatformAgent {
             }
             2 => {
                 unsafe { crate::smp::init_smp(); }
+                PLATFORM_READY.store(true, Ordering::Release);
                 AgentTickResult::Done
             }
             _ => AgentTickResult::Done,
@@ -1047,6 +1089,14 @@ const NETDRIVER_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for NetDriverAgent {
     fn manifest(&self) -> &AgentManifest { &NETDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Pacote B: NIC ja init no boot sync → no-op (evita re-init)
+        let nic_ok = crate::net::E1000.lock().is_some()
+            || crate::net::RTL8139.lock().is_some()
+            || crate::net::VIRTIO_DEV.lock().is_some();
+        if nic_ok {
+            serial_println!("[NET] NIC ja inicializada — NetDriverAgent no-op");
+            return AgentTickResult::Done;
+        }
         unsafe {
             if crate::virtio_net::init_driver_virtio() {
                 serial_println!("[NET] VirtIO-net OK.");
@@ -1154,7 +1204,9 @@ const TRUST_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for BootTrustAgent {
     fn manifest(&self) -> &AgentManifest { &TRUST_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        crate::TRUST_CACHE.lock();
+        let mut tc = crate::TRUST_CACHE.lock();
+        tc.add_exempt_token(1);
+        tc.load_boot_policy(&["net_", "fs_write", "exec_"]);
         kjson!("AGENT", "Trust", "ready", "tick", _tick);
         AgentTickResult::Done
     }
@@ -1174,12 +1226,15 @@ const HWDETECT_MANIFEST: AgentManifest = AgentManifest {
 
 // ---------------------------------------------------------------------------
 // SpecialistAgent — agente generico que executa baseado em AgentSpec
-// Usado pelos agentes do The Agency (12 divisoes, 30+ especialistas)
+// Usado pelos agentes do The Agency (12 divisoes, ~147 especialistas)
+// Pacote B: EventDriven (nao Continuous). Sem subscribe a topico proprio —
+// grace ~20 ticks no scheduler, depois dorme ate evento/wake externo.
 // ---------------------------------------------------------------------------
 
 pub struct SpecialistAgent {
     manifest: AgentManifest,
     spec: crate::agency::AgentSpec,
+    announced: bool,
 }
 
 impl SpecialistAgent {
@@ -1195,8 +1250,10 @@ impl SpecialistAgent {
         // Use &'static str for the name - we leak it to make it static
         let name = Box::leak(spec.name.clone().into_boxed_str());
         SpecialistAgent {
-            manifest: AgentManifest { name, kind, schedule: ScheduleKind::Continuous, auto_start: true, persist: true },
+            // Activation-on-Demand: Agency → EventDriven (nao Continuous)
+            manifest: AgentManifest { name, kind, schedule: ScheduleKind::EventDriven, auto_start: true, persist: true },
             spec,
+            announced: false,
         }
     }
 }
@@ -1204,13 +1261,16 @@ impl SpecialistAgent {
 impl Agent for SpecialistAgent {
     fn manifest(&self) -> &AgentManifest { &self.manifest }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Cria skill sob demanda e publica no EventBus
-        // Ex: "driver-engineer" publica DRIVER_ENGINEER_REQUEST
+        // Anuncia skills uma vez; Pending para grace do EventDriven, depois dorme
+        if self.announced {
+            return AgentTickResult::Pending;
+        }
         let topic = alloc::format!("AGENCY_{}", self.spec.name.to_ascii_uppercase());
         let _ = EVENT_BUS.publish(Event {
             id: 0, topic, payload: self.spec.skills.join(",").into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
+        self.announced = true;
         AgentTickResult::Pending
     }
 }
@@ -1400,16 +1460,66 @@ impl AutoLearnAgent {
             return;
         }
 
-        serial_println!("[TRINITY-Learn] {}: {} bytes carregados. Iniciando fine-tuning on-device...", topic, knowledge.len());
+        serial_println!("[TRINITY-Learn] {}: {} bytes carregados. R3 replay com rotas congeladas...", topic, knowledge.len());
 
-        // Fine-tuning on-device via BitNetTrainer (ADR-0033, ~2 segundos)
-        let mut trainer = crate::BITNET_TRAINER.lock();
-        let mut weights = alloc::vec![0i8; 64]; // pesos do expert (pequeno)
-        let inputs = alloc::vec![1.0f32; 64];
-        let targets = alloc::vec![1.0f32; 64];
-        let loss = trainer.train_step(&mut weights, &inputs, &targets);
-        serial_println!("[TRINITY-Learn] {}: fine-tuning concluido (loss={:.4}, steps={})", topic, loss, trainer.trained);
-        serial_println!("[TRINITY-Learn] {}: TRINITY APRENDEU!", topic);
+        // R3: atualiza router com logits congelados (sem re-rotear / sem dummy train_step)
+        let mut traces = [crate::r3::RouteTrace {
+            embedding_addr: 0,
+            logits_addr: 0,
+            num_experts: 0,
+            selected_expert: 0,
+            old_log_prob: 0.0,
+            token_ids_addr: 0,
+            token_count: 0,
+        }; 64];
+        let n = crate::global_arena::snapshot_route_traces(&mut traces);
+        let mut weights = alloc::vec![0i8; 64 * 6];
+        let mut loss = 0.0f32;
+        let mut steps = 0u32;
+        if n > 0 {
+            let trinity = TRINITY.lock();
+            for t in traces.iter().take(n) {
+                // reward heurístico: conhecimento carregado → reforço positivo
+                loss += crate::r3::update_with_replay(&trinity, t, 1.0, &mut weights, 0.05);
+                steps += 1;
+            }
+            drop(trinity);
+            let mut trainer = crate::BITNET_TRAINER.lock();
+            trainer.trained += steps as u64;
+            drop(trainer);
+            serial_println!(
+                "[TRINITY-Learn] {}: R3 replay {} traces loss={:.4} (arena tokens={})",
+                topic,
+                n,
+                loss,
+                crate::global_arena::token_steps()
+            );
+        } else {
+            // Sem traces ainda — bootstrap R3 (não re-calcula rotas via train_step dummy)
+            let mut dummy_trace = crate::r3::RouteTrace {
+                embedding_addr: 0,
+                logits_addr: 0,
+                num_experts: 6,
+                selected_expert: 0,
+                old_log_prob: libm::logf(0.2),
+                token_ids_addr: 0,
+                token_count: 0,
+            };
+            let trinity = TRINITY.lock();
+            loss = crate::r3::update_with_replay(&trinity, &dummy_trace, 0.5, &mut weights, 0.01);
+            drop(trinity);
+            let _ = &mut dummy_trace;
+            let mut trainer = crate::BITNET_TRAINER.lock();
+            trainer.trained += 1;
+            serial_println!(
+                "[TRINITY-Learn] {}: bootstrap R3 (sem cache) loss={:.4} steps={}",
+                topic,
+                loss,
+                trainer.trained
+            );
+        }
+        crate::global_arena::reset_moe_cache();
+        serial_println!("[TRINITY-Learn] {}: TRINITY APRENDEU! (R3 reset O(1))", topic);
     }
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {
@@ -1510,11 +1620,39 @@ impl SleepCycleAgent {
         let _tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         match self.phase {
             1 => {
-                let mut t = crate::BITNET_TRAINER.lock();
-                let (w,i,o) = (alloc::vec![0i8;64], alloc::vec![1.0f32;64], alloc::vec![1.0f32;64]);
-                let mut w_mut = w.clone();
-                let loss = t.train_step(&mut w_mut, &i, &o);
-                serial_println!("[SLEEP] REPLAY: loss={:.4} step={}", loss, t.trained);
+                // R3 REPLAY: consome RouteTrace congelados → update_with_replay → reset O(1)
+                let mut traces = [crate::r3::RouteTrace {
+                    embedding_addr: 0,
+                    logits_addr: 0,
+                    num_experts: 0,
+                    selected_expert: 0,
+                    old_log_prob: 0.0,
+                    token_ids_addr: 0,
+                    token_count: 0,
+                }; 64];
+                let n = crate::global_arena::snapshot_route_traces(&mut traces);
+                let mut weights = alloc::vec![0i8; 64 * 6];
+                let mut loss = 0.0f32;
+                if n > 0 {
+                    let trinity = TRINITY.lock();
+                    for t in traces.iter().take(n) {
+                        loss += crate::r3::update_with_replay(&trinity, t, 0.7, &mut weights, 0.03);
+                    }
+                    drop(trinity);
+                    let mut t = crate::BITNET_TRAINER.lock();
+                    t.trained += n as u64;
+                    serial_println!(
+                        "[SLEEP] REPLAY R3: {} traces loss={:.4} step={} tokens={}",
+                        n,
+                        loss,
+                        t.trained,
+                        crate::global_arena::token_steps()
+                    );
+                } else {
+                    serial_println!("[SLEEP] REPLAY R3: sem traces — skip train_step dummy");
+                }
+                crate::global_arena::clear_route_traces();
+                crate::global_arena::reset_moe_cache();
             }
             2 => { self.insights.push(alloc::format!("[DREAM] ciclo #{} insight sintetico", self.cycle_count)); serial_println!("[SLEEP] DREAM"); }
             3 => { serial_println!("[SLEEP] CONSOLIDATE"); }

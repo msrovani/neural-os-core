@@ -1,5 +1,24 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
+## [Unreleased] — 2026-07-14 — Boot A/B + MVP C Capability Rings
+
+### Pacote A — Boot endurecido
+- STI/PIC, stack heap ≥2MB, `init_phase` round-robin, `BOOT_PHASE` + consumer, DiagnosticSkill, logs/docs de heap
+
+### Pacote B — Ordem de bring-up
+- `init_platform_sync` (PCI+ACPI+APIC+SMP) **antes** dos probes de driver
+- PlatformAgent / NetDriverAgent idempotentes se sync já rodou
+- Agency SpecialistAgent: Continuous → EventDriven
+
+### MVP C — ADR-0041 Capability Rings (PoC)
+- `AddressSpace` + CR3 switch A→B→kernel (IRQ mascaradas na janela)
+- `SharedSpscRing` em página compartilhada; Cap bitflags + trap `int 0x90`
+- Demo pós-DriverInit non-fatal (WARN + boot continua)
+- Arquivos: `address_space.rs`, `syscall.rs`, `ipc/*`
+
+### Docs
+- ADR-0041, STATE/IDEA_BANK/SESSION_107, TECNOLOGIAS 2.10
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

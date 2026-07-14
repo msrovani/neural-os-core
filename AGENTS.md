@@ -1,5 +1,5 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v1.5.0 🏆
+#   PLANO DIRETOR — neural-os-core v2.0 "K²CHJ Core" 🏆
 #   ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
@@ -8,6 +8,8 @@
 #   v1.1.x: GPU Compute + WiFi + Visual 3-camadas + SelfHealing
 #   v1.2.0: ATA PIO Bug Fix — disco finalmente lê corretamente
 #   v1.5.0 (Jul 2026): K²CHJ Workspace Migration — monólito → 5 crates
+#   v2.0.0 (Jul 2026): Ecossistema de Anéis Lógicos — k_nano, k_ai, cortex, hermes, jarbas
+#   v2.0.0 (Jul 2026): Sprint 106 concluída — K²CHJ anéis lógicos + MicroPython/WASM ✅
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -19,12 +21,15 @@
 # docs/memory/IDEA_BANK.md     → 416+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
 # CHANGELOG.md                 → Histórico de versões
-# crates/neural-kernel/src/    → Código fonte do kernel (crate bin — monólito compilável)
-# crates/k_nano/src/           → Foundation crate (HAL, drivers, PCI, memory)
-# crates/cortex/src/           → Intelligence crate (LLM, BitNet, BPE, MoE)
-# crates/hermes/src/           → Orchestration crate (intent, agents, net)
-# crates/k_ia/src/             → Autonomy crate (self-heal, trust, security)
-# crates/jarvis/src/           → Interaction crate (display, audio, CLI)
+# ROADMAP.md                   → Roadmap completo (v1.0 → v2.0)
+# TODO.md                      → Checklist mestre de tarefas
+# crates/k_nano/src/           → Ring 0 Estrito (HAL, drivers, PCI, memory)
+# crates/k_ai/src/             → Ring 1 (SelfHeal, Trust, Audit, Agency, Cognitive)
+#                              → safety/security/optimizer/Sleep/AutoLearn: hermes
+#                              → boot bin ainda usa cópias em neural-kernel (migração gradual)
+# crates/cortex/src/           → Cognição e MoE (Trinity, BitNet, BPE)
+# crates/hermes/src/           → Executor (WASM, RustPython, Rede, Intent)
+# crates/jarbas/src/           → HCI, UI e Persona (Display, Audio, CLI)
 # tools/                       → Scripts Python (treino, extração SDIO, bridge)
 # ════════════════════════════════════════════════════════
 
@@ -43,7 +48,7 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 - **Unificação Ontológica:** Tudo é Agent. Drivers → DriverAgent, Daemons → InferenceAgent/RouterAgent.
 - **Manifesto Explícito:** Nome, tipo, schedule, trust tokens — nada implícito.
 - **Boot = 8 fases event-driven** (SafeHarbor → MemoryCore → SystemBringup → Diagnostics → HardwareDiscovery → DriverInit → AgentFleet → Runtime). Cada fase publica BOOT_PHASE no EventBus.
-- **Activation on Demand:** Apenas Hermes, Display, HwBridge usam Continuous. O resto dorme até ter evento. Continuous não-essencial >5% ticks por 1000 ticks → rebaixado para EventDriven.
+- **Activation on Demand:** Apenas Hermes, Display, HwBridge usam Continuous (nativos Net/Input/Cortex/Cron/Security/Safety/Optimizer/Wifi também Continuous). Agency SpecialistAgent (~147) → EventDriven. Continuous não-essencial >5% ticks por 1000 ticks → rebaixado para EventDriven.
 - **Trust por Agente:** (token, agent, skill) — não só (token, skill).
 
 # Agentes Nativos (A-001 a A-025)
@@ -80,12 +85,11 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 cargo build --release → python tools/build_image.py --bios → qemu
   └─ bootloader 0.11 → kernel_main
   ├── Init: serial, framebuffer, IDT, memory, heap, SIMD
-  ├── Phase 0-3: Agents de boot (Platform, Memory, SelfHeal, Trust)
-  ├── Phase 4: HardwareDiscovery — PCI scan, ACPI, SMP, GPU detect
-  │              └─ HwDetectAgent.AI → HWExpert identifica cada device
-  │              └─ generate_register_map() → registradores para WiFi
-  ├── Phase 5: DriverInit — RTL8139, xHCI, ATA, NVMe, AHCI, WiFi
-  ├── Phase 6: AgentFleet — The Agency (147) + HW agents (6) + FS (6)
+  ├── Phase 0-3: SafeHarbor→MemoryCore→SystemBringup→Diagnostics
+  ├── Phase 4: HardwareDiscovery — init_platform_sync (PCI+ACPI+APIC+SMP) sync ANTES dos drivers
+  ├── Phase 5: DriverInit — RTL8139/E1000, xHCI, ATA, NVMe, AHCI, GPU (apos plataforma)
+  │              PlatformAgent/NetDriverAgent no registry: idempotentes se sync ja rodou
+  ├── Phase 6: AgentFleet — The Agency (147 EventDriven) + HW agents (6) + FS (6)
   └── Phase 7: Runtime — HermesAgent + Trinity MoE + Cortex LLM + Display
        Agentes: Cortex, Hermes, Display, Net, Input, Cron, Security,
                 Safety, Optimizer, SleepCycle, AutoLearn, Wifi, HDA
@@ -95,6 +99,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **Zero Hallucination:** State explicitly if you don't know HW interaction. Don't invent no_std crates.
 - **cargo check --release:** 0 errors obrigatório. Dead-code warnings são esperados (política Known Warnings).
 - **⚠️ Build incremental mascara erros:** `cargo clean -p neural-kernel` antes de `cargo check --release` revela erros que o cache incremental esconde. Sempre rodar `cargo clean -p neural-kernel` quando erros somem misteriosamente ou após mudanças estruturais (PCI, ATA, imports).
+- **Cargo target dirs isolados:** builds paralelos de agentes/checks usam caminhos sob `target/`, nunca `target-*` na raiz. Exemplos: `--target-dir target/agent-<nome>`, `target/check-<nome>`, `target/s106`. Equivalente: `$env:CARGO_TARGET_DIR="target/agent-<nome>"`. `target/` já está no `.gitignore`; leftovers legados `target-*/` na raiz também.
 - **Boot sequence:** bootloader 0.11.15 para UEFI/BIOS handoff.
 - **Busca Ativa:** Se bloqueado (🔴), busque na internet PRIMEIRO — Context7, GitHub, crates.io, arXiv. Nada de ficar bloqueado.
 - **Pós-Tarefa:** Aprenda → Memorize (AGENTS.md + IDEA_BANK.md) → Documente (README, CHANGELOG, STATE, SESSION) → Versione (cargo check) → Git commit + tag.
@@ -110,8 +115,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 # K²CHJ Workspace Structure (v1.5.0+)
 # ═══════════════════════════════════════════════════════════════
 # Monolith → 5 crates (gradual migration):
-#   k_nano  ← cortex ← k_ia ← hermes ← jarvis   (dep chain, no cycles)
-#   neural-kernel (bin) = integration hub with all globals
+#   k_nano  ← cortex ← k_ai ← hermes ← jarbas   (dep chain, no cycles)
+#   neural-kernel (bin) = integration hub with all globals (ainda monolítico)
 # ═══════════════════════════════════════════════════════════════
 # Crate       | Files | Function
 # ────────────|───────|──────────────────────────────────────
@@ -121,13 +126,13 @@ cargo build --release → python tools/build_image.py --bios → qemu
 # cortex      |  13   | Intelligence: LLM inference, BitNet, BPE, tensor ops,
 #             |       | attention, Trinity MoE, DeltaNet, TV DSL, transformer,
 #             |       | burn_flex, nn, tokenizer, medusa, reasoning
-# k_ia        |  40   | Autonomy: self-heal, trust, safety, optimizer,
-#             |       | boot agents (12x), security (5 detectores),
-#             |       | audit, sleep cycle, auto-learn, shutdown, hal
+# k_ai        |  22   | Autonomy: self-heal, trust, audit, agency, cognitive,
+#             |       | training, inventory, boot_log, hw_agents, shutdown,
+#             |       | memory — (safety/security/optimizer/Sleep/AutoLearn → hermes)
 # hermes      |  28   | Orchestration: intent routing, ReAct, skills (47),
 #             |       | agents (12 FS + 6 HW + 40 repo), event bus,
-#             |       | netstack, HTTP, DHCP, DNS, cron, wifi
-# jarvis      |  28   | Interaction: display compositor, HDA audio, framebuffer,
+#             |       | netstack, HTTP, DHCP, DNS, cron, wifi, safety, security
+# jarbas      |  28   | Interaction: display compositor, HDA audio, framebuffer,
 #             |       | Hermes CLI, wake word, visual 3-camadas, font,
 #             |       | VirtIO-GPU, shell
 # ═══════════════════════════════════════════════════════════════
@@ -151,14 +156,15 @@ cargo build --release → python tools/build_image.py --bios → qemu
 
 # Key Architectural Decisions (resumo)
 - VGA address: `0xB8000 + physical_memory_offset` (runtime)
-- Heap: `0x4444_4444_0000` (fora do range kernel/bootloader)
+- Heap: `0x_4000_0000_0000` (512MB, talc — fora do range kernel/bootloader)
 - BitNet ternário: ADD/SUB apenas, zero FPU em matmul. 2-bit packing (4 pesos/byte)
 - Trinity MoE: LLM + 6 experts + router_weight treinável
 - SDIO MoE: 95.812 entradas .inf/.sys reais + análise pefile
 - HardwareRegisterMap: gerado por IA (3 níveis: HWID→família→heurística)
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
+- **Capability MVP (ADR-0041):** Anéis lógicos K²CHJ; PoC = 2 AS + CR3 + SPSC + `Cap` + `int 0x90`. Boot: platform sync **antes** drivers. Demo capability **non-fatal**. Sem Ring3 inventado; crate `hermes/` ≠ binário até wiring explícito.
 
-# Current Sprint: Sprint 105 — v2.0 Cognição Plena
+# Current Sprint: Sprint 107 — v2.0 Voice I/O Pipeline
 
 ## Roadmap v2.0 "Cognição"
 | Sprint | Foco | Status |
@@ -167,10 +173,10 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **101** | Piper TTS + STT + HDA Capture + ATA fix | ✅ |
 | **102** | GPU Compute (NVIDIA) + HW Expert v3 + Firmware | ✅ |
 | **103–104** | K²CHJ Workspace Migration (5 crates) | ✅ |
-| **105** | **v1.5.0 Release** — Crates + Imagens + Docs | ▶️ |
-| **106** | v2.0 "Cognição" — LLM agent 24/7, multi-turn | ⏳ |
-| **107** | v2.0 — Voice I/O pipeline (TTS→STT→LLM→TTS) | ⏳ |
-| **108** | v2.0 — Self-evolving agents (auto-skill generation) | ⏳ |
+| **105** | Ponytail Audit + v1.5.1..v1.5.3 | ✅ |
+| **106** | Ecossistema de Anéis Lógicos (10/10 sub-sprints) | ✅ |
+| **107** | Voice I/O pipeline (TTS→STT→LLM→TTS) | ▶️ |
+| **108** | Self-evolving agents (auto-skill generation) | ⏳ |
 
 # QEMU Launch (WHPX + VirtIO optimizado)
 ```powershell
@@ -237,6 +243,7 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - **GPU underutilization**: modelo com hidden=32 da 5% GPU. hidden=128 com batch=4096 satura a GTX 1050
 - **Cargo fix**: `cargo fix --release --allow-dirty` resolve imports nao usados automaticamente
 - **Cargo clean**: `cargo clean -p neural-kernel` as vezes nao limpa tudo. Usar `Remove-Item -Recurse -Force target`
+- **Cargo target dirs isolados**: nunca `target-*` na raiz. Usar `target/agent-<nome>`, `target/check-<nome>`, `target/s106`. Leftover `target-s106/` na raiz fica até cargo soltar o lock.
 - **Bootloader v0.11 UEFI**: BIOS image não funciona (triple fault). UEFI (OVMF) funciona. Stack top boundary bug: #PF em `0x180000000`+offset — bootloader não mapeia páginas acima do stack top. Workaround no `init_memory` com `map_to` falha porque frame allocator retorna frames em uso. Solução futura: mapear P3/P2 entries manualmente para frames no final da RAM.
 - **Bootloader v0.11 build**: Usar crate `boot` separada com artifact dependency (`bindeps`). `BiosBoot` + `UefiBoot` via build.rs. Bios.img não funciona no QEMU TCG/WHPX, apenas UEFI.
 - **WHPX + SMP**: "Unexpected VP exit code 4" com SMP em Windows 11. Usar `-accel tcg` para desenvolvimento.

@@ -66,6 +66,8 @@ mod allocator;
 
 mod apic;
 
+mod arena;
+
 mod ata;
 
 mod block_dev;
@@ -83,6 +85,8 @@ mod agency_importer;
 mod cron;
 
 mod display;
+
+mod global_arena;
 
 mod hermes;
 
@@ -169,6 +173,8 @@ mod virtio_net;
 mod virtio_gpu;
 
 mod profile;
+
+mod r3;
 
 mod wasm;
 
@@ -265,11 +271,19 @@ mod elf_loader;
 
 mod wasm_rt;
 mod wasm_exec;
+mod micropython_wasm;
+mod aios_api;
+mod skill_opt;
+mod rustpython_no_std;
 mod burn_flex;
 
 mod cognitive;
 
 mod audio;
+
+mod address_space;
+mod syscall;
+mod ipc;
 
 
 
@@ -821,6 +835,12 @@ impl Agent for SystemAgent {
 
             let reg = SKILL_REGISTRY.lock();
 
+            // DiagnosticSkill no boot (registrada na AgentFleet)
+            match reg.execute_skill("diagnostic", &[], &event.token) {
+                Ok(out) => serial_println!("[AGENT] DiagnosticSkill OK ({} bytes)", out.len()),
+                Err(e) => serial_println!("[AGENT] DiagnosticSkill: {}", e),
+            }
+
             let out = reg.execute_skill("echo", &event.payload, &event.token);
 
             drop(reg);
@@ -958,6 +978,9 @@ const CONFIG: bootloader_api::BootloaderConfig = {
 
 // ponytail: runs scheduler on heap-allocated stack (avoids bootloader v0.11 stack boundary #PF)
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
+    // init_phase AQUI (stack ≥2MB): round-robin Oneshot + timeout — seguro com System/Monitor
+    serial_println!("[BOOT] init_phase (heap stack, round-robin)...");
+    registry.init_phase();
     registry.run(
         || { x86_64::instructions::hlt(); },
         || {
@@ -1053,7 +1076,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     kjson!("BOOT", "IDT", "ready", "vecs", 256);
 
-    
+    // SafeHarbor / MemoryCore publicados após heap (publish precisa de alloc)
 
     let mut frame_allocator = memory::BitmapFrameAllocator::empty();
 
@@ -1072,16 +1095,33 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         crate::serial_println!("[DBG3] init_memory OK");
 
         allocator::init_heap(&mut mapper, &mut frame_allocator)
-
             .expect("heap initialization failed");
 
-        crate::serial_println!("[DBG4] heap init OK");
+        crate::serial_println!("[DBG4] heap init OK (Tier 1 talc)");
+
+        match arena::init_arena_region(
+            &mut mapper,
+            &mut frame_allocator,
+            arena::CORTEX_ARENA_VIRT,
+            arena::CORTEX_ARENA_DEFAULT_SIZE,
+        ) {
+            Ok(tensor_arena) => {
+                global_arena::install_global_arena(tensor_arena);
+                crate::serial_println!("[DBG4b] cortex arena init OK (Tier 2 bump)");
+            }
+            Err(e) => {
+                crate::serial_println!("[WARN] cortex arena init failed: {}", e);
+            }
+        }
 
         crate::boot_logger::log("BOOT: Heap init OK");
 
     }
 
-
+    // Consumer BOOT_PHASE antes de qualquer publish (EventBus → serial)
+    ensure_boot_phase_consumer();
+    publish_boot_phase(BootPhase::SafeHarbor, "Serial+Display+IDT prontos");
+    publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
 
     simd::enable_simd();
 
@@ -1105,17 +1145,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 
-    publish_boot_phase(BootPhase::SystemBringup, "System bringup — SIMD+heap prontos");
+    publish_boot_phase(BootPhase::SystemBringup, "SIMD+heap+TPM — Cortex/System prontos");
 
 
 
-    // Diagnosticos como skill (nao inline) — SystemAgent executa depois
+    // Diagnosticos como skill (nao inline) — SystemAgent + chamada explicita depois
 
     // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
 
     memory::init_global_allocator(frame_allocator);
 
-    publish_boot_phase(BootPhase::Diagnostics, "Allocator global pronto");
+    publish_boot_phase(BootPhase::Diagnostics, "Allocator global pronto (DiagnosticSkill depois)");
 
     
 
@@ -1129,8 +1169,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // para que o LLM possa participar das decisoes de hardware.
 
-    publish_boot_phase(BootPhase::SystemBringup, "CortexAgent acordando (pre-HW)");
-
     let cortex_agent = agents::CortexAgent::new();
 
     // Cortex precisa de pelo menos 1 tick para carregar modelo
@@ -1139,9 +1177,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
-    publish_boot_phase(BootPhase::HardwareDiscovery, "Drivers de HW como agentes");
+    // Pacote B: plataforma (PCI+ACPI+APIC[+SMP]) ANTES dos drivers
+    publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
+    unsafe { agents::init_platform_sync(); }
 
-    
+    publish_boot_phase(BootPhase::DriverInit, "Drivers de HW (NIC/ATA/USB/GPU)");
 
     // Detecta ambiente: QEMU sandbox vs HW real
     let is_sandbox = crate::net::detect_dev_env();
@@ -1154,14 +1194,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
         serial_println!("[ENV] Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
     }
-    // Init E1000 primeiro
+    // Init E1000 primeiro (apos PCI scan)
     unsafe { crate::net::init_driver_e1000(); }
-    publish_boot_phase(BootPhase::HardwareDiscovery, "E1000 init");
+    publish_boot_phase(BootPhase::DriverInit, "E1000 init");
 
     // Fallback: RTL8139
     if crate::net::E1000.lock().is_none() {
         unsafe { crate::net::init_driver_rtl8139(); }
-        publish_boot_phase(BootPhase::HardwareDiscovery, "RTL8139 init (fallback)");
+        publish_boot_phase(BootPhase::DriverInit, "RTL8139 init (fallback)");
     }
 
     // Decisão final: se NIC real encontrada → HW real. Se não → sandbox ou offline.
@@ -1178,12 +1218,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // Apenas em sandbox: ativa serial tunnel como bypass
         if is_sandbox {
             unsafe { crate::net::init_serial_tunnel(); }
-            publish_boot_phase(BootPhase::HardwareDiscovery, "Serial tunnel (SLIP) ativo");
+            publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) ativo");
         }
     } else {
         // Sandbox sem NIC: serial tunnel
         unsafe { crate::net::init_serial_tunnel(); }
-        publish_boot_phase(BootPhase::HardwareDiscovery, "Serial tunnel (SLIP) ativo");
+        publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) ativo");
     }
 
     serial_println!("[ENV] Sistema: {} | Rede: {}", crate::env::name(),
@@ -1203,7 +1243,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     };
 
-    publish_boot_phase(BootPhase::HardwareDiscovery, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
+    publish_boot_phase(BootPhase::DriverInit, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
     // AHCI probe (SATA 6G NCQ) — zero alocação via callback
     {
@@ -1254,7 +1294,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let _usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
 
-    publish_boot_phase(BootPhase::HardwareDiscovery, "xHCI+USB probe done");
+    publish_boot_phase(BootPhase::DriverInit, "xHCI+USB probe done");
 
 
 
@@ -1390,6 +1430,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
+    crate::micropython_wasm::try_init_at_boot();
+    crate::serial_println!("{}", crate::rustpython_no_std::viability_report());
+    crate::serial_println!("{}", crate::skill_opt::status());
 
     kjson!("BOOT", "WASM", "runtime", "skills", 2);
     kjson!("BOOT", "DECODE", "structured", "ready", 1);
@@ -1558,6 +1601,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 
+    publish_boot_phase(BootPhase::DriverInit, "NIC/ATA/AHCI/xHCI/GPU probes concluidos");
+
+    // MVP C (ADR-0041): CR3 switch + ring shared + Cap — non-fatal
+    match crate::ipc::demo_two_spaces() {
+        Ok(()) => {
+            serial_println!("[MVP-C] demo OK — capability rings PoC");
+            crate::boot_logger::log("BOOT: MVP-C CR3+ring+cap OK");
+        }
+        Err(e) => {
+            serial_println!("[MVP-C] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: MVP-C WARN (non-fatal)");
+        }
+    }
+
     // Skill Observer: registra observação inicial
 
     crate::skill_observer::watch_task("boot", &["PCI scan", "GPU init", "Agent registry"], 0);
@@ -1566,6 +1623,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let mut registry = agent_core::AgentRegistry::new();
 
+    // BootLogAgent cedo: consome BOOT_PHASE via EventBus
+    registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
+
+    // PlatformAgent: idempotente se init_platform_sync ja rodou
     registry.register(Box::new(agents::PlatformAgent::new()));
 
     registry.register(Box::new(agents::MemoryAgent::new()));
@@ -1610,9 +1671,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     klogc!("BOOT", "AGENTS", "registered", "{} agents", registry.agents.len());
 
-    // ponytail: skip init_phase to work around bootloader v0.11 UEFI stack boundary bug
-    // registry.init_phase();
-
+    // init_phase NÃO aqui (stack do bootloader): roda em raw_sched_run após switch ≥2MB.
+    // Redesign round-robin+timeout em agent-core: hang impossível mesmo com SystemAgent.
 
 
     // CortexAgent ja foi criado antes do HW discovery — registrar primeiro
@@ -1733,19 +1793,25 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("[BOOT] Registering WifiAgent...");
 
-    registry.register(Box::new(boot_log_agent::BootLogAgent::new()));
+    // BootLogAgent ja registrado no inicio do registry (BOOT_PHASE consumer)
 
     registry.register(Box::new(agents::log_analyst_agent::LogAnalystAgent::new()));
 
     
 
-    // DiagnosticSkill registrada para SystemAgent executar
-
-    // (substitui os testes inline Box/Vec/Tensor/SiLU)
+    // DiagnosticSkill — SystemAgent no SYSTEM_READY + execucao explicita no boot
 
     let diag_skill = agents::DiagnosticSkill::new();
 
     SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(diag_skill));
+
+    {
+        let tok = crate::CapabilityToken::Legacy(1);
+        match SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
+            Ok(out) => serial_println!("[BOOT] DiagnosticSkill executada ({} bytes)", out.len()),
+            Err(e) => serial_println!("[BOOT] DiagnosticSkill falhou: {}", e),
+        }
+    }
 
     
 
@@ -2013,13 +2079,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         } else {
 
-            serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — using embedded micro.bitnet.");
+            serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — modelo 2B deve estar na FAT32.");
 
         }
 
         if !model_loaded {
 
-            crate::boot_logger::log("BOOT: No ramdisk, micro.bitnet active");
+            crate::boot_logger::log("BOOT: Sem ramdisk — modelo 2B carregado da FAT32");
 
         }
 
@@ -2075,12 +2141,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
 
-    // ponytail: 2B model inferencia lenta em TCG — skip LLM test, scheduler assume
+    // PIC+STI antes do 1º hlt(): se ACPI=None/APIC nunca sobe, PIT acorda o scheduler.
+    // Se PlatformAgent já ativou APIC, USING_APIC→só STI de novo.
+    unsafe { interrupts::init_pic_fallback_and_sti(); }
 
-    // ponytail: allocate heap stack, switch to it, then call raw_sched_run (never returns)
+    publish_boot_phase(BootPhase::Runtime, "Entrando no AgentScheduler");
+
+    // Stack do scheduler no heap (≥2MB). NÃO usar Box::new([0u8; N]) — estoura stack do boot.
+    const SCHED_STACK_SIZE: usize = 2 * 1024 * 1024;
     unsafe {
-        let heap_stack = alloc::boxed::Box::new([0u8; 65536]);
-        let sp = heap_stack.as_ptr() as u64 + 65536;
+        let heap_stack = alloc::vec![0u8; SCHED_STACK_SIZE].into_boxed_slice();
+        let sp = (heap_stack.as_ptr() as u64 + SCHED_STACK_SIZE as u64) & !0xFu64;
         core::mem::forget(heap_stack);
         let reg = &mut registry as *mut agent_core::AgentRegistry;
         core::arch::asm!(
@@ -2108,6 +2179,26 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 pub const TOPIC_BOOT_PHASE: &str = "BOOT_PHASE";
+
+/// Receiver estático: 1 consumer mínimo inscrito antes das publishes.
+static BOOT_PHASE_RX: spin::Mutex<Option<event_bus::Receiver>> = spin::Mutex::new(None);
+
+pub fn ensure_boot_phase_consumer() {
+    let mut g = BOOT_PHASE_RX.lock();
+    if g.is_none() {
+        *g = Some(EVENT_BUS.subscribe(TOPIC_BOOT_PHASE));
+        serial_println!("[BOOT] Consumer BOOT_PHASE inscrito no EventBus");
+    }
+}
+
+fn drain_boot_phase_consumer() {
+    if let Some(ref mut rx) = *BOOT_PHASE_RX.lock() {
+        while let Some(ev) = rx.try_receive() {
+            let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
+            serial_println!("[BOOT-PHASE-RX] {}", msg);
+        }
+    }
+}
 
 
 
@@ -2141,6 +2232,8 @@ pub enum BootPhase {
 
 pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
 
+    ensure_boot_phase_consumer();
+
     let payload = alloc::format!("[BOOT:{:?}] {}", phase, msg);
 
     serial_println!("{}", payload);
@@ -2158,6 +2251,8 @@ pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
         token: crate::CapabilityToken::Legacy(1),
 
     });
+
+    drain_boot_phase_consumer();
 
 }
 

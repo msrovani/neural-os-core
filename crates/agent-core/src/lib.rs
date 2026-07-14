@@ -248,28 +248,38 @@ impl AgentRegistry {
 }
 
 impl AgentRegistry {
-    /// Run all Oneshot agents synchronously (boot phase).
+    /// Boot Oneshot round-robin até todos Done **ou** timeout.
+    /// NÃO processa agentes um-a-um até Done (hang se A espera evento de B).
+    /// Pendentes após timeout ficam Active para o `run()` — impossível hangar o boot.
     pub fn init_phase(&mut self) {
-        let mut i = 0;
-        while i < self.agents.len() {
-            let sched = self.agents[i].schedule;
-            if sched != ScheduleKind::Oneshot { i += 1; continue; }
-            if !self.agents[i].agent.manifest().auto_start { i += 1; continue; }
-            // Extrai o agente temporariamente para evitar raw pointer aliasing
-            let mut agent = self.agents.remove(i);
-            agent.state = AgentState::Active;
-            agent.agent.on_activate();
-            loop {
-                let result = agent.agent.tick(0, agent.tick_counter + 1);
-                agent.tick_counter += 1;
-                match result {
-                    AgentTickResult::Done => { agent.state = AgentState::Done; break; }
-                    AgentTickResult::Crashed => { agent.state = AgentState::Crashed; break; }
+        const MAX_ROUNDS: u64 = 10_000;
+        for i in 0..self.agents.len() {
+            if self.agents[i].schedule != ScheduleKind::Oneshot { continue; }
+            if !self.agents[i].agent.manifest().auto_start { continue; }
+            if self.agents[i].state == AgentState::Done || self.agents[i].state == AgentState::Crashed {
+                continue;
+            }
+            self.agents[i].state = AgentState::Active;
+            self.agents[i].agent.on_activate();
+        }
+        let mut round = 0u64;
+        loop {
+            round += 1;
+            let mut any_active = false;
+            for i in 0..self.agents.len() {
+                if self.agents[i].schedule != ScheduleKind::Oneshot { continue; }
+                if self.agents[i].state != AgentState::Active { continue; }
+                any_active = true;
+                self.agents[i].tick_counter += 1;
+                let tc = self.agents[i].tick_counter;
+                match self.agents[i].agent.tick(round, tc) {
+                    AgentTickResult::Done => self.agents[i].state = AgentState::Done,
+                    AgentTickResult::Crashed => self.agents[i].state = AgentState::Crashed,
                     AgentTickResult::Pending => {}
                 }
             }
-            self.agents.insert(i, agent);
-            i += 1;
+            if !any_active { break; }
+            if round >= MAX_ROUNDS { break; }
         }
     }
 

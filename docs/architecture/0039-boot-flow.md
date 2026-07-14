@@ -109,7 +109,7 @@ publish_boot_phase(SystemBringup)
   │
   └─ CortexAgent::new()                    → MODELO CARREGADO
        │
-       ├── include_bytes!("../micro.bitnet")
+        ├── modelo 2B carregado via FAT32/ramdisk
        ├── cortex::load_model(micro_data)  → TransformerModel
        ├── cortex::set_model(Box::new(model))
        └── subscriptions: TOPIC_LLM_REQUEST

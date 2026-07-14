@@ -1,4 +1,5 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
+use event_bus::Receiver;
 use crate::serial_println;
 
 const MANIFEST: AgentManifest = AgentManifest {
@@ -9,10 +10,16 @@ const MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
-pub struct BootLogAgent;
+pub struct BootLogAgent {
+    boot_phase_rx: Receiver,
+}
 
 impl BootLogAgent {
-    pub fn new() -> Self { BootLogAgent }
+    pub fn new() -> Self {
+        BootLogAgent {
+            boot_phase_rx: crate::EVENT_BUS.subscribe(crate::TOPIC_BOOT_PHASE),
+        }
+    }
 
     /// Le o ultimo log de boot e retorna como string para o Cortex
     /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
@@ -150,6 +157,11 @@ impl Agent for BootLogAgent {
     fn manifest(&self) -> &AgentManifest { &MANIFEST }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Consumer mínimo de BOOT_PHASE (EventBus → serial)
+        while let Some(ev) = self.boot_phase_rx.try_receive() {
+            let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
+            serial_println!("[BOOT-LOG-AGENT] fase={}", msg);
+        }
         if let Some(log) = Self::read_last_boot_log() {
             let diagnostics = Self::analyze_log(&log);
             for (kind, msg) in &diagnostics {

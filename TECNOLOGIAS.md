@@ -36,6 +36,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 1.4 | **SleepCycle — Ciclo de Sono em Bare-Metal** | 🏆 **Primeiro (e único) sistema bare-metal com ciclo sono/aprendizado.** 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT. Inspirado em neurociência humana. Sem internet. Sem humano. Cada boot melhora o sistema. | Neurociência (Atkinson-Shiffrin, Ebbinghaus), SleepCycle papers | — (conhecimento científico) | `agents.rs` (SleepCycleAgent) | ✅ 0 err |
 | 1.5 | **Memory Hierarchy Index (MHI) — Alocação por IA** | 🏆 Sistema de memória em 4 tiers (Dram→Vram→Nvme→Hdd) com alocação orientada por ML. `alloc_by_tier()` infere onde cada dado deve residir baseado em padrões de acesso. | ZFS ARC (MFU/MRU), Hierarchical Memory papers | GPLv2 / MIT | `mhi.rs`, `memory.rs` | ✅ 0 err |
 | 1.6 | **Trinity MoE — Roteamento de Intenção em Bare-Metal** | 🏆 6 experts (hw_identify, rust_coder, disk_diag, security, speech_synth, generator) + router treinável. Roteia dentro do LLM sem keyword matching. AutoLearn detecta necessidade → treina → registra novo expert. | Mixture of Experts papers (Shazeer 2017), MoE em LLMs | MIT | `trinity.rs`, `cortex.rs`, `agents.rs` (AutoLearnAgent) | ✅ 0 err |
+| 1.8 | **Dual-Tier Memory + R3 (Rollout Routing Replay)** | 🏆 Separação obrigatória: Tier 1 `talc` (Hermes/JARBAS/UI) vs Tier 2 `TensorArena` bump (Cortex/MoE). Cache de rotas e tokens na arena — reset O(1) após GRPO. Zero fragmentação no hot path de inferência. Proíbe `Box`/`Vec` global no loop de tokens. | Rollout Routing Replay / GRPO papers; bare-metal arena pattern | MIT | `allocator.rs`, `arena.rs`, `r3.rs`, `global_arena.rs` | ✅ 0 err |
 | 1.7 | **3 Camadas Visuais: Orb + Hermes CLI + Window Manager** | 🏆 Arquitetura visual em 3 camadas Z-order com FFT audio→Orbe, overlay CLI semi-transparente, e gerenciador de janelas com mouse integrado. Tudo renderizado por software no framebuffer UEFI, sem GPU. | SmileyOS patterns, JARVIS .NET MAUI (autor) | MIT | `display/compositor.rs`, `display/avatar.rs` | ✅ 0 err |
 
 ---
@@ -47,12 +48,14 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.1 | **Bootloader 0.11.15 UEFI/BIOS** | 📦 Integração com framebuffer UEFI GOP, 512KB stack, physical memory mapping | `bootloader` crate | MIT/Apache 2.0 | `main.rs`, `crates/boot/` | ✅ 0 err |
 | 2.2 | **IDT 32 handlers + IST** | 🔄 Double Fault IST com stack dedicada, GPF recoverable, Page Fault com endereço | `x86_64` crate, OSDev wiki | MIT/Apache 2.0 | `interrupts.rs` | ✅ 0 err |
 | 2.3 | **Bitmap Frame Allocator 8GB** | 🔄 Adaptado para suportar até 8GB RAM com bitmap 128KB | `linked_list_allocator`, OSDev | MIT/Apache 2.0 | `memory.rs` | ✅ 0 err |
-| 2.4 | **Adaptive Heap (AI Budget)** | 🏆 `resize_heap_to_mb()` com orçamento definido por IA via CortexAgent. Heap cresce/encolhe dinamicamente. | Slab allocator (Linux) | GPLv2 | `memory_agent.rs` | ✅ 0 err |
+| 2.4 | **Adaptive Heap (AI Budget) + talc Dual-Tier** | 🏆 Tier 1: `talc` como `#[global_allocator]` (substitui `linked_list_allocator`). Tier 2: `TensorArena` bump em `0x4800_0000_0000` exclusiva Cortex/R3. `resize_heap_to_mb()` via `talc::extend`. | `talc` crate, bumpalo pattern | MIT/Apache 2.0 | `allocator.rs`, `arena.rs` | ✅ 0 err |
 | 2.5 | **TicketLock FIFO + IrqSafeLock** | 🏆 Lock FIFO com TicketLock adaptado para no_std. `IrqSafeLock` com cli/sti automático, deadlock-free em ISRs. | `ticket-lock` crate, Linux spinlock | MIT | `ticket-lock/`, `sync/irq_lock.rs` | ✅ 0 err |
 | 2.6 | **SMP Multi-Core + PerCpu** | 🔄 INIT-SIPI-SIPI, trampoline, GS.base per-CPU. Adaptado para no_std sem acpi table dependency. | OSDev, Linux SMP, `x86_64` crate | MIT/GPLv2 | `smp/mod.rs`, `smp/percpu.rs` | ✅ 0 err |
 | 2.7 | **Work-Stealing Scheduler (Chase-Lev)** | 🔄 Deques lock-free com Chase-Lev algoritmo. Portado para no_std sem std::thread. | `fast-steal` crate, Chase-Lev (1994) paper | MIT | `smp/work_stealing.rs` | ✅ 0 err |
 | 2.8 | **CFS Scheduler (vruntime)** | 🔄 Completely Fair Scheduler com vruntime, baseado em Linux CFS. Implementação própria em no_std. | Linux CFS (Con Kolivas, Ingo Molnar) | GPLv2 | `cfs.rs` | ✅ 0 err |
 | 2.9 | **EventBus IPC Publish/Subscribe** | 🏆 Sistema IPC pub/sub com `CapabilityToken` para controle de acesso por agente. Zero-copy com lock-free queues. | EventBus patterns (C#, Spring), | MIT | `event-bus/` | ✅ 0 err |
+| 2.10 | **K²CHJ Capability Rings MVP C** | 🔄 Dois address spaces + CR3 switch + SPSC ring em página compartilhada + Cap bitflags + trap `int 0x90`. PoC Ring0↔Ring0; Ring3 TODO. ADR-0041. | Capability microkernels (seL4, Fuchsia), | MIT | `address_space.rs`, `ipc/`, `syscall.rs` | 🔄 PoC |
+| 2.10a | **Hermes CapabilityGate (P3)** | 🔄 Host-functions WASM/`aios_*` gated por Cap (SendTcp, WriteRing); deny + serial log. Sem POSIX. ADR-0041 P3. | Cap + trust tokens | MIT | `capability_gate.rs`, `aios_api.rs` | ⏳ P3 |
 | 2.10 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
 | 2.11 | **Huge Pages 2MiB/1GiB** | 🔄 `allocate_huge_2mb()` mapeia páginas grandes no page table para performance de memória. | x86_64 MMU, Linux hugetlbfs | GPLv2 | `memory.rs` | ✅ 0 err |
 | 2.12 | **DMA Uncacheable Pages** | 🏆 `dma_alloc()` → `map_page_uc()` (PWT+PCD) — solução para coerência cache/DMA. Fix crítico para NIC e GPU. | Intel x86 manual (PAT/MTRR), E1000 DMA debug (autor) | — (conhecimento HW) | `dma.rs`, `e1000.rs` | ✅ 0 err |
@@ -128,7 +131,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 |---|-----------|------------|------------|---------------|---------|--------|
 | 8.1 | **The Agency (147 agentes especialistas)** | 🏆 **Maior população de agentes em um único sistema bare-metal:** 147 especialistas divididos em Engineering, Design, Product, QA, Support, Marketing, Infra, Data Science, Research. Cada um com manifest, schedule, trust, e skill registry. | CrewAI, OpenAI Swarm, AutoGen, OpenHands, Cline | Apache 2.0 / MIT | `agents.rs`, `agent-core/` | ✅ 0 err |
 | 8.2 | **Consciousness Metrics (10 métricas)** | 🏆 Sistema de "consciência" com 10 métricas cognitivas (skills_ok, errors_resolved, anomaly_count, memories, etc.). Self-Improvement Loop periódico. | JARVIS C# (autor), Lethe brain regions | MIT | `cortex.rs` (Consciousness) | ✅ 0 err |
-| 8.3 | **Auto-Learn (detecta→treina→registra)** | 🏆 Trinity AutoLearnAgent: monitora intents não classificados, detecta padrões (≥3 repetições), carrega conhecimento, faz fine-tuning on-device via BitNetTrainer, registra novo expert no MoE. | Active Learning papers, MoE fine-tuning | MIT | `agents.rs` (AutoLearnAgent) | ✅ 0 err |
+| 8.3 | **Auto-Learn + R3 Replay** | 🏆 Trinity AutoLearnAgent: monitora intents não classificados, detecta padrões (≥3), carrega conhecimento, **update_with_replay()** com RouteTrace congelados da TensorArena (sem re-rotear / sem train_step dummy), reset_moe_cache O(1). | Active Learning, GRPO/R3 papers | MIT | `agents.rs`, `r3.rs` | ✅ 0 err |
 
 ---
 
@@ -217,7 +220,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 ```bash
 $ cargo build --release
-   Compiling neural-kernel v1.2.0
+   Compiling neural-kernel v2.0.0
    Compiling boot v0.1.0
     Finished `release` profile [optimized] target(s)
     0 errors, 0 warnings
@@ -242,7 +245,8 @@ $ cargo check --release
 | HWIDs no HW Expert v3 | **61.453 VID/DID únicos** |
 | Dataset SDIO HWIDs | 171.003 registros |
 | Dataset pci-ids + usb-ids | 48.346 registros |
-| Tags de versão | v0.01 → v1.2.0 |
+| Tags de versão | v0.01 → v2.0.0 |
+| Crates K²CHJ | k_nano, k_ai, cortex, hermes, jarbas |
 | Erros de compilação | **0** |
 | Warnings | **0** |
 
@@ -261,14 +265,16 @@ $ cargo check --release
 | bootloader crate | MIT/Apache 2.0 | Bootloader v0.11. |
 | x86_64 crate | MIT/Apache 2.0 | Instruções e estruturas x86. |
 | libm | MIT | Funções matemáticas (musl/newlib). |
-| linked_list_allocator | MIT/Apache 2.0 | Alocador de heap. |
+| linked_list_allocator | MIT/Apache 2.0 | Legado — substituído por `talc` no Dual-Tier (v2.0). |
+| **talc** | MIT/Apache 2.0 | **Tier 1 global allocator** (Hermes/JARBAS/UI). Claim via Memory Map. |
+| spinning_top | MIT/Apache 2.0 | RawMutex para Talck (dep transitiva / sync). |
 | spin | MIT | Mutex, RwLock. |
 | Linux kernel drivers (inspiração) | GPLv2 | Drivers NVIDIA, Intel, iwlwifi, E1000 — **engenharia reversa, não cópia de código.** |
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.2.0**  
-> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros.*  
+> **AIOS K²CHJ — Neural OS Hermes v2.0.0**  
+> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K²CHJ, 0 erros.*  
 > *"O hardware real não perdoa. O silício obedece."*  
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)  
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

@@ -281,10 +281,13 @@ lazy_static! {
         idt[0x81].set_handler_fn(ipi_halt_handler);
         idt[0x82].set_handler_fn(ipi_call_function_handler);
 
-        // Demais vetores (34-255, exceto IPI)
+        // MVP C: soft-syscall (0x90) — Cap gate / ADR-0041
+        idt[0x90].set_handler_fn(crate::syscall::syscall_int_handler);
+
+        // Demais vetores (34-255, exceto IPI + syscall)
         for i in 34..=255usize {
-            if i == 0x80 || i == 0x81 || i == 0x82 {
-                continue; // IPI handlers já configurados
+            if i == 0x80 || i == 0x81 || i == 0x82 || i == 0x90 {
+                continue;
             }
             idt[i].set_handler_fn(unhandled_interrupt_handler);
         }
@@ -312,4 +315,33 @@ pub fn enable_interrupts() {
     x86_64::instructions::interrupts::enable();
     serial_println!("[CPU] Interrupcoes de hardware habilitadas (IF=1).");
     println!("[CPU] Interrupcoes de hardware habilitadas (IF=1).");
+}
+
+/// PIC8259 mínimo + PIT + STI — acordável em hlt() se APIC nunca subir.
+/// Se PlatformAgent/`init_apic` rodar depois, `disable_pic()` mascara o PIC (transição OK).
+pub unsafe fn init_pic_fallback_and_sti() {
+    if crate::apic::USING_APIC.load(Ordering::Relaxed) {
+        enable_interrupts();
+        return;
+    }
+
+    // ICW1: begin init, expect ICW4
+    core::arch::asm!("out dx, al", in("dx") 0x20u16, in("al") 0x11u8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0xA0u16, in("al") 0x11u8, options(nostack, preserves_flags));
+    // ICW2: remap IRQs → 32–39 / 40–47
+    core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") PIC_1_OFFSET, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") PIC_2_OFFSET, options(nostack, preserves_flags));
+    // ICW3: slave on IRQ2
+    core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x04u8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x02u8, options(nostack, preserves_flags));
+    // ICW4: 8086 mode
+    core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nostack, preserves_flags));
+    // Mask: IRQ0 (PIT) + IRQ2 (cascade) abertos; resto mascarado
+    core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFAu8, options(nostack, preserves_flags));
+    core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nostack, preserves_flags));
+
+    crate::apic::pit_init();
+    serial_println!("[PIC] Fallback 8259 remapido (IRQ0→vec32). STI antes do scheduler.");
+    enable_interrupts();
 }
