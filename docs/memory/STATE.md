@@ -1,13 +1,13 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v2.0.1 🏆
+#   STATE — neural-os-core v1.5.7 🏆
 #   SPRINT 107 — Capability ladder (ADR-0041 P0–P9) + Voice I/O
 #   180+ arquivos Rust, ~26.000 LOC, 0 erros
-#   v2.0.0: Sprint 106 · v2.0.1: boot A/B + capability PoC P0–P9
+#   v2.0.0: Sprint 106 · v1.5.7: boot A/B + capability PoC P0–P9
 # ═════════════════════════════════════════════════════════
 
 ## Roadmap Atual
 **Roadmap v2.0 "Cognição":** Anéis lógicos operacionais; escada capability P0–P9 em PoC no monólito.
-**Última versão:** v2.0.1 (2026-07-14) — ADR-0041 P0–P9 ✅ (`9bb1382`…`49c4301`).
+**Última versão:** v1.5.7 (2026-07-14) — ADR-0041 P0–P9 ✅ (`9bb1382`…`49c4301`).
 **Próximo foco produto:** Sprint 107 Voice I/O (TTS→STT→LLM→TTS).  
 **Próximo foco capability:** SFI Hermes (#426) · ELF usermode · QUEUE_NOTIFY · I/O seguro no #PF.
 
@@ -39,7 +39,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 **Riscos / follow-ups:** Ring3 untested em QEMU; VirtIO sem QUEUE_NOTIFY; #PF sem I/O; Agency EventDriven ociosa sem eventos (intencional); crate `hermes/` ≠ bin até wiring explícito.
 
 ## Marcos Acumulados
-- **🏆 v2.0.1 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
+- **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
 - **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
