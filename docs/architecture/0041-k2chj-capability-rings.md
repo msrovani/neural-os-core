@@ -36,7 +36,7 @@ A visão-alvo é um **capability microkernel** onde:
 
 - Separar binários por crate K²CHJ
 - User-mode Ring 3 estável (jump `iret`/sysret) — bônus; stub Ring0↔Ring0 + CR3 OK
-- Hermes WASM SFI completo, JARBAS FB isolado, K-IA DMA pinning, Cortex mmap de pesos
+- Hermes WASM SFI completo; Ring3 user-mode estável; VirtIO ring DMA real; GGUF/FAT mmap real
 - Reescrever Agency / drivers / Pacotes A+B
 
 ---
@@ -47,8 +47,8 @@ A visão-alvo é um **capability microkernel** onde:
 |-------------|--------|-----------|---------|------------|
 | K-Nano Ring 0 exclusivo CR3/GDT/IDT | **Parcial** | `memory.rs` CR3 único; `interrupts.rs` GDT/IDT globais | G | Alto se CR3 errar |
 | Slab / lock-free scheduling, sem heap no path crítico | **Parcial** | `slab.rs`, `agent-core` RR; heap ainda no boot path | M | Médio |
-| K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Fictício** (drivers Ring 0) | `pci.rs`, `virtio_*`, `dma.rs` no monólito | G | Alto |
-| Cortex Ring 3 + mmap pesos | **Fictício** | `cortex.rs`, `arena.rs` — mesmo AS | G | Médio |
+| K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Parcial** (P5 PoC pin+map) | `k_ia_dma.rs` + Cap PIN/MAP_DMA; VirtIO ring = stub | G | Médio |
+| Cortex Ring 3 + mmap pesos | **Parcial** (P5 PoC eager mmap) | `cortex_mmap.rs` + Cap MAP_WEIGHTS; GGUF/FAT = TODO | G | Baixo |
 | Hermes WASM SFI + host caps | **Parcial** | `wasm*.rs`, `trust::check_syscall` — sem AS separado | M | Baixo |
 | JARBAS Ring 3 + FB MMIO + VSync | **Parcial** (P4 PoC Ring0+AS) | `jarbas_fb.rs` + Cap MAP/WRITE_FB | G | Médio |
 | IPC só ring lock-free entre AS | **Fictício** → **MVP C parcial** | EventBus in-process; MVP C: SPSC shared pages | M | Baixo se isolado |
@@ -66,9 +66,9 @@ A visão-alvo é um **capability microkernel** onde:
 | **P2** | **MVP C:** 2 AS + CR3 switch + ring SPSC shared + Cap + trap `int 0x90` + demo boot non-fatal | ✅ PoC |
 | **P3** | Hermes WASM host-functions por Cap (sem AS full) | ✅ CapGate + SEND_TCP/WRITE_RING |
 | **P4** | JARBAS FB MMIO capability + double-buffer contract | ✅ PoC |
-| **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ⏳ próximo |
+| **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ✅ PoC |
 
-Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap**.
+Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap** — P0–P5 concluídos (PoC).
 
 ---
 
@@ -96,6 +96,15 @@ Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap**.
 - `JarbasDoubleBuffer` (backheap) + `present` (cópia + stub vsync via `TIMER_TICKS`/`sfence`).
 - Demo boot non-fatal após P3; sem FB → Cap-only SUCCESS; falha → WARN, boot segue.
 - Path primário = UEFI/bootloader FB (VirtIO-GPU BAR = evolução). Ring3 jump = bônus futuro.
+
+### P5 — aceite (K-IA DMA pin + Cortex weight mmap)
+
+- `k_ia_dma.rs`: `pin_frames` / `map_pinned` / `unpin` opcional; Cap `PIN_DMA`/`MAP_DMA`; AS K-IA em `K_IA_DMA_VA`.
+- Stub VirtIO: phys addr logado como “buffer pinned ready”; ring/vring wiring = follow-up.
+- `cortex_mmap.rs`: aloca N páginas peso simuladas, mapeia em `CORTEX_WEIGHT_VA` (eager); Cap `MAP_WEIGHTS`.
+- Demand-paging (#PF first touch) e mmap GGUF/FAT = TODO documentado; PoC = memória simulada.
+- Demo boot non-fatal pós-P4: deny → pin+map DMA → mmap pesos + touch → restore CR3; falha frame alloc → Cap-only SUCCESS / WARN.
+- `SYS_PIN_DMA` / `SYS_MAP_DMA` / `SYS_MAP_WEIGHTS` em `syscall.rs`.
 
 ---
 

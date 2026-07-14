@@ -29,6 +29,11 @@
 - Double-buffer heap + `present` + stub vsync (`TIMER_TICKS`/`sfence`); demo boot non-fatal pós-P3
 - Sem FB físico → Cap-only path SUCCESS; falha → WARN, boot continua
 
+### P5 — K-IA DMA pin + Cortex weight mmap (ADR-0041)
+- `k_ia_dma.rs`: pin frames não-reclaimáveis + map AS (`K_IA_DMA_VA`), Cap `PIN_DMA`/`MAP_DMA`; VirtIO phys stub
+- `cortex_mmap.rs`: mmap N páginas peso simuladas em `CORTEX_WEIGHT_VA` (eager), Cap `MAP_WEIGHTS`; demand-paging/GGUF TODO
+- Demo boot non-fatal pós-P4; falha frame alloc → Cap-only / WARN, sem panic
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

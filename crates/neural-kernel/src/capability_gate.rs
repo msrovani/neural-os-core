@@ -15,6 +15,10 @@ pub const HOST_FN_WRITE_RING: &str = "aios_write_ring";
 /// JARBAS FB (ADR-0041 P4) — também registradas no gate para deny uniforme.
 pub const HOST_FN_MAP_FB: &str = "aios_map_fb";
 pub const HOST_FN_PRESENT_FB: &str = "aios_present_fb";
+/// K-IA / Cortex (ADR-0041 P5).
+pub const HOST_FN_PIN_DMA: &str = "aios_pin_dma";
+pub const HOST_FN_MAP_DMA: &str = "aios_map_dma";
+pub const HOST_FN_MAP_WEIGHTS: &str = "aios_map_weights";
 
 /// Cap exigida por nome de host-function.
 pub fn required_cap(host_fn: &str) -> Option<Cap> {
@@ -25,6 +29,9 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
         "read_ring" | "aios_read_ring" => Some(Cap::READ_RING),
         HOST_FN_MAP_FB | "map_fb" => Some(Cap::MAP_FB),
         HOST_FN_PRESENT_FB | "present_fb" | "write_fb" => Some(Cap::WRITE_FB),
+        HOST_FN_PIN_DMA | "pin_dma" => Some(Cap::PIN_DMA),
+        HOST_FN_MAP_DMA | "map_dma" => Some(Cap::MAP_DMA),
+        HOST_FN_MAP_WEIGHTS | "map_weights" => Some(Cap::MAP_WEIGHTS),
         _ => None,
     }
 }

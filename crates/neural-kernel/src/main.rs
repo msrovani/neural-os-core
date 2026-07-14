@@ -286,6 +286,8 @@ mod syscall;
 mod ipc;
 mod capability_gate;
 mod jarbas_fb;
+mod k_ia_dma;
+mod cortex_mmap;
 
 
 
@@ -1638,6 +1640,28 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[P4] WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P4 JARBAS FB WARN (non-fatal)");
+        }
+    }
+
+    // P5 (ADR-0041): K-IA DMA pin + Cortex weight mmap — non-fatal
+    match crate::k_ia_dma::demo_kia_dma() {
+        Ok(()) => {
+            serial_println!("[P5] K-IA DMA pin demo OK");
+            crate::boot_logger::log("BOOT: P5 K-IA DMA OK");
+        }
+        Err(e) => {
+            serial_println!("[P5] WARN DMA: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P5 DMA WARN (non-fatal)");
+        }
+    }
+    match crate::cortex_mmap::demo_cortex_mmap() {
+        Ok(()) => {
+            serial_println!("[P5] Cortex mmap demo OK");
+            crate::boot_logger::log("BOOT: P5 Cortex mmap OK");
+        }
+        Err(e) => {
+            serial_println!("[P5] WARN mmap: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P5 mmap WARN (non-fatal)");
         }
     }
 

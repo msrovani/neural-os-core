@@ -15,6 +15,12 @@ pub const SYS_SEND_TCP: u64 = 4;
 pub const SYS_MAP_FB: u64 = 5;
 /// JARBAS: present/flip backbuffer → FB físico.
 pub const SYS_PRESENT_FB: u64 = 6;
+/// K-IA: pin frames DMA não-reclaimáveis (ADR-0041 P5).
+pub const SYS_PIN_DMA: u64 = 7;
+/// K-IA: mapear buffer pinado no AS (ADR-0041 P5).
+pub const SYS_MAP_DMA: u64 = 8;
+/// Cortex: mmap páginas de peso LLM (ADR-0041 P5).
+pub const SYS_MAP_WEIGHTS: u64 = 9;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +37,12 @@ impl Cap {
     pub const MAP_FB: Cap = Cap(1 << 4);
     /// JARBAS: escrever / present no framebuffer.
     pub const WRITE_FB: Cap = Cap(1 << 5);
+    /// K-IA: pin frames físicos para DMA (ADR-0041 P5).
+    pub const PIN_DMA: Cap = Cap(1 << 6);
+    /// K-IA: mapear buffer DMA pinado no AddressSpace.
+    pub const MAP_DMA: Cap = Cap(1 << 7);
+    /// Cortex: mapear páginas de pesos LLM (mmap PoC).
+    pub const MAP_WEIGHTS: Cap = Cap(1 << 8);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -100,6 +112,24 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_PRESENT_FB => {
             if !cap.contains(Cap::WRITE_FB) {
                 return Err("EPERM: Cap::WRITE_FB");
+            }
+            Ok(0)
+        }
+        SYS_PIN_DMA => {
+            if !cap.contains(Cap::PIN_DMA) {
+                return Err("EPERM: Cap::PIN_DMA");
+            }
+            Ok(0)
+        }
+        SYS_MAP_DMA => {
+            if !cap.contains(Cap::MAP_DMA) {
+                return Err("EPERM: Cap::MAP_DMA");
+            }
+            Ok(0)
+        }
+        SYS_MAP_WEIGHTS => {
+            if !cap.contains(Cap::MAP_WEIGHTS) {
+                return Err("EPERM: Cap::MAP_WEIGHTS");
             }
             Ok(0)
         }
