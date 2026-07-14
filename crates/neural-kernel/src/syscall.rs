@@ -26,6 +26,8 @@ pub const SYS_MAP_WEIGHTS: u64 = 9;
 pub const SYS_EXIT_USER: u64 = 10;
 /// P7: demand-paging / lazy map de páginas (ADR-0041).
 pub const SYS_DEMAND_PAGE: u64 = 11;
+/// P8: setup VirtIO vring sobre DMA pinado (ADR-0041).
+pub const SYS_VRING_SETUP: u64 = 12;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +54,8 @@ impl Cap {
     pub const ENTER_USER: Cap = Cap(1 << 9);
     /// P7: registrar/curar demand-paging (lazy mmap pesos).
     pub const DEMAND_PAGE: Cap = Cap(1 << 10);
+    /// P8: montar/bind Virtqueue (desc+avail+used) sobre DMA pinado.
+    pub const VRING_SETUP: Cap = Cap(1 << 11);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -159,6 +163,12 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_DEMAND_PAGE => {
             if !cap.contains(Cap::DEMAND_PAGE) {
                 return Err("EPERM: Cap::DEMAND_PAGE");
+            }
+            Ok(0)
+        }
+        SYS_VRING_SETUP => {
+            if !cap.contains(Cap::VRING_SETUP) {
+                return Err("EPERM: Cap::VRING_SETUP");
             }
             Ok(0)
         }

@@ -1,5 +1,5 @@
 //! K-IA DMA pin — frames físicos não-reclaimáveis + map AS (ADR-0041 P5).
-//! Stub VirtIO: buffer pinned + phys addr pronto; ring real = follow-up.
+//! P8: `virtio_vring.rs` monta Virtqueue layout-compatible sobre frames pinados.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
@@ -154,6 +154,26 @@ pub fn pinned_count() -> u64 {
 /// Phys do buffer pinado (stub "VirtIO buffer ready").
 pub fn virtio_buf_phys(buf: &PinnedDmaBuf) -> u64 {
     buf.phys
+}
+
+/// Phys do frame pinado no índice `page_idx` relativo a `buf.phys`.
+pub fn pinned_phys_at(buf: &PinnedDmaBuf, page_idx: usize) -> Result<u64, &'static str> {
+    if page_idx >= buf.pages {
+        return Err("p5: page_idx fora do range");
+    }
+    let reg = unsafe { &*core::ptr::addr_of!(PIN_REG) };
+    let mut start = None;
+    for i in 0..reg.len {
+        if let Some(f) = reg.frames[i] {
+            if f.start_address().as_u64() == buf.phys {
+                start = Some(i);
+                break;
+            }
+        }
+    }
+    let start = start.ok_or("p5: buf nao pinado")?;
+    let frame = reg.frames[start + page_idx].ok_or("p5: frame pin ausente")?;
+    Ok(frame.start_address().as_u64())
 }
 
 /// Demo non-fatal: deny Cap → pin+map SUCCESS → log phys VirtIO stub → restore CR3.

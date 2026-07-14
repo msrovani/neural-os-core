@@ -107,6 +107,19 @@ pub struct VirtIoDevice {
     pub present: bool,
 }
 
+impl VirtIoDevice {
+    /// Phys da RX virtqueue (ADR-0041 P8 — observe-only, sem mutar filas).
+    #[inline]
+    pub fn rx_queue_phys(&self) -> u64 {
+        self.rx_queue_pa
+    }
+    /// Phys da TX virtqueue (ADR-0041 P8 — observe-only).
+    #[inline]
+    pub fn tx_queue_phys(&self) -> u64 {
+        self.tx_queue_pa
+    }
+}
+
 use crate::apic::map_page_uc;
 
 impl VirtIoDevice {

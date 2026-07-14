@@ -30,14 +30,16 @@
 | **P5** | K-IA DMA pin + Cortex mmap pesos | ✅ PoC (`k_ia_dma.rs`, `cortex_mmap.rs`) |
 | **P6** | Ring3 user-mode real (`iretq`) | ✅ PoC (`user_mode.rs`, GDT user + TSS.RSP0) |
 | **P7** | Demand-paging via #PF (lazy weights) | ✅ PoC (`demand_page.rs`, `mmap_weights_lazy`) |
+| **P8** | VirtIO vring sobre DMA pin | ✅ PoC (`virtio_vring.rs`, Cap VRING_SETUP) |
 
 **Arquivos MVP C:** `address_space.rs`, `syscall.rs`, `ipc/{mod,ring_buffer}.rs` + hooks `main.rs` / IDT `0x90`.  
 **Arquivos P4:** `jarbas_fb.rs` + `Cap::{MAP_FB,WRITE_FB}` em `syscall.rs` + CapGate host names + demo em `main.rs`.  
 **Arquivos P5:** `k_ia_dma.rs` + `cortex_mmap.rs` + `Cap::{PIN_DMA,MAP_DMA,MAP_WEIGHTS}` + demos non-fatal em `main.rs`.  
 **Arquivos P6:** `user_mode.rs` + GDT user/TSS.RSP0 em `interrupts.rs` + `Cap::ENTER_USER` / `SYS_EXIT_USER` + `map_user_page` + demo non-fatal.  
-**Arquivos P7:** `demand_page.rs` + `reserve_page` / `install_present_leaf_current` + Cap `DEMAND_PAGE` + `#PF` cure + demo non-fatal.
+**Arquivos P7:** `demand_page.rs` + `reserve_page` / `install_present_leaf_current` + Cap `DEMAND_PAGE` + `#PF` cure + demo non-fatal.  
+**Arquivos P8:** `virtio_vring.rs` + Cap `VRING_SETUP` / `SYS_VRING_SETUP` + pin 4 pages + demo non-fatal (NIC untouched).
 
-**Riscos residuais:** P6 PoC sem ELF/preempt; VirtIO ring DMA real e GGUF/FAT mmap = follow-up; Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
+**Riscos residuais:** P6 PoC sem ELF/preempt; P8 = layout-only (sem QUEUE_NOTIFY no device); GGUF/FAT mmap = follow-up; Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
 
 ## Marcos Acumulados
 - **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**

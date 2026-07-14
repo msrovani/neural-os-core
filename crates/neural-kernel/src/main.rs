@@ -290,6 +290,7 @@ mod k_ia_dma;
 mod cortex_mmap;
 mod demand_page;
 mod user_mode;
+mod virtio_vring;
 
 
 
@@ -1688,6 +1689,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[P7] WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P7 demand-page WARN (non-fatal)");
+        }
+    }
+
+    // P8 (ADR-0041): VirtIO vring sobre DMA pin (layout-compatible) — non-fatal
+    match crate::virtio_vring::demo_virtio_vring() {
+        Ok(()) => {
+            serial_println!("[P8] VirtIO vring demo OK");
+            crate::boot_logger::log("BOOT: P8 vring OK");
+        }
+        Err(e) => {
+            serial_println!("[P8] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P8 vring WARN (non-fatal)");
         }
     }
 

@@ -45,6 +45,11 @@
 - `cortex_mmap::mmap_weights_lazy` + Cap `DEMAND_PAGE` / `SYS_DEMAND_PAGE`; `AddressSpace::reserve_page`
 - Demo boot non-fatal pós-P6: first-touch R/W curado; deny sem Cap; falha → WARN
 
+### P8 — VirtIO vring + DMA pin (ADR-0041)
+- `virtio_vring.rs`: Virtqueue layout-compatible (desc+avail+used) sobre `k_ia_dma::pin_frames`; Cap `VRING_SETUP`
+- `Desc.addr` aponta para página pinnada (zero-copy); path paralelo — NIC live observe-only
+- Sem VirtIO device → layout-only SUCCESS; demo boot non-fatal pós-P7
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real
