@@ -392,6 +392,24 @@ impl HermesAgent {
     fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
         let token_val = token.as_legacy();
         let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        // P3: skills de rede exigem Cap::SEND_TCP (além do CapabilityToken legado).
+        // Token Legacy(1) = boot/trustado → concede SEND_TCP; demais = Cap vazia.
+        let held = if matches!(token, CapabilityToken::Legacy(1)) {
+            crate::syscall::Cap::SEND_TCP
+                .union(crate::syscall::Cap::WRITE_RING)
+                .union(crate::syscall::Cap::PING)
+        } else {
+            crate::syscall::Cap::EMPTY
+        };
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("net") || lower.contains("http") || lower.contains("tcp")
+            || lower.contains("wifi") || name == "aios_send_tcp"
+        {
+            crate::capability_gate::check(
+                crate::capability_gate::HOST_FN_SEND_TCP,
+                held,
+            )?;
+        }
         // Sprint 78: OutputCache — skills idempotentes usam cache
         if let Some(cached) = self.output_cache.get(name, payload, now) {
             return Ok(cached.to_vec());

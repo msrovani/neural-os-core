@@ -10,6 +10,7 @@ pub const SYSCALL_VECTOR: u8 = 0x90;
 pub const SYS_PING: u64 = 1;
 pub const SYS_WRITE_RING: u64 = 2;
 pub const SYS_READ_RING: u64 = 3;
+pub const SYS_SEND_TCP: u64 = 4;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,6 +21,8 @@ impl Cap {
     pub const PING: Cap = Cap(1 << 0);
     pub const WRITE_RING: Cap = Cap(1 << 1);
     pub const READ_RING: Cap = Cap(1 << 2);
+    /// Hermes/WASM: host `aios_send_tcp` / skill net (ADR-0041 P3).
+    pub const SEND_TCP: Cap = Cap(1 << 3);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -71,6 +74,12 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_READ_RING => {
             if !cap.contains(Cap::READ_RING) {
                 return Err("EPERM: Cap::READ_RING");
+            }
+            Ok(0)
+        }
+        SYS_SEND_TCP => {
+            if !cap.contains(Cap::SEND_TCP) {
+                return Err("EPERM: Cap::SEND_TCP");
             }
             Ok(0)
         }

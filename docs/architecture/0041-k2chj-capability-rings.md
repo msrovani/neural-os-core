@@ -64,8 +64,8 @@ A visão-alvo é um **capability microkernel** onde:
 | **P0** | Gap documentado (esta ADR) | ✅ |
 | **P1** | ADR curto + non-goals | ✅ |
 | **P2** | **MVP C:** 2 AS + CR3 switch + ring SPSC shared + Cap + trap `int 0x90` + demo boot non-fatal | ✅ PoC |
-| **P3** | Hermes WASM host-functions por Cap (sem AS full) | ⏳ |
-| **P4** | JARBAS FB MMIO capability + double-buffer contract | ⏳ |
+| **P3** | Hermes WASM host-functions por Cap (sem AS full) | ✅ CapGate + SEND_TCP/WRITE_RING |
+| **P4** | JARBAS FB MMIO capability + double-buffer contract | ⏳ próximo |
 | **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ⏳ |
 
 Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap**.
@@ -80,6 +80,13 @@ Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap**.
 - `Cap::{PING, WRITE_RING, READ_RING}` + `syscall::dispatch` via `int 0x90` (ABI staging via atomics).
 - Demo após DriverInit; erro → serial WARN, boot segue.
 - **TODO Ring3:** entrada user-mode real (stub code page + `iretq`) quando estável no QEMU UEFI.
+
+### P3 — aceite (parcial → done mínimo)
+
+- `capability_gate.rs`: `check` / `host_send_tcp` / `host_write_ring` + demo boot non-fatal.
+- `Cap::SEND_TCP` + `SYS_SEND_TCP`; `aios_send_tcp` / `aios_write_ring` em `aios_api.rs`.
+- Hermes `execute_skill`: skills net/http/tcp passam por CapGate; `wasm_rt::host_call_gated` para imports.
+- Ainda sem AS separado para WASM (SFI pleno = #426).
 
 ---
 

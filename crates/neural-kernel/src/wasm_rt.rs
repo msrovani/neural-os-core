@@ -77,6 +77,27 @@ pub fn wasi_to_skill(wasi: &str) -> &'static str {
     }
 }
 
+/// P3: resolve import AIOS/WASI sensível → CapGate (held do módulo WASM).
+pub fn host_call_gated(
+    import: &str,
+    held: crate::syscall::Cap,
+) -> Result<&'static str, &'static str> {
+    let host_fn = match import {
+        "aios_send_tcp" | "sock_send" | "http_get" => crate::capability_gate::HOST_FN_SEND_TCP,
+        "aios_write_ring" => crate::capability_gate::HOST_FN_WRITE_RING,
+        other => {
+            // Imports não sensíveis: só mapeia WASI→skill
+            let skill = wasi_to_skill(other);
+            if skill == "Unknown" {
+                return Err("ENOSYS: host import");
+            }
+            return Ok(skill);
+        }
+    };
+    crate::capability_gate::check(host_fn, held)?;
+    Ok(wasi_to_skill(import))
+}
+
 // ─── M45: Capability Token (wireado ao TrustCache) ────────────────────────
 
 #[derive(Clone)]

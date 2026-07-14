@@ -19,6 +19,11 @@
 ### Docs
 - ADR-0041, STATE/IDEA_BANK/SESSION_107, TECNOLOGIAS 2.10
 
+### P3 — Hermes CapabilityGate (ADR-0041)
+- `capability_gate.rs`: gate `aios_send_tcp` / `aios_write_ring` por `Cap::{SEND_TCP,WRITE_RING}`
+- Hermes skills net/* + `wasm_rt::host_call_gated`; demo boot non-fatal
+- Deny sem Cap → log serial `[CapGate] DENY`
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

@@ -284,6 +284,7 @@ mod audio;
 mod address_space;
 mod syscall;
 mod ipc;
+mod capability_gate;
 
 
 
@@ -1612,6 +1613,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[MVP-C] WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: MVP-C WARN (non-fatal)");
+        }
+    }
+
+    // P3 (ADR-0041): Hermes host Caps — non-fatal
+    match crate::capability_gate::demo_hermes_caps() {
+        Ok(()) => {
+            serial_println!("[P3] CapGate demo OK");
+            crate::boot_logger::log("BOOT: P3 CapGate OK");
+        }
+        Err(e) => {
+            serial_println!("[P3] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P3 CapGate WARN (non-fatal)");
         }
     }
 
