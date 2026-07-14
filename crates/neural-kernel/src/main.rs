@@ -288,6 +288,7 @@ mod capability_gate;
 mod jarbas_fb;
 mod k_ia_dma;
 mod cortex_mmap;
+mod demand_page;
 mod user_mode;
 
 
@@ -1675,6 +1676,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[P6] WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P6 Ring3 WARN (non-fatal)");
+        }
+    }
+
+    // P7 (ADR-0041): demand-paging via #PF (lazy Cortex weights) — non-fatal
+    match crate::cortex_mmap::demo_demand_paging() {
+        Ok(()) => {
+            serial_println!("[P7] Demand-paging demo OK");
+            crate::boot_logger::log("BOOT: P7 demand-page OK");
+        }
+        Err(e) => {
+            serial_println!("[P7] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P7 demand-page WARN (non-fatal)");
         }
     }
 

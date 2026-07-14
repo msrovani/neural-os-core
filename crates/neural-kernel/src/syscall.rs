@@ -24,6 +24,8 @@ pub const SYS_MAP_DMA: u64 = 8;
 pub const SYS_MAP_WEIGHTS: u64 = 9;
 /// P6: stub user → kernel (após marcador / Cap check).
 pub const SYS_EXIT_USER: u64 = 10;
+/// P7: demand-paging / lazy map de páginas (ADR-0041).
+pub const SYS_DEMAND_PAGE: u64 = 11;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +50,8 @@ impl Cap {
     pub const MAP_WEIGHTS: Cap = Cap(1 << 8);
     /// P6: permitir enter_user_mode / trap de volta do stub Ring3.
     pub const ENTER_USER: Cap = Cap(1 << 9);
+    /// P7: registrar/curar demand-paging (lazy mmap pesos).
+    pub const DEMAND_PAGE: Cap = Cap(1 << 10);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -149,6 +153,12 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_EXIT_USER => {
             if !cap.contains(Cap::ENTER_USER) {
                 return Err("EPERM: Cap::ENTER_USER");
+            }
+            Ok(0)
+        }
+        SYS_DEMAND_PAGE => {
+            if !cap.contains(Cap::DEMAND_PAGE) {
+                return Err("EPERM: Cap::DEMAND_PAGE");
             }
             Ok(0)
         }

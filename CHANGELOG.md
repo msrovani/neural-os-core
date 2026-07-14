@@ -40,6 +40,11 @@
 - `map_user_page` com USER em toda a cadeia PT; demo boot non-fatal pós-P5; #GP/#PF abort durante demo
 - Flag `TRY_ENTER_RING3` para disable se necessário
 
+### P7 — Demand-paging via #PF (ADR-0041)
+- `demand_page.rs`: registry lazy (frames pré-alocados); `#PF` instala leaf PRESENT e retorna (retry)
+- `cortex_mmap::mmap_weights_lazy` + Cap `DEMAND_PAGE` / `SYS_DEMAND_PAGE`; `AddressSpace::reserve_page`
+- Demo boot non-fatal pós-P6: first-touch R/W curado; deny sem Cap; falha → WARN
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

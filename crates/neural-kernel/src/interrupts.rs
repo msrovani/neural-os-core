@@ -188,6 +188,10 @@ extern "x86-interrupt" fn double_fault_handler(f: InterruptStackFrame, code: u64
 
 extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageFaultErrorCode) {
     let cr2 = x86_64::registers::control::Cr2::read();
+    // P7: demand-paging — cura lazy map e retorna (retry insn); sem hlt.
+    if crate::demand_page::try_handle_fault(cr2.as_u64()) {
+        return;
+    }
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
     if crate::user_mode::demo_active() {

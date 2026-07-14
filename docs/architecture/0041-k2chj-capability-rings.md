@@ -35,10 +35,11 @@ A visão-alvo é um **capability microkernel** onde:
 ### Non-goals desta sprint / MVP C
 
 - Separar binários por crate K²CHJ
-- Hermes WASM SFI completo; VirtIO ring DMA real; GGUF/FAT mmap + demand-paging
+- Hermes WASM SFI completo; VirtIO ring DMA real; GGUF/FAT mmap real
 - Reescrever Agency / drivers / Pacotes A+B
 
-**Nota P6:** user-mode Ring 3 via `iretq` + stub + `SYS_EXIT_USER` é PoC boot non-fatal (não scheduler multi-task).
+**Nota P6:** user-mode Ring 3 via `iretq` + stub + `SYS_EXIT_USER` é PoC boot non-fatal (não scheduler multi-task).  
+**Nota P7:** demand-paging #PF cura lazy weights (frames pré-alocados); GGUF/FAT ainda TODO.
 
 ---
 
@@ -49,7 +50,7 @@ A visão-alvo é um **capability microkernel** onde:
 | K-Nano Ring 0 exclusivo CR3/GDT/IDT | **Parcial** | `memory.rs` CR3 único; `interrupts.rs` GDT/IDT globais | G | Alto se CR3 errar |
 | Slab / lock-free scheduling, sem heap no path crítico | **Parcial** | `slab.rs`, `agent-core` RR; heap ainda no boot path | M | Médio |
 | K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Parcial** (P5 PoC pin+map) | `k_ia_dma.rs` + Cap PIN/MAP_DMA; VirtIO ring = stub | G | Médio |
-| Cortex Ring 3 + mmap pesos | **Parcial** (P5 PoC eager mmap) | `cortex_mmap.rs` + Cap MAP_WEIGHTS; GGUF/FAT = TODO | G | Baixo |
+| Cortex Ring 3 + mmap pesos | **Parcial** (P5 eager + P7 demand-page) | `cortex_mmap` + `demand_page` + Cap MAP_WEIGHTS/DEMAND_PAGE; GGUF/FAT = TODO | G | Baixo |
 | Hermes WASM SFI + host caps | **Parcial** | `wasm*.rs`, `trust::check_syscall` — sem AS separado | M | Baixo |
 | JARBAS Ring 3 + FB MMIO + VSync | **Parcial** (P4 PoC Ring0+AS) | `jarbas_fb.rs` + Cap MAP/WRITE_FB | G | Médio |
 | IPC só ring lock-free entre AS | **Fictício** → **MVP C parcial** | EventBus in-process; MVP C: SPSC shared pages | M | Baixo se isolado |
@@ -59,7 +60,7 @@ A visão-alvo é um **capability microkernel** onde:
 
 ---
 
-## 4. Prioridades P0 → P6
+## 4. Prioridades P0 → P7
 
 | Pri | Item | Status pós-MVP C |
 |-----|------|------------------|
@@ -70,9 +71,10 @@ A visão-alvo é um **capability microkernel** onde:
 | **P4** | JARBAS FB MMIO capability + double-buffer contract | ✅ PoC |
 | **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ✅ PoC |
 | **P6** | Ring3 user-mode real (`iretq` + stub USER + Cap::ENTER_USER + return) | ✅ PoC |
+| **P7** | Demand-paging via #PF (lazy Cortex weights) | ✅ PoC |
 
-Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap → Ring3** — P0–P6 concluídos (PoC).  
-Próximos: demand-paging #PF; VirtIO vring; GGUF/FAT mmap.
+Roadmap explícito: **MVP C → … → Ring3 → demand-paging** — P0–P7 concluídos (PoC).  
+Próximos: VirtIO vring; GGUF/FAT mmap.
 
 ---
 
@@ -106,7 +108,7 @@ Próximos: demand-paging #PF; VirtIO vring; GGUF/FAT mmap.
 - `k_ia_dma.rs`: `pin_frames` / `map_pinned` / `unpin` opcional; Cap `PIN_DMA`/`MAP_DMA`; AS K-IA em `K_IA_DMA_VA`.
 - Stub VirtIO: phys addr logado como “buffer pinned ready”; ring/vring wiring = follow-up.
 - `cortex_mmap.rs`: aloca N páginas peso simuladas, mapeia em `CORTEX_WEIGHT_VA` (eager); Cap `MAP_WEIGHTS`.
-- Demand-paging (#PF first touch) e mmap GGUF/FAT = TODO documentado; PoC = memória simulada.
+- Demand-paging (#PF first touch) = **P7**; mmap GGUF/FAT = TODO; PoC = memória simulada.
 - Demo boot non-fatal pós-P4: deny → pin+map DMA → mmap pesos + touch → restore CR3; falha frame alloc → Cap-only SUCCESS / WARN.
 - `SYS_PIN_DMA` / `SYS_MAP_DMA` / `SYS_MAP_WEIGHTS` em `syscall.rs`.
 
@@ -119,6 +121,15 @@ Próximos: demand-paging #PF; VirtIO vring; GGUF/FAT mmap.
 - Demo boot non-fatal pós-P5; #GP/#PF durante demo → WARN + restore (não halt).
 - Flag `TRY_ENTER_RING3` para disable se WHPX/QEMU instável (🟡 parcial).
 - Limitação: PoC single-threaded; sem ELF loader / preemptive usermode; shallow L4 ainda compartilha PTs do kernel.
+
+### P7 — aceite (demand-paging via #PF)
+
+- `demand_page.rs`: registry global (IrqSafeLock) de VAs lazy; frames **pré-alocados** no register (path #PF sem `GLOBAL_ALLOCATOR`).
+- `AddressSpace::reserve_page`: caminho PT CoW + leaf NOT PRESENT; `install_present_leaf_current` só instala leaf no CR3 atual.
+- `cortex_mmap::mmap_weights_lazy` + Cap `MAP_WEIGHTS|DEMAND_PAGE` / `SYS_DEMAND_PAGE`; deny sem Cap.
+- `#PF` handler: se CR2 em range → map PRESENT + return (retry); senão comportamento anterior (count/warn/hlt).
+- Demo boot non-fatal pós-P6: lazy 4 pages → switch CR3 → first-touch R/W → verify magic → restore; falha → WARN.
+- Limitação: PoC simulado (não GGUF/FAT); cure usa try_lock (se falhar, não cura); USER leaf opcional no registry.
 
 ---
 

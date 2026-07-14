@@ -133,9 +133,64 @@ impl AddressSpace {
         self.map_page_inner(virt, frame, f, true)
     }
 
+    /// Reserva VA: CoW do caminho PT, leaf fica NOT PRESENT (demand-paging P7).
+    pub unsafe fn reserve_page(&mut self, virt: VirtAddr, user: bool) -> Result<(), &'static str> {
+        let l4 = &mut *frame_as_table(self.l4_frame);
+        let e3 = &mut l4[virt.p4_index()];
+        let p3_frame = Self::ensure_owned_child(e3, user)?;
+
+        let l3 = &mut *frame_as_table(p3_frame);
+        let e2 = &mut l3[virt.p3_index()];
+        let p2_frame = Self::ensure_owned_child(e2, user)?;
+
+        let l2 = &mut *frame_as_table(p2_frame);
+        let e1 = &mut l2[virt.p2_index()];
+        let p1_frame = Self::ensure_owned_child(e1, user)?;
+
+        let l1 = &mut *frame_as_table(p1_frame);
+        let leaf = &mut l1[virt.p1_index()];
+        if leaf.flags().contains(PageTableFlags::PRESENT) {
+            return Err("mvp-c: VA ja mapeada");
+        }
+        leaf.set_unused();
+        Ok(())
+    }
+
     pub unsafe fn activate(&self) {
         Cr3::write(self.l4_frame, Cr3Flags::empty());
     }
+}
+
+/// Instala leaf PRESENT no CR3 atual sem alocar frames intermediários (#PF-safe).
+pub unsafe fn install_present_leaf_current(
+    virt: VirtAddr,
+    frame: PhysFrame<Size4KiB>,
+    flags: PageTableFlags,
+) -> Result<(), &'static str> {
+    let (l4_frame, _) = Cr3::read();
+    let l4 = &*frame_as_table(l4_frame);
+    let e3 = &l4[virt.p4_index()];
+    if !e3.flags().contains(PageTableFlags::PRESENT) {
+        return Err("p7: P3 ausente");
+    }
+    let l3 = &*frame_as_table(PhysFrame::containing_address(e3.addr()));
+    let e2 = &l3[virt.p3_index()];
+    if !e2.flags().contains(PageTableFlags::PRESENT) {
+        return Err("p7: P2 ausente");
+    }
+    let l2 = &*frame_as_table(PhysFrame::containing_address(e2.addr()));
+    let e1 = &l2[virt.p2_index()];
+    if !e1.flags().contains(PageTableFlags::PRESENT) {
+        return Err("p7: P1 ausente");
+    }
+    let l1 = &mut *frame_as_table(PhysFrame::containing_address(e1.addr()));
+    let leaf = &mut l1[virt.p1_index()];
+    if leaf.flags().contains(PageTableFlags::PRESENT) {
+        return Ok(());
+    }
+    leaf.set_addr(frame.start_address(), flags);
+    x86_64::instructions::tlb::flush(virt);
+    Ok(())
 }
 
 /// Ponteiro HHDM para um frame físico (válido no CR3 kernel e em clones shallow).

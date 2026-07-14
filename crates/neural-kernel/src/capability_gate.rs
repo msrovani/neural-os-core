@@ -19,6 +19,8 @@ pub const HOST_FN_PRESENT_FB: &str = "aios_present_fb";
 pub const HOST_FN_PIN_DMA: &str = "aios_pin_dma";
 pub const HOST_FN_MAP_DMA: &str = "aios_map_dma";
 pub const HOST_FN_MAP_WEIGHTS: &str = "aios_map_weights";
+/// P7 demand-paging.
+pub const HOST_FN_DEMAND_PAGE: &str = "aios_demand_page";
 
 /// Cap exigida por nome de host-function.
 pub fn required_cap(host_fn: &str) -> Option<Cap> {
@@ -32,6 +34,7 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
         HOST_FN_PIN_DMA | "pin_dma" => Some(Cap::PIN_DMA),
         HOST_FN_MAP_DMA | "map_dma" => Some(Cap::MAP_DMA),
         HOST_FN_MAP_WEIGHTS | "map_weights" => Some(Cap::MAP_WEIGHTS),
+        HOST_FN_DEMAND_PAGE | "demand_page" => Some(Cap::DEMAND_PAGE),
         _ => None,
     }
 }
