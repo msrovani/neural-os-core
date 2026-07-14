@@ -50,7 +50,7 @@ A visão-alvo é um **capability microkernel** onde:
 | K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Fictício** (drivers Ring 0) | `pci.rs`, `virtio_*`, `dma.rs` no monólito | G | Alto |
 | Cortex Ring 3 + mmap pesos | **Fictício** | `cortex.rs`, `arena.rs` — mesmo AS | G | Médio |
 | Hermes WASM SFI + host caps | **Parcial** | `wasm*.rs`, `trust::check_syscall` — sem AS separado | M | Baixo |
-| JARBAS Ring 3 + FB MMIO + VSync | **Fictício** | `display/`, compositor Ring 0 | G | Médio |
+| JARBAS Ring 3 + FB MMIO + VSync | **Parcial** (P4 PoC Ring0+AS) | `jarbas_fb.rs` + Cap MAP/WRITE_FB | G | Médio |
 | IPC só ring lock-free entre AS | **Fictício** → **MVP C parcial** | EventBus in-process; MVP C: SPSC shared pages | M | Baixo se isolado |
 | Capability autoritativa por operação | **Parcial** | EventBus `CapabilityToken`; MVP C: `Cap` bitflags + syscall | P | Baixo |
 | Dois address spaces + CR3 switch | **Fictício** → **MVP C** | Novo: `address_space.rs` | M | Médio (mitigado: non-fatal) |
@@ -65,8 +65,8 @@ A visão-alvo é um **capability microkernel** onde:
 | **P1** | ADR curto + non-goals | ✅ |
 | **P2** | **MVP C:** 2 AS + CR3 switch + ring SPSC shared + Cap + trap `int 0x90` + demo boot non-fatal | ✅ PoC |
 | **P3** | Hermes WASM host-functions por Cap (sem AS full) | ✅ CapGate + SEND_TCP/WRITE_RING |
-| **P4** | JARBAS FB MMIO capability + double-buffer contract | ⏳ próximo |
-| **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ⏳ |
+| **P4** | JARBAS FB MMIO capability + double-buffer contract | ✅ PoC |
+| **P5** | K-IA DMA pin + Cortex mmap pesos (AS dedicado) | ⏳ próximo |
 
 Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap**.
 
@@ -87,6 +87,15 @@ Roadmap explícito: **MVP C → Hermes/JARBAS → K-IA → Cortex mmap**.
 - `Cap::SEND_TCP` + `SYS_SEND_TCP`; `aios_send_tcp` / `aios_write_ring` em `aios_api.rs`.
 - Hermes `execute_skill`: skills net/http/tcp passam por CapGate; `wasm_rt::host_call_gated` para imports.
 - Ainda sem AS separado para WASM (SFI pleno = #426).
+
+### P4 — aceite (JARBAS FB MMIO + double-buffer)
+
+- `jarbas_fb.rs`: `FbContract` (virt/phys/stride/w/h/bpp) a partir do FB bootloader (`GpuDevice`).
+- `Cap::{MAP_FB,WRITE_FB}` + `SYS_MAP_FB` / `SYS_PRESENT_FB`; deny sem Cap + log serial.
+- AS JARBAS (`AddressSpace::clone_current`) mapeia `DEMO_MAP_PAGES` do FB em `JARBAS_FB_VA`.
+- `JarbasDoubleBuffer` (backheap) + `present` (cópia + stub vsync via `TIMER_TICKS`/`sfence`).
+- Demo boot non-fatal após P3; sem FB → Cap-only SUCCESS; falha → WARN, boot segue.
+- Path primário = UEFI/bootloader FB (VirtIO-GPU BAR = evolução). Ring3 jump = bônus futuro.
 
 ---
 

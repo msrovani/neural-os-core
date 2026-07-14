@@ -12,6 +12,9 @@ static ALLOW_COUNT: AtomicU64 = AtomicU64::new(0);
 /// Host Caps mínimas para sandbox Hermes (WASM / aios_*).
 pub const HOST_FN_SEND_TCP: &str = "aios_send_tcp";
 pub const HOST_FN_WRITE_RING: &str = "aios_write_ring";
+/// JARBAS FB (ADR-0041 P4) — também registradas no gate para deny uniforme.
+pub const HOST_FN_MAP_FB: &str = "aios_map_fb";
+pub const HOST_FN_PRESENT_FB: &str = "aios_present_fb";
 
 /// Cap exigida por nome de host-function.
 pub fn required_cap(host_fn: &str) -> Option<Cap> {
@@ -20,6 +23,8 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
         HOST_FN_WRITE_RING | "write_ring" => Some(Cap::WRITE_RING),
         "ping" | "aios_ping" => Some(Cap::PING),
         "read_ring" | "aios_read_ring" => Some(Cap::READ_RING),
+        HOST_FN_MAP_FB | "map_fb" => Some(Cap::MAP_FB),
+        HOST_FN_PRESENT_FB | "present_fb" | "write_fb" => Some(Cap::WRITE_FB),
         _ => None,
     }
 }

@@ -26,10 +26,11 @@
 | **P1** | ADR alvo + non-goals | ✅ |
 | **P2** | **MVP C:** 2 AS + CR3 + SPSC + Cap + `int 0x90` + demo non-fatal | ✅ PoC |
 | **P3** | Hermes WASM host-functions por Cap | ✅ CapGate (`capability_gate.rs`) |
-| **P4** | JARBAS FB MMIO + double-buffer | ⏳ próximo |
-| **P5** | K-IA DMA pin + Cortex mmap pesos | ⏳ |
+| **P4** | JARBAS FB MMIO + double-buffer | ✅ PoC (`jarbas_fb.rs`, Cap MAP/WRITE_FB) |
+| **P5** | K-IA DMA pin + Cortex mmap pesos | ⏳ próximo |
 
-**Arquivos MVP C:** `address_space.rs`, `syscall.rs`, `ipc/{mod,ring_buffer}.rs` + hooks `main.rs` / IDT `0x90`.
+**Arquivos MVP C:** `address_space.rs`, `syscall.rs`, `ipc/{mod,ring_buffer}.rs` + hooks `main.rs` / IDT `0x90`.  
+**Arquivos P4:** `jarbas_fb.rs` + `Cap::{MAP_FB,WRITE_FB}` em `syscall.rs` + CapGate host names + demo em `main.rs`.
 
 **Riscos residuais:** Ring3 user-mode (`iretq`) TODO; Agency em EventDriven dorme sem eventos (intencional); crate `hermes/` pode driftar vs monólito `neural-kernel` (migração gradual).
 

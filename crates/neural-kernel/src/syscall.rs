@@ -11,6 +11,10 @@ pub const SYS_PING: u64 = 1;
 pub const SYS_WRITE_RING: u64 = 2;
 pub const SYS_READ_RING: u64 = 3;
 pub const SYS_SEND_TCP: u64 = 4;
+/// JARBAS: mapear páginas FB no AddressSpace (ADR-0041 P4).
+pub const SYS_MAP_FB: u64 = 5;
+/// JARBAS: present/flip backbuffer → FB físico.
+pub const SYS_PRESENT_FB: u64 = 6;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +27,10 @@ impl Cap {
     pub const READ_RING: Cap = Cap(1 << 2);
     /// Hermes/WASM: host `aios_send_tcp` / skill net (ADR-0041 P3).
     pub const SEND_TCP: Cap = Cap(1 << 3);
+    /// JARBAS: mapear FB MMIO no AS do processo (ADR-0041 P4).
+    pub const MAP_FB: Cap = Cap(1 << 4);
+    /// JARBAS: escrever / present no framebuffer.
+    pub const WRITE_FB: Cap = Cap(1 << 5);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -80,6 +88,18 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_SEND_TCP => {
             if !cap.contains(Cap::SEND_TCP) {
                 return Err("EPERM: Cap::SEND_TCP");
+            }
+            Ok(0)
+        }
+        SYS_MAP_FB => {
+            if !cap.contains(Cap::MAP_FB) {
+                return Err("EPERM: Cap::MAP_FB");
+            }
+            Ok(0)
+        }
+        SYS_PRESENT_FB => {
+            if !cap.contains(Cap::WRITE_FB) {
+                return Err("EPERM: Cap::WRITE_FB");
             }
             Ok(0)
         }

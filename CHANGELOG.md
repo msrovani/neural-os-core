@@ -24,6 +24,11 @@
 - Hermes skills net/* + `wasm_rt::host_call_gated`; demo boot non-fatal
 - Deny sem Cap → log serial `[CapGate] DENY`
 
+### P4 — JARBAS FB MMIO + double-buffer (ADR-0041)
+- `jarbas_fb.rs`: contrato `FbContract` (bootloader FB), map AS JARBAS (`JARBAS_FB_VA`), Cap `MAP_FB`/`WRITE_FB`
+- Double-buffer heap + `present` + stub vsync (`TIMER_TICKS`/`sfence`); demo boot non-fatal pós-P3
+- Sem FB físico → Cap-only path SUCCESS; falha → WARN, boot continua
+
 ## v2.0.0 — 2026-07-13 — Sprint 106: Ecossistema de Anéis Lógicos
 
 ### Sprint 106-11: Correção de boot em HW real

@@ -285,6 +285,7 @@ mod address_space;
 mod syscall;
 mod ipc;
 mod capability_gate;
+mod jarbas_fb;
 
 
 
@@ -1625,6 +1626,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         Err(e) => {
             serial_println!("[P3] WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P3 CapGate WARN (non-fatal)");
+        }
+    }
+
+    // P4 (ADR-0041): JARBAS FB MMIO + double-buffer — non-fatal
+    match crate::jarbas_fb::demo_jarbas_fb() {
+        Ok(()) => {
+            serial_println!("[P4] JARBAS FB demo OK");
+            crate::boot_logger::log("BOOT: P4 JARBAS FB OK");
+        }
+        Err(e) => {
+            serial_println!("[P4] WARN: {} — boot continua", e);
+            crate::boot_logger::log("BOOT: P4 JARBAS FB WARN (non-fatal)");
         }
     }
 
