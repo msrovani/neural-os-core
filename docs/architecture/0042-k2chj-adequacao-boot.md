@@ -1,10 +1,11 @@
 # ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
 
-**Data:** 2026-07-14  
-**Status:** Accepted — plano diretor de adequação (implementação = N1…)  
+**Data:** 2026-07-14 · atualizado 2026-07-15  
+**Status:** Accepted — plano diretor de adequação (**N1 done**; N3 em progresso)  
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** 107+  
-**Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.6.x`** para adequação N1+ (ex.: v1.6.0-dev = N1 em curso); `1.5.7` = PoC Cap + boot OK baseline.  
+**Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5.**
 
 
@@ -64,7 +65,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N5** | jarbas | Ego / UI / +10% | Compositor vivo; persona; voz como expressão; só via Hermes |
 
 **Gate de release `v2.0.0`:** N1–N5 com gates de qualidade desta ADR (Runtime intacto + telemetria honesta + Caps/IPC por anel).  
-**Até `v2.0.0`:** tags/`CHANGELOG` em **`1.6.x`** durante adequação N1+ (baseline Cap/boot permanece documentado em 1.5.7).
+**Até `v2.0.0`:** tags/`CHANGELOG` em **`1.x`** (1.5.7 Cap; **1.7.0** = N1 + 2B LOADED; N3 generate/TTS ainda parcial).
 
 **Ordem fechada:** N0→N1→N2→N3→N4→N5.  
 **Paralelo:** drivers VirtIO/DMA em nano+k-ai durante N2 **sem** UI. Proibido jarbas antes de Hermes mínimo.
@@ -106,7 +107,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-Próximo código: **N1**.
+**N1** ✅ (v1.7.0). **N3 progress:** BitNet 2B LOADED (~590MB, 30 layers, FWD OK); generate/TTS empty = próximo. Depois: N2 / fechar N3–N5.
 
 ---
 

@@ -1,35 +1,40 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.6.0-dev
-#   SPRINT 107 — Adequação ADR-0042 N1 + Voice I/O
+#   STATE — neural-os-core v1.7.0
+#   SPRINT 107 — Adequação ADR-0042 + Voice I/O (marco 2B LOADED)
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
 # ═════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Versão (linha):** **v1.6.0-dev** — adequação N1+ (não declarar v2.0).  
-**Gate `v2.0.0`:** N1–N5 completos (ADR-0042).  
-**Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.
+**Versão:** **v1.7.0** (2026-07-15) — N1 ✅ + BitNet 2B LOADED (N3 parcial).  
+**Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
+**Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
+**Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
 
 ### Adequação N0–N5 (ADR-0042)
 | Fase | Status |
 |------|--------|
 | **N0** Baseline boot Runtime | ✅ |
-| **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 (evidência QEMU 2026-07-15) |
+| **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
 | **N2** k-ai HW-AI / SelfHeal | ⏳ |
-| **N3** cortex cérebro | ▶️ parcial — MICRO LOADED FAT; 2B PRESENT/full PIO deferred |
-| **N4** hermes orquestra | ▶️ parcial — STT-sim → Hermes weather intent |
-| **N5** jarbas ego/UI | ▶️ parcial — `[JARBAS-TTS]` formant (draft Hermes se MICRO vazio) |
+| **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** (~590MB, 30 layers) + FWD 0…29; generate/TTS ainda falha |
+| **N4** hermes orquestra | ▶️ STT-sim → Hermes → FWD |
+| **N5** jarbas ego/UI | ▶️ `[JARBAS-TTS] FAILED empty generate` |
 
-### Evidência QEMU (logs/boot_uefi_n16_slim_20260715.txt)
-- `[STATUS] llm=LOADED bge=FAILED piper=ABSENT fw_gpu=ABSENT` — sem SUCCESS falso 2B
-- `[FAT] BitNet loaded from FAT (MICRO.BITNET)`
-- Sem spam `[FW-TEST] NVIDIA` (GPU ausente / probe gated)
-- Runtime + TIMER ticks; `[JARBAS-STT-SIM]` + `[JARBAS-TTS]`
-- Disco: slim 64MB (`mkfat32_slim_qemu.py`); full 2B via `build_image.py` (após fix root dir)
+### Evidência QEMU BitNet 2B (2026-07-15 — `logs/boot_whpx_20260715_112049.txt`)
+| Item | Resultado |
+|------|-----------|
+| Loader | BITNET2B magic OK @0x100000000, **590680KB** |
+| `load_model` | ver=4 h=2560 **L=30** → `LLM LOADED file=BITNET2B` |
+| FWD | layers 0…29/30 no path clima |
+| TTS | **`[JARBAS-TTS] FAILED empty generate`** |
+| Clima e2e | **PARCIAL** (load+FWD OK; saída vazia) |
+
+**Ops:** soft-float + `cargo nk` + multicore; QEMU 6G/SMP; timeout captura ~5 min. Ver `SESSION_108.md`.
 
 ### Próximo
-- N3: load BitNet 2B completo (mmap/streaming ou PIO + RAM 6G) → `llm=LOADED` 2B
-- N2 SelfHeal gated; fechar e2e clima com TTS `amanha vai…` estável + rebuild uefi (bootloader lock)
-- Tag `v1.6.0` quando N1 checklist ADR fechado + CHANGELOG [1.6.0]
+- Fix **generate / TTS empty** (e2e clima fechado)
+- N2 SelfHeal gated; N4/N5 além do stub
+- Gate `v2.0.0` = N1–N5 only
 
 ### Identidade funcional K²CHJ (ADR-0042)
 | Anel | Função |
@@ -68,6 +73,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 **Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K²CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
 
 ## Marcos Acumulados
+- **🏆 v1.7.0 (2026-07-15):** N1 ✅ + BitNet 2B LOADED (~590MB, 30L, FWD); soft-float/`cargo nk`; TTS empty known. Ver `SESSION_108.md`.
 - **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
 - **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.

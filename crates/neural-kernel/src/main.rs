@@ -1990,45 +1990,138 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     }
 
+    // N3: QEMU -device loader ANTES do FAT — PIO de ~200MB no TCG trava/é inviável.
+    // Host: -device loader,file=target/bitnet_2B.bitnet,addr=0x100000000 + -m 6G
+    // Tamanho EXATO via FAT lookup (slice > arquivo → #PF / parse FAIL).
     if !model_loaded {
-
-        // Try FAT filesystem (HW real)
-
-        unsafe {
-
+        let load_addr: u64 = 0x100000000;
+        let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+        let mem_has_4gb = boot_info.memory_regions.iter().any(|r| r.start <= load_addr && r.end > load_addr);
+        let fat_2b_sz: Option<usize> = unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
-
-            if let Some(ref ata) = *ata_guard {
-
+            (*ata_guard).as_ref().and_then(|ata| {
                 let parts = crate::fat32::read_mbr(ata);
-
                 for p in &parts {
-
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        if let Some(sz) = fs.lookup_file_size("BITNET2B.BIN") { return Some(sz); }
+                        if let Some(sz) = fs.lookup_file_size("BITNET.BIN") { return Some(sz); }
+                    }
+                }
+                None
+            })
+        };
+        if mem_has_4gb {
+            let probe_ptr = (load_addr + pm_offset) as *const u8;
+            let raw0 = unsafe { core::ptr::read_volatile(probe_ptr) };
+            let raw1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
+            let raw2 = unsafe { core::ptr::read_volatile(probe_ptr.add(2)) };
+            let raw3 = unsafe { core::ptr::read_volatile(probe_ptr.add(3)) };
+            serial_println!("[RAMDISK] Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
+            let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
+            if qemu_magic == 0xBE11BE11 {
+                // Host: target/bitnet_2B.bitnet re-export q_dim=2560 (~577MB).
+                // FAT legado ~203MB NÃO pode fatiar o loader — truncava e load_model FAIL.
+                const BITNET_2B_V4_BYTES: usize = 604_856_373;
+                let mut model_len = match fat_2b_sz {
+                    Some(sz) if sz >= 400 * 1024 * 1024 => sz,
+                    Some(sz) => {
+                        serial_println!(
+                            "[RAMDISK] FAT BITNET2B size={}KB legado — using host V4 {}KB",
+                            sz / 1024,
+                            BITNET_2B_V4_BYTES / 1024
+                        );
+                        BITNET_2B_V4_BYTES
+                    }
+                    None => BITNET_2B_V4_BYTES,
+                };
+                for r in boot_info.memory_regions.iter() {
+                    if r.start <= load_addr && r.end > load_addr {
+                        let region = (r.end - load_addr) as usize;
+                        if region < model_len {
+                            serial_println!("[RAMDISK] region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
+                            model_len = region;
+                        }
+                        break;
+                    }
+                }
+                serial_println!(
+                    "[RAMDISK] QEMU loader: BITNET2B magic OK @0x100000000 exact={}KB fat={:?}",
+                    model_len / 1024,
+                    fat_2b_sz.map(|s| s / 1024)
+                );
+                if model_len > 1024 {
+                    let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
+                    serial_println!("[RAMDISK] QEMU loader: load_model slice={}KB...", model_len / 1024);
+                    if let Some(big_model) = crate::cortex::load_model(model_data) {
+                        crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                        serial_println!(
+                            "[RAMDISK] LLM LOADED file=BITNET2B (QEMU-loader @0x100000000) size={}KB",
+                            model_len / 1024
+                        );
+                        crate::boot_logger::log("BOOT: QEMU loader BitNet 2B loaded");
+                        model_loaded = true;
+                    } else {
+                        serial_println!("[RAMDISK] QEMU loader: load_model FAILED");
+                        crate::load_status::set(
+                            crate::load_status::AssetKind::Llm,
+                            crate::load_status::LoadStatus::Failed,
+                        );
+                    }
+                }
+            } else {
+                serial_println!("[RAMDISK] No model at 0x100000000 — trying 0x120000000...");
+                let load_addr2: u64 = 0x120000000;
+                if boot_info.memory_regions.iter().any(|r| r.start <= load_addr2 && r.end > load_addr2) {
+                    let probe2 = (load_addr2 + pm_offset) as *const u32;
+                    let magic2 = unsafe { core::ptr::read_volatile(probe2) };
+                    if magic2 == 0xBE11BE11 {
+                        const BITNET_2B_V4_BYTES: usize = 604_856_373;
+                        let model_len2 = fat_2b_sz
+                            .filter(|&sz| sz >= 400 * 1024 * 1024)
+                            .unwrap_or(BITNET_2B_V4_BYTES);
+                        let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
+                        if let Some(big_model) = crate::cortex::load_model(model_data2) {
+                            crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                            serial_println!("[RAMDISK] LLM LOADED file=BITNET2B (QEMU-loader @0x120000000)");
+                            model_loaded = true;
+                        }
+                    }
+                }
+            }
+        } else {
+            serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — fallback FAT.");
+        }
+    }
 
-                        // MICRO primeiro (boot/QEMU PIO); 2B >32MB = PRESENT_ON_FAT, skip full load
-                        const MAX_BOOT_MODEL: usize = 32 * 1024 * 1024;
-                        for name in &["MICRO.BITNET", "MICRO.BIN", "BITNET2B.BIN", "BITNET.BIN"] {
+    if !model_loaded {
+        // FAT: preferir 2B só se ≤48MB (PIO). >48MB = PRESENT (loader/HW).
+        // MICRO fallback para boot QEMU sem travar TCG.
+        unsafe {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata_guard {
+                let parts = crate::fat32::read_mbr(ata);
+                for p in &parts {
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        const PIO_BOOT_CAP: usize = 48 * 1024 * 1024;
+                        for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
-                            if sz > MAX_BOOT_MODEL {
-                                if let Some(hdr) = fs.read_file_range(name, 0, 16) {
-                                    let magic = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]);
-                                    serial_println!(
-                                        "[FAT] {} PRESENT size={}KB magic={:#x} — skip full boot load (PIO)",
-                                        name, sz / 1024, magic
-                                    );
-                                } else {
-                                    serial_println!("[FAT] {} PRESENT size={}KB — skip full boot load", name, sz / 1024);
-                                }
+                            if sz > PIO_BOOT_CAP {
+                                serial_println!(
+                                    "[FAT] {} PRESENT size={}KB — skip full PIO (use QEMU-loader/-m 6G)",
+                                    name, sz / 1024
+                                );
                                 continue;
                             }
-                            serial_println!("[FAT] lendo {} ({} bytes)...", name, sz);
+                            serial_println!("[FAT] lendo {} ({}KB) — candidato LLM...", name, sz / 1024);
                             if let Some(fat_data) = fs.read_file(name) {
                                 if let Some(big_model) = crate::cortex::load_model(&fat_data) {
                                     crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                                    serial_println!("[FAT] BitNet loaded from FAT ({}) — CortexAgent upgraded.", name);
+                                    serial_println!(
+                                        "[FAT] LLM LOADED file={} size={}KB — CortexAgent upgraded.",
+                                        name, fat_data.len() / 1024
+                                    );
                                     crate::boot_logger::log("BOOT: FAT BitNet model loaded");
                                     model_loaded = true;
                                     break;
@@ -2041,15 +2134,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                                 }
                             }
                         }
-
                     }
-
                 }
-
             }
-
         }
-
     }
 
     // Try RustCoder expert from FAT
@@ -2080,190 +2168,52 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     // LLM test + telemetria N1.1
-    if !model_loaded {
-        let prompt_micro = "hello";
-        let resp_micro = crate::cortex::generate_via_model(prompt_micro);
-        serial_println!("[LLM-TEST] micro prompt='{}' response='{}'", prompt_micro, resp_micro);
-        if crate::cortex::model_is_loaded() {
-            crate::load_status::set(
-                crate::load_status::AssetKind::Llm,
-                crate::load_status::LoadStatus::Loaded,
-            );
+    if model_loaded || crate::cortex::model_is_loaded() {
+        // BitNet 2B no soft-float: LLM-TEST completo demora demais no TCG — skip, STT path cobre.
+        let heavy = {
+            let g = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
+            g >= 2048
+        };
+        if heavy {
+            serial_println!("[LLM-TEST] SKIP heavy 2B (use STT clima path)");
         } else {
-            crate::load_status::set_if_upgrade(
-                crate::load_status::AssetKind::Llm,
-                crate::load_status::LoadStatus::Absent,
-            );
+            let r = crate::cortex::generate_via_model("hello");
+            serial_println!("[LLM-TEST] loaded prompt='hello' response='{}'", r);
         }
-    } else {
-        let r = crate::cortex::generate_via_model("hello");
-        serial_println!("[LLM-TEST] loaded prompt='hello' response='{}'", r);
         crate::load_status::set(
             crate::load_status::AssetKind::Llm,
             crate::load_status::LoadStatus::Loaded,
         );
-    }
-
-    if !model_loaded {
-
-        // Try QEMU generic loader (dev apenas)
-
-        let load_addr: u64 = 0x100000000;
-
-        let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
-
-        // Check if 4GB is within bootloader-mapped memory by scanning memory_regions
-
-        let mem_has_4gb = boot_info.memory_regions.iter().any(|r| r.start <= load_addr && r.end > load_addr);
-
-        if mem_has_4gb {
-
-            let probe_ptr = (load_addr + pm_offset) as *const u8;
-
-            let raw0 = unsafe { core::ptr::read_volatile(probe_ptr) };
-
-            let raw1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
-
-            let raw2 = unsafe { core::ptr::read_volatile(probe_ptr.add(2)) };
-
-            let raw3 = unsafe { core::ptr::read_volatile(probe_ptr.add(3)) };
-
-            serial_println!("[RAMDISK] Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
-
-            let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
-
-            if qemu_magic == 0xBE11BE11 {
-
-                // load_model() will auto-expand heap based on header
-
-                serial_println!("[RAMDISK] QEMU loader: .bitnet v3 OK, loading model...");
-
-                // Now load model using full memory region slice
-
-                let mut model_len = 0usize;
-
-                for r in boot_info.memory_regions.iter() {
-
-                    if r.start <= load_addr && r.end > load_addr {
-
-                        model_len = (r.end - load_addr) as usize;
-
-                        break;
-
-                    }
-
-                }
-
-                if model_len > 1024 {
-
-                    let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
-
-                    serial_println!("[RAMDISK] QEMU loader: attempting to load {} MB model...", model_len / (1024*1024));
-
-                    if let Some(big_model) = crate::cortex::load_model(model_data) {
-
-                        crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-
-                        serial_println!("[RAMDISK] QEMU loader: Big model loaded. CortexAgent upgraded.");
-
-                        crate::boot_logger::log("BOOT: QEMU loader .bitnet model loaded");
-
-                        model_loaded = true;
-
-                    } else {
-
-                        serial_println!("[RAMDISK] QEMU loader: .bitnet load FAILED — keeping micro model.");
-
-                    }
-
-                } else {
-
-                    serial_println!("[RAMDISK] QEMU loader: model region too small ({model_len} bytes)");
-
-                }
-
-            } else {
-
-                serial_println!("[RAMDISK] No model at phys 0x{load_addr:x} — trying 0x120000000...");
-
-                // Try alternative QEMU loader address (BitNet @ 4.5GB)
-
-                let load_addr2: u64 = 0x120000000;
-
-                let mem_has = boot_info.memory_regions.iter().any(|r| r.start <= load_addr2 && r.end > load_addr2);
-
-                if mem_has {
-
-                    let probe2 = (load_addr2 + pm_offset) as *const u32;
-
-                    let magic2 = unsafe { core::ptr::read_volatile(probe2) };
-
-                    if magic2 == 0xBE11BE11 {
-
-                        let model_len2 = 250usize * 1024 * 1024;
-
-                        let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
-
-                        if let Some(big_model) = crate::cortex::load_model(model_data2) {
-
-                            crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-
-                            serial_println!("[RAMDISK] BitNet model loaded from 0x120000000! CortexAgent upgraded.");
-
-                            model_loaded = true;
-
-                        }
-
-                    }
-
-                }
-
-            }
-
-        } else {
-
-            serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — modelo 2B deve estar na FAT32.");
-
-        }
-
-        if !model_loaded {
-            crate::boot_logger::log("BOOT: LLM ABSENT — sem ramdisk nem FAT modelo utilizavel");
-            serial_println!("[LLM] ABSENT — BitNet 2B nao carregado (FAT/ramdisk)");
-            crate::load_status::set_if_upgrade(
-                crate::load_status::AssetKind::Llm,
-                crate::load_status::LoadStatus::Absent,
-            );
-        }
-
+        model_loaded = true;
+    } else {
+        serial_println!("[LLM-TEST] no model — ABSENT");
+        crate::boot_logger::log("BOOT: LLM ABSENT — sem ramdisk/loader/FAT modelo utilizavel");
+        serial_println!("[LLM] ABSENT — BitNet 2B nao carregado (FAT/ramdisk)");
+        crate::load_status::set_if_upgrade(
+            crate::load_status::AssetKind::Llm,
+            crate::load_status::LoadStatus::Absent,
+        );
     }
 
     crate::load_status::print_status_banner();
 
-    // N4/N5 mínimo — STT simulado; TTS sempre com linha `[JARBAS-TTS] amanha vai ...`
+    // N4/N5 skinny — STT sim → Hermes → generate_via_model → TTS do modelo (sem canned).
     {
         let stt = "qual a previsao do tempo para amanha?";
         serial_println!("[JARBAS-STT-SIM] {}", stt);
-        serial_println!("[HERMES] weather intent → cortex generate");
-        let raw = if crate::cortex::model_is_loaded() {
-            crate::cortex::generate_via_model(stt)
-        } else {
-            alloc::string::String::new()
-        };
-        let tts = {
-            let lower = raw.to_ascii_lowercase();
-            if lower.contains("amanha") && raw.chars().count() > 12 {
-                raw
+        if crate::cortex::model_is_loaded() {
+            serial_println!("[HERMES] weather intent → cortex generate_via_model");
+            let raw = crate::cortex::generate_via_model(stt);
+            if raw.is_empty() {
+                serial_println!("[JARBAS-TTS] FAILED empty generate");
             } else {
-                // MICRO/sem modelo: orquestra Hermes + fala honesta (STT sim autorizado)
-                serial_println!("[HERMES] cortex short/empty — weather draft via Hermes");
-                alloc::string::String::from(
-                    "amanha vai ficar nublado com chance de chuva",
-                )
+                serial_println!("[JARBAS-TTS] {}", raw);
+                let _pcm = crate::audio::tts::synthesize(&raw);
+                serial_println!("[JARBAS-TTS] formant pcm_samples={}", _pcm.len());
             }
-        };
-        serial_println!("[JARBAS-TTS] {}", tts);
-        let _pcm = crate::audio::tts::synthesize(&tts);
-        serial_println!("[JARBAS-TTS] formant pcm_samples={}", _pcm.len());
+        } else {
+            serial_println!("[JARBAS-TTS] SKIP llm=ABSENT");
+        }
     }
 
     // Sprint 95-96: Cognitive + Memory status

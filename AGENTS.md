@@ -10,6 +10,8 @@
 #   v1.5.0 (Jul 2026): K²CHJ Workspace Migration — monólito → 5 crates
 #   v2.0.0 (Jul 2026): Ecossistema de Anéis Lógicos — k_nano, k_ai, cortex, hermes, jarbas
 #   v2.0.0 (Jul 2026): Sprint 106 concluída — K²CHJ anéis lógicos + MicroPython/WASM ✅
+#   ADR-0042 (Jul 2026): Adequação Boot OK → visão — cadeia k-nano→k-ai→cortex→hermes→jarbas (N1–N5)
+#   Gate v2.0.0 = N1–N5 done; até lá = 1.x (v1.5.7 Cap; v1.7.0 = N1 + 2B LOADED; não "2.0 completo")
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -20,16 +22,18 @@
 # docs/memory/STATE.md         → Estado atual do kernel
 # docs/memory/IDEA_BANK.md     → 416+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
+# docs/architecture/0041-*.md  → Capability PoC P0–P9
+# docs/architecture/0042-*.md  → Adequação Boot OK → K²CHJ (N1–N5)
 # CHANGELOG.md                 → Histórico de versões
 # ROADMAP.md                   → Roadmap completo (v1.0 → v2.0)
 # TODO.md                      → Checklist mestre de tarefas
-# crates/k_nano/src/           → Ring 0 Estrito (HAL, drivers, PCI, memory)
-# crates/k_ai/src/             → Ring 1 (SelfHeal, Trust, Audit, Agency, Cognitive)
+# crates/k_nano/src/           → Ring 0 — sistema LEGÍVEL (HAL, Caps, traps, drivers)
+# crates/k_ai/src/             → AI para HARDWARE + SelfHeal + Trust + HMI máquina
 #                              → safety/security/optimizer/Sleep/AutoLearn: hermes
 #                              → boot bin ainda usa cópias em neural-kernel (migração gradual)
-# crates/cortex/src/           → Cognição e MoE (Trinity, BitNet, BPE)
-# crates/hermes/src/           → Executor (WASM, RustPython, Rede, Intent)
-# crates/jarbas/src/           → HCI, UI e Persona (Display, Audio, CLI)
+# crates/cortex/src/           → CÉREBRO — MoE, aprendizado, busca, tensores
+# crates/hermes/src/           → ORQUESTRADOR agentic — intent, skills, cria apps/conteúdo
+# crates/jarbas/src/           → EGO / persona / +10% — UI, humor, voz, frontend
 # tools/                       → Scripts Python (treino, extração SDIO, bridge)
 # ════════════════════════════════════════════════════════
 
@@ -164,7 +168,9 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: Sprint 107 — v2.0 Voice I/O Pipeline (+ capability ladder PoC fechada)
+# Current Sprint: Sprint 107 — Voice I/O + pós v1.7.0 (N1 ✅, 2B LOADED; fix TTS/generate)
+# Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
+# Não declarar v2.0.0 até ADR-0042 N1–N5.
 
 ## Roadmap v2.0 "Cognição"
 | Sprint | Foco | Status |

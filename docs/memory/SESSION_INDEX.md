@@ -19,7 +19,8 @@
 | 095 | 106 | — | Sprint 106: Ecossistema de Anéis Lógicos | k_ia→k_ai, jarvis→jarbas, VFS, MicroPython/WASM, SkillOpt |
 | 106.3 | 106-3 | — | SOUL.md parser fix | jarbas usa `neural_kernel::fs::read_vfs()`, 0 refs ATA_DRIVER |
 | 106.5 | 106-5 | — | RustPython viabilidade | Não no_std nativo — rota WASM (106-6) é principal |
-| 107 | 107 | — | Boot A/B + ADR-0041 P0–P9 | A/B boot; CR3+SPSC+Cap→CapGate→FB→DMA/mmap→Ring3→#PF→vring→GGUF; PoC non-fatal (`9bb1382`…`49c4301`) |
+| 107 | 107 | — | Boot A/B + Cap P0–P9 + ADR-0042 | Runtime QEMU OK; cadeia k-nano→…→jarbas; próximo N1 legível |
+| 108 | 107 | — | N1 ✅ + BitNet 2B LOADED → v1.7.0 | Soft-float/cargo nk; 2B ~590MB L=30 FWD; TTS empty generate; e2e clima PARCIAL |
 
 ## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 
@@ -67,7 +68,10 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 
 15. **Sprint 106-7: Page faults (2026-07-13):** Ordem correta: allocator → events → agents. lazy_init!() para agentes dependentes de heap. **Inicialização deve seguir ordem estrita.**
 
-16. **Capability ADR-0041 P0–P9 (2026-07-14):** Platform sync ANTES dos drivers. Toda demo Cap é **non-fatal**. Ring3 PoC existe (`iretq`/stub) mas **não inventar usermode pleno** sem prova QEMU UEFI. VirtIO vring = layout+pin **sem QUEUE_NOTIFY**. #PF = PRESENT only (**sem I/O no fault**). Syscall soft = `int 0x90` (não 0x80).
+16. **Capability ADR-0041 P0–P9 (2026-07-14):** Platform sync ANTES dos drivers. Toda demo Cap é **non-fatal**. Ring3 PoC existe (`iretq`/stub) mas **default off** (`TRY_ENTER_RING3=false`) no boot estável. VirtIO vring = layout+pin **sem QUEUE_NOTIFY**. #PF = PRESENT only (**sem I/O no fault**). Syscall soft = `int 0x90` (não 0x80).
+17. **Adequação ADR-0042 (2026-07-14):** Cadeia `k-nano → k-ai → cortex → hermes → jarbas`. Identidades: legível / HW-AI+SelfHeal / cérebro / orquestra / ego+10%. Boot OK = N0; implementar **N1→N5** sem regredir Runtime. Boot OK ≠ visão completa. **`v2.0.0` só quando N1–N5 prontos**; até lá tags `1.x` (ex. 1.5.7 Cap, **1.7.0** N1+2B LOADED).
+
+18. **v1.7.0 / soft-float + 2B LOADED (2026-07-15):** Nightly SSE em `x86_64-unknown-none` → soft-float + `cargo nk`. FAT free-scan por setor (não 1 I/O/entry). BitNet 2B real ~590MB/30L (não confiar ficheiro ~203MB truncado). QEMU load+FWD: timeout serial **≥~5 min**. **LOADED ≠ generate**: `[JARBAS-TTS] FAILED empty generate` é known issue.
 
 ---
 

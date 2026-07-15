@@ -114,11 +114,12 @@ def populate(path):
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet")),
-        # Kernel (main.rs) le BITNET.BIN; ADR usa BITNET2B.BIN - popular ambos se caber
-        ("BITNET.BIN", find_file("bitnet_2B.bitnet") or find_file("BITNET.BIN")
-         or find_file("BITNET-2B.BITNET") or find_file("MICRO.BITNET")),
+        # BITNET2B primeiro; BITNET.BIN = alias só se ≠ 2B (evita 2×577MB no disco 1G)
         ("BITNET2B.BIN", find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN")
          or find_file("BITNET-2B.BITNET") or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet")),
+        ("BITNET.BIN", find_file("BITNET.BIN") if find_file("BITNET.BIN")
+         and find_file("BITNET.BIN") != (find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN"))
+         else None),
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),

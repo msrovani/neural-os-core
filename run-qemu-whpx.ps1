@@ -47,7 +47,8 @@ $accel = "tcg"
 $cpu = "max"
 if (-not $Tcg) {
     $accel = "whpx"
-    $cpu = "host"
+    # host + APX/MPX em QEMU 11 → OVMF #GP no PlatformPei; Haswell estável + AVX2
+    $cpu = "Haswell"
 }
 
 $smpTry = @($Smp)
@@ -78,6 +79,12 @@ function Build-QemuArgs {
         "-drive", "format=raw,file=$uefi,if=ide,index=0"
     )
     if ($disk) { $a += @("-drive", "format=raw,file=$disk,if=ide,index=1") }
+    # N3: BitNet 2B via QEMU loader @4GB (evita PIO FAT ~200MB no TCG)
+    $bitnet2b = Join-Path $Root "target\bitnet_2B.bitnet"
+    if (Test-Path $bitnet2b) {
+        $a += @("-device", "loader,file=$bitnet2b,addr=0x100000000")
+        Write-Host "BitNet2B loader: $bitnet2b @0x100000000" -ForegroundColor Green
+    }
     $a += @(
         "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
         "-serial", "file:$logfile",

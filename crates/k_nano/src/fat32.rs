@@ -186,17 +186,33 @@ impl<'a> Fat32Reader<'a> {
         self.data_lba + (cluster - 2) as u32 * self.sectors_per_cluster as u32
     }
 
+    /// Le um cluster completo (todos os setores), retornando None se qualquer
+    /// leitura de setor falhar. Evita processar um buffer parcialmente
+    /// zerado/obsoleto como se fossem dados validos do disco.
+    unsafe fn read_cluster(&self, cluster: u32) -> Option<Vec<u8>> {
+        let lba = self.cluster_lba(cluster);
+        let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
+        for i in 0..self.sectors_per_cluster as u32 {
+            if !self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i + 1) as usize * 512], 1) {
+                return None;
+            }
+        }
+        Some(buf)
+    }
+
     /// Le o diretorio root FAT32 (cluster chain) e lista arquivos
     pub unsafe fn list_root(&self) -> alloc::string::String {
         let mut out = alloc::string::String::from("FAT32 Root:\n");
         let mut cluster = self.root_cluster;
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-            let lba = self.cluster_lba(cluster);
-            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
-            for i in 0..self.sectors_per_cluster as u32 {
-                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
+            let buf = match self.read_cluster(cluster) {
+                Some(b) => b,
+                None => {
+                    out.push_str("  [ERRO] falha de leitura no disco — listagem truncada\n");
+                    break;
+                }
+            };
 
             for i in 0..buf.len() / 32 {
                 let off = i * 32;
@@ -224,11 +240,7 @@ impl<'a> Fat32Reader<'a> {
         let mut cluster = self.root_cluster;
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-            let lba = self.cluster_lba(cluster);
-            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
-            for i in 0..self.sectors_per_cluster as u32 {
-                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
+            let buf = match self.read_cluster(cluster) { Some(b) => b, None => return None };
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
                 if first == 0 { break; }
@@ -264,7 +276,9 @@ impl<'a> Fat32Reader<'a> {
                             continue; // skip sectors before offset
                         }
                         let mut chunk = [0u8; 512];
-                        self.ata.read_sectors(clba + si, &mut chunk, 1);
+                        if !self.ata.read_sectors(clba + si, &mut chunk, 1) {
+                            return None; // falha de I/O — nao propagar dados possivelmente invalidos
+                        }
                         let copy_start = if sector_start < offset { offset - sector_start } else { 0 };
                         let copy_end = 512.min(actual_size - data.len() + copy_start);
                         data.extend_from_slice(&chunk[copy_start..copy_end]);
@@ -289,11 +303,7 @@ impl<'a> Fat32Reader<'a> {
         let name_upper = name.to_ascii_uppercase();
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-            let lba = self.cluster_lba(cluster);
-            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
-            for i in 0..self.sectors_per_cluster as u32 {
-                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
+            let buf = match self.read_cluster(cluster) { Some(b) => b, None => return None };
 
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
@@ -320,7 +330,9 @@ impl<'a> Fat32Reader<'a> {
                     let mut chunk = [0u8; 512];
                     for i in 0..self.sectors_per_cluster as u32 {
                         if data.len() >= file_size { break; }
-                        self.ata.read_sectors(clba + i, &mut chunk, 1);
+                        if !self.ata.read_sectors(clba + i, &mut chunk, 1) {
+                            return None; // falha de I/O — nao propagar dados possivelmente invalidos
+                        }
                         let remaining = file_size - data.len();
                         let copy_end = remaining.min(512);
                         data.extend_from_slice(&chunk[..copy_end]);
@@ -348,6 +360,21 @@ impl<'a> Fat32Writer<'a> {
         Fat32Reader::new(ata, part).map(|reader| Fat32Writer { reader })
     }
 
+    /// Escreve um cluster completo (todos os setores), retornando false se
+    /// qualquer escrita de setor falhar (evita mascarar a falha como sucesso).
+    unsafe fn write_cluster(&self, cluster: u32, buf: &[u8]) -> bool {
+        let lba = self.reader.cluster_lba(cluster);
+        for i in 0..self.reader.sectors_per_cluster as u32 {
+            let off = i as usize * 512;
+            if off >= buf.len() { break; }
+            let end = (off + 512).min(buf.len());
+            let mut sector = [0u8; 512];
+            sector[..end - off].copy_from_slice(&buf[off..end]);
+            if !self.reader.ata.write_sectors(lba + i, &sector, 1) { return false; }
+        }
+        true
+    }
+
     /// Le entrada de diretorio pelo nome (formato 8.3 uppercase)
     unsafe fn find_entry(&self, name: &str) -> Option<(u32, u32, u32)> {
         let name_upper = name.to_ascii_uppercase();
@@ -358,11 +385,7 @@ impl<'a> Fat32Writer<'a> {
         let mut cluster = self.reader.root_cluster;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
             let lba = self.reader.cluster_lba(cluster);
-            let cluster_bytes = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
-            let mut buf = vec![0u8; cluster_bytes];
-            for i in 0..self.reader.sectors_per_cluster as u32 {
-                self.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
+            let buf = match self.reader.read_cluster(cluster) { Some(b) => b, None => return None };
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
                 if first == 0 || first == 0xE5 { continue; }
@@ -413,12 +436,7 @@ impl<'a> Fat32Writer<'a> {
 
         let mut cluster = self.reader.root_cluster;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-            let lba = self.reader.cluster_lba(cluster);
-            let cluster_bytes = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
-            let mut buf = vec![0u8; cluster_bytes];
-            for i in 0..self.reader.sectors_per_cluster as u32 {
-                self.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
+            let mut buf = match self.reader.read_cluster(cluster) { Some(b) => b, None => return false };
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
                 if first == 0 || first == 0xE5 {
@@ -436,11 +454,7 @@ impl<'a> Fat32Writer<'a> {
                     buf[entry_off+26..entry_off+28].copy_from_slice(&cluster_lo.to_le_bytes());
                     buf[entry_off+28..entry_off+32].copy_from_slice(&file_size.to_le_bytes());
                     // Escrever cluster de diretorio de volta
-                    for i in 0..self.reader.sectors_per_cluster as u32 {
-                        let off = i as usize * 512;
-                        self.reader.ata.write_sectors(lba + i, &buf[off..off+512], 1);
-                    }
-                    return true;
+                    return self.write_cluster(cluster, &buf);
                 }
             }
             cluster = self.reader.read_fat_entry(cluster);
@@ -465,11 +479,12 @@ impl<'a> Fat32Writer<'a> {
             let chunk = &data[written..written + cluster_size.min(data.len() - written)];
             for s in 0..spc {
                 let off = s as usize * bps;
-                let end = off + bps;
-                let sector_data = if end <= chunk.len() { &chunk[off..end] } else { &chunk[off..] };
                 let mut sector = [0u8; 512];
-                sector[..sector_data.len()].copy_from_slice(sector_data);
-                self.reader.ata.write_sectors(lba + s, &sector, 1);
+                if off < chunk.len() {
+                    let end = (off + bps).min(chunk.len());
+                    sector[..end - off].copy_from_slice(&chunk[off..end]);
+                }
+                if !self.reader.ata.write_sectors(lba + s, &sector, 1) { return false; }
             }
             written += cluster_size;
             // FAT entry: aponta para proximo cluster ou EOC
@@ -532,23 +547,14 @@ impl<'a> Fat32Writer<'a> {
 
         let mut cluster = self.reader.root_cluster;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-            let lba = self.reader.cluster_lba(cluster);
-            let cluster_bytes = self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
-            let mut buf = vec![0u8; cluster_bytes];
-            for i in 0..self.reader.sectors_per_cluster as u32 {
-                self.reader.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-            }
+            let mut buf = match self.reader.read_cluster(cluster) { Some(b) => b, None => return false };
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
                 if first == 0 || first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
                 if &buf[entry_off..entry_off+11] == &name_bytes {
                     buf[entry_off+28..entry_off+32].copy_from_slice(&size.to_le_bytes());
-                    for i in 0..self.reader.sectors_per_cluster as u32 {
-                        let off = i as usize * 512;
-                        self.reader.ata.write_sectors(lba + i, &buf[off..off+512], 1);
-                    }
-                    return true;
+                    return self.write_cluster(cluster, &buf);
                 }
             }
             cluster = self.reader.read_fat_entry(cluster);

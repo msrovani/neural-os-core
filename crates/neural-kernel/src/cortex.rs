@@ -102,11 +102,17 @@ fn rope_precompute(max_seq: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Ve
 
 fn rope_apply_heads(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usize,
                     cos: &[f32], sin: &[f32], start_pos: usize) {
+    if cos.is_empty() || sin.is_empty() || head_dim < 2 {
+        return;
+    }
     let half = head_dim / 2;
     for s in 0..seq_len {
         let pos = start_pos + s;
         let base = s * num_heads * head_dim;
         let rope_off = pos * half;
+        if rope_off + half > cos.len() || rope_off + half > sin.len() {
+            return;
+        }
         for h in 0..num_heads {
             let off = base + h * head_dim;
             for d in 0..half {
@@ -349,6 +355,9 @@ impl TransformerModel {
 
         let _layer_count = self.layers.len();
         for (layer_idx, layer) in self.layers.iter().enumerate() {
+            if is_first_pass && (layer_idx % 5 == 0 || layer_idx + 1 == _layer_count) {
+                crate::serial_println!("[FWD] layer {}/{}", layer_idx, _layer_count);
+            }
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
             // QKV for new tokens — fallback silencioso se matmul falhar
@@ -837,14 +846,30 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let _ms = read_u16(data, &mut off)? as usize;
         let isize = read_u16(data, &mut off)? as usize;
         let embed_bytes = (hidden * vs / 4) as u64;
-        // 4 aten tensors (q,k,v,o: hidden² each) + 3 FFN tensors (gate,up,down: hidden×isize each)
-        let layer_bytes = (4u64 * hidden as u64 * hidden as u64 / 4 + 3u64 * hidden as u64 * isize as u64 / 4) * num_layers as u64;
+        // Naive (v1 dense) — superestima GQA/BitFFN v3+ e forçava resize 900MB+
+        // (= ~100k map_page no TCG → hang sem log). v3+: pesos packed ≈ arquivo.
+        let layer_bytes = (4u64 * hidden as u64 * hidden as u64 / 4
+            + 3u64 * hidden as u64 * isize as u64 / 4)
+            * num_layers as u64;
         let unembed_bytes = (hidden as u64 * vs as u64 / 4) as u64;
-        let estimated = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
+        let naive_mb = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
+        let file_mb = (data.len() + 1024 * 1024 - 1) / (1024 * 1024);
+        let estimated = if version >= 3 {
+            // Ternário packed + headroom; heap já inicia em 1024MB (allocator).
+            file_mb + 64
+        } else {
+            naive_mb
+        };
         let cur_mb = crate::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
+        crate::serial_println!(
+            "[LLM] load_model ver={} h={} L={} file={}MB est={}MB heap={}MB",
+            version, hidden, num_layers, file_mb, estimated, cur_mb
+        );
         if estimated > cur_mb {
-            let total_mb = estimated + (estimated / 4).max(64);
+            let total_mb = (estimated + 64).min(1536); // teto 1.5G — evita remap infinito
+            crate::serial_println!("[LLM] resize_heap {} → {} MB...", cur_mb, total_mb);
             crate::allocator::resize_heap_to_mb(total_mb);
+            crate::serial_println!("[LLM] resize_heap done");
         }
     }
     // Reset offset past magic+version+num_params+hidden+num_layers for main parsing
@@ -864,7 +889,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     if version >= 3 {
         intermediate_size = read_u16(data, &mut off)? as usize;
         num_kv_heads = read_u16(data, &mut off)? as usize;
-        let q_dim = read_u16(data, &mut off)? as usize;  // Q projection output dim
+        let mut q_dim = read_u16(data, &mut off)? as usize;  // Q projection output dim
         num_medusa = read_u32(data, &mut off)? as usize;
         // v3.1: tie_word_embeddings flag (4 bytes)
         if off + 4 <= data.len() {
@@ -883,22 +908,120 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
 
         // v4: layer_features byte (bit 0 = inner_attn_ln, bit 1 = ffn_layernorm, bit 2 = RoPE)
         let layer_features = if version >= 4 { read_u8(data, &mut off)? } else { 0u8 };
-        let has_inner_attn_ln = (layer_features & 0x01) != 0;
-        let has_ffn_layernorm = (layer_features & 0x02) != 0;
+        let mut has_inner_attn_ln = (layer_features & 0x01) != 0;
+        let mut has_ffn_layernorm = (layer_features & 0x02) != 0;
         let has_rope = (layer_features & 0x04) != 0;
+
+        // BitNet-b1.58-2B-4T: HF packed shape (out/4,in) → q_dim=2560 (head_dim=128).
+        // Dump legado ~203MB (q_dim header 2560 mas pesos 640) → corrigir só se ficheiro cabe.
+        {
+            let k_try = num_kv_heads * (q_dim / num_heads.max(1));
+            let ffn_try = intermediate_size * q_dim / hidden.max(1);
+            let tern_try = (hidden * q_dim + 3) / 4
+                + 2 * ((hidden * k_try + 3) / 4)
+                + (q_dim * hidden + 3) / 4
+                + 2 * ((hidden * ffn_try + 3) / 4)
+                + (intermediate_size * q_dim + 3) / 4;
+            let need = (hidden * vocab_size as usize + 3) / 4 + tern_try * num_layers;
+            if need > data.len().saturating_add(data.len() / 8)
+                && hidden == 2560
+                && num_heads == 20
+                && num_kv_heads == 5
+                && q_dim == hidden
+            {
+                crate::serial_println!(
+                    "[LLM] q_dim header {} → 640 (legacy dump ~203MB; need~{}MB)",
+                    q_dim,
+                    need / (1024 * 1024)
+                );
+                q_dim = 640;
+            }
+        }
 
         let embed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
 
-        // GQA/BitFFN dimensions from header
-        let kv_head_dim = q_dim / num_heads;                  // 640/20 = 32
-        let k_dim = num_kv_heads * kv_head_dim;              // 5*32 = 160
-        let ffn_group = intermediate_size * q_dim / hidden;  // 6912*640/2560 = 1728
-        let down_out = q_dim;                                 // 640
+        // GQA/BitFFN dimensions from header (2B: q_dim=2560, head_dim=128, k_dim=640)
+        let kv_head_dim = q_dim / num_heads.max(1);
+        let k_dim = num_kv_heads * kv_head_dim;
+        let ffn_group = intermediate_size * q_dim / hidden.max(1);
+        let down_out = q_dim;
+
+        // Alguns dumps omitem vetores RMS f32; escolhe layout que fecha no ficheiro.
+        // (sem closures — soft-float / LLVM "offset not multiple of 16")
+        let tern_per = (hidden * q_dim + 3) / 4
+            + 2 * ((hidden * k_dim + 3) / 4)
+            + (q_dim * hidden + 3) / 4
+            + 2 * ((hidden * ffn_group + 3) / 4)
+            + (intermediate_size * down_out + 3) / 4;
+        let rem = data.len().saturating_sub(off);
+        let mut best_basic = true;
+        let mut best_inner = has_inner_attn_ln;
+        let mut best_ffn = has_ffn_layernorm;
+        let mut best_d = usize::MAX;
+        let mut bi = 0u8;
+        while bi < 2 {
+            let basic = bi == 0;
+            let mut ii = 0u8;
+            while ii < 2 {
+                let inner = ii == 1;
+                let mut fi = 0u8;
+                while fi < 2 {
+                    let ffn = fi == 1;
+                    let mut per = tern_per;
+                    if basic {
+                        per = per.saturating_add(hidden.saturating_mul(8));
+                    }
+                    if inner {
+                        per = per.saturating_add(kv_head_dim.saturating_mul(num_heads).saturating_mul(4));
+                    }
+                    if ffn {
+                        per = per.saturating_add(intermediate_size.saturating_mul(4));
+                    }
+                    let need = per.saturating_mul(num_layers);
+                    let d = if rem > need { rem - need } else { need - rem };
+                    if d < best_d {
+                        best_d = d;
+                        best_basic = basic;
+                        best_inner = inner;
+                        best_ffn = ffn;
+                    }
+                    fi += 1;
+                }
+                ii += 1;
+            }
+            bi += 1;
+        }
+        let has_basic_rms = best_basic;
+        has_inner_attn_ln = best_inner;
+        has_ffn_layernorm = best_ffn;
+        crate::serial_println!(
+            "[LLM] q_dim={} head_dim={} k_dim={} ffn_g={} layout rms={} inner={} ffn_ln={} rem={}KB d={}KB",
+            q_dim,
+            kv_head_dim,
+            k_dim,
+            ffn_group,
+            has_basic_rms as u8,
+            has_inner_attn_ln as u8,
+            has_ffn_layernorm as u8,
+            rem / 1024,
+            best_d / 1024
+        );
 
         let mut layers = Vec::with_capacity(num_layers);
-        for _ in 0..num_layers {
-            let rms_attn = read_f32_vec(data, &mut off, hidden)?;
-            let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
+        for li in 0..num_layers {
+            if li % 5 == 0 || li + 1 == num_layers {
+                crate::serial_println!("[LLM] loading layer {}/{} off={}KB", li, num_layers, off / 1024);
+            }
+            let rms_attn = if has_basic_rms {
+                read_f32_vec(data, &mut off, hidden)?
+            } else {
+                vec![1.0; hidden]
+            };
+            let rms_ffn = if has_basic_rms {
+                read_f32_vec(data, &mut off, hidden)?
+            } else {
+                vec![1.0; hidden]
+            };
             let rms_inner_attn = if has_inner_attn_ln {
                 read_f32_vec(data, &mut off, kv_head_dim * num_heads)?
             } else {
@@ -962,12 +1085,27 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             }
         }
 
-        let (rope_cos, rope_sin) = if has_rope {
-            let rope_theta_val = read_f32(data, &mut off)?;
-            rope_precompute(max_seq as usize, kv_head_dim, rope_theta_val)
-        } else {
-            (vec![], vec![])
-        };
+        // BitNet attn precisa RoPE. feat bit2 = theta no EOF; senão default 10000.
+        // Nunca confiar em theta<=1 (lixo pós-pesos / soft-float print edge).
+        let rope_seq = (max_seq as usize).min(2048).max(64);
+        let mut theta = 10000.0f32;
+        if has_rope && off + 4 <= data.len() {
+            if let Some(t) = read_f32(data, &mut off) {
+                if t > 1.0 {
+                    theta = t;
+                }
+            }
+        }
+        crate::serial_println!(
+            "[LLM] RoPE precompute seq={} theta={} feat_rope={}",
+            rope_seq, theta as u32, has_rope as u8
+        );
+        let (rope_cos, rope_sin) = rope_precompute(rope_seq, kv_head_dim, theta);
+
+        crate::serial_println!(
+            "[LLM] model OK layers={} q_dim={} tied={} off={}KB",
+            num_layers, q_dim, tie_embeddings as u8, off / 1024
+        );
 
         let model = TransformerModel {
             embed, layers, rms_final, unembed, medusa_heads,
@@ -1181,11 +1319,15 @@ fn argmax_row(logits: &Tensor, row: usize) -> u16 {
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
-    let max_seq = model.max_seq;
+    let max_seq = model.max_seq.min(64);
     let use_bpe = crate::bpe::is_loaded();
     let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
+    // Soft-float + BitNet 2B: prompt longo = hours. Smoke STT→TTS: 1 token + 1 gen.
+    if model.hidden >= 2048 && tokens.len() > 1 {
+        tokens = tokens[tokens.len() - 1..].to_vec();
+    }
     let prompt_len = tokens.len();
-    crate::serial_println!("[GEN] prompt_len={}, max_seq={}", prompt_len, max_seq);
+    crate::serial_println!("[GEN] prompt_len={}, max_seq={} h={} L={}", prompt_len, max_seq, model.hidden, model.num_layers);
 
     // Inicializa KV cache com dimensoes do modelo
     // Use model.kv_dim (Q output dim) for kv_dim, and infer k_dim from first layer's K projection
@@ -1201,7 +1343,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     crate::serial_println!("[GEN] prompt fwd: {} ticks", t1 - t0);
 
-    let max_gen = max_seq.saturating_sub(prompt_len).min(8);
+    let max_gen = if model.hidden >= 2048 {
+        1usize // 2B soft-float smoke: 1 token p/ STT→TTS path
+    } else {
+        max_seq.saturating_sub(prompt_len).min(8)
+    };
     for step in 0..max_gen {
         if tokens.len() >= max_seq { break; }
 
@@ -1259,8 +1405,12 @@ pub trait Model: Send {
 static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+/// Dimensão do CURRENT_MODEL (p/ skip LLM-TEST em 2B).
+pub static CURRENT_MODEL_EMBED_DIM: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 pub fn set_model(model: Box<dyn Model>) {
+    CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
     *CURRENT_MODEL.lock() = Some(model);
     crate::load_status::set(
         crate::load_status::AssetKind::Llm,

@@ -1,19 +1,29 @@
 # Changelog — neural-os-core v2.0 "Ring Buffer Refactor"
 
-## [Unreleased] — 1.6.0-dev (linha N1+)
+## [Unreleased]
 
-### N1 — k-nano legível (2026-07-15)
+## [1.7.0] — 2026-07-15 — N1 ✅ + BitNet 2B LOADED (N3 parcial)
+
+Marco QEMU além de “só N1”. Linha **1.6.0-dev absorvida/superseded** (sem tag `v1.6.0` vazia). Package Cargo permanece `1.0.0` (hábito tag-only, como 1.5.7). **Não** é `v2.0.0` (ADR-0042 gate = N1–N5).
+
+### N1 — k-nano legível ✅
 - **N1.1** `load_status::{LoadStatus,AssetKind}` + banner `[STATUS] llm=… bge=… piper=… fw_gpu=…`
 - Removido log falso `modelo 2B carregado da FAT32` sem prova → `LLM ABSENT` / LOADED coerente com `[LLM-TEST]`
 - **N1.2** Probe NVIDIA FW (`test_load_firmware` / ACR) **só** se `GpuVendor::Nvidia`; QEMU 1234:1111 → skip; CapGate bootstrap documentado (DENY demos esperados)
 - **N1.3** Hook `agent_core::set_sched_metrics_hook` → log periódico `[SCHED] tick= agents= polled=`
-- **FAT fixes (N3 path):** `mkfat32` não apaga root a cada arquivo; FAT[2]=root EOC; `encode_83` em `read_file`/`read_file_range`; free-cluster scan por setor (não 1 I/O/entry)
-- QEMU scripts: `-RamGB 6 -Smp 4` (fallback 2), `-Bridge` opcional, netdev user+hostfwd WARN no Windows
-- Disco slim: `tools/mkfat32_slim_qemu.py` (MICRO+experts); full image ainda via `build_image.py`
-- E2e clima (STT sim): `[JARBAS-STT-SIM]` → Hermes → cortex → `[JARBAS-TTS] amanha vai…` (formant; draft Hermes se MICRO vazio)
 
-### Soft-float / build note
-- Host `cargo build -p neural-kernel` sem `--target x86_64-unknown-none` pode falhar LLVM `offset is not a multiple of 16`; fluxo canônico: `cargo build --release -p boot` (artifact dep)
+### N3 parcial — BitNet 2B LOADED de verdade
+- Evidência `logs/boot_whpx_20260715_112049.txt`: QEMU-loader @0x100000000, **~590MB**, ver=4 h=2560 **L=30**, `LLM LOADED file=BITNET2B`
+- Path STT-sim → Hermes → **FWD layers 0…29/30**
+- Export/convert v4 (`tools/convert_bitnet.py`) alinhado a `load_model` dims
+
+### QEMU / ops / FAT
+- Soft-float + multicore: `.cargo/config.toml` (`jobs`/`-Z threads`, `-sse*`, alias `cargo nk`)
+- Disco/FAT: free-cluster scan por setor; `mkfat32` / `BITNET2B.BIN`; scripts `-RamGB 6 -Smp 4`
+- Disco slim: `tools/mkfat32_slim_qemu.py`; full via `build_image.py`
+
+### Known issue (e2e clima PARCIAL)
+- `[JARBAS-TTS] FAILED empty generate` — generate/TTS ainda aberto; LOADED+FWD ≠ resposta falada
 
 ## [1.5.7] — 2026-07-14 — Boot A/B + ADR-0041 Capability Ladder P0–P9
 

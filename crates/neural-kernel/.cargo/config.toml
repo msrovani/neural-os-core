@@ -1,5 +1,10 @@
 [build]
 target = "x86_64-unknown-none"
 
+# N1.0: x86_64-unknown-none habilita sse/sse2 por default no nightly 1.98 —
+# isso faz o LLVM emitir `error: offset is not a multiple of 16` (sem spans)
+# em vários paths (wifi/static/asm). Kernel bare-metal = soft-float, sem SSE.
 [target.x86_64-unknown-none]
-rustflags = []
+rustflags = [
+    "-C", "target-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2",
+]

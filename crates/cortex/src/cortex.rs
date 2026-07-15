@@ -102,11 +102,17 @@ fn rope_precompute(max_seq: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Ve
 
 fn rope_apply_heads(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usize,
                     cos: &[f32], sin: &[f32], start_pos: usize) {
+    if cos.is_empty() || sin.is_empty() || head_dim < 2 {
+        return;
+    }
     let half = head_dim / 2;
     for s in 0..seq_len {
         let pos = start_pos + s;
         let base = s * num_heads * head_dim;
         let rope_off = pos * half;
+        if rope_off + half > cos.len() || rope_off + half > sin.len() {
+            return;
+        }
         for h in 0..num_heads {
             let off = base + h * head_dim;
             for d in 0..half {
@@ -864,7 +870,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     if version >= 3 {
         intermediate_size = read_u16(data, &mut off)? as usize;
         num_kv_heads = read_u16(data, &mut off)? as usize;
-        let q_dim = read_u16(data, &mut off)? as usize;  // Q projection output dim
+        let mut q_dim = read_u16(data, &mut off)? as usize;  // Q projection output dim
         num_medusa = read_u32(data, &mut off)? as usize;
         // v3.1: tie_word_embeddings flag (4 bytes)
         if off + 4 <= data.len() {
@@ -883,22 +889,103 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
 
         // v4: layer_features byte (bit 0 = inner_attn_ln, bit 1 = ffn_layernorm, bit 2 = RoPE)
         let layer_features = if version >= 4 { read_u8(data, &mut off)? } else { 0u8 };
-        let has_inner_attn_ln = (layer_features & 0x01) != 0;
-        let has_ffn_layernorm = (layer_features & 0x02) != 0;
+        let mut has_inner_attn_ln = (layer_features & 0x01) != 0;
+        let mut has_ffn_layernorm = (layer_features & 0x02) != 0;
         let has_rope = (layer_features & 0x04) != 0;
+
+        // BitNet-b1.58-2B-4T mis-export: only rewrite q_dim if the file is the
+        // legacy ~203MB dump (header q_dim=2560 but packed as 640).
+        {
+            let k_try = num_kv_heads * (q_dim / num_heads.max(1));
+            let ffn_try = intermediate_size * q_dim / hidden.max(1);
+            let tern_try = (hidden * q_dim + 3) / 4
+                + 2 * ((hidden * k_try + 3) / 4)
+                + (q_dim * hidden + 3) / 4
+                + 2 * ((hidden * ffn_try + 3) / 4)
+                + (intermediate_size * q_dim + 3) / 4;
+            let need = (hidden * vocab_size as usize + 3) / 4 + tern_try * num_layers;
+            if need > data.len().saturating_add(data.len() / 8)
+                && hidden == 2560
+                && num_heads == 20
+                && num_kv_heads == 5
+                && q_dim == hidden
+            {
+                k_nano::serial_println!(
+                    "[LLM] q_dim header {} → 640 (legacy dump; need~{}MB)",
+                    q_dim,
+                    need / (1024 * 1024)
+                );
+                q_dim = 640;
+            }
+        }
 
         let embed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
 
         // GQA/BitFFN dimensions from header
-        let kv_head_dim = q_dim / num_heads;                  // 640/20 = 32
-        let k_dim = num_kv_heads * kv_head_dim;              // 5*32 = 160
-        let ffn_group = intermediate_size * q_dim / hidden;  // 6912*640/2560 = 1728
-        let down_out = q_dim;                                 // 640
+        let kv_head_dim = q_dim / num_heads.max(1);
+        let k_dim = num_kv_heads * kv_head_dim;
+        let ffn_group = intermediate_size * q_dim / hidden.max(1);
+        let down_out = q_dim;
+
+        let tern_per = (hidden * q_dim + 3) / 4
+            + 2 * ((hidden * k_dim + 3) / 4)
+            + (q_dim * hidden + 3) / 4
+            + 2 * ((hidden * ffn_group + 3) / 4)
+            + (intermediate_size * down_out + 3) / 4;
+        let rem = data.len().saturating_sub(off);
+        let mut best_basic = true;
+        let mut best_inner = has_inner_attn_ln;
+        let mut best_ffn = has_ffn_layernorm;
+        let mut best_d = usize::MAX;
+        let mut bi = 0u8;
+        while bi < 2 {
+            let basic = bi == 0;
+            let mut ii = 0u8;
+            while ii < 2 {
+                let inner = ii == 1;
+                let mut fi = 0u8;
+                while fi < 2 {
+                    let ffn = fi == 1;
+                    let mut per = tern_per;
+                    if basic {
+                        per = per.saturating_add(hidden.saturating_mul(8));
+                    }
+                    if inner {
+                        per = per.saturating_add(kv_head_dim.saturating_mul(num_heads).saturating_mul(4));
+                    }
+                    if ffn {
+                        per = per.saturating_add(intermediate_size.saturating_mul(4));
+                    }
+                    let need = per.saturating_mul(num_layers);
+                    let d = if rem > need { rem - need } else { need - rem };
+                    if d < best_d {
+                        best_d = d;
+                        best_basic = basic;
+                        best_inner = inner;
+                        best_ffn = ffn;
+                    }
+                    fi += 1;
+                }
+                ii += 1;
+            }
+            bi += 1;
+        }
+        let has_basic_rms = best_basic;
+        has_inner_attn_ln = best_inner;
+        has_ffn_layernorm = best_ffn;
 
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
-            let rms_attn = read_f32_vec(data, &mut off, hidden)?;
-            let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
+            let rms_attn = if has_basic_rms {
+                read_f32_vec(data, &mut off, hidden)?
+            } else {
+                vec![1.0; hidden]
+            };
+            let rms_ffn = if has_basic_rms {
+                read_f32_vec(data, &mut off, hidden)?
+            } else {
+                vec![1.0; hidden]
+            };
             let rms_inner_attn = if has_inner_attn_ln {
                 read_f32_vec(data, &mut off, kv_head_dim * num_heads)?
             } else {
@@ -962,11 +1049,13 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             }
         }
 
+        let rope_seq = (max_seq as usize).min(2048).max(64);
         let (rope_cos, rope_sin) = if has_rope {
             let rope_theta_val = read_f32(data, &mut off)?;
-            rope_precompute(max_seq as usize, kv_head_dim, rope_theta_val)
+            rope_precompute(rope_seq, kv_head_dim, rope_theta_val)
         } else {
-            (vec![], vec![])
+            // convert_bitnet omite feat bit2 — RoPE ainda é obrigatório no attn
+            rope_precompute(rope_seq, kv_head_dim, 10000.0)
         };
 
         let model = TransformerModel {

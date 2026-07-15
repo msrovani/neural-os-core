@@ -46,7 +46,7 @@ def fat32_write(disk_path):
         data_lba = lba_start + reserved + fat_count * spf
         # Files to write
         files = [
-            ("MICRO.BITNET", find_file("micro.bitnet")),
+            ("BITNET2B.BIN", find_file("bitnet_2B.bitnet")),
             ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
             ("HW_EXPERT.BITNET", find_file("hw_expert.bitnet") or find_file("HW_EXPERT.BITNET")),
             ("BGE.BIN", find_file("bge-small.bitnet") or find_file("BGE.BIN") or find_file("bge.bin")),

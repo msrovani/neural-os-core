@@ -1,40 +1,104 @@
 #!/usr/bin/env python3
 """Gera imagem FAT32 completa para QEMU e HW real.
-Inclui: .bitnet, firmware blobs, CONFIG.TXT
-Uso: python tools/build_image.py [--size 128] [--output disk.raw]
+Inclui: .bitnet (incl. BITNET-2B se existir), firmware blobs, CONFIG.TXT.
+
+Uso:
+  python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (1024 MB)
+  python tools/build_image.py --hw             # HW   -> target/disk_hw.raw   (1024 MB)
+  python tools/build_image.py --size 512 --output target/disk_qemu.raw
+
+Pendrive 32 GB: tamanho generoso ok - nao pular BITNET-2B.
+Fluxo QEMU: cargo build --release -> python tools/build_image.py -> .\\run-qemu-uefi.ps1 -Window
 """
-import os, sys, subprocess
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DEFAULT_SIZE_MB = 1024  # cabe BITNET.BIN + BITNET2B.BIN (~200MB) + firmware + extras
+
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="Gera disk_qemu.raw / disk_hw.raw com modelos .bitnet + firmware"
+    )
+    p.add_argument(
+        "--size",
+        type=int,
+        default=DEFAULT_SIZE_MB,
+        help=f"Tamanho da imagem em MB (default: {DEFAULT_SIZE_MB})",
+    )
+    p.add_argument(
+        "--output",
+        default=None,
+        help="Caminho de saida (default: target/disk_qemu.raw ou target/disk_hw.raw com --hw)",
+    )
+    p.add_argument(
+        "--hw",
+        action="store_true",
+        help="Imagem para HW/pendrive -> target/disk_hw.raw (BOOT_MODE=hw)",
+    )
+    return p.parse_args()
+
 
 def main():
-    size = sys.argv[2] if len(sys.argv) > 2 and sys.argv[1] == '--size' else '128'
-    out = sys.argv[4] if len(sys.argv) > 4 and sys.argv[3] == '--output' else os.path.join(ROOT, 'tools', 'disk_qemu.raw')
+    args = parse_args()
+    target_dir = os.path.join(ROOT, "target")
+    os.makedirs(target_dir, exist_ok=True)
 
-    # Ensure v3 model is available
-    src_v3 = os.path.join(ROOT, 'target', 'hw_expert_v3.bitnet')
-    dst_v3 = os.path.join(ROOT, 'target', 'hw_expert_tf.bitnet')
+    if args.output:
+        out = args.output if os.path.isabs(args.output) else os.path.join(ROOT, args.output)
+    elif args.hw:
+        out = os.path.join(target_dir, "disk_hw.raw")
+    else:
+        out = os.path.join(target_dir, "disk_qemu.raw")
+
+    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+
+    # Ensure v3 model alias for mkfat32 populate
+    src_v3 = os.path.join(target_dir, "hw_expert_v3.bitnet")
+    dst_v3 = os.path.join(target_dir, "hw_expert_tf.bitnet")
     if os.path.exists(src_v3) and not os.path.exists(dst_v3):
-        import shutil
         shutil.copy2(src_v3, dst_v3)
         print(f"[OK] hw_expert_v3.bitnet ({os.path.getsize(src_v3)//1024}KB) -> hw_expert_tf.bitnet")
 
-    # Run mkfat32
+    boot_mode = "hw" if (args.hw or "disk_hw" in os.path.basename(out).lower()) else "qemu"
     env = os.environ.copy()
-    if 'hw' in out:
-        env['SKIP_2B'] = '1'  # pular BITNET-2B para imagem de HW (nao cabe)
-    cmd = [sys.executable, os.path.join(ROOT, 'tools', 'mkfat32.py'),
-           '--size', str(size), '--output', out]
-    print(f"=== Criando imagem {size}MB -> {out} ===")
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=120)
-    print(r.stdout)
+    env.pop("SKIP_2B", None)  # nunca forcar skip — pendrive 32GB / disco generoso
+    env["BOOT_MODE"] = boot_mode
+
+    cmd = [
+        sys.executable,
+        os.path.join(ROOT, "tools", "mkfat32.py"),
+        "--size",
+        str(args.size),
+        "--output",
+        out,
+    ]
+    print(f"=== Criando imagem {args.size}MB (BOOT_MODE={boot_mode}) -> {out} ===")
+    print("    BITNET-2B incluso se arquivo existir em repo/target/")
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=600, env=env)
+    if r.stdout:
+        sys.stdout.buffer.write(r.stdout.encode("utf-8", errors="replace"))
+        sys.stdout.buffer.write(b"\n")
     if r.returncode != 0:
-        print(f"[ERRO] mkfat32: {r.stderr[:300]}")
-        return
+        err = (r.stderr or "")[:500]
+        print(f"[ERRO] mkfat32 exit={r.returncode}: {err}")
+        sys.exit(r.returncode)
+
+    if not os.path.exists(out):
+        print(f"[ERRO] arquivo nao criado: {out}")
+        sys.exit(1)
 
     final_size = os.path.getsize(out)
-    print(f"\n[OK] {out}: {final_size//1024//1024}MB")
-    print(f"Para QEMU: qemu-system-x86_64 -drive file={out},format=raw,if=ide")
-    print(f"Para pendrive: dd if={out} of=/dev/sdX bs=4M status=progress")
+    print(f"\n[OK] {out}: {final_size // 1024 // 1024}MB")
+    print(f"QEMU:  .\\run-qemu-uefi.ps1 -Window")
+    print(f"HW:    dd if={out} of=/dev/sdX bs=4M status=progress")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
