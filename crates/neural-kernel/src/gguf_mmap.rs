@@ -25,11 +25,13 @@ const FALLBACK_MAGIC: u32 = 0x4C49464E; // "NFIL"
 
 /// Nomes 8.3 / curtos conhecidos na imagem FAT (ordem de preferência).
 const CANDIDATES: &[&str] = &[
+    "BITNET2B.BIN",
     "BITNET.BIN",
     "HWEXPRT.BIN",
     "RUSTCDR.BITNET",
     "MODEL.GGUF",
     "MICRO.BIN",
+    "MICRO.BITNET",
 ];
 
 static MMAP_COUNT: AtomicU64 = AtomicU64::new(0);

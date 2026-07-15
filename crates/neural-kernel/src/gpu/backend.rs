@@ -111,13 +111,31 @@ pub unsafe fn init_backend(gpus: &[GpuInfo]) {
             serial_println!("[GPU-BACKEND] {}: SPSC job ring criado", gpu.name);
         }
 
-        // 4. Teste de firmware (valida blobs no FAT32 mesmo sem GPU NVIDIA)
-        crate::gpu::firmware::test_load_firmware();
+        // 4. Teste de firmware NVIDIA — só se VID NVIDIA (não QEMU 1234:1111)
+        if gpu.vendor == GpuVendor::Nvidia {
+            let fw_ok = crate::gpu::firmware::test_load_firmware();
+            crate::load_status::set(
+                crate::load_status::AssetKind::FwGpu,
+                if fw_ok {
+                    crate::load_status::LoadStatus::Loaded
+                } else {
+                    crate::load_status::LoadStatus::Absent
+                },
+            );
+            // 5. Secure boot (ACR) — carrega firmware na GPU se disponivel
+            let _sb_result = crate::gpu::firmware::secure_boot_gpu(gpu, pmoff);
+        } else {
+            crate::load_status::set_if_upgrade(
+                crate::load_status::AssetKind::FwGpu,
+                crate::load_status::LoadStatus::Absent,
+            );
+            serial_println!(
+                "[FW-TEST] skip (vendor={:?} — NVIDIA FW só com VID 0x10DE)",
+                gpu.vendor
+            );
+        }
 
-        // 5. Secure boot (ACR/PSP/GuC) — carrega firmware na GPU se disponivel
-        let _sb_result = crate::gpu::firmware::secure_boot_gpu(gpu, pmoff);
-
-        // 5. Inicializa backend especifico do vendor
+        // 6. Inicializa backend especifico do vendor
         match gpu.vendor {
             GpuVendor::Intel => {
                 if let Some(ring) = IntelRing::probe(gpu, pmoff) {

@@ -9,16 +9,27 @@ static TTS_ENGINE: spin::Mutex<Option<PiperEngine>> = spin::Mutex::new(None);
 
 pub fn init_neural_tts() {
     let engine = try_load_piper();
+    if engine.is_some() {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Piper,
+            crate::load_status::LoadStatus::Loaded,
+        );
+    } else {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Piper,
+            crate::load_status::LoadStatus::Absent,
+        );
+    }
     *TTS_ENGINE.lock() = engine;
 }
 
 fn try_load_piper() -> Option<PiperEngine> {
+    // Boot PIO em TCG nao aguenta Piper 60MB+ — formant e o path N5 minimo.
+    const MAX_BOOT_PIPER: usize = 2 * 1024 * 1024;
     unsafe {
-        // Try both master and slave ATA devices
         for try_slave in &[false, true] {
             let mut tmp = crate::ATA_DRIVER.lock();
             if let Some(ref mut ata) = *tmp {
-                // Temporarily switch slave flag and try reading
                 let orig = ata.slave;
                 ata.slave = *try_slave;
                 let parts = crate::fat32::read_mbr(ata);
@@ -26,6 +37,15 @@ fn try_load_piper() -> Option<PiperEngine> {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         for name in &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"] {
+                            if let Some(sz) = fs.lookup_file_size(name) {
+                                if sz > MAX_BOOT_PIPER {
+                                    crate::serial_println!(
+                                        "[PIPER] {} presente ({} KB) — skip boot load (PIO); formant ativo",
+                                        name, sz / 1024
+                                    );
+                                    continue;
+                                }
+                            }
                             if let Some(data) = fs.read_file(name) {
                                 let mut eng = PiperEngine::new();
                                 if eng.load(&data) {
@@ -38,21 +58,6 @@ fn try_load_piper() -> Option<PiperEngine> {
                     }
                 }
                 ata.slave = orig;
-            }
-        }
-    }
-    // Try QEMU loader fallback
-    let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-    for &addr in &[0x110000000u64, 0x120000000u64] {
-        unsafe {
-            let probe = (addr + pm) as *const u32;
-            if core::ptr::read_volatile(probe) == 0xBE11BE11 {
-                let data = core::slice::from_raw_parts(probe as *const u8, 70 * 1024 * 1024);
-                let mut eng = PiperEngine::new();
-                if eng.load(data) {
-                    crate::serial_println!("[PIPER] Piper TTS loaded from QEMU loader @{:x}", addr);
-                    return Some(eng);
-                }
             }
         }
     }

@@ -1,5 +1,11 @@
 //! CapabilityGate — host-functions Hermes/WASM gated por Cap (ADR-0041 P3).
 //! Sem POSIX: send_tcp / write_ring só passam com Cap explícita.
+//!
+//! # Bootstrap de Caps (N1.2)
+//! Demos P3–P9 no boot usam `Cap::empty()` / held parcial de propósito —
+//! os DENY no serial são **esperados** (prova do gate), não falha de produto.
+//! Authority de produção (Hermes AS + Caps iniciais) = follow-up N2/N4;
+//! não inventar grant amplo no boot só para silenciar DENY.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 

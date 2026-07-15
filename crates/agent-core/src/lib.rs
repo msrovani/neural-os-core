@@ -313,6 +313,7 @@ impl AgentRegistry {
                     self.agents[idx].agent.on_activate();
                 }
             }
+            let mut polled: u32 = 0;
             // Se StateGraph ativo, usa ele para decidir qual agente pollar
             if let Some(ref mut graph) = self.graph {
                 let node_idx = graph.advance();
@@ -322,6 +323,7 @@ impl AgentRegistry {
                     self.agents[i].tick_counter += 1;
                     let tc = self.agents[i].tick_counter;
                     let result = self.agents[i].agent.tick(tick_id, tc);
+                    polled = 1;
                     match result {
                         AgentTickResult::Pending => {
                             self.agents[i].consecutive_pending += 1;
@@ -341,6 +343,7 @@ impl AgentRegistry {
                         _ => {}
                     }
                 }
+                maybe_log_sched_metrics(tick_id, self.agents.len(), polled);
                 halt();
                 continue;
             }
@@ -366,6 +369,7 @@ impl AgentRegistry {
                 self.agents[i].tick_counter += 1;
                 let tc = self.agents[i].tick_counter;
                 let result = self.agents[i].agent.tick(tick_id, tc);
+                polled = polled.saturating_add(1);
                 // Watchdog: detecta loops infinitos (10000+ ticks sem Done)
                 match result {
                     AgentTickResult::Pending => {
@@ -386,7 +390,26 @@ impl AgentRegistry {
                     _ => {}
                 }
             }
+            maybe_log_sched_metrics(tick_id, self.agents.len(), polled);
             halt();
+        }
+    }
+}
+
+/// Hook opcional de métricas (N1.3). Kernel registra `serial_println` via `set_sched_metrics_hook`.
+static mut SCHED_METRICS_HOOK: Option<fn(u64, usize, u32)> = None;
+
+/// Período em ticks do scheduler entre logs `[SCHED]`.
+pub const SCHED_METRICS_PERIOD: u64 = 32;
+
+pub fn set_sched_metrics_hook(hook: Option<fn(u64, usize, u32)>) {
+    unsafe { SCHED_METRICS_HOOK = hook; }
+}
+
+fn maybe_log_sched_metrics(tick_id: u64, n_agents: usize, polled: u32) {
+    if tick_id == 1 || tick_id % SCHED_METRICS_PERIOD == 0 {
+        if let Some(hook) = unsafe { SCHED_METRICS_HOOK } {
+            hook(tick_id, n_agents, polled);
         }
     }
 }

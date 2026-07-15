@@ -1,17 +1,46 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.5.7 🏆
-#   SPRINT 107 — Capability ladder (ADR-0041 P0–P9) + Voice I/O
-#   180+ arquivos Rust, ~26.000 LOC, 0 erros
-#   v2.0.0: Sprint 106 · v1.5.7: boot A/B + capability PoC P0–P9
+#   STATE — neural-os-core v1.6.0-dev
+#   SPRINT 107 — Adequação ADR-0042 N1 + Voice I/O
+#   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
 # ═════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Roadmap v2.0 "Cognição":** Anéis lógicos operacionais; escada capability P0–P9 em PoC no monólito.
-**Última versão:** v1.5.7 (2026-07-14) — ADR-0041 P0–P9 ✅ (`9bb1382`…`49c4301`).
-**Próximo foco produto:** Sprint 107 Voice I/O (TTS→STT→LLM→TTS).  
-**Próximo foco capability:** SFI Hermes (#426) · ELF usermode · QUEUE_NOTIFY · I/O seguro no #PF.
+**Versão (linha):** **v1.6.0-dev** — adequação N1+ (não declarar v2.0).  
+**Gate `v2.0.0`:** N1–N5 completos (ADR-0042).  
+**Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.
 
-**Nota ops (2026-07-14):** Builds isolados sob `target/` (`target/agent-*`, `target/check-*`, `target/s106`). Leftover `target-s106/` — mover quando idle.
+### Adequação N0–N5 (ADR-0042)
+| Fase | Status |
+|------|--------|
+| **N0** Baseline boot Runtime | ✅ |
+| **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 (evidência QEMU 2026-07-15) |
+| **N2** k-ai HW-AI / SelfHeal | ⏳ |
+| **N3** cortex cérebro | ▶️ parcial — MICRO LOADED FAT; 2B PRESENT/full PIO deferred |
+| **N4** hermes orquestra | ▶️ parcial — STT-sim → Hermes weather intent |
+| **N5** jarbas ego/UI | ▶️ parcial — `[JARBAS-TTS]` formant (draft Hermes se MICRO vazio) |
+
+### Evidência QEMU (logs/boot_uefi_n16_slim_20260715.txt)
+- `[STATUS] llm=LOADED bge=FAILED piper=ABSENT fw_gpu=ABSENT` — sem SUCCESS falso 2B
+- `[FAT] BitNet loaded from FAT (MICRO.BITNET)`
+- Sem spam `[FW-TEST] NVIDIA` (GPU ausente / probe gated)
+- Runtime + TIMER ticks; `[JARBAS-STT-SIM]` + `[JARBAS-TTS]`
+- Disco: slim 64MB (`mkfat32_slim_qemu.py`); full 2B via `build_image.py` (após fix root dir)
+
+### Próximo
+- N3: load BitNet 2B completo (mmap/streaming ou PIO + RAM 6G) → `llm=LOADED` 2B
+- N2 SelfHeal gated; fechar e2e clima com TTS `amanha vai…` estável + rebuild uefi (bootloader lock)
+- Tag `v1.6.0` quando N1 checklist ADR fechado + CHANGELOG [1.6.0]
+
+### Identidade funcional K²CHJ (ADR-0042)
+| Anel | Função |
+|------|--------|
+| **k-nano** | Sistema **legível** (HW bruto, Caps, CR3, log honesto) |
+| **k-ai** | AI **para hardware** + SelfHeal + HMI de máquina |
+| **cortex** | **Cérebro** — MoE, learn, busca, mmap pesos |
+| **hermes** | **Orquestrador** agentic — intent, skills, criação |
+| **jarbas** | **Ego / persona / +10%** — UI, humor, frontend |
+
+**Nota ops:** Builds isolados sob `target/` (`target/agent-*`, `target/check-*`, `target/n16-*`). Rebuild `uefi.img` via `cargo build --release -p boot` (pode travar em `cargo install` bootloader — liberar lock `.cargo`).
 
 ### Boot endurecido + Capability Rings (2026-07-14)
 | Pacote | Conteúdo | Status |
@@ -36,7 +65,7 @@
 P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 · P7 #PF · P8 vring · P9 GGUF/FAT.  
 **Módulos:** `address_space`, `syscall`, `ipc/*`, `capability_gate`, `jarbas_fb`, `k_ia_dma`, `cortex_mmap`, `user_mode`, `demand_page`, `virtio_vring`, `gguf_mmap` + demos non-fatal em `main.rs`.
 
-**Riscos / follow-ups:** Ring3 untested em QEMU; VirtIO sem QUEUE_NOTIFY; #PF sem I/O; Agency EventDriven ociosa sem eventos (intencional); crate `hermes/` ≠ bin até wiring explícito.
+**Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K²CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
 
 ## Marcos Acumulados
 - **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.

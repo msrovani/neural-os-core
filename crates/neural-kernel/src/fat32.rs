@@ -7,6 +7,23 @@ use alloc::vec::Vec;
 use crate::ata::AtaDriver;
 use crate::serial_println;
 
+/// Converte "NAME.EXT" para entrada FAT 8.3 (11 bytes, espaços).
+fn encode_83(name: &str) -> [u8; 11] {
+    let mut out = [b' '; 11];
+    let upper = name.to_ascii_uppercase();
+    let (base, ext) = match upper.rsplit_once('.') {
+        Some((b, e)) => (b, e),
+        None => (upper.as_str(), ""),
+    };
+    for (i, &c) in base.as_bytes().iter().take(8).enumerate() {
+        out[i] = c;
+    }
+    for (i, &c) in ext.as_bytes().iter().take(3).enumerate() {
+        out[8 + i] = c;
+    }
+    out
+}
+
 #[derive(Debug)]
 pub struct Partition {
     pub bootable: bool,
@@ -220,7 +237,7 @@ impl<'a> Fat32Reader<'a> {
     /// Le um range de bytes de um arquivo pelo nome (streaming).
     /// Retorna bytes de `offset` ate `offset + size` do arquivo.
     pub unsafe fn read_file_range(&self, name: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
-        let name_upper = name.to_ascii_uppercase();
+        let want = encode_83(name);
         let mut cluster = self.root_cluster;
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
@@ -234,8 +251,8 @@ impl<'a> Fat32Reader<'a> {
                 if first == 0 { break; }
                 if first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
-                let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
-                if entry_name.trim_end() != name_upper { continue; }
+                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
+                if buf[entry_off..entry_off+11] != want { continue; }
 
                 let file_size = u32::from_le_bytes([
                     buf[entry_off+28], buf[entry_off+29],
@@ -283,10 +300,38 @@ impl<'a> Fat32Reader<'a> {
         None
     }
 
+    /// Retorna tamanho do arquivo na raiz (8.3), sem ler o conteúdo.
+    pub unsafe fn lookup_file_size(&self, name: &str) -> Option<usize> {
+        let want = encode_83(name);
+        let mut cluster = self.root_cluster;
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.cluster_lba(cluster);
+            let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
+            for i in 0..self.sectors_per_cluster as u32 {
+                self.ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
+            }
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 { return None; }
+                if first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x08 != 0 { continue; }
+                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
+                if buf[entry_off..entry_off+11] != want { continue; }
+                let file_size = u32::from_le_bytes([
+                    buf[entry_off+28], buf[entry_off+29],
+                    buf[entry_off+30], buf[entry_off+31],
+                ]) as usize;
+                return Some(file_size);
+            }
+            cluster = self.read_fat_entry(cluster);
+        }
+        None
+    }
+
     /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain)
     pub unsafe fn read_file(&self, name: &str) -> Option<Vec<u8>> {
         let mut cluster = self.root_cluster;
-        let name_upper = name.to_ascii_uppercase();
+        let want = encode_83(name);
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
             let lba = self.cluster_lba(cluster);
@@ -300,10 +345,8 @@ impl<'a> Fat32Reader<'a> {
                 if first == 0 { break; }
                 if first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
-
-                let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
-                let trimmed = entry_name.trim_end();
-                if trimmed != name_upper { continue; }
+                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
+                if buf[entry_off..entry_off+11] != want { continue; }
 
                 let file_size = u32::from_le_bytes([
                     buf[entry_off+28], buf[entry_off+29],
@@ -320,7 +363,9 @@ impl<'a> Fat32Reader<'a> {
                     let mut chunk = [0u8; 512];
                     for i in 0..self.sectors_per_cluster as u32 {
                         if data.len() >= file_size { break; }
-                        self.ata.read_sectors(clba + i, &mut chunk, 1);
+                        if !self.ata.read_sectors(clba + i, &mut chunk, 1) {
+                            return None;
+                        }
                         let remaining = file_size - data.len();
                         let copy_end = remaining.min(512);
                         data.extend_from_slice(&chunk[..copy_end]);
@@ -392,15 +437,32 @@ impl<'a> Fat32Writer<'a> {
         self.reader.ata.write_sectors(fat_sector, &sector, 1)
     }
 
-    /// Varre a FAT por N clusters livres consecutivos
+    /// Varre a FAT por N clusters livres (lê FAT por setor — não 1 I/O por entrada).
     unsafe fn find_free_clusters(&self, count: u32) -> Option<Vec<u32>> {
+        let bps = self.reader.bytes_per_sector as u32;
         let fat_sectors = self.reader.sectors_per_fat32;
-        let total_clusters = (fat_sectors as u64 * self.reader.bytes_per_sector as u64 / 4) as u32;
-        let mut result = Vec::new();
-        for c in 2..total_clusters {
+        let entries_per_sector = bps / 4;
+        let mut result = Vec::with_capacity(count as usize);
+        let mut sector_buf = [0u8; 512];
+        for sec in 0..fat_sectors {
             if result.len() >= count as usize { break; }
-            let val = unsafe { self.reader.read_fat_entry(c) };
-            if val == 0 { result.push(c); } // FREE
+            let lba = self.reader.fat_lba + sec;
+            if !self.reader.ata.read_sectors(lba, &mut sector_buf, 1) {
+                continue;
+            }
+            let base = sec * entries_per_sector;
+            let start = if sec == 0 { 2u32 } else { 0u32 }; // skip FAT[0], FAT[1]
+            for i in start..entries_per_sector {
+                if result.len() >= count as usize { break; }
+                let off = (i * 4) as usize;
+                let val = u32::from_le_bytes([
+                    sector_buf[off], sector_buf[off + 1],
+                    sector_buf[off + 2], sector_buf[off + 3],
+                ]) & 0x0FFF_FFFF;
+                if val == 0 {
+                    result.push(base + i);
+                }
+            }
         }
         if result.len() >= count as usize { Some(result) } else { None }
     }

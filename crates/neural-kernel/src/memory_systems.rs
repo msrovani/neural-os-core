@@ -58,9 +58,18 @@ pub fn load_bge(data: &[u8]) -> bool {
     let loaded = unsafe { BGE_WEIGHTS.is_some() };
     BGE_LOADED.store(loaded, Ordering::Relaxed);
     if loaded {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Bge,
+            crate::load_status::LoadStatus::Loaded,
+        );
         crate::serial_println!("[BGE] Carregado: vocab={} hidden={} ({} MB)",
             unsafe { BGE_VOCAB }, unsafe { BGE_HIDDEN },
             unsafe { BGE_WEIGHTS.as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024) });
+    } else {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Bge,
+            crate::load_status::LoadStatus::Failed,
+        );
     }
     loaded
 }
@@ -89,8 +98,16 @@ pub fn bge_embed(text: &str) -> Vec<f32> {
 
 pub fn bge_status() -> String {
     if BGE_LOADED.load(Ordering::Relaxed) {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Bge,
+            crate::load_status::LoadStatus::Loaded,
+        );
         alloc::format!("[BGE] {} dim, loaded=true", unsafe { BGE_HIDDEN })
     } else {
+        crate::load_status::set_if_upgrade(
+            crate::load_status::AssetKind::Bge,
+            crate::load_status::LoadStatus::Absent,
+        );
         String::from("[BGE] ausente — use build_image.py --all")
     }
 }

@@ -1262,7 +1262,16 @@ pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::ne
 
 pub fn set_model(model: Box<dyn Model>) {
     *CURRENT_MODEL.lock() = Some(model);
+    crate::load_status::set(
+        crate::load_status::AssetKind::Llm,
+        crate::load_status::LoadStatus::Loaded,
+    );
     crate::serial_println!("[CORTEX] Model swapped.");
+}
+
+/// True se CURRENT_MODEL está setado (LLM LOADED).
+pub fn model_is_loaded() -> bool {
+    CURRENT_MODEL.lock().is_some()
 }
 
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
@@ -1275,25 +1284,44 @@ pub fn set_hwexpert_model(model: Box<dyn Model>) {
     crate::serial_println!("[CORTEX] HW Expert model loaded (SDIO MoE).");
 }
 
+/// Gera resposta usando rota já decidida pelo caller (Hermes R3) — sem re-classificar.
+pub fn generate_via_model_with_route(prompt: &str, expert_name: &str) -> String {
+    dispatch_expert(prompt, expert_name)
+}
+
 pub fn generate_via_model(prompt: &str) -> String {
-    // MoE routing: Trinity classifica intencao, roteia para expert se disponivel
-    let expert_name = {
+    // 1) Rota pendente do Hermes (classificação única R3)
+    if let Some((name, _trace)) = crate::global_arena::take_pending_route() {
+        crate::serial_println!("[TRINITY] usando rota pendente R3: {}", name);
+        return dispatch_expert(prompt, name);
+    }
+    // 2) Fallback: classifica uma vez na arena (boot/test sem Hermes)
+    let expert_name = crate::global_arena::with_arena(|arena| {
         let trinity = crate::TRINITY.lock();
-        let expert = trinity.classify_intent(prompt);
+        let (expert, trace) = trinity.classify_intent_with_trace(prompt, arena);
         let name = expert.name;
         drop(trinity);
+        crate::global_arena::push_route_trace(trace);
         name
-    };
-    // Tenta expert RustCoder
+    })
+    .unwrap_or_else(|| {
+        let trinity = crate::TRINITY.lock();
+        trinity.classify_intent(prompt).name
+    });
+    dispatch_expert(prompt, expert_name)
+}
+
+fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
     if expert_name == "rust_coder" {
         let guard = RUSTCODER_MODEL.lock();
         if let Some(m) = guard.as_ref() {
             crate::serial_println!("[TRINITY] MoE routing: RustCoder expert");
             return m.generate(&alloc::format!(
-                "{{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}}\n{}\n", prompt));
+                "{{\"role\":\"system\",\"content\":\"Gere apenas codigo Rust valido.\"}}\n{}\n",
+                prompt
+            ));
         }
     }
-    // Tenta expert HW Identify
     if expert_name == "hw_identify" {
         let guard = HWEXPERT_MODEL.lock();
         if let Some(m) = guard.as_ref() {
@@ -1301,12 +1329,12 @@ pub fn generate_via_model(prompt: &str) -> String {
             return m.generate(&alloc::format!("identifique hardware {}", prompt));
         }
     }
-    // Fallback: modelo principal (BitNet LLM)
-    // Reporta intent nao classificado para AutoLearnAgent (Trinity learn cycle)
     if expert_name == "generator" {
         let _ = crate::EVENT_BUS.publish(crate::Event {
-            id: 0, topic: alloc::string::String::from("TRINITY_UNMATCHED"),
-            payload: prompt.as_bytes().to_vec(), token: crate::CapabilityToken::Legacy(1),
+            id: 0,
+            topic: alloc::string::String::from("TRINITY_UNMATCHED"),
+            payload: prompt.as_bytes().to_vec(),
+            token: crate::CapabilityToken::Legacy(1),
         });
     }
     let guard = CURRENT_MODEL.lock();
