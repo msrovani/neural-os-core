@@ -32,7 +32,132 @@ pub struct Partition {
     pub sector_count: u32,
 }
 
-/// Le MBR do primeiro setor (LBA 0) via ATA
+/// GUIDs GPT (bytes little-endian on-disk)
+const GPT_ESP: [u8; 16] = [
+    0x28, 0x73, 0x2A, 0xC1, 0x1F, 0xF8, 0xD2, 0x11, 0xBA, 0x4B, 0x00, 0xA0, 0xC9, 0x3E, 0xC9, 0x3B,
+];
+const GPT_BASIC_DATA: [u8; 16] = [
+    0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
+];
+
+/// Parseia tabela MBR (4 entradas) a partir do setor 0.
+pub fn parse_mbr_sector(mbr: &[u8; 512]) -> Vec<Partition> {
+    if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
+        return Vec::new();
+    }
+    let mut parts = Vec::new();
+    for i in 0..4 {
+        let off = 0x1BE + i * 16;
+        let type_code = mbr[off + 4];
+        if type_code == 0 {
+            continue;
+        }
+        let lba = u32::from_le_bytes([mbr[off + 8], mbr[off + 9], mbr[off + 10], mbr[off + 11]]);
+        let count = u32::from_le_bytes([mbr[off + 12], mbr[off + 13], mbr[off + 14], mbr[off + 15]]);
+        parts.push(Partition {
+            bootable: mbr[off] == 0x80,
+            type_code,
+            lba_start: lba,
+            sector_count: count,
+        });
+    }
+    parts
+}
+
+/// Parseia particoes GPT (ESP→0xEF, Basic Data→0x0C) a partir do header em LBA 1 + entries.
+/// `read_sector(lba, buf)` deve preencher 512 bytes.
+pub fn parse_gpt_partitions<F>(mut read_sector: F) -> Vec<Partition>
+where
+    F: FnMut(u64, &mut [u8; 512]) -> bool,
+{
+    let mut hdr = [0u8; 512];
+    if !read_sector(1, &mut hdr) || &hdr[0..8] != b"EFI PART" {
+        return Vec::new();
+    }
+    let entries_lba = u64::from_le_bytes([
+        hdr[72], hdr[73], hdr[74], hdr[75], hdr[76], hdr[77], hdr[78], hdr[79],
+    ]);
+    let entry_count = u32::from_le_bytes([hdr[80], hdr[81], hdr[82], hdr[83]]);
+    let entry_size = u32::from_le_bytes([hdr[84], hdr[85], hdr[86], hdr[87]]);
+    if entry_count == 0 || entry_count > 128 || entry_size != 128 {
+        return Vec::new();
+    }
+    let per_sec = 512 / entry_size as usize;
+    let total_blocks = (entry_count as usize + per_sec - 1) / per_sec;
+    let mut parts = Vec::new();
+    for blk in 0..total_blocks {
+        let mut buf = [0u8; 512];
+        if !read_sector(entries_lba + blk as u64, &mut buf) {
+            break;
+        }
+        for ent in 0..per_sec {
+            let idx = blk * per_sec + ent;
+            if idx >= entry_count as usize {
+                break;
+            }
+            let off = ent * entry_size as usize;
+            let type_guid = &buf[off..off + 16];
+            if type_guid.iter().all(|&b| b == 0) {
+                continue;
+            }
+            let start = u64::from_le_bytes([
+                buf[off + 32],
+                buf[off + 33],
+                buf[off + 34],
+                buf[off + 35],
+                buf[off + 36],
+                buf[off + 37],
+                buf[off + 38],
+                buf[off + 39],
+            ]);
+            let end = u64::from_le_bytes([
+                buf[off + 40],
+                buf[off + 41],
+                buf[off + 42],
+                buf[off + 43],
+                buf[off + 44],
+                buf[off + 45],
+                buf[off + 46],
+                buf[off + 47],
+            ]);
+            if start > 0xFFFF_FFFF || end < start || (end - start + 1) > 0xFFFF_FFFF {
+                continue;
+            }
+            let type_code = if type_guid == GPT_ESP {
+                0xEFu8
+            } else if type_guid == GPT_BASIC_DATA {
+                0x0Cu8 // FAT dados no USB unificado / Microsoft Basic Data
+            } else {
+                0xEEu8
+            };
+            parts.push(Partition {
+                bootable: false,
+                type_code,
+                lba_start: start as u32,
+                sector_count: (end - start + 1) as u32,
+            });
+        }
+    }
+    parts
+}
+
+fn merge_parts(mbr: Vec<Partition>, gpt: Vec<Partition>) -> Vec<Partition> {
+    let mut out = mbr;
+    for g in gpt {
+        // Pula protective 0xEE e duplicatas por LBA
+        if g.type_code == 0xEE {
+            continue;
+        }
+        if out.iter().any(|p| p.lba_start == g.lba_start) {
+            continue;
+        }
+        out.push(g);
+    }
+    out
+}
+
+/// Le MBR (+ GPT se protective 0xEE / header EFI PART) via ATA.
+/// USB unificado: MBR hibrido expoe 0x0C; GPT tambem lista Basic Data como 0x0C.
 pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
     let mut mbr = [0u8; 512];
     if !unsafe { ata.read_sectors(0, &mut mbr, 1) } {
@@ -43,17 +168,45 @@ pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
         serial_println!("[MBR] Signature 55AA nao encontrada");
         return Vec::new();
     }
-    let mut parts = Vec::new();
-    for i in 0..4 {
-        let off = 0x1BE + i * 16;
-        let type_code = mbr[off + 4];
-        if type_code == 0 { continue; }
-        let lba = u32::from_le_bytes([mbr[off+8], mbr[off+9], mbr[off+10], mbr[off+11]]);
-        let count = u32::from_le_bytes([mbr[off+12], mbr[off+13], mbr[off+14], mbr[off+15]]);
-        parts.push(Partition { bootable: mbr[off] == 0x80, type_code, lba_start: lba, sector_count: count });
-        serial_println!("[MBR] {}: type={:#04x} LBA={} size={}MB", i+1, type_code, lba, count as u64 * 512 / (1024*1024));
+    let mut parts = parse_mbr_sector(&mbr);
+    for (i, p) in parts.iter().enumerate() {
+        serial_println!(
+            "[MBR] {}: type={:#04x} LBA={} size={}MB",
+            i + 1,
+            p.type_code,
+            p.lba_start,
+            p.sector_count as u64 * 512 / (1024 * 1024)
+        );
+    }
+    let has_ee = parts.iter().any(|p| p.type_code == 0xEE);
+    let has_fat = parts
+        .iter()
+        .any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C);
+    // Sempre tenta GPT se protective EE, ou se nao ha FAT no MBR (firmware GPT-only)
+    if has_ee || !has_fat {
+        let gpt = parse_gpt_partitions(|lba, buf| unsafe { ata.read_sectors(lba as u32, buf, 1) });
+        if !gpt.is_empty() {
+            serial_println!("[GPT] {} particoes", gpt.len());
+            for (i, p) in gpt.iter().enumerate() {
+                serial_println!(
+                    "[GPT] {}: type={:#04x} LBA={} size={}MB",
+                    i + 1,
+                    p.type_code,
+                    p.lba_start,
+                    p.sector_count as u64 * 512 / (1024 * 1024)
+                );
+            }
+            parts = merge_parts(parts, gpt);
+        }
     }
     parts
+}
+
+/// Disco tem particao FAT32 visivel (MBR 0x0B/0x0C/0x1C ou GPT Basic Data).
+pub fn disk_has_fat32(ata: &AtaDriver) -> bool {
+    read_mbr(ata)
+        .iter()
+        .any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C)
 }
 
 /// Encontra o maior espaco livre nao particionado

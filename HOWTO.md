@@ -181,6 +181,9 @@ Pendrive tipico: **32 GB livres** — use imagem generosa (1024 MB+) e **inclua 
 `CONFIG.TXT` na imagem HW inclui `BOOT_MODE=hw`, `LOG_TO_FAT32=1`.
 
 ### Gerar imagem de dados (FAT + modelos + firmware)
+
+Para **dois meios** ou disco SATA separado; o fluxo recomendado de **1 stick** é a seção **USB unificado** abaixo.
+
 ```powershell
 # Soft-float kernel (obrigatório):
 $env:CARGO_TARGET_DIR = "$PWD\target"
@@ -199,30 +202,49 @@ python tools\build_image.py --hw --size 1536   # se 2B+Piper apertarem
 
 Conteúdo típico do FAT (`mkfat32.py`): `BITNET2B.BIN`, `HWEXPRT.BIN`, `RUSTCDR.BITNET`, `BGE.BIN`, `PIPER.BIN`, `STT.BIN`, `BPE.BIN`, `MICRO.BITNET`, `FW_*` (todos os blobs de `firmware/`), `CONFIG.TXT`.
 
-### Gravar no pendrive (dois meios — igual QEMU ide0/ide1)
+### Gerar USB unificado (recomendado — 1 pendrive)
 
-QEMU usa `uefi.img` (boot) + `disk_*.raw` (dados). Em HW real, replique:
+Uma imagem GPT: **ESP** (bootloader+kernel de `uefi.img`) + **FAT32 dados** (modelos/firmware, mesmo conteúdo de `--hw`). MBR híbrido expoe a partição de dados como `0x0C` para o kernel achar `BITNET2B`/`HWEXPRT` no mesmo stick.
 
-1. **Pendrive A (boot UEFI):** grave `target\uefi.img` (Rufus DD / `dd`).
-2. **Pendrive B ou HD SATA (dados):** grave `target\disk_hw.raw` (FAT com modelos+firmware).
-
-**Windows (Rufus, modo DD):**
 ```powershell
-# Baixe rufus.exe de https://rufus.ie
-# Selecione o .raw e grave em modo "Imagem DD"
-.\rufus.exe
+# Soft-float + uefi.img:
+$env:CARGO_TARGET_DIR = "$PWD\target"
+cargo nk
+cargo build --release -p boot
+
+# target\usb_hw.img (+ alias target\disk_hw_unified.raw)
+python tools\build_image.py --hw --unified
+# ou: python tools\build_usb_unified.py --size 1536
 ```
+
+**Windows (Rufus, um stick, modo DD):**
+1. Baixe [Rufus](https://rufus.ie)
+2. Device = seu pendrive (≥ **2 GB** livres; **8 GB+** recomendado se incluir 2B+Piper)
+3. Selecione `target\usb_hw.img`
+4. Modo de imagem = **DD** (não ISO)
+5. Start → apaga o pendrive
 
 **Linux:**
 ```bash
 # CUIDADO: confira o device (lsblk) — apaga o alvo
+sudo dd if=target/usb_hw.img of=/dev/sdX bs=4M status=progress && sync
+```
+
+### Dois meios (opcional — igual QEMU ide0/ide1)
+
+Ainda válido para lab / segundo disco SATA:
+
+1. Pendrive A: `target\uefi.img`
+2. Pendrive B ou HD: `target\disk_hw.raw` (`python tools\build_image.py --hw`)
+
+```bash
 sudo dd if=target/uefi.img of=/dev/sdX bs=4M status=progress && sync
 sudo dd if=target/disk_hw.raw of=/dev/sdY bs=4M status=progress && sync
 ```
 
 ### Boot
-1. Conecte boot USB + disco de dados (ou segundo USB)
-2. BIOS/UEFI: Secure Boot **off**, boot UEFI no pendrive A
+1. Conecte o pendrive unificado (ou boot USB + disco de dados)
+2. BIOS/UEFI: Secure Boot **off**, boot **UEFI** no pendrive
 3. No serial (abaixo), procure `[STATUS]`, `[HWEXPERT]`, `[FAT]`, `[PIPER]`, `[STT]`, `[BPE]`, `[GEN]`, `[TTS]`
 
 ### Coletar log em HW real (serial COM)

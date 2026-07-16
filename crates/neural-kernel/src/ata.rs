@@ -1,6 +1,5 @@
 
 
-use crate::pci::scan_pci;
 use crate::serial_println;
 
 #[derive(Clone)]
@@ -23,7 +22,7 @@ impl AtaDriver {
         for &base in &[0x1F0u16, 0x170u16] {
             for &slave in &[false, true] {
                 if !Self::detect(base, if slave { 0xB0 } else { 0xA0 }) { continue; }
-                let mut drv = AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave };
+                let drv = AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave };
                 if let Some(id) = drv.identify() {
                     let total = (id[60] as u64) | ((id[61] as u64) << 16);
                     if total > 0 && total < 0xFFFFFFFF {
@@ -31,17 +30,29 @@ impl AtaDriver {
                         write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
                         for _ in 0..1000 { core::hint::spin_loop(); }
                         if drv.has_mbr() {
+                            // Prefere disco com FAT32 (MBR 0x0B/0x0C ou GPT Basic Data) —
+                            // USB unificado / disk_hw no mesmo stick; evita escolher so ESP GPT.
+                            if crate::fat32::disk_has_fat32(&drv) {
+                                serial_println!(
+                                    "[ATA] ISA {}: {} FAT32 (MBR/GPT)!",
+                                    base,
+                                    if slave { "slave" } else { "master" }
+                                );
+                                return Some(drv);
+                            }
                             let mut mbr = [0u8; 512];
                             if drv.read_sectors(0, &mut mbr, 1) {
                                 for i in 0..4 {
                                     let off = 0x1BE + i * 16;
                                     let t = mbr[off + 4];
-                                    if t == 0x0B || t == 0x0C || t == 0x1C {
-                                        serial_println!("[ATA] ISA {}: {} FAT32! (type={:#x})", base, if slave { "slave" } else { "master" }, t);
-                                        return Some(drv);
+                                    if t == 0xEE && best.is_none() {
+                                        best = Some(drv.clone());
+                                        best_type = t;
                                     }
-                                    if t == 0xEE && best.is_none() { best = Some(drv.clone()); best_type = t; }
-                                    if best.is_none() { best = Some(drv.clone()); best_type = t; }
+                                    if best.is_none() {
+                                        best = Some(drv.clone());
+                                        best_type = t;
+                                    }
                                 }
                             }
                         }
@@ -201,8 +212,11 @@ impl AtaDriver {
             for i in 0..256 {
                 let lo = if off + i * 2 < data.len() { data[off + i * 2] } else { 0 };
                 let hi = if off + i * 2 + 1 < data.len() { data[off + i * 2 + 1] } else { 0 };
-                core::arch::asm!("out dx, al", in("dx") self.io_base, in("al") lo, options(nostack, preserves_flags));
-                core::arch::asm!("out dx, al", in("dx") (self.io_base + 1), in("al") hi, options(nostack, preserves_flags));
+                // BUG histórico (v0.1→v1.1.5): escrever "hi" em io_base+1 vai para o
+                // registrador FEATURES/ERROR, não para o byte alto do dado. O barramento
+                // de dados ATA é de 16 bits — precisa de UMA escrita de word em io_base.
+                let w = (lo as u16) | ((hi as u16) << 8);
+                core::arch::asm!("out dx, ax", in("dx") self.io_base, in("ax") w, options(nostack, preserves_flags));
             }
         }
         self.wait_bsy();

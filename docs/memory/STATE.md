@@ -6,8 +6,8 @@
 # ═════════════════════════════════════════════════════════
 
 ## HW real prep (2026-07-16)
-- **Imagem dados:** `python tools/build_image.py --hw` → `target/disk_hw.raw` (1024 MB+; modelos + `firmware/` → `FW_*` + `BPE.BIN`).
-- **Boot:** `target/uefi.img` (pendrive A) + `disk_hw.raw` (pendrive B / SATA) — ver HOWTO §5.
+- **USB unificado (recomendado):** `python tools/build_image.py --hw --unified` → `target/usb_hw.img` (ESP + FAT dados; Rufus DD 1 stick).
+- **Dois meios (opcional):** `target/uefi.img` + `python tools/build_image.py --hw` → `target/disk_hw.raw`.
 - **HW Expert:** precisa só `HWEXPRT.BIN` (não precisa linux-firmware).
 - **GPU/WiFi/NIC:** precisam blobs `firmware/` no FAT.
 - **E2e clima QEMU:** gated — default off; `cargo nk --features weather-e2e` para HIT.

@@ -5,10 +5,12 @@ Inclui: .bitnet (incl. BITNET-2B se existir), firmware blobs, CONFIG.TXT.
 Uso:
   python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (1024 MB)
   python tools/build_image.py --hw             # HW   -> target/disk_hw.raw   (1024 MB)
+  python tools/build_image.py --hw --unified   # USB  -> target/usb_hw.img (ESP+dados)
   python tools/build_image.py --size 512 --output target/disk_qemu.raw
 
 Pendrive 32 GB: tamanho generoso ok - nao pular BITNET-2B.
 Fluxo QEMU: cargo build --release -> python tools/build_image.py -> .\\run-qemu-uefi.ps1 -Window
+HW 1 stick: cargo build -p boot + python tools/build_image.py --hw --unified
 """
 from __future__ import annotations
 
@@ -24,23 +26,33 @@ DEFAULT_SIZE_MB = 1024  # cabe BITNET.BIN + BITNET2B.BIN (~200MB) + firmware + e
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Gera disk_qemu.raw / disk_hw.raw com modelos .bitnet + firmware"
+        description="Gera disk_qemu.raw / disk_hw.raw / usb_hw.img com modelos .bitnet + firmware"
     )
     p.add_argument(
         "--size",
         type=int,
         default=DEFAULT_SIZE_MB,
-        help=f"Tamanho da imagem em MB (default: {DEFAULT_SIZE_MB})",
+        help=f"Tamanho da imagem (ou particao de dados com --unified) em MB (default: {DEFAULT_SIZE_MB})",
     )
     p.add_argument(
         "--output",
         default=None,
-        help="Caminho de saida (default: target/disk_qemu.raw ou target/disk_hw.raw com --hw)",
+        help="Caminho de saida (default: target/disk_qemu.raw | disk_hw.raw | usb_hw.img)",
     )
     p.add_argument(
         "--hw",
         action="store_true",
         help="Imagem para HW/pendrive -> target/disk_hw.raw (BOOT_MODE=hw)",
+    )
+    p.add_argument(
+        "--unified",
+        action="store_true",
+        help="USB unificado ESP+dados (requer --hw) -> target/usb_hw.img; ver tools/build_usb_unified.py",
+    )
+    p.add_argument(
+        "--build-boot",
+        action="store_true",
+        help="Com --unified: se faltar uefi.img, roda cargo build -p boot",
     )
     return p.parse_args()
 
@@ -49,6 +61,29 @@ def main():
     args = parse_args()
     target_dir = os.path.join(ROOT, "target")
     os.makedirs(target_dir, exist_ok=True)
+
+    if args.unified:
+        if not args.hw:
+            print("[ERRO] --unified requer --hw (USB HW real, nao QEMU)")
+            sys.exit(2)
+        out = args.output
+        if out is None:
+            out = os.path.join(target_dir, "usb_hw.img")
+        elif not os.path.isabs(out):
+            out = os.path.join(ROOT, out)
+        cmd = [
+            sys.executable,
+            os.path.join(ROOT, "tools", "build_usb_unified.py"),
+            "--size",
+            str(args.size),
+            "--output",
+            out,
+        ]
+        if args.build_boot:
+            cmd.append("--build-boot")
+        print(f"=== USB unificado (BOOT_MODE=hw) -> {out} ===")
+        r = subprocess.run(cmd, cwd=ROOT)
+        sys.exit(r.returncode)
 
     if args.output:
         out = args.output if os.path.isabs(args.output) else os.path.join(ROOT, args.output)
@@ -97,7 +132,8 @@ def main():
     final_size = os.path.getsize(out)
     print(f"\n[OK] {out}: {final_size // 1024 // 1024}MB")
     print(f"QEMU:  .\\run-qemu-uefi.ps1 -Window")
-    print(f"HW:    dd if={out} of=/dev/sdX bs=4M status=progress")
+    print(f"HW dados-only: dd if={out} of=/dev/sdX bs=4M status=progress")
+    print(f"HW 1 stick:    python tools/build_image.py --hw --unified")
 
 
 if __name__ == "__main__":

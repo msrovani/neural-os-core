@@ -322,6 +322,9 @@ pub static ATA_DRIVER: spin::Mutex<Option<ata::AtaDriver>> = spin::Mutex::new(No
 
 pub static AHCI_DRIVER: spin::Mutex<Option<crate::ahci::AhciDriver>> = spin::Mutex::new(None);
 
+/// USB Mass Storage (pendrive unificado boot+dados em HW real)
+pub static USB_MSC: spin::Mutex<Option<crate::usb_msc::UsbMassStorage>> = spin::Mutex::new(None);
+
 /// Merkle Audit Trail global (#315.19)
 
 pub static AUDIT_TRAIL: spin::Mutex<crate::audit::AuditTrail> = spin::Mutex::new(crate::audit::AuditTrail::new());
@@ -1310,7 +1313,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     unsafe { crate::xhci::init_xhci(); }
 
-    let _usb_msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+    {
+        let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+        if msc.is_some() {
+            crate::serial_println!("[USB-MSC] stored for FAT model load (unified USB)");
+        }
+        *crate::USB_MSC.lock() = msc;
+    }
 
     publish_boot_phase(BootPhase::DriverInit, "xHCI+USB probe done");
 
@@ -1400,14 +1409,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     }
 
-    if let Some(msc) = unsafe { crate::usb_msc::UsbMassStorage::probe() } {
-
-        let ctrl = crate::disk_agent::controller::UsbMscCtrl::new(msc);
-
-        disk_agent.register_controller(Box::new(ctrl));
-
-        crate::boot_logger::log("BOOT: DiskAgent USB-MSC controller registered");
-
+    // Reusa USB_MSC ja probed (evita segundo probe no mesmo stick)
+    if crate::USB_MSC.lock().is_some() {
+        crate::boot_logger::log("BOOT: DiskAgent USB-MSC available (global USB_MSC)");
     }
 
     if let Some(nvme) = unsafe { crate::disk_agent::nvme::NvmeDriver::probe() } {
@@ -1461,16 +1465,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Carrega modelos do FAT32: BGE.BIN — tenta AHCI primeiro, fallback ATA
     unsafe fn read_file_from_dev(dev: &mut dyn crate::block_dev::BlockDevice, name: &str) -> Option<alloc::vec::Vec<u8>> {
-        // Le MBR
+        // Le MBR (+ GPT se USB unificado / protective EE)
         let mut mbr = [0u8; 512];
         if !dev.read_sectors(0, &mut mbr) { return None; }
         if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA { return None; }
-        // Varre particoes FAT32
-        for i in 0..4 {
-            let off = 0x1BE + i * 16;
-            let type_code = mbr[off + 4];
+        let mut parts = crate::fat32::parse_mbr_sector(&mbr);
+        let has_ee = parts.iter().any(|p| p.type_code == 0xEE);
+        let has_fat = parts.iter().any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C);
+        if has_ee || !has_fat {
+            let gpt = crate::fat32::parse_gpt_partitions(|lba, buf| {
+                let mut tmp = [0u8; 512];
+                if !dev.read_sectors(lba, &mut tmp) { return false; }
+                *buf = tmp;
+                true
+            });
+            // merge sem duplicar LBA
+            for g in gpt {
+                if g.type_code == 0xEE { continue; }
+                if parts.iter().any(|p| p.lba_start == g.lba_start) { continue; }
+                parts.push(g);
+            }
+        }
+        // Varre particoes FAT32 (MBR 0x0B/0x0C ou GPT Basic Data→0x0C)
+        for part in &parts {
+            let type_code = part.type_code;
             if type_code != 0x0B && type_code != 0x0C && type_code != 0x1C { continue; }
-            let lba_start = u32::from_le_bytes([mbr[off+8], mbr[off+9], mbr[off+10], mbr[off+11]]);
+            let lba_start = part.lba_start;
             // Le BPB
             let mut bpb = [0u8; 512];
             if !dev.read_sectors(lba_start as u64, &mut bpb) { continue; }
@@ -1637,13 +1657,30 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     }
                 }
             }
-            if !loaded && !found {
-                crate::load_status::set_if_upgrade(
-                    crate::load_status::AssetKind::Bge,
-                    crate::load_status::LoadStatus::Absent,
-                );
-                serial_println!("[BGE] BGE.BIN ausente no FAT — STATUS Absent");
+        }
+        // Fallback USB-MSC (pendrive unificado em HW — nao aparece como IDE)
+        if !loaded {
+            let mut usb_guard = crate::USB_MSC.lock();
+            if let Some(ref mut msc) = *usb_guard {
+                if let Some(bge_data) = read_file_from_dev(msc, "BGE.BIN") {
+                    found = true;
+                    serial_println!("[BGE] BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
+                    if crate::memory_systems::load_bge(&bge_data) {
+                        serial_println!("[BGE] Embedding model LOADED from USB-MSC FAT!");
+                        crate::boot_logger::log("BOOT: BGE embedding loaded (USB)");
+                        loaded = true;
+                    } else {
+                        serial_println!("[BGE] BGE.BIN present but parse FAILED (USB-MSC)");
+                    }
+                }
             }
+        }
+        if !loaded && !found {
+            crate::load_status::set_if_upgrade(
+                crate::load_status::AssetKind::Bge,
+                crate::load_status::LoadStatus::Absent,
+            );
+            serial_println!("[BGE] BGE.BIN ausente no FAT — STATUS Absent");
         }
     }
 
@@ -2243,6 +2280,42 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 }
             }
         }
+        // USB-MSC: mesmo stick unificado (boot ESP + dados) quando nao ha ATA/IDE
+        if !model_loaded {
+            unsafe {
+                let mut usb_guard = crate::USB_MSC.lock();
+                if let Some(ref mut msc) = *usb_guard {
+                    const PIO_HW: usize = 700 * 1024 * 1024;
+                    for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
+                        let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
+                        if fat_data.len() > PIO_HW {
+                            serial_println!(
+                                "[FAT] USB {} PRESENT size={}KB — skip PIO",
+                                name,
+                                fat_data.len() / 1024
+                            );
+                            continue;
+                        }
+                        serial_println!(
+                            "[FAT] USB lendo {} ({}KB) — candidato LLM...",
+                            name,
+                            fat_data.len() / 1024
+                        );
+                        if let Some(big_model) = crate::cortex::load_model(&fat_data) {
+                            crate::cortex::set_model(alloc::boxed::Box::new(big_model));
+                            serial_println!(
+                                "[FAT] LLM LOADED file={} size={}KB via USB-MSC",
+                                name,
+                                fat_data.len() / 1024
+                            );
+                            crate::boot_logger::log("BOOT: FAT BitNet model loaded (USB)");
+                            model_loaded = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // Trinity experts: QEMU-loader (HW @0x160000000, RustCoder @0x161000000) + FAT fallback
@@ -2352,6 +2425,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                                     crate::boot_logger::log("BOOT: HW Expert loaded");
                                     hw_ok = true;
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // USB-MSC experts (stick unificado)
+        if !hw_ok || !rust_ok {
+            unsafe {
+                let mut usb_guard = crate::USB_MSC.lock();
+                if let Some(ref mut msc) = *usb_guard {
+                    if !rust_ok {
+                        if let Some(rust_data) = read_file_from_dev(msc, "RUSTCDR.BITNET") {
+                            if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
+                                crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
+                                serial_println!("[FAT] RustCoder expert loaded (USB-MSC)!");
+                                rust_ok = true;
+                            }
+                        }
+                    }
+                    if !hw_ok {
+                        if let Some(hw_data) = read_file_from_dev(msc, "HWEXPRT.BIN") {
+                            if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
+                                crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
+                                serial_println!("[FAT] HW Expert loaded (USB-MSC)!");
+                                hw_ok = true;
                             }
                         }
                     }
