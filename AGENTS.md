@@ -272,3 +272,58 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - ADR-0037: SMP+GPU Architecture (multi-vendor)
 - ADR-0033: On-Device Micro-Learning (Self-Training MoE)
 - `docs/ecosystem-analysis.md` para padrões portados (141 repos analisados)
+
+# ════════════════════════════════════════════════════════
+## Cursor Cloud specific instructions
+# ════════════════════════════════════════════════════════
+Contexto durável para agentes rodando no VM Linux da Cursor Cloud (não-óbvio; o
+setup de dependências já foi feito pelo update script). Comandos padrão de
+build/run continuam em `HOWTO.md`; aqui ficam só as ressalvas do ambiente Linux.
+
+### Toolchain Rust (CRÍTICO — o `rust-toolchain.toml` quebra no Linux)
+- `rust-toolchain.toml` fixa `channel = "nightly-x86_64-pc-windows-gnu"` (um canal
+  **Windows**). No Linux isso faz `cargo`/`rustc`/`rustup` falharem com
+  `target tuple in channel name ...`. **NÃO edite esse arquivo** — ele é necessário
+  para o ambiente Windows do dono do projeto.
+- O VM usa `nightly-2026-07-05` (rustc 1.98.0-nightly) via a env var
+  `RUSTUP_TOOLCHAIN`, já exportada em `~/.bashrc`. Shells interativos pegam isso
+  automaticamente; em contextos sem `~/.bashrc` prefixe os comandos, ex:
+  `RUSTUP_TOOLCHAIN=nightly-2026-07-05 cargo build --release`.
+- Por que **exatamente** a série nightly 1.98: nightly ≥1.99 adiciona
+  `forward_overflowing`/`backward_overflowing` à trait instável `Step`, o que quebra
+  o crate `x86_64` 0.14.13 (dep transitiva); nightly ≤1.97 ainda não estabilizou
+  `str_from_utf16_endian`, usado por `k_nano` (`String::from_utf16le`). Só o ciclo
+  1.98 satisfaz os dois. Se precisar reinstalar:
+  `rustup toolchain install nightly-2026-07-05 -c rust-src -c llvm-tools-preview -t x86_64-unknown-none`.
+
+### Build / lint / test
+- Build + imagens de boot: `cargo build --release` (compila o default-member `boot`,
+  que via `bindeps` compila o kernel para `x86_64-unknown-none` e gera
+  `target/bios.img` + `target/uefi.img`). Lint canônico: `cargo check --release`
+  (0 erros; 1 warning conhecido de import não usado é esperado).
+- `cargo test` no host **não funciona** (crates `no_std` bare-metal; há bug pré-
+  existente só nos testes, ex. `vec!` sem `use alloc::vec` em `k_nano`). A validação
+  real é `cargo check --release` + boot no QEMU.
+
+### Rodar o OS no QEMU (equivalente Linux dos `run-qemu-*.ps1`, que são só Windows)
+- Só **UEFI/OVMF** dá boot; a imagem BIOS dá triple-fault. Use `-accel tcg`
+  (KVM/WHPX indisponível/instável no VM). OVMF do sistema: `/usr/share/ovmf/OVMF.fd`.
+- Gere o disco de dados FAT32 antes: `python3 tools/build_image.py` → `target/disk_qemu.raw`.
+- O kernel usa COM2 como peer SLIP; suba o bridge (stdlib) antes, senão o
+  `-serial tcp:` cliente do QEMU não conecta e o QEMU sai:
+  `python3 tools/serial_bridge.py --port 4444 --watchdog 0 &`
+  (para boot sem rede, troque `-serial tcp:127.0.0.1:4444` por `-serial null`).
+- Boot headless capturando o log serial (COM1) — QEMU roda pra sempre, use `timeout`:
+  ```bash
+  timeout 80 qemu-system-x86_64 -m 6G -smp 4 -accel tcg \
+    -drive format=raw,file=target/uefi.img,if=ide,index=0 \
+    -drive format=raw,file=target/disk_qemu.raw,if=ide,index=1 \
+    -drive if=pflash,format=raw,file=/usr/share/ovmf/OVMF.fd,readonly=on \
+    -serial file:logs/boot.txt -serial tcp:127.0.0.1:4444 \
+    -netdev user,id=n0 -device e1000,netdev=n0 -display none
+  ```
+- Screenshot do framebuffer: adicione `-vga std -monitor unix:/tmp/mon.sock,server,nowait`
+  e mande `screendump /tmp/screen.ppm` no monitor (converta com `ffmpeg`).
+- Boot OK ⇒ `logs/boot.txt` mostra as 8 fases, `[ATA] ... slave FAT32`,
+  `AgentFleet] 259 agents`, `[SCHEDULER] 259 runtime agents` e `[TIMER] ... tick=`
+  incrementando (scheduler vivo).
