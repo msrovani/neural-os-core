@@ -123,6 +123,7 @@ def populate(path):
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
+        ("BPE.BIN", find_file("bpe_vocab.bin") or find_file("BPE.BIN")),
         ("MICRO.BITNET", find_file("MICRO.BITNET") or find_file("target/MICRO.BITNET")),
         ("MICRO.BIN", find_file("MICRO.BITNET")),
     ]
@@ -133,7 +134,7 @@ def populate(path):
         for root, dirs, fnames in os.walk(fw_root):
             for name in fnames:
                 ext = os.path.splitext(name)[1].lower()
-                if ext not in (".bin", ".fw"): continue
+                if ext not in (".bin", ".fw", ".ucode"): continue
                 rel = os.path.relpath(root, fw_root)
                 prefix = rel.upper().replace("\\", "_").replace("/", "_")
                 fw_path = os.path.join(root, name)
@@ -141,6 +142,7 @@ def populate(path):
                 if prefix == "NVIDIA_GP108":
                     fw_name = "FW_" + name.upper().replace(".", "_")
                 else:
+                    # .ucode → _UCODE no 8.3-ish FAT name
                     fw_name = f"FW_{prefix}_{name.upper().replace('.', '_')}"
                 files.append((fw_name, fw_path))
     # CONFIG.TXT — BOOT_MODE via env ou inferido do path (passado por populate caller)

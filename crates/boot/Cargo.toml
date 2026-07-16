@@ -6,4 +6,4 @@ publish = false
 
 [build-dependencies]
 bootloader = "0.11"
-neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none" }
+neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none", features = ["fat-boot-log"] }

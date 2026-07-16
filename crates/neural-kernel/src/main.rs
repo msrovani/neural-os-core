@@ -188,6 +188,8 @@ mod fs;
 
 mod bpe;
 
+mod demo_flags;
+
 mod apps;
 
 mod skill_gen;
@@ -2184,15 +2186,38 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 for p in &parts {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                        const PIO_BOOT_CAP: usize = 48 * 1024 * 1024;
+                        // QEMU TCG: cap 48MB (loader @4GB cobre 2B). Baremetal/HW: sem
+                        // QEMU-loader → permitir FAT PIO grande (lento, mas único path).
+                        let qemu_loader_2b = {
+                            let pm = crate::memory::PHYS_MEM_OFFSET
+                                .load(core::sync::atomic::Ordering::Relaxed);
+                            if pm == 0 {
+                                false
+                            } else {
+                                let va = (0x100000000u64 + pm) as *const u32;
+                                unsafe { core::ptr::read_volatile(va) == 0xBE11BE11 }
+                            }
+                        };
+                        const PIO_QEMU: usize = 48 * 1024 * 1024;
+                        const PIO_HW: usize = 700 * 1024 * 1024;
+                        let pio_cap = if qemu_loader_2b { PIO_QEMU } else { PIO_HW };
                         for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
-                            if sz > PIO_BOOT_CAP {
+                            if sz > pio_cap {
                                 serial_println!(
-                                    "[FAT] {} PRESENT size={}KB — skip full PIO (use QEMU-loader/-m 6G)",
-                                    name, sz / 1024
+                                    "[FAT] {} PRESENT size={}KB — skip full PIO (cap={}MB; QEMU-loader ou --features hw)",
+                                    name,
+                                    sz / 1024,
+                                    pio_cap / (1024 * 1024)
                                 );
                                 continue;
+                            }
+                            if sz > PIO_QEMU {
+                                serial_println!(
+                                    "[FAT] {} size={}MB — baremetal FAT PIO (pode demorar minutos)",
+                                    name,
+                                    sz / (1024 * 1024)
+                                );
                             }
                             serial_println!("[FAT] lendo {} ({}KB) — candidato LLM...", name, sz / 1024);
                             if let Some(fat_data) = fs.read_file(name) {
@@ -2341,8 +2366,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    // STT CTC tiny via QEMU-loader @0x163000000 (FAT STT.BIN = size hint)
-    let _ = crate::audio::stt::try_load_from_qemu_loader();
+    // STT CTC tiny: QEMU-loader @0x163000000, depois FAT STT.BIN (HW real)
+    if !crate::audio::stt::try_load_from_qemu_loader() {
+        let _ = crate::audio::stt::try_load_from_fat();
+    }
 
     // LLM test + telemetria N1.1
     if model_loaded || crate::cortex::model_is_loaded() {
@@ -2352,7 +2379,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             g >= 2048
         };
         if heavy {
-            serial_println!("[LLM-TEST] SKIP heavy 2B (use STT clima path)");
+            serial_println!("[LLM-TEST] SKIP heavy 2B (boot path; enable weather-e2e for clima HIT)");
         } else {
             let r = crate::cortex::generate_via_model("hello");
             serial_println!("[LLM-TEST] loaded prompt='hello' response='{}'", r);
@@ -2374,10 +2401,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     crate::load_status::print_status_banner();
 
-    // BPE vocab HF (BPB1) via QEMU-loader — decode real BitNet 2B (antes do clima)
-    let _ = crate::bpe::try_load_from_qemu_loader();
+    // BPE vocab HF (BPB1) via QEMU-loader + FAT fallback (HW real)
+    if !crate::bpe::try_load_from_qemu_loader() {
+        let _ = crate::bpe::try_load_from_fat();
+    }
 
-    // N4/N5 skinny — STT CTC (PCM sintético) → Hermes → generate_via_model → TTS (sem canned).
+    // N4/N5 skinny clima e2e — SOMENTE com feature `weather-e2e` (QEMU HIT).
+    // HW real: off — não força STT-sim/seed/lexicon; serial `[STATUS]`/`[GEN]`/`[TTS]` permanecem.
+    if crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+    // STT CTC (PCM sintético) → Hermes → generate_via_model → TTS (sem canned).
     {
         let stt_seed = "qual a previsao do tempo para amanha?";
         // STT real no path: formant seed → CTC; se vazio, tenta neural-lite Piper curto.
@@ -2490,6 +2522,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         } else {
             serial_println!("[JARBAS-TTS] SKIP llm=ABSENT");
         }
+    }
+    } else {
+        serial_println!(
+            "[BOOT] weather-e2e OFF (HW/default) — skinny STT-sim/seed skipped; feature=weather-e2e p/ QEMU HIT"
+        );
     }
 
     // Sprint 95-96: Cognitive + Memory status

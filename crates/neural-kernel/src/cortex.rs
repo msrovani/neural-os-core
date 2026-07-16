@@ -1611,9 +1611,9 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
             model.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
         let next = if use_bpe {
-            // Soft-float 2B: logits HF ruidosos → constrained decode no lexicon clima
-            // (todos os passos; sem canned string).
-            if model.hidden >= 2048 {
+            // Soft-float 2B + feature weather-e2e: constrained lexicon clima (QEMU HIT).
+            // HW/default: argmax HF pleno (sem seed/lexicon de teste).
+            if model.hidden >= 2048 && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
                 argmax_row_weather_only(&logits, 0, &recent)
             } else {
                 argmax_row_hf_vocab(&logits, 0, &recent)
@@ -1640,8 +1640,8 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
             recent.remove(0);
         }
 
-        // Early-exit: exige moldura PT (tempo/clima + esta/bom/claro/faz) — evita "tempo dia"
-        if use_bpe {
+        // Early-exit weatherish só no path e2e clima
+        if use_bpe && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
             let partial = crate::bpe::decode(&tokens[prompt_len..]);
             let letters = partial.bytes().filter(|b| b.is_ascii_alphabetic()).count();
             let wx_hits = crate::bpe::weatherish_hit_count(&partial);

@@ -51,6 +51,43 @@ impl BpeVocab {
         out
     }
 
+    /// Encode genérico (não clima): moldura Llama curta + cue do 1º token semântico.
+    /// Usado em HW real quando `weather-e2e` está off.
+    pub fn encode_chat_frame(&self, prompt: &str) -> Vec<u32> {
+        let p = prompt.as_bytes();
+        // Cue: primeira palavra ASCII ≥3 chars → id heurístico via hash no vocab
+        // (sem merges BPE pleno). Fallback: token " hi" / espaço+hello-ish.
+        let mut cue = 1919u32; // Ġhi aproximado comum; sobrescrito se achar keyword
+        let lower_has = |s: &[u8]| {
+            if s.is_empty() || p.len() < s.len() {
+                return false;
+            }
+            p.windows(s.len()).any(|w| {
+                w.iter()
+                    .zip(s.iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
+            })
+        };
+        if lower_has(b"tempo") || lower_has(b"clima") || lower_has(b"weather") {
+            cue = 24108; // Ġtempo
+        } else if lower_has(b"hello") || lower_has(b"ola") || lower_has(b"oi") {
+            cue = 1919;
+        } else if lower_has(b"help") || lower_has(b"ajuda") {
+            cue = 4220; // approx
+        }
+        const START_HDR: u32 = 128006;
+        const END_HDR: u32 = 128007;
+        const ASSISTANT: u32 = 78191;
+        vec![
+            self.bos,
+            cue,
+            self.eot,
+            START_HDR,
+            ASSISTANT,
+            END_HDR,
+        ]
+    }
+
     /// Encode aproximado: keywords clima → IDs HF reais (não inventa texto de saída).
     /// Soft-float: Llama-3 mini chat (8 toks) — user cue + turno assistant.
     /// Não é string canned de clima; só moldura de chat + peça semântica.
@@ -205,12 +242,55 @@ pub fn try_load_from_qemu_loader() -> bool {
     }
 }
 
+/// FAT32 `BPE.BIN` / `BPEVOCAB.BIN` — path HW real (sem QEMU-loader).
+pub fn try_load_from_fat() -> bool {
+    unsafe {
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat32::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                    continue;
+                }
+                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                    for name in &["BPE.BIN", "BPEVOCAB.BIN"] {
+                        if let Some(data) = fs.read_file(name) {
+                            match init_from_bpb1(&data) {
+                                Ok(()) => {
+                                    crate::serial_println!(
+                                        "[BPE] BPB1 LOADED from FAT {} ({}KB)",
+                                        name,
+                                        data.len() / 1024
+                                    );
+                                    return true;
+                                }
+                                Err(e) => {
+                                    crate::serial_println!(
+                                        "[BPE] FAT {} parse FAILED: {}",
+                                        name,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    crate::serial_println!("[BPE] FAT ausente (BPE.BIN)");
+    false
+}
+
 pub fn encode(text: &str) -> Vec<u32> {
     let guard = BPE.lock();
     match guard.as_ref() {
         Some(tok) => {
-            // Soft-float / clima: cue semântico HF (não CHAR).
-            tok.encode_weather_cue(text)
+            if crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+                tok.encode_weather_cue(text)
+            } else {
+                tok.encode_chat_frame(text)
+            }
         }
         None => {
             // Fallback CHAR → u32

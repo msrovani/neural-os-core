@@ -424,6 +424,37 @@ pub fn try_load_from_qemu_loader() -> bool {
     }
 }
 
+/// FAT32 `STT.BIN` — path HW real (sem QEMU-loader).
+pub fn try_load_from_fat() -> bool {
+    unsafe {
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat32::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                    continue;
+                }
+                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                    if let Some(data) = fs.read_file("STT.BIN") {
+                        let mut eng = SttEngine::new();
+                        if eng.load(&data) {
+                            crate::serial_println!(
+                                "[STT] CTC LOADED from FAT STT.BIN ({}KB)",
+                                data.len() / 1024
+                            );
+                            *STT_ENGINE.lock() = Some(eng);
+                            return true;
+                        }
+                        crate::serial_println!("[STT] FAT STT.BIN parse FAILED");
+                    }
+                }
+            }
+        }
+    }
+    crate::serial_println!("[STT] FAT ausente (STT.BIN)");
+    false
+}
+
 pub fn is_loaded() -> bool {
     STT_ENGINE.lock().as_ref().map(|e| e.is_loaded()).unwrap_or(false)
 }

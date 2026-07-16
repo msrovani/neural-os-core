@@ -168,35 +168,98 @@ Topologia: `serial_bridge.py` escuta `127.0.0.1:4444`; QEMU usa `-serial tcp:127
 
 ## 5. HW Real — Pendrive Bootável
 
-Pendrive tipico: **32 GB livres** - use imagem generosa (512 MB-1 GB+) e **inclua BITNET-2B**.
+Pendrive tipico: **32 GB livres** — use imagem generosa (1024 MB+) e **inclua BITNET-2B**.
 
-### Gerar imagem para pendrive
+### Firmware vs HW Expert (importante)
+
+| Asset | Precisa de `firmware/`? | O que carregar |
+|-------|-------------------------|----------------|
+| **HW Expert** (`HWEXPRT.BIN` / `hw_expert_v3.bitnet`) | **Não** | Modelo BitNet ~260 KB no FAT. Identifica VID/DID; **não** carrega blobs linux-firmware. |
+| **GPU NVIDIA / i915 / Realtek NIC / iwlwifi** | **Sim** | Blobs em `firmware/` copiados pelo `mkfat32.py` como `FW_*.BIN` no FAT. Sem eles, drivers em HW real falham no load de ucode/FECS/etc. |
+| **Piper / STT / BPE / RustCoder / BGE / BitNet 2B** | **Não** (firmware) | Modelos `.bin`/`.bitnet` no FAT (ou QEMU-loader só em VM). |
+
+`CONFIG.TXT` na imagem HW inclui `BOOT_MODE=hw`, `LOG_TO_FAT32=1`.
+
+### Gerar imagem de dados (FAT + modelos + firmware)
 ```powershell
-# target\disk_hw.raw (1024 MB default; opcional --size 512)
+# Soft-float kernel (obrigatório):
+$env:CARGO_TARGET_DIR = "$PWD\target"
+cargo nk
+# Opcional: log B*.LOG no FAT (além do serial) — útil sem cabo COM:
+# cargo nk --features fat-boot-log
+
+# Imagem UEFI bootável (bootloader + kernel):
+# Preferir bootloader_linker se `cargo build -p boot` travar em nested install.
+cargo build --release -p boot
+
+# target\disk_hw.raw (1024 MB default; cabe 2B + Piper + firmware ~12 MB)
 python tools\build_image.py --hw
-python tools\build_image.py --hw --size 512
+python tools\build_image.py --hw --size 1536   # se 2B+Piper apertarem
 ```
 
-### Gravar no pendrive
+Conteúdo típico do FAT (`mkfat32.py`): `BITNET2B.BIN`, `HWEXPRT.BIN`, `RUSTCDR.BITNET`, `BGE.BIN`, `PIPER.BIN`, `STT.BIN`, `BPE.BIN`, `MICRO.BITNET`, `FW_*` (todos os blobs de `firmware/`), `CONFIG.TXT`.
 
-**Windows (Rufus):**
+### Gravar no pendrive (dois meios — igual QEMU ide0/ide1)
+
+QEMU usa `uefi.img` (boot) + `disk_*.raw` (dados). Em HW real, replique:
+
+1. **Pendrive A (boot UEFI):** grave `target\uefi.img` (Rufus DD / `dd`).
+2. **Pendrive B ou HD SATA (dados):** grave `target\disk_hw.raw` (FAT com modelos+firmware).
+
+**Windows (Rufus, modo DD):**
 ```powershell
 # Baixe rufus.exe de https://rufus.ie
-.\rufus.exe target\disk_hw.raw
+# Selecione o .raw e grave em modo "Imagem DD"
+.\rufus.exe
 ```
 
 **Linux:**
 ```bash
-sudo dd if=target/disk_hw.raw of=/dev/sdX bs=4M status=progress
-sync
+# CUIDADO: confira o device (lsblk) — apaga o alvo
+sudo dd if=target/uefi.img of=/dev/sdX bs=4M status=progress && sync
+sudo dd if=target/disk_hw.raw of=/dev/sdY bs=4M status=progress && sync
 ```
 
 ### Boot
-1. Conecte o pendrive no PC alvo (i5-6400 + GTX 1050 recomendado)
-2. Ligue o PC e entre na BIOS (F2/Del)
-3. Configure: UEFI boot, disable Secure Boot
-4. Selecione o pendrive como dispositivo de boot
-5. O AIOS K²CHJ inicializará automaticamente
+1. Conecte boot USB + disco de dados (ou segundo USB)
+2. BIOS/UEFI: Secure Boot **off**, boot UEFI no pendrive A
+3. No serial (abaixo), procure `[STATUS]`, `[HWEXPERT]`, `[FAT]`, `[PIPER]`, `[STT]`, `[BPE]`, `[GEN]`, `[TTS]`
+
+### Coletar log em HW real (serial COM)
+
+Kernel: UART 16550 em **COM1 = I/O `0x3F8`** (fallback `0x2F8` / `0x3E8` / `0x2E8`), baud típico **115200 8N1** (`uart_16550::SerialPort::init`).
+
+**Windows — cabo USB-Serial / header COM da placa:**
+```powershell
+# Liste portas
+mode
+# Ou: Get-CimInstance Win32_SerialPort | Select DeviceID, Name
+
+# PuTTY: Connection → Serial → COMx, Speed 115200, 8N1
+# Ou captura crua (ajuste COMx):
+$port = New-Object System.IO.Ports.SerialPort COM3,115200,None,8,One
+$port.Open()
+$log = "logs\boot_hw_$(Get-Date -Format yyyyMMdd_HHmmss).txt"
+$sw = [IO.StreamWriter]::new($log)
+while ($true) {
+  $line = $port.ReadLine()
+  $sw.WriteLine($line)
+  $sw.Flush()
+  Write-Host $line
+}
+```
+
+**Não use** `tools\serial_bridge.py` em HW real — ele é SLIP/TCP `:4444` para QEMU COM2, não UART físico.
+
+**Log em FAT (opcional):** compile com `--features fat-boot-log`. No volume de dados aparecem `B?????.LOG` (sessão). Sem a feature, o serial imprime `[LOG] SKIP fat session write...` e **mantém** todo `serial_println!`.
+
+### Features de build (QEMU HIT vs HW)
+| Feature | Default | Uso |
+|---------|---------|-----|
+| *(nenhuma)* | HW / release | Sem skinny STT-sim / seed clima / lexicon constrained |
+| `weather-e2e` | off | Reativa path Sprint 107 HIT (`run_weather_e2e.ps1`) |
+| `fat-boot-log` | off | Persiste boot log no FAT |
+| `jarbas-bridge` | off | Cross-check TOPIC_* (não muda boot default) |
 
 ---
 

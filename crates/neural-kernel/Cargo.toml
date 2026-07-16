@@ -29,6 +29,12 @@ jarbas = { path = "../jarbas", optional = true }
 
 [features]
 jarbas-bridge = ["jarbas"]
+# Sprint 107 QEMU HIT clima (STT-sim seed + lexicon constrained). Off = HW real.
+weather-e2e = []
+# Persiste B*.LOG no FAT32 (útil em pendrive sem cabo serial). Off por default
+# (PIO ATA no boot pode ser lento); ative para captura em disco:
+#   cargo nk --features fat-boot-log
+fat-boot-log = []
 # ttf-parser não é compatível com no_std puro.
 # Usamos ferramenta Python tools/convert_ttf_to_bitmap.py para converter TTF
 # em arrays Rust embutidos, sem runtime parsing.

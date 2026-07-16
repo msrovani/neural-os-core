@@ -5,6 +5,15 @@
 #   Áudio/voz: ADR-0045 (Sound Voice Stack)
 # ═════════════════════════════════════════════════════════
 
+## HW real prep (2026-07-16)
+- **Imagem dados:** `python tools/build_image.py --hw` → `target/disk_hw.raw` (1024 MB+; modelos + `firmware/` → `FW_*` + `BPE.BIN`).
+- **Boot:** `target/uefi.img` (pendrive A) + `disk_hw.raw` (pendrive B / SATA) — ver HOWTO §5.
+- **HW Expert:** precisa só `HWEXPRT.BIN` (não precisa linux-firmware).
+- **GPU/WiFi/NIC:** precisam blobs `firmware/` no FAT.
+- **E2e clima QEMU:** gated — default off; `cargo nk --features weather-e2e` para HIT.
+- **Log HW:** COM1 `0x3F8` @ 115200 8N1 (PuTTY/SerialPort); opcional `--features fat-boot-log`.
+- Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
+
 ## Roadmap Atual
 **Versão:** **v1.7.2** (2026-07-16) — Sprint 107 loops 1–5 clima PASS parcial forte.  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
