@@ -1,8 +1,9 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.2
-#   SPRINT 107 — Adequação ADR-0042 + Voice I/O (marco 2B LOADED)
+#   STATE — neural-os-core v1.7.3 (docs)
+#   PISTA LIMPA — próximo trabalho = ADR-0042 N2→N5
+#   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
+#   Backlog voz → Sprint Sound (reaberta) — ADR-0045
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
-#   Áudio/voz: ADR-0045 (Sound Voice Stack)
 # ═════════════════════════════════════════════════════════
 
 ## HW real prep (2026-07-16)
@@ -15,19 +16,29 @@
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 
 ## Roadmap Atual
-**Versão:** **v1.7.2** (2026-07-16) — Sprint 107 loops 1–5 clima PASS parcial forte.  
+**Versão:** **v1.7.3** (2026-07-16) — docs: handoff voz 107→Sprint Sound; pista limpa ADR-0042.  
+**Runtime marco:** v1.7.2 clima PASS parcial forte+ (sem mudança de binário nesta tag docs).  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
+
+### Pista limpa (2026-07-16)
+| Track | Status |
+|-------|--------|
+| **ADR-0042 N2→N5** | ▶️ **próximo trabalho ativo** (sugerido: N2 SelfHeal gated) |
+| Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
+| Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas…) — **não bloqueia** ADR-42 |
+| Sprint 108 | ⏳ self-evolving — paralelo; sem gate de voz |
 
 ### Sound / Voice (ADR-0045)
 | Item | Estado |
 |------|--------|
 | Truth path | `neural-kernel/src/audio/*` (boot) |
-| Espelho | `jarbas/src/audio/*` — **não wired** ao bin |
+| Espelho | `jarbas/src/audio/*` — **não wired** ao bin → Sprint Sound |
 | Stack | HDA + Piper (+formant) + STT CTC + VAD + mixer + FB TTS paint |
-| WakeWord | código existe; **registrado** (Loop 5) — ainda sem path Mic→WAKEWORD no clima e2e |
-| UAC | stub (#84 futuro) |
+| WakeWord | **registrado** (Loop 5) — Mic→WAKE e2e → Sprint Sound |
+| UAC | stub melhorado (PCI USB probe) — enum real → Sprint Sound (#84) |
+| Backlog | **Sprint Sound (reaberta)** — ver TODO.md |
 | Obsoleto | sherpa / Pocket / Kokoro-primário / Vosk / Wyoming / Rustpotter |
 
 ### Adequação N0–N5 (ADR-0042)
@@ -50,7 +61,7 @@
 | L4 | `logs/boot_whpx_20260716_104440.txt` | ✅ LOADED | ▶️ `ctc='so'` + EventBus | ✅ `' tempo esta bom'` | CMVN+TOPIC_STT_TEXT+USER_INTENT |
 | L5 | `logs/boot_whpx_20260716_110041.txt` | ✅ LOADED | ▶️ `ctc='so'` + EventBus | ✅ `'O tempo esta'` | bias O↑; **canônico fecho** |
 
-**Veredito Sprint 107:** **PASS parcial forte+** (fechada). Avanços vs baseline `033322`: HWEXPERT LOADED; CTC path non-empty (`so`); EventBus STT→INTENT; GEN weatherish estável no 2B; TTS Continuous=`synthesize_tts`/Piper; FB paint. Gaps → 108: STT retrain PCM-real; soft-float latency (#1 doc-only); Mic→Wake→STT runtime (não só boot skinny); jarbas wire pleno.
+**Veredito Sprint 107:** **PASS parcial forte+** (fechada para voz). Avanços vs baseline `033322`: HWEXPERT LOADED; CTC path non-empty (`so`); EventBus STT→INTENT; GEN weatherish estável no 2B; TTS Continuous=`synthesize_tts`/Piper; FB paint. **Gaps de voz → Sprint Sound (reaberta)** (não 108): STT retrain PCM-real; soft-float latency; Mic→Wake→STT runtime; jarbas wire pleno; Piper VITS pleno; UAC/VAD/SER polish.
 
 ### Evidência clima e2e (2026-07-16 — Sprint 107 fecho L5)
 
@@ -165,14 +176,11 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- Soft-float latency (tkn/s) — **known blocker** (sem fix em 1.7.2); ver `SESSION_110.md`
-- **STT CTC:** MFCC+loader corrigidos (Part B #2); path real ainda não fechado no e2e WHPX (não re-testado em HW — ver Part B abaixo)
-- Piper VITS pleno (neural-lite ≠ HiFi-GAN completo) — gap documentado, duração por fonema melhorada (Part B #5)
-- Loop **Mic→WakeWord→STT→LLM→TTS** wired no EventBus (Part B #4) — falta re-validar e2e WHPX pós-fix
-- `jarbas/audio` — dep opcional adicionada (`jarbas-bridge` feature); wiring pleno bloqueado por conflito `#[global_allocator]` (Part B #9)
-- N2 SelfHeal gated; Gate `v2.0.0` = N1–N5 only
-- Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`) — **reconfirmado 2026-07-16 Part B**: `cargo build --release -p boot` direto (sem `bootloader_linker`) travou >10min (nested cargo lock no mesmo `target/`); matado, e2e WHPX não re-executado nesta sessão
-- Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_033322.txt`
+- **ADR-0042 N2** SelfHeal gated — **pista limpa / trabalho ativo**
+- Backlog voz → **Sprint Sound (reaberta)** (TODO.md): STT retrain; Mic→Wake→STT e2e; Piper VITS pleno; soft-float latency; UAC; jarbas wire; VAD/SER/Wake polish
+- Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
+- Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_110041.txt`
+- Migração docs 107→Sound: `SESSION_111.md`
 
 ## Sprint 107 Part B — fixes pontuais (2026-07-16)
 
@@ -230,6 +238,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 **Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K²CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
 
 ## Marcos Acumulados
+- **🏆 v1.7.3 (2026-07-16):** Docs — Sprint 107 voice fechada; leftovers → Sprint Sound; pista limpa ADR-0042 N2. Ver `SESSION_111.md`.
 - **🏆 v1.7.2 (2026-07-16):** Sprint 107 loops 1–5 clima PASS parcial forte — GEN `'O tempo esta'`, Piper neural-lite, WakeWord registrado. Ver `SESSION_110.md`.
 - **🏆 v1.7.1 (2026-07-16):** ADR-0045 Sound Voice Stack (docs). Ver `SESSION_109.md`.
 - **🏆 v1.7.0 (2026-07-15):** N1 ✅ + BitNet 2B LOADED (~590MB, 30L, FWD); soft-float/`cargo nk`; TTS empty known. Ver `SESSION_108.md`.
@@ -401,9 +410,14 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - AIOS API (aios_net, aios_fs) + SkillOpt (Python→Rust no_std) ✅
 - Heap address HW real (`0x4000_0000_0000`) ✅
 
-### ⏳ Sprint 107+ — v2.0 Cognição Plena
-- Voice I/O pipeline (TTS→STT→LLM→TTS) ⏳
-- Self-evolving agents (auto-skill generation) ⏳
+### ✅ Sprint 107 — Voice I/O FECHADA (PASS parcial forte+)
+- Clima e2e GEN+TTS+FB, HWEXPERT, Piper neural-lite, WakeWord registrado, EventBus skinny ✅
+- Backlog voz → **Sprint Sound (reaberta)** (não bloqueia ADR-42)
+
+### ▶️ Sprint Sound (reaberta) + ADR-0042
+- STT retrain / Mic→Wake runtime / Piper VITS / UAC / jarbas wire ⏳ Sound
+- **N2→N5** ▶️ pista ativa
+- Self-evolving agents (Sprint 108) ⏳
 - LLM Agent 24/7 multi-turn conversation ⏳
 - DHCP/Rede nativa (e1000 sem serial tunnel) 🔴
 

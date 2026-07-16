@@ -3,7 +3,7 @@
 **Data:** 2026-07-14 · atualizado 2026-07-15  
 **Status:** Accepted — plano diretor de adequação (**N1 done**; N3 em progresso)  
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
-**Sprint:** 107+  
+**Sprint:** ADR-0042 (pista ativa N2→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
 **Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5.**

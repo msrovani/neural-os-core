@@ -1,9 +1,10 @@
 # 📋 TODO MASTER — neural-os-core v2.0
 
-**Data:** 2026-07-14  
+**Data:** 2026-07-16  
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.  
 **Documento oficial:** AGENTS.md (seção roadmap)  
-**Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
+**Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado  
+**Pista ativa:** **ADR-0042 N2→N5** (voz residual → Sprint Sound reaberta; não bloqueia ADR-42)
 
 ---
 
@@ -38,23 +39,58 @@
 
 ---
 
-## ▶️ SPRINT 107 — v2.0 Voice I/O Pipeline
+## ✅ SPRINT 107 — Voice I/O (FECHADA — PASS parcial forte+)
 
-**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — stack canônico = HDA + Piper (+formant) + STT CTC (não sherpa/Vosk/Kokoro/Wyoming).
+**Veredito:** fechada para voz — entregues clima e2e, HWEXPERT, Piper neural-lite, EventBus skinny, WakeWord registrado.  
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md).  
+**Pendências de voz ≠ 107** — migradas para **Sprint Sound (reaberta)** abaixo.  
+**Evidência:** `SESSION_110.md`, `SESSION_107_CLOSE.md`, log `logs/boot_whpx_20260716_110041.txt`.
 
-| Item | LOC | Status | Detalhes |
-|------|-----|--------|----------|
-| TTS→STT→LLM→TTS loop | ~600 | ▶️ parcial | TTS+FB+GEN ok; STT seed (não loop pleno) |
-| Voice activity detection improvements | ~200 | ⏳ | VAD refinado |
-| Wake word "Jarvis" — **registrar** agente | ~200 | ✅ registrado Loop 5 | Código em `wakeword.rs`; no AgentFleet (ADR-0045) |
-| Audio pipeline hardening | ~300 | ⏳ | Debug e otimização |
-| Piper neural `emb.weight` | ~100 | ▶️ neural-lite | neural-lite (não VITS pleno) |
-| Soft-float tkn/s | — | ❌ known blocker | Sem fix em 1.7.2 |
-| ~~sherpa / Vosk / Kokoro / Wyoming~~ | — | ❌ | Supersedido — ADR-0045 |
+| Item | Status | Nota |
+|------|--------|------|
+| Clima e2e GEN + TTS + FB | ✅ | `'O tempo esta'` + Piper neural-lite + paint |
+| HWEXPERT LOADED | ✅ | header u32 + sim host |
+| WakeWordAgent registrado | ✅ | Loop 5 / AgentFleet |
+| EventBus STT→INTENT (skinny) | ✅ | boot path; runtime Mic→Wake ainda Sound |
+| ~~sherpa / Vosk / Kokoro / Wyoming~~ | ❌ | Supersedido — ADR-0045 |
 
 ---
 
-## ▶️ SPRINT 108 — v2.0 Self-Evolving Agents
+## ▶️ SPRINT SOUND (reaberta) — leftovers voz pós-107
+
+**Home do backlog de voz.** Não bloqueia ADR-0042. Truth = `neural-kernel/src/audio/*` (ADR-0045).  
+**Deps/tools:** `tools/train_stt.py`, `tools/convert_piper_to_bitnet.py`, HDA (`audio/hda.rs`), UAC stub (`audio/usb.rs`).
+
+| Item | Status | Detalhes / deps |
+|------|--------|-----------------|
+| STT real / retrain PCM→MFCC | ⏳ | `train_stt.py` hoje = MFCC synth; fechar CTC útil no LLM |
+| Mic→Wake→STT→LLM→TTS runtime e2e | ⏳ | skinny EventBus ✅ em 107; falta path mic real + re-validar WHPX |
+| Piper VITS pleno | ⏳ | neural-lite ≠ HiFi-GAN; `convert_piper_to_bitnet.py` |
+| Soft-float voice latency | ⏳ | known blocker; defer sob Sound (sem fake fix) |
+| UAC real (#84) | ⏳ | probe PCI USB ✅; enum descriptors xHCI ainda stub |
+| jarbas/audio wire | ⏳ | feature `jarbas-bridge` opcional; blocker `#[global_allocator]` |
+| VAD refinements | ⏳ | `audio/vad.rs` base existe |
+| SER refinements | ⏳ | `audio/ser.rs` heurístico; polish |
+| Wake ML polish | ⏳ | agente registrado ✅; path Mic→WAKE e2e + MLP polish |
+| Unify truth↔espelho | ▶️ | partial (Part B); cutover pleno = Sound |
+
+---
+
+## ▶️ ADR-0042 — pista ativa (N2→N5)
+
+| Fase | Status | Nota |
+|------|--------|------|
+| N1 k-nano legível | ✅ | v1.7.0 |
+| **N2** k-ai SelfHeal / HMI | ⏳ | **próximo passo sugerido** |
+| N3 cortex cérebro | ▶️ parcial | 2B LOADED + GEN weatherish |
+| N4 hermes orquestra | ▶️ parcial | EventBus intent path |
+| N5 jarbas ego/UI | ▶️ parcial | TTS/FB; voz plena = Sprint Sound |
+
+Gate `v2.0.0` = N1–N5. Voz residual **não** é gate de N2.
+
+---
+
+## ⏳ SPRINT 108 — v2.0 Self-Evolving Agents
 
 | Item | LOC | Status | Detalhes |
 |------|-----|--------|----------|
@@ -157,8 +193,10 @@
 | 103-104 | K²CHJ Workspace Migration | ~500 | ✅ |
 | 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
 | 106 | v2.0 Ecossistema de Anéis Lógicos | ~3.000 | ✅ 10/10 concluídas |
-| 107 | Voice I/O Pipeline (TTS→STT→LLM→TTS) | ~1.500 | ▶️ parcial (v1.7.2) |
-| 108 | Self-Evolving Agents | ~1.600 | ⏳ |
+| 107 | Voice I/O (clima e2e + skinny EventBus) | ~1.500 | ✅ fechada (PASS parcial forte+) |
+| Sound | Leftovers voz (STT/Piper/UAC/jarbas wire…) | — | ▶️ reaberta |
+| ADR-42 | Adequação N2→N5 | — | ▶️ **pista ativa** |
+| 108 | Self-Evolving Agents | ~1.600 | ⏳ (não bloqueia ADR-42) |
 | **Total v2.0** | | **~9.000 LOC** | |
 
 ---

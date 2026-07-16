@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.7.3] — 2026-07-16 — Docs: handoff voz 107 → Sprint Sound + pista ADR-0042
+
+Docs-only. Sem mudança de runtime. Package Cargo permanece `1.0.0` (hábito tag-only).
+
+### Docs
+- Sprint **107 Voice** marcada **FECHADA** (PASS parcial forte+) — entregas permanecem; gaps de voz **não** são mais 107
+- Backlog voz migrado para **Sprint Sound (reaberta)**: STT retrain, Mic→Wake runtime, Piper VITS pleno, soft-float latency, UAC, jarbas wire, VAD/SER/Wake polish
+- **Pista ativa** = ADR-0042 N2→N5 (voz não bloqueia)
+- STATE / TODO / ROADMAP / AGENTS / IDEA_BANK / TECNOLOGIAS §5 / ADR-0045 / SESSION_111 alinhados
+
 ## [1.7.2] — 2026-07-16 — Sprint 107 loops 1–5 (clima PASS parcial forte)
 
 Marco funcional pós-ADR-0045. Package Cargo permanece `1.0.0` (hábito tag-only).
@@ -18,9 +28,8 @@ Marco funcional pós-ADR-0045. Package Cargo permanece `1.0.0` (hábito tag-only
 - Piper neural-lite + convert_piper; STT path hardening
 - WakeWord register; QEMU loaders BPE/HW/RustCoder/STT; weather e2e scripts
 
-### Known gaps
-- Soft-float tkn/s (sem fix nesta release)
-- STT CTC empty; Mic→WakeWord→STT→LLM→TTS EventBus; Piper VITS pleno; HW Expert re-export; jarbas/audio wiring
+### Known gaps (→ Sprint Sound reaberta / v1.7.3 docs)
+- Soft-float tkn/s; STT CTC retrain; Mic→WakeWord→STT→LLM→TTS runtime e2e; Piper VITS pleno; jarbas/audio wiring; UAC
 
 ## [1.7.1] — 2026-07-16 — ADR-0045 Sound Voice Stack (docs)
 

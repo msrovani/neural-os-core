@@ -240,7 +240,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 81 | VirtIO-GPU 2D/3D acelerado | ⏳ Pós-MVP | Sprint 24+ | Requer VirtIO. |
 | 82 | Tensor visualization no framebuffer | ⏳ Pós-MVP | Fase 5+ | Depende de #79 + #81. |
 | 83 | Intel HDA audio driver — Áudio via PCI HDA controller. Essencial para TTS/STT do JARVIS sem depender de USB. | ✅ feito | Sprint Sound / 101 | ✅ SD0 capture + SD1 playback. ADR-0045. |
-| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | 🟡 futuro | Sprint 107+ | Stub `audio/usb.rs` (probe false). Ainda válido quando HDA ausente. ADR-0045. |
+| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | 🟡 futuro | Sprint Sound (reaberta) | Stub + PCI USB probe (`audio/usb.rs`). Enum descriptors xHCI ainda aberto. ADR-0045. |
 
 ### 1.8. Princípios Arquiteturais
 
@@ -536,7 +536,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 315.22 | **STT (sherpa-onnx Whisper)** — Speech-to-text via sherpa-onnx Rust bindings. Whisper engine, CPU offline. Alternativa: Vosk. Pós B-01 | ❌ supersedido | — | Histórico. Primário = STT CTC nativo (`audio/stt.rs`). ADR-0045. | k2-fsa/sherpa-onnx |
 | 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | ❌ supersedido | — | Histórico. Substituído por MLP nativo `wakeword.rs` (**registrado** no boot Loop 5); path Mic→WAKEWORD e2e ainda aberto. ADR-0045. | Priler/jarvis |
 | 315.24 | **Audio Ring Buffer** — Circular buffer PCM lockless para DMA audio entre HDA/USB e voice pipeline. Produtor/consumidor SPSC via EventBus. | ✅ feito | Sprint Sound | `audio/ringbuf.rs` no truth. Não bloqueado por B-01. ADR-0045. | — |
-| 315.25 | **Voice Pipeline** — Pipeline de áudio nativo Rust sobre EventBus: Mic→WakeWord→STT→Cortex→TTS→Speaker. Frame types (AudioFrame, TranscriptionFrame, TTSCommandFrame) + PipelineAgent que orquestra. Ref arquitetural: pipecat pipeline composition pattern. | ❌ supersedido (spec sherpa) / ▶️ Sprint 107 | Sprint 107 | Spec original (sherpa+rustpotter) ❌. Pipeline nativo parcial em `pipeline.rs` + JarvisVoice — fechar loop = Sprint 107. ADR-0045. | EventBus nativo |
+| 315.25 | **Voice Pipeline** — Pipeline de áudio nativo Rust sobre EventBus: Mic→WakeWord→STT→Cortex→TTS→Speaker. Frame types (AudioFrame, TranscriptionFrame, TTSCommandFrame) + PipelineAgent que orquestra. Ref arquitetural: pipecat pipeline composition pattern. | ❌ supersedido (spec sherpa) / ▶️ Sprint Sound | Sprint Sound (reaberta) | Spec original (sherpa+rustpotter) ❌. Pipeline nativo parcial (107 skinny ✅); fechar loop runtime = Sound. ADR-0045. | EventBus nativo |
 | 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | SKYNET + BeFree |
 | 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | 🔴 Pós B-01 | N+2 | ~300 | SKYNET |
 | 315.28 | **Gamification** — Recompensas, streaks, achievements para interação com JARVIS. OptimizerAgent + CronAgent | 🟢 Futuro | N+1 | ~200 | Jotape |
@@ -1390,7 +1390,7 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | #307 | WWW Agents (Browser, Email, RSS, Search, Download, WS) | ~2600 | 🟡 parcial / bridge SLIP |
 | #306b | Self-Update Agent (A/B slots + rollback) | ~800 | 🟡 pós-rede estável |
 | #236 | Plugin Hub + Marketplace | ~400 | 🟡 pós-rede estável |
-| #315.N+1 | Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | ❌ supersedido — Piper+CTC nativo; sem Vosk/Wyoming. ADR-0045 / Sprint 107 |
+| #315.N+1 | Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | ❌ supersedido — Piper+CTC nativo; sem Vosk/Wyoming. ADR-0045 / leftovers → Sprint Sound |
 | #315.N+1b | Multi-device sync (CRDT) | ~300 | 🔴 rede |
 | #315.N+2 | SKYNET Mesh Node | ~300 | 🔴 rede |
 | B-29 | WiFi (Intel/Atheros/Realtek 802.11) | ~1000 | 🟡 em progresso (iwlwifi) |
@@ -1642,7 +1642,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-14 | **432** | **GGUF/FAT file-backed mmap (P9)** — pré-fill FAT `read_file_range` + demand-page lazy; Cap MAP_FILE; magic/fallback NFIL. Streaming on-fault / >4 pág. = follow-up. | ✅ PoC | Sprint 107 | ~260 | `gguf_mmap.rs` + `demand_page.rs` + ADR-0041 |
 | 2026-07-14 | **433** | **Cadeia K²CHJ canônica** — `k-nano → k-ai → cortex → hermes → jarbas` + identidades (legível / HW-AI / cérebro / orquestra / ego+10%). Gate **v2.0.0 = N1–N5**. | ✅ Doc | Sprint 107 | — | ADR-0042 |
 | 2026-07-14 | **434** | **N1 k-nano legível** — Telemetria LOADED\|ABSENT\|FAILED; Cap authority; probe NVIDIA gated; métricas scheduler; sem SUCCESS falso. | ✅ | Sprint 107 / v1.7.0 | — | ADR-0042 |
-| 2026-07-14 | **435** | **N2 k-ai HW-AI / SelfHeal / HMI** — Heal de B*.LOG; HEALTH_ISSUE; inventário VID-gated; Trust (agent,skill). | ⏳ | Sprint 107+ | — | ADR-0042 |
-| 2026-07-14 | **436** | **N3 cortex cérebro** — Modelo real se no FAT; MoE executa; learn/busca; Cap MAP_WEIGHTS. **Nota v1.7.0:** 2B load ✅ (~590MB, 30L, FWD OK); generate/TTS 🟡 empty. | ▶️ parcial | Sprint 107+ / v1.7.0 | — | ADR-0042 |
-| 2026-07-14 | **437** | **N4 hermes orquestra** — WASM SFI; skills on demand; intent e2e; cria skill/app; IPC→jarbas. | ⏳ | Sprint 107+ | — | ADR-0042 + #426 |
-| 2026-07-14 | **438** | **N5 jarbas ego/persona/+10%** — Compositor vivo; humor/voz/UI; só via Hermes; feedback preferências. | ⏳ | Sprint 107+ | — | ADR-0042 |
+| 2026-07-14 | **435** | **N2 k-ai HW-AI / SelfHeal / HMI** — Heal de B*.LOG; HEALTH_ISSUE; inventário VID-gated; Trust (agent,skill). | ⏳ | ADR-0042 (pista ativa) | — | ADR-0042 |
+| 2026-07-14 | **436** | **N3 cortex cérebro** — Modelo real se no FAT; MoE executa; learn/busca; Cap MAP_WEIGHTS. **Nota v1.7.2:** 2B LOADED + GEN weatherish; soft-float latency → Sound/N3. | ▶️ parcial | ADR-0042 | — | ADR-0042 |
+| 2026-07-14 | **437** | **N4 hermes orquestra** — WASM SFI; skills on demand; intent e2e; cria skill/app; IPC→jarbas. | ⏳ | ADR-0042 | — | ADR-0042 + #426 |
+| 2026-07-14 | **438** | **N5 jarbas ego/persona/+10%** — Compositor vivo; humor/UI; voz como expressão (stack pleno → Sprint Sound); só via Hermes; feedback preferências. | ⏳ | ADR-0042 + Sound (voz) | — | ADR-0042 |

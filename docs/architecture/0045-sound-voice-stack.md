@@ -2,10 +2,10 @@
 
 **Data:** 2026-07-16  
 **Status:** Accepted  
-**Sprint:** 107 (Voice I/O) — documentação do estado real pós Sprint Sound / 101  
+**Sprint:** Sound (base ✅) + 107 Voice ✅ FECHADA — leftovers → **Sprint Sound (reaberta)**  
 **Depende de:** ADR-0036 (JARVIS Interaction), ADR-0042 (K²CHJ N5 voz como expressão)  
 **Supersede / invalida como caminho primário:** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming protocol, Rustpotter crate  
-**Release:** documentado em CHANGELOG `[1.7.1]` (docs); package Cargo permanece `1.0.0` (hábito tag-only)
+**Release:** documentado em CHANGELOG `[1.7.1]` (docs); clima e2e `[1.7.2]`; handoff Sound `[1.7.3]` docs
 
 ---
 
@@ -30,15 +30,16 @@ Até o wiring explícito `main` → crate `jarbas` para áudio, qualquer mudanç
 
 1. **Stack canônico de voz (primário):** HDA + Piper VITS (+ fallback formant) + STT CTC + VAD + mixer + pintura FB do texto TTS.  
 2. **Não adotar** sherpa-onnx / Pocket TTS / Kokoro / Vosk / Wyoming / Rustpotter como dependência de boot ou skill primária.  
-3. **WakeWord:** código existe (`wakeword.rs`); **não está registrado** no AgentFleet — gap Sprint 107, não “bloqueado por B-01”.  
-4. **UAC (USB Audio Class):** stub (`usb.rs` / `UsbAudioAgent`) — válido como futuro (#84); HDA é o caminho atual.  
+3. **WakeWord:** código existe (`wakeword.rs`); **registrado** no AgentFleet (Loop 5 / Sprint 107). Path Mic→WAKEWORD e2e → Sprint Sound.  
+4. **UAC (USB Audio Class):** stub + PCI USB probe (`usb.rs`) — válido como futuro (#84 → Sprint Sound); HDA é o caminho atual.  
 5. IDEA_BANK / ROADMAP / TECNOLOGIAS devem marcar itens obsoletos como ❌ supersedido (histórico preservado) e apontar para esta ADR.
 
 ### Non-goals
 
-- Declarar pipeline TTS→STT→LLM→TTS “completo” (Sprint 107 ainda aberto).  
-- Afirmar Piper neural pleno (`emb.weight` / params) quando o boot usa formant fallback.  
-- Migrar o binário para `jarbas/audio` nesta ADR (só documentar o espelho).
+- Declarar pipeline TTS→STT→LLM→TTS “completo” (leftovers em Sprint Sound).  
+- Afirmar Piper VITS/HiFi-GAN pleno quando o boot usa neural-lite / formant.  
+- Migrar o binário para `jarbas/audio` nesta ADR (só documentar o espelho; wire → Sound).  
+- Bloquear ADR-0042 N2→N5 com gaps de voz.
 
 ---
 
@@ -50,20 +51,22 @@ Mic (HDA SD0) → ringbuf / VAD → [WakeWord*] → STT CTC → Hermes/Cortex
 Speaker (HDA SD1) / FB paint ← mixer ← Piper VITS | formant ← TTS cmd
 ```
 
-\* WakeWord: módulo presente; agente **não** registrado no boot.
+\* WakeWord: módulo presente; agente **registrado** no boot (Loop 5). Path Mic→WAKE e2e → Sprint Sound.
 
 | Componente | Arquivo (truth) | Estado |
 |------------|-----------------|--------|
 | Intel HDA capture+playback | `audio/hda.rs` | ✅ driver + agente registrado |
-| Piper TTS VITS | `audio/piper.rs` | ▶️ LOADED via QEMU-loader; neural fraco → **formant fallback** |
+| Piper TTS VITS | `audio/piper.rs` | ▶️ neural-lite no e2e 107; VITS pleno → Sound |
 | Formant TTS fallback | `audio/tts.rs` / voice path | ✅ produz `pcm_samples>0` |
-| STT CTC (MFCC→LSTM→CTC) | `audio/stt.rs` | ✅ CTC LOADED (evidência QEMU) |
-| VAD | `audio/vad.rs` | ✅ usado por voice path |
+| STT CTC (MFCC→LSTM→CTC) | `audio/stt.rs` | ▶️ CTC LOADED; retrain PCM → Sound |
+| VAD | `audio/vad.rs` | ✅ base; refinements → Sound |
 | Mixer / settings | `audio/mixer.rs`, `settings.rs` | ✅ |
 | FB TTS paint | jarbas/display path + `[JARBAS-TTS-FB]` | ✅ painted em e2e clima |
-| WakeWord “Jarvis” | `audio/wakeword.rs` | ✅ código + **registrado** (Loop 5); path Mic→WAKEWORD e2e ainda aberto |
-| UAC stub | `audio/usb.rs` | ⏳ probe sempre false; futuro #84 |
-| Pipeline / frames | `pipeline.rs`, `frame.rs`, `ringbuf.rs` | ▶️ parcial Sprint 107 |
+| WakeWord “Jarvis” | `audio/wakeword.rs` | ✅ registrado; Mic→WAKE e2e → Sound |
+| UAC stub | `audio/usb.rs` | ⏳ PCI probe; enum real → Sound (#84) |
+| SER | `audio/ser.rs` | ▶️ heurístico; polish → Sound |
+| Pipeline / frames | `pipeline.rs`, `frame.rs`, `ringbuf.rs` | ▶️ skinny 107 ✅; runtime pleno → Sound |
+| jarbas/audio wire | `jarbas/src/audio/*` | ⏳ espelho; allocator conflict → Sound |
 
 **Agentes registrados (boot):** `HdaAudioAgent`, `UsbAudioAgent` (stub), `JarvisVoiceAgent`, `WakeWordAgent`.
 
@@ -84,14 +87,19 @@ Histórico em CHANGELOG antigo (ex. VoiceService “Piper + Vosk”) permanece c
 
 ---
 
-## 5. Gaps Sprint 107 e próximos passos (ordem)
+## 5. Gaps → Sprint Sound (reaberta) — ordem sugerida
 
-1. **Generate / qualidade PT** — logits 2B soft-float ainda fracos para frase climática plena (N3).  
-2. **Piper neural** — corrigir lookup `emb.weight` / params (hoje formant).  
-3. **Registrar WakeWordAgent** + ligar Mic→WAKEWORD→STT no EventBus.  
-4. **Fechar loop** TTS→STT→LLM→TTS com telemetria honesta (não canned).  
-5. **UAC real** (#84) quando HDA ausente (HW real / fones USB).  
-6. **Wiring jarbas** — binário consome `jarbas::audio` sem duplicar truth no monólito.
+Sprint 107 Voice está **FECHADA** (PASS parcial forte+). Pendências abaixo **não** bloqueiam ADR-0042 N2→N5.
+
+1. **STT retrain** — PCM→MFCC real (`tools/train_stt.py`; hoje synth).  
+2. **Mic→Wake→STT→LLM→TTS runtime e2e** — skinny EventBus ✅; falta mic real + WHPX.  
+3. **Piper VITS pleno** — neural-lite ≠ HiFi-GAN (`convert_piper_to_bitnet.py`).  
+4. **Soft-float latency** — known blocker; defer sob Sound (sem fake).  
+5. **UAC real** (#84) quando HDA ausente.  
+6. **Wiring jarbas** — `jarbas-bridge` / resolver `#[global_allocator]`.  
+7. **VAD / SER / Wake ML polish**.
+
+Soft-float qualidade PT do 2B também toca **N3** (ADR-0042) — não só voz.
 
 ---
 
@@ -101,14 +109,15 @@ Histórico em CHANGELOG antigo (ex. VoiceService “Piper + Vosk”) permanece c
 |----|----------------|------|
 | #75 Intel HDA | ✅ feito | Absorvido por #83 / HDA real |
 | #83 HDA driver | ✅ feito | Sprint Sound / 101 |
-| #84 UAC | 🟡 futuro | Stub; ainda válido |
+| #84 UAC | 🟡 futuro | → Sprint Sound (reaberta) |
 | #315.21 Pocket/sherpa TTS | ❌ supersedido | → Piper + formant |
 | #315.22 sherpa Whisper / Vosk | ❌ supersedido | → STT CTC |
-| #315.23 Rustpotter | ❌ supersedido | → wakeword nativo (registrar) |
+| #315.23 Rustpotter | ❌ supersedido | → wakeword nativo (registrado) |
 | #315.24 Audio ring buffer | ✅ feito / parcial | `ringbuf.rs` no truth |
-| #315.25 Voice pipeline sherpa | ❌ supersedido como spec | Pipeline nativo = Sprint 107 |
-| #315.N+1 Piper+Vosk+Wyoming | ❌ supersedido | Piper+CTC nativo; sem Wyoming |
+| #315.25 Voice pipeline sherpa | ❌ supersedido como spec | Pipeline nativo = Sprint Sound |
+| #315.N+1 Piper+Vosk+Wyoming | ❌ supersedido | Piper+CTC nativo; leftovers → Sound |
 | #360 Kokoro-82M | ❌ supersedido | Piper é o TTS primário |
+| #438 N5 voz | ⏳ parcial | UI/persona = ADR-42; stack voz pleno = Sound |
 
 ---
 
@@ -124,5 +133,6 @@ Histórico em CHANGELOG antigo (ex. VoiceService “Piper + Vosk”) permanece c
 
 - `crates/neural-kernel/src/audio/`  
 - ADR-0036, ADR-0042 (N5)  
-- `docs/memory/STATE.md` (evidência TTS/FB Sprint 107)  
-- `docs/memory/SESSION_109.md` (sync docs desta ADR)
+- `docs/memory/STATE.md` (evidência TTS/FB Sprint 107; handoff Sound)  
+- `docs/memory/SESSION_109.md` (sync docs desta ADR)  
+- `docs/memory/SESSION_111.md` (migração leftovers 107 → Sound)

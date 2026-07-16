@@ -1,8 +1,8 @@
 # Roadmap — neural-os-core v2.0 🏆
 
-**Última atualização:** 2026-07-14  
-**Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros — **v2.0.0**  
-**Objetivo:** Ecossistema de anéis lógicos isolados (k_nano, k_ai, cortex, hermes, jarbas) — Sprint 106 concluída
+**Última atualização:** 2026-07-16  
+**Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros — linha **1.7.x** (não v2.0.0 até ADR-0042 N1–N5)  
+**Pista ativa:** **ADR-0042 N2→N5**. Voz residual → **Sprint Sound (reaberta)**. Sprint 107 fechada (PASS parcial forte+).
 
 ---
 
@@ -41,7 +41,7 @@
 | 44. MoE Router + Boot Agent | 101 | 0.101.x | Router IA, Boot Agent IA | ✅ |
 | 45. Trinity AutoLearn | 102 | 0.102.x | Detecta→treina→registra expert on-device | ✅ |
 | 46. SmileyOS Nativo | 103 | 0.103.x | 55+ cmd, drag, resize, wasm exec, llm icons | ✅ |
-| —. Sprint Sound | — | — | HDA, USB stub, Piper TTS, VAD, SER, Wake Word (código), Mixer — ver ADR-0045 | ✅ base / ▶️ Sprint 107 loop |
+| —. Sprint Sound | — | — | HDA, USB stub, Piper TTS, VAD, SER, Wake Word, Mixer — ADR-0045 | ✅ base / ▶️ **reaberta** (leftovers pós-107) |
 | 47. v1.1.1 GPU+Firmware+HW Expert | 104 | 1.1.1 | ACR WPR, 61K VID/DID, firmware loading | ✅ |
 | 48. v1.1.2 SelfHealing | 105 | 1.1.2 | I3/I4, hot_load_firmware, HEALTH_ISSUE | ✅ |
 | 49. v1.1.3 Visual+Audio | 106 | 1.1.3 | 3 layers, HDA playback, BrowserAgent | ✅ |
@@ -160,11 +160,38 @@
 
 ---
 
-## ▶️ Sprint 107 — v2.0 Voice I/O Pipeline
+## ✅ Sprint 107 — Voice I/O (FECHADA — PASS parcial forte+)
 
-**Status:** ▶️ PASS parcial forte (v1.7.2); Voice I/O loop parcial  
-**Objetivo:** Pipeline TTS→STT→LLM→TTS, VAD, wake word ML.  
-**Capability (2026-07-14):** Boot A/B + P0–P9 PoC no monólito — ver ADR-0041 / SESSION_107. Follow-ups: Ring3 QEMU, QUEUE_NOTIFY, SFI #426.
+**Status:** ✅ Fechada para voz (v1.7.2 + Part B). Entregue: clima e2e GEN+TTS+FB, HWEXPERT, Piper neural-lite, WakeWord registrado, EventBus skinny STT→INTENT.  
+**Pendências de voz:** migradas para **Sprint Sound (reaberta)** — não bloqueiam ADR-0042.  
+**Capability (histórico):** Boot A/B + P0–P9 PoC — ADR-0041 / SESSION_107.
+
+---
+
+## ▶️ Sprint Sound (reaberta) — leftovers voz
+
+Backlog: STT retrain PCM-real, Mic→Wake→STT→LLM→TTS runtime e2e, Piper VITS pleno, soft-float latency (defer), UAC (#84), jarbas/audio wire, VAD/SER polish, Wake ML e2e.  
+Tools: `train_stt.py`, `convert_piper_to_bitnet.py`. Ver TODO.md + ADR-0045.
+
+---
+
+## ▶️ ADR-0042 — pista ativa (N2→N5)
+
+| Fase | Status |
+|------|--------|
+| N1 | ✅ |
+| **N2** SelfHeal / HMI | ⏳ **próximo** |
+| N3 | ▶️ parcial (2B + GEN) |
+| N4 | ▶️ parcial |
+| N5 | ▶️ parcial (voz plena = Sound) |
+
+Gate `v2.0.0` = N1–N5. Sprint 108 (self-evolving) permanece agendada; **voz não bloqueia** ADR-42.
+
+---
+
+## ⏳ Sprint 108 — Self-Evolving Agents
+
+Auto-skill generation, verification, self-improvement — paralelo/após ADR-42; sem gate de voz.
 
 ---
 
@@ -172,8 +199,10 @@
 
 | Item | % | Esforço | Descrição |
 |------|---|---------|-----------|
-| **B-01** DHCP/RX funcional | ~500 LOC | smoltcp DHCP nunca completa | ⏳ |
-| Wake Word ML | 90% | ~100 LOC | Heurística→modelo simples | ⏳ |
+| **ADR-0042 N2** SelfHeal gated | — | ~LOC ADR | **pista ativa** — heal B*.LOG / HEALTH_ISSUE |
+| **B-01** DHCP/RX funcional | ~500 LOC | smoltcp DHCP nunca completa | ⏳ (SLIP bypass ativo) |
+| Sprint Sound leftovers | — | ver TODO | STT/Piper/UAC/jarbas — **não bloqueia N2** |
+| Wake Word ML e2e | 90% | ~100 LOC | → Sprint Sound |
 | burn-flex Backend | 70% | ~300 LOC | Integrar burn::Backend trait | ⏳ |
 | MSched VRAM | 70% | ~200 LOC | Conectar predictor ao scheduler GPU | ⏳ |
 | GPU Display sharing | 70% | ~200 LOC | Context switch iGPU/dGPU | ⏳ |

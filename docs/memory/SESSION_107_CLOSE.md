@@ -20,8 +20,10 @@
 3. **EventBus:** `TOPIC_STT_TEXT` + `USER_INTENT` no path clima boot.
 4. **Warnings:** 0 em neural-kernel (imports + `model_loaded`).
 
-## Handoff → 108 / N2–N5
-- Retrain STT em PCM→MFCC real (fecha CTC útil no LLM).
-- Soft-float 2B latency (AVX/host path) — sem fake.
-- Mic→WakeWord→STT runtime (além do skinny boot).
-- N2 SelfHeal gated; N5 jarbas wire (allocator conflict).
+## Handoff → Sprint Sound (reaberta) / ADR-0042 N2–N5
+- Retrain STT em PCM→MFCC real → **Sprint Sound**.
+- Soft-float 2B latency (AVX/host path) → Sound (defer; sem fake).
+- Mic→WakeWord→STT runtime (além do skinny boot) → Sound.
+- UAC / VAD / SER / Piper VITS pleno / jarbas wire → Sound.
+- **Pista ativa:** N2 SelfHeal gated (ADR-0042); voz **não** bloqueia.
+- Docs handoff: `SESSION_111.md` (v1.7.3).

@@ -98,16 +98,18 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 ## 5. 🎵 ÁUDIO — Captura e Reprodução
 
-**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).  
+**Backlog residual:** **Sprint Sound (reaberta)** — Sprint 107 Voice ✅ FECHADA (PASS parcial forte+). Não bloqueia ADR-0042.
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
 | 5.1 | **Intel HDA Capture + Playback** | 🏆 Driver HDA completo: SD0 (captura) + SD1 (playback). CORB/RIRB, codec discovery, DMA ring buffer. **Único driver HDA funcional em bare-metal Rust.** | Intel HDA spec, Linux HDA driver | GPLv2 | `audio/hda.rs` | ✅ 0 err |
 | 5.2 | **FFT Audio → Orb Visualization** | 🏆 `process_audio_fft()`: Goertzel simplificado com janela Hamming, 16 bins espectrais. Áudio do microfone HDA → FFT → animação do orbe em tempo real. | FFT algoritmos (Cooley-Tukey) | — (matemática) | `display/avatar.rs`, `audio/voice.rs` | ✅ 0 err |
-| 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural VITS (366 tensors). LOADED via QEMU-loader; **formant fallback** se `emb.weight` fraco. **Primário** (supersede Kokoro/Pocket/sherpa). | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs`, `audio/tts.rs` | ▶️ formant ok / neural parcial |
-| 5.4 | **STT CTC + VAD + Mixer** | 🔄 STT CTC nativo (MFCC→LSTM→CTC). VAD + mixer + ringbuf. **Não** Vosk/sherpa. | CTC papers, VAD | MIT | `audio/stt.rs`, `vad.rs`, `mixer.rs` | ✅ CTC LOADED |
-| 5.5 | **Wake Word "Jarvis" (nativo)** | ✅ MLP wakeword em `wakeword.rs`. **Código existe; `WakeWordAgent` registrado no boot** (Loop 5, `main.rs`). Path Mic→WAKEWORD no clima e2e ainda aberto. Supersede Rustpotter crate. | energia + MLP | MIT | `audio/wakeword.rs` | ▶️ registrado; e2e path pendente |
-| 5.6 | **USB Audio Class (UAC)** | ⏳ Stub `UsbAudioAgent` (probe false). Futuro #84 quando HDA ausente. | USB Audio Class | — | `audio/usb.rs` | ⏳ stub |
+| 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural. LOADED; **neural-lite** (`emb.weight`) no e2e 107; VITS/HiFi-GAN pleno → Sprint Sound. Tools: `convert_piper_to_bitnet.py`. | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs`, `audio/tts.rs` | ▶️ neural-lite / VITS→Sound |
+| 5.4 | **STT CTC + VAD + Mixer** | 🔄 STT CTC nativo (MFCC→LSTM→CTC). VAD + mixer + ringbuf. Retrain PCM-real + VAD polish → Sound. Tools: `train_stt.py`. **Não** Vosk/sherpa. | CTC papers, VAD | MIT | `audio/stt.rs`, `vad.rs`, `mixer.rs` | ▶️ LOADED; retrain→Sound |
+| 5.5 | **Wake Word "Jarvis" (nativo)** | ✅ MLP wakeword. **`WakeWordAgent` registrado** (Loop 5). Path Mic→WAKE e2e + ML polish → Sprint Sound. | energia + MLP | MIT | `audio/wakeword.rs` | ✅ registrado; e2e→Sound |
+| 5.6 | **USB Audio Class (UAC)** | ⏳ Stub + PCI USB class probe. Enum interface real → Sprint Sound (#84). | USB Audio Class | — | `audio/usb.rs` | ⏳ stub → Sound |
+| 5.7 | **SER (Speech Emotion)** | 🔄 Heurísticas em `ser.rs`. Refinements → Sprint Sound. | literatura SER | MIT | `audio/ser.rs` | ▶️ base; polish→Sound |
 
 **❌ Obsoleto como stack de kernel (histórico):** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming, Rustpotter — ver ADR-0045.
 
@@ -181,6 +183,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 11.3 | `fetch_pci_usb_ids.py` | 🏆 Download + parse de pci-ids e usb-ids oficiais. Estruturação como JSON hierárquico (vendor→device). | pci-ids.ucw.cz, linux-usb.org | MIT | `tools/fetch_pci_usb_ids.py` |
 | 11.4 | `train_hw_expert_v3.py` | 🏆 Pipeline de treino do HW Expert com dataset combinado (SDIO + pci-ids + usb-ids + kernel). | PyTorch, BitNet arquitetura | MIT | `tools/train_hw_expert_v3.py` |
 | 11.5 | `mkfat32.py` / `build_image.py` | 🏆 Gerador de imagem FAT32 bootável com modelos, firmware, e config. Inclui 111 blobs de firmware no disco. | mkfs.fat (Linux) | GPLv2 | `tools/mkfat32.py`, `tools/build_image.py` |
+| 11.6 | `train_stt.py` | 🔄 Treino CTC STT (hoje MFCC synth). Retrain PCM-real → Sprint Sound. | PyTorch CTC | MIT | `tools/train_stt.py` |
+| 11.7 | `convert_piper_to_bitnet.py` | 🔄 ONNX Piper → `.bin` (neural-lite). VITS pleno → Sprint Sound. | Piper / ONNX | MIT | `tools/convert_piper_to_bitnet.py` |
 
 ---
 
