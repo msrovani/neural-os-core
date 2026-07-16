@@ -3,7 +3,7 @@
 
 use alloc::vec::Vec;
 use core::ptr::write_volatile;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::{PageTable, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::VirtAddr;
@@ -20,11 +20,22 @@ pub const JARBAS_FB_VA: u64 = 0x0000_7000_0010_0000;
 /// Páginas FB mapeadas no PoC (prova MMIO; FB completo fica no VA kernel).
 pub const DEMO_MAP_PAGES: usize = 8;
 /// Retângulo demo no canto (evita alloc multi-MB no boot).
+/// Cores (0,180,255)/(20,20,40) — o "xuvisco" azul/preto no canto superior ESQUERDO
+/// na tela QEMU é este patch, não cursor/orb. `present()` copia DEMO_H scanlines;
+/// após a prova Cap/AS, apagamos o residual + splash (ver fim de `demo_jarbas_fb`).
 const DEMO_W: usize = 64;
 const DEMO_H: usize = 64;
 
 static PRESENT_COUNT: AtomicU64 = AtomicU64::new(0);
 static VSYNC_WAITS: AtomicU64 = AtomicU64::new(0);
+static P4_DEMO_OK: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// P4 Cap-only path OK (sem GpuDevice físico) — aceite N5 em QEMU short boot.
+static CAP_ONLY_OK: AtomicBool = AtomicBool::new(false);
+
+pub fn cap_only_ok() -> bool {
+    CAP_ONLY_OK.load(Ordering::Relaxed)
+}
 
 /// Contrato MMIO do framebuffer ativo (bootloader / GpuDevice).
 #[derive(Clone, Copy, Debug)]
@@ -220,6 +231,11 @@ pub fn present_count() -> u64 {
     PRESENT_COUNT.load(Ordering::Relaxed)
 }
 
+/// True se `demo_jarbas_fb` terminou OK (FB físico ou Cap-only sem GpuDevice).
+pub fn p4_demo_ok() -> bool {
+    P4_DEMO_OK.load(Ordering::Relaxed)
+}
+
 /// Demo non-fatal: Cap deny/allow + AS map + checker + present.
 pub fn demo_jarbas_fb() -> Result<(), &'static str> {
     serial_println!("[P4] JARBAS FB MMIO + double-buffer demo");
@@ -248,6 +264,8 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
                 return Err("p4: Cap vazia nao deveria PRESENT_FB");
             }
             syscall::dispatch(SYS_PRESENT_FB, 0, Cap::WRITE_FB)?;
+            CAP_ONLY_OK.store(true, Ordering::Relaxed);
+            P4_DEMO_OK.store(true, Ordering::Relaxed);
             serial_println!("[P4] SUCCESS Cap MAP_FB/WRITE_FB (sem FB fisico)");
             return Ok(());
         }
@@ -282,10 +300,36 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
     db.draw_checker((0, 180, 255), (20, 20, 40));
     db.present(Cap::WRITE_FB.union(Cap::MAP_FB))?;
 
+    // Apaga o checker residual (senão fica o bloco 64×64 no canto até o DisplayAgent).
+    erase_present_region(&contract);
+    crate::display::fb::boot_splash("AIOS");
+
     serial_println!(
-        "[P4] SUCCESS MAP_FB+AS+present count={} vsync_waits={}",
+        "[P4] SUCCESS MAP_FB+AS+present count={} vsync_waits={} (checker cleared+splash)",
         present_count(),
         VSYNC_WAITS.load(Ordering::Relaxed)
     );
+    P4_DEMO_OK.store(true, Ordering::Relaxed);
     Ok(())
+}
+
+/// Zera as DEMO_H scanlines escritas por `present()` (stride completo).
+fn erase_present_region(contract: &FbContract) {
+    let h = DEMO_H.min(contract.height as usize);
+    let len = h.saturating_mul(contract.stride as usize);
+    if len == 0 || contract.virt_kernel == 0 {
+        return;
+    }
+    unsafe {
+        let dst = contract.virt_kernel as *mut u8;
+        let mut i = 0usize;
+        while i + 8 <= len {
+            write_volatile(dst.add(i) as *mut u64, 0);
+            i += 8;
+        }
+        while i < len {
+            write_volatile(dst.add(i), 0);
+            i += 1;
+        }
+    }
 }

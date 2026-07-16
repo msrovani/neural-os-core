@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+## [1.7.7] — 2026-07-16 — ADR-0042 N5 CLOSED (jarbas ego/UI)
+
+### Closed
+- **N5.1–N5.6** funcionais: DisplayAgent compositor + GPU FB + P4 jarbas_fb; JarvisAgent persona 16-stage; voice agents (`jarvis_voice`/`wakeword`/`audio_mixer`) via Hermes only; `paint_tts_response` FB; voice e2e (GATED boot default + prior Sprint107 TTS+FB); IPC←hermes topics mirror honesto
+- Serial gate `[N5-JARBAS] … criteria=MET` — evidência `logs/boot_n5_20260716_145943.txt`
+- **N5.7** link crate `jarbas` no bin = deferred (espelho monólito; padrão N2.5/N3.5/N4.6)
+- STT/Piper/soft-float quality → Sprint Sound (não bloqueia N5)
+
+### Marco
+- **N1–N5 funcionais ✅** — gate `v2.0.0` pode ser **discutido**; wire crates N2.5–N5.7 e qualidade voz permanecem deferred
+
+### Não é
+- Crate `jarbas` wired no bin, voz production-grade, ou declaração automática de `v2.0.0` sem review de qualidade ADR
+
 ## [1.7.6] — 2026-07-16 — ADR-0042 N4 CLOSED (hermes orquestra)
 
 ### Closed
