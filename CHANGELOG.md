@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [1.7.9] — 2026-07-16 — ADR-0042 N3.5 (cortex wired no bin)
+
+### Wired
+- **N3.5** `neural-kernel` → `cortex-crate` (dep direta `package = "cortex"`)
+- `pub use cortex_crate::{arena, bitnet_avx2, burn_flex, delta, nn, r3, tensor, trinity, tv_dsl}`
+- Removidos 9 espelhos monólito (tensor, trinity, arena, r3, …)
+- Alias `cortex-crate` evita conflito com `mod cortex` (integração LLM/EventBus/load_status)
+- Trinity crate sync: Sprint 107 generator-first + `moe_router_loaded` / `has_generator`
+
+### Residual monólito (integração bin)
+- `cortex.rs` — generate path, EVENT_BUS, demo_flags, allocator resize
+- `bpe.rs` — BPB1 + weather-e2e lexicon + FAT/QEMU loader
+- `global_arena.rs` — pending route Hermes→Cortex
+- `cortex_mmap.rs` — ADR-0041 P5/P7 (não no crate)
+
+### Próximo
+- **N4.6** wire `hermes` crate
+
 ## [1.7.8] — 2026-07-16 — ADR-0042 N2.5 (k_ai wired no bin)
 
 ### Wired

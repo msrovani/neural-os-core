@@ -91,7 +91,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ✅ **CLOSED** (critérios funcionais; wire crate = N2.5) |
 
 **Evidência serial:** `logs/boot_n2_20260716_131837.txt` (WHPX short) — Trust allow + inventory + honest noop. Path HEALTH_ISSUE heal também visto em `logs/boot_n2_20260716_131655.txt` (pré fine-gate e1000).  
-**Espelho:** `neural-kernel` espelha `cortex`/`hermes`/`jarbas` até N3.5/N4.6/N5.7; **k_ai trust/self_heal wired** (N2.5 ✅).
+**Espelho:** `neural-kernel` espelha `hermes`/`jarbas` até N4.6/N5.7; **k_ai** (N2.5 ✅) + **cortex engine** (N3.5 ✅) wired.
 
 ### Checklist N3 (cortex cérebro)
 
@@ -101,12 +101,12 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N3.2** Cap MAP_WEIGHTS | P5 `demo_cortex_mmap` SUCCESS + gate `MAP_WEIGHTS pages>0` | ✅ |
 | **N3.3** MoE / Trinity | Experts registrados (≥6, generator OK); HWEXPERT+RustCoder LOADED; router MoE neural = ABSENT→keyword+R3 (honesto) | ✅ |
 | **N3.4** prompt→texto | Path `generate_via_model` / weather-e2e HIT **ou** gate `generate=GATED soft-float` + evidência prior | ✅ live GATED + prior `decoded_len=12` |
-| **N3.5** Link crate `cortex` no bin | Dep direta neural-kernel→cortex | ⏳ N3.5 — monólito espelha cortex até wire crate (padrão N2.5) |
+| **N3.5** Link crate `cortex` no bin | Dep `cortex-crate` + `pub use` engine; residuals integração bin | ✅ 2026-07-16 (v1.7.9) |
 | **Goal N3** | Cérebro: LOADED + Cap pesos + Trinity wiring + generate path | ✅ **CLOSED** (critérios funcionais; fluency soft-float → Sound; crate = N3.5) |
 
 **Evidência serial N3:** `logs/boot_n3_20260716_132753.txt` (WHPX short) — `[STATUS] llm=LOADED` + `[N3-CORTEX] … criteria=MET`.  
 **N3.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — `[GEN] decoded_len=12 text='O tempo esta'` (feature `weather-e2e`).  
-**Defer:** soft-float latency / chat fluente → Sprint Sound; link crate cortex → N3.5; jarbas pleno → N5.
+**Defer:** soft-float latency / chat fluente → Sprint Sound; jarbas pleno → N5; wire `hermes` → N4.6.
 
 ### Checklist N4 (hermes orquestra)
 

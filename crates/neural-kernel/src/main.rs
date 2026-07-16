@@ -66,8 +66,6 @@ mod allocator;
 
 mod apic;
 
-mod arena;
-
 mod ata;
 
 mod block_dev;
@@ -112,8 +110,10 @@ mod sync;
 
 pub use k_ai::{self_heal, trust};
 pub use k_nano::globals::EVENT_BUS;
-
-mod nn;
+// ADR-0042 N3.5: engine cortex wired; residuals = cortex.rs, bpe.rs, global_arena.rs, cortex_mmap.rs
+pub use cortex_crate::{
+    arena, bitnet_avx2, burn_flex, delta, nn, r3, tensor, trinity, tv_dsl,
+};
 
 mod serial;
 
@@ -125,15 +125,11 @@ mod simd;
 
 mod task;
 
-mod tensor;
-
 mod usage;
 
 mod chunker;
 
 mod conversation;
-
-mod delta;
 
 mod dma;
 
@@ -173,11 +169,7 @@ mod virtio_gpu;
 
 mod profile;
 
-mod r3;
-
 mod wasm;
-
-mod tv_dsl;
 
 mod gguf;
 
@@ -239,10 +231,6 @@ mod disk_agent;
 
 mod memory_agent;
 
-mod bitnet_avx2;
-
-mod trinity;
-
 mod jarvis;
 
 mod alloc_adapter;
@@ -276,8 +264,6 @@ mod micropython_wasm;
 mod aios_api;
 mod skill_opt;
 mod rustpython_no_std;
-mod burn_flex;
-
 mod cognitive;
 
 mod audio;

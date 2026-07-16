@@ -468,6 +468,7 @@ version = "1.0.0"
 dependencies = [
  "agent-core",
  "bootloader_api",
+ "cortex",
  "ed25519-compact",
  "event-bus",
  "jarbas",
