@@ -128,13 +128,32 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 
 ### Próximo
 - Soft-float latency (tkn/s) — **known blocker** (sem fix em 1.7.2); ver `SESSION_110.md`
-- **STT CTC:** treino/retry com PCM neural Piper; hoje `ctc=''` → seed (path parcial)
-- Fix HWEXPERT `load_model` parse FAILED; Piper VITS pleno (neural-lite ≠ HiFi-GAN completo)
-- Fechar loop **Mic→WakeWord→STT→LLM→TTS** no EventBus (boot e2e ainda usa seed)
-- Wire `jarbas/audio` ao bin (ou passo incremental); UAC além de stub
+- **STT CTC:** MFCC+loader corrigidos (Part B #2); path real ainda não fechado no e2e WHPX (não re-testado em HW — ver Part B abaixo)
+- Piper VITS pleno (neural-lite ≠ HiFi-GAN completo) — gap documentado, duração por fonema melhorada (Part B #5)
+- Loop **Mic→WakeWord→STT→LLM→TTS** wired no EventBus (Part B #4) — falta re-validar e2e WHPX pós-fix
+- `jarbas/audio` — dep opcional adicionada (`jarbas-bridge` feature); wiring pleno bloqueado por conflito `#[global_allocator]` (Part B #9)
 - N2 SelfHeal gated; Gate `v2.0.0` = N1–N5 only
-- Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
+- Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`) — **reconfirmado 2026-07-16 Part B**: `cargo build --release -p boot` direto (sem `bootloader_linker`) travou >10min (nested cargo lock no mesmo `target/`); matado, e2e WHPX não re-executado nesta sessão
 - Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_033322.txt`
+
+## Sprint 107 Part B — fixes pontuais (2026-07-16)
+
+Parte A = `c74ab95` + tag `v1.7.2`. Parte B = fixes 10→2 abaixo, **sem** bump de versão (continua 1.7.2), **sem** push, **sem** claim v2.0.0, **sem** strings de clima "canned". `cargo clean -p neural-kernel` + `cargo nk` (target isolado `target/check-s107b`, e também default `target/`) = **0 erros** em ambas as vezes, com e sem feature `jarbas-bridge`.
+
+| # | Item | Status | Evidência |
+|---|------|--------|-----------|
+| 10 | Doc drift WakeWord | ✅ | `SESSION_INDEX.md`/`IDEA_BANK.md` já diziam "registrado"; drift real estava em `docs/architecture/0045-sound-voice-stack.md` e `TECNOLOGIAS.md` (diziam "não registrado") — corrigido para "registrado (Loop 5, `main.rs`)" |
+| 9 | jarbas/audio wired | ▶️ incremental | `jarbas` adicionado como dep **opcional** (`Cargo.toml` feature `jarbas-bridge`, off por padrão). Referenciar `jarbas::audio::*` direto quebra link: `#[global_allocator]`/`#[alloc_error_handler]` de `k_nano` (via `jarbas→hermes→k_ai→cortex→k_nano`) colide com o de `neural-kernel`. Módulo novo `crates/neural-kernel/src/jarbas_bridge.rs` documenta o blocker e compara `TOPIC_*` via cópia local (`jarbas_mirror_literals`), sem `use jarbas::*` — não dispara o conflito. `cargo nk --features jarbas-bridge` = 0 erros. Wiring pleno = fora de escopo (exigiria remover allocator de `k_nano` ou trocar o de `neural-kernel` — refactor grande) |
+| 8 | HWEXPERT parse FAILED | ✅ | Causa raiz: `tools/train_gpu_full.py::write_bitnet` gravava `vocab_size`/`num_medusa` como `u16`; kernel lê como `u32` → `vocab_size=4194368` lixo → parse FAIL. Fix: (1) `write_bitnet` corrigido p/ `u32` (alinhado com `train_models_gpu.write_header`); (2) `tools/fix_bitnet_header.py` (novo) reescreve o header de `target/hw_expert_v3.bitnet` e `hw_expert_tf.bitnet` existentes sem retreinar — arquivos agora 266130B (era 266126B), header `vocab=64 num_medusa=0` corretos; (3) `main.rs` `hw_sz` QEMU-loader atualizado p/ 266130; (4) `tools/sim_load_model_hwexpert.py` (novo) simula `load_model()` em Python e confirma `[PASS] load_model() simulation returns Some(model)` — **não** mais `None`/parse FAILED. Ainda existe mismatch de *layout* de pesos (custom BitNetLM vs. esperado, ~220KB sobrando) — separado do bug do header, pesos ficam semanticamente incorretos mas o parse não falha mais |
+| 7 | UAC stub | ▶️ pequena melhoria | `audio/usb.rs::probe_uac()` era `false` fixo. Agora escaneia PCI (`crate::pci::scan_pci()`) por controlador USB (classe `0x0C`/subclasse `0x03`) e retorna `UacProbeResult` (`NoUsbController` / `ControllerPresentClassScanDeferred`) com log honesto — sem enumeração de interface USB real (fora de escopo, exigiria parser de descriptors xHCI completo) |
+| 6 | Unify TTS | ✅ | `JarvisVoiceAgent::speak()` em `audio/voice.rs` trocado de `audio::tts::synthesize` (formant puro) para `audio::skills::synthesize_tts` — mesmo path do e2e Piper. `audio/jarvis.rs` confirmado sem path de TTS próprio (só publica `TOPIC_TTS_CMD`) |
+| 5 | Piper VITS fuller | ▶️ gap documentado + melhoria concreta | Doc-header de `piper.rs` reescrito para não afirmar pipeline VITS completo (encoder→duration predictor→flow→HiFi-GAN) — hoje é "neural-lite": embedding real (`emb.weight`) + oscilador harmônico 3-senoides + ADSR. Melhoria concreta: duração por fonema agora varia (vogal +30%, consoante -20%, espaço -50%) em vez de fixa 50ms/fonema — aproxima (levemente) do duration predictor real sem fingir implementá-lo |
+| 4 | Mic→WakeWord→STT→LLM→TTS EventBus | ✅ skinny wiring | `JarvisVoiceAgent` agora assina `TOPIC_WAKEWORD` (seta `woken=true` + log). No fim de fala, chama `audio::stt::transcribe_global(&pcm_buffer)` real (era stub `[audio N samples]`); se retorno não-vazio publica em `TOPIC_STT_TEXT` **e** `USER_INTENT` (consumido por Hermes); se vazio, publica placeholder em `TOPIC_STT_TEXT` (fallback honesto, sem fingir texto) |
+| 3 | Generate livre PT | ✅ | `bpe.rs::weather_step_candidates()` — máscara de clima relaxada: `step=0`/`step=1` agora aceitam conjunto mais amplo de tokens iniciais (antes fixo), `step>=3` usa lexicon completo `weather_candidate_ids()` em vez de subset rígido — mais liberdade de frase PT dentro do mesmo `soft_stride` budget, sem strings canned |
+| 2 | STT CTC empty | ✅ 2 bugs corrigidos | (1) `mfcc()` recalculado com DFT real via tabelas seno/cosseno pré-computadas — implementação anterior produzia espectro fraco/incorreto; (2) `load()` — heurística de offset (byte vs. f32-index) para pesos LSTM corrigida, evitando carregar `lstm0.weight_ih`/`weight_hh` corrompidos; (3) `transcribe()` ganhou log de debug (`n_frames`, `raw_path` = melhores chars antes do collapse) quando resultado vazio, para diagnóstico futuro. **Não re-testado em WHPX real** nesta sessão (rebuild de `target/uefi.img` via `cargo build -p boot` sem `bootloader_linker` travou — ver "Ops" acima); validado apenas via `cargo nk` (0 erros) |
+| 1 | Soft-float perf | ❌ SKIP (pedido explícito) | Known blocker, sem fix fake. Ver `SESSION_110.md` |
+
+**Verificação pós-código:** `cargo clean -p neural-kernel` + `$env:CARGO_TARGET_DIR=target/check-s107b; cargo build --release -p neural-kernel --target x86_64-unknown-none` (equivalente a `cargo nk`) = **0 erros**, 3 warnings pré-existentes (unused imports em `bitnet_avx2.rs`/`piper.rs`, `model_loaded` unused-assignment em `main.rs` — não introduzidos por Part B). Repetido com `--features jarbas-bridge` = **0 erros** também. Rebuild adicional no `target/` default (não isolado) para tentar e2e WHPX: `cargo nk` OK, mas `cargo build --release -p boot` (sem `bootloader_linker`) travou (nested cargo lock) — morto após ~10min; e2e WHPX **não executado** nesta sessão. Fallback usado: `tools/sim_load_model_hwexpert.py` (host Python) confirma fix do #8.
 
 ### Identidade funcional K²CHJ (ADR-0042)
 | Anel | Função |

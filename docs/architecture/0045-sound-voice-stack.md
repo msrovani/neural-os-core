@@ -61,12 +61,11 @@ Speaker (HDA SD1) / FB paint ← mixer ← Piper VITS | formant ← TTS cmd
 | VAD | `audio/vad.rs` | ✅ usado por voice path |
 | Mixer / settings | `audio/mixer.rs`, `settings.rs` | ✅ |
 | FB TTS paint | jarbas/display path + `[JARBAS-TTS-FB]` | ✅ painted em e2e clima |
-| WakeWord “Jarvis” | `audio/wakeword.rs` | ⏳ código; **não registrado** |
+| WakeWord “Jarvis” | `audio/wakeword.rs` | ✅ código + **registrado** (Loop 5); path Mic→WAKEWORD e2e ainda aberto |
 | UAC stub | `audio/usb.rs` | ⏳ probe sempre false; futuro #84 |
 | Pipeline / frames | `pipeline.rs`, `frame.rs`, `ringbuf.rs` | ▶️ parcial Sprint 107 |
 
-**Agentes registrados (boot):** `HdaAudioAgent`, `UsbAudioAgent` (stub), `JarvisVoiceAgent`.  
-**Não registrado:** `WakeWordAgent`.
+**Agentes registrados (boot):** `HdaAudioAgent`, `UsbAudioAgent` (stub), `JarvisVoiceAgent`, `WakeWordAgent`.
 
 ---
 

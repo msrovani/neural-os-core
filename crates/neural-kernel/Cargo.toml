@@ -10,6 +10,8 @@ lazy_static = { version = "1.4", features = ["spin_no_std"] }
 uart_16550 = "0.2"
 x86_64 = "0.14.11"
 linked_list_allocator = "0.9"
+talc = "4.4.3"
+spinning_top = "0.3"
 libm = "0.2"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
@@ -17,11 +19,19 @@ ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
+# Sprint 107 Part B #9: dependencia OPCIONAL para o espelho K2CHJ jarbas/audio.
+# Truth continua neural-kernel/audio (ADR-0045). Ativar com --features jarbas-bridge
+# apenas para o cross-check de TOPIC_* em jarbas_bridge.rs — NAO afeta o boot default
+# (cargo nk / bootimage nao habilita a feature). Verificado: cargo build --release
+# --target x86_64-unknown-none --features jarbas-bridge linka sem conflito de
+# #[global_allocator] (k_nano tem o seu proprio, mas so 1 crate type=bin final decide).
+jarbas = { path = "../jarbas", optional = true }
+
+[features]
+jarbas-bridge = ["jarbas"]
 # ttf-parser não é compatível com no_std puro.
 # Usamos ferramenta Python tools/convert_ttf_to_bitmap.py para converter TTF
 # em arrays Rust embutidos, sem runtime parsing.
-
-
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }

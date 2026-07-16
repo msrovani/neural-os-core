@@ -339,14 +339,27 @@ pub fn weather_position_bias(id: u32, step: usize) -> f32 {
     }
 }
 
-/// Candidatos permitidos por passo (máscara dura; logits escolhem dentro do set).
-pub fn weather_step_candidates(step: usize, _prev: Option<u32>) -> &'static [u32] {
+/// Candidatos permitidos por passo (máscara; logits reais escolhem dentro do set).
+///
+/// FIX (Sprint 107 Part B #3): a mascara anterior era efetivamente CANNED —
+/// step 0 so admitia 1 token ("O"), step 1 so 2 tokens, step 2 so 3 — ou seja,
+/// a "escolha" por logits quase nao importava, a frase saia sempre igual
+/// ("O tempo esta ..."). Fix: (a) usa `prev` (antes ignorado) para abrir mais
+/// opcoes contextuais por passo, (b) a partir do step 3 usa o lexicon
+/// climatico COMPLETO (`weather_candidate_ids()`, ~22 pecas) em vez de um
+/// subconjunto fixo de 7 — os logits reais decidem entre mais opcoes,
+/// mantendo o orcamento de `soft_stride`/`max_gen` inalterado (mesmo numero
+/// de passos, so o SET de candidatos por passo fica maior/mais contextual).
+pub fn weather_step_candidates(step: usize, prev: Option<u32>) -> &'static [u32] {
     match step {
-        0 => &[46], // O — abre frase PT climática
-        1 => &[24108, 88603], // tempo
-        2 => &[15491, 30279, 38169], // esta / faz
-        3 => &[18665, 76321, 2092, 39298], // bom / claro / sol
-        _ => &[18665, 76321, 2092, 39298, 74258, 18205, 62447],
+        0 => &[46, 24108, 88603, 74258, 1788], // O / tempo / Tempo / hoje / qual
+        1 => match prev {
+            Some(46) => &[24108, 88603, 74258, 18205][..], // O → tempo/Tempo/hoje/dia
+            Some(24108) | Some(88603) => &[15491, 30279, 38169, 18205, 74258][..], // tempo → esta/faz/dia/hoje
+            _ => &[24108, 88603, 15491, 30279, 38169][..],
+        },
+        2 => &[15491, 30279, 38169, 18665, 76321, 18205, 74258], // esta/faz/bom/claro/dia/hoje
+        _ => weather_candidate_ids(), // step>=3: lexicon completo — sem subconjunto estreito fixo
     }
 }
 

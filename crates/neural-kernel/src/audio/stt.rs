@@ -5,35 +5,75 @@
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
-use libm::{tanhf, expf, cosf, log10f, logf};
+use libm::{tanhf, expf, cosf, sinf, sqrtf, log10f, logf};
+use spin::Once;
 
 const SAMPLE_RATE: u32 = 16000;
 const FFTSIZE: usize = 512;
+const N_BINS: usize = FFTSIZE / 2 + 1;
 const N_MFCC: usize = 13;
 const HIDDEN: usize = 64;
 const VOCAB: usize = 28; // a-z + space(26) + blank(27)
 
+/// Tabelas de cos/sin pre-computadas para o DFT ingenuo (N_BINS x FFTSIZE cada).
+/// Calculadas uma unica vez (spin::Once) e reusadas em toda chamada de `mfcc()` —
+/// evita repetir ~131K chamadas trigonometricas POR FRAME (custo alto em soft-float).
+static DFT_TABLE: Once<(Vec<f32>, Vec<f32>)> = Once::new();
+
+fn dft_tables() -> &'static (Vec<f32>, Vec<f32>) {
+    DFT_TABLE.call_once(|| {
+        let mut cos_t = vec![0.0f32; N_BINS * FFTSIZE];
+        let mut sin_t = vec![0.0f32; N_BINS * FFTSIZE];
+        for k in 0..N_BINS {
+            let ang_step = 2.0 * core::f32::consts::PI * k as f32 / FFTSIZE as f32;
+            for n in 0..FFTSIZE {
+                let ang = ang_step * n as f32;
+                cos_t[k * FFTSIZE + n] = cosf(ang);
+                sin_t[k * FFTSIZE + n] = sinf(ang);
+            }
+        }
+        (cos_t, sin_t)
+    })
+}
+
+/// MFCC via DFT real (magnitude) + filterbank Mel + log.
+///
+/// FIX (Sprint 107 Part B #2): a versao anterior NAO calculava um espectro real —
+/// para cada bin `i` somava um UNICO termo `pcm[off+i]*window(i)*cos(2*pi*i/512)`
+/// (o indice de tempo `i` era reusado como indice de frequencia), em vez da soma
+/// completa `X[k] = sum_n x[n]*e^{-j*2*pi*k*n/N}` sobre todas as N amostras da
+/// janela. Isso fazia o "espectro" depender de basicamente 1 amostra por bin —
+/// features quase-planas/ruidosas, LSTM/CTC saturava no blank → `ctc=''`.
+/// Fix: DFT ingenuo completo (real+imag) via tabelas pre-computadas.
 pub fn mfcc(pcm: &[i16]) -> Vec<f32> {
     let frame_shift = FFTSIZE / 2;
     let n_frames = pcm.len().saturating_sub(FFTSIZE) / frame_shift + 1;
     if n_frames == 0 { return vec![]; }
+    let (cos_t, sin_t) = dft_tables();
     let mut feats = vec![0.0f32; n_frames * N_MFCC];
+    let mut windowed = vec![0.0f32; FFTSIZE];
+    let mut spectrum = vec![0.0f32; N_BINS];
     for t in 0..n_frames {
         let off = t * frame_shift;
-        let mut spectrum = [0.0f32; FFTSIZE / 2 + 1];
         for i in 0..FFTSIZE {
             let idx = (off + i).min(pcm.len() - 1);
             let window = 0.54 - 0.46 * cosf(2.0 * core::f32::consts::PI * i as f32 / (FFTSIZE as f32 - 1.0));
-            let val = pcm[idx] as f32 * window;
-            // Real FFT approximation: magnitude
-            if i < spectrum.len() {
-                spectrum[i] += val * cosf(2.0 * core::f32::consts::PI * i as f32 / FFTSIZE as f32);
+            windowed[i] = pcm[idx] as f32 * window;
+        }
+        for k in 0..N_BINS {
+            let base = k * FFTSIZE;
+            let mut re = 0.0f32;
+            let mut im = 0.0f32;
+            for n in 0..FFTSIZE {
+                re += windowed[n] * cos_t[base + n];
+                im -= windowed[n] * sin_t[base + n];
             }
+            spectrum[k] = sqrtf(re * re + im * im);
         }
         // Mel filterbank + log + DCT → MFCC (simplified)
-        for m in 0..N_MFCC.min(spectrum.len()) {
+        for m in 0..N_MFCC {
             let mut mel = 0.0f32;
-            for k in 0..spectrum.len() {
+            for k in 0..N_BINS {
                 let mel_k = 2595.0 * log10f(1.0 + k as f32 * 16000.0 / FFTSIZE as f32 / 700.0);
                 let center = m as f32 * 200.0 + 200.0;
                 let bw = 100.0;
@@ -63,6 +103,9 @@ impl SttEngine {
         if r4(0) != 0xBE11BE11 { return false; }
         let n = r4(8) as usize;
         let f32s: &[f32] = unsafe { core::slice::from_raw_parts(data.as_ptr() as *const f32, data.len() / 4) };
+
+        // Passagem 1: coleta (nome, raw_off, cnt) de todas as entradas do indice.
+        let mut entries: Vec<(String, usize, usize)> = Vec::with_capacity(n);
         for i in 0..n {
             let b = 16 + i * 40;
             if b + 40 > data.len() { break; }
@@ -71,14 +114,44 @@ impl SttEngine {
             let raw_off = r4(b + 32) as usize;
             let cnt = r4(b + 36) as usize;
             if cnt == 0 { continue; }
-            // train_stt.py grava offset em BYTES; piper/canonical usa índice f32.
-            let off = if raw_off + cnt <= f32s.len() {
-                raw_off
-            } else if raw_off % 4 == 0 && (raw_off / 4) + cnt <= f32s.len() {
+            entries.push((nm, raw_off, cnt));
+        }
+
+        // FIX (Sprint 107 Part B #2): a heuristica antiga decidia bytes-vs-f32-index
+        // POR TENSOR (`raw_off + cnt <= f32s.len()`), o que e ambiguo para offsets
+        // pequenos — os 2 primeiros tensores (`lstm0.weight_ih`/`weight_hh`, os
+        // maiores e mais criticos) passavam a checagem por acidente e eram lidos
+        // do offset ERRADO (interpretando bytes como indice f32), corrompendo
+        // silenciosamente a 1a camada LSTM. Fix: decide o formato UMA VEZ, global,
+        // comparando o DELTA entre dois offsets consecutivos com o `cnt` do
+        // tensor anterior (delta==cnt → f32-index nativo; delta==cnt*4 → bytes).
+        let mut off_is_bytes = true; // default: train_stt.py sempre grava bytes
+        for w in 1..entries.len() {
+            let (_, off_prev, cnt_prev) = &entries[w - 1];
+            let (_, off_cur, _) = &entries[w];
+            if *off_cur <= *off_prev { continue; }
+            let delta = off_cur - off_prev;
+            if delta == *cnt_prev {
+                off_is_bytes = false;
+                break;
+            } else if delta == cnt_prev * 4 {
+                off_is_bytes = true;
+                break;
+            }
+        }
+        crate::serial_println!(
+            "[STT] weight index format: {}",
+            if off_is_bytes { "bytes (÷4)" } else { "f32-index (nativo)" }
+        );
+
+        for (nm, raw_off, cnt) in entries {
+            let off = if off_is_bytes {
+                if raw_off % 4 != 0 { continue; }
                 raw_off / 4
             } else {
-                continue;
+                raw_off
             };
+            if off + cnt > f32s.len() { continue; }
             let mut d = vec![0.0f32; cnt]; d.copy_from_slice(&f32s[off..off+cnt]);
             self.w.push((nm, d));
         }
@@ -140,11 +213,18 @@ impl SttEngine {
     }
 
     pub fn transcribe(&self, pcm: &[i16]) -> String {
-        if !self.loaded || pcm.len() < FFTSIZE { return String::new(); }
+        if !self.loaded || pcm.len() < FFTSIZE {
+            crate::serial_println!(
+                "[STT] transcribe skip: loaded={} pcm_len={} (min={})",
+                self.loaded, pcm.len(), FFTSIZE
+            );
+            return String::new();
+        }
         let feats = mfcc(pcm);
         if feats.is_empty() { return String::new(); }
         let n_frames = feats.len() / N_MFCC;
         if n_frames == 0 { return String::new(); }
+        crate::serial_println!("[STT] n_frames={} pcm_len={}", n_frames, pcm.len());
 
         // LSTM forward
         let w_ih0 = self.w("lstm0.w_ih");
@@ -191,19 +271,32 @@ impl SttEngine {
         // CTC decode: best path (argmax + collapse repeats + remove blank)
         let mut prev = VOCAB - 1; // blank
         let mut out = Vec::new();
+        let mut raw_path = Vec::with_capacity(n_frames);
         for t in 0..n_frames {
             let mut best = 0usize;
             let mut best_v = logits[t * VOCAB];
             for c in 1..VOCAB {
                 if logits[t * VOCAB + c] > best_v { best = c; best_v = logits[t * VOCAB + c]; }
             }
+            raw_path.push(best);
             if best != prev && best != VOCAB - 1 {
                 let ch = if best < 26 { (b'a' + best as u8) as char } else { ' ' };
                 out.push(ch);
             }
             prev = best;
         }
-        out.iter().collect()
+        let result: String = out.iter().collect();
+        if result.is_empty() {
+            // Debug (Sprint 107 Part B #2): mostra o best-path bruto (pre-collapse)
+            // para diagnosticar se o modelo so preve blank (27) ou fica preso num char.
+            let blanks = raw_path.iter().filter(|&&c| c == VOCAB - 1).count();
+            crate::serial_println!(
+                "[STT] ctc empty: n_frames={} blanks={}/{} raw_path[..{}]={:?}",
+                n_frames, blanks, n_frames, n_frames.min(16),
+                &raw_path[..n_frames.min(16)]
+            );
+        }
+        result
     }
 }
 

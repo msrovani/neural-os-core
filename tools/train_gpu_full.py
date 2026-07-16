@@ -25,11 +25,29 @@ if torch.cuda.is_available():
 MAGIC = 0xBE11BE11
 
 def write_bitnet(f, h, n_l, n_h, vcb, seq, ff, nkv, qd, tok):
+    """.bitnet v4 header — layout DEVE bater com `read_u32`/`read_u16` de
+    `crates/neural-kernel/src/cortex.rs::load_model()` e com
+    `train_models_gpu.py::write_header()` (fonte da verdade).
+    BUG (Sprint 107 Part B #8): versao anterior escrevia vocab_size e
+    num_medusa como u16 dentro do loop de 9 campos — o kernel le ambos como
+    u32, deslocando todo o parse (vocab virava lixo tipo 4194368) e o
+    load_model() falhava (`[HWEXPERT] parse FAILED`). Fix: vocab_size e
+    num_medusa agora sao u32 explicitos, iguais a write_header().
+    """
+    num_medusa = 0
     np_ = h*vcb + n_l*(4*h*h + 3*h*ff + 2*h + qd) + h*vcb
     f.write(struct.pack("<I", MAGIC))
     f.write(struct.pack("<H", 4))
     f.write(struct.pack("<I", np_))
-    for val in (h, n_l, n_h, vcb, seq, ff, nkv, qd, 0): f.write(struct.pack("<H", val))
+    f.write(struct.pack("<H", h))
+    f.write(struct.pack("<H", n_l))
+    f.write(struct.pack("<H", n_h))
+    f.write(struct.pack("<I", vcb))         # u32 (era u16 — bug)
+    f.write(struct.pack("<H", seq))
+    f.write(struct.pack("<H", ff))
+    f.write(struct.pack("<H", nkv))
+    f.write(struct.pack("<H", qd))
+    f.write(struct.pack("<I", num_medusa))  # u32 (era u16 — bug)
     f.write(b"\x00\x00\x00\x00")
     f.write(b"\x01")
     f.write(struct.pack("<I", len(tok))); f.write(tok)

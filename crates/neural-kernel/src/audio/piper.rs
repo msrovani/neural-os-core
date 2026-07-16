@@ -1,5 +1,21 @@
-//! Piper TTS engine — VITS-based neural TTS multilíngue (PT-BR + EN).
-//! Full pipeline: encoder → duration predictor → flow decoder → HiFi-GAN vocoder.
+//! Piper TTS engine — carrega pesos VITS (PT-BR + EN) exportados do ONNX Piper.
+//!
+//! Estado real (Sprint 107 Part B #5, honesto — sem VITS completo fake):
+//! o pipeline VITS de referencia e encoder → duration predictor (estocastico)
+//! → flow decoder (normalizing flow) → HiFi-GAN vocoder (~15M params, várias
+//! camadas de conv transposta). Implementar isso no_std/soft-float e um
+//! trabalho de dias (upsampling transposto multi-estagio + flow invertivel +
+//! ruido gaussiano condicionado), fora do escopo desta sprint.
+//!
+//! O que HA hoje (`generate()`, "neural-lite"): usa o embedding REAL de cada
+//! fonema (`emb.weight`/`sid`, [vocab,192], pesos genuinamente carregados do
+//! .bitnet Piper) para derivar amplitude/f0 por fonema, e sintetiza via
+//! oscilador harmonico (3 senoides) com envelope ADSR simples — NÃO e
+//! HiFi-GAN, mas tambem NÃO e formant puro (usa os pesos reais). Duracao por
+//! fonema agora varia (vogal > consoante > espaço) em vez de fixa — pequena
+//! melhoria "duration"-like, ainda longe do duration predictor estocastico
+//! do VITS real. Fallback final = `audio/tts.rs` (formant) se o embedding
+//! nao estiver carregado.
 
 use alloc::vec::Vec;
 use alloc::vec;
@@ -230,13 +246,37 @@ impl PiperEngine {
         // Cada fonema → linha do emb → envelope + oscilador (pcm>0, não formant puro).
         {
             let sr = PIPER_SR as usize;
-            let samples_per = (sr / 20).max(64); // ~50ms / fonema
-            let total = samples_per * seq.min(64);
+            let base_samples = (sr / 20).max(64); // ~50ms baseline / fonema
+            // Sprint 107 Part B #5: duracao por fonema varia (aproximacao leve de
+            // "duration predictor" — vogal > consoante > espaço/pontuacao), em vez
+            // de duracao fixa para todo fonema. Ainda nao e o duration predictor
+            // estocastico do VITS real, mas ja não é 100% uniforme.
+            let phoneme_dur = |b: u8| -> usize {
+                match b {
+                    b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U' => {
+                        (base_samples * 13) / 10 // vogal: +30%
+                    }
+                    b' ' => base_samples / 2, // pausa curta
+                    _ => (base_samples * 8) / 10, // consoante: -20%
+                }
+            };
+            let text_bytes = text.as_bytes();
+            let durations: Vec<usize> = ids.iter().enumerate().map(|(ti, _)| {
+                // ids[0]=^ (BOS) e ids[last]=$ (EOS) nao tem byte correspondente em text.
+                if ti == 0 || ti + 1 >= ids.len() {
+                    base_samples / 2
+                } else {
+                    text_bytes.get(ti - 1).copied().map(phoneme_dur).unwrap_or(base_samples)
+                }
+            }).collect();
+            let total: usize = durations.iter().take(64).sum();
             let mut audio = vec![0i16; total];
             let mut phase = 0.0f32;
+            let mut cursor = 0usize;
             for (ti, &id) in ids.iter().take(64).enumerate() {
+                let samples_per = durations[ti];
                 let base = id * dim;
-                if base + dim > ew_len { continue; }
+                if base + dim > ew_len { cursor += samples_per; continue; }
                 // energia / f0 a partir do vetor de embedding
                 let mut e = 0.0f32;
                 let mut fsum = 0.0f32;
@@ -248,12 +288,12 @@ impl PiperEngine {
                 let amp = libm::sqrtf(libm::sqrtf(e / dim as f32)).clamp(0.05, 0.9);
                 let f0 = 140.0 + 80.0 * libm::sinf(fsum * 0.5);
                 for s in 0..samples_per {
-                    let t = s as f32 / sr as f32;
                     phase += f0 / sr as f32;
-                    let env = if s < samples_per / 8 {
-                        s as f32 / (samples_per / 8) as f32
-                    } else if s > samples_per * 7 / 8 {
-                        (samples_per - s) as f32 / (samples_per / 8) as f32
+                    let fade = (samples_per / 8).max(1);
+                    let env = if s < fade {
+                        s as f32 / fade as f32
+                    } else if s > samples_per - fade {
+                        (samples_per - s) as f32 / fade as f32
                     } else {
                         1.0
                     };
@@ -262,15 +302,15 @@ impl PiperEngine {
                         + 0.25 * libm::sinf(phase * 12.566371)
                         + 0.15 * libm::sinf(phase * 18.849557)
                     );
-                    let idx = ti * samples_per + s;
+                    let idx = cursor + s;
                     if idx < audio.len() {
                         audio[idx] = (sample * 24000.0).clamp(-32768.0, 32767.0) as i16;
                     }
-                    let _ = t;
                 }
+                cursor += samples_per;
             }
             if audio.iter().any(|&s| s != 0) {
-                crate::serial_println!("[PIPER] neural-lite pcm_samples={}", audio.len());
+                crate::serial_println!("[PIPER] neural-lite pcm_samples={} (duration-varied)", audio.len());
                 return audio;
             }
         }

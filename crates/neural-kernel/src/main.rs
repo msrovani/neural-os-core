@@ -295,6 +295,9 @@ mod gguf_mmap;
 
 mod load_status;
 
+#[cfg(feature = "jarbas-bridge")]
+mod jarbas_bridge;
+
 use lazy_static::lazy_static;
 
 use cognitive::{IntentPlanner, SuccessEngine, NeuralCache, FeedbackLoop, WorkflowPredictor, CodebookVQ, ReActLoop, McpServer, AutoSkillGen, DynamicScaler, SelfOptScheduler, ReplayBuffer, BitNetTrainer, EpisodicMemory, TaskSpawner, WorkspaceIsolation, DeltaBranch, MatMulFreeLM};
@@ -1434,6 +1437,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Audio: configuracoes de som; Piper TTS AFTER BGE (BGE e leve; Piper 61MB nao bloqueia STATUS bge)
     audio::init_audio();
 
+    // Sprint 107 Part B #9: cross-check non-fatal do espelho jarbas/audio (ADR-0045).
+    // So compilado/rodado com --features jarbas-bridge; boot default (cargo nk) nao muda.
+    #[cfg(feature = "jarbas-bridge")]
+    jarbas_bridge::log_bridge_status();
+
 
 
     // WASM Runtime (Sprint 93): embedder + IDE + Plugin Hub
@@ -2278,9 +2286,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
 
         // Tamanhos reais dos .bitnet no QEMU-loader (FAT hint curto truncava HW → parse FAILED).
-        let hw_sz = 266126usize.max(fat_size_hint(
+        // Sprint 107 Part B #8: header fix (vocab_size/num_medusa u16→u32, ver
+        // tools/fix_bitnet_header.py) somou +4 bytes: 266126 → 266130.
+        let hw_sz = 266130usize.max(fat_size_hint(
             &["HWEXPRT.BIN", "HW_EXPERT.BITNET"],
-            266126,
+            266130,
         ));
         let rust_sz = 270222usize.max(fat_size_hint(&["RUSTCDR.BITNET"], 270222));
         let mut hw_ok = try_expert_qemu(0x160000000, hw_sz, "HWEXPERT", true);

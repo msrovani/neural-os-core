@@ -106,7 +106,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 5.2 | **FFT Audio → Orb Visualization** | 🏆 `process_audio_fft()`: Goertzel simplificado com janela Hamming, 16 bins espectrais. Áudio do microfone HDA → FFT → animação do orbe em tempo real. | FFT algoritmos (Cooley-Tukey) | — (matemática) | `display/avatar.rs`, `audio/voice.rs` | ✅ 0 err |
 | 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural VITS (366 tensors). LOADED via QEMU-loader; **formant fallback** se `emb.weight` fraco. **Primário** (supersede Kokoro/Pocket/sherpa). | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs`, `audio/tts.rs` | ▶️ formant ok / neural parcial |
 | 5.4 | **STT CTC + VAD + Mixer** | 🔄 STT CTC nativo (MFCC→LSTM→CTC). VAD + mixer + ringbuf. **Não** Vosk/sherpa. | CTC papers, VAD | MIT | `audio/stt.rs`, `vad.rs`, `mixer.rs` | ✅ CTC LOADED |
-| 5.5 | **Wake Word "Jarvis" (nativo)** | ⏳ MLP wakeword em `wakeword.rs`. **Código existe; agente não registrado no boot.** Supersede Rustpotter crate. | energia + MLP | MIT | `audio/wakeword.rs` | ⏳ gap Sprint 107 |
+| 5.5 | **Wake Word "Jarvis" (nativo)** | ✅ MLP wakeword em `wakeword.rs`. **Código existe; `WakeWordAgent` registrado no boot** (Loop 5, `main.rs`). Path Mic→WAKEWORD no clima e2e ainda aberto. Supersede Rustpotter crate. | energia + MLP | MIT | `audio/wakeword.rs` | ▶️ registrado; e2e path pendente |
 | 5.6 | **USB Audio Class (UAC)** | ⏳ Stub `UsbAudioAgent` (probe false). Futuro #84 quando HDA ausente. | USB Audio Class | — | `audio/usb.rs` | ⏳ stub |
 
 **❌ Obsoleto como stack de kernel (histórico):** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming, Rustpotter — ver ADR-0045.

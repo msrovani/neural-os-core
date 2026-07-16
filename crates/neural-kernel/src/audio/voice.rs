@@ -23,10 +23,12 @@ const VOICE_MANIFEST: AgentManifest = AgentManifest {
 pub struct JarvisVoiceAgent {
     audio_in: Receiver,
     hermes_out: Receiver,
+    wakeword_in: Receiver,
     vad: VAD,
     pcm_buffer: alloc::vec::Vec<i16>,
     listening: bool,
     emotion_samples: alloc::vec::Vec<i16>,
+    woken: bool,
 }
 
 impl JarvisVoiceAgent {
@@ -34,10 +36,12 @@ impl JarvisVoiceAgent {
         JarvisVoiceAgent {
             audio_in: crate::EVENT_BUS.subscribe(crate::audio::TOPIC_AUDIO_IN),
             hermes_out: crate::EVENT_BUS.subscribe("HERMES_RESPONSE"),
+            wakeword_in: crate::EVENT_BUS.subscribe(crate::audio::TOPIC_WAKEWORD),
             vad: VAD::new(300.0, 16000),
             pcm_buffer: alloc::vec::Vec::new(),
             listening: false,
             emotion_samples: alloc::vec::Vec::new(),
+            woken: false,
         }
     }
 }
@@ -48,6 +52,16 @@ impl Agent for JarvisVoiceAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         // Poll HDA DMA para capturar novo audio do microfone
         crate::audio::hda::poll_hda_audio();
+
+        // Sprint 107 Part B #4: consome WAKEWORD (publicado por WakeWordAgent).
+        // Nao gate o VAD por wake word ainda (evitaria regressao no e2e clima,
+        // que depende do path VAD contínuo) — so marca `woken` para telemetria
+        // e visibilidade do loop Mic→WakeWord→STT→LLM→TTS.
+        while let Some(ev) = self.wakeword_in.try_receive() {
+            let kw = core::str::from_utf8(&ev.payload).unwrap_or("?");
+            self.woken = true;
+            serial_println!("[JARVIS] 👂 wake word detectado: \"{}\"", kw);
+        }
 
         // ── Ouvidos: processa audio do microfone ──────────────
         while let Some(ev) = self.audio_in.try_receive() {
@@ -96,12 +110,34 @@ impl Agent for JarvisVoiceAgent {
                             emotion, features.pitch_hz, features.energy_rms);
                     }
 
-                    // STT stub: publica texto simulado
-                    let _ = crate::EVENT_BUS.publish(Event {
-                        id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
-                        payload: alloc::format!("[audio {} samples]", self.pcm_buffer.len()).into_bytes(),
-                        token: CapabilityToken::Legacy(1),
-                    });
+                    // Sprint 107 Part B #4/#2: STT real (nao mais stub "[audio N samples]").
+                    // `transcribe_global` retorna "" se o engine nao estiver carregado ou
+                    // se o CTC decode nao produzir chars (known gap — ver STATE.md #2).
+                    let text = crate::audio::stt::transcribe_global(&self.pcm_buffer);
+                    if !text.is_empty() {
+                        serial_println!("[JARVIS] 📝 STT: \"{}\"", text);
+                        let _ = crate::EVENT_BUS.publish(Event {
+                            id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
+                            payload: text.clone().into_bytes(),
+                            token: CapabilityToken::Legacy(1),
+                        });
+                        // Encaminha para o path de chat que Hermes/JarvisAgent ja consomem.
+                        let _ = crate::EVENT_BUS.publish(Event {
+                            id: 0, topic: alloc::string::String::from("USER_INTENT"),
+                            payload: text.into_bytes(),
+                            token: CapabilityToken::Legacy(1),
+                        });
+                    } else {
+                        serial_println!(
+                            "[JARVIS] STT vazio ({} amostras) — publicando placeholder (sem USER_INTENT)",
+                            self.pcm_buffer.len()
+                        );
+                        let _ = crate::EVENT_BUS.publish(Event {
+                            id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
+                            payload: alloc::format!("[audio {} samples]", self.pcm_buffer.len()).into_bytes(),
+                            token: CapabilityToken::Legacy(1),
+                        });
+                    }
 
                     self.listening = false;
                     self.pcm_buffer.clear();
@@ -118,7 +154,9 @@ impl Agent for JarvisVoiceAgent {
 
             serial_println!("[JARVIS] 🗣️ \"{}\"", text);
             let clean = text.trim_start_matches("[JARVIS] ").trim_start_matches("JARVIS: ");
-            let pcm = crate::audio::tts::synthesize(clean);
+            // Sprint 107 Part B #6: unifica com o path e2e (Piper neural-lite com
+            // fallback formant), em vez do formant puro de crate::audio::tts.
+            let pcm = crate::audio::skills::synthesize_tts(clean);
 
             let _ = crate::EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_AUDIO_OUT),
