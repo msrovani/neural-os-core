@@ -1,12 +1,12 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.1
+#   STATE — neural-os-core v1.7.2
 #   SPRINT 107 — Adequação ADR-0042 + Voice I/O (marco 2B LOADED)
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
 #   Áudio/voz: ADR-0045 (Sound Voice Stack)
 # ═════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Versão:** **v1.7.1** (2026-07-16) — ADR-0045 Sound (docs); funcional permanece marco **v1.7.0** (N1 ✅ + 2B LOADED).  
+**Versão:** **v1.7.2** (2026-07-16) — Sprint 107 loops 1–5 clima PASS parcial forte.  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
@@ -17,7 +17,7 @@
 | Truth path | `neural-kernel/src/audio/*` (boot) |
 | Espelho | `jarbas/src/audio/*` — **não wired** ao bin |
 | Stack | HDA + Piper (+formant) + STT CTC + VAD + mixer + FB TTS paint |
-| WakeWord | código existe; **não registrado** |
+| WakeWord | código existe; **registrado** (Loop 5) — ainda sem path Mic→WAKEWORD no clima e2e |
 | UAC | stub (#84 futuro) |
 | Obsoleto | sherpa / Pocket / Kokoro-primário / Vosk / Wyoming / Rustpotter |
 
@@ -31,7 +31,25 @@
 | **N4** hermes orquestra | ✅ STT-sim → Hermes → generate_via_model (path clima) |
 | **N5** jarbas ego/UI | ▶️ TTS `pcm_samples>0` + **FB paint** (`[JARBAS-TTS-FB] painted`); Piper LOADED / formant fallback |
 
-### Evidência clima e2e (2026-07-16 — `logs/boot_whpx_20260716_012934.txt`) — Sprint 107 cont.
+### Evidência clima e2e (2026-07-16 — Sprint 107 loops 1–5)
+
+**Log canônico:** `logs/boot_whpx_20260716_033322.txt` (Loop 5)
+
+| Critério | Resultado |
+|----------|-----------|
+| Bridge WHPX | ✅ `run_weather_e2e.ps1` `-Window -Smp 2`; kill 18 min |
+| GEN | ✅ `decoded_len=12 text='O tempo esta'` — frase PT climática (logits reais + máscara posicional; **não** canned) |
+| Evolução | L1 panic STT → L2 `' tempo Tempo dia'` → L4 `' tempo esta bom'` → **L5 `'O tempo esta'`** |
+| TTS | ✅ Piper **neural-lite** `emb.weight` vocab=256 · `pcm_samples=15428` (não formant-only) |
+| FB | ✅ `[JARBAS-TTS-FB] painted len=12 1280x800` |
+| STT | ▶️ CTC LOADED 10 tensors 55K; path real (formant+Piper retry) mas `ctc=''` → seed prompt (não STT-sim puro) |
+| WakeWord | ✅ `WakeWordAgent` registrado no boot |
+| Experts | ✅ RUSTCODER · STT · BGE · ❌ HWEXPERT parse FAILED |
+| **Veredito clima** | **PASS parcial forte** — meta 1+2+3+6; loop TTS↔STT↔LLM fechado só com seed STT |
+
+**Ops rebuild:** `CARGO_TARGET_DIR=target` + `cargo nk` + `cargo build --release -p boot`. Piper: `python tools/convert_piper_to_bitnet.py` → `target/PIPER_PT_BR.BIN` (v3 index + alias `emb.weight`←`sid`).
+
+### Evidência clima e2e (2026-07-16 — `logs/boot_whpx_20260716_012934.txt`) — superseded
 | Critério | Resultado |
 |----------|-----------|
 | Bridge WHPX | ✅ `run_weather_e2e.ps1` `-Window -Smp 2`; soft_stride FWD ok |
@@ -104,16 +122,19 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 ### Piper + BGE (2026-07-15)
 | Item | Antes | Agora |
 |------|-------|-------|
-| **Piper** | skip / ausente | LOADED via QEMU-loader; `emb.weight` lookup ainda fraco (`0M params` / formant fallback sem panic) |
+| **Piper** | LOADED 400 tensors 15M; **neural-lite** via `emb.weight`/`sid` (não formant-only no e2e) |
 | **Weather TTS** | FAILED empty generate | generate real + `pcm_samples>0` (texto ainda pobre) |
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **Clima pleno:** frase PT gramatical (ex. `O tempo esta bom`) — float/AVX FWD ou lexicon+ordem melhor; hoje constrained → `' tempo rain'`
-- Fix HWEXPERT `load_model` parse FAILED; Piper neural (`emb.weight`); merges BPE encode pleno
-- **Voice (ADR-0045):** registrar WakeWordAgent; fechar TTS→STT→LLM→TTS; depois UAC (#84) / wiring `jarbas/audio`
+- Soft-float latency (tkn/s) — **known blocker** (sem fix em 1.7.2); ver `SESSION_110.md`
+- **STT CTC:** treino/retry com PCM neural Piper; hoje `ctc=''` → seed (path parcial)
+- Fix HWEXPERT `load_model` parse FAILED; Piper VITS pleno (neural-lite ≠ HiFi-GAN completo)
+- Fechar loop **Mic→WakeWord→STT→LLM→TTS** no EventBus (boot e2e ainda usa seed)
+- Wire `jarbas/audio` ao bin (ou passo incremental); UAC além de stub
 - N2 SelfHeal gated; Gate `v2.0.0` = N1–N5 only
 - Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
+- Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_033322.txt`
 
 ### Identidade funcional K²CHJ (ADR-0042)
 | Anel | Função |
@@ -152,6 +173,8 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 **Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K²CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
 
 ## Marcos Acumulados
+- **🏆 v1.7.2 (2026-07-16):** Sprint 107 loops 1–5 clima PASS parcial forte — GEN `'O tempo esta'`, Piper neural-lite, WakeWord registrado. Ver `SESSION_110.md`.
+- **🏆 v1.7.1 (2026-07-16):** ADR-0045 Sound Voice Stack (docs). Ver `SESSION_109.md`.
 - **🏆 v1.7.0 (2026-07-15):** N1 ✅ + BitNet 2B LOADED (~590MB, 30L, FWD); soft-float/`cargo nk`; TTS empty known. Ver `SESSION_108.md`.
 - **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
 - **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**

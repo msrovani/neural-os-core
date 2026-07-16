@@ -14,18 +14,53 @@ pub fn init_neural_tts() {
             crate::load_status::AssetKind::Piper,
             crate::load_status::LoadStatus::Loaded,
         );
-    } else {
-        crate::load_status::set(
-            crate::load_status::AssetKind::Piper,
-            crate::load_status::LoadStatus::Absent,
-        );
     }
+    // Absent/Failed já definidos em try_load_piper (não sobrescrever Failed com Absent)
     *TTS_ENGINE.lock() = engine;
 }
 
+/// Sintetiza texto: Piper se carregado, senão formant. Logs `[TTS] Piper` / `[TTS] Formant`.
+pub fn synthesize_tts(text: &str) -> Vec<i16> {
+    let guard = TTS_ENGINE.lock();
+    match guard.as_ref() {
+        Some(engine) if engine.is_loaded() => {
+            let audio = engine.generate(text);
+            crate::serial_println!(
+                "[TTS] Piper: \"{}\" ({} samples)",
+                text,
+                audio.len()
+            );
+            audio
+        }
+        _ => {
+            let audio = crate::audio::tts::synthesize(text);
+            crate::serial_println!(
+                "[TTS] Formant: \"{}\" ({} samples)",
+                text,
+                audio.len()
+            );
+            audio
+        }
+    }
+}
+
+/// True se Piper neural está carregado e utilizável.
+pub fn piper_is_loaded() -> bool {
+    TTS_ENGINE
+        .lock()
+        .as_ref()
+        .map(|e| e.is_loaded())
+        .unwrap_or(false)
+}
+
 fn try_load_piper() -> Option<PiperEngine> {
-    // Boot PIO em TCG nao aguenta Piper 60MB+ — formant e o path N5 minimo.
-    const MAX_BOOT_PIPER: usize = 2 * 1024 * 1024;
+    // 1) QEMU -device loader @0x130000000 (WHPX rápido; evita PIO ~61MB)
+    if let Some(eng) = try_load_piper_from_loader() {
+        return Some(eng);
+    }
+    // 2) FAT PIO — sempre carregar quando presente (motor TTS = Piper)
+    let mut found_any = false;
+    let mut load_failed = false;
     unsafe {
         for try_slave in &[false, true] {
             let mut tmp = crate::ATA_DRIVER.lock();
@@ -34,26 +69,79 @@ fn try_load_piper() -> Option<PiperEngine> {
                 ata.slave = *try_slave;
                 let parts = crate::fat32::read_mbr(ata);
                 for p in &parts {
-                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                        continue;
+                    }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         for name in &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"] {
-                            if let Some(sz) = fs.lookup_file_size(name) {
-                                if sz > MAX_BOOT_PIPER {
-                                    crate::serial_println!(
-                                        "[PIPER] {} presente ({} KB) — skip boot load (PIO); formant ativo",
-                                        name, sz / 1024
-                                    );
-                                    continue;
+                            let Some(sz) = fs.lookup_file_size(name) else {
+                                continue;
+                            };
+                            found_any = true;
+                            crate::serial_println!(
+                                "[PIPER] {} presente ({} KB) — carregando via PIO…",
+                                name,
+                                sz / 1024
+                            );
+                            let chunk = 4 * 1024 * 1024;
+                            let mut data = alloc::vec::Vec::with_capacity(sz);
+                            let mut off = 0usize;
+                            let mut ok = true;
+                            while off < sz {
+                                let n = (sz - off).min(chunk);
+                                match fs.read_file_range(name, off, n) {
+                                    Some(part) => {
+                                        data.extend_from_slice(&part);
+                                        off += part.len();
+                                        let pct = if sz > 0 { (off * 100) / sz } else { 100 };
+                                        crate::serial_println!(
+                                            "[PIPER] leitura {} KB / {} KB ({}%)",
+                                            off / 1024,
+                                            sz / 1024,
+                                            pct
+                                        );
+                                        if part.len() < n {
+                                            break;
+                                        }
+                                    }
+                                    None => {
+                                        ok = false;
+                                        break;
+                                    }
                                 }
                             }
-                            if let Some(data) = fs.read_file(name) {
-                                let mut eng = PiperEngine::new();
-                                if eng.load(&data) {
-                                    crate::serial_println!("[PIPER] Piper TTS loaded from FAT ({}): {}", if *try_slave {"slave"} else {"master"}, name);
-                                    ata.slave = orig;
-                                    return Some(eng);
-                                }
+                            if !ok || data.len() < sz.min(16) {
+                                crate::serial_println!(
+                                    "[PIPER] {} I/O read FAILED ({} / {} KB)",
+                                    name,
+                                    data.len() / 1024,
+                                    sz / 1024
+                                );
+                                load_failed = true;
+                                continue;
                             }
+                            crate::serial_println!(
+                                "[PIPER] {} lido {} KB — parse…",
+                                name,
+                                data.len() / 1024
+                            );
+                            let mut eng = PiperEngine::new();
+                            if eng.load(&data) {
+                                crate::serial_println!(
+                                    "[PIPER] Piper TTS LOADED from FAT ({}): {} ({} KB)",
+                                    if *try_slave { "slave" } else { "master" },
+                                    name,
+                                    data.len() / 1024
+                                );
+                                ata.slave = orig;
+                                return Some(eng);
+                            }
+                            crate::serial_println!(
+                                "[PIPER] {} lido ({} KB) mas load() falhou (magic/tensors)",
+                                name,
+                                data.len() / 1024
+                            );
+                            load_failed = true;
                         }
                     }
                 }
@@ -61,8 +149,85 @@ fn try_load_piper() -> Option<PiperEngine> {
             }
         }
     }
-    crate::serial_println!("[PIPER] Piper TTS ausente — formant synth ativo");
+    if load_failed || found_any {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Piper,
+            crate::load_status::LoadStatus::Failed,
+        );
+        crate::serial_println!(
+            "[PIPER] Piper TTS FAILED — arquivo presente mas nao carregavel; formant fallback"
+        );
+    } else {
+        crate::load_status::set(
+            crate::load_status::AssetKind::Piper,
+            crate::load_status::LoadStatus::Absent,
+        );
+        crate::serial_println!("[PIPER] Piper TTS ausente no FAT — formant synth ativo");
+    }
     None
+}
+
+/// WHPX: `-device loader,file=PIPER_PT_BR.BIN,addr=0x130000000` + `-m 6G`.
+/// Usa PHYS_MEM_OFFSET (igual BitNet @0x100000000) — VA = PA + offset.
+fn try_load_piper_from_loader() -> Option<PiperEngine> {
+    const LOAD_ADDR: u64 = 0x130000000;
+    // Tamanho via FAT (mesmo nome no disco) — loader sozinho nao reporta len.
+    let mut size_hint: Option<usize> = None;
+    unsafe {
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat32::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                    continue;
+                }
+                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                    for name in &["PIPER.BIN", "PIPER_EN.BIN", "PIPER_PT_BR.BIN"] {
+                        if let Some(sz) = fs.lookup_file_size(name) {
+                            // Host PIPER regenerado ~60MB; FAT size hint pode estar stale.
+                            size_hint = Some(sz.max(62 * 1024 * 1024));
+                            break;
+                        }
+                    }
+                }
+                if size_hint.is_some() {
+                    break;
+                }
+            }
+        }
+    }
+    let Some(sz) = size_hint else {
+        return None;
+    };
+    if sz < 16 {
+        return None;
+    }
+    let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    let ptr = (LOAD_ADDR + pm) as *const u8;
+    let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
+    if magic != 0xBE11BE11 {
+        crate::serial_println!(
+            "[PIPER] QEMU-loader @0x130000000 magic=0x{:08X} (sem Piper; FAT PIO a seguir)",
+            magic
+        );
+        return None;
+    }
+    crate::serial_println!(
+        "[PIPER] QEMU-loader @0x130000000 magic OK — parse {} KB…",
+        sz / 1024
+    );
+    let data = unsafe { core::slice::from_raw_parts(ptr, sz) };
+    let mut eng = PiperEngine::new();
+    if eng.load(data) {
+        crate::serial_println!(
+            "[PIPER] Piper TTS LOADED (QEMU-loader @0x130000000) size={} KB",
+            sz / 1024
+        );
+        Some(eng)
+    } else {
+        crate::serial_println!("[PIPER] QEMU-loader parse FAILED — fallback FAT PIO");
+        None
+    }
 }
 
 pub struct TtsSkill;
@@ -79,21 +244,7 @@ impl Skill for TtsSkill {
 
     fn execute(&self, input: &[u8]) -> Result<Vec<u8>, &'static str> {
         let text = core::str::from_utf8(input).map_err(|_| "UTF-8 invalido")?;
-        let pcm = {
-            let guard = TTS_ENGINE.lock();
-            match guard.as_ref() {
-                Some(engine) if engine.is_loaded() => {
-                    let audio = engine.generate(text);
-                    crate::serial_println!("[TTS] Piper (neural): \"{}\" ({} samples, multi-lang PT-BR+EN)", text, audio.len());
-                    audio
-                }
-                _ => {
-                    let audio = crate::audio::tts::synthesize(text);
-                    crate::serial_println!("[TTS] Formant (CPU): \"{}\" ({} samples)", text, audio.len());
-                    audio
-                }
-            }
-        };
+        let pcm = synthesize_tts(text);
         Ok(pcm.iter().flat_map(|s| s.to_le_bytes()).collect())
     }
 }

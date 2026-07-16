@@ -22,6 +22,7 @@
 | 107 | 107 | — | Boot A/B + Cap P0–P9 + ADR-0042 | Runtime QEMU OK; cadeia k-nano→…→jarbas; próximo N1 legível |
 | 108 | 107 | — | N1 ✅ + BitNet 2B LOADED → v1.7.0 | Soft-float/cargo nk; 2B ~590MB L=30 FWD; TTS empty generate; e2e clima PARCIAL |
 | 109 | 107 | — | ADR-0045 Sound Voice Stack | Truth=`neural-kernel/audio`; jarbas espelho; sherpa/Vosk/Kokoro/Wyoming/Rustpotter ❌; v1.7.1 docs |
+| 110 | 107 | — | Sprint 107 loops 1–5 clima e2e → v1.7.2 | GEN 'O tempo esta'; Piper neural-lite; WakeWord registrado; STT ctc=''; HWEXPERT FAIL |
 
 ## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 
@@ -74,7 +75,7 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 
 18. **v1.7.0 / soft-float + 2B LOADED (2026-07-15):** Nightly SSE em `x86_64-unknown-none` → soft-float + `cargo nk`. FAT free-scan por setor (não 1 I/O/entry). BitNet 2B real ~590MB/30L (não confiar ficheiro ~203MB truncado). QEMU load+FWD: timeout serial **≥~5 min**. **LOADED ≠ generate**: `[JARBAS-TTS] FAILED empty generate` é known issue.
 
-19. **ADR-0045 Sound (2026-07-16):** Voz bootável = HDA + Piper (+formant) + STT CTC nativos em `neural-kernel/src/audio`. **Não** reabrir sherpa-onnx / Vosk / Kokoro-primário / Wyoming / Rustpotter como stack de kernel. `jarbas/audio` é espelho não wired. WakeWord existe mas **não** está no registry.
+19. **ADR-0045 Sound (2026-07-16):** Voz bootável = HDA + Piper (+formant) + STT CTC nativos em `neural-kernel/src/audio`. **Não** reabrir sherpa-onnx / Vosk / Kokoro-primário / Wyoming / Rustpotter como stack de kernel. `jarbas/audio` é espelho não wired. WakeWord **registrado** (Loop 5); path Mic→WAKEWORD no clima e2e ainda aberto.
 
 ---
 

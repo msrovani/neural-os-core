@@ -44,11 +44,12 @@
 
 | Item | LOC | Status | Detalhes |
 |------|-----|--------|----------|
-| TTS→STT→LLM→TTS loop | ~600 | ⏳ | Pipeline completo de voz (parcial: TTS+FB ok; STT↔loop aberto) |
+| TTS→STT→LLM→TTS loop | ~600 | ▶️ parcial | TTS+FB+GEN ok; STT seed (não loop pleno) |
 | Voice activity detection improvements | ~200 | ⏳ | VAD refinado |
-| Wake word "Jarvis" — **registrar** agente | ~200 | ⏳ | Código em `wakeword.rs`; **não** no AgentFleet (ADR-0045) |
+| Wake word "Jarvis" — **registrar** agente | ~200 | ✅ registrado Loop 5 | Código em `wakeword.rs`; no AgentFleet (ADR-0045) |
 | Audio pipeline hardening | ~300 | ⏳ | Debug e otimização |
-| Piper neural `emb.weight` | ~100 | ⏳ | Hoje formant fallback |
+| Piper neural `emb.weight` | ~100 | ▶️ neural-lite | neural-lite (não VITS pleno) |
+| Soft-float tkn/s | — | ❌ known blocker | Sem fix em 1.7.2 |
 | ~~sherpa / Vosk / Kokoro / Wyoming~~ | — | ❌ | Supersedido — ADR-0045 |
 
 ---
@@ -156,7 +157,7 @@
 | 103-104 | K²CHJ Workspace Migration | ~500 | ✅ |
 | 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
 | 106 | v2.0 Ecossistema de Anéis Lógicos | ~3.000 | ✅ 10/10 concluídas |
-| 107 | Voice I/O Pipeline (TTS→STT→LLM→TTS) | ~1.500 | ⏳ |
+| 107 | Voice I/O Pipeline (TTS→STT→LLM→TTS) | ~1.500 | ▶️ parcial (v1.7.2) |
 | 108 | Self-Evolving Agents | ~1.600 | ⏳ |
 | **Total v2.0** | | **~9.000 LOC** | |
 

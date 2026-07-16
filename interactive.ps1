@@ -52,8 +52,8 @@ if ($Serial) {
     Write-Host "Interaja na janela QEMU (teclado PS/2)" -ForegroundColor Yellow
     $qemuArgs = @("-m", "6G", "-smp", "2", "-accel", "tcg") + $driveBoot + $driveFat + $driveOvmf + @(
         "-serial", "file:$logfile",
-        "-serial", "tcp:127.0.0.1:4444,server=on,wait=off",
-        "-nic", "user,model=e1000,hostfwd=tcp::4444-:4444,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446",
+        "-serial", "tcp:127.0.0.1:4444",
+        "-nic", "user,model=e1000,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446",
         "-vga", "std"
     )
     & $qemu @qemuArgs

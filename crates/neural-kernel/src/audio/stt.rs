@@ -68,9 +68,17 @@ impl SttEngine {
             if b + 40 > data.len() { break; }
             let nb = &data[b..b+32];
             let nm = String::from_utf8_lossy(&nb[..nb.iter().position(|&x| x==0).unwrap_or(32)]).into_owned();
-            let off = r4(b + 32) as usize;
+            let raw_off = r4(b + 32) as usize;
             let cnt = r4(b + 36) as usize;
-            if off + cnt > f32s.len() { continue; }
+            if cnt == 0 { continue; }
+            // train_stt.py grava offset em BYTES; piper/canonical usa índice f32.
+            let off = if raw_off + cnt <= f32s.len() {
+                raw_off
+            } else if raw_off % 4 == 0 && (raw_off / 4) + cnt <= f32s.len() {
+                raw_off / 4
+            } else {
+                continue;
+            };
             let mut d = vec![0.0f32; cnt]; d.copy_from_slice(&f32s[off..off+cnt]);
             self.w.push((nm, d));
         }
@@ -85,22 +93,47 @@ impl SttEngine {
     pub fn is_loaded(&self) -> bool { self.loaded }
 
     fn w(&self, name: &str) -> &[f32] {
-        for (n, d) in &self.w { if n.contains(name) { return d; } }
-        &self.w[0].1
+        // Aceita aliases: w_ih ↔ weight_ih, w_hh ↔ weight_hh
+        let alt = if name.contains("w_ih") {
+            name.replace("w_ih", "weight_ih")
+        } else if name.contains("w_hh") {
+            name.replace("w_hh", "weight_hh")
+        } else if name.contains("b_ih") {
+            name.replace("b_ih", "bias_ih")
+        } else if name.contains("b_hh") {
+            name.replace("b_hh", "bias_hh")
+        } else {
+            String::new()
+        };
+        for (n, d) in &self.w {
+            if n.contains(name) || (!alt.is_empty() && n.contains(alt.as_str())) {
+                return d;
+            }
+        }
+        if !self.w.is_empty() { &self.w[0].1 } else { &[] }
     }
 
     // LSTM cell: h, c = lstm(x, h, c, w_ih, w_hh, b_ih, b_hh)
+    // w_ih: [4*dim, in_features] row-major; stride = inp.len(), NÃO dim.
     fn lstm_cell(&self, x: &[f32], h: &mut [f32], c: &mut [f32], dim: usize, w_ih: &[f32], w_hh: &[f32], b_ih: &[f32], b_hh: &[f32]) {
-        let gates = |i: usize, inp: &[f32], w: &[f32]| -> f32 {
+        let gates = |gi: usize, inp: &[f32], w: &[f32]| -> f32 {
+            let stride = inp.len();
+            let base = gi * stride;
+            if stride == 0 || base + stride > w.len() {
+                return 0.0;
+            }
             let mut s = 0.0f32;
-            for j in 0..inp.len() { s += w[i * dim + j] * inp[j]; }
+            for j in 0..stride {
+                s += w[base + j] * inp[j];
+            }
             s
         };
+        let bget = |b: &[f32], i: usize| -> f32 { if i < b.len() { b[i] } else { 0.0 } };
         for i in 0..dim {
-            let f = sigmoid(gates(i, x, w_ih) + gates(i, h, w_hh) + b_ih[i] + b_hh[i]);
-            let in_g = sigmoid(gates(i + dim, x, w_ih) + gates(i + dim, h, w_hh) + b_ih[i + dim] + b_hh[i + dim]);
-            let g = tanhf(gates(i + dim * 2, x, w_ih) + gates(i + dim * 2, h, w_hh) + b_ih[i + dim * 2] + b_hh[i + dim * 2]);
-            let o = sigmoid(gates(i + dim * 3, x, w_ih) + gates(i + dim * 3, h, w_hh) + b_ih[i + dim * 3] + b_hh[i + dim * 3]);
+            let f = sigmoid(gates(i, x, w_ih) + gates(i, h, w_hh) + bget(b_ih, i) + bget(b_hh, i));
+            let in_g = sigmoid(gates(i + dim, x, w_ih) + gates(i + dim, h, w_hh) + bget(b_ih, i + dim) + bget(b_hh, i + dim));
+            let g = tanhf(gates(i + dim * 2, x, w_ih) + gates(i + dim * 2, h, w_hh) + bget(b_ih, i + dim * 2) + bget(b_hh, i + dim * 2));
+            let o = sigmoid(gates(i + dim * 3, x, w_ih) + gates(i + dim * 3, h, w_hh) + bget(b_ih, i + dim * 3) + bget(b_hh, i + dim * 3));
             c[i] = f * c[i] + in_g * g;
             h[i] = o * tanhf(c[i]);
         }
@@ -124,6 +157,19 @@ impl SttEngine {
         let b_hh1 = self.w("lstm1.b_hh");
         let w_out = self.w("out.weight");
         let b_out = self.w("out.bias");
+        // Pesos incompletos → vazio (sem panic)
+        let need_ih0 = 4 * HIDDEN * N_MFCC;
+        let need_hh = 4 * HIDDEN * HIDDEN;
+        if w_ih0.len() < need_ih0 || w_hh0.len() < need_hh || w_ih1.len() < need_hh
+            || w_hh1.len() < need_hh || w_out.len() < VOCAB * HIDDEN || b_out.len() < VOCAB
+        {
+            crate::serial_println!(
+                "[STT] weights incomplete ih0={} hh0={} — skip",
+                w_ih0.len(),
+                w_hh0.len()
+            );
+            return String::new();
+        }
 
         let mut h0 = vec![0.0f32; HIDDEN];
         let mut c0 = vec![0.0f32; HIDDEN];
@@ -158,5 +204,70 @@ impl SttEngine {
             prev = best;
         }
         out.iter().collect()
+    }
+}
+
+static STT_ENGINE: spin::Mutex<Option<SttEngine>> = spin::Mutex::new(None);
+
+/// QEMU `-device loader,file=STT.BIN,addr=0x163000000`.
+pub fn try_load_from_qemu_loader() -> bool {
+    const LOAD_ADDR: u64 = 0x163000000;
+    let phys_off = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if phys_off == 0 {
+        return false;
+    }
+    let mut size_hint = 512 * 1024usize;
+    unsafe {
+        let ata_guard = crate::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = crate::fat32::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                    continue;
+                }
+                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                    if let Some(sz) = fs.lookup_file_size("STT.BIN") {
+                        // Margem: offsets em bytes no .bin exigem size real (~221KB+)
+                        size_hint = sz.max(256 * 1024).min(1024 * 1024);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let va = (LOAD_ADDR + phys_off) as *const u8;
+    let magic = unsafe { core::ptr::read_volatile(va as *const u32) };
+    if magic != 0xBE11BE11 {
+        crate::serial_println!(
+            "[STT] QEMU-loader @0x163000000 magic=0x{:08X} (ausente)",
+            magic
+        );
+        return false;
+    }
+    let data = unsafe { core::slice::from_raw_parts(va, size_hint) };
+    let mut eng = SttEngine::new();
+    if eng.load(data) {
+        crate::serial_println!(
+            "[STT] CTC LOADED (QEMU-loader @0x163000000) size={}KB",
+            size_hint / 1024
+        );
+        *STT_ENGINE.lock() = Some(eng);
+        true
+    } else {
+        crate::serial_println!("[STT] QEMU-loader parse FAILED");
+        false
+    }
+}
+
+pub fn is_loaded() -> bool {
+    STT_ENGINE.lock().as_ref().map(|e| e.is_loaded()).unwrap_or(false)
+}
+
+/// Transcreve PCM via engine global (vazio se STT não carregado).
+pub fn transcribe_global(pcm: &[i16]) -> String {
+    let guard = STT_ENGINE.lock();
+    match guard.as_ref() {
+        Some(eng) if eng.is_loaded() => eng.transcribe(pcm),
+        _ => String::new(),
     }
 }

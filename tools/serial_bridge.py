@@ -1,26 +1,30 @@
 #!/usr/bin/env python3
-"""serial_bridge.py — neural-os-core v1.0
-Bridge TCP <-> Serial para tunnel SLIP com watchdog e DNS hardening.
+"""serial_bridge.py — neural-os-core serial/SLIP TCP peer (bypass de NIC emulada).
 
-QEMU conecta como cliente: -serial tcp:127.0.0.1:4444,server,nowait
-Hardware real: python serial_bridge.py --hardware COM3
+Topologia correta (inversao B-01 / CHANGELOG):
+  - ESTE script = TCP servidor em 127.0.0.1:4444
+  - QEMU = TCP cliente:  -serial tcp:127.0.0.1:4444
+    (SEM server=on — se QEMU for server, disputa a mesma porta)
 
-Features:
-  - Watchdog: reconexao automatica se QEMU cair
-  - DNS hardening: healthcheck periodico, timeout configravel
-  - Rate limiting: evita flood de logs
-  - Estatisticas: RX/TX counters, throughput, uptime
+Ordem: python tools/serial_bridge.py  →  .\run-qemu-whpx.ps1
+  (ou deixe o PS1 subir/derrubar o bridge automaticamente)
+
+Hardware real: python tools/serial_bridge.py --hardware COM3
+Deps: stdlib only (TCP). Hardware: pyserial.
+
+Nota Windows: select() so funciona em sockets; stdin e tratado sem select.
+Watchdog NAO injeta bytes no stream (evita corromper frames length-prefix).
 """
 
 import argparse
 import socket
 import sys
 import time
-import select
 import logging
 
 logging.basicConfig(level=logging.INFO, format="[BRIDGE] %(message)s")
 log = logging.getLogger("bridge")
+
 
 class SerialBridge:
     def __init__(self, port=4444, hw_port=None, baud=115200,
@@ -54,29 +58,47 @@ class SerialBridge:
             self.last_report = now
 
     def watchdog_check(self):
-        """Healthcheck: verifica se QEMU ainda responde."""
+        """Liveness sem injetar bytes no stream serial/SLIP."""
         if self.conn and self.watchdog_interval > 0:
             try:
-                old_timeout = self.conn.gettimeout()
-                self.conn.settimeout(1.0)
-                self.conn.sendall(b"\x00")  # keepalive
-                self.conn.settimeout(old_timeout)
-            except (socket.timeout, OSError):
-                log.warning("Watchdog: QEMU nao respondeu, reconectando...")
+                self.conn.getpeername()
+            except OSError:
+                log.warning("Watchdog: socket morto, reconectando...")
+                try:
+                    self.conn.close()
+                except OSError:
+                    pass
                 self.conn = None
 
+    def _stdin_ready(self):
+        """True se stdin tem dados. Em Windows select() nao aceita pipes/console."""
+        if sys.platform == "win32":
+            try:
+                import msvcrt
+                if sys.stdin.isatty():
+                    return msvcrt.kbhit()
+            except Exception:
+                return False
+            return False
+        try:
+            import select
+            return bool(select.select([sys.stdin], [], [], 0)[0])
+        except (OSError, ValueError):
+            return False
+
     def wait_for_qemu(self):
-        """Aceita conexao do QEMU (com reconexao)."""
+        """Aceita conexao do QEMU (cliente) com reconexao."""
         if self.server is None:
             self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server.bind(("127.0.0.1", self.port))
             self.server.listen(1)
             self.server.settimeout(self.reconnect_delay)
+            log.info("LISTEN 127.0.0.1:%d (aguarde QEMU -serial tcp:127.0.0.1:%d)",
+                     self.port, self.port)
 
         while self.conn is None:
             try:
-                log.info("Aguardando QEMU conectar em 127.0.0.1:%d...", self.port)
                 conn, addr = self.server.accept()
                 log.info("QEMU conectado de %s", addr)
                 conn.settimeout(self.timeout)
@@ -88,7 +110,7 @@ class SerialBridge:
                 pass
 
     def handle_tcp(self):
-        """Loop principal do bridge TCP."""
+        """Loop principal: peer TCP <-> stdout/stdin (pipe de frames)."""
         last_watchdog = 0
         while True:
             if self.conn is None:
@@ -102,16 +124,23 @@ class SerialBridge:
                     self.conn = None
                     continue
                 self.rx_count += len(data)
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
+                try:
+                    sys.stdout.buffer.write(data)
+                    sys.stdout.buffer.flush()
+                except (BrokenPipeError, OSError):
+                    pass
             except socket.timeout:
                 pass
             except OSError as e:
                 log.warning("Erro de conexao: %s", e)
+                try:
+                    self.conn.close()
+                except OSError:
+                    pass
                 self.conn = None
                 continue
 
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+            if self._stdin_ready():
                 data = sys.stdin.buffer.read(4096)
                 if data:
                     self.tx_count += len(data)
@@ -122,14 +151,13 @@ class SerialBridge:
                             self.conn = None
             self.report()
 
-            # Watchdog periodico
             now = time.time()
-            if now - last_watchdog >= self.watchdog_interval:
+            if self.watchdog_interval > 0 and now - last_watchdog >= self.watchdog_interval:
                 self.watchdog_check()
                 last_watchdog = now
 
     def handle_hardware(self):
-        """Loop para hardware real."""
+        """Loop para hardware real (COM* via pyserial)."""
         try:
             import serial
             self.hw_ser = serial.Serial(self.hw_port, self.baud, timeout=self.timeout)
@@ -145,7 +173,7 @@ class SerialBridge:
                 sys.stdout.buffer.write(data)
                 sys.stdout.buffer.flush()
 
-            if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+            if self._stdin_ready():
                 data = sys.stdin.buffer.read(4096)
                 if data:
                     self.tx_count += len(data)
@@ -153,7 +181,7 @@ class SerialBridge:
             self.report()
 
     def run(self):
-        log.info("Serial Bridge v1.0 - neural-os-core")
+        log.info("Serial Bridge v1.1 - neural-os-core (TCP server / QEMU client)")
         if self.hw_port:
             self.handle_hardware()
         else:
@@ -163,20 +191,28 @@ class SerialBridge:
                 log.info("Encerrando...")
             finally:
                 if self.conn:
-                    self.conn.close()
+                    try:
+                        self.conn.close()
+                    except OSError:
+                        pass
                 if self.server:
-                    self.server.close()
+                    try:
+                        self.server.close()
+                    except OSError:
+                        pass
                 self.report(force=True)
 
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Serial bridge com watchdog")
-    parser.add_argument("--port", type=int, default=4444)
+    parser = argparse.ArgumentParser(description="Serial bridge SLIP/TCP peer para QEMU COM2")
+    parser.add_argument("--port", type=int, default=4444,
+                        help="Porta TCP local (default 4444; QEMU deve conectar como cliente)")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--hardware", type=str, default=None)
     parser.add_argument("--watchdog", type=float, default=10.0,
-                       help="Intervalo watchdog em segundos (0=desligado)")
+                        help="Intervalo watchdog em segundos (0=desligado)")
     parser.add_argument("--reconnect", type=float, default=2.0,
-                       help="Delay entre tentativas de reconexao (s)")
+                        help="Delay entre accept timeouts (s)")
     args = parser.parse_args()
 
     bridge = SerialBridge(

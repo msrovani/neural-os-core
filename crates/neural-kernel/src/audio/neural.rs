@@ -93,7 +93,7 @@ impl PocketTtsEngine {
 
     pub fn generate(&self, text: &str) -> Vec<i16> {
         if !self.loaded { return crate::audio::tts::synthesize(text); }
-        let tokens = crate::bpe::encode(text);
+        let tokens = crate::cortex::Tokenizer::encode(text);
         if tokens.is_empty() { return vec![0i16; SAMPLE_RATE as usize / 10]; }
 
         let embed = self.embed_w.as_ref().unwrap();

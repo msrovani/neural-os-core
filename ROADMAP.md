@@ -162,7 +162,7 @@
 
 ## ▶️ Sprint 107 — v2.0 Voice I/O Pipeline
 
-**Status:** ▶️ Em curso (capability ladder ADR-0041 P0–P9 ✅ PoC; Voice I/O pendente)  
+**Status:** ▶️ PASS parcial forte (v1.7.2); Voice I/O loop parcial  
 **Objetivo:** Pipeline TTS→STT→LLM→TTS, VAD, wake word ML.  
 **Capability (2026-07-14):** Boot A/B + P0–P9 PoC no monólito — ver ADR-0041 / SESSION_107. Follow-ups: Ring3 QEMU, QUEUE_NOTIFY, SFI #426.
 

@@ -57,7 +57,7 @@ cargo check --release
 
 **Esperado:**
 ```
-   Compiling neural-kernel v1.2.0
+   Compiling neural-kernel v2.0.0
    Compiling boot v0.1.0
     Finished `release` profile [optimized] target(s) in 0.30s
     0 errors, 0 warnings
@@ -135,36 +135,46 @@ Copy-Item "C:\msys64\usr\share\ovmf\OVMF.fd" "target\ovmf.fd"
 
 ### Gerar imagem de disco
 ```powershell
-# Cria disk_qemu.raw com modelos .bitnet + firmware (271MB)
+# Cria target\disk_qemu.raw (1024 MB default) com .bitnet + firmware (+ BITNET-2B se existir)
 python tools\build_image.py
+# Artefato canonico: target\disk_qemu.raw (scripts tambem aceitam tools\ e copiam)
 ```
 
 ### Executar QEMU
 ```powershell
-# Com framebuffer UEFI (janela grafica)
+# Fluxo canônico UEFI + FAT32 (IDE index=1) + log em logs\
 .\run-qemu-uefi.ps1 -Window
 
-# Sem janela (modo texto)
-.\run-qemu-uefi.ps1
+# Sem janela / gera disco se faltar
+.\run-qemu-uefi.ps1 -BuildDisk
+
+# WHPX (fallback: -Tcg)
+.\run-qemu-whpx.ps1 -Window
 ```
 
-### Com bridge serial (rede via SLIP)
+### Com bridge serial (rede via SLIP / bypass NIC)
 ```powershell
-# Terminal 1: bridge (deixa rodando)
-python tools\serial_bridge.py
+# Preferido: WHPX sobe e mata o bridge sozinho (TCP server :4444, QEMU cliente COM2)
+.\run-qemu-whpx.ps1 -Window
 
-# Terminal 2: QEMU
-.\run-qemu-uefi.ps1
+# Manual (se -NoSerialBridge): Terminal 1
+python tools\serial_bridge.py
+# Terminal 2
+.\run-qemu-whpx.ps1 -NoSerialBridge -Window
 ```
+Topologia: `serial_bridge.py` escuta `127.0.0.1:4444`; QEMU usa `-serial tcp:127.0.0.1:4444` (cliente, sem `server=on`).
 
 ---
 
 ## 5. HW Real — Pendrive Bootável
 
+Pendrive tipico: **32 GB livres** - use imagem generosa (512 MB-1 GB+) e **inclua BITNET-2B**.
+
 ### Gerar imagem para pendrive
 ```powershell
-# Cria disk_hw.raw (64MB) — sem BITNET-2B (modelo muito grande para pendrive menor)
-python tools\build_image.py --size 128 --output tools\disk_hw.raw
+# target\disk_hw.raw (1024 MB default; opcional --size 512)
+python tools\build_image.py --hw
+python tools\build_image.py --hw --size 512
 ```
 
 ### Gravar no pendrive
@@ -172,12 +182,12 @@ python tools\build_image.py --size 128 --output tools\disk_hw.raw
 **Windows (Rufus):**
 ```powershell
 # Baixe rufus.exe de https://rufus.ie
-.\rufus.exe tools\disk_hw.raw
+.\rufus.exe target\disk_hw.raw
 ```
 
 **Linux:**
 ```bash
-sudo dd if=tools/disk_hw.raw of=/dev/sdX bs=4M status=progress
+sudo dd if=target/disk_hw.raw of=/dev/sdX bs=4M status=progress
 sync
 ```
 
@@ -302,10 +312,11 @@ Seu objetivo é ajudar o usuário a configurar, entender e contribuir com o AIOS
 2. **NUNCA use stubs.** Se algo não pode ser implementado completamente, documente o bloqueio em `docs/dead-ends.md` com a tag CRM-XXX.
 3. **SEMPRE execute `cargo check --release` antes de considerar uma mudança completa.**
 4. **SEMPRE execute `cargo clean -p neural-kernel && cargo check --release` quando erros somem misteriosamente** — o cache incremental mascara erros.
-5. **SEMPRE verifique `TECNOLOGIAS.md` antes de decidir qual tecnologia usar** — evite reinventar a roda.
-6. **NUNCA adicione dependências externas** sem justificativa forte. O kernel é no_std. Prefira implementar do que adicionar crates.
-7. **Skills a quente:** "grava video" ou "imprime formulario" viram skills gerados pelo LLM sob demanda, não por enum Rust.
-8. **Documente no `AGENTS.md`** qualquer lição crítica que você aprender durante a sessão.
+5. **Builds isolados:** usar `--target-dir target/agent-<nome>` (ou `target/check-<nome>`, etc.) — **nunca** `target-*` na raiz do repo.
+6. **SEMPRE verifique `TECNOLOGIAS.md` antes de decidir qual tecnologia usar** — evite reinventar a roda.
+7. **NUNCA adicione dependências externas** sem justificativa forte. O kernel é no_std. Prefira implementar do que adicionar crates.
+8. **Skills a quente:** "grava video" ou "imprime formulario" viram skills gerados pelo LLM sob demanda, não por enum Rust.
+9. **Documente no `AGENTS.md`** qualquer lição crítica que você aprender durante a sessão.
 
 #### 8.3 Workflow do Agente
 
@@ -329,6 +340,9 @@ flowchart TD
 ```bash
 # Verificar compilação
 cargo check --release
+
+# Build isolado (agentes paralelos) — sob target/, nunca target-* na raiz
+cargo check --release --target-dir target/agent-<nome>
 
 # Build completo
 cargo build --release
@@ -370,20 +384,19 @@ cargo clean -p neural-kernel && cargo build --release
 
 ### 4. Testar em QEMU
 ```powershell
-# Gerar imagem com modelos + firmware
+# 1) Build kernel  2) FAT32 em target\  3) UEFI + disco + logs\
+cargo build --release
 python tools\build_image.py
-
-# Rodar QEMU
 .\run-qemu-uefi.ps1 -Window
 ```
 
 ### 5. Verificar log
-```bash
+```powershell
 # Último log gerado
 Get-ChildItem logs\boot_uefi*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 
 # Procurar erros
-Get-Content logs\boot_uefi_*.txt | Select-String "ERROR|FAIL|PANIC"
+Get-Content (Get-ChildItem logs\boot_uefi*.txt | Sort-Object LastWriteTime -Descending | Select-Object -First 1) | Select-String "ERROR|FAIL|PANIC"
 ```
 
 ### 6. Commit
@@ -401,7 +414,7 @@ git push
 |----------|-------|---------|
 | `error: linker 'cc' not found` | Falta GCC/MSYS2 | Instale MSYS2 com `pacman -S mingw-w64-ucrt-x86_64-gcc` |
 | `error: could not compile neural-kernel` + erros estranhos | Cache incremental corrompido | `cargo clean -p neural-kernel && cargo check --release` |
-| `[MBR] Signature 55AA nao encontrada` | Boot image nao tem FAT32 | Execute `python tools\build_image.py` para gerar disk_qemu.raw |
+| `[MBR] Signature 55AA nao encontrada` | Boot image nao tem FAT32 | `python tools\build_image.py` → `target\disk_qemu.raw` |
 | QEMU nao abre | OVMF nao encontrado | Copie OVMF.fd para `target/ovmf.fd` |
 | `[DISPLAY] Sem framebuffer UEFI` | QEMU sem UEFI | Use `-bios` com OVMF ou execute `.\run-qemu-uefi.ps1` |
 | Bridge serial nao conecta | Porta 4444 ocupada | Mate processos python anteriores: `Stop-Process -Name python*` |
@@ -427,5 +440,5 @@ git push
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.2.0**  
+> **AIOS K²CHJ — Neural OS Hermes v2.0.0**  
 > *"O hardware real não perdoa. O silício obedece."*

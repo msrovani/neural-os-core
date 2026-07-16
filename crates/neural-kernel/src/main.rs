@@ -1431,11 +1431,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 
-    // Audio: inicializa configuracoes de som + neural TTS (GPU offload)
-
+    // Audio: configuracoes de som; Piper TTS AFTER BGE (BGE e leve; Piper 61MB nao bloqueia STATUS bge)
     audio::init_audio();
-
-    audio::skills::init_neural_tts();
 
 
 
@@ -1536,14 +1533,70 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     unsafe {
         let mut loaded = false;
+        let mut found = false;
+        // QEMU-loader @0x162000000 (WHPX; evita PIO se FAT ausente)
+        {
+            const BGE_QEMU: u64 = 0x162000000;
+            let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+            if pm != 0 {
+                let mut size_hint = 512 * 1024usize;
+                let ata_guard = crate::ATA_DRIVER.lock();
+                if let Some(ref ata) = *ata_guard {
+                    let parts = crate::fat32::read_mbr(ata);
+                    for p in &parts {
+                        if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                            continue;
+                        }
+                        if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                            if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
+                                size_hint = sz.min(1024 * 1024).max(64);
+                                break;
+                            }
+                        }
+                    }
+                }
+                drop(ata_guard);
+                let ptr = (BGE_QEMU + pm) as *const u8;
+                let magic = core::ptr::read_volatile(ptr as *const u32);
+                if magic == 0xBE11BE11 {
+                    found = true;
+                    let data = core::slice::from_raw_parts(ptr, size_hint);
+                    serial_println!(
+                        "[BGE] QEMU-loader @0x162000000 magic OK — parse {} KB…",
+                        size_hint / 1024
+                    );
+                    if crate::memory_systems::load_bge(data) {
+                        serial_println!(
+                            "[BGE] Embedding model LOADED (QEMU-loader @0x162000000) size={}KB",
+                            size_hint / 1024
+                        );
+                        crate::boot_logger::log("BOOT: BGE embedding loaded (QEMU)");
+                        loaded = true;
+                    } else {
+                        serial_println!("[BGE] QEMU-loader parse FAILED — fallback FAT");
+                    }
+                } else {
+                    serial_println!(
+                        "[BGE] QEMU-loader @0x162000000 magic=0x{:08X} (ausente)",
+                        magic
+                    );
+                }
+            }
+        }
         // Tenta AHCI primeiro
         let mut ahci_guard = crate::AHCI_DRIVER.lock();
         if let Some(ref mut ahci) = *ahci_guard {
-            if let Some(bge_data) = read_file_from_dev(ahci, "BGE.BIN") {
-                if crate::memory_systems::load_bge(&bge_data) {
-                    serial_println!("[BGE] Embedding model loaded from AHCI FAT!");
-                    crate::boot_logger::log("BOOT: BGE embedding loaded");
-                    loaded = true;
+            if !loaded {
+                if let Some(bge_data) = read_file_from_dev(ahci, "BGE.BIN") {
+                    found = true;
+                    serial_println!("[BGE] BGE.BIN lido AHCI ({} KB) — parse…", bge_data.len() / 1024);
+                    if crate::memory_systems::load_bge(&bge_data) {
+                        serial_println!("[BGE] Embedding model LOADED from AHCI FAT!");
+                        crate::boot_logger::log("BOOT: BGE embedding loaded");
+                        loaded = true;
+                    } else {
+                        serial_println!("[BGE] BGE.BIN present but parse FAILED (AHCI)");
+                    }
                 }
             }
         }
@@ -1556,21 +1609,37 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 for p in &parts {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
+                            found = true;
+                            serial_println!("[BGE] BGE.BIN presente FAT ({} KB) — lendo…", sz / 1024);
+                        }
                         if let Some(bge_data) = fs.read_file("BGE.BIN") {
+                            found = true;
+                            serial_println!("[BGE] BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
                             if crate::memory_systems::load_bge(&bge_data) {
-                                serial_println!("[BGE] Embedding model loaded from FAT (ATA)!");
+                                serial_println!("[BGE] Embedding model LOADED from FAT (ATA)!");
                                 crate::boot_logger::log("BOOT: BGE embedding loaded");
                                 loaded = true;
+                            } else {
+                                serial_println!("[BGE] BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
                             }
                         }
                     }
                 }
             }
-            if !loaded {
-                serial_println!("[BOOT] No storage device found for model loading");
+            if !loaded && !found {
+                crate::load_status::set_if_upgrade(
+                    crate::load_status::AssetKind::Bge,
+                    crate::load_status::LoadStatus::Absent,
+                );
+                serial_println!("[BGE] BGE.BIN ausente no FAT — STATUS Absent");
             }
         }
     }
+
+    // Piper TTS: loader QEMU @0x130000000 ou FAT PIO (apos BGE para STATUS honesto)
+    audio::skills::init_neural_tts();
+    crate::load_status::print_status_banner();
 
 
 
@@ -1864,6 +1933,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     registry.register(Box::new(audio::voice::JarvisVoiceAgent::new()));
 
+    serial_println!("[BOOT] Registering WakeWordAgent...");
+    registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
+
     serial_println!("[BOOT] Registering AudioMixerAgent...");
 
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
@@ -2140,32 +2212,127 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
     }
 
-    // Try RustCoder expert from FAT
-    unsafe {
-        let ata_guard = crate::ATA_DRIVER.lock();
-        if let Some(ref ata) = *ata_guard {
-            let parts = crate::fat32::read_mbr(ata);
-            for p in &parts {
-                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                    if let Some(rust_data) = fs.read_file("RUSTCDR.BITNET") {
-                        if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
-                            crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
-                            serial_println!("[FAT] RustCoder expert model loaded!");
-                            crate::boot_logger::log("BOOT: RustCoder expert loaded");
+    // Trinity experts: QEMU-loader (HW @0x160000000, RustCoder @0x161000000) + FAT fallback
+    {
+        fn fat_size_hint(names: &[&str], default: usize) -> usize {
+            unsafe {
+                let ata_guard = crate::ATA_DRIVER.lock();
+                if let Some(ref ata) = *ata_guard {
+                    let parts = crate::fat32::read_mbr(ata);
+                    for p in &parts {
+                        if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                            continue;
+                        }
+                        if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                            for name in names {
+                                if let Some(sz) = fs.lookup_file_size(name) {
+                                    return sz.min(1024 * 1024).max(64);
+                                }
+                            }
                         }
                     }
-                    if let Some(hw_data) = fs.read_file("HWEXPRT.BIN") {
-                        if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
-                            crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
-                            serial_println!("[FAT] HW Expert model loaded (213K HWIDs)!");
-                            crate::boot_logger::log("BOOT: HW Expert loaded");
+                }
+            }
+            default
+        }
+        fn try_expert_qemu(addr: u64, size: usize, label: &str, is_hw: bool) -> bool {
+            let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+            if pm == 0 {
+                return false;
+            }
+            let ptr = (addr + pm) as *const u8;
+            let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
+            if magic != 0xBE11BE11 {
+                serial_println!(
+                    "[{}] QEMU-loader @{:#x} magic=0x{:08X} (ausente)",
+                    label,
+                    addr,
+                    magic
+                );
+                return false;
+            }
+            let data = unsafe { core::slice::from_raw_parts(ptr, size) };
+            serial_println!(
+                "[{}] QEMU-loader @{:#x} magic OK — parse {} KB…",
+                label,
+                addr,
+                size / 1024
+            );
+            if let Some(model) = crate::cortex::load_model(data) {
+                if is_hw {
+                    crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(model));
+                } else {
+                    crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(model));
+                }
+                serial_println!(
+                    "[{}] LOADED (QEMU-loader @{:#x}) size={}KB",
+                    label,
+                    addr,
+                    size / 1024
+                );
+                true
+            } else {
+                serial_println!("[{}] QEMU-loader parse FAILED", label);
+                false
+            }
+        }
+
+        // Tamanhos reais dos .bitnet no QEMU-loader (FAT hint curto truncava HW → parse FAILED).
+        let hw_sz = 266126usize.max(fat_size_hint(
+            &["HWEXPRT.BIN", "HW_EXPERT.BITNET"],
+            266126,
+        ));
+        let rust_sz = 270222usize.max(fat_size_hint(&["RUSTCDR.BITNET"], 270222));
+        let mut hw_ok = try_expert_qemu(0x160000000, hw_sz, "HWEXPERT", true);
+        let mut rust_ok = try_expert_qemu(0x161000000, rust_sz, "RUSTCODER", false);
+
+        unsafe {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata_guard {
+                let parts = crate::fat32::read_mbr(ata);
+                for p in &parts {
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                        continue;
+                    }
+                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                        if !rust_ok {
+                            if let Some(rust_data) = fs.read_file("RUSTCDR.BITNET") {
+                                if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
+                                    crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(
+                                        rust_model,
+                                    ));
+                                    serial_println!("[FAT] RustCoder expert model loaded!");
+                                    crate::boot_logger::log("BOOT: RustCoder expert loaded");
+                                    rust_ok = true;
+                                }
+                            }
+                        }
+                        if !hw_ok {
+                            if let Some(hw_data) = fs.read_file("HWEXPRT.BIN") {
+                                if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
+                                    crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(
+                                        hw_model,
+                                    ));
+                                    serial_println!("[FAT] HW Expert model loaded (213K HWIDs)!");
+                                    crate::boot_logger::log("BOOT: HW Expert loaded");
+                                    hw_ok = true;
+                                }
+                            }
                         }
                     }
                 }
             }
         }
+        if hw_ok {
+            crate::boot_logger::log("BOOT: HW Expert loaded");
+        }
+        if rust_ok {
+            crate::boot_logger::log("BOOT: RustCoder expert loaded");
+        }
     }
+
+    // STT CTC tiny via QEMU-loader @0x163000000 (FAT STT.BIN = size hint)
+    let _ = crate::audio::stt::try_load_from_qemu_loader();
 
     // LLM test + telemetria N1.1
     if model_loaded || crate::cortex::model_is_loaded() {
@@ -2197,10 +2364,46 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     crate::load_status::print_status_banner();
 
-    // N4/N5 skinny — STT sim → Hermes → generate_via_model → TTS do modelo (sem canned).
+    // BPE vocab HF (BPB1) via QEMU-loader — decode real BitNet 2B (antes do clima)
+    let _ = crate::bpe::try_load_from_qemu_loader();
+
+    // N4/N5 skinny — STT CTC (PCM sintético) → Hermes → generate_via_model → TTS (sem canned).
     {
-        let stt = "qual a previsao do tempo para amanha?";
-        serial_println!("[JARBAS-STT-SIM] {}", stt);
+        let stt_seed = "qual a previsao do tempo para amanha?";
+        // STT real no path: formant seed → CTC; se vazio, tenta neural-lite Piper curto.
+        let pcm_probe = crate::audio::tts::synthesize(stt_seed);
+        let mut stt_ctc = crate::audio::stt::transcribe_global(&pcm_probe);
+        if stt_ctc.is_empty() && crate::audio::skills::piper_is_loaded() {
+            let pcm2 = crate::audio::skills::synthesize_tts("tempo");
+            stt_ctc = crate::audio::stt::transcribe_global(&pcm2);
+            serial_println!(
+                "[JARBAS-STT] retry piper-pcm len={} ctc_len={} ctc='{}'",
+                pcm2.len(),
+                stt_ctc.len(),
+                stt_ctc
+            );
+        }
+        serial_println!(
+            "[JARBAS-STT] pcm_len={} ctc_len={} ctc='{}'",
+            pcm_probe.len(),
+            stt_ctc.len(),
+            stt_ctc
+        );
+        let stt_owned = if stt_ctc.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 4 {
+            if crate::bpe::weatherish_hit_count(&stt_ctc) >= 1
+                || stt_ctc.contains("temp")
+                || stt_ctc.contains("dia")
+            {
+                stt_ctc
+            } else {
+                serial_println!("[JARBAS-STT] weak ctc → seed prompt");
+                alloc::string::String::from(stt_seed)
+            }
+        } else {
+            serial_println!("[JARBAS-STT-SIM] {} (ctc empty/short)", stt_seed);
+            alloc::string::String::from(stt_seed)
+        };
+        let stt = stt_owned.as_str();
         if crate::cortex::model_is_loaded() {
             serial_println!("[HERMES] weather intent → cortex generate_via_model");
             let raw = crate::cortex::generate_via_model(stt);
@@ -2208,8 +2411,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 serial_println!("[JARBAS-TTS] FAILED empty generate");
             } else {
                 serial_println!("[JARBAS-TTS] {}", raw);
-                let _pcm = crate::audio::tts::synthesize(&raw);
-                serial_println!("[JARBAS-TTS] formant pcm_samples={}", _pcm.len());
+                let piper_on = crate::audio::skills::piper_is_loaded();
+                let _pcm = crate::audio::skills::synthesize_tts(&raw);
+                serial_println!(
+                    "[JARBAS-TTS] piper={} pcm_samples={}",
+                    if piper_on { "LOADED" } else { "OFF" },
+                    _pcm.len()
+                );
+                // FB antes do scheduler — DisplayAgent ainda nao trocou ownership
+                crate::display::fb::paint_tts_response(&raw);
             }
         } else {
             serial_println!("[JARBAS-TTS] SKIP llm=ABSENT");

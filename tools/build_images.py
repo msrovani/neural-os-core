@@ -82,10 +82,12 @@ def main():
         os.remove(qemu_disk)
     create_mbr_fat32(qemu_disk, 64, "NEURAL-QEMU")
     qemu_files = {
-        "MICRO.BITNET": find_file("micro.bitnet"),
+        "BITNET2B.BIN": find_file("bitnet_2B.bitnet"),
         "RUSTCDR.BITNET": find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET"),
-        "HW_EXPERT.BITNET": find_file("hw_expert.bitnet"),
-        "BGE.BITNET": find_file("bge-small.bitnet") or find_file("target/bge-small.bitnet"),
+        "HWEXPRT.BIN": find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("hw_expert.bitnet"),
+        "HW_EXPERT.BITNET": find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("hw_expert.bitnet"),
+        "BGE.BIN": find_file("bge-small.bitnet") or find_file("target/bge-small.bitnet"),
+        "STT.BIN": find_file("STT.BIN"),
         "CONFIG.TXT": os.path.join(WORKSPACE, "qemu_config.txt"),
     }
     # Cria CONFIG.TXT
@@ -105,10 +107,12 @@ def main():
         os.remove(hw_disk)
     create_mbr_fat32(hw_disk, 256, "NEURAL-HW")
     hw_files = {
-        "MICRO.BITNET": find_file("micro.bitnet"),
+        "BITNET2B.BIN": find_file("bitnet_2B.bitnet"),
         "RUSTCDR.BITNET": find_file("rust_coder.bitnet"),
-        "HW_EXPERT.BITNET": find_file("hw_expert.bitnet"),
-        "BGE.BITNET": find_file("bge-small.bitnet"),
+        "HWEXPRT.BIN": find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("hw_expert.bitnet"),
+        "HW_EXPERT.BITNET": find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("hw_expert.bitnet"),
+        "BGE.BIN": find_file("bge-small.bitnet"),
+        "STT.BIN": find_file("STT.BIN"),
         "POCKETTTS.BITNET": find_file("target/pocket-tts.bitnet"),
         "CONFIG.TXT": os.path.join(WORKSPACE, "hw_config.txt"),
     }

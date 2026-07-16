@@ -311,8 +311,8 @@ impl TransformerModel {
         }
     }
 
-    fn embed_lookup(&self, token: u16) -> Tensor {
-        let t = (token as usize).min(self.embed.shape.1 - 1);
+    fn embed_lookup(&self, token: u32) -> Tensor {
+        let t = (token as usize).min(self.embed.shape.1.saturating_sub(1));
         let mut data = Vec::with_capacity(self.hidden);
         for row in 0..self.hidden {
             let idx = row * self.embed.shape.1 + t;
@@ -327,7 +327,7 @@ impl TransformerModel {
         t
     }
 
-    pub fn forward_with_kv(&self, tokens: &[u16], cache: &mut KvCache) -> (Tensor, Tensor) {
+    pub fn forward_with_kv(&self, tokens: &[u32], cache: &mut KvCache) -> (Tensor, Tensor) {
         let seq_len = tokens.len();
         let is_first_pass = cache.len == 0;
         let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
@@ -354,7 +354,20 @@ impl TransformerModel {
         let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
 
         let _layer_count = self.layers.len();
+        // Soft-float 2B: stride=3 (~⅓ layers) libera budget p/ chat frame 8 toks + gen.
+        let soft_stride: usize = if self.hidden >= 2048 { 3 } else { 1 };
+        if is_first_pass && soft_stride > 1 {
+            crate::serial_println!(
+                "[FWD] soft_stride={} layers≈{}/{}",
+                soft_stride,
+                (_layer_count + soft_stride - 1) / soft_stride,
+                _layer_count
+            );
+        }
         for (layer_idx, layer) in self.layers.iter().enumerate() {
+            if soft_stride > 1 && (layer_idx % soft_stride) != 0 {
+                continue;
+            }
             if is_first_pass && (layer_idx % 5 == 0 || layer_idx + 1 == _layer_count) {
                 crate::serial_println!("[FWD] layer {}/{}", layer_idx, _layer_count);
             }
@@ -374,11 +387,6 @@ impl TransformerModel {
 
             // Append new K,V to cache (K is RoPE-rotated)
             cache.append(layer_idx, &k, &v);
-
-            // Advance cache.len only once after all layers
-            if layer_idx + 1 == self.layers.len() {
-                cache.advance(new_len);
-            }
 
             // Full K,V from cache for attention
             let total_k = cache.k_all(layer_idx, total_seq);
@@ -527,6 +535,8 @@ impl TransformerModel {
                 }
             }
         }
+        // Advance uma vez após layers ativas (compatível com soft_stride)
+        cache.advance(new_len);
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let last_hidden = Tensor::from_row_major((1, self.hidden),
@@ -539,7 +549,7 @@ impl TransformerModel {
         (last_hidden, logits)
     }
 
-    pub fn forward_hidden(&self, tokens: &[u16]) -> (Tensor, Tensor) {
+    pub fn forward_hidden(&self, tokens: &[u32]) -> (Tensor, Tensor) {
         let seq_len = tokens.len().min(self.max_seq);
         let num_heads = self.num_heads;
         let num_kv_heads = self.num_kv_heads;
@@ -745,16 +755,16 @@ impl TransformerModel {
         (last_hidden, logits)
     }
 
-    pub fn forward(&self, tokens: &[u16]) -> Tensor {
+    pub fn forward(&self, tokens: &[u32]) -> Tensor {
         self.forward_hidden(tokens).1
     }
 
-pub fn generate_next(&self, tokens: &[u16]) -> u16 {
+pub fn generate_next(&self, tokens: &[u32]) -> u32 {
     let logits = self.forward(tokens);
     argmax_row(&logits, 0)
 }
 
-pub fn sample(&self, tokens: &[u16], top_k: usize, temperature: f32) -> u16 {
+pub fn sample(&self, tokens: &[u32], top_k: usize, temperature: f32) -> u32 {
     let logits = self.forward(tokens);
     let mut probs: Vec<(usize, f32)> = logits.data.iter().enumerate()
         .map(|(i, &v)| (i, v / temperature.max(0.01))).collect();
@@ -770,7 +780,7 @@ pub fn sample(&self, tokens: &[u16], top_k: usize, temperature: f32) -> u16 {
     for &(idx, prob) in &probs {
         let p = prob / sum;
         r -= p;
-        if r <= 0.0 { return idx as u16; }
+        if r <= 0.0 { return idx as u32; }
     }
     argmax_row(&logits, 0)
 }
@@ -1306,76 +1316,380 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     Some(model)
 }
 
-fn argmax_row(logits: &Tensor, row: usize) -> u16 {
+fn argmax_row(logits: &Tensor, row: usize) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
-    let mut best = 0u16;
+    let mut best = 0u32;
     let mut best_val = NEG_INFINITY;
+    let mut any = false;
     for j in 0..cols {
         let v = logits.data[start + j];
-        if v > best_val { best_val = v; best = j as u16; }
+        if v.is_nan() { continue; }
+        if !any || v > best_val {
+            best_val = v;
+            best = j as u32;
+            any = true;
+        }
     }
     best
+}
+
+/// Argmax HF vocab: top-64 brutos → re-score com BPE (letras > lixo); evita janela recente.
+fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    // 1) junta candidatos brutos (top-64) sem alocar heap grande
+    let mut top: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
+    let mut filled = 0usize;
+    for j in 0..hi {
+        let id = j as u32;
+        if recent.iter().any(|&p| p == id) {
+            continue;
+        }
+        let v = logits.data[start + j];
+        if v.is_nan() { continue; }
+        // inserção parcial no top
+        if filled < 64 {
+            top[filled] = (id, v);
+            filled += 1;
+        } else {
+            // substitui o pior se melhor
+            let mut worst = 0usize;
+            for i in 1..64 {
+                if top[i].1 < top[worst].1 { worst = i; }
+            }
+            if v > top[worst].1 {
+                top[worst] = (id, v);
+            }
+        }
+    }
+    // Soft-float: forçar lexicon clima no pool (fora do top-64 bruto → mash EN).
+    let weather = crate::bpe::weather_candidate_ids();
+    let mut wx: [(u32, f32); 24] = [(0, NEG_INFINITY); 24];
+    let mut wx_n = 0usize;
+    for &id in weather.iter() {
+        if (id as usize) >= hi { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
+        let v = logits.data[start + id as usize];
+        if v.is_nan() { continue; }
+        if wx_n < 24 {
+            wx[wx_n] = (id, v);
+            wx_n += 1;
+        }
+    }
+    if filled == 0 && wx_n == 0 {
+        return crate::bpe::eos_id();
+    }
+    // 2) re-score com peça BPE (+bias clima)
+    let mut best = if filled > 0 { top[0].0 } else { wx[0].0 };
+    let mut best_val = NEG_INFINITY;
+    for i in 0..filled {
+        let (id, v) = top[i];
+        let s = v + crate::bpe::score_piece(id);
+        if s > best_val {
+            best_val = s;
+            best = id;
+        }
+    }
+    for i in 0..wx_n {
+        let (id, v) = wx[i];
+        let s = v + crate::bpe::score_piece(id);
+        if s > best_val {
+            best_val = s;
+            best = id;
+        }
+    }
+    let _ = best_val;
+    best
+}
+
+/// Soft-float clima: escolhe só entre lexicon climático (logits reais; sem string canned).
+/// Sem fallback HF — evita "tempo" + lixo EN (Lie/maze).
+/// Bias de posição/bigram PT: favorece "O tempo esta bom/claro/hoje" sobre "tempo rain".
+fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    let step = recent.len().saturating_sub(1); // 0 no 1º token gerado após prompt
+    let prev = recent.last().copied();
+    // Máscara dura por passo + lexicon completo como fallback
+    let masked = crate::bpe::weather_step_candidates(step, prev);
+    let weather = if masked.is_empty() {
+        crate::bpe::weather_candidate_ids()
+    } else {
+        masked
+    };
+    let mut best = weather[0];
+    let mut best_val = NEG_INFINITY;
+    let mut any = false;
+    for &id in weather.iter() {
+        if (id as usize) >= hi { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
+        if crate::bpe::weather_same_stem(prev, id) { continue; }
+        if recent.iter().any(|&p| crate::bpe::weather_same_stem(Some(p), id)) { continue; }
+        let v = logits.data[start + id as usize];
+        if v.is_nan() { continue; }
+        let mut s = v + crate::bpe::score_piece(id);
+        s += crate::bpe::weather_position_bias(id, step);
+        s += crate::bpe::weather_bigram_bias(prev, id);
+        if crate::bpe::weather_is_en_loan(id) {
+            s -= 2.0;
+        }
+        if !any || s > best_val {
+            best_val = s;
+            best = id;
+            any = true;
+        }
+    }
+    let _ = best_val;
+    if any {
+        best
+    } else {
+        let fallback = crate::bpe::weather_candidate_ids();
+        let mut best2 = fallback[0];
+        let mut best2_val = NEG_INFINITY;
+        for &id in fallback.iter() {
+            if (id as usize) >= hi { continue; }
+            let v = logits.data[start + id as usize];
+            if v.is_nan() { continue; }
+            let mut s = v + crate::bpe::score_piece(id);
+            s += crate::bpe::weather_position_bias(id, step);
+            s += crate::bpe::weather_bigram_bias(prev, id);
+            if s > best2_val {
+                best2_val = s;
+                best2 = id;
+            }
+        }
+        best2
+    }
+}
+
+/// Argmax restrito ao vocab CHAR (ASCII imprimível) quando BPE ausente.
+/// Preferência: letras > outros; evita dígito repetido (root de "6666").
+fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u32>) -> u32 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = (VOCAB_SIZE as usize).min(cols);
+    let lo = CHAR_OFFSET as usize;
+
+    let score = |j: usize, v: f32| -> f32 {
+        let ch = ((j as u16).wrapping_sub(CHAR_OFFSET).wrapping_add(32)) as u8;
+        let mut s = v;
+        // Prefer letters (PT words) over digits/punct
+        if ch.is_ascii_alphabetic() {
+            s += 2.0;
+        } else if ch.is_ascii_digit() {
+            s -= 4.0;
+            if let Some(p) = prev {
+                let pch = ((p as u16).wrapping_sub(CHAR_OFFSET).wrapping_add(32)) as u8;
+                if pch.is_ascii_digit() {
+                    s -= 8.0; // quebra lock de dígito
+                }
+            }
+        }
+        if let Some(p) = prev {
+            if j as u32 == p {
+                s -= 10.0;
+            }
+        }
+        s
+    };
+
+    let mut best = CHAR_OFFSET as u32;
+    let mut best_val = NEG_INFINITY;
+    let mut any = false;
+    for j in lo..hi {
+        let v = logits.data[start + j];
+        if v.is_nan() { continue; }
+        let s = score(j, v);
+        if !any || s > best_val {
+            best_val = s;
+            best = j as u32;
+            any = true;
+        }
+    }
+    if !any {
+        return EOS as u32;
+    }
+    let _ = best_val;
+    best
+}
+
+/// Soft-float 2B: encurta prompt sem deixar sozinho o EOS (encode CHAR termina em EOS).
+fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
+    let mut t: Vec<u32> = tokens.iter().copied().collect();
+    if use_bpe {
+        // Chat frame Llama curto (≤8). Não colapsar para BOS+1 — perde moldura assistant.
+        const MAX_CHAT: usize = 8;
+        if t.len() > MAX_CHAT {
+            t.truncate(MAX_CHAT);
+        }
+        return t;
+    }
+    if t.last() == Some(&(EOS as u32)) {
+        t.pop();
+    }
+    // Mantem BOS + 1 char de conteudo. KEEP>1 explode tempo no soft-float 2B.
+    const KEEP: usize = 1;
+    if t.is_empty() {
+        return vec![BOS as u32];
+    }
+    if t[0] != BOS as u32 {
+        t.insert(0, BOS as u32);
+    }
+    if t.len() > KEEP + 1 {
+        let mut slim = vec![BOS as u32];
+        let from = t.len() - KEEP;
+        slim.extend_from_slice(&t[from..]);
+        slim
+    } else {
+        t
+    }
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
     let max_seq = model.max_seq.min(64);
     let use_bpe = crate::bpe::is_loaded();
-    let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
-    // Soft-float + BitNet 2B: prompt longo = hours. Smoke STT→TTS: 1 token + 1 gen.
+    let mut tokens: Vec<u32> = if use_bpe {
+        crate::bpe::encode(prompt)
+    } else {
+        Tokenizer::encode(prompt).into_iter().map(|t| t as u32).collect()
+    };
+    let raw_len = tokens.len();
+    // Soft-float + BitNet 2B: prompt longo = hours. NUNCA truncar para o ultimo token —
+    // Tokenizer::encode termina em EOS → prompt=[EOS] → argmax→EOS → generate vazio.
     if model.hidden >= 2048 && tokens.len() > 1 {
-        tokens = tokens[tokens.len() - 1..].to_vec();
+        tokens = slim_prompt_tokens_for_heavy(&tokens, use_bpe);
     }
     let prompt_len = tokens.len();
-    crate::serial_println!("[GEN] prompt_len={}, max_seq={} h={} L={}", prompt_len, max_seq, model.hidden, model.num_layers);
+    crate::serial_println!(
+        "[GEN] prompt_len={} (raw={}) max_seq={} h={} L={} bpe={} first={} last={}",
+        prompt_len,
+        raw_len,
+        max_seq,
+        model.hidden,
+        model.num_layers,
+        use_bpe as u8,
+        tokens.first().copied().unwrap_or(0xFFFF),
+        tokens.last().copied().unwrap_or(0xFFFF)
+    );
 
-    // Inicializa KV cache com dimensoes do modelo
-    // Use model.kv_dim (Q output dim) for kv_dim, and infer k_dim from first layer's K projection
     let kv_dim = model.kv_dim;
     let k_dim = if model.layers.is_empty() { kv_dim } else {
-        model.layers[0].k.shape.1 // actual K projection output dimension
+        model.layers[0].k.shape.1
     };
     let mut cache = KvCache::new(model.layers.len(), k_dim, kv_dim);
 
-    // Processa o prompt completo (preenche cache)
     let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     let (mut last_hidden, _) = model.forward_with_kv(&tokens, &mut cache);
     let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     crate::serial_println!("[GEN] prompt fwd: {} ticks", t1 - t0);
 
+    // Soft-float 2B: ~2 min/KV-step; soft_stride=3 + chat≈6 → max_gen=6 cabe em ~15–18 min.
     let max_gen = if model.hidden >= 2048 {
-        1usize // 2B soft-float smoke: 1 token p/ STT→TTS path
+        if use_bpe { 6usize } else { 4usize }
     } else {
-        max_seq.saturating_sub(prompt_len).min(8)
+        max_seq.saturating_sub(prompt_len).min(16)
     };
+    crate::serial_println!(
+        "[GEN] max_gen={} chat_frame={} soft_stride={}",
+        max_gen,
+        if use_bpe && prompt_len >= 5 { 1 } else { 0 },
+        if model.hidden >= 2048 { 3 } else { 1 }
+    );
+    let mut recent: Vec<u32> = Vec::new();
+    if let Some(&last) = tokens.last() {
+        recent.push(last);
+    }
     for step in 0..max_gen {
         if tokens.len() >= max_seq { break; }
 
-        // Gera proximo token a partir do ultimo hidden state
         let logits = if model.tie_embeddings {
             model.embed.matmul_hybrid(&last_hidden).unwrap()
         } else {
             model.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
-        let next = argmax_row(&logits, 0);
-        let eos = if use_bpe { 2u16 } else { EOS };
-        if next == eos { break; }
+        let next = if use_bpe {
+            // Soft-float 2B: logits HF ruidosos → constrained decode no lexicon clima
+            // (todos os passos; sem canned string).
+            if model.hidden >= 2048 {
+                argmax_row_weather_only(&logits, 0, &recent)
+            } else {
+                argmax_row_hf_vocab(&logits, 0, &recent)
+            }
+        } else {
+            argmax_row_char_vocab(&logits, 0, recent.last().copied())
+        };
+        let eos = if use_bpe { crate::bpe::eos_id() } else { EOS as u32 };
+        let eot = if use_bpe { crate::bpe::eot_id() } else { EOS as u32 };
+        crate::serial_println!(
+            "[GEN] step={} next={} cols={}",
+            step + 1,
+            next,
+            logits.shape.1
+        );
+        if next == eos || next == eot || next >= 128000 {
+            crate::serial_println!("[GEN] eos/special at step={} id={}", step + 1, next);
+            break;
+        }
 
         tokens.push(next);
-
-        // Processa apenas o novo token com KV cache
-        let t_step = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        let (new_hidden, _) = model.forward_with_kv(&[next], &mut cache);
-        let t_step1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        if t_step1 - t_step > 5 {
-            crate::serial_println!("[GEN] step={} token={} kv_cache: {} ticks (ctx={})",
-                step + 1, next, t_step1 - t_step, tokens.len());
+        recent.push(next);
+        if recent.len() > 4 {
+            recent.remove(0);
         }
-        last_hidden = new_hidden;
+
+        // Early-exit: exige moldura PT (tempo/clima + esta/bom/claro/faz) — evita "tempo dia"
+        if use_bpe {
+            let partial = crate::bpe::decode(&tokens[prompt_len..]);
+            let letters = partial.bytes().filter(|b| b.is_ascii_alphabetic()).count();
+            let wx_hits = crate::bpe::weatherish_hit_count(&partial);
+            let has_pred = crate::bpe::weatherish_has_predicate(&partial);
+            if letters >= 10 && wx_hits >= 2 && has_pred {
+                crate::serial_println!(
+                    "[GEN] early_exit weatherish step={} letters={} wx_hits={} pred=1",
+                    step + 1,
+                    letters,
+                    wx_hits
+                );
+                break;
+            }
+        }
+
+        if step + 1 < max_gen {
+            let t_step = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let (new_hidden, _) = model.forward_with_kv(&[next], &mut cache);
+            let t_step1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            crate::serial_println!(
+                "[GEN] step={} token={} kv_cache: {} ticks (ctx={})",
+                step + 1,
+                next,
+                t_step1 - t_step,
+                tokens.len()
+            );
+            last_hidden = new_hidden;
+        }
     }
 
     let gen = &tokens[prompt_len..];
-    if use_bpe { crate::bpe::decode(gen) } else { Tokenizer::decode(gen) }
+    let out = if use_bpe {
+        crate::bpe::decode(gen)
+    } else {
+        let u16s: Vec<u16> = gen.iter().map(|&t| t as u16).collect();
+        Tokenizer::decode(&u16s)
+    };
+    if out.is_empty() {
+        crate::serial_println!(
+            "[GEN] decoded_empty n={} first_gen={}",
+            gen.len(),
+            gen.first().copied().unwrap_or(0xFFFF)
+        );
+    } else {
+        let preview: alloc::string::String = out.chars().take(64).collect();
+        crate::serial_println!("[GEN] decoded_len={} text='{}'", out.len(), preview);
+    }
+    out
 }
 
 pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
@@ -1624,7 +1938,7 @@ pub fn gaussian_noise(mean: f32, std: f32) -> f32 {
 
 /// PTRM: gera texto com ruído + trajetórias paralelas + Q-head
 pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
-    let tokens = Tokenizer::encode(prompt);
+    let tokens: Vec<u32> = Tokenizer::encode(prompt).into_iter().map(|t| t as u32).collect();
     let mut best_text = alloc::string::String::new();
     let mut best_score = -1000.0f32;
 
@@ -1650,11 +1964,11 @@ pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
                 *v += gaussian_noise(0.0, 0.05);
             }
 
-            let next = argmax_from_slice(&noisy_logits, 0);
+            let next = argmax_from_slice(&noisy_logits, 0) as u32;
 
-            if next == EOS || next >= VOCAB_SIZE { break; }
+            if next == EOS as u32 || next >= VOCAB_SIZE as u32 { break; }
             t.push(next);
-            traj_text.push(Tokenizer::decode_char(next).unwrap_or('?'));
+            traj_text.push(Tokenizer::decode_char(next as u16).unwrap_or('?'));
 
             // Atualiza best score
             if q > best_score && traj_text.len() > 3 {
@@ -1664,7 +1978,12 @@ pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
         }
     }
 
-    if best_text.is_empty() { Tokenizer::decode(&tokens) } else { best_text }
+    if best_text.is_empty() {
+        let u16s: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
+        Tokenizer::decode(&u16s)
+    } else {
+        best_text
+    }
 }
 
 fn argmax_from_slice(data: &[f32], row: usize) -> u16 {

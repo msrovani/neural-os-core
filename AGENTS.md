@@ -11,7 +11,7 @@
 #   v2.0.0 (Jul 2026): Ecossistema de Anéis Lógicos — k_nano, k_ai, cortex, hermes, jarbas
 #   v2.0.0 (Jul 2026): Sprint 106 concluída — K²CHJ anéis lógicos + MicroPython/WASM ✅
 #   ADR-0042 (Jul 2026): Adequação Boot OK → visão — cadeia k-nano→k-ai→cortex→hermes→jarbas (N1–N5)
-#   Gate v2.0.0 = N1–N5 done; até lá = 1.x (v1.5.7 Cap; v1.7.0 = N1 + 2B LOADED; não "2.0 completo")
+#   Gate v2.0.0 = N1–N5 done; até lá = 1.x (v1.5.7 Cap; v1.7.0 = N1 + 2B LOADED; v1.7.2 = clima PASS parcial forte; não "2.0 completo")
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -168,7 +168,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: Sprint 107 — Voice I/O + pós v1.7.0 (N1 ✅, 2B LOADED; fix TTS/generate)
+# Current Sprint: Sprint 107 — Voice I/O; v1.7.2 loops 1–5 PASS parcial forte; gaps STT/soft-float/HWEXPERT/jarbas wire
 # Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho; sem sherpa/Vosk/Kokoro-primário
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
 # Não declarar v2.0.0 até ADR-0042 N1–N5.

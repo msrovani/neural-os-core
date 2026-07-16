@@ -189,6 +189,26 @@ def _build_seq(data, vocab=128, seq_len=32):
     toks = [hashlib.md5(c.encode()).digest()[0] % vocab for c in data[:seq_len]]
     return toks + [0] * (seq_len - len(toks))
 
+def _build_seq_bytes(data, vocab=128, seq_len=256):
+    """Byte-level tokenization: ord(c) % vocab preserves character identity."""
+    toks = [ord(c) % vocab for c in data[:seq_len]]
+    return toks + [0] * (seq_len - len(toks))
+
+
+def _load_rusttraining_pairs():
+    """Load Microsoft RustTraining dataset. Falls back to RUST_EXAMPLES if not found."""
+    pairs_path = TARGET / "rusttraining_pairs.json"
+    if not pairs_path.exists():
+        print("  [WARN] rusttraining_pairs.json not found, using 20 built-in examples")
+        return RUST_EXAMPLES
+    import json
+    with open(pairs_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    pairs = [(item["context"], item["code"]) for item in data]
+    print(f"  Loaded {len(pairs)} training pairs from {pairs_path}")
+    return pairs
+
+
 def train_rustcoder(epochs=200, batch_size=32):
     print("\n=== RustCoder Training ===")
     hidden, vocab, num_layers, num_heads, ffn_dim = 128, 128, 6, 8, 256
@@ -197,11 +217,11 @@ def train_rustcoder(epochs=200, batch_size=32):
     print(f"  Params: {sum(p.numel() for p in model.parameters()):,} | "
           f"Device: {DEVICE} | Epochs: {epochs} | Batch: {batch_size}")
 
-    import hashlib
+    pairs = _load_rusttraining_pairs()
     tokens, targets = [], []
-    for inp, out in RUST_EXAMPLES:
-        tokens.append(_build_seq(inp, vocab))
-        targets.append(_build_seq(out, vocab))
+    for inp, out in pairs:
+        tokens.append(_build_seq_bytes(inp, vocab))
+        targets.append(_build_seq_bytes(out, vocab))
 
     tokens_t = torch.tensor(tokens, device=DEVICE)
     targets_t = torch.tensor(targets, device=DEVICE)
@@ -230,14 +250,92 @@ def train_rustcoder(epochs=200, batch_size=32):
 
         if avg < best:
             best = avg
-            model.export_bitnet(TARGET / "rust_coder.bitnet", tok_data=b"rustcoder_v1")
+            model.export_bitnet(TARGET / "rust_coder.bitnet", tok_data=b"rustcoder_v2")
 
         if (epoch + 1) % 20 == 0 or epoch == 0:
             lr = sched.get_last_lr()[0]
             print(f"  Epoch {epoch+1:3d}/{epochs} | loss={avg:.4f} | lr={lr:.2e} | best={best:.4f}")
 
     print(f"  [OK] RustCoder: {hidden}dim x {num_layers}L, loss={best:.4f}")
-    model.export_bitnet(TARGET / "rust_coder.bitnet", tok_data=b"rustcoder_v1")
+    model.export_bitnet(TARGET / "rust_coder.bitnet", tok_data=b"rustcoder_v2")
+
+
+def train_rustcoder_microsoft(epochs=200, batch_size=32):
+    """Train RustCoder specifically on Microsoft RustTraining dataset (1291 pairs).
+    
+    Uses byte-level tokenization (ord-based, no hash collisions) and seq_len=256
+    to handle full Rust code examples. Automatically scales down model for CPU.
+    """
+    is_cpu = str(DEVICE) == "cpu"
+    if is_cpu:
+        hidden, num_layers, num_heads, ffn_dim = 64, 4, 4, 128
+        print("\n=== RustCoder Microsoft Training (CPU mode: 64dim x 4L) ===")
+    else:
+        hidden, num_layers, num_heads, ffn_dim = 128, 6, 8, 256
+        print("\n=== RustCoder Microsoft Training (GPU mode: 128dim x 6L) ===")
+    vocab, seq_len = 128, 256
+    model = BitNetLM(hidden=hidden, vocab=vocab, num_layers=num_layers,
+                     num_heads=num_heads, ffn_dim=ffn_dim).to(DEVICE)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"  Params: {total_params:,} | Device: {DEVICE} | Epochs: {epochs}")
+    print(f"  Batch: {batch_size} | SeqLen: {seq_len} | Vocab: {vocab}")
+
+    pairs = _load_rusttraining_pairs()
+    if len(pairs) <= 20:
+        print("  [FALLBACK] Only built-in examples, using standard training")
+        return train_rustcoder(epochs, batch_size)
+
+    tokens, targets = [], []
+    skipped = 0
+    for inp, out in pairs:
+        toks = _build_seq_bytes(inp, vocab, seq_len)
+        tgt = _build_seq_bytes(out, vocab, seq_len)
+        # Skip pairs where target is all padding (empty code)
+        if all(t == 0 for t in tgt):
+            skipped += 1
+            continue
+        tokens.append(toks)
+        targets.append(tgt)
+
+    print(f"  Pairs: {len(pairs)} loaded, {len(tokens)} usable, {skipped} skipped (empty target)")
+
+    tokens_t = torch.tensor(tokens, device=DEVICE)
+    targets_t = torch.tensor(targets, device=DEVICE)
+    loader = torch.utils.data.DataLoader(
+        torch.utils.data.TensorDataset(tokens_t, targets_t),
+        batch_size=batch_size, shuffle=True, drop_last=True)
+
+    opt = optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-5)
+    sched = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=epochs)
+    best = float('inf')
+
+    for epoch in range(epochs):
+        model.train()
+        total_loss = 0.0
+        batches = 0
+        for x, y in loader:
+            opt.zero_grad()
+            logits = model(x)
+            loss = F.cross_entropy(logits.view(-1, vocab), y.view(-1))
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            total_loss += loss.item()
+            batches += 1
+
+        avg = total_loss / max(batches, 1)
+        sched.step()
+
+        if avg < best:
+            best = avg
+            model.export_bitnet(TARGET / "rust_coder.bitnet", tok_data=b"rustcoder_microsoft_v1")
+
+        if (epoch + 1) % 10 == 0 or epoch == 0:
+            lr = sched.get_last_lr()[0]
+            print(f"  Epoch {epoch+1:3d}/{epochs} | loss={avg:.4f} | lr={lr:.2e} | best={best:.4f}")
+
+    print(f"  [OK] RustCoder Microsoft: {hidden}dim x {num_layers}L, loss={best:.4f}")
+    model.export_bitnet(TARGET / "rust_coder.bitnet", tok_data=b"rustcoder_microsoft_v1")
 
 # ─── HW Expert ─────────────────────────────────────────────────────────────
 
@@ -335,12 +433,13 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch", type=int, default=32)
     parser.add_argument("--rustcoder", action="store_true")
+    parser.add_argument("--microsoft", action="store_true")
     parser.add_argument("--hw", action="store_true")
     parser.add_argument("--bge", action="store_true")
     parser.add_argument("--all", action="store_true")
     args = parser.parse_args()
 
-    if not any([args.all, args.rustcoder, args.hw, args.bge]):
+    if not any([args.all, args.rustcoder, args.microsoft, args.hw, args.bge]):
         args.all = True
 
     print("=" * 60)
@@ -352,6 +451,8 @@ def main():
         convert_bge()
     if args.all or args.rustcoder:
         train_rustcoder(epochs=args.epochs, batch_size=args.batch)
+    if args.microsoft:
+        train_rustcoder_microsoft(epochs=args.epochs, batch_size=args.batch)
     if args.all or args.hw:
         train_hw_expert(epochs=args.epochs // 2)
 

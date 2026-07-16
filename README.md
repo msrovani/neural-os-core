@@ -1,14 +1,18 @@
-﻿# Neural OS Hermes v1.2.0 — AI-native Bare-metal Operating System 🏆
+﻿# Neural OS Hermes v2.0.0 — AI-native Bare-metal Operating System 🏆
 
 **The first AI-native operating system in the world. Bare-metal Rust. No Linux. No POSIX. No legacy. 0 errors.**
 
 ```
 ╔══════════════════════════════════╗
-║  Neural OS Hermes v1.2.0        ║
-║  "ATA Liberation"               ║
+║  Neural OS Hermes v2.0.0        ║
+║  "K²CHJ Core — Cognição"        ║
 ╚══════════════════════════════════╝
 
-  ✦ v1.2.0 — 0 erros, ~26.000 LOC
+  ✦ v2.0.0 — 0 erros, ~26.000 LOC, 247+ agentes
+  ✦ K²CHJ Workspace: k_nano → k_ai → cortex → hermes → jarbas
+  ✦ Sprint 106 concluída — ecossistema de anéis lógicos isolados
+  ✦ MicroPython/WASM sandbox + SkillOpt (Python→Rust no_std)
+  ✦ SOUL.md via VFS — jarbas isolado de ring0 (sem ATA_DRIVER direto)
   ✦ ATA PIO bug CORRIGIDO — disco finalmente lê!
   ✦ HW Expert v3 (61.453 VID/DID, 1M params)
   ✦ SelfHealing Firmware Pipeline (I3/I4)
@@ -16,18 +20,9 @@
   ✦ 3 camadas visuais: Orb + Hermes CLI + Window Manager
   ✦ HDA capture + playback (microfone + auto-falante)
   ✦ BrowserAgent real: HTTP GET via smoltcp TCP
-  ✦ FFT audio → animação do Orbe em tempo real
-  ✦ Zero-Trust Syscall Categories (ReadOnly/Ephemeral/Persistent/Hardware)
-  ✦ GGUF streaming (>4GB models via chunky FAT32 read)
-  ✦ RssAgent + EmailAgent (WWW agents via HTTP + SMTP)
-  ✦ Serial bridge com watchdog + DNS healthcheck
-  ✦ Frame allocator 8GB (bitmap estendido)
   ✦ GPU compute: Intel ring, NVIDIA PFIFO, AMD PM4, VirtIO-GPU
-  ✦ WASM Runtime: bytecode VM, PluginHub, SkillMarket, fuel metering
+  ✦ WASM Runtime + BitNet IDE (F4) + skills a quente via LLM
   ✦ JARVIS: sleep cycle, ego layer, emoção, memória episódica
-  ✦ SkillOpt + Structured Decoding (compressed FSM)
-  ✦ Self-Update A/B slots + rollback
-  ✦ Embedding: BGE-Small-EN-v1.5 (384-dim, convertido para .bitnet)
 
   → Port do JARVIS .NET MAUI para bare-metal Rust
   → github.com/msrovani/jarvis (app original)
@@ -37,15 +32,28 @@
 
 | Métrica | Valor |
 |---------|-------|
-| Versão | v0.97.0-rustcoder |
-| Sprints completos | **97** (1-97) |
-| Arquivos Rust | ~200 |
-| LOC total | ~42.000 |
-| Agentes | 248+ |
-| IDEIAS no Banco | **408** (#1-#408) |
+| Versão | **v2.0.0** (Sprint 106 concluída) |
+| Sprints completos | **106** (1-106) |
+| Arquivos Rust | ~180+ (5 crates K²CHJ + monólito) |
+| LOC total | ~26.000 |
+| Agentes | 247+ |
+| IDEIAS no Banco | **416+** |
 | Erros de compilação | **0** (warnings: dead code policy) |
 | GPU suportadas | NVIDIA, AMD, Intel (30+ modelos) |
-| Kernel boot | QEMU, VirtualBox, HW real (Intel 6xx) |
+| Kernel boot | QEMU (UEFI/TCG), VirtualBox, HW real (Intel 6xx) |
+
+## Arquitetura K²CHJ (v2.0)
+
+| Crate | Ring | Função |
+|-------|------|--------|
+| `k_nano` | 0 | HAL, drivers, PCI, memory, interrupts |
+| `k_ai` | 1 | Sondagem, SelfHeal, Trust |
+| `cortex` | 2 | LLM, BitNet, BPE, Trinity MoE |
+| `hermes` | 2 | Orquestração: WASM, MicroPython, rede, skills |
+| `jarbas` | 2 | HCI: display, áudio, persona JARVIS |
+| `neural-kernel` | — | Bin de integração (monólito → migração gradual) |
+
+**Princípio:** ring 2 não acessa ring 0 diretamente — filesystem via `neural_kernel::fs::read_vfs()`.
 
 ## O que torna único
 
@@ -57,12 +65,13 @@ DisplayAgent renderiza o Compositor diretamente — sem X11, sem Wayland:
 - **F4**: **BitNet IDE** — digite `[GEN]` para criar WASM skills → viram ícones no desktop
 - Avatar JARVIS pulsante no canto inferior direito
 
-### WASM Runtime + Hybrid Agents
+### WASM + MicroPython Sandbox (Sprint 106)
 - `wasm_rt.rs`: WASM Skill Runtime com MemoryPool de 256 KB por skill
-- 15 WASI→Skill mappings (fd_read→FileAgent, poll_oneoff→EventBusAgent, etc)
+- `micropython_wasm.rs`: MicroPython compilado para `.wasm`, bridge WASI→Skill (20+ mapeamentos)
+- `skill_opt.rs`: Python efêmero → WASM persistente → tradução Rust no_std via Cortex LLM
 - `HybridRegistry`: agentes kernel + WASM + MCP externo
 
-### GPU Compute Bare-metal (Sprint 84-85)
+### GPU Compute Bare-metal
 - BAR0/BAR1 mapping UC para NVIDIA/AMD/Intel
 - SPSC job ring com doorbell por vendor
 - VRAM buddy allocator power-of-2 (4KB-4GB)
@@ -71,26 +80,12 @@ DisplayAgent renderiza o Compositor diretamente — sem X11, sem Wayland:
 ### JARVIS Cognitive Engine
 - SOUL.md Personality + Fluid Persona (3 modos: Coach/Tutor/Tool)
 - Emotion Analysis (7 emoções + sarcasmo)
-- Session Compression (4 estratégias) + Notification Gate (4 urgências)
-- Dreaming/Consolidation (insights sintéticos)
-- Ego Layer (confidence tracking, `can_answer()`)
-- Auto-Skill Generation (≥3 repetições → skill)
-- Babel-Index (monitor de entropia da memória)
-
-### Memory Systems (Sprint 89)
-- SHA-256 Dedup + Privacy Filter + TTL Eviction
-- Ebbinghaus Decay + BM25 Hybrid Search
-- 4-Tier Consolidation (Working→Episodic→Semantic→Procedural)
-- Metacognitive Guard + Draft→Review→Merge
-- Atkinson-Shiffrin 3-tier (Sensory→STM→LTM)
-- Bi-temporal Knowledge Graph
-- BGE-Small-EN-v1.5 embedding (384-dim, convertido ONNX→.bitnet)
+- Session Compression + Notification Gate + Dreaming/Consolidation
+- Ego Layer (confidence tracking) + Auto-Skill Generation
+- Memory Systems: KG bitemporal, BGE embedding, Ebbinghaus decay
 
 ### Boot Agent-First (8 fases)
 O LLM carrega ANTES do PCI scan. Cortex acompanha o hardware sendo descoberto.
-
-### Self-Healing com LLM
-Panics são classificados, analisados e recuperados com ação sugerida pelo LLM.
 
 ---
 
@@ -98,19 +93,14 @@ Panics são classificados, analisados e recuperados com ação sugerida pelo LLM
 
 | Sprint | Bloco | Status |
 |--------|-------|--------|
-| 84-85 | GPU Foundations + Decode | ✅ |
-| 86 | JARVIS Persona | ✅ |
-| 87 | Security + AHCI | ✅ |
-| 88 | Emotion + Cache | ✅ |
-| 89 | Memory + BGE | ✅ |
-| 90 | Deep Cognitive | ✅ |
-| 91 | Desktop UI + Polimento | ✅ |
-| 92 | LAN + Dependências | ✅ |
-| 93 | WASM Runtime + IDE | ✅ |
-| **94+** | Voice, Vision, NPU, AIOS | 🟡 |
-| **97** | RustCoder Expert + Trinity MoE | ✅ |
+| 100 | Code Freeze v1.0.0 | ✅ |
+| 101-102 | TTS/STT, GPU Compute, HW Expert v3 | ✅ |
+| 103-105 | K²CHJ Migration + Ponytail Audit | ✅ |
+| **106** | **Ecossistema de Anéis Lógicos (10/10)** | ✅ |
+| **107** | Voice I/O Pipeline (TTS→STT→LLM→TTS) | ⏳ |
+| **108** | Self-Evolving Agents | ⏳ |
 
-**Plano completo:** `docs/sprint-plan-92-99.md`
+**Documentação:** `ROADMAP.md` · `TODO.md` · `AGENTS.md` · `docs/memory/STATE.md`
 
 ---
 

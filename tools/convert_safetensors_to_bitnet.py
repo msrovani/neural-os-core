@@ -30,11 +30,17 @@ def convert_safetensors_to_bitnet(safetensors_path, config_path, output_path):
     max_seq = cfg.get("max_position_embeddings", 2048)
     intermediate_size = cfg["intermediate_size"]
     num_kv_heads = cfg.get("num_key_value_heads", num_heads)
-    q_dim = cfg.get("head_dim", hidden // num_heads) * num_heads
+    # BitNet-b1.58-2B-4T: HF head_dim=128 é enganoso; packing real = head_dim=32.
+    if hidden == 2560 and num_heads == 20 and num_kv_heads == 5:
+        head_dim = 32
+    else:
+        head_dim = cfg.get("head_dim", hidden // num_heads)
+    q_dim = head_dim * num_heads
     tie_embeddings = cfg.get("tie_word_embeddings", False)
 
     print(f"  Model: hidden={hidden} layers={num_layers} heads={num_heads}")
     print(f"  Vocab: {vocab_size} max_seq={max_seq} ffn={intermediate_size}")
+    print(f"  q_dim={q_dim} (head_dim={head_dim}) kv_heads={num_kv_heads}")
 
     # Write .bitnet v4 header
     MAGIC = 0xBE11BE11

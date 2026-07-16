@@ -254,7 +254,7 @@ v1 format (Sprint 25–26) is loadable but deprecated:
 
 | Model | Source | Params | .bitnet size | Arch | Status |
 |---|---|---|---|---|---|
-| micro.bitnet | `tools/gen_micro_model.py` | 272K | 12 KB | 64h,2L,2H,256voc | ✅ Dev fallback |
+| BITNET2B.BIN | `target/bitnet_2B.bitnet` | 202 MB | 2B params | 2B,12L,16H,32kv | ✅ Modelo real |
 | **1bitLLM 700M** | `1bitLLM/bitnet_b1_58-large` | 728M | ~182 MB | 1536h,24L,16H,32Kvoc | 🔄 Sprint 85 target |
 | Microsoft 2B-4T | `microsoft/bitnet-b1.58-2B-4T` | 850M | 1,464 MB | 2560h,30L,20H,128Kvoc | ⏳ QEMU WHPX or HW |
 | Microsoft 2B-4T-bf16 | `microsoft/bitnet-b1.58-2B-4T-bf16` | 850M | 3.2 GB (BF16) | — | 🔄 Training only |

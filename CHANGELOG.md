@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.7.2] — 2026-07-16 — Sprint 107 loops 1–5 (clima PASS parcial forte)
+
+Marco funcional pós-ADR-0045. Package Cargo permanece `1.0.0` (hábito tag-only).
+
+### Clima e2e (Loop 5 — `logs/boot_whpx_20260716_033322.txt`)
+- GEN: `decoded_len=12 text='O tempo esta'` — frase PT climática (logits + máscara; não canned)
+- TTS: Piper neural-lite (`emb.weight`) · `pcm_samples=15428` + FB paint
+- WakeWordAgent registrado no AgentFleet
+- STT CTC LOADED (path real) mas `ctc=''` → seed prompt
+- Experts: RUSTCODER/STT/BGE OK; HWEXPERT parse FAILED (header vocab u16)
+
+### Code (loops 1–5)
+- cortex/bpe generate constrained weather + chat frame Llama
+- Piper neural-lite + convert_piper; STT path hardening
+- WakeWord register; QEMU loaders BPE/HW/RustCoder/STT; weather e2e scripts
+
+### Known gaps
+- Soft-float tkn/s (sem fix nesta release)
+- STT CTC empty; Mic→WakeWord→STT→LLM→TTS EventBus; Piper VITS pleno; HW Expert re-export; jarbas/audio wiring
+
 ## [1.7.1] — 2026-07-16 — ADR-0045 Sound Voice Stack (docs)
 
 Documentação do stack de voz **real** no boot. Sem mudança de runtime. Package Cargo permanece `1.0.0` (hábito tag-only).
@@ -12,7 +32,7 @@ Documentação do stack de voz **real** no boot. Sem mudança de runtime. Packag
 - Supersede como primário: sherpa-onnx, Pocket TTS, Kokoro-82M, Vosk, Wyoming, Rustpotter
 - IDEA_BANK: #75/#83 ✅; #84 UAC 🟡 futuro; #315.21–25 / #315.N+1 / #360 ❌ supersedido; B-01 voz desbloqueado (SLIP #415)
 - STATE / SESSION_109 / SESSION_INDEX / TECNOLOGIAS §5 / TODO Sprint 107 alinhados
-- Gaps Sprint 107 documentados (WakeWord não registrado; Piper neural fraco; loop TTS↔STT↔LLM aberto)
+- Gaps Sprint 107 documentados (WakeWord não registrado; Piper neural fraco; loop TTS↔STT↔LLM aberto) — **superseded by 1.7.2** (WakeWord registrado; GEN+TTS neural-lite)
 
 ## [1.7.0] — 2026-07-15 — N1 ✅ + BitNet 2B LOADED (N3 parcial)
 
