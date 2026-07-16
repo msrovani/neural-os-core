@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_083.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # SESSION 083-090 — Sprint 86-87 completos + 4 maiores pendentes resolvidos
 
 **Data:** 2026-07-08

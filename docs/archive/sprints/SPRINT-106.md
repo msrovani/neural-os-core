@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/SPRINT-106.md`
+> Fonte atual: `docs/memory/STATE.md` · `ROADMAP.md`
+
 # Sprint 106-1: Estruturar Cargo workspace estrito
 
 **Data:** 2026-07-13  
@@ -6,7 +10,7 @@
 
 ## Ações
 
-1. **Backup Crates:** Copiado `crates/k_ia` → `crates/k_ai` e `crates/jarvis` → `crates/jarbas` (preservado originais)
+1. **Backup Crates:** Copiado `crates/k_ia` → `crates/k_ai` e `crates/jarvis` → `crates/jarbas`; originais arquivados depois em `LEGACY/k_ia` e `LEGACY/jarvis`
 2. **Cargo.toml Raiz:** Atualizado `members` com k_ai e jarbas, removido k_ia e jarvis
 3. **Cargo.toml Internos:** Atualizados versões para 2.0.0, dependências cross-crate
 4. **Use Statements:** Atualizados `use k_ia::` → `use k_ai::`, `use jarvis::` → `use jarbas::`
@@ -24,8 +28,8 @@
 - `crates/jarbas/Cargo.toml` (novo, versão 2.0.0)
 - `crates/hermes/Cargo.toml` (dependências)
 - `crates/cortex/Cargo.toml` (dependências)
-- `crates/k_ia/Cargo.toml` (backup)
-- `crates/jarvis/Cargo.toml` (backup)
+- `LEGACY/k_ia/Cargo.toml` (backup original, arquivado em 2026-07-16)
+- `LEGACY/jarvis/Cargo.toml` (backup original, arquivado em 2026-07-16)
 
 ---
 

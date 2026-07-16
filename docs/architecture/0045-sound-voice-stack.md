@@ -20,9 +20,9 @@ Documentação e IDEA_BANK ainda apontavam engines externos como 🟡/🔴 “p�
 | Caminho | Papel |
 |---------|--------|
 | `crates/neural-kernel/src/audio/*` | **Truth** — compilado e registrado no boot do monólito |
-| `crates/jarbas/src/audio/*` | **Espelho de migração** K²CHJ — cópia estrutural; **ainda não wired** como binário de voz |
+| `crates/jarbas/src/audio/*` | **Espelho wired no crate `jarbas`**, mas não re-exportado/adotado como truth pelo binário |
 
-Até o wiring explícito `main` → crate `jarbas` para áudio, qualquer mudança de comportamento deve ir primeiro (ou só) em `neural-kernel`.
+O crate `jarbas` está wired desde N5.7; o cutover específico de áudio continua pendente. Até ele, mudanças de comportamento devem ir primeiro (ou só) em `neural-kernel`.
 
 ---
 
@@ -38,7 +38,7 @@ Até o wiring explícito `main` → crate `jarbas` para áudio, qualquer mudanç
 
 - Declarar pipeline TTS→STT→LLM→TTS “completo” (leftovers em Sprint Sound).  
 - Afirmar Piper VITS/HiFi-GAN pleno quando o boot usa neural-lite / formant.  
-- Migrar o binário para `jarbas/audio` nesta ADR (só documentar o espelho; wire → Sound).  
+- Trocar o truth path do binário para `jarbas/audio` nesta ADR (cutover → Sound).
 - Bloquear ADR-0042 N2→N5 com gaps de voz.
 
 ---
@@ -66,7 +66,7 @@ Speaker (HDA SD1) / FB paint ← mixer ← Piper VITS | formant ← TTS cmd
 | UAC stub | `audio/usb.rs` | ⏳ PCI probe; enum real → Sound (#84) |
 | SER | `audio/ser.rs` | ▶️ heurístico; polish → Sound |
 | Pipeline / frames | `pipeline.rs`, `frame.rs`, `ringbuf.rs` | ▶️ skinny 107 ✅; runtime pleno → Sound |
-| jarbas/audio wire | `jarbas/src/audio/*` | ⏳ espelho; allocator conflict → Sound |
+| jarbas/audio cutover | `jarbas/src/audio/*` | ⏳ crate wired; módulo não re-exportado no bin → Sound |
 
 **Agentes registrados (boot):** `HdaAudioAgent`, `UsbAudioAgent` (stub), `JarvisVoiceAgent`, `WakeWordAgent`.
 
@@ -96,7 +96,7 @@ Sprint 107 Voice está **FECHADA** (PASS parcial forte+). Pendências abaixo **n
 3. **Piper VITS pleno** — neural-lite ≠ HiFi-GAN (`convert_piper_to_bitnet.py`).  
 4. **Soft-float latency** — known blocker; defer sob Sound (sem fake).  
 5. **UAC real** (#84) quando HDA ausente.  
-6. **Wiring jarbas** — `jarbas-bridge` / resolver `#[global_allocator]`.  
+6. **Unificar audio truth** — crate `jarbas` já wired; convergir wakeword e re-exportar `jarbas::audio` no bin.
 7. **VAD / SER / Wake ML polish**.
 
 Soft-float qualidade PT do 2B também toca **N3** (ADR-0042) — não só voz.
@@ -117,7 +117,7 @@ Soft-float qualidade PT do 2B também toca **N3** (ADR-0042) — não só voz.
 | #315.25 Voice pipeline sherpa | ❌ supersedido como spec | Pipeline nativo = Sprint Sound |
 | #315.N+1 Piper+Vosk+Wyoming | ❌ supersedido | Piper+CTC nativo; leftovers → Sound |
 | #360 Kokoro-82M | ❌ supersedido | Piper é o TTS primário |
-| #438 N5 voz | ⏳ parcial | UI/persona = ADR-42; stack voz pleno = Sound |
+| #438 N5 voz | ✅ funcional / qualidade pendente | UI/persona e expressão = ADR-42; voz production-grade = Sound |
 
 ---
 

@@ -48,20 +48,14 @@ Este documento guia a configuração completa do ambiente de desenvolvimento do 
 git clone https://github.com/msrovani/neural-os-core.git
 cd neural-os-core
 
-# Build (leva ~2-5min na primeira vez)
-cargo build --release
+# Build kernel (soft-float, alias recomendado)
+cargo nk
 
-# Verificação rápida (0 erros, 0 warnings)
-cargo check --release
+# Verificação rápida
+cargo clean -p neural-kernel && cargo nk
 ```
 
-**Esperado:**
-```
-   Compiling neural-kernel v2.0.0
-   Compiling boot v0.1.0
-    Finished `release` profile [optimized] target(s) in 0.30s
-    0 errors, 0 warnings
-```
+**Esperado:** `Finished release profile` com **0 erros** (warnings dead-code são política conhecida).
 
 ---
 
@@ -278,12 +272,11 @@ while ($true) {
 ### Features de build (QEMU HIT vs HW)
 | Feature | Default | Uso |
 |---------|---------|-----|
-| *(nenhuma)* | HW / release | Sem skinny STT-sim / seed clima / lexicon constrained |
-| `weather-e2e` | off | Reativa path Sprint 107 HIT (`run_weather_e2e.ps1`) |
-| `fat-boot-log` | **on no `crates/boot`** (HW) | Persiste `B*.LOG` no FAT; serial sempre ativo |
-| `jarbas-bridge` | off | Cross-check TOPIC_* (não muda boot default) |
+| *(nenhuma)* | HW / release | Boot padrão; sem skinny STT-sim / seed clima |
+| `weather-e2e` | off | Path Sprint 107 HIT (`run_weather_e2e.ps1`) |
+| `fat-boot-log` | off no kernel | Persiste `B*.LOG` no FAT; serial sempre ativo |
 
-Para reativar HIT clima QEMU: adicione `weather-e2e` nas features do `neural-kernel` em `crates/boot/Cargo.toml` e rebuild `cargo build --release -p boot`.
+Para reativar HIT clima QEMU: `cargo nk --features weather-e2e` e rebuild boot (`cargo build --release -p boot`).
 
 ---
 
@@ -321,7 +314,7 @@ python tools/download_firmware.py
 
 ```
 neural-os-core/
-├── AGENTS.md              # → REGRAS PARA AGENTES DE IA (leia primeiro!)
+├── AGENTS.md              # Regras para agentes de IA (leia primeiro)
 ├── TECNOLOGIAS.md         # Catálogo de PI e inovações
 ├── HOWTO.md               # ← Você está aqui
 ├── README.md              # Visão geral
@@ -331,48 +324,33 @@ neural-os-core/
 ├── SUMMARY.md             # Resumo executivo
 │
 ├── crates/
-│   ├── neural-kernel/     # → Kernel principal (~16.500 LOC)
+│   ├── neural-kernel/     # Bin de boot (~integração + residuals)
 │   │   └── src/
-│   │       ├── main.rs    # Entry point + boot sequence
-│   │       ├── agents.rs  # → 247+ agentes (Hermes, Cortex, etc)
-│   │       ├── cortex.rs  # → LLM, Trinity MoE, HW Expert
-│   │       ├── hermes.rs  # → Intent router, ReAct, Workflow
-│   │       ├── ata.rs     # → ATA PIO driver (fix v1.2.0!)
-│   │       ├── e1000.rs   # → NIC driver
-│   │       ├── display/   # → Framebuffer + compositor + orb
-│   │       ├── audio/     # → HDA driver + TTS + wake word
-│   │       ├── gpu/       # → NVIDIA/Intel/AMD + firmware
-│   │       └── pci.rs     # → PCI scan
-│   ├── agent-core/        # → Agent trait, scheduler
-│   ├── skill-registry/    # → Skill registry, MCP, FanOut
-│   ├── event-bus/         # → IPC pub/sub + MemoryTree
-│   └── ticket-lock/       # → Lock FIFO
+│   │       ├── main.rs    # Entry + boot 8 fases
+│   │       ├── agents.rs  # Fleet nativo + registry
+│   │       ├── cortex.rs  # Generate path, EventBus (residual)
+│   │       ├── audio/     # Truth path voz (ADR-0045)
+│   │       ├── net*       # NETSTACK singleton (residual)
+│   │       └── fs/        # VFS monólito (residual)
+│   ├── k_nano/            # Ring 0 — HAL, drivers, PCI
+│   ├── k_ai/              # SelfHeal, Trust
+│   ├── cortex/            # BitNet, Trinity, tensores
+│   ├── hermes/            # WASM, rede, skills, cron
+│   ├── jarbas/            # Display, GPU, persona
+│   ├── agent-core/        # Agent trait, scheduler
+│   ├── skill-registry/    # Skills, MCP
+│   ├── event-bus/         # IPC pub/sub
+│   ├── ticket-lock/       # Lock FIFO
+│   └── boot/              # Bootloader 0.11 UEFI/BIOS
 │
-├── firmware/              # → Firmware blobs git-tracked
-│   ├── nvidia/gp108/      #   FECS+GPCCS (39KB)
-│   ├── i915/              #   GuC+HuC+DMC SKL/KBL (3.8MB)
-│   ├── rtl_nic/           #   Realtek NIC (217KB)
-│   ├── rtlwifi/           #   Realtek WiFi (1MB)
-│   └── intel/iwlwifi/     #   Intel AX200/AX210 (7.5MB)
-│
-├── tools/                 # → Scripts Python
-│   ├── train_hw_expert_v3.py      # Treino HW Expert
-│   ├── extract_sdio_hw.py         # Extração SDIO HWIDs
-│   ├── extract_firmware_metadata.py # Extração WHENCE
-│   ├── fetch_pci_usb_ids.py       # Download pci/usb-ids
-│   ├── download_firmware.py       # Download firmware
-│   ├── mkfat32.py / build_image.py # Gerador de imagem
-│   ├── serial_bridge.py           # Bridge SLIP/QEMU
-│   └── test_firmware.py           # Validação de blobs
-│
+├── firmware/              # Blobs git-tracked (GPU/WiFi/NIC)
+├── tools/                 # Scripts Python (build, treino, bridge)
 ├── docs/
-│   ├── architecture/      # → 40 ADRs (decisões arquiteturais)
-│   ├── memory/            # → STATE.md, IDEA_BANK.md, Sessions
-│   └── sprint-plan-v1.1.x.md  # Plano de sprints
+│   ├── architecture/      # ADRs (0041–0047+)
+│   └── memory/            # STATE.md, IDEA_BANK, Sessions
 │
-├── run-qemu-uefi.ps1      # → Script QEMU (Windows)
-├── run-qemu.ps1           # → Script QEMU BIOS (Windows)
-└── .gitignore
+├── run-qemu-whpx.ps1      # QEMU WHPX + bridge serial
+└── run-qemu-uefi.ps1      # QEMU UEFI
 ```
 
 ---
@@ -397,8 +375,8 @@ Seu objetivo é ajudar o usuário a configurar, entender e contribuir com o AIOS
 
 1. **NUNCA hardcode skills no enum Intent.** Skills são geradas a quente pelo LLM e registradas pelo SkillObserver. O fluxo correto é: usuário → WakeWord → Hermes → Chat → LLM → gera skill → SkillObserver registra → executa.
 2. **NUNCA use stubs.** Se algo não pode ser implementado completamente, documente o bloqueio em `docs/dead-ends.md` com a tag CRM-XXX.
-3. **SEMPRE execute `cargo check --release` antes de considerar uma mudança completa.**
-4. **SEMPRE execute `cargo clean -p neural-kernel && cargo check --release` quando erros somem misteriosamente** — o cache incremental mascara erros.
+3. **SEMPRE execute `cargo clean -p neural-kernel && cargo nk` antes de considerar uma mudança completa.**
+4. **SEMPRE execute `cargo clean -p neural-kernel && cargo nk` quando erros somem misteriosamente** — cache incremental mascara erros.
 5. **Builds isolados:** usar `--target-dir target/agent-<nome>` (ou `target/check-<nome>`, etc.) — **nunca** `target-*` na raiz do repo.
 6. **SEMPRE verifique `TECNOLOGIAS.md` antes de decidir qual tecnologia usar** — evite reinventar a roda.
 7. **NUNCA adicione dependências externas** sem justificativa forte. O kernel é no_std. Prefira implementar do que adicionar crates.
@@ -414,7 +392,7 @@ flowchart TD
     C --> D{Implementar?}
     D -->|Sim| E[Buscar no TECNOLOGIAS.md referências]
     E --> F[Implementar com #![no_std]]
-    F --> G[cargo check --release]
+    F --> G[cargo nk]
     G --> H{0 erros?}
     H -->|Sim| I[Documentar lição em AGENTS.md]
     H -->|Não| J[Corrigir + cargo clean -p neural-kernel]
@@ -425,17 +403,14 @@ flowchart TD
 #### 8.4 Comandos Úteis para Agentes
 
 ```bash
-# Verificar compilação
-cargo check --release
+# Verificar compilação (canônico)
+cargo nk
 
-# Build isolado (agentes paralelos) — sob target/, nunca target-* na raiz
-cargo check --release --target-dir target/agent-<nome>
+# Check com clean (revela erros mascarados)
+cargo clean -p neural-kernel && cargo nk
 
-# Build completo
-cargo build --release
-
-# Check com clean (revela erros mascarados pelo cache)
-cargo clean -p neural-kernel && cargo check --release
+# Build isolado (agentes paralelos)
+cargo nk --target-dir target/agent-<nome>
 
 # Gerar imagem de disco
 python tools/build_image.py
@@ -460,13 +435,13 @@ git checkout -b feature/minha-feature
 ```
 
 ### 2. Implementar
-Siga o plano de sprints em `docs/sprint-plan-v1.1.x.md`.
+Consulte o plano histórico em `docs/archive/sprints/sprint-plan-v1.1.x.md`.
 
 ### 3. Compilar
 ```bash
-cargo build --release
-# Se erros estranhos aparecerem:
-cargo clean -p neural-kernel && cargo build --release
+cargo nk
+# Se erros estranhos:
+cargo clean -p neural-kernel && cargo nk
 ```
 
 ### 4. Testar em QEMU
@@ -500,7 +475,7 @@ git push
 | Problema | Causa | Solução |
 |----------|-------|---------|
 | `error: linker 'cc' not found` | Falta GCC/MSYS2 | Instale MSYS2 com `pacman -S mingw-w64-ucrt-x86_64-gcc` |
-| `error: could not compile neural-kernel` + erros estranhos | Cache incremental corrompido | `cargo clean -p neural-kernel && cargo check --release` |
+| `error: could not compile neural-kernel` + erros estranhos | Cache incremental | `cargo clean -p neural-kernel && cargo nk` |
 | `[MBR] Signature 55AA nao encontrada` | Boot image nao tem FAT32 | `python tools\build_image.py` → `target\disk_qemu.raw` |
 | QEMU nao abre | OVMF nao encontrado | Copie OVMF.fd para `target/ovmf.fd` |
 | `[DISPLAY] Sem framebuffer UEFI` | QEMU sem UEFI | Use `-bios` com OVMF ou execute `.\run-qemu-uefi.ps1` |
@@ -527,5 +502,5 @@ git push
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v2.0.0**  
+> **AIOS K²CHJ — Neural OS Hermes v1.8.0**
 > *"O hardware real não perdoa. O silício obedece."*

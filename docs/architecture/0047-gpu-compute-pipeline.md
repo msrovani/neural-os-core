@@ -246,6 +246,22 @@ PagedAttention, INT8/FP16 KV cache, HydraMoE.
 
 **O que pegar**: o conceito de hot-swap de adapters LoRA na VRAM. Se tivermos múltiplos experts no MoE, podemos ter os pesos de todos em VRAM e trocar o ativo conforme o routing.
 
+### 3.8 N-gram Speculative Decoding (llama.cpp, Alok 2026)
+
+```
+Tweet: https://x.com/analogalok/status/2077718647905333549
+Técnica: rolling LCG hash → O(1) lookup → draft M tokens → GPU verify
+```
+
+Aceleração de inferência **sem draft model, sem VRAM extra**:
+
+- Rolling hash da janela de N tokens → O(1) lookup no KV cache
+- Draft de M tokens copiados da ocorrência anterior
+- GPU verifica todo o batch draft em paralelo
+- Resultado: **2× speed** no Gemma 4 26B MoE com T4, zero overhead
+
+**Sinergia com GPU pipeline**: N-gram gera drafts que o pipeline GPU verifica via DP4A. É o mecanismo de speculative decoding mais leve que existe — ideal para nosso orçamento de VRAM (2GB) onde não cabe um draft model separado. Implementação trivial (~150 LOC) que já acelera a inferência enquanto os pilares G1-G5 são construídos.
+
 ---
 
 ## 4. Matmul Ternário na GPU: O Pulo do Gato
@@ -1064,6 +1080,9 @@ Fase 5 — Inference Pipeline (Sprint 113-114, ~500 LOC)
 
 10. **Maya** — Kolaparthi, J. S. (2026). *Maya: An AI-Native OS Kernel*. Zenodo:10.5281/zenodo.19218503
     - Scheduler PPO, anomaly detector em I/O, 109ns IPC
+
+11. **Alok** (2026). *N-gram speculative decoding in llama.cpp*. https://x.com/analogalok/status/2077718647905333549
+    - Rolling LCG hash, O(1) lookup, draft M tokens, GPU verify. 2× speedup, zero VRAM extra
 
 ### 11.2 Documentação interna
 

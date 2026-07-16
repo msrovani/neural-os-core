@@ -4,21 +4,18 @@
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
-#   Sprints 106+: v2.0 cognição plena — LLM agent 24/7, multi-turn, voice I/O
-#   v1.1.x: GPU Compute + WiFi + Visual 3-camadas + SelfHealing
-#   v1.2.0: ATA PIO Bug Fix — disco finalmente lê corretamente
-#   v1.5.0 (Jul 2026): K²CHJ Workspace Migration — monólito → 5 crates
-#   v2.0.0 (Jul 2026): Ecossistema de Anéis Lógicos — k_nano, k_ai, cortex, hermes, jarbas
-#   v2.0.0 (Jul 2026): Sprint 106 concluída — K²CHJ anéis lógicos + MicroPython/WASM ✅
-#   ADR-0042 (Jul 2026): Adequação Boot OK → visão — cadeia k-nano→k-ai→cortex→hermes→jarbas (N1–N5)
+#   Sprints 106+: K²CHJ wire + ADR-0042 — marco v1.8.0 (Jul 2026)
+#   v1.8.0 = N1–N5 + wire crates; v2.0.0 = gate após review (não declarado)
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação K²CHJ (Jul 2026); não "2.0 completo" sem review
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
 # ════════════════════════════════════════════════════════
-# docs/sprint-plan-92-100.md    → Roadmap v1.0 completo (Sprints 92-100)
+# docs/archive/sprints/sprint-plan-92-100.md → Roadmap histórico v1.0
 # TECNOLOGIAS.md               → Catálogo completo de todas as tecnologias (100+)
-# docs/sprint-plan-92-99.md    → Roadmap v1.0 legado
+# docs/architecture/INDEX.md   → Lifecycle e conflitos de IDs das ADRs
+# docs/GOVERNANCE.md           → Ciclo IDEA→ADR→sprint→check
+# docs/archive/                → Sessões, planos e notas históricas
 # docs/memory/STATE.md         → Estado atual do kernel
 # docs/memory/IDEA_BANK.md     → 416+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
@@ -27,13 +24,12 @@
 # CHANGELOG.md                 → Histórico de versões
 # ROADMAP.md                   → Roadmap completo (v1.0 → v2.0)
 # TODO.md                      → Checklist mestre de tarefas
-# crates/k_nano/src/           → Ring 0 — sistema LEGÍVEL (HAL, Caps, traps, drivers)
-# crates/k_ai/src/             → AI para HARDWARE + SelfHeal + Trust + HMI máquina
-#                              → safety/security/optimizer/Sleep/AutoLearn: hermes
-#                              → boot bin ainda usa cópias em neural-kernel (migração gradual)
-# crates/cortex/src/           → CÉREBRO — MoE, aprendizado, busca, tensores
-# crates/hermes/src/           → ORQUESTRADOR agentic — intent, skills, cria apps/conteúdo
-# crates/jarbas/src/           → EGO / persona / +10% — UI, humor, voz, frontend
+# crates/k_nano/src/           → Ring 0 — HAL, drivers, PCI, memory (wired no bin)
+# crates/k_ai/src/             → SelfHeal, Trust, inventário (wired N2.5)
+# crates/cortex/src/           → LLM, MoE, tensores (wired N3.5)
+# crates/hermes/src/           → Orquestração, WASM, rede, skills (wired N4.6)
+# crates/jarbas/src/           → Display, GPU, persona (wired N5.7)
+# crates/neural-kernel/src/    → Bin boot — residuals: cortex.rs, audio/*, agents.rs, net*, fs/*
 # tools/                       → Scripts Python (treino, extração SDIO, bridge)
 # ════════════════════════════════════════════════════════
 
@@ -46,7 +42,7 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 3. **Hardware Rings:** Ring 0 (NPU — intent routing), Ring 1 (GPU — tensor), Ring 2 (CPU — agents/skills).
 4. **HW Real First:** QEMU/VirtualBox são apenas **desenvolvimento e debug**. Validação final sempre em HW real.
 5. **Trinity MoE:** LLM + router treinável + experts (RustCoder, HWIdentify, etc). AutoLearn: detecta necessidade → treina → registra.
-6. **Toda tecnologia nova DEVE ser registrada em `docs/TECNOLOGIAS.md`** com ADR, IDEA, arquivo e sprint. Rodar `tools/update_tecnologias.py` após alterações.
+6. **Toda tecnologia nova DEVE ser registrada em `TECNOLOGIAS.md`** com ADR, IDEA, arquivo e sprint. Rodar `tools/update_tecnologias.py` após alterações.
 
 # Agent/Skill-First Design Principles
 - **Unificação Ontológica:** Tudo é Agent. Drivers → DriverAgent, Daemons → InferenceAgent/RouterAgent.
@@ -111,16 +107,17 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **Manutenção TECNOLOGIAS.md:** Toda tecnologia nova = linha nova. Avanço de status → update barra. Rodar `tools/update_tecnologias.py`.
 
 # Memory & Documentation
-- ADRs em `docs/architecture/` (39 documentos). STATE.md com estado atual. SESSION_NNN.md para debug.
+- ADRs em `docs/architecture/`; lifecycle e conflitos no `docs/architecture/INDEX.md`. STATE.md contém apenas o estado atual; SESSION_NNN.md registra evidência e debug.
+- **Governança:** seguir `docs/GOVERNANCE.md`: IDEA_BANK → ADR temática → sprint → TODO → implementação + STATE → SESSION → check final de IDEA/ADR. Fixes pontuais podem ir direto a TODO + SESSION.
 - **Consultar TECNOLOGIAS.md antes de qualquer decisão arquitetural.**
 - **Consultar SESSION_INDEX.md antes de repetir trabalho.**
 - **Consultar TODO.md antes de iniciar nova sprint.**
 
 # K²CHJ Workspace Structure (v1.5.0+)
 # ═══════════════════════════════════════════════════════════════
-# Monolith → 5 crates (gradual migration):
-#   k_nano  ← cortex ← k_ai ← hermes ← jarbas   (dep chain, no cycles)
-#   neural-kernel (bin) = integration hub with all globals (ainda monolítico)
+# Monolith → 5 crates (wire N2.5–N5.7 ✅ v1.8.0):
+#   k_nano ← k_ai ← cortex ← hermes ← jarbas   (dep chain, no cycles)
+#   neural-kernel (bin) = integração + residuals bin-only (audio, cortex.rs, net*, …)
 # ═══════════════════════════════════════════════════════════════
 # Crate       | Files | Function
 # ────────────|───────|──────────────────────────────────────

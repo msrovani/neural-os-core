@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_081.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # SESSION_081 — Documentação Reestruturada: HW Real First + Multi-Vendor + Sprint Plan 84-95
 
 **Data:** 2026-07-05 | **Sprint:** 84 — Bloco 21c | **v0.84.0-design**

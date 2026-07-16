@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_080.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # SESSION_080 — Sprint 80: AVX2 Debug + WHPX Detection + Forward Pass Speed
 
 **Data:** 2026-07-05 | **Sprint:** 80 — Bloco 24 | **v0.80.0**

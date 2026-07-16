@@ -176,16 +176,12 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **ADR-0042 N4→N5** — N3 ✅ CLOSED; próxima pista hermes orquestra + jarbas ego
-- **N3.5** ✅ (v1.7.9): `cortex-crate` wired — tensor/trinity/arena/r3/…; residuals `cortex.rs`, `bpe.rs`, `global_arena.rs`, `cortex_mmap.rs`
-- **N4.6** ✅ (v1.7.10): `hermes-crate` wired — cron/safety/wasm/skills/wifi/…; residuals `agents.rs`, `cognitive.rs`, `net*`, `fs/`, `aios_api.rs`, `micropython_wasm.rs`
-- **N5.7** (não bloqueia): link crate `jarbas` no bin; até lá espelho `neural-kernel`
-- Backlog voz / soft-float latency → **Sprint Sound (reaberta)** (TODO.md)
+- **Sprint Sound (pista ativa):** STT PCM-real, Mic→Wake runtime, Piper VITS, UAC e unificação do truth path de áudio.
+- **Gate `v2.0.0`:** review formal conjunto da ADR-0042 e da qualidade de voz; não declarar automaticamente.
+- **Sprint 108 (paralelo):** self-evolving agents / auto-skill generation.
+- **Residuals intencionais:** estabilizar APIs antes de migrar `cortex.rs`, `agents.rs`, `net*`, `fs/*` e `audio/*`.
 - Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
-- Evidência N3: `SESSION_113.md` + `logs/boot_n3_20260716_132753.txt` (+ N3.4 prior `boot_whpx_20260716_110041.txt`)
-- Evidência N2: `SESSION_112.md` + `logs/boot_n2_20260716_131837.txt`
-- Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_110041.txt`
-- Migração docs 107→Sound: `SESSION_111.md`
+- Evidência consolidada: `SESSION_120.md`; wires: `SESSION_116.md`–`SESSION_119.md`; voz: `SESSION_107_CLOSE.md` e `SESSION_110.md`.
 
 ### N3 CLOSED (2026-07-16) — cortex cérebro ✅
 | Item | Onde | Serial / aceite |
@@ -269,7 +265,8 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 - **🏆 v1.7.1 (2026-07-16):** ADR-0045 Sound Voice Stack (docs). Ver `SESSION_109.md`.
 - **🏆 v1.7.0 (2026-07-15):** N1 ✅ + BitNet 2B LOADED (~590MB, 30L, FWD); soft-float/`cargo nk`; TTS empty known. Ver `SESSION_108.md`.
 - **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
-- **🏆 v2.0.0 (2026-07-14):** Sprint 106 completa (10/10). Workspace estrito com 5 crates K²CHJ. SOUL.md via VFS (`neural_kernel::fs::read_vfs`). MicroPython/WASM sandbox (`micropython_wasm.rs`). SkillOpt + AIOS API. Heap em `0x4000_0000_0000` para HW real. **0 erros.**
+- **🏆 v1.8.0 (2026-07-16):** ADR-0042 N1–N5 + wire N2.5–N5.7 consolidados. Gate `v2.0.0` permanece sujeito a review formal; Sprint Sound concentra a qualidade de voz.
+- **🏆 Sprint 106 (2026-07-14):** Ecossistema de Anéis Lógicos completo (10/10), sem constituir release `v2.0.0`. Workspace K²CHJ, SOUL.md via VFS, MicroPython/WASM, SkillOpt e AIOS API.
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
 - **🏆 v1.5.1 (2026-07-13):** 0 erros. ~600 LOC removidos, 11 dep entries eliminados. 6 dead files movidos do neural-kernel para K²CHJ crates. pic8259 eliminado. #[cfg(not(x86_64))] branches removidos. Architecture trait removido.
@@ -341,7 +338,7 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 | Periodic | PollEvery(N) | Cron, Observer, Optimizer |
 | Learning | PollEvery(2000) | Novos agentes → analisados 5000 ticks → promovidos |
 
-## Roadmap v1.0 — Sprints 92-100 (Plano completo em docs/sprint-plan-92-100.md)
+## Roadmap v1.0 — Sprints 92-100 (plano arquivado)
 
 | Sprint | Foco | LOC | Status |
 |--------|------|-----|--------|
@@ -358,7 +355,7 @@ EventDriven scheduler fix: `has_event=true` + `has_pending()` early-return patte
 
 **v2.0 "Cognição"** começa na Sprint 101: Kernel, Cortex, Hermes, JARVIS como entidade viva.
 
-**Ver também:** `docs/sprint-plan-92-100.md` para detalhes de cada sprint.
+**Ver também:** `docs/archive/sprints/sprint-plan-92-100.md` para o plano histórico.
 
 ## Aprendizados Chave
 1. **Roadmap readequado 2026-07-04:** Reorganização completa por dependências. Itens independentes primeiro (Foundation → Agentic → LLM → JARVIS → GPU). B-01 e dependentes no final.
@@ -471,19 +468,23 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ```
 📁 docs/                         → Toda a documentação
-├── 📄 SPRINT-106.md             → Detalhes Sprint 106 (10 sub-sprints)
-├── 📄 SPRINT-106-STATUS.md      → Status consolidado v2.0
-├── 📄 sprint-plan-92-100.md     → Plano v1.0 Gold Master
 ├── 📁 architecture/             → ADRs: decisões arquiteturais (40 documentos)
+│   ├── 📄 INDEX.md              → Lifecycle, conflitos de ID e rastreabilidade
 │   └── 📄 0039-boot-flow.md     → Boot sequence agent-centric
 ├── 📁 memory/                   → Estado, ideias, sessões
 │   ├── 📄 STATE.md              → ⭐ COMEÇE AQUI: estado atual do kernel
 │   ├── 📄 IDEA_BANK.md          → 416+ ideias catalogadas
 │   ├── 📄 SESSION_INDEX.md      → Índice de sessões + lições críticas
 │   └── 📄 SESSION_NNN.md        → Sessões individuais com debug e descobertas
+├── 📁 archive/sprints/          → SPRINT-106 e planos concluídos
+└── 📄 GOVERNANCE.md             → Ciclo IDEA→ADR→sprint→check
 📄 AGENTS.md                     → ⭐ POLÍTICAS: regras de engenharia, premissas
 📄 ROADMAP.md                    → Roadmap v1.0 → v2.0
 📄 TODO.md                       → Checklist mestre
 📄 crates/k_nano/ … jarbas/      → 5 crates K²CHJ (v2.0)
 📄 crates/neural-kernel/         → Bin de integração
 ```
+
+---
+
+**Estado canônico:** v1.8.0 — ADR-0042 N1–N5 + wire crates completos; Sprint Sound ativa; `v2.0.0` não declarado.

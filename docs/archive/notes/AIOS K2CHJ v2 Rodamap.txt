@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/AIOS K2CHJ v2 Rodamap.txt`
+> Fonte atual: `ROADMAP.md`
+
 Minha opinião sincera sobre essa visão:
 
 ## A Arquitetura K²CHJ É BRILHANTE

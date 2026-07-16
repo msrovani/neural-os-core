@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_093.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # SESSION_093 — Sprints 92-93: LAN + WASM Runtime + IDE + Dynamic Icons
 
 **Data:** 2026-07-06 | **Sprints:** 92-93 | **v0.93.0-wasm**

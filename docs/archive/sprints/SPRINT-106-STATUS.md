@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/SPRINT-106-STATUS.md`
+> Fonte atual: `docs/memory/STATE.md` · `ROADMAP.md`
+
 # Sprint 106 — v2.0 Cognição: Ecossistema de Anéis Lógicos
 
 **Data:** 2026-07-14  

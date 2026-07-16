@@ -1,7 +1,9 @@
 # ADR-0035: J.A.R.V.I.S. Deep Research — Convergência de Ecossistema, Academia & Sprint Plan
 
+> **SUPERSEDED:** pesquisa preservada como histórico. A decisão unificada e canônica é a [ADR-0036](0036-jarvis-unified-interaction-layer.md).
+
 **Data:** 2026-07-04
-**Status:** Accepted
+**Status:** Superseded
 **Sprint Target:** 77-80 (JARVIS Sprint)
 **Depende de:** ADR-0034 (JARVIS Conscious Interaction Layer), ADR-0031 (AIOS Evolution), ADR-0032 (WASM Agent Apps), ADR-0033 (On-Device Micro-Learning)
 

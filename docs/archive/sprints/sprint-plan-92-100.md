@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/sprint-plan-92-100.md`
+> Fonte atual: `docs/memory/STATE.md` · `ROADMAP.md`
+
 # Sprint Plan 92–100 — neural-os-core v1.0 "Gold Master"
 # A Era do Silício — Fundação Inabalável
 

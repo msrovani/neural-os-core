@@ -414,6 +414,46 @@ Bidirectional evolution loop:
 - LoRA/QLoRA fine-tuning automático do modelo Devstral
 - Dashboard tempo real: WebSocket + systemd
 
+### 3.7 Speculative Decoding: N-gram KV Cache
+
+**N-gram speculative decoding — llama.cpp** (Alok, Jul 2026)
+```
+Tweet: https://x.com/analogalok/status/2077718647905333549
+Técnica: ngram-simple / ngram-mod no llama.cpp
+```
+
+Aceleração de inferência **sem draft model, sem VRAM extra, sem quantização**. Funciona via rolling hash do contexto recente:
+
+1. **Rolling LCG Hash (janela N)**: comprime os últimos N tokens num hash key. Rolling hash → recalcula em O(1) a cada novo token
+2. **O(1) lookup em hash directory**: encontra onde essa sequência ocorreu antes no KV cache
+3. **Draft de tamanho M**: copia os tokens que seguiram a ocorrência anterior como draft
+4. **Verificação paralela na GPU**: o LLM verifica todo o batch draft de uma vez
+
+```
+Contexto: "public void main(String[] args) {"
+  ↓ rolling hash da janela N=12
+  ↓ O(1) lookup → "public void main(String[] args) { System.out"
+  ↓ draft M=48: "System.out.println(\"Hello World\"); }"
+  ↓ GPU verifica 48 tokens em paralelo → 1 forward aceita 48 tokens
+```
+
+Resultados no Gemma 4 26B MoE com T4 GPU:
+- **50 → 100+ tokens/seg** (2× speedup)
+- **Zero overhead**: sem VRAM extra, sem pesos secundários, sem draft model
+- **Ideal para código/JSON/documentos**: padrões repetitivos = alta taxa de aceitação
+
+**Relevância para neural-os-core:**
+
+| Aspecto | Por que se encaixa |
+|---------|-------------------|
+| **Domínio** | Hermes/Cortex geram intents estruturados, JSON, skills — padrões altamente repetitivos intra-sessão |
+| **Recursos** | Zero VRAM extra, zero download — crítico para bare-metal com 2GB |
+| **Já temos Medusa** | N-gram como fonte de draft complementar; Medusa como fallback |
+| **Implementação** | ~150 LOC: rolling hash + hash table + draft buffer. Sem novas dependências |
+| **GPU synergy** | Draft verification em paralelo na GPU via DP4A (ADR-0047-GPU) |
+
+Ordem de implementação: N-gram spec é o "free lunch" mais imediato — custo quase zero, ganho 2×, implementação trivial. Deve vir antes dos pilares GPU.
+
 ---
 
 ## 4. Gap Analysis: neural-os-core vs SotA
@@ -430,6 +470,7 @@ Bidirectional evolution loop:
 | **Hot-swap código** | Não existe | symbiont.rs (~1ns dylib), ZYO (eBPF), MUE-X (AST) | **Total** — sem mecanismo |
 | **Comunicação GPU-native** | CPU-only (`Vec<f32>` Tensor) | neurOS (PyTorch GPU), Yantra (Sutra→tensor op graph) | **Grande** — mas não bloqueante (nosso contexto CPU) |
 | **Programação gradient-free** | Prompt engineering | NeuOS soul vectors (7D PCA → 100% acurácia) | **Enorme** — paradigma novo |
+| **Inferência: speculative decoding** | Geração autoregressiva pura — 1 token/forward | N-gram spec (llama.cpp): rolling hash → draft M tokens → GPU verify em paralelo. 2× speed, zero VRAM extra | **Médio** — free lunch imediato, ~150 LOC |
 
 ---
 
@@ -1318,6 +1359,10 @@ Sprint      ADR-0042 (N2→N5)          Pilares ADR-0047
 33. **Zhu et al.** (2025b). *High-dimensional latent space encodes richer information*.
 
 34. **Lyogavin** (2024-2026). *AirLLM: 70B models on 4GB GPU*. https://github.com/lyogavin/airllm
+
+### 9.8 Speculative Decoding
+
+35. **Alok** (2026). *N-gram speculative decoding in llama.cpp — rolling LCG hash, draft M tokens, GPU verify*. https://x.com/analogalok/status/2077718647905333549
 
 ---
 

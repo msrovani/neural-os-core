@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/sprint-plan-fs-v2.md`
+> Fonte atual: `docs/memory/STATE.md` · `ROADMAP.md`
+
 # Sprint Plan FS-v2 — Storage & Memory Ecosystem
 # A Era do Armazenamento — Multi-FS, Multi-TB, Multi-Tier
 

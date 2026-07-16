@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-16 — sync ADR-0045 Sound (voz nativa); itens sherpa/Vosk/Kokoro/Wyoming marcados ❌ supersedido.
+**Última atualização:** 2026-07-16 — governança IDEA↔ADR por tema e amostra de rastreabilidade v1.8.0.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -24,6 +24,33 @@ Nada é descartado sem registro. Ideias podem ser:
 - **Atualizar:** quando uma ideia muda de status, edite este arquivo (não a ADR-0015)
 - **Adicionar:** toda nova ideia discutida deve ganhar uma linha aqui na seção apropriada
 - **Origem:** o seed inicial veio da ADR-0014 (ideias de hardware) e da ADR-0015 (curso correção MVP). Novas ideias entram diretamente aqui.
+
+### Regra de rastreabilidade IDEA → ADR
+
+Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
+
+- Decisões arquiteturais, anéis, stacks e contratos públicos apontam para uma ADR própria ou temática.
+- Features relacionadas compartilham a ADR do tema.
+- Fixes/polish podem usar `ADR = — (fix pontual)` e seguir por TODO + SESSION.
+- Ideias descartadas/fundidas preservam a justificativa; não se cria ADR artificial só para preencher uma célula.
+- O check final de sprint atualiza IDEA, `architecture/INDEX.md`, TODO, STATE e SESSION em conjunto. Ver `docs/GOVERNANCE.md`.
+
+#### Amostra auditada
+
+| Ideias | ADR temática | Estado da ligação | Evidência |
+|---|---|---|---|
+| #315.1–20 | ADR-0036 | ✅ mapeada | JARVIS/persona unificados |
+| #315.21–25, #75, #83, #84, #360 | ADR-0045 Sound | ✅ mapeada | Stack nativo e superseded explícitos |
+| #424–432 | ADR-0041 | ✅ mapeada | Capability PoC P0–P9 |
+| #433–440 | ADR-0042 | ✅ mapeada | N1–N5 + wire; marco v1.8.0 |
+| #442 | ADR-0045 Sound | ✅ mapeada | Backlog da pista Sound |
+| #441 | — (entrega operacional) | ✅ justificada | USB HW unificado; build/image, sem nova decisão arquitetural |
+
+#### Gaps amostrados para triagem futura
+
+- **#277–283:** blocos antigos têm sprint/destino, mas nem sempre uma coluna ADR explícita; agrupar por temas Agency, GGUF, VFS/storage e desktop antes de decidir se ADR existente cobre.
+- **#416–423:** propostas recentes de JS/FS/MHI misturam pesquisa e arquitetura; ADR-0040/NeuralFS cobrem parte, mas o vínculo por item deve ser normalizado quando a pista FS for ativada.
+- Itens ✅ antigos sem ADR explícita não serão convertidos em centenas de ADRs retroativas. A triagem ocorre por tema e prioridade, preservando a evidência histórica.
 
 ---
 

@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_106_5.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # 📝 SESSION 106.5 — RustPython no_std Viabilidade
 
 **Data:** 2026-07-13  

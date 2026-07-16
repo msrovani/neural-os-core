@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_089.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # SESSION 089-108 — Sprints 86-89 completos + 4 maiores pendentes
 
 **Data:** 2026-07-08

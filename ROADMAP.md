@@ -1,8 +1,9 @@
-# Roadmap — neural-os-core v2.0 🏆
+# Roadmap — neural-os-core
 
-**Última atualização:** 2026-07-16  
-**Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros — linha **1.7.x** (não v2.0.0 até ADR-0042 N1–N5)  
-**Pista ativa:** **ADR-0042 N2→N5**. Voz residual → **Sprint Sound (reaberta)**. Sprint 107 fechada (PASS parcial forte+).
+**Última atualização:** 2026-07-16
+**Versão release:** **v1.8.0**
+**Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros (`cargo nk`)
+**Pista ativa:** **Sprint Sound** (voz pós-107). ADR-0042 ✅. Gate `v2.0.0` = review formal pendente.
 
 ---
 
@@ -52,7 +53,7 @@
 
 ## ✅ Sprint 106 — v2.0 Cognição: Refatoração para Ecossistema de Anéis Lógicos
 
-**Status:** ✅ Concluído (10/10 sub-sprints)  
+**Status:** ✅ Concluído (10/10 sub-sprints)
 **Objetivo:** Desacoplamento do monólito bare-metal (v1.0) para ecossistema de anéis lógicos isolados com orquestração IA nativa (WASM + MicroPython sandbox)
 
 ### Sprint 106-1: Estruturar Cargo workspace estrito
@@ -162,30 +163,31 @@
 
 ## ✅ Sprint 107 — Voice I/O (FECHADA — PASS parcial forte+)
 
-**Status:** ✅ Fechada para voz (v1.7.2 + Part B). Entregue: clima e2e GEN+TTS+FB, HWEXPERT, Piper neural-lite, WakeWord registrado, EventBus skinny STT→INTENT.  
-**Pendências de voz:** migradas para **Sprint Sound (reaberta)** — não bloqueiam ADR-0042.  
+**Status:** ✅ Fechada para voz (v1.7.2 + Part B). Entregue: clima e2e GEN+TTS+FB, HWEXPERT, Piper neural-lite, WakeWord registrado, EventBus skinny STT→INTENT.
+**Pendências de voz:** migradas para **Sprint Sound (reaberta)** — não bloqueiam ADR-0042.
 **Capability (histórico):** Boot A/B + P0–P9 PoC — ADR-0041 / SESSION_107.
+
+---
+
+## ✅ ADR-0042 — Adequação K²CHJ (v1.8.0)
+
+| Fase | Status | Wire crate |
+|------|--------|------------|
+| N1 k-nano legível | ✅ v1.7.0 | — |
+| N2 k-ai SelfHeal / Trust | ✅ v1.7.4 | N2.5 ✅ v1.7.8 |
+| N3 cortex cérebro | ✅ v1.7.5 | N3.5 ✅ v1.7.9 |
+| N4 hermes orquestra | ✅ v1.7.6 | N4.6 ✅ v1.7.10 |
+| N5 jarbas ego/UI | ✅ v1.7.7 | N5.7 ✅ v1.7.11 |
+
+**Marco v1.8.0:** N1–N5 funcionais + wire completo no bin.
+**Gate v2.0.0:** review conjunto (qualidade voz → Sprint Sound). **Não** declarar v2.0 automaticamente.
 
 ---
 
 ## ▶️ Sprint Sound (reaberta) — leftovers voz
 
-Backlog: STT retrain PCM-real, Mic→Wake→STT→LLM→TTS runtime e2e, Piper VITS pleno, soft-float latency (defer), UAC (#84), jarbas/audio wire, VAD/SER polish, Wake ML e2e.  
-Tools: `train_stt.py`, `convert_piper_to_bitnet.py`. Ver TODO.md + ADR-0045.
-
----
-
-## ▶️ ADR-0042 — pista ativa (N2→N5)
-
-| Fase | Status |
-|------|--------|
-| N1 | ✅ |
-| **N2** SelfHeal / HMI | ⏳ **próximo** |
-| N3 | ▶️ parcial (2B + GEN) |
-| N4 | ▶️ parcial |
-| N5 | ▶️ parcial (voz plena = Sound) |
-
-Gate `v2.0.0` = N1–N5. Sprint 108 (self-evolving) permanece agendada; **voz não bloqueia** ADR-42.
+Backlog: STT retrain PCM-real, Mic→Wake→STT→LLM→TTS runtime e2e, Piper VITS pleno, soft-float latency, UAC (#84), unificar `audio/*` truth↔jarbas, VAD/SER polish.
+Tools: `train_stt.py`, `convert_piper_to_bitnet.py`. Ver `TODO.md` + `docs/architecture/0045-sound-voice-stack.md`.
 
 ---
 
@@ -195,28 +197,20 @@ Auto-skill generation, verification, self-improvement — paralelo/após ADR-42;
 
 ---
 
-## 🔴 Próximos Passos — Boot HW Real + v2.0
+## Próximos Passos
 
-| Item | % | Esforço | Descrição |
-|------|---|---------|-----------|
-| **ADR-0042 N2** SelfHeal gated | — | ~LOC ADR | **pista ativa** — heal B*.LOG / HEALTH_ISSUE |
-| **B-01** DHCP/RX funcional | ~500 LOC | smoltcp DHCP nunca completa | ⏳ (SLIP bypass ativo) |
-| Sprint Sound leftovers | — | ver TODO | STT/Piper/UAC/jarbas — **não bloqueia N2** |
-| Wake Word ML e2e | 90% | ~100 LOC | → Sprint Sound |
-| burn-flex Backend | 70% | ~300 LOC | Integrar burn::Backend trait | ⏳ |
-| MSched VRAM | 70% | ~200 LOC | Conectar predictor ao scheduler GPU | ⏳ |
-| GPU Display sharing | 70% | ~200 LOC | Context switch iGPU/dGPU | ⏳ |
-| BGE HNSW index | 60% | ~400 LOC | Substituir busca linear por HNSW | ⏳ |
-| v86 browser (#279e) | 0% | ~500 LOC | Emulador x86 WASM | ⏳ |
-| Desktop Cube 3D | 50% | ~200 LOC | Transições 3D GPU | ⏳ |
-| BitNet IDE avançado | 40% | ~500 LOC | Debug WASM, syntax highlight | ⏳ |
-| Skill Market | 0% | ~500 LOC | Marketplace de skills | ⏳ |
-
----
+| Item | Descrição | Status |
+|------|-----------|--------|
+| **Sprint Sound** | STT/Piper/UAC/Mic→Wake — pista ativa | ▶️ |
+| **Gate v2.0.0** | Review ADR + qualidade voz | ⏳ |
+| DHCP/RX funcional | smoltcp DHCP incompleto em QEMU | ⏳ |
+| Sprint 108 | Self-evolving agents | ⏳ |
+| burn-flex Backend | Integrar `burn::Backend` trait | ⏳ |
+| BGE HNSW index | Substituir busca linear | ⏳ |
 
 ## 📊 ADR v2.0 — Topologia do Workspace
 
-**Status:** ✅ Migração concluída (Sprint 106) — integração gradual via `neural-kernel` bin
+**Status:** ✅ Migração + wire concluídos (Sprint 106 + ADR-0042 N2.5–N5.7) — bin `neural-kernel` linka os 5 crates; residuals documentados em `STATE.md`.
 
 ```
 [workspace]
@@ -237,5 +231,5 @@ members = [
 ---
 
 **Detalhes completos:** `TODO.md`
-**Catálogo de tecnologias:** `docs/TECNOLOGIAS.md`
-**Plano de sprints detalhado:** `docs/sprint-plan-92-100.md`
+**Catálogo de tecnologias:** `TECNOLOGIAS.md`
+**Plano histórico de sprints:** `docs/archive/sprints/sprint-plan-92-100.md`

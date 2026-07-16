@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_106_3.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # 📝 SESSION 106.3 — Corrigir SOUL.md parser (dependência ring2→ring0)
 
 **Data:** 2026-07-13  

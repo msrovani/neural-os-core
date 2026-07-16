@@ -1,25 +1,15 @@
-# SESSION INDEX — neural-os-core v2.0
+# SESSION INDEX — neural-os-core v1.8.0
 
-**Propósito:** Catálogo de sessões. Sessions de Sprints 1-68 foram arquivadas (conhecimento consolidado no código e neste índice). Sessions de Sprint 79+ mantidas individualmente.
+**Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
 ---
 
-## Sessões Mantidas (Sprint 79+)
+## Sessões Mantidas (107+)
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
-| 079 | 79 | 23 | LLM Infrastructure | BitNet-b1.58 850M, BPE, Trinity MoE, QEMU loader, Xuvisco fix |
-| 080 | 80 | 24 | AVX2 Debug + WHPX | WHPX emula VEX como VM exits. has_avx2() detecta hypervisor via CPUID. KV Cache 200× speedup |
-| 081 | 81-83 | 21a/b/e | SMP + GPU Research | SPSC ring, IPI, PerCpu, Work-Stealing, GPU architecture |
-| 082 | 97 | — | RustCoder Expert | Expert Rust (1.6M params) treinado com 41.2K amostras |
-| 083 | 86-87 | 30-31 | JARVIS Persona+Security | SOUL.md, I1-I4, AUDIT_TRAIL, AHCI |
-| 089 | 88-89 | 32-33 | JARVIS Emotion+Cache+SleepCycle | ADE, Pipeline 16 stages, KG bitemporal, BGE |
-| 093 | 93+ | — | SDIO Pipeline | 45 packs, 95.812 entradas, loss 0.38 |
-| 094 | 100-108 | — | v1.0 v2.0 Migration | Code Freeze, v2.0 cognição, K²CHJ Workspace Migration |
-| 095 | 106 | — | Sprint 106: Ecossistema de Anéis Lógicos | k_ia→k_ai, jarvis→jarbas, VFS, MicroPython/WASM, SkillOpt |
-| 106.3 | 106-3 | — | SOUL.md parser fix | jarbas usa `neural_kernel::fs::read_vfs()`, 0 refs ATA_DRIVER |
-| 106.5 | 106-5 | — | RustPython viabilidade | Não no_std nativo — rota WASM (106-6) é principal |
 | 107 | 107 | — | Boot A/B + Cap P0–P9 + ADR-0042 | Runtime QEMU OK; cadeia k-nano→…→jarbas; próximo N1 legível |
+| 107_CLOSE | 107 | — | Fecho Voice I/O | 5 loops WHPX; PASS parcial forte+; handoff de gaps para Sprint Sound |
 | 108 | 107 | — | N1 ✅ + BitNet 2B LOADED → v1.7.0 | Soft-float/cargo nk; 2B ~590MB L=30 FWD; TTS empty generate; e2e clima PARCIAL |
 | 109 | 107 | — | ADR-0045 Sound Voice Stack | Truth=`neural-kernel/audio`; jarbas espelho; sherpa/Vosk/Kokoro/Wyoming/Rustpotter ❌; v1.7.1 docs |
 | 110 | 107 | — | Sprint 107 loops 1–5 clima e2e → v1.7.2 | GEN 'O tempo esta'; Piper neural-lite; WakeWord registrado; STT ctc=''; HWEXPERT FAIL |
@@ -28,14 +18,15 @@
 | 113 | ADR-42 N3 | — | N3 cortex LOADED + Trinity CLOSED | v1.7.5; `[N3-CORTEX] criteria=MET`; N3.5 allocator |
 | 114 | ADR-42 N4 | — | N4 Hermes orchestrator CLOSED | v1.7.6; `[N4-HERMES] criteria=MET`; N4.6 allocator |
 | 115 | ADR-42 N5 | — | N5 jarbas ego/UI CLOSED | v1.7.7; `[N5-JARBAS] criteria=MET`; N5.7 allocator; N1–N5 ✅ |
+| 116 | ADR-42 N2.5 | — | k_ai crate wired no bin | v1.7.8; allocator único no bin; espelhos trust/self_heal removidos |
 | 117 | ADR-42 N3.5 | — | cortex crate wired no bin | v1.7.9; 9 espelhos removidos; residuals cortex/bpe/global_arena/cortex_mmap |
 | 118 | ADR-42 N4.6 | — | hermes crate wired no bin | v1.7.10; 37 espelhos removidos; residuals agents/net*/fs/aios_api |
 | 119 | ADR-42 N5.7 | — | jarbas crate wired no bin | v1.7.11; 29 espelhos removidos; audio truth residual ADR-0045 |
 | 120 | v1.8.0 | — | Marco K²CHJ pós-jornada | ADR-0042 N1–N5 + wire N2.5→N5.7; docs; tag v1.8.0; pista Sound |
 
-## Sessões Anteriores (Sprints 1-68 — Arquivadas)
+## Sessões Históricas e Lacunas
 
-Conhecimento consolidado no código-fonte e no `SESSION_INDEX.md` abaixo. Arquivos individuais removidos.
+Sessões 079, 080, 081, 082, 083, 089, 093, 106.3 e 106.5 estão preservadas em `docs/archive/sessions/`. Os identificadores **094** e **095** aparecem em registros históricos, mas os arquivos individuais nunca estiveram disponíveis nesta sanitização; o conteúdo está consolidado em `CHANGELOG.md`, no plano arquivado da Sprint 106 e neste índice.
 
 | Sprints | Tópicos Chave |
 |---------|---------------|
@@ -95,11 +86,11 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | Estado atual | `docs/memory/STATE.md` | Versão, sprint atual, arquitetura, pendências |
 | Ideias | `docs/memory/IDEA_BANK.md` | 354+ ideias catalogadas com status e sprint |
 | Decisões | `docs/architecture/*.md` | 38+ ADRs (ADR-0001 a ADR-0037+) |
-| Plano | `docs/sprint-plan-84-95.md` | 9 sprints (84-95) com items do IDEA_BANK |
+| Planos históricos | `docs/archive/sprints/` | Planos concluídos, incluindo Sprints 92–100 e Sprint 106 |
 | Checklist | `TODO.md` | Checklist mestre com sub-itens, goals, dificuldades |
 | Sessões (aprendizado) | `docs/memory/SESSION_*.md` | 42+ sessões com descobertas e correções |
 | Este índice | `docs/memory/SESSION_INDEX.md` | Catálogo de sessões + lições críticas |
-| Sprints detalhados | `docs/SPRINT-106.md` | Sprint 106-1 a 106-10 com ações e resultados |
+| Sprints detalhados | `docs/archive/sprints/SPRINT-106.md` | Sprint 106-1 a 106-10 com ações e resultados (arquivado) |
 | Roadmap completo | `ROADMAP.md` | v1.0 → v2.0 com status de cada sprint |
 | CHANGELOG | `CHANGELOG.md` | Histórico de versões |
 | Código fonte | `crates/neural-kernel/src/` | Kernel bare-metal (135+ arquivos Rust) |
@@ -124,5 +115,9 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | 106-10 | ✅ | SkillOpt: Tradução Python→Rust no_std |
 
 **Status v2.0:** ✅ Sprint 106 concluída (10/10). ✅ Sprint 107 Voice FECHADA (PASS parcial forte+).  
-**Pista ativa:** ADR-0042 **N1–N5 ✅ CLOSED** (v1.7.7). Sprint Sound = voz leftovers; wire crates N2.5–N5.7 deferred. Ver SESSION_115.
+**Pista ativa:** Sprint Sound. ADR-0042 **N1–N5 + wire N2.5–N5.7 ✅** no marco v1.8.0; gate `v2.0.0` depende de review formal. Ver `SESSION_120.md`.
+
+---
+
+**Índice atualizado para v1.8.0:** política viva `SESSION_107+`; históricos em `docs/archive/sessions/`.
 

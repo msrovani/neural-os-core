@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/sprint-plan-v1.1.x.md`
+> Fonte atual: `docs/memory/STATE.md` · `ROADMAP.md`
+
 # Sprint Plan v1.1.x — A Era do Silício (Continuação)
 # GPU · WiFi · Rede Nativa · JARVIS v2
 

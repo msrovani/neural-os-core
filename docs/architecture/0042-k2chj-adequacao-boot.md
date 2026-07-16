@@ -1,10 +1,10 @@
 # ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
 
 **Data:** 2026-07-14 · atualizado 2026-07-16  
-**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 ✅ CLOSED**; **N3 ✅ CLOSED**; **N4 ✅ CLOSED**; **N5 ✅ CLOSED**)  
+**Status:** Accepted — implementação funcional completa e modernizada no marco v1.8.0
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
-**Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
+**Release:** **N1–N5 + wire N2.5–N5.7 = marco `v1.8.0`**. A declaração de `v2.0.0` exige review formal adicional.
 **Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até review formal de qualidade ADR (voz Sprint Sound + checklist conjunto).**
 
@@ -15,7 +15,7 @@
 
 O boot UEFI alcançou **Runtime estável** (AgentFleet → AgentScheduler + timer) no monólito `neural-kernel`. Os PoCs Cap P0–P9 (ADR-0041) provaram mecânicas, **não** a visão de produto. Adequar sem regredir o Runtime.
 
-**Regra de versionamento:** não chamar o tree atual de “v2.0 feito”. `v2.0.0` marca **só** quando a cadeia funcional K²CHJ (N1–N5) estiver adequada à visão (legível → HW-AI → cérebro → orquestra → ego).
+**Regra de versionamento:** não chamar o tree atual de “v2.0 feito”. A cadeia funcional K²CHJ e o wire estão completos no marco `v1.8.0`; `v2.0.0` só pode ser declarado após review formal da ADR e da qualidade de voz.
 
 ### Cadeia canônica (dependência + anel)
 
@@ -64,8 +64,8 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N4** | hermes | Orquestra / cria | WASM SFI; skills on demand; intent e2e; IPC→jarbas |
 | **N5** | jarbas | Ego / UI / +10% | Compositor vivo; persona; voz como expressão; só via Hermes |
 
-**Gate de release `v2.0.0`:** N1–N5 com gates de qualidade desta ADR (Runtime intacto + telemetria honesta + Caps/IPC por anel).  
-**Até `v2.0.0`:** tags/`CHANGELOG` em **`1.x`** (1.5.7 Cap; **1.7.0** = N1 + 2B LOADED; **1.7.5** = N3 CLOSED).
+**Pré-requisitos funcionais do gate `v2.0.0`:** N1–N5 + wire N2.5–N5.7, Runtime intacto, telemetria honesta e Caps/IPC por anel — todos ✅ no marco `v1.8.0`.
+**Gate restante:** review formal conjunto desta ADR e da qualidade de voz em Sprint Sound. Até a aprovação, manter tags/`CHANGELOG` em **`1.x`**.
 
 **Ordem fechada:** N0→N1→N2→N3→N4→N5.  
 **Paralelo:** drivers VirtIO/DMA em nano+k-ai durante N2 **sem** UI. Proibido jarbas antes de Hermes mínimo.
@@ -106,7 +106,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 **Evidência serial N3:** `logs/boot_n3_20260716_132753.txt` (WHPX short) — `[STATUS] llm=LOADED` + `[N3-CORTEX] … criteria=MET`.  
 **N3.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — `[GEN] decoded_len=12 text='O tempo esta'` (feature `weather-e2e`).  
-**Defer:** soft-float latency / chat fluente → Sprint Sound; jarbas pleno → N5; wire `jarbas` → N5.7.
+**Residual:** soft-float latency / chat fluente → Sprint Sound. N5 e o wire `jarbas` foram concluídos.
 
 ### Checklist N4 (hermes orquestra)
 
@@ -122,7 +122,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 **Evidência serial N4:** `logs/boot_n4_20260716_144651.txt` (WHPX short) — `[N4-HERMES] … criteria=MET`.  
 **N4.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — EventBus `USER_INTENT` + GEN weatherish.  
-**Defer:** voz/STT quality → Sprint Sound; jarbas ego/UI → N5; wire `jarbas` → N5.7.
+**Residual:** voz/STT quality → Sprint Sound. N5 e o wire `jarbas` foram concluídos.
 
 ### Checklist N5 (jarbas ego/UI)
 
@@ -133,7 +133,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N5.3** Voz agents | `jarvis_voice` + `wakeword` + `audio_mixer` registrados; expressão só via Hermes (sem ATA/PCI direto) | ✅ |
 | **N5.4** FB/display | `paint_tts_response` + boot splash + GPU present | ✅ |
 | **N5.5** Voz expressão e2e | TTS+FB paint no path Hermes **ou** gate `voice_e2e=GATED` + prior Sprint107 | ✅ GATED + prior OK |
-| **N5.6** IPC←hermes | `jarbas_bridge::topics_in_sync()`; full wire `BLOCKED` (allocator) | ✅ |
+| **N5.6** IPC←hermes | `jarbas_bridge::topics_in_sync()`; crate `jarbas` wired; `audio/*` permanece residual no bin | ✅ |
 | **N5.7** Link crate `jarbas` no bin | Dep `jarbas-crate` + `pub use` display/gpu/persona; audio truth monólito | ✅ 2026-07-16 (v1.7.11) |
 | **Goal N5** | Ego/UI: compositor + persona + voz via Hermes + FB + IPC mirror | ✅ **CLOSED** (critérios funcionais; crate = N5.7) |
 
@@ -169,7 +169,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai` v1.7.8). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex` v1.7.9). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes` v1.7.10). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas` v1.7.11). Gate `v2.0.0` = N1–N5 funcionais ✅ + wire crates N2.5–N5.7 ✅; qualidade voz → Sprint Sound.
+**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai` v1.7.8). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex` v1.7.9). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes` v1.7.10). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas` v1.7.11). Marco `v1.8.0` = N1–N5 funcionais + wire crates; gate `v2.0.0` = review formal pendente.
 
 ---
 

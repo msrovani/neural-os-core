@@ -1,9 +1,10 @@
-# 📋 TODO MASTER — neural-os-core v2.0
+# 📋 TODO MASTER — neural-os-core
 
-**Data:** 2026-07-16  
-**Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.  
-**Documento oficial:** AGENTS.md (seção roadmap)  
-**Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado  
+**Versão release:** v1.8.0
+**Data:** 2026-07-16
+**Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
+**Documento oficial:** AGENTS.md (seção roadmap)
+**Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
 **Pista ativa:** **Sprint Sound** (voz pós-107). ADR-0042 ✅ v1.8.0. Review gate v2.0.0 pendente.
 
 ---
@@ -41,9 +42,9 @@
 
 ## ✅ SPRINT 107 — Voice I/O (FECHADA — PASS parcial forte+)
 
-**Veredito:** fechada para voz — entregues clima e2e, HWEXPERT, Piper neural-lite, EventBus skinny, WakeWord registrado.  
-**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md).  
-**Pendências de voz ≠ 107** — migradas para **Sprint Sound (reaberta)** abaixo.  
+**Veredito:** fechada para voz — entregues clima e2e, HWEXPERT, Piper neural-lite, EventBus skinny, WakeWord registrado.
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md).
+**Pendências de voz ≠ 107** — migradas para **Sprint Sound (reaberta)** abaixo.
 **Evidência:** `SESSION_110.md`, `SESSION_107_CLOSE.md`, log `logs/boot_whpx_20260716_110041.txt`.
 
 | Item | Status | Nota |
@@ -58,7 +59,7 @@
 
 ## ▶️ SPRINT SOUND (reaberta) — leftovers voz pós-107
 
-**Home do backlog de voz.** Não bloqueia ADR-0042. Truth = `neural-kernel/src/audio/*` (ADR-0045).  
+**Home do backlog de voz.** Não bloqueia ADR-0042. Truth = `neural-kernel/src/audio/*` (ADR-0045).
 **Deps/tools:** `tools/train_stt.py`, `tools/convert_piper_to_bitnet.py`, HDA (`audio/hda.rs`), UAC stub (`audio/usb.rs`).
 
 | Item | Status | Detalhes / deps |
@@ -133,7 +134,8 @@
 - [ ] **P01** Após singleton: `neural-kernel` depender de `k_ai` e eliminar mods locais (`self_heal`, `trust`, `agency`, `cognitive`, `audit`, …)
 - [ ] **P08** Um só `SELF_HEAL` / `TRUST_CACHE` no path boot (hoje: monólito × hermes/k_ai)
 - [ ] Mover **safety / security / optimizer / SleepCycle / AutoLearn** para `k_ai` **ou** manter em hermes e congelar docs (decidir ownership Ring 1)
-- [ ] Deprecar / remover `crates/k_ia` (legado pós-rename) e `hermes/src/monolith_stubs.rs` residual
+- [x] Arquivar `crates/k_ia` em `LEGACY/k_ia` (legado pós-rename; 2026-07-16)
+- [ ] Arquivar `hermes/src/monolith_stubs.rs` residual
 
 ### Checkpoint / SelfHeal (P09)
 
@@ -236,5 +238,5 @@
 ---
 
 **Detalhes completos:** `TODO.md`
-**Catálogo de tecnologias:** `docs/TECNOLOGIAS.md`
+**Catálogo de tecnologias:** `TECNOLOGIAS.md`
 **Roadmap completo:** `ROADMAP.md`

@@ -1,9 +1,10 @@
 # CATÁLOGO DE TECNOLOGIAS — AIOS K²CHJ (neural-os-core)
 ## Registro de Propriedade Intelectual e Inovação
 
-**~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros de compilação**
+**~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
+**Versão release:** v1.8.0 (2026-07-16)
+**Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
-**Build status:** ✅ `cargo build --release` = 0 erros, 0 warnings
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 **HuggingFace:** [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)
 
@@ -61,7 +62,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.10d | **Demand-paging #PF (P7)** | ✅ Lazy VA registry + reserve NOT PRESENT + #PF cura leaf; Cap DEMAND_PAGE; frames pré-alocados (path #PF sem alloc). ADR-0041 P7. | Cap + #PF demand-page | MIT | `demand_page.rs`, `cortex_mmap.rs`, `interrupts.rs` | ✅ PoC |
 | 2.10e | **VirtIO vring + DMA pin (P8)** | ✅ Virtqueue layout-compatible sobre pin; Cap VRING_SETUP; NIC live untouched. ADR-0041 P8. | Cap + VirtIO vring | MIT | `virtio_vring.rs`, `k_ia_dma.rs` | ✅ PoC |
 | 2.10f | **GGUF/FAT file-backed mmap (P9)** | ✅ Pré-fill FAT→frames + demand-page; Cap MAP_FILE; magic GGUF/BitNet; fallback NFIL. ADR-0041 P9. | Cap + FAT mmap | MIT | `gguf_mmap.rs`, `demand_page.rs`, `fat32.rs` | ✅ PoC |
-| 2.10g | **Adequação Boot OK→K²CHJ (ADR-0042)** | ▶️ Cadeia k-nano→k-ai→cortex→hermes→jarbas; N1–N5; **v2.0.0 = N1–N5 done**. N1 ✅; marco **v1.7.0**. | K²CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ▶️ N2–N5 |
+| 2.10g | **Adequação Boot OK→K²CHJ (ADR-0042)** | ✅ N1–N5 + wire N2.5–N5.7; marco **v1.8.0**; gate v2.0.0 = review formal | K²CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ✅ v1.8.0 |
 | 2.10h | **LoadStatus + BitNet 2B LOADED (QEMU)** | ✅ Telemetria `LoadStatus`/`[STATUS]`; 2B ~590MB L=30 LOADED via QEMU-loader; FWD OK; TTS empty = known. v1.7.0. | BitNet v4 + LoadStatus | MIT | `load_status.rs`, `cortex.rs`, `main.rs` | ✅ load / 🟡 gen |
 | 2.10 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
 | 2.11 | **Huge Pages 2MiB/1GiB** | 🔄 `allocate_huge_2mb()` mapeia páginas grandes no page table para performance de memória. | x86_64 MMU, Linux hugetlbfs | GPLv2 | `memory.rs` | ✅ 0 err |
@@ -98,7 +99,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 ## 5. 🎵 ÁUDIO — Captura e Reprodução
 
-**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).  
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).
 **Backlog residual:** **Sprint Sound (reaberta)** — Sprint 107 Voice ✅ FECHADA (PASS parcial forte+). Não bloqueia ADR-0042.
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
@@ -236,36 +237,24 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 ## 14. 📋 COMPILAÇÃO — Prova de Zero Erros
 
 ```bash
-$ cargo build --release
-   Compiling neural-kernel v2.0.0
-   Compiling boot v0.1.0
+$ cargo clean -p neural-kernel && cargo nk
     Finished `release` profile [optimized] target(s)
-    0 errors, 0 warnings
+    0 errors
 ```
 
-```bash
-$ cargo check --release
-    Finished `release` profile [optimized] target(s)
-    0 errors, 0 warnings
-```
-
-**Métricas finais:**
+**Métricas (v1.8.0):**
 
 | Métrica | Valor |
 |---------|-------|
 | Linhas de código (Rust) | ~26.000 |
 | Arquivos Rust | 180+ |
 | Agentes | 247+ |
-| ADRs (decisões arquiteturais) | 40 |
-| Commits | 500+ |
+| ADRs | 47+ |
 | Firmware blobs | 116 (~12.5 MB) |
-| HWIDs no HW Expert v3 | **61.453 VID/DID únicos** |
-| Dataset SDIO HWIDs | 171.003 registros |
-| Dataset pci-ids + usb-ids | 48.346 registros |
-| Tags de versão | v0.01 → v2.0.0 |
-| Crates K²CHJ | k_nano, k_ai, cortex, hermes, jarbas |
-| Erros de compilação | **0** |
-| Warnings | **0** |
+| HWIDs HW Expert v3 | **61.453 VID/DID** |
+| Tags release | v1.0.0 → **v1.8.0** (gate v2.0.0 = review) |
+| Crates K²CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
+| Erros (`cargo nk`) | **0** |
 
 ---
 
@@ -290,8 +279,8 @@ $ cargo check --release
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v2.0.0**  
-> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K²CHJ, 0 erros.*  
-> *"O hardware real não perdoa. O silício obedece."*  
-> [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)  
+> **AIOS K²CHJ — Neural OS Hermes v1.8.0**
+> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K²CHJ wired, cargo nk = 0 erros.*
+> *"O hardware real não perdoa. O silício obedece."*
+> [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

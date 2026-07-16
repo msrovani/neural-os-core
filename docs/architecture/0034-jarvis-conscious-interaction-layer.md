@@ -1,7 +1,9 @@
 # ADR-0034: J.A.R.V.I.S. — Camada de Interação Consciente do Hermes
 
+> **SUPERSEDED:** preservada como histórico. A decisão canônica é a [ADR-0036](0036-jarvis-unified-interaction-layer.md).
+
 **Data:** 2026-07-03
-**Status:** Draft
+**Status:** Superseded
 **Sprint Target:** 77-78 (J.A.R.V.I.S. como persona) + N+1 (voz, emotion, cross-device)
 
 ---

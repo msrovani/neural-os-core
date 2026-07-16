@@ -1,3 +1,7 @@
+> **Histórico** — Arquivado em 2026-07-16.
+> Origem: `docs/memory/SESSION_079.md`
+> Fonte atual: `docs/memory/SESSION_INDEX.md` · `docs/memory/STATE.md`
+
 # SESSION_079 — Sprint 79: LLM Infrastructure + Display Xuvisco Fix
 
 **Data:** 2026-07-04 | **Sprint:** 79 — Bloco 23 | **v0.79.0–v0.79.1**
