@@ -1,4 +1,10 @@
 target/
+# Builds isolados: usar target/agent-*, target/check-*, target/s106 (sob target/).
+# Rede de segurança para leftovers legados na raiz (não criar novos):
+target-*/
+target_*.txt
+*-check*.log
+*-check*.txt
 
 # Compiled binaries / disk images
 *.bin

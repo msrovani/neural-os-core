@@ -5,10 +5,10 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::interrupts::TIMER_TICKS;
+use k_nano::interrupts::TIMER_TICKS;
 use k_nano::serial_println;
 use k_nano::EVENT_BUS;
-use crate::{Event, CapabilityToken};
+use event_bus::{Event, CapabilityToken};
 
 const SEC_MANIFEST: AgentManifest = AgentManifest {
     name: "security",
@@ -31,8 +31,8 @@ pub struct SecurityEvent {
 }
 
 pub struct SecurityAgent {
-    net_receiver: crate::Receiver,
-    sys_receiver: crate::Receiver,
+    net_receiver: event_bus::Receiver,
+    sys_receiver: event_bus::Receiver,
     events: Vec<SecurityEvent>,
     port_scan_counter: u64,
     ping_flood_counter: u64,
@@ -183,7 +183,7 @@ impl SecurityAgent {
                 // Notifica Hermes
                 let _ = EVENT_BUS.publish(Event {
                     id: tick,
-                    topic: String::from(hermes::hermes::TOPIC_HERMES_RESPONSE),
+                    topic: String::from(crate::hermes::TOPIC_HERMES_RESPONSE),
                     payload: alloc::format!("[SECURITY] Correlacao: {} eventos, severidade {}", self.events.len(), sev).into_bytes(),
                     token: CapabilityToken::Legacy(1),
                 });

@@ -7,8 +7,8 @@
 //! `zerocopy-derive` (proc macro incompatível com MinGW toolchain no Windows).
 //! Revisitar quando houver crate compatível ou após migração para MSVC.
 //!
-//! A struct VIRTIO_DEV em net.rs é populada por init_driver_virtio().
-//! A NetPhy unificada em netstack.rs tenta RTL8139 e VirtIO.
+//! VIRTIO_DEV em nic_globals é populada por init_driver_virtio().
+//! A NetPhy unificada em hermes::netstack tenta RTL8139 e VirtIO.
 
 extern crate alloc;
 use alloc::vec::Vec;

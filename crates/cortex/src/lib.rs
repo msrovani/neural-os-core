@@ -22,6 +22,9 @@ pub struct HardwareRegisterMap {
     pub rx_buf_len: usize,
 }
 
+pub mod arena;
+pub mod global_arena;
+pub mod r3;
 pub mod bitnet_avx2;
 pub mod bpe;
 pub mod burn_flex;

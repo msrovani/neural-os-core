@@ -4,7 +4,7 @@
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.  
 **Documento oficial:** AGENTS.md (seção roadmap)  
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado  
-**Pista ativa:** **ADR-0042 N2→N5** (voz residual → Sprint Sound reaberta; não bloqueia ADR-42)
+**Pista ativa:** **Sprint Sound** (voz pós-107). ADR-0042 ✅ v1.8.0. Review gate v2.0.0 pendente.
 
 ---
 
@@ -68,7 +68,7 @@
 | Piper VITS pleno | ⏳ | neural-lite ≠ HiFi-GAN; `convert_piper_to_bitnet.py` |
 | Soft-float voice latency | ⏳ | known blocker; defer sob Sound (sem fake fix) |
 | UAC real (#84) | ⏳ | probe PCI USB ✅; enum descriptors xHCI ainda stub |
-| jarbas/audio wire | ⏳ | feature `jarbas-bridge` opcional; blocker `#[global_allocator]` |
+| jarbas/audio wire | ⏳ | N5.7 wired display/gpu; audio truth monólito (ADR-0045); re-export quando wakeword convergir |
 | VAD refinements | ⏳ | `audio/vad.rs` base existe |
 | SER refinements | ⏳ | `audio/ser.rs` heurístico; polish |
 | Wake ML polish | ⏳ | agente registrado ✅; path Mic→WAKE e2e + MLP polish |
@@ -76,19 +76,21 @@
 
 ---
 
-## ▶️ ADR-0042 — pista ativa (N2→N5)
+## ✅ ADR-0042 — adequação K²CHJ (v1.8.0)
 
-| Fase | Status | Nota |
-|------|--------|------|
+| Fase | Status | Versão |
+|------|--------|--------|
 | N1 k-nano legível | ✅ | v1.7.0 |
-| **N2** k-ai SelfHeal / HMI | ⏳ | **próximo passo sugerido** |
-| N3 cortex cérebro | ▶️ parcial | 2B LOADED + GEN weatherish |
-| N4 hermes orquestra | ▶️ parcial | EventBus intent path |
-| N5 jarbas ego/UI | ▶️ parcial | TTS/FB; voz plena = Sprint Sound |
+| N2 k-ai SelfHeal / Trust | ✅ CLOSED + N2.5 wired | v1.7.4 / v1.7.8 |
+| N3 cortex cérebro | ✅ CLOSED + N3.5 wired | v1.7.5 / v1.7.9 |
+| N4 hermes orquestra | ✅ CLOSED + N4.6 wired | v1.7.6 / v1.7.10 |
+| N5 jarbas ego/UI | ✅ CLOSED + N5.7 wired | v1.7.7 / v1.7.11 |
 
-Gate `v2.0.0` = N1–N5. Voz residual **não** é gate de N2.
+**Marco v1.8.0:** N1–N5 funcionais + wire crates completo. Gate `v2.0.0` = review formal (qualidade voz → Sprint Sound).
 
 ---
+
+## ▶️ ADR-0042 — histórico (arquivado)
 
 ## ⏳ SPRINT 108 — v2.0 Self-Evolving Agents
 

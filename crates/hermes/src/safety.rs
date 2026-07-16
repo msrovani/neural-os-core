@@ -17,7 +17,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::{serial_println, println};
+use k_nano::{serial_println, println};
 use k_nano::EVENT_BUS;
 
 const SAFETY_MANIFEST: AgentManifest = AgentManifest {
@@ -68,9 +68,9 @@ impl SafetyInvariants {
         }
         // I4: Signed evidence — registra no Merkle Audit Trail
         if self.i4_signed {
-            let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
             let msg = alloc::format!("{}:{}:{}", action, agent, skill_name);
-            k_nano::AUDIT_TRAIL.lock().push(tick, agent, "safety_check", msg.as_bytes());
+            crate::globals::AUDIT_TRAIL.lock().push(tick, agent, "safety_check", msg.as_bytes());
         }
         // Hard blocklist + Layer 0 (patterns)
         for (pattern, reason) in LAYER0_PATTERNS.iter() {
@@ -152,7 +152,7 @@ pub fn check_safety(input: &str) -> SafetyVerdict {
 }
 
 pub struct SafetyAgent {
-    receiver: crate::Receiver,
+    receiver: event_bus::Receiver,
     violations: Vec<(u8, String, u64)>,
 }
 
@@ -165,7 +165,7 @@ impl SafetyAgent {
     }
 
     fn log_violation(&mut self, layer: u8, input: &str, reason: &str) {
-        let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         self.violations.push((layer, String::from(input), tick as u64));
         serial_println!("\n⚠️  SAFETY VIOLATION — Layer {} ⚠️", layer);
         serial_println!("   Input: \"{}\"", input);
@@ -187,15 +187,15 @@ impl Agent for SafetyAgent {
             let verdict = check_safety(text);
             if let SafetyVerdict::Violation { layer, reason } = verdict {
                 self.log_violation(layer, text, &reason);
-                let _ = EVENT_BUS.publish(crate::Event {
+                let _ = EVENT_BUS.publish(event_bus::Event {
                     id: 0, topic: String::from("SAFETY_RESULT"),
                     payload: alloc::format!("DENY: Layer {} - {}", layer, reason).into_bytes(),
-                    token: crate::CapabilityToken::Legacy(1),
+                    token: event_bus::CapabilityToken::Legacy(1),
                 });
             } else {
-                let _ = EVENT_BUS.publish(crate::Event {
+                let _ = EVENT_BUS.publish(event_bus::Event {
                     id: 0, topic: String::from("SAFETY_RESULT"),
-                    payload: b"ALLOW".to_vec(), token: crate::CapabilityToken::Legacy(1),
+                    payload: b"ALLOW".to_vec(), token: event_bus::CapabilityToken::Legacy(1),
                 });
             }
         }

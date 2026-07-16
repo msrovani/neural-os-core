@@ -22,7 +22,7 @@ pub struct PciDevice {
     pub bar5: u32,
 }
 
-pub(crate) unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
+pub unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
     let address = 0x8000_0000u32
         | ((bus as u32) << 16)
         | ((device as u32) << 11)
@@ -49,7 +49,7 @@ pub(crate) unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset:
     ((dword >> ((offset as u32 & 2) * 8)) & 0xFFFF) as u16
 }
 
-pub(crate) unsafe fn read_config_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
+pub unsafe fn read_config_byte(bus: u8, device: u8, function: u8, offset: u8) -> u8 {
     let dword = read_config_dword(bus, device, function, offset & 0xFC);
     ((dword >> ((offset as u32 & 3) * 8)) & 0xFF) as u8
 }
@@ -98,12 +98,18 @@ unsafe fn scan_bus(bus: u8, visited: &mut alloc::vec::Vec<u8>) -> alloc::vec::Ve
                     let cl = (cr >> 8) as u8;
                     let sc = (cr & 0xFF) as u8;
                     let pi = (read_config_word(bus, device, function, 0x08) >> 8) as u8;
+                    // Le todas as 6 BARs, exatamente como a function 0 (funcoes 1-7
+                    // podem ter recursos MMIO/IO proprios, ex: multi-porta NIC/SATA).
                     let b0 = read_bar(bus, device, function, 0);
                     let b1 = read_bar(bus, device, function, 1);
+                    let b2 = read_bar(bus, device, function, 2);
+                    let b3 = read_bar(bus, device, function, 3);
+                    let b4 = read_bar(bus, device, function, 4);
+                    let b5 = read_bar(bus, device, function, 5);
                     devices.push(PciDevice {
                         bus, device, function,
                         vendor_id: vf, device_id: df, class: cl, subclass: sc, prog_if: pi,
-                        bar0: b0, bar1: b1, bar2: 0, bar3: 0, bar4: 0, bar5: 0,
+                        bar0: b0, bar1: b1, bar2: b2, bar3: b3, bar4: b4, bar5: b5,
                     });
                 }
             }

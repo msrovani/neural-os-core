@@ -1,5 +1,6 @@
 extern crate alloc;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::str::from_utf8;
 use k_nano::kjson;

@@ -52,7 +52,7 @@ impl Observability {
     }
 
     pub fn log(&mut self, level: LogLevel, agent: &str, event: &str, msg: &str) {
-        let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         if self.logs.len() >= self.max_logs { self.logs.remove(0); }
         self.logs.push(LogEntry { tick, level, agent: String::from(agent), event: String::from(event), message: String::from(msg) });
         kjson!(level.name(), agent, event, "msg", msg);

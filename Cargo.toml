@@ -8,15 +8,21 @@ members = [
     "crates/event-bus",
     "crates/boot",
     "crates/k_nano",
-    "crates/k_ia",
+    "crates/k_ai",
     "crates/cortex",
     "crates/hermes",
-    "crates/jarvis",
+    "crates/jarbas",
 ]
 default-members = ["crates/boot"]
 
 [profile.dev]
 panic = "abort"
+# Paraleliza codegen LLVM por crate (dev: rebuild mais rápido).
+codegen-units = 16
 
 [profile.release]
 panic = "abort"
+# Sem LTO fat: mantém codegen-units>1 para usar vários cores no LLVM.
+# (LTO=true serializa e deixa o build bem mais lento.)
+codegen-units = 16
+# incremental no release costuma atrapalhar com bindeps/bootloader; deixar off (default).

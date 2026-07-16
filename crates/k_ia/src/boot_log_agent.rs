@@ -1,5 +1,5 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::serial_println;
+use k_nano::serial_println;
 
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
@@ -18,14 +18,14 @@ impl BootLogAgent {
     /// Suporta FAT32 (B<TICK>.LOG) e LogFsAgent (memoria)
     pub fn read_last_boot_log() -> Option<alloc::string::String> {
         // Tenta ler do disco ATA primeiro
-        let ata_guard = crate::ATA_DRIVER.lock();
+        let ata_guard = k_nano::ATA_DRIVER.lock();
         let ata = (*ata_guard).as_ref()?;
-        let parts = unsafe { crate::fat32::read_mbr(ata) };
+        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
             match part.type_code {
                 0x0B | 0x0C | 0x1C | 0x73 => {
                     // FAT32 (ou mascarado): ler B<TICK>.LOG mais recente
-                    if let Some(fat32) = unsafe { crate::fat32::Fat32Reader::new(ata, part) } {
+                    if let Some(fat32) = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) } {
                         let mut best_name = alloc::string::String::new();
                         let mut best_tick = 0u64;
                         let mut cluster = fat32.get_root_cluster();
@@ -64,17 +64,17 @@ impl BootLogAgent {
                 _ => {}
             }
         }
-        // Fallback: ler do LogFsAgent (memoria)
-        if let Some(ref vfs) = *crate::vfs::VFS.lock() {
+        // Fallback: ler do LogFsAgent (memoria) — apenas quando parte do neural-kernel
+        #[cfg(feature = "kernel")]
+        if let Some(ref vfs) = *k_nano::vfs::VFS.lock() {
             let files = vfs.list_dir("/logs");
             for file in files {
                 if file.starts_with("boot_") && file.ends_with(".log") {
                     let path = alloc::format!("/logs/{}", file);
                     let (_mount, rel_path, agent_name) = vfs.resolve(&path);
                     if let Some("logfs") = agent_name {
-                        // Usar LogFsAgent diretamente via FilesystemAgent trait
-                        use crate::fs::FilesystemAgent;
-                        let logfs = crate::fs::log_fs_agent::LogFsAgent::new();
+                        use k_nano::fs::FilesystemAgent;
+                        let logfs = hermes::fs::log_fs_agent::LogFsAgent::new();
                         if let Ok(data) = logfs.read(rel_path) {
                             return core::str::from_utf8(&data).ok().map(|s| alloc::string::String::from(s));
                         }
@@ -91,13 +91,13 @@ impl BootLogAgent {
         let _filename = alloc::format!("B{:07X}.LOG", tick);
         
         // Tenta escrever no disco ATA
-        let ata_guard = crate::ATA_DRIVER.lock();
+        let ata_guard = k_nano::ATA_DRIVER.lock();
         if let Some(ata) = (*ata_guard).as_ref() {
-            let parts = unsafe { crate::fat32::read_mbr(ata) };
+            let parts = unsafe { k_nano::fat32::read_mbr(ata) };
             for part in &parts {
                 match part.type_code {
                     0x0B | 0x0C | 0x1C | 0x73 => {
-                        if let Some(_fat32) = unsafe { crate::fat32::Fat32Reader::new(ata, part) } {
+                        if let Some(_fat32) = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) } {
                             let _data = content.as_bytes();
                             // Simplificado: escrever direto no cluster (requer implementacao completa)
                             // Por enquanto, fallback para LogFsAgent
@@ -108,11 +108,16 @@ impl BootLogAgent {
             }
         }
         
-        // Fallback: escrever no LogFsAgent
-        let log_path = alloc::format!("boot_{:07X}.log", tick);
-        use crate::fs::FilesystemAgent;
-        let mut logfs = crate::fs::log_fs_agent::LogFsAgent::new();
-        logfs.write(&log_path, content.as_bytes()).map_err(|_| "logfs write failed")
+        // Fallback: escrever no LogFsAgent — apenas quando parte do neural-kernel
+        #[cfg(feature = "kernel")]
+        {
+            let log_path = alloc::format!("boot_{:07X}.log", tick);
+            use k_nano::fs::FilesystemAgent;
+            let mut logfs = hermes::fs::log_fs_agent::LogFsAgent::new();
+            return logfs.write(&log_path, content.as_bytes()).map_err(|_| "logfs write failed");
+        }
+        #[cfg(not(feature = "kernel"))]
+        Err("logfs not available outside kernel")
     }
 
     /// Analisa o log e retorna diagnostics para o Cortex
@@ -155,7 +160,8 @@ impl Agent for BootLogAgent {
             for (kind, msg) in &diagnostics {
                 serial_println!("[BOOT-LOG-AGENT] {}: {}", kind, msg);
                 
-                // Se detectou panic, acionar Self-Heal
+                // Se detectou panic, acionar Self-Heal — apenas quando parte do neural-kernel
+                #[cfg(feature = "kernel")]
                 if *kind == "PANIC" || *kind == "GPU_HUNG" {
                     let ctx = crate::self_heal::ErrorContext {
                         kind,

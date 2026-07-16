@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-07-16 — Marco K²CHJ: ADR-0042 adequação + wire crates completo
+
+### Marco
+- **ADR-0042 N1–N5 ✅** — cadeia funcional `k-nano → k-ai → cortex → hermes → jarbas` verificada em QEMU
+- **Wire crates N2.5→N5.7 ✅** — monólito boot linka os 5 crates K²CHJ (commits `8740bfd`…`95f8967`)
+- **Sprint 107 Voice ✅** — PASS parcial forte+ (`'O tempo esta'` + Piper neural-lite + EventBus skinny)
+- **Pista ativa pós-1.8.0:** Sprint Sound (voz production-grade) + review gate `v2.0.0` (não declarar automaticamente)
+
+### Wire summary (N2.5→N5.7)
+| Fase | Versão | Crate | Espelhos removidos |
+|------|--------|-------|-------------------|
+| N2.5 | v1.7.8 | `k_ai` + `k_nano` | `trust.rs`, `self_heal.rs` |
+| N3.5 | v1.7.9 | `cortex` | 9 (tensor, trinity, arena, r3, …) |
+| N4.6 | v1.7.10 | `hermes` | ~37 (cron, wasm*, wifi*, apps/, …) |
+| N5.7 | v1.7.11 | `jarbas` | 29 (display/*, gpu/*, jarvis, …) |
+
+### Padrão de migração (lição)
+- Alias dep `*-crate` evita conflito com `mod` re-exportado
+- `k_nano` sem feature `global-alloc` → único `#[global_allocator]` no bin
+- Bridge `memory` + `EVENT_BUS` → `k_nano::globals`
+- Residual monólito = integração bin-only (`cortex.rs`, `audio/*`, `agents.rs`, `net*`, `fs/*`, `jarbas_fb.rs`)
+
+### Residual (não bloqueia 1.8.0)
+- `audio/*` — ADR-0045 truth path (Sprint Sound)
+- `cortex.rs` / `bpe.rs` — generate path + weather-e2e loader
+- `agents.rs` / `net*` / `fs/*` — fleet + NETSTACK singleton
+- Qualidade voz: STT CTC fraco, Mic→Wake runtime, Piper VITS pleno, soft-float latency
+
+### HW real
+- `target/usb_hw.img` unificado (ESP + FAT dados; Rufus DD)
+- BITNET2B + PIPER + HWEXPRT + RUSTCDR + BGE + STT + 116 firmware blobs
+
+### Build
+- `cargo clean -p neural-kernel && cargo nk` — **0 erros** (2026-07-16)
+
+### Docs
+- STATE v1.8.0, SESSION_120, SESSION_INDEX, TODO, AGENTS, ADR-0042 policy, IDEA_BANK #439–#442
+
 ## [1.7.11] — 2026-07-16 — ADR-0042 N5.7 (jarbas wired no bin)
 
 ### Wired

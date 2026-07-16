@@ -142,7 +142,7 @@ pub unsafe fn inject_wpa2_key(mmio_base: usize, crypto: &CryptoOffsets, pmk: &[u
 
 /// Executa scan ativo: envia Probe Request em cada canal, coleta respostas.
 /// Usa send_packet/receive_packet do driver ativo.
-pub fn scan_networks<D: hermes::generic_wifi::WifiChipset>(
+pub fn scan_networks<D: crate::generic_wifi::WifiChipset>(
     driver: &mut D, results: &mut Vec<WirelessNetwork>) -> Result<usize, &'static str> {
     let mut found = 0;
     // Canais 2.4GHz: 1-11

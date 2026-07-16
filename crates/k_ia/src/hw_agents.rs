@@ -39,7 +39,7 @@ impl HwRegistry {
 
     /// Detecta hardware via PCI scan e cria HwAgent para cada dispositivo
     pub unsafe fn detect_all(&mut self) {
-        let devices = crate::pci::scan_pci();
+        let devices = k_nano::pci::scan_pci();
         for dev in &devices {
             let (class, subclass) = (dev.class as u16, dev.subclass as u16);
             let caps = Self::class_to_capabilities(class, subclass);

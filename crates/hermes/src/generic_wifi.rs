@@ -103,8 +103,9 @@ impl ChipIoInterface {
 }
 
 // ── 4. DESCRITOR DMA ──────────────────────────────────────────
+// align(16) no descriptor + ChipIoInterface@72B → LLVM "offset is not a multiple of 16".
 
-#[repr(C, align(16))]
+#[repr(C)]
 pub struct DmaDescriptor {
     pub buf_addr: u64,
     pub len_flags: u32,
@@ -116,11 +117,12 @@ const BUF_SIZE: usize = 2048;
 
 // ── 5. MOTOR AGNOSTIC WIFI ENGINE ──────────────────────────────
 
+#[repr(C, align(16))]
 pub struct AgnosticWifiEngine {
-    io: ChipIoInterface,
     tx_ring: [DmaDescriptor; 64],
     rx_ring: [DmaDescriptor; 64],
     rx_buf: [[u8; 2048]; 64],
+    io: ChipIoInterface,
     tx_head: usize,
     rx_tail: usize,
     ring_sz: usize,
@@ -135,10 +137,10 @@ impl AgnosticWifiEngine {
             Err(_) => ChipIoInterface { base: 0, map },
         };
         AgnosticWifiEngine {
-            io,
             tx_ring: unsafe { core::mem::zeroed() },
             rx_ring: unsafe { core::mem::zeroed() },
             rx_buf: unsafe { core::mem::zeroed() },
+            io,
             tx_head: 0,
             rx_tail: 0,
             ring_sz,
@@ -318,7 +320,7 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             (_, _) if is_ethernet(vid, did) => (ETH_FALLBACK_MAP, "Ethernet"),
             _ => {
                 // Tenta sintese via IA se mapa fixo nao existe
-                let hw_map = cortex::generate_register_map(vid, did);
+                let hw_map = cortex::cortex::generate_register_map(vid, did);
                 if let Some(ai_map) = hw_map {
                     (ai_map, "Sintetizado-IA")
                 } else {
@@ -362,7 +364,7 @@ fn is_ethernet(v: u16, d: u16) -> bool {
 }
 
 pub fn detect_wifi() -> bool {
-    let devices = unsafe { crate::pci::scan_pci() };
+    let devices = unsafe { k_nano::pci::scan_pci() };
     for dev in &devices {
         if dev.class == 0x02 && dev.subclass == 0x80 {
             let bar_raw = (dev.bar0 as u64) | ((dev.bar1 as u64) << 32);

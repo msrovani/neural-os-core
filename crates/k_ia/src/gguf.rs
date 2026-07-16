@@ -312,7 +312,7 @@ pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
 // GgufBackedModel — implementa Model trait usando pesos GGUF
 // ---------------------------------------------------------------------------
 
-use cortex::Model;
+use cortex::cortex::Model;
 
 /// Converte um tensor f32 para PackedTernaryTensor via limiar
 fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
@@ -345,7 +345,7 @@ fn dequantize_tensor_by_name(file: &GgufFile, name_hint: &str) -> Option<(Vec<f3
                     Some((vals, cols, rows))
                 }
                 GgufType::Q4_0 => {
-                    k_ia::gguf::dequantize_q4_0(raw, rows, cols)
+                    crate::gguf::dequantize_q4_0(raw, rows, cols)
                         .map(|t| (t.data, cols, rows))
                 }
                 _ => None,
@@ -374,7 +374,7 @@ impl GgufBackedModel {
         GgufBackedModel { file, n_layers, hidden_dim }
     }
 
-    fn try_build_transformer(&self) -> Option<cortex::TransformerModel> {
+    fn try_build_transformer(&self) -> Option<cortex::cortex::TransformerModel> {
         let (vals, hidden, vocab) = dequantize_tensor_by_name(&self.file, "token_embd")?;
         let embed = {
             let mut vals_t = Vec::with_capacity(hidden * vocab);
@@ -399,7 +399,7 @@ impl GgufBackedModel {
             let ffn_dim = gc.max(gr) / 4 * 4; // approximate FFN intermediate dim
             let rms_inner_attn = alloc::vec![1.0f32; self.hidden_dim];
             let rms_ffn_norm = alloc::vec![1.0f32; ffn_dim];
-            layers.push(cortex::LayerWeights {
+            layers.push(cortex::cortex::LayerWeights {
                 rms_attn: rms_default.clone(),
                 q: f32_to_ternary_packed(&q, qr, qc),
                 k: f32_to_ternary_packed(&k, kr, kc),
@@ -422,19 +422,19 @@ impl GgufBackedModel {
             .map(|(data, c, r)| f32_to_ternary_packed(&data, r, c))
             .unwrap_or_else(|| {
                 let mut seed = 42u32;
-                cortex::random_ternary(&mut seed, self.hidden_dim, cortex::VOCAB_SIZE as usize)
+                cortex::cortex::random_ternary(&mut seed, self.hidden_dim, cortex::cortex::VOCAB_SIZE as usize)
             });
         let rms_final = alloc::vec![1.0f32; self.hidden_dim];
-        Some(cortex::TransformerModel {
+        Some(cortex::cortex::TransformerModel {
             embed,
             layers,
             rms_final,
             unembed,
             medusa_heads: Vec::new(),
-            vocab_size: cortex::VOCAB_SIZE as u32,
+            vocab_size: cortex::cortex::VOCAB_SIZE as u32,
             hidden: self.hidden_dim,
             num_layers: self.n_layers,
-            max_seq: cortex::MAX_SEQ,
+            max_seq: cortex::cortex::MAX_SEQ,
             num_heads: self.hidden_dim / 64,
             num_kv_heads: self.hidden_dim / 64,
             head_dim: 64,
@@ -452,7 +452,7 @@ impl GgufBackedModel {
 impl Model for GgufBackedModel {
     fn generate(&self, prompt: &str) -> String {
         if let Some(model) = self.try_build_transformer() {
-            cortex::generate_text(&model, prompt)
+            cortex::cortex::generate_text(&model, prompt)
         } else {
             let summary = gguf_summary(&self.file);
             alloc::format!("[GGUF] Modelo carregado. {} camadas, {} hidden.\n\
@@ -467,11 +467,11 @@ impl Model for GgufBackedModel {
     }
 
     fn vocab_size(&self) -> u32 {
-        cortex::VOCAB_SIZE as u32
+        cortex::cortex::VOCAB_SIZE as u32
     }
 
     fn max_seq(&self) -> usize {
-        cortex::MAX_SEQ
+        cortex::cortex::MAX_SEQ
     }
 }
 
@@ -479,7 +479,7 @@ impl Model for GgufBackedModel {
 pub fn load_gguf_model(data: &[u8]) -> Result<(), &'static str> {
     let file = load_gguf(data)?;
     let model = GgufBackedModel::new(file);
-    cortex::set_model(Box::new(model));
+    cortex::cortex::set_model(Box::new(model));
     Ok(())
 }
 
@@ -504,10 +504,10 @@ pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
     let name = path.trim().to_uppercase();
     let ata = k_nano::ATA_DRIVER.lock();
     let ata = ata.as_ref()?;
-    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-            let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part)? };
+            let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part)? };
             let file_size = unsafe { let mut cluster = fs.get_root_cluster();
                 let mut found_size = 0usize;
                 while cluster < 0x0FFF_FFF8 && cluster >= 2 {
@@ -551,10 +551,10 @@ pub fn load_gguf_model_from_disk(path: &str) -> Option<GgufBackedModel> {
     let name = path.trim().to_uppercase();
     let ata = k_nano::ATA_DRIVER.lock();
     let ata = ata.as_ref()?;
-    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-            let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part)? };
+            let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part)? };
             let data = unsafe { fs.read_file(&name)? };
             let file = load_gguf(&data).ok()?;
             return Some(GgufBackedModel::new(file));

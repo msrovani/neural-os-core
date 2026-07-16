@@ -52,25 +52,31 @@ impl<T> IrqSafeLock<T> {
     }
 
     /// Tenta adquirir sem esperar. Retorna None se lockado por outro core.
+    ///
+    /// Usa CAS (compare_exchange) em vez de fetch_add incondicional: se o
+    /// ticket estivesse sempre incrementando mesmo quando o lock já está
+    /// ocupado, o ticket "roubado" nunca seria liberado (nenhum guard seria
+    /// criado para chamar `serving.fetch_add` no Drop), causando starvation
+    /// permanente de `lock()`/`try_lock()` (deadlock: `serving` nunca alcança
+    /// o ticket perdido).
     pub fn try_lock(&self) -> Option<IrqSafeGuard<'_, T>> {
         let irq_was_enabled = are_irqs_enabled();
         x86_64::instructions::interrupts::disable();
 
-        let my_ticket = self.ticket.load(Ordering::Relaxed);
         let now_serving = self.serving.load(Ordering::Acquire);
-        if now_serving == my_ticket {
-            // Ninguém na fila — tenta tomar o ticket
-            let ticket = self.ticket.fetch_add(1, Ordering::Relaxed);
-            if ticket == my_ticket {
-                return Some(IrqSafeGuard { lock: self, irq_was_enabled });
+        // So reivindica o ticket se ninguem estiver na fila (ticket == serving).
+        // CAS garante que nao incrementamos o contador se a condicao deixou de
+        // valer entre o load e a tentativa (outro core pode ter adquirido).
+        match self.ticket.compare_exchange(now_serving, now_serving + 1, Ordering::AcqRel, Ordering::Relaxed) {
+            Ok(_) => Some(IrqSafeGuard { lock: self, irq_was_enabled }),
+            Err(_) => {
+                // Lock ocupado — restaura IRQ e retorna None (nenhum ticket foi consumido)
+                if irq_was_enabled {
+                    unsafe { x86_64::instructions::interrupts::enable(); }
+                }
+                None
             }
         }
-
-        // Lock ocupado — restaura IRQ e retorna None
-        if irq_was_enabled {
-            unsafe { x86_64::instructions::interrupts::enable(); }
-        }
-        None
     }
 }
 

@@ -128,7 +128,8 @@ pub fn user_data_selector() -> SegmentSelector {
 fn putc(c: u8) {
     unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") c, options(nostack, preserves_flags)); }
 }
-fn puts(s: &[u8]) { for &c in s { putc(c); } }
+/// Lock-free serial write (exception / P6 abort path — sem Mutex).
+pub(crate) fn puts(s: &[u8]) { for &c in s { putc(c); } }
 fn puthex(mut n: u64) {
     putc(b'0'); putc(b'x');
     for _ in 0..16 {
@@ -188,15 +189,20 @@ extern "x86-interrupt" fn double_fault_handler(f: InterruptStackFrame, code: u64
 
 extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageFaultErrorCode) {
     let cr2 = x86_64::registers::control::Cr2::read();
+    // P6 abort em curso: NUNCA return/retry (evita storm CR2=ip err=0x10).
+    if crate::user_mode::demo_active() {
+        dump_exception("#PF", &f, Some(code.bits() as u64));
+        puts(b" CR2=");
+        puthex(cr2.as_u64());
+        putc(b'\n');
+        crate::user_mode::fault_abort("P6 #PF in Ring3 demo");
+    }
     // P7: demand-paging — cura lazy map e retorna (retry insn); sem hlt.
     if crate::demand_page::try_handle_fault(cr2.as_u64()) {
         return;
     }
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
-    if crate::user_mode::demo_active() {
-        crate::user_mode::fault_abort("P6 #PF in Ring3 demo");
-    }
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 10 {
         return;

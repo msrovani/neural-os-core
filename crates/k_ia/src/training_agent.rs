@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
-use k_ia::cognitive::BitNetTrainer;
+use crate::cognitive::BitNetTrainer;
 use k_nano::kjson;
 
 pub struct TrainingAgent {
@@ -65,7 +65,7 @@ impl DataCollector {
     }
 
     pub fn collect_from_system(&mut self) {
-        let sources = k_ia::cognitive::get_training_sources();
+        let sources = crate::cognitive::get_training_sources();
         for s in sources {
             let emb = vec![0.5; 64];
             self.record(emb, vec![0.5; 64]);

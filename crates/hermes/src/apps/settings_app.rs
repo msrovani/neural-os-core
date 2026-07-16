@@ -11,7 +11,7 @@ pub struct SettingsApp {
 impl SettingsApp {
     pub fn new() -> Self {
         SettingsApp {
-            theme_names: jarvis::display::theme::list_names(),
+            theme_names: Vec::new() /* TODO: jarbas::display::theme::list_names */,
             profile_names: vec!["engineer", "gamer", "student", "office", "browsing", "multimedia"],
         }
     }
@@ -27,14 +27,14 @@ impl App for SettingsApp {
         if y >= 30 && y < 60 {
             let idx = (x / 120) as usize;
             if idx < self.theme_names.len() {
-                let _ = jarvis::display::theme::apply(self.theme_names[idx]);
+                // TODO: jarbas::display::theme::apply
                 return Some(alloc::format!("theme {}", self.theme_names[idx]));
             }
         }
         if y >= 80 && y < 110 {
             let idx = (x / 100) as usize;
             if idx < self.profile_names.len() {
-                k_ia::profile::ProfileManager::set_from_name(self.profile_names[idx]);
+                k_ai::profile::ProfileManager::set_from_name(self.profile_names[idx]);
                 return Some(alloc::format!("profile {}", self.profile_names[idx]));
             }
         }

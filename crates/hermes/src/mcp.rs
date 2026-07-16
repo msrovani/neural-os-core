@@ -45,7 +45,7 @@ impl McpAgent {
                 Some(diag)
             }
             "skill" if arg == "list" => {
-                let storage = k_nano::SKILL_STORAGE.lock();
+                let storage = crate::globals::SKILL_STORAGE.lock();
                 let skills = storage.list_skills();
                 drop(storage);
                 let mut msg = String::from("Skills:\n");
@@ -57,11 +57,11 @@ impl McpAgent {
             "help" => Some("Comandos: echo <txt>, status, skill list, help".into()),
             _ => {
                 // Publica como USER_INTENT para o Hermes processar
-                let _ = EVENT_BUS.publish(crate::Event {
+                let _ = EVENT_BUS.publish(event_bus::Event {
                     id: 0,
-                    topic: String::from(hermes::TOPIC_USER_INTENT),
+                    topic: String::from(crate::hermes::TOPIC_USER_INTENT),
                     payload: method.as_bytes().to_vec(),
-                    token: crate::CapabilityToken::Legacy(1),
+                    token: event_bus::CapabilityToken::Legacy(1),
                 });
                 Some(alloc::format!("MCP: '{}' roteado para Hermes", cmd))
             }

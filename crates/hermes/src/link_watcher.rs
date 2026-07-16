@@ -21,9 +21,9 @@ pub struct EthInterface;
 impl NetworkInterface for EthInterface {
     fn name(&self) -> &'static str { "eth0" }
     fn check_health(&mut self) -> LinkStatus {
-        let ok = hermes::net::RTL8139.lock().is_some()
-            || hermes::net::E1000.lock().is_some()
-            || hermes::net::VIRTIO_DEV.lock().is_some();
+        let ok = crate::net::RTL8139.lock().is_some()
+            || crate::net::E1000.lock().is_some()
+            || crate::net::VIRTIO_DEV.lock().is_some();
         if ok { LinkStatus::Up } else { LinkStatus::Down }
     }
     fn set_active(&mut self, _a: bool) {}
@@ -110,9 +110,9 @@ impl FailoverEngine {
         wlan.set_active(target == 1);
         self.deg_count = 0;
         if target == 0 {
-            crate::serial_println!("[LINK] Switch para Ethernet");
+            k_nano::serial_println!("[LINK] Switch para Ethernet");
         } else {
-            crate::serial_println!("[LINK] Switch para WiFi");
+            k_nano::serial_println!("[LINK] Switch para WiFi");
         }
     }
 

@@ -66,8 +66,12 @@ impl Journal {
     pub fn recover(dev: &mut dyn BlockDevice, start_lba: u64, sb: &Superblock) -> bool {
         let journal_lba = start_lba + sb.journal_start * 8;
         let mut header = [0u8; 512];
-        if !dev.read_sectors(journal_lba, &mut header) { return true; }
-        if &header[0..8] != JOURNAL_MAGIC { return true; }
+        // Falha de I/O ao ler o header do journal e um erro real — nao podemos
+        // assumir "journal vazio" nesse caso, pois o disco pode estar com dados
+        // sujos nao aplicados. Retornar sucesso aqui mascararia um estado de
+        // volume potencialmente inconsistente.
+        if !dev.read_sectors(journal_lba, &mut header) { return false; }
+        if &header[0..8] != JOURNAL_MAGIC { return true; } // journal vazio/nao inicializado — ok
 
         let journal_tx = u64::from_le_bytes([header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15]]);
         if journal_tx <= sb.last_tx_id { return true; }

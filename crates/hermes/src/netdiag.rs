@@ -13,7 +13,7 @@ pub fn run_network_test() -> String {
     report.push_str(&alloc::format!("Online: {}\n", k_nano::env::is_online()));
 
     // 2. Netstack
-    let ns_guard = hermes::net::NETSTACK.lock();
+    let ns_guard = crate::net::NETSTACK.lock();
     if ns_guard.is_some() {
         report.push_str("[OK] NETSTACK inicializado\n");
     } else {
@@ -23,7 +23,7 @@ pub fn run_network_test() -> String {
     drop(ns_guard);
 
     // 3. Configuracao IP
-    let cfg = hermes::net::NET_CONFIG.lock();
+    let cfg = crate::net::NET_CONFIG.lock();
     report.push_str(&alloc::format!("MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
         cfg.mac[0], cfg.mac[1], cfg.mac[2], cfg.mac[3], cfg.mac[4], cfg.mac[5]));
     report.push_str(&alloc::format!("IP: {}.{}.{}.{}\n", cfg.ip[0], cfg.ip[1], cfg.ip[2], cfg.ip[3]));
@@ -34,8 +34,8 @@ pub fn run_network_test() -> String {
     drop(cfg);
 
     // 4. Estatisticas de TX/RX
-    let tx = hermes::netstack::net_tx_count();
-    let rx = hermes::netstack::net_rx_count();
+    let tx = crate::netstack::net_tx_count();
+    let rx = crate::netstack::net_rx_count();
     report.push_str(&alloc::format!("TX total (NET): {}\n", tx));
     report.push_str(&alloc::format!("RX total (NET): {}\n", rx));
     let slip_tx = k_nano::slip::slip_tx_count();
@@ -44,7 +44,7 @@ pub fn run_network_test() -> String {
     // 5. Teste de resolucao DNS (usa smoltcp internamente)
     report.push_str("\n--- Teste DNS ---\n");
     let dns_ip = [8, 8, 8, 8]; // Google DNS
-    let mut ns = hermes::net::NETSTACK.lock();
+    let mut ns = crate::net::NETSTACK.lock();
     if let Some(ref mut netstack) = *ns {
         let result = netstack.dns_resolve("google.com", dns_ip);
         match result {
@@ -56,7 +56,7 @@ pub fn run_network_test() -> String {
 
     // 6. Teste HTTP (fetch google.com)
     report.push_str("\n--- Teste HTTP ---\n");
-    let mut ns = hermes::net::NETSTACK.lock();
+    let mut ns = crate::net::NETSTACK.lock();
     if let Some(ref mut netstack) = *ns {
         let target_ip = [142, 250, 80, 110]; // google.com IP fixo como fallback
         let mut conn = netstack.http_new(target_ip, 80, "/");
@@ -67,12 +67,12 @@ pub fn run_network_test() -> String {
             if now.wrapping_sub(start) > 200 { break; }
             netstack.http_poll(&mut conn, (now * 55) as u64);
             match &conn.state {
-                hermes::netstack::HttpState::Done(data) => {
+                crate::netstack::HttpState::Done(data) => {
                     let text = core::str::from_utf8(data).unwrap_or("<binario>");
                     report.push_str(&alloc::format!("[OK] HTTP OK ({} bytes): {}\n", data.len(), &text[..core::cmp::min(100, text.len())]));
                     break;
                 }
-                hermes::netstack::HttpState::Failed => {
+                crate::netstack::HttpState::Failed => {
                     report.push_str("[FAIL] HTTP failed\n");
                     break;
                 }

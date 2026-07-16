@@ -1,8 +1,8 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.11 — ADR-0042 N5.7 ✅
-#   N1–N5 funcionais ✅ — gate v2.0.0 discutível
+#   STATE — neural-os-core v1.8.0 — Marco K²CHJ ✅
+#   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
-#   Backlog voz → Sprint Sound (reaberta) — ADR-0045
+#   Pista ativa: Sprint Sound (voz) + review gate v2.0.0
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
 # ═════════════════════════════════════════════════════════
 
@@ -16,9 +16,9 @@
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 
 ## Roadmap Atual
-**Versão:** **v1.7.11** (2026-07-16) — ADR-0042 **N5.7** jarbas wired no bin; N4.6 v1.7.10; N3.5 v1.7.9; N5 CLOSED v1.7.7; N2.5 v1.7.8.  
-**Runtime marco:** v1.7.2 clima PASS parcial forte+; N2 `logs/boot_n2_20260716_131837.txt`; N3 `logs/boot_n3_20260716_132753.txt`; N4 `logs/boot_n4_20260716_144651.txt`; N5 `logs/boot_n5_20260716_145943.txt`.  
-**Gate `v2.0.0`:** N1–N5 funcionais ✅ — **pode ser discutido**; wire crates N2.5–N5.7 + qualidade voz → Sprint Sound. **Não** declarar v2.0 sem review ADR.  
+**Versão:** **v1.8.0** (2026-07-16) — marco consolidado: ADR-0042 N1–N5 + wire crates N2.5→N5.7 (v1.7.8…v1.7.11).  
+**Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
+**Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review pendente** (qualidade voz Sprint Sound + checklist ADR). **Não** declarar v2.0 automaticamente.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
 

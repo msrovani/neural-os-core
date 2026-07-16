@@ -38,7 +38,7 @@ impl ActorRegistry {
 
     pub fn spawn(&mut self, name: &str, parent: Option<u64>, skills: Vec<String>) -> u64 {
         let id = self.next_id; self.next_id += 1;
-        let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         self.actors.insert(id, ActorEntry {
             id, name: String::from(name), state: ActorState::Idle,
             parent, skills, ticks_used: 0, spawned_at: tick,
@@ -51,7 +51,7 @@ impl ActorRegistry {
         if let Some(actor) = self.actors.get_mut(&id) {
             let old = actor.state;
             if old == ActorState::Done || old == ActorState::Crashed { return false; }
-            let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
             actor.ticks_used += tick;
             actor.state = state;
             kjson!("ACTOR", &actor.name, "trans", "id", id, "from", format_args!("\"{:?}\"", old), "to", format_args!("\"{:?}\"", state));

@@ -10,8 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
-use crate::fs::FilesystemAgent;
-use crate::serial_println;
+use k_nano::fs::FilesystemAgent;
+use k_nano::serial_println;
 
 const HISTORY_MAX: usize = 50;
 
@@ -69,11 +69,11 @@ impl FilesystemAgent for HermesFsAgent {
                 CHAT_COUNTER.fetch_add(1, Ordering::Relaxed);
 
                 // Publish to EventBus for LLM processing
-                let _ = crate::EVENT_BUS.publish(crate::Event {
+                let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                     id: CHAT_COUNTER.load(Ordering::Relaxed),
-                    topic: String::from(crate::cortex::TOPIC_LLM_REQUEST),
+                    topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
                     payload: data.to_vec(),
-                    token: crate::CapabilityToken::Legacy(1),
+                    token: event_bus::CapabilityToken::Legacy(1),
                 });
 
                 // Stub: echo response

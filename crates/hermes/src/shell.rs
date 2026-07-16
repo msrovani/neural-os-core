@@ -15,22 +15,22 @@ pub fn execute(cmd: &str) -> String {
         "help" | "?" => help(args),
         "echo" => alloc::format!("{}\n", args),
         "clear" => String::new(),
-        "uptime" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Uptime: {} ticks ({}s)\n", t, t/18) }
+        "uptime" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Uptime: {} ticks ({}s)\n", t, t/18) }
         "ps" => ps(),
         "kill" => alloc::format!("kill: signal sent\n"),
-        "meminfo" | "memory" => { let ctx = crate::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
+        "meminfo" | "memory" => { let ctx = k_nano::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
         "pci" => pci_ls(),
         "theme" => theme_cmd(args),
-        "shutdown" => { crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered); crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered); String::from("Shutdown...\n") }
-        "reboot" => { crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Scheduled); crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Scheduled); String::from("Reboot...\n") }
-        "date" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
+        "shutdown" => { k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Triggered); k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Triggered); String::from("Shutdown...\n") }
+        "reboot" => { k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Scheduled); k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Scheduled); String::from("Reboot...\n") }
+        "date" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
         "uname" => String::from("Neural OS Hermes v0.109\n"),
-        "cpuinfo" => alloc::format!("CPUs: {}\n", crate::smp::ap_entry_count() + 1),
+        "cpuinfo" => alloc::format!("CPUs: {}\n", k_nano::smp::ap_entry_count() + 1),
         "ls" => ls(args),
         "cat" => cat(args),
         "learn" => learn(args),
-        "observations" => { let r = hermes::skill_observer::report(); if r.is_empty() { String::from("No observations.\n") } else { r } }
-        "profile" => { let p = k_ia::profile::ProfileManager::get(); alloc::format!("Profile: {} {}\n", p.icon(), p.name()) }
+        "observations" => { let r = crate::skill_observer::report(); if r.is_empty() { String::from("No observations.\n") } else { r } }
+        "profile" => { let p = k_ai::profile::ProfileManager::get(); alloc::format!("Profile: {} {}\n", p.icon(), p.name()) }
         "version" => String::from("Neural OS Hermes v0.102\n"),
         "credits" => String::from("Neural OS Hermes — J.A.R.V.I.S.\nBare-metal Rust AI OS\n"),
         "whoami" => String::from("jarvish\n"),
@@ -40,20 +40,20 @@ pub fn execute(cmd: &str) -> String {
         "ping" => String::from("pong\n"),
         "dns" => { let ip = [10,0,2,3]; alloc::format!("DNS: {}.{}.{}.{}\n", ip[0], ip[1], ip[2], ip[3]) }
         "http" | "fetch" => { if args.is_empty() { String::from("Usage: fetch <url>\n") } else { fetch_cmd(args) } }
-        "gpu" => jarvis::gpu::backend::gpu_status().into(),
-        "vram" => jarvis::gpu::vram::vram_status(),
+"gpu" => String::from("GPU stub"), /* TODO: jarbas::gpu::backend::gpu_status */
+"vram" => String::from("VRAM stub"), /* TODO: jarbas::gpu::vram::vram_status */
         "agents" => alloc::format!("Agents: 248\n"),
         "skills" => alloc::format!("Skills: see /skills\n"),
         "events" => alloc::format!("Events: see EventBus\n"),
-        "ticks" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Ticks: {}\n", t) }
+        "ticks" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Ticks: {}\n", t) }
         "bench" => {
-            let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             for _ in 0..1000 { core::hint::spin_loop(); }
-            let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             alloc::format!("1000 spin loops: {} ticks\n", t1.wrapping_sub(t0))
         }
         "heap" => {
-            let allocated = crate::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
+            let allocated = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
             alloc::format!("Heap: {} MB allocated\n", allocated)
         }
         "irq" => String::from("IRQ: 0-15 PIC, 32-255 APIC\n"),
@@ -103,20 +103,20 @@ fn ps() -> String {
 }
 
 fn pci_ls() -> String {
-    let devs = unsafe { crate::pci::scan_pci() };
+    let devs = unsafe { k_nano::pci::scan_pci() };
     let mut s = String::from("PCI Devices:\n");
     for d in &devs { s.push_str(&alloc::format!("  {:02x}:{:02x}.{:02x} {:04x}:{:04x} class={:02x}\n", d.bus, d.device, d.function, d.vendor_id, d.device_id, d.class)); }
     s
 }
 
 fn theme_cmd(args: &str) -> String {
-    let themes = jarvis::display::theme::list_names();
+    let themes: alloc::vec::Vec<alloc::string::String> = alloc::vec![] /* TODO: jarbas::display::theme::list_names */;
     if args.is_empty() { let mut s = String::from("Themes:\n"); for t in &themes { s.push_str(&alloc::format!("  {}\n", t)); } s }
-    else { match jarvis::display::theme::apply(args) { Ok(_) => alloc::format!("Theme: {}\n", args), Err(e) => alloc::format!("Error: {}\n", e) } }
+    else { let r: Result<(), &str> = Err("stub"); /* TODO: jarbas::display::theme::apply */ match r { Ok(_) => alloc::format!("Theme: {}\n", args), Err(e) => alloc::format!("Error: {}\n", e) } }
 }
 
 fn ls(args: &str) -> String {
-    let mut items = crate::vfs::VFS.lock();
+    let mut items = k_nano::vfs::VFS.lock();
     if let Some(ref mut vfs) = *items {
         let entries = vfs.list_dir(if args.is_empty() { "/" } else { args });
         let mut s = String::new(); for e in &entries { s.push_str(&alloc::format!("{}  ", e)); } s.push('\n'); s
@@ -130,8 +130,8 @@ fn cat(args: &str) -> String {
 
 fn learn(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: learn <pattern-name>\n"); }
-    match hermes::skill_gen::generate_skill(args) {
-        Some(_md) => { hermes::skill_observer::mark_actioned(0); alloc::format!("Skill '{}' generated\n", args) }
+    match crate::skill_gen::generate_skill(args) {
+        Some(_md) => { crate::skill_observer::mark_actioned(0); alloc::format!("Skill '{}' generated\n", args) }
         None => alloc::format!("Pattern '{}' not found. Use it 3+ times first.\n", args)
     }
 }
@@ -149,16 +149,16 @@ fn which_cmd(args: &str) -> String {
 }
 
 fn fetch_cmd(url: &str) -> String {
-    let _ = k_nano::EVENT_BUS.publish(crate::Event {
-        id: 0, topic: alloc::string::String::from(hermes::browser_agent::TOPIC_FETCH_REQUEST),
-        payload: url.as_bytes().to_vec(), token: crate::CapabilityToken::Legacy(1),
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0, topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
+        payload: url.as_bytes().to_vec(), token: event_bus::CapabilityToken::Legacy(1),
     });
     alloc::format!("Fetch requested: {}\n", url)
 }
 
 fn touch_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: touch <path>\n"); }
-    let vfs = crate::vfs::VFS.lock();
+    let vfs = k_nano::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         if vfs.lookup(args).is_some() {
             alloc::format!("Already exists: {}\n", args)
@@ -170,7 +170,7 @@ fn touch_cmd(args: &str) -> String {
 
 fn mkdir_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: mkdir <path>\n"); }
-    let vfs = crate::vfs::VFS.lock();
+    let vfs = k_nano::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         if vfs.lookup(args).is_some() {
             alloc::format!("Already exists: {}\n", args)
@@ -182,7 +182,7 @@ fn mkdir_cmd(args: &str) -> String {
 
 fn rm_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: rm <path>\n"); }
-    let vfs = crate::vfs::VFS.lock();
+    let vfs = k_nano::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         if vfs.lookup(args).is_some() {
             alloc::format!("rm: {} (VFS append-only)\n", args)
@@ -193,7 +193,7 @@ fn rm_cmd(args: &str) -> String {
 }
 
 fn pwd_cmd() -> String {
-    let vfs = crate::vfs::VFS.lock();
+    let vfs = k_nano::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         alloc::format!("{}\n", vfs.fmt_tree().lines().next().unwrap_or("/\n"))
     } else {
@@ -203,7 +203,7 @@ fn pwd_cmd() -> String {
 
 fn find_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: find <pattern>\n"); }
-    let vfs = crate::vfs::VFS.lock();
+    let vfs = k_nano::vfs::VFS.lock();
     if let Some(ref vfs) = *vfs {
         let results = vfs.list_dir(args);
         if results.is_empty() { String::from("Not found\n") }
@@ -212,13 +212,13 @@ fn find_cmd(args: &str) -> String {
 }
 
 fn top_cmd() -> String {
-    let ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    let heap = crate::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
+    let ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    let heap = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
     alloc::format!("TOP — Neural OS Hermes\nTicks: {} | Heap: {} MB\n", ticks, heap)
 }
 
 fn dmesg_cmd() -> String {
-    crate::boot_logger::log("dmesg: consulted");
+    k_nano::boot_logger::log("dmesg: consulted");
     String::from("dmesg: see boot logger\n")
 }
 
@@ -227,9 +227,9 @@ fn netstat_cmd() -> String {
 }
 
 fn dhcp_cmd() -> String {
-    let _ = k_nano::EVENT_BUS.publish(crate::Event {
-        id: 0, topic: alloc::string::String::from(crate::dhcp::TOPIC_DHCP_REQUEST),
-        payload: vec![], token: crate::CapabilityToken::Legacy(1),
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0, topic: alloc::string::String::from("DHCP_REQUEST"),
+        payload: vec![], token: event_bus::CapabilityToken::Legacy(1),
     });
     String::from("DHCP request sent\n")
 }

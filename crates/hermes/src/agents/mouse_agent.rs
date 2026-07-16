@@ -3,9 +3,10 @@
 //! publica MOUSE_MOVED e MOUSE_CLICK no EventBus.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::interrupts::LAST_MOUSE_PACKET;
+use k_nano::interrupts::LAST_MOUSE_PACKET;
 use k_nano::EVENT_BUS;
-use crate::{Event, CapabilityToken, serial_println};
+use event_bus::{Event, CapabilityToken};
+use k_nano::serial_println;
 use alloc::string::String;
 use alloc::vec::Vec;
 

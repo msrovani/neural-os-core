@@ -4,7 +4,7 @@
 
 use alloc::vec::Vec;
 use alloc::string::String;
-use crate::tpm::sha256;
+use k_nano::tpm::sha256;
 
 const AUDIT_RING_SIZE: usize = 4096;
 

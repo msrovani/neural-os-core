@@ -7,7 +7,7 @@ use event_bus::{CapabilityToken, Event, Receiver};
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
-use hermes::generic_wifi::{self, ACTIVE_DRIVER};
+use crate::generic_wifi::{self, ACTIVE_DRIVER};
 use k_nano::serial_println;
 
 const WIFI_MANIFEST: AgentManifest = AgentManifest {
@@ -178,10 +178,10 @@ impl WifiAgent {
         unsafe {
             let ata_guard = k_nano::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
-                let parts = crate::fat32::read_mbr(ata);
+                let parts = k_nano::fat32::read_mbr(ata);
                 for p in &parts {
                     if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
-                        if let Some(w) = crate::fat32::Fat32Writer::new(ata, p) {
+                        if let Some(w) = k_nano::fat32::Fat32Writer::new(ata, p) {
                             if w.write_file("WIFI.CFG", cfg.as_bytes()) {
                                 serial_println!("[WIFI] Credenciais salvas (WIFI.CFG)");
                                 break;
@@ -197,10 +197,10 @@ impl WifiAgent {
         unsafe {
             let ata_guard = k_nano::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
-                let parts = crate::fat32::read_mbr(ata);
+                let parts = k_nano::fat32::read_mbr(ata);
                 for p in &parts {
                     if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
-                        if let Some(r) = crate::fat32::Fat32Reader::new(ata, p) {
+                        if let Some(r) = k_nano::fat32::Fat32Reader::new(ata, p) {
                             if let Some(data) = r.read_file("WIFI.CFG") {
                                 let s = core::str::from_utf8(&data).unwrap_or("");
                                 let mut parts = s.splitn(2, ' ');

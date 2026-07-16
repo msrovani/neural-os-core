@@ -5,7 +5,7 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::fs::FilesystemAgent;
+use k_nano::fs::FilesystemAgent;
 use k_nano::pci::PciDevice;
 
 pub struct DevFsAgent {
@@ -51,7 +51,7 @@ impl FilesystemAgent for DevFsAgent {
                 Ok(s.into_bytes())
             }
             "rtl8139" | "net" => {
-                let cfg = hermes::net::NET_CONFIG.lock();
+                let cfg = crate::net::NET_CONFIG.lock();
                 let mac = cfg.mac;
                 let ip = cfg.ip;
                 let online = cfg.online;

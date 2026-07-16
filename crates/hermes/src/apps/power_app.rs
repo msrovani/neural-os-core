@@ -20,8 +20,8 @@ impl App for PowerApp {
             if x >= 20 && x < 140 {
                 if self.confirmed {
                     k_nano::serial_println!("[POWER] Shutdown...");
-                    crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
-                    crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
+                    k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Triggered);
+                    k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Triggered);
                     unsafe { core::arch::asm!("out dx, al", in("dx") 0x604u16, in("al") 0x10u8, options(nostack)); }
                     return Some(String::from("Shutting down..."));
                 }
@@ -30,8 +30,8 @@ impl App for PowerApp {
             }
             if x >= 160 && x < 280 {
                 k_nano::serial_println!("[POWER] Reboot...");
-                crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Scheduled);
-                crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Scheduled);
+                k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Scheduled);
+                k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Scheduled);
                 unsafe { x86_64::instructions::port::Port::new(0x64u16).write(0xFEu8); }
                 return Some(String::from("Rebooting..."));
             }

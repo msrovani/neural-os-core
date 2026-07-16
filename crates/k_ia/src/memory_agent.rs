@@ -73,9 +73,9 @@ impl MemoryAgent {
         unsafe {
             core::arch::asm!("rdtsc", out("eax") start_lo, out("edx") start_hi);
         }
-        let timer_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let timer_ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         let target = timer_ticks + 10;
-        while crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) < target {
+        while k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) < target {
             core::hint::spin_loop();
         }
         let end_lo: u32; let end_hi: u32;
@@ -116,16 +116,18 @@ impl Agent for MemoryAgent {
 
         // RAM total: soma todas as regiões de memória do boot
         let total_ram = {
-            let guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+            let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
             guard.as_ref().map(|a| (a.total_frames as u64 * 4096) / (1024*1024)).unwrap_or(0)
         };
 
         let total_vram = {
-            let vram = jarvis::gpu::vram::VRAM_BUDDY.lock();
-            vram.as_ref().map(|v| v.size / (1024*1024)).unwrap_or(0)
+            #[cfg(feature = "kernel")]
+            { let vram = jarvis::gpu::vram::VRAM_BUDDY.lock(); vram.as_ref().map(|v| v.size / (1024*1024)).unwrap_or(0) }
+            #[cfg(not(feature = "kernel"))]
+            0
         };
 
-        let model_params = cortex::GLOBAL_MODEL_PARAMS.load(core::sync::atomic::Ordering::Relaxed);
+        let model_params = cortex::cortex::GLOBAL_MODEL_PARAMS.load(core::sync::atomic::Ordering::Relaxed);
 
         let budget = if model_params > 0 {
             Self::calculate_budget(model_params, total_ram, total_vram)
@@ -154,15 +156,17 @@ impl Agent for MemoryAgent {
             cpu_mhz, active, optimal_init);
 
         // Resize heap
-        crate::allocator::resize_heap_to_mb(budget.heap_target_mb);
+        k_nano::allocator::resize_heap_to_mb(budget.heap_target_mb);
 
+        #[cfg(feature = "kernel")] {
         if budget.vram_model_mb > 0 {
             if let Some(ref vram) = *jarvis::gpu::vram::VRAM_BUDDY.lock() {
-                crate::mhi::MHI_REGISTRY.lock().register(
+                k_nano::mhi::MHI_REGISTRY.lock().register(
                     x86_64::PhysAddr::new(vram.base),
                     budget.vram_model_mb * 1024 * 1024,
-                    crate::mhi::AllocTier::Vram, "model_weights");
+                    k_nano::mhi::AllocTier::Vram, "model_weights");
             }
+        }
         }
 
         if budget.free_after_mb < 256 {

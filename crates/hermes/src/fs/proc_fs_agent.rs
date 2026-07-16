@@ -5,8 +5,8 @@
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use crate::fs::FilesystemAgent;
-use crate::interrupts::TIMER_TICKS;
+use k_nano::fs::FilesystemAgent;
+use k_nano::interrupts::TIMER_TICKS;
 use core::sync::atomic::Ordering;
 
 pub struct ProcFsAgent;
@@ -38,7 +38,7 @@ impl FilesystemAgent for ProcFsAgent {
                 Ok(s.into_bytes())
             }
             "meminfo" | "memory" => {
-                let ctx = crate::memory::global_hardware_context();
+                let ctx = k_nano::memory::global_hardware_context();
                 let uptime = TIMER_TICKS.load(Ordering::Relaxed);
                 let s = alloc::format!(
                     "Total ticks: {}\nMemory: {:.1}%\nFrames allocated: {:.0}\n",
@@ -53,7 +53,7 @@ impl FilesystemAgent for ProcFsAgent {
                 Ok(s.into_bytes())
             }
             "cpuinfo" | "cpu" => {
-                let smp_aps = crate::smp::ap_entry_count();
+                let smp_aps = k_nano::smp::ap_entry_count();
                 let s = alloc::format!(
                     "Processors: {}\nBSP: core 0\nAPs: {}\nModel: x86_64\n",
                     smp_aps + 1, smp_aps
@@ -68,12 +68,12 @@ impl FilesystemAgent for ProcFsAgent {
                 Ok(s.into_bytes())
             }
             "profile" => {
-                let p = crate::profile::ProfileManager::get();
+                let p = k_ai::profile::ProfileManager::get();
                 let s = alloc::format!("Current profile: {} {}\n", p.icon(), p.name());
                 Ok(s.into_bytes())
             }
             "mhi" | "tiers" => {
-                let reg = crate::mhi::MHI_REGISTRY.lock();
+                let reg = k_nano::mhi::MHI_REGISTRY.lock();
                 Ok(reg.summary().into_bytes())
             }
             _ => Err("File not found in /proc/"),

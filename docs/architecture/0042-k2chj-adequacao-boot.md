@@ -5,8 +5,8 @@
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred); **`v1.7.6`** (2026-07-16) = N4 ✅ CLOSED (hermes orquestra; N4.6 crate link deferred); **`v1.7.7`** (2026-07-16) = N5 ✅ CLOSED (jarbas ego/UI; N5.7 crate link deferred); **`v1.7.9`** (2026-07-16) = N3.5 cortex wired; **`v1.7.10`** (2026-07-16) = N4.6 hermes wired; **`v1.7.11`** (2026-07-16) = N5.7 jarbas wired. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
-**Não declarar `v2.0.0` até N1–N5 critérios de qualidade desta ADR verificados em conjunto.**
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Não declarar `v2.0.0` até review formal de qualidade ADR (voz Sprint Sound + checklist conjunto).**
 
 
 ---

@@ -11,7 +11,7 @@
 #   v2.0.0 (Jul 2026): Ecossistema de Anéis Lógicos — k_nano, k_ai, cortex, hermes, jarbas
 #   v2.0.0 (Jul 2026): Sprint 106 concluída — K²CHJ anéis lógicos + MicroPython/WASM ✅
 #   ADR-0042 (Jul 2026): Adequação Boot OK → visão — cadeia k-nano→k-ai→cortex→hermes→jarbas (N1–N5)
-#   Gate v2.0.0 = N1–N5 done; até lá = 1.x (v1.5.7 Cap; v1.7.0 = N1 + 2B LOADED; v1.7.2 = clima PASS parcial forte; não "2.0 completo")
+#   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação K²CHJ (Jul 2026); não "2.0 completo" sem review
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -168,12 +168,12 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: ADR-0042 N4→N5 (pista ativa; N3 ✅ CLOSED v1.7.5; N2 ✅ CLOSED v1.7.4). Sprint 107 Voice ✅ FECHADA (PASS parcial forte+).
-# Voz residual → Sprint Sound (reaberta) — NÃO bloqueia ADR-42. Sprint 108 self-evolving permanece ⏳.
-# Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho; sem sherpa/Vosk/Kokoro-primário
+# Current Sprint: Sprint Sound (reaberta) — voz production-grade pós-107. ADR-0042 N1–N5 + wire N2.5→N5.7 ✅ (v1.8.0).
+# Voz residual → Sprint Sound — STT/Piper/UAC/Mic→Wake. Sprint 108 self-evolving permanece ⏳.
+# Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho wired mas não re-exportado no bin
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
-# Não declarar v2.0.0 até ADR-0042 N1–N5.
-# N2/N3: comportamento via espelho no bin até N2.5/N3.5 (allocator / crate link)
+# Não declarar v2.0.0 sem review formal ADR (qualidade voz + checklist conjunto).
+# Wire crates: alias `*-crate` + `pub use`; k_nano sem `global-alloc`; residuals = integração bin-only
 
 ## Roadmap v2.0 "Cognição"
 | Sprint | Foco | Status |
@@ -185,8 +185,8 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **105** | Ponytail Audit + v1.5.1..v1.5.3 | ✅ |
 | **106** | Ecossistema de Anéis Lógicos (10/10 sub-sprints) | ✅ |
 | **107** | Voice I/O (clima e2e + skinny EventBus) | ✅ FECHADA (PASS parcial forte+) |
-| **Sound** | Leftovers voz (STT/Piper/UAC/jarbas…) | ▶️ reaberta |
-| **ADR-42** | Adequação N4→N5 (N3 ✅) | ▶️ **pista ativa** |
+| **Sound** | Leftovers voz (STT/Piper/UAC/jarbas…) | ▶️ **pista ativa** |
+| **ADR-42** | Adequação N1–N5 + wire crates | ✅ **v1.8.0** |
 | **108** | Self-evolving agents (auto-skill generation) | ⏳ |
 
 # QEMU Launch (WHPX + VirtIO optimizado)

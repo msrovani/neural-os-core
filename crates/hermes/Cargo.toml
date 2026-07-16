@@ -14,7 +14,11 @@ ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 k-nano = { path = "../k_nano" }
 cortex = { path = "../cortex" }
-k-ia = { path = "../k_ia" }
+k_ai = { path = "../k_ai" }
+smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+
+[features]
+kernel = []
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }

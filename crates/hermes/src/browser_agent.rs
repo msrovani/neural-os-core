@@ -25,7 +25,7 @@ const BROWSER_MANIFEST: AgentManifest = AgentManifest {
 };
 
 pub struct BrowserAgent {
-    fetch_receiver: crate::Receiver,
+    fetch_receiver: event_bus::Receiver,
     cache: BTreeMap<String, PageCache>,
 }
 
@@ -150,10 +150,10 @@ impl Agent for BrowserAgent {
 
             // Check cache
             if let Some(cached) = self.cache.get(url) {
-                let _ = k_nano::EVENT_BUS.publish(crate::Event {
+                let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                     id: 0, topic: String::from(TOPIC_FETCH_RESPONSE),
                     payload: cached.text.as_bytes().to_vec(),
-                    token: crate::CapabilityToken::Legacy(1),
+                    token: event_bus::CapabilityToken::Legacy(1),
                 });
                 continue;
             }
@@ -162,17 +162,17 @@ impl Agent for BrowserAgent {
                 Ok((_url, html)) => {
                     let title = Self::title_from_html(&html);
                     let text = Self::extract_text(&html);
-                    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+                    let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
                     self.cache.insert(String::from(url), PageCache {
                         url: String::from(url), title, text: text.clone(),
                         html, fetched_at_tick: tick as u64,
                     });
 
-                    let _ = k_nano::EVENT_BUS.publish(crate::Event {
+                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                         id: 0, topic: String::from(TOPIC_FETCH_RESPONSE),
                         payload: text.into_bytes(),
-                        token: crate::CapabilityToken::Legacy(1),
+                        token: event_bus::CapabilityToken::Legacy(1),
                     });
                 }
                 Err(e) => {

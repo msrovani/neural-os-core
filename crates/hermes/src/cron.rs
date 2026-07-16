@@ -4,7 +4,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::interrupts::TIMER_TICKS;
+use k_nano::interrupts::TIMER_TICKS;
 use k_nano::serial_println;
 use k_nano::EVENT_BUS;
 
@@ -60,7 +60,7 @@ impl CronAgent {
 
     /// Executa revisão comprehensive de observações (função livre, sem borrow)
     pub fn run_review() {
-        let pending = hermes::skill_observer::pending_observations();
+        let pending = crate::skill_observer::pending_observations();
         let count = pending.len();
         if count == 0 { return; }
 
@@ -69,10 +69,10 @@ impl CronAgent {
             // Tenta auto-skill se for candidato a nova skill
             if obs.skill.starts_with("New skill candidate:") {
                 let name = obs.skill.trim_start_matches("New skill candidate:");
-                let skill_md = hermes::skill_gen::generate_skill(name.trim());
+                let skill_md = crate::skill_gen::generate_skill(name.trim());
                 if let Some(_md) = skill_md {
                     serial_println!("[REVIEW] Generated skill '{}' from observation #{}", name.trim(), obs.number);
-                    hermes::skill_observer::mark_actioned(obs.number);
+                    crate::skill_observer::mark_actioned(obs.number);
                 }
             }
         }
@@ -97,11 +97,11 @@ impl Agent for CronAgent {
                     continue;
                 }
 
-                let _ = EVENT_BUS.publish(crate::Event {
+                let _ = EVENT_BUS.publish(event_bus::Event {
                     id: 0,
                     topic: job.topic.clone(),
                     payload: job.message.as_bytes().to_vec(),
-                    token: crate::CapabilityToken::Legacy(1),
+                    token: event_bus::CapabilityToken::Legacy(1),
                 });
             }
         }

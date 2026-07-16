@@ -21,7 +21,7 @@ static LAST_SPEECH: Mutex<Option<VoiceOutput>> = Mutex::new(None);
 /// Hermes fala algo. Se MCP conectado, envia para voicebox.
 /// Se nao, mostra no display como [Hermes diz: ...]
 pub fn speak(text: &str, profile: &str) {
-    let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     *LAST_SPEECH.lock() = Some(VoiceOutput {
         text: String::from(text),
         profile: String::from(profile),
@@ -29,11 +29,11 @@ pub fn speak(text: &str, profile: &str) {
     });
     // Mostra no display
     let msg = alloc::format!("[Hermes diz: {}]", text);
-    let _ = k_nano::EVENT_BUS.publish(crate::Event {
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
         id: tick as u64,
-        topic: String::from(hermes::hermes::TOPIC_HERMES_RESPONSE),
+        topic: String::from(crate::hermes::TOPIC_HERMES_RESPONSE),
         payload: msg.into_bytes(),
-        token: crate::CapabilityToken::Legacy(1),
+        token: event_bus::CapabilityToken::Legacy(1),
     });
 }
 

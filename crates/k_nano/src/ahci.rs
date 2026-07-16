@@ -15,20 +15,21 @@ const HBA_PORTS: u64 = 0x100;  // Port registers (32 ports × 0x80)
 const GHC_AE: u32 = 0x80000000; // AHCI Enable
 const GHC_HR: u32 = 0x00000001; // HBA Reset
 
-// Port register offsets
-const PXCMD: u64 = 0x00;  // Command and Status
-const PXIS: u64 = 0x10;   // Interrupt Status
-const PXIE: u64 = 0x14;   // Interrupt Enable
-const PXSERR: u64 = 0x28; // SATA Error
-const PXSSTS: u64 = 0x28; // SATA Status (alternate offset)
-const PXSCTL: u64 = 0x2C; // SATA Control
-const PXTFD: u64 = 0x20;  // Task File Data
-const PXCI: u64 = 0x18;   // Command Issue
+// Port register offsets — AHCI 1.3.1 spec §3.3 (Table 3-1 do HBA Port register set)
 const PXCLB: u64 = 0x00;  // Command List Base (32-bit)
 const PXCLBU: u64 = 0x04; // Command List Base Upper (32-bit)
 const PXFB: u64 = 0x08;   // FIS Base (32-bit)
 const PXFBU: u64 = 0x0C;  // FIS Base Upper
-const PXIE_BITS: u32 = 0x7F; // enable interrupts
+const PXIS: u64 = 0x10;   // Interrupt Status
+const PXIE: u64 = 0x14;   // Interrupt Enable
+const PXCMD: u64 = 0x18;  // Command and Status
+const PXTFD: u64 = 0x20;  // Task File Data
+const PXSIG: u64 = 0x24;  // Signature
+const PXSSTS: u64 = 0x28; // SATA Status
+const PXSCTL: u64 = 0x2C; // SATA Control
+const PXSERR: u64 = 0x30; // SATA Error
+const PXSACT: u64 = 0x34; // SATA Active
+const PXCI: u64 = 0x38;   // Command Issue
 
 const CMD_ST: u32 = 0x0001; // Start
 const CMD_FRE: u32 = 0x0010; // FIS Receive Enable
@@ -94,7 +95,7 @@ impl AhciDriver {
             let dev_present = (ssts & 0x0F) == 0x03; // IPM active + DET present
             if !dev_present { continue; }
 
-            let sig = core::ptr::read_volatile((port_base + 0x24) as *const u32);
+            let sig = core::ptr::read_volatile((port_base + PXSIG) as *const u32);
             let dev_type = if sig == SATA_SIG_ATAPI { AHCI_DEV_ATAPI }
                 else if sig == SATA_SIG_PM { AHCI_DEV_PM }
                 else if sig == SATA_SIG_SEMB { AHCI_DEV_SEMB }
@@ -156,7 +157,7 @@ impl AhciDriver {
 
         // Allocate PRDT (Physical Region Descriptor Table)
         let prdt_va = ct_va + 0x80;
-        let buf_pa = buffer.as_ptr() as u64 - pmoff;
+        let buf_pa = dma_va_to_pa(buffer.as_ptr() as u64, pmoff);
 
         // PRDT entry
         core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);       // DBA
@@ -197,9 +198,9 @@ impl AhciDriver {
             core::hint::spin_loop();
         }
         // Verifica erro: PxIS.TFES (bit 30) = Task File Error Status
-        let is = core::ptr::read_volatile((port_base + 0x10 + 0x08) as *const u32); // PxIS
+        let is = core::ptr::read_volatile((port_base + PXIS) as *const u32);
         if is & (1 << 30) != 0 {
-            core::ptr::write_volatile((port_base + 0x10 + 0x08) as *mut u32, is); // clear IRQ
+            core::ptr::write_volatile((port_base + PXIS) as *mut u32, is); // clear IRQ (RWC)
             return false;
         }
         true
@@ -220,17 +221,8 @@ impl AhciDriver {
 
         let prdt_va = ct_va + 0x80;
 
-        // Traducao de endereco: buffer do usuario -> fisico.
-        // O buffer pode vir do heap (linked_list_allocator em 0x4444_4444_0000)
-        // ou de uma pagina identity-mapped. Usamos a page table ativa para traduzir.
-        let buf_va = buffer.as_ptr() as u64;
-        let buf_pa = if buf_va >= 0x4444_4444_0000 {
-            // Heap: VA - offset (assumindo que o heap esta mapeado linearmente)
-            buf_va - pmoff
-        } else {
-            // Identity-mapped (first 4GB)
-            buf_va
-        };
+        // Traducao de endereco: buffer do usuario -> fisico (ver dma_va_to_pa).
+        let buf_pa = dma_va_to_pa(buffer.as_ptr() as u64, pmoff);
 
         core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);
         core::ptr::write_volatile((prdt_va + 0x04) as *mut u32, (buf_pa >> 32) as u32);
@@ -265,12 +257,26 @@ impl AhciDriver {
             if ci & 1 == 0 { break; }
             core::hint::spin_loop();
         }
-        let is = core::ptr::read_volatile((port_base + 0x10 + 0x08) as *const u32);
+        let is = core::ptr::read_volatile((port_base + PXIS) as *const u32);
         if is & (1 << 30) != 0 {
-            core::ptr::write_volatile((port_base + 0x10 + 0x08) as *mut u32, is);
+            core::ptr::write_volatile((port_base + PXIS) as *mut u32, is);
             return false;
         }
         true
+    }
+}
+
+/// Traduz um endereço virtual de um buffer DMA para físico.
+/// Unifica a lógica usada por `read()` e `write()`: buffers alocados no heap
+/// Tier 1 (talc, base em `allocator::HEAP_START`) sao VA = PA + pmoff; buffers
+/// identity-mapped (primeiros 4GB, ex: stack ou frames do bootloader) sao VA == PA.
+fn dma_va_to_pa(va: u64, pmoff: u64) -> u64 {
+    let heap_start = crate::allocator::HEAP_START as u64;
+    let heap_end = heap_start + crate::allocator::HEAP_SIZE as u64;
+    if va >= heap_start && va < heap_end {
+        va - pmoff
+    } else {
+        va
     }
 }
 

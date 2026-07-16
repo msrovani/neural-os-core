@@ -1,6 +1,5 @@
 
 
-use crate::pci::scan_pci;
 use crate::serial_println;
 
 #[derive(Clone)]
@@ -23,7 +22,7 @@ impl AtaDriver {
         for &base in &[0x1F0u16, 0x170u16] {
             for &slave in &[false, true] {
                 if !Self::detect(base, if slave { 0xB0 } else { 0xA0 }) { continue; }
-                let mut drv = AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave };
+                let drv = AtaDriver { io_base: base, pci_bus: 0, pci_device: 0, pci_func: 0, slave };
                 if let Some(id) = drv.identify() {
                     let total = (id[60] as u64) | ((id[61] as u64) << 16);
                     if total > 0 && total < 0xFFFFFFFF {
@@ -201,8 +200,8 @@ impl AtaDriver {
             for i in 0..256 {
                 let lo = if off + i * 2 < data.len() { data[off + i * 2] } else { 0 };
                 let hi = if off + i * 2 + 1 < data.len() { data[off + i * 2 + 1] } else { 0 };
-                core::arch::asm!("out dx, al", in("dx") self.io_base, in("al") lo, options(nostack, preserves_flags));
-                core::arch::asm!("out dx, al", in("dx") (self.io_base + 1), in("al") hi, options(nostack, preserves_flags));
+                let w = (lo as u16) | ((hi as u16) << 8);
+                core::arch::asm!("out dx, ax", in("dx") self.io_base, in("ax") w, options(nostack, preserves_flags));
             }
         }
         self.wait_bsy();

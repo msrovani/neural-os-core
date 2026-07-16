@@ -1,0 +1,122 @@
+//! SkillOpt — Sprint 106-9/10
+//! Escalonamento Evolutivo de Código (JIT Cognitivo):
+//! Python efêmero → WASM persistente → Rust no_std via Cortex LLM.
+
+use alloc::string::String;
+use alloc::vec::Vec;
+use alloc::collections::BTreeMap;
+use spin::Mutex;
+
+use crate::structured_decode::SkillOptimizer;
+
+/// Estágio de evolução de um skill gerado on-demand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillStage {
+    EphemeralPython,
+    WasmPersistent,
+    RustNoStd,
+}
+
+#[derive(Debug, Clone)]
+pub struct EvolvingSkill {
+    pub name: String,
+    pub stage: SkillStage,
+    pub source: String,
+    pub runs: u32,
+    pub success_rate: f32,
+}
+
+static EVOLVING: Mutex<BTreeMap<String, EvolvingSkill>> = Mutex::new(BTreeMap::new());
+
+/// Registra execução Python efêmera (primeiro uso).
+pub fn record_python_run(name: &str, source: &str, success: bool) {
+    let mut map = EVOLVING.lock();
+    let entry = map.entry(String::from(name)).or_insert(EvolvingSkill {
+        name: String::from(name),
+        stage: SkillStage::EphemeralPython,
+        source: String::from(source),
+        runs: 0,
+        success_rate: 0.0,
+    });
+    entry.runs += 1;
+    let prev = entry.success_rate;
+    entry.success_rate = if entry.runs == 1 {
+        if success { 1.0 } else { 0.0 }
+    } else {
+        (prev * (entry.runs as f32 - 1.0) + if success { 1.0 } else { 0.0 }) / entry.runs as f32
+    };
+    k_nano::serial_println!(
+        "[SkillOpt] '{}' python run #{} success_rate={:.0}%",
+        name,
+        entry.runs,
+        entry.success_rate * 100.0
+    );
+}
+
+/// Promove skill para WASM após N execuções bem-sucedidas (≥3, taxa ≥70%).
+pub fn maybe_promote_to_wasm(name: &str) -> Option<String> {
+    let mut map = EVOLVING.lock();
+    let entry = map.get_mut(name)?;
+    if entry.stage != SkillStage::EphemeralPython {
+        return None;
+    }
+    if entry.runs < 3 || entry.success_rate < 0.7 {
+        return None;
+    }
+    entry.stage = SkillStage::WasmPersistent;
+    let wasm_path = alloc::format!("/skills/{}.wasm", name);
+    k_nano::serial_println!("[SkillOpt] Promovido '{}' → WASM ({})", name, wasm_path);
+    Some(wasm_path)
+}
+
+/// Gera prompt para Cortex traduzir Python → Rust no_std (Sprint 106-10).
+pub fn rust_no_std_prompt(python_source: &str, skill_name: &str) -> String {
+    alloc::format!(
+        "Translate this Python skill to Rust no_std for Neural OS Hermes.\n\
+         Rules: #![no_std], use alloc only, no std::, no OS calls.\n\
+         Skill name: {skill_name}\n\
+         Expose fn execute(payload: &[u8]) -> Result<Vec<u8>, &'static str>\n\n\
+         ```python\n{python_source}\n```\n\
+         Output only valid Rust code."
+    )
+}
+
+/// Marca skill como promovido a Rust no_std após compilação bem-sucedida.
+pub fn mark_rust_promoted(name: &str, rust_source: &str) {
+    let mut map = EVOLVING.lock();
+    if let Some(entry) = map.get_mut(name) {
+        entry.stage = SkillStage::RustNoStd;
+        entry.source = String::from(rust_source);
+        k_nano::serial_println!("[SkillOpt] '{}' → Rust no_std cravado em pedra", name);
+    }
+}
+
+/// Pipeline completo: analisa mercado WASM + skills evolutivos pendentes.
+pub fn run_evolution_pass(market: &crate::wasm_rt::SkillMarket) -> Vec<String> {
+    let mut opt = SkillOptimizer::new();
+    let mut actions = opt.analyze(market);
+
+    let map = EVOLVING.lock();
+    for (name, skill) in map.iter() {
+        if skill.stage == SkillStage::EphemeralPython && skill.runs >= 3 && skill.success_rate >= 0.7 {
+            actions.push(alloc::format!(
+                "Promote '{}' to WASM (runs={}, rate={:.0}%)",
+                name, skill.runs, skill.success_rate * 100.0
+            ));
+        }
+    }
+    actions
+}
+
+/// Status resumido do pipeline JIT Cognitivo.
+pub fn status() -> String {
+    let map = EVOLVING.lock();
+    let (py, wasm, rust) = map.values().fold((0u32, 0u32, 0u32), |acc, s| {
+        match s.stage {
+            SkillStage::EphemeralPython => (acc.0 + 1, acc.1, acc.2),
+            SkillStage::WasmPersistent => (acc.0, acc.1 + 1, acc.2),
+            SkillStage::RustNoStd => (acc.0, acc.1, acc.2 + 1),
+        }
+    });
+    alloc::format!("[SkillOpt] evolving: {} python, {} wasm, {} rust", py, wasm, rust)
+}

@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 #![allow(static_mut_refs)]
 #![allow(unused_unsafe)]
+#![feature(abi_x86_interrupt)]
 
 extern crate alloc;
 
@@ -21,6 +22,7 @@ pub mod hermes;
 pub mod hub;
 pub mod mcp;
 pub mod net;
+pub mod netdiag;
 pub mod netfs;
 pub mod netstack;
 pub mod network_agent;
@@ -41,10 +43,15 @@ pub mod structured_decode;
 pub mod wasm;
 pub mod wasm_exec;
 pub mod wasm_rt;
+pub mod micropython_wasm;
+pub mod aios_api;
+pub mod skill_opt;
+pub mod rustpython_no_std;
 pub mod email_agent;
 pub mod fs;
 pub mod link_watcher;
 pub mod generic_wifi;
+pub mod globals;
 pub mod wifi_agent;
 pub mod wifi_protocol;
 pub mod wifi_compat;

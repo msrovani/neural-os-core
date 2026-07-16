@@ -41,7 +41,7 @@ pub fn network_agent_tick() {
         if tick % 50 == 0 {
             log(tick, &alloc::format!("poll: tx={} rx={} slip_tx={} slip_rx={}",
                 crate::netstack::net_tx_count(), crate::netstack::net_rx_count(),
-                crate::slip::slip_tx_count(), crate::slip::slip_rx_count()));
+                k_nano::slip::slip_tx_count(), k_nano::slip::slip_rx_count()));
         }
         if tick % 100 == 0 {
             unsafe { crate::net::dump_e1000_status(); }
@@ -117,7 +117,7 @@ pub fn network_agent_tick() {
                                     gw[0], gw[1], gw[2], gw[3],
                                     dns[0], dns[1], dns[2], dns[3]));
                                 // If serial tunnel sandbox, override DNS to 8.8.8.8
-                                if crate::env::is_sandbox() {
+                                if k_nano::env::is_sandbox() {
                                     NET_CONFIG.lock().dns_ip = [8, 8, 8, 8];
                                     log(tick, "Sandbox: DNS overridden to 8.8.8.8");
                                 }
@@ -145,7 +145,7 @@ pub fn network_agent_tick() {
                     let dns_srv = NET_CONFIG.lock().dns_ip;
                     log(tick, &alloc::format!("DNS resolve google.com (try {}) via {}.{}.{}.{}",
                         s.dns_tries, dns_srv[0], dns_srv[1], dns_srv[2], dns_srv[3]));
-                    let resolved = if crate::env::is_sandbox() {
+                    let resolved = if k_nano::env::is_sandbox() {
                         crate::netstack::dns_resolve_manual("google.com", dns_srv)
                     } else {
                         ns.dns_resolve("google.com", dns_srv)

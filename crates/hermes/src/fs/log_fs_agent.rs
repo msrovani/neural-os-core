@@ -4,8 +4,9 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use crate::fs::{FilesystemAgent, RingBufStore};
-use crate::serial_println;
+use crate::fs::RingBufStore;
+use k_nano::fs::FilesystemAgent;
+use k_nano::serial_println;
 
 static STORE: RingBufStore = RingBufStore::new(256 * 1024);
 

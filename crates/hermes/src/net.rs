@@ -1,6 +1,6 @@
 use k_nano::rtl8139::Rtl8139Driver;
 use k_nano::e1000::{E1000Driver, REG_STATUS, REG_RDH};
-use crate::{println, serial_println};
+use k_nano::{println, serial_println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
@@ -12,7 +12,7 @@ pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
 pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
 pub static VIRTIO_DEV: spin::Mutex<Option<k_nano::virtio_net::VirtIoDevice>> = spin::Mutex::new(None);
-pub static NETSTACK: spin::Mutex<Option<hermes::netstack::NetStack>> = spin::Mutex::new(None);
+pub static NETSTACK: spin::Mutex<Option<crate::netstack::NetStack>> = spin::Mutex::new(None);
 
 pub struct NetConfig {
     pub mac: [u8; 6],
@@ -147,13 +147,13 @@ pub unsafe fn init_driver_rtl8139() -> bool {
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     println!("[NET] RTL8139 iniciado.");
 
-    let hw_event = crate::Event {
+    let hw_event = event_bus::Event {
         id: 0,
         topic: alloc::string::String::from(TOPIC_HW_NET_RTL8139),
         payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
-        token: crate::CapabilityToken::Legacy(1),
+        token: event_bus::CapabilityToken::Legacy(1),
     };
-    let _ = crate::EVENT_BUS.publish(hw_event);
+    let _ = k_nano::EVENT_BUS.publish(hw_event);
     true
 }
 
@@ -178,11 +178,11 @@ pub unsafe fn init_driver_e1000() -> bool {
                         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
                     println!("[NET] e1000 iniciado.");
 
-                    let _ = crate::EVENT_BUS.publish(crate::Event {
+                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("HW_NET_E1000"),
                         payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
-                        token: crate::CapabilityToken::Legacy(1),
+                        token: event_bus::CapabilityToken::Legacy(1),
                     });
                     return true;
                 }
@@ -234,8 +234,8 @@ pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> 
     for _ in 0..2000 {
         stack.http_poll(&mut conn, now as u64);
         match conn.state {
-            hermes::netstack::HttpState::Done(ref data) => { return Some(data.clone()); }
-            hermes::netstack::HttpState::Failed => { break; }
+            crate::netstack::HttpState::Done(ref data) => { return Some(data.clone()); }
+            crate::netstack::HttpState::Failed => { break; }
             _ => { core::hint::spin_loop(); }
         }
     }
@@ -253,8 +253,8 @@ pub unsafe fn http_get_raw(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<
     for _ in 0..2000 {
         stack.http_poll(&mut conn, now as u64);
         match conn.state {
-            hermes::netstack::HttpState::Done(ref d) => { return Some(d.clone()); }
-            hermes::netstack::HttpState::Failed => { break; }
+            crate::netstack::HttpState::Done(ref d) => { return Some(d.clone()); }
+            crate::netstack::HttpState::Failed => { break; }
             _ => { core::hint::spin_loop(); }
         }
     }
@@ -263,7 +263,7 @@ pub unsafe fn http_get_raw(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<
 
 pub unsafe fn ping(_target_ip: [u8; 4]) -> Option<u64> { None }
 
-pub fn run_network_diagnostics() -> crate::String {
+pub fn run_network_diagnostics() -> alloc::string::String {
     let cfg = NET_CONFIG.lock();
     let mac = cfg.mac;
     let ip = cfg.ip;
@@ -273,7 +273,7 @@ pub fn run_network_diagnostics() -> crate::String {
     let online = cfg.online;
     drop(cfg);
 
-    let mut report = crate::String::new();
+    let mut report = alloc::string::String::new();
     report.push_str("=== Diagnostico de Rede ===\n");
 
     if !configured {
@@ -298,15 +298,15 @@ pub fn run_network_diagnostics() -> crate::String {
 
 pub struct NetDiagnosticSkill;
 
-impl crate::Skill for NetDiagnosticSkill {
-    fn manifest(&self) -> crate::McpManifest {
-        crate::McpManifest {
+impl skill_registry::Skill for NetDiagnosticSkill {
+    fn manifest(&self) -> skill_registry::McpManifest {
+        skill_registry::McpManifest {
             name: alloc::string::String::from("net_diag"),
             description: alloc::string::String::from("Network diagnostics and AI analysis of connectivity"),
             required_tokens: alloc::vec![1],
             preconditions: alloc::vec![],
             context_links: alloc::vec![],
-            output_schema: crate::OutputSchema::Any,
+            output_schema: skill_registry::OutputSchema::Any,
             idempotent: true,
             contracts: Vec::new(),
         }

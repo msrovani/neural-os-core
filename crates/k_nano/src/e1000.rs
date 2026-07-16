@@ -143,7 +143,7 @@ impl E1000Driver {
         })
     }
 
-    pub(crate) unsafe fn read32(&self, reg: u64) -> u32 {
+    pub unsafe fn read32(&self, reg: u64) -> u32 {
         let ptr = (self.mmio_virt + reg) as *mut u32;
         core::ptr::read_volatile(ptr)
     }

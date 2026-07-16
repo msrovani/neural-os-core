@@ -37,7 +37,7 @@ impl ContextWindow {
     }
 
     pub fn add(&mut self, role: &str, content: &str, priority: u8) {
-        let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         self.messages.push_back(ContextMessage {
             role: String::from(role), content: String::from(content),
             priority, tick,

@@ -66,10 +66,18 @@ pub unsafe fn init_xhci() {
         w32(op, 0, r32(op, 0) & !0x01);
         for _ in 0..1000 { if r32(op, 0) & 0x01 == 0 { break; } core::hint::spin_loop(); }
 
-        let dcbaa = alloc_phys(1).unwrap(); core::ptr::write_bytes(dcbaa.1, 0, 4096);
+        let dcbaa = match alloc_phys(1) {
+            Some(p) => p,
+            None => { serial_println!("[XHCI] alloc_phys falhou (DCBAA) — abortando init"); continue; }
+        };
+        core::ptr::write_bytes(dcbaa.1, 0, 4096);
         w32(op, 0x10, dcbaa.0 as u32); w32(op, 0x14, (dcbaa.0 >> 32) as u32);
 
-        let er = alloc_phys(2).unwrap(); core::ptr::write_bytes(er.1, 0, 8192);
+        let er = match alloc_phys(2) {
+            Some(p) => p,
+            None => { serial_println!("[XHCI] alloc_phys falhou (Event Ring) — abortando init"); continue; }
+        };
+        core::ptr::write_bytes(er.1, 0, 8192);
         w32(base + capl, 0x38, er.0 as u32); w32(base + capl, 0x3C, (er.0 >> 32) as u32);
         w32(base + capl, 0x30, 0); w32(base + capl, 0x34, er.0 as u32 | 0x01);
 
@@ -79,8 +87,16 @@ pub unsafe fn init_xhci() {
         for _ in 0..1000 { if r32(op, 0) & 0x01 != 0 { break; } core::hint::spin_loop(); }
 
         // Allocate transfer ring + report buffer
-        let tr = alloc_phys(1).unwrap(); core::ptr::write_bytes(tr.1, 0, 4096);
-        let report = alloc_phys(1).unwrap(); core::ptr::write_bytes(report.1, 0, 4096);
+        let tr = match alloc_phys(1) {
+            Some(p) => p,
+            None => { serial_println!("[XHCI] alloc_phys falhou (transfer ring) — abortando init"); continue; }
+        };
+        core::ptr::write_bytes(tr.1, 0, 4096);
+        let report = match alloc_phys(1) {
+            Some(p) => p,
+            None => { serial_println!("[XHCI] alloc_phys falhou (report buffer) — abortando init"); continue; }
+        };
+        core::ptr::write_bytes(report.1, 0, 4096);
 
         *XHCI_STATE.lock() = Some(XhciState {
             op, capl, base, pmoff,

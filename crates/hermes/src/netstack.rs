@@ -78,7 +78,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
 
-    crate::serial_println!("[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
+    k_nano::serial_println!("[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
         hostname, dns_server[0], dns_server[1], dns_server[2], dns_server[3], frame.len());
 
     unsafe { slip::send(&frame); }
@@ -128,7 +128,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
                 if rdata_end > resp.len() { break; }
                 if rr_type == 1 && rdlen == 4 {
                     let ip = [resp[pos], resp[pos + 1], resp[pos + 2], resp[pos + 3]];
-                    crate::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
+                    k_nano::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
                         ip[0], ip[1], ip[2], ip[3]);
                     return Some(ip);
                 }
@@ -139,7 +139,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
             unsafe { slip::send(&frame); }
         }
     }
-    crate::serial_println!("[DNS-MANUAL] Timeout");
+    k_nano::serial_println!("[DNS-MANUAL] Timeout");
     None
 }
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
@@ -154,7 +154,7 @@ use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, Ip
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
 use smoltcp::socket::udp as udp_socket;
 use smoltcp::socket::dhcpv4::{Event as DhcpEvent, Socket as DhcpSocket};
-use k_nano::net::VIRTIO_DEV;
+use crate::net::VIRTIO_DEV;
 
 pub struct PhyToken(pub Vec<u8>);
 
@@ -182,13 +182,13 @@ unsafe fn nic_send(data: Vec<u8>) {
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         nic.send(&data); return;
     }
-    if let Some(ref mut nic) = *k_nano::net::E1000.lock() {
+    if let Some(ref mut nic) = *crate::net::E1000.lock() {
         nic.send(&data); return;
     }
-    if let Some(ref mut nic) = *k_nano::net::RTL8139.lock() {
+    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         nic.send(&data); return;
     }
-    hermes::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
+    crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
         if let Some(wifi) = driver { let _ = wifi.send_packet(&data); }
     });
     k_nano::slip::send(&data);
@@ -199,15 +199,15 @@ unsafe fn nic_recv() -> Option<Vec<u8>> {
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
-    if let Some(ref mut nic) = *k_nano::net::E1000.lock() {
+    if let Some(ref mut nic) = *crate::net::E1000.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
-    if let Some(ref mut nic) = *k_nano::net::RTL8139.lock() {
+    if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     // Generic WiFi driver — bridge formal smoltcp::phy::Device via WifiChipset trait
     let mut wifi_pkt: Option<Vec<u8>> = None;
-    hermes::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
+    crate::generic_wifi::ACTIVE_DRIVER.lock(|driver| {
         if let Some(wifi) = driver {
             let mut rx_buf = [0u8; 1518];
             if let Ok(n) = wifi.receive_packet(&mut rx_buf) {
@@ -243,7 +243,7 @@ impl Device for NetPhy {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
         if let Some(ref d) = data {
-            unsafe { crate::serial_println!("[NET-RX] {} bytes", d.len()); }
+            unsafe { k_nano::serial_println!("[NET-RX] {} bytes", d.len()); }
         }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
@@ -311,7 +311,7 @@ impl NetStack {
         self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
-        crate::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2");
+        k_nano::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2");
     }
 
     pub fn poll(&mut self, now_ms: i64) {
@@ -503,7 +503,7 @@ impl NetStack {
             let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
             let _ = udp.bind(54321);
             if udp.send_slice(&query, dns_server_addr).is_err() {
-                crate::serial_println!("[DNS] send_slice falhou");
+                k_nano::serial_println!("[DNS] send_slice falhou");
             }
         }
 

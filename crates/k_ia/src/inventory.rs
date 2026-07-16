@@ -1,5 +1,5 @@
-use crate::acpi::AcpiInfo;
-use crate::pci::PciDevice;
+use k_nano::acpi::AcpiInfo;
+use k_nano::pci::PciDevice;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
@@ -22,7 +22,7 @@ impl HardwareInventory {
         let has_nvme = pci_devices.iter().any(|d| d.class == 0x01 && d.subclass == 0x08);
         let has_xhci = pci_devices.iter().any(|d| d.class == 0x0C && d.subclass == 0x03);
         let total_ram_bytes = {
-            let guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+            let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
             guard.as_ref().map_or(0, |a| a.usable_memory_bytes())
         };
 

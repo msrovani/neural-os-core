@@ -10,14 +10,14 @@ use k_nano::fs_driver::{FilesystemDriver, FsInfo};
 const NETFS_PORT: u16 = 4446;
 
 fn netfs_send(cmd: u8, payload: &[u8]) -> Option<Vec<u8>> {
-    let cfg = hermes::net::NET_CONFIG.lock();
+    let cfg = crate::net::NET_CONFIG.lock();
     let dns = cfg.dns_ip;
     drop(cfg);
     let mut msg = Vec::with_capacity(5 + payload.len());
     msg.push(cmd);
     msg.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     msg.extend_from_slice(payload);
-    let raw = unsafe { hermes::net::http_get_raw(dns, NETFS_PORT, &msg) };
+    let raw = unsafe { crate::net::http_get_raw(dns, NETFS_PORT, &msg) };
     raw
 }
 

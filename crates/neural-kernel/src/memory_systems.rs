@@ -81,7 +81,7 @@ pub fn bge_embed(text: &str) -> Vec<f32> {
     let Some(weights) = (unsafe { BGE_WEIGHTS.as_ref() }) else { return Vec::new(); };
     let vocab = unsafe { BGE_VOCAB };
 
-    let tokens = crate::bpe::encode(text);
+    let tokens = crate::cortex::Tokenizer::encode(text);
     if tokens.is_empty() { return vec![0.0f32; hidden]; }
 
     let mut out = vec![0.0f32; hidden];

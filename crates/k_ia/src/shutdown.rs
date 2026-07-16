@@ -23,6 +23,7 @@ pub fn set_cause(cause: ShutdownCause) {
     };
     let tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
     let msg = alloc::format!("SHUTDOWN:{} tick={}", label, tick);
+    #[cfg(feature = "kernel")]
     let _ = hermes::agents::log_analyst_agent::write_log("shutdown", &msg);
     k_nano::serial_println!("[SHUTDOWN] Causa: {} (tick={})", label, tick);
 }
@@ -59,7 +60,7 @@ pub fn write_persistent_shutdown_log(cause: ShutdownCause) {
         },
         k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed));
 
-    let ata_guard = k_nano::ata_DRIVER.lock();
+    let ata_guard = k_nano::ATA_DRIVER.lock();
     let ata = match *ata_guard { Some(ref a) => a, None => return };
     let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
@@ -71,7 +72,7 @@ pub fn write_persistent_shutdown_log(cause: ShutdownCause) {
 
 /// Le o ultimo shutdown cause do boot log persistente
 pub fn read_last_shutdown_from_boot_log() -> Option<ShutdownCause> {
-    let log = k_ia::boot_log_agent::BootLogAgent::read_last_boot_log()?;
+    let log = crate::boot_log_agent::BootLogAgent::read_last_boot_log()?;
     for line in log.lines().rev() {
         if let Some(rest) = line.strip_prefix("SHUTDOWN:") {
             let code = rest.chars().next()?;

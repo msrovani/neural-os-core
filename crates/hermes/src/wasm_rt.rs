@@ -7,7 +7,8 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use hermes::wasm_exec::{WasmExec, Op};
+use crate::wasm_exec::{WasmExec, Op};
+use crate::wasm_exec::Op::*;
 use k_nano::kjson;
 
 // ─── #104: Linear Memory Pool (256 KB per skill) ──────────────────────────
@@ -377,7 +378,7 @@ impl WasmSkillRuntime {
     }
 
     pub fn execute(&mut self, name: &str) -> Result<u32, &'static str> {
-        let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         let agent = self.registry.by_name(name).ok_or("skill not found")?;
         let bytecode = match &agent.origin {
             AgentOrigin::Wasm(code) => code.clone(),
@@ -387,7 +388,7 @@ impl WasmSkillRuntime {
 
         // #244: Human-in-the-Loop — verifica se skill requer aprovacao
         {
-            let gate = &mut *k_nano::APPROVAL_GATE.lock();
+            let gate = &mut *crate::globals::APPROVAL_GATE.lock();
             if !gate.can_execute(name) {
                 let level = crate::approval::ApprovalGate::classify(name);
                 let id = gate.request(name, "wasm", "skill execution", level);
@@ -409,7 +410,7 @@ impl WasmSkillRuntime {
             mem[..len].copy_from_slice(&vm.memory[..len]);
         }
 
-        let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         let elapsed = t1.wrapping_sub(t0);
 
         match result {

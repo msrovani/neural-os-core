@@ -5,7 +5,7 @@ use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::interrupts::TIMER_TICKS;
+use k_nano::interrupts::TIMER_TICKS;
 use k_nano::serial_println;
 
 const OPT_MANIFEST: AgentManifest = AgentManifest {
@@ -92,7 +92,7 @@ impl UsagePatternAnalyzer {
 // ---------------------------------------------------------------------------
 
 fn auto_scale_memory() {
-    let mem = crate::memory::global_hardware_context();
+    let mem = k_nano::memory::global_hardware_context();
     let occupancy = mem[0];
     if occupancy > 0.85 {
         serial_println!("[OPTIMIZER] ⚠️ Memória acima de 85% ({:.0}% ocupada). Compactando...", occupancy * 100.0);
@@ -173,10 +173,10 @@ impl ConfigLearner {
     pub fn snapshot(&mut self) {
         let tick = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         // Locks individuais (sem aninhamento) para evitar deadlock
-        let gpu_present = jarvis::display::fb::GPU.lock().is_some();
+        let gpu_present = false; // TODO: jarbas::display::fb::GPU
         let net_online = crate::net::NET_CONFIG.lock().online;
-        let ring0_mode = k_nano::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.ring0_mode);
-        let heap_mb = k_nano::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.heap_size_mb as u64);
+        let ring0_mode = crate::globals::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.ring0_mode);
+        let heap_mb = crate::globals::SYSTEM_ARCH.lock().as_ref().map_or(0, |a| a.heap_size_mb as u64);
         let snap = HardwareConfigSnapshot { tick, ring0_mode, heap_mb, gpu_present, net_online };
         self.snapshots.push(snap);
         if self.snapshots.len() > 20 { self.snapshots.remove(0); }
@@ -254,10 +254,10 @@ impl Agent for OptimizerAgent {
         }
 
         // MHI Scheduler: promove/demove tiers por padrao de acesso
-        crate::fs::mhi_scheduler::mhi_scheduler_tick(self.tick_counter);
+        k_ai::fs::mhi_scheduler::mhi_scheduler_tick(_tick);
 
         // MegaTrain: prefetch overlap I/O + compute
-        crate::mhi::megatrain_tick();
+        k_nano::mhi::megatrain_tick();
 
         // #163: Snapshot de config a cada 1000 ticks
         if self.tick_counter % 1000 == 0 {
@@ -272,9 +272,9 @@ impl Agent for OptimizerAgent {
 
         // Skill Observer: captura padrões de task para auto-skill
         if self.tick_counter % 300 == 0 {
-            let pending = hermes::skill_observer::pending_observations();
+            let pending = crate::skill_observer::pending_observations();
             if !pending.is_empty() {
-                let report = hermes::skill_observer::report();
+                let report = crate::skill_observer::report();
                 serial_println!("[OBSERVER] {} pending observations\n{}", pending.len(), report);
             }
         }
@@ -282,9 +282,9 @@ impl Agent for OptimizerAgent {
         // B-28: Auto-skill a cada 500 ticks — tenta gerar skill de padrões com 3+ usos
         if self.tick_counter % 500 == 0 {
             if let Some(predicted) = self.analyzer.predict_next_skill() {
-                if let Some(skill_md) = hermes::skill_gen::maybe_auto_skill(&predicted) {
+                if let Some(skill_md) = crate::skill_gen::maybe_auto_skill(&predicted) {
                     serial_println!("[AUTO-SKILL] Generated skill '{}' (3+ uses)", predicted);
-                    hermes::skill_observer::watch_correction(
+                    crate::skill_observer::watch_correction(
                         &predicted, "Auto-detected pattern", &skill_md,
                         "Repeated patterns should become reusable skills",
                         self.tick_counter,

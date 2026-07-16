@@ -415,7 +415,7 @@ pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<()
     k_nano::serial_println!("[WASM] Registrando '{}' ({} exports)...", name, module.exports.len());
 
     let skill = WasmSkill::new(bytecode, name, desc, module.exports.clone());
-    crate::SKILL_REGISTRY.lock().register(Box::new(skill));
+    crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
     {
         let mut bridge = WASM_SKILL_BRIDGE.lock();
         bridge.skill_name = String::from(name);

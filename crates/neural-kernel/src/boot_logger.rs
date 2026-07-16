@@ -55,8 +55,8 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, parts: &[crate::fat32::Partitio
         for part in parts {
             if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
                 unsafe {
+                    crate::serial_println!("[LOG] Abrindo FAT32 writer para sessao {}...", name);
                     if let Some(w) = crate::fat32::Fat32Writer::new(a, part) {
-                        // Monta conteudo: cabecalho + buffered lines
                         let ver = env!("CARGO_PKG_VERSION");
                         let mut content = alloc::format!("[S] neural-os-core {} boot tick={}\n", ver, tick);
                         let buf = PRE_FAT_BUF.lock();
@@ -64,12 +64,36 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, parts: &[crate::fat32::Partitio
                             content.push_str(core::str::from_utf8(line).unwrap_or(""));
                         }
                         drop(buf);
-                        w.write_file(&name, content.as_bytes());
-                        *SESSION_FILENAME.lock() = Some(name.clone());
-                        FAT_READY.store(true, Ordering::Relaxed);
-                        let count = PRE_FAT_COUNT.load(Ordering::Relaxed);
-                        crate::serial_println!("[LOG] FAT32 pronto: escrevendo para logs/{} ({} buffered)", name, count);
+                        crate::serial_println!("[LOG] Gravando {} ({} bytes)...", name, content.len());
+                        // N1.0/N1.1: write FAT no boot sob TCG pode travar minutos (PIO).
+                        // Serial continua; disco = best-effort sem bloquear Runtime/STATUS.
+                        #[cfg(not(feature = "fat-boot-log"))]
+                        {
+                            let _ = content;
+                            let _ = w;
+                            crate::serial_println!(
+                                "[LOG] SKIP fat session write (enable feature fat-boot-log to persist)"
+                            );
+                            FAT_READY.store(false, Ordering::Relaxed);
+                        }
+                        #[cfg(feature = "fat-boot-log")]
+                        if w.write_file(&name, content.as_bytes()) {
+                            *SESSION_FILENAME.lock() = Some(name.clone());
+                            FAT_READY.store(true, Ordering::Relaxed);
+                            let count = PRE_FAT_COUNT.load(Ordering::Relaxed);
+                            crate::serial_println!(
+                                "[LOG] FAT32 pronto: escrevendo para logs/{} ({} buffered)",
+                                name, count
+                            );
+                        } else {
+                            crate::serial_println!(
+                                "[LOG] WARN: falha ao gravar {} — seguindo sem log em disco",
+                                name
+                            );
+                        }
                         break;
+                    } else {
+                        crate::serial_println!("[LOG] WARN: Fat32Writer::new falhou");
                     }
                 }
             }
@@ -77,7 +101,10 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, parts: &[crate::fat32::Partitio
     }
 }
 
-/// Registra mensagem de log. Antes do FAT: bufferiza. Depois: escreve direto.
+/// Contador de appends em disco apos FAT_READY (rate-limit sob TCG).
+static DISK_APPENDS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+/// Registra mensagem de log. Antes do FAT: bufferiza. Depois: serial + append ocasional.
 pub fn log(msg: &str) {
     crate::serial_println!("[LOG] {}", msg);
 
@@ -86,7 +113,14 @@ pub fn log(msg: &str) {
         return;
     }
 
-    // Anexa ao arquivo de sessao no FAT (sem alloc)
+    // Rate-limit: cada append FAT = MBR+Writer+read+write (caro em TCG PIO).
+    // Mantém serial sempre; disco só a cada 8ª mensagem (além do flush inicial em init).
+    let n = DISK_APPENDS.fetch_add(1, Ordering::Relaxed);
+    if n % 8 != 0 {
+        return;
+    }
+
+    // Anexa ao arquivo de sessao no FAT (sem alloc no path quente)
     let sfn_guard = SESSION_FILENAME.lock();
     if let Some(ref name) = *sfn_guard {
         let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
@@ -94,7 +128,10 @@ pub fn log(msg: &str) {
         let _ = write!(sb, "[T+{}] [LOG] {}\n", tick, msg);
         let log_line = sb.as_str();
         unsafe {
-            let ata_guard = crate::ATA_DRIVER.lock();
+            // try_lock: evita deadlock se o caller ja segura ATA_DRIVER
+            let Some(ata_guard) = crate::ATA_DRIVER.try_lock() else {
+                return;
+            };
             if let Some(ref ata) = *ata_guard {
                 let parts = crate::fat32::read_mbr(ata);
                 for part in &parts {

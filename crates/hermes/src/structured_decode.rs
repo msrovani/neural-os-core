@@ -242,7 +242,7 @@ impl SkillOptimizer {
     }
 
     /// Analisa metricas do SkillMarket e sugere otimizacoes
-    pub fn analyze(&mut self, market: &hermes::wasm_rt::SkillMarket) -> Vec<String> {
+    pub fn analyze(&mut self, market: &crate::wasm_rt::SkillMarket) -> Vec<String> {
         let mut suggestions = Vec::new();
         for s in market.top(10) {
             if s.calls >= self.min_calls && s.success_rate < self.min_success {

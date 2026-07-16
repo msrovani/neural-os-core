@@ -6,14 +6,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
-use crate::fs::FilesystemAgent;
-use crate::serial_println;
+use k_nano::fs::FilesystemAgent;
+use k_nano::serial_println;
 
 static INFERENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static TRAINING_BUF: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
 
 fn get_tick() -> u64 {
-    crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64
+    k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64
 }
 
 fn generate_content(path: &str) -> Vec<u8> {

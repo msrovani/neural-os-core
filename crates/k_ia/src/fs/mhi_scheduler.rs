@@ -23,7 +23,7 @@ pub fn mhi_scheduler_tick(tick: u64) {
     if tick < last + SCAN_INTERVAL { return; }
     LAST_SCAN_TICK.store(tick, Ordering::Relaxed);
 
-    let reg = crate::mhi::MHI_REGISTRY.lock();
+    let reg = k_nano::mhi::MHI_REGISTRY.lock();
     let mut promotions = 0u64;
     let mut demotions = 0u64;
 
@@ -32,17 +32,17 @@ pub fn mhi_scheduler_tick(tick: u64) {
         let idle = tick.saturating_sub(profile.last_access_tick);
         let (_cpu_w, gpu_w, _io_w) = crate::profile::ProfileManager::get().resource_weights();
         let profile_weight = gpu_w;
-        let suggested = crate::mhi::arc_suggest_tier(profile, tick, profile_weight);
+        let suggested = k_nano::mhi::arc_suggest_tier(profile, tick, profile_weight);
 
         if suggested != profile.tier {
             if freq > PROMOTE_ACCESS_THRESHOLD && idle < PROMOTE_TICK_WINDOW {
                 // Promocao: tier mais quente
-                crate::serial_println!("[MHI] Promover {:?} {}H{}.tier {:?}→{:?} (freq={} idle={})",
+                k_nano::serial_println!("[MHI] Promover {:?} {}H{}.tier {:?}→{:?} (freq={} idle={})",
                     profile.phys_addr, profile.owner, freq, profile.tier, suggested, freq, idle);
                 promotions += 1;
             } else if idle > DEMOTE_IDLE_TICKS {
                 // Democao: tier mais frio
-                crate::serial_println!("[MHI] Demover {:?} (freq={} idle={})",
+                k_nano::serial_println!("[MHI] Demover {:?} (freq={} idle={})",
                     profile.phys_addr, freq, idle);
                 demotions += 1;
             }

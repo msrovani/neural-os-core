@@ -100,7 +100,7 @@ impl IwlWifi {
     pub fn new(bar: u64) -> Self {
         IwlWifi {
             bar,
-            pmoff: crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed),
+            pmoff: k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed),
             initialized: false,
             ucode_loaded: false,
             alive: false,

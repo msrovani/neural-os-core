@@ -18,10 +18,10 @@ impl SelfUpdate {
     pub fn active_slot() -> u8 {
         let ata = ATA_DRIVER.lock();
         let ata = match ata.as_ref() { Some(a) => a, None => return 1 };
-        let parts = unsafe { crate::fat32::read_mbr(ata) };
+        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
             if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C {
-                let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part) };
+                let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
                 if let Some(fs) = fs {
                     if let Some(cfg) = unsafe { fs.read_file(BOOT_CFG) } {
                         let text = core::str::from_utf8(&cfg).unwrap_or("");
@@ -61,10 +61,10 @@ impl SelfUpdate {
     fn write_bootcfg(text: &str) -> bool {
         let ata = ATA_DRIVER.lock();
         let ata = match ata.as_ref() { Some(a) => a, None => return false };
-        let parts = unsafe { crate::fat32::read_mbr(ata) };
+        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
             if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C {
-                if let Some(w) = unsafe { crate::fat32::Fat32Writer::new(ata, part) } {
+                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
                     unsafe { w.write_file(BOOT_CFG, text.as_bytes()); }
                     kjson!("UPDATE", "BOOTCFG", "written", "slot", alloc::format!("\"{}\"", text));
                     return true;
@@ -78,10 +78,10 @@ impl SelfUpdate {
     fn write_kernel(name: &str, data: &[u8]) -> bool {
         let ata = ATA_DRIVER.lock();
         let ata = match ata.as_ref() { Some(a) => a, None => return false };
-        let parts = unsafe { crate::fat32::read_mbr(ata) };
+        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
             if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C {
-                if let Some(w) = unsafe { crate::fat32::Fat32Writer::new(ata, part) } {
+                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
                     unsafe { w.write_file(name, data); }
                     kjson!("UPDATE", "KERNEL", "written", "slot", name);
                     return true;

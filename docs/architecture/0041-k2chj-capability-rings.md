@@ -180,8 +180,11 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 
 ## 8. Próximos
 
-1. Validar Ring3 em QEMU UEFI (TRY_ENTER_RING3).
-2. SFI WASM + Cap contract (#426).
-3. QUEUE_NOTIFY VirtIO real (path paralelo seguro).
-4. On-fault I/O seguro / streaming GGUF > prefixo.
-5. ELF usermode / preempt (após Ring3 estável).
+**Adequação Boot OK → visão K²CHJ:** ver **ADR-0042** (cadeia `k-nano → k-ai → cortex → hermes → jarbas`, fases N1–N5).
+
+1. **N1** k-nano legível (telemetria / Cap authority) — ADR-0042.
+2. Validar Ring3 em QEMU UEFI (TRY_ENTER_RING3) sob N1/N3+.
+3. SFI WASM + Cap contract (#426) — fase N4.
+4. QUEUE_NOTIFY VirtIO real — N2 (k-ai/nano).
+5. On-fault I/O / streaming GGUF — N3.
+6. ELF usermode / preempt (após Ring3 estável).

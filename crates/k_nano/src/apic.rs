@@ -182,7 +182,7 @@ unsafe fn read_lapic_base_msr() -> u64 {
 /// Mapeia uma página MMIO como uncacheable e presente.
 /// Diferente de set_page_uc (que só modifica flags se a entrada existir),
 /// esta função CRIA a entrada se ela não existir, apontando para o frame físico.
-pub(crate) unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
+pub unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
     use x86_64::structures::paging::{FrameAllocator, Page, PhysFrame, Size4KiB, PageTable, PageTableFlags};
     use x86_64::VirtAddr;
     use x86_64::registers::control::Cr3;

@@ -19,6 +19,8 @@ pub const USER_MARKER_VA: u64 = 0x0000_7000_0030_2000;
 pub const RING3_MAGIC: u64 = 0x0033_5249_4E47_0001;
 
 static DEMO_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// Evita storm: nested #PF durante abort não faz return/retry.
+static ABORTING: AtomicBool = AtomicBool::new(false);
 /// 1=ok 2=cap-deny-on-exit 3=fault 0=unset
 static EXIT_OK: AtomicU64 = AtomicU64::new(0);
 static SAVED_CR3: AtomicU64 = AtomicU64::new(0);
@@ -28,18 +30,29 @@ static SAVED_CR3_FLAGS: AtomicU64 = AtomicU64::new(0);
 static mut SAVED_RIP: u64 = 0;
 static mut SAVED_RSP: u64 = 0;
 
-/// Feature: tentar `iretq` real. Desligar se WHPX/QEMU instável.
-pub const TRY_ENTER_RING3: bool = true;
+/// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
+/// Cap deny path ainda roda; reativar quando clone CR3 mapear kernel text.
+pub const TRY_ENTER_RING3: bool = false;
 
 #[inline]
 pub fn demo_active() -> bool {
-    DEMO_ACTIVE.load(Ordering::SeqCst)
+    DEMO_ACTIVE.load(Ordering::SeqCst) || ABORTING.load(Ordering::SeqCst)
 }
 
 /// Abort non-fatal de #GP/#PF durante a demo — restaura kernel e continua boot.
 pub fn fault_abort(msg: &'static str) -> ! {
-    serial_println!("[P6] WARN fault: {}", msg);
+    // Idempotent: nested faults durante restore não reentram.
+    if ABORTING.swap(true, Ordering::SeqCst) {
+        // Já abortando — não retry (handler não deve return).
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+    DEMO_ACTIVE.store(false, Ordering::SeqCst);
     EXIT_OK.store(3, Ordering::SeqCst);
+    // Lock-free: serial_println pode deadlock no IRQ path.
+    crate::interrupts::puts(b"[P6] WARN fault abort - restore CR3 + skip iretq\n");
+    let _ = msg;
     unsafe { jump_back_to_kernel() }
 }
 
@@ -60,6 +73,15 @@ unsafe fn jump_back_to_kernel() -> ! {
     }
     let rip = SAVED_RIP;
     let rsp = SAVED_RSP;
+    // Sem return point salvo (fault pré-asm) → não jmp 0 (nova storm).
+    if rip == 0 || rsp == 0 {
+        ABORTING.store(false, Ordering::SeqCst);
+        crate::interrupts::puts(b"[P6] WARN no SAVED_RIP - spin (no return)\n");
+        loop {
+            x86_64::instructions::hlt();
+        }
+    }
+    ABORTING.store(false, Ordering::SeqCst);
     core::arch::asm!(
         "xor ax, ax",
         "mov ds, ax",
@@ -102,16 +124,17 @@ pub unsafe fn enter_user_mode(
     core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack));
     rflags &= !0x200; // IF=0; int software ainda funciona
 
-    DEMO_ACTIVE.store(true, Ordering::SeqCst);
-    address_space::restore_cr3(user_l4, Cr3Flags::empty());
-
     let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
     let rsp_ptr = core::ptr::addr_of_mut!(SAVED_RSP);
+    let cr3_val = user_l4.start_address().as_u64();
 
+    // Salva RIP/RSP no mesmo asm que o CR3 switch — clone AS pode omitir text → #PF.
+    DEMO_ACTIVE.store(true, Ordering::SeqCst);
     core::arch::asm!(
         "lea {tmp}, [rip + 2f]",
         "mov qword ptr [{rip_ptr}], {tmp}",
         "mov qword ptr [{rsp_ptr}], rsp",
+        "mov cr3, {cr3}",
         "mov ax, {uds:x}",
         "mov ds, ax",
         "mov es, ax",
@@ -125,6 +148,7 @@ pub unsafe fn enter_user_mode(
         tmp = out(reg) _,
         rip_ptr = in(reg) rip_ptr,
         rsp_ptr = in(reg) rsp_ptr,
+        cr3 = in(reg) cr3_val,
         uds = in(reg) uds,
         ucs = in(reg) ucs,
         stack = in(reg) user_stack,

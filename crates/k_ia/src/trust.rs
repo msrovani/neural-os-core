@@ -184,6 +184,7 @@ impl TrustCache {
 
     /// #259: verifica se hardware está apto antes de executar skill
     pub fn posture_check(skill: &str) -> bool {
+        #[cfg(feature = "kernel")]
         if skill.contains("net_") && !crate::net::NET_CONFIG.lock().online {
             serial_println!("[TRUST] Posture: net offline, skill '{}' bloqueada", skill);
             return false;
@@ -228,7 +229,7 @@ impl TrustCache {
 
     /// #364: Zero-Trust Syscall — avalia permissão por classe
     pub fn check_syscall(&self, token: u64, skill: &str, class: SyscallClass) -> bool {
-        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         match class {
             SyscallClass::ReadOnly => true,
             SyscallClass::Ephemeral => self.is_trusted(token, skill, now as u64),
