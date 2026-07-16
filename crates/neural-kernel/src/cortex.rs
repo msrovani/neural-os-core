@@ -1738,6 +1738,16 @@ pub fn model_is_loaded() -> bool {
     CURRENT_MODEL.lock().is_some()
 }
 
+/// True se HW Expert MoE está setado.
+pub fn hwexpert_is_loaded() -> bool {
+    HWEXPERT_MODEL.lock().is_some()
+}
+
+/// True se RustCoder expert está setado.
+pub fn rustcoder_is_loaded() -> bool {
+    RUSTCODER_MODEL.lock().is_some()
+}
+
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
     *RUSTCODER_MODEL.lock() = Some(model);
     crate::serial_println!("[CORTEX] RustCoder expert model loaded.");

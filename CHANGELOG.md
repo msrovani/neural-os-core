@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.7.5] — 2026-07-16 — ADR-0042 N3 CLOSED (cortex cérebro)
+
+### Closed
+- **N3.1–N3.4** funcionais: BitNet 2B `llm=LOADED`, Cap MAP_WEIGHTS (P5), Trinity 6 experts + HWEXPERT/RustCoder, generate path (GATED soft-float no boot default + prior weather-e2e HIT)
+- Serial gate `[N3-CORTEX] … criteria=MET` — evidência `logs/boot_n3_20260716_132753.txt`
+- **N3.5** link crate `cortex` no bin = deferred (espelho monólito; padrão N2.5)
+- Soft-float fluency / TTS quality → Sprint Sound (não bloqueia N3)
+
+### Não é
+- Chat fluente 24/7, float/AVX path pleno, ou `v2.0.0` (falta N4–N5)
+
 ## [1.7.4] — 2026-07-16 — ADR-0042 N2 CLOSED (SelfHeal VID-gated + Trust)
 
 Critérios funcionais N2 ✅. Package Cargo permanece `1.0.0` (tag-only). **Não** é v2.0.0.

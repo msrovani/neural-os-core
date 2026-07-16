@@ -233,6 +233,16 @@ impl TrinityRouter {
     }
 
     pub fn agent_count(&self) -> usize { self.experts.len() }
+
+    /// True se pesos do router MoE neural estão carregados (senão: keyword/R3).
+    pub fn moe_router_loaded(&self) -> bool {
+        self.router_weight.is_some() && self.router_embed.is_some()
+    }
+
+    /// Tem expert generator registrado (rota default segura).
+    pub fn has_generator(&self) -> bool {
+        self.experts.iter().any(|e| e.kind == ExpertKind::Generator)
+    }
 }
 
 pub fn init_trinity() -> TrinityRouter {

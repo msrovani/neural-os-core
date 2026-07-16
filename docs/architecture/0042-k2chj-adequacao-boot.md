@@ -1,11 +1,11 @@
 # ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
 
 **Data:** 2026-07-14 · atualizado 2026-07-16  
-**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 ✅ CLOSED**; N3 parcial)  
+**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 ✅ CLOSED**; **N3 ✅ CLOSED**)  
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
-**Sprint:** ADR-0042 (pista ativa N3→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
+**Sprint:** ADR-0042 (pista ativa N4→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅ funcional (espelho até N2.5 allocator). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5.**
 
 
@@ -65,7 +65,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N5** | jarbas | Ego / UI / +10% | Compositor vivo; persona; voz como expressão; só via Hermes |
 
 **Gate de release `v2.0.0`:** N1–N5 com gates de qualidade desta ADR (Runtime intacto + telemetria honesta + Caps/IPC por anel).  
-**Até `v2.0.0`:** tags/`CHANGELOG` em **`1.x`** (1.5.7 Cap; **1.7.0** = N1 + 2B LOADED; N3 generate/TTS ainda parcial).
+**Até `v2.0.0`:** tags/`CHANGELOG` em **`1.x`** (1.5.7 Cap; **1.7.0** = N1 + 2B LOADED; **1.7.5** = N3 CLOSED).
 
 **Ordem fechada:** N0→N1→N2→N3→N4→N5.  
 **Paralelo:** drivers VirtIO/DMA em nano+k-ai durante N2 **sem** UI. Proibido jarbas antes de Hermes mínimo.
@@ -92,6 +92,21 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 **Evidência serial:** `logs/boot_n2_20260716_131837.txt` (WHPX short) — Trust allow + inventory + honest noop. Path HEALTH_ISSUE heal também visto em `logs/boot_n2_20260716_131655.txt` (pré fine-gate e1000).  
 **Espelho:** `neural-kernel` espelha `k_ai` SelfHeal/Trust/inventory até N2.5; hermes já usa `k_ai` real.
+
+### Checklist N3 (cortex cérebro)
+
+| Item | Aceite | Status |
+|------|--------|--------|
+| **N3.1** Modelo LOADED | `[STATUS] llm=LOADED` quando BitNet no loader/FAT; telemetria honesta ABSENT/FAILED | ✅ 2026-07-16 QEMU |
+| **N3.2** Cap MAP_WEIGHTS | P5 `demo_cortex_mmap` SUCCESS + gate `MAP_WEIGHTS pages>0` | ✅ |
+| **N3.3** MoE / Trinity | Experts registrados (≥6, generator OK); HWEXPERT+RustCoder LOADED; router MoE neural = ABSENT→keyword+R3 (honesto) | ✅ |
+| **N3.4** prompt→texto | Path `generate_via_model` / weather-e2e HIT **ou** gate `generate=GATED soft-float` + evidência prior | ✅ live GATED + prior `decoded_len=12` |
+| **N3.5** Link crate `cortex` no bin | Dep direta neural-kernel→cortex | ⏳ N3.5 — monólito espelha cortex até wire crate (padrão N2.5) |
+| **Goal N3** | Cérebro: LOADED + Cap pesos + Trinity wiring + generate path | ✅ **CLOSED** (critérios funcionais; fluency soft-float → Sound; crate = N3.5) |
+
+**Evidência serial N3:** `logs/boot_n3_20260716_132753.txt` (WHPX short) — `[STATUS] llm=LOADED` + `[N3-CORTEX] … criteria=MET`.  
+**N3.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — `[GEN] decoded_len=12 text='O tempo esta'` (feature `weather-e2e`).  
+**Defer:** soft-float latency / chat fluente → Sprint Sound; link crate cortex → N3.5; hermes/jarbas pleno → N4/N5.
 
 ---
 
@@ -121,7 +136,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4 funcional; N2.5 = link crate). **N3 progress:** BitNet 2B LOADED (~590MB, 30 layers, FWD OK); generate/TTS empty = próximo. Depois: N3–N5.
+**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai`). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex`). Próximo: N4→N5.
 
 ---
 

@@ -1,6 +1,6 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.4 — ADR-0042 N2 ✅ CLOSED
-#   PISTA ATIVA — ADR-0042 N3→N5 (cortex / hermes / jarbas)
+#   STATE — neural-os-core v1.7.5 — ADR-0042 N3 ✅ CLOSED
+#   PISTA ATIVA — ADR-0042 N4→N5 (hermes / jarbas)
 #   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
 #   Backlog voz → Sprint Sound (reaberta) — ADR-0045
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
@@ -16,8 +16,8 @@
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 
 ## Roadmap Atual
-**Versão:** **v1.7.4** (2026-07-16) — ADR-0042 **N2 CLOSED** (SelfHeal VID + Trust; espelho até N2.5).  
-**Runtime marco:** v1.7.2 clima PASS parcial forte+; N2 evidência `logs/boot_n2_20260716_131837.txt`.  
+**Versão:** **v1.7.5** (2026-07-16) — ADR-0042 **N3 CLOSED** (cortex LOADED + MAP_WEIGHTS + Trinity + generate path; N3.5 crate deferred).  
+**Runtime marco:** v1.7.2 clima PASS parcial forte+; N2 `logs/boot_n2_20260716_131837.txt`; N3 `logs/boot_n3_20260716_132753.txt`.  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
@@ -25,9 +25,9 @@
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
-| **ADR-0042 N3→N5** | ▶️ **pista ativa** (N2 ✅); fechar N3 generate/TTS + N4/N5 |
+| **ADR-0042 N4→N5** | ▶️ **pista ativa** (N3 ✅); fechar hermes orquestra + jarbas ego |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
-| Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas…) — **não bloqueia** ADR-42 |
+| Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas… + soft-float latency) — **não bloqueia** ADR-42 |
 | Sprint 108 | ⏳ self-evolving — paralelo; sem gate de voz |
 
 ### Sound / Voice (ADR-0045)
@@ -47,8 +47,8 @@
 | **N0** Baseline boot Runtime | ✅ |
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
 | **N2** k-ai HW-AI / SelfHeal | ✅ **CLOSED** (v1.7.4) — heal/noop + HEALTH_ISSUE/honest noop + VID+subclass gate + Trust; **N2.5** link `k_ai` no bin ⏳ (espelho) |
-| **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** + FWD + BPE HF + chat frame + soft_stride=3 + clima `'O tempo esta'` / `' tempo esta bom'` |
-| **N4** hermes orquestra | ✅ STT path → EventBus → generate_via_model (generator); seed LLM enquanto CTC curto |
+| **N3** cortex cérebro | ✅ **CLOSED** (v1.7.5) — llm=LOADED + MAP_WEIGHTS + Trinity (keyword+R3) + generate path; soft-float fluency → Sound; **N3.5** link `cortex` ⏳ |
+| **N4** hermes orquestra | ▶️ STT path → EventBus → generate_via_model (generator); seed LLM enquanto CTC curto |
 | **N5** jarbas ego/UI | ▶️ TTS `synthesize_tts`/Piper + FB paint; WakeWord registrado |
 
 ### Sprint 107 close loops (2026-07-16 sessão 2) — **FECHADA (parcial forte+)**
@@ -176,13 +176,24 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **ADR-0042 N3→N5** — N2 ✅ CLOSED; próxima pista N3 generate/TTS + N4/N5
-- **N2.5** (não bloqueia N3): link crate `k_ai` no bin quando `#[global_allocator]` resolvido; até lá espelho `neural-kernel`
-- Backlog voz → **Sprint Sound (reaberta)** (TODO.md): STT retrain; Mic→Wake→STT e2e; Piper VITS pleno; soft-float latency; UAC; jarbas wire; VAD/SER/Wake polish
+- **ADR-0042 N4→N5** — N3 ✅ CLOSED; próxima pista hermes orquestra + jarbas ego
+- **N2.5 / N3.5** (não bloqueiam): link crates `k_ai` / `cortex` no bin quando allocator único; até lá espelho `neural-kernel`
+- Backlog voz / soft-float latency → **Sprint Sound (reaberta)** (TODO.md)
 - Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
+- Evidência N3: `SESSION_113.md` + `logs/boot_n3_20260716_132753.txt` (+ N3.4 prior `boot_whpx_20260716_110041.txt`)
 - Evidência N2: `SESSION_112.md` + `logs/boot_n2_20260716_131837.txt`
 - Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_110041.txt`
 - Migração docs 107→Sound: `SESSION_111.md`
+
+### N3 CLOSED (2026-07-16) — cortex cérebro ✅
+| Item | Onde | Serial / aceite |
+|------|------|-----------------|
+| N3.1 llm LOADED | QEMU-loader BitNet 2B + `[STATUS]` | `llm=LOADED dim=2560 bpe=LOADED` |
+| N3.2 MAP_WEIGHTS | P5 `cortex_mmap` + gate | `MAP_WEIGHTS pages>0 (P5 Cap OK)` |
+| N3.3 Trinity MoE | experts + HWEXPERT/RustCoder | `experts=6 generator=OK moe_router=ABSENT(keyword)` |
+| N3.4 prompt→texto | path + prior weather-e2e | boot `generate=GATED soft-float`; prior `decoded_len=12 'O tempo esta'` |
+| N3.5 crate link | bin monólito espelha `cortex` | ⏳ deferred (padrão N2.5) |
+| Gate | `n3_cortex_gate()` em `main.rs` | `[N3-CORTEX] gate complete … criteria=MET` |
 
 ### N2 CLOSED (2026-07-16) — SelfHeal gated ✅
 | Item | Onde | Serial / aceite |
