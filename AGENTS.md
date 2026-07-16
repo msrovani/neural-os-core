@@ -169,6 +169,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
 # Current Sprint: Sprint 107 — Voice I/O + pós v1.7.0 (N1 ✅, 2B LOADED; fix TTS/generate)
+# Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho; sem sherpa/Vosk/Kokoro-primário
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
 # Não declarar v2.0.0 até ADR-0042 N1–N5.
 
@@ -186,12 +187,13 @@ cargo build --release → python tools/build_image.py --bios → qemu
 
 # QEMU Launch (WHPX + VirtIO optimizado)
 ```powershell
-.\run-qemu-whpx.ps1              # Boot normal
+.\run-qemu-whpx.ps1              # Boot normal (sobe SLIP bridge :4444; mata no exit)
 .\run-qemu-whpx.ps1 -debug       # Aguarda GDB (-s -S)
-python serial_bridge.py          # Tunnel SLIP (outro terminal)
+.\run-qemu-whpx.ps1 -NoSerialBridge  # sem auto-bridge
+# Manual se necessario: python tools\serial_bridge.py
 ```
 
-Config: WHPX accel, `-cpu host`, VirtIO-GPU, VirtIO-net, 2× serial (stdio + tcp tunnel).
+Config: WHPX accel, `-cpu host`, VirtIO-GPU, VirtIO-net, 2× serial (file log + tcp COM2 SLIP client).
 Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 
 # Sprint 100 — Code Freeze v1.0.0

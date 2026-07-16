@@ -98,12 +98,18 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 ## 5. 🎵 ÁUDIO — Captura e Reprodução
 
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).
+
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
 | 5.1 | **Intel HDA Capture + Playback** | 🏆 Driver HDA completo: SD0 (captura) + SD1 (playback). CORB/RIRB, codec discovery, DMA ring buffer. **Único driver HDA funcional em bare-metal Rust.** | Intel HDA spec, Linux HDA driver | GPLv2 | `audio/hda.rs` | ✅ 0 err |
 | 5.2 | **FFT Audio → Orb Visualization** | 🏆 `process_audio_fft()`: Goertzel simplificado com janela Hamming, 16 bins espectrais. Áudio do microfone HDA → FFT → animação do orbe em tempo real. | FFT algoritmos (Cooley-Tukey) | — (matemática) | `display/avatar.rs`, `audio/voice.rs` | ✅ 0 err |
-| 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural VITS (366 tensors, 15.6M params). Port do Piper para .bitnet, carregado via FAT32 ou QEMU loader. | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs` | ✅ 0 err |
-| 5.4 | **Wake Word "Jarvis" + VAD + SER** | 🔄 Pipeline de voz completo: wake word → VAD → speech recognition → emotion analysis → TTS response. 3 engines de TTS (formant + Piper + Pocket). | Rustpotter (wake word), VAD/SER papers | MIT | `audio/wakeword.rs`, `audio/vad.rs`, `audio/stt.rs` | ✅ 0 err |
+| 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural VITS (366 tensors). LOADED via QEMU-loader; **formant fallback** se `emb.weight` fraco. **Primário** (supersede Kokoro/Pocket/sherpa). | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs`, `audio/tts.rs` | ▶️ formant ok / neural parcial |
+| 5.4 | **STT CTC + VAD + Mixer** | 🔄 STT CTC nativo (MFCC→LSTM→CTC). VAD + mixer + ringbuf. **Não** Vosk/sherpa. | CTC papers, VAD | MIT | `audio/stt.rs`, `vad.rs`, `mixer.rs` | ✅ CTC LOADED |
+| 5.5 | **Wake Word "Jarvis" (nativo)** | ⏳ MLP wakeword em `wakeword.rs`. **Código existe; agente não registrado no boot.** Supersede Rustpotter crate. | energia + MLP | MIT | `audio/wakeword.rs` | ⏳ gap Sprint 107 |
+| 5.6 | **USB Audio Class (UAC)** | ⏳ Stub `UsbAudioAgent` (probe false). Futuro #84 quando HDA ausente. | USB Audio Class | — | `audio/usb.rs` | ⏳ stub |
+
+**❌ Obsoleto como stack de kernel (histórico):** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming, Rustpotter — ver ADR-0045.
 
 ---
 

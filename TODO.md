@@ -1,6 +1,6 @@
-# 📋 TODO MASTER — neural-os-core v1.5.3
+# 📋 TODO MASTER — neural-os-core v2.0
 
-**Data:** 2026-07-13  
+**Data:** 2026-07-14  
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.  
 **Documento oficial:** AGENTS.md (seção roadmap)  
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
@@ -21,32 +21,128 @@
 
 ---
 
-## ▶️ SPRINT 106 — v2.0 Cognição: LLM Agent 24/7
+## ✅ SPRINT 106 — v2.0 Cognição: Refatoração para Ecossistema de Anéis Lógicos
 
-| Item | LOC | Status |
-|------|-----|--------|
-| Multi-turn conversation (Cortex + Hermes) | ~800 | ⏳ |
-| Persistent agent state across reboots | ~400 | ⏳ |
-| LLM-powered Hermes CLI | ~300 | ⏳ |
-| Auto-skill generation from natural language | ~500 | ⏳ |
+| Sprint | Item | LOC | Status | Detalhes |
+|--------|------|-----|--------|----------|
+| 106-1 | Estruturar Cargo workspace estrito | ~100 | ✅ | k_nano, k_ai, cortex, hermes, jarbas membros |
+| 106-2 | Renomear crates k_ia→k_ai e jarvis→jarbas | ~200 | ✅ | Copiados backups preservados, nomes atualizados |
+| 106-3 | Corrigir SOUL.md parser (dependência ring2→ring0) | ~300 | ✅ | jarbas usar neural_kernel::fs::read_vfs(), não k_nano::ATA_DRIVER |
+| 106-4 | Corrigir Trinity MoE Router | ~100 | ✅ | Trinity classifica intents via ML/keyword — não roteia para hardware |
+| 106-5 | RustPython viabilidade | ~200 | ✅ | Documentado: RustPython não é no_std nativo — rota WASM (106-6) é principal |
+| 106-6 | MicroPython via WASM | ~300 | ✅ | Compilado para .wasm, sandbox isolado |
+| 106-7 | Corrigir page faults (ordem de inicialização) | ~200 | ✅ | allocator → events → agents |
+| 106-8 | AIOS API para Python (RAG + System Prompt) | ~300 | ✅ | aios_net, aios_fs injetadas via RAG |
+| 106-9 | Escalonamento Evolutivo de Código (JIT Cognitivo) | ~500 | ✅ | Python efêmero → WASM cravado em pedra |
+| 106-10 | SkillOpt - Tradução Python→Rust no_std | ~400 | ✅ | Geração Rust no_std via Cortex LLM |
+
+---
 
 ## ▶️ SPRINT 107 — v2.0 Voice I/O Pipeline
 
-| Item | LOC | Status |
-|------|-----|--------|
-| TTS→STT→LLM→TTS loop | ~600 | ⏳ |
-| Voice activity detection improvements | ~200 | ⏳ |
-| Wake word "Jarvis" refinements | ~200 | ⏳ |
-| Audio pipeline hardening | ~300 | ⏳ |
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — stack canônico = HDA + Piper (+formant) + STT CTC (não sherpa/Vosk/Kokoro/Wyoming).
+
+| Item | LOC | Status | Detalhes |
+|------|-----|--------|----------|
+| TTS→STT→LLM→TTS loop | ~600 | ⏳ | Pipeline completo de voz (parcial: TTS+FB ok; STT↔loop aberto) |
+| Voice activity detection improvements | ~200 | ⏳ | VAD refinado |
+| Wake word "Jarvis" — **registrar** agente | ~200 | ⏳ | Código em `wakeword.rs`; **não** no AgentFleet (ADR-0045) |
+| Audio pipeline hardening | ~300 | ⏳ | Debug e otimização |
+| Piper neural `emb.weight` | ~100 | ⏳ | Hoje formant fallback |
+| ~~sherpa / Vosk / Kokoro / Wyoming~~ | — | ❌ | Supersedido — ADR-0045 |
+
+---
 
 ## ▶️ SPRINT 108 — v2.0 Self-Evolving Agents
 
-| Item | LOC | Status |
-|------|-----|--------|
-| Auto-skill generation via LLM | ~500 | ⏳ |
-| Runtime skill verification | ~300 | ⏳ |
-| Agent self-improvement loop | ~400 | ⏳ |
-| Meta-cognition and reflection | ~400 | ⏳ |
+| Item | LOC | Status | Detalhes |
+|------|-----|--------|----------|
+| Auto-skill generation via LLM | ~500 | ⏳ | Geração de skills via Cortex |
+| Runtime skill verification | ~300 | ⏳ | Validação automática |
+| Agent self-improvement loop | ~400 | ⏳ | Loop de auto-improvement |
+| Meta-cognition and reflection | ~400 | ⏳ | Auto-reflexão |
+
+---
+
+## 🔍 Auditoria de erros Cursor — k_nano (Jul 2026)
+
+> **Origem:** auditoria Cursor k_nano (Sprint/Jul 2026). Bugs de código já corrigidos (AHCI MMIO/TFES, VA→PA, FAT32 read_sectors, ATA PIO write, IrqSafeLock CAS, journal recover, BlockDevice len, xHCI init, PCI multi-function BARs, warnings/stubs). Resta dívida arquitetural + validação em runtime.
+
+- [ ] Migrar `neural-kernel` para depender de `k_nano` e eliminar ~66 módulos duplicados (maior drift)
+- [ ] Validar AHCI em QEMU (`-device ahci`) e/ou HW real — read/write + detecção TFES
+- [ ] Validar `dma_va_to_pa` com buffers fora do heap (stack/.bss) vs identity map
+- [ ] Validar FAT32 com falha de I/O real (erro visível no chamador)
+- [ ] Validar IrqSafeLock::try_lock sob contenção SMP
+- [ ] Validar xHCI com heap pressionado (boot continua sem panic)
+- [ ] Validar PCI multi-function BARs em device real multi-função
+- [ ] Wire-up / ownership único VirtIO-GPU (stub k_nano vs impl jarbas/neural-kernel)
+- [ ] Implementar `disk_power` real ou mover para agente (hoje stub)
+- [ ] Driver RTC (mencionado em AGENTS.md, sem módulo) ou atualizar docs
+- [ ] Exportar ou deprecar claramente `debug_rl!` no ecossistema crate
+- [ ] Adicionar `k-ia` ao workspace ou deprecar em favor de `k_ai`
+- [ ] Reorganizar `hnsw` / `multi_user` fora do Ring 0 (candidatos cortex/k_ai)
+
+---
+
+## 🔍 Auditoria de erros Cursor — k_ai (Jul 2026)
+
+> **Origem:** auditoria Cursor Ring 1 / k_ai (Jul 2026). Já corrigido: stubs hermes→k_ai real (agency/hw/audit/boot_log/inventory), Trust sem auto-grant + BootTrust `add_exempt_token(1)`, Audit Merkle ativo, MHI scheduler ligado, `mask_secrets` UTF-8, I3/I4 via `k_nano::EVENT_BUS` (sem jarvis), DataCollector sem dummy, docs AGENTS.md alinhados. Canvas: `k-ai-audit.canvas.tsx`.
+
+### Dívida restante (bloqueio / arquitetura)
+
+- [ ] **P01** Unificar globals (`EVENT_BUS` / `GLOBAL_ALLOCATOR` / `SKILL_REGISTRY`) em `k_nano` como singleton único
+- [ ] **P01** Após singleton: `neural-kernel` depender de `k_ai` e eliminar mods locais (`self_heal`, `trust`, `agency`, `cognitive`, `audit`, …)
+- [ ] **P08** Um só `SELF_HEAL` / `TRUST_CACHE` no path boot (hoje: monólito × hermes/k_ai)
+- [ ] Mover **safety / security / optimizer / SleepCycle / AutoLearn** para `k_ai` **ou** manter em hermes e congelar docs (decidir ownership Ring 1)
+- [ ] Deprecar / remover `crates/k_ia` (legado pós-rename) e `hermes/src/monolith_stubs.rs` residual
+
+### Checkpoint / SelfHeal (P09)
+
+- [ ] Expandir `restore_checkpoint` além do bitmap (page tables / heap talc / estado drivers) ou documentar como “best-effort” e nunca chamar em produção sem validação
+- [ ] Validar em QEMU: BootSelfHeal lê boot log real (FAT32/`/logs`) após unexpected shutdown
+
+### Trust / Security (validação runtime)
+
+- [ ] Validar Contain/Enforce: skill sem `trust_allow` é negada pós-boot
+- [ ] Validar skills de sistema com `Legacy(1)` após exempt explícito (EventBus interno não quebra)
+- [ ] Wire `check_or_cache` em todos os execute_skill paths (hermes + neural-kernel)
+
+### Cognitive / treino (hollow → real)
+
+- [ ] Substituir toys restantes (`CandleSidecar`, `TaskSpawner`, `ReActLoop` scripted, `McpServer` echo) por no-op documentado ou impl mínima
+- [ ] Conectar AutoLearn/SleepCycle do **hermes** ao `update_with_replay` + cache R3 (hoje R3 está no neural-kernel)
+- [ ] BGE `memory_systems`: alinhar `f32` load (alignment) + evitar `static mut` unsync em SMP
+
+### Validação / polish
+
+- [ ] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
+- [ ] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
+- [ ] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)
+- [ ] Atualizar TECNOLOGIAS.md se ownership Ring 1 mudar pós-migração
+
+---
+
+## 🔴 BLOQUEADORES — Apenas leitura
+
+| Item | Esforço | Descrição |
+|------|---------|-----------|
+| **B-01** DHCP/RX funcional | ~500 LOC | smoltcp DHCP nunca completa |
+| WWW Agents | ~2.600 | Email, Search, RSS, Download |
+| Self-Update Agent | ~800 | A/B slots, channels |
+| Cross-OS compat | ~2.000 | PE/ELF/Mach-O/APK |
+| Federated Cluster | ~300 | Mesh multi-máquina |
+| Multi-device sync | ~300 | CRDT |
+| AppForge | ~3.000 | Apps multi-usuário |
+
+---
+
+## ⏳ Pós-MVP
+
+| Item | Esforço |
+|------|---------|
+| GGUF v3 loader (modelos 9B+) | ~500 LOC |
+| NPU AMD XDNA driver (💰 sponsor) | ~2.000 LOC |
+| ARM/RISC-V port (💰 sponsor) | ~5.000 LOC |
 
 ---
 
@@ -59,7 +155,45 @@
 | 102 | GPU Compute + HW Expert v3 + Firmware | ~1.500 | ✅ |
 | 103-104 | K²CHJ Workspace Migration | ~500 | ✅ |
 | 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
-| 106 | LLM Agent 24/7 multi-turn | ~2.000 | ⏳ |
+| 106 | v2.0 Ecossistema de Anéis Lógicos | ~3.000 | ✅ 10/10 concluídas |
 | 107 | Voice I/O Pipeline (TTS→STT→LLM→TTS) | ~1.500 | ⏳ |
 | 108 | Self-Evolving Agents | ~1.600 | ⏳ |
-| **Total v2.0** | | **~9.500 LOC** | |
+| **Total v2.0** | | **~9.000 LOC** | |
+
+---
+
+## 📝 NOTAS TÉCNICAS
+
+### Sprint 106-1: Workspace Estrito
+- **Cargo.toml raiz:** `members = ["crates/k_nano", "crates/k_ai", "crates/cortex", "crates/hermes", "crates/jarbas"]`
+- **Resolver:** `resolver = "2"` para dependências escalonadas
+- **Isolamento:** Dependências não vazam entre camadas
+
+### Sprint 106-2: Rename Crates
+- **k_ia → k_ai:** Ring 1 Lógico (Sondagem, SelfHeal, Trust)
+- **jarvis → jarbas:** Ring 2 HCI (Display, Audio, CLI)
+- **Backups:** Pastas antigas preservadas (LEGACY/k_ia, LEGACY/jarvis)
+
+### Sprint 106-5/106-6: Python no_std
+- **Rota Nativa:** RustPython embed com `#![no_std]`
+- **Rota Sandbox:** MicroPython compilado para .wasm
+- **Bridge:** `abi_x86_interrupt` para rust→python
+
+### Sprint 106-7: Page Faults
+- **Ordem correta:** allocator → events → agents
+- **lazy_init!():** Macro para agentes dependentes de heap
+
+### Sprint 106-8: AIOS API
+- **Bibliotecas:** aios_net, aios_fs
+- **Injeção:** RAG/System Prompt no RustPython
+
+### Sprint 106-9/106-10: Escalonamento Evolutivo
+- **SkillOpt:** Optimizador de skills via LLM
+- **Knowledge Graph:** Rastreamento de evolução
+- **Python → WASM:** Código efêmero → persistente
+
+---
+
+**Detalhes completos:** `TODO.md`
+**Catálogo de tecnologias:** `docs/TECNOLOGIAS.md`
+**Roadmap completo:** `ROADMAP.md`

@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-07-16 — ADR-0045 Sound Voice Stack (docs)
+
+Documentação do stack de voz **real** no boot. Sem mudança de runtime. Package Cargo permanece `1.0.0` (hábito tag-only).
+
+### Docs / ADR
+- **ADR-0045** `docs/architecture/0045-sound-voice-stack.md` — truth = `neural-kernel/src/audio/*`; `jarbas/audio` = espelho não wired
+- Stack canônico: HDA + Piper VITS (+ formant fallback) + STT CTC + VAD + mixer + FB TTS paint
+- Supersede como primário: sherpa-onnx, Pocket TTS, Kokoro-82M, Vosk, Wyoming, Rustpotter
+- IDEA_BANK: #75/#83 ✅; #84 UAC 🟡 futuro; #315.21–25 / #315.N+1 / #360 ❌ supersedido; B-01 voz desbloqueado (SLIP #415)
+- STATE / SESSION_109 / SESSION_INDEX / TECNOLOGIAS §5 / TODO Sprint 107 alinhados
+- Gaps Sprint 107 documentados (WakeWord não registrado; Piper neural fraco; loop TTS↔STT↔LLM aberto)
+
 ## [1.7.0] — 2026-07-15 — N1 ✅ + BitNet 2B LOADED (N3 parcial)
 
 Marco QEMU além de “só N1”. Linha **1.6.0-dev absorvida/superseded** (sem tag `v1.6.0` vazia). Package Cargo permanece `1.0.0` (hábito tag-only, como 1.5.7). **Não** é `v2.0.0` (ADR-0042 gate = N1–N5).

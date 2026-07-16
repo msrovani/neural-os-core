@@ -1,14 +1,25 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.0
+#   STATE — neural-os-core v1.7.1
 #   SPRINT 107 — Adequação ADR-0042 + Voice I/O (marco 2B LOADED)
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
+#   Áudio/voz: ADR-0045 (Sound Voice Stack)
 # ═════════════════════════════════════════════════════════
 
 ## Roadmap Atual
-**Versão:** **v1.7.0** (2026-07-15) — N1 ✅ + BitNet 2B LOADED (N3 parcial).  
+**Versão:** **v1.7.1** (2026-07-16) — ADR-0045 Sound (docs); funcional permanece marco **v1.7.0** (N1 ✅ + 2B LOADED).  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
+
+### Sound / Voice (ADR-0045)
+| Item | Estado |
+|------|--------|
+| Truth path | `neural-kernel/src/audio/*` (boot) |
+| Espelho | `jarbas/src/audio/*` — **não wired** ao bin |
+| Stack | HDA + Piper (+formant) + STT CTC + VAD + mixer + FB TTS paint |
+| WakeWord | código existe; **não registrado** |
+| UAC | stub (#84 futuro) |
+| Obsoleto | sherpa / Pocket / Kokoro-primário / Vosk / Wyoming / Rustpotter |
 
 ### Adequação N0–N5 (ADR-0042)
 | Fase | Status |
@@ -16,25 +27,93 @@
 | **N0** Baseline boot Runtime | ✅ |
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
 | **N2** k-ai HW-AI / SelfHeal | ⏳ |
-| **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** (~590MB, 30 layers) + FWD 0…29; generate/TTS ainda falha |
-| **N4** hermes orquestra | ▶️ STT-sim → Hermes → FWD |
-| **N5** jarbas ego/UI | ▶️ `[JARBAS-TTS] FAILED empty generate` |
+| **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** + FWD + BPE HF + **chat frame Llama** (`prompt_len=6`) + soft_stride=3 + constrained clima (`' tempo rain'`) |
+| **N4** hermes orquestra | ✅ STT-sim → Hermes → generate_via_model (path clima) |
+| **N5** jarbas ego/UI | ▶️ TTS `pcm_samples>0` + **FB paint** (`[JARBAS-TTS-FB] painted`); Piper LOADED / formant fallback |
 
-### Evidência QEMU BitNet 2B (2026-07-15 — `logs/boot_whpx_20260715_112049.txt`)
+### Evidência clima e2e (2026-07-16 — `logs/boot_whpx_20260716_012934.txt`) — Sprint 107 cont.
+| Critério | Resultado |
+|----------|-----------|
+| Bridge WHPX | ✅ `run_weather_e2e.ps1` `-Window -Smp 2`; soft_stride FWD ok |
+| Chat template | ✅ `prompt_len=6` `first=128000 last=128007` (BOS+cue+eot+assistant hdr) |
+| soft_stride | ✅ `[FWD] soft_stride=3 layers≈10/30` |
+| GEN | ✅ `decoded_len=11 text=' tempo rain'` — **weatherish** (tempo+rain), não mash EN / não `"6666"` |
+| Constrained | ✅ `argmax_row_weather_only` no lexicon (logits reais; sem string canned) |
+| TTS | ✅ `pcm_samples=13920` (formant; emb invalid) |
+| FB | ✅ `[JARBAS-TTS-FB] painted len=11 1280x800` |
+| Experts | ✅ RUSTCODER LOADED · STT CTC LOADED · BGE LOADED · ❌ HWEXPERT parse FAILED |
+| HIT e2e | ✅ `readable + weatherish=True + pcm + fb` |
+| **Veredito clima** | **PARTIAL** — melhor que mash EN; ainda não frase PT climática plena (`O tempo está bom…`) |
+
+**Ops rebuild:** `CARGO_TARGET_DIR` sandbox mascara `cargo nk` → forçar `$env:CARGO_TARGET_DIR=…\target` + `bootloader_linker -u` (crate `boot` trava em `cargo install bootloader-x86_64-uefi`).
+
+### Evidência clima e2e REAL (2026-07-15 — `logs/boot_whpx_20260715_185914.txt`)
+| Critério | Resultado |
+|----------|-----------|
+| Bridge WHPX | ✅ `run_weather_e2e.ps1` sem `-NoSerialBridge`; kill 18 min |
+| BPE | ✅ `[BPE] BPB1 LOADED vocab_n=128256` @0x150000000 |
+| GEN | ✅ IDs HF reais `bpe=1 first=128000 last=24108` (`Ġtempo`); `decoded_len=50` com letras (não `"6666"`) |
+| Texto PT clima | ❌ saída mash EN (` importantlyabil-worker…`) — não frase climática |
+| TTS | ✅ `pcm_samples=59040` (formant; `emb invalid`) |
+| FB | ✅ `[JARBAS-TTS-FB] painted len=50 1280x800` |
+| Canned | ✅ texto vem do decode do modelo |
+| **Veredito clima** | **FAIL fechar pleno** / **PASS mínimo anti-`6666`** (letras+len+TTS+FB) — **superseded** pela evidência 2026-07-16 |
+
+**Root `"6666"`:** `.bitnet` só embute stub `CHAR:32-126`; sem BPE, encode CHAR aponta embeddings HF errados e `argmax_row_char_vocab` travava em token 25 = `'6'`.
+
+**Fix parcial:** `tools/export_bpe_bin.py` → `target/bpe_vocab.bin` (BPB1); loader QEMU; tokens `u32`; chat frame Llama 6 toks; soft_stride=3; constrained weather lexicon; e2e exige letras + weatherish≥2 hits.
+
+**Blocker restante:** soft-float 2B — logits HF ainda fracos p/ frase PT gramatical; Piper `emb.weight`; HWEXPERT parse FAILED (magic OK); float/AVX path ou merges BPE encode pleno.
+
+### Evidência multi-token smoke antigo (2026-07-15 — `logs/boot_whpx_20260715_155416.txt`)
 | Item | Resultado |
 |------|-----------|
-| Loader | BITNET2B magic OK @0x100000000, **590680KB** |
-| `load_model` | ver=4 h=2560 **L=30** → `LLM LOADED file=BITNET2B` |
-| FWD | layers 0…29/30 no path clima |
-| TTS | **`[JARBAS-TTS] FAILED empty generate`** |
-| Clima e2e | **PARCIAL** (load+FWD OK; saída vazia) |
+| Bridge | via `run_weather_e2e.ps1` + `-Window` (GUI); kill 15 min |
+| GEN | `max_gen=4` → `decoded_len=4 text='6666'` (CHAR argmax; qualidade baixa = dígito repetido) |
+| TTS | `[JARBAS-TTS] 6666` + `pcm_samples=1600` (formant fallback; `emb invalid len=0`) |
+| FB | `[JARBAS-TTS-FB] painted len=4 1280x800` — splash Orb + texto na janela QEMU |
+| HIT e2e | `HIT multi-token+TTS … decoded>=4 pcm ok fb=True` (**obsoleto** — critério endurecido) |
 
-**Ops:** soft-float + `cargo nk` + multicore; QEMU 6G/SMP; timeout captura ~5 min. Ver `SESSION_108.md`.
+**Antes (smoke 1-token):** `logs/boot_whpx_20260715_145128.txt` — `decoded_len=1` `"6"`; FB só DIAG/AIOS.
+
+### Evidência clima e2e + bridge (2026-07-15 — `logs/boot_whpx_20260715_145128.txt`)
+| Item | Resultado |
+|------|-----------|
+| Bridge | `[BRIDGE] started` → QEMU → `[BRIDGE] killed` (PS1 finally; **sem** `-NoSerialBridge`) |
+| Status | `llm=LOADED bge=LOADED piper=LOADED` |
+| GEN | `prompt_len=2 (raw=39)` (nao mais EOS-sozinho) → `next=25` → `decoded_len=1` → texto `"6"` |
+| TTS | `[TTS] Piper: "6" (1600 samples)` + `[JARBAS-TTS] piper=LOADED pcm_samples=1600` |
+| Clima e2e | **PASS** smoke antigo (generate nao-vazio + samples>0) — **não** fecha qualidade |
+
+**Root cause empty generate:** soft-float 2B truncava prompt ao **ultimo token = EOS** (`prompt_len=1`) → argmax→EOS → string vazia; vocab HF 128k + decode CHAR sem BPE tambem devolvia vazio. Fix: slim BOS+1 char + argmax no range CHAR.
+
+**Loop:** attempt1 `prompt_len=5` timeout FWD; attempt2 generate OK + Piper panic `%0`; attempt3 PASS 1-token; attempt4 multi-token `max_gen=8` timeout 10m (3 steps); attempt5 `max_gen=4` + 15m kill → PASS smoke; attempt6 BPE HF → letras mas não PT clima.
+
+**Ops:** soft-float + `cargo nk`; QEMU 6G/SMP; timeout ~18 min BPE; helper `tools/run_weather_e2e.ps1`. Ver `SESSION_108.md`.
+
+### Micro-experts QEMU loaders (2026-07-16)
+Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v3.bitnet` ~260KB), **RustCoder** `@0x161000000` (`rust_coder.bitnet` ~270KB), **BGE** `@0x162000000`, **STT** `@0x163000000`. Kernel consome via QEMU-loader + fallback FAT (`HWEXPRT.BIN` / `RUSTCDR.BITNET`). Alias legado `hw_expert.bitnet` ausente no disco — usar v3/tf. Regenerar: `python tools/train_hw_expert_v3.py`, `python tools/download_and_train.py --rustcoder`.
+
+**Boot 2026-07-16 (`012934`):** `[RUSTCODER] LOADED` · `[STT] CTC LOADED` · `[BGE] …LOADED` · `[HWEXPERT] parse FAILED` (magic OK @0x160000000 — layout/size hint).
+
+### Serial SLIP bridge (bypass NIC)
+- Script: `tools/serial_bridge.py` — TCP **server** `127.0.0.1:4444`; QEMU COM2 = **cliente** (`-serial tcp:127.0.0.1:4444`, sem `server=on`).
+- Lifecycle: `run-qemu-whpx.ps1` sobe bridge antes do QEMU e mata no `finally`. PS1 = **ASCII-only** (em-dash UTF-8 partia parser PS5/CP1252). `Test-PortListening` cruza netstat (Get-NetTCPConnection pode mentir vazio).
+- Skip: `-NoSerialBridge`. `-Bridge` = WinTAP (distinto do SLIP).
+
+### Piper + BGE (2026-07-15)
+| Item | Antes | Agora |
+|------|-------|-------|
+| **Piper** | skip / ausente | LOADED via QEMU-loader; `emb.weight` lookup ainda fraco (`0M params` / formant fallback sem panic) |
+| **Weather TTS** | FAILED empty generate | generate real + `pcm_samples>0` (texto ainda pobre) |
+| **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- Fix **generate / TTS empty** (e2e clima fechado)
-- N2 SelfHeal gated; N4/N5 além do stub
-- Gate `v2.0.0` = N1–N5 only
+- **Clima pleno:** frase PT gramatical (ex. `O tempo esta bom`) — float/AVX FWD ou lexicon+ordem melhor; hoje constrained → `' tempo rain'`
+- Fix HWEXPERT `load_model` parse FAILED; Piper neural (`emb.weight`); merges BPE encode pleno
+- **Voice (ADR-0045):** registrar WakeWordAgent; fechar TTS→STT→LLM→TTS; depois UAC (#84) / wiring `jarbas/audio`
+- N2 SelfHeal gated; Gate `v2.0.0` = N1–N5 only
+- Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
 
 ### Identidade funcional K²CHJ (ADR-0042)
 | Anel | Função |

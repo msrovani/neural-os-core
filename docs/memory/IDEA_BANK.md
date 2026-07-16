@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-13 — ~420 ideias catalogadas (#1-#418 + letras). Consolidado após verificação cruzada com TECNOLOGIAS.md, TODO.md e SPRINT-106.md.
+**Última atualização:** 2026-07-16 — sync ADR-0045 Sound (voz nativa); itens sherpa/Vosk/Kokoro/Wyoming marcados ❌ supersedido.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -226,7 +226,7 @@ Nada é descartado sem registro. Ideias podem ser:
 | 259 | **Posture-Aware Alerting** | ✅ v0.49.0 | Sprint 49 | `posture_check()` verifica hardware antes de executar skill. |
 | 260 | **Event→Detector→Response Pipeline** | ✅ v0.50.0 | Sprint 50 | 5 detectores (PortScan, ArpSpoof, PingFlood, DhcpStarvation, TimerAnomaly) + correlação. |
 | 74 | VirtIO-gpu (PCI 1AF4:1050) | ⏳ Pós-MVP | Sprint 24+ | MVP usa VGA text. |
-| 75 | Intel HDA audio | ⏳ Pós-MVP | Fase 5+ | Nenhuma skill de áudio no MVP. |
+| 75 | Intel HDA audio | ✅ feito | Sprint Sound / 101 | ✅ `audio/hda.rs` no monólito. Ver ADR-0045. (histórico: “nenhuma skill no MVP”) |
 | 76 | Sem kernel thread de hotplug | ✅ Princípio | — | Diretriz adotada. |
 | 77 | Sem sysfs genérico | ✅ Princípio | — | Diretriz adotada. |
 | 78 | Cada driver é módulo autocontido, sem trait Device universal | ✅ Princípio | — | Diretriz adotada. |
@@ -239,8 +239,8 @@ Nada é descartado sem registro. Ideias podem ser:
 | 80 | Font rendering para alta resolução | ⏳ Pós-MVP | Sprint 23+ | Depende de #79. |
 | 81 | VirtIO-GPU 2D/3D acelerado | ⏳ Pós-MVP | Sprint 24+ | Requer VirtIO. |
 | 82 | Tensor visualization no framebuffer | ⏳ Pós-MVP | Fase 5+ | Depende de #79 + #81. |
-| 83 | Intel HDA audio driver — Áudio via PCI HDA controller. Essencial para TTS/STT do JARVIS sem depender de USB. | 🟡 Sprint Sound | Sprint Sound | JARVIS precisa ouvir e falar. Port do driver Linux HDA. |
-| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | 🟡 Sprint Sound | Sprint Sound | JARVIS voice I/O via USB. |
+| 83 | Intel HDA audio driver — Áudio via PCI HDA controller. Essencial para TTS/STT do JARVIS sem depender de USB. | ✅ feito | Sprint Sound / 101 | ✅ SD0 capture + SD1 playback. ADR-0045. |
+| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | 🟡 futuro | Sprint 107+ | Stub `audio/usb.rs` (probe false). Ainda válido quando HDA ausente. ADR-0045. |
 
 ### 1.8. Princípios Arquiteturais
 
@@ -532,11 +532,11 @@ Nada é descartado sem registro. Ideias podem ser:
 | 315.18 | **Fail-Closed Safety Invariant** — SafetyAgent sempre nega por padrão. Toda skill precisa autorização explícita. SMT-proof (Z3-style): 4 invariants: process separation, pre-action, fail-closed, signed evidence | 🟡 Sprint 80 | 80 | ~200 | Unfireable Safety Kernel paper |
 | 315.19 | **Merkle Audit Trail (Ed25519 signed)** — Chain de audit entries: tick, agent, action, payload_hash, prev_hash, Ed25519 signature. Verificação de integridade a cada entry. Ring buffer 4096 | 🟡 Sprint 80 | 80 | ~200 | PunkGo + NEOTH |
 | 315.20 | **Fluid Persona (context-adaptive)** — Persona muda por contexto: urgente→preciso, triste→empático, irritado→formal. 3 eixos: persona metafórica (coach/tutor/tool) + intensidade (low/med/high) + traits do usuário | 🟡 Sprint 80 | 80 | ~100 | Fluid Personality paper |
-| 315.21 | **Pocket TTS Integration** (TTS) — Via sherpa-onnx (Rust bindings). PocketTTS engine 100M params, CPU-native, ~200ms latência, voice cloning, 6 idiomas. Alternativa: Kokoro via sherpa-onnx. Pós B-01 | 🔴 Pós B-01 | Sprint Sound | ~400 | k2-fsa/sherpa-onnx |
-| 315.22 | **STT (sherpa-onnx Whisper)** — Speech-to-text via sherpa-onnx Rust bindings. Whisper engine, CPU offline. Alternativa: Vosk. Pós B-01 | 🔴 Pós B-01 | Sprint Sound | ~400 | k2-fsa/sherpa-onnx |
-| 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | 🔴 Pós B-01 | N+1 | ~100 | Priler/jarvis |
-| 315.24 | **Audio Ring Buffer** — Circular buffer PCM lockless para DMA audio entre HDA/USB e voice pipeline. Produtor/consumidor SPSC via EventBus. | 🔴 Pós B-01 | Sprint Sound | ~100 | — |
-| 315.25 | **Voice Pipeline** — Pipeline de áudio nativo Rust sobre EventBus: Mic→WakeWord→STT→Cortex→TTS→Speaker. Frame types (AudioFrame, TranscriptionFrame, TTSCommandFrame) + PipelineAgent que orquestra. Ref arquitetural: pipecat pipeline composition pattern. | 🔴 Pós B-01 | Sprint Sound | ~800 | EventBus + sherpa-onnx + rustpotter |
+| 315.21 | **Pocket TTS Integration** (TTS) — Via sherpa-onnx (Rust bindings). PocketTTS engine 100M params, CPU-native, ~200ms latência, voice cloning, 6 idiomas. Alternativa: Kokoro via sherpa-onnx. Pós B-01 | ❌ supersedido | — | Histórico. Primário = Piper VITS + formant. ADR-0045. | k2-fsa/sherpa-onnx |
+| 315.22 | **STT (sherpa-onnx Whisper)** — Speech-to-text via sherpa-onnx Rust bindings. Whisper engine, CPU offline. Alternativa: Vosk. Pós B-01 | ❌ supersedido | — | Histórico. Primário = STT CTC nativo (`audio/stt.rs`). ADR-0045. | k2-fsa/sherpa-onnx |
+| 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | ❌ supersedido | — | Histórico. Substituído por MLP nativo `wakeword.rs` (código existe; **não registrado** no boot — gap 107). ADR-0045. | Priler/jarvis |
+| 315.24 | **Audio Ring Buffer** — Circular buffer PCM lockless para DMA audio entre HDA/USB e voice pipeline. Produtor/consumidor SPSC via EventBus. | ✅ feito | Sprint Sound | `audio/ringbuf.rs` no truth. Não bloqueado por B-01. ADR-0045. | — |
+| 315.25 | **Voice Pipeline** — Pipeline de áudio nativo Rust sobre EventBus: Mic→WakeWord→STT→Cortex→TTS→Speaker. Frame types (AudioFrame, TranscriptionFrame, TTSCommandFrame) + PipelineAgent que orquestra. Ref arquitetural: pipecat pipeline composition pattern. | ❌ supersedido (spec sherpa) / ▶️ Sprint 107 | Sprint 107 | Spec original (sherpa+rustpotter) ❌. Pipeline nativo parcial em `pipeline.rs` + JarvisVoice — fechar loop = Sprint 107. ADR-0045. | EventBus nativo |
 | 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | SKYNET + BeFree |
 | 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | 🔴 Pós B-01 | N+2 | ~300 | SKYNET |
 | 315.28 | **Gamification** — Recompensas, streaks, achievements para interação com JARVIS. OptimizerAgent + CronAgent | 🟢 Futuro | N+1 | ~200 | Jotape |
@@ -1382,18 +1382,18 @@ Blocos reconsolidados após v0.47.0. Itens já implementados foram removidos. Bl
 | | **Total bloco** | **~1500 LOC** |
 
 ### Bloco 29+ — AIOS Evolution (Sprint 85+, pós B-01)
-**Tudo que depende de rede (LAN) — B-01 é o gatekeeper**
+**Itens de rede (LAN):** B-01 NIC/DHCP era o gatekeeper histórico. **B-01 MORTO** via SLIP (#415) — voz local **não** depende de NIC.
 
 | Item | O que | LOC | Bloqueador |
 |---|---|---|---|
-| B-01 | RX fix (RTL8139 DHCP/RX) | ~500 | 🔴 QEMU SLiRP |
-| #307 | WWW Agents (Browser, Email, RSS, Search, Download, WS) | ~2600 | 🔴 B-01 |
-| #306b | Self-Update Agent (A/B slots + rollback) | ~800 | 🔴 B-01 |
-| #236 | Plugin Hub + Marketplace | ~400 | 🔴 B-01 |
-| #315.N+1 | Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | 🔴 B-01 |
-| #315.N+1b | Multi-device sync (CRDT) | ~300 | 🔴 B-01 |
-| #315.N+2 | SKYNET Mesh Node | ~300 | 🔴 B-01 |
-| B-29 | WiFi (Intel/Atheros/Realtek 802.11) | ~1000 | 🔴 B-01 |
+| B-01 | RX fix (RTL8139 DHCP/RX) | ~500 | ✅ morto — SLIP serial tunnel (#415); NIC emulada ainda frágil |
+| #307 | WWW Agents (Browser, Email, RSS, Search, Download, WS) | ~2600 | 🟡 parcial / bridge SLIP |
+| #306b | Self-Update Agent (A/B slots + rollback) | ~800 | 🟡 pós-rede estável |
+| #236 | Plugin Hub + Marketplace | ~400 | 🟡 pós-rede estável |
+| #315.N+1 | Voice Pipeline (Piper TTS + Vosk STT + Wake Word + Wyoming) | ~1600 | ❌ supersedido — Piper+CTC nativo; sem Vosk/Wyoming. ADR-0045 / Sprint 107 |
+| #315.N+1b | Multi-device sync (CRDT) | ~300 | 🔴 rede |
+| #315.N+2 | SKYNET Mesh Node | ~300 | 🔴 rede |
+| B-29 | WiFi (Intel/Atheros/Realtek 802.11) | ~1000 | 🟡 em progresso (iwlwifi) |
 | | | **~7500 LOC** | |
 
 ### Resumo dos 10 blocos futuros (Sprints 77-86)
@@ -1443,7 +1443,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 357 | khal-std | -- | ❌ |
 | 358 | ruvix-net | -- | 🔵 |
 | 359 | BGE Embedding | Sprint 89 | ✅ |
-| 360 | Kokoro-82M TTS | Sprint 94 | 🟡 |
+| 360 | Kokoro-82M TTS | — | ❌ supersedido (ADR-0045 → Piper) |
 | 361 | Zero-Copy SFS | Sprint 96 | ✅ |
 | 362 | Episodic memory NVMe | Sprint 95 | ✅ |
 | 363 | Skills-as-Modules | Sprint 96 | ✅ |
@@ -1566,7 +1566,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-06 | **357** | **khal-std (dimforge/khal)** — GPU compute shaders Rust→SPIR-V/PTX/CPU. **Não viável diretamente** (requer wgpu/std), mas arquitetura inspira nossa futura GPU compute. | ❌ Inviável (std) | — | ADR-0038 |
 | 2026-07-06 | **358** | **ruvix-net (ruvnet/ruvector)** — Kernel cognitivo Rust bare-metal similar ao nosso. Stack de rede mínima para "RuVix Cognition Kernel". Referência arquitetural. | 🔵 Referência | — | ADR-0038 |
 | 2026-07-06 | **359** | **BGE-Small-EN-v1.5 Embedding (BAAI)** — Modelo de embedding semântico 33.4M params, 384-dim, ONNX, MIT license. Converter para .bitnet e integrar como skill semantic_search no HermesAgent. MTEB 62.17, 62M downloads/mês. | 🟡 Sprint 89 | Sprint 89 | ADR-0038 v2 |
-| 2026-07-06 | **360** | **Kokoro-82M TTS (ONNX Community)** — Modelo TTS 82M params, 24kHz, 28 vozes, Apache-2.0. Formato ONNX com quantizações (86 MB Q8). Converter para .bitnet e integrar como skill TTS. Único modelo TTS viável para bare-metal. | 🟡 Sprint 94 | Sprint 94 | ADR-0038 v2 |
+| 2026-07-06 | **360** | **Kokoro-82M TTS (ONNX Community)** — Modelo TTS 82M params, 24kHz, 28 vozes, Apache-2.0. Formato ONNX com quantizações (86 MB Q8). Converter para .bitnet e integrar como skill TTS. Único modelo TTS viável para bare-metal. | ❌ supersedido | — | Histórico. TTS primário = Piper VITS + formant. ADR-0045. |
 | 2026-07-06 | **361** | Zero-Copy SFS via zerocopy crate — Transmuting &[u8] ↔ &Tensor sobre páginas NVMe mapeadas. Serialização sem serde, sem alocação. | 🟡 Sprint 96 | Sprint 96 | ADR-0010 |
 | 2026-07-06 | **362** | Episodic memory via battery-backed NVMe — KV-cache persistida entre reboots. Páginas físicas mantidas via NVMe battery-backed ou S3 sleep. | 🟡 Sprint 95 | Sprint 95 | ADR-0010 |
 | 2026-07-06 | **363** | Skills-as-Modules capability import — Allowlist-based validação (nn:silu, tensor:matmul como imports declarados por skill). | 🟡 Sprint 96 | Sprint 96 | ADR-0010 |
