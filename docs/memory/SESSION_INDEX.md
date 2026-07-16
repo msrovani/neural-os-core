@@ -30,6 +30,7 @@
 | 115 | ADR-42 N5 | — | N5 jarbas ego/UI CLOSED | v1.7.7; `[N5-JARBAS] criteria=MET`; N5.7 allocator; N1–N5 ✅ |
 | 117 | ADR-42 N3.5 | — | cortex crate wired no bin | v1.7.9; 9 espelhos removidos; residuals cortex/bpe/global_arena/cortex_mmap |
 | 118 | ADR-42 N4.6 | — | hermes crate wired no bin | v1.7.10; 37 espelhos removidos; residuals agents/net*/fs/aios_api |
+| 119 | ADR-42 N5.7 | — | jarbas crate wired no bin | v1.7.11; 29 espelhos removidos; audio truth residual ADR-0045 |
 
 ## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 

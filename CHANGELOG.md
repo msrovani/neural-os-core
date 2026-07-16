@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+## [1.7.11] — 2026-07-16 — ADR-0042 N5.7 (jarbas wired no bin)
+
+### Wired
+- **N5.7** `neural-kernel` → `jarbas-crate` (dep direta `package = "jarbas"`)
+- `pub use jarbas_crate::{display, gpu, jarvis, virtio_gpu, uvc_driver, vision_agent}`
+- Removidos 29 espelhos monólito (display/*, gpu/*, jarvis, virtio_gpu, uvc_driver, vision_agent)
+- Feature `jarbas-bridge` removida — wire always-on (`k_nano` sem `global-alloc` resolve conflito allocator)
+- `jarbas_bridge.rs` compara TOPIC_* via `jarbas_crate::audio` (audio truth permanece monólito)
+- Gate `[N5-JARBAS] full_wire=OK(jarbas-crate)`
+- `paint_tts_response` / `boot_splash` portados para `jarbas/src/display/fb.rs`
+
+### Residual monólito (integração bin)
+- `audio/*` — ADR-0045 truth path + Sprint107 wakeword (`voice.rs` diverge do espelho jarbas)
+- `jarbas_fb.rs` — CapGate P4 FB demo (bin-only)
+- `jarbas_bridge.rs` — cross-check TOPIC_* monólito vs jarbas-crate
+
+### Marco
+- **Wire crates N2.5→N5.7 ✅** — cadeia K²CHJ linkada no bin; qualidade voz → Sprint Sound
+
 ## [1.7.10] — 2026-07-16 — ADR-0042 N4.6 (hermes wired no bin)
 
 ### Wired
@@ -20,7 +39,7 @@
 - `micropython_wasm.rs` — loader via `crate::fs`
 
 ### Próximo
-- **N5.7** wire `jarbas` crate
+- Sprint Sound — qualidade voz (STT/Piper/soft-float); Mic→Wake runtime
 
 ## [1.7.9] — 2026-07-16 — ADR-0042 N3.5 (cortex wired no bin)
 

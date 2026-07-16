@@ -80,8 +80,6 @@ mod agency;
 
 mod agency_importer;
 
-mod display;
-
 mod global_arena;
 
 mod identity;
@@ -116,6 +114,8 @@ pub use hermes_crate::{
     voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat, wifi_iwlwifi, wifi_msix,
     wifi_protocol,
 };
+// ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
+pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
 
 mod serial;
 
@@ -157,8 +157,6 @@ mod usb_msc;
 
 mod virtio_net;
 
-mod virtio_gpu;
-
 mod profile;
 
 mod gguf;
@@ -170,12 +168,6 @@ mod fs;
 mod bpe;
 
 mod demo_flags;
-
-mod gpu;
-
-mod vision_agent;
-
-mod uvc_driver;
 
 mod hw_rng;
 
@@ -202,8 +194,6 @@ mod disk_power;
 mod disk_agent;
 
 mod memory_agent;
-
-mod jarvis;
 
 mod alloc_adapter;
 
@@ -1177,7 +1167,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     );
     let topics_ok = crate::jarbas_bridge::topics_in_sync();
     serial_println!(
-        "[N5-JARBAS] IPC←hermes topics_mirror={} full_wire=BLOCKED(N5.7 allocator)",
+        "[N5-JARBAS] IPC←hermes topics_mirror={} full_wire=OK(jarbas-crate)",
         if topics_ok { "OK" } else { "DRIFT" }
     );
 
@@ -1195,7 +1185,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     let n56 = topics_ok;
     let met = n51 && n52 && n53 && n54 && n55 && n56;
     serial_println!(
-        "[N5-JARBAS] gate complete n5.1={} n5.2={} n5.3={} n5.4={} n5.5={} n5.6={} criteria={} (N5.7 crate jarbas link deferred)",
+        "[N5-JARBAS] gate complete n5.1={} n5.2={} n5.3={} n5.4={} n5.5={} n5.6={} criteria={} (N5.7 jarbas-crate wired)",
         if n51 { "OK" } else { "FAIL" },
         if n52 { "OK" } else { "FAIL" },
         if n53 { "OK" } else { "FAIL" },
@@ -1621,9 +1611,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Audio: configuracoes de som; Piper TTS AFTER BGE (BGE e leve; Piper 61MB nao bloqueia STATUS bge)
     audio::init_audio();
 
-    // Sprint 107 Part B #9: cross-check non-fatal do espelho jarbas/audio (ADR-0045).
-    // So compilado/rodado com --features jarbas-bridge; boot default (cargo nk) nao muda.
-    #[cfg(feature = "jarbas-bridge")]
+    // ADR-0042 N5.7: cross-check non-fatal TOPIC_* monólito vs jarbas-crate (audio truth = neural-kernel).
     jarbas_bridge::log_bridge_status();
 
 

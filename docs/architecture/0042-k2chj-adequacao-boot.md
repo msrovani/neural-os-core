@@ -5,7 +5,7 @@
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred); **`v1.7.6`** (2026-07-16) = N4 ✅ CLOSED (hermes orquestra; N4.6 crate link deferred); **`v1.7.7`** (2026-07-16) = N5 ✅ CLOSED (jarbas ego/UI; N5.7 crate link deferred); **`v1.7.9`** (2026-07-16) = N3.5 cortex wired; **`v1.7.10`** (2026-07-16) = N4.6 hermes wired. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred); **`v1.7.6`** (2026-07-16) = N4 ✅ CLOSED (hermes orquestra; N4.6 crate link deferred); **`v1.7.7`** (2026-07-16) = N5 ✅ CLOSED (jarbas ego/UI; N5.7 crate link deferred); **`v1.7.9`** (2026-07-16) = N3.5 cortex wired; **`v1.7.10`** (2026-07-16) = N4.6 hermes wired; **`v1.7.11`** (2026-07-16) = N5.7 jarbas wired. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5 critérios de qualidade desta ADR verificados em conjunto.**
 
 
@@ -91,7 +91,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ✅ **CLOSED** (critérios funcionais; wire crate = N2.5) |
 
 **Evidência serial:** `logs/boot_n2_20260716_131837.txt` (WHPX short) — Trust allow + inventory + honest noop. Path HEALTH_ISSUE heal também visto em `logs/boot_n2_20260716_131655.txt` (pré fine-gate e1000).  
-**Espelho:** `neural-kernel` espelha `jarbas` até N5.7; **k_ai** (N2.5 ✅) + **cortex** (N3.5 ✅) + **hermes** (N4.6 ✅) wired.
+**Espelho:** `neural-kernel` espelha só `audio/*` (ADR-0045); **k_ai** (N2.5 ✅) + **cortex** (N3.5 ✅) + **hermes** (N4.6 ✅) + **jarbas** (N5.7 ✅) wired.
 
 ### Checklist N3 (cortex cérebro)
 
@@ -134,12 +134,12 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N5.4** FB/display | `paint_tts_response` + boot splash + GPU present | ✅ |
 | **N5.5** Voz expressão e2e | TTS+FB paint no path Hermes **ou** gate `voice_e2e=GATED` + prior Sprint107 | ✅ GATED + prior OK |
 | **N5.6** IPC←hermes | `jarbas_bridge::topics_in_sync()`; full wire `BLOCKED` (allocator) | ✅ |
-| **N5.7** Link crate `jarbas` no bin | Dep direta neural-kernel→jarbas | ⏳ N5.7 — monólito espelha jarbas até wire crate (padrão N2.5/N3.5/N4.6) |
+| **N5.7** Link crate `jarbas` no bin | Dep `jarbas-crate` + `pub use` display/gpu/persona; audio truth monólito | ✅ 2026-07-16 (v1.7.11) |
 | **Goal N5** | Ego/UI: compositor + persona + voz via Hermes + FB + IPC mirror | ✅ **CLOSED** (critérios funcionais; crate = N5.7) |
 
 **Evidência serial N5:** `logs/boot_n5_20260716_145943.txt` (WHPX/TCG short) — `[N5-JARBAS] … criteria=MET`.  
 **N5.5 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — TTS `pcm_samples=15428` + FB paint.  
-**Defer:** STT retrain / Piper VITS pleno / Mic→Wake runtime / soft-float → Sprint Sound; link crate jarbas → N5.7.
+**Defer:** STT retrain / Piper VITS pleno / Mic→Wake runtime / soft-float → Sprint Sound.
 
 ---
 
@@ -169,7 +169,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai`). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex` v1.7.9). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes` v1.7.10). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas`). Gate `v2.0.0` = N1–N5 funcionais ✅; qualidade voz → Sprint Sound; wire crate N5.7 deferred.
+**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai` v1.7.8). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex` v1.7.9). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes` v1.7.10). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas` v1.7.11). Gate `v2.0.0` = N1–N5 funcionais ✅ + wire crates N2.5–N5.7 ✅; qualidade voz → Sprint Sound.
 
 ---
 

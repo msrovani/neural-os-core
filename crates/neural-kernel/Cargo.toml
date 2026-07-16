@@ -26,16 +26,10 @@ k_ai = { path = "../k_ai" }
 cortex-crate = { path = "../cortex", package = "cortex" }
 # ADR-0042 N4.6: dep direta hermes (cron/safety/wasm/skills…); bin mantém agents + net stack.
 hermes-crate = { path = "../hermes", package = "hermes" }
-# Sprint 107 Part B #9: dependencia OPCIONAL para o espelho K2CHJ jarbas/audio.
-# Truth continua neural-kernel/audio (ADR-0045). Ativar com --features jarbas-bridge
-# apenas para o cross-check de TOPIC_* em jarbas_bridge.rs — NAO afeta o boot default
-# (cargo nk / bootimage nao habilita a feature). Verificado: cargo build --release
-# --target x86_64-unknown-none --features jarbas-bridge linka sem conflito de
-# #[global_allocator] (k_nano tem o seu proprio, mas so 1 crate type=bin final decide).
-jarbas = { path = "../jarbas", optional = true }
+# ADR-0042 N5.7: dep direta jarbas (display/gpu/persona…); bin mantém audio (ADR-0045) + jarbas_fb.
+jarbas-crate = { path = "../jarbas", package = "jarbas" }
 
 [features]
-jarbas-bridge = ["jarbas"]
 # Sprint 107 QEMU HIT clima (STT-sim seed + lexicon constrained). Off = HW real.
 weather-e2e = []
 # Persiste B*.LOG no FAT32 (útil em pendrive sem cabo serial). Off por default
