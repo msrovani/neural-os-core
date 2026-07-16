@@ -258,8 +258,10 @@ while ($true) {
 |---------|---------|-----|
 | *(nenhuma)* | HW / release | Sem skinny STT-sim / seed clima / lexicon constrained |
 | `weather-e2e` | off | Reativa path Sprint 107 HIT (`run_weather_e2e.ps1`) |
-| `fat-boot-log` | off | Persiste boot log no FAT |
+| `fat-boot-log` | **on no `crates/boot`** (HW) | Persiste `B*.LOG` no FAT; serial sempre ativo |
 | `jarbas-bridge` | off | Cross-check TOPIC_* (não muda boot default) |
+
+Para reativar HIT clima QEMU: adicione `weather-e2e` nas features do `neural-kernel` em `crates/boot/Cargo.toml` e rebuild `cargo build --release -p boot`.
 
 ---
 
