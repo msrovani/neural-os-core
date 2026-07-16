@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.7.4] — 2026-07-16 — ADR-0042 N2 CLOSED (SelfHeal VID-gated + Trust)
+
+Critérios funcionais N2 ✅. Package Cargo permanece `1.0.0` (tag-only). **Não** é v2.0.0.
+
+### N2 (k-ai HW-AI / SelfHeal)
+- Boot path: Trust `(token,agent,skill)` → inventário PCI → `run_vid_gated_scan` com heal/noop + HEALTH_ISSUE
+- Fine-gate: Intel net `8086` class 02/0D **exclui** Ethernet nativo (`subclass==0x00`, ex. e1000) — alinhado à política NVIDIA (sem falso positivo)
+- Honest noop quando `fw_gated=0`; hermes residual gate commitado (usa `k_ai` real)
+- **N2.5:** link crate `k_ai` no bin ainda bloqueado por `#[global_allocator]` — comportamento via espelho `neural-kernel` até então
+
+### Evidência
+- `logs/boot_n2_20260716_131837.txt` — `[TRUST] allow` + `[N2-SELFHEAL]` inventory/honest noop/gate complete
+- `cargo nk` = 0 erros
+
+### Docs
+- ADR-0042 checklist N2 ✅; STATE; SESSION_112; IDEA #435 ✅
+
 ## [1.7.3] — 2026-07-16 — Docs: handoff voz 107 → Sprint Sound + pista ADR-0042
 
 Docs-only. Sem mudança de runtime. Package Cargo permanece `1.0.0` (hábito tag-only).

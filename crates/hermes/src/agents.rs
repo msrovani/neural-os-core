@@ -10,12 +10,13 @@ use alloc::vec;
 use alloc::vec::Vec;
 use event_bus::{CapabilityToken, Event, Receiver};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::cortex;
-use hermes::hermes::{self, IntentCache, WorkflowEngine};
-use crate::conversation;
-use crate::{serial_println, println, kjson};
-use crate::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
-            CONVERSATION_TRACKER, PENDING_SKILL, TRINITY};
+
+use crate::hermes::{self, IntentCache, WorkflowEngine};
+use k_ai::conversation;
+use k_nano::{serial_println, println, kjson};
+use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
+            CONVERSATION_TRACKER, PENDING_SKILL, TRINITY, SELF_HEAL, BITNET_TRAINER, LOG_SECTOR,
+            APPROVAL_GATE, boot_log_agent, agency, hw_agents, inventory};
 
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
@@ -66,7 +67,7 @@ pub struct HwBridgeAgent;
 impl Agent for HwBridgeAgent {
     fn manifest(&self) -> &AgentManifest { &HWBRIDGE_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        let scancode = crate::interrupts::LAST_SCANCODE.swap(0, core::sync::atomic::Ordering::Acquire);
+        let scancode = k_nano::interrupts::LAST_SCANCODE.swap(0, core::sync::atomic::Ordering::Acquire);
         if scancode != 0 {
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from("RAW_HW_IRQ1"),
@@ -155,7 +156,7 @@ impl Agent for InputAgent {
 
 impl InputAgent {
     fn poll_usb_keyboard(&self) -> Option<u8> {
-        unsafe { crate::xhci::poll_keyboard() }
+        unsafe { k_nano::xhci::poll_keyboard() }
     }
     fn process_scancode(&mut self, scancode: u8) {
         let pressed = scancode < 0x80;
@@ -181,7 +182,7 @@ impl InputAgent {
                 }
             }
             0x0E => { self.buffer.pop(); }
-            _ => { if let Some(ch) = crate::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
+            _ => { if let Some(ch) = k_nano::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
         }
         // Echo tecla para o display em tempo real
         let _ = EVENT_BUS.publish(Event {
@@ -191,10 +192,10 @@ impl InputAgent {
         });
     }
     fn handle_cad(&self) {
-        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
-        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
+        k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Triggered);
+        k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Triggered);
         serial_println!("[SYS] Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
-        let log = crate::serial::BOOT_LOG.lock();
+        let log = k_nano::serial::BOOT_LOG.lock();
         let dump = log.dump();
         if !dump.is_empty() {
             serial_println!("[SYS] Log: {} bytes capturados.", dump.len());
@@ -204,8 +205,8 @@ impl InputAgent {
                 if dump.len() <= 512 {
                     let mut sector = [0u8; 512];
                     sector[..dump.len()].copy_from_slice(dump);
-                    if unsafe { ata.write_sectors(crate::LOG_SECTOR, &sector, 1) } {
-                        serial_println!("[SYS] Log escrito no setor LBA {} (512 bytes).", crate::LOG_SECTOR);
+                    if unsafe { ata.write_sectors(LOG_SECTOR, &sector, 1) } {
+                        serial_println!("[SYS] Log escrito no setor LBA {} (512 bytes).", LOG_SECTOR);
                     } else { serial_println!("[SYS] Falha ao escrever log no SDHC."); }
                 } else {
                     serial_println!("[SYS] Log grande demais para 1 setor (512B). Usar serial.");
@@ -265,14 +266,11 @@ pub struct CortexAgent {
 
 impl CortexAgent {
     pub fn new() -> Self {
-        let model_data = include_bytes!("../micro.bitnet");
-        let model = cortex::load_model(model_data).unwrap_or_else(|| {
-            serial_println!("[CORTEX-LLM] Falha ao carregar modelo treinado. Usando random.");
-            cortex::TransformerModel::new()
-        });
-        serial_println!("[CORTEX-LLM] Transformer loaded. Skills via SKILL_STORAGE.");
-        cortex::set_model(alloc::boxed::Box::new(model));
-        CortexAgent { receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST) }
+        // Modelo amplo (1.5B/2B) carregado via FAT32 no boot — aqui só inicializa com default
+        let model = cortex::cortex::TransformerModel::new();
+        serial_println!("[CORTEX-LLM] Transformer default ready. Modelo real carregado do disco no boot.");
+        cortex::cortex::set_model(alloc::boxed::Box::new(model));
+        CortexAgent { receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_REQUEST) }
     }
 }
 
@@ -285,16 +283,16 @@ impl Agent for CortexAgent {
             let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
             let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
             serial_println!("[CORTEX-LLM] Calling generate_via_model...");
-            let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let output = cortex::generate_via_model(&full_prompt);
-            let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let output = cortex::cortex::generate_via_model(&full_prompt);
+            let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             serial_println!("[CORTEX-LLM] generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
                 alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
             } else { output };
             serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
+                id: 0, topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
                 payload: output.into_bytes(), token: CapabilityToken::Legacy(1),
             });
         }
@@ -325,17 +323,17 @@ pub struct HermesAgent {
     llm_receiver: Receiver,
     security_receiver: Receiver,
     health_receiver: Receiver,
-    cortex: cortex::Cortex,
+    cortex: cortex::cortex::Cortex,
     state: HermesState,
     status_skill: String,
     echo_skill: String,
     hw_skill: String,
     net_diag_skill: String,
     boot_greeted: bool,
-    react_phase: hermes::hermes::ReActPhase,
+    react_phase: crate::hermes::ReActPhase,
     sdd_counter: u64,
-    consciousness: cortex::Consciousness,
-    sil: cortex::SelfImprovementLoop,
+    consciousness: cortex::cortex::Consciousness,
+    sil: cortex::cortex::SelfImprovementLoop,
     con_skills_ok: u64,
     con_skills_total: u64,
     con_errors: u64,
@@ -351,20 +349,20 @@ impl HermesAgent {
     pub fn new() -> Self {
         HermesAgent {
             user_receiver: EVENT_BUS.subscribe(hermes::TOPIC_USER_INTENT),
-            llm_receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE),
+            llm_receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_RESPONSE),
             security_receiver: EVENT_BUS.subscribe("SECURITY_ALERT"),
             health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
-            cortex: cortex::Cortex::new(),
+            cortex: cortex::cortex::Cortex::new(),
             state: HermesState::Idle,
             status_skill: String::from("system_status"),
             echo_skill: String::from("echo"),
             hw_skill: String::from("hardware_info"),
             net_diag_skill: String::from("net_diag"),
             boot_greeted: false,
-            react_phase: hermes::hermes::ReActPhase::Observe,
+            react_phase: crate::hermes::ReActPhase::Observe,
             sdd_counter: 0,
-            consciousness: cortex::Consciousness::new(),
-            sil: cortex::SelfImprovementLoop::new(),
+            consciousness: cortex::cortex::Consciousness::new(),
+            sil: cortex::cortex::SelfImprovementLoop::new(),
             con_skills_ok: 0,
             con_skills_total: 0,
             con_errors: 0,
@@ -377,16 +375,16 @@ impl HermesAgent {
         }
     }
 
-    fn log_phase(&self, phase: hermes::hermes::ReActPhase, detail: &str) {
+    fn log_phase(&self, phase: crate::hermes::ReActPhase, detail: &str) {
         serial_println!("[HERMES] {} — {}", phase.label(), detail);
     }
 
     fn show_sdd(&self, goal: &str) {
-        let sdd = hermes::hermes::Sdd::new(
+        let sdd = crate::hermes::Sdd::new(
             goal,
             &alloc::format!("Tick {}, agentes ativos, memória {:.0}%",
-                crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed),
-                crate::memory::global_hardware_context()[0] * 100.0),
+                k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed),
+                k_nano::memory::global_hardware_context()[0] * 100.0),
             goal,
             "Comando processado com sucesso",
             "Nada a reverter — comando não destrutivo",
@@ -396,7 +394,7 @@ impl HermesAgent {
 
     fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
         let token_val = token.as_legacy();
-        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         // Sprint 78: OutputCache — skills idempotentes usam cache
         if let Some(cached) = self.output_cache.get(name, payload, now) {
             return Ok(cached.to_vec());
@@ -426,13 +424,13 @@ impl Agent for HermesAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         // #180: Greeting no primeiro boot
         if !self.boot_greeted {
-            let greeting = hermes::hermes::hermes_greeting();
+            let greeting = crate::hermes::hermes_greeting();
             serial_println!("{}", greeting);
             println!("{}", greeting);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-                payload: alloc::format!("{} v{} — {}", hermes::hermes::HERMES_NAME,
-                    hermes::hermes::HERMES_VERSION, hermes::hermes::HERMES_MOTTO).into_bytes(),
+                payload: alloc::format!("{} v{} — {}", crate::hermes::HERMES_NAME,
+                    crate::hermes::HERMES_VERSION, crate::hermes::HERMES_MOTTO).into_bytes(),
                 token: CapabilityToken::Legacy(1),
             });
             self.boot_greeted = true;
@@ -487,7 +485,7 @@ impl Agent for HermesAgent {
                 }
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
                 serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
-                let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 let pending = PENDING_SKILL.lock().take();
                 if let Some((name, _desc)) = pending {
                     let mut storage = SKILL_STORAGE.lock();
@@ -550,7 +548,7 @@ impl Agent for HermesAgent {
             println!("[CORTEX] Texto: \"{}\"", text);
 
             // Sprint 78: IntentCache — evita re-classificação
-            let now_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let now_ticks = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
             let cmd = if let Some(cached) = self.intent_cache.get(text, now_ticks) {
                 cached
             } else {
@@ -584,7 +582,7 @@ impl Agent for HermesAgent {
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
-            let intent_info = hermes::hermes::IntentInfo {
+            let intent_info = crate::hermes::IntentInfo {
                 intent_name: String::from(intent_name),
                 confidence: 0.92,
                 alternatives: Vec::new(),
@@ -594,12 +592,12 @@ impl Agent for HermesAgent {
 
             // #191: Council deliberation para comandos ambíguos (ex: Chat)
             if matches!(cmd, hermes::Command::Chat(_)) {
-                let (opt, skep, prag) = hermes::hermes::council_deliberate(text);
-                serial_println!("{}", hermes::hermes::council_display(&opt, &skep, &prag));
+                let (opt, skep, prag) = crate::hermes::council_deliberate(text);
+                serial_println!("{}", crate::hermes::council_display(&opt, &skep, &prag));
             }
 
             // #193: Bitter Pill check
-            if let Some(reason) = hermes::hermes::check_bitter_pill(text) {
+            if let Some(reason) = crate::hermes::check_bitter_pill(text) {
                 serial_println!("[HERMES] 🛑 Bitter Pill: {}", reason);
                 let _ = EVENT_BUS.publish(Event {
                     id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
@@ -611,7 +609,7 @@ impl Agent for HermesAgent {
 
             let response = match cmd {
                 hermes::Command::Status => {
-                    self.log_phase(hermes::hermes::ReActPhase::Execute, "status skill");
+                    self.log_phase(crate::hermes::ReActPhase::Execute, "status skill");
                     let skill_name = self.status_skill.clone();
                     match self.execute_skill(&skill_name, &event.payload, &event.token) {
                         Ok(_) => String::from("System status report executado."),
@@ -698,7 +696,7 @@ impl Agent for HermesAgent {
                     EVENT_LOG.lock().summarize()
                 }
                 hermes::Command::TrustAllow(token, ref skill) => {
-                    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                     TRUST_CACHE.lock().trust_allow(token, skill, now);
                     alloc::format!("Trust permitido: token {} -> skill '{}'", token, skill)
                 }
@@ -707,14 +705,14 @@ impl Agent for HermesAgent {
                     alloc::format!("Trust revogado: token {} -> skill '{}'", token, skill)
                 }
                 hermes::Command::Approve(id) => {
-                    if k_nano::APPROVAL_GATE.lock().resolve(id, true) {
+                    if APPROVAL_GATE.lock().resolve(id, true) {
                         alloc::format!("Requisicao #{} aprovada.", id)
                     } else {
                         alloc::format!("Requisicao #{} nao encontrada ou ja resolvida.", id)
                     }
                 }
                 hermes::Command::Deny(id) => {
-                    if k_nano::APPROVAL_GATE.lock().resolve(id, false) {
+                    if APPROVAL_GATE.lock().resolve(id, false) {
                         alloc::format!("Requisicao #{} negada.", id)
                     } else {
                         alloc::format!("Requisicao #{} nao encontrada ou ja resolvida.", id)
@@ -722,7 +720,7 @@ impl Agent for HermesAgent {
                 }
                 hermes::Command::PendingApprovals => {
                     let pending = {
-                        let gate = k_nano::APPROVAL_GATE.lock();
+                        let gate = APPROVAL_GATE.lock();
                         gate.pending().iter().map(|r| (
                             r.id, r.skill.clone(), r.agent.clone(), r.reason.clone(),
                             alloc::string::String::from(r.required_level.name())
@@ -766,7 +764,7 @@ impl Agent for HermesAgent {
                     );
                     *PENDING_SKILL.lock() = Some((name.clone(), desc.clone()));
                     let _ = EVENT_BUS.publish(Event {
-                        id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
+                        id: 0, topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
                         payload: prompt.into_bytes(), token: CapabilityToken::Legacy(1),
                     });
                     self.state = HermesState::AwaitingLLM;
@@ -791,39 +789,39 @@ impl Agent for HermesAgent {
                 }
                 hermes::Command::ReloadSkills => {
                     let mut storage = SKILL_STORAGE.lock();
-                    *storage = hermes::skill_loader::load_embedded_skills();
+                    *storage = crate::skill_loader::load_embedded_skills();
                     alloc::format!("Skills recarregadas: {} skills.", storage.skills.len())
                 }
                 hermes::Command::ModelSwap(ref path) => {
                     let mut msg = alloc::format!("[MODEL] Swapping to: {}\n", path);
-                    if let Ok(data) = crate::fs::read_vfs(path) {
+                    if let Ok(data) = crate::globals::read_vfs(path) {
                         if !data.is_empty() {
-                            if let Some(model) = cortex::load_model(&data) {
-                                cortex::set_model(alloc::boxed::Box::new(model));
+                            if let Some(model) = cortex::cortex::load_model(&data) {
+                                cortex::cortex::set_model(alloc::boxed::Box::new(model));
                                 msg.push_str("[MODEL] Model loaded and activated.\n");
                                 k_nano::kjson!("MODEL", "SWAP", "ok", "path", path);
                             } else {
                                 msg.push_str("[MODEL] Failed to parse model file.\n");
                             }
                         } else { msg.push_str("[MODEL] Empty file.\n"); }
-                    } else if let Some(_model) = k_ia::gguf::load_gguf_model_from_disk(path) {
+                    } else if let Some(_model) = k_ai::gguf::load_gguf_model_from_disk(path) {
                         msg.push_str("[MODEL] GGUF model loaded from disk.\n");
                     } else {
                         msg.push_str("[MODEL] GGUF header NOTICE: streaming not yet supported.\n");
-                        msg.push_str(&k_ia::gguf::print_supported_formats());
+                        msg.push_str(&k_ai::gguf::print_supported_formats());
                     }
                     msg
                 }
                 hermes::Command::Profile => {
-                    let profile = k_ia::profile::ProfileManager::get();
-                    let profiles = k_ia::profile::ProfileManager::list();
+                    let profile = k_ai::profile::ProfileManager::get();
+                    let profiles = k_ai::profile::ProfileManager::list();
                     let parts: alloc::vec::Vec<&str> = text.splitn(2, |c: char| c.is_whitespace()).collect();
                     let change_msg = if parts.len() > 1 {
                         let desired = parts[1].trim();
                         let mut found_name = String::new();
                         for (p, _desc) in &profiles {
                             if p.name().eq_ignore_ascii_case(desired) {
-                                k_ia::profile::ProfileManager::set(*p);
+                                k_ai::profile::ProfileManager::set(*p);
                                 found_name = alloc::format!("{} {}", p.icon(), p.name());
                                 break;
                             }
@@ -859,11 +857,11 @@ impl Agent for HermesAgent {
                     let intent_name = intent.skill_name();
                     serial_println!("[CORTEX] Intent: {} = {:?} (trinity: {})", intent_name, intent, expert_name);
                     match intent {
-                        cortex::Intent::Greeting | cortex::Intent::Chat => {
+                        cortex::cortex::Intent::Greeting | cortex::cortex::Intent::Chat => {
                             serial_println!("[CORTEX-LLM] Enviando: \"{}\"", msg);
                             self.workflow_engine.start();
                             let _ = EVENT_BUS.publish(Event {
-                                id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
+                                id: 0, topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
                                 payload: msg.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
                             });
                             self.state = HermesState::AwaitingLLM;
@@ -888,7 +886,7 @@ impl Agent for HermesAgent {
         }
     };
 
-            let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
             // If we already have a response (e.g., LLM skill creation), use responded
             let _final_response = if !responded.is_empty() {
@@ -962,26 +960,26 @@ impl Agent for PlatformAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         match self.phase {
             0 => {
-                unsafe { crate::pci::init_pci(); }
+                unsafe { k_nano::pci::init_pci(); }
                 self.phase = 1;
                 AgentTickResult::Pending
             }
             1 => {
-                let phys_off = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-                let acpi_info = unsafe { crate::acpi::init_acpi(phys_off) };
+                let phys_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+                let acpi_info = unsafe { k_nano::acpi::init_acpi(phys_off) };
                 if let Some(ref info) = acpi_info {
-                    unsafe { crate::apic::init_apic(info); }
+                    unsafe { k_nano::apic::init_apic(info); }
                     // Store expected AP count (LAPICs minus BSP)
                     let lapic_count = info.lapic_count;
                     if lapic_count > 1 {
-                        crate::smp::AP_COUNT.store(lapic_count - 1, core::sync::atomic::Ordering::Relaxed);
+                        k_nano::smp::AP_COUNT.store(lapic_count - 1, core::sync::atomic::Ordering::Relaxed);
                     }
                 }
                 self.phase = 2;
                 AgentTickResult::Pending
             }
             2 => {
-                unsafe { crate::smp::init_smp(); }
+                unsafe { k_nano::smp::init_smp(); }
                 AgentTickResult::Done
             }
             _ => AgentTickResult::Done,
@@ -1009,23 +1007,31 @@ impl Agent for MemoryAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         match self.phase {
             0 => {
-                let arch = crate::inventory::SystemArchitecture {
-                    ring0_mode: 0, ring1_mode: 0, heap_size_mb: 2048,
-                    trust_level: 1, power_mode: 0, tensor_tier: 0,
-                };
-                serial_println!("[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
-                    arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
-                    arch.trust_level, arch.power_mode, arch.tensor_tier);
-                *k_nano::SYSTEM_ARCH.lock() = Some(arch);
+                // Arquitetura real via PCI + MHI (sem FakeIntel hardcoded)
+                let pci = unsafe { k_nano::pci::scan_pci() };
+                let inv = inventory::HardwareInventory::collect(pci, None);
+                let arch = inventory::SystemArchitecture::infer(&inv);
+                serial_println!(
+                    "[ARCH] inferred: ring0={} ring1={} heap={}MB trust={} power={} tensor={} (pci={} ram={}MB)",
+                    arch.ring0_mode,
+                    arch.ring1_mode,
+                    arch.heap_size_mb,
+                    arch.trust_level,
+                    arch.power_mode,
+                    arch.tensor_tier,
+                    inv.pci_devices.len(),
+                    inv.total_ram_bytes / (1024 * 1024)
+                );
+                *crate::globals::SYSTEM_ARCH.lock() = Some(arch);
                 self.phase = 1;
                 AgentTickResult::Pending
             }
             1 => {
-                let mhi = crate::mhi::MemoryHierarchy::new();
+                let mhi = k_nano::mhi::MemoryHierarchy::new();
                 serial_println!("[MHI] {} tier(s). Best: {:?} ({} bytes avail)",
                     mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
                 // ponytail: skip heap-allocated mhi.clone() to avoid stack overflow
-                *k_nano::MEMORY_HIERARCHY.lock() = Some(mhi);
+                *crate::globals::MEMORY_HIERARCHY.lock() = Some(mhi);
                 AgentTickResult::Done
             }
             _ => AgentTickResult::Done,
@@ -1048,7 +1054,7 @@ impl Agent for NetDriverAgent {
     fn manifest(&self) -> &AgentManifest { &NETDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         unsafe {
-            if crate::virtio_net::init_driver_virtio() {
+            if k_nano::virtio_net::init_driver_virtio() {
                 serial_println!("[NET] VirtIO-net OK.");
             } else if crate::net::init_driver_rtl8139() {
                 serial_println!("[NET] RTL8139 OK.");
@@ -1095,32 +1101,65 @@ const SELFHEAL_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for BootSelfHealAgent {
     fn manifest(&self) -> &AgentManifest { &SELFHEAL_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        crate::SELF_HEAL.lock();
+        SELF_HEAL.lock();
         kjson!("AGENT", "SelfHeal", "ready", "tick", _tick);
 
+        // ADR-0042 N2: Trust (token, agent, skill) + inventário VID-gated
+        {
+            let trusted = TRUST_CACHE.lock().check_or_cache_agent(
+                1, "self_heal", "recover", _tick, u64::MAX,
+            );
+            if !trusted {
+                serial_println!("[N2-SELFHEAL] trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
+            } else {
+                let devices = unsafe { k_nano::pci::scan_pci() };
+                let inv = inventory::HardwareInventory::collect(devices, None);
+                let triples = inv.vid_class_triples();
+                let fw_n = inv.fw_gated_devices().len();
+                serial_println!(
+                    "[N2-SELFHEAL] inventory pci={} fw_gated={} trust=OK",
+                    triples.len(),
+                    fw_n
+                );
+                if fw_n == 0 {
+                    serial_println!(
+                        "[N2-SELFHEAL] HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)"
+                    );
+                }
+                let mut heal = SELF_HEAL.lock();
+                let report = heal.run_vid_gated_scan(&triples);
+                serial_println!(
+                    "[N2-SELFHEAL] gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai)",
+                    report.heal_issues,
+                    report.noop,
+                    report.health_published
+                );
+            }
+        }
+
         // Verifica causa do ultimo desligamento
-        let last_cause = crate::shutdown::read_last_shutdown_from_boot_log();
+        let last_cause = k_ai::shutdown::read_last_shutdown_from_boot_log();
         match last_cause {
-            Some(crate::shutdown::ShutdownCause::Unexpected) => {
+            Some(k_ai::shutdown::ShutdownCause::Unexpected) => {
                 serial_println!("[SELF-HEAL] *** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
                 serial_println!("[SELF-HEAL] Analisando boot log para possiveis erros...");
                 let _ = log_analyst_agent::write_log("self_heal",
                     "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
-                if let Some(log) = crate::boot_log_agent::BootLogAgent::read_last_boot_log() {
-                    let diagnostics = crate::boot_log_agent::BootLogAgent::analyze_log(&log);
+                if let Some(log) = boot_log_agent::BootLogAgent::read_last_boot_log() {
+                    let diagnostics = boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
                         serial_println!("[SELF-HEAL] Diagnostico: {} — {}", kind, msg);
                         let _ = log_analyst_agent::write_log("self_heal",
                             &alloc::format!("Diagnostico: {} — {}", kind, msg));
                         if *kind == "PANIC" || *kind == "GPU_HUNG" {
-                            let ctx = k_ia::self_heal::ErrorContext {
-                                kind, message: msg.clone(),
+                            let ctx = k_ai::self_heal::ErrorContext {
+                                kind: "BOOT_ERROR", message: msg.clone(),
                                 file: alloc::string::String::from("boot_log"),
                                 line: 0, ring: 0,
                                 daemon: alloc::string::String::from("boot_self_heal"),
                                 tick: _tick,
                             };
-                            let mut heal = crate::SELF_HEAL.lock();
+                            let mut heal = SELF_HEAL.lock();
                             heal.analyze(&ctx, true);
                         }
                     }
@@ -1129,7 +1168,7 @@ impl Agent for BootSelfHealAgent {
                 }
             }
             Some(cause) => {
-                serial_println!("[SELF-HEAL] Ultimo desligamento: {} (ok)", crate::shutdown::label(cause));
+                serial_println!("[SELF-HEAL] Ultimo desligamento: {} (ok)", k_ai::shutdown::label(cause));
             }
             None => {
                 serial_println!("[SELF-HEAL] Primeiro boot ou sem registro de desligamento.");
@@ -1154,7 +1193,13 @@ const TRUST_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for BootTrustAgent {
     fn manifest(&self) -> &AgentManifest { &TRUST_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        k_nano::TRUST_CACHE.lock();
+        let mut tc = TRUST_CACHE.lock();
+        // Bootstrap: token Legacy(1) = EventBus/sistema — explícito, não default hardcoded
+        tc.add_exempt_token(1);
+        tc.load_boot_policy(&["net_", "fs_write", "exec_"]);
+        // ADR-0042 N2: Trust por (token, agent, skill)
+        tc.trust_allow_agent(1, "self_heal", "recover", _tick);
+        tc.trust_allow_agent(1, "self_heal", "inventory_vid", _tick);
         kjson!("AGENT", "Trust", "ready", "tick", _tick);
         AgentTickResult::Done
     }
@@ -1179,11 +1224,11 @@ const HWDETECT_MANIFEST: AgentManifest = AgentManifest {
 
 pub struct SpecialistAgent {
     manifest: AgentManifest,
-    spec: crate::agency::AgentSpec,
+    spec: agency::AgentSpec,
 }
 
 impl SpecialistAgent {
-    pub fn new(spec: crate::agency::AgentSpec) -> Self {
+    pub fn new(spec: agency::AgentSpec) -> Self {
         let kind = match spec.division.as_str() {
             "engineering" | "research" => AgentKind::System,
             "design" | "creative" => AgentKind::Console,
@@ -1217,7 +1262,7 @@ impl Agent for SpecialistAgent {
 
 /// Registra todos os agentes do The Agency no registry
 pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
-    let agency = crate::agency::Agency::new();
+    let agency = agency::Agency::new();
     for div in &agency.divisions {
         for spec in &div.agents {
             let agent = SpecialistAgent::new(spec.clone());
@@ -1230,7 +1275,7 @@ pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
 
 /// Registra HwAgents como agentes nativos (um por dispositivo PCI)
 pub fn register_hw_agents(registry: &mut agent_core::AgentRegistry) {
-    let mut hw = crate::hw_agents::HwRegistry::new();
+    let mut hw = hw_agents::HwRegistry::new();
     unsafe { hw.detect_all(); }
     for hw_agent in &hw.agents {
         let name = Box::leak(hw_agent.name.clone().into_boxed_str());
@@ -1267,7 +1312,7 @@ impl Agent for HwDetectAgent {
     fn manifest(&self) -> &AgentManifest { &HWDETECT_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         // Fase 1: PCI scan usando HwRegistry
-        let mut hw = crate::hw_agents::HwRegistry::new();
+        let mut hw = hw_agents::HwRegistry::new();
         unsafe { hw.detect_all(); }
 
         // Fase 2: Para cada dispositivo, tenta identificar com IA e gerar mapa
@@ -1282,7 +1327,7 @@ impl Agent for HwDetectAgent {
             if parts.len() == 2 {
                 if let (Ok(vid), Ok(did)) = (u16::from_str_radix(parts[0], 16), u16::from_str_radix(parts[1], 16)) {
                     // Tenta identificar com IA via HWExpert
-                    let ai_name = cortex::generate_via_hwexpert(
+                    let ai_name = cortex::cortex::generate_via_hwexpert(
                         &alloc::format!("identifique PCI\\VEN_{:04X}&DEV_{:04X}", vid, did));
                     if !ai_name.starts_with("[HWEXPERT]") {
                         // IA identificou! Usa o nome real.
@@ -1291,7 +1336,7 @@ impl Agent for HwDetectAgent {
 
                     // Tenta gerar mapa de registradores (para WiFi/network)
                     if agent.class == 0x02 || agent.class == 0x0D {
-                        if let Some(map) = cortex::generate_register_map(vid, did) {
+                        if let Some(map) = cortex::cortex::generate_register_map(vid, did) {
                             device_tree.push_str(&alloc::format!(
                                 "    → RegMap: tx={:#x} rx={:#x} doorbell={:#x}/{:x} ring={}\n",
                                 map.tx_ring_low, map.rx_ring_low,
@@ -1319,7 +1364,7 @@ impl Agent for HwDetectAgent {
 
         // Fase 3: Publica para o LLM como contexto enriquecido
         let _ = EVENT_BUS.publish(Event {
-            id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
+            id: 0, topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
             payload: device_tree.into_bytes(), token: CapabilityToken::Legacy(1),
         });
 
@@ -1403,7 +1448,7 @@ impl AutoLearnAgent {
         serial_println!("[TRINITY-Learn] {}: {} bytes carregados. Iniciando fine-tuning on-device...", topic, knowledge.len());
 
         // Fine-tuning on-device via BitNetTrainer (ADR-0033, ~2 segundos)
-        let mut trainer = crate::BITNET_TRAINER.lock();
+        let mut trainer = BITNET_TRAINER.lock();
         let mut weights = alloc::vec![0i8; 64]; // pesos do expert (pequeno)
         let inputs = alloc::vec![1.0f32; 64];
         let targets = alloc::vec![1.0f32; 64];
@@ -1418,10 +1463,10 @@ impl AutoLearnAgent {
         unsafe {
             let ata = k_nano::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata {
-                let parts = crate::fat32::read_mbr(ata);
+                let parts = k_nano::fat32::read_mbr(ata);
                 for p in &parts {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                    if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
                         if let Some(data) = fs.read_file(&fname) {
                             serial_println!("[TRINITY-Learn] {} carregado via FAT32: {} bytes", fname, data.len());
                             return data;
@@ -1443,7 +1488,7 @@ impl AutoLearnAgent {
         serial_println!("[TRINITY-Learn] Tentando download: {}", url);
         // Tenta via browser_agent (que usa smoltcp)
         let _ = k_nano::EVENT_BUS.publish(Event {
-            id: 0, topic: alloc::string::String::from(hermes::browser_agent::TOPIC_FETCH_REQUEST),
+            id: 0, topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
             payload: url.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
         });
         // Por enquanto, http_get retorna None ate B-01 ser resolvido
@@ -1507,10 +1552,10 @@ impl SleepCycleAgent {
     pub fn new() -> Self { SleepCycleAgent { phase: 0, cycle_count: 0, phase_tick: 0, insights: Vec::new() } }
     fn phase_name(&self) -> &'static str { match self.phase {1=>"REPLAY",2=>"DREAM",3=>"CONSOLIDATE",4=>"PRUNE",5=>"REFLECT",_=>"IDLE"} }
     fn execute_phase(&mut self) {
-        let _tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let _tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         match self.phase {
             1 => {
-                let mut t = crate::BITNET_TRAINER.lock();
+                let mut t = BITNET_TRAINER.lock();
                 let (w,i,o) = (alloc::vec![0i8;64], alloc::vec![1.0f32;64], alloc::vec![1.0f32;64]);
                 let mut w_mut = w.clone();
                 let loss = t.train_step(&mut w_mut, &i, &o);
@@ -1530,7 +1575,7 @@ impl SleepCycleAgent {
 impl Agent for SleepCycleAgent {
     fn manifest(&self) -> &AgentManifest { &SLEEPCYCLE_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
-        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         if self.phase == 0 {
             if self.cycle_count == 0 || now > self.phase_tick + 5000 { self.phase = 1; self.phase_tick = now; }
             return AgentTickResult::Pending;
@@ -1565,27 +1610,27 @@ impl FsBridgeAgent {
 
     fn execute_migration(&mut self, _tick: u64) {
         let suggestions: Vec<(u64, u64)> = {
-            let reg = crate::mhi::MHI_REGISTRY.lock();
+            let reg = k_nano::mhi::MHI_REGISTRY.lock();
             reg.allocations.iter()
                 .filter(|(_, p)| {
                     let idle = _tick.saturating_sub(p.last_access_tick);
                     p.access_count > 5 && idle < 500
-                        && p.tier != crate::mhi::AllocTier::Dram
+                        && p.tier != k_nano::mhi::AllocTier::Dram
                 })
                 .map(|(&addr, p)| (addr, p.last_access_tick))
                 .collect()
         };
         for (addr, last_access) in &suggestions {
             let path = alloc::format!("/mhi/{:x}", addr);
-            match crate::fs::read_vfs(&path) {
+            match crate::globals::read_vfs(&path) {
                 Ok(data) => {
                     let phys = x86_64::PhysAddr::new(*addr);
                     let size = data.len();
-                    if let Some(dram_addr) = crate::mhi::alloc_by_tier(crate::mhi::AllocTier::Dram, size) {
+                    if let Some(dram_addr) = k_nano::mhi::alloc_by_tier(k_nano::mhi::AllocTier::Dram, size) {
                         let dst = dram_addr.as_u64() as *mut u8;
                         unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), dst, size); }
-                        let mut reg = crate::mhi::MHI_REGISTRY.lock();
-                        reg.register(phys, size, crate::mhi::AllocTier::Dram, "fs_bridge");
+                        let mut reg = k_nano::mhi::MHI_REGISTRY.lock();
+                        reg.register(phys, size, k_nano::mhi::AllocTier::Dram, "fs_bridge");
                         reg.record_access(phys, _tick, 0);
                         serial_println!("[FS-BRIDGE] Migrado {:?} → DRAM ({} bytes, idle={})",
                             phys, size, _tick.saturating_sub(*last_access));
@@ -1625,7 +1670,7 @@ impl Agent for GpuDriverAgent {
     fn manifest(&self) -> &AgentManifest { &GPUDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         unsafe {
-            if crate::virtio_gpu::init_driver_virtio_gpu() {
+            if k_nano::virtio_gpu::init_driver_virtio_gpu() {
                 serial_println!("[VGPU] VirtIO-GPU OK.");
             }
         }
@@ -1689,8 +1734,8 @@ impl Skill for DiagnosticSkill {
 
         // 4. SiLU + RMSNorm
         let mut tensor = cortex::tensor::Tensor::from_row_major((1, 3), vec![-1.0, 0.0, 1.0]).unwrap();
-        tensor.apply(crate::nn::silu);
-        crate::nn::rms_norm(&mut tensor, &[1.0], 1e-6);
+        tensor.apply(cortex::nn::silu);
+        cortex::nn::rms_norm(&mut tensor, &[1.0], 1e-6);
         report.push_str(&alloc::format!("[DIAG] SiLU+RMSNorm = {:?}\n", tensor.data));
 
         // 5. BitNet 2-bit inference
@@ -1699,7 +1744,7 @@ impl Skill for DiagnosticSkill {
             (3, 2), vec![1.5_f32, -1.8, 0.2, 2.1, -3.0, 0.0],
         ).unwrap();
         let packed_weights = cortex::tensor::quantize_to_packed(&weights_f32, 0.5);
-        let bit_linear = crate::nn::BitLinear::new(packed_weights, None);
+        let bit_linear = cortex::nn::BitLinear::new(packed_weights, None);
         let bit_output = bit_linear.forward(&bit_input);
         report.push_str(&alloc::format!("[DIAG] BitNet output = {:?}\n", bit_output.data));
 

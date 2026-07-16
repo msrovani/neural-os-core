@@ -24,6 +24,7 @@
 | 109 | 107 | — | ADR-0045 Sound Voice Stack | Truth=`neural-kernel/audio`; jarbas espelho; sherpa/Vosk/Kokoro/Wyoming/Rustpotter ❌; v1.7.1 docs |
 | 110 | 107 | — | Sprint 107 loops 1–5 clima e2e → v1.7.2 | GEN 'O tempo esta'; Piper neural-lite; WakeWord registrado; STT ctc=''; HWEXPERT FAIL |
 | 111 | Sound / ADR-42 | — | Handoff voz 107→Sprint Sound; pista limpa ADR-0042 | Docs v1.7.3; 107 Voice ✅ FECHADA; leftovers Sound; N2 próximo |
+| 112 | ADR-42 N2 | — | N2 SelfHeal VID+Trust CLOSED | v1.7.4; QEMU `[N2-SELFHEAL]`+`[TRUST]`; N2.5 allocator; pista N3→N5 |
 
 ## Sessões Anteriores (Sprints 1-68 — Arquivadas)
 
@@ -116,5 +117,5 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | 106-10 | ✅ | SkillOpt: Tradução Python→Rust no_std |
 
 **Status v2.0:** ✅ Sprint 106 concluída (10/10). ✅ Sprint 107 Voice FECHADA (PASS parcial forte+).  
-**Pista ativa:** ADR-0042 N2→N5. Backlog voz → Sprint Sound (reaberta). Ver SESSION_111.
+**Pista ativa:** ADR-0042 N3→N5 (N2 ✅ CLOSED). Backlog voz → Sprint Sound (reaberta). Ver SESSION_112.
 

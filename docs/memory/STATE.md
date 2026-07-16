@@ -1,6 +1,6 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.3 (docs) + N2 slice
-#   PISTA ATIVA — ADR-0042 N2 SelfHeal gated (slice 1)
+#   STATE — neural-os-core v1.7.4 — ADR-0042 N2 ✅ CLOSED
+#   PISTA ATIVA — ADR-0042 N3→N5 (cortex / hermes / jarbas)
 #   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
 #   Backlog voz → Sprint Sound (reaberta) — ADR-0045
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
@@ -16,8 +16,8 @@
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 
 ## Roadmap Atual
-**Versão:** **v1.7.3** (2026-07-16) — docs: handoff voz 107→Sprint Sound; pista limpa ADR-0042.  
-**Runtime marco:** v1.7.2 clima PASS parcial forte+ (sem mudança de binário nesta tag docs).  
+**Versão:** **v1.7.4** (2026-07-16) — ADR-0042 **N2 CLOSED** (SelfHeal VID + Trust; espelho até N2.5).  
+**Runtime marco:** v1.7.2 clima PASS parcial forte+; N2 evidência `logs/boot_n2_20260716_131837.txt`.  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
@@ -25,7 +25,7 @@
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
-| **ADR-0042 N2→N5** | ▶️ **N2 slice 1 landed** (SelfHeal VID + Trust agent/skill); fechar N2 + N3–N5 |
+| **ADR-0042 N3→N5** | ▶️ **pista ativa** (N2 ✅); fechar N3 generate/TTS + N4/N5 |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
 | Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas…) — **não bloqueia** ADR-42 |
 | Sprint 108 | ⏳ self-evolving — paralelo; sem gate de voz |
@@ -46,7 +46,7 @@
 |------|--------|
 | **N0** Baseline boot Runtime | ✅ |
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
-| **N2** k-ai HW-AI / SelfHeal | ▶️ **slice 1** — `[N2-SELFHEAL]` heal/noop + HEALTH_ISSUE + inventário VID + Trust `(token,agent,skill)`; link crate k_ai no bin ainda ⏳ (allocator) |
+| **N2** k-ai HW-AI / SelfHeal | ✅ **CLOSED** (v1.7.4) — heal/noop + HEALTH_ISSUE/honest noop + VID+subclass gate + Trust; **N2.5** link `k_ai` no bin ⏳ (espelho) |
 | **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** + FWD + BPE HF + chat frame + soft_stride=3 + clima `'O tempo esta'` / `' tempo esta bom'` |
 | **N4** hermes orquestra | ✅ STT path → EventBus → generate_via_model (generator); seed LLM enquanto CTC curto |
 | **N5** jarbas ego/UI | ▶️ TTS `synthesize_tts`/Piper + FB paint; WakeWord registrado |
@@ -176,22 +176,23 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **ADR-0042 N2** — slice 1 ✅ código (`run_vid_gated_scan`, Trust agent, BootSelfHeal/Trust order). **Falta:** evidência serial QEMU (`[N2-SELFHEAL]` / `[TRUST] allow (token,agent,skill)`); resolver link `k_ai` no bin (allocator) ou aceitar espelho até N2.5
-- N2 residual → N3 generate/TTS / fechar N3–N5
+- **ADR-0042 N3→N5** — N2 ✅ CLOSED; próxima pista N3 generate/TTS + N4/N5
+- **N2.5** (não bloqueia N3): link crate `k_ai` no bin quando `#[global_allocator]` resolvido; até lá espelho `neural-kernel`
 - Backlog voz → **Sprint Sound (reaberta)** (TODO.md): STT retrain; Mic→Wake→STT e2e; Piper VITS pleno; soft-float latency; UAC; jarbas wire; VAD/SER/Wake polish
 - Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
+- Evidência N2: `SESSION_112.md` + `logs/boot_n2_20260716_131837.txt`
 - Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_110041.txt`
 - Migração docs 107→Sound: `SESSION_111.md`
 
-### N2 slice 1 (2026-07-16) — SelfHeal gated
+### N2 CLOSED (2026-07-16) — SelfHeal gated ✅
 | Item | Onde | Serial / aceite |
 |------|------|-----------------|
 | `SelfHeal::run_vid_gated_scan` | `k_ai` + espelho `neural-kernel` | `[N2-SELFHEAL] heal\|noop` + `done scanned=…` |
-| Inventário VID | `HardwareInventory::vid_class_triples` / `fw_gated_devices` | `[N2-SELFHEAL] inventory pci=N fw_gated=M` |
+| Inventário VID+subclass | `vid_class_triples` / `fw_gated_devices` / `device_needs_fw` | Intel e1000 02:00 ≠ iwlwifi; NVIDIA 10DE:03 intacto |
 | Trust (agent,skill) | `trust_allow_agent` / `check_or_cache_agent` | `[TRUST] allow (token,agent,skill)=(1,self_heal,recover)` |
 | Boot order | Trust **antes** SelfHeal no registry | gate não DENY sob Observe |
-| HEALTH_ISSUE | I3 signal-only no gate (sem ACR load) | topic `HEALTH_ISSUE` EventBus |
-| Link crate | hermes já usa `k_ai::*`; bin monólito espelha | ⏳ `#[global_allocator]` clash |
+| HEALTH_ISSUE | I3 signal-only **ou** honest noop `fw_gated=0` | EventBus + log explícito |
+| Link crate | hermes → `k_ai::*`; bin monólito espelha | ⏳ N2.5 `#[global_allocator]` clash |
 
 ## Sprint 107 Part B — fixes pontuais (2026-07-16)
 
@@ -249,6 +250,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 **Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K²CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
 
 ## Marcos Acumulados
+- **🏆 v1.7.4 (2026-07-16):** ADR-0042 **N2 CLOSED** — SelfHeal VID+subclass + Trust + QEMU serial. N2.5 = link `k_ai` (allocator). Ver `SESSION_112.md`.
 - **🏆 v1.7.3 (2026-07-16):** Docs — Sprint 107 voice fechada; leftovers → Sprint Sound; pista limpa ADR-0042 N2. Ver `SESSION_111.md`.
 - **🏆 v1.7.2 (2026-07-16):** Sprint 107 loops 1–5 clima PASS parcial forte — GEN `'O tempo esta'`, Piper neural-lite, WakeWord registrado. Ver `SESSION_110.md`.
 - **🏆 v1.7.1 (2026-07-16):** ADR-0045 Sound Voice Stack (docs). Ver `SESSION_109.md`.
@@ -427,7 +429,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ### ▶️ Sprint Sound (reaberta) + ADR-0042
 - STT retrain / Mic→Wake runtime / Piper VITS / UAC / jarbas wire ⏳ Sound
-- **N2→N5** ▶️ pista ativa
+- **N3→N5** ▶️ pista ativa (N2 ✅ CLOSED)
 - Self-evolving agents (Sprint 108) ⏳
 - LLM Agent 24/7 multi-turn conversation ⏳
 - DHCP/Rede nativa (e1000 sem serial tunnel) 🔴

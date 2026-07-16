@@ -1,11 +1,11 @@
 # ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
 
 **Data:** 2026-07-14 · atualizado 2026-07-16  
-**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 em progresso**; N3 parcial)  
+**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 ✅ CLOSED**; N3 parcial)  
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
-**Sprint:** ADR-0042 (pista ativa N2→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
+**Sprint:** ADR-0042 (pista ativa N3→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅ funcional (espelho até N2.5 allocator). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5.**
 
 
@@ -83,12 +83,15 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 | Item | Aceite | Status |
 |------|--------|--------|
-| **N2.1** Heal/noop explícito | Serial `[N2-SELFHEAL] heal\|noop` por VID; sumário `done scanned/noop/heal` | ▶️ 2026-07-16 (boot + k_ai API) |
-| **N2.2** HEALTH_ISSUE | I3/I4 publicados no EventBus só para VID conhecidos | ▶️ wired no gate |
-| **N2.3** Inventário VID-gated | `HardwareInventory::fw_gated_devices` + scan PCI no `BootSelfHealAgent` | ▶️ |
-| **N2.4** Trust (token, agent, skill) | `trust_allow_agent` / `check_or_cache_agent`; Trust antes de SelfHeal no registry | ▶️ |
-| **N2.5** Link crate `k_ai` no bin | Dep direta neural-kernel→k_ai | ⏳ bloqueado (`#[global_allocator]` k_nano vs monólito) — comportamento espelhado |
-| **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ▶️ slice 1; falta evidência serial QEMU + wire crate |
+| **N2.1** Heal/noop explícito | Serial `[N2-SELFHEAL] heal\|noop` por VID; sumário `done scanned/noop/heal` | ✅ 2026-07-16 QEMU |
+| **N2.2** HEALTH_ISSUE | I3/I4 no EventBus para VID conhecidos; senão log `honest noop (fw_gated=0)` | ✅ |
+| **N2.3** Inventário VID-gated | `fw_gated_devices` + subclass fine-gate (Intel net ≠ e1000 02:00) | ✅ |
+| **N2.4** Trust (token, agent, skill) | `trust_allow_agent` + Trust antes de SelfHeal; serial `[TRUST] allow (token,agent,skill)=…` | ✅ |
+| **N2.5** Link crate `k_ai` no bin | Dep direta neural-kernel→k_ai | ⏳ N2.5 — bloqueado (`#[global_allocator]` k_nano vs monólito); **comportamento via espelho** até então |
+| **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ✅ **CLOSED** (critérios funcionais; wire crate = N2.5) |
+
+**Evidência serial:** `logs/boot_n2_20260716_131837.txt` (WHPX short) — Trust allow + inventory + honest noop. Path HEALTH_ISSUE heal também visto em `logs/boot_n2_20260716_131655.txt` (pré fine-gate e1000).  
+**Espelho:** `neural-kernel` espelha `k_ai` SelfHeal/Trust/inventory até N2.5; hermes já usa `k_ai` real.
 
 ---
 
@@ -118,7 +121,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N2** ▶️ slice SelfHeal gated (2026-07-16). **N3 progress:** BitNet 2B LOADED (~590MB, 30 layers, FWD OK); generate/TTS empty = próximo. Depois: fechar N2 → N3–N5.
+**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4 funcional; N2.5 = link crate). **N3 progress:** BitNet 2B LOADED (~590MB, 30 layers, FWD OK); generate/TTS empty = próximo. Depois: N3–N5.
 
 ---
 

@@ -1183,15 +1183,21 @@ impl Agent for BootSelfHealAgent {
                     triples.len(),
                     fw_n
                 );
+                if fw_n == 0 {
+                    serial_println!(
+                        "[N2-SELFHEAL] HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)"
+                    );
+                }
                 let mut heal = crate::SELF_HEAL.lock();
                 let report = heal.run_vid_gated_scan(&triples);
                 let _ = crate::SYSTEM_ARCH.lock().get_or_insert_with(|| {
                     crate::inventory::SystemArchitecture::infer(&inv)
                 });
                 serial_println!(
-                    "[N2-SELFHEAL] gate complete heal={} noop={} (k_ai policy mirror)",
+                    "[N2-SELFHEAL] gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai policy mirror)",
                     report.heal_issues,
-                    report.noop
+                    report.noop,
+                    report.health_published
                 );
             }
         }

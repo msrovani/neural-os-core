@@ -130,17 +130,29 @@ impl SelfHeal {
         FW_KNOWN_VIDS.iter().any(|(v, c, _, _)| *v == vid && *c == class as u16)
     }
 
+    /// Gate fino: Intel net 8086 02/0D só se não for Ethernet nativo (`subclass != 0x00`).
+    pub fn device_needs_fw(vid: u16, _did: u16, class: u8, subclass: u8) -> bool {
+        if !Self::vid_class_needs_fw(vid, class) {
+            return false;
+        }
+        if vid == 0x8086 && (class == 0x02 || class == 0x0D) && subclass == 0x00 {
+            return false;
+        }
+        true
+    }
+
     /// ADR-0042 N2: percorre inventário PCI; só age em VID conhecidos.
     /// - `noop`: VID fora da tabela ou FW/skill OK
     /// - `heal`: publica HEALTH_ISSUE (I3/I4) — Ring 1 não carrega FW de Ring 2
+    /// `devices`: (VID, DID, class, subclass).
     pub fn run_vid_gated_scan(
         &mut self,
-        devices: &[(u16, u16, u8)],
+        devices: &[(u16, u16, u8, u8)],
     ) -> VidGateReport {
         let mut report = VidGateReport::default();
-        for &(vid, did, class) in devices {
+        for &(vid, did, class, subclass) in devices {
             report.scanned = report.scanned.saturating_add(1);
-            if !Self::vid_class_needs_fw(vid, class) {
+            if !Self::device_needs_fw(vid, did, class, subclass) {
                 report.noop = report.noop.saturating_add(1);
                 continue;
             }

@@ -39,19 +39,21 @@ impl HardwareInventory {
         }
     }
 
-    /// Tuplas (VID, DID, class) para SelfHeal VID-gated (ADR-0042 N2).
-    pub fn vid_class_triples(&self) -> Vec<(u16, u16, u8)> {
+    /// Tuplas (VID, DID, class, subclass) para SelfHeal VID-gated (ADR-0042 N2).
+    pub fn vid_class_triples(&self) -> Vec<(u16, u16, u8, u8)> {
         self.pci_devices
             .iter()
-            .map(|d| (d.vendor_id, d.device_id, d.class))
+            .map(|d| (d.vendor_id, d.device_id, d.class, d.subclass))
             .collect()
     }
 
-    /// Subconjunto cujo (VID, class) precisa de check de firmware.
-    pub fn fw_gated_devices(&self) -> Vec<(u16, u16, u8)> {
+    /// Subconjunto que precisa de check de firmware (política NVIDIA-coerente).
+    pub fn fw_gated_devices(&self) -> Vec<(u16, u16, u8, u8)> {
         self.vid_class_triples()
             .into_iter()
-            .filter(|&(vid, _, class)| crate::self_heal::SelfHeal::vid_class_needs_fw(vid, class))
+            .filter(|&(vid, did, class, subclass)| {
+                crate::self_heal::SelfHeal::device_needs_fw(vid, did, class, subclass)
+            })
             .collect()
     }
 }

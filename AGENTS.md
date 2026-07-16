@@ -168,11 +168,12 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: ADR-0042 N2→N5 (pista ativa). Sprint 107 Voice ✅ FECHADA (PASS parcial forte+).
+# Current Sprint: ADR-0042 N3→N5 (pista ativa; N2 ✅ CLOSED v1.7.4). Sprint 107 Voice ✅ FECHADA (PASS parcial forte+).
 # Voz residual → Sprint Sound (reaberta) — NÃO bloqueia ADR-42. Sprint 108 self-evolving permanece ⏳.
 # Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho; sem sherpa/Vosk/Kokoro-primário
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
 # Não declarar v2.0.0 até ADR-0042 N1–N5.
+# N2: comportamento SelfHeal/Trust no bin via espelho até N2.5 (allocator clash k_ai link)
 
 ## Roadmap v2.0 "Cognição"
 | Sprint | Foco | Status |
@@ -185,7 +186,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **106** | Ecossistema de Anéis Lógicos (10/10 sub-sprints) | ✅ |
 | **107** | Voice I/O (clima e2e + skinny EventBus) | ✅ FECHADA (PASS parcial forte+) |
 | **Sound** | Leftovers voz (STT/Piper/UAC/jarbas…) | ▶️ reaberta |
-| **ADR-42** | Adequação N2→N5 | ▶️ **pista ativa** |
+| **ADR-42** | Adequação N3→N5 (N2 ✅) | ▶️ **pista ativa** |
 | **108** | Self-evolving agents (auto-skill generation) | ⏳ |
 
 # QEMU Launch (WHPX + VirtIO optimizado)
