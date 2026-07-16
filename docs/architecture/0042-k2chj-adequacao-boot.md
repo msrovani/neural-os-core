@@ -87,11 +87,11 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N2.2** HEALTH_ISSUE | I3/I4 no EventBus para VID conhecidos; senão log `honest noop (fw_gated=0)` | ✅ |
 | **N2.3** Inventário VID-gated | `fw_gated_devices` + subclass fine-gate (Intel net ≠ e1000 02:00) | ✅ |
 | **N2.4** Trust (token, agent, skill) | `trust_allow_agent` + Trust antes de SelfHeal; serial `[TRUST] allow (token,agent,skill)=…` | ✅ |
-| **N2.5** Link crate `k_ai` no bin | Dep direta neural-kernel→k_ai | ⏳ N2.5 — bloqueado (`#[global_allocator]` k_nano vs monólito); **comportamento via espelho** até então |
+| **N2.5** Link crate `k_ai` no bin | Dep direta neural-kernel→k_ai; `k_nano` feature `global-alloc` OFF; memory+EVENT_BUS bridge | ✅ 2026-07-16 (v1.7.8) |
 | **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ✅ **CLOSED** (critérios funcionais; wire crate = N2.5) |
 
 **Evidência serial:** `logs/boot_n2_20260716_131837.txt` (WHPX short) — Trust allow + inventory + honest noop. Path HEALTH_ISSUE heal também visto em `logs/boot_n2_20260716_131655.txt` (pré fine-gate e1000).  
-**Espelho:** `neural-kernel` espelha `k_ai` SelfHeal/Trust/inventory até N2.5; hermes já usa `k_ai` real.
+**Espelho:** `neural-kernel` espelha `cortex`/`hermes`/`jarbas` até N3.5/N4.6/N5.7; **k_ai trust/self_heal wired** (N2.5 ✅).
 
 ### Checklist N3 (cortex cérebro)
 

@@ -1194,7 +1194,7 @@ impl Agent for BootSelfHealAgent {
                     crate::inventory::SystemArchitecture::infer(&inv)
                 });
                 serial_println!(
-                    "[N2-SELFHEAL] gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai policy mirror)",
+                    "[N2-SELFHEAL] gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai crate N2.5)",
                     report.heal_issues,
                     report.noop,
                     report.health_published

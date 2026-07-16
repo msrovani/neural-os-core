@@ -10,6 +10,8 @@ lazy_static = { version = "1.4", features = ["spin_no_std"] }
 uart_16550 = "0.2"
 x86_64 = "0.14.11"
 linked_list_allocator = "0.9"
+talc = "4.4.3"
+spinning_top = "0.3"
 libm = "0.2"
 event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
@@ -17,6 +19,11 @@ ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+
+[features]
+default = []
+# Apenas bins standalone que não definem seu próprio #[global_allocator].
+global-alloc = []
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }

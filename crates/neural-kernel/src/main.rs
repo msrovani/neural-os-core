@@ -110,11 +110,10 @@ mod smp;
 
 mod sync;
 
+pub use k_ai::{self_heal, trust};
+pub use k_nano::globals::EVENT_BUS;
+
 mod nn;
-
-mod trust;
-
-mod self_heal;
 
 mod serial;
 
@@ -661,8 +660,6 @@ impl Skill for HwIdentifySkill {
 
 
 lazy_static! {
-
-    static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
 
     // Locks IRQ-safe: SELF_HEAL e RESPAWN_QUEUE são acessados de handlers de exceção
 

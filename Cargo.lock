@@ -297,11 +297,12 @@ dependencies = [
  "agent-core",
  "cortex",
  "event-bus",
- "k-ia",
  "k-nano",
+ "k_ai",
  "lazy_static",
  "libm",
  "skill-registry",
+ "smoltcp",
  "spin",
  "ticket-lock",
  "x86_64",
@@ -314,16 +315,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
-name = "jarvis"
-version = "1.5.0"
+name = "jarbas"
+version = "2.0.0"
 dependencies = [
  "agent-core",
+ "bootloader_api",
  "cortex",
  "event-bus",
  "hermes",
  "k-nano",
  "lazy_static",
  "libm",
+ "skill-registry",
  "spin",
  "ticket-lock",
  "x86_64",
@@ -341,22 +344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "k-ia"
-version = "1.5.0"
-dependencies = [
- "agent-core",
- "cortex",
- "event-bus",
- "k-nano",
- "lazy_static",
- "libm",
- "skill-registry",
- "spin",
- "ticket-lock",
- "x86_64",
-]
-
-[[package]]
 name = "k-nano"
 version = "1.5.0"
 dependencies = [
@@ -370,8 +357,26 @@ dependencies = [
  "skill-registry",
  "smoltcp",
  "spin",
+ "spinning_top 0.3.0",
+ "talc",
  "ticket-lock",
  "uart_16550",
+ "x86_64",
+]
+
+[[package]]
+name = "k_ai"
+version = "2.0.0"
+dependencies = [
+ "agent-core",
+ "cortex",
+ "event-bus",
+ "k-nano",
+ "lazy_static",
+ "libm",
+ "skill-registry",
+ "spin",
+ "ticket-lock",
  "x86_64",
 ]
 
@@ -402,7 +407,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "549ce1740e46b291953c4340adcd74c59bcf4308f4cac050fd33ba91b7168f4a"
 dependencies = [
- "spinning_top",
+ "spinning_top 0.2.5",
 ]
 
 [[package]]
@@ -465,12 +470,17 @@ dependencies = [
  "bootloader_api",
  "ed25519-compact",
  "event-bus",
+ "jarbas",
+ "k-nano",
+ "k_ai",
  "lazy_static",
  "libm",
  "linked_list_allocator",
  "skill-registry",
  "smoltcp",
  "spin",
+ "spinning_top 0.3.0",
+ "talc",
  "ticket-lock",
  "uart_16550",
  "x86_64",
@@ -663,6 +673,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "spinning_top"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d96d2d1d716fb500937168cc09353ffdc7a012be8475ac7308e1bdf0e3923300"
+dependencies = [
+ "lock_api",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -677,6 +696,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "talc"
+version = "4.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3ae828aa394de34c7de08f522d1b86bd1c182c668d27da69caadda00590f26d"
+dependencies = [
+ "lock_api",
 ]
 
 [[package]]

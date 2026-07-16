@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [1.7.8] — 2026-07-16 — ADR-0042 N2.5 (k_ai wired no bin)
+
+### Wired
+- **N2.5** `neural-kernel` → `k_ai` + `k-nano` (sem feature `global-alloc`)
+- Removidos espelhos `trust.rs` / `self_heal.rs`; `pub use k_ai::{trust, self_heal}`
+- Bridge `memory` → `k_nano::memory` (GLOBAL_ALLOCATOR único para boot + SelfHeal)
+- Bridge `EVENT_BUS` → `k_nano::globals::EVENT_BUS` (HEALTH_ISSUE no mesmo bus)
+- `k_nano` feature `global-alloc` (default OFF) gateia `#[global_allocator]` no crate lib
+
+### Próximo
+- **N3.5** wire `cortex` — remover espelhos `cortex.rs`, `bpe.rs`, `tensor.rs`, `trinity.rs`, …
+
 ## [1.7.7] — 2026-07-16 — ADR-0042 N5 CLOSED (jarbas ego/UI)
 
 ### Closed

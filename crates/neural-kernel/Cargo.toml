@@ -19,6 +19,9 @@ ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
+# ADR-0042 N2.5: k_nano sem global-alloc (bin mantém allocator.rs); k_ai trust/self_heal.
+k-nano = { path = "../k_nano" }
+k_ai = { path = "../k_ai" }
 # Sprint 107 Part B #9: dependencia OPCIONAL para o espelho K2CHJ jarbas/audio.
 # Truth continua neural-kernel/audio (ADR-0045). Ativar com --features jarbas-bridge
 # apenas para o cross-check de TOPIC_* em jarbas_bridge.rs — NAO afeta o boot default

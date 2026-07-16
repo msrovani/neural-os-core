@@ -25,7 +25,7 @@
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
-| **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K²CHJ funcional; wire crates N2.5–N5.7 deferred |
+| **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K²CHJ funcional; **N2.5** ✅ (v1.7.8); N3.5–N5.7 wire crates deferred |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
 | Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas wire… + soft-float latency) — **não bloqueia** v2.0 gate review |
 | Sprint 108 | ⏳ self-evolving — paralelo |
@@ -46,7 +46,7 @@
 |------|--------|
 | **N0** Baseline boot Runtime | ✅ |
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
-| **N2** k-ai HW-AI / SelfHeal | ✅ **CLOSED** (v1.7.4) — heal/noop + HEALTH_ISSUE/honest noop + VID+subclass gate + Trust; **N2.5** link `k_ai` no bin ⏳ (espelho) |
+| **N2** k-ai HW-AI / SelfHeal | ✅ **CLOSED** (v1.7.4) — heal/noop + HEALTH_ISSUE/honest noop + VID+subclass gate + Trust; **N2.5** link `k_ai` no bin ✅ (v1.7.8) |
 | **N3** cortex cérebro | ✅ **CLOSED** (v1.7.5) — llm=LOADED + MAP_WEIGHTS + Trinity (keyword+R3) + generate path; soft-float fluency → Sound; **N3.5** link `cortex` ⏳ |
 | **N4** hermes orquestra | ✅ **CLOSED** (v1.7.6) — intent routing + ReAct/skills + WASM SFI + cortex orchestrate + EventBus; **N4.6** link `hermes` ⏳ |
 | **N5** jarbas ego/UI | ✅ **CLOSED** (v1.7.7) — compositor + persona + voz via Hermes + FB paint; **N5.7** link `jarbas` ⏳ |
