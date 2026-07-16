@@ -3,14 +3,14 @@ use alloc::string::String;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use core::sync::atomic::Ordering;
-use crate::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
-use crate::serial_println;
+use k_nano::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
+use k_nano::serial_println;
 use crate::chunker;
 
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
     pub valid: bool,
-    pub bitmap: [u8; crate::memory::BITMAP_SIZE],
+    pub bitmap: [u8; k_nano::memory::BITMAP_SIZE],
     pub next_free_bit: usize,
     pub total_frames: usize,
     pub usable_frames: usize,
@@ -22,7 +22,7 @@ pub struct Checkpoint {
 impl Checkpoint {
     pub const fn empty() -> Self {
         Checkpoint {
-            valid: false, bitmap: [0; crate::memory::BITMAP_SIZE],
+            valid: false, bitmap: [0; k_nano::memory::BITMAP_SIZE],
             next_free_bit: 0, total_frames: 0,
             usable_frames: 0, allocated_count: 0,
             mhi_dram_bytes: 0, tick: 0,
@@ -102,7 +102,6 @@ pub struct SelfHeal {
 }
 
 /// Invariantes de hardware: I3 (firmware) e I4 (skill) — só VIDs conhecidos (N2 gated).
-/// Espelho de `k_ai::self_heal::FW_KNOWN_VIDS` (bin ainda sem dep k_ai — allocator clash).
 pub const FW_KNOWN_VIDS: &[(u16, u16, &str, &str)] = &[
     (0x10DE, 0x03, "nvidia/gp108", "FECS+GPCCS"),
     (0x8086, 0x03, "i915/skl+kbl", "GuC+HuC+DMC"),
@@ -112,7 +111,7 @@ pub const FW_KNOWN_VIDS: &[(u16, u16, &str, &str)] = &[
     (0x8086, 0x0D, "intel/iwlwifi", "AX200/AX210"),
 ];
 
-/// Relatório do scan VID-gated (ADR-0042 N2). Espelho de k_ai.
+/// Relatório do scan VID-gated (ADR-0042 N2).
 #[derive(Clone, Debug, Default)]
 pub struct VidGateReport {
     pub scanned: u32,
@@ -126,13 +125,18 @@ impl SelfHeal {
         SelfHeal { pending_fixes: Vec::new(), lessons: Vec::new(), checkpoint: Checkpoint::empty() }
     }
 
+    /// True se (VID, class) está na tabela de FW conhecidos (gate N2).
     pub fn vid_class_needs_fw(vid: u16, class: u8) -> bool {
         FW_KNOWN_VIDS.iter().any(|(v, c, _, _)| *v == vid && *c == class as u16)
     }
 
-    /// ADR-0042 N2 no boot path: inventário PCI → heal/noop explícito + HEALTH_ISSUE.
-    /// Comportamento alinhado a `k_ai::SelfHeal::run_vid_gated_scan` (crate ainda não linkada).
-    pub fn run_vid_gated_scan(&mut self, devices: &[(u16, u16, u8)]) -> VidGateReport {
+    /// ADR-0042 N2: percorre inventário PCI; só age em VID conhecidos.
+    /// - `noop`: VID fora da tabela ou FW/skill OK
+    /// - `heal`: publica HEALTH_ISSUE (I3/I4) — Ring 1 não carrega FW de Ring 2
+    pub fn run_vid_gated_scan(
+        &mut self,
+        devices: &[(u16, u16, u8)],
+    ) -> VidGateReport {
         let mut report = VidGateReport::default();
         for &(vid, did, class) in devices {
             report.scanned = report.scanned.saturating_add(1);
@@ -141,12 +145,11 @@ impl SelfHeal {
                 continue;
             }
             let desc = alloc::format!("{:04X}:{:04X}", vid, did);
-            // N2 gate: Ring-1 policy = sinalizar HEALTH_ISSUE, não carregar ACR aqui.
-            let fw_ok = self.check_device_firmware_signal_only(vid, did, class);
+            let fw_ok = self.check_device_firmware(vid, did, class);
             let skill_ok = self.check_device_skill(vid, did, class, &desc);
             if fw_ok && skill_ok {
                 report.noop = report.noop.saturating_add(1);
-                serial_println!(
+                k_nano::serial_println!(
                     "[N2-SELFHEAL] noop VID={:04X}:{:04X} class={:02X}",
                     vid, did, class
                 );
@@ -158,38 +161,17 @@ impl SelfHeal {
                 if !skill_ok {
                     report.health_published = report.health_published.saturating_add(1);
                 }
-                serial_println!(
+                k_nano::serial_println!(
                     "[N2-SELFHEAL] heal VID={:04X}:{:04X} class={:02X} fw_ok={} skill_ok={}",
                     vid, did, class, fw_ok, skill_ok
                 );
             }
         }
-        serial_println!(
+        k_nano::serial_println!(
             "[N2-SELFHEAL] done scanned={} noop={} heal={} HEALTH_ISSUE={}",
             report.scanned, report.noop, report.heal_issues, report.health_published
         );
         report
-    }
-
-    /// I3 signal-only (política k-ai): nunca chama nvidia_acr_load no gate N2.
-    fn check_device_firmware_signal_only(&mut self, vid: u16, did: u16, class: u8) -> bool {
-        if !Self::vid_class_needs_fw(vid, class) {
-            return true;
-        }
-        let dev = alloc::format!("{:04X}:{:04X} class={}", vid, did, class);
-        self.pending_fixes.push((
-            dev.clone(),
-            alloc::format!("firmware ausente para VID={:04X} DID={:04X}", vid, did),
-        ));
-        let msg = alloc::format!("HEALTH_ISSUE:I3:{}:firmware_ausente", dev);
-        let _ = crate::EVENT_BUS.publish(crate::Event {
-            id: 0,
-            topic: alloc::string::String::from("HEALTH_ISSUE"),
-            payload: msg.into_bytes(),
-            token: crate::CapabilityToken::Legacy(1),
-        });
-        serial_println!("[SELFHEAL] I3: {} precisa de firmware", dev);
-        false
     }
 
     /// I3: Verifica se um dispositivo conhecido tem firmware carregado.
@@ -197,21 +179,18 @@ impl SelfHeal {
     pub fn check_device_firmware(&mut self, vid: u16, did: u16, class: u8) -> bool {
         let needs_fw = Self::vid_class_needs_fw(vid, class);
         if !needs_fw { return true; }
-        // Verifica se firmware ja foi carregado (via test_load_firmware log)
-        let loaded = match (vid, class) {
-            (0x10DE, 0x03) => unsafe { crate::gpu::firmware::nvidia_acr_load_available() },
-            _ => false, // outros ainda nao tem check
-        };
+        // Ring 1 (k-ai): nunca carrega ACR NVIDIA — só sinaliza HEALTH_ISSUE.
+        let loaded = false;
         if !loaded {
             let dev = alloc::format!("{:04X}:{:04X} class={}", vid, did, class);
             self.pending_fixes.push((dev.clone(),
                 alloc::format!("firmware ausente para VID={:04X} DID={:04X}", vid, did)));
             let msg = alloc::format!("HEALTH_ISSUE:I3:{}:firmware_ausente", dev);
-            let _ = crate::EVENT_BUS.publish(crate::Event {
+            let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                 id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
-                payload: msg.into_bytes(), token: crate::CapabilityToken::Legacy(1),
+                payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
             });
-            serial_println!("[SELFHEAL] I3: {} precisa de firmware", dev);
+            k_nano::serial_println!("[SELFHEAL] I3: {} precisa de firmware", dev);
             return false;
         }
         true
@@ -220,20 +199,24 @@ impl SelfHeal {
     /// I4: Verifica se existe skill para um dispositivo sem driver.
     pub fn check_device_skill(&mut self, vid: u16, did: u16, class: u8, desc: &str) -> bool {
         let skill_name = alloc::format!("driver_{:04X}_{:04X}", vid, did);
-        let has_skill = crate::SKILL_REGISTRY.lock().has_skill(&skill_name);
+        let has_skill = k_nano::SKILL_REGISTRY.lock().has_skill(&skill_name);
         if !has_skill && class != 0x03 && class != 0x06 {
-            // Classes 03 (VGA) e 06 (ISA) tem drivers nativos; outras podem precisar skill
             self.pending_fixes.push((skill_name.clone(),
                 alloc::format!("skill ausente para {} ({:04X}:{:04X}:{:02X})", desc, vid, did, class)));
             let msg = alloc::format!("HEALTH_ISSUE:I4:{}:skill_ausente:{:04X}:{:04X}", desc, vid, did);
-            let _ = crate::EVENT_BUS.publish(crate::Event {
+            let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
                 id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
-                payload: msg.into_bytes(), token: crate::CapabilityToken::Legacy(1),
+                payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
             });
-            serial_println!("[SELFHEAL] I4: {} sem skill '{}'", desc, skill_name);
+            k_nano::serial_println!("[SELFHEAL] I4: {} sem skill '{}'", desc, skill_name);
             return false;
         }
         true
+    }
+
+    fn get_mhi_dram_bytes() -> u64 {
+        // MHI vive em hermes/neural-kernel — Ring 1 lê via k_nano se disponível
+        0
     }
 
     pub fn save_checkpoint(&mut self) {
@@ -247,9 +230,8 @@ impl SelfHeal {
             self.checkpoint.allocated_count = alloc.allocated_count;
         }
         drop(guard);
-        self.checkpoint.mhi_dram_bytes = crate::MEMORY_HIERARCHY.lock().as_ref()
-            .map_or(0, |m| m.tiers[0].capacity_bytes as u64);
-        self.checkpoint.tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        self.checkpoint.mhi_dram_bytes = Self::get_mhi_dram_bytes();
+        self.checkpoint.tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
         self.checkpoint.valid = true;
         serial_println!("[CHECKPOINT] Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
             self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
@@ -259,8 +241,8 @@ impl SelfHeal {
     /// Retorna (chunks_completos, chunks_delta_modificados).
     /// `prev_bitmap` = bitmap anterior (vazio [] se primeiro snapshot).
     pub fn semantic_snapshot(&mut self, prev_bitmap: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        use crate::delta::xor_buffers;
-        use crate::memory::BITMAP_SIZE;
+        use cortex::delta::xor_buffers;
+        use k_nano::memory::BITMAP_SIZE;
 
         // Copia o bitmap atual para análise fora do lock
         let current_bmp = {
@@ -301,7 +283,10 @@ impl SelfHeal {
             alloc.allocated_count = self.checkpoint.allocated_count;
         }
         drop(guard);
-        serial_println!("[CHECKPOINT] Restaurado. {} frames.", self.checkpoint.allocated_count);
+        serial_println!(
+            "[CHECKPOINT] Bitmap restaurado @ {} frames — AVISO: page tables/heap/drivers NAO restaurados (P09)",
+            self.checkpoint.allocated_count
+        );
         true
     }
 
@@ -428,8 +413,14 @@ pub fn verify_recovery(check: fn() -> bool, _label: &str) -> bool {
 
 /// M10: Erros no EventLog — registra falha no log de eventos
 pub fn log_error_to_eventlog(error: &str, class: FailureClass) {
-    // Persistir erro no EventLog (EventBus publish)
-    let _ = alloc::format!("[EVENTLOG] {:?}: {}", class, error);
+    let msg = alloc::format!("[EVENTLOG] {:?}: {}", class, error);
+    k_nano::serial_println!("{}", msg);
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: alloc::string::String::from("SELFHEAL_ERROR"),
+        payload: msg.into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
 }
 
 /// M11: Budgeted Recovery — limita tentativas de recovery por período
@@ -521,7 +512,7 @@ pub static BAD_BLOCKS: spin::Mutex<BTreeSet<(String, u64)>> = spin::Mutex::new(B
 
 pub fn mark_bad(dev_name: &str, lba: u64) {
     BAD_BLOCKS.lock().insert((String::from(dev_name), lba));
-    crate::serial_println!("[SELFHEAL] Bad block {}@{:#x}", dev_name, lba);
+    k_nano::serial_println!("[SELFHEAL] Bad block {}@{:#x}", dev_name, lba);
 }
 
 pub fn is_bad(dev_name: &str, lba: u64) -> bool {
@@ -532,29 +523,29 @@ pub fn is_bad_any(lba: u64) -> bool {
     BAD_BLOCKS.lock().iter().any(|(_, l)| *l == lba)
 }
 
-pub fn read_with_retry(dev: &mut dyn crate::block_dev::BlockDevice, lba: u64, buf: &mut [u8], name: &str) -> bool {
+pub fn read_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, buf: &mut [u8], name: &str) -> bool {
     for attempt in 0..3 {
         if dev.read_sectors(lba, buf) {
             // Se bloco de 4096 bytes, verifica CRC
             if buf.len() == 4096 {
-                if crate::neural_fs::checksum::crc32c(&buf[4..4096]) != u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) {
-                    crate::serial_println!("[SELFHEAL] CRC mismatch {}@{:#x}, retrying", name, lba);
+                if k_nano::neural_fs::checksum::crc32c(&buf[4..4096]) != u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) {
+                    k_nano::serial_println!("[SELFHEAL] CRC mismatch {}@{:#x}, retrying", name, lba);
                     continue;
                 }
                 return true;
             }
             return true;
         }
-        crate::serial_println!("[SELFHEAL] Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+        k_nano::serial_println!("[SELFHEAL] Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
     }
     mark_bad(name, lba);
     false
 }
 
-pub fn write_with_retry(dev: &mut dyn crate::block_dev::BlockDevice, lba: u64, buf: &[u8], name: &str) -> bool {
+pub fn write_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, buf: &[u8], name: &str) -> bool {
     for attempt in 0..3 {
         if dev.write_sectors(lba, buf) { return true; }
-        crate::serial_println!("[SELFHEAL] Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+        k_nano::serial_println!("[SELFHEAL] Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
     }
     mark_bad(name, lba);
     false

@@ -1,6 +1,6 @@
-//! Inventário de hardware — espelho k_ai (ADR-0042 N2: gate por VID).
-use crate::acpi::AcpiInfo;
-use crate::pci::PciDevice;
+//! Inventário de hardware (Ring 1 / k-ai) — ADR-0042 N2: gate por VID.
+use k_nano::acpi::AcpiInfo;
+use k_nano::pci::PciDevice;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
@@ -23,7 +23,7 @@ impl HardwareInventory {
         let has_nvme = pci_devices.iter().any(|d| d.class == 0x01 && d.subclass == 0x08);
         let has_xhci = pci_devices.iter().any(|d| d.class == 0x0C && d.subclass == 0x03);
         let total_ram_bytes = {
-            let guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+            let guard = k_nano::memory::GLOBAL_ALLOCATOR.lock();
             guard.as_ref().map_or(0, |a| a.usable_memory_bytes())
         };
 
@@ -47,6 +47,7 @@ impl HardwareInventory {
             .collect()
     }
 
+    /// Subconjunto cujo (VID, class) precisa de check de firmware.
     pub fn fw_gated_devices(&self) -> Vec<(u16, u16, u8)> {
         self.vid_class_triples()
             .into_iter()

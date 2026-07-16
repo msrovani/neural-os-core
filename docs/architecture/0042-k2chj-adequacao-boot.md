@@ -1,7 +1,7 @@
 # ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
 
-**Data:** 2026-07-14 · atualizado 2026-07-15  
-**Status:** Accepted — plano diretor de adequação (**N1 done**; N3 em progresso)  
+**Data:** 2026-07-14 · atualizado 2026-07-16  
+**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 em progresso**; N3 parcial)  
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (pista ativa N2→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
@@ -79,6 +79,17 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N1.3** Métricas scheduler | Log periódico `[SCHED] tick/agents/polled` pós-Runtime | ✅ código (hook); re-flash uefi se log slim não mostrar |
 | **Goal N1** | Log legível; QEMU limpo de FW NVIDIA spam | ✅ |
 
+### Checklist N2 (k-ai HW-AI / SelfHeal)
+
+| Item | Aceite | Status |
+|------|--------|--------|
+| **N2.1** Heal/noop explícito | Serial `[N2-SELFHEAL] heal\|noop` por VID; sumário `done scanned/noop/heal` | ▶️ 2026-07-16 (boot + k_ai API) |
+| **N2.2** HEALTH_ISSUE | I3/I4 publicados no EventBus só para VID conhecidos | ▶️ wired no gate |
+| **N2.3** Inventário VID-gated | `HardwareInventory::fw_gated_devices` + scan PCI no `BootSelfHealAgent` | ▶️ |
+| **N2.4** Trust (token, agent, skill) | `trust_allow_agent` / `check_or_cache_agent`; Trust antes de SelfHeal no registry | ▶️ |
+| **N2.5** Link crate `k_ai` no bin | Dep direta neural-kernel→k_ai | ⏳ bloqueado (`#[global_allocator]` k_nano vs monólito) — comportamento espelhado |
+| **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ▶️ slice 1; falta evidência serial QEMU + wire crate |
+
 ---
 
 ## 4. Mapa boot OK atual → anel dono
@@ -107,7 +118,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N3 progress:** BitNet 2B LOADED (~590MB, 30 layers, FWD OK); generate/TTS empty = próximo. Depois: N2 / fechar N3–N5.
+**N1** ✅ (v1.7.0). **N2** ▶️ slice SelfHeal gated (2026-07-16). **N3 progress:** BitNet 2B LOADED (~590MB, 30 layers, FWD OK); generate/TTS empty = próximo. Depois: fechar N2 → N3–N5.
 
 ---
 

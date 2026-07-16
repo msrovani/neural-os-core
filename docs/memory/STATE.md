@@ -1,6 +1,6 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.3 (docs)
-#   PISTA LIMPA — próximo trabalho = ADR-0042 N2→N5
+#   STATE — neural-os-core v1.7.3 (docs) + N2 slice
+#   PISTA ATIVA — ADR-0042 N2 SelfHeal gated (slice 1)
 #   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
 #   Backlog voz → Sprint Sound (reaberta) — ADR-0045
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
@@ -25,7 +25,7 @@
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
-| **ADR-0042 N2→N5** | ▶️ **próximo trabalho ativo** (sugerido: N2 SelfHeal gated) |
+| **ADR-0042 N2→N5** | ▶️ **N2 slice 1 landed** (SelfHeal VID + Trust agent/skill); fechar N2 + N3–N5 |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
 | Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas…) — **não bloqueia** ADR-42 |
 | Sprint 108 | ⏳ self-evolving — paralelo; sem gate de voz |
@@ -46,7 +46,7 @@
 |------|--------|
 | **N0** Baseline boot Runtime | ✅ |
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
-| **N2** k-ai HW-AI / SelfHeal | ⏳ |
+| **N2** k-ai HW-AI / SelfHeal | ▶️ **slice 1** — `[N2-SELFHEAL]` heal/noop + HEALTH_ISSUE + inventário VID + Trust `(token,agent,skill)`; link crate k_ai no bin ainda ⏳ (allocator) |
 | **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** + FWD + BPE HF + chat frame + soft_stride=3 + clima `'O tempo esta'` / `' tempo esta bom'` |
 | **N4** hermes orquestra | ✅ STT path → EventBus → generate_via_model (generator); seed LLM enquanto CTC curto |
 | **N5** jarbas ego/UI | ▶️ TTS `synthesize_tts`/Piper + FB paint; WakeWord registrado |
@@ -176,11 +176,22 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **ADR-0042 N2** SelfHeal gated — **pista limpa / trabalho ativo**
+- **ADR-0042 N2** — slice 1 ✅ código (`run_vid_gated_scan`, Trust agent, BootSelfHeal/Trust order). **Falta:** evidência serial QEMU (`[N2-SELFHEAL]` / `[TRUST] allow (token,agent,skill)`); resolver link `k_ai` no bin (allocator) ou aceitar espelho até N2.5
+- N2 residual → N3 generate/TTS / fechar N3–N5
 - Backlog voz → **Sprint Sound (reaberta)** (TODO.md): STT retrain; Mic→Wake→STT e2e; Piper VITS pleno; soft-float latency; UAC; jarbas wire; VAD/SER/Wake polish
 - Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
 - Evidência loops 1–5: `SESSION_110.md` + log `logs/boot_whpx_20260716_110041.txt`
 - Migração docs 107→Sound: `SESSION_111.md`
+
+### N2 slice 1 (2026-07-16) — SelfHeal gated
+| Item | Onde | Serial / aceite |
+|------|------|-----------------|
+| `SelfHeal::run_vid_gated_scan` | `k_ai` + espelho `neural-kernel` | `[N2-SELFHEAL] heal\|noop` + `done scanned=…` |
+| Inventário VID | `HardwareInventory::vid_class_triples` / `fw_gated_devices` | `[N2-SELFHEAL] inventory pci=N fw_gated=M` |
+| Trust (agent,skill) | `trust_allow_agent` / `check_or_cache_agent` | `[TRUST] allow (token,agent,skill)=(1,self_heal,recover)` |
+| Boot order | Trust **antes** SelfHeal no registry | gate não DENY sob Observe |
+| HEALTH_ISSUE | I3 signal-only no gate (sem ACR load) | topic `HEALTH_ISSUE` EventBus |
+| Link crate | hermes já usa `k_ai::*`; bin monólito espelha | ⏳ `#[global_allocator]` clash |
 
 ## Sprint 107 Part B — fixes pontuais (2026-07-16)
 

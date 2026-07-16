@@ -1166,6 +1166,36 @@ impl Agent for BootSelfHealAgent {
         crate::SELF_HEAL.lock();
         kjson!("AGENT", "SelfHeal", "ready", "tick", _tick);
 
+        // ── ADR-0042 N2: Trust (token, agent, skill) + inventário VID-gated ──
+        {
+            let trusted = crate::TRUST_CACHE.lock().check_or_cache_agent(
+                1, "self_heal", "recover", _tick, u64::MAX,
+            );
+            if !trusted {
+                serial_println!("[N2-SELFHEAL] trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
+            } else {
+                let devices = unsafe { crate::pci::scan_pci() };
+                let inv = crate::inventory::HardwareInventory::collect(devices, None);
+                let triples = inv.vid_class_triples();
+                let fw_n = inv.fw_gated_devices().len();
+                serial_println!(
+                    "[N2-SELFHEAL] inventory pci={} fw_gated={} trust=OK",
+                    triples.len(),
+                    fw_n
+                );
+                let mut heal = crate::SELF_HEAL.lock();
+                let report = heal.run_vid_gated_scan(&triples);
+                let _ = crate::SYSTEM_ARCH.lock().get_or_insert_with(|| {
+                    crate::inventory::SystemArchitecture::infer(&inv)
+                });
+                serial_println!(
+                    "[N2-SELFHEAL] gate complete heal={} noop={} (k_ai policy mirror)",
+                    report.heal_issues,
+                    report.noop
+                );
+            }
+        }
+
         // Verifica causa do ultimo desligamento
         let last_cause = crate::shutdown::read_last_shutdown_from_boot_log();
         match last_cause {
@@ -1225,6 +1255,9 @@ impl Agent for BootTrustAgent {
         let mut tc = crate::TRUST_CACHE.lock();
         tc.add_exempt_token(1);
         tc.load_boot_policy(&["net_", "fs_write", "exec_"]);
+        // ADR-0042 N2: Trust por (token, agent, skill) para SelfHeal / inventário
+        tc.trust_allow_agent(1, "self_heal", "recover", _tick);
+        tc.trust_allow_agent(1, "self_heal", "inventory_vid", _tick);
         kjson!("AGENT", "Trust", "ready", "tick", _tick);
         AgentTickResult::Done
     }

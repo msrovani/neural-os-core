@@ -3,7 +3,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::serial_println;
+use k_nano::serial_println;
 
 // ---------------------------------------------------------------------------
 // #166 Multi-mode Trust
@@ -55,7 +55,7 @@ const SECRET_PATTERNS: &[&str] = &[
     "sk-", "ghp_", "gho_", "ghu_", "xoxb-", "xoxp-",
 ];
 
-/// Substitui padrões sensíveis por "*" (UTF-8 safe).
+/// Substitui padrões sensíveis por "*" em uma string (UTF-8 safe).
 pub fn mask_secrets(input: &str) -> String {
     let lower = input.to_ascii_lowercase();
     let mut result = String::with_capacity(input.len());
@@ -74,6 +74,7 @@ pub fn mask_secrets(input: &str) -> String {
         }
         if let Some(redact_len) = matched {
             let end = core::cmp::min(i + redact_len, bytes.len());
+            // Avança por boundaries UTF-8
             let mut j = i;
             while j < end {
                 let ch_len = match bytes[j] {
@@ -84,7 +85,9 @@ pub fn mask_secrets(input: &str) -> String {
                 };
                 result.push('*');
                 j += ch_len;
-                if j > end { break; }
+                if j > end {
+                    break;
+                }
             }
             i = j;
         } else {
@@ -94,8 +97,7 @@ pub fn mask_secrets(input: &str) -> String {
                 b if b & 0xF0 == 0xE0 => 3,
                 _ => 4,
             };
-            let take = ch_len.min(bytes.len() - i);
-            if let Ok(s) = core::str::from_utf8(&bytes[i..i + take]) {
+            if let Ok(s) = core::str::from_utf8(&bytes[i..i + ch_len.min(bytes.len() - i)]) {
                 result.push_str(s);
             }
             i += ch_len;
@@ -168,6 +170,7 @@ impl TrustCache {
         alloc::format!("{}:{}", agent, skill)
     }
 
+    /// Concede trust por (token, agent, skill).
     pub fn trust_allow_agent(&mut self, token: u64, agent: &str, skill: &str, now: u64) {
         let key = Self::agent_skill_key(agent, skill);
         self.trust_allow(token, &key, now);
@@ -211,6 +214,8 @@ impl TrustCache {
     }
 
     fn is_exempt(&self, token: u64) -> bool {
+        // Somente tokens explicitamente adicionados via add_exempt_token().
+        // Legacy(0/1) NÃO são mais isentos por default (P06).
         self.exempt_tokens.contains(&token)
     }
 
@@ -219,18 +224,33 @@ impl TrustCache {
         serial_println!("[TRUST] exempt token={} (sistema)", token);
     }
 
-    /// NÃO auto-concede TotalAccess. Observe/Warn: transitório. Contain/Enforce: nega.
+    /// Verifica confiança. NÃO auto-concede TotalAccess (P05).
+    /// Observe/Warn: permite transitório sem cachear. Contain/Enforce: nega até trust_allow.
     pub fn check_or_cache(&mut self, token: u64, skill: &str, now: u64, _ttl: u64) -> bool {
-        if self.is_trusted(token, skill, now) { return true; }
+        if self.is_trusted(token, skill, now) {
+            return true;
+        }
         let key = (token, String::from(skill));
-        if self.denylist.contains_key(&key) { return false; }
+        if self.denylist.contains_key(&key) {
+            return false;
+        }
         match self.global_policy {
             PolicyState::Observe | PolicyState::Warn => {
-                serial_println!("[TRUST] transient allow ({:?}): token={} skill={}", self.global_policy, token, skill);
+                serial_println!(
+                    "[TRUST] transient allow ({:?}): token={} skill={}",
+                    self.global_policy,
+                    token,
+                    skill
+                );
                 true
             }
             PolicyState::Contain | PolicyState::Enforce => {
-                serial_println!("[TRUST] DENY uncached ({:?}): token={} skill={}", self.global_policy, token, skill);
+                serial_println!(
+                    "[TRUST] DENY uncached ({:?}): token={} skill={} — use trust_allow",
+                    self.global_policy,
+                    token,
+                    skill
+                );
                 false
             }
         }
@@ -249,9 +269,10 @@ impl TrustCache {
     }
 
     /// #259: verifica se hardware está apto antes de executar skill
-    pub fn posture_check(skill: &str) -> bool {
-        if skill.contains("net_") && !crate::net::NET_CONFIG.lock().online {
-            serial_println!("[TRUST] Posture: net offline, skill '{}' bloqueada", skill);
+    pub fn posture_check(_skill: &str) -> bool {
+        #[cfg(feature = "kernel")]
+        if _skill.contains("net_") && !crate::net::NET_CONFIG.lock().online {
+            serial_println!("[TRUST] Posture: net offline, skill '{}' bloqueada", _skill);
             return false;
         }
         true
@@ -294,7 +315,7 @@ impl TrustCache {
 
     /// #364: Zero-Trust Syscall — avalia permissão por classe
     pub fn check_syscall(&self, token: u64, skill: &str, class: SyscallClass) -> bool {
-        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         match class {
             SyscallClass::ReadOnly => true,
             SyscallClass::Ephemeral => self.is_trusted(token, skill, now as u64),

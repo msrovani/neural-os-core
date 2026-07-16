@@ -1854,9 +1854,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     registry.register(Box::new(agents::MemoryAgent::new()));
 
-    registry.register(Box::new(agents::BootSelfHealAgent));
-
+    // ADR-0042 N2: Trust antes de SelfHeal para (token,agent,skill) já estar concedido
     registry.register(Box::new(agents::BootTrustAgent));
+    registry.register(Box::new(agents::BootSelfHealAgent));
 
     registry.register(Box::new(crate::memory_agent::MemoryAgent::new()));
 
