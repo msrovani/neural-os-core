@@ -471,6 +471,7 @@ dependencies = [
  "cortex",
  "ed25519-compact",
  "event-bus",
+ "hermes",
  "jarbas",
  "k-nano",
  "k_ai",

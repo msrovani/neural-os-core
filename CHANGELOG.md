@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [1.7.10] — 2026-07-16 — ADR-0042 N4.6 (hermes wired no bin)
+
+### Wired
+- **N4.6** `neural-kernel` → `hermes-crate` (dep direta `package = "hermes"`)
+- `pub use hermes_crate::{actor_registry, apps, cron, hermes, safety, security, wasm*, wifi*, …}`
+- Removidos 37 espelhos monólito (hermes, cron, wasm_rt, skill_*, wifi_*, apps/, …)
+- Alias `hermes-crate` evita conflito com módulos re-exportados
+- Gate `[N4-HERMES] full_wire=OK(hermes-crate)`
+
+### Residual monólito (integração bin)
+- `agents.rs` — fleet nativo + HermesAgent; globals em `main.rs`
+- `cognitive.rs` — engine Sprint 95 (não no crate)
+- `net*` + `rtl8139`/`e1000`/`virtio_net` — NETSTACK singleton + virtio init
+- `fs/*` — VFS monólito (`inference_fs_agent`, `mhi_scheduler`)
+- `aios_api.rs` — CapGate P3
+- `micropython_wasm.rs` — loader via `crate::fs`
+
+### Próximo
+- **N5.7** wire `jarbas` crate
+
 ## [1.7.9] — 2026-07-16 — ADR-0042 N3.5 (cortex wired no bin)
 
 ### Wired

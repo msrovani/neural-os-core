@@ -1823,8 +1823,8 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
 ///   1. Tenta mapa direto por HWID (tabela conhecida)
 ///   2. Usa IA para identificar familia do chip e aplicar mapa correspondente
 ///   3. Heuristica por vendor (fallback)
-pub fn generate_register_map(vid: u16, did: u16) -> Option<crate::generic_wifi::HardwareRegisterMap> {
-    use crate::generic_wifi::HardwareRegisterMap as Hm;
+pub fn generate_register_map(vid: u16, did: u16) -> Option<cortex_crate::HardwareRegisterMap> {
+    use cortex_crate::HardwareRegisterMap as Hm;
 
     // Nivel 1: mapa direto por HWID (da tabela conhecida)
     let direct = match (vid, did) {

@@ -5,7 +5,7 @@
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred); **`v1.7.6`** (2026-07-16) = N4 ✅ CLOSED (hermes orquestra; N4.6 crate link deferred); **`v1.7.7`** (2026-07-16) = N5 ✅ CLOSED (jarbas ego/UI; N5.7 crate link deferred). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred); **`v1.7.6`** (2026-07-16) = N4 ✅ CLOSED (hermes orquestra; N4.6 crate link deferred); **`v1.7.7`** (2026-07-16) = N5 ✅ CLOSED (jarbas ego/UI; N5.7 crate link deferred); **`v1.7.9`** (2026-07-16) = N3.5 cortex wired; **`v1.7.10`** (2026-07-16) = N4.6 hermes wired. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5 critérios de qualidade desta ADR verificados em conjunto.**
 
 
@@ -91,7 +91,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **Goal N2** | Heal honesto + inventário gated + Trust agentic no boot path | ✅ **CLOSED** (critérios funcionais; wire crate = N2.5) |
 
 **Evidência serial:** `logs/boot_n2_20260716_131837.txt` (WHPX short) — Trust allow + inventory + honest noop. Path HEALTH_ISSUE heal também visto em `logs/boot_n2_20260716_131655.txt` (pré fine-gate e1000).  
-**Espelho:** `neural-kernel` espelha `hermes`/`jarbas` até N4.6/N5.7; **k_ai** (N2.5 ✅) + **cortex engine** (N3.5 ✅) wired.
+**Espelho:** `neural-kernel` espelha `jarbas` até N5.7; **k_ai** (N2.5 ✅) + **cortex** (N3.5 ✅) + **hermes** (N4.6 ✅) wired.
 
 ### Checklist N3 (cortex cérebro)
 
@@ -106,7 +106,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 **Evidência serial N3:** `logs/boot_n3_20260716_132753.txt` (WHPX short) — `[STATUS] llm=LOADED` + `[N3-CORTEX] … criteria=MET`.  
 **N3.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — `[GEN] decoded_len=12 text='O tempo esta'` (feature `weather-e2e`).  
-**Defer:** soft-float latency / chat fluente → Sprint Sound; jarbas pleno → N5; wire `hermes` → N4.6.
+**Defer:** soft-float latency / chat fluente → Sprint Sound; jarbas pleno → N5; wire `jarbas` → N5.7.
 
 ### Checklist N4 (hermes orquestra)
 
@@ -116,13 +116,13 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 | **N4.2** ReAct + skills + WASM SFI | ReAct 7 fases; `SKILL_REGISTRY` >0; WASM hub builtins + CapGate P3 allow | ✅ |
 | **N4.3** Cortex orchestration | `global_arena` pending route → `generate_via_model` (sem double routing) | ✅ |
 | **N4.4** Intent e2e EventBus | STT→`USER_INTENT`→cortex **ou** gate `intent_e2e=GATED` + prior weather-e2e L5 | ✅ GATED + prior OK |
-| **N4.5** IPC→jarbas (honesto) | `jarbas_bridge` topics mirror OK; full wire `BLOCKED` (allocator) documentado | ✅ |
-| **N4.6** Link crate `hermes` no bin | Dep direta neural-kernel→hermes | ⏳ N4.6 — monólito espelha hermes até wire crate (padrão N2.5/N3.5) |
+| **N4.5** IPC→jarbas (honesto) | `jarbas_bridge` topics mirror OK; full wire via `hermes-crate` | ✅ |
+| **N4.6** Link crate `hermes` no bin | Dep `hermes-crate` + `pub use` engine; residuals integração bin | ✅ 2026-07-16 (v1.7.10) |
 | **Goal N4** | Orquestrador: intent→skill/ReAct + WASM SFI + cortex path + EventBus + IPC mirror | ✅ **CLOSED** (critérios funcionais; crate = N4.6) |
 
 **Evidência serial N4:** `logs/boot_n4_20260716_144651.txt` (WHPX short) — `[N4-HERMES] … criteria=MET`.  
 **N4.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — EventBus `USER_INTENT` + GEN weatherish.  
-**Defer:** voz/STT quality → Sprint Sound; link crate hermes → N4.6; jarbas ego/UI → N5.
+**Defer:** voz/STT quality → Sprint Sound; jarbas ego/UI → N5; wire `jarbas` → N5.7.
 
 ### Checklist N5 (jarbas ego/UI)
 
@@ -169,7 +169,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai`). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex`). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes`). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas`). Gate `v2.0.0` = N1–N5 funcionais ✅; qualidade voz → Sprint Sound; wire crates N2.5–N5.7 deferred.
+**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai`). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex` v1.7.9). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes` v1.7.10). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas`). Gate `v2.0.0` = N1–N5 funcionais ✅; qualidade voz → Sprint Sound; wire crate N5.7 deferred.
 
 ---
 

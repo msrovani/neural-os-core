@@ -80,17 +80,11 @@ mod agency;
 
 mod agency_importer;
 
-mod cron;
-
 mod display;
 
 mod global_arena;
 
-mod hermes;
-
 mod identity;
-
-mod mcp;
 
 mod interrupts;
 
@@ -114,10 +108,16 @@ pub use k_nano::globals::EVENT_BUS;
 pub use cortex_crate::{
     arena, bitnet_avx2, burn_flex, delta, nn, r3, tensor, trinity, tv_dsl,
 };
+// ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
+pub use hermes_crate::{
+    actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, generic_wifi,
+    hermes, hub, mcp, optimizer, plugin_hub, rustpython_no_std, safety, search_agent, security,
+    self_update, skill_gen, skill_loader, skill_observer, skill_opt, structured_decode,
+    voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat, wifi_iwlwifi, wifi_msix,
+    wifi_protocol,
+};
 
 mod serial;
-
-mod skill_loader;
 
 mod xhci;
 
@@ -147,19 +147,11 @@ mod netdiag;
 
 mod network_agent;
 
-mod optimizer;
-
 mod proto;
 
 mod rtl8139;
 
 mod e1000;
-
-mod safety;
-
-mod security;
-
-mod skill_observer;
 
 mod usb_msc;
 
@@ -168,8 +160,6 @@ mod virtio_net;
 mod virtio_gpu;
 
 mod profile;
-
-mod wasm;
 
 mod gguf;
 
@@ -181,19 +171,7 @@ mod bpe;
 
 mod demo_flags;
 
-mod apps;
-
-mod skill_gen;
-
-mod browser_agent;
-
 mod gpu;
-
-mod wifi_agent;
-
-mod generic_wifi;
-
-mod wifi_protocol;
 
 mod vision_agent;
 
@@ -201,13 +179,7 @@ mod uvc_driver;
 
 mod hw_rng;
 
-mod wifi_msix;
-
 mod link_watcher;
-
-mod wifi_compat;
-
-mod wifi_iwlwifi;
 
 mod boot_logger;
 
@@ -241,29 +213,14 @@ mod ahci;
 
 mod memory_systems;
 
-mod app_store;
-
 mod multi_user;
 
-mod hub;
-mod approval;
-mod actor_registry;
 mod hnsw;
-mod search_agent;
-mod self_update;
-mod structured_decode;
 mod context_window;
-mod plugin_hub;
 mod training_agent;
 
-mod elf_loader;
-
-mod wasm_rt;
-mod wasm_exec;
 mod micropython_wasm;
 mod aios_api;
-mod skill_opt;
-mod rustpython_no_std;
 mod cognitive;
 
 mod audio;
@@ -1123,12 +1080,13 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
         ),
     }
     serial_println!(
-        "[N4-HERMES] IPC→jarbas topics_mirror={} full_wire=BLOCKED(N4.6 allocator)",
-        if topics_ok { "OK" } else { "DRIFT" }
+        "[N4-HERMES] IPC→jarbas topics_mirror={} full_wire={}",
+        if topics_ok { "OK" } else { "DRIFT" },
+        if topics_ok { "OK(hermes-crate)" } else { "DRIFT" }
     );
 
     // Critérios funcionais N4 (ADR): intent routing; ReAct+skills+WASM SFI; cortex path;
-    // EventBus intent e2e (live ou gated com evidência weather-e2e). Crate link → N4.6.
+    // EventBus intent e2e (live ou gated com evidência weather-e2e). Crate link N4.6 ✅.
     let n41 = topics_ok && skills > 0;
     let n42 = skills > 0 && WASM_HUB_BUILTINS >= 2 && cap_allow >= 2;
     let n43 = llm_loaded;
@@ -1140,7 +1098,7 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
     let n45 = topics_ok;
     let met = n41 && n42 && n43 && n44 && n45;
     serial_println!(
-        "[N4-HERMES] gate complete n4.1={} n4.2={} n4.3={} n4.4={} n4.5={} criteria={} (N4.6 crate hermes link deferred)",
+        "[N4-HERMES] gate complete n4.1={} n4.2={} n4.3={} n4.4={} n4.5={} criteria={} (N4.6 hermes-crate wired)",
         if n41 { "OK" } else { "FAIL" },
         if n42 { "OK" } else { "FAIL" },
         if n43 { "OK" } else { "FAIL" },
