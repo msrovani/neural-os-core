@@ -1,11 +1,11 @@
 # ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
 
 **Data:** 2026-07-14 · atualizado 2026-07-16  
-**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 ✅ CLOSED**; **N3 ✅ CLOSED**)  
+**Status:** Accepted — plano diretor de adequação (**N1 done**; **N2 ✅ CLOSED**; **N3 ✅ CLOSED**; **N4 ✅ CLOSED**)  
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
-**Sprint:** ADR-0042 (pista ativa N4→N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
+**Sprint:** ADR-0042 (pista ativa N5). Sprint 107 Voice ✅ FECHADA; leftovers voz → Sprint Sound.  
 **Release:** conclusão de **N1–N5 = versão `v2.0.0`**. Até lá: linha **`1.x`** de adequação.  
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED (N3 parcial); **`v1.7.4`** (2026-07-16) = N2 ✅; **`v1.7.5`** (2026-07-16) = N3 ✅ CLOSED (cortex cérebro; N3.5 crate link deferred); **`v1.7.6`** (2026-07-16) = N4 ✅ CLOSED (hermes orquestra; N4.6 crate link deferred). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até N1–N5.**
 
 
@@ -106,7 +106,23 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 **Evidência serial N3:** `logs/boot_n3_20260716_132753.txt` (WHPX short) — `[STATUS] llm=LOADED` + `[N3-CORTEX] … criteria=MET`.  
 **N3.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — `[GEN] decoded_len=12 text='O tempo esta'` (feature `weather-e2e`).  
-**Defer:** soft-float latency / chat fluente → Sprint Sound; link crate cortex → N3.5; hermes/jarbas pleno → N4/N5.
+**Defer:** soft-float latency / chat fluente → Sprint Sound; link crate cortex → N3.5; jarbas pleno → N5.
+
+### Checklist N4 (hermes orquestra)
+
+| Item | Aceite | Status |
+|------|--------|--------|
+| **N4.1** Intent routing | HermesAgent `intent_router` + `USER_INTENT`/`HERMES_RESPONSE` no EventBus | ✅ 2026-07-16 QEMU |
+| **N4.2** ReAct + skills + WASM SFI | ReAct 7 fases; `SKILL_REGISTRY` >0; WASM hub builtins + CapGate P3 allow | ✅ |
+| **N4.3** Cortex orchestration | `global_arena` pending route → `generate_via_model` (sem double routing) | ✅ |
+| **N4.4** Intent e2e EventBus | STT→`USER_INTENT`→cortex **ou** gate `intent_e2e=GATED` + prior weather-e2e L5 | ✅ GATED + prior OK |
+| **N4.5** IPC→jarbas (honesto) | `jarbas_bridge` topics mirror OK; full wire `BLOCKED` (allocator) documentado | ✅ |
+| **N4.6** Link crate `hermes` no bin | Dep direta neural-kernel→hermes | ⏳ N4.6 — monólito espelha hermes até wire crate (padrão N2.5/N3.5) |
+| **Goal N4** | Orquestrador: intent→skill/ReAct + WASM SFI + cortex path + EventBus + IPC mirror | ✅ **CLOSED** (critérios funcionais; crate = N4.6) |
+
+**Evidência serial N4:** `logs/boot_n4_20260716_144651.txt` (WHPX short) — `[N4-HERMES] … criteria=MET`.  
+**N4.4 prior HIT:** `logs/boot_whpx_20260716_110041.txt` — EventBus `USER_INTENT` + GEN weatherish.  
+**Defer:** voz/STT quality → Sprint Sound; link crate hermes → N4.6; jarbas ego/UI → N5.
 
 ---
 
@@ -136,7 +152,7 @@ Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
 ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
-**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai`). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex`). Próximo: N4→N5.
+**N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai`). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex`). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes`). Próximo: **N5**.
 
 ---
 

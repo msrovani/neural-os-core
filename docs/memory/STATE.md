@@ -1,6 +1,6 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.7.5 — ADR-0042 N3 ✅ CLOSED
-#   PISTA ATIVA — ADR-0042 N4→N5 (hermes / jarbas)
+#   STATE — neural-os-core v1.7.6 — ADR-0042 N4 ✅ CLOSED
+#   PISTA ATIVA — ADR-0042 N5 (jarbas ego/UI)
 #   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
 #   Backlog voz → Sprint Sound (reaberta) — ADR-0045
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
@@ -16,8 +16,8 @@
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 
 ## Roadmap Atual
-**Versão:** **v1.7.5** (2026-07-16) — ADR-0042 **N3 CLOSED** (cortex LOADED + MAP_WEIGHTS + Trinity + generate path; N3.5 crate deferred).  
-**Runtime marco:** v1.7.2 clima PASS parcial forte+; N2 `logs/boot_n2_20260716_131837.txt`; N3 `logs/boot_n3_20260716_132753.txt`.  
+**Versão:** **v1.7.6** (2026-07-16) — ADR-0042 **N4 CLOSED** (hermes orquestra + ReAct/skills + cortex path + EventBus; N4.6 crate deferred).  
+**Runtime marco:** v1.7.2 clima PASS parcial forte+; N2 `logs/boot_n2_20260716_131837.txt`; N3 `logs/boot_n3_20260716_132753.txt`; N4 `logs/boot_n4_20260716_144651.txt`.  
 **Gate `v2.0.0`:** ainda N1–N5 completos (ADR-0042) — **não** declarar v2.0.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
@@ -25,7 +25,7 @@
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
-| **ADR-0042 N4→N5** | ▶️ **pista ativa** (N3 ✅); fechar hermes orquestra + jarbas ego |
+| **ADR-0042 N5** | ▶️ **pista ativa** (N4 ✅); fechar jarbas ego/UI |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
 | Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC/jarbas… + soft-float latency) — **não bloqueia** ADR-42 |
 | Sprint 108 | ⏳ self-evolving — paralelo; sem gate de voz |
@@ -48,8 +48,8 @@
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
 | **N2** k-ai HW-AI / SelfHeal | ✅ **CLOSED** (v1.7.4) — heal/noop + HEALTH_ISSUE/honest noop + VID+subclass gate + Trust; **N2.5** link `k_ai` no bin ⏳ (espelho) |
 | **N3** cortex cérebro | ✅ **CLOSED** (v1.7.5) — llm=LOADED + MAP_WEIGHTS + Trinity (keyword+R3) + generate path; soft-float fluency → Sound; **N3.5** link `cortex` ⏳ |
-| **N4** hermes orquestra | ▶️ STT path → EventBus → generate_via_model (generator); seed LLM enquanto CTC curto |
-| **N5** jarbas ego/UI | ▶️ TTS `synthesize_tts`/Piper + FB paint; WakeWord registrado |
+| **N4** hermes orquestra | ✅ **CLOSED** (v1.7.6) — intent routing + ReAct/skills + WASM SFI + cortex orchestrate + EventBus; **N4.6** link `hermes` ⏳ |
+| **N5** jarbas ego/UI | ▶️ compositor + persona + voz via Hermes; WakeWord registrado |
 
 ### Sprint 107 close loops (2026-07-16 sessão 2) — **FECHADA (parcial forte+)**
 

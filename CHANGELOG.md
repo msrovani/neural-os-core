@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+## [1.7.6] — 2026-07-16 — ADR-0042 N4 CLOSED (hermes orquestra)
+
+### Closed
+- **N4.1–N4.5** funcionais: HermesAgent intent routing (`USER_INTENT`/`HERMES_RESPONSE`), ReAct 7 fases + `SKILL_REGISTRY` + WASM SFI hub, `global_arena`→`generate_via_model`, EventBus intent e2e (GATED boot default + prior weather-e2e L5), IPC→jarbas topics mirror honesto
+- Serial gate `[N4-HERMES] … criteria=MET` — evidência `logs/boot_n4_20260716_144651.txt`
+- **N4.6** link crate `hermes` no bin = deferred (espelho monólito; padrão N2.5/N3.5)
+- Voz/STT quality → Sprint Sound (não bloqueia N4)
+
+### Não é
+- Crate `hermes` wired no bin, jarbas ego pleno, ou `v2.0.0` (falta N5)
+
 ## [1.7.5] — 2026-07-16 — ADR-0042 N3 CLOSED (cortex cérebro)
 
 ### Closed
