@@ -6,11 +6,16 @@
 //! - Dispatch adaptativo por CPU: scalar, AVX2, bitwise
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
-use alloc::vec;
 
 // ─── HW Detection ───────────────────────────────────────────────────────
 
 fn avx2_available() -> bool {
+    // Soft-float kernel (N1.0): sem SSE no target — never dispatch SIMD.
+    #[cfg(not(any(target_feature = "sse", target_feature = "sse2")))]
+    {
+        return false;
+    }
+    #[cfg(any(target_feature = "sse", target_feature = "sse2"))]
     unsafe {
         let leaf1 = core::arch::x86_64::__cpuid(1);
         let has_hypervisor = (leaf1.ecx & (1 << 31)) != 0;
@@ -38,11 +43,14 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     if k != k2 { return None; }
 
     // Escolhe implementacao baseada no HW
-    if avx2_available() && k >= 16 && n >= 16 {
-        return Some(unsafe { avx2_bitwise_matmul(weight, input, m, k, n) });
-    }
-    if avx2_available() && k >= 8 && n >= 8 {
-        return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
+    #[cfg(any(target_feature = "sse", target_feature = "sse2"))]
+    {
+        if avx2_available() && k >= 16 && n >= 16 {
+            return Some(unsafe { avx2_bitwise_matmul(weight, input, m, k, n) });
+        }
+        if avx2_available() && k >= 8 && n >= 8 {
+            return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
+        }
     }
     Some(scalar_ternary_matmul(weight, input, m, k, n))
 }
@@ -87,8 +95,7 @@ unsafe fn process_quad(quad: u8, inputs: &[f32; 4]) -> f32 {
 }
 
 /// AVX2 bitwise: processa 16 pesos ternarios por iteracao sem unpack.
-/// Carrega 4 bytes (16 pesos) → expande para 16 f32 → FMA com input.
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_feature = "sse", target_feature = "sse2"))]
 unsafe fn avx2_bitwise_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     use core::arch::x86_64::*;
 
@@ -145,7 +152,7 @@ unsafe fn avx2_bitwise_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: u
 
 // ─── AVX2 Original (fallback para shapes pequenos) ──────────────────────
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_feature = "sse", target_feature = "sse2"))]
 fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut [i8]) {
     let packed_row_words = n.div_ceil(4);
     let row_start = row * packed_row_words;
@@ -160,7 +167,7 @@ fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut
     }
 }
 
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_feature = "sse", target_feature = "sse2"))]
 unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     use core::arch::x86_64::*;
 
@@ -196,22 +203,19 @@ pub fn ternary_matmul_adaptive(weight: &PackedTernaryTensor, input: &Tensor) -> 
     let (k, n) = weight.shape;
     let (m, _k2) = input.shape;
 
-    // Para matrizes grandes, usa bitwise AVX2
-    if avx2_available() && k >= 32 && n >= 32 {
-        // Prefetch dos dados de entrada
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
-                input.data.as_ptr() as *const i8);
+    #[cfg(any(target_feature = "sse", target_feature = "sse2"))]
+    {
+        if avx2_available() && k >= 32 && n >= 32 {
+            unsafe {
+                core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
+                    input.data.as_ptr() as *const i8);
+            }
+            return Some(unsafe { avx2_bitwise_matmul(weight, input, m, k, n) });
         }
-        return Some(unsafe { avx2_bitwise_matmul(weight, input, m, k, n) });
+        if avx2_available() && k >= 8 && n >= 8 {
+            return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
+        }
     }
 
-    // Para matrizes medias, AVX2 classico
-    if avx2_available() && k >= 8 && n >= 8 {
-        return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
-    }
-
-    // Scalar fallback
     Some(scalar_ternary_matmul(weight, input, m, k, n))
 }

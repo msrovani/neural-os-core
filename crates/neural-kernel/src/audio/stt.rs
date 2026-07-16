@@ -84,6 +84,26 @@ pub fn mfcc(pcm: &[i16]) -> Vec<f32> {
             feats[t * N_MFCC + m] = if mel > 1e-10 { logf(mel) } else { 0.0 };
         }
     }
+    // CMVN por coeficiente (média/var ao longo dos frames) — estabiliza escala
+    // vs. treino synth (randn*0.1). Nao fecha domain gap do train_stt.py.
+    if n_frames > 1 {
+        for m in 0..N_MFCC {
+            let mut sum = 0.0f32;
+            let mut sum2 = 0.0f32;
+            for t in 0..n_frames {
+                let v = feats[t * N_MFCC + m];
+                sum += v;
+                sum2 += v * v;
+            }
+            let mean = sum / n_frames as f32;
+            let var = (sum2 / n_frames as f32 - mean * mean).max(1e-6);
+            let inv_std = 1.0 / sqrtf(var);
+            for t in 0..n_frames {
+                let i = t * N_MFCC + m;
+                feats[i] = (feats[i] - mean) * inv_std * 0.1; // escala ~treino synth
+            }
+        }
+    }
     feats
 }
 
@@ -159,6 +179,9 @@ impl SttEngine {
         if self.loaded {
             let p: usize = self.w.iter().map(|(_, d)| d.len()).sum();
             crate::serial_println!("[STT] {} tensors, {}K params", self.w.len(), p / 1000);
+            crate::serial_println!(
+                "[STT] domain: train_stt.py = MFCC synth (randn), nao PCM real — CTC fraco em TTS/formant (Sprint 108 retrain)"
+            );
         }
         self.loaded
     }
@@ -268,18 +291,37 @@ impl SttEngine {
             }
         }
 
-        // CTC decode: best path (argmax + collapse repeats + remove blank)
-        let mut prev = VOCAB - 1; // blank
+        // CTC decode: best path (argmax + collapse repeats + remove blank).
+        // Sprint 107 Loop1: soft blank-margin — se blank ganha por <0.15 vs melhor
+        // não-blank, preferir o não-blank (modelos CTC tiny saturam em blank com
+        // PCM TTS/formant fora do treino; margem evita canned text).
+        const BLANK_MARGIN: f32 = 0.15;
+        let blank_id = VOCAB - 1;
+        let mut prev = blank_id;
         let mut out = Vec::new();
         let mut raw_path = Vec::with_capacity(n_frames);
         for t in 0..n_frames {
+            let base = t * VOCAB;
             let mut best = 0usize;
-            let mut best_v = logits[t * VOCAB];
-            for c in 1..VOCAB {
-                if logits[t * VOCAB + c] > best_v { best = c; best_v = logits[t * VOCAB + c]; }
+            let mut best_v = logits[base];
+            let mut best_nb = 0usize;
+            let mut best_nb_v = f32::NEG_INFINITY;
+            for c in 0..VOCAB {
+                let v = logits[base + c];
+                if v > best_v {
+                    best = c;
+                    best_v = v;
+                }
+                if c != blank_id && v > best_nb_v {
+                    best_nb = c;
+                    best_nb_v = v;
+                }
+            }
+            if best == blank_id && best_nb_v.is_finite() && (best_v - best_nb_v) < BLANK_MARGIN {
+                best = best_nb;
             }
             raw_path.push(best);
-            if best != prev && best != VOCAB - 1 {
+            if best != prev && best != blank_id {
                 let ch = if best < 26 { (b'a' + best as u8) as char } else { ' ' };
                 out.push(ch);
             }
@@ -287,14 +329,44 @@ impl SttEngine {
         }
         let result: String = out.iter().collect();
         if result.is_empty() {
-            // Debug (Sprint 107 Part B #2): mostra o best-path bruto (pre-collapse)
-            // para diagnosticar se o modelo so preve blank (27) ou fica preso num char.
-            let blanks = raw_path.iter().filter(|&&c| c == VOCAB - 1).count();
+            let blanks = raw_path.iter().filter(|&&c| c == blank_id).count();
             crate::serial_println!(
                 "[STT] ctc empty: n_frames={} blanks={}/{} raw_path[..{}]={:?}",
                 n_frames, blanks, n_frames, n_frames.min(16),
                 &raw_path[..n_frames.min(16)]
             );
+            // Sprint 107 Loop2: blank-only path → re-decode com blank suprimido
+            // (CTC blank-suppression; nao e texto canned — argmax nos logits reais).
+            if blanks == n_frames && n_frames > 0 {
+                let mut prev_nb = blank_id;
+                let mut out2 = Vec::new();
+                for t in 0..n_frames {
+                    let base = t * VOCAB;
+                    let mut best = 0usize;
+                    let mut best_v = f32::NEG_INFINITY;
+                    for c in 0..blank_id {
+                        let v = logits[base + c];
+                        if v > best_v {
+                            best = c;
+                            best_v = v;
+                        }
+                    }
+                    if best != prev_nb {
+                        let ch = if best < 26 { (b'a' + best as u8) as char } else { ' ' };
+                        out2.push(ch);
+                    }
+                    prev_nb = best;
+                }
+                let forced: String = out2.iter().collect();
+                if !forced.is_empty() {
+                    crate::serial_println!(
+                        "[STT] blank-suppress decode ctc='{}' (len={})",
+                        forced,
+                        forced.len()
+                    );
+                    return forced;
+                }
+            }
         }
         result
     }

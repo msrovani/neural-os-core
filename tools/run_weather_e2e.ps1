@@ -1,13 +1,17 @@
 # Orchestrates WHPX weather e2e with serial bridge via run-qemu-whpx.ps1
-# Kill/wait default: 18 minutes — chat frame + soft_stride (~2 min/KV-step).
+# Kill/wait default: 15 minutes (Sprint 107 loops). Override: -KillMinutes 18
 # NOTA: NAO usar Start-Job — jobs PS podem impedir bind TCP do serial_bridge.
 # GUI: passa -Window ao run-qemu-whpx.ps1 (sem -nographic / -display none).
+param(
+    [int]$KillMinutes = 15,
+    [switch]$Window = $true,
+    [int]$Smp = 2
+)
 $ErrorActionPreference = "Continue"
 $Root = Split-Path $PSScriptRoot -Parent
 Set-Location $Root
 
-# Auto-kill deadline: 18 minutes — BPE chat≈7 + soft_stride=2 + max_gen=5.
-$KillMinutes = 18
+# Auto-kill deadline — BPE chat + soft_stride + max_gen; default 15m (Sprint 107).
 
 Get-Process qemu-system-x86_64 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue | Where-Object {
@@ -28,12 +32,14 @@ $psErr = Join-Path $Root "logs\whpx_runner_err.log"
 # -Window: QEMU GUI on screen (screenshots). Normal style so console runner is visible too.
 # Nao usar -NoSerialBridge — bridge sobe antes do QEMU e morre no finally do script.
 # SMP=2: WHPX mais estavel no soft-float 2B (SMP=4 ja saiu cedo no FWD).
+$qemuArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Root "run-qemu-whpx.ps1"), "-Smp", "$Smp")
+if ($Window) { $qemuArgs += "-Window" }
 $runner = Start-Process -FilePath "powershell.exe" `
-    -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $Root "run-qemu-whpx.ps1"), "-Window", "-Smp", "2") `
+    -ArgumentList $qemuArgs `
     -WorkingDirectory $Root `
     -PassThru -WindowStyle Normal
 
-Write-Host "runner pid=$($runner.Id) kill_timeout=${KillMinutes}m (GUI -Window)"
+Write-Host "runner pid=$($runner.Id) kill_timeout=${KillMinutes}m Window=$Window Smp=$Smp"
 Write-Host "runner_out_hint=$psOut (unused; use boot_whpx + bridge logs)"
 
 function Test-ReadableGenerate {

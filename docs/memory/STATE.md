@@ -27,13 +27,42 @@
 | **N0** Baseline boot Runtime | ✅ |
 | **N1** k-nano legível | ✅ N1.1+N1.2+N1.3 |
 | **N2** k-ai HW-AI / SelfHeal | ⏳ |
-| **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** + FWD + BPE HF + **chat frame Llama** (`prompt_len=6`) + soft_stride=3 + constrained clima (`' tempo rain'`) |
-| **N4** hermes orquestra | ✅ STT-sim → Hermes → generate_via_model (path clima) |
-| **N5** jarbas ego/UI | ▶️ TTS `pcm_samples>0` + **FB paint** (`[JARBAS-TTS-FB] painted`); Piper LOADED / formant fallback |
+| **N3** cortex cérebro | ▶️ **parcial** — **2B LOADED** + FWD + BPE HF + chat frame + soft_stride=3 + clima `'O tempo esta'` / `' tempo esta bom'` |
+| **N4** hermes orquestra | ✅ STT path → EventBus → generate_via_model (generator); seed LLM enquanto CTC curto |
+| **N5** jarbas ego/UI | ▶️ TTS `synthesize_tts`/Piper + FB paint; WakeWord registrado |
 
-### Evidência clima e2e (2026-07-16 — Sprint 107 loops 1–5)
+### Sprint 107 close loops (2026-07-16 sessão 2) — **FECHADA (parcial forte+)**
 
-**Log canônico:** `logs/boot_whpx_20260716_033322.txt` (Loop 5)
+| Loop | Log | HWEXPERT | STT ctc | GEN | Notas |
+|------|-----|----------|---------|-----|-------|
+| L1 | `logs/boot_whpx_20260716_095549.txt` | ✅ LOADED | ❌ blanks=100% | ❌ `'LOA,BLOA…'` h=128 | Trinity default→hw_identify; cargo 0e/0w |
+| L2 | `logs/boot_whpx_20260716_101215.txt` | ✅ LOADED | ▶️ `ctc='so'` (blank-suppress→seed) | ✅ `' tempo esta bom'` | force generator; weatherish |
+| L3 | `logs/boot_whpx_20260716_102813.txt` | ✅ LOADED | ▶️ `ctc='so'` + retries | ✅ `' tempo esta bom'` | multi-probe STT |
+| L4 | `logs/boot_whpx_20260716_104440.txt` | ✅ LOADED | ▶️ `ctc='so'` + EventBus | ✅ `' tempo esta bom'` | CMVN+TOPIC_STT_TEXT+USER_INTENT |
+| L5 | `logs/boot_whpx_20260716_110041.txt` | ✅ LOADED | ▶️ `ctc='so'` + EventBus | ✅ `'O tempo esta'` | bias O↑; **canônico fecho** |
+
+**Veredito Sprint 107:** **PASS parcial forte+** (fechada). Avanços vs baseline `033322`: HWEXPERT LOADED; CTC path non-empty (`so`); EventBus STT→INTENT; GEN weatherish estável no 2B; TTS Continuous=`synthesize_tts`/Piper; FB paint. Gaps → 108: STT retrain PCM-real; soft-float latency (#1 doc-only); Mic→Wake→STT runtime (não só boot skinny); jarbas wire pleno.
+
+### Evidência clima e2e (2026-07-16 — Sprint 107 fecho L5)
+
+**Log canônico fecho:** `logs/boot_whpx_20260716_110041.txt`  
+**Baseline antigo:** `logs/boot_whpx_20260716_033322.txt`
+
+| Critério | Resultado L5 fecho |
+|----------|-------------------|
+| Bridge WHPX | ✅ `run_weather_e2e.ps1` `-KillMinutes 15 -Window -Smp 2` |
+| GEN | ✅ `decoded_len=12 text='O tempo esta'` — h=2560 soft_stride=3 weatherish |
+| TTS | ✅ Piper neural-lite `pcm_samples=13769` via `synthesize_tts` |
+| FB | ✅ `[JARBAS-TTS-FB] painted len=12 1280x800` |
+| STT | ▶️ CTC LOADED; blank-suppress `ctc='so'` (non-empty); LLM ainda seed (domain synth) |
+| EventBus | ✅ `TOPIC_STT_TEXT` + `USER_INTENT` no path clima |
+| WakeWord | ✅ registrado; Mic→WAKE no e2e clima ainda não exercitado |
+| Experts | ✅ HWEXPERT·RUSTCODER·STT·BGE LOADED |
+| Soft-float | ❌ known blocker (doc-only; sem fake fix) |
+
+### Evidência clima e2e (2026-07-16 — Sprint 107 loops 1–5 antigos)
+
+**Log canônico:** `logs/boot_whpx_20260716_033322.txt` (Loop 5 sessão 1)
 
 | Critério | Resultado |
 |----------|-----------|

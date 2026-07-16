@@ -2361,7 +2361,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             crate::load_status::AssetKind::Llm,
             crate::load_status::LoadStatus::Loaded,
         );
-        model_loaded = true;
+        // model_loaded already true from FAT/QEMU paths; load_status is the banner source.
     } else {
         serial_println!("[LLM-TEST] no model — ABSENT");
         crate::boot_logger::log("BOOT: LLM ABSENT — sem ramdisk/loader/FAT modelo utilizavel");
@@ -2383,15 +2383,36 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         // STT real no path: formant seed → CTC; se vazio, tenta neural-lite Piper curto.
         let pcm_probe = crate::audio::tts::synthesize(stt_seed);
         let mut stt_ctc = crate::audio::stt::transcribe_global(&pcm_probe);
-        if stt_ctc.is_empty() && crate::audio::skills::piper_is_loaded() {
+        // Sprint 107 Loop3: retry Piper tambem se CTC curto (<4 letras) — blank-suppress
+        // pode devolver "so" e antes pulava o retry (so checava is_empty).
+        let ctc_alpha = |s: &str| s.chars().filter(|c| c.is_ascii_alphabetic()).count();
+        if ctc_alpha(&stt_ctc) < 4 && crate::audio::skills::piper_is_loaded() {
             let pcm2 = crate::audio::skills::synthesize_tts("tempo");
-            stt_ctc = crate::audio::stt::transcribe_global(&pcm2);
+            let ctc2 = crate::audio::stt::transcribe_global(&pcm2);
             serial_println!(
-                "[JARBAS-STT] retry piper-pcm len={} ctc_len={} ctc='{}'",
+                "[JARBAS-STT] retry piper-pcm len={} ctc_len={} ctc='{}' (prev='{}')",
                 pcm2.len(),
-                stt_ctc.len(),
+                ctc2.len(),
+                ctc2,
                 stt_ctc
             );
+            if ctc_alpha(&ctc2) > ctc_alpha(&stt_ctc) {
+                stt_ctc = ctc2;
+            }
+        }
+        // Terceiro probe: frase curta "dia" (fonemas distintos) se ainda fraco
+        if ctc_alpha(&stt_ctc) < 4 && crate::audio::skills::piper_is_loaded() {
+            let pcm3 = crate::audio::skills::synthesize_tts("dia sol");
+            let ctc3 = crate::audio::stt::transcribe_global(&pcm3);
+            serial_println!(
+                "[JARBAS-STT] retry2 piper-pcm len={} ctc_len={} ctc='{}'",
+                pcm3.len(),
+                ctc3.len(),
+                ctc3
+            );
+            if ctc_alpha(&ctc3) > ctc_alpha(&stt_ctc) {
+                stt_ctc = ctc3;
+            }
         }
         serial_println!(
             "[JARBAS-STT] pcm_len={} ctc_len={} ctc='{}'",
@@ -2399,6 +2420,25 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             stt_ctc.len(),
             stt_ctc
         );
+        // EventBus skinny: publica CTC real (mesmo curto) + USER_INTENT com prompt LLM.
+        // Fecha Mic→STT→LLM visibilidade sem fingir que CTC curto e frase climatica.
+        {
+            let ctc_payload = if stt_ctc.is_empty() {
+                alloc::string::String::from("[ctc empty]")
+            } else {
+                stt_ctc.clone()
+            };
+            let _ = crate::EVENT_BUS.publish(crate::Event {
+                id: 0,
+                topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
+                payload: ctc_payload.into_bytes(),
+                token: crate::CapabilityToken::Legacy(1),
+            });
+            serial_println!(
+                "[JARBAS-STT] EventBus TOPIC_STT_TEXT published (ctc_nonempty={})",
+                !stt_ctc.is_empty()
+            );
+        }
         let stt_owned = if stt_ctc.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 4 {
             if crate::bpe::weatherish_hit_count(&stt_ctc) >= 1
                 || stt_ctc.contains("temp")
@@ -2410,13 +2450,29 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 alloc::string::String::from(stt_seed)
             }
         } else {
-            serial_println!("[JARBAS-STT-SIM] {} (ctc empty/short)", stt_seed);
+            if !stt_ctc.is_empty() {
+                serial_println!(
+                    "[JARBAS-STT] path_ctc_nonempty='{}' → seed LLM (synth-train domain gap)",
+                    stt_ctc
+                );
+            } else {
+                serial_println!("[JARBAS-STT-SIM] {} (ctc empty/short)", stt_seed);
+            }
             alloc::string::String::from(stt_seed)
         };
+        let _ = crate::EVENT_BUS.publish(crate::Event {
+            id: 0,
+            topic: alloc::string::String::from("USER_INTENT"),
+            payload: stt_owned.as_bytes().to_vec(),
+            token: crate::CapabilityToken::Legacy(1),
+        });
+        serial_println!("[JARBAS-STT] EventBus USER_INTENT published len={}", stt_owned.len());
         let stt = stt_owned.as_str();
         if crate::cortex::model_is_loaded() {
-            serial_println!("[HERMES] weather intent → cortex generate_via_model");
-            let raw = crate::cortex::generate_via_model(stt);
+            // Sprint 107 Loop2: forçar rota generator (LLM 2B). Sem isso, Trinity
+            // defaultava hw_identify e — com HWEXPERT LOADED — gerava vocab=64 lixo.
+            serial_println!("[HERMES] weather intent → cortex generate_via_model (generator)");
+            let raw = crate::cortex::generate_via_model_with_route(stt, "generator");
             if raw.is_empty() {
                 serial_println!("[JARBAS-TTS] FAILED empty generate");
             } else {

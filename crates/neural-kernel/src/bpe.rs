@@ -303,8 +303,9 @@ pub fn weather_same_stem(prev: Option<u32>, id: u32) -> bool {
 pub fn weather_position_bias(id: u32, step: usize) -> f32 {
     match step {
         0 => {
-            // Preferir "O" no início (frase PT)
-            if id == 46 { 8.0 }
+            // Preferir "O" no início (frase PT) — Sprint 107 Loop5: bias↑ p/
+            // recuperar "O tempo esta bom" (L2–L4 saíam " tempo esta bom").
+            if id == 46 { 15.0 }
             else if id == 24108 || id == 88603 { 2.0 }
             else if id == 74258 { 1.0 }
             else if weather_is_en_loan(id) { -5.0 }

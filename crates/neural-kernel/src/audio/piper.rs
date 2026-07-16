@@ -20,7 +20,6 @@
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
-use alloc::format;
 use libm::expf;
 
 pub const PIPER_SR: u32 = 22050;
