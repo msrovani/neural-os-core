@@ -80,10 +80,19 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             bootloader_api::info::PixelFormat::Rgb => "RGB",
             _ => "OTHER",
         };
-        let bpp = match info.pixel_format {
-            bootloader_api::info::PixelFormat::Bgr => { k_nano::serial_println!("[DISPLAY] PixelFormat: Bgr (B primeiro)"); 3u32 },
-            bootloader_api::info::PixelFormat::Rgb => { k_nano::serial_println!("[DISPLAY] PixelFormat: Rgb (R primeiro) — invertendo canais!"); 3u32 },
-            _ => { k_nano::serial_println!("[DISPLAY] PixelFormat: {} — assumindo 4 bytes/pixel", pixel_name); 4u32 },
+        // bytes/pixel REAL reportado pelo bootloader (GOP). Hardcodar 3 quebra
+        // framebuffers BGRA/BGRX de 32 bits (QEMU/OVMF e a maioria do HW): cada
+        // pixel escreve 3 bytes num slot de 4 e cada linha usa stride errado, o
+        // que "escorrega" a imagem na diagonal e vira chuviscos. Confiar em
+        // info.bytes_per_pixel cobre tanto 24-bit (=3) quanto 32-bit (=4).
+        let bpp = {
+            let b = info.bytes_per_pixel as u32;
+            if b == 0 { 4 } else { b }
+        };
+        match info.pixel_format {
+            bootloader_api::info::PixelFormat::Bgr => k_nano::serial_println!("[DISPLAY] PixelFormat: Bgr (B primeiro) bytes/pixel={}", bpp),
+            bootloader_api::info::PixelFormat::Rgb => k_nano::serial_println!("[DISPLAY] PixelFormat: Rgb (R primeiro) — invertendo canais! bytes/pixel={}", bpp),
+            _ => k_nano::serial_println!("[DISPLAY] PixelFormat: {} bytes/pixel={}", pixel_name, bpp),
         };
         // Stride da UEFI em bytes (= pixels por linha * bytes por pixel)
         let fb_stride = info.stride as u32 * bpp;
