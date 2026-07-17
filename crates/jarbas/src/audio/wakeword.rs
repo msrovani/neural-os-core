@@ -65,9 +65,9 @@ impl WakeWordML {
 const WAKEWORD_MANIFEST: AgentManifest = AgentManifest {
     name: "wakeword",
     kind: AgentKind::Skill,
-    schedule: ScheduleKind::EventDriven,
+    schedule: ScheduleKind::Continuous,
     auto_start: true,
-    persist: false,
+    persist: true,
 };
 
 pub struct WakeWordAgent {

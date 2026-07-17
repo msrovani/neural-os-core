@@ -1,4 +1,4 @@
-[package]
+﻿[package]
 name = "boot"
 version = "0.1.0"
 edition = "2021"
@@ -6,4 +6,6 @@ publish = false
 
 [build-dependencies]
 bootloader = "0.11"
-neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none", features = ["fat-boot-log"] }
+# fat-boot-log OFF: write B*.LOG no boot varre FAT inteira (PIO) e trava WHPX minutos.
+# Ative só para captura em disco sem serial: features = ["fat-boot-log"]
+neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none" }

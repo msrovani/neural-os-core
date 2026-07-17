@@ -35,3 +35,7 @@ pub mod parallel_matmul;
 pub mod tensor;
 pub mod trinity;
 pub mod tv_dsl;
+pub mod ngram_spec;
+pub mod projection;
+pub mod neuos_probe;
+pub mod kv_h2o;

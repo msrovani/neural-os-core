@@ -256,8 +256,8 @@ impl Agent for OptimizerAgent {
         // MHI Scheduler: promove/demove tiers por padrao de acesso
         k_ai::fs::mhi_scheduler::mhi_scheduler_tick(_tick);
 
-        // MegaTrain: prefetch overlap I/O + compute
-        k_nano::mhi::megatrain_tick();
+        // MHI Ativo: soft-migrate (metadata + DRAM memcpy; DMA disk/VRAM deferred)
+        k_nano::mhi::mhi_tick(_tick);
 
         // #163: Snapshot de config a cada 1000 ticks
         if self.tick_counter % 1000 == 0 {

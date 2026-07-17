@@ -1,13 +1,25 @@
 # ADR-0047-GPU: GPU Compute Pipeline — Matmul Ternário, Persistent Kernel, VRAM Unificada
 
 **Data:** 2026-07-16  
-**Status:** Proposta — análise completa de 12+ projetos 2025-2026  
+**Status:** Accepted (MVP parcial) — SESSION_126–127; G1–G5 PoC (G5 50μs aspiracional); DP4A defer  
+
 **Complemento de:** ADR-0047 (LatentBus + EvolveAgent + NeuOS Probe)  
 **Depende de:** ADR-0029 (GPU Architecture), ADR-0037 (SMP+GPU), ADR-0041 Cap P5 (DMA pin), ADR-0043 (CubeCL 20 patterns)  
 **Sprint:** 109+ (paralelo com ADR-0042 N2→N5 e ADR-0047 pilares 1-3)  
 **Hardware alvo:** Intel Gen9+ iGPU, NVIDIA GTX 1050 (Pascal, sm_61), VirtIO-GPU (QEMU)
 
 ---
+
+## 0. MVP PoC (SESSION_126–127)
+
+| Item | Status |
+|------|--------|
+| G1 persistent work-queue | ✅ `gpu/work_queue.rs` |
+| G2 matmul path + gate HW/CPU_FALLBACK | ✅ `backend::adr0047_compute_gate` |
+| G3 SASOS-lite unified map | ✅ `gpu/sasos.rs` |
+| G4 H2O + pages (CPU) | ✅ `cortex/kv_h2o.rs` |
+| G5 pipeline stages (CPU timing) | ✅ `gpu/pipeline_g5.rs` — 50μs/token aspiracional até shader HW |
+| N-gram DP4A verify | ⏳ defer (precisa G2 HW real) |
 
 ## Índice
 
@@ -25,6 +37,17 @@
 12. [Riscos e Mitigações](#12-riscos-e-mitigações)
 
 ---
+
+## 0. MVP PoC (SESSION_126+)
+
+| Item | Status |
+|------|--------|
+| G1 persistent work-queue | ✅ `gpu/work_queue.rs` |
+| G2 matmul path + gate HW/CPU_FALLBACK | ✅ `backend::adr0047_compute_gate` |
+| G3 SASOS-lite unified map | ✅ `gpu/sasos.rs` |
+| G4 H2O + pages (CPU) | ✅ `cortex/kv_h2o.rs` |
+| G5 pipeline stages (CPU timing) | ✅ `gpu/pipeline_g5.rs` — target 50μs/token = aspiracional até shader HW |
+| N-gram DP4A verify | ⏳ defer (precisa G2 HW real) |
 
 ## 1. Executive Summary
 
@@ -261,6 +284,8 @@ Aceleração de inferência **sem draft model, sem VRAM extra**:
 - Resultado: **2× speed** no Gemma 4 26B MoE com T4, zero overhead
 
 **Sinergia com GPU pipeline**: N-gram gera drafts que o pipeline GPU verifica via DP4A. É o mecanismo de speculative decoding mais leve que existe — ideal para nosso orçamento de VRAM (2GB) onde não cabe um draft model separado. Implementação trivial (~150 LOC) que já acelera a inferência enquanto os pilares G1-G5 são construídos.
+
+**Status (SESSION_125):** ✅ lógica OK em CPU/`KvCache` (`cortex/ngram_spec.rs`). Verify paralelo na GPU (DP4A) permanece aberto neste ADR.
 
 ---
 

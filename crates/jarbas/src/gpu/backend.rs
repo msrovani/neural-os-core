@@ -153,7 +153,12 @@ pub unsafe fn init_backend(gpus: &[GpuInfo]) {
 }
 
 pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
+    let _ = crate::gpu::work_queue::submit(crate::gpu::work_queue::GpuOp::MatmulTernary);
     let mut guard = CURRENT_BACKEND.lock();
+    let hw = matches!(
+        guard.as_ref(),
+        Some(GpuAccel::Nvidia(nv)) if nv.pfifo_ready
+    ) || matches!(guard.as_ref(), Some(GpuAccel::Intel(_, _)));
     let result = match guard.as_mut() {
         Some(GpuAccel::Intel(ring, _)) => ring.gpu_matmul(a, b),
         Some(GpuAccel::Nvidia(nv)) => {
@@ -165,7 +170,20 @@ pub fn gpu_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
         _ => None,
     };
     drop(guard);
-    result.or_else(|| cpu_matmul(a, b))
+    let _ = crate::gpu::work_queue::drain(hw && result.is_some());
+    result.or_else(|| {
+        let _ = crate::gpu::work_queue::drain(false);
+        cpu_matmul(a, b)
+    })
+}
+
+/// ADR-0047-G gate: HW if NVIDIA PFIFO ready, else CPU_FALLBACK.
+pub fn adr0047_compute_gate() -> &'static str {
+    let hw = {
+        let guard = CURRENT_BACKEND.lock();
+        matches!(guard.as_ref(), Some(GpuAccel::Nvidia(nv)) if nv.pfifo_ready)
+    };
+    crate::gpu::work_queue::gate_status(hw)
 }
 
 /// NVIDIA GPU matmul: DMA pipeline + CPU fallback.

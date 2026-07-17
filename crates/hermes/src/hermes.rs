@@ -519,7 +519,12 @@ pub fn parse_command(line: &str) -> Command {
                 }
             }
         }
-        if name.eq_ignore_ascii_case("model") || name.eq_ignore_ascii_case("swap") {
+        if name.eq_ignore_ascii_case("model")
+            || name.eq_ignore_ascii_case("swap")
+            || name.eq_ignore_ascii_case("model-fetch")
+            || name.eq_ignore_ascii_case("modelfetch")
+        {
+            // Remainder may be "PATH" or "http://ip:port/path [DEST.GGUF]"
             return Command::ModelSwap(parts.next().unwrap_or("").trim().to_string());
         }
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {

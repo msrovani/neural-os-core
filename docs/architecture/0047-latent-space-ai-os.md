@@ -1,12 +1,25 @@
 # ADR-0047: Três Pilares para a Próxima Geração — LatentBus + EvolveAgent + NeuOS Probe
 
 **Data:** 2026-07-16
-**Status:** Proposta — análise completa de 20+ projetos/papers 2025-2026
+**Status:** Accepted (MVP parcial) — SESSION_126; PoC LatentBus + Evolve WASM + NeuOS Probe fase 1
 **Depende de:** ADR-0041 (Cap Rings P0-P9), ADR-0042 (K²CHJ N1-N5), ADR-0046 (GGUF Streaming), Sprint 106 (WASM runtime), Sprint 108 (Self-Evolving Agents)
 **Sprint:** 109+ (pilares paralelos com ADR-0042)
 **Versão alvo:** v2.1.0+ (pilares 1-3 não bloqueiam v2.0.0)
 
 ---
+
+## 0. MVP PoC (SESSION_126) — feito / defer / descartado
+
+| Item | Status |
+|------|--------|
+| LatentBus `[f16;256]` + publish generate + Hermes recv | ✅ |
+| Evolve WASM hot_swap/rollback + SleepCycle DREAM | ✅ |
+| Evolve Genesis (1 child WASM, ratchet) | ✅ SESSION_127 |
+| NeuOS Probe fase 1 (weight stats / soul stub) | ✅ |
+| N-gram spec + empirical bench | ✅ SESSION_125/127 |
+| **NeuOS ISA decompilação plena** | ❌ **DESCARTADO** — BitNet ternário sem ISA decompilável confiável |
+| **LatentBus cross-modelo adapter treinável** | ❌ **DESCARTADO** — overhead sem hot-path multi-modelo hoje |
+| Scheduler neural / Aeon memory | ⏳ defer (non-goals) |
 
 ## Índice
 
@@ -37,6 +50,17 @@
 10. [Riscos e Mitigações](#10-riscos-e-mitigações)
 
 ---
+
+## 0. MVP PoC (SESSION_126) — feito / defer
+
+| Item | Status |
+|------|--------|
+| LatentBus `[f16;256]` + publish generate + Hermes recv | ✅ |
+| Evolve WASM hot_swap/rollback + SleepCycle DREAM | ✅ |
+| NeuOS Probe fase 1 (weight stats / soul stub) | ✅ |
+| N-gram spec (SESSION_125) | ✅ |
+| Cross-modelo adapter / Genesis / ISA decompilação | ⏳ defer |
+| Scheduler neural / Aeon memory | ⏳ defer (non-goals) |
 
 ## 1. Executive Summary
 
@@ -454,6 +478,13 @@ Resultados no Gemma 4 26B MoE com T4 GPU:
 
 Ordem de implementação: N-gram spec é o "free lunch" mais imediato — custo quase zero, ganho 2×, implementação trivial. Deve vir antes dos pilares GPU.
 
+**Status (2026-07-16, SESSION_125):** ✅ **OK** em `crates/cortex/src/ngram_spec.rs` + `generate_speculative`.
+- Hash LCG N=8 → mapa last-writer-wins (índice de continuação) → draft M=4
+- `draft[0]` só entra se bate com argmax dos logits do passo anterior
+- `forward_with_kv_all_logits` + `verify_draft` + truncate KV sem re-forward dos aceitos
+- Bonus token do último logits aceito; fallback autoregressivo se miss
+- Speedup ~2× = claim SotA (Gemma/T4); **não** medido ainda no BitNet bare-metal
+
 ---
 
 ## 4. Gap Analysis: neural-os-core vs SotA
@@ -470,7 +501,7 @@ Ordem de implementação: N-gram spec é o "free lunch" mais imediato — custo 
 | **Hot-swap código** | Não existe | symbiont.rs (~1ns dylib), ZYO (eBPF), MUE-X (AST) | **Total** — sem mecanismo |
 | **Comunicação GPU-native** | CPU-only (`Vec<f32>` Tensor) | neurOS (PyTorch GPU), Yantra (Sutra→tensor op graph) | **Grande** — mas não bloqueante (nosso contexto CPU) |
 | **Programação gradient-free** | Prompt engineering | NeuOS soul vectors (7D PCA → 100% acurácia) | **Enorme** — paradigma novo |
-| **Inferência: speculative decoding** | Geração autoregressiva pura — 1 token/forward | N-gram spec (llama.cpp): rolling hash → draft M tokens → GPU verify em paralelo. 2× speed, zero VRAM extra | **Médio** — free lunch imediato, ~150 LOC |
+| **Inferência: speculative decoding** | N-gram spec ✅ OK (`ngram_spec.rs`, SESSION_125); Medusa também presente | N-gram + draft model / Medusa heads | **Baixo** — lógica OK; benchmark empírica + GPU verify DP4A abertos |
 
 ---
 

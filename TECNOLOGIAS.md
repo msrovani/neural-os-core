@@ -2,7 +2,7 @@
 ## Registro de Propriedade Intelectual e Inovação
 
 **~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
-**Versão release:** v1.8.0 (2026-07-16)
+**Versão release:** v1.8.5 TESTE / NÃO ESTÁVEL (2026-07-16)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
@@ -35,7 +35,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 1.2 | **HW Expert v3 — Identificação de Hardware por Rede Neural em Kernel** | 🏆 **61.453 VID/DID** reconhecidos por BitNet ternário (1M params, 259KB) rodando em no_std. Primeiro modelo de ML a rodar DENTRO do kernel para identificar hardware em tempo real. Nenhum OS conhecido faz isso. | pci.ids (almanaque), usb.ids, SDIO DriverPacks (lista de HWIDs) | MIT (pci.ids: domínio público) | `cortex.rs`, `hw_expert_v3.bitnet` | ✅ 0 err |
 | 1.3 | **SelfHealing Firmware Pipeline I3/I4** | 🏆 HW novo é instalado → detectado → identificado → firmware baixado (HTTP) → carregado hot → skill gerada (LLM) → registrada → funcional. Tudo automático, sem reboot, sem configuração. | linux-firmware.git (blobs), Self-Healing Agents papers (arXiv) | MIT (linux-firmware) | `self_heal.rs`, `firmware.rs`, `agents.rs` | ✅ 0 err |
 | 1.4 | **SleepCycle — Ciclo de Sono em Bare-Metal** | 🏆 **Primeiro (e único) sistema bare-metal com ciclo sono/aprendizado.** 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT. Inspirado em neurociência humana. Sem internet. Sem humano. Cada boot melhora o sistema. | Neurociência (Atkinson-Shiffrin, Ebbinghaus), SleepCycle papers | — (conhecimento científico) | `agents.rs` (SleepCycleAgent) | ✅ 0 err |
-| 1.5 | **Memory Hierarchy Index (MHI) — Alocação por IA** | 🏆 Sistema de memória em 4 tiers (Dram→Vram→Nvme→Hdd) com alocação orientada por ML. `alloc_by_tier()` infere onde cada dado deve residir baseado em padrões de acesso. | ZFS ARC (MFU/MRU), Hierarchical Memory papers | GPLv2 / MIT | `mhi.rs`, `memory.rs` | ✅ 0 err |
+| 1.5 | **Memory Hierarchy Index (MHI) — Alocação por IA** | 🏆 Sistema de memória em 4 tiers (Dram→Vram→Nvme→Hdd) com alocação orientada por ML. `alloc_by_tier()` + soft-migrate ativo (ADR-0040 MVP). | ZFS ARC (MFU/MRU), Hierarchical Memory papers | GPLv2 / MIT | `mhi.rs`, `memory.rs` | ✅ soft-MVP |
 | 1.6 | **Trinity MoE — Roteamento de Intenção em Bare-Metal** | 🏆 6 experts (hw_identify, rust_coder, disk_diag, security, speech_synth, generator) + router treinável. Roteia dentro do LLM sem keyword matching. AutoLearn detecta necessidade → treina → registra novo expert. | Mixture of Experts papers (Shazeer 2017), MoE em LLMs | MIT | `trinity.rs`, `cortex.rs`, `agents.rs` (AutoLearnAgent) | ✅ 0 err |
 | 1.8 | **Dual-Tier Memory + R3 (Rollout Routing Replay)** | 🏆 Separação obrigatória: Tier 1 `talc` (Hermes/JARBAS/UI) vs Tier 2 `TensorArena` bump (Cortex/MoE). Cache de rotas e tokens na arena — reset O(1) após GRPO. Zero fragmentação no hot path de inferência. Proíbe `Box`/`Vec` global no loop de tokens. | Rollout Routing Replay / GRPO papers; bare-metal arena pattern | MIT | `allocator.rs`, `arena.rs`, `r3.rs`, `global_arena.rs` | ✅ 0 err |
 | 1.7 | **3 Camadas Visuais: Orb + Hermes CLI + Window Manager** | 🏆 Arquitetura visual em 3 camadas Z-order com FFT audio→Orbe, overlay CLI semi-transparente, e gerenciador de janelas com mouse integrado. Tudo renderizado por software no framebuffer UEFI, sem GPU. | SmileyOS patterns, JARVIS .NET MAUI (autor) | MIT | `display/compositor.rs`, `display/avatar.rs` | ✅ 0 err |
@@ -61,7 +61,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.10c | **K-IA DMA pin + Cortex mmap (P5)** | ✅ Cap PIN/MAP_DMA + MAP_WEIGHTS; frames pinados + AS; mmap pesos eager (simulado). Vring = P8; GGUF = P9. ADR-0041 P5. | Cap + DMA pin + mmap | MIT | `k_ia_dma.rs`, `cortex_mmap.rs` | ✅ PoC |
 | 2.10d | **Demand-paging #PF (P7)** | ✅ Lazy VA registry + reserve NOT PRESENT + #PF cura leaf; Cap DEMAND_PAGE; frames pré-alocados (path #PF sem alloc). ADR-0041 P7. | Cap + #PF demand-page | MIT | `demand_page.rs`, `cortex_mmap.rs`, `interrupts.rs` | ✅ PoC |
 | 2.10e | **VirtIO vring + DMA pin (P8)** | ✅ Virtqueue layout-compatible sobre pin; Cap VRING_SETUP; NIC live untouched. ADR-0041 P8. | Cap + VirtIO vring | MIT | `virtio_vring.rs`, `k_ia_dma.rs` | ✅ PoC |
-| 2.10f | **GGUF/FAT file-backed mmap (P9)** | ✅ Pré-fill FAT→frames + demand-page; Cap MAP_FILE; magic GGUF/BitNet; fallback NFIL. ADR-0041 P9. | Cap + FAT mmap | MIT | `gguf_mmap.rs`, `demand_page.rs`, `fat32.rs` | ✅ PoC |
+| 2.10f | **GGUF/FAT file-backed mmap (P9)** | ✅ Pré-fill FAT→frames + demand-page; Cap MAP_FILE; magic GGUF/BitNet; fallback NFIL. ADR-0041 P9. **≠ AirLLM** (prefixo só). | Cap + FAT mmap | MIT | `gguf_mmap.rs`, `demand_page.rs`, `fat32.rs` | ✅ PoC |
+| 2.10f2 | **AirLLM GGUF Streaming (ADR-0046)** | 🏆 Layer-wise: header+layer map+embed/unembed em RAM; 1 layer/forward via ATA `read_file_range`; PrefetchEngine **soft** (nao DMA); dequant Q4_0/Q5_0/Q8_0/F16; hot-swap ATA + Net→FAT→`set_model` (L3.5/RX se RX=0). Stream-to-disk/DMA deferred. | AirLLM, llama.cpp GGUF | MIT | `gguf_streaming.rs`, `gguf.rs`, `cortex.rs` | ✅ MVP / 🟡 residual |
 | 2.10g | **Adequação Boot OK→K²CHJ (ADR-0042)** | ✅ N1–N5 + wire N2.5–N5.7; marco **v1.8.0**; gate v2.0.0 = review formal | K²CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ✅ v1.8.0 |
 | 2.10h | **LoadStatus + BitNet 2B LOADED (QEMU)** | ✅ Telemetria `LoadStatus`/`[STATUS]`; 2B ~590MB L=30 LOADED via QEMU-loader; FWD OK; TTS empty = known. v1.7.0. | BitNet v4 + LoadStatus | MIT | `load_status.rs`, `cortex.rs`, `main.rs` | ✅ load / 🟡 gen |
 | 2.10 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
@@ -76,10 +77,13 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 |---|-----------|------------|------------|---------------|---------|--------|
 | 3.1 | **GPU Backend Universal (NVIDIA→Intel→AMD→CPU)** | 🏆 Pipeline único que tenta 4 backends em sequência: NVIDIA PFIFO → Intel Ring → AMD PM4 → CPU AVX2. Primeira implementação bare-metal multi-vendor. | nouveau, i915, amdgpu drivers | GPLv2 (kernel) | `gpu/backend.rs` | ✅ 0 err |
 | 3.2 | **NVIDIA PFIFO PUSH_BUFFER** | 🔬 Engenharia reversa do canal de comandos GPFIFO da NVIDIA Pascal (GTX 1050). `pushbuffer_submit()` com doorbell + timeout. Sem NDA. | nouveau driver (eng. reversa) | GPLv2 | `gpu/nvidia.rs` | ✅ 0 err |
-| 3.3 | **GPU Secure Boot WPR (FECS+GPCCS)** | 🔬 Pipeline ACR completo: aloca WPR 2MB no topo da VRAM, upload FECS+GPCCS via BAR2, boot Falcon, poll status. Blobs baixados de linux-firmware.git. | nouveau ACR driver | GPLv2 (MIT blobs) | `gpu/firmware.rs` | ✅ 0 err |
+| 3.3 | **GPU Secure Boot WPR (FECS+GPCCS)** | 🔬 PoC GP108: aloca WPR 2MB, faz upload parcial FECS+GPCCS e poll. **Não é ACR completo:** faltam ACR HS/LSB, assinaturas na WPR, GR `sw_*`, MMU/runlist/canal e evidência HW. | nouveau ACR driver | GPLv2 (MIT blobs) | `gpu/firmware.rs` | 🟡 PoC / ADR-0048 |
 | 3.4 | **VRAM Buddy Allocator** | 🏆 Alocador de VRAM power-of-2 com split/merge. `vram_alloc()`/`vram_free()` integrado ao BAR2 UC. | Linux buddy allocator | GPLv2 | `gpu/vram.rs` | ✅ 0 err |
 | 3.5 | **Intel GPU Gen Ring (BCS Blitter)** | 🔬 Ring buffer Intel Gen6+ com MI_BATCH_BUFFER. Blitter BCS para cópia 2D acelerada. | i915 driver | GPLv2 | `gpu/intel.rs` | ✅ 0 err |
 | 3.6 | **VirtIO-GPU 2D** | Port do driver VirtIO-GPU para framebuffer em QEMU. | `virtio-drivers` crate | MIT/Apache 2.0 | `gpu/virtio_gpu.rs` | ✅ 0 err |
+| 3.7 | **NVIDIA Compute Multigeração (ADR-0048)** | 🏆 Contrato único com backends Legacy ACR (Maxwell/Pascal/Volta) e GSP (Turing+), seleção runtime e Kernel Pack multi-ISA pré-compilado; Pascal é o primeiro gate HW. | Nouveau/NVK/NAK, open-gpu-doc, open-gpu-kernel-modules | MIT/GPLv2; CUDA host-only | `docs/architecture/0048-nvidia-compute-multigeracao.md` | ⏳ Proposed |
+| 3.8 | **AMD Compute Multigeração (ADR-0049)** | 🏆 IP Discovery → backends KIQ/MES; `AMD_KERNEL_PACK` (HSACO COV4/5) offline; PSP/SMU/SDMA assinados; sem ROCm no alvo. Código atual: BAR map + stub PSP. | amdgpu, LLVM AMDGPU, RADV/ACO, GPUOpen ISA | MIT/GPLv2; FW MIT redistrib. | `docs/architecture/0049-amd-compute-multigeracao.md` | ⏳ Proposed |
+| 3.9 | **Intel Compute Multigeração (ADR-0050)** | 🏆 GMD_ID → famílias Gen9…Xe3; GuC + `GPGPU_WALKER`/`COMPUTE_WALKER`; `INTEL_KERNEL_PACK` (ocloc/zebin) offline; sem L0/OpenCL no alvo. Código atual: ring/BCS + GuC stub. | i915/xe, IGC, Mesa genxml, PRMs Intel | MIT/GPLv2; FW MIT redistrib. | `docs/architecture/0050-intel-compute-multigeracao.md` | ⏳ Proposed |
 
 ---
 
@@ -100,17 +104,17 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 ## 5. 🎵 ÁUDIO — Captura e Reprodução
 
 **ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).
-**Backlog residual:** **Sprint Sound (reaberta)** — Sprint 107 Voice ✅ FECHADA (PASS parcial forte+). Não bloqueia ADR-0042.
+**Backlog residual:** Sprint Sound ✅ (2026-07-16) — soft-float/VITS + cutover jarbas ainda abertos. Não bloqueia ADR-0042.
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
 | 5.1 | **Intel HDA Capture + Playback** | 🏆 Driver HDA completo: SD0 (captura) + SD1 (playback). CORB/RIRB, codec discovery, DMA ring buffer. **Único driver HDA funcional em bare-metal Rust.** | Intel HDA spec, Linux HDA driver | GPLv2 | `audio/hda.rs` | ✅ 0 err |
 | 5.2 | **FFT Audio → Orb Visualization** | 🏆 `process_audio_fft()`: Goertzel simplificado com janela Hamming, 16 bins espectrais. Áudio do microfone HDA → FFT → animação do orbe em tempo real. | FFT algoritmos (Cooley-Tukey) | — (matemática) | `display/avatar.rs`, `audio/voice.rs` | ✅ 0 err |
-| 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural. LOADED; **neural-lite** (`emb.weight`) no e2e 107; VITS/HiFi-GAN pleno → Sprint Sound. Tools: `convert_piper_to_bitnet.py`. | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs`, `audio/tts.rs` | ▶️ neural-lite / VITS→Sound |
-| 5.4 | **STT CTC + VAD + Mixer** | 🔄 STT CTC nativo (MFCC→LSTM→CTC). VAD + mixer + ringbuf. Retrain PCM-real + VAD polish → Sound. Tools: `train_stt.py`. **Não** Vosk/sherpa. | CTC papers, VAD | MIT | `audio/stt.rs`, `vad.rs`, `mixer.rs` | ▶️ LOADED; retrain→Sound |
-| 5.5 | **Wake Word "Jarvis" (nativo)** | ✅ MLP wakeword. **`WakeWordAgent` registrado** (Loop 5). Path Mic→WAKE e2e + ML polish → Sprint Sound. | energia + MLP | MIT | `audio/wakeword.rs` | ✅ registrado; e2e→Sound |
-| 5.6 | **USB Audio Class (UAC)** | ⏳ Stub + PCI USB class probe. Enum interface real → Sprint Sound (#84). | USB Audio Class | — | `audio/usb.rs` | ⏳ stub → Sound |
-| 5.7 | **SER (Speech Emotion)** | 🔄 Heurísticas em `ser.rs`. Refinements → Sprint Sound. | literatura SER | MIT | `audio/ser.rs` | ▶️ base; polish→Sound |
+| 5.3 | **Piper TTS VITS (PT-BR + EN)** | 🔄 Engine TTS neural. LOADED; **neural-lite** polish (prosódia/PT); VITS/HiFi-GAN = soft-float blocker. Tools: `convert_piper_to_bitnet.py`. | Piper TTS (rhasspy), VITS paper | MIT | `audio/piper.rs`, `audio/tts.rs` | ✅ neural-lite / ⏳ VITS |
+| 5.4 | **STT CTC + VAD + Mixer** | ✅ STT CTC PCM→MFCC alinhado; VAD adaptativo; MIC/PLAYBACK rings; barge-in. Tools: `train_stt.py`. **Não** Vosk/sherpa. | CTC papers, VAD | MIT | `audio/stt.rs`, `vad.rs`, `mixer.rs` | ✅ Sound |
+| 5.5 | **Wake Word "Jarvis" (nativo)** | ✅ MLP + Continuous + gate pós-WAKEWORD (bypass weather-e2e). | energia + MLP | MIT | `audio/wakeword.rs` | ✅ Sound |
+| 5.6 | **USB Audio Class (UAC)** | ✅ Parse config AC/AS/iso EP + probe PCI/xHCI. Iso DMA → HW. | USB Audio Class | — | `audio/usb.rs`, `xhci.rs` | ✅ parse / ⏳ iso HW |
+| 5.7 | **SER (Speech Emotion)** | ✅ Heurísticas + confidence gate. | literatura SER | MIT | `audio/ser.rs` | ✅ Sound |
 
 **❌ Obsoleto como stack de kernel (histórico):** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming, Rustpotter — ver ADR-0045.
 
@@ -124,7 +128,9 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 6.2 | **FAT32 Read/Write** | 🔄 Leitura e escrita de partições FAT32 LBA. MBR parser, cluster chain, diretórios, long filenames. | FAT32 spec, Microsoft | — (especificação) | `fat32.rs` | ✅ 0 err |
 | 6.3 | **NVMe Driver + TRIM** | 🔄 Driver NVMe com admin queue, SQ/CQ, e comando DSM TRIM para SSD. | NVMe spec, Linux NVMe driver | GPLv2 | `disk_agent/nvme.rs` | ✅ 0 err |
 | 6.4 | **AHCI SATA NCQ** | 🔄 AHCI driver com Native Command Queuing, PRDT, DMA. | AHCI spec, Linux ahci driver | GPLv2 | `ahci.rs` | ✅ 0 err |
-| 6.5 | **NeuralFS (B-tree CoW + CRC32C)** | 🏆 Sistema de arquivos próprio: B-tree Copy-on-Write com CRC32C Castagnoli, journal, extent allocator. Projetado para cargas de IA (arquivos grandes, imutáveis, checksumados). | BAFS (bazzulto-bafs), Btrfs, ZFS | MIT | `neural_fs/` | ✅ 0 err |
+| 6.5 | **NeuralFS (B-tree CoW + CRC32C)** | ✅ FS CoW: leaf B-tree mutavel, journal, create/read/write, agent `/mnt/neural` RAM 4MB. Disco fisico / multi-level = `por_fazer`. | BAFS, Btrfs, ZFS | MIT | `neural_fs/` | ✅ I/O RAM / ⏳ `por_fazer` disco |
+| 6.6 | **exFAT FilesystemDriver** | 🔄 Detect/mount + list root cache; write arquivo = `por_fazer` (bitmap/FAT; risco mídia). BlockDevice+write nos backends. ADR-0040 MVP. | Microsoft exFAT 1.0 | — (especificação) | `exfat.rs`, `block_dev.rs` | ✅ MVP r / ⏳ w |
+| 6.7 | **MHI soft-migrate** | 🏆 `mhi_tick` metadata + DRAM memcpy seguro; registry unico k_nano; DMA NVMe/VRAM deferido. | ZFS ARC | MIT | `k_nano/mhi.rs` | ✅ soft-MVP |
 
 ---
 
@@ -137,6 +143,16 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 7.3 | **Medusa Speculative Decoding** | 🔄 Decodificação especulativa com 3 heads: head predict tokens, LLM verifica em paralelo. Aceleração de 2-3×. | Medusa paper (Cai et al., 2024) | MIT | `cortex.rs` | ✅ 0 err |
 | 7.4 | **BitNet AVX2 Kernel** | 🔄 `_mm256_cvtepi8_epi32` + FMA para matmul ternário acelerado por AVX2. 2-6× speedup em HW real. | BitNet.cpp (Microsoft) | MIT | `bitnet_avx2.rs` | ✅ 0 err |
 | 7.5 | **KV Cache 200× Speedup** | 🔄 Cache de Key/Value tokens. Reduz tempo de inferência de 6h para 84s. | KV cache em transformers (Dai et al., 2019) | MIT | `cortex.rs` | ✅ 0 err |
+| 7.5b | **N-gram Speculative Decoding** | 🔄 Draft M tokens via rolling LCG hash (N=8) + verify paralelo no KV; zero deps/VRAM extra; Medusa complementar. | llama.cpp ngram-simple (Alok 2026) | MIT | `cortex/ngram_spec.rs`, `cortex.rs` | ✅ OK |
+| 7.5c | **LatentBus + Projection** | 🔄 Canal hidden `[f16;256]` paralelo ao EventBus; mean-pool ad-hoc f16; Cortex publish / Hermes recv. | Interlat / LatentMAS | MIT | `event-bus/latent.rs`, `cortex/projection.rs` | ✅ MVP |
+| 7.5d | **Evolve WASM Hot-Swap** | 🔄 Ledger + sandbox execute → promote/rollback; DREAM hook SleepCycle. | symbiont.rs / EVA | MIT | `hermes/evolve.rs` | ✅ MVP |
+| 7.5e | **NeuOS Probe fase 1** | 🔄 Weight stats por layer + soul-vector stub; read-only. | NeuOS (Funasaki) | MIT | `cortex/neuos_probe.rs` | ✅ MVP |
+| 7.5f | **GPU Work-Queue G1/G2** | 🔄 Persistent op queue; NVIDIA PFIFO path ou CPU_FALLBACK honesto. | neurOS / Yantra | MIT | `jarbas/gpu/work_queue.rs` | ✅ MVP |
+| 7.5g | **Generative UI Spec H1+H4** | 🔄 JSON WindowSpec → compositor; avatar state ← LatentBus norm. | A2UI / leOS | MIT | `jarbas/display/ui_spec.rs` | ✅ MVP |
+| 7.5h | **N-gram empirical bench** | 🔄 Accept/forward counters + microbench + speedup_est. | llama.cpp ngram | MIT | `cortex/ngram_spec.rs` | ✅ |
+| 7.5i | **Evolve Genesis** | 🔄 Parent spawn 1 child WASM (ratchet). | EvolveOS Genesis | MIT | `hermes/evolve.rs` | ✅ MVP |
+| 7.5j | **KV H2O + SASOS + G5 pipe** | 🔄 H2O eviction CPU; SASOS-lite map; pipeline timing CPU. | H2O / PagedAttention / neurOS | MIT | `kv_h2o.rs` `sasos.rs` `pipeline_g5.rs` | ✅ MVP |
+| 7.5k | **Embed viz H2+H5** | 🔄 Latent→2D points + thought splats no FB. | leOS / NeuralOS viz | MIT | `display/embed_viz.rs` | ✅ MVP |
 | 7.6 | **RustCoder Expert** | 🏆 **Modelo especialista em geração de código Rust treinado com 263KB.** hidden=128, 6 layers, loss=2.79. Gera skills WASM sob demanda. | Fine-tuning de LLM para código (CodeLlama, StarCoder) | MIT | `rust_coder.bitnet` | ✅ 0 err |
 
 ---
@@ -147,6 +163,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 |---|-----------|------------|------------|---------------|---------|--------|
 | 8.1 | **The Agency (147 agentes especialistas)** | 🏆 **Maior população de agentes em um único sistema bare-metal:** 147 especialistas divididos em Engineering, Design, Product, QA, Support, Marketing, Infra, Data Science, Research. Cada um com manifest, schedule, trust, e skill registry. | CrewAI, OpenAI Swarm, AutoGen, OpenHands, Cline | Apache 2.0 / MIT | `agents.rs`, `agent-core/` | ✅ 0 err |
 | 8.2 | **Consciousness Metrics (10 métricas)** | 🏆 Sistema de "consciência" com 10 métricas cognitivas (skills_ok, errors_resolved, anomaly_count, memories, etc.). Self-Improvement Loop periódico. | JARVIS C# (autor), Lethe brain regions | MIT | `cortex.rs` (Consciousness) | ✅ 0 err |
+| 8.2b | **Self-Evolve Engine (Sprint 108)** | 🏆 observe→generate→verify→improve→reflect: auto-skill por padrão/LLM, verificação estrutural, SIL wired, meta-reflect no SleepCycle. | Cratos / SkillObserver | MIT | `hermes/self_evolve.rs`, `agents.rs` (SelfEvolveAgent) | ✅ S108 |
 | 8.3 | **Auto-Learn + R3 Replay** | 🏆 Trinity AutoLearnAgent: monitora intents não classificados, detecta padrões (≥3), carrega conhecimento, **update_with_replay()** com RouteTrace congelados da TensorArena (sem re-rotear / sem train_step dummy), reset_moe_cache O(1). | Active Learning, GRPO/R3 papers | MIT | `agents.rs`, `r3.rs` | ✅ 0 err |
 
 ---
@@ -184,8 +201,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 11.3 | `fetch_pci_usb_ids.py` | 🏆 Download + parse de pci-ids e usb-ids oficiais. Estruturação como JSON hierárquico (vendor→device). | pci-ids.ucw.cz, linux-usb.org | MIT | `tools/fetch_pci_usb_ids.py` |
 | 11.4 | `train_hw_expert_v3.py` | 🏆 Pipeline de treino do HW Expert com dataset combinado (SDIO + pci-ids + usb-ids + kernel). | PyTorch, BitNet arquitetura | MIT | `tools/train_hw_expert_v3.py` |
 | 11.5 | `mkfat32.py` / `build_image.py` | 🏆 Gerador de imagem FAT32 bootável com modelos, firmware, e config. Inclui 111 blobs de firmware no disco. | mkfs.fat (Linux) | GPLv2 | `tools/mkfat32.py`, `tools/build_image.py` |
-| 11.6 | `train_stt.py` | 🔄 Treino CTC STT (hoje MFCC synth). Retrain PCM-real → Sprint Sound. | PyTorch CTC | MIT | `tools/train_stt.py` |
-| 11.7 | `convert_piper_to_bitnet.py` | 🔄 ONNX Piper → `.bin` (neural-lite). VITS pleno → Sprint Sound. | Piper / ONNX | MIT | `tools/convert_piper_to_bitnet.py` |
+| 11.6 | `train_stt.py` | ✅ Treino CTC STT PCM→MFCC kernel-aligned. | PyTorch CTC | MIT | `tools/train_stt.py` |
+| 11.7 | `convert_piper_to_bitnet.py` | ✅ ONNX Piper → `.bin` + validação manifesto. VITS forward = soft-float blocker. | Piper / ONNX | MIT | `tools/convert_piper_to_bitnet.py` |
 
 ---
 
@@ -242,7 +259,7 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.8.0):**
+**Métricas (v1.8.5 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
@@ -252,7 +269,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | ADRs | 47+ |
 | Firmware blobs | 116 (~12.5 MB) |
 | HWIDs HW Expert v3 | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.8.0** (gate v2.0.0 = review) |
+| Tags release | v1.0.0 → **v1.8.5 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K²CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 
@@ -279,7 +296,7 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.8.0**
+> **AIOS K²CHJ — Neural OS Hermes v1.8.5 TEST / NÃO ESTÁVEL**
 > *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K²CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)

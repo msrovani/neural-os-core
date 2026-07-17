@@ -48,9 +48,18 @@ impl StorageController for AtaCtrl {
         let total = unsafe { self.ata.total_sectors().unwrap_or(0) };
         if total == 0 { return Vec::new(); }
 
-        let bw = self.measure_bandwidth(0);
-        let interface = if bw > 200 { InterfaceType::Sata } else { InterfaceType::Pata };
-        let (is_opal, security_frozen) = unsafe { self.ata_detect_security() };
+        // QEMU/VBox: measure_bandwidth lê 256 setores PIO + IDENTIFY security —
+        // minutos sob WHPX e prende DiskIntelligenceAgent.tick (bloqueia NetAgent).
+        let sandbox = crate::env::is_sandbox() || crate::net::NET_CONFIG.lock().is_dev_env;
+        let (bw, is_opal, security_frozen, interface) = if sandbox {
+            crate::serial_println!("[DISK] ata0: skip bw/IDENTIFY (sandbox)");
+            (100u32, false, false, InterfaceType::Sata)
+        } else {
+            let bw = self.measure_bandwidth(0);
+            let interface = if bw > 200 { InterfaceType::Sata } else { InterfaceType::Pata };
+            let (is_opal, security_frozen) = unsafe { self.ata_detect_security() };
+            (bw, is_opal, security_frozen, interface)
+        };
 
         let raw = RawDisk {
             name: alloc::format!("sda"),
@@ -280,7 +289,8 @@ impl StorageController for UsbMscCtrl {
         self.probed = true;
         let msc = unsafe { &mut *self.msc.get() };
         if msc.max_lba == 0 { return Vec::new(); }
-        let bw = self.measure_bandwidth(0);
+        let sandbox = crate::env::is_sandbox() || crate::net::NET_CONFIG.lock().is_dev_env;
+        let bw = if sandbox { 50u32 } else { self.measure_bandwidth(0) };
 
         let raw = RawDisk {
             name: alloc::format!("sdb"),

@@ -1,8 +1,40 @@
+//! NetAgent tick — bootstrap de rede (QEMU user/slirp ou bridge TAP via e1000).
+//! Sprint Net gate = **e1000** (smoltcp/NIC). SLIP = bypass serial FROZEN — nao e o gate.
+//! Smoke labels: `[smoltcp/NIC]`. User: static 10.0.2.15; Bridge: DHCP.
+//!
+//! Escada (ver tambem `netdiag::run_network_test`):
+//!   L0 link → L1 MAC → L2 netstack → L3 static/DHCP → L3.5 RX prove → L4 DNS → L5 HTTP
+//! `bootstrap_early` sobe L2–L3.5 (+ smoke L4/L5 se RX ok) no boot, antes do scheduler.
+
 extern crate alloc;
-use crate::net::{NETSTACK, NET_CONFIG};
+use crate::net::{NETSTACK, NET_CONFIG, TOPIC_NETWORK_CONFIGURED, QemuNetMode};
 use crate::netstack::{HttpConn, HttpState};
 use crate::serial_println;
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use event_bus::{CapabilityToken, Event};
 use spin::Mutex;
+
+/// Resultado honesto do smoke `bootstrap_early` (este boot).
+/// 0=UNSET 1=L5_OK 2=L5_FAIL 3=L5_PENDING 4=L4_FAIL 5=SKIP 6=L3_5_FAIL
+static EARLY_SMOKE: AtomicU8 = AtomicU8::new(0);
+static CONTINUOUS_ANNOUNCED: AtomicBool = AtomicBool::new(false);
+
+fn set_early_smoke(v: u8) {
+    EARLY_SMOKE.store(v, Ordering::Relaxed);
+}
+
+/// Label do smoke deste boot — para gates Hermes/N4 (nao confundir com hist Sprint107 voz L5).
+pub fn early_smoke_status() -> &'static str {
+    match EARLY_SMOKE.load(Ordering::Relaxed) {
+        1 => "L5_OK",
+        2 => "L5_FAIL",
+        3 => "L5_PENDING",
+        4 => "L4_FAIL",
+        5 => "SKIP",
+        6 => "L3_5_FAIL",
+        _ => "UNSET",
+    }
+}
 
 fn log(tick: u64, msg: &str) {
     serial_println!("[NET @t={}] {}", tick, msg);
@@ -13,6 +45,27 @@ fn init_netstack(mac: [u8; 6]) {
     *NETSTACK.lock() = Some(ns);
 }
 
+fn has_ethernet_nic() -> bool {
+    crate::net::E1000.lock().is_some()
+        || crate::net::VIRTIO_DEV.lock().is_some()
+        || crate::net::RTL8139.lock().is_some()
+}
+
+fn apply_static_qemu(ns: &mut crate::netstack::NetStack, tick: u64) {
+    ns.set_static_ip(); // também atualiza NET_CONFIG
+    log(tick, "Static IP 10.0.2.15/24 gw=10.0.2.2 dns=10.0.2.3 (QEMU user/slirp)");
+    publish_configured();
+}
+
+fn publish_configured() {
+    let _ = crate::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_NETWORK_CONFIGURED),
+        payload: b"configured".to_vec(),
+        token: CapabilityToken::Legacy(1),
+    });
+}
+
 struct NetState {
     tick: u64,
     phase: u8,
@@ -20,9 +73,370 @@ struct NetState {
     target_ip: [u8; 4],
     dns_tries: u32,
     dev_env_detected: bool,
+    static_applied: bool,
+    bridge_mode: bool,
 }
 
-static NET_STATE: Mutex<NetState> = Mutex::new(NetState { tick: 0, phase: 0, http: None, target_ip: [0; 4], dns_tries: 0, dev_env_detected: false });
+static NET_STATE: Mutex<NetState> = Mutex::new(NetState {
+    tick: 0,
+    phase: 0,
+    http: None,
+    target_ip: [0; 4],
+    dns_tries: 0,
+    dev_env_detected: false,
+    static_applied: false,
+    bridge_mode: false,
+});
+
+/// L3.5: ARP who-has gw + poll e1000 DD/recv before DNS. Honest FAIL if silent.
+fn prove_rx_before_dns(tick: u64) -> bool {
+    let (sip, tip) = {
+        let cfg = NET_CONFIG.lock();
+        let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+        let tip = if cfg.gateway_ip != [0; 4] {
+            cfg.gateway_ip
+        } else {
+            [10, 0, 2, 2]
+        };
+        (sip, tip)
+    };
+    let rx_before = crate::netstack::net_rx_count();
+    let tx_before = crate::netstack::net_tx_count();
+    log(
+        tick,
+        &alloc::format!(
+            "bootstrap_early L3.5: prove RX (ARP {}.{}.{}.{} -> {}.{}.{}.{}) tx={} rx={}",
+            sip[0], sip[1], sip[2], sip[3], tip[0], tip[1], tip[2], tip[3], tx_before, rx_before
+        ),
+    );
+    let ok = unsafe { crate::net::prove_e1000_rx(sip, tip) };
+    if let Some(ref mut ns) = *NETSTACK.lock() {
+        for i in 0..40u64 {
+            ns.poll((i * 5) as i64);
+            crate::netstack::wall_pause_us(500);
+        }
+    }
+    let rx_after = crate::netstack::net_rx_count();
+    let tx_after = crate::netstack::net_tx_count();
+    let dtx = tx_after.saturating_sub(tx_before);
+    let drx = rx_after.saturating_sub(rx_before);
+    if ok || drx > 0 {
+        log(
+            tick,
+            &alloc::format!(
+                "bootstrap_early L3.5 OK: RX alive dtx={} drx={} (e1000_ok={})",
+                dtx, drx, ok
+            ),
+        );
+        true
+    } else {
+        log(
+            tick,
+            &alloc::format!(
+                "bootstrap_early L3.5 FAIL: RX silent dtx={} drx={} — skip L4/L5 (honest)",
+                dtx, drx
+            ),
+        );
+        false
+    }
+}
+
+/// Bootstrap L2–L3.5 no boot (DriverInit), antes do AgentScheduler.
+/// Nao inventa DNS/HTTP OK — configura stack + static/DHCP, prova RX, so entao DNS.
+pub fn bootstrap_early() {
+    let mac = NET_CONFIG.lock().mac;
+    if mac == [0; 6] {
+        set_early_smoke(5);
+        log(0, "bootstrap_early SKIP: MAC zero (L1 fail)");
+        return;
+    }
+
+    let mut s = NET_STATE.lock();
+    if s.static_applied && NETSTACK.lock().as_ref().map_or(false, |ns| ns.dhcp_done) {
+        log(0, "bootstrap_early SKIP: already configured");
+        return;
+    }
+
+    let net_mode = crate::net::detect_qemu_net_mode();
+    s.bridge_mode = net_mode == QemuNetMode::Bridge;
+    match net_mode {
+        QemuNetMode::Bridge => {
+            log(0, "bootstrap_early: netmode=BRIDGE (TAP) — DHCP, no static 10.0.2.15")
+        }
+        QemuNetMode::User => {
+            log(0, "bootstrap_early: netmode=USER (slirp) — static 10.0.2.15")
+        }
+    }
+
+    if !s.dev_env_detected {
+        let is_dev = crate::net::detect_dev_env() || crate::env::is_sandbox();
+        NET_CONFIG.lock().is_dev_env = is_dev;
+        s.dev_env_detected = true;
+        if is_dev {
+            log(0, "bootstrap_early: Dev env — L3 + L3.5 RX + DNS/HTTP smoke best-effort");
+        } else {
+            log(0, "bootstrap_early: HW — netstack only; DHCP fica no NetAgent");
+        }
+    }
+
+    if NETSTACK.lock().is_none() {
+        init_netstack(mac);
+        log(
+            0,
+            &alloc::format!(
+                "bootstrap_early L2: NETSTACK init MAC={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+            ),
+        );
+    }
+    s.phase = 1;
+
+    let nic = has_ethernet_nic();
+    let is_dev = NET_CONFIG.lock().is_dev_env || crate::env::is_sandbox();
+
+    if !is_dev && !s.bridge_mode {
+        set_early_smoke(5);
+        log(0, "bootstrap_early L3 deferred (HW DHCP via ticks)");
+        return;
+    }
+
+    // L3: user/slirp → static; bridge/TAP → DHCP (never force 10.0.2.15 on bridge)
+    if s.bridge_mode {
+        log(0, "bootstrap_early L3: DHCP poll (bridge/TAP)");
+        let mut dhcp_ok = false;
+        if let Some(ref mut ns) = *NETSTACK.lock() {
+            for i in 0..600u64 {
+                ns.poll((i * 5) as i64);
+                crate::netstack::wall_pause_us(500);
+                let (got, gw, dns) = ns.dhcp_poll((i * 5) as i64);
+                if got {
+                    let mut cfg = NET_CONFIG.lock();
+                    cfg.configured = true;
+                    cfg.online = true;
+                    cfg.gateway_ip = gw;
+                    if dns != [0, 0, 0, 0] {
+                        cfg.dns_ip = dns;
+                    }
+                    drop(cfg);
+                    publish_configured();
+                    dhcp_ok = true;
+                    log(
+                        0,
+                        &alloc::format!(
+                            "bootstrap_early L3 OK DHCP gw={}.{}.{}.{} dns={}.{}.{}.{}",
+                            gw[0], gw[1], gw[2], gw[3], dns[0], dns[1], dns[2], dns[3]
+                        ),
+                    );
+                    break;
+                }
+            }
+        }
+        if !dhcp_ok {
+            set_early_smoke(6);
+            log(0, "bootstrap_early L3 FAIL: DHCP timeout on bridge — skip L4/L5 (honest)");
+            s.phase = 99;
+            return;
+        }
+        s.static_applied = true;
+    } else if is_dev && !s.static_applied {
+        if let Some(ref mut ns) = *NETSTACK.lock() {
+            if !ns.dhcp_done {
+                apply_static_qemu(ns, 0);
+            }
+            s.static_applied = true;
+            log(
+                0,
+                &alloc::format!(
+                    "bootstrap_early L3 OK (nic={} configured={})",
+                    nic,
+                    NET_CONFIG.lock().configured
+                ),
+            );
+        }
+    }
+
+    if s.http.is_some() || s.phase >= 2 {
+        return;
+    }
+    unsafe {
+        crate::net::dump_e1000_status();
+    }
+
+    // L3.5: prove RX before DNS
+    if nic && !prove_rx_before_dns(0) {
+        set_early_smoke(6);
+        s.phase = 99;
+        return;
+    }
+
+    let dns_srv = NET_CONFIG.lock().dns_ip;
+    let tx_before = crate::netstack::net_tx_count();
+    let rx_before = crate::netstack::net_rx_count();
+    s.dns_tries = s.dns_tries.saturating_add(1);
+    log(
+        0,
+        &alloc::format!(
+            "bootstrap_early L4: DNS google.com via {}.{}.{}.{} [smoltcp/NIC] tx={} rx={}",
+            dns_srv[0], dns_srv[1], dns_srv[2], dns_srv[3],
+            tx_before, rx_before
+        ),
+    );
+    let dns_ip = {
+        let mut ns_guard = NETSTACK.lock();
+        ns_guard
+            .as_mut()
+            .and_then(|ns| ns.dns_resolve("google.com", dns_srv))
+    };
+    let tx_after = crate::netstack::net_tx_count();
+    let rx_after = crate::netstack::net_rx_count();
+    match dns_ip {
+        Some(ip) => {
+            s.target_ip = ip;
+            log(
+                0,
+                &alloc::format!(
+                    "bootstrap_early L4 OK: {}.{}.{}.{} (dtx={} drx={})",
+                    ip[0], ip[1], ip[2], ip[3],
+                    tx_after.saturating_sub(tx_before),
+                    rx_after.saturating_sub(rx_before)
+                ),
+            );
+            if let Some(ref mut ns) = *NETSTACK.lock() {
+                let mut conn = ns.http_new(ip, 80, "/");
+                log(0, "bootstrap_early L5: HTTP GET / smoke (bounded)");
+                let mut done = false;
+                for i in 0..400u64 {
+                    ns.poll((i * 5) as i64);
+                    crate::netstack::wall_pause_us(500);
+                    ns.http_poll(&mut conn, i * 5);
+                    match &conn.state {
+                        HttpState::Done(data) => {
+                            let text = core::str::from_utf8(data).unwrap_or("<binary>");
+                            let preview = &text[..core::cmp::min(80, text.len())];
+                            set_early_smoke(1);
+                            log(
+                                0,
+                                &alloc::format!(
+                                    "bootstrap_early L5 OK ({} bytes) tx={} rx={}: {}",
+                                    data.len(),
+                                    crate::netstack::net_tx_count(),
+                                    crate::netstack::net_rx_count(),
+                                    preview
+                                ),
+                            );
+                            ns.http_close(&mut conn);
+                            s.phase = 99;
+                            done = true;
+                            break;
+                        }
+                        HttpState::Failed => {
+                            set_early_smoke(2);
+                            log(
+                                0,
+                                &alloc::format!(
+                                    "bootstrap_early L5 FAIL: HTTP failed tx={} rx={}",
+                                    crate::netstack::net_tx_count(),
+                                    crate::netstack::net_rx_count()
+                                ),
+                            );
+                            ns.http_close(&mut conn);
+                            s.phase = 99;
+                            done = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if !done {
+                    // Deixa conexão para NetAgent continuar no scheduler (se sobreviver).
+                    set_early_smoke(3);
+                    log(
+                        0,
+                        &alloc::format!(
+                            "bootstrap_early L5 PENDING — handoff NetAgent (tx={} rx={})",
+                            crate::netstack::net_tx_count(),
+                            crate::netstack::net_rx_count()
+                        ),
+                    );
+                    s.http = Some(conn);
+                    s.phase = 2;
+                }
+            }
+        }
+        None => {
+            set_early_smoke(4);
+            log(
+                0,
+                &alloc::format!(
+                    "bootstrap_early L4 FAIL: DNS timeout (honest) dtx={} drx={} tx={} rx={}",
+                    tx_after.saturating_sub(tx_before),
+                    rx_after.saturating_sub(rx_before),
+                    tx_after,
+                    rx_after
+                ),
+            );
+            // Fallback IP: tenta HTTP breve; se pendente, NetAgent retoma.
+            s.target_ip = [142, 250, 190, 14];
+            if let Some(ref mut ns) = *NETSTACK.lock() {
+                let mut conn = ns.http_new(s.target_ip, 80, "/");
+                log(0, "bootstrap_early L5: HTTP via hardcoded IP (DNS failed)");
+                let mut done = false;
+                for i in 0..400u64 {
+                    ns.poll((i * 5) as i64);
+                    crate::netstack::wall_pause_us(500);
+                    ns.http_poll(&mut conn, i * 5);
+                    match &conn.state {
+                        HttpState::Done(data) => {
+                            set_early_smoke(1);
+                            log(
+                                0,
+                                &alloc::format!(
+                                    "bootstrap_early L5 OK hardcoded ({} bytes) tx={} rx={}",
+                                    data.len(),
+                                    crate::netstack::net_tx_count(),
+                                    crate::netstack::net_rx_count()
+                                ),
+                            );
+                            ns.http_close(&mut conn);
+                            s.phase = 99;
+                            done = true;
+                            break;
+                        }
+                        HttpState::Failed => {
+                            set_early_smoke(2);
+                            log(
+                                0,
+                                &alloc::format!(
+                                    "bootstrap_early L5 FAIL: HTTP hardcoded failed tx={} rx={}",
+                                    crate::netstack::net_tx_count(),
+                                    crate::netstack::net_rx_count()
+                                ),
+                            );
+                            ns.http_close(&mut conn);
+                            s.phase = 99;
+                            done = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if !done {
+                    set_early_smoke(3);
+                    log(
+                        0,
+                        &alloc::format!(
+                            "bootstrap_early L5 PENDING hardcoded — handoff NetAgent (tx={} rx={})",
+                            crate::netstack::net_tx_count(),
+                            crate::netstack::net_rx_count()
+                        ),
+                    );
+                    s.http = Some(conn);
+                    s.phase = 2;
+                }
+            }
+        }
+    }
+}
 
 pub fn network_agent_tick() {
     let mut s = NET_STATE.lock();
@@ -30,7 +444,17 @@ pub fn network_agent_tick() {
     s.tick = tick.wrapping_add(1);
     let ms = tick * 55;
 
-    // Debug inicial - mais frequente
+    // Pós SelfHeal/Disk: Continuous entrou no run() — log cedo mesmo se serial for cortado depois.
+    // Não bloqueia se Disk ainda emitir; só anuncia que NetAgent está tickando.
+    if !CONTINUOUS_ANNOUNCED.swap(true, Ordering::Relaxed) {
+        serial_println!(
+            "[NET] Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]"
+        );
+    }
+    // Periódico mínimo cedo (sobrevive flood serial de Disk se cortar depois).
+    if tick <= 20 || tick % 50 == 0 {
+        serial_println!("[NET] tick {}", tick);
+    }
     if tick == 0 || tick == 1 || tick == 2 || tick == 5 || tick == 10 {
         log(tick, &alloc::format!("NetAgent tick started (tick={})", tick));
     }
@@ -39,19 +463,32 @@ pub fn network_agent_tick() {
     if let Some(ref mut ns) = *NETSTACK.lock() {
         ns.poll(ms as i64);
         if tick % 50 == 0 {
-            log(tick, &alloc::format!("poll: tx={} rx={} slip_tx={} slip_rx={}",
-                crate::netstack::net_tx_count(), crate::netstack::net_rx_count(),
-                crate::slip::slip_tx_count(), crate::slip::slip_rx_count()));
+            log(
+                tick,
+                &alloc::format!(
+                    "poll: tx={} rx={} slip_tx={} slip_rx={} configured={}",
+                    crate::netstack::net_tx_count(),
+                    crate::netstack::net_rx_count(),
+                    crate::slip::slip_tx_count(),
+                    crate::slip::slip_rx_count(),
+                    NET_CONFIG.lock().configured
+                ),
+            );
         }
         if tick % 100 == 0 {
-            unsafe { crate::net::dump_e1000_status(); }
+            unsafe {
+                crate::net::dump_e1000_status();
+            }
         }
         if let Some(ref mut c) = s.http {
             ns.http_poll(c, ms as u64);
             match &c.state {
                 HttpState::Done(data) => {
                     let text = core::str::from_utf8(data).unwrap_or("<binary>");
-                    log(tick, &alloc::format!("HTTP OK ({} bytes): {}", data.len(), text.trim_end()));
+                    log(
+                        tick,
+                        &alloc::format!("HTTP OK ({} bytes): {}", data.len(), text.trim_end()),
+                    );
                     ns.http_close(c);
                     s.http = None;
                     s.phase = 99;
@@ -65,94 +502,146 @@ pub fn network_agent_tick() {
                 _ => {}
             }
         }
-    } else {
-        if tick % 10 == 0 {
-            log(tick, "NETSTACK not initialized");
-        }
+    } else if tick % 10 == 0 {
+        log(tick, "NETSTACK not initialized");
     }
 
     match s.phase {
-        // Phase 0: init netstack + detect dev env
+        // Phase 0: init netstack + detect env (imediato se MAC já existe)
         0 => {
-            if tick >= 10 {
-                let mac = NET_CONFIG.lock().mac;
-                if mac != [0; 6] {
-                    init_netstack(mac);
-                    // Detect dev environment (QEMU/VBox vs HW real)
-                    if !s.dev_env_detected {
-                        let is_dev = crate::net::detect_dev_env();
-                        NET_CONFIG.lock().is_dev_env = is_dev;
-                        s.dev_env_detected = true;
-                        if is_dev {
-                            log(tick, "Dev environment detected (QEMU/VBox) - will use static IP");
-                        } else {
-                            log(tick, "HW real detected - will use DHCP");
-                        }
+            let mac = NET_CONFIG.lock().mac;
+            if mac != [0; 6] {
+                init_netstack(mac);
+                if !s.dev_env_detected {
+                    let is_dev = crate::net::detect_dev_env();
+                    NET_CONFIG.lock().is_dev_env = is_dev;
+                    s.dev_env_detected = true;
+                    if is_dev {
+                        log(tick, "Dev env (QEMU/VBox) — static IP early + DHCP best-effort");
+                    } else {
+                        log(tick, "HW real — DHCP primary");
                     }
-                    s.phase = 1;
                 }
+                s.phase = 1;
             }
         }
-        // Phase 1: DHCP (HW real) or static IP (dev env) → DNS → HTTP
+        // Phase 1: configure → DNS → HTTP smoke
         1 => {
-            // Use DHCP via e1000 when NIC present (both dev and HW)
-            let has_nic = crate::net::E1000.lock().is_some();
-            if has_nic {
-                // Try DHCP first (works with QEMU -nic user which has built-in DHCP)
-                let dhcp_done = {
+            let nic = has_ethernet_nic();
+            let is_dev = NET_CONFIG.lock().is_dev_env || crate::env::is_sandbox();
+            if !s.dev_env_detected {
+                s.bridge_mode = crate::net::detect_qemu_net_mode() == QemuNetMode::Bridge;
+            }
+            let bridge = s.bridge_mode;
+
+            // User/slirp only: static 10.0.2.15. Bridge/TAP: DHCP (never force slirp IP).
+            if nic && is_dev && !bridge && !s.static_applied {
+                if let Some(ref mut ns) = *NETSTACK.lock() {
+                    if !ns.dhcp_done {
+                        apply_static_qemu(ns, tick);
+                    }
+                    s.static_applied = true;
+                }
+            }
+
+            // DHCP poll — HW / bridge primary; user sandbox may upgrade if OFFER arrives
+            if nic {
+                let dhcp_got = {
                     let mut ns_guard = NETSTACK.lock();
                     if let Some(ref mut ns) = *ns_guard {
+                        // Apos static em user/slirp, dhcp_done ja true — nao reentrar.
+                        // Em HW/bridge: poll ate Configured.
                         if !ns.dhcp_done {
                             let (got, gw, dns) = ns.dhcp_poll(ms as i64);
                             if tick % 50 == 0 {
-                                log(tick, &alloc::format!("DHCP poll (e1000): got={} tx={} rx={}",
-                                    got, crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+                                log(
+                                    tick,
+                                    &alloc::format!(
+                                        "DHCP poll: got={} tx={} rx={}",
+                                        got,
+                                        crate::netstack::net_tx_count(),
+                                        crate::netstack::net_rx_count()
+                                    ),
+                                );
                             }
                             if got {
-                                NET_CONFIG.lock().configured = true;
-                                NET_CONFIG.lock().online = true;
-                                NET_CONFIG.lock().dns_ip = dns;
-                                NET_CONFIG.lock().gateway_ip = gw;
-                                log(tick, &alloc::format!("DHCP OK via e1000! gw={}.{}.{}.{} dns={}.{}.{}.{}",
-                                    gw[0], gw[1], gw[2], gw[3],
-                                    dns[0], dns[1], dns[2], dns[3]));
-                                // If serial tunnel sandbox, override DNS to 8.8.8.8
-                                if crate::env::is_sandbox() {
-                                    NET_CONFIG.lock().dns_ip = [8, 8, 8, 8];
-                                    log(tick, "Sandbox: DNS overridden to 8.8.8.8");
+                                let mut cfg = NET_CONFIG.lock();
+                                cfg.configured = true;
+                                cfg.online = true;
+                                cfg.gateway_ip = gw;
+                                if dns != [0, 0, 0, 0] {
+                                    cfg.dns_ip = dns;
+                                } else if is_dev && !bridge {
+                                    cfg.dns_ip = [10, 0, 2, 3];
                                 }
+                                if cfg.ip == [0, 0, 0, 0] && is_dev && !bridge {
+                                    cfg.ip = [10, 0, 2, 15];
+                                }
+                                drop(cfg);
+                                log(
+                                    tick,
+                                    &alloc::format!(
+                                        "DHCP OK! gw={}.{}.{}.{} dns={}.{}.{}.{}",
+                                        gw[0], gw[1], gw[2], gw[3],
+                                        dns[0], dns[1], dns[2], dns[3]
+                                    ),
+                                );
+                                publish_configured();
                             }
                         }
                         ns.dhcp_done
-                    } else { false }
+                    } else {
+                        false
+                    }
                 };
-                // Fallback: static IP after 30s (600 ticks)
-                if !dhcp_done && tick >= 600 {
+                // HW: fallback static só após ~30s
+                if !is_dev && !dhcp_got && !s.static_applied && tick >= 600 {
                     if let Some(ref mut ns) = *NETSTACK.lock() {
-                        ns.set_static_ip();
-                        NET_CONFIG.lock().configured = true;
-                        NET_CONFIG.lock().online = true;
-                        log(tick, "DHCP timeout, using static IP 10.0.2.15/24");
+                        apply_static_qemu(ns, tick);
+                        s.static_applied = true;
+                        log(tick, "HW DHCP timeout — static fallback (may be wrong for LAN)");
                     }
                 }
+            } else if !s.static_applied && tick >= 2 {
+                // Sem NIC Ethernet: serial tunnel — ainda seta stack local para apps
+                if let Some(ref mut ns) = *NETSTACK.lock() {
+                    apply_static_qemu(ns, tick);
+                    s.static_applied = true;
+                    log(tick, "No Ethernet NIC — static + SLIP fallback path");
+                }
             }
-            
-            // Se DHCP (ou static fallback) ainda nao configurou, espera
-            if !NETSTACK.lock().as_ref().map_or(false, |ns| ns.dhcp_done) { return; }
-            if tick >= 40 && !s.http.is_some() && s.dns_tries < 3 {
+
+            // Espera configuração
+            let ready = NETSTACK
+                .lock()
+                .as_ref()
+                .map_or(false, |ns| ns.dhcp_done);
+            if !ready {
+                return;
+            }
+
+            // DNS + HTTP via smoltcp (mesmo medium da NIC) — NÃO dns_resolve_manual/slip
+            // Threshold baixo: hang pós-Runtime pode matar o scheduler cedo.
+            if tick >= 2 && s.http.is_none() && s.dns_tries < 4 {
                 if let Some(ref mut ns) = *NETSTACK.lock() {
                     s.dns_tries += 1;
                     let dns_srv = NET_CONFIG.lock().dns_ip;
-                    log(tick, &alloc::format!("DNS resolve google.com (try {}) via {}.{}.{}.{}",
-                        s.dns_tries, dns_srv[0], dns_srv[1], dns_srv[2], dns_srv[3]));
-                    let resolved = if crate::env::is_sandbox() {
-                        crate::netstack::dns_resolve_manual("google.com", dns_srv)
-                    } else {
-                        ns.dns_resolve("google.com", dns_srv)
-                    };
-                    if let Some(ip) = resolved {
+                    log(
+                        tick,
+                        &alloc::format!(
+                            "DNS resolve google.com (try {}) via {}.{}.{}.{} [smoltcp/NIC]",
+                            s.dns_tries, dns_srv[0], dns_srv[1], dns_srv[2], dns_srv[3]
+                        ),
+                    );
+                    if let Some(ip) = ns.dns_resolve("google.com", dns_srv) {
                         s.target_ip = ip;
-                        log(tick, &alloc::format!("DNS OK: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]));
+                        log(
+                            tick,
+                            &alloc::format!(
+                                "DNS OK: {}.{}.{}.{}",
+                                ip[0], ip[1], ip[2], ip[3]
+                            ),
+                        );
                         s.http = Some(ns.http_new(ip, 80, "/"));
                         s.phase = 2;
                     } else {
@@ -160,23 +649,29 @@ pub fn network_agent_tick() {
                     }
                 }
             }
-            // Fallback: hardcoded IP after 3 fails
-            if s.dns_tries >= 3 && !s.http.is_some() {
-                log(tick, "DNS exhausted, using fallback IP");
-                s.target_ip = [142, 250, 80, 110];
+            // Fallback: IP público conhecido (Google) se DNS falhar
+            if s.dns_tries >= 4 && s.http.is_none() {
+                log(tick, "DNS exhausted — HTTP smoke via hardcoded IP");
+                s.target_ip = [142, 250, 190, 14];
                 if let Some(ref mut ns) = *NETSTACK.lock() {
                     s.http = Some(ns.http_new(s.target_ip, 80, "/"));
                     s.phase = 2;
                 }
             }
         }
-        // Health + resultados
+        // Health
         _ => {
             if tick % 200 == 0 && NET_CONFIG.lock().configured {
-                log(tick, &alloc::format!("Health TX={} RX={}",
-                    crate::netstack::net_tx_count(), crate::netstack::net_rx_count()));
+                log(
+                    tick,
+                    &alloc::format!(
+                        "Health TX={} RX={} online={}",
+                        crate::netstack::net_tx_count(),
+                        crate::netstack::net_rx_count(),
+                        NET_CONFIG.lock().online
+                    ),
+                );
             }
-            // Mostra diagnostico completo quando HTTP termina
             if tick == 300 || tick == 500 {
                 let report = crate::netdiag::run_network_test();
                 for line in report.lines() {

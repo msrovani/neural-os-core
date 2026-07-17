@@ -1,8 +1,9 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.8.0 — Marco K²CHJ ✅
+#   STATE — neural-os-core v1.8.5 TEST — NÃO ESTÁVEL
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
-#   Pista ativa: Sprint Sound (voz) + review gate v2.0.0
+#   Pista ativa: estabilização v1.8.5 + Sprint Net; Sprint Sound ✅
+#   Gate v2.0.0: só com por_fazer zerado + OK maintainer (lembrar)
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
 # ═════════════════════════════════════════════════════════
 
@@ -16,29 +17,55 @@
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 
 ## Roadmap Atual
-**Versão:** **v1.8.0** (2026-07-16) — marco consolidado: ADR-0042 N1–N5 + wire crates N2.5→N5.7 (v1.7.8…v1.7.11).  
+**Versão:** **v1.8.5 TESTE / NÃO ESTÁVEL** (2026-07-16) — consolidação pós-v1.8.0 para integração e validação.  
+**Base:** v1.8.0 = ADR-0042 N1–N5 + wire crates N2.5→N5.7.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
-**Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review pendente** (qualidade voz Sprint Sound + checklist ADR). **Não** declarar v2.0 automaticamente.  
+**Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
 **Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
+
+### Consolidação pós-v1.8.0 — v1.8.5 TEST
+- **Sprint 108:** Self-Evolve completo (`observe→generate→verify→improve→reflect`).
+- **Sprint Sound:** pipeline e ferramentas fechados como parcial honesto; soft-float/VITS, CTC WER, UAC iso e cutover abertos.
+- **ADR-0040 / NeuralFS:** MVP aceito; RAM I/O + reclaim/split + ATA opcional; residual físico/multinível `por_fazer`.
+- **ADR-0046:** AirLLM layer-wise + hot-swap ATA/Net code; DMA, stream-to-disk, K-quants e e2e grande abertos.
+- **ADR-0047:** família Latent/Evolve/Probe/GPU/HMI em MVP/PoC; sem promoção indevida a produção.
+- **ADRs 0048–0050:** arquitetura GPU multigeração proposta; nenhuma implementação alegada.
+- **Evidência consolidada:** `SESSION_121.md`–`SESSION_129.md`.
 
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
 | **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K²CHJ funcional; **N2.5** ✅ (v1.7.8); **N3.5** ✅ (v1.7.9); **N4.6** ✅ (v1.7.10); **N5.7** ✅ (v1.7.11) |
+| **ADR-0040 FS MVP** | ✅ **CLOSED** (SESSION_124) — soft-migrate MHI; exFAT FilesystemDriver; NeuralFS `/mnt/neural` (SESSION_123 RAM); residuals SESSION_125 → todos `por_fazer` |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
-| Sprint Sound (reaberta) | ▶️ backlog voz (STT/Piper/UAC + unificar audio truth…) — **não bloqueia** v2.0 gate review |
-| Sprint 108 | ⏳ self-evolving — paralelo |
+| Sprint Sound | ✅ pipeline Mic→Wake→STT→TTS; STT PCM; UAC parse; neural-lite; residual soft-float/VITS + cutover |
+| Sprint 108 | ✅ **CLOSED** — self_evolve + SelfEvolveAgent (observe→gen→verify→improve→reflect) |
+| **N-gram spec (ADR-0047 §3.7)** | ✅ **OK** (SESSION_125/127) — decode + bench empírico `[ADR-0047-NGRAM]` speedup_est |
+| **ADR-0047 família MVP** | ✅ **Accepted parcial** (SESSION_126–127) — L1–L3 + Genesis + G1–G5 PoC + H1/H2/H4/H5; H3/ISA/adapter ❌ descartados |
+| **ADR-0046 AirLLM GGUF** | ✅ **MVP completa** (SESSION_127) + hot-swap Net code (SESSION_128) — ATA+`set_model`; Net→FAT→AirLLM (L3.5/RX se RX=0); residuals: DMA / stream-to-disk / K-quants / e2e GGUF grande |
 
-### Sound / Voice (ADR-0045)
+### NeuralFS (SESSION_123 + reclaim/split/ATA)
 | Item | Estado |
 |------|--------|
-| Truth path | `neural-kernel/src/audio/*` (boot) — **residual N5.7** |
-| Espelho | `jarbas/src/audio/*` — wired no crate; **não re-exportado** no bin (Sprint107 wakeword diverge) |
-| Stack | HDA + Piper (+formant) + STT CTC + VAD + mixer + FB TTS paint |
-| WakeWord | **registrado** (Loop 5) — Mic→WAKE e2e → Sprint Sound |
-| UAC | stub melhorado (PCI USB probe) — enum real → Sprint Sound (#84) |
-| Backlog | **Sprint Sound (reaberta)** — ver TODO.md |
+| Format/mount + file R/W | ✅ RAM 4MB em `/mnt/neural` |
+| B-tree leaf mutavel | ✅ insert/delete/split (max 84/folha; root 2-niveis) |
+| Free-list reclaim | ✅ LIFO + page `NRFSFREE` (free_extent_root); smoke_reclaim |
+| VFS agent | ✅ ATA MBR `0x7F` se existir; senao RAM; seed hello.txt |
+| Disco fisico | ✅ probe/mount/format cauda livre (>=8MB, slot MBR); nao toca FAT |
+| Espelho k_nano | ✅ btree/volume/agent/tests sync; BlockDevice.total_sectors |
+| Residual | ⏳ B-tree 3+ niveis; GPT NeuralFS; parent-full no 2o split |
+
+### Sound / Voice (ADR-0045) — Sprint Sound ✅
+| Item | Estado |
+|------|--------|
+| Truth path | `neural-kernel/src/audio/*` (boot) — residual N5.7 |
+| Espelho | `jarbas/src/audio/*` — sync VAD/settings/wake Continuous; **sem cutover** |
+| Stack | HDA + Piper neural-lite (+formant) + STT CTC PCM + VAD adapt + mixer + barge-in |
+| WakeWord | Continuous + gate pós-WAKEWORD (bypass `weather-e2e`) |
+| UAC | parse AC/AS/iso EP + probe; isócrono DMA → HW real |
+| STT | `train_stt.py` PCM→MFCC; `STT.BIN` regenerado; CTC tiny WER ainda fraco |
+| Piper | neural-lite polish; **VITS/HiFi-GAN = soft-float blocker** |
 | Obsoleto | sherpa / Pocket / Kokoro-primário / Vosk / Wyoming / Rustpotter |
 
 ### Adequação N0–N5 (ADR-0042)
@@ -163,10 +190,16 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 
 **Boot 2026-07-16 (`012934`):** `[RUSTCODER] LOADED` · `[STT] CTC LOADED` · `[BGE] …LOADED` · `[HWEXPERT] parse FAILED` (magic OK @0x160000000 — layout/size hint).
 
-### Serial SLIP bridge (bypass NIC)
-- Script: `tools/serial_bridge.py` — TCP **server** `127.0.0.1:4444`; QEMU COM2 = **cliente** (`-serial tcp:127.0.0.1:4444`, sem `server=on`).
-- Lifecycle: `run-qemu-whpx.ps1` sobe bridge antes do QEMU e mata no `finally`. PS1 = **ASCII-only** (em-dash UTF-8 partia parser PS5/CP1252). `Test-PortListening` cruza netstat (Get-NetTCPConnection pode mentir vazio).
-- Skip: `-NoSerialBridge`. `-Bridge` = WinTAP (distinto do SLIP).
+### Sprint Net / e1000 (2026-07-16)
+- **Gate canônico:** e1000 PCI + smoltcp. **SLIP/COM2 FROZEN** (default off; opt-in `-SerialBridge` apenas; COM2=`null` sem peer).
+- **Launch:** default = user/slirp + e1000 + static `10.0.2.15`. **Recomendado WiFi host:** `-Bridge` → TAP + guest DHCP; `netmode.flag` loader `@0x164000000` (`U`/`B`).
+- **P0:** e1000 RX — split 2MiB→4KiB UC DMA, kick_rx reset, clflush DD, L3.5 ARP prove antes de DNS.
+- **Smoke `190530` (user):** L3 OK + L3.5 FAIL honesto `dtx=1 drx=0` (skip L4) — RX ainda morto em WHPX+slirp; proximo = `-Bridge` TAP.
+
+### Serial SLIP bridge (FROZEN — nao e path do gate Net)
+- Script: `tools/serial_bridge.py` — TCP **server** `127.0.0.1:4444`; QEMU COM2 = **cliente**.
+- Default: **nao** sobe peer. Opt-in: `-SerialBridge`. Alias `-NoSerialBridge` = skip (ja e default).
+- `-Bridge` = WinTAP/e1000 (distinto do SLIP). PS1 ASCII-only.
 
 ### Piper + BGE (2026-07-15)
 | Item | Antes | Agora |
@@ -178,7 +211,7 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 ### Próximo
 - **Sprint Sound (pista ativa):** STT PCM-real, Mic→Wake runtime, Piper VITS, UAC e unificação do truth path de áudio.
 - **Gate `v2.0.0`:** review formal conjunto da ADR-0042 e da qualidade de voz; não declarar automaticamente.
-- **Sprint 108 (paralelo):** self-evolving agents / auto-skill generation.
+- **Sprint 108:** ✅ self-evolving agents (`hermes/self_evolve.rs` + `SelfEvolveAgent`).
 - **Residuals intencionais:** estabilizar APIs antes de migrar `cortex.rs`, `agents.rs`, `net*`, `fs/*` e `audio/*`.
 - Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
 - Evidência consolidada: `SESSION_120.md`; wires: `SESSION_116.md`–`SESSION_119.md`; voz: `SESSION_107_CLOSE.md` e `SESSION_110.md`.
@@ -266,6 +299,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 - **🏆 v1.7.0 (2026-07-15):** N1 ✅ + BitNet 2B LOADED (~590MB, 30L, FWD); soft-float/`cargo nk`; TTS empty known. Ver `SESSION_108.md`.
 - **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
 - **🏆 v1.8.0 (2026-07-16):** ADR-0042 N1–N5 + wire N2.5–N5.7 consolidados. Gate `v2.0.0` permanece sujeito a review formal; Sprint Sound concentra a qualidade de voz.
+- **🧪 v1.8.5 (2026-07-16):** consolidação não estável pós-v1.8.0: Self-Evolve, Sound, NeuralFS/ADR-0040, AirLLM/ADR-0046 e família ADR-0047; ADRs GPU 0048–0050 propostas.
 - **🏆 Sprint 106 (2026-07-14):** Ecossistema de Anéis Lógicos completo (10/10), sem constituir release `v2.0.0`. Workspace K²CHJ, SOUL.md via VFS, MicroPython/WASM, SkillOpt e AIOS API.
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
@@ -400,7 +434,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - **Serial bridge**: Watchdog + DNS healthcheck + reconexão automática
 - **Human-in-the-Loop (#244)**: `/approve`, `/deny`, `/pending` + bloqueio de skills
 - **LLM Icons**: `generate_llm_icon()` integrado no compositor com cache
-- **GGUF streaming**: `load_gguf_header_from_disk()` + `load_gguf_streaming()`
+- **GGUF streaming (ADR-0046 MVP):** `GGUFStreamingModel` + `forward_streaming` + soft PrefetchEngine; `/model` ATA + `/model-fetch` Net→FAT→AirLLM (SESSION_127/128). Net falha L3.5/RX se RX=0. P9 mmap ≠ AirLLM.
 - **Frame allocator**: Bitmap estendido para 8GB
 - **FAT32 streaming**: `read_file_range()` — leitura chunked
 - **RssAgent + EmailAgent**: Agentes WWW via HTTP + SMTP
@@ -440,9 +474,14 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 ### ▶️ Sprint Sound (reaberta) + ADR-0042
 - STT retrain / Mic→Wake runtime / Piper VITS / UAC / jarbas wire ⏳ Sound
 - **N3→N5** ▶️ pista ativa (N2 ✅ CLOSED)
-- Self-evolving agents (Sprint 108) ⏳
+- Self-evolving agents (Sprint 108) ✅
+- ADR-0040 residuals (SESSION_125): write FS / MHI DMA / #421 / #423 / cloud / NeuralFS disco / #419 UI → todos `por_fazer` (nenhum viavel agora)
 - LLM Agent 24/7 multi-turn conversation ⏳
-- DHCP/Rede nativa (e1000 sem serial tunnel) 🔴
+- DHCP/Rede QEMU user/slirp (static 10.0.2.15 + DNS/HTTP via NIC) ▶️ Sprint Net
+  - **Gate Sprint Net = e1000** `[smoltcp/NIC]` — SLIP = bypass serial de debug, **não** é o gate.
+  - DiskIntelligence: sandbox = light probe ✅; TODO validar probe completo só em HW (sem reintroduzir hang QEMU).
+  - Inventário: 8086:100E e1000 → log `not wifi` (iwlwifi N/A); SelfHeal DID-gate.
+- **Gate v2.0.0:** só quando demandas `por_fazer` zeradas **e** OK explícito do maintainer (lembrar sempre).
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
 - RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado
@@ -487,4 +526,4 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ---
 
-**Estado canônico:** v1.8.0 — ADR-0042 N1–N5 + wire crates completos; Sprint Sound ativa; `v2.0.0` não declarado.
+**Estado canônico:** v1.8.5 teste/não estável — base v1.8.0 preservada; MVPs pós-marco em validação; `v2.0.0` não declarado.

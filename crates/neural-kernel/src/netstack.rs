@@ -149,6 +149,30 @@ static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
 static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
 pub fn net_tx_count() -> u64 { NET_TX_COUNT.load(Ordering::Relaxed) }
 pub fn net_rx_count() -> u64 { NET_RX_COUNT.load(Ordering::Relaxed) }
+
+/// Wall-clock pause (pré-sti / sem TIMER). Conservador @2GHz: 1µs ≈ 2000 ciclos.
+/// Necessário para QEMU slirp injetar ARP/DNS no e1000 — Instant fake sem delay = RX=0.
+pub(crate) fn wall_pause_us(us: u64) {
+    let cycles = us.saturating_mul(2_000);
+    let start = unsafe {
+        let lo: u32;
+        let hi: u32;
+        core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
+        ((hi as u64) << 32) | (lo as u64)
+    };
+    loop {
+        let now = unsafe {
+            let lo: u32;
+            let hi: u32;
+            core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
+            ((hi as u64) << 32) | (lo as u64)
+        };
+        if now.wrapping_sub(start) >= cycles {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+}
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, Ipv4Address, IpCidr};
 use smoltcp::socket::tcp::{self, State as TcpState, Socket as TcpSocket};
@@ -311,7 +335,17 @@ impl NetStack {
         self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
-        crate::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2");
+        // Espelha em NET_CONFIG (diag / agentes / is_online)
+        {
+            let mut cfg = crate::net::NET_CONFIG.lock();
+            cfg.ip = [10, 0, 2, 15];
+            cfg.gateway_ip = [10, 0, 2, 2];
+            cfg.subnet_mask = [255, 255, 255, 0];
+            cfg.dns_ip = [10, 0, 2, 3];
+            cfg.configured = true;
+            cfg.online = true;
+        }
+        crate::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2 dns=10.0.2.3");
     }
 
     pub fn poll(&mut self, now_ms: i64) {
@@ -476,6 +510,8 @@ impl NetStack {
     pub fn dns_resolve(&mut self, hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
         let txid: u16 = 0x1234;
         let qname = Self::encode_dns_name(hostname);
+        let tx0 = net_tx_count();
+        let rx0 = net_rx_count();
 
         let mut query = Vec::with_capacity(12 + qname.len() + 4);
         query.extend_from_slice(&txid.to_be_bytes());
@@ -507,12 +543,14 @@ impl NetStack {
             }
         }
 
-        for i in 0..500 {
-            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-            iface.poll(Instant::from_millis(i as i64 * 5), phy, sockets);
+        // ~800 × 500µs ≈ 400ms wall — tempo para ARP gw 10.0.2.2 + DNS 10.0.2.3 no slirp.
+        // Instant avança 5ms/iter (lógico); wall_pause dá RX real no e1000.
+        for i in 0..800u64 {
+            self.poll((i * 5) as i64);
+            wall_pause_us(500);
 
             let payload = {
-                let udp = sockets.get_mut::<udp_socket::Socket>(handle);
+                let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
                 udp.recv().ok().map(|(data, _)| Vec::from(data))
             };
 
@@ -540,6 +578,12 @@ impl NetStack {
                     if rtype == 1 && rclass == 1 && rdlen == 4 {
                         let ip = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
                         self.sockets.remove(handle);
+                        crate::serial_println!(
+                            "[DNS] OK {}.{}.{}.{} (dtx={} drx={})",
+                            ip[0], ip[1], ip[2], ip[3],
+                            net_tx_count().saturating_sub(tx0),
+                            net_rx_count().saturating_sub(rx0)
+                        );
                         return Some(ip);
                     }
                     pos = name_end.max(pos + rdlen);
@@ -548,6 +592,13 @@ impl NetStack {
             }
         }
         self.sockets.remove(handle);
+        crate::serial_println!(
+            "[DNS] timeout dtx={} drx={} tx={} rx={}",
+            net_tx_count().saturating_sub(tx0),
+            net_rx_count().saturating_sub(rx0),
+            net_tx_count(),
+            net_rx_count()
+        );
         None
     }
 

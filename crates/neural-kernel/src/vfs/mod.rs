@@ -20,6 +20,7 @@ pub fn init_standard_mounts() {
         v.mount("/mnt/ram", "ramfs");
         v.mount("/mnt/hdd", "ata");
         v.mount("/mnt/sdhc", "usbmsc");
+        v.mount("/mnt/neural", "neuralfs");
         v.mount("/chat", "hermes");
         v.mount("/dev", "devfs");
         v.mount("/proc", "procfs");

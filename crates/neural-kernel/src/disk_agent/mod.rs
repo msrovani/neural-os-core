@@ -108,8 +108,22 @@ impl DiskIntelligenceAgent {
         }
     }
 
+    /// QEMU/VBox: ATA PIO síncrono (SMART / bw 256 setores / 10 FS probes / LVM)
+    /// engasga WHPX e prende `init_phase` — NetAgent Continuous nunca entra no `run()`.
+    /// Sandbox = light probe (confirmado). TODO: validar probe completo fora de sandbox (HW real)
+    /// sem reintroduzir hang — não reativar SMART/bw/FS-storm no path QEMU.
+    fn is_dev_sandbox() -> bool {
+        crate::env::is_sandbox() || crate::net::NET_CONFIG.lock().is_dev_env
+    }
+
     fn probe_all(&mut self) {
         crate::serial_println!("[DISK] DiskIntelligenceAgent: probing storage...");
+        let sandbox = Self::is_dev_sandbox();
+        if sandbox {
+            crate::serial_println!(
+                "[DISK] sandbox: lightweight probe (skip SMART/bw/FS-storm/vol) — nao bloqueia NetAgent"
+            );
+        }
         let ctrl_count = self.controllers.len();
         for ctrl_idx in 0..ctrl_count {
             let ctrl_name: String;
@@ -121,23 +135,39 @@ impl DiskIntelligenceAgent {
                 crate::serial_println!("[DISK]  Controller: {} ({:?})", ctrl_name, ctrl_type);
                 let disks = ctrl.probe_disks();
                 for mut disk in disks {
-                    // S.M.A.R.T. probe
-                    disk.smart = self.controllers[ctrl_idx].read_smart(0);
-                    if let Some(ref smart) = disk.smart {
-                        let status = if smart.healthy { "healthy" } else { "⚠ UNHEALTHY" };
-                        crate::serial_println!("[SMART] {}: {}, {}°C, {}h on, realloc={}, pending={}",
-                            disk.name, status, smart.temp_c, smart.power_on_hours,
-                            smart.realloc_sectors, smart.pending_sectors);
-                        if !smart.healthy {
-                            crate::serial_println!("[SMART] *** {} HEALTH ALERT: atributos criticos! ***", disk.name);
-                        }
+                    if sandbox {
+                        crate::serial_println!("[SMART] {}: skipped (sandbox)", disk.name);
                     } else {
-                        crate::serial_println!("[SMART] {}: S.M.A.R.T. nao disponivel", disk.name);
+                        // S.M.A.R.T. probe — comandos ATA extras; em QEMU pode deixar BSY/DRQ pendente
+                        disk.smart = self.controllers[ctrl_idx].read_smart(0);
+                        if let Some(ref smart) = disk.smart {
+                            let status = if smart.healthy { "healthy" } else { "⚠ UNHEALTHY" };
+                            crate::serial_println!("[SMART] {}: {}, {}°C, {}h on, realloc={}, pending={}",
+                                disk.name, status, smart.temp_c, smart.power_on_hours,
+                                smart.realloc_sectors, smart.pending_sectors);
+                            if !smart.healthy {
+                                crate::serial_println!("[SMART] *** {} HEALTH ALERT: atributos criticos! ***", disk.name);
+                            }
+                        } else {
+                            crate::serial_println!("[SMART] {}: S.M.A.R.T. nao disponivel", disk.name);
+                        }
                     }
 
                     self.read_partitions(&mut disk, ctrl_idx);
-                    self.detect_fs(&mut disk, ctrl_idx);
-                    self.detect_volume_mgrs(&mut disk, ctrl_idx);
+                    // Sandbox: no máximo 4 partições — GPT lixo / multi-FS storm engasga PIO
+                    if sandbox && disk.partitions.len() > 4 {
+                        crate::serial_println!(
+                            "[DISK] sandbox: capping partitions {}→4",
+                            disk.partitions.len()
+                        );
+                        disk.partitions.truncate(4);
+                    }
+                    if sandbox {
+                        self.detect_fs_light(&mut disk, ctrl_idx);
+                    } else {
+                        self.detect_fs(&mut disk, ctrl_idx);
+                        self.detect_volume_mgrs(&mut disk, ctrl_idx);
+                    }
                     self.register_mhi(&disk);
                     self.mount_vfs(&disk);
                     self.disks.push(disk);
@@ -146,6 +176,7 @@ impl DiskIntelligenceAgent {
         }
         self.print_topology();
         DISK_AGENT_INIT.store(true, Ordering::Release);
+        crate::serial_println!("[DISK] probe_all Done (sandbox={})", sandbox);
     }
 
     fn io_scheduler_enqueue(&mut self, ctrl_idx: u8, disk: u8, lba: u64, data: Vec<u8>) {
@@ -215,14 +246,18 @@ impl DiskIntelligenceAgent {
         let entry_size = u32::from_le_bytes([hdr[84], hdr[85], hdr[86], hdr[87]]);
         if entry_count > 128 || entry_size != 128 { return None; }
 
+        // Sandbox: no máximo 4 entradas GPT (1 setor) — evita tempestade PIO
+        let max_entries = if Self::is_dev_sandbox() { 4u32.min(entry_count) } else { entry_count };
+
         // Read partition entries (typically LBA 2-33)
         let entries_per_block = 512 / entry_size as usize; // typically 4 per sector
-        let total_blocks = (entry_count as usize + entries_per_block - 1) / entries_per_block;
+        let total_blocks = (max_entries as usize + entries_per_block - 1) / entries_per_block;
         let mut parts = Vec::new();
         for blk in 0..total_blocks {
             let mut buf = [0u8; 512];
             if !read_fn(entries_lba + blk as u64, &mut buf) { break; }
             for ent in 0..entries_per_block {
+                if parts.len() >= max_entries as usize { break; }
                 let off = ent * entry_size as usize;
                 let type_guid = &buf[off..off+16];
                 if type_guid.iter().all(|&b| b == 0) { continue; }
@@ -312,6 +347,54 @@ impl DiskIntelligenceAgent {
         }
     }
 
+    /// Sandbox: 1 setor/partição — só FAT32/exFAT OEM (sem 10 probes × LBA altos).
+    fn detect_fs_light(&self, disk: &mut RawDisk, ctrl_idx: usize) {
+        for part in &mut disk.partitions {
+            let base_lba = part.lba_start;
+            let mut bpb = [0u8; 512];
+            let ok = if ctrl_idx < self.controllers.len() {
+                self.controllers[ctrl_idx].read_blocks(0, base_lba, &mut bpb, 1)
+            } else {
+                false
+            };
+            if !ok {
+                continue;
+            }
+            if &bpb[3..11] == b"EXFAT   " {
+                part.fs_info = Some(disk_info::FsInfo {
+                    fs_type: disk_info::FilesystemType::ExFat,
+                    label: alloc::format!("exFAT"),
+                    uuid: String::new(),
+                    total_bytes: part.sector_count.saturating_mul(512),
+                    free_bytes: None,
+                    block_size: 512,
+                    is_writeable: true,
+                });
+                crate::serial_println!("[DISK]  p{}: exFAT (light)", part.index);
+            } else if bpb[0] == 0xEB || bpb[0] == 0xE9 {
+                let oem = core::str::from_utf8(&bpb[3..11]).unwrap_or("");
+                if oem.starts_with("FAT") || oem.starts_with("MSDOS") || oem.starts_with("MSWIN")
+                    || part.mbr_type == 0x0B || part.mbr_type == 0x0C || part.mbr_type == 0x1C
+                {
+                    let label = core::str::from_utf8(&bpb[0x47..0x52])
+                        .unwrap_or("")
+                        .trim_end()
+                        .into();
+                    part.fs_info = Some(disk_info::FsInfo {
+                        fs_type: disk_info::FilesystemType::Fat32,
+                        label,
+                        uuid: String::new(),
+                        total_bytes: part.sector_count.saturating_mul(512),
+                        free_bytes: None,
+                        block_size: 512,
+                        is_writeable: true,
+                    });
+                    crate::serial_println!("[DISK]  p{}: FAT32 (light)", part.index);
+                }
+            }
+        }
+    }
+
     fn detect_volume_mgrs(&self, disk: &mut RawDisk, ctrl_idx: usize) {
         let read_fn = |lba: u64, buf: &mut [u8]| -> bool {
             if ctrl_idx < self.controllers.len() {
@@ -371,9 +454,15 @@ impl Agent for DiskIntelligenceAgent {
         if !self.tick_run {
             self.tick_run = true;
             self.probe_all();
+            // Oneshot: Done libera init_phase → run() Continuous (NetAgent)
             AgentTickResult::Done
         } else {
             self.tick_count += 1;
+
+            // Sandbox: sem I/O periódico — Oneshot já Done; path Continuous legado
+            if Self::is_dev_sandbox() {
+                return AgentTickResult::Done;
+            }
 
             // I/O scheduler flush (a cada 10 ticks)
             if self.tick_count % 10 == 0 {

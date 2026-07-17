@@ -1,9 +1,41 @@
 # ADR-0040: Neural Memory & Storage Architecture — MHI Ativo + Multi-FS
 
-**Data:** 2026-07-10 (v2)  
-**Status:** Draft  
+**Data:** 2026-07-10 (v2); **MVP aceite:** 2026-07-16 (SESSION_124)  
+**Status:** Accepted  
 **Substitui:** ADR-0010 (SFS Phase 4), ADR-0030 (DiskIntelligenceAgent), ADR-0040 v1  
 **Depende de:** ADR-0004 (Page Tables), ADR-0037 (NVMe DMA GPU), ADR-0039 (Boot Flow)
+
+---
+
+## 0. Critério de aceite MVP (2026-07-16)
+
+Este ADR fecha lifecycle `por_fazer` → `completa` sob **MVP honesto**, não visão plena §3.1 N+3.
+
+| Escopo MVP aceite | Evidência |
+|-------------------|-----------|
+| BlockDevice + `write_sectors` (ATA/AHCI/USB-MSC) | `block_dev.rs` |
+| exFAT detect/mount + list root (FilesystemDriver); write arquivo deferido | `exfat.rs` (`ExfatFs`) |
+| EXT2/NTFS detect + mount via FilesystemDriver (read path parcial) | `ext2_reader.rs`, `ntfs_reader.rs` |
+| DiskIntelligenceAgent probes (10+ FS) + VFS mounts | `disk_agent/` |
+| MHI soft-migrate (metadata + DRAM memcpy seguro; **nunca** `write_bytes(0)`) | `k_nano::mhi::mhi_tick` wired via Optimizer |
+| NeuralFS scaffold + agent VFS `/mnt/neural` (status real se montado) | `neural_fs/`, `NeuralFsAgent` |
+| FilesystemDriver trait | `fs_driver.rs` |
+
+| Explicitamente deferido | Motivo | Residual (SESSION_125) |
+|-------------------------|--------|------------------------|
+| exFAT write (bitmap/FAT) | Risco de corromper mídia sem validação HW | `por_fazer` (#417 w) |
+| NTFS/EXT write; EXT4 journal | Risco + complexidade; read-only atende | `por_fazer` |
+| MHI DMA NVMe↔DRAM / VRAM PCIe | Sem path DMA storage/GPU maduro no tick | `por_fazer` (#420 DMA) |
+| NeuralFS disco fisico / multi-level (#422) | RAM I/O ✅ SESSION_123; path CoW em MemoryDisk | `por_fazer` (NeuralFS.md) |
+| SysInstaller (#421) | UI/LLM flow pós-MVP; write HD | `por_fazer` |
+| GPU Direct Storage (#423) | Depende GPU compute + NVMe DMA | `por_fazer` |
+| Cloud mounts plenos (#418 net) | `netfs` scaffold; depende Sprint Net | `por_fazer` |
+| Storage Manager App UI (#419) | CLI `storage_report` existe; UI Settings residual | `por_fazer` |
+
+**Lifecycle:** ADR-0040 permanece `completa` (MVP). Residuais acima = follow-up `por_fazer` — **não** reabrem a ADR.
+Triagem 2026-07-16 (SESSION_125): **nenhum** residual viável agora (baixo risco, sem HW real / sem Net / sem GPU DMA).
+
+**Não declarar v2.0.0** — gate ainda exige outros `por_fazer` + OK humano.
 
 ---
 

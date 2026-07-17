@@ -52,6 +52,13 @@ impl SkillLoader {
 
     /// Parse a skill markdown file, validate security, and add to registry
     pub fn register_skill(&mut self, content: &str) -> Result<(), &'static str> {
+        // Sprint 108: verificação estrutural antes do parse completo
+        if let crate::self_evolve::VerifyVerdict::Reject(reason) =
+            crate::self_evolve::verify_skill_md(content)
+        {
+            serial_println!("[SKILL-VERIFY] REJECT: {}", reason);
+            return Err(reason);
+        }
         let content = content.replace("\r\n", "\n");
         let parts: Vec<&str> = content.splitn(3, "---\n").collect();
         if parts.len() < 3 {

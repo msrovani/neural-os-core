@@ -8,6 +8,8 @@ pub static ATA_DRIVER: Mutex<Option<crate::ata::AtaDriver>> = Mutex::new(None); 
 lazy_static! {
     /// Shared event bus for all K²CHJ crates.
     pub static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
+    /// ADR-0047 LatentBus — hidden-state channel (parallel to EventBus).
+    pub static ref LATENT_BUS: event_bus::LatentBus = event_bus::LatentBus::new();
 }
 
 // ponytail: SKILL_REGISTRY stub for cross-crate access.

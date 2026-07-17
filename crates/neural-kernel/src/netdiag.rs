@@ -2,9 +2,15 @@ use alloc::string::String;
 use core::sync::atomic::Ordering;
 
 /// Skill de diagnostico de rede para JARVIS.
+/// Sprint Net gate = **e1000** via smoltcp/NIC (não SLIP). Labels smoke: `[smoltcp/NIC]`.
 /// Testa cada protocolo e reporta status no log.
 pub fn run_network_test() -> String {
     let mut report = String::from("\n======= DIAGNOSTICO DE REDE =======\n");
+    report.push_str("Gate Sprint Net: e1000 [smoltcp/NIC] (SLIP = debug bypass only)\n");
+    report.push_str(&alloc::format!(
+        "bootstrap_early smoke: {}\n",
+        crate::network_agent::early_smoke_status()
+    ));
 
     // 1. Ambiente
     let env = crate::env::get();

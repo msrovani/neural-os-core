@@ -255,9 +255,13 @@ impl Skill for SttSkill {
     fn manifest(&self) -> McpManifest {
         McpManifest {
             name: String::from("stt_transcribe"),
-            description: String::from("Detecta atividade de voz e extrai caracteristicas do audio"),
-            required_tokens: Vec::new(), preconditions: Vec::new(), context_links: Vec::new(),
-            output_schema: OutputSchema::String, idempotent: false, contracts: Vec::new(),
+            description: String::from("Transcreve PCM i16 LE via CTC global (mesmo path do runtime)"),
+            required_tokens: Vec::new(),
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: OutputSchema::String,
+            idempotent: false,
+            contracts: Vec::new(),
         }
     }
 
@@ -265,38 +269,30 @@ impl Skill for SttSkill {
         let pcm: &[i16] = unsafe {
             core::slice::from_raw_parts(input.as_ptr() as *const i16, input.len() / 2)
         };
+        if pcm.is_empty() {
+            return Ok(alloc::vec![b'?']);
+        }
 
-        if pcm.is_empty() { return Ok(alloc::vec![b'?']); }
-
-        let mut vad = VAD::new(300.0, 16000);
+        // Telemetria VAD opcional
+        let mut vad = VAD::new(crate::audio::settings::vad_threshold(), 16000);
         let mut speech_segments = 0u32;
-        let mut total_energy = 0.0f32;
-        let mut total_zcr = 0.0f32;
-        let mut frame_count = 0u32;
-        let frame_size = 320;
-
-        for chunk in pcm.chunks(frame_size) {
-            if chunk.len() < frame_size { continue; }
-            let (energy, zcr, _active, transition) = vad.process_frame(chunk);
-            total_energy += energy;
-            total_zcr += zcr;
-            frame_count += 1;
+        for chunk in pcm.chunks(320) {
+            if chunk.len() < 320 {
+                continue;
+            }
+            let (_e, _z, _a, transition) = vad.process_frame(chunk);
             if transition == VadTransition::SpeechStart {
                 speech_segments += 1;
             }
         }
 
-        let avg_energy = if frame_count > 0 { total_energy / frame_count as f32 } else { 0.0 };
-        let avg_zcr = if frame_count > 0 { total_zcr / frame_count as f32 } else { 0.0 };
-
-        let has_speech = speech_segments > 0 && avg_energy > 200.0;
-        let result = if has_speech {
-            alloc::format!("[VAD] {} segmentos de voz, energy={:.0}, zcr={:.3}", speech_segments, avg_energy, avg_zcr)
+        let text = crate::audio::stt::transcribe_global(pcm);
+        let result = if text.is_empty() {
+            alloc::format!("[STT] empty vad_segs={} samples={}", speech_segments, pcm.len())
         } else {
-            alloc::format!("[VAD] Silencio")
+            text
         };
-
-        crate::serial_println!("[STT] {}", result);
+        crate::serial_println!("[STT] skill: {}", result);
         Ok(result.into_bytes())
     }
 }

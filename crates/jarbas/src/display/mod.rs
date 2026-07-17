@@ -16,3 +16,5 @@ pub mod theme;
 pub mod compositor;
 pub mod ttf_engine;
 pub mod avatar;
+pub mod ui_spec;
+pub mod embed_viz;

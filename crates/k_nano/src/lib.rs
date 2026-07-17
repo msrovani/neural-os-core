@@ -32,6 +32,7 @@ pub mod fs;
 pub mod globals;
 pub use globals::ATA_DRIVER;
 pub use globals::EVENT_BUS;
+pub use globals::LATENT_BUS;
 pub use globals::SKILL_REGISTRY;
 pub use scancode_to_ascii::scancode_to_ascii;
 pub mod fs_driver;

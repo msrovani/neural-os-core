@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use event_bus::{CapabilityToken, Event, Receiver};
+use event_bus::latent::{LatentReceiver, TOPIC_THOUGHT_LLM};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
 use crate::hermes::{self, IntentCache, WorkflowEngine};
@@ -323,6 +324,8 @@ pub struct HermesAgent {
     llm_receiver: Receiver,
     security_receiver: Receiver,
     health_receiver: Receiver,
+    latent_receiver: LatentReceiver,
+    latent_recv_total: u64,
     cortex: cortex::cortex::Cortex,
     state: HermesState,
     status_skill: String,
@@ -352,6 +355,8 @@ impl HermesAgent {
             llm_receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_RESPONSE),
             security_receiver: EVENT_BUS.subscribe("SECURITY_ALERT"),
             health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
+            latent_receiver: k_nano::globals::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
+            latent_recv_total: 0,
             cortex: cortex::cortex::Cortex::new(),
             state: HermesState::Idle,
             status_skill: String::from("system_status"),
@@ -434,6 +439,18 @@ impl Agent for HermesAgent {
                 token: CapabilityToken::Legacy(1),
             });
             self.boot_greeted = true;
+        }
+
+        // ADR-0047: drain LatentBus thoughts (non-fatal)
+        while let Some(pkt) = self.latent_receiver.try_receive() {
+            self.latent_recv_total = self.latent_recv_total.saturating_add(1);
+            let norm = f32::from_bits(pkt.norm_bits);
+            if self.latent_recv_total <= 3 || self.latent_recv_total % 32 == 0 {
+                serial_println!(
+                    "[HERMES-LATENT] recv id={} norm={:.3} total={}",
+                    pkt.id, norm, self.latent_recv_total
+                );
+            }
         }
 
         // Atualiza métricas de consciência (sempre, leve)
@@ -1344,13 +1361,28 @@ impl Agent for HwDetectAgent {
                         }
                     }
 
-                    // Log de firmware disponivel baseado em VID/DID
-                    let fw_available = match (vid, agent.class) {
-                        (0x10DE, 0x03) => Some("nvidia/gp108 (FECS+GPCCS)"),
-                        (0x8086, 0x03) => Some("i915/skl+kbl (GuC+HuC+DMC)"),
-                        (0x10EC, 0x02) | (0x10EC, 0x0D) => Some("rtl_nic/rtl8168*"),
-                        (0x8086, 0x02) | (0x8086, 0x0D) => Some("intel/iwlwifi*"),
-                        _ => None,
+                    // Firmware hint: e1000 (8086:100E etc) ≠ iwlwifi
+                    let subclass = agent.subclass as u8;
+                    let is_intel_eth = vid == 0x8086
+                        && (agent.class == 0x02 || agent.class == 0x0D)
+                        && (subclass == 0x00
+                            || matches!(did, 0x100E | 0x100F | 0x10D3 | 0x1502 | 0x1503));
+                    if is_intel_eth {
+                        serial_println!(
+                            "[HW] {:04X}:{:04X} Ethernet e1000 — not wifi (iwlwifi N/A)",
+                            vid, did
+                        );
+                    }
+                    let fw_available = if is_intel_eth {
+                        None
+                    } else {
+                        match (vid, agent.class) {
+                            (0x10DE, 0x03) => Some("nvidia/gp108 (FECS+GPCCS)"),
+                            (0x8086, 0x03) => Some("i915/skl+kbl (GuC+HuC+DMC)"),
+                            (0x10EC, 0x02) | (0x10EC, 0x0D) => Some("rtl_nic/rtl8168*"),
+                            (0x8086, 0x02) | (0x8086, 0x0D) => Some("intel/iwlwifi*"),
+                            _ => None,
+                        }
                     };
                     if let Some(fw) = fw_available {
                         serial_println!("[HW] Firmware disponivel: {} para {:04X}:{:04X}", fw, vid, did);
@@ -1561,11 +1593,20 @@ impl SleepCycleAgent {
                 let loss = t.train_step(&mut w_mut, &i, &o);
                 serial_println!("[SLEEP] REPLAY: loss={:.4} step={}", loss, t.trained);
             }
-            2 => { self.insights.push(alloc::format!("[DREAM] ciclo #{} insight sintetico", self.cycle_count)); serial_println!("[SLEEP] DREAM"); }
+            2 => {
+                // ADR-0047: DREAM dispara evolve hot-swap demo
+                let st = crate::evolve::evolve_dream_tick();
+                self.insights.push(alloc::format!(
+                    "[DREAM] ciclo #{} evolve={}", self.cycle_count, st
+                ));
+                serial_println!("[SLEEP] DREAM evolve={}", st);
+            }
             3 => { serial_println!("[SLEEP] CONSOLIDATE"); }
             4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } serial_println!("[SLEEP] PRUNE: {} insights", self.insights.len()); }
             5 => {
                 serial_println!("[SLEEP] REFLECT: ciclo #{} completo (KG disponivel via event-bus)", self.cycle_count);
+                // ADR-0047 L3: probe presence gate (deep probe needs model ref in bin)
+                cortex::neuos_probe::log_probe(None);
             }
             _ => {}
         }

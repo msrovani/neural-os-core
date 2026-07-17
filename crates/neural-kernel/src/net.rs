@@ -1,5 +1,5 @@
 use crate::rtl8139::Rtl8139Driver;
-use crate::e1000::{E1000Driver, REG_STATUS, REG_RDH};
+use crate::e1000::{E1000Driver, REG_STATUS};
 use crate::{println, serial_println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
@@ -211,16 +211,58 @@ pub unsafe fn dump_e1000_status() {
     let mut guard = E1000.lock();
     if let Some(ref mut nic) = *guard {
         nic.dump_status();
-        // Read current link state from STATUS register
         let status = nic.read32(REG_STATUS);
         let link_up = status & 0x02 != 0;
-        let rdh = nic.read32(REG_RDH);
-        // If link just came up or RDH never moved, kick RX
-        if (link_up && !E1000_LINK_WAS_UP) || (link_up && rdh == 0) {
+        // Kick ONLY on link-up transition (NOT every time RDH==0 — that resets RX mid-poll).
+        if link_up && !E1000_LINK_WAS_UP {
             nic.kick_rx();
         }
         E1000_LINK_WAS_UP = link_up;
     }
+}
+
+/// Phys loader @0x164000000: 'B' = bridge/TAP (DHCP), 'U'/other = user/slirp (static 10.0.2.15).
+pub const NETMODE_LOADER_PHYS: u64 = 0x1640_0000_00;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum QemuNetMode {
+    User,
+    Bridge,
+}
+
+/// Read netmode.flag from QEMU loader window (written by run-qemu-whpx.ps1).
+/// Maps the phys page first — HHDM may omit high loader windows until touch.
+pub fn detect_qemu_net_mode() -> QemuNetMode {
+    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    if pmoff == 0 {
+        return QemuNetMode::User;
+    }
+    unsafe {
+        // Avoid #PF: bootloader HHDM may not cover unused high loader slots.
+        crate::apic::map_page_uc(NETMODE_LOADER_PHYS, pmoff);
+        let p = (NETMODE_LOADER_PHYS + pmoff) as *const u8;
+        let b = core::ptr::read_volatile(p);
+        match b {
+            b'B' | b'b' => QemuNetMode::Bridge,
+            b'U' | b'u' => QemuNetMode::User,
+            _ => QemuNetMode::User, // missing/garbage → user/slirp default
+        }
+    }
+}
+
+/// Prove e1000 RX with ARP kick before DNS. Returns true if any packet/DD observed.
+pub unsafe fn prove_e1000_rx(sip: [u8; 4], tip: [u8; 4]) -> bool {
+    let mut guard = E1000.lock();
+    if let Some(ref mut nic) = *guard {
+        let (rdh, dd, ok) = nic.prove_rx(sip, tip, 800);
+        serial_println!(
+            "[E1000] prove_rx: ok={} rdh={} dd={} (ARP who-has {}.{}.{}.{})",
+            ok, rdh, dd, tip[0], tip[1], tip[2], tip[3]
+        );
+        return ok;
+    }
+    serial_println!("[E1000] prove_rx SKIP: no e1000");
+    false
 }
 
 /// HTTP GET real via netstack. Usa o socket TCP do smoltcp.

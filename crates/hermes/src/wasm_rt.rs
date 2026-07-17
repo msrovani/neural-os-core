@@ -344,6 +344,22 @@ pub struct WasmSkillRuntime {
 }
 
 impl WasmSkillRuntime {
+    /// Replace-or-insert skill bytecode (ADR-0047 evolve hot-swap).
+    pub fn force_load_skill(&mut self, name: &str, bytecode: Vec<Op>, manifest: WasmSkillManifest) {
+        self.pool.alloc(name);
+        if let Some(agent) = self.registry.by_name_mut(name) {
+            agent.origin = AgentOrigin::Wasm(bytecode);
+            agent.manifest = manifest.clone();
+        } else {
+            self.registry
+                .register(name, AgentOrigin::Wasm(bytecode), manifest.clone());
+        }
+        self.manifests.insert(String::from(name), manifest);
+        kjson!("WASM", "RT", "force_load", "name", name);
+    }
+}
+
+impl WasmSkillRuntime {
     pub fn new() -> Self {
         let mut rt = WasmSkillRuntime {
             pool: MemoryPool::new(256 * 1024),
@@ -375,6 +391,21 @@ impl WasmSkillRuntime {
         self.hub.register(name, description, "1.0", "ide");
         self.load_skill(name, code, manifest);
         kjson!("IDE", "WASM", "create", "name", name);
+    }
+
+    /// Sandbox execute without ApprovalGate (ADR-0047 evolve test-before-promote).
+    pub fn execute_sandbox(&mut self, name: &str) -> Result<u32, &'static str> {
+        let agent = self.registry.by_name(name).ok_or("skill not found")?;
+        let bytecode = match &agent.origin {
+            AgentOrigin::Wasm(code) => code.clone(),
+            _ => return Err("not a WASM agent"),
+        };
+        let fuel = agent.max_fuel.min(50_000);
+        let memory = self.pool.alloc(name);
+        let mut vm = WasmExec::new(memory.len());
+        vm.memory.copy_from_slice(memory);
+        vm.fuel = fuel;
+        vm.run(&bytecode)
     }
 
     pub fn execute(&mut self, name: &str) -> Result<u32, &'static str> {

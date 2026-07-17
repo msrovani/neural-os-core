@@ -1,17 +1,18 @@
 ﻿# Neural OS Hermes — AI-native Bare-metal Operating System
 
-**Versão:** **v1.8.0** (tag) · codename **K²CHJ Core — Cognição**
+**Versão:** **v1.8.5** (teste / não estável) · codename **K²CHJ Core — Cognição**
 Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de compilação.
 
 ```
 ╔══════════════════════════════════╗
-║  Neural OS Hermes v1.8.0        ║
+║  Neural OS Hermes v1.8.5 TEST   ║
 ║  "K²CHJ Core — Cognição"        ║
 ╚══════════════════════════════════╝
 
   ✦ ~26.000 LOC · 180+ arquivos Rust · 247+ agentes
   ✦ Cadeia K²CHJ wired: k_nano → k_ai → cortex → hermes → jarbas
   ✦ ADR-0042 N1–N5 ✅ + wire crates N2.5→N5.7 ✅ (v1.8.0)
+  ✦ Self-Evolve · NeuralFS · AirLLM · LatentBus/GPU/HMI MVPs
   ✦ Sprint 107 Voice ✅ (PASS parcial forte+)
   ✦ MicroPython/WASM sandbox + SkillOpt (Python→Rust no_std)
   ✦ BitNet 2B LOADED · HW Expert v3 · SelfHeal I3/I4
@@ -27,8 +28,8 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 
 | Métrica | Valor |
 |---------|-------|
-| **Versão release** | **v1.8.0** (2026-07-16) |
-| **Gate v2.0.0** | Pré-requisitos funcionais ✅ — **review pendente** (qualidade voz + ADR) |
+| **Versão release** | **v1.8.5 teste / não estável** (2026-07-16) |
+| **Gate v2.0.0** | **Fechado** — review, `por_fazer` e OK do maintainer pendentes |
 | Sprints completos | 106 + 107 fechada |
 | Arquivos Rust | ~180+ (5 crates K²CHJ + bin `neural-kernel`) |
 | LOC total | ~26.000 |
@@ -85,8 +86,9 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | 106 Ecossistema de Anéis Lógicos | ✅ |
 | 107 Voice I/O | ✅ FECHADA (parcial forte+) |
 | **ADR-0042** Adequação N1–N5 + wire | ✅ **v1.8.0** |
-| **Sound** leftovers voz | ▶️ **pista ativa** |
-| 108 Self-Evolving Agents | ⏳ |
+| **Sound** pipeline voz | ✅ parcial honesto |
+| 108 Self-Evolving Agents | ✅ |
+| ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |
 
 **Documentação:** `ROADMAP.md` · `TODO.md` · `AGENTS.md` · `HOWTO.md` · `docs/memory/STATE.md`
 

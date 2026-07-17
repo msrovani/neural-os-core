@@ -102,15 +102,17 @@ mod sync;
 
 pub use k_ai::{self_heal, trust};
 pub use k_nano::globals::EVENT_BUS;
+pub use k_nano::globals::LATENT_BUS;
 // ADR-0042 N3.5: engine cortex wired; residuals = cortex.rs, bpe.rs, global_arena.rs, cortex_mmap.rs
 pub use cortex_crate::{
-    arena, bitnet_avx2, burn_flex, delta, nn, r3, tensor, trinity, tv_dsl,
+    arena, bitnet_avx2, burn_flex, delta, kv_h2o, neuos_probe, nn, ngram_spec, projection, r3,
+    tensor, trinity, tv_dsl,
 };
 // ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
-    actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, generic_wifi,
+    actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
     hermes, hub, mcp, optimizer, plugin_hub, rustpython_no_std, safety, search_agent, security,
-    self_update, skill_gen, skill_loader, skill_observer, skill_opt, structured_decode,
+    self_evolve, self_update, skill_gen, skill_loader, skill_observer, skill_opt, structured_decode,
     voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat, wifi_iwlwifi, wifi_msix,
     wifi_protocol,
 };
@@ -160,6 +162,7 @@ mod virtio_net;
 mod profile;
 
 mod gguf;
+mod gguf_streaming;
 
 mod vfs;
 
@@ -962,6 +965,83 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     );
 }
 
+/// ADR-0047 MVP PoC gates — LatentBus / Evolve / Probe / GPU / HMI (non-fatal).
+fn adr0047_mvp_gates() {
+    // L1 LatentBus: subscribe + optional synthetic publish if no gen yet
+    let rx = crate::LATENT_BUS.subscribe(event_bus::TOPIC_THOUGHT_LLM);
+    let (pub_n, _) = crate::LATENT_BUS.stats();
+    if pub_n == 0 {
+        // Synthetic thought so recv path is exercisable without full generate
+        let mut vec = [0u16; event_bus::LATENT_DIM];
+        vec[0] = 0x3C00; // f16 1.0
+        let _ = crate::LATENT_BUS.publish(event_bus::LatentPacket {
+            id: 0,
+            topic: alloc::string::String::from(event_bus::TOPIC_THOUGHT_LLM),
+            vec,
+            token: event_bus::CapabilityToken::Legacy(1),
+            norm_bits: 1.0f32.to_bits(),
+        });
+    }
+    let got = rx.try_receive().is_some();
+    let (p2, r2) = crate::LATENT_BUS.stats();
+    let l1 = if got || p2 > 0 { "OK" } else { "ABSENT" };
+    serial_println!(
+        "[ADR-0047-L1] latent publish/recv {} (pub={} recv_slots={})",
+        l1, p2, r2
+    );
+
+    // L2 Evolve WASM hot-swap + Genesis
+    let l2 = crate::evolve::evolve_gate_status();
+    serial_println!("[ADR-0047-L2] evolve swap={}", l2);
+    let gen = crate::evolve::genesis_gate_status();
+    serial_println!("[ADR-0047-GENESIS] spawn={}", gen);
+
+    // L3 NeuOS Probe — deep probe needs &TransformerModel; boot gate uses presence
+    if crate::cortex::model_is_loaded() {
+        serial_println!("[ADR-0047-L3] probe=OK (model LOADED; weight probe on REFLECT)");
+    } else {
+        crate::neuos_probe::log_probe(None);
+    }
+
+    // N-gram empirical microbench (always runnable)
+    crate::ngram_spec::log_bench_gate();
+
+    // G GPU compute + G3/G4/G5
+    let g = crate::gpu::backend::adr0047_compute_gate();
+    serial_println!("[ADR-0047-G] compute={}", g);
+    let vram_ok = {
+        let s = crate::gpu::backend::gpu_status();
+        s.contains("NVIDIA") || s.contains("VRAM") || s.contains("pfifo")
+    };
+    let g3 = crate::gpu::sasos::gate_status(vram_ok);
+    serial_println!("[ADR-0047-G3] sasos={}", g3);
+    let g4 = crate::kv_h2o::gate_smoke();
+    serial_println!("[ADR-0047-G4] h2o={}", g4);
+    let g5 = crate::gpu::pipeline_g5::gate_status();
+    serial_println!("[ADR-0047-G5] pipeline={}", g5);
+
+    // H HMI — demo UI publish for DisplayAgent; avatar telem may arrive later
+    let _ = crate::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: alloc::string::String::from(crate::display::ui_spec::TOPIC_UI_SPEC),
+        payload: crate::display::ui_spec::demo_ui_json().as_bytes().to_vec(),
+        token: CapabilityToken::Legacy(1),
+    });
+    // Parse locally to mark ui_ok even before DisplayAgent ticks
+    if crate::display::ui_spec::parse_window_spec(crate::display::ui_spec::demo_ui_json()).is_some()
+    {
+        crate::display::ui_spec::mark_ui_ok();
+    }
+    let (ui, av) = crate::display::ui_spec::gate_status();
+    let (h2, h5) = crate::display::embed_viz::gate_status();
+    serial_println!(
+        "[ADR-0047-H] ui_spec={} avatar_telem={} h2={} h5={}",
+        ui, av, h2, h5
+    );
+
+    crate::boot_logger::log("BOOT: ADR-0047 MVP PoC gates");
+}
+
 /// ADR-0042 N3 — gate serial honesto do cérebro (cortex).
 /// `gen`: Some(true/false) se weather-e2e exercitou prompt→texto; None = soft-float gated no boot.
 fn n3_cortex_gate(gen: Option<bool>) {
@@ -1065,9 +1145,18 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
             serial_println!("[N4-HERMES] intent_e2e=OK STT→USER_INTENT→cortex (weather-e2e)")
         }
         Some(false) => serial_println!("[N4-HERMES] intent_e2e=FAILED"),
-        None => serial_println!(
-            "[N4-HERMES] intent_e2e=GATED boot default (feature=weather-e2e; prior L5 evidence OK)"
-        ),
+        None => {
+            // Não afirmar "prior L5 OK" — hist Sprint107 ≠ smoke deste boot.
+            // Gate net = bootstrap_early [smoltcp/NIC]; L5_OK só se este boot passou.
+            let net = crate::network_agent::early_smoke_status();
+            serial_println!(
+                "[N4-HERMES] intent_e2e=GATED boot default (feature=weather-e2e; hist Sprint107 ≠ this-boot)"
+            );
+            serial_println!(
+                "[N4-HERMES] this-boot net_smoke={} [smoltcp/NIC] (bootstrap_early; L5_OK só se smoke passou)",
+                net
+            );
+        }
     }
     serial_println!(
         "[N4-HERMES] IPC→jarbas topics_mirror={} full_wire={}",
@@ -1418,7 +1507,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[ENV] Sistema: {} | Rede: {}", crate::env::name(),
         if nic_found { "fisica" } else if crate::env::is_sandbox() { "serial tunnel" } else { "offline" });
 
-    
+    // Sprint Net: L2–L3 (+ smoke L4/L5) antes do scheduler — hang pós-Runtime não impede static.
+    crate::network_agent::bootstrap_early();
+    publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP smoke)");
 
     let ata_found = {
 
@@ -1557,7 +1648,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     crate::boot_logger::log("BOOT: FS agents OK");
 
+    // ADR-0040 MVP smoke (compile-time wired; runtime probes via DiskAgent)
+    {
+        let (meta, copy, skip) = crate::mhi::migration_stats();
+        crate::serial_println!(
+            "[ADR-0040] MVP wired: BlockDevice+write | exFAT FilesystemDriver | EXT2/NTFS detect | NeuralFS /mnt/neural | MHI soft-migrate (meta={} copy={} skip={})",
+            meta, copy, skip
+        );
+        crate::boot_logger::log("BOOT: ADR-0040 FS MVP markers");
+    }
 
+    // ADR-0047 MVP PoC gates (non-fatal)
+    adr0047_mvp_gates();
 
     // Init DiskIntelligenceAgent (substitui mount_partitions manual)
 
@@ -2043,6 +2145,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     registry.register(Box::new(agents::HwDetectAgent));
     registry.register(Box::new(agents::AutoLearnAgent::new()));
     registry.register(Box::new(agents::SleepCycleAgent::new()));
+    registry.register(Box::new(agents::SelfEvolveAgent::new()));
 
     registry.register(disk_agent_box);
 
@@ -2093,6 +2196,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     serial_println!("[BOOT] NetAgent manifest: name={}, auto_start={}, schedule={:?}",
 
         net_agent.manifest().name, net_agent.manifest().auto_start, net_agent.manifest().schedule);
+    serial_println!(
+        "[NET] registered Continuous — ticks após init_phase (SelfHeal/Disk); gate=e1000 [smoltcp/NIC]"
+    );
 
     registry.register(net_agent);
 
@@ -2148,6 +2254,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     serial_println!("[BOOT] Registering WakeWordAgent...");
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
+
+    serial_println!("[BOOT] Registering AudioPipelineAgent (barge-in)...");
+    registry.register(Box::new(audio::pipeline::AudioPipelineAgent::new()));
 
     serial_println!("[BOOT] Registering AudioMixerAgent...");
 

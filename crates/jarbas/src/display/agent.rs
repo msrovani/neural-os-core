@@ -7,7 +7,8 @@ use k_nano::serial_println;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS};
-use crate::display::avatar::JarvisAvatar;
+use crate::display::avatar::{AvatarState, JarvisAvatar};
+use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -22,7 +23,10 @@ pub struct DisplayAgent {
     echo_receiver: event_bus::Receiver,
     mouse_receiver: event_bus::Receiver,
     click_receiver: event_bus::Receiver,
+    ui_receiver: event_bus::Receiver,
+    latent_receiver: event_bus::LatentReceiver,
     gpu_inited: bool,
+    demo_ui_sent: bool,
     input_buffer: alloc::string::String,
     avatar: Option<JarvisAvatar>,
     dragging: bool,
@@ -38,13 +42,44 @@ impl DisplayAgent {
             echo_receiver: EVENT_BUS.subscribe("KEYBOARD_ECHO"),
             mouse_receiver: EVENT_BUS.subscribe(hermes::agents::mouse_agent::TOPIC_MOUSE_MOVED),
             click_receiver: EVENT_BUS.subscribe(hermes::agents::mouse_agent::TOPIC_MOUSE_CLICK),
+            ui_receiver: EVENT_BUS.subscribe(TOPIC_UI_SPEC),
+            latent_receiver: k_nano::LATENT_BUS.subscribe(event_bus::TOPIC_THOUGHT_LLM),
             gpu_inited: false,
+            demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
             avatar: None,
             dragging: false,
             drag_id: AppId::None,
             drag_off_x: 0,
             drag_off_y: 0,
+        }
+    }
+
+    fn apply_ui_spec(&mut self, json: &str) {
+        if let Some(spec) = ui_spec::parse_window_spec(json) {
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                    chat.data.push_str(&alloc::format!(
+                        "[UI] {} @{},{} {}x{}\n",
+                        spec.title, spec.x, spec.y, spec.w, spec.h
+                    ));
+                    for w in &spec.widgets {
+                        chat.data.push_str(&alloc::format!("  - {}: {}\n", w.kind, w.text));
+                    }
+                }
+                // Also surface as Settings window content
+                if let Some(settings) = desktop.apps.iter_mut().find(|a| a.id == AppId::Settings) {
+                    settings.data = alloc::format!("{} | {}", spec.title,
+                        spec.widgets.first().map(|w| w.text.as_str()).unwrap_or(""));
+                    settings.visible = true;
+                    settings.x = spec.x.max(0) as usize;
+                    settings.y = spec.y.max(0) as usize;
+                    settings.w = spec.w.max(120) as usize;
+                    settings.h = spec.h.max(80) as usize;
+                }
+            }
+            ui_spec::mark_ui_ok();
+            serial_println!("[ADR-0047-H] ui_spec applied title={}", spec.title);
         }
     }
 }
@@ -75,6 +110,63 @@ impl Agent for DisplayAgent {
             }
             self.gpu_inited = true;
             return AgentTickResult::Pending;
+        }
+
+        // ADR-0047-H1: publish demo UI_SPEC once
+        if !self.demo_ui_sent {
+            let _ = EVENT_BUS.publish(event_bus::Event {
+                id: 0,
+                topic: alloc::string::String::from(TOPIC_UI_SPEC),
+                payload: ui_spec::demo_ui_json().as_bytes().to_vec(),
+                token: event_bus::CapabilityToken::Legacy(1),
+            });
+            self.demo_ui_sent = true;
+        }
+
+        // Generative UI specs
+        while let Some(ev) = self.ui_receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            self.apply_ui_spec(text);
+        }
+
+        // H4: avatar telemetria from LatentBus norm + H2/H5 viz
+        while let Some(pkt) = self.latent_receiver.try_receive() {
+            let norm = f32::from_bits(pkt.norm_bits);
+            if let Some(ref mut avatar) = self.avatar {
+                let st = if norm > 8.0 {
+                    AvatarState::Speaking
+                } else if norm > 2.0 {
+                    AvatarState::Processing
+                } else if norm > 0.1 {
+                    AvatarState::Listening
+                } else {
+                    AvatarState::Idle
+                };
+                avatar.set_state(st);
+                ui_spec::mark_avatar_telem();
+            }
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                let w = desktop.fb.info.width;
+                let h = desktop.fb.info.height;
+                let (x, y) = crate::display::embed_viz::latent_to_xy(&pkt.vec, w, h);
+                crate::display::embed_viz::draw_embed_point(
+                    &mut desktop.fb,
+                    x,
+                    y,
+                    0x00_7F_CF,
+                );
+                crate::display::embed_viz::mark_h2();
+                if norm > 0.5 {
+                    crate::display::embed_viz::draw_thought_splat(
+                        &mut desktop.fb,
+                        x,
+                        y,
+                        8,
+                        0xCF_7F_00,
+                    );
+                    crate::display::embed_viz::mark_h5();
+                }
+            }
         }
 
         // Keyboard echo

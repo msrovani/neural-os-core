@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.8.0
+# SESSION INDEX — neural-os-core v1.8.5 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -23,6 +23,18 @@
 | 118 | ADR-42 N4.6 | — | hermes crate wired no bin | v1.7.10; 37 espelhos removidos; residuals agents/net*/fs/aios_api |
 | 119 | ADR-42 N5.7 | — | jarbas crate wired no bin | v1.7.11; 29 espelhos removidos; audio truth residual ADR-0045 |
 | 120 | v1.8.0 | — | Marco K²CHJ pós-jornada | ADR-0042 N1–N5 + wire N2.5→N5.7; docs; tag v1.8.0; pista Sound |
+| 121 | 108 | — | Self-Evolving Agents CLOSED | self_evolve engine; verify; SIL wired; SelfEvolveAgent; SleepCycle REFLECT |
+| 122 | Sound | — | Sprint Sound CLOSED (parcial honesto) | Mic→Wake gate; STT PCM; UAC parse; neural-lite; VAD/SER; soft-float/VITS aberto |
+| 123 | FS | — | NeuralFS I/O usavel (RAM) | B-tree insert/delete; create/read/write; /mnt/neural; smoke OK |
+| 124 | ADR-0040 | — | FS MVP aceite (por_fazer→completa) | MHI soft-migrate; exFAT driver; IDEA #417–423; defer #421–423 |
+| 125 | ADR-0040 | — | Triagem residuals deferidos | Nenhum viável agora; todos `por_fazer`; ADR MVP intacta |
+| 125 | Cortex / ADR-0047 | — | N-gram speculative decoding OK | Cache por posição LWW; verify draft[0]; KV truncate sem double-forward; IDEA #443 |
+| 126 | ADR-0047 família | — | LatentBus+Evolve+Probe+GPU/HMI MVP | L1–L3 + G1/G2 + H1/H4; residuals G3–G5/H2–H5 |
+| 127 | ADR-0046 | — | AirLLM GGUF streaming MVP | Layer-wise load/forward; soft prefetch; ATA set_model; Net/DMA/K-quant defer |
+| 126 | ADR-0047 | — | Família MVP PoC Accepted parcial | LatentBus+Evolve+Probe+GPU G1/G2+HMI H1/H4; IDEA #444–448 |
+| 127 | ADR-0047 | — | Wave2 bench/Genesis/G3–G5/H2/H5 | Descartes ISA/adapter/H3; IDEA #449–453 |
+| 128 | ADR-0046 | — | Hot-swap Net→FAT→AirLLM | `hot_swap_from_net` + FAT 8.3 write fix; `/model-fetch`; L3.5/RX honest fail |
+| 129 | v1.8.5 | — | Consolidação pós-v1.8.0 (teste) | Self-Evolve, Sound, NeuralFS, AirLLM, ADR-0047 e propostas GPU 0048–0050 |
 
 ## Sessões Históricas e Lacunas
 
@@ -115,9 +127,9 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | 106-10 | ✅ | SkillOpt: Tradução Python→Rust no_std |
 
 **Status v2.0:** ✅ Sprint 106 concluída (10/10). ✅ Sprint 107 Voice FECHADA (PASS parcial forte+).  
-**Pista ativa:** Sprint Sound. ADR-0042 **N1–N5 + wire N2.5–N5.7 ✅** no marco v1.8.0; gate `v2.0.0` depende de review formal. Ver `SESSION_120.md`.
+**Pista ativa:** gate `v2.0.0` review + residual soft-float/VITS. Sprint Sound ✅ (`SESSION_122.md`). ADR-0042 **N1–N5 + wire N2.5–N5.7 ✅** no marco v1.8.0.
 
 ---
 
-**Índice atualizado para v1.8.0:** política viva `SESSION_107+`; históricos em `docs/archive/sessions/`.
+**Índice atualizado para v1.8.5 TEST:** release não estável; política viva `SESSION_107+`; históricos em `docs/archive/sessions/`.
 

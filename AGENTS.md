@@ -4,8 +4,8 @@
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
-#   Sprints 106+: K²CHJ wire + ADR-0042 — marco v1.8.0 (Jul 2026)
-#   v1.8.0 = N1–N5 + wire crates; v2.0.0 = gate após review (não declarado)
+#   Sprints 106+: K²CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.5 TEST
+#   v1.8.5 = pós-1.8.0 em teste/não estável; v2.0.0 = gate após review (não declarado)
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação K²CHJ (Jul 2026); não "2.0 completo" sem review
 # ════════════════════════════════════════════════════════
 
@@ -165,11 +165,12 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: Sprint Sound (reaberta) — voz production-grade pós-107. ADR-0042 N1–N5 + wire N2.5→N5.7 ✅ (v1.8.0).
-# Voz residual → Sprint Sound — STT/Piper/UAC/Mic→Wake. Sprint 108 self-evolving permanece ⏳.
+# Current Sprint: estabilização v1.8.5 TEST + Sprint Net; gate v2.0.0 permanece fechado.
+# Pós-v1.8.0: Sprint 108 ✅; Sound ✅ parcial; ADR-0040/0046/0047 MVPs ✅ com residuals explícitos.
 # Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho wired mas não re-exportado no bin
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
-# Não declarar v2.0.0 sem review formal ADR (qualidade voz + checklist conjunto).
+# Não declarar v2.0.0 sem review formal ADR E sem zerar demandas `por_fazer` — só com OK explícito do maintainer.
+# Lembrete: gate v2.0.0 = checklist completo (voz Sound + ADRs por_fazer + rede) + OK humano.
 # Wire crates: alias `*-crate` + `pub use`; k_nano sem `global-alloc`; residuals = integração bin-only
 
 ## Roadmap v2.0 "Cognição"
@@ -182,9 +183,9 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **105** | Ponytail Audit + v1.5.1..v1.5.3 | ✅ |
 | **106** | Ecossistema de Anéis Lógicos (10/10 sub-sprints) | ✅ |
 | **107** | Voice I/O (clima e2e + skinny EventBus) | ✅ FECHADA (PASS parcial forte+) |
-| **Sound** | Leftovers voz (STT/Piper/UAC/jarbas…) | ▶️ **pista ativa** |
+| **Sound** | Pipeline voz + STT PCM + UAC parse | ✅ (soft-float/VITS abertos) |
 | **ADR-42** | Adequação N1–N5 + wire crates | ✅ **v1.8.0** |
-| **108** | Self-evolving agents (auto-skill generation) | ⏳ |
+| **108** | Self-evolving agents (auto-skill generation) | ✅ |
 
 # QEMU Launch (WHPX + VirtIO optimizado)
 ```powershell

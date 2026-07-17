@@ -130,9 +130,16 @@ impl SelfHeal {
         FW_KNOWN_VIDS.iter().any(|(v, c, _, _)| *v == vid && *c == class as u16)
     }
 
-    /// Gate fino: Intel net 8086 02/0D só se não for Ethernet nativo (`subclass != 0x00`).
-    pub fn device_needs_fw(vid: u16, _did: u16, class: u8, subclass: u8) -> bool {
+    /// Gate fino: Intel net 8086 02/0D só se não for Ethernet nativo.
+    /// - `subclass == 0x00` → Ethernet (e1000) ≠ iwlwifi
+    /// - DIDs conhecidos 100E/100F/10D3/1502/1503 → never iwlwifi (sem retrain)
+    pub fn device_needs_fw(vid: u16, did: u16, class: u8, subclass: u8) -> bool {
         if !Self::vid_class_needs_fw(vid, class) {
+            return false;
+        }
+        if vid == 0x8086
+            && matches!(did, 0x100E | 0x100F | 0x10D3 | 0x1502 | 0x1503)
+        {
             return false;
         }
         if vid == 0x8086 && (class == 0x02 || class == 0x0D) && subclass == 0x00 {

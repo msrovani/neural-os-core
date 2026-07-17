@@ -1,9 +1,9 @@
 # Roadmap — neural-os-core
 
 **Última atualização:** 2026-07-16
-**Versão release:** **v1.8.0**
+**Versão release:** **v1.8.5 TESTE / NÃO ESTÁVEL**
 **Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros (`cargo nk`)
-**Pista ativa:** **Sprint Sound** (voz pós-107). ADR-0042 ✅. Gate `v2.0.0` = review formal pendente.
+**Pista ativa:** estabilização v1.8.5 + Sprint Net. Gate `v2.0.0` fechado até review, `por_fazer` zerado e OK humano.
 
 ---
 
@@ -42,7 +42,7 @@
 | 44. MoE Router + Boot Agent | 101 | 0.101.x | Router IA, Boot Agent IA | ✅ |
 | 45. Trinity AutoLearn | 102 | 0.102.x | Detecta→treina→registra expert on-device | ✅ |
 | 46. SmileyOS Nativo | 103 | 0.103.x | 55+ cmd, drag, resize, wasm exec, llm icons | ✅ |
-| —. Sprint Sound | — | — | HDA, USB stub, Piper TTS, VAD, SER, Wake Word, Mixer — ADR-0045 | ✅ base / ▶️ **reaberta** (leftovers pós-107) |
+| —. Sprint Sound | — | — | Pipeline Mic→Wake→STT→TTS; STT PCM; UAC parse; neural-lite; VAD/SER — ADR-0045 | ✅ (soft-float/VITS + cutover abertos) |
 | 47. v1.1.1 GPU+Firmware+HW Expert | 104 | 1.1.1 | ACR WPR, 61K VID/DID, firmware loading | ✅ |
 | 48. v1.1.2 SelfHealing | 105 | 1.1.2 | I3/I4, hot_load_firmware, HEALTH_ISSUE | ✅ |
 | 49. v1.1.3 Visual+Audio | 106 | 1.1.3 | 3 layers, HDA playback, BrowserAgent | ✅ |
@@ -184,16 +184,30 @@
 
 ---
 
-## ▶️ Sprint Sound (reaberta) — leftovers voz
+## 🧪 v1.8.5 — Consolidação pós-v1.8.0 (teste / não estável)
 
-Backlog: STT retrain PCM-real, Mic→Wake→STT→LLM→TTS runtime e2e, Piper VITS pleno, soft-float latency, UAC (#84), unificar `audio/*` truth↔jarbas, VAD/SER polish.
+- Sprint 108 Self-Evolving Agents ✅
+- Sprint Sound ✅ parcial honesto; soft-float/VITS, CTC WER, UAC iso e cutover abertos
+- ADR-0040/NeuralFS MVP ✅; disco físico, multinível, writes e DMA `por_fazer`
+- ADR-0046 AirLLM MVP + hot-swap ATA/Net code ✅; residuals de streaming/DMA/RX
+- ADR-0047 Latent/Evolve/Probe/GPU/HMI ✅ MVP/PoC
+- ADRs 0048–0050 GPU multigeração ⏳ propostas
+
+**Uso:** integração e testes. Não é release estável e não altera o gate de v2.0.0.
+
+---
+
+## ✅ Sprint Sound — leftovers voz (fechada 2026-07-16)
+
+Entregue: STT PCM→MFCC, wake-gated pipeline, UAC descriptor parse, Piper neural-lite polish, VAD/SER, espelho jarbas sync.
+Aberto (honesto): soft-float/VITS pleno, isócrono UAC em HW, cutover `jarbas::audio` no bin.
 Tools: `train_stt.py`, `convert_piper_to_bitnet.py`. Ver `TODO.md` + `docs/architecture/0045-sound-voice-stack.md`.
 
 ---
 
-## ⏳ Sprint 108 — Self-Evolving Agents
+## ✅ Sprint 108 — Self-Evolving Agents
 
-Auto-skill generation, verification, self-improvement — paralelo/após ADR-42; sem gate de voz.
+Auto-skill generation, verification, self-improvement, meta-reflect — **CLOSED** (`hermes/self_evolve.rs` + `SelfEvolveAgent`).
 
 ---
 
@@ -201,10 +215,10 @@ Auto-skill generation, verification, self-improvement — paralelo/após ADR-42;
 
 | Item | Descrição | Status |
 |------|-----------|--------|
-| **Sprint Sound** | STT/Piper/UAC/Mic→Wake — pista ativa | ▶️ |
+| **Sprint Sound** | Pipeline voz + STT PCM + UAC parse | ✅ |
 | **Gate v2.0.0** | Review ADR + qualidade voz | ⏳ |
-| DHCP/RX funcional | smoltcp DHCP incompleto em QEMU | ⏳ |
-| Sprint 108 | Self-evolving agents | ⏳ |
+| DHCP/RX funcional | smoltcp + QEMU user/slirp (static 10.0.2.15) | ▶️ Sprint Net |
+| Sprint 108 | Self-evolving agents | ✅ |
 | burn-flex Backend | Integrar `burn::Backend` trait | ⏳ |
 | BGE HNSW index | Substituir busca linear | ⏳ |
 

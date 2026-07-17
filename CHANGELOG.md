@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+## [1.8.5] — 2026-07-16 — Consolidação pós-v1.8.0 (teste / não estável)
+
+> Canal de integração e testes. Os MVPs abaixo não constituem validação
+> production-grade nem liberam o gate de `v2.0.0`.
+
+### Agentes e voz
+- **Sprint 108:** Self-Evolve `observe→generate→verify→improve→reflect`, verificação de skills, SIL e reflexão no SleepCycle
+- **Sprint Sound:** pipeline Mic→Wake→STT→LLM→TTS, STT PCM→MFCC, UAC descriptor parse, VAD/SER e Piper neural-lite
+- Residuais honestos: soft-float/VITS, CTC WER, UAC isócrono e cutover `jarbas::audio`
+
+### Filesystems e modelos
+- **NeuralFS:** I/O RAM, B-tree leaf com reclaim/split, ATA MBR opcional e agente `/mnt/neural`
+- **ADR-0040:** exFAT read-MVP + MHI soft-migrate; writes e DMA físico permanecem `por_fazer`
+- **ADR-0046:** AirLLM GGUF layer-wise, prefetch soft e hot-swap ATA/Net→FAT→`set_model`
+- **Cortex:** N-gram speculative decoding com benchmark empírico e rollback de KV
+
+### Latent/GPU/HMI
+- **ADR-0047:** LatentBus, Evolve hot-swap/Genesis, NeuOS Probe, GPU work queue/SASOS/H2O/G5 e HMI embedding/splats
+- **ADRs 0048–0050:** propostas multigeração NVIDIA/AMD/Intel registradas como `por_fazer`
+
+### Estado
+- Versão **v1.8.5 de teste, não estável**
+- `v2.0.0` continua bloqueada por review formal, demandas `por_fazer` e aprovação explícita do maintainer
+- Memória consolidada em `docs/memory/SESSION_121.md`–`SESSION_129.md`
+
 ## [1.8.0] — 2026-07-16 — Marco K²CHJ: ADR-0042 adequação + wire crates completo
 
 ### Marco

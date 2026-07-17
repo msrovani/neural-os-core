@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-16 — governança IDEA↔ADR por tema e amostra de rastreabilidade v1.8.0.
+**Última atualização:** 2026-07-16 — Sprint 108 ✅ (self_evolve); governança IDEA↔ADR por tema.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -44,12 +44,14 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | #424–432 | ADR-0041 | ✅ mapeada | Capability PoC P0–P9 |
 | #433–440 | ADR-0042 | ✅ mapeada | N1–N5 + wire; marco v1.8.0 |
 | #442 | ADR-0045 Sound | ✅ mapeada | Backlog da pista Sound |
-| #441 | — (entrega operacional) | ✅ justificada | USB HW unificado; build/image, sem nova decisão arquitetural |
+| #448 | ADR-0047-HMI | ✅ mapeada | H1+H4 UI_SPEC |
+| #449 | ADR-0046 AirLLM | ✅ mapeada | GGUFStreamingModel SESSION_127; hot-swap Net SESSION_128 |
+| auto-skill / SIL / SkillObserver | ADR-0036 (+ skill stack) | ✅ Sprint 108 | `hermes/self_evolve.rs` + SelfEvolveAgent |
 
 #### Gaps amostrados para triagem futura
 
 - **#277–283:** blocos antigos têm sprint/destino, mas nem sempre uma coluna ADR explícita; agrupar por temas Agency, GGUF, VFS/storage e desktop antes de decidir se ADR existente cobre.
-- **#416–423:** propostas recentes de JS/FS/MHI misturam pesquisa e arquitetura; ADR-0040/NeuralFS cobrem parte, mas o vínculo por item deve ser normalizado quando a pista FS for ativada.
+- **#416–423:** ADR-0040 MVP `completa` (SESSION_124). Residuais triados SESSION_125 → todos `por_fazer` (write/DMA/#421/#423/cloud/NeuralFS disco/#419 UI). NeuralFS.md lifecycle `por_fazer`.
 - Itens ✅ antigos sem ADR explícita não serão convertidos em centenas de ADRs retroativas. A triagem ocorre por tema e prioridade, preservando a evidência histórica.
 
 ---
@@ -267,7 +269,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 81 | VirtIO-GPU 2D/3D acelerado | ⏳ Pós-MVP | Sprint 24+ | Requer VirtIO. |
 | 82 | Tensor visualization no framebuffer | ⏳ Pós-MVP | Fase 5+ | Depende de #79 + #81. |
 | 83 | Intel HDA audio driver — Áudio via PCI HDA controller. Essencial para TTS/STT do JARVIS sem depender de USB. | ✅ feito | Sprint Sound / 101 | ✅ SD0 capture + SD1 playback. ADR-0045. |
-| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | 🟡 futuro | Sprint Sound (reaberta) | Stub + PCI USB probe (`audio/usb.rs`). Enum descriptors xHCI ainda aberto. ADR-0045. |
+| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | ✅ parcial | Sprint Sound | Parse config AC/AS/iso EP + probe; isócrono DMA → HW. ADR-0045 / SESSION_122. |
 
 ### 1.8. Princípios Arquiteturais
 
@@ -1608,9 +1610,9 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-06 | **372** | Silent Failure Detection — LLM verifica se output está correto mesmo sem erro explícito. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
 | 2026-07-06 | **373** | Multi-level Failure Architecture — Supervisionado (classificação) + não-supervisionado (anomalias) para detecção de falhas. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
 | 2026-07-06 | **374** | Failure Prediction — Predizer falhas antes de ocorrerem baseado em tendências. | 🟡 Sprint 96 | Sprint 96 | ADR-0027 |
-| 2026-07-06 | **375** | GGUF phased implementation (Phase 1-3) — P1: parser header+metadata (150 LOC), P2: Q4_0 dequantization (200 LOC), P3: streaming ATA/USB (150 LOC). | 🟡 Sprint 99+ | Sprint 99+ | ADR-0028 |
-| 2026-07-06 | **376** | f16_to_f32() manual conversion — u16 + função manual para dequantização GGUF Q4_0. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0028 |
-| 2026-07-06 | **377** | GGUF streaming from ATA/USB — Page table mapping para modelos >4GB, streaming blocks on demand. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0028 |
+| 2026-07-06 | **375** | GGUF phased implementation (Phase 1-3) — P1: parser header+metadata (150 LOC), P2: Q4_0 dequantization (200 LOC), P3: streaming ATA/USB (150 LOC). | ✅ P1–P3 MVP | SESSION_127 | ADR-0028/0046 |
+| 2026-07-06 | **376** | f16_to_f32() manual conversion — u16 + função manual para dequantização GGUF Q4_0. | ✅ OK | Sprint 96+ | ADR-0028 |
+| 2026-07-06 | **377** | GGUF streaming from ATA/USB — Page table mapping para modelos >4GB, streaming blocks on demand. | ✅ AirLLM MVP (layer-wise); mmap P9 ≠ AirLLM | SESSION_127 | ADR-0046 |
 | 2026-07-06 | **378** | Per-vendor GPU driver LOC breakdown — intel.rs (~700), nvidia.rs (~1500), amd.rs (~2000), virtio.rs (~400). | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
 | 2026-07-06 | **379** | NVIDIA Pascal Push Buffer channel layout — Register map: PUSH_BUFFER 0x002000, size 0x002004, tail 0x002008. | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
 | 2026-07-06 | **380** | AMD RDNA PM4 packet types — PKT3_WRITE_DATA, PKT3_ACQUIRE_MEM, PKT3_DMA_DATA, PKT3_RELEASE_MEM, PKT3_SET_BASE. | 🟡 Sprint 98 | Sprint 98 | ADR-0029 |
@@ -1651,13 +1653,13 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-09 | **415** | ✅ **B-01 MORTO** — Serial tunnel TCP bridge. `slip.rs` driver COM2 + `serial_bridge.py` TCP server. Bypassa NICs emuladas (RTL8139/E1000). `-serial tcp:127.0.0.1:4444` (QEMU cliente). Primeiro RX: 304 bytes. | ✅ Implementado | v0.109.3 | ~82 | slip.rs + serial_bridge.py |
 | 2026-07-10 | **416** | **Boa JS Engine** (boa_engine crate) � Engine JavaScript 100% Rust puro, compativel com no_std. ES2023+, ~180K LOC, ~5MB. Alternativa ao V8 para executar JS no kernel sem C++. BrowserAgent local usaria Boa como engine JS; Obscura (host) como fallback via serial tunnel para V8+CDP+stealth. | ?? IDEA_BANK | v2.0 | ~investigar | boa_engine |
 
-| 2026-07-10 | **417** | **exFAT + BlockDevice+ write** � Driver exFAT leitura/escrita baseado em hadris-fat ou exfat-slim. Pendrives >4GB, SDHC, USB-C. BlockDevice trait com write_sectors(). ATA, AHCI, NVMe, USB-MSC com escrita via DMA coalescing. Pre-requisito para todo ecossistema multi-FS. | ?? Sprint N | Sprint N | ~550 | fat32.rs + block_dev.rs + dma.rs |
-| 2026-07-10 | **418** | **DiskIntelligenceAgent v2** � Reescrita do agente de armazenamento para multi-FS + multi-TB + tiers reais. Probe de exFAT/NTFS/EXT com mount real via FilesystemDriver trait. Benchmark de bandwidth/latencia real por disco. Hotplug USB/SDHC via EventBus. SMART preventivo com SelfHeal (migrar dados se disco morrendo). ARC cache dinamico (MB-GB configuravel). Integracao com MHI ativo para migracao automatica entre tiers. | ?? Sprint N | Sprint N | ~800 | disk_agent/ + mhi.rs + fs/ |
-| 2026-07-10 | **419** | **FilesystemDriver trait + FS Manager App** � Trait unificado para montar/ler/escrever em qualquer FS. App Settings ? Storage para listar particoes, montar/desmontar, formatar, benchmark, SMART, instalacao neural pendrive?HD. Gerenciar tiers do MHI (promover/rebaixar). | ?? Sprint N+1 | Sprint N+1 | ~500 | fs/ + display/ + agents.rs |
-| 2026-07-10 | **420** | **MHI Ativo com DMA ring** � Migracao real de dados entre tiers (Dram?Nvme?Vram?Hdd) via DMA ring. mhi_tick() executa migrations sugeridas pelo arc_suggest_tier(). ARC cache write-back. MSched VRAM integrado. | ?? Sprint N+2 | Sprint N+2 | ~500 | mhi.rs + dma.rs + gpu/vram.rs |
-| 2026-07-10 | **421** | **Instalador Neural com IA** � App SysInstaller que detecta discos, LLM sugere particao/tamanho/FS, usuario confirma, kernel formata e copia sistema do pendrive para o HD. Bootloader configurado para proximo boot pelo HD. | ?? Sprint N+2 | Sprint N+2 | ~400 | agents.rs + hermes.rs + fs/ |
-| 2026-07-10 | **422** | **NeuralFS � FS nativo CoW para neural-os-core** � FS pr�prio inspirado no BAFS (cl8dep/bazzulto-bafs). Copy-on-Write, CRC32C checksums em todos os blocos, B-tree para inodes/diretorios/extents, journal write-ahead log para crash recovery, extent-based allocation, superblock backup. ~3.500 LOC. Integra com nosso MHI para tiering automatico, com FilesystemDriver trait para montagem via VFS. Substitui FAT32 como FS nativo do sistema. | ?? Sprint FS-b | FS-b | ~3500 | fs/ + mhi.rs + block_dev.rs |
-| 2026-07-10 | **423** | **Tutti-style GPU Direct Storage** � Port dos conceitos do Tutti (arXiv 2605.03375) para nosso MHI. GPU io_uring simplificado: CPU carrega I/O kernel uma vez por layer, GPU faz DMA direto NVMe?VRAM sem CPU no caminho. Elimina stall de GPU durante restore de KV cache do NVMe. | ?? Sprint FS-d | FS-d | ~300 | mhi.rs + gpu/kv_dma.rs |
+| 2026-07-10 | **417** | **exFAT + BlockDevice+ write** — Driver exFAT + BlockDevice write_sectors (ATA/AHCI/USB-MSC). Pendrives >4GB. | ✅ MVP r/list; ⏳ `por_fazer` write arquivo | ADR-0040 | SESSION_124/125 | `exfat.rs` + `block_dev.rs` |
+| 2026-07-10 | **418** | **DiskIntelligenceAgent v2** — multi-FS probes, SMART/hotplug/ARC, MHI register. Mount FilesystemDriver pleno + cloud = residual. | ✅ parcial probes+VFS+ARC; ⏳ `por_fazer` cloud/mount pleno | ADR-0040 | SESSION_124/125 | `disk_agent/` + `netfs.rs` |
+| 2026-07-10 | **419** | **FilesystemDriver trait + FS Manager App** — Trait unificado detect/mount/list. App Storage Manager = residual UI. | ✅ trait; ⏳ `por_fazer` App UI | ADR-0040 | SESSION_124/125 | `fs_driver.rs` + `storage_manager.rs` |
+| 2026-07-10 | **420** | **MHI Ativo com DMA ring** — soft-migrate metadata + DRAM memcpy; DMA NVMe/VRAM deferido. Registry unificado k_nano. | ✅ soft-MVP; ⏳ `por_fazer` DMA | ADR-0040 | SESSION_124/125 | `k_nano/mhi.rs` |
+| 2026-07-10 | **421** | **Instalador Neural com IA** — SysInstaller pendrive→HD. | ⏳ `por_fazer` | ADR-0040 | SESSION_125 | pós-MVP; precisa write HD |
+| 2026-07-10 | **422** | **NeuralFS — FS nativo CoW** — btree/journal/volume + NeuralFsAgent `/mnt/neural`; RAM I/O ✅; disco fisico / multi-level. | ✅ RAM I/O; ⏳ `por_fazer` disco | ADR-0040 / NeuralFS.md | SESSION_123/125 | `neural_fs/` |
+| 2026-07-10 | **423** | **Tutti-style GPU Direct Storage** — NVMe→VRAM sem CPU. | ⏳ `por_fazer` | ADR-0040 | SESSION_125 | requer GPU+NVMe DMA |
 | 2026-07-14 | **424** | **K²CHJ Capability Rings MVP C** — Dois AddressSpace + CR3 switch + SharedSpscRing + Cap bitflags + trap `int 0x90`. Demo boot non-fatal. Base Ring0↔Ring0; Ring3 = #429. | ✅ PoC | Sprint 107 | ~400 | ADR-0041 + `address_space.rs` + `ipc/` + `syscall.rs` |
 | 2026-07-14 | **425** | **Hermes WASM host Caps (P3)** — Host-functions (`aios_send_tcp`, WriteRing) gated por `Cap` / CapabilityGate; negar sem Cap + log serial. Sem POSIX. | ✅ CapGate | Sprint 107 | ~150 | `capability_gate.rs` + `aios_api.rs` + ADR-0041 |
 | 2026-07-14 | **426** | **SFI WASM + Cap contract** — Sandbox WASM com fuel + Cap por import sensível (net/ipc/FB). CapGate (#425) cobre o mínimo; SFI/AS pleno pendente. | 🟡 pós-P9 | Sprint 107+ | — | `wasm_rt.rs` + Cap |
@@ -1676,4 +1678,20 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-16 | **439** | **Wire pattern K²CHJ** — Alias dep `*-crate` + `pub use` + deletar espelhos; `k_nano` sem `global-alloc`; bridge `memory`/`EVENT_BUS` → k_nano globals; residuals = integração bin-only. | ✅ | ADR-0042 N2.5–N5.7 | — | SESSION_117–119 |
 | 2026-07-16 | **440** | **Marco v1.8.0** — ADR-0042 N1–N5 funcional + wire crates completo; Sprint 107 fechada; gate v2.0.0 = review (não auto-declare). | ✅ | v1.8.0 | — | STATE + CHANGELOG |
 | 2026-07-16 | **441** | **USB HW unificado** — `usb_hw.img` GPT ESP + FAT dados; Rufus DD 1 stick; BITNET+PIPER+experts+116 FW. | ✅ | HW real | — | `build_image.py --hw --unified` |
-| 2026-07-16 | **442** | **Sprint Sound backlog** — STT retrain PCM-real; Mic→Wake runtime; Piper VITS; soft-float latency; audio truth unification. | ▶️ | Sprint Sound | — | ADR-0045 |
+| 2026-07-16 | **442** | **Sprint Sound backlog** — STT PCM; Mic→Wake gate; neural-lite; UAC parse; VAD/SER. Soft-float/VITS + cutover abertos. | ✅ parcial | Sprint Sound | SESSION_122 | ADR-0045 |
+| 2026-07-16 | **443** | **N-gram speculative decoding** — LCG hash N=8 → draft M=4 da ocorrência anterior (last-writer-wins por índice); `verify_draft` + truncate KV; `draft[0]` gated pelos logits do passo anterior; sem double-forward. Zero deps. | ✅ OK | ADR-0047 §3.7 | SESSION_125 | `cortex/ngram_spec.rs` + `generate_speculative` |
+| 2026-07-16 | **444** | **LatentBus** — canal `[f16;256]` paralelo ao EventBus; projection mean-pool; publish no generate; Hermes drain. | ✅ MVP | ADR-0047 P1 | SESSION_126 | `event-bus/latent.rs` + `cortex/projection.rs` |
+| 2026-07-16 | **445** | **Evolve WASM hot-swap** — ledger + sandbox test + rollback; SleepCycle DREAM hook. | ✅ MVP | ADR-0047 P2 | SESSION_126 | `hermes/evolve.rs` |
+| 2026-07-16 | **446** | **NeuOS Probe fase 1** — weight stats Healthy/Degraded + soul-vector stub; sem mutar pesos. | ✅ MVP | ADR-0047 P3 | SESSION_126 | `cortex/neuos_probe.rs` |
+| 2026-07-16 | **447** | **GPU G1/G2 work-queue** — persistent queue + matmul HW/CPU_FALLBACK gate. | ✅ MVP | ADR-0047-GPU | SESSION_126 | `jarbas/gpu/work_queue.rs` |
+| 2026-07-16 | **448** | **HMI H1+H4** — UI_SPEC JSON → compositor; avatar telemetria via LatentBus norm. | ✅ MVP | ADR-0047-HMI | SESSION_126 | `jarbas/display/ui_spec.rs` |
+| 2026-07-16 | **449** | **N-gram bench empírico** — counters accept/forward + microbench padrão + `speedup_est`. | ✅ | ADR-0047 | SESSION_127 | `ngram_spec.rs` |
+| 2026-07-16 | **450** | **Evolve Genesis** — 1 parent→1 child WASM, ratchet MAX_GENESIS=1. | ✅ MVP | ADR-0047 P2 | SESSION_127 | `hermes/evolve.rs` |
+| 2026-07-16 | **451** | **GPU G3 SASOS-lite + G4 H2O/pages + G5 pipeline CPU** | ✅ MVP | ADR-0047-GPU | SESSION_127 | `sasos.rs` `kv_h2o.rs` `pipeline_g5.rs` |
+| 2026-07-16 | **452** | **HMI H2+H5** — embedding points + thought splats no FB. | ✅ MVP | ADR-0047-HMI | SESSION_127 | `embed_viz.rs` |
+| 2026-07-16 | **453** | **Descartes ADR-0047** — NeuOS ISA plena; LatentBus adapter; H3 diffusion. | ❌ | ADR-0047 | SESSION_127 | docs |
+| 2026-07-16 | **454** | **NVIDIA Compute Multigeração** — contrato comum; backends Legacy ACR e GSP; Kernel Pack multi-ISA; Pascal é primeiro gate HW, não limite do produto. | ⏳ | ADR-0048 | futuro | `0048-nvidia-compute-multigeracao.md` |
+| 2026-07-16 | **455** | **AMD Compute Multigeração** — IP Discovery; backends KIQ (GFX9–10) e MES (GFX11+); `AMD_KERNEL_PACK` HSACO offline; iGPU/APU display + dGPU AI; sem ROCm no alvo. | ⏳ | ADR-0049 | futuro | `0049-amd-compute-multigeracao.md` |
+| 2026-07-16 | **456** | **Intel Compute Multigeração** — GMD_ID; famílias Gen9→Xe3; GuC + walkers; `INTEL_KERNEL_PACK` zebin offline; iGPU vídeo + dGPU IA; sem Level Zero no alvo. | ⏳ | ADR-0050 | futuro | `0050-intel-compute-multigeracao.md` |
+| 2026-07-16 | **449** | **AirLLM GGUF streaming** — `GGUFStreamingModel` layer-wise ATA; soft PrefetchEngine; Q5_0/Q8_0 dequant; hot-swap ATA+Net→FAT→`set_model` (RX gate L3.5); DMA/stream-to-disk/K-quant deferred. | ✅ MVP + Net code | ADR-0046 | SESSION_127/128 | `gguf_streaming.rs` + `gguf.rs` |
+| 2026-07-16 | **457** | **Marco v1.8.5 TEST** — consolidação não estável pós-v1.8.0: Self-Evolve, Sound, NeuralFS/ADR-0040, AirLLM/ADR-0046, família ADR-0047 e propostas GPU 0048–0050. | ✅ documentação/release | v1.8.5 teste | SESSION_129 | STATE + CHANGELOG |

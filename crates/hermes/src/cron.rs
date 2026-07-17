@@ -65,18 +65,22 @@ impl CronAgent {
         if count == 0 { return; }
 
         serial_println!("[REVIEW] Running comprehensive review ({} open observations)", count);
+        // Sprint 108: review só sinaliza; SelfEvolveAgent registra no SKILL_STORAGE do bin.
         for obs in &pending {
-            // Tenta auto-skill se for candidato a nova skill
             if obs.skill.starts_with("New skill candidate:") {
-                let name = obs.skill.trim_start_matches("New skill candidate:");
-                let skill_md = crate::skill_gen::generate_skill(name.trim());
-                if let Some(_md) = skill_md {
-                    serial_println!("[REVIEW] Generated skill '{}' from observation #{}", name.trim(), obs.number);
-                    crate::skill_observer::mark_actioned(obs.number);
-                }
+                let name = obs.skill.trim_start_matches("New skill candidate:").trim();
+                // Garante padrão em skill_gen para maybe_auto_skill
+                crate::skill_gen::record_task(name, &obs.suggestion, &["review", "generate", "verify"]);
+                serial_println!("[REVIEW] candidate '{}' (obs #{}) queued for S108", name, obs.number);
             }
         }
-        serial_println!("[REVIEW] Review complete. {} observations processed.", count);
+        let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+            id: 0,
+            topic: alloc::string::String::from(crate::self_evolve::TOPIC_SELF_EVOLVE),
+            payload: b"skill_review".to_vec(),
+            token: event_bus::CapabilityToken::Legacy(1),
+        });
+        serial_println!("[REVIEW] Review complete. {} observations scanned.", count);
     }
 }
 

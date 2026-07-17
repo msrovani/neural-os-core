@@ -1,17 +1,24 @@
-use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::serial_println;
+//! USB Audio Class (UAC1/UAC2) — probe + parsing de descritores + I/O fallback.
+//! Sprint Sound #84: enumeração de interfaces; isócrono pleno depende de HW real.
 
-// USB Audio Class constants (UAC1/UAC2, USB-IF class 0x01)
-const UAC_HEADER: u8 = 0x01;
-const UAC_INPUT_TERMINAL: u8 = 0x02;
-const UAC_OUTPUT_TERMINAL: u8 = 0x03;
-const UAC_FEATURE_UNIT: u8 = 0x06;
-/// bInterfaceClass 0x01 = Audio (USB-IF class code), usado em descritores de interface.
+use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
+use event_bus::{CapabilityToken, Event};
+use crate::serial_println;
+use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+
 const USB_CLASS_AUDIO: u8 = 0x01;
-/// PCI class 0x0C = Serial Bus Controller; subclasse 0x03 = USB
-/// (0x00=UHCI/0x10=OHCI/0x20=EHCI/0x30=xHCI no prog_if).
+const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
+const USB_SUBCLASS_AUDIOSTREAMING: u8 = 0x02;
 const PCI_CLASS_SERIAL_BUS: u8 = 0x0C;
 const PCI_SUBCLASS_USB: u8 = 0x03;
+
+/// Endpoint isócrono OUT (playback) / IN (capture) descobertos.
+static UAC_READY: AtomicBool = AtomicBool::new(false);
+static UAC_VID: AtomicU16 = AtomicU16::new(0);
+static UAC_DID: AtomicU16 = AtomicU16::new(0);
+static UAC_CAPTURE_EP: AtomicU16 = AtomicU16::new(0);
+static UAC_PLAYBACK_EP: AtomicU16 = AtomicU16::new(0);
+static UAC_SAMPLE_RATE: AtomicU16 = AtomicU16::new(16000);
 
 const UAC_MANIFEST: AgentManifest = AgentManifest {
     name: "usb_audio",
@@ -21,39 +28,101 @@ const UAC_MANIFEST: AgentManifest = AgentManifest {
     persist: false,
 };
 
-/// Resultado do probe UAC — distingue "sem controlador USB" de
-/// "controlador presente mas sem enumeracao de descritores de interface ainda".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UacProbeResult {
-    /// Nenhum controlador USB (xHCI/EHCI/OHCI) encontrado no barramento PCI.
     NoUsbController,
-    /// >=1 controlador USB encontrado via PCI, mas o driver xHCI atual
-    /// (`crate::xhci`) so enumera 1 dispositivo HID por porta — nao le
-    /// descritores de interface (bInterfaceClass) de dispositivos genericos.
-    /// Deferred = nao e possivel confirmar/negar UAC sem essa enumeracao.
-    ControllerPresentClassScanDeferred { count: u8 },
-    /// Dispositivo de classe Audio (0x01) confirmado via descritor de interface.
-    /// (Caminho futuro — requer `xhci::enumerate_interfaces()`, nao existe ainda.)
-    AudioDeviceFound { vendor_id: u16, device_id: u16 },
+    /// Controlador presente; scan de config feito, sem interface Audio.
+    NoAudioInterface { controllers: u8 },
+    /// Interface Audio encontrada (AC+AS e endpoints isócronos).
+    AudioDeviceFound {
+        vendor_id: u16,
+        device_id: u16,
+        capture_ep: u8,
+        playback_ep: u8,
+    },
+    /// Scan de descritores não pôde completar (xHCI GET_DESCRIPTOR falhou).
+    ScanIncomplete { controllers: u8 },
+}
+
+/// Info extraída de um Configuration Descriptor USB.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UacInterfaceInfo {
+    pub has_audio_control: bool,
+    pub has_audio_streaming: bool,
+    pub capture_ep: u8,
+    pub playback_ep: u8,
+    pub max_packet: u16,
+}
+
+/// Parseia blob de Configuration Descriptor (USB 2.0 §9.6.3).
+/// Retorna info UAC se encontrar bInterfaceClass == 0x01.
+pub fn parse_config_for_audio(cfg: &[u8]) -> Option<UacInterfaceInfo> {
+    if cfg.len() < 9 {
+        return None;
+    }
+    // bLength, bDescriptorType=0x02 (CONFIGURATION)
+    if cfg[1] != 0x02 {
+        return None;
+    }
+    let total = u16::from_le_bytes([cfg[2], cfg[3]]) as usize;
+    let end = total.min(cfg.len());
+    let mut info = UacInterfaceInfo::default();
+    let mut i = 0usize;
+    let mut in_audio_streaming = false;
+    while i + 2 <= end {
+        let blen = cfg[i] as usize;
+        if blen < 2 || i + blen > end {
+            break;
+        }
+        let dtype = cfg[i + 1];
+        match dtype {
+            0x04 if blen >= 9 => {
+                // INTERFACE
+                let if_class = cfg[i + 5];
+                let if_sub = cfg[i + 6];
+                in_audio_streaming = false;
+                if if_class == USB_CLASS_AUDIO {
+                    if if_sub == USB_SUBCLASS_AUDIOCONTROL {
+                        info.has_audio_control = true;
+                    } else if if_sub == USB_SUBCLASS_AUDIOSTREAMING {
+                        info.has_audio_streaming = true;
+                        in_audio_streaming = true;
+                    }
+                }
+            }
+            0x05 if blen >= 7 && in_audio_streaming => {
+                // ENDPOINT
+                let addr = cfg[i + 2];
+                let attr = cfg[i + 3];
+                let maxp = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+                let is_iso = (attr & 0x03) == 0x01;
+                if is_iso {
+                    info.max_packet = info.max_packet.max(maxp);
+                    if addr & 0x80 != 0 {
+                        info.capture_ep = addr;
+                    } else {
+                        info.playback_ep = addr;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += blen;
+    }
+    if info.has_audio_control || info.has_audio_streaming {
+        Some(info)
+    } else {
+        None
+    }
 }
 
 pub struct UsbAudioAgent;
 
 impl UsbAudioAgent {
-    pub fn new() -> Self { UsbAudioAgent }
+    pub fn new() -> Self {
+        UsbAudioAgent
+    }
 
-    /// Detecta dispositivos USB Audio Class.
-    ///
-    /// Estado real (Sprint 107 Part B #7): `crate::xhci` inicializa o
-    /// controlador xHCI e enumera HID (teclado) em 1 porta/slot fixo —
-    /// nao ha uma API generica de enumeracao de descritores de interface
-    /// (`GET_DESCRIPTOR` recursivo por config/interface/endpoint) para
-    /// varrer `bInterfaceClass == USB_CLASS_AUDIO` em todos os dispositivos
-    /// conectados. Implementar isso e o trabalho de #84 (futuro).
-    ///
-    /// Passo honesto desta sprint: em vez do stub `false` incondicional,
-    /// ao menos reporta se HA controlador USB (via PCI class 0x0C) — para
-    /// diferenciar "sem hardware USB" de "hardware presente, scan pendente".
     fn probe_uac() -> UacProbeResult {
         let devices = unsafe { crate::pci::scan_pci() };
         let usb_controllers = devices
@@ -63,33 +132,114 @@ impl UsbAudioAgent {
         if usb_controllers == 0 {
             return UacProbeResult::NoUsbController;
         }
-        // xHCI presente (crate::xhci::init_xhci ja roda no boot); sem enumeracao
-        // de interfaces genericas ainda, nao podemos confirmar classe Audio real.
-        UacProbeResult::ControllerPresentClassScanDeferred { count: usb_controllers as u8 }
+        let controllers = usb_controllers as u8;
+
+        // Tenta obter config descriptor via xHCI (pode falhar sem device Audio).
+        let mut cfg_buf = [0u8; 512];
+        match unsafe { crate::xhci::try_read_config_descriptor(&mut cfg_buf) } {
+            Some((n, vid, did)) if n > 0 => {
+                if let Some(info) = parse_config_for_audio(&cfg_buf[..n]) {
+                    if info.has_audio_streaming
+                        && (info.capture_ep != 0 || info.playback_ep != 0)
+                    {
+                        UAC_VID.store(vid, Ordering::Relaxed);
+                        UAC_DID.store(did, Ordering::Relaxed);
+                        UAC_CAPTURE_EP.store(info.capture_ep as u16, Ordering::Relaxed);
+                        UAC_PLAYBACK_EP.store(info.playback_ep as u16, Ordering::Relaxed);
+                        UAC_READY.store(true, Ordering::Relaxed);
+                        return UacProbeResult::AudioDeviceFound {
+                            vendor_id: vid,
+                            device_id: did,
+                            capture_ep: info.capture_ep,
+                            playback_ep: info.playback_ep,
+                        };
+                    }
+                    return UacProbeResult::NoAudioInterface { controllers };
+                }
+                UacProbeResult::NoAudioInterface { controllers }
+            }
+            _ => UacProbeResult::ScanIncomplete { controllers },
+        }
     }
 }
 
 impl Agent for UsbAudioAgent {
-    fn manifest(&self) -> &AgentManifest { &UAC_MANIFEST }
+    fn manifest(&self) -> &AgentManifest {
+        &UAC_MANIFEST
+    }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
         match Self::probe_uac() {
-            UacProbeResult::AudioDeviceFound { vendor_id, device_id } => {
+            UacProbeResult::AudioDeviceFound {
+                vendor_id,
+                device_id,
+                capture_ep,
+                playback_ep,
+            } => {
                 serial_println!(
-                    "[UAC] USB Audio Class device encontrado vid={:#06x} did={:#06x}",
-                    vendor_id, device_id
+                    "[UAC] Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x}",
+                    vendor_id,
+                    device_id,
+                    capture_ep,
+                    playback_ep
                 );
             }
-            UacProbeResult::ControllerPresentClassScanDeferred { count } => {
+            UacProbeResult::NoAudioInterface { controllers } => {
                 serial_println!(
-                    "[UAC] xHCI/USB presente ({} controlador(es) PCI classe 0x0C) — \
-                     class scan de interface deferido (sem enumeracao generica, ver #84)",
-                    count
+                    "[UAC] {} USB ctrl — config lida, sem interface Audio (HDA primario)",
+                    controllers
+                );
+            }
+            UacProbeResult::ScanIncomplete { controllers } => {
+                serial_println!(
+                    "[UAC] {} USB ctrl — GET_DESCRIPTOR incompleto (sem device UAC no bus)",
+                    controllers
                 );
             }
             UacProbeResult::NoUsbController => {
-                serial_println!("[UAC] Nenhum controlador USB (PCI 0x0C) encontrado");
+                serial_println!("[UAC] Nenhum controlador USB (PCI 0x0C)");
             }
         }
         AgentTickResult::Done
     }
+}
+
+/// Poll captura UAC → AUDIO_IN (no-op se device ausente).
+pub fn poll_uac_audio() {
+    if !UAC_READY.load(Ordering::Relaxed) {
+        return;
+    }
+    // Isochronous IN ainda requer TRB periódico xHCI — stub honesto:
+    // quando buffer de captura estiver wired, publicar AUDIO_IN aqui.
+    let _ = (UAC_CAPTURE_EP.load(Ordering::Relaxed), UAC_SAMPLE_RATE.load(Ordering::Relaxed));
+}
+
+/// Playback UAC a partir de PCM (no-op se device ausente / sem EP OUT).
+pub fn write_uac_playback(pcm: &[i16]) {
+    if !UAC_READY.load(Ordering::Relaxed) || pcm.is_empty() {
+        return;
+    }
+    if UAC_PLAYBACK_EP.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+    // Placeholder: isócrono OUT exigirá ring dedicado; HDA permanece primario.
+    let _ = pcm;
+}
+
+pub fn uac_is_ready() -> bool {
+    UAC_READY.load(Ordering::Relaxed)
+}
+
+/// Publica frame de captura (helper para futuro DMA isócrono).
+#[allow(dead_code)]
+pub fn publish_capture_pcm(pcm: &[i16]) {
+    if pcm.is_empty() {
+        return;
+    }
+    let payload: alloc::vec::Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
+    let _ = crate::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: alloc::string::String::from(crate::audio::TOPIC_AUDIO_IN),
+        payload,
+        token: CapabilityToken::Legacy(1),
+    });
 }

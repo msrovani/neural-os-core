@@ -387,13 +387,23 @@ impl<'a> Fat32Reader<'a> {
         out
     }
 
+    /// Teto de clusters ao varrer root — chain ciclica/corrupta nao pode hangar o scheduler.
+    const MAX_ROOT_DIR_CLUSTERS: u32 = 256;
+
     /// Le um range de bytes de um arquivo pelo nome (streaming).
     /// Retorna bytes de `offset` ate `offset + size` do arquivo.
     pub unsafe fn read_file_range(&self, name: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
         let want = encode_83(name);
         let mut cluster = self.root_cluster;
+        let mut walked = 0u32;
+        let mut prev = 0u32;
 
-        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Self::MAX_ROOT_DIR_CLUSTERS {
+            if cluster == prev {
+                break;
+            }
+            prev = cluster;
+            walked += 1;
             let lba = self.cluster_lba(cluster);
             let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
             for i in 0..self.sectors_per_cluster as u32 {
@@ -401,7 +411,10 @@ impl<'a> Fat32Reader<'a> {
             }
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
-                if first == 0 { break; }
+                // first==0 = fim do diretorio inteiro (spec FAT) — nao seguir chain
+                if first == 0 {
+                    return None;
+                }
                 if first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
                 if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
@@ -457,7 +470,14 @@ impl<'a> Fat32Reader<'a> {
     pub unsafe fn lookup_file_size(&self, name: &str) -> Option<usize> {
         let want = encode_83(name);
         let mut cluster = self.root_cluster;
-        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+        let mut walked = 0u32;
+        let mut prev = 0u32;
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Self::MAX_ROOT_DIR_CLUSTERS {
+            if cluster == prev {
+                break;
+            }
+            prev = cluster;
+            walked += 1;
             let lba = self.cluster_lba(cluster);
             let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
             for i in 0..self.sectors_per_cluster as u32 {
@@ -465,7 +485,9 @@ impl<'a> Fat32Reader<'a> {
             }
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
-                if first == 0 { return None; }
+                if first == 0 {
+                    return None;
+                }
                 if first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
                 if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
@@ -485,8 +507,15 @@ impl<'a> Fat32Reader<'a> {
     pub unsafe fn read_file(&self, name: &str) -> Option<Vec<u8>> {
         let mut cluster = self.root_cluster;
         let want = encode_83(name);
+        let mut walked = 0u32;
+        let mut prev = 0u32;
 
-        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 && walked < Self::MAX_ROOT_DIR_CLUSTERS {
+            if cluster == prev {
+                break;
+            }
+            prev = cluster;
+            walked += 1;
             let lba = self.cluster_lba(cluster);
             let mut buf = vec![0u8; self.sectors_per_cluster as usize * self.bytes_per_sector as usize];
             for i in 0..self.sectors_per_cluster as u32 {
@@ -495,7 +524,9 @@ impl<'a> Fat32Reader<'a> {
 
             for entry_off in (0..buf.len()).step_by(32) {
                 let first = buf[entry_off];
-                if first == 0 { break; }
+                if first == 0 {
+                    return None;
+                }
                 if first == 0xE5 { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
                 if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
@@ -505,13 +536,17 @@ impl<'a> Fat32Reader<'a> {
                     buf[entry_off+28], buf[entry_off+29],
                     buf[entry_off+30], buf[entry_off+31],
                 ]) as usize;
+                // Cap defensivo: arquivos >64MB via read_file completo nao sao esperados no boot path
+                let file_size = file_size.min(64 * 1024 * 1024);
                 let start_cluster_lo = u16::from_le_bytes([buf[entry_off+26], buf[entry_off+27]]);
                 let start_cluster_hi = u16::from_le_bytes([buf[entry_off+20], buf[entry_off+21]]);
                 let start_cluster = ((start_cluster_hi as u32) << 16) | start_cluster_lo as u32;
 
                 let mut data = Vec::with_capacity(file_size);
                 let mut fc = start_cluster;
-                while fc < 0x0FFF_FFF8 && fc >= 2 {
+                let max_clusters = (file_size / self.bytes_per_sector as usize).max(1) * 2;
+                let mut cluster_iter = 0usize;
+                while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < file_size && cluster_iter < max_clusters {
                     let clba = self.cluster_lba(fc);
                     let mut chunk = [0u8; 512];
                     for i in 0..self.sectors_per_cluster as u32 {
@@ -524,6 +559,7 @@ impl<'a> Fat32Reader<'a> {
                         data.extend_from_slice(&chunk[..copy_end]);
                     }
                     fc = self.read_fat_entry(fc);
+                    cluster_iter += 1;
                 }
                 return Some(data);
             }
@@ -546,12 +582,9 @@ impl<'a> Fat32Writer<'a> {
         Fat32Reader::new(ata, part).map(|reader| Fat32Writer { reader })
     }
 
-    /// Le entrada de diretorio pelo nome (formato 8.3 uppercase)
+    /// Le entrada de diretorio pelo nome (formato 8.3 uppercase via encode_83)
     unsafe fn find_entry(&self, name: &str) -> Option<(u32, u32, u32)> {
-        let name_upper = name.to_ascii_uppercase();
-        let mut name_bytes = [0u8; 11];
-        let bytes = name_upper.as_bytes();
-        for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+        let name_bytes = encode_83(name);
 
         let mut cluster = self.reader.root_cluster;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
@@ -590,10 +623,12 @@ impl<'a> Fat32Writer<'a> {
         self.reader.ata.write_sectors(fat_sector, &sector, 1)
     }
 
-    /// Varre a FAT por N clusters livres (lê FAT por setor — não 1 I/O por entrada).
+    /// Varre a FAT por N clusters livres (le FAT por setor — nao 1 I/O por entrada).
+    /// Budget: no maximo MAX_FAT_SCAN_SECTORS para nao travar o boot em PIO (spf pode ser 16K+).
     unsafe fn find_free_clusters(&self, count: u32) -> Option<Vec<u32>> {
+        const MAX_FAT_SCAN_SECTORS: u32 = 512;
         let bps = self.reader.bytes_per_sector as u32;
-        let fat_sectors = self.reader.sectors_per_fat32;
+        let fat_sectors = self.reader.sectors_per_fat32.min(MAX_FAT_SCAN_SECTORS);
         let entries_per_sector = bps / 4;
         let mut result = Vec::with_capacity(count as usize);
         let mut sector_buf = [0u8; 512];
@@ -617,14 +652,20 @@ impl<'a> Fat32Writer<'a> {
                 }
             }
         }
-        if result.len() >= count as usize { Some(result) } else { None }
+        if result.len() >= count as usize {
+            Some(result)
+        } else {
+            crate::serial_println!(
+                "[FAT32] find_free_clusters budget/miss need={} got={} scanned<={}",
+                count, result.len(), fat_sectors
+            );
+            None
+        }
     }
 
     /// Cria entrada de diretorio 8.3 no root
     unsafe fn create_entry(&self, name: &str, first_cluster: u32, file_size: u32) -> bool {
-        let mut name_bytes = [0x20u8; 11];
-        let bytes = name.to_ascii_uppercase().as_bytes().to_vec();
-        for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+        let name_bytes = encode_83(name);
 
         let mut cluster = self.reader.root_cluster;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
@@ -740,10 +781,7 @@ impl<'a> Fat32Writer<'a> {
 
     /// Atualiza tamanho do arquivo na entrada de diretorio
     unsafe fn update_file_size(&self, name: &str, size: u32) -> bool {
-        let name_upper = name.to_ascii_uppercase();
-        let mut name_bytes = [0u8; 11];
-        let bytes = name_upper.as_bytes();
-        for i in 0..11.min(bytes.len()) { name_bytes[i] = bytes[i]; }
+        let name_bytes = encode_83(name);
 
         let mut cluster = self.reader.root_cluster;
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {

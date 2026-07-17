@@ -1,7 +1,7 @@
 # ADR-0047-HMI: Neural Desktop — HMI Generativa, Embedding Space Visual, Avatar Vivo
 
 **Data:** 2026-07-16
-**Status:** Proposta — análise comparativa com 12+ projetos 2025-2026
+**Status:** Accepted (MVP parcial) — SESSION_126; H1 UI_SPEC JSON + H4 avatar telemetria; H2/H3/H5 defer
 **Complemento de:** ADR-0047 (Pilares 1-3), ADR-0047-GPU (Compute Pipeline)
 **Depende de:** ADR-0042 N5 (Jarbas persona), ADR-0036 (JARVIS Interaction Layer)
 **Sprint:** 110+ (paralelo com ADR-0042, ADR-0047, ADR-0047-GPU)
@@ -23,6 +23,16 @@
 11. [Referências](#11-referências)
 
 ---
+
+## 0. MVP PoC (SESSION_126+)
+
+| Item | Status |
+|------|--------|
+| H1 UI_SPEC JSON → compositor | ✅ `display/ui_spec.rs` |
+| H4 avatar telemetria (LatentBus norm) | ✅ DisplayAgent |
+| H2 embedding points on FB | ✅ `display/embed_viz.rs` |
+| H5 thought splats | ✅ `embed_viz::draw_thought_splat` |
+| **H3 neural/diffusion compositor** | ❌ **DESCARTADO** — inviável soft-float bare-metal (modelo 263M+) |
 
 ## 1. Executive Summary
 

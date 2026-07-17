@@ -6,7 +6,6 @@
 
 use alloc::boxed::Box;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use crate::serial_println;
@@ -14,7 +13,7 @@ use crate::serial_println;
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_VERSION: u32 = 3;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum GgufType {
     F32,
     F16,
@@ -53,6 +52,31 @@ impl GgufType {
             GgufType::Q8_0 => 9,
             GgufType::Q8_1 => 9,
             GgufType::Unknown(_) => 32,
+        }
+    }
+
+    /// Byte size of a quantized/raw tensor with `ne` elements (llama.cpp layout).
+    pub fn nbytes_for_elements(&self, ne: usize) -> usize {
+        match self {
+            GgufType::F32 => ne.saturating_mul(4),
+            GgufType::F16 => ne.saturating_mul(2),
+            GgufType::Q4_0 => {
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(18) // f16 scale + 16 packed nibbles
+            }
+            GgufType::Q5_0 => {
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(22) // f16 + 4 hi-bits + 16 lo-nibbles
+            }
+            GgufType::Q8_0 => {
+                let blocks = (ne + 31) / 32;
+                blocks.saturating_mul(34) // f16 scale + 32 i8
+            }
+            GgufType::Q4_1 | GgufType::Q5_1 | GgufType::Q8_1 => {
+                // Conservative upper bound until dedicated dequant lands
+                ne.saturating_mul(2)
+            }
+            GgufType::Unknown(_) => ne.saturating_mul(4),
         }
     }
 }
@@ -308,6 +332,101 @@ pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
     Tensor::from_row_major((rows, cols), tensor_data)
 }
 
+/// Q8_0 block: f16 scale (2) + 32 x int8 = 34 bytes -> 32 f32
+fn dequantize_q8_0_block(block: &[u8]) -> Result<[f32; 32], &'static str> {
+    if block.len() < 34 { return Err("Q8_0 block too short"); }
+    let scale = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    let mut result = [0.0f32; 32];
+    for i in 0..32 {
+        result[i] = (block[2 + i] as i8 as f32) * scale;
+    }
+    Ok(result)
+}
+
+/// Dequantiza tensor Q8_0 completo (llama.cpp QK8_0=32).
+pub fn dequantize_q8_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
+    let total_weights = rows * cols;
+    let num_blocks = (total_weights + 31) / 32;
+    let expected_bytes = num_blocks * 34;
+    if data.len() < expected_bytes { return None; }
+
+    let mut tensor_data = Vec::with_capacity(total_weights);
+    for b in 0..num_blocks {
+        let start = b * 34;
+        if let Ok(values) = dequantize_q8_0_block(&data[start..start + 34]) {
+            let remaining = total_weights - tensor_data.len();
+            let to_copy = core::cmp::min(32, remaining);
+            tensor_data.extend_from_slice(&values[..to_copy]);
+        }
+    }
+    Tensor::from_row_major((rows, cols), tensor_data)
+}
+
+/// Q5_0 block: f16 scale (2) + uint32 qh (4) + 16 packed lo-nibbles = 22 bytes -> 32 f32
+/// Layout matches ggml-quants.c / llama.cpp QK5_0.
+fn dequantize_q5_0_block(block: &[u8]) -> Result<[f32; 32], &'static str> {
+    if block.len() < 22 { return Err("Q5_0 block too short"); }
+    let scale = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    let qh = u32::from_le_bytes([block[2], block[3], block[4], block[5]]);
+    let mut result = [0.0f32; 32];
+    for i in 0..16 {
+        let byte = block[6 + i];
+        let x0 = ((byte & 0x0F) as i8) | ((((qh >> i) & 1) as i8) << 4);
+        let x1 = (((byte >> 4) & 0x0F) as i8) | ((((qh >> (i + 16)) & 1) as i8) << 4);
+        result[i] = ((x0 - 16) as f32) * scale;
+        result[i + 16] = ((x1 - 16) as f32) * scale;
+    }
+    Ok(result)
+}
+
+/// Dequantiza tensor Q5_0 completo.
+pub fn dequantize_q5_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
+    let total_weights = rows * cols;
+    let num_blocks = (total_weights + 31) / 32;
+    let expected_bytes = num_blocks * 22;
+    if data.len() < expected_bytes { return None; }
+
+    let mut tensor_data = Vec::with_capacity(total_weights);
+    for b in 0..num_blocks {
+        let start = b * 22;
+        if let Ok(values) = dequantize_q5_0_block(&data[start..start + 22]) {
+            let remaining = total_weights - tensor_data.len();
+            let to_copy = core::cmp::min(32, remaining);
+            tensor_data.extend_from_slice(&values[..to_copy]);
+        }
+    }
+    Tensor::from_row_major((rows, cols), tensor_data)
+}
+
+/// Dequantiza bytes brutos conforme tipo GGUF (F32/F16/Q4_0/Q5_0/Q8_0).
+pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
+    let ne = rows * cols;
+    match qtype {
+        GgufType::F32 => {
+            if data.len() < ne * 4 { return None; }
+            let mut vals = Vec::with_capacity(ne);
+            for i in 0..ne {
+                let o = i * 4;
+                vals.push(f32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]));
+            }
+            Some(vals)
+        }
+        GgufType::F16 => {
+            if data.len() < ne * 2 { return None; }
+            let mut vals = Vec::with_capacity(ne);
+            for i in 0..ne {
+                let o = i * 2;
+                vals.push(f16_to_f32(u16::from_le_bytes([data[o], data[o + 1]])));
+            }
+            Some(vals)
+        }
+        GgufType::Q4_0 => dequantize_q4_0(data, rows, cols).map(|t| t.data),
+        GgufType::Q5_0 => dequantize_q5_0(data, rows, cols).map(|t| t.data),
+        GgufType::Q8_0 => dequantize_q8_0(data, rows, cols).map(|t| t.data),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GgufBackedModel — implementa Model trait usando pesos GGUF
 // ---------------------------------------------------------------------------
@@ -315,7 +434,7 @@ pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
 use crate::cortex::Model;
 
 /// Converte um tensor f32 para PackedTernaryTensor via limiar
-fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
+pub(crate) fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
     let mut vals = Vec::with_capacity(rows * cols);
     for &v in data.iter().take(rows * cols) {
         vals.push(if v > 0.1 { 1 } else if v < -0.1 { -1 } else { 0 });
@@ -328,28 +447,16 @@ fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernar
 fn dequantize_tensor_by_name(file: &GgufFile, name_hint: &str) -> Option<(Vec<f32>, usize, usize)> {
     for t in &file.tensors {
         if t.name.contains(name_hint) {
-            let start = t.offset as usize;
-            let end = start + (t.dims.iter().product::<u64>() as usize) * 4;
-            if end > file.data.len() { return None; }
-            let raw = &file.data[start..end];
             let rows = t.dims[0] as usize;
             let cols = if t.n_dims > 1 { t.dims[1] as usize } else { 1 };
-            return match t.tensor_type {
-                GgufType::F32 => {
-                    let mut vals = Vec::with_capacity(rows * cols);
-                    for i in 0..rows * cols {
-                        if i * 4 + 4 <= raw.len() {
-                            vals.push(f32::from_le_bytes([raw[i*4], raw[i*4+1], raw[i*4+2], raw[i*4+3]]));
-                        }
-                    }
-                    Some((vals, cols, rows))
-                }
-                GgufType::Q4_0 => {
-                    crate::gguf::dequantize_q4_0(raw, rows, cols)
-                        .map(|t| (t.data, cols, rows))
-                }
-                _ => None,
-            };
+            let ne = t.dims.iter().product::<u64>() as usize;
+            let nbytes = t.tensor_type.nbytes_for_elements(ne);
+            let start = t.offset as usize;
+            let end = start.saturating_add(nbytes);
+            if end > file.data.len() { return None; }
+            let raw = &file.data[start..end];
+            let vals = dequantize_raw(t.tensor_type, raw, rows, cols)?;
+            return Some((vals, cols, rows));
         }
     }
     None
@@ -500,6 +607,7 @@ pub fn gguf_summary(file: &GgufFile) -> String {
 
 /// Carrega apenas cabecalho GGUF + metadados + info tensores via FAT32 streaming.
 /// Nao carrega dados dos tensores — leitura sob demanda via read_file_range().
+/// Tenta 64KB -> 256KB -> 1MB ate o parse do header caber (modelos com muitos tensores).
 pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
     let name = path.trim().to_uppercase();
     let ata = crate::ATA_DRIVER.lock();
@@ -508,42 +616,75 @@ pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
     for part in &parts {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
             let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part)? };
-            let file_size = unsafe { let mut cluster = fs.get_root_cluster();
-                let mut found_size = 0usize;
-                while cluster < 0x0FFF_FFF8 && cluster >= 2 {
-                    let lba = fs.cluster_lba(cluster);
-                    let mut buf = vec![0u8; fs.sectors_per_cluster as usize * fs.bytes_per_sector as usize];
-                    for i in 0..fs.sectors_per_cluster as u32 {
-                        ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1);
-                    }
-                    for entry_off in (0..buf.len()).step_by(32) {
-                        if buf[entry_off] == 0 { break; }
-                        if buf[entry_off] == 0xE5 { continue; }
-                        if buf[entry_off + 11] & 0x08 != 0 { continue; }
-                        let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
-                        if entry_name.trim_end() != name { continue; }
-                        found_size = u32::from_le_bytes([
-                            buf[entry_off+28], buf[entry_off+29],
-                            buf[entry_off+30], buf[entry_off+31],
-                        ]) as usize;
-                        break;
-                    }
-                    if found_size > 0 { break; }
-                    cluster = fs.read_fat_entry(cluster);
-                }
-                found_size
-            };
+            let file_size = unsafe { fs.lookup_file_size(&name)? };
             if file_size == 0 { return None; }
-            // Le primeiros 4KB (header + metadados + info tensores)
-            let header_bytes = file_size.min(4096);
-            let header_data = unsafe { fs.read_file_range(&name, 0, header_bytes)? };
-            let mut file = load_gguf(&header_data).ok()?;
-            // Atualiza data_start para refletir o arquivo completo
-            file.data_start = 0;
-            return Some(file);
+
+            // Progressive header window — tensor_info can exceed 4KB on large GGUF.
+            const TRIES: [usize; 3] = [64 * 1024, 256 * 1024, 1024 * 1024];
+            for &want in &TRIES {
+                let header_bytes = file_size.min(want);
+                let header_data = unsafe { fs.read_file_range(&name, 0, header_bytes)? };
+                match load_gguf_meta_only(&header_data) {
+                    Ok(file) => {
+                        serial_println!(
+                            "[GGUF] Header OK path={} size={} meta_window={} tensors={} data_start={}",
+                            name, file_size, header_bytes, file.tensors.len(), file.data_start
+                        );
+                        return Some(file);
+                    }
+                    Err(_) => continue,
+                }
+            }
+            return None;
         }
     }
     None
+}
+
+/// Parse GGUF magic/metadata/tensor infos without requiring tensor payload bytes.
+/// `data_start` is the absolute file offset where tensor blobs begin.
+pub fn load_gguf_meta_only(data: &[u8]) -> Result<GgufFile, &'static str> {
+    if data.len() < 24 { return Err("GGUF: dados muito curtos"); }
+
+    let mut offset = 0;
+    let magic = read_u32(data, &mut offset);
+    if magic != GGUF_MAGIC { return Err("GGUF: magic invalido"); }
+
+    let version = read_u32(data, &mut offset);
+    let tensor_count = read_u64(data, &mut offset);
+    let metadata_kv_count = read_u64(data, &mut offset);
+    let header = GgufHeader { magic, version, tensor_count, metadata_kv_count };
+
+    let mut metadata = Vec::new();
+    for _ in 0..metadata_kv_count {
+        if offset + 8 > data.len() { return Err("GGUF: metadata truncado"); }
+        let key = read_string(data, &mut offset);
+        let value = read_metadata_value(data, &mut offset);
+        metadata.push(GgufMetadata { key, value });
+    }
+
+    let mut tensors = Vec::new();
+    for _ in 0..tensor_count {
+        if offset + 8 > data.len() { return Err("GGUF: tensor info truncado"); }
+        let name = read_string(data, &mut offset);
+        let n_dims = read_u32(data, &mut offset);
+        let mut dims = Vec::with_capacity(n_dims as usize);
+        for _ in 0..n_dims {
+            dims.push(read_u64(data, &mut offset));
+        }
+        let tensor_type = GgufType::from_u32(read_u32(data, &mut offset));
+        let tensor_offset = read_u64(data, &mut offset);
+        tensors.push(GgufTensorInfo { name, n_dims, dims, tensor_type, offset: tensor_offset });
+    }
+
+    let data_start = ((offset + 31) & !31) as u64;
+    Ok(GgufFile {
+        header,
+        metadata,
+        tensors,
+        data_start,
+        data: Vec::new(), // streaming: payload stays on disk
+    })
 }
 
 /// Tenta carregar modelo GGUF diretamente do disco (ATA/FAT32).
@@ -563,33 +704,83 @@ pub fn load_gguf_model_from_disk(path: &str) -> Option<GgufBackedModel> {
     None
 }
 
-/// Carrega header GGUF em modo streaming e registra como modelo.
-/// Modelos >4GB agora funcionam — apenas metadados carregados na RAM.
+/// AirLLM path: load GGUFStreamingModel (header + layer map + embed/unembed only)
+/// and register via set_model. Does NOT load full weight blobs into RAM.
 pub fn load_gguf_streaming(path: &str) -> Result<(), &'static str> {
-    let file = load_gguf_header_from_disk(path).ok_or("GGUF header load failed")?;
-    let n_tensors = file.tensors.len();
-    let total_params: u64 = file.tensors.iter().map(|t| t.dims.iter().product::<u64>()).sum();
-    let n_layers = file.metadata.iter()
-        .find(|m| m.key.contains("block_count"))
-        .and_then(|m| m.value.parse().ok())
-        .unwrap_or(0u64) as usize;
-    crate::kjson!("GGUF", "STREAM", "loaded", "path", path, "tensors", n_tensors,
-        "params", total_params, "layers", n_layers);
-    let _msg = alloc::format!("[GGUF] Streaming '{}': {} tensors, {} params (est). Header only in RAM.",
-        path, n_tensors, total_params);
+    let model = crate::gguf_streaming::GGUFStreamingModel::load(path)?;
+    let n_layers = model.num_layers();
+    let hidden = model.embed_dim();
+    crate::kjson!(
+        "GGUF", "STREAM", "loaded",
+        "path", path,
+        "layers", n_layers,
+        "hidden", hidden,
+        "mode", "airllm"
+    );
+    serial_println!(
+        "[GGUF] AirLLM streaming model ready: path={} layers={} hidden={} (1 layer/forward)",
+        path, n_layers, hidden
+    );
+    crate::cortex::set_model(Box::new(model));
     Ok(())
 }
 
 /// Lista formatos GGUF suportados
 pub fn print_supported_formats() -> String {
     alloc::format!(
-        "Supported GGUF formats:\n\
-         Q4_0: 4-bit block quantization (5 bpw)\n\
-         Q8_0: 8-bit block quantization (9 bpw)\n\
-         F16: 16-bit float\n\
-         F32: 32-bit float\n\
-         Tensor types: {}\n\
-         Use: /model <path> to load from FAT32",
-         "Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1, F16, F32"
+        "Supported GGUF formats (AirLLM streaming):\n\
+         Q4_0: 4-bit block quantization (dequant OK)\n\
+         Q5_0: 5-bit block quantization (dequant OK)\n\
+         Q8_0: 8-bit block quantization (dequant OK)\n\
+         F16/F32: float (dequant OK)\n\
+         K-quants (Q2_K/Q3_K/...): deferred\n\
+         Prefetch: soft double-buffer (NOT DMA)\n\
+         Hot-swap ATA: /model <FAT32-8.3-name>\n\
+         Hot-swap Net: /model http://ip:port/path [DEST.GGUF]\n\
+         Net note: stages body in RAM then FAT write (no stream-to-disk yet);\n\
+         if e1000 RX=0, fails honestly with L3.5/RX (does NOT fake OK)"
     )
+}
+
+/// Read a byte range from a FAT32 root file (shared by streaming).
+pub fn read_fat_range(path: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
+    let name = path.trim().to_uppercase();
+    let ata = crate::ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    for part in &parts {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+            let fs = unsafe { crate::fat32::Fat32Reader::new(ata, part)? };
+            return unsafe { fs.read_file_range(&name, offset, size) };
+        }
+    }
+    None
+}
+
+/// Write full file to FAT32 root (create or replace). Used by Net hot-swap.
+pub fn write_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
+    let name = path.trim().to_uppercase();
+    if name.is_empty() {
+        return Err("FAT write: empty path");
+    }
+    let ata = crate::ATA_DRIVER.lock();
+    let ata = ata.as_ref().ok_or("FAT write: ATA driver missing")?;
+    let parts = unsafe { crate::fat32::read_mbr(ata) };
+    for part in &parts {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+            let writer = unsafe { crate::fat32::Fat32Writer::new(ata, part) }
+                .ok_or("FAT write: Fat32Writer::new failed")?;
+            let ok = unsafe { writer.write_file(&name, data) };
+            if ok {
+                serial_println!(
+                    "[GGUF] FAT write OK path={} bytes={}",
+                    name,
+                    data.len()
+                );
+                return Ok(());
+            }
+            return Err("FAT write: write_file failed (no free clusters?)");
+        }
+    }
+    Err("FAT write: no FAT32 partition found")
 }

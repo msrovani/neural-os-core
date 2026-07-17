@@ -32,7 +32,11 @@ pub fn is_sandbox() -> bool {
 }
 
 pub fn is_online() -> bool {
-    get() == SystemEnv::HwReal
+    // HW real sempre candidata; sandbox/QEMU fica online após NET_CONFIG (static/DHCP)
+    if get() == SystemEnv::HwReal {
+        return true;
+    }
+    crate::net::NET_CONFIG.lock().online
 }
 
 pub fn name() -> &'static str {

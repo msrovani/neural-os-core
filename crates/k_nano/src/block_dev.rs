@@ -4,6 +4,10 @@ use crate::ahci::AhciDriver;
 pub trait BlockDevice {
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> bool;
     fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> bool;
+    /// Total de setores 512B (0 = desconhecido).
+    fn total_sectors(&self) -> u64 {
+        0
+    }
 }
 
 impl BlockDevice for AtaDriver {

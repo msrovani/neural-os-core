@@ -1,10 +1,6 @@
-//! Audio subsystem — JARVIS voice pipeline (Sprint Sound)
-//!
-//! JarvisAgent: persona que conversa com o usuario
-//!   - USER_INTENT  → processa → LLM_REQUEST → LLM_RESPONSE → HERMES_RESPONSE + TTS
-//! JarvisVoiceAgent: ouvidos + boca (somente I/O de audio)
-//! AudioMixerAgent: volume, mixing
-//! Skills: TtsSkill, SttSkill, AudioGetSettingsSkill, AudioSetVolumeSkill
+//! Audio subsystem — espelho Jarbas (Sprint Sound / ADR-0045).
+//! Truth runtime do bin = `neural-kernel/src/audio/*` (nao re-exportado aqui).
+//! Contrato TOPIC_* + VAD/settings/wake Continuous alinhados ao monólito.
 
 pub mod frame;
 pub mod ringbuf;

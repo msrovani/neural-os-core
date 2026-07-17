@@ -84,8 +84,7 @@ pub fn mfcc(pcm: &[i16]) -> Vec<f32> {
             feats[t * N_MFCC + m] = if mel > 1e-10 { logf(mel) } else { 0.0 };
         }
     }
-    // CMVN por coeficiente (média/var ao longo dos frames) — estabiliza escala
-    // vs. treino synth (randn*0.1). Nao fecha domain gap do train_stt.py.
+    // CMVN por coeficiente — alinhado a tools/train_stt.py (PCM→MFCC, Sprint Sound).
     if n_frames > 1 {
         for m in 0..N_MFCC {
             let mut sum = 0.0f32;
@@ -100,7 +99,7 @@ pub fn mfcc(pcm: &[i16]) -> Vec<f32> {
             let inv_std = 1.0 / sqrtf(var);
             for t in 0..n_frames {
                 let i = t * N_MFCC + m;
-                feats[i] = (feats[i] - mean) * inv_std * 0.1; // escala ~treino synth
+                feats[i] = (feats[i] - mean) * inv_std;
             }
         }
     }
@@ -180,7 +179,7 @@ impl SttEngine {
             let p: usize = self.w.iter().map(|(_, d)| d.len()).sum();
             crate::serial_println!("[STT] {} tensors, {}K params", self.w.len(), p / 1000);
             crate::serial_println!(
-                "[STT] domain: train_stt.py = MFCC synth (randn), nao PCM real — CTC fraco em TTS/formant (Sprint 108 retrain)"
+                "[STT] domain: train_stt.py = PCM→MFCC kernel-aligned (Sprint Sound)"
             );
         }
         self.loaded

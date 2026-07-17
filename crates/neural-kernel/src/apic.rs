@@ -283,9 +283,51 @@ pub(crate) unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     x86_64::instructions::tlb::flush(virt);
 }
 
-/// Mapa uma pagina de 4KB para MMIO no endereco fisico `phys_addr`,
+/// Split a 2MiB huge L2 entry into 512x4KiB PTEs so a single page can be UC.
+/// WHPX/QEMU DMA: PCD on the whole 2MiB is not enough for e1000 RX desc visibility.
+unsafe fn split_l2_huge_to_4k(
+    l2_entry: &mut x86_64::structures::paging::page_table::PageTableEntry,
+    phys_addr: u64,
+    phys_mem_offset: u64,
+    base: x86_64::VirtAddr,
+) {
+    use x86_64::structures::paging::PageTable;
+    use x86_64::{PhysAddr, VirtAddr};
+
+    let huge_phys = l2_entry.addr().as_u64() & !0x1F_FFFF;
+    let old_flags = l2_entry.flags();
+    let l1_pa = alloc_mmio_frame(base);
+    if l1_pa == 0 {
+        // Fallback: mark entire 2MiB UC (legacy path)
+        let mut f = old_flags;
+        f.insert(PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+        l2_entry.set_flags(f);
+        x86_64::instructions::tlb::flush(VirtAddr::new(phys_addr + phys_mem_offset));
+        return;
+    }
+    let l1_table = &mut *((base + l1_pa).as_mut_ptr::<PageTable>());
+    let target = phys_addr & !0xFFF;
+    let wb = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
+    for i in 0..512usize {
+        let f_phys = huge_phys + (i as u64) * 0x1000;
+        let mut flags = wb;
+        if old_flags.contains(PageTableFlags::NO_EXECUTE) {
+            flags |= PageTableFlags::NO_EXECUTE;
+        }
+        if f_phys == target {
+            flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
+        }
+        l1_table[i].set_addr(PhysAddr::new(f_phys), flags);
+    }
+    l2_entry.set_addr(PhysAddr::new(l1_pa), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+    for i in 0..512u64 {
+        x86_64::instructions::tlb::flush(VirtAddr::new(huge_phys + phys_mem_offset + i * 0x1000));
+    }
+}
+
+/// Mapa uma pagina de 4KB para MMIO/DMA no endereco fisico `phys_addr`,
 /// criando entradas de tabela se necessario, e marca como NO_CACHE + WRITE_THROUGH.
-/// Se uma huge page (2MB/1GB) ja cobrir o endereco, modifica as flags diretamente.
+/// Huge 2MiB pages are SPLIT to 4KiB so only the target page is UC (e1000 RX under WHPX).
 pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     use x86_64::structures::paging::PageTable;
     use x86_64::VirtAddr;
@@ -303,8 +345,12 @@ pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
         let frame = alloc_mmio_frame(base);
         l3_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     } else if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
-        let mut f = l3_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l3_entry.set_flags(f);
-        x86_64::instructions::tlb::flush(virt); return;
+        // 1GiB huge: mark UC on the GB (rare); bootloader usually uses 2MiB
+        let mut f = l3_entry.flags();
+        f.insert(PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+        l3_entry.set_flags(f);
+        x86_64::instructions::tlb::flush(virt);
+        return;
     }
     let l3_virt = base + l3_entry.addr().as_u64();
     let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
@@ -315,8 +361,8 @@ pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
         let frame = alloc_mmio_frame(base);
         l2_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     } else if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
-        let mut f = l2_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l2_entry.set_flags(f);
-        x86_64::instructions::tlb::flush(virt); return;
+        split_l2_huge_to_4k(l2_entry, phys_addr, phys_mem_offset, base);
+        return;
     }
     let l2_virt = base + l2_entry.addr().as_u64();
     let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
@@ -327,8 +373,12 @@ pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
         let frame = alloc_mmio_frame(base);
         l1_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     } else if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
-        let mut f = l1_entry.flags(); f.insert(PageTableFlags::NO_CACHE); f.insert(PageTableFlags::WRITE_THROUGH); l1_entry.set_flags(f);
-        x86_64::instructions::tlb::flush(virt); return;
+        // Unexpected HUGE at L1 slot (some maps misuse); treat as 2MiB at this level
+        let mut f = l1_entry.flags();
+        f.insert(PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH);
+        l1_entry.set_flags(f);
+        x86_64::instructions::tlb::flush(virt);
+        return;
     }
     let l1_virt = base + l1_entry.addr().as_u64();
     let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());

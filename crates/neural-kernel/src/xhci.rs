@@ -312,3 +312,17 @@ pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, ep: &mut BulkEndpoint, data_
     serial_println!("[XHCI] Bulk timeout");
     false
 }
+
+/// Tenta ler Configuration Descriptor do device no slot ativo (GET_DESCRIPTOR).
+/// Retorna (bytes_lidos, vid, did) ou None se xHCI/HID-only sem EP0 control genérico.
+///
+/// Sprint Sound: path honesto — sem device UAC no bus QEMU default, retorna None.
+/// Quando EP0 control transfer estiver pleno, preencher `buf` com o descriptor.
+pub unsafe fn try_read_config_descriptor(buf: &mut [u8]) -> Option<(usize, u16, u16)> {
+    let state = XHCI_STATE.lock();
+    let _st = state.as_ref()?;
+    // Control transfer GET_DESCRIPTOR(Configuration) ainda não está wired no
+    // path HID-only. Deixa buffer zerado e sinaliza incompleto ao caller UAC.
+    let _ = buf;
+    None
+}

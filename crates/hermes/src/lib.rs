@@ -39,6 +39,8 @@ pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_market;
 pub mod skill_observer;
+pub mod self_evolve;
+pub mod evolve;
 pub mod structured_decode;
 pub mod wasm;
 pub mod wasm_exec;

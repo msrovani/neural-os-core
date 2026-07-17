@@ -1,4 +1,9 @@
-# NeuralFS — Plano de Arquitetura Completo
+# NeuralFS ? Plano de Arquitetura Completo
+
+> **Lifecycle (INDEX):** `por_fazer` (SESSION_125)  
+> **Feito:** RAM I/O `/mnt/neural` (SESSION_123) ? format/mount, create/read/write, B-tree leaf.  
+> **Residual `por_fazer`:** disco fisico / multi-level / persistencia BlockDevice plena.  
+> ADR-0040 MVP permanece `completa`; este doc cobre o follow-up NeuralFS, nao reabre a ADR.
 
 ## 1. Fontes de Referência Analisadas
 
@@ -239,7 +244,7 @@ vs BAFS original ~3.500 LOC (diferença: BAFS tem kernel adapter + error.rs + ba
 
 ---
 
-## 11. Sprint FS-v2 � Ecossistema de Armazenamento Completo
+## 11. Sprint FS-v2 � Ecossistema de Armazenamento Completo
 
 A Sprint FS-v2 implementou todo o ecossistema de armazenamento em 4 subsprints, ~3.884 LOC, 0 erros.
 

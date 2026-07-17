@@ -3,6 +3,7 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::boxed::Box;
 use core::f32::NEG_INFINITY;
+use crate::ngram_spec::{NgramSpeculator, verify_draft, record_spec_hit, record_spec_bonus_forward, record_spec_tokens, record_classic_step};
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
 pub const TOPIC_LLM_RESPONSE: &str = "LLM_RESPONSE";
@@ -191,6 +192,9 @@ impl KvCache {
             len: 0, k_dim, kv_dim,
         }
     }
+
+    pub fn k_dim(&self) -> usize { self.k_dim }
+    pub fn kv_dim(&self) -> usize { self.kv_dim }
 
     pub fn append(&mut self, layer: usize, k_new: &Tensor, v_new: &Tensor) {
         self.k[layer].extend_from_slice(&k_new.data);
@@ -534,6 +538,179 @@ impl TransformerModel {
             self.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
         (last_hidden, logits)
+    }
+
+    /// Forward new tokens with KV cache; returns logits [new_len × vocab] (one row per input token).
+    pub fn forward_with_kv_all_logits(&self, tokens: &[u16], cache: &mut KvCache) -> Tensor {
+        let seq_len = tokens.len();
+        let is_first_pass = cache.len == 0;
+        let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
+        let total_seq = if is_first_pass { new_len } else { cache.len + seq_len };
+
+        let start_pos = if is_first_pass { 0 } else { cache.len };
+        let mut x = Tensor::new((new_len, self.hidden));
+        for (i, &t) in tokens.iter().enumerate().take(new_len) {
+            let emb = self.embed_lookup(t);
+            for j in 0..self.hidden {
+                x.data[i * self.hidden + j] = emb.data[j];
+            }
+        }
+
+        let mut mask_data = vec![0.0f32; new_len * total_seq];
+        for i in 0..new_len {
+            let global_i = start_pos + i;
+            for j in (global_i + 1)..total_seq {
+                mask_data[i * total_seq + j] = NEG_INFINITY;
+            }
+        }
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
+
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
+            let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+            let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            let v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            let qk_head_dim = self.kv_dim / self.num_heads;
+            rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+            rope_apply_heads(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
+                &self.rope_cos, &self.rope_sin, start_pos);
+            cache.append(layer_idx, &k, &v);
+            if layer_idx + 1 == self.layers.len() {
+                cache.advance(new_len);
+            }
+            let total_k = cache.k_all(layer_idx, total_seq);
+            let total_v = cache.v_all(layer_idx, total_seq);
+            let num_heads = self.num_heads;
+            let num_kv_heads = self.num_kv_heads;
+            let kv_dim = self.kv_dim;
+            let q_group_size = num_heads / num_kv_heads;
+            let k_dim = total_k.shape.1;
+            let v_dim = total_v.shape.1;
+            let mut attn_out_data = vec![0.0f32; new_len * kv_dim];
+            let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
+
+            for kv_g in 0..num_kv_heads {
+                let kv_start = kv_g * qk_head_dim;
+                let mut k_g = Tensor::new((total_seq, qk_head_dim));
+                let mut v_g = Tensor::new((total_seq, qk_head_dim));
+                for s in 0..total_seq {
+                    for d in 0..qk_head_dim {
+                        let kd = kv_start + d;
+                        if kd < k_dim { k_g.data[s * qk_head_dim + d] = total_k.data[s * k_dim + kd]; }
+                        if kd < v_dim { v_g.data[s * qk_head_dim + d] = total_v.data[s * v_dim + kd]; }
+                    }
+                }
+                for qh in 0..q_group_size {
+                    let head_idx = kv_g * q_group_size + qh;
+                    let head_start = head_idx * qk_head_dim;
+                    for qb in (0..new_len).step_by(block_size) {
+                        let qb_end = (qb + block_size).min(new_len);
+                        let qb_len = qb_end - qb;
+                        let mut q_block = Tensor::new((qb_len, qk_head_dim));
+                        for s in 0..qb_len {
+                            for d in 0..qk_head_dim {
+                                q_block.data[s * qk_head_dim + d] =
+                                    q.data[(qb + s) * kv_dim + head_start + d];
+                            }
+                        }
+                        for kb in (0..total_seq).step_by(block_size) {
+                            let kb_end = (kb + block_size).min(total_seq);
+                            let kb_len = kb_end - kb;
+                            let mut k_block = Tensor::new((kb_len, qk_head_dim));
+                            for s in 0..kb_len {
+                                for d in 0..qk_head_dim {
+                                    k_block.data[s * qk_head_dim + d] =
+                                        k_g.data[(kb + s) * qk_head_dim + d];
+                                }
+                            }
+                            let k_block_t = k_block.transposed();
+                            let mut scores = q_block.matmul(&k_block_t).unwrap();
+                            let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
+                            let mask_row_start = (qb) * total_seq + kb;
+                            for si in 0..qb_len {
+                                for sj in 0..kb_len {
+                                    let idx = si * kb_len + sj;
+                                    scores.data[idx] *= scale;
+                                    scores.data[idx] += mask.data[mask_row_start + si * total_seq + sj];
+                                }
+                            }
+                            for si in 0..qb_len {
+                                let start = si * kb_len;
+                                let end = start + kb_len;
+                                for sj in 0..kb_len {
+                                    if (qb + si) < (kb + sj) {
+                                        scores.data[start + sj] = -1e9;
+                                    }
+                                }
+                                softmax_inplace(&mut scores.data[start..end]);
+                            }
+                            let mut v_block = Tensor::new((kb_len, qk_head_dim));
+                            for s in 0..kb_len {
+                                for d in 0..qk_head_dim {
+                                    v_block.data[s * qk_head_dim + d] =
+                                        v_g.data[(kb + s) * qk_head_dim + d];
+                                }
+                            }
+                            let attn_block = scores.matmul(&v_block).unwrap();
+                            for s in 0..qb_len {
+                                for d in 0..qk_head_dim {
+                                    attn_out_data[(qb + s) * kv_dim + head_start + d] +=
+                                        attn_block.data[s * qk_head_dim + d];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap();
+            let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
+            let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap();
+            x = x.add(&proj).unwrap();
+            let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
+            let gate = layer.gate.matmul_hybrid(&norm2).unwrap();
+            let up = layer.up.matmul_hybrid(&norm2).unwrap();
+            let ffn_group = gate.shape.1;
+            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
+            for (i, g) in gated.data.iter_mut().enumerate() { *g = silu(*g) * up.data[i]; }
+            let intermediate_size = layer.intermediate_size;
+            let down_out = layer.down.shape.1;
+            let num_groups = intermediate_size / ffn_group;
+            let mut gated_full = Tensor::new((new_len, intermediate_size));
+            for s in 0..new_len {
+                for g in 0..num_groups {
+                    let g_off = g * ffn_group;
+                    for d in 0..ffn_group {
+                        gated_full.data[s * intermediate_size + g_off + d] = gated.data[s * ffn_group + d];
+                    }
+                }
+            }
+            let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
+            let down = layer.down.matmul_hybrid(&gated_norm).unwrap();
+            for s in 0..new_len {
+                for d in 0..down_out.min(self.hidden) {
+                    x.data[s * self.hidden + d] += down.data[s * down_out + d];
+                }
+            }
+        }
+
+        let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
+        let vocab_size = self.vocab_size as usize;
+        let mut all_logits = vec![0.0f32; new_len * vocab_size];
+        for i in 0..new_len {
+            let hidden = Tensor::from_row_major((1, self.hidden),
+                final_norm.data[i * self.hidden..(i + 1) * self.hidden].to_vec()).unwrap();
+            let logits = if self.tie_embeddings {
+                self.embed.matmul_hybrid(&hidden).unwrap()
+            } else {
+                self.unembed.matmul_hybrid(&hidden).unwrap()
+            };
+            for j in 0..vocab_size {
+                all_logits[i * vocab_size + j] = logits.data[j];
+            }
+        }
+        Tensor::from_row_major((new_len, vocab_size), all_logits).unwrap()
     }
 
     pub fn forward_hidden(&self, tokens: &[u16]) -> (Tensor, Tensor) {
@@ -1257,7 +1434,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     Some(model)
 }
 
-fn argmax_row(logits: &Tensor, row: usize) -> u16 {
+pub fn argmax_row(logits: &Tensor, row: usize) -> u16 {
     let cols = logits.shape.1;
     let start = row * cols;
     let mut best = 0u16;
@@ -1272,50 +1449,112 @@ fn argmax_row(logits: &Tensor, row: usize) -> u16 {
 pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
     let max_seq = model.max_seq;
     let use_bpe = crate::bpe::is_loaded();
+    let eos = if use_bpe { 2u16 } else { EOS };
     let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
     let prompt_len = tokens.len();
     k_nano::serial_println!("[GEN] prompt_len={}, max_seq={}", prompt_len, max_seq);
 
-    // Inicializa KV cache com dimensoes do modelo
-    // Use model.kv_dim (Q output dim) for kv_dim, and infer k_dim from first layer's K projection
     let kv_dim = model.kv_dim;
     let k_dim = if model.layers.is_empty() { kv_dim } else {
-        model.layers[0].k.shape.1 // actual K projection output dimension
+        model.layers[0].k.shape.1
     };
     let mut cache = KvCache::new(model.layers.len(), k_dim, kv_dim);
 
-    // Processa o prompt completo (preenche cache)
     let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    let (mut last_hidden, _) = model.forward_with_kv(&tokens, &mut cache);
+    let (mut last_hidden, mut last_logits) = model.forward_with_kv(&tokens, &mut cache);
     let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     k_nano::serial_println!("[GEN] prompt fwd: {} ticks", t1 - t0);
 
+    let mut spec = NgramSpeculator::new();
+    spec.feed_slice(&tokens);
+
     let max_gen = max_seq.saturating_sub(prompt_len).min(8);
-    for step in 0..max_gen {
+    let mut step = 0usize;
+    while step < max_gen {
         if tokens.len() >= max_seq { break; }
 
-        // Gera proximo token a partir do ultimo hidden state
-        let logits = if model.tie_embeddings {
-            model.embed.matmul_hybrid(&last_hidden).unwrap()
+        let model_next = argmax_row(&last_logits, 0);
+        if model_next == eos { break; }
+
+        let draft = spec.propose();
+        // Speculative path only if draft[0] matches the model's greedy next token.
+        let use_spec = !draft.is_empty() && draft[0] == model_next;
+
+        if use_spec {
+            let m = draft.len().min(max_gen - step).min(crate::ngram_spec::M);
+            if m == 0 { break; }
+            let drafts = &draft[..m];
+
+            let prev_cache_len = cache.len;
+            let prev_k_lens: Vec<usize> = cache.k.iter().map(|k| k.len()).collect();
+            let prev_v_lens: Vec<usize> = cache.v.iter().map(|v| v.len()).collect();
+
+            let all_logits = model.forward_with_kv_all_logits(drafts, &mut cache);
+            let (extra_accept, bonus) = verify_draft(&all_logits, drafts);
+            // drafts[0] pre-verified; keep 1+extra_accept draft tokens in KV.
+            let kept = (1 + extra_accept).min(m);
+
+            // Truncate KV to accepted draft prefix (no re-forward of accepted tokens).
+            if kept < m && m > 0 && !cache.k.is_empty() {
+                let per_k = (cache.k[0].len() - prev_k_lens[0]) / m;
+                let per_v = (cache.v[0].len() - prev_v_lens[0]) / m;
+                for l in 0..model.layers.len() {
+                    cache.k[l].truncate(prev_k_lens[l] + kept * per_k);
+                    cache.v[l].truncate(prev_v_lens[l] + kept * per_v);
+                }
+                cache.len = prev_cache_len + kept;
+            }
+
+            for &t in drafts.iter().take(kept) {
+                tokens.push(t);
+                step += 1;
+                spec.feed(t);
+            }
+            record_spec_hit(kept as u64);
+
+            // Logits at last kept draft position predict the bonus / next token.
+            let vdim = all_logits.shape.1;
+            let hi = kept - 1;
+            last_logits = Tensor::from_row_major(
+                (1, vdim),
+                all_logits.data[hi * vdim..(hi + 1) * vdim].to_vec(),
+            ).unwrap();
+
+            // Bonus from verification (next token after accepted prefix).
+            if bonus != eos && step < max_gen && tokens.len() < max_seq {
+                tokens.push(bonus);
+                step += 1;
+                spec.feed(bonus);
+                let (new_hidden, new_logits) = model.forward_with_kv(&[bonus], &mut cache);
+                last_hidden = new_hidden;
+                last_logits = new_logits;
+                record_spec_bonus_forward();
+                record_spec_tokens(1);
+            }
+
+            if tokens.last() == Some(&eos) { break; }
         } else {
-            model.unembed.matmul_hybrid(&last_hidden).unwrap()
-        };
-        let next = argmax_row(&logits, 0);
-        let eos = if use_bpe { 2u16 } else { EOS };
-        if next == eos { break; }
+            // Autoregressive: commit model_next (draft miss or empty).
+            tokens.push(model_next);
+            step += 1;
+            spec.feed(model_next);
+            record_classic_step();
 
-        tokens.push(next);
-
-        // Processa apenas o novo token com KV cache
-        let t_step = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        let (new_hidden, _) = model.forward_with_kv(&[next], &mut cache);
-        let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        if t_step1 - t_step > 5 {
-            k_nano::serial_println!("[GEN] step={} token={} kv_cache: {} ticks (ctx={})",
-                step + 1, next, t_step1 - t_step, tokens.len());
+            let t_step = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let (new_hidden, new_logits) = model.forward_with_kv(&[model_next], &mut cache);
+            let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            if t_step1 - t_step > 5 {
+                k_nano::serial_println!("[GEN] step={} token={} kv_cache: {} ticks (ctx={})",
+                    step, model_next, t_step1 - t_step, tokens.len());
+            }
+            last_hidden = new_hidden;
+            last_logits = new_logits;
         }
-        last_hidden = new_hidden;
     }
+
+    // ADR-0047: publish last hidden as latent thought (non-fatal).
+    crate::projection::publish_thought(&last_hidden.data);
+    crate::ngram_spec::log_bench_gate();
 
     let gen = &tokens[prompt_len..];
     if use_bpe { crate::bpe::decode(gen) } else { Tokenizer::decode(gen) }

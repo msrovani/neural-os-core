@@ -1,17 +1,28 @@
-# neural-os-core - QEMU UEFI com WHPX (fallback TCG via -Tcg) - v1.7.0
+# neural-os-core - QEMU UEFI com WHPX (fallback TCG via -Tcg) - v1.8.0
 # Fluxo: cargo build --release -> python tools\build_image.py -> .\run-qemu-whpx.ps1 [-Window]
 #
-# Bypass rede (SLIP/COM2): sobe tools\serial_bridge.py ANTES do QEMU e mata no exit/Ctrl+C.
-#   Bridge = TCP server 127.0.0.1:4444 | QEMU = cliente (-serial tcp:127.0.0.1:4444)
-#   NAO use server=on no QEMU (disputa a porta com o bridge).
-#   Skip: -NoSerialBridge   |  WinTAP NIC: -Bridge (netdev distinto do SLIP)
+# === Sprint Net gate (CANONICO) ===
+# Path de internet = e1000 PCI (NAO SLIP/COM2).
+#   Default: -netdev user + e1000 (QEMU slirp). Guest static 10.0.2.15/24.
+#   Recomendado internet real via WiFi host: -Bridge (TAP + ICS/bridge Windows).
+#     Guest: DHCP (nao forca 10.0.2.15). Requer adaptador TAP (OpenVPN TAP-Windows).
+#
+# === SLIP FREEZE (nao e path do gate Net) ===
+# tools\serial_bridge.py + COM2 = peer de debug legado. Codigo permanece, default OFF.
+#   Opt-in legado: -SerialBridge
+#   Alias explicito skip: -NoSerialBridge (default ja e skip)
+#
+# VirtIO-net: -VirtioNet (alternativa ao e1000 no mesmo netdev)
 # NOTA: ficheiro ASCII-only (PS5 le UTF-8 sem BOM como CP1252; em-dash partia strings).
 param(
     [switch]$Window,
     [switch]$BuildDisk,
     [switch]$Tcg,
     [switch]$Bridge,
-    [switch]$NoSerialBridge,
+    [switch]$NoSerialBridge,   # default behavior; kept for scripts
+    [switch]$SerialBridge,     # opt-in: start tools\serial_bridge.py (FROZEN for Net gate)
+    [switch]$VirtioNet,
+    [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
     [int]$RamGB = 6,
     [int]$Smp = 4
@@ -30,6 +41,7 @@ $uefi = Join-Path $Root "target\uefi.img"
 $ovmf = Join-Path $Root "target\ovmf.fd"
 $qemu = "C:\Program Files\qemu\qemu-system-x86_64.exe"
 $bridgeScript = Join-Path $Root "tools\serial_bridge.py"
+$netmodeFile = Join-Path $Root "target\netmode.flag"
 
 if (!(Test-Path $uefi)) { Write-Host "ERRO: target\uefi.img ausente. cargo build --release"; exit 1 }
 if (!(Test-Path $ovmf)) { Write-Host "ERRO: target\ovmf.fd ausente"; exit 1 }
@@ -45,20 +57,18 @@ function Stop-SerialBridge {
             Stop-Process -Id $bridgePid -Force -ErrorAction SilentlyContinue
             Get-CimInstance Win32_Process -Filter "ParentProcessId=$bridgePid" -ErrorAction SilentlyContinue |
                 ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            Write-Host "[BRIDGE] killed pid=$bridgePid" -ForegroundColor Yellow
+            Write-Host "[SLIP] killed pid=$bridgePid" -ForegroundColor Yellow
         } else {
-            Write-Host "[BRIDGE] ja encerrado pid=$bridgePid" -ForegroundColor Gray
+            Write-Host "[SLIP] ja encerrado pid=$bridgePid" -ForegroundColor Gray
         }
     } catch {
-        Write-Host "[BRIDGE] kill falhou pid=$bridgePid : $_" -ForegroundColor Yellow
+        Write-Host "[SLIP] kill falhou pid=$bridgePid : $_" -ForegroundColor Yellow
     }
     $script:bridgeProc = $null
 }
 
 function Test-PortListening {
     param([int]$Port)
-    # Get-NetTCPConnection pode retornar vazio (sem throw) sem admin / race —
-    # sempre cruzar com netstat se o cmdlet nao achar LISTEN.
     try {
         $c = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
         if ($c.Count -gt 0) { return $true }
@@ -70,16 +80,16 @@ function Test-PortListening {
 function Start-SerialBridge {
     param([int]$Port)
     if (!(Test-Path $bridgeScript)) {
-        Write-Host "[BRIDGE] ERRO: $bridgeScript ausente" -ForegroundColor Red
+        Write-Host "[SLIP] ERRO: $bridgeScript ausente" -ForegroundColor Red
         return $false
     }
     if (Test-PortListening -Port $Port) {
-        Write-Host "[BRIDGE] porta $Port ja em LISTEN - reutilizando (nao sobe novo)" -ForegroundColor Yellow
+        Write-Host "[SLIP] porta $Port ja em LISTEN - reutilizando" -ForegroundColor Yellow
         return $true
     }
     $py = Get-Command python -ErrorAction SilentlyContinue
     if (-not $py) {
-        Write-Host "[BRIDGE] ERRO: python nao encontrado no PATH" -ForegroundColor Red
+        Write-Host "[SLIP] ERRO: python nao encontrado no PATH" -ForegroundColor Red
         return $false
     }
     $script:bridgeProc = Start-Process -FilePath $py.Source `
@@ -88,7 +98,6 @@ function Start-SerialBridge {
         -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $bridgeLog `
         -RedirectStandardError $bridgeErr
-    # aguarda bind (ate ~5s; logging vai p/ stderr redirecionado)
     $ok = $false
     for ($i = 0; $i -lt 34; $i++) {
         Start-Sleep -Milliseconds 150
@@ -96,10 +105,10 @@ function Start-SerialBridge {
         if (Test-PortListening -Port $Port) { $ok = $true; break }
     }
     if ($ok) {
-        Write-Host "[BRIDGE] started pid=$($script:bridgeProc.Id) listen=127.0.0.1:$Port log=$bridgeLog" -ForegroundColor Green
+        Write-Host "[SLIP] started pid=$($script:bridgeProc.Id) listen=127.0.0.1:$Port (FROZEN path; not Net gate)" -ForegroundColor Yellow
         return $true
     }
-    Write-Host "[BRIDGE] FALHA ao escutar :$Port (pid=$($script:bridgeProc.Id) exited=$($script:bridgeProc.HasExited))" -ForegroundColor Red
+    Write-Host "[SLIP] FALHA ao escutar :$Port" -ForegroundColor Red
     if (Test-Path $bridgeErr) {
         Get-Content $bridgeErr -ErrorAction SilentlyContinue | Select-Object -Last 8 | ForEach-Object {
             Write-Host "  $_" -ForegroundColor DarkRed
@@ -122,6 +131,30 @@ function Resolve-FatDisk {
     return $null
 }
 
+function Find-TapAdapter {
+    param([string]$Preferred)
+    if ($Preferred -and $Preferred.Length -gt 0) { return $Preferred }
+    # Prefer OpenVPN TAP / tap-windows names
+    try {
+        $adapters = Get-NetAdapter -ErrorAction SilentlyContinue |
+            Where-Object { $_.Status -ne "Not Present" -and (
+                $_.InterfaceDescription -match "TAP|tap-windows|OpenVPN|Wintun" -or
+                $_.Name -match "TAP|tap"
+            ) }
+        if ($adapters) {
+            $a = $adapters | Select-Object -First 1
+            return $a.Name
+        }
+    } catch { }
+    return $null
+}
+
+function Write-NetModeFlag {
+    param([string]$Mode) # 'U' = user/slirp, 'B' = bridge/TAP
+    New-Item -ItemType Directory -Force -Path (Join-Path $Root "target") | Out-Null
+    [System.IO.File]::WriteAllBytes($netmodeFile, [byte[]][char]$Mode)
+}
+
 try {
     $disk = Resolve-FatDisk
     if (-not $disk -and $BuildDisk) {
@@ -141,23 +174,47 @@ try {
     if ($Smp -ne 2) { $smpTry += 2 }
 
     $netMode = "user"
-    $netArgs = @("-netdev", "user,id=n0,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446", "-device", "e1000,netdev=n0")
+    $nicDev = if ($VirtioNet) { "virtio-net-pci,netdev=n0" } else { "e1000,netdev=n0" }
+    $netArgs = @("-netdev", "user,id=n0,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446", "-device", $nicDev)
+    Write-NetModeFlag -Mode "U"
+
     if ($Bridge) {
-        Write-Host "Tentando -netdev bridge,id=n0 ..." -ForegroundColor Cyan
+        Write-Host "=== NET: -Bridge (RECOMENDADO para internet real via WiFi host) ===" -ForegroundColor Cyan
+        $tap = Find-TapAdapter -Preferred $TapName
+        if (-not $tap) {
+            Write-Host "ERRO: nenhum adaptador TAP encontrado." -ForegroundColor Red
+            Write-Host "  1) Instale OpenVPN (TAP-Windows) ou tap-windows6" -ForegroundColor Yellow
+            Write-Host "  2) Em 'Adaptadores de Rede', renomeie o TAP (ex: tap0)" -ForegroundColor Yellow
+            Write-Host "  3) Opcao A: Bridge o TAP com o WiFi (botao direito > Bridge Connections)" -ForegroundColor Yellow
+            Write-Host "     Opcao B: WiFi Properties > Sharing > ICS para o TAP" -ForegroundColor Yellow
+            Write-Host "  4) Rode: .\run-qemu-whpx.ps1 -Bridge -TapName tap0 -Window" -ForegroundColor Yellow
+            Write-Host "Fallback: sem -Bridge usa user/slirp (static 10.0.2.15)." -ForegroundColor Gray
+            exit 1
+        }
         $netMode = "bridge"
-        $netArgs = @("-netdev", "bridge,id=n0,br=bridge", "-device", "e1000,netdev=n0")
+        Write-NetModeFlag -Mode "B"
+        # Windows: tap backend (NOT linux -netdev bridge helper)
+        $netArgs = @(
+            "-netdev", "tap,id=n0,ifname=$tap,script=no,downscript=no",
+            "-device", $nicDev
+        )
+        Write-Host "NET: TAP ifname='$tap' + $nicDev (guest DHCP; host WiFi via ICS/bridge)" -ForegroundColor Green
+        Write-Host "Guest NAO usa 10.0.2.15 neste modo (isso e so slirp)." -ForegroundColor Gray
     } else {
-        Write-Host "WARN: netdev=user (WinTAP -Bridge nao pedido). hostfwd :4445/:4446 (porta 4444 reservada ao SLIP)" -ForegroundColor Yellow
+        Write-Host "NET: user/slirp + $nicDev (guest static 10.0.2.15 -> host NAT)" -ForegroundColor Green
+        Write-Host "Dica gate Net / WiFi real: .\run-qemu-whpx.ps1 -Bridge -Window" -ForegroundColor Cyan
     }
 
-    # SLIP peer ANTES do QEMU (cliente TCP precisa de LISTEN)
-    if (-not $NoSerialBridge) {
+    # SLIP FREEZE: default OFF. Only -SerialBridge starts peer.
+    $wantSlip = $SerialBridge -and (-not $NoSerialBridge)
+    if ($wantSlip) {
+        Write-Host "[SLIP] opt-in (-SerialBridge) — FROZEN; not Sprint Net gate" -ForegroundColor Yellow
         if (-not (Start-SerialBridge -Port $SerialBridgePort)) {
-            Write-Host "[BRIDGE] abortando: sem peer serial a bypass nao funciona" -ForegroundColor Red
+            Write-Host "[SLIP] abortando: peer serial falhou" -ForegroundColor Red
             exit 1
         }
     } else {
-        Write-Host "[BRIDGE] skip (-NoSerialBridge) - COM2 tcp:$SerialBridgePort sem peer" -ForegroundColor Yellow
+        Write-Host "[SLIP] skip (frozen default; use -SerialBridge to opt-in)" -ForegroundColor Gray
     }
 
     Write-Host "=== NEURAL-OS-CORE (UEFI + $accel) ===" -ForegroundColor Cyan
@@ -165,7 +222,7 @@ try {
     if ($disk) { Write-Host "FAT32: $disk (IDE index=1)" -ForegroundColor Green }
     else { Write-Host "AVISO: sem disk_qemu.raw - python tools\build_image.py" -ForegroundColor Yellow }
     Write-Host "Log: $logfile"
-    Write-Host "Serial: COM1=file log | COM2=tcp client -> 127.0.0.1:$SerialBridgePort (SLIP)" -ForegroundColor Gray
+    Write-Host "Serial: COM1=file log | COM2=tcp client -> 127.0.0.1:$SerialBridgePort (SLIP peer opcional)" -ForegroundColor Gray
     Write-Host "Nota: se WHPX falhar (VP exit), rode: .\run-qemu-whpx.ps1 -Tcg -Window" -ForegroundColor Gray
 
     function Build-QemuArgs {
@@ -177,15 +234,14 @@ try {
         )
         if ($disk) { $a += @("-drive", "format=raw,file=$disk,if=ide,index=1") }
         # Phys loader map (non-overlapping; precisa -m 6G+). Janelas 1MB apos BPE.
-        #   0x100000000  target\bitnet_2B.bitnet     LLM BitNet 2B (~577MB); alt kernel 0x120000000
-        #   0x130000000  target\PIPER_PT_BR.BIN      Piper TTS PT-BR (~60MB)
-        #   0x140000000  (reservado probe firmware / legado)
-        #   0x150000000  target\bpe_vocab.bin        BPE HF vocab BPB1 (~1.5MB)
-        #   0x160000000  target\hw_expert_v3.bitnet  HW Expert Trinity MoE (~260KB)
-        #   0x161000000  target\rust_coder.bitnet    RustCoder expert (~270KB)
-        #   0x162000000  target\bge-small.bitnet     BGE embeddings (~393KB)
-        #   0x163000000  target\STT.BIN              STT CTC tiny (~222KB)
-        # MICRO.BITNET (~13KB) fica no FAT (PIO leve); sem loader dedicado.
+        #   0x100000000  target\bitnet_2B.bitnet
+        #   0x130000000  target\PIPER_PT_BR.BIN
+        #   0x150000000  target\bpe_vocab.bin
+        #   0x160000000  target\hw_expert_v3.bitnet
+        #   0x161000000  target\rust_coder.bitnet
+        #   0x162000000  target\bge-small.bitnet
+        #   0x163000000  target\STT.BIN
+        #   0x164000000  target\netmode.flag   'U'=user/slirp 'B'=bridge/TAP
         $bitnet2b = Join-Path $Root "target\bitnet_2B.bitnet"
         if (Test-Path $bitnet2b) {
             $a += @("-device", "loader,file=$bitnet2b,addr=0x100000000")
@@ -226,14 +282,22 @@ try {
             $a += @("-device", "loader,file=$stt,addr=0x163000000")
             Write-Host "STT loader: $stt @0x163000000" -ForegroundColor Green
         }
-        # COM1 = log file; COM2 = SLIP bypass (QEMU CLIENTE -> bridge servidor)
+        if (Test-Path $netmodeFile) {
+            $a += @("-device", "loader,file=$netmodeFile,addr=0x164000000")
+            Write-Host "NetMode loader: $netmodeFile @0x164000000 ($netMode)" -ForegroundColor Green
+        }
+        # COM1 = log file; COM2 = SLIP only if peer started (-SerialBridge).
+        # Without peer, tcp client aborts QEMU — use null when SLIP frozen.
         $a += @(
             "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
-            "-serial", "file:$logfile",
-            "-serial", "tcp:127.0.0.1:${SerialBridgePort}"
+            "-serial", "file:$logfile"
         )
+        if ($wantSlip) {
+            $a += @("-serial", "tcp:127.0.0.1:${SerialBridgePort}")
+        } else {
+            $a += @("-serial", "null")
+        }
         $a += $netArgs
-        # -Window: VGA std (janela GUI visivel). Sem -Window: headless (-nographic).
         if ($Window) { $a += @("-vga", "std") }
         else { $a += @("-vga", "none", "-display", "none", "-nographic") }
         return $a
@@ -263,8 +327,9 @@ try {
                 }
             }
             if ($netMode -eq "bridge") {
-                Write-Host "WARN: bridge -> user+hostfwd" -ForegroundColor Yellow
+                Write-Host "WARN: bridge/TAP falhou -> fallback user/slirp + e1000" -ForegroundColor Yellow
                 $netMode = "user"
+                Write-NetModeFlag -Mode "U"
                 $netArgs = @("-netdev", "user,id=n0,hostfwd=tcp::4445-:4445,hostfwd=tcp::4446-:4446", "-device", "e1000,netdev=n0")
             }
         }

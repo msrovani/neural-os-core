@@ -15,4 +15,7 @@ pub mod xpu;
 pub mod msched;
 pub mod display_coex;
 pub mod bench;
+pub mod work_queue;
+pub mod sasos;
+pub mod pipeline_g5;
 

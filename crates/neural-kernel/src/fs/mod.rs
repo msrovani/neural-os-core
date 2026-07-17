@@ -163,4 +163,8 @@ pub fn init_fs_agents() {
     register_fs_agent(Box::new(hermes_fs_agent::HermesFsAgent::new()));
     register_fs_agent(Box::new(ram_fs_agent::RamFsAgent::new()));
     register_fs_agent(Box::new(log_fs_agent::LogFsAgent::new()));
+    // NeuralFS CoW — RAM 4MB format+mount (nao sobrescreve FAT)
+    register_fs_agent(Box::new(
+        crate::neural_fs::neural_fs_agent::NeuralFsAgent::new(),
+    ));
 }

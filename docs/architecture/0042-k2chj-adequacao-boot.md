@@ -5,7 +5,7 @@
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
 **Release:** **N1–N5 + wire N2.5–N5.7 = marco `v1.8.0`**. A declaração de `v2.0.0` exige review formal adicional.
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). **`v1.8.5`** = tag de teste / não estável pós-marco (SESSION_121–129); **não** substitui o marco estável `v1.8.0` e **não** declara `v2.0.0`. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até review formal de qualidade ADR (voz Sprint Sound + checklist conjunto).**
 
 

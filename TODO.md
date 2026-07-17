@@ -1,11 +1,12 @@
 # 📋 TODO MASTER — neural-os-core
 
-**Versão release:** v1.8.0
+**Versão release:** v1.8.5 TESTE / NÃO ESTÁVEL
 **Data:** 2026-07-16
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **Sprint Sound** (voz pós-107). ADR-0042 ✅ v1.8.0. Review gate v2.0.0 pendente.
+**Pista ativa:** estabilização **v1.8.5** + **Sprint Net** (DHCP/RX). Sprint Sound ✅. ADR-0042 ✅. ADR-0040/0046/0047 MVPs ✅. Sprint 108 ✅.
+**Gate v2.0.0:** só com `por_fazer` zerado **e** OK explícito do maintainer (não automático). Residual INDEX `por_fazer`: follow-up ADR-0040 (write/DMA/#421/#423/cloud/NeuralFS disco/#419 UI) + NeuralFS.md + residuals ADR-0046 (DMA prefetch / Net RX runtime / stream-to-disk / K-quants / e2e GGUF) — MVP ADR-0046 ✅ SESSION_127; hot-swap Net code ✅ SESSION_128.
 
 ---
 
@@ -57,23 +58,24 @@
 
 ---
 
-## ▶️ SPRINT SOUND (reaberta) — leftovers voz pós-107
+## ✅ SPRINT SOUND — voz production-path (2026-07-16)
 
-**Home do backlog de voz.** Não bloqueia ADR-0042. Truth = `neural-kernel/src/audio/*` (ADR-0045).
-**Deps/tools:** `tools/train_stt.py`, `tools/convert_piper_to_bitnet.py`, HDA (`audio/hda.rs`), UAC stub (`audio/usb.rs`).
+**Truth** = `neural-kernel/src/audio/*` (ADR-0045). Espelho jarbas sincronizado; **sem cutover**.
+**Check:** `cargo check --release -p neural-kernel` = 0 erros (`target/check-sound`).
+**SESSION:** `docs/memory/SESSION_122.md`.
 
 | Item | Status | Detalhes / deps |
 |------|--------|-----------------|
-| STT real / retrain PCM→MFCC | ⏳ | `train_stt.py` hoje = MFCC synth; fechar CTC útil no LLM |
-| Mic→Wake→STT→LLM→TTS runtime e2e | ⏳ | skinny EventBus ✅ em 107; falta path mic real + re-validar WHPX |
-| Piper VITS pleno | ⏳ | neural-lite ≠ HiFi-GAN; `convert_piper_to_bitnet.py` |
-| Soft-float voice latency | ⏳ | known blocker; defer sob Sound (sem fake fix) |
-| UAC real (#84) | ⏳ | probe PCI USB ✅; enum descriptors xHCI ainda stub |
-| jarbas/audio wire | ⏳ | N5.7 wired display/gpu; audio truth monólito (ADR-0045); re-export quando wakeword convergir |
-| VAD refinements | ⏳ | `audio/vad.rs` base existe |
-| SER refinements | ⏳ | `audio/ser.rs` heurístico; polish |
-| Wake ML polish | ⏳ | agente registrado ✅; path Mic→WAKE e2e + MLP polish |
-| Unify truth↔espelho | ▶️ | partial (Part B); cutover pleno = Sound |
+| STT real / retrain PCM→MFCC | ✅ | `train_stt.py` PCM→MFCC kernel-aligned; `STT.BIN` regenerado; CTC tiny ainda fraco (WER) |
+| Mic→Wake→STT→LLM→TTS runtime | ✅ | Wake Continuous; gate pós-WAKEWORD; MIC/PLAYBACK rings; pipeline barge-in; rota única HERMES→TTS |
+| Piper neural-lite polish | ✅ | prosódia/duração/PT normalize; VITS/HiFi-GAN = **blocker soft-float** (não fakeado) |
+| Soft-float voice latency | ⏳ | known blocker; defer honesto (sem fake fix) |
+| UAC (#84) | ✅ | parse config AC/AS/iso EP; probe + `try_read_config_descriptor`; isócrono DMA → HW |
+| jarbas/audio wire | ▶️ | espelho sync (VAD/settings/wake Continuous); cutover re-export = futuro |
+| VAD refinements | ✅ | noise-floor EMA + ZCR + histerese |
+| SER refinements | ✅ | confidence gate + thresholds calibrados |
+| Wake ML polish | ✅ | Continuous + sensitivity + telemetria throttled |
+| Unify truth↔espelho | ▶️ | topics+settings contract no bridge; cutover pleno adiado (ADR-0045) |
 
 ---
 
@@ -91,16 +93,30 @@
 
 ---
 
+## 🧪 RELEASE v1.8.5 — integração e testes
+
+- [x] Consolidar aprendizados das sessões 121–128
+- [x] Registrar Self-Evolve, Sound, NeuralFS, AirLLM e família ADR-0047
+- [x] Manter ADRs 0048–0050 como propostas `por_fazer`
+- [x] Marcar versão como não estável / em teste
+- [ ] Validar residuals em HW real e Sprint Net
+- [ ] Liberar v2.0.0 somente após review formal e OK explícito do maintainer
+
+---
+
 ## ▶️ ADR-0042 — histórico (arquivado)
 
-## ⏳ SPRINT 108 — v2.0 Self-Evolving Agents
+## ✅ SPRINT 108 — v2.0 Self-Evolving Agents
 
 | Item | LOC | Status | Detalhes |
 |------|-----|--------|----------|
-| Auto-skill generation via LLM | ~500 | ⏳ | Geração de skills via Cortex |
-| Runtime skill verification | ~300 | ⏳ | Validação automática |
-| Agent self-improvement loop | ~400 | ⏳ | Loop de auto-improvement |
-| Meta-cognition and reflection | ~400 | ⏳ | Auto-reflexão |
+| Auto-skill generation via LLM | ~500 | ✅ | `self_evolve` + AddSkill/LLM + pattern≥3 |
+| Runtime skill verification | ~300 | ✅ | `verify_skill_md` no loader + register path |
+| Agent self-improvement loop | ~400 | ✅ | SIL Research→Create→Improve→Verify wired |
+| Meta-cognition and reflection | ~400 | ✅ | SleepCycle REFLECT + SelfEvolveAgent |
+
+**Engine:** `crates/hermes/src/self_evolve.rs` · **Agente:** `SelfEvolveAgent` (PollEvery 100) · Serial `[S108]` / `[S108-SIL]` / `[S108-REFLECT]`
+
 
 ---
 
@@ -167,7 +183,7 @@
 
 | Item | Esforço | Descrição |
 |------|---------|-----------|
-| **B-01** DHCP/RX funcional | ~500 LOC | smoltcp DHCP nunca completa |
+| **B-01** DHCP/RX + internet QEMU | ~500 LOC | ▶️ gate=**e1000** (SLIP frozen); user=static 10.0.2.15; **-Bridge**=TAP+DHCP; L3.5 prove RX before DNS |
 | WWW Agents | ~2.600 | Email, Search, RSS, Download |
 | Self-Update Agent | ~800 | A/B slots, channels |
 | Cross-OS compat | ~2.000 | PE/ELF/Mach-O/APK |
@@ -198,9 +214,9 @@
 | 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
 | 106 | v2.0 Ecossistema de Anéis Lógicos | ~3.000 | ✅ 10/10 concluídas |
 | 107 | Voice I/O (clima e2e + skinny EventBus) | ~1.500 | ✅ fechada (PASS parcial forte+) |
-| Sound | Leftovers voz (STT/Piper/UAC/jarbas wire…) | — | ▶️ reaberta |
-| ADR-42 | Adequação N2→N5 | — | ▶️ **pista ativa** |
-| 108 | Self-Evolving Agents | ~1.600 | ⏳ (não bloqueia ADR-42) |
+| Sound | Voz pipeline + STT PCM + UAC parse + neural-lite | — | ✅ (soft-float/VITS + cutover abertos) |
+| ADR-42 | Adequação N1–N5 + wire | — | ✅ v1.8.0 |
+| 108 | Self-Evolving Agents | ~1.600 | ✅ |
 | **Total v2.0** | | **~9.000 LOC** | |
 
 ---

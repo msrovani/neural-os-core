@@ -83,32 +83,28 @@ impl Agent for JarvisAgent {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty() { continue; }
 
+            // Rota unica: HERMES_RESPONSE → JarvisVoiceAgent → TTS → AUDIO_OUT.
+            // TOPIC_TTS_CMD nao e mais publicado (orfa desde Sound).
             if !self.greeted {
                 self.greeted = true;
                 let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, text);
                 serial_println!("{}", greeting);
-                let bytes = greeting.as_bytes().to_vec();
                 let _ = crate::EVENT_BUS.publish(Event {
-                    id: 0, topic: alloc::string::String::from("HERMES_RESPONSE"),
-                    payload: bytes.clone(), token: CapabilityToken::Legacy(1),
-                });
-                let _ = crate::EVENT_BUS.publish(Event {
-                    id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_TTS_CMD),
-                    payload: bytes, token: CapabilityToken::Legacy(1),
+                    id: 0,
+                    topic: alloc::string::String::from("HERMES_RESPONSE"),
+                    payload: greeting.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
                 });
                 continue;
             }
 
             let response = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, text);
             serial_println!("{}", response);
-            let bytes = response.as_bytes().to_vec();
             let _ = crate::EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from("HERMES_RESPONSE"),
-                payload: bytes.clone(), token: CapabilityToken::Legacy(1),
-            });
-            let _ = crate::EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_TTS_CMD),
-                payload: bytes, token: CapabilityToken::Legacy(1),
+                id: 0,
+                topic: alloc::string::String::from("HERMES_RESPONSE"),
+                payload: response.into_bytes(),
+                token: CapabilityToken::Legacy(1),
             });
         }
 

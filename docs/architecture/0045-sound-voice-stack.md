@@ -2,7 +2,7 @@
 
 **Data:** 2026-07-16  
 **Status:** Accepted  
-**Sprint:** Sound (base ✅) + 107 Voice ✅ FECHADA — leftovers → **Sprint Sound (reaberta)**  
+**Sprint:** Sound base ✅ + 107 Voice ✅ + **Sprint Sound ✅** (2026-07-16; soft-float/VITS + cutover abertos)  
 **Depende de:** ADR-0036 (JARVIS Interaction), ADR-0042 (K²CHJ N5 voz como expressão)  
 **Supersede / invalida como caminho primário:** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming protocol, Rustpotter crate  
 **Release:** documentado em CHANGELOG `[1.7.1]` (docs); clima e2e `[1.7.2]`; handoff Sound `[1.7.3]` docs
@@ -87,17 +87,17 @@ Histórico em CHANGELOG antigo (ex. VoiceService “Piper + Vosk”) permanece c
 
 ---
 
-## 5. Gaps → Sprint Sound (reaberta) — ordem sugerida
+## 5. Sprint Sound — status (2026-07-16)
 
-Sprint 107 Voice está **FECHADA** (PASS parcial forte+). Pendências abaixo **não** bloqueiam ADR-0042 N2→N5.
-
-1. **STT retrain** — PCM→MFCC real (`tools/train_stt.py`; hoje synth).  
-2. **Mic→Wake→STT→LLM→TTS runtime e2e** — skinny EventBus ✅; falta mic real + WHPX.  
-3. **Piper VITS pleno** — neural-lite ≠ HiFi-GAN (`convert_piper_to_bitnet.py`).  
-4. **Soft-float latency** — known blocker; defer sob Sound (sem fake).  
-5. **UAC real** (#84) quando HDA ausente.  
-6. **Unificar audio truth** — crate `jarbas` já wired; convergir wakeword e re-exportar `jarbas::audio` no bin.
-7. **VAD / SER / Wake ML polish**.
+| Item | Status |
+|------|--------|
+| STT PCM→MFCC (`train_stt.py`) | ✅ path + `STT.BIN`; WER CTC tiny ainda fraco |
+| Mic→Wake→STT→TTS gate | ✅ Wake Continuous; janela pós-WAKE; bypass `weather-e2e` |
+| Piper neural-lite polish | ✅; VITS/HiFi-GAN **não** implementado (soft-float blocker) |
+| Soft-float latency | ⏳ defer honesto |
+| UAC parse (#84) | ✅ descriptors; isócrono DMA → HW |
+| VAD / SER / Wake polish | ✅ |
+| jarbas cutover | ▶️ espelho sync; re-export adiado |
 
 Soft-float qualidade PT do 2B também toca **N3** (ADR-0042) — não só voz.
 

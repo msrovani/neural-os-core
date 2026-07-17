@@ -1,9 +1,9 @@
 # ADR-0046: AirLLM + GGUF Streaming — Modelos LLM Layer-by-Layer
 
 **Data:** 2026-07-16
-**Status:** Proposta — análise completa, não implementado
+**Status:** Accepted (MVP) — SESSION_127; hot-swap Net code SESSION_128; residuals documentados
 **Depende de:** ADR-0028 (GGUF format research), ADR-0041 P9 (GGUF mmap), Sprint 96 (GGUF parser + GgufBackedModel)
-**Sprint:** 108+
+**Sprint:** 108+ / SESSION_127
 
 ---
 
@@ -156,15 +156,37 @@ HermesAgent recebe:
 
 ### 3.2 O que precisa ser implementado
 
-| Componente | LOC | Descrição |
-|-----------|-----|-----------|
-| `GGUFStreamingModel` struct | ~80 | layer_info: Vec<(offset, size, type)>, embed, unembed |
-| `GGUFStreamingModel::load(path)` | ~100 | Lê header, preenche layer_info, carrega embed+unembed |
-| `forward_streaming()` | ~150 | Loop de layers com seek+read+dequant+forward |
-| `PrefetchEngine` | ~100 | DMA background, double buffer, submit/take |
-| Hot swap pipeline (download → load) | ~100 | NetAgent stream → ATA → detect → load |
-| Dequant para mais tipos (Q5_0, Q8_0, F16) | ~100 | Cada tipo precisa de função de dequant |
-| **Total** | **~630** | |
+| Componente | LOC | Descrição | Status SESSION_127 |
+|-----------|-----|-----------|-------------------|
+| `GGUFStreamingModel` struct | ~80 | layer_info: Vec<(offset, size, type)>, embed, unembed | ✅ `gguf_streaming.rs` |
+| `GGUFStreamingModel::load(path)` | ~100 | Lê header, preenche layer_info, carrega embed+unembed | ✅ header+layer map; embed/unembed only |
+| `forward_streaming()` | ~150 | Loop de layers com seek+read+dequant+forward | ✅ + `apply_one_layer` |
+| `PrefetchEngine` | ~100 | DMA background, double buffer, submit/take | 🟡 **soft** double-buffer (NOT DMA) |
+| Hot swap pipeline (download → load) | ~100 | NetAgent stream → ATA → detect → load | ✅ code path: `hot_swap_from_net` + ATA; **runtime gated by e1000 RX** (honest L3.5/RX) |
+| Dequant para mais tipos (Q5_0, Q8_0, F16) | ~100 | Cada tipo precisa de função de dequant | ✅ Q5_0 + Q8_0 + F16; K-quants ⏳ |
+| **Total** | **~630** | | MVP code path ✅ |
+
+### 3.2b Residuals `por_fazer` (MVP intacto)
+
+| Residual | Motivo |
+|----------|--------|
+| Prefetch DMA real | ATA PIO sync only; soft staging buffer |
+| Net RX / e1000 gate (runtime) | Pipeline Net→FAT→AirLLM **implementado** (SESSION_128); falha L3.5/RX se RX=0 — nao fingir download OK |
+| Stream-to-disk HTTP | `http_get` stage em RAM (cap 64MiB); multi-GB precisa write chunked |
+| K-quants (Q2_K/Q3_K/IQ4_NL) | Layout llama.cpp específico; sem path claro agora |
+| Q4_1 / Q5_1 / Q8_1 | Menos comuns; deferred |
+| E2e QEMU com GGUF multi-GB em FAT | Precisa imagem FAT com modelo; nao fingir "8GB streaming tested" |
+| P9 mmap ≠ AirLLM | Prefixo pages only — nao confundir com layer-wise |
+
+### 3.2c Hot-swap API (SESSION_128)
+
+| Comando | Path |
+|---------|------|
+| `/model <FAT32-8.3>` | ATA → `hot_swap_from_ata` → `set_model` |
+| `/model http://A.B.C.D[:port]/path [DEST.GGUF]` | `http_get` → FAT write → AirLLM |
+| `/model-fetch …` | Alias do acima |
+
+Hostname DNS e HTTPS: nao implementados (erro honesto). SLIP nao e gate.
 
 ### 3.3 Impacto no desempenho
 

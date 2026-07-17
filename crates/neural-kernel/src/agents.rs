@@ -9,6 +9,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use event_bus::{CapabilityToken, Event, Receiver};
+use event_bus::latent::{LatentReceiver, TOPIC_THOUGHT_LLM};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::cortex;
 use crate::hermes::{self, IntentCache, WorkflowEngine};
@@ -222,7 +223,8 @@ impl InputAgent {
 }
 
 // ---------------------------------------------------------------------------
-// NetAgent — smoltcp poll loop
+// NetAgent — smoltcp poll loop (Continuous). Gate Sprint Net = e1000 [smoltcp/NIC], não SLIP.
+// Tick pós init_phase (SelfHeal/Disk Done) → network_agent_tick; log `[NET] tick` cedo.
 // ---------------------------------------------------------------------------
 
 const NETAGENT_MANIFEST: AgentManifest = AgentManifest {
@@ -320,6 +322,8 @@ pub struct HermesAgent {
     llm_receiver: Receiver,
     security_receiver: Receiver,
     health_receiver: Receiver,
+    latent_receiver: LatentReceiver,
+    latent_recv_total: u64,
     cortex: crate::cortex::Cortex,
     state: HermesState,
     status_skill: String,
@@ -349,6 +353,8 @@ impl HermesAgent {
             llm_receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE),
             security_receiver: EVENT_BUS.subscribe("SECURITY_ALERT"),
             health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
+            latent_receiver: crate::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
+            latent_recv_total: 0,
             cortex: crate::cortex::Cortex::new(),
             state: HermesState::Idle,
             status_skill: String::from("system_status"),
@@ -451,6 +457,18 @@ impl Agent for HermesAgent {
             self.boot_greeted = true;
         }
 
+        // ADR-0047: drain LatentBus thoughts (non-fatal)
+        while let Some(pkt) = self.latent_receiver.try_receive() {
+            self.latent_recv_total = self.latent_recv_total.saturating_add(1);
+            let norm = f32::from_bits(pkt.norm_bits);
+            if self.latent_recv_total <= 3 || self.latent_recv_total % 32 == 0 {
+                serial_println!(
+                    "[HERMES-LATENT] recv id={} norm={:.3} total={}",
+                    pkt.id, norm, self.latent_recv_total
+                );
+            }
+        }
+
         // Atualiza métricas de consciência (sempre, leve)
         let skills_total = SKILL_REGISTRY.lock().skill_count() as u64;
         self.consciousness.tick(
@@ -470,15 +488,51 @@ impl Agent for HermesAgent {
                 &alloc::format!("Metricas criticas: {:?}", self.consciousness.critical_metrics()));
         }
 
-        // Self-Improvement Loop: periódico
-        if !self.sil.is_active() && _tick % 1000 == 0 { self.sil.start(_tick); }
-        if self.sil.needs_research() { log_analyst_agent::write_log("sil", "Research phase"); self.sil.advance(true); }
+        // Self-Improvement Loop: periódico — Sprint 108 fecha Create/Improve/Verify
+        if !self.sil.is_active() && _tick % 1000 == 0 {
+            if self.sil.start(_tick) {
+                serial_println!("[S108-SIL] start Research @ tick {}", _tick);
+            }
+        }
+        if self.sil.needs_research() {
+            // Research: padrões observados ≥3 → oportunidade
+            let pending = crate::skill_observer::pending_observations().len();
+            let found = pending > 0 || crate::self_evolve::counters().0 > 0
+                || !crate::skill_observer::count_by_skill().is_empty();
+            log_analyst_agent::write_log("sil", if found { "Research: patterns found" } else { "Research: idle" });
+            self.sil.advance(found);
+        }
+        if self.sil.needs_create() {
+            let mut storage = SKILL_STORAGE.lock();
+            let n = crate::self_evolve::auto_generate_pending(&mut storage);
+            drop(storage);
+            serial_println!("[S108-SIL] Create: {} skills", n);
+            self.sil.advance(n > 0);
+        }
+        if self.sil.needs_improve() {
+            let mut storage = SKILL_STORAGE.lock();
+            let n = crate::self_evolve::improve_failed(&mut storage);
+            drop(storage);
+            serial_println!("[S108-SIL] Improve: {} skills", n);
+            self.sil.advance(true); // ciclo avança; fila vazia = noop ok
+        }
+        if self.sil.needs_verify() {
+            // Verificação: rejeições vs oks
+            let (_g, ok, rej, _i, _r) = crate::self_evolve::counters();
+            let pass = rej == 0 || ok >= rej;
+            serial_println!("[S108-SIL] Verify: ok={} rej={} pass={}", ok, rej, pass);
+            self.sil.advance(pass);
+            if pass {
+                serial_println!("{}", crate::self_evolve::status_line());
+            }
+        }
 
         // Consciousness report periódico
         if _tick > 0 && _tick % 2000 == 0 {
             let report = self.consciousness.report();
             serial_println!("{}", report);
             log_analyst_agent::write_log("consciousness", &report);
+            serial_println!("{}", crate::self_evolve::status_line());
         }
 
         // ── Processamento de eventos (o trabalho real) ──
@@ -503,11 +557,33 @@ impl Agent for HermesAgent {
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 let pending = PENDING_SKILL.lock().take();
                 if let Some((name, _desc)) = pending {
-                    let mut storage = SKILL_STORAGE.lock();
-                    match storage.register_skill(text) {
-                        Ok(()) => { serial_println!("[SKILL-LLM] Skill '{}' gerada ({} bytes)", name, text.len());
-                            responded = alloc::format!("[Hermes] Skill '{}' criada via LLM!", name); }
-                        Err(e) => { responded = alloc::format!("[Hermes] Erro ao criar skill '{}': {}", name, e); }
+                    // Sprint 108: verify before register
+                    match crate::self_evolve::verify_skill_md(text) {
+                        crate::self_evolve::VerifyVerdict::Ok => {
+                            let mut storage = SKILL_STORAGE.lock();
+                            match crate::self_evolve::verify_and_register(&mut storage, text) {
+                                Ok(n) => {
+                                    serial_println!("[SKILL-LLM] Skill '{}' gerada+verified ({} bytes)", n, text.len());
+                                    responded = alloc::format!("[Hermes] Skill '{}' criada via LLM!", n);
+                                    if self.sil.needs_create() || self.sil.needs_verify() {
+                                        self.sil.advance(true);
+                                    }
+                                    crate::self_evolve::record_outcome(&n, true, now);
+                                }
+                                Err(e) => {
+                                    responded = alloc::format!("[Hermes] Erro ao criar skill '{}': {}", name, e);
+                                    if self.sil.is_active() { self.sil.advance(false); }
+                                    crate::self_evolve::record_outcome(&name, false, now);
+                                }
+                            }
+                        }
+                        crate::self_evolve::VerifyVerdict::Reject(reason) => {
+                            responded = alloc::format!(
+                                "[Hermes] Skill '{}' rejeitada na verificação: {}", name, reason
+                            );
+                            if self.sil.is_active() { self.sil.advance(false); }
+                            crate::self_evolve::record_outcome(&name, false, now);
+                        }
                     }
                 } else {
                     EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
@@ -561,6 +637,10 @@ impl Agent for HermesAgent {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             serial_println!("[CORTEX] Texto: \"{}\"", text);
             println!("[CORTEX] Texto: \"{}\"", text);
+
+            // Sprint 108: observar intent para auto-skill
+            let now_obs = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            crate::self_evolve::observe_intent(text, now_obs);
 
             // Sprint 78: IntentCache — evita re-classificação
             let now_ticks = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
@@ -756,7 +836,7 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill <nome> <desc>, /rm_skill <name>, /reload_skills, /help")
+                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /model <path|http://ip:port/path>, /model-fetch <url> [DEST.GGUF], /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill <nome> <desc>, /rm_skill <name>, /reload_skills, /help")
                 }
                 hermes::Command::ShowSkills => {
                     let storage = SKILL_STORAGE.lock();
@@ -771,29 +851,31 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::AddSkill(ref name, ref desc) => {
-                    let prompt = alloc::format!(
-                        "Crie uma skill para o Neural OS Hermes (SKILL.md).\nNome: {}\nDescricao: {}\n\
-                         Formato:\n---\nname: <nome>\ndescription: <descricao>\nrequired_tokens: [1]\n---\n\n\
-                         <instrucoes markdown>\nGera APENAS o bloco da skill.",
-                        name, desc,
-                    );
+                    let prompt = crate::self_evolve::llm_skill_prompt(name, desc);
                     *PENDING_SKILL.lock() = Some((name.clone(), desc.clone()));
                     let _ = EVENT_BUS.publish(Event {
                         id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
                         payload: prompt.into_bytes(), token: CapabilityToken::Legacy(1),
                     });
                     self.state = HermesState::AwaitingLLM;
+                    if self.sil.needs_create() || !self.sil.is_active() {
+                        // alimenta SIL se ativo em Create
+                    }
                     String::from("...")
                 }
                 hermes::Command::Learn(ref name, ref desc) => {
                     let instructions = alloc::format!("Skill gerada via /learn: {}", desc);
+                    let md = alloc::format!(
+                        "---\nname: {}\ndescription: {}\nrequired_tokens: [1]\n---\n{}\n",
+                        name, desc, instructions
+                    );
                     let skill = skill_registry::DynamicSkill::new(name, desc, &instructions);
                     SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(skill));
                     let mut storage = SKILL_STORAGE.lock();
-                    storage.register_skill(&alloc::format!(
-                        "---\nname: {}\ndescription: {}\n---\n{}\n", name, desc, instructions
-                    )).ok();
-                    alloc::format!("Skill '{}' aprendida! Descricao: {}", name, desc)
+                    match crate::self_evolve::verify_and_register(&mut storage, &md) {
+                        Ok(n) => alloc::format!("Skill '{}' aprendida+verified! Descricao: {}", n, desc),
+                        Err(e) => alloc::format!("Skill '{}' rejeitada: {}", name, e),
+                    }
                 }
                 hermes::Command::RmSkill(ref name) => {
                     if SKILL_STORAGE.lock().remove_skill(name) {
@@ -809,23 +891,66 @@ impl Agent for HermesAgent {
                 }
                 hermes::Command::ModelSwap(ref path) => {
                     let mut msg = alloc::format!("[MODEL] Swapping to: {}\n", path);
-                    if let Ok(data) = crate::fs::read_vfs(path) {
+                    if path.trim().is_empty() {
+                        msg.push_str("[MODEL] Usage:\n");
+                        msg.push_str("  /model <FAT32-8.3>              — ATA AirLLM load + set_model\n");
+                        msg.push_str("  /model http://ip:port/path [DEST.GGUF]\n");
+                        msg.push_str("  /model-fetch http://ip:port/path [DEST.GGUF]\n");
+                        msg.push_str("[MODEL] Net uses e1000/smoltcp http_get (not SLIP). RX=0 → L3.5/RX fail.\n");
+                        msg
+                    } else if crate::gguf_streaming::is_http_model_spec(path) {
+                        match crate::gguf_streaming::hot_swap_from_net(path) {
+                            Ok(dest) => {
+                                msg.push_str(&alloc::format!(
+                                    "[MODEL] Net→FAT→AirLLM OK dest={} (set_model).\n",
+                                    dest
+                                ));
+                                msg.push_str("[MODEL] PrefetchEngine = soft double-buffer (NOT DMA).\n");
+                                crate::kjson!("MODEL", "SWAP", "net_airllm", "dest", dest.as_str());
+                            }
+                            Err(e) => {
+                                msg.push_str(&alloc::format!("[MODEL] Net hot-swap FAIL: {}\n", e));
+                                msg.push_str("[MODEL] Honest: if L3.5/RX, download did NOT succeed.\n");
+                                crate::kjson!("MODEL", "SWAP", "net_fail", "err", e);
+                            }
+                        }
+                        msg
+                    } else if let Ok(data) = crate::fs::read_vfs(path) {
                         if !data.is_empty() {
                             if let Some(model) = crate::cortex::load_model(&data) {
                                 crate::cortex::set_model(alloc::boxed::Box::new(model));
-                                msg.push_str("[MODEL] Model loaded and activated.\n");
+                                msg.push_str("[MODEL] Model loaded and activated (VFS).\n");
                                 crate::kjson!("MODEL", "SWAP", "ok", "path", path);
                             } else {
                                 msg.push_str("[MODEL] Failed to parse model file.\n");
                             }
-                        } else { msg.push_str("[MODEL] Empty file.\n"); }
-                    } else if let Some(_model) = crate::gguf::load_gguf_model_from_disk(path) {
-                        msg.push_str("[MODEL] GGUF model loaded from disk.\n");
+                        } else {
+                            msg.push_str("[MODEL] Empty file.\n");
+                        }
+                        msg
                     } else {
-                        msg.push_str("[MODEL] GGUF header NOTICE: streaming not yet supported.\n");
-                        msg.push_str(&crate::gguf::print_supported_formats());
+                        match crate::gguf_streaming::hot_swap_from_ata(path) {
+                            Ok(()) => {
+                                msg.push_str("[MODEL] AirLLM GGUFStreamingModel loaded (ATA local, set_model).\n");
+                                msg.push_str("[MODEL] PrefetchEngine = soft double-buffer (NOT DMA).\n");
+                                crate::kjson!("MODEL", "SWAP", "airllm", "path", path);
+                            }
+                            Err(e_air) => {
+                                if let Some(model) = crate::gguf::load_gguf_model_from_disk(path) {
+                                    crate::cortex::set_model(alloc::boxed::Box::new(model));
+                                    msg.push_str("[MODEL] GGUF full in-RAM model loaded from disk.\n");
+                                    crate::kjson!("MODEL", "SWAP", "gguf_full", "path", path);
+                                } else {
+                                    msg.push_str(&alloc::format!(
+                                        "[MODEL] AirLLM/GGUF load failed: {}\n",
+                                        e_air
+                                    ));
+                                    msg.push_str(&crate::gguf::print_supported_formats());
+                                }
+                            }
+                        }
+                        msg
                     }
-                    msg
                 }
                 hermes::Command::Profile => {
                     let profile = crate::profile::ProfileManager::get();
@@ -1202,14 +1327,22 @@ impl Agent for BootSelfHealAgent {
             }
         }
 
-        // Verifica causa do ultimo desligamento
-        let last_cause = crate::shutdown::read_last_shutdown_from_boot_log();
+        // Shutdown persistente via FAT — orçado (ver boot_log_agent). Sem budget,
+        // walk root sem limite bloqueava init_phase e NetAgent nunca entrava no run().
+        serial_println!("[SELF-HEAL] lendo shutdown cause (FAT boot-log budgeted)...");
+        let last_cause = if crate::env::is_sandbox() {
+            serial_println!("[SELF-HEAL] sandbox: skip FAT shutdown log (evita hang PIO)");
+            None
+        } else {
+            crate::shutdown::read_last_shutdown_from_boot_log()
+        };
         match last_cause {
             Some(crate::shutdown::ShutdownCause::Unexpected) => {
                 serial_println!("[SELF-HEAL] *** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
                 serial_println!("[SELF-HEAL] Analisando boot log para possiveis erros...");
                 let _ = log_analyst_agent::write_log("self_heal",
                     "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
+                // Ja lemos o log em read_last_shutdown; reusa a mesma API budgeted
                 if let Some(log) = crate::boot_log_agent::BootLogAgent::read_last_boot_log() {
                     let diagnostics = crate::boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
@@ -1239,6 +1372,7 @@ impl Agent for BootSelfHealAgent {
                 serial_println!("[SELF-HEAL] Primeiro boot ou sem registro de desligamento.");
             }
         }
+        serial_println!("[SELF-HEAL] oneshot Done — liberando init_phase p/ NetAgent");
 
         AgentTickResult::Done
     }
@@ -1416,13 +1550,28 @@ impl Agent for HwDetectAgent {
                         }
                     }
 
-                    // Log de firmware disponivel baseado em VID/DID
-                    let fw_available = match (vid, agent.class) {
-                        (0x10DE, 0x03) => Some("nvidia/gp108 (FECS+GPCCS)"),
-                        (0x8086, 0x03) => Some("i915/skl+kbl (GuC+HuC+DMC)"),
-                        (0x10EC, 0x02) | (0x10EC, 0x0D) => Some("rtl_nic/rtl8168*"),
-                        (0x8086, 0x02) | (0x8086, 0x0D) => Some("intel/iwlwifi*"),
-                        _ => None,
+                    // Firmware hint: e1000 (8086:100E etc, subclass 0x00) ≠ iwlwifi — não atribuir FW WiFi.
+                    let subclass = agent.subclass as u8;
+                    let is_intel_eth = vid == 0x8086
+                        && (agent.class == 0x02 || agent.class == 0x0D)
+                        && (subclass == 0x00
+                            || matches!(did, 0x100E | 0x100F | 0x10D3 | 0x1502 | 0x1503));
+                    if is_intel_eth {
+                        serial_println!(
+                            "[HW] {:04X}:{:04X} Ethernet e1000 — not wifi (iwlwifi N/A)",
+                            vid, did
+                        );
+                    }
+                    let fw_available = if is_intel_eth {
+                        None
+                    } else {
+                        match (vid, agent.class) {
+                            (0x10DE, 0x03) => Some("nvidia/gp108 (FECS+GPCCS)"),
+                            (0x8086, 0x03) => Some("i915/skl+kbl (GuC+HuC+DMC)"),
+                            (0x10EC, 0x02) | (0x10EC, 0x0D) => Some("rtl_nic/rtl8168*"),
+                            (0x8086, 0x02) | (0x8086, 0x0D) => Some("intel/iwlwifi*"),
+                            _ => None,
+                        }
                     };
                     if let Some(fw) = fw_available {
                         serial_println!("[HW] Firmware disponivel: {} para {:04X}:{:04X}", fw, vid, did);
@@ -1711,11 +1860,28 @@ impl SleepCycleAgent {
                 crate::global_arena::clear_route_traces();
                 crate::global_arena::reset_moe_cache();
             }
-            2 => { self.insights.push(alloc::format!("[DREAM] ciclo #{} insight sintetico", self.cycle_count)); serial_println!("[SLEEP] DREAM"); }
+            2 => {
+                let st = crate::evolve::evolve_dream_tick();
+                self.insights.push(alloc::format!(
+                    "[DREAM] ciclo #{} evolve={}", self.cycle_count, st
+                ));
+                serial_println!("[SLEEP] DREAM evolve={}", st);
+            }
             3 => { serial_println!("[SLEEP] CONSOLIDATE"); }
             4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } serial_println!("[SLEEP] PRUNE: {} insights", self.insights.len()); }
             5 => {
-                serial_println!("[SLEEP] REFLECT: ciclo #{} completo (KG disponivel via event-bus)", self.cycle_count);
+                // Sprint 108: REFLECT → meta-cognição self_evolve
+                let detail = crate::self_evolve::reflect(crate::interrupts::TIMER_TICKS
+                    .load(core::sync::atomic::Ordering::Relaxed) as u64);
+                self.insights.push(alloc::format!("[REFLECT] {}", detail));
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(crate::self_evolve::TOPIC_SELF_EVOLVE),
+                    payload: detail.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                // ADR-0047 L3 probe presence (deep stats need &TransformerModel)
+                crate::neuos_probe::log_probe(None);
             }
             _ => {}
         }
@@ -1900,3 +2066,81 @@ impl Skill for DiagnosticSkill {
         Ok(report.into_bytes())
     }
 }
+
+// ---------------------------------------------------------------------------
+// SelfEvolveAgent — Sprint 108: observe→generate→verify→improve→reflect
+// ---------------------------------------------------------------------------
+
+const SELF_EVOLVE_MANIFEST: AgentManifest = AgentManifest {
+    name: "self_evolve",
+    kind: AgentKind::System,
+    schedule: ScheduleKind::PollEvery(100),
+    auto_start: true,
+    persist: true,
+};
+
+pub struct SelfEvolveAgent {
+    receiver: Receiver,
+    last_reflect: u64,
+    cycles: u64,
+}
+
+impl SelfEvolveAgent {
+    pub fn new() -> Self {
+        SelfEvolveAgent {
+            receiver: EVENT_BUS.subscribe(crate::self_evolve::TOPIC_SELF_EVOLVE),
+            last_reflect: 0,
+            cycles: 0,
+        }
+    }
+}
+
+impl Agent for SelfEvolveAgent {
+    fn manifest(&self) -> &AgentManifest { &SELF_EVOLVE_MANIFEST }
+
+    fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
+        // Consome sinais (cron review / sleep reflect)
+        while let Some(ev) = self.receiver.try_receive() {
+            let msg = core::str::from_utf8(&ev.payload).unwrap_or("");
+            serial_println!("[S108] event: {}", msg);
+            if msg == "skill_review" || msg.starts_with("intents=") {
+                let mut storage = SKILL_STORAGE.lock();
+                let n = crate::self_evolve::tick_cycle(&mut storage, tick);
+                drop(storage);
+                if n > 0 {
+                    serial_println!("[S108] tick_cycle registered/improved={}", n);
+                }
+            }
+        }
+
+        // Ciclo periódico: generate + improve
+        self.cycles = self.cycles.wrapping_add(1);
+        if self.cycles % 5 == 0 {
+            let mut storage = SKILL_STORAGE.lock();
+            let n = crate::self_evolve::tick_cycle(&mut storage, tick);
+            drop(storage);
+            if n > 0 {
+                serial_println!("[S108] periodic work={}", n);
+            }
+        }
+
+        // Reflect a cada ~2000 ticks
+        if tick.saturating_sub(self.last_reflect) >= 2000 {
+            self.last_reflect = tick;
+            let detail = crate::self_evolve::reflect(tick);
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                payload: alloc::format!("[S108-REFLECT] {}", detail).into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+        }
+
+        if tick > 0 && tick % 5000 == 0 {
+            serial_println!("{}", crate::self_evolve::status_line());
+        }
+
+        AgentTickResult::Pending
+    }
+}
+

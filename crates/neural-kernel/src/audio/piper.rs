@@ -221,71 +221,98 @@ impl PiperEngine {
             return crate::audio::tts::synthesize(text);
         }
 
-        // Fonemas Piper: mapa ASCII simples → id 0..vocab (não IDs HF BitNet)
+        // Tokenização ASCII/PT: strip acentos comuns → a-z; mapa estável → emb id.
         let mut ids: Vec<usize> = Vec::new();
-        ids.push(1.min(vocab - 1)); // ^
+        let mut norm_bytes: Vec<u8> = Vec::new();
+        ids.push(1.min(vocab - 1)); // BOS
         for b in text.bytes() {
-            let id = match b {
-                b' ' => 3,
-                b'a'..=b'z' => 10 + (b - b'a') as usize,
-                b'A'..=b'Z' => 10 + (b - b'A') as usize,
+            let nb = match b {
+                b'A'..=b'Z' => b - b'A' + b'a',
+                // UTF-8 PT comum: treat continuation / high bytes as skip; Latin1-ish
+                0xC3 => continue, // lead of áéíóúãõç — next byte handled below
+                0xA1 | 0xA0 | 0xA2 | 0xA3 | 0xA4 | 0xA5 => b'a', // á à â ã
+                0xA9 | 0xA8 | 0xAA => b'e',
+                0xAD | 0xAC => b'i',
+                0xB3 | 0xB2 | 0xB4 | 0xB5 => b'o',
+                0xBA | 0xB9 => b'u',
+                0xA7 => b'c', // ç
+                b'a'..=b'z' | b' ' | b'.' | b',' | b'?' | b'!' => b,
+                _ if b < 128 => b' ',
+                _ => continue,
+            };
+            let id = match nb {
+                b' ' | b'.' | b',' | b'?' | b'!' => 3,
+                b'a'..=b'z' => 10 + (nb - b'a') as usize,
                 _ => 3,
             };
             ids.push(id % vocab);
+            norm_bytes.push(nb);
         }
-        ids.push(2.min(vocab - 1)); // $
-        if ids.is_empty() { return crate::audio::tts::synthesize(text); }
+        ids.push(2.min(vocab - 1)); // EOS
+        if ids.len() <= 2 {
+            return crate::audio::tts::synthesize(text);
+        }
         let seq = ids.len();
         crate::serial_println!(
-            "[PIPER] neural emb name='{}' vocab={} seq={}",
+            "[PIPER] neural-lite emb='{}' vocab={} seq={} (VITS/HiFi-GAN blocked soft-float)",
             ew.name, vocab, seq
         );
 
-        // Soft-float: VITS completo é lento demais no e2e — neural-lite com emb real.
-        // Cada fonema → linha do emb → envelope + oscilador (pcm>0, não formant puro).
+        // Soft-float: neural-lite com emb real + prosódia (não VITS pleno).
         {
             let sr = PIPER_SR as usize;
-            let base_samples = (sr / 20).max(64); // ~50ms baseline / fonema
-            // Sprint 107 Part B #5: duracao por fonema varia (aproximacao leve de
-            // "duration predictor" — vogal > consoante > espaço/pontuacao), em vez
-            // de duracao fixa para todo fonema. Ainda nao e o duration predictor
-            // estocastico do VITS real, mas ja não é 100% uniforme.
+            let base_samples = (sr / 18).max(64);
             let phoneme_dur = |b: u8| -> usize {
                 match b {
-                    b'a' | b'e' | b'i' | b'o' | b'u' | b'A' | b'E' | b'I' | b'O' | b'U' => {
-                        (base_samples * 13) / 10 // vogal: +30%
-                    }
-                    b' ' => base_samples / 2, // pausa curta
-                    _ => (base_samples * 8) / 10, // consoante: -20%
+                    b'a' | b'e' | b'i' | b'o' | b'u' => (base_samples * 14) / 10,
+                    b'm' | b'n' | b'l' | b'r' => (base_samples * 11) / 10,
+                    b' ' => base_samples / 2,
+                    b'.' | b'!' | b'?' => base_samples,
+                    b',' => (base_samples * 3) / 4,
+                    _ => (base_samples * 8) / 10,
                 }
             };
-            let text_bytes = text.as_bytes();
-            let durations: Vec<usize> = ids.iter().enumerate().map(|(ti, _)| {
-                // ids[0]=^ (BOS) e ids[last]=$ (EOS) nao tem byte correspondente em text.
-                if ti == 0 || ti + 1 >= ids.len() {
-                    base_samples / 2
-                } else {
-                    text_bytes.get(ti - 1).copied().map(phoneme_dur).unwrap_or(base_samples)
-                }
-            }).collect();
-            let total: usize = durations.iter().take(64).sum();
+            let durations: Vec<usize> = ids
+                .iter()
+                .enumerate()
+                .map(|(ti, _)| {
+                    if ti == 0 || ti + 1 >= ids.len() {
+                        base_samples / 2
+                    } else {
+                        norm_bytes
+                            .get(ti - 1)
+                            .copied()
+                            .map(phoneme_dur)
+                            .unwrap_or(base_samples)
+                    }
+                })
+                .collect();
+            let max_phonemes = 96.min(ids.len());
+            let total: usize = durations.iter().take(max_phonemes).sum();
             let mut audio = vec![0i16; total];
             let mut phase = 0.0f32;
             let mut cursor = 0usize;
-            for (ti, &id) in ids.iter().take(64).enumerate() {
+            // Contorno F0 leve (declinação).
+            let n_ph = max_phonemes.max(1) as f32;
+            for (ti, &id) in ids.iter().take(max_phonemes).enumerate() {
                 let samples_per = durations[ti];
                 let base = id * dim;
-                if base + dim > ew_len { cursor += samples_per; continue; }
-                // energia / f0 a partir do vetor de embedding
+                if base + dim > ew_len {
+                    cursor += samples_per;
+                    continue;
+                }
                 let mut e = 0.0f32;
                 let mut fsum = 0.0f32;
                 for d in 0..dim {
                     let v = ew.data[base + d];
                     e += v * v;
-                    if d < 8 { fsum += v; }
+                    if d < 8 {
+                        fsum += v;
+                    }
                 }
-                let amp = libm::sqrtf(libm::sqrtf(e / dim as f32)).clamp(0.05, 0.9);
-                let f0 = 140.0 + 80.0 * libm::sinf(fsum * 0.5);
+                let amp = libm::sqrtf(libm::sqrtf(e / dim as f32)).clamp(0.05, 0.85);
+                let decl = 1.0 - 0.12 * (ti as f32 / n_ph);
+                let f0 = (145.0 + 70.0 * libm::sinf(fsum * 0.5)) * decl;
                 for s in 0..samples_per {
                     phase += f0 / sr as f32;
                     let fade = (samples_per / 8).max(1);
@@ -296,25 +323,28 @@ impl PiperEngine {
                     } else {
                         1.0
                     };
-                    let sample = amp * env * (
-                        0.6 * libm::sinf(phase * 6.2831855)
-                        + 0.25 * libm::sinf(phase * 12.566371)
-                        + 0.15 * libm::sinf(phase * 18.849557)
-                    );
+                    let sample = amp
+                        * env
+                        * (0.55 * libm::sinf(phase * 6.2831855)
+                            + 0.28 * libm::sinf(phase * 12.566371)
+                            + 0.12 * libm::sinf(phase * 18.849557)
+                            + 0.05 * libm::sinf(phase * 25.132742));
                     let idx = cursor + s;
                     if idx < audio.len() {
-                        audio[idx] = (sample * 24000.0).clamp(-32768.0, 32767.0) as i16;
+                        audio[idx] = (sample * 22000.0).clamp(-32768.0, 32767.0) as i16;
                     }
                 }
                 cursor += samples_per;
             }
             if audio.iter().any(|&s| s != 0) {
-                crate::serial_println!("[PIPER] neural-lite pcm_samples={} (duration-varied)", audio.len());
+                crate::serial_println!(
+                    "[PIPER] neural-lite pcm_samples={} (prosody+duration)",
+                    audio.len()
+                );
                 return audio;
             }
         }
 
-        // Soft-float: VITS pleno fica para float/AVX; aqui formant se neural-lite falhar.
         crate::serial_println!("[PIPER] neural-lite empty -> formant fallback");
         crate::audio::tts::synthesize(text)
     }
