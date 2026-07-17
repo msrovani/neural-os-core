@@ -318,7 +318,7 @@ impl SkillMarket {
     }
     pub fn top(&self, n: usize) -> Vec<&SkillScore> {
         let mut v: Vec<_> = self.scores.values().collect();
-        v.sort_by(|a, b| b.success_rate.partial_cmp(&a.success_rate).unwrap());
+        v.sort_by(|a, b| b.success_rate.total_cmp(&a.success_rate));
         v.truncate(n);
         v
     }
@@ -493,4 +493,34 @@ impl WasmSkillRuntime {
 
 pub fn init_wasm_runtime() -> WasmSkillRuntime {
     WasmSkillRuntime::new()
+}
+
+#[cfg(test)]
+mod skill_market_sort_tests {
+    use super::SkillMarket;
+
+    #[test]
+    fn top_orders_by_success_rate_desc() {
+        let mut m = SkillMarket::new();
+        m.record("low", 1, false);
+        m.record("high", 1, true);
+        m.record("high", 1, true);
+        let top = m.top(2);
+        assert_eq!(top.len(), 2);
+        assert!(top[0].success_rate >= top[1].success_rate);
+        assert_eq!(top[0].skill, "high");
+    }
+
+    #[test]
+    fn top_survives_nan_without_panic() {
+        let mut m = SkillMarket::new();
+        m.record("a", 1, true);
+        m.record("b", 1, true);
+        // Force a non-total PartialOrd case that would panic with unwrap().
+        if let Some(e) = m.scores.get_mut("a") {
+            e.success_rate = f32::NAN;
+        }
+        let top = m.top(2);
+        assert_eq!(top.len(), 2);
+    }
 }

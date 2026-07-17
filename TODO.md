@@ -172,6 +172,7 @@
 
 ### Validação / polish
 
+- [x] `wasm_rt::SkillMarket::top` — `total_cmp` NaN-safe (SESSION_130; alinhado a `skill_market`)
 - [ ] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
 - [ ] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
 - [ ] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)

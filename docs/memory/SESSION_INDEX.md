@@ -35,6 +35,7 @@
 | 127 | ADR-0047 | — | Wave2 bench/Genesis/G3–G5/H2/H5 | Descartes ISA/adapter/H3; IDEA #449–453 |
 | 128 | ADR-0046 | — | Hot-swap Net→FAT→AirLLM | `hot_swap_from_net` + FAT 8.3 write fix; `/model-fetch`; L3.5/RX honest fail |
 | 129 | v1.8.5 | — | Consolidação pós-v1.8.0 (teste) | Self-Evolve, Sound, NeuralFS, AirLLM, ADR-0047 e propostas GPU 0048–0050 |
+| 130 | fix | — | SkillMarket ranking total_cmp | `wasm_rt::top` NaN-safe; alinhado a `skill_market`; ADR=— fix pontual |
 
 ## Sessões Históricas e Lacunas
 

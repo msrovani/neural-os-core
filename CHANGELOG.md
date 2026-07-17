@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- **hermes `wasm_rt::SkillMarket::top`:** replace `partial_cmp(...).unwrap()` ranking with `f32::total_cmp` (total order, NaN-safe), aligned with `skill_market::SkillMarket::top_skills`. Truth path is hermes only (monolith `wasm_rt` mirror removed at N4.6); LEGACY snapshot untouched.
+
 ## [1.8.5] — 2026-07-16 — Consolidação pós-v1.8.0 (teste / não estável)
 
 > Canal de integração e testes. Os MVPs abaixo não constituem validação
