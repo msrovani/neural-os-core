@@ -261,3 +261,19 @@ validação amostral. Preferência de vendor quando várias dGPUs: política do
 - TheRock supported GPUs: <https://github.com/ROCm/TheRock/blob/main/SUPPORTED_GPUS.md>
 - TrustOS (Polaris SDMA lesson): <https://github.com/nathan237/TrustOS>
 - BitNet 2B4T packing: <https://arxiv.org/abs/2504.12285>
+
+---
+
+## 14. Planos Cursor implementados
+
+Plano **`GPU Multivendor Unlock`** Fase **C3** (AMD):
+
+| Entrega | Status | Artefato |
+|---------|--------|----------|
+| IP Discovery parse + ArchHint | ✅ | `k_hal/gpu/amd_discovery.rs` |
+| PSP Degrau (ASD/TA → AuthTimeout honesto) | ✅ | `amd_psp.rs` |
+| KIQ/MES backends + doorbell por GC | ✅ | `amd_kiq.rs` / `amd_mes.rs` |
+| KernelPack `NKP_GFX*` + FW aliases FAT | ✅ | packers + `firmware/amdgpu/` |
+| Canário FailDispatch → CPU (display intacto) | ✅ | `canary.rs` |
+
+**Residual:** golden `vector_add` em APU/dGPU real — lifecycle ADR `fazendo`. BE em `k_hal` (ADR-0041 H2).

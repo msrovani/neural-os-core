@@ -1,7 +1,18 @@
+//! ACPI MADT — RSDP via BootInfo.rsdp_addr (UEFI) ou scan legado (ADR-0055).
+
 use crate::{println};
 use alloc::vec::Vec;
 use core::ptr::read_volatile;
+use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::VirtAddr;
+
+/// Endereço físico RSDP passado pelo bootloader (UEFI). 0 = ausente.
+static BOOT_RSDP_PHYS: AtomicU64 = AtomicU64::new(0);
+
+/// Chamar cedo a partir de `kernel_main` com `boot_info.rsdp_addr`.
+pub fn set_boot_rsdp(phys: Option<u64>) {
+    BOOT_RSDP_PHYS.store(phys.unwrap_or(0), Ordering::Release);
+}
 
 #[repr(C, packed)]
 struct RsdpDescriptor {
@@ -32,6 +43,29 @@ fn checksum_valid(data: &[u8]) -> bool {
 }
 
 unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
+    // Preferência: RSDP do bootloader (UEFI OVMF não garante scan BIOS).
+    let boot_rsdp = BOOT_RSDP_PHYS.load(Ordering::Acquire);
+    if boot_rsdp != 0 {
+        let addr = VirtAddr::new(physical_memory_offset + boot_rsdp).as_u64();
+        let ptr = addr as *const u8;
+        if read_volatile(ptr.add(0)) == b'R'
+            && read_volatile(ptr.add(1)) == b'S'
+            && read_volatile(ptr.add(2)) == b'D'
+            && read_volatile(ptr.add(3)) == b' '
+            && read_volatile(ptr.add(4)) == b'P'
+            && read_volatile(ptr.add(5)) == b'T'
+            && read_volatile(ptr.add(6)) == b'R'
+            && read_volatile(ptr.add(7)) == b' '
+        {
+            let rsdp = &*(addr as *const RsdpDescriptor);
+            let len = if rsdp.revision >= 2 { 36usize } else { 20usize };
+            let raw = core::slice::from_raw_parts(addr as *const u8, len);
+            if checksum_valid(raw) {
+                return Some(boot_rsdp);
+            }
+        }
+    }
+
     let ebda_start = VirtAddr::new(physical_memory_offset + 0x0008_0000);
     let ebda_end = VirtAddr::new(physical_memory_offset + 0x000A_0000);
     let bios_start = VirtAddr::new(physical_memory_offset + 0x000E_0000);

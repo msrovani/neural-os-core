@@ -1,4 +1,4 @@
-# CATÁLOGO DE TECNOLOGIAS — AIOS K²CHJ (neural-os-core)
+# CATÁLOGO DE TECNOLOGIAS — AIOS K³CHJ (neural-os-core)
 ## Registro de Propriedade Intelectual e Inovação
 
 **~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
@@ -14,14 +14,14 @@
 
 | Selo | Significado |
 |------|------------|
-| 🏆 **INOVAÇÃO ORIGINAL** | Tecnologia desenvolvida integralmente pela equipe AIOS K²CHJ. Sem precedente conhecido em sistemas bare-metal. |
+| 🏆 **INOVAÇÃO ORIGINAL** | Tecnologia desenvolvida integralmente pela equipe AIOS K³CHJ. Sem precedente conhecido em sistemas bare-metal. |
 | 🔬 **ENG. REVERSA** | Implementação própria baseada em engenharia reversa de hardware ou formato fechado. |
 | 🔄 **PORT/ADAPT** | Port de conceito de ecossistema aberto, com adaptação significativa para no_std e arquitetura de agente. |
 | 📚 **PAPER IMPL** | Implementação baseada em paper acadêmico, com otimizações próprias para bare-metal. |
 | 📦 **CRATE** | Utilização direta de crate existente, possivelmente com patches para no_std. |
 | ⚠️ **TERCEIROS** | Código de terceiros sob licença própria, utilizado conforme termos originais. |
 
-**DISCLAIMER:** Este documento cataloga fontes de inspiração, licenças originais e a contribuição inovadora da equipe AIOS K²CHJ. As inovações listadas como 🏆 são elegíveis para proteção por direitos autorais, patentes de software (onde aplicável) e constituem o diferencial competitivo do projeto.
+**DISCLAIMER:** Este documento cataloga fontes de inspiração, licenças originais e a contribuição inovadora da equipe AIOS K³CHJ. As inovações listadas como 🏆 são elegíveis para proteção por direitos autorais, patentes de software (onde aplicável) e constituem o diferencial competitivo do projeto.
 
 ---
 
@@ -52,11 +52,12 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.3 | **Bitmap Frame Allocator 8GB** | 🔄 Adaptado para suportar até 8GB RAM com bitmap 128KB | `linked_list_allocator`, OSDev | MIT/Apache 2.0 | `memory.rs` | ✅ 0 err |
 | 2.4 | **Adaptive Heap (AI Budget) + talc Dual-Tier** | 🏆 Tier 1: `talc` como `#[global_allocator]` (substitui `linked_list_allocator`). Tier 2: `TensorArena` bump em `0x4800_0000_0000` exclusiva Cortex/R3. `resize_heap_to_mb()` via `talc::extend`. | `talc` crate, bumpalo pattern | MIT/Apache 2.0 | `allocator.rs`, `arena.rs` | ✅ 0 err |
 | 2.5 | **TicketLock FIFO + IrqSafeLock** | 🏆 Lock FIFO com TicketLock adaptado para no_std. `IrqSafeLock` com cli/sti automático, deadlock-free em ISRs. | `ticket-lock` crate, Linux spinlock | MIT | `ticket-lock/`, `sync/irq_lock.rs` | ✅ 0 err |
-| 2.6 | **SMP Multi-Core + PerCpu** | 🔄 INIT-SIPI-SIPI, trampoline, GS.base per-CPU. Adaptado para no_std sem acpi table dependency. | OSDev, Linux SMP, `x86_64` crate | MIT/GPLv2 | `smp/mod.rs`, `smp/percpu.rs` | ✅ 0 err |
+| 2.6 | **SMP Multi-Core + PerCpu** | ✅ ADR-0055: FeatureGate + trampoline raw + AP work + CorePools. WHPX OFF; TCG APs≥1. | OSDev, Linux SMP, `x86_64` crate | MIT/GPLv2 | `platform_probe.rs`, `smp/*` | ✅ SESSION_141 |
+| 2.6b | **FeatureGate / CpuFeatures / CacheTopology** | ✅ PlatformProbe HV∩ISA; IsaPath; tiles L1/L2; OSXSAVE/XCR0 | Intel SDM, ADR-0055 | — | `k_nano/src/platform_probe.rs` | ✅ SESSION_141 |
 | 2.7 | **Work-Stealing Scheduler (Chase-Lev)** | 🔄 Deques lock-free com Chase-Lev algoritmo. Portado para no_std sem std::thread. | `fast-steal` crate, Chase-Lev (1994) paper | MIT | `smp/work_stealing.rs` | ✅ 0 err |
 | 2.8 | **CFS Scheduler (vruntime)** | 🔄 Completely Fair Scheduler com vruntime, baseado em Linux CFS. Implementação própria em no_std. | Linux CFS (Con Kolivas, Ingo Molnar) | GPLv2 | `cfs.rs` | ✅ 0 err |
 | 2.9 | **EventBus IPC Publish/Subscribe** | 🏆 Sistema IPC pub/sub com `CapabilityToken` para controle de acesso por agente. Zero-copy com lock-free queues. | EventBus patterns (C#, Spring), | MIT | `event-bus/` | ✅ 0 err |
-| 2.10 | **K²CHJ Capability Rings P0–P9** | ✅ Escada completa: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 → #PF → vring → GGUF/FAT. Demos non-fatal. ADR-0041. | Capability microkernels (seL4, Fuchsia), | MIT | `address_space.rs`…`gguf_mmap.rs` | ✅ PoC |
+| 2.10 | **K³CHJ Capability Rings P0–P9** | ✅ Escada completa: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 → #PF → vring → GGUF/FAT. Demos non-fatal. ADR-0041. | Capability microkernels (seL4, Fuchsia), | MIT | `address_space.rs`…`gguf_mmap.rs` | ✅ PoC |
 | 2.10a | **Hermes CapabilityGate (P3)** | 🏆 Host-functions WASM/`aios_*` gated por Cap (SendTcp, WriteRing); deny + serial log. Sem POSIX. ADR-0041 P3. | Cap + trust tokens | MIT | `capability_gate.rs`, `aios_api.rs`, `wasm_rt.rs` | ✅ CapGate |
 | 2.10b | **JARBAS FB MMIO + double-buffer (P4)** | ✅ Cap MAP_FB/WRITE_FB, AS JARBAS mapeia FB bootloader, backbuffer+present+vsync stub. PoC Ring0+CR3. ADR-0041 P4. | Cap + FB MMIO | MIT | `jarbas_fb.rs`, `syscall.rs` | ✅ PoC |
 | 2.10c | **K-IA DMA pin + Cortex mmap (P5)** | ✅ Cap PIN/MAP_DMA + MAP_WEIGHTS; frames pinados + AS; mmap pesos eager (simulado). Vring = P8; GGUF = P9. ADR-0041 P5. | Cap + DMA pin + mmap | MIT | `k_ia_dma.rs`, `cortex_mmap.rs` | ✅ PoC |
@@ -64,7 +65,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.10e | **VirtIO vring + DMA pin (P8)** | ✅ Virtqueue layout-compatible sobre pin; Cap VRING_SETUP; NIC live untouched. ADR-0041 P8. | Cap + VirtIO vring | MIT | `virtio_vring.rs`, `k_ia_dma.rs` | ✅ PoC |
 | 2.10f | **GGUF/FAT file-backed mmap (P9)** | ✅ Pré-fill FAT→frames + demand-page; Cap MAP_FILE; magic GGUF/BitNet; fallback NFIL. ADR-0041 P9. **≠ AirLLM** (prefixo só). | Cap + FAT mmap | MIT | `gguf_mmap.rs`, `demand_page.rs`, `fat32.rs` | ✅ PoC |
 | 2.10f2 | **AirLLM GGUF Streaming (ADR-0046)** | 🏆 Layer-wise: header+layer map+embed/unembed em RAM; 1 layer/forward via ATA `read_file_range`; PrefetchEngine **soft** (nao DMA); dequant Q4_0/Q5_0/Q8_0/F16; hot-swap ATA + Net→FAT→`set_model` (L3.5/RX se RX=0). Stream-to-disk/DMA deferred. | AirLLM, llama.cpp GGUF | MIT | `gguf_streaming.rs`, `gguf.rs`, `cortex.rs` | ✅ MVP / 🟡 residual |
-| 2.10g | **Adequação Boot OK→K²CHJ (ADR-0042)** | ✅ N1–N5 + wire N2.5–N5.7; marco **v1.8.0**; gate v2.0.0 = review formal | K²CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ✅ v1.8.0 |
+| 2.10g | **Adequação Boot OK→K³CHJ (ADR-0042)** | ✅ N1–N5 + wire N2.5–N5.7; marco **v1.8.0**; gate v2.0.0 = review formal | K³CHJ + Cap PoC | MIT | `docs/architecture/0042-*.md` | ✅ v1.8.0 |
 | 2.10h | **LoadStatus + BitNet 2B LOADED (QEMU)** | ✅ Telemetria `LoadStatus`/`[STATUS]`; 2B ~590MB L=30 LOADED via QEMU-loader; FWD OK; TTS empty = known. v1.7.0. | BitNet v4 + LoadStatus | MIT | `load_status.rs`, `cortex.rs`, `main.rs` | ✅ load / 🟡 gen |
 | 2.10 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
 | 2.11 | **Huge Pages 2MiB/1GiB** | 🔄 `allocate_huge_2mb()` mapeia páginas grandes no page table para performance de memória. | x86_64 MMU, Linux hugetlbfs | GPLv2 | `memory.rs` | ✅ 0 err |
@@ -95,7 +96,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 |---|-----------|------------|------------|---------------|---------|--------|
 | 4.1 | **smoltcp Stack** | 📦 TCP/UDP/DHCPv4/DNS integrado com Device trait customizado (`NetPhy`). | `smoltcp` crate | MIT/Apache 2.0 | `netstack.rs` | ✅ 0 err |
 | 4.2 | **E1000 RX DMA Fix** | 🏆 Debug e correção de DMA write: map_page_uc(), RDT ordering (RCTL.EN → RDT), RDLEN alignment, sfence/lfence. RX=0 para RX=184 pacotes. | E1000 datasheet, Linux driver | GPLv2 | `e1000.rs` | ✅ 0 err |
-| 4.3 | **DHCP + DNS + HTTP** | 🔄 Cliente HTTP GET real via smoltcp TCP. Usado por BrowserAgent, SearchAgent, RssAgent, EmailAgent. | smoltcp examples, HTTP/1.1 spec | MIT | `net.rs`, `netstack.rs` | ✅ 0 err |
+| 4.2b | **E1000 TX canonical regs** | 🏆 QEMU não wireia aliases `TDBAL_A/TDT_A` (`0x0420/0x0438`) → TX no-op. Fix: `TDBAL/TDT=0x3800/0x3818`. Desbloqueia ARP/RX (SESSION_149). | Intel 8254x SDM, QEMU `e1000_regs.h` | — | `e1000.rs` (nk+k_nano) | ✅ L3.5 |
+| 4.3 | **DHCP + DNS + HTTP** | 🏆 DNS **raw** Ethernet+IP+UDP no NIC + `skip_dns_name` (compressão); HTTP GET smoltcp. Smoke WHPX: L4 A-record + L5 301 (SESSION_150). | smoltcp, RFC 1035 | MIT | `netstack.rs`, `network_agent.rs` | ✅ L4/L5 |
 | 4.4 | **WiFi Intel AX200/AX210 (iwlwifi)** | 🔬 Driver iwlwifi real: CSR/HBUS/SRAM registers, ucode loading pipeline, command/response via doorbell NMI. Blobs de firmware em `firmware/intel/iwlwifi/`. | iwlwifi Linux driver (eng. reversa) | GPLv2 (MIT/BSD firmware) | `wifi_iwlwifi.rs` | ✅ 0 err |
 | 4.5 | **WiFi Agnostic Engine** | 🔄 WifiChipset trait + AgnosticWifiEngine com DMA rings. Suporte a Intel, Realtek, Atheros, Broadcom via tabela de 50+ VID/DID. | iwlwifi, rtlwifi, ath drivers | GPLv2 | `generic_wifi.rs` | ✅ 0 err |
 | 4.6 | **BrowserAgent HTTP Real** | 🏆 `fetch_page()` com DNS resolve + HTTP GET real via smoltcp. Antes: retornava placeholder HTML. Agora: requisição real. | Chromium networking (conceito) | BSD | `browser_agent.rs` | ✅ 0 err |
@@ -142,6 +144,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 |---|-----------|------------|------------|---------------|---------|--------|
 | 7.1 | **BitNet b1.58 850M — Arquitetura Descoberta** | 🔬 **Engenharia reversa do modelo BitNet b1.58 da Microsoft.** Descoberta: 850M params (não 2B), GQA (20Q/5KV heads), BitFFN com grouped down_proj. `tie_word_embeddings=true`. Não documentado pela Microsoft. | Microsoft BitNet b1.58 model | MIT (model) | `cortex.rs`, `tools/export_hw_bitnet.py` | ✅ 0 err |
 | 7.2 | **Modelo .bitnet (formato próprio)** | 🏆 **Formato binário proprietário para modelos ternários.** Magic "BITN", header com spec completo (hidden, layers, heads, vocab, rope, medusa), pesos compactados em 2-bit (4 pesos/byte). | GGUF (llama.cpp), safetensors (HuggingFace) | MIT / Apache 2.0 | `cortex.rs` (load_model) | ✅ 0 err |
+| 7.2b | **ModelHub multi-slot** | ✅ TinyStories / generator_fast(850M) / generator_pro(3B) + Active; `load_models_multi`; GGUF→WASM SkillMarket; RustCoder 2B/3B FAT. Trinity indices estáveis. | SESSION_142 | MIT | `model_hub.rs`, `gguf_wasm.rs` | ✅ SESSION_142 |
 | 7.3 | **Medusa Speculative Decoding** | 🔄 Decodificação especulativa com 3 heads: head predict tokens, LLM verifica em paralelo. Aceleração de 2-3×. | Medusa paper (Cai et al., 2024) | MIT | `cortex.rs` | ✅ 0 err |
 | 7.4 | **BitNet AVX2 Kernel** | 🔄 `_mm256_cvtepi8_epi32` + FMA para matmul ternário acelerado por AVX2. 2-6× speedup em HW real. | BitNet.cpp (Microsoft) | MIT | `bitnet_avx2.rs` | ✅ 0 err |
 | 7.5 | **KV Cache 200× Speedup** | 🔄 Cache de Key/Value tokens. Reduz tempo de inferência de 6h para 84s. | KV cache em transformers (Dai et al., 2019) | MIT | `cortex.rs` | ✅ 0 err |
@@ -179,7 +182,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 9.2 | **TrustCache + Ed25519 Identity** | 🏆 Token trust + **session keypair** boot (`sign_session` / `verify_trusted` trusted\|session). Assina artifacts PackageHub. | Ed25519 (Bernstein et al.), TPM | MIT / domínio público | `k_nano/identity.rs`, `package_hub.rs` | ✅ SESSION_136 |
 | 9.3 | **Merkle Audit Trail** | 🏆 SHA-256 chain + **Ed25519 por entry** (session). Wire PackageHub/Approval/self_evolve. | Blockchain / distributed ledger (conceito) | MIT | `k_ai/audit.rs` | ✅ SESSION_136 |
 | 9.4 | **HANR Marketplace + Memory** | 🏆 Loja local+Net allowlist; USER/MEMORY/SOUL; progressive skills L0/L1; MCP JSON-RPC mínimo. | Nous Hermes Agent (paridade semântica) | MIT | `marketplace.rs`, `memory_store.rs`, `mcp.rs` | ✅ SESSION_136 |
-| 9.5 | **Cognitive Bridge K²CHJ** | 🏆 Prompt Cortex = SOUL+USER+MEMORY + BGE-RAG + Trinity + L0 CapGate; **route_user_intent** Trinity→Trust→Skill/LLM; IterationBudget; session search; PERSONA Jarbas; REFLECT→MEMORY_NUDGE. UX HANR, stack superior. | HANR + BGE + Trinity MoE | MIT | `cognitive_bridge.rs`, `memory_store.rs`, `jarvis.rs` | ✅ SESSION_137 |
+| 9.5 | **Cognitive Bridge K³CHJ** | 🏆 Prompt Cortex = SOUL+USER+MEMORY + BGE-RAG + Trinity + L0 CapGate; **route_user_intent** Trinity→Trust→Skill/LLM; IterationBudget; session search; PERSONA Jarbas; REFLECT→MEMORY_NUDGE. UX HANR, stack superior. | HANR + BGE + Trinity MoE | MIT | `cognitive_bridge.rs`, `memory_store.rs`, `jarvis.rs` | ✅ SESSION_137 |
 | 9.4 | **DHCP Starvation Detection** | 🏆 Monitora relação tx_count/rx_count. Se tx >> rx por período prolongado, alerta. Detector implementado em SecurityAgent. | Segurança de rede (conceito) | MIT | `security.rs` | ✅ 0 err |
 
 ---
@@ -275,7 +278,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | Firmware blobs | 116 (~12.5 MB) |
 | HWIDs HW Expert v3 | **61.453 VID/DID** |
 | Tags release | v1.0.0 → **v1.8.6 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
-| Crates K²CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
+| Crates K³CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 
 ---
@@ -284,11 +287,11 @@ $ cargo clean -p neural-kernel && cargo nk
 
 | Componente | Licença | Detalhes |
 |-----------|---------|----------|
-| **Código próprio (AIOS K²CHJ)** | **MIT** | Todo código original. Copyright © 2026 Marcelo Scapin Rovani. |
+| **Código próprio (AIOS K³CHJ)** | **MIT** | Todo código original. Copyright © 2026 Marcelo Scapin Rovani. |
 | linux-firmware blobs | MIT | Firmware NVIDIA, Intel, Realtek redistribuível. |
 | pci.ids / usb.ids | MIT/GPL | Listas de IDs PCI-SIG e USB-IF. |
 | SDIO HWIDs | MIT | Dados extraídos de DriverPacks públicos. |
-| Modelos .bitnet | MIT | Pesos treinados pela equipe AIOS K²CHJ. |
+| Modelos .bitnet | MIT | Pesos treinados pela equipe AIOS K³CHJ. |
 | smoltcp | MIT/Apache 2.0 | Pilha TCP/IP. |
 | bootloader crate | MIT/Apache 2.0 | Bootloader v0.11. |
 | x86_64 crate | MIT/Apache 2.0 | Instruções e estruturas x86. |
@@ -301,8 +304,8 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
-> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K²CHJ wired, cargo nk = 0 erros.*
+> **AIOS K³CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
+> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

@@ -250,7 +250,8 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
 pub unsafe fn prove_e1000_rx(sip: [u8; 4], tip: [u8; 4]) -> bool {
     let mut guard = E1000.lock();
     if let Some(ref mut nic) = *guard {
-        let (rdh, dd, ok) = nic.prove_rx(sip, tip, 800);
+        // ~3× ARP × ~2000×200µs ≈ 1.2s wall — slirp/WHPX precisa latência real
+        let (rdh, dd, ok) = nic.prove_rx(sip, tip, 6_000);
         k_nano::slog_bin!("Net", "e1000", "prove_rx: ok={} rdh={} dd={} (ARP who-has {}.{}.{}.{})", ok, rdh, dd, tip[0], tip[1], tip[2], tip[3]);
         return ok;
     }

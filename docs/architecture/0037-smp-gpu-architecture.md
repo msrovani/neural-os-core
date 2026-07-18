@@ -1,10 +1,18 @@
 # ADR-0037: SMP + GPU Architecture — Arquitetura Genérica Multiplataforma
 
-**Data:** 2026-07-05 (v5 — 2026-07-10: marcado como implementado)
-**Status:** Implementado
-**Substitui:** ADR-0029 (GPU Architecture) + v3 deste documento
-**Depende de:** ADR-0014 (Ideias de Hardware), ADR-0031 (AIOS Evolution)
-**Sprint Target:** Completado — SPSC, IPI, PerCpu, work-stealing, GPU detect/ring/doorbell/VRAM todos implementados. Pendente: burn-flex backend full.
+> **SUPERSEDED (deprecated)** — Tema **SMP** (SPSC, IPI, PerCpu, work-steal, parallel matmul CPU,
+> FeatureGate/ISA/caches) transferido para **[ADR-0055](0055-smp-revision.md)**.
+> Tema **GPU** multi-vendor: seguir **[ADR-0048](0048-nvidia-compute-multigeracao.md)** /
+> **[ADR-0049](0049-amd-compute-multigeracao.md)** / **[ADR-0050](0050-intel-compute-multigeracao.md)**
+> (ADR-0029 histórico). Este arquivo não é fonte operacional.
+> Lifecycle INDEX: `substituida`.
+
+**Data:** 2026-07-05 (v5 — 2026-07-10: marcado como implementado; **2026-07-18: Superseded por ADR-0055**)  
+**Status:** Superseded  
+**Substitui:** ADR-0029 (GPU Architecture) + v3 deste documento  
+**Substituída por:** ADR-0055 (SMP); ADR-0048–0050 (GPU)  
+**Depende de:** ADR-0014 (Ideias de Hardware), ADR-0031 (AIOS Evolution)  
+**Sprint Target:** Histórico — ver ADR-0055 para roadmap SMP real.
 
 ---
 

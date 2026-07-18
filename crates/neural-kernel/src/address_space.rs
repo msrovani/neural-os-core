@@ -291,11 +291,11 @@ pub fn demo_as_r1_r3_shallow() {
     unsafe {
         as_r1.activate();
     }
-    // Touch via HHDM (sempre válido no monólito) — prova CR3 switch non-fatal
-    let pmoff = phys_offset();
-    let touch = (bar0.wrapping_add(pmoff)) as *const u32;
+    // Touch na VA dedicada do AS (mapeada acima) — HHDM+BAR pode #PF se
+    // a página PCI não estiver no mapa do bootloader.
+    let touch = AS_BAR_VA as *const u32;
     let val = unsafe { core::ptr::read_volatile(touch) };
-    k_nano::slog_bin!("AS", "r1", "touch BAR ok val={:#x} (CR3 switched)", val);
+    k_nano::slog_bin!("AS", "r1", "touch BAR ok val={:#x} (CR3 switched @ {:#x})", val, AS_BAR_VA);
 
     unsafe {
         restore_cr3(kernel_l4, kernel_flags);

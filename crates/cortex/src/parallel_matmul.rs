@@ -1,58 +1,116 @@
-//! Parallel Matmul — multiplicação de matrizes paralela usando work-stealing.
-//! Divide o trabalho em blocos de linhas e distribui entre cores.
-//!
-//! Usa WorkStealingPool para balanceamento dinâmico de carga.
+//! Parallel Matmul — ADR-0055: chunks + barreira + IPI wake nos APs.
 
 use alloc::vec::Vec;
 use crate::tensor::Tensor;
+use core::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-/// Matmul paralela simples usando chunking (sem work-stealing complexo)
+struct MatmulJobCtx {
+    a_ptr: *const f32,
+    b_ptr: *const f32,
+    c_ptr: *mut f32,
+    m: usize,
+    n: usize,
+    k: usize,
+    row_start: usize,
+    row_end: usize,
+}
+
+static CTX: AtomicPtr<MatmulJobCtx> = AtomicPtr::new(core::ptr::null_mut());
+static ROWS_CLAIMED: AtomicUsize = AtomicUsize::new(0);
+
+unsafe fn matmul_worker(_job_id: usize, _worker: usize) {
+    let ctx = CTX.load(Ordering::Acquire);
+    if ctx.is_null() {
+        return;
+    }
+    let c = &*ctx;
+    let tile = k_nano::platform_probe::matmul_tile_rows(c.k, c.n).max(1);
+    loop {
+        let start = ROWS_CLAIMED.fetch_add(tile, Ordering::Relaxed);
+        if start >= c.m {
+            break;
+        }
+        let end = (start + tile).min(c.m);
+        for i in start..end {
+            for j in 0..c.n {
+                let mut sum = 0.0f32;
+                for l in 0..c.k {
+                    sum += *c.a_ptr.add(i * c.k + l) * *c.b_ptr.add(l * c.n + j);
+                }
+                *c.c_ptr.add(i * c.n + j) = sum;
+            }
+        }
+    }
+}
+
+/// Matmul: se SMP ativo e >1 CPU, distribui linhas; senão single-thread.
 pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     let (m, k) = a.shape;
     let (k2, n) = b.shape;
-    
     if k != k2 {
-        return None; // Dimensões incompatíveis
+        return None;
     }
-    
-    let m = m;
-    let n = n;
-    let k = k;
-    
-    // Aloca buffer de output
+
     let mut c_data = Vec::with_capacity(m * n);
     c_data.resize(m * n, 0.0f32);
-    
-    // Matmul paralela simples — divide em chunks de linhas
-    let chunk_size = if m > 4 { m / 4 } else { 1 };
-    let mut row_start = 0usize;
-    
-    while row_start < m {
-        let row_end = (row_start + chunk_size).min(m);
-        
-        // Processa linhas [row_start, row_end)
-        for i in row_start..row_end {
+
+    let smp_ok = k_nano::platform_probe::allow_smp() && k_nano::smp::ap_entry_count() > 0;
+
+    if !smp_ok || m < 8 {
+        // Single-core path
+        for i in 0..m {
             for j in 0..n {
                 let mut sum = 0.0f32;
                 for l in 0..k {
-                    let a_val = a.data[i * k + l];
-                    let b_val = b.data[l * n + j];
-                    sum += a_val * b_val;
+                    sum += a.data[i * k + l] * b.data[l * n + j];
                 }
                 c_data[i * n + j] = sum;
             }
         }
-        
-        row_start = row_end;
+        return Tensor::from_row_major((m, n), c_data);
     }
-    
-    // Cria tensor de output
+
+    let mut ctx = MatmulJobCtx {
+        a_ptr: a.data.as_ptr(),
+        b_ptr: b.data.as_ptr(),
+        c_ptr: c_data.as_mut_ptr(),
+        m,
+        n,
+        k,
+        row_start: 0,
+        row_end: m,
+    };
+    ROWS_CLAIMED.store(0, Ordering::Release);
+    CTX.store(&mut ctx as *mut _, Ordering::Release);
+
+    let aps = k_nano::smp::ap_entry_count() as usize;
+    let n_workers = (aps + 1).min(8);
+    k_nano::smp::ap_work::clear_queue();
+    // Barreira = só APs (BSP sincroniza localmente após seu próprio trabalho)
+    k_nano::smp::ap_work::reset_barrier(aps.min(n_workers.saturating_sub(1)) as u32);
+
+    for jid in 0..aps.min(n_workers.saturating_sub(1)) {
+        let _ = k_nano::smp::ap_work::enqueue(matmul_worker, jid);
+    }
+
+    unsafe {
+        k_nano::apic::send_ipi_reschedule();
+    }
+
+    unsafe {
+        matmul_worker(0, 0);
+    }
+    if aps > 0 {
+        k_nano::smp::ap_work::wait_barrier();
+    }
+
+    CTX.store(core::ptr::null_mut(), Ordering::Release);
     Tensor::from_row_major((m, n), c_data)
 }
 
-/// Matmul paralela ternária (PackedTernaryTensor) — stub para futuro
-pub fn parallel_ternary_matmul(_a: &crate::tensor::PackedTernaryTensor, _b: &crate::tensor::PackedTernaryTensor) -> Option<crate::tensor::Tensor> {
-    // TODO: Implementar parallel matmul ternária usando work-stealing
-    // Por enquanto, fallback para scalar
+pub fn parallel_ternary_matmul(
+    _a: &crate::tensor::PackedTernaryTensor,
+    _b: &crate::tensor::PackedTernaryTensor,
+) -> Option<crate::tensor::Tensor> {
     None
 }

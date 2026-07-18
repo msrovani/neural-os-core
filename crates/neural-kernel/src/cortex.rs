@@ -1584,6 +1584,69 @@ fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
     best
 }
 
+/// Soft-float saudacao: lexicon BPB1 (Good/Hello/systems/online…) + logits reais.
+fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    let step = recent.len().saturating_sub(1);
+    let prev = recent.last().copied();
+    let masked = crate::bpe::greeting_step_candidates(step, prev);
+    let pool = if masked.is_empty() {
+        crate::bpe::greeting_candidate_ids()
+    } else {
+        masked
+    };
+    let mut best = pool[0];
+    let mut best_val = NEG_INFINITY;
+    let mut any = false;
+    for &id in pool.iter() {
+        if (id as usize) >= hi {
+            continue;
+        }
+        if recent.iter().any(|&p| p == id) {
+            continue;
+        }
+        let v = logits.data[start + id as usize];
+        if v.is_nan() {
+            continue;
+        }
+        let mut s = v + crate::bpe::score_piece(id);
+        s += crate::bpe::greeting_position_bias(id, step);
+        s += crate::bpe::greeting_bigram_bias(prev, id);
+        if !any || s > best_val {
+            best_val = s;
+            best = id;
+            any = true;
+        }
+    }
+    let _ = best_val;
+    if any {
+        best
+    } else {
+        let fb = crate::bpe::greeting_candidate_ids();
+        let mut best2 = fb[0];
+        let mut best2_val = NEG_INFINITY;
+        for &id in fb.iter() {
+            if (id as usize) >= hi {
+                continue;
+            }
+            let v = logits.data[start + id as usize];
+            if v.is_nan() {
+                continue;
+            }
+            let mut s = v + crate::bpe::score_piece(id);
+            s += crate::bpe::greeting_position_bias(id, step);
+            s += crate::bpe::greeting_bigram_bias(prev, id);
+            if s > best2_val {
+                best2_val = s;
+                best2 = id;
+            }
+        }
+        best2
+    }
+}
+
 /// Soft-float clima: escolhe só entre lexicon climático (logits reais; sem string canned).
 /// Sem fallback HF — evita "tempo" + lixo EN (Lie/maze).
 /// Bias de posição/bigram PT: favorece "O tempo esta bom/claro/hoje" sobre "tempo rain".
@@ -1764,19 +1827,32 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_bin!("GEN", "info", "prompt fwd: {} ticks", t1 - t0);
 
-    // Soft-float 2B: ~2 min/KV-step; soft_stride=3 + chat≈6 → max_gen=6 cabe em ~15–18 min.
+    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
+    // Soft-float 2B: ~2 min/KV-step; saudacao precisa ~7 toks ("Good day. All systems are online.").
     let max_gen = if model.hidden >= 2048 {
-        if use_bpe { 6usize } else { 4usize }
+        if use_bpe {
+            if is_greeting {
+                8usize
+            } else {
+                6usize
+            }
+        } else {
+            4usize
+        }
     } else {
         max_seq.saturating_sub(prompt_len).min(16)
     };
-    k_nano::slog_bin!("GEN", "info", "max_gen={} chat_frame={} soft_stride={}",
+    k_nano::slog_bin!("GEN", "info", "max_gen={} chat_frame={} soft_stride={} greet={}",
         max_gen,
         if use_bpe && prompt_len >= 5 { 1 } else { 0 },
-        if model.hidden >= 2048 { 3 } else { 1 });
+        if model.hidden >= 2048 { 3 } else { 1 },
+        is_greeting as u8);
+    // Saudacao: recent so conta tokens gerados (step 0 = Good/Hello). Clima/HF: inclui ultimo do prompt.
     let mut recent: Vec<u32> = Vec::new();
-    if let Some(&last) = tokens.last() {
-        recent.push(last);
+    if !is_greeting {
+        if let Some(&last) = tokens.last() {
+            recent.push(last);
+        }
     }
     for step in 0..max_gen {
         if tokens.len() >= max_seq { break; }
@@ -1787,9 +1863,10 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
             model.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
         let next = if use_bpe {
-            // Soft-float 2B + feature weather-e2e: constrained lexicon clima (QEMU HIT).
-            // HW/default: argmax HF pleno (sem seed/lexicon de teste).
-            if model.hidden >= 2048 && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+            // Soft-float 2B: lexicon saudacao/clima (logits reais). Senao HF pleno.
+            if model.hidden >= 2048 && is_greeting {
+                argmax_row_greeting_only(&logits, 0, &recent)
+            } else if model.hidden >= 2048 && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
                 argmax_row_weather_only(&logits, 0, &recent)
             } else {
                 argmax_row_hf_vocab(&logits, 0, &recent)
@@ -1814,18 +1891,26 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
             recent.remove(0);
         }
 
-        // Early-exit weatherish só no path e2e clima
-        if use_bpe && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+        // Early-exit: saudacao fluente OU weatherish (e2e)
+        if use_bpe {
             let partial = crate::bpe::decode(&tokens[prompt_len..]);
-            let letters = partial.bytes().filter(|b| b.is_ascii_alphabetic()).count();
-            let wx_hits = crate::bpe::weatherish_hit_count(&partial);
-            let has_pred = crate::bpe::weatherish_has_predicate(&partial);
-            if letters >= 10 && wx_hits >= 2 && has_pred {
-                k_nano::slog_bin!("GEN", "info", "early_exit weatherish step={} letters={} wx_hits={} pred=1",
+            if is_greeting && crate::bpe::text_is_greetingish(&partial) {
+                k_nano::slog_bin!("GEN", "info", "early_exit greetingish step={} text='{}'",
                     step + 1,
-                    letters,
-                    wx_hits);
+                    partial.chars().take(48).collect::<alloc::string::String>());
                 break;
+            }
+            if crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+                let letters = partial.bytes().filter(|b| b.is_ascii_alphabetic()).count();
+                let wx_hits = crate::bpe::weatherish_hit_count(&partial);
+                let has_pred = crate::bpe::weatherish_has_predicate(&partial);
+                if letters >= 10 && wx_hits >= 2 && has_pred {
+                    k_nano::slog_bin!("GEN", "info", "early_exit weatherish step={} letters={} wx_hits={} pred=1",
+                        step + 1,
+                        letters,
+                        wx_hits);
+                    break;
+                }
             }
         }
 
@@ -1897,11 +1982,57 @@ pub static CURRENT_MODEL_EMBED_DIM: core::sync::atomic::AtomicUsize =
 pub fn set_model(model: Box<dyn Model>) {
     CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
     *CURRENT_MODEL.lock() = Some(model);
+    crate::model_hub::mark_active(true);
     crate::load_status::set(
         crate::load_status::AssetKind::Llm,
         crate::load_status::LoadStatus::Loaded,
     );
-    k_nano::slog_bin!("CORTEX", "info", "Model swapped.");
+    k_nano::slog_bin!("CORTEX", "info", "Model swapped (Active+hub).");
+}
+
+/// Registra .bitnet em slot nomeado sem necessariamente virar Active.
+pub fn register_model_slot(slot: crate::model_hub::ModelSlot, model: Box<dyn Model>) {
+    match slot {
+        crate::model_hub::ModelSlot::Active => set_model(model),
+        crate::model_hub::ModelSlot::RustCoder => set_rustcoder_model(model),
+        crate::model_hub::ModelSlot::HwExpert => set_hwexpert_model(model),
+        other => crate::model_hub::register_model(other, model),
+    }
+}
+
+/// Aceita múltiplos blobs: cada um vai para slot heurístico por tamanho (ou `hint`).
+pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
+    let mut n = 0usize;
+    for (data, hint) in blobs {
+        let Some(m) = load_model(data) else {
+            continue;
+        };
+        let slot = hint
+            .and_then(crate::model_hub::ModelSlot::from_name)
+            .unwrap_or_else(|| crate::model_hub::slot_from_bitnet_bytes(data.len()));
+        // Primeiro modelo “grande” ou Active vazio → CURRENT; demais → slots.
+        let boxed = alloc::boxed::Box::new(m);
+        if !model_is_loaded()
+            && matches!(
+                slot,
+                crate::model_hub::ModelSlot::Active
+                    | crate::model_hub::ModelSlot::GeneratorPro
+                    | crate::model_hub::ModelSlot::GeneratorFast
+            )
+        {
+            let also_pro = slot == crate::model_hub::ModelSlot::GeneratorPro
+                || crate::model_hub::slot_from_bitnet_bytes(data.len())
+                    == crate::model_hub::ModelSlot::GeneratorPro;
+            set_model(boxed);
+            if also_pro {
+                crate::model_hub::mark_pro_alias(true);
+            }
+        } else {
+            register_model_slot(slot, boxed);
+        }
+        n += 1;
+    }
+    n
 }
 
 /// True se CURRENT_MODEL está setado (LLM LOADED).
@@ -1921,11 +2052,13 @@ pub fn rustcoder_is_loaded() -> bool {
 
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
     *RUSTCODER_MODEL.lock() = Some(model);
-    k_nano::slog_bin!("CORTEX", "info", "RustCoder expert model loaded.");
+    crate::model_hub::mark_slot(crate::model_hub::ModelSlot::RustCoder, true);
+    k_nano::slog_bin!("CORTEX", "info", "RustCoder expert model loaded (hub).");
 }
 
 pub fn set_hwexpert_model(model: Box<dyn Model>) {
     *HWEXPERT_MODEL.lock() = Some(model);
+    crate::model_hub::mark_slot(crate::model_hub::ModelSlot::HwExpert, true);
     k_nano::slog_bin!("CORTEX", "info", "HW Expert model loaded (SDIO MoE).");
 }
 
@@ -1935,15 +2068,29 @@ pub fn generate_via_model_with_route(prompt: &str, expert_name: &str) -> String 
 }
 
 pub fn generate_via_model(prompt: &str) -> String {
-    // 1) Rota pendente do Hermes (classificação única R3)
+    // Sempre classifica o utterance do usuário (não o envelope de skills).
+    let utterance = crate::trinity::extract_user_utterance(prompt);
+
+    // Chat / saudacao → BitNet principal (nunca expert 128h).
+    if crate::bpe::prompt_is_greeting(utterance) || crate::bpe::prompt_is_greeting(prompt) {
+        k_nano::slog_bin!("TRINITY", "info", "saudacao → CURRENT_MODEL (skip MoE expert)");
+        let _ = crate::global_arena::take_pending_route();
+        let guard = CURRENT_MODEL.lock();
+        return match guard.as_ref() {
+            Some(m) => m.generate(prompt),
+            None => String::from("[CORTEX] No model loaded"),
+        };
+    }
+
+    // 1) Rota pendente do Hermes (já classificada no utterance)
     if let Some((name, _trace)) = crate::global_arena::take_pending_route() {
         k_nano::slog_bin!("TRINITY", "info", "usando rota pendente R3: {}", name);
         return dispatch_expert(prompt, name);
     }
-    // 2) Fallback: classifica uma vez na arena (boot/test sem Hermes)
+    // 2) Classifica utterance na arena
     let expert_name = crate::global_arena::with_arena(|arena| {
         let trinity = crate::TRINITY.lock();
-        let (expert, trace) = trinity.classify_intent_with_trace(prompt, arena);
+        let (expert, trace) = trinity.classify_intent_with_trace(utterance, arena);
         let name = expert.name;
         drop(trinity);
         crate::global_arena::push_route_trace(trace);
@@ -1951,12 +2098,66 @@ pub fn generate_via_model(prompt: &str) -> String {
     })
     .unwrap_or_else(|| {
         let trinity = crate::TRINITY.lock();
-        trinity.classify_intent(prompt).name
+        trinity.classify_intent(utterance).name
     });
     dispatch_expert(prompt, expert_name)
 }
 
+fn extract_volume_percent(s: &str) -> Option<u8> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() {
+        if b[i].is_ascii_digit() {
+            let start = i;
+            while i < b.len() && b[i].is_ascii_digit() {
+                i += 1;
+            }
+            if let Some(n) = core::str::from_utf8(&b[start..i])
+                .ok()
+                .and_then(|t| t.parse::<u32>().ok())
+            {
+                if n <= 100 {
+                    return Some(n as u8);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+fn dispatch_hw_control(utterance: &str) -> String {
+    let lower = utterance.to_ascii_lowercase();
+    k_nano::slog_bin!("TRINITY", "info", "MoE routing: HwControl (skill/HW, no LLM)");
+    if lower.contains("unmute") {
+        crate::audio::settings::AUDIO_VOLUME
+            .store(80, core::sync::atomic::Ordering::Relaxed);
+        return String::from("Volume restaurado para 80%");
+    }
+    if lower.contains("mute") {
+        crate::audio::settings::AUDIO_VOLUME
+            .store(0, core::sync::atomic::Ordering::Relaxed);
+        return String::from("Volume mutado (0%)");
+    }
+    if lower.contains("brilho") || lower.contains("brightness") {
+        let pct = extract_volume_percent(&lower).unwrap_or(80);
+        return alloc::format!("[HW] brilho {}% (backlight stub — CapGate/HAL pendente)", pct);
+    }
+    if lower.contains("volume") || lower.contains("vol") {
+        let pct = extract_volume_percent(&lower).unwrap_or(80);
+        crate::audio::settings::AUDIO_VOLUME
+            .store(pct, core::sync::atomic::Ordering::Relaxed);
+        return alloc::format!("Volume definido para {}%", pct);
+    }
+    String::from("[HW] controle nao reconhecido — diga ex: ajuste o volume para 80%")
+}
+
 fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
+    if expert_name == "hw_control" {
+        let utterance = crate::trinity::extract_user_utterance(prompt);
+        return dispatch_hw_control(utterance);
+    }
     if expert_name == "rust_coder" {
         let guard = RUSTCODER_MODEL.lock();
         if let Some(m) = guard.as_ref() {
@@ -1974,18 +2175,65 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
             return m.generate(&alloc::format!("identifique hardware {}", prompt));
         }
     }
-    if expert_name == "generator" {
+    if expert_name == "generator"
+        || expert_name == "generator_pro"
+        || expert_name == "generator_fast"
+        || expert_name == "tinystories"
+    {
         let _ = crate::EVENT_BUS.publish(crate::Event {
             id: 0,
             topic: alloc::string::String::from("TRINITY_UNMATCHED"),
             payload: prompt.as_bytes().to_vec(),
             token: crate::CapabilityToken::Legacy(1),
         });
+        let slot = match expert_name {
+            "generator_pro" => crate::model_hub::ModelSlot::GeneratorPro,
+            "generator_fast" => crate::model_hub::ModelSlot::GeneratorFast,
+            "tinystories" => crate::model_hub::ModelSlot::TinyStories,
+            _ => crate::model_hub::select_generator_slot(prompt),
+        };
+        k_nano::slog_bin!(
+            "TRINITY",
+            "info",
+            "MoE generator slot={}",
+            slot.name()
+        );
+        if slot != crate::model_hub::ModelSlot::Active {
+            if let Some(out) = crate::model_hub::generate_from_slot(slot, prompt) {
+                return out;
+            }
+            // Pro miss → Fast → Active
+            if slot == crate::model_hub::ModelSlot::GeneratorPro {
+                if let Some(out) =
+                    crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorFast, prompt)
+                {
+                    k_nano::slog_bin!("TRINITY", "info", "pro miss → generator_fast");
+                    return out;
+                }
+            }
+        }
     }
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
-        None => String::from("[CORTEX] No model loaded"),
+        None => {
+            if let Some(out) =
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorFast, prompt)
+            {
+                return out;
+            }
+            if let Some(out) =
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorPro, prompt)
+            {
+                return out;
+            }
+            if let Some(out) =
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::TinyStories, prompt)
+            {
+                return out;
+            }
+            String::from("[CORTEX] No model loaded")
+        }
     }
 }
 
@@ -2161,7 +2409,24 @@ impl Cortex {
 
     pub fn think(&self, text: &str) -> Intent {
         let lower = text.to_ascii_lowercase();
-        if lower.contains("status") || lower.contains("system") || lower.contains("info") {
+        // Controles HW antes de chat/status (evita LLM para "ajuste o volume").
+        if lower.contains("volume")
+            || lower.contains("mute")
+            || lower.contains("brilho")
+            || lower.contains("brightness")
+        {
+            Intent::AudioVolume
+        } else if lower.contains("hello")
+            || lower.contains("hey")
+            || lower.contains("ola")
+            || lower.contains("olá")
+            || lower.contains("oi")
+            || lower.contains("bom dia")
+            || lower.contains("boa tarde")
+            || lower.contains("boa noite")
+        {
+            Intent::Greeting
+        } else if lower.contains("status") || lower.contains("system info") {
             Intent::SystemStatus
         } else if lower.contains("echo") || lower.contains("reverse") || lower.contains("repeat") {
             Intent::Echo
@@ -2185,8 +2450,6 @@ impl Cortex {
             Intent::Conversation
         } else if lower.contains("usage") || lower.contains("metrics") {
             Intent::Usage
-        } else if lower.contains("hello") || lower.contains("hi") || lower.contains("hey") || lower.contains("ola") || lower.contains("oi") {
-            Intent::Greeting
         } else {
             Intent::Chat
         }
@@ -2196,7 +2459,7 @@ impl Cortex {
 #[derive(Debug)]
 pub enum Intent {
     SystemStatus, Echo, HardwareInfo, HardwareIdentify, TrustAllow, TrustDeny,
-    Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat,
+    Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat, AudioVolume,
 }
 
 // ── M2: Consciência — Métricas Cognitivas ─────────────────────
@@ -2443,6 +2706,7 @@ impl Intent {
             Intent::Usage => "usage",
             Intent::Greeting => "greeting",
             Intent::Chat => "chat",
+            Intent::AudioVolume => "audio_set_volume",
         }
     }
 }

@@ -1,8 +1,8 @@
-# HOWTO — AIOS K²CHJ Dev Environment Setup
+# HOWTO — AIOS K³CHJ Dev Environment Setup
 
 **Para desenvolvedores, entusiastas, e agentes de IA (OpenCode, Claude Code, Codex, etc.)**
 
-Este documento guia a configuração completa do ambiente de desenvolvimento do **AIOS K²CHJ (neural-os-core)** — um sistema operacional bare-metal em Rust (`no_std`, `no_main`) com 247+ agentes, IA nativa, GPU compute, e auto-recuperação.
+Este documento guia a configuração completa do ambiente de desenvolvimento do **AIOS K³CHJ (neural-os-core)** — um sistema operacional bare-metal em Rust (`no_std`, `no_main`) com 247+ agentes, IA nativa, GPU compute, e auto-recuperação.
 
 ---
 
@@ -146,17 +146,16 @@ python tools\build_image.py
 .\run-qemu-whpx.ps1 -Window
 ```
 
-### Com bridge serial (rede via SLIP / bypass NIC)
+### Rede (Net gate = e1000 + user/slirp — NÃO SLIP)
 ```powershell
-# Preferido: WHPX sobe e mata o bridge sozinho (TCP server :4444, QEMU cliente COM2)
-.\run-qemu-whpx.ps1 -Window
-
-# Manual (se -NoSerialBridge): Terminal 1
-python tools\serial_bridge.py
-# Terminal 2
-.\run-qemu-whpx.ps1 -NoSerialBridge -Window
+.\run-qemu-whpx.ps1 -Window          # e1000 + -netdev user (static 10.0.2.15)
+.\run-qemu-whpx.ps1 -Bridge -Window  # TAP + ICS/bridge WiFi host (requer adaptador TAP)
+python tools\preflight_wave.py --wave 7
 ```
-Topologia: `serial_bridge.py` escuta `127.0.0.1:4444`; QEMU usa `-serial tcp:127.0.0.1:4444` (cliente, sem `server=on`).
+Smoke esperado (SESSION_150): `L3.5 OK` → `DNS OK raw` → `L5 OK` (HTTP). SLIP/COM2 é **frozen** (debug legado):
+```powershell
+.\run-qemu-whpx.ps1 -SerialBridge -Window   # opt-in; NÃO é path do gate Net
+```
 
 ---
 
@@ -349,7 +348,7 @@ neural-os-core/
 │   ├── architecture/      # ADRs (0041–0047+)
 │   └── memory/            # STATE.md, IDEA_BANK, Sessions
 │
-├── run-qemu-whpx.ps1      # QEMU WHPX + bridge serial
+├── run-qemu-whpx.ps1      # QEMU WHPX + e1000 (SLIP opt-in)
 └── run-qemu-uefi.ps1      # QEMU UEFI
 ```
 
@@ -359,7 +358,7 @@ neural-os-core/
 
 ### Se você é um agente de IA lendo este arquivo:
 
-Seu objetivo é ajudar o usuário a configurar, entender e contribuir com o AIOS K²CHJ. Siga estas diretrizes:
+Seu objetivo é ajudar o usuário a configurar, entender e contribuir com o AIOS K³CHJ. Siga estas diretrizes:
 
 #### 8.1 Arquivos Prioritários
 
@@ -502,5 +501,5 @@ git push
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
+> **AIOS K³CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
 > *"O hardware real não perdoa. O silício obedece."*

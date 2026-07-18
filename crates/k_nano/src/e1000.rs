@@ -22,11 +22,12 @@ const REG_IMASK: u64 = 0x00D0;
 const REG_IMC: u64 = 0x00D8;
 const REG_RCTRL: u64 = 0x0100;
 const REG_TCTRL: u64 = 0x0400;
-const REG_TDBAL: u64 = 0x0420;
-const REG_TDBAH: u64 = 0x0424;
-const REG_TDLEN: u64 = 0x0428;
-const REG_TDH: u64 = 0x0430;
-const REG_TDT: u64 = 0x0438;
+// TX ring: offsets canônicos 8254x/QEMU (aliases 0x0420..438 não são wired no QEMU).
+const REG_TDBAL: u64 = 0x3800;
+const REG_TDBAH: u64 = 0x3804;
+const REG_TDLEN: u64 = 0x3808;
+const REG_TDH: u64 = 0x3810;
+const REG_TDT: u64 = 0x3818;
 const REG_RDBAL: u64 = 0x2800;
 const REG_RDBAH: u64 = 0x2804;
 const REG_RDLEN: u64 = 0x2808;

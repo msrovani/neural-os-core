@@ -90,6 +90,8 @@ def collect_files() -> list[tuple[str, bytes | str | None]]:
     config = (
         f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\nLOG_TO_EXFAT=1\n"
         f"NEURALFS_USB_FORMAT=0\n"
+        f"EXFAT_WRITE=0\n"
+        f"USB_TRUST_ENFORCE=0\n"
     ).encode()
     files.append(("CONFIG.TXT", config))
     return files

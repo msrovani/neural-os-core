@@ -3,7 +3,7 @@
 **Data:** 2026-07-16  
 **Status:** Accepted  
 **Sprint:** Sound base ✅ + 107 Voice ✅ + **Sprint Sound ✅** (2026-07-16; soft-float/VITS + cutover abertos)  
-**Depende de:** ADR-0036 (JARVIS Interaction), ADR-0042 (K²CHJ N5 voz como expressão)  
+**Depende de:** ADR-0036 (JARVIS Interaction), ADR-0042 (K³CHJ N5 voz como expressão)  
 **Supersede / invalida como caminho primário:** sherpa-onnx, Pocket TTS, Kokoro-82M como TTS padrão, Vosk, Wyoming protocol, Rustpotter crate  
 **Release:** documentado em CHANGELOG `[1.7.1]` (docs); clima e2e `[1.7.2]`; handoff Sound `[1.7.3]` docs
 
@@ -135,4 +135,22 @@ Soft-float qualidade PT do 2B também toca **N3** (ADR-0042) — não só voz.
 - ADR-0036, ADR-0042 (N5)  
 - `docs/memory/STATE.md` (evidência TTS/FB Sprint 107; handoff Sound)  
 - `docs/memory/SESSION_109.md` (sync docs desta ADR)  
-- `docs/memory/SESSION_111.md` (migração leftovers 107 → Sound)
+
+---
+
+## 9. Planos Cursor implementados
+
+### `Sprint Sound completa` (`sprint_sound_completa`)
+
+| Entrega do plano | Status | Nota |
+|------------------|--------|------|
+| Mic→Wake→STT→TTS gate | ✅ | SESSION_122 |
+| STT PCM path + `STT.BIN` | ✅ | WER CTC tiny fraco |
+| UAC parse descriptors | ✅ | isócrono DMA → HW |
+| Piper neural-lite | ✅ | VITS/HiFi-GAN **não** (soft-float) |
+| VAD/SER/Wake polish | ✅ | |
+| jarbas cutover re-export | ▶️ | espelho sync; truth = `neural-kernel/audio` |
+
+Residuals abertos: soft-float/VITS, cutover jarbas pleno — lifecycle ADR `completa` com residuals explícitos (não reabre sherpa/Vosk).
+
+Também: `docs/memory/SESSION_111.md` (migração leftovers 107 → Sound).

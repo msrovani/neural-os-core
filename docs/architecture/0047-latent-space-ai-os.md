@@ -2,7 +2,7 @@
 
 **Data:** 2026-07-16
 **Status:** Accepted (MVP parcial) — SESSION_126; PoC LatentBus + Evolve WASM + NeuOS Probe fase 1
-**Depende de:** ADR-0041 (Cap Rings P0-P9), ADR-0042 (K²CHJ N1-N5), ADR-0046 (GGUF Streaming), Sprint 106 (WASM runtime), Sprint 108 (Self-Evolving Agents)
+**Depende de:** ADR-0041 (Cap Rings P0-P9), ADR-0042 (K³CHJ N1-N5), ADR-0046 (GGUF Streaming), Sprint 106 (WASM runtime), Sprint 108 (Self-Evolving Agents)
 **Sprint:** 109+ (pilares paralelos com ADR-0042)
 **Versão alvo:** v2.1.0+ (pilares 1-3 não bloqueiam v2.0.0)
 
@@ -20,6 +20,19 @@
 | **NeuOS ISA decompilação plena** | ❌ **DESCARTADO** — BitNet ternário sem ISA decompilável confiável |
 | **LatentBus cross-modelo adapter treinável** | ❌ **DESCARTADO** — overhead sem hot-path multi-modelo hoje |
 | Scheduler neural / Aeon memory | ⏳ defer (non-goals) |
+
+### Planos Cursor — `ADR-0047 MVP PoC` (`adr-0047_mvp_poc`)
+
+| Fase do plano | Entrega | Status | Extensão ADR |
+|---------------|---------|--------|--------------|
+| 1 LatentBus | f16 publish Cortex + recv Hermes + gate L1 | ✅ | esta ADR §0 / §5 |
+| 2 Evolve | hot_swap/rollback + SleepCycle DREAM + gate L2 | ✅ | esta ADR + `hermes/evolve` |
+| 3 Probe | neuos_probe snapshot-safe + gate L3 | ✅ | esta ADR §7 |
+| 4 GPU G1/G2 | work-queue + matmul HW/fallback | ✅ PoC | `0047-gpu-compute-pipeline.md` |
+| 5 HMI H1/H4 | UI JSON + avatar telemetria | ✅ PoC | `0047-hmi-neural-desktop.md` |
+| 6 Docs | Accepted parcial + defer/descarte ISA/adapter | ✅ | SESSION_126–127 |
+
+Wave2 (Genesis/G3–G5/H2/H5): parcial — ver família 0047-* e SESSION_127.
 
 ## Índice
 
@@ -83,7 +96,7 @@ Os pilares rodam **em paralelo** com ADR-0042 N2→N5. Nenhum bloqueia v2.0.0.
 ```
 ~26.000 LOC | 180+ arquivos Rust | 247+ agentes | 0 erros de compilação
 ┌──────────────────────────────────────────────────────────────┐
-│  Cadeia K²CHJ: k_nano → k_ai → cortex → hermes → jarbas     │
+│  Cadeia K³CHJ: k_nano → k_ai → cortex → hermes → jarbas     │
 │                                                              │
 │  IPC: EventBus (66 linhas) — pub/sub tópico com Vec<u8>      │
 │  Inferência: BitNet ternário 2B, Trinity MoE (6 experts)     │

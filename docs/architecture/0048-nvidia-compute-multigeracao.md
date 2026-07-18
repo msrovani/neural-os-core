@@ -343,3 +343,30 @@ limite de banda. A meta passa a ser medida contra o baseline da mesma máquina.
 - T-MAC: <https://arxiv.org/abs/2407.00088>
 - RSR-core: <https://github.com/UIC-InDeXLab/RSR-core>
 
+---
+
+## 13. Planos Cursor implementados
+
+### 13.1 `GPU Multivendor Unlock` (`gpu_multivendor_unlock`) — ADRs 0048–0050
+
+| Fase | Entrega | Status | Nota honesta |
+|------|---------|--------|--------------|
+| **A** Foundation | `compute_abi`, detect `has_compute=false` até canário, `display_coex` wired, hardening ACR/doorbell | ✅ | SESSION_138 |
+| **B** KernelPacks | envelope NKP1 + `tools/gpu_kernels` + packers NVIDIA/AMD/Intel | ✅ | sig zeros = unsigned |
+| **C1** NVIDIA | LegacyAcr Pascal + GspBackend stubs | ✅ Degrau | golden silicon aberto |
+| **C2** Intel | Gen9 walker + Arc GuC/CCS separado | ✅ Degrau | golden HW aberto |
+| **C3** AMD | IP Discovery + KiQ/Mes + PSP | ✅ Degrau | golden HW aberto |
+| **D** Docs/Cortex | TensorOp→queue; INDEX/STATE/TECNOLOGIAS | ✅ | Ready só pós-canário HW |
+
+**Não alegado:** QMD/walker/PM4 golden em silicon; Vulkan/CUDA runtime no kernel.
+
+### 13.2 `Pascal ACR Degrau` (`pascal_acr_degrau`) — esta ADR P2
+
+| Item | Entrega | Status |
+|------|---------|--------|
+| `nvidia_pascal_acr.rs` | WPR/LSB/HS + `bring_up_acr` + `AcrReport` | ✅ |
+| `nvidia_pascal_sw.rs` | sw_nonctx MMIO + status Present/Applied/Deferred | ✅ |
+| Wire firmware/backend | stub → ACR→sw→D2/D3 | ✅ |
+| Honestidade | nunca `Ready`/`has_compute` sem evidência silício | ✅ |
+
+BE vive em **`k_hal::gpu`** (pós ADR-0041 H2); jarbas só FE.

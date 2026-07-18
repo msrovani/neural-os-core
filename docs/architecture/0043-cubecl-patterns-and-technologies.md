@@ -1,4 +1,4 @@
-# ADR-0043: Análise Tecnológica CubeCL — Padrões Aproveitáveis para o AIOS K²CHJ
+# ADR-0043: Análise Tecnológica CubeCL — Padrões Aproveitáveis para o AIOS K³CHJ
 
 **Status:** Finalizado — Análise Completa (código + book + exemplos)  
 **Data:** 2026-07-15  

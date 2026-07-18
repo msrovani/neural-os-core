@@ -284,3 +284,19 @@ O n-gram speculative decoding continua CPU/policy; não confundir com DPAS.
 - BitNet: <https://arxiv.org/abs/2402.17764>
 - XeTLA (referência, archived): <https://github.com/intel/xetla>
 - oneDNN: <https://github.com/uxlfoundation/oneDNN>
+
+---
+
+## 14. Planos Cursor implementados
+
+Plano **`GPU Multivendor Unlock`** Fase **C2** (Intel):
+
+| Entrega | Status | Artefato |
+|---------|--------|----------|
+| GMD_ID + famílias DID | ✅ | `k_hal/gpu/detect` / intel_* |
+| Gen9 GPGPU_WALKER Degrau | ✅ | `intel_gen9.rs` |
+| Arc GuC/CCS separado | ✅ | `intel_guc.rs` / `intel_arc.rs` |
+| KernelPack + FW i915/xe | ✅ | packers + `firmware/i915/`, `firmware/xe/` |
+| Política display vs compute | ✅ | `display_coex` |
+
+**Residual:** golden walker HD 620/630 / Arc em silicon — lifecycle `fazendo`. BE em `k_hal` (ADR-0041 H2).

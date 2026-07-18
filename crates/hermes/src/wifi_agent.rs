@@ -101,6 +101,16 @@ impl WifiAgent {
         if !generic_wifi::detect_wifi() {
             self.state = WifiState::Failed("Sem WiFi");
             self.publish("Sem WiFi. Ethernet cabeada ativa.");
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=detect status=UNSUPPORTED detail=no_wifi_pci"
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio_onda7"
+            );
             return;
         }
 
@@ -111,10 +121,17 @@ impl WifiAgent {
             }
         });
 
-        // Scan comandado via driver (stub ate driver real existir)
-        // Num driver real, enviariamos comando de scan via send_packet().
-        // O driver retornaria resultados via receive_packet().
-        // Por enquanto, simulamos 3 APs para testar o fluxo.
+        // Scan real ainda depende de ucode/HW — lista demo NÃO é Ready (Onda 7).
+        k_nano::slog_bin!(
+            "WIFI-HW",
+            "info",
+            "step=scan status=UNSUPPORTED detail=demo_ap_list_not_rf"
+        );
+        k_nano::slog_bin!(
+            "WIFI-HW",
+            "info",
+            "VERDICT=AWAITING_REAL_HW reason=iwlwifi_scan_unwired_onda7"
+        );
         let aps = vec![
             AccessPoint { ssid: String::from("JARVIS-NET"),   bssid: [0xAA;6], signal_dbm: -45, channel: 6,  security: SecurityType::WPA2 },
             AccessPoint { ssid: String::from("MeuWiFi"),      bssid: [0xBB;6], signal_dbm: -60, channel: 11, security: SecurityType::WPA2 },

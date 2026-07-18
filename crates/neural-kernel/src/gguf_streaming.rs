@@ -519,6 +519,7 @@ pub fn hot_swap_from_ata(path: &str) -> Result<(), &'static str> {
     match gguf::load_gguf_streaming(path) {
         Ok(()) => {
             k_nano::slog_bin!("AIRLLM", "info", "hot-swap ATA OK path={} (set_model)", path);
+            log_airllm_residuals();
             Ok(())
         }
         Err(e) => {
@@ -530,6 +531,46 @@ pub fn hot_swap_from_ata(path: &str) -> Result<(), &'static str> {
 
 /// Max staged download size (RAM → FAT). Multi-GB GGUF needs stream-to-disk residual.
 const HOTSWAP_MAX_STAGED_BYTES: usize = 64 * 1024 * 1024;
+
+/// Onda 6 — residuals honestos (DMA peer / stream / K-quants avançados / e2e 9B).
+/// Prefetch soft + Q4_0/Q8_0 já existem; peer DMA e K-quants llama.cpp ≠ Ready.
+pub fn log_airllm_residuals() {
+    k_nano::slog_bin!(
+        "AIRLLM-DMA",
+        "info",
+        "step=peer_dma status=UNSUPPORTED detail=soft_prefetch_only"
+    );
+    k_nano::slog_bin!(
+        "AIRLLM-DMA",
+        "info",
+        "step=stream_to_disk status=UNSUPPORTED detail=ram_stage_64mib_cap"
+    );
+    k_nano::slog_bin!(
+        "AIRLLM-DMA",
+        "info",
+        "step=k_quants status=PARTIAL detail=q4_0_q8_0_ok_q4k_deferred"
+    );
+    k_nano::slog_bin!(
+        "AIRLLM-DMA",
+        "info",
+        "VERDICT=AWAITING_REAL_HW reason=dma_stream_kquant_9b"
+    );
+}
+
+/// Stream HTTP→FAT sem staging RAM pleno — deferred (IDEA Onda 6).
+pub fn stream_to_disk_deferred(_url: &str, _dest: &str) -> Result<(), &'static str> {
+    k_nano::slog_bin!(
+        "AIRLLM-DMA",
+        "info",
+        "step=stream_to_disk status=UNSUPPORTED detail=not_wired"
+    );
+    k_nano::slog_bin!(
+        "AIRLLM-DMA",
+        "info",
+        "VERDICT=AWAITING_REAL_HW reason=stream_to_disk_unwired"
+    );
+    Err("stream-to-disk deferred (ADR-0046 / Onda 6 residual)")
+}
 
 /// Parse `http://ip[:port]/path` — hostname DNS not implemented (honest fail).
 fn parse_http_url(url: &str) -> Result<([u8; 4], u16, alloc::string::String), &'static str> {
@@ -632,6 +673,7 @@ pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static s
         k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: body {} > max staged {} (stream-to-disk residual)",
             data.len(),
             HOTSWAP_MAX_STAGED_BYTES);
+        let _ = stream_to_disk_deferred(url, &dest);
         return Err("hot_swap Net: body too large for RAM staging (64MiB cap; stream-to-disk deferred)");
     }
 

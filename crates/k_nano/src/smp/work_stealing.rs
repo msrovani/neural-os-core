@@ -123,6 +123,23 @@ pub struct WorkStealingPool {
     num_workers: usize,
 }
 
+/// Pool global (ADR-0055 Fase B) — APs tentam steal quando a fila ap_work está vazia.
+static mut GLOBAL_POOL: Option<WorkStealingPool> = None;
+
+pub fn init_global_pool(num_workers: usize) {
+    unsafe {
+        GLOBAL_POOL = Some(WorkStealingPool::new(num_workers.max(1)));
+    }
+}
+
+pub fn global_pool() -> Option<&'static WorkStealingPool> {
+    unsafe { GLOBAL_POOL.as_ref() }
+}
+
+pub fn try_steal_global(worker_id: usize) -> Option<Task> {
+    global_pool()?.steal(worker_id)
+}
+
 impl WorkStealingPool {
     /// Cria um pool com N workers (cores)
     pub fn new(num_workers: usize) -> Self {

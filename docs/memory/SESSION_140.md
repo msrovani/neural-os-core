@@ -54,3 +54,8 @@ HalOffer = API R3; VirtIO = transporte BE apenas.
 - Boot QEMU: confirmar `NotifySent` + slog Cap/AS non-fatal
 - Sprint Net (DHCP/RX)
 - Não declarar ADR-0041 `completa` / v2.0.0 sem OK humano
+
+## Addendum — rebrand K³CHJ (mesmo dia)
+
+Produto formalizado como **K³CHJ** (k-nano + **k-hal** + k-ai + Cortex + Hermes + Jarbas).  
+Histórico K²CHJ = sem k-hal na marca. IDEA #461 · ADR-0042 §0.

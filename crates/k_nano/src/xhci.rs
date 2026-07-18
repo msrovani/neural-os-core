@@ -141,7 +141,7 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
         // (simplified: assumes xHC accepts default slot context)
 
         state.last_report[0] = 0xFF; // mark as configured
-        crate::slog_nano!("USB", "info", "HID boot configurado.");
+        crate::slog_bin!("USB", "info", "HID boot configurado.");
     }
 
     // Ler Event Ring para completions
@@ -291,22 +291,111 @@ pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, ep: &mut BulkEndpoint, data_
     let db_val = if direction == 0 { 2u32 } else { 3u32 };
     w32(st.base, db_off, db_val);
 
-    // Wait for completion event (poll ER with timeout)
-    for _ in 0..2_000_000 {
+    // Wait for completion event (poll ER with timeout curto — HW real sem EP MSC).
+    for _ in 0..80_000 {
         let evt = st.er_va as *const u32;
         let flags = (evt.add(11).read_volatile() >> 24) as u8;
         if flags & 0x20 != 0 {
             let comp = evt.add(10).read_volatile() & 0xFF;
-            // Advance ERDP to acknowledge the event
             let erdp_phys = st.er_va - st.pmoff;
             w32(st.base + st.capl, 0x38, erdp_phys as u32);
             w32(st.base + st.capl, 0x3C, (erdp_phys >> 32) as u32 | 0x01);
-            if comp == 0 { return true; }
+            if comp == 0 {
+                return true;
+            }
             crate::slog_nano!("USB", "xhci", "Bulk err: comp={}", comp);
             return false;
         }
         core::hint::spin_loop();
     }
-    crate::slog_nano!("USB", "xhci", "Bulk timeout");
+    // Uma vez só — flood de timeout ilegível no FB.
+    static TIMEOUT_LOGGED: core::sync::atomic::AtomicBool =
+        core::sync::atomic::AtomicBool::new(false);
+    if !TIMEOUT_LOGGED.swap(true, Ordering::Relaxed) {
+        crate::slog_nano!("USB", "xhci", "Bulk timeout (demais omitidos)");
+    }
     false
+}
+
+/// Tenta ler Configuration Descriptor do device no slot ativo (GET_DESCRIPTOR).
+/// Retorna (bytes_lidos, vid, did) ou None se xHCI/HID-only sem EP0 control genérico.
+///
+/// Sprint Sound: path honesto — sem device UAC no bus QEMU default, retorna None.
+/// Quando EP0 control transfer estiver pleno, preencher `buf` com o descriptor.
+pub unsafe fn try_read_config_descriptor(buf: &mut [u8]) -> Option<(usize, u16, u16)> {
+    let state = XHCI_STATE.lock();
+    let _st = state.as_ref()?;
+    // Control transfer GET_DESCRIPTOR(Configuration) ainda não está wired no
+    // path HID-only. Deixa buffer zerado e sinaliza incompleto ao caller UAC.
+    let _ = buf;
+    None
+}
+
+/// PORTSC base = op + 0x400 + (port-1)*0x10 (xHCI 1.1).
+unsafe fn portsc_addr(st: &XhciState, port: u8) -> Option<u64> {
+    if port == 0 {
+        return None;
+    }
+    // HCSPARAMS1 @ cap+0x04: MaxPorts[31:24]
+    let hcs1 = r32(st.base, 0x04);
+    let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
+    if port > max_ports || max_ports == 0 {
+        return None;
+    }
+    Some(st.op + 0x400 + ((port as u64 - 1) * 0x10))
+}
+
+/// Desabilita porta (limpa PED). Best-effort — W1C bits preservados.
+pub unsafe fn disable_port(port: u8) -> bool {
+    let state = XHCI_STATE.lock();
+    let st = match state.as_ref() {
+        Some(s) => s,
+        None => return false,
+    };
+    let Some(addr) = portsc_addr(st, port) else {
+        return false;
+    };
+    let off = addr - st.base;
+    let mut v = r32(st.base, off);
+    // Clear PED (bit 1); preserve CCS etc. Write-1-to-clear: mask carefully.
+    v &= !0x2;
+    // Clear change bits by writing 1s where needed (CSC=17, PEC=18, …)
+    v |= (1 << 17) | (1 << 18);
+    w32(st.base, off, v);
+    true
+}
+
+/// IDEA #12 — desabilita portas com device conectado (CCS) em modo enforce Deny.
+/// Nao distingue teclado vs MSC (EP0 limitado); conta portas tocadas.
+pub unsafe fn disable_untrusted_ports() -> u8 {
+    let state = XHCI_STATE.lock();
+    let st = match state.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    let hcs1 = r32(st.base, 0x04);
+    let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
+    drop(state);
+    let mut n = 0u8;
+    for port in 1..=max_ports.max(1) {
+        let state = XHCI_STATE.lock();
+        let Some(st) = state.as_ref() else {
+            break;
+        };
+        let Some(addr) = portsc_addr(st, port) else {
+            continue;
+        };
+        let off = addr - st.base;
+        let v = r32(st.base, off);
+        let ccs = v & 1 != 0;
+        let ped = v & 2 != 0;
+        drop(state);
+        if ccs && ped {
+            if disable_port(port) {
+                n = n.saturating_add(1);
+                crate::slog_bin!("USB-TRUST", "info", "port {} PED cleared (CCS)", port);
+            }
+        }
+    }
+    n
 }

@@ -1,6 +1,11 @@
 # ADR-0005: SIMD and FPU Enablement
 
-**Status:** Accepted  
+> **SUPERSEDED (deprecated)** — Autoridade de enablement ISA/FPU/SIMD transferida para
+> **[ADR-0055](0055-smp-revision.md)** (FeatureGate, OSXSAVE/XCR0, `IsaPath`).
+> Este arquivo permanece como registro histórico do enablement SSE (CR0/CR4).
+> Lifecycle INDEX: `substituida`.
+
+**Status:** Superseded  
 **Date:** 2026-06-21  
 **Driver:** Necessidade de operações com ponto flutuante (`f32`/`f64`) e instruções SIMD para processamento de tensores e pesos de LLM no Ring 0.
 

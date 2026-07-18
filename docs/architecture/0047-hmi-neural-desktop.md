@@ -1214,7 +1214,7 @@ Fase 5 — Neural Renderer (Sprint 113, ~300 LOC + treino)
 ### 11.2 Documentação interna
 
 13. ADR-0036 — JARVIS Unified Interaction Layer (SOUL.md, persona)
-14. ADR-0042 — K²CHJ N5: Jarbas ego/persona/frontend
+14. ADR-0042 — K³CHJ N5: Jarbas ego/persona/frontend
 15. ADR-0047 — LatentBus + EvolveAgent + NeuOS Probe
 16. ADR-0047-GPU — GPU Compute Pipeline
 17. `crates/jarbas/src/display/` — Compositor, avatar, font, theme (~1700 LOC)

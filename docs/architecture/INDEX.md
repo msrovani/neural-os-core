@@ -26,7 +26,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0002-vga-and-serial-logging.md` | Accepted | `completa` | Console/serial | Base operacional |
 | `0003-interrupt-descriptor-table.md` | Accepted | `completa` | IDT | Implementada |
 | `0004-memory-paging-and-heap.md` | Accepted | `modernizada` | Memória | Heap e paging evoluíram |
-| `0005-simd-and-fpu-enablement.md` | Accepted | `completa` | SIMD/FPU | Implementada |
+| `0005-simd-and-fpu-enablement.md` | Superseded | `substituida` | SIMD/FPU → **0055** | Histórico SSE; autoridade ISA em ADR-0055 |
 | `0006-neural-primitives-and-libm.md` | Accepted | `completa` | Primitivas neurais | Implementada |
 | `0007-intent-router-mlp.md` | Accepted | `modernizada` | Cortex/Hermes | Evoluiu para Trinity/Hermes |
 | `0009-pic-watchdog-and-page-fault.md` | Accepted | `modernizada` | IRQ/#PF | Endurecida em sprints posteriores |
@@ -34,7 +34,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0011-bitlinear-and-hybrid-matmul.md` | Accepted | `completa` | BitLinear | Base do tensor engine |
 | `0012-2bit-packing-quantization.md` | Accepted | `completa` | Packing ternário | Formato implementado |
 | `0013-neural-os-executive-summary.md` | Accepted | `pesquisa` | Visão executiva | Snapshot histórico |
-| `0014-ideias-hardware.md` | Proposed | `pesquisa` | Seed #1–116 | Ideias migradas ao IDEA_BANK |
+| `0014-ideias-hardware.md` | Proposed | `pesquisa` | Seed #1–116; **SMP→0055** | §SMP/CorePools deprecated; USB/NPU seeds intactos |
 | `0015-curso-correcao-mvp.md` | Proposed | `plano_sprint` | MVP Hermes | Rota histórica |
 | `0016-network-strategy.md` | Proposed | `modernizada` | #117–125, #415 | Rede evoluiu para SLIP + nativa |
 | `0017-critical-bugfix-sprint.md` | Accepted | `completa` | Bugfix crítico | Critérios atendidos |
@@ -58,12 +58,12 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0034-jarvis-conscious-interaction-layer.md` | Superseded | `substituida` | #310/#315 | Substituída pela ADR-0036 |
 | `0035-jarvis-deep-research-ecosystem-convergence.md` | Superseded | `substituida` | #315 | Substituída pela ADR-0036 |
 | `0036-jarvis-unified-interaction-layer.md` | Accepted | `modernizada` | #315.* | Canônica para interação/persona |
-| `0037-smp-gpu-architecture.md` | Accepted | `modernizada` | #319–354 | Implementação multi-vendor evolutiva |
+| `0037-smp-gpu-architecture.md` | Superseded | `substituida` | #319–354 → **0055** / GPU **0048–50** | SMP→0055; GPU→0048–0050 |
 | `0038-ecosystem-optimization.md` | Accepted | `pesquisa` | #355–360 | Auditoria e substituições |
 | `0039-boot-flow.md` | Accepted | `modernizada` | Boot 8 fases | Alinhada a Pacotes A/B |
 | `0040-filesystem-architecture.md` | Accepted | `completa` | #417–423 | MVP aceite 2026-07-16; **residuals `por_fazer`** (não reabrem ADR) |
-| `0041-k2chj-capability-rings.md` | Accepted | `fazendo` | #424–432, **#459** | PoC P0–P9 ✅; H1–H5 + **H4+/H5+/AS shallow** ✅ (1.8.x); HalOffer Cap grant; VirtIO=transporte BE; ≠ v2.0.0 |
-| `0042-k2chj-adequacao-boot.md` | Accepted | `modernizada` | #433–440, #457 | N1–N5 + wire em v1.8.0; tree teste v1.8.6 (não estável) |
+| `0041-k2chj-capability-rings.md` | Accepted | `fazendo` | #424–432, **#459–461** | **K³CHJ** capability; P0–P9 ✅; planos H1–H5+HalOffer+H4+/AS ✅ v1.8.6; path file `k2chj` estável |
+| `0042-k2chj-adequacao-boot.md` | Accepted | `modernizada` | #433–440, #457, **#461** | N1–N5 + wire v1.8.0; produto **K³CHJ** (§0); tree teste v1.8.6 |
 | `0043-cubecl-patterns-and-technologies.md` | Accepted | `pesquisa` | GPU patterns | Análise tecnológica |
 | `0044-edge-python-patterns.md` | Accepted | `pesquisa` | VM/SSA patterns | Análise tecnológica |
 | `0045-sound-voice-stack.md` | Accepted | `completa` | #75, #83, #84, #315.21–25, #360, #438, #442 | Canônico Sound; residuals VITS/soft-float/jarbas cutover |
@@ -78,21 +78,22 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0052-neural-artifact-contract.md` | Accepted (MVP) | `fazendo` | schema/hash/sig/acionaveis | Deny unsigned; Hermes create; import sandbox |
 | `0053-hanr-parity-marketplace-trust.md` | Accepted (MVP) | `fazendo` | HANR parity | SESSION_136: session Ed25519, market, memory, MCP mínimo |
 | `0054-perci-bitwork-integration.md` | Proposed | `pesquisa` | Perci/Bitwork | Ex-0045 conflito; **adiada** — CognitiveRouter Bitwork→Trinity; sem wire |
+| `0055-smp-revision.md` | Accepted | `fazendo` | #16–42, #20–33, #35–41, #317, #319–324, #347 | **Canônica SMP** — FeatureGate; TCG APs=1; WHPX BSP-only (SESSION_141); residuals HW hybrid/matmul |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)
 
-Triagem SESSION_125: nenhum item abaixo é viável agora (precisa Net / HW real / GPU DMA / risco de corromper mídia).
+Triagem Onda 0 (2026-07-18): destino por onda + tags. LAN/WiFi crônicos → **Onda 7**. Itens de rede: **`depends_on: lan`**.
 
-| Residual | IDEA | Bloqueio |
-|----------|------|----------|
-| exFAT/NTFS/EXT **write** | #417 w | Risco mídia sem validação HW |
-| MHI DMA NVMe↔DRAM/VRAM | #420 DMA | Path DMA storage/GPU não maduro |
-| SysInstaller | #421 | UI/LLM + write HD |
-| NeuralFS disco fisico | #422 / NeuralFS.md | USB lock + GPT + unified exFAT ✅ SESSION_133; residual power-loss/stress |
-| GPU Direct Storage | #423 | GPU compute + NVMe DMA |
-| Cloud mounts plenos | #418 net | Sprint Net |
-| Storage Manager App UI | #419 UI | Settings/jarbas; CLI report já existe |
+| Residual | IDEA | Destino | Bloqueio / tag |
+|----------|------|---------|----------------|
+| exFAT/NTFS/EXT **write** | #417 w | Onda 3 | Risco mídia; flag opt-in QEMU |
+| MHI DMA NVMe↔DRAM/VRAM | #420 DMA | Onda 5 | ▶️ AWAITING_HW típico |
+| SysInstaller | #421 | defer | UI/LLM + write HD |
+| NeuralFS disco fisico | #422 / NeuralFS.md | mount/GPT ✅; evidência Onda 1 | USB power-loss ▶️ AWAITING_HW |
+| GPU Direct Storage | #423 | Onda 5 após Ready | GPU compute + NVMe DMA |
+| Cloud mounts plenos | #418 | Onda 7 fila | **`depends_on: lan`** |
+| Storage Manager App UI | #419 UI | Onda 3 cauda opcional | CLI report já existe |
 
 ## Conflitos de ID
 
@@ -108,7 +109,40 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 - ADR-0034 → ADR-0036.
 - ADR-0035 → ADR-0036.
 - Rotas sherpa/Vosk/Kokoro/Wyoming/Rustpotter → ADR-0045 Sound, sem apagar o histórico nas ADRs antigas.
+- ADR-0037 → ADR-0055 (SMP); GPU → ADR-0048–0050.
+- ADR-0005 → ADR-0055 (autoridade ISA).
+- ADR-0014 §SMP/CorePools → ADR-0055.
 
 ## Manutenção
 
 Ao fechar uma sprint, aplicar o checklist de `docs/GOVERNANCE.md`: atualizar IDEA_BANK, lifecycle deste índice, TODO, STATE e SESSION na mesma passagem.
+
+## Planos Cursor → ADR (implementados)
+
+Registro dos planos de implementação (Cursor Plans) já refletidos no corpo das ADRs. Fonte dos planos: histórico maintainer / SESSION; **não** versionar `.cursor/plans` no repo.
+
+| Plano (nome) | ADR(s) | Status implementação | Sessão / tag |
+|--------------|--------|----------------------|--------------|
+| `k-HAL H1-H5` | **0041** §11.1 | ✅ H1–H5 | pré-140 → v1.8.6 |
+| `HalOffer API 1.8.x` | **0041** §9.4 / §11.2 | ✅ MVP HalOffer | v1.8.6 |
+| `ADR41 H4 H5 full` | **0041** §11.3 | ✅ H4+/MMIO/Cap/AS | SESSION_140 / **v1.8.6** |
+| `GPU Multivendor Unlock` | **0048–0050** | ✅ Degrau A–D (golden HW aberto) | SESSION_138 |
+| `Pascal ACR Degrau` | **0048** §13.2 | ✅ Degrau P2 honesto | SESSION_138 |
+| `ADR-0047 MVP PoC` | **0047** (+ gpu/hmi) | ✅ Accepted parcial | SESSION_126–127 |
+| `Sprint Sound completa` | **0045** §9 | ✅ parcial honesto | SESSION_122 |
+| `Ecosystem Package Hub` | **0051** (+ NeuralFS §12) | ✅ MVP | SESSION_134–135 |
+| `Migrar agentes NeuralFS` | **0051** / **0052** | ✅ → stubs **corrigidos** por 0052 | SESSION_134–135 |
+| `HANR Hermes Port` | **0053** | ✅ Waves 0–4 MVP | SESSION_136–137 |
+| `Sandbox gates SMP` | **0055** | ✅ Fases 0–C wired; evidência TCG/WHPX | SESSION_141 |
+| `Sanitizar pasta docs` | INDEX + GOVERNANCE | ✅ ciclo IDEA→ADR | archive + INDEX |
+
+**Próximo aceite operacional (0041):** boot QEMU com slog `NotifySent` + Cap/AS non-fatal — não reabre plano; só evidencia lifecycle.
+
+### Nome do produto
+
+| Nome | Era | Cadeia |
+|------|-----|--------|
+| **K²CHJ** | ≤ v1.8.5 (histórico) | k-nano → k-ai → cortex → hermes → jarbas |
+| **K³CHJ** | **canônico desde 2026-07-18** | k-nano → **k-hal** → k-ai → cortex → hermes → jarbas |
+
+Arquivos ADR `*k2chj*` não são renomeados (links). Glossário: ADR-0042 §0.

@@ -280,12 +280,47 @@ impl Agent for CortexAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
-            k_nano::slog_cortex!("LLM", "info", "Generating for: \"{}\"", user_text);
-            let system_prompt = SKILL_STORAGE.lock().build_system_prompt_for(user_text);
-            let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
+            let expert = {
+                let t = crate::globals::TRINITY.lock();
+                t.classify_intent(user_text).name
+            };
+            k_nano::slog_cortex!(
+                "LLM",
+                "info",
+                "Generating for: \"{}\" route→{}",
+                user_text,
+                expert
+            );
+            // hw_control: Hermes Chat já executa audio_set_volume via RouteKind::ExpertSkill.
+            // Aqui LLM_REQUEST direto — resposta honesta sem mash de expert 128h.
+            if expert == "hw_control" {
+                let msg = alloc::format!(
+                    "[HW] controle '{}' — use path Hermes/skill audio_set_volume",
+                    user_text
+                );
+                k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", msg);
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: alloc::string::String::from(cortex::cortex::TOPIC_LLM_RESPONSE),
+                    payload: msg.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                return AgentTickResult::Pending;
+            }
+            let prompt = if expert == "generator" {
+                alloc::format!(
+                    "You are Jarbas, the Neural OS voice assistant. \
+                     Reply with one short fluent conversational sentence. \
+                     Match the user language (PT-BR or EN).\nUser: {}\nJarbas:",
+                    user_text
+                )
+            } else {
+                let system_prompt = SKILL_STORAGE.lock().build_system_prompt_for(user_text);
+                alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text)
+            };
             k_nano::slog_cortex!("LLM", "info", "Calling generate_via_model...");
             let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let output = cortex::cortex::generate_via_model(&full_prompt);
+            let output = cortex::cortex::generate_via_model(&prompt);
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
@@ -1159,8 +1194,12 @@ impl Agent for HermesAgent {
                                 as u64;
                             let intent = self.cortex.think(msg);
                             let structured_skill = match intent {
+                                // Conversa fluente → LLM (generator). Volume → skill HW.
                                 cortex::cortex::Intent::Greeting
                                 | cortex::cortex::Intent::Chat => None,
+                                cortex::cortex::Intent::AudioVolume => {
+                                    Some("audio_set_volume")
+                                }
                                 _ => Some(intent.skill_name()),
                             };
                             let route = crate::cognitive_bridge::route_user_intent(

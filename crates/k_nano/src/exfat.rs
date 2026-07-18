@@ -1,5 +1,5 @@
 //! exFAT Filesystem — leitura + list root para pendrives/SDHC >4GB.
-//! Formato: Microsoft exFAT 1.0. Escrita de arquivo deferida (bitmap/FAT — risco de corromper).
+//! Formato: Microsoft exFAT 1.0. Write de arquivo: `exfat_write` + opt-in `EXFAT_WRITE=1`.
 //! FilesystemDriver: detect/mount/list(cache)/read(cache path).
 
 use alloc::collections::BTreeSet;
@@ -110,13 +110,16 @@ pub struct ExfatFs {
     pub total_sectors: u64,
     pub bytes_per_cluster: u64,
     pub clusters: u32,
-    fat_lba: u64,
-    cluster_heap_lba: u64,
-    root_cluster: u32,
+    pub(crate) fat_lba: u64,
+    pub(crate) cluster_heap_lba: u64,
+    pub(crate) root_cluster: u32,
     pub volume_label: String,
+    /// Allocation Bitmap first cluster (entry 0x81); 0 = unknown.
+    pub(crate) bitmap_cluster: u32,
+    pub(crate) bitmap_length: u64,
     /// Cached root: (name, is_dir, first_cluster, size)
-    root_cache: Vec<(String, bool, u32, u64)>,
-    mounted: bool,
+    pub(crate) root_cache: Vec<(String, bool, u32, u64)>,
+    pub(crate) mounted: bool,
 }
 
 fn parse_vbr(vbr: &[u8; 512], start_lba: u64) -> Option<ExfatFs> {
@@ -156,9 +159,19 @@ fn parse_vbr(vbr: &[u8; 512], start_lba: u64) -> Option<ExfatFs> {
         cluster_heap_lba: start_lba + cluster_heap_offset as u64,
         root_cluster,
         volume_label: label,
+        bitmap_cluster: 0,
+        bitmap_length: 0,
         root_cache: Vec::new(),
         mounted: false,
     })
+}
+
+pub(crate) fn read_fat_entry_pub(
+    dev: &mut dyn BlockDevice,
+    fat_lba: u64,
+    cluster: u32,
+) -> Option<u32> {
+    read_fat_entry(dev, fat_lba, cluster)
 }
 
 fn read_fat_entry(
@@ -183,6 +196,53 @@ fn read_fat_entry(
 
 fn cluster_to_lba(cluster_heap_lba: u64, bytes_per_cluster: u64, cluster: u32) -> u64 {
     cluster_heap_lba + (cluster - 2) as u64 * bytes_per_cluster / BYTES_PER_SECTOR
+}
+
+/// Localiza Allocation Bitmap (0x81) no root.
+fn discover_bitmap(
+    dev: &mut dyn BlockDevice,
+    fat_lba: u64,
+    cluster_heap_lba: u64,
+    bytes_per_cluster: u64,
+    first_cluster: u32,
+) -> (u32, u64) {
+    let mut cluster = first_cluster;
+    let cluster_bytes = bytes_per_cluster as usize;
+    let mut visited = BTreeSet::new();
+    while cluster >= 2 && cluster < 0xFFFF_FFF0 {
+        if !visited.insert(cluster) {
+            break;
+        }
+        let lba = cluster_to_lba(cluster_heap_lba, bytes_per_cluster, cluster);
+        let mut buf = vec![0u8; cluster_bytes];
+        for i in 0..cluster_bytes / 512 {
+            if !dev.read_sectors(lba + i as u64, &mut buf[i * 512..(i + 1) * 512]) {
+                return (0, 0);
+            }
+        }
+        let mut off = 0;
+        while off + 32 <= buf.len() {
+            let entry = &buf[off..off + 32];
+            let etype = entry[0];
+            if etype == 0x00 {
+                return (0, 0);
+            }
+            if etype == 0x81 {
+                let bm_cl = u32::from_le_bytes([entry[20], entry[21], entry[22], entry[23]]);
+                let bm_len = u64::from_le_bytes([
+                    entry[24], entry[25], entry[26], entry[27], entry[28], entry[29],
+                    entry[30], entry[31],
+                ]);
+                return (bm_cl, bm_len);
+            }
+            off += 32;
+        }
+        match read_fat_entry(dev, fat_lba, cluster) {
+            Some(next) => cluster = next,
+            None => break,
+        }
+    }
+    (0, 0)
 }
 
 fn list_directory(
@@ -304,6 +364,15 @@ impl FilesystemDriver for ExfatFs {
             self.bytes_per_cluster,
             self.root_cluster,
         );
+        let (bm_cl, bm_len) = discover_bitmap(
+            dev,
+            self.fat_lba,
+            self.cluster_heap_lba,
+            self.bytes_per_cluster,
+            self.root_cluster,
+        );
+        self.bitmap_cluster = bm_cl;
+        self.bitmap_length = bm_len;
         self.mounted = true;
         Ok(FsInfo {
             fs_type: "exFAT",
@@ -311,7 +380,7 @@ impl FilesystemDriver for ExfatFs {
             total_bytes: self.total_sectors * 512,
             free_bytes: None,
             block_size: self.bytes_per_cluster as u32,
-            writable: false,
+            writable: bm_cl >= 2,
         })
     }
 
@@ -346,7 +415,7 @@ impl FilesystemDriver for ExfatFs {
     }
 
     fn write(&mut self, _path: &str, _offset: u64, _data: &[u8]) -> Result<(), &'static str> {
-        Err("exFAT write deferred (bitmap/FAT — ADR-0040)")
+        Err("exFAT write needs BlockDevice — use exfat_write::write_file + EXFAT_WRITE=1")
     }
 
     fn list(&self, path: &str) -> Result<Vec<(String, bool)>, &'static str> {

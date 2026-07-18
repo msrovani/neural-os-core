@@ -28,6 +28,7 @@ pub mod ring;
 pub mod firmware;
 pub mod xqueue;
 pub mod kv_dma;
+pub mod direct_storage;
 pub mod xpu;
 pub mod msched;
 pub mod display_coex;

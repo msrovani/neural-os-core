@@ -20,15 +20,25 @@ import numpy as np
 TARGET = Path(__file__).parent / "target"
 TARGET.mkdir(exist_ok=True)
 
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
+
 try:
     import torch
     import torch.nn as nn
     import torch.nn.functional as F
     import torch.optim as optim
     HAS_TORCH = True
-    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[GPU] PyTorch {torch.__version__} | Device: {DEVICE}")
+    _cuda_ok = False
     if torch.cuda.is_available():
+        try:
+            torch.zeros(4, device="cuda").sum().item()
+            _cuda_ok = True
+        except Exception as e:
+            print(f"[WARN] CUDA sem kernels sm_61: {e}")
+            print("[HINT] pip install torch==2.13.0+cu126 --index-url https://download.pytorch.org/whl/cu126")
+    DEVICE = torch.device("cuda" if _cuda_ok else "cpu")
+    print(f"[GPU] PyTorch {torch.__version__} cuda={getattr(torch.version,'cuda',None)} | Device: {DEVICE}")
+    if DEVICE.type == "cuda":
         print(f"[GPU] {torch.cuda.get_device_name(0)} | VRAM: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
 except ImportError:
     print("[FATAL] pip install torch numpy")
@@ -64,23 +74,31 @@ def write_header(f, hidden, num_layers, num_heads, vocab_size, max_seq,
     return f.tell()
 
 def quantize_ternary(arr_1d, threshold=0.5):
-    packed = bytearray()
-    for i in range(0, len(arr_1d), 4):
-        byte = 0
-        for j in range(4):
-            if i + j < len(arr_1d):
-                v = float(arr_1d[i + j])
-                bits = 0b01 if v > threshold else (0b10 if v < -threshold else 0b00)
-                byte |= bits << (j * 2)
-        packed.append(byte)
-    return bytes(packed)
+    """Quantiza float -> packing 2-bit ternario. Aceita list/np/torch (sempre via numpy)."""
+    if hasattr(arr_1d, "detach"):
+        arr = arr_1d.detach().float().cpu().numpy()
+    else:
+        arr = np.asarray(arr_1d, dtype=np.float32)
+    flat = np.ascontiguousarray(arr).reshape(-1)
+    n = flat.size
+    bits = np.zeros(n, dtype=np.uint8)
+    bits[flat > threshold] = 0b01
+    bits[flat < -threshold] = 0b10
+    pad = (-n) % 4
+    if pad:
+        bits = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
+    b = bits.reshape(-1, 4)
+    packed = b[:, 0] | (b[:, 1] << 2) | (b[:, 2] << 4) | (b[:, 3] << 6)
+    return packed.tobytes()
 
 def write_tensor(f, tensor_f32):
-    t = tensor_f32.reshape(-1)
-    f.write(struct.pack("<I", len(t)))
+    if hasattr(tensor_f32, "detach"):
+        t = tensor_f32.detach().float().cpu().numpy().reshape(-1)
+    else:
+        t = np.asarray(tensor_f32, dtype=np.float32).reshape(-1)
+    f.write(struct.pack("<I", int(t.size)))
     f.write(struct.pack("<I", 0))
-    data = quantize_ternary(t)
-    f.write(data)
+    f.write(quantize_ternary(t))
 
 def write_vec_f32(f, vec):
     arr = list(vec)

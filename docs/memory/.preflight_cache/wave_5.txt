@@ -1,0 +1,7 @@
+# PreFlight cache wave=5
+lan_rx_ok=True
+logs_scanned=8
+420	AWAITING_HW	path/log AWAITING — não reimplementar; coletar log HW
+423	AWAITING_HW	path/log AWAITING — não reimplementar; coletar log HW
+454-456	AWAITING_HW	path/log AWAITING — não reimplementar; coletar log HW
+67	PARTIAL	presente; falta evidência runtime/aceite

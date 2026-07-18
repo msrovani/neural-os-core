@@ -8,6 +8,18 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 151 | planos | — | Fecho Residuals 0–7 | PreFlight pass_marker; LAN✅; WiFi AWAITING; TLS/418 PARTIAL |
+| 150 | Onda 7 | — | DNS raw + HTTP L4/L5 | skip_dns_name; OK raw google; L5 301; internet smoke |
+| 149 | Onda 7 | — | LAN RX destravado (e1000 TX) | aliases 0x0420 no-op QEMU; TDT=0x3818; L3.5 PASS |
+| 148 | Onda 6–7 | — | AirLLM-DMA + NET/WIFI-HW | residuals ATA; lan fila BLOCKED; PreFlight cache |
+| 147 | Trilha R | — | soft-float/VITS pesquisa | defer hardfloat; neural-lite permanece |
+| 146 | Onda 5 | — | MHI-DMA + GPU-HW AWAITING | Vram hook #67; GDS stub; [GPU-HW] [MHI-DMA] sem fake Ready |
+| 145 | Onda 4 | — | USB Trust + UAC-HW | usb_trust/usb.tbl; enforce+disable_port; [UAC-HW] AWAITING; soft-float defer |
+| 144 | Onda 3 | — | exFAT write + FS agents fecho | `exfat_write` + EXFAT_WRITE=1; 282e–g ✅; 282h ⏳; #418 BLOCKED |
+| 143 | docs | — | Auditoria ideias antigas | STALE→✅; VIABLE→Onda+lan; DEFER/💰/❌; fecho por ID |
+| 142 | Ondas 0–1 | — | PreFlight + NeuralFS evidência | preflight_wave.py; depends_on: lan; Onda 7 crônicos; smoke_level2/power_loss; NRFS-HW AWAITING |
+| 142 | Models | — | Multi-model hub | TinyStories/3B/850M slots; gguf_wasm SkillMarket; RustCoder 2B/3B FAT |
+| 141 | ADR-55 | — | FeatureGate + SMP revision | PlatformProbe; WHPX SMP off; TCG APs=1; RSDP BootInfo; CorePools |
 | 140 | ADR-41 | — | H4+/H5+/AS + HalOffer Cap → v1.8.6 | QUEUE_NOTIFY real; Cap grant bind; AS shallow PoC; 1.8.x |
 | 139 | HW | — | USB BOOT.LOG + console FB | FAT 0x0C+ESP; BltOnly patch; console_clear |
 | 107 | 107 | — | Boot A/B + Cap P0–P9 + ADR-0042 | Runtime QEMU OK; cadeia k-nano→…→jarbas; próximo N1 legível |
@@ -24,7 +36,7 @@
 | 117 | ADR-42 N3.5 | — | cortex crate wired no bin | v1.7.9; 9 espelhos removidos; residuals cortex/bpe/global_arena/cortex_mmap |
 | 118 | ADR-42 N4.6 | — | hermes crate wired no bin | v1.7.10; 37 espelhos removidos; residuals agents/net*/fs/aios_api |
 | 119 | ADR-42 N5.7 | — | jarbas crate wired no bin | v1.7.11; 29 espelhos removidos; audio truth residual ADR-0045 |
-| 120 | v1.8.0 | — | Marco K²CHJ pós-jornada | ADR-0042 N1–N5 + wire N2.5→N5.7; docs; tag v1.8.0; pista Sound |
+| 120 | v1.8.0 | — | Marco K³CHJ pós-jornada | ADR-0042 N1–N5 + wire N2.5→N5.7; docs; tag v1.8.0; pista Sound |
 | 121 | 108 | — | Self-Evolving Agents CLOSED | self_evolve engine; verify; SIL wired; SelfEvolveAgent; SleepCycle REFLECT |
 | 122 | Sound | — | Sprint Sound CLOSED (parcial honesto) | Mic→Wake gate; STT PCM; UAC parse; neural-lite; VAD/SER; soft-float/VITS aberto |
 | 123 | FS | — | NeuralFS I/O usavel (RAM) | B-tree insert/delete; create/read/write; /mnt/neural; smoke OK |
@@ -69,6 +81,10 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 2. **AVX2 sob WHPX (Sprint 80):** Instruções VEX/AVX2 causam VM exit (~10k+ ciclos). Scalar é 2x+ rápido. `has_avx2()` deve detectar hypervisor via CPUID 0x40000000 e retornar false.
 
 3. **e1000 TDT bug (Sprint 23-24):** `send()` escrevia REG_TDT = idx (== TDH) → hardware via ring vazio. **TDT = (idx+1) % NUM_DESC.** NUM_DESC RX mínimo = 48 para 82540EM.
+
+3b. **e1000 TX aliases QEMU (SESSION_149):** `TDBAL/TDT` em `0x0420/0x0438` são aliases Intel **não wired** no QEMU → write no-op, `TDT` fica 0, ARP nunca sai, RX=0. **Usar `0x3800/0x3818`.**
+
+3c. **DNS name compression (SESSION_150):** ao pular nomes DNS, **não seguir** pointer `0xC0xx` no offset de continuação — só avançar 2 bytes no wire (`skip_dns_name`). Seguir o pointer corrompe o parse do A record.
 
 4. **Ramdisk via bootloader (Sprint 79):** FAT partition autosized ~64MB insuficiente para modelos >100MB. **Usar QEMU loader (`-device loader,addr=0x100000000`) para dev, NVMe/FAT32 para HW real.**
 
@@ -120,7 +136,7 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 | Roadmap completo | `ROADMAP.md` | v1.0 → v2.0 com status de cada sprint |
 | CHANGELOG | `CHANGELOG.md` | Histórico de versões |
 | Código fonte | `crates/neural-kernel/src/` | Kernel bare-metal (135+ arquivos Rust) |
-| Workspace crates | `crates/k_nano/`, `crates/k_ai/`, `crates/cortex/`, `crates/hermes/`, `crates/jarbas/` | Anéis lógicos K²CHJ (v2.0) |
+| Workspace crates | `crates/k_nano/`, `crates/k_ai/`, `crates/cortex/`, `crates/hermes/`, `crates/jarbas/` | Anéis lógicos K³CHJ (v2.0) |
 | Config VM | `tools/` | Scripts de build, QEMU launch, image creation |
 
 ---

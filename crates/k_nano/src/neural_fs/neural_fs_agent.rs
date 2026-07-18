@@ -205,6 +205,32 @@ impl NeuralFsAgent {
         } else {
             crate::slog_nano!("NEURALFS", "info", "smoke_split=FAIL");
         }
+        if crate::neural_fs::tests::smoke_multilevel() {
+            crate::slog_nano!("NEURALFS", "info", "smoke_multilevel=OK");
+        } else {
+            crate::slog_nano!("NEURALFS", "info", "smoke_multilevel=FAIL");
+        }
+        if crate::neural_fs::tests::smoke_level2() {
+            crate::slog_nano!("NEURALFS", "info", "smoke_level2=OK");
+        } else {
+            crate::slog_nano!("NEURALFS", "info", "smoke_level2=FAIL");
+        }
+        if crate::neural_fs::tests::smoke_power_loss_soft() {
+            crate::slog_nano!("NEURALFS", "info", "smoke_power_loss_soft=OK");
+        } else {
+            crate::slog_nano!("NEURALFS", "info", "smoke_power_loss_soft=FAIL");
+        }
+        // USB power-cycle e2e: path existe; aceite final = log HW real
+        crate::slog_nano!(
+            "NRFS-HW",
+            "info",
+            "step=usb_power_cycle status=UNSUPPORTED detail=qemu_ram_only"
+        );
+        crate::slog_nano!(
+            "NRFS-HW",
+            "info",
+            "VERDICT=AWAITING_REAL_HW reason=awaiting_usb_power_cycle"
+        );
     }
 
     fn parent_and_name(path: &str) -> (&str, &str) {

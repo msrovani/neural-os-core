@@ -1,12 +1,40 @@
 //! Memory Hierarchy Index — alocacao inteligente por tier com migracao soft.
 //! MHI Ativo: mhi_tick() executa 1 migracao/tick (metadata + memcpy DRAM quando seguro).
-//! DMA NVMe/VRAM real fica deferido (ADR-0040 / IDEA #420/#423).
+//! DMA NVMe/VRAM peer = AWAITING_HW (ADR-0040 / IDEA #420/#423) — logs `[MHI-DMA]`.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use x86_64::PhysAddr;
+
+/// Hook opcional: k_hal/vram registra apos `init_vram_tier` (IDEA #67).
+static mut VRAM_ALLOC_HOOK: Option<fn(usize) -> Option<u64>> = None;
+static MHI_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
+
+/// Registra alocador VRAM (BAR buddy). Sem hook = Vram tier retorna None.
+pub fn register_vram_allocator(hook: fn(usize) -> Option<u64>) {
+    unsafe { VRAM_ALLOC_HOOK = Some(hook) };
+    crate::slog_bin!("MHI", "info", "VRAM alloc hook registered (IDEA #67)");
+}
+
+fn log_mhi_dma_awaiting(reason: &str) {
+    if MHI_DMA_LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    crate::slog_bin!(
+        "MHI-DMA",
+        "info",
+        "step=peer_dma status=UNSUPPORTED detail={}",
+        reason
+    );
+    crate::slog_bin!(
+        "MHI-DMA",
+        "info",
+        "VERDICT=AWAITING_REAL_HW reason={}",
+        reason
+    );
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AllocTier {
@@ -196,14 +224,29 @@ impl AllocTier {
 }
 
 pub fn alloc_by_tier(tier: AllocTier, size: usize) -> Option<x86_64::PhysAddr> {
-    if tier == AllocTier::Dram {
-        let frames = (size + 4095) / 4096;
-        let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
-        let alloc = guard.as_mut()?;
-        let frame = alloc.allocate_contiguous(frames)?;
-        return Some(frame.start_address());
+    match tier {
+        AllocTier::Dram => {
+            let frames = (size + 4095) / 4096;
+            let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
+            let alloc = guard.as_mut()?;
+            let frame = alloc.allocate_contiguous(frames)?;
+            Some(frame.start_address())
+        }
+        AllocTier::Vram => {
+            let hook = unsafe { VRAM_ALLOC_HOOK };
+            if let Some(f) = hook {
+                if let Some(pa) = f(size) {
+                    return Some(PhysAddr::new(pa));
+                }
+            }
+            log_mhi_dma_awaiting("vram_tier_unavailable");
+            None
+        }
+        AllocTier::Nvme | AllocTier::Hdd | AllocTier::UsbMsc => {
+            log_mhi_dma_awaiting("block_tier_alloc_needs_dma");
+            None
+        }
     }
-    None
 }
 
 pub fn megatrain_tick() {
@@ -265,7 +308,11 @@ fn execute_soft_migrate(req: MigrationRequest) {
     }
 
     if looks_like_ram_page && req.to != AllocTier::Dram {
-        // Demote Dram→cold: metadata only (no disk DMA yet)
+        // Demote Dram→cold: metadata only (no disk/VRAM peer DMA yet)
+        let needs_peer = matches!(req.to, AllocTier::Vram | AllocTier::Nvme);
+        if needs_peer {
+            log_mhi_dma_awaiting("dram_to_peer_dma");
+        }
         let ok = MHI_REGISTRY
             .lock()
             .set_tier(PhysAddr::new(req.phys_addr), req.to);
@@ -312,7 +359,12 @@ fn execute_soft_migrate(req: MigrationRequest) {
         return;
     }
 
-    // Hdd/Nvme/Usb/Vram <-> *: metadata-only (block/GPU DMA not wired)
+    // Hdd/Nvme/Usb/Vram <-> *: metadata-only (block/GPU peer DMA not wired)
+    if matches!(req.from, AllocTier::Vram | AllocTier::Nvme)
+        || matches!(req.to, AllocTier::Vram | AllocTier::Nvme)
+    {
+        log_mhi_dma_awaiting("cross_tier_peer_dma");
+    }
     let ok = MHI_REGISTRY
         .lock()
         .set_tier(PhysAddr::new(req.phys_addr), req.to);

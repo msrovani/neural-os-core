@@ -10,28 +10,9 @@ use alloc::vec;
 
 // ─── HW Detection ───────────────────────────────────────────────────────
 
-#[cfg(target_arch = "x86_64")]
 fn avx2_available() -> bool {
-    unsafe {
-        let leaf1 = core::arch::x86_64::__cpuid(1);
-        let has_hypervisor = (leaf1.ecx & (1 << 31)) != 0;
-        let leaf7 = core::arch::x86_64::__cpuid(7);
-        let has_avx2 = (leaf7.ebx & (1 << 5)) != 0;
-        if !has_avx2 { return false; }
-        if has_hypervisor {
-            let hv = core::arch::x86_64::__cpuid(0x40000000);
-            let vendor: [u8; 12] = [
-                (hv.ebx >> 0) as u8, (hv.ebx >> 8) as u8, (hv.ebx >> 16) as u8, (hv.ebx >> 24) as u8,
-                (hv.ecx >> 0) as u8, (hv.ecx >> 8) as u8, (hv.ecx >> 16) as u8, (hv.ecx >> 24) as u8,
-                (hv.edx >> 0) as u8, (hv.edx >> 8) as u8, (hv.edx >> 16) as u8, (hv.edx >> 24) as u8,
-            ];
-            if &vendor[..9] == b"TCGTCGTCG" { return false; }
-        }
-        true
-    }
+    k_nano::platform_probe::allow_avx2()
 }
-#[cfg(not(target_arch = "x86_64"))]
-fn avx2_available() -> bool { false }
 
 // ─── Main Dispatch ──────────────────────────────────────────────────────
 

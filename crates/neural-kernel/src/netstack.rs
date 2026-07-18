@@ -142,7 +142,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     None
 }
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
-use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::phy::{Checksum, ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 
 static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
 static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -258,16 +258,22 @@ impl Device for NetPhy {
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut caps = DeviceCapabilities::default();
-        caps.max_transmission_unit = 1500;
+        // Ethernet MTU = eth header (14) + IP MTU — ver docs smoltcp DeviceCapabilities.
+        caps.max_transmission_unit = 1514;
         caps.medium = Medium::Ethernet;
+        // QEMU/slirp às vezes entrega UDP/TCP com checksum 0 ou offload; verificar RX
+        // descarta pacotes já contados em NET_RX_COUNT → DNS/HTTP “timeout fantasma”.
+        let mut csum = ChecksumCapabilities::ignored();
+        csum.ipv4 = Checksum::Tx;
+        csum.udp = Checksum::Tx;
+        csum.tcp = Checksum::Tx;
+        csum.icmpv4 = Checksum::Tx;
+        caps.checksum = csum;
         caps
     }
 
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
-        if let Some(ref d) = data {
-            unsafe { k_nano::slog_bin!("NET", "RX", "{} bytes", d.len()); }
-        }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
 
@@ -411,7 +417,9 @@ impl NetStack {
         let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
         let tcp = self.sockets.get_mut::<TcpSocket>(handle);
         let context = self.iface.context();
-        let _ = tcp.connect(context, remote, 54321);
+        // Porta efêmera ≠ DNS 54321 (evita colisão se socket UDP ainda vivo).
+        let local_port: u16 = 49152u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
+        let _ = tcp.connect(context, remote, local_port);
 
         let request = alloc::format!(
             "GET {} HTTP/1.1\r\nHost: {}.{}.{}.{}\r\nConnection: close\r\n\r\n",
@@ -433,7 +441,8 @@ impl NetStack {
         iface.poll(Instant::from_millis(now as i64), phy, sockets);
 
         conn.timeout = conn.timeout.wrapping_add(1);
-        if conn.timeout > 200 {
+        // ~4k polls × wall_pause no bootstrap — ARP+SYN precisa >200 sob slirp/WHPX.
+        if conn.timeout > 8_000 {
             conn.state = HttpState::Failed;
             return;
         }
@@ -506,95 +515,251 @@ impl NetStack {
         sockets.remove(conn.handle);
     }
 
+    /// DNS via Ethernet+IP+UDP raw no NIC (bypass demux smoltcp).
+    /// Necessário: smoltcp perde o 1º UDP no ARP e, mesmo com resend, o demux
+    /// sob QEMU/slirp não entrega a resposta ao socket (evidência SESSION_149).
     pub fn dns_resolve(&mut self, hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]> {
-        let txid: u16 = 0x1234;
-        let qname = Self::encode_dns_name(hostname);
         let tx0 = net_tx_count();
         let rx0 = net_rx_count();
-
-        let mut query = Vec::with_capacity(12 + qname.len() + 4);
-        query.extend_from_slice(&txid.to_be_bytes());
-        query.extend_from_slice(&[0x01, 0x00]);
-        query.extend_from_slice(&[0x00, 0x01]);
-        query.extend_from_slice(&[0x00, 0x00]);
-        query.extend_from_slice(&[0x00, 0x00]);
-        query.extend_from_slice(&[0x00, 0x00]);
-        query.extend_from_slice(&qname);
-        query.extend_from_slice(&[0x00, 0x01]);
-        query.extend_from_slice(&[0x00, 0x01]);
-
-        let dns_server_addr = (IpAddress::v4(dns_server[0], dns_server[1], dns_server[2], dns_server[3]), 53u16);
-
-        let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
-        let payload = vec![0u8; 512];
-        let buf_rx = udp_socket::PacketBuffer::new(meta, payload);
-        let meta2 = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 1];
-        let payload2 = vec![0u8; 512];
-        let buf_tx = udp_socket::PacketBuffer::new(meta2, payload2);
-        let socket = udp_socket::Socket::new(buf_rx, buf_tx);
-        let handle = self.sockets.add(socket);
-
-        {
-            let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
-            let _ = udp.bind(54321);
-            if udp.send_slice(&query, dns_server_addr).is_err() {
-                k_nano::slog_bin!("DNS", "info", "send_slice falhou");
-            }
+        let (sip, smac) = {
+            let cfg = crate::net::NET_CONFIG.lock();
+            let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+            (sip, cfg.mac)
+        };
+        if smac == [0; 6] {
+            k_nano::slog_bin!("DNS", "info", "raw SKIP: MAC zero");
+            return None;
         }
 
-        // ~800 × 500µs ≈ 400ms wall — tempo para ARP gw 10.0.2.2 + DNS 10.0.2.3 no slirp.
-        // Instant avança 5ms/iter (lógico); wall_pause dá RX real no e1000.
-        for i in 0..800u64 {
-            self.poll((i * 5) as i64);
-            wall_pause_us(500);
+        let dmac = match Self::arp_resolve_raw(sip, dns_server, smac) {
+            Some(m) => m,
+            None => {
+                k_nano::slog_bin!("DNS", "info", "raw ARP timeout for {}.{}.{}.{}",
+                    dns_server[0], dns_server[1], dns_server[2], dns_server[3]);
+                return None;
+            }
+        };
 
-            let payload = {
-                let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
-                udp.recv().ok().map(|(data, _)| Vec::from(data))
-            };
+        let txid: u16 = 0x1234;
+        let qname = Self::encode_dns_name(hostname);
+        let mut dns = Vec::with_capacity(12 + qname.len() + 4);
+        dns.extend_from_slice(&txid.to_be_bytes());
+        dns.extend_from_slice(&[0x01, 0x00]);
+        dns.extend_from_slice(&[0x00, 0x01]);
+        dns.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        dns.extend_from_slice(&qname);
+        dns.extend_from_slice(&[0x00, 0x01, 0x00, 0x01]);
 
-            if let Some(ref data) = payload {
-                if data.len() < 12 { break; }
-                let resp_txid = u16::from_be_bytes([data[0], data[1]]);
-                if resp_txid != txid { continue; }
-                let flags = u16::from_be_bytes([data[2], data[3]]);
-                if flags & 0x8000 == 0 { continue; }
-                let ancount = u16::from_be_bytes([data[6], data[7]]);
-                if ancount == 0 { break; }
+        let src_port: u16 = 54321;
+        let udp_len = (8 + dns.len()) as u16;
+        let mut udp = Vec::with_capacity(udp_len as usize);
+        udp.extend_from_slice(&src_port.to_be_bytes());
+        udp.extend_from_slice(&53u16.to_be_bytes());
+        udp.extend_from_slice(&udp_len.to_be_bytes());
+        udp.extend_from_slice(&[0x00, 0x00]); // UDP checksum opcional = 0
+        udp.extend_from_slice(&dns);
 
-                let (mut pos, _) = Self::parse_dns_name(data, 12);
-                pos += 4;
+        let total_len = (20 + udp.len()) as u16;
+        let mut ip = [0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&total_len.to_be_bytes());
+        ip[8] = 64;
+        ip[9] = 17;
+        ip[12..16].copy_from_slice(&sip);
+        ip[16..20].copy_from_slice(&dns_server);
+        let cs = ip_checksum(&ip);
+        ip[10..12].copy_from_slice(&cs.to_be_bytes());
 
-                for _ in 0..ancount {
-                    let (new_pos, name_end) = Self::parse_dns_name(data, pos);
-                    pos = new_pos;
-                    let rtype = u16::from_be_bytes([data[pos], data[pos + 1]]);
-                    let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
-                    let _ttl = u32::from_be_bytes([data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]]);
-                    let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
-                    pos += 10;
+        let mut frame = Vec::with_capacity(14 + 20 + udp.len());
+        frame.extend_from_slice(&dmac);
+        frame.extend_from_slice(&smac);
+        frame.extend_from_slice(&[0x08, 0x00]);
+        frame.extend_from_slice(&ip);
+        frame.extend_from_slice(&udp);
 
-                    if rtype == 1 && rclass == 1 && rdlen == 4 {
-                        let ip = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
-                        self.sockets.remove(handle);
-                        k_nano::slog_bin!("DNS", "info", "OK {}.{}.{}.{} (dtx={} drx={})",
-                            ip[0], ip[1], ip[2], ip[3],
-                            net_tx_count().saturating_sub(tx0),
-                            net_rx_count().saturating_sub(rx0));
-                        return Some(ip);
-                    }
-                    pos = name_end.max(pos + rdlen);
+        for attempt in 0..8u32 {
+            unsafe { nic_send(frame.clone()) };
+            NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            for _ in 0..600u32 {
+                wall_pause_us(500);
+                let pkt = unsafe { nic_recv() };
+                let Some(pkt) = pkt else { continue };
+                NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+                if let Some(ip) = Self::parse_dns_udp_reply(&pkt, txid, src_port) {
+                    let _ = self.prime_neighbor_for_http();
+                    k_nano::slog_bin!(
+                        "DNS",
+                        "info",
+                        "OK raw {}.{}.{}.{} (dtx={} drx={} attempt={})",
+                        ip[0], ip[1], ip[2], ip[3],
+                        net_tx_count().saturating_sub(tx0),
+                        net_rx_count().saturating_sub(rx0),
+                        attempt + 1
+                    );
+                    return Some(ip);
                 }
-                break;
             }
         }
-        self.sockets.remove(handle);
-        k_nano::slog_bin!("DNS", "info", "timeout dtx={} drx={} tx={} rx={}",
+        k_nano::slog_bin!(
+            "DNS",
+            "info",
+            "timeout raw dtx={} drx={} tx={} rx={}",
             net_tx_count().saturating_sub(tx0),
             net_rx_count().saturating_sub(rx0),
             net_tx_count(),
-            net_rx_count());
+            net_rx_count()
+        );
         None
+    }
+
+    /// ARP who-has via NIC raw; devolve MAC do alvo.
+    fn arp_resolve_raw(sip: [u8; 4], tip: [u8; 4], smac: [u8; 6]) -> Option<[u8; 6]> {
+        let mut req = [0u8; 42];
+        req[0..6].copy_from_slice(&[0xff; 6]);
+        req[6..12].copy_from_slice(&smac);
+        req[12] = 0x08;
+        req[13] = 0x06;
+        req[14] = 0x00;
+        req[15] = 0x01;
+        req[16] = 0x08;
+        req[17] = 0x00;
+        req[18] = 6;
+        req[19] = 4;
+        req[20] = 0x00;
+        req[21] = 0x01;
+        req[22..28].copy_from_slice(&smac);
+        req[28..32].copy_from_slice(&sip);
+        req[38..42].copy_from_slice(&tip);
+
+        for _ in 0..5u32 {
+            unsafe { nic_send(req.to_vec()) };
+            NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            for _ in 0..400u32 {
+                wall_pause_us(500);
+                let Some(pkt) = (unsafe { nic_recv() }) else { continue };
+                NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+                if pkt.len() < 42 {
+                    continue;
+                }
+                if pkt[12] != 0x08 || pkt[13] != 0x06 {
+                    continue;
+                }
+                let oper = u16::from_be_bytes([pkt[20], pkt[21]]);
+                if oper != 2 {
+                    continue;
+                }
+                let spa = [pkt[28], pkt[29], pkt[30], pkt[31]];
+                if spa != tip {
+                    continue;
+                }
+                let mut mac = [0u8; 6];
+                mac.copy_from_slice(&pkt[22..28]);
+                return Some(mac);
+            }
+        }
+        None
+    }
+
+    fn parse_dns_udp_reply(pkt: &[u8], txid: u16, local_port: u16) -> Option<[u8; 4]> {
+        if pkt.len() < 14 + 20 + 8 + 12 {
+            return None;
+        }
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            return None;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 + 12 {
+            return None;
+        }
+        if pkt[14 + 9] != 17 {
+            return None;
+        }
+        let udp = 14 + ihl;
+        let sport = u16::from_be_bytes([pkt[udp], pkt[udp + 1]]);
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if sport != 53 || dport != local_port {
+            return None;
+        }
+        let dns_off = udp + 8;
+        let data = &pkt[dns_off..];
+        if data.len() < 12 {
+            return None;
+        }
+        let resp_txid = u16::from_be_bytes([data[0], data[1]]);
+        if resp_txid != txid {
+            return None;
+        }
+        let flags = u16::from_be_bytes([data[2], data[3]]);
+        if flags & 0x8000 == 0 {
+            return None;
+        }
+        let ancount = u16::from_be_bytes([data[6], data[7]]);
+        if ancount == 0 {
+            return None;
+        }
+        // Pula question name + QTYPE/QCLASS (skip no wire; pointer 0xC0xx = 2 bytes).
+        let mut pos = Self::skip_dns_name(data, 12);
+        pos += 4;
+        for _ in 0..ancount {
+            if pos + 10 > data.len() {
+                break;
+            }
+            pos = Self::skip_dns_name(data, pos);
+            if pos + 10 > data.len() {
+                break;
+            }
+            let rtype = u16::from_be_bytes([data[pos], data[pos + 1]]);
+            let rclass = u16::from_be_bytes([data[pos + 2], data[pos + 3]]);
+            let rdlen = u16::from_be_bytes([data[pos + 8], data[pos + 9]]) as usize;
+            pos += 10;
+            if rtype == 1 && rclass == 1 && rdlen == 4 && pos + 4 <= data.len() {
+                return Some([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+            }
+            // CNAME/AAAA/etc — avança RDATA
+            pos = pos.saturating_add(rdlen);
+        }
+        None
+    }
+
+    /// Priming público do gw QEMU (10.0.2.2) antes de TCP/HTTP.
+    pub fn prime_neighbor_for_http(&mut self) -> bool {
+        self.prime_neighbor_smoltcp([10, 0, 2, 2])
+    }
+
+    /// Dispara UDP dummy com resends para popular NeighborCache do smoltcp (TCP/HTTP).
+    fn prime_neighbor_smoltcp(&mut self, target: [u8; 4]) -> bool {
+        let addr = (IpAddress::v4(target[0], target[1], target[2], target[3]), 9u16);
+        let meta = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 2];
+        let payload = vec![0u8; 64];
+        let buf_rx = udp_socket::PacketBuffer::new(meta, payload);
+        let meta2 = vec![smoltcp::storage::PacketMetadata::<smoltcp::socket::udp::UdpMetadata>::EMPTY; 2];
+        let payload2 = vec![0u8; 64];
+        let buf_tx = udp_socket::PacketBuffer::new(meta2, payload2);
+        let socket = udp_socket::Socket::new(buf_rx, buf_tx);
+        let handle = self.sockets.add(socket);
+        {
+            let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
+            let _ = udp.bind(54322);
+            let _ = udp.send_slice(&[0u8], addr);
+        }
+        let tx_before = net_tx_count();
+        for i in 0..400u64 {
+            self.poll((i * 5) as i64);
+            wall_pause_us(500);
+            if i > 0 && i % 40 == 0 {
+                let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
+                if udp.can_send() {
+                    let _ = udp.send_slice(&[0u8], addr);
+                }
+            }
+            // ARP reply + possível ICMP → phy RX; se TX avançou além do ARP, OK
+            if net_tx_count().saturating_sub(tx_before) >= 2 {
+                self.sockets.remove(handle);
+                return true;
+            }
+        }
+        self.sockets.remove(handle);
+        net_tx_count().saturating_sub(tx_before) >= 1
     }
 
     fn encode_dns_name(name: &str) -> Vec<u8> {
@@ -607,23 +772,20 @@ impl NetStack {
         buf
     }
 
-    fn parse_dns_name(pkt: &[u8], offset: usize) -> (usize, usize) {
+    /// Avança offset no wire após um DNS name (labels ou pointer 0xC0xx).
+    /// Não segue o pointer — só precisa saber quantos bytes o nome ocupa na mensagem.
+    fn skip_dns_name(pkt: &[u8], offset: usize) -> usize {
         let mut pos = offset;
-        let mut jumped = false;
-        let mut end = 0;
         while pos < pkt.len() {
             let b = pkt[pos];
             if b & 0xC0 == 0xC0 {
-                if !jumped { end = pos + 2; }
-                pos = ((b as usize & 0x3F) << 8) | (pkt[pos + 1] as usize);
-                jumped = true;
+                return pos.saturating_add(2);
             } else if b == 0 {
-                pos += 1;
-                return (pos, if jumped { end } else { pos });
+                return pos.saturating_add(1);
             } else {
-                pos += 1 + b as usize;
+                pos = pos.saturating_add(1 + b as usize);
             }
         }
-        (pos, pos)
+        pos
     }
 }

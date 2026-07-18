@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-16 — Sprint 108 ✅ (self_evolve); governança IDEA↔ADR por tema.
+**Última atualização:** 2026-07-18 — SESSION_148 plano ondas 0–7 (AirLLM-DMA + NET/WIFI-HW; soft-float R).
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -13,9 +13,12 @@ Nada é descartado sem registro. Ideias podem ser:
 - ✅ **Implementada** — já está no código
 - 🟡 **Agendada** — sprint/bloco definido
 - ⏳ **Pós-MVP** — adiada com dependências documentadas (ver Seção 3)
+- ▶️ **AWAITING_HW** — código+log `VERDICT=AWAITING_REAL_HW`; falta evidência HW real
 - 💰 **Sponsor** — requer hardware/parceria/financiamento
 - ❌ **Descartada** — com justificativa explícita
 - 🔄 **Fundida** — absorvida por item maior
+
+**Tags de dependência:** `depends_on: lan` (Ethernet RX estável / Onda 7); `depends_on: wifi` (radio / Onda 7). PreFlight: `python tools/preflight_wave.py`.
 
 **Por que esta premissa existe:** Estamos inovando em caminhos pouco ou não trilhados (bare-metal neural OS, Memory Hierarchy Index, intent routing em Ring 0). Muitas ideias não são implementáveis hoje — seja por limitação tecnológica, falta de hardware, ou prioridade. Mas amanhã um dev pode saber como fazer, a tecnologia pode melhorar, ou podem surgir patrocinadores. Se a ideia não estiver registrada, ela morre.
 
@@ -47,12 +50,30 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | #448 | ADR-0047-HMI | ✅ mapeada | H1+H4 UI_SPEC |
 | #449 | ADR-0046 AirLLM | ✅ mapeada | GGUFStreamingModel SESSION_127; hot-swap Net SESSION_128 |
 | auto-skill / SIL / SkillObserver | ADR-0036 (+ skill stack) | ✅ Sprint 108 | `hermes/self_evolve.rs` + SelfEvolveAgent |
+| **#277** Agency / HwRegistry | ADR-0051 + 0052; 277c→0041 HalOffer | ✅ mapeada | SESSION_134; 277c 🟡 |
+| **#278** GGUF | ADR-0046 | ✅ mapeada | 278a MVP ✅ SESSION_127; residuals Onda 6 |
+| **#279** SmileyOS | ADR-0047-HMI (+ 0036) | ✅ mapeada | 279f ✅; 279a–e ⏳ defer |
+| **#280** Ecosystem Batch 3 | ADR-0026 | ✅ mapeada | ports ✅; 280l 🟡 |
+| **#281–282** VFS/MHI/Storage | ADR-0040 | ✅ mapeada | base ✅; 282e–g ✅ SESSION_144; 282h ⏳ |
+| **#283** Desktop Cube | ADR-0047-HMI | ✅ mapeada | 🟡/💰 VirtIO-GPU 3D |
+| **#416–423** FS follow-up | ADR-0040 (+ NeuralFS.md) | ✅ triagem Onda 0 | ver tabela residuals abaixo |
 
-#### Gaps amostrados para triagem futura
+#### Gaps — triagem Onda 0 ✅ (2026-07-18)
 
-- **#277–283:** blocos antigos têm sprint/destino, mas nem sempre uma coluna ADR explícita; agrupar por temas Agency, GGUF, VFS/storage e desktop antes de decidir se ADR existente cobre.
-- **#416–423:** ADR-0040 MVP `completa` (SESSION_124). Residuais triados SESSION_125 → todos `por_fazer` (write/DMA/#421/#423/cloud/NeuralFS disco/#419 UI). NeuralFS.md lifecycle `por_fazer`.
-- Itens ✅ antigos sem ADR explícita não serão convertidos em centenas de ADRs retroativas. A triagem ocorre por tema e prioridade, preservando a evidência histórica.
+Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
+
+| Residual | IDEA | Destino | Tag |
+|----------|------|---------|-----|
+| exFAT/NTFS/EXT write | #417 | ✅ exFAT write opt-in SESSION_144; NTFS/EXT ⏳ | — |
+| cloud sync | #418 | PARTIAL pós-LAN | lan ✅ SESSION_150; sync runtime aberto |
+| Storage UI | #419 | ✅ CLI `storage_report`; UI App ⏳ | — |
+| MHI DMA | #420 | ▶️ AWAITING_HW SESSION_146 `[MHI-DMA]` | soft-MVP ✅ |
+| SysInstaller | #421 | defer | — |
+| NeuralFS disco | #422 | mount/GPT ✅; evidência Onda 1 | USB power-loss ▶️ AWAITING_HW |
+| GPU Direct | #423 | ▶️ AWAITING_HW SESSION_146 `[GDS-HW]` | stub probe; sem P2P |
+| LAN/RX/DHCP/VirtIO-net | #73, #117–123, #251–252 | **Onda 7** L3.5 ✅ SESSION_149; L4/L5 residual | base LAN |
+| WiFi | WifiAgent / iwlwifi | **Onda 7** | `depends_on: wifi` |
+| TLS / model-fetch Net / Update HTTP | #124, AirLLM L3.5, #308 | Onda 7 fila | **`depends_on: lan`** |
 
 ---
 
@@ -61,13 +82,15 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | Marca | Significado | Exemplo |
 |---|---|---|
 | ✅ Block N | Implementado no bloco N da chain MVP | ✅ Block 2 |
-| 🟡 Sprint N | Agendado para sprint específica | 🟡 Sprint 19 |
+| 🟡 Onda N / ADR | Agendado com destino explícito (não Sprint fantasma) | 🟡 Onda 7 |
 | 🔴 Bloqueado | Bloqueado por dependência externa (ex: B-01) | 🔴 B-01 |
-| ⏳ Pós-MVP | Adiado, ver Seção 3 para dependências | ⏳ Pós-MVP |
+| ⏳ Pós-MVP / defer gate | Adiado com motivo; fora do gate v2.0.0 | ⏳ defer |
+| ▶️ AWAITING_HW | Código+log AWAITING; falta evidência HW real | ▶️ AWAITING_HW |
 | 💰 Sponsor | Requer hardware/parceria | 💰 Sponsor |
 | ❌ Descartado | Não será feito, com motivo | ❌ Descartado |
 | 🔄 Fundido | Absorvido por item maior | 🔄 Fundido |
 | 🟢 v2.0 Sprint N | Implementado no Sprint N da v2.0 | 🟢 v2.0 Sprint 106-5 |
+| tag `depends_on: lan` | Bloqueado até Onda 7 LAN RX>0 | #418 cloud |
 
 ---
 
@@ -78,22 +101,22 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 |---|---|---|---|---|
 | 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | ✅ SESSION_134 | v1.8.5 | LLM pergunta "o que tem de HW" → ativa agentes |
 | 277b | Agency: 214 specs → AGENT.md + seed (ADR-0051) | ✅ SESSION_134 | v1.8.5 | Catálogo data-driven; nativos mantêm código no bin |
-| 277c | LLM-aware hardware activation por intent | 🟡 Sprint 92+ / PnP | v0.92+ | "quero video chamada" → mic+camera+display+net |
+| 277c | LLM-aware hardware activation por intent | 🟡 ADR-0041 HalOffer / PnP | pós-PnP | SESSION_143: VIABLE; intent net → `depends_on: lan` |
 
 ### 1.2. GGUF Format Support (IDEA #278)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 278a | Loader GGUF mínimo para kernels no_std (~500 LOC) | 🟡 Sprint 92+ | v0.92+ | Modelos maiores (9B+ via GGUF Q4) |
-| 278b | .bitnet v3: header extensível com metadata | 🟡 Sprint 92+ | v0.92+ | Alternativa mais leve que GGUF |
+| 278a | Loader GGUF mínimo para kernels no_std (~500 LOC) | ✅ MVP; ▶️ AIRLLM-DMA SESSION_148 | ADR-0046 | soft prefetch; DMA/stream/K-quant AWAITING |
+| 278b | .bitnet v3: header extensível com metadata | ⏳ defer gate | cortex / ADR-0012 | Alternativa leve; não bloqueia gate |
 
 ### 1.3. SmileyOS Patterns (IDEA #279)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 279a | Shell com 40+ comandos (ls, cat, ps, uptime, theme) | 🟡 Sprint 91 | v0.91+ | Port da UX do SmileyOS (~90K LOC Rust) |
-| 279b | Sistema de temas (5+ cores, hot-swap) | 🟡 Sprint 91 | v0.91+ | theme list + theme <name> |
-| 279c | Filesystem proprio com permissoes | 🟡 Sprint 91 | v0.91+ | Substituir FAT12 mínimo |
-| 279d | Compositor multi-window (dock, menus, drag) | 🟡 Sprint 92+ | v0.92+ | DisplayAgent atual é single-tela |
-| 279e | v86 browser demo (WebAssembly x86 emulator) | 🟡 Sprint 92+ | v0.92+ | Bootar no navegador |
+| 279a | Shell com 40+ comandos (ls, cat, ps, uptime, theme) | ⏳ defer gate | ADR-0047-HMI | SESSION_143: fora do gate; shell mínima já existe |
+| 279b | Sistema de temas (5+ cores, hot-swap) | ⏳ defer gate | ADR-0047-HMI | Escopo UX largo; ADR-0052 anti-massa |
+| 279c | Filesystem proprio com permissoes | 🔄 → #422 NeuralFS | ADR-0040 | Fundido em NeuralFS |
+| 279d | Compositor multi-window (dock, menus, drag) | 🟡 PARTIAL ADR-0047-HMI | Onda 4 cauda | jarbas compositor parcial N5 |
+| 279e | v86 browser demo (WebAssembly x86 emulator) | ⏳ defer gate | — | Fora do gate v2.0.0 |
 | 279f | App SDK via trait + registry (JA TEMOS!) | ✅ Confirmado | — | Nosso Agent trait + AgentRegistry validado |
 
 ### 1.4. Ecosystem Batch 3 — 12 Repos Portados (IDEA #280)
@@ -110,7 +133,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 280i | VRSEN/agency-swarm: SpecialistAgent (214 data-driven) | ✅ SESSION_134 | v1.8.5 | AGENT.md + seed; não mais 147 hardcoded |
 | 280j | browser-use: HwRegistry device tree (ja tinhamos!) | ✅ Confirmado | v0.59.1 | HW context para LLM |
 | 280k | micro/go-micro: endpoints discovery (ja tinhamos!) | ✅ Confirmado | v0.55.0 | AgentManifest extensivel |
-| 280l | pydantic-ai: SkillManifest derive macro (conceitual) | 🟡 Sprint 91 | v0.91+ | Proc-macro para manifests |
+| 280l | pydantic-ai: SkillManifest derive macro (conceitual) | ⏳ defer gate | ADR-0052 | Manifests manuais bastam; nice-to-have |
 
 ### 1.6. VFS + MHI Bridge (IDEA #281)
 | # | Item | Destino | Target | Motivação |
@@ -127,66 +150,69 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 282b | AtaAgent: /mnt/hdd/ + block R/W | ✅ v0.62.1 | v0.62.1 | ATA via DriverAgent |
 | 282c | DevFsAgent: /dev/pci/ + NIC + USB + mem | ✅ v0.62.1 | v0.62.1 | Hardware como arquivos |
 | 282d | ProcFsAgent: /proc/agent/mem/uptime/cpu | ✅ v0.62.1 | v0.62.1 | Sistema como arquivos |
-| 282e | InferenceFsAgent: /inference/ com LLM | 🟡 Sprint 92+ | v0.92+ | LLM gera arquivos |
-| 282f | HermesFsAgent: /chat/send + /chat/history | 🟡 Sprint 92+ | v0.92+ | Chat como FS |
-| 282g | RamFsAgent: /mnt/ram/ cache DRAM | 🟡 Sprint 92+ | v0.92+ | Cache tiers inferiores |
-| 282h | Auto tier migration via MhiScheduler | 🟡 Sprint 92+ | v0.92+ | Promove/demove por acesso |
+| 282e | InferenceFsAgent: /inference/ com LLM | ✅ SESSION_144 (já wired `fs/`) | ADR-0040 | register_fs_agent |
+| 282f | HermesFsAgent: /chat/send + /chat/history | ✅ SESSION_144 (já wired `/chat/`) | ADR-0040 | hermes_fs_agent |
+| 282g | RamFsAgent: /mnt/ram/ cache DRAM | ✅ SESSION_144 (já wired) | ADR-0040 | ram_fs_agent |
+| 282h | Auto tier migration via MhiScheduler | ⏳ defer (sem auto-migrate MHI) | ADR-0040 | SESSION_144 |
 
 ### 1.8. Desktop Cube (IDEA #283)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 283a | Workspace Cube 3D com rotação via GPU (VirtIO-GPU) | 🟡 Sprint 91 | v0.91+ | 3 workspaces (main/dev/chat) como faces de cubo giratório |
-| 283b | Transição crossfade entre workspaces (fallback sem GPU) | 🟡 Sprint 91 | v0.91+ | Efeito moderno sem 3D, ~100 LOC |
+| 283a | Workspace Cube 3D com rotação via GPU (VirtIO-GPU) | ⏳ defer gate / 💰 | ADR-0047-HMI | 3D baixo vs GPU compute golden |
+| 283b | Transição crossfade entre workspaces (fallback sem GPU) | 🟡 Onda 4/HMI cauda | ADR-0047-HMI | ~100 LOC se compositor estável |
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 1 | xHCI controller mínimo (<500 LOC, BAR0, port status) | ⏳ Pós-MVP | Sprint 23+ | MVP usa PS/2 legacy. xHCI requer PCI (Block 1) + driver USB (~500 LOC). |
-| 2 | `identify_device()` → VID/PID/class | ⏳ Pós-MVP | Sprint 23+ | Bloqueado pelo xHCI driver. |
+| 1 | xHCI controller mínimo (<500 LOC, BAR0, port status) | ✅ k_nano xHCI | USB-MSC/UAC | SESSION_143 STALE→feito; residual trust/UAC |
+| 2 | `identify_device()` → VID/PID/class | ✅ PCI/USB probe | — | SESSION_143; path parcial via scan |
 | 3 | Neural Cortex classify (MLP 7→5: allow/deny/learn/no_intent/suspect) | ✅ Sprint 25 | Sprint 25 | Implementado como `cortex::Cortex::think()` com 12 intenções. Substitui INTENT_MLP antigo (16→8→3). |
 | 4 | Trust Cache (TrustEntry, TrustTable, trust-once-use-always) | 🔄 Fundido no Block 5 | Sprint 22 | TrustCache do MVP (Block 5) é versão simplificada. |
 | 5 | Trust Cache: regra de 5 situações (auto-ON, conhecido, novo, rejeitado, desconhecido) | 🔄 Fundido no Block 5 | Sprint 22 | Incorporado à TrustTable do MVP. |
-| 6 | Trust Cache: persistência no SFS (`/system/trust/usb.tbl`) | ⏳ Pós-MVP | Sprint 24+ | Requer SFS (Sprint 24). MVP sem persistência. |
+| 6 | Trust Cache: persistência no SFS (`/system/trust/usb.tbl`) | ✅ SESSION_145 MVP | — | `usb_trust.rs` + NeuralFS `system/trust/usb.tbl` |
 | 7 | Trust Cache: revogação ("não confio mais") | 🔄 Fundido no Block 5 | Sprint 22 | `trust deny <skill>` no MVP. |
-| 8 | WASM skill dispatch para protocolos USB | ⏳ Pós-MVP | Sprint 25+ | Requer WASM embedder (Sprint 25). |
-| 9 | Nível 1 — HW Detection (xHCI mínimo, sem IA) | ⏳ Pós-MVP | Sprint 23+ | Bloqueado pelo xHCI driver. |
-| 10 | Nível 2 — Device Classification (MLP 7→5) | ⏳ Pós-MVP | Sprint 23+ | MLP arquitetura (Block 4) é primeiro passo. |
-| 11 | Nível 3 — Dynamic Interface Creation (WASM) | ⏳ Pós-MVP | Sprint 25+ | Requer WASM embedder. |
-| 12 | USB flow: dispositivo desconhecido → porta desabilitada | ⏳ Pós-MVP | Sprint 23+ | Mesma dependência do xHCI. |
-| 13 | USB flow: trust-once → segunda conexão auto-ON | ⏳ Pós-MVP | Sprint 23+ | TrustCache existe (Block 5), falta xHCI. |
-| 14 | USB flow: usuário precisa inferir intenção (nada automático) | ⏳ Pós-MVP | Sprint 23+ | Princípio arquitetural. Depende de xHCI. |
-| 15 | "Zero autorun, zero superfície de ataque USB" | ⏳ Pós-MVP | Sprint 23+ | Princípio adotado como diretriz. |
+| 8 | WASM skill dispatch para protocolos USB | ⏳ defer gate | pesquisa | WASM SFI existe; USB-via-WASM = pesquisa |
+| 9 | Nível 1 — HW Detection (xHCI mínimo, sem IA) | ✅ xHCI | — | SESSION_143 STALE→feito |
+| 10 | Nível 2 — Device Classification (MLP 7→5) | 🔄 → Cortex/Trust | — | Cobertura parcial por intents |
+| 11 | Nível 3 — Dynamic Interface Creation (WASM) | ⏳ defer gate | pesquisa | Mesmo que #8 |
+| 12 | USB flow: dispositivo desconhecido → porta desabilitada | ✅ SESSION_145 (`disable_port` + Deny) | — | `USB_TRUST_ENFORCE=1` |
+| 13 | USB flow: trust-once → segunda conexão auto-ON | ✅ SESSION_145 (`allow` + usb.tbl) | — | reload no mount NeuralFS |
+| 14 | USB flow: usuário precisa inferir intenção (nada automático) | ✅ princípio + Observe default | — | HITL = `allow()` / CONFIG |
+| 15 | "Zero autorun, zero superfície de ataque USB" | ✅ parcial SESSION_145 | — | boot-once MSC; enforce Deny; EP0 VID ⏳ |
 
 ### 1.2. SMP / APIC / Multicore
 
+> **ADR canônica: [ADR-0055](../architecture/0055-smp-revision.md)** (2026-07-18).  
+> Itens abaixo com ✅ histórico que não estão wired no boot atual → **fazendo** até evidência.
+
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 16 | APIC Local (LAPIC) init no BSP | ✅ Block 1 | Sprint 18 | Implementado: SVR, TPR, timer masked. |
-| 17 | IOAPIC init (roteamento IRQ externo) | ✅ Block 1 | Sprint 18 | Implementado: timer→vec32, keyboard→vec33. |
-| 18 | x2APIC mode (MSR-based, sem MMIO) | ✅ Bloco 21a | Sprint 81 | x2APIC enable implementado no SMP Foundation. |
-| 19 | MADT parsing (ACPI → LAPIC list) | ✅ Block 1 | Sprint 18 | Implementado: type 0 (LAPIC), type 1 (IOAPIC), type 2 (x2APIC). |
-| 20 | CPUID leaf 0x1A (P-core / E-core detection) | ✅ Block 2 | Sprint 19 | Essencial para CorePools inteligente. |
-| 21 | CPUID leaf 0x0B (Extended Topology) | ✅ Block 2 | Sprint 19 | Necessário para distinguir HT de cores físicos. |
-| 22 | CorePools / ComputePools (P→Ring0/1, E→Ring2) | ✅ Block 2 | Sprint 19 | Atribuição por tipo de core + fallback homogêneo. |
-| 23 | Algoritmo `assign_cores()` — P/E-aware + N+1 + fallback | ✅ Block 2 | Sprint 19 | Adicionado ao Block 2 após cross-ref. |
-| 24 | PerCpu struct (core_id, lapic_id, core_type, ring, stack, queue) | ✅ Bloco 21a | Sprint 81 | PerCpu dinâmico implementado no SMP Foundation. |
-| 25 | GS.base segment register per-core | ✅ Bloco 21a | Sprint 81 | GS.base individual por AP implementado. |
-| 26 | INIT-SIPI-SIPI via LAPIC ICR | ✅ Bloco 21a | Sprint 81 | IPI funcional para acordar APs sob demanda. |
-| 27 | Trampoline assembly (16→32→PAE→64→Rust) | ✅ Block 2 | Sprint 19 | Ponte entre modo real e long mode. |
-| 28 | AP startup IPI (BSP → INIT → SIPI → SIPI) | ✅ Bloco 21a | Sprint 81 | AP startup implementado no SMP Foundation. |
-| 29 | Stack separada por core (64 KB cada) | ✅ Bloco 21a | Sprint 81 | Stack separada por AP implementada. |
-| 30 | Regras de escalonamento por pool | ✅ Block 2 | Sprint 19 | Tabela: qual trabalho → qual pool. |
-| 31 | "Se só E-cores, tudo roda em E-cores mais lentos" | ✅ Block 2 | Sprint 19 | Caso de borda documentado. |
-| 32 | "Se 1 core apenas (QEMU -smp 1), tudo no mesmo core" | ✅ Block 2 | Sprint 19 | Caso de borda documentado. |
-| 33 | "HT: 1 thread por core físico no Ring 0/1, restante no Ring 2" | ✅ Block 2 | Sprint 19 | Regra de atribuição incluída. |
-| 34 | `acpi` crate para parser MADT/PPTT | 🟡 Sprint 18+ | Sprint 18+ | Parser ACPI mínimo implementado (sem crate externo). |
-| 35 | `raw-cpuid` crate para detecção de features | 🟡 Block 2 | Sprint 19 | No MVP, CPUID inline assembly. |
-| 36 | SPSC ring lockless (bbqueue) | ✅ Bloco 21a | Sprint 81 | Fila lock-free Single-Producer Single-Consumer implementada. |
-| 37 | `#[repr(align(64))]` cross-core | ✅ Bloco 21a | Sprint 81 | Prevenção de false sharing em atomics compartilhados. |
-| 38 | IPI handler registrável | ✅ Bloco 21a | Sprint 81 | Callback por vetor IPI implementado. |
-| 39 | Work-stealing Chase-Lev | ✅ Bloco 21b | Sprint 82 | Deques por core, steal quando vazio implementado. |
-| 40 | Parallel-for AVX2 matmul | ✅ Bloco 21b | Sprint 82 | Chunk hidden dim por core, sem lock implementado. |
-| 41 | AgentScheduler multicore | ✅ Bloco 21b | Sprint 82 | 4 run queues, steal entre cores implementado. |
-| 42 | Per-CPU slab allocator | ✅ Bloco 21b | Sprint 82 | Alocar sem lock no hot path implementado. |
+| 16 | APIC Local (LAPIC) init no BSP | ✅ ADR-0055 / Block 1 | Sprint 18 | Implementado: SVR, TPR, timer masked. |
+| 17 | IOAPIC init (roteamento IRQ externo) | ✅ ADR-0055 / Block 1 | Sprint 18 | Implementado: timer→vec32, keyboard→vec33. |
+| 18 | x2APIC mode (MSR-based, sem MMIO) | ✅ ADR-0055 | Sprint 81 | x2APIC enable no path APIC. |
+| 19 | MADT parsing (ACPI → LAPIC list) | ✅ ADR-0055 / Block 1 | Sprint 18 | type 0/1/2 MADT. |
+| 20 | CPUID leaf 0x1A (P-core / E-core detection) | 🟡 ADR-0055 | SESSION_141 | CorePools detect; hybrid só HW Intel. |
+| 21 | CPUID leaf 0x0B (Extended Topology) | 🟡 ADR-0055 | SESSION_141 | Usado em assign; HT refine residual. |
+| 22 | CorePools / ComputePools (P→Ring0/1, E→Ring2) | ✅ ADR-0055 | SESSION_141 | Log TCG `r0=1 r1=1`; hybrid HW pending. |
+| 23 | Algoritmo `assign_cores()` — P/E-aware + N+1 + fallback | ✅ ADR-0055 | SESSION_141 | Wired em `corepools.rs`. |
+| 24 | PerCpu struct (core_id, lapic_id, core_type, ring, stack, queue) | ✅ ADR-0055 | SESSION_141 | BSP+AP path. |
+| 25 | GS.base segment register per-core | 🟡 ADR-0055 | SESSION_141 | BSP; APs parcial. |
+| 26 | INIT-SIPI-SIPI via LAPIC ICR | ✅ ADR-0055 | SESSION_141 | TCG APs=1; WHPX gated OFF. |
+| 27 | Trampoline assembly (16→32→PAE→64→Rust) | ✅ ADR-0055 | SESSION_141 | k_nano global_asm; 286 bytes. |
+| 28 | AP startup IPI (BSP → INIT → SIPI → SIPI) | ✅ ADR-0055 | SESSION_141 | FeatureGate.allow_smp. |
+| 29 | Stack separada por core (64 KB cada) | ✅ ADR-0055 | SESSION_141 | Com PerCpu AP. |
+| 30 | Regras de escalonamento por pool | ✅ ADR-0055 | SESSION_141 | affinity_ring + poll R0→R2. |
+| 31 | "Se só E-cores, tudo roda em E-cores mais lentos" | ✅ ADR-0055 | SESSION_141 | assign_cores fallback. |
+| 32 | "Se 1 core apenas (QEMU -smp 1), tudo no mesmo core" | ✅ ADR-0055 | SESSION_141 | FeatureGate + MADT. |
+| 33 | "HT: 1 thread por core físico no Ring 0/1, restante no Ring 2" | 🟡 ADR-0055 | SESSION_141 | Política; refine leaf 0x0B. |
+| 34 | `acpi` crate para parser MADT/PPTT | ✅ ADR-0055 | SESSION_141 | Parser mínimo + BootInfo.rsdp. |
+| 35 | `raw-cpuid` crate para detecção de features | ✅ ADR-0055 | SESSION_141 | CPUID inline `platform_probe`. |
+| 36 | SPSC ring lockless (bbqueue) | 🟡 ADR-0055 | SESSION_141 | ap_work queue + barrier. |
+| 37 | `#[repr(align(line_size))]` cross-core | 🟡 ADR-0055 | SESSION_141 | CacheTopology.line_size exposto. |
+| 38 | IPI handler registrável | ✅ ADR-0055 | SESSION_141 | IPI wake matmul/APs. |
+| 39 | Work-stealing Chase-Lev | ✅ ADR-0055 | SESSION_141 | GLOBAL_POOL + AP steal. |
+| 40 | Parallel-for AVX2 matmul | 🟡 ADR-0055 | SESSION_141 | Wired; speedup aceite = HW. |
+| 41 | AgentScheduler multicore | 🟡 ADR-0055 | SESSION_141 | Affinity order; steal jobs AP. |
+| 42 | Per-CPU slab allocator | 🟡 ADR-0055 | residual | Após APs vivos. |
 
 ### 1.3. NPU (AMD XDNA)
 
@@ -226,9 +252,9 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 64 | `struct MemoryHierarchy { tiers: Vec<MemoryTier> }` ordenado | ✅ Block 4 | Sprint 21 | Adicionado ao MVP. |
 | 65 | `enum AllocTier { Dram, Vram, Nvme, Hdd }` | ✅ Block 4 | Sprint 21 | Adicionado ao MVP. |
 | 66 | `fn alloc_by_tier(tier, size) -> Option<PhysAddr>` | ✅ Block 4 | Sprint 21 | Dram implementado. Vram/Nvme → None com diagnóstico. |
-| 67 | `AllocTier::Vram` → alocar no BAR da GPU | 🟡 Bloco 21c | Sprint 84 | Requer driver GPU + BAR mapeado. |
-| 68 | `AllocTier::Nvme` → alocar no NVMe via SFS | ⏳ Pós-MVP | Sprint 24+ | Requer NVMe driver + SFS. |
-| 69 | `AllocTier::Hdd` → cold storage | ⏳ Pós-MVP | Sprint 24+ | Requer SFS + driver ATA/NVMe. |
+| 67 | `AllocTier::Vram` → alocar no BAR da GPU | ✅ hook SESSION_146 | #420 AWAITING se init falha | `register_vram_allocator` → `vram_alloc` |
+| 68 | `AllocTier::Nvme` → alocar no NVMe via SFS | ⏳ defer gate | após #420 | NVMe driver existe; tier pleno defer |
+| 69 | `AllocTier::Hdd` → cold storage | ⏳ defer gate | após #420 | ATA ok; tier policy defer |
 | 70 | MLP saídas: heap_tier, tensor_tier, kv_cache_tier, sfs_active_tier | ✅ Block 4 | Sprint 21 | 4 tiers de saída no MLP do MVP. |
 | 71 | MLP saídas opcionais: sfs_cold_tier, tensor_swap_tier, skill_heap_tier | 🟡 Block 4 | Sprint 21 | Campos opcionais no SystemArchitecture. |
 | 72 | Exemplo real: notebook i5 + GTX 1050 + NVMe + HDD | ✅ Doc | README | Caso de uso documentado. |
@@ -242,10 +268,10 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 68 | PCI config space access (CF8/CFC) | ✅ Block 1 | Sprint 18 | Implementado: read_config_dword/word, BARs. |
 | 69 | PCI scan: vendor, device, class, subclass, BARs | ✅ Block 1 | Sprint 18 | Implementado: 256 busses, 32 devices, BAR0-5. |
 | 70 | PCI bridges (hierarquia de barramento) | 🟡 Block 1 | Sprint 18 | Suporte básico: multi-função em bridges PCI-PCI. |
-| 71 | NVMe driver (PCI Class 01.08) | ⏳ Pós-MVP | Sprint 24+ | MVP é stateless. Sem SFS, NVMe é desnecessário. |
-| 72 | VirtIO-blk (PCI 1AF4:1001) | ⏳ Pós-MVP | Sprint 24+ | Alternativa QEMU ao NVMe. |
-| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 Sprint 23 (⚠️ não 100%) | Sprint 23 | Driver manual implementado sem `virtio-drivers` crate. Pendente: IRQ, TX recycling. |
-| 73b | **VirtIO-GPU (PCI 1AF4:1050)** | 🟡 Sprint 45 (⚠️ 95%) | Sprint 45 | Driver manual PCI caps + MMIO + queue setup. GET_DISPLAY_INFO ⏳ (QEMU TCG lento). |
+| 71 | NVMe driver (PCI Class 01.08) | ✅ parcial `disk_agent/nvme` | Onda 5 DMA | Driver existe; DMA maduro = Onda 5 |
+| 72 | VirtIO-blk (PCI 1AF4:1001) | ⏳ defer gate | — | ATA/NVMe cobrem necessidade atual |
+| 73 | VirtIO-net (PCI 1AF4:1041) | 🟡 polish / e1000 L3.5 ✅ | LAN | SESSION_149: e1000 TX 0x3800 + RX PASS; VirtIO-net opcional |
+| 73b | **VirtIO-GPU (PCI 1AF4:1050)** | 🟡 Onda 7 display quirk | — | Driver ~95%; GET_DISPLAY_INFO residual; #74 fundido aqui |
 | 166 | **Multi-mode Trust** | ✅ v0.49.0 | Sprint 49 | PermissionMode enum. `trust_allow_with_mode()`. |
 | 176 | **Ed25519 Cryptographic Identity** | ✅ v0.50.0 | Sprint 50 | `identity.rs`, `CapabilityToken` enum, `verify_signature()` bare-metal. |
 | 198 | **Boot-time security policy** | ✅ v0.49.0 | Sprint 49 | `TrustCache::load_boot_policy()` seta `PolicyState::Contain` no boot. |
@@ -254,7 +280,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 258 | **Graduated Enforcement** | ✅ v0.49.0 | Sprint 49 | `PolicyState` máquina: Observe→Warn→Contain→Enforce. |
 | 259 | **Posture-Aware Alerting** | ✅ v0.49.0 | Sprint 49 | `posture_check()` verifica hardware antes de executar skill. |
 | 260 | **Event→Detector→Response Pipeline** | ✅ v0.50.0 | Sprint 50 | 5 detectores (PortScan, ArpSpoof, PingFlood, DhcpStarvation, TimerAnomaly) + correlação. |
-| 74 | VirtIO-gpu (PCI 1AF4:1050) | ⏳ Pós-MVP | Sprint 24+ | MVP usa VGA text. |
+| 74 | VirtIO-gpu (PCI 1AF4:1050) | 🔄 → #73b | — | SESSION_143: duplicata; residual em #73b |
 | 75 | Intel HDA audio | ✅ feito | Sprint Sound / 101 | ✅ `audio/hda.rs` no monólito. Ver ADR-0045. (histórico: “nenhuma skill no MVP”) |
 | 76 | Sem kernel thread de hotplug | ✅ Princípio | — | Diretriz adotada. |
 | 77 | Sem sysfs genérico | ✅ Princípio | — | Diretriz adotada. |
@@ -264,12 +290,12 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 79 | UEFI framebuffer (BGRA32 writer) | ⏳ Pós-MVP | Sprint 23+ | VGA text serve. |
-| 80 | Font rendering para alta resolução | ⏳ Pós-MVP | Sprint 23+ | Depende de #79. |
-| 81 | VirtIO-GPU 2D/3D acelerado | ⏳ Pós-MVP | Sprint 24+ | Requer VirtIO. |
-| 82 | Tensor visualization no framebuffer | ⏳ Pós-MVP | Fase 5+ | Depende de #79 + #81. |
+| 79 | UEFI framebuffer (BGRA32 writer) | ✅ jarbas/fb N5 | SESSION_115 | SESSION_143 STALE: probe_uefi_framebuffer |
+| 80 | Font rendering para alta resolução | ✅ console/fb | — | Depende #79; path atual OK |
+| 81 | VirtIO-GPU 2D/3D acelerado | ⏳ defer gate | #73b | 2D parcial; 3D fora do gate |
+| 82 | Tensor visualization no framebuffer | 🟡 ADR-0047-HMI PARTIAL | embed_viz | PoC H2/H5; não desktop 3D |
 | 83 | Intel HDA audio driver — Áudio via PCI HDA controller. Essencial para TTS/STT do JARVIS sem depender de USB. | ✅ feito | Sprint Sound / 101 | ✅ SD0 capture + SD1 playback. ADR-0045. |
-| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | ✅ parcial | Sprint Sound | Parse config AC/AS/iso EP + probe; isócrono DMA → HW. ADR-0045 / SESSION_122. |
+| 84 | Áudio via USB (UAC) — USB Audio Class para fones/microfone USB. Alternativa ao HDA quando não disponível. | ▶️ AWAITING_HW SESSION_145 | ADR-0045 | Parse+probe+USB-TRUST; iso DMA → `[UAC-HW] VERDICT=AWAITING_REAL_HW` |
 
 ### 1.8. Princípios Arquiteturais
 
@@ -287,8 +313,8 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
 | 91 | Bitmap Frame Allocator | ✅ Block 0 | Sprint 11 | Já implementado. |
-| 92 | Huge Pages (2 MiB) | ⏳ Pós-MVP | Sprint 23+ | Otimização para modelos pesados pós-MVP. |
-| 93 | Huge Pages (1 GiB) | ⏳ Pós-MVP | Sprint 24+ | Depende de #92. |
+| 92 | Huge Pages (2 MiB) | ⏳ defer gate (pós Onda 6) | — | Otimização modelos; fora do gate |
+| 93 | Huge Pages (1 GiB) | ⏳ defer gate | — | Depende de #92 |
 | 94 | Slab Allocator | ✅ Block 2 | Sprint 19 | Essencial para heap dinâmico. |
 
 ### 1.10. Roadmap Original — Kernel Abstraction
@@ -296,34 +322,34 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
 | 95 | Async Neural Executor | ✅ Block 0 | Sprint 12 | Já implementado. |
-| 96 | Agent Scheduler (round-robin) | ⏳ Pós-MVP | Sprint 24+ | Executor cooperativo segura 1-4 cores. |
-| 97 | Budget de execução (tokens_consumed) | ⏳ Pós-MVP | Sprint 24+ | Depende de #96. |
-| 98 | MLP decide prioridade no scheduler | ⏳ Pós-MVP | Sprint 24+ | Depende de #96 + MLP. |
+| 96 | Agent Scheduler (round-robin) | ✅ AgentScheduler boot | — | SESSION_143 STALE→feito |
+| 97 | Budget de execução (tokens_consumed) | ⏳ defer gate | polish | Scheduler OK; budget = polish |
+| 98 | MLP decide prioridade no scheduler | ⏳ defer gate | polish | Tipagem/MLP priority fora do gate |
 
 ### 1.11. Roadmap Original — EventBus
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
 | 99 | EventBus + CapabilityToken | ✅ Block 0 | Sprint 13 | Já implementado. |
-| 100 | Topic enum completo | ⏳ Pós-MVP | Sprint 23+ | Strings funcionam. Enum é segurança de tipo. |
-| 101 | ML-based routing (EventBus consulta Intent Router) | ⏳ Pós-MVP | Sprint 23+ | Inovação futura. BTreeMap resolve. |
+| 100 | Topic enum completo | ⏳ defer gate | polish | Strings funcionam |
+| 101 | ML-based routing (EventBus consulta Intent Router) | ⏳ defer gate | polish | BTreeMap resolve; LatentBus parcial |
 
 ### 1.12. Roadmap Original — Skill Registry
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
 | 102 | Skill trait + MCP + Registry | ✅ Block 0 | Sprint 14 | Já implementado. |
-| 103 | WASM embedder (wasmi) | ⏳ Pós-MVP | Sprint 25+ | Skills Rust traits bastam para MVP. |
-| 104 | Linear memory pool (256 KB por skill) | ⏳ Pós-MVP | Sprint 25+ | Depende de #103. |
+| 103 | WASM embedder (wasmi) | ✅ SFI `hermes/wasm_rt` | Sprint 93 | SESSION_143: **não** crate wasmi; runtime próprio |
+| 104 | Linear memory pool (256 KB por skill) | ✅ MemoryPool WASM | — | Path custom com #103 |
 
 ### 1.13. Roadmap Original — Cognitive Runtime
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 105 | Intent Planner (sequência de SkillCommands) | ⏳ Pós-MVP | Fase 6 | MVP classifica intent única. |
-| 106 | Success Engine (feedback loop, ajuste online de pesos) | ⏳ Pós-MVP | Fase 6 | Depende de #105. Pesquisa acadêmica. |
-| 107 | Neural Cache (lookup table 50 ns em Huge Pages) | ⏳ Pós-MVP | Fase 6 | Depende de #92 + #105. |
-| 108 | MatMul-free LM (RWKV/Mamba/ternary pooling) | ⏳ Pós-MVP | Fase 7 | Meta futura distante. |
+| 105 | Intent Planner (sequência de SkillCommands) | ✅ scaffold cognitive | Sprint 95 | SESSION_143: scaffold ≠ produção plena |
+| 106 | Success Engine (feedback loop, ajuste online de pesos) | ⏳ defer gate | pesquisa | Scaffold; treino online real fora do gate |
+| 107 | Neural Cache (lookup table 50 ns em Huge Pages) | ✅ scaffold / NeuralCache | Sprint 95 | Path parcial |
+| 108 | MatMul-free LM (RWKV/Mamba/ternary pooling) | ⏳ defer gate | stub | `loaded: false`; não priorizar |
 
 ### 1.14. Roadmap Original — Timeline
 
@@ -347,17 +373,17 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 117 | VirtIO-net driver (PCI) sobre `virtio-drivers` crate | 🟡 Sprint 23 | Sprint 23 | PCI scan já detecta 1AF4:1041. VirtIO é spec simples. |
-| 118 | smoltcp TCP/IP stack integration | 🟡 Sprint 23 | Sprint 23 | ARP/IP/TCP/UDP/DNS no_std, usado pelo Redox OS. |
-| 119 | DNS resolver (smoltcp `dns` feature) | 🟡 Sprint 23 | Sprint 23 | Resolução de hostnames para HTTP. |
-| 120 | HTTP GET/POST client minimal (~200 LOC) | 🟡 Sprint 23 | Sprint 23 | Saída de smoltcp TCP para skills e weight updates. |
-| 121 | Hermes `/fetch` command | 🟡 Sprint 23 | Sprint 23 | Comando de shell para baixar arquivos via HTTP. |
-| 122 | Skill manifest field `requires_network: bool` | 🟡 Sprint 23 | Sprint 23 | Skills podem declarar necessidade de rede. |
-| 123 | TLS 1.3 client (`embedded-tls` crate) | ⏳ Pós-MVP | Sprint 25+ | Obrigatório para HTTPS. Postergado para WASM. |
-| 124 | Wi-Fi / Ethernet (e1000/RTL8139 para HW real) | ⏳ Pós-MVP | Sprint 26+ | VirtIO só funciona em QEMU. HW real precisa de driver nativo. |
+| 117 | VirtIO-net driver (PCI) sobre `virtio-drivers` crate | ✅ parcial / 🟡 Onda 7 | LAN | Driver manual existe; polish RX → Onda 7 |
+| 118 | smoltcp TCP/IP stack integration | ✅ L5 HTTP | LAN ✅ | SESSION_150: TCP HTTP 301 via e1000 |
+| 119 | DNS resolver (smoltcp `dns` feature) | ✅ raw e1000 | LAN ✅ | SESSION_150: DNS raw (bypass demux); skip_dns_name |
+| 120 | HTTP GET/POST client minimal (~200 LOC) | ✅ L5 smoke | LAN ✅ | SESSION_150: GET / → 301 google |
+| 121 | Hermes `/fetch` command | 🟡 Onda 7 | `depends_on: lan` | Após LAN |
+| 122 | Skill manifest field `requires_network: bool` | ✅ / 🟡 Onda 7 polish | — | Campo existe em manifests; enforce = lan |
+| 123 | TLS 1.3 client (`embedded-tls` crate) | 🟡 Onda 7 | `depends_on: lan` | HTTPS só após LAN; sem fake |
+| 124 | Wi-Fi / Ethernet (e1000/RTL8139 para HW real) | ✅ e1000 L3.5 / 🟡 wifi | `depends_on: wifi` | e1000 TX 0x3800 ✅ SESSION_149; WiFi aberto |
 | 250 | **Comando `/ping <ip>`** — ICMP Echo Request via e1000 | ✅ Block 6 | Sprint 23 | `net::ping()` usa `icmp_echo_request` + `parse_icmp_reply`. |
-| 251 | **DHCP timer-based wait** — refatorar spin loops para `hlt()` com timeout por timer ticks | 🟡 Sprint 24 | Sprint 24 | Spin loops não funcionam no QEMU TCG (slirp não processa I/O). Necessário para DHCP dinâmico. |
-| 252 | **ARP não-bloqueante** — timeout com retry usando timer ticks em vez de spin loop | 🟡 Sprint 24 | Sprint 24 | ARP sem resposta no QEMU TCG. Gateway MAC hardcoded temporariamente. |
+| 251 | **DHCP timer-based wait** — refatorar spin loops para `hlt()` com timeout por timer ticks | 🟡 Onda 7 LAN | — | Crônico DHCP |
+| 252 | **ARP não-bloqueante** — timeout com retry usando timer ticks em vez de spin loop | 🟡 Onda 7 LAN | — | Crônico ARP |
 | 253 | **e1000 TDT protocol fix** — `send()` escrevia REG_TDT = idx (== TDH), hardware via ring vazio. Corrigido: TDT = (idx+1) % NUM_DESC | ✅ Block 6 | Sprint 23 | Causa raiz TPT=0. Descritor lido mas pacote não enviado. |
 | 254 | **e1000 NUM_DESC 32→48** — 82540EM requer mínimo 48 descritores RX | ✅ Block 6 | Sprint 23 | Linux e1000 driver docs: "48-256 for 82542 and 82543-based adapters". |
 | 255 | **Arquitetura Neural de Rede** — init_driver_network() → HW_NET_E1000 EventBus → network_bootstrap() → network_health_daemon() → skill routing | ✅ Block 6 | Sprint 23 | Hardware detection first, IA decide routing. |
@@ -389,64 +415,64 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 126 | **Transformer Engine** — Attention (`QK^T/√d`), causal mask, softmax, FFN (SiLU), residual | ✅ Sprint 26 | Sprint 26 | Implementado em cortex.rs: 4 layers, Attention Q/K/V/O, causal mask, RMSNorm, SiLU FFN, residual. |
-| 127 | **Tokenizer character-level** — ASCII 32-126 + `<BOS>/<EOS>/<PAD>` | 🟡 Sprint 25 | Sprint 25 | Entrada/saída de texto bare-metal. Reutiliza `scancode_to_ascii()`. |
-| 128 | **Autoregressive generation** — loop `tokenize → forward → sample → next` | 🟡 Sprint 25 | Sprint 25 | ~30 LOC. Gera resposta token por token até `<EOS>`. |
-| 129 | **Model format `.bitnet`** — binary spec com magic, header, packed ternary weights | 🟡 Sprint 25 | Sprint 25 | Formato padronizado para modelos exportados do Python. |
-| 130 | **Model loader** — `include_bytes!` + `allocate_contiguous()` → `PackedTernaryTensor` | 🟡 Sprint 25 | Sprint 25 | Carrega micro-modelo (~1M params, ~250 KB). |
-| 131 | **Micro-model TinyStories** (1M params, 4 layers, hidden=128) treinado em Python | 🟡 Sprint 25 | Sprint 25 | Modelo de prova para testar pipeline completo. |
-| 132 | **Cortex Daemon** — async task que recebe `LLM_REQUEST` → gera → publica resposta | ✅ Sprint 27 | Sprint 27 | Implementado como `cortex_llm_daemon` (8ª task). TransformerModel carregado no boot. |
-| 133 | **Modelo 1.5B params** (distilado do Llama 3.2 1B → ternário 2-bit, ~375 MB) | 🟡 Sprint 26 | Sprint 26 | Cérebro completo do AIOS. ~5-15 tok/s em x86-64. |
-| 134 | **Model update via HTTP** — download `.bitnet` → validar hash → hot-swap | 🟡 Sprint 26 | Sprint 26 | Permite evolução do modelo sem recompilar kernel. |
-| 135 | **LLM decide hardware arch** — substitui `SystemArchitecture::infer()` heurístico | 🟡 Sprint 26 | Sprint 26 | MLP (item #51) vira LLM query. |
-| 136 | **LLM decide memory tier** — roteia alocações Dram/Vram/Nvme/Hdd | 🟡 Sprint 26 | Sprint 26 | Substitui `AllocTier` heurístico. |
-| 137 | **LLM classifica USB devices** — Neural Cortex 7→5 allow/deny/learn/no_intent/suspect | 🟡 Sprint 27 | Sprint 27 | Substitui item #3 (MLP 7→5). |
-| 138 | **LLM dispatch skills** — qual skill executar para cada intenção | 🟡 Sprint 27 | Sprint 27 | Evolução do roteamento atual. |
-| 139 | **Reflex MLP threshold tuning** — se confiança > 0.9, bypassa LLM | 🟡 Sprint 27 | Sprint 27 | Performance: decisões simples em microssegundos. |
-| 140 | **Speculative decoding** — Reflex MLP prediz próximo token, LLM verifica | ⏳ Pós-MVP | Sprint 27+ | Acelera geração 2-3×. |
-| 141 | **1.5B model benchmark** — 5-15 tok/s on single x86-64 core (AVX2) | 🟡 Sprint 26 | Sprint 26 | Critério de aceite do Cortex. |
+| 126 | **Transformer Engine** — Attention (`QK^T/√d`), causal mask, softmax, FFN (SiLU), residual | ✅ Sprint 26 / N3 | — | cortex BitNet path |
+| 127 | **Tokenizer character-level** — ASCII 32-126 + `<BOS>/<EOS>/<PAD>` | ✅ + BPE HF | — | CHAR + BPE loaders |
+| 128 | **Autoregressive generation** — loop `tokenize → forward → sample → next` | ✅ N3 | — | generate path; soft-float fluency residual |
+| 129 | **Model format `.bitnet`** — binary spec com magic, header, packed ternary weights | ✅ | — | Formato em uso |
+| 130 | **Model loader** — `include_bytes!` + `allocate_contiguous()` → `PackedTernaryTensor` | ✅ | — | FAT/QEMU loader |
+| 131 | **Micro-model TinyStories** (1M params, 4 layers, hidden=128) treinado em Python | ✅ / supersedido por 2B | — | Pipeline provado; 2B LOADED |
+| 132 | **Cortex Daemon** — async task que recebe `LLM_REQUEST` → gera → publica resposta | ✅ Sprint 27 / N3 | — | CortexAgent Continuous |
+| 133 | **Modelo 1.5B params** (distilado do Llama 3.2 1B → ternário 2-bit, ~375 MB) | ✅ 2B path | — | BitNet 2B LOADED (soft-float) |
+| 134 | **Model update via HTTP** — download `.bitnet` → validar hash → hot-swap | 🟡 Onda 7 / AirLLM Net | `depends_on: lan` | hot_swap_from_net gated RX |
+| 135 | **LLM decide hardware arch** — substitui `SystemArchitecture::infer()` heurístico | ✅ parcial Trinity/HWEXPERT | — | keyword+R3; não 100% LLM |
+| 136 | **LLM decide memory tier** — roteia alocações Dram/Vram/Nvme/Hdd | ⏳ defer gate | MHI | Soft-migrate MHI; LLM tier fora do gate |
+| 137 | **LLM classifica USB devices** — Neural Cortex 7→5 allow/deny/learn/no_intent/suspect | 🔄 → #3 / Trust | — | Cobertura parcial |
+| 138 | **LLM dispatch skills** — qual skill executar para cada intenção | ✅ Hermes/Trinity | — | Intent routing N4 |
+| 139 | **Reflex MLP threshold tuning** — se confiança > 0.9, bypassa LLM | ✅ parcial | — | keyword bypass |
+| 140 | **Speculative decoding** — Reflex MLP prediz próximo token, LLM verifica | ✅ n-gram ADR-0047 | SESSION_125 | Spec decode OK; MLP reflex residual |
+| 141 | **1.5B model benchmark** — 5-15 tok/s on single x86-64 core (AVX2) | 🟡 soft-float residual | trilha R | Aceite qualidade ≠ tok/s só |
 
 ### 1.19. Transformer Engine (Detalhamento Técnico)
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 142 | `Attention` struct — q_proj, k_proj, v_proj, o_proj (todos `Linear`) | 🟡 Sprint 25 | Sprint 25 | Bloco fundamental do transformer. |
-| 143 | `causal_mask` — triângulo superior -inf, diag/abaixo 0 | 🟡 Sprint 25 | Sprint 25 | Impede token de "ver" o futuro. |
-| 144 | `softmax` row-wise em cima de `Tensor` | 🟡 Sprint 25 | Sprint 25 | Normalização das probabilidades de atenção. |
-| 145 | `TransformerBlock` — RMSNorm → Attn → residual → RMSNorm → FFN(SiLU) → residual | 🟡 Sprint 25 | Sprint 25 | Camada completa do transformer. |
-| 146 | `Transformer` — embed → N×TransformerBlock → RMSNorm → unembed | 🟡 Sprint 25 | Sprint 25 | Modelo completo. |
-| 147 | `generate()` — loop: forward → sample → next | 🟡 Sprint 25 | Sprint 25 | Geração autoregressiva. |
-| 148 | Sampling: argmax, top-k(3/5/10), temperature | 🟡 Sprint 27 | Sprint 27 | Controla criatividade da resposta. |
+| 142 | `Attention` struct — q_proj, k_proj, v_proj, o_proj (todos `Linear`) | ✅ | — | cortex |
+| 143 | `causal_mask` — triângulo superior -inf, diag/abaixo 0 | ✅ | — | cortex |
+| 144 | `softmax` row-wise em cima de `Tensor` | ✅ | — | cortex |
+| 145 | `TransformerBlock` — RMSNorm → Attn → residual → RMSNorm → FFN(SiLU) → residual | ✅ | — | cortex |
+| 146 | `Transformer` — embed → N×TransformerBlock → RMSNorm → unembed | ✅ | — | cortex |
+| 147 | `generate()` — loop: forward → sample → next | ✅ | — | cortex |
+| 148 | Sampling: argmax, top-k(3/5/10), temperature | ✅ parcial | — | argmax/constrained; top-k polish |
 
 ### 1.20. Success Engine (Ajuste Online)
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 149 | Feedback loop — usuário avalia resposta (👍/👎) | ⏳ Pós-MVP | Sprint 29+ | Input para ajuste de pesos. |
-| 150 | Ternary weight update — {-1,0,+1} → {-1,0,+1} com probabilidade | ⏳ Pós-MVP | Sprint 29+ | Algoritmo de aprendizado online. Pesquisa. |
-| 151 | Experience replay buffer (últimas N interações) | ⏳ Pós-MVP | Sprint 29+ | Evita esquecimento catastrófico. |
-| 152 | Weight consolidation — export modelo atualizado | ⏳ Pós-MVP | Sprint 29+ | Persistência do aprendizado. |
+| 149 | Feedback loop — usuário avalia resposta (👍/👎) | ⏳ defer gate | pesquisa | Scaffold cognitive; fora do gate |
+| 150 | Ternary weight update — {-1,0,+1} → {-1,0,+1} com probabilidade | ⏳ defer gate | pesquisa | Idem |
+| 151 | Experience replay buffer (últimas N interações) | ✅ parcial SleepCycle | — | REPLAY phase; profundidade pesquisa defer |
+| 152 | Weight consolidation — export modelo atualizado | ⏳ defer gate | pesquisa | Persistência online fora do gate |
 
 ### 1.21. Treinamento (Host-side, Python)
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 153 | Train micro BitNet (1M params, TinyStories) → export `.bitnet` | 🟡 Sprint 25 | Sprint 25 | Modelo de teste para integrar. |
-| 154 | Distil Llama 3.2 1B → ternário → `.bitnet` 1.5B | 🟡 Sprint 26 | Sprint 26 | Modelo completo do AIOS. |
-| 155 | Pipeline `bitnet.cpp` quantization script | 🟡 Sprint 25 | Sprint 25 | Ferramenta para quantizar qualquer modelo. |
-| 156 | Ferramenta de validação — forward match kernel vs Python | 🟡 Sprint 25 | Sprint 25 | Garante que kernel e Python produzem mesmos outputs. |
+| 153 | Train micro BitNet (1M params, TinyStories) → export `.bitnet` | ✅ tools Python | — | Pipeline treino existe |
+| 154 | Distil Llama 3.2 1B → ternário → `.bitnet` 1.5B | ✅ 2B path | — | Modelo grande em uso |
+| 155 | Pipeline `bitnet.cpp` quantization script | ✅ tools | — | Conversão/export em tools/ |
+| 156 | Ferramenta de validação — forward match kernel vs Python | ⏳ defer gate | polish | Útil; fora do crítico |
 
 ### 1.22. Self-Optimization / Workflow Learning
 
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 157 | **Usage Pattern Analyzer** — LLM observa últimas N intenções, detecta workflow do usuário (hora, frequência, recursos) | 🟡 Sprint 27 | Sprint 27 | Base de todo o ciclo de auto-otimização. Analisa EventBus history + MLP decisions. |
-| 158 | **Workflow Predictor** — pré-carrega recursos (MHI tiers, scheduler priority) baseado em hora/dia/padrão detectado | 🟡 Sprint 27 | Sprint 27 | Ex: "14h toda segunda → pré-alocar 6 GB RAM + GPU para CAD". Depende de #157. |
-| 159 | **Auto-Skill Generator** — cria skill WASM para tarefa repetitiva detectada (≥3 ocorrências no mesmo workflow) | 🟡 Sprint 28 | Sprint 28 | Ex: "render_batch" skill gerada automaticamente. Depende de #103 (WASM). |
-| 160 | **Dynamic Resource Scaling** — MHI ajusta tiers (Dram/Vram/Nvme) dinamicamente pelo uso real, não só por boot | 🟡 Sprint 27 | Sprint 27 | MHI hoje é estático (boot). Evolui para auto-ajuste. Depende de #56-67. |
-| 161 | **Self-Optimizing Scheduler** — prioriza agentes conforme workflow detectado (render → GPU agent high prio) | 🟡 Sprint 27 | Sprint 27 | Depende de #96 (Agent Scheduler) + #157. |
-| 162 | **Workflow Profile** — perfil salvo exportável ("arquiteto", "escritório", "dev") com recursos, skills, prioridades | 🟡 Sprint 28 | Sprint 28 | Permite trocar perfil sem rebuild. Depende de #157 + SFS (Layer 2). |
-| 163 | **Hardware Config Learning** — `SystemArchitecture` evolui com feedback do usuário (não só heurística de boot) | 🟡 Sprint 27 | Sprint 27 | LLM ajusta `SystemArchitecture` baseado em uso real. Depende de #135 + #157. |
+| 157 | **Usage Pattern Analyzer** — LLM observa últimas N intenções, detecta workflow do usuário (hora, frequência, recursos) | ✅ scaffold SelfOpt | Sprint 95–96 | SESSION_143: scaffold; produção defer |
+| 158 | **Workflow Predictor** — pré-carrega recursos (MHI tiers, scheduler priority) baseado em hora/dia/padrão detectado | ✅ scaffold | — | Idem |
+| 159 | **Auto-Skill Generator** — cria skill WASM para tarefa repetitiva detectada (≥3 ocorrências no mesmo workflow) | ✅ Sprint 108 self_evolve | — | SelfEvolveAgent / SkillOpt path |
+| 160 | **Dynamic Resource Scaling** — MHI ajusta tiers (Dram/Vram/Nvme) dinamicamente pelo uso real, não só por boot | ⏳ defer gate | Onda 3/5 | Soft-migrate; DMA tiers = #420 |
+| 161 | **Self-Optimizing Scheduler** — prioriza agentes conforme workflow detectado (render → GPU agent high prio) | ✅ scaffold | — | OptimizerAgent Continuous |
+| 162 | **Workflow Profile** — perfil salvo exportável ("arquiteto", "escritório", "dev") com recursos, skills, prioridades | ⏳ defer gate | — | Fora do gate |
+| 163 | **Hardware Config Learning** — `SystemArchitecture` evolui com feedback do usuário (não só heurística de boot) | ✅ parcial HWEXPERT | — | Cards/PnP; evolução plena defer |
 
 ---
 
@@ -456,7 +482,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 |---|---|---|---|---|
 | 164 | **XOR Delta reconstruction** — modo Archive lossless no PackedTernaryTensor; armazena resíduo XOR para round-trip bit-exact | ✅ Imediata | Sprint 24 | ~50 LOC sobre operações bitwise existentes. Permite verificação SHA-256 do output. |
 | 165 | **CDC Rabin Fingerprint** — Content-Defined Chunking via rolling hash p/ dividir `.bitnet` models em chunks carregáveis | ✅ Imediata | Sprint 24 | ~80 LOC, rolling hash polinomial. Útil para carregamento sob demanda de modelos grandes. |
-| 166 | **Multi-mode Trust** — PermissionMode enum (TotalAccess/AskEveryTime/Scoped) no TrustCache | 🟡 Baixa | Sprint 27 | ~100 LOC sobre TrustCache existente. Alinha com HITL do Crom-Agente. |
+| 166 | **Multi-mode Trust** — PermissionMode enum (TotalAccess/AskEveryTime/Scoped) no TrustCache | ✅ v0.49 / parcial | — | PermissionMode existe; polish HITL defer |
 | 167 | **TV-DSL Co-processor** — AST determinístico para expressões matemáticas; Hermes chama co-processador para cálculos exatos sem alucinação | 🟡 Baixa | Sprint 27 | ~200 LOC, parser de expr matemática em `no_std` (reusa `libm`). Zero alucinação aritmética — crítico p/ arquiteto (volumetria) e escritório (impostos). |
 | 168 | **PonderNet dynamic stop** — Reflex MLP decide quantos ciclos de inferência executar (não fixo) baseado em confiança | 🟡 Baixa | Sprint 27 | ~150 LOC sobre executor existente. Adaptive compute = eficiência energética. |
 | 169 | **Codebook Compression (VQ)** — Vector Quantization p/ PackedTernaryTensor; substitui `quantize_to_packed()` por `train_codebook()` + `lookup()` O(1) | 🟠 Média | Sprint 28 | ~300 LOC kernel + script Python treinamento. Crompressor-Neurônio: 97.56% acc com 40.8× compressão. |
@@ -483,19 +509,19 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 ### 1.25. AIOS Cross-OS Compatibility + WASM + J.A.R.V.I.S. (IDEA #306-#310)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 306a | **Windows binary compat** — PE32+ loader + syscall translation (NT→AIOS). DLL loader stub, SEH handler, PEB emulação | ⏳ Pós-MVP | v0.80+ | Rodar .exe nativos sem emulação |
-| 306b | **Linux ELF compat** — ELF x86-64 loader + syscall translation (open/read/write/mmap/clone → agent skills) | ⏳ Pós-MVP | v0.80+ | Aproveitar ecossistema Linux |
-| 306c | **macOS/iOS Mach-O compat** — Mach-O loader + XNU syscall translation. Desafio: APIs Cocoa/AppKit fechadas | ⏳ Pós-MVP | v0.85+ | Apps nativos Apple |
-| 306d | **Android APK compat** — ART runtime como skill, Binder IPC → agentes. Desafio: framework Java → tradução | ⏳ Pós-MVP | v0.85+ | 3M+ apps Android no AIOS |
-| 307 | **Syscall-to-Skill Translation Layer** — Camada única: syscall (NT/Linux/XNU) → skill request → agent.response. "abrir /etc/passwd" → DiskAgent.read() | ⏳ Pós-MVP | v0.80+ | Base p/ compatibilidade cross-OS |
-| 308a | **Update/Upgrade Agent** — Dual Kernel Slot A/B no FAT32. Baixa novo kernel via smoltcp HTTP GET, verifica Ed25519 + SHA-256, escreve KERNEL~2, switch BOOTCFG.JSON, reboot | 🟡 Pós-MVP | v0.80+ | ~500 LOC. Viability 9/10. Bloqueado por B-01 (rede). ADR-0031 |
-| 308b | **Update channels** — stable (Sprint), nightly (HEAD), security (hotfix). Channel manifesto via HTTP GET de update-server. Poll 3600s/600s/60s | 🟡 Pós-MVP | v0.80+ | ~200 LOC. ADR-0031 |
-| 308c | **Rollback automático** — BootSelfHealAgent detecta crash pós-update → restaura BOOTCFG.JSON → last_good slot. Três falhas seguidas → rollback forçado | 🟡 Pós-MVP | v0.80+ | ~100 LOC. ADR-0031 |
-| 309a | **WASM Skill Runtime (wasmi)** — wasmi v0.42+ intérprete no_std. Cada .wasm vira agente com sandbox, 256KB linear memory, fuel metering (100k/tick), capability tokens | 🟡 Pós-MVP | v0.75+ | ~800 LOC. Viability 8/10. WASI→agent skill mapping (20 syscalls). ADR-0031 |
-| 309b | **IDE Agent (BitNet IDE)** — IDE no-navegador no AIOS, assistida por Cortex LLM BitNet. Escreve, debuga, compila para WASM | ⏳ Pós-MVP | v0.85+ | ~2000 LOC. Requer WASM + Cortex 1.5B + J.A.R.V.I.S. ADR-0031 |
-| 309c | **Agentes: kernel vs WASM (Hybrid)** — Tier 0-2 kernel (boot, HW, runtime crítico). Tier 3 WASM (user-extensible). Tier 4 external MCP. 20 agentes kernel, ∞ WASM | 🟡 Pós-MVP | v0.80+ | ~100 LOC (policy config). Viability 9/10. ADR-0031 |
-| 310a | **J.A.R.V.I.S. Layer** — Camada de persona acima do Hermes: SOUL.md, contexto persistente (MemoryTree+KG), notificações proativas (NotificationGate), conversation engine (greetings, mood, task decomposition) | 🟡 Sprint 77 | Sprint 77 | ~950 LOC (Sprint 77). Substituído pelo ADR-0036 detalhado (#315) |
-| 310b | **Stack final:** Boot → Kernel → Cortex/LLM → Hermes → J.A.R.V.I.S. — Ver diagrama ADR-0036. Boot minimalista. Kernel acorda Cortex (BitNet). Cortex alimenta Hermes (intent). Hermes delega para J.A.R.V.I.S. (persona). Tudo agentes, tudo skills | 🟡 Sprint 77 | Sprint 77 | ADR-0036 |
+| 306a | **Windows binary compat** — PE32+ loader + syscall translation (NT→AIOS). DLL loader stub, SEH handler, PEB emulação | ✅ parcial PE / ⏳ defer | — | PE loader existe; NT pleno fora do gate |
+| 306b | **Linux ELF compat** — ELF x86-64 loader + syscall translation (open/read/write/mmap/clone → agent skills) | ✅ parcial ELF / ⏳ defer | — | ELF loader existe; syscall layer defer |
+| 306c | **macOS/iOS Mach-O compat** — Mach-O loader + XNU syscall translation. Desafio: APIs Cocoa/AppKit fechadas | ⏳ defer gate | — | Stub; fora do gate |
+| 306d | **Android APK compat** — ART runtime como skill, Binder IPC → agentes. Desafio: framework Java → tradução | ⏳ defer gate | — | Fora do gate |
+| 307 | **Syscall-to-Skill Translation Layer** — Camada única: syscall (NT/Linux/XNU) → skill request → agent.response. "abrir /etc/passwd" → DiskAgent.read() | ⏳ defer gate | — | PE/ELF cobrem necessidade atual |
+| 308a | **Update/Upgrade Agent** — Dual Kernel Slot A/B no FAT32. Baixa novo kernel via smoltcp HTTP GET, verifica Ed25519 + SHA-256, escreve KERNEL~2, switch BOOTCFG.JSON, reboot | 🟡 Onda 7 | `depends_on: lan` | Código/scaffold; HTTP path gated LAN |
+| 308b | **Update channels** — stable (Sprint), nightly (HEAD), security (hotfix). Channel manifesto via HTTP GET de update-server. Poll 3600s/600s/60s | 🟡 Onda 7 | `depends_on: lan` | Idem |
+| 308c | **Rollback automático** — BootSelfHealAgent detecta crash pós-update → restaura BOOTCFG.JSON → last_good slot. Três falhas seguidas → rollback forçado | ✅ parcial SelfHeal | — | Path heal existe; update full = lan |
+| 309a | **WASM Skill Runtime (wasmi)** — wasmi v0.42+ intérprete no_std. Cada .wasm vira agente com sandbox, 256KB linear memory, fuel metering (100k/tick), capability tokens | ✅ SFI `hermes/wasm_rt` | — | **não** crate wasmi; runtime próprio Sprint 93 |
+| 309b | **IDE Agent (BitNet IDE)** — IDE no-navegador no AIOS, assistida por Cortex LLM BitNet. Escreve, debuga, compila para WASM | ⏳ defer gate | — | Fora do gate |
+| 309c | **Agentes: kernel vs WASM (Hybrid)** — Tier 0-2 kernel (boot, HW, runtime crítico). Tier 3 WASM (user-extensible). Tier 4 external MCP. 20 agentes kernel, ∞ WASM | ✅ política ADR-0051/52 | — | Nativos no bin; WASM catalog |
+| 310a | **J.A.R.V.I.S. Layer** — Camada de persona acima do Hermes: SOUL.md, contexto persistente (MemoryTree+KG), notificações proativas (NotificationGate), conversation engine (greetings, mood, task decomposition) | 🔄 → #315 / ADR-0036 | ✅ | Núcleo entregue; residuals Sound/Onda 4 |
+| 310b | **Stack final:** Boot → Kernel → Cortex/LLM → Hermes → J.A.R.V.I.S. — Ver diagrama ADR-0036. Boot minimalista. Kernel acorda Cortex (BitNet). Cortex alimenta Hermes (intent). Hermes delega para J.A.R.V.I.S. (persona). Tudo agentes, tudo skills | ✅ ADR-0036 / N5 | — | Cadeia K³CHJ wired |
 
 ### 1.26. Trinity Model Hub — Mixture of Experts (IDEA #311)
 | # | Item | Destino | Target | Motivação |
@@ -560,15 +586,15 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 315.17 | **Babel-Index (entropy monitoring)** — Monitora entropia, contradiction rate, staleness index da memória. Prevê colapso de coerência → dispara consolidação automática | 🟡 Sprint 79 | 79 | ~100 | NEOTH |
 | 315.18 | **Fail-Closed Safety Invariant** — SafetyAgent sempre nega por padrão. Toda skill precisa autorização explícita. SMT-proof (Z3-style): 4 invariants: process separation, pre-action, fail-closed, signed evidence | 🟡 Sprint 80 | 80 | ~200 | Unfireable Safety Kernel paper |
 | 315.19 | **Merkle Audit Trail (Ed25519 signed)** — Chain de audit entries: tick, agent, action, payload_hash, prev_hash, Ed25519 signature. Verificação de integridade a cada entry. Ring buffer 4096 | ✅ SESSION_136 | ADR-0053 | ~200 | Session key assina entry_hash |
-| 315.20 | **Cognitive Bridge (HANR UX / K²CHJ stack)** — SOUL≠PERSONA; BGE+Trinity no prompt; IterationBudget; session search; CapGate L0; SleepCycle REFLECT→MEMORY_NUDGE Jarbas | ✅ SESSION_137 | ADR-0053+ | ~400 | `cognitive_bridge.rs` |
+| 315.20 | **Cognitive Bridge (HANR UX / K³CHJ stack)** — SOUL≠PERSONA; BGE+Trinity no prompt; IterationBudget; session search; CapGate L0; SleepCycle REFLECT→MEMORY_NUDGE Jarbas | ✅ SESSION_137 | ADR-0053+ | ~400 | `cognitive_bridge.rs` |
 | 315.20 | **Fluid Persona (context-adaptive)** — Persona muda por contexto: urgente→preciso, triste→empático, irritado→formal. 3 eixos: persona metafórica (coach/tutor/tool) + intensidade (low/med/high) + traits do usuário | 🟡 Sprint 80 | 80 | ~100 | Fluid Personality paper |
 | 315.21 | **Pocket TTS Integration** (TTS) — Via sherpa-onnx (Rust bindings). PocketTTS engine 100M params, CPU-native, ~200ms latência, voice cloning, 6 idiomas. Alternativa: Kokoro via sherpa-onnx. Pós B-01 | ❌ supersedido | — | Histórico. Primário = Piper VITS + formant. ADR-0045. | k2-fsa/sherpa-onnx |
 | 315.22 | **STT (sherpa-onnx Whisper)** — Speech-to-text via sherpa-onnx Rust bindings. Whisper engine, CPU offline. Alternativa: Vosk. Pós B-01 | ❌ supersedido | — | Histórico. Primário = STT CTC nativo (`audio/stt.rs`). ADR-0045. | k2-fsa/sherpa-onnx |
 | 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | ❌ supersedido | — | Histórico. Substituído por MLP nativo `wakeword.rs` (**registrado** no boot Loop 5); path Mic→WAKEWORD e2e ainda aberto. ADR-0045. | Priler/jarvis |
 | 315.24 | **Audio Ring Buffer** — Circular buffer PCM lockless para DMA audio entre HDA/USB e voice pipeline. Produtor/consumidor SPSC via EventBus. | ✅ feito | Sprint Sound | `audio/ringbuf.rs` no truth. Não bloqueado por B-01. ADR-0045. | — |
 | 315.25 | **Voice Pipeline** — Pipeline de áudio nativo Rust sobre EventBus: Mic→WakeWord→STT→Cortex→TTS→Speaker. Frame types (AudioFrame, TranscriptionFrame, TTSCommandFrame) + PipelineAgent que orquestra. Ref arquitetural: pipecat pipeline composition pattern. | ❌ supersedido (spec sherpa) / ▶️ Sprint Sound | Sprint Sound (reaberta) | Spec original (sherpa+rustpotter) ❌. Pipeline nativo parcial (107 skinny ✅); fechar loop runtime = Sound. ADR-0045. | EventBus nativo |
-| 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | 🔴 Pós B-01 | N+1 | ~300 | SKYNET + BeFree |
-| 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | 🔴 Pós B-01 | N+2 | ~300 | SKYNET |
+| 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | ⏳ defer + `depends_on: lan` | fora gate | SESSION_143: não gate v2.0.0 |
+| 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | ⏳ defer + `depends_on: lan` | fora gate | SESSION_143: não planejar sprint |
 | 315.28 | **Gamification** — Recompensas, streaks, achievements para interação com JARVIS. OptimizerAgent + CronAgent | 🟢 Futuro | N+1 | ~200 | Jotape |
 
 **Total:** ~5650 LOC (Sprints 77-80: ~3550, N+1: ~1600, N+2: ~500). ADR-0036.
@@ -1654,14 +1680,14 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-09 | **415** | ✅ **B-01 MORTO** — Serial tunnel TCP bridge. `slip.rs` driver COM2 + `serial_bridge.py` TCP server. Bypassa NICs emuladas (RTL8139/E1000). `-serial tcp:127.0.0.1:4444` (QEMU cliente). Primeiro RX: 304 bytes. | ✅ Implementado | v0.109.3 | ~82 | slip.rs + serial_bridge.py |
 | 2026-07-10 | **416** | **Boa JS Engine** (boa_engine crate) � Engine JavaScript 100% Rust puro, compativel com no_std. ES2023+, ~180K LOC, ~5MB. Alternativa ao V8 para executar JS no kernel sem C++. BrowserAgent local usaria Boa como engine JS; Obscura (host) como fallback via serial tunnel para V8+CDP+stealth. | ?? IDEA_BANK | v2.0 | ~investigar | boa_engine |
 
-| 2026-07-10 | **417** | **exFAT + BlockDevice+ write** — Driver exFAT + BlockDevice write_sectors (ATA/AHCI/USB-MSC). Pendrives >4GB. | ✅ MVP r/list; ⏳ `por_fazer` write arquivo | ADR-0040 | SESSION_124/125 | `exfat.rs` + `block_dev.rs` |
-| 2026-07-10 | **418** | **DiskIntelligenceAgent v2** — multi-FS probes, SMART/hotplug/ARC, MHI register. Mount FilesystemDriver pleno + cloud = residual. | ✅ parcial probes+VFS+ARC; ⏳ `por_fazer` cloud/mount pleno | ADR-0040 | SESSION_124/125 | `disk_agent/` + `netfs.rs` |
-| 2026-07-10 | **419** | **FilesystemDriver trait + FS Manager App** — Trait unificado detect/mount/list. App Storage Manager = residual UI. | ✅ trait; ⏳ `por_fazer` App UI | ADR-0040 | SESSION_124/125 | `fs_driver.rs` + `storage_manager.rs` |
-| 2026-07-10 | **420** | **MHI Ativo com DMA ring** — soft-migrate metadata + DRAM memcpy; DMA NVMe/VRAM deferido. Registry unificado k_nano. | ✅ soft-MVP; ⏳ `por_fazer` DMA | ADR-0040 | SESSION_124/125 | `k_nano/mhi.rs` |
+| 2026-07-10 | **417** | **exFAT + BlockDevice+ write** — Driver exFAT + BlockDevice write_sectors (ATA/AHCI/USB-MSC). Pendrives >4GB. | ✅ r/list + **write opt-in** (`EXFAT_WRITE=1`, `exfat_write.rs`); NTFS/EXT write ⏳ | ADR-0040 | SESSION_144 | `exfat.rs` + `exfat_write.rs` |
+| 2026-07-10 | **418** | **DiskIntelligenceAgent v2** — multi-FS probes, SMART/hotplug/ARC, MHI register. Mount FilesystemDriver pleno + cloud = residual. | ✅ parcial probes+VFS+ARC; cloud **BLOCKED** Onda 7 `depends_on: lan` | ADR-0040 | SESSION_144 | `disk_agent/` + `netfs.rs` |
+| 2026-07-10 | **419** | **FilesystemDriver trait + FS Manager App** — Trait unificado detect/mount/list. App Storage Manager = residual UI. | ✅ trait + CLI `storage_report`; ⏳ App UI (cauda) | ADR-0040 | SESSION_144 | `fs_driver.rs` + `storage_manager.rs` |
+| 2026-07-10 | **420** | **MHI Ativo com DMA ring** — soft-migrate metadata + DRAM memcpy; DMA NVMe/VRAM deferido. Registry unificado k_nano. | ✅ soft-MVP; ▶️ `[MHI-DMA] AWAITING_REAL_HW` peer DMA | ADR-0040 | SESSION_146 | `k_nano/mhi.rs` |
 | 2026-07-10 | **421** | **Instalador Neural com IA** — SysInstaller pendrive→HD. | ⏳ `por_fazer` | ADR-0040 | SESSION_125 | pós-MVP; precisa write HD |
 | 2026-07-10 | **422** | **NeuralFS — FS nativo CoW** — btree/journal/volume + NeuralFsAgent `/mnt/neural`; RAM I/O ✅; disco fisico / multi-level. | ✅ RAM I/O; ⏳ `por_fazer` disco | ADR-0040 / NeuralFS.md | SESSION_123/125 | `neural_fs/` |
-| 2026-07-10 | **423** | **Tutti-style GPU Direct Storage** — NVMe→VRAM sem CPU. | ⏳ `por_fazer` | ADR-0040 | SESSION_125 | requer GPU+NVMe DMA |
-| 2026-07-14 | **424** | **K²CHJ Capability Rings MVP C** — Dois AddressSpace + CR3 switch + SharedSpscRing + Cap bitflags + trap `int 0x90`. Demo boot non-fatal. Base Ring0↔Ring0; Ring3 = #429. | ✅ PoC | Sprint 107 | ~400 | ADR-0041 + `address_space.rs` + `ipc/` + `syscall.rs` |
+| 2026-07-10 | **423** | **Tutti-style GPU Direct Storage** — NVMe→VRAM sem CPU. | ▶️ `[GDS-HW] AWAITING_REAL_HW` stub SESSION_146 | ADR-0040 | SESSION_146 | `k_hal/gpu/direct_storage.rs` |
+| 2026-07-14 | **424** | **K³CHJ Capability Rings MVP C** — Dois AddressSpace + CR3 switch + SharedSpscRing + Cap bitflags + trap `int 0x90`. Demo boot non-fatal. Base Ring0↔Ring0; Ring3 = #429. | ✅ PoC | Sprint 107 | ~400 | ADR-0041 + `address_space.rs` + `ipc/` + `syscall.rs` |
 | 2026-07-14 | **425** | **Hermes WASM host Caps (P3)** — Host-functions (`aios_send_tcp`, WriteRing) gated por `Cap` / CapabilityGate; negar sem Cap + log serial. Sem POSIX. | ✅ CapGate | Sprint 107 | ~150 | `capability_gate.rs` + `aios_api.rs` + ADR-0041 |
 | 2026-07-14 | **426** | **SFI WASM + Cap contract** — Sandbox WASM com fuel + Cap por import sensível (net/ipc/FB). CapGate (#425) cobre o mínimo; SFI/AS pleno pendente. | 🟡 pós-P9 | Sprint 107+ | — | `wasm_rt.rs` + Cap |
 | 2026-07-14 | **427** | **JARBAS FB MMIO + double-buffer (P4)** — Cap MAP_FB/WRITE_FB, AS map em JARBAS_FB_VA, backbuffer+present+vsync stub. Path bootloader FB; VirtIO-GPU BAR = follow-up. | ✅ PoC | Sprint 107 | ~280 | `jarbas_fb.rs` + ADR-0041 |
@@ -1670,16 +1696,16 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-14 | **430** | **Demand-paging via #PF (P7)** — lazy registry + reserve NOT PRESENT + #PF cure (frames pré-alocados); Cap DEMAND_PAGE. Sem I/O no fault (GGUF pré-fill = #432). | ✅ PoC | Sprint 107 | ~280 | `demand_page.rs` + `cortex_mmap.rs` + ADR-0041 |
 | 2026-07-14 | **431** | **VirtIO vring + DMA pin (P8)** — Virtqueue layout-compatible sobre frames pinnados; Cap VRING_SETUP; NIC live untouched. QUEUE_NOTIFY device = follow-up. | ✅ PoC | Sprint 107 | ~220 | `virtio_vring.rs` + `k_ia_dma.rs` + ADR-0041 |
 | 2026-07-14 | **432** | **GGUF/FAT file-backed mmap (P9)** — pré-fill FAT `read_file_range` + demand-page lazy; Cap MAP_FILE; magic/fallback NFIL. Streaming on-fault / >4 pág. = follow-up. | ✅ PoC | Sprint 107 | ~260 | `gguf_mmap.rs` + `demand_page.rs` + ADR-0041 |
-| 2026-07-14 | **433** | **Cadeia K²CHJ canônica** — `k-nano → k-ai → cortex → hermes → jarbas` + identidades (legível / HW-AI / cérebro / orquestra / ego+10%). Gate **v2.0.0 = N1–N5**. | ✅ Doc | Sprint 107 | — | ADR-0042 |
+| 2026-07-14 | **433** | **Cadeia K³CHJ canônica** — `k-nano → k-ai → cortex → hermes → jarbas` + identidades (legível / HW-AI / cérebro / orquestra / ego+10%). Gate **v2.0.0 = N1–N5**. | ✅ Doc | Sprint 107 | — | ADR-0042 |
 | 2026-07-14 | **434** | **N1 k-nano legível** — Telemetria LOADED\|ABSENT\|FAILED; Cap authority; probe NVIDIA gated; métricas scheduler; sem SUCCESS falso. | ✅ | Sprint 107 / v1.7.0 | — | ADR-0042 |
 | 2026-07-14 | **435** | **N2 k-ai HW-AI / SelfHeal / HMI** — Heal/noop; HEALTH_ISSUE; inventário VID-gated (+ subclass); Trust (agent,skill). **N2.5 wired v1.7.8.** | ✅ CLOSED | ADR-0042 | v1.8.0 | SESSION_112 |
 | 2026-07-14 | **436** | **N3 cortex cérebro** — Modelo real; MoE; Cap MAP_WEIGHTS; prompt→texto. **N3.5 wired v1.7.9.** | ✅ CLOSED | ADR-0042 | v1.8.0 | SESSION_113/117 |
 | 2026-07-14 | **437** | **N4 hermes orquestra** — WASM SFI; skills; intent e2e; IPC→jarbas. **N4.6 wired v1.7.10.** | ✅ CLOSED | ADR-0042 | v1.8.0 | SESSION_114/118 |
 | 2026-07-14 | **438** | **N5 jarbas ego/persona/+10%** — Compositor vivo; humor/UI; voz como expressão (stack pleno → Sprint Sound); só via Hermes; feedback preferências. **CLOSED v1.7.7 + N5.7 wired v1.7.11.** | ✅ CLOSED | ADR-0042 + Sound (voz) | v1.8.0 | ADR-0042 + SESSION_115/119 |
-| 2026-07-16 | **439** | **Wire pattern K²CHJ** — Alias dep `*-crate` + `pub use` + deletar espelhos; `k_nano` sem `global-alloc`; bridge `memory`/`EVENT_BUS` → k_nano globals; residuals = integração bin-only. | ✅ | ADR-0042 N2.5–N5.7 | — | SESSION_117–119 |
+| 2026-07-16 | **439** | **Wire pattern K³CHJ** — Alias dep `*-crate` + `pub use` + deletar espelhos; `k_nano` sem `global-alloc`; bridge `memory`/`EVENT_BUS` → k_nano globals; residuals = integração bin-only. | ✅ | ADR-0042 N2.5–N5.7 | — | SESSION_117–119 |
 | 2026-07-16 | **440** | **Marco v1.8.0** — ADR-0042 N1–N5 funcional + wire crates completo; Sprint 107 fechada; gate v2.0.0 = review (não auto-declare). | ✅ | v1.8.0 | — | STATE + CHANGELOG |
 | 2026-07-16 | **441** | **USB HW unificado** — `usb_hw.img` GPT ESP + FAT dados; Rufus DD 1 stick; BITNET+PIPER+experts+116 FW. | ✅ | HW real | — | `build_image.py --hw --unified` |
-| 2026-07-16 | **442** | **Sprint Sound backlog** — STT PCM; Mic→Wake gate; neural-lite; UAC parse; VAD/SER. Soft-float/VITS + cutover abertos. | ✅ parcial | Sprint Sound | SESSION_122 | ADR-0045 |
+| 2026-07-16 | **442** | **Sprint Sound backlog** — STT PCM; Mic→Wake gate; neural-lite; UAC parse; VAD/SER. Soft-float/VITS + cutover abertos. | ✅ parcial; Onda 4: UAC-HW AWAITING + soft-float ⏳ | Sprint Sound | SESSION_145 | ADR-0045 |
 | 2026-07-16 | **443** | **N-gram speculative decoding** — LCG hash N=8 → draft M=4 da ocorrência anterior (last-writer-wins por índice); `verify_draft` + truncate KV; `draft[0]` gated pelos logits do passo anterior; sem double-forward. Zero deps. | ✅ OK | ADR-0047 §3.7 | SESSION_125 | `cortex/ngram_spec.rs` + `generate_speculative` |
 | 2026-07-16 | **444** | **LatentBus** — canal `[f16;256]` paralelo ao EventBus; projection mean-pool; publish no generate; Hermes drain. | ✅ MVP | ADR-0047 P1 | SESSION_126 | `event-bus/latent.rs` + `cortex/projection.rs` |
 | 2026-07-16 | **445** | **Evolve WASM hot-swap** — ledger + sandbox test + rollback; SleepCycle DREAM hook. | ✅ MVP | ADR-0047 P2 | SESSION_126 | `hermes/evolve.rs` |
@@ -1691,10 +1717,13 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-16 | **451** | **GPU G3 SASOS-lite + G4 H2O/pages + G5 pipeline CPU** | ✅ MVP | ADR-0047-GPU | SESSION_127 | `sasos.rs` `kv_h2o.rs` `pipeline_g5.rs` |
 | 2026-07-16 | **452** | **HMI H2+H5** — embedding points + thought splats no FB. | ✅ MVP | ADR-0047-HMI | SESSION_127 | `embed_viz.rs` |
 | 2026-07-16 | **453** | **Descartes ADR-0047** — NeuOS ISA plena; LatentBus adapter; H3 diffusion. | ❌ | ADR-0047 | SESSION_127 | docs |
-| 2026-07-16 | **454** | **NVIDIA Compute Multigeração** — contrato comum; backends Legacy ACR e GSP; Kernel Pack multi-ISA; Pascal é primeiro gate HW, não limite do produto. | ⏳ | ADR-0048 | futuro | `0048-nvidia-compute-multigeracao.md` |
-| 2026-07-16 | **455** | **AMD Compute Multigeração** — IP Discovery; backends KIQ (GFX9–10) e MES (GFX11+); `AMD_KERNEL_PACK` HSACO offline; iGPU/APU display + dGPU AI; sem ROCm no alvo. | ⏳ | ADR-0049 | futuro | `0049-amd-compute-multigeracao.md` |
-| 2026-07-16 | **456** | **Intel Compute Multigeração** — GMD_ID; famílias Gen9→Xe3; GuC + walkers; `INTEL_KERNEL_PACK` zebin offline; iGPU vídeo + dGPU IA; sem Level Zero no alvo. | ⏳ | ADR-0050 | futuro | `0050-intel-compute-multigeracao.md` |
-| 2026-07-16 | **449** | **AirLLM GGUF streaming** — `GGUFStreamingModel` layer-wise ATA; soft PrefetchEngine; Q5_0/Q8_0 dequant; hot-swap ATA+Net→FAT→`set_model` (RX gate L3.5); DMA/stream-to-disk/K-quant deferred. | ✅ MVP + Net code | ADR-0046 | SESSION_127/128 | `gguf_streaming.rs` + `gguf.rs` |
+| 2026-07-16 | **454** | **NVIDIA Compute Multigeração** — contrato comum; backends Legacy ACR e GSP; Kernel Pack multi-ISA; Pascal é primeiro gate HW, não limite do produto. | ▶️ `[GPU-HW] AWAITING` SESSION_146; Degrau ✅ | ADR-0048 | SESSION_146 | golden silício |
+| 2026-07-16 | **455** | **AMD Compute Multigeração** — IP Discovery; backends KIQ (GFX9–10) e MES (GFX11+); `AMD_KERNEL_PACK` HSACO offline; iGPU/APU display + dGPU AI; sem ROCm no alvo. | ▶️ `[GPU-HW] AWAITING` SESSION_146; Degrau ✅ | ADR-0049 | SESSION_146 | golden silício |
+| 2026-07-16 | **456** | **Intel Compute Multigeração** — GMD_ID; famílias Gen9→Xe3; GuC + walkers; `INTEL_KERNEL_PACK` zebin offline; iGPU vídeo + dGPU IA; sem Level Zero no alvo. | ▶️ `[GPU-HW] AWAITING` SESSION_146; Degrau ✅ | ADR-0050 | SESSION_146 | golden silício |
+| 2026-07-16 | **449** | **AirLLM GGUF streaming** — `GGUFStreamingModel` layer-wise ATA; soft PrefetchEngine; Q5_0/Q8_0 dequant; hot-swap ATA+Net→FAT→`set_model` (RX gate L3.5); DMA/stream-to-disk/K-quant deferred. | ✅ MVP ATA; ▶️ `[AIRLLM-DMA]`; Net `depends_on: lan` | ADR-0046 | SESSION_148 | `gguf_streaming.rs` + `gguf.rs` |
+| 2026-07-18 | **461** | **Rebrand K³CHJ** — terceira K = `k_hal`; cadeia k-nano→k-hal→k-ai→cortex→hermes→jarbas; K²CHJ histórico. | ✅ documentação | v1.8.6+ | ADR-0042 §0 | INDEX + AGENTS + README |
+
 | 2026-07-18 | **460** | **Marco v1.8.6 TEST** — ADR-0041 H4+/H5+/AS + HalOffer Cap + slog canônico; continua não estável; ≠ v2.0.0. | ✅ documentação/release | v1.8.6 teste | SESSION_140 | STATE + CHANGELOG + tag |
 | 2026-07-17 | **458** | **HW USB diagnostics sem serial** — `BOOT.LOG` FAT + console FB (`console_clear`/`console_print`) + ckpts K0–K17; MBR dados+ESP montável no Windows; vendor bootloader BltOnly→SetMode. | ✅ MVP debug | HW real | SESSION_139 | `boot_logger.rs` + `fb.rs` + `build_usb_unified.py` + `vendor/bootloader*` |
 | 2026-07-18 | **459** | **k-HAL R1 + HalOffer + H4+/H5+/AS** — L0–L4; DeviceCap; QUEUE_NOTIFY real; Cap grant no bind; AS shallow PoC; VirtIO=transporte BE. | ✅ PoC v1.8.6 | ADR-0041 §9–§10 | SESSION_140 | `crates/k_hal`, `hermes/hal_offer.rs` |
+| 2026-07-18 | **462** | **Auditoria ideias antigas** — STALE→✅/🔄; VIABLE→Onda+tags `depends_on: lan`; DEFER/💰/❌; legenda AWAITING_HW; zero 🟡 órfão nos IDs tocados. | ✅ docs | governança | SESSION_143 | IDEA_BANK + TODO + STATE |

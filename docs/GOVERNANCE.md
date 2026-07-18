@@ -12,6 +12,7 @@ IDEA_BANK → ADR temática → plano de sprint → TODO → implementação + S
 1. **IDEA_BANK:** registrar toda ideia com status, destino e evidência conhecida.
 2. **ADR temática:** agrupar ideias relacionadas que impliquem decisão arquitetural, stack, anel ou contrato público.
 3. **Plano de sprint:** detalhar escopo, ordem, critérios de aceite e riscos. Planos concluídos vão para `docs/archive/sprints/`.
+   - **Planos Cursor** (implementação): ao fechar, registrar seção **“Planos Cursor implementados”** na ADR temática + linha na tabela `INDEX.md` → “Planos Cursor → ADR”. Não versionar `.cursor/plans` no git.
 4. **TODO:** transformar o plano aprovado em checklist executável, com referências a IDEA/ADR.
 5. **Implementação + STATE:** implementar e atualizar `docs/memory/STATE.md` somente com a verdade operacional atual.
 6. **SESSION:** registrar decisões, evidências, comandos de verificação, limites e handoff.

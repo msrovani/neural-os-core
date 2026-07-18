@@ -1585,25 +1585,47 @@ pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::ne
 
 pub fn set_model(model: Box<dyn Model>) {
     *CURRENT_MODEL.lock() = Some(model);
+    crate::model_hub::mark(crate::model_hub::ModelSlot::Active, true);
     k_nano::slog_cortex!("CORTEX", "info", "Model swapped.");
 }
 
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
     *RUSTCODER_MODEL.lock() = Some(model);
+    crate::model_hub::mark(crate::model_hub::ModelSlot::RustCoder, true);
     k_nano::slog_cortex!("CORTEX", "info", "RustCoder expert model loaded.");
 }
 
 pub fn set_hwexpert_model(model: Box<dyn Model>) {
     *HWEXPERT_MODEL.lock() = Some(model);
+    crate::model_hub::mark(crate::model_hub::ModelSlot::HwExpert, true);
     k_nano::slog_cortex!("CORTEX", "info", "HW Expert model loaded (SDIO MoE).");
 }
 
+pub fn register_model_slot(slot: crate::model_hub::ModelSlot, model: Box<dyn Model>) {
+    match slot {
+        crate::model_hub::ModelSlot::Active => set_model(model),
+        crate::model_hub::ModelSlot::RustCoder => set_rustcoder_model(model),
+        crate::model_hub::ModelSlot::HwExpert => set_hwexpert_model(model),
+        other => crate::model_hub::register_model(other, model),
+    }
+}
+
 pub fn generate_via_model(prompt: &str) -> String {
-    // ponytail: pure inference — Trinity routing lives in neural-kernel
+    // Sub-rota ModelHub (crate); Trinity completo no bin.
+    let slot = crate::model_hub::select_generator_slot(prompt);
+    if slot != crate::model_hub::ModelSlot::Active {
+        if let Some(out) = crate::model_hub::generate_from_slot(slot, prompt) {
+            return out;
+        }
+    }
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
-        None => String::from("[CORTEX] No model loaded"),
+        None => crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorFast, prompt)
+            .or_else(|| {
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::TinyStories, prompt)
+            })
+            .unwrap_or_else(|| String::from("[CORTEX] No model loaded")),
     }
 }
 
@@ -1776,7 +1798,23 @@ impl Cortex {
 
     pub fn think(&self, text: &str) -> Intent {
         let lower = text.to_ascii_lowercase();
-        if lower.contains("status") || lower.contains("system") || lower.contains("info") {
+        if lower.contains("volume")
+            || lower.contains("mute")
+            || lower.contains("brilho")
+            || lower.contains("brightness")
+        {
+            Intent::AudioVolume
+        } else if lower.contains("hello")
+            || lower.contains("hey")
+            || lower.contains("ola")
+            || lower.contains("olá")
+            || lower.contains("oi")
+            || lower.contains("bom dia")
+            || lower.contains("boa tarde")
+            || lower.contains("boa noite")
+        {
+            Intent::Greeting
+        } else if lower.contains("status") || lower.contains("system info") {
             Intent::SystemStatus
         } else if lower.contains("echo") || lower.contains("reverse") || lower.contains("repeat") {
             Intent::Echo
@@ -1800,8 +1838,6 @@ impl Cortex {
             Intent::Conversation
         } else if lower.contains("usage") || lower.contains("metrics") {
             Intent::Usage
-        } else if lower.contains("hello") || lower.contains("hi") || lower.contains("hey") || lower.contains("ola") || lower.contains("oi") {
-            Intent::Greeting
         } else {
             Intent::Chat
         }
@@ -1811,7 +1847,7 @@ impl Cortex {
 #[derive(Debug)]
 pub enum Intent {
     SystemStatus, Echo, HardwareInfo, HardwareIdentify, TrustAllow, TrustDeny,
-    Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat,
+    Network, HttpFetch, Help, Conversation, Usage, Greeting, Chat, AudioVolume,
 }
 
 // ── M2: Consciência — Métricas Cognitivas ─────────────────────
@@ -2058,6 +2094,7 @@ impl Intent {
             Intent::Usage => "usage",
             Intent::Greeting => "greeting",
             Intent::Chat => "chat",
+            Intent::AudioVolume => "audio_set_volume",
         }
     }
 }

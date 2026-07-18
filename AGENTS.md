@@ -1,12 +1,13 @@
 # ════════════════════════════════════════════════════════
-#   PLANO DIRETOR — neural-os-core v2.0 "K²CHJ Core" 🏆
+#   PLANO DIRETOR — neural-os-core v2.0 "K³CHJ Core" 🏆
 #   ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
-#   Sprints 106+: K²CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 TEST
-#   v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer (pós-1.8.5); v2.0.0 = gate após review (não declarado)
-#   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação K²CHJ (Jul 2026); não "2.0 completo" sem review
+#   Sprints 106+: K³CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 TEST
+#   v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer + rebrand K³CHJ (k-hal); v2.0.0 = gate após review
+#   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação (Jul 2026); não "2.0 completo" sem review
+#   K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
@@ -20,7 +21,7 @@
 # docs/memory/IDEA_BANK.md     → 416+ ideias catalogadas com status
 # docs/memory/SESSION_INDEX.md → Índice de sessões + lições críticas
 # docs/architecture/0041-*.md  → Capability PoC P0–P9
-# docs/architecture/0042-*.md  → Adequação Boot OK → K²CHJ (N1–N5)
+# docs/architecture/0042-*.md  → Adequação Boot OK → K³CHJ (N1–N5)
 # CHANGELOG.md                 → Histórico de versões
 # ROADMAP.md                   → Roadmap completo (v1.0 → v2.0)
 # TODO.md                      → Checklist mestre de tarefas
@@ -114,29 +115,23 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **Consultar SESSION_INDEX.md antes de repetir trabalho.**
 - **Consultar TODO.md antes de iniciar nova sprint.**
 
-# K²CHJ Workspace Structure (v1.5.0+)
+# K³CHJ Workspace Structure (v1.5.0+ → v1.8.6)
 # ═══════════════════════════════════════════════════════════════
-# Monolith → 5 crates (wire N2.5–N5.7 ✅ v1.8.0):
-#   k_nano ← k_ai ← cortex ← hermes ← jarbas   (dep chain, no cycles)
-#   neural-kernel (bin) = integração + residuals bin-only (audio, cortex.rs, net*, …)
+# Monolith → 6 crates de produto (wire N2.5–N5.7 ✅ v1.8.0; k_hal ✅ v1.8.6):
+#   k_nano ← k_hal ← cortex
+#                  ← k_ai
+#                  ← hermes ← jarbas
+#   neural-kernel (bin) = integração + residuals bin-only
 # ═══════════════════════════════════════════════════════════════
-# Crate       | Files | Function
-# ────────────|───────|──────────────────────────────────────
-# k_nano      |  73   | Foundation: HAL, drivers, PCI, memory, interrupts,
-#             |       | console, timer, ATA, RTC, ACPI, SMP, APIC, VGA,
-#             |       | serial, VGA, AHCI, NVMe, xHCI, RDTSC, simd
-# cortex      |  13   | Intelligence: LLM inference, BitNet, BPE, tensor ops,
-#             |       | attention, Trinity MoE, DeltaNet, TV DSL, transformer,
-#             |       | burn_flex, nn, tokenizer, medusa, reasoning
-# k_ai        |  22   | Autonomy: self-heal, trust, audit, agency, cognitive,
-#             |       | training, inventory, boot_log, hw_agents, shutdown,
-#             |       | memory — (safety/security/optimizer/Sleep/AutoLearn → hermes)
-# hermes      |  28   | Orchestration: intent routing, ReAct, skills (47),
-#             |       | agents (12 FS + 6 HW + 40 repo), event bus,
-#             |       | netstack, HTTP, DHCP, DNS, cron, wifi, safety, security
-# jarbas      |  28   | Interaction: display compositor, HDA audio, framebuffer,
-#             |       | Hermes CLI, wake word, visual 3-camadas, font,
-#             |       | VirtIO-GPU, shell
+# Crate       | Anel | Function
+# ────────────|------|──────────────────────────────────────
+# k_nano      | R0   | Foundation: mem, IRQ, PCI cfg, traps, serial
+# k_hal       | R1   | DeviceCap, HalOffer, MMIO BE, VirtIO transporte
+# k_ai        | R2   | SelfHeal, Trust, inventário, Agency
+# cortex      | R2   | LLM BitNet, Trinity MoE, tensores
+# hermes      | R3   | Orquestração, WASM, rede, skills, HalOffer client
+# jarbas      | R3   | Display FE, persona (GPU BE em k_hal)
+# neural-kernel | —  | Bin boot — residuals integração
 # ═══════════════════════════════════════════════════════════════
 
 # Active Dependencies (neural-kernel)
@@ -166,13 +161,16 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: estabilização v1.8.6 TEST + Sprint Net; gate v2.0.0 permanece fechado.
-# Pós-v1.8.0: Sprint 108 ✅; Sound ✅ parcial; ADR-0040/0046/0047 MVPs ✅ com residuals explícitos.
+# Current Sprint: pós-plano Residuals 0–7 ✅ (SESSION_151); gate v2.0.0 permanece fechado.
+# Residuals: PreFlight `tools/preflight_wave.py`; AWAITING_HW; depends_on: lan liberado (L3.5–L5).
+# Onda 7 LAN: e1000 TX regs 0x3800/0x3818; DNS raw + HTTP smoke QEMU/WHPX (SESSION_149/150).
+# Abertos conscientes: WiFi AWAITING; TLS/#418 PARTIAL; soft-float/VITS defer; GPU/UAC/DMA AWAITING_HW.
 # Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho wired mas não re-exportado no bin
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
 # Não declarar v2.0.0 sem review formal ADR E sem zerar demandas `por_fazer` — só com OK explícito do maintainer.
-# Lembrete: gate v2.0.0 = checklist completo (voz Sound + ADRs por_fazer + rede) + OK humano.
+# Lembrete: gate v2.0.0 = checklist completo (voz Sound + ADRs por_fazer + WiFi/TLS) + OK humano.
 # Wire crates: alias `*-crate` + `pub use`; k_nano sem `global-alloc`; residuals = integração bin-only
+# Net gate canônico = e1000 + smoltcp (SLIP/COM2 = frozen debug; não é path do gate)
 
 ## Roadmap v2.0 "Cognição"
 | Sprint | Foco | Status |
@@ -180,7 +178,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **100** | **Code Freeze** Release v1.0.0 | ✅ |
 | **101** | Piper TTS + STT + HDA Capture + ATA fix | ✅ |
 | **102** | GPU Compute (NVIDIA) + HW Expert v3 + Firmware | ✅ |
-| **103–104** | K²CHJ Workspace Migration (5 crates) | ✅ |
+| **103–104** | K³CHJ Workspace Migration (5 crates) | ✅ |
 | **105** | Ponytail Audit + v1.5.1..v1.5.3 | ✅ |
 | **106** | Ecossistema de Anéis Lógicos (10/10 sub-sprints) | ✅ |
 | **107** | Voice I/O (clima e2e + skinny EventBus) | ✅ FECHADA (PASS parcial forte+) |
@@ -188,16 +186,17 @@ cargo build --release → python tools/build_image.py --bios → qemu
 | **ADR-42** | Adequação N1–N5 + wire crates | ✅ **v1.8.0** |
 | **108** | Self-evolving agents (auto-skill generation) | ✅ |
 
-# QEMU Launch (WHPX + VirtIO optimizado)
+# QEMU Launch (WHPX; Net gate = e1000 + user/slirp)
 ```powershell
-.\run-qemu-whpx.ps1              # Boot normal (sobe SLIP bridge :4444; mata no exit)
-.\run-qemu-whpx.ps1 -debug       # Aguarda GDB (-s -S)
-.\run-qemu-whpx.ps1 -NoSerialBridge  # sem auto-bridge
-# Manual se necessario: python tools\serial_bridge.py
+.\run-qemu-whpx.ps1              # Boot: e1000 + user net (SLIP default OFF)
+.\run-qemu-whpx.ps1 -Window      # com display
+.\run-qemu-whpx.ps1 -Bridge      # TAP + ICS/bridge (internet real via WiFi host)
+.\run-qemu-whpx.ps1 -SerialBridge  # opt-in SLIP legado (não é Net gate)
+python tools\preflight_wave.py --wave 7   # PreFlight residuals
 ```
 
-Config: WHPX accel, `-cpu host`, VirtIO-GPU, VirtIO-net, 2× serial (file log + tcp COM2 SLIP client).
-Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
+Config: WHPX + Haswell/TCG, e1000 + `-netdev user`, VirtIO-GPU. SLIP/COM2 frozen.
+Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 
 # Sprint 100 — Code Freeze v1.0.0
 - `cargo clean -p neural-kernel && cargo check --release` — 0 erros
@@ -206,14 +205,14 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - Tag `v1.0.0` + release notes
 - **Fim da v1.0. v2.0 "Cognição" começa na Sprint 101.**
 
-# Sprint v1.5.0 (Jul 2026) — K²CHJ Workspace Migration
+# Sprint v1.5.0 (Jul 2026) — K³CHJ Workspace Migration
 - **Crate taxonomy**: Monólito `neural-kernel` → 5 crates especializados (k_nano, k_ia, cortex, hermes, jarvis)
 - **Migration tool**: `tools/migrate_k2chj.py` — mapeia 193 arquivos para crates, corrige 79 refs cross-crate
 - **Dep chain**: k_nano (foundation, 73 files) → cortex (intelligence, 13) → hermes (orchestration, 28) → k_ia (autonomy, 40) → jarvis (interaction, 28)
 - **k_nano compile**: crate independente — 0 erros (HAL, drivers, PCI, memory, interrupts)
 - **Neural-kernel intact**: monólito compila com 0 erros, integra todos os globals via `pub use`
 - **Release v1.5.0**: tag git + imagens bootáveis `disk_qemu.raw` (256MB) + `disk_hw.raw` (64MB)
-- **Workspace members**: 11 crates (ticket-lock, event-bus, skill-registry, agent-core, boot, neural-kernel + 5 K²CHJ)
+- **Workspace members**: 11 crates (ticket-lock, event-bus, skill-registry, agent-core, boot, neural-kernel + 5 K³CHJ)
 - **Gradual migration**: arquivos permanecem no monólito até que main.rs use explicitamente as crates externas
 
 # Sprint v1.2 — ATA PIO Bug + Release Final
@@ -267,6 +266,8 @@ Disk: `if=ide` (VirtIO-blk ainda nao implementado). Ver `run-qemu-whpx.ps1`.
 - **ATA PIO bug (v0.1 → v1.1.5)**: `read_sectors()` usava `in al, dx+1` para o byte alto — esse port é FEATURES/ERROR, não dado. Fix: `in ax, dx`. Impacto: TODO acesso a disco desde o início era lixo. MBR, FAT32, modelos, firmware — nada funcionava em disco.
 - **Framebuffer bpp hardcoded (tela = "chuviscos")**: `probe_uefi_framebuffer` (`crates/jarbas/src/display/fb.rs`) fixava `bpp=3` para `PixelFormat::Bgr`/`Rgb` e derivava `fb_stride = info.stride * 3`. Em framebuffer de 32 bits (QEMU/OVMF e a maioria do HW real reportam `bytes_per_pixel=4`, ex. stride 1280px = 5120 bytes) cada pixel escrevia 3 bytes num slot de 4 e cada linha usava 3840 em vez de 5120 → imagem "escorrega" na diagonal e vira chuviscos; só ficaria certo num painel real de 24-bit. Fix: usar `info.bytes_per_pixel` (cobre 24-bit=3 e 32-bit=4), com `fb_stride = info.stride * bytes_per_pixel`. Todos os consumidores (console fb em `vga_buffer.rs`, splash, P4 `jarbas_fb.rs`) leem `fb_bpp`/`fb_stride` do `GpuDevice`, então corrigir a fonte conserta tudo.
 - **FB texto ilegível / sobrescrita (SESSION_139):** TRACE do bootloader + `boot_ckpt` + `fb_print` sem limpar faixa → “fantasma”. Fix: `console_clear` no probe; `console_print` limpa banda da linha; `fb_print`→`console_print`. Stick Windows: MBR FAT dados `0x0C` + ESP `0xEF` (não 0xEE-first). `BOOT.LOG` só pós-heap. GOP `BltOnly` → vendor bootloader SetMode Rgb/Bgr.
+- **e1000 TX aliases QEMU (SESSION_149):** `TDBAL/TDT` em `0x0420/0x0438` são aliases Intel **não wired** no QEMU → write no-op → ARP nunca sai → RX=0. **Usar `0x3800/0x3818`.**
+- **DNS compressão (SESSION_150):** ao pular nomes DNS, **não seguir** pointer `0xC0xx` no offset de continuação — só +2 bytes no wire (`skip_dns_name`). DNS bootstrap = raw Ethernet+IP+UDP no NIC (smoltcp perde 1º UDP no ARP).
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

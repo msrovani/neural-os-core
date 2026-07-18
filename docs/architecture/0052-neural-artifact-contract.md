@@ -54,3 +54,15 @@ Seções Markdown: Contexto, Goal, Acionaveis, Workflow, Pre-Flight, Success Cri
 - [ ] Sandbox militar completo para import (hoje: gate de campo + CapGate WASM parcial)
 - [ ] `verify_skill_md` unificado com `verify_artifact_md` (schema 1)
 - [ ] Promoção Hermes draft → `agent-wasm` via SkillOpt/evolve
+
+---
+
+## Planos Cursor relacionados (implementados / corrigidos)
+
+| Plano | Papel nesta ADR | Status |
+|-------|-----------------|--------|
+| `Ecosystem Package Hub` | Hub + namespace; gerou pressão por AGENT.md | ✅ MVP |
+| `Migrar agentes NeuralFS` | Export em massa SESSION_134 | ✅ código → **corrigido** por esta ADR (stubs ≠ artefato) |
+| `HANR Hermes Port` Wave 0 | Session Ed25519 + auto-sign drafts | ✅ ADR-0053 |
+
+**Decisão canônica:** inventário copiado sem missão executável **não** é artefato; não registrar no fleet.

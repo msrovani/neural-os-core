@@ -86,3 +86,50 @@ pub fn smoke_multilevel() -> bool {
         Err(_) => false,
     }
 }
+
+/// Stress B-tree: milhares de keys → root level >= 2 (Onda 1 evidência).
+pub fn smoke_level2() -> bool {
+    let mut disk = MemoryDisk::new(32 * 1024 * 1024);
+    let total = disk.sector_count();
+    if !NeuralVolume::format(&mut disk, 0, total) {
+        return false;
+    }
+    let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
+        return false;
+    };
+    match vol.test_insert_many(&mut disk, 2500) {
+        Ok(level) => level >= 2,
+        Err(_) => false,
+    }
+}
+
+/// Power-loss soft: write+commit → drop vol → remount → read (journal recover path).
+/// USB power-cycle real fica AWAITING_HW ([NRFS-HW]).
+pub fn smoke_power_loss_soft() -> bool {
+    let mut disk = MemoryDisk::new(4 * 1024 * 1024);
+    let total = disk.sector_count();
+    if !NeuralVolume::format(&mut disk, 0, total) {
+        return false;
+    }
+    {
+        let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
+            return false;
+        };
+        let Ok(ino) = vol.create_file(&mut disk, 1, "ploss.txt") else {
+            return false;
+        };
+        if vol.write_file(&mut disk, ino, b"survive-reboot\n").is_err() {
+            return false;
+        }
+    }
+    let Some(vol) = NeuralVolume::mount(&mut disk, 0) else {
+        return false;
+    };
+    let Some(ino) = vol.resolve_path(&mut disk, "ploss.txt") else {
+        return false;
+    };
+    match vol.read_file(&mut disk, ino) {
+        Ok(d) => d == b"survive-reboot\n",
+        Err(_) => false,
+    }
+}

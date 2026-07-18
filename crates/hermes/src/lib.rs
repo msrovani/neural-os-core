@@ -52,6 +52,7 @@ pub mod structured_decode;
 pub mod wasm;
 pub mod wasm_exec;
 pub mod wasm_rt;
+pub mod gguf_wasm;
 pub mod micropython_wasm;
 pub mod aios_api;
 pub mod skill_opt;

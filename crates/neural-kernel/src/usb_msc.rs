@@ -34,6 +34,16 @@ impl UsbMassStorage {
             }
         }
 
+        // IDEA #12/#15 — gate antes de configurar endpoints (VID/PID=0 até EP0).
+        match crate::usb_trust::decide(0, 0, "msc") {
+            crate::usb_trust::UsbPolicy::Deny => {
+                crate::usb_trust::enforce_deny_ports();
+                k_nano::slog_nano!("USB", "msc", "probe blocked by USB-TRUST");
+                return None;
+            }
+            crate::usb_trust::UsbPolicy::Allow | crate::usb_trust::UsbPolicy::Observe => {}
+        }
+
         let slot = 2;
         let max_packet = 512;
         if let Some((ep_in, ep_out)) = xhci::configure_msc_endpoints(slot, max_packet) {
@@ -75,6 +85,7 @@ impl UsbMassStorage {
                 return None;
             }
 
+            crate::usb_trust::note_boot_msc_ok();
             Some(msc)
         } else {
             None

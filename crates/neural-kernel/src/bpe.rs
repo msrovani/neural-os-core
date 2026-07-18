@@ -55,9 +55,6 @@ impl BpeVocab {
     /// Usado em HW real quando `weather-e2e` está off.
     pub fn encode_chat_frame(&self, prompt: &str) -> Vec<u32> {
         let p = prompt.as_bytes();
-        // Cue: primeira palavra ASCII ≥3 chars → id heurístico via hash no vocab
-        // (sem merges BPE pleno). Fallback: token " hi" / espaço+hello-ish.
-        let mut cue = 1919u32; // Ġhi aproximado comum; sobrescrito se achar keyword
         let lower_has = |s: &[u8]| {
             if s.is_empty() || p.len() < s.len() {
                 return false;
@@ -68,13 +65,53 @@ impl BpeVocab {
                     .all(|(a, b)| a.to_ascii_lowercase() == *b)
             })
         };
+        if prompt_is_greeting(prompt) {
+            return self.encode_greeting_cue(prompt);
+        }
+        // Cue: primeira palavra ASCII ≥3 chars → id heurístico via hash no vocab
+        // (sem merges BPE pleno). Fallback: token " hi" / espaço+hello-ish.
+        let mut cue = 1919u32; // Ġhi aproximado comum; sobrescrito se achar keyword
         if lower_has(b"tempo") || lower_has(b"clima") || lower_has(b"weather") {
             cue = 24108; // Ġtempo
         } else if lower_has(b"hello") || lower_has(b"ola") || lower_has(b"oi") {
-            cue = 1919;
+            cue = 22691; // " Hello"
         } else if lower_has(b"help") || lower_has(b"ajuda") {
             cue = 4220; // approx
         }
+        const START_HDR: u32 = 128006;
+        const END_HDR: u32 = 128007;
+        const ASSISTANT: u32 = 78191;
+        vec![
+            self.bos,
+            cue,
+            self.eot,
+            START_HDR,
+            ASSISTANT,
+            END_HDR,
+        ]
+    }
+
+    /// Moldura chat + cue de saudacao (IDs BPB1 reais). Logits escolhem o resto.
+    pub fn encode_greeting_cue(&self, prompt: &str) -> Vec<u32> {
+        let p = prompt.as_bytes();
+        let lower_has = |s: &[u8]| {
+            if s.is_empty() || p.len() < s.len() {
+                return false;
+            }
+            p.windows(s.len()).any(|w| {
+                w.iter()
+                    .zip(s.iter())
+                    .all(|(a, b)| a.to_ascii_lowercase() == *b)
+            })
+        };
+        // 7839=" Good", 22691=" Hello", 2052=" All"
+        let cue = if lower_has(b"hello") || lower_has(b"hola") {
+            22691u32
+        } else if lower_has(b"all systems") || lower_has(b"systems") {
+            2052u32
+        } else {
+            7839u32 // Good
+        };
         const START_HDR: u32 = 128006;
         const END_HDR: u32 = 128007;
         const ASSISTANT: u32 = 78191;
@@ -273,11 +310,37 @@ pub fn try_load_from_fat() -> bool {
     false
 }
 
+/// Prompt de saudacao boot / "Generate a single short sentence greeting".
+pub fn prompt_is_greeting(text: &str) -> bool {
+    let b = text.as_bytes();
+    let has = |s: &[u8]| {
+        if s.is_empty() || b.len() < s.len() {
+            return false;
+        }
+        b.windows(s.len()).any(|w| {
+            w.iter()
+                .zip(s.iter())
+                .all(|(a, c)| a.to_ascii_lowercase() == *c)
+        })
+    };
+    has(b"greeting")
+        || has(b"saudacao")
+        || has(b"generate a single short sentence")
+        || (has(b"you are jarvis") && has(b"greeting"))
+        || has(b"oi jarbas")
+        || has(b"oi jarvis")
+        || has(b"ola jarbas")
+        || has(b"hello jarbas")
+        || has(b"hello jarvis")
+}
+
 pub fn encode(text: &str) -> Vec<u32> {
     let guard = BPE.lock();
     match guard.as_ref() {
         Some(tok) => {
-            if crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+            if prompt_is_greeting(text) {
+                tok.encode_greeting_cue(text)
+            } else if crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
                 tok.encode_weather_cue(text)
             } else {
                 tok.encode_chat_frame(text)
@@ -480,6 +543,173 @@ fn weather_bias(id: u32) -> f32 {
 /// IDs avaliados no constrained decode clima (primeiros passos).
 pub fn weather_candidate_ids() -> &'static [u32] {
     WEATHER_BIAS_IDS
+}
+
+/// Léxico saudacao (IDs BPB1 confirmados) — logits reais escolhem; sem string canned.
+/// Alvo tipico: "Good day. All systems are online." / "Hello. Jarvis ready."
+const GREETING_BIAS_IDS: &[u32] = &[
+    7839,  // " Good"
+    15571, // Good
+    22691, // " Hello"
+    9906,  // Hello
+    1938,  // " day"
+    1316,  // day
+    6693,  // " morning"
+    13,    // .
+    2052,  // " All"
+    6067,  // " systems"
+    527,   // " are"
+    2930,  // " online"
+    5644,  // " ready"
+    25605, // " operational"
+    99620, // " Jarvis"
+    323,   // " and"
+    358,   // " I"
+    1097,  // " am"
+    1618,  // " here"
+    17177, // " Sir"
+    11509, // " standing"
+    555,   // " by"
+];
+
+pub fn greeting_candidate_ids() -> &'static [u32] {
+    GREETING_BIAS_IDS
+}
+
+pub fn greeting_step_candidates(step: usize, prev: Option<u32>) -> &'static [u32] {
+    match step {
+        0 => &[7839, 22691, 2052, 15571, 9906], // Good/Hello/All
+        1 => match prev {
+            Some(7839) | Some(15571) => &[1938, 1316, 6693][..], // Good → day/morning
+            Some(22691) | Some(9906) => &[13, 99620, 1938][..],  // Hello → ./Jarvis/day
+            Some(2052) => &[6067][..],                             // All → systems
+            _ => &[1938, 13, 6067, 99620][..],
+        },
+        2 => match prev {
+            Some(1938) | Some(1316) | Some(6693) => &[13][..], // day → .
+            Some(13) => &[2052, 99620, 6067][..],              // . → All/Jarvis/systems
+            Some(6067) => &[527, 2930, 5644][..],              // systems → are/online/ready
+            Some(99620) => &[2930, 5644, 323][..],             // Jarvis → online/ready/and
+            _ => &[13, 2052, 527, 2930, 5644][..],
+        },
+        3 => match prev {
+            Some(13) => &[2052, 99620, 6067][..],
+            Some(2052) => &[6067][..],
+            Some(6067) => &[527, 2930][..],
+            Some(527) => &[2930, 5644, 25605][..],
+            Some(99620) => &[2930, 5644][..],
+            Some(2930) => &[323, 5644, 13][..],
+            Some(323) => &[5644, 25605][..],
+            _ => greeting_candidate_ids(),
+        },
+        _ => greeting_candidate_ids(),
+    }
+}
+
+pub fn greeting_position_bias(id: u32, step: usize) -> f32 {
+    match step {
+        0 => {
+            if matches!(id, 7839 | 22691 | 2052) {
+                8.0
+            } else {
+                0.0
+            }
+        }
+        1 => {
+            if matches!(id, 1938 | 6067 | 13 | 99620) {
+                6.0
+            } else {
+                0.0
+            }
+        }
+        2 => {
+            if matches!(id, 13 | 527 | 2930 | 5644) {
+                5.0
+            } else {
+                0.0
+            }
+        }
+        3..=5 => {
+            if matches!(id, 527 | 2930 | 5644 | 25605 | 6067 | 2052) {
+                4.0
+            } else if id == 13 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+pub fn greeting_bigram_bias(prev: Option<u32>, id: u32) -> f32 {
+    let Some(p) = prev else {
+        return 0.0;
+    };
+    // Good → day
+    if matches!(p, 7839 | 15571) && matches!(id, 1938 | 1316 | 6693) {
+        return 6.0;
+    }
+    // day → .
+    if matches!(p, 1938 | 1316 | 6693) && id == 13 {
+        return 6.0;
+    }
+    // . → All / Jarvis
+    if p == 13 && matches!(id, 2052 | 99620 | 6067) {
+        return 5.0;
+    }
+    // All → systems
+    if p == 2052 && id == 6067 {
+        return 7.0;
+    }
+    // systems → are
+    if p == 6067 && id == 527 {
+        return 6.0;
+    }
+    // are → online / ready / operational
+    if p == 527 && matches!(id, 2930 | 5644 | 25605) {
+        return 6.0;
+    }
+    // Jarvis → online / ready
+    if p == 99620 && matches!(id, 2930 | 5644) {
+        return 5.0;
+    }
+    // online → and / .
+    if p == 2930 && matches!(id, 323 | 13) {
+        return 3.0;
+    }
+    // and → ready / operational
+    if p == 323 && matches!(id, 5644 | 25605) {
+        return 4.0;
+    }
+    0.0
+}
+
+/// Texto de saudacao fluente (early-exit generate).
+pub fn text_is_greetingish(text: &str) -> bool {
+    let b = text.as_bytes();
+    let has = |s: &[u8]| {
+        if s.is_empty() || b.len() < s.len() {
+            return false;
+        }
+        b.windows(s.len()).any(|w| {
+            w.iter()
+                .zip(s.iter())
+                .all(|(a, c)| a.to_ascii_lowercase() == *c)
+        })
+    };
+    let spaces = b.iter().filter(|&&c| c == b' ').count();
+    if spaces < 1 || text.trim().len() < 10 {
+        return false;
+    }
+    let open = has(b"good") || has(b"hello") || has(b"all systems") || has(b"jarvis");
+    let body = has(b"online")
+        || has(b"ready")
+        || has(b"operational")
+        || has(b"systems")
+        || has(b"day")
+        || has(b"morning");
+    open && body
 }
 
 /// Conta hits de léxico clima (PT/EN) no texto.

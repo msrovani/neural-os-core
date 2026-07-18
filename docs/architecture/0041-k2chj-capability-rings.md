@@ -1,17 +1,19 @@
-# ADR-0041: K²CHJ Capability-Based Rings + SFI
+# ADR-0041: K³CHJ Capability-Based Rings + SFI
 
-**Data:** 2026-07-14 · **revisão anéis:** 2026-07-18  
-**Status:** Accepted — P0–P9 PoC complete; **emenda R0–R3 + k-HAL** (direcionamento)  
-**Lifecycle:** `fazendo` (emenda de limites; PoC mecânico permanece válido)  
-**Sprint:** 107+ (capability microkernel) → pós-v1.8.5 (separação HAL)  
-**Ideia:** #424–#432 (PoC); **#459** (k-HAL / anéis R0–R3 / VirtIO-bound)  
+**Data:** 2026-07-14 · **revisão anéis:** 2026-07-18 · **rebrand K³CHJ:** 2026-07-18  
+**Status:** Accepted — P0–P9 PoC complete; **emenda R0–R3 + k-HAL** H1–H5 + HalOffer + H4+/H5+/AS ✅ código (v1.8.6)  
+**Lifecycle:** `fazendo` (aceite QEMU maintainer + ≠ isolamento produção)  
+**Sprint:** 107+ → **v1.8.6 TEST** (SESSION_140)  
+**Ideia:** #424–#432 (PoC); **#459** (k-HAL); **#460** (marco 1.8.6); **#461** (rebrand K³CHJ)  
 **Propósito:** Formalizar anéis por capability, o estado real (monólito Ring 0) e o **mapa-alvo de privilégio + ownership de HW** sem desfazer Pacotes A/B nem N1–N5 (ADR-0042).
+
+**Nome de produto:** **K³CHJ** = `k_nano` + `k_hal` + `k_ai` + Cortex + Hermes + Jarbas (ver ADR-0042 §0). Histórico **K²CHJ** = sem `k_hal` na marca.
 
 ---
 
 ## 1. Contexto
 
-A visão-alvo é um **capability microkernel** onde crates K²CHJ são fronteiras de **função** (ADR-0042) e anéis R0–R3 são fronteiras de **privilégio / MMIO**.
+A visão-alvo é um **capability microkernel** onde crates K³CHJ são fronteiras de **função** (ADR-0042) e anéis R0–R3 são fronteiras de **privilégio / MMIO**.
 
 ### 1.1 Mapa legado (PoC 2026-07-14) — ainda válido como histórico
 
@@ -32,7 +34,7 @@ A visão-alvo é um **capability microkernel** onde crates K²CHJ são fronteira
 
 ## 2. Decisão (base PoC — inalterada)
 
-1. Tratar K²CHJ crates como **fronteiras lógicas** até haver address spaces + IPC real.
+1. Tratar K³CHJ crates como **fronteiras lógicas** até haver address spaces + IPC real.
 2. Evoluir o monólito com provas de conceito **não-fatais** no boot (falha → warn, continua).
 3. Adotar **capability tokens de operação** (bitflags) além do `CapabilityToken` do EventBus (legado/Ed25519).
 4. IPC interno futuro = **SPSC/MPMC ring buffers** em páginas compartilhadas mapeadas nos address spaces envolvidos.
@@ -40,7 +42,7 @@ A visão-alvo é um **capability microkernel** onde crates K²CHJ são fronteira
 
 ### Non-goals desta sprint / MVP C (histórico P0–P9)
 
-- Separar binários por crate K²CHJ
+- Separar binários por crate K³CHJ
 - Hermes WASM SFI completo; VirtIO ring DMA real (QUEUE_NOTIFY); streaming GGUF >RAM
 - Reescrever Agency / drivers / Pacotes A+B
 
@@ -398,7 +400,8 @@ Custo em **esforço relativo** (S=dias–1 sem; M=2–6 sem; G=mês+; X=trimestr
 | **P9** | GGUF/FAT file-backed mmap sobre demand-paging | ✅ PoC |
 
 Roadmap mecânico P0–P9 ✅ PoC.  
-**Próximo eixo de produto:** §9 degraus **H1→H5** (k-HAL + VirtIO FE/BE) + SFI Hermes (#426) + QUEUE_NOTIFY real.
+**Próximo eixo de produto:** aceite QEMU H4+/AS (§11.3) + SFI Hermes (#426). H1→H5 **implementados** (código); isolamento CPU produção **não**.
+
 
 ---
 
@@ -498,12 +501,12 @@ Roadmap mecânico P0–P9 ✅ PoC.
 | P5 DMA + mmap | ✅ | Pesos eager simulados |
 | P6 Ring3 iretq | ✅ código | Untested QEMU estável; sem ELF/preempt |
 | P7 demand-page #PF | ✅ | Sem I/O no fault |
-| P8 VirtIO vring | ✅ layout+pin | Sem QUEUE_NOTIFY; NIC untouched |
+| P8 VirtIO vring | ✅ layout+pin | H4+ acrescenta QUEUE_NOTIFY em `k_hal::virtio` |
 | P9 GGUF/FAT mmap | ✅ pré-fill | Prefixo 1–4 pág.; sem streaming |
-| **k-HAL R1** | ❌ | Emenda §9 / H1+ |
+| **k-HAL R1** | ✅ H1–H5 + H4+/H5+ (v1.8.6) | PoC monólito; ≠ isolamento CPU produção; aceite QEMU maintainer pendente |
 
 **Checklist P0–P9:** todos ✅ PoC.  
-**Checklist H0–H5:** ✅ H1–H3 BE + **H4+ QUEUE_NOTIFY real** + **H5+ Cap enforce + AS shallow** (2026-07-18). Lifecycle permanece `fazendo` até aceite QEMU maintainer; **≠** ADR `completa` / v2.0.0 / isolamento Ring0 produção.
+**Checklist H0–H5:** ✅ H1–H3 BE + **H4+ QUEUE_NOTIFY real** + **H5+ Cap enforce + AS shallow** (2026-07-18 / SESSION_140 / tag **v1.8.6**). Lifecycle permanece `fazendo` até aceite QEMU maintainer; **≠** ADR `completa` / v2.0.0 / isolamento Ring0 produção.
 
 ### Aceite por fase (2026-07-18, permanece **1.8.x**)
 
@@ -514,18 +517,15 @@ Roadmap mecânico P0–P9 ✅ PoC.
 | 3 H5+ Cap | `check_fe_bound` ports + grant em `offer::bind` | R3_no_cap=Deny; Bound=Allow; FE sem bind=Deny |
 | 4 AS shallow | `address_space::demo_as_r1_r3_shallow` | CR3 switch + touch BAR + restore; R3 MAP_BAR Deny |
 
-## 8. Próximos
+## 8. Próximos (pós-implementação H1–H5)
 
-**Adequação Boot OK → visão K²CHJ (função):** **ADR-0042** (N1–N5).  
-**Privilégio / HAL / VirtIO-bound:** esta ADR §9 (H1→H5).
+**Adequação Boot OK → visão K³CHJ (função):** **ADR-0042** (N1–N5) ✅ v1.8.0.  
+**Privilégio / HAL:** planos H1–H5 + HalOffer + H4+/H5+/AS ✅ código (v1.8.6) — ver §11.
 
-1. **H1** — crate `k-hal` + `DeviceCap` (sem big-bang MMIO).  
-2. **H2** — GPU MMIO jarbas → k-hal (ADR-0048–50 atrás do BE).  
-3. **H3** — net/wifi/HDA → k-hal; hermes/jarbas FE only.  
-4. **H4** — QUEUE_NOTIFY + mesmo FE VirtIO/nativo.  
-5. **H5** — AS R1/R3 + deny BAR em R3.  
-6. SFI WASM + Cap contract (#426) — fase N4 contínua.  
-7. Validar Ring3 em QEMU UEFI (`TRY_ENTER_RING3`) sob nano estável.
+1. **Aceite QEMU** — confirmar slog `NotifySent` + Cap/AS non-fatal no boot UEFI.  
+2. SFI WASM + Cap contract (#426) — fase N4 contínua.  
+3. Validar Ring3 em QEMU UEFI (`TRY_ENTER_RING3`) sob nano estável.  
+4. **Não** declarar esta ADR `completa` / v2.0.0 sem OK maintainer + isolamento real.
 
 ### Fontes (pesquisa)
 
@@ -534,3 +534,56 @@ Roadmap mecânico P0–P9 ✅ PoC.
 - seL4 sDDF (drivers isolados, zero-copy): Trustworthy Systems / Heiser et al.  
 - Fuchsia Zircon device model (devhost + protocols)  
 - ADR-0042 identidades; ADR-0048–50 compute backends (viram BE de k-HAL)
+
+---
+
+## 11. Planos Cursor implementados (registro canônico)
+
+Três planos encadeados fecharam a emenda §9–§10 em **v1.8.x** (tag **v1.8.6**, SESSION_140). Gate **v2.0.0** intacto.
+
+### 11.1 Plano `k-HAL H1-H5` (`k-hal_h1-h5`)
+
+| Degrau | Entrega | Status | Artefatos |
+|--------|---------|--------|-----------|
+| **H1** | Crate `k_hal` + DeviceCap + ports + DeviceTree PCI + wire facade | ✅ | `crates/k_hal/`, workspace member |
+| **H2** | GPU MMIO → k-hal; jarbas FE (`pub use` + cube) | ✅ | `k_hal/gpu/*`; `jarbas/gpu/mod.rs` |
+| **H3** | net/wifi + HDA → k-hal; hermes/jarbas FE + inject | ✅ | `k_hal/net/*`, `k_hal/audio/hda` |
+| **H4** | VirtIO FE/BE Degrau + SCL log | ✅ → supersedido por H4+ (§11.3) | `k_hal/virtio.rs` |
+| **H5** | Cap demo + `bind_hal_as` flag | ✅ → supersedido por H5+/AS (§11.3) | `k_hal/cap_gate.rs` |
+
+Cadeia Cargo: `k_nano ← k_hal ← {cortex,k_ai,hermes←jarbas}`; `neural-kernel` integra.
+
+### 11.2 Plano `HalOffer API 1.8.x` (`haloffer_api_1.8.x`)
+
+| Item | Entrega | Status |
+|------|---------|--------|
+| API | `k_hal::offer` query/bind/release/list/request | ✅ |
+| Classes | `DeviceClass` incl. **Video**; ports tipados | ✅ |
+| Hermes | `hermes::hal_offer` + EventBus `HW_OFFER`/`HW_BOUND`/`CAMERA_BOUND` | ✅ |
+| Jarbas | UVC/Vision FE sem `pci::scan` no path câmera | ✅ |
+| Docs | §9.4 VirtIO=transporte; HalOffer=API R3; **ficar 1.8.x** (não 1.9.0) | ✅ |
+
+**Não-meta do plano (cumprido):** sem QUEUE_NOTIFY produção na leva HalOffer (feito depois em H4+); sem AS R1/R3 real na leva HalOffer (feito depois em AS shallow).
+
+### 11.3 Plano `ADR41 H4 H5 full` (`adr41_h4_h5_full`)
+
+| Fase | Entrega | Status | Aceite |
+|------|---------|--------|--------|
+| **1 H4+** | Map UC VirtIO-PCI + `try_pci_queue_notify` → `NotifySent`/`NotifySkipped` | ✅ código | QEMU slog pendente maintainer |
+| **2 MMIO residual** | hermes/jarbas zero BAR live; VGACNTRL em k-hal; virtio_gpu/link_watcher FE | ✅ | FB GOP permitido |
+| **3 H5+ Cap** | `grant_fe` no bind; `check_fe_bound` nos ports; CapDenied→Quarantined | ✅ | demo boot Deny/Allow |
+| **4 AS shallow** | `demo_as_r1_r3_shallow` CR3 + touch BAR + restore | ✅ PoC | ≠ isolamento produção |
+| **Docs** | ADR/STATE/TECNOLOGIAS; tag v1.8.6 | ✅ | lifecycle `fazendo` |
+
+**Não-meta (cumprido):** sem segundo binário kernel; sem SFI Hermes pleno; sem “CPU Ring 3 de produção”; sem declarar ADR `completa` / v2.0.0.
+
+### 11.4 Log estruturado (acompanha H1–H5)
+
+Formato canônico `[T+n] [Rn] [k-xxx] [Item] [subitem] - …` via `k_nano::slog_*!` (§9.9). Migração massiva SESSION_140 era.
+
+### 11.5 Residuals honestos
+
+- Boot QEMU: evidência serial `NotifySent` ainda sob aceite maintainer.  
+- `neural-kernel/virtio_net.rs`: data-plane legado + bridge HalOffer/notify k-hal (não move completo).  
+- Orfãos disco `jarbas/gpu/*.rs` / cópias hermes wifi (não `mod`) — higiene, não path live.  
+- Isolamento AS/IOMMU/ELF multi-agent = fora de escopo.

@@ -110,6 +110,8 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         k_nano::slog_hal!("GPU", "BACKEND", "Sem GPU compute. Fallback CPU.");
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::CpuOnly;
+        log_gpu_hw_verdict("no_compute_gpu");
+        let _ = crate::gpu::direct_storage::probe_gds();
         return;
     }
 
@@ -126,6 +128,8 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
     let Some(ci) = compute_idx else {
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::CpuOnly;
+        log_gpu_hw_verdict("no_compute_index");
+        let _ = crate::gpu::direct_storage::probe_gds();
         return;
     };
     let gpu = match gpus.get(ci) {
@@ -133,6 +137,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         None => {
             *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
             *COMPUTE_STATE.lock() = BackendState::CpuOnly;
+            log_gpu_hw_verdict("compute_gpu_missing");
             return;
         }
     };
@@ -145,6 +150,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         k_nano::slog_hal!("GPU", "BACKEND", "{}: BAR0 validation FAILED → CPU", gpu.name);
         *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
         *COMPUTE_STATE.lock() = BackendState::Quarantine;
+        log_gpu_hw_verdict("bar0_validate_failed");
         return;
     }
 
@@ -231,12 +237,35 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
                 a.compute_ready = true;
             }
             k_nano::slog_hal!("GPU", "BACKEND", "compute Ready (canário PASS)");
+            k_nano::slog_bin!(
+                "GPU-HW",
+                "info",
+                "VERDICT=PASS vendor={} canary=vector_add",
+                gpu.name
+            );
         }
         _ => {
             k_nano::slog_hal!("GPU", "BACKEND", "compute Quarantine/CPU — display owner preservado ({:?})", canary);
+            log_gpu_hw_verdict("canary_not_pass");
         }
     }
+    let _ = crate::gpu::direct_storage::probe_gds();
     crate::compute_port::sync_from_backend();
+}
+
+fn log_gpu_hw_verdict(reason: &str) {
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "step=compute_ready status=UNSUPPORTED detail={}",
+        reason
+    );
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "VERDICT=AWAITING_REAL_HW reason={}",
+        reason
+    );
 }
 
 pub fn compute_state() -> BackendState {

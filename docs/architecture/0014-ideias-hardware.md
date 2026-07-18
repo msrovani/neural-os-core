@@ -1,6 +1,11 @@
 # ADR-0014: Hardware Abstraction — AI-Driven System Architecture, USB, SMP, Periféricos e Áudio/Video
 
-**Status:** Draft  
+> **§ SMP / CorePools / P-core·E-core / assign_cores — DEPRECATED**  
+> Autoridade transferida para **[ADR-0055](0055-smp-revision.md)**.  
+> Seções USB trust, NPU seeds e demais ideias fora de SMP permanecem como pesquisa/seed.  
+> Nota INDEX: SMP→0055.
+
+**Status:** Draft (SMP section superseded by ADR-0055)  
 **Date:** 2026-06-23  
 **Driver:** Definir como o Neural OS lida com todo o hardware via IA — inventário → MLP → configuração dinâmica da arquitetura de rings, memória, storage e dispositivos.
 

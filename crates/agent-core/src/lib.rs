@@ -134,11 +134,19 @@ pub struct AgentInstance {
     pub consecutive_pending: u64,  // watchdog: ticks consecutivos sem Done
     pub crew: CrewManifest,
     pub tier: AgentTier,
+    /// ADR-0055: pool ring 0=BSP/critical, 1=compute, 2=event/WASM
+    pub affinity_ring: u8,
 }
 
 impl AgentInstance {
     pub fn new(agent: Box<dyn Agent>) -> Self {
         let schedule = agent.manifest().schedule;
+        let affinity_ring = match schedule {
+            ScheduleKind::Continuous => 0,
+            ScheduleKind::Oneshot => 0,
+            ScheduleKind::PollEvery(_) => 1,
+            ScheduleKind::EventDriven => 2,
+        };
         AgentInstance {
             agent,
             state: AgentState::Inactive,
@@ -148,6 +156,7 @@ impl AgentInstance {
             consecutive_pending: 0,
             crew: CrewManifest::empty(),
             tier: AgentTier::Permanent,
+            affinity_ring,
         }
     }
 }
@@ -240,6 +249,31 @@ impl AgentRegistry {
             .filter(|(_, a)| a.tier == tier)
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// ADR-0055: índices por affinity_ring (0=BSP/critical, 1=compute, 2=event).
+    pub fn agents_by_affinity_ring(&self, ring: u8) -> Vec<usize> {
+        self.agents
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.affinity_ring == ring)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Ordem de poll: ring0 → ring1 → ring2 (CorePools R0/R1/R2).
+    pub fn poll_order_by_affinity(&self) -> Vec<usize> {
+        let mut order = Vec::with_capacity(self.agents.len());
+        for ring in 0u8..3 {
+            order.extend(self.agents_by_affinity_ring(ring));
+        }
+        // Qualquer ring fora 0..2
+        for (i, a) in self.agents.iter().enumerate() {
+            if a.affinity_ring > 2 {
+                order.push(i);
+            }
+        }
+        order
     }
 }
 
@@ -343,8 +377,9 @@ impl AgentRegistry {
                 halt();
                 continue;
             }
-            // Scheduler round-robin padrao (com FlowTrigger support)
-            for i in 0..self.agents.len() {
+            // Scheduler por affinity ring R0→R1→R2 (ADR-0055) + FlowTrigger
+            let order = self.poll_order_by_affinity();
+            for &i in &order {
                 let state = self.agents[i].state;
                 if state != AgentState::Active {
                     continue;

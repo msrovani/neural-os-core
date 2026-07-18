@@ -1,8 +1,8 @@
 # NeuralFS ? Plano de Arquitetura Completo
 
-> **Lifecycle (INDEX):** `fazendo` (SESSION_133)  
-> **Feito:** RAM I/O; B-tree multi-nivel; USB mount + format opt-in; GPT GUID NeuralFS; boot dados exFAT (+ unified); journal recover no mount.  
-> **Residual:** stress power-loss e2e; stress B-tree level≥2 com milhares de keys; interop Windows/Linux da imagem exFAT.  
+> **Lifecycle (INDEX):** `fazendo` (SESSION_133 + Onda 1 SESSION_142)  
+> **Feito:** RAM I/O; B-tree multi-nivel; USB mount + format opt-in; GPT GUID NeuralFS; boot dados exFAT (+ unified); journal recover no mount; smokes `level2` + `power_loss_soft` (QEMU/RAM).  
+> **Residual:** USB power-cycle e2e ▶️ AWAITING_HW (`[NRFS-HW] VERDICT=AWAITING_REAL_HW`); interop host exFAT Windows/Linux.  
 > ADR-0040 MVP permanece `completa`; este doc cobre o follow-up NeuralFS, nao reabre a ADR.
 
 ## 1. Fontes de Referência Analisadas

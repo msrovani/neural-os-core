@@ -88,7 +88,7 @@ pub unsafe fn try_queue_notify(mmio_bar: u64, queue_idx: u32) -> VirtioStage {
     VirtioStage::NotifySent
 }
 
-/// Map UC de uma página BAR (R1 only).
+/// Map UC de uma página BAR (R1 only). Retorna false se mapper falhar.
 unsafe fn map_uc_page(phys: u64) -> bool {
     if crate::cap_gate::check_map_bar(1, true) == crate::cap_gate::CapResult::Deny {
         return false;
@@ -97,7 +97,11 @@ unsafe fn map_uc_page(phys: u64) -> bool {
         return false;
     }
     let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-    k_nano::apic::map_mmio_page(phys & !0xFFF, pmoff);
+    if pmoff == 0 {
+        return false;
+    }
+    // map_page_uc = walk 4 níveis; map_mmio_page antigo quebrava L1 → #PF
+    k_nano::apic::map_page_uc(phys & !0xFFF, pmoff);
     true
 }
 

@@ -127,6 +127,13 @@ fn prove_rx_before_dns(tick: u64) -> bool {
                 dtx, drx, ok
             ),
         );
+        k_nano::slog_bin!(
+            "NET-HW",
+            "info",
+            "VERDICT=PASS reason=rx_alive dtx={} drx={}",
+            dtx,
+            drx
+        );
         true
     } else {
         log(
@@ -135,6 +142,16 @@ fn prove_rx_before_dns(tick: u64) -> bool {
                 "bootstrap_early L3.5 FAIL: RX silent dtx={} drx={} — skip L4/L5 (honest)",
                 dtx, drx
             ),
+        );
+        k_nano::slog_bin!(
+            "NET-HW",
+            "info",
+            "step=lan_rx status=UNSUPPORTED detail=rx_silent_l3_5"
+        );
+        k_nano::slog_bin!(
+            "NET-HW",
+            "info",
+            "VERDICT=AWAITING_REAL_HW reason=lan_rx_zero_onda7"
         );
         false
     }
@@ -282,9 +299,12 @@ pub fn bootstrap_early() {
     );
     let dns_ip = {
         let mut ns_guard = NETSTACK.lock();
-        ns_guard
-            .as_mut()
-            .and_then(|ns| ns.dns_resolve("google.com", dns_srv))
+        ns_guard.as_mut().and_then(|ns| {
+            // QEMU slirp: 10.0.2.3 = DNS; fallback 10.0.2.2 (gateway) se 2.3 falhar
+            ns.dns_resolve("google.com", dns_srv)
+                .or_else(|| ns.dns_resolve("google.com", [10, 0, 2, 2]))
+                .or_else(|| ns.dns_resolve("example.com", dns_srv))
+        })
     };
     let tx_after = crate::netstack::net_tx_count();
     let rx_after = crate::netstack::net_rx_count();
@@ -301,10 +321,11 @@ pub fn bootstrap_early() {
                 ),
             );
             if let Some(ref mut ns) = *NETSTACK.lock() {
+                let _ = ns.prime_neighbor_for_http();
                 let mut conn = ns.http_new(ip, 80, "/");
                 log(0, "bootstrap_early L5: HTTP GET / smoke (bounded)");
                 let mut done = false;
-                for i in 0..400u64 {
+                for i in 0..4_000u64 {
                     ns.poll((i * 5) as i64);
                     crate::netstack::wall_pause_us(500);
                     ns.http_poll(&mut conn, i * 5);
@@ -377,10 +398,11 @@ pub fn bootstrap_early() {
             // Fallback IP: tenta HTTP breve; se pendente, NetAgent retoma.
             s.target_ip = [142, 250, 190, 14];
             if let Some(ref mut ns) = *NETSTACK.lock() {
+                let _ = ns.prime_neighbor_for_http();
                 let mut conn = ns.http_new(s.target_ip, 80, "/");
                 log(0, "bootstrap_early L5: HTTP via hardcoded IP (DNS failed)");
                 let mut done = false;
-                for i in 0..400u64 {
+                for i in 0..4_000u64 {
                     ns.poll((i * 5) as i64);
                     crate::netstack::wall_pause_us(500);
                     ns.http_poll(&mut conn, i * 5);

@@ -33,3 +33,23 @@ Messaging gateway 20+, Docker/Modal, Honcho, FTS5, scrape genérico do Skills Hu
 - [x] MCP JSON-RPC mínimo
 - [x] SOUL path Jarbas → `/mnt/neural/SOUL.md`
 - [x] HITL via Jarbas ou terminal HANR (`/ui`)
+
+---
+
+## Planos Cursor implementados
+
+### `HANR Hermes Port` (`hanr_hermes_port`)
+
+| Wave | Entrega | Status |
+|------|---------|--------|
+| **0** Trust | Session Ed25519 + `verify_trusted(session)` + PackageHub auto-sign + Merkle Audit Ed25519 | ✅ |
+| **1** Skills/Mem | Progressive disclosure L0/L1 + USER/MEMORY/SOUL.md + SkillMarket unificado | ✅ |
+| **2** Market local | `/market` search/install/promote/remove + INDEX + HITL | ✅ |
+| **3** Market net | HTTP fetch allowlist → sandbox → re-sign → NeuralFS | ✅ |
+| **4** MCP/SOUL/docs | MCP JSON-RPC mínimo + SOUL wire + ADR/SESSION/TECNOLOGIAS | ✅ |
+
+**Fora de escopo (cumprido):** messaging gateway 20+, Docker/Modal, Honcho, fine-tune Nous.
+
+**Residuals:** TCP listener MCP pleno; FTS5; scrape genérico Skills Hub.
+
+Dependências: ADR-0051 (hub), ADR-0052 (contrato), ADR-0041 CapGate (sandbox parcial).

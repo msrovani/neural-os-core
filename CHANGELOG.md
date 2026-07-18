@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Rebrand K³CHJ (2026-07-18)
+- Nome canônico **K³CHJ** = `k_nano` + `k_hal` + `k_ai` + Cortex + Hermes + Jarbas
+- Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados
+- Glossário: ADR-0042 §0; INDEX “Nome do produto”
+
+### Plano Residuals 0–7 FECHADO (SESSION_142–151)
+- **PreFlight:** `tools/preflight_wave.py` + cache `.preflight_cache/` + `pass_marker` anti-contaminação + anti-fake Ready
+- **Ondas 0–6:** docs/IDEA; NeuralFS smokes; exFAT write `#417`; USB Trust/UAC-HW; GPU/MHI AWAITING; AirLLM ATA + AIRLLM-DMA; soft-float defer (Trilha R)
+- **Onda 7 LAN:** e1000 TX canônico `0x3800/0x3818` (aliases QEMU no-op); L3.5 ARP/RX; DNS raw + HTTP 301 smoke WHPX
+- **Tags:** `depends_on: lan` liberado (L3.5–L5); WiFi/`[WIFI-HW]` AWAITING; TLS/#418 PARTIAL
+- **Política:** `▶️ AWAITING_HW` + logs `[NET-HW]`/`[GPU-HW]`/`[UAC-HW]`/… — sem fake Ready
+
 ## [1.8.6] — 2026-07-18 — ADR-0041 H4+/H5+/AS + HalOffer Cap (TEST)
 
 ### ADR-0041 restante (SESSION_140)
@@ -76,11 +88,11 @@
 - `v2.0.0` continua bloqueada por review formal, demandas `por_fazer` e aprovação explícita do maintainer
 - Memória consolidada em `docs/memory/SESSION_121.md`–`SESSION_129.md`
 
-## [1.8.0] — 2026-07-16 — Marco K²CHJ: ADR-0042 adequação + wire crates completo
+## [1.8.0] — 2026-07-16 — Marco K³CHJ: ADR-0042 adequação + wire crates completo
 
 ### Marco
 - **ADR-0042 N1–N5 ✅** — cadeia funcional `k-nano → k-ai → cortex → hermes → jarbas` verificada em QEMU
-- **Wire crates N2.5→N5.7 ✅** — monólito boot linka os 5 crates K²CHJ (commits `8740bfd`…`95f8967`)
+- **Wire crates N2.5→N5.7 ✅** — monólito boot linka os 5 crates K³CHJ (commits `8740bfd`…`95f8967`)
 - **Sprint 107 Voice ✅** — PASS parcial forte+ (`'O tempo esta'` + Piper neural-lite + EventBus skinny)
 - **Pista ativa pós-1.8.0:** Sprint Sound (voz production-grade) + review gate `v2.0.0` (não declarar automaticamente)
 
@@ -131,7 +143,7 @@
 - `jarbas_bridge.rs` — cross-check TOPIC_* monólito vs jarbas-crate
 
 ### Marco
-- **Wire crates N2.5→N5.7 ✅** — cadeia K²CHJ linkada no bin; qualidade voz → Sprint Sound
+- **Wire crates N2.5→N5.7 ✅** — cadeia K³CHJ linkada no bin; qualidade voz → Sprint Sound
 
 ## [1.7.10] — 2026-07-16 — ADR-0042 N4.6 (hermes wired no bin)
 
@@ -459,7 +471,7 @@ PoC capability no monólito `neural-kernel` (commits `9bb1382`…`49c4301`). Pac
 - **Trait `Architecture` + static `ARCH` removidos** de `hal.rs` — marcado `@dead` pelo autor, zero chamadores
 - **`PICS` lazy_static + `init_pics()` removidos** de `interrupts.rs` — kernel só usa APIC
 
-### K²CHJ Workspace Migration (v1.5.0)
+### K³CHJ Workspace Migration (v1.5.0)
 - Monólito `neural-kernel` → 5 crates (k_nano, cortex, hermes, k_ia, jarvis)
 - `tools/migrate_k2chj.py`: 193 arquivos mapeados, 79 refs cross-crate corrigidas
 - k_nano compila independentemente (0 erros)

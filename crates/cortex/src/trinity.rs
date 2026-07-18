@@ -5,12 +5,45 @@ use alloc::vec;
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum ExpertKind {
     HwIdentify,
+    /// Controles de plataforma (volume, mute, brilho) — skill/HW, sem LLM.
+    HwControl,
     RustCoder,
     DiskDiag,
     Security,
     Generator,
     SpeechSynth,
     Unknown,
+}
+
+/// Extrai o pedido do usuário de prompts envelopados (skills L0 / cognitive context).
+/// Trinity DEVE classificar só isto — nunca o catálogo de skills no system prompt.
+pub fn extract_user_utterance(text: &str) -> &str {
+    let t = text.trim();
+    if let Some((_, rest)) = t.rsplit_once("PERGUNTA:") {
+        let u = rest.trim();
+        if !u.is_empty() {
+            return u;
+        }
+    }
+    if let Some(idx) = t.rfind("[User]") {
+        let u = t[idx + "[User]".len()..].trim();
+        if !u.is_empty() {
+            return u;
+        }
+    }
+    if t.contains("[NEURAL-OS COGNITIVE CONTEXT") || t.contains("[SKILLS L0") {
+        if let Some(line) = t.lines().rev().find(|l| {
+            let s = l.trim();
+            s.len() >= 2
+                && s.len() < 220
+                && !s.starts_with('[')
+                && !s.starts_with("Instruções:")
+                && !s.starts_with("Use /")
+        }) {
+            return line.trim();
+        }
+    }
+    t
 }
 
 pub struct Expert {
@@ -88,6 +121,7 @@ impl TrinityRouter {
         text: &str,
         arena: &mut crate::arena::TensorArena,
     ) -> (&Expert, crate::r3::RouteTrace) {
+        let text = extract_user_utterance(text);
         if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {
             let tokens = encode(text);
             if !tokens.is_empty() {
@@ -153,7 +187,8 @@ impl TrinityRouter {
     }
 
     pub fn classify_intent(&self, text: &str) -> &Expert {
-        // Tenta router neurnal primeiro
+        let text = extract_user_utterance(text);
+        // Tenta router neural primeiro (só no utterance)
         if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {
             let tokens = encode(text);
             if !tokens.is_empty() {
@@ -165,13 +200,13 @@ impl TrinityRouter {
                         embedding[j] += embed_table.get(start + j).copied().unwrap_or(0.0);
                     }
                 }
-                // Normaliza
                 let norm = libm::sqrtf(embedding.iter().map(|v| v * v).sum::<f32>() + 1e-8);
-                for v in embedding.iter_mut() { *v /= norm; }
-
-                // Router weight: (HIDDEN, num_experts) ternary → scores
+                for v in embedding.iter_mut() {
+                    *v /= norm;
+                }
                 let num_exp = self.experts.len();
-                let emb_tensor = crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding).unwrap();
+                let emb_tensor =
+                    crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding).unwrap();
                 let scores_t = weight.matmul_hybrid(&emb_tensor).unwrap();
                 let mut scores = scores_t.data.clone();
                 if scores.len() == num_exp {
@@ -179,61 +214,199 @@ impl TrinityRouter {
                     let mut best_idx = 0;
                     let mut best_score = scores[0];
                     for (i, &s) in scores.iter().enumerate().skip(1) {
-                        if s > best_score { best_idx = i; best_score = s; }
+                        if s > best_score {
+                            best_idx = i;
+                            best_score = s;
+                        }
                     }
                     if best_score > 0.15 {
-                        k_nano::slog_cortex!("TRINITY", "info", "MoE router: expert {} (score={:.3})", self.experts[best_idx].name, best_score);
+                        k_nano::slog_cortex!(
+                            "TRINITY",
+                            "info",
+                            "MoE router: expert {} (score={:.3})",
+                            self.experts[best_idx].name,
+                            best_score
+                        );
                         return &self.experts[best_idx];
                     }
                 }
             }
         }
+        self.classify_keywords(text)
+    }
 
-        // Fallback: keyword matching
+    /// Keyword path — utterance puro (já extraído).
+    fn classify_keywords(&self, text: &str) -> &Expert {
         let lower = text.to_lowercase();
+        let has_word = |w: &str| -> bool {
+            let b = lower.as_bytes();
+            let n = w.as_bytes();
+            if n.is_empty() || b.len() < n.len() {
+                return false;
+            }
+            let is_alnum = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+            let mut i = 0usize;
+            while i + n.len() <= b.len() {
+                if &b[i..i + n.len()] == n {
+                    let left_ok = i == 0 || !is_alnum(b[i - 1]);
+                    let right = i + n.len();
+                    let right_ok = right == b.len() || !is_alnum(b[right]);
+                    if left_ok && right_ok {
+                        return true;
+                    }
+                }
+                i += 1;
+            }
+            false
+        };
+
+        let is_hw_control = has_word("volume")
+            || has_word("mute")
+            || has_word("unmute")
+            || has_word("brilho")
+            || has_word("brightness")
+            || lower.contains("volume para")
+            || lower.contains("vol para")
+            || lower.contains("vol=")
+            || ((has_word("ajuste")
+                || has_word("ajustar")
+                || has_word("ajusta")
+                || has_word("ajste")
+                || has_word("set")
+                || has_word("definir")
+                || has_word("defina"))
+                && (has_word("volume") || has_word("vol") || has_word("brilho")));
+
+        // 1) Controles de HW/plataforma — skill direta, sem LLM / sem hw_identify 128h
+        if is_hw_control {
+            if let Some(e) = self.experts.iter().find(|e| e.kind == ExpertKind::HwControl) {
+                k_nano::slog_cortex!("TRINITY", "info", "keyword: hw_control (volume/mute/brilho)");
+                return e;
+            }
+        }
+
+        // 2) Conversa / saudacao / "oi jarbas" → generator (BitNet fluente)
+        let is_chat = has_word("oi")
+            || has_word("ola")
+            || has_word("olá")
+            || has_word("hello")
+            || has_word("hey")
+            || has_word("hi")
+            || has_word("greeting")
+            || has_word("saudacao")
+            || has_word("saudação")
+            || lower.contains("bom dia")
+            || lower.contains("boa tarde")
+            || lower.contains("boa noite")
+            || lower.contains("como vai")
+            || lower.contains("tudo bem")
+            || lower.contains("single short sentence greeting")
+            || ((has_word("jarbas") || has_word("jarvis"))
+                && !is_hw_control
+                && (has_word("oi")
+                    || has_word("ola")
+                    || has_word("olá")
+                    || has_word("hello")
+                    || has_word("hey")
+                    || has_word("hi")
+                    || has_word("greeting")
+                    || has_word("generate")
+                    || text.len() < 48));
+
+        if is_chat {
+            if let Some(gen) = self.experts.iter().find(|e| e.kind == ExpertKind::Generator) {
+                k_nano::slog_cortex!("TRINITY", "info", "keyword: chat/saudacao → generator");
+                return gen;
+            }
+        }
+
         for expert in &self.experts {
             match expert.kind {
+                ExpertKind::HwControl => {}
                 ExpertKind::HwIdentify => {
-                    if lower.contains("/hw") || lower.contains("hardware") || lower.contains("pci")
-                        || lower.contains("dispositivo") || lower.contains("device")
-                    { return expert; }
+                    // Só identificação (PCI/USB ID) — não "hardware" genérico do catálogo.
+                    let hex_id = lower.contains(':')
+                        && lower.chars().filter(|c| c.is_ascii_hexdigit()).count() >= 4;
+                    if has_word("pci")
+                        || has_word("hwid")
+                        || lower.contains("/hw")
+                        || hex_id
+                        || ((has_word("identifique") || has_word("identify"))
+                            && (has_word("hardware")
+                                || has_word("device")
+                                || has_word("dispositivo")
+                                || has_word("usb")))
+                        || (has_word("hardware") && (has_word("qual") || has_word("id")))
+                    {
+                        return expert;
+                    }
                 }
                 ExpertKind::RustCoder => {
-                    if lower.contains("crie") || lower.contains("create") || lower.contains("code")
-                        || lower.contains("write") || lower.contains("implement")
-                    { return expert; }
+                    if has_word("crie")
+                        || has_word("create")
+                        || has_word("code")
+                        || has_word("write")
+                        || has_word("implement")
+                        || has_word("codigo")
+                        || has_word("código")
+                    {
+                        return expert;
+                    }
                 }
                 ExpertKind::DiskDiag => {
-                    if lower.contains("disk") || lower.contains("disco") || lower.contains("smart")
-                        || lower.contains("storage") || lower.contains("armazenamento")
-                    { return expert; }
+                    if has_word("disk")
+                        || has_word("disco")
+                        || has_word("smart")
+                        || has_word("storage")
+                        || has_word("armazenamento")
+                    {
+                        return expert;
+                    }
                 }
                 ExpertKind::Security => {
-                    if lower.contains("security") || lower.contains("seguranca")
-                        || lower.contains("cve") || lower.contains("attack") || lower.contains("ataque")
-                    { return expert; }
+                    if has_word("security")
+                        || has_word("seguranca")
+                        || has_word("segurança")
+                        || has_word("cve")
+                        || has_word("attack")
+                        || has_word("ataque")
+                    {
+                        return expert;
+                    }
                 }
                 ExpertKind::SpeechSynth => {
-                    if lower.contains("fale") || lower.contains("speak") || lower.contains("diga")
-                        || lower.contains("say") || lower.contains("tts")
-                        || lower.contains("pronuncie") || lower.contains("pronounce")
-                        || lower.contains("audio") || lower.contains("voz") || lower.contains("voice")
-                    { return expert; }
+                    // Pedido explícito de sintetizar fala — não "TTS mode" meta nem volume.
+                    if !is_hw_control
+                        && (has_word("fale")
+                            || has_word("diga")
+                            || has_word("pronuncie")
+                            || has_word("pronounce")
+                            || (has_word("tts") && !has_word("greeting") && !has_word("mode"))
+                            || (has_word("speak") && !has_word("greeting")))
+                    {
+                        return expert;
+                    }
                 }
-                // Sprint 107 Loop2: chat/clima → generator (LLM 2B), nao hw_identify.
                 ExpertKind::Generator => {
-                    if lower.contains("tempo") || lower.contains("clima") || lower.contains("weather")
-                        || lower.contains("previsao") || lower.contains("previsão")
-                        || lower.contains("amanha") || lower.contains("amanhã")
-                        || lower.contains("hoje") || lower.contains("chat")
-                    { return expert; }
+                    if has_word("tempo")
+                        || has_word("clima")
+                        || has_word("weather")
+                        || has_word("previsao")
+                        || has_word("previsão")
+                        || has_word("amanha")
+                        || has_word("amanhã")
+                        || has_word("hoje")
+                        || has_word("chat")
+                    {
+                        return expert;
+                    }
                 }
                 ExpertKind::Unknown => {}
             }
         }
-        // Default = generator (LLM CURRENT_MODEL). Antes era experts[0]=hw_identify —
-        // com HWEXPERT LOADED o clima e2e gerava no vocab=64 → "LOA,BLOA…".
-        self.experts.iter().find(|e| e.kind == ExpertKind::Generator)
+        self.experts
+            .iter()
+            .find(|e| e.kind == ExpertKind::Generator)
             .or_else(|| self.experts.last())
             .unwrap_or(&FALLBACK_GENERATOR)
     }
@@ -256,7 +429,11 @@ pub fn init_trinity() -> TrinityRouter {
     // Generator primeiro = default seguro se find() falhar (Sprint 107 Loop2).
     router.register_expert(Expert {
         kind: ExpertKind::Generator, name: "generator",
-        description: "Geracao generica de texto e respostas", weight: None,
+        description: "Geracao generica (ModelHub: pro/fast/tiny)", weight: None,
+    });
+    router.register_expert(Expert {
+        kind: ExpertKind::HwControl, name: "hw_control",
+        description: "Controle HW: volume, mute, brilho (skill, sem LLM)", weight: None,
     });
     router.register_expert(Expert {
         kind: ExpertKind::HwIdentify, name: "hw_identify",
@@ -264,7 +441,7 @@ pub fn init_trinity() -> TrinityRouter {
     });
     router.register_expert(Expert {
         kind: ExpertKind::RustCoder, name: "rust_coder",
-        description: "Gera codigo Rust sob demanda", weight: None,
+        description: "Gera codigo Rust sob demanda (2B/3B se carregado)", weight: None,
     });
     router.register_expert(Expert {
         kind: ExpertKind::DiskDiag, name: "disk_diag",

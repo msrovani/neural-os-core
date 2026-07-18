@@ -65,3 +65,31 @@ Alias legado ADR-0032: `/agents/<stem>.wasm` → `ecosystem/agents/<stem>/MANIFE
 - [x] Agency/nativos no catálogo — nativos seed OK; Agency seed vazio até assinados (ADR-0052)
 - [x] Persistência honesta: árvore `ecosystem/` no mount + VFS bridge; nested mkexfat = residual
 - [x] Contrato ADR-0052 + deny unsigned (SESSION_135)
+
+---
+
+## Planos Cursor implementados
+
+### `Ecosystem Package Hub` (`ecosystem_package_hub`)
+
+| Todo | Status | Evidência |
+|------|--------|-----------|
+| NeuralFS §12 + ADR-0051 + INDEX | ✅ | esta ADR + NeuralFS.md |
+| `hermes::package_hub` CRUD+sig+HITL+catalog | ✅ | `package_hub.rs` |
+| Migrar `skills/` → pastas `SKILL.md` | ✅ | `skills/*/SKILL.md` |
+| `/pkg` + Approve path + hw_pnp promote | ✅ | hermes shell |
+| `catalog_for_cortex` no system prompt | ✅ | cortex wire |
+| cargo check + SESSION/CHANGELOG | ✅ | SESSION_134–135 |
+
+### `Migrar agentes NeuralFS` (`migrar_agentes_neuralfs`)
+
+| Todo | Status | Nota |
+|------|--------|------|
+| VFS unify PackageHub↔boot | ✅ parcial | bridge Hermes → `neural-kernel` FS |
+| `export_agent_packages.py` + seeds | ✅ → **corrigido** | SESSION_134 gerou stubs; SESSION_135/ADR-0052 **apagou** stubs idênticos |
+| Agency data-driven | ✅ | `AGENCY_SEEDS = &[]` até assinados; nativos no bin |
+| kinds Agent + Workflow | ✅ | PackageHub |
+| 41 nativos catalog `native:true` | ✅ | `native_agent_seed` |
+| nested mkexfat seed | ❌ residual | disco flat; não mentir `persisted` |
+
+Contrato de conteúdo: **ADR-0052**. Trust/marketplace: **ADR-0053**.

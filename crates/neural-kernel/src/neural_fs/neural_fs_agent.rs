@@ -108,15 +108,51 @@ impl NeuralFsAgent {
         };
         if agent.try_bootstrap_ata() {
             agent.ensure_ecosystem_tree();
+            Self::try_exfat_write_smoke();
             return agent;
         }
         if agent.try_bootstrap_usb() {
             agent.ensure_ecosystem_tree();
+            Self::try_exfat_write_smoke();
             return agent;
         }
         agent.bootstrap_ram();
         agent.ensure_ecosystem_tree();
+        Self::try_exfat_write_smoke();
         agent
+    }
+
+    /// IDEA #417 — write opt-in: `EXFAT_WRITE=1` no CONFIG.TXT do volume exFAT.
+    fn try_exfat_write_smoke() {
+        let mut guard = crate::ATA_DRIVER.lock();
+        let Some(ata) = guard.as_mut() else {
+            return;
+        };
+        if !config_flag_true(ata, "EXFAT_WRITE") {
+            k_nano::slog_bin!(
+                "EXFAT",
+                "info",
+                "write smoke SKIP (set EXFAT_WRITE=1 in CONFIG.TXT)"
+            );
+            return;
+        }
+        let parts = crate::fat32::read_mbr_dev(ata);
+        for p in &parts {
+            let start = p.lba_start as u64;
+            let mut vbr = [0u8; 512];
+            if !ata.read_sectors(start, &mut vbr) {
+                continue;
+            }
+            if &vbr[3..11] != b"EXFAT   " {
+                continue;
+            }
+            match crate::exfat_write::smoke_write_roundtrip(ata, start) {
+                Ok(()) => k_nano::slog_bin!("EXFAT", "info", "smoke_write=OK"),
+                Err(e) => k_nano::slog_bin!("EXFAT", "info", "smoke_write=FAIL {}", e),
+            }
+            return;
+        }
+        k_nano::slog_bin!("EXFAT", "info", "write smoke SKIP (no exFAT partition)");
     }
 
     /// ADR-0051 / NeuralFS §12 — árvore canônica do PackageHub.
@@ -136,11 +172,64 @@ impl NeuralFsAgent {
                     let _ = vol.create_dir(dev, eco, name);
                 }
             }
+            // IDEA #6 — /system/trust/ para usb.tbl
+            let sys = match vol.lookup_dir_entry(dev, root, "system") {
+                Some(ino) => ino,
+                None => vol.create_dir(dev, root, "system")?,
+            };
+            if vol.lookup_dir_entry(dev, sys, "trust").is_none() {
+                let _ = vol.create_dir(dev, sys, "trust");
+            }
             Ok(())
         });
         match result {
             Ok(()) => k_nano::slog_bin!("NEURALFS", "info", "ecosystem/ tree ready (ADR-0051)"),
             Err(e) => k_nano::slog_bin!("NEURALFS", "info", "ecosystem/ tree fail: {}", e),
+        }
+        // Drop lock before sync (sync re-locks state).
+        drop(guard);
+        self.sync_usb_trust_table();
+    }
+
+    /// Carrega `system/trust/usb.tbl` e aplica `USB_TRUST_ENFORCE` do CONFIG.
+    fn sync_usb_trust_table(&self) {
+        // Enforce via CONFIG no ATA (mesmo peek do EXFAT_WRITE).
+        {
+            let mut guard = crate::ATA_DRIVER.lock();
+            if let Some(ata) = guard.as_mut() {
+                if config_flag_true(ata, "USB_TRUST_ENFORCE") {
+                    crate::usb_trust::set_enforce(true);
+                }
+            }
+        }
+        let mut guard = self.state.lock();
+        let Some(st) = guard.as_mut() else {
+            return;
+        };
+        let loaded = Self::with_dev(st, |vol, dev| {
+            let root = vol.resolve_path(dev, "").ok_or("root")?;
+            let sys = vol
+                .lookup_dir_entry(dev, root, "system")
+                .ok_or("no system")?;
+            let trust = vol
+                .lookup_dir_entry(dev, sys, "trust")
+                .ok_or("no trust")?;
+            let Some(ino) = vol.lookup_dir_entry(dev, trust, "usb.tbl") else {
+                // Persistir tabela RAM (BOOT seed) se existir
+                let blob = crate::usb_trust::serialize();
+                if blob.len() > 12 {
+                    let ino = vol.create_file(dev, trust, "usb.tbl")?;
+                    vol.write_file(dev, ino, &blob)?;
+                    k_nano::slog_bin!("USB-TRUST", "info", "created {}", crate::usb_trust::TBL_PATH);
+                }
+                return Ok(0usize);
+            };
+            let data = vol.read_file(dev, ino).map_err(|_| "read usb.tbl")?;
+            crate::usb_trust::load_bytes(&data).map_err(|_| "parse usb.tbl")
+        });
+        match loaded {
+            Ok(n) => k_nano::slog_bin!("USB-TRUST", "info", "sync ok entries={}", n),
+            Err(e) => k_nano::slog_bin!("USB-TRUST", "info", "sync skip: {}", e),
         }
     }
 
@@ -435,6 +524,31 @@ impl NeuralFsAgent {
         } else {
             k_nano::slog_bin!("NEURALFS", "info", "smoke_split=FAIL");
         }
+        if crate::neural_fs::tests::smoke_multilevel() {
+            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=OK");
+        } else {
+            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=FAIL");
+        }
+        if crate::neural_fs::tests::smoke_level2() {
+            k_nano::slog_bin!("NEURALFS", "info", "smoke_level2=OK");
+        } else {
+            k_nano::slog_bin!("NEURALFS", "info", "smoke_level2=FAIL");
+        }
+        if crate::neural_fs::tests::smoke_power_loss_soft() {
+            k_nano::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=OK");
+        } else {
+            k_nano::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=FAIL");
+        }
+        k_nano::slog_bin!(
+            "NRFS-HW",
+            "info",
+            "step=usb_power_cycle status=UNSUPPORTED detail=qemu_ram_only"
+        );
+        k_nano::slog_bin!(
+            "NRFS-HW",
+            "info",
+            "VERDICT=AWAITING_REAL_HW reason=awaiting_usb_power_cycle"
+        );
         if crate::neural_fs::tests::smoke_multilevel() {
             k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=OK");
         } else {

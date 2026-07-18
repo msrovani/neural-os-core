@@ -1,13 +1,30 @@
-# ADR-0042: Adequação Boot OK → Visão K²CHJ (hierarquia de anéis + função)
+# ADR-0042: Adequação Boot OK → Visão K³CHJ (hierarquia de anéis + função)
 
-**Data:** 2026-07-14 · atualizado 2026-07-16  
+**Data:** 2026-07-14 · atualizado **2026-07-18** (rebrand **K³CHJ**)  
 **Status:** Accepted — implementação funcional completa e modernizada no marco v1.8.0
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
 **Release:** **N1–N5 + wire N2.5–N5.7 = marco `v1.8.0`**. A declaração de `v2.0.0` exige review formal adicional.
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). **`v1.8.5`** = consolidação teste; **`v1.8.6`** = ADR-0041 H4+/H5+/AS (SESSION_140); **não** declara `v2.0.0`. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`**–**`v1.8.0`** = adequação (nome histórico K²CHJ, 5 crates); **`v1.8.5`** teste; **`v1.8.6`** = ADR-0041 H4+/H5+/AS + nome canônico **K³CHJ** (6 crates com `k_hal`); **não** declara `v2.0.0`.  
 **Não declarar `v2.0.0` até review formal de qualidade ADR (voz Sprint Sound + checklist conjunto).**
 
+
+---
+
+## 0. Nome do produto — **K³CHJ** (canônico 2026-07-18)
+
+| Símbolo | Expansão | Crate |
+|---------|----------|--------|
+| **K** | Kernel nano | `k_nano` |
+| **K** | Kernel HAL | `k_hal` |
+| **K** | Kernel AI | `k_ai` |
+| **C** | Cortex | `cortex` |
+| **H** | Hermes | `hermes` |
+| **J** | Jarbas | `jarbas` |
+
+- **K²CHJ** (histórico ≤ v1.8.5): `k_nano` + `k_ai` + CHJ — MMIO ainda vazava em hermes/jarbas.  
+- **K³CHJ** (atual): terceira K = **`k_hal`** (R1 DeviceCap / HalOffer / MMIO BE).  
+- Paths `*k2chj*` nos nomes de arquivo **permanecem** (links estáveis); nome de produto = **K³CHJ** / ASCII `K3CHJ`.
 
 ---
 
@@ -15,28 +32,28 @@
 
 O boot UEFI alcançou **Runtime estável** (AgentFleet → AgentScheduler + timer) no monólito `neural-kernel`. Os PoCs Cap P0–P9 (ADR-0041) provaram mecânicas, **não** a visão de produto. Adequar sem regredir o Runtime.
 
-**Regra de versionamento:** não chamar o tree atual de “v2.0 feito”. A cadeia funcional K²CHJ e o wire estão completos no marco `v1.8.0`; `v2.0.0` só pode ser declarado após review formal da ADR e da qualidade de voz.
+**Regra de versionamento:** não chamar o tree atual de “v2.0 feito”. A cadeia funcional K³CHJ e o wire estão completos no marco `v1.8.0`; `v2.0.0` só pode ser declarado após review formal da ADR e da qualidade de voz.
 
-### Cadeia canônica (dependência + anel de *função*)
+### Cadeia canônica (dependência Cargo + anéis)
 
 ```text
-k-nano → k-ai → cortex → hermes → jarbas
+k-nano → k-hal → k-ai → cortex → hermes → jarbas
+  R0       R1      R2      R2        R3       R3
 ```
 
-Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
-
-**Privilégio / MMIO (ADR-0041 §9, 2026-07-18):** anéis R0 k-nano → R1 **k-HAL** (VirtIO-bound) → R2 cortex+k-ai → R3 hermes+jarbas.  
-Identidades desta tabela **permanecem**; ownership de BAR deixa de ser jarbas/hermes.
+Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.  
+**Privilégio / MMIO (ADR-0041 §9):** só **k-hal** (e fundação k-nano) toca BAR de device. Hermes/Jarbas = HalOffer FE.
 
 ### Identidade funcional
 
 | Anel | Função | É | Não é |
 |------|--------|---|--------|
-| **k-nano** | Sistema **legível** | Tempo, mem, traps, Caps, CR3, drivers brutos, log honesto, scheduler mínimo | Persona, LLM, apps, humor |
-| **k-ai** | AI **para hardware** + autonomia de máquina | SelfHeal, Trust, inventário HW, HMI de plataforma, FW/agentes HW | Personalidade; criação de apps |
-| **cortex** | O **cérebro** | Tensores, MoE, aprendizado, seleção de experts, busca/retrieval, mmap pesos | Intent de usuário; compositor |
-| **hermes** | O **orquestrador** agentic | Intent→skill, ReAct, WASM/SFI, criar conteúdo/apps/skills, aprendizado de fluxo | Ego; pixels finais |
-| **jarbas** | O **ego / consciência / persona** | Interface, humor, voz, “sempre +10%”, intelecto situado, frontend | Drivers; matmul; caps de kernel |
+| **k-nano** | Sistema **legível** | Tempo, mem, traps, Caps authority, CR3, PCI *cfg*, log, scheduler mínimo | Persona, LLM, BAR de GPU/NIC |
+| **k-hal** | **HAL / DeviceCap** (R1) | DeviceTree, HalOffer, backends nativos/VirtIO, MMIO BE | Intent de usuário; persona |
+| **k-ai** | AI **para hardware** + autonomia | SelfHeal, Trust, inventário lógico, HEALTH_*, Agency de máquina | Personalidade; tocar BAR |
+| **cortex** | O **cérebro** | Tensores, MoE, aprendizado, experts, mmap pesos | Intent de usuário; compositor |
+| **hermes** | O **orquestrador** agentic | Intent→skill, ReAct, WASM/SFI, PackageHub, HalOffer client | Ego; pixels; MMIO |
+| **jarbas** | O **ego / consciência / persona** | Interface, humor, voz, “+10%”, display FE | Drivers; matmul; BAR GPU |
 
 ---
 
@@ -171,7 +188,7 @@ Identidades desta tabela **permanecem**; ownership de BAR deixa de ser jarbas/he
 ## 6. Relação com ADR-0041
 
 ADR-0041 = **PoC mecânico** Cap/AS/Ring3.  
-ADR-0042 = **adequação de produto/anel** Boot OK → identidades K²CHJ.  
+ADR-0042 = **adequação de produto/anel** Boot OK → identidades K³CHJ.  
 **N1** ✅ (v1.7.0). **N2** ✅ CLOSED (v1.7.4; N2.5 = link `k_ai` v1.7.8). **N3** ✅ CLOSED (v1.7.5; N3.5 = link `cortex` v1.7.9). **N4** ✅ CLOSED (v1.7.6; N4.6 = link `hermes` v1.7.10). **N5** ✅ CLOSED (v1.7.7; N5.7 = link `jarbas` v1.7.11). Marco `v1.8.0` = N1–N5 funcionais + wire crates; gate `v2.0.0` = review formal pendente.
 
 ---

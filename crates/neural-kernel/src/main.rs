@@ -103,17 +103,18 @@ pub use k_nano::globals::EVENT_BUS;
 pub use k_nano::globals::LATENT_BUS;
 // ADR-0042 N3.5: engine cortex wired; residuals = cortex.rs, bpe.rs, global_arena.rs, cortex_mmap.rs
 pub use cortex_crate::{
-    arena, bitnet_avx2, burn_flex, delta, kv_h2o, neuos_probe, nn, ngram_spec, projection, r3,
-    tensor, trinity, tv_dsl,
+    arena, bitnet_avx2, burn_flex, delta, kv_h2o, model_hub as cortex_model_hub, neuos_probe, nn,
+    ngram_spec, projection, r3, tensor, trinity, tv_dsl,
 };
+mod model_hub;
 // ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
     actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
-    globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp, memory_store, optimizer,
-    package_hub, plugin_hub, rustpython_no_std, safety, search_agent, security, self_evolve,
-    self_update, skill_gen, skill_loader, skill_market, skill_observer, skill_opt,
-    structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat, wifi_iwlwifi,
-    wifi_msix, wifi_protocol,
+    gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp,
+    memory_store, optimizer, package_hub, plugin_hub, rustpython_no_std, safety, search_agent,
+    security, self_evolve, self_update, skill_gen, skill_loader, skill_market, skill_observer,
+    skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat,
+    wifi_iwlwifi, wifi_msix, wifi_protocol,
 };
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
@@ -155,6 +156,7 @@ mod rtl8139;
 mod e1000;
 
 mod usb_msc;
+mod usb_trust;
 
 mod virtio_net;
 
@@ -183,6 +185,7 @@ mod shutdown;
 
 mod tpm;
 mod exfat;
+mod exfat_write;
 mod gpt;
 mod neural_fs;
 mod fs_driver;
@@ -1317,8 +1320,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     
 
     let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
-
-    
+    // ADR-0055: RSDP UEFI via bootloader — sem isto MADT/APIC/SMP falham no QEMU OVMF
+    crate::acpi::set_boot_rsdp(boot_info.rsdp_addr.into_option());
 
     // Sonda framebuffer ANTES do VGA text mode para evitar escrever nos registros
 
@@ -1412,19 +1415,23 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
     crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
 
+    // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
+    k_nano::platform_probe::detect();
+    k_nano::platform_probe::log_itd_probe();
     simd::enable_simd();
 
-    crate::boot_logger::log("BOOT: SIMD enabled");
+    crate::boot_logger::log("BOOT: PlatformProbe+SIMD enabled");
     crate::display::fb::boot_ckpt(14, "SIMD ok");
 
     #[cfg(target_arch = "x86_64")]
-
     {
-
-        let avx = crate::tensor::has_avx2();
-
-        k_nano::slog_bin!("SIMD", "info", "AVX2: {}", if avx { "SIM ✅" } else { "NAO ❌" });
-
+        let avx = k_nano::platform_probe::allow_avx2();
+        let path = match k_nano::platform_probe::isa_path() {
+            k_nano::platform_probe::IsaPath::Avx2Fma => "avx2+fma",
+            k_nano::platform_probe::IsaPath::Sse42 => "sse42",
+            k_nano::platform_probe::IsaPath::Scalar => "scalar",
+        };
+        k_nano::slog_bin!("SIMD", "info", "AVX2={} isa={}", if avx { "SIM" } else { "NAO" }, path);
     }
 
 
@@ -1978,7 +1985,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
             if let Some(ci) = plan.compute_index() {
                 if let Some(g) = gpus.get(ci) {
-                    crate::gpu::vram::init_vram_tier(g);
+                    if crate::gpu::vram::init_vram_tier(g) {
+                        // IDEA #67 — MHI AllocTier::Vram → buddy BAR
+                        crate::mhi::register_vram_allocator(crate::gpu::vram::vram_alloc);
+                    } else {
+                        k_nano::slog_bin!(
+                            "MHI-DMA",
+                            "info",
+                            "VERDICT=AWAITING_REAL_HW reason=vram_tier_init_failed_or_virtio"
+                        );
+                    }
                 }
             }
 
@@ -2688,7 +2704,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             &["HWEXPRT.BIN", "HW_EXPERT.BITNET"],
             266130,
         ));
-        let rust_sz = 270222usize.max(fat_size_hint(&["RUSTCDR.BITNET"], 270222));
+        let rust_sz = 270222usize.max(fat_size_hint(
+            &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
+            270222,
+        ));
         let mut hw_ok = try_expert_qemu(0x160000000, hw_sz, "HWEXPERT", true);
         let mut rust_ok = try_expert_qemu(0x161000000, rust_sz, "RUSTCODER", false);
 
@@ -2702,14 +2721,23 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         if !rust_ok {
-                            if let Some(rust_data) = fs.read_file("RUSTCDR.BITNET") {
-                                if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
-                                    crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(
-                                        rust_model,
-                                    ));
-                                    k_nano::slog_bin!("FAT", "info", "RustCoder expert model loaded!");
-                                    crate::boot_logger::log("BOOT: RustCoder expert loaded");
-                                    rust_ok = true;
+                            for rname in &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"] {
+                                if let Some(rust_data) = fs.read_file(rname) {
+                                    if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
+                                        crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(
+                                            rust_model,
+                                        ));
+                                        k_nano::slog_bin!(
+                                            "FAT",
+                                            "info",
+                                            "RustCoder expert LOADED file={} size={}KB (Trinity hub same router)",
+                                            rname,
+                                            rust_data.len() / 1024
+                                        );
+                                        crate::boot_logger::log("BOOT: RustCoder expert loaded");
+                                        rust_ok = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -2735,11 +2763,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
                     if !rust_ok {
-                        if let Some(rust_data) = read_file_from_dev(msc, "RUSTCDR.BITNET") {
-                            if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
-                                crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
-                                k_nano::slog_bin!("FAT", "info", "RustCoder expert loaded (USB-MSC)!");
-                                rust_ok = true;
+                        for rname in &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"] {
+                            if let Some(rust_data) = read_file_from_dev(msc, rname) {
+                                if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
+                                    crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
+                                    k_nano::slog_bin!("FAT", "info", "RustCoder expert loaded (USB {})!", rname);
+                                    rust_ok = true;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2761,6 +2792,90 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         if rust_ok {
             crate::boot_logger::log("BOOT: RustCoder expert loaded");
         }
+    }
+
+    // ModelHub extras: TinyStories / 850M fast / 3B pro — não substituem Active se já carregado
+    {
+        fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
+            if crate::model_hub::slot_loaded(slot)
+                && matches!(
+                    slot,
+                    crate::model_hub::ModelSlot::GeneratorFast
+                        | crate::model_hub::ModelSlot::GeneratorPro
+                        | crate::model_hub::ModelSlot::TinyStories
+                )
+            {
+                // Pode estar só marcado (pro-alias); ainda tenta blob dedicado
+            }
+            const PIO_CAP: usize = 48 * 1024 * 1024;
+            unsafe {
+                let ata_guard = crate::ATA_DRIVER.lock();
+                if let Some(ref ata) = *ata_guard {
+                    let parts = crate::fat32::read_mbr(ata);
+                    for p in &parts {
+                        if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                            continue;
+                        }
+                        if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                            for name in crate::model_hub::fat_names_for(slot) {
+                                let Some(sz) = fs.lookup_file_size(name) else { continue };
+                                if sz > PIO_CAP {
+                                    k_nano::slog_bin!(
+                                        "MODEL",
+                                        "info",
+                                        "{} PRESENT {}KB — skip PIO (use QEMU-loader); slot={}",
+                                        name,
+                                        sz / 1024,
+                                        slot.name()
+                                    );
+                                    continue;
+                                }
+                                if let Some(data) = fs.read_file(name) {
+                                    if let Some(m) = crate::cortex::load_model(&data) {
+                                        // Se Active vazio e slot é pro/fast, vira primary
+                                        if !crate::cortex::model_is_loaded()
+                                            && matches!(
+                                                slot,
+                                                crate::model_hub::ModelSlot::GeneratorPro
+                                                    | crate::model_hub::ModelSlot::GeneratorFast
+                                            )
+                                        {
+                                            crate::cortex::set_model(alloc::boxed::Box::new(m));
+                                            if slot == crate::model_hub::ModelSlot::GeneratorPro {
+                                                crate::model_hub::mark_pro_alias(true);
+                                            }
+                                        } else {
+                                            crate::cortex::register_model_slot(
+                                                slot,
+                                                alloc::boxed::Box::new(m),
+                                            );
+                                        }
+                                        k_nano::slog_bin!(
+                                            "MODEL",
+                                            "info",
+                                            "hub LOADED file={} slot={} size={}KB",
+                                            name,
+                                            slot.name(),
+                                            data.len() / 1024
+                                        );
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try_hub_slot_fat(crate::model_hub::ModelSlot::TinyStories);
+        try_hub_slot_fat(crate::model_hub::ModelSlot::GeneratorFast);
+        try_hub_slot_fat(crate::model_hub::ModelSlot::GeneratorPro);
+        // Se Active é grande (≥200MB heurística via embed), marca pro-alias
+        let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
+        if dim >= 2048 {
+            crate::model_hub::mark_pro_alias(true);
+        }
+        k_nano::slog_bin!("MODEL", "info", "{}", crate::model_hub::hub_status());
     }
 
     // STT CTC tiny: QEMU-loader @0x163000000, depois FAT STT.BIN (HW real)
@@ -2987,6 +3102,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     unsafe { interrupts::init_pic_fallback_and_sti(); }
 
     publish_boot_phase(BootPhase::Runtime, "Entrando no AgentScheduler");
+
+    // Onda 6 — residuals AirLLM (ATA soft path OK; DMA/stream/K-quant AWAITING).
+    crate::gguf_streaming::log_airllm_residuals();
+    // Onda 7 — LAN snapshot (PASS só se RX>0 já visto; senão AWAITING).
+    {
+        let rx = crate::netstack::net_rx_count();
+        if rx == 0 {
+            k_nano::slog_bin!(
+                "NET-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=rx_count_zero_at_runtime"
+            );
+        } else {
+            k_nano::slog_bin!("NET-HW", "info", "VERDICT=PASS reason=rx_count={} at_runtime", rx);
+        }
+    }
 
     // Stack do scheduler no heap (≥2MB). NÃO usar Box::new([0u8; N]) — estoura stack do boot.
     const SCHED_STACK_SIZE: usize = 2 * 1024 * 1024;

@@ -22,11 +22,13 @@ const REG_IMASK: u64 = 0x00D0;
 const REG_IMC: u64 = 0x00D8;
 const REG_RCTRL: u64 = 0x0100;
 const REG_TCTRL: u64 = 0x0400;
-const REG_TDBAL: u64 = 0x0420;
-const REG_TDBAH: u64 = 0x0424;
-const REG_TDLEN: u64 = 0x0428;
-const REG_TDH: u64 = 0x0430;
-const REG_TDT: u64 = 0x0438;
+// TX ring: offsets canônicos Intel 8254x / QEMU e1000 (NÃO os aliases 0x0420..0x0438 —
+// QEMU não wireia TDBAL_A/TDT_A; write em alias = no-op → TDT fica 0 e ARP nunca sai).
+const REG_TDBAL: u64 = 0x3800;
+const REG_TDBAH: u64 = 0x3804;
+const REG_TDLEN: u64 = 0x3808;
+const REG_TDH: u64 = 0x3810;
+const REG_TDT: u64 = 0x3818;
 const REG_RDBAL: u64 = 0x2800;
 const REG_RDBAH: u64 = 0x2804;
 const REG_RDLEN: u64 = 0x2808;
@@ -454,8 +456,48 @@ impl E1000Driver {
         n
     }
 
-    /// Kick RX engine: reset ring pointers + clear DD, re-enable, THEN set RDT.
-    /// Ordem Linux: enable receiver FIRST, THEN set RDT=N-1.
+    /// Wall-clock pause (rdtsc @~2GHz). Needed so QEMU slirp can inject ARP reply.
+    unsafe fn pause_us(us: u64) {
+        let cycles = us.saturating_mul(2_000);
+        let start = {
+            let lo: u32;
+            let hi: u32;
+            core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
+            ((hi as u64) << 32) | (lo as u64)
+        };
+        loop {
+            let now = {
+                let lo: u32;
+                let hi: u32;
+                core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
+                ((hi as u64) << 32) | (lo as u64)
+            };
+            if now.wrapping_sub(start) >= cycles {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    /// Wait until TX descriptor `idx` reports DD (or timeout).
+    unsafe fn wait_tx_dd(&self, idx: usize, timeout_us: u64) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let desc = (self.tx_ring_paddr + pmoff) as *const u8;
+        let status_ptr = desc.add(idx * core::mem::size_of::<TxDesc>() + 12);
+        let steps = (timeout_us / 50).max(1);
+        for _ in 0..steps {
+            Self::fence_read();
+            if status_ptr.read_volatile() & 0x01 != 0 {
+                return true;
+            }
+            Self::pause_us(50);
+        }
+        false
+    }
+
+    /// Kick RX engine: clear DD, re-enable, THEN set RDT.
+    /// NÃO escrever RDH (RO no HW real) nem RDT==RDH — QEMU e1000 trata RDH==RDT
+    /// como ring full e deixa de entregar RX (slirp/TAP).
     pub unsafe fn kick_rx(&mut self) {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let rctl = RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LBM_NONE
@@ -477,17 +519,22 @@ impl E1000Driver {
         Self::fence_write();
         self.rx_cur = 0;
 
-        self.write32(REG_RDH, 0);
-        self.write32(REG_RDT, 0);
-        Self::fence_write();
-
-        // Re-enable receiver PRIMEIRO (Linux ordem)
+        // Re-enable receiver FIRST (Linux order), then RDT with one spare slot.
+        // Never poke RDH; never park RDT==RDH (QEMU false-full).
         self.write32(REG_RCTRL, rctl);
         Self::fence_write();
-        // RDT só DEPOIS de habilitar
-        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
+        let rdh = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
+        let rdt = (rdh + RX_DESC_COUNT - 1) % RX_DESC_COUNT;
+        self.write32(REG_RDT, rdt as u32);
         let _ = self.read32(REG_ICR);
-        k_nano::slog_bin!("Net", "e1000", "RX kick: RDH=0 RDT={} RCTL={:#010x}", RX_DESC_COUNT - 1, rctl);
+        k_nano::slog_bin!(
+            "Net",
+            "e1000",
+            "RX kick: RDH={} RDT={} RCTL={:#010x} (no RDH poke)",
+            rdh,
+            rdt,
+            rctl
+        );
     }
 
     /// Build + send ARP request for `tip` (who-has). Used to prove RX before DNS.
@@ -511,23 +558,43 @@ impl E1000Driver {
         self.send(&frame)
     }
 
-    /// Poll RX for up to `iters` after optional ARP; returns (rdh, dd_count, got_pkt).
+    /// Poll RX after ARP who-has; returns (rdh, dd_count, got_pkt).
+    /// `iters` ≈ poll rounds × 200µs wall (~iters*0.2ms). Retries ARP 3× for slirp latency.
     pub unsafe fn prove_rx(&mut self, sip: [u8; 4], tip: [u8; 4], iters: u32) -> (u32, u32, bool) {
         self.kick_rx();
-        let _ = self.send_arp_request(sip, tip);
-        for _ in 0..iters {
-            if let Some(_pkt) = self.recv() {
-                let rdh = self.read32(REG_RDH);
-                let dd = self.count_rx_dd();
-                return (rdh, dd.saturating_add(1), true);
-            }
-            if self.any_rx_dd() {
-                // DD set but recv path filtered — still counts as RX alive
-                let rdh = self.read32(REG_RDH);
-                return (rdh, self.count_rx_dd(), true);
-            }
-            for _ in 0..50_000 {
-                core::hint::spin_loop();
+        let rounds = 3u32;
+        let per_round = (iters / rounds).max(200);
+        for attempt in 0..rounds {
+            let tx_idx = self.tx_cur;
+            let sent = self.send_arp_request(sip, tip);
+            let tx_dd = if sent {
+                self.wait_tx_dd(tx_idx, 5_000)
+            } else {
+                false
+            };
+            let tdh = self.read32(REG_TDH);
+            let tdt = self.read32(REG_TDT);
+            k_nano::slog_bin!(
+                "Net",
+                "e1000",
+                "prove_rx ARP#{} sent={} tx_dd={} TDH={} TDT={}",
+                attempt + 1,
+                sent,
+                tx_dd,
+                tdh,
+                tdt
+            );
+            for _ in 0..per_round {
+                if let Some(_pkt) = self.recv() {
+                    let rdh = self.read32(REG_RDH);
+                    let dd = self.count_rx_dd();
+                    return (rdh, dd.saturating_add(1), true);
+                }
+                if self.any_rx_dd() {
+                    let rdh = self.read32(REG_RDH);
+                    return (rdh, self.count_rx_dd(), true);
+                }
+                Self::pause_us(200);
             }
         }
         let rdh = self.read32(REG_RDH);

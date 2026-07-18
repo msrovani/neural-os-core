@@ -6,8 +6,9 @@
 **Estado:** ~26.000 LOC, 180+ arquivos, `cargo nk` = 0 erros.
 
 **Base v1.8.0:**
-- ADR-0042 N1–N5 ✅ — cadeia funcional K²CHJ
-- Wire crates N2.5–N5.7 ✅ — `k_nano`, `k_ai`, `cortex`, `hermes`, `jarbas` linkados no bin
+- ADR-0042 N1–N5 ✅ — cadeia funcional K³CHJ
+- Wire crates N2.5–N5.7 ✅ — `k_nano`, `k_ai`, `cortex`, `hermes`, `jarbas` (+ **`k_hal`** em v1.8.6) linkados no bin
+- Produto **K³CHJ** (ADR-0042 §0); histórico K²CHJ = sem k-hal na marca
 - Sprint 107 Voice ✅ — clima e2e, Piper neural-lite, EventBus skinny
 
 **Consolidação v1.8.6 (teste):**
@@ -17,7 +18,7 @@
 - ADRs GPU 0048–0050 ⏳
 - **Não** é declaração de `v2.0.0`
 
-**Arquitetura K²CHJ:**
+**Arquitetura K³CHJ:**
 
 | Crate | Função |
 |-------|--------|
@@ -29,7 +30,7 @@
 | `jarbas` | Display FE, persona (GPU BE em k_hal) |
 | `neural-kernel` | Bin de boot (integração + residuals) |
 
-**Pista ativa:** estabilização v1.8.6 + Sprint Net — validar NotifySent QEMU + residuals em HW real.
+**Pista ativa:** pós-Residuals 0–7 ✅ (SESSION_151) — LAN L3.5–L5 OK; WiFi/TLS/#418 abertos; gate v2.0.0 review.
 
 **Para agentes de IA:**
 1. `AGENTS.md` — regras operacionais

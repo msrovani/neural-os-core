@@ -5,8 +5,12 @@
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** estabilização **v1.8.6** + **Sprint Net** (DHCP/RX). ADR-0041 H4+/H5+/AS ✅ PoC (SESSION_140). Sprint Sound ✅. ADR-0042 ✅. ADR-0040/0046/0047 MVPs ✅. Sprint 108 ✅.
-**Gate v2.0.0:** só com `por_fazer` zerado **e** OK explícito do maintainer (não automático). Residual INDEX `por_fazer`: follow-up ADR-0040 (write alien/DMA/#421/#423/cloud/#419 UI) + NeuralFS GPT/power-loss (`fazendo` SESSION_132) + residuals ADR-0046 (DMA prefetch / Net RX runtime / stream-to-disk / K-quants / e2e GGUF) — MVP ADR-0046 ✅ SESSION_127; hot-swap Net code ✅ SESSION_128.
+**Pista ativa:** **plano Residuals 0–7 FECHADO** (SESSION_151). Próximo: WiFi AWAITING · TLS/#418 PARTIAL · gate v2.0.0 review.
+**PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
+**Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW**
+**Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
+**Residuals por onda:** 0–7 ✅ (LAN internet) · WiFi/TLS/cloud abertos conscientes · R soft-float defer.
+**Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
 ---
 
@@ -17,10 +21,10 @@
 | 1-100 | v1.0.0 | Gold Master — Code Freeze + Release | ~26.000 | ✅ |
 | 101 | v2.0 | Cognição: TTS, STT, HDA capture, ATA fix, NVIDIA GPU | ~2.000 | ✅ |
 | 102 | v1.1.x | GPU Compute, HW Expert v3, Firmware Pipeline, WiFi | ~1.500 | ✅ |
-| 103-104 | v1.5.0 | K²CHJ Workspace Migration (5 crates) | ~500 | ✅ |
+| 103-104 | v1.5.0 | K³CHJ Workspace Migration (5 crates) | ~500 | ✅ |
 | 105 | v1.5.1 | Ponytail Audit: ~600 LOC removidos, 11 deps eliminadas | ~100 | ✅ |
 | 105b | v1.5.2 | RingBufStore refactor + LEGACY snapshot | ~50 | ✅ |
-| 105c | v1.5.3 | K²CHJ crate dead code cleanup + PICS fix | ~50 | ✅ |
+| 105c | v1.5.3 | K³CHJ crate dead code cleanup + PICS fix | ~50 | ✅ |
 
 ---
 
@@ -69,8 +73,9 @@
 | STT real / retrain PCM→MFCC | ✅ | `train_stt.py` PCM→MFCC kernel-aligned; `STT.BIN` regenerado; CTC tiny ainda fraco (WER) |
 | Mic→Wake→STT→LLM→TTS runtime | ✅ | Wake Continuous; gate pós-WAKEWORD; MIC/PLAYBACK rings; pipeline barge-in; rota única HERMES→TTS |
 | Piper neural-lite polish | ✅ | prosódia/duração/PT normalize; VITS/HiFi-GAN = **blocker soft-float** (não fakeado) |
-| Soft-float voice latency | ⏳ | known blocker; defer honesto (sem fake fix) |
-| UAC (#84) | ✅ | parse config AC/AS/iso EP; probe + `try_read_config_descriptor`; isócrono DMA → HW |
+| Soft-float voice latency | ⏳ | known blocker; defer honesto (sem fake fix) — Onda 4 |
+| UAC (#84) | ▶️ AWAITING_HW | parse+probe+USB-TRUST; `[UAC-HW] VERDICT=AWAITING_REAL_HW` (iso TRB) |
+| USB Trust #6/#12–15 | ✅ | `usb_trust.rs` + `usb.tbl` + enforce/disable_port (SESSION_145) |
 | jarbas/audio wire | ▶️ | espelho sync (VAD/settings/wake Continuous); cutover re-export = futuro |
 | VAD refinements | ✅ | noise-floor EMA + ZCR + histerese |
 | SER refinements | ✅ | confidence gate + thresholds calibrados |
@@ -79,7 +84,7 @@
 
 ---
 
-## ✅ ADR-0042 — adequação K²CHJ (v1.8.0)
+## ✅ ADR-0042 — adequação K³CHJ (v1.8.0)
 
 | Fase | Status | Versão |
 |------|--------|--------|
@@ -99,7 +104,7 @@
 - [x] Registrar Self-Evolve, Sound, NeuralFS, AirLLM e família ADR-0047
 - [x] Manter ADRs 0048–0050 como propostas `por_fazer`
 - [x] Marcar versão como não estável / em teste
-- [ ] Validar residuals em HW real e Sprint Net
+- [ ] Validar residuals em HW real (WiFi RF · TLS/#418 · GPU/UAC AWAITING)
 - [ ] Liberar v2.0.0 somente após review formal e OK explícito do maintainer
 
 ---
@@ -217,7 +222,7 @@
 | 100 | Code Freeze v1.0.0 | ~500 | ✅ |
 | 101 | TTS+STT+ATA fix+NVIDIA GPU | ~2.000 | ✅ |
 | 102 | GPU Compute + HW Expert v3 + Firmware | ~1.500 | ✅ |
-| 103-104 | K²CHJ Workspace Migration | ~500 | ✅ |
+| 103-104 | K³CHJ Workspace Migration | ~500 | ✅ |
 | 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
 | 106 | v2.0 Ecossistema de Anéis Lógicos | ~3.000 | ✅ 10/10 concluídas |
 | 107 | Voice I/O (clima e2e + skinny EventBus) | ~1.500 | ✅ fechada (PASS parcial forte+) |

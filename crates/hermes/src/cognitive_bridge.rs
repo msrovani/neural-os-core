@@ -323,6 +323,7 @@ pub fn emotion_hint(text: &str) -> &'static str {
 /// Sem fallback genérico para system_status — skills reais disk_diag/security.
 pub fn prefer_expert_skill(expert: &str) -> Option<&'static [&'static str]> {
     match expert {
+        "hw_control" => Some(&["audio_set_volume"]),
         "hw_identify" => Some(&["hw_identify", "hardware_info"]),
         "disk_diag" => Some(&["disk_diag"]),
         "security" => Some(&["security"]),

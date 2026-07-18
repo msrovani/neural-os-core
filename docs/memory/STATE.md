@@ -2,9 +2,21 @@
 #   STATE — neural-os-core v1.8.6 TEST — NÃO ESTÁVEL
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
-#   Pista ativa: estabilização v1.8.6 + Sprint Net; Sprint Sound ✅
-#   Gate v2.0.0: só com por_fazer zerado + OK maintainer (lembrar)
-#   Cadeia: k-nano → k-hal → k-ai → cortex → hermes → jarbas
+#   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
+#   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
+#   Pista ativa: pós-plano residuals 0–7 ✅; WiFi/TLS/cloud PARTIAL|AWAITING; gate v2.0.0 review
+#   SESSION_143: auditoria ideias antigas ✅
+#   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
+#   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer
+#   SESSION_146: Onda 5 — [MHI-DMA] [GDS-HW] [GPU-HW] AWAITING; #67 Vram hook; sem fake Ready
+#   SESSION_147: Trilha R soft-float/VITS — pesquisa defer (sem fake hardfloat)
+#   SESSION_148: Onda 6 AIRLLM-DMA AWAITING + Onda 7 NET-HW/WIFI-HW scaffold
+#   SESSION_149: Onda 7 LAN RX ✅ — e1000 TX 0x3800; L3.5 PASS
+#   SESSION_150: L4 DNS raw + L5 HTTP ✅ — internet smoke QEMU/WHPX
+#   SESSION_151: Fecho plano Residuals ondas 0–7 (PreFlight pass_marker; WiFi AWAITING)
+#   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
+#   PreFlight: tools/preflight_wave.py · cache docs/memory/.preflight_cache/ · depends_on: lan · AWAITING_HW
+#   Cadeia: k-nano → k-hal → k-ai → cortex → hermes → jarbas  (**K³CHJ**)
 # ═════════════════════════════════════════════════════════
 
 ## HW real prep (2026-07-16 / SESSION_139)
@@ -27,13 +39,15 @@
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
 
 ### Consolidação pós-v1.8.0 — v1.8.6 TEST (pós 1.8.5)
+- **SESSION_142:** ModelHub multi-.bitnet (TinyStories / generator_fast 850M / generator_pro 3B) + `gguf_wasm` SkillMarket + RustCoder 2B/3B FAT; Trinity router inalterado.
+- **SESSION_141 / ADR-0055:** FeatureGate + CpuFeatures/CacheTopology + SMP real. WHPX `smp=false`; TCG `-smp 2` APs=1 + CorePools; RSDP `BootInfo.rsdp_addr`; OSXSAVE/XCR0; affinity R0→R2. GPU = 0048–0050.
 - **SESSION_140 / ADR-0041:** H4+ QUEUE_NOTIFY; residual MMIO→k-hal; H5+ Cap nos ports + HalOffer grant; AS shallow demo CR3. Lifecycle ADR `fazendo`.
 - **Sprint Sound:** pipeline e ferramentas fechados como parcial honesto; soft-float/VITS, CTC WER, UAC iso e cutover abertos.
-- **ADR-0040 / NeuralFS:** MVP aceito; RAM I/O + reclaim/split + ATA opcional; residual físico/multinível `por_fazer`.
+- **ADR-0040 / NeuralFS:** MVP aceito; mount/GPT/USB ✅; Onda 1 smokes level2+power_loss_soft; USB power-cycle ▶️ AWAITING_HW `[NRFS-HW]`.
 - **ADR-0046:** AirLLM layer-wise + hot-swap ATA/Net code; DMA, stream-to-disk, K-quants e e2e grande abertos.
 - **ADR-0047:** família Latent/Evolve/Probe/GPU/HMI em MVP/PoC; sem promoção indevida a produção.
 - **ADRs 0048–0050:** `fazendo` — NVIDIA ACR/D2–D4; **AMD ADR-0049** Degrau; **Intel ADR-0050** ampliado; Ready só golden HW.
-- **ADR-0041 emenda §9–§10 (2026-07-18):** hierarquia L0–L4; **H1–H5** + **H4+/H5+/AS shallow** (`crates/k_hal` DeviceCap + GPU/net/HDA BE + QUEUE_NOTIFY real + Cap enforce nos ports + `demo_as_r1_r3_shallow`); IDEA #459. Lifecycle ADR continua `fazendo` (PoC ≠ produção). Versão **v1.8.6 TEST**.
+- **ADR-0041 emenda §9–§10 (2026-07-18):** hierarquia L0–L4; **H1–H5** + **H4+/H5+/AS shallow** (`crates/k_hal` DeviceCap + GPU/net/HDA BE + QUEUE_NOTIFY real + Cap enforce nos ports + `demo_as_r1_r3_shallow`); IDEA #459. Lifecycle ADR continua `fazendo` (PoC ≠ produção). Versão **v1.8.6 TEST**. Planos Cursor canônicos em ADR-0041 **§11** + INDEX “Planos Cursor → ADR”.
 - **HalOffer (2026-07-18, 1.8.x):** API R3→R1 `k_hal::offer` (query/bind/release) para **qualquer** `DeviceClass` (gpu/net/wifi/block/snd/video/display/input). Bind **granta Cap Fe***; ports `fe_*` Deny sem bind. Hermes: `request_from_intent` + PnP `request_from_pnp_next`. Tópicos `HW_OFFER` / `HW_BOUND`. VirtIO = só transporte BE.
 - **Log estruturado (2026-07-18):** formato canônico `[T+n] [Rn] [k-xxx] [Item] [subitem] - …` via `k_nano::slog_*!` (`slog.rs`); **~1526** calls migrados em k-nano/k-hal/k_ai/cortex/hermes/jarbas/neural-kernel (`tools/migrate_slog_all.py`). Leftover `serial_println!` só em `slog.rs` (backend) + comentários.
 - **Evidência consolidada:** `SESSION_121.md`–`SESSION_129.md`.
@@ -42,7 +56,7 @@
 | Track | Status |
 |-------|--------|
 | **ADR-0053 HANR parity** | ✅ **MVP++** (SESSION_136–137) — Cognitive Bridge + **route_user_intent** Trinity→Trust→Skill/LLM |
-| **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K²CHJ funcional; **N2.5** ✅ (v1.7.8); **N3.5** ✅ (v1.7.9); **N4.6** ✅ (v1.7.10); **N5.7** ✅ (v1.7.11) |
+| **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K³CHJ funcional; **N2.5** ✅ (v1.7.8); **N3.5** ✅ (v1.7.9); **N4.6** ✅ (v1.7.10); **N5.7** ✅ (v1.7.11) |
 | **ADR-0040 FS MVP** | ✅ **CLOSED** (SESSION_124) — soft-migrate MHI; exFAT FilesystemDriver; NeuralFS `/mnt/neural` (SESSION_123 RAM); residuals SESSION_125 → todos `por_fazer` |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
 | Sprint Sound | ✅ pipeline Mic→Wake→STT→TTS; STT PCM; UAC parse; neural-lite; residual soft-float/VITS + cutover |
@@ -62,7 +76,8 @@
 | Disco fisico | ✅ ATA cauda; USB mount; USB format só com flag/debug |
 | Boot dados exFAT | ✅ `mkexfat` + unified ESP FAT / dados exFAT |
 | Espelho k_nano | ✅ gpt sync; agent USB fica no bin |
-| Residual | ⏳ power-loss e2e; stress B-tree level≥2; interop host exFAT |
+| Residual | ▶️ USB power-cycle AWAITING_HW; interop host exFAT; smokes level2+power_loss_soft wired |
+| exFAT write (#417) | ✅ opt-in `EXFAT_WRITE=1` + `exfat_write.rs` (SESSION_144); smoke SKIP sem flag |
 
 ### Sound / Voice (ADR-0045) — Sprint Sound ✅
 | Item | Estado |
@@ -71,9 +86,10 @@
 | Espelho | `jarbas/src/audio/*` — sync VAD/settings/wake Continuous; **sem cutover** |
 | Stack | HDA + Piper neural-lite (+formant) + STT CTC PCM + VAD adapt + mixer + barge-in |
 | WakeWord | Continuous + gate pós-WAKEWORD (bypass `weather-e2e`) |
-| UAC | parse AC/AS/iso EP + probe; isócrono DMA → HW real |
+| UAC | parse+probe+USB-TRUST; iso ▶️ `[UAC-HW] VERDICT=AWAITING_REAL_HW` (SESSION_145) |
+| USB Trust | ✅ `usb_trust` + `system/trust/usb.tbl`; `USB_TRUST_ENFORCE` |
 | STT | `train_stt.py` PCM→MFCC; `STT.BIN` regenerado; CTC tiny WER ainda fraco |
-| Piper | neural-lite polish; **VITS/HiFi-GAN = soft-float blocker** |
+| Piper | neural-lite polish; **VITS/HiFi-GAN = soft-float blocker** (defer Onda 4) |
 | Obsoleto | sherpa / Pocket / Kokoro-primário / Vosk / Wyoming / Rustpotter |
 
 ### Adequação N0–N5 (ADR-0042)
@@ -263,14 +279,17 @@ Parte A = `c74ab95` + tag `v1.7.2`. Parte B = fixes 10→2 abaixo, **sem** bump 
 
 **Verificação pós-código:** `cargo clean -p neural-kernel` + `$env:CARGO_TARGET_DIR=target/check-s107b; cargo build --release -p neural-kernel --target x86_64-unknown-none` (equivalente a `cargo nk`) = **0 erros**, 3 warnings pré-existentes (unused imports em `bitnet_avx2.rs`/`piper.rs`, `model_loaded` unused-assignment em `main.rs` — não introduzidos por Part B). Repetido com `--features jarbas-bridge` = **0 erros** também. Rebuild adicional no `target/` default (não isolado) para tentar e2e WHPX: `cargo nk` OK, mas `cargo build --release -p boot` (sem `bootloader_linker`) travou (nested cargo lock) — morto após ~10min; e2e WHPX **não executado** nesta sessão. Fallback usado: `tools/sim_load_model_hwexpert.py` (host Python) confirma fix do #8.
 
-### Identidade funcional K²CHJ (ADR-0042)
+### Identidade funcional K³CHJ (ADR-0042)
 | Anel | Função |
 |------|--------|
 | **k-nano** | Sistema **legível** (HW bruto, Caps, CR3, log honesto) |
+| **k-hal** | **HAL R1** — DeviceCap, HalOffer, MMIO BE, VirtIO transporte |
 | **k-ai** | AI **para hardware** + SelfHeal + HMI de máquina |
 | **cortex** | **Cérebro** — MoE, learn, busca, mmap pesos |
 | **hermes** | **Orquestrador** agentic — intent, skills, criação |
 | **jarbas** | **Ego / persona / +10%** — UI, humor, frontend |
+
+Cadeia: `k-nano → k-hal → k-ai → cortex → hermes → jarbas`. Histórico **K²CHJ** = sem `k_hal` na marca (ADR-0042 §0).
 
 **Nota ops:** Builds isolados sob `target/` (`target/agent-*`, `target/check-*`, `target/n16-*`). Rebuild `uefi.img` via `cargo build --release -p boot` (pode travar em `cargo install` bootloader — liberar lock `.cargo`).
 
@@ -293,11 +312,11 @@ Parte A = `c74ab95` + tag `v1.7.2`. Parte B = fixes 10→2 abaixo, **sem** bump 
 | VirtIO vring | ✅ layout+pin | **Sem QUEUE_NOTIFY**; NIC live observe-only |
 | GGUF/FAT mmap | ✅ pré-fill 1–4 pág. | Prefixo só; fallback `NFIL`; sem streaming 8GB |
 
-### K²CHJ Capability Rings — P0–P9 (ADR-0041) — todos ✅ PoC
+### K³CHJ Capability Rings — P0–P9 (ADR-0041) — todos ✅ PoC
 P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 · P7 #PF · P8 vring · P9 GGUF/FAT.  
 **Módulos:** `address_space`, `syscall`, `ipc/*`, `capability_gate`, `jarbas_fb`, `k_ia_dma`, `cortex_mmap`, `user_mode`, `demand_page`, `virtio_vring`, `gguf_mmap` + demos non-fatal em `main.rs`.
 
-**Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K²CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
+**Riscos / follow-ups:** Ring3 default `TRY_ENTER_RING3=false` (PoC); VirtIO sem QUEUE_NOTIFY; #PF sem I/O; telemetria modelo ainda inconsistente (alvo N1); Agency EventDriven ociosa sem eventos; crates K³CHJ ≠ bin até wiring; **Boot OK ≠ visão completa** (ADR-0042).
 
 ## Marcos Acumulados
 - **🏆 v1.7.4 (2026-07-16):** ADR-0042 **N2 CLOSED** — SelfHeal VID+subclass + Trust + QEMU serial. N2.5 = link `k_ai` (allocator). Ver `SESSION_112.md`.
@@ -309,11 +328,11 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 - **🏆 v1.8.0 (2026-07-16):** ADR-0042 N1–N5 + wire N2.5–N5.7 consolidados. Gate `v2.0.0` permanece sujeito a review formal; Sprint Sound concentra a qualidade de voz.
 - **🧪 v1.8.5 (2026-07-16):** consolidação não estável pós-v1.8.0: Self-Evolve, Sound, NeuralFS/ADR-0040, AirLLM/ADR-0046 e família ADR-0047; ADRs GPU 0048–0050 propostas.
 - **🧪 v1.8.6 (2026-07-18):** ADR-0041 H4+/H5+/AS shallow + HalOffer Cap grant; crate `k_hal` + slog canônico; SESSION_140. Gate v2.0.0 intacto.
-- **🏆 Sprint 106 (2026-07-14):** Ecossistema de Anéis Lógicos completo (10/10), sem constituir release `v2.0.0`. Workspace K²CHJ, SOUL.md via VFS, MicroPython/WASM, SkillOpt e AIOS API.
+- **🏆 Sprint 106 (2026-07-14):** Ecossistema de Anéis Lógicos completo (10/10), sem constituir release `v2.0.0`. Workspace K³CHJ, SOUL.md via VFS, MicroPython/WASM, SkillOpt e AIOS API.
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
-- **🏆 v1.5.1 (2026-07-13):** 0 erros. ~600 LOC removidos, 11 dep entries eliminados. 6 dead files movidos do neural-kernel para K²CHJ crates. pic8259 eliminado. #[cfg(not(x86_64))] branches removidos. Architecture trait removido.
-- **🏆 v1.5.0 (2026-07-13):** 0 erros. K²CHJ workspace migration: monólito → 5 crates (k_nano, cortex, k_ia, hermes, jarvis). Dep chain linear. k_nano compila independentemente. migrate_k2chj.py (193 files, 79 refs).
+- **🏆 v1.5.1 (2026-07-13):** 0 erros. ~600 LOC removidos, 11 dep entries eliminados. 6 dead files movidos do neural-kernel para K³CHJ crates. pic8259 eliminado. #[cfg(not(x86_64))] branches removidos. Architecture trait removido.
+- **🏆 v1.5.0 (2026-07-13):** 0 erros. K³CHJ workspace migration: monólito → 5 crates (k_nano, cortex, k_ia, hermes, jarvis). Dep chain linear. k_nano compila independentemente. migrate_k2chj.py (193 files, 79 refs).
 - **🏆 v1.2.0 (2026-07-12):** ATA PIO bug fix crítico — READ_SECTORS e IDENTIFY usavam `in al, dx+1` para byte alto (lendo FEATURES/ERROR). Fix: `in ax, dx`. TODO acesso a disco desde o início do projeto era lixo.
 - **🏆 v1.1.5 (2026-07-12):** 0 erros, ~26.000 LOC, 116 firmwares. HW Expert v3 (61.453 VID/DID), SelfHealing I3/I4, WiFi Intel AX200 ucode loading, 3 camadas visuais (Orb + Hermes CLI + WM), HDA playback, BrowserAgent real, FFT audio.
 - **🏆 B-01 MORTO (v0.109.3 — 2026-07-09):** O bloqueador de 18 sprints caiu. Serial tunnel TCP bridge resolveu o RX=0 que perseguia o projeto desde o início. Primeiro RX: 304 bytes.
@@ -462,7 +481,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ### ✅ Sprint 101-105 — v2.0 Fundação
 - Piper TTS, STT, HDA capture, NVIDIA GPU compute ✅
-- K²CHJ workspace migration (5 crates, dep chain) ✅
+- K³CHJ workspace migration (5 crates, dep chain) ✅
 - Ponytail audit (600 LOC, 11 deps) ✅
 - RingBufStore refactor + LEGACY snapshot ✅
 
@@ -484,10 +503,15 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - STT retrain / Mic→Wake runtime / Piper VITS / UAC / jarbas wire ⏳ Sound
 - **N3→N5** ▶️ pista ativa (N2 ✅ CLOSED)
 - Self-evolving agents (Sprint 108) ✅
-- ADR-0040 residuals (SESSION_125): write FS / MHI DMA / #421 / #423 / cloud / NeuralFS disco / #419 UI → todos `por_fazer` (nenhum viavel agora)
-- LLM Agent 24/7 multi-turn conversation ⏳
-- DHCP/Rede QEMU user/slirp (static 10.0.2.15 + DNS/HTTP via NIC) ▶️ Sprint Net
-  - **Gate Sprint Net = e1000** `[smoltcp/NIC]` — SLIP = bypass serial de debug, **não** é o gate.
+- ADR-0040 residuals: #417/#419/#282e–g ✅ · 282h ⏳ · #418 PARTIAL (lan OK SESSION_150; sync runtime aberto) · #420/#423 ▶️ · #422 USB AWAITING
+- Onda 4 Sound/USB: #6/#12–15 ✅ · #84 ▶️ UAC-HW AWAITING · soft-float/VITS ⏳
+- Onda 5 GPU: #67 hook ✅ · #420/#423/#454–456 ▶️ `[MHI-DMA]`/`[GDS-HW]`/`[GPU-HW]`
+- Onda 6 AirLLM: ATA+soft prefetch ✅ · ▶️ `[AIRLLM-DMA]` · Net path liberado pós L3.5 (SESSION_149)
+- Onda 7 LAN: ✅ L3.5+L4+L5 (SESSION_149/150) — DNS raw + HTTP 301; `[NET-HW] PASS` · WiFi ▶️
+- Trilha R soft-float: SESSION_147 ⏳ (neural-lite permanece)
+- Ideias antigas: SESSION_143 — STALE fechado; defer SmileyOS/Cube/XDNA/SKYNET
+- LLM Agent 24/7 multi-turn conversation ⏳ defer gate
+- LAN gate = e1000 `[smoltcp/NIC]` RX>0 — SLIP = bypass serial de debug, **não** é o gate.
   - DiskIntelligence: sandbox = light probe ✅; TODO validar probe completo só em HW (sem reintroduzir hang QEMU).
   - Inventário: 8086:100E e1000 → log `not wifi` (iwlwifi N/A); SelfHeal DID-gate.
 - **Gate v2.0.0:** só quando demandas `por_fazer` zeradas **e** OK explícito do maintainer (lembrar sempre).
@@ -529,7 +553,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 📄 AGENTS.md                     → ⭐ POLÍTICAS: regras de engenharia, premissas
 📄 ROADMAP.md                    → Roadmap v1.0 → v2.0
 📄 TODO.md                       → Checklist mestre
-📄 crates/k_nano/ … jarbas/      → 5 crates K²CHJ (v2.0)
+📄 crates/k_nano/ … jarbas/      → 5 crates K³CHJ (v2.0)
 📄 crates/neural-kernel/         → Bin de integração
 ```
 

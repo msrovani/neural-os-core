@@ -1,0 +1,6 @@
+# PreFlight cache wave=3
+lan_rx_ok=True
+logs_scanned=8
+417	PARTIAL	presente; falta evidência runtime/aceite
+418	PARTIAL	presente; falta evidência runtime/aceite
+419	PARTIAL	presente; falta evidência runtime/aceite

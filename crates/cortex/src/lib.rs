@@ -30,6 +30,7 @@ pub mod bpe;
 pub mod burn_flex;
 pub mod cortex;
 pub mod delta;
+pub mod model_hub;
 pub mod nn;
 pub mod parallel_matmul;
 pub mod tensor;

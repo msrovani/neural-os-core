@@ -103,7 +103,37 @@ impl Skill for AudioSetVolumeSkill {
 
     fn execute(&self, input: &[u8]) -> Result<Vec<u8>, &'static str> {
         let s = core::str::from_utf8(input).unwrap_or("80");
-        let vol: u8 = s.trim().parse().unwrap_or(80).min(100);
+        let lower = s.to_ascii_lowercase();
+        let vol: u8 = if lower.contains("unmute") {
+            80
+        } else if lower.contains("mute") {
+            0
+        } else {
+            // Aceita "80", "80%" ou "ajuste o volume para 80%"
+            let mut parsed = None;
+            let b = lower.as_bytes();
+            let mut i = 0usize;
+            while i < b.len() {
+                if b[i].is_ascii_digit() {
+                    let start = i;
+                    while i < b.len() && b[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    if let Some(n) = core::str::from_utf8(&b[start..i])
+                        .ok()
+                        .and_then(|t| t.parse::<u32>().ok())
+                    {
+                        if n <= 100 {
+                            parsed = Some(n as u8);
+                            break;
+                        }
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            parsed.unwrap_or(80)
+        };
         AUDIO_VOLUME.store(vol, Ordering::Relaxed);
         Ok(alloc::format!("Volume definido para {}%", vol).into_bytes())
     }

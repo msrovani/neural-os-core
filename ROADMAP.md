@@ -144,7 +144,7 @@
 | 100 | Code Freeze v1.0.0 | ~500 | ✅ |
 | 101 | TTS+STT+ATA fix+NVIDIA GPU | ~2.000 | ✅ |
 | 102 | GPU Compute + HW Expert v3 + Firmware | ~1.500 | ✅ |
-| 103-104 | K²CHJ Workspace Migration | ~500 | ✅ |
+| 103-104 | K³CHJ Workspace Migration | ~500 | ✅ |
 | 105 | Ponytail Audit + v1.5.1..v1.5.3 | ~200 | ✅ |
 | 106-1 | Estruturar workspace estrito | ~100 | ✅ |
 | 106-2 | Renomear crates k_ia→k_ai, jarvis→jarbas | ~200 | ✅ |
@@ -169,7 +169,7 @@
 
 ---
 
-## ✅ ADR-0042 — Adequação K²CHJ (v1.8.0)
+## ✅ ADR-0042 — Adequação K³CHJ (v1.8.0)
 
 | Fase | Status | Wire crate |
 |------|--------|------------|
@@ -216,8 +216,10 @@ Auto-skill generation, verification, self-improvement, meta-reflect — **CLOSED
 | Item | Descrição | Status |
 |------|-----------|--------|
 | **Sprint Sound** | Pipeline voz + STT PCM + UAC parse | ✅ |
-| **Gate v2.0.0** | Review ADR + qualidade voz | ⏳ |
-| DHCP/RX funcional | smoltcp + QEMU user/slirp (static 10.0.2.15) | ▶️ Sprint Net |
+| **Residuals 0–7** | PreFlight + ondas FS/Sound/GPU/AirLLM + LAN | ✅ SESSION_151 |
+| **LAN L3.5–L5** | e1000 TX 0x3800 + DNS raw + HTTP smoke | ✅ SESSION_149/150 |
+| **Gate v2.0.0** | Review ADR + AWAITING_HW / TLS / WiFi | ⏳ |
+| WiFi RF / TLS / #418 | `depends_on: wifi` + fila pós-LAN | ▶️ AWAITING / PARTIAL |
 | Sprint 108 | Self-evolving agents | ✅ |
 | burn-flex Backend | Integrar `burn::Backend` trait | ⏳ |
 | BGE HNSW index | Substituir busca linear | ⏳ |

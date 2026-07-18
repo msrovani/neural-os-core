@@ -201,6 +201,10 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if crate::demand_page::try_handle_fault(cr2.as_u64()) {
         return;
     }
+    // Heap Tier-1: buracos apos demos CR3/AS ou map incompleto — cura 4KiB e retry.
+    if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
+        return;
+    }
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
