@@ -148,14 +148,19 @@ python tools\build_image.py
 
 ### Rede (Net gate = e1000 + user/slirp — NÃO SLIP)
 ```powershell
-.\run-qemu-whpx.ps1 -Window          # e1000 + -netdev user (static 10.0.2.15)
-.\run-qemu-whpx.ps1 -Bridge -Window  # TAP + ICS/bridge WiFi host (requer adaptador TAP)
+# Host peers (Pós-LAN SESSION_152) — antes do QEMU
+python tools\netfs_peer.py              # :4446 NetFs #418
+python tools\serve_tiny_gguf.py         # :8080 GGUF/UPDATE.MANIFEST (guest → 10.0.2.2)
+.\run-qemu-whpx.ps1 -Window             # e1000 + -netdev user (static 10.0.2.15)
+.\run-qemu-whpx.ps1 -Bridge -Window     # TAP + ICS/bridge WiFi host
 python tools\preflight_wave.py --wave 7
 ```
-Smoke esperado (SESSION_150): `L3.5 OK` → `DNS OK raw` → `L5 OK` (HTTP). SLIP/COM2 é **frozen** (debug legado):
+Smoke esperado: `L3.5 OK` → `DNS OK raw` → `L5 OK` → `[NETFS] VERDICT=PASS` → `[TLS] VERDICT=BLOCKED`.  
+SLIP/COM2 é **frozen** (debug legado):
 ```powershell
 .\run-qemu-whpx.ps1 -SerialBridge -Window   # opt-in; NÃO é path do gate Net
 ```
+Evitar `hostfwd=tcp::4446` se `netfs_peer` já escuta :4446 (conflito).
 
 ---
 

@@ -332,7 +332,12 @@ pub fn bootstrap_early() {
                     match &conn.state {
                         HttpState::Done(data) => {
                             let text = core::str::from_utf8(data).unwrap_or("<binary>");
-                            let preview = &text[..core::cmp::min(80, text.len())];
+                            // Single-line preview (HTTP headers have CR/LF — don't dump raw).
+                            let preview: alloc::string::String = text
+                                .chars()
+                                .take(60)
+                                .map(|c| if c == '\r' || c == '\n' { ' ' } else { c })
+                                .collect();
                             set_early_smoke(1);
                             log(
                                 0,
@@ -347,6 +352,7 @@ pub fn bootstrap_early() {
                             ns.http_close(&mut conn);
                             s.phase = 99;
                             done = true;
+                            // NetFs smoke AFTER drop NETSTACK lock (main.rs) — avoid deadlock
                             break;
                         }
                         HttpState::Failed => {
@@ -421,6 +427,7 @@ pub fn bootstrap_early() {
                             ns.http_close(&mut conn);
                             s.phase = 99;
                             done = true;
+                            // NetFs smoke AFTER drop NETSTACK lock (main.rs)
                             break;
                         }
                         HttpState::Failed => {
@@ -469,6 +476,10 @@ pub fn network_agent_tick() {
     // Não bloqueia se Disk ainda emitir; só anuncia que NetAgent está tickando.
     if !CONTINUOUS_ANNOUNCED.swap(true, Ordering::Relaxed) {
         k_nano::slog_hermes!("Net", "info", "Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]");
+        // Best-effort NetFs smoke if bootstrap already reached L5_OK.
+        drop(s);
+        crate::netfs::smoke_if_online();
+        s = NET_STATE.lock();
     }
     // Periódico mínimo cedo (sobrevive flood serial de Disk se cortar depois).
     if tick <= 20 || tick % 50 == 0 {

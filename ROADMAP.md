@@ -218,8 +218,9 @@ Auto-skill generation, verification, self-improvement, meta-reflect — **CLOSED
 | **Sprint Sound** | Pipeline voz + STT PCM + UAC parse | ✅ |
 | **Residuals 0–7** | PreFlight + ondas FS/Sound/GPU/AirLLM + LAN | ✅ SESSION_151 |
 | **LAN L3.5–L5** | e1000 TX 0x3800 + DNS raw + HTTP smoke | ✅ SESSION_149/150 |
+| **Pós-LAN B-01** | net_bridge · NetFs · SelfUpdate HTTP · TLS stub | ✅ SESSION_152 |
 | **Gate v2.0.0** | Review ADR + AWAITING_HW / TLS / WiFi | ⏳ |
-| WiFi RF / TLS / #418 | `depends_on: wifi` + fila pós-LAN | ▶️ AWAITING / PARTIAL |
+| WiFi RF / TLS real | `depends_on: wifi` + embedded-tls | ▶️ AWAITING / BLOCKED |
 | Sprint 108 | Self-evolving agents | ✅ |
 | burn-flex Backend | Integrar `burn::Backend` trait | ⏳ |
 | BGE HNSW index | Substituir busca linear | ⏳ |

@@ -87,6 +87,8 @@ Dependências: N3, WASM (Sprint 25+)
 - Certificado embutido ou trust-on-first-use
 - Entregável: HTTPS para skill updates seguros
 
+**Nota 2026-07-18 (Pós-LAN):** `embedded-tls` **BLOCKED** no target `x86_64-unknown-none` + soft-float do bin — não adicionado às deps. Stub `net::https_get` → `Err("tls_not_ready")` + log `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate`. **Nunca** strip `https://` → `http://:80`. HTTP plain (N3) permanece o path ativo.
+
 ---
 
 ## 3. Impacto no MVP

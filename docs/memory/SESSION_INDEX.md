@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 152 | Pós-LAN | — | B-01 fila unlock ondas 0–5 | net_bridge; NetFs PASS; TLS BLOCKED; deadlock NETSTACK pós-L5 fix |
 | 151 | planos | — | Fecho Residuals 0–7 | PreFlight pass_marker; LAN✅; WiFi AWAITING; TLS/418 PARTIAL |
 | 150 | Onda 7 | — | DNS raw + HTTP L4/L5 | skip_dns_name; OK raw google; L5 301; internet smoke |
 | 149 | Onda 7 | — | LAN RX destravado (e1000 TX) | aliases 0x0420 no-op QEMU; TDT=0x3818; L3.5 PASS |
@@ -85,6 +86,12 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 3b. **e1000 TX aliases QEMU (SESSION_149):** `TDBAL/TDT` em `0x0420/0x0438` são aliases Intel **não wired** no QEMU → write no-op, `TDT` fica 0, ARP nunca sai, RX=0. **Usar `0x3800/0x3818`.**
 
 3c. **DNS name compression (SESSION_150):** ao pular nomes DNS, **não seguir** pointer `0xC0xx` no offset de continuação — só avançar 2 bytes no wire (`skip_dns_name`). Seguir o pointer corrompe o parse do A record.
+
+3d. **Hermes net espelho (SESSION_152):** FE (Browser/Search/Market) **não** usa `hermes::net` (NETSTACK vazio). **Registrar `net_bridge` no boot** → `neural-kernel::resolve_and_http_get_safe`.
+
+3e. **Deadlock NETSTACK (SESSION_152):** `smoke_if_online`/`tcp_exchange` **dentro** de `NETSTACK.lock()` em `bootstrap_early` → hang pós-L5. Smoke só **após** return do bootstrap.
+
+3f. **HTTPS fake (SESSION_152):** **nunca** strip `https://`→porta 80. Stub `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate` até TLS real.
 
 4. **Ramdisk via bootloader (Sprint 79):** FAT partition autosized ~64MB insuficiente para modelos >100MB. **Usar QEMU loader (`-device loader,addr=0x100000000`) para dev, NVMe/FAT32 para HW real.**
 

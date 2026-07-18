@@ -43,8 +43,9 @@ pub struct StreamingLayerInfo {
     pub ffn_norm: Option<TensorRef>,
 }
 
-/// Soft double-buffer prefetch — NOT hardware DMA.
-/// Stages next layer raw span in RAM via synchronous ATA read_file_range.
+/// Soft double-buffer prefetch — NOT peer DMA (AHCI/NVMe async).
+/// Stages next layer span via sync ATA/`read_file_range` while current layer computes.
+/// Peer DMA = residual Onda 6 (`[AIRLLM-DMA] peer_dma UNSUPPORTED`).
 pub struct PrefetchEngine {
     path: String,
     /// Soft buffer: (layer_idx, raw bytes)
@@ -529,79 +530,156 @@ pub fn hot_swap_from_ata(path: &str) -> Result<(), &'static str> {
     }
 }
 
-/// Max staged download size (RAM → FAT). Multi-GB GGUF needs stream-to-disk residual.
+/// Max staged download size (RAM). Acima → HTTP Range stream-to-disk.
 const HOTSWAP_MAX_STAGED_BYTES: usize = 64 * 1024 * 1024;
+/// Chunk de stream Net→FAT (mantém pico de RAM baixo).
+const STREAM_CHUNK_BYTES: usize = 512 * 1024;
 
-/// Onda 6 — residuals honestos (DMA peer / stream / K-quants avançados / e2e 9B).
-/// Prefetch soft + Q4_0/Q8_0 já existem; peer DMA e K-quants llama.cpp ≠ Ready.
+/// Onda 6 — status honesto pós K-quant + stream-to-disk.
 pub fn log_airllm_residuals() {
     k_nano::slog_bin!(
         "AIRLLM-DMA",
         "info",
-        "step=peer_dma status=UNSUPPORTED detail=soft_prefetch_only"
+        "step=peer_dma status=UNSUPPORTED detail=soft_prefetch_only_awaiting_ahci_peer"
     );
     k_nano::slog_bin!(
         "AIRLLM-DMA",
         "info",
-        "step=stream_to_disk status=UNSUPPORTED detail=ram_stage_64mib_cap"
+        "step=stream_to_disk status=OK detail=http_range_512kib_fat_append"
     );
     k_nano::slog_bin!(
         "AIRLLM-DMA",
         "info",
-        "step=k_quants status=PARTIAL detail=q4_0_q8_0_ok_q4k_deferred"
+        "step=k_quants status=OK detail=q4_k_q6_k_dequant"
     );
     k_nano::slog_bin!(
         "AIRLLM-DMA",
         "info",
-        "VERDICT=AWAITING_REAL_HW reason=dma_stream_kquant_9b"
+        "VERDICT=PARTIAL reason=peer_dma_still_soft"
     );
 }
 
-/// Stream HTTP→FAT sem staging RAM pleno — deferred (IDEA Onda 6).
-pub fn stream_to_disk_deferred(_url: &str, _dest: &str) -> Result<(), &'static str> {
-    k_nano::slog_bin!(
-        "AIRLLM-DMA",
-        "info",
-        "step=stream_to_disk status=UNSUPPORTED detail=not_wired"
-    );
-    k_nano::slog_bin!(
-        "AIRLLM-DMA",
-        "info",
-        "VERDICT=AWAITING_REAL_HW reason=stream_to_disk_unwired"
-    );
-    Err("stream-to-disk deferred (ADR-0046 / Onda 6 residual)")
+/// HTTP Range → FAT append (sem staging multi-GB em RAM).
+pub fn stream_to_disk(url: &str, dest: &str) -> Result<(), &'static str> {
+    stream_to_disk_impl(url, dest)
 }
 
-/// Parse `http://ip[:port]/path` — hostname DNS not implemented (honest fail).
-fn parse_http_url(url: &str) -> Result<([u8; 4], u16, alloc::string::String), &'static str> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("HTTP://"))
-        .ok_or("hot_swap Net: only http:// supported (no https)")?;
-    let (host_port, path) = if let Some(pos) = rest.find('/') {
-        let (hp, p) = rest.split_at(pos);
-        (hp, alloc::string::String::from(p))
-    } else {
-        (rest, alloc::string::String::from("/"))
-    };
-    let (host_only, port) = if let Some(pos) = host_port.find(':') {
-        let (h, p_str) = host_port.split_at(pos);
-        let p: u16 = p_str[1..].parse().unwrap_or(80);
-        (h, p)
-    } else {
-        (host_port, 80u16)
-    };
-    let parts: Vec<&str> = host_only.split('.').collect();
-    if parts.len() != 4 {
-        return Err("hot_swap Net: hostname DNS not implemented — use http://A.B.C.D[:port]/path");
+/// Alias legado — agora wired.
+pub fn stream_to_disk_deferred(url: &str, dest: &str) -> Result<(), &'static str> {
+    stream_to_disk(url, dest)
+}
+
+fn stream_to_disk_impl(url: &str, dest: &str) -> Result<(), &'static str> {
+    let (host, port, path) = crate::net::parse_http_url(url).map_err(|e| match e {
+        "tls_not_ready" => "stream-to-disk: https not ready (tls)",
+        _ => "stream-to-disk: bad URL",
+    })?;
+    let ip = unsafe { crate::net::dns_resolve_host(&host) }.ok_or("stream-to-disk: DNS failed")?;
+
+    k_nano::slog_bin!(
+        "AIRLLM",
+        "info",
+        "stream-to-disk begin {} -> FAT {} chunk={}B",
+        url,
+        dest,
+        STREAM_CHUNK_BYTES
+    );
+
+    // Probe: primeiros bytes + Content-Range total
+    let end0 = STREAM_CHUNK_BYTES.saturating_sub(1);
+    let probe = unsafe {
+        crate::net::http_get_range_host(ip, port, &path, Some(host.as_str()), 0, end0)
     }
-    let ip = [
-        parts[0].parse().map_err(|_| "hot_swap Net: bad IPv4")?,
-        parts[1].parse().map_err(|_| "hot_swap Net: bad IPv4")?,
-        parts[2].parse().map_err(|_| "hot_swap Net: bad IPv4")?,
-        parts[3].parse().map_err(|_| "hot_swap Net: bad IPv4")?,
-    ];
-    Ok((ip, port, path))
+    .ok_or("stream-to-disk: range probe failed (RX/HTTP)")?;
+
+    if probe.body.is_empty() {
+        return Err("stream-to-disk: empty probe body");
+    }
+
+    let total = match probe.total {
+        Some(t) if t > 0 => t,
+        _ if probe.status == 200 => {
+            // Servidor ignorou Range e mandou arquivo inteiro
+            if probe.body.len() > HOTSWAP_MAX_STAGED_BYTES {
+                return Err("stream-to-disk: server ignored Range and body >64MiB");
+            }
+            gguf::write_fat_file(dest, &probe.body)?;
+            k_nano::slog_bin!(
+                "AIRLLM",
+                "info",
+                "stream-to-disk OK (full GET fallback) bytes={}",
+                probe.body.len()
+            );
+            return Ok(());
+        }
+        _ => {
+            // Sem Content-Range: assume pelo menos o chunk; loop até body curto
+            probe.body.len().max(STREAM_CHUNK_BYTES)
+        }
+    };
+
+    if probe.status != 206 && probe.status != 200 {
+        k_nano::slog_bin!(
+            "AIRLLM",
+            "info",
+            "stream-to-disk WARN status={} (expect 206)",
+            probe.status
+        );
+    }
+
+    gguf::write_fat_file(dest, &probe.body)?;
+    let mut offset = probe.body.len();
+    let mut chunk_i = 1u32;
+
+    while offset < total {
+        let end = (offset + STREAM_CHUNK_BYTES - 1).min(total - 1);
+        if end < offset {
+            break;
+        }
+        let part = unsafe {
+            crate::net::http_get_range_host(ip, port, &path, Some(host.as_str()), offset, end)
+        }
+        .ok_or("stream-to-disk: range chunk failed")?;
+        if part.body.is_empty() {
+            break;
+        }
+        gguf::append_fat_file(dest, &part.body)?;
+        offset += part.body.len();
+        chunk_i += 1;
+        if chunk_i % 8 == 0 || offset >= total {
+            k_nano::slog_bin!(
+                "AIRLLM",
+                "info",
+                "stream-to-disk progress {}/{} B chunks={}",
+                offset,
+                total,
+                chunk_i
+            );
+        }
+        // Servidor sem total confiável: parar se chunk curto
+        if part.total.is_none() && part.body.len() < STREAM_CHUNK_BYTES {
+            break;
+        }
+    }
+
+    k_nano::slog_bin!(
+        "AIRLLM",
+        "info",
+        "stream-to-disk OK dest={} bytes≈{} chunks={}",
+        dest,
+        offset,
+        chunk_i
+    );
+    Ok(())
+}
+
+/// Parse + resolve via `net::resolve_and_http_get` path components.
+fn parse_http_url(url: &str) -> Result<(alloc::string::String, u16, alloc::string::String), &'static str> {
+    crate::net::parse_http_url(url).map_err(|e| match e {
+        "tls_not_ready" => "hot_swap Net: https requires TLS (#123)",
+        "bad_url" | "bad_port" => "hot_swap Net: bad URL",
+        other => other,
+    })
 }
 
 /// Derive FAT 8.3 dest from URL path, or default HOTSWAP.GGUF.
@@ -631,10 +709,11 @@ fn dest_from_url_path(url_path: &str, explicit: Option<&str>) -> alloc::string::
     name
 }
 
-/// Net HTTP GET → FAT write → AirLLM hot_swap_from_ata.
-/// Uses e1000/smoltcp `net::http_get` (NOT SLIP). If RX=0, fails with L3.5/RX — never fakes OK.
+/// Net HTTP → FAT → AirLLM hot_swap_from_ata.
+/// Probe Range primeiro: se total >64MiB → stream-to-disk; senão GET pleno.
+/// RX=0 → L3.5/RX (nunca finge OK).
 ///
-/// `spec`: `"http://ip:port/path"` or `"http://ip:port/path DEST.GGUF"`
+/// `spec`: `"http://host[:port]/path"` ou `"… DEST.GGUF"`
 pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static str> {
     let spec = spec.trim();
     if spec.is_empty() {
@@ -644,44 +723,88 @@ pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static s
     let url = parts.next().unwrap_or("").trim();
     let dest_opt = parts.next().map(|s| s.trim()).filter(|s| !s.is_empty());
 
-    let (ip, port, path) = parse_http_url(url)?;
+    let (host, port, path) = crate::net::parse_http_url(url).map_err(|e| match e {
+        "tls_not_ready" => "hot_swap Net: https not ready (tls)",
+        _ => "hot_swap Net: bad URL",
+    })?;
     let dest = dest_from_url_path(&path, dest_opt);
 
-    k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net begin {}.{}.{}.{}:{}{} -> FAT {}", ip[0], ip[1], ip[2], ip[3], port, path, dest);
+    let ip = unsafe { crate::net::dns_resolve_host(&host) }.ok_or_else(|| {
+        k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: DNS {}", host);
+        "hot_swap Net: DNS failed"
+    })?;
+
+    k_nano::slog_bin!(
+        "AIRLLM",
+        "info",
+        "hot-swap Net begin {}.{}.{}.{}:{}{} Host={} -> FAT {}",
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3],
+        port,
+        path,
+        host,
+        dest
+    );
 
     let rx_before = crate::netstack::net_rx_count();
-    let body = unsafe { crate::net::http_get(ip, port, &path) };
+    // Probe tamanho sem baixar o GGUF inteiro
+    let probe = unsafe {
+        crate::net::http_get_range_host(ip, port, &path, Some(host.as_str()), 0, 1023)
+    };
     let rx_after = crate::netstack::net_rx_count();
 
-    let data = match body {
-        Some(d) if !d.is_empty() => d,
-        Some(_) => {
-            k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: empty HTTP body");
-            return Err("hot_swap Net: empty HTTP body");
-        }
+    let probe = match probe {
+        Some(p) if !p.body.is_empty() => p,
+        Some(_) => return Err("hot_swap Net: empty probe body"),
         None => {
             if rx_after == 0 || rx_after <= rx_before {
-                k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL L3.5/RX: http_get None rx_before={} rx_after={} (e1000 RX gate)", rx_before, rx_after);
-                return Err("L3.5/RX: http_get failed — net RX=0 or no reply (e1000; Sprint Net)");
+                return Err("L3.5/RX: range probe failed — net RX=0 or no reply");
             }
-            k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: http_get None but RX delta={} (TCP/HTTP error)", rx_after.saturating_sub(rx_before));
-            return Err("hot_swap Net: http_get failed (RX seen, no HTTP body)");
+            return Err("hot_swap Net: range probe failed (RX seen)");
         }
     };
 
-    if data.len() > HOTSWAP_MAX_STAGED_BYTES {
-        k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: body {} > max staged {} (stream-to-disk residual)",
-            data.len(),
-            HOTSWAP_MAX_STAGED_BYTES);
-        let _ = stream_to_disk_deferred(url, &dest);
-        return Err("hot_swap Net: body too large for RAM staging (64MiB cap; stream-to-disk deferred)");
+    let use_stream = match probe.total {
+        Some(t) if t > HOTSWAP_MAX_STAGED_BYTES => true,
+        None if probe.status == 200 && probe.body.len() > HOTSWAP_MAX_STAGED_BYTES => true,
+        _ => false,
+    };
+
+    if use_stream {
+        k_nano::slog_bin!(
+            "AIRLLM",
+            "info",
+            "hot-swap Net → stream-to-disk (total≈{:?})",
+            probe.total
+        );
+        stream_to_disk(url, &dest)?;
+        hot_swap_from_ata(&dest)?;
+        return Ok(dest);
     }
 
-    // Strip HTTP status line if raw response leaked (netstack may return body-only)
-    let payload = strip_http_headers_if_present(&data);
+    // Arquivo pequeno: GET completo (body já sem headers via http_get_host)
+    let data = unsafe { crate::net::http_get_host(ip, port, &path, Some(host.as_str())) }
+        .ok_or("hot_swap Net: http_get failed")?;
+    if data.is_empty() {
+        return Err("hot_swap Net: empty HTTP body");
+    }
+    if data.len() > HOTSWAP_MAX_STAGED_BYTES {
+        // Race: Content-Length mentiu — stream
+        stream_to_disk(url, &dest)?;
+        hot_swap_from_ata(&dest)?;
+        return Ok(dest);
+    }
 
+    let payload = strip_http_headers_if_present(&data);
     if payload.len() < 4 || &payload[0..4] != b"GGUF" {
-        k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net WARN: payload magic != GGUF (len={}); writing anyway for ATA detect", payload.len());
+        k_nano::slog_bin!(
+            "AIRLLM",
+            "info",
+            "hot-swap Net WARN: magic != GGUF len={}",
+            payload.len()
+        );
     }
 
     gguf::write_fat_file(&dest, payload)?;

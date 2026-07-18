@@ -223,7 +223,34 @@ fn dmesg_cmd() -> String {
 }
 
 fn netstat_cmd() -> String {
-    String::from("Netstat:\n  DHCP: pending (B-01)\n  smoltcp: active\n")
+    let cfg = crate::net::NET_CONFIG.lock();
+    let ip = cfg.ip;
+    let gw = cfg.gateway_ip;
+    let dns = cfg.dns_ip;
+    let online = cfg.online;
+    let configured = cfg.configured;
+    drop(cfg);
+    let rx = crate::netstack::net_rx_count();
+    let tx = crate::netstack::net_tx_count();
+    alloc::format!(
+        "Netstat:\n  configured={} online={}\n  IP {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{}\n  e1000/smoltcp tx={} rx={}\n",
+        configured,
+        online,
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3],
+        gw[0],
+        gw[1],
+        gw[2],
+        gw[3],
+        dns[0],
+        dns[1],
+        dns[2],
+        dns[3],
+        tx,
+        rx
+    )
 }
 
 fn dhcp_cmd() -> String {

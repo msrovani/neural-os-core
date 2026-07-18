@@ -14,14 +14,10 @@ impl SearchAgent {
     pub fn search(&self, query: &str, max_results: usize) -> Vec<(String, String)> {
         let mut results = Vec::new();
         let query_encoded: String = query.chars().map(|c| if c == ' ' { '+' } else { c }).collect();
-        let path = alloc::format!("/lite/?q={}&ia=web", query_encoded);
+        let url = alloc::format!("http://lite.duckduckgo.com/lite/?q={}&ia=web", query_encoded);
 
-        let cfg = crate::net::NET_CONFIG.lock();
-        let dns = cfg.dns_ip;
-        drop(cfg);
-
-        let html = unsafe { crate::net::http_get(dns, 80, &path) };
-        if let Some(data) = html {
+        let html = crate::net_bridge::http_get_url(&url);
+        if let Ok(data) = html {
             let text = core::str::from_utf8(&data).unwrap_or("");
             let mut count = 0;
             for line in text.lines() {

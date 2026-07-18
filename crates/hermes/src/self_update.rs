@@ -1,5 +1,6 @@
 //! #308 Self-Update Agent — A/B dual-slot update via FAT32.
 //! Boot slot A (KERNEL~1) e slot B (KERNEL~2). BOOTCFG.JSON aponta qual usar.
+//! HTTP fetch via `net_bridge::http_get_url` (kernel NETSTACK). Never strip https→http.
 
 use alloc::string::String;
 use k_nano::ATA_DRIVER;
@@ -8,12 +9,77 @@ use k_nano::kjson;
 const SLOT_A: &str = "KERNEL~1";
 const SLOT_B: &str = "KERNEL~2";
 const BOOT_CFG: &str = "BOOTCFG~1";
+const CHANNEL_MANIFEST_URL: &str = "http://10.0.2.2:8080/UPDATE.MANIFEST";
 
 pub enum UpdateChannel { Stable, Nightly, Security }
 
 pub struct SelfUpdate;
 
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in data {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 impl SelfUpdate {
+    /// HTTP GET `url` → length>0 + FNV-1a log → write inactive slot via `apply_update`.
+    pub fn fetch_update(url: &str) -> Result<usize, &'static str> {
+        let data = crate::net_bridge::http_get_url(url).map_err(|e| {
+            k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err={}", e);
+            e
+        })?;
+        if data.is_empty() {
+            k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err=empty");
+            return Err("update_empty");
+        }
+        let n = data.len();
+        let hash = fnv1a64(&data);
+        if !Self::apply_update(&data) {
+            k_nano::slog_hermes!(
+                "UPDATE",
+                "info",
+                "fetch=FAIL err=apply bytes={} fnv={:016x}",
+                n,
+                hash
+            );
+            return Err("apply_failed");
+        }
+        k_nano::slog_hermes!(
+            "UPDATE",
+            "info",
+            "fetch=OK bytes={} fnv={:016x}",
+            n,
+            hash
+        );
+        Ok(n)
+    }
+
+    /// Optional channel poll stub — GET UPDATE.MANIFEST from host :8080 (serve_tiny_gguf).
+    pub fn poll_channel(_ch: &UpdateChannel) -> Result<usize, &'static str> {
+        match crate::net_bridge::http_get_url(CHANNEL_MANIFEST_URL) {
+            Ok(body) if !body.is_empty() => {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "info",
+                    "channel_poll=OK bytes={}",
+                    body.len()
+                );
+                Ok(body.len())
+            }
+            Ok(_) => {
+                k_nano::slog_hermes!("UPDATE", "info", "channel_poll=FAIL err=empty");
+                Err("manifest_empty")
+            }
+            Err(e) => {
+                k_nano::slog_hermes!("UPDATE", "info", "channel_poll=FAIL err={}", e);
+                Err(e)
+            }
+        }
+    }
+
     /// Detecta qual slot esta ativo lendo BOOTCFG~1 da FAT32
     pub fn active_slot() -> u8 {
         let ata = ATA_DRIVER.lock();

@@ -161,10 +161,10 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: pós-plano Residuals 0–7 ✅ (SESSION_151); gate v2.0.0 permanece fechado.
-# Residuals: PreFlight `tools/preflight_wave.py`; AWAITING_HW; depends_on: lan liberado (L3.5–L5).
-# Onda 7 LAN: e1000 TX regs 0x3800/0x3818; DNS raw + HTTP smoke QEMU/WHPX (SESSION_149/150).
-# Abertos conscientes: WiFi AWAITING; TLS/#418 PARTIAL; soft-float/VITS defer; GPU/UAC/DMA AWAITING_HW.
+# Current Sprint: Pós-LAN B-01 unlock ✅ (SESSION_152); gate v2.0.0 permanece fechado.
+# Residuals 0–7 ✅ + fila lan: net_bridge · NetFs PASS · SelfUpdate HTTP · TLS BLOCKED honesto.
+# Onda 7 LAN: e1000 TX 0x3800/0x3818; DNS raw + HTTP; SESSION_149/150/152.
+# Abertos: WiFi AWAITING; TLS real (softfloat_or_crate); /model-fetch e2e; GPU/UAC/DMA AWAITING_HW.
 # Áudio: ADR-0045 — truth=`neural-kernel/src/audio`; jarbas/audio=espelho wired mas não re-exportado no bin
 # Build: soft-float + alias `cargo nk` (`.cargo/config.toml`); multicore jobs/-Z threads=16
 # Não declarar v2.0.0 sem review formal ADR E sem zerar demandas `por_fazer` — só com OK explícito do maintainer.
@@ -268,6 +268,9 @@ Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 - **FB texto ilegível / sobrescrita (SESSION_139):** TRACE do bootloader + `boot_ckpt` + `fb_print` sem limpar faixa → “fantasma”. Fix: `console_clear` no probe; `console_print` limpa banda da linha; `fb_print`→`console_print`. Stick Windows: MBR FAT dados `0x0C` + ESP `0xEF` (não 0xEE-first). `BOOT.LOG` só pós-heap. GOP `BltOnly` → vendor bootloader SetMode Rgb/Bgr.
 - **e1000 TX aliases QEMU (SESSION_149):** `TDBAL/TDT` em `0x0420/0x0438` são aliases Intel **não wired** no QEMU → write no-op → ARP nunca sai → RX=0. **Usar `0x3800/0x3818`.**
 - **DNS compressão (SESSION_150):** ao pular nomes DNS, **não seguir** pointer `0xC0xx` no offset de continuação — só +2 bytes no wire (`skip_dns_name`). DNS bootstrap = raw Ethernet+IP+UDP no NIC (smoltcp perde 1º UDP no ARP).
+- **Hermes net espelho (SESSION_152):** Browser/Search/Market **não** usam `hermes::net` (NETSTACK vazio). Registrar `hermes::net_bridge` no boot → `neural-kernel::net::resolve_and_http_get_safe`.
+- **Deadlock NETSTACK (SESSION_152):** nunca chamar `tcp_exchange` / NetFs smoke **dentro** de `NETSTACK.lock()` em `bootstrap_early` — hang pós-L5. Smoke só após return do bootstrap.
+- **HTTPS:** deny `tls_not_ready` até TLS real; **nunca** strip `https://` → porta 80. Stub: `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate`.
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

@@ -18,7 +18,7 @@ Nada é descartado sem registro. Ideias podem ser:
 - ❌ **Descartada** — com justificativa explícita
 - 🔄 **Fundida** — absorvida por item maior
 
-**Tags de dependência:** `depends_on: lan` (Ethernet RX estável / Onda 7); `depends_on: wifi` (radio / Onda 7). PreFlight: `python tools/preflight_wave.py`.
+**Tags de dependência:** `depends_on: lan` — **liberado** pós L3.5–L5 (SESSION_149/150); itens restantes = runtime/TLS/peer, não RX=0. `depends_on: wifi` (radio / Onda 7). PreFlight: `python tools/preflight_wave.py`.
 
 **Por que esta premissa existe:** Estamos inovando em caminhos pouco ou não trilhados (bare-metal neural OS, Memory Hierarchy Index, intent routing em Ring 0). Muitas ideias não são implementáveis hoje — seja por limitação tecnológica, falta de hardware, ou prioridade. Mas amanhã um dev pode saber como fazer, a tecnologia pode melhorar, ou podem surgir patrocinadores. Se a ideia não estiver registrada, ela morre.
 
@@ -65,7 +65,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | Residual | IDEA | Destino | Tag |
 |----------|------|---------|-----|
 | exFAT/NTFS/EXT write | #417 | ✅ exFAT write opt-in SESSION_144; NTFS/EXT ⏳ | — |
-| cloud sync | #418 | PARTIAL pós-LAN | lan ✅ SESSION_150; sync runtime aberto |
+| cloud sync | #418 | ✅ NetFs TCP smoke QEMU | `[NETFS] VERDICT=PASS` SESSION_152; backends S3/WebDAV residual |
 | Storage UI | #419 | ✅ CLI `storage_report`; UI App ⏳ | — |
 | MHI DMA | #420 | ▶️ AWAITING_HW SESSION_146 `[MHI-DMA]` | soft-MVP ✅ |
 | SysInstaller | #421 | defer | — |
@@ -73,7 +73,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | GPU Direct | #423 | ▶️ AWAITING_HW SESSION_146 `[GDS-HW]` | stub probe; sem P2P |
 | LAN/RX/DHCP/VirtIO-net | #73, #117–123, #251–252 | **Onda 7** L3.5 ✅ SESSION_149; L4/L5 residual | base LAN |
 | WiFi | WifiAgent / iwlwifi | **Onda 7** | `depends_on: wifi` |
-| TLS / model-fetch Net / Update HTTP | #124, AirLLM L3.5, #308 | Onda 7 fila | **`depends_on: lan`** |
+| TLS / model-fetch Net / Update HTTP | #124, AirLLM L3.5, #308 | TLS BLOCKED soft-float; HTTP update path | lan ✅; `https_get` stub |
 
 ---
 
@@ -90,7 +90,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | ❌ Descartado | Não será feito, com motivo | ❌ Descartado |
 | 🔄 Fundido | Absorvido por item maior | 🔄 Fundido |
 | 🟢 v2.0 Sprint N | Implementado no Sprint N da v2.0 | 🟢 v2.0 Sprint 106-5 |
-| tag `depends_on: lan` | Bloqueado até Onda 7 LAN RX>0 | #418 cloud |
+| tag `depends_on: lan` | Liberado (RX/L3.5–L5); tag histórica em itens TLS/peer | #418 NetFs runtime |
 
 ---
 
@@ -1681,7 +1681,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-10 | **416** | **Boa JS Engine** (boa_engine crate) � Engine JavaScript 100% Rust puro, compativel com no_std. ES2023+, ~180K LOC, ~5MB. Alternativa ao V8 para executar JS no kernel sem C++. BrowserAgent local usaria Boa como engine JS; Obscura (host) como fallback via serial tunnel para V8+CDP+stealth. | ?? IDEA_BANK | v2.0 | ~investigar | boa_engine |
 
 | 2026-07-10 | **417** | **exFAT + BlockDevice+ write** — Driver exFAT + BlockDevice write_sectors (ATA/AHCI/USB-MSC). Pendrives >4GB. | ✅ r/list + **write opt-in** (`EXFAT_WRITE=1`, `exfat_write.rs`); NTFS/EXT write ⏳ | ADR-0040 | SESSION_144 | `exfat.rs` + `exfat_write.rs` |
-| 2026-07-10 | **418** | **DiskIntelligenceAgent v2** — multi-FS probes, SMART/hotplug/ARC, MHI register. Mount FilesystemDriver pleno + cloud = residual. | ✅ parcial probes+VFS+ARC; cloud **BLOCKED** Onda 7 `depends_on: lan` | ADR-0040 | SESSION_144 | `disk_agent/` + `netfs.rs` |
+| 2026-07-10 | **418** | **DiskIntelligenceAgent v2** — multi-FS probes, SMART/hotplug/ARC, MHI register. Mount FilesystemDriver pleno + cloud = residual. | ✅ parcial probes+VFS+ARC; cloud NetFs TCP+smoke (lan ✅; peer runtime) | ADR-0040 | SESSION_144+Pós-LAN | `netfs.rs` + `tools/netfs_peer.py` |
 | 2026-07-10 | **419** | **FilesystemDriver trait + FS Manager App** — Trait unificado detect/mount/list. App Storage Manager = residual UI. | ✅ trait + CLI `storage_report`; ⏳ App UI (cauda) | ADR-0040 | SESSION_144 | `fs_driver.rs` + `storage_manager.rs` |
 | 2026-07-10 | **420** | **MHI Ativo com DMA ring** — soft-migrate metadata + DRAM memcpy; DMA NVMe/VRAM deferido. Registry unificado k_nano. | ✅ soft-MVP; ▶️ `[MHI-DMA] AWAITING_REAL_HW` peer DMA | ADR-0040 | SESSION_146 | `k_nano/mhi.rs` |
 | 2026-07-10 | **421** | **Instalador Neural com IA** — SysInstaller pendrive→HD. | ⏳ `por_fazer` | ADR-0040 | SESSION_125 | pós-MVP; precisa write HD |

@@ -73,11 +73,12 @@ pub fn aios_fs_write(path: &str, data: &[u8]) -> Result<(), &'static str> {
     crate::fs::write_vfs(path, data)
 }
 
-/// Wrapper Python-like: HTTP GET via BrowserAgent path (retorna stub se offline).
+/// Wrapper Python-like: HTTP GET via resolve_and_http_get (bin NETSTACK).
 pub fn aios_net_http_get(url: &str) -> Result<String, &'static str> {
-    let _ = url;
-    // Integração completa via BrowserAgent no monólito; stub seguro para crate isolado.
-    Err("aios_net.http_get: requer kernel runtime (BrowserAgent)")
+    let body = crate::net::resolve_and_http_get_safe(url)?;
+    core::str::from_utf8(&body)
+        .map(String::from)
+        .map_err(|_| "aios_net.http_get: not utf8")
 }
 
 /// Host sensível: TCP send exige Cap::SEND_TCP (Hermes WASM / skills).

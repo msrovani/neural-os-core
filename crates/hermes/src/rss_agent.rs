@@ -11,26 +11,21 @@ impl RssAgent {
     pub fn new() -> Self { RssAgent }
 
     pub fn fetch(&self, feed_url: &str, max_items: usize) -> Vec<(String, String)> {
-        let cfg = crate::net::NET_CONFIG.lock();
-        let dns = cfg.dns_ip;
-        drop(cfg);
-
-        let path = if let Some(p) = feed_url.find("://") {
-            let after_scheme = &feed_url[p + 3..];
-            let slash = after_scheme.find('/');
-            let path_only = if let Some(s) = slash { &after_scheme[s..] } else { "/" };
-            String::from(path_only)
-        } else { String::from("/") };
-
-        let html = unsafe { crate::net::http_get(dns, 80, &path) };
-        if let Some(data) = html {
-            let text = from_utf8(&data).unwrap_or("");
-            let items = parse_feed(text, max_items);
-            kjson!("RSS", "agent", "fetch", "url", feed_url, "items", items.len());
-            items
-        } else {
-            kjson!("RSS", "agent", "err", "url", feed_url);
-            Vec::new()
+        if feed_url.starts_with("https://") {
+            kjson!("RSS", "agent", "err", "msg", "tls_not_ready");
+            return Vec::new();
+        }
+        match crate::net_bridge::http_get_url(feed_url) {
+            Ok(data) => {
+                let text = from_utf8(&data).unwrap_or("");
+                let items = parse_feed(text, max_items);
+                kjson!("RSS", "agent", "fetch", "url", feed_url, "items", items.len());
+                items
+            }
+            Err(e) => {
+                kjson!("RSS", "agent", "err", "url", feed_url, "msg", e);
+                Vec::new()
+            }
         }
     }
 }

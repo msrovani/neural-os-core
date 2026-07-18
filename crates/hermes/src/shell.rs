@@ -223,7 +223,15 @@ fn dmesg_cmd() -> String {
 }
 
 fn netstat_cmd() -> String {
-    String::from("Netstat:\n  DHCP: pending (B-01)\n  smoltcp: active\n")
+    let cfg = crate::net::NET_CONFIG.lock();
+    let ip = cfg.ip;
+    let online = cfg.online;
+    let configured = cfg.configured;
+    drop(cfg);
+    alloc::format!(
+        "Netstat:\n  configured={} online={}\n  IP {}.{}.{}.{}\n  (use bin shell for tx/rx counters)\n",
+        configured, online, ip[0], ip[1], ip[2], ip[3]
+    )
 }
 
 fn dhcp_cmd() -> String {

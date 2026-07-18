@@ -14,6 +14,14 @@
 - **Tags:** `depends_on: lan` liberado (L3.5–L5); WiFi/`[WIFI-HW]` AWAITING; TLS/#418 PARTIAL
 - **Política:** `▶️ AWAITING_HW` + logs `[NET-HW]`/`[GPU-HW]`/`[UAC-HW]`/… — sem fake Ready
 
+### Pós-LAN B-01 unlock (SESSION_152)
+- **net_bridge** Hermes→bin NETSTACK; `resolve_and_http_get` + Host header; HTTPS deny até TLS
+- **Agents:** `/fetch`, Browser, Search, RSS, Market, AutoLearn sem stub B-01; Email SMTP residual honesto
+- **AirLLM Net:** DNS+hostname + Range/stream; `tools/serve_tiny_gguf.py`
+- **#418 NetFs:** TCP `gateway:4446` + `tools/netfs_peer.py` + smoke `[NETFS]`
+- **#308 SelfUpdate:** `fetch_update` HTTP + FNV + slot A/B
+- **#123 TLS:** `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate` (sem fake HTTPS)
+
 ## [1.8.6] — 2026-07-18 — ADR-0041 H4+/H5+/AS + HalOffer Cap (TEST)
 
 ### ADR-0041 restante (SESSION_140)

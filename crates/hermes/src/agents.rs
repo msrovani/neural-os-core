@@ -769,38 +769,19 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::Fetch(ref url) => {
-                    let parsed: Option<([u8; 4], u16, String)> = {
-                        let url_str = url.trim();
-                        if let Some(rest) = url_str.strip_prefix("http://") {
-                            let without_slash = if let Some(pos) = rest.find('/') {
-                                let (hp, p) = rest.split_at(pos);
-                                (hp, alloc::string::ToString::to_string(p))
-                            } else { (rest, String::from("/")) };
-                            let (host_str, path) = without_slash;
-                            let (host_only, port) = if let Some(pos) = host_str.find(':') {
-                                let (h, p_str) = host_str.split_at(pos);
-                                let p: u16 = p_str[1..].parse().unwrap_or(80);
-                                (h, p)
-                            } else { (host_str, 80u16) };
-                            let parts: Vec<&str> = host_only.split('.').collect();
-                            if parts.len() == 4 {
-                                Some(([parts[0].parse().unwrap_or(0), parts[1].parse().unwrap_or(0),
-                                       parts[2].parse().unwrap_or(0), parts[3].parse().unwrap_or(0)], port, path))
-                            } else { None }
-                        } else { None }
-                    };
-                    match parsed {
-                        Some((ip, port, path)) => {
-                            match unsafe { crate::net::http_get(ip, port, &path) } {
-                                Some(body) => {
-                                    let text = core::str::from_utf8(&body).unwrap_or("(binary)");
-                                    let preview = if text.len() > 200 { &text[..200] } else { text };
-                                    alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
-                                }
-                                None => String::from("Fetch falhou: sem resposta"),
-                            }
+                    match crate::net_bridge::http_get_url(url.trim()) {
+                        Ok(body) => {
+                            let text = core::str::from_utf8(&body).unwrap_or("(binary)");
+                            let preview = if text.len() > 200 { &text[..200] } else { text };
+                            alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
                         }
-                        None => String::from("Formato: /fetch http://ip:port/path"),
+                        Err("tls_not_ready") => {
+                            String::from("Fetch: HTTPS requer TLS (#123) — use http://")
+                        }
+                        Err(e) => alloc::format!(
+                            "Fetch falhou: {} (formato: /fetch http://host[:port]/path)",
+                            e
+                        ),
                     }
                 }
                 hermes::Command::Ping(ref target) => {
@@ -2006,19 +1987,36 @@ impl AutoLearnAgent {
     }
 
     fn download_knowledge(&self, topic: &str) -> Option<Vec<u8>> {
-        // Usa browser_agent ou http_get para baixar de repositorio online
-        let url = alloc::format!("http://repository.neuralos.local/{}.BIN", topic);
-        k_nano::slog_hermes!("TRINITY", "Learn", "Tentando download: {}", url);
-        // Tenta via browser_agent (que usa smoltcp)
+        let url_gw = alloc::format!("http://10.0.2.2:8080/{}.BIN", topic);
+        let url_dns = alloc::format!("http://repository.neuralos.local/{}.BIN", topic);
+        k_nano::slog_hermes!("TRINITY", "Learn", "Tentando download: {}", url_gw);
         let _ = k_nano::EVENT_BUS.publish(Event {
-            id: 0, topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
-            payload: url.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
+            id: 0,
+            topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
+            payload: url_gw.as_bytes().to_vec(),
+            token: CapabilityToken::Legacy(1),
         });
-        // Por enquanto, http_get retorna None ate B-01 ser resolvido
-        // Quando DHCP funcionar, baixara automaticamente de:
-        // huggingface.co/datasets/neural-os/hardware-moe-dataset/resolve/main/
-        k_nano::slog_hermes!("TRINITY", "Learn", "Rede indisponivel (B-01). Coloque {} na FAT32.", url);
-        None
+        match crate::net_bridge::http_get_url(&url_gw) {
+            Ok(data) if !data.is_empty() => {
+                k_nano::slog_hermes!("TRINITY", "Learn", "download OK {} bytes", data.len());
+                return Some(data);
+            }
+            _ => {}
+        }
+        match crate::net_bridge::http_get_url(&url_dns) {
+            Ok(data) if !data.is_empty() => Some(data),
+            Err(e) => {
+                k_nano::slog_hermes!(
+                    "TRINITY",
+                    "Learn",
+                    "download fail ({}) — coloque {}.BIN na FAT32",
+                    e,
+                    topic
+                );
+                None
+            }
+            Ok(_) => None,
+        }
     }
 }
 

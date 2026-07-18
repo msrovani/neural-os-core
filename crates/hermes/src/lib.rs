@@ -22,6 +22,7 @@ pub mod hermes;
 pub mod hub;
 pub mod mcp;
 pub mod net;
+pub mod net_bridge;
 pub mod netdiag;
 pub mod netfs;
 pub mod netstack;

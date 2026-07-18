@@ -798,6 +798,163 @@ impl<'a> Fat32Writer<'a> {
         }
     }
 
+    /// Tamanho atual do arquivo no root (None se inexistente).
+    unsafe fn file_size(&self, name: &str) -> Option<u32> {
+        let name_bytes = encode_83(name);
+        let mut cluster = self.reader.root_cluster;
+        while cluster < 0x0FFF_FFF8 && cluster >= 2 {
+            let lba = self.reader.cluster_lba(cluster);
+            let cluster_bytes =
+                self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+            let mut buf = vec![0u8; cluster_bytes];
+            for i in 0..self.reader.sectors_per_cluster as u32 {
+                self.reader.ata.read_sectors(
+                    lba + i,
+                    &mut buf[i as usize * 512..(i + 1) as usize * 512],
+                    1,
+                );
+            }
+            for entry_off in (0..buf.len()).step_by(32) {
+                let first = buf[entry_off];
+                if first == 0 || first == 0xE5 {
+                    continue;
+                }
+                if buf[entry_off + 11] & 0x08 != 0 {
+                    continue;
+                }
+                if &buf[entry_off..entry_off + 11] == &name_bytes {
+                    return Some(u32::from_le_bytes([
+                        buf[entry_off + 28],
+                        buf[entry_off + 29],
+                        buf[entry_off + 30],
+                        buf[entry_off + 31],
+                    ]));
+                }
+            }
+            cluster = self.reader.read_fat_entry(cluster);
+        }
+        None
+    }
+
+    /// Escreve `data` nos clusters já alocados (encadeia FAT).
+    unsafe fn write_data_to_clusters(&self, clusters: &[u32], data: &[u8]) -> bool {
+        if clusters.is_empty() {
+            return data.is_empty();
+        }
+        let spc = self.reader.sectors_per_cluster as u32;
+        let bps = self.reader.bytes_per_sector as usize;
+        let cluster_size = spc as usize * bps;
+        let mut written = 0usize;
+        for (i, &c) in clusters.iter().enumerate() {
+            let lba = self.reader.cluster_lba(c);
+            let remain = data.len().saturating_sub(written);
+            let chunk_len = remain.min(cluster_size);
+            let chunk = &data[written..written + chunk_len];
+            for s in 0..spc {
+                let off = s as usize * bps;
+                let mut sector = [0u8; 512];
+                if off < chunk.len() {
+                    let end = (off + bps).min(chunk.len());
+                    sector[..end - off].copy_from_slice(&chunk[off..end]);
+                }
+                if !self.reader.ata.write_sectors(lba + s, &sector, 1) {
+                    return false;
+                }
+            }
+            written += chunk_len;
+            let next = if i + 1 < clusters.len() {
+                clusters[i + 1]
+            } else {
+                0x0FFF_FFF8
+            };
+            if !self.write_fat_entry(c, next) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Append chunks (stream-to-disk). Cria o arquivo se não existir.
+    pub unsafe fn append_file(&self, name: &str, data: &[u8]) -> bool {
+        if data.is_empty() {
+            return true;
+        }
+        let cluster_size =
+            self.reader.sectors_per_cluster as usize * self.reader.bytes_per_sector as usize;
+
+        if self.find_entry(name).is_none() {
+            return self.write_file(name, data);
+        }
+
+        let mut size = self.file_size(name).unwrap_or(0) as usize;
+        let (_off, _lba, first_cluster) = match self.find_entry(name) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        // Último cluster da chain
+        let mut last = first_cluster;
+        let mut c = first_cluster;
+        while c >= 2 && c < 0x0FFF_FFF8 {
+            last = c;
+            c = self.reader.read_fat_entry(c);
+        }
+
+        let mut src = 0usize;
+        // Completa espaço livre no último cluster (parcial)
+        let pad = size % cluster_size;
+        if pad != 0 && last >= 2 {
+            let space = cluster_size - pad;
+            let take = space.min(data.len());
+            let lba = self.reader.cluster_lba(last);
+            let mut cluster_buf = vec![0u8; cluster_size];
+            for s in 0..self.reader.sectors_per_cluster as u32 {
+                let off = s as usize * 512;
+                self.reader.ata.read_sectors(
+                    lba + s,
+                    &mut cluster_buf[off..off + 512],
+                    1,
+                );
+            }
+            cluster_buf[pad..pad + take].copy_from_slice(&data[..take]);
+            for s in 0..self.reader.sectors_per_cluster as u32 {
+                let off = s as usize * 512;
+                if !self
+                    .reader
+                    .ata
+                    .write_sectors(lba + s, &cluster_buf[off..off + 512], 1)
+                {
+                    return false;
+                }
+            }
+            src = take;
+            size += take;
+        }
+
+        let remaining = &data[src..];
+        if !remaining.is_empty() {
+            let num = (remaining.len() + cluster_size - 1) / cluster_size;
+            let clusters = match self.find_free_clusters(num as u32) {
+                Some(c) => c,
+                None => {
+                    k_nano::slog_bin!("FAT32", "info", "append: sem clusters livres need={}", num);
+                    return false;
+                }
+            };
+            if last >= 2 && last < 0x0FFF_FFF8 {
+                if !self.write_fat_entry(last, clusters[0]) {
+                    return false;
+                }
+            }
+            if !self.write_data_to_clusters(&clusters, remaining) {
+                return false;
+            }
+            size += remaining.len();
+        }
+
+        self.update_file_size(name, size as u32)
+    }
+
     /// Atualiza tamanho do arquivo na entrada de diretorio
     unsafe fn update_file_size(&self, name: &str, size: u32) -> bool {
         let name_bytes = encode_83(name);

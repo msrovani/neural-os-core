@@ -14,36 +14,26 @@ impl EmailAgent {
         EmailAgent { smtp_host: host, smtp_port: port, from_addr: String::from(from) }
     }
 
-    /// Envia email via SMTP. Requer um servidor SMTP local ou relay.
+    /// SMTP real ainda residual — não finge sucesso via http_get no DNS.
     pub fn send(&self, to: &str, subject: &str, body: &str) -> Result<(), &'static str> {
-        let cfg = crate::net::NET_CONFIG.lock();
-        let dns = cfg.dns_ip;
-        drop(cfg);
-
-        let mut msg = Vec::new();
-        msg.extend_from_slice(b"HELO aios\r\n");
-        msg.extend_from_slice(&alloc::format!("MAIL FROM:<{}>\r\n", self.from_addr).into_bytes());
-        msg.extend_from_slice(&alloc::format!("RCPT TO:<{}>\r\n", to).into_bytes());
-        msg.extend_from_slice(b"DATA\r\n");
-        msg.extend_from_slice(&alloc::format!("From: {}\r\n", self.from_addr).into_bytes());
-        msg.extend_from_slice(&alloc::format!("To: {}\r\n", to).into_bytes());
-        msg.extend_from_slice(&alloc::format!("Subject: {}\r\n", subject).into_bytes());
-        msg.extend_from_slice(b"\r\n");
-        msg.extend_from_slice(body.as_bytes());
-        msg.extend_from_slice(b"\r\n.\r\n");
-        msg.extend_from_slice(b"QUIT\r\n");
-
-        let raw = unsafe { crate::net::http_get_raw(dns, self.smtp_port, &msg) };
-        match raw {
-            Some(_) => {
-                kjson!("EMAIL", "agent", "send", "to", to, "subject", subject);
-                Ok(())
-            }
-            None => {
-                kjson!("EMAIL", "agent", "err", "to", to);
-                Err("smtp failed")
-            }
-        }
+        let _ = (to, subject, body);
+        kjson!(
+            "EMAIL",
+            "agent",
+            "err",
+            "msg",
+            "smtp_dialogue_unwired",
+            "host",
+            alloc::format!(
+                "{}.{}.{}.{}:{}",
+                self.smtp_host[0],
+                self.smtp_host[1],
+                self.smtp_host[2],
+                self.smtp_host[3],
+                self.smtp_port
+            )
+        );
+        Err("smtp_dialogue_unwired")
     }
 
     pub fn status(&self) -> String {

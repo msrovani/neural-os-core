@@ -409,7 +409,42 @@ impl NetStack {
     }
 
     pub fn http_new(&mut self, host: [u8; 4], port: u16, path: &str) -> HttpConn {
-        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 4096]);
+        self.http_new_host(host, port, path, None)
+    }
+
+    /// HTTP GET with optional Host header (hostname for vhosts / CDN).
+    pub fn http_new_host(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        path: &str,
+        host_header: Option<&str>,
+    ) -> HttpConn {
+        self.http_new_host_ex(host, port, path, host_header, None)
+    }
+
+    /// HTTP GET + `Range: bytes=start-end` (AirLLM stream-to-disk).
+    pub fn http_new_host_ranged(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        path: &str,
+        host_header: Option<&str>,
+        start: usize,
+        end: usize,
+    ) -> HttpConn {
+        self.http_new_host_ex(host, port, path, host_header, Some((start, end)))
+    }
+
+    fn http_new_host_ex(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        path: &str,
+        host_header: Option<&str>,
+        range: Option<(usize, usize)>,
+    ) -> HttpConn {
+        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 8192]);
         let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 4096]);
         let tcp = TcpSocket::new(tcp_rx, tcp_tx);
         let handle = self.sockets.add(tcp);
@@ -417,14 +452,24 @@ impl NetStack {
         let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
         let tcp = self.sockets.get_mut::<TcpSocket>(handle);
         let context = self.iface.context();
-        // Porta efêmera ≠ DNS 54321 (evita colisão se socket UDP ainda vivo).
         let local_port: u16 = 49152u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
         let _ = tcp.connect(context, remote, local_port);
 
-        let request = alloc::format!(
-            "GET {} HTTP/1.1\r\nHost: {}.{}.{}.{}\r\nConnection: close\r\n\r\n",
-            path, host[0], host[1], host[2], host[3]
-        );
+        let host_line = match host_header {
+            Some(h) if !h.is_empty() => alloc::string::String::from(h),
+            _ => alloc::format!("{}.{}.{}.{}", host[0], host[1], host[2], host[3]),
+        };
+        let request = if let Some((start, end)) = range {
+            alloc::format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nRange: bytes={}-{}\r\nConnection: close\r\n\r\n",
+                path, host_line, start, end
+            )
+        } else {
+            alloc::format!(
+                "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                path, host_line
+            )
+        };
 
         HttpConn {
             handle,
@@ -434,6 +479,72 @@ impl NetStack {
             buf: Vec::new(),
             timeout: 0,
         }
+    }
+
+    /// TCP connect → send payload → recv until close/timeout (NetFs / SMTP framing).
+    pub fn tcp_exchange(&mut self, host: [u8; 4], port: u16, payload: &[u8], now: u64) -> Option<Vec<u8>> {
+        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 8192]);
+        let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 8192]);
+        let tcp = TcpSocket::new(tcp_rx, tcp_tx);
+        let handle = self.sockets.add(tcp);
+        let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
+        {
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            let context = self.iface.context();
+            let local_port: u16 = 50000u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
+            let _ = tcp.connect(context, remote, local_port);
+        }
+        let mut sent = false;
+        let mut buf = Vec::new();
+        for _ in 0..8_000 {
+            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+            iface.poll(Instant::from_millis(now as i64), phy, sockets);
+            let tcp = sockets.get_mut::<TcpSocket>(handle);
+            match tcp.state() {
+                TcpState::Established => {
+                    if !sent {
+                        let _ = tcp.send_slice(payload);
+                        sent = true;
+                    }
+                    if tcp.can_recv() {
+                        if let Ok(chunk) = tcp.recv(|data| {
+                            let v = Vec::from(&*data);
+                            (data.len(), v)
+                        }) {
+                            buf.extend_from_slice(&chunk);
+                        }
+                    }
+                }
+                TcpState::CloseWait => {
+                    if tcp.can_recv() {
+                        if let Ok(chunk) = tcp.recv(|data| {
+                            let v = Vec::from(&*data);
+                            (data.len(), v)
+                        }) {
+                            buf.extend_from_slice(&chunk);
+                        }
+                    }
+                    tcp.close();
+                    break;
+                }
+                TcpState::Closed | TcpState::Closing => break,
+                TcpState::SynSent | TcpState::SynReceived => {}
+                _ => {
+                    if sent && !buf.is_empty() {
+                        break;
+                    }
+                }
+            }
+            core::hint::spin_loop();
+        }
+        {
+            let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
+            let tcp = sockets.get_mut::<TcpSocket>(handle);
+            tcp.close();
+            iface.poll(Instant::from_millis(now as i64), phy, sockets);
+            sockets.remove(handle);
+        }
+        if buf.is_empty() { None } else { Some(buf) }
     }
 
     pub fn http_poll(&mut self, conn: &mut HttpConn, now: u64) {

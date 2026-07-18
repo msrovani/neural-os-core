@@ -111,10 +111,10 @@ mod model_hub;
 pub use hermes_crate::{
     actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp,
-    memory_store, optimizer, package_hub, plugin_hub, rustpython_no_std, safety, search_agent,
-    security, self_evolve, self_update, skill_gen, skill_loader, skill_market, skill_observer,
-    skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat,
-    wifi_iwlwifi, wifi_msix, wifi_protocol,
+    memory_store, net_bridge, optimizer, package_hub, plugin_hub, rustpython_no_std, safety,
+    search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
+    skill_observer, skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent,
+    wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
 };
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
@@ -1528,6 +1528,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Sprint Net: L2–L3 (+ smoke L4/L5) antes do scheduler — hang pós-Runtime não impede static.
     crate::network_agent::bootstrap_early();
+    // Hermes FE → bin NETSTACK (Browser/Search/Market/SelfUpdate)
+    hermes_crate::net_bridge::register_http_get_url(crate::net::resolve_and_http_get_safe);
+    hermes_crate::net_bridge::register_tcp_xfer(|host, port, data| unsafe {
+        crate::net::tcp_exchange(host, port, data)
+    });
+    crate::net::log_tls_status_boot();
+    // NetFs #418 smoke (best-effort; also from network_agent after L5_OK)
+    crate::netfs::smoke_if_online();
     publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP smoke)");
 
     let ata_found = {

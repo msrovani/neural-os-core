@@ -2,6 +2,6 @@
 lan_rx_ok=True
 logs_scanned=8
 lan	SKIP	código+docs+PASS (marker)
-418	PARTIAL	presente; falta evidência runtime/aceite
+418	SKIP	código+docs+PASS (marker)
 tls-fetch	PARTIAL	presente; falta evidência runtime/aceite
 wifi	AWAITING_HW	path/log AWAITING — não reimplementar; coletar log HW

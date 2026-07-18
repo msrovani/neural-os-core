@@ -3,7 +3,6 @@
 
 use alloc::format;
 use alloc::string::String;
-use alloc::vec::Vec;
 
 use crate::approval::ApprovalLevel;
 use crate::package_hub::{
@@ -13,6 +12,7 @@ use crate::package_hub::{
 /// Hosts permitidos para fetch (MVP). IP literals ou hostnames resolvidos offline.
 pub const ALLOWLIST_HOSTS: &[&str] = &[
     "127.0.0.1",
+    "10.0.2.2",
     "raw.githubusercontent.com",
     "cdn.jsdelivr.net",
 ];
@@ -132,16 +132,22 @@ pub fn host_allowed(host: &str) -> bool {
 /// Parse URL http://host[:port]/path — só HTTP plain (smoltcp).
 pub fn parse_http_url(url: &str) -> Result<(String, u16, String), &'static str> {
     let u = url.trim();
-    let rest = u
-        .strip_prefix("http://")
-        .ok_or("only_http")?;
+    if u.starts_with("https://") {
+        return Err("tls_not_ready");
+    }
+    let rest = u.strip_prefix("http://").ok_or("only_http")?;
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
     };
     let (host, port) = if let Some(i) = hostport.rfind(':') {
-        let p: u16 = hostport[i + 1..].parse().map_err(|_| "bad_port")?;
-        (&hostport[..i], p)
+        let maybe = &hostport[i + 1..];
+        if maybe.chars().all(|c| c.is_ascii_digit()) {
+            let p: u16 = maybe.parse().map_err(|_| "bad_port")?;
+            (&hostport[..i], p)
+        } else {
+            (hostport, 80u16)
+        }
     } else {
         (hostport, 80u16)
     };
@@ -151,49 +157,28 @@ pub fn parse_http_url(url: &str) -> Result<(String, u16, String), &'static str> 
     Ok((String::from(host), port, String::from(path)))
 }
 
-fn parse_ipv4(host: &str) -> Option<[u8; 4]> {
-    let mut out = [0u8; 4];
-    let parts: Vec<&str> = host.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-    for (i, p) in parts.iter().enumerate() {
-        out[i] = p.parse().ok()?;
-    }
-    Some(out)
-}
-
-/// Fetch allowlisted URL → validate → resign → stage install.
-/// Hostname não-IP: fail honesto (sem DNS nesta leva) salvo 127.0.0.1.
+/// Fetch allowlisted URL → validate → resign → stage install (DNS via net_bridge).
 pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
-    let (host, port, path) = match parse_http_url(url) {
+    let (host, _port, path) = match parse_http_url(url) {
         Ok(v) => v,
         Err(e) => {
             k_nano::slog_hermes!("Market", "info", "fetch=deny reason={}", e);
             return format!("[MARKET] fetch denied: {}", e);
         }
     };
-    let ip = match parse_ipv4(&host) {
-        Some(ip) => ip,
-        None => {
-            k_nano::slog_hermes!("Market", "info", "fetch=noop host={} (DNS not in MVP — use IP allowlist)", host);
-            return format!(
-                "[MARKET] fetch noop: host '{}' needs IP literal in MVP",
-                host
-            );
+    k_nano::slog_hermes!("Market", "info", "fetch host={} path={}", host, path);
+    let bytes = match crate::net_bridge::http_get_url(url.trim()) {
+        Ok(b) => b,
+        Err(e) => {
+            k_nano::slog_hermes!("Market", "info", "fetch=fail {}", e);
+            return format!("[MARKET] fetch failed ({}) — noop honesto", e);
         }
-    };
-    k_nano::slog_hermes!("Market", "info", "fetch host={}.{}.{}.{}:{} path={}", ip[0], ip[1], ip[2], ip[3], port, path);
-    let bytes = unsafe { crate::net::http_get(ip, port, &path) };
-    let Some(bytes) = bytes else {
-        k_nano::slog_hermes!("Market", "info", "fetch=fail network");
-        return String::from("[MARKET] fetch failed (network) — noop honesto");
     };
     let body = match core::str::from_utf8(&bytes) {
         Ok(s) => s,
         Err(_) => return String::from("[MARKET] fetch: not utf8"),
     };
-    // Extrai body HTTP se vier com headers
+    // Body já vem sem headers se bridge stripou; fallback se raw
     let md = if let Some(idx) = body.find("\r\n\r\n") {
         &body[idx + 4..]
     } else if let Some(idx) = body.find("\n\n") {

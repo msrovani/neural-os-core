@@ -5,7 +5,7 @@
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **plano Residuals 0–7 FECHADO** (SESSION_151). Próximo: WiFi AWAITING · TLS/#418 PARTIAL · gate v2.0.0 review.
+**Pista ativa:** **Pós-LAN B-01 unlock ✅** (SESSION_152; NetFs PASS). Próximo: `/model-fetch` e2e · WiFi AWAITING · TLS real · gate v2.0.0 review.
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW**
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
@@ -195,13 +195,18 @@
 
 | Item | Esforço | Descrição |
 |------|---------|-----------|
-| **B-01** DHCP/RX + internet QEMU | ~500 LOC | ▶️ gate=**e1000** (SLIP frozen); user=static 10.0.2.15; **-Bridge**=TAP+DHCP; L3.5 prove RX before DNS |
 | WWW Agents | ~2.600 | Email, Search, RSS, Download |
-| Self-Update Agent | ~800 | A/B slots, channels |
+| Self-Update Agent | ~800 | A/B slots, channels — `fetch_update` HTTP stub (#308) |
 | Cross-OS compat | ~2.000 | PE/ELF/Mach-O/APK |
 | Federated Cluster | ~300 | Mesh multi-máquina |
 | Multi-device sync | ~300 | CRDT |
 | AppForge | ~3.000 | Apps multi-usuário |
+
+### ✅ Desbloqueados (histórico)
+
+| Item | Status |
+|------|--------|
+| **B-01** DHCP/RX + internet QEMU | ✅ LAN unlocked (e1000 + L3.5–L5; SESSION_149/150; Pós-LAN ondas 0–1) |
 
 ---
 

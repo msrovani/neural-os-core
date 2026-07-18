@@ -193,10 +193,10 @@ WAVE_ITEMS: dict[int, list[dict]] = {
         {
             "id": "airllm-net",
             "label": "AirLLM Net/L3.5 model-fetch",
-            "docs": ["depends_on: lan", "L3.5", "model-fetch"],
-            "code": ["hot_swap_from_net"],
+            "docs": ["depends_on: lan", "L3.5", "model-fetch", "hot_swap_from_net"],
+            "code": ["hot_swap_from_net", "http_get_range_host", "http_new_host_ranged"],
             "depends_on_lan": True,
-            "force_blocked": "depends_on: lan — Onda 7 (Net path)",
+            "pass_marker": "hot_swap Net",
         },
     ],
     7: [
@@ -212,18 +212,19 @@ WAVE_ITEMS: dict[int, list[dict]] = {
         {
             "id": "418",
             "label": "cloud sync #418",
-            "docs": ["depends_on: lan", "#418"],
-            "code": ["netfs"],
+            "docs": ["#418", "NETFS", "netfs_peer"],
+            "code": ["netfs", "smoke_if_online", "tcp_exchange"],
             "depends_on_lan": True,
-            "force_blocked": "depends_on: lan — após LAN RX>0",
+            "pass_marker": "NETFS] [info] - VERDICT=PASS",
         },
         {
             "id": "tls-fetch",
             "label": "TLS/fetch/HTTP update",
-            "docs": ["depends_on: lan", "#124", "#308"],
-            "code": ["http_get", "tls"],
+            "docs": ["#124", "#308", "ADR-0016 N4"],
+            "code": ["https_get", "tls_not_ready", "fetch_update"],
             "depends_on_lan": True,
-            "force_blocked": "depends_on: lan — após LAN RX>0",
+            # pass_marker only when real HTTPS works — stub logs BLOCKED (PARTIAL ok)
+            "pass_marker": "TLS] [info] - VERDICT=PASS",
         },
         {
             "id": "wifi",

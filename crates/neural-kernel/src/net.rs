@@ -262,36 +262,263 @@ pub unsafe fn prove_e1000_rx(sip: [u8; 4], tip: [u8; 4]) -> bool {
 /// HTTP GET real via netstack. Usa o socket TCP do smoltcp.
 /// HTTP GET real via NetStack::http_new + http_poll + http_close
 pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
+    http_get_host(host, port, path, None)
+}
+
+/// HTTP GET with Host header (required for hostname/CDN targets).
+pub unsafe fn http_get_host(
+    host: [u8; 4],
+    port: u16,
+    path: &str,
+    host_header: Option<&str>,
+) -> Option<Vec<u8>> {
     let mut stack_guard = NETSTACK.lock();
     let stack = stack_guard.as_mut()?;
     let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
-    let mut conn = stack.http_new(host, port, path);
-    for _ in 0..2000 {
+    let mut conn = stack.http_new_host(host, port, path, host_header);
+    for _ in 0..8_000 {
         stack.http_poll(&mut conn, now as u64);
         match conn.state {
-            crate::netstack::HttpState::Done(ref data) => { return Some(data.clone()); }
-            crate::netstack::HttpState::Failed => { break; }
-            _ => { core::hint::spin_loop(); }
+            crate::netstack::HttpState::Done(ref data) => {
+                return Some(strip_http_envelope(data));
+            }
+            crate::netstack::HttpState::Failed => {
+                break;
+            }
+            _ => {
+                core::hint::spin_loop();
+            }
         }
     }
     None
 }
 
-/// Envia dados brutos via TCP e recebe resposta (usado por SMTP, etc)
+/// Envia dados brutos via TCP e recebe resposta (SMTP / legado).
 pub unsafe fn http_get_raw(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<u8>> {
+    tcp_exchange(host, port, data)
+}
+
+/// TCP framing exchange (NetFs #418, SMTP residual).
+pub unsafe fn tcp_exchange(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<u8>> {
     let mut stack_guard = NETSTACK.lock();
     let stack = stack_guard.as_mut()?;
     let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    stack.tcp_exchange(host, port, data, now as u64)
+}
 
-    let mut conn = stack.http_new(host, port, "/");
-    stack.http_send_raw(&mut conn, data);
-    for _ in 0..2000 {
+/// Parse `http://host[:port]/path`. HTTPS → Err(`tls_not_ready`).
+pub fn parse_http_url(
+    url: &str,
+) -> Result<(alloc::string::String, u16, alloc::string::String), &'static str> {
+    let u = url.trim();
+    if u.starts_with("https://") || u.starts_with("HTTPS://") {
+        return Err("tls_not_ready");
+    }
+    let rest = u
+        .strip_prefix("http://")
+        .or_else(|| u.strip_prefix("HTTP://"))
+        .ok_or("bad_url")?;
+    let (hostport, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    if hostport.is_empty() {
+        return Err("bad_url");
+    }
+    let (host, port) = if let Some(i) = hostport.rfind(':') {
+        let maybe_port = &hostport[i + 1..];
+        if maybe_port.chars().all(|c| c.is_ascii_digit()) {
+            let p: u16 = maybe_port.parse().map_err(|_| "bad_port")?;
+            (&hostport[..i], p)
+        } else {
+            (hostport, 80u16)
+        }
+    } else {
+        (hostport, 80u16)
+    };
+    Ok((
+        alloc::string::String::from(host),
+        port,
+        alloc::string::String::from(path),
+    ))
+}
+
+fn parse_ipv4_host(host: &str) -> Option<[u8; 4]> {
+    let parts: alloc::vec::Vec<&str> = host.split('.').collect();
+    if parts.len() != 4 {
+        return None;
+    }
+    let mut out = [0u8; 4];
+    for (i, p) in parts.iter().enumerate() {
+        if p.is_empty() || p.len() > 3 {
+            return None;
+        }
+        out[i] = p.parse().ok()?;
+    }
+    Some(out)
+}
+
+/// DNS resolve via NETSTACK (raw UDP) using NET_CONFIG.dns_ip (fallback 10.0.2.3).
+pub unsafe fn dns_resolve_host(hostname: &str) -> Option<[u8; 4]> {
+    if let Some(ip) = parse_ipv4_host(hostname) {
+        return Some(ip);
+    }
+    let dns = {
+        let cfg = NET_CONFIG.lock();
+        if cfg.dns_ip != [0; 4] {
+            cfg.dns_ip
+        } else {
+            [10, 0, 2, 3]
+        }
+    };
+    let mut stack_guard = NETSTACK.lock();
+    let stack = stack_guard.as_mut()?;
+    stack.dns_resolve(hostname, dns)
+}
+
+/// Resolve hostname + HTTP GET. Body only (headers stripped).
+/// `https://` → Err(`tls_not_ready`) — never silently strip to port 80.
+pub unsafe fn resolve_and_http_get(url: &str) -> Result<Vec<u8>, &'static str> {
+    let (host, port, path) = parse_http_url(url)?;
+    let ip = dns_resolve_host(&host).ok_or("dns_failed")?;
+    k_nano::slog_bin!(
+        "Net",
+        "http",
+        "GET {}.{}.{}.{}:{}{} Host={}",
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3],
+        port,
+        path,
+        host
+    );
+    match http_get_host(ip, port, &path, Some(host.as_str())) {
+        Some(body) if !body.is_empty() => Ok(body),
+        Some(_) => Err("http_empty"),
+        None => Err("http_failed"),
+    }
+}
+
+/// Safe wrapper for hermes net_bridge (no `unsafe` in FE call sites).
+pub fn resolve_and_http_get_safe(url: &str) -> Result<Vec<u8>, &'static str> {
+    unsafe { resolve_and_http_get(url) }
+}
+
+/// HTTPS stub — `embedded-tls` blocked on soft-float / x86_64-unknown-none (ADR-0016 N4).
+/// Never strips https→http:80. Logs VERDICT=BLOCKED once per boot.
+pub fn https_get(_url: &str) -> Result<Vec<u8>, &'static str> {
+    log_tls_blocked_once();
+    Err("tls_not_ready")
+}
+
+fn log_tls_blocked_once() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        k_nano::slog_bin!(
+            "TLS",
+            "info",
+            "VERDICT=BLOCKED reason=softfloat_or_crate"
+        );
+    }
+}
+
+/// Call once at boot so serial always shows TLS status even without https:// fetch.
+pub fn log_tls_status_boot() {
+    log_tls_blocked_once();
+}
+
+/// Resultado de GET com Range (AirLLM stream-to-disk).
+pub struct HttpRangeBody {
+    pub status: u16,
+    pub body: Vec<u8>,
+    /// Total do `Content-Range: bytes a-b/TOTAL` quando 206.
+    pub total: Option<usize>,
+}
+
+/// HTTP GET ranged. Body sem headers; `total` se servidor enviar Content-Range.
+pub unsafe fn http_get_range_host(
+    host: [u8; 4],
+    port: u16,
+    path: &str,
+    host_header: Option<&str>,
+    start: usize,
+    end: usize,
+) -> Option<HttpRangeBody> {
+    let mut stack_guard = NETSTACK.lock();
+    let stack = stack_guard.as_mut()?;
+    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+    let mut conn = stack.http_new_host_ranged(host, port, path, host_header, start, end);
+    for _ in 0..12_000 {
         stack.http_poll(&mut conn, now as u64);
         match conn.state {
-            crate::netstack::HttpState::Done(ref d) => { return Some(d.clone()); }
-            crate::netstack::HttpState::Failed => { break; }
-            _ => { core::hint::spin_loop(); }
+            crate::netstack::HttpState::Done(ref data) => {
+                return Some(parse_http_range_raw(data));
+            }
+            crate::netstack::HttpState::Failed => break,
+            _ => core::hint::spin_loop(),
+        }
+    }
+    None
+}
+
+fn parse_http_range_raw(raw: &[u8]) -> HttpRangeBody {
+    let mut status = 0u16;
+    let mut total = None;
+    let body_off = find_header_end(raw).unwrap_or(0);
+    if raw.starts_with(b"HTTP/") {
+        let line_end = raw.iter().position(|&b| b == b'\n').unwrap_or(raw.len().min(32));
+        if let Ok(line) = core::str::from_utf8(&raw[..line_end]) {
+            if let Some(code) = line.split_whitespace().nth(1) {
+                status = code.parse().unwrap_or(0);
+            }
+        }
+        if let Ok(hdrs) = core::str::from_utf8(&raw[..body_off]) {
+            for hline in hdrs.lines() {
+                let lower = hline.to_ascii_lowercase();
+                if let Some(rest) = lower.strip_prefix("content-range:") {
+                    if let Some(slash) = rest.rfind('/') {
+                        let t = rest[slash + 1..].trim();
+                        if t != "*" {
+                            total = t.parse().ok();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let body = if body_off < raw.len() {
+        raw[body_off..].to_vec()
+    } else {
+        Vec::new()
+    };
+    HttpRangeBody { status, body, total }
+}
+
+fn strip_http_envelope(raw: &[u8]) -> Vec<u8> {
+    if let Some(idx) = find_header_end(raw) {
+        Vec::from(&raw[idx..])
+    } else {
+        Vec::from(raw)
+    }
+}
+
+fn find_header_end(raw: &[u8]) -> Option<usize> {
+    let n = raw.len();
+    for i in 0..n.saturating_sub(3) {
+        if raw[i] == b'\r'
+            && raw[i + 1] == b'\n'
+            && raw[i + 2] == b'\r'
+            && raw[i + 3] == b'\n'
+        {
+            return Some(i + 4);
+        }
+    }
+    for i in 0..n.saturating_sub(1) {
+        if raw[i] == b'\n' && raw[i + 1] == b'\n' {
+            return Some(i + 2);
         }
     }
     None

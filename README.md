@@ -13,7 +13,7 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
   ✦ K³CHJ: k_nano → k_hal → k_ai → cortex → hermes → jarbas
   ✦ ADR-0042 N1–N5 ✅ + wire crates N2.5→N5.7 ✅ (v1.8.0)
   ✦ ADR-0041 H4+/H5+/AS shallow ✅ PoC (HalOffer Cap; QUEUE_NOTIFY)
-  ✦ Residuals 0–7 ✅ · LAN L3.5–L5 (e1000 + DNS/HTTP smoke)
+  ✦ Residuals 0–7 ✅ · Pós-LAN (#418 NetFs PASS · TLS BLOCKED)
   ✦ Self-Evolve · NeuralFS · AirLLM · LatentBus/GPU/HMI MVPs
   ✦ Sprint 107 Voice ✅ (PASS parcial forte+)
   ✦ MicroPython/WASM sandbox + SkillOpt (Python→Rust no_std)
@@ -93,7 +93,8 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | **Sound** pipeline voz | ✅ parcial honesto |
 | 108 Self-Evolving Agents | ✅ |
 | ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |
-| **Residuals 0–7** | ✅ FECHADO (LAN internet; WiFi/TLS abertos) |
+| **Residuals 0–7** | ✅ FECHADO (LAN internet) |
+| **Pós-LAN B-01** | ✅ SESSION_152 (NetFs PASS; TLS BLOCKED; WiFi AWAITING) |
 
 **Documentação:** `ROADMAP.md` · `TODO.md` · `AGENTS.md` · `HOWTO.md` · `docs/memory/STATE.md`
 

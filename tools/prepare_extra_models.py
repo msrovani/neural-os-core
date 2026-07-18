@@ -136,24 +136,23 @@ def fat_copy(src: Path, fat8: str) -> None:
 # â”€â”€â”€ TinyStories (HF â†’ .bitnet via GPU quant) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def prepare_tinystories(repo: str = "roneneldan/TinyStories-1M", out_name: str = "tinystories.bitnet"):
-    print(f"\n=== TinyStories â† {repo} ===")
+    """Converte TinyStories-1M via state_dict (sem AutoModel — evita bug torchvision/cu126)."""
+    print(f"\n=== TinyStories <- {repo} ===")
     from huggingface_hub import hf_hub_download
-    from transformers import AutoModelForCausalLM, AutoConfig
 
     local = CACHE / repo.replace("/", "__")
     local.mkdir(exist_ok=True, parents=True)
-    print("  [DL] config + weightsâ€¦")
+    print("  [DL] config + weights...")
     try:
-        cfg_path = hf_hub_download(repo, "config.json", local_dir=str(local))
+        hf_hub_download(repo, "config.json", local_dir=str(local))
     except Exception as e:
         print(f"  [ERR] download config: {e}")
         return None
 
-    # Prefer pytorch_model.bin / model.safetensors
     weight_file = None
     for cand in ("model.safetensors", "pytorch_model.bin", "pytorch_model.pt"):
         try:
-            weight_file = hf_hub_download(repo, cand, local_dir=str(local))
+            weight_file = Path(hf_hub_download(repo, cand, local_dir=str(local)))
             break
         except Exception:
             continue
@@ -161,112 +160,88 @@ def prepare_tinystories(repo: str = "roneneldan/TinyStories-1M", out_name: str =
         print("  [ERR] nenhum weight file")
         return None
 
+    cfg = json.loads((local / "config.json").read_text(encoding="utf-8"))
     print(f"  [LOAD] {weight_file} on {DEVICE}")
-    cfg = AutoConfig.from_pretrained(str(local))
-    model = AutoModelForCausalLM.from_pretrained(str(local), torch_dtype=torch.float32)
-    model = model.to(DEVICE)
-    model.eval()
+    if weight_file.suffix == ".safetensors":
+        from safetensors.torch import load_file
+        state = load_file(str(weight_file), device="cpu")
+    else:
+        state = torch.load(str(weight_file), map_location="cpu", weights_only=True)
 
-    # GPT-Neo style: transformer.h / wte
-    if not hasattr(model, "transformer"):
-        print("  [ERR] arquitetura nao suportada â€” use --tiny15")
-        return None
-    tr = model.transformer
-    emb = tr.wte.weight.data
-    layers = list(tr.h)
-    ln_f = tr.ln_f.weight.data if hasattr(tr, "ln_f") else torch.ones(emb.shape[1], device=DEVICE)
+    def get(name: str) -> torch.Tensor:
+        if name in state:
+            return state[name]
+        alt = name.replace("transformer.", "")
+        if alt in state:
+            return state[alt]
+        raise KeyError(name)
 
+    emb = get("transformer.wte.weight")
     hidden = int(emb.shape[1])
     vocab = int(emb.shape[0])
-    num_layers = len(layers)
-    num_heads = int(getattr(cfg, "num_heads", getattr(cfg, "n_head", 16)))
-    max_seq = int(getattr(cfg, "max_position_embeddings", getattr(cfg, "n_positions", 2048)))
+    num_layers = int(cfg.get("num_layers", cfg.get("n_layer", 8)))
+    num_heads = int(cfg.get("num_heads", cfg.get("n_head", 16)))
+    max_seq = int(cfg.get("max_position_embeddings", cfg.get("n_positions", 2048)))
     intermediate = hidden * 4
     q_dim = hidden
+    print(f"  arch hidden={hidden} L={num_layers} heads={num_heads} vocab={vocab}")
 
     out = TARGET / out_name
-    print(f"  arch hidden={hidden} L={num_layers} heads={num_heads} vocab={vocab}")
     with open(out, "wb") as f:
         write_header_v4(
             f, hidden=hidden, num_layers=num_layers, num_heads=num_heads,
             vocab=vocab, max_seq=max_seq, intermediate=intermediate,
             num_kv=num_heads, q_dim=q_dim, tie=True, tok=b"tinystories_v1", feat=0x01,
         )
-        emb_q = absmean_quantize_t(emb)
-        # pack (vocab,hidden) as oi â†’ bytes for (hidden,vocab)
+        emb_q = absmean_quantize_t(emb.to(DEVICE) if emb.numel() < 50_000_000 else emb)
         f.write(encode_trit_vec(np.ascontiguousarray(emb_q.T)))
 
-        for i, lyr in enumerate(layers):
-            # GPT-Neo LayerNorm
-            ln1 = lyr.ln_1.weight.data if hasattr(lyr, "ln_1") else torch.ones(hidden, device=DEVICE)
-            ln2 = lyr.ln_2.weight.data if hasattr(lyr, "ln_2") else torch.ones(hidden, device=DEVICE)
-            write_f32(f, ln1.detach().float().cpu().numpy())
-            write_f32(f, ln2.detach().float().cpu().numpy())
-            write_f32(f, np.ones(hidden, dtype=np.float32))  # attn_sub
-            write_f32(f, np.ones(hidden, dtype=np.float32))  # ffn_sub
-
-            # c_attn: (3*hidden, hidden) â†’ split q,k,v
-            if hasattr(lyr.attn, "attention"):
-                attn = lyr.attn.attention
-                c = attn.q_proj.weight.data if hasattr(attn, "q_proj") else None
+        def pack_oi(oi: np.ndarray, out_d: int, in_d: int) -> bytes:
+            if oi.shape == (out_d, in_d):
+                pass
+            elif oi.shape == (in_d, out_d):
+                oi = oi.T
             else:
-                attn = lyr.attn
-                c = None
+                oi = oi.reshape(out_d, in_d)
+            return encode_trit_vec(np.ascontiguousarray(oi.T))
 
-            if hasattr(attn, "q_proj"):
-                q = absmean_quantize_t(attn.q_proj.weight.data)
-                k = absmean_quantize_t(attn.k_proj.weight.data)
-                v = absmean_quantize_t(attn.v_proj.weight.data)
-                o = absmean_quantize_t(attn.out_proj.weight.data)
-            elif hasattr(attn, "c_attn"):
-                # fused (3H, H)
-                w = attn.c_attn.weight.data  # (3H, H) or (H, 3H)
-                if w.shape[0] == 3 * hidden:
-                    wq, wk, wv = w[:hidden], w[hidden:2*hidden], w[2*hidden:]
-                else:
+        for i in range(num_layers):
+            pfx = f"transformer.h.{i}"
+            ln1 = get(f"{pfx}.ln_1.weight")
+            ln2 = get(f"{pfx}.ln_2.weight")
+            write_f32(f, ln1.float().numpy())
+            write_f32(f, ln2.float().numpy())
+            write_f32(f, np.ones(hidden, dtype=np.float32))
+            write_f32(f, np.ones(hidden, dtype=np.float32))
+
+            # GPT-Neo: attn.attention.q/k/v_proj ou c_attn
+            try:
+                q = absmean_quantize_t(get(f"{pfx}.attn.attention.q_proj.weight").to(DEVICE))
+                k = absmean_quantize_t(get(f"{pfx}.attn.attention.k_proj.weight").to(DEVICE))
+                v = absmean_quantize_t(get(f"{pfx}.attn.attention.v_proj.weight").to(DEVICE))
+                o = absmean_quantize_t(get(f"{pfx}.attn.attention.out_proj.weight").to(DEVICE))
+            except KeyError:
+                w = get(f"{pfx}.attn.attention.c_attn.weight")
+                if w.shape[0] != 3 * hidden:
                     w = w.T
-                    wq, wk, wv = w[:hidden], w[hidden:2*hidden], w[2*hidden:]
-                q = absmean_quantize_t(wq)
-                k = absmean_quantize_t(wk)
-                v = absmean_quantize_t(wv)
-                o = absmean_quantize_t(attn.c_proj.weight.data if attn.c_proj.weight.shape[0] == hidden
-                                       else attn.c_proj.weight.data.T)
-            else:
-                print(f"  [ERR] layer {i} attn unknown")
-                return None
+                q = absmean_quantize_t(w[:hidden].to(DEVICE))
+                k = absmean_quantize_t(w[hidden:2*hidden].to(DEVICE))
+                v = absmean_quantize_t(w[2*hidden:].to(DEVICE))
+                o = absmean_quantize_t(get(f"{pfx}.attn.attention.c_proj.weight").to(DEVICE))
 
-            # FFN
-            if hasattr(lyr, "mlp"):
-                mlp = lyr.mlp
-                if hasattr(mlp, "c_fc"):
-                    fc = mlp.c_fc.weight.data
-                    proj = mlp.c_proj.weight.data
-                    if fc.shape[0] != intermediate:
-                        fc = fc.T
-                    if proj.shape[0] != hidden:
-                        proj = proj.T
-                    gate = absmean_quantize_t(fc)  # reuse as gate
-                    up = absmean_quantize_t(fc)
-                    down = absmean_quantize_t(proj)
-                else:
-                    gate = absmean_quantize_t(mlp.fc_in.weight.data)
-                    up = gate
-                    down = absmean_quantize_t(mlp.fc_out.weight.data)
-            else:
-                gate = np.zeros((intermediate, hidden), dtype=np.int8)
-                up = gate
-                down = np.zeros((hidden, intermediate), dtype=np.int8)
-
-            # Kernel expects oi packed: q (q_dim, hidden) etc.
-            # Our q is (out, in) typically (hidden, hidden)
-            def pack_oi(oi: np.ndarray, out_d: int, in_d: int) -> bytes:
-                if oi.shape == (out_d, in_d):
-                    pass
-                elif oi.shape == (in_d, out_d):
-                    oi = oi.T
-                else:
-                    oi = oi.reshape(out_d, in_d)
-                return encode_trit_vec(np.ascontiguousarray(oi.T))  # (in,out)
+            try:
+                fc = get(f"{pfx}.mlp.c_fc.weight")
+                proj = get(f"{pfx}.mlp.c_proj.weight")
+            except KeyError:
+                fc = get(f"{pfx}.mlp.fc_in.weight")
+                proj = get(f"{pfx}.mlp.fc_out.weight")
+            if fc.shape[0] != intermediate:
+                fc = fc.T
+            if proj.shape[0] != hidden:
+                proj = proj.T
+            gate = absmean_quantize_t(fc.to(DEVICE))
+            up = absmean_quantize_t(fc.to(DEVICE))
+            down = absmean_quantize_t(proj.to(DEVICE))
 
             f.write(pack_oi(q, q_dim, hidden))
             f.write(pack_oi(k, q_dim, hidden))
@@ -275,12 +250,18 @@ def prepare_tinystories(repo: str = "roneneldan/TinyStories-1M", out_name: str =
             f.write(pack_oi(gate, intermediate, hidden))
             f.write(pack_oi(up, intermediate, hidden))
             f.write(pack_oi(down, hidden, intermediate))
-            if i % 4 == 0:
+            if i % 2 == 0:
                 print(f"  [L] {i}/{num_layers}")
+            if DEVICE.type == "cuda":
+                torch.cuda.empty_cache()
 
-        write_f32(f, ln_f.detach().float().cpu().numpy())
+        try:
+            ln_f = get("transformer.ln_f.weight")
+        except KeyError:
+            ln_f = torch.ones(hidden)
+        write_f32(f, ln_f.float().numpy())
 
-    del model
+    del state
     if DEVICE.type == "cuda":
         torch.cuda.empty_cache()
     print(f"  [OK] {out} ({out.stat().st_size/1024:.1f}KB)")
@@ -312,14 +293,19 @@ def prepare_tinystories_15m():
     ]
     try:
         from datasets import load_dataset
-        print("  [DL] TinyStories dataset sampleâ€¦")
-        ds = load_dataset("roneneldan/TinyStories", split="train[:2000]")
+        print("  [DL] TinyStories dataset sample (streaming)...")
+        ds = load_dataset("roneneldan/TinyStories", split="train", streaming=True)
+        n = 0
         for row in ds:
             t = row.get("text") or ""
             if len(t) > 20:
                 stories.append(t.encode("utf-8", errors="ignore")[:seq])
+                n += 1
+            if n >= 2000:
+                break
+        print(f"  [DL] {n} stories")
     except Exception as e:
-        print(f"  [WARN] dataset skip: {e} â€” usando seeds")
+        print(f"  [WARN] dataset skip: {e} - usando seeds")
 
     def tok(b: bytes):
         arr = [(x % (vocab - 1)) + 1 for x in b[:seq]]

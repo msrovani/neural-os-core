@@ -4,7 +4,7 @@
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: pós-plano residuals 0–7 ✅; WiFi/TLS/cloud PARTIAL|AWAITING; gate v2.0.0 review
+#   Pista ativa: Pós-LAN B-01 unlock ✅ SESSION_152; #418 NetFs PASS; TLS BLOCKED; WiFi AWAITING
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer
@@ -14,6 +14,7 @@
 #   SESSION_149: Onda 7 LAN RX ✅ — e1000 TX 0x3800; L3.5 PASS
 #   SESSION_150: L4 DNS raw + L5 HTTP ✅ — internet smoke QEMU/WHPX
 #   SESSION_151: Fecho plano Residuals ondas 0–7 (PreFlight pass_marker; WiFi AWAITING)
+#   SESSION_152: Pós-LAN — net_bridge DNS/HTTP; NetFs peer; SelfUpdate HTTP; TLS BLOCKED
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
 #   PreFlight: tools/preflight_wave.py · cache docs/memory/.preflight_cache/ · depends_on: lan · AWAITING_HW
 #   Cadeia: k-nano → k-hal → k-ai → cortex → hermes → jarbas  (**K³CHJ**)

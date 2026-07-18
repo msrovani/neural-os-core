@@ -43,44 +43,23 @@ impl BrowserAgent {
         }
     }
 
-    /// Fetch uma pagina web via HTTP real (smoltcp TCP)
+    /// Fetch via net_bridge → neural-kernel NETSTACK (DNS + HTTP). HTTPS deny até #123.
     fn fetch_page(url: &str) -> Result<(String, Vec<u8>), &'static str> {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
+        if url.starts_with("https://") || url.starts_with("HTTPS://") {
+            k_nano::slog_hermes!("BROWSER", "info", "HTTPS denied (tls_not_ready #123)");
+            return Err("tls_not_ready");
+        }
+        if !url.starts_with("http://") && !url.starts_with("HTTP://") {
             return Err("Invalid URL");
         }
-        let url_clean = url.trim_start_matches("https://").trim_start_matches("http://");
-        let (host, path) = if let Some(pos) = url_clean.find('/') {
-            (&url_clean[..pos], &url_clean[pos..])
-        } else {
-            (url_clean, "/")
-        };
-        let host_clean = host.trim_end_matches(':').split(':').next().unwrap_or(host);
-        let port: u16 = 80;
-
-        // Resolve DNS
-        let ip = unsafe {
-            let mut stack = crate::net::NETSTACK.lock();
-            if let Some(ref mut ns) = *stack {
-                ns.dns_resolve(host_clean, [8, 8, 8, 8])
-            } else { None }
-        };
-        let host_ip = match ip {
-            Some(ip) => ip,
-            None => {
-                k_nano::slog_hermes!("BROWSER", "info", "DNS resolve falhou para {}", host_clean);
-                return Err("DNS resolve failed");
-            }
-        };
-
-        k_nano::slog_hermes!("BROWSER", "info", "HTTP GET {:?}:{}{}", host_ip, port, path);
-        match unsafe { crate::net::http_get(host_ip, port, path) } {
-            Some(response) => {
-                k_nano::slog_hermes!("BROWSER", "info", "{} bytes de {}", response.len(), host_clean);
+        match crate::net_bridge::http_get_url(url.trim()) {
+            Ok(response) => {
+                k_nano::slog_hermes!("BROWSER", "info", "{} bytes de {}", response.len(), url);
                 Ok((String::from(url), response))
             }
-            None => {
-                k_nano::slog_hermes!("BROWSER", "info", "Falha ao buscar {}", url);
-                Err("HTTP GET failed")
+            Err(e) => {
+                k_nano::slog_hermes!("BROWSER", "info", "Falha {}: {}", url, e);
+                Err(e)
             }
         }
     }

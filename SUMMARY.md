@@ -30,7 +30,7 @@
 | `jarbas` | Display FE, persona (GPU BE em k_hal) |
 | `neural-kernel` | Bin de boot (integração + residuals) |
 
-**Pista ativa:** pós-Residuals 0–7 ✅ (SESSION_151) — LAN L3.5–L5 OK; WiFi/TLS/#418 abertos; gate v2.0.0 review.
+**Pista ativa:** Pós-LAN B-01 ✅ (SESSION_152) — NetFs PASS; TLS BLOCKED; WiFi AWAITING; gate v2.0.0 review.
 
 **Para agentes de IA:**
 1. `AGENTS.md` — regras operacionais
