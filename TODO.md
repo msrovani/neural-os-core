@@ -1,6 +1,6 @@
 # 📋 TODO MASTER — neural-os-core
 
-**Versão release:** v1.8.6 TESTE / NÃO ESTÁVEL
+**Versão release:** v1.9.0 TESTE / NÃO ESTÁVEL
 **Data:** 2026-07-18
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
@@ -9,7 +9,7 @@
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW**
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
-**Residuals por onda:** 0–7 ✅ (LAN internet) · WiFi/TLS/cloud abertos conscientes · R soft-float defer.
+**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · WiFi AWAITING · TLS BLOCKED · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
 ---
@@ -104,7 +104,7 @@
 - [x] Registrar Self-Evolve, Sound, NeuralFS, AirLLM e família ADR-0047
 - [x] Manter ADRs 0048–0050 como propostas `por_fazer`
 - [x] Marcar versão como não estável / em teste
-- [ ] Validar residuals em HW real (WiFi RF · TLS/#418 · GPU/UAC AWAITING)
+- [ ] Validar residuals em HW real (WiFi RF · TLS real · GPU/UAC/DMA AWAITING; #418 peer já PASS QEMU)
 - [ ] Liberar v2.0.0 somente após review formal e OK explícito do maintainer
 
 ---
@@ -191,22 +191,25 @@
 
 ---
 
-## 🔴 BLOQUEADORES — Apenas leitura
+## 🔴 BLOQUEADORES — Apenas leitura (pós SESSION_152)
 
 | Item | Esforço | Descrição |
 |------|---------|-----------|
-| WWW Agents | ~2.600 | Email, Search, RSS, Download |
-| Self-Update Agent | ~800 | A/B slots, channels — `fetch_update` HTTP stub (#308) |
-| Cross-OS compat | ~2.000 | PE/ELF/Mach-O/APK |
-| Federated Cluster | ~300 | Mesh multi-máquina |
-| Multi-device sync | ~300 | CRDT |
-| AppForge | ~3.000 | Apps multi-usuário |
+| **TLS real #123** | ~1.500 | `[TLS] BLOCKED softfloat_or_crate` — sem fake HTTPS |
+| **WiFi RF** | ~2.000 | `[WIFI-HW]` AWAITING; SoftMAC `#407`/`#408` → `depends_on: wifi` |
+| Cross-OS compat | ~2.000 | PE/ELF/Mach-O/APK (fora gate) |
+| Federated Cluster | ~300 | Mesh multi-máquina (fora gate) |
+| Multi-device sync | ~300 | CRDT `#315.26` (fora gate) |
+| AppForge | ~3.000 | Apps multi-usuário (fora gate) |
 
 ### ✅ Desbloqueados (histórico)
 
 | Item | Status |
 |------|--------|
-| **B-01** DHCP/RX + internet QEMU | ✅ LAN unlocked (e1000 + L3.5–L5; SESSION_149/150; Pós-LAN ondas 0–1) |
+| **B-01** DHCP/RX + internet QEMU | ✅ L3.5–L5 (SESSION_149/150) + Pós-LAN (SESSION_152) |
+| WWW Agents (HTTP) | ✅ Search/RSS/Browser via net_bridge; Email SMTP residual |
+| Self-Update HTTP #308a | ✅ `fetch_update` + FNV + slot A/B; reboot A/B residual |
+| NetFs #418 peer | ✅ `[NETFS] VERDICT=PASS` (S3/WebDAV backends residual) |
 
 ---
 

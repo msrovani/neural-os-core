@@ -1,10 +1,10 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.8.6 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.0 TEST — NÃO ESTÁVEL
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: Pós-LAN B-01 unlock ✅ SESSION_152; #418 NetFs PASS; TLS BLOCKED; WiFi AWAITING
+#   Pista ativa: v1.9.0 TEST — Pós-LAN ✅ SESSION_152; #418 NetFs PASS; TLS BLOCKED; WiFi AWAITING
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer
@@ -15,6 +15,7 @@
 #   SESSION_150: L4 DNS raw + L5 HTTP ✅ — internet smoke QEMU/WHPX
 #   SESSION_151: Fecho plano Residuals ondas 0–7 (PreFlight pass_marker; WiFi AWAITING)
 #   SESSION_152: Pós-LAN — net_bridge DNS/HTTP; NetFs peer; SelfUpdate HTTP; TLS BLOCKED
+#   SESSION_153: Release v1.9.0 TEST (docs + tag)
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
 #   PreFlight: tools/preflight_wave.py · cache docs/memory/.preflight_cache/ · depends_on: lan · AWAITING_HW
 #   Cadeia: k-nano → k-hal → k-ai → cortex → hermes → jarbas  (**K³CHJ**)
@@ -32,8 +33,8 @@
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
-**Versão:** **v1.8.6 TESTE / NÃO ESTÁVEL** (2026-07-18) — ADR-0041 H4+/H5+/AS + HalOffer Cap; base v1.8.0.  
-**Base:** v1.8.0 = ADR-0042 N1–N5 + wire crates N2.5→N5.7.  
+**Versão:** **v1.9.0 TESTE / NÃO ESTÁVEL** (2026-07-18) — Pós-LAN B-01 + Residuals 0–7; base v1.8.6.  
+**Base:** v1.8.0 = ADR-0042 N1–N5 + wire; v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
 **Cadeia canônica:** `k-nano → k-hal → k-ai → cortex → hermes → jarbas`.  
@@ -215,11 +216,12 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 
 **Boot 2026-07-16 (`012934`):** `[RUSTCODER] LOADED` · `[STT] CTC LOADED` · `[BGE] …LOADED` · `[HWEXPERT] parse FAILED` (magic OK @0x160000000 — layout/size hint).
 
-### Sprint Net / e1000 (2026-07-16)
-- **Gate canônico:** e1000 PCI + smoltcp. **SLIP/COM2 FROZEN** (default off; opt-in `-SerialBridge` apenas; COM2=`null` sem peer).
-- **Launch:** default = user/slirp + e1000 + static `10.0.2.15`. **Recomendado WiFi host:** `-Bridge` → TAP + guest DHCP; `netmode.flag` loader `@0x164000000` (`U`/`B`).
-- **P0:** e1000 RX — split 2MiB→4KiB UC DMA, kick_rx reset, clflush DD, L3.5 ARP prove antes de DNS.
-- **Smoke `190530` (user):** L3 OK + L3.5 FAIL honesto `dtx=1 drx=0` (skip L4) — RX ainda morto em WHPX+slirp; proximo = `-Bridge` TAP.
+### Sprint Net / e1000 → Pós-LAN (SESSION_149–152)
+- **Gate canônico:** e1000 PCI + smoltcp. **SLIP/COM2 FROZEN** (opt-in `-SerialBridge` apenas).
+- **Launch:** user/slirp + static `10.0.2.15`; `-Bridge` = TAP + DHCP. Peers host: `netfs_peer.py` :4446, `serve_tiny_gguf.py` :8080.
+- **✅ L3.5–L5:** TX regs `0x3800/0x3818`; DNS raw; HTTP 301 (SESSION_149/150).
+- **✅ Pós-LAN:** `net_bridge`; NetFs `[NETFS] VERDICT=PASS`; TLS `[TLS] VERDICT=BLOCKED softfloat_or_crate`; SelfUpdate HTTP (SESSION_152).
+- **Histórico:** smoke `190530` L3.5 FAIL — supersedido; não repetir “RX morto” como estado atual.
 
 ### Serial SLIP bridge (FROZEN — nao e path do gate Net)
 - Script: `tools/serial_bridge.py` — TCP **server** `127.0.0.1:4444`; QEMU COM2 = **cliente**.
@@ -234,12 +236,11 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **Sprint Sound (pista ativa):** STT PCM-real, Mic→Wake runtime, Piper VITS, UAC e unificação do truth path de áudio.
-- **Gate `v2.0.0`:** review formal conjunto da ADR-0042 e da qualidade de voz; não declarar automaticamente.
-- **Sprint 108:** ✅ self-evolving agents (`hermes/self_evolve.rs` + `SelfEvolveAgent`).
-- **Residuals intencionais:** estabilizar APIs antes de migrar `cortex.rs`, `agents.rs`, `net*`, `fs/*` e `audio/*`.
-- Ops: sempre `CARGO_TARGET_DIR=repo\target` + `bootloader_linker` (evitar hang `cargo build -p boot`)
-- Evidência consolidada: `SESSION_120.md`; wires: `SESSION_116.md`–`SESSION_119.md`; voz: `SESSION_107_CLOSE.md` e `SESSION_110.md`.
+- **Pista ativa:** Pós-LAN ✅ — `/model-fetch` e2e · TLS real `#123` · WiFi AWAITING · gate v2.0.0 review.
+- **Sound residuals (não pista):** soft-float/VITS defer · UAC `#84` AWAITING_HW · cutover jarbas/audio.
+- **Gate `v2.0.0`:** review ADR `fazendo` + `por_fazer`/AWAITING defer + OK maintainer — não auto-declarar.
+- **Sprint 108:** ✅ self-evolving agents.
+- Ops: `CARGO_TARGET_DIR=repo\target`; evidência Pós-LAN: `SESSION_152.md` + `logs/boot_postlan_152c_*.txt`.
 
 ### N3 CLOSED (2026-07-16) — cortex cérebro ✅
 | Item | Onde | Serial / aceite |
@@ -500,22 +501,17 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - Clima e2e GEN+TTS+FB, HWEXPERT, Piper neural-lite, WakeWord registrado, EventBus skinny ✅
 - Backlog voz → **Sprint Sound (reaberta)** (não bloqueia ADR-42)
 
-### ▶️ Sprint Sound (reaberta) + ADR-0042
-- STT retrain / Mic→Wake runtime / Piper VITS / UAC / jarbas wire ⏳ Sound
-- **N3→N5** ▶️ pista ativa (N2 ✅ CLOSED)
-- Self-evolving agents (Sprint 108) ✅
-- ADR-0040 residuals: #417/#419/#282e–g ✅ · 282h ⏳ · #418 PARTIAL (lan OK SESSION_150; sync runtime aberto) · #420/#423 ▶️ · #422 USB AWAITING
-- Onda 4 Sound/USB: #6/#12–15 ✅ · #84 ▶️ UAC-HW AWAITING · soft-float/VITS ⏳
-- Onda 5 GPU: #67 hook ✅ · #420/#423/#454–456 ▶️ `[MHI-DMA]`/`[GDS-HW]`/`[GPU-HW]`
-- Onda 6 AirLLM: ATA+soft prefetch ✅ · ▶️ `[AIRLLM-DMA]` · Net path liberado pós L3.5 (SESSION_149)
-- Onda 7 LAN: ✅ L3.5+L4+L5 (SESSION_149/150) — DNS raw + HTTP 301; `[NET-HW] PASS` · WiFi ▶️
-- Trilha R soft-float: SESSION_147 ⏳ (neural-lite permanece)
-- Ideias antigas: SESSION_143 — STALE fechado; defer SmileyOS/Cube/XDNA/SKYNET
-- LLM Agent 24/7 multi-turn conversation ⏳ defer gate
-- LAN gate = e1000 `[smoltcp/NIC]` RX>0 — SLIP = bypass serial de debug, **não** é o gate.
-  - DiskIntelligence: sandbox = light probe ✅; TODO validar probe completo só em HW (sem reintroduzir hang QEMU).
-  - Inventário: 8086:100E e1000 → log `not wifi` (iwlwifi N/A); SelfHeal DID-gate.
-- **Gate v2.0.0:** só quando demandas `por_fazer` zeradas **e** OK explícito do maintainer (lembrar sempre).
+### Residuals conscientes (pós SESSION_152)
+- Sound: soft-float/VITS ⏳ · UAC `#84` ▶️ · jarbas cutover ▶️ (pipeline Mic→Wake→STT→TTS ✅)
+- ADR-0042 N1–N5 + wire ✅ CLOSED (não é pista ativa)
+- ADR-0040: #417/#419/#282e–g ✅ · 282h ⏳ · **#418 peer PASS** (S3/WebDAV residual) · #420/#423 ▶️ · #422 USB AWAITING
+- Onda 5 GPU: #420/#423/#454–456 ▶️ `[MHI-DMA]`/`[GDS-HW]`/`[GPU-HW]`
+- Onda 6 AirLLM: ATA ✅ · Net path ✅ · PreFlight `airllm-net` PARTIAL (falta e2e) · ▶️ `[AIRLLM-DMA]`
+- Onda 7 / Pós-LAN: LAN+NetFs ✅ · TLS BLOCKED · WiFi ▶️ AWAITING
+- Trilha R soft-float: SESSION_147 ⏳
+- Fora gate: SmileyOS/Cube/XDNA/SKYNET · Cross-OS · CRDT
+- LAN gate = e1000 RX>0 — SLIP ≠ gate
+- **Gate v2.0.0:** `por_fazer`/AWAITING defer + review + OK maintainer.
 
 ### ✅ Scheduler performance fix (Sprint 95/96 runtime)
 - RTL8139 RX debug rate-limited (1/100 chamadas) — serial flood eliminado
@@ -560,4 +556,4 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ---
 
-**Estado canônico:** v1.8.6 teste/não estável — base v1.8.0 preservada; ADR-0041 H4+/H5+/AS PoC; `v2.0.0` não declarado.
+**Estado canônico:** v1.9.0 teste/não estável — Pós-LAN + Residuals; base v1.8.6; `v2.0.0` não declarado.

@@ -4,8 +4,8 @@
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
-#   Sprints 106+: K³CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 TEST
-#   v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer + rebrand K³CHJ (k-hal); v2.0.0 = gate após review
+#   Sprints 106+: K³CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 → **v1.9.0 TEST**
+#   v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Pós-LAN + Residuals 0–7; v2.0.0 = gate após review
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação (Jul 2026); não "2.0 completo" sem review
 #   K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
 # ════════════════════════════════════════════════════════
@@ -161,7 +161,7 @@ cargo build --release → python tools/build_image.py --bios → qemu
 - **WHPX + AVX2:** WHPX com `-cpu host` executa AVX2 **nativo**. Só bloquear AVX2 se hypervisor = TCG (QEMU sem accel). Fix em `bitnet_avx2.rs` e `tensor.rs`.
 - **Capability MVP (ADR-0041 P0–P9 ✅ PoC):** Boot A+B (`init_platform_sync` **antes** drivers; Agency EventDriven). Escada: AS+CR3+SPSC+Cap+`int 0x90` → CapGate → FB → DMA/mmap → Ring3 `iretq` → #PF demand-page → VirtIO vring layout → GGUF/FAT pré-fill. Demos **non-fatal**. **Não inventar Ring3/SFI/QUEUE_NOTIFY plenos** — PoC ≠ produção. crate `hermes/` ≠ binário até wiring explícito. Detalhe: `docs/architecture/0041-k2chj-capability-rings.md`, `docs/memory/SESSION_107.md`.
 
-# Current Sprint: Pós-LAN B-01 unlock ✅ (SESSION_152); gate v2.0.0 permanece fechado.
+# Current Sprint: **v1.9.0 TEST** (SESSION_153) — Pós-LAN ✅; gate v2.0.0 permanece fechado.
 # Residuals 0–7 ✅ + fila lan: net_bridge · NetFs PASS · SelfUpdate HTTP · TLS BLOCKED honesto.
 # Onda 7 LAN: e1000 TX 0x3800/0x3818; DNS raw + HTTP; SESSION_149/150/152.
 # Abertos: WiFi AWAITING; TLS real (softfloat_or_crate); /model-fetch e2e; GPU/UAC/DMA AWAITING_HW.

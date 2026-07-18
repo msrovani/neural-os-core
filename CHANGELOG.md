@@ -7,20 +7,26 @@
 - Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados
 - Glossário: ADR-0042 §0; INDEX “Nome do produto”
 
+## [1.9.0] — 2026-07-18 — Pós-LAN B-01 + Residuals 0–7 (TEST)
+
+**Versão:** v1.9.0 TEST / NÃO ESTÁVEL — base v1.8.6; **não** v2.0.0.
+
 ### Plano Residuals 0–7 FECHADO (SESSION_142–151)
 - **PreFlight:** `tools/preflight_wave.py` + cache `.preflight_cache/` + `pass_marker` anti-contaminação + anti-fake Ready
 - **Ondas 0–6:** docs/IDEA; NeuralFS smokes; exFAT write `#417`; USB Trust/UAC-HW; GPU/MHI AWAITING; AirLLM ATA + AIRLLM-DMA; soft-float defer (Trilha R)
 - **Onda 7 LAN:** e1000 TX canônico `0x3800/0x3818` (aliases QEMU no-op); L3.5 ARP/RX; DNS raw + HTTP 301 smoke WHPX
-- **Tags:** `depends_on: lan` liberado (L3.5–L5); WiFi/`[WIFI-HW]` AWAITING; TLS/#418 PARTIAL
-- **Política:** `▶️ AWAITING_HW` + logs `[NET-HW]`/`[GPU-HW]`/`[UAC-HW]`/… — sem fake Ready
+- **Tags:** `depends_on: lan` liberado; WiFi AWAITING; TLS BLOCKED; #418 peer PASS
+- **Política:** `▶️ AWAITING_HW` — sem fake Ready
 
 ### Pós-LAN B-01 unlock (SESSION_152)
 - **net_bridge** Hermes→bin NETSTACK; `resolve_and_http_get` + Host header; HTTPS deny até TLS
 - **Agents:** `/fetch`, Browser, Search, RSS, Market, AutoLearn sem stub B-01; Email SMTP residual honesto
 - **AirLLM Net:** DNS+hostname + Range/stream; `tools/serve_tiny_gguf.py`
-- **#418 NetFs:** TCP `gateway:4446` + `tools/netfs_peer.py` + smoke `[NETFS]`
+- **#418 NetFs:** TCP `gateway:4446` + `tools/netfs_peer.py` + `[NETFS] VERDICT=PASS`
 - **#308 SelfUpdate:** `fetch_update` HTTP + FNV + slot A/B
 - **#123 TLS:** `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate` (sem fake HTTPS)
+- **Fix:** deadlock NETSTACK — NetFs smoke fora de `NETSTACK.lock()` pós-L5
+- **Hygiene:** TODO BLOQUEADORES / STATE / IDEA / INDEX alinhados SESSION_152
 
 ## [1.8.6] — 2026-07-18 — ADR-0041 H4+/H5+/AS + HalOffer Cap (TEST)
 

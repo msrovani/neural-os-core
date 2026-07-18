@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.8.6 TEST
+# SESSION INDEX — neural-os-core v1.9.0 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 153 | release | — | **v1.9.0 TEST** | Pós-LAN + Residuals 0–7; tag v1.9.0; ≠ v2.0.0 |
 | 152 | Pós-LAN | — | B-01 fila unlock ondas 0–5 | net_bridge; NetFs PASS; TLS BLOCKED; deadlock NETSTACK pós-L5 fix |
 | 151 | planos | — | Fecho Residuals 0–7 | PreFlight pass_marker; LAN✅; WiFi AWAITING; TLS/418 PARTIAL |
 | 150 | Onda 7 | — | DNS raw + HTTP L4/L5 | skip_dns_name; OK raw google; L5 301; internet smoke |

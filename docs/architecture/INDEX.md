@@ -83,16 +83,16 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)
 
-Triagem Onda 0 (2026-07-18): destino por onda + tags. LAN/WiFi crônicos → **Onda 7**. Itens de rede: **`depends_on: lan`**.
+Triagem Onda 0 (2026-07-18) + Pós-LAN SESSION_152: `depends_on: lan` liberado (L3.5–L5 + NetFs peer). WiFi → `depends_on: wifi`.
 
 | Residual | IDEA | Destino | Bloqueio / tag |
 |----------|------|---------|----------------|
-| exFAT/NTFS/EXT **write** | #417 w | Onda 3 | Risco mídia; flag opt-in QEMU |
+| exFAT/NTFS/EXT **write** | #417 w | Onda 3 | exFAT ✅ opt-in; NTFS/EXT ⏳ |
 | MHI DMA NVMe↔DRAM/VRAM | #420 DMA | Onda 5 | ▶️ AWAITING_HW típico |
 | SysInstaller | #421 | defer | UI/LLM + write HD |
 | NeuralFS disco fisico | #422 / NeuralFS.md | mount/GPT ✅; evidência Onda 1 | USB power-loss ▶️ AWAITING_HW |
 | GPU Direct Storage | #423 | Onda 5 após Ready | GPU compute + NVMe DMA |
-| Cloud mounts plenos | #418 | Onda 7 fila | **`depends_on: lan`** |
+| Cloud mounts plenos | #418 | peer TCP ✅ SESSION_152 | S3/WebDAV backends residual (não RX) |
 | Storage Manager App UI | #419 UI | Onda 3 cauda opcional | CLI report já existe |
 
 ## Conflitos de ID

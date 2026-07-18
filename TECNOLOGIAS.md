@@ -2,7 +2,7 @@
 ## Registro de Propriedade Intelectual e Inovação
 
 **~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
-**Versão release:** v1.8.6 TESTE / NÃO ESTÁVEL (2026-07-18)
+**Versão release:** v1.9.0 TESTE / NÃO ESTÁVEL (2026-07-18)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
@@ -270,7 +270,7 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.8.6 TEST):**
+**Métricas (v1.9.0 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
@@ -280,7 +280,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | ADRs | 47+ |
 | Firmware blobs | 116 (~12.5 MB) |
 | HWIDs HW Expert v3 | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.8.6 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
+| Tags release | v1.0.0 → **v1.9.0 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K³CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 
@@ -307,7 +307,7 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K³CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
+> **AIOS K³CHJ — Neural OS Hermes v1.9.0 TEST / NÃO ESTÁVEL**
 > *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
