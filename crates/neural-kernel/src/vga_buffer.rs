@@ -11,27 +11,16 @@ unsafe fn set_cursor(pos: u16) {
     core::arch::asm!("out dx, al", in("dx") 0x3D5u16, in("al") (pos & 0xFF) as u8, options(nostack, preserves_flags));
 }
 
-/// Desliga o VGA plane via sequenciador (porta 0x3C4/0x3C5, NÃO CRTC).
-/// Seguro para Intel 6xx com UEFI GOP — não acessa CRTC (0x3D4/0x3D5) nem
-/// memoria VGA (0xB8000 pode estar desmapeada pelo bootloader).
+/// Evita xuvisco em Intel 6xx: NÃO escrever CRTC/0xB8000 quando há GOP.
+///
+/// Importante (HW real): NÃO setar Sequencer bit5 (Screen Off). Em vários
+/// Skylake+/GOP isso blanka o painel inteiro — parece "travou" logo após o boot
+/// com framebuffer já sondado.
+///
+/// Sem serial: NÃO chamar serial_println aqui — o path sem-COM faz
+/// append_raw/alloc antes do heap e mata o boot entre K2 e K3.
 pub fn disable_vga_plane() {
-    crate::serial_println!("[VGA] Desabilitando VGA plane via sequenciador (0x3C4:0x01 = 0x21)...");
-    unsafe {
-        let orig_idx: u8;
-        let orig_val: u8;
-        // Le registro atual do sequencer
-        core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
-        core::arch::asm!("in al, dx", out("al") orig_val, in("dx") 0x3C5u16, options(nostack, preserves_flags));
-        crate::serial_println!("[VGA] Sequencer 0x01 antes: 0x{:02X}", orig_val);
-        // Set bit 5 (Screen Off) + bit 0 (8 dot font) = 0x21
-        core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
-        core::arch::asm!("out dx, al", in("dx") 0x3C5u16, in("al") 0x21u8, options(nostack, preserves_flags));
-        // Le de volta para confirmar
-        core::arch::asm!("out dx, al", in("dx") 0x3C4u16, in("al") 0x01u8, options(nostack, preserves_flags));
-        core::arch::asm!("in al, dx", out("al") orig_idx, in("dx") 0x3C5u16, options(nostack, preserves_flags));
-        crate::serial_println!("[VGA] Sequencer 0x01 depois: 0x{:02X} (bit5=1=screen off)", orig_idx);
-    }
-    crate::serial_println!("[VGA] VGA plane desabilitado.");
+    // no-op deliberado (ver comentario acima)
 }
 
 /// Limpa o buffer fisico VGA (0xB8000) escrevendo zeros diretamente,
@@ -157,27 +146,27 @@ pub fn _print(args: fmt::Arguments) {
 }
 
 /// Escreve no framebuffer. Retorna true se conseguiu.
+/// Usa console_print (limpa faixa por linha) — evita texto fantasma ilegível.
 pub fn fb_print(args: fmt::Arguments) -> bool {
-    
-    let gpu = crate::display::fb::GPU.lock();
-    if let Some(ref fb_gpu) = *gpu {
-        let w = fb_gpu.fb_width as usize;
-        let h = fb_gpu.fb_height as usize;
-        let stride = fb_gpu.fb_stride as usize;
-        let bpp = fb_gpu.fb_bpp as usize;
-        let addr = fb_gpu.fb_addr as usize;
-        if addr > 0 && w > 0 && h > 0 && bpp > 0 {
-            let mut buf = [0u8; 128];
-            let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
-            let n = buf.iter().position(|&b| b == 0).unwrap_or(128);
-            if n > 0 {
-                let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
-                fb_write_text(addr, w, h, stride, bpp, text);
-                return true;
-            }
-        }
+    let has_fb = {
+        let gpu = crate::display::fb::GPU.lock();
+        matches!(
+            gpu.as_ref(),
+            Some(g) if g.present && g.fb_addr != 0 && g.fb_width > 0 && g.fb_height > 0
+        )
+    };
+    if !has_fb {
+        return false;
     }
-    false
+    let mut buf = [0u8; 160];
+    let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
+    let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    if n == 0 {
+        return false;
+    }
+    let text = core::str::from_utf8(&buf[..n]).unwrap_or("");
+    crate::display::fb::console_print(text);
+    true
 }
 
 /// Escreve texto no framebuffer (fallback quando serial inexistente)

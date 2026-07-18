@@ -2,8 +2,44 @@
 
 ## [Unreleased]
 
+### HW USB boot diagnostics (SESSION_139)
+- **Console FB legível:** `console_clear` / `console_print` em `jarbas/display/fb.rs`; `boot_ckpt`/`boot_splash` e `vga_buffer::fb_print` usam o mesmo cursor (limpa faixa — sem TRACE/ghost).
+- **BOOT.LOG:** `fat-boot-log` no artifact boot; overwrite 8.3 + `heap_ready`; `init_after_usb` + ckpts K0–K17.
+- **USB Windows mount:** MBR dados FAT32 `0x0C` + ESP `0xEF`; `mkfat32` BPB/seed; `inspect_usb_layout.py`.
+- **Bootloader BltOnly:** `[patch.crates-io]` → `vendor/bootloader` (SetMode Rgb/Bgr; sem panic em HD 620).
+
+### ADR-0048 / 0049 / 0050 — GPU Multivendor Unlock (SESSION_138)
+- Fundação: `compute_abi`, detect `has_compute=false` até canário, `display_coex` dirige `init_backend_with_plan`
+- KernelPack NKP1 (`kernel_pack.rs`) + packers host NVIDIA/AMD/Intel + `tools/gpu_kernels` (CPU golden)
+- Bring-up stubs: LegacyAcr vs Gsp; Gen9 vs Arc; AMD KiQ/Mes; canário FailDispatch → CPU (display intacto)
+- Hardening: ACR só Pascal + BAR2+pmoff; AMD doorbell noop; gate ADR-0047 só `Ready`
+- **Não alegado:** QMD/walker/PM4 golden em silicon; NKP ainda unsigned (sig zeros)
+
+### ADR-0051 / Agency data-driven (SESSION_134)
+- **255 AGENT.md** em `ecosystem/agents/` (214 Agency + 41 nativos) via `tools/export_agent_packages.py`
+- Seed embutido `k_ai::{agency_seed,native_agent_seed}`; `Agency::from_specs` + registro via PackageHub
+- Kinds `Agent` + `Workflow`; alias legado `/agents/*.wasm`
+- VFS bridge Hermes → `neural-kernel::fs`; `NeuralFsAgent` cria árvore `ecosystem/`
+- Disco exFAT **não** recebe nested ecosystem (residual honesto)
+
+### NeuralFS / storage (SESSION_133)
+- USB format lock (opt-in: `NEURALFS_USB_FORMAT=1` / `debug_assertions` / `allow_usb_format`)
+- GPT dedicada NeuralFS (`GPT_TYPE_NEURALFS` + virgin `gpt_format_single`)
+- `build_usb_unified.py`: partição de dados exFAT default (`--fat32` legado)
+- `mkexfat.py`: boot Microsoft checksum + backup; bitmap/upcase; root 0x81/0x82/0x83
+
+### NeuralFS / storage (SESSION_132)
+- B-tree multi-nivel (split interno + path CoW); USB-MSC format/mount `0x7F` para pendrive de teste
+- Volume de dados de boot: `mkexfat.py` default; `read_file_from_dev` prefere exFAT (fallback FAT32)
+- Fix exFAT `VolumeLength` @ offset 72 (spec Microsoft)
+
 ### Fixed
 - **hermes `wasm_rt::SkillMarket::top`:** replace `partial_cmp(...).unwrap()` ranking with `f32::total_cmp` (total order, NaN-safe), aligned with `skill_market::SkillMarket::top_skills`. Truth path is hermes only (monolith `wasm_rt` mirror removed at N4.6); LEGACY snapshot untouched.
+- **Release build warning cleanup:** remove three unused imports, two unreachable match arms and the informational `cargo:warning` emitted by `boot/build.rs`; clean `cargo check --release` now completes with 0 errors and 0 warnings.
+- **Framebuffer bpp dinâmico:** `GpuDevice::from_probe` / `resolve_bytes_per_pixel` usam `info.bytes_per_pixel` do GOP como fonte única; `DoubleBuffer::from_gpu` e consumidores (DisplayAgent, splash, console, avatar, P4) atuam sobre o valor coletado — sem hardcode Bgr→3.
+- **HW PnP / HwCapabilityCard:** remove free-text `generate_via_hwexpert("identifique…")` (lixo `OA5US…`); card tipado `k_ai::hw_capability` (family/fw/agent/caps/next_action) publicado em `HW_CAPABILITY` + `HW_PNP_ACTION`; hooks honestos (NEED_FW→HEALTH_ISSUE, wifi→NET_IFACE_AVAILABLE). Seed treino `tools/train_hw_expert_v4.py` no mesmo schema.
+- **Hermes agentico PnP:** `hermes::hw_pnp` — card → `observe_intent` + skill efêmera (SkillOpt) → com ≥3 usos/70% promove WASM via `evolve::promote_ephemeral_to_wasm`; Cortex só em `bind_wifi_scan`/`bind_gpu_compute` (hint ≠ ordem). Detect deixa de dump free-text da árvore em `LLM_REQUEST`.
+- **ADR-0051 Package Hub:** namespace NeuralFS §12 `/mnt/neural/ecosystem/{skills,agents,plugins,mcp,models,firmware}`; `package_hub` CRUD+HITL+assinatura embutida; `/pkg *`; catalog no system prompt Cortex; seed `skills/*/SKILL.md`.
 
 ## [1.8.5] — 2026-07-16 — Consolidação pós-v1.8.0 (teste / não estável)
 

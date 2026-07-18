@@ -35,7 +35,16 @@
 | 127 | ADR-0047 | — | Wave2 bench/Genesis/G3–G5/H2/H5 | Descartes ISA/adapter/H3; IDEA #449–453 |
 | 128 | ADR-0046 | — | Hot-swap Net→FAT→AirLLM | `hot_swap_from_net` + FAT 8.3 write fix; `/model-fetch`; L3.5/RX honest fail |
 | 129 | v1.8.5 | — | Consolidação pós-v1.8.0 (teste) | Self-Evolve, Sound, NeuralFS, AirLLM, ADR-0047 e propostas GPU 0048–0050 |
-| 130 | fix | — | SkillMarket ranking total_cmp | `wasm_rt::top` NaN-safe; alinhado a `skill_market`; ADR=— fix pontual |
+| 130 | fix / polish | — | SkillMarket total_cmp + bpp dinâmico + 0 warn | `wasm_rt::top` NaN-safe; FB bpp do GOP; release 0/0 warnings |
+| 131 | HW-PnP | — | HwCapabilityCard + Expert v4 schema | cards EventBus; sem OA5US free-text; train_hw_expert_v4 seed |
+| 132 | FS | — | NeuralFS multi-nivel + USB teste + exFAT dados | B-tree 3+; MBR 0x7F USB; mkexfat; VolumeLength@72 |
+| 133 | FS | — | Fechar residuals implementáveis | USB format lock; GPT NeuralFS; unified exFAT; boot checksum |
+| 134 | ADR-0051 | — | Agency/nativos → AGENT.md | 214+41 manifests (stubs); VFS bridge; seed embutido |
+| 135 | ADR-0052 | — | Contrato artefatos + deny stubs | Regra Cursor; validate deny; AGENCY=0; stubs apagados |
+| 136 | ADR-0053 | — | HANR parity marketplace+trust | Session Ed25519; market; memory; MCP mínimo |
+| 137 | ADR-0053+ | — | Cognitive Bridge superior ao HANR | BGE+Trinity prompt; SOUL≠PERSONA; budget; `/search`; REFLECT nudge |
+| 138 | ADR-0048–50 | — | GPU Multivendor Unlock fundação | Caps honestas; NKP; canário; LegacyAcr/Gsp/Gen9/Arc/KiQ; packers host |
+| 139 | HW / USB | — | BOOT.LOG + console FB legível | MBR FAT dados+ESP; BltOnly SetMode; heap_ready; console_clear/print; K0–K17 |
 
 ## Sessões Históricas e Lacunas
 
@@ -89,6 +98,8 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 18. **v1.7.0 / soft-float + 2B LOADED (2026-07-15):** Nightly SSE em `x86_64-unknown-none` → soft-float + `cargo nk`. FAT free-scan por setor (não 1 I/O/entry). BitNet 2B real ~590MB/30L (não confiar ficheiro ~203MB truncado). QEMU load+FWD: timeout serial **≥~5 min**. **LOADED ≠ generate**: `[JARBAS-TTS] FAILED empty generate` é known issue.
 
 19. **ADR-0045 Sound (2026-07-16):** Voz bootável = HDA + Piper (+formant) + STT CTC nativos em `neural-kernel/src/audio`. **Não** reabrir sherpa-onnx / Vosk / Kokoro-primário / Wyoming / Rustpotter como stack de kernel. `jarbas/audio` é espelho não wired. WakeWord **registrado** (Loop 5); leftovers (Mic→WAKE e2e, STT retrain, Piper VITS, UAC, jarbas wire) → **Sprint Sound (reaberta)** — ver SESSION_111.
+
+20. **HW USB / FB console (SESSION_139, 2026-07-17):** Stick removable Windows = MBR slot0 FAT32 dados (`0x0C`) + slot1 ESP (`0xEF`) — não 0xEE-first nem GPT-only. Sem serial: `console_clear` + `console_print` (limpa faixa); `fb_print`→mesmo path; limpar TRACE no probe. `BOOT.LOG` só após heap (`heap_ready`). GOP Intel `BltOnly` → vendor bootloader `SetMode` Rgb/Bgr. Early boot: sem alloc/`println` em `disable_vga_plane`.
 
 ---
 

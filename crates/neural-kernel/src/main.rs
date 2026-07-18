@@ -43,7 +43,7 @@ use alloc::vec::Vec;
 
 use bootloader_api::BootInfo;
 
-use event_bus::{CapabilityToken, Event, Receiver};
+use event_bus::{CapabilityToken, Event};
 
 use skill_registry::{McpManifest, Skill, SkillRegistry, OutputSchema};
 
@@ -78,8 +78,6 @@ mod hw_agents;
 
 mod agency;
 
-mod agency_importer;
-
 mod global_arena;
 
 mod identity;
@@ -111,10 +109,11 @@ pub use cortex_crate::{
 // ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
     actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
-    hermes, hub, mcp, optimizer, plugin_hub, rustpython_no_std, safety, search_agent, security,
-    self_evolve, self_update, skill_gen, skill_loader, skill_observer, skill_opt, structured_decode,
-    voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat, wifi_iwlwifi, wifi_msix,
-    wifi_protocol,
+    globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp, memory_store, optimizer,
+    package_hub, plugin_hub, rustpython_no_std, safety, search_agent, security, self_evolve,
+    self_update, skill_gen, skill_loader, skill_market, skill_observer, skill_opt,
+    structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent, wifi_compat, wifi_iwlwifi,
+    wifi_msix, wifi_protocol,
 };
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
@@ -612,6 +611,10 @@ lazy_static! {
         reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
 
         reg.register(alloc::boxed::Box::new(HwIdentifySkill));
+
+        reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill));
+
+        reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill));
 
         reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
 
@@ -1312,70 +1315,67 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // VGA CRTC (0x3D4/0x3D5) em hardware Intel 6xx com UEFI GOP, o que causa xuvisco.
 
+    // probe pinta K0 se GOP ok — prova que kernel_main rodou.
     display::fb::probe_uefi_framebuffer(boot_info);
-
-    
+    crate::display::fb::boot_ckpt(1, "pos-probe + serial");
 
     // Se framebuffer disponivel, NAO inicializa VGA text mode.
-
     // Desliga o VGA plane via sequenciador (0x3C4/0x3C5) em vez de
-
     // limpar 0xB8000 — o bootloader nao mapeia o VGA text buffer, e
-
     // escrever la causa page fault ANTES da IDT estar pronta.
-
     // _print() usa fb_print() primeiro; fallback VGA soh sem framebuffer.
 
     let has_fb = crate::display::fb::GPU.lock().is_some();
 
     if !has_fb {
-
         vga_buffer::init(pm_offset);
-
         crate::serial_println!("[BOOT] Sem framebuffer — usando VGA text mode.");
-
     } else {
-
+        crate::display::fb::boot_ckpt(2, "antes disable_vga_plane");
         vga_buffer::disable_vga_plane();
+        crate::display::fb::boot_ckpt(3, "apos disable_vga_plane");
 
         let g = crate::display::fb::GPU.lock();
         let (fw, fh, fb) = g.as_ref().map(|d| (d.fb_width, d.fb_height, d.fb_bpp)).unwrap_or((0,0,0));
+        drop(g);
         kjson!("BOOT", "DISPLAY", "fb", "w", fw, "h", fh, "bpp", fb);
-
+        // Nao limpar tela inteira — ckpts empilhados p/ foto HW.
+        crate::display::fb::boot_ckpt(4, "FB vivo — indo IDT/mem");
+        crate::serial_println!("[BOOT] FB {}x{} bpp={} — ckpt OK; continue IDT/mem", fw, fh, fb);
     }
-
-    
 
     kjson!("BOOT", "KERNEL", "start", "serial", serial_exists as u32, "pm_off", pm_offset);
 
-    
-
+    crate::display::fb::boot_ckpt(5, "antes init_idt");
     interrupts::init_idt();
+    crate::display::fb::boot_ckpt(6, "IDT ok");
 
     kjson!("BOOT", "IDT", "ready", "vecs", 256);
 
     // SafeHarbor / MemoryCore publicados após heap (publish precisa de alloc)
 
     let mut frame_allocator = memory::BitmapFrameAllocator::empty();
-
     frame_allocator.init(&boot_info.memory_regions);
+    crate::display::fb::boot_ckpt(7, "frame_allocator ok");
 
     kjson!("DBG", "MEM", "regions", "n", boot_info.memory_regions.len());
 
-
-
     {
-
+        crate::display::fb::boot_ckpt(8, "antes init_memory");
         let mut mapper = unsafe { memory::init_memory(pm_offset) };
 
         // ponytail: stack boundary fix deferred — needs proper P3/P2 page table from end-of-RAM frames
 
         crate::serial_println!("[DBG3] init_memory OK");
+        crate::display::fb::boot_ckpt(9, "init_memory ok");
 
+        crate::display::fb::boot_ckpt(10, "antes init_heap");
         allocator::init_heap(&mut mapper, &mut frame_allocator)
             .expect("heap initialization failed");
+        crate::boot_logger::mark_heap_ready();
 
         crate::serial_println!("[DBG4] heap init OK (Tier 1 talc)");
+        crate::display::fb::boot_ckpt(11, "heap OK");
 
         match arena::init_arena_region(
             &mut mapper,
@@ -1393,17 +1393,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         }
 
         crate::boot_logger::log("BOOT: Heap init OK");
-
+        crate::display::fb::boot_ckpt(12, "arena+boot_logger");
     }
 
     // Consumer BOOT_PHASE antes de qualquer publish (EventBus → serial)
     ensure_boot_phase_consumer();
     publish_boot_phase(BootPhase::SafeHarbor, "Serial+Display+IDT prontos");
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
+    crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
 
     simd::enable_simd();
 
     crate::boot_logger::log("BOOT: SIMD enabled");
+    crate::display::fb::boot_ckpt(14, "SIMD ok");
 
     #[cfg(target_arch = "x86_64")]
 
@@ -1571,47 +1573,38 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     unsafe { crate::xhci::init_xhci(); }
+    crate::display::fb::boot_ckpt(15, "xhci init done");
 
     {
         let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
         if msc.is_some() {
             crate::serial_println!("[USB-MSC] stored for FAT model load (unified USB)");
+            crate::display::fb::boot_ckpt(16, "USB-MSC OK");
+        } else {
+            crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
         }
         *crate::USB_MSC.lock() = msc;
+        // Notebooks sem serial: grava BOOT.LOG na FAT32 do stick o mais cedo possível.
+        crate::boot_logger::init_after_usb();
+        crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
     }
 
     publish_boot_phase(BootPhase::DriverInit, "xHCI+USB probe done");
 
-
-
-    // Boot log: init after ATA probe
-
+    // Boot log: reforço ATA (se houver) + flush checkpoint
     {
-
         let ata_guard = crate::ATA_DRIVER.lock();
-
         if let Some(ref ata) = *ata_guard {
-
             let parts = crate::fat32::read_mbr(ata);
-
             crate::boot_logger::init(Some(ata), &parts);
-
-            // Verificar assinatura do kernel (l� KERNEL~1 do FAT)
-
             verify_kernel_from_disk(ata, &parts);
-
             drop(parts);
-
         } else {
-
             crate::boot_logger::init(None, &[]);
-
         }
-
         drop(ata_guard);
-
         crate::boot_logger::log("BOOT: ATA+FAT init OK");
-
+        crate::boot_logger::flush();
     }
 
 
@@ -1645,6 +1638,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Init Filesystem Agents
 
     crate::fs::init_fs_agents();
+
+    hermes_crate::globals::install_vfs_bridge(hermes_crate::globals::VfsBridge {
+        read: crate::fs::read_vfs,
+        write: crate::fs::write_vfs,
+        list: crate::fs::list_vfs,
+    });
+    crate::serial_println!("[VFS] Hermes bridge -> neural-kernel FS_AGENTS");
 
     crate::boot_logger::log("BOOT: FS agents OK");
 
@@ -1723,6 +1723,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
+    // Wave 0 HANR: session Ed25519 antes do PackageHub seed/assinatura
+    k_nano::identity::init_session_identity();
+    crate::package_hub::init_package_hub();
+    crate::serial_println!("{}", hermes_globals::AUDIT_TRAIL.lock().status());
     crate::serial_println!("{}", crate::rustpython_no_std::viability_report());
     crate::serial_println!("{}", crate::skill_opt::status());
 
@@ -1747,21 +1751,37 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 *buf = tmp;
                 true
             });
-            // merge sem duplicar LBA
             for g in gpt {
                 if g.type_code == 0xEE { continue; }
                 if parts.iter().any(|p| p.lba_start == g.lba_start) { continue; }
                 parts.push(g);
             }
         }
-        // Varre particoes FAT32 (MBR 0x0B/0x0C ou GPT Basic Data→0x0C)
+        let name_upper = name.to_ascii_uppercase();
+        // 1) Preferir exFAT (boot data ADR-0040)
+        for part in &parts {
+            let start = part.lba_start as u64;
+            let mut vbr = [0u8; 512];
+            if !dev.read_sectors(start, &mut vbr) { continue; }
+            if &vbr[3..11] != b"EXFAT   " { continue; }
+            if let Some(mut ex) = crate::exfat::ExfatReader::new(dev, start) {
+                for (fname, is_dir, cluster, size) in ex.list_root() {
+                    if is_dir { continue; }
+                    if !fname.eq_ignore_ascii_case(name_upper.as_str()) { continue; }
+                    if let Some(data) = ex.read_file(cluster, size as usize) {
+                        return Some(data);
+                    }
+                }
+            }
+        }
+        // 2) Fallback FAT32 (MBR 0x0B/0x0C ou GPT Basic Data→0x0C)
         for part in &parts {
             let type_code = part.type_code;
             if type_code != 0x0B && type_code != 0x0C && type_code != 0x1C { continue; }
             let lba_start = part.lba_start;
-            // Le BPB
             let mut bpb = [0u8; 512];
             if !dev.read_sectors(lba_start as u64, &mut bpb) { continue; }
+            if &bpb[3..11] == b"EXFAT   " { continue; }
             let bps = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]);
             let spc = bpb[0x0D];
             let reserved = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]);
@@ -1774,8 +1794,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             let fat_lba = lba_start + reserved as u32;
             let data_lba = fat_lba + fat_count as u32 * spf;
 
-            // Procura arquivo no diretorio root
-            let name_upper = name.to_ascii_uppercase();
             let mut cluster = root_cluster;
             while cluster < 0x0FFF_FFF8 && cluster >= 2 {
                 let clba = data_lba + (cluster - 2) as u32 * spc as u32;
@@ -1807,7 +1825,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                             let rem = fsize - data.len();
                             data.extend_from_slice(&chunk[..rem.min(512)]);
                         }
-                        // Le proximo cluster da FAT
                         let fat_off = fc as usize * 4;
                         let fat_sec = fat_lba + (fat_off / bps as usize) as u32;
                         let mut fsector = [0u8; 512];
@@ -1817,7 +1834,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     }
                     return Some(data);
                 }
-                // Proximo cluster FAT
                 let fat_off = cluster as usize * 4;
                 let fat_sec = fat_lba + (fat_off / bps as usize) as u32;
                 let mut fsector = [0u8; 512];
@@ -1974,13 +1990,62 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
             crate::boot_logger::log(&alloc::format!("BOOT: GPU plan — {:?}", plan));
 
-            if let Some(g) = crate::gpu::detect::best_compute_gpu(&gpus) {
-
-                crate::gpu::vram::init_vram_tier(g);
-
+            if let Some(ci) = plan.compute_index() {
+                if let Some(g) = gpus.get(ci) {
+                    crate::gpu::vram::init_vram_tier(g);
+                }
             }
 
-            crate::gpu::backend::init_backend(&gpus);
+            // Pré-carrega firmware NVIDIA GP108 (8.3 no FAT) via ATA/USB antes do ACR.
+            // Sem isso o jarbas só vê ATA; no boot USB puro o MSC é a fonte.
+            {
+                const GP108: &[(&str, &str)] = &[
+                    ("fecs_bl.bin", "FECS_BL.BIN"),
+                    ("fecs_data.bin", "FECS_DAT.BIN"),
+                    ("fecs_inst.bin", "FECS_INS.BIN"),
+                    ("fecs_sig.bin", "FECS_SIG.BIN"),
+                    ("gpccs_bl.bin", "GPCCS_BL.BIN"),
+                    ("gpccs_data.bin", "GPCCS_DA.BIN"),
+                    ("gpccs_inst.bin", "GPCCS_IN.BIN"),
+                    ("gpccs_sig.bin", "GPCCS_SI.BIN"),
+                    ("sw_ctx.bin", "SW_CTX.BIN"),
+                    ("sw_bundle_init.bin", "SW_BNDL.BIN"),
+                    ("sw_method_init.bin", "SW_MTHD.BIN"),
+                    ("sw_nonctx.bin", "SW_NONC.BIN"),
+                    ("bl.bin", "ACR_BL.BIN"),
+                    ("ucode_load.bin", "ACRLOAD.BIN"),
+                    ("ucode_unload.bin", "ACRUNLD.BIN"),
+                    ("unload_bl.bin", "ACR_UBL.BIN"),
+                ];
+                let mut n = 0u32;
+                for (logical, fat_name) in GP108 {
+                    let mut data = None;
+                    if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
+                        let parts = unsafe { crate::fat32::read_mbr(ata) };
+                        for p in &parts {
+                            if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0x73) {
+                                if let Some(fs) = unsafe { crate::fat32::Fat32Reader::new(ata, p) } {
+                                    data = unsafe { fs.read_file(fat_name) };
+                                    if data.is_some() { break; }
+                                }
+                            }
+                        }
+                    }
+                    if data.is_none() {
+                        if let Some(ref mut msc) = *crate::USB_MSC.lock() {
+                            data = unsafe { read_file_from_dev(msc, fat_name) };
+                        }
+                    }
+                    if let Some(d) = data {
+                        crate::gpu::firmware::preload_blob(logical, d);
+                        n += 1;
+                    }
+                }
+                serial_println!("[FW] GP108 preload: {}/{} blobs (ATA/USB)", n, GP108.len());
+            }
+
+            // Plano coex dirige backend (display owner intocado em falha compute)
+            crate::gpu::backend::init_backend_with_plan(&gpus, &plan);
 
             serial_println!("[GPU] {} GPU(s) detectadas. Backend: {}",
 

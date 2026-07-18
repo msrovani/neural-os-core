@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
-"""Gera imagem USB unificada (boot UEFI + dados FAT) para Rufus DD / um pendrive.
+"""Gera imagem USB unificada (boot UEFI + dados exFAT/FAT32) para Rufus DD / um pendrive.
 
-Layout (GPT + MBR hibrido):
-  Part GPT 0 — ESP (conteudo de target/uefi.img / bootloader 0.11)
-  Part GPT 1 — FAT32 dados (mesmos arquivos de build_image.py --hw)
-  MBR hibrido: 0xEE (protective ate fim do ESP) + 0x0C (dados)
-    → kernel ATA/fat32 acha BITNET2B/HWEXPRT sem segundo disco.
+Layout (GPT + MBR amigavel a Windows removable):
+  Part GPT 0 — ESP (conteudo de target/uefi.img / bootloader 0.11) — FAT
+  Part GPT 1 — dados (exFAT default ou FAT32 com --fat32)
+  MBR slot0 — dados 0x0C/0x07 PRIMEIRO (Windows em pendrive ignora GPT e
+    so monta MBR; 0xEE-only = nenhuma letra; 0xEE-primeiro = \"FS nao
+    reconhecido\"). Slot1 — ESP 0xEF. UEFI boot usa a GPT.
 
 Uso:
   python tools/build_usb_unified.py
   python tools/build_usb_unified.py --size 1536 --output target/usb_hw.img
   python tools/build_image.py --hw --unified
+  python tools/build_usb_unified.py --fat32   # dados FAT32 (BOOT.LOG / modelos)
 
 Requer: target/uefi.img (cargo build --release -p boot) e modelos/firmware
-        como em mkfat32.py / build_image.py --hw.
+        como em mkexfat.py / build_image.py --hw.
 """
 from __future__ import annotations
 
@@ -148,10 +150,62 @@ def write_gpt(
     f.write(backup)
 
 
-def write_hybrid_mbr(f, *, esp_start: int, esp_end: int, data_start: int, data_sectors: int, total_sectors: int) -> None:
-    """MBR hibrido: 0xEE cobre GPT+ESP; 0x0C expoe FAT de dados ao kernel."""
+def write_protective_mbr(f, *, total_sectors: int) -> None:
+    """MBR protetor GPT padrao (uma unica 0xEE). So para disco fixo; em USB removable
+    o Windows ignora GPT e nao cria letra — use write_removable_mbr."""
     mbr = bytearray(SECTOR)
-    # Protective covering LBA 1 .. data_start-1 (GPT + ESP)
+    mbr[0x1BE] = 0x00
+    mbr[0x1BE + 4] = 0xEE
+    struct.pack_into("<I", mbr, 0x1BE + 8, 1)
+    struct.pack_into("<I", mbr, 0x1BE + 12, min(max(1, total_sectors - 1), 0xFFFFFFFF))
+    mbr[0x1FE], mbr[0x1FF] = 0x55, 0xAA
+    f.seek(0)
+    f.write(mbr)
+
+
+def write_removable_mbr(
+    f,
+    *,
+    esp_start: int,
+    esp_sectors: int,
+    data_start: int,
+    data_sectors: int,
+    data_mbr_type: int = 0x0C,
+) -> None:
+    """MBR para pendrive: dados PRIMEIRO (Windows removable so olha MBR).
+
+    Slot 0 = FAT32/exFAT (letra no Explorer).
+    Slot 1 = ESP 0xEF (firmware MBR-UEFI; GPT continua sendo a fonte do boot UEFI).
+    Sem 0xEE: em media removable o Windows nao monta GPT atras de protective-only.
+    """
+    mbr = bytearray(SECTOR)
+    # Part 0 — dados (Explorer)
+    mbr[0x1BE] = 0x00
+    mbr[0x1BE + 4] = data_mbr_type & 0xFF
+    struct.pack_into("<I", mbr, 0x1BE + 8, data_start)
+    struct.pack_into("<I", mbr, 0x1BE + 12, min(data_sectors, 0xFFFFFFFF))
+    # Part 1 — ESP
+    mbr[0x1CE] = 0x80  # bootable (alguns firmware MBR-UEFI)
+    mbr[0x1CE + 4] = 0xEF
+    struct.pack_into("<I", mbr, 0x1CE + 8, esp_start)
+    struct.pack_into("<I", mbr, 0x1CE + 12, min(esp_sectors, 0xFFFFFFFF))
+    mbr[0x1FE], mbr[0x1FF] = 0x55, 0xAA
+    f.seek(0)
+    f.write(mbr)
+
+
+def write_hybrid_mbr(
+    f,
+    *,
+    esp_start: int,
+    esp_end: int,
+    data_start: int,
+    data_sectors: int,
+    total_sectors: int,
+    data_mbr_type: int = 0x07,
+) -> None:
+    """Legado 0xEE-primeiro — nao usar em USB (Windows monta EE sem FS)."""
+    mbr = bytearray(SECTOR)
     ee_start = 1
     ee_size = max(1, data_start - 1)
     mbr[0x1BE] = 0x00
@@ -159,41 +213,87 @@ def write_hybrid_mbr(f, *, esp_start: int, esp_end: int, data_start: int, data_s
     struct.pack_into("<I", mbr, 0x1BE + 8, ee_start)
     struct.pack_into("<I", mbr, 0x1BE + 12, min(ee_size, 0xFFFFFFFF))
 
-    # FAT32 LBA data partition (kernel probe / fat32::read_mbr)
     mbr[0x1CE] = 0x00
-    mbr[0x1CE + 4] = 0x0C
+    mbr[0x1CE + 4] = data_mbr_type
     struct.pack_into("<I", mbr, 0x1CE + 8, data_start)
     struct.pack_into("<I", mbr, 0x1CE + 12, min(data_sectors, 0xFFFFFFFF))
 
     mbr[0x1FE], mbr[0x1FF] = 0x55, 0xAA
     f.seek(0)
     f.write(mbr)
-    _ = (esp_start, esp_end, total_sectors)  # documentados no layout impresso
+    _ = (esp_start, esp_end, total_sectors)
+
+
+def patch_exfat_vbr(f, part_lba: int, part_sectors: int) -> None:
+    """Ajusta PartitionOffset + VolumeLength do VBR exFAT na particao de dados."""
+    f.seek(part_lba * SECTOR)
+    vbr = bytearray(f.read(SECTOR))
+    if vbr[3:11] != b"EXFAT   ":
+        print("[AVISO] VBR sem assinatura EXFAT — patch PartitionOffset/VolumeLength mesmo assim")
+    struct.pack_into("<Q", vbr, 64, part_lba)
+    struct.pack_into("<Q", vbr, 72, part_sectors)
+    vbr[0x1FE], vbr[0x1FF] = 0x55, 0xAA
+    f.seek(part_lba * SECTOR)
+    f.write(vbr)
+    # Recalcular boot checksum nos 11 setores + escrever sector 11 e backup@23
+    f.seek(part_lba * SECTOR)
+    boot = bytearray(f.read(11 * SECTOR))
+    # Patch sector 0 again inside boot buffer
+    struct.pack_into("<Q", boot, 64, part_lba)
+    struct.pack_into("<Q", boot, 72, part_sectors)
+    csum = 0
+    for i, b in enumerate(boot):
+        if i in (106, 107, 112):
+            continue
+        csum = ((csum << 31) | (csum >> 1)) & 0xFFFFFFFF
+        csum = (csum + b) & 0xFFFFFFFF
+    csum_sector = bytearray(SECTOR)
+    for i in range(128):
+        struct.pack_into("<I", csum_sector, i * 4, csum)
+    f.seek(part_lba * SECTOR)
+    f.write(boot)
+    f.seek((part_lba + 11) * SECTOR)
+    f.write(csum_sector)
+    # Backup region @ +12
+    f.seek((part_lba + 12) * SECTOR)
+    f.write(boot)
+    f.seek((part_lba + 23) * SECTOR)
+    f.write(csum_sector)
 
 
 def patch_fat_bpb(f, part_lba: int, part_sectors: int) -> None:
-    """Ajusta Hidden Sectors + Total Sectors do BPB na particao de dados."""
+    """Ajusta Hidden/Total + jump/OEM do BPB FAT32 (e backup boot @+6)."""
     f.seek(part_lba * SECTOR)
     bpb = bytearray(f.read(SECTOR))
     if bpb[0x52:0x5A] != b"FAT32   " and bpb[0x36:0x3B] != b"FAT32":
-        # ainda pode ser valido; so avisa
         print("[AVISO] BPB sem assinatura FAT32 tipica — patch Hidden/Total mesmo assim")
-    struct.pack_into("<I", bpb, 0x1C, part_lba)  # hidden sectors
-    struct.pack_into("<I", bpb, 0x20, part_sectors)  # total sectors 32
-    # Manter signature
+    # Windows exige jmp + OEM validos para montar
+    if bpb[0] not in (0xEB, 0xE9):
+        bpb[0], bpb[1], bpb[2] = 0xEB, 0x58, 0x90
+    if bpb[3:11] == b"\x00" * 8:
+        bpb[3:11] = b"MSWIN4.1"
+    struct.pack_into("<I", bpb, 0x1C, part_lba)
+    struct.pack_into("<I", bpb, 0x20, part_sectors)
     bpb[0x1FE], bpb[0x1FF] = 0x55, 0xAA
     f.seek(part_lba * SECTOR)
     f.write(bpb)
+    # Backup boot sector (BPB_BkBootSec, tipicamente 6)
+    bk = struct.unpack_from("<H", bpb, 0x32)[0]
+    if 1 <= bk < 32:
+        f.seek((part_lba + bk) * SECTOR)
+        f.write(bpb)
 
 
-def build_data_fat(size_mb: int, tmp_path: str) -> int:
-    """Gera disk FAT via mkfat32; retorna LBA de inicio da particao no raw (2048)."""
+def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
+    """Gera disk via mkexfat (default) ou mkfat32; retorna LBA inicio particao (2048)."""
     env = os.environ.copy()
     env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = "hw"
+    maker = "mkfat32.py" if use_fat32 else "mkexfat.py"
+    fs_name = "FAT32" if use_fat32 else "exFAT"
     cmd = [
         sys.executable,
-        os.path.join(ROOT, "tools", "mkfat32.py"),
+        os.path.join(ROOT, "tools", maker),
         "--size",
         str(size_mb),
         "--output",
@@ -201,46 +301,48 @@ def build_data_fat(size_mb: int, tmp_path: str) -> int:
         "--label",
         "NEURAL-OS",
     ]
-    print(f"=== Dados FAT {size_mb}MB (BOOT_MODE=hw) ===")
+    print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) ===")
     r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
     if r.stdout:
         sys.stdout.write(r.stdout)
         if not r.stdout.endswith("\n"):
             sys.stdout.write("\n")
     if r.returncode != 0:
-        print(f"[ERRO] mkfat32 exit={r.returncode}: {(r.stderr or '')[:500]}")
+        print(f"[ERRO] {maker} exit={r.returncode}: {(r.stderr or '')[:500]}")
         sys.exit(r.returncode)
-    return 2048  # mkfat32 coloca BPB em LBA 2048
+    return 2048
 
 
 def ensure_uefi_img(uefi_path: str, build_boot: bool) -> None:
+    # --build-boot sempre recompila (kernel/features mudam; uefi.img stale engana)
+    if build_boot:
+        print("=== cargo build --release -p boot (gera uefi.img) ===")
+        env = os.environ.copy()
+        env.setdefault("CARGO_TARGET_DIR", os.path.join(ROOT, "target"))
+        r = subprocess.run(
+            ["cargo", "build", "--release", "-p", "boot"],
+            cwd=ROOT,
+            env=env,
+            timeout=3600,
+        )
+        if r.returncode != 0 or not os.path.exists(uefi_path):
+            raise SystemExit("[ERRO] falha ao gerar uefi.img via cargo build -p boot")
+        return
     if os.path.exists(uefi_path) and os.path.getsize(uefi_path) > 1024 * 1024:
         return
-    if not build_boot:
-        raise SystemExit(
-            f"[ERRO] {uefi_path} ausente. Rode: cargo build --release -p boot\n"
-            "       ou passe --build-boot"
-        )
-    print("=== cargo build --release -p boot (gera uefi.img) ===")
-    env = os.environ.copy()
-    env.setdefault("CARGO_TARGET_DIR", os.path.join(ROOT, "target"))
-    r = subprocess.run(
-        ["cargo", "build", "--release", "-p", "boot"],
-        cwd=ROOT,
-        env=env,
-        timeout=3600,
+    raise SystemExit(
+        f"[ERRO] {uefi_path} ausente. Rode: cargo build --release -p boot\n"
+        "       ou passe --build-boot"
     )
-    if r.returncode != 0 or not os.path.exists(uefi_path):
-        raise SystemExit("[ERRO] falha ao gerar uefi.img via cargo build -p boot")
-
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="USB unificado: ESP UEFI + FAT dados (Rufus DD)")
+    p = argparse.ArgumentParser(description="USB unificado: ESP UEFI + exFAT dados (Rufus DD)")
     p.add_argument("--size", type=int, default=DEFAULT_SIZE_MB, help="Tamanho da particao de dados em MB")
     p.add_argument("--output", default=None, help="Saida (default: target/usb_hw.img)")
     p.add_argument("--uefi", default=None, help="Caminho uefi.img (default: target/uefi.img)")
     p.add_argument("--data-raw", default=None, help="Reusar disk_hw.raw em vez de regenerar")
     p.add_argument("--build-boot", action="store_true", help="Se falta uefi.img, roda cargo build -p boot")
+    p.add_argument("--fat32", action="store_true", help="Legado: particao de dados FAT32 (mkfat32)")
     args = p.parse_args()
 
     target_dir = os.path.join(ROOT, "target")
@@ -250,7 +352,6 @@ def main() -> None:
     if not os.path.isabs(out):
         out = os.path.join(ROOT, out)
 
-    # Alias HW Expert (igual build_image.py)
     src_v3 = os.path.join(target_dir, "hw_expert_v3.bitnet")
     dst_v3 = os.path.join(target_dir, "hw_expert_tf.bitnet")
     if os.path.exists(src_v3) and not os.path.exists(dst_v3):
@@ -259,11 +360,12 @@ def main() -> None:
     ensure_uefi_img(uefi_path, args.build_boot)
     esp_src_lba, esp_sectors, esp_raw = parse_uefi_esp(uefi_path)
 
-    # ESP no disco unificado: manter LBA 34 (padrao bootloader) se fonte tambem for 34
     esp_start = 34
     if esp_src_lba != 34:
         print(f"[AVISO] ESP fonte em LBA {esp_src_lba}; unificado usa LBA {esp_start}")
     esp_end = esp_start + esp_sectors - 1
+    data_mbr_type = 0x0C if args.fat32 else 0x07
+    fs_name = "FAT32" if args.fat32 else "exFAT"
 
     with tempfile.TemporaryDirectory(prefix="nk_usb_") as tmp:
         if args.data_raw:
@@ -273,26 +375,29 @@ def main() -> None:
             part_lba_in_raw = 2048
         else:
             data_raw = os.path.join(tmp, "disk_hw.raw")
-            part_lba_in_raw = build_data_fat(args.size, data_raw)
+            part_lba_in_raw = build_data_volume(args.size, data_raw, use_fat32=args.fat32)
 
         data_file_sectors = os.path.getsize(data_raw) // SECTOR
         data_payload_sectors = data_file_sectors - part_lba_in_raw
-        if data_payload_sectors < 65525:
-            raise SystemExit("[ERRO] particao de dados muito pequena para FAT32")
+        min_payload = 65525 if args.fat32 else 4096 * 8  # exFAT: ~clusters min * SPC
+        if data_payload_sectors < min_payload:
+            raise SystemExit(f"[ERRO] particao de dados muito pequena para {fs_name}")
 
-        data_start = align_up(esp_end + 1, 2048)  # 1 MiB
+        data_start = align_up(esp_end + 1, 2048)
         data_sectors = data_payload_sectors
         data_end = data_start + data_sectors - 1
-        total_sectors = data_end + 34  # backup GPT
+        total_sectors = data_end + 34
         total_bytes = total_sectors * SECTOR
 
         print(f"=== Layout unificado -> {out} ===")
-        print(f"  ESP : LBA {esp_start}..{esp_end} ({esp_sectors * SECTOR // 1024} KB)")
-        print(f"  DATA: LBA {data_start}..{data_end} ({data_sectors * SECTOR // (1024*1024)} MB) type=0x0C")
+        print(f"  ESP : LBA {esp_start}..{esp_end} ({esp_sectors * SECTOR // 1024} KB) FAT")
+        print(
+            f"  DATA: LBA {data_start}..{data_end} "
+            f"({data_sectors * SECTOR // (1024*1024)} MB) type=0x{data_mbr_type:02X} {fs_name}"
+        )
         print(f"  Total: {total_bytes // (1024*1024)} MB ({total_sectors} setores)")
 
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        # Pre-aloca
         with open(out, "wb") as f:
             f.truncate(total_bytes)
 
@@ -301,13 +406,15 @@ def main() -> None:
         data_guid = uuid.uuid4().bytes
 
         with open(out, "r+b") as f:
-            write_hybrid_mbr(
+            # Pendrive = removable: Windows ignora GPT se MBR for so 0xEE.
+            # Dados na slot0 → Explorer ganha letra; GPT permanece para UEFI.
+            write_removable_mbr(
                 f,
                 esp_start=esp_start,
-                esp_end=esp_end,
+                esp_sectors=esp_sectors,
                 data_start=data_start,
                 data_sectors=data_sectors,
-                total_sectors=total_sectors,
+                data_mbr_type=data_mbr_type,
             )
             write_gpt(
                 f,
@@ -318,10 +425,8 @@ def main() -> None:
                     (GUID_BASIC, data_start, data_end, "NEURAL-OS", data_guid),
                 ],
             )
-            # ESP
             f.seek(esp_start * SECTOR)
             f.write(esp_raw)
-            # Dados FAT (sem MBR do mkfat32)
             with open(data_raw, "rb") as src:
                 src.seek(part_lba_in_raw * SECTOR)
                 remaining = data_sectors * SECTOR
@@ -334,17 +439,20 @@ def main() -> None:
                     remaining -= len(chunk)
                 if remaining != 0:
                     raise SystemExit("[ERRO] copia incompleta da particao de dados")
-            patch_fat_bpb(f, data_start, data_sectors)
+            if args.fat32:
+                patch_fat_bpb(f, data_start, data_sectors)
+            else:
+                patch_exfat_vbr(f, data_start, data_sectors)
 
     final = os.path.getsize(out)
-    # Tambem copia alias pedida no pedido
     alias = os.path.join(target_dir, "disk_hw_unified.raw")
     if os.path.abspath(out) != os.path.abspath(alias):
         shutil.copy2(out, alias)
         print(f"[OK] alias {alias}")
 
-    print(f"\n[OK] {out}: {final // (1024 * 1024)} MB")
+    print(f"\n[OK] {out}: {final // (1024 * 1024)} MB (ESP FAT + dados {fs_name})")
     print("Rufus: modo Imagem DD -> grave no pendrive (Secure Boot OFF).")
+    print("Windows: deve aparecer volume NEURAL-OS (FAT32/exFAT) com BOOT.LOG.")
     print("QEMU dois discos: continue com uefi.img + disk_qemu.raw (nao use este como unico).")
 
 

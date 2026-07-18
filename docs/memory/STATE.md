@@ -7,14 +7,16 @@
 #   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
 # ═════════════════════════════════════════════════════════
 
-## HW real prep (2026-07-16)
-- **USB unificado (recomendado):** `python tools/build_image.py --hw --unified` → `target/usb_hw.img` (ESP + FAT dados; Rufus DD 1 stick).
+## HW real prep (2026-07-16 / SESSION_139)
+- **USB unificado (recomendado):** `python tools/build_usb_unified.py --size 2048 --fat32 --build-boot -o target/usb_hw.img` (ou `build_image.py --hw --unified`). Layout: MBR **FAT32 dados `0x0C` + ESP `0xEF`** (+ GPT UEFI). Rufus DD 1 stick. Format NeuralFS em USB só com `NEURALFS_USB_FORMAT=1` (ou debug build).
 - **Dois meios (opcional):** `target/uefi.img` + `python tools/build_image.py --hw` → `target/disk_hw.raw`.
 - **HW Expert:** precisa só `HWEXPRT.BIN` (não precisa linux-firmware).
 - **GPU/WiFi/NIC:** precisam blobs `firmware/` no FAT.
 - **E2e clima QEMU:** gated — default off; `cargo nk --features weather-e2e` para HIT.
-- **Log HW:** COM1 `0x3F8` @ 115200 8N1 (PuTTY/SerialPort); opcional `--features fat-boot-log`.
+- **Log HW sem serial:** `BOOT.LOG` no volume FAT (`fat-boot-log` on); tela = `console_print` / `boot_ckpt` K0–K17 (SESSION_139). COM1 ainda útil em bancada.
+- **Bootloader vendor:** `vendor/bootloader` patch BltOnly→SetMode Rgb/Bgr (Intel HD 620).
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
+- **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
 **Versão:** **v1.8.5 TESTE / NÃO ESTÁVEL** (2026-07-16) — consolidação pós-v1.8.0 para integração e validação.  
@@ -30,12 +32,13 @@
 - **ADR-0040 / NeuralFS:** MVP aceito; RAM I/O + reclaim/split + ATA opcional; residual físico/multinível `por_fazer`.
 - **ADR-0046:** AirLLM layer-wise + hot-swap ATA/Net code; DMA, stream-to-disk, K-quants e e2e grande abertos.
 - **ADR-0047:** família Latent/Evolve/Probe/GPU/HMI em MVP/PoC; sem promoção indevida a produção.
-- **ADRs 0048–0050:** arquitetura GPU multigeração proposta; nenhuma implementação alegada.
+- **ADRs 0048–0050:** lifecycle `fazendo` — SESSION_138 fundação; **Degrau 2+3+4 Pascal** (`nvidia_pascal` + `nvidia_pascal_qmd`: GMMU/channel + runlist/kick + QMD v01_07/PCAS/fence); Ready/`has_compute` **só** com fence+golden em HW (QEMU → FenceTimeout honesto); falta ACR/GR+CUBIN sm_61 assinado no silício.
 - **Evidência consolidada:** `SESSION_121.md`–`SESSION_129.md`.
 
 ### Pista limpa (2026-07-16)
 | Track | Status |
 |-------|--------|
+| **ADR-0053 HANR parity** | ✅ **MVP++** (SESSION_136–137) — Cognitive Bridge + **route_user_intent** Trinity→Trust→Skill/LLM |
 | **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K²CHJ funcional; **N2.5** ✅ (v1.7.8); **N3.5** ✅ (v1.7.9); **N4.6** ✅ (v1.7.10); **N5.7** ✅ (v1.7.11) |
 | **ADR-0040 FS MVP** | ✅ **CLOSED** (SESSION_124) — soft-migrate MHI; exFAT FilesystemDriver; NeuralFS `/mnt/neural` (SESSION_123 RAM); residuals SESSION_125 → todos `por_fazer` |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
@@ -45,16 +48,18 @@
 | **ADR-0047 família MVP** | ✅ **Accepted parcial** (SESSION_126–127) — L1–L3 + Genesis + G1–G5 PoC + H1/H2/H4/H5; H3/ISA/adapter ❌ descartados |
 | **ADR-0046 AirLLM GGUF** | ✅ **MVP completa** (SESSION_127) + hot-swap Net code (SESSION_128) — ATA+`set_model`; Net→FAT→AirLLM (L3.5/RX se RX=0); residuals: DMA / stream-to-disk / K-quants / e2e GGUF grande |
 
-### NeuralFS (SESSION_123 + reclaim/split/ATA)
+### NeuralFS (SESSION_123 + 132 + 133)
 | Item | Estado |
 |------|--------|
 | Format/mount + file R/W | ✅ RAM 4MB em `/mnt/neural` |
-| B-tree leaf mutavel | ✅ insert/delete/split (max 84/folha; root 2-niveis) |
-| Free-list reclaim | ✅ LIFO + page `NRFSFREE` (free_extent_root); smoke_reclaim |
-| VFS agent | ✅ ATA MBR `0x7F` se existir; senao RAM; seed hello.txt |
-| Disco fisico | ✅ probe/mount/format cauda livre (>=8MB, slot MBR); nao toca FAT |
-| Espelho k_nano | ✅ btree/volume/agent/tests sync; BlockDevice.total_sectors |
-| Residual | ⏳ B-tree 3+ niveis; GPT NeuralFS; parent-full no 2o split |
+| B-tree multi-nivel | ✅ leaf + internal split; path CoW; smoke_multilevel |
+| Free-list reclaim | ✅ LIFO + page `NRFSFREE`; smoke_reclaim |
+| VFS agent | ✅ ATA → USB (mount) → RAM; format USB **opt-in** |
+| GPT NeuralFS | ✅ GUID `GPT_TYPE_NEURALFS` + virgin `gpt_format_single` |
+| Disco fisico | ✅ ATA cauda; USB mount; USB format só com flag/debug |
+| Boot dados exFAT | ✅ `mkexfat` + unified ESP FAT / dados exFAT |
+| Espelho k_nano | ✅ gpt sync; agent USB fica no bin |
+| Residual | ⏳ power-loss e2e; stress B-tree level≥2; interop host exFAT |
 
 ### Sound / Voice (ADR-0045) — Sprint Sound ✅
 | Item | Estado |
@@ -332,7 +337,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 
 ## Arquitetura Fundamental
 **Tudo no Neural OS Hermes é um Agente ou uma Skill.**
-247+ agentes: 20 nativos + 147 The Agency + ~80 importados + ~6 HW + ~6 FS.
+Fleet scheduler: **41 nativos + N PCI** (+ Agency **0** até AGENT.md assinado — ADR-0052 / SESSION_135). Stubs SESSION_134 apagados. FS VFS (8) fora do scheduler.
 Bootloader 0.11.15 com `bootloader_api`. Boot sequence agent-centric.
 
 ### Activation on Demand

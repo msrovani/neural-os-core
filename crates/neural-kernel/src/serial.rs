@@ -117,33 +117,15 @@ pub fn _print(args: fmt::Arguments) {
 
 /// Tenta escrever no arquivo de sessao no disco FAT32 (HW real sem serial)
 fn write_to_disk_journal(data: &[u8], tick: u64) {
-    
-    let sfn = {
-        let g = crate::boot_logger::SESSION_FILENAME.lock();
-        g.clone()
-    };
-    if let Some(ref name) = sfn {
-        unsafe {
-            let ata_guard = crate::ATA_DRIVER.lock();
-            if let Some(ref ata) = *ata_guard {
-                let parts = crate::fat32::read_mbr(ata);
-                for part in &parts {
-                    if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-                        let writer = crate::fat32::Fat32Writer::new(ata, part);
-                        if let Some(w) = writer {
-                            if let Some(existing) = w.reader.read_file(name) {
-                                let mut new_data = existing;
-                                let ts = alloc::format!("[T+{}] ", tick);
-                                new_data.extend_from_slice(ts.as_bytes());
-                                new_data.extend_from_slice(data);
-                                if !data.ends_with(b"\n") { new_data.push(b'\n'); }
-                                w.write_file(name, &new_data);
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
+    let _ = tick;
+    // Antes do heap: append_raw/buffer_log usam alloc — NUNCA chamar.
+    if !crate::boot_logger::heap_ready() {
+        return;
+    }
+    if let Ok(s) = core::str::from_utf8(data) {
+        let trimmed = s.trim_end_matches('\n');
+        if !trimmed.is_empty() {
+            crate::boot_logger::append_raw(trimmed);
         }
     }
 }

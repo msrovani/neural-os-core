@@ -1,16 +1,23 @@
-//! Raw framebuffer — BGRA32 pixel writer + embedded-graphics DrawTarget.
+//! Raw framebuffer — pixel writer + double buffer.
 //! Suporta UEFI GOP (hardware real) e VirtIO-GPU (QEMU).
-//! Double buffering: todas as operacoes vao para back buffer, swap() copia para tela.
+//! Contrato: bpp/stride/rgb_order vêm da leitura do bootloader/GOP (ou do
+//! protocolo VirtIO). Consumidores NÃO devem hardcodar 3 nem 4 — leem GpuDevice.
 
 use core::ptr::write_volatile;
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::vec::Vec;
+
+static CONSOLE_LINE: AtomicUsize = AtomicUsize::new(0);
+static CONSOLE_INITED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Copy)]
 pub struct GpuDevice {
     pub fb_addr: u64,
     pub fb_width: u32,
     pub fb_height: u32,
+    /// Stride em BYTES (= pixels_por_linha * bytes_per_pixel).
     pub fb_stride: u32,
+    /// Bytes por pixel reportados pelo GOP (`info.bytes_per_pixel`) ou protocolo.
     pub fb_bpp: u32,
     pub notify_addr: u64,
     pub present: bool,
@@ -20,6 +27,66 @@ pub struct GpuDevice {
 impl GpuDevice {
     pub const fn empty() -> Self {
         GpuDevice { fb_addr: 0, fb_width: 0, fb_height: 0, fb_stride: 0, fb_bpp: 4, notify_addr: 0, present: false, rgb_order: false }
+    }
+
+    /// Converte o valor reportado pelo bootloader/GOP em bpp operacional.
+    /// Nunca infere bpp a partir de `PixelFormat` (Bgr/Rgb ≠ 24-bit).
+    pub fn resolve_bytes_per_pixel(reported: u32) -> u32 {
+        match reported {
+            3 | 4 => reported,
+            0 => {
+                k_nano::serial_println!(
+                    "[DISPLAY] bytes_per_pixel=0 do GOP — fallback dinamico bpp=4"
+                );
+                4
+            }
+            other if (1..=8).contains(&other) => {
+                k_nano::serial_println!(
+                    "[DISPLAY] bytes_per_pixel={} incomum — aceitando valor do GOP",
+                    other
+                );
+                other
+            }
+            other => {
+                k_nano::serial_println!(
+                    "[DISPLAY] bytes_per_pixel={} invalido — fallback dinamico bpp=4",
+                    other
+                );
+                4
+            }
+        }
+    }
+
+    #[inline]
+    pub fn bytes_per_pixel(&self) -> usize {
+        self.fb_bpp as usize
+    }
+
+    #[inline]
+    pub fn stride_bytes(&self) -> usize {
+        self.fb_stride as usize
+    }
+
+    /// Monta o device a partir da geometria ja resolvida (fonte = GOP/protocolo).
+    pub fn from_probe(
+        fb_addr: u64,
+        width: u32,
+        height: u32,
+        stride_px: u32,
+        bytes_per_pixel: u32,
+        rgb_order: bool,
+    ) -> Self {
+        let bpp = Self::resolve_bytes_per_pixel(bytes_per_pixel);
+        Self {
+            fb_addr,
+            fb_width: width,
+            fb_height: height,
+            fb_stride: stride_px.saturating_mul(bpp),
+            fb_bpp: bpp,
+            notify_addr: 0,
+            present: true,
+            rgb_order,
+        }
     }
 }
 
@@ -80,27 +147,40 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
             bootloader_api::info::PixelFormat::Rgb => "RGB",
             _ => "OTHER",
         };
-        // bytes/pixel REAL reportado pelo bootloader (GOP). Hardcodar 3 quebra
-        // framebuffers BGRA/BGRX de 32 bits (QEMU/OVMF e a maioria do HW): cada
-        // pixel escreve 3 bytes num slot de 4 e cada linha usa stride errado, o
-        // que "escorrega" a imagem na diagonal e vira chuviscos. Confiar em
-        // info.bytes_per_pixel cobre tanto 24-bit (=3) quanto 32-bit (=4).
-        let bpp = {
-            let b = info.bytes_per_pixel as u32;
-            if b == 0 { 4 } else { b }
-        };
-        match info.pixel_format {
-            bootloader_api::info::PixelFormat::Bgr => k_nano::serial_println!("[DISPLAY] PixelFormat: Bgr (B primeiro) bytes/pixel={}", bpp),
-            bootloader_api::info::PixelFormat::Rgb => k_nano::serial_println!("[DISPLAY] PixelFormat: Rgb (R primeiro) — invertendo canais! bytes/pixel={}", bpp),
-            _ => k_nano::serial_println!("[DISPLAY] PixelFormat: {} bytes/pixel={}", pixel_name, bpp),
-        };
-        // Stride da UEFI em bytes (= pixels por linha * bytes por pixel)
-        let fb_stride = info.stride as u32 * bpp;
-        let fb_width = info.width as u32;
-        let fb_height = info.height as u32;
+        // Fonte de verdade: info.bytes_per_pixel do bootloader/GOP.
+        // PixelFormat só define ordem dos canais (Bgr/Rgb), NÃO o bpp.
+        let reported_bpp = info.bytes_per_pixel as u32;
+        let rgb_order = matches!(info.pixel_format, bootloader_api::info::PixelFormat::Rgb);
+        let gpu = GpuDevice::from_probe(
+            fb.buffer().as_ptr() as u64,
+            info.width as u32,
+            info.height as u32,
+            info.stride as u32,
+            reported_bpp,
+            rgb_order,
+        );
+        let bpp = gpu.fb_bpp;
+        let fb_stride = gpu.fb_stride;
+        let fb_width = gpu.fb_width;
+        let fb_height = gpu.fb_height;
         let fb_buf_len = fb.buffer().len();
 
-        // Validacao: stride original vs tamanho real do buffer
+        match info.pixel_format {
+            bootloader_api::info::PixelFormat::Bgr => k_nano::serial_println!(
+                "[DISPLAY] PixelFormat: Bgr (B primeiro) bytes/pixel={} (gop_reported={})",
+                bpp, reported_bpp
+            ),
+            bootloader_api::info::PixelFormat::Rgb => k_nano::serial_println!(
+                "[DISPLAY] PixelFormat: Rgb (R primeiro) bytes/pixel={} (gop_reported={})",
+                bpp, reported_bpp
+            ),
+            _ => k_nano::serial_println!(
+                "[DISPLAY] PixelFormat: {} bytes/pixel={} (gop_reported={})",
+                pixel_name, bpp, reported_bpp
+            ),
+        };
+
+        // Validacao: stride derivado vs tamanho real do buffer
         let expected_min = (fb_height as usize).saturating_sub(1) * fb_stride as usize
             + fb_width as usize * bpp as usize;
         if expected_min > fb_buf_len {
@@ -108,51 +188,17 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
                 fb_stride, fb_buf_len, expected_min);
         }
 
-        // Log das resolucoes suportadas pelo hardware (Intel 6xx Gen9):
-        // 1920x1080, 1366x768, 1280x720, 1024x768, 800x600
         k_nano::serial_println!("[DISPLAY] UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
             fb_width, fb_height, bpp, fb_stride, info.stride, fb_buf_len, fb.buffer().as_ptr() as u64);
-
-        // Detecta ordem de bytes: PixelFormat::Rgb = R primeiro, Bgr = B primeiro
-        let rgb_order = match info.pixel_format {
-            bootloader_api::info::PixelFormat::Rgb => true,
-            _ => false,
-        };
 
         // NOTA: NAO remapear como UC aqui — map_page_uc() aloca frames para
         // page tables, mas o frame allocator e a IDT ainda nao foram init.
         // O remapeamento UC sera feito em fb_remap_uc(), chamado apos memory init.
-        let gpu = GpuDevice {
-            fb_addr: fb.buffer().as_ptr() as u64,
-            fb_width,
-            fb_height,
-            fb_stride,
-            fb_bpp: bpp,
-            notify_addr: 0,
-            present: true,
-            rgb_order,
-        };
         *GPU.lock() = Some(gpu);
 
-        // Limpa framebuffer para preto — elimina artefatos do bootloader
-        // Usando write_volatile para garantir que o UC mapping funcione
-        let fb_size = gpu.fb_height as usize * gpu.fb_stride as usize;
-        if fb_size > 0 {
-            unsafe {
-                let ptr = gpu.fb_addr as *mut u8;
-                let clear_size = fb_size.min(1024 * 1024); // limpa ate 1MB (1920x1080x4 = 8.3MB)
-                // Preenche com preto usando write_volatile em bursts de 8 bytes
-                let mut i = 0usize;
-                while i + 8 <= clear_size {
-                    core::ptr::write_volatile(ptr.add(i) as *mut u64, 0);
-                    i += 8;
-                }
-                while i < clear_size {
-                    core::ptr::write_volatile(ptr.add(i), 0);
-                    i += 1;
-                }
-            }
-        }
+        // Limpa TRACE do bootloader — texto sobreposto ficava ilegível.
+        console_clear();
+        boot_ckpt(0, "probe FB ok (kernel entrou)");
 
         k_nano::serial_println!("[DISPLAY] UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}",
             gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
@@ -172,8 +218,8 @@ pub fn paint_tts_response(text: &str) {
         k_nano::serial_println!("[JARBAS-TTS-FB] skip — FB nao present");
         return;
     }
-    let bpp = gpu.fb_bpp as usize;
-    let stride = gpu.fb_stride as usize;
+    let bpp = gpu.bytes_per_pixel();
+    let stride = gpu.stride_bytes();
     let w = gpu.fb_width as usize;
     let h = gpu.fb_height as usize;
     let addr = gpu.fb_addr as usize;
@@ -252,23 +298,28 @@ pub fn paint_tts_response(text: &str) {
     );
 }
 
-/// Splash pós-boot/demo: fundo temático (OrbBackground) + label (ex: "AIOS").
+/// Splash pós-boot/demo: limpa FB e escreve uma linha legível.
 pub fn boot_splash(msg: &str) {
+    console_clear();
+    console_print(msg);
+    k_nano::serial_println!("[DISPLAY] splash '{}'", msg);
+}
+
+/// Limpa o FB e zera o cursor do console de boot.
+pub fn console_clear() {
     let guard = GPU.lock();
     let Some(gpu) = guard.as_ref() else {
-        k_nano::serial_println!("[DISPLAY] splash skip — sem FB");
         return;
     };
     if !gpu.present || gpu.fb_addr == 0 {
         return;
     }
-    let bpp = gpu.fb_bpp as usize;
-    let stride = gpu.fb_stride as usize;
-    let w = gpu.fb_width as usize;
+    let bpp = gpu.bytes_per_pixel();
+    let stride = gpu.stride_bytes();
     let h = gpu.fb_height as usize;
     let addr = gpu.fb_addr as usize;
     let rgb = gpu.rgb_order;
-    let (tr, tg, tb) = (10u8, 10u8, 15u8);
+    let (tr, tg, tb) = (8u8, 8u8, 12u8);
     let (c0, c1, c2) = if rgb { (tr, tg, tb) } else { (tb, tg, tr) };
     let clear_size = h.saturating_mul(stride);
     unsafe {
@@ -281,31 +332,177 @@ pub fn boot_splash(msg: &str) {
                 i += 4;
             }
         } else if bpp > 0 {
-            for y in 0..h {
-                for x in 0..w {
-                    let off = y * stride + x * bpp;
-                    if off + 2 >= clear_size {
-                        continue;
-                    }
-                    write_volatile(ptr.add(off), c0);
-                    write_volatile(ptr.add(off + 1), c1);
-                    write_volatile(ptr.add(off + 2), c2);
-                    if bpp > 3 {
-                        write_volatile(ptr.add(off + 3), 0xFF);
-                    }
+            let mut i = 0usize;
+            while i + bpp <= clear_size {
+                write_volatile(ptr.add(i), c0);
+                write_volatile(ptr.add(i + 1), c1);
+                write_volatile(ptr.add(i + 2), c2);
+                if bpp > 3 {
+                    write_volatile(ptr.add(i + 3), 0xFF);
+                }
+                i += bpp;
+            }
+        }
+    }
+    drop(guard);
+    CONSOLE_LINE.store(0, Ordering::Relaxed);
+    CONSOLE_INITED.store(true, Ordering::Relaxed);
+}
+
+/// Uma linha no FB: limpa a faixa da linha e desenha (sem ghost/TRACE).
+pub fn console_print(text: &str) {
+    let text = text.trim_end_matches(['\r', '\n']);
+    if text.is_empty() {
+        return;
+    }
+    if !CONSOLE_INITED.load(Ordering::Relaxed) {
+        console_clear();
+    }
+    let guard = GPU.lock();
+    let Some(gpu) = guard.as_ref() else {
+        return;
+    };
+    if !gpu.present || gpu.fb_addr == 0 {
+        return;
+    }
+    let bpp = gpu.bytes_per_pixel();
+    let stride = gpu.stride_bytes();
+    let w = gpu.fb_width as usize;
+    let h = gpu.fb_height as usize;
+    let addr = gpu.fb_addr as usize;
+    let rgb = gpu.rgb_order;
+    if bpp == 0 || h < 16 {
+        return;
+    }
+    let ch = 16usize;
+    let max_lines = h / ch;
+    if max_lines == 0 {
+        return;
+    }
+    let mut line = CONSOLE_LINE.fetch_add(1, Ordering::Relaxed);
+    if line >= max_lines {
+        drop(guard);
+        console_clear();
+        let guard = GPU.lock();
+        let Some(gpu) = guard.as_ref() else {
+            return;
+        };
+        line = 0;
+        CONSOLE_LINE.store(1, Ordering::Relaxed);
+        draw_console_line(
+            gpu.fb_addr as usize,
+            gpu.fb_width as usize,
+            gpu.fb_height as usize,
+            gpu.stride_bytes(),
+            gpu.bytes_per_pixel(),
+            gpu.rgb_order,
+            line,
+            text,
+        );
+        return;
+    }
+    draw_console_line(addr, w, h, stride, bpp, rgb, line, text);
+}
+
+fn draw_console_line(
+    addr: usize,
+    w: usize,
+    h: usize,
+    stride: usize,
+    bpp: usize,
+    rgb: bool,
+    line: usize,
+    text: &str,
+) {
+    let ch = 16usize;
+    let cw = 8usize;
+    let y0 = line * ch;
+    if y0 + ch > h {
+        return;
+    }
+    let (bg0, bg1, bg2) = if rgb {
+        (8u8, 8u8, 12u8)
+    } else {
+        (12u8, 8u8, 8u8)
+    };
+    unsafe {
+        let ptr = addr as *mut u8;
+        for y in y0..(y0 + ch) {
+            for x in 0..w {
+                let off = y * stride + x * bpp;
+                write_volatile(ptr.add(off), bg0);
+                write_volatile(ptr.add(off + 1), bg1);
+                write_volatile(ptr.add(off + 2), bg2);
+                if bpp > 3 {
+                    write_volatile(ptr.add(off + 3), 0xFF);
                 }
             }
         }
     }
-    let fb_addr = addr;
-    let fb_w = w;
-    let fb_h = h;
-    let fb_stride = stride;
-    let fb_bpp = bpp;
-    let rgb_order = gpu.rgb_order;
-    drop(guard);
-    splash_draw_text(fb_addr, fb_w, fb_h, fb_stride, fb_bpp, rgb_order, 16, 16, msg);
-    k_nano::serial_println!("[DISPLAY] splash '{}' {}x{} bpp={}", msg, w, h, bpp);
+    let (fg0, fg1, fg2) = if rgb {
+        (230u8, 240u8, 255u8)
+    } else {
+        (255u8, 240u8, 230u8)
+    };
+    let mut x = 4usize;
+    for c in text.chars() {
+        if x + cw > w {
+            break;
+        }
+        if let Some(bitmap) = crate::display::font::get_char_bitmap(c) {
+            for dy in 0..ch.min(16) {
+                let row = bitmap[dy];
+                for dx in 0..cw.min(8) {
+                    if (row >> (7 - dx)) & 1 != 1 {
+                        continue;
+                    }
+                    let off = (y0 + dy) * stride + (x + dx) * bpp;
+                    unsafe {
+                        let ptr = (addr + off) as *mut u8;
+                        write_volatile(ptr, fg0);
+                        write_volatile(ptr.add(1), fg1);
+                        write_volatile(ptr.add(2), fg2);
+                        if bpp > 3 {
+                            write_volatile(ptr.add(3), 0xFF);
+                        }
+                    }
+                }
+            }
+        }
+        x += cw;
+    }
+}
+
+/// Checkpoint de boot — mesma fila do console (legível).
+pub fn boot_ckpt(n: u8, msg: &str) {
+    k_nano::serial_println!("[CKPT] K{} {}", n, msg);
+    let mut buf = [0u8; 100];
+    let mut pos = 0usize;
+    buf[pos] = b'K';
+    pos += 1;
+    if n >= 100 {
+        buf[pos] = b'0' + (n / 100);
+        pos += 1;
+    }
+    if n >= 10 {
+        buf[pos] = b'0' + ((n / 10) % 10);
+        pos += 1;
+    }
+    buf[pos] = b'0' + (n % 10);
+    pos += 1;
+    buf[pos] = b':';
+    pos += 1;
+    buf[pos] = b' ';
+    pos += 1;
+    for &b in msg.as_bytes() {
+        if pos >= buf.len() - 1 {
+            break;
+        }
+        buf[pos] = b;
+        pos += 1;
+    }
+    let s = core::str::from_utf8(&buf[..pos]).unwrap_or("K?");
+    console_print(s);
 }
 
 fn splash_draw_text(
@@ -385,6 +582,18 @@ impl DoubleBuffer {
             info: FramebufferInfo { addr, width, height, stride, bpp, rgb_order },
             back: alloc::vec![0u8; size],
         }
+    }
+
+    /// Constrói o double-buffer a partir do GpuDevice já probeado (fonte dinâmica).
+    pub fn from_gpu(gpu: &GpuDevice) -> Self {
+        Self::new(
+            gpu.fb_addr as usize,
+            gpu.fb_width as usize,
+            gpu.fb_height as usize,
+            gpu.stride_bytes(),
+            gpu.bytes_per_pixel(),
+            gpu.rgb_order,
+        )
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {

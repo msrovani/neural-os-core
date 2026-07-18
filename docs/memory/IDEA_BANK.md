@@ -76,9 +76,9 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 ### 1.1. The Agency — HW Agents + User Agents (IDEA #277)
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
-| 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | 🟡 Sprint 92+ | v0.92+ | LLM pergunta "o que tem de HW" → ativa agentes |
-| 277b | Agency: 12 divisões, 30+ agentes especializados | 🟡 Sprint 92+ | v0.92+ | Port do The Agency (50K★) para nosso ecossistema |
-| 277c | LLM-aware hardware activation por intent | 🟡 Sprint 92+ | v0.92+ | "quero video chamada" → mic+camera+display+net |
+| 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | ✅ SESSION_134 | v1.8.5 | LLM pergunta "o que tem de HW" → ativa agentes |
+| 277b | Agency: 214 specs → AGENT.md + seed (ADR-0051) | ✅ SESSION_134 | v1.8.5 | Catálogo data-driven; nativos mantêm código no bin |
+| 277c | LLM-aware hardware activation por intent | 🟡 Sprint 92+ / PnP | v0.92+ | "quero video chamada" → mic+camera+display+net |
 
 ### 1.2. GGUF Format Support (IDEA #278)
 | # | Item | Destino | Target | Motivação |
@@ -107,7 +107,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 280f | raga-ai-hub/Catalyst: Span tracer 256-entry (tracer.rs) | ✅ v0.59.2 | v0.59.2 | Tracing de spans de agentes |
 | 280g | kyegomez/swarms: Orchestrator decompose+assign | ✅ v0.59.2 | v0.59.2 | Task decomposition por keywords |
 | 280h | TransformerOptimus/SuperAGI: SkillScore scoring | ✅ v0.59.2 | v0.59.2 | Skill performance ranking |
-| 280i | VRSEN/agency-swarm: SpecialistAgent (ja tinhamos!) | ✅ Confirmado | v0.59.1 | 147 agentes em 12 divisões |
+| 280i | VRSEN/agency-swarm: SpecialistAgent (214 data-driven) | ✅ SESSION_134 | v1.8.5 | AGENT.md + seed; não mais 147 hardcoded |
 | 280j | browser-use: HwRegistry device tree (ja tinhamos!) | ✅ Confirmado | v0.59.1 | HW context para LLM |
 | 280k | micro/go-micro: endpoints discovery (ja tinhamos!) | ✅ Confirmado | v0.55.0 | AgentManifest extensivel |
 | 280l | pydantic-ai: SkillManifest derive macro (conceitual) | 🟡 Sprint 91 | v0.91+ | Proc-macro para manifests |
@@ -559,7 +559,8 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | 315.16 | **Auto-Skill Generation** — Cratos-inspired: observa interações, gera SKILL.md com padrões detectados. Pipeline: watch → pattern → propose → generate → register | 🟡 Sprint 79 | 79 | ~150 | Cratos |
 | 315.17 | **Babel-Index (entropy monitoring)** — Monitora entropia, contradiction rate, staleness index da memória. Prevê colapso de coerência → dispara consolidação automática | 🟡 Sprint 79 | 79 | ~100 | NEOTH |
 | 315.18 | **Fail-Closed Safety Invariant** — SafetyAgent sempre nega por padrão. Toda skill precisa autorização explícita. SMT-proof (Z3-style): 4 invariants: process separation, pre-action, fail-closed, signed evidence | 🟡 Sprint 80 | 80 | ~200 | Unfireable Safety Kernel paper |
-| 315.19 | **Merkle Audit Trail (Ed25519 signed)** — Chain de audit entries: tick, agent, action, payload_hash, prev_hash, Ed25519 signature. Verificação de integridade a cada entry. Ring buffer 4096 | 🟡 Sprint 80 | 80 | ~200 | PunkGo + NEOTH |
+| 315.19 | **Merkle Audit Trail (Ed25519 signed)** — Chain de audit entries: tick, agent, action, payload_hash, prev_hash, Ed25519 signature. Verificação de integridade a cada entry. Ring buffer 4096 | ✅ SESSION_136 | ADR-0053 | ~200 | Session key assina entry_hash |
+| 315.20 | **Cognitive Bridge (HANR UX / K²CHJ stack)** — SOUL≠PERSONA; BGE+Trinity no prompt; IterationBudget; session search; CapGate L0; SleepCycle REFLECT→MEMORY_NUDGE Jarbas | ✅ SESSION_137 | ADR-0053+ | ~400 | `cognitive_bridge.rs` |
 | 315.20 | **Fluid Persona (context-adaptive)** — Persona muda por contexto: urgente→preciso, triste→empático, irritado→formal. 3 eixos: persona metafórica (coach/tutor/tool) + intensidade (low/med/high) + traits do usuário | 🟡 Sprint 80 | 80 | ~100 | Fluid Personality paper |
 | 315.21 | **Pocket TTS Integration** (TTS) — Via sherpa-onnx (Rust bindings). PocketTTS engine 100M params, CPU-native, ~200ms latência, voice cloning, 6 idiomas. Alternativa: Kokoro via sherpa-onnx. Pós B-01 | ❌ supersedido | — | Histórico. Primário = Piper VITS + formant. ADR-0045. | k2-fsa/sherpa-onnx |
 | 315.22 | **STT (sherpa-onnx Whisper)** — Speech-to-text via sherpa-onnx Rust bindings. Whisper engine, CPU offline. Alternativa: Vosk. Pós B-01 | ❌ supersedido | — | Histórico. Primário = STT CTC nativo (`audio/stt.rs`). ADR-0045. | k2-fsa/sherpa-onnx |
@@ -1695,3 +1696,4 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-16 | **456** | **Intel Compute Multigeração** — GMD_ID; famílias Gen9→Xe3; GuC + walkers; `INTEL_KERNEL_PACK` zebin offline; iGPU vídeo + dGPU IA; sem Level Zero no alvo. | ⏳ | ADR-0050 | futuro | `0050-intel-compute-multigeracao.md` |
 | 2026-07-16 | **449** | **AirLLM GGUF streaming** — `GGUFStreamingModel` layer-wise ATA; soft PrefetchEngine; Q5_0/Q8_0 dequant; hot-swap ATA+Net→FAT→`set_model` (RX gate L3.5); DMA/stream-to-disk/K-quant deferred. | ✅ MVP + Net code | ADR-0046 | SESSION_127/128 | `gguf_streaming.rs` + `gguf.rs` |
 | 2026-07-16 | **457** | **Marco v1.8.5 TEST** — consolidação não estável pós-v1.8.0: Self-Evolve, Sound, NeuralFS/ADR-0040, AirLLM/ADR-0046, família ADR-0047 e propostas GPU 0048–0050. | ✅ documentação/release | v1.8.5 teste | SESSION_129 | STATE + CHANGELOG |
+| 2026-07-17 | **458** | **HW USB diagnostics sem serial** — `BOOT.LOG` FAT + console FB (`console_clear`/`console_print`) + ckpts K0–K17; MBR dados+ESP montável no Windows; vendor bootloader BltOnly→SetMode. | ✅ MVP debug | HW real | SESSION_139 | `boot_logger.rs` + `fb.rs` + `build_usb_unified.py` + `vendor/bootloader*` |

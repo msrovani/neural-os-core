@@ -23,20 +23,19 @@ def create_fat32(path, size_mb, label):
     size = size_mb * 1024 * 1024
     bps, spc, reserved, fat_count = 512, 1, 32, 2
     total_sectors = size // bps
-    # FAT32: data area starts after reserved + FATs
-    # Root cluster is always 2
-    # Calculate FAT size in sectors
-    data_sectors = total_sectors - reserved
+    part_lba = 2048
+    part_sectors = total_sectors - part_lba
+    # FAT32: geometria relativa a particao (nao ao disco inteiro)
+    data_sectors = part_sectors - reserved
     fat_sectors = align_up(((data_sectors * 4) + bps - 1) // bps, 1)
-    # Adjust: data area = total - reserved - fat_count * fat_sectors
     data_start = reserved + fat_count * fat_sectors
-    data_sectors = total_sectors - data_start
+    data_sectors = part_sectors - data_start
     total_clusters = data_sectors // spc
     # FAT32 needs >= 65525 clusters
     if total_clusters < 65525:
         fat_sectors = align_up(fat_sectors * 2, 1)
         data_start = reserved + fat_count * fat_sectors
-        data_sectors = total_sectors - data_start
+        data_sectors = part_sectors - data_start
         total_clusters = data_sectors // spc
     # Create file
     with open(path, "wb") as f:
@@ -46,13 +45,16 @@ def create_fat32(path, size_mb, label):
     mbr[0x1BE] = 0x00; mbr[0x1BF] = 0x01; mbr[0x1C0] = 0x01; mbr[0x1C1] = 0x00
     mbr[0x1C2] = 0x0C  # FAT32 LBA
     mbr[0x1C3] = 0xFE; mbr[0x1C4] = 0xFF; mbr[0x1C5] = 0xFF
-    struct.pack_into("<I", mbr, 0x1C6, 2048)  # LBA start
-    struct.pack_into("<I", mbr, 0x1CA, (total_sectors - 2048))  # sectors
+    struct.pack_into("<I", mbr, 0x1C6, part_lba)  # LBA start
+    struct.pack_into("<I", mbr, 0x1CA, part_sectors)  # sectors
     mbr[0x1FE], mbr[0x1FF] = 0x55, 0xAA
     with open(path, "r+b") as f:
         f.write(mbr)
     # Write BPB at LBA 2048 (partition start)
     bpb = bytearray(512)
+    # jmp + OEM — sem isso o Windows recusa montar FAT32
+    bpb[0], bpb[1], bpb[2] = 0xEB, 0x58, 0x90
+    bpb[3:11] = b"MSWIN4.1"
     struct.pack_into("<H", bpb, 0x0B, bps)      # bytes per sector
     bpb[0x0D] = spc                             # sectors per cluster
     struct.pack_into("<H", bpb, 0x0E, reserved) # reserved sectors
@@ -61,10 +63,10 @@ def create_fat32(path, size_mb, label):
     struct.pack_into("<H", bpb, 0x13, 0)        # total sectors 16-bit (0 for FAT32)
     bpb[0x15] = 0xF8                            # media descriptor (hard disk)
     struct.pack_into("<H", bpb, 0x16, 0)        # FAT size 16 (0 for FAT32)
-    struct.pack_into("<H", bpb, 0x18, 0)        # sectors per track
-    struct.pack_into("<H", bpb, 0x1A, 0)        # heads
-    struct.pack_into("<I", bpb, 0x1C, 0)        # hidden sectors
-    struct.pack_into("<I", bpb, 0x20, total_sectors)  # total sectors 32-bit
+    struct.pack_into("<H", bpb, 0x18, 63)       # sectors per track (CHS dummy)
+    struct.pack_into("<H", bpb, 0x1A, 255)      # heads
+    struct.pack_into("<I", bpb, 0x1C, part_lba) # hidden sectors (= LBA start)
+    struct.pack_into("<I", bpb, 0x20, part_sectors)  # total sectors na particao
     struct.pack_into("<I", bpb, 0x24, fat_sectors)    # FAT size 32
     bpb[0x28] = 0                                # extended flags
     bpb[0x29] = 0                                # FS version
@@ -81,7 +83,7 @@ def create_fat32(path, size_mb, label):
     bpb[0x52:0x52+8] = b'FAT32   '
     bpb[0x1FE], bpb[0x1FF] = 0x55, 0xAA
     with open(path, "r+b") as f:
-        f.seek(2048 * 512)
+        f.seek(part_lba * 512)
         f.write(bpb)
         # FSInfo sector
         fsinfo = bytearray(512)
@@ -91,9 +93,13 @@ def create_fat32(path, size_mb, label):
         struct.pack_into("<I", fsinfo, 492, total_clusters - 1)
         struct.pack_into("<I", fsinfo, 508, 0xAA550000)
         f.write(fsinfo)
+        # Backup boot + FSInfo (@ reserved sectors 6 and 7)
+        f.seek((part_lba + 6) * 512)
+        f.write(bpb)
+        f.write(fsinfo)
         # Zero FAT tables
         for i in range(fat_count):
-            f.seek((2048 + reserved + i * fat_sectors) * 512)
+            f.seek((part_lba + reserved + i * fat_sectors) * 512)
             fat = bytearray(fat_sectors * 512)
             # FAT[0] = media descriptor + dirty flags
             struct.pack_into("<I", fat, 0, 0x0FFFFF8)
@@ -102,10 +108,9 @@ def create_fat32(path, size_mb, label):
             struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
             f.write(fat)
         # Zero root directory cluster (cluster 2)
-        root_lba = 2048 + data_start + (2 - 2) * spc
+        root_lba = part_lba + data_start + (2 - 2) * spc
         f.seek(root_lba * 512)
         f.write(b'\x00' * spc * bps)
-        # Zero FSInfo backup
         print(f"[OK] {path}: {size_mb}MB, {total_clusters} clusters, FAT {fat_sectors}s x {fat_count}")
 
 def populate(path):
@@ -128,23 +133,121 @@ def populate(path):
         ("MICRO.BIN", find_file("MICRO.BITNET")),
     ]
     # SKIP_2B removido: com imagem 512MB+ e pendrive 32GB, sempre inclui se existir
-    # Firmware blobs (todos os grupos)
+    # Firmware blobs — política FAT (GSP dezenas de MB; não embutir catálogo inteiro).
+    # FW_FAT_CHIPS=gp108,skl,kbl,green_sardine  (default)
+    # Opt-in GSP: FW_FAT_CHIPS=...,tu102,ad102,ga102
+    # FW_FAT_CHIPS=all → legado (tudo em firmware/)
     fw_root = os.path.join(ROOT, "firmware")
-    if os.path.isdir(fw_root):
-        for root, dirs, fnames in os.walk(fw_root):
+    fat_chips = os.environ.get("FW_FAT_CHIPS", "gp108,skl,kbl,green_sardine").strip().lower()
+    chip_allow = {c.strip() for c in fat_chips.split(",") if c.strip()} if fat_chips != "all" else None
+    # Mapa chip → substrings no path relativo (posix)
+    chip_paths = {
+        "gp108": ("nvidia/gp108/",),
+        "tu102": ("nvidia/tu102/",),
+        "tu106": ("nvidia/tu106/",),
+        "ad102": ("nvidia/ad102/",),
+        "ga102": ("nvidia/ga102/",),
+        "green_sardine": ("amdgpu/green_sardine_",),
+        "raphael": ("amdgpu/gc_10_3_6_", "amdgpu/psp_13_0_5_", "amdgpu/sdma_5_2_6"),
+        "gc_11_5_0": ("amdgpu/gc_11_5_0_",),
+        "skl": ("i915/skl_",),
+        "kbl": ("i915/kbl_",),
+        "dg2": ("i915/dg2_",),
+        "xe": ("xe/",),
+        # WiFi/NIC legado (se chip listado ou all)
+        "rtl_nic": ("rtl_nic/",),
+        "rtlwifi": ("rtlwifi/",),
+        "iwlwifi": ("intel/iwlwifi/",),
+    }
+
+    def fw_allowed(rel_posix: str) -> bool:
+        if chip_allow is None:
+            return True
+        # NIC/WiFi legado: sempre no FAT (não é GSP)
+        if rel_posix.startswith(("rtl_nic/", "rtlwifi/", "intel/iwlwifi/", "realtek/")):
+            return True
+        # GSP: opt-in explícito (dezenas de MB)
+        if "/gsp/" in rel_posix:
+            return bool(chip_allow & {"tu102", "ad102", "ga102", "tu106"})
+        for chip in chip_allow:
+            for prefix in chip_paths.get(chip, ()):
+                if rel_posix.startswith(prefix) or prefix.rstrip("_") in rel_posix:
+                    return True
+        return False
+
+    def collect_fw_from(fw_base: str, gsp_only: bool = False) -> None:
+        if not os.path.isdir(fw_base):
+            return
+        for root, dirs, fnames in os.walk(fw_base):
+            # Skip clone tree se existir sob target/firmware
+            dirs[:] = [d for d in dirs if d != "linux-firmware"]
             for name in fnames:
                 ext = os.path.splitext(name)[1].lower()
-                if ext not in (".bin", ".fw", ".ucode"): continue
-                rel = os.path.relpath(root, fw_root)
-                prefix = rel.upper().replace("\\", "_").replace("/", "_")
-                fw_path = os.path.join(root, name)
-                # NVIDIA GP108 mantém nome curto (FW_FECS_BL_BIN) p/ compatibilidade
-                if prefix == "NVIDIA_GP108":
-                    fw_name = "FW_" + name.upper().replace(".", "_")
+                if ext not in (".bin", ".fw", ".ucode"):
+                    continue
+                rel = os.path.relpath(root, fw_base)
+                if rel == ".":
+                    rel_posix = name
                 else:
-                    # .ucode → _UCODE no 8.3-ish FAT name
-                    fw_name = f"FW_{prefix}_{name.upper().replace('.', '_')}"
+                    rel_posix = rel.replace("\\", "/") + "/" + name
+                if gsp_only and "/gsp/" not in rel_posix:
+                    continue
+                if not fw_allowed(rel_posix):
+                    continue
+                prefix = "" if rel == "." else rel.upper().replace("\\", "_").replace("/", "_")
+                fw_path = os.path.join(root, name)
+                # NVIDIA GP108: nomes 8.3 reais (kernel Fat32Reader usa encode_83).
+                # Sem isso FW_FECS_BL_BIN vira "FW_FECS_BL_" e o ACR nunca acha o blob.
+                gp108_short = {
+                    "fecs_bl.bin": "FECS_BL.BIN",
+                    "fecs_data.bin": "FECS_DAT.BIN",
+                    "fecs_inst.bin": "FECS_INS.BIN",
+                    "fecs_sig.bin": "FECS_SIG.BIN",
+                    "gpccs_bl.bin": "GPCCS_BL.BIN",
+                    "gpccs_data.bin": "GPCCS_DA.BIN",
+                    "gpccs_inst.bin": "GPCCS_IN.BIN",
+                    "gpccs_sig.bin": "GPCCS_SI.BIN",
+                    "sw_ctx.bin": "SW_CTX.BIN",
+                    "sw_bundle_init.bin": "SW_BNDL.BIN",
+                    "sw_method_init.bin": "SW_MTHD.BIN",
+                    "sw_nonctx.bin": "SW_NONC.BIN",
+                    "bl.bin": "ACR_BL.BIN",
+                    "ucode_load.bin": "ACRLOAD.BIN",
+                    "ucode_unload.bin": "ACRUNLD.BIN",
+                    "unload_bl.bin": "ACR_UBL.BIN",
+                }
+                lname = name.lower()
+                if ("nvidia" in prefix.lower() and "gp108" in prefix.lower()) or prefix in (
+                    "NVIDIA_GP108",
+                    "NVIDIA_GP108_GR",
+                    "NVIDIA_GP108_ACR",
+                ):
+                    if lname in gp108_short:
+                        fw_name = gp108_short[lname]
+                    elif prefix in ("NVIDIA_GP108",):
+                        fw_name = "FW_" + name.upper().replace(".", "_")
+                    else:
+                        fw_name = "FW_GP108_" + name.upper().replace(".", "_")
+                elif prefix in ("NVIDIA_GP108",):
+                    fw_name = "FW_" + name.upper().replace(".", "_")
+                elif prefix.startswith("NVIDIA_GP108"):
+                    fw_name = "FW_GP108_" + name.upper().replace(".", "_")
+                else:
+                    fw_name = (
+                        f"FW_{prefix}_{name.upper().replace('.', '_')}"
+                        if prefix
+                        else f"FW_{name.upper().replace('.', '_')}"
+                    )
+                # Evita duplicar se já coletado de firmware/
+                if any(existing[0] == fw_name for existing in files):
+                    continue
                 files.append((fw_name, fw_path))
+
+    # Catálogo repo (sem GSP — gitignore)
+    collect_fw_from(fw_root, gsp_only=False)
+    # GSP só em target/firmware; embute no FAT apenas com FW_FAT_CHIPS opt-in
+    if chip_allow is None or (chip_allow & {"tu102", "ad102", "ga102", "tu106"}):
+        collect_fw_from(os.path.join(ROOT, "target", "firmware"), gsp_only=True)
     # CONFIG.TXT — BOOT_MODE via env ou inferido do path (passado por populate caller)
     boot_mode = os.environ.get("BOOT_MODE", "hw").strip().lower()
     if boot_mode not in ("qemu", "hw"):
@@ -154,6 +257,13 @@ def populate(path):
         f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\nLOG_TO_FAT32=1\n"
     ).encode()
     files.append(("CONFIG.TXT", config_content))
+    # BOOT.LOG pré-alocado (256 KiB): kernel fat-boot-log sobrescreve via USB-MSC/ATA
+    # sem alocar clusters no boot (notebooks sem serial).
+    boot_log = (
+        b"[S] neural-os-core BOOT.LOG placeholder - rewritten at runtime\n"
+        + b"\x00" * (256 * 1024 - 64)
+    )
+    files.append(("BOOT.LOG", boot_log[: 256 * 1024]))
 
     with open(path, "r+b") as f:
         f.seek(2048 * 512)  # skip MBR + partition start

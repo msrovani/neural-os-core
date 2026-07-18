@@ -6,6 +6,6 @@ publish = false
 
 [build-dependencies]
 bootloader = "0.11"
-# fat-boot-log OFF: write B*.LOG no boot varre FAT inteira (PIO) e trava WHPX minutos.
-# Ative só para captura em disco sem serial: features = ["fat-boot-log"]
-neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none" }
+# fat-boot-log ON: grava BOOT.LOG (8.3 pré-alocado) no FAT32 do pendrive — notebooks sem COM.
+# Sobrescrita via USB-MSC/ATA (sem alocar clusters novos). Em QEMU/WHPX o flush é rate-limited.
+neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none", features = ["fat-boot-log"] }
