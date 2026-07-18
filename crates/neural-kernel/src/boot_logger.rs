@@ -71,6 +71,8 @@ static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
 const FLUSH_EVERY: usize = 8;
 
 fn buffer_log(msg: &str) {
+    // Espelho físico → soft-reboot UEFI grava BOOT.LOG sem USB-MSC.
+    k_nano::boot_ramlog::append(msg);
     if !HEAP_READY.load(Ordering::Relaxed) {
         return;
     }
@@ -289,14 +291,18 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
     let ok = if let Some(d) = dev {
         unsafe { overwrite_boot_log(d, &content) }
     } else {
-        // Tenta USB depois ATA
+        // try_lock: evita deadlock se o caller já segura USB_MSC/ATA_DRIVER.
         let mut ok = false;
-        if let Some(ref mut msc) = *crate::USB_MSC.lock() {
-            ok = unsafe { overwrite_boot_log(msc, &content) };
+        if let Some(mut g) = crate::USB_MSC.try_lock() {
+            if let Some(ref mut msc) = *g {
+                ok = unsafe { overwrite_boot_log(msc, &content) };
+            }
         }
         if !ok {
-            if let Some(ref mut ata) = *crate::ATA_DRIVER.lock() {
-                ok = unsafe { overwrite_boot_log(ata, &content) };
+            if let Some(mut g) = crate::ATA_DRIVER.try_lock() {
+                if let Some(ref mut ata) = *g {
+                    ok = unsafe { overwrite_boot_log(ata, &content) };
+                }
             }
         }
         ok
@@ -323,25 +329,21 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
             // AtaDriver: precisamos &mut — try via global
             let _ = a;
             let ok = persist_now(None);
-            crate::serial_println!(
-                "[LOG] BOOT.LOG persist ATA/USB={} writes={}",
+            k_nano::slog_bin!("LOG", "info", "BOOT.LOG persist ATA/USB={} writes={}",
                 ok,
-                DISK_WRITES.load(Ordering::Relaxed)
-            );
+                DISK_WRITES.load(Ordering::Relaxed));
             if !ok {
-                crate::serial_println!("[LOG] WARN: BOOT.LOG nao gravado — confira FAT32 no stick");
+                k_nano::slog_bin!("LOG", "info", "WARN: BOOT.LOG nao gravado — confira FAT32 no stick");
             }
         } else {
             let ok = persist_now(None);
-            crate::serial_println!("[LOG] BOOT.LOG persist (no ATA arg) ok={}", ok);
+            k_nano::slog_bin!("LOG", "info", "BOOT.LOG persist (no ATA arg) ok={}", ok);
         }
     }
     #[cfg(not(feature = "fat-boot-log"))]
     {
         let _ = ata;
-        crate::serial_println!(
-            "[LOG] SKIP fat session write (enable feature fat-boot-log to persist)"
-        );
+        k_nano::slog_bin!("LOG", "info", "SKIP fat session write (enable feature fat-boot-log to persist)");
         FAT_READY.store(false, Ordering::Relaxed);
     }
 }
@@ -352,21 +354,22 @@ pub fn init_after_usb() {
     {
         log("BOOT: fat-boot-log init_after_usb");
         let ok = persist_now(None);
-        crate::serial_println!(
-            "[LOG] init_after_usb BOOT.LOG ok={} (procure BOOT.LOG na raiz FAT32)",
-            ok
-        );
+        k_nano::slog_bin!("LOG", "info", "init_after_usb BOOT.LOG ok={} (procure BOOT.LOG na raiz FAT32)", ok);
+        // NÃO boot_splash aqui — limpar a tela no meio do boot causa “ghost” com logs.
         if ok {
-            // Splash hint se FB vivo
-            crate::display::fb::boot_splash("LOG->BOOT.LOG on USB FAT32 (assign drive letter)");
+            crate::display::fb::console_print("LOG: BOOT.LOG ok (FAT32 stick)");
         }
     }
 }
 
 /// Registra mensagem. Com fat-boot-log: buffer + flush a cada FLUSH_EVERY msgs.
 pub fn log(msg: &str) {
-    crate::serial_println!("[LOG] {}", msg);
+    k_nano::slog_bin!("LOG", "info", "{}", msg);
+    log_quiet(msg);
+}
 
+/// Buffer/persist sem eco no serial/FB (evita triplicar linhas de BOOT_PHASE).
+pub fn log_quiet(msg: &str) {
     if !HEAP_READY.load(Ordering::Relaxed) {
         return;
     }
@@ -376,7 +379,6 @@ pub fn log(msg: &str) {
         #[cfg(feature = "fat-boot-log")]
         {
             let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
-            // Tentativa oportunista só de N em N (FAT walk + USB write é caro).
             if n >= FLUSH_EVERY {
                 let _ = persist_now(None);
             }
@@ -384,18 +386,9 @@ pub fn log(msg: &str) {
         return;
     }
 
-    let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
-    let mut sb = StackBuf::new();
-    let _ = write!(sb, "[T+{}] {}\n", tick, msg);
-    {
-        let mut body = SESSION_BODY.lock();
-        if body.len() + sb.pos < BOOT_LOG_CAP - 64 {
-            body.extend_from_slice(sb.as_str().as_bytes());
-        }
-    }
-
     #[cfg(feature = "fat-boot-log")]
     {
+        buffer_log(msg);
         let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
         if n >= FLUSH_EVERY {
             let _ = persist_now(None);
@@ -408,11 +401,53 @@ pub fn flush() {
     #[cfg(feature = "fat-boot-log")]
     {
         let ok = persist_now(None);
-        crate::serial_println!(
-            "[LOG] flush BOOT.LOG ok={} bytes~{}",
+        k_nano::slog_bin!("LOG", "info", "flush BOOT.LOG ok={} bytes~{}",
             ok,
-            build_session_bytes().len()
-        );
+            build_session_bytes().len());
+    }
+}
+
+/// Se USB-MSC/ATA falhou: pausa 60s com ultimo Kxx na tela (foto!), depois soft-reboot
+/// para o bootloader tentar gravar BOOT.LOG (RAM @ 256MiB + CRC).
+pub fn maybe_uefi_flush_reboot(reason: &str) {
+    #[cfg(feature = "fat-boot-log")]
+    {
+        if FAT_READY.load(Ordering::Relaxed) {
+            return;
+        }
+        if k_nano::boot_ramlog::skip_flush_reboot() {
+            return;
+        }
+        let content = build_session_bytes();
+        let s = core::str::from_utf8(&content).unwrap_or(reason);
+        for line in s.lines().take(200) {
+            k_nano::boot_ramlog::append(line);
+        }
+        let k = k_nano::boot_ramlog::last_ckpt();
+        k_nano::slog_bin!("RAMLOG", "info", "FOTO AGORA ultimo=K{} — soft-reboot em 60s ({})",
+            k,
+            reason);
+        // 60s visíveis: note sem serial — usuario tira foto do ultimo Kxx.
+        for sec in (0..60u32).rev() {
+            let mut line = [0u8; 72];
+            let msg = alloc::format!(">>> FOTO! ultimo=K{}  reboot LOG {}s <<<", k, sec);
+            let b = msg.as_bytes();
+            let n = b.len().min(line.len());
+            line[..n].copy_from_slice(&b[..n]);
+            if let Ok(t) = core::str::from_utf8(&line[..n]) {
+                crate::display::fb::console_print(t);
+            }
+            // ~1s busy-wait (sem timer confiavel em todos HW neste ponto)
+            for _ in 0..80_000_000 {
+                core::hint::spin_loop();
+            }
+        }
+        crate::display::fb::console_print(">>> soft-reboot gravando BOOT.LOG...");
+        k_nano::boot_ramlog::maybe_flush_reboot(reason);
+    }
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        let _ = reason;
     }
 }
 

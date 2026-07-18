@@ -14,7 +14,7 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use crate::cortex;
 use crate::hermes::{self, IntentCache, WorkflowEngine};
 use crate::conversation;
-use crate::{serial_println, println, kjson};
+use crate::{println, kjson};
 use crate::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
             CONVERSATION_TRACKER, PENDING_SKILL, TRINITY};
 
@@ -42,8 +42,8 @@ impl Agent for MonitorAgent {
         if self.done { return AgentTickResult::Done; }
         let event = Event { id: 0, topic: String::from("SYSTEM_READY"), payload: vec![1, 2, 3], token: CapabilityToken::Legacy(1) };
         match EVENT_BUS.publish(event) {
-            Ok(()) => { serial_println!("[MONITOR] Evento SYSTEM_READY publicado."); }
-            Err(e) => { serial_println!("[MONITOR] Falha: {}", e); }
+            Ok(()) => { k_nano::slog_bin!("Agent", "monitor", "Evento SYSTEM_READY publicado."); }
+            Err(e) => { k_nano::slog_bin!("Agent", "monitor", "Falha: {}", e); }
         }
         self.done = true;
         AgentTickResult::Done
@@ -106,7 +106,7 @@ impl Agent for ConsoleAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
             let text = core::str::from_utf8(&event.payload).unwrap_or("(bytes)");
-            serial_println!("[Hermes] {}", text);
+            k_nano::slog_hermes!("Hermes", "info", "{}", text);
         }
         AgentTickResult::Pending
     }
@@ -173,7 +173,7 @@ impl InputAgent {
             0x1C => {
                 let text = core::mem::take(&mut self.buffer);
                 if !text.is_empty() {
-                    serial_println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
+                    k_nano::slog_bin!("Input", "info", "ENTER — USER_INTENT: \"{}\"", text);
                     println!("[INPUT] ENTER — USER_INTENT: \"{}\"", text);
                     let _ = EVENT_BUS.publish(Event {
                         id: 0, topic: String::from("USER_INTENT"),
@@ -194,11 +194,11 @@ impl InputAgent {
     fn handle_cad(&self) {
         crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
         crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
-        serial_println!("[SYS] Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
+        k_nano::slog_bin!("Sys", "info", "Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
         let log = crate::serial::BOOT_LOG.lock();
         let dump = log.dump();
         if !dump.is_empty() {
-            serial_println!("[SYS] Log: {} bytes capturados.", dump.len());
+            k_nano::slog_bin!("Sys", "info", "Log: {} bytes capturados.", dump.len());
             // Write log to SDHC via ATA
             let ata = crate::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata {
@@ -206,15 +206,15 @@ impl InputAgent {
                     let mut sector = [0u8; 512];
                     sector[..dump.len()].copy_from_slice(dump);
                     if unsafe { ata.write_sectors(crate::LOG_SECTOR, &sector, 1) } {
-                        serial_println!("[SYS] Log escrito no setor LBA {} (512 bytes).", crate::LOG_SECTOR);
-                    } else { serial_println!("[SYS] Falha ao escrever log no SDHC."); }
+                        k_nano::slog_bin!("Sys", "info", "Log escrito no setor LBA {} (512 bytes).", crate::LOG_SECTOR);
+                    } else { k_nano::slog_bin!("Sys", "info", "Falha ao escrever log no SDHC."); }
                 } else {
-                    serial_println!("[SYS] Log grande demais para 1 setor (512B). Usar serial.");
+                    k_nano::slog_bin!("Sys", "info", "Log grande demais para 1 setor (512B). Usar serial.");
                 }
-            } else { serial_println!("[SYS] ATA nao disponivel. Log nao salvo."); }
+            } else { k_nano::slog_bin!("Sys", "info", "ATA nao disponivel. Log nao salvo."); }
         }
         drop(log);
-        serial_println!("[SYS] Power off via PS/2 reset...");
+        k_nano::slog_bin!("Sys", "info", "Power off via PS/2 reset...");
         unsafe {
             core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8, options(nostack, preserves_flags));
         }
@@ -268,7 +268,7 @@ pub struct CortexAgent {
 impl CortexAgent {
     pub fn new() -> Self {
         // Modelo real só após load (ramdisk/FAT32/QEMU loader) — não declarar aqui
-        serial_println!("[CORTEX-LLM] CortexAgent ativo; aguardando load do modelo.");
+        k_nano::slog_cortex!("LLM", "info", "CortexAgent ativo; aguardando load do modelo.");
         CortexAgent { receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_REQUEST) }
     }
 }
@@ -278,18 +278,18 @@ impl Agent for CortexAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if let Some(event) = self.receiver.try_receive() {
             let user_text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[CORTEX-LLM] Generating for: \"{}\"", user_text);
-            let system_prompt = SKILL_STORAGE.lock().build_system_prompt();
+            k_nano::slog_cortex!("LLM", "info", "Generating for: \"{}\"", user_text);
+            let system_prompt = SKILL_STORAGE.lock().build_system_prompt_for(user_text);
             let full_prompt = alloc::format!("{}. PERGUNTA: {}", system_prompt, user_text);
-            serial_println!("[CORTEX-LLM] Calling generate_via_model...");
+            k_nano::slog_cortex!("LLM", "info", "Calling generate_via_model...");
             let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let output = crate::cortex::generate_via_model(&full_prompt);
             let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            serial_println!("[CORTEX-LLM] generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
+            k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
                 alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
             } else { output };
-            serial_println!("[CORTEX-LLM] Generated: \"{}\"", output);
+            k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
                 payload: output.into_bytes(), token: CapabilityToken::Legacy(1),
@@ -322,6 +322,8 @@ pub struct HermesAgent {
     llm_receiver: Receiver,
     security_receiver: Receiver,
     health_receiver: Receiver,
+    pnp_receiver: Receiver,
+    cap_receiver: Receiver,
     latent_receiver: LatentReceiver,
     latent_recv_total: u64,
     cortex: crate::cortex::Cortex,
@@ -353,6 +355,8 @@ impl HermesAgent {
             llm_receiver: EVENT_BUS.subscribe(cortex::TOPIC_LLM_RESPONSE),
             security_receiver: EVENT_BUS.subscribe("SECURITY_ALERT"),
             health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
+            pnp_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_PNP_ACTION),
+            cap_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_CAPABILITY),
             latent_receiver: crate::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
             latent_recv_total: 0,
             cortex: crate::cortex::Cortex::new(),
@@ -379,7 +383,7 @@ impl HermesAgent {
     }
 
     fn log_phase(&self, phase: crate::hermes::ReActPhase, detail: &str) {
-        serial_println!("[HERMES] {} — {}", phase.label(), detail);
+        k_nano::slog_hermes!("Hermes", "info", "{} — {}", phase.label(), detail);
     }
 
     fn show_sdd(&self, goal: &str) {
@@ -392,7 +396,7 @@ impl HermesAgent {
             "Comando processado com sucesso",
             "Nada a reverter — comando não destrutivo",
         );
-        serial_println!("{}", sdd.display());
+        k_nano::slog_bin!("Log", "msg", "{}", sdd.display());
     }
 
     fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
@@ -446,7 +450,7 @@ impl Agent for HermesAgent {
         // #180: Greeting no primeiro boot
         if !self.boot_greeted {
             let greeting = crate::hermes::hermes_greeting();
-            serial_println!("{}", greeting);
+            k_nano::slog_bin!("Log", "msg", "{}", greeting);
             println!("{}", greeting);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
@@ -457,15 +461,16 @@ impl Agent for HermesAgent {
             self.boot_greeted = true;
         }
 
-        // ADR-0047: drain LatentBus thoughts (non-fatal)
+        // ADR-0047: drain LatentBus → cognitive_bridge (prompt Cortex)
         while let Some(pkt) = self.latent_receiver.try_receive() {
             self.latent_recv_total = self.latent_recv_total.saturating_add(1);
             let norm = f32::from_bits(pkt.norm_bits);
+            hermes_crate::cognitive_bridge::note_latent(&alloc::format!(
+                "thought#{} n={:.2}",
+                pkt.id, norm
+            ));
             if self.latent_recv_total <= 3 || self.latent_recv_total % 32 == 0 {
-                serial_println!(
-                    "[HERMES-LATENT] recv id={} norm={:.3} total={}",
-                    pkt.id, norm, self.latent_recv_total
-                );
+                k_nano::slog_bin!("HERMES", "LATENT", "recv id={} norm={:.3} total={}", pkt.id, norm, self.latent_recv_total);
             }
         }
 
@@ -482,8 +487,7 @@ impl Agent for HermesAgent {
 
         // Métricas críticas só reportam se houver anomalia
         if !self.consciousness.critical_metrics().is_empty() {
-            serial_println!("[HERMES] Metricas criticas: {:?}",
-                self.consciousness.critical_metrics());
+            k_nano::slog_hermes!("Hermes", "info", "Metricas criticas: {:?}", self.consciousness.critical_metrics());
             let _ = log_analyst_agent::write_log("hermes",
                 &alloc::format!("Metricas criticas: {:?}", self.consciousness.critical_metrics()));
         }
@@ -491,7 +495,7 @@ impl Agent for HermesAgent {
         // Self-Improvement Loop: periódico — Sprint 108 fecha Create/Improve/Verify
         if !self.sil.is_active() && _tick % 1000 == 0 {
             if self.sil.start(_tick) {
-                serial_println!("[S108-SIL] start Research @ tick {}", _tick);
+                k_nano::slog_bin!("S108", "SIL", "start Research @ tick {}", _tick);
             }
         }
         if self.sil.needs_research() {
@@ -506,33 +510,33 @@ impl Agent for HermesAgent {
             let mut storage = SKILL_STORAGE.lock();
             let n = crate::self_evolve::auto_generate_pending(&mut storage);
             drop(storage);
-            serial_println!("[S108-SIL] Create: {} skills", n);
+            k_nano::slog_bin!("S108", "SIL", "Create: {} skills", n);
             self.sil.advance(n > 0);
         }
         if self.sil.needs_improve() {
             let mut storage = SKILL_STORAGE.lock();
             let n = crate::self_evolve::improve_failed(&mut storage);
             drop(storage);
-            serial_println!("[S108-SIL] Improve: {} skills", n);
+            k_nano::slog_bin!("S108", "SIL", "Improve: {} skills", n);
             self.sil.advance(true); // ciclo avança; fila vazia = noop ok
         }
         if self.sil.needs_verify() {
             // Verificação: rejeições vs oks
             let (_g, ok, rej, _i, _r) = crate::self_evolve::counters();
             let pass = rej == 0 || ok >= rej;
-            serial_println!("[S108-SIL] Verify: ok={} rej={} pass={}", ok, rej, pass);
+            k_nano::slog_bin!("S108", "SIL", "Verify: ok={} rej={} pass={}", ok, rej, pass);
             self.sil.advance(pass);
             if pass {
-                serial_println!("{}", crate::self_evolve::status_line());
+                k_nano::slog_bin!("Log", "msg", "{}", crate::self_evolve::status_line());
             }
         }
 
         // Consciousness report periódico
         if _tick > 0 && _tick % 2000 == 0 {
             let report = self.consciousness.report();
-            serial_println!("{}", report);
+            k_nano::slog_bin!("Log", "msg", "{}", report);
             log_analyst_agent::write_log("consciousness", &report);
-            serial_println!("{}", crate::self_evolve::status_line());
+            k_nano::slog_bin!("Log", "msg", "{}", crate::self_evolve::status_line());
         }
 
         // ── Processamento de eventos (o trabalho real) ──
@@ -549,11 +553,11 @@ impl Agent for HermesAgent {
                 if self.workflow_engine.is_active() {
                     let done = self.workflow_engine.advance(true);
                     if done {
-                        serial_println!("[WORKFLOW] LLM workflow completo.");
+                        k_nano::slog_bin!("Workflow", "info", "LLM workflow completo.");
                     }
                 }
                 let text = core::str::from_utf8(&event.payload).unwrap_or("");
-                serial_println!("[CORTEX-LLM] Resposta: \"{}\"", text);
+                k_nano::slog_cortex!("LLM", "info", "Resposta: \"{}\"", text);
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 let pending = PENDING_SKILL.lock().take();
                 if let Some((name, _desc)) = pending {
@@ -563,7 +567,7 @@ impl Agent for HermesAgent {
                             let mut storage = SKILL_STORAGE.lock();
                             match crate::self_evolve::verify_and_register(&mut storage, text) {
                                 Ok(n) => {
-                                    serial_println!("[SKILL-LLM] Skill '{}' gerada+verified ({} bytes)", n, text.len());
+                                    k_nano::slog_bin!("Skill", "llm", "Skill '{}' gerada+verified ({} bytes)", n, text.len());
                                     responded = alloc::format!("[Hermes] Skill '{}' criada via LLM!", n);
                                     if self.sil.needs_create() || self.sil.needs_verify() {
                                         self.sil.advance(true);
@@ -588,6 +592,7 @@ impl Agent for HermesAgent {
                 } else {
                     EVENT_LOG.lock().push(conversation::EventKind::HermesResponse, event.payload.clone(), now);
                     CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
+                    hermes_crate::cognitive_bridge::after_exchange("(LLM)", text, now);
                     responded = alloc::format!("[Hermes] {}", text);
                 }
             }
@@ -597,7 +602,7 @@ impl Agent for HermesAgent {
         if let Some(event) = self.security_receiver.try_receive() {
             had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[SECURITY] {}", text);
+            k_nano::slog_bin!("Sec", "info", "{}", text);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
                 payload: text.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
@@ -608,7 +613,7 @@ impl Agent for HermesAgent {
         if let Some(event) = self.health_receiver.try_receive() {
             had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[HEALTH] {}", text);
+            k_nano::slog_bin!("Health", "info", "{}", text);
             // Health issues viram intent para o LLM resolver
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: String::from(hermes::TOPIC_USER_INTENT),
@@ -617,14 +622,74 @@ impl Agent for HermesAgent {
             });
         }
 
+        // HW plug-and-play agentico: card completo → Hermes decide → efêmera → WASM
+        while let Some(event) = self.cap_receiver.try_receive() {
+            had_work = true;
+            let text = core::str::from_utf8(&event.payload).unwrap_or("");
+            let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+            let d = crate::hw_pnp::hermes_decide_card(text, now);
+            k_nano::slog_bin!("Log", "msg", "{}", d.ack);
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                payload: d.ack.as_bytes().to_vec(),
+                token: CapabilityToken::Legacy(1),
+            });
+            if let Some(md) = d.auto_skill_md.as_ref() {
+                // Promote → PackageHub (HITL se unsigned)
+                let hub = crate::package_hub::PACKAGE_HUB.lock();
+                if let Ok((level, op)) = hub.stage_create(
+                    crate::package_hub::PackageKind::Skill,
+                    &d.skill_key,
+                    md,
+                    "auto-skill S108 / hw_pnp",
+                ) {
+                    drop(hub);
+                    let id = crate::APPROVAL_GATE.lock().request(
+                        &d.skill_key,
+                        "hw_pnp",
+                        "CREATE skill auto",
+                        level,
+                    );
+                    crate::package_hub::PACKAGE_HUB.lock().bind_pending(id, op);
+                    k_nano::slog_bin!("PnP", "info", "auto SKILL.md '{}' → pending #{} ({})",
+                        d.skill_key,
+                        id,
+                        level.name());
+                } else {
+                    drop(hub);
+                    let mut storage = SKILL_STORAGE.lock();
+                    match crate::self_evolve::verify_and_register(&mut storage, md) {
+                        Ok(n) => k_nano::slog_bin!("PnP", "info", "auto SKILL.md '{}'", n),
+                        Err(e) => k_nano::slog_bin!("PnP", "info", "auto SKILL.md skip: {}", e),
+                    }
+                }
+            }
+            if let Some(intent) = d.user_intent {
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(hermes::TOPIC_USER_INTENT),
+                    payload: intent.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+            }
+        }
+
+        // HW_PNP_ACTION: hint curto já coberto pelo card — drena sem recontar SkillOpt.
+        while let Some(event) = self.pnp_receiver.try_receive() {
+            had_work = true;
+            let text = core::str::from_utf8(&event.payload).unwrap_or("");
+            k_nano::slog_bin!("HERMES", "PnP", "hint-wire {}", text);
+        }
+
         // Sprint 78: WorkflowEngine — se workflow ativo, avança fases
         if self.workflow_engine.is_active() {
             had_work = true;
             let phase = self.workflow_engine.phase.clone();
-            serial_println!("[WORKFLOW] Fase: {:?}", phase);
+            k_nano::slog_bin!("Workflow", "info", "Fase: {:?}", phase);
             let done = self.workflow_engine.advance(true);
             if done {
-                serial_println!("[WORKFLOW] Completo.");
+                k_nano::slog_bin!("Workflow", "info", "Completo.");
                 responded = String::from("[Hermes] Workflow concluído.");
             } else {
                 responded = alloc::format!("[Hermes] Workflow → {:?}", self.workflow_engine.phase);
@@ -635,7 +700,7 @@ impl Agent for HermesAgent {
         if let Some(event) = self.user_receiver.try_receive() {
             had_work = true;
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[CORTEX] Texto: \"{}\"", text);
+            k_nano::slog_bin!("CORTEX", "info", "Texto: \"{}\"", text);
             println!("[CORTEX] Texto: \"{}\"", text);
 
             // Sprint 108: observar intent para auto-skill
@@ -674,6 +739,30 @@ impl Agent for HermesAgent {
                 hermes::Command::Approve(_) => "Approve",
                 hermes::Command::Deny(_) => "Deny",
                 hermes::Command::PendingApprovals => "PendingApprovals",
+                hermes::Command::PkgCatalog => "PkgCatalog",
+                hermes::Command::PkgList(_) => "PkgList",
+                hermes::Command::PkgGet(_, _) => "PkgGet",
+                hermes::Command::PkgInstall(_, _, _) => "PkgInstall",
+                hermes::Command::PkgUpdate(_, _, _) => "PkgUpdate",
+                hermes::Command::PkgRm(_, _) => "PkgRm",
+                hermes::Command::SkillView(_) => "SkillView",
+                hermes::Command::Remember(_) => "Remember",
+                hermes::Command::Soul(_) => "Soul",
+                hermes::Command::Persona(_) => "Persona",
+                hermes::Command::MemoryShow => "MemoryShow",
+                hermes::Command::SessionSearch(_) => "SessionSearch",
+                hermes::Command::Budget(_) => "Budget",
+                hermes::Command::CogStatus => "CogStatus",
+                hermes::Command::MarketList => "MarketList",
+                hermes::Command::MarketSearch(_) => "MarketSearch",
+                hermes::Command::MarketInstall(_, _, _) => "MarketInstall",
+                hermes::Command::MarketPromote(_) => "MarketPromote",
+                hermes::Command::MarketRemove(_, _) => "MarketRemove",
+                hermes::Command::MarketFetch(_, _, _) => "MarketFetch",
+                hermes::Command::MarketIndex => "MarketIndex",
+                hermes::Command::Mcp(_) => "Mcp",
+                hermes::Command::UiMode(_) => "UiMode",
+                hermes::Command::Commands => "Commands",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
             };
@@ -682,18 +771,18 @@ impl Agent for HermesAgent {
                 confidence: 0.92,
                 alternatives: Vec::new(),
             };
-            serial_println!("{}", intent_info.display());
+            k_nano::slog_bin!("Log", "msg", "{}", intent_info.display());
             self.show_sdd(intent_name);
 
             // #191: Council deliberation para comandos ambíguos (ex: Chat)
             if matches!(cmd, hermes::Command::Chat(_)) {
                 let (opt, skep, prag) = crate::hermes::council_deliberate(text);
-                serial_println!("{}", crate::hermes::council_display(&opt, &skep, &prag));
+                k_nano::slog_bin!("Log", "msg", "{}", crate::hermes::council_display(&opt, &skep, &prag));
             }
 
             // #193: Bitter Pill check
             if let Some(reason) = crate::hermes::check_bitter_pill(text) {
-                serial_println!("[HERMES] 🛑 Bitter Pill: {}", reason);
+                k_nano::slog_hermes!("Hermes", "info", "🛑 Bitter Pill: {}", reason);
                 let _ = EVENT_BUS.publish(Event {
                     id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
                     payload: alloc::format!("[Hermes] 🛑 Não posso pular: {}", reason).into_bytes(),
@@ -800,14 +889,52 @@ impl Agent for HermesAgent {
                     alloc::format!("Trust revogado: token {} -> skill '{}'", token, skill)
                 }
                 hermes::Command::Approve(id) => {
-                    if crate::APPROVAL_GATE.lock().resolve(id, true) {
-                        alloc::format!("Requisicao #{} aprovada.", id)
-                    } else {
+                    let skill_name = {
+                        let gate = crate::APPROVAL_GATE.lock();
+                        gate.pending()
+                            .iter()
+                            .find(|r| r.id == id)
+                            .map(|r| r.skill.clone())
+                    };
+                    let gate_ok = crate::APPROVAL_GATE.lock().resolve(id, true);
+                    if !gate_ok {
                         alloc::format!("Requisicao #{} nao encontrada ou ja resolvida.", id)
+                    } else {
+                        let now = crate::interrupts::TIMER_TICKS
+                            .load(core::sync::atomic::Ordering::Relaxed)
+                            as u64;
+                        if skill_name.as_deref() == Some("llm_generate") {
+                            hermes_crate::cognitive_bridge::grant_llm_after_approve(1, now);
+                            alloc::format!(
+                                "Requisicao #{} aprovada. [TRUST] llm_generate OK — reenvie o chat",
+                                id
+                            )
+                        } else {
+                            let mut hub = crate::package_hub::PACKAGE_HUB.lock();
+                            match hub.apply_approved(id) {
+                                Ok(out) => {
+                                    if let Some(md) = out.skill_md.as_ref() {
+                                        let mut storage = SKILL_STORAGE.lock();
+                                        let _ =
+                                            crate::self_evolve::verify_and_register(&mut storage, md);
+                                    }
+                                    if let Some(n) = out.remove_skill.as_ref() {
+                                        let _ = SKILL_STORAGE.lock().remove_skill(n);
+                                    }
+                                    alloc::format!(
+                                        "Requisicao #{} aprovada. [PKG] {}",
+                                        id, out.message
+                                    )
+                                }
+                                Err(_) => alloc::format!("Requisicao #{} aprovada.", id),
+                            }
+                        }
                     }
                 }
                 hermes::Command::Deny(id) => {
-                    if crate::APPROVAL_GATE.lock().resolve(id, false) {
+                    let gate_ok = crate::APPROVAL_GATE.lock().resolve(id, false);
+                    let _ = crate::package_hub::PACKAGE_HUB.lock().deny_pending(id);
+                    if gate_ok {
                         alloc::format!("Requisicao #{} negada.", id)
                     } else {
                         alloc::format!("Requisicao #{} nao encontrada ou ja resolvida.", id)
@@ -835,19 +962,244 @@ impl Agent for HermesAgent {
                         msg
                     }
                 }
-                hermes::Command::Help => {
-                    String::from("Comandos: /status, /echo <txt>, /hw, /netdiag, /usage, /conv, /ping <ip>, /fetch <url>, /model <path|http://ip:port/path>, /model-fetch <url> [DEST.GGUF], /trust allow <token> <skill>, /trust deny <token> <skill>, /show_skills, /add_skill <nome> <desc>, /rm_skill <name>, /reload_skills, /help")
+                hermes::Command::PkgCatalog => {
+                    crate::package_hub::PACKAGE_HUB.lock().catalog_for_cortex()
                 }
-                hermes::Command::ShowSkills => {
-                    let storage = SKILL_STORAGE.lock();
-                    let list = storage.list_skills();
-                    if list.is_empty() { String::from("Nenhuma skill carregada.") }
-                    else {
-                        let mut msg = alloc::format!("Skills ({}) carregadas:\n", list.len());
-                        for (i, (n, d, b)) in list.iter().enumerate() {
-                            msg.push_str(&alloc::format!("{}. {} - {} ({} bytes)\n", i+1, n, d, b));
+                hermes::Command::PkgList(ref kind_s) => {
+                    let kind = kind_s.as_ref().and_then(|s| crate::package_hub::PackageKind::from_str(s));
+                    let hub = crate::package_hub::PACKAGE_HUB.lock();
+                    let list = hub.list(kind);
+                    if list.is_empty() {
+                        String::from("[PKG] nenhum pacote")
+                    } else {
+                        let mut msg = alloc::format!("[PKG] {} pacote(s):\n", list.len());
+                        for p in list {
+                            msg.push_str(&alloc::format!(
+                                "  {} {} path={} signed={} purpose={}\n",
+                                p.kind.as_str(), p.name, p.path, p.signed, p.purpose
+                            ));
                         }
                         msg
+                    }
+                }
+                hermes::Command::PkgGet(ref kind_s, ref name) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => alloc::format!("[PKG] kind invalido: {}", kind_s),
+                        Some(kind) => {
+                            let hub = crate::package_hub::PACKAGE_HUB.lock();
+                            match hub.get(kind, name) {
+                                None => alloc::format!("[PKG] nao encontrado: {} {}", kind_s, name),
+                                Some(p) => alloc::format!(
+                                    "[PKG] {} '{}'\npath: {}\nsigned: {}\nhash: {}\ncaps: {}\npurpose: {}\n---\n{}",
+                                    p.kind.as_str(), p.name, p.path, p.signed, p.content_hash,
+                                    p.caps_hint, p.purpose, p.body
+                                ),
+                            }
+                        }
+                    }
+                }
+                hermes::Command::PkgInstall(ref kind_s, ref name, ref body) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => alloc::format!("[PKG] kind invalido: {}", kind_s),
+                        Some(kind) => {
+                            let body_owned = if body.trim().is_empty() && kind == crate::package_hub::PackageKind::Skill {
+                                crate::package_hub::minimal_skill_md(name, "installed via /pkg install")
+                            } else {
+                                body.clone()
+                            };
+                            let hub = crate::package_hub::PACKAGE_HUB.lock();
+                            match hub.stage_create(kind, name, &body_owned, "user /pkg install") {
+                                Err(e) => alloc::format!("[PKG] install recusado: {}", e),
+                                Ok((level, op)) => {
+                                    drop(hub);
+                                    let id = crate::APPROVAL_GATE.lock().request(
+                                        name, "package_hub",
+                                        &alloc::format!("CREATE {}", kind.as_str()),
+                                        level,
+                                    );
+                                    crate::package_hub::PACKAGE_HUB.lock().bind_pending(id, op);
+                                    alloc::format!(
+                                        "[PKG] CREATE {} '{}' pendente #{} nivel={} — /approve {} ou /deny {}",
+                                        kind.as_str(), name, id, level.name(), id, id
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                hermes::Command::PkgUpdate(ref kind_s, ref name, ref body) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => alloc::format!("[PKG] kind invalido: {}", kind_s),
+                        Some(kind) => {
+                            let hub = crate::package_hub::PACKAGE_HUB.lock();
+                            match hub.stage_update(kind, name, body) {
+                                Err(e) => alloc::format!("[PKG] update recusado: {}", e),
+                                Ok((level, op)) => {
+                                    drop(hub);
+                                    let id = crate::APPROVAL_GATE.lock().request(
+                                        name, "package_hub",
+                                        &alloc::format!("UPDATE {}", kind.as_str()),
+                                        level,
+                                    );
+                                    crate::package_hub::PACKAGE_HUB.lock().bind_pending(id, op);
+                                    alloc::format!(
+                                        "[PKG] UPDATE {} '{}' pendente #{} — /approve {}",
+                                        kind.as_str(), name, id, id
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                hermes::Command::PkgRm(ref kind_s, ref name) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => alloc::format!("[PKG] kind invalido: {}", kind_s),
+                        Some(kind) => {
+                            let hub = crate::package_hub::PACKAGE_HUB.lock();
+                            match hub.stage_delete(kind, name) {
+                                Err(e) => alloc::format!("[PKG] rm recusado: {}", e),
+                                Ok((level, op)) => {
+                                    drop(hub);
+                                    let id = crate::APPROVAL_GATE.lock().request(
+                                        name, "package_hub",
+                                        &alloc::format!("DELETE {}", kind.as_str()),
+                                        level,
+                                    );
+                                    crate::package_hub::PACKAGE_HUB.lock().bind_pending(id, op);
+                                    alloc::format!(
+                                        "[PKG] DELETE {} '{}' pendente #{} — /approve {}",
+                                        kind.as_str(), name, id, id
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                hermes::Command::Help => {
+                    String::from(
+                        "Comandos: /help /commands /ui jarbas|terminal | /skills /skill | \
+                         /remember /soul /persona /memory /search /budget /cog | \
+                         /market … /mcp /pkg /approve /deny /pending"
+                    )
+                }
+                hermes::Command::Commands => hermes_crate::hitl_ui::open_terminal_help(),
+                hermes::Command::UiMode(ref arg) => {
+                    if arg.trim().is_empty() {
+                        hermes_crate::hitl_ui::mode_status()
+                    } else {
+                        match hermes_crate::hitl_ui::set_mode_str(arg) {
+                            Ok(m) => alloc::format!(
+                                "[HITL] ui_mode={} — intervenções via {}",
+                                m.as_str(),
+                                if m == hermes_crate::hitl_ui::HitlMode::Jarbas {
+                                    "Jarbas"
+                                } else {
+                                    "Terminal HANR"
+                                }
+                            ),
+                            Err(e) => String::from(e),
+                        }
+                    }
+                }
+                hermes::Command::ShowSkills => hermes_crate::memory_store::skills_l0(),
+                hermes::Command::SkillView(ref name) => hermes_crate::memory_store::skill_view(name),
+                hermes::Command::Remember(ref fact) => {
+                    match hermes_crate::memory_store::remember(fact) {
+                        Ok(m) => m,
+                        Err(e) => alloc::format!("[MEMORY] fail: {}", e),
+                    }
+                }
+                hermes::Command::Soul(ref text) => {
+                    if text.trim().is_empty() {
+                        hermes_crate::memory_store::read_soul()
+                    } else {
+                        match hermes_crate::memory_store::write_soul(text) {
+                            Ok(()) => alloc::format!("[SOUL] Hermes orchestrator saved ({} chars)", text.len()),
+                            Err(e) => alloc::format!("[SOUL] fail: {}", e),
+                        }
+                    }
+                }
+                hermes::Command::Persona(ref text) => {
+                    if text.trim().is_empty() {
+                        hermes_crate::memory_store::persona_slice()
+                    } else {
+                        match hermes_crate::memory_store::write_persona(text) {
+                            Ok(()) => alloc::format!("[PERSONA] Jarbas saved ({} chars)", text.len()),
+                            Err(e) => alloc::format!("[PERSONA] fail: {}", e),
+                        }
+                    }
+                }
+                hermes::Command::MemoryShow => hermes_crate::memory_store::prompt_slice(),
+                hermes::Command::SessionSearch(ref q) => {
+                    hermes_crate::cognitive_bridge::session_search(q, 8)
+                }
+                hermes::Command::Budget(ref arg) => {
+                    let a = arg.trim();
+                    if a.is_empty() {
+                        hermes_crate::cognitive_bridge::budget_status()
+                    } else if let Ok(n) = a.parse::<u16>() {
+                        hermes_crate::cognitive_bridge::budget_set_max(n);
+                        hermes_crate::cognitive_bridge::budget_status()
+                    } else {
+                        String::from("[BUDGET] use /budget or /budget <1-64>")
+                    }
+                }
+                hermes::Command::CogStatus => hermes_crate::cognitive_bridge::status_line(),
+                hermes::Command::MarketList => hermes_crate::marketplace::list_local(),
+                hermes::Command::MarketSearch(ref q) => hermes_crate::marketplace::search(q),
+                hermes::Command::MarketInstall(ref kind_s, ref name, ref body) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => String::from("[MARKET] kind invalido"),
+                        Some(kind) => {
+                            let body_owned = if body.trim().is_empty()
+                                && kind == crate::package_hub::PackageKind::Skill
+                            {
+                                crate::package_hub::minimal_skill_md(name, "market install")
+                            } else {
+                                body.clone()
+                            };
+                            match hermes_crate::marketplace::install_local(kind, name, &body_owned) {
+                                Ok((level, id)) => alloc::format!(
+                                    "[MARKET] pending #{} level={:?} — /approve {}",
+                                    id, level, id
+                                ),
+                                Err(e) => alloc::format!("[MARKET] {}", e),
+                            }
+                        }
+                    }
+                }
+                hermes::Command::MarketPromote(ref name) => {
+                    match hermes_crate::marketplace::promote_draft(name) {
+                        Ok(m) => m,
+                        Err(e) => alloc::format!("[MARKET] {}", e),
+                    }
+                }
+                hermes::Command::MarketRemove(ref kind_s, ref name) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => String::from("[MARKET] kind invalido"),
+                        Some(kind) => match hermes_crate::marketplace::remove(kind, name) {
+                            Ok((level, id)) => alloc::format!(
+                                "[MARKET] remove pending #{} level={:?} — /approve {}",
+                                id, level, id
+                            ),
+                            Err(e) => alloc::format!("[MARKET] {}", e),
+                        },
+                    }
+                }
+                hermes::Command::MarketFetch(ref kind_s, ref name, ref url) => {
+                    match crate::package_hub::PackageKind::from_str(kind_s) {
+                        None => String::from("[MARKET] kind invalido"),
+                        Some(kind) => {
+                            hermes_crate::marketplace::install_from_url(url, kind, name)
+                        }
+                    }
+                }
+                hermes::Command::MarketIndex => hermes_crate::marketplace::rebuild_index(),
+                hermes::Command::Mcp(ref line) => {
+                    if line.trim().is_empty() {
+                        String::from("MCP: /mcp tools/list")
+                    } else {
+                        hermes_crate::mcp::handle_mcp_line(line)
                     }
                 }
                 hermes::Command::AddSkill(ref name, ref desc) => {
@@ -983,61 +1335,119 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
-                    // R3: classificação ÚNICA — pendente para CortexAgent (sem double routing)
-                    let expert_name = if let Some(name) = crate::global_arena::with_arena(|arena| {
-                        let trinity_guard = TRINITY.lock();
-                        let (expert, trace) =
-                            trinity_guard.classify_intent_with_trace(msg, arena);
-                        let name = expert.name;
-                        drop(trinity_guard);
-                        crate::global_arena::set_pending_route(name, Some(trace));
-                        name
-                    }) {
-                        name
-                    } else {
-                        let trinity_guard = TRINITY.lock();
-                        let name = trinity_guard.classify_intent(msg).name;
-                        drop(trinity_guard);
-                        crate::global_arena::set_pending_route(name, None);
-                        name
-                    };
-                    if expert_name == "speech_synth" {
-                        serial_println!("[TRINITY] SpeechSynth: \"{}\"", msg);
-                        alloc::format!("[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)", msg)
-                    } else {
-                    // Demais intents: CortexAgent consome rota pendente via generate_via_model
-                    let intent = self.cortex.think(msg);
-                    let intent_name = intent.skill_name();
-                    serial_println!("[CORTEX] Intent: {} = {:?} (trinity: {})", intent_name, intent, expert_name);
-                    match intent {
-                        cortex::Intent::Greeting | cortex::Intent::Chat => {
-                            serial_println!("[CORTEX-LLM] Enviando: \"{}\"", msg);
-                            self.workflow_engine.start();
-                            let _ = EVENT_BUS.publish(Event {
-                                id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
-                                payload: msg.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
-                            });
-                            self.state = HermesState::AwaitingLLM;
-                            String::from("...")
+                    match hermes_crate::cognitive_bridge::budget_tick() {
+                        hermes_crate::cognitive_bridge::BudgetVerdict::Exhausted => {
+                            String::from("[BUDGET] exhausted — /budget N para resetar max")
                         }
-                        _ => {
-                            match SKILL_REGISTRY.lock().has_skill(intent_name) {
-                                true => {
-                                    match self.execute_skill(intent_name, msg.as_bytes(), &event.token) {
+                        verdict => {
+                            if matches!(verdict, hermes_crate::cognitive_bridge::BudgetVerdict::Grace) {
+                                k_nano::slog_bin!("BUDGET", "info", "grace cycle");
+                            }
+                            let token_val = event.token.as_legacy();
+                            let tick_now = crate::interrupts::TIMER_TICKS
+                                .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                            let intent = self.cortex.think(msg);
+                            let structured_skill = match intent {
+                                cortex::Intent::Greeting | cortex::Intent::Chat => None,
+                                _ => Some(intent.skill_name()),
+                            };
+
+                            // Uma única classificação Trinity alimenta decisão e trace R3.
+                            let classified = crate::global_arena::with_arena(|arena| {
+                                let trinity = TRINITY.lock();
+                                let (expert, trace) =
+                                    trinity.classify_intent_with_trace(msg, arena);
+                                (expert.name, trinity.moe_router_loaded(), trace)
+                            });
+                            let (expert, moe_loaded) = if let Some((expert, loaded, trace)) = classified {
+                                crate::global_arena::set_pending_route(expert, Some(trace));
+                                (expert, loaded)
+                            } else {
+                                let trinity = TRINITY.lock();
+                                let expert = trinity.classify_intent(msg).name;
+                                let loaded = trinity.moe_router_loaded();
+                                drop(trinity);
+                                crate::global_arena::set_pending_route(expert, None);
+                                (expert, loaded)
+                            };
+                            let route =
+                                hermes_crate::cognitive_bridge::route_classified_user_intent(
+                                    msg,
+                                    token_val,
+                                    tick_now,
+                                    expert,
+                                    moe_loaded,
+                                    structured_skill,
+                                );
+                            hermes_crate::cognitive_bridge::note_route(&route);
+                            k_nano::slog_bin!("ROUTE", "info", "{} — {}", route.reason, route.emotion);
+
+                            match route.kind {
+                                hermes_crate::cognitive_bridge::RouteKind::Tts => {
+                                    alloc::format!(
+                                        "[TTS] Falando: \"{}\" (Pocket TTS pendente — Sprint Sound)",
+                                        msg
+                                    )
+                                }
+                                hermes_crate::cognitive_bridge::RouteKind::DenyTrust => {
+                                    alloc::format!("[Hermes] {}", route.reason)
+                                }
+                                hermes_crate::cognitive_bridge::RouteKind::EscalateLlm => {
+                                    alloc::format!(
+                                        "[HITL] {}\n/approve {}   ou   /deny {}",
+                                        route.reason,
+                                        route.approval_id.unwrap_or(0),
+                                        route.approval_id.unwrap_or(0)
+                                    )
+                                }
+                                hermes_crate::cognitive_bridge::RouteKind::ExpertSkill
+                                | hermes_crate::cognitive_bridge::RouteKind::Structured => {
+                                    let sk = route.skill.unwrap_or("system_status");
+                                    match self.execute_skill(sk, msg.as_bytes(), &event.token) {
                                         Ok(output) => {
                                             let text = core::str::from_utf8(&output).unwrap_or("(binary)");
-                                            alloc::format!("[Cortex] {}: {}", intent_name, text)
+                                            alloc::format!(
+                                                "[Route:{:?}:{}→{}] {}",
+                                                route.kind, route.expert, sk, text
+                                            )
                                         }
-                                        Err(e) => alloc::format!("[Cortex] {} erro: {}", intent_name, e),
+                                        Err(e) => {
+                                            if hermes_crate::cognitive_bridge::llm_allowed(token_val, tick_now).is_ok() {
+                                                hermes_crate::cognitive_bridge::session_record("user", msg, tick_now);
+                                                self.workflow_engine.start();
+                                                let _ = EVENT_BUS.publish(Event {
+                                                    id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
+                                                    payload: msg.as_bytes().to_vec(),
+                                                    token: CapabilityToken::Legacy(1),
+                                                });
+                                                self.state = HermesState::AwaitingLLM;
+                                                String::from("...")
+                                            } else {
+                                                alloc::format!("[Trinity:{}] skill '{}' erro: {}", route.expert, sk, e)
+                                            }
+                                        }
                                     }
                                 }
-                                false => alloc::format!("Hermes: sem skill para '{}'. /help", intent_name)
+                                hermes_crate::cognitive_bridge::RouteKind::Llm => {
+                                    k_nano::slog_cortex!("LLM", "info", "Enviando: \"{}\" (trinity: {})", msg, route.expert);
+                                    hermes_crate::cognitive_bridge::session_record(
+                                        "user", msg, tick_now,
+                                    );
+                                    self.workflow_engine.start();
+                                    let _ = EVENT_BUS.publish(Event {
+                                        id: 0,
+                                        topic: String::from(cortex::TOPIC_LLM_REQUEST),
+                                        payload: msg.as_bytes().to_vec(),
+                                        token: CapabilityToken::Legacy(1),
+                                    });
+                                    self.state = HermesState::AwaitingLLM;
+                                    String::from("...")
+                                }
                             }
                         }
+                    }
                 }
-            }
-        }
-    };
+            };
 
             let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
@@ -1052,7 +1462,7 @@ impl Agent for HermesAgent {
             if !matches!(self.state, HermesState::AwaitingLLM) {
                 let critique = hermes::SelfCritique::check_command(&cmd, &response);
                 if let hermes::CritiqueVerdict::NeedsRefinement(reason) = critique {
-                    serial_println!("[CRITIQUE] {}: {}", reason, &response[..core::cmp::min(60, response.len())]);
+                    k_nano::slog_bin!("CRITIQUE", "info", "{}: {}", reason, &response[..core::cmp::min(60, response.len())]);
                 }
 
                 USAGE_TRACKER.lock().record_call("intent_router", 1);
@@ -1061,7 +1471,7 @@ impl Agent for HermesAgent {
                 CONVERSATION_TRACKER.lock().record_exchange(text, &response);
                 if CONVERSATION_TRACKER.lock().needs_compact() {
                     let compact_msg = CONVERSATION_TRACKER.lock().compact();
-                    serial_println!("[HERMES] {}", compact_msg);
+                    k_nano::slog_hermes!("Hermes", "info", "{}", compact_msg);
                     EVENT_LOG.lock().push(conversation::EventKind::ContextCompacted, compact_msg.into_bytes(), now);
                 }
                 let _ = EVENT_BUS.publish(Event {
@@ -1080,7 +1490,7 @@ impl Agent for HermesAgent {
         }
         // Heartbeat a cada 250 ticks (~3s) — mostra que Hermes esta vivo
         if _tick % 250 == 0 {
-            serial_println!("[HERMES] \u{1f4a4} escutando... (tick {})", _tick);
+            k_nano::slog_hermes!("Hermes", "info", "escutando... (tick {})", _tick);
         }
 
         AgentTickResult::Pending
@@ -1103,23 +1513,29 @@ pub static PLATFORM_READY: core::sync::atomic::AtomicBool =
 pub unsafe fn init_platform_sync() {
     use core::sync::atomic::Ordering;
     if PLATFORM_READY.load(Ordering::Acquire) {
-        serial_println!("[PLATFORM] ja inicializada — skip");
+        k_nano::slog_bin!("PLATFORM", "info", "ja inicializada — skip");
         return;
     }
+    crate::display::fb::boot_ckpt(18, "PLATFORM pci+acpi");
     crate::pci::init_pci();
     let phys_off = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let acpi_info = crate::acpi::init_acpi(phys_off);
     if let Some(ref info) = acpi_info {
+        crate::display::fb::boot_ckpt(19, "PLATFORM apic");
         crate::apic::init_apic(info);
         let lapic_count = info.lapic_count;
         if lapic_count > 1 {
             crate::smp::AP_COUNT.store(lapic_count - 1, Ordering::Relaxed);
         }
     }
-    // Nao forca SMP: init_smp so sobe APs se AP_COUNT>0 e USING_APIC
+    crate::display::fb::boot_ckpt(20, "PLATFORM smp");
+    // Nao forca SMP: trampoline stub → BSP only (sem hang SIPI)
     crate::smp::init_smp();
+    // STI so depois de SMP — timer IRQ nao pode reentrar serial/FB spinlock
+    x86_64::instructions::interrupts::enable();
     PLATFORM_READY.store(true, Ordering::Release);
-    serial_println!("[PLATFORM] sync OK (PCI+ACPI+APIC+SMP)");
+    crate::display::fb::boot_ckpt(21, "PLATFORM sync OK");
+    k_nano::slog_bin!("PLATFORM", "info", "sync OK (PCI+ACPI+APIC+SMP) STI=1");
 }
 
 /// PlatformAgent — PCI + ACPI + APIC + SMP init (idempotente se sync ja rodou)
@@ -1198,7 +1614,7 @@ impl Agent for MemoryAgent {
                     ring0_mode: 0, ring1_mode: 0, heap_size_mb: 2048,
                     trust_level: 1, power_mode: 0, tensor_tier: 0,
                 };
-                serial_println!("[ARCH] System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
+                k_nano::slog_bin!("ARCH", "info", "System architecture: ring0={} ring1={} heap={}MB trust={} power={} tensor={}",
                     arch.ring0_mode, arch.ring1_mode, arch.heap_size_mb,
                     arch.trust_level, arch.power_mode, arch.tensor_tier);
                 *crate::SYSTEM_ARCH.lock() = Some(arch);
@@ -1207,7 +1623,7 @@ impl Agent for MemoryAgent {
             }
             1 => {
                 let mhi = crate::mhi::MemoryHierarchy::new();
-                serial_println!("[MHI] {} tier(s). Best: {:?} ({} bytes avail)",
+                k_nano::slog_bin!("MHI", "info", "{} tier(s). Best: {:?} ({} bytes avail)",
                     mhi.tiers.len(), mhi.best_tier(), mhi.tiers[0].capacity_bytes);
                 // ponytail: skip heap-allocated mhi.clone() to avoid stack overflow
                 *crate::MEMORY_HIERARCHY.lock() = Some(mhi);
@@ -1237,18 +1653,18 @@ impl Agent for NetDriverAgent {
             || crate::net::RTL8139.lock().is_some()
             || crate::net::VIRTIO_DEV.lock().is_some();
         if nic_ok {
-            serial_println!("[NET] NIC ja inicializada — NetDriverAgent no-op");
+            k_nano::slog_hermes!("Net", "info", "NIC ja inicializada — NetDriverAgent no-op");
             return AgentTickResult::Done;
         }
         unsafe {
             if crate::virtio_net::init_driver_virtio() {
-                serial_println!("[NET] VirtIO-net OK.");
+                k_nano::slog_hermes!("Net", "info", "VirtIO-net OK.");
             } else if crate::net::init_driver_rtl8139() {
-                serial_println!("[NET] RTL8139 OK.");
+                k_nano::slog_hermes!("Net", "info", "RTL8139 OK.");
             } else if crate::net::init_driver_e1000() {
-                serial_println!("[NET] e1000 OK.");
+                k_nano::slog_hermes!("Net", "info", "e1000 OK.");
             } else {
-                serial_println!("[NET] Sem hardware de rede. Modo offline.");
+                k_nano::slog_hermes!("Net", "info", "Sem hardware de rede. Modo offline.");
             }
         }
         AgentTickResult::Done
@@ -1269,7 +1685,7 @@ const USBDRIVER_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for UsbDriverAgent {
     fn manifest(&self) -> &AgentManifest { &USBDRIVER_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        serial_println!("[USB] Inicializado via init_xhci().");
+        k_nano::slog_bin!("USB", "info", "Inicializado via init_xhci().");
         AgentTickResult::Done
     }
 }
@@ -1297,56 +1713,50 @@ impl Agent for BootSelfHealAgent {
                 1, "self_heal", "recover", _tick, u64::MAX,
             );
             if !trusted {
-                serial_println!("[N2-SELFHEAL] trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
+                k_nano::slog_kai!("Gate", "n2", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
             } else {
                 let devices = unsafe { crate::pci::scan_pci() };
                 let inv = crate::inventory::HardwareInventory::collect(devices, None);
                 let triples = inv.vid_class_triples();
                 let fw_n = inv.fw_gated_devices().len();
-                serial_println!(
-                    "[N2-SELFHEAL] inventory pci={} fw_gated={} trust=OK",
+                k_nano::slog_kai!("Gate", "n2", "inventory pci={} fw_gated={} trust=OK",
                     triples.len(),
-                    fw_n
-                );
+                    fw_n);
                 if fw_n == 0 {
-                    serial_println!(
-                        "[N2-SELFHEAL] HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)"
-                    );
+                    k_nano::slog_kai!("Gate", "n2", "HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)");
                 }
                 let mut heal = crate::SELF_HEAL.lock();
                 let report = heal.run_vid_gated_scan(&triples);
                 let _ = crate::SYSTEM_ARCH.lock().get_or_insert_with(|| {
                     crate::inventory::SystemArchitecture::infer(&inv)
                 });
-                serial_println!(
-                    "[N2-SELFHEAL] gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai crate N2.5)",
+                k_nano::slog_kai!("Gate", "n2", "gate complete heal={} noop={} HEALTH_ISSUE={} (k_ai crate N2.5)",
                     report.heal_issues,
                     report.noop,
-                    report.health_published
-                );
+                    report.health_published);
             }
         }
 
         // Shutdown persistente via FAT — orçado (ver boot_log_agent). Sem budget,
         // walk root sem limite bloqueava init_phase e NetAgent nunca entrava no run().
-        serial_println!("[SELF-HEAL] lendo shutdown cause (FAT boot-log budgeted)...");
+        k_nano::slog_bin!("SELF", "HEAL", "lendo shutdown cause (FAT boot-log budgeted)...");
         let last_cause = if crate::env::is_sandbox() {
-            serial_println!("[SELF-HEAL] sandbox: skip FAT shutdown log (evita hang PIO)");
+            k_nano::slog_bin!("SELF", "HEAL", "sandbox: skip FAT shutdown log (evita hang PIO)");
             None
         } else {
             crate::shutdown::read_last_shutdown_from_boot_log()
         };
         match last_cause {
             Some(crate::shutdown::ShutdownCause::Unexpected) => {
-                serial_println!("[SELF-HEAL] *** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
-                serial_println!("[SELF-HEAL] Analisando boot log para possiveis erros...");
+                k_nano::slog_bin!("SELF", "HEAL", "*** ULTIMO DESLIGAMENTO FOI INESPERADO! ***");
+                k_nano::slog_bin!("SELF", "HEAL", "Analisando boot log para possiveis erros...");
                 let _ = log_analyst_agent::write_log("self_heal",
                     "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
                 // Ja lemos o log em read_last_shutdown; reusa a mesma API budgeted
                 if let Some(log) = crate::boot_log_agent::BootLogAgent::read_last_boot_log() {
                     let diagnostics = crate::boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
-                        serial_println!("[SELF-HEAL] Diagnostico: {} — {}", kind, msg);
+                        k_nano::slog_bin!("SELF", "HEAL", "Diagnostico: {} — {}", kind, msg);
                         let _ = log_analyst_agent::write_log("self_heal",
                             &alloc::format!("Diagnostico: {} — {}", kind, msg));
                         if *kind == "PANIC" || *kind == "GPU_HUNG" {
@@ -1362,17 +1772,17 @@ impl Agent for BootSelfHealAgent {
                         }
                     }
                 } else {
-                    serial_println!("[SELF-HEAL] Boot log nao disponivel para analise.");
+                    k_nano::slog_bin!("SELF", "HEAL", "Boot log nao disponivel para analise.");
                 }
             }
             Some(cause) => {
-                serial_println!("[SELF-HEAL] Ultimo desligamento: {} (ok)", crate::shutdown::label(cause));
+                k_nano::slog_bin!("SELF", "HEAL", "Ultimo desligamento: {} (ok)", crate::shutdown::label(cause));
             }
             None => {
-                serial_println!("[SELF-HEAL] Primeiro boot ou sem registro de desligamento.");
+                k_nano::slog_bin!("SELF", "HEAL", "Primeiro boot ou sem registro de desligamento.");
             }
         }
-        serial_println!("[SELF-HEAL] oneshot Done — liberando init_phase p/ NetAgent");
+        k_nano::slog_bin!("SELF", "HEAL", "oneshot Done — liberando init_phase p/ NetAgent");
 
         AgentTickResult::Done
     }
@@ -1392,6 +1802,8 @@ const TRUST_MANIFEST: AgentManifest = AgentManifest {
 impl Agent for BootTrustAgent {
     fn manifest(&self) -> &AgentManifest { &TRUST_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Idempotente — session key pode já ter sido gerada pré-PackageHub
+        k_nano::identity::init_session_identity();
         let mut tc = crate::TRUST_CACHE.lock();
         tc.add_exempt_token(1);
         tc.load_boot_policy(&["net_", "fs_write", "exec_"]);
@@ -1466,9 +1878,15 @@ impl Agent for SpecialistAgent {
     }
 }
 
-/// Registra todos os agentes do The Agency no registry
+/// Registra SpecialistAgents Agency **somente** se PackageHub tiver AGENT.md
+/// agency assinados (ADR-0052). Seed compilado vazio — stubs não entram no fleet.
 pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
-    let agency = crate::agency::Agency::new();
+    let specs = crate::package_hub::PACKAGE_HUB.lock().agency_specs();
+    if specs.is_empty() {
+        k_nano::slog_bin!("AGENCY", "info", "0 agentes — ADR-0052: sem AGENT.md agency assinado (stubs removidos)");
+        return;
+    }
+    let agency = crate::agency::Agency::from_specs(specs);
     for div in &agency.divisions {
         for spec in &div.agents {
             let agent = SpecialistAgent::new(spec.clone());
@@ -1476,7 +1894,7 @@ pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
         }
     }
     let count: usize = agency.divisions.iter().map(|d| d.agents.len()).sum();
-    serial_println!("[AGENCY] {} agentes registrados via SpecialistAgent", count);
+    k_nano::slog_bin!("AGENCY", "info", "{} agentes registrados via PackageHub AGENT.md assinado", count);
 }
 
 /// Registra HwAgents como agentes nativos (um por dispositivo PCI)
@@ -1489,7 +1907,7 @@ pub fn register_hw_agents(registry: &mut agent_core::AgentRegistry) {
         let payload = alloc::format!("{} caps={:?}", hw_agent.device_id, hw_agent.capabilities);
         registry.register(Box::new(HwSpecialistAgent { manifest, device_id: hw_agent.device_id.clone(), payload }));
     }
-    serial_println!("[HW-AGENTS] {} agentes de hardware registrados", hw.agents.len());
+    k_nano::slog_bin!("HW", "AGENTS", "{} agentes de hardware registrados", hw.agents.len());
 }
 
 // ---------------------------------------------------------------------------
@@ -1517,79 +1935,144 @@ impl Agent for HwSpecialistAgent {
 impl Agent for HwDetectAgent {
     fn manifest(&self) -> &AgentManifest { &HWDETECT_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Fase 1: PCI scan usando HwRegistry
+        // Plug-and-play (truth path do bin): PCI → HwCapabilityCard → EventBus.
+        // Sem generate() free-text do HW Expert v3 (OA5US…).
         let mut hw = crate::hw_agents::HwRegistry::new();
         unsafe { hw.detect_all(); }
 
-        // Fase 2: Para cada dispositivo, tenta identificar com IA e gerar mapa
         let mut device_tree = alloc::string::String::new();
-        device_tree.push_str("Dispositivos detectados:\n");
+        device_tree.push_str("Dispositivos (PnP cards):\n");
+        let mut cards_n = 0u32;
+
         for agent in &hw.agents {
-            // Extrai vendor:device do device_id
             let parts: Vec<&str> = agent.device_id.split(':').collect();
-            let dev_line = alloc::format!("  {} — {}\n", agent.device_id, agent.description);
-            device_tree.push_str(&dev_line);
+            device_tree.push_str(&alloc::format!("  {} — {}\n", agent.device_id, agent.description));
 
-            if parts.len() == 2 {
-                if let (Ok(vid), Ok(did)) = (u16::from_str_radix(parts[0], 16), u16::from_str_radix(parts[1], 16)) {
-                    // Tenta identificar com IA via HWExpert
-                    let ai_name = crate::cortex::generate_via_hwexpert(
-                        &alloc::format!("identifique PCI\\VEN_{:04X}&DEV_{:04X}", vid, did));
-                    if !ai_name.starts_with("[HWEXPERT]") {
-                        // IA identificou! Usa o nome real.
-                        device_tree.push_str(&alloc::format!("    → IA: {}\n", ai_name));
-                    }
-
-                    // Tenta gerar mapa de registradores (para WiFi/network)
-                    if agent.class == 0x02 || agent.class == 0x0D {
-                        if let Some(map) = crate::cortex::generate_register_map(vid, did) {
-                            device_tree.push_str(&alloc::format!(
-                                "    → RegMap: tx={:#x} rx={:#x} doorbell={:#x}/{:x} ring={}\n",
-                                map.tx_ring_low, map.rx_ring_low,
-                                map.doorbell_tx, map.doorbell_rx, map.ring_size));
-                        }
-                    }
-
-                    // Firmware hint: e1000 (8086:100E etc, subclass 0x00) ≠ iwlwifi — não atribuir FW WiFi.
-                    let subclass = agent.subclass as u8;
-                    let is_intel_eth = vid == 0x8086
-                        && (agent.class == 0x02 || agent.class == 0x0D)
-                        && (subclass == 0x00
-                            || matches!(did, 0x100E | 0x100F | 0x10D3 | 0x1502 | 0x1503));
-                    if is_intel_eth {
-                        serial_println!(
-                            "[HW] {:04X}:{:04X} Ethernet e1000 — not wifi (iwlwifi N/A)",
-                            vid, did
-                        );
-                    }
-                    let fw_available = if is_intel_eth {
-                        None
-                    } else {
-                        match (vid, agent.class) {
-                            (0x10DE, 0x03) => Some("nvidia/gp108 (FECS+GPCCS)"),
-                            (0x8086, 0x03) => Some("i915/skl+kbl (GuC+HuC+DMC)"),
-                            (0x10EC, 0x02) | (0x10EC, 0x0D) => Some("rtl_nic/rtl8168*"),
-                            (0x8086, 0x02) | (0x8086, 0x0D) => Some("intel/iwlwifi*"),
-                            _ => None,
-                        }
-                    };
-                    if let Some(fw) = fw_available {
-                        serial_println!("[HW] Firmware disponivel: {} para {:04X}:{:04X}", fw, vid, did);
-                        device_tree.push_str(&alloc::format!("    → Firmware: {}\n", fw));
-                    }
-                }
+            if parts.len() != 2 {
+                continue;
             }
+            let (Ok(vid), Ok(did)) = (
+                u16::from_str_radix(parts[0], 16),
+                u16::from_str_radix(parts[1], 16),
+            ) else {
+                continue;
+            };
+
+            let card = k_ai::hw_capability::build_card(
+                vid,
+                did,
+                agent.class as u8,
+                agent.subclass as u8,
+                &agent.description,
+            );
+
+            if (agent.class == 0x02 || agent.class == 0x0D) && card.ring_size == 0 {
+                if let Some(map) = crate::cortex::generate_register_map(vid, did) {
+                    device_tree.push_str(&alloc::format!(
+                        "    → RegMap: tx={:#x} rx={:#x} db={:#x}/{:#x} ring={}\n",
+                        map.tx_ring_low, map.rx_ring_low, map.doorbell_tx, map.doorbell_rx, map.ring_size
+                    ));
+                }
+            } else if card.ring_size > 0 {
+                device_tree.push_str(&alloc::format!(
+                    "    → RegMap: tx={:#x} rx={:#x} db={:#x}/{:#x} ring={}\n",
+                    card.reg_tx, card.reg_rx, card.reg_db_tx, card.reg_db_rx, card.ring_size
+                ));
+            }
+
+            device_tree.push_str(&alloc::format!(
+                "    → Card: family={} agent={} fw={} next={} caps={:#x} src={}\n",
+                card.family.as_str(),
+                card.agent,
+                card.firmware.unwrap_or("-"),
+                card.next_action.as_str(),
+                card.caps_bits,
+                card.source,
+            ));
+
+            k_nano::slog_bin!("Log", "msg", "{}", card.log_line());
+
+            let wire = card.to_wire();
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(k_ai::hw_capability::TOPIC_HW_CAPABILITY),
+                payload: wire.as_bytes().to_vec(),
+                token: CapabilityToken::Legacy(1),
+            });
+            let action_payload = alloc::format!(
+                "{}|{}|{}",
+                card.next_action.as_str(),
+                card.agent,
+                card.firmware.unwrap_or("-")
+            );
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(k_ai::hw_capability::TOPIC_HW_PNP_ACTION),
+                payload: action_payload.as_bytes().to_vec(),
+                token: CapabilityToken::Legacy(1),
+            });
+
+            dispatch_pnp_action_nk(&card);
+            cards_n = cards_n.saturating_add(1);
         }
 
-        serial_println!("[HW-AI] Arvore de dispositivos:\n{}", device_tree);
+        k_nano::slog_bin!("HW", "PnP", "published {} capability cards", cards_n);
+        k_nano::slog_bin!("HW", "AI", "Arvore PnP:\n{}", device_tree);
 
-        // Fase 3: Publica para o LLM como contexto enriquecido
+        // Hermes consome HW_CAPABILITY e decide (agentico). Não dump free-text → LLM aqui.
         let _ = EVENT_BUS.publish(Event {
-            id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
-            payload: device_tree.into_bytes(), token: CapabilityToken::Legacy(1),
+            id: 0,
+            topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+            payload: alloc::format!("[HW-PnP] {} cards published — Hermes decide", cards_n)
+                .into_bytes(),
+            token: CapabilityToken::Legacy(1),
         });
 
         AgentTickResult::Done
+    }
+}
+
+fn dispatch_pnp_action_nk(card: &k_ai::hw_capability::HwCapabilityCard) {
+    use k_ai::hw_capability::HwNextAction;
+    match card.next_action {
+        HwNextAction::BindNetwork | HwNextAction::Ready => {
+            k_nano::slog_bin!("HW", "PnP", "READY {:04X}:{:04X} → agent={} (já no boot path)", card.vid, card.did, card.agent);
+        }
+        HwNextAction::LoadFirmware => {
+            k_nano::slog_bin!("HW", "PnP", "NEED_FW {:04X}:{:04X} fw={} → SelfHeal/HEALTH_ISSUE path", card.vid, card.did, card.firmware.unwrap_or("?"));
+            let msg = alloc::format!(
+                "HEALTH_ISSUE:I3:{:04X}:{:04X}:firmware_hint:{}",
+                card.vid, card.did, card.firmware.unwrap_or("-")
+            );
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from("HEALTH_ISSUE"),
+                payload: msg.into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+        }
+        HwNextAction::BindWifiScan => {
+            k_nano::slog_bin!("HW", "PnP", "WIFI_SCAN {:04X}:{:04X} → WifiAgent", card.vid, card.did);
+            let _ = EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from("NET_IFACE_AVAILABLE"),
+                payload: alloc::format!("wifi:{:04X}:{:04X}", card.vid, card.did).into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+        }
+        HwNextAction::BindUsbHost => {
+            k_nano::slog_bin!("HW", "PnP", "USB_HOST {:04X}:{:04X} → xHCI/UVC/UAC hot-enum", card.vid, card.did);
+        }
+        HwNextAction::BindGpuCompute => {
+            k_nano::slog_bin!("HW", "PnP", "GPU {:04X}:{:04X} fw={} → GpuBackend", card.vid, card.did, card.firmware.unwrap_or("-"));
+        }
+        HwNextAction::BindAudio => {
+            k_nano::slog_bin!("HW", "PnP", "AUDIO {:04X}:{:04X} → HdaAudioAgent", card.vid, card.did);
+        }
+        HwNextAction::BindStorage => {
+            k_nano::slog_bin!("HW", "PnP", "STORAGE {:04X}:{:04X} → DiskAgent", card.vid, card.did);
+        }
+        HwNextAction::ObserveOnly => {}
     }
 }
 
@@ -1653,7 +2136,7 @@ impl AutoLearnAgent {
     }
 
     fn learn_topic(&mut self, topic: &str) {
-        serial_println!("[TRINITY-Learn] Iniciando aprendizado: {}...", topic);
+        k_nano::slog_bin!("TRINITY", "Learn", "Iniciando aprendizado: {}...", topic);
         for need in &mut self.needs {
             if need.topic == topic { need.triggered = true; }
         }
@@ -1661,12 +2144,12 @@ impl AutoLearnAgent {
         // Carrega conhecimento da FAT32 e faz fine-tuning on-device via BitNetTrainer
         let knowledge = self.load_knowledge(topic);
         if knowledge.is_empty() {
-            serial_println!("[TRINITY-Learn] {}: conhecimento indisponivel em FAT32", topic);
-            serial_println!("[TRINITY-Learn] Coloque {}.BIN na FAT32 ou gere via SDIO pipeline", topic.to_uppercase());
+            k_nano::slog_bin!("TRINITY", "Learn", "{}: conhecimento indisponivel em FAT32", topic);
+            k_nano::slog_bin!("TRINITY", "Learn", "Coloque {}.BIN na FAT32 ou gere via SDIO pipeline", topic.to_uppercase());
             return;
         }
 
-        serial_println!("[TRINITY-Learn] {}: {} bytes carregados. R3 replay com rotas congeladas...", topic, knowledge.len());
+        k_nano::slog_bin!("TRINITY", "Learn", "{}: {} bytes carregados. R3 replay com rotas congeladas...", topic, knowledge.len());
 
         // R3: atualiza router com logits congelados (sem re-rotear / sem dummy train_step)
         let mut traces = [crate::r3::RouteTrace {
@@ -1693,13 +2176,11 @@ impl AutoLearnAgent {
             let mut trainer = crate::BITNET_TRAINER.lock();
             trainer.trained += steps as u64;
             drop(trainer);
-            serial_println!(
-                "[TRINITY-Learn] {}: R3 replay {} traces loss={:.4} (arena tokens={})",
+            k_nano::slog_bin!("TRINITY", "Learn", "{}: R3 replay {} traces loss={:.4} (arena tokens={})",
                 topic,
                 n,
                 loss,
-                crate::global_arena::token_steps()
-            );
+                crate::global_arena::token_steps());
         } else {
             // Sem traces ainda — bootstrap R3 (não re-calcula rotas via train_step dummy)
             let mut dummy_trace = crate::r3::RouteTrace {
@@ -1717,15 +2198,13 @@ impl AutoLearnAgent {
             let _ = &mut dummy_trace;
             let mut trainer = crate::BITNET_TRAINER.lock();
             trainer.trained += 1;
-            serial_println!(
-                "[TRINITY-Learn] {}: bootstrap R3 (sem cache) loss={:.4} steps={}",
+            k_nano::slog_bin!("TRINITY", "Learn", "{}: bootstrap R3 (sem cache) loss={:.4} steps={}",
                 topic,
                 loss,
-                trainer.trained
-            );
+                trainer.trained);
         }
         crate::global_arena::reset_moe_cache();
-        serial_println!("[TRINITY-Learn] {}: TRINITY APRENDEU! (R3 reset O(1))", topic);
+        k_nano::slog_bin!("TRINITY", "Learn", "{}: TRINITY APRENDEU! (R3 reset O(1))", topic);
     }
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {
@@ -1739,7 +2218,7 @@ impl AutoLearnAgent {
                     if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         if let Some(data) = fs.read_file(&fname) {
-                            serial_println!("[TRINITY-Learn] {} carregado via FAT32: {} bytes", fname, data.len());
+                            k_nano::slog_bin!("TRINITY", "Learn", "{} carregado via FAT32: {} bytes", fname, data.len());
                             return data;
                         }
                     }
@@ -1756,7 +2235,7 @@ impl AutoLearnAgent {
     fn download_knowledge(&self, topic: &str) -> Option<Vec<u8>> {
         // Usa browser_agent ou http_get para baixar de repositorio online
         let url = alloc::format!("http://repository.neuralos.local/{}.BIN", topic);
-        serial_println!("[TRINITY-Learn] Tentando download: {}", url);
+        k_nano::slog_bin!("TRINITY", "Learn", "Tentando download: {}", url);
         // Tenta via browser_agent (que usa smoltcp)
         let _ = crate::EVENT_BUS.publish(Event {
             id: 0, topic: alloc::string::String::from(crate::browser_agent::TOPIC_FETCH_REQUEST),
@@ -1765,7 +2244,7 @@ impl AutoLearnAgent {
         // Por enquanto, http_get retorna None ate B-01 ser resolvido
         // Quando DHCP funcionar, baixara automaticamente de:
         // huggingface.co/datasets/neural-os/hardware-moe-dataset/resolve/main/
-        serial_println!("[TRINITY-Learn] Rede indisponivel (B-01). Coloque {} na FAT32.", url);
+        k_nano::slog_bin!("TRINITY", "Learn", "Rede indisponivel (B-01). Coloque {} na FAT32.", url);
         None
     }
 }
@@ -1847,15 +2326,13 @@ impl SleepCycleAgent {
                     drop(trinity);
                     let mut t = crate::BITNET_TRAINER.lock();
                     t.trained += n as u64;
-                    serial_println!(
-                        "[SLEEP] REPLAY R3: {} traces loss={:.4} step={} tokens={}",
+                    k_nano::slog_bin!("SLEEP", "info", "REPLAY R3: {} traces loss={:.4} step={} tokens={}",
                         n,
                         loss,
                         t.trained,
-                        crate::global_arena::token_steps()
-                    );
+                        crate::global_arena::token_steps());
                 } else {
-                    serial_println!("[SLEEP] REPLAY R3: sem traces — skip train_step dummy");
+                    k_nano::slog_bin!("SLEEP", "info", "REPLAY R3: sem traces — skip train_step dummy");
                 }
                 crate::global_arena::clear_route_traces();
                 crate::global_arena::reset_moe_cache();
@@ -1865,12 +2342,12 @@ impl SleepCycleAgent {
                 self.insights.push(alloc::format!(
                     "[DREAM] ciclo #{} evolve={}", self.cycle_count, st
                 ));
-                serial_println!("[SLEEP] DREAM evolve={}", st);
+                k_nano::slog_bin!("SLEEP", "info", "DREAM evolve={}", st);
             }
-            3 => { serial_println!("[SLEEP] CONSOLIDATE"); }
-            4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } serial_println!("[SLEEP] PRUNE: {} insights", self.insights.len()); }
+            3 => { k_nano::slog_bin!("SLEEP", "info", "CONSOLIDATE"); }
+            4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } k_nano::slog_bin!("SLEEP", "info", "PRUNE: {} insights", self.insights.len()); }
             5 => {
-                // Sprint 108: REFLECT → meta-cognição self_evolve
+                // Sprint 108: REFLECT → meta-cognição self_evolve + memory nudge HITL
                 let detail = crate::self_evolve::reflect(crate::interrupts::TIMER_TICKS
                     .load(core::sync::atomic::Ordering::Relaxed) as u64);
                 self.insights.push(alloc::format!("[REFLECT] {}", detail));
@@ -1880,7 +2357,8 @@ impl SleepCycleAgent {
                     payload: detail.into_bytes(),
                     token: CapabilityToken::Legacy(1),
                 });
-                // ADR-0047 L3 probe presence (deep stats need &TransformerModel)
+                let nudge = hermes_crate::cognitive_bridge::reflect_and_nudge(self.cycle_count);
+                k_nano::slog_bin!("SLEEP", "info", "REFLECT nudge: {}", nudge);
                 crate::neuos_probe::log_probe(None);
             }
             _ => {}
@@ -1946,8 +2424,7 @@ impl FsBridgeAgent {
                         let mut reg = crate::mhi::MHI_REGISTRY.lock();
                         reg.register(phys, size, crate::mhi::AllocTier::Dram, "fs_bridge");
                         reg.record_access(phys, _tick, 0);
-                        serial_println!("[FS-BRIDGE] Migrado {:?} → DRAM ({} bytes, idle={})",
-                            phys, size, _tick.saturating_sub(*last_access));
+                        k_nano::slog_bin!("FS", "BRIDGE", "Migrado {:?} → DRAM ({} bytes, idle={})", phys, size, _tick.saturating_sub(*last_access));
                     }
                 }
                 Err(_) => {}
@@ -1984,7 +2461,7 @@ impl Agent for GpuDriverAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         unsafe {
             if crate::virtio_gpu::init_driver_virtio_gpu() {
-                serial_println!("[VGPU] VirtIO-GPU OK.");
+                k_nano::slog_jarbas!("VGPU", "info", "VirtIO-GPU OK.");
             }
         }
         AgentTickResult::Done
@@ -2061,7 +2538,7 @@ impl Skill for DiagnosticSkill {
         let bit_output = bit_linear.forward(&bit_input);
         report.push_str(&alloc::format!("[DIAG] BitNet output = {:?}\n", bit_output.data));
 
-        crate::serial_println!("{}", report);
+        k_nano::slog_bin!("Log", "msg", "{}", report);
         crate::println!("{}", report);
         Ok(report.into_bytes())
     }
@@ -2102,13 +2579,13 @@ impl Agent for SelfEvolveAgent {
         // Consome sinais (cron review / sleep reflect)
         while let Some(ev) = self.receiver.try_receive() {
             let msg = core::str::from_utf8(&ev.payload).unwrap_or("");
-            serial_println!("[S108] event: {}", msg);
+            k_nano::slog_bin!("S108", "info", "event: {}", msg);
             if msg == "skill_review" || msg.starts_with("intents=") {
                 let mut storage = SKILL_STORAGE.lock();
                 let n = crate::self_evolve::tick_cycle(&mut storage, tick);
                 drop(storage);
                 if n > 0 {
-                    serial_println!("[S108] tick_cycle registered/improved={}", n);
+                    k_nano::slog_bin!("S108", "info", "tick_cycle registered/improved={}", n);
                 }
             }
         }
@@ -2120,7 +2597,7 @@ impl Agent for SelfEvolveAgent {
             let n = crate::self_evolve::tick_cycle(&mut storage, tick);
             drop(storage);
             if n > 0 {
-                serial_println!("[S108] periodic work={}", n);
+                k_nano::slog_bin!("S108", "info", "periodic work={}", n);
             }
         }
 
@@ -2137,7 +2614,7 @@ impl Agent for SelfEvolveAgent {
         }
 
         if tick > 0 && tick % 5000 == 0 {
-            serial_println!("{}", crate::self_evolve::status_line());
+            k_nano::slog_bin!("Log", "msg", "{}", crate::self_evolve::status_line());
         }
 
         AgentTickResult::Pending

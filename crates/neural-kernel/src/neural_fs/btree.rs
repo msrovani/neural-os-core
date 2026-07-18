@@ -1,5 +1,5 @@
-//! B-tree CoW para NeuralFS — leaf items de 48 bytes + internos 2-niveis.
-//! key(17) + value(31). insert/delete/lookup/scan/split.
+//! B-tree CoW para NeuralFS — leaf items de 48 bytes + internos multi-nivel.
+//! key(17) + value(31). insert/delete/lookup/scan/split (folha + interno).
 
 use crate::block_dev::BlockDevice;
 
@@ -348,8 +348,8 @@ impl BTreeNode {
         v
     }
 
-    /// Divide folha cheia ao meio. Retorna (right_leaf_items moved into new node content via callback).
-    /// `right` deve ser no vazio; move metade superior para `right`.
+    /// Divide folha cheia ao meio. `right` vazio; move metade superior (incl. sep) para `right`.
+    /// Retorna a key separadora (primeira de `right`) — copia sobe ao pai.
     pub fn split_into(&mut self, right: &mut BTreeNode) -> Option<Key> {
         let count = self.item_count() as usize;
         if count < 2 {
@@ -357,15 +357,56 @@ impl BTreeNode {
         }
         let mid = count / 2;
         let sep = self.get_key_value(mid)?.0;
+        right.set_level(0);
         for i in mid..count {
             let (k, v) = self.get_key_value(i)?;
             right.insert(&k, &v);
         }
-        // trim left
         for i in (mid..count).rev() {
             self.delete_at(i);
         }
         Some(sep)
+    }
+
+    /// Divide no interno: promove a key do meio (remove dos dois lados).
+    /// `right.leftmost_child` = child ptr da key promovida.
+    pub fn split_internal_into(&mut self, right: &mut BTreeNode) -> Option<Key> {
+        let count = self.item_count() as usize;
+        if count < 2 {
+            return None;
+        }
+        let mid = count / 2;
+        let (sep_key, sep_val) = self.get_key_value(mid)?;
+        let sep_child = u64::from_le_bytes(sep_val.raw[0..8].try_into().unwrap_or([0; 8]));
+        right.set_level(self.level());
+        right.set_leftmost_child(sep_child);
+        for i in (mid + 1)..count {
+            let (k, v) = self.get_key_value(i)?;
+            right.insert(&k, &v);
+        }
+        for i in (mid..count).rev() {
+            self.delete_at(i);
+        }
+        Some(sep_key)
+    }
+
+    /// Troca ponteiro de filho `old` → `new` (leftmost ou item).
+    pub fn replace_child_ptr(&mut self, old: u64, new: u64) -> bool {
+        let mut found = false;
+        if self.leftmost_child() == old {
+            self.set_leftmost_child(new);
+            found = true;
+        }
+        for i in 0..self.item_count() as usize {
+            if let Some((_, v)) = self.get_key_value(i) {
+                let child = u64::from_le_bytes(v.raw[0..8].try_into().unwrap_or([0; 8]));
+                if child == old {
+                    self.update_at(i, &Self::from_child_ptr(new));
+                    found = true;
+                }
+            }
+        }
+        found
     }
 }
 

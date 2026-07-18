@@ -1,3 +1,7 @@
+//! Per-CPU state (BSP). `UnsafeCell` — static imutável iria para .rodata;
+//! escrever nele (self_ptr/lapic_id) causa #PF e o boot para em K20/SMP.
+
+use core::cell::UnsafeCell;
 use core::sync::atomic::AtomicU8;
 
 #[repr(C)]
@@ -15,7 +19,18 @@ pub struct PerCpu {
 pub const CPU_TYPE_P_CORE: u8 = 0;
 pub const CPU_TYPE_E_CORE: u8 = 1;
 
-pub static BSP_PCPU: PerCpu = PerCpu {
+pub struct BspPcpu(UnsafeCell<PerCpu>);
+
+// Safety: single-BSP write in init; APs only after SIPI (ainda stub).
+unsafe impl Sync for BspPcpu {}
+
+impl BspPcpu {
+    pub const fn get(&self) -> *mut PerCpu {
+        self.0.get()
+    }
+}
+
+pub static BSP_PCPU: BspPcpu = BspPcpu(UnsafeCell::new(PerCpu {
     self_ptr: 0,
     cpu_id: 0,
     cpu_type: CPU_TYPE_P_CORE,
@@ -24,13 +39,13 @@ pub static BSP_PCPU: PerCpu = PerCpu {
     online: 1,
     ring: 0,
     _padding: [0u8; 43],
-};
+}));
 
 pub static CPU_COUNT: AtomicU8 = AtomicU8::new(1);
 pub static AP_ONLINE: AtomicU8 = AtomicU8::new(0);
 
 pub fn init_bsp_percpu(lapic_id: u8) {
-    let pcpu = &BSP_PCPU as *const PerCpu as *mut PerCpu;
+    let pcpu = BSP_PCPU.get();
     unsafe {
         (*pcpu).self_ptr = pcpu as u64;
         (*pcpu).lapic_id = lapic_id;

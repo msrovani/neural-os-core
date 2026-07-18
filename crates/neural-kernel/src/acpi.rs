@@ -1,4 +1,4 @@
-use crate::{println, serial_println};
+use crate::{println};
 use alloc::vec::Vec;
 use core::ptr::read_volatile;
 use x86_64::VirtAddr;
@@ -95,10 +95,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         rsdp.rsdt_address as u64
     };
 
-    serial_println!(
-        "[ACPI] RSDP encontrado em 0x{:x}. Revisao: {}. RSDT/XSDT em 0x{:x}",
-        rsdp_phys, revision, rsdt_phys
-    );
+    k_nano::slog_bin!("ACPI", "info", "RSDP encontrado em 0x{:x}. Revisao: {}. RSDT/XSDT em 0x{:x}", rsdp_phys, revision, rsdt_phys);
     println!(
         "[ACPI] RSDP encontrado. Revisao: {}. RSDT em 0x{:x}",
         revision, rsdt_phys
@@ -114,7 +111,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
 
     let is_xsdt = &sig == b"XSDT";
     if &sig != b"RSDT" && !is_xsdt {
-        serial_println!("[ACPI] Assinatura invalida: {:?}", core::str::from_utf8(&sig));
+        k_nano::slog_bin!("ACPI", "info", "Assinatura invalida: {:?}", core::str::from_utf8(&sig));
         println!("[ACPI] Assinatura invalida: {:?}", core::str::from_utf8(&sig));
         return None;
     }
@@ -124,7 +121,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     let entry_size: usize = if is_xsdt { 8 } else { 4 };
     let entry_count = (rsdt_len - 36) / entry_size;
 
-    serial_println!("[ACPI] Tabela RSDT/XSDT: {} bytes, {} entradas ({} bytes cada).", rsdt_len, entry_count, entry_size);
+    k_nano::slog_bin!("ACPI", "info", "Tabela RSDT/XSDT: {} bytes, {} entradas ({} bytes cada).", rsdt_len, entry_count, entry_size);
     println!("[ACPI] Tabela: {} bytes, {} entradas.", rsdt_len, entry_count);
 
     let mut lapic_base = 0xFEE0_0000u64;
@@ -152,7 +149,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
 
         match &table_sig {
             b"APIC" => {
-                serial_println!("[ACPI] MADT encontrado em 0x{:x}", table_phys);
+                k_nano::slog_bin!("ACPI", "info", "MADT encontrado em 0x{:x}", table_phys);
                 let madt_len_raw = table_ptr.add(4) as *const u32;
                 let madt_len = read_volatile(madt_len_raw) as usize;
                 let madt_lapic_addr_raw = table_ptr.add(0x24) as *const u32;
@@ -178,16 +175,13 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                             let ioapic_addr = read_volatile(ioapic_addr_raw2) as u64;
                             ioapic_base = ioapic_addr;
                             ioapic_count += 1;
-                            serial_println!(
-                                "[ACPI] IOAPIC ID {} em 0x{:x}",
-                                ioapic_id, ioapic_addr
-                            );
+                            k_nano::slog_bin!("ACPI", "info", "IOAPIC ID {} em 0x{:x}", ioapic_id, ioapic_addr);
                         }
                         2 => {
                             let source = read_volatile(table_ptr.add(offset + 3) as *const u8);
                             let gsi = read_volatile(table_ptr.add(offset + 4) as *const u32);
                             let flags = read_volatile(table_ptr.add(offset + 8) as *const u16);
-                            serial_println!("[ACPI] ISO: source={} gsi={} flags=0x{:04x}", source, gsi, flags);
+                            k_nano::slog_bin!("ACPI", "info", "ISO: source={} gsi={} flags=0x{:04x}", source, gsi, flags);
                             iso_overrides.push((source, gsi));
                         }
                         5 => {
@@ -195,7 +189,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                             let new_lapic = read_volatile(lapic_addr_raw) as u64;
                             if new_lapic != 0 {
                                 lapic_base = new_lapic;
-                                serial_println!("[ACPI] LAPIC Address Override: 0x{:x}", lapic_base);
+                                k_nano::slog_bin!("ACPI", "info", "LAPIC Address Override: 0x{:x}", lapic_base);
                             }
                         }
                         9 => {
@@ -207,10 +201,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                     offset += entry_len;
                 }
 
-                serial_println!(
-                    "[ACPI] MADT: LAPIC base 0x{:x}, IOAPIC base 0x{:x}, LAPICs: {}, IOAPICs: {}",
-                    lapic_base, ioapic_base, lapic_count, ioapic_count
-                );
+                k_nano::slog_bin!("ACPI", "info", "MADT: LAPIC base 0x{:x}, IOAPIC base 0x{:x}, LAPICs: {}, IOAPICs: {}", lapic_base, ioapic_base, lapic_count, ioapic_count);
                 println!(
                     "[ACPI] MADT: LAPICs: {}, IOAPICs: {}",
                     lapic_count, ioapic_count

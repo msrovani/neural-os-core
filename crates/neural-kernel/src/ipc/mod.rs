@@ -6,14 +6,13 @@ mod ring_buffer;
 pub use ring_buffer::SharedSpscRing;
 
 use crate::address_space::{self, AddressSpace, PRIVATE_PAGE_VA, SHARED_RING_VA};
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_PING};
 use x86_64::VirtAddr;
 
 /// Prova de conceito: dois AS, troca CR3, ring shared, Cap::PING via int 0x90.
 /// Non-fatal no boot — chamador loga WARN em Err.
 pub fn demo_two_spaces() -> Result<(), &'static str> {
-    serial_println!("[MVP-C] iniciando demo CR3 + ring + capability");
+    k_nano::slog_bin!("MVP", "C", "iniciando demo CR3 + ring + capability");
 
     let (kernel_l4, kernel_flags) = address_space::kernel_cr3();
     let mut as_a = AddressSpace::clone_current()?;
@@ -96,10 +95,7 @@ pub fn demo_two_spaces() -> Result<(), &'static str> {
         Cap::PING.union(Cap::WRITE_RING).union(Cap::READ_RING),
     )?;
 
-    serial_println!(
-        "[MVP-C] SUCCESS cr3-switch + shared-ring + Cap::PING (count={})",
-        syscall::ping_count()
-    );
+    k_nano::slog_bin!("MVP", "C", "SUCCESS cr3-switch + shared-ring + Cap::PING (count={})", syscall::ping_count());
     // Ring3 real: ver user_mode::demo_ring3 (P6).
     Ok(())
 }

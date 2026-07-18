@@ -78,7 +78,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
 
-    k_nano::serial_println!("[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
+    k_nano::slog_hermes!("DNS", "MANUAL", "Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
         hostname, dns_server[0], dns_server[1], dns_server[2], dns_server[3], frame.len());
 
     unsafe { slip::send(&frame); }
@@ -128,8 +128,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
                 if rdata_end > resp.len() { break; }
                 if rr_type == 1 && rdlen == 4 {
                     let ip = [resp[pos], resp[pos + 1], resp[pos + 2], resp[pos + 3]];
-                    k_nano::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
-                        ip[0], ip[1], ip[2], ip[3]);
+                    k_nano::slog_hermes!("DNS", "MANUAL", "OK: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
                     return Some(ip);
                 }
                 pos = rdata_end;
@@ -139,7 +138,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
             unsafe { slip::send(&frame); }
         }
     }
-    k_nano::serial_println!("[DNS-MANUAL] Timeout");
+    k_nano::slog_hermes!("DNS", "MANUAL", "Timeout");
     None
 }
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
@@ -243,7 +242,7 @@ impl Device for NetPhy {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
         if let Some(ref d) = data {
-            unsafe { k_nano::serial_println!("[NET-RX] {} bytes", d.len()); }
+            unsafe { k_nano::slog_hermes!("NET", "RX", "{} bytes", d.len()); }
         }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
@@ -311,7 +310,7 @@ impl NetStack {
         self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
-        k_nano::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2");
+        k_nano::slog_hermes!("Net", "info", "Static IP: 10.0.2.15/24 gw=10.0.2.2");
     }
 
     pub fn poll(&mut self, now_ms: i64) {
@@ -503,7 +502,7 @@ impl NetStack {
             let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
             let _ = udp.bind(54321);
             if udp.send_slice(&query, dns_server_addr).is_err() {
-                k_nano::serial_println!("[DNS] send_slice falhou");
+                k_nano::slog_hermes!("DNS", "info", "send_slice falhou");
             }
         }
 

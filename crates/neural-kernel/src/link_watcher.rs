@@ -110,9 +110,9 @@ impl FailoverEngine {
         wlan.set_active(target == 1);
         self.deg_count = 0;
         if target == 0 {
-            crate::serial_println!("[LINK] Switch para Ethernet");
+            k_nano::slog_bin!("LINK", "info", "Switch para Ethernet");
         } else {
-            crate::serial_println!("[LINK] Switch para WiFi");
+            k_nano::slog_bin!("LINK", "info", "Switch para WiFi");
         }
     }
 

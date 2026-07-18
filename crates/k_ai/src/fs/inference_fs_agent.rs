@@ -7,8 +7,6 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 use k_nano::fs::FilesystemAgent;
-use k_nano::serial_println;
-
 static INFERENCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static TRAINING_BUF: Mutex<Vec<(String, Vec<u8>)>> = Mutex::new(Vec::new());
 
@@ -29,7 +27,7 @@ pub struct InferenceFsAgent;
 
 impl InferenceFsAgent {
     pub fn new() -> Self {
-        serial_println!("[INFERENCE-FS] /inference/ pronto.");
+        k_nano::slog_kai!("INFERENCE", "FS", "/inference/ pronto.");
         InferenceFsAgent
     }
 }
@@ -50,7 +48,7 @@ impl FilesystemAgent for InferenceFsAgent {
         let mut buf = TRAINING_BUF.lock();
         if buf.len() >= 100 { buf.remove(0); }
         buf.push((key, data.to_vec()));
-        serial_println!("[INFERENCE-FS] Training: {} ({} bytes)", path, data.len());
+        k_nano::slog_kai!("INFERENCE", "FS", "Training: {} ({} bytes)", path, data.len());
         Ok(())
     }
 

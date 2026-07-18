@@ -22,5 +22,4 @@ fn main() {
 
     println!("cargo:rustc-env=BIOS_IMG={}", bios_path.display());
     println!("cargo:rustc-env=UEFI_IMG={}", uefi_path.display());
-    println!("cargo:warning=images at {} and {}", bios_path.display(), uefi_path.display());
 }

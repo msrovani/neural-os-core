@@ -38,7 +38,7 @@ impl MemoryAgent {
     }
 
     pub fn calculate_budget(model_params: u64, total_ram_mb: u64, total_vram_mb: u64) -> MemoryBudget {
-        crate::serial_println!("[MEM] Calculando budget: params={} ram={} vram={}", model_params, total_ram_mb, total_vram_mb);
+        k_nano::slog_bin!("MEM", "info", "Calculando budget: params={} ram={} vram={}", model_params, total_ram_mb, total_vram_mb);
         let model_gb: f64 = model_params as f64 / 1_000_000_000.0;
         let model_mb = (model_params * 2 / 8 / 1024 / 1024) as usize;
 
@@ -51,11 +51,9 @@ impl MemoryAgent {
         let used = (heap_mb + model_mb + kv_mb + arc_mb) as u64;
         let free = total_ram_mb.saturating_sub(used);
 
-        crate::serial_println!("[MEM]  RAM: {} MB | VRAM: {} MB | Modelo: {} params",
-            total_ram_mb, total_vram_mb, model_params);
-        crate::serial_println!("[MEM]  Heap:{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
-            heap_mb, model_mb, kv_mb, arc_mb, vram_mb);
-        crate::serial_println!("[MEM]  Livre apos: {} MB", free);
+        k_nano::slog_bin!("MEM", "info", "RAM: {} MB | VRAM: {} MB | Modelo: {} params", total_ram_mb, total_vram_mb, model_params);
+        k_nano::slog_bin!("MEM", "info", "Heap:{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB", heap_mb, model_mb, kv_mb, arc_mb, vram_mb);
+        k_nano::slog_bin!("MEM", "info", "Livre apos: {} MB", free);
 
         MemoryBudget {
             total_ram_mb, total_vram_mb,
@@ -138,20 +136,18 @@ impl Agent for MemoryAgent {
             }
         };
 
-        crate::serial_println!("[MEM] Orcamento adaptativo de memoria");
-        crate::serial_println!("[MEM]  RAM: {} MB | VRAM: {} MB | Modelo: {} params",
-            budget.total_ram_mb, budget.total_vram_mb, model_params);
-        crate::serial_println!("[MEM]  Heap:{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
+        k_nano::slog_bin!("MEM", "info", "Orcamento adaptativo de memoria");
+        k_nano::slog_bin!("MEM", "info", "RAM: {} MB | VRAM: {} MB | Modelo: {} params", budget.total_ram_mb, budget.total_vram_mb, model_params);
+        k_nano::slog_bin!("MEM", "info", "Heap:{}MB Model:{}MB KV:{}MB ARC:{}MB Vram:{}MB",
             budget.heap_target_mb, budget.model_ram_mb,
             budget.kv_cache_mb, budget.arc_cache_mb, budget.vram_model_mb);
-        crate::serial_println!("[MEM]  Livre apos: {} MB", budget.free_after_mb);
+        k_nano::slog_bin!("MEM", "info", "Livre apos: {} MB", budget.free_after_mb);
 
         // ── Clock measurement + dynamic tick calibration ──
         let cpu_mhz = Self::measure_cpu_freq();
         let active = Self::count_active_agents();
         let optimal_init = Self::calibrate_tick_init(active, cpu_mhz);
-        crate::serial_println!("[MEM]  CPU: {} MHz | {} agentes ativos | tick init: {}",
-            cpu_mhz, active, optimal_init);
+        k_nano::slog_bin!("MEM", "info", "CPU: {} MHz | {} agentes ativos | tick init: {}", cpu_mhz, active, optimal_init);
 
         // Resize heap
         crate::allocator::resize_heap_to_mb(budget.heap_target_mb);
@@ -166,7 +162,7 @@ impl Agent for MemoryAgent {
         }
 
         if budget.free_after_mb < 256 {
-            crate::serial_println!("[MEM]  ⚠ RAM insuficiente!");
+            k_nano::slog_bin!("MEM", "info", "⚠ RAM insuficiente!");
         }
 
         self.budget = Some(budget);

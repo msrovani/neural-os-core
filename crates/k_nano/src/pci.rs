@@ -1,4 +1,4 @@
-use crate::{serial_println, kjson};
+use crate::{kjson};
 use alloc::vec::Vec;
 
 const CONFIG_ADDRESS: u16 = 0xCF8;
@@ -261,18 +261,17 @@ pub(crate) unsafe fn write_config_dword(bus: u8, device: u8, function: u8, offse
 }
 
 /// Habilita Bus Master + Memory Space + I/O Space no PCI command register.
-pub(crate) unsafe fn enable_pci_bus_master(dev: &PciDevice) {
+pub unsafe fn enable_pci_bus_master(dev: &PciDevice) {
     enable_pci_bus_master_unsafe(dev.bus, dev.device, dev.function);
 }
 
-pub(crate) unsafe fn enable_pci_bus_master_unsafe(bus: u8, device: u8, function: u8) {
+pub unsafe fn enable_pci_bus_master_unsafe(bus: u8, device: u8, function: u8) {
     let cmd = read_config_word(bus, device, function, 0x04);
     let new_cmd = cmd | 0x07;
     if new_cmd != cmd {
         write_config_dword(bus, device, function, 0x04, new_cmd as u32);
         let verify = read_config_word(bus, device, function, 0x04);
-        serial_println!("[PCI] BusMaster enabled for {:02x}:{:02x}.{:02x}: cmd={:#06x}->{:#06x}",
-            bus, device, function, cmd, verify);
+        crate::slog_nano!("PCI", "info", "BusMaster enabled for {:02x}:{:02x}.{:02x}: cmd={:#06x}->{:#06x}", bus, device, function, cmd, verify);
     }
 }
 

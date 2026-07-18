@@ -5,6 +5,13 @@
 
 use core::sync::atomic::Ordering;
 
+/// `false` enquanto o blob real-mode/long-mode não voltar.
+/// `init_smp` deve skip INIT-SIPI (senão hang eterno esperando APs).
+#[inline]
+pub fn sipi_ready() -> bool {
+    false
+}
+
 #[repr(C, align(4096))]
 struct TrampolinePage([u8; 4096]);
 
@@ -45,7 +52,7 @@ pub unsafe fn init_trampoline(
     let gdt_phys = phys_addr + OFF_GDT as u64;
     core::ptr::write_volatile(tramp_virt.add(OFF_GDT_PSEUDO + 2) as *mut u32, gdt_phys as u32);
 
-    crate::serial_println!("[SMP] trampoline STUB (global_asm disabled — LLVM align16/SSE)");
+    k_nano::slog_nano!("SMP", "info", "trampoline STUB (global_asm disabled — LLVM align16/SSE)");
 }
 
 pub unsafe fn trampoline_size() -> usize {

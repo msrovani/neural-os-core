@@ -39,5 +39,5 @@ pub fn init_apps() {
     register_app("settings", Box::new(settings_app::SettingsApp::new()));
     register_app("power", Box::new(power_app::PowerApp::new()));
     let names = app_names();
-    k_nano::serial_println!("[APPS] {} apps registrados no Hermes Chat.", names.len());
+    k_nano::slog_hermes!("APPS", "info", "{} apps registrados no Hermes Chat.", names.len());
 }

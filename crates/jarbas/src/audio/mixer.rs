@@ -3,7 +3,6 @@ use event_bus::Receiver;
 use crate::audio::ringbuf::AudioRingBuffer;
 use crate::audio::settings::AUDIO_VOLUME;
 use crate::audio::voice::AUDIO_RING;
-use k_nano::serial_println;
 use core::sync::atomic::Ordering;
 
 const MIXER_MANIFEST: AgentManifest = AgentManifest {
@@ -45,7 +44,7 @@ impl Agent for AudioMixerAgent {
                 scaled.push((s as f32 * vol) as i16);
             }
             let written = self.out_ring.push(&scaled);
-            serial_println!("[MIXER] {} samples -> ring (vol={}%)", written, (vol * 100.0) as u8);
+            k_nano::slog_jarbas!("MIXER", "info", "{} samples -> ring (vol={}%)", written, (vol * 100.0) as u8);
         }
         // Drena o ring buffer para o HDA playback (auto-falante)
         let mut hda_buf = [0i16; 1024];

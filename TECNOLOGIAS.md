@@ -2,7 +2,7 @@
 ## Registro de Propriedade Intelectual e Inovação
 
 **~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
-**Versão release:** v1.8.5 TESTE / NÃO ESTÁVEL (2026-07-16)
+**Versão release:** v1.8.6 TESTE / NÃO ESTÁVEL (2026-07-18)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
@@ -38,6 +38,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 1.5 | **Memory Hierarchy Index (MHI) — Alocação por IA** | 🏆 Sistema de memória em 4 tiers (Dram→Vram→Nvme→Hdd) com alocação orientada por ML. `alloc_by_tier()` + soft-migrate ativo (ADR-0040 MVP). | ZFS ARC (MFU/MRU), Hierarchical Memory papers | GPLv2 / MIT | `mhi.rs`, `memory.rs` | ✅ soft-MVP |
 | 1.6 | **Trinity MoE — Roteamento de Intenção em Bare-Metal** | 🏆 6 experts (hw_identify, rust_coder, disk_diag, security, speech_synth, generator) + router treinável. Roteia dentro do LLM sem keyword matching. AutoLearn detecta necessidade → treina → registra novo expert. | Mixture of Experts papers (Shazeer 2017), MoE em LLMs | MIT | `trinity.rs`, `cortex.rs`, `agents.rs` (AutoLearnAgent) | ✅ 0 err |
 | 1.8 | **Dual-Tier Memory + R3 (Rollout Routing Replay)** | 🏆 Separação obrigatória: Tier 1 `talc` (Hermes/JARBAS/UI) vs Tier 2 `TensorArena` bump (Cortex/MoE). Cache de rotas e tokens na arena — reset O(1) após GRPO. Zero fragmentação no hot path de inferência. Proíbe `Box`/`Vec` global no loop de tokens. | Rollout Routing Replay / GRPO papers; bare-metal arena pattern | MIT | `allocator.rs`, `arena.rs`, `r3.rs`, `global_arena.rs` | ✅ 0 err |
+| 1.9 | **k-HAL — Anel R1 / DeviceCap + HalOffer (ADR-0041)** | 🏆 Único dono MMIO + DeviceTree + **HalOffer** (API R3 query/bind + Cap grant) + ports FE Cap-enforce + **H4+ QUEUE_NOTIFY** + **AS shallow** PoC. Continua release **1.8.x**. | HalOffer ≠ VirtIO; sDDF; Theseus | MIT | `crates/k_hal/offer.rs`, `virtio.rs`, `cap_gate.rs`, `hermes/hal_offer.rs` | ✅ H4+/H5+/AS (1.8.x) |
 | 1.7 | **3 Camadas Visuais: Orb + Hermes CLI + Window Manager** | 🏆 Arquitetura visual em 3 camadas Z-order com FFT audio→Orbe, overlay CLI semi-transparente, e gerenciador de janelas com mouse integrado. Tudo renderizado por software no framebuffer UEFI, sem GPU. | SmileyOS patterns, JARVIS .NET MAUI (autor) | MIT | `display/compositor.rs`, `display/avatar.rs` | ✅ 0 err |
 
 ---
@@ -75,15 +76,16 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 3.1 | **GPU Backend Universal (NVIDIA→Intel→AMD→CPU)** | 🏆 Pipeline único que tenta 4 backends em sequência: NVIDIA PFIFO → Intel Ring → AMD PM4 → CPU AVX2. Primeira implementação bare-metal multi-vendor. | nouveau, i915, amdgpu drivers | GPLv2 (kernel) | `gpu/backend.rs` | ✅ 0 err |
+| 3.1 | **GPU Backend Universal (NVIDIA→Intel→AMD→CPU)** | 🏆 Plano `display_coex` dirige init; canário `vector_add` promove Ready; gate ADR-0047 só após golden (não PFIFO NOP). | nouveau, i915, amdgpu; rust-gpu (host) | GPLv2 (kernel) | `gpu/backend.rs`, `canary.rs`, `compute_abi.rs` | 🟡 fundação |
 | 3.2 | **NVIDIA PFIFO PUSH_BUFFER** | 🔬 Engenharia reversa do canal de comandos GPFIFO da NVIDIA Pascal (GTX 1050). `pushbuffer_submit()` com doorbell + timeout. Sem NDA. | nouveau driver (eng. reversa) | GPLv2 | `gpu/nvidia.rs` | ✅ 0 err |
 | 3.3 | **GPU Secure Boot WPR (FECS+GPCCS)** | 🔬 PoC GP108: aloca WPR 2MB, faz upload parcial FECS+GPCCS e poll. **Não é ACR completo:** faltam ACR HS/LSB, assinaturas na WPR, GR `sw_*`, MMU/runlist/canal e evidência HW. | nouveau ACR driver | GPLv2 (MIT blobs) | `gpu/firmware.rs` | 🟡 PoC / ADR-0048 |
 | 3.4 | **VRAM Buddy Allocator** | 🏆 Alocador de VRAM power-of-2 com split/merge. `vram_alloc()`/`vram_free()` integrado ao BAR2 UC. | Linux buddy allocator | GPLv2 | `gpu/vram.rs` | ✅ 0 err |
 | 3.5 | **Intel GPU Gen Ring (BCS Blitter)** | 🔬 Ring buffer Intel Gen6+ com MI_BATCH_BUFFER. Blitter BCS para cópia 2D acelerada. | i915 driver | GPLv2 | `gpu/intel.rs` | ✅ 0 err |
 | 3.6 | **VirtIO-GPU 2D** | Port do driver VirtIO-GPU para framebuffer em QEMU. | `virtio-drivers` crate | MIT/Apache 2.0 | `gpu/virtio_gpu.rs` | ✅ 0 err |
-| 3.7 | **NVIDIA Compute Multigeração (ADR-0048)** | 🏆 Contrato único com backends Legacy ACR (Maxwell/Pascal/Volta) e GSP (Turing+), seleção runtime e Kernel Pack multi-ISA pré-compilado; Pascal é o primeiro gate HW. | Nouveau/NVK/NAK, open-gpu-doc, open-gpu-kernel-modules | MIT/GPLv2; CUDA host-only | `docs/architecture/0048-nvidia-compute-multigeracao.md` | ⏳ Proposed |
-| 3.8 | **AMD Compute Multigeração (ADR-0049)** | 🏆 IP Discovery → backends KIQ/MES; `AMD_KERNEL_PACK` (HSACO COV4/5) offline; PSP/SMU/SDMA assinados; sem ROCm no alvo. Código atual: BAR map + stub PSP. | amdgpu, LLVM AMDGPU, RADV/ACO, GPUOpen ISA | MIT/GPLv2; FW MIT redistrib. | `docs/architecture/0049-amd-compute-multigeracao.md` | ⏳ Proposed |
-| 3.9 | **Intel Compute Multigeração (ADR-0050)** | 🏆 GMD_ID → famílias Gen9…Xe3; GuC + `GPGPU_WALKER`/`COMPUTE_WALKER`; `INTEL_KERNEL_PACK` (ocloc/zebin) offline; sem L0/OpenCL no alvo. Código atual: ring/BCS + GuC stub. | i915/xe, IGC, Mesa genxml, PRMs Intel | MIT/GPLv2; FW MIT redistrib. | `docs/architecture/0050-intel-compute-multigeracao.md` | ⏳ Proposed |
+| 3.7 | **NVIDIA Compute Multigeração (ADR-0048)** | 🔄 LegacyAcr (Pascal) vs Gsp (Turing+) separados; NKP CUBIN offline (`pack_nvidia_kernels.py`); ACR só Pascal + BAR2+pmoff. Canário HW aberto. | Nouveau/NVK/NAK, open-gpu-doc | MIT/GPLv2; CUDA host-only | `gpu/nvidia.rs`, `kernel_pack.rs`, `tools/pack_nvidia_kernels.py` | 🟡 fazendo |
+| 3.8 | **AMD Compute Multigeração (ADR-0049)** | 🔄 KiQ/Mes por arch; IP Discovery hint; doorbell MMIO noop até C3; NKP HSACO packer; FW amdgpu no download script. | amdgpu, LLVM AMDGPU | MIT/GPLv2 | `gpu/amd.rs`, `tools/pack_amd_kernels.py` | 🟡 fazendo |
+| 3.9 | **Intel Compute Multigeração (ADR-0050)** | 🔄 Gen9 `GPGPU_WALKER` vs Arc `COMPUTE_WALKER` paths separados; NKP zebin packer; iGPU display / dGPU compute. | i915/xe, IGC | MIT/GPLv2 | `gpu/intel.rs`, `tools/pack_intel_kernels.py` | 🟡 fazendo |
+| 3.10 | **KernelPack NKP1 + gpu_kernels host** | 🏆 Envelope assinado FNV1a64+Ed25519; crate `tools/gpu_kernels` isolada (CPU golden); zero Vulkan/CUDA no bin. | ADR-0052, rust-gpu no_std patterns | MIT | `gpu/kernel_pack.rs`, `tools/gpu_kernels/` | 🟡 fundação |
 
 ---
 
@@ -161,7 +163,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 8.1 | **The Agency (147 agentes especialistas)** | 🏆 **Maior população de agentes em um único sistema bare-metal:** 147 especialistas divididos em Engineering, Design, Product, QA, Support, Marketing, Infra, Data Science, Research. Cada um com manifest, schedule, trust, e skill registry. | CrewAI, OpenAI Swarm, AutoGen, OpenHands, Cline | Apache 2.0 / MIT | `agents.rs`, `agent-core/` | ✅ 0 err |
+| 8.1 | **The Agency (214 especialistas)** | 🏆 Catálogo data-driven: 146 base + 68 importados em `AGENT.md` / seed; SpecialistAgent EventDriven no scheduler. Docs antigos “147” = drift. | CrewAI, OpenAI Swarm, AutoGen, agency-agents (MIT) | Apache 2.0 / MIT | `agency_seed.rs`, `ecosystem/agents/`, `agents.rs` | ✅ data-driven |
+| 8.1b | **PackageHub Agent manifests (ADR-0051)** | 🏆 Manifestos nativos+Agency no namespace NeuralFS; CRUD HITL; VFS bridge bin↔Hermes. | ADR-0051 / NeuralFS §12 | MIT | `hermes/package_hub.rs`, `tools/export_agent_packages.py` | ✅ SESSION_134 |
 | 8.2 | **Consciousness Metrics (10 métricas)** | 🏆 Sistema de "consciência" com 10 métricas cognitivas (skills_ok, errors_resolved, anomaly_count, memories, etc.). Self-Improvement Loop periódico. | JARVIS C# (autor), Lethe brain regions | MIT | `cortex.rs` (Consciousness) | ✅ 0 err |
 | 8.2b | **Self-Evolve Engine (Sprint 108)** | 🏆 observe→generate→verify→improve→reflect: auto-skill por padrão/LLM, verificação estrutural, SIL wired, meta-reflect no SleepCycle. | Cratos / SkillObserver | MIT | `hermes/self_evolve.rs`, `agents.rs` (SelfEvolveAgent) | ✅ S108 |
 | 8.3 | **Auto-Learn + R3 Replay** | 🏆 Trinity AutoLearnAgent: monitora intents não classificados, detecta padrões (≥3), carrega conhecimento, **update_with_replay()** com RouteTrace congelados da TensorArena (sem re-rotear / sem train_step dummy), reset_moe_cache O(1). | Active Learning, GRPO/R3 papers | MIT | `agents.rs`, `r3.rs` | ✅ 0 err |
@@ -173,8 +176,10 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
 | 9.1 | **SafetyAgent — 4 Invariantes SMT-proof** | 🏆 **Único sistema bare-metal com Asimov's Laws implementadas.** 4 invariantes: I1 (process separation), I2 (pre-action), I3 (fail-closed), I4 (signed evidence). Layer 0 = Cosmic Law (halt em violação). | Asimov's Three Laws, AI Safety research | MIT | `safety.rs` | ✅ 0 err |
-| 9.2 | **TrustCache + Ed25519 Identity** | 🔄 Sistema de confiança por token: (token, agent, skill). Verificação Ed25519 de skills. TTL e deny list. | Ed25519 (Bernstein et al.), TPM | MIT / domínio público | `trust.rs`, `identity.rs` | ✅ 0 err |
-| 9.3 | **Merkle Audit Trail** | 🏆 Cadeia de hash SHA-256 para toda decisão de segurança. Cada entrada assinada por chave do kernel. Verificável contra violação. | Blockchain / distributed ledger (conceito) | MIT | `audit.rs` | ✅ 0 err |
+| 9.2 | **TrustCache + Ed25519 Identity** | 🏆 Token trust + **session keypair** boot (`sign_session` / `verify_trusted` trusted\|session). Assina artifacts PackageHub. | Ed25519 (Bernstein et al.), TPM | MIT / domínio público | `k_nano/identity.rs`, `package_hub.rs` | ✅ SESSION_136 |
+| 9.3 | **Merkle Audit Trail** | 🏆 SHA-256 chain + **Ed25519 por entry** (session). Wire PackageHub/Approval/self_evolve. | Blockchain / distributed ledger (conceito) | MIT | `k_ai/audit.rs` | ✅ SESSION_136 |
+| 9.4 | **HANR Marketplace + Memory** | 🏆 Loja local+Net allowlist; USER/MEMORY/SOUL; progressive skills L0/L1; MCP JSON-RPC mínimo. | Nous Hermes Agent (paridade semântica) | MIT | `marketplace.rs`, `memory_store.rs`, `mcp.rs` | ✅ SESSION_136 |
+| 9.5 | **Cognitive Bridge K²CHJ** | 🏆 Prompt Cortex = SOUL+USER+MEMORY + BGE-RAG + Trinity + L0 CapGate; **route_user_intent** Trinity→Trust→Skill/LLM; IterationBudget; session search; PERSONA Jarbas; REFLECT→MEMORY_NUDGE. UX HANR, stack superior. | HANR + BGE + Trinity MoE | MIT | `cognitive_bridge.rs`, `memory_store.rs`, `jarvis.rs` | ✅ SESSION_137 |
 | 9.4 | **DHCP Starvation Detection** | 🏆 Monitora relação tx_count/rx_count. Se tx >> rx por período prolongado, alerta. Detector implementado em SecurityAgent. | Segurança de rede (conceito) | MIT | `security.rs` | ✅ 0 err |
 
 ---
@@ -259,7 +264,7 @@ $ cargo clean -p neural-kernel && cargo nk
     0 errors
 ```
 
-**Métricas (v1.8.5 TEST):**
+**Métricas (v1.8.6 TEST):**
 
 | Métrica | Valor |
 |---------|-------|
@@ -269,7 +274,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | ADRs | 47+ |
 | Firmware blobs | 116 (~12.5 MB) |
 | HWIDs HW Expert v3 | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.8.5 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
+| Tags release | v1.0.0 → **v1.8.6 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K²CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 
@@ -296,7 +301,7 @@ $ cargo clean -p neural-kernel && cargo nk
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.8.5 TEST / NÃO ESTÁVEL**
+> **AIOS K²CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
 > *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K²CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)

@@ -70,3 +70,19 @@ pub fn smoke_split() -> bool {
     let root = crate::neural_fs::btree::BTreeNode::read(&mut disk, 0, vol.sb.inode_tree_root);
     root.map(|n| n.level() >= 1).unwrap_or(false)
 }
+
+/// Multi-nivel: 200 keys forcam splits; nao pode falhar com "parent full".
+pub fn smoke_multilevel() -> bool {
+    let mut disk = MemoryDisk::new(16 * 1024 * 1024);
+    let total = disk.sector_count();
+    if !NeuralVolume::format(&mut disk, 0, total) {
+        return false;
+    }
+    let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
+        return false;
+    };
+    match vol.test_insert_many(&mut disk, 200) {
+        Ok(level) => level >= 1,
+        Err(_) => false,
+    }
+}

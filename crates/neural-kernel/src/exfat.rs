@@ -123,8 +123,9 @@ fn parse_vbr(vbr: &[u8; 512], start_lba: u64) -> Option<ExfatFs> {
     if &vbr[3..11] != &EBPB_SIGNATURE[..] || vbr[11] != 0x00 {
         return None;
     }
+    // Microsoft exFAT: VolumeLength @72 (nao @56 — bytes 11..63 MustBeZero)
     let total_sectors = u64::from_le_bytes([
-        vbr[56], vbr[57], vbr[58], vbr[59], vbr[60], vbr[61], vbr[62], vbr[63],
+        vbr[72], vbr[73], vbr[74], vbr[75], vbr[76], vbr[77], vbr[78], vbr[79],
     ]);
     let fat_offset = u32::from_le_bytes([vbr[80], vbr[81], vbr[82], vbr[83]]);
     let cluster_heap_offset = u32::from_le_bytes([vbr[88], vbr[89], vbr[90], vbr[91]]);

@@ -7,7 +7,6 @@ use event_bus::{CapabilityToken, Event, Receiver};
 use crate::audio::vad::{VAD, VadTransition};
 use crate::audio::settings::{self, WAKEWORD_SENSITIVITY};
 use crate::audio::{TOPIC_WAKEWORD, TOPIC_AUDIO_IN};
-use crate::serial_println;
 use crate::kjson;
 use core::sync::atomic::Ordering;
 
@@ -119,7 +118,7 @@ impl WakeWordAgent {
 
     fn publish_wake(&mut self, score: f32, via: &str) {
         self.cooldown = settings::wake_cooldown_ticks();
-        serial_println!("[WAKEWORD] HIT \"jarvis\" via={} score={:.2}", via, score);
+        k_nano::slog_bin!("WAKEWORD", "info", "HIT \"jarvis\" via={} score={:.2}", via, score);
         let _ = crate::EVENT_BUS.publish(Event {
             id: 0,
             topic: alloc::string::String::from(TOPIC_WAKEWORD),
@@ -158,11 +157,11 @@ impl Agent for WakeWordAgent {
                 self.history_idx = (self.history_idx + 1).min(64);
 
                 if transition == VadTransition::SpeechStart {
-                    serial_println!("[WAKEWORD] Voz detectada (energy={:.0})", energy);
+                    k_nano::slog_bin!("WAKEWORD", "info", "Voz detectada (energy={:.0})", energy);
                 }
 
                 if transition == VadTransition::SpeechEnd {
-                    serial_println!("[WAKEWORD] Silencio detectado");
+                    k_nano::slog_bin!("WAKEWORD", "info", "Silencio detectado");
                     let mut energy_16 = [0.0f32; 16];
                     let copy_len = self.history_idx.min(16);
                     energy_16[..copy_len].copy_from_slice(&self.energy_history[..copy_len]);

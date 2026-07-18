@@ -4,7 +4,6 @@ use alloc::format;
 use alloc::collections::BTreeMap;
 use core::sync::atomic::Ordering;
 use k_nano::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
-use k_nano::serial_println;
 use crate::chunker;
 
 #[derive(Clone, Debug)]
@@ -168,10 +167,7 @@ impl SelfHeal {
             let skill_ok = self.check_device_skill(vid, did, class, &desc);
             if fw_ok && skill_ok {
                 report.noop = report.noop.saturating_add(1);
-                k_nano::serial_println!(
-                    "[N2-SELFHEAL] noop VID={:04X}:{:04X} class={:02X}",
-                    vid, did, class
-                );
+                k_nano::slog_kai!("Gate", "n2", "noop VID={:04X}:{:04X} class={:02X}", vid, did, class);
             } else {
                 report.heal_issues = report.heal_issues.saturating_add(1);
                 if !fw_ok {
@@ -180,16 +176,11 @@ impl SelfHeal {
                 if !skill_ok {
                     report.health_published = report.health_published.saturating_add(1);
                 }
-                k_nano::serial_println!(
-                    "[N2-SELFHEAL] heal VID={:04X}:{:04X} class={:02X} fw_ok={} skill_ok={}",
-                    vid, did, class, fw_ok, skill_ok
-                );
+                k_nano::slog_kai!("Gate", "n2", "heal VID={:04X}:{:04X} class={:02X} fw_ok={} skill_ok={}", vid, did, class, fw_ok, skill_ok);
             }
         }
-        k_nano::serial_println!(
-            "[N2-SELFHEAL] done scanned={} noop={} heal={} HEALTH_ISSUE={}",
-            report.scanned, report.noop, report.heal_issues, report.health_published
-        );
+        k_nano::slog_kai!("Gate", "n2", "done scanned={} noop={} heal={} HEALTH_ISSUE={}",
+            report.scanned, report.noop, report.heal_issues, report.health_published);
         report
     }
 
@@ -209,7 +200,7 @@ impl SelfHeal {
                 id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
                 payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
             });
-            k_nano::serial_println!("[SELFHEAL] I3: {} precisa de firmware", dev);
+            k_nano::slog_kai!("SelfHeal", "info", "I3: {} precisa de firmware", dev);
             return false;
         }
         true
@@ -227,7 +218,7 @@ impl SelfHeal {
                 id: 0, topic: alloc::string::String::from("HEALTH_ISSUE"),
                 payload: msg.into_bytes(), token: event_bus::CapabilityToken::Legacy(1),
             });
-            k_nano::serial_println!("[SELFHEAL] I4: {} sem skill '{}'", desc, skill_name);
+            k_nano::slog_kai!("SelfHeal", "info", "I4: {} sem skill '{}'", desc, skill_name);
             return false;
         }
         true
@@ -239,7 +230,7 @@ impl SelfHeal {
     }
 
     pub fn save_checkpoint(&mut self) {
-        serial_println!("[CHECKPOINT] Salvando estado do kernel...");
+        k_nano::slog_kai!("CHECKPOINT", "info", "Salvando estado do kernel...");
         let guard = GLOBAL_ALLOCATOR.lock();
         if let Some(ref alloc) = *guard {
             self.checkpoint.bitmap = alloc.bitmap;
@@ -252,7 +243,7 @@ impl SelfHeal {
         self.checkpoint.mhi_dram_bytes = Self::get_mhi_dram_bytes();
         self.checkpoint.tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
         self.checkpoint.valid = true;
-        serial_println!("[CHECKPOINT] Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
+        k_nano::slog_kai!("CHECKPOINT", "info", "Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
             self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
     }
 
@@ -271,7 +262,7 @@ impl SelfHeal {
 
         if prev_bitmap.is_empty() || prev_bitmap.len() != BITMAP_SIZE {
             let chunks = chunker::chunk_data(&current_bmp);
-            serial_println!("[SNAPSHOT] Primeiro: {} chunks CDC", chunks.len());
+            k_nano::slog_kai!("SNAPSHOT", "info", "Primeiro: {} chunks CDC", chunks.len());
             return (chunks, Vec::new());
         }
 
@@ -281,18 +272,17 @@ impl SelfHeal {
             .filter(|c| c.iter().any(|&b| b != 0))
             .collect();
 
-        serial_println!("[SNAPSHOT] Delta: {}/{} chunks modificados",
-            nonzero.len(), chunker::chunk_data(&current_bmp).len());
+        k_nano::slog_kai!("SNAPSHOT", "info", "Delta: {}/{} chunks modificados", nonzero.len(), chunker::chunk_data(&current_bmp).len());
 
         (chunker::chunk_data(&current_bmp), nonzero)
     }
 
     pub fn restore_checkpoint(&mut self) -> bool {
         if !self.checkpoint.valid {
-            serial_println!("[CHECKPOINT] Nenhum checkpoint valido para restaurar.");
+            k_nano::slog_kai!("CHECKPOINT", "info", "Nenhum checkpoint valido para restaurar.");
             return false;
         }
-        serial_println!("[CHECKPOINT] Restaurando estado @ tick {}...", self.checkpoint.tick);
+        k_nano::slog_kai!("CHECKPOINT", "info", "Restaurando estado @ tick {}...", self.checkpoint.tick);
         let mut guard = GLOBAL_ALLOCATOR.lock();
         if let Some(ref mut alloc) = *guard {
             alloc.bitmap = self.checkpoint.bitmap;
@@ -302,10 +292,7 @@ impl SelfHeal {
             alloc.allocated_count = self.checkpoint.allocated_count;
         }
         drop(guard);
-        serial_println!(
-            "[CHECKPOINT] Bitmap restaurado @ {} frames — AVISO: page tables/heap/drivers NAO restaurados (P09)",
-            self.checkpoint.allocated_count
-        );
+        k_nano::slog_kai!("CHECKPOINT", "info", "Bitmap restaurado @ {} frames — AVISO: page tables/heap/drivers NAO restaurados (P09)", self.checkpoint.allocated_count);
         true
     }
 
@@ -314,13 +301,13 @@ impl SelfHeal {
     }
 
     pub fn record_failure(&mut self, msg: String, action: String, tick: u64) {
-        serial_println!("[SELF-HEAL] Falha registrada: '{}' + '{}'", msg, action);
+        k_nano::slog_kai!("SELF", "HEAL", "Falha registrada: '{}' + '{}'", msg, action);
         self.lessons.push(FailedStrategy { error_msg: msg, attempted_action: action, tick });
     }
 
     pub fn analyze(&mut self, ctx: &ErrorContext, recover: bool) -> RecoveryAction {
         let class = FailureClass::classify(ctx.kind, &ctx.message);
-        serial_println!("[SELF-HEAL] {:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
+        k_nano::slog_kai!("SELF", "HEAL", "{:?}: {} daemon '{}' ({} lessons)", class, ctx.kind, ctx.daemon, self.lessons.len());
 
         if !recover { return RecoveryAction::LogAndContinue; }
 
@@ -433,7 +420,7 @@ pub fn verify_recovery(check: fn() -> bool, _label: &str) -> bool {
 /// M10: Erros no EventLog — registra falha no log de eventos
 pub fn log_error_to_eventlog(error: &str, class: FailureClass) {
     let msg = alloc::format!("[EVENTLOG] {:?}: {}", class, error);
-    k_nano::serial_println!("{}", msg);
+    k_nano::slog_kai!("Log", "msg", "{}", msg);
     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
         id: 0,
         topic: alloc::string::String::from("SELFHEAL_ERROR"),
@@ -531,7 +518,7 @@ pub static BAD_BLOCKS: spin::Mutex<BTreeSet<(String, u64)>> = spin::Mutex::new(B
 
 pub fn mark_bad(dev_name: &str, lba: u64) {
     BAD_BLOCKS.lock().insert((String::from(dev_name), lba));
-    k_nano::serial_println!("[SELFHEAL] Bad block {}@{:#x}", dev_name, lba);
+    k_nano::slog_kai!("SelfHeal", "info", "Bad block {}@{:#x}", dev_name, lba);
 }
 
 pub fn is_bad(dev_name: &str, lba: u64) -> bool {
@@ -548,14 +535,14 @@ pub fn read_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, b
             // Se bloco de 4096 bytes, verifica CRC
             if buf.len() == 4096 {
                 if k_nano::neural_fs::checksum::crc32c(&buf[4..4096]) != u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) {
-                    k_nano::serial_println!("[SELFHEAL] CRC mismatch {}@{:#x}, retrying", name, lba);
+                    k_nano::slog_kai!("SelfHeal", "info", "CRC mismatch {}@{:#x}, retrying", name, lba);
                     continue;
                 }
                 return true;
             }
             return true;
         }
-        k_nano::serial_println!("[SELFHEAL] Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+        k_nano::slog_kai!("SelfHeal", "info", "Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
     }
     mark_bad(name, lba);
     false
@@ -564,7 +551,7 @@ pub fn read_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, b
 pub fn write_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, buf: &[u8], name: &str) -> bool {
     for attempt in 0..3 {
         if dev.write_sectors(lba, buf) { return true; }
-        k_nano::serial_println!("[SELFHEAL] Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+        k_nano::slog_kai!("SelfHeal", "info", "Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
     }
     mark_bad(name, lba);
     false

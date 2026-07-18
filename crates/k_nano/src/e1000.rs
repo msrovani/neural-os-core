@@ -7,8 +7,6 @@ use alloc::vec::Vec;
  // kept for potential I/O bar fallback
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
-use crate::serial_println;
-
 pub const E1000_VENDOR_INTEL: u16 = 0x8086;
 pub const E1000_DEVICE_82540EM: u16 = 0x100E;
 pub const E1000_DEVICE_82574L: u16 = 0x10D3;
@@ -121,8 +119,7 @@ impl E1000Driver {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let mmio_virt = mmio_base + pmoff;
 
-        serial_println!("[E1000] Detectado vendor={:#06x} device={:#06x} MMIO={:#010x} virt={:#010x}",
-            dev.vendor_id, dev.device_id, mmio_base, mmio_virt);
+        crate::slog_nano!("Net", "e1000", "Detectado vendor={:#06x} device={:#06x} MMIO={:#010x} virt={:#010x}", dev.vendor_id, dev.device_id, mmio_base, mmio_virt);
 
         // Garantir PCI Bus Master + Memory Space habilitados para DMA
         crate::pci::enable_pci_bus_master(dev);
@@ -193,15 +190,15 @@ impl E1000Driver {
             if self.read32(REG_CTRL) & CTRL_RST == 0 { break; }
             core::hint::spin_loop();
         }
-        serial_println!("[E1000] Reset OK");
+        crate::slog_nano!("Net", "e1000", "Reset OK");
 
         // Re-check PCI Bus Master after reset (CTRL_RST pode ter limpado)
         let cmd = crate::pci::read_config_word(self.pci_bus, self.pci_device, self.pci_func, 0x04);
         if cmd & 0x04 == 0 {
-            serial_println!("[E1000] Bus Master lost after reset! Re-enabling...");
+            crate::slog_nano!("Net", "e1000", "Bus Master lost after reset! Re-enabling...");
             crate::pci::enable_pci_bus_master_unsafe(self.pci_bus, self.pci_device, self.pci_func);
         } else {
-            serial_println!("[E1000] Bus Master OK after reset: cmd={:#06x}", cmd);
+            crate::slog_nano!("Net", "e1000", "Bus Master OK after reset: cmd={:#06x}", cmd);
         }
 
         // Read MAC
@@ -211,7 +208,7 @@ impl E1000Driver {
         self.write32(REG_CTRL, 0x80000000);
         for _ in 0..1000 { core::hint::spin_loop(); }
         self.write32(REG_CTRL, CTRL_SLU | CTRL_FD);
-        serial_println!("[E1000] MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        crate::slog_nano!("Net", "e1000", "MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
             self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
             self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
 
@@ -222,15 +219,14 @@ impl E1000Driver {
                       (mac[1] as u32) << 8 | (mac[0] as u32);
         self.write32(REG_RAL, ral_val);
         self.write32(REG_RAH, rah_val);
-        serial_println!("[E1000] MAC re-written: RAL={:#010x} RAH={:#010x}", ral_val, rah_val);
+        crate::slog_nano!("Net", "e1000", "MAC re-written: RAL={:#010x} RAH={:#010x}", ral_val, rah_val);
 
         // Force link UP: escreve CTRL com valor limpo (SLU + FD + SPEED1000)
         // VirtualBox precisa de CTRL limpo (sem bits reservados que travam o link)
         // QEMU aceita qualquer valor com SLU setado
         self.write32(REG_CTRL, CTRL_SLU | CTRL_FD);
         let ctrl_new = self.read32(REG_CTRL);
-        serial_println!("[E1000] CTRL forced link UP (clean): wrote={:#010x} readback={:#010x}",
-            CTRL_SLU | CTRL_FD, ctrl_new);
+        crate::slog_nano!("Net", "e1000", "CTRL forced link UP (clean): wrote={:#010x} readback={:#010x}", CTRL_SLU | CTRL_FD, ctrl_new);
 
         // Allocate TX ring + mapear como uncacheable
         let tx_ring = Self::alloc_frame();
@@ -313,7 +309,7 @@ impl E1000Driver {
         self.write32(REG_IMASK, 0);
         Self::fence_write();
 
-        serial_println!("[E1000] Init OK. TX descs={} RX descs={}", TX_DESC_COUNT, RX_DESC_COUNT);
+        crate::slog_nano!("Net", "e1000", "Init OK. TX descs={} RX descs={}", TX_DESC_COUNT, RX_DESC_COUNT);
 
         true
     }
@@ -426,7 +422,7 @@ impl E1000Driver {
         self.write32(REG_RCTRL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
         // RDT só DEPOIS de habilitar
         self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
-        serial_println!("[E1000] RX kick: Rx enabled -> RDT={}", RX_DESC_COUNT - 1);
+        crate::slog_nano!("Net", "e1000", "RX kick: Rx enabled -> RDT={}", RX_DESC_COUNT - 1);
     }
 
     pub unsafe fn dump_status(&mut self) {
@@ -447,23 +443,21 @@ impl E1000Driver {
         let desc0_virt = (self.rx_ring_paddr + pmoff) as *const RxDesc;
         let desc0_status = (*desc0_virt).status;
         let desc0_len = (*desc0_virt).length;
-        serial_println!("[E1000] CTRL={:#010x} STATUS={:#010x} link={} speed={} AV={}",
+        crate::slog_nano!("Net", "e1000", "CTRL={:#010x} STATUS={:#010x} link={} speed={} AV={}",
             ctrl, status,
             if status & 0x02 != 0 { "UP" } else { "DOWN" },
             match (status >> 6) & 0x03 {
-                0 => "10Mb", 1 => "100Mb", 2 => "1000Mb", _ => "?"
+            0 => "10Mb", 1 => "100Mb", 2 => "1000Mb", _ => "?"
             },
             if rah & 0x80000000 != 0 { "1" } else { "0" });
-        serial_println!("[E1000] RDH={} RDT={} TDH={} TDT={} RCTRL={:#010x} RAH={:#010x}",
-            rdh, rdt, tdh, tdt, rctrl, rah);
-        serial_println!("[E1000] RDBAL={:#010x} RDBAH={:#010x} RDLEN={} ICR={:#010x}",
-            rdbal, rdbah, rdlen, icr);
+        crate::slog_nano!("Net", "e1000", "RDH={} RDT={} TDH={} TDT={} RCTRL={:#010x} RAH={:#010x}", rdh, rdt, tdh, tdt, rctrl, rah);
+        crate::slog_nano!("Net", "e1000", "RDBAL={:#010x} RDBAH={:#010x} RDLEN={} ICR={:#010x}", rdbal, rdbah, rdlen, icr);
         let desc0_addr = (*desc0_virt).addr;
         // Raw bytes of descriptor 0 (read as u8 array to verify exact format)
         let raw = desc0_virt as *const u8;
-        serial_println!("[E1000] desc0 status={:#04x} len={} dd={} addr={:#010x}",
+        crate::slog_nano!("Net", "e1000", "desc0 status={:#04x} len={} dd={} addr={:#010x}",
             desc0_status, desc0_len, if desc0_status & 0x01 != 0 { "1" } else { "0" }, desc0_addr);
-        serial_println!("[E1000] desc0 raw: {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} {:02x}{:02x}|{:02x}{:02x}|{:02x}{:02x}{:02x}{:02x}",
+        crate::slog_nano!("Net", "e1000", "desc0 raw: {:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} {:02x}{:02x}|{:02x}{:02x}|{:02x}{:02x}{:02x}{:02x}",
             core::ptr::read_volatile(raw.add(0)),
             core::ptr::read_volatile(raw.add(1)),
             core::ptr::read_volatile(raw.add(2)),

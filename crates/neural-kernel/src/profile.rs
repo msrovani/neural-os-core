@@ -151,7 +151,7 @@ impl ProfileManager {
         for (i, p) in ALL_PROFILES.iter().enumerate() {
             if *p == profile {
                 CURRENT_PROFILE.store(i as u8, Ordering::Relaxed);
-                crate::serial_println!("[PROFILE] Perfil alterado para: {} {}", profile.icon(), profile.name());
+                k_nano::slog_bin!("PROFILE", "info", "Perfil alterado para: {} {}", profile.icon(), profile.name());
                 return;
             }
         }

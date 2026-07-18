@@ -9,8 +9,6 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use spin::Mutex;
 
-use k_nano::serial_println;
-
 use crate::skill_gen;
 use crate::skill_loader::SkillLoader;
 use crate::skill_observer;
@@ -120,12 +118,13 @@ pub fn observe_intent(text: &str, tick: u64) {
     drop(st);
 
     if n == 3 || n == 5 || (n > 5 && n % 10 == 0) {
-        serial_println!("[S108] pattern '{}' hits={} — candidato auto-skill", key, n);
+        k_nano::slog_hermes!("S108", "info", "pattern '{}' hits={} — candidato auto-skill", key, n);
     }
 }
 
 /// Registra resultado de execução de skill (para self-improvement).
 pub fn record_outcome(name: &str, ok: bool, tick: u64) {
+    crate::skill_market::record_outcome("self_evolve", name, tick, ok);
     let mut st = STATE.lock();
     st.outcomes.push(SkillOutcome {
         name: String::from(name),
@@ -239,19 +238,27 @@ pub fn llm_skill_prompt(name: &str, description: &str) -> String {
 
 /// Verifica + registra no SkillLoader. Retorna Ok(nome) ou Err(motivo).
 pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<String, &'static str> {
+    let tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     match verify_skill_md(content) {
         VerifyVerdict::Ok => {}
         VerifyVerdict::Reject(reason) => {
             VERIFIED_REJECT.fetch_add(1, Ordering::Relaxed);
-            serial_println!("[S108-VERIFY] REJECT reason={}", reason);
+            k_nano::slog_hermes!("S108", "VERIFY", "REJECT reason={}", reason);
+            crate::globals::AUDIT_TRAIL.lock().push(
+                tick,
+                "self_evolve",
+                "verify_reject",
+                reason.as_bytes(),
+            );
             return Err(reason);
         }
     }
-    // Extrai nome do frontmatter
-    let name = extract_name(content).unwrap_or_else(|| String::from("unnamed"));
-    // Evita duplicata silenciosa: remove e re-registra
+    // Session-sign se possível (HANR trust wave 0)
+    let sealed = crate::package_hub::sign_artifact_md(content)
+        .unwrap_or_else(|_| String::from(content));
+    let name = extract_name(&sealed).unwrap_or_else(|| String::from("unnamed"));
     loader.remove_skill(&name);
-    match loader.register_skill(content) {
+    match loader.register_skill(&sealed) {
         Ok(()) => {
             VERIFIED_OK.fetch_add(1, Ordering::Relaxed);
             GENERATED_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -259,7 +266,13 @@ pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<St
             if !st.generated.iter().any(|g| g == &name) {
                 st.generated.push(name.clone());
             }
-            serial_println!("[S108] skill '{}' verified+registered", name);
+            crate::globals::AUDIT_TRAIL.lock().push(
+                tick,
+                "self_evolve",
+                "verify_ok",
+                name.as_bytes(),
+            );
+            k_nano::slog_hermes!("S108", "info", "skill '{}' verified+registered", name);
             Ok(name)
         }
         Err(e) => {
@@ -302,9 +315,9 @@ pub fn auto_generate_pending(loader: &mut SkillLoader) -> u32 {
             match verify_and_register(loader, &md) {
                 Ok(_) => {
                     created += 1;
-                    serial_println!("[S108-GEN] auto-skill '{}' from {} hits", name, hits);
+                    k_nano::slog_hermes!("S108", "GEN", "auto-skill '{}' from {} hits", name, hits);
                 }
-                Err(e) => serial_println!("[S108-GEN] fail '{}': {}", name, e),
+                Err(e) => k_nano::slog_hermes!("S108", "GEN", "fail '{}': {}", name, e),
             }
         }
     }
@@ -363,9 +376,9 @@ pub fn improve_failed(loader: &mut SkillLoader) -> u32 {
             Ok(_) => {
                 n += 1;
                 IMPROVE_COUNT.fetch_add(1, Ordering::Relaxed);
-                serial_println!("[S108-IMPROVE] skill '{}' regenerated", name);
+                k_nano::slog_hermes!("S108", "IMPROVE", "skill '{}' regenerated", name);
             }
-            Err(e) => serial_println!("[S108-IMPROVE] fail '{}': {}", name, e),
+            Err(e) => k_nano::slog_hermes!("S108", "IMPROVE", "fail '{}': {}", name, e),
         }
     }
     n
@@ -404,7 +417,7 @@ pub fn reflect(tick: u64) -> String {
     drop(st);
     REFLECT_COUNT.fetch_add(1, Ordering::Relaxed);
     CYCLE_COUNT.fetch_add(1, Ordering::Relaxed);
-    serial_println!("[S108-REFLECT] {}", detail);
+    k_nano::slog_hermes!("S108", "REFLECT", "{}", detail);
     detail
 }
 

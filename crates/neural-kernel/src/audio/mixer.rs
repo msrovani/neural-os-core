@@ -5,7 +5,6 @@ use event_bus::Receiver;
 use crate::audio::ringbuf::AudioRingBuffer;
 use crate::audio::settings::AUDIO_VOLUME;
 use crate::audio::voice::PLAYBACK_RING;
-use crate::serial_println;
 use core::sync::atomic::Ordering;
 
 const MIXER_MANIFEST: AgentManifest = AgentManifest {
@@ -50,11 +49,9 @@ impl Agent for AudioMixerAgent {
                 scaled.push(v);
             }
             let written = self.out_ring.push(&scaled);
-            serial_println!(
-                "[MIXER] {} samples -> playback ring (vol={}%)",
+            k_nano::slog_bin!("MIXER", "info", "{} samples -> playback ring (vol={}%)",
                 written,
-                (vol * 100.0) as u8
-            );
+                (vol * 100.0) as u8);
         }
 
         let mut buf = [0i16; 1024];

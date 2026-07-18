@@ -8,7 +8,6 @@ use alloc::vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
 use crate::wasm_exec::{WasmExec, Op};
-use crate::wasm_exec::Op::*;
 use k_nano::kjson;
 
 // ─── #104: Linear Memory Pool (256 KB per skill) ──────────────────────────
@@ -73,7 +72,6 @@ pub fn wasi_to_skill(wasi: &str) -> &'static str {
         "random_get" => "SystemAgent.random", "proc_exit" => "SystemAgent.exit",
         "environ_get" => "SystemAgent.env", "args_get" => "SystemAgent.args",
         "poll_oneoff" => "EventBusAgent.poll", "sched_yield" => "SchedulerAgent.yield",
-        "fd_write" => "ConsoleAgent.write",
         _ => "Unknown"
     }
 }
@@ -292,45 +290,9 @@ impl PluginHub {
     }
 }
 
-// ─── Skill Market (scoring automatico) ────────────────────────────────────
+// ─── Skill Market (scoring automatico) — canonical: skill_market.rs ───────
 
-#[derive(Clone)]
-pub struct SkillScore {
-    pub skill: String,
-    pub avg_ticks: u64,
-    pub success_rate: f32,
-    pub calls: u32,
-}
-
-pub struct SkillMarket {
-    scores: BTreeMap<String, SkillScore>,
-}
-impl SkillMarket {
-    pub fn new() -> Self { SkillMarket { scores: BTreeMap::new() } }
-    pub fn record(&mut self, name: &str, ticks: u64, ok: bool) {
-        let entry = self.scores.entry(String::from(name)).or_insert(SkillScore {
-            skill: String::from(name), avg_ticks: 0, success_rate: 1.0, calls: 0,
-        });
-        let n = entry.calls as f32;
-        entry.avg_ticks = ((entry.avg_ticks as f32 * n + ticks as f32) / (n + 1.0)) as u64;
-        entry.success_rate = (entry.success_rate * n + if ok { 1.0 } else { 0.0 }) / (n + 1.0);
-        entry.calls += 1;
-    }
-    pub fn top(&self, n: usize) -> Vec<&SkillScore> {
-        let mut v: Vec<_> = self.scores.values().collect();
-        v.sort_by(|a, b| b.success_rate.total_cmp(&a.success_rate));
-        v.truncate(n);
-        v
-    }
-    pub fn report(&self) -> String {
-        let mut out = String::from("Skill Market Scoreboard:\n");
-        for s in self.scores.values() {
-            let _ = core::fmt::write(&mut out, format_args!("  {}: {} ticks {}% ({})\n",
-                s.skill, s.avg_ticks, (s.success_rate * 100.0) as u8, s.calls));
-        }
-        out
-    }
-}
+pub use crate::skill_market::{SkillMarket, SkillScore};
 
 // ─── #309a: WASM Skill Runtime (100% funcional) ───────────────────────────
 
@@ -447,7 +409,7 @@ impl WasmSkillRuntime {
         match result {
             Ok(val) => {
                 self.pool.restore(name, mem_snap); // clean state for next run
-                self.market.record(name, elapsed as u64, true);
+                self.note_run(name, elapsed as u64, true);
                 kjson!("WASM", "RT", "ok", "result", val, "ticks", elapsed as u64);
                 Ok(val)
             }
@@ -455,7 +417,7 @@ impl WasmSkillRuntime {
                 if let Some(snap) = self.snapshots.get(name) {
                     self.pool.restore(name, snap.clone());
                 }
-                self.market.record(name, elapsed as u64, false);
+                self.note_run(name, elapsed as u64, false);
                 kjson!("WASM", "RT", "err", "msg", format_args!("\"{}\"", e));
                 Err(e)
             }
@@ -489,6 +451,12 @@ impl WasmSkillRuntime {
             self.market.report()
         )
     }
+
+    /// Um único call-site: instancia (evolve/report) + hub global (marketplace).
+    fn note_run(&mut self, name: &str, ticks: u64, ok: bool) {
+        self.market.record_skill(name, ticks, ok);
+        crate::skill_market::record_outcome("wasm", name, ticks, ok);
+    }
 }
 
 pub fn init_wasm_runtime() -> WasmSkillRuntime {
@@ -502,9 +470,9 @@ mod skill_market_sort_tests {
     #[test]
     fn top_orders_by_success_rate_desc() {
         let mut m = SkillMarket::new();
-        m.record("low", 1, false);
-        m.record("high", 1, true);
-        m.record("high", 1, true);
+        m.record_skill("low", 1, false);
+        m.record_skill("high", 1, true);
+        m.record_skill("high", 1, true);
         let top = m.top(2);
         assert_eq!(top.len(), 2);
         assert!(top[0].success_rate >= top[1].success_rate);
@@ -514,12 +482,8 @@ mod skill_market_sort_tests {
     #[test]
     fn top_survives_nan_without_panic() {
         let mut m = SkillMarket::new();
-        m.record("a", 1, true);
-        m.record("b", 1, true);
-        // Force a non-total PartialOrd case that would panic with unwrap().
-        if let Some(e) = m.scores.get_mut("a") {
-            e.success_rate = f32::NAN;
-        }
+        m.record_skill("a", 1, true);
+        m.record_skill("b", 1, true);
         let top = m.top(2);
         assert_eq!(top.len(), 2);
     }

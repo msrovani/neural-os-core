@@ -58,7 +58,7 @@ pub fn load_bge(data: &[u8]) -> bool {
     let loaded = unsafe { BGE_WEIGHTS.is_some() };
     BGE_LOADED.store(loaded, Ordering::Relaxed);
     if loaded {
-        k_nano::serial_println!("[BGE] Carregado: vocab={} hidden={} ({} MB)",
+        k_nano::slog_kai!("Asset", "bge", "Carregado: vocab={} hidden={} ({} MB)",
             unsafe { BGE_VOCAB }, unsafe { BGE_HIDDEN },
             unsafe { BGE_WEIGHTS.as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024) });
     }

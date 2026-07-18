@@ -2,8 +2,6 @@
 //! Estados: Loaded | Absent | Failed. Sem SUCCESS falso.
 
 use core::sync::atomic::{AtomicU8, Ordering};
-use crate::serial_println;
-
 /// Estado de carga de um asset de boot/runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -80,11 +78,9 @@ pub fn set_if_upgrade(kind: AssetKind, status: LoadStatus) {
 
 /// Banner serial coerente com LLM-TEST / FAT load.
 pub fn print_status_banner() {
-    serial_println!(
-        "[STATUS] llm={} bge={} piper={} fw_gpu={}",
+    k_nano::slog_bin!("Status", "info", "llm={} bge={} piper={} fw_gpu={}",
         get(AssetKind::Llm).as_str(),
         get(AssetKind::Bge).as_str(),
         get(AssetKind::Piper).as_str(),
-        get(AssetKind::FwGpu).as_str(),
-    );
+        get(AssetKind::FwGpu).as_str(),);
 }

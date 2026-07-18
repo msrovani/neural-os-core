@@ -96,20 +96,19 @@ impl DiskIntelligenceAgent {
             if self.smart_history.len() >= 2 {
                 let prev = &self.smart_history[self.smart_history.len() - 2];
                 if realloc > prev.realloc_sectors + 5 {
-                    crate::serial_println!("[SMART] ⚠ ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
+                    crate::slog_nano!("SMART", "info", "⚠ ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
                         disk_name, realloc - prev.realloc_sectors,
                         prev.tick);
                 }
                 if pending > 10 {
-                    crate::serial_println!("[SMART] ⚠ ALERTA: {} tem {} setores pendentes — disco pode estar falhando!",
-                        disk_name, pending);
+                    crate::slog_nano!("SMART", "info", "⚠ ALERTA: {} tem {} setores pendentes — disco pode estar falhando!", disk_name, pending);
                 }
             }
         }
     }
 
     fn probe_all(&mut self) {
-        crate::serial_println!("[DISK] DiskIntelligenceAgent: probing storage...");
+        crate::slog_nano!("DISK", "info", "DiskIntelligenceAgent: probing storage...");
         let ctrl_count = self.controllers.len();
         for ctrl_idx in 0..ctrl_count {
             let ctrl_name: String;
@@ -118,21 +117,21 @@ impl DiskIntelligenceAgent {
                 let ctrl = &mut *self.controllers[ctrl_idx];
                 ctrl_name = ctrl.name().into();
                 ctrl_type = ctrl.controller_type();
-                crate::serial_println!("[DISK]  Controller: {} ({:?})", ctrl_name, ctrl_type);
+                crate::slog_nano!("DISK", "info", "Controller: {} ({:?})", ctrl_name, ctrl_type);
                 let disks = ctrl.probe_disks();
                 for mut disk in disks {
                     // S.M.A.R.T. probe
                     disk.smart = self.controllers[ctrl_idx].read_smart(0);
                     if let Some(ref smart) = disk.smart {
                         let status = if smart.healthy { "healthy" } else { "⚠ UNHEALTHY" };
-                        crate::serial_println!("[SMART] {}: {}, {}°C, {}h on, realloc={}, pending={}",
+                        crate::slog_nano!("SMART", "info", "{}: {}, {}°C, {}h on, realloc={}, pending={}",
                             disk.name, status, smart.temp_c, smart.power_on_hours,
                             smart.realloc_sectors, smart.pending_sectors);
                         if !smart.healthy {
-                            crate::serial_println!("[SMART] *** {} HEALTH ALERT: atributos criticos! ***", disk.name);
+                            crate::slog_nano!("SMART", "info", "*** {} HEALTH ALERT: atributos criticos! ***", disk.name);
                         }
                     } else {
-                        crate::serial_println!("[SMART] {}: S.M.A.R.T. nao disponivel", disk.name);
+                        crate::slog_nano!("SMART", "info", "{}: S.M.A.R.T. nao disponivel", disk.name);
                     }
 
                     self.read_partitions(&mut disk, ctrl_idx);
@@ -306,7 +305,7 @@ impl DiskIntelligenceAgent {
                         block_size: 512,
                         is_writeable: true,
                     });
-                    crate::serial_println!("[DISK]  Partition {}: exFAT detectado em {}", part.index, disk.name);
+                    crate::slog_nano!("DISK", "info", "Partition {}: exFAT detectado em {}", part.index, disk.name);
                 }
             }
         }
@@ -328,8 +327,7 @@ impl DiskIntelligenceAgent {
             let size = part.sector_count * disk.sector_size as u64;
             crate::mhi::MHI_REGISTRY.lock().register(
                 x86_64::PhysAddr::new(phys), size as usize, part.mhi_tier, &disk.name);
-            crate::serial_println!("[DISK]  MHI: {} part{} {}MB tier={:?}",
-                disk.name, part.index, size / (1024*1024), part.mhi_tier);
+            crate::slog_nano!("DISK", "info", "MHI: {} part{} {}MB tier={:?}", disk.name, part.index, size / (1024*1024), part.mhi_tier);
         }
     }
 
@@ -340,25 +338,25 @@ impl DiskIntelligenceAgent {
             if let Some(ref mut vfs) = *crate::vfs::VFS.lock() {
                 vfs.mount(Box::leak(mount.clone().into_boxed_str()), Box::leak(label.clone().into_boxed_str()));
             }
-            crate::serial_println!("[DISK]  Mount: {} -> {}", mount, label);
+            crate::slog_nano!("DISK", "info", "Mount: {} -> {}", mount, label);
         }
     }
 
     fn print_topology(&self) {
-        crate::serial_println!("[DISK] === Topology ===");
+        crate::slog_nano!("DISK", "info", "=== Topology ===");
         for disk in &self.disks {
-            crate::serial_println!("[DISK]  {}: {}GB {:?} ({})",
+            crate::slog_nano!("DISK", "info", "{}: {}GB {:?} ({})",
                 disk.name, disk.capacity_bytes / (1024*1024*1024), disk.interface, disk.controller);
             for part in &disk.partitions {
                 let fs = part.fs_info.as_ref().map(|f| alloc::format!("{:?}", f.fs_type)).unwrap_or("?".into());
                 let vol = part.mount_point.as_ref().map(|m| alloc::format!(" -> {}", m)).unwrap_or(String::new());
-                crate::serial_println!("[DISK]    p{}: {:#04x} {} {}", part.index, part.mbr_type, fs, vol);
+                crate::slog_nano!("DISK", "info", "p{}: {:#04x} {} {}", part.index, part.mbr_type, fs, vol);
             }
             for vg in &disk.volume_groups {
-                crate::serial_println!("[DISK]    VG: {} ({:?}) uuid={}", vg.name, vg.technology, vg.uuid);
+                crate::slog_nano!("DISK", "info", "VG: {} ({:?}) uuid={}", vg.name, vg.technology, vg.uuid);
             }
         }
-        crate::serial_println!("[DISK] === End Topology ===");
+        crate::slog_nano!("DISK", "info", "=== End Topology ===");
     }
 }
 
@@ -404,7 +402,7 @@ impl Agent for DiskIntelligenceAgent {
                         let new_disks = self.controllers[ctrl_idx].probe_disks();
                         for disk in new_disks {
                             if !self.disks.iter().any(|d| d.name == disk.name) {
-                                crate::serial_println!("[DISK] Hotplug: {} detectado!", disk.name);
+                                crate::slog_nano!("DISK", "info", "Hotplug: {} detectado!", disk.name);
                             }
                         }
                     }
@@ -427,11 +425,10 @@ impl DiskIntelligenceAgent {
                     let size = part.sector_count * disk.sector_size as u64;
                     crate::mhi::MHI_REGISTRY.lock().register(
                         x86_64::PhysAddr::new(phys), size as usize, ideal, &disk.name);
-                    crate::serial_println!("[MHI] Tier migration: {} p{} {:?}→{:?} @ tick {}",
-                        disk.name, part.index, part.mhi_tier, ideal, tick);
+                    crate::slog_nano!("MHI", "info", "Tier migration: {} p{} {:?}→{:?} @ tick {}", disk.name, part.index, part.mhi_tier, ideal, tick);
                 }
             }
         }
-            crate::serial_println!("[MHI] {} allocations", crate::mhi::MHI_REGISTRY.lock().allocations.len());
+            crate::slog_nano!("MHI", "info", "{} allocations", crate::mhi::MHI_REGISTRY.lock().allocations.len());
     }
 }

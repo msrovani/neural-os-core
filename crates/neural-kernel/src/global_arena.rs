@@ -36,10 +36,7 @@ pub fn with_arena<R>(f: impl FnOnce(&mut TensorArena) -> R) -> Option<R> {
 pub fn reset_moe_cache() {
     if let Some(arena) = CORTEX_ARENA.lock().as_mut() {
         arena.reset_moe_cache();
-        crate::serial_println!(
-            "[R3] reset_moe_cache: arena liberada ({} MB capacity)",
-            arena.capacity_bytes() / (1024 * 1024)
-        );
+        k_nano::slog_bin!("R3", "info", "reset_moe_cache: arena liberada ({} MB capacity)", arena.capacity_bytes() / (1024 * 1024));
     }
     TOKEN_STEPS.store(0, Ordering::SeqCst);
 }

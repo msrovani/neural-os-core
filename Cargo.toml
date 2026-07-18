@@ -8,6 +8,7 @@ members = [
     "crates/event-bus",
     "crates/boot",
     "crates/k_nano",
+    "crates/k_hal",
     "crates/k_ai",
     "crates/cortex",
     "crates/hermes",

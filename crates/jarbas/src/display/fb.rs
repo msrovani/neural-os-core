@@ -35,23 +35,15 @@ impl GpuDevice {
         match reported {
             3 | 4 => reported,
             0 => {
-                k_nano::serial_println!(
-                    "[DISPLAY] bytes_per_pixel=0 do GOP — fallback dinamico bpp=4"
-                );
+                k_nano::slog_jarbas!("Display", "info", "bytes_per_pixel=0 do GOP — fallback dinamico bpp=4");
                 4
             }
             other if (1..=8).contains(&other) => {
-                k_nano::serial_println!(
-                    "[DISPLAY] bytes_per_pixel={} incomum — aceitando valor do GOP",
-                    other
-                );
+                k_nano::slog_jarbas!("Display", "info", "bytes_per_pixel={} incomum — aceitando valor do GOP", other);
                 other
             }
             other => {
-                k_nano::serial_println!(
-                    "[DISPLAY] bytes_per_pixel={} invalido — fallback dinamico bpp=4",
-                    other
-                );
+                k_nano::slog_jarbas!("Display", "info", "bytes_per_pixel={} invalido — fallback dinamico bpp=4", other);
                 4
             }
         }
@@ -92,41 +84,18 @@ impl GpuDevice {
 
 pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
 
-/// Força coerência de cache no framebuffer + desliga VGA plane Intel corretamente.
+/// Força coerência de cache no framebuffer + desliga VGA plane Intel (via k-hal R1).
 /// Em Intel Skylake+ (6xx), o VGA plane NÃO é completamente desligado pelo
-/// sequenciador (0x3C4/0x3C5) — precisa escrever no register VGACNTRL (0x71400).
-/// Usa o resultado de detect_all() em vez de re-escanear PCI manualmente.
-/// NOTA: map_bars_uc() já mapeou BAR0 inteiro como UC antes desta função ser chamada.
+/// sequenciador (0x3C4/0x3C5) — VGACNTRL (0x71400) vive no BE k-hal.
 /// Também aplica sfence para garantir que writes cheguem ao display controller.
 pub fn fb_remap_uc() {
     let gpu = GPU.lock();
     if let Some(ref gpu_dev) = *gpu {
         if gpu_dev.fb_addr == 0 { return; }
 
-        // Usa o detect module para encontrar Intel GPU com display engine
-        // (em vez de re-escanear PCI via CF8/CFC manualmente)
-        let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
-        let intel_gpu = unsafe {
-            crate::gpu::detect::detect_all().into_iter()
-                .find(|g| g.vendor == crate::gpu::detect::GpuVendor::Intel && g.has_display_engine)
-        };
-
-        if let Some(ref igpu) = intel_gpu {
-            // VGACNTRL = offset 0x71400 no BAR0 da GPU Intel
-            // Bit 31 (VGA_DISABLE) = 1 desliga o plano VGA corretamente
-            let vga_cntrl = (igpu.bar0 + 0x71400 + pmoff) as *mut u32;
-            unsafe {
-                let val = vga_cntrl.read_volatile();
-                if val & 0x80000000 == 0 {
-                    vga_cntrl.write_volatile(val | 0x80000000);
-                    k_nano::serial_println!("[DISPLAY] Intel VGA plane DISABLED via VGACNTRL ({}:{}.{})",
-                        igpu.pci_bus, igpu.pci_dev, igpu.pci_fn);
-                } else {
-                    k_nano::serial_println!("[DISPLAY] Intel VGA plane ja desligado");
-                }
-            }
-        } else {
-            k_nano::serial_println!("[DISPLAY] Intel GPU com display nao encontrada - VGACNTRL nao escrito");
+        // MMIO BAR → k-hal only (ADR-0041 Fase 2)
+        unsafe {
+            k_hal::gpu::backend::disable_intel_vga_plane();
         }
 
         // Sfence + barreira de escrita garantem visibilidade
@@ -134,8 +103,7 @@ pub fn fb_remap_uc() {
             core::arch::asm!("sfence", options(nostack, preserves_flags));
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         }
-        k_nano::serial_println!("[DISPLAY] FB sfence aplicado @{:x} ({}x{})",
-            gpu_dev.fb_addr, gpu_dev.fb_width, gpu_dev.fb_height);
+        k_nano::slog_jarbas!("Display", "info", "FB sfence aplicado @{:x} ({}x{})", gpu_dev.fb_addr, gpu_dev.fb_width, gpu_dev.fb_height);
     }
 }
 
@@ -166,29 +134,19 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
         let fb_buf_len = fb.buffer().len();
 
         match info.pixel_format {
-            bootloader_api::info::PixelFormat::Bgr => k_nano::serial_println!(
-                "[DISPLAY] PixelFormat: Bgr (B primeiro) bytes/pixel={} (gop_reported={})",
-                bpp, reported_bpp
-            ),
-            bootloader_api::info::PixelFormat::Rgb => k_nano::serial_println!(
-                "[DISPLAY] PixelFormat: Rgb (R primeiro) bytes/pixel={} (gop_reported={})",
-                bpp, reported_bpp
-            ),
-            _ => k_nano::serial_println!(
-                "[DISPLAY] PixelFormat: {} bytes/pixel={} (gop_reported={})",
-                pixel_name, bpp, reported_bpp
-            ),
+            bootloader_api::info::PixelFormat::Bgr => k_nano::slog_jarbas!("Display", "info", "PixelFormat: Bgr (B primeiro) bytes/pixel={} (gop_reported={})", bpp, reported_bpp),
+            bootloader_api::info::PixelFormat::Rgb => k_nano::slog_jarbas!("Display", "info", "PixelFormat: Rgb (R primeiro) bytes/pixel={} (gop_reported={})", bpp, reported_bpp),
+            _ => k_nano::slog_jarbas!("Display", "info", "PixelFormat: {} bytes/pixel={} (gop_reported={})", pixel_name, bpp, reported_bpp),
         };
 
         // Validacao: stride derivado vs tamanho real do buffer
         let expected_min = (fb_height as usize).saturating_sub(1) * fb_stride as usize
             + fb_width as usize * bpp as usize;
         if expected_min > fb_buf_len {
-            k_nano::serial_println!("[DISPLAY] ALERTA: stride {} pode exceder buffer ({} bytes, esperado min {})",
-                fb_stride, fb_buf_len, expected_min);
+            k_nano::slog_jarbas!("Display", "info", "ALERTA: stride {} pode exceder buffer ({} bytes, esperado min {})", fb_stride, fb_buf_len, expected_min);
         }
 
-        k_nano::serial_println!("[DISPLAY] UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
+        k_nano::slog_jarbas!("Display", "info", "UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
             fb_width, fb_height, bpp, fb_stride, info.stride, fb_buf_len, fb.buffer().as_ptr() as u64);
 
         // NOTA: NAO remapear como UC aqui — map_page_uc() aloca frames para
@@ -200,10 +158,9 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
         console_clear();
         boot_ckpt(0, "probe FB ok (kernel entrou)");
 
-        k_nano::serial_println!("[DISPLAY] UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}",
-            gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
+        k_nano::slog_jarbas!("Display", "info", "UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}", gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
     } else {
-        k_nano::serial_println!("[DISPLAY] Sem framebuffer UEFI — VGA text mode.");
+        k_nano::slog_jarbas!("Display", "info", "Sem framebuffer UEFI — VGA text mode.");
     }
 }
 
@@ -211,11 +168,11 @@ pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
 pub fn paint_tts_response(text: &str) {
     let guard = GPU.lock();
     let Some(gpu) = guard.as_ref() else {
-        k_nano::serial_println!("[JARBAS-TTS-FB] skip — sem FB");
+        k_nano::slog_jarbas!("JARBAS", "TTS-FB", "skip — sem FB");
         return;
     };
     if !gpu.present || gpu.fb_addr == 0 {
-        k_nano::serial_println!("[JARBAS-TTS-FB] skip — FB nao present");
+        k_nano::slog_jarbas!("JARBAS", "TTS-FB", "skip — FB nao present");
         return;
     }
     let bpp = gpu.bytes_per_pixel();
@@ -290,19 +247,16 @@ pub fn paint_tts_response(text: &str) {
     if !line.is_empty() && y + 16 <= fb_h {
         splash_draw_text(fb_addr, fb_w, fb_h, fb_stride, fb_bpp, rgb_order, 16, y, &line);
     }
-    k_nano::serial_println!(
-        "[JARBAS-TTS-FB] painted len={} {}x{}",
+    k_nano::slog_jarbas!("JARBAS", "TTS-FB", "painted len={} {}x{}",
         text.len(),
         w,
-        h
-    );
+        h);
 }
 
 /// Splash pós-boot/demo: limpa FB e escreve uma linha legível.
 pub fn boot_splash(msg: &str) {
     console_clear();
     console_print(msg);
-    k_nano::serial_println!("[DISPLAY] splash '{}'", msg);
 }
 
 /// Limpa o FB e zera o cursor do console de boot.
@@ -319,31 +273,7 @@ pub fn console_clear() {
     let h = gpu.fb_height as usize;
     let addr = gpu.fb_addr as usize;
     let rgb = gpu.rgb_order;
-    let (tr, tg, tb) = (8u8, 8u8, 12u8);
-    let (c0, c1, c2) = if rgb { (tr, tg, tb) } else { (tb, tg, tr) };
-    let clear_size = h.saturating_mul(stride);
-    unsafe {
-        let ptr = addr as *mut u8;
-        if bpp == 4 {
-            let pix = u32::from_le_bytes([c0, c1, c2, 0xFF]);
-            let mut i = 0usize;
-            while i + 4 <= clear_size {
-                write_volatile(ptr.add(i) as *mut u32, pix);
-                i += 4;
-            }
-        } else if bpp > 0 {
-            let mut i = 0usize;
-            while i + bpp <= clear_size {
-                write_volatile(ptr.add(i), c0);
-                write_volatile(ptr.add(i + 1), c1);
-                write_volatile(ptr.add(i + 2), c2);
-                if bpp > 3 {
-                    write_volatile(ptr.add(i + 3), 0xFF);
-                }
-                i += bpp;
-            }
-        }
-    }
+    clear_fb_pixels(addr, h, stride, bpp, rgb);
     drop(guard);
     CONSOLE_LINE.store(0, Ordering::Relaxed);
     CONSOLE_INITED.store(true, Ordering::Relaxed);
@@ -379,29 +309,43 @@ pub fn console_print(text: &str) {
     if max_lines == 0 {
         return;
     }
-    let mut line = CONSOLE_LINE.fetch_add(1, Ordering::Relaxed);
+    // Cursor + clear + draw sob o MESMO GPU.lock (não soltar no wrap → sem ghost).
+    let mut line = CONSOLE_LINE.load(Ordering::Relaxed);
     if line >= max_lines {
-        drop(guard);
-        console_clear();
-        let guard = GPU.lock();
-        let Some(gpu) = guard.as_ref() else {
-            return;
-        };
+        clear_fb_pixels(addr, h, stride, bpp, rgb);
         line = 0;
-        CONSOLE_LINE.store(1, Ordering::Relaxed);
-        draw_console_line(
-            gpu.fb_addr as usize,
-            gpu.fb_width as usize,
-            gpu.fb_height as usize,
-            gpu.stride_bytes(),
-            gpu.bytes_per_pixel(),
-            gpu.rgb_order,
-            line,
-            text,
-        );
-        return;
+        CONSOLE_LINE.store(0, Ordering::Relaxed);
     }
+    CONSOLE_LINE.store(line.saturating_add(1), Ordering::Relaxed);
     draw_console_line(addr, w, h, stride, bpp, rgb, line, text);
+}
+
+fn clear_fb_pixels(addr: usize, h: usize, stride: usize, bpp: usize, rgb: bool) {
+    let (tr, tg, tb) = (8u8, 8u8, 12u8);
+    let (c0, c1, c2) = if rgb { (tr, tg, tb) } else { (tb, tg, tr) };
+    let clear_size = h.saturating_mul(stride);
+    unsafe {
+        let ptr = addr as *mut u8;
+        if bpp == 4 {
+            let pix = u32::from_le_bytes([c0, c1, c2, 0xFF]);
+            let mut i = 0usize;
+            while i + 4 <= clear_size {
+                write_volatile(ptr.add(i) as *mut u32, pix);
+                i += 4;
+            }
+        } else if bpp > 0 {
+            let mut i = 0usize;
+            while i + bpp <= clear_size {
+                write_volatile(ptr.add(i), c0);
+                write_volatile(ptr.add(i + 1), c1);
+                write_volatile(ptr.add(i + 2), c2);
+                if bpp > 3 {
+                    write_volatile(ptr.add(i + 3), 0xFF);
+                }
+                i += bpp;
+            }
+        }
+    }
 }
 
 fn draw_console_line(
@@ -473,9 +417,8 @@ fn draw_console_line(
     }
 }
 
-/// Checkpoint de boot — mesma fila do console (legível).
+/// Checkpoint de boot — uma linha no FB (sem serial duplicado no k_nano).
 pub fn boot_ckpt(n: u8, msg: &str) {
-    k_nano::serial_println!("[CKPT] K{} {}", n, msg);
     let mut buf = [0u8; 100];
     let mut pos = 0usize;
     buf[pos] = b'K';
@@ -502,7 +445,10 @@ pub fn boot_ckpt(n: u8, msg: &str) {
         pos += 1;
     }
     let s = core::str::from_utf8(&buf[..pos]).unwrap_or("K?");
+    // neural-kernel serial espelha no FB; ckpt só console (evita 2 linhas).
     console_print(s);
+    k_nano::boot_ramlog::set_last_ckpt(n);
+    k_nano::boot_ramlog::append(s);
 }
 
 fn splash_draw_text(

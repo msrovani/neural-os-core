@@ -65,12 +65,10 @@ pub fn resize_heap_to_mb(target_mb: usize) {
             }
         }
         CURRENT_HEAP_MB.store(new_mb, Ordering::SeqCst);
-        crate::serial_println!(
-            "[HEAP/TALC] {} MB → {} MB ({} pages added)",
+        k_nano::slog_bin!("HEAP", "TALC", "{} MB → {} MB ({} pages added)",
             current,
             new_mb,
-            allocated
-        );
+            allocated);
     }
 }
 
@@ -178,10 +176,8 @@ pub fn init_heap(
         *CLAIMED_HEAP.lock() = Some(claimed);
     }
 
-    crate::serial_println!(
-        "[HEAP/TALC] Tier 1 ready: virt={:#x} size={} MB (Hermes/JARBAS/UI)",
+    k_nano::slog_bin!("HEAP", "TALC", "Tier 1 ready: virt={:#x} size={} MB (Hermes/JARBAS/UI)",
         LARGE_HEAP_START,
-        LARGE_HEAP_SIZE / (1024 * 1024)
-    );
+        LARGE_HEAP_SIZE / (1024 * 1024));
     Ok(())
 }

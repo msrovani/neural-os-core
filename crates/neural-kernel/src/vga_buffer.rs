@@ -127,22 +127,24 @@ pub fn init(physical_memory_offset: u64) {
 }
 
 pub fn _print(args: fmt::Arguments) {
-    // Se o compositor esta ativo, nao escreve no framebuffer
-    // (o compositor gerencia a tela via DoubleBuffer::swap).
-    // So escreve via fb_print quando nao ha compositor.
-    let comp_active = crate::display::compositor::COMPOSITOR.lock().is_some();
-    if !comp_active {
-        if fb_print(args) { return; }
+    // Com FB UEFI ativo: println! NÃO pinta o FB.
+    // Em HW sem COM, serial_println! já espelha no FB via fb_print —
+    // se println! também pintar, cada linha aparece 2× (foto SMP/APIC).
+    // Compositor ativo: DisplayAgent dono da tela.
+    let fb_active = crate::display::fb::GPU.lock().as_ref().map(|g| g.present).unwrap_or(false);
+    if fb_active {
+        return;
     }
-    // Se framebuffer ativo e WRITER nunca foi init, VGA nao existe
-    // (vga_buffer::init() nao foi chamado) — evita fallback para
-    // VGA text buffer sem WRITER, prevenindo escritas fantasma em 0xB8000.
-    let fb_active = crate::display::fb::GPU.lock().is_some();
-    if fb_active { return; }
-    // Fallback: VGA text mode (se inicializado e sem framebuffer)
+    let comp_active = crate::display::compositor::COMPOSITOR.lock().is_some();
+    if comp_active {
+        return;
+    }
+    // Fallback: VGA text mode (sem FB; QEMU text / early)
     use fmt::Write;
     let mut w = WRITER.lock();
-    if let Some(ref mut w) = *w { let _ = w.write_fmt(args); }
+    if let Some(ref mut w) = *w {
+        let _ = w.write_fmt(args);
+    }
 }
 
 /// Escreve no framebuffer. Retorna true se conseguiu.

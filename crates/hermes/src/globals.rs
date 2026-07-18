@@ -25,6 +25,13 @@ pub use k_ai::cognitive::BitNetTrainer;
 
 pub const LOG_SECTOR: u32 = 2048;
 
+#[derive(Clone, Copy)]
+pub struct VfsBridge {
+    pub read: fn(&str) -> Result<Vec<u8>, &'static str>,
+    pub write: fn(&str, &[u8]) -> Result<(), &'static str>,
+    pub list: fn(&str) -> Result<Vec<String>, &'static str>,
+}
+
 lazy_static! {
     pub static ref APPROVAL_GATE: TicketLock<crate::approval::ApprovalGate> =
         TicketLock::new(crate::approval::ApprovalGate::new());
@@ -43,16 +50,31 @@ lazy_static! {
     pub static ref SYSTEM_ARCH: Mutex<Option<SystemArchitecture>> = Mutex::new(None);
     pub static ref MEMORY_HIERARCHY: Mutex<Option<k_nano::mhi::MemoryHierarchy>> = Mutex::new(None);
     pub static ref AUDIT_TRAIL: Mutex<AuditTrail> = Mutex::new(AuditTrail::new());
+    static ref VFS_BRIDGE: TicketLock<Option<VfsBridge>> = TicketLock::new(None);
+}
+
+/// Instala o VFS do bin de integração sem criar dependência hermes → neural-kernel.
+pub fn install_vfs_bridge(bridge: VfsBridge) {
+    *VFS_BRIDGE.lock() = Some(bridge);
 }
 
 pub fn read_vfs(path: &str) -> Result<Vec<u8>, &'static str> {
+    if let Some(bridge) = *VFS_BRIDGE.lock() {
+        return (bridge.read)(path);
+    }
     k_nano::fs::read_vfs(path)
 }
 
 pub fn write_vfs(path: &str, data: &[u8]) -> Result<(), &'static str> {
+    if let Some(bridge) = *VFS_BRIDGE.lock() {
+        return (bridge.write)(path, data);
+    }
     k_nano::fs::write_vfs(path, data)
 }
 
 pub fn list_vfs(path: &str) -> Result<Vec<String>, &'static str> {
+    if let Some(bridge) = *VFS_BRIDGE.lock() {
+        return (bridge.list)(path);
+    }
     k_nano::fs::list_vfs(path)
 }

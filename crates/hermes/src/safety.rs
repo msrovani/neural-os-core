@@ -17,7 +17,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use k_nano::{serial_println, println};
+use k_nano::{println};
 use k_nano::EVENT_BUS;
 
 const SAFETY_MANIFEST: AgentManifest = AgentManifest {
@@ -167,12 +167,12 @@ impl SafetyAgent {
     fn log_violation(&mut self, layer: u8, input: &str, reason: &str) {
         let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         self.violations.push((layer, String::from(input), tick as u64));
-        serial_println!("\n⚠️  SAFETY VIOLATION — Layer {} ⚠️", layer);
-        serial_println!("   Input: \"{}\"", input);
-        serial_println!("   Reason: {}", reason);
-        serial_println!("   Tick: {}", tick);
+        k_nano::slog_hermes!("Log", "msg", "⚠️  SAFETY VIOLATION — Layer {} ⚠️", layer);
+        k_nano::slog_hermes!("Input", "info", "\"{}\"", input);
+        k_nano::slog_hermes!("Reason", "info", "{}", reason);
+        k_nano::slog_hermes!("Tick", "info", "{}", tick);
         if layer == 0 {
-            serial_println!("[SAFETY] LAYER 0 VIOLATION — HALT");
+            k_nano::slog_hermes!("SAFETY", "info", "LAYER 0 VIOLATION — HALT");
             println!("[SAFETY] ⛔ LAYER 0 — Cosmic Law Violation. HALT.");
             loop { x86_64::instructions::hlt(); }
         }
@@ -217,13 +217,13 @@ pub fn check_command(cmd: &str) -> Result<(), &'static str> {
     let lower = cmd.to_ascii_lowercase();
     for &blocked in HARD_BLOCKLIST {
         if lower.contains(blocked) {
-            k_nano::serial_println!("[SAFETY] Blocked: {}", blocked);
+            k_nano::slog_hermes!("SAFETY", "info", "Blocked: {}", blocked);
             return Err("Hard blocklist violation");
         }
     }
     if lower.contains("weapon") || lower.contains("wmd") || lower.contains("cyberwar")
         || lower.contains("nuclear") || lower.contains("biological") {
-        k_nano::serial_println!("[SAFETY] Layer 0 violation!");
+        k_nano::slog_hermes!("SAFETY", "info", "Layer 0 violation!");
         return Err("Layer 0: Systemic Cosmic Law");
     }
     Ok(())

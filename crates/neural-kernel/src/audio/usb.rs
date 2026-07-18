@@ -2,8 +2,6 @@
 //! Sprint Sound #84: enumeração de interfaces; isócrono pleno depende de HW real.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use event_bus::{CapabilityToken, Event};
-use crate::serial_println;
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
@@ -175,28 +173,20 @@ impl Agent for UsbAudioAgent {
                 capture_ep,
                 playback_ep,
             } => {
-                serial_println!(
-                    "[UAC] Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x}",
+                k_nano::slog_bin!("UAC", "info", "Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x}",
                     vendor_id,
                     device_id,
                     capture_ep,
-                    playback_ep
-                );
+                    playback_ep);
             }
             UacProbeResult::NoAudioInterface { controllers } => {
-                serial_println!(
-                    "[UAC] {} USB ctrl — config lida, sem interface Audio (HDA primario)",
-                    controllers
-                );
+                k_nano::slog_bin!("UAC", "info", "{} USB ctrl — config lida, sem interface Audio (HDA primario)", controllers);
             }
             UacProbeResult::ScanIncomplete { controllers } => {
-                serial_println!(
-                    "[UAC] {} USB ctrl — GET_DESCRIPTOR incompleto (sem device UAC no bus)",
-                    controllers
-                );
+                k_nano::slog_bin!("UAC", "info", "{} USB ctrl — GET_DESCRIPTOR incompleto (sem device UAC no bus)", controllers);
             }
             UacProbeResult::NoUsbController => {
-                serial_println!("[UAC] Nenhum controlador USB (PCI 0x0C)");
+                k_nano::slog_bin!("UAC", "info", "Nenhum controlador USB (PCI 0x0C)");
             }
         }
         AgentTickResult::Done
@@ -227,19 +217,4 @@ pub fn write_uac_playback(pcm: &[i16]) {
 
 pub fn uac_is_ready() -> bool {
     UAC_READY.load(Ordering::Relaxed)
-}
-
-/// Publica frame de captura (helper para futuro DMA isócrono).
-#[allow(dead_code)]
-pub fn publish_capture_pcm(pcm: &[i16]) {
-    if pcm.is_empty() {
-        return;
-    }
-    let payload: alloc::vec::Vec<u8> = pcm.iter().flat_map(|s| s.to_le_bytes()).collect();
-    let _ = crate::EVENT_BUS.publish(Event {
-        id: 0,
-        topic: alloc::string::String::from(crate::audio::TOPIC_AUDIO_IN),
-        payload,
-        token: CapabilityToken::Legacy(1),
-    });
 }

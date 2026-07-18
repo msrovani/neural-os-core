@@ -7,8 +7,6 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use crate::audio::ringbuf::AudioRingBuffer;
 use crate::audio::vad::{VAD, VadTransition};
 use crate::audio::ser::{extract_features, classify_emotion};
-use k_nano::serial_println;
-
 pub static AUDIO_RING: AudioRingBuffer = AudioRingBuffer::new();
 pub static LAST_VOICE_EMOTION: AtomicU8 = AtomicU8::new(0);
 
@@ -69,7 +67,7 @@ impl Agent for JarvisVoiceAgent {
                     self.listening = true;
                     self.pcm_buffer.clear();
                     self.emotion_samples.clear();
-                    serial_println!("[JARVIS] 🎤 Escutando...");
+                    k_nano::slog_jarbas!("Jarbas", "info", "🎤 Escutando...");
                     let _ = k_nano::EVENT_BUS.publish(Event {
                         id: 0, topic: alloc::string::String::from("HERMES_RESPONSE"),
                         payload: alloc::format!("[JARVIS] 🎤 Escutando...").into_bytes(),
@@ -85,15 +83,14 @@ impl Agent for JarvisVoiceAgent {
                 }
 
                 if transition == VadTransition::SpeechEnd && !self.pcm_buffer.is_empty() {
-                    serial_println!("[JARVIS] Fala detectada: {} amostras", self.pcm_buffer.len());
+                    k_nano::slog_jarbas!("Jarbas", "info", "Fala detectada: {} amostras", self.pcm_buffer.len());
 
                     // SER: detecta emoção na voz
                     if self.emotion_samples.len() > 800 {
                         let features = extract_features(&self.emotion_samples);
                         let emotion = classify_emotion(&features);
                         LAST_VOICE_EMOTION.store(emotion as u8, Ordering::Relaxed);
-                        serial_println!("[JARVIS] ❤️ Emoção na voz: {:?} (pitch={:.0}Hz, energy={:.0})",
-                            emotion, features.pitch_hz, features.energy_rms);
+                        k_nano::slog_jarbas!("Jarbas", "info", "❤️ Emoção na voz: {:?} (pitch={:.0}Hz, energy={:.0})", emotion, features.pitch_hz, features.energy_rms);
                     }
 
                     // STT stub: publica texto simulado
@@ -116,7 +113,7 @@ impl Agent for JarvisVoiceAgent {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty() || text.starts_with("[JARVIS] 🎤") { continue; }
 
-            serial_println!("[JARVIS] 🗣️ \"{}\"", text);
+            k_nano::slog_jarbas!("Jarbas", "info", "🗣️ \"{}\"", text);
             let clean = text.trim_start_matches("[JARVIS] ").trim_start_matches("JARVIS: ");
             let pcm = crate::audio::tts::synthesize(clean);
 

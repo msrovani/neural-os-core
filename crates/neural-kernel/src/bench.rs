@@ -22,7 +22,7 @@ pub struct Benchmark {
 pub fn start_bench(name: &str) {
     let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     BENCH_START_TICK.store(tick, Ordering::Relaxed);
-    crate::serial_println!("[BENCH] Starting: {} @ tick {}", name, tick);
+    k_nano::slog_bin!("GPU", "bench", "Starting: {} @ tick {}", name, tick);
 }
 
 pub fn end_bench(name: &str) -> Benchmark {
@@ -32,7 +32,7 @@ pub fn end_bench(name: &str) -> Benchmark {
     let elapsed_ms = elapsed_ticks * 55; // 18.2Hz → ~55ms per tick
 
     let result = alloc::format!("{} ticks ({} ms)", elapsed_ticks, elapsed_ms);
-    crate::serial_println!("[BENCH] {}: {}", name, result);
+    k_nano::slog_bin!("GPU", "bench", "{}: {}", name, result);
 
     Benchmark {
         name: String::from(name),

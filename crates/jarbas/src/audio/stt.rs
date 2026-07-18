@@ -77,7 +77,7 @@ impl SttEngine {
         self.loaded = !self.w.is_empty();
         if self.loaded {
             let p: usize = self.w.iter().map(|(_, d)| d.len()).sum();
-            k_nano::serial_println!("[STT] {} tensors, {}K params", self.w.len(), p / 1000);
+            k_nano::slog_jarbas!("Audio", "stt", "{} tensors, {}K params", self.w.len(), p / 1000);
         }
         self.loaded
     }

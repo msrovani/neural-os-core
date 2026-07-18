@@ -1,7 +1,5 @@
 
 
-use crate::serial_println;
-
 #[derive(Clone)]
 pub struct AtaDriver {
     pub io_base: u16,
@@ -26,18 +24,16 @@ impl AtaDriver {
                 if let Some(id) = drv.identify() {
                     let total = (id[60] as u64) | ((id[61] as u64) << 16);
                     if total > 0 && total < 0xFFFFFFFF {
-                        serial_println!("[ATA] ISA {}: {} {} setores", base, if slave { "slave" } else { "master" }, total);
+                        k_nano::slog_nano!("Disk", "ata", "ISA {}: {} {} setores", base, if slave { "slave" } else { "master" }, total);
                         write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
                         for _ in 0..1000 { core::hint::spin_loop(); }
                         if drv.has_mbr() {
                             // Prefere disco com FAT32 (MBR 0x0B/0x0C ou GPT Basic Data) —
                             // USB unificado / disk_hw no mesmo stick; evita escolher so ESP GPT.
                             if crate::fat32::disk_has_fat32(&drv) {
-                                serial_println!(
-                                    "[ATA] ISA {}: {} FAT32 (MBR/GPT)!",
+                                k_nano::slog_nano!("Disk", "ata", "ISA {}: {} FAT32 (MBR/GPT)!",
                                     base,
-                                    if slave { "slave" } else { "master" }
-                                );
+                                    if slave { "slave" } else { "master" });
                                 return Some(drv);
                             }
                             let mut mbr = [0u8; 512];
@@ -60,18 +56,18 @@ impl AtaDriver {
                 }
             }
         }
-        if best.is_some() { serial_println!("[ATA] Usando fallback type={:#x}", best_type); }
+        if best.is_some() { k_nano::slog_nano!("Disk", "ata", "Usando fallback type={:#x}", best_type); }
         best
     }
 
     unsafe fn has_mbr(&self) -> bool {
         let mut buf = [0u8; 512];
         if !self.read_sectors(0, &mut buf, 1) {
-            serial_println!("[ATA] has_mbr: read_sectors falhou para slave={}", self.slave);
+            k_nano::slog_nano!("Disk", "ata", "has_mbr: read_sectors falhou para slave={}", self.slave);
             return false;
         }
         let ok = buf[0x1FE] == 0x55 && buf[0x1FF] == 0xAA;
-        serial_println!("[ATA] has_mbr: slave={} 55AA={} bytes510={:02X}511={:02X}", self.slave, ok, buf[0x1FE], buf[0x1FF]);
+        k_nano::slog_nano!("Disk", "ata", "has_mbr: slave={} 55AA={} bytes510={:02X}511={:02X}", self.slave, ok, buf[0x1FE], buf[0x1FF]);
         ok
     }
 
@@ -158,7 +154,7 @@ impl AtaDriver {
         for s in 0..count as usize {
             self.wait_bsy();
             if !self.wait_drq() {
-                serial_println!("[ATA] read: DRQ nao pronto LBA={} s={}/{} slave={}", lba, s, count, self.slave);
+                k_nano::slog_nano!("Disk", "ata", "read: DRQ nao pronto LBA={} s={}/{} slave={}", lba, s, count, self.slave);
                 return false;
             }
             for i in 0..256 {

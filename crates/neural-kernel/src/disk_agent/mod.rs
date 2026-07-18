@@ -96,13 +96,12 @@ impl DiskIntelligenceAgent {
             if self.smart_history.len() >= 2 {
                 let prev = &self.smart_history[self.smart_history.len() - 2];
                 if realloc > prev.realloc_sectors + 5 {
-                    crate::serial_println!("[SMART] ⚠ ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
+                    k_nano::slog_bin!("SMART", "info", "⚠ ALERTA: {} realocou {} setores em {} ticks! Possivel degradacao.",
                         disk_name, realloc - prev.realloc_sectors,
                         prev.tick);
                 }
                 if pending > 10 {
-                    crate::serial_println!("[SMART] ⚠ ALERTA: {} tem {} setores pendentes — disco pode estar falhando!",
-                        disk_name, pending);
+                    k_nano::slog_bin!("SMART", "info", "⚠ ALERTA: {} tem {} setores pendentes — disco pode estar falhando!", disk_name, pending);
                 }
             }
         }
@@ -117,12 +116,10 @@ impl DiskIntelligenceAgent {
     }
 
     fn probe_all(&mut self) {
-        crate::serial_println!("[DISK] DiskIntelligenceAgent: probing storage...");
+        k_nano::slog_bin!("DISK", "info", "DiskIntelligenceAgent: probing storage...");
         let sandbox = Self::is_dev_sandbox();
         if sandbox {
-            crate::serial_println!(
-                "[DISK] sandbox: lightweight probe (skip SMART/bw/FS-storm/vol) — nao bloqueia NetAgent"
-            );
+            k_nano::slog_bin!("DISK", "info", "sandbox: lightweight probe (skip SMART/bw/FS-storm/vol) — nao bloqueia NetAgent");
         }
         let ctrl_count = self.controllers.len();
         for ctrl_idx in 0..ctrl_count {
@@ -132,34 +129,31 @@ impl DiskIntelligenceAgent {
                 let ctrl = &mut *self.controllers[ctrl_idx];
                 ctrl_name = ctrl.name().into();
                 ctrl_type = ctrl.controller_type();
-                crate::serial_println!("[DISK]  Controller: {} ({:?})", ctrl_name, ctrl_type);
+                k_nano::slog_bin!("DISK", "info", "Controller: {} ({:?})", ctrl_name, ctrl_type);
                 let disks = ctrl.probe_disks();
                 for mut disk in disks {
                     if sandbox {
-                        crate::serial_println!("[SMART] {}: skipped (sandbox)", disk.name);
+                        k_nano::slog_bin!("SMART", "info", "{}: skipped (sandbox)", disk.name);
                     } else {
                         // S.M.A.R.T. probe — comandos ATA extras; em QEMU pode deixar BSY/DRQ pendente
                         disk.smart = self.controllers[ctrl_idx].read_smart(0);
                         if let Some(ref smart) = disk.smart {
                             let status = if smart.healthy { "healthy" } else { "⚠ UNHEALTHY" };
-                            crate::serial_println!("[SMART] {}: {}, {}°C, {}h on, realloc={}, pending={}",
+                            k_nano::slog_bin!("SMART", "info", "{}: {}, {}°C, {}h on, realloc={}, pending={}",
                                 disk.name, status, smart.temp_c, smart.power_on_hours,
                                 smart.realloc_sectors, smart.pending_sectors);
                             if !smart.healthy {
-                                crate::serial_println!("[SMART] *** {} HEALTH ALERT: atributos criticos! ***", disk.name);
+                                k_nano::slog_bin!("SMART", "info", "*** {} HEALTH ALERT: atributos criticos! ***", disk.name);
                             }
                         } else {
-                            crate::serial_println!("[SMART] {}: S.M.A.R.T. nao disponivel", disk.name);
+                            k_nano::slog_bin!("SMART", "info", "{}: S.M.A.R.T. nao disponivel", disk.name);
                         }
                     }
 
                     self.read_partitions(&mut disk, ctrl_idx);
                     // Sandbox: no máximo 4 partições — GPT lixo / multi-FS storm engasga PIO
                     if sandbox && disk.partitions.len() > 4 {
-                        crate::serial_println!(
-                            "[DISK] sandbox: capping partitions {}→4",
-                            disk.partitions.len()
-                        );
+                        k_nano::slog_bin!("DISK", "info", "sandbox: capping partitions {}→4", disk.partitions.len());
                         disk.partitions.truncate(4);
                     }
                     if sandbox {
@@ -176,7 +170,7 @@ impl DiskIntelligenceAgent {
         }
         self.print_topology();
         DISK_AGENT_INIT.store(true, Ordering::Release);
-        crate::serial_println!("[DISK] probe_all Done (sandbox={})", sandbox);
+        k_nano::slog_bin!("DISK", "info", "probe_all Done (sandbox={})", sandbox);
     }
 
     fn io_scheduler_enqueue(&mut self, ctrl_idx: u8, disk: u8, lba: u64, data: Vec<u8>) {
@@ -341,7 +335,7 @@ impl DiskIntelligenceAgent {
                         block_size: 512,
                         is_writeable: true,
                     });
-                    crate::serial_println!("[DISK]  Partition {}: exFAT detectado em {}", part.index, disk.name);
+                    k_nano::slog_bin!("DISK", "info", "Partition {}: exFAT detectado em {}", part.index, disk.name);
                 }
             }
         }
@@ -370,7 +364,7 @@ impl DiskIntelligenceAgent {
                     block_size: 512,
                     is_writeable: true,
                 });
-                crate::serial_println!("[DISK]  p{}: exFAT (light)", part.index);
+                k_nano::slog_bin!("DISK", "info", "p{}: exFAT (light)", part.index);
             } else if bpb[0] == 0xEB || bpb[0] == 0xE9 {
                 let oem = core::str::from_utf8(&bpb[3..11]).unwrap_or("");
                 if oem.starts_with("FAT") || oem.starts_with("MSDOS") || oem.starts_with("MSWIN")
@@ -389,7 +383,7 @@ impl DiskIntelligenceAgent {
                         block_size: 512,
                         is_writeable: true,
                     });
-                    crate::serial_println!("[DISK]  p{}: FAT32 (light)", part.index);
+                    k_nano::slog_bin!("DISK", "info", "p{}: FAT32 (light)", part.index);
                 }
             }
         }
@@ -411,8 +405,7 @@ impl DiskIntelligenceAgent {
             let size = part.sector_count * disk.sector_size as u64;
             crate::mhi::MHI_REGISTRY.lock().register(
                 x86_64::PhysAddr::new(phys), size as usize, part.mhi_tier, &disk.name);
-            crate::serial_println!("[DISK]  MHI: {} part{} {}MB tier={:?}",
-                disk.name, part.index, size / (1024*1024), part.mhi_tier);
+            k_nano::slog_bin!("DISK", "info", "MHI: {} part{} {}MB tier={:?}", disk.name, part.index, size / (1024*1024), part.mhi_tier);
         }
     }
 
@@ -423,25 +416,25 @@ impl DiskIntelligenceAgent {
             if let Some(ref mut vfs) = *crate::vfs::VFS.lock() {
                 vfs.mount(Box::leak(mount.clone().into_boxed_str()), Box::leak(label.clone().into_boxed_str()));
             }
-            crate::serial_println!("[DISK]  Mount: {} -> {}", mount, label);
+            k_nano::slog_bin!("DISK", "info", "Mount: {} -> {}", mount, label);
         }
     }
 
     fn print_topology(&self) {
-        crate::serial_println!("[DISK] === Topology ===");
+        k_nano::slog_bin!("DISK", "info", "=== Topology ===");
         for disk in &self.disks {
-            crate::serial_println!("[DISK]  {}: {}GB {:?} ({})",
+            k_nano::slog_bin!("DISK", "info", "{}: {}GB {:?} ({})",
                 disk.name, disk.capacity_bytes / (1024*1024*1024), disk.interface, disk.controller);
             for part in &disk.partitions {
                 let fs = part.fs_info.as_ref().map(|f| alloc::format!("{:?}", f.fs_type)).unwrap_or("?".into());
                 let vol = part.mount_point.as_ref().map(|m| alloc::format!(" -> {}", m)).unwrap_or(String::new());
-                crate::serial_println!("[DISK]    p{}: {:#04x} {} {}", part.index, part.mbr_type, fs, vol);
+                k_nano::slog_bin!("DISK", "info", "p{}: {:#04x} {} {}", part.index, part.mbr_type, fs, vol);
             }
             for vg in &disk.volume_groups {
-                crate::serial_println!("[DISK]    VG: {} ({:?}) uuid={}", vg.name, vg.technology, vg.uuid);
+                k_nano::slog_bin!("DISK", "info", "VG: {} ({:?}) uuid={}", vg.name, vg.technology, vg.uuid);
             }
         }
-        crate::serial_println!("[DISK] === End Topology ===");
+        k_nano::slog_bin!("DISK", "info", "=== End Topology ===");
     }
 }
 
@@ -493,7 +486,7 @@ impl Agent for DiskIntelligenceAgent {
                         let new_disks = self.controllers[ctrl_idx].probe_disks();
                         for disk in new_disks {
                             if !self.disks.iter().any(|d| d.name == disk.name) {
-                                crate::serial_println!("[DISK] Hotplug: {} detectado!", disk.name);
+                                k_nano::slog_bin!("DISK", "info", "Hotplug: {} detectado!", disk.name);
                             }
                         }
                     }
@@ -516,11 +509,10 @@ impl DiskIntelligenceAgent {
                     let size = part.sector_count * disk.sector_size as u64;
                     crate::mhi::MHI_REGISTRY.lock().register(
                         x86_64::PhysAddr::new(phys), size as usize, ideal, &disk.name);
-                    crate::serial_println!("[MHI] Tier migration: {} p{} {:?}→{:?} @ tick {}",
-                        disk.name, part.index, part.mhi_tier, ideal, tick);
+                    k_nano::slog_bin!("MHI", "info", "Tier migration: {} p{} {:?}→{:?} @ tick {}", disk.name, part.index, part.mhi_tier, ideal, tick);
                 }
             }
         }
-            crate::serial_println!("[MHI] {} allocations", crate::mhi::MHI_REGISTRY.lock().allocations.len());
+            k_nano::slog_bin!("MHI", "info", "{} allocations", crate::mhi::MHI_REGISTRY.lock().allocations.len());
     }
 }

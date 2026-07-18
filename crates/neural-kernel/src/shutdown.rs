@@ -14,17 +14,11 @@ static SHUTDOWN_CAUSE: AtomicU8 = AtomicU8::new(0);
 
 pub fn set_cause(cause: ShutdownCause) {
     SHUTDOWN_CAUSE.store(cause as u8, Ordering::SeqCst);
-    let label = match cause {
-        ShutdownCause::Expected => "E",
-        ShutdownCause::Triggered => "T",
-        ShutdownCause::Scheduled => "S",
-        ShutdownCause::Unexpected => "U",
-        ShutdownCause::None => "N",
-    };
+    let label = match cause {ShutdownCause::Expected => "E", ShutdownCause::Triggered => "T", ShutdownCause::Scheduled => "S", ShutdownCause::Unexpected => "U", ShutdownCause::None => "N"};
     let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
     let msg = alloc::format!("SHUTDOWN:{} tick={}", label, tick);
     let _ = crate::agents::log_analyst_agent::write_log("shutdown", &msg);
-    crate::serial_println!("[SHUTDOWN] Causa: {} (tick={})", label, tick);
+    k_nano::slog_bin!("SHUTDOWN", "info", "Causa: {} (tick={})", label, tick);
 }
 
 pub fn get_cause() -> ShutdownCause {

@@ -3,8 +3,6 @@ use x86_64::instructions::port::Port;
 
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
-use crate::serial_println;
-
 pub const RTL8139_VENDOR: u16 = 0x10EC;
 pub const RTL8139_DEVICE: u16 = 0x8139;
 
@@ -119,11 +117,9 @@ impl Rtl8139Driver {
             }
             core::hint::spin_loop();
         }
-        serial_println!(
-            "[RTL8139] Reset OK. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+        k_nano::slog_bin!("Net", "rtl8139", "Reset OK. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
             self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
-            self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]
-        );
+            self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
 
         // Primeiro enable RE (Receiver MAC) + RXE (RX DMA) + TXE (TX DMA)
         // RE bit (0x01) é CRÍTICO — sem ele o receptor MAC fica desligado e rx=0 sempre
@@ -141,11 +137,11 @@ impl Rtl8139Driver {
         const RXFTH_NONE: u32 = 0b1110_0000_0000_0000;
         let rcr_val = APM | AB | AM | WRAP | MXDMA_UNLIMITED | RXFTH_NONE;
         self.write32(REG_RCR, rcr_val);
-        serial_println!("[RTL8139] RCR={:#010x} (WRAP=1 MXDMA=unlimited)", rcr_val);
+        k_nano::slog_bin!("Net", "rtl8139", "RCR={:#010x} (WRAP=1 MXDMA=unlimited)", rcr_val);
 
         let rx_paddr = Self::alloc_pages((RX_BUF_SIZE + 4095) / 4096);
         if rx_paddr == 0 {
-            serial_println!("[RTL8139] RX buffer alloc failed (size={})", RX_BUF_SIZE);
+            k_nano::slog_bin!("Net", "rtl8139", "RX buffer alloc failed (size={})", RX_BUF_SIZE);
             return false;
         }
         self.rx_buf_paddr = rx_paddr;
@@ -163,7 +159,7 @@ impl Rtl8139Driver {
         for i in 0..4 {
             let tx_paddr = Self::alloc_page();
             if tx_paddr == 0 {
-                serial_println!("[RTL8139] TX buffer alloc failed at {}", i);
+                k_nano::slog_bin!("Net", "rtl8139", "TX buffer alloc failed at {}", i);
                 return false;
             }
             self.tx_buf_paddrs[i] = tx_paddr;
@@ -179,12 +175,9 @@ impl Rtl8139Driver {
         let capr_init = (RX_BUF_LEN as u16).wrapping_sub(16);
         self.write16(REG_CAPR, capr_init);
         self.rx_offset = 0;
-        serial_println!("[RTL8139] RX init: CAPR={} RX_BUF_SIZE={}", capr_init, RX_BUF_SIZE);
+        k_nano::slog_bin!("Net", "rtl8139", "RX init: CAPR={} RX_BUF_SIZE={}", capr_init, RX_BUF_SIZE);
 
-        serial_println!(
-            "[RTL8139] Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]",
-            self.rx_buf_paddr, self.tx_buf_paddrs[0]
-        );
+        k_nano::slog_bin!("Net", "rtl8139", "Init OK. rx_buf=0x{:x} tx_bufs=[0x{:x},...]", self.rx_buf_paddr, self.tx_buf_paddrs[0]);
         true
     }
 
@@ -218,8 +211,7 @@ impl Rtl8139Driver {
         let tx_dbg = idx;
         if tx_dbg < 4 && self.tx_cur == 0 {
             let tsd_val = self.read32(tsd_reg);
-            serial_println!("[RTL8139] TX{} len={} tsd={:#x} tsad={:#x}",
-                tx_dbg, data.len(), tsd_val, self.tx_buf_paddrs[idx]);
+            k_nano::slog_bin!("Net", "rtl8139", "TX{} len={} tsd={:#x} tsad={:#x}", tx_dbg, data.len(), tsd_val, self.tx_buf_paddrs[idx]);
         }
 
         for _ in 0..100_000 {
@@ -230,7 +222,7 @@ impl Rtl8139Driver {
             }
             core::hint::spin_loop();
         }
-        serial_println!("[RTL8139] TX{} timeout tsd=0x{:x}", idx, self.read32(tsd_reg));
+        k_nano::slog_bin!("Net", "rtl8139", "TX{} timeout tsd=0x{:x}", idx, self.read32(tsd_reg));
         false
     }
 
@@ -270,15 +262,13 @@ impl Rtl8139Driver {
 
         // Debug primeira leitura (a cada 100 chamadas para evitar flooding)
         if self.rx_offset == 0 && self.debug_count % 100 == 0 {
-            serial_println!("[RTL8139-RX] first: rx_off={:#06x} status={:#06x} len={} cr={:#04x}",
-                self.rx_offset, status, total_len, cr);
+            k_nano::slog_bin!("RTL8139", "RX", "first: rx_off={:#06x} status={:#06x} len={} cr={:#04x}", self.rx_offset, status, total_len, cr);
         }
 
         // Se status não tem bit 0 (ROK) ou len < 64 ou len inválido
         if status & 0x0001 == 0 || total_len < 64 || total_len > RX_BUF_WRAP + 14 {
             if status & 0x0001 == 0 && self.debug_count % 100 == 0 {
-                serial_println!("[RTL8139-RX] !ROK: rx_off={:#06x} status={:#06x} len={} cr={:#04x}",
-                    self.rx_offset, status, total_len, cr);
+                k_nano::slog_bin!("RTL8139", "RX", "!ROK: rx_off={:#06x} status={:#06x} len={} cr={:#04x}", self.rx_offset, status, total_len, cr);
             }
             return None;
         }
@@ -291,7 +281,7 @@ impl Rtl8139Driver {
         let data_len = total_len.saturating_sub(4);
         if data_len < 14 || data_len > RX_BUF_WRAP {
             if self.debug_count % 100 == 0 {
-                serial_println!("[RTL8139-RX] bad data_len={} total_len={}", data_len, total_len);
+                k_nano::slog_bin!("RTL8139", "RX", "bad data_len={} total_len={}", data_len, total_len);
             }
             return None;
         }
@@ -330,10 +320,7 @@ impl Rtl8139Driver {
         unsafe {
             let cr = self.read8(REG_CR);
             let capr = self.read16(REG_CAPR);
-            serial_println!(
-                "[RTL8139] CR=0x{:02x} CAPR=0x{:04x} rx_off=0x{:04x} tx_cur={}",
-                cr, capr, self.rx_offset, self.tx_cur
-            );
+            k_nano::slog_bin!("Net", "rtl8139", "CR=0x{:02x} CAPR=0x{:04x} rx_off=0x{:04x} tx_cur={}", cr, capr, self.rx_offset, self.tx_cur);
         }
     }
 }

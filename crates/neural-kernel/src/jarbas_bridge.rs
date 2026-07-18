@@ -26,9 +26,7 @@ pub fn settings_contract_ok() -> bool {
 pub fn log_bridge_status() {
     let topics = topics_in_sync();
     let settings = settings_contract_ok();
-    crate::serial_println!(
-        "[JARBAS-BRIDGE] jarbas-crate=linked topics_ok={} settings_ok={} audio_truth=neural-kernel cutover=deferred(ADR-0045)",
+    k_nano::slog_bin!("JARBAS", "BRIDGE", "jarbas-crate=linked topics_ok={} settings_ok={} audio_truth=neural-kernel cutover=deferred(ADR-0045)",
         topics,
-        settings
-    );
+        settings);
 }

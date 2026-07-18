@@ -9,8 +9,6 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use k_nano::serial_println;
-
 pub const TOPIC_FETCH_REQUEST: &str = "FETCH_REQUEST";
 pub const TOPIC_FETCH_RESPONSE: &str = "FETCH_RESPONSE";
 pub const TOPIC_SEARCH_REQUEST: &str = "SEARCH_REQUEST";
@@ -69,19 +67,19 @@ impl BrowserAgent {
         let host_ip = match ip {
             Some(ip) => ip,
             None => {
-                serial_println!("[BROWSER] DNS resolve falhou para {}", host_clean);
+                k_nano::slog_hermes!("BROWSER", "info", "DNS resolve falhou para {}", host_clean);
                 return Err("DNS resolve failed");
             }
         };
 
-        serial_println!("[BROWSER] HTTP GET {:?}:{}{}", host_ip, port, path);
+        k_nano::slog_hermes!("BROWSER", "info", "HTTP GET {:?}:{}{}", host_ip, port, path);
         match unsafe { crate::net::http_get(host_ip, port, path) } {
             Some(response) => {
-                serial_println!("[BROWSER] {} bytes de {}", response.len(), host_clean);
+                k_nano::slog_hermes!("BROWSER", "info", "{} bytes de {}", response.len(), host_clean);
                 Ok((String::from(url), response))
             }
             None => {
-                serial_println!("[BROWSER] Falha ao buscar {}", url);
+                k_nano::slog_hermes!("BROWSER", "info", "Falha ao buscar {}", url);
                 Err("HTTP GET failed")
             }
         }
@@ -146,7 +144,7 @@ impl Agent for BrowserAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         while let Some(event) = self.fetch_receiver.try_receive() {
             let url = core::str::from_utf8(&event.payload).unwrap_or("");
-            serial_println!("[BROWSER] Fetch: {}", url);
+            k_nano::slog_hermes!("BROWSER", "info", "Fetch: {}", url);
 
             // Check cache
             if let Some(cached) = self.cache.get(url) {
@@ -176,7 +174,7 @@ impl Agent for BrowserAgent {
                     });
                 }
                 Err(e) => {
-                    serial_println!("[BROWSER] Error: {}", e);
+                    k_nano::slog_hermes!("BROWSER", "info", "Error: {}", e);
                 }
             }
         }
@@ -207,7 +205,7 @@ impl PageViewerApp {
         self.url = String::from(url);
         self.content = String::from(content);
         self.title = String::from(title);
-        k_nano::serial_println!("[BROWSER] Page loaded: {} ({} bytes)", url, content.len());
+        k_nano::slog_hermes!("BROWSER", "info", "Page loaded: {} ({} bytes)", url, content.len());
     }
 
     pub fn render(&self) {
@@ -218,5 +216,5 @@ impl PageViewerApp {
 /// Registra BrowserAgent no scheduler
 pub fn register_browser_agent(registry: &mut agent_core::AgentRegistry) {
     registry.register(Box::new(BrowserAgent::new()));
-    serial_println!("[BROWSER] BrowserAgent registrado. Skills: fetch, search, extract, render");
+    k_nano::slog_hermes!("BROWSER", "info", "BrowserAgent registrado. Skills: fetch, search, extract, render");
 }

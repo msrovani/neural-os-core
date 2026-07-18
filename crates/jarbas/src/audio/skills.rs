@@ -18,7 +18,7 @@ fn try_load_piper() -> Option<PiperEngine> {
         if let Ok(data) = hermes::globals::read_vfs(name) {
                 let mut eng = PiperEngine::new();
                 if eng.load(&data) {
-                    k_nano::serial_println!("[PIPER] Piper TTS loaded from VFS: {}", name);
+                    k_nano::slog_jarbas!("Audio", "piper", "Piper TTS loaded from VFS: {}", name);
                     return Some(eng);
             }
         }
@@ -32,13 +32,13 @@ fn try_load_piper() -> Option<PiperEngine> {
                 let data = core::slice::from_raw_parts(probe as *const u8, 70 * 1024 * 1024);
                 let mut eng = PiperEngine::new();
                 if eng.load(data) {
-                    k_nano::serial_println!("[PIPER] Piper TTS loaded from QEMU loader @{:x}", addr);
+                    k_nano::slog_jarbas!("Audio", "piper", "Piper TTS loaded from QEMU loader @{:x}", addr);
                     return Some(eng);
                 }
             }
         }
     }
-    k_nano::serial_println!("[PIPER] Piper TTS ausente — formant synth ativo");
+    k_nano::slog_jarbas!("Audio", "piper", "Piper TTS ausente — formant synth ativo");
     None
 }
 
@@ -61,12 +61,12 @@ impl Skill for TtsSkill {
             match guard.as_ref() {
                 Some(engine) if engine.is_loaded() => {
                     let audio = engine.generate(text);
-                    k_nano::serial_println!("[TTS] Piper (neural): \"{}\" ({} samples, multi-lang PT-BR+EN)", text, audio.len());
+                    k_nano::slog_jarbas!("Audio", "tts", "Piper (neural): \"{}\" ({} samples, multi-lang PT-BR+EN)", text, audio.len());
                     audio
                 }
                 _ => {
                     let audio = crate::audio::tts::synthesize(text);
-                    k_nano::serial_println!("[TTS] Formant (CPU): \"{}\" ({} samples)", text, audio.len());
+                    k_nano::slog_jarbas!("Audio", "tts", "Formant (CPU): \"{}\" ({} samples)", text, audio.len());
                     audio
                 }
             }
@@ -122,7 +122,7 @@ impl Skill for SttSkill {
             alloc::format!("[VAD] Silencio")
         };
 
-        k_nano::serial_println!("[STT] {}", result);
+        k_nano::slog_jarbas!("Audio", "stt", "{}", result);
         Ok(result.into_bytes())
     }
 }

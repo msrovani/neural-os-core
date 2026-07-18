@@ -6,7 +6,6 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use event_bus::{CapabilityToken, Event, Receiver};
 use crate::audio::vad::{VAD, VadTransition};
 use crate::audio::{TOPIC_WAKEWORD, TOPIC_AUDIO_IN};
-use k_nano::serial_println;
 use k_nano::kjson;
 
 /// MLP ternario 16→8→1 para classificacao wake word.
@@ -134,11 +133,11 @@ impl Agent for WakeWordAgent {
                 self.history_idx = (self.history_idx + 1).min(64);
 
                 if transition == VadTransition::SpeechStart {
-                    serial_println!("[WAKEWORD] Voz detectada (energy={:.0})", energy);
+                    k_nano::slog_jarbas!("WAKEWORD", "info", "Voz detectada (energy={:.0})", energy);
                 }
 
                 if transition == VadTransition::SpeechEnd {
-                    serial_println!("[WAKEWORD] Silencio detectado");
+                    k_nano::slog_jarbas!("WAKEWORD", "info", "Silencio detectado");
                     let mut energy_16 = [0.0f32; 16];
                     let copy_len = self.history_idx.min(16);
                     energy_16[..copy_len].copy_from_slice(&self.energy_history[..copy_len]);

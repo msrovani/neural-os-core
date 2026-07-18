@@ -5,8 +5,6 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use crate::ata::AtaDriver;
-use crate::serial_println;
-
 /// Converte "NAME.EXT" para entrada FAT 8.3 (11 bytes, espaços).
 fn encode_83(name: &str) -> [u8; 11] {
     let mut out = [b' '; 11];
@@ -39,6 +37,8 @@ const GPT_ESP: [u8; 16] = [
 const GPT_BASIC_DATA: [u8; 16] = [
     0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7,
 ];
+/// NeuralFS GPT type — ver `gpt::GPT_TYPE_NEURALFS`.
+const GPT_NEURALFS: [u8; 16] = crate::gpt::GPT_TYPE_NEURALFS;
 
 /// Parseia tabela MBR (4 entradas) a partir do setor 0.
 pub fn parse_mbr_sector(mbr: &[u8; 512]) -> Vec<Partition> {
@@ -125,8 +125,10 @@ where
             }
             let type_code = if type_guid == GPT_ESP {
                 0xEFu8
+            } else if type_guid == GPT_NEURALFS {
+                crate::neural_fs::volume::MBR_TYPE_NEURALFS // 0x7F — NeuralFS nativo
             } else if type_guid == GPT_BASIC_DATA {
-                0x0Cu8 // FAT dados no USB unificado / Microsoft Basic Data
+                0x0Cu8 // FAT/exFAT dados (USB unificado / Microsoft Basic Data)
             } else {
                 0xEEu8
             };
@@ -161,22 +163,20 @@ fn merge_parts(mbr: Vec<Partition>, gpt: Vec<Partition>) -> Vec<Partition> {
 pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
     let mut mbr = [0u8; 512];
     if !unsafe { ata.read_sectors(0, &mut mbr, 1) } {
-        serial_println!("[MBR] Falha ao ler setor 0");
+        k_nano::slog_bin!("MBR", "info", "Falha ao ler setor 0");
         return Vec::new();
     }
     if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
-        serial_println!("[MBR] Signature 55AA nao encontrada");
+        k_nano::slog_bin!("MBR", "info", "Signature 55AA nao encontrada");
         return Vec::new();
     }
     let mut parts = parse_mbr_sector(&mbr);
     for (i, p) in parts.iter().enumerate() {
-        serial_println!(
-            "[MBR] {}: type={:#04x} LBA={} size={}MB",
+        k_nano::slog_bin!("MBR", "info", "{}: type={:#04x} LBA={} size={}MB",
             i + 1,
             p.type_code,
             p.lba_start,
-            p.sector_count as u64 * 512 / (1024 * 1024)
-        );
+            p.sector_count as u64 * 512 / (1024 * 1024));
     }
     let has_ee = parts.iter().any(|p| p.type_code == 0xEE);
     let has_fat = parts
@@ -186,16 +186,37 @@ pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
     if has_ee || !has_fat {
         let gpt = parse_gpt_partitions(|lba, buf| unsafe { ata.read_sectors(lba as u32, buf, 1) });
         if !gpt.is_empty() {
-            serial_println!("[GPT] {} particoes", gpt.len());
+            k_nano::slog_bin!("GPT", "info", "{} particoes", gpt.len());
             for (i, p) in gpt.iter().enumerate() {
-                serial_println!(
-                    "[GPT] {}: type={:#04x} LBA={} size={}MB",
+                k_nano::slog_bin!("GPT", "info", "{}: type={:#04x} LBA={} size={}MB",
                     i + 1,
                     p.type_code,
                     p.lba_start,
-                    p.sector_count as u64 * 512 / (1024 * 1024)
-                );
+                    p.sector_count as u64 * 512 / (1024 * 1024));
             }
+            parts = merge_parts(parts, gpt);
+        }
+    }
+    parts
+}
+
+/// Le MBR (+ GPT) via qualquer BlockDevice (ATA, USB-MSC, MemoryDisk).
+pub fn read_mbr_dev(dev: &mut dyn crate::block_dev::BlockDevice) -> Vec<Partition> {
+    let mut mbr = [0u8; 512];
+    if !dev.read_sectors(0, &mut mbr) {
+        return Vec::new();
+    }
+    if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
+        return Vec::new();
+    }
+    let mut parts = parse_mbr_sector(&mbr);
+    let has_ee = parts.iter().any(|p| p.type_code == 0xEE);
+    let has_fat = parts
+        .iter()
+        .any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C);
+    if has_ee || !has_fat {
+        let gpt = parse_gpt_partitions(|lba, buf| dev.read_sectors(lba, buf));
+        if !gpt.is_empty() {
             parts = merge_parts(parts, gpt);
         }
     }
@@ -245,7 +266,7 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
     let parts = read_mbr(ata);
     if parts.is_empty() { return; }
     let total = ata.total_sectors().unwrap_or(0);
-    serial_println!("[DISK] Total: {} setores ({} MB), {} particoes", total, total as u64 * 512 / (1024*1024), parts.len());
+    k_nano::slog_bin!("DISK", "info", "Total: {} setores ({} MB), {} particoes", total, total as u64 * 512 / (1024*1024), parts.len());
 
     for (i, part) in parts.iter().enumerate() {
         let fs_name = match part.type_code {
@@ -256,7 +277,7 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
             if let Some(fat32) = Fat32Reader::new(ata, part) {
                 let root_list = unsafe { fat32.list_root() };
-                serial_println!("[FAT32] Root contents:\n{}", root_list);
+                k_nano::slog_bin!("FAT32", "info", "Root contents:\n{}", root_list);
             }
         }
         let mount_point = alloc::format!("/mnt/sdhc/p{}", i+1);
@@ -266,22 +287,23 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
         crate::mhi::MHI_REGISTRY.lock().register(
             x86_64::PhysAddr::new(part.lba_start as u64 * 512),
             part.sector_count as usize * 512, crate::mhi::AllocTier::Hdd, &mount_point);
-        serial_println!("[DISK] Montado {} type={:#04x} {}MB", mount_point, part.type_code, part.sector_count as u64 * 512 / (1024*1024));
+        k_nano::slog_bin!("DISK", "info", "Montado {} type={:#04x} {}MB",
+            mount_point, part.type_code, part.sector_count as u64 * 512 / (1024*1024));
     }
 
     if total > 0 {
         let (free_start, free_size) = find_free_space(&parts, total);
         let free_mb = free_size as u64 * 512 / (1024*1024);
         let is_usb = is_bootable_usb(&parts);
-        serial_println!("[DISK] Livre: LBA {} ({} MB) usb={}", free_start, free_mb, is_usb);
+        k_nano::slog_bin!("DISK", "info", "Livre: LBA {} ({} MB) usb={}", free_start, free_mb, is_usb);
         if free_size > 2048 && is_usb {
             let addr = free_start as u64 * 512;
             crate::mhi::MHI_REGISTRY.lock().register(
                 x86_64::PhysAddr::new(addr), free_size as usize * 512, crate::mhi::AllocTier::Hdd, "/mnt/sdhc/data");
             if let Some(ref mut vfs) = *crate::vfs::VFS.lock() { vfs.mount("/mnt/sdhc/data", "ata"); }
-            serial_println!("[DISK] + {} MB para dados MHI!", free_mb);
+            k_nano::slog_bin!("DISK", "info", "+ {} MB para dados MHI!", free_mb);
         } else if free_size > 2048 && !is_usb {
-            serial_println!("[DISK] HD com {} MB livres. Ignorado (requer confirmacao).", free_mb);
+            k_nano::slog_bin!("DISK", "info", "HD com {} MB livres. Ignorado (requer confirmacao).", free_mb);
         }
     }
 }
@@ -326,9 +348,9 @@ impl<'a> Fat32Reader<'a> {
         let fat_lba = part.lba_start + reserved_sectors as u32;
         let data_lba = fat_lba + fat_count as u32 * sectors_per_fat32;
 
-        serial_println!("[FAT32] BPB: bps={} spc={} fats={} spf={} root_cluster={}",
+        k_nano::slog_bin!("FAT32", "info", "BPB: bps={} spc={} fats={} spf={} root_cluster={}",
             bytes_per_sector, sectors_per_cluster, fat_count, sectors_per_fat32, root_cluster);
-        serial_println!("[FAT32] fat_lba={} data_lba={}", fat_lba, data_lba);
+        k_nano::slog_bin!("FAT32", "info", "fat_lba={} data_lba={}", fat_lba, data_lba);
 
         Some(Fat32Reader { ata, lba_start: part.lba_start, sectors_per_cluster, bytes_per_sector,
             reserved_sectors, fat_count, sectors_per_fat32, root_cluster, fat_lba, data_lba })
@@ -655,10 +677,7 @@ impl<'a> Fat32Writer<'a> {
         if result.len() >= count as usize {
             Some(result)
         } else {
-            crate::serial_println!(
-                "[FAT32] find_free_clusters budget/miss need={} got={} scanned<={}",
-                count, result.len(), fat_sectors
-            );
+            k_nano::slog_bin!("FAT32", "info", "find_free_clusters budget/miss need={} got={} scanned<={}", count, result.len(), fat_sectors);
             None
         }
     }
@@ -713,7 +732,7 @@ impl<'a> Fat32Writer<'a> {
 
         let clusters = match self.find_free_clusters(num_clusters as u32) {
             Some(c) => c,
-            None => { crate::serial_println!("[FAT32] Sem clusters livres!"); return false; }
+            None => { k_nano::slog_bin!("FAT32", "info", "Sem clusters livres!"); return false; }
         };
         let mut written = 0usize;
         for (i, &c) in clusters.iter().enumerate() {
@@ -772,7 +791,7 @@ impl<'a> Fat32Writer<'a> {
             // Arquivo novo: alocar clusters e criar entrada
             let clusters = match self.find_free_clusters(num_clusters as u32) {
                 Some(c) => c,
-                None => { crate::serial_println!("[FAT32] Sem clusters livres!"); return false; }
+                None => { k_nano::slog_bin!("FAT32", "info", "Sem clusters livres!"); return false; }
             };
             if !self.write_cluster_chain(clusters[0], data) { return false; }
             self.create_entry(name, clusters[0], data.len() as u32)

@@ -4,8 +4,6 @@
 //! GPU VRAM Buddy para memória de vídeo.
 
 use alloc::string::String;
-use crate::serial_println;
-
 /// Slab allocator: 8 buckets para alocações pequenas (32-4096 bytes)
 pub struct SlabBuddy {
     slab: crate::slab::SlabAllocator,
@@ -45,7 +43,7 @@ impl SlabBuddy {
 }
 
 pub fn init(_heap_start: usize, _heap_size: usize) {
-    serial_println!("[ALLOC] SlabBuddy allocator ativo (slab 32-4096, fallback heap)");
+    k_nano::slog_bin!("ALLOC", "info", "SlabBuddy allocator ativo (slab 32-4096, fallback heap)");
 }
 
 pub fn status() -> &'static str { "SlabBuddy: slab+buddy integrados" }

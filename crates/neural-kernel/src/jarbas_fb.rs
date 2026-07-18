@@ -12,7 +12,6 @@ use crate::address_space::{self, AddressSpace};
 use crate::display::fb::GPU;
 use crate::interrupts::TIMER_TICKS;
 use crate::memory::PHYS_MEM_OFFSET;
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_MAP_FB, SYS_PRESENT_FB};
 
 /// VA base do FB no AddressSpace JARBAS (L4 idx 224+, após MVP C).
@@ -108,7 +107,7 @@ pub fn probe_contract() -> Result<FbContract, &'static str> {
         width: gpu.fb_width,
         height: gpu.fb_height,
         stride: gpu.fb_stride,
-        bpp: gpu.fb_bpp,
+        bpp: gpu.fb_bpp, // dinâmico: coletado no probe GOP
         rgb_order: gpu.rgb_order,
     })
 }
@@ -120,10 +119,7 @@ pub unsafe fn map_fb_pages(
     held: Cap,
 ) -> Result<u64, &'static str> {
     if !held.contains(Cap::MAP_FB) {
-        serial_println!(
-            "[CapGate] DENY MAP_FB held=0x{:x}",
-            held.bits()
-        );
+        k_nano::slog_bin!("CapGate", "info", "DENY MAP_FB held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_FB");
     }
     let _ = syscall::dispatch(SYS_MAP_FB, contract.phys_base, held)?;
@@ -207,10 +203,7 @@ impl JarbasDoubleBuffer {
     /// Present: copia back → FB kernel VA (canto superior). Cap::WRITE_FB.
     pub fn present(&mut self, held: Cap) -> Result<(), &'static str> {
         if !held.contains(Cap::WRITE_FB) {
-            serial_println!(
-                "[CapGate] DENY WRITE_FB held=0x{:x}",
-                held.bits()
-            );
+            k_nano::slog_bin!("CapGate", "info", "DENY WRITE_FB held=0x{:x}", held.bits());
             return Err("EPERM: Cap::WRITE_FB");
         }
         let _ = syscall::dispatch(SYS_PRESENT_FB, 0, held)?;
@@ -238,24 +231,22 @@ pub fn p4_demo_ok() -> bool {
 
 /// Demo non-fatal: Cap deny/allow + AS map + checker + present.
 pub fn demo_jarbas_fb() -> Result<(), &'static str> {
-    serial_println!("[P4] JARBAS FB MMIO + double-buffer demo");
+    k_nano::slog_bin!("Cap", "p4", "JARBAS FB MMIO + double-buffer demo");
 
     let contract = match probe_contract() {
         Ok(c) => {
-            serial_println!(
-                "[P4] FB contract {}x{} bpp={} stride={} virt={:x} phys={:x}",
+            k_nano::slog_bin!("Cap", "p4", "FB contract {}x{} bpp={} stride={} virt={:x} phys={:x}",
                 c.width,
                 c.height,
                 c.bpp,
                 c.stride,
                 c.virt_kernel,
-                c.phys_base
-            );
+                c.phys_base);
             c
         }
         Err(e) => {
             // Sem FB: ainda prova Cap deny/allow sem touch MMIO.
-            serial_println!("[P4] {} — Cap-only path", e);
+            k_nano::slog_bin!("Cap", "p4", "{} — Cap-only path", e);
             if syscall::dispatch(SYS_MAP_FB, 0, Cap::EMPTY).is_ok() {
                 return Err("p4: Cap vazia nao deveria MAP_FB");
             }
@@ -266,7 +257,7 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
             syscall::dispatch(SYS_PRESENT_FB, 0, Cap::WRITE_FB)?;
             CAP_ONLY_OK.store(true, Ordering::Relaxed);
             P4_DEMO_OK.store(true, Ordering::Relaxed);
-            serial_println!("[P4] SUCCESS Cap MAP_FB/WRITE_FB (sem FB fisico)");
+            k_nano::slog_bin!("Cap", "p4", "SUCCESS Cap MAP_FB/WRITE_FB (sem FB fisico)");
             return Ok(());
         }
     };
@@ -304,11 +295,9 @@ pub fn demo_jarbas_fb() -> Result<(), &'static str> {
     erase_present_region(&contract);
     crate::display::fb::boot_splash("AIOS");
 
-    serial_println!(
-        "[P4] SUCCESS MAP_FB+AS+present count={} vsync_waits={} (checker cleared+splash)",
+    k_nano::slog_bin!("Cap", "p4", "SUCCESS MAP_FB+AS+present count={} vsync_waits={} (checker cleared+splash)",
         present_count(),
-        VSYNC_WAITS.load(Ordering::Relaxed)
-    );
+        VSYNC_WAITS.load(Ordering::Relaxed));
     P4_DEMO_OK.store(true, Ordering::Relaxed);
     Ok(())
 }

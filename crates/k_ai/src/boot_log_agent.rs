@@ -1,6 +1,4 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use k_nano::serial_println;
-
 const MANIFEST: AgentManifest = AgentManifest {
     name: "boot_log",
     kind: AgentKind::Skill,
@@ -83,7 +81,7 @@ impl BootLogAgent {
         let path = alloc::format!("/logs/boot_{:07X}.log", tick);
         k_nano::fs::write_vfs(&path, content.as_bytes())
             .or_else(|_| {
-                serial_println!("[BOOTLOG] VFS write falhou para {}", path);
+                k_nano::slog_kai!("BOOTLOG", "info", "VFS write falhou para {}", path);
                 Err("boot log persist failed")
             })
     }
@@ -126,7 +124,7 @@ impl Agent for BootLogAgent {
         if let Some(log) = Self::read_last_boot_log() {
             let diagnostics = Self::analyze_log(&log);
             for (kind, msg) in &diagnostics {
-                serial_println!("[BOOT-LOG-AGENT] {}: {}", kind, msg);
+                k_nano::slog_kai!("BOOT", "LOG-AGENT", "{}: {}", kind, msg);
                 
                 // Panic detectado → publica HEALTH_ISSUE (Ring 1 não segura SELF_HEAL global hermes)
                 if *kind == "PANIC" || *kind == "GPU_HUNG" {
@@ -137,7 +135,7 @@ impl Agent for BootLogAgent {
                         payload: msg_out.into_bytes(),
                         token: event_bus::CapabilityToken::Legacy(1),
                     });
-                    serial_println!("[BOOTLOG] Health issue publicado: {}", kind);
+                    k_nano::slog_kai!("BOOTLOG", "info", "Health issue publicado: {}", kind);
                 }
             }
         }

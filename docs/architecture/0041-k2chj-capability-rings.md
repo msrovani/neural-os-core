@@ -1,15 +1,19 @@
 # ADR-0041: K²CHJ Capability-Based Rings + SFI
 
-**Data:** 2026-07-14  
-**Status:** Accepted — P0–P9 PoC complete (monólito; non-fatal demos)  
-**Sprint:** 107+ (capability microkernel)  
-**Propósito:** Formalizar a visão de anéis por capability (K-Nano / K-IA / Cortex / Hermes / JARBAS), o estado real (monólito Ring 0) e o roadmap incremental sem desfazer Pacotes A/B.
+**Data:** 2026-07-14 · **revisão anéis:** 2026-07-18  
+**Status:** Accepted — P0–P9 PoC complete; **emenda R0–R3 + k-HAL** (direcionamento)  
+**Lifecycle:** `fazendo` (emenda de limites; PoC mecânico permanece válido)  
+**Sprint:** 107+ (capability microkernel) → pós-v1.8.5 (separação HAL)  
+**Ideia:** #424–#432 (PoC); **#459** (k-HAL / anéis R0–R3 / VirtIO-bound)  
+**Propósito:** Formalizar anéis por capability, o estado real (monólito Ring 0) e o **mapa-alvo de privilégio + ownership de HW** sem desfazer Pacotes A/B nem N1–N5 (ADR-0042).
 
 ---
 
 ## 1. Contexto
 
-A visão-alvo é um **capability microkernel** onde:
+A visão-alvo é um **capability microkernel** onde crates K²CHJ são fronteiras de **função** (ADR-0042) e anéis R0–R3 são fronteiras de **privilégio / MMIO**.
+
+### 1.1 Mapa legado (PoC 2026-07-14) — ainda válido como histórico
 
 | Anel lógico | Privilege | Contrato |
 |-------------|-----------|----------|
@@ -20,11 +24,13 @@ A visão-alvo é um **capability microkernel** onde:
 | **JARBAS** | Ring 3 + FB MMIO | Double-buffer / VSync |
 | **IPC** | Cross-AS | Só ring buffers lock-free (sem sockets internos) |
 
-**Realidade atual (2026-07-14):** boot = monólito `neural-kernel` em Ring 0 único. Crates K²CHJ existem no workspace, mas o binário de boot não depende delas para isolamento. Pacotes A+B (STI/PIC, stack 2MB, init_phase RR, BOOT_PHASE, DiagnosticSkill, `init_platform_sync` antes de drivers, Agency EventDriven) **permanecem** — não desfazer.
+**Problema observado (2026-07-18):** o mapa legado colocava **MMIO/VirtIO em K-IA** e **FB MMIO em JARBAS**. Na prática o monólito vazou ainda mais: GPU BAR em `jarbas/gpu`, WiFi/net MMIO em `hermes`, inventário limpo em `k_ai`, cérebro limpo em `cortex`. Trocar HW exige tocar 3+ crates — o oposto do sonho VirtIO-portátil.
+
+**Realidade atual:** boot = monólito `neural-kernel` em **CPU Ring 0 único**. Crates existem; **não há isolamento de privilégio de produção**. Pacotes A+B e Runtime **permanecem**.
 
 ---
 
-## 2. Decisão
+## 2. Decisão (base PoC — inalterada)
 
 1. Tratar K²CHJ crates como **fronteiras lógicas** até haver address spaces + IPC real.
 2. Evoluir o monólito com provas de conceito **não-fatais** no boot (falha → warn, continua).
@@ -32,33 +38,347 @@ A visão-alvo é um **capability microkernel** onde:
 4. IPC interno futuro = **SPSC/MPMC ring buffers** em páginas compartilhadas mapeadas nos address spaces envolvidos.
 5. Syscall mínimo = trap software (`int 0x90`; 0x80–0x82 reservados para IPI SMP). Ring 3 completo é fase seguinte.
 
-### Non-goals desta sprint / MVP C
+### Non-goals desta sprint / MVP C (histórico P0–P9)
 
 - Separar binários por crate K²CHJ
 - Hermes WASM SFI completo; VirtIO ring DMA real (QUEUE_NOTIFY); streaming GGUF >RAM
 - Reescrever Agency / drivers / Pacotes A+B
 
-**Nota P6:** user-mode Ring 3 via `iretq` + stub + `SYS_EXIT_USER` é PoC boot non-fatal (não scheduler multi-task).  
-**Nota P7:** demand-paging #PF cura lazy weights (frames pré-alocados); GGUF/FAT = **P9**.  
-**Nota P8:** VirtIO vring layout-compatible sobre DMA pin; NIC live observe-only (path paralelo).  
-**Nota P9:** GGUF/FAT file-backed mmap — pré-fill frames no register; #PF só PRESENT (sem I/O no fault).
+*(Aceites P0–P9: ver §5–§7 abaixo — PoC ✅.)*
 
 ---
 
-## 3. Gap analysis (visão × realidade)
+## 9. Emenda 2026-07-18 — Anéis R0–R3 + k-HAL (direcionamento canônico)
+
+Esta seção **supersede** a atribuição de MMIO da tabela §1.1 para o **roadmap futuro**. Não invalida PoCs P0–P9; redefine **quem pode tocar silício**.
+
+### 9.1 Princípio
+
+```text
+Privilégio CPU (x86 rings / AS futuros)  ≠  Função de produto (ADR-0042)
+```
+
+- **ADR-0042** responde: *o que a caixa faz* (legível / HW-AI / cérebro / orquestra / ego).
+- **Esta emenda** responde: *quem pode fazer MMIO, IRQ de device, DMA pin de device*.
+
+### 9.2 Mapa-alvo de privilégio
+
+```text
+CPU / AS Ring 0 ── k-nano          subir máquina (tempo, mem, traps, PCI cfg mínimo)
+CPU / AS Ring 1 ── k-HAL           descoberta HW + backends nativos + fachulação VirtIO-xxx
+CPU / AS Ring 2 ── cortex + k-ai   cérebro + autonomia (SEM MMIO de device)
+CPU / AS Ring 3 ── hermes + jarbas orquestra + persona (SEM MMIO; só Caps / vring FE)
+```
+
+| Anel | Componente | É | Não é | MMIO device? |
+|------|------------|---|--------|--------------|
+| **R0** | **k-nano** | Boot, CR3/GDT/IDT, heap/slab, timer, IRQ *roteamento*, PCI *config space* (scan), Cap authority, DMA *pin genérico*, serial | Persona, LLM, “entender” GPU | Só fundação (não BAR de GPU/NIC/HDA) |
+| **R1** | **k-HAL** (novo / extraído) | Enumerar BARs, bind driver nativo **ou** VirtIO backend, publicar `DeviceCap` + filas, AI HW Expert *binding*, quarantine local de device | Intent de usuário; matmul de política; humor | **Sim — único dono** |
+| **R2** | **cortex** | LLM, Trinity MoE, tensores, mmap pesos, experts de *cálculo* | Orquestrar skills; tocar BAR | **Não** — só `ComputeJob` / Cap MAP_WEIGHTS |
+| **R2** | **k-ai** | SelfHeal, Trust, inventário *lógico*, HEALTH_ISSUE, Agency de máquina | Trinity/LLM; compositor | **Não** — consome telemetria HAL |
+| **R3** | **hermes** | Intent→skill, ReAct, WASM/SFI, PackageHub, criar artefatos | Drivers; FB direto | **Não** — CapGate + hostcalls |
+| **R3** | **jarbas** | Persona, compositor, voz como expressão, +10% | BAR GPU; HDA MMIO; ATA | **Não** — `DisplayCap` / `AudioCap` FE |
+
+### 9.3 Onde fica o Cortex? (resposta explícita)
+
+**Cortex não é HAL e não é k-ai.**
+
+| | **cortex** | **k-ai** |
+|--|------------|----------|
+| Metáfora ADR-0042 | O **cérebro** | AI **para a máquina** / autonomia |
+| Conteúdo | BitNet, MoE/Trinity, tokenizer, tensores, speculative decode | SelfHeal, Trust, inventário, HW agents *de política* |
+| Entrada | tokens / tensores / KernelPack *já validado* | EventBus `HEALTH_*`, DeviceTree lógico |
+| Saída | logits / embeddings / LatentBus | heal/noop, Trust allow/deny |
+| HW Expert *modelo* (pesos) | pode **inferir** (R2) | — |
+| HW Expert *vinculação* (qual BAR/blob) | — | observa; **bind** é R1 k-HAL |
+
+Colocar “LLM/Trinity em k-ai” seria **inverter** ADR-0042 e o Cargo atual (`cortex` abaixo de `k_ai`). **Rejeitado.**
+
+### 9.4 k-HAL, HalOffer e VirtIO — portátil sem misturar nomes
+
+**Separação canônica (1.8.x):**
+
+| Nome | Papel | Quem chama |
+|------|-------|------------|
+| **HalOffer** (`k_hal::offer`) | API de alto nível R3→R1: *tem X? conecte o agente neste port/tópico* | hermes / jarbas / cortex / k_ai (**sem MMIO**) |
+| **DevicePort** | Canal tipado pós-bind (`video_port`, `display_port`, `audio_port`, …) | FE após `bind` |
+| **VirtIO** | Transporte OASIS/QEMU (vring, QUEUE_NOTIFY, VID `1AF4`) | só **backend** dentro de k-hal |
+
+Exemplo vertical câmera:
+
+```text
+Jarbas (Vision/UVC FE) → Hermes → HalOffer::query/bind(Video)
+  → Available/Bound + topic CAMERA_FRAME
+  → BE nativo (xHCI/UVC) ou VirtIO-input no R1 — R3 nunca faz pci::scan
+```
+
+Referências externas (comportamento, não cópia de código):
+
+| Sistema | Lição para Neural OS |
+|---------|----------------------|
+| **VirtIO 1.x** (OASIS) | FE↔BE via virtqueue — **só o transporte BE**; a API de produto é HalOffer |
+| **QEMU/ACRN VirtIO** | FE no guest, BE no hypervisor; data plane = vring |
+| **seL4 sDDF** | Drivers isolados; clients não falam MMIO |
+| **Fuchsia Zircon DDK** | Device tree + protocols; isolamento por política |
+
+**Modelo Neural OS:**
+
+```text
+                    ┌─────────────────────────────────────┐
+   R3 hermes/jarbas │  HalOffer client + DevicePort FE    │  query/bind/topic
+                    └──────────────┬──────────────────────┘
+                                   │ Cap + EventBus (sem BAR)
+                    ┌──────────────▼──────────────────────┐
+   R1 k-HAL         │  HalOffer server + DeviceTree       │
+                    │  VirtIO BE  ←→  Native BE           │  MMIO/IRQ/DMA
+                    └──────────────┬──────────────────────┘
+                                   │ pin / map / IRQ route
+                    ┌──────────────▼──────────────────────┐
+   R0 k-nano        │  machine services (sem política AI) │
+                    └─────────────────────────────────────┘
+```
+
+Classes HalOffer (DeviceClass), com backend nativo **ou** VirtIO atrás do **mesmo** port:
+
+| Classe lógica | Frontend (R2/R3) | Backend R1 (nativo ou VirtIO) |
+|---------------|------------------|-------------------------------|
+| `gpu` / compute | jarbas DisplayCap; cortex ComputeJob | NVIDIA/AMD/Intel **ou** VirtIO-GPU |
+| `net` / `wifi` | hermes NetAgent (só FE) | RTL/e1000/iwlwifi **ou** VirtIO-net |
+| `block` | NeuralFS / PackageHub I/O | NVMe/AHCI/ATA **ou** VirtIO-blk |
+| `input` | InputAgent FE | HID **ou** VirtIO-input |
+| `snd` | jarbas voz FE | HDA/UAC **ou** VirtIO-snd |
+| `video` | Vision/UVC FE | xHCI/UVC **ou** VirtIO-input video |
+
+**AI HW Expert** vive em duas metades:
+
+1. **Binding (R1):** dado VID/DID → escolher backend, FW blob, quarantine; publicar HalOffer.  
+2. **Inferência (R2 cortex):** classificar device / sugerir skill — **sem** escrever BAR.
+
+### 9.5 Matriz Cap (quem pode o quê)
+
+| Cap / recurso | R0 nano | R1 HAL | R2 cortex | R2 k-ai | R3 hermes | R3 jarbas |
+|---------------|---------|--------|-----------|---------|-----------|-----------|
+| CR3 / IDT / IRQ route | ✅ | pedida | — | — | — | — |
+| PCI config scan | ✅ mínimo | ✅ full | — | leitura lógica | — | — |
+| BAR MMIO GPU/NIC/HDA | — | ✅ | — | — | — | — |
+| DMA pin device | auxilia | ✅ | — | — | — | — |
+| MAP_WEIGHTS / DEMAND_PAGE | grant | — | ✅ use | — | — | — |
+| ComputeJob submit | — | executa BE | ✅ pede | observa | pede via skill | — |
+| SEND_TCP / net FE | — | BE | — | heal path | ✅ | — |
+| MAP_FB / PRESENT | grant | BE scanout | — | — | — | ✅ FE |
+| Trust / SelfHeal | — | reporta fault | — | ✅ | escalate | — |
+| WASM hostcalls | — | — | — | — | ✅ CapGate | — |
+
+### 9.6 Divisão de tarefas (infraestrutura)
+
+#### Boot (fases × anel dono)
+
+| Fase boot | Dono privilégio | Notas |
+|-----------|-----------------|-------|
+| SafeHarbor → MemoryCore → SystemBringup | **R0 nano** | serial, IDT, heap, SMP mínimo |
+| Diagnostics | R0 + telemetria | sem BAR GPU |
+| HardwareDiscovery | **R1 HAL** (PCI/ACPI enumerate) | nano só entrega cfg space / map UC |
+| DriverInit | **R1 HAL** | bind VirtIO ou nativo; **não** jarbas/hermes |
+| AgentFleet | R2/R3 registro | agents sem MMIO |
+| Runtime | scheduler R0; ticks R2/R3 | compute via HAL BE |
+
+#### Cargo / workspace (alvo)
+
+```text
+k-nano          (R0)
+   ↑
+k-hal           (R1)  ← NOVO: extrair jarbas/gpu + hermes wifi/net drivers + HDA
+   ↑
+cortex          (R2)  ← só k-nano + k-hal ABI (ComputePort), sem MMIO
+k-ai            (R2)  ← k-nano + k-hal DeviceTree + cortex (opcional)
+   ↑
+hermes          (R3)  ← Caps; Net FE; sem iwlwifi MMIO
+jarbas          (R3)  ← Display/Audio FE; sem BAR
+neural-kernel   bin integração
+```
+
+Cadeia ADR-0042 `k-nano → k-ai → cortex → …` permanece como **identidade de produto**; a cadeia de **privilégio** passa a exigir `k-hal` entre nano e o resto. Ajustar Cargo quando a extração começar (sem ciclo).
+
+#### Conciliação com IDEA #88 (“sem HAL genérica”)
+
+Não reintroduzir “HAL Linux” (open/read/write genéricos).  
+**k-HAL = catálogo de classes VirtIO-shaped + backends tipados** (GPU/net/block/snd). Cada backend é explícito; o FE é estável.
+
+### 9.7 Realidade × alvo (gap 2026-07-18)
+
+| Claim | Hoje | Alvo |
+|-------|------|------|
+| Único MMIO GPU | `jarbas/gpu/*` | `k-hal` backends ADR-0048–50 |
+| Único MMIO WiFi/net live | `hermes` wifi_* / net init | `k-hal` + hermes só FE |
+| HDA MMIO | `jarbas/audio` (+ residual bin) | `k-hal` snd BE |
+| Inventário | `k_ai` (bom) | permanece; fonte = HAL events |
+| Trinity/LLM | `cortex` (bom) | permanece R2 |
+| VirtIO vring | PoC P8 layout | BE real + QUEUE_NOTIFY em HAL |
+| Isolamento AS | PoC shallow L4 | R1/R2/R3 AS quando estável |
+
+### 9.8 Roadmap de migração (após PoC P0–P9)
+
+| Degrau | Entrega | Aceite |
+|--------|---------|--------|
+| **H0** | Esta emenda + IDEA #459 | Doc ✅ |
+| **H1** | Crate `k-hal` + `DeviceCap` + ports + DeviceTree PCI | ✅ `k_hal::init`; serial `[K-HAL] H1 DeviceTree`; jarbas/k_ai/neural-kernel wire |
+| **H2** | Extrair `gpu/*` → `k-hal`; jarbas FE (`pub use` + cube) | ✅ MMIO GPU em `crates/k_hal/src/gpu`; jarbas sem BAR |
+| **H3** | Extrair net/wifi + HDA → `k-hal`; hermes/jarbas FE | ✅ `k_hal::net` + `k_hal::audio::hda`; inject callback |
+| **H4** | VirtIO FE/BE + QUEUE_NOTIFY + SCL log | ✅ **H4+** `map_bars_uc` VirtIO-PCI + `try_pci_queue_notify` → **NotifySent** (QEMU); NotifySkipped honesto se BAR inválido |
+| **H5** | AS R1 BAR + Cap deny R3 MMIO | ✅ **H5+** `check_map_bar`/`check_fe` nos ports + HalOffer grant Cap; `demo_as_r1_r3_shallow` CR3 (PoC ≠ produção) |
+
+**Non-goals H0–H3:** segundo binário kernel; reescrever Agency; declarar v2.0.0; PRIME/P2P.
+
+### 9.9 Log estruturado (localização)
+
+Formato canônico (tick prefixado por `serial::_print`):
+
+```text
+[T+n] [Rn] [k-xxx] [Item] [subitem] - texto e dados
+```
+
+Macros em `k_nano::slog` / `slog_nano!` / `slog_hal!` / `slog_kai!` / `slog_cortex!` / `slog_hermes!` / `slog_jarbas!` / `slog_bin!`.
+
+Exemplo (k-hal H1–H5):
+
+```text
+[T+0] [R1] [k-hal] [DeviceTree] [populate] - devices=6
+[T+0] [R1] [k-hal] [DeviceCap] [ready] - devices=6 compute=NotBound ...
+[T+0] [R1] [k-hal] [VirtIO] [select] - BE net=Native gpu=VirtioPci ...
+[T+0] [R1] [k-hal] [SCL] [map] - control=k_ai cognition=cortex action=hermes ...
+[T+0] [R1] [k-hal] [Cap] [MAP_BAR] - DENY ring=3
+```
+
+Grepar por anel (`[R1]`), crate (`[k-hal]`) ou item (`[VirtIO]`) isola falhas visualmente.
+
+### 9.10 Riscos aceitos
+
+- Extrair GPU de jarbas é grande (ADR-0048–50 ainda `fazendo`) — migrar **depois** de canários honestos ou em paralelo com facade.
+- VirtIO-net “puro” no lab real não substitui iwlwifi — backends nativos obrigatórios atrás do mesmo FE.
+- Monólito Ring0 permanece até H5; **fronteira de código primeiro**, isolamento CPU depois (lição P0–P9).
+
+### 9.11 Decisões fechadas nesta emenda
+
+1. **Sim**, há camada entre nano e k-ai: **k-HAL (R1)** — não um segundo kernel binário.  
+2. **Cortex = R2 cérebro** (Trinity/LLM); **k-ai = R2 autonomia/HW-policy** — sem MMIO.  
+3. **Hermes/Jarbas = R3** — orquestra/persona; clientes VirtIO/Cap apenas.  
+4. Portabilidade HW = **trocar backend R1**, não reescrever R2/R3.  
+5. ADR-0042 identidades de produto **permanecem**; privilégio MMIO **move** para esta emenda.
+
+### 9.12 Glossário — hierarquia de consciência de *máquina* (sem psique humana)
+
+Copia-se só a **estrutura hierárquica** (deliberativo / automático / sensório-motor / substrato).  
+**Proibido** importar desejo, repressão, infância ou metáforas clínicas.
+
+| Nível | Nome canônico | Componente | Papel operacional |
+|-------|---------------|------------|-------------------|
+| L4 | **Consciência de ação / expressão** | hermes + jarbas (R3) | Orquestra intent→skill; persona/UI/voz. Sem BAR. |
+| L3 | **Consciência deliberativa** | cortex (R2) | Raciocínio “agora”: LLM, Trinity MoE, tensores. Capacidade limitada (contexto/RAM). |
+| L2 | **Consciência automática de máquina** | k-ai (R2) | Reflexos de sobrevivência: Trust, SelfHeal, quarantine, inventário lógico. Rápido, simbólico. |
+| L1 | **Sensório-motor** | k-HAL (R1) | BAR, IRQ, VirtIO BE/nativo. Sem narrativa. |
+| L0 | **Substrato** | k-nano (R0) | Tempo, mem, traps, Cap authority, PCI cfg mínimo. |
+
+```text
+        ╱╲          L4  hermes/jarbas — ação + expressão
+       ╱  ╲
+  ────╱────╲────    linha d'água = Cap / EventBus (o que sobe a L3/L4)
+     ╱ L3   ╲       cortex — deliberativo
+    ╱────────╲
+   ╱   L2     ╲     k-ai — automático de máquina
+  ╱────────────╲
+ ╱     L1       ╲   k-HAL — sensório-motor
+╱_______L0_______╲  k-nano — substrato
+```
+
+**Invariantes do glossário**
+
+1. L2 **não** é “LLM escondido”; L3 **não** é Trust/SelfHeal.  
+2. Surpresa de silício sobe L1→L2 (HEALTH_*); deliberação sobe L2→L3 só se Cap/Hermes pedir.  
+3. L4 nunca fala MMIO; L1 nunca decide persona.
+
+---
+
+## 10. Pesquisa de ponta aderente (2026-07-18) — o que usar e custo
+
+Fontes: arXiv, GitHub (OS/AI-native), seL4/sDDF, VirtIO OASIS, Theseus OSDI, folkering/coconut/RVM/eo9.  
+Custo em **esforço relativo** (S=dias–1 sem; M=2–6 sem; G=mês+; X=trimestre+) e **risco boot** (Baixo/Médio/Alto). Não é orçamento financeiro.
+
+### 10.1 Cognitivo / governança (L2–L4)
+
+| Ideia | Fonte | Aderência ADR-0041 | Usar? | Como no Neural OS | Custo |
+|-------|-------|--------------------|-------|-------------------|-------|
+| **Structured Cognitive Loop (R-CCAM)** + Soft Symbolic Control | arXiv:2511.17673, 2510.05107; github.com/enkiluv/scl-core-experiment | Alta: separa Cognition vs Control | **Sim (padrão)** | Control = **k-ai** + CapGate; Cognition = **cortex**; Action = **hermes**; Memory = EventBus/NeuralFS/SleepCycle | S–M (mapear fases; sem portar Python) |
+| **Talker–Reasoner** (fast/slow) | arXiv:2410.08328 (Google) | Média–alta; dual process | **Sim (parcial)** | Talker≈**jarbas**+Hermes resposta rápida; Reasoner≈**cortex**+Hermes ReAct. **Não** colocar Trust no Talker | S (política de latência) |
+| Dual System 1/2 visual (FaST) | arXiv:2408.08862 | Baixa no bare-metal | Referência só | Switch adapter → Cap “budget deliberativo” | — |
+| Hierarchical skill/tool execution | arXiv:2504.16563 | Alta p/ Hermes | **Sim** | Já alinhado a skills/PackageHub ADR-0052; planner global → skill → tool Cap | S–M |
+| Active Inference / free energy | arXiv:2401.12917, 2311.10215 | Média (teoria) | **Parcial / defer** | L2: minimizar “surpresa” = HEALTH mismatch vs DeviceTree esperado; **não** POMDP pleno no boot | M teoria; X se POMDP |
+| Society of Mind / PEACE meta-arch | arXiv:2507.16184 | Baixa implementação | Glossário | Já coberto por L0–L4 | — |
+
+### 10.2 HAL / VirtIO / isolamento (L0–L1)
+
+| Ideia | Fonte | Aderência | Usar? | Como | Custo |
+|-------|-------|-----------|-------|------|-------|
+| **VirtIO FE/BE + vring** | OASIS VirtIO 1.3; ACRN HLD | Canônica §9.4 | **Sim** | FE em R3; BE em k-HAL; P8→H4 QUEUE_NOTIFY | M (net/gpu classes); G full |
+| **seL4 sDDF** (async zero-copy, driver isolado) | Heiser et al.; github.com/sel4-cap/sDDF | Alta p/ contrato L1↔L2 | **Sim (padrão de filas)** | Copiar *ideia* de filas Rx/Tx/Rq + notify; **não** portar seL4 | M desenho; X se Microkit |
+| VirtIO+QEMU on seL4 | TrustCom 2023 / Summit | Alta p/ lab | **Sim (H4)** | QEMU BE = um backend; silício = outro | M com P8 existente |
+| **Theseus** cells / intralingual | OSDI’20; theseus-os/Theseus | Média: SAS+SPL ≈ monólito atual | **Parcial** | Fronteira de *crate/célula* antes de AS (H1–H3); não abandonar Cap HW | S (disciplina); X se SAS-only forever |
+| coconutOS GPU shards + IOMMU Cap | github.com/coconut-os/coconutOS | Alta p/ GPU Cap | **Ideias** | IOMMU/VRAM Cap quando lab tiver IOMMU; pós H2 | G–X |
+| folkering-os AI-native | github.com/merknu/folkering-os | Média (já IDEA #341) | Referência | Dream cycle ≈ SleepCycle; WASM apps ≈ Hermes | — |
+| RVM / eo9 / Oreulius | ruvnet/rvm; wyager/eo9 | Baixa–média | Cherry-pick | Witness/boot gating; WASM component Caps (#426) | M se só Cap; X se Cranelift-on-metal |
+| Fuchsia Zircon DDK | fuchsia.dev | Média | Referência | Device tree + protocols ≈ DeviceCap | — |
+
+### 10.3 Já no tree (reforçar, não reinventar)
+
+| Peça Neural OS | Papel na hierarquia | Gap vs pesquisa |
+|----------------|---------------------|-----------------|
+| CapGate + `int 0x90` (P2–P3) | Soft Symbolic Control mínimo | Falta Control *sempre* antes de Action (SCL) |
+| EventBus + LatentBus | Memory / linha d’água | Indexação episódio vs long-term (SCL Memory) |
+| Trust + SelfHeal (k_ai) | L2 automático | Explicitar “zero action sem precondition” |
+| Hermes ReAct / skills | L4 Action + planner | Hierarchical execution (skill→tool→params) |
+| compute_abi / KernelPack | L3 pede → L1 executa | FE estável; BE ainda em jarbas |
+| virtio_vring PoC (P8) | embrião L1 | Sem QUEUE_NOTIFY / sem classes net-gpu unificadas |
+| SleepCycle / Evolve | consolidação “offline” | Parecido a memory update + genesis; manter honesto |
+
+### 10.4 Prioridade de adoção (recomendado)
+
+| Pri | Adotar | Degrau | Custo | Não adotar agora |
+|-----|--------|--------|-------|------------------|
+| 1 | Glossário L0–L4 + SCL Control=k-ai | H0–H1 | S | Freudian labels |
+| 2 | VirtIO FE/BE classes + extrair k-hal | H1–H3 | G | Portar seL4/Microkit |
+| 3 | Talker/Reasoner latência (jarbas vs cortex) | paralelo N5 | S | Dois LLMs sempre |
+| 4 | QUEUE_NOTIFY + BE QEMU==nativo | H4 | M–G | PRIME/P2P |
+| 5 | IOMMU/GPU shard Caps (coconut-like) | pós H2+HW | G–X | Theseus abandonar rings |
+| 6 | Active Inference lite (surpresa HEALTH) | pós H1 | M | POMDP/free-energy pleno |
+
+### 10.5 Custo consolidado H1–H5 (ordem de grandeza)
+
+| Degrau | Esforço | Risco boot | Dependência |
+|--------|---------|------------|-------------|
+| H1 skeleton `k-hal` + DeviceCap | S–M | Baixo | nenhuma |
+| H2 GPU → k-hal | G | Médio | ADR-0048–50 estáveis o bastante p/ facade |
+| H3 net/wifi/HDA → k-hal | G | Médio | lab WiFi/HDA |
+| H4 VirtIO unificado | M–G | Médio | P8 + QEMU |
+| H5 AS R1/R3 | G–X | Alto | Ring3 QEMU estável (P6) |
+
+**Teto consciente:** não embutir runtimes host (ROCm/L0/Python SCL) no alvo `no_std`. Pesquisa vira **contrato e fases**, não dependência crate.
+
+---
+
+## 3. Gap analysis (visão × realidade) — PoC mecânico
 
 | Claim visão | Status | Evidência | Esforço | Risco boot |
 |-------------|--------|-----------|---------|------------|
 | K-Nano Ring 0 exclusivo CR3/GDT/IDT | **Parcial** | `memory.rs` CR3 único; `interrupts.rs` GDT/IDT globais | G | Alto se CR3 errar |
 | Slab / lock-free scheduling, sem heap no path crítico | **Parcial** | `slab.rs`, `agent-core` RR; heap ainda no boot path | M | Médio |
-| K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Parcial** (P5+P8 PoC) | `k_ia_dma` + `virtio_vring` + Cap PIN/MAP_DMA/VRING_SETUP; live NIC untouched | G | Médio |
-| Cortex Ring 3 + mmap pesos | **Parcial** (P5+P7+P9) | `cortex_mmap` + `demand_page` + `gguf_mmap`; Cap MAP_WEIGHTS/DEMAND_PAGE/MAP_FILE; FAT pré-fill | G | Baixo |
-| Hermes WASM SFI + host caps | **Parcial** | `wasm*.rs`, `trust::check_syscall` — sem AS separado | M | Baixo |
-| JARBAS Ring 3 + FB MMIO + VSync | **Parcial** (P4 PoC Ring0+AS) | `jarbas_fb.rs` + Cap MAP/WRITE_FB | G | Médio |
-| IPC só ring lock-free entre AS | **Fictício** → **MVP C parcial** | EventBus in-process; MVP C: SPSC shared pages | M | Baixo se isolado |
-| Capability autoritativa por operação | **Parcial** | EventBus `CapabilityToken`; MVP C: `Cap` bitflags + syscall | P | Baixo |
-| Dois address spaces + CR3 switch | **Fictício** → **MVP C** | Novo: `address_space.rs` | M | Médio (mitigado: non-fatal) |
-| Ring3 CPL=3 real (`iretq`) | **Fictício** → **P6 PoC** | GDT user + TSS.RSP0 + `user_mode.rs` | G | Médio (non-fatal + fault abort) |
+| K-IA Ring 3 + MMIO / VirtIO / DMA pin | **Parcial** (P5+P8 PoC) → **reorientado §9** (MMIO → k-HAL) | `k_ia_dma` + `virtio_vring` | G | Médio |
+| Cortex Ring 3 + mmap pesos | **Parcial** (P5+P7+P9) | `cortex_mmap` + `demand_page` + `gguf_mmap` | G | Baixo |
+| Hermes WASM SFI + host caps | **Parcial** | `wasm*.rs`, CapGate — sem AS separado | M | Baixo |
+| JARBAS Ring 3 + FB MMIO + VSync | **Parcial** (P4) → **FE only §9** | `jarbas_fb.rs` | G | Médio |
+| IPC só ring lock-free entre AS | **MVP C parcial** | EventBus in-process; SPSC shared pages | M | Baixo se isolado |
+| Capability autoritativa por operação | **Parcial** | Cap bitflags + syscall | P | Baixo |
+| Dois address spaces + CR3 switch | **MVP C** | `address_space.rs` | M | Médio (non-fatal) |
+| Ring3 CPL=3 real (`iretq`) | **P6 PoC** | `user_mode.rs` | G | Médio |
+| **k-HAL R1 único dono MMIO** | **Fictício → H1+** | hoje espalhado jarbas/hermes | G | Médio (migração) |
 
 ---
 
@@ -77,8 +397,8 @@ A visão-alvo é um **capability microkernel** onde:
 | **P8** | VirtIO vring wiring sobre DMA pin | ✅ PoC |
 | **P9** | GGUF/FAT file-backed mmap sobre demand-paging | ✅ PoC |
 
-Roadmap explícito: **MVP C → … → Ring3 → demand-paging → VirtIO vring → GGUF/FAT mmap** — P0–P9 concluídos (PoC).  
-Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
+Roadmap mecânico P0–P9 ✅ PoC.  
+**Próximo eixo de produto:** §9 degraus **H1→H5** (k-HAL + VirtIO FE/BE) + SFI Hermes (#426) + QUEUE_NOTIFY real.
 
 ---
 
@@ -106,6 +426,7 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 - `JarbasDoubleBuffer` (backheap) + `present` (cópia + stub vsync via `TIMER_TICKS`/`sfence`).
 - Demo boot non-fatal após P3; sem FB → Cap-only SUCCESS; falha → WARN, boot segue.
 - Path primário = UEFI/bootloader FB (VirtIO-GPU BAR = evolução). Ring3 jump = bônus futuro.
+- **Emenda §9:** FB raw MMIO migra para k-HAL BE; jarbas mantém apenas FE/present Cap.
 
 ### P5 — aceite (K-IA DMA pin + Cortex weight mmap)
 
@@ -115,6 +436,7 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 - Demand-paging (#PF first touch) = **P7**; mmap GGUF/FAT = TODO; PoC = memória simulada.
 - Demo boot non-fatal pós-P4: deny → pin+map DMA → mmap pesos + touch → restore CR3; falha frame alloc → Cap-only SUCCESS / WARN.
 - `SYS_PIN_DMA` / `SYS_MAP_DMA` / `SYS_MAP_WEIGHTS` em `syscall.rs`.
+- **Emenda §9:** pin de *device* → k-HAL; k-ai deixa de ser dono de MMIO (só política).
 
 ### P6 — aceite (Ring3 user-mode real)
 
@@ -142,6 +464,7 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 - Path paralelo: se `VIRTIO_DEV` presente, loga `rx/tx_queue_phys` **sem mutar** filas live (NIC intacto).
 - Sem device VirtIO: PoC layout-only ainda = SUCCESS documentado.
 - Demo boot non-fatal pós-P7: deny Cap → pin+setup SUCCESS → log phys/indices; falha frame → Cap-only / WARN.
+- **Emenda §9:** QUEUE_NOTIFY + BE nativo = degrau H4 em k-HAL.
 
 ### P9 — aceite (GGUF/FAT file-backed mmap)
 
@@ -156,8 +479,10 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 
 ## 6. Consequências
 
-- Positivo: prova hardware-level de isolamento de página + IPC shared-memory sem reinventar drivers.
+- Positivo: prova hardware-level de isolamento de página + IPC shared-memory sem reinventar drivers (P0–P9).
+- Positivo (emenda): caminho claro para **portabilidade HW** via VirtIO FE/BE e um único dono MMIO (k-HAL).
 - Negativo: shallow-copy L4 compartilha PageTables inferiores do kernel — AS ainda não é isolamento forte contra o kernel (intencional no PoC).
+- Negativo (emenda): migração H2–H3 é grande (GPU/net hoje em jarbas/hermes).
 - EventBus continua pub/sub in-process até migração gradual para rings cross-AS.
 
 ---
@@ -175,16 +500,37 @@ Próximo: SFI pleno Hermes / ELF usermode / QUEUE_NOTIFY real.
 | P7 demand-page #PF | ✅ | Sem I/O no fault |
 | P8 VirtIO vring | ✅ layout+pin | Sem QUEUE_NOTIFY; NIC untouched |
 | P9 GGUF/FAT mmap | ✅ pré-fill | Prefixo 1–4 pág.; sem streaming |
+| **k-HAL R1** | ❌ | Emenda §9 / H1+ |
 
-**Checklist P0–P9:** todos ✅ PoC.
+**Checklist P0–P9:** todos ✅ PoC.  
+**Checklist H0–H5:** ✅ H1–H3 BE + **H4+ QUEUE_NOTIFY real** + **H5+ Cap enforce + AS shallow** (2026-07-18). Lifecycle permanece `fazendo` até aceite QEMU maintainer; **≠** ADR `completa` / v2.0.0 / isolamento Ring0 produção.
+
+### Aceite por fase (2026-07-18, permanece **1.8.x**)
+
+| Fase | Entrega | Aceite |
+|------|---------|--------|
+| 1 H4+ | `k_hal::virtio` map UC + `try_pci_queue_notify` | boot: `NotifySent` ≥1× (virtio-gpu/net); sem #GP/#PF fatal |
+| 2 MMIO residual | hermes/jarbas FE; VGACNTRL em `k_hal`; HalOffer | zero device-BAR MMIO live em hermes/jarbas tick (FB GOP OK) |
+| 3 H5+ Cap | `check_fe_bound` ports + grant em `offer::bind` | R3_no_cap=Deny; Bound=Allow; FE sem bind=Deny |
+| 4 AS shallow | `address_space::demo_as_r1_r3_shallow` | CR3 switch + touch BAR + restore; R3 MAP_BAR Deny |
 
 ## 8. Próximos
 
-**Adequação Boot OK → visão K²CHJ:** ver **ADR-0042** (cadeia `k-nano → k-ai → cortex → hermes → jarbas`, fases N1–N5).
+**Adequação Boot OK → visão K²CHJ (função):** **ADR-0042** (N1–N5).  
+**Privilégio / HAL / VirtIO-bound:** esta ADR §9 (H1→H5).
 
-1. **N1** k-nano legível (telemetria / Cap authority) — ADR-0042.
-2. Validar Ring3 em QEMU UEFI (TRY_ENTER_RING3) sob N1/N3+.
-3. SFI WASM + Cap contract (#426) — fase N4.
-4. QUEUE_NOTIFY VirtIO real — N2 (k-ai/nano).
-5. On-fault I/O / streaming GGUF — N3.
-6. ELF usermode / preempt (após Ring3 estável).
+1. **H1** — crate `k-hal` + `DeviceCap` (sem big-bang MMIO).  
+2. **H2** — GPU MMIO jarbas → k-hal (ADR-0048–50 atrás do BE).  
+3. **H3** — net/wifi/HDA → k-hal; hermes/jarbas FE only.  
+4. **H4** — QUEUE_NOTIFY + mesmo FE VirtIO/nativo.  
+5. **H5** — AS R1/R3 + deny BAR em R3.  
+6. SFI WASM + Cap contract (#426) — fase N4 contínua.  
+7. Validar Ring3 em QEMU UEFI (`TRY_ENTER_RING3`) sob nano estável.
+
+### Fontes (pesquisa)
+
+- VirtIO 1.3: <https://docs.oasis-open.org/virtio/virtio/v1.3/virtio-v1.3.html>  
+- ACRN VirtIO HLD (FE/BE/vring): Project ACRN docs  
+- seL4 sDDF (drivers isolados, zero-copy): Trustworthy Systems / Heiser et al.  
+- Fuchsia Zircon device model (devhost + protocols)  
+- ADR-0042 identidades; ADR-0048–50 compute backends (viram BE de k-HAL)

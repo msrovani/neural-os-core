@@ -45,15 +45,15 @@ pub fn record_python_run(name: &str, source: &str, success: bool) {
     } else {
         (prev * (entry.runs as f32 - 1.0) + if success { 1.0 } else { 0.0 }) / entry.runs as f32
     };
-    k_nano::serial_println!(
-        "[SkillOpt] '{}' python run #{} success_rate={:.0}%",
+    k_nano::slog_hermes!("SkillOpt", "info", "'{}' python run #{} success_rate={:.0}%",
         name,
         entry.runs,
-        entry.success_rate * 100.0
-    );
+        entry.success_rate * 100.0);
 }
 
-/// Promove skill para WASM após N execuções bem-sucedidas (≥3, taxa ≥70%).
+/// Marca estágio WASM após N execuções bem-sucedidas (≥3, taxa ≥70%).
+/// Retorna path lógico; o caller deve chamar `evolve::promote_ephemeral_to_wasm`
+/// para materializar bytecode no runtime (cola agentica PnP / S108).
 pub fn maybe_promote_to_wasm(name: &str) -> Option<String> {
     let mut map = EVOLVING.lock();
     let entry = map.get_mut(name)?;
@@ -65,7 +65,11 @@ pub fn maybe_promote_to_wasm(name: &str) -> Option<String> {
     }
     entry.stage = SkillStage::WasmPersistent;
     let wasm_path = alloc::format!("/skills/{}.wasm", name);
-    k_nano::serial_println!("[SkillOpt] Promovido '{}' → WASM ({})", name, wasm_path);
+    k_nano::slog_hermes!("SkillOpt", "info", "'{}' elegível WASM (runs={}, rate={:.0}%) → {}",
+        name,
+        entry.runs,
+        entry.success_rate * 100.0,
+        wasm_path);
     Some(wasm_path)
 }
 
@@ -87,7 +91,7 @@ pub fn mark_rust_promoted(name: &str, rust_source: &str) {
     if let Some(entry) = map.get_mut(name) {
         entry.stage = SkillStage::RustNoStd;
         entry.source = String::from(rust_source);
-        k_nano::serial_println!("[SkillOpt] '{}' → Rust no_std cravado em pedra", name);
+        k_nano::slog_hermes!("SkillOpt", "info", "'{}' → Rust no_std cravado em pedra", name);
     }
 }
 

@@ -11,8 +11,6 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
 use k_nano::fs::FilesystemAgent;
-use k_nano::serial_println;
-
 const HISTORY_MAX: usize = 50;
 
 static CHAT_HISTORY: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -23,7 +21,7 @@ pub struct HermesFsAgent;
 
 impl HermesFsAgent {
     pub fn new() -> Self {
-        serial_println!("[CHAT-FS] /chat/ pronto.");
+        k_nano::slog_hermes!("CHAT", "FS", "/chat/ pronto.");
         HermesFsAgent
     }
 }
@@ -83,14 +81,14 @@ impl FilesystemAgent for HermesFsAgent {
                 hist.push_back(reply);
                 if hist.len() > HISTORY_MAX { hist.pop_front(); }
 
-                serial_println!("[CHAT-FS] Sent: {}", text.trim());
+                k_nano::slog_hermes!("CHAT", "FS", "Sent: {}", text.trim());
                 Ok(())
             }
             "clear" | "reset" => {
                 let mut hist = CHAT_HISTORY.lock();
                 hist.clear();
                 LAST_RESPONSE.lock().clear();
-                serial_println!("[CHAT-FS] History cleared.");
+                k_nano::slog_hermes!("CHAT", "FS", "History cleared.");
                 Ok(())
             }
             _ => Err("file not found"),

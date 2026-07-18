@@ -1,7 +1,5 @@
 use core::sync::atomic::Ordering;
 use crate::memory::{PHYS_MEM_OFFSET, GLOBAL_ALLOCATOR};
-use crate::serial_println;
-
 pub struct XhciDev {
     pub port: u8,
     pub slot: u8,
@@ -68,14 +66,14 @@ pub unsafe fn init_xhci() {
 
         let dcbaa = match alloc_phys(1) {
             Some(p) => p,
-            None => { serial_println!("[XHCI] alloc_phys falhou (DCBAA) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (DCBAA) — abortando init"); continue; }
         };
         core::ptr::write_bytes(dcbaa.1, 0, 4096);
         w32(op, 0x10, dcbaa.0 as u32); w32(op, 0x14, (dcbaa.0 >> 32) as u32);
 
         let er = match alloc_phys(2) {
             Some(p) => p,
-            None => { serial_println!("[XHCI] alloc_phys falhou (Event Ring) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (Event Ring) — abortando init"); continue; }
         };
         core::ptr::write_bytes(er.1, 0, 8192);
         w32(base + capl, 0x38, er.0 as u32); w32(base + capl, 0x3C, (er.0 >> 32) as u32);
@@ -89,12 +87,12 @@ pub unsafe fn init_xhci() {
         // Allocate transfer ring + report buffer
         let tr = match alloc_phys(1) {
             Some(p) => p,
-            None => { serial_println!("[XHCI] alloc_phys falhou (transfer ring) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (transfer ring) — abortando init"); continue; }
         };
         core::ptr::write_bytes(tr.1, 0, 4096);
         let report = match alloc_phys(1) {
             Some(p) => p,
-            None => { serial_println!("[XHCI] alloc_phys falhou (report buffer) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (report buffer) — abortando init"); continue; }
         };
         core::ptr::write_bytes(report.1, 0, 4096);
 
@@ -104,7 +102,7 @@ pub unsafe fn init_xhci() {
             slot: 1, db_off, tr_va: tr.0 + pmoff, report_va: report.0 + pmoff,
             last_report: [0; 8],
         });
-        serial_println!("[XHCI] Inicializado. db_off={:#x}", db_off);
+        crate::slog_nano!("USB", "xhci", "Inicializado. db_off={:#x}", db_off);
         return;
     }
 }
@@ -143,7 +141,7 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
         // (simplified: assumes xHC accepts default slot context)
 
         state.last_report[0] = 0xFF; // mark as configured
-        serial_println!("[USB] HID boot configurado.");
+        crate::slog_nano!("USB", "info", "HID boot configurado.");
     }
 
     // Ler Event Ring para completions
@@ -245,7 +243,7 @@ pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(Bulk
     ep1_in.add(3).write_volatile(0x0000_0000);
     ((ctx.1.add(32 + 64 + 8)) as *mut u16).write_volatile(max_packet);
 
-    serial_println!("[XHCI] Bulk endpoints OK. slot={} tr_in={:#x} tr_out={:#x}", slot, tr_in.0, tr_out.0);
+    crate::slog_nano!("USB", "xhci", "Bulk endpoints OK. slot={} tr_in={:#x} tr_out={:#x}", slot, tr_in.0, tr_out.0);
 
     Some((
         BulkEndpoint { trb_pa: tr_in.0, trb_va: tr_in.1 as *mut u32, enqueue_idx: 0, cycle: true, max_entries },
@@ -304,11 +302,11 @@ pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, ep: &mut BulkEndpoint, data_
             w32(st.base + st.capl, 0x38, erdp_phys as u32);
             w32(st.base + st.capl, 0x3C, (erdp_phys >> 32) as u32 | 0x01);
             if comp == 0 { return true; }
-            serial_println!("[XHCI] Bulk err: comp={}", comp);
+            crate::slog_nano!("USB", "xhci", "Bulk err: comp={}", comp);
             return false;
         }
         core::hint::spin_loop();
     }
-    serial_println!("[XHCI] Bulk timeout");
+    crate::slog_nano!("USB", "xhci", "Bulk timeout");
     false
 }

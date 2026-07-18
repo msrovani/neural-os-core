@@ -18,7 +18,7 @@ unsafe fn ensure_init() {
     Port::<u8>::new(COM2 + 2).write(0xC7);
     Port::<u8>::new(COM2 + 1).write(0x00);
     COM2_INIT.store(true, Ordering::Release);
-    crate::serial_println!("[SLIP] COM2 (0x2F8) inicializada 115200 8N1");
+    crate::slog_nano!("SLIP", "info", "COM2 (0x2F8) inicializada 115200 8N1");
 }
 
 unsafe fn write_byte(b: u8) -> bool {

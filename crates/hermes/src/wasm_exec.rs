@@ -93,7 +93,7 @@ impl WasmExec {
             }
             Op::Print => {
                 if let Some(v) = self.stack.last() {
-                    k_nano::serial_println!("[WASM] print: {}", v);
+                    k_nano::slog_hermes!("Wasm", "info", "print: {}", v);
                 }
             }
             Op::Halt => { self.running = false; }

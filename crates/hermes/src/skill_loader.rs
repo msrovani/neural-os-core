@@ -1,9 +1,6 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use alloc::format;
-use k_nano::serial_println;
-
 #[derive(Clone, Debug)]
 pub struct SkillManifest {
     pub name: String,
@@ -56,7 +53,7 @@ impl SkillLoader {
         if let crate::self_evolve::VerifyVerdict::Reject(reason) =
             crate::self_evolve::verify_skill_md(content)
         {
-            serial_println!("[SKILL-VERIFY] REJECT: {}", reason);
+            k_nano::slog_hermes!("SKILL", "VERIFY", "REJECT: {}", reason);
             return Err(reason);
         }
         let content = content.replace("\r\n", "\n");
@@ -97,7 +94,7 @@ impl SkillLoader {
         ];
         for &pattern in &dangerous {
             if instructions.contains(pattern) {
-                serial_println!("[SKILL-SEC] BLOQUEADO: skill '{}' contem padrao perigoso: '{}'", name, pattern);
+                k_nano::slog_hermes!("SKILL", "SEC", "BLOQUEADO: skill '{}' contem padrao perigoso: '{}'", name, pattern);
                 return Err("Skill: conteudo malicioso detectado");
             }
         }
@@ -119,7 +116,7 @@ impl SkillLoader {
             requires_network,
         };
 
-        serial_println!("[SKILL] Registrada: '{}' — {} ({} tokens, {} bytes)",
+        k_nano::slog_hermes!("SKILL", "info", "Registrada: '{}' — {} ({} tokens, {} bytes)",
             manifest.name, manifest.description, tok_count, instructions.len());
         self.skills.push(manifest);
         Ok(())
@@ -141,14 +138,14 @@ impl SkillLoader {
         list
     }
 
-    /// Build a system prompt from all registered skills
+    /// Build system prompt — cognitive bridge (BGE+Trinity+SOUL+L0 gated).
     pub fn build_system_prompt(&self) -> String {
-        let mut prompt = String::from("Voce e o Cortex LLM do Neural OS Hermes. Siga estas skills:\n\n");
-        for skill in &self.skills {
-            prompt.push_str(&format!("=== {} ===\n{}\n\n", skill.name, skill.instructions));
-        }
-        prompt.push_str("Responda de acordo com as instrucoes acima. Se nao houver instrucao relevante, use seu conhecimento geral treinado.\n");
-        prompt
+        crate::cognitive_bridge::cortex_system_prompt("")
+    }
+
+    /// Prompt contextualizado com intent do usuário.
+    pub fn build_system_prompt_for(&self, intent: &str) -> String {
+        crate::cognitive_bridge::cortex_system_prompt(intent)
     }
 }
 
@@ -157,18 +154,18 @@ pub fn load_embedded_skills() -> SkillLoader {
 
     // Skills embutidas via include_str! (path relativo ao workspace root)
     let skills_raw: [&str; 2] = [
-        include_str!("../../../skills/hw_identify.md"),
-        include_str!("../../../skills/self_heal.md"),
+        include_str!("../../../skills/hw_identify/SKILL.md"),
+        include_str!("../../../skills/self_heal/SKILL.md"),
     ];
 
     for content in &skills_raw {
         if let Err(e) = loader.register_skill(content) {
-            serial_println!("[SKILL] Erro ao carregar skill: {}", e);
+            k_nano::slog_hermes!("SKILL", "info", "Erro ao carregar skill: {}", e);
         }
     }
 
     let count = loader.skills.len();
     let system = loader.build_system_prompt();
-    serial_println!("[SKILL] {} skill(s) carregadas, prompt de {} bytes", count, system.len());
+    k_nano::slog_hermes!("SKILL", "info", "{} skill(s) carregadas, prompt de {} bytes", count, system.len());
     loader
 }

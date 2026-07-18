@@ -5,7 +5,6 @@
 use alloc::vec::Vec;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
-use crate::serial_println;
 use core::sync::atomic::Ordering;
 
 const HBA_CAP: u64 = 0x00;     // Host Bus Adapter Capabilities
@@ -80,11 +79,11 @@ impl AhciDriver {
         // Enable AHCI
         let ghc = core::ptr::read_volatile((mmio_virt + HBA_GHC) as *const u32);
         core::ptr::write_volatile((mmio_virt + HBA_GHC) as *mut u32, ghc | GHC_AE);
-        serial_println!("[AHCI] HBA at {:#x} GHC={:#x}", mmio_base, ghc);
+        k_nano::slog_nano!("Disk", "ahci", "HBA at {:#x} GHC={:#x}", mmio_base, ghc);
 
         let cap = core::ptr::read_volatile((mmio_virt + HBA_CAP) as *const u32);
         let ports_impl = core::ptr::read_volatile((mmio_virt + 0x0C) as *const u32);
-        serial_println!("[AHCI] CAP={:#x} PORTS_IMPL={:#x}", cap, ports_impl);
+        k_nano::slog_nano!("Disk", "ahci", "CAP={:#x} PORTS_IMPL={:#x}", cap, ports_impl);
 
         let mut driver = AhciDriver { mmio_virt, ports: Vec::new(), pci_bus: dev.bus, pci_dev: dev.device, pci_fn: dev.function };
 
@@ -129,7 +128,7 @@ impl AhciDriver {
 
             let cmd_new = CMD_ST | CMD_FRE;
             core::ptr::write_volatile((port_base + PXCMD) as *mut u32, cmd_new);
-            serial_println!("[AHCI] Port {}: {} dev_type={} sig={:#x} ssts={:#x}",
+            k_nano::slog_nano!("Disk", "ahci", "Port {}: {} dev_type={} sig={:#x} ssts={:#x}",
                 i, if dev_type == AHCI_DEV_ATA { "SATA" } else { "OTHER" }, dev_type, sig, ssts);
 
             driver.ports.push(AhciPort {

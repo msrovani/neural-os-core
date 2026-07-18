@@ -1,17 +1,18 @@
 ﻿# Neural OS Hermes — AI-native Bare-metal Operating System
 
-**Versão:** **v1.8.5** (teste / não estável) · codename **K²CHJ Core — Cognição**
+**Versão:** **v1.8.6** (teste / não estável) · codename **K²CHJ Core — Cognição**
 Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de compilação.
 
 ```
 ╔══════════════════════════════════╗
-║  Neural OS Hermes v1.8.5 TEST   ║
+║  Neural OS Hermes v1.8.6 TEST   ║
 ║  "K²CHJ Core — Cognição"        ║
 ╚══════════════════════════════════╝
 
   ✦ ~26.000 LOC · 180+ arquivos Rust · 247+ agentes
-  ✦ Cadeia K²CHJ wired: k_nano → k_ai → cortex → hermes → jarbas
+  ✦ Cadeia: k_nano → k_hal → k_ai → cortex → hermes → jarbas
   ✦ ADR-0042 N1–N5 ✅ + wire crates N2.5→N5.7 ✅ (v1.8.0)
+  ✦ ADR-0041 H4+/H5+/AS shallow ✅ PoC (HalOffer Cap; QUEUE_NOTIFY)
   ✦ Self-Evolve · NeuralFS · AirLLM · LatentBus/GPU/HMI MVPs
   ✦ Sprint 107 Voice ✅ (PASS parcial forte+)
   ✦ MicroPython/WASM sandbox + SkillOpt (Python→Rust no_std)
@@ -28,10 +29,10 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 
 | Métrica | Valor |
 |---------|-------|
-| **Versão release** | **v1.8.5 teste / não estável** (2026-07-16) |
+| **Versão release** | **v1.8.6 teste / não estável** (2026-07-18) |
 | **Gate v2.0.0** | **Fechado** — review, `por_fazer` e OK do maintainer pendentes |
 | Sprints completos | 106 + 107 fechada |
-| Arquivos Rust | ~180+ (5 crates K²CHJ + bin `neural-kernel`) |
+| Arquivos Rust | ~180+ (6 crates K²CHJ + bin `neural-kernel`) |
 | LOC total | ~26.000 |
 | Agentes | 247+ |
 | IDEIAS (IDEA_BANK) | 440+ |
@@ -45,18 +46,19 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 
 | Crate | Anel | Função |
 |-------|------|--------|
-| `k_nano` | 0 | HAL, drivers, PCI, memory, interrupts |
-| `k_ai` | 1 | SelfHeal, Trust, inventário HW |
+| `k_nano` | 0 | HAL base, drivers, PCI, memory, interrupts |
+| `k_hal` | 1 | DeviceCap, HalOffer, MMIO BE, VirtIO transporte |
+| `k_ai` | 2 | SelfHeal, Trust, inventário HW |
 | `cortex` | 2 | LLM BitNet, Trinity MoE, tensores |
-| `hermes` | 2 | Orquestração: WASM, rede, skills, intent |
-| `jarbas` | 2 | HCI: display, GPU FB, persona JARVIS |
+| `hermes` | 3 | Orquestração: WASM, rede, skills, HalOffer client |
+| `jarbas` | 3 | HCI: display FE, persona JARVIS (GPU BE em k_hal) |
 | `neural-kernel` | — | **Bin de boot** — integra crates + residuals bin-only |
 
-**Cadeia:** `k-nano → k-ai → cortex → hermes → jarbas` (sem ciclos).
+**Cadeia:** `k-nano → k-hal → k-ai → cortex → hermes → jarbas` (sem ciclos).
 
 **Residuals no bin** (integração, não duplicação): `cortex.rs`, `bpe.rs`, `audio/*` (ADR-0045 truth), `agents.rs`, `net*`, `fs/*`, `jarbas_fb.rs`.
 
-**Princípio:** ring 2 não acessa ring 0 diretamente — VFS via `neural_kernel::fs::read_vfs()`.
+**Princípio:** anéis R2/R3 não tocam BAR MMIO — só HalOffer / ports FE.
 
 ## Destaques
 
@@ -86,6 +88,7 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | 106 Ecossistema de Anéis Lógicos | ✅ |
 | 107 Voice I/O | ✅ FECHADA (parcial forte+) |
 | **ADR-0042** Adequação N1–N5 + wire | ✅ **v1.8.0** |
+| **ADR-0041** H4+/H5+/AS | ✅ PoC **v1.8.6** |
 | **Sound** pipeline voz | ✅ parcial honesto |
 | 108 Self-Evolving Agents | ✅ |
 | ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |

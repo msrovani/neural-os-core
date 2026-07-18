@@ -5,7 +5,7 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::interrupts::LAST_MOUSE_PACKET;
 use crate::EVENT_BUS;
-use crate::{Event, CapabilityToken, serial_println};
+use crate::{Event, CapabilityToken};
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -51,7 +51,7 @@ impl MouseAgent {
             // Enable mouse packet streaming: 0xF4 to 0x60
             x86_64::instructions::port::Port::new(0x60).write(0xF4u8);
         }
-        serial_println!("[MOUSE] PS/2 mouse enabled.");
+        k_nano::slog_bin!("MOUSE", "info", "PS/2 mouse enabled.");
         MouseAgent {
             x: 640, y: 360,
             buttons: 0,

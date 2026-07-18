@@ -4,7 +4,6 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use crate::audio::vad::{VAD, VadTransition};
-use crate::serial_println;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub static BARGE_IN: AtomicBool = AtomicBool::new(false);
@@ -42,7 +41,7 @@ impl Agent for AudioPipelineAgent {
         if BARGE_IN.load(Ordering::Relaxed) {
             // Limpa playback para interromper TTS em curso.
             crate::audio::voice::PLAYBACK_RING.clear();
-            serial_println!("[PIPELINE] Barge-in: playback limpo");
+            k_nano::slog_bin!("PIPELINE", "info", "Barge-in: playback limpo");
             BARGE_IN.store(false, Ordering::Relaxed);
         }
 

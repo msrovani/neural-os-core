@@ -109,11 +109,9 @@ pub fn init_arena_region(
         }
     }
     ARENA_SIZE_BYTES.store(size, Ordering::SeqCst);
-    k_nano::serial_println!(
-        "[CORTEX-ARENA] Tier 2 mapped: virt={:#x} size={} MB",
+    k_nano::slog_cortex!("CORTEX", "ARENA", "Tier 2 mapped: virt={:#x} size={} MB",
         virt_start,
-        size / (1024 * 1024)
-    );
+        size / (1024 * 1024));
     Ok(TensorArena::from_region(virt_start, size))
 }
 

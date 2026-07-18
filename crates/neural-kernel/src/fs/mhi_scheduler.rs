@@ -37,13 +37,12 @@ pub fn mhi_scheduler_tick(tick: u64) {
         if suggested != profile.tier {
             if freq > PROMOTE_ACCESS_THRESHOLD && idle < PROMOTE_TICK_WINDOW {
                 // Promocao: tier mais quente
-                crate::serial_println!("[MHI] Promover {:?} {}H{}.tier {:?}→{:?} (freq={} idle={})",
+                k_nano::slog_bin!("MHI", "info", "Promover {:?} {}H{}.tier {:?}→{:?} (freq={} idle={})",
                     profile.phys_addr, profile.owner, freq, profile.tier, suggested, freq, idle);
                 promotions += 1;
             } else if idle > DEMOTE_IDLE_TICKS {
                 // Democao: tier mais frio
-                crate::serial_println!("[MHI] Demover {:?} (freq={} idle={})",
-                    profile.phys_addr, freq, idle);
+                k_nano::slog_bin!("MHI", "info", "Demover {:?} (freq={} idle={})", profile.phys_addr, freq, idle);
                 demotions += 1;
             }
         }

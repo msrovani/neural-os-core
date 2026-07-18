@@ -3,7 +3,6 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use hermes;
-use k_nano::serial_println;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS};
@@ -24,6 +23,9 @@ pub struct DisplayAgent {
     mouse_receiver: event_bus::Receiver,
     click_receiver: event_bus::Receiver,
     ui_receiver: event_bus::Receiver,
+    hitl_receiver: event_bus::Receiver,
+    hitl_term_receiver: event_bus::Receiver,
+    memory_nudge_receiver: event_bus::Receiver,
     latent_receiver: event_bus::LatentReceiver,
     gpu_inited: bool,
     demo_ui_sent: bool,
@@ -43,6 +45,9 @@ impl DisplayAgent {
             mouse_receiver: EVENT_BUS.subscribe(hermes::agents::mouse_agent::TOPIC_MOUSE_MOVED),
             click_receiver: EVENT_BUS.subscribe(hermes::agents::mouse_agent::TOPIC_MOUSE_CLICK),
             ui_receiver: EVENT_BUS.subscribe(TOPIC_UI_SPEC),
+            hitl_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_REQUEST),
+            hitl_term_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_TERMINAL),
+            memory_nudge_receiver: EVENT_BUS.subscribe(hermes::cognitive_bridge::TOPIC_MEMORY_NUDGE),
             latent_receiver: k_nano::LATENT_BUS.subscribe(event_bus::TOPIC_THOUGHT_LLM),
             gpu_inited: false,
             demo_ui_sent: false,
@@ -52,6 +57,54 @@ impl DisplayAgent {
             drag_id: AppId::None,
             drag_off_x: 0,
             drag_off_y: 0,
+        }
+    }
+
+    /// Drena receiver → overlay Hermes (HITL / terminal / memory nudge).
+    fn drain_hermes_overlay(
+        avatar: &mut Option<JarvisAvatar>,
+        rx: &mut event_bus::Receiver,
+        mode: OverlayMode,
+    ) {
+        while let Some(ev) = rx.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                desktop.ensure_hermes_overlay();
+                if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                    chat.visible = true;
+                    match mode {
+                        OverlayMode::HitlConfirm => {
+                            chat.data.push_str("[HITL] Confirmação necessária\n");
+                            chat.data.push_str(text);
+                            chat.data.push('\n');
+                            chat.data.push_str("Responda: /approve <id>  ou  /deny <id>\n");
+                            chat.data.push_str(
+                                "Preferência: /ui jarbas | /ui terminal | /commands\n",
+                            );
+                        }
+                        OverlayMode::HitlTerminal => {
+                            chat.title = alloc::string::String::from("Hermes Terminal");
+                            chat.data.clear();
+                            chat.data.push_str(text);
+                            chat.data.push('\n');
+                        }
+                        OverlayMode::MemoryNudge => {
+                            chat.data.push_str(text);
+                            chat.data.push('\n');
+                        }
+                    }
+                }
+            }
+            if matches!(mode, OverlayMode::HitlConfirm | OverlayMode::MemoryNudge) {
+                if let Some(ref mut av) = avatar {
+                    av.set_state(AvatarState::Listening);
+                }
+            }
+            match mode {
+                OverlayMode::HitlConfirm => k_nano::slog_jarbas!("JARBAS", "HITL", "request received"),
+                OverlayMode::MemoryNudge => k_nano::slog_jarbas!("JARBAS", "info", "MEMORY_NUDGE"),
+                OverlayMode::HitlTerminal => {}
+            }
         }
     }
 
@@ -79,9 +132,16 @@ impl DisplayAgent {
                 }
             }
             ui_spec::mark_ui_ok();
-            serial_println!("[ADR-0047-H] ui_spec applied title={}", spec.title);
+            k_nano::slog_jarbas!("ADR", "0047-H", "ui_spec applied title={}", spec.title);
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum OverlayMode {
+    HitlConfirm,
+    HitlTerminal,
+    MemoryNudge,
 }
 
 impl Agent for DisplayAgent {
@@ -91,11 +151,7 @@ impl Agent for DisplayAgent {
         if !self.gpu_inited {
             let gpu = GPU.lock();
             if let Some(ref gpu_dev) = *gpu {
-                let fb = DoubleBuffer::new(
-                    gpu_dev.fb_addr as usize, gpu_dev.fb_width as usize,
-                    gpu_dev.fb_height as usize, gpu_dev.fb_stride as usize,
-                    gpu_dev.fb_bpp as usize, gpu_dev.rgb_order,
-                );
+                let fb = DoubleBuffer::from_gpu(gpu_dev);
                 let mut desktop = JarvisDesktop::new(fb);
                 desktop.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
                 desktop.register_app(AppId::Settings, "Settings", Layer::AppWindows);
@@ -106,7 +162,7 @@ impl Agent for DisplayAgent {
                 desktop.ensure_hermes_overlay();
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(JarvisAvatar::new(gpu_dev));
-                serial_println!("[JARVIS] Desktop iniciado @ {}x{}", gpu_dev.fb_width, gpu_dev.fb_height);
+                k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", gpu_dev.fb_width, gpu_dev.fb_height);
             }
             self.gpu_inited = true;
             return AgentTickResult::Pending;
@@ -184,6 +240,23 @@ impl Agent for DisplayAgent {
                 }
             }
         }
+
+        // HITL / terminal / memory nudge → overlay Hermes
+        Self::drain_hermes_overlay(
+            &mut self.avatar,
+            &mut self.hitl_receiver,
+            OverlayMode::HitlConfirm,
+        );
+        Self::drain_hermes_overlay(
+            &mut self.avatar,
+            &mut self.hitl_term_receiver,
+            OverlayMode::HitlTerminal,
+        );
+        Self::drain_hermes_overlay(
+            &mut self.avatar,
+            &mut self.memory_nudge_receiver,
+            OverlayMode::MemoryNudge,
+        );
 
         // App switching via keyboard commands
         if self.input_buffer.contains("[F1]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::HermesChat); }}

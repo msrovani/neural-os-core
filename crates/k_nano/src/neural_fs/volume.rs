@@ -1,11 +1,11 @@
-//! Volume NeuralFS — format/mount + file API + reclaim + split 2-niveis.
+//! Volume NeuralFS — format/mount + file API + reclaim + split multi-nivel.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::block_dev::BlockDevice;
 use super::superblock::Superblock;
 use super::btree::{
-    btree_find_leaf, btree_lookup, btree_scan_leaves, BTreeNode, ItemType, Key, LeafValue,
+    btree_lookup, btree_scan_leaves, BTreeNode, ItemType, Key, LeafValue,
     MAX_LEAF_ITEMS,
 };
 use super::dir::DirEntry;
@@ -256,47 +256,122 @@ impl NeuralVolume {
         Self::read_block_static(dev, self.start_lba, block, data)
     }
 
-    /// CoW da folha que contem `hint_key`; reclaim do bloco antigo.
+    /// Caminho root→folha para `key` (inclusive).
+    fn collect_path(
+        &self,
+        dev: &mut dyn BlockDevice,
+        key: &Key,
+    ) -> Option<alloc::vec::Vec<BTreeNode>> {
+        let mut path = alloc::vec::Vec::new();
+        let mut addr = self.sb.inode_tree_root;
+        for _ in 0..8 {
+            let node = BTreeNode::read(dev, self.start_lba, addr)?;
+            let is_leaf = node.level() == 0;
+            path.push(node);
+            if is_leaf {
+                return Some(path);
+            }
+            let next = path.last()?.child_for_key(key);
+            if next == 0 {
+                return None;
+            }
+            addr = next;
+        }
+        None
+    }
+
+    /// Ancestrais root→pai de `child` (pai incluso). Vazio se `child` e a raiz.
+    fn find_parent_path(
+        &self,
+        dev: &mut dyn BlockDevice,
+        child: u64,
+        hint: &Key,
+    ) -> Option<alloc::vec::Vec<BTreeNode>> {
+        if self.sb.inode_tree_root == child {
+            return Some(alloc::vec::Vec::new());
+        }
+        let mut path = alloc::vec::Vec::new();
+        let mut addr = self.sb.inode_tree_root;
+        for _ in 0..8 {
+            let node = BTreeNode::read(dev, self.start_lba, addr)?;
+            if node.level() == 0 {
+                return None;
+            }
+            let mut is_parent = node.leftmost_child() == child;
+            if !is_parent {
+                for i in 0..node.item_count() as usize {
+                    if let Some((_, v)) = node.get_key_value(i) {
+                        let c = u64::from_le_bytes(v.raw[0..8].try_into().unwrap_or([0; 8]));
+                        if c == child {
+                            is_parent = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            path.push(node);
+            if is_parent {
+                return Some(path);
+            }
+            let next = path.last()?.child_for_key(hint);
+            if next == 0 {
+                return None;
+            }
+            addr = next;
+        }
+        None
+    }
+
+    /// Propaga CoW de ponteiro `old_child`→`new_child` nos ancestrais (path sem a folha).
+    fn cow_update_ancestors(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        mut ancestors: alloc::vec::Vec<BTreeNode>,
+        mut old_child: u64,
+        mut new_child: u64,
+    ) -> bool {
+        while let Some(mut parent) = ancestors.pop() {
+            let old_p = parent.block_addr;
+            let new_p = match self.next_block() {
+                Some(b) => b,
+                None => return false,
+            };
+            parent.block_addr = new_p;
+            let _ = parent.replace_child_ptr(old_child, new_child);
+            parent.set_generation(self.tx_id.max(1));
+            self.journal.log_block(new_p, &parent.data);
+            if !parent.write(dev, self.start_lba) {
+                return false;
+            }
+            self.reclaim_block(old_p);
+            if ancestors.is_empty() {
+                self.sb.inode_tree_root = new_p;
+            }
+            old_child = old_p;
+            new_child = new_p;
+        }
+        true
+    }
+
+    /// CoW da folha que contem `hint_key`; reclaim do bloco antigo; atualiza ancestrais.
     fn cow_leaf_for_key(
         &mut self,
         dev: &mut dyn BlockDevice,
         hint_key: &Key,
     ) -> Option<BTreeNode> {
-        let old = btree_find_leaf(dev, self.start_lba, self.sb.inode_tree_root, hint_key)?;
+        let mut path = self.collect_path(dev, hint_key)?;
+        let old = path.pop()?;
         let old_addr = old.block_addr;
         let new_addr = self.next_block()?;
         let mut node = old;
         node.block_addr = new_addr;
         node.set_generation(self.tx_id.max(1));
-
-        let root = BTreeNode::read(dev, self.start_lba, self.sb.inode_tree_root)?;
-        if root.level() == 0 {
-            self.sb.inode_tree_root = new_addr;
-        } else {
-            let mut parent = root;
-            let parent_old = parent.block_addr;
-            let parent_new = self.next_block()?;
-            parent.block_addr = parent_new;
-            if parent.leftmost_child() == old_addr {
-                parent.set_leftmost_child(new_addr);
-            }
-            for i in 0..parent.item_count() as usize {
-                if let Some((_, v)) = parent.get_key_value(i) {
-                    let child = u64::from_le_bytes(v.raw[0..8].try_into().unwrap_or([0; 8]));
-                    if child == old_addr {
-                        parent.update_at(i, &BTreeNode::from_child_ptr(new_addr));
-                    }
-                }
-            }
-            parent.set_generation(self.tx_id.max(1));
-            self.journal.log_block(parent_new, &parent.data);
-            if !parent.write(dev, self.start_lba) {
-                return None;
-            }
-            self.sb.inode_tree_root = parent_new;
-            self.reclaim_block(parent_old);
-        }
         self.reclaim_block(old_addr);
+        if path.is_empty() {
+            self.sb.inode_tree_root = new_addr;
+        } else if !self.cow_update_ancestors(dev, path, old_addr, new_addr) {
+            return None;
+        }
         Some(node)
     }
 
@@ -311,12 +386,6 @@ impl NeuralVolume {
             self.journal.log_block(leaf.block_addr, &leaf.data);
             if !leaf.write(dev, self.start_lba) {
                 return Err("leaf write");
-            }
-            if BTreeNode::read(dev, self.start_lba, self.sb.inode_tree_root)
-                .map(|r| r.level() == 0)
-                .unwrap_or(false)
-            {
-                self.sb.inode_tree_root = leaf.block_addr;
             }
             return Ok(());
         }
@@ -351,46 +420,116 @@ impl NeuralVolume {
         if !left.write(dev, self.start_lba) || !right.write(dev, self.start_lba) {
             return Err("split write");
         }
+        self.insert_separator(dev, &sep, left.block_addr, right.block_addr)
+    }
 
-        let root = BTreeNode::read(dev, self.start_lba, self.sb.inode_tree_root)
-            .ok_or("root read")?;
-        if root.level() == 0 {
-            let root_addr = self.next_block().ok_or("no space root")?;
-            let mut inode = BTreeNode::new(root_addr);
-            inode.set_level(1);
-            inode.set_leftmost_child(left.block_addr);
-            let sep_val = BTreeNode::from_child_ptr(right.block_addr);
-            if !inode.insert(&sep, &sep_val) {
-                return Err("root insert");
-            }
-            inode.set_generation(self.tx_id.max(1));
-            self.journal.log_block(root_addr, &inode.data);
-            if !inode.write(dev, self.start_lba) {
-                return Err("root write");
-            }
-            if root.block_addr != left.block_addr {
-                self.reclaim_block(root.block_addr);
-            }
-            self.sb.inode_tree_root = root_addr;
-        } else {
-            let mut parent = BTreeNode::read(dev, self.start_lba, self.sb.inode_tree_root)
-                .ok_or("parent")?;
-            let old_p = parent.block_addr;
-            let new_p = self.next_block().ok_or("no space")?;
-            parent.block_addr = new_p;
-            let sep_val = BTreeNode::from_child_ptr(right.block_addr);
-            if !parent.insert(&sep, &sep_val) {
-                return Err("parent full");
-            }
+    /// Insere separador `sep`→`right_child` no pai de `left_child`; split recursivo se cheio.
+    fn insert_separator(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        sep: &Key,
+        left_child: u64,
+        right_child: u64,
+    ) -> Result<(), &'static str> {
+        let mut path = self
+            .find_parent_path(dev, left_child, sep)
+            .ok_or("parent path")?;
+        if path.is_empty() {
+            return self.new_root(dev, 1, left_child, sep, right_child);
+        }
+        let mut parent = path.pop().ok_or("no parent")?;
+        let parent_level = parent.level();
+        let old_p = parent.block_addr;
+        let new_p = self.next_block().ok_or("no space")?;
+        parent.block_addr = new_p;
+        let sep_val = BTreeNode::from_child_ptr(right_child);
+        if parent.insert(sep, &sep_val) {
             parent.set_generation(self.tx_id.max(1));
             self.journal.log_block(new_p, &parent.data);
             if !parent.write(dev, self.start_lba) {
                 return Err("parent write");
             }
-            self.sb.inode_tree_root = new_p;
             self.reclaim_block(old_p);
+            if path.is_empty() {
+                self.sb.inode_tree_root = new_p;
+            } else if !self.cow_update_ancestors(dev, path, old_p, new_p) {
+                return Err("ancestor cow");
+            }
+            return Ok(());
         }
+        // Pai cheio → split interno + promover mid_sep
+        let right_addr = self.next_block().ok_or("no space")?;
+        let mut right = BTreeNode::new(right_addr);
+        let mid_sep = parent.split_internal_into(&mut right).ok_or("split parent")?;
+        if sep.cmp(&mid_sep) == core::cmp::Ordering::Less {
+            if !parent.insert(sep, &sep_val) {
+                return Err("insert parent left");
+            }
+        } else if !right.insert(sep, &sep_val) {
+            return Err("insert parent right");
+        }
+        parent.set_generation(self.tx_id.max(1));
+        right.set_generation(self.tx_id.max(1));
+        self.journal.log_block(new_p, &parent.data);
+        self.journal.log_block(right_addr, &right.data);
+        if !parent.write(dev, self.start_lba) || !right.write(dev, self.start_lba) {
+            return Err("parent split write");
+        }
+        self.reclaim_block(old_p);
+        if path.is_empty() {
+            self.new_root(dev, parent_level.saturating_add(1), new_p, &mid_sep, right_addr)
+        } else {
+            if !self.cow_update_ancestors(dev, path, old_p, new_p) {
+                return Err("ancestor after split");
+            }
+            self.insert_separator(dev, &mid_sep, new_p, right_addr)
+        }
+    }
+
+    fn new_root(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        level: u8,
+        left: u64,
+        sep: &Key,
+        right: u64,
+    ) -> Result<(), &'static str> {
+        let root_addr = self.next_block().ok_or("no space root")?;
+        let mut inode = BTreeNode::new(root_addr);
+        inode.set_level(level);
+        inode.set_leftmost_child(left);
+        let sep_val = BTreeNode::from_child_ptr(right);
+        if !inode.insert(sep, &sep_val) {
+            return Err("root insert");
+        }
+        inode.set_generation(self.tx_id.max(1));
+        self.journal.log_block(root_addr, &inode.data);
+        if !inode.write(dev, self.start_lba) {
+            return Err("root write");
+        }
+        self.sb.inode_tree_root = root_addr;
         Ok(())
+    }
+
+    /// Insere N keys sinteticas (smoke multi-nivel). object_id = 1000+i.
+    pub fn test_insert_many(
+        &mut self,
+        dev: &mut dyn BlockDevice,
+        n: usize,
+    ) -> Result<u8, &'static str> {
+        use super::inode::Inode;
+        for i in 0..n {
+            self.begin_tx();
+            let ino = 1000 + i as u64;
+            let key = Inode::make_key(ino);
+            let val = LeafValue::from_inode(Inode::S_IFREG | 0o644, 0, 0, 0);
+            self.leaf_insert(dev, &key, &val)?;
+            if !self.commit_tx(dev) {
+                return Err("commit");
+            }
+        }
+        let root = BTreeNode::read(dev, self.start_lba, self.sb.inode_tree_root).ok_or("root")?;
+        Ok(root.level())
     }
 
     pub fn lookup_inode(

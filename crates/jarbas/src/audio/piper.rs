@@ -64,7 +64,7 @@ impl PiperEngine {
         self.loaded = !self.w.is_empty();
         if self.loaded {
             let p: usize = self.w.iter().map(|w| w.data.len()).sum();
-            k_nano::serial_println!("[PIPER] {} tensors, {}M params", self.w.len(), p / 1000000);
+            k_nano::slog_jarbas!("Audio", "piper", "{} tensors, {}M params", self.w.len(), p / 1000000);
         }
         self.loaded
     }
@@ -77,7 +77,7 @@ impl PiperEngine {
     }
 
     fn dump_w(&self) { // debug
-        for w in &self.w { if w.data.len() > 1000 { k_nano::serial_println!("  {}: {}x{}={}", w.name, w.rows, w.cols, w.data.len()); } }
+        for w in &self.w { if w.data.len() > 1000 { k_nano::slog_jarbas!("Log", "msg", "{}: {}x{}={}", w.name, w.rows, w.cols, w.data.len()); } }
     }
 
     // Conv1d: [in_ch, in_len] × weight[out_ch, in_ch*k] → [out_ch, out_len]

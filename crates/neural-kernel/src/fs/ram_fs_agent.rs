@@ -5,15 +5,13 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::fs::{FilesystemAgent, RingBufStore};
-use crate::serial_println;
-
 static STORE: RingBufStore = RingBufStore::new(1024 * 1024);
 
 pub struct RamFsAgent;
 
 impl RamFsAgent {
     pub fn new() -> Self {
-        serial_println!("[RAM-FS] /mnt/ram/ pronto. Max: 1MB");
+        k_nano::slog_bin!("RAM", "FS", "/mnt/ram/ pronto. Max: 1MB");
         RamFsAgent
     }
 }

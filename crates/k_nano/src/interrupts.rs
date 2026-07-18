@@ -1,6 +1,6 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
 
-use crate::{println, serial_println};
+use crate::{println};
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 // ponytail: PICS/pic8259 removed — kernel só usa APIC
@@ -109,7 +109,7 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { dump_exception("#DB", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("#NMI", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { serial_println!("[EXCEPTION] #BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
+extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { crate::slog_nano!("EXCEPTION", "info", "#BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
 extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { dump_exception("#UD", &f, None); loop { x86_64::instructions::hlt(); } }
@@ -172,7 +172,7 @@ fn send_eoi(vector: u8) {
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     if ticks < 5 {
-        serial_println!("[TIMER] Interrupt fired! tick={}", ticks);
+        crate::slog_nano!("TIMER", "info", "Interrupt fired! tick={}", ticks);
     }
     send_eoi(32);
 }
@@ -208,7 +208,7 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStackFrame) {
-    serial_println!("[IRQ] Interrupção não tratada ip={:#x}", stack_frame.instruction_pointer.as_u64());
+    crate::slog_nano!("IRQ", "info", "Interrupção não tratada ip={:#x}", stack_frame.instruction_pointer.as_u64());
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
         unsafe { crate::apic::apic_eoi(); }
     } else {
@@ -222,20 +222,20 @@ extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStac
 // IPI handlers para SMP
 extern "x86-interrupt" fn ipi_reschedule_handler(_stack_frame: InterruptStackFrame) {
     IPI_RESCHEDULE.fetch_add(1, Ordering::Relaxed);
-    serial_println!("[IPI] Reschedule received on CPU {}", crate::smp::percpu::cpu_id());
+    crate::slog_nano!("IPI", "info", "Reschedule received on CPU {}", crate::smp::percpu::cpu_id());
     unsafe { crate::apic::apic_eoi(); }
 }
 
 extern "x86-interrupt" fn ipi_halt_handler(_stack_frame: InterruptStackFrame) {
     IPI_HALT.fetch_add(1, Ordering::Relaxed);
-    serial_println!("[IPI] Halt received on CPU {}", crate::smp::percpu::cpu_id());
+    crate::slog_nano!("IPI", "info", "Halt received on CPU {}", crate::smp::percpu::cpu_id());
     unsafe { crate::apic::apic_eoi(); }
     loop { x86_64::instructions::hlt(); }
 }
 
 extern "x86-interrupt" fn ipi_call_function_handler(_stack_frame: InterruptStackFrame) {
     IPI_CALL_FUNCTION.fetch_add(1, Ordering::Relaxed);
-    serial_println!("[IPI] Call function received on CPU {}", crate::smp::percpu::cpu_id());
+    crate::slog_nano!("IPI", "info", "Call function received on CPU {}", crate::smp::percpu::cpu_id());
     unsafe { crate::apic::apic_eoi(); }
 }
 
@@ -307,13 +307,13 @@ pub fn init_idt() {
         core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
     }
     IDT.load();
-    serial_println!("[IDT] IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.");
+    crate::slog_nano!("IDT", "info", "IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.");
 }
 
 // ponytail: init_pics removed — kernel só usa APIC
 
 pub fn enable_interrupts() {
     x86_64::instructions::interrupts::enable();
-    serial_println!("[CPU] Interrupcoes de hardware habilitadas (IF=1).");
+    crate::slog_nano!("CPU", "info", "Interrupcoes de hardware habilitadas (IF=1).");
     println!("[CPU] Interrupcoes de hardware habilitadas (IF=1).");
 }

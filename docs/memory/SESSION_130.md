@@ -16,6 +16,14 @@ usado em `hermes::skill_market`.
 | Arquivo | Alteração |
 |---------|-----------|
 | `crates/hermes/src/wasm_rt.rs` | `partial_cmp(...).unwrap()` → `total_cmp`; testes unitários de ordem e NaN |
+| `crates/jarbas/src/display/fb.rs` | `GpuDevice::from_probe` + `resolve_bytes_per_pixel` + `DoubleBuffer::from_gpu` — bpp dinâmico do GOP |
+| `crates/jarbas/src/display/agent.rs` | DisplayAgent usa `DoubleBuffer::from_gpu` |
+| `crates/jarbas/src/display/avatar.rs` / `virtio_gpu.rs` | consumers via helpers; VirtIO bpp=4 = protocolo |
+| `crates/neural-kernel/src/vga_buffer.rs` | console FB lê `bytes_per_pixel()`/`stride_bytes()` |
+| `crates/hermes/src/{mcp,wasm_rt,micropython_wasm}.rs` | imports sem uso removidos; braço `fd_write` duplicado/inalcançável removido |
+| `crates/jarbas/src/display/compositor.rs` | braço `WasmSkill` duplicado/inalcançável removido |
+| `crates/neural-kernel/src/main.rs` | import `Receiver` sem uso removido |
+| `crates/boot/build.rs` | mensagem informativa deixou de usar o canal `cargo:warning` |
 | `CHANGELOG.md` | entrada sob `[Unreleased]` |
 | `docs/memory/SESSION_130.md` | esta sessão |
 | `docs/memory/SESSION_INDEX.md` | linha SESSION_130 |
@@ -35,6 +43,7 @@ usado em `hermes::skill_market`.
 | `cargo clean -p neural-kernel && cargo check --release -p neural-kernel --target x86_64-unknown-none --target-dir target/check-wasm-rt-nk` | ✅ 0 erros |
 | `cargo test -p hermes --lib skill_market_sort_tests` (host) | ❌ bloqueado: `k-nano` host → `offset is not a multiple of 16` (soft-float / N1.0) |
 | `cargo test … --target x86_64-unknown-none --no-run` | ❌ `can't find crate for test` (esperado em bare-metal) |
+| `cargo clean -p neural-kernel && cargo check --release` (`CARGO_TARGET_DIR=target/check-zero-warn`) | ✅ 0 erros, 0 warnings |
 
 Testes unitários em `wasm_rt.rs` documentam o contrato (ordem desc + NaN sem panic); execução host/none permanece limitada pelo toolchain do kernel — validação efetiva = `cargo check --release`.
 

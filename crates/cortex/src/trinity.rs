@@ -20,6 +20,14 @@ pub struct Expert {
     pub weight: Option<PackedTernaryTensor>,
 }
 
+/// Fallback quando `experts` está vazio (evita `len-1` → usize::MAX).
+static FALLBACK_GENERATOR: Expert = Expert {
+    kind: ExpertKind::Generator,
+    name: "generator",
+    description: "trinity empty fallback",
+    weight: None,
+};
+
 pub struct TrinityRouter {
     experts: Vec<Expert>,
     router_weight: Option<PackedTernaryTensor>,
@@ -60,7 +68,7 @@ impl TrinityRouter {
     }
 
     pub fn register_expert(&mut self, expert: Expert) {
-        k_nano::serial_println!("[TRINITY] Expert '{}' registered: {}", expert.name, expert.description);
+        k_nano::slog_cortex!("TRINITY", "info", "Expert '{}' registered: {}", expert.name, expert.description);
         self.experts.push(expert);
     }
 
@@ -70,7 +78,7 @@ impl TrinityRouter {
     pub fn load_router(&mut self, embed: Vec<f32>, weight: PackedTernaryTensor) {
         self.router_embed = Some(embed);
         self.router_weight = Some(weight);
-        k_nano::serial_println!("[TRINITY] Router MoE loaded: {} dim, {} experts", ROUTER_HIDDEN, self.experts.len());
+        k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded: {} dim, {} experts", ROUTER_HIDDEN, self.experts.len());
     }
 
     /// Classifica intent e grava logits na TensorArena (R3 rollout).
@@ -118,12 +126,10 @@ impl TrinityRouter {
                             &scores,
                             best_idx,
                         ) {
-                            k_nano::serial_println!(
-                                "[TRINITY] MoE router (R3): expert {} (score={:.3}) arena_used={} B",
+                            k_nano::slog_cortex!("TRINITY", "info", "MoE router (R3): expert {} (score={:.3}) arena_used={} B",
                                 self.experts[best_idx].name,
                                 best_score,
-                                arena.used_bytes()
-                            );
+                                arena.used_bytes());
                             return (&self.experts[best_idx], trace);
                         }
                     }
@@ -176,8 +182,7 @@ impl TrinityRouter {
                         if s > best_score { best_idx = i; best_score = s; }
                     }
                     if best_score > 0.15 {
-                        k_nano::serial_println!("[TRINITY] MoE router: expert {} (score={:.3})", 
-                            self.experts[best_idx].name, best_score);
+                        k_nano::slog_cortex!("TRINITY", "info", "MoE router: expert {} (score={:.3})", self.experts[best_idx].name, best_score);
                         return &self.experts[best_idx];
                     }
                 }
@@ -229,7 +234,8 @@ impl TrinityRouter {
         // Default = generator (LLM CURRENT_MODEL). Antes era experts[0]=hw_identify —
         // com HWEXPERT LOADED o clima e2e gerava no vocab=64 → "LOA,BLOA…".
         self.experts.iter().find(|e| e.kind == ExpertKind::Generator)
-            .unwrap_or(&self.experts[self.experts.len() - 1])
+            .or_else(|| self.experts.last())
+            .unwrap_or(&FALLBACK_GENERATOR)
     }
 
     pub fn agent_count(&self) -> usize { self.experts.len() }

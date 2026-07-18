@@ -2,10 +2,11 @@
 
 **Data:** 2026-07-16  
 **Status:** Proposed  
-**Lifecycle:** `por_fazer`  
+**Lifecycle:** `fazendo`  
 **Ideia:** #455  
 **Complementa:** ADR-0029, ADR-0037, ADR-0047-GPU e ADR-0048  
 **Hardware de validação inicial (preferido):** qualquer dGPU AMD com IP Discovery válido; ideal RDNA2 (`gfx1030`) — menos dependência de MES; RDNA3/3.5 como segundo gate  
+**Nota implementação:** Degrau sem dGPU AMD no lab atual — IP Discovery parse + ArchHint, PSP ASD/TA upload, KIQ PM4/EOP estrutural, MES path separado, pack gfx1030/1103, DOT/INT8 host; golden silício aberto. 
 
 ## 1. Contexto
 
@@ -176,36 +177,37 @@ validação amostral. Preferência de vendor quando várias dGPUs: política do
 
 ### P0 — Detecção
 
-- [ ] IP Discovery + `GC_HWIP` no path de probe;
-- [ ] publicar `KiQ` / `Mes` / `CpuFallback` honestamente;
-- [ ] remover dependência de lista DID como única fonte.
+- [x] IP Discovery parse (`amd_discovery.rs`) + GC_HWID; ArchHint se VRAM/TMR ausente;
+- [x] publicar `KiQ` / `Mes` / `CpuFallback` via `AmdIpId::backend_kind`;
+- [x] faixas DID AMD como hint (`identify_amd_unknown`); discovery confirma no probe.
 
 ### P1 — Kernel pack host
 
-- [ ] gerar pack com ao menos um `gfx1030` ou `gfx1100`;
-- [ ] rejeitar assinatura/ISA incompatíveis;
-- [ ] compiladores fora do bare-metal.
+- [x] `pack_amd_kernels.py` gfx1030/gfx1103/gfx90c + stub + Ed25519/session;
+- [x] mkfat32 `NKP_GFX1030.BIN` / `NKP_GFX1103.BIN` / `NKP_GFX90C.BIN`;
+- [x] rejeitar magic/abi/hash no `kernel_pack`; clang fora do bare-metal.
 
 ### P2 — Bring-up
 
-- [ ] PSP carrega SOS/TA e autentica FW mínimo;
-- [ ] GMC+SDMA+sched (KIQ ou MES) sem fault;
-- [ ] logs: blob presente ≠ engine pronto.
+- [~] PSP carrega ASD/TA DMA (`amd_psp.rs`); mailbox/TMR auth → AuthTimeout honesto;
+- [~] GMC+SDMA presence log; sched KIQ/MES estrutural sem fault claim;
+- [x] logs: blob presente ≠ engine pronto.
 
 ### P3 — Primeiro compute
 
-- [ ] `vector_add` + fence/EOP;
-- [ ] fault injection → CPU, display intacto.
+- [x] `vector_add` PM4 DISPATCH + EOP fence Degrau (`amd_kiq`) / MES separado (`amd_mes`);
+- [ ] golden fence+EU **em HW**;
+- [x] fault/timeout → CPU; display intacto (canário + coex).
 
 ### P4 — BitNet
 
-- [ ] microkernel INT8/dot ou WMMA bit-exato vs CPU;
-- [ ] GEMV W2A8 packed; benchmark honesto vs AVX2.
+- [x] microkernel DOT/INT8 **host** (`amd_mad.rs`); WMMA device residual;
+- [ ] GEMV W2A8 + benchmark vs AVX2 em silício.
 
 ### P5 — Multigeração
 
-- [ ] segundo `gfx_id` (ex. RDNA3 após RDNA2) no mesmo contrato;
-- [ ] nenhum offset KIQ usado no path MES.
+- [x] segundo gfx (`gfx1100`/`gfx1103` pack) + path MES sem offsets KIQ;
+- [x] nenhum offset KIQ no path MES (`amd_mes.rs`).
 
 ## 10. Consequências
 
@@ -239,13 +241,13 @@ validação amostral. Preferência de vendor quando várias dGPUs: política do
 
 ## 12. Gaps vs código atual
 
-| Item | Hoje | Esta ADR |
+| Item | Antes | Agora (Degrau) |
 |------|------|----------|
-| Detecção | DID curtos | IP Discovery + GC |
-| `amd.rs` | BAR map | backends KIQ/MES |
-| `amd_psp_load` | `NoFirmware` | SOS/TA + TMR |
-| Doorbell | `+0x1B0` | layout por gen |
-| FW pack FAT | foco NVIDIA | espelho `amdgpu/*` por IP |
+| Detecção | DID curtos | IP Discovery parse + ArchHint + faixas DID |
+| `amd.rs` | BAR map | KIQ/MES backends + canário vivo |
+| `amd_psp_load` | `NoFirmware` | ASD/TA upload → AuthTimeout honesto |
+| Doorbell | `+0x1B0` genérico | tabela por GC (`amd_kiq` / `amd_mes`) |
+| FW pack FAT | foco NVIDIA | aliases amdgpu + NKP_GFX* |
 
 ## 13. Fontes
 

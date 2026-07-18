@@ -1,0 +1,8 @@
+# Gerado por download_firmware.py
+# GSP: SO em target/firmware/nvidia/*/gsp/ -- NAO versionar em firmware/
+# FAT: NAO embutir GSP sem FW_FAT_CHIPS=tu102,ad102,ga102
+GSP_PIN=535.113.01
+GSP_LOCATION=target/firmware/nvidia/{tu102,ad102,ga102}/gsp/
+FAT_DEFAULT_CHIPS=gp108,skl,kbl,green_sardine
+FAT_GSP_CHIPS=tu102,ad102,ga102
+NOTE=GSP pin ABI 535.113.01; WHENCE MIT/redistrib; 570=opt-in bring-up

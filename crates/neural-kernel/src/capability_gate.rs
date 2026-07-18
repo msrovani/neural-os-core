@@ -9,7 +9,6 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_WRITE_RING};
 
 static DENY_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -55,17 +54,15 @@ pub fn required_cap(host_fn: &str) -> Option<Cap> {
 pub fn check(host_fn: &str, held: Cap) -> Result<(), &'static str> {
     let Some(need) = required_cap(host_fn) else {
         DENY_COUNT.fetch_add(1, Ordering::Relaxed);
-        serial_println!("[CapGate] DENY unknown host_fn={}", host_fn);
+        k_nano::slog_bin!("CapGate", "info", "DENY unknown host_fn={}", host_fn);
         return Err("EPERM: host_fn desconhecida");
     };
     if !held.contains(need) {
         DENY_COUNT.fetch_add(1, Ordering::Relaxed);
-        serial_println!(
-            "[CapGate] DENY fn={} need=0x{:x} held=0x{:x}",
+        k_nano::slog_bin!("CapGate", "info", "DENY fn={} need=0x{:x} held=0x{:x}",
             host_fn,
             need.bits(),
-            held.bits()
-        );
+            held.bits());
         return Err("EPERM: Cap insuficiente");
     }
     ALLOW_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -94,7 +91,7 @@ pub fn allow_count() -> u64 {
 
 /// Demo non-fatal: deny sem Cap, allow com Cap::SEND_TCP | WRITE_RING.
 pub fn demo_hermes_caps() -> Result<(), &'static str> {
-    serial_println!("[P3] CapabilityGate demo (Hermes host Caps)");
+    k_nano::slog_bin!("Cap", "p3", "CapabilityGate demo (Hermes host Caps)");
 
     if host_send_tcp(Cap::EMPTY, "127.0.0.1", 80).is_ok() {
         return Err("p3: Cap vazia nao deveria enviar tcp");
@@ -106,10 +103,8 @@ pub fn demo_hermes_caps() -> Result<(), &'static str> {
     }
     host_write_ring(Cap::WRITE_RING.union(Cap::SEND_TCP))?;
 
-    serial_println!(
-        "[P3] SUCCESS CapGate allow={} deny={}",
+    k_nano::slog_bin!("Cap", "p3", "SUCCESS CapGate allow={} deny={}",
         allow_count(),
-        deny_count()
-    );
+        deny_count());
     Ok(())
 }

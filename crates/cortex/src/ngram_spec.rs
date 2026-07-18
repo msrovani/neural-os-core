@@ -92,10 +92,8 @@ pub fn log_bench_gate() {
     let (hits, misses, tokens, spec_fwd, classic_fwd, _) = bench_stats();
     let (nonempty, proposed, rate) = microbench_accept_pattern();
     let est = speedup_estimate();
-    k_nano::serial_println!(
-        "[ADR-0047-NGRAM] hits={} misses={} tokens={} fwd_spec={} fwd_ar={} speedup_est={:.2}x micro_hit={}/{} ({:.0}%)",
-        hits, misses, tokens, spec_fwd, classic_fwd, est, nonempty, proposed, rate * 100.0
-    );
+    k_nano::slog_cortex!("ADR", "0047-NGRAM", "hits={} misses={} tokens={} fwd_spec={} fwd_ar={} speedup_est={:.2}x micro_hit={}/{} ({:.0}%)",
+        hits, misses, tokens, spec_fwd, classic_fwd, est, nonempty, proposed, rate * 100.0);
 }
 
 fn hash_window(tokens: &[u16]) -> u64 {

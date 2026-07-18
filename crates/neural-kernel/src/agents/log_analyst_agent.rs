@@ -5,8 +5,6 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use alloc::string::String;
-use crate::serial_println;
-
 const LOG_ANALYST_MANIFEST: AgentManifest = AgentManifest {
     name: "log_analyst",
     kind: AgentKind::Skill,
@@ -27,7 +25,7 @@ pub struct LogAnalystAgent;
 
 impl LogAnalystAgent {
     pub fn new() -> Self {
-        serial_println!("[LOG-ANALYST] /logs/ analyst ativo.");
+        k_nano::slog_bin!("LOG", "ANALYST", "/logs/ analyst ativo.");
         LogAnalystAgent
     }
 

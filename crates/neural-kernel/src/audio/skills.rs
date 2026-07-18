@@ -25,20 +25,16 @@ pub fn synthesize_tts(text: &str) -> Vec<i16> {
     match guard.as_ref() {
         Some(engine) if engine.is_loaded() => {
             let audio = engine.generate(text);
-            crate::serial_println!(
-                "[TTS] Piper: \"{}\" ({} samples)",
+            k_nano::slog_bin!("Audio", "tts", "Piper: \"{}\" ({} samples)",
                 text,
-                audio.len()
-            );
+                audio.len());
             audio
         }
         _ => {
             let audio = crate::audio::tts::synthesize(text);
-            crate::serial_println!(
-                "[TTS] Formant: \"{}\" ({} samples)",
+            k_nano::slog_bin!("Audio", "tts", "Formant: \"{}\" ({} samples)",
                 text,
-                audio.len()
-            );
+                audio.len());
             audio
         }
     }
@@ -78,11 +74,9 @@ fn try_load_piper() -> Option<PiperEngine> {
                                 continue;
                             };
                             found_any = true;
-                            crate::serial_println!(
-                                "[PIPER] {} presente ({} KB) — carregando via PIO…",
+                            k_nano::slog_jarbas!("Audio", "piper", "{} presente ({} KB) — carregando via PIO…",
                                 name,
-                                sz / 1024
-                            );
+                                sz / 1024);
                             let chunk = 4 * 1024 * 1024;
                             let mut data = alloc::vec::Vec::with_capacity(sz);
                             let mut off = 0usize;
@@ -94,12 +88,10 @@ fn try_load_piper() -> Option<PiperEngine> {
                                         data.extend_from_slice(&part);
                                         off += part.len();
                                         let pct = if sz > 0 { (off * 100) / sz } else { 100 };
-                                        crate::serial_println!(
-                                            "[PIPER] leitura {} KB / {} KB ({}%)",
+                                        k_nano::slog_jarbas!("Audio", "piper", "leitura {} KB / {} KB ({}%)",
                                             off / 1024,
                                             sz / 1024,
-                                            pct
-                                        );
+                                            pct);
                                         if part.len() < n {
                                             break;
                                         }
@@ -111,36 +103,28 @@ fn try_load_piper() -> Option<PiperEngine> {
                                 }
                             }
                             if !ok || data.len() < sz.min(16) {
-                                crate::serial_println!(
-                                    "[PIPER] {} I/O read FAILED ({} / {} KB)",
+                                k_nano::slog_jarbas!("Audio", "piper", "{} I/O read FAILED ({} / {} KB)",
                                     name,
                                     data.len() / 1024,
-                                    sz / 1024
-                                );
+                                    sz / 1024);
                                 load_failed = true;
                                 continue;
                             }
-                            crate::serial_println!(
-                                "[PIPER] {} lido {} KB — parse…",
+                            k_nano::slog_jarbas!("Audio", "piper", "{} lido {} KB — parse…",
                                 name,
-                                data.len() / 1024
-                            );
+                                data.len() / 1024);
                             let mut eng = PiperEngine::new();
                             if eng.load(&data) {
-                                crate::serial_println!(
-                                    "[PIPER] Piper TTS LOADED from FAT ({}): {} ({} KB)",
+                                k_nano::slog_jarbas!("Audio", "piper", "Piper TTS LOADED from FAT ({}): {} ({} KB)",
                                     if *try_slave { "slave" } else { "master" },
                                     name,
-                                    data.len() / 1024
-                                );
+                                    data.len() / 1024);
                                 ata.slave = orig;
                                 return Some(eng);
                             }
-                            crate::serial_println!(
-                                "[PIPER] {} lido ({} KB) mas load() falhou (magic/tensors)",
+                            k_nano::slog_jarbas!("Audio", "piper", "{} lido ({} KB) mas load() falhou (magic/tensors)",
                                 name,
-                                data.len() / 1024
-                            );
+                                data.len() / 1024);
                             load_failed = true;
                         }
                     }
@@ -154,15 +138,13 @@ fn try_load_piper() -> Option<PiperEngine> {
             crate::load_status::AssetKind::Piper,
             crate::load_status::LoadStatus::Failed,
         );
-        crate::serial_println!(
-            "[PIPER] Piper TTS FAILED — arquivo presente mas nao carregavel; formant fallback"
-        );
+        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS FAILED — arquivo presente mas nao carregavel; formant fallback");
     } else {
         crate::load_status::set(
             crate::load_status::AssetKind::Piper,
             crate::load_status::LoadStatus::Absent,
         );
-        crate::serial_println!("[PIPER] Piper TTS ausente no FAT — formant synth ativo");
+        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS ausente no FAT — formant synth ativo");
     }
     None
 }
@@ -206,26 +188,17 @@ fn try_load_piper_from_loader() -> Option<PiperEngine> {
     let ptr = (LOAD_ADDR + pm) as *const u8;
     let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
     if magic != 0xBE11BE11 {
-        crate::serial_println!(
-            "[PIPER] QEMU-loader @0x130000000 magic=0x{:08X} (sem Piper; FAT PIO a seguir)",
-            magic
-        );
+        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x130000000 magic=0x{:08X} (sem Piper; FAT PIO a seguir)", magic);
         return None;
     }
-    crate::serial_println!(
-        "[PIPER] QEMU-loader @0x130000000 magic OK — parse {} KB…",
-        sz / 1024
-    );
+    k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x130000000 magic OK — parse {} KB…", sz / 1024);
     let data = unsafe { core::slice::from_raw_parts(ptr, sz) };
     let mut eng = PiperEngine::new();
     if eng.load(data) {
-        crate::serial_println!(
-            "[PIPER] Piper TTS LOADED (QEMU-loader @0x130000000) size={} KB",
-            sz / 1024
-        );
+        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS LOADED (QEMU-loader @0x130000000) size={} KB", sz / 1024);
         Some(eng)
     } else {
-        crate::serial_println!("[PIPER] QEMU-loader parse FAILED — fallback FAT PIO");
+        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader parse FAILED — fallback FAT PIO");
         None
     }
 }
@@ -292,7 +265,7 @@ impl Skill for SttSkill {
         } else {
             text
         };
-        crate::serial_println!("[STT] skill: {}", result);
+        k_nano::slog_bin!("Audio", "stt", "skill: {}", result);
         Ok(result.into_bytes())
     }
 }

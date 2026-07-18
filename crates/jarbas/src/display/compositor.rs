@@ -345,7 +345,7 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr
             }
             draw_text(fb, cx + 4, cy + 108, "[F11] Mute", scr_w, 200, 100, 100);
         }
-        AppId::WasmSkill(_) | AppId::None => {}
+        AppId::None => {}
     }
 }
 

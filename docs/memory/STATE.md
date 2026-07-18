@@ -1,10 +1,10 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.8.5 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.8.6 TEST — NÃO ESTÁVEL
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
-#   Sprint 107 Voice ✅ FECHADA (PASS parcial forte+)
-#   Pista ativa: estabilização v1.8.5 + Sprint Net; Sprint Sound ✅
+#   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
+#   Pista ativa: estabilização v1.8.6 + Sprint Net; Sprint Sound ✅
 #   Gate v2.0.0: só com por_fazer zerado + OK maintainer (lembrar)
-#   Cadeia: k-nano → k-ai → cortex → hermes → jarbas
+#   Cadeia: k-nano → k-hal → k-ai → cortex → hermes → jarbas
 # ═════════════════════════════════════════════════════════
 
 ## HW real prep (2026-07-16 / SESSION_139)
@@ -19,20 +19,23 @@
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
-**Versão:** **v1.8.5 TESTE / NÃO ESTÁVEL** (2026-07-16) — consolidação pós-v1.8.0 para integração e validação.  
+**Versão:** **v1.8.6 TESTE / NÃO ESTÁVEL** (2026-07-18) — ADR-0041 H4+/H5+/AS + HalOffer Cap; base v1.8.0.  
 **Base:** v1.8.0 = ADR-0042 N1–N5 + wire crates N2.5→N5.7.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
-**Cadeia canônica:** `k-nano → k-ai → cortex → hermes → jarbas`.  
+**Cadeia canônica:** `k-nano → k-hal → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
 
-### Consolidação pós-v1.8.0 — v1.8.5 TEST
-- **Sprint 108:** Self-Evolve completo (`observe→generate→verify→improve→reflect`).
+### Consolidação pós-v1.8.0 — v1.8.6 TEST (pós 1.8.5)
+- **SESSION_140 / ADR-0041:** H4+ QUEUE_NOTIFY; residual MMIO→k-hal; H5+ Cap nos ports + HalOffer grant; AS shallow demo CR3. Lifecycle ADR `fazendo`.
 - **Sprint Sound:** pipeline e ferramentas fechados como parcial honesto; soft-float/VITS, CTC WER, UAC iso e cutover abertos.
 - **ADR-0040 / NeuralFS:** MVP aceito; RAM I/O + reclaim/split + ATA opcional; residual físico/multinível `por_fazer`.
 - **ADR-0046:** AirLLM layer-wise + hot-swap ATA/Net code; DMA, stream-to-disk, K-quants e e2e grande abertos.
 - **ADR-0047:** família Latent/Evolve/Probe/GPU/HMI em MVP/PoC; sem promoção indevida a produção.
-- **ADRs 0048–0050:** lifecycle `fazendo` — SESSION_138 fundação; **Degrau 2+3+4 Pascal** (`nvidia_pascal` + `nvidia_pascal_qmd`: GMMU/channel + runlist/kick + QMD v01_07/PCAS/fence); Ready/`has_compute` **só** com fence+golden em HW (QEMU → FenceTimeout honesto); falta ACR/GR+CUBIN sm_61 assinado no silício.
+- **ADRs 0048–0050:** `fazendo` — NVIDIA ACR/D2–D4; **AMD ADR-0049** Degrau; **Intel ADR-0050** ampliado; Ready só golden HW.
+- **ADR-0041 emenda §9–§10 (2026-07-18):** hierarquia L0–L4; **H1–H5** + **H4+/H5+/AS shallow** (`crates/k_hal` DeviceCap + GPU/net/HDA BE + QUEUE_NOTIFY real + Cap enforce nos ports + `demo_as_r1_r3_shallow`); IDEA #459. Lifecycle ADR continua `fazendo` (PoC ≠ produção). Versão **v1.8.6 TEST**.
+- **HalOffer (2026-07-18, 1.8.x):** API R3→R1 `k_hal::offer` (query/bind/release) para **qualquer** `DeviceClass` (gpu/net/wifi/block/snd/video/display/input). Bind **granta Cap Fe***; ports `fe_*` Deny sem bind. Hermes: `request_from_intent` + PnP `request_from_pnp_next`. Tópicos `HW_OFFER` / `HW_BOUND`. VirtIO = só transporte BE.
+- **Log estruturado (2026-07-18):** formato canônico `[T+n] [Rn] [k-xxx] [Item] [subitem] - …` via `k_nano::slog_*!` (`slog.rs`); **~1526** calls migrados em k-nano/k-hal/k_ai/cortex/hermes/jarbas/neural-kernel (`tools/migrate_slog_all.py`). Leftover `serial_println!` só em `slog.rs` (backend) + comentários.
 - **Evidência consolidada:** `SESSION_121.md`–`SESSION_129.md`.
 
 ### Pista limpa (2026-07-16)
@@ -305,6 +308,7 @@ P0 gap · P1 ADR · P2 MVP C · P3 CapGate · P4 FB · P5 DMA/mmap · P6 Ring3 �
 - **🏆 v1.5.7 (2026-07-14):** Boot A/B + ADR-0041 capability ladder P0–P9 (PoC non-fatal). Ver `SESSION_107.md`.
 - **🏆 v1.8.0 (2026-07-16):** ADR-0042 N1–N5 + wire N2.5–N5.7 consolidados. Gate `v2.0.0` permanece sujeito a review formal; Sprint Sound concentra a qualidade de voz.
 - **🧪 v1.8.5 (2026-07-16):** consolidação não estável pós-v1.8.0: Self-Evolve, Sound, NeuralFS/ADR-0040, AirLLM/ADR-0046 e família ADR-0047; ADRs GPU 0048–0050 propostas.
+- **🧪 v1.8.6 (2026-07-18):** ADR-0041 H4+/H5+/AS shallow + HalOffer Cap grant; crate `k_hal` + slog canônico; SESSION_140. Gate v2.0.0 intacto.
 - **🏆 Sprint 106 (2026-07-14):** Ecossistema de Anéis Lógicos completo (10/10), sem constituir release `v2.0.0`. Workspace K²CHJ, SOUL.md via VFS, MicroPython/WASM, SkillOpt e AIOS API.
 - **🏆 v1.5.3 (2026-07-13):** Ponytail audit 100% implementado. 6 dead files → LEGACY/v1.5-dead-k2chj/.
 - **🏆 v1.5.2 (2026-07-13):** 0 erros. RingBufStore extraído em fs/mod.rs (ram_fs + log_fs delegam para tipo genérico com evicção FIFO). LEGACY/v1.5-neural-kernel-src/ snapshot criado — baseline para migração v2.0.
@@ -531,4 +535,4 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ---
 
-**Estado canônico:** v1.8.5 teste/não estável — base v1.8.0 preservada; MVPs pós-marco em validação; `v2.0.0` não declarado.
+**Estado canônico:** v1.8.6 teste/não estável — base v1.8.0 preservada; ADR-0041 H4+/H5+/AS PoC; `v2.0.0` não declarado.

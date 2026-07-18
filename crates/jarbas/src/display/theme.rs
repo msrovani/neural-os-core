@@ -41,7 +41,7 @@ pub fn apply(name: &str) -> Result<(), &'static str> {
     for (i, t) in THEMES.iter().enumerate() {
         if t.name == name {
             *ACTIVE_THEME.lock() = i;
-            k_nano::serial_println!("[THEME] Aplicado: {}", name);
+            k_nano::slog_jarbas!("THEME", "info", "Aplicado: {}", name);
             return Ok(());
         }
     }

@@ -412,7 +412,7 @@ static WASM_SKILL_BRIDGE: spin::Mutex<WasmSkillBridge> = spin::Mutex::new(WasmSk
 /// Registra uma skill WASM no SkillRegistry
 pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<(), &'static str> {
     let module = parse_wasm(bytecode)?;
-    k_nano::serial_println!("[WASM] Registrando '{}' ({} exports)...", name, module.exports.len());
+    k_nano::slog_hermes!("Wasm", "info", "Registrando '{}' ({} exports)...", name, module.exports.len());
 
     let skill = WasmSkill::new(bytecode, name, desc, module.exports.clone());
     crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
@@ -421,7 +421,7 @@ pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<()
         bridge.skill_name = String::from(name);
         bridge.registered = true;
     }
-    k_nano::serial_println!("[WASM] Skill '{}' registrada com {} exports.", name, module.exports.len());
+    k_nano::slog_hermes!("Wasm", "info", "Skill '{}' registrada com {} exports.", name, module.exports.len());
     Ok(())
 }
 

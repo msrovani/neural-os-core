@@ -8,8 +8,6 @@ use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use crate::tensor::{PackedTernaryTensor, Tensor};
-use crate::serial_println;
-
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_VERSION: u32 = 3;
 
@@ -242,8 +240,7 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
     let metadata_kv_count = read_u64(data, &mut offset);
 
     let header = GgufHeader { magic, version, tensor_count, metadata_kv_count };
-    serial_println!("[GGUF] Header: version={} tensors={} metadata={}",
-        version, tensor_count, metadata_kv_count);
+    k_nano::slog_bin!("GGUF", "info", "Header: version={} tensors={} metadata={}", version, tensor_count, metadata_kv_count);
 
     // Metadata
     let mut metadata = Vec::new();
@@ -273,8 +270,7 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
 
     let raw_data = data[data_start..].to_vec();
 
-    serial_println!("[GGUF] Parse OK. Metadata: {} items, Tensors: {} items, Data: {} bytes",
-        metadata.len(), tensors.len(), raw_data.len());
+    k_nano::slog_bin!("GGUF", "info", "Parse OK. Metadata: {} items, Tensors: {} items, Data: {} bytes", metadata.len(), tensors.len(), raw_data.len());
 
     Ok(GgufFile { header, metadata, tensors, data_start: data_start as u64, data: raw_data })
 }
@@ -626,10 +622,8 @@ pub fn load_gguf_header_from_disk(path: &str) -> Option<GgufFile> {
                 let header_data = unsafe { fs.read_file_range(&name, 0, header_bytes)? };
                 match load_gguf_meta_only(&header_data) {
                     Ok(file) => {
-                        serial_println!(
-                            "[GGUF] Header OK path={} size={} meta_window={} tensors={} data_start={}",
-                            name, file_size, header_bytes, file.tensors.len(), file.data_start
-                        );
+                        k_nano::slog_bin!("GGUF", "info", "Header OK path={} size={} meta_window={} tensors={} data_start={}",
+                            name, file_size, header_bytes, file.tensors.len(), file.data_start);
                         return Some(file);
                     }
                     Err(_) => continue,
@@ -717,10 +711,7 @@ pub fn load_gguf_streaming(path: &str) -> Result<(), &'static str> {
         "hidden", hidden,
         "mode", "airllm"
     );
-    serial_println!(
-        "[GGUF] AirLLM streaming model ready: path={} layers={} hidden={} (1 layer/forward)",
-        path, n_layers, hidden
-    );
+    k_nano::slog_bin!("GGUF", "info", "AirLLM streaming model ready: path={} layers={} hidden={} (1 layer/forward)", path, n_layers, hidden);
     crate::cortex::set_model(Box::new(model));
     Ok(())
 }
@@ -772,11 +763,9 @@ pub fn write_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
                 .ok_or("FAT write: Fat32Writer::new failed")?;
             let ok = unsafe { writer.write_file(&name, data) };
             if ok {
-                serial_println!(
-                    "[GGUF] FAT write OK path={} bytes={}",
+                k_nano::slog_bin!("GGUF", "info", "FAT write OK path={} bytes={}",
                     name,
-                    data.len()
-                );
+                    data.len());
                 return Ok(());
             }
             return Err("FAT write: write_file failed (no free clusters?)");

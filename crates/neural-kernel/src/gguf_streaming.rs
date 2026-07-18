@@ -14,7 +14,6 @@ use crate::cortex::{
 use crate::gguf::{
     self, dequantize_raw, f32_to_ternary_packed, GgufFile, GgufTensorInfo, GgufType,
 };
-use crate::serial_println;
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
 /// Absolute file reference for one GGUF tensor (payload stays on disk).
@@ -188,10 +187,7 @@ impl GGUFStreamingModel {
             rope_sin,
         };
 
-        serial_println!(
-            "[AIRLLM] load OK path={} layers={} hidden={} heads={} kv_heads={} embed_only+layer_map (soft prefetch)",
-            path_u, layers.len(), hidden, num_heads, num_kv_heads
-        );
+        k_nano::slog_bin!("AIRLLM", "info", "load OK path={} layers={} hidden={} heads={} kv_heads={} embed_only+layer_map (soft prefetch)", path_u, layers.len(), hidden, num_heads, num_kv_heads);
 
         let _ = file.data_start; // used via TensorRef.file_offset
         Ok(GGUFStreamingModel {
@@ -226,7 +222,7 @@ impl GGUFStreamingModel {
             let layer_weights = match self.load_layer_weights(n, info) {
                 Some(w) => w,
                 None => {
-                    serial_println!("[AIRLLM] layer {} load FAILED — skipping", n);
+                    k_nano::slog_bin!("AIRLLM", "info", "layer {} load FAILED — skipping", n);
                     continue;
                 }
             };
@@ -238,12 +234,10 @@ impl GGUFStreamingModel {
             }
 
             if n == 0 || n + 1 == self.n_layers || n % 4 == 0 {
-                serial_println!(
-                    "[AIRLLM] forward layer {}/{} (soft_prefetch={})",
+                k_nano::slog_bin!("AIRLLM", "info", "forward layer {}/{} (soft_prefetch={})",
                     n + 1,
                     self.n_layers,
-                    self.prefetch.lock().is_soft_not_dma()
-                );
+                    self.prefetch.lock().is_soft_not_dma());
             }
 
             self.skeleton.apply_one_layer(
@@ -328,11 +322,9 @@ impl Model for GGUFStreamingModel {
         let mut cache = KvCache::new(self.n_layers, self.skeleton.kv_dim, self.skeleton.kv_dim);
         let max_new = 16usize.min(MAX_SEQ.saturating_sub(tokens.len()).max(1));
 
-        serial_println!(
-            "[AIRLLM] generate start prompt_len={} layers={} (layer-wise ATA)",
+        k_nano::slog_bin!("AIRLLM", "info", "generate start prompt_len={} layers={} (layer-wise ATA)",
             tokens.len(),
-            self.n_layers
-        );
+            self.n_layers);
 
         let mut out_tokens: Vec<u32> = Vec::new();
         for step in 0..max_new {
@@ -523,14 +515,14 @@ pub fn hot_swap_from_ata(path: &str) -> Result<(), &'static str> {
     if path.is_empty() {
         return Err("hot_swap ATA: empty path");
     }
-    serial_println!("[AIRLLM] hot-swap ATA begin path={}", path);
+    k_nano::slog_bin!("AIRLLM", "info", "hot-swap ATA begin path={}", path);
     match gguf::load_gguf_streaming(path) {
         Ok(()) => {
-            serial_println!("[AIRLLM] hot-swap ATA OK path={} (set_model)", path);
+            k_nano::slog_bin!("AIRLLM", "info", "hot-swap ATA OK path={} (set_model)", path);
             Ok(())
         }
         Err(e) => {
-            serial_println!("[AIRLLM] hot-swap ATA FAIL path={} err={}", path, e);
+            k_nano::slog_bin!("AIRLLM", "info", "hot-swap ATA FAIL path={} err={}", path, e);
             Err(e)
         }
     }
@@ -614,10 +606,7 @@ pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static s
     let (ip, port, path) = parse_http_url(url)?;
     let dest = dest_from_url_path(&path, dest_opt);
 
-    serial_println!(
-        "[AIRLLM] hot-swap Net begin {}.{}.{}.{}:{}{} -> FAT {}",
-        ip[0], ip[1], ip[2], ip[3], port, path, dest
-    );
+    k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net begin {}.{}.{}.{}:{}{} -> FAT {}", ip[0], ip[1], ip[2], ip[3], port, path, dest);
 
     let rx_before = crate::netstack::net_rx_count();
     let body = unsafe { crate::net::http_get(ip, port, &path) };
@@ -626,31 +615,23 @@ pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static s
     let data = match body {
         Some(d) if !d.is_empty() => d,
         Some(_) => {
-            serial_println!("[AIRLLM] hot-swap Net FAIL: empty HTTP body");
+            k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: empty HTTP body");
             return Err("hot_swap Net: empty HTTP body");
         }
         None => {
             if rx_after == 0 || rx_after <= rx_before {
-                serial_println!(
-                    "[AIRLLM] hot-swap Net FAIL L3.5/RX: http_get None rx_before={} rx_after={} (e1000 RX gate)",
-                    rx_before, rx_after
-                );
+                k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL L3.5/RX: http_get None rx_before={} rx_after={} (e1000 RX gate)", rx_before, rx_after);
                 return Err("L3.5/RX: http_get failed — net RX=0 or no reply (e1000; Sprint Net)");
             }
-            serial_println!(
-                "[AIRLLM] hot-swap Net FAIL: http_get None but RX delta={} (TCP/HTTP error)",
-                rx_after.saturating_sub(rx_before)
-            );
+            k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: http_get None but RX delta={} (TCP/HTTP error)", rx_after.saturating_sub(rx_before));
             return Err("hot_swap Net: http_get failed (RX seen, no HTTP body)");
         }
     };
 
     if data.len() > HOTSWAP_MAX_STAGED_BYTES {
-        serial_println!(
-            "[AIRLLM] hot-swap Net FAIL: body {} > max staged {} (stream-to-disk residual)",
+        k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net FAIL: body {} > max staged {} (stream-to-disk residual)",
             data.len(),
-            HOTSWAP_MAX_STAGED_BYTES
-        );
+            HOTSWAP_MAX_STAGED_BYTES);
         return Err("hot_swap Net: body too large for RAM staging (64MiB cap; stream-to-disk deferred)");
     }
 
@@ -658,10 +639,7 @@ pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static s
     let payload = strip_http_headers_if_present(&data);
 
     if payload.len() < 4 || &payload[0..4] != b"GGUF" {
-        serial_println!(
-            "[AIRLLM] hot-swap Net WARN: payload magic != GGUF (len={}); writing anyway for ATA detect",
-            payload.len()
-        );
+        k_nano::slog_bin!("AIRLLM", "info", "hot-swap Net WARN: payload magic != GGUF (len={}); writing anyway for ATA detect", payload.len());
     }
 
     gguf::write_fat_file(&dest, payload)?;

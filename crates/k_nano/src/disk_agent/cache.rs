@@ -78,7 +78,7 @@ impl ArcCache {
         if let Some(lba) = victim {
             let dirty = self.entries.get(&lba).map_or(false, |e| e.dirty);
             if dirty {
-                crate::serial_println!("[CACHE] evict dirty {:#x} without flush_fn — DATA LOSS RISK", lba);
+                crate::slog_nano!("CACHE", "info", "evict dirty {:#x} without flush_fn — DATA LOSS RISK", lba);
             }
             self.entries.remove(&lba);
         }

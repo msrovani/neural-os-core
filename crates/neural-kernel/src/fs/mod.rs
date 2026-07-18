@@ -35,7 +35,7 @@ pub fn register_fs_agent(agent: Box<dyn FilesystemAgent>) {
     let name = alloc::format!("{}", agent.name());
     let mp = alloc::format!("{}", agent.mount_point());
     FS_AGENTS.lock().push(FsAgentEntry { agent });
-    crate::serial_println!("[FS] Agent '{}' registrado em {}", name, mp);
+    k_nano::slog_bin!("FS", "info", "Agent '{}' registrado em {}", name, mp);
 }
 
 /// Find agent by name and call a read operation

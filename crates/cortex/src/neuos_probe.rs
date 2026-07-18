@@ -124,25 +124,22 @@ pub fn probe_model(model: &TransformerModel, max_layers: usize) -> ProbeReport {
 pub fn log_probe(model: Option<&TransformerModel>) {
     match model {
         None => {
-            k_nano::serial_println!("[ADR-0047-L3] probe=NO_MODEL");
+            k_nano::slog_cortex!("ADR", "0047-L3", "probe=NO_MODEL");
         }
         Some(m) => {
             if m.layers.is_empty() {
-                k_nano::serial_println!("[ADR-0047-L3] probe=NO_MODEL");
+                k_nano::slog_cortex!("ADR", "0047-L3", "probe=NO_MODEL");
                 return;
             }
             let report = probe_model(m, 8.min(m.layers.len()));
-            k_nano::serial_println!("[ADR-0047-L3] probe=OK {}", report.summary);
+            k_nano::slog_cortex!("ADR", "0047-L3", "probe=OK {}", report.summary);
             for lr in report.layers.iter().take(4) {
                 let st = match lr.status {
                     LayerStatus::Healthy => "H",
                     LayerStatus::Degraded => "D",
                     LayerStatus::Absent => "A",
                 };
-                k_nano::serial_println!(
-                    "[PROBE] L{} {} mean={:.4} std={:.4}",
-                    lr.index, st, lr.mean_abs, lr.std_approx
-                );
+                k_nano::slog_cortex!("PROBE", "info", "L{} {} mean={:.4} std={:.4}", lr.index, st, lr.mean_abs, lr.std_approx);
             }
         }
     }

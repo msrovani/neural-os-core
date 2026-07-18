@@ -177,13 +177,11 @@ pub fn init_from_bpb1(data: &[u8]) -> Result<(), &'static str> {
         offsets,
         heap,
     };
-    crate::serial_println!(
-        "[BPE] BPB1 LOADED vocab_n={} bos={} eos={} heap={}KB",
+    k_nano::slog_bin!("BPE", "info", "BPB1 LOADED vocab_n={} bos={} eos={} heap={}KB",
         vocab.vocab_n,
         vocab.bos,
         vocab.eos,
-        heap_len / 1024
-    );
+        heap_len / 1024);
     *BPE.lock() = Some(vocab);
     Ok(())
 }
@@ -201,10 +199,7 @@ pub fn try_load_from_qemu_loader() -> bool {
     unsafe {
         let magic = core::slice::from_raw_parts(va, 4);
         if magic != b"BPB1" {
-            crate::serial_println!(
-                "[BPE] QEMU-loader @0x150000000 magic={:02x?} (ausente)",
-                magic
-            );
+            k_nano::slog_bin!("BPE", "info", "QEMU-loader @0x150000000 magic={:02x?} (ausente)", magic);
             return false;
         }
         let vocab_n = u32::from_le_bytes([
@@ -214,7 +209,7 @@ pub fn try_load_from_qemu_loader() -> bool {
             *va.add(21),
         ]) as usize;
         if vocab_n == 0 || vocab_n > 200_000 {
-            crate::serial_println!("[BPE] bad vocab_n={}", vocab_n);
+            k_nano::slog_bin!("BPE", "info", "bad vocab_n={}", vocab_n);
             return false;
         }
         let header = 6 + 16 + (vocab_n + 1) * 4;
@@ -228,14 +223,14 @@ pub fn try_load_from_qemu_loader() -> bool {
         let total = header + heap_len;
         // Caps: ~8MB segurança
         if total > 8 * 1024 * 1024 {
-            crate::serial_println!("[BPE] refuse size={}KB", total / 1024);
+            k_nano::slog_bin!("BPE", "info", "refuse size={}KB", total / 1024);
             return false;
         }
         let slice = core::slice::from_raw_parts(va, total);
         match init_from_bpb1(slice) {
             Ok(()) => true,
             Err(e) => {
-                crate::serial_println!("[BPE] parse FAILED: {}", e);
+                k_nano::slog_bin!("BPE", "info", "parse FAILED: {}", e);
                 false
             }
         }
@@ -257,19 +252,15 @@ pub fn try_load_from_fat() -> bool {
                         if let Some(data) = fs.read_file(name) {
                             match init_from_bpb1(&data) {
                                 Ok(()) => {
-                                    crate::serial_println!(
-                                        "[BPE] BPB1 LOADED from FAT {} ({}KB)",
+                                    k_nano::slog_bin!("BPE", "info", "BPB1 LOADED from FAT {} ({}KB)",
                                         name,
-                                        data.len() / 1024
-                                    );
+                                        data.len() / 1024);
                                     return true;
                                 }
                                 Err(e) => {
-                                    crate::serial_println!(
-                                        "[BPE] FAT {} parse FAILED: {}",
+                                    k_nano::slog_bin!("BPE", "info", "FAT {} parse FAILED: {}",
                                         name,
-                                        e
-                                    );
+                                        e);
                                 }
                             }
                         }
@@ -278,7 +269,7 @@ pub fn try_load_from_fat() -> bool {
             }
         }
     }
-    crate::serial_println!("[BPE] FAT ausente (BPE.BIN)");
+    k_nano::slog_bin!("BPE", "info", "FAT ausente (BPE.BIN)");
     false
 }
 

@@ -6,7 +6,6 @@ use core::sync::atomic::Ordering;
 
 use crate::k_ia_dma::{self, PinnedDmaBuf};
 use crate::memory::PHYS_MEM_OFFSET;
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_PIN_DMA, SYS_VRING_SETUP};
 
 /// Queue size PoC (layout-compatible; NIC live usa 64).
@@ -71,7 +70,7 @@ fn phys_va(pa: u64) -> *mut u8 {
 /// Zero-copy: `Desc.addr` aponta para página pinnada de payload (não heap scratch).
 pub fn setup_vring(buf: &PinnedDmaBuf, held: Cap) -> Result<VringHandle, &'static str> {
     if !held.contains(Cap::VRING_SETUP) {
-        serial_println!("[CapGate] DENY VRING_SETUP held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "info", "DENY VRING_SETUP held=0x{:x}", held.bits());
         return Err("EPERM: Cap::VRING_SETUP");
     }
     let _ = syscall::dispatch(SYS_VRING_SETUP, buf.phys, held)?;
@@ -154,7 +153,7 @@ fn probe_live_virtio() -> Option<(u64, u64)> {
 
 /// Demo non-fatal: deny Cap → pin+setup SUCCESS → log phys/indices → NIC untouched.
 pub fn demo_virtio_vring() -> Result<(), &'static str> {
-    serial_println!("[P8] VirtIO vring + DMA pin demo");
+    k_nano::slog_bin!("Cap", "p8", "VirtIO vring + DMA pin demo");
 
     if setup_vring(
         &PinnedDmaBuf {
@@ -176,10 +175,10 @@ pub fn demo_virtio_vring() -> Result<(), &'static str> {
     let buf = match k_ia_dma::pin_frames(VRING_PIN_PAGES, Cap::PIN_DMA) {
         Ok(b) => b,
         Err(e) => {
-            serial_println!("[P8] WARN pin_frames: {} — Cap-only path", e);
+            k_nano::slog_bin!("Cap", "p8", "WARN pin_frames: {} — Cap-only path", e);
             syscall::dispatch(SYS_PIN_DMA, VRING_PIN_PAGES as u64, Cap::PIN_DMA)?;
             syscall::dispatch(SYS_VRING_SETUP, 0, Cap::VRING_SETUP)?;
-            serial_println!("[P8] SUCCESS Cap VRING_SETUP (layout-only sem frames)");
+            k_nano::slog_bin!("Cap", "p8", "SUCCESS Cap VRING_SETUP (layout-only sem frames)");
             return Ok(());
         }
     };
@@ -187,9 +186,9 @@ pub fn demo_virtio_vring() -> Result<(), &'static str> {
     let handle = match setup_vring(&buf, Cap::VRING_SETUP) {
         Ok(h) => h,
         Err(e) => {
-            serial_println!("[P8] WARN setup_vring: {} — Cap path", e);
+            k_nano::slog_bin!("Cap", "p8", "WARN setup_vring: {} — Cap path", e);
             syscall::dispatch(SYS_VRING_SETUP, buf.phys, Cap::VRING_SETUP)?;
-            serial_println!("[P8] SUCCESS Cap VRING_SETUP (sem layout write)");
+            k_nano::slog_bin!("Cap", "p8", "SUCCESS Cap VRING_SETUP (sem layout write)");
             return Ok(());
         }
     };
@@ -197,19 +196,16 @@ pub fn demo_virtio_vring() -> Result<(), &'static str> {
 
     match probe_live_virtio() {
         Some((rx, tx)) => {
-            serial_println!(
-                "[P8] VirtIO-net live rx_q={:x} tx_q={:x} — P8 stub paralelo (NIC untouched)",
+            k_nano::slog_bin!("Cap", "p8", "VirtIO-net live rx_q={:x} tx_q={:x} — P8 stub paralelo (NIC untouched)",
                 rx,
-                tx
-            );
+                tx);
         }
         None => {
-            serial_println!("[P8] VirtIO-net ausente — PoC layout-only (Opcao B) = SUCCESS");
+            k_nano::slog_bin!("Cap", "p8", "VirtIO-net ausente — PoC layout-only (Opcao B) = SUCCESS");
         }
     }
 
-    serial_println!(
-        "[P8] SUCCESS vring q={} desc={:x} avail={:x} used={:x} payload={:x} avail_idx={} head={} caps=0x{:x} pinned={}",
+    k_nano::slog_bin!("Cap", "p8", "SUCCESS vring q={} desc={:x} avail={:x} used={:x} payload={:x} avail_idx={} head={} caps=0x{:x} pinned={}",
         handle.queue_size,
         handle.desc_phys,
         handle.avail_phys,
@@ -218,7 +214,6 @@ pub fn demo_virtio_vring() -> Result<(), &'static str> {
         handle.avail_idx,
         handle.desc_head,
         caps.bits(),
-        k_ia_dma::pinned_count()
-    );
+        k_ia_dma::pinned_count());
     Ok(())
 }

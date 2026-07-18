@@ -5,7 +5,6 @@ use alloc::vec::Vec;
 use crate::block_dev::BlockDevice;
 use crate::fs::FilesystemAgent;
 use crate::neural_fs::volume::{MemoryDisk, NeuralVolume, MBR_TYPE_NEURALFS};
-use crate::serial_println;
 use spin::Mutex;
 
 enum Backend {
@@ -68,12 +67,10 @@ impl NeuralFsAgent {
             let start = p.lba_start as u64;
             if NeuralVolume::probe_magic(ata, start) {
                 if let Some(vol) = NeuralVolume::mount(ata, start) {
-                    serial_println!(
-                        "[NEURALFS] ATA mount LBA={} free_blocks={} inodes={}",
+                    crate::slog_nano!("NEURALFS", "info", "ATA mount LBA={} free_blocks={} inodes={}",
                         start,
                         vol.sb.free_blocks,
-                        vol.sb.allocated_inodes
-                    );
+                        vol.sb.allocated_inodes);
                     *self.state.lock() = Some(NeuralFsState {
                         backend: Backend::Ata { start_lba: start },
                         volume: vol,
@@ -89,11 +86,9 @@ impl NeuralFsAgent {
                         if let Ok(ino) = vol.create_file(ata, 1, "hello.txt") {
                             let _ = vol.write_file(ata, ino, b"NeuralFS ATA online\n");
                         }
-                        serial_println!(
-                            "[NEURALFS] ATA format+mount LBA={} size={}MB",
+                        crate::slog_nano!("NEURALFS", "info", "ATA format+mount LBA={} size={}MB",
                             start,
-                            total_lba * 512 / (1024 * 1024)
-                        );
+                            total_lba * 512 / (1024 * 1024));
                         *self.state.lock() = Some(NeuralFsState {
                             backend: Backend::Ata { start_lba: start },
                             volume: vol,
@@ -168,11 +163,9 @@ impl NeuralFsAgent {
         if !NeuralVolume::format(ata, start, size_u32 as u64) {
             return false;
         }
-        serial_println!(
-            "[NEURALFS] created MBR 0x7F LBA={} size={}MB",
+        crate::slog_nano!("NEURALFS", "info", "created MBR 0x7F LBA={} size={}MB",
             start,
-            size_u32 as u64 * 512 / (1024 * 1024)
-        );
+            size_u32 as u64 * 512 / (1024 * 1024));
         true
     }
 
@@ -180,39 +173,37 @@ impl NeuralFsAgent {
         let mut disk = MemoryDisk::new(4 * 1024 * 1024);
         let total_lba = disk.sector_count();
         if !NeuralVolume::format(&mut disk, 0, total_lba) {
-            serial_println!("[NEURALFS] format RAM FAILED");
+            crate::slog_nano!("NEURALFS", "info", "format RAM FAILED");
             return;
         }
         let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
-            serial_println!("[NEURALFS] mount RAM FAILED");
+            crate::slog_nano!("NEURALFS", "info", "mount RAM FAILED");
             return;
         };
         if let Ok(ino) = vol.create_file(&mut disk, 1, "hello.txt") {
             let _ = vol.write_file(&mut disk, ino, b"NeuralFS online\n");
         }
-        serial_println!(
-            "[NEURALFS] RAM 4MB mounted free_blocks={} inodes={}",
+        crate::slog_nano!("NEURALFS", "info", "RAM 4MB mounted free_blocks={} inodes={}",
             vol.sb.free_blocks,
-            vol.sb.allocated_inodes
-        );
+            vol.sb.allocated_inodes);
         *self.state.lock() = Some(NeuralFsState {
             backend: Backend::Ram(disk),
             volume: vol,
         });
         if crate::neural_fs::tests::smoke_ram_roundtrip() {
-            serial_println!("[NEURALFS] smoke_ram_roundtrip=OK");
+            crate::slog_nano!("NEURALFS", "info", "smoke_ram_roundtrip=OK");
         } else {
-            serial_println!("[NEURALFS] smoke_ram_roundtrip=FAIL");
+            crate::slog_nano!("NEURALFS", "info", "smoke_ram_roundtrip=FAIL");
         }
         if crate::neural_fs::tests::smoke_reclaim() {
-            serial_println!("[NEURALFS] smoke_reclaim=OK");
+            crate::slog_nano!("NEURALFS", "info", "smoke_reclaim=OK");
         } else {
-            serial_println!("[NEURALFS] smoke_reclaim=FAIL");
+            crate::slog_nano!("NEURALFS", "info", "smoke_reclaim=FAIL");
         }
         if crate::neural_fs::tests::smoke_split() {
-            serial_println!("[NEURALFS] smoke_split=OK");
+            crate::slog_nano!("NEURALFS", "info", "smoke_split=OK");
         } else {
-            serial_println!("[NEURALFS] smoke_split=FAIL");
+            crate::slog_nano!("NEURALFS", "info", "smoke_split=FAIL");
         }
     }
 

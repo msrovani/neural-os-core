@@ -30,7 +30,7 @@ pub mod stt;
 
 pub fn init_audio() {
     crate::audio::settings::init_audio_settings();
-    crate::serial_println!("[AUDIO] Configuracoes de audio inicializadas");
+    k_nano::slog_bin!("Audio", "info", "Configuracoes de audio inicializadas");
 }
 
 pub const TOPIC_AUDIO_IN: &str = "AUDIO_IN";

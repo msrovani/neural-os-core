@@ -7,7 +7,6 @@ use x86_64::PhysAddr;
 
 use crate::address_space::{self, AddressSpace};
 use crate::demand_page;
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_DEMAND_PAGE, SYS_MAP_FILE, SYS_MAP_WEIGHTS};
 
 /// VA dedicado (fora de CORTEX_WEIGHT_VA P5/P7).
@@ -89,13 +88,11 @@ fn try_read_model_prefix(nbytes: usize) -> Option<(BackingKind, u32, alloc::stri
                     continue;
                 }
                 let (kind, magic) = detect_kind(&buf);
-                serial_println!(
-                    "[P9] FAT hit name={} bytes={} kind={:?} magic=0x{:08x}",
+                k_nano::slog_bin!("P9", "info", "FAT hit name={} bytes={} kind={:?} magic=0x{:08x}",
                     name,
                     buf.len(),
                     kind,
-                    magic
-                );
+                    magic);
                 return Some((kind, magic, alloc::string::String::from(name), buf));
             }
         }
@@ -156,10 +153,7 @@ pub unsafe fn mmap_file_weights(
         .union(Cap::DEMAND_PAGE)
         .union(Cap::MAP_FILE);
     if !held.contains(need) {
-        serial_println!(
-            "[CapGate] DENY MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE held=0x{:x}",
-            held.bits()
-        );
+        k_nano::slog_bin!("CapGate", "info", "DENY MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE");
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
@@ -175,7 +169,7 @@ pub unsafe fn mmap_file_weights(
         }
         None => {
             FALLBACK_HIT.fetch_add(1, Ordering::Relaxed);
-            serial_println!("[P9] WARN no model file on FAT — fallback stub frames");
+            k_nano::slog_bin!("P9", "info", "WARN no model file on FAT — fallback stub frames");
             let (fr, first, k, m) = alloc_and_fill(n, None)?;
             (k, m, fr, first)
         }
@@ -198,7 +192,7 @@ pub fn mmap_count() -> u64 {
 
 /// Demo non-fatal P9: deny Cap → mmap file-backed → first-touch → verify magic → restore CR3.
 pub fn demo_gguf_mmap() -> Result<(), &'static str> {
-    serial_println!("[P9] GGUF/FAT file-backed mmap demo (demand-page + pre-fill)");
+    k_nano::slog_bin!("P9", "info", "GGUF/FAT file-backed mmap demo (demand-page + pre-fill)");
 
     let need = Cap::MAP_WEIGHTS
         .union(Cap::DEMAND_PAGE)
@@ -224,9 +218,9 @@ pub fn demo_gguf_mmap() -> Result<(), &'static str> {
     let map = match unsafe { mmap_file_weights(&mut as_cortex, DEMO_FILE_PAGES, need) } {
         Ok(m) => m,
         Err(e) => {
-            serial_println!("[P9] WARN mmap_file_weights: {} — Cap-only path", e);
+            k_nano::slog_bin!("P9", "info", "WARN mmap_file_weights: {} — Cap-only path", e);
             syscall::dispatch(SYS_MAP_FILE, DEMO_FILE_PAGES as u64, need)?;
-            serial_println!("[P9] SUCCESS Cap MAP_FILE (sem frames / sem FAT)");
+            k_nano::slog_bin!("P9", "info", "SUCCESS Cap MAP_FILE (sem frames / sem FAT)");
             return Ok(());
         }
     };
@@ -244,12 +238,10 @@ pub fn demo_gguf_mmap() -> Result<(), &'static str> {
         return Err("p9: esperava >=1 cure #PF first-touch");
     }
     if got_magic != map.expected_magic {
-        serial_println!(
-            "[P9] WARN magic got=0x{:08x} expected=0x{:08x} kind={:?}",
+        k_nano::slog_bin!("P9", "info", "WARN magic got=0x{:08x} expected=0x{:08x} kind={:?}",
             got_magic,
             map.expected_magic,
-            map.kind
-        );
+            map.kind);
         // Non-fatal se fallback batido ou dados truncados — ainda prova mmap.
         if map.kind != BackingKind::Fallback {
             return Err("p9: header magic mismatch");
@@ -261,15 +253,13 @@ pub fn demo_gguf_mmap() -> Result<(), &'static str> {
     } else {
         "FAT"
     };
-    serial_println!(
-        "[P9] SUCCESS file-mmap pages={} va={:x} kind={:?} src={} magic=0x{:08x} cures={} hits={}",
+    k_nano::slog_bin!("P9", "info", "SUCCESS file-mmap pages={} va={:x} kind={:?} src={} magic=0x{:08x} cures={} hits={}",
         map.pages,
         map.virt,
         map.kind,
         src,
         got_magic,
         cured,
-        FILE_HIT.load(Ordering::Relaxed)
-    );
+        FILE_HIT.load(Ordering::Relaxed));
     Ok(())
 }

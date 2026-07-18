@@ -19,6 +19,7 @@ pub mod apic;
 pub mod ata;
 pub mod block_dev;
 pub mod boot_logger;
+pub mod boot_ramlog;
 // ponytail: cfs.rs moved to LEGACY/v1.5-dead-k2chj/k_nano/ (dead code)
 pub mod disk_agent;
 pub mod disk_power;
@@ -54,6 +55,7 @@ pub mod pci;
 pub mod rtl8139;
 pub mod scancode_to_ascii;
 pub mod serial;
+pub mod slog;
 pub mod simd;
 pub mod slab;
 pub mod slip;

@@ -123,8 +123,9 @@ fn parse_vbr(vbr: &[u8; 512], start_lba: u64) -> Option<ExfatFs> {
     if &vbr[3..11] != &EBPB_SIGNATURE[..] || vbr[11] != 0x00 {
         return None;
     }
+    // Microsoft exFAT: VolumeLength @72 (nao @56 — bytes 11..63 MustBeZero)
     let total_sectors = u64::from_le_bytes([
-        vbr[56], vbr[57], vbr[58], vbr[59], vbr[60], vbr[61], vbr[62], vbr[63],
+        vbr[72], vbr[73], vbr[74], vbr[75], vbr[76], vbr[77], vbr[78], vbr[79],
     ]);
     let fat_offset = u32::from_le_bytes([vbr[80], vbr[81], vbr[82], vbr[83]]);
     let cluster_heap_offset = u32::from_le_bytes([vbr[88], vbr[89], vbr[90], vbr[91]]);
@@ -217,15 +218,14 @@ fn list_directory(
             let entry = &buf[off..off + 32];
             let etype = entry[0];
             if etype == 0x00 {
-                return out; // end of directory
+                return out;
             }
             if etype & 0x80 == 0 {
                 off += 32;
-                continue; // deleted / unused
+                continue;
             }
             match etype {
                 0x85 => {
-                    // File directory entry
                     secondary_left = entry[1] as i32;
                     pending_attrs = u16::from_le_bytes([entry[4], entry[5]]);
                     pending_name.clear();
@@ -311,7 +311,7 @@ impl FilesystemDriver for ExfatFs {
             total_bytes: self.total_sectors * 512,
             free_bytes: None,
             block_size: self.bytes_per_cluster as u32,
-            writable: false, // write deferred — bitmap/FAT risk
+            writable: false,
         })
     }
 
@@ -342,7 +342,6 @@ impl FilesystemDriver for ExfatFs {
             buf[..n].copy_from_slice(&bytes[start..start + n]);
             return Ok(n);
         }
-        // Path read requires BlockDevice — use status stub pointing to inherent API
         Err("exFAT path read needs BlockDevice — use ExfatReader::read_file")
     }
 

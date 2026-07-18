@@ -8,7 +8,6 @@ use x86_64::VirtAddr;
 
 use crate::address_space::{self, AddressSpace};
 use crate::interrupts::{user_code_selector, user_data_selector};
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_EXIT_USER};
 
 /// Região user isolada (após Cortex weights VA).
@@ -103,7 +102,7 @@ pub unsafe fn enter_user_mode(
     held: Cap,
 ) -> Result<(), &'static str> {
     if !held.contains(Cap::ENTER_USER) {
-        serial_println!("[CapGate] DENY ENTER_USER held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "info", "DENY ENTER_USER held=0x{:x}", held.bits());
         return Err("EPERM: Cap::ENTER_USER");
     }
     if !TRY_ENTER_RING3 {
@@ -199,7 +198,7 @@ fn write_stub(code: PhysFrame<Size4KiB>) {
 
 /// Demo non-fatal: deny Cap → map stub USER → iretq → marker → EXIT → SUCCESS.
 pub fn demo_ring3() -> Result<(), &'static str> {
-    serial_println!("[P6] Ring3 user-mode demo");
+    k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo");
 
     let deny = unsafe {
         enter_user_mode(
@@ -212,10 +211,10 @@ pub fn demo_ring3() -> Result<(), &'static str> {
     if deny.is_ok() {
         return Err("P6: Cap vazia nao deveria entrar");
     }
-    serial_println!("[P6] Cap::ENTER_USER deny OK");
+    k_nano::slog_bin!("P6", "info", "Cap::ENTER_USER deny OK");
 
     if !TRY_ENTER_RING3 {
-        serial_println!("[P6] stub path ready; TRY_ENTER_RING3=false — skip iretq");
+        k_nano::slog_bin!("P6", "info", "stub path ready; TRY_ENTER_RING3=false — skip iretq");
         return Ok(());
     }
 
@@ -259,9 +258,6 @@ pub fn demo_ring3() -> Result<(), &'static str> {
         return Err("P6: marker Ring3 nao escrito");
     }
 
-    serial_println!(
-        "[P6] SUCCESS iretq+CPL3 marker={:x} Cap::ENTER_USER",
-        marker
-    );
+    k_nano::slog_bin!("P6", "info", "SUCCESS iretq+CPL3 marker={:x} Cap::ENTER_USER", marker);
     Ok(())
 }

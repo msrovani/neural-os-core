@@ -1,11 +1,10 @@
 extern crate alloc;
 use crate::net::{NETSTACK, NET_CONFIG};
 use crate::netstack::{HttpConn, HttpState};
-use k_nano::serial_println;
 use spin::Mutex;
 
 fn log(tick: u64, msg: &str) {
-    serial_println!("[NET @t={}] {}", tick, msg);
+    k_nano::slog_hermes!("Net", "tick", "t={} {}", tick, msg);
 }
 
 fn init_netstack(mac: [u8; 6]) {
@@ -180,7 +179,7 @@ pub fn network_agent_tick() {
             if tick == 300 || tick == 500 {
                 let report = crate::netdiag::run_network_test();
                 for line in report.lines() {
-                    serial_println!("{}", line);
+                    k_nano::slog_hermes!("Log", "msg", "{}", line);
                 }
             }
         }

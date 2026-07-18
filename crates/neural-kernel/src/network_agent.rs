@@ -9,7 +9,6 @@
 extern crate alloc;
 use crate::net::{NETSTACK, NET_CONFIG, TOPIC_NETWORK_CONFIGURED, QemuNetMode};
 use crate::netstack::{HttpConn, HttpState};
-use crate::serial_println;
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use event_bus::{CapabilityToken, Event};
 use spin::Mutex;
@@ -37,7 +36,7 @@ pub fn early_smoke_status() -> &'static str {
 }
 
 fn log(tick: u64, msg: &str) {
-    serial_println!("[NET @t={}] {}", tick, msg);
+    k_nano::slog_bin!("Net", "tick", "t={} {}", tick, msg);
 }
 
 fn init_netstack(mac: [u8; 6]) {
@@ -447,13 +446,11 @@ pub fn network_agent_tick() {
     // Pós SelfHeal/Disk: Continuous entrou no run() — log cedo mesmo se serial for cortado depois.
     // Não bloqueia se Disk ainda emitir; só anuncia que NetAgent está tickando.
     if !CONTINUOUS_ANNOUNCED.swap(true, Ordering::Relaxed) {
-        serial_println!(
-            "[NET] Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]"
-        );
+        k_nano::slog_hermes!("Net", "info", "Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]");
     }
     // Periódico mínimo cedo (sobrevive flood serial de Disk se cortar depois).
     if tick <= 20 || tick % 50 == 0 {
-        serial_println!("[NET] tick {}", tick);
+        k_nano::slog_hermes!("Net", "info", "tick {}", tick);
     }
     if tick == 0 || tick == 1 || tick == 2 || tick == 5 || tick == 10 {
         log(tick, &alloc::format!("NetAgent tick started (tick={})", tick));
@@ -675,7 +672,7 @@ pub fn network_agent_tick() {
             if tick == 300 || tick == 500 {
                 let report = crate::netdiag::run_network_test();
                 for line in report.lines() {
-                    serial_println!("{}", line);
+                    k_nano::slog_bin!("Log", "msg", "{}", line);
                 }
             }
         }

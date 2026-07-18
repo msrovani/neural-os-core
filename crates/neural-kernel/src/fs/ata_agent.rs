@@ -7,8 +7,6 @@ use alloc::vec;
 use alloc::vec::Vec;
 use crate::fs::FilesystemAgent;
 use crate::ata::AtaDriver;
-use crate::serial_println;
-
 pub struct AtaAgent {
     ata: Option<AtaDriver>,
     ata_inited: bool,
@@ -19,7 +17,7 @@ impl AtaAgent {
         let ata = unsafe { AtaDriver::probe() };
         let inited = ata.is_some();
         if inited {
-            serial_println!("[ATA-FS] ATA detectado. /mnt/hdd/ disponivel.");
+            k_nano::slog_bin!("ATA", "FS", "ATA detectado. /mnt/hdd/ disponivel.");
         }
         AtaAgent { ata, ata_inited: inited }
     }

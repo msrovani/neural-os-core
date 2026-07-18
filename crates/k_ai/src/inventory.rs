@@ -1,7 +1,17 @@
-//! Inventário de hardware (Ring 1 / k-ai) — ADR-0042 N2: gate por VID.
+//! Inventário de hardware (k-ai L2) — ADR-0042 N2 + ADR-0041 DeviceTree via k-hal.
 use k_nano::acpi::AcpiInfo;
 use k_nano::pci::PciDevice;
 use alloc::vec::Vec;
+
+/// Snapshot DeviceTree do k-hal (sem scan PCI em k_ai).
+pub fn khal_device_tree() -> alloc::vec::Vec<k_hal::device_cap::DeviceCap> {
+    k_hal::device_tree()
+}
+
+/// Contagem de devices publicados pelo HAL (HEALTH / SelfHeal).
+pub fn khal_device_count() -> usize {
+    k_hal::discovery::device_count()
+}
 
 #[derive(Debug, Clone)]
 pub struct HardwareInventory {

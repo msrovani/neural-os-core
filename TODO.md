@@ -1,12 +1,12 @@
 # 📋 TODO MASTER — neural-os-core
 
-**Versão release:** v1.8.5 TESTE / NÃO ESTÁVEL
-**Data:** 2026-07-16
+**Versão release:** v1.8.6 TESTE / NÃO ESTÁVEL
+**Data:** 2026-07-18
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** estabilização **v1.8.5** + **Sprint Net** (DHCP/RX). Sprint Sound ✅. ADR-0042 ✅. ADR-0040/0046/0047 MVPs ✅. Sprint 108 ✅.
-**Gate v2.0.0:** só com `por_fazer` zerado **e** OK explícito do maintainer (não automático). Residual INDEX `por_fazer`: follow-up ADR-0040 (write/DMA/#421/#423/cloud/NeuralFS disco/#419 UI) + NeuralFS.md + residuals ADR-0046 (DMA prefetch / Net RX runtime / stream-to-disk / K-quants / e2e GGUF) — MVP ADR-0046 ✅ SESSION_127; hot-swap Net code ✅ SESSION_128.
+**Pista ativa:** estabilização **v1.8.6** + **Sprint Net** (DHCP/RX). ADR-0041 H4+/H5+/AS ✅ PoC (SESSION_140). Sprint Sound ✅. ADR-0042 ✅. ADR-0040/0046/0047 MVPs ✅. Sprint 108 ✅.
+**Gate v2.0.0:** só com `por_fazer` zerado **e** OK explícito do maintainer (não automático). Residual INDEX `por_fazer`: follow-up ADR-0040 (write alien/DMA/#421/#423/cloud/#419 UI) + NeuralFS GPT/power-loss (`fazendo` SESSION_132) + residuals ADR-0046 (DMA prefetch / Net RX runtime / stream-to-disk / K-quants / e2e GGUF) — MVP ADR-0046 ✅ SESSION_127; hot-swap Net code ✅ SESSION_128.
 
 ---
 
@@ -173,6 +173,12 @@
 ### Validação / polish
 
 - [x] `wasm_rt::SkillMarket::top` — `total_cmp` NaN-safe (SESSION_130; alinhado a `skill_market`)
+- [x] `cargo check --release` limpo — 0 erros, 0 warnings (SESSION_130; `target/check-zero-warn`)
+- [x] Framebuffer bpp dinâmico — `GpuDevice::from_probe` + consumidores via `from_gpu`/helpers (SESSION_130; PR #3 + reforço)
+- [x] HW PnP `HwCapabilityCard` — identify→use contract + EventBus; Expert v4 seed (SESSION_131)
+- [x] Hermes agentico PnP — card→decide→efêmera→WASM (`hw_pnp` + SkillOpt + evolve)
+- [x] ADR-0051 Package Hub — ecosystem folders + CRUD HITL + Cortex catalog (SESSION_133)
+- [x] Agency/nativos → AGENT.md + seed embutido + VFS bridge (SESSION_134)
 - [ ] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
 - [ ] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
 - [ ] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)

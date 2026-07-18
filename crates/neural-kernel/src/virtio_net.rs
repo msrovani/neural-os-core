@@ -16,7 +16,7 @@ use core::sync::atomic::Ordering;
 use x86_64::instructions::port::Port;
 use crate::memory::{GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET};
 use crate::pci::PciDevice;
-use crate::{serial_println, kjson};
+use crate::{kjson};
 
 pub const VIRTIO_VENDOR: u16 = 0x1AF4;
 pub const VIRTIO_NET_TRANSITIONAL: u16 = 0x1041; // transitional (legacy + modern)
@@ -174,7 +174,7 @@ impl VirtIoDevice {
             // FEATURES_OK
             io.add_status(STATUS_FEATURES_OK);
             if io.read8(REG_STATUS) & STATUS_FEATURES_OK == 0 {
-                serial_println!("[VIRTIO] Features rejeitadas");
+                k_nano::slog_bin!("VIRTIO", "info", "Features rejeitadas");
                 return None;
             }
 
@@ -198,8 +198,7 @@ impl VirtIoDevice {
             // DRIVER_OK
             io.add_status(STATUS_DRIVER_OK);
 
-            serial_println!("[VIRTIO] VirtIO-net OK. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            k_nano::slog_bin!("VIRTIO", "info", "VirtIO-net OK. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
             Some(VirtIoDevice {
                 io_base,
@@ -217,6 +216,13 @@ impl VirtIoDevice {
     }
 
     fn notify_queue(&self, queue: u16) {
+        // Cap MAP_BAR: path MMIO é BE R1 (caller_ring=1 → Allow)
+        if self.is_mmio
+            && k_hal::cap_gate::check_map_bar(1, true) == k_hal::cap_gate::CapResult::Deny
+        {
+            k_nano::slog_bin!("VIRTIO", "notify", "DENY MAP_BAR — NotifySkipped");
+            return;
+        }
         if self.is_mmio {
             unsafe {
                 let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
@@ -422,8 +428,7 @@ pub unsafe fn init_driver_virtio() -> bool {
     for dev in &devices {
         if dev.vendor_id == VIRTIO_VENDOR &&
            (dev.device_id == VIRTIO_NET_TRANSITIONAL || dev.device_id == VIRTIO_NET_MODERN) {
-            serial_println!("[VIRTIO] Detectado: {:02x}:{:02x}.{:02x}",
-                dev.bus, dev.device, dev.function);
+            k_nano::slog_bin!("VIRTIO", "info", "Detectado: {:02x}:{:02x}.{:02x}", dev.bus, dev.device, dev.function);
 
             // Diagnostico dos 6 BARs
             let read_bar = |idx: u8| -> u32 {
@@ -433,12 +438,11 @@ pub unsafe fn init_driver_virtio() -> bool {
                 let bar = read_bar(i);
                 if bar == 0 { continue; }
                 if bar & 1 == 1 {
-                    serial_println!("[VIRTIO]  BAR{} = {:#010x} (I/O Port {:#06x})", i, bar, bar & !3);
+                    k_nano::slog_bin!("VIRTIO", "info", "BAR{} = {:#010x} (I/O Port {:#06x})", i, bar, bar & !3);
                 } else {
                     let phys = bar & !0xF;
                     let is64 = (bar >> 1) & 3 == 2;
-                    serial_println!("[VIRTIO]  BAR{} = {:#010x} (MMIO {}b addr={:#010x})",
-                        i, bar, if is64 { 64 } else { 32 }, phys);
+                    k_nano::slog_bin!("VIRTIO", "info", "BAR{} = {:#010x} (MMIO {}b addr={:#010x})", i, bar, if is64 { 64 } else { 32 }, phys);
                 }
             }
 
@@ -446,10 +450,17 @@ pub unsafe fn init_driver_virtio() -> bool {
                 let mac = virtio.mac;
                 crate::net::NET_CONFIG.lock().mac = mac;
                 *crate::net::VIRTIO_DEV.lock() = Some(virtio);
+                // ADR-0041: HalOffer Net FE + QUEUE_NOTIFY via k-hal (além do PIO/MMIO legacy)
+                let _ = k_hal::offer::request(
+                    k_hal::device_cap::DeviceClass::Net,
+                    "virtio_net",
+                );
+                let stage = k_hal::virtio::try_pci_queue_notify(dev.bus, dev.device, dev.function, 0);
+                k_nano::slog_bin!("VIRTIO", "notify", "k_hal QUEUE_NOTIFY {:?}", stage);
                 return true;
             }
         }
     }
-    serial_println!("[VIRTIO] Nenhum dispositivo VirtIO-net encontrado.");
+    k_nano::slog_bin!("VIRTIO", "info", "Nenhum dispositivo VirtIO-net encontrado.");
     false
 }

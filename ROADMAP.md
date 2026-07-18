@@ -1,9 +1,9 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-07-16
-**Versão release:** **v1.8.5 TESTE / NÃO ESTÁVEL**
+**Última atualização:** 2026-07-18
+**Versão release:** **v1.8.6 TESTE / NÃO ESTÁVEL**
 **Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros (`cargo nk`)
-**Pista ativa:** estabilização v1.8.5 + Sprint Net. Gate `v2.0.0` fechado até review, `por_fazer` zerado e OK humano.
+**Pista ativa:** estabilização v1.8.6 + Sprint Net. Gate `v2.0.0` fechado até review, `por_fazer` zerado e OK humano.
 
 ---
 

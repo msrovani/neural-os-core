@@ -232,26 +232,42 @@ limite de banda. A meta passa a ser medida contra o baseline da mesma máquina.
 
 ### P0 — Detecção
 
-- [ ] identificar família por hardware, não apenas por lista curta de PCI IDs;
-- [ ] medir VRAM e publicar capabilities honestas;
-- [ ] selecionar `LegacyAcr`, `Gsp` ou `CpuFallback`.
+- [x] identificar família por DID explícito **ou** faixa DID **ou** `PMC_BOOT_0`
+      (`detect.rs`: chipset Nouveau `(boot0&0x1ff00000)>>20`);
+- [~] medir VRAM: hint DID/tabela; BAR size probe residual;
+- [x] selecionar `LegacyAcr` / `Gsp` / `CpuFallback` via `select_backend_family`.
 
 ### P1 — Kernel pack host
 
-- [ ] gerar e validar pack com uma imagem `sm_61`;
-- [ ] rejeitar versão, assinatura, offsets e ISA incompatíveis;
-- [ ] manter compiladores fora do target bare-metal.
+- [x] `tools/pack_nvidia_kernels.py`: CUBIN `sm_61` (nvcc) ou stub; FNV hash; sign opcional
+      via env `NKP_SIGNING_SEED_HEX` (nunca commit); `--unsigned` default path;
+- [x] OS: `kernel_pack::promote_with_session` re-assina hash-ok com session Ed25519;
+- [x] rejeitar magic/abi/hash; signature via `verify_trusted` (trusted∪session);
+- [x] mkfat32 embute `target/NKP_SM61.BIN` → `NKP_SM61.BIN`;
+- [x] compiladores fora do target bare-metal.
 
 ### P2 — Pascal bring-up
 
-- [ ] ACR HS autentica FECS/GPCCS no GP107;
-- [ ] GR/MMU/channel/runlist ficam prontos sem fault;
-- [ ] logs distinguem blob presente, autenticado e engine pronto.
+- [ ] ACR HS autentica FECS/GPCCS no GP107 (**silício**);
+- [x] Degrau ACR estrutural (`nvidia_pascal_acr.rs`): WPR/LSB v1 + HS SEC2 + dual-shadow
+      (2×2MiB quando VRAM cabe; senão ShadowSkipped) + status
+      BlobsMissing/WprBuilt/HsSubmitted/HsTimeout/HsBooted (HsBooted só se WPR status
+      VALIDATION_DONE/BOOTSTRAP_READY; stub linear antigo removido);
+- [x] GMMU v2 + instance/RAMFC/GPFIFO/USERD em sysmem UC (`nvidia_pascal.rs`, Degrau 2);
+- [x] logs distinguem StructuresReady / WaitingSwCtx / Failed (sem alegar engine Ready);
+- [x] pushbuffer (SET_OBJECT PASCAL_COMPUTE_B) + GPFIFO entry + GPPut + runlist/kick MMIO (Degrau 3, `bring_up_d3`);
+      offsets Nouveau gk104→gp10x: RUNLIST_BASE `0x2270`, SUBMIT `0x2274`, STATUS `0x2284`, KICK `0x2634`, CHANNEL `0x800000`;
+      status honesto `RunlistSubmitted`/`RunlistTimeout` (poll bounded, não-fatal; sem HW/QEMU não prova execução);
+- [~] sw_nonctx aplicado via MMIO (`nvidia_pascal_sw.rs`); bundle/method/ctx =
+      PresentNotApplied até FECS vivo no silício;
+- [x] logs distinguem blob presente, WPR built, HS submitted/timeout/booted, sw applied/deferred.
 
 ### P3 — Primeiro compute
 
-- [ ] `vector_add` produz golden vector;
-- [ ] QMD e semaphore encerram sem timeout;
+- [x] QMD v01_07 (`nvidia_pascal_qmd.rs` / `clc1c0qmd.h`) + SEND_PCAS_A/SIGNALING_PCAS_B + fence RELEASE0 (Degrau 4);
+- [x] canário NVIDIA via `run_vector_add_canary_nv` + `try_vector_add_d4` (estrutural mesmo sem pack; Ready só com signed+golden);
+- [ ] `vector_add` produz golden vector **em HW real** (ACR+GR+CUBIN sm_61 assinado);
+- [ ] QMD e semaphore encerram sem timeout em silício;
 - [ ] fault injection cai para CPU e mantém o boot.
 
 ### P4 — BitNet DP4A

@@ -1,0 +1,20 @@
+# Host-only kernel logic — NOT linked into neural-kernel / boot.
+# Isolado do nightly do OS; testável com `cargo test` no host.
+
+[package]
+name = "gpu_kernels"
+version = "0.1.0"
+edition = "2021"
+description = "Shared no_std GPU kernel logic (CPU golden + pack metadata)"
+
+# Standalone — not a workspace member of neural-os-core
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+std = []
+
+[dependencies]

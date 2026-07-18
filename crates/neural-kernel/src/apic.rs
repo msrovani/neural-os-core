@@ -1,5 +1,5 @@
 use crate::acpi::AcpiInfo;
-use crate::{println, serial_println};
+use crate::{println};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use core::ptr::{read_volatile, write_volatile};
 use x86_64::structures::paging::{PageTable, PageTableFlags};
@@ -72,7 +72,7 @@ impl Lapic {
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
         self.write(LAPIC_INIT_COUNT, 0);
 
-        serial_println!("[APIC] LAPIC inicializado. Base: 0x{:x}", self.base);
+        k_nano::slog_nano!("APIC", "info", "LAPIC inicializado. Base: 0x{:x}", self.base);
         println!("[APIC] LAPIC inicializado.");
     }
 
@@ -81,7 +81,7 @@ impl Lapic {
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
         self.write(LAPIC_INIT_COUNT, 0x800000);
 
-        serial_println!("[APIC] LAPIC timer iniciado: vetor 32, count=8388608, div=1.");
+        k_nano::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count=8388608, div=1.");
     }
 }
 
@@ -118,7 +118,7 @@ impl IoApic {
 
     unsafe fn init(&self, iso_overrides: &[(u8, u32)]) {
         let max_redirect = (self.read(0x01) >> 16) & 0xFF;
-        serial_println!("[APIC] IOAPIC em 0x{:x}. Max redirecionamentos: {}", self.base, max_redirect);
+        k_nano::slog_nano!("APIC", "info", "IOAPIC em 0x{:x}. Max redirecionamentos: {}", self.base, max_redirect);
         println!("[APIC] IOAPIC encontrado. Max redirecionamentos: {}", max_redirect);
 
         // Mascara TODAS as RTEs inicialmente (bit 16)
@@ -145,23 +145,22 @@ impl IoApic {
 
         let v1_low = self.read(reg_kbd);
         let v1_high = self.read(reg_kbd + 1);
-        serial_println!("[APIC] IOAPIC verificado: kbd GSI {} (0x{:02x}:0x{:08x})",
-            kbd_gsi, v1_high, v1_low);
-        serial_println!("[APIC] Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.");
+        k_nano::slog_nano!("APIC", "info", "IOAPIC verificado: kbd GSI {} (0x{:02x}:0x{:08x})", kbd_gsi, v1_high, v1_low);
+        k_nano::slog_nano!("APIC", "info", "Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.");
         println!("[APIC] IOAPIC configurado: keyboard->vec33, mouse->vec44.");
 
         // Mouse (IRQ12) → vetor 44, desmascarado
         self.redirect_gsi(12, 44, 0);
         let reg_mouse = 0x10 + 12 * 2;
         self.write(reg_mouse, self.read(reg_mouse) & !0x10000);
-        serial_println!("[APIC] Mouse (IRQ12) redirecionado para vetor 44.");
+        k_nano::slog_nano!("APIC", "info", "Mouse (IRQ12) redirecionado para vetor 44.");
     }
 }
 
     unsafe fn disable_pic() {
         core::arch::asm!("out dx, al", in("dx") PIC_MASTER_DATA, in("al") 0xFFu8, options(nostack, preserves_flags));
         core::arch::asm!("out dx, al", in("dx") PIC_SLAVE_DATA, in("al") 0xFFu8, options(nostack, preserves_flags));
-        serial_println!("[APIC] PIC 8259 desabilitado (mascara todos IRQs).");
+        k_nano::slog_nano!("APIC", "info", "PIC 8259 desabilitado (mascara todos IRQs).");
         println!("[APIC] PIC 8259 desabilitado.");
     }
 
@@ -169,13 +168,13 @@ impl IoApic {
         core::arch::asm!("out 0x43, al", in("al") 0x36u8, options(nostack, preserves_flags));
         core::arch::asm!("out 0x40, al", in("al") 0x00u8, options(nostack, preserves_flags));
         core::arch::asm!("out 0x40, al", in("al") 0x00u8, options(nostack, preserves_flags));
-        serial_println!("[PIT] Canal 0 programado: modo 3, divisor 65536 (18.2 Hz).");
+        k_nano::slog_bin!("PIT", "info", "Canal 0 programado: modo 3, divisor 65536 (18.2 Hz).");
     }
 
 unsafe fn read_lapic_base_msr() -> u64 {
     let msr_value = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read();
     let base = msr_value & 0xFFFF_FFFF_FFFF_F000;
-    serial_println!("[APIC] LAPIC base via MSR: 0x{:x}", base);
+    k_nano::slog_nano!("APIC", "info", "LAPIC base via MSR: 0x{:x}", base);
     base
 }
 
@@ -444,17 +443,17 @@ fn alloc_mmio_frame(base: VirtAddr) -> u64 {
             return pa;
         }
     }
-    crate::serial_println!("[PAGING] No frame for MMIO mapping!");
+    k_nano::slog_bin!("PAGING", "info", "No frame for MMIO mapping!");
     0
 }
 
 pub unsafe fn init_apic(info: &AcpiInfo) {
-    serial_println!("[APIC] Inicializando APIC...");
+    k_nano::slog_nano!("APIC", "info", "Inicializando APIC...");
     println!("[APIC] Inicializando APIC...");
 
     set_page_uc(0xFEC0_0000, info.phys_mem_offset);
     set_page_uc(0xFEE0_0000, info.phys_mem_offset);
-    serial_println!("[APIC] IOAPIC/LAPIC pages mapped uncacheable.");
+    k_nano::slog_nano!("APIC", "info", "IOAPIC/LAPIC pages mapped uncacheable.");
 
     // SVR deve ser escrito IMEDIATAMENTE após mapear as páginas,
     // ANTES de habilitar x2APIC ou qualquer outra operação APIC.
@@ -465,7 +464,7 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     let svr_early = read_volatile((lapic_virt_base + LAPIC_SVR) as *const u32);
     let svr_fixed_early = (svr_early & 0xFFFFFF00) | 0xFF | 0x100;
     write_volatile((lapic_virt_base + LAPIC_SVR) as *mut u32, svr_fixed_early);
-    serial_println!("[APIC] SVR set early: {:#x}", svr_fixed_early);
+    k_nano::slog_nano!("APIC", "info", "SVR set early: {:#x}", svr_fixed_early);
 
     let _msr_base = read_lapic_base_msr();
 
@@ -484,7 +483,7 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
         let apic_base = x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).read();
         x86_64::registers::model_specific::Msr::new(IA32_APIC_BASE_MSR).write(apic_base | (1 << 10));
         USING_X2APIC.store(true, Ordering::Release);
-        serial_println!("[APIC] x2APIC ativado via MSR.");
+        k_nano::slog_nano!("APIC", "info", "x2APIC ativado via MSR.");
     }
     lapic.init();
 
@@ -498,10 +497,9 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     lapic.start_timer();
 
     USING_APIC.store(true, Ordering::Release);
-    x86_64::instructions::interrupts::enable();
-
-    serial_println!("[APIC] APIC operacional. x2APIC={}", x2apic_supported);
-    println!("[APIC] APIC operacional.");
+    // STI adiado para depois de init_smp (SESSION_139): timer IRQ + serial_println
+    // sob spinlock = deadlock no BSP (tela parava em "[SMP] Inicializando...").
+    k_nano::slog_nano!("APIC", "info", "APIC operacional. x2APIC={} (STI deferred)", x2apic_supported);
 }
 
 /// Lê registrador LAPIC (compatível xAPIC/x2APIC)
@@ -558,13 +556,13 @@ pub unsafe fn send_init_ipi() {
         let icr_val: u64 = (5u64 << 8) | (3u64 << 18);
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
         msr.write(icr_val);
-        serial_println!("[SMP] INIT IPI (x2APIC, ICR={:#x})", icr_val);
+        k_nano::slog_nano!("SMP", "info", "INIT IPI (x2APIC, ICR={:#x})", icr_val);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
         let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15) | (3 << 18);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-        serial_println!("[SMP] INIT IPI (xAPIC, ICR=0x{:08x})", icr_val);
+        k_nano::slog_nano!("SMP", "info", "INIT IPI (xAPIC, ICR=0x{:08x})", icr_val);
     }
 }
 
@@ -590,13 +588,13 @@ pub unsafe fn send_sipi(trampoline_vector: u8) {
         let icr_val: u64 = (6u64 << 8) | (3u64 << 18) | trampoline_vector as u64;
         let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
         msr.write(icr_val);
-        serial_println!("[SMP] SIPI (x2APIC, ICR={:#x}, vetor={:#04x})", icr_val, trampoline_vector);
+        k_nano::slog_nano!("SMP", "info", "SIPI (x2APIC, ICR={:#x}, vetor={:#04x})", icr_val, trampoline_vector);
     } else {
         let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
         let icr_val = (6u32 << 8) | (3 << 18) | trampoline_vector as u32;
         write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, 0);
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
-        serial_println!("[SMP] SIPI (xAPIC, ICR=0x{:08x}, vetor={:#04x})", icr_val, trampoline_vector);
+        k_nano::slog_nano!("SMP", "info", "SIPI (xAPIC, ICR=0x{:08x}, vetor={:#04x})", icr_val, trampoline_vector);
     }
 }
 

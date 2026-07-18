@@ -68,7 +68,7 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, parts: &[crate::fat32::Partitio
                         *SESSION_FILENAME.lock() = Some(name.clone());
                         FAT_READY.store(true, Ordering::Relaxed);
                         let count = PRE_FAT_COUNT.load(Ordering::Relaxed);
-                        crate::serial_println!("[LOG] FAT32 pronto: escrevendo para logs/{} ({} buffered)", name, count);
+                        crate::slog_nano!("LOG", "info", "FAT32 pronto: escrevendo para logs/{} ({} buffered)", name, count);
                         break;
                     }
                 }
@@ -79,7 +79,7 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, parts: &[crate::fat32::Partitio
 
 /// Registra mensagem de log. Antes do FAT: bufferiza. Depois: escreve direto.
 pub fn log(msg: &str) {
-    crate::serial_println!("[LOG] {}", msg);
+    crate::slog_nano!("LOG", "info", "{}", msg);
 
     if !FAT_READY.load(Ordering::Relaxed) {
         buffer_log(msg);

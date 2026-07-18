@@ -2,7 +2,6 @@
 //! SD0 = captura (microfone), SD1 = playback (auto-falante).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::serial_println;
 use crate::pci;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -63,9 +62,9 @@ impl Agent for HdaAudioAgent {
     fn manifest(&self) -> &AgentManifest { &HDA_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
         if unsafe { init_hda() } {
-            serial_println!("[HDA] Intel HDA ativo — captura SD0 + playback SD1");
+            k_nano::slog_jarbas!("Audio", "hda", "Intel HDA ativo — captura SD0 + playback SD1");
         } else {
-            serial_println!("[HDA] Nenhum controlador Intel HDA encontrado");
+            k_nano::slog_jarbas!("Audio", "hda", "Nenhum controlador Intel HDA encontrado");
         }
         AgentTickResult::Done
     }
@@ -81,7 +80,7 @@ unsafe fn init_hda() -> bool {
     for dev in &devices {
         if dev.class == 0x04 && dev.subclass == 0x03 {
             let bar = (dev.bar0 as u64 & !0xF) + crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
-            serial_println!("[HDA] Intel HDA: {:04x}:{:04x} BAR0={:#x}", dev.vendor_id, dev.device_id, dev.bar0);
+            k_nano::slog_jarbas!("Audio", "hda", "Intel HDA: {:04x}:{:04x} BAR0={:#x}", dev.vendor_id, dev.device_id, dev.bar0);
 
             w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) | HDA_GCTL_RESET);
             for _ in 0..100 { core::hint::spin_loop(); }
@@ -105,7 +104,7 @@ unsafe fn init_hda() -> bool {
                 for _ in 0..5000 { core::hint::spin_loop(); if r32(bar, HDA_ICW) & 0x80000000 != 0 { break; } }
                 let resp = r32(bar, HDA_ICR);
                 if resp != 0 && resp != 0xFFFFFFFF {
-                    serial_println!("[HDA] Codec {}: vendor={:#08x}", cad, resp);
+                    k_nano::slog_jarbas!("Audio", "hda", "Codec {}: vendor={:#08x}", cad, resp);
 
                     // SD0: Capture
                     w32(bar, SD0_BDLPL, CAPTURE_BUF as u32);
@@ -127,7 +126,7 @@ unsafe fn init_hda() -> bool {
                     for _ in 0..100 { core::hint::spin_loop(); }
                     w32(bar, SD1_CTL, 0x82);
 
-                    serial_println!("[HDA] Capture SD0 @ 0x{:x} + Playback SD1 @ 0x{:x}", CAPTURE_BUF, PLAYBACK_BUF);
+                    k_nano::slog_jarbas!("Audio", "hda", "Capture SD0 @ 0x{:x} + Playback SD1 @ 0x{:x}", CAPTURE_BUF, PLAYBACK_BUF);
                     HDA_BAR.store(bar, Ordering::Relaxed);
                 }
             }

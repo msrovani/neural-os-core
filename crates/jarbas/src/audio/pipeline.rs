@@ -2,7 +2,6 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use event_bus::{Receiver, Event, CapabilityToken};
 use crate::audio::vad::VAD;
 use crate::audio::tts::FrameProcessor;
-use k_nano::serial_println;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 pub static BARGE_IN: AtomicBool = AtomicBool::new(false);
@@ -44,14 +43,14 @@ impl Agent for AudioPipelineAgent {
         if let Some(ev) = self.llm_receiver.try_receive() {
             if let Ok(text) = core::str::from_utf8(&ev.payload) {
                 self.pending_text.push(alloc::string::String::from(text));
-                serial_println!("[PIPELINE] LLM response enqueued for TTS");
+                k_nano::slog_jarbas!("PIPELINE", "info", "LLM response enqueued for TTS");
             }
         }
 
         if BARGE_IN.load(Ordering::Relaxed) {
             if self.active_frame.is_some() {
                 self.active_frame = None;
-                serial_println!("[PIPELINE] Barge-in: TTS interrupted by user");
+                k_nano::slog_jarbas!("PIPELINE", "info", "Barge-in: TTS interrupted by user");
             }
             BARGE_IN.store(false, Ordering::Relaxed);
         }
@@ -70,7 +69,7 @@ impl Agent for AudioPipelineAgent {
                 });
                 if fp.is_done() {
                     self.active_frame = None;
-                    serial_println!("[PIPELINE] TTS frame stream complete");
+                    k_nano::slog_jarbas!("PIPELINE", "info", "TTS frame stream complete");
                 }
             }
         } else if !self.pending_text.is_empty() {
@@ -78,7 +77,7 @@ impl Agent for AudioPipelineAgent {
             let fp = FrameProcessor::new(&text);
             let total_frames = fp.estimated_frames();
             self.active_frame = Some(fp);
-            serial_println!("[PIPELINE] Starting TTS stream: ~{} frames (12.5 Hz)", total_frames);
+            k_nano::slog_jarbas!("PIPELINE", "info", "Starting TTS stream: ~{} frames (12.5 Hz)", total_frames);
         }
 
         if self.frame_counter % 10 == 0 {

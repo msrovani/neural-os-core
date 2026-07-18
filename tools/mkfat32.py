@@ -248,6 +248,21 @@ def populate(path):
     # GSP só em target/firmware; embute no FAT apenas com FW_FAT_CHIPS opt-in
     if chip_allow is None or (chip_allow & {"tu102", "ad102", "ga102", "tu106"}):
         collect_fw_from(os.path.join(ROOT, "target", "firmware"), gsp_only=True)
+
+    # KernelPack NVIDIA/Intel (host packers → target/)
+    for nkp_name, fat_name in (
+        ("NKP_SM61.BIN", "NKP_SM61.BIN"),
+        ("NKP_VECTOR_ADD.BIN", "NKP_VADD.BIN"),
+        ("NKP_GEN9.BIN", "NKP_GEN9.BIN"),
+        ("NKP_DG2.BIN", "NKP_DG2.BIN"),
+        ("NKP_GFX1030.BIN", "NKP_GFX1030.BIN"),
+        ("NKP_GFX1103.BIN", "NKP_GFX1103.BIN"),
+        ("NKP_GFX90C.BIN", "NKP_GFX90C.BIN"),
+    ):
+        nkp_path = os.path.join(ROOT, "target", nkp_name)
+        if os.path.isfile(nkp_path) and not any(e[0] == fat_name for e in files):
+            files.append((fat_name, nkp_path))
+
     # CONFIG.TXT — BOOT_MODE via env ou inferido do path (passado por populate caller)
     boot_mode = os.environ.get("BOOT_MODE", "hw").strip().lower()
     if boot_mode not in ("qemu", "hw"):
@@ -257,11 +272,12 @@ def populate(path):
         f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\nLOG_TO_FAT32=1\n"
     ).encode()
     files.append(("CONFIG.TXT", config_content))
-    # BOOT.LOG pré-alocado (256 KiB): kernel fat-boot-log sobrescreve via USB-MSC/ATA
-    # sem alocar clusters no boot (notebooks sem serial).
+    # BOOT.LOG pre-alocado (256 KiB): USB-MSC ou soft-reboot UEFI ramlog.
     boot_log = (
-        b"[S] neural-os-core BOOT.LOG placeholder - rewritten at runtime\n"
-        + b"\x00" * (256 * 1024 - 64)
+        b"[S] neural-os-core BOOT.LOG\n"
+        b"# Placeholder - apos soft-reboot HW deve ter linhas [T+] / Knn:\n"
+        b"# Se ainda so isto: UEFI nao achou SFS do volume de dados.\n"
+        + b"\x00" * (256 * 1024 - 160)
     )
     files.append(("BOOT.LOG", boot_log[: 256 * 1024]))
 

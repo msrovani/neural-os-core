@@ -5,7 +5,7 @@
 **Depende de:** ADR-0041 (capability PoC P0–P9), Pacotes A/B boot  
 **Sprint:** ADR-0042 (**N1–N5 ✅**; Sprint Sound = voz leftovers). Sprint 107 Voice ✅ FECHADA.  
 **Release:** **N1–N5 + wire N2.5–N5.7 = marco `v1.8.0`**. A declaração de `v2.0.0` exige review formal adicional.
-**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). **`v1.8.5`** = tag de teste / não estável pós-marco (SESSION_121–129); **não** substitui o marco estável `v1.8.0` e **não** declara `v2.0.0`. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
+**Policy:** `1.5.7` = Cap PoC + boot OK; **`v1.7.0`** (2026-07-15) = marco N1 ✅ + BitNet 2B LOADED; **`v1.7.4`**–**`v1.7.7`** = N2–N5 CLOSED; **`v1.7.8`**–**`v1.7.11`** = wire N2.5–N5.7; **`v1.8.0`** (2026-07-16) = marco consolidado adequação K²CHJ (N1–N5 + wire crates). **`v1.8.5`** = consolidação teste; **`v1.8.6`** = ADR-0041 H4+/H5+/AS (SESSION_140); **não** declara `v2.0.0`. 1.6.0-dev absorvida (sem tag 1.6.0 vazia).  
 **Não declarar `v2.0.0` até review formal de qualidade ADR (voz Sprint Sound + checklist conjunto).**
 
 
@@ -17,13 +17,16 @@ O boot UEFI alcançou **Runtime estável** (AgentFleet → AgentScheduler + time
 
 **Regra de versionamento:** não chamar o tree atual de “v2.0 feito”. A cadeia funcional K²CHJ e o wire estão completos no marco `v1.8.0`; `v2.0.0` só pode ser declarado após review formal da ADR e da qualidade de voz.
 
-### Cadeia canônica (dependência + anel)
+### Cadeia canônica (dependência + anel de *função*)
 
 ```text
 k-nano → k-ai → cortex → hermes → jarbas
 ```
 
 Sem ciclos. Camada de cima orquestra; a de baixo não conhece persona/UI.
+
+**Privilégio / MMIO (ADR-0041 §9, 2026-07-18):** anéis R0 k-nano → R1 **k-HAL** (VirtIO-bound) → R2 cortex+k-ai → R3 hermes+jarbas.  
+Identidades desta tabela **permanecem**; ownership de BAR deixa de ser jarbas/hermes.
 
 ### Identidade funcional
 

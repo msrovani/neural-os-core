@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.8.5 TEST
+# SESSION INDEX — neural-os-core v1.8.6 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,8 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 140 | ADR-41 | — | H4+/H5+/AS + HalOffer Cap → v1.8.6 | QUEUE_NOTIFY real; Cap grant bind; AS shallow PoC; 1.8.x |
+| 139 | HW | — | USB BOOT.LOG + console FB | FAT 0x0C+ESP; BltOnly patch; console_clear |
 | 107 | 107 | — | Boot A/B + Cap P0–P9 + ADR-0042 | Runtime QEMU OK; cadeia k-nano→…→jarbas; próximo N1 legível |
 | 107_CLOSE | 107 | — | Fecho Voice I/O | 5 loops WHPX; PASS parcial forte+; handoff de gaps para Sprint Sound |
 | 108 | 107 | — | N1 ✅ + BitNet 2B LOADED → v1.7.0 | Soft-float/cargo nk; 2B ~590MB L=30 FWD; TTS empty generate; e2e clima PARCIAL |

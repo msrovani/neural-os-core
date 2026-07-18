@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [1.8.6] — 2026-07-18 — ADR-0041 H4+/H5+/AS + HalOffer Cap (TEST)
+
+### ADR-0041 restante (SESSION_140)
+- **H4+ QUEUE_NOTIFY:** `k_hal::virtio` map UC VirtIO-PCI + `try_pci_queue_notify` → `NotifySent` / `NotifySkipped` honesto
+- **Residual MMIO:** hermes/jarbas FE (HalOffer); VGACNTRL → `k_hal::gpu::backend::disable_intel_vga_plane`; `virtio_gpu` / `link_watcher` sem BAR
+- **H5+ Cap:** `grant_fe` no `offer::bind`; ports `fe_*` + `check_fe_bound`; demo R3 Deny / Bound Allow
+- **AS shallow:** `address_space::demo_as_r1_r3_shallow` (CR3 + touch BAR + restore; ≠ isolamento produção)
+- **HalOffer:** API R3 genérica; VirtIO = transporte BE; slog canônico `[T+n] [Rn] [k-xxx]`
+- **Versão:** v1.8.6 TEST — **não** v2.0.0; ADR lifecycle `fazendo`
+
 ### HW USB boot diagnostics (SESSION_139)
 - **Console FB legível:** `console_clear` / `console_print` em `jarbas/display/fb.rs`; `boot_ckpt`/`boot_splash` e `vga_buffer::fb_print` usam o mesmo cursor (limpa faixa — sem TRACE/ghost).
 - **BOOT.LOG:** `fat-boot-log` no artifact boot; overwrite 8.3 + `heap_ready`; `init_after_usb` + ckpts K0–K17.

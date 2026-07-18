@@ -9,8 +9,6 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use cortex::tensor::{PackedTernaryTensor, Tensor};
-use k_nano::serial_println;
-
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_VERSION: u32 = 3;
 
@@ -218,8 +216,7 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
     let metadata_kv_count = read_u64(data, &mut offset);
 
     let header = GgufHeader { magic, version, tensor_count, metadata_kv_count };
-    serial_println!("[GGUF] Header: version={} tensors={} metadata={}",
-        version, tensor_count, metadata_kv_count);
+    k_nano::slog_kai!("GGUF", "info", "Header: version={} tensors={} metadata={}", version, tensor_count, metadata_kv_count);
 
     // Metadata
     let mut metadata = Vec::new();
@@ -249,8 +246,7 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
 
     let raw_data = data[data_start..].to_vec();
 
-    serial_println!("[GGUF] Parse OK. Metadata: {} items, Tensors: {} items, Data: {} bytes",
-        metadata.len(), tensors.len(), raw_data.len());
+    k_nano::slog_kai!("GGUF", "info", "Parse OK. Metadata: {} items, Tensors: {} items, Data: {} bytes", metadata.len(), tensors.len(), raw_data.len());
 
     Ok(GgufFile { header, metadata, tensors, data_start: data_start as u64, data: raw_data })
 }

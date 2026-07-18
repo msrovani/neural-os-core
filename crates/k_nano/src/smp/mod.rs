@@ -13,7 +13,7 @@ use crate::apic;
 
 use crate::memory;
 
-use crate::{println, serial_println};
+use crate::{println};
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -49,7 +49,7 @@ extern "C" fn ap_entry(_cpu_id: u64) -> ! {
 
     let cpu_id = percpu::CPU_COUNT.fetch_add(1, Ordering::SeqCst);
 
-    serial_println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
+    crate::slog_nano!("SMP", "info", "AP {} entrou em modo 64-bit Rust!", cpu_id);
 
     println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
 
@@ -117,7 +117,7 @@ fn busy_wait_us(us: u64) {
 
 pub unsafe fn init_smp() {
 
-    serial_println!("[SMP] Inicializando SMP...");
+    crate::slog_nano!("SMP", "info", "Inicializando SMP...");
 
     println!("[SMP] Inicializando SMP...");
 
@@ -125,7 +125,7 @@ pub unsafe fn init_smp() {
 
     if !apic::USING_APIC.load(Ordering::Relaxed) {
 
-        serial_println!("[SMP] APIC nao disponivel — SMP ignorado.");
+        crate::slog_nano!("SMP", "info", "APIC nao disponivel — SMP ignorado.");
 
         println!("[SMP] APIC nao disponivel — SMP ignorado.");
 
@@ -149,7 +149,7 @@ pub unsafe fn init_smp() {
 
     percpu::init_bsp_percpu(bsp_lapic_id);
 
-    serial_println!("[SMP] BSP PerCpu inicializado. LAPIC ID: {}", bsp_lapic_id);
+    crate::slog_nano!("SMP", "info", "BSP PerCpu inicializado. LAPIC ID: {}", bsp_lapic_id);
 
     println!("[SMP] BSP PerCpu inicializado.");
 
@@ -159,7 +159,7 @@ pub unsafe fn init_smp() {
 
     if ap_expected == 0 {
 
-        serial_println!("[SMP] Nenhum AP detectado (MADT: {} LAPICs). SMP ignorado.", ap_expected);
+        crate::slog_nano!("SMP", "info", "Nenhum AP detectado (MADT: {} LAPICs). SMP ignorado.", ap_expected);
 
         println!("[SMP] Sem APs — modo single-core.");
 
@@ -185,7 +185,7 @@ pub unsafe fn init_smp() {
 
     };
 
-    serial_println!("[SMP] Trampoline page em 0x{:x}", tramp_phys);
+    crate::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
 
     println!("[SMP] Trampoline page em low memory.");
 
@@ -251,15 +251,10 @@ pub unsafe fn init_smp() {
 
     let tsize = unsafe { trampoline::trampoline_size() };
 
-    serial_println!(
-
-        "[SMP] Trampoline em 0x{:x} ({} bytes).",
-
+    crate::slog_nano!("SMP", "info", "Trampoline em 0x{:x} ({} bytes).",
         tramp_phys,
-
-        tsize
-
-    );
+        
+        tsize);
 
     println!("[SMP] Trampoline configurado.");
 
@@ -267,13 +262,7 @@ pub unsafe fn init_smp() {
 
     let tramp_vector = (tramp_phys >> 12) as u8;
 
-    serial_println!(
-
-        "[SMP] INIT-SIPI-SIPI (vetor={:#04x})...",
-
-        tramp_vector
-
-    );
+    crate::slog_nano!("SMP", "info", "INIT-SIPI-SIPI (vetor={:#04x})...", tramp_vector);
 
     println!("[SMP] INIT-SIPI-SIPI...");
 
@@ -319,13 +308,7 @@ pub unsafe fn init_smp() {
 
     let ap_woke = AP_ENTRY_COUNTER.load(Ordering::Relaxed);
 
-    serial_println!(
-
-        "[SMP] APs acordados: {}",
-
-        ap_woke
-
-    );
+    crate::slog_nano!("SMP", "info", "APs acordados: {}", ap_woke);
 
     println!("[SMP] INIT-SIPI-SIPI concluido.");
 

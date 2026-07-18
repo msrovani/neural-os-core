@@ -6,7 +6,6 @@ use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::VirtAddr;
 
 use crate::address_space::{self, AddressSpace};
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_MAP_DMA, SYS_PIN_DMA};
 
 /// VA base do buffer DMA no AddressSpace K-IA (após JARBAS_FB_VA).
@@ -45,7 +44,7 @@ pub struct PinnedDmaBuf {
 /// Aloca e registra `n` frames como não-reclaimáveis. Exige Cap::PIN_DMA.
 pub fn pin_frames(n: usize, held: Cap) -> Result<PinnedDmaBuf, &'static str> {
     if !held.contains(Cap::PIN_DMA) {
-        serial_println!("[CapGate] DENY PIN_DMA held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "info", "DENY PIN_DMA held=0x{:x}", held.bits());
         return Err("EPERM: Cap::PIN_DMA");
     }
     let _ = syscall::dispatch(SYS_PIN_DMA, n as u64, held)?;
@@ -88,7 +87,7 @@ pub unsafe fn map_pinned(
     held: Cap,
 ) -> Result<u64, &'static str> {
     if !held.contains(Cap::MAP_DMA) {
-        serial_println!("[CapGate] DENY MAP_DMA held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "info", "DENY MAP_DMA held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_DMA");
     }
     let _ = syscall::dispatch(SYS_MAP_DMA, buf.phys, held)?;
@@ -178,7 +177,7 @@ pub fn pinned_phys_at(buf: &PinnedDmaBuf, page_idx: usize) -> Result<u64, &'stat
 
 /// Demo non-fatal: deny Cap → pin+map SUCCESS → log phys VirtIO stub → restore CR3.
 pub fn demo_kia_dma() -> Result<(), &'static str> {
-    serial_println!("[P5] K-IA DMA pin demo");
+    k_nano::slog_bin!("P5", "info", "K-IA DMA pin demo");
 
     if pin_frames(DEMO_PIN_PAGES, Cap::EMPTY).is_ok() {
         return Err("p5: Cap vazia nao deveria PIN_DMA");
@@ -190,10 +189,10 @@ pub fn demo_kia_dma() -> Result<(), &'static str> {
     let mut buf = match pin_frames(DEMO_PIN_PAGES, Cap::PIN_DMA) {
         Ok(b) => b,
         Err(e) => {
-            serial_println!("[P5] WARN pin_frames: {} — Cap-only path", e);
+            k_nano::slog_bin!("P5", "info", "WARN pin_frames: {} — Cap-only path", e);
             syscall::dispatch(SYS_PIN_DMA, DEMO_PIN_PAGES as u64, Cap::PIN_DMA)?;
             syscall::dispatch(SYS_MAP_DMA, 0, Cap::MAP_DMA)?;
-            serial_println!("[P5] SUCCESS Cap PIN_DMA/MAP_DMA (sem frames)");
+            k_nano::slog_bin!("P5", "info", "SUCCESS Cap PIN_DMA/MAP_DMA (sem frames)");
             return Ok(());
         }
     };
@@ -217,13 +216,11 @@ pub fn demo_kia_dma() -> Result<(), &'static str> {
         return Err("p5: touch DMA VA falhou");
     }
 
-    serial_println!(
-        "[P5] SUCCESS DMA pin pages={} phys={:x} va={:x} (VirtIO buf stub ready) pinned={}",
+    k_nano::slog_bin!("P5", "info", "SUCCESS DMA pin pages={} phys={:x} va={:x} (VirtIO buf stub ready) pinned={}",
         buf.pages,
         virtio_buf_phys(&buf),
         mapped,
-        pinned_count()
-    );
+        pinned_count());
     // Mantém pinado no boot PoC (não unpin) — frames não-reclaimáveis até reboot.
     Ok(())
 }

@@ -3,7 +3,6 @@
 //! Sandbox dentro de sandbox: MicroPython roda isolado no WASM executor.
 //! SEM FALLBACK STUB - requer bytecode MicroPython WASM real.
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
@@ -21,13 +20,13 @@ use crate::wasm::WasmExecutor;
 pub fn load_micropython_wasm() -> Result<Vec<u8>, &'static str> {
     // Tenta carregar do VFS via globals stub
     if let Ok(bytes) = crate::globals::read_vfs("/micropython/micropython.wasm") {
-        k_nano::serial_println!("[MicroPython] Carregado do VFS: {} bytes", bytes.len());
+        k_nano::slog_hermes!("MicroPython", "info", "Carregado do VFS: {} bytes", bytes.len());
         return Ok(bytes);
     }
     
     // ERRO: não há fallback stub
-    k_nano::serial_println!("[MicroPython] ERRO: micropython.wasm não encontrado no VFS");
-    k_nano::serial_println!("[MicroPython] Execute: python tools/build_micropython_wasm.py");
+    k_nano::slog_hermes!("MicroPython", "info", "ERRO: micropython.wasm não encontrado no VFS");
+    k_nano::slog_hermes!("MicroPython", "info", "Execute: python tools/build_micropython_wasm.py");
     Err("MicroPython WASM bytecode não encontrado - execute tools/build_micropython_wasm.py")
 }
 
@@ -55,7 +54,7 @@ impl MicroPythonSandbox {
         let wasm_bytes = load_micropython_wasm()?;
         self.executor.load(&wasm_bytes)?;
         self.loaded = true;
-        k_nano::serial_println!("[MicroPython] Sandbox carregado com heap de {} KB", self.heap_size / 1024);
+        k_nano::slog_hermes!("MicroPython", "info", "Sandbox carregado com heap de {} KB", self.heap_size / 1024);
         Ok(())
     }
 
@@ -67,7 +66,7 @@ impl MicroPythonSandbox {
             self.load()?;
         }
 
-        k_nano::serial_println!("[MicroPython] Executando: {}", python_code);
+        k_nano::slog_hermes!("MicroPython", "info", "Executando: {}", python_code);
 
         // Converte código Python para argumento i64 (simplificado)
         // Na implementação completa, seria compilado para bytecode MicroPython
@@ -77,12 +76,12 @@ impl MicroPythonSandbox {
         match self.executor.call_export("python_eval", &[code_hash as i64]) {
             Ok(Some(result)) => {
                 let output = alloc::format!("[MicroPython] Result: {}", result);
-                k_nano::serial_println!("{}", output);
+                k_nano::slog_hermes!("Log", "msg", "{}", output);
                 Ok(output)
             }
             Ok(None) => Ok("[MicroPython] Executed (no result)".to_string()),
             Err(e) => {
-                k_nano::serial_println!("[MicroPython] Erro: {}", e);
+                k_nano::slog_hermes!("MicroPython", "info", "Erro: {}", e);
                 Err(e)
             }
         }
@@ -112,13 +111,13 @@ impl MicroPythonSandbox {
     /// Reset do sandbox (limpa estado)
     pub fn reset(&mut self) {
         self.executor.reset();
-        k_nano::serial_println!("[MicroPython] Sandbox resetado");
+        k_nano::slog_hermes!("MicroPython", "info", "Sandbox resetado");
     }
 
     /// Define tamanho do heap Python
     pub fn set_heap_size(&mut self, size: usize) {
         self.heap_size = size;
-        k_nano::serial_println!("[MicroPython] Heap definido para {} KB", size / 1024);
+        k_nano::slog_hermes!("MicroPython", "info", "Heap definido para {} KB", size / 1024);
     }
 }
 
@@ -234,12 +233,12 @@ pub fn micropython_wasi_to_skill(wasi_call: &str) -> Option<&'static str> {
 /// Intercepta chamadas WASI do MicroPython e roteia para Skills
 pub fn intercept_wasi_call(wasi_call: &str, _args: &[i64]) -> Result<i64, &'static str> {
     if let Some(skill_name) = micropython_wasi_to_skill(wasi_call) {
-        k_nano::serial_println!("[MicroPython-WASI] {} -> {}", wasi_call, skill_name);
+        k_nano::slog_hermes!("MicroPython", "WASI", "{} -> {}", wasi_call, skill_name);
         // Na implementação completa, chamaria o skill via SkillRegistry
         // Por agora retorna sucesso simulado
         Ok(0)
     } else {
-        k_nano::serial_println!("[MicroPython-WASI] Chamada não mapeada: {}", wasi_call);
+        k_nano::slog_hermes!("MicroPython", "WASI", "Chamada não mapeada: {}", wasi_call);
         Err("WASI call not mapped")
     }
 }
@@ -248,15 +247,15 @@ pub fn intercept_wasi_call(wasi_call: &str, _args: &[i64]) -> Result<i64, &'stat
 pub fn register_micropython_skill() -> Result<(), &'static str> {
     let mut skill = MicroPythonSkill::new("micropython");
     skill.init()?;
-    k_nano::serial_println!("[MicroPython] Skill pronta para registro no SkillRegistry");
+    k_nano::slog_hermes!("MicroPython", "info", "Skill pronta para registro no SkillRegistry");
     Ok(())
 }
 
 /// Init não-fatal no boot — WASM pode ser gerado depois via build_micropython_wasm.py.
 pub fn try_init_at_boot() {
     match register_micropython_skill() {
-        Ok(()) => k_nano::serial_println!("[MicroPython] Sandbox ativo"),
-        Err(e) => k_nano::serial_println!("[MicroPython] Adiado: {} (rode tools/build_micropython_wasm.py)", e),
+        Ok(()) => k_nano::slog_hermes!("MicroPython", "info", "Sandbox ativo"),
+        Err(e) => k_nano::slog_hermes!("MicroPython", "info", "Adiado: {} (rode tools/build_micropython_wasm.py)", e),
     }
 }
 

@@ -62,20 +62,23 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0038-ecosystem-optimization.md` | Accepted | `pesquisa` | #355–360 | Auditoria e substituições |
 | `0039-boot-flow.md` | Accepted | `modernizada` | Boot 8 fases | Alinhada a Pacotes A/B |
 | `0040-filesystem-architecture.md` | Accepted | `completa` | #417–423 | MVP aceite 2026-07-16; **residuals `por_fazer`** (não reabrem ADR) |
-| `0041-k2chj-capability-rings.md` | Accepted | `completa` | #424–432 | PoC P0–P9, não produção plena |
-| `0042-k2chj-adequacao-boot.md` | Accepted | `modernizada` | #433–440, #457 | N1–N5 + wire em v1.8.0; tree teste v1.8.5 (não estável) |
+| `0041-k2chj-capability-rings.md` | Accepted | `fazendo` | #424–432, **#459** | PoC P0–P9 ✅; H1–H5 + **H4+/H5+/AS shallow** ✅ (1.8.x); HalOffer Cap grant; VirtIO=transporte BE; ≠ v2.0.0 |
+| `0042-k2chj-adequacao-boot.md` | Accepted | `modernizada` | #433–440, #457 | N1–N5 + wire em v1.8.0; tree teste v1.8.6 (não estável) |
 | `0043-cubecl-patterns-and-technologies.md` | Accepted | `pesquisa` | GPU patterns | Análise tecnológica |
 | `0044-edge-python-patterns.md` | Accepted | `pesquisa` | VM/SSA patterns | Análise tecnológica |
-| `0045-sound-voice-stack.md` | Accepted | `conflito_id` | #75, #83, #84, #315.21–25, #360, #438, #442 | **Canônico ADR-0045**; Sound ativa |
-| `0045-perci-bitwork-integration.md` | Proposed | `conflito_id` | Perci/Bitwork | Pesquisa, não canônica para o ID |
+| `0045-sound-voice-stack.md` | Accepted | `completa` | #75, #83, #84, #315.21–25, #360, #438, #442 | Canônico Sound; residuals VITS/soft-float/jarbas cutover |
 | `0046-airllm-gguf-streaming.md` | Accepted (MVP) | `completa` | #377, #449 | MVP AirLLM ✅; hot-swap ATA+Net code ✅ SESSION_128 (RX runtime gate); residuals: DMA prefetch / stream-to-disk / K-quants / e2e GGUF grande |
 | `0047-latent-space-ai-os.md` | Accepted (MVP parcial) | `completa` | LatentBus/Evolve/Probe PoC | **Canônico base**; SESSION_126; defer cross-modelo/Genesis/ISA plena |
 | `0047-gpu-compute-pipeline.md` | Accepted (MVP parcial) | `completa` | Extensão GPU | G1+G2 PoC; G3–G5 + DP4A defer |
 | `0047-hmi-neural-desktop.md` | Accepted (MVP parcial) | `completa` | Extensão HMI | H1+H4 PoC; H2/H3/H5 defer |
-| `0048-nvidia-compute-multigeracao.md` | Proposed | `por_fazer` | #454; NVIDIA ACR/GSP/Kernel Pack | Pascal = primeiro gate HW; contrato cobre NVIDIA multigeração |
-| `0049-amd-compute-multigeracao.md` | Proposed | `por_fazer` | #455; AMD PSP/KIQ/MES/Kernel Pack | IP Discovery; iGPU display + dGPU AI; sem ROCm no alvo |
-| `0050-intel-compute-multigeracao.md` | Proposed | `por_fazer` | #456; Intel GuC/walkers/Kernel Pack | GMD_ID; Gen9 gate lab; Arc CCS opcional; sem L0 no alvo |
-| `NeuralFS.md` | Proposed | `por_fazer` | #422 | RAM I/O ✅ SESSION_123; **residual** disco fisico / multi-level |
+| `0048-nvidia-compute-multigeracao.md` | Proposed | `fazendo` | #454; NVIDIA ACR/GSP/Kernel Pack | P0 PMC+DID; P1 NKP+session; ACR dual-shadow; canário HW aberto |
+| `0049-amd-compute-multigeracao.md` | Proposed | `fazendo` | #455; AMD PSP/KIQ/MES/Kernel Pack | Discovery parse+PSP Degrau+KIQ/MES+pack gfx1030; golden HW aberto |
+| `0050-intel-compute-multigeracao.md` | Proposed | `fazendo` | #456; Intel GuC/walkers/Kernel Pack | GMD+DID; GuC/Gen9 Degrau; dual iGPU/dGPU; golden HW aberto |
+| `0051-hermes-ecosystem-packages.md` | Accepted (MVP) | `fazendo` | PackageHub + VFS | SESSION_135: stubs Agency removidos; contrato em ADR-0052 |
+| `0052-neural-artifact-contract.md` | Accepted (MVP) | `fazendo` | schema/hash/sig/acionaveis | Deny unsigned; Hermes create; import sandbox |
+| `0053-hanr-parity-marketplace-trust.md` | Accepted (MVP) | `fazendo` | HANR parity | SESSION_136: session Ed25519, market, memory, MCP mínimo |
+| `0054-perci-bitwork-integration.md` | Proposed | `pesquisa` | Perci/Bitwork | Ex-0045 conflito; **adiada** — CognitiveRouter Bitwork→Trinity; sem wire |
+| `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)
 
@@ -86,7 +89,7 @@ Triagem SESSION_125: nenhum item abaixo é viável agora (precisa Net / HW real 
 | exFAT/NTFS/EXT **write** | #417 w | Risco mídia sem validação HW |
 | MHI DMA NVMe↔DRAM/VRAM | #420 DMA | Path DMA storage/GPU não maduro |
 | SysInstaller | #421 | UI/LLM + write HD |
-| NeuralFS disco fisico | #422 / NeuralFS.md | Risco + BlockDevice persistência plena |
+| NeuralFS disco fisico | #422 / NeuralFS.md | USB lock + GPT + unified exFAT ✅ SESSION_133; residual power-loss/stress |
 | GPU Direct Storage | #423 | GPU compute + NVMe DMA |
 | Cloud mounts plenos | #418 net | Sprint Net |
 | Storage Manager App UI | #419 UI | Settings/jarbas; CLI report já existe |
@@ -96,7 +99,7 @@ Triagem SESSION_125: nenhum item abaixo é viável agora (precisa Net / HW real 
 Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração aprovada.
 
 - **0026:** `0026-ecosystem-batch3-analysis.md` é a ADR canônica. `0026-sprint-29-xhci-usb-driver.md` é um plano de sprint histórico.
-- **0045:** `0045-sound-voice-stack.md` é a decisão canônica Accepted. `0045-perci-bitwork-integration.md` é pesquisa/proposta independente.
+- **0045:** `0045-sound-voice-stack.md` é a decisão canônica Accepted. Perci/Bitwork migrou para `0054-perci-bitwork-integration.md` (pesquisa adiada).
 - **0047:** `0047-latent-space-ai-os.md` é o documento-base. GPU e HMI são extensões nomeadas da família, não novas decisões numeradas.
 - **Lacuna 0008:** não há arquivo ADR-0008 no repositório; o índice não infere conteúdo ausente.
 

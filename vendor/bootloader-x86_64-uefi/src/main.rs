@@ -10,6 +10,7 @@ use bootloader_x86_64_common::{
 };
 use core::{
     cell::UnsafeCell,
+    fmt::Write,
     ops::{Deref, DerefMut},
     ptr, slice,
 };
@@ -32,6 +33,7 @@ use uefi::{
     },
     table::boot::{
         AllocateType, MemoryType, OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol,
+        SearchType,
     },
 };
 use x86_64::{
@@ -71,6 +73,9 @@ fn main_inner(image: Handle, mut st: SystemTable<Boot>) -> Status {
     unsafe {
         *SYSTEM_TABLE.get() = Some(st.unsafe_clone());
     }
+
+    // Soft-reboot do kernel: grava BOOT.LOG no volume FAT32 de dados ANTES de carregar o kernel.
+    flush_boot_ramlog_if_needed(image, &mut st);
 
     let mut boot_mode = BootMode::Disk;
 
@@ -182,6 +187,246 @@ fn main_inner(image: Handle, mut st: SystemTable<Boot>) -> Status {
 pub enum BootMode {
     Disk,
     Tftp,
+}
+
+// ── BOOT.LOG via soft-reboot (kernel → RAM @ 256MiB → UEFI SFS) ─────────────
+// Deve bater com k_nano::boot_ramlog (PHYS + magics).
+const BOOT_RAMLOG_PHYS: u64 = 0x1000_0000;
+const MAGIC_NEED_FLUSH: u64 = u64::from_le_bytes(*b"NEURLOG!");
+const MAGIC_FLUSHED: u64 = u64::from_le_bytes(*b"NEURDONE");
+const BOOT_RAMLOG_HDR: usize = 16;
+const BOOT_LOG_CAP: usize = 256 * 1024;
+
+fn crc32_24(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (!(crc & 1)).wrapping_add(1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    (!crc) & 0x00FF_FFFF
+}
+
+fn flush_boot_ramlog_if_needed(image: Handle, st: &mut SystemTable<Boot>) {
+    // Cold boot apos HALT: se RLOG.OK existe no ESP, avisa kernel pular soft-reboot.
+    if consume_rlog_ok(image, st) {
+        unsafe {
+            core::ptr::write_volatile(BOOT_RAMLOG_PHYS as *mut u64, MAGIC_FLUSHED);
+            core::ptr::write_volatile((BOOT_RAMLOG_PHYS + 8) as *mut u32, 0u32);
+            core::ptr::write_volatile((BOOT_RAMLOG_PHYS + 12) as *mut u32, 0u32);
+        }
+        let _ = writeln!(st.stdout(), "[RAMLOG] RLOG.OK — skip soft-reboot neste boot");
+    }
+
+    let magic = unsafe { core::ptr::read_volatile(BOOT_RAMLOG_PHYS as *const u64) };
+    if magic != MAGIC_NEED_FLUSH {
+        return;
+    }
+    let len = unsafe { core::ptr::read_volatile((BOOT_RAMLOG_PHYS + 8) as *const u32) } as usize;
+    let crc_ckpt = unsafe { core::ptr::read_volatile((BOOT_RAMLOG_PHYS + 12) as *const u32) };
+    let expect_crc = crc_ckpt & 0x00FF_FFFF;
+    let last_k = (crc_ckpt >> 24) as u8;
+    let data_cap = BOOT_LOG_CAP.saturating_sub(BOOT_RAMLOG_HDR);
+    let len = len.min(data_cap);
+    let data =
+        unsafe { slice::from_raw_parts((BOOT_RAMLOG_PHYS + BOOT_RAMLOG_HDR as u64) as *const u8, len) };
+    let got_crc = crc32_24(data);
+    let ram_ok = len > 0 && got_crc == expect_crc;
+
+    let _ = writeln!(
+        st.stdout(),
+        "[RAMLOG] magic OK last=K{} len={} crc_ok={} — gravando BOOT.LOG...",
+        last_k,
+        len,
+        ram_ok
+    );
+
+    let mut payload = [0u8; BOOT_LOG_CAP];
+    let n = if ram_ok {
+        payload[..len].copy_from_slice(data);
+        len
+    } else {
+        let stub = alloc_stub_msg(last_k);
+        let mut real = stub.len();
+        while real > 0 && stub[real - 1] == 0 {
+            real -= 1;
+        }
+        payload[..real].copy_from_slice(&stub[..real]);
+        real.max(64)
+    };
+    let write_slice = &payload[..n.min(BOOT_LOG_CAP)];
+
+    let mut ok = false;
+    if let Ok(handles) = st
+        .boot_services()
+        .locate_handle_buffer(SearchType::from_proto::<SimpleFileSystem>())
+    {
+        for &h in handles.handles() {
+            if try_write_boot_log_on_sfs(image, st, h, write_slice) {
+                ok = true;
+            }
+        }
+    }
+    if let Some(mut sfs) = locate_and_open_protocol::<SimpleFileSystem>(image, st) {
+        if write_boot_log_volume(sfs.deref_mut(), write_slice) {
+            ok = true;
+        }
+    }
+
+    if ok {
+        let _ = write_rlog_ok(image, st);
+        let _ = writeln!(
+            st.stdout(),
+            "[RAMLOG] BOOT.LOG OK (K{}). DESLIGUE e leia E:\\BOOT.LOG — HALT.",
+            last_k
+        );
+        unsafe {
+            core::ptr::write_volatile(BOOT_RAMLOG_PHYS as *mut u64, MAGIC_FLUSHED);
+        }
+    } else {
+        let _ = writeln!(
+            st.stdout(),
+            "[RAMLOG] FALHA SFS — last=K{} (tire foto desta tela)",
+            last_k
+        );
+        unsafe {
+            core::ptr::write_volatile(BOOT_RAMLOG_PHYS as *mut u64, 0u64);
+        }
+    }
+
+    loop {
+        let _ = writeln!(st.stdout(), "[RAMLOG] HALT — remova USB / leia BOOT.LOG");
+        for _ in 0..50_000_000 {
+            core::hint::spin_loop();
+        }
+    }
+}
+
+fn write_rlog_ok(image: Handle, st: &SystemTable<Boot>) -> bool {
+    let Some(mut sfs) = locate_and_open_protocol::<SimpleFileSystem>(image, st) else {
+        return false;
+    };
+    let Ok(mut root) = sfs.open_volume() else {
+        return false;
+    };
+    let mut name_buf = [0u16; 16];
+    let Ok(fname) = CStr16::from_str_with_buf("RLOG.OK", &mut name_buf) else {
+        return false;
+    };
+    let Ok(fh) = root.open(fname, FileMode::CreateReadWrite, FileAttribute::empty()) else {
+        return false;
+    };
+    let mut file = match fh.into_type() {
+        Ok(uefi::proto::media::file::FileType::Regular(f)) => f,
+        _ => return false,
+    };
+    let _ = file.write(b"1\n");
+    let _ = file.flush();
+    true
+}
+
+fn consume_rlog_ok(image: Handle, st: &SystemTable<Boot>) -> bool {
+    let Some(mut sfs) = locate_and_open_protocol::<SimpleFileSystem>(image, st) else {
+        return false;
+    };
+    let Ok(mut root) = sfs.open_volume() else {
+        return false;
+    };
+    let mut name_buf = [0u16; 16];
+    let Ok(fname) = CStr16::from_str_with_buf("RLOG.OK", &mut name_buf) else {
+        return false;
+    };
+    let Ok(fh) = root.open(fname, FileMode::ReadWrite, FileAttribute::empty()) else {
+        return false;
+    };
+    let _ = fh.delete();
+    true
+}
+
+fn alloc_stub_msg(last_k: u8) -> [u8; 192] {
+    let mut out = [0u8; 192];
+    let msg = b"[S] neural-os-core BOOT.LOG\n# RAM limpa no reset (CRC fail)\n# ultimo ckpt no header: K";
+    let mut i = 0;
+    for &b in msg {
+        out[i] = b;
+        i += 1;
+    }
+    if last_k >= 100 {
+        out[i] = b'0' + last_k / 100;
+        i += 1;
+    }
+    if last_k >= 10 {
+        out[i] = b'0' + (last_k / 10) % 10;
+        i += 1;
+    }
+    out[i] = b'0' + last_k % 10;
+    i += 1;
+    out[i] = b'\n';
+    let _ = i;
+    out
+}
+
+fn try_write_boot_log_on_sfs(
+    image: Handle,
+    st: &SystemTable<Boot>,
+    handle: Handle,
+    data: &[u8],
+) -> bool {
+    let opened = unsafe {
+        st.boot_services().open_protocol::<SimpleFileSystem>(
+            OpenProtocolParams {
+                handle,
+                agent: image,
+                controller: None,
+            },
+            OpenProtocolAttributes::GetProtocol,
+        )
+    };
+    let Ok(mut sfs) = opened else {
+        return false;
+    };
+    write_boot_log_volume(sfs.deref_mut(), data)
+}
+
+fn write_boot_log_volume(fs: &mut SimpleFileSystem, data: &[u8]) -> bool {
+    let Ok(mut root) = fs.open_volume() else {
+        return false;
+    };
+    let mut name_buf = [0u16; 16];
+    let Ok(fname) = CStr16::from_str_with_buf("BOOT.LOG", &mut name_buf) else {
+        return false;
+    };
+    // Preferir arquivo pré-alocado (ReadWrite); senão criar.
+    let file_handle = root
+        .open(fname, FileMode::ReadWrite, FileAttribute::empty())
+        .or_else(|_| {
+            root.open(
+                fname,
+                FileMode::CreateReadWrite,
+                FileAttribute::empty(),
+            )
+        });
+    let Ok(file_handle) = file_handle else {
+        return false;
+    };
+    let mut file = match file_handle.into_type() {
+        Ok(uefi::proto::media::file::FileType::Regular(f)) => f,
+        _ => return false,
+    };
+    if file.set_position(0).is_err() {
+        return false;
+    }
+    // Sobrescreve os 256 KiB pré-alocados (resto fica zero).
+    let mut payload = [0u8; BOOT_LOG_CAP];
+    let n = data.len().min(BOOT_LOG_CAP);
+    payload[..n].copy_from_slice(&data[..n]);
+    if file.write(&payload).is_err() {
+        return false;
+    }
+    let _ = file.flush();
+    true
 }
 
 fn load_ramdisk(

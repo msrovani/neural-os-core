@@ -1,6 +1,4 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use k_nano::serial_println;
-
 // USB Audio Class constants
 const UAC_HEADER: u8 = 0x01;
 const UAC_INPUT_TERMINAL: u8 = 0x02;
@@ -32,9 +30,9 @@ impl Agent for UsbAudioAgent {
     fn manifest(&self) -> &AgentManifest { &UAC_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
         if Self::probe_uac() {
-            serial_println!("[UAC] USB Audio Class device encontrado");
+            k_nano::slog_jarbas!("UAC", "info", "USB Audio Class device encontrado");
         } else {
-            serial_println!("[UAC] Nenhum dispositivo USB Audio Class encontrado");
+            k_nano::slog_jarbas!("UAC", "info", "Nenhum dispositivo USB Audio Class encontrado");
         }
         AgentTickResult::Done
     }

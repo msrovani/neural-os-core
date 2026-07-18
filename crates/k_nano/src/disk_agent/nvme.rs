@@ -78,9 +78,9 @@ impl NvmeDriver {
 
         if drv.admin_identify() && drv.create_io_cq() && drv.create_io_sq() {
             let gb = (drv.lba_count as u128 * drv.lba_size as u128) / (1024*1024*1024);
-            crate::serial_println!("[NVMe] NS{}: {} setores x {}B = {}GB", drv.nsid, drv.lba_count, drv.lba_size, gb);
+            crate::slog_nano!("NVMe", "info", "NS{}: {} setores x {}B = {}GB", drv.nsid, drv.lba_count, drv.lba_size, gb);
             let m = core::str::from_utf8(&drv.model).unwrap_or("NVMe");
-            crate::serial_println!("[NVMe] Modelo: {}", m.trim());
+            crate::slog_nano!("NVMe", "info", "Modelo: {}", m.trim());
             Some(drv)
         } else {
             None

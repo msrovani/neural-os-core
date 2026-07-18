@@ -8,8 +8,6 @@ use crate::audio::ringbuf::AudioRingBuffer;
 use crate::audio::vad::{VAD, VadTransition};
 use crate::audio::ser::{extract_features, classify_emotion};
 use crate::audio::settings;
-use crate::serial_println;
-
 /// Ring de captura (mic) — barge-in / pipeline lê daqui.
 pub static MIC_CAPTURE_RING: AudioRingBuffer = AudioRingBuffer::new();
 /// Ring de playback (TTS) — mixer drena para HDA/UAC.
@@ -71,7 +69,7 @@ impl Agent for JarvisVoiceAgent {
         if self.wake_window > 0 {
             self.wake_window -= 1;
             if self.wake_window == 0 {
-                serial_println!("[JARVIS] wake window expirada — dormindo");
+                k_nano::slog_jarbas!("Jarbas", "info", "wake window expirada — dormindo");
                 self.listening = false;
                 self.pcm_buffer.clear();
             }
@@ -80,11 +78,9 @@ impl Agent for JarvisVoiceAgent {
         while let Some(ev) = self.wakeword_in.try_receive() {
             let kw = core::str::from_utf8(&ev.payload).unwrap_or("?");
             self.wake_window = settings::wake_listen_ticks();
-            serial_println!(
-                "[JARVIS] wake word \"{}\" — janela {} ticks",
+            k_nano::slog_jarbas!("Jarbas", "info", "wake word \"{}\" — janela {} ticks",
                 kw,
-                self.wake_window
-            );
+                self.wake_window);
         }
 
         while let Some(ev) = self.audio_in.try_receive() {
@@ -113,7 +109,7 @@ impl Agent for JarvisVoiceAgent {
                     self.listening = true;
                     self.pcm_buffer.clear();
                     self.emotion_samples.clear();
-                    serial_println!("[JARVIS] Escutando...");
+                    k_nano::slog_jarbas!("Jarbas", "info", "Escutando...");
                 }
 
                 if self.listening {
@@ -124,25 +120,23 @@ impl Agent for JarvisVoiceAgent {
                 }
 
                 if transition == VadTransition::SpeechEnd && !self.pcm_buffer.is_empty() {
-                    serial_println!("[JARVIS] Fala detectada: {} amostras", self.pcm_buffer.len());
+                    k_nano::slog_jarbas!("Jarbas", "info", "Fala detectada: {} amostras", self.pcm_buffer.len());
 
                     if self.emotion_samples.len() >= settings::ser_min_samples() {
                         let features = extract_features(&self.emotion_samples);
                         if features.energy_rms > 50.0 {
                             let emotion = classify_emotion(&features);
                             LAST_VOICE_EMOTION.store(emotion as u8, Ordering::Relaxed);
-                            serial_println!(
-                                "[JARVIS] Emocao: {:?} (pitch={:.0}Hz, energy={:.0})",
+                            k_nano::slog_jarbas!("Jarbas", "info", "Emocao: {:?} (pitch={:.0}Hz, energy={:.0})",
                                 emotion,
                                 features.pitch_hz,
-                                features.energy_rms
-                            );
+                                features.energy_rms);
                         }
                     }
 
                     let text = crate::audio::stt::transcribe_global(&self.pcm_buffer);
                     if !text.is_empty() {
-                        serial_println!("[JARVIS] STT: \"{}\"", text);
+                        k_nano::slog_jarbas!("Jarbas", "info", "STT: \"{}\"", text);
                         let _ = crate::EVENT_BUS.publish(Event {
                             id: 0,
                             topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
@@ -160,10 +154,7 @@ impl Agent for JarvisVoiceAgent {
                             self.wake_window = self.wake_window.min(120);
                         }
                     } else {
-                        serial_println!(
-                            "[JARVIS] STT vazio ({} amostras) — sem USER_INTENT",
-                            self.pcm_buffer.len()
-                        );
+                        k_nano::slog_jarbas!("Jarbas", "info", "STT vazio ({} amostras) — sem USER_INTENT", self.pcm_buffer.len());
                         let _ = crate::EVENT_BUS.publish(Event {
                             id: 0,
                             topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
@@ -187,7 +178,7 @@ impl Agent for JarvisVoiceAgent {
                 continue;
             }
 
-            serial_println!("[JARVIS] TTS: \"{}\"", text);
+            k_nano::slog_jarbas!("Jarbas", "info", "TTS: \"{}\"", text);
             let clean = text
                 .trim_start_matches("[JARVIS] ")
                 .trim_start_matches("JARVIS: ");

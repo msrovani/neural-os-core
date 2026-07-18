@@ -230,13 +230,11 @@ pub fn mhi_tick(tick: u64) {
                 None => (4096, String::from("mhi")),
             }
         };
-        crate::serial_println!(
-            "[MHI] Queue migrate {:?}->{:?} @{:x} size={}",
+        crate::slog_nano!("MHI", "info", "Queue migrate {:?}->{:?} @{:x} size={}",
             from,
             to,
             addr.as_u64(),
-            size
-        );
+            size);
         MIGRATION_QUEUE.lock().push(MigrationRequest {
             phys_addr: addr.as_u64(),
             from: *from,
@@ -273,12 +271,10 @@ fn execute_soft_migrate(req: MigrationRequest) {
             .set_tier(PhysAddr::new(req.phys_addr), req.to);
         if ok {
             MHI_SOFT_META.fetch_add(1, Ordering::Relaxed);
-            crate::serial_println!(
-                "[MHI] soft-demote Dram->{:?} @{:x} size={} (DMA disk deferred)",
+            crate::slog_nano!("MHI", "info", "soft-demote Dram->{:?} @{:x} size={} (DMA disk deferred)",
                 req.to,
                 req.phys_addr,
-                req.size
-            );
+                req.size);
         } else {
             MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
         }
@@ -306,12 +302,10 @@ fn execute_soft_migrate(req: MigrationRequest) {
             reg.allocations.remove(&req.phys_addr);
             reg.register(new_pa, req.size, AllocTier::Dram, &req.owner);
             MHI_SOFT_COPY.fetch_add(1, Ordering::Relaxed);
-            crate::serial_println!(
-                "[MHI] soft-copy Dram page @{:x} -> @{:x} ({} bytes)",
+            crate::slog_nano!("MHI", "info", "soft-copy Dram page @{:x} -> @{:x} ({} bytes)",
                 req.phys_addr,
                 new_pa.as_u64(),
-                req.size
-            );
+                req.size);
             return;
         }
         MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
@@ -324,12 +318,10 @@ fn execute_soft_migrate(req: MigrationRequest) {
         .set_tier(PhysAddr::new(req.phys_addr), req.to);
     if ok {
         MHI_SOFT_META.fetch_add(1, Ordering::Relaxed);
-        crate::serial_println!(
-            "[MHI] soft-meta {:?}->{:?} @{:x} (no DMA; ADR-0040 defer)",
+        crate::slog_nano!("MHI", "info", "soft-meta {:?}->{:?} @{:x} (no DMA; ADR-0040 defer)",
             req.from,
             req.to,
-            req.phys_addr
-        );
+            req.phys_addr);
     } else {
         MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
     }

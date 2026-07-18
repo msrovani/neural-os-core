@@ -27,25 +27,9 @@ pub enum SecurityType { Open, Wpa2Psk, Wpa3Sae }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ConnectionState { Disconnected, Scanning, Associating, HandshakingWpa, ReadyForTraffic }
 
-// ── 2. OFFSETS DE CRIPTOGRAFIA (por vendor, parte do HardwareRegisterMap) ──
-
-pub struct CryptoOffsets {
-    pub reg_crypto_ctrl: usize,
-    pub reg_key_idx: usize,
-    pub reg_key_data: usize,
-}
-
-pub const INTEL_CRYPTO: CryptoOffsets = CryptoOffsets {
-    reg_crypto_ctrl: 0x3000, reg_key_idx: 0x3004, reg_key_data: 0x3008,
-};
-pub const REALTEK_CRYPTO: CryptoOffsets = CryptoOffsets {
-    reg_crypto_ctrl: 0x00E0, reg_key_idx: 0x00E4, reg_key_data: 0x00E8,
-};
-pub const ATHEROS_CRYPTO: CryptoOffsets = CryptoOffsets {
-    reg_crypto_ctrl: 0x0D00, reg_key_idx: 0x0D04, reg_key_data: 0x0D08,
-};
-pub const BROADCOM_CRYPTO: CryptoOffsets = CryptoOffsets {
-    reg_crypto_ctrl: 0x0700, reg_key_idx: 0x0704, reg_key_data: 0x0708,
+// ── 2. OFFSETS DE CRIPTOGRAFIA — BE em k-hal (sem MMIO neste FE) ──
+pub use k_hal::net::wifi_crypto::{
+    CryptoOffsets, INTEL_CRYPTO, REALTEK_CRYPTO, ATHEROS_CRYPTO, BROADCOM_CRYPTO,
 };
 
 // ── 3. DERIVAÇÃO DE CHAVE WPA2 (PBKDF2-HMAC-SHA1 simplificado) ──
@@ -120,29 +104,14 @@ pub fn parse_beacon(frame: &[u8]) -> Option<WirelessNetwork> {
     Some(WirelessNetwork { bssid, ssid, ssid_len, channel, signal_dbm: signal, security })
 }
 
-// ── 5. INJECAO DE CHAVE NO HARDWARE ───────────────────────────
-
-/// Injeta a PMK de 32 bytes nos registradores criptograficos do chip WiFi.
-/// Ativa o motor de criptografia AES-CCMP em hardware.
-pub unsafe fn inject_wpa2_key(mmio_base: usize, crypto: &CryptoOffsets, pmk: &[u8; 32]) {
-    use core::ptr::{read_volatile, write_volatile};
-    // Seleciona slot de chave 0 (par a par)
-    write_volatile((mmio_base + crypto.reg_key_idx) as *mut u32, 0x00);
-    // Escreve 256 bits (8 x 32) no registrador de dados de chave
-    let key_reg = (mmio_base + crypto.reg_key_data) as *mut u32;
-    let pmk_words = pmk.as_ptr() as *const u32;
-    for i in 0..8 {
-        write_volatile(key_reg.add(i), read_volatile(pmk_words.add(i)));
-    }
-    // Ativa cifra AES-CCMP em hardware
-    write_volatile((mmio_base + crypto.reg_crypto_ctrl) as *mut u32, 0x01);
-}
+// ── 5. INJECAO DE CHAVE — delega BE k-hal ─────────────────────
+pub use k_hal::net::wifi_crypto::inject_wpa2_key;
 
 // ── 6. SCAN COMPLETO ──────────────────────────────────────────
 
 /// Executa scan ativo: envia Probe Request em cada canal, coleta respostas.
 /// Usa send_packet/receive_packet do driver ativo.
-pub fn scan_networks<D: crate::generic_wifi::WifiChipset>(
+pub fn scan_networks<D: k_hal::net::generic_wifi::WifiChipset>(
     driver: &mut D, results: &mut Vec<WirelessNetwork>) -> Result<usize, &'static str> {
     let mut found = 0;
     // Canais 2.4GHz: 1-11

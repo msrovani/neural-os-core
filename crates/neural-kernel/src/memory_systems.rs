@@ -62,7 +62,7 @@ pub fn load_bge(data: &[u8]) -> bool {
             crate::load_status::AssetKind::Bge,
             crate::load_status::LoadStatus::Loaded,
         );
-        crate::serial_println!("[BGE] Carregado: vocab={} hidden={} ({} MB)",
+        k_nano::slog_bin!("Asset", "bge", "Carregado: vocab={} hidden={} ({} MB)",
             unsafe { BGE_VOCAB }, unsafe { BGE_HIDDEN },
             unsafe { BGE_WEIGHTS.as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024) });
     } else {

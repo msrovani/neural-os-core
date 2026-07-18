@@ -26,13 +26,14 @@ pub struct SoulProfile {
 impl SoulProfile {
     pub fn default_jarvis() -> Self { SoulProfile { name: String::from("JARVIS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
 
-    /// Carrega SOUL.md via neural-kernel::fs (ring2→ring2, sem acesso direto a ring0)
+    /// Carrega PERSONA.md (Jarbas) — fallback SOUL.md só se PERSONA ausente.
     pub fn load_from_vfs() -> Self {
         let mut profile = Self::default_jarvis();
-        // Usar hermes::globals::read_vfs — jarbas (ring2) → hermes → k_nano::fs
-        if let Ok(data) = hermes::globals::read_vfs("/SOUL.MD") {
+        let data = hermes::globals::read_vfs("/mnt/neural/PERSONA.md")
+            .or_else(|_| hermes::globals::read_vfs("/mnt/neural/SOUL.md"))
+            .or_else(|_| hermes::globals::read_vfs("/SOUL.MD"));
+        if let Ok(data) = data {
             let text = core::str::from_utf8(&data).unwrap_or("");
-            // Parse markdown simples: "name: JARVIS" ou "name=JARVIS"
             for line in text.lines() {
                 let l = line.trim();
                 if let Some(val) = l.strip_prefix("name:") { profile.name = val.trim().into(); }
@@ -46,10 +47,25 @@ impl SoulProfile {
                 else if let Some(val) = l.strip_prefix("empathy:") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
                 else if let Some(val) = l.strip_prefix("empathy=") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
             }
-            k_nano::serial_println!("[SOUL] Perfil carregado: {} ({})", profile.name, profile.tone);
+            if profile.name == "JARVIS" && text.contains("Hermes") {
+                profile.name = String::from("Hermes");
+                profile.tone = String::from("precise");
+            }
+            k_nano::slog_jarbas!("PERSONA", "info", "Perfil Jarbas: {} ({})", profile.name, profile.tone);
             return profile;
         }
-        k_nano::serial_println!("[SOUL] SOUL.MD nao encontrado no VFS. Usando perfil padrao.");
+        // Defaults de PERSONA.md via Hermes memory_store
+        hermes::memory_store::ensure_defaults();
+        let slice = hermes::memory_store::persona_slice();
+        for line in slice.lines() {
+            let l = line.trim();
+            if let Some(val) = l.strip_prefix("name:") { profile.name = val.trim().into(); }
+            else if let Some(val) = l.strip_prefix("tone:") { profile.tone = val.trim().into(); }
+            else if let Some(val) = l.strip_prefix("humor:") { if let Ok(v) = val.trim().parse::<f32>() { profile.humor_level = v; } }
+            else if let Some(val) = l.strip_prefix("formality:") { if let Ok(v) = val.trim().parse::<f32>() { profile.formality = v; } }
+            else if let Some(val) = l.strip_prefix("empathy:") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
+        }
+        k_nano::slog_jarbas!("PERSONA", "info", "defaults: {} ({})", profile.name, profile.tone);
         profile
     }
 
@@ -174,7 +190,7 @@ pub fn ade_pipeline(action: &str, expected: &str) -> (String, bool) {
     if action.is_empty() { return (String::from("ADE: Spec falhou — acao vazia"), false); }
     // Execute: roda acao e captura resultado
     let result = alloc::format!("[ADE] Exec: {} em t={}", action, tick);
-    k_nano::serial_println!("{}", result);
+    k_nano::slog_jarbas!("Log", "msg", "{}", result);
     // Review: compara com expected
     let review_ok = expected.is_empty() || action.contains(expected);
     if !review_ok {

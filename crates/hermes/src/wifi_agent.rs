@@ -8,8 +8,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
 use crate::generic_wifi::{self, ACTIVE_DRIVER};
-use k_nano::serial_println;
-
 const WIFI_MANIFEST: AgentManifest = AgentManifest {
     name: "wifi_agent",
     kind: AgentKind::Network,
@@ -98,7 +96,8 @@ impl WifiAgent {
         self.state = WifiState::Scanning;
         self.publish("Escaneando redes WiFi...");
 
-        // Tenta detectar hardware WiFi
+        // FE: registra inject smoltcp; MMIO BE = k-hal
+        k_hal::net::wifi_msix::set_rx_inject(crate::netstack::inject_rx_packet);
         if !generic_wifi::detect_wifi() {
             self.state = WifiState::Failed("Sem WiFi");
             self.publish("Sem WiFi. Ethernet cabeada ativa.");
@@ -150,7 +149,7 @@ impl WifiAgent {
         self.save_credentials(&ap.ssid, password);
 
         // Notifica sistema
-        serial_println!("[WIFI] Conectado a \"{}\" (security={:?})", ap.ssid, ap.security);
+        k_nano::slog_hermes!("Wifi", "info", "Conectado a \"{}\" (security={:?})", ap.ssid, ap.security);
         self.publish(&alloc::format!("Conectado a \"{}\"!", ap.ssid));
         self.state = WifiState::Connected { ssid: ap.ssid.clone() };
 
@@ -183,7 +182,7 @@ impl WifiAgent {
                     if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
                         if let Some(w) = k_nano::fat32::Fat32Writer::new(ata, p) {
                             if w.write_file("WIFI.CFG", cfg.as_bytes()) {
-                                serial_println!("[WIFI] Credenciais salvas (WIFI.CFG)");
+                                k_nano::slog_hermes!("Wifi", "info", "Credenciais salvas (WIFI.CFG)");
                                 break;
                             }
                         }

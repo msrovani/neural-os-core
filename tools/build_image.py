@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Gera imagem FAT32 completa para QEMU e HW real.
+"""Gera imagem exFAT (default) ou FAT32 para QEMU e HW real.
 Inclui: .bitnet (incl. BITNET-2B se existir), firmware blobs, CONFIG.TXT.
 
 Uso:
-  python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (1024 MB)
-  python tools/build_image.py --hw             # HW   -> target/disk_hw.raw   (1024 MB)
+  python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (exFAT)
+  python tools/build_image.py --fat32          # legado FAT32
+  python tools/build_image.py --hw             # HW   -> target/disk_hw.raw
   python tools/build_image.py --hw --unified   # USB  -> target/usb_hw.img (ESP+dados)
   python tools/build_image.py --size 512 --output target/disk_qemu.raw
 
@@ -54,6 +55,11 @@ def parse_args():
         action="store_true",
         help="Com --unified: se faltar uefi.img, roda cargo build -p boot",
     )
+    p.add_argument(
+        "--fat32",
+        action="store_true",
+        help="Usar mkfat32.py em vez de mkexfat.py (legado)",
+    )
     return p.parse_args()
 
 
@@ -94,7 +100,6 @@ def main():
 
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
 
-    # Ensure v3 model alias for mkfat32 populate
     src_v3 = os.path.join(target_dir, "hw_expert_v3.bitnet")
     dst_v3 = os.path.join(target_dir, "hw_expert_tf.bitnet")
     if os.path.exists(src_v3) and not os.path.exists(dst_v3):
@@ -103,18 +108,20 @@ def main():
 
     boot_mode = "hw" if (args.hw or "disk_hw" in os.path.basename(out).lower()) else "qemu"
     env = os.environ.copy()
-    env.pop("SKIP_2B", None)  # nunca forcar skip — pendrive 32GB / disco generoso
+    env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = boot_mode
 
+    maker = "mkfat32.py" if args.fat32 else "mkexfat.py"
+    fs_name = "FAT32" if args.fat32 else "exFAT"
     cmd = [
         sys.executable,
-        os.path.join(ROOT, "tools", "mkfat32.py"),
+        os.path.join(ROOT, "tools", maker),
         "--size",
         str(args.size),
         "--output",
         out,
     ]
-    print(f"=== Criando imagem {args.size}MB (BOOT_MODE={boot_mode}) -> {out} ===")
+    print(f"=== Criando imagem {args.size}MB {fs_name} (BOOT_MODE={boot_mode}) -> {out} ===")
     print("    BITNET-2B incluso se arquivo existir em repo/target/")
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=600, env=env)
     if r.stdout:
@@ -122,7 +129,7 @@ def main():
         sys.stdout.buffer.write(b"\n")
     if r.returncode != 0:
         err = (r.stderr or "")[:500]
-        print(f"[ERRO] mkfat32 exit={r.returncode}: {err}")
+        print(f"[ERRO] {maker} exit={r.returncode}: {err}")
         sys.exit(r.returncode)
 
     if not os.path.exists(out):
@@ -130,7 +137,7 @@ def main():
         sys.exit(1)
 
     final_size = os.path.getsize(out)
-    print(f"\n[OK] {out}: {final_size // 1024 // 1024}MB")
+    print(f"\n[OK] {out}: {final_size // 1024 // 1024}MB ({fs_name})")
     print(f"QEMU:  .\\run-qemu-uefi.ps1 -Window")
     print(f"HW dados-only: dd if={out} of=/dev/sdX bs=4M status=progress")
     print(f"HW 1 stick:    python tools/build_image.py --hw --unified")

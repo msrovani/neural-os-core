@@ -78,8 +78,8 @@ impl JarvisAvatar {
             frame: 0,
             fb_w: gpu.fb_width as usize,
             fb_h: gpu.fb_height as usize,
-            fb_stride: gpu.fb_stride as usize,
-            fb_bpp: gpu.fb_bpp as usize,
+            fb_stride: gpu.stride_bytes(),
+            fb_bpp: gpu.bytes_per_pixel(),
         }
     }
 

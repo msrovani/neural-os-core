@@ -1,8 +1,8 @@
 # NeuralFS ? Plano de Arquitetura Completo
 
-> **Lifecycle (INDEX):** `por_fazer` (SESSION_125)  
-> **Feito:** RAM I/O `/mnt/neural` (SESSION_123) ? format/mount, create/read/write, B-tree leaf.  
-> **Residual `por_fazer`:** disco fisico / multi-level / persistencia BlockDevice plena.  
+> **Lifecycle (INDEX):** `fazendo` (SESSION_133)  
+> **Feito:** RAM I/O; B-tree multi-nivel; USB mount + format opt-in; GPT GUID NeuralFS; boot dados exFAT (+ unified); journal recover no mount.  
+> **Residual:** stress power-loss e2e; stress B-tree level≥2 com milhares de keys; interop Windows/Linux da imagem exFAT.  
 > ADR-0040 MVP permanece `completa`; este doc cobre o follow-up NeuralFS, nao reabre a ADR.
 
 ## 1. Fontes de Referência Analisadas
@@ -298,3 +298,52 @@ A Sprint FS-v2 implementou todo o ecossistema de armazenamento em 4 subsprints, 
 | GPU Direct Storage | ~300 | Requer GPU compute maduro (futuro) |
 
 ### 0 erros, 0 warnings em todos os crates.
+
+---
+
+## 12. Ecosystem Namespace (Hermes / Cortex packages)
+
+> **Contrato de pastas** no volume NeuralFS. Orquestração, assinatura, CRUD e HITL:
+> **ADR-0051** (`0051-hermes-ecosystem-packages.md`). Este § só define **onde** vive o quê.
+
+Mount canônico: `/mnt/neural` (NeuralFsAgent). Namespace de pacotes:
+
+```
+/mnt/neural/ecosystem/
+  skills/<name>/
+    SKILL.md              # metadata + instruções (assinatura embutida opcional)
+    references/           # schemas, exemplos (read)
+    scripts/              # Python/Bash efêmero (HITL antes de exec)
+    app.wasm              # artefato promovido (SkillOpt / evolve)
+  agents/<name>/
+    AGENT.md              # manifesto Agency/nativo (schedule, division, skills)
+    MANIFEST              # legado WASM (ADR-0032)
+    app.wasm              # agente WASM tickável (opcional)
+  workflows/<id>/
+    WORKFLOW.md           # fluxo declarativo
+  plugins/<name>/
+    PLUGIN.md             # bundle: skills declaradas + risk
+  mcp/<name>/
+    MCP.md                # tools/resources → bridge EventBus
+  models/                 # .bitnet / pesos (read; update = Confirm)
+  firmware/               # FW blobs HW (read; write = Escalate)
+```
+
+| Pasta | Propósito | FS default | Consumidor |
+|-------|-----------|------------|------------|
+| `skills/` | Capacidade repetível (procedimento) | RW via PackageHub | Hermes + Cortex prompt |
+| `agents/` | Manifestos Agent + WASM opcional | RW + HITL | Agency / PackageHub / WasmRT |
+| `workflows/` | Fluxos declarativos | RW + HITL | Hermes |
+| `plugins/` | Bundle de skills | RW + Escalate | PluginHub |
+| `mcp/` | Tools externos | RW + Escalate | McpAgent |
+| `models/` | Inferência | R (W Confirm) | Cortex |
+| `firmware/` | HW bring-up | R (W Escalate) | SelfHeal / GPU FW |
+
+**Bootstrap:** `NeuralFsAgent` cria `ecosystem/{skills,agents,workflows,plugins,mcp,models,firmware}` após mount (RAM/ATA/USB). Nomes de dir entry ≤22 bytes; paths lógicos longos são codificados no VFS.
+
+**Disco de dados ≠ namespace:** `disk_*.raw` (exFAT flat via `mkexfat.py`) carrega modelos/firmware no root. PackageHub **não** lê exFAT — só NeuralFS `/mnt/neural`. Seed de agentes = embutido (`include`/`agency_seed`) + persist opcional no NeuralFS.
+
+**Persistência:** se `/mnt/neural` não montar, PackageHub opera em **RAM** e loga honestamente (`persisted=false`). Não inventar write em disco.
+
+**Segurança no FS:** path traversal (`..`) rejeitado no hub; pacotes unsigned exigem ApprovalGate Escalate antes de Create/Update/Delete (detalhe ADR-0051).
+**VFS bridge:** Hermes usa callbacks do bin (`neural-kernel::fs`) após `init_fs_agents` — não o VFS vazio de `k_nano`.

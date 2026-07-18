@@ -158,10 +158,8 @@ impl SttEngine {
                 break;
             }
         }
-        crate::serial_println!(
-            "[STT] weight index format: {}",
-            if off_is_bytes { "bytes (÷4)" } else { "f32-index (nativo)" }
-        );
+        k_nano::slog_bin!("Audio", "stt", "weight index format: {}",
+            if off_is_bytes { "bytes (÷4)" } else { "f32-index (nativo)" });
 
         for (nm, raw_off, cnt) in entries {
             let off = if off_is_bytes {
@@ -177,10 +175,8 @@ impl SttEngine {
         self.loaded = !self.w.is_empty();
         if self.loaded {
             let p: usize = self.w.iter().map(|(_, d)| d.len()).sum();
-            crate::serial_println!("[STT] {} tensors, {}K params", self.w.len(), p / 1000);
-            crate::serial_println!(
-                "[STT] domain: train_stt.py = PCM→MFCC kernel-aligned (Sprint Sound)"
-            );
+            k_nano::slog_bin!("Audio", "stt", "{} tensors, {}K params", self.w.len(), p / 1000);
+            k_nano::slog_bin!("Audio", "stt", "domain: train_stt.py = PCM→MFCC kernel-aligned (Sprint Sound)");
         }
         self.loaded
     }
@@ -236,17 +232,14 @@ impl SttEngine {
 
     pub fn transcribe(&self, pcm: &[i16]) -> String {
         if !self.loaded || pcm.len() < FFTSIZE {
-            crate::serial_println!(
-                "[STT] transcribe skip: loaded={} pcm_len={} (min={})",
-                self.loaded, pcm.len(), FFTSIZE
-            );
+            k_nano::slog_bin!("Audio", "stt", "transcribe skip: loaded={} pcm_len={} (min={})", self.loaded, pcm.len(), FFTSIZE);
             return String::new();
         }
         let feats = mfcc(pcm);
         if feats.is_empty() { return String::new(); }
         let n_frames = feats.len() / N_MFCC;
         if n_frames == 0 { return String::new(); }
-        crate::serial_println!("[STT] n_frames={} pcm_len={}", n_frames, pcm.len());
+        k_nano::slog_bin!("Audio", "stt", "n_frames={} pcm_len={}", n_frames, pcm.len());
 
         // LSTM forward
         let w_ih0 = self.w("lstm0.w_ih");
@@ -265,11 +258,9 @@ impl SttEngine {
         if w_ih0.len() < need_ih0 || w_hh0.len() < need_hh || w_ih1.len() < need_hh
             || w_hh1.len() < need_hh || w_out.len() < VOCAB * HIDDEN || b_out.len() < VOCAB
         {
-            crate::serial_println!(
-                "[STT] weights incomplete ih0={} hh0={} — skip",
+            k_nano::slog_bin!("Audio", "stt", "weights incomplete ih0={} hh0={} — skip",
                 w_ih0.len(),
-                w_hh0.len()
-            );
+                w_hh0.len());
             return String::new();
         }
 
@@ -329,11 +320,9 @@ impl SttEngine {
         let result: String = out.iter().collect();
         if result.is_empty() {
             let blanks = raw_path.iter().filter(|&&c| c == blank_id).count();
-            crate::serial_println!(
-                "[STT] ctc empty: n_frames={} blanks={}/{} raw_path[..{}]={:?}",
+            k_nano::slog_bin!("Audio", "stt", "ctc empty: n_frames={} blanks={}/{} raw_path[..{}]={:?}",
                 n_frames, blanks, n_frames, n_frames.min(16),
-                &raw_path[..n_frames.min(16)]
-            );
+                &raw_path[..n_frames.min(16)]);
             // Sprint 107 Loop2: blank-only path → re-decode com blank suprimido
             // (CTC blank-suppression; nao e texto canned — argmax nos logits reais).
             if blanks == n_frames && n_frames > 0 {
@@ -358,11 +347,9 @@ impl SttEngine {
                 }
                 let forced: String = out2.iter().collect();
                 if !forced.is_empty() {
-                    crate::serial_println!(
-                        "[STT] blank-suppress decode ctc='{}' (len={})",
+                    k_nano::slog_bin!("Audio", "stt", "blank-suppress decode ctc='{}' (len={})",
                         forced,
-                        forced.len()
-                    );
+                        forced.len());
                     return forced;
                 }
             }
@@ -402,23 +389,17 @@ pub fn try_load_from_qemu_loader() -> bool {
     let va = (LOAD_ADDR + phys_off) as *const u8;
     let magic = unsafe { core::ptr::read_volatile(va as *const u32) };
     if magic != 0xBE11BE11 {
-        crate::serial_println!(
-            "[STT] QEMU-loader @0x163000000 magic=0x{:08X} (ausente)",
-            magic
-        );
+        k_nano::slog_bin!("Audio", "stt", "QEMU-loader @0x163000000 magic=0x{:08X} (ausente)", magic);
         return false;
     }
     let data = unsafe { core::slice::from_raw_parts(va, size_hint) };
     let mut eng = SttEngine::new();
     if eng.load(data) {
-        crate::serial_println!(
-            "[STT] CTC LOADED (QEMU-loader @0x163000000) size={}KB",
-            size_hint / 1024
-        );
+        k_nano::slog_bin!("Audio", "stt", "CTC LOADED (QEMU-loader @0x163000000) size={}KB", size_hint / 1024);
         *STT_ENGINE.lock() = Some(eng);
         true
     } else {
-        crate::serial_println!("[STT] QEMU-loader parse FAILED");
+        k_nano::slog_bin!("Audio", "stt", "QEMU-loader parse FAILED");
         false
     }
 }
@@ -437,20 +418,17 @@ pub fn try_load_from_fat() -> bool {
                     if let Some(data) = fs.read_file("STT.BIN") {
                         let mut eng = SttEngine::new();
                         if eng.load(&data) {
-                            crate::serial_println!(
-                                "[STT] CTC LOADED from FAT STT.BIN ({}KB)",
-                                data.len() / 1024
-                            );
+                            k_nano::slog_bin!("Audio", "stt", "CTC LOADED from FAT STT.BIN ({}KB)", data.len() / 1024);
                             *STT_ENGINE.lock() = Some(eng);
                             return true;
                         }
-                        crate::serial_println!("[STT] FAT STT.BIN parse FAILED");
+                        k_nano::slog_bin!("Audio", "stt", "FAT STT.BIN parse FAILED");
                     }
                 }
             }
         }
     }
-    crate::serial_println!("[STT] FAT ausente (STT.BIN)");
+    k_nano::slog_bin!("Audio", "stt", "FAT ausente (STT.BIN)");
     false
 }
 

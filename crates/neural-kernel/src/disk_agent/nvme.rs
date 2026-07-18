@@ -63,9 +63,15 @@ impl NvmeDriver {
 
         // Enable controller
         mmio.add((NVME_CC / 4) as usize).write_volatile(CC_EN | (6 << 16) | (4 << 20));
-        for _ in 0..500000 {
-            if mmio.add((NVME_CSTS / 4) as usize).read_volatile() & CSTS_RDY != 0 { break; }
+        // Timeout curto — NVMe ausente/quebrado não pode segurar o boot HW.
+        for _ in 0..50_000 {
+            if mmio.add((NVME_CSTS / 4) as usize).read_volatile() & CSTS_RDY != 0 {
+                break;
+            }
             core::hint::spin_loop();
+        }
+        if mmio.add((NVME_CSTS / 4) as usize).read_volatile() & CSTS_RDY == 0 {
+            return None;
         }
 
         let mut drv = NvmeDriver {
@@ -78,9 +84,9 @@ impl NvmeDriver {
 
         if drv.admin_identify() && drv.create_io_cq() && drv.create_io_sq() {
             let gb = (drv.lba_count as u128 * drv.lba_size as u128) / (1024*1024*1024);
-            crate::serial_println!("[NVMe] NS{}: {} setores x {}B = {}GB", drv.nsid, drv.lba_count, drv.lba_size, gb);
+            k_nano::slog_bin!("NVMe", "info", "NS{}: {} setores x {}B = {}GB", drv.nsid, drv.lba_count, drv.lba_size, gb);
             let m = core::str::from_utf8(&drv.model).unwrap_or("NVMe");
-            crate::serial_println!("[NVMe] Modelo: {}", m.trim());
+            k_nano::slog_bin!("NVMe", "info", "Modelo: {}", m.trim());
             Some(drv)
         } else {
             None

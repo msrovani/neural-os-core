@@ -2,7 +2,6 @@
 #![allow(dead_code)]
 #![allow(static_mut_refs)]
 #![allow(unused_unsafe)]
-#![feature(abi_x86_interrupt)]
 
 extern crate alloc;
 
@@ -14,6 +13,7 @@ pub mod actor_registry;
 pub mod agents;
 pub mod app_store;
 pub mod approval;
+pub mod hitl_ui;
 pub mod apps;
 pub mod browser_agent;
 pub mod cron;
@@ -38,9 +38,16 @@ pub mod shell;
 pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_market;
+pub mod memory_store;
+pub mod marketplace;
+pub mod cognitive_bridge;
+pub mod expert_skills;
 pub mod skill_observer;
 pub mod self_evolve;
 pub mod evolve;
+pub mod hw_pnp;
+pub mod hal_offer;
+pub mod package_hub;
 pub mod structured_decode;
 pub mod wasm;
 pub mod wasm_exec;
@@ -52,12 +59,12 @@ pub mod rustpython_no_std;
 pub mod email_agent;
 pub mod fs;
 pub mod link_watcher;
-pub mod generic_wifi;
 pub mod globals;
 pub mod wifi_agent;
 pub mod wifi_protocol;
-pub mod wifi_compat;
-// ponytail: wifi_aer/dma/apic.rs moved to LEGACY/v1.5-dead-k2chj/hermes/ (dead code)
-pub mod wifi_iwlwifi;
-pub mod wifi_msix;
+// ADR-0041 H3: MMIO WiFi BE em k-hal; hermes = FE
+pub use k_hal::net::generic_wifi;
+pub use k_hal::net::wifi_compat;
+pub use k_hal::net::wifi_iwlwifi;
+pub use k_hal::net::wifi_msix;
 pub mod voice_skill;

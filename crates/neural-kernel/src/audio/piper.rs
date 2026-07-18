@@ -120,7 +120,7 @@ impl PiperEngine {
         self.loaded = !self.w.is_empty();
         if self.loaded {
             let p: usize = self.w.iter().map(|w| w.data.len()).sum();
-            crate::serial_println!("[PIPER] {} tensors, {}M params", self.w.len(), p / 1000000);
+            k_nano::slog_jarbas!("Audio", "piper", "{} tensors, {}M params", self.w.len(), p / 1000000);
         }
         self.loaded
     }
@@ -154,7 +154,7 @@ impl PiperEngine {
     }
 
     fn dump_w(&self) { // debug
-        for w in &self.w { if w.data.len() > 1000 { crate::serial_println!("  {}: {}x{}={}", w.name, w.rows, w.cols, w.data.len()); } }
+        for w in &self.w { if w.data.len() > 1000 { k_nano::slog_bin!("Log", "msg", "{}: {}x{}={}", w.name, w.rows, w.cols, w.data.len()); } }
     }
 
     // Conv1d: [in_ch, in_len] × weight[out_ch, in_ch*k] → [out_ch, out_len]
@@ -207,17 +207,15 @@ impl PiperEngine {
         let dim = 192;
         // Embedding lookup — `sid`/`emb.weight`; se ausente, formant (pcm>0)
         let Some(ew) = self.emb_table() else {
-            crate::serial_println!("[PIPER] emb invalid len=0 name='' -> formant fallback");
+            k_nano::slog_jarbas!("Audio", "piper", "emb invalid len=0 name='' -> formant fallback");
             return crate::audio::tts::synthesize(text);
         };
         let ew_len = ew.data.len();
         let vocab = if ew.rows > 0 { ew.rows } else { ew_len / dim };
         if ew_len < dim * 2 || vocab < 2 {
-            crate::serial_println!(
-                "[PIPER] emb invalid len={} name='{}' -> formant fallback",
+            k_nano::slog_jarbas!("Audio", "piper", "emb invalid len={} name='{}' -> formant fallback",
                 ew_len,
-                ew.name
-            );
+                ew.name);
             return crate::audio::tts::synthesize(text);
         }
 
@@ -253,10 +251,7 @@ impl PiperEngine {
             return crate::audio::tts::synthesize(text);
         }
         let seq = ids.len();
-        crate::serial_println!(
-            "[PIPER] neural-lite emb='{}' vocab={} seq={} (VITS/HiFi-GAN blocked soft-float)",
-            ew.name, vocab, seq
-        );
+        k_nano::slog_jarbas!("Audio", "piper", "neural-lite emb='{}' vocab={} seq={} (VITS/HiFi-GAN blocked soft-float)", ew.name, vocab, seq);
 
         // Soft-float: neural-lite com emb real + prosódia (não VITS pleno).
         {
@@ -337,15 +332,12 @@ impl PiperEngine {
                 cursor += samples_per;
             }
             if audio.iter().any(|&s| s != 0) {
-                crate::serial_println!(
-                    "[PIPER] neural-lite pcm_samples={} (prosody+duration)",
-                    audio.len()
-                );
+                k_nano::slog_jarbas!("Audio", "piper", "neural-lite pcm_samples={} (prosody+duration)", audio.len());
                 return audio;
             }
         }
 
-        crate::serial_println!("[PIPER] neural-lite empty -> formant fallback");
+        k_nano::slog_jarbas!("Audio", "piper", "neural-lite empty -> formant fallback");
         crate::audio::tts::synthesize(text)
     }
 }

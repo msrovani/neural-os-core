@@ -209,8 +209,7 @@ impl KvCache {
         let data = self.k[layer].clone();
         let expected = seq_len * self.k_dim;
         if data.len() != expected {
-            k_nano::serial_println!("[KV] k_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
-                layer, data.len(), expected, seq_len, self.k_dim);
+            k_nano::slog_cortex!("KV", "info", "k_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})", layer, data.len(), expected, seq_len, self.k_dim);
         }
         Tensor::from_row_major((seq_len, self.k_dim), data).unwrap()
     }
@@ -219,8 +218,7 @@ impl KvCache {
         let data = self.v[layer].clone();
         let expected = seq_len * self.k_dim;
         if data.len() != expected {
-            k_nano::serial_println!("[KV] v_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})",
-                layer, data.len(), expected, seq_len, self.k_dim);
+            k_nano::slog_cortex!("KV", "info", "v_all mismatch: layer={} data.len={} expected={} (seq={} k_dim={})", layer, data.len(), expected, seq_len, self.k_dim);
         }
         Tensor::from_row_major((seq_len, self.k_dim), data).unwrap()
     }
@@ -895,11 +893,11 @@ impl TransformerModel {
 
             let lt1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             if layer_idx == 0 {
-                k_nano::serial_println!("[FWD] L0 qkv:{} attn:{} proj:{} ffn_gateup:{} down:{} total:{}",
+                k_nano::slog_cortex!("FWD", "info", "L0 qkv:{} attn:{} proj:{} ffn_gateup:{} down:{} total:{}",
                     t_q1 - t_q0, t_attn1 - t_v1, t_proj1 - t_attn1, t_ffn1 - t_proj1, lt1 - t_ffn1, lt1 - lt0);
             }
             if lt1 - lt0 > 5 || layer_idx == 0 || layer_idx + 1 == layer_count {
-                k_nano::serial_println!("[FWD] layer {}/{}: {} ticks", layer_idx + 1, layer_count, lt1 - lt0);
+                k_nano::slog_cortex!("FWD", "info", "layer {}/{}: {} ticks", layer_idx + 1, layer_count, lt1 - lt0);
             }
         }
 
@@ -914,7 +912,7 @@ impl TransformerModel {
         };
         let t_unembed1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         if t_unembed1 - t_unembed0 > 10 {
-            k_nano::serial_println!("[FWD] unembed: {} ticks", t_unembed1 - t_unembed0);
+            k_nano::slog_cortex!("FWD", "info", "unembed: {} ticks", t_unembed1 - t_unembed0);
         }
         (last_hidden, logits)
     }
@@ -1059,7 +1057,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         if tok_len > 0 && off + tok_len <= data.len() {
             let tok_data = &data[off..off + tok_len];
             let first = if tok_len >= 8 { &tok_data[..8] } else { tok_data };
-            k_nano::serial_println!("[BPE] Tokenizer data: {} bytes, starts {:02x?}", tok_len, first);
+            k_nano::slog_cortex!("BPE", "info", "Tokenizer data: {} bytes, starts {:02x?}", tok_len, first);
             // BPE tokenizer skipped for v3 (large tokenizer needs proper JSON parser)
         }
         off += tok_len;
@@ -1087,11 +1085,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 && num_kv_heads == 5
                 && q_dim == hidden
             {
-                k_nano::serial_println!(
-                    "[LLM] q_dim header {} → 640 (legacy dump; need~{}MB)",
+                k_nano::slog_cortex!("LLM", "info", "q_dim header {} → 640 (legacy dump; need~{}MB)",
                     q_dim,
-                    need / (1024 * 1024)
-                );
+                    need / (1024 * 1024));
                 q_dim = 640;
             }
         }
@@ -1452,7 +1448,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     let eos = if use_bpe { 2u16 } else { EOS };
     let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
     let prompt_len = tokens.len();
-    k_nano::serial_println!("[GEN] prompt_len={}, max_seq={}", prompt_len, max_seq);
+    k_nano::slog_cortex!("GEN", "info", "prompt_len={}, max_seq={}", prompt_len, max_seq);
 
     let kv_dim = model.kv_dim;
     let k_dim = if model.layers.is_empty() { kv_dim } else {
@@ -1463,7 +1459,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     let (mut last_hidden, mut last_logits) = model.forward_with_kv(&tokens, &mut cache);
     let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    k_nano::serial_println!("[GEN] prompt fwd: {} ticks", t1 - t0);
+    k_nano::slog_cortex!("GEN", "info", "prompt fwd: {} ticks", t1 - t0);
 
     let mut spec = NgramSpeculator::new();
     spec.feed_slice(&tokens);
@@ -1544,8 +1540,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
             let (new_hidden, new_logits) = model.forward_with_kv(&[model_next], &mut cache);
             let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             if t_step1 - t_step > 5 {
-                k_nano::serial_println!("[GEN] step={} token={} kv_cache: {} ticks (ctx={})",
-                    step, model_next, t_step1 - t_step, tokens.len());
+                k_nano::slog_cortex!("GEN", "info", "step={} token={} kv_cache: {} ticks (ctx={})", step, model_next, t_step1 - t_step, tokens.len());
             }
             last_hidden = new_hidden;
             last_logits = new_logits;
@@ -1590,17 +1585,17 @@ pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::ne
 
 pub fn set_model(model: Box<dyn Model>) {
     *CURRENT_MODEL.lock() = Some(model);
-    k_nano::serial_println!("[CORTEX] Model swapped.");
+    k_nano::slog_cortex!("CORTEX", "info", "Model swapped.");
 }
 
 pub fn set_rustcoder_model(model: Box<dyn Model>) {
     *RUSTCODER_MODEL.lock() = Some(model);
-    k_nano::serial_println!("[CORTEX] RustCoder expert model loaded.");
+    k_nano::slog_cortex!("CORTEX", "info", "RustCoder expert model loaded.");
 }
 
 pub fn set_hwexpert_model(model: Box<dyn Model>) {
     *HWEXPERT_MODEL.lock() = Some(model);
-    k_nano::serial_println!("[CORTEX] HW Expert model loaded (SDIO MoE).");
+    k_nano::slog_cortex!("CORTEX", "info", "HW Expert model loaded (SDIO MoE).");
 }
 
 pub fn generate_via_model(prompt: &str) -> String {
@@ -1647,34 +1642,9 @@ pub fn generate_register_map(vid: u16, did: u16) -> Option<crate::HardwareRegist
     };
     if let Some(m) = direct { return Some(m); }
 
-    // Nivel 2: IA identifica familia. HWExpert model classifica o chip.
-    if let Some(ref model) = *HWEXPERT_MODEL.lock() {
-        let hwid = alloc::format!("PCI\\VEN_{:04X}&DEV_{:04X}", vid, did);
-        let resp = model.generate(&alloc::format!(
-            "classifique {} em: IntelWiFi RealtekWiFi AtherosWiFi BroadcomWiFi Otro", hwid));
-        let lower = resp.to_lowercase();
-        let family_map = if lower.contains("intel") {
-            Some(Hm { tx_ring_low:0x1000, rx_ring_low:0x1004, rx_control:0x0008,
-                      doorbell_tx:0x2000, doorbell_rx:0x2004, cmd_start_rx:0x0001,
-                      ring_size:64, rx_buf_len:2048 })
-        } else if lower.contains("realtek") {
-            Some(Hm { tx_ring_low:0x00A0, rx_ring_low:0x00A4, rx_control:0x002C,
-                      doorbell_tx:0x00D0, doorbell_rx:0x00D4, cmd_start_rx:0x8002,
-                      ring_size:16, rx_buf_len:2048 })
-        } else if lower.contains("atheros") || lower.contains("qualcomm") {
-            Some(Hm { tx_ring_low:0x0800, rx_ring_low:0x0804, rx_control:0x0010,
-                      doorbell_tx:0x0C00, doorbell_rx:0x0C04, cmd_start_rx:0x0001,
-                      ring_size:32, rx_buf_len:2048 })
-        } else if lower.contains("broadcom") {
-            Some(Hm { tx_ring_low:0x0500, rx_ring_low:0x0504, rx_control:0x0020,
-                      doorbell_tx:0x0600, doorbell_rx:0x0604, cmd_start_rx:0x0100,
-                      ring_size:32, rx_buf_len:2048 })
-        } else { None };
-        if let Some(m) = family_map {
-            k_nano::serial_println!("[AI-MAP] {} classificado como {}, mapa aplicado", hwid, lower.split_whitespace().next().unwrap_or("?"));
-            return Some(m);
-        }
-    }
+    // Nivel 2 (legado free-text HW Expert) REMOVIDO — gerava lixo (OA5US…).
+    // Médio prazo: HW Expert v4 classifica HWID empacotado → family_id no schema
+    // `k_ai::hw_capability`. Até lá, heurística vendor (nível 3).
 
     // Nivel 3: heuristica por vendor ID
     let vendor_map = match vid {
@@ -1693,7 +1663,7 @@ pub fn generate_register_map(vid: u16, did: u16) -> Option<crate::HardwareRegist
         _ => None,
     };
     if let Some(m) = vendor_map {
-        k_nano::serial_println!("[AI-MAP] Heuristica vendor {:#06x}: mapa generico aplicado", vid);
+        k_nano::slog_cortex!("AI", "MAP", "Heuristica vendor {:#06x}: mapa generico aplicado", vid);
         return Some(m);
     }
     None

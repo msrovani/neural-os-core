@@ -110,11 +110,9 @@ impl KvPages {
 
 pub fn log_g4_gate(cache: &KvCache) {
     let pages = KvPages::from_len(cache.len, 16);
-    k_nano::serial_println!(
-        "[ADR-0047-G4] kv_len={} {} h2o=ready",
+    k_nano::slog_cortex!("ADR", "0047-G4", "kv_len={} {} h2o=ready",
         cache.len,
-        pages.status()
-    );
+        pages.status());
 }
 
 /// Boot smoke: empty cache + optional synthetic append/evict.
@@ -131,9 +129,6 @@ pub fn gate_smoke() -> &'static str {
     let before = cache.len;
     let dropped = h2o_evict(&mut cache, 8, 4);
     log_g4_gate(&cache);
-    k_nano::serial_println!(
-        "[ADR-0047-G4] h2o before={} after={} dropped={}",
-        before, cache.len, dropped
-    );
+    k_nano::slog_cortex!("ADR", "0047-G4", "h2o before={} after={} dropped={}", before, cache.len, dropped);
     "OK"
 }

@@ -25,6 +25,9 @@ impl BlockDevice for AtaDriver {
         if sectors > 255 { return false; } // LBA28 PIO: max 255 setores por comando
         unsafe { crate::ata::AtaDriver::write_sectors(self, lba as u32, buf, sectors as u8) }
     }
+    fn total_sectors(&self) -> u64 {
+        unsafe { AtaDriver::total_sectors(self).unwrap_or(0) }
+    }
 }
 
 impl BlockDevice for AhciDriver {

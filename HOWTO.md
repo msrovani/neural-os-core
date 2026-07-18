@@ -502,5 +502,5 @@ git push
 
 ---
 
-> **AIOS K²CHJ — Neural OS Hermes v1.8.5 TEST / NÃO ESTÁVEL**
+> **AIOS K²CHJ — Neural OS Hermes v1.8.6 TEST / NÃO ESTÁVEL**
 > *"O hardware real não perdoa. O silício obedece."*

@@ -5,7 +5,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::interrupts::TIMER_TICKS;
-use k_nano::serial_println;
 use k_nano::EVENT_BUS;
 
 const CRON_MANIFEST: AgentManifest = AgentManifest {
@@ -46,7 +45,7 @@ impl CronAgent {
             message: String::from(message),
             topic: String::from(topic),
         });
-        serial_println!("[CRON] Job '{}' agendado: a cada {} ticks", name, interval_ticks);
+        k_nano::slog_hermes!("Cron", "info", "Job '{}' agendado: a cada {} ticks", name, interval_ticks);
     }
 
     /// Executa ações programadas (health check, relatórios, etc.)
@@ -55,7 +54,7 @@ impl CronAgent {
         self.schedule("health", 200, "CRON_HEALTH", "Health check");
         self.schedule("memory_report", 500, "CRON_REPORT", "Memory report");
         self.schedule("skill_review", 3000, "SKILL_REVIEW", "Comprehensive skill review");
-        serial_println!("[CRON] {} jobs default registrados", self.jobs.len());
+        k_nano::slog_hermes!("Cron", "info", "{} jobs default registrados", self.jobs.len());
     }
 
     /// Executa revisão comprehensive de observações (função livre, sem borrow)
@@ -64,14 +63,14 @@ impl CronAgent {
         let count = pending.len();
         if count == 0 { return; }
 
-        serial_println!("[REVIEW] Running comprehensive review ({} open observations)", count);
+        k_nano::slog_hermes!("REVIEW", "info", "Running comprehensive review ({} open observations)", count);
         // Sprint 108: review só sinaliza; SelfEvolveAgent registra no SKILL_STORAGE do bin.
         for obs in &pending {
             if obs.skill.starts_with("New skill candidate:") {
                 let name = obs.skill.trim_start_matches("New skill candidate:").trim();
                 // Garante padrão em skill_gen para maybe_auto_skill
                 crate::skill_gen::record_task(name, &obs.suggestion, &["review", "generate", "verify"]);
-                serial_println!("[REVIEW] candidate '{}' (obs #{}) queued for S108", name, obs.number);
+                k_nano::slog_hermes!("REVIEW", "info", "candidate '{}' (obs #{}) queued for S108", name, obs.number);
             }
         }
         let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
@@ -80,7 +79,7 @@ impl CronAgent {
             payload: b"skill_review".to_vec(),
             token: event_bus::CapabilityToken::Legacy(1),
         });
-        serial_println!("[REVIEW] Review complete. {} observations scanned.", count);
+        k_nano::slog_hermes!("REVIEW", "info", "Review complete. {} observations scanned.", count);
     }
 }
 
@@ -93,7 +92,7 @@ impl Agent for CronAgent {
         for job in &mut self.jobs {
             if now >= job.last_run + job.interval {
                 job.last_run = now;
-                serial_println!("[CRON] Job '{}' disparado @ tick {}", job.name, now);
+                k_nano::slog_hermes!("Cron", "info", "Job '{}' disparado @ tick {}", job.name, now);
 
                 // Skill review é executado inline, não via EventBus
                 if job.name == "skill_review" {

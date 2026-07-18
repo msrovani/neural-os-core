@@ -11,4 +11,5 @@ pub mod checksum_tree;
 pub mod journal;
 pub mod volume;
 pub mod neural_fs_agent;
+// API: neural_fs::neural_fs_agent::allow_usb_format(true) — opt-in format USB.
 pub mod tests;

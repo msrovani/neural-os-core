@@ -299,6 +299,38 @@ pub enum Command {
     Learn(String, String),
     ModelSwap(String),
     Approve(u64), Deny(u64), PendingApprovals,
+    /// ADR-0051 PackageHub
+    PkgCatalog,
+    PkgList(Option<String>),
+    PkgGet(String, String),
+    PkgInstall(String, String, String),
+    PkgUpdate(String, String, String),
+    PkgRm(String, String),
+    /// HANR progressive disclosure
+    SkillView(String),
+    Remember(String),
+    Soul(String),
+    /// PERSONA Jarbas (tom/voz) — distinto de SOUL Hermes
+    Persona(String),
+    MemoryShow,
+    /// Session search FTS5-lite + BGE fallback
+    SessionSearch(String),
+    /// IterationBudget status ou set N
+    Budget(String),
+    CogStatus,
+    /// Marketplace local + Net
+    MarketList,
+    MarketSearch(String),
+    MarketInstall(String, String, String),
+    MarketPromote(String),
+    MarketRemove(String, String),
+    MarketFetch(String, String, String),
+    MarketIndex,
+    Mcp(String),
+    /// Preferência HITL: jarbas | terminal
+    UiMode(String),
+    /// Catálogo slash HANR-style
+    Commands,
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +577,81 @@ pub fn parse_command(line: &str) -> Command {
         if name.eq_ignore_ascii_case("show_skills") || name.eq_ignore_ascii_case("skills") || name.eq_ignore_ascii_case("list_skills") {
             return Command::ShowSkills;
         }
+        if name.eq_ignore_ascii_case("skill") || name.eq_ignore_ascii_case("skill_view") {
+            return Command::SkillView(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("remember") {
+            return Command::Remember(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("soul") {
+            return Command::Soul(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("persona") {
+            return Command::Persona(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("search") || name.eq_ignore_ascii_case("session") {
+            return Command::SessionSearch(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("budget") {
+            return Command::Budget(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("cog") || name.eq_ignore_ascii_case("cognitive") {
+            return Command::CogStatus;
+        }
+        if name.eq_ignore_ascii_case("memory") {
+            return Command::MemoryShow;
+        }
+        if name.eq_ignore_ascii_case("ui") || name.eq_ignore_ascii_case("hitl") {
+            return Command::UiMode(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("commands")
+            || name.eq_ignore_ascii_case("slash")
+            || name.eq_ignore_ascii_case("terminal")
+        {
+            return Command::Commands;
+        }
+        if name.eq_ignore_ascii_case("mcp") {
+            return Command::Mcp(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("market") {
+            let remainder = parts.next().unwrap_or("").trim();
+            let mut sub = remainder.splitn(3, |c: char| c.is_whitespace());
+            let op = sub.next().unwrap_or("");
+            if op.is_empty() || op.eq_ignore_ascii_case("list") || op.eq_ignore_ascii_case("ls") {
+                return Command::MarketList;
+            }
+            if op.eq_ignore_ascii_case("search") {
+                return Command::MarketSearch(sub.next().unwrap_or("").to_string());
+            }
+            if op.eq_ignore_ascii_case("install") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let rest = sub.next().unwrap_or("").to_string();
+                let mut np = rest.splitn(2, |c: char| c.is_whitespace());
+                let pname = np.next().unwrap_or("").to_string();
+                let body = np.next().unwrap_or("").to_string();
+                return Command::MarketInstall(kind, pname, body);
+            }
+            if op.eq_ignore_ascii_case("promote") {
+                return Command::MarketPromote(sub.next().unwrap_or("").to_string());
+            }
+            if op.eq_ignore_ascii_case("rm") || op.eq_ignore_ascii_case("remove") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let pname = sub.next().unwrap_or("").to_string();
+                return Command::MarketRemove(kind, pname);
+            }
+            if op.eq_ignore_ascii_case("fetch") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let rest = sub.next().unwrap_or("").to_string();
+                let mut np = rest.splitn(2, |c: char| c.is_whitespace());
+                let pname = np.next().unwrap_or("").to_string();
+                let url = np.next().unwrap_or("").to_string();
+                return Command::MarketFetch(kind, pname, url);
+            }
+            if op.eq_ignore_ascii_case("index") {
+                return Command::MarketIndex;
+            }
+            return Command::MarketList;
+        }
         if name.eq_ignore_ascii_case("add_skill") {
             let arg = parts.next().unwrap_or("").trim().to_string();
             let desc = parts.next().unwrap_or("").trim().to_string();
@@ -576,6 +683,45 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("pending") || name.eq_ignore_ascii_case("approvals") {
             return Command::PendingApprovals;
+        }
+        if name.eq_ignore_ascii_case("pkg") {
+            let remainder = parts.next().unwrap_or("").trim();
+            let mut sub = remainder.splitn(3, |c: char| c.is_whitespace());
+            let op = sub.next().unwrap_or("");
+            if op.eq_ignore_ascii_case("catalog") || op.eq_ignore_ascii_case("cat") {
+                return Command::PkgCatalog;
+            }
+            if op.eq_ignore_ascii_case("list") || op.eq_ignore_ascii_case("ls") {
+                let kind = sub.next().map(|s| s.to_string());
+                return Command::PkgList(kind);
+            }
+            if op.eq_ignore_ascii_case("get") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let pname = sub.next().unwrap_or("").to_string();
+                return Command::PkgGet(kind, pname);
+            }
+            if op.eq_ignore_ascii_case("install") || op.eq_ignore_ascii_case("create") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let rest = sub.next().unwrap_or("").to_string();
+                let mut np = rest.splitn(2, |c: char| c.is_whitespace());
+                let pname = np.next().unwrap_or("").to_string();
+                let body = np.next().unwrap_or("").to_string();
+                return Command::PkgInstall(kind, pname, body);
+            }
+            if op.eq_ignore_ascii_case("update") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let rest = sub.next().unwrap_or("").to_string();
+                let mut np = rest.splitn(2, |c: char| c.is_whitespace());
+                let pname = np.next().unwrap_or("").to_string();
+                let body = np.next().unwrap_or("").to_string();
+                return Command::PkgUpdate(kind, pname, body);
+            }
+            if op.eq_ignore_ascii_case("rm") || op.eq_ignore_ascii_case("delete") {
+                let kind = sub.next().unwrap_or("skill").to_string();
+                let pname = sub.next().unwrap_or("").to_string();
+                return Command::PkgRm(kind, pname);
+            }
+            return Command::PkgCatalog;
         }
     }
     Command::Chat(trimmed.to_string())

@@ -224,3 +224,85 @@ pub fn user_code_flags() -> PageTableFlags {
 pub fn user_data_flags() -> PageTableFlags {
     PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE
 }
+
+/// ADR-0041 Fase 4 — AS HAL shallow (PoC ≠ produção).
+/// R1: clone L4 + map 1 página BAR UC + switch CR3 + touch + restore.
+/// R3: tentativa map BAR sem Cap → Deny (não mapeia).
+pub fn demo_as_r1_r3_shallow() {
+    k_nano::slog_bin!("AS", "r1", "demo shallow start (PoC monólito)");
+
+    let bar0 = match k_hal::cap_gate::hal_as_bar0() {
+        Some(b) if b != 0 && b != 0xffff_ffff_ffff_ffff => b,
+        _ => {
+            // bind se demo_h5 ainda nao setou
+            let fallback = k_hal::discovery::device_tree()
+                .into_iter()
+                .find(|c| c.id.bar0 != 0)
+                .map(|c| c.id.bar0);
+            match fallback {
+                Some(b) => {
+                    k_hal::cap_gate::bind_hal_as(b);
+                    b
+                }
+                None => {
+                    k_nano::slog_bin!("AS", "r1", "skip — sem BAR no DeviceTree");
+                    return;
+                }
+            }
+        }
+    };
+
+    // R3 path: Cap MAP_BAR negado → não mapear BAR no AS “user”
+    let r3 = k_hal::cap_gate::check_map_bar(3, false);
+    k_nano::slog_bin!("AS", "r3", "MAP_BAR {:?} (expect Deny — sem BAR no AS R3)", r3);
+    if r3 == k_hal::cap_gate::CapResult::Deny {
+        k_nano::slog_bin!("AS", "r3", "BAR map skipped (Deny honesto)");
+    }
+
+    // R1 path: Cap Allow → shallow AS + touch
+    if k_hal::cap_gate::check_map_bar(1, true) != k_hal::cap_gate::CapResult::Allow {
+        k_nano::slog_bin!("AS", "r1", "unexpected MAP_BAR Deny em R1");
+        return;
+    }
+
+    let (kernel_l4, kernel_flags) = kernel_cr3();
+    let mut as_r1 = match AddressSpace::clone_current() {
+        Ok(a) => a,
+        Err(e) => {
+            k_nano::slog_bin!("AS", "r1", "clone_current fail: {}", e);
+            return;
+        }
+    };
+
+    // VA dedicada no MVP region para shadow do BAR (não o HHDM do kernel)
+    const AS_BAR_VA: u64 = MVP_REGION_BASE + 0x2000;
+    let bar_frame = PhysFrame::<Size4KiB>::containing_address(x86_64::PhysAddr::new(bar0 & !0xFFF));
+    let flags = rw_flags() | PageTableFlags::NO_CACHE;
+
+    let map_ok = unsafe { as_r1.map_page(VirtAddr::new(AS_BAR_VA), bar_frame, flags) };
+    match map_ok {
+        Ok(()) => k_nano::slog_bin!("AS", "r1", "BAR {:#x} mapped @ {:#x} UC", bar0, AS_BAR_VA),
+        Err(e) => {
+            // Pode já estar no shallow clone via HHDM — ainda assim switch CR3
+            k_nano::slog_bin!("AS", "r1", "map note: {} — continua switch CR3", e);
+        }
+    }
+
+    unsafe {
+        as_r1.activate();
+    }
+    // Touch via HHDM (sempre válido no monólito) — prova CR3 switch non-fatal
+    let pmoff = phys_offset();
+    let touch = (bar0.wrapping_add(pmoff)) as *const u32;
+    let val = unsafe { core::ptr::read_volatile(touch) };
+    k_nano::slog_bin!("AS", "r1", "touch BAR ok val={:#x} (CR3 switched)", val);
+
+    unsafe {
+        restore_cr3(kernel_l4, kernel_flags);
+    }
+    k_nano::slog_bin!(
+        "AS",
+        "r1",
+        "restore CR3 OK — shallow PoC done (≠ isolamento produção)"
+    );
+}

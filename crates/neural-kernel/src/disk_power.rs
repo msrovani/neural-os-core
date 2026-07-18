@@ -5,13 +5,13 @@
 /// Stub: ATA IDLE — implementacao segura (apenas log).
 /// O comando ATA IDLE (0xE3/E2) deve ser enviado via taskfile regs, nao via write_sectors.
 pub fn ata_idle(spindown_secs: u16) {
-    crate::serial_println!("[DISK_POWER] ATA IDLE {}s (stub)", spindown_secs);
+    k_nano::slog_bin!("DISK_POWER", "info", "ATA IDLE {}s (stub)", spindown_secs);
 }
 
 /// Stub: NVMe Set Power State — implementacao segura (apenas log).
 /// Deve usar admin command Set Features (0x09) via NVMe admin queue.
 pub fn nvme_set_power(ps: u8) {
-    crate::serial_println!("[DISK_POWER] NVMe PS{} (stub)", ps);
+    k_nano::slog_bin!("DISK_POWER", "info", "NVMe PS{} (stub)", ps);
 }
 
 pub fn apply_idle_policy(is_ssd: bool, idle_ticks: u64) {

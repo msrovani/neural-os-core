@@ -5,8 +5,6 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use event_bus::{CapabilityToken, Event, Receiver};
 use crate::jarvis::{JarvisEngine, Emotion, EmotionAnalysis};
 use crate::audio::context::build_emotional_context;
-use crate::serial_println;
-
 const JARVIS_MANIFEST: AgentManifest = AgentManifest {
     name: "jarvis",
     kind: AgentKind::Console,
@@ -71,7 +69,7 @@ impl Agent for JarvisAgent {
                 mem_mb, cpu_count, agent_count, tts_mode
             );
 
-            serial_println!("[JARVIS] Solicitando saudacao a LLM...");
+            k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao a LLM...");
             let _ = crate::EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from("LLM_REQUEST"),
                 payload: prompt.into_bytes(), token: CapabilityToken::Legacy(1),
@@ -88,7 +86,7 @@ impl Agent for JarvisAgent {
             if !self.greeted {
                 self.greeted = true;
                 let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, text);
-                serial_println!("{}", greeting);
+                k_nano::slog_bin!("Log", "msg", "{}", greeting);
                 let _ = crate::EVENT_BUS.publish(Event {
                     id: 0,
                     topic: alloc::string::String::from("HERMES_RESPONSE"),
@@ -99,7 +97,7 @@ impl Agent for JarvisAgent {
             }
 
             let response = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, text);
-            serial_println!("{}", response);
+            k_nano::slog_bin!("Log", "msg", "{}", response);
             let _ = crate::EVENT_BUS.publish(Event {
                 id: 0,
                 topic: alloc::string::String::from("HERMES_RESPONSE"),
@@ -111,7 +109,7 @@ impl Agent for JarvisAgent {
         // ── Input do usuario ─────────────────────────────────
         while let Some(ev) = self.user_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            serial_println!("[JARVIS] \"{}\"", text);
+            k_nano::slog_jarbas!("Jarbas", "info", "\"{}\"", text);
 
             let text_emotion = EmotionAnalysis::analyze(text);
             self.last_text_emotion = Some(text_emotion.dominant());
@@ -119,7 +117,7 @@ impl Agent for JarvisAgent {
 
             let emotional_ctx = build_emotional_context(self.last_text_emotion);
             let enhanced_prompt = alloc::format!("{}\nUser: {}", emotional_ctx, text);
-            serial_println!("[JARVIS] Contexto emocional: {}", emotional_ctx);
+            k_nano::slog_jarbas!("Jarbas", "info", "Contexto emocional: {}", emotional_ctx);
 
             if !self.greeted {
                 self.greeted = true;

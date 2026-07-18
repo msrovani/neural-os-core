@@ -1,21 +1,6 @@
-//! GPU Module — detecção, VRAM tier, ring buffer, firmware, backend, cube.
+//! GPU FE — reexport k-hal BE (ADR-0041 H2). MMIO vive em k_hal; jarbas só FE + cube.
 
-pub mod detect;
-pub mod vram;
-pub mod intel;
-pub mod nvidia;
-pub mod amd;
-pub mod backend;
+pub use k_hal::gpu::*;
+
+/// Demo FE (DoubleBuffer) — não toca BAR GPU.
 pub mod cube;
-pub mod ring;
-pub mod firmware;
-pub mod xqueue;
-pub mod kv_dma;
-pub mod xpu;
-pub mod msched;
-pub mod display_coex;
-pub mod bench;
-pub mod work_queue;
-pub mod sasos;
-pub mod pipeline_g5;
-

@@ -27,7 +27,7 @@ pub fn register_fs_agent(agent: Box<dyn FilesystemAgent>) {
     let name = alloc::format!("{}", agent.name());
     let mp = alloc::format!("{}", agent.mount_point());
     FS_AGENTS.lock().push(FsAgentEntry { agent });
-    crate::serial_println!("[FS] Agent '{}' registrado em {}", name, mp);
+    crate::slog_nano!("FS", "info", "Agent '{}' registrado em {}", name, mp);
 }
 
 // ponytail: agent_for_mount stub removed (dead code, preserved in LEGACY/v1.5-neural-kernel-src/)

@@ -208,7 +208,7 @@ try {
     # SLIP FREEZE: default OFF. Only -SerialBridge starts peer.
     $wantSlip = $SerialBridge -and (-not $NoSerialBridge)
     if ($wantSlip) {
-        Write-Host "[SLIP] opt-in (-SerialBridge) — FROZEN; not Sprint Net gate" -ForegroundColor Yellow
+        Write-Host "[SLIP] opt-in (-SerialBridge) - FROZEN; not Sprint Net gate" -ForegroundColor Yellow
         if (-not (Start-SerialBridge -Port $SerialBridgePort)) {
             Write-Host "[SLIP] abortando: peer serial falhou" -ForegroundColor Red
             exit 1
@@ -247,6 +247,7 @@ try {
             $a += @("-device", "loader,file=$bitnet2b,addr=0x100000000")
             Write-Host "BitNet2B loader: $bitnet2b @0x100000000" -ForegroundColor Green
         }
+        # HW simulado extra ja anexado abaixo (HDA/xHCI/VirtIO-GPU)
         $piper = Join-Path $Root "target\PIPER_PT_BR.BIN"
         if (-not (Test-Path $piper)) { $piper = Join-Path $Root "target\PIPER.BIN" }
         if (Test-Path $piper) {
@@ -287,7 +288,7 @@ try {
             Write-Host "NetMode loader: $netmodeFile @0x164000000 ($netMode)" -ForegroundColor Green
         }
         # COM1 = log file; COM2 = SLIP only if peer started (-SerialBridge).
-        # Without peer, tcp client aborts QEMU — use null when SLIP frozen.
+        # Without peer, tcp client aborts QEMU - use null when SLIP frozen.
         $a += @(
             "-drive", "if=pflash,format=raw,file=$ovmf,readonly=on",
             "-serial", "file:$logfile"
@@ -298,8 +299,25 @@ try {
             $a += @("-serial", "null")
         }
         $a += $netArgs
-        if ($Window) { $a += @("-vga", "std") }
-        else { $a += @("-vga", "none", "-display", "none", "-nographic") }
+        # HW simulado (QEMU device emulation docs):
+        #   intel-hda + hda-duplex (ICH HDA; i440fx-safe — ich9 precisa q35)
+        #   qemu-xhci + usb-tablet/kbd (input)
+        #   virtio-gpu-pci (DeviceTree / k-hal VirtIO path; UEFI GOP continua em -vga)
+        # Ref: https://qemu.readthedocs.io/en/latest/system/device-emulation.html
+        $a += @(
+            "-audiodev", "none,id=snd0",
+            "-device", "intel-hda,id=hda0",
+            "-device", "hda-duplex,id=hda-codec,bus=hda0.0,cad=0,audiodev=snd0",
+            "-device", "qemu-xhci,id=xhci",
+            "-device", "usb-tablet,bus=xhci.0",
+            "-device", "usb-kbd,bus=xhci.0",
+            "-device", "virtio-gpu-pci,id=vgpu"
+        )
+        if ($Window) {
+            $a += @("-vga", "std", "-display", "gtk")
+        } else {
+            $a += @("-vga", "std", "-display", "none")
+        }
         return $a
     }
 

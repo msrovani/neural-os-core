@@ -78,7 +78,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
     frame.extend_from_slice(&ip);
     frame.extend_from_slice(&udp_data);
 
-    crate::serial_println!("[DNS-MANUAL] Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
+    k_nano::slog_bin!("DNS", "MANUAL", "Resolvendo {} -> {}.{}.{}.{} ({} bytes)",
         hostname, dns_server[0], dns_server[1], dns_server[2], dns_server[3], frame.len());
 
     unsafe { slip::send(&frame); }
@@ -128,8 +128,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
                 if rdata_end > resp.len() { break; }
                 if rr_type == 1 && rdlen == 4 {
                     let ip = [resp[pos], resp[pos + 1], resp[pos + 2], resp[pos + 3]];
-                    crate::serial_println!("[DNS-MANUAL] OK: {}.{}.{}.{}",
-                        ip[0], ip[1], ip[2], ip[3]);
+                    k_nano::slog_bin!("DNS", "MANUAL", "OK: {}.{}.{}.{}", ip[0], ip[1], ip[2], ip[3]);
                     return Some(ip);
                 }
                 pos = rdata_end;
@@ -139,7 +138,7 @@ pub fn dns_resolve_manual(hostname: &str, dns_server: [u8; 4]) -> Option<[u8; 4]
             unsafe { slip::send(&frame); }
         }
     }
-    crate::serial_println!("[DNS-MANUAL] Timeout");
+    k_nano::slog_bin!("DNS", "MANUAL", "Timeout");
     None
 }
 use smoltcp::iface::{Config, Interface, SocketSet, SocketHandle};
@@ -267,7 +266,7 @@ impl Device for NetPhy {
     fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = unsafe { nic_recv() };
         if let Some(ref d) = data {
-            unsafe { crate::serial_println!("[NET-RX] {} bytes", d.len()); }
+            unsafe { k_nano::slog_bin!("NET", "RX", "{} bytes", d.len()); }
         }
         data.map(|d| (PhyToken(d), PhyToken(vec![])))
     }
@@ -345,7 +344,7 @@ impl NetStack {
             cfg.configured = true;
             cfg.online = true;
         }
-        crate::serial_println!("[NET] Static IP: 10.0.2.15/24 gw=10.0.2.2 dns=10.0.2.3");
+        k_nano::slog_hermes!("Net", "info", "Static IP: 10.0.2.15/24 gw=10.0.2.2 dns=10.0.2.3");
     }
 
     pub fn poll(&mut self, now_ms: i64) {
@@ -539,7 +538,7 @@ impl NetStack {
             let udp = self.sockets.get_mut::<udp_socket::Socket>(handle);
             let _ = udp.bind(54321);
             if udp.send_slice(&query, dns_server_addr).is_err() {
-                crate::serial_println!("[DNS] send_slice falhou");
+                k_nano::slog_bin!("DNS", "info", "send_slice falhou");
             }
         }
 
@@ -578,12 +577,10 @@ impl NetStack {
                     if rtype == 1 && rclass == 1 && rdlen == 4 {
                         let ip = [data[pos], data[pos + 1], data[pos + 2], data[pos + 3]];
                         self.sockets.remove(handle);
-                        crate::serial_println!(
-                            "[DNS] OK {}.{}.{}.{} (dtx={} drx={})",
+                        k_nano::slog_bin!("DNS", "info", "OK {}.{}.{}.{} (dtx={} drx={})",
                             ip[0], ip[1], ip[2], ip[3],
                             net_tx_count().saturating_sub(tx0),
-                            net_rx_count().saturating_sub(rx0)
-                        );
+                            net_rx_count().saturating_sub(rx0));
                         return Some(ip);
                     }
                     pos = name_end.max(pos + rdlen);
@@ -592,13 +589,11 @@ impl NetStack {
             }
         }
         self.sockets.remove(handle);
-        crate::serial_println!(
-            "[DNS] timeout dtx={} drx={} tx={} rx={}",
+        k_nano::slog_bin!("DNS", "info", "timeout dtx={} drx={} tx={} rx={}",
             net_tx_count().saturating_sub(tx0),
             net_rx_count().saturating_sub(rx0),
             net_tx_count(),
-            net_rx_count()
-        );
+            net_rx_count());
         None
     }
 

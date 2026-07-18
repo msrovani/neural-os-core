@@ -14,6 +14,7 @@ ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 cortex = { path = "../cortex" }
 k-nano = { path = "../k_nano" }
+k-hal = { path = "../k_hal" }
 
 [features]
 kernel = []

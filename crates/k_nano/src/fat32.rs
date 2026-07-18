@@ -5,7 +5,22 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 use crate::ata::AtaDriver;
-use crate::serial_println;
+/// Converte "NAME.EXT" para entrada FAT 8.3 (11 bytes, espaços).
+pub fn encode_83(name: &str) -> [u8; 11] {
+    let mut out = [b' '; 11];
+    let upper = name.to_ascii_uppercase();
+    let (base, ext) = match upper.rsplit_once('.') {
+        Some((b, e)) => (b, e),
+        None => (upper.as_str(), ""),
+    };
+    for (i, &c) in base.as_bytes().iter().take(8).enumerate() {
+        out[i] = c;
+    }
+    for (i, &c) in ext.as_bytes().iter().take(3).enumerate() {
+        out[8 + i] = c;
+    }
+    out
+}
 
 #[derive(Debug)]
 pub struct Partition {
@@ -19,11 +34,11 @@ pub struct Partition {
 pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
     let mut mbr = [0u8; 512];
     if !unsafe { ata.read_sectors(0, &mut mbr, 1) } {
-        serial_println!("[MBR] Falha ao ler setor 0");
+        crate::slog_nano!("MBR", "info", "Falha ao ler setor 0");
         return Vec::new();
     }
     if mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
-        serial_println!("[MBR] Signature 55AA nao encontrada");
+        crate::slog_nano!("MBR", "info", "Signature 55AA nao encontrada");
         return Vec::new();
     }
     let mut parts = Vec::new();
@@ -34,7 +49,7 @@ pub fn read_mbr(ata: &AtaDriver) -> Vec<Partition> {
         let lba = u32::from_le_bytes([mbr[off+8], mbr[off+9], mbr[off+10], mbr[off+11]]);
         let count = u32::from_le_bytes([mbr[off+12], mbr[off+13], mbr[off+14], mbr[off+15]]);
         parts.push(Partition { bootable: mbr[off] == 0x80, type_code, lba_start: lba, sector_count: count });
-        serial_println!("[MBR] {}: type={:#04x} LBA={} size={}MB", i+1, type_code, lba, count as u64 * 512 / (1024*1024));
+        crate::slog_nano!("MBR", "info", "{}: type={:#04x} LBA={} size={}MB", i+1, type_code, lba, count as u64 * 512 / (1024*1024));
     }
     parts
 }
@@ -75,7 +90,7 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
     let parts = read_mbr(ata);
     if parts.is_empty() { return; }
     let total = ata.total_sectors().unwrap_or(0);
-    serial_println!("[DISK] Total: {} setores ({} MB), {} particoes", total, total as u64 * 512 / (1024*1024), parts.len());
+    crate::slog_nano!("DISK", "info", "Total: {} setores ({} MB), {} particoes", total, total as u64 * 512 / (1024*1024), parts.len());
 
     for (i, part) in parts.iter().enumerate() {
         let fs_name = match part.type_code {
@@ -86,7 +101,7 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
         if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
             if let Some(fat32) = Fat32Reader::new(ata, part) {
                 let root_list = unsafe { fat32.list_root() };
-                serial_println!("[FAT32] Root contents:\n{}", root_list);
+                crate::slog_nano!("FAT32", "info", "Root contents:\n{}", root_list);
             }
         }
         let mount_point = alloc::format!("/mnt/sdhc/p{}", i+1);
@@ -96,22 +111,23 @@ pub unsafe fn mount_partitions(ata: &AtaDriver) {
         crate::mhi::MHI_REGISTRY.lock().register(
             x86_64::PhysAddr::new(part.lba_start as u64 * 512),
             part.sector_count as usize * 512, crate::mhi::AllocTier::Hdd, &mount_point);
-        serial_println!("[DISK] Montado {} type={:#04x} {}MB", mount_point, part.type_code, part.sector_count as u64 * 512 / (1024*1024));
+        crate::slog_nano!("DISK", "info", "Montado {} type={:#04x} {}MB",
+            mount_point, part.type_code, part.sector_count as u64 * 512 / (1024*1024));
     }
 
     if total > 0 {
         let (free_start, free_size) = find_free_space(&parts, total);
         let free_mb = free_size as u64 * 512 / (1024*1024);
         let is_usb = is_bootable_usb(&parts);
-        serial_println!("[DISK] Livre: LBA {} ({} MB) usb={}", free_start, free_mb, is_usb);
+        crate::slog_nano!("DISK", "info", "Livre: LBA {} ({} MB) usb={}", free_start, free_mb, is_usb);
         if free_size > 2048 && is_usb {
             let addr = free_start as u64 * 512;
             crate::mhi::MHI_REGISTRY.lock().register(
                 x86_64::PhysAddr::new(addr), free_size as usize * 512, crate::mhi::AllocTier::Hdd, "/mnt/sdhc/data");
             if let Some(ref mut vfs) = *crate::vfs::VFS.lock() { vfs.mount("/mnt/sdhc/data", "ata"); }
-            serial_println!("[DISK] + {} MB para dados MHI!", free_mb);
+            crate::slog_nano!("DISK", "info", "+ {} MB para dados MHI!", free_mb);
         } else if free_size > 2048 && !is_usb {
-            serial_println!("[DISK] HD com {} MB livres. Ignorado (requer confirmacao).", free_mb);
+            crate::slog_nano!("DISK", "info", "HD com {} MB livres. Ignorado (requer confirmacao).", free_mb);
         }
     }
 }
@@ -156,9 +172,9 @@ impl<'a> Fat32Reader<'a> {
         let fat_lba = part.lba_start + reserved_sectors as u32;
         let data_lba = fat_lba + fat_count as u32 * sectors_per_fat32;
 
-        serial_println!("[FAT32] BPB: bps={} spc={} fats={} spf={} root_cluster={}",
+        crate::slog_nano!("FAT32", "info", "BPB: bps={} spc={} fats={} spf={} root_cluster={}",
             bytes_per_sector, sectors_per_cluster, fat_count, sectors_per_fat32, root_cluster);
-        serial_println!("[FAT32] fat_lba={} data_lba={}", fat_lba, data_lba);
+        crate::slog_nano!("FAT32", "info", "fat_lba={} data_lba={}", fat_lba, data_lba);
 
         Some(Fat32Reader { ata, lba_start: part.lba_start, sectors_per_cluster, bytes_per_sector,
             reserved_sectors, fat_count, sectors_per_fat32, root_cluster, fat_lba, data_lba })
@@ -236,7 +252,7 @@ impl<'a> Fat32Reader<'a> {
     /// Le um range de bytes de um arquivo pelo nome (streaming).
     /// Retorna bytes de `offset` ate `offset + size` do arquivo.
     pub unsafe fn read_file_range(&self, name: &str, offset: usize, size: usize) -> Option<Vec<u8>> {
-        let name_upper = name.to_ascii_uppercase();
+        let want = encode_83(name);
         let mut cluster = self.root_cluster;
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
@@ -245,9 +261,9 @@ impl<'a> Fat32Reader<'a> {
                 let first = buf[entry_off];
                 if first == 0 { break; }
                 if first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
-                let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
-                if entry_name.trim_end() != name_upper { continue; }
+                if buf[entry_off..entry_off + 11] != want { continue; }
 
                 let file_size = u32::from_le_bytes([
                     buf[entry_off+28], buf[entry_off+29],
@@ -300,7 +316,7 @@ impl<'a> Fat32Reader<'a> {
     /// Le o conteudo de um arquivo pelo nome na raiz (cluster chain)
     pub unsafe fn read_file(&self, name: &str) -> Option<Vec<u8>> {
         let mut cluster = self.root_cluster;
-        let name_upper = name.to_ascii_uppercase();
+        let want = encode_83(name);
 
         while cluster < 0x0FFF_FFF8 && cluster >= 2 {
             let buf = match self.read_cluster(cluster) { Some(b) => b, None => return None };
@@ -309,11 +325,9 @@ impl<'a> Fat32Reader<'a> {
                 let first = buf[entry_off];
                 if first == 0 { break; }
                 if first == 0xE5 { continue; }
+                if buf[entry_off + 11] & 0x0F == 0x0F { continue; }
                 if buf[entry_off + 11] & 0x08 != 0 { continue; }
-
-                let entry_name = core::str::from_utf8(&buf[entry_off..entry_off+11]).unwrap_or("");
-                let trimmed = entry_name.trim_end();
-                if trimmed != name_upper { continue; }
+                if buf[entry_off..entry_off + 11] != want { continue; }
 
                 let file_size = u32::from_le_bytes([
                     buf[entry_off+28], buf[entry_off+29],
@@ -471,7 +485,7 @@ impl<'a> Fat32Writer<'a> {
 
         let clusters = match self.find_free_clusters(num_clusters as u32) {
             Some(c) => c,
-            None => { crate::serial_println!("[FAT32] Sem clusters livres!"); return false; }
+            None => { crate::slog_nano!("FAT32", "info", "Sem clusters livres!"); return false; }
         };
         let mut written = 0usize;
         for (i, &c) in clusters.iter().enumerate() {
@@ -531,7 +545,7 @@ impl<'a> Fat32Writer<'a> {
             // Arquivo novo: alocar clusters e criar entrada
             let clusters = match self.find_free_clusters(num_clusters as u32) {
                 Some(c) => c,
-                None => { crate::serial_println!("[FAT32] Sem clusters livres!"); return false; }
+                None => { crate::slog_nano!("FAT32", "info", "Sem clusters livres!"); return false; }
             };
             if !self.write_cluster_chain(clusters[0], data) { return false; }
             self.create_entry(name, clusters[0], data.len() as u32)

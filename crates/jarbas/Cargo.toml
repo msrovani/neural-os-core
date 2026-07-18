@@ -13,6 +13,7 @@ ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 skill-registry = { path = "../skill-registry" }
 k-nano = { path = "../k_nano" }
+k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 hermes = { path = "../hermes" }
 bootloader_api = "0.11.15"

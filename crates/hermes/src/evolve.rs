@@ -88,7 +88,7 @@ impl EvolveLedger {
         match rt.execute_sandbox(name) {
             Ok(_) => {
                 self.swaps_ok = self.swaps_ok.saturating_add(1);
-                k_nano::serial_println!("[EVOLVE] hot_swap OK skill={} gen={}", name, gen);
+                k_nano::slog_hermes!("EVOLVE", "info", "hot_swap OK skill={} gen={}", name, gen);
                 Ok(())
             }
             Err(e) => {
@@ -108,10 +108,7 @@ impl EvolveLedger {
                         });
                     rt.force_load_skill(name, entry.bytecode.clone(), m);
                     self.rollbacks = self.rollbacks.saturating_add(1);
-                    k_nano::serial_println!(
-                        "[EVOLVE] rollback skill={} after err={} gen={}",
-                        name, e, gen
-                    );
+                    k_nano::slog_hermes!("EVOLVE", "info", "rollback skill={} after err={} gen={}", name, e, gen);
                 } else {
                     self.skips = self.skips.saturating_add(1);
                 }
@@ -150,6 +147,26 @@ fn ensure_rt() {
     if g.is_none() {
         *g = Some(WasmSkillRuntime::new());
     }
+}
+
+/// Promove skill efêmera (SkillOpt) → bytecode WASM no runtime global (ADR-0047).
+/// Usado quando uso rotineiro (≥3 runs, ≥70% sucesso) justifica persistência.
+pub fn promote_ephemeral_to_wasm(name: &str, description: &str) -> Result<(), &'static str> {
+    if name.is_empty() || name.len() > 64 {
+        return Err("bad_name");
+    }
+    ensure_rt();
+    let mut rt_g = WASM_RT.lock();
+    let rt = rt_g.as_mut().ok_or("no runtime")?;
+    if rt.manifests.contains_key(name) {
+        rt.market.record_skill(name, 1, true);
+        k_nano::slog_hermes!("EVOLVE", "info", "skill '{}' já WASM — market bump", name);
+        return Ok(());
+    }
+    rt.create_skill(description, name);
+    rt.market.record_skill(name, 1, true);
+    k_nano::slog_hermes!("EVOLVE", "info", "ephemeral→WASM skill={}", name);
+    Ok(())
 }
 
 /// Boot / DREAM hook: demo swap on builtin "echo" skill (non-fatal).
@@ -204,10 +221,7 @@ pub fn genesis_spawn(parent: &str, child_desc: &str) -> Result<alloc::string::St
     let mut ledger = EVOLVE_LEDGER.lock();
     ledger.hot_swap(rt, &child_name, code, manifest)?;
     GENESIS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    k_nano::serial_println!(
-        "[GENESIS] parent={} spawned={} (count={})",
-        parent, child_name, n + 1
-    );
+    k_nano::slog_hermes!("GENESIS", "info", "parent={} spawned={} (count={})", parent, child_name, n + 1);
     Ok(child_name)
 }
 

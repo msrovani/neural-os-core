@@ -21,6 +21,7 @@ agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
 # ADR-0042 N2.5: k_nano sem global-alloc (bin mantém allocator.rs); k_ai trust/self_heal.
 k-nano = { path = "../k_nano" }
+k-hal = { path = "../k_hal" }
 k_ai = { path = "../k_ai" }
 # ADR-0042 N3.5: dep direta cortex (tensor/trinity/arena…); bin mantém mod cortex integração.
 cortex-crate = { path = "../cortex", package = "cortex" }

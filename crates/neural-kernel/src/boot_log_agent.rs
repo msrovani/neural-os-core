@@ -3,8 +3,6 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::Receiver;
-use crate::serial_println;
-
 /// Max clusters ao varrer root em busca de B*.LOG (evita hang em chain ciclica/corrupta).
 const MAX_ROOT_CLUSTERS: u32 = 8;
 /// Cap de bytes ao carregar um boot log do disco (nao engolir o scheduler).
@@ -52,7 +50,7 @@ impl BootLogAgent {
         // QEMU/VBox: ATA PIO no walk do root engasga WHPX (minutos) e prende init_phase.
         // Persistencia em disco so em HW real; sandbox usa serial + LogFs fallback.
         if crate::env::is_sandbox() {
-            serial_println!("[BOOTLOG] SKIP FAT walk (sandbox) — SelfHeal nao bloqueia NetAgent");
+            k_nano::slog_bin!("BOOTLOG", "info", "SKIP FAT walk (sandbox) — SelfHeal nao bloqueia NetAgent");
             // Fallback LogFs abaixo ainda roda
         } else {
         let ata_guard = crate::ATA_DRIVER.lock();
@@ -75,16 +73,13 @@ impl BootLogAgent {
                             && !hit_eod
                         {
                             if cluster == prev {
-                                serial_println!(
-                                    "[BOOTLOG] root FAT self-loop cluster={} — abort walk",
-                                    cluster
-                                );
+                                k_nano::slog_bin!("BOOTLOG", "info", "root FAT self-loop cluster={} — abort walk", cluster);
                                 break;
                             }
                             prev = cluster;
                             walked += 1;
                             if walked == 1 || walked % 4 == 0 {
-                                serial_println!("[BOOTLOG] root walk cluster={} n={}", cluster, walked);
+                                k_nano::slog_bin!("BOOTLOG", "info", "root walk cluster={} n={}", cluster, walked);
                             }
 
                             let lba = fat32.cluster_lba(cluster);
@@ -142,10 +137,7 @@ impl BootLogAgent {
                         }
 
                         if walked >= MAX_ROOT_CLUSTERS {
-                            serial_println!(
-                                "[BOOTLOG] root walk budget hit ({} clusters) — skip rest",
-                                MAX_ROOT_CLUSTERS
-                            );
+                            k_nano::slog_bin!("BOOTLOG", "info", "root walk budget hit ({} clusters) — skip rest", MAX_ROOT_CLUSTERS);
                         }
 
                         if !best_name.is_empty() {
@@ -266,7 +258,7 @@ impl Agent for BootLogAgent {
         // Consumer mínimo de BOOT_PHASE (EventBus → serial)
         while let Some(ev) = self.boot_phase_rx.try_receive() {
             let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
-            serial_println!("[BOOT-LOG-AGENT] fase={}", msg);
+            k_nano::slog_bin!("BOOT", "LOG-AGENT", "fase={}", msg);
         }
         // FAT so uma vez — senao Continuous remonta BPB e engasga o scheduler
         if !self.analyzed {
@@ -274,7 +266,7 @@ impl Agent for BootLogAgent {
             if let Some(log) = Self::read_last_boot_log() {
                 let diagnostics = Self::analyze_log(&log);
                 for (kind, msg) in &diagnostics {
-                    serial_println!("[BOOT-LOG-AGENT] {}: {}", kind, msg);
+                    k_nano::slog_bin!("BOOT", "LOG-AGENT", "{}: {}", kind, msg);
 
                     if *kind == "PANIC" || *kind == "GPU_HUNG" {
                         let ctx = crate::self_heal::ErrorContext {

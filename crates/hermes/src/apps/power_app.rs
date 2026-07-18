@@ -19,7 +19,7 @@ impl App for PowerApp {
         if y >= 40 && y < 80 {
             if x >= 20 && x < 140 {
                 if self.confirmed {
-                    k_nano::serial_println!("[POWER] Shutdown...");
+                    k_nano::slog_hermes!("POWER", "info", "Shutdown...");
                     k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Triggered);
                     k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Triggered);
                     unsafe { core::arch::asm!("out dx, al", in("dx") 0x604u16, in("al") 0x10u8, options(nostack)); }
@@ -29,7 +29,7 @@ impl App for PowerApp {
                 return Some(String::from("Click again to confirm"));
             }
             if x >= 160 && x < 280 {
-                k_nano::serial_println!("[POWER] Reboot...");
+                k_nano::slog_hermes!("POWER", "info", "Reboot...");
                 k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Scheduled);
                 k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Scheduled);
                 unsafe { x86_64::instructions::port::Port::new(0x64u16).write(0xFEu8); }

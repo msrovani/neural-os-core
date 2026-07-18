@@ -6,7 +6,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::interrupts::TIMER_TICKS;
-use k_nano::serial_println;
 use k_nano::EVENT_BUS;
 use event_bus::{Event, CapabilityToken};
 
@@ -171,7 +170,7 @@ impl SecurityAgent {
     fn correlate(&mut self, tick: u64) {
         if self.events.len() >= 3 {
             let sev: u8 = self.events.iter().map(|e| e.severity).max().unwrap_or(0);
-            serial_println!("[SECURITY] Correlacao: {} eventos, severidade max={}", self.events.len(), sev);
+            k_nano::slog_hermes!("Sec", "info", "Correlacao: {} eventos, severidade max={}", self.events.len(), sev);
             if sev >= 4 {
                 let msg = alloc::format!("ALERTA: {} eventos detectados, severidade {}", self.events.len(), sev);
                 let _ = EVENT_BUS.publish(Event {

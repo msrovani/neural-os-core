@@ -7,7 +7,6 @@ use x86_64::VirtAddr;
 
 use crate::address_space::{self, AddressSpace};
 use crate::demand_page;
-use crate::serial_println;
 use crate::syscall::{self, Cap, SYS_DEMAND_PAGE, SYS_MAP_WEIGHTS};
 
 /// VA base dos pesos no AddressSpace Cortex (após K_IA_DMA_VA).
@@ -87,7 +86,7 @@ pub unsafe fn mmap_weights(
     held: Cap,
 ) -> Result<WeightMap, &'static str> {
     if !held.contains(Cap::MAP_WEIGHTS) {
-        serial_println!("[CapGate] DENY MAP_WEIGHTS held=0x{:x}", held.bits());
+        k_nano::slog_bin!("CapGate", "info", "DENY MAP_WEIGHTS held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_WEIGHTS");
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
@@ -116,10 +115,7 @@ pub unsafe fn mmap_weights_lazy(
     held: Cap,
 ) -> Result<WeightMap, &'static str> {
     if !held.contains(Cap::MAP_WEIGHTS) || !held.contains(Cap::DEMAND_PAGE) {
-        serial_println!(
-            "[CapGate] DENY MAP_WEIGHTS|DEMAND_PAGE held=0x{:x}",
-            held.bits()
-        );
+        k_nano::slog_bin!("CapGate", "info", "DENY MAP_WEIGHTS|DEMAND_PAGE held=0x{:x}", held.bits());
         return Err("EPERM: Cap::MAP_WEIGHTS|DEMAND_PAGE");
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
@@ -148,7 +144,7 @@ pub fn mmap_count() -> u64 {
 
 /// Demo non-fatal P5: deny → mmap eager SUCCESS → touch → restore CR3.
 pub fn demo_cortex_mmap() -> Result<(), &'static str> {
-    serial_println!("[P5] Cortex weight mmap demo (eager; lazy = P7)");
+    k_nano::slog_bin!("P5", "info", "Cortex weight mmap demo (eager; lazy = P7)");
 
     if syscall::dispatch(SYS_MAP_WEIGHTS, 0, Cap::EMPTY).is_ok() {
         return Err("p5: Cap vazia nao deveria MAP_WEIGHTS");
@@ -165,9 +161,9 @@ pub fn demo_cortex_mmap() -> Result<(), &'static str> {
     {
         Ok(m) => m,
         Err(e) => {
-            serial_println!("[P5] WARN mmap_weights: {} — Cap-only path", e);
+            k_nano::slog_bin!("P5", "info", "WARN mmap_weights: {} — Cap-only path", e);
             syscall::dispatch(SYS_MAP_WEIGHTS, DEMO_WEIGHT_PAGES as u64, Cap::MAP_WEIGHTS)?;
-            serial_println!("[P5] SUCCESS Cap MAP_WEIGHTS (sem frames)");
+            k_nano::slog_bin!("P5", "info", "SUCCESS Cap MAP_WEIGHTS (sem frames)");
             return Ok(());
         }
     };
@@ -182,19 +178,17 @@ pub fn demo_cortex_mmap() -> Result<(), &'static str> {
         return Err("p5: touch weight page falhou");
     }
 
-    serial_println!(
-        "[P5] SUCCESS mmap pesos pages={} va={:x} phys={:x} count={}",
+    k_nano::slog_bin!("P5", "info", "SUCCESS mmap pesos pages={} va={:x} phys={:x} count={}",
         map.pages,
         map.virt,
         map.phys,
-        mmap_count()
-    );
+        mmap_count());
     Ok(())
 }
 
 /// Demo non-fatal P7: lazy reserve → CR3 cortex → first-touch #PF cured → verify.
 pub fn demo_demand_paging() -> Result<(), &'static str> {
-    serial_println!("[P7] Demand-paging #PF demo (lazy weights)");
+    k_nano::slog_bin!("P7", "info", "Demand-paging #PF demo (lazy weights)");
 
     let need = Cap::MAP_WEIGHTS.union(Cap::DEMAND_PAGE);
     if syscall::dispatch(SYS_DEMAND_PAGE, 0, Cap::EMPTY).is_ok() {
@@ -217,9 +211,9 @@ pub fn demo_demand_paging() -> Result<(), &'static str> {
     let map = match unsafe { mmap_weights_lazy(&mut as_cortex, DEMO_WEIGHT_PAGES, need) } {
         Ok(m) => m,
         Err(e) => {
-            serial_println!("[P7] WARN mmap_weights_lazy: {} — Cap-only path", e);
+            k_nano::slog_bin!("P7", "info", "WARN mmap_weights_lazy: {} — Cap-only path", e);
             syscall::dispatch(SYS_DEMAND_PAGE, DEMO_WEIGHT_PAGES as u64, need)?;
-            serial_println!("[P7] SUCCESS Cap DEMAND_PAGE (sem frames)");
+            k_nano::slog_bin!("P7", "info", "SUCCESS Cap DEMAND_PAGE (sem frames)");
             return Ok(());
         }
     };
@@ -245,12 +239,10 @@ pub fn demo_demand_paging() -> Result<(), &'static str> {
         return Err("p7: esperava >=2 cures #PF");
     }
 
-    serial_println!(
-        "[P7] SUCCESS lazy pages={} va={:x} cures={} lazy_maps={}",
+    k_nano::slog_bin!("P7", "info", "SUCCESS lazy pages={} va={:x} cures={} lazy_maps={}",
         map.pages,
         map.virt,
         cured,
-        LAZY_COUNT.load(Ordering::Relaxed)
-    );
+        LAZY_COUNT.load(Ordering::Relaxed));
     Ok(())
 }

@@ -14,13 +14,7 @@ static SHUTDOWN_CAUSE: AtomicU8 = AtomicU8::new(0);
 
 pub fn set_cause(cause: ShutdownCause) {
     SHUTDOWN_CAUSE.store(cause as u8, Ordering::SeqCst);
-    let label = match cause {
-        ShutdownCause::Expected => "E",
-        ShutdownCause::Triggered => "T",
-        ShutdownCause::Scheduled => "S",
-        ShutdownCause::Unexpected => "U",
-        ShutdownCause::None => "N",
-    };
+    let label = match cause {ShutdownCause::Expected => "E", ShutdownCause::Triggered => "T", ShutdownCause::Scheduled => "S", ShutdownCause::Unexpected => "U", ShutdownCause::None => "N"};
     let tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
     let _msg = alloc::format!("SHUTDOWN:{} tick={}", label, tick);
     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
@@ -29,7 +23,7 @@ pub fn set_cause(cause: ShutdownCause) {
         payload: _msg.as_bytes().to_vec(),
         token: event_bus::CapabilityToken::Legacy(1),
     });
-    k_nano::serial_println!("[SHUTDOWN] Causa: {} (tick={})", label, tick);
+    k_nano::slog_kai!("SHUTDOWN", "info", "Causa: {} (tick={})", label, tick);
 }
 
 pub fn get_cause() -> ShutdownCause {

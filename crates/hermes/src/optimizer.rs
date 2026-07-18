@@ -6,8 +6,6 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::interrupts::TIMER_TICKS;
-use k_nano::serial_println;
-
 const OPT_MANIFEST: AgentManifest = AgentManifest {
     name: "optimizer",
     kind: AgentKind::System,
@@ -95,10 +93,10 @@ fn auto_scale_memory() {
     let mem = k_nano::memory::global_hardware_context();
     let occupancy = mem[0];
     if occupancy > 0.85 {
-        serial_println!("[OPTIMIZER] ⚠️ Memória acima de 85% ({:.0}% ocupada). Compactando...", occupancy * 100.0);
+        k_nano::slog_hermes!("Optimizer", "info", "⚠️ Memória acima de 85% ({:.0}% ocupada). Compactando...", occupancy * 100.0);
     } else if occupancy < 0.30 {
         let free = (1.0 - occupancy) * 100.0;
-        serial_println!("[OPTIMIZER] ✅ Memória folgada ({:.0}% livre). Pode expandir cache.", free);
+        k_nano::slog_hermes!("Optimizer", "info", "✅ Memória folgada ({:.0}% livre). Pode expandir cache.", free);
     }
 }
 
@@ -250,7 +248,7 @@ impl Agent for OptimizerAgent {
 
         // #157: Relatório a cada 500 ticks
         if self.tick_counter % 500 == 0 {
-            serial_println!("{}", self.analyzer.report());
+            k_nano::slog_hermes!("Log", "msg", "{}", self.analyzer.report());
         }
 
         // MHI Scheduler: promove/demove tiers por padrao de acesso
@@ -262,11 +260,11 @@ impl Agent for OptimizerAgent {
         // #163: Snapshot de config a cada 1000 ticks
         if self.tick_counter % 1000 == 0 {
             self.config_learner.snapshot();
-            serial_println!("{}", self.config_learner.suggest_arch_tuning());
+            k_nano::slog_hermes!("Log", "msg", "{}", self.config_learner.suggest_arch_tuning());
 
             // #161: Sugere schedule baseado no workflow detectado
             if let Some(predicted) = self.analyzer.predict_next_skill() {
-                serial_println!("{}", suggest_schedule(predicted));
+                k_nano::slog_hermes!("Log", "msg", "{}", suggest_schedule(predicted));
             }
         }
 
@@ -275,7 +273,7 @@ impl Agent for OptimizerAgent {
             let pending = crate::skill_observer::pending_observations();
             if !pending.is_empty() {
                 let report = crate::skill_observer::report();
-                serial_println!("[OBSERVER] {} pending observations\n{}", pending.len(), report);
+                k_nano::slog_hermes!("OBSERVER", "info", "{} pending observations\n{}", pending.len(), report);
             }
         }
 
@@ -283,7 +281,7 @@ impl Agent for OptimizerAgent {
         if self.tick_counter % 500 == 0 {
             if let Some(predicted) = self.analyzer.predict_next_skill() {
                 if let Some(skill_md) = crate::skill_gen::maybe_auto_skill(&predicted) {
-                    serial_println!("[AUTO-SKILL] Generated skill '{}' (3+ uses)", predicted);
+                    k_nano::slog_hermes!("AUTO", "SKILL", "Generated skill '{}' (3+ uses)", predicted);
                     crate::skill_observer::watch_correction(
                         &predicted, "Auto-detected pattern", &skill_md,
                         "Repeated patterns should become reusable skills",

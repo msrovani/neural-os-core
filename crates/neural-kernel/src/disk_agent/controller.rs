@@ -52,7 +52,7 @@ impl StorageController for AtaCtrl {
         // minutos sob WHPX e prende DiskIntelligenceAgent.tick (bloqueia NetAgent).
         let sandbox = crate::env::is_sandbox() || crate::net::NET_CONFIG.lock().is_dev_env;
         let (bw, is_opal, security_frozen, interface) = if sandbox {
-            crate::serial_println!("[DISK] ata0: skip bw/IDENTIFY (sandbox)");
+            k_nano::slog_bin!("DISK", "info", "ata0: skip bw/IDENTIFY (sandbox)");
             (100u32, false, false, InterfaceType::Sata)
         } else {
             let bw = self.measure_bandwidth(0);

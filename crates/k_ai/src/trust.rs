@@ -3,8 +3,6 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
-use k_nano::serial_println;
-
 // ---------------------------------------------------------------------------
 // #166 Multi-mode Trust
 // ---------------------------------------------------------------------------
@@ -174,10 +172,7 @@ impl TrustCache {
     pub fn trust_allow_agent(&mut self, token: u64, agent: &str, skill: &str, now: u64) {
         let key = Self::agent_skill_key(agent, skill);
         self.trust_allow(token, &key, now);
-        serial_println!(
-            "[TRUST] allow (token,agent,skill)=({},{},{})",
-            token, agent, skill
-        );
+        k_nano::slog_kai!("Trust", "info", "allow (token,agent,skill)=({},{},{})", token, agent, skill);
     }
 
     pub fn is_trusted_agent(&self, token: u64, agent: &str, skill: &str, now: u64) -> bool {
@@ -221,7 +216,7 @@ impl TrustCache {
 
     pub fn add_exempt_token(&mut self, token: u64) {
         self.exempt_tokens.insert(token);
-        serial_println!("[TRUST] exempt token={} (sistema)", token);
+        k_nano::slog_kai!("Trust", "info", "exempt token={} (sistema)", token);
     }
 
     /// Verifica confiança. NÃO auto-concede TotalAccess (P05).
@@ -236,21 +231,17 @@ impl TrustCache {
         }
         match self.global_policy {
             PolicyState::Observe | PolicyState::Warn => {
-                serial_println!(
-                    "[TRUST] transient allow ({:?}): token={} skill={}",
+                k_nano::slog_kai!("Trust", "info", "transient allow ({:?}): token={} skill={}",
                     self.global_policy,
                     token,
-                    skill
-                );
+                    skill);
                 true
             }
             PolicyState::Contain | PolicyState::Enforce => {
-                serial_println!(
-                    "[TRUST] DENY uncached ({:?}): token={} skill={} — use trust_allow",
+                k_nano::slog_kai!("Trust", "info", "DENY uncached ({:?}): token={} skill={} — use trust_allow",
                     self.global_policy,
                     token,
-                    skill
-                );
+                    skill);
                 false
             }
         }
@@ -264,7 +255,7 @@ impl TrustCache {
             self.escalation_log.push(
                 alloc::format!("token={} skill={} escalated to {:?}", token, skill, entry.state)
             );
-            if let Some(last) = self.escalation_log.last() { serial_println!("[TRUST] Violation: {}", last); }
+            if let Some(last) = self.escalation_log.last() { k_nano::slog_kai!("Trust", "info", "Violation: {}", last); }
         }
     }
 
@@ -272,7 +263,7 @@ impl TrustCache {
     pub fn posture_check(_skill: &str) -> bool {
         #[cfg(feature = "kernel")]
         if _skill.contains("net_") && !crate::net::NET_CONFIG.lock().online {
-            serial_println!("[TRUST] Posture: net offline, skill '{}' bloqueada", _skill);
+            k_nano::slog_kai!("Trust", "info", "Posture: net offline, skill '{}' bloqueada", _skill);
             return false;
         }
         true
@@ -295,7 +286,7 @@ impl TrustCache {
             if let Some(ref rule) = entry.path_rule {
                 let allowed = rule.allowed_prefixes.iter().any(|p| path.starts_with(p));
                 if !allowed {
-                    serial_println!("[TRUST] Path denied: {} for token={} skill={}", path, token, skill);
+                    k_nano::slog_kai!("Trust", "info", "Path denied: {} for token={} skill={}", path, token, skill);
                 }
                 return allowed;
             }
@@ -306,7 +297,7 @@ impl TrustCache {
     /// #198: carrega política de segurança de boot (patterns de regex)
     pub fn load_boot_policy(&mut self, patterns: &[&str]) {
         self.global_policy = PolicyState::Contain;
-        serial_println!("[TRUST] Boot policy loaded: {} patterns, policy={:?}", patterns.len(), self.global_policy);
+        k_nano::slog_kai!("Trust", "info", "Boot policy loaded: {} patterns, policy={:?}", patterns.len(), self.global_policy);
     }
 
     pub fn mask_sensitive(&self, data: &str) -> String {

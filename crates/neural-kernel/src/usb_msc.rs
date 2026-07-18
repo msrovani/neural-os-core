@@ -1,7 +1,6 @@
 //! USB Mass Storage via Bulk-Only Transport (BOT) + SCSI.
 //! Protocolo: CBW (31 bytes) -> Data (opcional) -> CSW (13 bytes)
 
-use crate::serial_println;
 use crate::xhci::{self, BulkEndpoint};
 
 const CBW_SIGNATURE: u32 = 0x43425355;
@@ -26,34 +25,54 @@ unsafe impl Send for UsbMassStorage {}
 
 impl UsbMassStorage {
     pub unsafe fn probe() -> Option<Self> {
-        let state = xhci::XHCI_STATE.lock();
-        if state.is_none() { return None; }
+        // NÃO segurar XHCI_STATE aqui: configure_msc_endpoints / bulk_transfer
+        // também fazem lock — spin::Mutex não é reentrante → hang pós-K15.
+        {
+            let state = xhci::XHCI_STATE.lock();
+            if state.is_none() {
+                return None;
+            }
+        }
 
         let slot = 2;
         let max_packet = 512;
         if let Some((ep_in, ep_out)) = xhci::configure_msc_endpoints(slot, max_packet) {
-            serial_println!("[USB-MSC] Endpoints OK. probe...");
+            k_nano::slog_nano!("USB", "msc", "Endpoints OK. probe...");
 
             let mut msc = UsbMassStorage {
-                slot, tag: 1, max_lba: 0, sector_size: 512,
-                bulk_in: ep_in, bulk_out: ep_out,
+                slot,
+                tag: 1,
+                max_lba: 0,
+                sector_size: 512,
+                bulk_in: ep_in,
+                bulk_out: ep_out,
                 model: [0u8; 36],
             };
 
-            // SCSI INQUIRY
+            // SCSI — sem sucesso = não alegar MSC (endpoints sozinhos não leem FAT).
+            let mut scsi_ok = false;
             if let Some(inq) = msc.scsi_inquiry() {
                 msc.model = inq;
                 let vendor = core::str::from_utf8(&inq[8..16]).unwrap_or("?");
                 let product = core::str::from_utf8(&inq[16..32]).unwrap_or("?");
-                serial_println!("[USB-MSC] {} {}", vendor.trim(), product.trim());
+                k_nano::slog_nano!("USB", "msc", "{} {}", vendor.trim(), product.trim());
+                scsi_ok = true;
             }
 
-            // SCSI READ CAPACITY
             if let Some((lba, blk_sz)) = msc.scsi_read_capacity() {
                 msc.max_lba = lba;
                 msc.sector_size = blk_sz;
-                let gb = (lba as u128 * blk_sz as u128) / (1024*1024*1024);
-                serial_println!("[USB-MSC] Capacidade: {} setores x {}B = {}GB", lba, blk_sz, gb);
+                let gb = (lba as u128 * blk_sz as u128) / (1024 * 1024 * 1024);
+                k_nano::slog_nano!("USB", "msc", "Capacidade: {} setores x {}B = {}GB",
+                    lba,
+                    blk_sz,
+                    gb);
+                scsi_ok = true;
+            }
+
+            if !scsi_ok {
+                k_nano::slog_nano!("USB", "msc", "SCSI falhou (bulk timeout) — MSC ignorado");
+                return None;
             }
 
             Some(msc)

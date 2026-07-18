@@ -20,13 +20,13 @@ use crate::wasm::WasmExecutor;
 pub fn load_micropython_wasm() -> Result<Vec<u8>, &'static str> {
     // Tenta carregar do VFS via globals stub
     if let Ok(bytes) = crate::fs::read_vfs("/micropython/micropython.wasm") {
-        crate::serial_println!("[MicroPython] Carregado do VFS: {} bytes", bytes.len());
+        k_nano::slog_bin!("MicroPython", "info", "Carregado do VFS: {} bytes", bytes.len());
         return Ok(bytes);
     }
     
     // ERRO: não há fallback stub
-    crate::serial_println!("[MicroPython] ERRO: micropython.wasm não encontrado no VFS");
-    crate::serial_println!("[MicroPython] Execute: python tools/build_micropython_wasm.py");
+    k_nano::slog_bin!("MicroPython", "info", "ERRO: micropython.wasm não encontrado no VFS");
+    k_nano::slog_bin!("MicroPython", "info", "Execute: python tools/build_micropython_wasm.py");
     Err("MicroPython WASM bytecode não encontrado - execute tools/build_micropython_wasm.py")
 }
 
@@ -54,7 +54,7 @@ impl MicroPythonSandbox {
         let wasm_bytes = load_micropython_wasm()?;
         self.executor.load(&wasm_bytes)?;
         self.loaded = true;
-        crate::serial_println!("[MicroPython] Sandbox carregado com heap de {} KB", self.heap_size / 1024);
+        k_nano::slog_bin!("MicroPython", "info", "Sandbox carregado com heap de {} KB", self.heap_size / 1024);
         Ok(())
     }
 
@@ -66,7 +66,7 @@ impl MicroPythonSandbox {
             self.load()?;
         }
 
-        crate::serial_println!("[MicroPython] Executando: {}", python_code);
+        k_nano::slog_bin!("MicroPython", "info", "Executando: {}", python_code);
 
         // Converte código Python para argumento i64 (simplificado)
         // Na implementação completa, seria compilado para bytecode MicroPython
@@ -76,12 +76,12 @@ impl MicroPythonSandbox {
         match self.executor.call_export("python_eval", &[code_hash as i64]) {
             Ok(Some(result)) => {
                 let output = alloc::format!("[MicroPython] Result: {}", result);
-                crate::serial_println!("{}", output);
+                k_nano::slog_bin!("Log", "msg", "{}", output);
                 Ok(output)
             }
             Ok(None) => Ok("[MicroPython] Executed (no result)".to_string()),
             Err(e) => {
-                crate::serial_println!("[MicroPython] Erro: {}", e);
+                k_nano::slog_bin!("MicroPython", "info", "Erro: {}", e);
                 Err(e)
             }
         }
@@ -111,13 +111,13 @@ impl MicroPythonSandbox {
     /// Reset do sandbox (limpa estado)
     pub fn reset(&mut self) {
         self.executor.reset();
-        crate::serial_println!("[MicroPython] Sandbox resetado");
+        k_nano::slog_bin!("MicroPython", "info", "Sandbox resetado");
     }
 
     /// Define tamanho do heap Python
     pub fn set_heap_size(&mut self, size: usize) {
         self.heap_size = size;
-        crate::serial_println!("[MicroPython] Heap definido para {} KB", size / 1024);
+        k_nano::slog_bin!("MicroPython", "info", "Heap definido para {} KB", size / 1024);
     }
 }
 
@@ -233,12 +233,12 @@ pub fn micropython_wasi_to_skill(wasi_call: &str) -> Option<&'static str> {
 /// Intercepta chamadas WASI do MicroPython e roteia para Skills
 pub fn intercept_wasi_call(wasi_call: &str, _args: &[i64]) -> Result<i64, &'static str> {
     if let Some(skill_name) = micropython_wasi_to_skill(wasi_call) {
-        crate::serial_println!("[MicroPython-WASI] {} -> {}", wasi_call, skill_name);
+        k_nano::slog_bin!("MicroPython", "WASI", "{} -> {}", wasi_call, skill_name);
         // Na implementação completa, chamaria o skill via SkillRegistry
         // Por agora retorna sucesso simulado
         Ok(0)
     } else {
-        crate::serial_println!("[MicroPython-WASI] Chamada não mapeada: {}", wasi_call);
+        k_nano::slog_bin!("MicroPython", "WASI", "Chamada não mapeada: {}", wasi_call);
         Err("WASI call not mapped")
     }
 }
@@ -247,16 +247,14 @@ pub fn intercept_wasi_call(wasi_call: &str, _args: &[i64]) -> Result<i64, &'stat
 pub fn register_micropython_skill() -> Result<(), &'static str> {
     let mut skill = MicroPythonSkill::new("micropython");
     skill.init()?;
-    crate::serial_println!("[MicroPython] Skill pronta para registro no SkillRegistry");
+    k_nano::slog_bin!("MicroPython", "info", "Skill pronta para registro no SkillRegistry");
     Ok(())
 }
 
 /// Init não-fatal no boot — nao chama load()/VFS aqui (evita hang no path critico).
 /// WASM MicroPython e carregado sob demanda via `register_micropython_skill`.
 pub fn try_init_at_boot() {
-    crate::serial_println!(
-        "[MicroPython] Adiado no boot (lazy) — rode tools/build_micropython_wasm.py e registre sob demanda"
-    );
+    k_nano::slog_bin!("MicroPython", "info", "Adiado no boot (lazy) — rode tools/build_micropython_wasm.py e registre sob demanda");
 }
 
 // --------------------------------------------------------------------------- 

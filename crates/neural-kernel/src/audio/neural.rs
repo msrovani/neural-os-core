@@ -82,7 +82,7 @@ impl PocketTtsEngine {
                 let cols = self.dw3.as_ref().unwrap().shape.1;
                 self.db3 = Some(Tensor::new((1, cols)));
             }
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS loaded: embed={:?}, decoder={:?}",
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS loaded: embed={:?}, decoder={:?}",
                 self.embed_w.as_ref().map(|t| t.shape),
                 self.dw3.as_ref().map(|t| t.shape));
         }
@@ -166,7 +166,7 @@ fn try_load_qemu(addr: u64, max_mb: usize) -> Option<alloc::vec::Vec<u8>> {
         let probe = (addr + pm) as *const u32;
         if core::ptr::read_volatile(probe) == 0xBE11BE11 {
             let data = core::slice::from_raw_parts(probe as *const u8, max_mb * 1024 * 1024);
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS encontrado em QEMU loader 0x{:x}", addr);
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS encontrado em QEMU loader 0x{:x}", addr);
             return Some(data.to_vec());
         }
     }
@@ -178,7 +178,7 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     if let Some(data) = try_load_fat("POCKETTTS.BIN") {
         let mut eng = PocketTtsEngine::new();
         if eng.load(&data) {
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from FAT! GPU offload ativo");
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS 100M loaded from FAT! GPU offload ativo");
             return Some(eng);
         }
     }
@@ -186,11 +186,11 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     if let Some(data) = try_load_qemu(0x100000000, 420) {
         let mut eng = PocketTtsEngine::new();
         if eng.load(&data) {
-            crate::serial_println!("[TTS-NEURAL] Pocket TTS 100M loaded from QEMU loader! GPU offload ativo");
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS 100M loaded from QEMU loader! GPU offload ativo");
             return Some(eng);
         }
     }
-    crate::serial_println!("[TTS-NEURAL] Pocket TTS ausente — formant synth ativo");
+    k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS ausente — formant synth ativo");
     None
 }
 

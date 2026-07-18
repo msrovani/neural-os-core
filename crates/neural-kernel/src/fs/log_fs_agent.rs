@@ -5,15 +5,13 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 use crate::fs::{FilesystemAgent, RingBufStore};
-use crate::serial_println;
-
 static STORE: RingBufStore = RingBufStore::new(256 * 1024);
 
 pub struct LogFsAgent;
 
 impl LogFsAgent {
     pub fn new() -> Self {
-        serial_println!("[LOG-FS] /logs/ pronto. Max: 256KB (ring)");
+        k_nano::slog_bin!("LOG", "FS", "/logs/ pronto. Max: 256KB (ring)");
         LogFsAgent
     }
 }

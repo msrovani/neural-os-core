@@ -13,6 +13,7 @@ skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 k-nano = { path = "../k_nano" }
+k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 k_ai = { path = "../k_ai" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }

@@ -19,7 +19,7 @@ macro_rules! debug_rl {
             let c = COUNTER.wrapping_add(1);
             COUNTER = c;
             if c % ($rate as u64) == 0 {
-                crate::serial_println!(concat!("[RL]", $msg, " ", $($arg)*));
+                k_nano::slog_bin!("Boot", "rl", concat!($msg, " ", $($arg)*));
             }
         }
     }};
@@ -396,7 +396,7 @@ impl Skill for SystemStatusSkill {
 
         drop(mhi_guard);
 
-        serial_println!("[SKILL] SystemStatus: {}", msg);
+        k_nano::slog_bin!("SKILL", "info", "SystemStatus: {}", msg);
 
         println!("[SKILL] SystemStatus: {}", msg);
 
@@ -490,7 +490,7 @@ impl Skill for HardwareInfoSkill {
 
         let response = alloc::format!("{}\n{}", info, mem_info);
 
-        serial_println!("[SKILL] HardwareInfo: {}", response);
+        k_nano::slog_bin!("SKILL", "info", "HardwareInfo: {}", response);
 
         println!("[SKILL] HardwareInfo: {}", response);
 
@@ -572,7 +572,7 @@ impl Skill for HwIdentifySkill {
 
         }
 
-        serial_println!("[HW-ID] {} dispositivos encontrados. Enviando para LLM...", devices.len());
+        k_nano::slog_bin!("HW-ID", "info", "{} dispositivos encontrados. Enviando para LLM...", devices.len());
 
         let _ = EVENT_BUS.publish(crate::Event {
 
@@ -774,7 +774,7 @@ impl Agent for SystemAgent {
 
             self.receiver = Some(EVENT_BUS.subscribe("SYSTEM_READY"));
 
-            serial_println!("[AGENT] SystemAgent ativo. Aguardando SYSTEM_READY...");
+            k_nano::slog_bin!("AGENT", "info", "SystemAgent ativo. Aguardando SYSTEM_READY...");
 
         }
 
@@ -788,8 +788,8 @@ impl Agent for SystemAgent {
 
             // DiagnosticSkill no boot (registrada na AgentFleet)
             match reg.execute_skill("diagnostic", &[], &event.token) {
-                Ok(out) => serial_println!("[AGENT] DiagnosticSkill OK ({} bytes)", out.len()),
-                Err(e) => serial_println!("[AGENT] DiagnosticSkill: {}", e),
+                Ok(out) => k_nano::slog_bin!("Agent", "info", "DiagnosticSkill OK ({} bytes)", out.len()),
+                Err(e) => k_nano::slog_bin!("Agent", "info", "DiagnosticSkill: {}", e),
             }
 
             let out = reg.execute_skill("echo", &event.payload, &event.token);
@@ -798,11 +798,11 @@ impl Agent for SystemAgent {
 
             if let Ok(output) = out {
 
-                serial_println!("[AGENT] EchoSkill: {:?}", output);
+                k_nano::slog_bin!("Agent", "info", "EchoSkill: {:?}", output);
 
             }
 
-            serial_println!("[AGENT] SystemAgent: SYSTEM_READY confirmado. Concluido.");
+            k_nano::slog_bin!("AGENT", "info", "SystemAgent: SYSTEM_READY confirmado. Concluido.");
 
             println!("[AGENT] SystemAgent: SYSTEM_READY confirmado.");
 
@@ -869,7 +869,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
         let class = self_heal::FailureClass::classify(kind, &msg);
 
-        serial_println!("[SELF-HEAL] Class: {:?} — {}", class, class.default_recovery());
+        k_nano::slog_bin!("SELF-HEAL", "info", "Class: {:?} — {}", class, class.default_recovery());
 
         let ctx = self_heal::ErrorContext {
 
@@ -889,13 +889,13 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
         drop(heal);
 
-        serial_println!("[PANIC] SelfHeal acionado. {:?}", action);
+        k_nano::slog_bin!("PANIC", "info", "SelfHeal acionado. {:?}", action);
 
     } else {
 
-        serial_println!("[PANIC] OOM detectado — SelfHeal ignorado (sem memoria).");
+        k_nano::slog_bin!("PANIC", "info", "OOM detectado — SelfHeal ignorado (sem memoria).");
 
-        serial_println!("[PANIC] Aumente HEAP_SIZE em allocator.rs ou reduza alocacoes no boot.");
+        k_nano::slog_bin!("PANIC", "info", "Aumente HEAP_SIZE em allocator.rs ou reduza alocacoes no boot.");
 
     }
 
@@ -929,12 +929,12 @@ const CONFIG: bootloader_api::BootloaderConfig = {
 
 // ponytail: runs scheduler on heap-allocated stack (avoids bootloader v0.11 stack boundary #PF)
 fn sched_metrics_hook(tick: u64, n_agents: usize, polled: u32) {
-    serial_println!("[SCHED] tick={} agents={} polled={}", tick, n_agents, polled);
+    k_nano::slog_bin!("SCHED", "info", "tick={} agents={} polled={}", tick, n_agents, polled);
 }
 
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // init_phase AQUI (stack ≥2MB): round-robin Oneshot + timeout — seguro com System/Monitor
-    serial_println!("[BOOT] init_phase (heap stack, round-robin)...");
+    k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
     registry.init_phase();
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     registry.run(
@@ -945,7 +945,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             q
         },
         |name| {
-            serial_println!("[SCHEDULER] Respawning agent '{}'...", name);
+            k_nano::slog_bin!("Sched", "info", "Respawning agent '{}'...", name);
             let agent: Option<Box<dyn Agent>> = match name {
                 "monitor" => Some(Box::new(agents::MonitorAgent::new())),
                 "hw_bridge" => Some(Box::new(agents::HwBridgeAgent)),
@@ -988,20 +988,17 @@ fn adr0047_mvp_gates() {
     let got = rx.try_receive().is_some();
     let (p2, r2) = crate::LATENT_BUS.stats();
     let l1 = if got || p2 > 0 { "OK" } else { "ABSENT" };
-    serial_println!(
-        "[ADR-0047-L1] latent publish/recv {} (pub={} recv_slots={})",
-        l1, p2, r2
-    );
+    k_nano::slog_bin!("ADR", "0047-L1", "latent publish/recv {} (pub={} recv_slots={})", l1, p2, r2);
 
     // L2 Evolve WASM hot-swap + Genesis
     let l2 = crate::evolve::evolve_gate_status();
-    serial_println!("[ADR-0047-L2] evolve swap={}", l2);
+    k_nano::slog_bin!("ADR-0047-L2", "info", "evolve swap={}", l2);
     let gen = crate::evolve::genesis_gate_status();
-    serial_println!("[ADR-0047-GENESIS] spawn={}", gen);
+    k_nano::slog_bin!("ADR-0047-GENESIS", "info", "spawn={}", gen);
 
     // L3 NeuOS Probe — deep probe needs &TransformerModel; boot gate uses presence
     if crate::cortex::model_is_loaded() {
-        serial_println!("[ADR-0047-L3] probe=OK (model LOADED; weight probe on REFLECT)");
+        k_nano::slog_bin!("ADR-0047-L3", "info", "probe=OK (model LOADED; weight probe on REFLECT)");
     } else {
         crate::neuos_probe::log_probe(None);
     }
@@ -1011,17 +1008,17 @@ fn adr0047_mvp_gates() {
 
     // G GPU compute + G3/G4/G5
     let g = crate::gpu::backend::adr0047_compute_gate();
-    serial_println!("[ADR-0047-G] compute={}", g);
+    k_nano::slog_bin!("ADR-0047-G", "info", "compute={}", g);
     let vram_ok = {
         let s = crate::gpu::backend::gpu_status();
         s.contains("NVIDIA") || s.contains("VRAM") || s.contains("pfifo")
     };
     let g3 = crate::gpu::sasos::gate_status(vram_ok);
-    serial_println!("[ADR-0047-G3] sasos={}", g3);
+    k_nano::slog_bin!("ADR-0047-G3", "info", "sasos={}", g3);
     let g4 = crate::kv_h2o::gate_smoke();
-    serial_println!("[ADR-0047-G4] h2o={}", g4);
+    k_nano::slog_bin!("ADR-0047-G4", "info", "h2o={}", g4);
     let g5 = crate::gpu::pipeline_g5::gate_status();
-    serial_println!("[ADR-0047-G5] pipeline={}", g5);
+    k_nano::slog_bin!("ADR-0047-G5", "info", "pipeline={}", g5);
 
     // H HMI — demo UI publish for DisplayAgent; avatar telem may arrive later
     let _ = crate::EVENT_BUS.publish(Event {
@@ -1037,10 +1034,7 @@ fn adr0047_mvp_gates() {
     }
     let (ui, av) = crate::display::ui_spec::gate_status();
     let (h2, h5) = crate::display::embed_viz::gate_status();
-    serial_println!(
-        "[ADR-0047-H] ui_spec={} avatar_telem={} h2={} h5={}",
-        ui, av, h2, h5
-    );
+    k_nano::slog_bin!("ADR", "0047-H", "ui_spec={} avatar_telem={} h2={} h5={}", ui, av, h2, h5);
 
     crate::boot_logger::log("BOOT: ADR-0047 MVP PoC gates");
 }
@@ -1061,19 +1055,16 @@ fn n3_cortex_gate(gen: Option<bool>) {
     let bpe = crate::bpe::is_loaded();
     let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
 
-    serial_println!(
-        "[N3-CORTEX] llm={} dim={} bpe={}",
+    k_nano::slog_cortex!("Gate", "n3", "llm={} dim={} bpe={}",
         llm.as_str(),
         dim,
         if bpe { "LOADED" } else { "ABSENT" }
     );
-    serial_println!(
-        "[N3-CORTEX] MAP_WEIGHTS pages={} (P5 Cap {})",
+    k_nano::slog_cortex!("Gate", "n3", "MAP_WEIGHTS pages={} (P5 Cap {})",
         mmap_n,
         if mmap_n > 0 { "OK" } else { "WARN" }
     );
-    serial_println!(
-        "[N3-CORTEX] Trinity experts={} generator={} moe_router={} hwexpert={} rustcoder={} route=keyword+R3",
+    k_nano::slog_cortex!("Gate", "n3", "Trinity experts={} generator={} moe_router={} hwexpert={} rustcoder={} route=keyword+R3",
         experts,
         if has_gen { "OK" } else { "MISSING" },
         if moe_router { "LOADED" } else { "ABSENT(keyword)" },
@@ -1081,10 +1072,12 @@ fn n3_cortex_gate(gen: Option<bool>) {
         if rustc { "LOADED" } else { "ABSENT" }
     );
     match gen {
-        Some(true) => serial_println!("[N3-CORTEX] generate=OK prompt→texto (weather-e2e)"),
-        Some(false) => serial_println!("[N3-CORTEX] generate=FAILED empty/absent"),
-        None => serial_println!(
-            "[N3-CORTEX] generate=GATED soft-float (boot skip; feature=weather-e2e p/ HIT; prior N3.4 evidence OK)"
+        Some(true) => k_nano::slog_cortex!("Gate", "n3", "generate=OK prompt→texto (weather-e2e)"),
+        Some(false) => k_nano::slog_cortex!("Gate", "n3", "generate=FAILED empty/absent"),
+        None => k_nano::slog_cortex!(
+            "Gate",
+            "n3",
+            "generate=GATED soft-float (boot skip; feature=weather-e2e p/ HIT; prior N3.4 evidence OK)"
         ),
     }
 
@@ -1099,8 +1092,7 @@ fn n3_cortex_gate(gen: Option<bool>) {
         None => n31, // path existe; HIT = weather-e2e / log canônico
     };
     let met = n31 && n32 && n33 && n34;
-    serial_println!(
-        "[N3-CORTEX] gate complete n3.1={} n3.2={} n3.3={} n3.4={} criteria={} (N3.5 crate cortex link deferred)",
+    k_nano::slog_cortex!("Gate", "n3", "gate complete n3.1={} n3.2={} n3.3={} n3.4={} criteria={} (N3.5 crate cortex link deferred)",
         if n31 { "OK" } else { "FAIL" },
         if n32 { "OK" } else { "FAIL" },
         if n33 { "OK" } else { "FAIL" },
@@ -1127,42 +1119,46 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
         && crate::jarbas_bridge::topics_in_sync();
     let llm_loaded = crate::cortex::model_is_loaded();
 
-    serial_println!(
-        "[N4-HERMES] intent_router=REGISTERED topics={}/{} react=7phase",
+    k_nano::slog_hermes!("Gate", "n4", "intent_router=REGISTERED topics={}/{} react=7phase",
         crate::hermes::TOPIC_USER_INTENT,
         crate::hermes::TOPIC_HERMES_RESPONSE
     );
-    serial_println!(
-        "[N4-HERMES] skills={} wasm_sfi={} CapGate allow={} deny={}",
+    k_nano::slog_hermes!("Gate", "n4", "skills={} wasm_sfi={} CapGate allow={} deny={}",
         skills,
         WASM_HUB_BUILTINS,
         cap_allow,
         cap_deny
     );
-    serial_println!(
-        "[N4-HERMES] cortex_orchestrate={} route=global_arena pending→generate_via_model",
+    k_nano::slog_hermes!("Gate", "n4", "cortex_orchestrate={} route=global_arena pending→generate_via_model",
         if llm_loaded { "OK" } else { "ABSENT" }
     );
     match intent_e2e {
         Some(true) => {
-            serial_println!("[N4-HERMES] intent_e2e=OK STT→USER_INTENT→cortex (weather-e2e)")
+            k_nano::slog_hermes!(
+                "Gate",
+                "n4",
+                "intent_e2e=OK STT→USER_INTENT→cortex (weather-e2e)"
+            )
         }
-        Some(false) => serial_println!("[N4-HERMES] intent_e2e=FAILED"),
+        Some(false) => k_nano::slog_hermes!("Gate", "n4", "intent_e2e=FAILED"),
         None => {
             // Não afirmar "prior L5 OK" — hist Sprint107 ≠ smoke deste boot.
             // Gate net = bootstrap_early [smoltcp/NIC]; L5_OK só se este boot passou.
             let net = crate::network_agent::early_smoke_status();
-            serial_println!(
-                "[N4-HERMES] intent_e2e=GATED boot default (feature=weather-e2e; hist Sprint107 ≠ this-boot)"
+            k_nano::slog_hermes!(
+                "Gate",
+                "n4",
+                "intent_e2e=GATED boot default (feature=weather-e2e; hist Sprint107 != this-boot)"
             );
-            serial_println!(
-                "[N4-HERMES] this-boot net_smoke={} [smoltcp/NIC] (bootstrap_early; L5_OK só se smoke passou)",
+            k_nano::slog_hermes!(
+                "Gate",
+                "n4",
+                "this-boot net_smoke={} [smoltcp/NIC] (bootstrap_early; L5_OK so se smoke passou)",
                 net
             );
         }
     }
-    serial_println!(
-        "[N4-HERMES] IPC→jarbas topics_mirror={} full_wire={}",
+    k_nano::slog_hermes!("Gate", "n4", "IPC→jarbas topics_mirror={} full_wire={}",
         if topics_ok { "OK" } else { "DRIFT" },
         if topics_ok { "OK(hermes-crate)" } else { "DRIFT" }
     );
@@ -1179,8 +1175,7 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
     };
     let n45 = topics_ok;
     let met = n41 && n42 && n43 && n44 && n45;
-    serial_println!(
-        "[N4-HERMES] gate complete n4.1={} n4.2={} n4.3={} n4.4={} n4.5={} criteria={} (N4.6 hermes-crate wired)",
+    k_nano::slog_hermes!("Gate", "n4", "gate complete n4.1={} n4.2={} n4.3={} n4.4={} n4.5={} criteria={} (N4.6 hermes-crate wired)",
         if n41 { "OK" } else { "FAIL" },
         if n42 { "OK" } else { "FAIL" },
         if n43 { "OK" } else { "FAIL" },
@@ -1231,40 +1226,52 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     let soul = crate::jarvis::SoulProfile::default_jarvis();
     let persona_desc = soul.describe();
 
-    serial_println!(
-        "[N5-JARBAS] compositor=REGISTERED display={} gpu={} p4_present={} apps=HermesChat+Settings+Power",
+    k_nano::slog_jarbas!(
+        "Compositor",
+        "register",
+        "display={} gpu={} p4_present={} apps=HermesChat+Settings+Power",
         if display_reg { "OK" } else { "MISSING" },
         if gpu_present { "OK" } else { "ABSENT" },
         p4_status
     );
-    serial_println!(
-        "[N5-JARBAS] persona=REGISTERED jarvis={} pipeline=16stage {}",
+    k_nano::slog_jarbas!(
+        "Persona",
+        "register",
+        "jarvis={} pipeline=16stage {}",
         if jarvis_reg { "OK" } else { "MISSING" },
         persona_desc
     );
     match voice_e2e {
-        Some(true) => serial_println!(
-            "[N5-JARBAS] voice_e2e=OK Hermes→TTS→FB (weather-e2e; jarvis_voice+wakeword registered)"
+        Some(true) => k_nano::slog_jarbas!(
+            "Voice",
+            "e2e",
+            "OK Hermes->TTS->FB (weather-e2e; jarvis_voice+wakeword registered)"
         ),
-        Some(false) => serial_println!("[N5-JARBAS] voice_e2e=FAILED"),
-        None => serial_println!(
-            "[N5-JARBAS] voice_e2e=GATED boot default (feature=weather-e2e; prior Sprint107 TTS+FB OK)"
+        Some(false) => k_nano::slog_jarbas!("Voice", "e2e", "FAILED"),
+        None => k_nano::slog_jarbas!(
+            "Voice",
+            "e2e",
+            "GATED boot default (feature=weather-e2e; prior Sprint107 TTS+FB OK)"
         ),
     }
-    serial_println!(
-        "[N5-JARBAS] voice_agents jarvis_voice={} wakeword={} mixer={} hermes_only=OK (no direct ATA/PCI)",
+    k_nano::slog_jarbas!(
+        "Voice",
+        "agents",
+        "jarvis_voice={} wakeword={} mixer={} hermes_only=OK (no direct ATA/PCI)",
         if voice_reg { "OK" } else { "MISSING" },
         if wake_reg { "OK" } else { "MISSING" },
         if mixer_reg { "OK" } else { "MISSING" }
     );
     let topics_ok = crate::jarbas_bridge::topics_in_sync();
-    serial_println!(
-        "[N5-JARBAS] IPC←hermes topics_mirror={} full_wire=OK(jarbas-crate)",
+    k_nano::slog_jarbas!(
+        "IPC",
+        "hermes",
+        "topics_mirror={} full_wire=OK(jarbas-crate)",
         if topics_ok { "OK" } else { "DRIFT" }
     );
 
-    // Critérios funcionais N5 (ADR): compositor vivo; persona via Hermes; voz agents;
-    // FB/display integration; voz expressão e2e; IPC mirror. Crate link → N5.7.
+    // Criterios funcionais N5 (ADR): compositor vivo; persona via Hermes; voz agents;
+    // FB/display integration; voz expressao e2e; IPC mirror. Crate link -> N5.7.
     let n51 = compositor_ready;
     let n52 = jarvis_reg;
     let n53 = voice_reg && wake_reg && mixer_reg;
@@ -1272,12 +1279,14 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     let n55 = match voice_e2e {
         Some(true) => true,
         Some(false) => false,
-        None => n53, // path existe; HIT = weather-e2e / log canônico Sprint107
+        None => n53,
     };
     let n56 = topics_ok;
     let met = n51 && n52 && n53 && n54 && n55 && n56;
-    serial_println!(
-        "[N5-JARBAS] gate complete n5.1={} n5.2={} n5.3={} n5.4={} n5.5={} n5.6={} criteria={} (N5.7 jarbas-crate wired)",
+    k_nano::slog_jarbas!(
+        "Gate",
+        "n5",
+        "complete n5.1={} n5.2={} n5.3={} n5.4={} n5.5={} n5.6={} criteria={} (N5.7 jarbas-crate wired)",
         if n51 { "OK" } else { "FAIL" },
         if n52 { "OK" } else { "FAIL" },
         if n53 { "OK" } else { "FAIL" },
@@ -1329,7 +1338,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     if !has_fb {
         vga_buffer::init(pm_offset);
-        crate::serial_println!("[BOOT] Sem framebuffer — usando VGA text mode.");
+        k_nano::slog_bin!("Boot", "info", "Sem framebuffer — usando VGA text mode.");
     } else {
         crate::display::fb::boot_ckpt(2, "antes disable_vga_plane");
         vga_buffer::disable_vga_plane();
@@ -1341,7 +1350,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         kjson!("BOOT", "DISPLAY", "fb", "w", fw, "h", fh, "bpp", fb);
         // Nao limpar tela inteira — ckpts empilhados p/ foto HW.
         crate::display::fb::boot_ckpt(4, "FB vivo — indo IDT/mem");
-        crate::serial_println!("[BOOT] FB {}x{} bpp={} — ckpt OK; continue IDT/mem", fw, fh, fb);
+        k_nano::slog_bin!("Boot", "info", "FB {}x{} bpp={} — ckpt OK; continue IDT/mem", fw, fh, fb);
     }
 
     kjson!("BOOT", "KERNEL", "start", "serial", serial_exists as u32, "pm_off", pm_offset);
@@ -1366,15 +1375,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         // ponytail: stack boundary fix deferred — needs proper P3/P2 page table from end-of-RAM frames
 
-        crate::serial_println!("[DBG3] init_memory OK");
+        k_nano::slog_bin!("Boot", "dbg", "init_memory OK");
         crate::display::fb::boot_ckpt(9, "init_memory ok");
 
         crate::display::fb::boot_ckpt(10, "antes init_heap");
         allocator::init_heap(&mut mapper, &mut frame_allocator)
             .expect("heap initialization failed");
         crate::boot_logger::mark_heap_ready();
+        unsafe { k_nano::boot_ramlog::init_from_phys() };
 
-        crate::serial_println!("[DBG4] heap init OK (Tier 1 talc)");
+        k_nano::slog_bin!("Boot", "dbg", "heap init OK (Tier 1 talc)");
         crate::display::fb::boot_ckpt(11, "heap OK");
 
         match arena::init_arena_region(
@@ -1385,10 +1395,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         ) {
             Ok(tensor_arena) => {
                 global_arena::install_global_arena(tensor_arena);
-                crate::serial_println!("[DBG4b] cortex arena init OK (Tier 2 bump)");
+                k_nano::slog_bin!("Boot", "dbg", "cortex arena init OK (Tier 2 bump)");
             }
             Err(e) => {
-                crate::serial_println!("[WARN] cortex arena init failed: {}", e);
+                k_nano::slog_bin!("Warn", "info", "cortex arena init failed: {}", e);
             }
         }
 
@@ -1413,7 +1423,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         let avx = crate::tensor::has_avx2();
 
-        serial_println!("[SIMD] AVX2: {}", if avx { "SIM ✅" } else { "NAO ❌" });
+        k_nano::slog_bin!("SIMD", "info", "AVX2: {}", if avx { "SIM ✅" } else { "NAO ❌" });
 
     }
 
@@ -1441,7 +1451,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let slab_metrics = { let s = crate::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
 
-    crate::serial_println!("[DBG6] slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
+    k_nano::slog_bin!("Boot", "dbg", "slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
 
     
 
@@ -1472,7 +1482,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         } else {
             crate::env::set(crate::env::SystemEnv::QemuSandbox);
         }
-        serial_println!("[ENV] Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
+        k_nano::slog_bin!("ENV", "info", "Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
     }
     // Init E1000 primeiro (apos PCI scan)
     unsafe { crate::net::init_driver_e1000(); }
@@ -1490,11 +1500,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     if nic_found {
         if !is_sandbox {
             crate::env::set(crate::env::SystemEnv::HwReal);
-            serial_println!("[ENV] HW real detectado — NIC fisica presente");
+            k_nano::slog_bin!("ENV", "info", "HW real detectado — NIC fisica presente");
         }
     } else if crate::env::get() == crate::env::SystemEnv::Unknown {
         crate::env::set(crate::env::SystemEnv::Offline);
-        serial_println!("[ENV] Offline — nenhuma rede disponivel");
+        k_nano::slog_bin!("ENV", "info", "Offline — nenhuma rede disponivel");
         // Apenas em sandbox: ativa serial tunnel como bypass
         if is_sandbox {
             unsafe { crate::net::init_serial_tunnel(); }
@@ -1506,7 +1516,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         publish_boot_phase(BootPhase::DriverInit, "Serial tunnel (SLIP) ativo");
     }
 
-    serial_println!("[ENV] Sistema: {} | Rede: {}", crate::env::name(),
+    k_nano::slog_bin!("ENV", "info", "Sistema: {} | Rede: {}", crate::env::name(),
         if nic_found { "fisica" } else if crate::env::is_sandbox() { "serial tunnel" } else { "offline" });
 
     // Sprint Net: L2–L3 (+ smoke L4/L5) antes do scheduler — hang pós-Runtime não impede static.
@@ -1545,7 +1555,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     };
                     if let Some(mut ahci) = crate::ahci::AhciDriver::new(&dev) {
                         let port_count = ahci.ports.len();
-                        crate::serial_println!("[AHCI] SATA controller init: {} ports", port_count);
+                        k_nano::slog_nano!("Disk", "ahci", "SATA controller init: {} ports", port_count);
                         // Testa leitura do primeiro setor via AHCI
                         for (pi, p) in ahci.ports.iter().enumerate() {
                             if p.present {
@@ -1568,75 +1578,68 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             });
         }
         if !ahci_init {
-            crate::serial_println!("[AHCI] Nenhum controlador SATA AHCI encontrado");
+            k_nano::slog_nano!("Disk", "ahci", "Nenhum controlador SATA AHCI encontrado");
         }
     }
 
     unsafe { crate::xhci::init_xhci(); }
     crate::display::fb::boot_ckpt(15, "xhci init done");
 
+    crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
         let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
         if msc.is_some() {
-            crate::serial_println!("[USB-MSC] stored for FAT model load (unified USB)");
+            k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
             crate::display::fb::boot_ckpt(16, "USB-MSC OK");
         } else {
             crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
         }
         *crate::USB_MSC.lock() = msc;
-        // Notebooks sem serial: grava BOOT.LOG na FAT32 do stick o mais cedo possível.
+        crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
         crate::boot_logger::init_after_usb();
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
     }
 
+    crate::display::fb::boot_ckpt(26, "pos-K17 publish");
     publish_boot_phase(BootPhase::DriverInit, "xHCI+USB probe done");
 
     // Boot log: reforço ATA (se houver) + flush checkpoint
+    crate::display::fb::boot_ckpt(27, "ATA boot_log/verify");
     {
-        let ata_guard = crate::ATA_DRIVER.lock();
-        if let Some(ref ata) = *ata_guard {
-            let parts = crate::fat32::read_mbr(ata);
-            crate::boot_logger::init(Some(ata), &parts);
-            verify_kernel_from_disk(ata, &parts);
-            drop(parts);
-        } else {
-            crate::boot_logger::init(None, &[]);
+        // NÃO segurar ATA_DRIVER.lock() durante boot_logger::init/persist_now —
+        // persist_now faz ATA_DRIVER.lock() de novo → deadlock (parava em K27).
+        let parts = {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            ata_guard
+                .as_ref()
+                .map(|ata| crate::fat32::read_mbr(ata))
+                .unwrap_or_default()
+        };
+        if !parts.is_empty() {
+            let ata_guard = crate::ATA_DRIVER.lock();
+            if let Some(ref ata) = *ata_guard {
+                verify_kernel_from_disk(ata, &parts);
+            }
         }
-        drop(ata_guard);
+        crate::boot_logger::init(None, &[]);
         crate::boot_logger::log("BOOT: ATA+FAT init OK");
-        crate::boot_logger::flush();
     }
 
-
-
-    // Init VFS + mounts
-
+    crate::display::fb::boot_ckpt(28, "VFS init");
     {
-
         use crate::vfs::VfsRegistry;
-
         let vfs = VfsRegistry::new();
-
         *crate::vfs::VFS.lock() = Some(vfs);
-
-        // Mount points are registered at boot by each agent
-
         crate::vfs::init_standard_mounts();
-
     }
 
     let vfs_guard = crate::vfs::VFS.lock();
-
     let mcount = vfs_guard.as_ref().map_or(0, |v| v.mount_table().len());
-
-    crate::serial_println!("[VFS] Init OK. {} mounts.", mcount);
-
+    drop(vfs_guard);
+    k_nano::slog_bin!("VFS", "info", "Init OK. {} mounts.", mcount);
     crate::boot_logger::log(&alloc::format!("BOOT: VFS {} mounts", mcount));
 
-
-
-    // Init Filesystem Agents
-
+    crate::display::fb::boot_ckpt(29, "FS agents");
     crate::fs::init_fs_agents();
 
     hermes_crate::globals::install_vfs_bridge(hermes_crate::globals::VfsBridge {
@@ -1644,96 +1647,81 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         write: crate::fs::write_vfs,
         list: crate::fs::list_vfs,
     });
-    crate::serial_println!("[VFS] Hermes bridge -> neural-kernel FS_AGENTS");
-
+    k_nano::slog_bin!("VFS", "info", "Hermes bridge -> neural-kernel FS_AGENTS");
     crate::boot_logger::log("BOOT: FS agents OK");
 
-    // ADR-0040 MVP smoke (compile-time wired; runtime probes via DiskAgent)
     {
         let (meta, copy, skip) = crate::mhi::migration_stats();
-        crate::serial_println!(
-            "[ADR-0040] MVP wired: BlockDevice+write | exFAT FilesystemDriver | EXT2/NTFS detect | NeuralFS /mnt/neural | MHI soft-migrate (meta={} copy={} skip={})",
-            meta, copy, skip
-        );
+        k_nano::slog_bin!("ADR", "0040", "MVP wired: BlockDevice+write | exFAT FilesystemDriver | EXT2/NTFS detect | NeuralFS /mnt/neural | MHI soft-migrate (meta={} copy={} skip={})", meta, copy, skip);
         crate::boot_logger::log("BOOT: ADR-0040 FS MVP markers");
     }
 
-    // ADR-0047 MVP PoC gates (non-fatal)
+    crate::display::fb::boot_ckpt(30, "ADR-0047 gates");
     adr0047_mvp_gates();
 
-    // Init DiskIntelligenceAgent (substitui mount_partitions manual)
-
+    crate::display::fb::boot_ckpt(31, "DiskAgent");
     let mut disk_agent = crate::disk_agent::DiskIntelligenceAgent::new();
 
     if let Some(ref ata) = *crate::ATA_DRIVER.lock() {
-
         let ctrl = crate::disk_agent::controller::AtaCtrl::new(ata.clone());
-
         disk_agent.register_controller(Box::new(ctrl));
-
         crate::boot_logger::log("BOOT: DiskAgent ATA controller registered");
-
     } else {
-
         crate::boot_logger::log("BOOT: No ATA device for DiskAgent");
-
     }
 
-    // Reusa USB_MSC ja probed (evita segundo probe no mesmo stick)
     if crate::USB_MSC.lock().is_some() {
         crate::boot_logger::log("BOOT: DiskAgent USB-MSC available (global USB_MSC)");
     }
 
+    crate::display::fb::boot_ckpt(32, "NVMe probe");
     if let Some(nvme) = unsafe { crate::disk_agent::nvme::NvmeDriver::probe() } {
-
         let ctrl = crate::disk_agent::controller::NvmeCtrl::new(nvme);
-
         disk_agent.register_controller(Box::new(ctrl));
-
         crate::boot_logger::log("BOOT: DiskAgent NVMe controller registered");
-
     }
 
     let disk_agent_box = Box::new(disk_agent);
-
-
-
     crate::boot_logger::log("BOOT: DiskAgent ready");
 
-
-
-    // Init Desktop Apps
-
+    crate::display::fb::boot_ckpt(33, "apps+audio+wasm");
     crate::apps::init_apps();
-
     crate::boot_logger::log("BOOT: Desktop apps OK");
 
-
-
-    // Audio: configuracoes de som; Piper TTS AFTER BGE (BGE e leve; Piper 61MB nao bloqueia STATUS bge)
     audio::init_audio();
-
-    // ADR-0042 N5.7: cross-check non-fatal TOPIC_* monólito vs jarbas-crate (audio truth = neural-kernel).
     jarbas_bridge::log_bridge_status();
-
-
-
-    // WASM Runtime (Sprint 93): embedder + IDE + Plugin Hub
 
     let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
-    // Wave 0 HANR: session Ed25519 antes do PackageHub seed/assinatura
+    crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
+    crate::display::fb::boot_ckpt(36, "package_hub");
     crate::package_hub::init_package_hub();
-    crate::serial_println!("{}", hermes_globals::AUDIT_TRAIL.lock().status());
-    crate::serial_println!("{}", crate::rustpython_no_std::viability_report());
-    crate::serial_println!("{}", crate::skill_opt::status());
+    crate::display::fb::boot_ckpt(37, "hub ok");
+    // Snapshot intermediário se ainda sem FAT (antes de paths que podem hang).
+    if crate::USB_MSC.lock().is_none() && crate::ATA_DRIVER.lock().is_none() {
+        crate::boot_logger::maybe_uefi_flush_reboot("K37 hub ok — sem MSC/ATA");
+    }
+    k_nano::slog_bin!("Log", "msg", "{}", hermes_globals::AUDIT_TRAIL.lock().status());
+    k_nano::slog_bin!("Log", "msg", "{}", crate::rustpython_no_std::viability_report());
+    k_nano::slog_bin!("Log", "msg", "{}", crate::skill_opt::status());
 
     kjson!("BOOT", "WASM", "runtime", "skills", 2);
     kjson!("BOOT", "DECODE", "structured", "ready", 1);
 
+    crate::display::fb::boot_ckpt(34, "antes load modelos");
 
+    // Pendrive HW: sem USB-MSC/ATA o BOOT.LOG nao grava e FAT PIO pode travar (AHCI
+    // interno sozinho nao conta — disco errado / portas vazias). QEMU-loader continua.
+    let has_fat_block = crate::ATA_DRIVER.lock().is_some() || crate::USB_MSC.lock().is_some();
+    if !has_fat_block {
+        crate::display::fb::boot_ckpt(38, "sem MSC/ATA — skip FAT");
+        k_nano::slog_nano!("FAT", "info", "sem ATA/USB-MSC — skip FAT models; BOOT.LOG via soft-reboot UEFI");
+        crate::boot_logger::log("BOOT: skip FAT models; requesting UEFI BOOT.LOG flush");
+        // Soft-reboot 1×: bootloader grava E:\BOOT.LOG real; 2ª passagem continua o boot.
+        crate::boot_logger::maybe_uefi_flush_reboot("K38 no ATA/USB-MSC");
+    }
 
     // Carrega modelos do FAT32: BGE.BIN — tenta AHCI primeiro, fallback ATA
     unsafe fn read_file_from_dev(dev: &mut dyn crate::block_dev::BlockDevice, name: &str) -> Option<alloc::vec::Vec<u8>> {
@@ -1875,86 +1863,77 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 if magic == 0xBE11BE11 {
                     found = true;
                     let data = core::slice::from_raw_parts(ptr, size_hint);
-                    serial_println!(
-                        "[BGE] QEMU-loader @0x162000000 magic OK — parse {} KB…",
-                        size_hint / 1024
-                    );
+                    k_nano::slog_bin!("Asset", "bge", "QEMU-loader @0x162000000 magic OK — parse {} KB…", size_hint / 1024);
                     if crate::memory_systems::load_bge(data) {
-                        serial_println!(
-                            "[BGE] Embedding model LOADED (QEMU-loader @0x162000000) size={}KB",
-                            size_hint / 1024
-                        );
+                        k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED (QEMU-loader @0x162000000) size={}KB", size_hint / 1024);
                         crate::boot_logger::log("BOOT: BGE embedding loaded (QEMU)");
                         loaded = true;
                     } else {
-                        serial_println!("[BGE] QEMU-loader parse FAILED — fallback FAT");
+                        k_nano::slog_bin!("Asset", "bge", "QEMU-loader parse FAILED — fallback FAT");
                     }
                 } else {
-                    serial_println!(
-                        "[BGE] QEMU-loader @0x162000000 magic=0x{:08X} (ausente)",
-                        magic
-                    );
+                    k_nano::slog_bin!("Asset", "bge", "QEMU-loader @0x162000000 magic=0x{:08X} (ausente)", magic);
                 }
             }
         }
-        // Tenta AHCI primeiro
-        let mut ahci_guard = crate::AHCI_DRIVER.lock();
-        if let Some(ref mut ahci) = *ahci_guard {
-            if !loaded {
-                if let Some(bge_data) = read_file_from_dev(ahci, "BGE.BIN") {
-                    found = true;
-                    serial_println!("[BGE] BGE.BIN lido AHCI ({} KB) — parse…", bge_data.len() / 1024);
-                    if crate::memory_systems::load_bge(&bge_data) {
-                        serial_println!("[BGE] Embedding model LOADED from AHCI FAT!");
-                        crate::boot_logger::log("BOOT: BGE embedding loaded");
-                        loaded = true;
-                    } else {
-                        serial_println!("[BGE] BGE.BIN present but parse FAILED (AHCI)");
+        // FAT só com ATA/USB-MSC (evita hang AHCI em notebook USB-boot sem MSC)
+        if has_fat_block {
+            let mut ahci_guard = crate::AHCI_DRIVER.lock();
+            if let Some(ref mut ahci) = *ahci_guard {
+                if !loaded {
+                    if let Some(bge_data) = read_file_from_dev(ahci, "BGE.BIN") {
+                        found = true;
+                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido AHCI ({} KB) — parse…", bge_data.len() / 1024);
+                        if crate::memory_systems::load_bge(&bge_data) {
+                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from AHCI FAT!");
+                            crate::boot_logger::log("BOOT: BGE embedding loaded");
+                            loaded = true;
+                        } else {
+                            k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (AHCI)");
+                        }
                     }
                 }
             }
-        }
-        drop(ahci_guard);
-        // Fallback ATA
-        if !loaded {
-            let ata_guard = crate::ATA_DRIVER.lock();
-            if let Some(ref ata) = *ata_guard {
-                let parts = crate::fat32::read_mbr(ata);
-                for p in &parts {
-                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
-                    if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                        if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
-                            found = true;
-                            serial_println!("[BGE] BGE.BIN presente FAT ({} KB) — lendo…", sz / 1024);
-                        }
-                        if let Some(bge_data) = fs.read_file("BGE.BIN") {
-                            found = true;
-                            serial_println!("[BGE] BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
-                            if crate::memory_systems::load_bge(&bge_data) {
-                                serial_println!("[BGE] Embedding model LOADED from FAT (ATA)!");
-                                crate::boot_logger::log("BOOT: BGE embedding loaded");
-                                loaded = true;
-                            } else {
-                                serial_println!("[BGE] BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
+            drop(ahci_guard);
+            if !loaded {
+                let ata_guard = crate::ATA_DRIVER.lock();
+                if let Some(ref ata) = *ata_guard {
+                    let parts = crate::fat32::read_mbr(ata);
+                    for p in &parts {
+                        if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                        if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                            if let Some(sz) = fs.lookup_file_size("BGE.BIN") {
+                                found = true;
+                                k_nano::slog_bin!("BGE", "info", "BGE.BIN presente FAT ({} KB) — lendo…", sz / 1024);
+                            }
+                            if let Some(bge_data) = fs.read_file("BGE.BIN") {
+                                found = true;
+                                k_nano::slog_bin!("BGE", "info", "BGE.BIN lido ATA ({} KB) — parse…", bge_data.len() / 1024);
+                                if crate::memory_systems::load_bge(&bge_data) {
+                                    k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from FAT (ATA)!");
+                                    crate::boot_logger::log("BOOT: BGE embedding loaded");
+                                    loaded = true;
+                                } else {
+                                    k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (sem word_embeddings_weight?)");
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        // Fallback USB-MSC (pendrive unificado em HW — nao aparece como IDE)
-        if !loaded {
-            let mut usb_guard = crate::USB_MSC.lock();
-            if let Some(ref mut msc) = *usb_guard {
-                if let Some(bge_data) = read_file_from_dev(msc, "BGE.BIN") {
-                    found = true;
-                    serial_println!("[BGE] BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
-                    if crate::memory_systems::load_bge(&bge_data) {
-                        serial_println!("[BGE] Embedding model LOADED from USB-MSC FAT!");
-                        crate::boot_logger::log("BOOT: BGE embedding loaded (USB)");
-                        loaded = true;
-                    } else {
-                        serial_println!("[BGE] BGE.BIN present but parse FAILED (USB-MSC)");
+            if !loaded {
+                let mut usb_guard = crate::USB_MSC.lock();
+                if let Some(ref mut msc) = *usb_guard {
+                    if let Some(bge_data) = read_file_from_dev(msc, "BGE.BIN") {
+                        found = true;
+                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido USB-MSC ({} KB) — parse…", bge_data.len() / 1024);
+                        if crate::memory_systems::load_bge(&bge_data) {
+                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from USB-MSC FAT!");
+                            crate::boot_logger::log("BOOT: BGE embedding loaded (USB)");
+                            loaded = true;
+                        } else {
+                            k_nano::slog_bin!("Asset", "bge", "BGE.BIN present but parse FAILED (USB-MSC)");
+                        }
                     }
                 }
             }
@@ -1964,7 +1943,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 crate::load_status::AssetKind::Bge,
                 crate::load_status::LoadStatus::Absent,
             );
-            serial_println!("[BGE] BGE.BIN ausente no FAT — STATUS Absent");
+            k_nano::slog_bin!("Asset", "bge", "BGE.BIN ausente no FAT — STATUS Absent");
         }
     }
 
@@ -1974,7 +1953,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
 
 
-    // GPU: detecta hardware, separa display/compute, inicializa backend
+    // ADR-0041 H1: k-hal DeviceTree + ports (antes do GPU BE)
+    let _khal_n = k_hal::init();
+    k_hal::virtio::init_h4_log();
+    k_hal::cap_gate::demo_h5_deny();
+    // ADR-0041 Fase 4: AS R1/R3 shallow (PoC non-fatal)
+    crate::address_space::demo_as_r1_r3_shallow();
+
+    // GPU: detecta hardware, separa display/compute, inicializa backend (k_hal BE)
 
     unsafe {
 
@@ -1986,7 +1972,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
             let plan = crate::gpu::display_coex::plan_assignment(&gpus);
 
-            serial_println!("{}", crate::gpu::display_coex::assignment_status(&plan, &gpus));
+            k_nano::slog_bin!("Log", "msg", "{}", crate::gpu::display_coex::assignment_status(&plan, &gpus));
 
             crate::boot_logger::log(&alloc::format!("BOOT: GPU plan — {:?}", plan));
 
@@ -2041,13 +2027,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         n += 1;
                     }
                 }
-                serial_println!("[FW] GP108 preload: {}/{} blobs (ATA/USB)", n, GP108.len());
+                k_nano::slog_bin!("FW", "info", "GP108 preload: {}/{} blobs (ATA/USB)", n, GP108.len());
             }
 
             // Plano coex dirige backend (display owner intocado em falha compute)
             crate::gpu::backend::init_backend_with_plan(&gpus, &plan);
 
-            serial_println!("[GPU] {} GPU(s) detectadas. Backend: {}",
+            k_nano::slog_hal!("GPU", "info", "{} GPU(s) detectadas. Backend: {}",
 
                 gpus.len(), crate::gpu::backend::gpu_status());
 
@@ -2055,7 +2041,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         } else {
 
-            serial_println!("[GPU] Nenhuma GPU detectada.");
+            k_nano::slog_hal!("GPU", "info", "Nenhuma GPU detectada.");
 
         }
 
@@ -2068,11 +2054,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // MVP C (ADR-0041): CR3 switch + ring shared + Cap — non-fatal
     match crate::ipc::demo_two_spaces() {
         Ok(()) => {
-            serial_println!("[MVP-C] demo OK — capability rings PoC");
+            k_nano::slog_bin!("MVP-C", "info", "demo OK — capability rings PoC");
             crate::boot_logger::log("BOOT: MVP-C CR3+ring+cap OK");
         }
         Err(e) => {
-            serial_println!("[MVP-C] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("MVP-C", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: MVP-C WARN (non-fatal)");
         }
     }
@@ -2080,11 +2066,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P3 (ADR-0041): Hermes host Caps — non-fatal
     match crate::capability_gate::demo_hermes_caps() {
         Ok(()) => {
-            serial_println!("[P3] CapGate demo OK");
+            k_nano::slog_bin!("Cap", "p3", "CapGate demo OK");
             crate::boot_logger::log("BOOT: P3 CapGate OK");
         }
         Err(e) => {
-            serial_println!("[P3] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P3", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P3 CapGate WARN (non-fatal)");
         }
     }
@@ -2092,11 +2078,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P4 (ADR-0041): JARBAS FB MMIO + double-buffer — non-fatal
     match crate::jarbas_fb::demo_jarbas_fb() {
         Ok(()) => {
-            serial_println!("[P4] JARBAS FB demo OK");
+            k_nano::slog_bin!("Cap", "p4", "JARBAS FB demo OK");
             crate::boot_logger::log("BOOT: P4 JARBAS FB OK");
         }
         Err(e) => {
-            serial_println!("[P4] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P4", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P4 JARBAS FB WARN (non-fatal)");
         }
     }
@@ -2104,21 +2090,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P5 (ADR-0041): K-IA DMA pin + Cortex weight mmap — non-fatal
     match crate::k_ia_dma::demo_kia_dma() {
         Ok(()) => {
-            serial_println!("[P5] K-IA DMA pin demo OK");
+            k_nano::slog_bin!("P5", "info", "K-IA DMA pin demo OK");
             crate::boot_logger::log("BOOT: P5 K-IA DMA OK");
         }
         Err(e) => {
-            serial_println!("[P5] WARN DMA: {} — boot continua", e);
+            k_nano::slog_bin!("P5", "info", "WARN DMA: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P5 DMA WARN (non-fatal)");
         }
     }
     match crate::cortex_mmap::demo_cortex_mmap() {
         Ok(()) => {
-            serial_println!("[P5] Cortex mmap demo OK");
+            k_nano::slog_bin!("P5", "info", "Cortex mmap demo OK");
             crate::boot_logger::log("BOOT: P5 Cortex mmap OK");
         }
         Err(e) => {
-            serial_println!("[P5] WARN mmap: {} — boot continua", e);
+            k_nano::slog_bin!("P5", "info", "WARN mmap: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P5 mmap WARN (non-fatal)");
         }
     }
@@ -2126,11 +2112,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P6 (ADR-0041): Ring3 real via iretq — non-fatal
     match crate::user_mode::demo_ring3() {
         Ok(()) => {
-            serial_println!("[P6] Ring3 user-mode demo OK");
+            k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo OK");
             crate::boot_logger::log("BOOT: P6 Ring3 OK");
         }
         Err(e) => {
-            serial_println!("[P6] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P6", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P6 Ring3 WARN (non-fatal)");
         }
     }
@@ -2138,11 +2124,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P7 (ADR-0041): demand-paging via #PF (lazy Cortex weights) — non-fatal
     match crate::cortex_mmap::demo_demand_paging() {
         Ok(()) => {
-            serial_println!("[P7] Demand-paging demo OK");
+            k_nano::slog_bin!("P7", "info", "Demand-paging demo OK");
             crate::boot_logger::log("BOOT: P7 demand-page OK");
         }
         Err(e) => {
-            serial_println!("[P7] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P7", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P7 demand-page WARN (non-fatal)");
         }
     }
@@ -2150,11 +2136,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P8 (ADR-0041): VirtIO vring sobre DMA pin (layout-compatible) — non-fatal
     match crate::virtio_vring::demo_virtio_vring() {
         Ok(()) => {
-            serial_println!("[P8] VirtIO vring demo OK");
+            k_nano::slog_bin!("P8", "info", "VirtIO vring demo OK");
             crate::boot_logger::log("BOOT: P8 vring OK");
         }
         Err(e) => {
-            serial_println!("[P8] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P8", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P8 vring WARN (non-fatal)");
         }
     }
@@ -2162,11 +2148,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // P9 (ADR-0041): GGUF/FAT file-backed mmap + demand-paging — non-fatal
     match crate::gguf_mmap::demo_gguf_mmap() {
         Ok(()) => {
-            serial_println!("[P9] GGUF/FAT mmap demo OK");
+            k_nano::slog_bin!("P9", "info", "GGUF/FAT mmap demo OK");
             crate::boot_logger::log("BOOT: P9 gguf-mmap OK");
         }
         Err(e) => {
-            serial_println!("[P9] WARN: {} — boot continua", e);
+            k_nano::slog_bin!("P9", "info", "WARN: {} — boot continua", e);
             crate::boot_logger::log("BOOT: P9 gguf-mmap WARN (non-fatal)");
         }
     }
@@ -2222,7 +2208,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     unsafe { hw_reg.detect_all(); }
 
-    serial_println!("[HW-AGENTS] {} dispositivos detectados como HwAgents.", hw_reg.agents.len());
+    k_nano::slog_bin!("HW-AGENTS", "info", "{} dispositivos detectados como HwAgents.", hw_reg.agents.len());
 
     
 
@@ -2242,36 +2228,34 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Runtime agents — HermesAgent acorda logo apos o Cortex
 
-    serial_println!("[BOOT] Registering SystemAgent...");
+    k_nano::slog_bin!("Boot", "register", "SystemAgent");
 
     registry.register(Box::new(SystemAgent::new()));
 
-    serial_println!("[BOOT] Registering MonitorAgent...");
+    k_nano::slog_bin!("Boot", "register", "MonitorAgent");
 
     registry.register(Box::new(agents::MonitorAgent::new()));
 
-    serial_println!("[BOOT] Registering HwBridgeAgent...");
+    k_nano::slog_bin!("Boot", "register", "HwBridgeAgent");
 
     registry.register(Box::new(agents::HwBridgeAgent));
 
-    serial_println!("[BOOT] Registering NetAgent...");
+    k_nano::slog_bin!("Boot", "register", "NetAgent");
 
     let net_agent = Box::new(agents::NetAgent::new());
 
-    serial_println!("[BOOT] NetAgent manifest: name={}, auto_start={}, schedule={:?}",
+    k_nano::slog_bin!("Boot", "info", "NetAgent manifest: name={}, auto_start={}, schedule={:?}",
 
         net_agent.manifest().name, net_agent.manifest().auto_start, net_agent.manifest().schedule);
-    serial_println!(
-        "[NET] registered Continuous — ticks após init_phase (SelfHeal/Disk); gate=e1000 [smoltcp/NIC]"
-    );
+    k_nano::slog_hermes!("Net", "info", "registered Continuous — ticks após init_phase (SelfHeal/Disk); gate=e1000 [smoltcp/NIC]");
 
     registry.register(net_agent);
 
-    serial_println!("[BOOT] Registering InputAgent...");
+    k_nano::slog_bin!("Boot", "register", "InputAgent");
 
     registry.register(Box::new(agents::InputAgent::new()));
 
-    serial_println!("[BOOT] Registering HermesAgent...");
+    k_nano::slog_bin!("Boot", "register", "HermesAgent");
 
     registry.register(Box::new(agents::HermesAgent::new()));
 
@@ -2279,7 +2263,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // The Agency: 30+ agentes especialistas
 
-    serial_println!("[BOOT] Registering agency agents...");
+    k_nano::slog_bin!("Boot", "register", "agency agents");
 
     agents::register_agency_agents(&mut registry);
 
@@ -2287,7 +2271,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // HW Agents: um agente por dispositivo PCI
 
-    serial_println!("[BOOT] Registering HW agents...");
+    k_nano::slog_bin!("Boot", "register", "HW agents");
 
     agents::register_hw_agents(&mut registry);
 
@@ -2301,33 +2285,33 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     kjson!("BOOT", "AGENTS", "www", "search", 1);
 
-    serial_println!("[BOOT] Registering DisplayAgent...");
+    k_nano::slog_bin!("Boot", "register", "DisplayAgent");
 
     registry.register(Box::new(display::agent::DisplayAgent::new()));
 
-    serial_println!("[BOOT] Registering VisionAgent...");
+    k_nano::slog_bin!("Boot", "register", "VisionAgent");
 
     registry.register(Box::new(vision_agent::VisionAgent::new()));
 
-    serial_println!("[BOOT] Registering JarvisAgent...");
+    k_nano::slog_bin!("Boot", "register", "JarvisAgent");
 
     registry.register(Box::new(audio::jarvis::JarvisAgent::new()));
 
-    serial_println!("[BOOT] Registering JarvisVoiceAgent...");
+    k_nano::slog_bin!("Boot", "register", "JarvisVoiceAgent");
 
     registry.register(Box::new(audio::voice::JarvisVoiceAgent::new()));
 
-    serial_println!("[BOOT] Registering WakeWordAgent...");
+    k_nano::slog_bin!("Boot", "register", "WakeWordAgent");
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
 
-    serial_println!("[BOOT] Registering AudioPipelineAgent (barge-in)...");
+    k_nano::slog_bin!("Boot", "register", "AudioPipelineAgent (barge-in)");
     registry.register(Box::new(audio::pipeline::AudioPipelineAgent::new()));
 
-    serial_println!("[BOOT] Registering AudioMixerAgent...");
+    k_nano::slog_bin!("Boot", "register", "AudioMixerAgent");
 
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
 
-    serial_println!("[BOOT] Registering CronAgent...");
+    k_nano::slog_bin!("Boot", "register", "CronAgent");
 
     let mut cron = cron::CronAgent::new();
 
@@ -2335,19 +2319,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     registry.register(Box::new(cron));
 
-    serial_println!("[BOOT] Registering McpAgent...");
+    k_nano::slog_bin!("Boot", "register", "McpAgent");
 
     registry.register(Box::new(mcp::McpAgent::new()));
 
-    serial_println!("[BOOT] Registering SecurityAgent...");
+    k_nano::slog_bin!("Boot", "register", "SecurityAgent");
 
     registry.register(Box::new(security::SecurityAgent::new()));
 
-    serial_println!("[BOOT] Registering SafetyAgent...");
+    k_nano::slog_bin!("Boot", "register", "SafetyAgent");
 
     registry.register(Box::new(safety::SafetyAgent::new()));
 
-    serial_println!("[BOOT] Registering OptimizerAgent...");
+    k_nano::slog_bin!("Boot", "register", "OptimizerAgent");
 
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
 
@@ -2357,7 +2341,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     registry.register(Box::new(wifi_agent::WifiAgent::new()));
 
-    serial_println!("[BOOT] Registering WifiAgent...");
+    k_nano::slog_bin!("Boot", "register", "WifiAgent");
 
     // BootLogAgent ja registrado no inicio do registry (BOOT_PHASE consumer)
 
@@ -2374,8 +2358,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     {
         let tok = crate::CapabilityToken::Legacy(1);
         match SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
-            Ok(out) => serial_println!("[BOOT] DiagnosticSkill executada ({} bytes)", out.len()),
-            Err(e) => serial_println!("[BOOT] DiagnosticSkill falhou: {}", e),
+            Ok(out) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill executada ({} bytes)", out.len()),
+            Err(e) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill falhou: {}", e),
         }
     }
 
@@ -2399,7 +2383,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
             } else {
 
-                serial_println!("[RAMDISK] Ramdisk too small ({} bytes) — trying QEMU loader.", len);
+                k_nano::slog_bin!("Asset", "ramdisk", "Ramdisk too small ({} bytes) — trying QEMU loader.", len);
 
                 None
 
@@ -2419,17 +2403,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
         if magic == 0xBE11BE11 {
 
-            serial_println!("[RAMDISK] .bitnet model found ({} bytes). Loading...", data.len());
+            k_nano::slog_bin!("Asset", "ramdisk", ".bitnet model found ({} bytes). Loading...", data.len());
 
             if let Some(big_model) = crate::cortex::load_model(data) {
 
                 crate::cortex::set_model(alloc::boxed::Box::new(big_model));
 
-                serial_println!("[RAMDISK] Big model loaded. CortexAgent upgraded.");
+                k_nano::slog_bin!("RAMDISK", "info", "Big model loaded. CortexAgent upgraded.");
 
                 // Test 2B inference: gera 1 token para confirmar
                 let r = crate::cortex::generate_via_model("hello world");
-                serial_println!("[LLM-2B] prompt='hello world' response='{}'", r);
+                k_nano::slog_bin!("LLM-2B", "info", "prompt='hello world' response='{}'", r);
 
                 crate::boot_logger::log("BOOT: Ramdisk .bitnet model loaded");
 
@@ -2437,13 +2421,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
             } else {
 
-                serial_println!("[RAMDISK] .bitnet load FAILED — keeping micro model.");
+                k_nano::slog_bin!("RAMDISK", "info", ".bitnet load FAILED — keeping micro model.");
 
             }
 
         } else {
 
-            serial_println!("[RAMDISK] Unknown magic {:02X?} — skipping model load.", &magic);
+            k_nano::slog_bin!("Asset", "ramdisk", "Unknown magic {:02X?} — skipping model load.", &magic);
 
         }
 
@@ -2476,7 +2460,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             let raw1 = unsafe { core::ptr::read_volatile(probe_ptr.add(1)) };
             let raw2 = unsafe { core::ptr::read_volatile(probe_ptr.add(2)) };
             let raw3 = unsafe { core::ptr::read_volatile(probe_ptr.add(3)) };
-            serial_println!("[RAMDISK] Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
+            k_nano::slog_bin!("Asset", "ramdisk", "Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
             let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
             if qemu_magic == 0xBE11BE11 {
                 // Host: target/bitnet_2B.bitnet re-export q_dim=2560 (~577MB).
@@ -2485,11 +2469,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 let mut model_len = match fat_2b_sz {
                     Some(sz) if sz >= 400 * 1024 * 1024 => sz,
                     Some(sz) => {
-                        serial_println!(
-                            "[RAMDISK] FAT BITNET2B size={}KB legado — using host V4 {}KB",
+                        k_nano::slog_bin!("Asset", "ramdisk", "FAT BITNET2B size={}KB legado — using host V4 {}KB",
                             sz / 1024,
-                            BITNET_2B_V4_BYTES / 1024
-                        );
+                            BITNET_2B_V4_BYTES / 1024);
                         BITNET_2B_V4_BYTES
                     }
                     None => BITNET_2B_V4_BYTES,
@@ -2498,30 +2480,25 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     if r.start <= load_addr && r.end > load_addr {
                         let region = (r.end - load_addr) as usize;
                         if region < model_len {
-                            serial_println!("[RAMDISK] region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
+                            k_nano::slog_bin!("Asset", "ramdisk", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
                             model_len = region;
                         }
                         break;
                     }
                 }
-                serial_println!(
-                    "[RAMDISK] QEMU loader: BITNET2B magic OK @0x100000000 exact={}KB fat={:?}",
+                k_nano::slog_bin!("Asset", "ramdisk", "QEMU loader: BITNET2B magic OK @0x100000000 exact={}KB fat={:?}",
                     model_len / 1024,
-                    fat_2b_sz.map(|s| s / 1024)
-                );
+                    fat_2b_sz.map(|s| s / 1024));
                 if model_len > 1024 {
                     let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
-                    serial_println!("[RAMDISK] QEMU loader: load_model slice={}KB...", model_len / 1024);
+                    k_nano::slog_bin!("Asset", "ramdisk", "QEMU loader: load_model slice={}KB...", model_len / 1024);
                     if let Some(big_model) = crate::cortex::load_model(model_data) {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                        serial_println!(
-                            "[RAMDISK] LLM LOADED file=BITNET2B (QEMU-loader @0x100000000) size={}KB",
-                            model_len / 1024
-                        );
+                        k_nano::slog_bin!("Asset", "ramdisk", "LLM LOADED file=BITNET2B (QEMU-loader @0x100000000) size={}KB", model_len / 1024);
                         crate::boot_logger::log("BOOT: QEMU loader BitNet 2B loaded");
                         model_loaded = true;
                     } else {
-                        serial_println!("[RAMDISK] QEMU loader: load_model FAILED");
+                        k_nano::slog_bin!("RAMDISK", "info", "QEMU loader: load_model FAILED");
                         crate::load_status::set(
                             crate::load_status::AssetKind::Llm,
                             crate::load_status::LoadStatus::Failed,
@@ -2529,7 +2506,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     }
                 }
             } else {
-                serial_println!("[RAMDISK] No model at 0x100000000 — trying 0x120000000...");
+                k_nano::slog_bin!("RAMDISK", "info", "No model at 0x100000000 — trying 0x120000000...");
                 let load_addr2: u64 = 0x120000000;
                 if boot_info.memory_regions.iter().any(|r| r.start <= load_addr2 && r.end > load_addr2) {
                     let probe2 = (load_addr2 + pm_offset) as *const u32;
@@ -2542,14 +2519,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
                         if let Some(big_model) = crate::cortex::load_model(model_data2) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                            serial_println!("[RAMDISK] LLM LOADED file=BITNET2B (QEMU-loader @0x120000000)");
+                            k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=BITNET2B (QEMU-loader @0x120000000)");
                             model_loaded = true;
                         }
                     }
                 }
             }
         } else {
-            serial_println!("[RAMDISK] 4GB not in memory map (use -m 6G) — fallback FAT.");
+            k_nano::slog_bin!("RAMDISK", "info", "4GB not in memory map (use -m 6G) — fallback FAT.");
         }
     }
 
@@ -2581,34 +2558,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
                             if sz > pio_cap {
-                                serial_println!(
-                                    "[FAT] {} PRESENT size={}KB — skip full PIO (cap={}MB; QEMU-loader ou --features hw)",
+                                k_nano::slog_nano!("FAT", "info", "{} PRESENT size={}KB — skip full PIO (cap={}MB; QEMU-loader ou --features hw)",
                                     name,
                                     sz / 1024,
-                                    pio_cap / (1024 * 1024)
-                                );
+                                    pio_cap / (1024 * 1024));
                                 continue;
                             }
                             if sz > PIO_QEMU {
-                                serial_println!(
-                                    "[FAT] {} size={}MB — baremetal FAT PIO (pode demorar minutos)",
+                                k_nano::slog_nano!("FAT", "info", "{} size={}MB — baremetal FAT PIO (pode demorar minutos)",
                                     name,
-                                    sz / (1024 * 1024)
-                                );
+                                    sz / (1024 * 1024));
                             }
-                            serial_println!("[FAT] lendo {} ({}KB) — candidato LLM...", name, sz / 1024);
+                            k_nano::slog_nano!("FAT", "info", "lendo {} ({}KB) — candidato LLM...", name, sz / 1024);
                             if let Some(fat_data) = fs.read_file(name) {
                                 if let Some(big_model) = crate::cortex::load_model(&fat_data) {
                                     crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                                    serial_println!(
-                                        "[FAT] LLM LOADED file={} size={}KB — CortexAgent upgraded.",
-                                        name, fat_data.len() / 1024
-                                    );
+                                    k_nano::slog_nano!("FAT", "info", "LLM LOADED file={} size={}KB — CortexAgent upgraded.", name, fat_data.len() / 1024);
                                     crate::boot_logger::log("BOOT: FAT BitNet model loaded");
                                     model_loaded = true;
                                     break;
                                 } else {
-                                    serial_println!("[FAT] {} presente mas load_model FAILED", name);
+                                    k_nano::slog_nano!("FAT", "info", "{} presente mas load_model FAILED", name);
                                     crate::load_status::set(
                                         crate::load_status::AssetKind::Llm,
                                         crate::load_status::LoadStatus::Failed,
@@ -2629,25 +2599,19 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
                         let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
                         if fat_data.len() > PIO_HW {
-                            serial_println!(
-                                "[FAT] USB {} PRESENT size={}KB — skip PIO",
+                            k_nano::slog_nano!("FAT", "info", "USB {} PRESENT size={}KB — skip PIO",
                                 name,
-                                fat_data.len() / 1024
-                            );
+                                fat_data.len() / 1024);
                             continue;
                         }
-                        serial_println!(
-                            "[FAT] USB lendo {} ({}KB) — candidato LLM...",
+                        k_nano::slog_nano!("FAT", "info", "USB lendo {} ({}KB) — candidato LLM...",
                             name,
-                            fat_data.len() / 1024
-                        );
+                            fat_data.len() / 1024);
                         if let Some(big_model) = crate::cortex::load_model(&fat_data) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                            serial_println!(
-                                "[FAT] LLM LOADED file={} size={}KB via USB-MSC",
+                            k_nano::slog_nano!("FAT", "info", "LLM LOADED file={} size={}KB via USB-MSC",
                                 name,
-                                fat_data.len() / 1024
-                            );
+                                fat_data.len() / 1024);
                             crate::boot_logger::log("BOOT: FAT BitNet model loaded (USB)");
                             model_loaded = true;
                             break;
@@ -2689,36 +2653,30 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             let ptr = (addr + pm) as *const u8;
             let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
             if magic != 0xBE11BE11 {
-                serial_println!(
-                    "[{}] QEMU-loader @{:#x} magic=0x{:08X} (ausente)",
+                k_nano::slog_bin!("Asset", "loader", "{} QEMU-loader @{:#x} magic=0x{:08X} (ausente)",
                     label,
                     addr,
-                    magic
-                );
+                    magic);
                 return false;
             }
             let data = unsafe { core::slice::from_raw_parts(ptr, size) };
-            serial_println!(
-                "[{}] QEMU-loader @{:#x} magic OK — parse {} KB…",
+            k_nano::slog_bin!("Asset", "loader", "{} QEMU-loader @{:#x} magic OK — parse {} KB…",
                 label,
                 addr,
-                size / 1024
-            );
+                size / 1024);
             if let Some(model) = crate::cortex::load_model(data) {
                 if is_hw {
                     crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(model));
                 } else {
                     crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(model));
                 }
-                serial_println!(
-                    "[{}] LOADED (QEMU-loader @{:#x}) size={}KB",
+                k_nano::slog_bin!("Asset", "loader", "{} LOADED (QEMU-loader @{:#x}) size={}KB",
                     label,
                     addr,
-                    size / 1024
-                );
+                    size / 1024);
                 true
             } else {
-                serial_println!("[{}] QEMU-loader parse FAILED", label);
+                k_nano::slog_bin!("Asset", "loader", "{} QEMU-loader parse FAILED", label);
                 false
             }
         }
@@ -2749,7 +2707,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                                     crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(
                                         rust_model,
                                     ));
-                                    serial_println!("[FAT] RustCoder expert model loaded!");
+                                    k_nano::slog_bin!("FAT", "info", "RustCoder expert model loaded!");
                                     crate::boot_logger::log("BOOT: RustCoder expert loaded");
                                     rust_ok = true;
                                 }
@@ -2761,7 +2719,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                                     crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(
                                         hw_model,
                                     ));
-                                    serial_println!("[FAT] HW Expert model loaded (213K HWIDs)!");
+                                    k_nano::slog_bin!("FAT", "info", "HW Expert model loaded (213K HWIDs)!");
                                     crate::boot_logger::log("BOOT: HW Expert loaded");
                                     hw_ok = true;
                                 }
@@ -2780,7 +2738,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         if let Some(rust_data) = read_file_from_dev(msc, "RUSTCDR.BITNET") {
                             if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
                                 crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
-                                serial_println!("[FAT] RustCoder expert loaded (USB-MSC)!");
+                                k_nano::slog_bin!("FAT", "info", "RustCoder expert loaded (USB-MSC)!");
                                 rust_ok = true;
                             }
                         }
@@ -2789,7 +2747,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         if let Some(hw_data) = read_file_from_dev(msc, "HWEXPRT.BIN") {
                             if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
                                 crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
-                                serial_println!("[FAT] HW Expert loaded (USB-MSC)!");
+                                k_nano::slog_bin!("FAT", "info", "HW Expert loaded (USB-MSC)!");
                                 hw_ok = true;
                             }
                         }
@@ -2818,10 +2776,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             g >= 2048
         };
         if heavy {
-            serial_println!("[LLM-TEST] SKIP heavy 2B (boot path; enable weather-e2e for clima HIT)");
+            k_nano::slog_bin!("LLM-TEST", "info", "SKIP heavy 2B (boot path; enable weather-e2e for clima HIT)");
         } else {
             let r = crate::cortex::generate_via_model("hello");
-            serial_println!("[LLM-TEST] loaded prompt='hello' response='{}'", r);
+            k_nano::slog_bin!("LLM-TEST", "info", "loaded prompt='hello' response='{}'", r);
         }
         crate::load_status::set(
             crate::load_status::AssetKind::Llm,
@@ -2829,9 +2787,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         );
         // model_loaded already true from FAT/QEMU paths; load_status is the banner source.
     } else {
-        serial_println!("[LLM-TEST] no model — ABSENT");
+        k_nano::slog_bin!("LLM-TEST", "info", "no model — ABSENT");
         crate::boot_logger::log("BOOT: LLM ABSENT — sem ramdisk/loader/FAT modelo utilizavel");
-        serial_println!("[LLM] ABSENT — BitNet 2B nao carregado (FAT/ramdisk)");
+        k_nano::slog_bin!("LLM", "info", "ABSENT — BitNet 2B nao carregado (FAT/ramdisk)");
         crate::load_status::set_if_upgrade(
             crate::load_status::AssetKind::Llm,
             crate::load_status::LoadStatus::Absent,
@@ -2866,13 +2824,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         if ctc_alpha(&stt_ctc) < 4 && crate::audio::skills::piper_is_loaded() {
             let pcm2 = crate::audio::skills::synthesize_tts("tempo");
             let ctc2 = crate::audio::stt::transcribe_global(&pcm2);
-            serial_println!(
-                "[JARBAS-STT] retry piper-pcm len={} ctc_len={} ctc='{}' (prev='{}')",
+            k_nano::slog_bin!("JARBAS", "STT", "retry piper-pcm len={} ctc_len={} ctc='{}' (prev='{}')",
                 pcm2.len(),
                 ctc2.len(),
                 ctc2,
-                stt_ctc
-            );
+                stt_ctc);
             if ctc_alpha(&ctc2) > ctc_alpha(&stt_ctc) {
                 stt_ctc = ctc2;
             }
@@ -2881,22 +2837,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         if ctc_alpha(&stt_ctc) < 4 && crate::audio::skills::piper_is_loaded() {
             let pcm3 = crate::audio::skills::synthesize_tts("dia sol");
             let ctc3 = crate::audio::stt::transcribe_global(&pcm3);
-            serial_println!(
-                "[JARBAS-STT] retry2 piper-pcm len={} ctc_len={} ctc='{}'",
+            k_nano::slog_bin!("JARBAS", "STT", "retry2 piper-pcm len={} ctc_len={} ctc='{}'",
                 pcm3.len(),
                 ctc3.len(),
-                ctc3
-            );
+                ctc3);
             if ctc_alpha(&ctc3) > ctc_alpha(&stt_ctc) {
                 stt_ctc = ctc3;
             }
         }
-        serial_println!(
-            "[JARBAS-STT] pcm_len={} ctc_len={} ctc='{}'",
+        k_nano::slog_bin!("JARBAS", "STT", "pcm_len={} ctc_len={} ctc='{}'",
             pcm_probe.len(),
             stt_ctc.len(),
-            stt_ctc
-        );
+            stt_ctc);
         // EventBus skinny: publica CTC real (mesmo curto) + USER_INTENT com prompt LLM.
         // Fecha Mic→STT→LLM visibilidade sem fingir que CTC curto e frase climatica.
         {
@@ -2911,10 +2863,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 payload: ctc_payload.into_bytes(),
                 token: crate::CapabilityToken::Legacy(1),
             });
-            serial_println!(
-                "[JARBAS-STT] EventBus TOPIC_STT_TEXT published (ctc_nonempty={})",
-                !stt_ctc.is_empty()
-            );
+            k_nano::slog_bin!("JARBAS", "STT", "EventBus TOPIC_STT_TEXT published (ctc_nonempty={})", !stt_ctc.is_empty());
         }
         let stt_owned = if stt_ctc.chars().filter(|c| c.is_ascii_alphabetic()).count() >= 4 {
             if crate::bpe::weatherish_hit_count(&stt_ctc) >= 1
@@ -2923,17 +2872,14 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             {
                 stt_ctc
             } else {
-                serial_println!("[JARBAS-STT] weak ctc → seed prompt");
+                k_nano::slog_bin!("JARBAS-STT", "info", "weak ctc → seed prompt");
                 alloc::string::String::from(stt_seed)
             }
         } else {
             if !stt_ctc.is_empty() {
-                serial_println!(
-                    "[JARBAS-STT] path_ctc_nonempty='{}' → seed LLM (synth-train domain gap)",
-                    stt_ctc
-                );
+                k_nano::slog_bin!("JARBAS", "STT", "path_ctc_nonempty='{}' → seed LLM (synth-train domain gap)", stt_ctc);
             } else {
-                serial_println!("[JARBAS-STT-SIM] {} (ctc empty/short)", stt_seed);
+                k_nano::slog_bin!("JARBAS-STT-SIM", "info", "{} (ctc empty/short)", stt_seed);
             }
             alloc::string::String::from(stt_seed)
         };
@@ -2943,44 +2889,40 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             payload: stt_owned.as_bytes().to_vec(),
             token: crate::CapabilityToken::Legacy(1),
         });
-        serial_println!("[JARBAS-STT] EventBus USER_INTENT published len={}", stt_owned.len());
+        k_nano::slog_bin!("JARBAS-STT", "info", "EventBus USER_INTENT published len={}", stt_owned.len());
         let stt = stt_owned.as_str();
         if crate::cortex::model_is_loaded() {
             // Sprint 107 Loop2: forçar rota generator (LLM 2B). Sem isso, Trinity
             // defaultava hw_identify e — com HWEXPERT LOADED — gerava vocab=64 lixo.
-            serial_println!("[N4-HERMES] intent_e2e STT→USER_INTENT→cortex generate_via_model (generator)");
+            k_nano::slog_hermes!("Gate", "n4", "intent_e2e STT→USER_INTENT→cortex generate_via_model (generator)");
             let raw = crate::cortex::generate_via_model_with_route(stt, "generator");
             if raw.is_empty() {
-                serial_println!("[JARBAS-TTS] FAILED empty generate");
+                k_nano::slog_bin!("JARBAS-TTS", "info", "FAILED empty generate");
                 n3_gen = Some(false);
                 n4_intent = Some(false);
                 n5_voice = Some(false);
             } else {
-                serial_println!("[JARBAS-TTS] {}", raw);
+                k_nano::slog_bin!("JARBAS-TTS", "info", "{}", raw);
                 n3_gen = Some(true);
                 n4_intent = Some(true);
                 let piper_on = crate::audio::skills::piper_is_loaded();
                 let _pcm = crate::audio::skills::synthesize_tts(&raw);
-                serial_println!(
-                    "[JARBAS-TTS] piper={} pcm_samples={}",
+                k_nano::slog_bin!("JARBAS", "TTS", "piper={} pcm_samples={}",
                     if piper_on { "LOADED" } else { "OFF" },
-                    _pcm.len()
-                );
+                    _pcm.len());
                 // FB antes do scheduler — DisplayAgent ainda nao trocou ownership
                 crate::display::fb::paint_tts_response(&raw);
                 n5_voice = Some(!_pcm.is_empty() || piper_on);
             }
         } else {
-            serial_println!("[JARBAS-TTS] SKIP llm=ABSENT");
+            k_nano::slog_bin!("JARBAS-TTS", "info", "SKIP llm=ABSENT");
             n3_gen = Some(false);
             n4_intent = Some(false);
             n5_voice = Some(false);
         }
     }
     } else {
-        serial_println!(
-            "[BOOT] weather-e2e OFF (HW/default) — skinny STT-sim/seed skipped; feature=weather-e2e p/ QEMU HIT"
-        );
+        k_nano::slog_bin!("Boot", "info", "weather-e2e OFF (HW/default) — skinny STT-sim/seed skipped; feature=weather-e2e p/ QEMU HIT");
     }
 
     // ADR-0042 N3 gate — telemetria honesta (cérebro): LOADED + MAP_WEIGHTS + Trinity + generate
@@ -2994,51 +2936,51 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Sprint 95-96: Cognitive + Memory status
 
-    serial_println!("[COG] {}", INTENT_PLANNER.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", INTENT_PLANNER.lock().status());
 
-    serial_println!("[COG] {}", SUCCESS_ENGINE.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", SUCCESS_ENGINE.lock().status());
 
-    serial_println!("[COG] {}", FEEDBACK_LOOP.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", FEEDBACK_LOOP.lock().status());
 
-    serial_println!("[COG] {}", NEURAL_CACHE.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", NEURAL_CACHE.lock().status());
 
-    serial_println!("[COG] {}", WORKFLOW_PREDICTOR.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", WORKFLOW_PREDICTOR.lock().status());
 
-    serial_println!("[COG] {}", CODEBOOK_VQ.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", CODEBOOK_VQ.lock().status());
 
-    serial_println!("[COG] {}", REACT_LOOP.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", REACT_LOOP.lock().status());
 
-    serial_println!("[COG] {}", MCP_SERVER.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", MCP_SERVER.lock().status());
 
-    serial_println!("[COG] {}", AUTOSKILL_GEN.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", AUTOSKILL_GEN.lock().status());
 
-    serial_println!("[COG] {}", DYNAMIC_SCALER.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", DYNAMIC_SCALER.lock().status());
 
-    serial_println!("[COG] {}", SCHED_OPT.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", SCHED_OPT.lock().status());
 
-    serial_println!("[COG] {}", REPLAY_BUF.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", REPLAY_BUF.lock().status());
 
-    serial_println!("[COG] {}", BITNET_TRAINER.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", BITNET_TRAINER.lock().status());
 
-    serial_println!("[COG] {}", EPISODIC_MEM.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", EPISODIC_MEM.lock().status());
 
-    serial_println!("[COG] {}", TASK_SPAWNER.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", TASK_SPAWNER.lock().status());
 
-    serial_println!("[COG] {}", WORKSPACE_ISO.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", WORKSPACE_ISO.lock().status());
 
-    serial_println!("[COG] {}", DELTA_BRANCH.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", DELTA_BRANCH.lock().status());
 
-    serial_println!("[COG] {}", MATMUL_FREE_LM.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", MATMUL_FREE_LM.lock().status());
 
-    serial_println!("[COG] {}", TEAM_MEMORY.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", TEAM_MEMORY.lock().status());
 
-    serial_println!("[COG] {}", VECTOR_FS.lock().status());
+    k_nano::slog_bin!("COG", "info", "{}", VECTOR_FS.lock().status());
 
-    serial_println!("[COG] {}", crate::memory_systems::bge_status());
+    k_nano::slog_bin!("COG", "info", "{}", crate::memory_systems::bge_status());
 
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
 
-    serial_println!("[SCHEDULER] {} runtime agents. Iniciando scheduler...", registry.agents.len());
+    k_nano::slog_bin!("Sched", "info", "{} runtime agents. Iniciando scheduler...", registry.agents.len());
 
     // PIC+STI antes do 1º hlt(): se ACPI=None/APIC nunca sobe, PIT acorda o scheduler.
     // Se PlatformAgent já ativou APIC, USING_APIC→só STI de novo.
@@ -3086,16 +3028,15 @@ pub fn ensure_boot_phase_consumer() {
     let mut g = BOOT_PHASE_RX.lock();
     if g.is_none() {
         *g = Some(EVENT_BUS.subscribe(TOPIC_BOOT_PHASE));
-        serial_println!("[BOOT] Consumer BOOT_PHASE inscrito no EventBus");
+        k_nano::slog_bin!("BOOT", "info", "Consumer BOOT_PHASE inscrito no EventBus");
     }
 }
 
 fn drain_boot_phase_consumer() {
+    // Drena sem serial/FB — publish_boot_phase já imprimiu a payload.
+    // Imprimir de novo gerava 3 linhas sobrepostas ([BOOT] + [LOG] + [BOOT-PHASE-RX]).
     if let Some(ref mut rx) = *BOOT_PHASE_RX.lock() {
-        while let Some(ev) = rx.try_receive() {
-            let msg = core::str::from_utf8(&ev.payload).unwrap_or("?");
-            serial_println!("[BOOT-PHASE-RX] {}", msg);
-        }
+        while rx.try_receive().is_some() {}
     }
 }
 
@@ -3130,29 +3071,18 @@ pub enum BootPhase {
 
 
 pub fn publish_boot_phase(phase: BootPhase, msg: &str) {
-
     ensure_boot_phase_consumer();
-
     let payload = alloc::format!("[BOOT:{:?}] {}", phase, msg);
-
-    serial_println!("{}", payload);
-
-    crate::boot_logger::log(&payload);
-
+    k_nano::slog_bin!("Log", "msg", "{}", payload);
+    // Disco/buffer só — sem segundo serial_println ([LOG] duplicava no FB).
+    crate::boot_logger::log_quiet(&payload);
     let _ = EVENT_BUS.publish(crate::Event {
-
         id: 0,
-
         topic: alloc::string::String::from(TOPIC_BOOT_PHASE),
-
         payload: payload.into_bytes(),
-
         token: crate::CapabilityToken::Legacy(1),
-
     });
-
     drain_boot_phase_consumer();
-
 }
 
 
@@ -3208,43 +3138,29 @@ pub(crate) fn scancode_to_ascii(scancode: u8) -> Option<char> {
 
 
 fn verify_kernel_from_disk(ata: &crate::ata::AtaDriver, parts: &[crate::fat32::Partition]) {
-
     for part in parts {
-
-        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
-
+        if part.type_code == 0x0B
+            || part.type_code == 0x0C
+            || part.type_code == 0x1C
+            || part.type_code == 0x73
+        {
             if let Some(fat32) = unsafe { crate::fat32::Fat32Reader::new(ata, part) } {
-
                 if let Some(data) = unsafe { fat32.read_file("KERNEL~1") } {
-
                     if !crate::identity::verify_kernel_signature(&data) {
-
-                        crate::serial_println!("[SEC] *** ASSINATURA DO KERNEL INVALIDA! ***");
-
-                        crate::serial_println!("[SEC] HALT por seguranca.");
-
-                        loop { core::hint::spin_loop() }
-
-                    } else {
-
-                        crate::serial_println!("[SEC] Assinatura do kernel OK.");
-
-                        crate::tpm::tpm_extend_pcr(crate::tpm::TPM_PCR_KERNEL, &data);
-
+                        // NÃO halt — notebooks USB-boot sem kernel assinado no ATA interno
+                        // travavam aqui após K17 (loop spin eterno).
+                        k_nano::slog_bin!("Sec", "info", "KERNEL~1 assinatura INVALIDA — continue (HW USB boot)");
+                        crate::display::fb::console_print("SEC: kernel unsigned — continue");
+                        return;
                     }
-
+                    k_nano::slog_bin!("Sec", "info", "Assinatura do kernel OK.");
+                    crate::tpm::tpm_extend_pcr(crate::tpm::TPM_PCR_KERNEL, &data);
                     return;
-
                 }
-
             }
-
         }
-
     }
-
-    crate::serial_println!("[SEC] Kernel nao assinado (sem FAT ou KERNEL~1 nao encontrado).");
-
+    k_nano::slog_bin!("Sec", "info", "Kernel nao assinado (sem FAT ou KERNEL~1 nao encontrado).");
 }
 
 

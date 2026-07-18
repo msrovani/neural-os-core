@@ -1,7 +1,5 @@
 
 
-use crate::serial_println;
-
 #[derive(Clone)]
 pub struct AtaDriver {
     pub io_base: u16,
@@ -26,7 +24,7 @@ impl AtaDriver {
                 if let Some(id) = drv.identify() {
                     let total = (id[60] as u64) | ((id[61] as u64) << 16);
                     if total > 0 && total < 0xFFFFFFFF {
-                        serial_println!("[ATA] ISA {}: {} {} setores", base, if slave { "slave" } else { "master" }, total);
+                        crate::slog_nano!("Disk", "ata", "ISA {}: {} {} setores", base, if slave { "slave" } else { "master" }, total);
                         write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
                         for _ in 0..1000 { core::hint::spin_loop(); }
                         if drv.has_mbr() {
@@ -36,7 +34,7 @@ impl AtaDriver {
                                     let off = 0x1BE + i * 16;
                                     let t = mbr[off + 4];
                                     if t == 0x0B || t == 0x0C || t == 0x1C {
-                                        serial_println!("[ATA] ISA {}: {} FAT32! (type={:#x})", base, if slave { "slave" } else { "master" }, t);
+                                        crate::slog_nano!("Disk", "ata", "ISA {}: {} FAT32! (type={:#x})", base, if slave { "slave" } else { "master" }, t);
                                         return Some(drv);
                                     }
                                     if t == 0xEE && best.is_none() { best = Some(drv.clone()); best_type = t; }
@@ -48,18 +46,18 @@ impl AtaDriver {
                 }
             }
         }
-        if best.is_some() { serial_println!("[ATA] Usando fallback type={:#x}", best_type); }
+        if best.is_some() { crate::slog_nano!("Disk", "ata", "Usando fallback type={:#x}", best_type); }
         best
     }
 
     unsafe fn has_mbr(&self) -> bool {
         let mut buf = [0u8; 512];
         if !self.read_sectors(0, &mut buf, 1) {
-            serial_println!("[ATA] has_mbr: read_sectors falhou para slave={}", self.slave);
+            crate::slog_nano!("Disk", "ata", "has_mbr: read_sectors falhou para slave={}", self.slave);
             return false;
         }
         let ok = buf[0x1FE] == 0x55 && buf[0x1FF] == 0xAA;
-        serial_println!("[ATA] has_mbr: slave={} 55AA={} bytes510={:02X}511={:02X}", self.slave, ok, buf[0x1FE], buf[0x1FF]);
+        crate::slog_nano!("Disk", "ata", "has_mbr: slave={} 55AA={} bytes510={:02X}511={:02X}", self.slave, ok, buf[0x1FE], buf[0x1FF]);
         ok
     }
 
@@ -146,7 +144,7 @@ impl AtaDriver {
         for s in 0..count as usize {
             self.wait_bsy();
             if !self.wait_drq() {
-                serial_println!("[ATA] read: DRQ nao pronto LBA={} s={}/{} slave={}", lba, s, count, self.slave);
+                crate::slog_nano!("Disk", "ata", "read: DRQ nao pronto LBA={} s={}/{} slave={}", lba, s, count, self.slave);
                 return false;
             }
             for i in 0..256 {

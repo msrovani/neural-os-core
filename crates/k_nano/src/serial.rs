@@ -172,7 +172,8 @@ pub fn serial_available() -> bool {
 #[macro_export] macro_rules! serial_println { () => ($crate::serial_print!("\n")); ($($arg:tt)*) => ($crate::serial_print!("{}\n", format_args!($($arg)*))); }
 
 /// Log estruturado para debug IA e re-aprendizado da LLM.
-/// Formato: [T+123][NIVEL][AGENTE][EVENTO] mensagem
+/// Formato legado: [T+123][NIVEL][AGENTE][EVENTO] mensagem
+/// Preferir `slog!` / `slog_hal!` etc. (`slog.rs`): `[T+n] [Rn] [k-xxx] [Item] [sub] - …`
 #[macro_export]
 macro_rules! klog {
     ($agent:expr, $event:expr, $fmt:tt $(,$arg:expr)*) => {

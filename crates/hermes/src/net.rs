@@ -1,6 +1,6 @@
 use k_nano::rtl8139::Rtl8139Driver;
 use k_nano::e1000::{E1000Driver, REG_STATUS, REG_RDH};
-use k_nano::{println, serial_println};
+use k_nano::{println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
@@ -91,7 +91,7 @@ pub fn detect_dev_env() -> bool {
                 hypervisor_name[8..12].copy_from_slice(&edx_bytes);
                 
                 let name = core::str::from_utf8(&hypervisor_name).unwrap_or("unknown");
-                serial_println!("[NET] Hypervisor detected: {}", name.trim_end_matches('\0'));
+                k_nano::slog_hermes!("Net", "info", "Hypervisor detected: {}", name.trim_end_matches('\0'));
                 
                 // QEMU, KVM, VBox, VMware, WHPX sao ambientes dev
                 let name_lower = name.to_ascii_lowercase();
@@ -121,9 +121,9 @@ pub unsafe fn init_driver_rtl8139() -> bool {
     let mut dev_opt = None;
     for dev in &pci_devices {
         if dev.vendor_id == 0x10EC && dev.device_id == 0x8139 {
-            serial_println!("[NET] RTL8139 detectado: {:02x}:{:02x}.{:02x}", dev.bus, dev.device, dev.function);
+            k_nano::slog_hermes!("Net", "info", "RTL8139 detectado: {:02x}:{:02x}.{:02x}", dev.bus, dev.device, dev.function);
             println!("[NET] RTL8139 detectado.");
-            let mut driver = match Rtl8139Driver::new(dev) { Some(d) => d, None => { serial_println!("[NET] RTL8139 new() falhou"); return false; } };
+            let mut driver = match Rtl8139Driver::new(dev) { Some(d) => d, None => { k_nano::slog_hermes!("Net", "info", "RTL8139 new() falhou"); return false; } };
             if driver.init() {
                 dev_opt = Some(driver);
             }
@@ -134,7 +134,7 @@ pub unsafe fn init_driver_rtl8139() -> bool {
     let driver = match dev_opt {
         Some(d) => d,
         None => {
-            serial_println!("[NET] RTL8139 nao encontrado.");
+            k_nano::slog_hermes!("Net", "info", "RTL8139 nao encontrado.");
             return false;
         }
     };
@@ -143,8 +143,7 @@ pub unsafe fn init_driver_rtl8139() -> bool {
     NET_CONFIG.lock().mac = mac;
     *RTL8139.lock() = Some(driver);
 
-    serial_println!("[NET] RTL8139 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    k_nano::slog_hermes!("Net", "info", "RTL8139 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     println!("[NET] RTL8139 iniciado.");
 
     let hw_event = event_bus::Event {
@@ -166,16 +165,14 @@ pub unsafe fn init_driver_e1000() -> bool {
         if dev.vendor_id == 0x8086 {
             let valid_devices = [0x100E, 0x10D3, 0x1502];
             if valid_devices.contains(&dev.device_id) {
-                serial_println!("[NET] e1000 detectado: {:02x}:{:02x}.{:02x} device={:#06x}",
-                    dev.bus, dev.device, dev.function, dev.device_id);
-                let mut driver = match E1000Driver::new(dev) { Some(d) => d, None => { serial_println!("[NET] E1000 new() falhou"); return false; } };
+                k_nano::slog_hermes!("Net", "info", "e1000 detectado: {:02x}:{:02x}.{:02x} device={:#06x}", dev.bus, dev.device, dev.function, dev.device_id);
+                let mut driver = match E1000Driver::new(dev) { Some(d) => d, None => { k_nano::slog_hermes!("Net", "info", "E1000 new() falhou"); return false; } };
                 if driver.init() {
                     let mac = driver.mac();
                     NET_CONFIG.lock().mac = mac;
                     *E1000.lock() = Some(driver);
 
-                    serial_println!("[NET] e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                    k_nano::slog_hermes!("Net", "info", "e1000 iniciado. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
                     println!("[NET] e1000 iniciado.");
 
                     let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
@@ -189,18 +186,17 @@ pub unsafe fn init_driver_e1000() -> bool {
             }
         }
     }
-    serial_println!("[NET] e1000 nao encontrado.");
+    k_nano::slog_hermes!("Net", "info", "e1000 nao encontrado.");
     false
 }
 
 /// Inicializa serial tunnel (SLIP) como fallback quando nenhuma NIC existe.
 pub unsafe fn init_serial_tunnel() -> bool {
-    serial_println!("[NET] Inicializando serial tunnel (COM2 bypass)...");
+    k_nano::slog_hermes!("Net", "info", "Inicializando serial tunnel (COM2 bypass)...");
     let mac = [0x02, 0x00, 0x00, 0x00, 0x00, 0xFE];
     NET_CONFIG.lock().mac = mac;
-    serial_println!("[NET] Serial tunnel ativo. Fake MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    serial_println!("[NET] Modo offline — aguardando trafego via serial tunnel.");
+    k_nano::slog_hermes!("Net", "info", "Serial tunnel ativo. Fake MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    k_nano::slog_hermes!("Net", "info", "Modo offline — aguardando trafego via serial tunnel.");
     true
 }
 

@@ -1,7 +1,6 @@
 //! USB Mass Storage via Bulk-Only Transport (BOT) + SCSI.
 //! Protocolo: CBW (31 bytes) -> Data (opcional) -> CSW (13 bytes)
 
-use crate::serial_println;
 use crate::xhci::{self, BulkEndpoint};
 
 const CBW_SIGNATURE: u32 = 0x43425355;
@@ -26,13 +25,18 @@ unsafe impl Send for UsbMassStorage {}
 
 impl UsbMassStorage {
     pub unsafe fn probe() -> Option<Self> {
-        let state = xhci::XHCI_STATE.lock();
-        if state.is_none() { return None; }
+        // NÃO segurar XHCI_STATE: configure_msc_endpoints também faz lock (não-reentrante).
+        {
+            let state = xhci::XHCI_STATE.lock();
+            if state.is_none() {
+                return None;
+            }
+        }
 
         let slot = 2;
         let max_packet = 512;
         if let Some((ep_in, ep_out)) = xhci::configure_msc_endpoints(slot, max_packet) {
-            serial_println!("[USB-MSC] Endpoints OK. probe...");
+            crate::slog_nano!("USB", "msc", "Endpoints OK. probe...");
 
             let mut msc = UsbMassStorage {
                 slot, tag: 1, max_lba: 0, sector_size: 512,
@@ -45,7 +49,7 @@ impl UsbMassStorage {
                 msc.model = inq;
                 let vendor = core::str::from_utf8(&inq[8..16]).unwrap_or("?");
                 let product = core::str::from_utf8(&inq[16..32]).unwrap_or("?");
-                serial_println!("[USB-MSC] {} {}", vendor.trim(), product.trim());
+                crate::slog_nano!("USB", "msc", "{} {}", vendor.trim(), product.trim());
             }
 
             // SCSI READ CAPACITY
@@ -53,7 +57,7 @@ impl UsbMassStorage {
                 msc.max_lba = lba;
                 msc.sector_size = blk_sz;
                 let gb = (lba as u128 * blk_sz as u128) / (1024*1024*1024);
-                serial_println!("[USB-MSC] Capacidade: {} setores x {}B = {}GB", lba, blk_sz, gb);
+                crate::slog_nano!("USB", "msc", "Capacidade: {} setores x {}B = {}GB", lba, blk_sz, gb);
             }
 
             Some(msc)

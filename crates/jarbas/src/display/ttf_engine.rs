@@ -11,8 +11,6 @@ use alloc::string::String;
 use alloc::collections::BTreeMap;
 
 use crate::display::fb::DoubleBuffer;
-use k_nano::serial_println;
-
 fn read_u32_le(data: &[u8], offset: usize) -> Option<u32> {
     let bytes = data.get(offset..offset.checked_add(4)?)?;
     Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
@@ -78,7 +76,7 @@ impl TtfRasterFont {
             self.add_glyph(c, w, h, x, y, &data[offset..end]);
             offset += pixels_size;
         }
-        serial_println!("[TTF] '{}' carregada: {} glyphs @ {}px", self.name, self.glyph_count(), self.size);
+        k_nano::slog_jarbas!("TTF", "info", "'{}' carregada: {} glyphs @ {}px", self.name, self.glyph_count(), self.size);
     }
 
     /// Desenha texto no framebuffer

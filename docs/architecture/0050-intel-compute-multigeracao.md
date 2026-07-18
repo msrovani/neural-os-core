@@ -2,10 +2,11 @@
 
 **Data:** 2026-07-16  
 **Status:** Proposed  
-**Lifecycle:** `por_fazer`  
+**Lifecycle:** `fazendo`  
 **Ideia:** #456  
 **Complementa:** ADR-0029, ADR-0037, ADR-0047-GPU, ADR-0048 e ADR-0049  
 **Hardware de validação inicial:** Intel HD 620 / Gen9 (iGPU do lab) para walker+MAD; Arc/Battlemage opcional para CCS+DPAS  
+**Nota implementação:** Degrau ampliado (lab iGPU): GGTT WOPCM bias, GuC pin+DMC presence, GPGPU_WALKER Mesa 15dw + RingAlive MI_STORE, MAD/INT8 host, COMPUTE_WALKER Arc scaffold. Golden EU silício ainda aberto.  
 
 ## 1. Contexto
 
@@ -191,36 +192,39 @@ O n-gram speculative decoding continua CPU/policy; não confundir com DPAS.
 
 ### P0 — Detecção
 
-- [ ] GMD_ID + famílias no `detect` / capabilities;
-- [ ] separar display IP de graphics IP;
-- [ ] publicar engines CCS fused honestamente.
+- [x] GMD_ID (`0xd8c`) + faixas DID Gen9/12/Arc/Xe2 em `detect.rs`;
+- [x] Arc dGPU (`is_integrated=false`) separado de Iris Xe iGPU;
+- [x] engines CCS fused — `probe_ccs_fused` + `ComputeCaps.has_ccs` (Arc/Xe2); Gen12 iGPU residual;
+- [x] `display_coex`: iGPU display + dGPU compute (NVIDIA > AMD > Arc).
 
 ### P1 — Kernel pack host
 
-- [ ] pack Gen9 (`GpgpuWalker` + `mad-int8`) gerado e assinado;
-- [ ] rejeitar patchtokens e L0 no alvo.
+- [x] `tools/pack_intel_kernels.py` Gen9/dg2 + stub + unsigned/session promote;
+- [x] mkfat32 `NKP_GEN9.BIN` / `NKP_DG2.BIN`;
+- [x] rejeitar magic/abi/hash; sem L0 no alvo.
 
 ### P2 — iGPU display + GuC mínimo
 
-- [ ] DMC (display path) estável;
-- [ ] GuC load real onde obrigatório (Gen12+); Gen9 pode permanecer ring;
-- [ ] GGTT pin bias WOPCM.
+- [x] DMC presence (`skl_dmc`/`kbl_dmc`/`dg2_dmc`) + aliases FAT; load MMIO residual se GOP OK;
+- [x] GuC Degrau (`intel_guc.rs`): SkippedGen9 / BlobsMissing / Uploaded / BootTimeout / Booted + pin GGTT;
+- [x] GGTT pin bias WOPCM (`intel_gtt.rs`).
 
 ### P3 — Primeiro compute Gen9
 
-- [ ] `GPGPU_WALKER` / MEDIA path produz golden vector no HD 620;
-- [ ] fault → CPU; FB intacto.
+- [x] `GPGPU_WALKER` Mesa 15dw + MEDIA_VFE/IDL + RingAlive MI_STORE + canário ring;
+- [ ] golden vector **em HW** (HD 620 — precisa EU/zebin ocloc);
+- [x] fault/timeout → CPU; display owner preservado (coex).
 
 ### P4 — BitNet Gen9
 
-- [ ] MAD/INT8 bit-exato vs CPU;
-- [ ] benchmark honesto sob UMA (pode perder para AVX2 — registrar).
+- [x] MAD/INT8 bit-exato **host** (`intel_mad.rs`) + unpack W2→i8; GPU EU residual;
+- [ ] benchmark honesto sob UMA (pode perder para AVX2 — registrar em silício).
 
 ### P5 — Arc/CCS (opcional lab)
 
-- [ ] `COMPUTE_WALKER` @ CCS + GuC;
+- [~] `COMPUTE_WALKER` scaffold (`intel_arc.rs`) + GuC stage; submit CCS real residual;
 - [ ] perfil DPAS quando HW presente;
-- [ ] nenhuma estrutura Gen9 no path Xe-HPG.
+- [x] nenhuma estrutura Gen9 no path Xe-HPG (`intel_arc` separado).
 
 ### P6 — Xe2/Xe3Track
 
