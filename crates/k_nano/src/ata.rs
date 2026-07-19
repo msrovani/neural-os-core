@@ -17,6 +17,8 @@ impl AtaDriver {
     pub unsafe fn probe() -> Option<Self> {
         let mut best: Option<AtaDriver> = None;
         let mut best_type: u8 = 0;
+        // Candidatos com FS de dados; preferir exFAT (QEMU disk_qemu) e maior tamanho.
+        let mut data_best: Option<(AtaDriver, u64, bool)> = None; // drv, sectors, is_exfat
         for &base in &[0x1F0u16, 0x170u16] {
             for &slave in &[false, true] {
                 if !Self::detect(base, if slave { 0xB0 } else { 0xA0 }) { continue; }
@@ -28,45 +30,60 @@ impl AtaDriver {
                         write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
                         for _ in 0..1000 { core::hint::spin_loop(); }
                         if drv.has_mbr() {
+                            let has_ex = crate::fat32::disk_has_exfat(&drv);
+                            let has_fat = crate::fat32::disk_has_fat32(&drv);
+                            if has_ex || has_fat {
+                                crate::slog_nano!(
+                                    "Disk",
+                                    "ata",
+                                    "ISA {}: {} data FS exfat={} fat32={} sectors={}",
+                                    base,
+                                    if slave { "slave" } else { "master" },
+                                    has_ex,
+                                    has_fat,
+                                    total
+                                );
+                                let better = match &data_best {
+                                    None => true,
+                                    Some((_, sec, was_ex)) => {
+                                        (has_ex && !*was_ex) || (has_ex == *was_ex && total > *sec)
+                                    }
+                                };
+                                if better {
+                                    data_best = Some((drv.clone(), total, has_ex));
+                                }
+                                continue;
+                            }
                             let mut mbr = [0u8; 512];
                             if drv.read_sectors(0, &mut mbr, 1) {
                                 for i in 0..4 {
                                     let off = 0x1BE + i * 16;
                                     let t = mbr[off + 4];
-                                    if t == 0x0B || t == 0x0C || t == 0x1C {
-                                        crate::slog_nano!("Disk", "ata", "ISA {}: {} FAT32! (type={:#x})", base, if slave { "slave" } else { "master" }, t);
-                                        return Some(drv);
+                                    if t == 0xEE && best.is_none() {
+                                        best = Some(drv.clone());
+                                        best_type = t;
                                     }
-                                    // exFAT dados (mkexfat MBR 0x07) — preferir a ESP
-                                    if t == 0x07 {
-                                        let mut vbr = [0u8; 512];
-                                        let lba = u32::from_le_bytes([
-                                            mbr[off + 8],
-                                            mbr[off + 9],
-                                            mbr[off + 10],
-                                            mbr[off + 11],
-                                        ]);
-                                        if drv.read_sectors(lba, &mut vbr, 1)
-                                            && &vbr[3..11] == b"EXFAT   "
-                                        {
-                                            crate::slog_nano!(
-                                                "Disk",
-                                                "ata",
-                                                "ISA {}: {} exFAT! (type=0x07)",
-                                                base,
-                                                if slave { "slave" } else { "master" }
-                                            );
-                                            return Some(drv);
-                                        }
+                                    if best.is_none() {
+                                        best = Some(drv.clone());
+                                        best_type = t;
                                     }
-                                    if t == 0xEE && best.is_none() { best = Some(drv.clone()); best_type = t; }
-                                    if best.is_none() { best = Some(drv.clone()); best_type = t; }
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+        if let Some((drv, sec, ex)) = data_best {
+            crate::slog_nano!(
+                "Disk",
+                "ata",
+                "escolhido data disk slave={} sectors={} exfat={}",
+                drv.slave,
+                sec,
+                ex
+            );
+            return Some(drv);
         }
         if best.is_some() { crate::slog_nano!("Disk", "ata", "Usando fallback type={:#x}", best_type); }
         best
@@ -220,6 +237,9 @@ impl AtaDriver {
             for i in 0..256 {
                 let lo = if off + i * 2 < data.len() { data[off + i * 2] } else { 0 };
                 let hi = if off + i * 2 + 1 < data.len() { data[off + i * 2 + 1] } else { 0 };
+                // BUG histórico (v0.1→v1.1.5): escrever "hi" em io_base+1 vai para o
+                // registrador FEATURES/ERROR, não para o byte alto do dado. O barramento
+                // de dados ATA é de 16 bits — precisa de UMA escrita de word em io_base.
                 let w = (lo as u16) | ((hi as u16) << 8);
                 core::arch::asm!("out dx, ax", in("dx") self.io_base, in("ax") w, options(nostack, preserves_flags));
             }

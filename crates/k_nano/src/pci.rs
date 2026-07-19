@@ -44,7 +44,7 @@ pub unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -
     value
 }
 
-pub(crate) unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
+pub unsafe fn read_config_word(bus: u8, device: u8, function: u8, offset: u8) -> u16 {
     let dword = read_config_dword(bus, device, function, offset & 0xFC);
     ((dword >> ((offset as u32 & 2) * 8)) & 0xFFFF) as u16
 }

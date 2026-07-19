@@ -1,5 +1,6 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
 //! P6: segmentos user (Ring3) + TSS.RSP0 para trap de CPL=3.
+//! Onda 5: TIMER_TICKS + MOUSE_ABS_* canônicos em k_nano (Hermes/Jarbas leem o mesmo).
 
 use crate::{println};
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
@@ -11,10 +12,14 @@ static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::{PrivilegeLevel, VirtAddr};
 
+pub use k_nano::interrupts::{
+    TIMER_TICKS, MOUSE_ABS_X, MOUSE_ABS_Y, MOUSE_ABS_BTN, MOUSE_PREV_BTN, MOUSE_CLICK_FLASH,
+    MOUSE_MAX_X, MOUSE_MAX_Y,
+};
+
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
 
-pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
 static MOUSE_PHASE: AtomicU8 = AtomicU8::new(0);
@@ -254,7 +259,6 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
     // Mouse envia 1 byte por IRQ (3 bytes por pacote)
-    // Usamos uma fase global para montar o pacote
     let mut data_port = Port::<u8>::new(0x60);
     let byte: u8 = unsafe { data_port.read() };
     let phase = MOUSE_PHASE.fetch_add(1, Ordering::Relaxed) % 3;
@@ -263,10 +267,25 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
         1 => MOUSE_B1.store(byte, Ordering::Release),
         2 => {
             MOUSE_B2.store(byte, Ordering::Release);
-            let packet = MOUSE_B0.load(Ordering::Acquire) as u32
-                | ((MOUSE_B1.load(Ordering::Acquire) as u32) << 8)
-                | ((byte as u32) << 16);
+            let b0 = MOUSE_B0.load(Ordering::Acquire);
+            let b1 = MOUSE_B1.load(Ordering::Acquire);
+            let packet = b0 as u32 | ((b1 as u32) << 8) | ((byte as u32) << 16);
             LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+            MOUSE_PHASE.store(0, Ordering::Release);
+            // Abs canônico (k_nano) — Display/MouseAgent leem o mesmo estático.
+            let dx = b1 as i8 as i32;
+            let dy = -(byte as i8 as i32);
+            let max_x = MOUSE_MAX_X.load(Ordering::Relaxed) as i32;
+            let max_y = MOUSE_MAX_Y.load(Ordering::Relaxed) as i32;
+            let nx = (MOUSE_ABS_X.load(Ordering::Relaxed) as i32 + dx).clamp(0, max_x);
+            let ny = (MOUSE_ABS_Y.load(Ordering::Relaxed) as i32 + dy).clamp(0, max_y);
+            MOUSE_ABS_X.store(nx as u32, Ordering::Release);
+            MOUSE_ABS_Y.store(ny as u32, Ordering::Release);
+            let btn = b0 & 0x07;
+            let prev = MOUSE_ABS_BTN.swap(btn, Ordering::AcqRel);
+            if btn & !prev != 0 {
+                MOUSE_CLICK_FLASH.store(12, Ordering::Release);
+            }
         }
         _ => {}
     }

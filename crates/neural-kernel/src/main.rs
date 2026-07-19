@@ -103,7 +103,7 @@ pub use k_nano::globals::EVENT_BUS;
 pub use k_nano::globals::LATENT_BUS;
 // ADR-0042 N3.5: engine cortex wired; residuals = cortex.rs, bpe.rs, global_arena.rs, cortex_mmap.rs
 pub use cortex_crate::{
-    arena, bitnet_avx2, burn_flex, delta, kv_h2o, model_hub as cortex_model_hub, neuos_probe, nn,
+    arena, bitnet_avx2, burn_flex, delta, kv_h2o, neuos_probe, nn,
     ngram_spec, projection, r3, tensor, trinity, tv_dsl,
 };
 mod model_hub;
@@ -254,9 +254,8 @@ pub const LOG_SECTOR: u32 = 2048;
 
 
 
-/// ATA driver global para escrita de log no SDHC
-
-pub static ATA_DRIVER: spin::Mutex<Option<ata::AtaDriver>> = spin::Mutex::new(None);
+/// ATA driver global — canônico em k_nano (Onda 4: sem mirror duplo).
+pub use k_nano::ATA_DRIVER;
 
 /// Unidade de armazenamento primária (AHCI ou ATA) para FAT32
 
@@ -1548,23 +1547,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let ata_found = {
         let ata_dev = unsafe { ata::AtaDriver::probe() };
         let is_some = ata_dev.is_some();
-        // Espelha em k_nano — k_hal LEGO/fat_assets leem k_nano::ATA_DRIVER
-        if let Some(ref a) = ata_dev {
-            *k_nano::ATA_DRIVER.lock() = Some(k_nano::ata::AtaDriver {
-                io_base: a.io_base,
-                pci_bus: a.pci_bus,
-                pci_device: a.pci_device,
-                pci_func: a.pci_func,
-                slave: a.slave,
-            });
-            k_nano::slog_bin!(
-                "Disk",
-                "ata",
-                "k_nano ATA mirror slave={} io={:#x}",
-                a.slave,
-                a.io_base
-            );
-        }
+        // Um único ATA_DRIVER (k_nano) — k_hal LEGO/fat_assets leem o mesmo estático.
         *ATA_DRIVER.lock() = ata_dev;
         is_some
     };

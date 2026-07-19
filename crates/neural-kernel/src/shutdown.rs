@@ -1,5 +1,8 @@
 //! Shutdown / reboot orderly — HW real (ACPI S5) first; QEMU/PS2 fallbacks.
 //! Entradas: botão OFF, soft USER_INTENT, Ctrl+Alt+Del, shell.
+//!
+//! Onda 2 split: `k_ai::shutdown` espelha cause/arm/phrases; **este arquivo do bin**
+//! permanece truth da execução HW (`begin_orderly_*`). Não `pub use` cego.
 
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 

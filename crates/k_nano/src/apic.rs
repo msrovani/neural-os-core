@@ -7,7 +7,7 @@ use x86_64::VirtAddr;
 
 pub static USING_APIC: AtomicBool = AtomicBool::new(false);
 pub static USING_X2APIC: AtomicBool = AtomicBool::new(false);
-pub(crate) static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
+pub static LAPIC_VIRT_BASE: AtomicU64 = AtomicU64::new(0);
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 
@@ -190,7 +190,7 @@ pub unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
     map_page_uc(phys_addr & !0xFFF, phys_mem_offset);
 }
 
-pub(crate) unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
+pub unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     let virt = VirtAddr::new(phys_addr + phys_mem_offset);
 
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();

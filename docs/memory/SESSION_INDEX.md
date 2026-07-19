@@ -8,7 +8,9 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 163 | emagrecer | Onda 0–6 | cutover bin→crates | diff_bin_crate; ATA único; TIMER_TICKS; pending_route; cargo nk 0e |
 | 162 | LLM | BitNet ladder 850 | #PF AVX2 + BPE SP32/MRG1 | OOB store n%4; encode=HF; coh semântica residual |
+
 | 161 | WiFi | ath10k A3 | BMI→fw_ready | CE0/1+LZ; FW_IMAGE 681KB; PASS só FW_IND pós-DONE |
 | 160 | WiFi | ath10k | pivô Note1050 QCA6174 | 168C:003E; FW 1.45MB; BMI/CE scaffold; iwl secondary |
 | 159 | WiFi | S0+prepS1 | honesty + DID/FAT | VERDICT AWAITING; fw_resolve=SKIP QEMU; sem ALIVE |

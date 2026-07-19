@@ -22,7 +22,8 @@ const REG_IMASK: u64 = 0x00D0;
 const REG_IMC: u64 = 0x00D8;
 const REG_RCTRL: u64 = 0x0100;
 const REG_TCTRL: u64 = 0x0400;
-// TX ring: offsets canônicos 8254x/QEMU (aliases 0x0420..438 não são wired no QEMU).
+// TX ring: offsets canônicos Intel 8254x / QEMU e1000 (NÃO os aliases 0x0420..0x0438 —
+// QEMU não wireia TDBAL_A/TDT_A; write em alias = no-op → TDT fica 0 e ARP nunca sai).
 const REG_TDBAL: u64 = 0x3800;
 const REG_TDBAH: u64 = 0x3804;
 const REG_TDLEN: u64 = 0x3808;
@@ -37,6 +38,8 @@ const REG_RAL: u64 = 0x5400;
 const REG_RAH: u64 = 0x5404;
 const REG_MTA: u64 = 0x5200;
 const REG_RXDCTL: u64 = 0x3828;
+const REG_TIPG: u64 = 0x0410;
+const REG_RDTR: u64 = 0x2820;
 const REG_IPAV: u64 = 0x00C0;
 
 // CTRL bits
@@ -222,12 +225,11 @@ impl E1000Driver {
         self.write32(REG_RAH, rah_val);
         crate::slog_nano!("Net", "e1000", "MAC re-written: RAL={:#010x} RAH={:#010x}", ral_val, rah_val);
 
-        // Force link UP: escreve CTRL com valor limpo (SLU + FD + SPEED1000)
-        // VirtualBox precisa de CTRL limpo (sem bits reservados que travam o link)
-        // QEMU aceita qualquer valor com SLU setado
-        self.write32(REG_CTRL, CTRL_SLU | CTRL_FD);
+        // Force link UP: SLU + ASDE + FD (Linux e1000 default-ish for QEMU)
+        let ctrl_want = CTRL_SLU | CTRL_ASDE | CTRL_FD;
+        self.write32(REG_CTRL, ctrl_want);
         let ctrl_new = self.read32(REG_CTRL);
-        crate::slog_nano!("Net", "e1000", "CTRL forced link UP (clean): wrote={:#010x} readback={:#010x}", CTRL_SLU | CTRL_FD, ctrl_new);
+        crate::slog_nano!("Net", "e1000", "CTRL forced link UP: wrote={:#010x} readback={:#010x}", ctrl_want, ctrl_new);
 
         // Allocate TX ring + mapear como uncacheable
         let tx_ring = Self::alloc_frame();
@@ -298,19 +300,28 @@ impl E1000Driver {
             self.write32(REG_MTA + (mta_idx as u64 * 4), 0);
         }
 
+        // TIPG required on real HW; QEMU accepts it. RDTR=0 = no interrupt delay (poll mode).
+        self.write32(REG_TIPG, 0x0060_200A);
+        self.write32(REG_RDTR, 0);
+
         // Enable RX/TX — Rx habilita PRIMEIRO, depois RDT (ordem do Linux)
-        self.write32(REG_RCTRL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
+        let rctl = RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LBM_NONE
+            | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048 | RCTL_RDMTS_HALF;
+        self.write32(REG_RCTRL, rctl);
         self.write32(REG_TCTRL, TCTL_EN | TCTL_PSP | (0x10 << TCTL_CT_SHIFT) | (0x40 << TCTL_COLD_SHIFT));
 
         // RDT só DEPOIS de habilitar o receiver — NIC precisa ver RDT válido após enable
         self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
 
-        // Mask all interrupts via IMC + IMASK (redundante pra garantir)
+        // Mask all interrupts via IMC + IMASK (poll mode)
         self.write32(REG_IMC, 0xFFFF_FFFF);
         self.write32(REG_IMASK, 0);
+        let _ = self.read32(REG_ICR); // clear pending
         Self::fence_write();
 
-        crate::slog_nano!("Net", "e1000", "Init OK. TX descs={} RX descs={}", TX_DESC_COUNT, RX_DESC_COUNT);
+        self.rx_cur = 0;
+        self.tx_cur = 0;
+        crate::slog_nano!("Net", "e1000", "Init OK. TX descs={} RX descs={} RCTL={:#010x}", TX_DESC_COUNT, RX_DESC_COUNT, rctl);
 
         true
     }
@@ -336,10 +347,17 @@ impl E1000Driver {
         (desc.add(14) as *mut u16).write_volatile(0);     // vlan
     }
 
+    /// Invalidate cache line then read DD (belt-and-suspenders vs UC map under WHPX).
+    unsafe fn clflush_desc(ring_virt: *const u8, idx: usize) {
+        let desc = ring_virt.add(idx * core::mem::size_of::<RxDesc>());
+        core::arch::asm!("clflush [{}]", in(reg) desc, options(nostack, preserves_flags));
+        Self::fence_read();
+    }
+
     /// Lê DD bit do RX descriptor via raw ptr.
     unsafe fn read_rx_dd(ring_virt: *const u8, idx: usize) -> bool {
+        Self::clflush_desc(ring_virt, idx);
         let desc = ring_virt.add(idx * core::mem::size_of::<RxDesc>());
-        Self::fence_read();
         (desc.add(12) as *const u8).read_volatile() & 0x01 != 0
     }
 
@@ -387,8 +405,8 @@ impl E1000Driver {
             // Mark descriptor as available again via raw ptr
             let desc = (self.rx_ring_paddr + pmoff) as *mut u8;
             (desc.add(idx * core::mem::size_of::<RxDesc>() + 12) as *mut u8).write_volatile(0);
+            self.write32(REG_RDT, idx as u32);
             self.rx_cur = (idx + 1) % RX_DESC_COUNT;
-            self.write32(REG_RDT, self.rx_cur as u32);
             return None;
         }
 
@@ -402,8 +420,9 @@ impl E1000Driver {
         let desc = (self.rx_ring_paddr + pmoff) as *mut u8;
         (desc.add(idx * core::mem::size_of::<RxDesc>() + 12) as *mut u8).write_volatile(0);
         Self::fence_write();
+        // Return THIS descriptor to HW (RDT = last software-owned index).
+        self.write32(REG_RDT, idx as u32);
         self.rx_cur = (idx + 1) % RX_DESC_COUNT;
-        self.write32(REG_RDT, self.rx_cur as u32);
 
         Some(buf)
     }
@@ -412,18 +431,174 @@ impl E1000Driver {
     pub unsafe fn read_e1000_rdh(&self) -> u32 { self.read32(REG_RDH) }
     pub fn rx_cur_val(&self) -> usize { self.rx_cur }
 
-    /// Kick RX engine: disable Rx, drain ring, re-enable, THEN set RDT.
-    /// Ordem Linux: enable receiver FIRST, THEN set RDT=N-1.
+    /// True if any RX descriptor has DD set (after clflush).
+    pub unsafe fn any_rx_dd(&self) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let ring = (self.rx_ring_paddr + pmoff) as *const u8;
+        for i in 0..RX_DESC_COUNT {
+            if Self::read_rx_dd(ring, i) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Count RX descriptors with DD=1.
+    pub unsafe fn count_rx_dd(&self) -> u32 {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let ring = (self.rx_ring_paddr + pmoff) as *const u8;
+        let mut n = 0u32;
+        for i in 0..RX_DESC_COUNT {
+            if Self::read_rx_dd(ring, i) {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Wall-clock pause (rdtsc @~2GHz). Needed so QEMU slirp can inject ARP reply.
+    unsafe fn pause_us(us: u64) {
+        let cycles = us.saturating_mul(2_000);
+        let start = {
+            let lo: u32;
+            let hi: u32;
+            core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
+            ((hi as u64) << 32) | (lo as u64)
+        };
+        loop {
+            let now = {
+                let lo: u32;
+                let hi: u32;
+                core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem, preserves_flags));
+                ((hi as u64) << 32) | (lo as u64)
+            };
+            if now.wrapping_sub(start) >= cycles {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+
+    /// Wait until TX descriptor `idx` reports DD (or timeout).
+    unsafe fn wait_tx_dd(&self, idx: usize, timeout_us: u64) -> bool {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let desc = (self.tx_ring_paddr + pmoff) as *const u8;
+        let status_ptr = desc.add(idx * core::mem::size_of::<TxDesc>() + 12);
+        let steps = (timeout_us / 50).max(1);
+        for _ in 0..steps {
+            Self::fence_read();
+            if status_ptr.read_volatile() & 0x01 != 0 {
+                return true;
+            }
+            Self::pause_us(50);
+        }
+        false
+    }
+
+    /// Kick RX engine: clear DD, re-enable, THEN set RDT.
+    /// NÃO escrever RDH (RO no HW real) nem RDT==RDH — QEMU e1000 trata RDH==RDT
+    /// como ring full e deixa de entregar RX (slirp/TAP).
     pub unsafe fn kick_rx(&mut self) {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let rctl = RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_LBM_NONE
+            | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048 | RCTL_RDMTS_HALF;
+
         // Disable receiver
         self.write32(REG_RCTRL, 0);
-        // Empty ring: writing RDT=0 esvazia
-        self.write32(REG_RDT, 0);
-        // Re-enable receiver PRIMEIRO (Linux ordem)
-        self.write32(REG_RCTRL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
-        // RDT só DEPOIS de habilitar
-        self.write32(REG_RDT, RX_DESC_COUNT as u32 - 1);
-        crate::slog_nano!("Net", "e1000", "RX kick: Rx enabled -> RDT={}", RX_DESC_COUNT - 1);
+        Self::fence_write();
+
+        // Clear DD on all RX descs and reset software cursor
+        let ring = (self.rx_ring_paddr + pmoff) as *mut u8;
+        for i in 0..RX_DESC_COUNT {
+            let status_ptr = ring.add(i * core::mem::size_of::<RxDesc>() + 12) as *mut u8;
+            status_ptr.write_volatile(0);
+            // Re-assert buffer addr (QEMU may have rewritten desc)
+            let addr_ptr = ring.add(i * core::mem::size_of::<RxDesc>()) as *mut u64;
+            addr_ptr.write_volatile(self.rx_buf_paddrs[i]);
+        }
+        Self::fence_write();
+        self.rx_cur = 0;
+
+        // Re-enable receiver FIRST (Linux order), then RDT with one spare slot.
+        // Never poke RDH; never park RDT==RDH (QEMU false-full).
+        self.write32(REG_RCTRL, rctl);
+        Self::fence_write();
+        let rdh = self.read32(REG_RDH) as usize % RX_DESC_COUNT;
+        let rdt = (rdh + RX_DESC_COUNT - 1) % RX_DESC_COUNT;
+        self.write32(REG_RDT, rdt as u32);
+        let _ = self.read32(REG_ICR);
+        crate::slog_nano!(
+            "Net",
+            "e1000",
+            "RX kick: RDH={} RDT={} RCTL={:#010x} (no RDH poke)",
+            rdh,
+            rdt,
+            rctl
+        );
+    }
+
+    /// Build + send ARP request for `tip` (who-has). Used to prove RX before DNS.
+    pub unsafe fn send_arp_request(&mut self, sip: [u8; 4], tip: [u8; 4]) -> bool {
+        let mac = self.mac_addr;
+        let mut frame = [0u8; 42];
+        // Ethernet: dst broadcast, src MAC, ethertype ARP
+        frame[0..6].copy_from_slice(&[0xff; 6]);
+        frame[6..12].copy_from_slice(&mac);
+        frame[12] = 0x08;
+        frame[13] = 0x06;
+        // ARP: HTYPE=1 PTYPE=0x0800 HLEN=6 PLEN=4 OPER=1 (request)
+        frame[14] = 0x00; frame[15] = 0x01;
+        frame[16] = 0x08; frame[17] = 0x00;
+        frame[18] = 6; frame[19] = 4;
+        frame[20] = 0x00; frame[21] = 0x01;
+        frame[22..28].copy_from_slice(&mac);
+        frame[28..32].copy_from_slice(&sip);
+        // tha = zeros
+        frame[38..42].copy_from_slice(&tip);
+        self.send(&frame)
+    }
+
+    /// Poll RX after ARP who-has; returns (rdh, dd_count, got_pkt).
+    /// `iters` ≈ poll rounds × 200µs wall (~iters*0.2ms). Retries ARP 3× for slirp latency.
+    pub unsafe fn prove_rx(&mut self, sip: [u8; 4], tip: [u8; 4], iters: u32) -> (u32, u32, bool) {
+        self.kick_rx();
+        let rounds = 3u32;
+        let per_round = (iters / rounds).max(200);
+        for attempt in 0..rounds {
+            let tx_idx = self.tx_cur;
+            let sent = self.send_arp_request(sip, tip);
+            let tx_dd = if sent {
+                self.wait_tx_dd(tx_idx, 5_000)
+            } else {
+                false
+            };
+            let tdh = self.read32(REG_TDH);
+            let tdt = self.read32(REG_TDT);
+            crate::slog_nano!(
+                "Net",
+                "e1000",
+                "prove_rx ARP#{} sent={} tx_dd={} TDH={} TDT={}",
+                attempt + 1,
+                sent,
+                tx_dd,
+                tdh,
+                tdt
+            );
+            for _ in 0..per_round {
+                if let Some(_pkt) = self.recv() {
+                    let rdh = self.read32(REG_RDH);
+                    let dd = self.count_rx_dd();
+                    return (rdh, dd.saturating_add(1), true);
+                }
+                if self.any_rx_dd() {
+                    let rdh = self.read32(REG_RDH);
+                    return (rdh, self.count_rx_dd(), true);
+                }
+                Self::pause_us(200);
+            }
+        }
+        let rdh = self.read32(REG_RDH);
+        (rdh, self.count_rx_dd(), false)
     }
 
     pub unsafe fn dump_status(&mut self) {

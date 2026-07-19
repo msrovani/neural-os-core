@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-19 — IDEA #466 BitNet ladder coerência; #465 Metrics HUD.
+**Última atualização:** 2026-07-19 — IDEA #467 Emagrecer bin; #466 BitNet ladder; #465 Metrics HUD.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -60,6 +60,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#464** Neural Device LEGO | ADR-0056 (+ 0051–53) | ✅ mapeada | hub+specs+H1 `device_recipe`; market fetch slot v3 |
 | **#465** Metrics HUD → skill/WASM | ADR-0052 + 0047-HMI (+ 0041 Cap) | 🟡 agendada | MVP nativo `sys_metrics`; destino Hermes+WASM |
 | **#466** BitNet ladder coerência | ADR-0019 | 🟡 agendada | 850 #PF+BPE ✅; forward host vs kernel + stop `</s>`; 13/2B/3B |
+| **#467** Emagrecer neural-kernel | ADR-0042 (+ #439) | ✅ parcial SESSION_163 | ondas 0–6 stubs/promotes; residuals cortex/agents/net/audio |
 
 #### Gaps — triagem Onda 0 ✅ (2026-07-18)
 
@@ -1709,7 +1710,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-14 | **436** | **N3 cortex cérebro** — Modelo real; MoE; Cap MAP_WEIGHTS; prompt→texto. **N3.5 wired v1.7.9.** | ✅ CLOSED | ADR-0042 | v1.8.0 | SESSION_113/117 |
 | 2026-07-14 | **437** | **N4 hermes orquestra** — WASM SFI; skills; intent e2e; IPC→jarbas. **N4.6 wired v1.7.10.** | ✅ CLOSED | ADR-0042 | v1.8.0 | SESSION_114/118 |
 | 2026-07-14 | **438** | **N5 jarbas ego/persona/+10%** — Compositor vivo; humor/UI; voz como expressão (stack pleno → Sprint Sound); só via Hermes; feedback preferências. **CLOSED v1.7.7 + N5.7 wired v1.7.11.** | ✅ CLOSED | ADR-0042 + Sound (voz) | v1.8.0 | ADR-0042 + SESSION_115/119 |
-| 2026-07-16 | **439** | **Wire pattern K³CHJ** — Alias dep `*-crate` + `pub use` + deletar espelhos; `k_nano` sem `global-alloc`; bridge `memory`/`EVENT_BUS` → k_nano globals; residuals = integração bin-only. | ✅ | ADR-0042 N2.5–N5.7 | — | SESSION_117–119 |
+| 2026-07-16 | **439** | **Wire pattern K³CHJ** — Alias dep `*-crate` + `pub use` + deletar espelhos; `k_nano` sem `global-alloc`; bridge `memory`/`EVENT_BUS` → k_nano globals; residuals = integração bin-only. **Extensão SESSION_163:** emagrecer ondas 0–6 (`diff_bin_crate`, ATA/TIMER únicos). | ✅ + 🟡 follow-up | ADR-0042 | SESSION_117–119/163 | #467 |
 | 2026-07-16 | **440** | **Marco v1.8.0** — ADR-0042 N1–N5 funcional + wire crates completo; Sprint 107 fechada; gate v2.0.0 = review (não auto-declare). | ✅ | v1.8.0 | — | STATE + CHANGELOG |
 | 2026-07-16 | **441** | **USB HW unificado** — `usb_hw.img` GPT ESP + FAT dados; Rufus DD 1 stick; BITNET+PIPER+experts+116 FW. | ✅ | HW real | — | `build_image.py --hw --unified` |
 | 2026-07-16 | **442** | **Sprint Sound backlog** — STT PCM; Mic→Wake gate; neural-lite; UAC parse; VAD/SER. Soft-float/VITS + cutover abertos. | ✅ parcial; Onda 4: UAC-HW AWAITING + soft-float ⏳ | Sprint Sound | SESSION_145 | ADR-0045 |
@@ -1737,3 +1738,4 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-18 | **463** | **Marco v1.9.0 TEST** — Residuals 0–7 + Pós-LAN B-01 (net_bridge, NetFs PASS, TLS BLOCKED); continua não estável; ≠ v2.0.0. | ✅ documentação/release | v1.9.0 teste | SESSION_153 | CHANGELOG + tag `v1.9.0` |
 | 2026-07-18 | **464** | **Neural Device LEGO** — L0 Bus / L1 HalOffer / L2 DeviceRecipe; UnlockDAG; trust Ed25519+blob_hash; community Adopt-a-Chip; SDIO≠bring-up; H1 bind table; NeuralFS `ecosystem/devices/`; slot `/market fetch` v3. | 🟡 MVP docs+H1 | ADR-0056 | community + `device_recipe.rs` | Install≠Ready |
 | 2026-07-19 | **465** | **Metrics HUD → skill Hermes → agent-wasm** — Relógios CPU/MEM/GPU/HD no Jarbas. **MVP atual:** `MetricsAgent` nativo hardcoded (`sys_metrics`, poll ~0,5s) + snapshot + compositor. **Destino:** skill ADR-0052 (`acionaveis: poll_every:N`) orquestrada pelo Hermes; HUD só consome EventBus (`SYS_METRICS`); evolução `agent-wasm` sob CapGate. Leituras HW (frames/ATA/VRAM/sched) ficam atrás de Cap/HalOffer observe-only — WASM SFI **não** toca MMIO. Sem stub Agency. | 🟡 agendada (MVP nativo ✅) | ADR-0052 + 0047-HMI + 0041 | `metrics_agent.rs` + `gauges.rs` | Cap métricas + PackageHub |
+| 2026-07-19 | **467** | **Emagrecer neural-kernel** — Cutover cirúrgico bin→crates: promote-if-bin-ahead → `pub use` stub; `tools/diff_bin_crate.py`; unificar `ATA_DRIVER`/`TIMER_TICKS`; pending_route em cortex. Residuals: cortex/bpe/agents/net/audio/smp/boot_logger. | ✅ parcial | ADR-0042 + #439 | SESSION_163 | BIN_CRATE_DIFF.md |
