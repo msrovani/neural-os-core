@@ -154,7 +154,14 @@ impl AgentInstance {
             tick_counter: 0,
             schedule,
             consecutive_pending: 0,
-            crew: CrewManifest::empty(),
+            // Espelha schedule no flow — PollEvery/EventDriven funcionam de fato.
+            crew: CrewManifest {
+                role: "",
+                goal: "",
+                backstory: "",
+                flow: FlowTrigger::Schedule(schedule),
+                crew_id: None,
+            },
             tier: AgentTier::Permanent,
             affinity_ring,
         }
@@ -430,6 +437,12 @@ impl AgentRegistry {
 /// Hook opcional de métricas (N1.3). Kernel registra `serial_println` via `set_sched_metrics_hook`.
 static mut SCHED_METRICS_HOOK: Option<fn(u64, usize, u32)> = None;
 
+/// Snapshot para HUD Jarbas (atualizado a cada tick do scheduler).
+pub static LAST_SCHED_AGENTS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+pub static LAST_SCHED_POLLED: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
 /// Período em ticks do scheduler entre logs `[SCHED]`.
 pub const SCHED_METRICS_PERIOD: u64 = 32;
 
@@ -438,6 +451,8 @@ pub fn set_sched_metrics_hook(hook: Option<fn(u64, usize, u32)>) {
 }
 
 fn maybe_log_sched_metrics(tick_id: u64, n_agents: usize, polled: u32) {
+    LAST_SCHED_AGENTS.store(n_agents, core::sync::atomic::Ordering::Relaxed);
+    LAST_SCHED_POLLED.store(polled, core::sync::atomic::Ordering::Relaxed);
     if tick_id == 1 || tick_id % SCHED_METRICS_PERIOD == 0 {
         if let Some(hook) = unsafe { SCHED_METRICS_HOOK } {
             hook(tick_id, n_agents, polled);

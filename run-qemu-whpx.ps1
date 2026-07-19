@@ -12,6 +12,12 @@
 #   Opt-in legado: -SerialBridge
 #   Alias explicito skip: -NoSerialBridge (default ja e skip)
 #
+# === Audio host bridge ===
+# Default: -audiodev none (HDA presente, sem mic/speakers do Windows).
+#   Opt-in: -AudioBridge -> dsound duplex (in+out) no hda-duplex.
+#   QEMU Win 11.x desta maquina: none/dsound/sdl/jack/spice/wav (sem wasapi).
+#   Windows: permitir microfone para QEMU em Privacidade.
+#
 # VirtIO-net: -VirtioNet (alternativa ao e1000 no mesmo netdev)
 # NOTA: ficheiro ASCII-only (PS5 le UTF-8 sem BOM como CP1252; em-dash partia strings).
 param(
@@ -22,6 +28,7 @@ param(
     [switch]$NoSerialBridge,   # default behavior; kept for scripts
     [switch]$SerialBridge,     # opt-in: start tools\serial_bridge.py (FROZEN for Net gate)
     [switch]$VirtioNet,
+    [switch]$AudioBridge,      # opt-in: dsound duplex (mic + speakers) via intel-hda
     [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
     [int]$RamGB = 6,
@@ -304,8 +311,18 @@ try {
         #   qemu-xhci + usb-tablet/kbd (input)
         #   virtio-gpu-pci (DeviceTree / k-hal VirtIO path; UEFI GOP continua em -vga)
         # Ref: https://qemu.readthedocs.io/en/latest/system/device-emulation.html
+        # Audio: default none; -AudioBridge = dsound duplex (mic+speakers do Windows).
+        # QEMU 11 Win build: wasapi indisponivel — usar dsound.
+        if ($AudioBridge) {
+            $audioDev = "dsound,id=snd0,out.mixing-engine=on,in.mixing-engine=on"
+            Write-Host "AudioBridge: dsound duplex (mic+speakers) -> hda-duplex" -ForegroundColor Green
+            Write-Host "  Windows: Privacidade > Microfone > permitir QEMU se captura falhar" -ForegroundColor Gray
+        } else {
+            $audioDev = "none,id=snd0"
+            Write-Host "Audio: audiodev=none (use -AudioBridge para mic/speakers do host)" -ForegroundColor Gray
+        }
         $a += @(
-            "-audiodev", "none,id=snd0",
+            "-audiodev", $audioDev,
             "-device", "intel-hda,id=hda0",
             "-device", "hda-duplex,id=hda-codec,bus=hda0.0,cad=0,audiodev=snd0",
             "-device", "qemu-xhci,id=xhci",
@@ -324,7 +341,7 @@ try {
     $ok = $false
     foreach ($smpN in $smpTry) {
         $qemuArgs = Build-QemuArgs -Acc $accel -Cpu $cpu -SmpN $smpN
-        Write-Host "QEMU: -smp $smpN accel=$accel net=$netMode serial-tcp=client:$SerialBridgePort" -ForegroundColor Gray
+        Write-Host "QEMU: -smp $smpN accel=$accel net=$netMode audio=$(if ($AudioBridge) {'dsound'} else {'none'}) serial-tcp=client:$SerialBridgePort" -ForegroundColor Gray
         try {
             & $qemu @qemuArgs
             $ok = $true

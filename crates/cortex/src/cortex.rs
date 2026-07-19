@@ -1064,8 +1064,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
 
         // v4: layer_features byte (bit 0 = inner_attn_ln, bit 1 = ffn_layernorm, bit 2 = RoPE)
         let layer_features = if version >= 4 { read_u8(data, &mut off)? } else { 0u8 };
-        let mut has_inner_attn_ln = (layer_features & 0x01) != 0;
-        let mut has_ffn_layernorm = (layer_features & 0x02) != 0;
+        let has_inner_attn_ln = (layer_features & 0x01) != 0;
+        let has_ffn_layernorm = (layer_features & 0x02) != 0;
         let has_rope = (layer_features & 0x04) != 0;
 
         // BitNet-b1.58-2B-4T mis-export: only rewrite q_dim if the file is the
@@ -1106,46 +1106,35 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             + 2 * ((hidden * ffn_group + 3) / 4)
             + (intermediate_size * down_out + 3) / 4;
         let rem = data.len().saturating_sub(off);
-        let mut best_basic = true;
-        let mut best_inner = has_inner_attn_ln;
-        let mut best_ffn = has_ffn_layernorm;
-        let mut best_d = usize::MAX;
-        let mut bi = 0u8;
-        while bi < 2 {
-            let basic = bi == 0;
-            let mut ii = 0u8;
-            while ii < 2 {
-                let inner = ii == 1;
-                let mut fi = 0u8;
-                while fi < 2 {
-                    let ffn = fi == 1;
-                    let mut per = tern_per;
-                    if basic {
-                        per = per.saturating_add(hidden.saturating_mul(8));
-                    }
-                    if inner {
-                        per = per.saturating_add(kv_head_dim.saturating_mul(num_heads).saturating_mul(4));
-                    }
-                    if ffn {
-                        per = per.saturating_add(intermediate_size.saturating_mul(4));
-                    }
-                    let need = per.saturating_mul(num_layers);
-                    let d = if rem > need { rem - need } else { need - rem };
-                    if d < best_d {
-                        best_d = d;
-                        best_basic = basic;
-                        best_inner = inner;
-                        best_ffn = ffn;
-                    }
-                    fi += 1;
+        // v4 export (prepare_extra_models): SEMPRE grava input+post RMS; feat bits = sub-norms.
+        // Heuristica rem/need preferia rms=0 no slice exacto → desalinhamento → #PF.
+        let has_basic_rms = version >= 4 || {
+            let mut best_basic = true;
+            let mut best_d = usize::MAX;
+            for basic in [true, false] {
+                let mut per = tern_per;
+                if basic {
+                    per = per.saturating_add(hidden.saturating_mul(8));
                 }
-                ii += 1;
+                if has_inner_attn_ln {
+                    per = per.saturating_add(hidden.saturating_mul(4));
+                }
+                if has_ffn_layernorm {
+                    // exporter legado gravava hidden; v4 tipico = intermediate
+                    per = per.saturating_add(intermediate_size.saturating_mul(4));
+                }
+                let need = per.saturating_mul(num_layers);
+                let d = if rem > need { rem - need } else { need - rem };
+                if d < best_d {
+                    best_d = d;
+                    best_basic = basic;
+                }
             }
-            bi += 1;
-        }
-        let has_basic_rms = best_basic;
-        has_inner_attn_ln = best_inner;
-        has_ffn_layernorm = best_ffn;
+            best_basic
+        };
+        // prepare_extra_models feat=0x03: sub-norms em tamanho `hidden` (ones), nao intermediate.
+        // Ler intermediate aqui desalinha o resto do ficheiro.
+        let rms_ffn_norm_dim = hidden;
 
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
@@ -1160,12 +1149,21 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 vec![1.0; hidden]
             };
             let rms_inner_attn = if has_inner_attn_ln {
-                read_f32_vec(data, &mut off, kv_head_dim * num_heads)?
+                read_f32_vec(data, &mut off, hidden)?
             } else {
                 vec![1.0; kv_head_dim * num_heads]
             };
             let rms_ffn_norm = if has_ffn_layernorm {
-                read_f32_vec(data, &mut off, intermediate_size)?
+                let v = read_f32_vec(data, &mut off, rms_ffn_norm_dim)?;
+                // Forward aplica em gated (intermediate); pad/trunc para tamanho certo
+                if v.len() == intermediate_size {
+                    v
+                } else {
+                    let mut out = vec![1.0f32; intermediate_size];
+                    let n = core::cmp::min(v.len(), out.len());
+                    out[..n].copy_from_slice(&v[..n]);
+                    out
+                }
             } else {
                 vec![1.0; intermediate_size]
             };

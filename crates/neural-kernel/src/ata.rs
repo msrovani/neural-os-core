@@ -17,6 +17,8 @@ impl AtaDriver {
     pub unsafe fn probe() -> Option<Self> {
         let mut best: Option<AtaDriver> = None;
         let mut best_type: u8 = 0;
+        // Candidatos com FS de dados; preferir exFAT (QEMU disk_qemu) e maior tamanho.
+        let mut data_best: Option<(AtaDriver, u64, bool)> = None; // drv, sectors, is_exfat
         for &base in &[0x1F0u16, 0x170u16] {
             for &slave in &[false, true] {
                 if !Self::detect(base, if slave { 0xB0 } else { 0xA0 }) { continue; }
@@ -28,13 +30,29 @@ impl AtaDriver {
                         write_io(base + 6, if slave { 0xB0 } else { 0xA0 });
                         for _ in 0..1000 { core::hint::spin_loop(); }
                         if drv.has_mbr() {
-                            // Prefere disco com FAT32 (MBR 0x0B/0x0C ou GPT Basic Data) —
-                            // USB unificado / disk_hw no mesmo stick; evita escolher so ESP GPT.
-                            if crate::fat32::disk_has_fat32(&drv) {
-                                k_nano::slog_nano!("Disk", "ata", "ISA {}: {} FAT32 (MBR/GPT)!",
+                            let has_ex = crate::fat32::disk_has_exfat(&drv);
+                            let has_fat = crate::fat32::disk_has_fat32(&drv);
+                            if has_ex || has_fat {
+                                k_nano::slog_nano!(
+                                    "Disk",
+                                    "ata",
+                                    "ISA {}: {} data FS exfat={} fat32={} sectors={}",
                                     base,
-                                    if slave { "slave" } else { "master" });
-                                return Some(drv);
+                                    if slave { "slave" } else { "master" },
+                                    has_ex,
+                                    has_fat,
+                                    total
+                                );
+                                let better = match &data_best {
+                                    None => true,
+                                    Some((_, sec, was_ex)) => {
+                                        (has_ex && !*was_ex) || (has_ex == *was_ex && total > *sec)
+                                    }
+                                };
+                                if better {
+                                    data_best = Some((drv.clone(), total, has_ex));
+                                }
+                                continue;
                             }
                             let mut mbr = [0u8; 512];
                             if drv.read_sectors(0, &mut mbr, 1) {
@@ -55,6 +73,17 @@ impl AtaDriver {
                     }
                 }
             }
+        }
+        if let Some((drv, sec, ex)) = data_best {
+            k_nano::slog_nano!(
+                "Disk",
+                "ata",
+                "escolhido data disk slave={} sectors={} exfat={}",
+                drv.slave,
+                sec,
+                ex
+            );
+            return Some(drv);
         }
         if best.is_some() { k_nano::slog_nano!("Disk", "ata", "Usando fallback type={:#x}", best_type); }
         best

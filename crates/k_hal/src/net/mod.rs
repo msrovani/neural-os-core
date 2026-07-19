@@ -1,7 +1,11 @@
 //! Net/WiFi BE — MMIO drivers (ADR-0041 H3).
 //! hermes NetAgent/WifiAgent = FE (netstack/smoltcp); BAR vive aqui.
 
+pub mod ath10k_ce_bmi;
+pub mod ath10k_fw;
 pub mod generic_wifi;
+pub mod iwl_fw;
+pub mod wifi_ath10k;
 pub mod wifi_compat;
 pub mod wifi_crypto;
 pub mod wifi_iwlwifi;

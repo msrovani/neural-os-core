@@ -4,7 +4,7 @@
 **Lifecycle:** `fazendo`
 **Data:** 2026-07-17
 **Ideias:** PackageHub / Agency honesty / Hermes create / import sandbox
-**Relacionadas:** ADR-0051 (PackageHub), ADR-0032 (WASM apps), ADR-0041 (CapGate), NeuralFS §12
+**Relacionadas:** ADR-0051 (PackageHub), ADR-0032 (WASM apps), ADR-0041 (CapGate), ADR-0056 (DeviceRecipe), NeuralFS §12
 
 ## Contexto
 
@@ -14,7 +14,7 @@ Stub não entra no fleet. Contagem honesta = nativos compilados + pacotes **vali
 
 ## Decisão
 
-1. Todo artefato de ecossistema (`skill`, `agent`, `agent-wasm`, `workflow`, `plugin`, `mcp`, `model`, `firmware`) obedece ao **Neural Artifact Spec** (`.cursor/rules/neural-artifact-spec.mdc`).
+1. Todo artefato de ecossistema (`skill`, `agent`, `agent-wasm`, `workflow`, `plugin`, `mcp`, `model`, `firmware`, `device-recipe`) obedece ao **Neural Artifact Spec** (`.cursor/rules/neural-artifact-spec.mdc`). DeviceRecipe: seções UnlockDAG + path `ecosystem/devices/` (ADR-0056).
 2. `PackageHub::validate` é **deny-by-default**: sem schema / campos obrigatórios / seções / `content_hash` / `signature` trusted → **Reject**.
 3. Campo obrigatório **`acionaveis`**: `init | oneshot | continuous | event_driven | poll_every:N | on_demand`.
 4. Hermes pode **criar** drafts (`provenance: hermes_created`); draft sem assinatura não ativa Auto nem seed de fleet.
@@ -26,7 +26,7 @@ Stub não entra no fleet. Contagem honesta = nativos compilados + pacotes **vali
 
 ```yaml
 schema: 1
-kind: skill|agent|agent-wasm|workflow|plugin|mcp|model|firmware
+kind: skill|agent|agent-wasm|workflow|plugin|mcp|model|firmware|device-recipe
 name: <id>
 goal: <mensurável>
 contexto: <papel no AIOS>

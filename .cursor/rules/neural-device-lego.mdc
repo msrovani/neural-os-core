@@ -1,0 +1,36 @@
+---
+description: Guardrails para DeviceRecipe / LEGO HW — assinatura, honesty, SDIO≠bring-up
+alwaysApply: false
+---
+
+# Neural Device LEGO
+
+Premissas: HalOffer ≠ VirtIO; L0/L1/L2; unsigned = Escalate; SDIO só índice.
+
+## Ao gerar ou editar RECIPE.md
+
+1. Usar template `docs/specs/device-lego/RECIPE.template.md` ou clonar golden.
+2. Validar campos contra `RECIPE.schema.json` (`schema: 1`, `kind: device-recipe`, `honesty: no_fake_ready`).
+3. Sem `signature`/`content_hash` válidos → draft Escalate; **não** claim bind Auto / Ready.
+4. `firmware[].blob_hash` obrigatório para L2 ativo.
+5. RegMap/offsets só com cite Linux/datasheet — nunca inventar do `.inf` SDIO.
+6. Stages com `success_observable` / `on_fail`; Ready só se provides medidos.
+7. Path NeuralFS: `/mnt/neural/ecosystem/devices/<name>/RECIPE.md`.
+
+## Anti-padrões
+
+- Fake `VERDICT=PASS` / Connected / scan RF sem HW
+- Centenas de recipes stub
+- MMIO fora de `capabilities_required`
+- Mapear `168C:003E` como Ath9k
+- GSP NVIDIA no git
+- Republicar `.sys`
+- Misturar VirtIO com HalOffer no contrato
+
+## SDIO / HW Expert
+
+Card tipado roteia (`NEEDS_FW`); não autoriza bring-up. Índice: `tools/export_sdio_lego_index.py`.
+
+## Docs
+
+`docs/community/` · `docs/specs/device-lego/` · ADR-0056

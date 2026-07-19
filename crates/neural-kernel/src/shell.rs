@@ -21,8 +21,14 @@ pub fn execute(cmd: &str) -> String {
         "meminfo" | "memory" => { let ctx = crate::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
         "pci" => pci_ls(),
         "theme" => theme_cmd(args),
-        "shutdown" => { crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered); crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered); String::from("Shutdown...\n") }
-        "reboot" => { crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Scheduled); crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Scheduled); String::from("Reboot...\n") }
+        "shutdown" => {
+            crate::shutdown::request_shutdown();
+            String::from("Shutdown...\n")
+        }
+        "reboot" => {
+            crate::shutdown::request_reboot();
+            String::from("Reboot...\n")
+        }
         "date" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
         "uname" => String::from("Neural OS Hermes v0.109\n"),
         "cpuinfo" => alloc::format!("CPUs: {}\n", crate::smp::ap_entry_count() + 1),

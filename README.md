@@ -98,6 +98,8 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 
 **Documentação:** `ROADMAP.md` · `TODO.md` · `AGENTS.md` · `HOWTO.md` · `docs/memory/STATE.md`
 
+**Device LEGO / comunidade:** [docs/community/](docs/community/) · [ADR-0056](docs/architecture/0056-neural-device-lego.md) · [specs](docs/specs/device-lego/) · HF [aios-k2chj](https://huggingface.co/aios-k2chj)
+
 ---
 
 ```

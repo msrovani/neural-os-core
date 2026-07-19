@@ -79,11 +79,12 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0053-hanr-parity-marketplace-trust.md` | Accepted (MVP) | `fazendo` | HANR parity | SESSION_136: session Ed25519, market, memory, MCP mínimo |
 | `0054-perci-bitwork-integration.md` | Proposed | `pesquisa` | Perci/Bitwork | Ex-0045 conflito; **adiada** — CognitiveRouter Bitwork→Trinity; sem wire |
 | `0055-smp-revision.md` | Accepted | `fazendo` | #16–42, #20–33, #35–41, #317, #319–324, #347 | **Canônica SMP** — FeatureGate; TCG APs=1; WHPX BSP-only (SESSION_141); residuals HW hybrid/matmul |
+| `0056-neural-device-lego.md` | Accepted (MVP) | `fazendo` | #464 | L0/L1/L2 DeviceRecipe; UnlockDAG; trust Ed25519; community hub; H1 bind table |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)
 
-Triagem Onda 0 (2026-07-18) + Pós-LAN SESSION_152: `depends_on: lan` liberado (L3.5–L5 + NetFs peer). WiFi → `depends_on: wifi`.
+Triagem Onda 0 (2026-07-18) + Pós-LAN SESSION_152: `depends_on: lan` liberado (L3.5–L5 + NetFs peer). WiFi → `depends_on: wifi`. SESSION_154: TLS N4 opções A–D (pesquisa); WiFi inventário API77 + plano S0–S5 (FW-MAC, não SoftMAC clássico).
 
 | Residual | IDEA | Destino | Bloqueio / tag |
 |----------|------|---------|----------------|
@@ -134,6 +135,7 @@ Registro dos planos de implementação (Cursor Plans) já refletidos no corpo da
 | `Migrar agentes NeuralFS` | **0051** / **0052** | ✅ → stubs **corrigidos** por 0052 | SESSION_134–135 |
 | `HANR Hermes Port` | **0053** | ✅ Waves 0–4 MVP | SESSION_136–137 |
 | `Sandbox gates SMP` | **0055** | ✅ Fases 0–C wired; evidência TCG/WHPX | SESSION_141 |
+| `Neural Device LEGOs` | **0056** (+ 0051–53, NeuralFS §12) | ✅ docs hub+specs+H1 bind; goldens VirtIO/ath10k | community + `device_recipe.rs` |
 | `Sanitizar pasta docs` | INDEX + GOVERNANCE | ✅ ciclo IDEA→ADR | archive + INDEX |
 
 **Próximo aceite operacional (0041):** boot QEMU com slog `NotifySent` + Cap/AS non-fatal — não reabre plano; só evidencia lifecycle.

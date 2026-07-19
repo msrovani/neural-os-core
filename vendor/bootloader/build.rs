@@ -72,6 +72,7 @@ fn build_uefi_bootloader() -> PathBuf {
         .join("..")
         .join("bootloader-x86_64-uefi");
     println!("cargo:rerun-if-changed={}", uefi_path.join("src").join("main.rs").display());
+    println!("cargo:rerun-if-changed={}", uefi_path.join("src").join("fb_pick.rs").display());
     let mut cmd = Command::new(cargo);
     cmd.arg("install").arg("bootloader-x86_64-uefi");
     cmd.arg("--path").arg(&uefi_path);

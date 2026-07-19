@@ -1,10 +1,10 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.0 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.1 TEST — NÃO ESTÁVEL
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: v1.9.0 TEST — Pós-LAN ✅ SESSION_152; #418 NetFs PASS; TLS BLOCKED; WiFi AWAITING
+#   Pista ativa: v1.9.1 TEST — BitNet 850 #PF+BPE SP32 (SESSION_162); ath10k A3 (161); TLS smoke (157)
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer
@@ -16,6 +16,16 @@
 #   SESSION_151: Fecho plano Residuals ondas 0–7 (PreFlight pass_marker; WiFi AWAITING)
 #   SESSION_152: Pós-LAN — net_bridge DNS/HTTP; NetFs peer; SelfUpdate HTTP; TLS BLOCKED
 #   SESSION_153: Release v1.9.0 TEST (docs + tag)
+#   SESSION_154: TLS pesquisa (B) opções A–D; WiFi inventário API77 + plano S0–S5
+#   SESSION_155: TLS #123 probe A PASS — embedded-tls 0.19 soft-float
+#   SESSION_156: TLS N4 wire — https_get; trust=unsecure
+#   SESSION_157: TLS smoke PASS — google 80952 B; soft crypto cfgs; WHPX qemu64
+#   SESSION_158: TLS PKI híbrido — root_learn→root_pin; pins+TOFU RAM
+#   SESSION_159: WiFi S0 honesty + prep S1 DID/FAT; fw_resolve=SKIP QEMU; sem ALIVE
+#   SESSION_160: WiFi pivô ath10k QCA6174 Note1050; A0–A2; iwlwifi secondary
+#   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
+#   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
+#   ADR-0056 H1 runtime: unlock_dag + recipe FAT gate + HalOffer NeedsFw/Escalate (#464)
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
 #   PreFlight: tools/preflight_wave.py · cache docs/memory/.preflight_cache/ · depends_on: lan · AWAITING_HW
 #   Cadeia: k-nano → k-hal → k-ai → cortex → hermes → jarbas  (**K³CHJ**)
@@ -33,8 +43,8 @@
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
-**Versão:** **v1.9.0 TESTE / NÃO ESTÁVEL** (2026-07-18) — Pós-LAN B-01 + Residuals 0–7; base v1.8.6.  
-**Base:** v1.8.0 = ADR-0042 N1–N5 + wire; v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer.  
+**Versão:** **v1.9.1 TESTE / NÃO ESTÁVEL** (2026-07-19) — BitNet 850 generate sem #PF + BPE SP32; base v1.9.0 Pós-LAN.  
+**Base:** v1.8.0 = ADR-0042 N1–N5 + wire; v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Residuals 0–7.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
 **Cadeia canônica:** `k-nano → k-hal → k-ai → cortex → hermes → jarbas`.  
@@ -221,6 +231,14 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 - **Launch:** user/slirp + static `10.0.2.15`; `-Bridge` = TAP + DHCP. Peers host: `netfs_peer.py` :4446, `serve_tiny_gguf.py` :8080.
 - **✅ L3.5–L5:** TX regs `0x3800/0x3818`; DNS raw; HTTP 301 (SESSION_149/150).
 - **✅ Pós-LAN:** `net_bridge`; NetFs `[NETFS] VERDICT=PASS`; TLS `[TLS] VERDICT=BLOCKED softfloat_or_crate`; SelfUpdate HTTP (SESSION_152).
+- **🔬 SESSION_154:** TLS opções A–D; WiFi API77 + S0–S5; iwlwifi FW MAC.
+- **✅ SESSION_155:** TLS probe A — soft-float compile PASS.
+- **✅ SESSION_156:** TLS N4 wire — `https_get` + `NetTcpIo` + `KernelRng`; `trust=unsecure`.
+- **✅ SESSION_157:** TLS smoke PASS — `[TLS] VERDICT=PASS bytes=80952` + `smoke=PASS` (google); PKI residual.
+- **✅ SESSION_158:** TLS PKI híbrido — `trust=root_learn`→`root_pin` (google×2); CertVerify/FAT residual.
+- **✅ SESSION_159:** WiFi S0 + prep S1 — `VERDICT=AWAITING_REAL_HW` + `fw_resolve=SKIP`; DID→FAT; sem ALIVE.
+- **✅ SESSION_160:** WiFi pivô ath10k QCA6174 — `168C:003E`; FW 1.45MB; BMI/CE scaffold; A3 Note AWAITING.
+- **✅ SESSION_161:** ath10k A3 — CE/BMI/LZ wired; `VERDICT=PASS` só com FW_IND pós-DONE no Note.
 - **Histórico:** smoke `190530` L3.5 FAIL — supersedido; não repetir “RX morto” como estado atual.
 
 ### Serial SLIP bridge (FROZEN — nao e path do gate Net)
@@ -236,7 +254,7 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 | **BGE** | FAILED | **LOADED** stub |
 
 ### Próximo
-- **Pista ativa:** Pós-LAN ✅ — `/model-fetch` e2e · TLS real `#123` · WiFi AWAITING · gate v2.0.0 review.
+- **Pista ativa:** Boot Note ath10k A3 (`fw_ready`) · TLS `#123` ✅ · `/model-fetch` · gate v2.0.0 review.
 - **Sound residuals (não pista):** soft-float/VITS defer · UAC `#84` AWAITING_HW · cutover jarbas/audio.
 - **Gate `v2.0.0`:** review ADR `fazendo` + `por_fazer`/AWAITING defer + OK maintainer — não auto-declarar.
 - **Sprint 108:** ✅ self-evolving agents.
@@ -507,7 +525,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - ADR-0040: #417/#419/#282e–g ✅ · 282h ⏳ · **#418 peer PASS** (S3/WebDAV residual) · #420/#423 ▶️ · #422 USB AWAITING
 - Onda 5 GPU: #420/#423/#454–456 ▶️ `[MHI-DMA]`/`[GDS-HW]`/`[GPU-HW]`
 - Onda 6 AirLLM: ATA ✅ · Net path ✅ · PreFlight `airllm-net` PARTIAL (falta e2e) · ▶️ `[AIRLLM-DMA]`
-- Onda 7 / Pós-LAN: LAN+NetFs ✅ · TLS BLOCKED · WiFi ▶️ AWAITING
+- Onda 7 / Pós-LAN: LAN+NetFs ✅ · TLS ✅ · WiFi ath10k A3 código ✅ SESSION_161 · runtime Note AWAITING
 - Trilha R soft-float: SESSION_147 ⏳
 - Fora gate: SmileyOS/Cube/XDNA/SKYNET · Cross-OS · CRDT
 - LAN gate = e1000 RX>0 — SLIP ≠ gate

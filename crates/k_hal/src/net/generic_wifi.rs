@@ -236,6 +236,26 @@ impl WifiChipset for AtherosAth9k {
     fn receive_packet(&mut self, b: &mut [u8]) -> Result<usize, &'static str> { self.0.receive_packet(b) }
 }
 
+/// QCA6174 / QCA6164 — ath10k FW-MAC (Note 1050 QCA61x4A). Não é ath9k.
+pub struct Ath10kQca6174(pub AgnosticWifiEngine);
+impl WifiChipset for Ath10kQca6174 {
+    fn init(&mut self) -> Result<(), &'static str> {
+        // A2 scaffold: engine DMA genérico não é HTT; honesty via wifi_ath10k.
+        k_nano::slog_hal!(
+            "ATH10K",
+            "info",
+            "step=init status=UNSUPPORTED detail=awaiting_bmi_a3"
+        );
+        Err("ath10k_bmi_unwired")
+    }
+    fn send_packet(&mut self, _p: &[u8]) -> Result<(), &'static str> {
+        Err("ath10k_tx_unwired")
+    }
+    fn receive_packet(&mut self, _b: &mut [u8]) -> Result<usize, &'static str> {
+        Err("ath10k_rx_unwired")
+    }
+}
+
 pub struct BroadcomBcm4360(pub AgnosticWifiEngine);
 impl WifiChipset for BroadcomBcm4360 {
     fn init(&mut self) -> Result<(), &'static str> { self.0.init() }
@@ -277,6 +297,7 @@ pub union DriverStorage {
     intel: ManuallyDrop<IntelAx200>,
     realtek: ManuallyDrop<RealtekRtl8188>,
     atheros: ManuallyDrop<AtherosAth9k>,
+    ath10k: ManuallyDrop<Ath10kQca6174>,
     broadcom: ManuallyDrop<BroadcomBcm4360>,
     ethernet: ManuallyDrop<FallbackEthernet>,
 }
@@ -320,9 +341,11 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
             |(0x8086,0x24F5)|(0x8086,0x24F6)|(0x8086,0x24FD)|(0x8086,0x2526)
             |(0x8086,0x2527)|(0x8086,0x2723)|(0x8086,0x2725)|(0x8086,0x2726)
             |(0x8086,0x3165)|(0x8086,0x3166)|(0x8086,0x06F0)|(0x8086,0x02F0) => (INTEL_AX_MAP, "Intel WiFi"),
-            // Atheros
+            // ath10k QCA6174 / QCA6164 (Note 1050 QCA61x4A) — NÃO ath9k
+            (0x168C, 0x003E) | (0x168C, 0x0041) => (ATHEROS_MAP, "ath10k QCA6174"),
+            // Atheros ath9k legado (SoftMAC-era DIDs)
             (0x168C,0x0030)|(0x168C,0x0032)|(0x168C,0x0033)|(0x168C,0x0034)
-            |(0x168C,0x003C)|(0x168C,0x0040)|(0x168C,0x0041)|(0x168C,0x0042)
+            |(0x168C,0x003C)|(0x168C,0x0040)|(0x168C,0x0042)
             |(0x168C,0x0050) => (ATHEROS_MAP, "Atheros WiFi"),
             // Broadcom
             (0x14E4,0x43A0)|(0x14E4,0x43B1)|(0x14E4,0x43DC)|(0x14E4,0x4464)
@@ -343,8 +366,19 @@ pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
         let _r = match name {
             "Realtek WiFi" => { (*ptr).realtek = ManuallyDrop::new(RealtekRtl8188(engine));
                 *active = Some(&mut *(*ptr).realtek as &mut dyn WifiChipset); }
-            "Intel WiFi" => { (*ptr).intel = ManuallyDrop::new(IntelAx200(engine));
-                *active = Some(&mut *(*ptr).intel as &mut dyn WifiChipset); }
+            "Intel WiFi" => {
+                (*ptr).intel = ManuallyDrop::new(IntelAx200(engine));
+                *active = Some(&mut *(*ptr).intel as &mut dyn WifiChipset);
+                // Prep S1: DID→FAT resolve (sem load_ucode / sem ALIVE).
+                crate::net::iwl_fw::probe_iwl_fw_for_did(did);
+            }
+            "ath10k QCA6174" => {
+                (*ptr).ath10k = ManuallyDrop::new(Ath10kQca6174(engine));
+                *active = Some(&mut *(*ptr).ath10k as &mut dyn WifiChipset);
+                crate::net::ath10k_fw::probe_ath10k_fw_for_did(did);
+                // pci_rev desconhecido no bind atual — 0 até ler config space.
+                crate::net::wifi_ath10k::scaffold_on_bind(bar, did, 0);
+            }
             "Atheros WiFi" => { (*ptr).atheros = ManuallyDrop::new(AtherosAth9k(engine));
                 *active = Some(&mut *(*ptr).atheros as &mut dyn WifiChipset); }
             "Broadcom WiFi" => { (*ptr).broadcom = ManuallyDrop::new(BroadcomBcm4360(engine));
@@ -385,6 +419,8 @@ pub fn detect_wifi() -> bool {
             }
         }
     }
+    crate::net::ath10k_fw::log_fw_resolve_skip_no_radio();
+    crate::net::iwl_fw::log_fw_resolve_skip_no_radio();
     k_nano::slog_hal!("WIFI", "info", "Nenhum adaptador wireless — Ethernet smoltcp ativo");
     false
 }

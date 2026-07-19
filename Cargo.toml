@@ -16,7 +16,7 @@ members = [
 ]
 default-members = ["crates/boot"]
 # Host-only kernel logic / packers — never linked into boot/neural-kernel
-exclude = ["tools/gpu_kernels"]
+exclude = ["tools/gpu_kernels", "tools/check-tls"]
 
 # Bootloader UEFI: SetMode para Rgb/Bgr quando GOP inicia em BltOnly (Intel HD 620).
 [patch.crates-io]

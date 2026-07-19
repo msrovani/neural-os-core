@@ -1,0 +1,120 @@
+---
+description: Contrato Neural OS — criação, validação e trust de artefatos (agents/skills/mcp/workflows/plugins/models/firmware). Deny sem schema/hash/assinatura.
+alwaysApply: true
+---
+
+# Neural Artifact Spec (ADR-0052)
+
+Premissas do Neural OS: **tudo é Agent ou Skill**; bare-metal `no_std`; stack **K³CHJ** (`k_nano`→`k_hal`→`k_ai`→`cortex`→`hermes`→`jarbas`); Trust `(token,agent,skill)`; HITL Escalate; CapGate; Hermes orquestra; Cortex decide; PackageHub é o catálogo em `/mnt/neural/ecosystem/`.
+
+## Kinds canônicos
+
+| kind | Manifesto | Destino FS |
+|------|-----------|------------|
+| `skill` | `SKILL.md` | `ecosystem/skills/<name>/` |
+| `agent` | `AGENT.md` | `ecosystem/agents/<name>/` |
+| `agent-wasm` | `MANIFEST` + `app.wasm` | `ecosystem/agents/<name>/` |
+| `workflow` | `WORKFLOW.md` | `ecosystem/workflows/<id>/` |
+| `plugin` | `PLUGIN.md` | `ecosystem/plugins/<name>/` |
+| `mcp` | `MCP.md` | `ecosystem/mcp/<name>/` |
+| `model` | meta + blob | `ecosystem/models/` |
+| `firmware` | meta + blob | `ecosystem/firmware/` |
+| `device-recipe` | `RECIPE.md` | `ecosystem/devices/<name>/` |
+
+**Stub / inventário copiado sem missão executável NÃO é artefato.** Não gerar em massa. Não registrar no fleet. DeviceRecipe: ver ADR-0056 + `.cursor/rules/neural-device-lego.mdc`.
+
+## Frontmatter obrigatório (deny se faltar)
+
+```yaml
+---
+schema: 1
+kind: skill|agent|agent-wasm|workflow|plugin|mcp|model|firmware|device-recipe
+name: <charset [A-Za-z0-9_-] max 64>
+package_id: <único; default=name>
+description: <uma linha — goal curto>
+goal: <objetivo mensurável>
+contexto: <quando/por que este artefato existe no AIOS>
+acionaveis: [init|oneshot|continuous|event_driven|poll_every:N|on_demand]
+required_tokens: [<u64>, ...]
+capabilities: [<cap>, ...]
+provenance: hermes_created|imported|native_compiled
+sandbox_status: none|pending|passed|failed
+trust_class: observe|confirm|escalate|deny
+content_hash: "<hex16 fnv1a64 do corpo canônico>"
+signature: "<hex128 ed25519 sobre corpo canônico>"
+---
+```
+
+### Corpo canônico (assinatura)
+
+Hash/assinatura cobrem o manifesto **sem** as linhas `content_hash:` e `signature:`.
+Algoritmo: FNV-1a 64 (hash) + Ed25519 (`k_nano::identity::verify_trusted`).
+
+### Seções Markdown obrigatórias
+
+1. `## Contexto` — papel no K³CHJ / EventBus / HW
+2. `## Goal` — critério de sucesso observável
+3. `## Acionaveis` — como Cortex/Hermes dispara (espelha frontmatter)
+4. `## Workflow` — passos Observe→Plan→Act→Verify (ou equivalentes)
+5. `## Pre-Flight` — checklist antes de executar
+6. `## Success Criteria`
+7. `## Failure Policy` — escalate / rollback / noop honesto
+
+## Campo `acionaveis` (obrigatório)
+
+Diz **como** Cortex/Hermes materializa o artefato:
+
+| Valor | Significado |
+|-------|-------------|
+| `init` | Roda na fase de bring-up / registro (boot-adjacent) |
+| `oneshot` | Uma execução e encerra |
+| `continuous` | Tick contínuo (só se essencial; senão rebaixa) |
+| `event_driven` | Acorda por EventBus / intent |
+| `poll_every:N` | Poll a cada N ticks |
+| `on_demand` | Alias de event_driven sob pedido Hermes |
+
+Sem `acionaveis` válido → **deny**.
+
+## Validação = deny by default
+
+`PackageHub::validate` / `verify_artifact_md`:
+
+1. Schema + kind + name + goal + contexto + acionaveis + tokens
+2. Seções obrigatórias presentes
+3. `content_hash` confere com corpo canônico
+4. `signature` verifica com chave trusted
+5. Injection deny-list (self_evolve)
+6. `imported` exige `sandbox_status: passed`
+7. Qualquer falha → **Reject** → não entra no catálogo ativo / não Auto
+
+**Unsigned ≠ artefato ativo.** Pode existir draft Hermes, mas ApprovalLevel = Escalate e **não** vira seed do fleet.
+
+## Hermes cria artefatos
+
+1. Hermes/Cortex geram draft conforme este contrato (sem signature ainda).
+2. Draft fica `provenance: hermes_created`, `sandbox_status: none|pending`.
+3. HITL `/approve` só promove após hash+signature **ou** Escalate explícito do maintainer.
+4. SkillOpt / evolve podem promover draft → `agent-wasm` (`app.wasm`) sob CapGate + Trust.
+5. Artefato promovido a WASM continua sujeito a este schema no `MANIFEST`.
+
+## Importação (terceiros)
+
+1. Pacote entra só como `provenance: imported`, `sandbox_status: pending`.
+2. Obrigatório passar **sandbox de segurança militar** (WASM SFI + CapGate + deny syscalls + sem DMA/IRQ direto + telemetria).
+3. Só com `sandbox_status: passed` + signature trusted o hub aceita Create sem Deny.
+4. Falha no sandbox → `failed` → **deny** permanente até novo pacote.
+
+## Nativos compilados
+
+Código Ring0/IRQ/HAL/Cortex/Hermes **permanece no bin**.
+Manifesto `native_compiled` é catálogo/descoberta — não substitui o binário.
+Não inventar 200 SpecialistAgents stubs.
+
+## Anti-padrões (proibido)
+
+- Gerar centenas de `AGENT.md` idênticos com contrato boilerplate
+- Registrar Agency stub no AgentScheduler só para inflar contagem
+- `required_tokens: [1]` genérico sem capabilities reais
+- Claim `signed=true` sem Ed25519 trusted
+- Seed nested no exFAT flat como se fosse NeuralFS
+- Mentir `persisted=true` / `sandbox_status: passed`

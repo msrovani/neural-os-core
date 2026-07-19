@@ -1,11 +1,15 @@
-//! BPE vocab compacto (BPB1) — decode id→texto para BitNet 2B HF (128k).
-//! Encode pleno com merges ainda não; soft-float: chat frame Llama + IDs semânticos.
+//! BPE vocab compacto (BPB1) — decode id→texto para BitNet.
+//! - Llama-3 128k (2B): chat frame + IDs semânticos
+//! - SentencePiece BPE 32k (850/xl/3B): merges MRG1 + ▁→espaço no decode
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Tabla carregada do QEMU-loader (`target/bpe_vocab.bin`).
+const SP_SPACE: char = '\u{2581}'; // ▁ SentencePiece
+
+/// Tabla carregada do QEMU-loader (`target/bpe_vocab.bin` ou `bpe_vocab_sp32.bin`).
 pub struct BpeVocab {
     bos: u32,
     eos: u32,
@@ -14,6 +18,10 @@ pub struct BpeVocab {
     /// offsets[i]..offsets[i+1] no heap
     offsets: Vec<u32>,
     heap: Vec<u8>,
+    /// Só SP32 (vocab≤33k): peça→id p/ encode
+    rev: BTreeMap<String, u32>,
+    /// Merges BPE em ordem (HF tokenizer.json) — encode correcto vs greedy
+    merges: Vec<(String, String)>,
 }
 
 impl BpeVocab {
@@ -21,6 +29,11 @@ impl BpeVocab {
     pub fn eos(&self) -> u32 { self.eos }
     pub fn eot(&self) -> u32 { self.eot }
     pub fn vocab_n(&self) -> u32 { self.vocab_n }
+
+    /// SentencePiece 32k (BitNet 850/xl/3B) vs Llama-3 128k (2B).
+    pub fn is_sp32(&self) -> bool {
+        self.vocab_n > 0 && self.vocab_n <= 33_000
+    }
 
     pub fn decode_id(&self, id: u32) -> Option<&str> {
         if id >= self.vocab_n { return None; }
@@ -45,7 +58,112 @@ impl BpeVocab {
                 if s.starts_with("<|") && s.ends_with("|>") {
                     continue;
                 }
-                out.push_str(s);
+                if s == "<s>" || s == "</s>" || s == "<unk>" || s == "<pad>" || s == "</line>" {
+                    continue;
+                }
+                // SentencePiece: ▁ = espaço
+                for ch in s.chars() {
+                    if ch == SP_SPACE {
+                        out.push(' ');
+                    } else {
+                        out.push(ch);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Encode SentencePiece BPE (merges HF) — alinhado a `tokenizers`.
+    /// "ola" → [<s>, ▁o, la] (não greedy ▁ol+a).
+    pub fn encode_sp32(&self, text: &str) -> Vec<u32> {
+        let mut out = vec![self.bos];
+        if text.is_empty() {
+            return out;
+        }
+        // SP: espaços → ▁; prefixo ▁ no início
+        let mut norm = String::new();
+        norm.push(SP_SPACE);
+        for ch in text.chars() {
+            if ch == ' ' {
+                norm.push(SP_SPACE);
+            } else {
+                norm.push(ch);
+            }
+        }
+        // 1 char = 1 peça; aplica merges em ordem
+        let mut word: Vec<String> = norm.chars().map(|c| {
+            let mut s = String::new();
+            s.push(c);
+            s
+        }).collect();
+        if !self.merges.is_empty() {
+            for (a, b) in self.merges.iter() {
+                let mut i = 0usize;
+                while i + 1 < word.len() {
+                    if word[i] == *a && word[i + 1] == *b {
+                        let mut merged = String::with_capacity(a.len() + b.len());
+                        merged.push_str(a);
+                        merged.push_str(b);
+                        word[i] = merged;
+                        word.remove(i + 1);
+                    } else {
+                        i += 1;
+                    }
+                }
+            }
+        } else {
+            // Fallback greedy se MRG1 ausente (pior; evita ▁ol vs ▁o+la quando possível
+            // via preferência peça-mais-curta entre top-2 — ainda imperfecto)
+            return self.encode_sp32_greedy_fallback(text);
+        }
+        for piece in word.iter() {
+            if let Some(&id) = self.rev.get(piece) {
+                out.push(id);
+            } else {
+                out.push(0); // <unk>
+            }
+        }
+        out
+    }
+
+    fn encode_sp32_greedy_fallback(&self, text: &str) -> Vec<u32> {
+        let mut out = vec![self.bos];
+        if text.is_empty() || self.rev.is_empty() {
+            return out;
+        }
+        let mut s = String::new();
+        s.push(SP_SPACE);
+        for ch in text.chars() {
+            if ch == ' ' {
+                s.push(SP_SPACE);
+            } else {
+                s.push(ch);
+            }
+        }
+        const MAX_PIECE: usize = 24;
+        while !s.is_empty() {
+            let mut best: Option<(u32, usize)> = None;
+            let max_try = s.len().min(MAX_PIECE);
+            let mut len = max_try;
+            while len > 0 {
+                if s.is_char_boundary(len) {
+                    let piece = &s[..len];
+                    if let Some(&id) = self.rev.get(piece) {
+                        best = Some((id, len));
+                        break;
+                    }
+                }
+                len -= 1;
+            }
+            if let Some((id, len)) = best {
+                out.push(id);
+                s = String::from(&s[len..]);
+            } else {
+                let ch = s.chars().next().unwrap();
+                let l = ch.len_utf8();
+                out.push(0);
+                s = String::from(&s[l..]);
             }
         }
         out
@@ -54,6 +172,9 @@ impl BpeVocab {
     /// Encode genérico (não clima): moldura Llama curta + cue do 1º token semântico.
     /// Usado em HW real quando `weather-e2e` está off.
     pub fn encode_chat_frame(&self, prompt: &str) -> Vec<u32> {
+        if self.is_sp32() {
+            return self.encode_sp32(prompt);
+        }
         let p = prompt.as_bytes();
         let lower_has = |s: &[u8]| {
             if s.is_empty() || p.len() < s.len() {
@@ -93,6 +214,9 @@ impl BpeVocab {
 
     /// Moldura chat + cue de saudacao (IDs BPB1 reais). Logits escolhem o resto.
     pub fn encode_greeting_cue(&self, prompt: &str) -> Vec<u32> {
+        if self.is_sp32() {
+            return self.encode_sp32(prompt);
+        }
         let p = prompt.as_bytes();
         let lower_has = |s: &[u8]| {
             if s.is_empty() || p.len() < s.len() {
@@ -129,6 +253,9 @@ impl BpeVocab {
     /// Soft-float: Llama-3 mini chat (8 toks) — user cue + turno assistant.
     /// Não é string canned de clima; só moldura de chat + peça semântica.
     pub fn encode_weather_cue(&self, prompt: &str) -> Vec<u32> {
+        if self.is_sp32() {
+            return self.encode_sp32(prompt);
+        }
         let p = prompt.as_bytes();
         let lower_has = |s: &[u8]| {
             // busca ASCII case-insensitive simples
@@ -204,8 +331,64 @@ pub fn init_from_bpb1(data: &[u8]) -> Result<(), &'static str> {
     if o + heap_len > data.len() {
         return Err("trunc heap");
     }
-    // Aceita trailing padding no loader
+    // Aceita trailing padding / MRG1 no loader
     let heap = data[o..o + heap_len].to_vec();
+    o += heap_len;
+    let mut rev = BTreeMap::new();
+    // Índice inverso só para SP32 (encode); Llama 128k usa cues hardcoded.
+    if vocab_n > 0 && vocab_n <= 33_000 {
+        for id in 0..vocab_n {
+            let i = id as usize;
+            let a = offsets[i] as usize;
+            let b = offsets[i + 1] as usize;
+            if b > heap.len() || a > b {
+                continue;
+            }
+            if let Ok(s) = core::str::from_utf8(&heap[a..b]) {
+                if s.is_empty() {
+                    continue;
+                }
+                // Não indexar specials
+                if s.starts_with('<') && s.ends_with('>') {
+                    continue;
+                }
+                rev.entry(String::from(s)).or_insert(id);
+            }
+        }
+    }
+    // MRG1: merges BPE (opcional; necessário p/ encode SP32 correcto)
+    let mut merges: Vec<(String, String)> = Vec::new();
+    if o + 8 <= data.len() && &data[o..o + 4] == b"MRG1" {
+        o += 4;
+        let merge_n = rd_u32(data, &mut o)? as usize;
+        if merge_n > 200_000 {
+            return Err("bad merge_n");
+        }
+        merges.reserve(merge_n);
+        for _ in 0..merge_n {
+            if o + 2 > data.len() {
+                return Err("trunc merge a len");
+            }
+            let la = u16::from_le_bytes([data[o], data[o + 1]]) as usize;
+            o += 2;
+            if o + la > data.len() {
+                return Err("trunc merge a");
+            }
+            let a = core::str::from_utf8(&data[o..o + la]).map_err(|_| "merge a utf8")?;
+            o += la;
+            if o + 2 > data.len() {
+                return Err("trunc merge b len");
+            }
+            let lb = u16::from_le_bytes([data[o], data[o + 1]]) as usize;
+            o += 2;
+            if o + lb > data.len() {
+                return Err("trunc merge b");
+            }
+            let b = core::str::from_utf8(&data[o..o + lb]).map_err(|_| "merge b utf8")?;
+            o += lb;
+            merges.push((String::from(a), String::from(b)));
+        }
+    }
     let vocab = BpeVocab {
         bos,
         eos,
@@ -213,12 +396,17 @@ pub fn init_from_bpb1(data: &[u8]) -> Result<(), &'static str> {
         vocab_n,
         offsets,
         heap,
+        rev,
+        merges,
     };
-    k_nano::slog_bin!("BPE", "info", "BPB1 LOADED vocab_n={} bos={} eos={} heap={}KB",
+    k_nano::slog_bin!("BPE", "info", "BPB1 LOADED vocab_n={} bos={} eos={} heap={}KB rev={} merges={} sp32={}",
         vocab.vocab_n,
         vocab.bos,
         vocab.eos,
-        heap_len / 1024);
+        heap_len / 1024,
+        vocab.rev.len(),
+        vocab.merges.len(),
+        vocab.is_sp32() as u8);
     *BPE.lock() = Some(vocab);
     Ok(())
 }
@@ -257,9 +445,30 @@ pub fn try_load_from_qemu_loader() -> bool {
             *heap_off_ptr.add(2),
             *heap_off_ptr.add(3),
         ]) as usize;
-        let total = header + heap_len;
-        // Caps: ~8MB segurança
-        if total > 8 * 1024 * 1024 {
+        let mut total = header + heap_len;
+        // MRG1 opcional após heap (merges BPE SP32)
+        let mrg = va.add(total);
+        if core::slice::from_raw_parts(mrg, 4) == b"MRG1" {
+            let merge_n = u32::from_le_bytes([
+                *mrg.add(4),
+                *mrg.add(5),
+                *mrg.add(6),
+                *mrg.add(7),
+            ]) as usize;
+            let mut o = total + 8;
+            for _ in 0..merge_n {
+                let la = u16::from_le_bytes([*va.add(o), *va.add(o + 1)]) as usize;
+                o += 2 + la;
+                let lb = u16::from_le_bytes([*va.add(o), *va.add(o + 1)]) as usize;
+                o += 2 + lb;
+                if o > 12 * 1024 * 1024 {
+                    break;
+                }
+            }
+            total = o;
+        }
+        // Caps: ~12MB (vocab+merges SP32 ~1MB)
+        if total > 12 * 1024 * 1024 {
             k_nano::slog_bin!("BPE", "info", "refuse size={}KB", total / 1024);
             return false;
         }
@@ -285,7 +494,7 @@ pub fn try_load_from_fat() -> bool {
                     continue;
                 }
                 if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                    for name in &["BPE.BIN", "BPEVOCAB.BIN"] {
+                    for name in &["BPE.BIN", "BPEVOCAB.BIN", "BPESP32.BIN"] {
                         if let Some(data) = fs.read_file(name) {
                             match init_from_bpb1(&data) {
                                 Ok(()) => {
@@ -338,7 +547,10 @@ pub fn encode(text: &str) -> Vec<u32> {
     let guard = BPE.lock();
     match guard.as_ref() {
         Some(tok) => {
-            if prompt_is_greeting(text) {
+            if tok.is_sp32() {
+                // BitNet 850/xl/3B: sempre SP greedy (sem moldura Llama 128k).
+                tok.encode_sp32(text)
+            } else if prompt_is_greeting(text) {
                 tok.encode_greeting_cue(text)
             } else if crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
                 tok.encode_weather_cue(text)
@@ -762,10 +974,15 @@ pub fn weatherish_has_predicate(text: &str) -> bool {
 /// Score peça p/ argmax: +letras, +clima, -dígitos/parênteses. Sem alocar.
 pub fn score_piece(id: u32) -> f32 {
     let guard = BPE.lock();
-    let Some(tok) = guard.as_ref() else { return weather_bias(id); };
-    let Some(s) = tok.decode_id(id) else { return weather_bias(id); };
+    let Some(tok) = guard.as_ref() else { return 0.0; };
+    // SP32: sem bias clima Llama-128k (IDs 24108/… colidem com peças erradas).
+    let base = if tok.is_sp32() { 0.0 } else { weather_bias(id) };
+    let Some(s) = tok.decode_id(id) else { return base; };
+    if s.starts_with('<') && s.ends_with('>') {
+        return -20.0; // specials / pad /line
+    }
     let bytes = s.as_bytes();
-    let mut score = weather_bias(id);
+    let mut score = base;
     let mut has_alpha = false;
     let mut has_digit = false;
     let mut has_paren = false;
@@ -773,12 +990,33 @@ pub fn score_piece(id: u32) -> f32 {
     for &b in bytes {
         if b.is_ascii_alphabetic() { has_alpha = true; alnum_or_space = true; }
         else if b.is_ascii_digit() { has_digit = true; alnum_or_space = true; }
-        else if b == b' ' { alnum_or_space = true; }
+        else if b == b' ' || b == 0xE2 { alnum_or_space = true; } // espaço ou ▁ utf8 lead
         else if b == b'(' || b == b')' { has_paren = true; }
+    }
+    // ▁ sozinho / peças só-espaço
+    if s == "\u{2581}" || s.trim().is_empty() {
+        score -= 1.0;
     }
     if has_alpha { score += 1.5; }
     if has_digit { score -= 2.0; }
     if has_paren { score -= 3.0; }
     if !alnum_or_space { score -= 4.0; }
     score
+}
+
+/// True se id é special SP/Llama (não gerar).
+pub fn is_special_id(id: u32) -> bool {
+    let guard = BPE.lock();
+    let Some(tok) = guard.as_ref() else {
+        return id <= 2;
+    };
+    if id == tok.bos() || id == tok.eos() || id == tok.eot() {
+        return true;
+    }
+    if let Some(s) = tok.decode_id(id) {
+        if s.starts_with('<') && s.ends_with('>') {
+            return true;
+        }
+    }
+    false
 }

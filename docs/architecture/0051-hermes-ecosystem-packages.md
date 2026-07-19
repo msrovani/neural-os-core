@@ -30,6 +30,7 @@ Faltava um **hub único** onde Hermes/Cortex saibam *onde*, *o quê*, *como acha
 | Mcp | `mcp/<name>/` | Tools → USER_INTENT |
 | Model | `models/` | Pesos / .bitnet |
 | Firmware | `firmware/` | Blobs HW |
+| DeviceRecipe | `devices/<name>/RECIPE.md` | LEGO HW bind+UnlockDAG (ADR-0056) |
 
 Alias legado ADR-0032: `/agents/<stem>.wasm` → `ecosystem/agents/<stem>/MANIFEST`.
 

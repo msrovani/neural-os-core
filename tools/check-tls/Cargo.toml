@@ -1,0 +1,20 @@
+# Probe isolado TLS #123 opção A — NÃO linkar no neural-kernel.
+# Soft-float: herda `.cargo/config.toml` [target.x86_64-unknown-none].
+# Uso: cargo check --release --target x86_64-unknown-none --target-dir ../../target/check-tls
+[package]
+name = "check-tls"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone — não é member do workspace neural-os-core
+[workspace]
+
+[dependencies]
+embedded-tls = { version = "0.19", default-features = false }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"

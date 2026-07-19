@@ -25,6 +25,8 @@ pub enum PackageKind {
     Mcp,
     Model,
     Firmware,
+    /// ADR-0056 DeviceRecipe — `/mnt/neural/ecosystem/devices/<name>/RECIPE.md`
+    DeviceRecipe,
 }
 
 impl PackageKind {
@@ -38,6 +40,7 @@ impl PackageKind {
             PackageKind::Mcp => "mcp",
             PackageKind::Model => "model",
             PackageKind::Firmware => "firmware",
+            PackageKind::DeviceRecipe => "device-recipe",
         }
     }
 
@@ -51,6 +54,7 @@ impl PackageKind {
             PackageKind::Mcp => "tools externos → EventBus/USER_INTENT",
             PackageKind::Model => "pesos .bitnet / inferencia Cortex",
             PackageKind::Firmware => "blobs HW (SelfHeal / GPU FW)",
+            PackageKind::DeviceRecipe => "LEGO HW bind+stages UnlockDAG (ADR-0056)",
         }
     }
 
@@ -64,6 +68,9 @@ impl PackageKind {
             "mcp" => Some(PackageKind::Mcp),
             "model" | "models" => Some(PackageKind::Model),
             "firmware" | "fw" => Some(PackageKind::Firmware),
+            "device-recipe" | "device_recipe" | "devicerecipe" | "devices" => {
+                Some(PackageKind::DeviceRecipe)
+            }
             _ => None,
         }
     }
@@ -450,15 +457,29 @@ pub fn verify_artifact_md(kind: PackageKind, content: &str) -> Result<(), &'stat
         return Err("sandbox_failed");
     }
 
-    for section in [
-        "Contexto",
-        "Goal",
-        "Acionaveis",
-        "Workflow",
-        "Pre-Flight",
-        "Success Criteria",
-        "Failure Policy",
-    ] {
+    let sections: &[&str] = if kind == PackageKind::DeviceRecipe {
+        // ADR-0056 LEGO — seções AI-Friendly (docs/specs/device-lego)
+        &[
+            "Contexto",
+            "Bind",
+            "Stages / UnlockDAG",
+            "Pre-Flight",
+            "Success Criteria",
+            "Failure Policy",
+            "Anti-Patterns",
+        ]
+    } else {
+        &[
+            "Contexto",
+            "Goal",
+            "Acionaveis",
+            "Workflow",
+            "Pre-Flight",
+            "Success Criteria",
+            "Failure Policy",
+        ]
+    };
+    for section in sections {
         if !has_section(body, section) {
             return Err("missing_section");
         }
@@ -537,7 +558,9 @@ impl PackageHub {
                     return ApprovalLevel::Deny;
                 }
                 match kind {
-                    PackageKind::Firmware | PackageKind::AgentWasm => ApprovalLevel::Escalate,
+                    PackageKind::Firmware
+                    | PackageKind::AgentWasm
+                    | PackageKind::DeviceRecipe => ApprovalLevel::Escalate,
                     PackageKind::Plugin
                     | PackageKind::Mcp
                     | PackageKind::Agent
@@ -568,6 +591,9 @@ impl PackageHub {
             PackageKind::Mcp => format!("{}/mcp/{}/MCP.md", ECOSYSTEM_ROOT, name),
             PackageKind::Model => format!("{}/models/{}", ECOSYSTEM_ROOT, name),
             PackageKind::Firmware => format!("{}/firmware/{}", ECOSYSTEM_ROOT, name),
+            PackageKind::DeviceRecipe => {
+                format!("{}/devices/{}/RECIPE.md", ECOSYSTEM_ROOT, name)
+            }
         }
     }
 
@@ -674,12 +700,50 @@ impl PackageHub {
             "Analisa erros e sugere recuperacao",
         );
         self.seed_embedded_agents();
+        self.seed_native_device_recipes();
         if self.vfs_ok {
             k_nano::slog_hermes!("PKG", "info", "VFS ecosystem montado em {}", ECOSYSTEM_ROOT);
         } else {
             k_nano::slog_hermes!("PKG", "info", "VFS {} indisponivel — catalogo RAM only (persisted=false)", ECOSYSTEM_ROOT);
         }
         k_nano::slog_hermes!("Log", "msg", "{}", self.report());
+    }
+
+    /// ADR-0056: catálogo dos 4 goldens (FAT `LEGO*.MD` + bind table k-hal).
+    /// Disk seed unsigned; Cap gate = `GOLDEN_RECIPES` in-tree.
+    fn seed_native_device_recipes(&mut self) {
+        const SEEDS: &[(&str, &str, &str)] = &[
+            ("net.virtio", "VirtIO-net L1 behaved", "LEGOVNET.MD"),
+            ("wifi.qca6174.ath10k", "QCA6174 ath10k UnlockDAG", "LEGOATHK.MD"),
+            ("gpu.nvidia.gp108", "NVIDIA GP108 Pascal stages", "LEGOGP08.MD"),
+            ("usb.xhci.host", "xHCI UsbHost U0–U2", "LEGOXHCI.MD"),
+        ];
+        for (name, purpose, fat) in SEEDS {
+            let path = Self::package_path(PackageKind::DeviceRecipe, name);
+            let body = format!(
+                "---\nschema: 1\nkind: device-recipe\nname: {}\npackage_id: {}\nprovenance: native_compiled\ntrust_class: escalate\nhonesty: no_fake_ready\nfat_short: {}\n---\n# {}\n\nFonte: ecosystem/devices/{}/RECIPE.md — FAT {} — bind Cap = k_hal H1.\n",
+                name, name, fat, purpose, name, fat
+            );
+            let rec = PackageRecord {
+                kind: PackageKind::DeviceRecipe,
+                name: String::from(*name),
+                purpose: String::from(*purpose),
+                path,
+                body,
+                signed: false,
+                content_hash: String::from("0"),
+                caps_hint: String::from("device-recipe"),
+                persisted: false,
+            };
+            self.packages
+                .insert(pkg_key(PackageKind::DeviceRecipe, name), rec);
+        }
+        k_nano::slog_hermes!(
+            "PKG",
+            "info",
+            "seed device-recipe goldens={} FAT=LEGO*.MD bind=GOLDEN_RECIPES",
+            SEEDS.len()
+        );
     }
 
     fn seed_embedded_agents(&mut self) {

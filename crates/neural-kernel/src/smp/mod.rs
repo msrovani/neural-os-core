@@ -56,6 +56,12 @@ fn busy_wait_us(us: u64) {
     }
 }
 
+fn finish_bsp_only(bsp_lapic_id: u8, reason: &str) {
+    k_nano::slog_nano!("SMP", "info", "BSP-only ({})", reason);
+    crate::display::fb::boot_ckpt(23, reason);
+    k_nano::smp::corepools::init_from_boot(bsp_lapic_id, 0);
+}
+
 pub unsafe fn init_smp() {
     crate::display::fb::boot_ckpt(22, "smp: check apic");
 
@@ -66,18 +72,19 @@ pub unsafe fn init_smp() {
             "BSP-only (FeatureGate hv={})",
             k_nano::platform_probe::hypervisor().name()
         );
-        crate::display::fb::boot_ckpt(23, "smp: gate bsp-only");
         if apic::USING_APIC.load(Ordering::Relaxed) {
             let bsp = apic::lapic_id();
             percpu::init_bsp_percpu(bsp);
-            k_nano::smp::corepools::init_from_boot(bsp, 0);
+            finish_bsp_only(bsp, "smp: gate bsp-only");
+        } else {
+            crate::display::fb::boot_ckpt(23, "smp: gate no-apic");
         }
         return;
     }
 
     if !apic::USING_APIC.load(Ordering::Relaxed) {
         k_nano::slog_nano!("SMP", "info", "APIC nao disponivel — SMP ignorado.");
-        crate::display::fb::boot_ckpt(22, "smp: no apic");
+        crate::display::fb::boot_ckpt(23, "smp: no apic");
         return;
     }
 
@@ -89,7 +96,9 @@ pub unsafe fn init_smp() {
             "trampoline not ready — BSP only (MADT APs={})",
             ap_expected
         );
-        crate::display::fb::boot_ckpt(23, "smp: stub bsp-only");
+        let bsp = apic::lapic_id();
+        percpu::init_bsp_percpu(bsp);
+        finish_bsp_only(bsp, "smp: stub bsp-only");
         return;
     }
 
@@ -118,18 +127,25 @@ pub unsafe fn init_smp() {
     }
 
     if ap_expected == 0 {
-        k_nano::slog_nano!("SMP", "info", "Nenhum AP detectado (MADT). SMP single-core.");
-        k_nano::smp::corepools::init_from_boot(bsp_lapic_id, 0);
+        finish_bsp_only(bsp_lapic_id, "smp: no MADT APs");
         return;
     }
 
+    crate::display::fb::boot_ckpt(22, "smp: alloc tramp");
     let tramp_phys = {
         let mut guard = memory::GLOBAL_ALLOCATOR.lock();
-        let alloc = guard.as_mut().expect("Frame allocator not initialized");
-        let frame = alloc
-            .allocate_below_1mb()
-            .expect("Failed to allocate trampoline page below 1 MB");
-        frame.start_address().as_u64()
+        let Some(alloc) = guard.as_mut() else {
+            finish_bsp_only(bsp_lapic_id, "smp: no frame alloc");
+            return;
+        };
+        match alloc.allocate_below_1mb() {
+            Some(frame) => frame.start_address().as_u64(),
+            None => {
+                drop(guard);
+                finish_bsp_only(bsp_lapic_id, "smp: no lowmem tramp");
+                return;
+            }
+        }
     };
     k_nano::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
 
@@ -140,6 +156,8 @@ pub unsafe fn init_smp() {
     let stack_64_top =
         ap_base + (percpu::CPU_COUNT.load(Ordering::Relaxed) as u64) * stack_per_ap;
 
+    // Identity-map o físico do trampoline (não hardcode 0x40000 — UEFI reserva lowmem).
+    crate::display::fb::boot_ckpt(22, "smp: map tramp");
     {
         let phys_offset = memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
         let (l4_frame, _) = x86_64::registers::control::Cr3::read();
@@ -149,18 +167,32 @@ pub unsafe fn init_smp() {
         let page_table = &mut *page_table_ptr;
         let mut mapper = OffsetPageTable::new(page_table, VirtAddr::new(phys_offset));
 
-        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(0x40000));
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(tramp_phys));
         let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(tramp_phys));
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
 
         let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
-        let allocator = guard.as_mut().unwrap();
-        mapper
-            .map_to(page, frame, flags, &mut *allocator)
-            .unwrap()
-            .flush();
+        let Some(allocator) = guard.as_mut() else {
+            drop(guard);
+            finish_bsp_only(bsp_lapic_id, "smp: map no alloc");
+            return;
+        };
+        match mapper.map_to(page, frame, flags, &mut *allocator) {
+            Ok(flush) => flush.flush(),
+            Err(e) => {
+                // Já mapeado (identity UEFI) — ok; outro erro → BSP-only
+                let _ = e;
+                k_nano::slog_nano!(
+                    "SMP",
+                    "warn",
+                    "map_to tramp 0x{:x} falhou/ja-existe — tenta SIPI mesmo assim",
+                    tramp_phys
+                );
+            }
+        }
     }
 
+    crate::display::fb::boot_ckpt(22, "smp: init tramp");
     let percpu_addr = percpu::BSP_PCPU.get() as u64;
     trampoline::init_trampoline(tramp_phys, cr3_val, stack_64_top, percpu_addr, ap_entry);
     let tsize = trampoline::trampoline_size();
@@ -173,6 +205,30 @@ pub unsafe fn init_smp() {
     );
 
     let tramp_vector = (tramp_phys >> 12) as u8;
+    if tramp_phys >= 0x100000 || tramp_vector == 0 {
+        finish_bsp_only(bsp_lapic_id, "smp: bad tramp vector");
+        return;
+    }
+
+    // HW real (foto 2026-07-19): hang em shorthand INIT-SIPI (all excl self).
+    // Trampoline alloc/map/init OK — APs ficam deferred até SIPI por LAPIC ID (MADT).
+    // QEMU/TCG/KVM ainda exercitam o path completo abaixo.
+    if matches!(
+        k_nano::platform_probe::hypervisor(),
+        k_nano::platform_probe::HypervisorKind::None
+    ) {
+        k_nano::slog_nano!(
+            "SMP",
+            "info",
+            "BareMetal: skip INIT-SIPI (shorthand hang) tramp=0x{:x} APs_madt={} — BSP-only",
+            tramp_phys,
+            ap_expected
+        );
+        finish_bsp_only(bsp_lapic_id, "smp: sipi skip baremetal");
+        return;
+    }
+
+    crate::display::fb::boot_ckpt(22, "smp: INIT-SIPI");
     k_nano::slog_nano!(
         "SMP",
         "info",
@@ -180,23 +236,28 @@ pub unsafe fn init_smp() {
         tramp_vector
     );
 
+    crate::display::fb::boot_ckpt(22, "smp: send INIT");
     apic::send_init_ipi();
     apic::wait_for_ipi_delivery();
     busy_wait_us(10000);
 
+    crate::display::fb::boot_ckpt(22, "smp: deassert");
     apic::send_init_deassert_ipi();
     apic::wait_for_ipi_delivery();
     busy_wait_us(200);
 
+    crate::display::fb::boot_ckpt(22, "smp: SIPI#1");
     apic::send_sipi(tramp_vector);
     apic::wait_for_ipi_delivery();
     busy_wait_us(200);
 
+    crate::display::fb::boot_ckpt(22, "smp: SIPI#2");
     apic::send_sipi(tramp_vector);
     apic::wait_for_ipi_delivery();
     busy_wait_us(50000);
 
     let ap_woke = AP_ENTRY_COUNTER.load(Ordering::Relaxed);
+    crate::display::fb::boot_ckpt(23, "smp: sipi done");
     k_nano::slog_nano!("SMP", "info", "APs acordados: {}", ap_woke);
     k_nano::smp::corepools::init_from_boot(bsp_lapic_id, ap_woke.min(255) as u8);
     let workers = (ap_woke as usize).saturating_add(1).min(8);

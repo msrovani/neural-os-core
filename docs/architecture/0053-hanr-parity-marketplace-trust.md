@@ -52,4 +52,15 @@ Messaging gateway 20+, Docker/Modal, Honcho, FTS5, scrape genérico do Skills Hu
 
 **Residuals:** TCP listener MCP pleno; FTS5; scrape genérico Skills Hub.
 
-Dependências: ADR-0051 (hub), ADR-0052 (contrato), ADR-0041 CapGate (sandbox parcial).
+### Slot v3 — Device LEGO catalog (ADR-0056)
+
+Quando houver volume de recipes/FW na rede, estender `/market fetch` (Wave 3) com allowlist:
+
+- HF org `aios-k2chj` (datasets/models + futuros `device-recipe-seeds`)
+- linux-firmware mirror / NetFs peer
+- Fluxo: fetch → sandbox → re-sign session → NeuralFS `ecosystem/devices/` + `ecosystem/firmware/` → retoma UnlockDAG
+
+Interface futura: `LegoCatalogSource { Local, HttpAllowlist, NetFsPeer, SkynetMesh }`.  
+**Não implementado neste MVP** — só encaixe documental; Install ≠ Ready.
+
+Dependências: ADR-0051 (hub), ADR-0052 (contrato), ADR-0041 CapGate (sandbox parcial), ADR-0056 (LEGO).

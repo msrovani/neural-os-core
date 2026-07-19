@@ -13,13 +13,34 @@ import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SIZE_MB = 1024
+DEFAULT_SIZE_MB = 3072  # 3GB dados (arquivo FAT32 máx ~4GB-1; partição pode ser maior)
 PART_LBA = 2048
 BPS = 512
 # 8 setores/cluster = 4 KiB (shift=3) — alinhado ao parser do kernel
 SPC_SHIFT = 3
 SPC = 1 << SPC_SHIFT
 CLUSTER_BYTES = BPS * SPC
+
+
+def pack_llm_set() -> set[str]:
+    """PACK_LLM=850|13|2b|3b|all — default 850 (primeiro degrau)."""
+    raw = os.environ.get("PACK_LLM", "850").strip().lower()
+    if not raw or raw in ("none", "0", "off"):
+        return set()
+    if raw in ("all", "*"):
+        return {"850", "13", "2b", "3b"}
+    out: set[str] = set()
+    for tok in raw.replace(";", ",").split(","):
+        t = tok.strip().lower().replace(" ", "")
+        if t in ("850", "850m", "fast", "large"):
+            out.add("850")
+        elif t in ("13", "1.3", "1p3", "1.5", "xl", "1.58", "158"):
+            out.add("13")
+        elif t in ("2b", "2", "2.0"):
+            out.add("2b")
+        elif t in ("3b", "3", "pro"):
+            out.add("3b")
+    return out
 
 
 def find_file(name: str):
@@ -36,38 +57,61 @@ def find_file(name: str):
     return None
 
 
+def find_large(name: str, min_bytes: int = 1_000_000):
+    p = find_file(name)
+    if p and os.path.getsize(p) >= min_bytes:
+        return p
+    return None
+
+
+def find_bitnet_13():
+    return find_large("BITNET13.BIN") or find_large("bitnet_1p3b.bitnet")
+
+
+def find_bitnet_850():
+    return (
+        find_large("BITNET850.BIN")
+        or find_large("bitnet_850m.bitnet")
+        or find_large("MICRO.BIN")
+    )
+
+
+def find_bitnet_3b():
+    return find_large("BITNET3B.BIN") or find_large("bitnet_3B.bitnet")
+
+
 def align_up(v: int, a: int) -> int:
     return (v + a - 1) // a * a
 
 
 def collect_files() -> list[tuple[str, bytes | str | None]]:
+    llm = pack_llm_set()
+    print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
     files: list[tuple[str, bytes | str | None]] = [
         ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin")),
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet")),
-        (
-            "BITNET2B.BIN",
-            find_file("bitnet_2B.bitnet")
-            or find_file("BITNET2B.BIN")
-            or find_file("BITNET-2B.BITNET")
-            or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet"),
-        ),
-        (
-            "BITNET.BIN",
-            find_file("BITNET.BIN")
-            if find_file("BITNET.BIN")
-            and find_file("BITNET.BIN")
-            != (find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN"))
-            else None,
-        ),
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
         ("BPE.BIN", find_file("bpe_vocab.bin") or find_file("BPE.BIN")),
-        ("MICRO.BITNET", find_file("MICRO.BITNET") or find_file("target/MICRO.BITNET")),
-        ("MICRO.BIN", find_file("MICRO.BITNET")),
+        ("BITNET13.BIN", find_bitnet_13() if "13" in llm else None),
+        ("BITNET850.BIN", find_bitnet_850() if "850" in llm else None),
+        (
+            "BITNET2B.BIN",
+            (find_file("bitnet_2B.bitnet")
+            or find_file("BITNET2B.BIN")
+            or find_file("BITNET-2B.BITNET")
+            or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet"))
+            if "2b" in llm else None,
+        ),
+        ("BITNET.BIN", None),
+        ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
+        ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
     ]
+    # ADR-0056: LEGOs cedo no root (antes do walk firmware) — evita "sem slot dir"
+    _inject_device_legos(files)
     fw_root = os.path.join(ROOT, "firmware")
     if os.path.isdir(fw_root):
         for root, _dirs, fnames in os.walk(fw_root):
@@ -95,6 +139,18 @@ def collect_files() -> list[tuple[str, bytes | str | None]]:
     ).encode()
     files.append(("CONFIG.TXT", config))
     return files
+
+
+def _inject_device_legos(files: list) -> None:
+    tools_dir = os.path.join(ROOT, "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    try:
+        from pack_device_legos import append_lego_files
+
+        append_lego_files(files)
+    except Exception as e:
+        print(f"[LEGO] ERROR inject skipped: {e}")
 
 
 def utf16le(s: str) -> bytes:

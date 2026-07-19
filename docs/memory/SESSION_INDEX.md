@@ -1,4 +1,4 @@
-# SESSION INDEX — neural-os-core v1.9.0 TEST
+# SESSION INDEX — neural-os-core v1.9.1 TEST
 
 **Propósito:** Catálogo de sessões. A pasta viva `docs/memory/` mantém `SESSION_107+`; sessões históricas anteriores ficam em `docs/archive/sessions/`.
 
@@ -8,6 +8,15 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 162 | LLM | BitNet ladder 850 | #PF AVX2 + BPE SP32/MRG1 | OOB store n%4; encode=HF; coh semântica residual |
+| 161 | WiFi | ath10k A3 | BMI→fw_ready | CE0/1+LZ; FW_IMAGE 681KB; PASS só FW_IND pós-DONE |
+| 160 | WiFi | ath10k | pivô Note1050 QCA6174 | 168C:003E; FW 1.45MB; BMI/CE scaffold; iwl secondary |
+| 159 | WiFi | S0+prepS1 | honesty + DID/FAT | VERDICT AWAITING; fw_resolve=SKIP QEMU; sem ALIVE |
+| 158 | TLS | N4 | #123 PKI híbrido | pins+TOFU; smoke root_learn→root_pin; CertVerify residual |
+| 157 | TLS | N4 | #123 smoke PASS | google HTTPS 80952 B; WHPX qemu64; soft polyval/aes/sha2 |
+| 156 | TLS | N4 | #123 wire https_get | NetTcpIo+KernelRng; VERDICT=WIRED trust=unsecure |
+| 155 | TLS | — | #123 probe A PASS | `embedded-tls` 0.19 soft-float ✅ `tools/check-tls` |
+| 154 | pesquisa | — | TLS #123 (B) + WiFi firmware/plano | Opções A–D N4; API77 ~7,51 MB; FW-MAC; S0–S5; #408 reclass |
 | 153 | release | — | **v1.9.0 TEST** | Pós-LAN + Residuals 0–7; tag v1.9.0; ≠ v2.0.0 |
 | 152 | Pós-LAN | — | B-01 fila unlock ondas 0–5 | net_bridge; NetFs PASS; TLS BLOCKED; deadlock NETSTACK pós-L5 fix |
 | 151 | planos | — | Fecho Residuals 0–7 | PreFlight pass_marker; LAN✅; WiFi AWAITING; TLS/418 PARTIAL |
@@ -92,7 +101,9 @@ Estes são caminhos já trilhados que terminaram em dead-end ou soluções já e
 
 3e. **Deadlock NETSTACK (SESSION_152):** `smoke_if_online`/`tcp_exchange` **dentro** de `NETSTACK.lock()` em `bootstrap_early` → hang pós-L5. Smoke só **após** return do bootstrap.
 
-3f. **HTTPS fake (SESSION_152):** **nunca** strip `https://`→porta 80. Stub `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate` até TLS real.
+3f. **HTTPS / TLS soft-float (SESSION_152–157):** **nunca** strip `https://`→:80. Build precisa `polyval_force_soft`+`aes_force_soft`+`sha2/force-soft` (LLVM CLMUL). Smoke: WHPX `-cpu qemu64` (não `host`/APX); TCG soft-AES muito lento.
+
+3g. **iwlwifi ≠ SoftMAC clássico (SESSION_154):** AX200/210 = **FW MAC**; ACK no firmware. Não priorizar Embassy/#408 como SoftMAC ACK ~10µs (ath9k). Plano S0–S5; gap `.pnvm`.
 
 4. **Ramdisk via bootloader (Sprint 79):** FAT partition autosized ~64MB insuficiente para modelos >100MB. **Usar QEMU loader (`-device loader,addr=0x100000000`) para dev, NVMe/FAT32 para HW real.**
 

@@ -327,6 +327,9 @@ Mount canônico: `/mnt/neural` (NeuralFsAgent). Namespace de pacotes:
     MCP.md                # tools/resources → bridge EventBus
   models/                 # .bitnet / pesos (read; update = Confirm)
   firmware/               # FW blobs HW (read; write = Escalate)
+  devices/<name>/         # ADR-0056 DeviceRecipe (LEGO HW)
+    RECIPE.md             # kind: device-recipe + signature
+    references/           # cites / serial (opcional)
 ```
 
 | Pasta | Propósito | FS default | Consumidor |
@@ -338,8 +341,9 @@ Mount canônico: `/mnt/neural` (NeuralFsAgent). Namespace de pacotes:
 | `mcp/` | Tools externos | RW + Escalate | McpAgent |
 | `models/` | Inferência | R (W Confirm) | Cortex |
 | `firmware/` | HW bring-up | R (W Escalate) | SelfHeal / GPU FW |
+| `devices/` | DeviceRecipe LEGO (bind+stages) | RW + Escalate | PackageHub / k-hal bind |
 
-**Bootstrap:** `NeuralFsAgent` cria `ecosystem/{skills,agents,workflows,plugins,mcp,models,firmware}` após mount (RAM/ATA/USB). Nomes de dir entry ≤22 bytes; paths lógicos longos são codificados no VFS.
+**Bootstrap:** `NeuralFsAgent` cria `ecosystem/{skills,agents,workflows,plugins,mcp,models,firmware,devices}` após mount (RAM/ATA/USB). Nomes de dir entry ≤22 bytes; paths lógicos longos são codificados no VFS. Detalhe LEGO: `docs/specs/device-lego/NEURALFS_LAYOUT.md`.
 
 **Disco de dados ≠ namespace:** `disk_*.raw` (exFAT flat via `mkexfat.py`) carrega modelos/firmware no root. PackageHub **não** lê exFAT — só NeuralFS `/mnt/neural`. Seed de agentes = embutido (`include`/`agency_seed`) + persist opcional no NeuralFS.
 

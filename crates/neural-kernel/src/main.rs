@@ -141,6 +141,10 @@ mod net;
 
 mod netstack;
 
+mod tls_client;
+
+mod tls_trust;
+
 mod slip;
 
 mod env;
@@ -958,6 +962,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "intent_router" => Some(Box::new(agents::HermesAgent::new())),
                 "hermes_console" => Some(Box::new(display::agent::DisplayAgent::new())),
                 "display" => Some(Box::new(display::agent::DisplayAgent::new())),
+                "sys_metrics" => Some(Box::new(display::metrics_agent::MetricsAgent::new())),
                 "cron" => Some(Box::new(cron::CronAgent::new())),
                 "mcp" => Some(Box::new(mcp::McpAgent::new())),
                 "security" => Some(Box::new(security::SecurityAgent::new())),
@@ -1536,18 +1541,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::net::log_tls_status_boot();
     // NetFs #418 smoke (best-effort; also from network_agent after L5_OK)
     crate::netfs::smoke_if_online();
-    publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP smoke)");
+    // TLS N4 smoke — só com L5_OK; fora do lock do bootstrap
+    crate::net::smoke_https_if_online();
+    publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP/TLS smoke)");
 
     let ata_found = {
-
         let ata_dev = unsafe { ata::AtaDriver::probe() };
-
         let is_some = ata_dev.is_some();
-
+        // Espelha em k_nano — k_hal LEGO/fat_assets leem k_nano::ATA_DRIVER
+        if let Some(ref a) = ata_dev {
+            *k_nano::ATA_DRIVER.lock() = Some(k_nano::ata::AtaDriver {
+                io_base: a.io_base,
+                pci_bus: a.pci_bus,
+                pci_device: a.pci_device,
+                pci_func: a.pci_func,
+                slave: a.slave,
+            });
+            k_nano::slog_bin!(
+                "Disk",
+                "ata",
+                "k_nano ATA mirror slave={} io={:#x}",
+                a.slave,
+                a.io_base
+            );
+        }
         *ATA_DRIVER.lock() = ata_dev;
-
         is_some
-
     };
 
     publish_boot_phase(BootPhase::DriverInit, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
@@ -1608,6 +1627,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             crate::display::fb::boot_ckpt(16, "USB-MSC OK");
         } else {
             crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
+            // Honestidade: xHCI sobe controller; enum+BOT do stick ainda residual.
+            k_nano::slog_nano!(
+                "USB",
+                "msc",
+                "AUSENTE — xHCI sem Address Device/BOT no stick (residual); boot continua"
+            );
         }
         *crate::USB_MSC.lock() = msc;
         crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
@@ -1714,7 +1739,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::display::fb::boot_ckpt(36, "package_hub");
     crate::package_hub::init_package_hub();
     crate::display::fb::boot_ckpt(37, "hub ok");
-    // Snapshot intermediário se ainda sem FAT (antes de paths que podem hang).
+    // Sem MSC/ATA: ramlog + foto curta, mas NAO soft-reboot (bloqueava JARVIS no HW).
     if crate::USB_MSC.lock().is_none() && crate::ATA_DRIVER.lock().is_none() {
         crate::boot_logger::maybe_uefi_flush_reboot("K37 hub ok — sem MSC/ATA");
     }
@@ -1732,10 +1757,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let has_fat_block = crate::ATA_DRIVER.lock().is_some() || crate::USB_MSC.lock().is_some();
     if !has_fat_block {
         crate::display::fb::boot_ckpt(38, "sem MSC/ATA — skip FAT");
-        k_nano::slog_nano!("FAT", "info", "sem ATA/USB-MSC — skip FAT models; BOOT.LOG via soft-reboot UEFI");
-        crate::boot_logger::log("BOOT: skip FAT models; requesting UEFI BOOT.LOG flush");
-        // Soft-reboot 1×: bootloader grava E:\BOOT.LOG real; 2ª passagem continua o boot.
-        crate::boot_logger::maybe_uefi_flush_reboot("K38 no ATA/USB-MSC");
+        k_nano::slog_nano!(
+            "FAT",
+            "info",
+            "sem ATA/USB-MSC — skip FAT models; continue AgentFleet (MSC residual)"
+        );
+        crate::boot_logger::log("BOOT: skip FAT models; continue without soft-reboot");
+        // Já avisou em K37; skip_flush evita 2ª pausa.
+        if !k_nano::boot_ramlog::skip_flush_reboot() {
+            crate::boot_logger::maybe_uefi_flush_reboot("K38 no ATA/USB-MSC");
+        }
     }
 
     // Carrega modelos do FAT32: BGE.BIN — tenta AHCI primeiro, fallback ATA
@@ -1972,6 +2003,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _khal_n = k_hal::init();
     k_hal::virtio::init_h4_log();
     k_hal::cap_gate::demo_h5_deny();
+    // ADR-0056: 4 LEGOs na FAT — localize + utilize bind table (≠ Ready)
+    k_hal::lego_boot::boot_selftest();
     // ADR-0041 Fase 4: AS R1/R3 shallow (PoC non-fatal)
     crate::address_space::demo_as_r1_r3_shallow();
 
@@ -2279,6 +2312,26 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     registry.register(Box::new(agents::InputAgent::new()));
 
+    // Mouse ANTES do Hermes: Continuous na ordem de registro. Hermes THINK
+    // soft-float bloqueia o scheduler — mouse depois do Hermes nunca polla.
+    // Posição também atualiza no IRQ (MOUSE_ABS_*) independente do tick.
+    k_nano::slog_bin!("Boot", "register", "MouseAgent");
+    registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
+
+    // Display + Metrics ANTES do Hermes: Continuous ring0 polla por ordem de
+    // registro. Hermes THINK/LLM soft-float pode bloquear o tick por minutos —
+    // se Display vier depois, o orb/HUD nunca sobe (QEMU e HW). Claim graphics
+    // só no 1º tick do Display (K* de boot permanece no FB até lá).
+    display::fb::fb_remap_uc();
+    crate::display::fb::boot_ckpt(40, "pos fb_remap");
+    crate::display::fb::boot_ckpt(41, "antes DisplayAgent");
+    k_nano::slog_bin!("Boot", "register", "DisplayAgent");
+    registry.register(Box::new(display::agent::DisplayAgent::new()));
+    crate::display::fb::boot_ckpt(42, "DisplayAgent OK");
+    k_nano::slog_bin!("Boot", "register", "MetricsAgent");
+    registry.register(Box::new(display::metrics_agent::MetricsAgent::new()));
+    crate::display::fb::boot_ckpt(51, "MetricsAgent OK");
+
     k_nano::slog_bin!("Boot", "register", "HermesAgent");
 
     registry.register(Box::new(agents::HermesAgent::new()));
@@ -2301,39 +2354,36 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
-    // DisplayAgent + Apps
-
-    // Re-mapeia framebuffer como UC antes do DisplayAgent comecar a desenhar
-
-    display::fb::fb_remap_uc();
+    // Display/Metrics já registrados antes do Hermes (ver acima).
 
     kjson!("BOOT", "AGENTS", "www", "search", 1);
 
-    k_nano::slog_bin!("Boot", "register", "DisplayAgent");
-
-    registry.register(Box::new(display::agent::DisplayAgent::new()));
-
     k_nano::slog_bin!("Boot", "register", "VisionAgent");
-
     registry.register(Box::new(vision_agent::VisionAgent::new()));
+    crate::display::fb::boot_ckpt(43, "VisionAgent OK");
 
     k_nano::slog_bin!("Boot", "register", "JarvisAgent");
-
     registry.register(Box::new(audio::jarvis::JarvisAgent::new()));
+    crate::display::fb::boot_ckpt(44, "JarvisAgent OK");
+    // HW sem MSC: saudacao + BOOT.LOG AGORA (hang comum logo apos K44 nos agents audio).
+    audio::jarvis::emit_hw_greeting_at_register();
 
+    crate::display::fb::boot_ckpt(45, "antes JarvisVoice");
     k_nano::slog_bin!("Boot", "register", "JarvisVoiceAgent");
-
     registry.register(Box::new(audio::voice::JarvisVoiceAgent::new()));
+    crate::display::fb::boot_ckpt(46, "JarvisVoice OK");
 
     k_nano::slog_bin!("Boot", "register", "WakeWordAgent");
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
+    crate::display::fb::boot_ckpt(47, "WakeWord OK");
 
     k_nano::slog_bin!("Boot", "register", "AudioPipelineAgent (barge-in)");
     registry.register(Box::new(audio::pipeline::AudioPipelineAgent::new()));
+    crate::display::fb::boot_ckpt(48, "AudioPipeline OK");
 
     k_nano::slog_bin!("Boot", "register", "AudioMixerAgent");
-
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
+    crate::display::fb::boot_ckpt(49, "AudioMixer OK");
 
     k_nano::slog_bin!("Boot", "register", "CronAgent");
 
@@ -2358,8 +2408,6 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     k_nano::slog_bin!("Boot", "register", "OptimizerAgent");
 
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
-
-    registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
 
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
 
@@ -2458,25 +2506,41 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
 
     // N3: QEMU -device loader ANTES do FAT — PIO de ~200MB no TCG trava/é inviável.
-    // Host: -device loader,file=target/bitnet_2B.bitnet,addr=0x100000000 + -m 6G
-    // Tamanho EXATO via FAT lookup (slice > arquivo → #PF / parse FAIL).
+    // Host: -device loader,file=<bitnet>,addr=0x100000000 + -m 6G+
+    // Tamanho EXATO via FAT (850/13/2B/3B) — slice > arquivo mapeado → #PF no forward.
     if !model_loaded {
         let load_addr: u64 = 0x100000000;
         let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
         let mem_has_4gb = boot_info.memory_regions.iter().any(|r| r.start <= load_addr && r.end > load_addr);
-        let fat_2b_sz: Option<usize> = unsafe {
+        let (fat_name, fat_sz): (Option<&'static str>, Option<usize>) = unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
-            (*ata_guard).as_ref().and_then(|ata| {
+            (*ata_guard).as_ref().map(|ata| {
                 let parts = crate::fat32::read_mbr(ata);
                 for p in &parts {
-                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                    if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                        continue;
+                    }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                        if let Some(sz) = fs.lookup_file_size("BITNET2B.BIN") { return Some(sz); }
-                        if let Some(sz) = fs.lookup_file_size("BITNET.BIN") { return Some(sz); }
+                        // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
+                        for name in &[
+                            "BITNET850.BIN",
+                            "BITNET13.BIN",
+                            "BITNET2B.BIN",
+                            "BITNET3B.BIN",
+                            "BITNET.BIN",
+                            "MICRO.BIN",
+                        ] {
+                            if let Some(sz) = fs.lookup_file_size(name) {
+                                if sz >= 1_000_000 {
+                                    return (Some(*name), Some(sz));
+                                }
+                            }
+                        }
                     }
                 }
-                None
+                (None, None)
             })
+            .unwrap_or((None, None))
         };
         if mem_has_4gb {
             let probe_ptr = (load_addr + pm_offset) as *const u8;
@@ -2487,19 +2551,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             k_nano::slog_bin!("Asset", "ramdisk", "Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
             let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
             if qemu_magic == 0xBE11BE11 {
-                // Host: target/bitnet_2B.bitnet re-export q_dim=2560 (~577MB).
-                // FAT legado ~203MB NÃO pode fatiar o loader — truncava e load_model FAIL.
+                // Fallback so se FAT nao tiver blob (loader-only legacy 2B).
                 const BITNET_2B_V4_BYTES: usize = 604_856_373;
-                let mut model_len = match fat_2b_sz {
-                    Some(sz) if sz >= 400 * 1024 * 1024 => sz,
-                    Some(sz) => {
-                        k_nano::slog_bin!("Asset", "ramdisk", "FAT BITNET2B size={}KB legado — using host V4 {}KB",
-                            sz / 1024,
-                            BITNET_2B_V4_BYTES / 1024);
-                        BITNET_2B_V4_BYTES
-                    }
-                    None => BITNET_2B_V4_BYTES,
-                };
+                let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
                 for r in boot_info.memory_regions.iter() {
                     if r.start <= load_addr && r.end > load_addr {
                         let region = (r.end - load_addr) as usize;
@@ -2510,16 +2564,37 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         break;
                     }
                 }
-                k_nano::slog_bin!("Asset", "ramdisk", "QEMU loader: BITNET2B magic OK @0x100000000 exact={}KB fat={:?}",
+                k_nano::slog_bin!(
+                    "Asset",
+                    "ramdisk",
+                    "QEMU loader: magic OK @0x100000000 exact={}KB fat={:?} name={:?}",
                     model_len / 1024,
-                    fat_2b_sz.map(|s| s / 1024));
+                    fat_sz.map(|s| s / 1024),
+                    fat_name
+                );
                 if model_len > 1024 {
                     let model_data = unsafe { core::slice::from_raw_parts(probe_ptr, model_len) };
-                    k_nano::slog_bin!("Asset", "ramdisk", "QEMU loader: load_model slice={}KB...", model_len / 1024);
-                    if let Some(big_model) = crate::cortex::load_model(model_data) {
+                    // Copia + LEAK: load_model faz zero-copy nos pesos; dropar o Vec
+                    // apos set_model deixava dangling → #PF no FWD (CR2 heap liberado).
+                    k_nano::slog_bin!(
+                        "Asset",
+                        "ramdisk",
+                        "QEMU loader: copying {}KB -> heap (leak backing) then load_model...",
+                        model_len / 1024
+                    );
+                    let owned: alloc::vec::Vec<u8> = model_data.to_vec();
+                    let leaked: &'static [u8] = alloc::boxed::Box::leak(owned.into_boxed_slice());
+                    if let Some(big_model) = crate::cortex::load_model(leaked) {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                        k_nano::slog_bin!("Asset", "ramdisk", "LLM LOADED file=BITNET2B (QEMU-loader @0x100000000) size={}KB", model_len / 1024);
-                        crate::boot_logger::log("BOOT: QEMU loader BitNet 2B loaded");
+                        let tag = fat_name.unwrap_or("BITNET2B.BIN");
+                        k_nano::slog_bin!(
+                            "Asset",
+                            "ramdisk",
+                            "LLM LOADED file={} (QEMU-loader@4G->heap-leak) size={}KB",
+                            tag,
+                            leaked.len() / 1024
+                        );
+                        crate::boot_logger::log("BOOT: QEMU loader BitNet loaded");
                         model_loaded = true;
                     } else {
                         k_nano::slog_bin!("RAMDISK", "info", "QEMU loader: load_model FAILED");
@@ -2537,13 +2612,13 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                     let magic2 = unsafe { core::ptr::read_volatile(probe2) };
                     if magic2 == 0xBE11BE11 {
                         const BITNET_2B_V4_BYTES: usize = 604_856_373;
-                        let model_len2 = fat_2b_sz
-                            .filter(|&sz| sz >= 400 * 1024 * 1024)
+                        let model_len2 = fat_sz
+                            .filter(|&sz| sz >= 50 * 1024 * 1024)
                             .unwrap_or(BITNET_2B_V4_BYTES);
                         let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
                         if let Some(big_model) = crate::cortex::load_model(model_data2) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                            k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=BITNET2B (QEMU-loader @0x120000000)");
+                            k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=BITNET (QEMU-loader @0x120000000)");
                             model_loaded = true;
                         }
                     }
@@ -2579,8 +2654,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         const PIO_QEMU: usize = 48 * 1024 * 1024;
                         const PIO_HW: usize = 700 * 1024 * 1024;
                         let pio_cap = if qemu_loader_2b { PIO_QEMU } else { PIO_HW };
-                        for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
+                        // Preferência chat: 1.3B → 850 → 2B/3B. Stub MICRO.BITNET por último.
+                        // Degrau: PACK_LLM=850 só empacota 850; depois 13, 2b, 3b.
+                        // Modelos GGUF grandes: /model (AirLLM ATA) em vez de PIO full-RAM.
+                        for name in &[
+                            "BITNET13.BIN",
+                            "BITN13.BIN",
+                            "BITNET850.BIN",
+                            "BITN850.BIN",
+                            "MICRO.BIN",
+                            "BITNET2B.BIN",
+                            "BITNET3B.BIN",
+                            "BITNET.BIN",
+                            "MICRO.BITNET",
+                        ] {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
+                            // Stub ~13KB não serve para chat fluente
+                            if *name == "MICRO.BITNET" && sz < 1_000_000 {
+                                k_nano::slog_nano!(
+                                    "FAT",
+                                    "info",
+                                    "{} size={}B — stub smoke, skip Active chat",
+                                    name,
+                                    sz
+                                );
+                                continue;
+                            }
                             if sz > pio_cap {
                                 k_nano::slog_nano!("FAT", "info", "{} PRESENT size={}KB — skip full PIO (cap={}MB; QEMU-loader ou --features hw)",
                                     name,
@@ -2620,8 +2719,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
                     const PIO_HW: usize = 700 * 1024 * 1024;
-                    for name in &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"] {
+                    for name in &[
+                        "BITNET13.BIN",
+                        "BITN13.BIN",
+                        "BITNET850.BIN",
+                        "BITN850.BIN",
+                        "MICRO.BIN",
+                        "BITNET2B.BIN",
+                        "BITNET3B.BIN",
+                        "BITNET.BIN",
+                        "MICRO.BITNET",
+                    ] {
                         let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
+                        if *name == "MICRO.BITNET" && fat_data.len() < 1_000_000 {
+                            continue;
+                        }
                         if fat_data.len() > PIO_HW {
                             k_nano::slog_nano!("FAT", "info", "USB {} PRESENT size={}KB — skip PIO",
                                 name,
@@ -2815,7 +2927,51 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             {
                 // Pode estar só marcado (pro-alias); ainda tenta blob dedicado
             }
-            const PIO_CAP: usize = 48 * 1024 * 1024;
+            // QEMU+loader 2B: cap 48MB no hub. HW / sem loader: até 700MB (850/2B/3B).
+            let qemu_loader_2b = {
+                let pm = crate::memory::PHYS_MEM_OFFSET
+                    .load(core::sync::atomic::Ordering::Relaxed);
+                if pm == 0 {
+                    false
+                } else {
+                    let va = (0x100000000u64 + pm) as *const u32;
+                    unsafe { core::ptr::read_volatile(va) == 0xBE11BE11 }
+                }
+            };
+            // Com QEMU-loader Active ja em RAM: NUNCA PIO do chat grande no hub
+            // (antes PIO_FAST=400MB relia BITNET850 e travava o boot por minutos/horas).
+            const PIO_FAST: usize = 400 * 1024 * 1024;
+            const PIO_HW: usize = 700 * 1024 * 1024;
+            const PIO_QEMU: usize = 48 * 1024 * 1024;
+            let pio_cap = if qemu_loader_2b {
+                match slot {
+                    crate::model_hub::ModelSlot::TinyStories => 32 * 1024 * 1024,
+                    _ => PIO_QEMU,
+                }
+            } else {
+                match slot {
+                    crate::model_hub::ModelSlot::GeneratorFast => PIO_FAST,
+                    crate::model_hub::ModelSlot::TinyStories => 32 * 1024 * 1024,
+                    _ => PIO_HW,
+                }
+            };
+            // Active ja veio do loader — nao duplicar GeneratorFast/Pro via FAT
+            if qemu_loader_2b
+                && crate::cortex::model_is_loaded()
+                && matches!(
+                    slot,
+                    crate::model_hub::ModelSlot::GeneratorFast
+                        | crate::model_hub::ModelSlot::GeneratorPro
+                )
+            {
+                k_nano::slog_bin!(
+                    "MODEL",
+                    "info",
+                    "hub skip {} — Active ja carregado via QEMU-loader",
+                    slot.name()
+                );
+                return;
+            }
             unsafe {
                 let ata_guard = crate::ATA_DRIVER.lock();
                 if let Some(ref ata) = *ata_guard {
@@ -2827,13 +2983,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                         if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                             for name in crate::model_hub::fat_names_for(slot) {
                                 let Some(sz) = fs.lookup_file_size(name) else { continue };
-                                if sz > PIO_CAP {
+                                if *name == "MICRO.BITNET" && sz < 1_000_000 {
+                                    continue;
+                                }
+                                if sz > pio_cap {
                                     k_nano::slog_bin!(
                                         "MODEL",
                                         "info",
-                                        "{} PRESENT {}KB — skip PIO (use QEMU-loader); slot={}",
+                                        "{} PRESENT {}KB — skip PIO (cap={}MB); slot={}",
                                         name,
                                         sz / 1024,
+                                        pio_cap / (1024 * 1024),
                                         slot.name()
                                     );
                                     continue;
@@ -2886,29 +3046,47 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         k_nano::slog_bin!("MODEL", "info", "{}", crate::model_hub::hub_status());
     }
 
+    // BPE vocab HF (BPB1) via QEMU-loader + FAT — ANTES do LLM-TEST
+    // (senão generate cai em CHAR vocab → ABAB / incoerente em BitNet 32k/128k).
+    if !crate::bpe::try_load_from_qemu_loader() {
+        let _ = crate::bpe::try_load_from_fat();
+    }
+
     // STT CTC tiny: QEMU-loader @0x163000000, depois FAT STT.BIN (HW real)
     if !crate::audio::stt::try_load_from_qemu_loader() {
         let _ = crate::audio::stt::try_load_from_fat();
     }
 
-    // LLM test + telemetria N1.1
+    // LLM test + telemetria N1.1 — ladder prompts (coerencia/tempo) no boot serial
     if model_loaded || crate::cortex::model_is_loaded() {
-        // BitNet 2B no soft-float: LLM-TEST completo demora demais no TCG — skip, STT path cobre.
-        let heavy = {
-            let g = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
-            g >= 2048
-        };
-        if heavy {
-            k_nano::slog_bin!("LLM-TEST", "info", "SKIP heavy 2B (boot path; enable weather-e2e for clima HIT)");
-        } else {
-            let r = crate::cortex::generate_via_model("hello");
-            k_nano::slog_bin!("LLM-TEST", "info", "loaded prompt='hello' response='{}'", r);
+        let prompts: &[&str] = &[
+            "ola",
+            "quanto e 2 mais 2",
+            "o que e neural os",
+        ];
+        // Ladder: 1 token-ish curto — soft-float WHPX em h=1536+ e lento; 3 prompts completos
+        // podem levar dezenas de min. Loga ticks por prompt para custo/tempo.
+        for (i, p) in prompts.iter().enumerate() {
+            let t0 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let r = crate::cortex::generate_via_model(p);
+            let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let ticks = t1.saturating_sub(t0);
+            k_nano::slog_bin!(
+                "LLM-TEST",
+                "info",
+                "#{}/{} prompt='{}' ticks={} (~{}s) response='{}'",
+                i + 1,
+                prompts.len(),
+                p,
+                ticks,
+                ticks / 100,
+                r
+            );
         }
         crate::load_status::set(
             crate::load_status::AssetKind::Llm,
             crate::load_status::LoadStatus::Loaded,
         );
-        // model_loaded already true from FAT/QEMU paths; load_status is the banner source.
     } else {
         k_nano::slog_bin!("LLM-TEST", "info", "no model — ABSENT");
         crate::boot_logger::log("BOOT: LLM ABSENT — sem ramdisk/loader/FAT modelo utilizavel");
@@ -2921,9 +3099,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     crate::load_status::print_status_banner();
 
-    // BPE vocab HF (BPB1) via QEMU-loader + FAT fallback (HW real)
-    if !crate::bpe::try_load_from_qemu_loader() {
-        let _ = crate::bpe::try_load_from_fat();
+    // BPE já tentado antes do LLM-TEST; se ainda ausente, retry (FAT tardio).
+    if !crate::bpe::is_loaded() {
+        if !crate::bpe::try_load_from_qemu_loader() {
+            let _ = crate::bpe::try_load_from_fat();
+        }
     }
 
     // N4/N5 skinny clima e2e — SOMENTE com feature `weather-e2e` (QEMU HIT).

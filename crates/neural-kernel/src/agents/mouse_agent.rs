@@ -8,6 +8,7 @@ use crate::EVENT_BUS;
 use crate::{Event, CapabilityToken};
 use alloc::string::String;
 use alloc::vec::Vec;
+use x86_64::instructions::port::Port;
 
 pub const TOPIC_MOUSE_MOVED: &str = "MOUSE_MOVED";
 pub const TOPIC_MOUSE_CLICK: &str = "MOUSE_CLICK";
@@ -22,6 +23,130 @@ const MOUSE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// Espera buffer de entrada do 8042 livre (bit1=0), com timeout.
+fn ps2_wait_write() {
+    for _ in 0..100_000 {
+        let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
+        if st & 0x02 == 0 {
+            return;
+        }
+    }
+}
+
+/// Espera dado no buffer de saída (bit0=1), com timeout.
+fn ps2_wait_read() -> bool {
+    for _ in 0..100_000 {
+        let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
+        if st & 0x01 != 0 {
+            return true;
+        }
+    }
+    false
+}
+
+fn ps2_drain() {
+    for _ in 0..16 {
+        let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
+        if st & 0x01 == 0 {
+            break;
+        }
+        let _: u8 = unsafe { Port::<u8>::new(0x60).read() };
+    }
+}
+
+/// Init PS/2 aux correto: reset + enable IRQ12 + stream (0xD4/0xF4).
+fn enable_ps2_mouse() {
+    unsafe {
+        ps2_drain();
+
+        // Enable auxiliary device interface
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xA8);
+
+        // Read controller config (cmd 0x20)
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0x20);
+        let mut cfg = if ps2_wait_read() {
+            Port::<u8>::new(0x60).read()
+        } else {
+            0x47
+        };
+        k_nano::slog_bin!("MOUSE", "info", "8042 cfg_before={:#04x}", cfg);
+        cfg |= 0x02; // IRQ12
+        cfg |= 0x01; // IRQ1
+        cfg &= !0x20; // mouse clock on
+        cfg &= !0x10; // keyboard clock on
+        // Write controller config (cmd 0x60)
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0x60);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(cfg);
+        k_nano::slog_bin!("MOUSE", "info", "8042 cfg_after={:#04x}", cfg);
+
+        // Reset mouse: 0xD4 / 0xFF → ACK FA, BAT AA, ID 00
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xFF);
+        for i in 0..3u32 {
+            if ps2_wait_read() {
+                let b: u8 = Port::<u8>::new(0x60).read();
+                k_nano::slog_bin!("MOUSE", "info", "reset_rsp[{}]={:#04x}", i, b);
+            }
+        }
+
+        // Enable data reporting: 0xD4 / 0xF4 → ACK FA
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xF4);
+        if ps2_wait_read() {
+            let ack: u8 = Port::<u8>::new(0x60).read();
+            k_nano::slog_bin!("MOUSE", "info", "enable_ack={:#04x} (expect 0xfa)", ack);
+        } else {
+            k_nano::slog_bin!("MOUSE", "info", "enable_ack=TIMEOUT");
+        }
+
+        // Diagnóstico: Status Request 0xE9 — se responder, o device vive;
+        // se nunca vier byte de movimento depois, o host QEMU não está injetando.
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xE9);
+        for i in 0..4u32 {
+            if ps2_wait_read() {
+                let b: u8 = Port::<u8>::new(0x60).read();
+                k_nano::slog_bin!("MOUSE", "info", "status_req[{}]={:#04x}", i, b);
+            } else {
+                k_nano::slog_bin!("MOUSE", "info", "status_req[{}]=TIMEOUT", i);
+                break;
+            }
+        }
+
+        // Re-enable stream após E9
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xF4);
+        if ps2_wait_read() {
+            let ack: u8 = Port::<u8>::new(0x60).read();
+            k_nano::slog_bin!("MOUSE", "info", "re_enable_ack={:#04x}", ack);
+        }
+    }
+    k_nano::slog_bin!("MOUSE", "info", "PS/2 mouse enabled (IRQ12 + stream).");
+    k_nano::interrupts::mouse_log_status("after_enable");
+}
+
+fn screen_max() -> (u16, u16) {
+    // Prefer FB real; fallback 1280x720 (QEMU cap).
+    if let Some(ref g) = *crate::display::fb::GPU.lock() {
+        let w = g.fb_width.saturating_sub(1).max(1) as u16;
+        let h = g.fb_height.saturating_sub(1).max(1) as u16;
+        return (w, h);
+    }
+    (1279, 719)
+}
+
 pub struct MouseAgent {
     x: u16,
     y: u16,
@@ -35,25 +160,9 @@ pub struct MouseAgent {
 
 impl MouseAgent {
     pub fn new() -> Self {
-        // Enable PS/2 mouse: command 0xA8, then set compaq status bit 1
-        unsafe {
-            // Write 0xA8 to 0x64 = enable mouse
-            x86_64::instructions::port::Port::new(0x64).write(0xA8u8);
-            // Write 0x60 to 0x64 = set compaq status
-            x86_64::instructions::port::Port::new(0x64).write(0x60u8);
-            // Read current status from 0x60
-            let mut st: u8 = 0;
-            core::arch::asm!("in al, dx", out("al") st, in("dx") 0x60u16, options(nostack, preserves_flags));
-            // Set bit 1 (enable mouse IRQ12)
-            st |= 0x02;
-            // Write back
-            x86_64::instructions::port::Port::new(0x60).write(st);
-            // Enable mouse packet streaming: 0xF4 to 0x60
-            x86_64::instructions::port::Port::new(0x60).write(0xF4u8);
-        }
-        k_nano::slog_bin!("MOUSE", "info", "PS/2 mouse enabled.");
         MouseAgent {
-            x: 640, y: 360,
+            x: 640,
+            y: 360,
             buttons: 0,
             prev_buttons: 0,
             dragging: false,
@@ -74,70 +183,75 @@ impl MouseAgent {
 }
 
 impl Agent for MouseAgent {
-    fn manifest(&self) -> &AgentManifest { &MOUSE_MANIFEST }
+    fn manifest(&self) -> &AgentManifest {
+        &MOUSE_MANIFEST
+    }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        // Read mouse packet from IRQ12 handler
-        let packet = LAST_MOUSE_PACKET.swap(0, core::sync::atomic::Ordering::Acquire);
-        if packet == 0 { return AgentTickResult::Pending; }
+        if !self.inited {
+            enable_ps2_mouse();
+            let (mw, mh) = screen_max();
+            self.x = mw / 2;
+            self.y = mh / 2;
+            *crate::display::compositor::MOUSE_X.lock() = self.x as usize;
+            *crate::display::compositor::MOUSE_Y.lock() = self.y as usize;
+            self.inited = true;
+        }
 
-        // Parse PS/2 3-byte packet (packed in u32: byte0 | (byte1<<8) | (byte2<<16))
+        // Poll aux + IRQ — WHPX às vezes atrasa IRQ12
+        k_nano::interrupts::mouse_poll_bytes();
+
+        let packet = LAST_MOUSE_PACKET.swap(0, core::sync::atomic::Ordering::Acquire);
+        if packet == 0 {
+            return AgentTickResult::Pending;
+        }
+
         let b0 = (packet & 0xFF) as u8;
         let b1 = ((packet >> 8) & 0xFF) as u8;
         let b2 = ((packet >> 16) & 0xFF) as u8;
 
-        // Byte 0: button flags
-        let new_buttons = b0 & 0x07; // bits: LMB=1, RMB=2, MMB=4
+        // Bit 3 do 1º byte deve ser 1 (sync). Se não, descarta.
+        if b0 & 0x08 == 0 {
+            return AgentTickResult::Pending;
+        }
 
-        // Bytes 1,2: delta X, Y (signed, 9-bit twos complement)
-        let raw_dx = b1 as i16;
-        let raw_dy = -(b2 as i16); // negate Y (screen coords: down=positive)
+        let new_buttons = b0 & 0x07;
+        let dx = b1 as i8 as i16;
+        let dy = -(b2 as i8 as i16); // tela: Y para baixo
 
-        let dx = if raw_dx & 0x80 != 0 { raw_dx - 256 } else { raw_dx };
-        let dy = if raw_dy & 0x80 != 0 { raw_dy - 256 } else { raw_dy };
+        // Posição canônica = IRQ (MOUSE_ABS_*). Não reaplicar delta (senão dobra).
+        use core::sync::atomic::Ordering;
+        self.x = k_nano::interrupts::MOUSE_ABS_X.load(Ordering::Acquire) as u16;
+        self.y = k_nano::interrupts::MOUSE_ABS_Y.load(Ordering::Acquire) as u16;
+        *crate::display::compositor::MOUSE_X.lock() = self.x as usize;
+        *crate::display::compositor::MOUSE_Y.lock() = self.y as usize;
 
-        // Scale sensitivity
-        let dx = dx / 2;
-        let dy = dy / 2;
-
-        // Update position (clamped to screen)
-        let _old_x = self.x;
-        let _old_y = self.y;
-        self.x = (self.x as i32 + dx as i32).max(0).min(1279) as u16;
-        self.y = (self.y as i32 + dy as i32).max(0).min(719) as u16;
-
-        // Always publish movement
         let mut payload = Vec::with_capacity(8);
         payload.extend_from_slice(&self.x.to_le_bytes());
         payload.extend_from_slice(&self.y.to_le_bytes());
-        payload.extend_from_slice(&(dx as i16).to_le_bytes());
-        payload.extend_from_slice(&(dy as i16).to_le_bytes());
+        payload.extend_from_slice(&dx.to_le_bytes());
+        payload.extend_from_slice(&dy.to_le_bytes());
         self.publish_mouse_event(TOPIC_MOUSE_MOVED, payload);
 
-        // Detect button state changes
         let pressed = new_buttons & !self.prev_buttons;
         let released = self.prev_buttons & !new_buttons;
         self.prev_buttons = new_buttons;
         self.buttons = new_buttons;
 
-        // Click event (on press)
         if pressed != 0 {
             let mut payload = Vec::with_capacity(5);
             payload.push(pressed);
             payload.extend_from_slice(&self.x.to_le_bytes());
             payload.extend_from_slice(&self.y.to_le_bytes());
             self.publish_mouse_event(TOPIC_MOUSE_CLICK, payload);
-
-            // Start drag
             self.dragging = true;
             self.drag_start_x = self.x;
             self.drag_start_y = self.y;
         }
 
-        // Release event → end drag
         if released != 0 && self.dragging {
             self.dragging = false;
-            let mut payload = Vec::with_capacity(6);
+            let mut payload = Vec::with_capacity(8);
             payload.extend_from_slice(&self.drag_start_x.to_le_bytes());
             payload.extend_from_slice(&self.drag_start_y.to_le_bytes());
             payload.extend_from_slice(&self.x.to_le_bytes());

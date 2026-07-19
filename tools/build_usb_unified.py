@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Gera imagem USB unificada (boot UEFI + dados exFAT/FAT32) para Rufus DD / um pendrive.
+"""Gera imagem USB unificada (boot UEFI + dados FAT32/exFAT) para Rufus DD / um pendrive.
 
 Layout (GPT + MBR amigavel a Windows removable):
   Part GPT 0 — ESP (conteudo de target/uefi.img / bootloader 0.11) — FAT
-  Part GPT 1 — dados (exFAT default ou FAT32 com --fat32)
+  Part GPT 1 — dados (FAT32 default — monta no Explorer; --exfat opcional)
   MBR slot0 — dados 0x0C/0x07 PRIMEIRO (Windows em pendrive ignora GPT e
     so monta MBR; 0xEE-only = nenhuma letra; 0xEE-primeiro = \"FS nao
     reconhecido\"). Slot1 — ESP 0xEF. UEFI boot usa a GPT.
@@ -16,6 +16,7 @@ Uso:
 
 Requer: target/uefi.img (cargo build --release -p boot) e modelos/firmware
         como em mkexfat.py / build_image.py --hw.
+        Device LEGO (ADR-0056): pack_device_legos.py + inject LEGO*.MD no volume.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SECTOR = 512
-DEFAULT_SIZE_MB = 1024
+DEFAULT_SIZE_MB = 3072  # 3GB partição dados (FAT32 file limit ≈4GB-1)
 
 # GPT type GUIDs (mixed-endian as stored on disk)
 GUID_ESP = bytes.fromhex("28732ac11ff8d211ba4b00a0c93ec93b")  # C12A7328-F81F-11D2-BA4B-00A0C93EC93B
@@ -289,6 +290,26 @@ def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
     env = os.environ.copy()
     env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = "hw"
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+
+    # ADR-0056: pack LEGOs antes do volume de dados
+    print("=== Device LEGO pack (ecosystem/devices -> target/lego) ===")
+    r_lego = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "tools", "pack_device_legos.py")],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r_lego.stdout:
+        sys.stdout.write(r_lego.stdout)
+        if not r_lego.stdout.endswith("\n"):
+            sys.stdout.write("\n")
+    if r_lego.returncode != 0:
+        print(f"[ERRO] pack_device_legos.py exit={r_lego.returncode}: {(r_lego.stderr or '')[:400]}")
+        sys.exit(r_lego.returncode)
+
     maker = "mkfat32.py" if use_fat32 else "mkexfat.py"
     fs_name = "FAT32" if use_fat32 else "exFAT"
     cmd = [
@@ -301,7 +322,7 @@ def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
         "--label",
         "NEURAL-OS",
     ]
-    print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) ===")
+    print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) + Device LEGO ===")
     r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
     if r.stdout:
         sys.stdout.write(r.stdout)
@@ -342,8 +363,18 @@ def main() -> None:
     p.add_argument("--uefi", default=None, help="Caminho uefi.img (default: target/uefi.img)")
     p.add_argument("--data-raw", default=None, help="Reusar disk_hw.raw em vez de regenerar")
     p.add_argument("--build-boot", action="store_true", help="Se falta uefi.img, roda cargo build -p boot")
-    p.add_argument("--fat32", action="store_true", help="Legado: particao de dados FAT32 (mkfat32)")
+    p.add_argument(
+        "--exfat",
+        action="store_true",
+        help="Particao de dados exFAT (Windows pode marcar RAW; default e FAT32)",
+    )
+    p.add_argument(
+        "--fat32",
+        action="store_true",
+        help="Particao FAT32 (default; redundante, so documenta)",
+    )
     args = p.parse_args()
+    use_fat32 = not args.exfat  # default FAT32 — Explorer monta; --exfat opt-in
 
     target_dir = os.path.join(ROOT, "target")
     os.makedirs(target_dir, exist_ok=True)
@@ -364,8 +395,8 @@ def main() -> None:
     if esp_src_lba != 34:
         print(f"[AVISO] ESP fonte em LBA {esp_src_lba}; unificado usa LBA {esp_start}")
     esp_end = esp_start + esp_sectors - 1
-    data_mbr_type = 0x0C if args.fat32 else 0x07
-    fs_name = "FAT32" if args.fat32 else "exFAT"
+    data_mbr_type = 0x0C if use_fat32 else 0x07
+    fs_name = "FAT32" if use_fat32 else "exFAT"
 
     with tempfile.TemporaryDirectory(prefix="nk_usb_") as tmp:
         if args.data_raw:
@@ -375,11 +406,11 @@ def main() -> None:
             part_lba_in_raw = 2048
         else:
             data_raw = os.path.join(tmp, "disk_hw.raw")
-            part_lba_in_raw = build_data_volume(args.size, data_raw, use_fat32=args.fat32)
+            part_lba_in_raw = build_data_volume(args.size, data_raw, use_fat32=use_fat32)
 
         data_file_sectors = os.path.getsize(data_raw) // SECTOR
         data_payload_sectors = data_file_sectors - part_lba_in_raw
-        min_payload = 65525 if args.fat32 else 4096 * 8  # exFAT: ~clusters min * SPC
+        min_payload = 65525 if use_fat32 else 4096 * 8  # exFAT: ~clusters min * SPC
         if data_payload_sectors < min_payload:
             raise SystemExit(f"[ERRO] particao de dados muito pequena para {fs_name}")
 
@@ -439,7 +470,7 @@ def main() -> None:
                     remaining -= len(chunk)
                 if remaining != 0:
                     raise SystemExit("[ERRO] copia incompleta da particao de dados")
-            if args.fat32:
+            if use_fat32:
                 patch_fat_bpb(f, data_start, data_sectors)
             else:
                 patch_exfat_vbr(f, data_start, data_sectors)

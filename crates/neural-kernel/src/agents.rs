@@ -192,33 +192,7 @@ impl InputAgent {
         });
     }
     fn handle_cad(&self) {
-        crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Triggered);
-        crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Triggered);
-        k_nano::slog_bin!("Sys", "info", "Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
-        let log = crate::serial::BOOT_LOG.lock();
-        let dump = log.dump();
-        if !dump.is_empty() {
-            k_nano::slog_bin!("Sys", "info", "Log: {} bytes capturados.", dump.len());
-            // Write log to SDHC via ATA
-            let ata = crate::ATA_DRIVER.lock();
-            if let Some(ref ata) = *ata {
-                if dump.len() <= 512 {
-                    let mut sector = [0u8; 512];
-                    sector[..dump.len()].copy_from_slice(dump);
-                    if unsafe { ata.write_sectors(crate::LOG_SECTOR, &sector, 1) } {
-                        k_nano::slog_bin!("Sys", "info", "Log escrito no setor LBA {} (512 bytes).", crate::LOG_SECTOR);
-                    } else { k_nano::slog_bin!("Sys", "info", "Falha ao escrever log no SDHC."); }
-                } else {
-                    k_nano::slog_bin!("Sys", "info", "Log grande demais para 1 setor (512B). Usar serial.");
-                }
-            } else { k_nano::slog_bin!("Sys", "info", "ATA nao disponivel. Log nao salvo."); }
-        }
-        drop(log);
-        k_nano::slog_bin!("Sys", "info", "Power off via PS/2 reset...");
-        unsafe {
-            core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8, options(nostack, preserves_flags));
-        }
-        loop { x86_64::instructions::hlt(); }
+        crate::shutdown::begin_orderly_shutdown(crate::shutdown::ShutdownCause::Triggered);
     }
 }
 
@@ -318,8 +292,13 @@ impl Agent for CortexAgent {
             let t1 = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
-                alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
-            } else { output };
+                alloc::format!(
+                    "(sem LLM gerador — {})",
+                    crate::model_hub::hub_status()
+                )
+            } else {
+                output
+            };
             k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {
                 id: 0, topic: alloc::string::String::from(cortex::TOPIC_LLM_RESPONSE),
@@ -355,6 +334,8 @@ pub struct HermesAgent {
     health_receiver: Receiver,
     pnp_receiver: Receiver,
     cap_receiver: Receiver,
+    shutdown_receiver: Receiver,
+    reboot_receiver: Receiver,
     latent_receiver: LatentReceiver,
     latent_recv_total: u64,
     cortex: crate::cortex::Cortex,
@@ -388,6 +369,8 @@ impl HermesAgent {
             health_receiver: EVENT_BUS.subscribe("HEALTH_ISSUE"),
             pnp_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_PNP_ACTION),
             cap_receiver: EVENT_BUS.subscribe(k_ai::hw_capability::TOPIC_HW_CAPABILITY),
+            shutdown_receiver: EVENT_BUS.subscribe(crate::shutdown::TOPIC_SYSTEM_SHUTDOWN),
+            reboot_receiver: EVENT_BUS.subscribe(crate::shutdown::TOPIC_SYSTEM_REBOOT),
             latent_receiver: crate::LATENT_BUS.subscribe(TOPIC_THOUGHT_LLM),
             latent_recv_total: 0,
             cortex: crate::cortex::Cortex::new(),
@@ -733,6 +716,18 @@ impl Agent for HermesAgent {
             let text = core::str::from_utf8(&event.payload).unwrap_or("");
             k_nano::slog_bin!("CORTEX", "info", "Texto: \"{}\"", text);
             println!("[CORTEX] Texto: \"{}\"", text);
+
+            // Soft power: desligar/reiniciar/hibernar — sem LLM
+            if let Some(msg) = crate::shutdown::handle_power_phrase(text) {
+                responded = alloc::format!("[Jarbas] {}", msg);
+                k_nano::slog_bin!("SHUTDOWN", "info", "soft phrase → {}", msg);
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                    payload: responded.clone().into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+            } else {
 
             // Sprint 108: observar intent para auto-skill
             let now_obs = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
@@ -1494,7 +1489,14 @@ impl Agent for HermesAgent {
             } else {
                 EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);
             }
+            } // else !power_phrase
         }
+
+        // Power EventBus — executa orderly (nunca retorna se shutdown/reboot)
+        crate::shutdown::drain_power_requests(
+            &mut self.shutdown_receiver,
+            &mut self.reboot_receiver,
+        );
 
         // 🔧 Event-driven: só avança ReAct quando houve trabalho real
         if had_work {

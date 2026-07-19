@@ -98,8 +98,9 @@ impl Agent for JarvisAgent {
     fn manifest(&self) -> &AgentManifest { &JARVIS_MANIFEST }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        // ── Saudação inicial gerada pela LLM ──────────────────
-        // tick>2: TCG soft-float + TTS PnP demora; 15 atrasava demais a saudacao.
+        // ── Saudação inicial ──────────────────────────────────
+        // tick>2: TCG soft-float 2B FWD não completa a tempo → template imediato.
+        // WHPX/HW: LLM primeiro; se lixo → template (abaixo).
         if !self.greeted && !self.greeting_prompt_sent && tick > 2 {
             self.greeting_prompt_sent = true;
 
@@ -114,27 +115,58 @@ impl Agent for JarvisAgent {
                 let tr = hermes::globals::TRINITY.lock();
                 tr.agent_count()
             };
-            let tts_mode = "formant";
 
-            let prompt = alloc::format!(
-                "You are JARVIS, an AI operating system. Generate a single short sentence \
-                 greeting the user. Include that the system has {}MB RAM, {} CPU cores, \
-                 {} agents, running in {} TTS mode. Be creative and match the personality \
-                 based on these specs:\n\
-                 - If memory < 256MB: humble, 'small but mighty'\n\
-                 - If 256-1024MB: modest, capable\n\
-                 - If > 1024MB: confident, powerful\n\
-                 - If > 4096MB: cocky, 'I could run a small country'\n\
-                 - If agents > 200: 'managing a small army'\n\
-                 Speak as JARVIS. One sentence only, no emojis, no markdown.",
-                self.greet_mem_mb, self.greet_cpu, self.greet_agents, tts_mode
+            let tcg = matches!(
+                k_nano::platform_probe::hypervisor(),
+                k_nano::platform_probe::HypervisorKind::Tcg
             );
-
-            k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao a LLM...");
-            let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from("LLM_REQUEST"),
-                payload: prompt.into_bytes(), token: CapabilityToken::Legacy(1),
-            });
+            if tcg {
+                self.greeted = true;
+                let body =
+                    compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents);
+                let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "info",
+                    "saudacao template TCG (skip LLM soft-float FWD)"
+                );
+                k_nano::slog_jarbas!("Log", "msg", "{}", greeting);
+                let bytes = greeting.as_bytes().to_vec();
+                let _ = k_nano::EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from("HERMES_RESPONSE"),
+                    payload: bytes.clone(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                let _ = k_nano::EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(crate::audio::TOPIC_TTS_CMD),
+                    payload: bytes,
+                    token: CapabilityToken::Legacy(1),
+                });
+            } else {
+                let tts_mode = "formant";
+                let prompt = alloc::format!(
+                    "You are JARVIS, an AI operating system. Generate a single short sentence \
+                     greeting the user. Include that the system has {}MB RAM, {} CPU cores, \
+                     {} agents, running in {} TTS mode. Be creative and match the personality \
+                     based on these specs:\n\
+                     - If memory < 256MB: humble, 'small but mighty'\n\
+                     - If 256-1024MB: modest, capable\n\
+                     - If > 1024MB: confident, powerful\n\
+                     - If > 4096MB: cocky, 'I could run a small country'\n\
+                     - If agents > 200: 'managing a small army'\n\
+                     Speak as JARVIS. One sentence only, no emojis, no markdown.",
+                    self.greet_mem_mb, self.greet_cpu, self.greet_agents, tts_mode
+                );
+                k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao a LLM...");
+                let _ = k_nano::EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: alloc::string::String::from("LLM_REQUEST"),
+                    payload: prompt.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+            }
         }
 
         // ── Resposta da LLM (saudacao ou conversa) ──────────

@@ -46,8 +46,8 @@ fn class_from_pci(dev: &PciDevice) -> DeviceClass {
         (0x02, _) => DeviceClass::Net,
         (0x01, _) => DeviceClass::Block,
         (0x04, _) => DeviceClass::Snd,
-        // xHCI/UHCI/EHCI: host USB — oferta HalOffer Video (UVC), não Input HID
-        (0x0C, 0x03) => DeviceClass::Video,
+        // xHCI: UsbHost (ADR-0056); UVC continua DeviceClass::Video via oferta derivada
+        (0x0C, 0x03) => DeviceClass::UsbHost,
         (0x0C, _) => DeviceClass::Input,
         _ => DeviceClass::Unknown,
     }
@@ -64,7 +64,9 @@ fn name_hint(vid: u16, class: DeviceClass) -> &'static str {
         (_, DeviceClass::Net) => "Ethernet",
         (_, DeviceClass::Snd) => "Audio",
         (_, DeviceClass::Block) => "Block",
-        (_, DeviceClass::Video) => "xHCI / UVC host",
+        (_, DeviceClass::UsbHost) => "xHCI USB host",
+        (_, DeviceClass::Video) => "UVC / camera",
+        (_, DeviceClass::Bluetooth) => "Bluetooth",
         (_, DeviceClass::Input) => "USB/HID",
         _ => "PCI device",
     }
@@ -108,6 +110,8 @@ pub fn populate_from_pci() -> usize {
         cap.virtio_bound = virtio;
         cap.has_display = class == DeviceClass::Gpu;
         cap.compute_candidate = class == DeviceClass::Gpu && !virtio;
+        let promote = crate::device_recipe::log_match(dev.vendor_id, dev.device_id, class);
+        cap.recipe_promote = promote as u8;
         register_device(cap);
         n += 1;
     }

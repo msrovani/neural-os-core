@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
 use crate::generic_wifi::{self, ACTIVE_DRIVER};
+use core::sync::atomic::Ordering;
 const WIFI_MANIFEST: AgentManifest = AgentManifest {
     name: "wifi_agent",
     kind: AgentKind::Network,
@@ -65,6 +66,31 @@ pub struct WifiAgent {
 
 impl WifiAgent {
     pub fn new() -> Self {
+        // S0/S1-prep: probe no registro (antes do scheduler) — QEMU sem RF + evidência
+        // serial mesmo se NetAgent falhar depois.
+        if generic_wifi::detect_wifi() {
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=boot_probe status=PRESENT detail=pci_wifi_bound"
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=iwlwifi_scan_unwired_onda7"
+            );
+        } else {
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=boot_probe status=UNSUPPORTED detail=no_wifi_pci"
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio_onda7"
+            );
+        }
         WifiAgent {
             state: WifiState::Idle,
             user_receiver: k_nano::EVENT_BUS.subscribe("USER_INTENT"),
@@ -121,7 +147,7 @@ impl WifiAgent {
             }
         });
 
-        // Scan real ainda depende de ucode/HW — lista demo NÃO é Ready (Onda 7).
+        // Scan real ainda depende de ucode/HW — lista demo NÃO é Ready (S0).
         k_nano::slog_bin!(
             "WIFI-HW",
             "info",
@@ -138,51 +164,54 @@ impl WifiAgent {
             AccessPoint { ssid: String::from("Rede-Aberta"),  bssid: [0xCC;6], signal_dbm: -72, channel: 1,  security: SecurityType::Open },
         ];
 
-        let mut msg = alloc::format!("Redes WiFi encontradas ({}):\n", aps.len());
+        let mut msg = alloc::format!(
+            "DEMO AP list (nao e RF; scan iwlwifi AWAITING) — {} entradas:\n",
+            aps.len()
+        );
         for (i, ap) in aps.iter().enumerate() {
             msg.push_str(&alloc::format!(
                 "  [{}] {} {} ({}dBm) ch.{} {}\n", i, ap.lock(), ap.ssid, ap.signal_dbm, ap.channel, ap.bars()));
         }
-        msg.push_str("\nDigite o NUMERO da rede para conectar.");
+        msg.push_str("\nConnect bloqueado ate S1/S3 (RF). Digite NUMERO so para ver o gate S0.");
         self.publish(&msg);
         self.state = WifiState::ScanDone(aps);
     }
 
     // ── Conexão ───────────────────────────────────────────────
 
-    fn do_connect(&mut self, ap: &AccessPoint, password: &str) {
-        self.state = WifiState::Connecting;
-        self.publish(&alloc::format!("Conectando a \"{}\"...", ap.ssid));
-
-        // Monta comando de conexao para o driver WiFi
-        let connect_cmd = alloc::format!("CONNECT {} {}\n", ap.ssid, password);
-        ACTIVE_DRIVER.lock(|driver| {
-            if let Some(wifi) = driver {
-                let _ = wifi.send_packet(connect_cmd.as_bytes());
-            }
-        });
-
-        // Salva credenciais para reconexao futura
-        self.save_credentials(&ap.ssid, password);
-
-        // Notifica sistema
-        k_nano::slog_hermes!("Wifi", "info", "Conectado a \"{}\" (security={:?})", ap.ssid, ap.security);
-        self.publish(&alloc::format!("Conectado a \"{}\"!", ap.ssid));
-        self.state = WifiState::Connected { ssid: ap.ssid.clone() };
-
-        // Publica eventos para o kernel
-        let _ = k_nano::EVENT_BUS.publish(Event {
-            id: 0, topic: alloc::string::String::from("NETWORK_CONFIGURED"),
-            payload: alloc::format!("wifi:{}", ap.ssid).into_bytes(),
-            token: CapabilityToken::Legacy(1),
-        });
-        let _ = k_nano::EVENT_BUS.publish(Event {
-            id: 0, topic: alloc::string::String::from("NET_DHCP_REQUEST"),
-            payload: ap.ssid.as_bytes().to_vec(),
-            token: CapabilityToken::Legacy(1),
-        });
-
-        self.notify_hermes_available();
+    fn do_connect(&mut self, ap: &AccessPoint, _password: &str) {
+        // S0 honesty: nunca Connected/Ready sem RF + assoc real.
+        let has_radio = generic_wifi::WIFI_PRESENT.load(Ordering::Relaxed);
+        if !has_radio {
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=connect status=UNSUPPORTED detail=no_wifi_pci ssid={}",
+                ap.ssid
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio"
+            );
+        } else {
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=connect status=UNSUPPORTED detail=link_unwired ssid={}",
+                ap.ssid
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=iwlwifi_link_unwired"
+            );
+        }
+        self.publish(&alloc::format!(
+            "Connect bloqueado: sem RF/ucode (S0) — \"{}\"",
+            ap.ssid
+        ));
+        self.state = WifiState::Failed("WiFi RF AWAITING");
     }
 
     // ── Persistência ──────────────────────────────────────────

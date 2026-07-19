@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Gera imagem exFAT (default) ou FAT32 para QEMU e HW real.
-Inclui: .bitnet (incl. BITNET-2B se existir), firmware blobs, CONFIG.TXT.
+Inclui: .bitnet (incl. BITNET-2B se existir), firmware blobs, CONFIG.TXT,
+Device LEGO goldens (LEGO*.MD / LEGOIDX.TXT — ADR-0056).
 
 Uso:
   python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (exFAT)
@@ -22,7 +23,7 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SIZE_MB = 1024  # cabe BITNET.BIN + BITNET2B.BIN (~200MB) + firmware + extras
+DEFAULT_SIZE_MB = 3072  # 3GB dados — 850→1.3→2B→3B progressivo; arquivo FAT32 ≤4GB-1
 
 
 def parse_args():
@@ -111,6 +112,24 @@ def main():
     env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = boot_mode
 
+    # ADR-0056: pack LEGOs antes do maker (mkexfat/mkfat32 tambem reinjeta)
+    print("=== Device LEGO pack (ecosystem/devices -> target/lego) ===")
+    r_lego = subprocess.run(
+        [sys.executable, os.path.join(ROOT, "tools", "pack_device_legos.py")],
+        cwd=ROOT,
+        env={**env, "PYTHONIOENCODING": "utf-8"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if r_lego.stdout:
+        sys.stdout.write(r_lego.stdout)
+        if not r_lego.stdout.endswith("\n"):
+            sys.stdout.write("\n")
+    if r_lego.returncode != 0:
+        print(f"[ERRO] pack_device_legos.py exit={r_lego.returncode}: {(r_lego.stderr or '')[:400]}")
+        sys.exit(r_lego.returncode)
+
     maker = "mkfat32.py" if args.fat32 else "mkexfat.py"
     fs_name = "FAT32" if args.fat32 else "exFAT"
     cmd = [
@@ -123,6 +142,7 @@ def main():
     ]
     print(f"=== Criando imagem {args.size}MB {fs_name} (BOOT_MODE={boot_mode}) -> {out} ===")
     print("    BITNET-2B incluso se arquivo existir em repo/target/")
+    print("    Device LEGO: LEGOVNET/ATHK/GP08/XHCI.MD + LEGOIDX.TXT")
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=600, env=env)
     if r.stdout:
         sys.stdout.buffer.write(r.stdout.encode("utf-8", errors="replace"))

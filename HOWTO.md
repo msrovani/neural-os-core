@@ -18,6 +18,8 @@ Este documento guia a configuração completa do ambiente de desenvolvimento do 
 8. [Para Agentes de IA (OpenCode, Claude Code)](#8-para-agentes-de-ia-opencode-claude-code)
 9. [Workflow de Desenvolvimento](#9-workflow-de-desenvolvimento)
 10. [Solução de Problemas](#10-solução-de-problemas)
+11. [Device LEGO e comunidade](#11-device-lego-e-comunidade)
+12. [Licenças e dados](#12-licenças-e-dados)
 
 ---
 
@@ -129,7 +131,9 @@ Copy-Item "C:\msys64\usr\share\ovmf\OVMF.fd" "target\ovmf.fd"
 
 ### Gerar imagem de disco
 ```powershell
-# Cria target\disk_qemu.raw (1024 MB default) com .bitnet + firmware (+ BITNET-2B se existir)
+# Cria target\disk_qemu.raw (3072 MB default). PACK_LLM=850 (default) → depois 13 → 2b → 3b|all
+# $env:PACK_LLM="850"; python tools\build_image.py
+# $env:PACK_LLM="850,13"; python tools\build_image.py
 python tools\build_image.py
 # Artefato canonico: target\disk_qemu.raw (scripts tambem aceitam tools\ e copiam)
 ```
@@ -290,25 +294,38 @@ Para reativar HIT clima QEMU: `cargo nk --features weather-e2e` e rebuild boot (
 O projeto já inclui firmware no diretório `firmware/`. Para atualizar:
 
 ```powershell
-# Baixa firmware NVIDIA + Intel + Realtek do GitLab mirror
-python tools\download_firmware.py
+python tools\download_firmware.py --list
+python tools\download_firmware.py --pull
+# Embutir subset no disco (ex.: Note + Pascal lab)
+$env:FW_FAT_CHIPS="gp108,ath10k"
+python tools\build_image.py
+```
+
+Guia completo: [docs/guides/firmware-download-and-fat.md](docs/guides/firmware-download-and-fat.md).  
+**GSP NVIDIA:** só em `target/firmware/` — não versionar no git.
+
+### HuggingFace (modelos + datasets)
+
+Org: https://huggingface.co/aios-k2chj — ver [docs/guides/huggingface-aios-k2chj.md](docs/guides/huggingface-aios-k2chj.md).
+
+```powershell
+# opcional
+huggingface-cli download aios-k2chj/aios-k2chj-hw-expert-v3 --local-dir target/hf/hw-expert-v3
 ```
 
 ### Modelos .bitnet
 Os modelos já estão incluídos na imagem de disco (`build_image.py`). Para retreinar:
 
 ```powershell
-# HW Expert v3 (1M params, 259KB, 61K VID/DID)
 python tools\train_hw_expert_v3.py --epochs 50
-
-# HDIO HWIDs — extrair de DriverPacks
-python tools\extract_sdio_hw.py --dir "Caminho\para\DriverPacks" --extract-only
+python tools\train_hw_expert_v4.py --dry-run
+python tools\extract_sdio_hw.py --dir "Caminho\para\DriverPacks"
+python tools\export_sdio_lego_index.py --dry-run
 ```
 
 ### Firmware do linux-firmware (GitLab mirror)
 ```bash
 git clone --depth 1 https://gitlab.com/kernel-firmware/linux-firmware.git
-# Ou via script:
 python tools/download_firmware.py
 ```
 
@@ -490,17 +507,53 @@ git push
 
 ---
 
+## 11. Device LEGO e comunidade
+
+Conectores de hardware (HalOffer + DeviceRecipe). **Install ≠ Ready.**
+
+| Doc | URL |
+|-----|-----|
+| Community hub | [docs/community/](docs/community/) |
+| Call for contributors | [docs/community/CALL_FOR_CONTRIBUTORS.md](docs/community/CALL_FOR_CONTRIBUTORS.md) |
+| Specs + goldens | [docs/specs/device-lego/](docs/specs/device-lego/) |
+| ADR-0056 | [docs/architecture/0056-neural-device-lego.md](docs/architecture/0056-neural-device-lego.md) |
+| Perigos | [docs/community/DANGERS.md](docs/community/DANGERS.md) |
+| Cursor rule | `.cursor/rules/neural-device-lego.mdc` |
+
+### 4 goldens na imagem (teste)
+
+```powershell
+python tools\pack_device_legos.py
+python tools\build_image.py
+# serial: [LEGO] [boot] VERDICT=PASS locate=4/4 …
+```
+
+FAT: `LEGOVNET.MD`, `LEGOATHK.MD`, `LEGOGP08.MD`, `LEGOXHCI.MD`, `LEGOIDX.TXT`.  
+Fonte: `ecosystem/devices/<pkg>/RECIPE.md`. Cap bind = tabela in-tree `GOLDEN_RECIPES` (H1); disco = spec + smoke.
+
+Para agentes de IA: não inventar MMIO; não claim `VERDICT=PASS` sem serial; SDIO só índice.
+
+---
+
+## 12. Licenças e dados
+
+Código: **AGPL-3.0**. Matriz FW/datasets/recipes: [docs/community/LICENSES.md](docs/community/LICENSES.md).
+
+---
+
 ## Links Rápidos
 
 | Recurso | Link |
 |---------|------|
 | Repositório | https://github.com/msrovani/neural-os-core |
+| Community / Device LEGO | [docs/community/](docs/community/) |
 | HuggingFace Org | https://huggingface.co/aios-k2chj |
 | HW Expert v3 Model | https://huggingface.co/aios-k2chj/aios-k2chj-hw-expert-v3 |
 | SDIO HWIDs Dataset | https://huggingface.co/datasets/aios-k2chj/aios-k2chj-sdio-hwids |
 | PCI/USB IDs Dataset | https://huggingface.co/datasets/aios-k2chj/aios-k2chj-pci-usb-ids |
 | Firmware Metadata | https://huggingface.co/datasets/aios-k2chj/aios-k2chj-firmware-metadata |
 | linux-firmware (GitLab) | https://gitlab.com/kernel-firmware/linux-firmware |
+| ADR-0056 Device LEGO | [docs/architecture/0056-neural-device-lego.md](docs/architecture/0056-neural-device-lego.md) |
 | Rust nightly | https://rust-lang.github.io/rustup/ |
 | QEMU | https://www.qemu.org |
 

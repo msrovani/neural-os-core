@@ -178,6 +178,16 @@ def intel_specs() -> list[tuple[str, str]]:
     return specs
 
 
+def ath10k_specs() -> list[tuple[str, str]]:
+    """QCA6174 hw3.0 — Note 1050 QCA61x4A (SESSION_160)."""
+    specs: list[tuple[str, str]] = []
+    for name in ("firmware-6.bin", "board-2.bin", "board.bin"):
+        specs.append(
+            (f"ath10k/QCA6174/hw3.0/{name}", f"ath10k/QCA6174/hw3.0/{name}")
+        )
+    return specs
+
+
 # Chips aceitos por FW_FAT_CHIPS (substring match no rel path)
 FAT_CHIP_PATHS = {
     "gp108": ("nvidia/gp108/",),
@@ -284,7 +294,7 @@ def main() -> None:
     ap.add_argument("--list", action="store_true", help="so listar specs / existencia no clone")
     args = ap.parse_args()
 
-    specs = nvidia_specs(args.gsp_ver) + amd_specs() + intel_specs()
+    specs = nvidia_specs(args.gsp_ver) + amd_specs() + intel_specs() + ath10k_specs()
 
     if args.list:
         ensure_clone(False)

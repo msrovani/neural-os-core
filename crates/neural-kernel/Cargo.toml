@@ -19,6 +19,12 @@ ticket-lock = { path = "../ticket-lock" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
+# ADR-0016 N4 — TLS 1.3. Soft-float: force soft crypto (CLMUL/SHA-NI break LLVM).
+embedded-tls = { version = "0.19", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+embedded-io = { version = "0.7", default-features = false }
+sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 # ADR-0042 N2.5: k_nano sem global-alloc (bin mantém allocator.rs); k_ai trust/self_heal.
 k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }

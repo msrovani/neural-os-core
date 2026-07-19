@@ -37,6 +37,28 @@ impl AtaDriver {
                                         crate::slog_nano!("Disk", "ata", "ISA {}: {} FAT32! (type={:#x})", base, if slave { "slave" } else { "master" }, t);
                                         return Some(drv);
                                     }
+                                    // exFAT dados (mkexfat MBR 0x07) — preferir a ESP
+                                    if t == 0x07 {
+                                        let mut vbr = [0u8; 512];
+                                        let lba = u32::from_le_bytes([
+                                            mbr[off + 8],
+                                            mbr[off + 9],
+                                            mbr[off + 10],
+                                            mbr[off + 11],
+                                        ]);
+                                        if drv.read_sectors(lba, &mut vbr, 1)
+                                            && &vbr[3..11] == b"EXFAT   "
+                                        {
+                                            crate::slog_nano!(
+                                                "Disk",
+                                                "ata",
+                                                "ISA {}: {} exFAT! (type=0x07)",
+                                                base,
+                                                if slave { "slave" } else { "master" }
+                                            );
+                                            return Some(drv);
+                                        }
+                                    }
                                     if t == 0xEE && best.is_none() { best = Some(drv.clone()); best_type = t; }
                                     if best.is_none() { best = Some(drv.clone()); best_type = t; }
                                 }

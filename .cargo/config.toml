@@ -16,6 +16,8 @@ rustflags = ["-Z", "threads=16"]
 [target.x86_64-unknown-none]
 rustflags = [
     "-C", "target-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2",
+    "--cfg", "polyval_force_soft",
+    "--cfg", "aes_force_soft",
     "-Z", "threads=16",
 ]
 

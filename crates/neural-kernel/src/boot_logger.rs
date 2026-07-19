@@ -407,8 +407,8 @@ pub fn flush() {
     }
 }
 
-/// Se USB-MSC/ATA falhou: pausa 60s com ultimo Kxx na tela (foto!), depois soft-reboot
-/// para o bootloader tentar gravar BOOT.LOG (RAM @ 256MiB + CRC).
+/// Sem USB-MSC/ATA: grava ramlog + pausa curta p/ foto, **continua o boot**.
+/// Soft-reboot p/ BOOT.LOG fica para `flush_bootlog_after_greeting` (pos-JARVIS).
 pub fn maybe_uefi_flush_reboot(reason: &str) {
     #[cfg(feature = "fat-boot-log")]
     {
@@ -424,30 +424,72 @@ pub fn maybe_uefi_flush_reboot(reason: &str) {
             k_nano::boot_ramlog::append(line);
         }
         let k = k_nano::boot_ramlog::last_ckpt();
-        k_nano::slog_bin!("RAMLOG", "info", "FOTO AGORA ultimo=K{} — soft-reboot em 60s ({})",
+        k_nano::slog_bin!(
+            "RAMLOG",
+            "info",
+            "sem FAT (K{}) — {} — continue; BOOT.LOG apos saudacao",
             k,
-            reason);
-        // 60s visíveis: note sem serial — usuario tira foto do ultimo Kxx.
-        for sec in (0..60u32).rev() {
-            let mut line = [0u8; 72];
-            let msg = alloc::format!(">>> FOTO! ultimo=K{}  reboot LOG {}s <<<", k, sec);
-            let b = msg.as_bytes();
-            let n = b.len().min(line.len());
-            line[..n].copy_from_slice(&b[..n]);
-            if let Ok(t) = core::str::from_utf8(&line[..n]) {
-                crate::display::fb::console_print(t);
-            }
-            // ~1s busy-wait (sem timer confiavel em todos HW neste ponto)
-            for _ in 0..80_000_000 {
+            reason
+        );
+        for sec in (0..5u32).rev() {
+            let msg = alloc::format!(">>> FOTO K{} | go boot {}s <<<", k, sec);
+            crate::display::fb::console_print(&msg);
+            for _ in 0..40_000_000 {
                 core::hint::spin_loop();
             }
         }
-        crate::display::fb::console_print(">>> soft-reboot gravando BOOT.LOG...");
-        k_nano::boot_ramlog::maybe_flush_reboot(reason);
+        // Nao marca skip permanente — ainda vamos flush apos JARVIS.
+        crate::display::fb::console_print(">>> continue (BOOT.LOG apos JARVIS)");
+        crate::display::fb::boot_ckpt(38, "continue sem MSC");
     }
     #[cfg(not(feature = "fat-boot-log"))]
     {
         let _ = reason;
+    }
+}
+
+/// Pos-saudacao JARVIS: soft-reboot 1× → UEFI grava `E:\BOOT.LOG` e HALT.
+/// Sem isto o FAT fica so com o seed vazio do mkfat32 (USB-MSC AUSENTE).
+pub fn flush_bootlog_after_greeting(reason: &str) -> ! {
+    #[cfg(feature = "fat-boot-log")]
+    {
+        if FAT_READY.load(Ordering::Relaxed) {
+            // Ja gravou via MSC/ATA — nao precisa reboot.
+            crate::display::fb::console_print(">>> BOOT.LOG ja no FAT (MSC/ATA)");
+            loop {
+                core::hint::spin_loop();
+            }
+        }
+        let content = build_session_bytes();
+        let s = core::str::from_utf8(&content).unwrap_or(reason);
+        for line in s.lines().take(400) {
+            k_nano::boot_ramlog::append(line);
+        }
+        k_nano::boot_ramlog::append(reason);
+        k_nano::boot_ramlog::append("[JARVIS] greet OK — flush BOOT.LOG via UEFI soft-reboot");
+        let k = k_nano::boot_ramlog::last_ckpt();
+        crate::display::fb::boot_ckpt(51, "flush BOOT.LOG");
+        for sec in (0..12u32).rev() {
+            let msg = alloc::format!(
+                ">>> BOOT.LOG via UEFI | K{} | reboot {}s — depois leia FAT <<<",
+                k,
+                sec
+            );
+            crate::display::fb::console_print(&msg);
+            for _ in 0..50_000_000 {
+                core::hint::spin_loop();
+            }
+        }
+        crate::display::fb::console_print(">>> soft-reboot gravando BOOT.LOG...");
+        unsafe { k_nano::boot_ramlog::request_flush_and_reboot(reason) }
+    }
+    #[cfg(not(feature = "fat-boot-log"))]
+    {
+        let _ = reason;
+        crate::display::fb::console_print(">>> fat-boot-log OFF — halt");
+        loop {
+            core::hint::spin_loop();
+        }
     }
 }
 

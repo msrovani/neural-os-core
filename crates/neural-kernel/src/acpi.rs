@@ -36,6 +36,8 @@ pub struct AcpiInfo {
     pub has_x2apic: bool,
     pub phys_mem_offset: u64,
     pub iso_overrides: Vec<(u8, u32)>,
+    pub pm1a_cnt_port: u16,
+    pub slp_typa: Option<u8>,
 }
 
 fn checksum_valid(data: &[u8]) -> bool {
@@ -164,6 +166,8 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     let mut ioapic_count = 0u8;
     let mut has_x2apic = false;
     let mut iso_overrides = Vec::new();
+    let mut pm1a_cnt_port = 0u16;
+    let mut slp_typa: Option<u8> = None;
 
     for i in 0..entry_count {
         let entry_ptr = rsdt_virt.as_u64() as *const u8;
@@ -182,6 +186,14 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         }
 
         match &table_sig {
+            b"FACP" => {
+                k_nano::slog_bin!("ACPI", "info", "FADT encontrado em 0x{:x}", table_phys);
+                let (pm1a, slp) =
+                    unsafe { k_nano::acpi::parse_fadt_power(table_ptr, physical_memory_offset) };
+                pm1a_cnt_port = pm1a;
+                slp_typa = slp;
+                k_nano::acpi::set_s5_regs(pm1a, slp);
+            }
             b"APIC" => {
                 k_nano::slog_bin!("ACPI", "info", "MADT encontrado em 0x{:x}", table_phys);
                 let madt_len_raw = table_ptr.add(4) as *const u32;
@@ -253,5 +265,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         has_x2apic,
         phys_mem_offset: physical_memory_offset,
         iso_overrides,
+        pm1a_cnt_port,
+        slp_typa,
     })
 }

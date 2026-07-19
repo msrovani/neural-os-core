@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/msrovani/neural-os-core/docs/specs/device-lego/RECIPE.schema.json",
+  "title": "Neural DeviceRecipe frontmatter",
+  "type": "object",
+  "required": [
+    "schema",
+    "kind",
+    "name",
+    "class",
+    "layer",
+    "bind",
+    "honesty",
+    "trust_class",
+    "provenance"
+  ],
+  "properties": {
+    "schema": { "const": 1 },
+    "kind": { "const": "device-recipe" },
+    "name": { "type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" },
+    "package_id": { "type": "string" },
+    "class": {
+      "type": "string",
+      "enum": ["Net", "Wifi", "Block", "Gpu", "Display", "Snd", "Input", "Video", "UsbHost", "Bluetooth", "Unknown"]
+    },
+    "layer": { "type": "string", "enum": ["L1", "L2"] },
+    "bind": {
+      "type": "object",
+      "required": ["vendor_id", "device_id"],
+      "properties": {
+        "vendor_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "device_id": { "type": "integer", "minimum": 0, "maximum": 65535 },
+        "rev_mask": { "type": ["integer", "null"] }
+      }
+    },
+    "firmware": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["fat_name", "role"],
+        "properties": {
+          "fat_name": { "type": "string" },
+          "role": { "type": "string" },
+          "blob_hash": { "type": "string" },
+          "neuralfs_path": { "type": "string" }
+        }
+      }
+    },
+    "capabilities_required": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "requires": { "type": "array", "items": { "type": "string" } },
+    "provides": { "type": "array", "items": { "type": "string" } },
+    "stages": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "requires": { "type": "array", "items": { "type": "string" } },
+          "provides": { "type": "array", "items": { "type": "string" } },
+          "success_observable": { "type": "string" },
+          "on_fail": { "type": "string" }
+        }
+      }
+    },
+    "honesty": { "const": "no_fake_ready" },
+    "trust_class": { "type": "string", "enum": ["observe", "confirm", "escalate", "deny"] },
+    "provenance": {
+      "type": "string",
+      "enum": ["hermes_created", "imported", "native_compiled"]
+    },
+    "sandbox_status": {
+      "type": "string",
+      "enum": ["none", "pending", "passed", "failed"]
+    },
+    "license": { "type": "string" },
+    "content_hash": { "type": "string" },
+    "signature": { "type": "string" }
+  },
+  "additionalProperties": true
+}

@@ -16,7 +16,7 @@ use crate::hermes::{self, IntentCache, WorkflowEngine};
 use k_ai::conversation;
 use k_nano::{println, kjson};
 use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
-            CONVERSATION_TRACKER, PENDING_SKILL, SELF_HEAL, BITNET_TRAINER, LOG_SECTOR,
+            CONVERSATION_TRACKER, PENDING_SKILL, SELF_HEAL, BITNET_TRAINER,
             APPROVAL_GATE, boot_log_agent, agency, hw_agents, inventory};
 
 // ---------------------------------------------------------------------------
@@ -193,33 +193,8 @@ impl InputAgent {
         });
     }
     fn handle_cad(&self) {
-        k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Triggered);
-        k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Triggered);
-        k_nano::slog_hermes!("Sys", "info", "Ctrl+Alt+Del. Escrevendo log no SDHC e desligando...");
-        let log = k_nano::serial::BOOT_LOG.lock();
-        let dump = log.dump();
-        if !dump.is_empty() {
-            k_nano::slog_hermes!("Sys", "info", "Log: {} bytes capturados.", dump.len());
-            // Write log to SDHC via ATA
-            let ata = k_nano::ATA_DRIVER.lock();
-            if let Some(ref ata) = *ata {
-                if dump.len() <= 512 {
-                    let mut sector = [0u8; 512];
-                    sector[..dump.len()].copy_from_slice(dump);
-                    if unsafe { ata.write_sectors(LOG_SECTOR, &sector, 1) } {
-                        k_nano::slog_hermes!("Sys", "info", "Log escrito no setor LBA {} (512 bytes).", LOG_SECTOR);
-                    } else { k_nano::slog_hermes!("Sys", "info", "Falha ao escrever log no SDHC."); }
-                } else {
-                    k_nano::slog_hermes!("Sys", "info", "Log grande demais para 1 setor (512B). Usar serial.");
-                }
-            } else { k_nano::slog_hermes!("Sys", "info", "ATA nao disponivel. Log nao salvo."); }
-        }
-        drop(log);
-        k_nano::slog_hermes!("Sys", "info", "Power off via PS/2 reset...");
-        unsafe {
-            core::arch::asm!("out dx, al", in("dx") 0x64u16, in("al") 0xFEu8, options(nostack, preserves_flags));
-        }
-        loop { x86_64::instructions::hlt(); }
+        k_nano::slog_hermes!("Sys", "info", "Ctrl+Alt+Del → SYSTEM_SHUTDOWN");
+        k_ai::shutdown::request_shutdown();
     }
 }
 
@@ -324,7 +299,10 @@ impl Agent for CortexAgent {
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
-                alloc::string::String::from("(modelo pequeno demais para gerar — necessario GGUF com 1B+ params)")
+                alloc::format!(
+                    "(sem LLM gerador — {})",
+                    cortex::model_hub::hub_status()
+                )
             } else { output };
             k_nano::slog_cortex!("LLM", "info", "Generated: \"{}\"", output);
             let _ = EVENT_BUS.publish(Event {

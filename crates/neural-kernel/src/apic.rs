@@ -523,19 +523,24 @@ unsafe fn lapic_write_reg(reg: u64, value: u32) {
     }
 }
 
-/// Espera ICR idle (checa bit 12 — delivery status)
+/// Espera ICR idle (bit 12). Timeout evita hang eterno em HW real (k22).
+/// Em x2APIC o bit 12 é reserved/0 — retorna imediato.
 unsafe fn icr_wait_idle() {
     if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR é MSR único 0x830, bit 12 = delivery status
-        while (lapic_read_reg(LAPIC_ICR_LOW) & (1 << 12)) != 0 {
-            core::hint::spin_loop();
-        }
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
-            core::hint::spin_loop();
-        }
+        // Intel SDM: x2APIC ICR bit 12 reserved; não spin.
+        return;
     }
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return;
+    }
+    for _ in 0..2_000_000u32 {
+        if (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) == 0 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+    k_nano::slog_nano!("SMP", "warn", "ICR delivery timeout — continue BSP");
 }
 
 pub unsafe fn apic_eoi() {

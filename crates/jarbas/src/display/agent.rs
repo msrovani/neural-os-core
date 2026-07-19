@@ -5,7 +5,7 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS};
+use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button};
 use crate::display::avatar::{AvatarState, JarvisAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 
@@ -26,7 +26,7 @@ pub struct DisplayAgent {
     hitl_receiver: event_bus::Receiver,
     hitl_term_receiver: event_bus::Receiver,
     memory_nudge_receiver: event_bus::Receiver,
-    latent_receiver: event_bus::LatentReceiver,
+    latent_receiver: Option<event_bus::LatentReceiver>,
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
@@ -35,10 +35,16 @@ pub struct DisplayAgent {
     drag_id: AppId,
     drag_off_x: isize,
     drag_off_y: isize,
+    /// Arm do botão OFF (tick até quando o 2º clique confirma).
+    power_armed_until: usize,
 }
 
 impl DisplayAgent {
     pub fn new() -> Self {
+        // NÃO claim_graphics aqui: no HW real o new() roda no register (ainda
+        // mid-boot) e apagaria K*/BOOT.LOG visual. Claim só no 1º tick com FB.
+        // LatentBus subscribe adiado p/ 1º tick — no HW real o new() aqui
+        // coincidia com freeze pos-www (foto AIOS + 18 agents).
         DisplayAgent {
             receiver: EVENT_BUS.subscribe(hermes::hermes::TOPIC_HERMES_RESPONSE),
             echo_receiver: EVENT_BUS.subscribe("KEYBOARD_ECHO"),
@@ -48,7 +54,7 @@ impl DisplayAgent {
             hitl_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_REQUEST),
             hitl_term_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_TERMINAL),
             memory_nudge_receiver: EVENT_BUS.subscribe(hermes::cognitive_bridge::TOPIC_MEMORY_NUDGE),
-            latent_receiver: k_nano::LATENT_BUS.subscribe(event_bus::TOPIC_THOUGHT_LLM),
+            latent_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
@@ -57,6 +63,7 @@ impl DisplayAgent {
             drag_id: AppId::None,
             drag_off_x: 0,
             drag_off_y: 0,
+            power_armed_until: 0,
         }
     }
 
@@ -108,6 +115,98 @@ impl DisplayAgent {
         }
     }
 
+    /// Clique canônico: edge de `MOUSE_ABS_BTN` (não EventBus). Retorna hit p/ log.
+    fn handle_pointer_click(&mut self, btn: u8, cx: usize, cy: usize) -> &'static str {
+        let scr_w = COMPOSITOR
+            .lock()
+            .as_ref()
+            .map(|d| d.w)
+            .unwrap_or(1280);
+        // OFF canto SD — antes da dock
+        if hit_power_button(cx, cy, scr_w) {
+            let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            if tick <= self.power_armed_until && self.power_armed_until != 0 {
+                *POWER_BANNER.lock() = Some("Shutting down...");
+                let _ = EVENT_BUS.publish(event_bus::Event {
+                    id: 0,
+                    topic: alloc::string::String::from("SYSTEM_SHUTDOWN"),
+                    payload: b"ui_off".to_vec(),
+                    token: event_bus::CapabilityToken::Legacy(1),
+                });
+                self.power_armed_until = 0;
+                return "power_off";
+            }
+            self.power_armed_until = tick.saturating_add(90);
+            *POWER_BANNER.lock() = Some("Confirme: clique OFF de novo");
+            return "power_arm";
+        }
+        // Clique fora desarma OFF
+        if self.power_armed_until != 0 {
+            self.power_armed_until = 0;
+            *POWER_BANNER.lock() = None;
+        }
+
+        let mut hit: &'static str = "miss";
+        let mut comp = COMPOSITOR.lock();
+        if let Some(ref mut desktop) = *comp {
+            let apps_clone = desktop.apps.clone();
+            let dock_y = desktop.h.saturating_sub(36);
+            if cy >= dock_y {
+                hit = "dock";
+                for (idx, app) in apps_clone.iter().enumerate() {
+                    if !app.visible {
+                        continue;
+                    }
+                    let rx = 10 + idx * 66;
+                    if cx >= rx && cx <= rx + 60 {
+                        desktop.toggle_app(app.id);
+                        hit = match app.id {
+                            AppId::HermesChat => "dock:chat",
+                            AppId::Settings => "dock:settings",
+                            AppId::Power => "dock:power",
+                            AppId::Ide => "dock:ide",
+                            AppId::Camera => "dock:camera",
+                            AppId::AudioViz => "dock:audio",
+                            AppId::WasmSkill(_) => "dock:skill",
+                            AppId::None => "dock",
+                        };
+                        break;
+                    }
+                }
+            } else if (btn & 1) != 0 {
+                for app in &apps_clone {
+                    if !app.visible {
+                        continue;
+                    }
+                    let cx_btn = app.x + app.w - 20;
+                    if cx >= cx_btn
+                        && cx <= cx_btn + 16
+                        && cy >= app.y + 3
+                        && cy <= app.y + 19
+                    {
+                        desktop.close_window(app.id);
+                        hit = "close";
+                        break;
+                    }
+                    if cx >= app.x
+                        && cx <= app.x + app.w
+                        && cy >= app.y
+                        && cy <= app.y + 24
+                    {
+                        self.dragging = true;
+                        self.drag_id = app.id;
+                        self.drag_off_x = cx as isize - app.x as isize;
+                        self.drag_off_y = cy as isize - app.y as isize;
+                        hit = "titlebar";
+                        break;
+                    }
+                }
+            }
+        }
+        drop(comp);
+        hit
+    }
+
     fn apply_ui_spec(&mut self, json: &str) {
         if let Some(spec) = ui_spec::parse_window_spec(json) {
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
@@ -149,9 +248,16 @@ impl Agent for DisplayAgent {
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
         if !self.gpu_inited {
-            let gpu = GPU.lock();
-            if let Some(ref gpu_dev) = *gpu {
-                let fb = DoubleBuffer::from_gpu(gpu_dev);
+            // Não segurar GPU.lock() durante claim_graphics (spin::Mutex ≠ reentrante).
+            let built = {
+                let gpu = GPU.lock();
+                gpu.as_ref().map(|gpu_dev| {
+                    let fb = DoubleBuffer::from_gpu(gpu_dev);
+                    let av = JarvisAvatar::new(gpu_dev);
+                    (fb, av, gpu_dev.fb_width, gpu_dev.fb_height)
+                })
+            };
+            if let Some((fb, av, fw, fh)) = built {
                 let mut desktop = JarvisDesktop::new(fb);
                 desktop.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
                 desktop.register_app(AppId::Settings, "Settings", Layer::AppWindows);
@@ -161,11 +267,66 @@ impl Agent for DisplayAgent {
                 desktop.register_app(AppId::AudioViz, "Audio Visualizer", Layer::AppWindows);
                 desktop.ensure_hermes_overlay();
                 *COMPOSITOR.lock() = Some(desktop);
-                self.avatar = Some(JarvisAvatar::new(gpu_dev));
-                k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", gpu_dev.fb_width, gpu_dev.fb_height);
+                self.avatar = Some(av);
+                // Limites + centro para IRQ mouse
+                k_nano::interrupts::MOUSE_MAX_X.store(fw.saturating_sub(1), core::sync::atomic::Ordering::Release);
+                k_nano::interrupts::MOUSE_MAX_Y.store(fh.saturating_sub(1), core::sync::atomic::Ordering::Release);
+                k_nano::interrupts::MOUSE_ABS_X.store(fw / 2, core::sync::atomic::Ordering::Release);
+                k_nano::interrupts::MOUSE_ABS_Y.store(fh / 2, core::sync::atomic::Ordering::Release);
+                *MOUSE_X.lock() = (fw / 2) as usize;
+                *MOUSE_Y.lock() = (fh / 2) as usize;
+                crate::display::fb::claim_graphics();
+                k_nano::slog_jarbas!("Jarbas", "info", "Desktop iniciado @ {}x{}", fw, fh);
+                k_nano::interrupts::mouse_log_status("desktop_ready");
             }
             self.gpu_inited = true;
             return AgentTickResult::Pending;
+        }
+
+        // Poll mouse todo frame (IRQ pode ter atualizado MOUSE_ABS_* durante Hermes)
+        k_nano::interrupts::mouse_poll_bytes();
+        // Expira arm do OFF
+        {
+            let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            if self.power_armed_until != 0 && tick > self.power_armed_until {
+                self.power_armed_until = 0;
+                *POWER_BANNER.lock() = None;
+            }
+        }
+        let (mx, my, btn) = {
+            use core::sync::atomic::Ordering;
+            let mx = k_nano::interrupts::MOUSE_ABS_X.load(Ordering::Acquire) as usize;
+            let my = k_nano::interrupts::MOUSE_ABS_Y.load(Ordering::Acquire) as usize;
+            let btn = k_nano::interrupts::MOUSE_ABS_BTN.load(Ordering::Acquire);
+            *MOUSE_X.lock() = mx;
+            *MOUSE_Y.lock() = my;
+            *MOUSE_BUTTONS.lock() = btn;
+            (mx, my, btn)
+        };
+        // Clique confiável: edge no Display (nao so EventBus — pacotes intermediários
+        // se perdem no AtomicU32 do LAST_MOUSE_PACKET).
+        {
+            use core::sync::atomic::Ordering;
+            let prev = k_nano::interrupts::MOUSE_PREV_BTN.swap(btn, Ordering::AcqRel);
+            let pressed = btn & !prev;
+            if pressed != 0 {
+                k_nano::interrupts::MOUSE_CLICK_FLASH.store(18, Ordering::Release);
+                let hit = self.handle_pointer_click(pressed, mx, my);
+                k_nano::slog_jarbas!(
+                    "MOUSE",
+                    "info",
+                    "CLICK btn={:#x} @{}x{} hit={}",
+                    pressed,
+                    mx,
+                    my,
+                    hit
+                );
+            }
+        }
+        static STATUS_LOG: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+        let sn = STATUS_LOG.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if sn < 5 || sn % 120 == 0 {
+            k_nano::interrupts::mouse_log_status("display_tick");
         }
 
         // ADR-0047-H1: publish demo UI_SPEC once
@@ -186,7 +347,12 @@ impl Agent for DisplayAgent {
         }
 
         // H4: avatar telemetria from LatentBus norm + H2/H5 viz
-        while let Some(pkt) = self.latent_receiver.try_receive() {
+        if self.latent_receiver.is_none() {
+            self.latent_receiver =
+                Some(k_nano::LATENT_BUS.subscribe(event_bus::TOPIC_THOUGHT_LLM));
+        }
+        if let Some(ref rx) = self.latent_receiver {
+            while let Some(pkt) = rx.try_receive() {
             let norm = f32::from_bits(pkt.norm_bits);
             if let Some(ref mut avatar) = self.avatar {
                 let st = if norm > 8.0 {
@@ -223,7 +389,8 @@ impl Agent for DisplayAgent {
                     crate::display::embed_viz::mark_h5();
                 }
             }
-        }
+            } // while pkt
+        } // if latent_receiver
 
         // Keyboard echo
         while let Some(ev) = self.echo_receiver.try_receive() {
@@ -330,75 +497,36 @@ impl Agent for DisplayAgent {
                 *MOUSE_Y.lock() = my;
             }
         }
-        while let Some(ev) = self.click_receiver.try_receive() {
-            if ev.payload.len() >= 3 {
-                let btn = ev.payload[0];
-                let cx = u16::from_le_bytes([ev.payload[1], ev.payload[2]]) as usize;
-                let cy = if ev.payload.len() >= 5 {
-                    u16::from_le_bytes([ev.payload[3], ev.payload[4]]) as usize
-                } else { 0 };
-                *MOUSE_BUTTONS.lock() = btn;
+        // EventBus MOUSE_CLICK: drenar só (UI já tratada no edge MOUSE_ABS_BTN).
+        while self.click_receiver.try_receive().is_some() {}
 
+        // Drag: solta no release do botão esquerdo; move enquanto pressionado.
+        if self.dragging {
+            if (btn & 1) == 0 {
+                self.dragging = false;
+            } else {
                 let mut comp = COMPOSITOR.lock();
                 if let Some(ref mut desktop) = *comp {
-                    let apps_clone = desktop.apps.clone();
-                    // Click na dock bar: toggle app
-                    let dock_y = desktop.h.saturating_sub(36);
-                    if cy >= dock_y {
-                        for (idx, app) in apps_clone.iter().enumerate() {
-                            if app.visible {
-                                let rx = 10 + idx * 66;
-                                if cx >= rx && cx <= rx + 60 {
-                                    desktop.toggle_app(app.id);
-                                }
-                            }
-                        }
-                    } else if btn == 1 { // Left click — check close buttons
-                        for app in &apps_clone {
-                            if !app.visible { continue; }
-                            let cx_btn = app.x + app.w - 20;
-                            if cx >= cx_btn && cx <= cx_btn + 16 && cy >= app.y + 3 && cy <= app.y + 19 {
-                                desktop.close_window(app.id);
-                                break;
-                            }
-                            if cx >= app.x && cx <= app.x + app.w && cy >= app.y && cy <= app.y + 24 {
-                                self.dragging = true;
-                                self.drag_id = app.id;
-                                self.drag_off_x = cx as isize - app.x as isize;
-                                self.drag_off_y = cy as isize - app.y as isize;
-                                break;
-                            }
-                        }
+                    let app = desktop
+                        .apps
+                        .iter_mut()
+                        .find(|a| a.id == self.drag_id && a.visible);
+                    if let Some(a) = app {
+                        let nx = (mx as isize - self.drag_off_x).max(0) as usize;
+                        let ny = (my as isize - self.drag_off_y).max(28) as usize;
+                        a.x = nx.min(desktop.w.saturating_sub(100));
+                        a.y = ny.min(desktop.h.saturating_sub(100));
+                    } else {
+                        self.dragging = false;
                     }
-                }
-                drop(comp);
-            }
-        }
-        // Handle drag continuacao (enquanto mouse move sem novo clique)
-        if self.dragging {
-            let mx = *MOUSE_X.lock();
-            let my = *MOUSE_Y.lock();
-            let mut comp = COMPOSITOR.lock();
-            if let Some(ref mut desktop) = *comp {
-                let app = desktop.apps.iter_mut().find(|a| a.id == self.drag_id && a.visible);
-                if let Some(a) = app {
-                    let nx = (mx as isize - self.drag_off_x).max(0) as usize;
-                    let ny = (my as isize - self.drag_off_y).max(28) as usize;
-                    a.x = nx.min(desktop.w.saturating_sub(100));
-                    a.y = ny.min(desktop.h.saturating_sub(100));
-                } else {
-                    self.dragging = false;
                 }
             }
         }
 
-        // Render desktop
+        // Render desktop: orb circular no compositor (avatar partículas após clear interno)
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {
-            if let Some(ref mut avatar) = self.avatar {
-                avatar.render(&mut desktop.fb);
-            }
-            desktop.render(tick);
+            desktop.render(tick, self.avatar.as_mut());
         }
         drop(comp);
 

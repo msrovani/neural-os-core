@@ -101,6 +101,11 @@ pub fn skip_flush_reboot() -> bool {
     SKIP_FLUSH_REBOOT.load(Ordering::Relaxed)
 }
 
+/// Marca esta sessão para não pedir soft-reboot de novo (continue boot).
+pub fn mark_skip_flush_reboot() {
+    SKIP_FLUSH_REBOOT.store(true, Ordering::Relaxed);
+}
+
 /// Anexa linha (sem alloc). No-op se PHYS_MEM_OFFSET ainda 0.
 pub fn append(msg: &str) {
     if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {

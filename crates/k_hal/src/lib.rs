@@ -15,6 +15,10 @@
 extern crate alloc;
 
 pub mod device_cap;
+pub mod device_recipe;
+pub mod fat_assets;
+pub mod lego_boot;
+pub mod unlock_dag;
 pub mod discovery;
 pub mod pci_bar;
 pub mod compute_port;
@@ -29,20 +33,21 @@ pub mod net;
 pub mod audio;
 pub mod gpu;
 
-/// Bring-up H1: popula DeviceTree a partir do PCI + HalOffer.
+/// Bring-up H1: DeviceTree + UnlockDAG tokens + HalOffer (ADR-0056).
 pub fn init_h1() -> usize {
     let n = discovery::populate_from_pci();
+    let fat = device_recipe::fat_readable_hint();
+    unlock_dag::boot_platform_tokens(n > 0, fat);
     offer::refresh_from_tree();
     k_nano::slog_hal!(
         "DeviceCap",
         "ready",
-        "devices={} compute={:?} net={:?} display={:?} audio={:?} video={:?}",
+        "devices={} fat={} unlock={:#x} compute={:?} net={:?}",
         n,
+        fat,
+        unlock_dag::token_mask(),
         compute_port::status().status,
-        net_port::status(),
-        display_port::status(),
-        audio_port::status(),
-        video_port::status()
+        net_port::status()
     );
     n
 }

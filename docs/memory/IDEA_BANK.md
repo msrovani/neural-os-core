@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-18 — SESSION_152 Pós-LAN (net_bridge · NetFs PASS · TLS BLOCKED · hygiene docs).
+**Última atualização:** 2026-07-19 — IDEA #466 BitNet ladder coerência; #465 Metrics HUD.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -57,6 +57,9 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#281–282** VFS/MHI/Storage | ADR-0040 | ✅ mapeada | base ✅; 282e–g ✅ SESSION_144; 282h ⏳ |
 | **#283** Desktop Cube | ADR-0047-HMI | ✅ mapeada | 🟡/💰 VirtIO-GPU 3D |
 | **#416–423** FS follow-up | ADR-0040 (+ NeuralFS.md) | ✅ triagem Onda 0 | ver tabela residuals abaixo |
+| **#464** Neural Device LEGO | ADR-0056 (+ 0051–53) | ✅ mapeada | hub+specs+H1 `device_recipe`; market fetch slot v3 |
+| **#465** Metrics HUD → skill/WASM | ADR-0052 + 0047-HMI (+ 0041 Cap) | 🟡 agendada | MVP nativo `sys_metrics`; destino Hermes+WASM |
+| **#466** BitNet ladder coerência | ADR-0019 | 🟡 agendada | 850 #PF+BPE ✅; forward host vs kernel + stop `</s>`; 13/2B/3B |
 
 #### Gaps — triagem Onda 0 ✅ (2026-07-18)
 
@@ -73,8 +76,9 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | GPU Direct | #423 | ▶️ AWAITING_HW SESSION_146 `[GDS-HW]` | stub probe; sem P2P |
 | LAN/RX/DHCP/VirtIO-net | #73, #117–120 | ✅ L3.5–L5 SESSION_149/150; #117 polish / #251–252 timer | base LAN |
 | `/fetch` + Update HTTP | #121, #308a/b | ✅ HTTP path SESSION_152; reboot A/B residual | net_bridge |
-| WiFi SoftMAC / async | #407–409, WifiAgent | ▶️ `depends_on: wifi` (não “Pós B-01”) | AWAITING RF |
-| TLS / model-fetch e2e | #123, #134, AirLLM Net | TLS BLOCKED; `airllm-net` PreFlight PARTIAL | lan ✅ |
+| WiFi ath10k QCA6174 | Note1050 / #407b | A0–A3 código ✅ SESSION_161; runtime Note AWAITING | pista ativa; iwlwifi secondary |
+| WiFi FW-MAC / iwlwifi | #407–409, WifiAgent | S0+prepS1 ✅ SESSION_159; ALIVE secondary | #408 ≠ SoftMAC ACK clássico |
+| TLS / model-fetch e2e | #123, #134, AirLLM Net | smoke ✅ + PKI hybrid SESSION_158; CertVerify/FAT residual; `airllm-net` PARTIAL | lan ✅ |
 
 ---
 
@@ -92,7 +96,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | 🔄 Fundido | Absorvido por item maior | 🔄 Fundido |
 | 🟢 v2.0 Sprint N | Implementado no Sprint N da v2.0 | 🟢 v2.0 Sprint 106-5 |
 | tag `depends_on: lan` | Liberado (L3.5–L5 + NetFs peer PASS) | TLS/e2e restantes ≠ RX=0 |
-| tag `depends_on: wifi` | Radio SoftMAC / iwlwifi — **não** “Pós B-01” | #407–409, WifiAgent |
+| tag `depends_on: wifi` | Radio iwlwifi FW-MAC — **não** “Pós B-01” | #407–409, WifiAgent; SESSION_154 |
 
 ---
 
@@ -381,7 +385,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | 120 | HTTP GET/POST client minimal (~200 LOC) | ✅ L5 smoke | LAN ✅ | SESSION_150: GET / → 301 google |
 | 121 | Hermes `/fetch` command | ✅ hostname DNS + HTTP | SESSION_152 | `resolve_and_http_get` / net_bridge |
 | 122 | Skill manifest field `requires_network: bool` | ✅ / 🟡 polish enforce | — | Campo existe; enforce CapGate quando RX=0 |
-| 123 | TLS 1.3 client (`embedded-tls` crate) | ▶️ BLOCKED soft-float | ADR-0016 N4 | `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate`; sem fake HTTPS |
+| 123 | TLS 1.3 client (`embedded-tls` 0.19) | ✅ smoke + PKI hybrid | ADR-0016 N4 | SESSION_158: pins+TOFU; `root_learn`→`root_pin`; CertVerify/FAT residual |
 | 124 | Wi-Fi / Ethernet (e1000/RTL8139 para HW real) | ✅ e1000 L3.5 / 🟡 wifi | `depends_on: wifi` | e1000 TX 0x3800 ✅ SESSION_149; WiFi aberto |
 | 250 | **Comando `/ping <ip>`** — ICMP Echo Request via e1000 | ✅ Block 6 | Sprint 23 | `net::ping()` usa `icmp_echo_request` + `parse_icmp_reply`. |
 | 251 | **DHCP timer-based wait** — refatorar spin loops para `hlt()` com timeout por timer ticks | 🟡 polish | LAN ✅ | Static user OK; timer polish opcional |
@@ -1517,7 +1521,7 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 404 | NVMe SQ/CQ | Sprint 99+ | ✅ |
 | 405 | Capability token crypto | Sprint 93 | 🟡 |
 | 406 | VirtIO-GPU fix | Sprint 97 | 🟡 |
-| 407-408 | WiFi SoftMAC + Async | Pos B-01 | 🔴 |
+| 407-408 | WiFi FW load + async (S1/S4) | S0+prepS1 ✅ SESSION_159; ALIVE/S4 AWAITING | 🟡 |
 
 ## Seção 5 — Changelog do Idea Bank
 
@@ -1671,10 +1675,11 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-06 | **404** | NVMe submission/completion queue architecture — Submission/completion queues, MSI-X, PRP lists, SGL. | 🟡 Sprint 99+ | Sprint 99+ | ADR-0010 |
 | 2026-07-06 | **405** | Capability token cryptographically signed — Skill recebe contexto com token criptografado scoped a operações permitidas, verificado pelo kernel. | 🟡 Sprint 93 | Sprint 93 | ADR-0010 |
 | 2026-07-06 | **406** | VirtIO-GPU GET_DISPLAY_INFO pending fix — Bug do QEMU TCG onde GET_DISPLAY_INFO retorna 0x0. | 🟡 Sprint 97 | Sprint 97 | ADR-0029 |
-| 2026-07-07 | **407** | WiFi SoftMAC firmware loading — Carregar blob iwlwifi.ucode via PCIe DMA para chips Intel AX200/AX210. Requer DMA ring + firmware loader da flash FAT. | ▶️ `depends_on: wifi` | N+2 | ~800 | generic_wifi.rs |
-| 2026-07-07 | **408** | Async executor bare-metal x86_64 — Port do Embassy para x86_64 (APIC timer + MSI-X como drivers de temporizador/interrupção). Necessário para SoftMAC (ACK 802.11 em ~10µs). | ▶️ `depends_on: wifi` | N+2 | ~1500 | embassy-rs + generic_wifi.rs |
-| 2026-07-07 | **409** | USB CDC ECM driver — Driver USB Ethernet Control Model para dongles WiFi HardMAC (Realtek RTL8188/RTL8192). Comunicação via xHCI isochronous + bulk. | ▶️ `depends_on: wifi` | N+2 | ~500 | xHCI + generic_wifi.rs |
-| 2026-07-07 | **410** | Bridge smoltcp::phy::Device para WifiChipset — Implementar trait Device do smoltcp sobre a trait WifiChipset do generic_wifi para unificar o path de pacotes. | 🟡 Sprint atual | Atual | ~50 | generic_wifi.rs + netstack.rs |
+| 2026-07-07 | **407** | iwlwifi FW load (S1) — DID→blob(+pnvm); FAT; TLV/seções; PCIe DMA/TFD; wake→ALIVE. Inventário API77 SESSION_154 (~7,51 MB; sem `.pnvm`). iwlwifi = **FW MAC**, não SoftMAC clássico. | 🟡 S0+prepS1 ✅; **secondary** pós SESSION_160 | S1 ALIVE | ~800 | `iwl_fw.rs` + `wifi_iwlwifi.rs` + FAT |
+| 2026-07-18 | **407b** | ath10k QCA6174 Note1050 — DID `168C:003E`; FW hw3.0 FAT; BMI/CE → fw_ready. | 🟡 A3 wired SESSION_161; PASS só com log Note | A3 runtime Note | ~900 | `ath10k_ce_bmi.rs` + `wifi_ath10k.rs` |
+| 2026-07-07 | **408** | Async executor bare-metal (Embassy-style) — APIC/MSI-X. **Reclassificado SESSION_154:** não assumir SoftMAC ACK ~10µs (ath9k); iwlwifi ACK no FW. Só se S2 provar timing host-side (fase S4). | ▶️ `depends_on: wifi` | S4 condicional | ~1500 | embassy-rs + MSI-X |
+| 2026-07-07 | **409** | USB CDC ECM HardMAC (S5) — dongles RTL8188/8192 via xHCI se PCIe iwlwifi bloqueado. | ▶️ `depends_on: wifi` | S5 alt | ~500 | xHCI + `generic_wifi.rs` |
+| 2026-07-07 | **410** | Bridge smoltcp::phy::Device ↔ WifiChipset — após RF link (pós-S3); inject hook MSI-X já existe. | ▶️ `depends_on: wifi` | S3+ | ~50 | `generic_wifi.rs` + `netstack.rs` |
 | 2026-07-08 | **411** | SkillOpt (Microsoft Research) — Otimizador de agent skills em espaço textual. Optimizer model (BitNet) gera add/delete/replace edits no SKILL.md, aceitos só se melhoram score de validação. SleepCycleAgent como scheduler de épocas. ~145 LOC. | 🟡 Sprint 99 | Sprint 99 | ~145 | agents.rs + cognitive.rs + skill_loader.rs |
 | 2026-07-08 | **412** | SGLang Structured Decoding (Stanford/Berkeley) — FSM comprimido para geração constraint a JSON/SKILL.md/shell. Mascara logits no BitNet decoder para só tokens válidos. ~120 LOC. | 🟡 Sprint 99 | Sprint 99 | ~120 | cortex.rs + cognitive.rs |
 | 2026-07-08 | **413** | vLLM PagedAttention (UC Berkeley, SOSP 2023) — KV cache paginado com COW entre prefixos. Frame allocator + page table já existem. Ganho marginal para single-user. | ⏳ Sprint 100+ | Sprint 100+ | ~100 | cortex.rs + allocator |
@@ -1730,3 +1735,5 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-18 | **459** | **k-HAL R1 + HalOffer + H4+/H5+/AS** — L0–L4; DeviceCap; QUEUE_NOTIFY real; Cap grant no bind; AS shallow PoC; VirtIO=transporte BE. | ✅ PoC v1.8.6 | ADR-0041 §9–§10 | SESSION_140 | `crates/k_hal`, `hermes/hal_offer.rs` |
 | 2026-07-18 | **462** | **Auditoria ideias antigas** — STALE→✅/🔄; VIABLE→Onda+tags `depends_on: lan`; DEFER/💰/❌; legenda AWAITING_HW; zero 🟡 órfão nos IDs tocados. | ✅ docs | governança | SESSION_143 | IDEA_BANK + TODO + STATE |
 | 2026-07-18 | **463** | **Marco v1.9.0 TEST** — Residuals 0–7 + Pós-LAN B-01 (net_bridge, NetFs PASS, TLS BLOCKED); continua não estável; ≠ v2.0.0. | ✅ documentação/release | v1.9.0 teste | SESSION_153 | CHANGELOG + tag `v1.9.0` |
+| 2026-07-18 | **464** | **Neural Device LEGO** — L0 Bus / L1 HalOffer / L2 DeviceRecipe; UnlockDAG; trust Ed25519+blob_hash; community Adopt-a-Chip; SDIO≠bring-up; H1 bind table; NeuralFS `ecosystem/devices/`; slot `/market fetch` v3. | 🟡 MVP docs+H1 | ADR-0056 | community + `device_recipe.rs` | Install≠Ready |
+| 2026-07-19 | **465** | **Metrics HUD → skill Hermes → agent-wasm** — Relógios CPU/MEM/GPU/HD no Jarbas. **MVP atual:** `MetricsAgent` nativo hardcoded (`sys_metrics`, poll ~0,5s) + snapshot + compositor. **Destino:** skill ADR-0052 (`acionaveis: poll_every:N`) orquestrada pelo Hermes; HUD só consome EventBus (`SYS_METRICS`); evolução `agent-wasm` sob CapGate. Leituras HW (frames/ATA/VRAM/sched) ficam atrás de Cap/HalOffer observe-only — WASM SFI **não** toca MMIO. Sem stub Agency. | 🟡 agendada (MVP nativo ✅) | ADR-0052 + 0047-HMI + 0041 | `metrics_agent.rs` + `gauges.rs` | Cap métricas + PackageHub |

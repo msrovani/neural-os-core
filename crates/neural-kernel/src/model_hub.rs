@@ -33,7 +33,9 @@ impl ModelSlot {
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "active" | "current" | "generator" => Some(Self::Active),
-            "generator_fast" | "fast" | "850m" | "bitnet850" => Some(Self::GeneratorFast),
+            "generator_fast" | "fast" | "850m" | "bitnet850" | "1p3" | "1.3b" | "xl" => {
+                Some(Self::GeneratorFast)
+            }
             "generator_pro" | "pro" | "3b" | "bitnet3b" => Some(Self::GeneratorPro),
             "tinystories" | "tiny" | "smoke" => Some(Self::TinyStories),
             "rust_coder" | "rustcoder" => Some(Self::RustCoder),
@@ -203,7 +205,7 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
     const MB: usize = 1024 * 1024;
     if len < 20 * MB {
         ModelSlot::TinyStories
-    } else if len < 200 * MB {
+    } else if len < 450 * MB {
         ModelSlot::GeneratorFast
     } else {
         ModelSlot::GeneratorPro
@@ -214,10 +216,25 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
 pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
     match slot {
         ModelSlot::TinyStories => &["TINYSTOR.BIN", "TINY.BIN", "STORIES.BIN"],
-        ModelSlot::GeneratorFast => &["BITNET850.BIN", "BITN850.BIN", "MICRO.BIN", "MICRO.BITNET"],
+        ModelSlot::GeneratorFast => &[
+            "BITNET13.BIN",
+            "BITN13.BIN",
+            "BITNET850.BIN",
+            "BITN850.BIN",
+            "MICRO.BIN",
+            "MICRO.BITNET",
+        ],
         ModelSlot::GeneratorPro => &["BITNET3B.BIN", "BITN3B.BIN", "BITNET2B.BIN"],
         ModelSlot::RustCoder => &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
         ModelSlot::HwExpert => &["HWEXPRT.BIN", "HWEXPERT.BIN"],
-        ModelSlot::Active => &["BITNET2B.BIN", "BITNET.BIN", "MICRO.BITNET", "MICRO.BIN"],
+        ModelSlot::Active => &[
+            "BITNET13.BIN",
+            "BITNET850.BIN",
+            "BITNET2B.BIN",
+            "BITNET3B.BIN",
+            "BITNET.BIN",
+            "MICRO.BITNET",
+            "MICRO.BIN",
+        ],
     }
 }

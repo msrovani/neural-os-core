@@ -7,6 +7,23 @@
 - Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados
 - Glossário: ADR-0042 §0; INDEX “Nome do produto”
 
+## [1.9.1] — 2026-07-19 — BitNet 850 generate + BPE SP32 + TLS/WiFi/LEGO (TEST)
+
+**Versão:** v1.9.1 TEST / NÃO ESTÁVEL — **não** v2.0.0.
+
+### BitNet ladder 850 (SESSION_162)
+- **#PF fix:** AVX2 ternary matmul — desactivar bitwise OOB (`n%4`); cauda scalar `n%8` (`bitnet_avx2.rs`)
+- **Loader:** size = blob chat FAT; hub skip PIO se Active QEMU-loader; copy+`Box::leak`
+- **Layout v4:** `has_basic_rms=true` (evita rms=0)
+- **BPE SP32:** `export_bpe_bin.py --sp32` → BPB1+**MRG1** (61249 merges); load **antes** LLM-TEST
+- **LLM-TEST:** `ola` → encode HF `[1,288,433]`; resposta BPE (coerência semântica residual)
+- **Harness:** `tools/llm_ladder_bench.py`; FAT default **3072 MB**; `PACK_LLM=850|13|2b|3b|all`
+
+### TLS / WiFi / Device LEGO (SESSION_154–161)
+- TLS #123: embedded-tls soft-float; https_get; smoke google; PKI pins+TOFU
+- WiFi ath10k QCA6174 A0–A3 BMI→fw_ready (Note AWAITING)
+- ADR-0056 DeviceRecipe / UnlockDAG H1 + specs `docs/specs/device-lego/`
+
 ## [1.9.0] — 2026-07-18 — Pós-LAN B-01 + Residuals 0–7 (TEST)
 
 **Versão:** v1.9.0 TEST / NÃO ESTÁVEL — base v1.8.6; **não** v2.0.0.

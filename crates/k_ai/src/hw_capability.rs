@@ -254,7 +254,31 @@ fn table_lookup(
             source: "table",
             reg_tx: 0x1000, reg_rx: 0x1004, reg_db_tx: 0x2000, reg_db_rx: 0x2004, ring_size: 64,
         }),
+        // QCA6174 / Note 1050 — ath10k (ADR-0056 golden; NÃO ath9k)
+        (0x168C, 0x003E) | (0x168C, 0x0041) => Some(HwCapabilityCard {
+            vid, did, class, subclass,
+            name: String::from(name),
+            family: HwFamily::AtherosWifi,
+            agent: "WifiAgent",
+            firmware: Some("ath10k/QCA6174"),
+            caps_bits: WIFI | NET | NEEDS_FW | SCAN,
+            next_action: recipe_next_or(vid, did, HwNextAction::LoadFirmware),
+            source: "table",
+            reg_tx: 0, reg_rx: 0, reg_db_tx: 0, reg_db_rx: 0, ring_size: 0,
+        }),
         _ => None,
+    }
+}
+
+/// Consulta DeviceRecipe (k-hal): NeedsFw → LoadFirmware; Ok → BindWifiScan (≠ RF Ready).
+fn recipe_next_or(vid: u16, did: u16, fallback: HwNextAction) -> HwNextAction {
+    use k_hal::device_cap::DeviceClass;
+    use k_hal::device_recipe::{evaluate_device, RecipePromote};
+    match evaluate_device(vid, did, DeviceClass::Wifi) {
+        RecipePromote::NeedsFw => HwNextAction::LoadFirmware,
+        RecipePromote::Ok => HwNextAction::BindWifiScan,
+        RecipePromote::Escalate => HwNextAction::ObserveOnly,
+        RecipePromote::None => fallback,
     }
 }
 
@@ -324,9 +348,10 @@ fn wifi_heuristic(vid: u16) -> (HwFamily, &'static str, Option<&'static str>, u3
         0x10EC | 0x0BDA => (HwFamily::RealtekWifi, "WifiAgent", Some("rtlwifi"),
                    WIFI | NET | NEEDS_FW | SCAN, HwNextAction::LoadFirmware,
                    (0xA0, 0xA4, 0xD0, 0xD4, 16)),
-        0x168C => (HwFamily::AtherosWifi, "WifiAgent", Some("ath9k"),
+        // Atheros: default ath10k (QCA61x4); ath9k SoftMAC = recipe dedicada futura
+        0x168C => (HwFamily::AtherosWifi, "WifiAgent", Some("ath10k"),
                    WIFI | NET | NEEDS_FW | SCAN, HwNextAction::LoadFirmware,
-                   (0x800, 0x804, 0xC00, 0xC04, 32)),
+                   (0, 0, 0, 0, 0)),
         0x14E4 => (HwFamily::BroadcomWifi, "WifiAgent", Some("brcmfmac"),
                    WIFI | NET | NEEDS_FW | SCAN, HwNextAction::LoadFirmware,
                    (0x500, 0x504, 0x600, 0x604, 32)),

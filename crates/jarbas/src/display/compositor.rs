@@ -33,6 +33,21 @@ use libm::sinf;
 use crate::display::fb::DoubleBuffer;
 
 pub static COMPOSITOR: Mutex<Option<JarvisDesktop>> = Mutex::new(None);
+/// Banner power (confirm / shutting) — set pelo DisplayAgent.
+pub static POWER_BANNER: Mutex<Option<&'static str>> = Mutex::new(None);
+
+pub const POWER_BTN_W: usize = 48;
+pub const POWER_BTN_H: usize = 28;
+
+pub fn power_btn_rect(scr_w: usize) -> (usize, usize, usize, usize) {
+    let x = scr_w.saturating_sub(POWER_BTN_W + 8);
+    (x, 4, POWER_BTN_W, POWER_BTN_H)
+}
+
+pub fn hit_power_button(cx: usize, cy: usize, scr_w: usize) -> bool {
+    let (bx, by, bw, bh) = power_btn_rect(scr_w);
+    cx >= bx && cx < bx + bw && cy >= by && cy < by + bh
+}
 
 pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: usize, r: u8, g: u8, b: u8) {
     crate::display::font::draw_text_scaled(fb, x, y, text, 1, scr_w, r, g, b);
@@ -170,7 +185,7 @@ impl JarvisDesktop {
         v
     }
 
-    pub fn render(&mut self, tick: u64) {
+    pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar::JarvisAvatar>) {
         self.tick = tick; let (w, h) = (self.w, self.h);
 
         // ── FPS control: skip frame se estiver muito rapido ──
@@ -179,28 +194,20 @@ impl JarvisDesktop {
         LAST_FRAME_TICK.store(tick, core::sync::atomic::Ordering::Relaxed);
 
         // ═══════════════════════════════════════════════════════
-        // LAYER 0: Fundo + Orb (mais profundo)
+        // LAYER 0: Fundo + Orb circular (resolução nativa — sem texto)
         // ═══════════════════════════════════════════════════════
         self.fb.fill_rect(0, 0, w, h, 10, 10, 15);
 
-        // Orb JARVIS como layer de fundo (centro, pulsante)
         if self.avatar_visible {
-            let orb = 60 + (sinf(tick as f32 * 0.04) * 20.0) as u32;
-            let ax = (w - orb as usize) / 2;
-            let ay = (h - orb as usize) / 2;
-            // Glow
-            self.fb.fill_rect(ax.saturating_sub(10), ay.saturating_sub(10), orb as usize + 20, orb as usize + 20, 0, 20, 40);
-            // Orb com FFT audio (se disponivel) ou pulsacao padrao
-            let fft_energy = crate::display::avatar::read_audio_energy();
-            let bri = if fft_energy > 0.0 {
-                130 + (fft_energy.min(1.0) * 100.0) as u8
-            } else {
-                130 + (sinf(tick as f32 * 0.05) * 40.0) as u8
-            };
-            let _g = if fft_energy > 0.5 { bri / 2 } else { bri / 3 };
-            self.fb.fill_rect(ax, ay, orb as usize, orb as usize, 0, bri, 255);
-            draw_text(&mut self.fb, ax + orb as usize / 2 - 20, ay + orb as usize + 5, "JARVIS", self.w, 0, 200, 255);
+            self.draw_orb_layer(tick, w, h);
+            if let Some(av) = avatar {
+                // Partículas/estado por cima do orb (não antes do clear)
+                av.render_particles(&mut self.fb);
+            }
         }
+
+        // Barra de relógios CPU/MEM/GPU/HD (métricas honestas)
+        crate::display::gauges::draw_status_gauges(&mut self.fb, w);
 
         // ═══════════════════════════════════════════════════════
         // LAYER 1: Hermes CLI Overlay (semi-transparente, canto)
@@ -259,13 +266,103 @@ impl JarvisDesktop {
             dx += 66;
         }
 
-        // Cursor do mouse (cruz 7x7)
+        // Botão OFF — canto superior direito (sempre visível)
+        {
+            let (bx, by, bw, bh) = power_btn_rect(w);
+            self.fb.fill_rect(bx, by, bw, bh, 160, 40, 40);
+            draw_text(&mut self.fb, bx + 10, by + 8, "OFF", self.w, 255, 220, 220);
+        }
+        if let Some(banner) = *POWER_BANNER.lock() {
+            let bx = w.saturating_sub(280) / 2;
+            self.fb.fill_rect(bx, 40, 280, 28, 40, 20, 20);
+            draw_text(&mut self.fb, bx + 8, 48, banner, self.w, 255, 200, 120);
+        }
+
+        // Cursor do mouse — seta visível (não só cruz 1px)
         let mx = *MOUSE_X.lock();
         let my = *MOUSE_Y.lock();
-        self.fb.fill_rect(mx.saturating_sub(3), my, 7, 1, 255, 255, 255);
-        self.fb.fill_rect(mx, my.saturating_sub(3), 1, 7, 255, 255, 255);
+        draw_mouse_cursor(&mut self.fb, mx, my, self.w, self.h);
 
         self.fb.swap();
+    }
+
+    /// Orb gráfico proporcional ao FB (não retângulo + label "JARVIS").
+    fn draw_orb_layer(&mut self, tick: u64, w: usize, h: usize) {
+        let cx = (w / 2) as isize;
+        let cy = (h / 2) as isize;
+        let base = (core::cmp::min(w, h) as f32 * 0.09).max(28.0);
+        let pulse = base + sinf(tick as f32 * 0.04) * (base * 0.22);
+        let fft_energy = crate::display::avatar::read_audio_energy();
+        let bri = if fft_energy > 0.0 {
+            130.0 + fft_energy.min(1.0) * 100.0
+        } else {
+            130.0 + sinf(tick as f32 * 0.05) * 40.0
+        };
+        let bri_u8 = bri.clamp(40.0, 255.0) as u8;
+        let glow_r = (pulse * 1.55) as isize;
+        let core_r = pulse as isize;
+        let hot_r = (pulse * 0.28).max(4.0) as isize;
+        // Halo externo → núcleo → highlight (cyan JARVIS)
+        self.fb.fill_circle_glow(cx, cy, glow_r, 0, 40, 90, 35);
+        self.fb.fill_circle_glow(cx, cy, core_r, 0, bri_u8, 255, 70);
+        self.fb.fill_circle_glow(cx, cy, hot_r, 220, 245, 255, 90);
+    }
+}
+
+fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, scr_h: usize) {
+    // Flash amarelo no clique (MOUSE_CLICK_FLASH decrementado por frame).
+    let flash = k_nano::interrupts::MOUSE_CLICK_FLASH.load(core::sync::atomic::Ordering::Acquire);
+    if flash > 0 {
+        k_nano::interrupts::MOUSE_CLICK_FLASH.fetch_sub(1, core::sync::atomic::Ordering::AcqRel);
+        let r = 10 + (flash as usize);
+        let ox = mx.saturating_sub(r / 2);
+        let oy = my.saturating_sub(r / 2);
+        fb.fill_rect(ox, oy, r.min(scr_w.saturating_sub(ox)), 2, 255, 220, 40);
+        fb.fill_rect(ox, oy, 2, r.min(scr_h.saturating_sub(oy)), 255, 220, 40);
+        let bx = mx.saturating_add(r / 2).min(scr_w.saturating_sub(1));
+        let by = my.saturating_add(r / 2).min(scr_h.saturating_sub(1));
+        fb.fill_rect(ox, by.saturating_sub(1), r.min(scr_w.saturating_sub(ox)), 2, 255, 220, 40);
+        fb.fill_rect(bx.saturating_sub(1), oy, 2, r.min(scr_h.saturating_sub(oy)), 255, 220, 40);
+    }
+
+    // Seta 11×16 (1=preto contorno, 2=branco fill) — legível no orb escuro.
+    const ARROW: [[u8; 11]; 16] = [
+        [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [2, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0],
+        [2, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0],
+        [2, 1, 1, 1, 2, 0, 0, 0, 0, 0, 0],
+        [2, 1, 1, 1, 1, 2, 0, 0, 0, 0, 0],
+        [2, 1, 1, 1, 1, 1, 2, 0, 0, 0, 0],
+        [2, 1, 1, 1, 1, 1, 1, 2, 0, 0, 0],
+        [2, 1, 1, 1, 1, 1, 1, 1, 2, 0, 0],
+        [2, 1, 1, 1, 1, 1, 1, 1, 1, 2, 0],
+        [2, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2],
+        [2, 1, 1, 2, 1, 1, 2, 0, 0, 0, 0],
+        [2, 1, 2, 0, 2, 1, 1, 2, 0, 0, 0],
+        [2, 2, 0, 0, 2, 1, 1, 2, 0, 0, 0],
+        [2, 0, 0, 0, 0, 2, 1, 1, 2, 0, 0],
+        [0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0],
+    ];
+    for (row, line) in ARROW.iter().enumerate() {
+        let y = my + row;
+        if y >= scr_h {
+            break;
+        }
+        for (col, &pix) in line.iter().enumerate() {
+            if pix == 0 {
+                continue;
+            }
+            let x = mx + col;
+            if x >= scr_w {
+                break;
+            }
+            if pix == 1 {
+                fb.fill_rect(x, y, 1, 1, 0, 0, 0);
+            } else {
+                fb.fill_rect(x, y, 1, 1, 255, 255, 255);
+            }
+        }
     }
 }
 

@@ -3,7 +3,7 @@
 use crate::{println};
 use alloc::vec::Vec;
 use core::ptr::read_volatile;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use x86_64::VirtAddr;
 
 static BOOT_RSDP_PHYS: AtomicU64 = AtomicU64::new(0);
@@ -34,6 +34,153 @@ pub struct AcpiInfo {
     pub has_x2apic: bool,
     pub phys_mem_offset: u64,
     pub iso_overrides: Vec<(u8, u32)>,
+    /// I/O port PM1a_CNT (0 = ausente).
+    pub pm1a_cnt_port: u16,
+    /// SLP_TYPa de \_S5_ (None = tentar fallbacks 5 depois 0).
+    pub slp_typa: Option<u8>,
+}
+
+/// Registradores S5 descobertos no boot (power_off_s5).
+static PM1A_CNT_PORT: AtomicU64 = AtomicU64::new(0);
+static SLP_TYPA_STORED: AtomicU8 = AtomicU8::new(0xFF);
+
+pub fn set_s5_regs(pm1a_cnt_port: u16, slp_typa: Option<u8>) {
+    PM1A_CNT_PORT.store(pm1a_cnt_port as u64, Ordering::Release);
+    SLP_TYPA_STORED.store(slp_typa.unwrap_or(0xFF), Ordering::Release);
+}
+
+pub fn pm1a_cnt_port() -> u16 {
+    PM1A_CNT_PORT.load(Ordering::Acquire) as u16
+}
+
+/// Escreve S5 em PM1a_CNT. Retorna true se tentou (porta conhecida).
+pub fn power_off_s5() -> bool {
+    let port = pm1a_cnt_port();
+    if port == 0 {
+        crate::slog_nano!("ACPI", "info", "S5 skip — PM1a_CNT ausente");
+        return false;
+    }
+    let stored = SLP_TYPA_STORED.load(Ordering::Acquire);
+    let mut types = [0u8; 3];
+    let n = if stored == 0xFF {
+        types[0] = 5;
+        types[1] = 0;
+        2
+    } else {
+        types[0] = stored;
+        types[1] = 5;
+        types[2] = 0;
+        3
+    };
+    power_off_s5_try(port, &types[..n])
+}
+
+fn power_off_s5_try(port: u16, types: &[u8]) -> bool {
+    for &typ in types {
+        // PM1_CNT: SLP_TYP[12:10] | SLP_EN[13]
+        let val: u16 = ((typ as u16) << 10) | (1u16 << 13);
+        crate::slog_nano!(
+            "ACPI",
+            "info",
+            "S5 write PM1a={:#x} typ={} val={:#x}",
+            port,
+            typ,
+            val
+        );
+        unsafe {
+            core::arch::asm!(
+                "out dx, ax",
+                in("dx") port,
+                in("ax") val,
+                options(nostack, preserves_flags)
+            );
+        }
+        // delay curto entre tentativas
+        for _ in 0..100_000 {
+            core::hint::spin_loop();
+        }
+    }
+    true
+}
+
+/// Extrai PM1a_CNT + SLP_TYPa de uma tabela FACP (+ DSDT \_S5_ se possível).
+pub unsafe fn parse_fadt_power(table_ptr: *const u8, phys_off: u64) -> (u16, Option<u8>) {
+    let len = read_volatile(table_ptr.add(4) as *const u32) as usize;
+    if len < 90 {
+        return (0, None);
+    }
+
+    let mut pm1a = read_volatile(table_ptr.add(64) as *const u32) as u16;
+
+    // X_PM1a_CNT_BLK (GAS) em FADT rev≥3 / length ≥ 244
+    if len >= 244 {
+        let space = read_volatile(table_ptr.add(172));
+        let addr = read_volatile(table_ptr.add(176) as *const u64);
+        if space == 1 && addr != 0 {
+            pm1a = addr as u16;
+        }
+    }
+
+    let mut slp: Option<u8> = None;
+    // DSDT phys: legacy @40; X_DSDT @140 se len>=148
+    let mut dsdt_phys = read_volatile(table_ptr.add(40) as *const u32) as u64;
+    if len >= 148 {
+        let x_dsdt = read_volatile(table_ptr.add(140) as *const u64);
+        if x_dsdt != 0 {
+            dsdt_phys = x_dsdt;
+        }
+    }
+    if dsdt_phys != 0 {
+        slp = parse_s5_from_dsdt(dsdt_phys, phys_off);
+    }
+
+    crate::slog_nano!(
+        "ACPI",
+        "info",
+        "FADT PM1a_CNT={:#x} SLP_TYPa={:?}",
+        pm1a,
+        slp
+    );
+    (pm1a, slp)
+}
+
+unsafe fn parse_s5_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {
+    let virt = VirtAddr::new(phys_off.wrapping_add(dsdt_phys)).as_u64() as *const u8;
+    let mut sig = [0u8; 4];
+    for i in 0..4 {
+        sig[i] = read_volatile(virt.add(i));
+    }
+    if &sig != b"DSDT" && &sig != b"SSDT" {
+        return None;
+    }
+    let len = read_volatile(virt.add(4) as *const u32) as usize;
+    if len < 36 || len > 2 * 1024 * 1024 {
+        return None;
+    }
+    // Procurar "_S5_" e BytePrefix 0x0A + typ
+    let needle = b"_S5_";
+    let end = len.saturating_sub(needle.len() + 4);
+    for i in 36..end {
+        let mut ok = true;
+        for (j, &b) in needle.iter().enumerate() {
+            if read_volatile(virt.add(i + j)) != b {
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        // Janela à frente: 0x0A <byte>
+        for k in (i + 4)..(i + 64).min(len.saturating_sub(1)) {
+            if read_volatile(virt.add(k)) == 0x0A {
+                let typ = read_volatile(virt.add(k + 1));
+                crate::slog_nano!("ACPI", "info", "DSDT _S5_ SLP_TYPa={}", typ);
+                return Some(typ);
+            }
+        }
+    }
+    None
 }
 
 fn checksum_valid(data: &[u8]) -> bool {
@@ -161,6 +308,8 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     let mut ioapic_count = 0u8;
     let mut has_x2apic = false;
     let mut iso_overrides = Vec::new();
+    let mut pm1a_cnt_port = 0u16;
+    let mut slp_typa: Option<u8> = None;
 
     for i in 0..entry_count {
         let entry_ptr = rsdt_virt.as_u64() as *const u8;
@@ -179,6 +328,13 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         }
 
         match &table_sig {
+            b"FACP" => {
+                crate::slog_nano!("ACPI", "info", "FADT encontrado em 0x{:x}", table_phys);
+                let (pm1a, slp) = parse_fadt_power(table_ptr, physical_memory_offset);
+                pm1a_cnt_port = pm1a;
+                slp_typa = slp;
+                set_s5_regs(pm1a, slp);
+            }
             b"APIC" => {
                 crate::slog_nano!("ACPI", "info", "MADT encontrado em 0x{:x}", table_phys);
                 let madt_len_raw = table_ptr.add(4) as *const u32;
@@ -250,5 +406,7 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         has_x2apic,
         phys_mem_offset: physical_memory_offset,
         iso_overrides,
+        pm1a_cnt_port,
+        slp_typa,
     })
 }

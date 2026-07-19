@@ -9,6 +9,42 @@ use alloc::vec::Vec;
 
 static CONSOLE_LINE: AtomicUsize = AtomicUsize::new(0);
 static CONSOLE_INITED: AtomicBool = AtomicBool::new(false);
+/// DisplayAgent / compositor assume o FB — console de boot (K*) deixa de pintar texto.
+static GRAPHICS_OWNED: AtomicBool = AtomicBool::new(false);
+
+/// DisplayAgent chama ao iniciar o desktop gráfico (orb/resolução nativa).
+/// Só após o 1º tick do compositor — no register mid-boot o FB ainda é console
+/// de diagnóstico (K* / HW sem serial, SESSION_139).
+pub fn claim_graphics() {
+    if GRAPHICS_OWNED.swap(true, Ordering::SeqCst) {
+        return; // já claimed
+    }
+    CONSOLE_INITED.store(false, Ordering::Relaxed);
+    // Apaga K* / TRACE residuais — orb gráfico vem no mesmo tick do compositor.
+    let guard = GPU.lock();
+    if let Some(ref gpu) = *guard {
+        if gpu.present && gpu.fb_addr != 0 {
+            clear_fb_pixels(
+                gpu.fb_addr as usize,
+                gpu.fb_height as usize,
+                gpu.stride_bytes(),
+                gpu.bytes_per_pixel(),
+                gpu.rgb_order,
+            );
+            // Cursor IRQ-safe enquanto Hermes THINK bloqueia o DisplayAgent
+            k_nano::interrupts::FB_ADDR.store(gpu.fb_addr, Ordering::Release);
+            k_nano::interrupts::FB_STRIDE.store(gpu.fb_stride, Ordering::Release);
+            k_nano::interrupts::FB_BPP.store(gpu.fb_bpp.max(3), Ordering::Release);
+            k_nano::interrupts::FB_W.store(gpu.fb_width, Ordering::Release);
+            k_nano::interrupts::FB_H.store(gpu.fb_height, Ordering::Release);
+        }
+    }
+}
+
+#[inline]
+pub fn graphics_owned() -> bool {
+    GRAPHICS_OWNED.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy)]
 pub struct GpuDevice {
@@ -280,9 +316,13 @@ pub fn console_clear() {
 }
 
 /// Uma linha no FB: limpa a faixa da linha e desenha (sem ghost/TRACE).
+/// No-op no pixel buffer depois de `claim_graphics()` (desktop/orb gráficos).
 pub fn console_print(text: &str) {
     let text = text.trim_end_matches(['\r', '\n']);
     if text.is_empty() {
+        return;
+    }
+    if GRAPHICS_OWNED.load(Ordering::Relaxed) {
         return;
     }
     if !CONSOLE_INITED.load(Ordering::Relaxed) {
@@ -445,8 +485,10 @@ pub fn boot_ckpt(n: u8, msg: &str) {
         pos += 1;
     }
     let s = core::str::from_utf8(&buf[..pos]).unwrap_or("K?");
-    // neural-kernel serial espelha no FB; ckpt só console (evita 2 linhas).
-    console_print(s);
+    // Após claim_graphics: só ramlog/serial — não pinta K* por cima do orb.
+    if !GRAPHICS_OWNED.load(Ordering::Relaxed) {
+        console_print(s);
+    }
     k_nano::boot_ramlog::set_last_ckpt(n);
     k_nano::boot_ramlog::append(s);
 }
@@ -584,6 +626,49 @@ impl DoubleBuffer {
         for dy in 0..h {
             for dx in 0..w {
                 self.set_pixel(x + dx, y + dy, r, g, b);
+            }
+        }
+    }
+
+    /// Disco com falloff radial (orb JARVIS) — resolução nativa do FB, sem texto.
+    pub fn fill_circle_glow(
+        &mut self,
+        cx: isize,
+        cy: isize,
+        radius: isize,
+        r: u8,
+        g: u8,
+        b: u8,
+        alpha_pct: u8,
+    ) {
+        if radius <= 0 {
+            return;
+        }
+        let r2 = (radius * radius) as i64;
+        let alpha = (alpha_pct as f32 / 100.0).clamp(0.0, 1.0);
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                let d2 = (dx as i64) * (dx as i64) + (dy as i64) * (dy as i64);
+                if d2 > r2 {
+                    continue;
+                }
+                let dist = libm::sqrtf(d2 as f32);
+                let falloff = (1.0 - dist / radius as f32) * alpha;
+                if falloff <= 0.01 {
+                    continue;
+                }
+                let px = cx + dx;
+                let py = cy + dy;
+                if px < 0 || py < 0 {
+                    continue;
+                }
+                self.set_pixel(
+                    px as usize,
+                    py as usize,
+                    (r as f32 * falloff) as u8,
+                    (g as f32 * falloff) as u8,
+                    (b as f32 * falloff) as u8,
+                );
             }
         }
     }

@@ -207,3 +207,9 @@ pub fn vram_status() -> alloc::string::String {
         alloc::string::String::from("VRAM: not initialized")
     }
 }
+
+/// `(used_bytes, total_bytes)` do buddy VRAM — None se não init.
+pub fn vram_usage() -> Option<(u64, u64)> {
+    let guard = VRAM_BUDDY.lock();
+    guard.as_ref().map(|b| (b.allocated(), b.size))
+}

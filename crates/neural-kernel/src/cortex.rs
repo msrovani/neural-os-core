@@ -1108,8 +1108,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
 
         // v4: layer_features byte (bit 0 = inner_attn_ln, bit 1 = ffn_layernorm, bit 2 = RoPE)
         let layer_features = if version >= 4 { read_u8(data, &mut off)? } else { 0u8 };
-        let mut has_inner_attn_ln = (layer_features & 0x01) != 0;
-        let mut has_ffn_layernorm = (layer_features & 0x02) != 0;
+        let has_inner_attn_ln = (layer_features & 0x01) != 0;
+        let has_ffn_layernorm = (layer_features & 0x02) != 0;
         let has_rope = (layer_features & 0x04) != 0;
 
         // BitNet-b1.58-2B-4T: HF packed shape (out/4,in) → q_dim=2560 (head_dim=128).
@@ -1152,46 +1152,37 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             + 2 * ((hidden * ffn_group + 3) / 4)
             + (intermediate_size * down_out + 3) / 4;
         let rem = data.len().saturating_sub(off);
-        let mut best_basic = true;
-        let mut best_inner = has_inner_attn_ln;
-        let mut best_ffn = has_ffn_layernorm;
-        let mut best_d = usize::MAX;
-        let mut bi = 0u8;
-        while bi < 2 {
-            let basic = bi == 0;
-            let mut ii = 0u8;
-            while ii < 2 {
-                let inner = ii == 1;
-                let mut fi = 0u8;
-                while fi < 2 {
-                    let ffn = fi == 1;
-                    let mut per = tern_per;
-                    if basic {
-                        per = per.saturating_add(hidden.saturating_mul(8));
-                    }
-                    if inner {
-                        per = per.saturating_add(kv_head_dim.saturating_mul(num_heads).saturating_mul(4));
-                    }
-                    if ffn {
-                        per = per.saturating_add(intermediate_size.saturating_mul(4));
-                    }
-                    let need = per.saturating_mul(num_layers);
-                    let d = if rem > need { rem - need } else { need - rem };
-                    if d < best_d {
-                        best_d = d;
-                        best_basic = basic;
-                        best_inner = inner;
-                        best_ffn = ffn;
-                    }
-                    fi += 1;
+        // v4 + prepare_extra_models: SEMPRE grava input/post RMS; feat bits = sub-norms
+        // em tamanho `hidden` (ones). Heuristica rem/need preferia rms=0 → #PF no FWD.
+        let (has_basic_rms, best_d) = if version >= 4 {
+            (true, 0usize)
+        } else {
+            let mut best_basic = true;
+            let mut best_d = usize::MAX;
+            let mut bi = 0u8;
+            while bi < 2 {
+                let basic = bi == 0;
+                let mut per = tern_per;
+                if basic {
+                    per = per.saturating_add(hidden.saturating_mul(8));
                 }
-                ii += 1;
+                if has_inner_attn_ln {
+                    per = per.saturating_add(hidden.saturating_mul(4));
+                }
+                if has_ffn_layernorm {
+                    per = per.saturating_add(hidden.saturating_mul(4));
+                }
+                let need = per.saturating_mul(num_layers);
+                let d = if rem > need { rem - need } else { need - rem };
+                if d < best_d {
+                    best_d = d;
+                    best_basic = basic;
+                }
+                bi += 1;
             }
-            bi += 1;
-        }
-        let has_basic_rms = best_basic;
-        has_inner_attn_ln = best_inner;
-        has_ffn_layernorm = best_ffn;
+            (best_basic, best_d)
+        };
+        // Nao sobrescrever feat bits com heuristica (inner/ffn).
         k_nano::slog_cortex!("LLM", "info", "q_dim={} head_dim={} k_dim={} ffn_g={} layout rms={} inner={} ffn_ln={} rem={}KB d={}KB",
             q_dim,
             kv_head_dim,
@@ -1219,12 +1210,22 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 vec![1.0; hidden]
             };
             let rms_inner_attn = if has_inner_attn_ln {
-                read_f32_vec(data, &mut off, kv_head_dim * num_heads)?
+                // prepare_extra_models grava `hidden` (nao so kv*heads quando diverge)
+                read_f32_vec(data, &mut off, hidden)?
             } else {
                 vec![1.0; kv_head_dim * num_heads]
             };
             let rms_ffn_norm = if has_ffn_layernorm {
-                read_f32_vec(data, &mut off, intermediate_size)?
+                // Blobs atuais: ones(hidden). Forward precisa intermediate — pad.
+                let v = read_f32_vec(data, &mut off, hidden)?;
+                if v.len() == intermediate_size {
+                    v
+                } else {
+                    let mut out = vec![1.0f32; intermediate_size];
+                    let n = core::cmp::min(v.len(), out.len());
+                    out[..n].copy_from_slice(&v[..n]);
+                    out
+                }
             } else {
                 vec![1.0; intermediate_size]
             };
@@ -1527,6 +1528,9 @@ fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
         if recent.iter().any(|&p| p == id) {
             continue;
         }
+        if crate::bpe::is_special_id(id) {
+            continue;
+        }
         let v = logits.data[start + j];
         if v.is_nan() { continue; }
         // inserção parcial no top
@@ -1799,6 +1803,12 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     } else {
         Tokenizer::encode(prompt).into_iter().map(|t| t as u32).collect()
     };
+    // Guarda: IDs Llama-128k num modelo 32k (ou vice-versa) → OOB no embed.
+    let vs = model.vocab_size;
+    tokens.retain(|&t| t < vs);
+    if tokens.is_empty() {
+        tokens.push(if use_bpe { crate::bpe::bos_id().min(vs.saturating_sub(1)) } else { BOS as u32 });
+    }
     let raw_len = tokens.len();
     // Soft-float + BitNet 2B: prompt longo = hours. NUNCA truncar para o ultimo token —
     // Tokenizer::encode termina em EOS → prompt=[EOS] → argmax→EOS → generate vazio.
@@ -1863,10 +1873,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
             model.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
         let next = if use_bpe {
-            // Soft-float 2B: lexicon saudacao/clima (logits reais). Senao HF pleno.
-            if model.hidden >= 2048 && is_greeting {
+            // Soft-float 2B Llama: lexicon saudacao/clima. SP32 / vocab≤33k: argmax HF pleno.
+            let sp32ish = model.vocab_size > 0 && model.vocab_size <= 33_000;
+            if !sp32ish && model.hidden >= 2048 && is_greeting {
                 argmax_row_greeting_only(&logits, 0, &recent)
-            } else if model.hidden >= 2048 && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
+            } else if !sp32ish && model.hidden >= 2048 && crate::demo_flags::RUN_WEATHER_E2E_SKINNY {
                 argmax_row_weather_only(&logits, 0, &recent)
             } else {
                 argmax_row_hf_vocab(&logits, 0, &recent)

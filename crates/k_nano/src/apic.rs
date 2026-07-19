@@ -133,6 +133,11 @@ impl IoApic {
             .map(|(_, gsi)| *gsi as u8)
             .unwrap_or(1);
 
+        let mouse_gsi = iso_overrides.iter()
+            .find(|(source, _)| *source == 12)
+            .map(|(_, gsi)| *gsi as u8)
+            .unwrap_or(12);
+
         // Timer (IRQ0) → vetor 32, desmascarado
         self.redirect_gsi(0, 32, 0);
         let reg_tmr = 0x10;
@@ -149,11 +154,11 @@ impl IoApic {
         crate::slog_nano!("APIC", "info", "Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.");
         println!("[APIC] IOAPIC configurado: keyboard->vec33, mouse->vec44.");
 
-        // Mouse (IRQ12) → vetor 44, desmascarado
-        self.redirect_gsi(12, 44, 0);
-        let reg_mouse = 0x10 + 12 * 2;
+        // Mouse (IRQ12 / GSI override) → vetor 44, desmascarado
+        self.redirect_gsi(mouse_gsi, 44, 0);
+        let reg_mouse = 0x10 + mouse_gsi * 2;
         self.write(reg_mouse, self.read(reg_mouse) & !0x10000);
-        crate::slog_nano!("APIC", "info", "Mouse (IRQ12) redirecionado para vetor 44.");
+        crate::slog_nano!("APIC", "info", "Mouse (IRQ12) GSI {} → vetor 44.", mouse_gsi);
     }
 }
 
@@ -431,19 +436,23 @@ unsafe fn lapic_write_reg(reg: u64, value: u32) {
     }
 }
 
-/// Espera ICR idle (checa bit 12 — delivery status)
+/// Espera ICR idle (bit 12). Timeout evita hang eterno em HW real.
+/// Em x2APIC o bit 12 é reserved/0 — retorna imediato.
 unsafe fn icr_wait_idle() {
     if USING_X2APIC.load(Ordering::Relaxed) {
-        // x2APIC: ICR é MSR único 0x830, bit 12 = delivery status
-        while (lapic_read_reg(LAPIC_ICR_LOW) & (1 << 12)) != 0 {
-            core::hint::spin_loop();
-        }
-    } else {
-        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
-        while (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) != 0 {
-            core::hint::spin_loop();
-        }
+        return;
     }
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return;
+    }
+    for _ in 0..2_000_000u32 {
+        if (read_volatile((base + LAPIC_ICR_LOW) as *const u32) & (1 << 12)) == 0 {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+    crate::slog_nano!("SMP", "warn", "ICR delivery timeout — continue BSP");
 }
 
 pub unsafe fn apic_eoi() {

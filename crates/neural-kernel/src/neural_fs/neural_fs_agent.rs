@@ -167,7 +167,16 @@ impl NeuralFsAgent {
                 Some(ino) => ino,
                 None => vol.create_dir(dev, root, "ecosystem")?,
             };
-            for name in ["skills", "agents", "plugins", "mcp", "models", "firmware", "workflows"] {
+            for name in [
+                "skills",
+                "agents",
+                "plugins",
+                "mcp",
+                "models",
+                "firmware",
+                "workflows",
+                "devices",
+            ] {
                 if vol.lookup_dir_entry(dev, eco, name).is_none() {
                     let _ = vol.create_dir(dev, eco, name);
                 }

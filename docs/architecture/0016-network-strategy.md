@@ -79,15 +79,28 @@ Dependências: N2
 - HTTP GET client mínimo (~200 LOC) sobre smoltcp TCP
 - Test: Hermes baixa um arquivo de um servidor HTTP
 
-### Fase N4 — TLS + HTTPS (Pós-MVP, Sprint 25+)
+### Fase N4 — TLS + HTTPS (Pós-MVP; BLOCKED soft-float)
 
-Dependências: N3, WASM (Sprint 25+)
+Dependências: N3; WASM/CapGate opcional (offload)
 
-- `embedded-tls` ou similar para TLS 1.3
-- Certificado embutido ou trust-on-first-use
-- Entregável: HTTPS para skill updates seguros
+- Candidatos: `embedded-tls` 0.19 (drogue), `noxtls`, ou primitivas RustCrypto/rscrypto + handshake mínimo
+- Certificado embutido ou trust-on-first-use + CapGate + Trust `(token,agent,skill)`
+- Entregável: HTTPS para skill updates / Marketplace / `/model-fetch` seguros
 
 **Nota 2026-07-18 (Pós-LAN):** `embedded-tls` **BLOCKED** no target `x86_64-unknown-none` + soft-float do bin — não adicionado às deps. Stub `net::https_get` → `Err("tls_not_ready")` + log `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate`. **Nunca** strip `https://` → `http://:80`. HTTP plain (N3) permanece o path ativo.
+
+**Pesquisa SESSION_154 + probe SESSION_155 (2026-07-18):**
+
+| Opção | Abordagem | Estado |
+|-------|-----------|--------|
+| **A** | Compile probe `tools/check-tls` + `embedded-tls` 0.19 `default-features=false` | ✅ **PASS** soft-float (`SESSION_155`) |
+| **B** | Hardfloat seletivo só crate crypto | ⏳ desnecessário p/ compile; reservar se RNG/AES-NI |
+| **C** | Offload HTTPS Ring3/WASM CapGate | ⏳ fallback |
+| **D** | Stack mínimo integer-only | ⏳ último recurso |
+
+**Wire SESSION_156 + smoke SESSION_157:** `https_get` + soft crypto (`polyval_force_soft`/`aes_force_soft`/`sha2 force-soft`). QEMU: `[TLS] VERDICT=PASS bytes=80952` + `smoke=PASS` (google, WHPX `-cpu qemu64`).
+
+**PKI híbrido SESSION_158:** `HybridProvider` (`tls_trust.rs`) — hosts conhecidos → pin sticky (`root_learn`→`root_pin`); demais → TOFU. Fingerprint SHA-256(leaf DER). Smoke: `trust=root_learn` + `root_pin` (google×2). Residuais: CertificateVerify crypto, persistência FAT, CA chain (`rustpki` não wired).
 
 ---
 
@@ -135,7 +148,7 @@ Isso significa que Sprint 23 (MVP+1) é o **Network Sprint** — adicionamos um 
 | 120 | HTTP GET/POST client | 🟡 Sprint 23 | Sprint 23 | smoltcp TCP |
 | 121 | Hermes `/fetch` command | 🟡 Sprint 23 | Sprint 23 | HTTP client |
 | 122 | Skill `requires_network` manifest field | 🟡 Sprint 23 | Sprint 23 | SkillRegistry |
-| 123 | TLS 1.3 client (`embedded-tls`) | ⏳ Pós-MVP | Sprint 25+ | WASM, HTTP |
+| 123 | TLS 1.3 client (`embedded-tls` 0.19) | ✅ smoke + PKI hybrid | N4 SESSION_158 | root_learn→root_pin; CertVerify/FAT residual |
 | 124 | Wi-Fi (e1000/RTL8139 para hardware real) | ⏳ Pós-MVP | Sprint 26+ | VirtIO-net driver |
 
 ---

@@ -1,14 +1,38 @@
 #!/usr/bin/env python3
 """Cria imagem FAT32 com MBR, formata, copia modelos .bitnet e CONFIG.TXT.
-Uso: python tools/mkfat32.py [--size 512] [--label NEURAL-OS] [--output target/disk_qemu.raw]
+Uso: python tools/mkfat32.py [--size 3072] [--label NEURAL-OS] [--output target/disk_qemu.raw]
 
-Inclui BITNET-2B se existir (nao pula). Tamanho generoso p/ QEMU e HW (32GB pendrive ok).
+PACK_LLM=850|13|2b|3b|all  — progressivo (default: 850). Ex: PACK_LLM=850,13
+  850 → BITNET850; 13 → BITNET13 (~1.3B xl); 2b → BITNET2B; 3b → BITNET3B; all → tudo
+FAT32: partição pode ser 3GB+; limite ~4GB-1 é por *arquivo*. Modelos grandes (>PIO):
+  preferir AirLLM (/model GGUF ATA) em vez de PIO full-RAM.
 BOOT_MODE via env BOOT_MODE=qemu|hw (default: inferido do nome do arquivo).
 """
 import os, struct, sys, argparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DEFAULT_SIZE_MB = 1024
+DEFAULT_SIZE_MB = 3072  # 3GB dados — cabe 850+1.3B+2B; arquivo FAT32 máx ~4GB-1
+
+
+def pack_llm_set() -> set[str]:
+    """Tokens normalizados: 850, 13, 2b, 3b. Default só 850 (primeiro degrau)."""
+    raw = os.environ.get("PACK_LLM", "850").strip().lower()
+    if not raw or raw in ("none", "0", "off"):
+        return set()
+    if raw in ("all", "*"):
+        return {"850", "13", "2b", "3b"}
+    out: set[str] = set()
+    for tok in raw.replace(";", ",").split(","):
+        t = tok.strip().lower().replace(" ", "")
+        if t in ("850", "850m", "fast", "large"):
+            out.add("850")
+        elif t in ("13", "1.3", "1p3", "1.5", "xl", "1.58", "158"):
+            out.add("13")
+        elif t in ("2b", "2", "2.0"):
+            out.add("2b")
+        elif t in ("3b", "3", "pro"):
+            out.add("3b")
+    return out
 
 def find_file(name):
     for d in [ROOT, os.path.join(ROOT, "target"), os.path.join(ROOT, "firmware"),
@@ -16,6 +40,27 @@ def find_file(name):
         p = os.path.join(d, name)
         if os.path.exists(p): return p
     return None
+
+def find_large(name, min_bytes=1_000_000):
+    """Como find_file, mas exige tamanho mínimo (evita stub MICRO.BITNET ~13KB)."""
+    p = find_file(name)
+    if p and os.path.getsize(p) >= min_bytes:
+        return p
+    return None
+
+def find_bitnet_13():
+    return find_large("BITNET13.BIN") or find_large("bitnet_1p3b.bitnet")
+
+
+def find_bitnet_850():
+    return (
+        find_large("BITNET850.BIN")
+        or find_large("bitnet_850m.bitnet")
+        or find_large("MICRO.BIN")
+    )
+
+def find_bitnet_3b():
+    return find_large("BITNET3B.BIN") or find_large("bitnet_3B.bitnet")
 
 def align_up(v, a): return (v + a - 1) // a * a
 
@@ -113,25 +158,43 @@ def create_fat32(path, size_mb, label):
         f.write(b'\x00' * spc * bps)
         print(f"[OK] {path}: {size_mb}MB, {total_clusters} clusters, FAT {fat_sectors}s x {fat_count}")
 
+def _inject_device_legos(files: list) -> None:
+    tools_dir = os.path.join(ROOT, "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    try:
+        from pack_device_legos import append_lego_files
+
+        append_lego_files(files)
+    except Exception as e:
+        print(f"[LEGO] ERROR inject skipped: {e}")
+
+
 def populate(path):
+    llm = pack_llm_set()
+    print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
     files = [
         ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin")),
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet")),
-        # BITNET2B primeiro; BITNET.BIN = alias só se ≠ 2B (evita 2×577MB no disco 1G)
-        ("BITNET2B.BIN", find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN")
-         or find_file("BITNET-2B.BITNET") or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet")),
-        ("BITNET.BIN", find_file("BITNET.BIN") if find_file("BITNET.BIN")
-         and find_file("BITNET.BIN") != (find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN"))
-         else None),
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
         ("BPE.BIN", find_file("bpe_vocab.bin") or find_file("BPE.BIN")),
-        ("MICRO.BITNET", find_file("MICRO.BITNET") or find_file("target/MICRO.BITNET")),
-        ("MICRO.BIN", find_file("MICRO.BITNET")),
+        # Progressivo: PACK_LLM=850 → 13 → 2b → 3b (AirLLM p/ GGUF grandes no boot)
+        ("BITNET13.BIN", find_bitnet_13() if "13" in llm else None),
+        ("BITNET850.BIN", find_bitnet_850() if "850" in llm else None),
+        ("MICRO.BIN", None),  # evita stub; boot usa BITNET850/13
+        ("BITNET2B.BIN", (find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN")
+         or find_file("BITNET-2B.BITNET") or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet"))
+         if "2b" in llm else None),
+        ("BITNET.BIN", None),  # alias legado; não empacota stub
+        ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
+        ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
     ]
+    # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
+    _inject_device_legos(files)
     # SKIP_2B removido: com imagem 512MB+ e pendrive 32GB, sempre inclui se existir
     # Firmware blobs — política FAT (GSP dezenas de MB; não embutir catálogo inteiro).
     # FW_FAT_CHIPS=gp108,skl,kbl,green_sardine  (default)
@@ -158,13 +221,16 @@ def populate(path):
         "rtl_nic": ("rtl_nic/",),
         "rtlwifi": ("rtlwifi/",),
         "iwlwifi": ("intel/iwlwifi/",),
+        "ath10k": ("ath10k/",),
     }
 
     def fw_allowed(rel_posix: str) -> bool:
         if chip_allow is None:
             return True
         # NIC/WiFi legado: sempre no FAT (não é GSP)
-        if rel_posix.startswith(("rtl_nic/", "rtlwifi/", "intel/iwlwifi/", "realtek/")):
+        if rel_posix.startswith(
+            ("rtl_nic/", "rtlwifi/", "intel/iwlwifi/", "realtek/", "ath10k/")
+        ):
             return True
         # GSP: opt-in explícito (dezenas de MB)
         if "/gsp/" in rel_posix:
@@ -217,7 +283,25 @@ def populate(path):
                     "unload_bl.bin": "ACR_UBL.BIN",
                 }
                 lname = name.lower()
-                if ("nvidia" in prefix.lower() and "gp108" in prefix.lower()) or prefix in (
+                # Intel iwlwifi API77 — short 8.3 (SESSION_154 / S1 prep).
+                iwlwifi_short = {
+                    "iwlwifi-cc-a0-77.ucode": "FW_CC77.BIN",
+                    "iwlwifi-so-a0-gf-a0-77.ucode": "FW_SOGF.BIN",
+                    "iwlwifi-so-a0-hr-b0-77.ucode": "FW_SOHR.BIN",
+                    "iwlwifi-ty-a0-gf-a0-77.ucode": "FW_TYGF.BIN",
+                    "iwlwifi-qu-b0-hr-b0-77.ucode": "FW_QUHR.BIN",
+                }
+                # ath10k QCA6174 hw3.0 — short 8.3 (SESSION_160 / Note 1050).
+                ath10k_short = {
+                    "firmware-6.bin": "AT10K_F6.BIN",
+                    "board-2.bin": "AT10K_B2.BIN",
+                    "board.bin": "AT10K_BD.BIN",
+                }
+                if "iwlwifi" in prefix.lower() and lname in iwlwifi_short:
+                    fw_name = iwlwifi_short[lname]
+                elif "ath10k" in prefix.lower() and lname in ath10k_short:
+                    fw_name = ath10k_short[lname]
+                elif ("nvidia" in prefix.lower() and "gp108" in prefix.lower()) or prefix in (
                     "NVIDIA_GP108",
                     "NVIDIA_GP108_GR",
                     "NVIDIA_GP108_ACR",

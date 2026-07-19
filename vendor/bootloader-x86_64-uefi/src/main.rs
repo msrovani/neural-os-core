@@ -41,6 +41,7 @@ use x86_64::{
     structures::paging::{FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB},
 };
 
+mod fb_pick;
 mod memory_descriptor;
 
 static SYSTEM_TABLE: RacyCell<Option<SystemTable<Boot>>> = RacyCell::new(None);
@@ -728,7 +729,7 @@ fn init_logger(
     };
 
     // Intel HD/UHD (ex.: 620) costuma iniciar em PixelFormat::BltOnly — sem FB linear.
-    // O bootloader stock panica em gop.frame_buffer(). Sempre preferir Rgb/Bgr via SetMode.
+    // Cascata: [QEMU~1280] → EDID → teto 1080p → uncapped (sem panic).
     let min_h = config
         .frame_buffer
         .minimum_framebuffer_height
@@ -738,46 +739,16 @@ fn init_logger(
         .minimum_framebuffer_width
         .map(|v| usize::try_from(v).unwrap());
 
-    let mut pick_linear = |enforce_min: bool| {
-        let mut best: Option<(usize, uefi::proto::console::gop::Mode)> = None;
-        for mode in gop.modes() {
-            let info = mode.info();
-            match info.pixel_format() {
-                PixelFormat::Rgb | PixelFormat::Bgr => {}
-                PixelFormat::Bitmask | PixelFormat::BltOnly => continue,
-            }
-            let (w, h) = info.resolution();
-            if enforce_min {
-                if let Some(mh) = min_h {
-                    if h < mh {
-                        continue;
-                    }
-                }
-                if let Some(mw) = min_w {
-                    if w < mw {
-                        continue;
-                    }
-                }
-            }
-            let pixels = w.saturating_mul(h);
-            let replace = match &best {
-                None => true,
-                Some((bp, _)) => pixels >= *bp,
-            };
-            if replace {
-                best = Some((pixels, mode));
-            }
-        }
-        best.map(|(_, m)| m)
-    };
-
-    let mode = pick_linear(true).or_else(|| pick_linear(false));
-    if let Some(mode) = mode {
-        if gop.set_mode(&mode).is_err() {
-            return None;
-        }
-    } else {
+    let qemu = fb_pick::detect_qemu(st);
+    let edid = fb_pick::read_edid_preferred(image_handle, st, gop_handle);
+    let picked = fb_pick::pick_gop_mode(&gop, edid, min_w, min_h, qemu);
+    let Some(picked) = picked else {
         // Sem modo linear: kernel sobe sem FB (VGA text / serial).
+        return None;
+    };
+    let pick_reason = picked.reason;
+    let pick_edid = picked.edid;
+    if gop.set_mode(&picked.mode).is_err() {
         return None;
     }
 
@@ -814,6 +785,36 @@ fn init_logger(
         config.frame_buffer_logging,
         config.serial_logging,
     );
+
+    let (mw, mh) = mode_info.resolution();
+    let (cap_w, cap_h) = if qemu {
+        (fb_pick::QEMU_CAP_W, fb_pick::QEMU_CAP_H)
+    } else {
+        (fb_pick::CAP_W, fb_pick::CAP_H)
+    };
+    match pick_edid {
+        Some(e) => log::info!(
+            "FB pick reason={} mode={}x{} edid={}x{}@{}Hz cap={}x{} qemu={}",
+            pick_reason,
+            mw,
+            mh,
+            e.width,
+            e.height,
+            e.hz,
+            cap_w,
+            cap_h,
+            qemu
+        ),
+        None => log::info!(
+            "FB pick reason={} mode={}x{} edid=none cap={}x{} qemu={}",
+            pick_reason,
+            mw,
+            mh,
+            cap_w,
+            cap_h,
+            qemu
+        ),
+    }
 
     Some(RawFrameBufferInfo {
         addr: PhysAddr::new(framebuffer.as_mut_ptr() as u64),

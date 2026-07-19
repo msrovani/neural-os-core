@@ -21,8 +21,14 @@ pub fn execute(cmd: &str) -> String {
         "meminfo" | "memory" => { let ctx = k_nano::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
         "pci" => pci_ls(),
         "theme" => theme_cmd(args),
-        "shutdown" => { k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Triggered); k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Triggered); String::from("Shutdown...\n") }
-        "reboot" => { k_ai::shutdown::set_cause(k_ai::shutdown::ShutdownCause::Scheduled); k_ai::shutdown::write_persistent_shutdown_log(k_ai::shutdown::ShutdownCause::Scheduled); String::from("Reboot...\n") }
+        "shutdown" => {
+            k_ai::shutdown::request_shutdown();
+            String::from("Shutdown...\n")
+        }
+        "reboot" => {
+            k_ai::shutdown::request_reboot();
+            String::from("Reboot...\n")
+        }
         "date" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
         "uname" => String::from("Neural OS Hermes v0.109\n"),
         "cpuinfo" => alloc::format!("CPUs: {}\n", k_nano::smp::ap_entry_count() + 1),

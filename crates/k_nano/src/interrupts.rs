@@ -1,7 +1,7 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
 
 use crate::{println};
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 // ponytail: PICS/pic8259 removed — kernel só usa APIC
 use x86_64::instructions::segmentation::Segment;
@@ -17,6 +17,22 @@ pub const PIC_2_OFFSET: u8 = 40;
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
+/// Posição absoluta atualizada no IRQ/poll (não depende do MouseAgent / Hermes).
+pub static MOUSE_ABS_X: AtomicU32 = AtomicU32::new(640);
+pub static MOUSE_ABS_Y: AtomicU32 = AtomicU32::new(360);
+pub static MOUSE_ABS_BTN: AtomicU8 = AtomicU8::new(0);
+/// Edge detect no DisplayAgent / flash visual de clique.
+pub static MOUSE_PREV_BTN: AtomicU8 = AtomicU8::new(0);
+pub static MOUSE_CLICK_FLASH: AtomicU32 = AtomicU32::new(0);
+pub static MOUSE_MAX_X: AtomicU32 = AtomicU32::new(1279);
+pub static MOUSE_MAX_Y: AtomicU32 = AtomicU32::new(719);
+pub static MOUSE_BYTE_LOG: AtomicU32 = AtomicU32::new(0);
+/// FB físico para cursor IRQ-safe (Hermes THINK não redesenha).
+pub static FB_ADDR: AtomicU64 = AtomicU64::new(0);
+pub static FB_STRIDE: AtomicU32 = AtomicU32::new(0);
+pub static FB_BPP: AtomicU32 = AtomicU32::new(4);
+pub static FB_W: AtomicU32 = AtomicU32::new(0);
+pub static FB_H: AtomicU32 = AtomicU32::new(0);
 static MOUSE_PHASE: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B0: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B1: AtomicU8 = AtomicU8::new(0);
@@ -179,30 +195,192 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
+    let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
+    // Bit5=1 → dado do mouse no 0x60. Não roubar (desync do pacote PS/2).
+    if status & 0x20 != 0 {
+        send_eoi(33);
+        return;
+    }
+    if status & 0x01 == 0 {
+        send_eoi(33);
+        return;
+    }
     let mut data_port = Port::<u8>::new(0x60);
     let scancode: u8 = unsafe { data_port.read() };
     LAST_SCANCODE.store(scancode, Ordering::Release);
     send_eoi(33);
 }
 
-extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
-    use x86_64::instructions::port::Port;
-    // Mouse envia 1 byte por IRQ (3 bytes por pacote)
-    // Usamos uma fase global para montar o pacote
-    let mut data_port = Port::<u8>::new(0x60);
-    let byte: u8 = unsafe { data_port.read() };
+/// Alimenta a máquina de estados do pacote PS/2 (3 bytes). Usado por IRQ e poll.
+pub fn mouse_feed_byte(byte: u8) {
+    let n = MOUSE_BYTE_LOG.fetch_add(1, Ordering::Relaxed);
+    if n < 64 {
+        crate::slog_nano!(
+            "MOUSE",
+            "info",
+            "byte[{}]={:#04x} status_phase={} aux",
+            n,
+            byte,
+            MOUSE_PHASE.load(Ordering::Relaxed)
+        );
+    }
+
+    let phase = MOUSE_PHASE.load(Ordering::Relaxed);
+    if phase == 0 && (byte & 0x08) == 0 {
+        if n < 64 {
+            crate::slog_nano!("MOUSE", "info", "byte[{}] discard (no sync bit3)", n);
+        }
+        return;
+    }
     let phase = MOUSE_PHASE.fetch_add(1, Ordering::Relaxed) % 3;
     match phase {
         0 => MOUSE_B0.store(byte, Ordering::Release),
         1 => MOUSE_B1.store(byte, Ordering::Release),
         2 => {
-            MOUSE_B2.store(byte, Ordering::Release);
-            let packet = MOUSE_B0.load(Ordering::Acquire) as u32
-                | ((MOUSE_B1.load(Ordering::Acquire) as u32) << 8)
-                | ((byte as u32) << 16);
+            let b0 = MOUSE_B0.load(Ordering::Acquire);
+            let b1 = MOUSE_B1.load(Ordering::Acquire);
+            let b2 = byte;
+            let packet = b0 as u32 | ((b1 as u32) << 8) | ((b2 as u32) << 16);
             LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+            MOUSE_PHASE.store(0, Ordering::Release);
+
+            // Aplica delta já no IRQ — sobrevive ao Hermes THINK bloqueante.
+            let dx = b1 as i8 as i32;
+            let dy = -(b2 as i8 as i32);
+            let max_x = MOUSE_MAX_X.load(Ordering::Relaxed) as i32;
+            let max_y = MOUSE_MAX_Y.load(Ordering::Relaxed) as i32;
+            let nx = (MOUSE_ABS_X.load(Ordering::Relaxed) as i32 + dx).clamp(0, max_x);
+            let ny = (MOUSE_ABS_Y.load(Ordering::Relaxed) as i32 + dy).clamp(0, max_y);
+            MOUSE_ABS_X.store(nx as u32, Ordering::Release);
+            MOUSE_ABS_Y.store(ny as u32, Ordering::Release);
+            let btn = b0 & 0x07;
+            let prev = MOUSE_ABS_BTN.swap(btn, Ordering::AcqRel);
+            mouse_paint_irq_cursor(nx as u32, ny as u32);
+
+            let pressed = btn & !prev;
+            if pressed != 0 {
+                MOUSE_CLICK_FLASH.store(12, Ordering::Release);
+                crate::slog_nano!(
+                    "MOUSE",
+                    "info",
+                    "CLICK press={:#x} release_edge={:#x} @{}x{} (irq)",
+                    pressed,
+                    prev & !btn,
+                    nx,
+                    ny
+                );
+            } else if (prev & !btn) != 0 {
+                crate::slog_nano!(
+                    "MOUSE",
+                    "info",
+                    "CLICK release={:#x} @{}x{} (irq)",
+                    prev & !btn,
+                    nx,
+                    ny
+                );
+            }
+
+            let pkt_n = n / 3;
+            if pkt_n < 32 || pressed != 0 {
+                crate::slog_nano!(
+                    "MOUSE",
+                    "info",
+                    "pkt #{} raw={:02x}{:02x}{:02x} d={},{} pos={}x{} btn={:#x}",
+                    pkt_n,
+                    b0,
+                    b1,
+                    b2,
+                    dx,
+                    dy,
+                    nx,
+                    ny,
+                    btn
+                );
+            }
         }
         _ => {}
+    }
+}
+
+/// Pinta seta mínima no FB físico (visível mesmo com Hermes bloqueado).
+fn mouse_paint_irq_cursor(x: u32, y: u32) {
+    let addr = FB_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let stride = FB_STRIDE.load(Ordering::Relaxed) as usize;
+    let bpp = FB_BPP.load(Ordering::Relaxed) as usize;
+    if stride == 0 || bpp == 0 {
+        return;
+    }
+    let w = FB_W.load(Ordering::Relaxed) as usize;
+    let h = FB_H.load(Ordering::Relaxed) as usize;
+    let ptr = addr as *mut u8;
+    // Bloco 8×12 branco com borda preta — barato no IRQ
+    for row in 0..12u32 {
+        for col in 0..8u32 {
+            let px = x.saturating_add(col) as usize;
+            let py = y.saturating_add(row) as usize;
+            if px >= w || py >= h {
+                continue;
+            }
+            let edge = row == 0 || col == 0 || row == 11 || col == 7 || col == row;
+            let (r, g, b) = if edge { (0u8, 0u8, 0u8) } else { (255, 255, 255) };
+            let off = py * stride + px * bpp;
+            unsafe {
+                core::ptr::write_volatile(ptr.add(off), b);
+                if bpp > 1 {
+                    core::ptr::write_volatile(ptr.add(off + 1), g);
+                }
+                if bpp > 2 {
+                    core::ptr::write_volatile(ptr.add(off + 2), r);
+                }
+            }
+        }
+    }
+}
+
+/// Poll do buffer aux (bit5) — fallback se IRQ12 falhar no QEMU/WHPX.
+pub fn mouse_poll_bytes() {
+    use x86_64::instructions::port::Port;
+    for _ in 0..16 {
+        let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
+        if status & 0x01 == 0 {
+            break;
+        }
+        if status & 0x20 == 0 {
+            // Teclado — não consumir aqui
+            break;
+        }
+        let byte: u8 = unsafe { Port::<u8>::new(0x60).read() };
+        mouse_feed_byte(byte);
+    }
+}
+
+/// Log periódico do status 8042 (diagnóstico QEMU grab / IRQ).
+pub fn mouse_log_status(tag: &str) {
+    use x86_64::instructions::port::Port;
+    let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
+    crate::slog_nano!(
+        "MOUSE",
+        "info",
+        "{} status={:#04x} obf={} ibf={} aux={} pos={}x{}",
+        tag,
+        status,
+        status & 1,
+        (status >> 1) & 1,
+        (status >> 5) & 1,
+        MOUSE_ABS_X.load(Ordering::Relaxed),
+        MOUSE_ABS_Y.load(Ordering::Relaxed)
+    );
+}
+
+extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    use x86_64::instructions::port::Port;
+    let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
+    if status & 0x01 != 0 && status & 0x20 != 0 {
+        let byte: u8 = unsafe { Port::<u8>::new(0x60).read() };
+        mouse_feed_byte(byte);
     }
     send_eoi(44);
 }

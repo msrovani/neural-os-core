@@ -14,8 +14,12 @@ pub enum DeviceClass {
     Snd = 5,
     Input = 6,
     Display = 7,
-    /// Câmera / UVC (host USB xHCI ou VirtIO-input video).
+    /// Câmera / UVC (não confundir com host xHCI genérico).
     Video = 8,
+    /// Host USB xHCI (ADR-0056) — filhos HID/MSC/UAC/BT após EP0.
+    UsbHost = 9,
+    /// Bluetooth HCI (combo WiFi ou dongle USB).
+    Bluetooth = 10,
 }
 
 impl DeviceClass {
@@ -30,6 +34,8 @@ impl DeviceClass {
             DeviceClass::Input => "input",
             DeviceClass::Display => "display",
             DeviceClass::Video => "video",
+            DeviceClass::UsbHost => "usbhost",
+            DeviceClass::Bluetooth => "bluetooth",
         }
     }
 }
@@ -58,6 +64,8 @@ pub struct DeviceCap {
     pub has_display: bool,
     /// Bound = BE registrado; ≠ Ready/golden.
     pub bound: bool,
+    /// ADR-0056: RecipePromote as u8 (0=Ok … 3=None).
+    pub recipe_promote: u8,
 }
 
 impl DeviceCap {
@@ -69,6 +77,7 @@ impl DeviceCap {
             compute_candidate: false,
             has_display: false,
             bound: false,
+            recipe_promote: 3, // None
         }
     }
 }

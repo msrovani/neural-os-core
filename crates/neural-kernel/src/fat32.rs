@@ -230,6 +230,28 @@ pub fn disk_has_fat32(ata: &AtaDriver) -> bool {
         .any(|p| p.type_code == 0x0B || p.type_code == 0x0C || p.type_code == 0x1C)
 }
 
+/// Volume de dados QEMU/HW: MBR 0x07 + assinatura `EXFAT   ` no VBR (mkexfat.py).
+pub fn disk_has_exfat(ata: &AtaDriver) -> bool {
+    for p in read_mbr(ata) {
+        if p.type_code != 0x07 && p.type_code != 0xEE {
+            // 0x07 clássico; alguns layouts usam GPT — ainda checamos VBR abaixo
+        }
+        let mut vbr = [0u8; 512];
+        if !unsafe { ata.read_sectors(p.lba_start, &mut vbr, 1) } {
+            continue;
+        }
+        if &vbr[3..11] == b"EXFAT   " {
+            return true;
+        }
+    }
+    false
+}
+
+/// Disco de dados preferível a ESP boot (FAT pequenino / só UEFI).
+pub fn disk_has_data_fs(ata: &AtaDriver) -> bool {
+    disk_has_fat32(ata) || disk_has_exfat(ata)
+}
+
 /// Encontra o maior espaco livre nao particionado
 pub fn find_free_space(parts: &[Partition], total_sectors: u64) -> (u32, u32) {
     let mut occupied: Vec<(u32, u32)> = parts.iter()

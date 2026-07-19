@@ -126,11 +126,20 @@ pub unsafe fn init_smp() {
 
     let tramp_phys = {
         let mut guard = memory::GLOBAL_ALLOCATOR.lock();
-        let alloc = guard.as_mut().expect("Frame allocator not initialized");
-        let frame = alloc
-            .allocate_below_1mb()
-            .expect("Failed to allocate trampoline page below 1 MB");
-        frame.start_address().as_u64()
+        let Some(alloc) = guard.as_mut() else {
+            crate::slog_nano!("SMP", "warn", "sem frame alloc — BSP-only");
+            corepools::init_from_boot(bsp_lapic_id, 0);
+            return;
+        };
+        match alloc.allocate_below_1mb() {
+            Some(frame) => frame.start_address().as_u64(),
+            None => {
+                drop(guard);
+                crate::slog_nano!("SMP", "warn", "sem lowmem tramp — BSP-only");
+                corepools::init_from_boot(bsp_lapic_id, 0);
+                return;
+            }
+        }
     };
     crate::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
 
@@ -150,16 +159,25 @@ pub unsafe fn init_smp() {
         let page_table = &mut *page_table_ptr;
         let mut mapper = OffsetPageTable::new(page_table, VirtAddr::new(phys_offset));
 
-        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(0x40000));
+        // Identity-map do físico real (não 0x40000 fixo).
+        let page = Page::<Size4KiB>::containing_address(VirtAddr::new(tramp_phys));
         let frame = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(tramp_phys));
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
 
         let mut guard = crate::memory::GLOBAL_ALLOCATOR.lock();
-        let allocator = guard.as_mut().unwrap();
-        mapper
-            .map_to(page, frame, flags, &mut *allocator)
-            .unwrap()
-            .flush();
+        if let Some(allocator) = guard.as_mut() {
+            match mapper.map_to(page, frame, flags, &mut *allocator) {
+                Ok(flush) => flush.flush(),
+                Err(_) => {
+                    crate::slog_nano!(
+                        "SMP",
+                        "warn",
+                        "map_to tramp 0x{:x} falhou/ja-existe",
+                        tramp_phys
+                    );
+                }
+            }
+        }
     }
 
     let percpu_addr = &percpu::BSP_PCPU as *const _ as u64;
@@ -174,6 +192,27 @@ pub unsafe fn init_smp() {
     );
 
     let tramp_vector = (tramp_phys >> 12) as u8;
+    if tramp_phys >= 0x100000 || tramp_vector == 0 {
+        crate::slog_nano!("SMP", "warn", "bad tramp vector — BSP-only");
+        corepools::init_from_boot(bsp_lapic_id, 0);
+        return;
+    }
+
+    // HW real: shorthand INIT-SIPI hang — skip até SIPI por LAPIC ID.
+    if matches!(
+        crate::platform_probe::hypervisor(),
+        crate::platform_probe::HypervisorKind::None
+    ) {
+        crate::slog_nano!(
+            "SMP",
+            "info",
+            "BareMetal: skip INIT-SIPI tramp=0x{:x} — BSP-only",
+            tramp_phys
+        );
+        corepools::init_from_boot(bsp_lapic_id, 0);
+        return;
+    }
+
     crate::slog_nano!(
         "SMP",
         "info",

@@ -35,6 +35,16 @@ pub unsafe fn map_bars_uc(gpu: &GpuInfo) {
         k_nano::slog_hal!("GPU", "BAR", "VirtIO skip map_bars (display FE=GOP; BE deferred)");
         return;
     }
+    // QEMU std VGA (vendor Unknown, DID 0x1111) — map BAR causa #PF storm.
+    if gpu.vendor == GpuVendor::Unknown {
+        k_nano::slog_hal!(
+            "GPU",
+            "BAR",
+            "skip Unknown DID={:04x} (QEMU VGA / avoid #PF)",
+            gpu.device_id
+        );
+        return;
+    }
     if gpu.bar0 == 0 || (gpu.bar0 >> 48) != 0 {
         k_nano::slog_hal!("GPU", "BAR", "skip — bar0 invalido {:#x}", gpu.bar0);
         return;

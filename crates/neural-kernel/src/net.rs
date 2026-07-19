@@ -307,13 +307,13 @@ pub unsafe fn tcp_exchange(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<
     stack.tcp_exchange(host, port, data, now as u64)
 }
 
-/// Parse `http://host[:port]/path`. HTTPS → Err(`tls_not_ready`).
+/// Parse `http://host[:port]/path`. HTTPS → use `parse_https_url` / `https_get`.
 pub fn parse_http_url(
     url: &str,
 ) -> Result<(alloc::string::String, u16, alloc::string::String), &'static str> {
     let u = url.trim();
     if u.starts_with("https://") || u.starts_with("HTTPS://") {
-        return Err("tls_not_ready");
+        return Err("use_https_get");
     }
     let rest = u
         .strip_prefix("http://")
@@ -377,9 +377,13 @@ pub unsafe fn dns_resolve_host(hostname: &str) -> Option<[u8; 4]> {
     stack.dns_resolve(hostname, dns)
 }
 
-/// Resolve hostname + HTTP GET. Body only (headers stripped).
-/// `https://` → Err(`tls_not_ready`) — never silently strip to port 80.
+/// Resolve hostname + HTTP(S) GET. Body only (headers stripped).
+/// `https://` → TLS N4 (`https_get`); never silently strip to port 80.
 pub unsafe fn resolve_and_http_get(url: &str) -> Result<Vec<u8>, &'static str> {
+    let u = url.trim();
+    if u.starts_with("https://") || u.starts_with("HTTPS://") {
+        return https_get(u);
+    }
     let (host, port, path) = parse_http_url(url)?;
     let ip = dns_resolve_host(&host).ok_or("dns_failed")?;
     k_nano::slog_bin!(
@@ -406,28 +410,121 @@ pub fn resolve_and_http_get_safe(url: &str) -> Result<Vec<u8>, &'static str> {
     unsafe { resolve_and_http_get(url) }
 }
 
-/// HTTPS stub — `embedded-tls` blocked on soft-float / x86_64-unknown-none (ADR-0016 N4).
-/// Never strips https→http:80. Logs VERDICT=BLOCKED once per boot.
-pub fn https_get(_url: &str) -> Result<Vec<u8>, &'static str> {
-    log_tls_blocked_once();
-    Err("tls_not_ready")
+/// HTTPS GET — ADR-0016 N4 (`embedded-tls` 0.19). Trust = unsecure (sem PKI).
+/// Never strips https→http:80.
+pub fn https_get(url: &str) -> Result<Vec<u8>, &'static str> {
+    let (host, port, path) = crate::tls_client::parse_https_url(url)?;
+    let ip = unsafe { dns_resolve_host(&host) }.ok_or("dns_failed")?;
+    k_nano::slog_bin!(
+        "TLS",
+        "info",
+        "GET {}.{}.{}.{}:{}{} Host={} trust=hybrid",
+        ip[0],
+        ip[1],
+        ip[2],
+        ip[3],
+        port,
+        path,
+        host
+    );
+    let mut stack_guard = NETSTACK.lock();
+    let stack = stack_guard.as_mut().ok_or("no_netstack")?;
+    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    match crate::tls_client::https_get_on_stack(stack, ip, port, &host, &path, now) {
+        Ok(raw) => {
+            let body = strip_http_envelope(&raw);
+            if body.is_empty() {
+                k_nano::slog_bin!("TLS", "info", "VERDICT=FAIL reason=http_empty");
+                Err("http_empty")
+            } else {
+                k_nano::slog_bin!(
+                    "TLS",
+                    "info",
+                    "VERDICT=PASS bytes={} trust={}",
+                    body.len(),
+                    crate::tls_trust::last_trust().as_str()
+                );
+                Ok(body)
+            }
+        }
+        Err(e) => {
+            k_nano::slog_bin!("TLS", "info", "VERDICT=FAIL reason={}", e);
+            Err(e)
+        }
+    }
 }
 
-fn log_tls_blocked_once() {
+/// Call once at boot — wired N4, trust unsecure até PKI.
+pub fn log_tls_status_boot() {
     use core::sync::atomic::{AtomicBool, Ordering};
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
         k_nano::slog_bin!(
             "TLS",
             "info",
-            "VERDICT=BLOCKED reason=softfloat_or_crate"
+            "VERDICT=WIRED trust=hybrid crate=embedded-tls-0.19"
         );
     }
 }
 
-/// Call once at boot so serial always shows TLS status even without https:// fetch.
-pub fn log_tls_status_boot() {
-    log_tls_blocked_once();
+/// Smoke HTTPS pós-L5 (fora de `NETSTACK.lock` do bootstrap). Best-effort.
+pub fn smoke_https_if_online() {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    // TCG + soft-AES: handshake pode #UD (IP em faixa loader BitNet) e o handler faz hlt forever.
+    // Smoke HTTPS canônico = WHPX `-cpu qemu64` (SESSION_157). Não bloquear AgentFleet/JARVIS.
+    if matches!(
+        k_nano::platform_probe::hypervisor(),
+        k_nano::platform_probe::HypervisorKind::Tcg
+    ) {
+        k_nano::slog_bin!(
+            "TLS",
+            "info",
+            "smoke=SKIP reason=tcg_ud_risk (use WHPX qemu64 p/ smoke=PASS)"
+        );
+        return;
+    }
+    // Só se L5 HTTP deste boot passou (internet real via e1000/slirp).
+    let st = crate::network_agent::early_smoke_status();
+    if st != "L5_OK" {
+        k_nano::slog_bin!("TLS", "info", "smoke=SKIP reason=no_L5_OK status={}", st);
+        return;
+    }
+    // google.com: vizinho/DNS já aquecidos no L4/L5 deste boot.
+    // 1ª chamada → trust=root_learn; 2ª → trust=root_pin (pin sticky RAM).
+    k_nano::slog_bin!("TLS", "info", "smoke=START url=https://www.google.com/");
+    match https_get("https://www.google.com/") {
+        Ok(body) => {
+            k_nano::slog_bin!(
+                "TLS",
+                "info",
+                "smoke=PASS bytes={} trust={} (google#1)",
+                body.len(),
+                crate::tls_trust::last_trust().as_str()
+            );
+        }
+        Err(e) => {
+            k_nano::slog_bin!("TLS", "info", "smoke=FAIL reason={}", e);
+            return;
+        }
+    }
+    match https_get("https://www.google.com/") {
+        Ok(body) => {
+            k_nano::slog_bin!(
+                "TLS",
+                "info",
+                "smoke=PASS bytes={} trust={} (google#2)",
+                body.len(),
+                crate::tls_trust::last_trust().as_str()
+            );
+        }
+        Err(e) => {
+            k_nano::slog_bin!("TLS", "info", "smoke=FAIL reason={} (google#2)", e);
+        }
+    }
 }
 
 /// Resultado de GET com Range (AirLLM stream-to-disk).

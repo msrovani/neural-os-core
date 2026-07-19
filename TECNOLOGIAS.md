@@ -70,6 +70,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.10 | **ACPI Parser (RSDP/MADT/RSDT)** | 🔄 Parsing de ACPI para descoberta de hardware. Implementação própria sem depender de `acpi` crate. | ACPI spec, OSDev | — (especificação) | `acpi.rs` | ✅ 0 err |
 | 2.11 | **Huge Pages 2MiB/1GiB** | 🔄 `allocate_huge_2mb()` mapeia páginas grandes no page table para performance de memória. | x86_64 MMU, Linux hugetlbfs | GPLv2 | `memory.rs` | ✅ 0 err |
 | 2.12 | **DMA Uncacheable Pages** | 🏆 `dma_alloc()` → `map_page_uc()` (PWT+PCD) — solução para coerência cache/DMA. Fix crítico para NIC e GPU. | Intel x86 manual (PAT/MTRR), E1000 DMA debug (autor) | — (conhecimento HW) | `dma.rs`, `e1000.rs` | ✅ 0 err |
+| 2.13 | **Neural Device LEGO (ADR-0056)** | 🏆 L0 Bus / L1 HalOffer / L2 DeviceRecipe; UnlockDAG stages; Ed25519+blob_hash; UsbHost/Bluetooth; bind H1 só trusted+FW; community hub + AI-Friendly specs | HalOffer ADR-0041, PackageHub 0051–53 | AGPL + FW licenses | `k_hal/device_recipe.rs`, `docs/specs/device-lego/`, `docs/community/` | 🟡 MVP H1 |
 
 ---
 
@@ -100,8 +101,9 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 4.3 | **DHCP + DNS + HTTP** | 🏆 DNS **raw** Ethernet+IP+UDP no NIC + `skip_dns_name` (compressão); HTTP GET smoltcp + Host header. Smoke WHPX: L4 A-record + L5 301 (SESSION_150/152). | smoltcp, RFC 1035 | MIT | `netstack.rs`, `net.rs` | ✅ L4/L5 |
 | 4.3b | **net_bridge + resolve_and_http_get** | 🏆 Hermes FE → bin NETSTACK (evita espelho vazio). HTTPS → `tls_not_ready` (sem strip→:80). | — | — | `hermes/net_bridge.rs`, `net.rs` | ✅ SESSION_152 |
 | 4.3c | **NetFs #418 TCP peer** | 🏆 cmd+len+payload em `gateway:4446`; smoke LIST/READ/WRITE `[NETFS] VERDICT=PASS`. | — | — | `netfs.rs`, `tools/netfs_peer.py` | ✅ PASS |
-| 4.3d | **TLS stub #123** | ▶️ `embedded-tls` BLOCKED soft-float/`x86_64-unknown-none`. Log `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate`. | ADR-0016 N4 | — | `net.rs` `https_get` | ▶️ BLOCKED |
-| 4.4 | **WiFi Intel AX200/AX210 (iwlwifi)** | 🔬 Driver iwlwifi real: CSR/HBUS/SRAM registers, ucode loading pipeline, command/response via doorbell NMI. Blobs de firmware em `firmware/intel/iwlwifi/`. | iwlwifi Linux driver (eng. reversa) | GPLv2 (MIT/BSD firmware) | `wifi_iwlwifi.rs` | ✅ 0 err |
+| 4.3d | **TLS #123 N4** | 🏆 `embedded-tls` 0.19 + hybrid PKI (pins known + TOFU); smoke `root_learn`→`root_pin` (SESSION_158). | ADR-0016 N4 | Apache-2.0 | `tls_client.rs`, `tls_trust.rs` | ✅ hybrid |
+| 4.4 | **WiFi Intel AX200/AX210 (iwlwifi)** | 🔬 S0+prepS1 DID→`FW_*.BIN`; **secondary** (pista = ath10k Note). SESSION_159. | iwlwifi Linux | MIT/BSD firmware | `iwl_fw.rs`, `wifi_iwlwifi.rs` | 🟡 secondary |
+| 4.4b | **WiFi ath10k QCA6174** | 🏆 A3 BMI→fw_ready wired (CE0/1+LZ); FW_IMAGE 681KB; PASS só `FW_IND` pós-DONE. SESSION_161. | ath10k_pci / linux-firmware | MIT/BSD firmware | `ath10k_ce_bmi.rs`, `wifi_ath10k.rs` | 🟡 código; runtime Note |
 | 4.5 | **WiFi Agnostic Engine** | 🔄 WifiChipset trait + AgnosticWifiEngine com DMA rings. Suporte a Intel, Realtek, Atheros, Broadcom via tabela de 50+ VID/DID. | iwlwifi, rtlwifi, ath drivers | GPLv2 | `generic_wifi.rs` | ✅ 0 err |
 | 4.6 | **BrowserAgent HTTP Real** | 🏆 `fetch_page()` com DNS resolve + HTTP GET real via smoltcp. Antes: retornava placeholder HTML. Agora: requisição real. | Chromium networking (conceito) | BSD | `browser_agent.rs` | ✅ 0 err |
 | 4.7 | **Serial SLIP Tunnel** | 🏆 Bridge serial TCP para rede em sandbox (QEMU TCG). `serial_bridge.py` com watchdog + rate limiting. | SLIP protocol (RFC 1055), QEMU serial | — (padrão internet) | `slip.rs`, `tools/serial_bridge.py` | ✅ 0 err |
@@ -149,7 +151,9 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 7.2 | **Modelo .bitnet (formato próprio)** | 🏆 **Formato binário proprietário para modelos ternários.** Magic "BITN", header com spec completo (hidden, layers, heads, vocab, rope, medusa), pesos compactados em 2-bit (4 pesos/byte). | GGUF (llama.cpp), safetensors (HuggingFace) | MIT / Apache 2.0 | `cortex.rs` (load_model) | ✅ 0 err |
 | 7.2b | **ModelHub multi-slot** | ✅ TinyStories / generator_fast(850M) / generator_pro(3B) + Active; `load_models_multi`; GGUF→WASM SkillMarket; RustCoder 2B/3B FAT. Trinity indices estáveis. | SESSION_142 | MIT | `model_hub.rs`, `gguf_wasm.rs` | ✅ SESSION_142 |
 | 7.3 | **Medusa Speculative Decoding** | 🔄 Decodificação especulativa com 3 heads: head predict tokens, LLM verifica em paralelo. Aceleração de 2-3×. | Medusa paper (Cai et al., 2024) | MIT | `cortex.rs` | ✅ 0 err |
-| 7.4 | **BitNet AVX2 Kernel** | 🔄 `_mm256_cvtepi8_epi32` + FMA para matmul ternário acelerado por AVX2. 2-6× speedup em HW real. | BitNet.cpp (Microsoft) | MIT | `bitnet_avx2.rs` | ✅ 0 err |
+| 7.4 | **BitNet AVX2 Kernel (OOB-safe)** | ✅ Matmul ternário AVX2 + **cauda scalar** (`n%8`); bitwise path **off** (OOB store vocab 32002 → #PF). SESSION_162. | BitNet.cpp (Microsoft) | MIT | `bitnet_avx2.rs` | ✅ 850 FWD |
+| 7.4b | **BPB1 SentencePiece 32k + MRG1** | ✅ Vocab id→UTF-8 + **merges BPE** HF; encode merge-order (=`tokenizers`); decode ▁→espaço. Ladder 850/xl/3B. | HF LlamaTokenizer / tokenizers | MIT | `bpe.rs`, `export_bpe_bin.py` | ✅ SESSION_162 |
+| 7.4c | **LLM ladder bench** | ✅ QEMU WHPX: pack FAT32 + loader por degrau; parse `LLM-TEST`; métricas custo/tempo/coh. | — | MIT | `tools/llm_ladder_bench.py` | ✅ SESSION_162 |
 | 7.5 | **KV Cache 200× Speedup** | 🔄 Cache de Key/Value tokens. Reduz tempo de inferência de 6h para 84s. | KV cache em transformers (Dai et al., 2019) | MIT | `cortex.rs` | ✅ 0 err |
 | 7.5b | **N-gram Speculative Decoding** | 🔄 Draft M tokens via rolling LCG hash (N=8) + verify paralelo no KV; zero deps/VRAM extra; Medusa complementar. | llama.cpp ngram-simple (Alok 2026) | MIT | `cortex/ngram_spec.rs`, `cortex.rs` | ✅ OK |
 | 7.5c | **LatentBus + Projection** | 🔄 Canal hidden `[f16;256]` paralelo ao EventBus; mean-pool ad-hoc f16; Cortex publish / Hermes recv. | Interlat / LatentMAS | MIT | `event-bus/latent.rs`, `cortex/projection.rs` | ✅ MVP |
@@ -257,7 +261,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | Intel i915 SKL+KBL (GuC+HuC+DMC) | 24 | 3.8 MB | linux-firmware.git | MIT | Intel GPU scheduling |
 | Realtek NIC (rtl_nic) | 41 | 217 KB | linux-firmware.git | MIT | RTL8168/8125 |
 | Realtek WiFi (rtlwifi) | 38 | 1 MB | linux-firmware.git | MIT | RTL8188/8192/8822 |
-| Intel WiFi (iwlwifi AX200/210) | 5 | 7.5 MB | linux-firmware.git | MIT | AX200/AX210 ucode |
+| Intel WiFi (iwlwifi AX200/210) | 5 | 7.51 MB (API77) | linux-firmware.git | MIT | SESSION_154; gap `.pnvm` |
 | **Total** | **116** | **~12.5 MB** | linux-firmware.git | MIT | |
 
 ---

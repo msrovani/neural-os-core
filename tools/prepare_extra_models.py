@@ -1,17 +1,19 @@
 ﻿#!/usr/bin/env python3
-"""prepare_extra_models.py â€” baixa, treina/converte e gera .bitnet para ModelHub.
+"""prepare_extra_models.py — baixa, treina/converte e gera .bitnet para ModelHub.
 
 Modelos:
-  TinyStories-1M / ~15M   â†’ target/tinystories.bitnet (+ TINYSTOR.BIN)
-  BitNet b1.58-large (~0.7Bâ‰ˆ850M) â†’ target/bitnet_850m.bitnet (+ BITNET850.BIN)
-  BitNet b1.58-3B         â†’ target/bitnet_3B.bitnet (+ BITNET3B.BIN)
-  RustCoder expert maior  â†’ target/rust_coder_2.bitnet (+ RUSTCDR2.BIN)
+  TinyStories-1M / ~15M   → target/tinystories.bitnet (+ TINYSTOR.BIN)
+  BitNet b1.58-large (~0.7B≈850M) → target/bitnet_850m.bitnet (+ BITNET850.BIN)
+  BitNet b1.58-xl (~1.3B) → target/bitnet_1p3b.bitnet (+ BITNET13.BIN)
+  BitNet b1.58-3B         → target/bitnet_3B.bitnet (+ BITNET3B.BIN)
+  RustCoder expert maior  → target/rust_coder_2.bitnet (+ RUSTCDR2.BIN)
 
-GPU: usa CUDA se disponÃ­vel (recomendado torch+cu118 na GTX 1050 / sm_61).
-ConversÃ£o BitNet 3B faz streaming layer-a-layer (4GB VRAM).
+GPU: usa CUDA se disponível (recomendado torch+cu126 na GTX 1050 / sm_61).
+Conversão BitNet 3B faz streaming layer-a-layer (4GB VRAM).
 
 Uso:
   python tools/prepare_extra_models.py --all
+  python tools/prepare_extra_models.py --xl --pro
   python tools/prepare_extra_models.py --tiny --fast --pro --rustcoder
 """
 from __future__ import annotations
@@ -351,15 +353,15 @@ def prepare_tinystories_15m():
     return out
 
 
-# â”€â”€â”€ BitNet HF float16 (1bitLLM) â†’ .bitnet â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# --- BitNet HF float16 (1bitLLM) -> .bitnet ---
 
 def prepare_bitnet_hf(repo: str, out_name: str, fat8: str):
-    print(f"\n=== BitNet â† {repo} â†’ {out_name} ===")
+    print(f"\n=== BitNet HF {repo} -> {out_name} ===")
     from huggingface_hub import snapshot_download
     from safetensors.torch import load_file
 
     local = CACHE / repo.replace("/", "__")
-    print("  [DL] snapshot (pode demorar)â€¦")
+    print("  [DL] snapshot (pode demorar)...")
     snapshot_download(repo, local_dir=str(local), local_dir_use_symlinks=False,
                       ignore_patterns=["*.md", "*.txt", "flax*", "tf*"])
 
@@ -424,12 +426,15 @@ def prepare_bitnet_hf(repo: str, out_name: str, fat8: str):
                 f"{p}.post_attention_layernorm.weight",
             ):
                 write_f32(f, get(nkey).float().numpy())
-            # optional sub norms â€” ones if absent
-            for nkey in (f"{p}.self_attn.attn_sub_norm.weight", f"{p}.mlp.ffn_sub_norm.weight"):
-                if nkey in state:
-                    write_f32(f, get(nkey).float().numpy())
-                else:
-                    write_f32(f, np.ones(hidden, dtype=np.float32))
+            # sub-norms: attn=hidden; ffn=intermediate (alinhado ao cortex load_model)
+            if f"{p}.self_attn.attn_sub_norm.weight" in state:
+                write_f32(f, get(f"{p}.self_attn.attn_sub_norm.weight").float().numpy())
+            else:
+                write_f32(f, np.ones(hidden, dtype=np.float32))
+            if f"{p}.mlp.ffn_sub_norm.weight" in state:
+                write_f32(f, get(f"{p}.mlp.ffn_sub_norm.weight").float().numpy())
+            else:
+                write_f32(f, np.ones(intermediate, dtype=np.float32))
 
             def proj(name: str, out_d: int, in_d: int) -> bytes:
                 w = get(name)
@@ -529,13 +534,17 @@ def main():
     ap.add_argument("--tiny", action="store_true", help="TinyStories-1M HF")
     ap.add_argument("--tiny15", action="store_true", help="TinyStories ~15M train")
     ap.add_argument("--fast", action="store_true", help="BitNet large ~850M")
+    ap.add_argument("--xl", action="store_true",
+                    help="BitNet b1.58-xl ~1.3B (1bitLLM/bitnet_b1_58-xl)")
     ap.add_argument("--pro", action="store_true", help="BitNet 3B")
     ap.add_argument("--rustcoder", action="store_true")
+    ap.add_argument("--force", action="store_true",
+                    help="Reconverter mesmo se .bitnet destino ja existir")
     ap.add_argument("--epochs", type=int, default=80)
     ap.add_argument("--allow-cpu", action="store_true",
                     help="Permite treino/quant em CPU (padrao: exige GPU com kernels)")
     args = ap.parse_args()
-    if not any([args.all, args.tiny, args.tiny15, args.fast, args.pro, args.rustcoder]):
+    if not any([args.all, args.tiny, args.tiny15, args.fast, args.xl, args.pro, args.rustcoder]):
         args.all = True
 
     needs_train = args.all or args.tiny15 or args.rustcoder
@@ -543,6 +552,20 @@ def main():
         print("[FATAL] Treino exige GPU (sm_61). Instale torch+cu126 e CUDA_VISIBLE_DEVICES=0")
         print("  pip install torch==2.13.0+cu126 --index-url https://download.pytorch.org/whl/cu126")
         sys.exit(2)
+
+    # Quant HF (xl/pro/fast) tambem prefere GPU
+    needs_hf = args.all or args.fast or args.xl or args.pro
+    if needs_hf and DEVICE.type != "cuda" and not args.allow_cpu:
+        print("[FATAL] Conversao BitNet HF exige GPU. Use --allow-cpu so em emergencia.")
+        sys.exit(2)
+
+    def skip_existing(path: Path, label: str) -> bool:
+        if args.force:
+            return False
+        if path.exists() and path.stat().st_size > 1_000_000:
+            print(f"  [SKIP] {label} ja existe ({path.stat().st_size/1e6:.1f}MB) — use --force")
+            return True
+        return False
 
     if args.all or args.tiny:
         try:
@@ -560,14 +583,27 @@ def main():
             traceback.print_exc()
     if args.all or args.fast:
         try:
-            prepare_bitnet_hf("1bitLLM/bitnet_b1_58-large", "bitnet_850m.bitnet", "BITNET850.BIN")
+            out = TARGET / "bitnet_850m.bitnet"
+            if not skip_existing(out, "850M"):
+                prepare_bitnet_hf("1bitLLM/bitnet_b1_58-large", "bitnet_850m.bitnet", "BITNET850.BIN")
         except Exception as e:
             print(f"[ERR] bitnet-850: {e}")
             import traceback
             traceback.print_exc()
+    if args.all or args.xl:
+        try:
+            out = TARGET / "bitnet_1p3b.bitnet"
+            if not skip_existing(out, "1.3B/xl"):
+                prepare_bitnet_hf("1bitLLM/bitnet_b1_58-xl", "bitnet_1p3b.bitnet", "BITNET13.BIN")
+        except Exception as e:
+            print(f"[ERR] bitnet-1.3B/xl: {e}")
+            import traceback
+            traceback.print_exc()
     if args.all or args.pro:
         try:
-            prepare_bitnet_hf("1bitLLM/bitnet_b1_58-3B", "bitnet_3B.bitnet", "BITNET3B.BIN")
+            out = TARGET / "bitnet_3B.bitnet"
+            if not skip_existing(out, "3B"):
+                prepare_bitnet_hf("1bitLLM/bitnet_b1_58-3B", "bitnet_3B.bitnet", "BITNET3B.BIN")
         except Exception as e:
             print(f"[ERR] bitnet-3b: {e}")
             import traceback
@@ -583,6 +619,9 @@ def main():
     # Alias MICRO / fast
     if (TARGET / "bitnet_850m.bitnet").exists() and not (TARGET / "MICRO.BITNET").exists():
         fat_copy(TARGET / "bitnet_850m.bitnet", "MICRO.BIN")
+    # Alias 1.3B 8.3
+    if (TARGET / "bitnet_1p3b.bitnet").exists():
+        fat_copy(TARGET / "bitnet_1p3b.bitnet", "BITNET13.BIN")
 
     print("\n=== RESUMO target/ ===")
     for p in sorted(TARGET.glob("*.bitnet")) + sorted(TARGET.glob("*.BIN")) + sorted(TARGET.glob("*.BITNET")):

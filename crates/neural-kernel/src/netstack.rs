@@ -899,4 +899,145 @@ impl NetStack {
         }
         pos
     }
+
+    // ── TCP session (TLS N4 / embedded-io) ────────────────────────────
+    // Tempo virtual avança a cada poll (igual L5) — smoltcp precisa para SYN/retransmit.
+
+    /// Connect TCP; spin until Established or timeout. Caller must `tcp_session_close`.
+    pub fn tcp_session_connect(
+        &mut self,
+        host: [u8; 4],
+        port: u16,
+        now: u64,
+    ) -> Option<SocketHandle> {
+        let tcp_rx = tcp::SocketBuffer::new(vec![0u8; 16_384]);
+        let tcp_tx = tcp::SocketBuffer::new(vec![0u8; 16_384]);
+        let tcp = TcpSocket::new(tcp_rx, tcp_tx);
+        let handle = self.sockets.add(tcp);
+        let remote = (IpAddress::v4(host[0], host[1], host[2], host[3]), port);
+        {
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            let context = self.iface.context();
+            let local_port: u16 = 51000u16.wrapping_add((net_tx_count() as u16) & 0x3fff);
+            let _ = tcp.connect(context, remote, local_port);
+        }
+        let mut t = now;
+        // ~6k × 200µs ≈ 1.2s wall + poll; TCG soft-crypto TLS precisa fail rápido se SYN morrer.
+        for _ in 0..6_000 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+            wall_pause_us(200);
+            let st = self.sockets.get_mut::<TcpSocket>(handle).state();
+            match st {
+                TcpState::Established => return Some(handle),
+                TcpState::Closed | TcpState::Closing | TcpState::TimeWait => break,
+                _ => {}
+            }
+        }
+        k_nano::slog_bin!("TLS", "info", "tcp_connect timeout state");
+        self.tcp_session_close(handle, t);
+        None
+    }
+
+    pub fn tcp_session_poll(&mut self, now: u64) {
+        let Self {
+            ref mut iface,
+            ref mut phy,
+            ref mut sockets,
+            ..
+        } = self;
+        iface.poll(Instant::from_millis(now as i64), phy, sockets);
+    }
+
+    pub fn tcp_session_send(
+        &mut self,
+        handle: SocketHandle,
+        data: &[u8],
+        now: u64,
+    ) -> Result<usize, ()> {
+        let mut offset = 0usize;
+        let mut t = now;
+        for _ in 0..8_000 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+            wall_pause_us(100);
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            match tcp.state() {
+                TcpState::Established => {
+                    if offset >= data.len() {
+                        return Ok(offset);
+                    }
+                    if tcp.can_send() {
+                        match tcp.send_slice(&data[offset..]) {
+                            Ok(n) => {
+                                offset = offset.saturating_add(n);
+                                if offset >= data.len() {
+                                    return Ok(offset);
+                                }
+                            }
+                            Err(_) => return Err(()),
+                        }
+                    }
+                }
+                TcpState::Closed | TcpState::Closing | TcpState::TimeWait => {
+                    return if offset > 0 { Ok(offset) } else { Err(()) };
+                }
+                _ => {}
+            }
+        }
+        if offset > 0 {
+            Ok(offset)
+        } else {
+            Err(())
+        }
+    }
+
+    /// Blocking recv: waits for data or peer close. Returns 0 on clean EOF.
+    pub fn tcp_session_recv(
+        &mut self,
+        handle: SocketHandle,
+        buf: &mut [u8],
+        now: u64,
+    ) -> Result<usize, ()> {
+        let mut t = now;
+        for _ in 0..8_000 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+            wall_pause_us(100);
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            if tcp.can_recv() {
+                return tcp
+                    .recv(|data| {
+                        let n = core::cmp::min(buf.len(), data.len());
+                        buf[..n].copy_from_slice(&data[..n]);
+                        (n, n)
+                    })
+                    .map_err(|_| ());
+            }
+            match tcp.state() {
+                TcpState::CloseWait => {
+                    if tcp.can_recv() {
+                        continue;
+                    }
+                    return Ok(0);
+                }
+                TcpState::Closed | TcpState::Closing | TcpState::TimeWait => return Ok(0),
+                _ => {}
+            }
+        }
+        Err(())
+    }
+
+    pub fn tcp_session_close(&mut self, handle: SocketHandle, now: u64) {
+        {
+            let tcp = self.sockets.get_mut::<TcpSocket>(handle);
+            tcp.close();
+        }
+        let mut t = now;
+        for _ in 0..32 {
+            t = t.wrapping_add(5);
+            self.tcp_session_poll(t);
+        }
+        self.sockets.remove(handle);
+    }
 }

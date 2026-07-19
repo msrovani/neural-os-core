@@ -21,10 +21,11 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     let (m, k2) = input.shape;
     if k != k2 { return None; }
 
-    // Escolhe implementacao baseada no HW
-    if avx2_available() && k >= 16 && n >= 16 {
-        return Some(unsafe { avx2_bitwise_matmul(weight, input, m, k, n) });
-    }
+    // NÃO usar avx2_bitwise_matmul aqui:
+    // - quando n%4 != 0 (vocab BitNet 32002) o store _mm_storeu_ps passa do fim
+    //   do buffer de logits → heap corrupt → #PF apos FWD (850 tied-embed unembed);
+    // - o kernel FMA 4x4 tambem nao e matmul row-major correcto.
+    // Caminho seguro: unpack-por-linha (AVX2) ou scalar.
     if avx2_available() && k >= 8 && n >= 8 {
         return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
     }
@@ -150,16 +151,20 @@ unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor,
 
     let mut result = Tensor::new((m, n));
     let mut row_buf = vec![0i8; n];
+    let n8 = n & !7; // maior multiplo de 8 <= n
 
     for i in 0..m {
         let inp_row = &input.data[i * k..];
         let out_row = &mut result.data[i * n..];
-        for j in 0..n { out_row[j] = 0.0; }
+        for j in 0..n {
+            out_row[j] = 0.0;
+        }
 
         for t in 0..k {
             unpack_row_into(weight, t, n, &mut row_buf);
             let a = _mm256_set1_ps(inp_row[t]);
-            for j in (0..n).step_by(8) {
+            let mut j = 0usize;
+            while j < n8 {
                 let w_ptr = row_buf.as_ptr().add(j) as *const __m128i;
                 let w_i8 = _mm_loadl_epi64(w_ptr);
                 let w_i32 = _mm256_cvtepi8_epi32(w_i8);
@@ -167,6 +172,13 @@ unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor,
                 let prev = _mm256_loadu_ps(out_row.as_mut_ptr().add(j));
                 let updated = _mm256_fmadd_ps(a, w_f32, prev);
                 _mm256_storeu_ps(out_row.as_mut_ptr().add(j), updated);
+                j += 8;
+            }
+            // cauda n%8 (vocab 32002 → 2 elems) — sem store AVX past-end
+            let scale = inp_row[t];
+            while j < n {
+                out_row[j] += scale * (row_buf[j] as f32);
+                j += 1;
             }
         }
     }
@@ -177,25 +189,6 @@ unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor,
 
 /// Seleciona implementacao otima baseada no tamanho das matrizes e HW disponivel.
 pub fn ternary_matmul_adaptive(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Tensor> {
-    let (k, n) = weight.shape;
-    let (m, _k2) = input.shape;
-
-    // Para matrizes grandes, usa bitwise AVX2
-    if avx2_available() && k >= 32 && n >= 32 {
-        // Prefetch dos dados de entrada
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
-                input.data.as_ptr() as *const i8);
-        }
-        return Some(unsafe { avx2_bitwise_matmul(weight, input, m, k, n) });
-    }
-
-    // Para matrizes medias, AVX2 classico
-    if avx2_available() && k >= 8 && n >= 8 {
-        return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
-    }
-
-    // Scalar fallback
-    Some(scalar_ternary_matmul(weight, input, m, k, n))
+    // Mesmo caminho seguro que ternary_matmul (bitwise AVX2 desactivado).
+    ternary_matmul(weight, input)
 }

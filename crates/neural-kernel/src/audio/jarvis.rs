@@ -3,8 +3,12 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use alloc::string::String;
 use event_bus::{CapabilityToken, Event, Receiver};
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::jarvis::{JarvisEngine, Emotion, EmotionAnalysis};
 use crate::audio::context::build_emotional_context;
+
+/// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
+static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
 
 const JARVIS_MANIFEST: AgentManifest = AgentManifest {
     name: "jarvis",
@@ -107,13 +111,68 @@ impl JarvisAgent {
     }
 }
 
+/// Chamado logo apos `register(JarvisAgent)` no boot HW.
+/// Emite template + soft-reboot p/ BOOT.LOG (nao espera tick — hang comum pos-K44).
+pub fn emit_hw_greeting_at_register() {
+    if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let bare = matches!(
+        k_nano::platform_probe::hypervisor(),
+        k_nano::platform_probe::HypervisorKind::None
+    );
+    let no_fat = crate::USB_MSC.lock().is_none() && crate::ATA_DRIVER.lock().is_none();
+    if !(bare || no_fat) {
+        return;
+    }
+
+    let mem_mb = {
+        let g = crate::memory::GLOBAL_ALLOCATOR.lock();
+        g.as_ref()
+            .map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024))
+            .unwrap_or(0)
+    };
+    let cpu = crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed);
+    let agents = {
+        let tr = crate::TRINITY.lock();
+        tr.agent_count()
+    };
+    let body = compose_boot_greeting(mem_mb, cpu, agents);
+    let line = alloc::format!("[JARVIS] JARVIS: {}", body);
+    k_nano::slog_jarbas!(
+        "Jarbas",
+        "info",
+        "saudacao @register K44 (bare={} no_fat={})",
+        bare,
+        no_fat
+    );
+    crate::display::fb::console_print(&line);
+    crate::display::fb::boot_ckpt(50, "jarvis greet OK");
+    let _ = crate::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from("HERMES_RESPONSE"),
+        payload: line.into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
+    if no_fat {
+        crate::boot_logger::flush_bootlog_after_greeting(
+            "pos-JARVIS @register K44 — USB-MSC AUSENTE",
+        );
+    }
+}
+
 impl Agent for JarvisAgent {
     fn manifest(&self) -> &AgentManifest {
         &JARVIS_MANIFEST
     }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        // tick>2: TCG soft-float + TTS PnP demora; 15 atrasava demais a saudacao.
+        // Ja saudou no register (HW) — nao repetir.
+        if HW_GREET_EMITTED.load(Ordering::Relaxed) {
+            self.greeted = true;
+            self.greeting_prompt_sent = true;
+        }
+        // tick>2: BareMetal/sem FAT → template (LLM soft-float nao completa sem modelo).
         if !self.greeted && !self.greeting_prompt_sent && tick > 2 {
             self.greeting_prompt_sent = true;
 
@@ -128,8 +187,37 @@ impl Agent for JarvisAgent {
                 let tr = crate::TRINITY.lock();
                 tr.agent_count()
             };
-            let tts_mode = "formant";
 
+            let bare = matches!(
+                k_nano::platform_probe::hypervisor(),
+                k_nano::platform_probe::HypervisorKind::None
+            );
+            let no_fat = crate::USB_MSC.lock().is_none() && crate::ATA_DRIVER.lock().is_none();
+            if bare || no_fat {
+                self.greeted = true;
+                HW_GREET_EMITTED.store(true, Ordering::Relaxed);
+                let body =
+                    compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents);
+                k_nano::slog_jarbas!(
+                    "Jarbas",
+                    "info",
+                    "saudacao template HW (skip LLM; bare={} no_fat={})",
+                    bare,
+                    no_fat
+                );
+                self.publish_greeting(&body);
+                let line = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
+                crate::display::fb::console_print(&line);
+                crate::display::fb::boot_ckpt(50, "jarvis greet OK");
+                if no_fat {
+                    crate::boot_logger::flush_bootlog_after_greeting(
+                        "pos-JARVIS greet — USB-MSC AUSENTE",
+                    );
+                }
+                return AgentTickResult::Pending;
+            }
+
+            let tts_mode = "formant";
             let prompt = alloc::format!(
                 "You are JARVIS, an AI operating system. Generate a single short sentence \
                  greeting the user. Include that the system has {}MB RAM, {} CPU cores, \

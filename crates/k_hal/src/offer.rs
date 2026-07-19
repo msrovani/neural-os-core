@@ -40,6 +40,10 @@ pub enum OfferError {
     InvalidClass,
     /// CapGate DENY (R3 sem Cap / FE sem bind).
     CapDenied,
+    /// ADR-0056: recipe rebelde sem FW / hash
+    NeedsFw,
+    /// ADR-0056: recipe unsigned ou ausente (Escalate)
+    RecipeEscalate,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -80,7 +84,7 @@ pub fn topic_for(class: DeviceClass) -> &'static str {
         DeviceClass::Net | DeviceClass::Wifi => TOPIC_NET_RX,
         DeviceClass::Block => TOPIC_BLOCK_IO,
         DeviceClass::Input => TOPIC_INPUT_EVENT,
-        DeviceClass::Unknown => TOPIC_HW_OFFER,
+        DeviceClass::UsbHost | DeviceClass::Bluetooth | DeviceClass::Unknown => TOPIC_HW_OFFER,
     }
 }
 
@@ -95,6 +99,8 @@ pub fn default_agent(class: DeviceClass) -> &'static str {
         DeviceClass::Wifi => "wifi",
         DeviceClass::Block => "disk",
         DeviceClass::Input => "input",
+        DeviceClass::UsbHost => "usb_driver",
+        DeviceClass::Bluetooth => "observe",
         DeviceClass::Unknown => "observe",
     }
 }
@@ -182,9 +188,10 @@ pub fn refresh_from_tree() {
         });
     }
 
+    // UVC continua ofertável quando há UsbHost (xHCI), sem confundir classes.
     if !seen_video {
         let has_xhci = tree.iter().any(|c| {
-            c.id.class == DeviceClass::Video
+            c.id.class == DeviceClass::UsbHost
                 || c.name.contains("xHCI")
                 || c.name.contains("USB")
         });
@@ -210,6 +217,8 @@ pub fn refresh_from_tree() {
         DeviceClass::Video,
         DeviceClass::Display,
         DeviceClass::Input,
+        DeviceClass::UsbHost,
+        DeviceClass::Bluetooth,
     ] {
         let st = offers
             .iter()
@@ -261,6 +270,41 @@ pub fn bind(class: DeviceClass, agent_name: &str) -> Result<BindHandle, OfferErr
     if class == DeviceClass::Unknown {
         return Err(OfferError::InvalidClass);
     }
+    // ADR-0056 H1: rebelde só com recipe trusted + FW (quando exige)
+    match crate::device_recipe::gate_bind_class(class) {
+        Ok(pkg) => {
+            k_nano::slog_hal!(
+                "HalOffer",
+                "recipe",
+                "gate=ALLOW class={} pkg={}",
+                class.as_str(),
+                pkg
+            );
+        }
+        Err(crate::device_recipe::RecipePromote::NeedsFw) => {
+            k_nano::slog_hal!(
+                "HalOffer",
+                "bind",
+                "DENY class={} agent={} — NeedsFw",
+                class.as_str(),
+                agent_name
+            );
+            return Err(OfferError::NeedsFw);
+        }
+        Err(crate::device_recipe::RecipePromote::Escalate)
+        | Err(crate::device_recipe::RecipePromote::None) => {
+            k_nano::slog_hal!(
+                "HalOffer",
+                "bind",
+                "DENY class={} agent={} — RecipeEscalate",
+                class.as_str(),
+                agent_name
+            );
+            return Err(OfferError::RecipeEscalate);
+        }
+        Err(crate::device_recipe::RecipePromote::Ok) => {}
+    }
+
     let mut offers = OFFERS.lock();
     let Some(slot) = offers.iter_mut().find(|o| {
         o.class == class && matches!(o.status, OfferStatus::Available | OfferStatus::Bound)
@@ -390,6 +434,8 @@ pub fn class_from_str(s: &str) -> Option<DeviceClass> {
         "wifi" | "wlan" | "wireless" => Some(DeviceClass::Wifi),
         "block" | "disk" | "storage" | "nvme" | "ata" => Some(DeviceClass::Block),
         "input" | "hid" | "keyboard" | "mouse" => Some(DeviceClass::Input),
+        "usbhost" | "usb" | "xhci" => Some(DeviceClass::UsbHost),
+        "bluetooth" | "bt" => Some(DeviceClass::Bluetooth),
         _ => None,
     }
 }

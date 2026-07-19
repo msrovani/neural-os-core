@@ -96,7 +96,8 @@ pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResu
             }
             Err(e) => {
                 let status = match e {
-                    OfferError::CapDenied => OfferStatus::Quarantined,
+                    OfferError::CapDenied | OfferError::RecipeEscalate => OfferStatus::Quarantined,
+                    OfferError::NeedsFw => OfferStatus::Available, // presente, sem FW
                     _ => st,
                 };
                 let ack = format!(
@@ -105,10 +106,24 @@ pub fn request_device(class: DeviceClass, agent_name: &str) -> DeviceRequestResu
                     e
                 );
                 k_nano::slog_hermes!("HalOffer", "request", "{}", ack);
-                if matches!(e, OfferError::CapDenied) {
+                let reason = match e {
+                    OfferError::CapDenied => "CapDenied",
+                    OfferError::NeedsFw => "NeedsFw",
+                    OfferError::RecipeEscalate => "RecipeEscalate",
+                    _ => "bind_fail",
+                };
+                if matches!(
+                    e,
+                    OfferError::CapDenied | OfferError::NeedsFw | OfferError::RecipeEscalate
+                ) {
                     publish(
                         offer::TOPIC_HW_OFFER,
-                        format!("status=Quarantined;class={};reason=CapDenied", class.as_str()),
+                        format!(
+                            "status={:?};class={};reason={}",
+                            status,
+                            class.as_str(),
+                            reason
+                        ),
                     );
                 }
                 DeviceRequestResult {
@@ -140,6 +155,7 @@ pub fn ensure_bound(class: DeviceClass, agent_name: &str) -> Result<BindHandle, 
     } else {
         match r.status {
             OfferStatus::Quarantined => Err(OfferError::Quarantined),
+            OfferStatus::Available if r.ack.contains("NeedsFw") => Err(OfferError::NeedsFw),
             _ => Err(OfferError::Absent),
         }
     }
