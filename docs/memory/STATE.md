@@ -1,10 +1,10 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.1 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.2 TEST — NÃO ESTÁVEL
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: v1.9.1 TEST — Emagrecer SESSION_163 ✅ parcial; BitNet 850 (162); ath10k A3 (161)
+#   Pista ativa: v1.9.2 TEST — Emagrecer SESSION_163 ✅ parcial; BitNet 850 (162); ath10k A3 (161)
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer
@@ -44,7 +44,7 @@
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
-**Versão:** **v1.9.1 TESTE / NÃO ESTÁVEL** (2026-07-19) — BitNet 850 generate sem #PF + BPE SP32; base v1.9.0 Pós-LAN.  
+**Versão:** **v1.9.2 TESTE / NÃO ESTÁVEL** (2026-07-19) — Emagrecer bin→crates SESSION_163; base v1.9.1 BitNet/TLS/WiFi.
 **Base:** v1.8.0 = ADR-0042 N1–N5 + wire; v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Residuals 0–7.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
@@ -575,4 +575,4 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ---
 
-**Estado canônico:** v1.9.0 teste/não estável — Pós-LAN + Residuals; base v1.8.6; `v2.0.0` não declarado.
+**Estado canônico:** v1.9.2 teste/não estável — Emagrecer SESSION_163; base v1.9.1; `v2.0.0` não declarado.

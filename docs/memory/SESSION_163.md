@@ -1,6 +1,7 @@
 # SESSION_163 — Emagrecer neural-kernel (cutover seguro, zero perda)
 
 **Data:** 2026-07-19  
+**Release:** **v1.9.2 TEST** (não v2.0.0)  
 **Escopo:** Ondas 0–6 do plano Emagrecer — inventário + stubs cirúrgicos + promotes bin→crate.
 
 ## Onda 0

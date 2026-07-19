@@ -2,18 +2,22 @@
 
 ## [Unreleased]
 
-### Emagrecer neural-kernel (SESSION_163)
+### Rebrand K³CHJ (2026-07-18)
+- Nome canônico **K³CHJ** = `k_nano` + `k_hal` + `k_ai` + Cortex + Hermes + Jarbas
+- Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados
+- Glossário: ADR-0042 §0; INDEX “Nome do produto”
+
+## [1.9.2] — 2026-07-19 — Emagrecer neural-kernel cutover (TEST)
+
+**Versão:** v1.9.2 TEST / NÃO ESTÁVEL — **não** v2.0.0.
+
+### Emagrecer neural-kernel (SESSION_163 / IDEA #467)
 - Cutover seguro bin→crates K³CHJ (ondas 0–6): stubs `pub use` + promote truth do bin
 - Gate: `tools/diff_bin_crate.py` + `docs/memory/BIN_CRATE_DIFF.md`
 - Unificados: `ATA_DRIVER`, `TIMER_TICKS`/`MOUSE_ABS_*`, `global_arena` pending_route
 - Promovidos a k_nano: `fat32`/`ata`/`e1000` (probe exFAT, prove_rx)
 - Residuals honestos no bin: `cortex.rs`/`bpe`/`agents`/`net*`/`audio/*`/`boot_logger`/`smp`
 - `cargo nk` = 0 erros; ~−7k LOC no monólito (sem perda de lógica)
-
-### Rebrand K³CHJ (2026-07-18)
-- Nome canônico **K³CHJ** = `k_nano` + `k_hal` + `k_ai` + Cortex + Hermes + Jarbas
-- Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados
-- Glossário: ADR-0042 §0; INDEX “Nome do produto”
 
 ## [1.9.1] — 2026-07-19 — BitNet 850 generate + BPE SP32 + TLS/WiFi/LEGO (TEST)
 
