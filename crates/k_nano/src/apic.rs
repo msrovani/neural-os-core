@@ -515,6 +515,38 @@ pub unsafe fn send_sipi(trampoline_vector: u8) {
     }
 }
 
+/// ADR-0057 WS-A: INIT IPI direcionado a UM LAPIC ID (sem shorthand).
+/// Necessário para o wake sequencial (broadcast acorda todos ao mesmo tempo →
+/// corrompem a stack compartilhada na transição de modo).
+pub unsafe fn send_init_ipi_to(dest_apic: u8) {
+    icr_wait_idle();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let icr_val: u64 = ((dest_apic as u64) << 32) | (5u64 << 8) | (1 << 14) | (1 << 15);
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        let icr_val = (5u32 << 8) | (1 << 14) | (1 << 15);
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
+
+/// ADR-0057 WS-A: SIPI direcionado a UM LAPIC ID (sem shorthand).
+pub unsafe fn send_sipi_to(dest_apic: u8, trampoline_vector: u8) {
+    icr_wait_idle();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let icr_val: u64 = ((dest_apic as u64) << 32) | (6u64 << 8) | trampoline_vector as u64;
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        let icr_val = (6u32 << 8) | trampoline_vector as u32;
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
+
 pub unsafe fn wait_for_ipi_delivery() {
     icr_wait_idle();
 }

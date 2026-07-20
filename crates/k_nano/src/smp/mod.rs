@@ -26,9 +26,14 @@ pub static AP_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8
 #[allow(dead_code)]
 const AP_STACK_SIZE: u64 = 16384;
 
-extern "C" fn ap_entry(_cpu_id: u64) -> ! {
+/// Entry point Rust dos APs (chamado pelo trampoline em modo 64-bit).
+/// ADR-0057 WS-A: `pub` para o binário (`neural-kernel`) reusar este mesmo
+/// entry — assim o `AP_ENTRY_COUNTER` do `k_nano` é o único incrementado e o
+/// `parallel_matmul` (que lê `k_nano::smp::ap_entry_count()`) enxerga os APs.
+pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
     let _lock = AP_BOOT_LOCK.lock();
     let cpu_id = percpu::CPU_COUNT.fetch_add(1, Ordering::SeqCst);
+    percpu::AP_ONLINE.fetch_add(1, Ordering::SeqCst);
     crate::slog_nano!("SMP", "info", "AP {} entrou em modo 64-bit Rust!", cpu_id);
     println!("[SMP] AP {} entrou em modo 64-bit Rust!", cpu_id);
     drop(_lock);
@@ -58,6 +63,77 @@ fn busy_wait_us(us: u64) {
     for _ in 0..us * 40 {
         core::hint::spin_loop();
     }
+}
+
+/// ADR-0057 WS-A: acorda os APs **um a um** por LAPIC ID (directed IPI), cada
+/// um com stack + PerCpu próprios. Causa-raiz do não-wake anterior: SIPI
+/// broadcast ("all excl self") largava todos ao mesmo tempo compartilhando a
+/// mesma stack (real 0x1000 / 32b tramp+0x1000 / 64b `stack_64_top`) e o mesmo
+/// GS.base (BSP) — com ≥2 APs eles se corrompiam antes de `ap_entry`.
+///
+/// A APIC é injetada por fn-pointers porque o `apic` do binário e o do `k_nano`
+/// têm bases LAPIC independentes; o chamador passa a sua (a que está viva).
+///
+/// `ap_stack_base` = base da região reservada; o AP `i` recebe topo
+/// `ap_stack_base + (i+1) * stack_per_ap`. Retorna quantos APs subiram.
+#[allow(clippy::too_many_arguments)]
+pub unsafe fn wake_aps_sequential(
+    tramp_phys: u64,
+    cr3_val: u64,
+    ap_stack_base: u64,
+    stack_per_ap: u64,
+    tramp_vector: u8,
+    ap_lapic_ids: &[u8],
+    send_init_to: unsafe fn(u8),
+    send_sipi_to: unsafe fn(u8, u8),
+    wait_delivery: unsafe fn(),
+) -> u64 {
+    let mut woke = 0u64;
+    for (i, &dest) in ap_lapic_ids.iter().enumerate() {
+        if i >= percpu::MAX_APS {
+            break;
+        }
+        let ap_stack = ap_stack_base + ((i as u64) + 1) * stack_per_ap;
+        let percpu_addr = percpu::ap_percpu_ptr(i);
+
+        // Sequencial: apenas 1 AP no trampoline por vez → seguro re-patch o blob
+        // (stacks real/32b compartilhadas do trampoline não colidem).
+        trampoline::init_trampoline(tramp_phys, cr3_val, ap_stack, percpu_addr, ap_entry);
+
+        let before = AP_ENTRY_COUNTER.load(Ordering::Acquire);
+        send_init_to(dest);
+        wait_delivery();
+        busy_wait_us(10000);
+        send_sipi_to(dest, tramp_vector);
+        wait_delivery();
+        busy_wait_us(200);
+        send_sipi_to(dest, tramp_vector);
+        wait_delivery();
+
+        // Espera ESTE AP sinalizar antes de acordar o próximo (timeout ~100 ms).
+        let mut ok = false;
+        for _ in 0..2000 {
+            if AP_ENTRY_COUNTER.load(Ordering::Acquire) > before {
+                ok = true;
+                break;
+            }
+            busy_wait_us(50);
+        }
+        if ok {
+            woke += 1;
+            crate::slog_nano!(
+                "SMP",
+                "info",
+                "AP LAPIC {} online ({}/{})",
+                dest,
+                woke,
+                ap_lapic_ids.len()
+            );
+        } else {
+            crate::slog_nano!("SMP", "warn", "AP LAPIC {} timeout (nao subiu)", dest);
+        }
+    }
+    woke
 }
 
 pub unsafe fn init_smp() {
@@ -143,12 +219,8 @@ pub unsafe fn init_smp() {
     };
     crate::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
 
-    let heap_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
-    let cpu_total = percpu::CPU_COUNT.load(Ordering::Relaxed) as u64 + 1;
+    // ADR-0057 WS-A: stack por-AP (não mais um único `stack_64_top`).
     let stack_per_ap: u64 = AP_STACK_SIZE * 4;
-    let ap_base = heap_top - (cpu_total * stack_per_ap);
-    let stack_64_top =
-        ap_base + (percpu::CPU_COUNT.load(Ordering::Relaxed) as u64) * stack_per_ap;
 
     {
         let phys_offset = memory::PHYS_MEM_OFFSET.load(Ordering::Acquire);
@@ -180,8 +252,7 @@ pub unsafe fn init_smp() {
         }
     }
 
-    let percpu_addr = &percpu::BSP_PCPU as *const _ as u64;
-    trampoline::init_trampoline(tramp_phys, cr3_val, stack_64_top, percpu_addr, ap_entry);
+    // Trampoline é (re)patchado por AP dentro de `wake_aps_sequential`.
     let tsize = trampoline::trampoline_size();
     crate::slog_nano!(
         "SMP",
@@ -198,45 +269,37 @@ pub unsafe fn init_smp() {
         return;
     }
 
-    // HW real: shorthand INIT-SIPI hang — skip até SIPI por LAPIC ID.
-    if matches!(
-        crate::platform_probe::hypervisor(),
-        crate::platform_probe::HypervisorKind::None
-    ) {
-        crate::slog_nano!(
-            "SMP",
-            "info",
-            "BareMetal: skip INIT-SIPI tramp=0x{:x} — BSP-only",
-            tramp_phys
-        );
-        corepools::init_from_boot(bsp_lapic_id, 0);
-        return;
+    // ADR-0057 WS-A: wake sequencial por LAPIC ID (directed IPI). Substitui o
+    // broadcast "all excl self" + stack/PerCpu compartilhados que só acordava
+    // 1 AP. Vale inclusive em bare-metal (o hang antigo era do shorthand).
+    let heap_top2 = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
+    let n_aps = (ap_expected as usize).min(percpu::MAX_APS);
+    let region_base = heap_top2 - ((n_aps as u64) + 1) * stack_per_ap;
+    let mut ap_ids = [0u8; percpu::MAX_APS];
+    for i in 0..n_aps {
+        ap_ids[i] = bsp_lapic_id.wrapping_add((i as u8) + 1);
     }
 
     crate::slog_nano!(
         "SMP",
         "info",
-        "INIT-SIPI-SIPI (vetor={:#04x})...",
-        tramp_vector
+        "INIT-SIPI-SIPI sequencial (vetor={:#04x}, APs={})...",
+        tramp_vector,
+        n_aps
     );
 
-    apic::send_init_ipi();
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(10000);
+    let ap_woke = wake_aps_sequential(
+        tramp_phys,
+        cr3_val,
+        region_base,
+        stack_per_ap,
+        tramp_vector,
+        &ap_ids[..n_aps],
+        apic::send_init_ipi_to,
+        apic::send_sipi_to,
+        apic::wait_for_ipi_delivery,
+    );
 
-    apic::send_init_deassert_ipi();
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(200);
-
-    apic::send_sipi(tramp_vector);
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(200);
-
-    apic::send_sipi(tramp_vector);
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(50000);
-
-    let ap_woke = AP_ENTRY_COUNTER.load(Ordering::Relaxed);
     crate::slog_nano!("SMP", "info", "APs acordados: {}", ap_woke);
     println!("[SMP] INIT-SIPI-SIPI concluido. APs={}", ap_woke);
 

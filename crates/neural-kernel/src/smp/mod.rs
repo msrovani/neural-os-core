@@ -8,52 +8,22 @@ pub mod parallel_matmul;
 
 use crate::apic;
 use crate::memory;
-use core::sync::atomic::{AtomicU64, Ordering};
-use spin::Mutex;
+use core::sync::atomic::Ordering;
 use x86_64::structures::paging::{
     Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
 };
 use x86_64::{PhysAddr, VirtAddr};
-
-static AP_BOOT_LOCK: Mutex<()> = Mutex::new(());
-static AP_ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub static AP_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
 
 #[allow(dead_code)]
 const AP_STACK_SIZE: u64 = 16384;
 
-extern "C" fn ap_entry(_cpu_id: u64) -> ! {
-    let _lock = AP_BOOT_LOCK.lock();
-    let cpu_id = percpu::CPU_COUNT.fetch_add(1, Ordering::SeqCst);
-    k_nano::slog_nano!("SMP", "info", "AP {} entrou em modo 64-bit Rust!", cpu_id);
-    drop(_lock);
-
-    unsafe {
-        let base = crate::apic::LAPIC_VIRT_BASE.load(Ordering::Acquire);
-        if base > 0 {
-            let svr = core::ptr::read_volatile((base + 0xF0) as *const u32);
-            core::ptr::write_volatile(
-                (base + 0xF0) as *mut u32,
-                (svr & 0xFFFFFF00) | 0xFF | 0x100,
-            );
-            core::ptr::write_volatile((base + 0x80) as *mut u32, 0u32);
-            apic::apic_eoi();
-        }
-    }
-
-    AP_ENTRY_COUNTER.fetch_add(1, Ordering::SeqCst);
-    k_nano::smp::ap_work::ap_idle_loop(cpu_id as usize);
-}
-
+// ADR-0057 WS-A: `ap_entry` e o `AP_ENTRY_COUNTER` agora vivem SÓ em
+// `k_nano::smp` (emagrece o bin + unifica o contador que o `parallel_matmul`
+// lê). O bin apenas delega a leitura.
 pub fn ap_entry_count() -> u64 {
-    AP_ENTRY_COUNTER.load(Ordering::Relaxed)
-}
-
-fn busy_wait_us(us: u64) {
-    for _ in 0..us * 40 {
-        core::hint::spin_loop();
-    }
+    k_nano::smp::ap_entry_count()
 }
 
 fn finish_bsp_only(bsp_lapic_id: u8, reason: &str) {
@@ -149,12 +119,9 @@ pub unsafe fn init_smp() {
     };
     k_nano::slog_nano!("SMP", "info", "Trampoline page em 0x{:x}", tramp_phys);
 
+    // ADR-0057 WS-A: stack por-AP (não mais um único `stack_64_top`).
     let heap_top = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
-    let cpu_total = percpu::CPU_COUNT.load(Ordering::Relaxed) as u64 + 1;
     let stack_per_ap: u64 = AP_STACK_SIZE * 4;
-    let ap_base = heap_top - (cpu_total * stack_per_ap);
-    let stack_64_top =
-        ap_base + (percpu::CPU_COUNT.load(Ordering::Relaxed) as u64) * stack_per_ap;
 
     // Identity-map o físico do trampoline (não hardcode 0x40000 — UEFI reserva lowmem).
     crate::display::fb::boot_ckpt(22, "smp: map tramp");
@@ -192,9 +159,7 @@ pub unsafe fn init_smp() {
         }
     }
 
-    crate::display::fb::boot_ckpt(22, "smp: init tramp");
-    let percpu_addr = percpu::BSP_PCPU.get() as u64;
-    trampoline::init_trampoline(tramp_phys, cr3_val, stack_64_top, percpu_addr, ap_entry);
+    // Trampoline é (re)patchado por AP dentro de `wake_aps_sequential` (k_nano).
     let tsize = trampoline::trampoline_size();
     k_nano::slog_nano!(
         "SMP",
@@ -210,53 +175,39 @@ pub unsafe fn init_smp() {
         return;
     }
 
-    // HW real (foto 2026-07-19): hang em shorthand INIT-SIPI (all excl self).
-    // Trampoline alloc/map/init OK — APs ficam deferred até SIPI por LAPIC ID (MADT).
-    // QEMU/TCG/KVM ainda exercitam o path completo abaixo.
-    if matches!(
-        k_nano::platform_probe::hypervisor(),
-        k_nano::platform_probe::HypervisorKind::None
-    ) {
-        k_nano::slog_nano!(
-            "SMP",
-            "info",
-            "BareMetal: skip INIT-SIPI (shorthand hang) tramp=0x{:x} APs_madt={} — BSP-only",
-            tramp_phys,
-            ap_expected
-        );
-        finish_bsp_only(bsp_lapic_id, "smp: sipi skip baremetal");
-        return;
+    // ADR-0057 WS-A: wake sequencial por LAPIC ID (directed IPI). Substitui o
+    // broadcast "all excl self" + stack/PerCpu compartilhados que só acordava 1
+    // AP. Delega a `k_nano::smp` (ecossistema) passando o APIC vivo do bin por
+    // fn-pointer — assim `k_nano::smp::ap_entry` é o único entry e unifica o
+    // contador que o `parallel_matmul` consulta.
+    let n_aps = (ap_expected as usize).min(k_nano::smp::percpu::MAX_APS);
+    let region_base = heap_top - ((n_aps as u64) + 1) * stack_per_ap;
+    let mut ap_ids = [0u8; k_nano::smp::percpu::MAX_APS];
+    for i in 0..n_aps {
+        ap_ids[i] = bsp_lapic_id.wrapping_add((i as u8) + 1);
     }
 
-    crate::display::fb::boot_ckpt(22, "smp: INIT-SIPI");
+    crate::display::fb::boot_ckpt(22, "smp: INIT-SIPI seq");
     k_nano::slog_nano!(
         "SMP",
         "info",
-        "INIT-SIPI-SIPI (vetor={:#04x})...",
-        tramp_vector
+        "INIT-SIPI-SIPI sequencial (vetor={:#04x}, APs={})...",
+        tramp_vector,
+        n_aps
     );
 
-    crate::display::fb::boot_ckpt(22, "smp: send INIT");
-    apic::send_init_ipi();
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(10000);
+    let ap_woke = k_nano::smp::wake_aps_sequential(
+        tramp_phys,
+        cr3_val,
+        region_base,
+        stack_per_ap,
+        tramp_vector,
+        &ap_ids[..n_aps],
+        apic::send_init_ipi_to,
+        apic::send_sipi_to,
+        apic::wait_for_ipi_delivery,
+    );
 
-    crate::display::fb::boot_ckpt(22, "smp: deassert");
-    apic::send_init_deassert_ipi();
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(200);
-
-    crate::display::fb::boot_ckpt(22, "smp: SIPI#1");
-    apic::send_sipi(tramp_vector);
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(200);
-
-    crate::display::fb::boot_ckpt(22, "smp: SIPI#2");
-    apic::send_sipi(tramp_vector);
-    apic::wait_for_ipi_delivery();
-    busy_wait_us(50000);
-
-    let ap_woke = AP_ENTRY_COUNTER.load(Ordering::Relaxed);
     crate::display::fb::boot_ckpt(23, "smp: sipi done");
     k_nano::slog_nano!("SMP", "info", "APs acordados: {}", ap_woke);
     k_nano::smp::corepools::init_from_boot(bsp_lapic_id, ap_woke.min(255) as u8);

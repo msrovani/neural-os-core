@@ -1,3 +1,4 @@
+use core::cell::UnsafeCell;
 use core::sync::atomic::AtomicU8;
 
 #[repr(C)]
@@ -28,6 +29,42 @@ pub static BSP_PCPU: PerCpu = PerCpu {
 
 pub static CPU_COUNT: AtomicU8 = AtomicU8::new(1);
 pub static AP_ONLINE: AtomicU8 = AtomicU8::new(0);
+
+/// ADR-0057 WS-A: máximo de APs suportados (total de cores = MAX_APS + 1 BSP).
+pub const MAX_APS: usize = 7;
+
+/// Array de PerCpu por-AP. Cada AP recebe GS.base próprio (não mais o BSP
+/// compartilhado — causa do não-wake com ≥2 APs).
+pub struct ApPcpuArray([UnsafeCell<PerCpu>; MAX_APS]);
+unsafe impl Sync for ApPcpuArray {}
+
+pub static AP_PCPU: ApPcpuArray = ApPcpuArray(
+    [const {
+        UnsafeCell::new(PerCpu {
+            self_ptr: 0,
+            cpu_id: 0,
+            cpu_type: CPU_TYPE_P_CORE,
+            lapic_id: 0,
+            is_bsp: false,
+            online: 0,
+            ring: 1,
+            _padding: [0u8; 43],
+        })
+    }; MAX_APS],
+);
+
+/// Ponteiro (u64) para o PerCpu do AP de índice `i` (para patch do trampoline).
+pub fn ap_percpu_ptr(i: usize) -> u64 {
+    if i >= MAX_APS {
+        return 0;
+    }
+    let p = AP_PCPU.0[i].get();
+    unsafe {
+        (*p).self_ptr = p as u64;
+        (*p).cpu_id = (i as u64) + 1;
+    }
+    p as u64
+}
 
 pub fn init_bsp_percpu(lapic_id: u8) {
     let pcpu = &BSP_PCPU as *const PerCpu as *mut PerCpu;
