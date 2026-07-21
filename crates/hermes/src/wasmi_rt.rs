@@ -96,6 +96,78 @@ const ADD_WASM: &[u8] = &[
     0x0a, 0x09, 0x01, 0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b, // code: get0 get1 i32.add end
 ];
 
+/// Gera um módulo WASM mínimo com uma função exportada que retorna i32(42).
+/// Usado pelo bridge ADR-0059 F3/F5 para criar bytecode dummy para evolução/hot-swap.
+/// ponytail: módulo minimalista — só `_start` exportado, sem imports.
+pub fn generate_wasm_module() -> Vec<u8> {
+    let mut wasm = Vec::with_capacity(64);
+    // magic + version
+    wasm.extend_from_slice(&[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    // type section: () -> i32
+    wasm.push(0x01); wasm.push(0x05); wasm.push(0x01); // section 1, 5 bytes, 1 type
+    wasm.push(0x60); wasm.push(0x00); wasm.push(0x01); wasm.push(0x7f); // ()->i32
+    // func section: 1 func, type 0
+    wasm.push(0x03); wasm.push(0x02); wasm.push(0x01); wasm.push(0x00);
+    // export section: "_start" func 0
+    wasm.push(0x07); wasm.push(0x0a); wasm.push(0x01);
+    wasm.push(0x06); // name length = 6 ("_start")
+    wasm.extend_from_slice(b"_start"); // name
+    wasm.push(0x00); // kind = func
+    wasm.push(0x00); // func_idx = 0
+    // code section: body = i32.const 42; end
+    wasm.push(0x0a); wasm.push(0x06); wasm.push(0x01);
+    wasm.push(0x04); wasm.push(0x00); // body size 4, 0 locals
+    wasm.push(0x41); wasm.push(42); // i32.const 42
+    wasm.push(0x0b); // end
+    wasm
+}
+
+/// Executa uma função exportada de um módulo WASM com argumentos `&[i32]`.
+/// Tenta resolver por assinatura (0..4 args i32 → i32).
+/// Fallback: tenta com 0 params se a assinatura exata falhar.
+pub fn run_wasm(
+    wasm: &[u8],
+    func_name: &str,
+    args: &[i32],
+    caps: u32,
+) -> Result<i32, &'static str> {
+    let mut config = Config::default();
+    config.consume_fuel(true);
+    let engine = Engine::new(&config);
+    let module = Module::new(&engine, wasm).map_err(|_| "wasm: módulo inválido")?;
+    let mut store = Store::new(&engine, HostState::new(caps));
+    store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
+    let mut linker = <Linker<HostState>>::new(&engine);
+    install_host_abi(&mut linker)?;
+    let instance = linker
+        .instantiate(&mut store, &module)
+        .map_err(|_| "wasm: instantiate")?
+        .start(&mut store)
+        .map_err(|_| "wasm: start")?;
+    for n_params in &[args.len(), 0] {
+        let a = |i: usize| args.get(i).copied().unwrap_or(0);
+        let r: Result<i32, _> = match n_params {
+            0 => instance.get_typed_func::<(), i32>(&store, func_name)
+                .and_then(|f| f.call(&mut store, (())).map_err(|e| e.into())),
+            1 => instance.get_typed_func::<(i32,), i32>(&store, func_name)
+                .and_then(|f| f.call(&mut store, (a(0),)).map_err(|e| e.into())),
+            2 => instance.get_typed_func::<(i32, i32), i32>(&store, func_name)
+                .and_then(|f| f.call(&mut store, (a(0), a(1))).map_err(|e| e.into())),
+            3 => instance.get_typed_func::<(i32, i32, i32), i32>(&store, func_name)
+                .and_then(|f| f.call(&mut store, (a(0), a(1), a(2))).map_err(|e| e.into())),
+            4 => instance.get_typed_func::<(i32, i32, i32, i32), i32>(&store, func_name)
+                .and_then(|f| f.call(&mut store, (a(0), a(1), a(2), a(3))).map_err(|e| e.into())),
+            _ => return Err("wasm: muitos argumentos (max 4)"),
+        };
+        match r {
+            Ok(val) => return Ok(val),
+            Err(_) if *n_params == args.len() => continue,
+            Err(_) => return Err("wasm: export não encontrado/assinatura"),
+        }
+    }
+    Err("wasm: export não encontrado ou assinatura incompatível")
+}
+
 /// Self-test de boot (sem modelo): roda um `.wasm` real (`add(2,3)==5`) no
 /// wasmi. Prova que o runtime WASM funciona em bare-metal. Retorna true = PASS.
 pub fn self_test() -> bool {

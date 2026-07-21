@@ -6,7 +6,10 @@
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
+use core::hash::{Hash, Hasher};
+use core::mem;
 use lazy_static::lazy_static;
 use ticket_lock::TicketLock;
 
@@ -29,12 +32,40 @@ pub enum PackageKind {
     DeviceRecipe,
 }
 
+/// Assinatura simples de um pacote: hash do conteúdo + chave curta.
+#[derive(Debug, Clone)]
+pub struct PackageSignature {
+    /// Hash simples (primeiros 8 bytes do hash do conteúdo).
+    pub hash: u64,
+    /// Metadado de verificação: "unsigned" para dev, "evolve" para auto-gerado.
+    pub kind: String,
+}
+
+impl PackageSignature {
+    /// ADR-0059 F6: sign simples para AgentWasm — hash do bytecode.
+    pub fn compute(wasm: &[u8]) -> Self {
+        let mut hasher = SimpleHasher(0u64);
+        hasher.write(wasm);
+        PackageSignature {
+            hash: hasher.finish(),
+            kind: String::from("simple-v1"),
+        }
+    }
+}
+
+/// ponytail: hash simples (xorshift) — não é criptográfico.
+struct SimpleHasher(u64);
+impl Hasher for SimpleHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = self.0.wrapping_mul(0x517cc1b727220a95);
+            self.0 ^= b as u64;
+        }
+    }
+    fn finish(&self) -> u64 { self.0 }
+}
+
 impl PackageKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            PackageKind::Skill => "skill",
-            PackageKind::Agent => "agent",
-            PackageKind::AgentWasm => "agent-wasm",
             PackageKind::Workflow => "workflow",
             PackageKind::Plugin => "plugin",
             PackageKind::Mcp => "mcp",

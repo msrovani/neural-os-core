@@ -26,6 +26,7 @@
 #   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
 #   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
 #   SESSION_164: FitPolicy Neural (#468) — host pack_filter + cortex::model_fit; cargo nk 0e
+#   SESSION_165: ADR-0059 F3-F7 — bridges + decode_harness + promote + micropython_fix + cleanup
 #   SESSION_163: Emagrecer neural-kernel Onda 0–6 + ADR-0057 Compute Dispatch + ADR-0058 Generative Card Desktop
 #   ADR-0056 H1 runtime: unlock_dag + recipe FAT gate + HalOffer NeedsFw/Escalate (#464)
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
@@ -576,4 +577,4 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ---
 
-**Estado canônico:** v1.9.2 teste/não estável — Emagrecer SESSION_163; base v1.9.1; `v2.0.0` não declarado.
+**Estado canônico:** v1.9.2 teste/não estável — Emagrecer SESSION_163; ADR-0059 F3-F7 SESSION_165; base v1.9.1; `v2.0.0` não declarado.

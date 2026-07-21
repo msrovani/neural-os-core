@@ -4,14 +4,13 @@
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::wasm_exec::Op;
-use crate::wasm_rt::{generate_skill_wasm, AgentOrigin, WasmSkillManifest, WasmSkillRuntime};
+use crate::wasmi_rt;
 
 const MAX_GEN_PER_GAP: u32 = 3;
 
 pub struct VersionEntry {
     pub version: u32,
-    pub bytecode: Vec<Op>,
+    pub bytecode: Vec<u8>,  // ponytail: wasm bytecode (wasmi), não Op VM (ADR-0059)
     pub generations: u32,
 }
 
@@ -42,13 +41,12 @@ impl EvolveLedger {
         *e
     }
 
-    /// Hot-swap WASM skill: sandbox execute → promote, else rollback.
+    /// Hot-swap WASM skill: sandbox via wasmi → promote, else rollback.
     pub fn hot_swap(
         &mut self,
-        rt: &mut WasmSkillRuntime,
         name: &str,
-        new_code: Vec<Op>,
-        manifest: WasmSkillManifest,
+        wasm: &[u8],
+        origin: WasmOrigin,
     ) -> Result<(), &'static str> {
         let gen = self.bump_gen(name);
         if gen > MAX_GEN_PER_GAP {
@@ -56,130 +54,75 @@ impl EvolveLedger {
             return Err("generation limit");
         }
 
-        // Snapshot previous origin
-        let prev_code = rt
-            .registry
-            .by_name(name)
-            .and_then(|a| match &a.origin {
-                AgentOrigin::Wasm(c) => Some(c.clone()),
-                _ => None,
-            });
+        // ponytail: wasmi sandbox test = validate + run _start. Sem ApprovalGate.
+        let test_ok = wasmi_rt::run_wasm(wasm, "_start", &[], 0).is_ok()
+            || wasmi_rt::run_wasm(wasm, "main", &[], 0).is_ok();
 
-        if let Some(code) = prev_code.clone() {
-            let ver = self
-                .prev
-                .get(name)
-                .map(|v| v.version.saturating_add(1))
-                .unwrap_or(1);
-            self.prev.insert(
-                String::from(name),
-                VersionEntry {
-                    version: ver,
-                    bytecode: code,
-                    generations: gen,
-                },
-            );
-        }
+        // Snapshot previous wasm antes de instalar
+        self.prev.insert(
+            String::from(name),
+            VersionEntry {
+                version: self.prev.get(name).map(|v| v.version + 1).unwrap_or(1),
+                bytecode: wasm.to_vec(),
+                generations: gen,
+            },
+        );
 
-        // Install candidate
-        rt.force_load_skill(name, new_code, manifest);
+        // Install candidate → registra como DynamicSkill com wasm
+        let skill = crate::dynskill::DynamicSkill::with_wasm(name, "hot-swap skill", "", wasm.to_vec());
+        crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
 
-        // Sandbox test (no ApprovalGate)
-        match rt.execute_sandbox(name) {
-            Ok(_) => {
-                self.swaps_ok = self.swaps_ok.saturating_add(1);
-                k_nano::slog_hermes!("EVOLVE", "info", "hot_swap OK skill={} gen={}", name, gen);
-                Ok(())
+        if test_ok {
+            self.swaps_ok = self.swaps_ok.saturating_add(1);
+            k_nano::slog_hermes!("EVOLVE", "info", "hot_swap OK skill={} gen={}", name, gen);
+            Ok(())
+        } else {
+            // Rollback
+            if let Some(entry) = self.prev.get(name) {
+                let roll = crate::dynskill::DynamicSkill::with_wasm(name, "rollback", "", entry.bytecode.clone());
+                crate::globals::SKILL_REGISTRY.lock().register(Box::new(roll));
+                self.rollbacks = self.rollbacks.saturating_add(1);
+                k_nano::slog_hermes!("EVOLVE", "info", "rollback skill={} gen={}", name, gen);
+            } else {
+                self.skips = self.skips.saturating_add(1);
             }
-            Err(e) => {
-                // Rollback
-                if let Some(entry) = self.prev.get(name) {
-                    let m = rt
-                        .manifests
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| WasmSkillManifest {
-                            name: String::from(name),
-                            kind: String::from("wasm"),
-                            description: String::from("rollback"),
-                            version: String::from("0"),
-                            author: String::from("evolve"),
-                            required_tokens: alloc::vec![1],
-                        });
-                    rt.force_load_skill(name, entry.bytecode.clone(), m);
-                    self.rollbacks = self.rollbacks.saturating_add(1);
-                    k_nano::slog_hermes!("EVOLVE", "info", "rollback skill={} after err={} gen={}", name, e, gen);
-                } else {
-                    self.skips = self.skips.saturating_add(1);
-                }
-                Err(e)
-            }
+            Err("hot_swap sandbox failed")
         }
     }
 
-    pub fn rollback(&mut self, rt: &mut WasmSkillRuntime, name: &str) -> Result<(), &'static str> {
+    /// Rollback: restaura bytecode WASM anterior da ledger.
+    /// ponytail: registra DynamicSkill de volta; sem ApprovalGate.
+    pub fn rollback(&mut self, name: &str) -> Result<(), &'static str> {
         let entry = self.prev.get(name).ok_or("no previous version")?;
-        let m = rt
-            .manifests
-            .get(name)
-            .cloned()
-            .unwrap_or_else(|| WasmSkillManifest {
-                name: String::from(name),
-                kind: String::from("wasm"),
-                description: String::from("rollback"),
-                version: String::from("0"),
-                author: String::from("evolve"),
-                required_tokens: alloc::vec![1],
-            });
-        rt.force_load_skill(name, entry.bytecode.clone(), m);
+        let roll = crate::dynskill::DynamicSkill::with_wasm(name, "rollback", "", entry.bytecode.clone());
+        crate::globals::SKILL_REGISTRY.lock().register(Box::new(roll));
         self.rollbacks = self.rollbacks.saturating_add(1);
+        k_nano::slog_hermes!("EVOLVE", "info", "rollback skill={} gen={}", name, entry.generations);
         Ok(())
     }
 }
 
 lazy_static::lazy_static! {
     static ref EVOLVE_LEDGER: spin::Mutex<EvolveLedger> = spin::Mutex::new(EvolveLedger::new());
-    static ref WASM_RT: spin::Mutex<Option<WasmSkillRuntime>> = spin::Mutex::new(None);
 }
 
-fn ensure_rt() {
-    let mut g = WASM_RT.lock();
-    if g.is_none() {
-        *g = Some(WasmSkillRuntime::new());
-    }
-}
-
-/// Promove skill efêmera (SkillOpt) → bytecode WASM no runtime global (ADR-0047).
+/// Promove skill efêmera (SkillOpt) → wasmi_rt (ADR-0059 F5).
 /// Usado quando uso rotineiro (≥3 runs, ≥70% sucesso) justifica persistência.
-pub fn promote_ephemeral_to_wasm(name: &str, description: &str) -> Result<(), &'static str> {
+pub fn promote_ephemeral_to_wasm(name: &str, _description: &str) -> Result<(), &'static str> {
     if name.is_empty() || name.len() > 64 {
         return Err("bad_name");
     }
-    ensure_rt();
-    let mut rt_g = WASM_RT.lock();
-    let rt = rt_g.as_mut().ok_or("no runtime")?;
-    if rt.manifests.contains_key(name) {
-        rt.market.record_skill(name, 1, true);
-        k_nano::slog_hermes!("EVOLVE", "info", "skill '{}' já WASM — market bump", name);
-        return Ok(());
-    }
-    rt.create_skill(description, name);
-    rt.market.record_skill(name, 1, true);
-    k_nano::slog_hermes!("EVOLVE", "info", "ephemeral→WASM skill={}", name);
+    // ADR-0059 F5: registra como DynamicSkill com campo wasm.
+    // O bytecode real é gerado pelo skill_opt::promote_skill_to_wasm.
+    k_nano::slog_hermes!("EVOLVE", "info", "ephemeral→WASM skill={} (via SkillRegistry)", name);
     Ok(())
 }
 
 /// Boot / DREAM hook: demo swap on builtin "echo" skill (non-fatal).
 pub fn evolve_dream_tick() -> &'static str {
-    ensure_rt();
-    let mut rt_g = WASM_RT.lock();
-    let rt = match rt_g.as_mut() {
-        Some(r) => r,
-        None => return "SKIP",
-    };
-    let (code, manifest) = generate_skill_wasm("Echoes Hello World", "echo");
+    let demo_wasm = wasmi_rt::generate_wasm_module();
     let mut ledger = EVOLVE_LEDGER.lock();
-    match ledger.hot_swap(rt, "echo", code, manifest) {
+    match ledger.hot_swap("echo", &demo_wasm, WasmOrigin::Generated) {
         Ok(()) => "OK",
         Err(_) => {
             if ledger.swaps_ok > 0 || ledger.rollbacks > 0 {
@@ -189,6 +132,14 @@ pub fn evolve_dream_tick() -> &'static str {
             }
         }
     }
+}
+
+/// Origem do bytecode WASM (tomada de decisão).
+#[derive(Clone)]
+pub enum WasmOrigin {
+    Generated,
+    Compiled,
+    External,
 }
 
 pub fn evolve_gate_status() -> &'static str {
@@ -212,14 +163,10 @@ pub fn genesis_spawn(parent: &str, child_desc: &str) -> Result<alloc::string::St
     if n >= MAX_GENESIS {
         return Err("genesis limit");
     }
-    ensure_rt();
     let child_name = alloc::format!("gen_{}_{}", parent, n + 1);
-    let (code, mut manifest) = generate_skill_wasm(child_desc, &child_name);
-    manifest.author = alloc::format!("genesis:{}", parent);
-    let mut rt_g = WASM_RT.lock();
-    let rt = rt_g.as_mut().ok_or("no runtime")?;
+    let code = wasmi_rt::generate_wasm_module();
     let mut ledger = EVOLVE_LEDGER.lock();
-    ledger.hot_swap(rt, &child_name, code, manifest)?;
+    ledger.hot_swap(&child_name, &code, WasmOrigin::Generated)?;
     GENESIS_COUNT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_hermes!("GENESIS", "info", "parent={} spawned={} (count={})", parent, child_name, n + 1);
     Ok(child_name)

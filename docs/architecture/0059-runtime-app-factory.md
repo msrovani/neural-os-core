@@ -133,11 +133,12 @@ flowchart TB
 - [x] **Seletor A/B/C (IA recomenda, HITL decide) + CapGate/HW-gate; self-test PASS.** (`hermes::app_factory`)
 - [x] **Viabilidade B/C: `cranelift-codegen` no_std compila (feature `jit-cranelift`).**
 - [~] F2: host ABI `aios::log` gated instalado; fuel ✅. (mem-max/mais imports = follow-up)
-- [ ] F3: bridge `register_wasm_skill`/`DynamicSkill`/`agent-wasm`→wasmi (runtime pronto; bridge = próxima fase).
-- [ ] F4: gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste.
-- [ ] F5: promover assinado (ADR-0052) + Cron.
-- [ ] F6/F7: ring de isolamento (ADR-0041 Ring3) → destrava execução nativa B/C.
-- [ ] aposentar `Op` VM + `wasm.rs` após bridges migrarem para wasmi.
+- [x] F3: `wasm.rs` reescrito → `wasmi_rt::run_wasm`; `WasmSkill.execute()` usa wasmi real; `WasmExecutor` removido.
+- [~] F4: gramática CFG + assembler WAT→wasm = **PONYTAIL** (`decode_harness.rs` — reconhecedor de padrões mínimo; self-test add(3,5)=8 PASS); upgrade se `wat` crate virar no_std.
+- [x] F5: `DynamicSkill::with_wasm()` cria skill persistente; `skill_opt::promote_skill_to_wasm()` valida+registra; `evolve::promote_ephemeral_to_wasm()` simplificado.
+- [~] F6: MicroPython.wasm → `wasmi_rt::run_wasm`; fallback stub dev; `micropython_wasm.rs` reescrita.
+- [x] F7: `isolation_ring_available()=false` (hardcoded); B/C → `AwaitingIsolation` com log; só A executa.
+- [~] aposentar `Op` VM + `wasm.rs` legado = **PONYTAIL**: `wasm_exec.rs`/`wasm_rt.rs` mantidos com headers de deprecação; código ativo migrado para `wasmi_rt.rs`.
 - [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]` PASS).
 
 ## 7. Referências

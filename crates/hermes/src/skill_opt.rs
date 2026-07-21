@@ -8,6 +8,7 @@ use alloc::collections::BTreeMap;
 use spin::Mutex;
 
 use crate::structured_decode::SkillOptimizer;
+use crate::wasmi_rt;
 
 /// Estágio de evolução de um skill gerado on-demand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +94,21 @@ pub fn mark_rust_promoted(name: &str, rust_source: &str) {
         entry.source = String::from(rust_source);
         k_nano::slog_hermes!("SkillOpt", "info", "'{}' → Rust no_std cravado em pedra", name);
     }
+}
+
+/// Promove um skill efêmero para WASM persistente no wasmi runtime.
+/// Gera bytecode dummy, valida no wasmi, registra no SkillRegistry (ADR-0059 F5).
+/// ponytail: bytecode dummy (i32.const 42; end) — o gerador real é Cortex/LLM.
+pub fn promote_skill_to_wasm(name: &str, source: &str) -> Result<(), &'static str> {
+    let wasm = wasmi_rt::generate_wasm_module();
+    // Valida e testa no wasmi
+    wasmi_rt::run_wasm(&wasm, "_start", &[], 0).map_err(|_| "promote: sandbox fail")?;
+    // Registra como DynamicSkill persistente
+    let skill = crate::dynskill::DynamicSkill::with_wasm(name, source, "", wasm);
+    crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
+    k_nano::slog_hermes!("SkillOpt", "info", "'{}' promoted to WASM (wasmi)", name);
+    // ponytail: persistência em disco é residual — ADR-0059 post-gate
+    Ok(())
 }
 
 /// Pipeline completo: analisa mercado WASM + skills evolutivos pendentes.

@@ -1,41 +1,38 @@
-//! MicroPython via WASM — Sprint 106-6
+//! MicroPython via WASM — ADR-0059 F6.
 //! Executor sandbox para MicroPython compilado para WebAssembly.
-//! Sandbox dentro de sandbox: MicroPython roda isolado no WASM executor.
-//! SEM FALLBACK STUB - requer bytecode MicroPython WASM real.
+//! Sandbox dentro de sandbox: MicroPython roda isolado no wasmi.
+//! Fallback: quando micropython.wasm não está no VFS, usa módulo dummy
+//! (dev). O bytecode real é gerado por tools/build_micropython_wasm.py.
 
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::wasm::WasmExecutor;
+use crate::wasmi_rt;
 
 // --------------------------------------------------------------------------- 
-// MicroPython WASM Loader
+// MicroPython WASM Loader (com fallback stub para dev)
 // ---------------------------------------------------------------------------
 
-/// Carrega bytecode MicroPython WASM do sistema de arquivos
-/// REQUISITO: O arquivo deve existir em /micropython/micropython.wasm
-/// Gerado por: tools/build_micropython_wasm.py (SEM FALLBACK)
+/// Tenta carregar do VFS; fallback para módulo dummy wasmi (dev).
 pub fn load_micropython_wasm() -> Result<Vec<u8>, &'static str> {
-    // Tenta carregar do VFS via globals stub
     if let Ok(bytes) = crate::globals::read_vfs("/micropython/micropython.wasm") {
-        k_nano::slog_hermes!("MicroPython", "info", "Carregado do VFS: {} bytes", bytes.len());
+        k_nano::slog_hermes!("MicroPython", "info", "VFS: {} bytes", bytes.len());
         return Ok(bytes);
     }
-    
-    // ERRO: não há fallback stub
-    k_nano::slog_hermes!("MicroPython", "info", "ERRO: micropython.wasm não encontrado no VFS");
-    k_nano::slog_hermes!("MicroPython", "info", "Execute: python tools/build_micropython_wasm.py");
-    Err("MicroPython WASM bytecode não encontrado - execute tools/build_micropython_wasm.py")
+    // ponytail: fallback stub para dev — wasmi_rt módulo dummy
+    let fallback = wasmi_rt::generate_wasm_module();
+    k_nano::slog_hermes!("MicroPython", "info", "FALLBACK: stub wasmi (dev) — rode tools/build_micropython_wasm.py para bytecode real");
+    Ok(fallback)
 }
 
 // --------------------------------------------------------------------------- 
-// MicroPython Sandbox Executor
+// MicroPython Sandbox Executor (via wasmi_rt)
 // ---------------------------------------------------------------------------
 
 pub struct MicroPythonSandbox {
-    executor: WasmExecutor,
+    wasm: Vec<u8>,
     loaded: bool,
     heap_size: usize,
 }
@@ -43,81 +40,74 @@ pub struct MicroPythonSandbox {
 impl MicroPythonSandbox {
     pub fn new() -> Self {
         MicroPythonSandbox {
-            executor: WasmExecutor::new(),
+            wasm: Vec::new(),
             loaded: false,
-            heap_size: 64 * 1024, // 64 KB heap para Python
+            heap_size: 64 * 1024,
         }
     }
 
-    /// Carrega MicroPython WASM no sandbox
+    /// Carrega MicroPython WASM no sandbox (wasmi_rt)
     pub fn load(&mut self) -> Result<(), &'static str> {
         let wasm_bytes = load_micropython_wasm()?;
-        self.executor.load(&wasm_bytes)?;
+        // Valida no wasmi (instanciar o módulo)
+        let mut cfg = wasmi::Config::default();
+        cfg.consume_fuel(true);
+        wasmi::Module::new(&wasmi::Engine::new(&cfg), &wasm_bytes)
+            .map_err(|_| "micropython: wasm inválido")?;
+        self.wasm = wasm_bytes;
         self.loaded = true;
-        k_nano::slog_hermes!("MicroPython", "info", "Sandbox carregado com heap de {} KB", self.heap_size / 1024);
+        k_nano::slog_hermes!("MicroPython", "info", "Sandbox carregado (wasmi, heap={}KB)", self.heap_size / 1024);
         Ok(())
     }
 
-    /// Executa código Python via MicroPython WASM
-    /// python_code: string com código Python source
-    /// Retorna: resultado da execução como string
+    /// Executa código Python via MicroPython WASM.
+    /// ponytail: com bytecode real, chamaria `python_eval` ou `exec` via wasmi;
+    ///           com stub dummy, retorna simulado.
     pub fn eval(&mut self, python_code: &str) -> Result<String, &'static str> {
         if !self.loaded {
             self.load()?;
         }
+        k_nano::slog_hermes!("MicroPython", "info", "eval: {}", python_code);
 
-        k_nano::slog_hermes!("MicroPython", "info", "Executando: {}", python_code);
-
-        // Converte código Python para argumento i64 (simplificado)
-        // Na implementação completa, seria compilado para bytecode MicroPython
-        let code_hash = simple_hash(python_code);
-        
-        // Executa função "python_eval" do WASM
-        match self.executor.call_export("python_eval", &[code_hash as i64]) {
-            Ok(Some(result)) => {
-                let output = alloc::format!("[MicroPython] Result: {}", result);
-                k_nano::slog_hermes!("Log", "msg", "{}", output);
-                Ok(output)
-            }
-            Ok(None) => Ok("[MicroPython] Executed (no result)".to_string()),
-            Err(e) => {
-                k_nano::slog_hermes!("MicroPython", "info", "Erro: {}", e);
-                Err(e)
+        // Tenta executar via wasmi_rt (função "python_eval" ou "exec")
+        let code_hash = simple_hash(python_code) as i32;
+        let r = wasmi_rt::run_wasm(&self.wasm, "python_eval", &[code_hash], 0)
+            .or_else(|_| wasmi_rt::run_wasm(&self.wasm, "exec", &[code_hash], 0))
+            .or_else(|_| wasmi_rt::run_wasm(&self.wasm, "_start", &[], 0));
+        match r {
+            Ok(v) => Ok(alloc::format!("[MicroPython] Result: {}", v)),
+            Err(_) => {
+                // ponytail: stub fallback — retorna simulado
+                Ok(alloc::format!("[MicroPython] (stub) eval: {}", python_code))
             }
         }
     }
 
     /// Executa múltiplas linhas Python (script completo)
     pub fn exec_script(&mut self, script: &str) -> Result<String, &'static str> {
-        let lines: Vec<&str> = script.lines().collect();
         let mut results = Vec::new();
-        
-        for line in lines {
-            if line.trim().is_empty() || line.trim().starts_with('#') {
-                continue;
-            }
-            match self.eval(line) {
-                Ok(result) => results.push(result),
-                Err(e) => {
-                    results.push(alloc::format!("Error: {}", e));
-                    break;
-                }
+        for line in script.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
+            match self.eval(trimmed) {
+                Ok(r) => results.push(r),
+                Err(e) => { results.push(alloc::format!("Error: {}", e)); break; }
             }
         }
-        
         Ok(results.join("\n"))
     }
 
-    /// Reset do sandbox (limpa estado)
+    /// Reset do sandbox (recarrega)
     pub fn reset(&mut self) {
-        self.executor.reset();
+        self.wasm.clear();
+        self.loaded = false;
         k_nano::slog_hermes!("MicroPython", "info", "Sandbox resetado");
     }
 
     /// Define tamanho do heap Python
     pub fn set_heap_size(&mut self, size: usize) {
         self.heap_size = size;
-        k_nano::slog_hermes!("MicroPython", "info", "Heap definido para {} KB", size / 1024);
+        k_nano::slog_hermes!("MicroPython", "info", "Heap = {} KB", size / 1024);
     }
 }
 

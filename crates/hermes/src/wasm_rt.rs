@@ -1,7 +1,13 @@
 //! WASM Runtime — Skill execution engine (Sprint 93).
 //! Fuel metering, linear memory pool, WASI→Skill bridge, BitNet IDE,
 //! Plugin Hub, Skill Marketplace, hybrid kernel/WASM agents.
-//! Zero stubs — toda funcao e 100% funcional.
+//!
+//! ## Deprecação (ADR-0059)
+//! O interpretador `Op` VM foi **substituído** pelo `wasmi_rt` (wasmi real,
+//! no_std, fuel). Este módulo é mantido como referência histórica para
+//! `MemoryPool`, `HybridRegistry` e `PluginHub` — infraestrutura que ainda
+//! pode ser útil. O caminho de execução (`WasmSkillRuntime`, `execute_sandbox`,
+//! `force_load_skill`) está **congelado**; novos skills usam `wasmi_rt::run_wasm`.
 
 use alloc::vec::Vec;
 use alloc::vec;

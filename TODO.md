@@ -227,13 +227,13 @@
 | ADR-0058 S2 `UiDeclaration`+`UiRenderer` (cards) sobre toolkit no_std | ~600 LOC |
 | ADR-0058 S3 árvore de janelas retida + `UI_SPEC` spawn/close/focus (remove `AppId`) | ~400 LOC |
 | ADR-0058 S4 card-answer Hermes (#412 grammar) + skill WASM `weather` + Cron | ~400 LOC |
-| ADR-0059 F1 runtime **wasmi** no_std (validar compila soft-float) + WasmiRuntime | ~300 LOC |
-| ADR-0059 F2 host ABI `aios::*` + CapGate imports + fuel/mem limits | ~250 LOC |
-| ADR-0059 F3 bridges (register_wasm_skill/DynamicSkill/agent-wasm→spawn) | ~300 LOC |
-| ADR-0059 F4 gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste | ~800 LOC |
-| ADR-0059 F5 promover/persistir (ADR-0052 sign + PackageHub + SkillOpt cravado) | ~250 LOC |
-| ADR-0059 F6 Python via MicroPython/quickpython.wasm no wasmi (opcional) | ~200 LOC + off-device build |
-| ADR-0059 aposentar `Op` VM (`wasm_exec.rs`) + `wasm.rs` parcial | limpeza |
+| ADR-0059 F1–F2 runtime wasmi + CapGate | ✅ (rodada anterior) |
+| ADR-0059 F3 bridges → wasmi_rt + DynamicSkill | ✅ SESSION_165 — wasm.rs reescrito; WasmExecutor removido |
+| ADR-0059 F4 decode harness (PONYTAIL — sem full assembler) | ✅ SESSION_165 — decode_harness.rs (Add/Echo/Default); upgrade qdo `wat` no_std |
+| ADR-0059 F5 promote (DynamicSkill::with_wasm + SkillOpt) | ✅ SESSION_165 — chain completo |
+| ADR-0059 F6 MicroPython.wasm → wasmi_rt + fallback dev | ✅ SESSION_165 — micropython_wasm.rs reescrita |
+| ADR-0059 F7 ring gate (isolation_ring_available=false) | ✅ (já existia) |
+| ADR-0059 aposentar `Op` VM (`wasm_exec.rs`) + limpeza | ✅ SESSION_165 — headers deprecação; `wasm.rs` ativo migrado |
 | ARM/RISC-V port (💰 sponsor) | ~5.000 LOC |
 
 ---

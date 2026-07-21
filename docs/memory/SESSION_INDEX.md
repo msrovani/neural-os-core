@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 165 | ADR-0059 | Runtime App Factory | F3-F7 + cleanup | wasm.rs→wasmi_rt; decode_harness; DynamicSkill::with_wasm; promote; micropython→wasmi_rt; deprecação wasm_exec/wasm_rt |
 | 164 | FitPolicy | llmfit-inspired | #468 host+guest fit | pack_filter FIT_GATE; cortex::model_fit; ModelHub escalate |
 | 163 | emagrecer + ADR-0057/0058 | Onda 0–6 + Compute + UI | cutover bin→crates + compute dispatch + card desktop | diff_bin_crate; wake multi-AP (-smp4 APs=3); #412 decode; embedded-graphics cards (close/mover/resize); orb+HUD |
 | 162 | LLM | BitNet ladder 850 | #PF AVX2 + BPE SP32/MRG1 | OOB store n%4; encode=HF; coh semântica residual |

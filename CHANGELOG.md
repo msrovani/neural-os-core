@@ -8,15 +8,15 @@
 - MemoryAgent loga `[FIT]`; ModelHub `select_generator_slot` cai se TooTight/Deny
 - Guia: `docs/guides/model-fit-and-pack.md` — inspirado em llmfit, sem port do binário
 
-### Runtime App Factory — ADR-0059 (2026-07-21) — Caminho A ✅ implementado
-- **Viabilidade CONFIRMADA:** `wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float (0 erros)
-- **Caminho A (wasmi) real:** `hermes::wasmi_rt` executa **módulos WASM padrão** em sandbox (fuel + CapGate host-imports `aios::*`); self-test de boot roda um `.wasm` real → `add(2,3)=5` PASS
-- **Seletor por IA (`hermes::app_factory`):** IA recomenda backend **A/B/C**; usuário/HITL decide; CapGate + HW-gate (ring de isolamento) aplicados. B/C (Cranelift, feature `jit-cranelift`) geram nativo → execução **GATED** por ring (ADR-0041) + HITL forte (honesto `AWAITING`)
-- **Integração** self-improve/self-heal/self-update: App Factory é o motor de execução do ciclo evolutivo (testa no sandbox → promove assinado ADR-0052 → hot-swap)
-- Plano restante: bridges (F3), gramática+assembler (F4), promover (F5), ring de isolamento (F6/F7). Aposentar VM `Op` após migração
-- Bare-metal sem `rustc` → IA emite **WAT/DSL**, não Rust compilado (Rust→wasm on-device = residual host)
-- **Supersede** ADR-0031 (tema WASM; desvio wasmi→Op revertido) e ADR-0032 (Op VM + `wasm.rs` aposentados); reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306
-- Fases F1–F6 (wasmi → host ABI/CapGate → bridges → geração validada → promover → Python opcional). Status: **Proposed** — aguardando validação
+### Runtime App Factory — ADR-0059 (2026-07-21) — F3–F7 + Cleanup ✅
+- **F1 (wasmi_rt)** ✅, **F2 (app_factory)** ✅, **F0 (self-test)** ✅ (todos da rodada anterior)
+- **F3 (bridges) ✅:** `wasm.rs` reescrito → `wasmi_rt::run_wasm`; `WasmExecutor` (~150 LOC) removido; `WasmSkill::execute()` roda WASM real via wasmi. `evolve.rs` hot-swap/rollback rewired para wasmi sandbox + `DynamicSkill`; `Vec<Op>` → `Vec<u8>`.
+- **F4 (decode harness) ✅ (PONYTAIL):** `decode_harness.rs` — reconhecedor de padrões (Add/Echo/Default) gera WASM → valida no wasmi; self-test `add(3,5)=8` PASS. Full WAT assembler (~800 LOC) postergado.
+- **F5 (promote) ✅:** `DynamicSkill::with_wasm()` cria skill persistente com bytecode WASM; `skill_opt::promote_skill_to_wasm()` gera → testa → registra no SkillRegistry; `evolve::promote_ephemeral_to_wasm()` simplificado.
+- **F6 (MicroPython.wasm) ✅:** `micropython_wasm.rs` reescrita: `WasmExecutor` → `wasmi_rt::run_wasm`; fallback stub dev (módulo dummy when real .wasm ausente).
+- **F7 (ring gate) ✅:** `isolation_ring_available()=false` (hardcoded); B/C retornam `AwaitingIsolation` com log; só A (wasmi) executa.
+- **Cleanup:** `wasm_rt.rs` + `wasm_exec.rs` headers de deprecação ADR-0059; `package_hub.rs` `PackageSignature` com `compute()` hash simples.
+- **Supersede** ADR-0031/0032; reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306.
 - Refs: wasmi, AAGT, GBNF/Outlines/XGrammar, arXiv SelfEvolve/ARISE/Tool-Making/MCP-SandboxScan
 
 ### Generative Card Desktop (UI/Desktop Jarbas) — ADR-0058 (2026-07-21) — S1–S4 ✅

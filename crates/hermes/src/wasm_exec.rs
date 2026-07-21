@@ -1,6 +1,11 @@
 //! WASM Bytecode Executor — stack-based VM minimal para skills.
 //! Opcodes simples: push, pop, add, sub, load, store, call, br, ret.
 //! no_std, sem alocação dinâmica no hot path.
+//!
+//! ## Deprecação (ADR-0059)
+//! Substituído por `wasmi_rt` (wasmi real). Mantido como referência histórica
+//! para consulta de definições `Op`/`WasmExec` — o fluxo ativo de execução WASM
+//! usa `wasmi_rt::run_wasm`. Novos desenvolvimentos: não dependa deste módulo.
 
 use alloc::vec;
 use alloc::vec::Vec;

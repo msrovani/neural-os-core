@@ -16,11 +16,11 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
   ✦ Residuals 0–7 ✅ · Pós-LAN (#418 NetFs PASS · TLS BLOCKED)
   ✦ Self-Evolve · NeuralFS · AirLLM · LatentBus/GPU/HMI MVPs
   ✦ Sprint 107 Voice ✅ (PASS parcial forte+)
-  ✦ MicroPython/WASM sandbox + SkillOpt (Python→Rust no_std)
+  ✦ **ADR-0059 Runtime App Factory:** wasmi real (`.wasm` bare-metal) + decode harness + promote
   ✦ BitNet 2B LOADED · HW Expert v3 · SelfHeal I3/I4
   ✦ HDA capture + playback · Piper TTS · STT CTC
   ✦ 3 camadas visuais · GPU multi-vendor · WiFi iwlwifi (AWAITING RF)
-  ✦ Skills a quente via LLM (nada hardcoded no enum Intent)
+  ✦ Skills a quente via LLM + **promote automático** (efêmero → WASM persistente)
 
   → Port do JARVIS .NET MAUI para bare-metal Rust
   → github.com/msrovani/jarvis (app original)
@@ -69,8 +69,8 @@ Tudo é Agente ou Skill. Drivers, daemons e serviços são agentes com manifesto
 ### JARVIS Desktop
 DisplayAgent + compositor no framebuffer UEFI (sem X11/Wayland): Orb FFT, Hermes CLI, dock, BitNet IDE (F4).
 
-### WASM + MicroPython (Sprint 106)
-`wasm_rt`, `micropython_wasm`, `skill_opt` — skills efêmeras → WASM persistente → Rust `no_std` via Cortex.
+### WASM Runtime (ADR-0059 — wasmi real)
+`wasmi_rt` executa **módulos WASM padrão** em sandbox (fuel + CapGate). Skill efêmera → `skill_opt::promote_skill_to_wasm()` → `DynamicSkill::with_wasm()` persistente. `decode_harness` reconhece padrões (Add/Echo) e gera WASM. MicroPython.wasm via wasmi (fallback stub dev). `wasm_rt`/`wasm_exec` legados (Op VM) **deprecados**.
 
 ### Voz (Sprint 107 + Sound)
 HDA + Piper + STT CTC + WakeWord registrado. Clima e2e: `'O tempo esta'` + TTS + FB paint. **Backlog voz → Sprint Sound** (STT real, Mic→Wake runtime, Piper VITS pleno).
@@ -95,7 +95,7 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |
 | **ADR-0057** Compute Dispatch SMP+GPU+NPU | ✅ WS-A wake multi-AP (`-smp 4`→APs=3) + dispatcher + #412; GPU/NPU/on-demand = Layer S/HW |
 | **ADR-0058** Generative Card Desktop (UI/Jarbas) | ✅ **S1–S4** — embedded-graphics + `UiDeclaration`/`UiRenderer` (cards por LLM #412 / skill WASM); orb + HUD preservados; supersede parcial 0047-HMI. S5/A-V = residual |
-| **ADR-0059** Runtime App Factory (app por IA) | ✅ **Caminho A** — runtime **wasmi** real (`.wasm` roda no bare-metal: `add(2,3)=5`) + seletor IA A/B/C + CapGate/HW-gate/HITL; B/C (Cranelift) exec gated por ring. Supersede 0031(WASM)/0032 |
+| **ADR-0059** Runtime App Factory (app por IA) | ✅ **F0-F7 completo** — wasmi real (`.wasm` bare-metal: `add(2,3)=5`) + seletor IA A/B/C + **F3 bridges** wasm.rs→wasmi_rt + **F4 decode_harness** (Add/Echo→WASM) + **F5 promote** (efêmero→persistente via `DynamicSkill::with_wasm()`) + **F6 MicroPython.wasm** via wasmi + **F7 ring gate** (B/C AWAITING). Aposenta Op VM. F4 assembler = PONYTAIL (upgrade qdo `wat` no_std). |
 | **Residuals 0–7** | ✅ FECHADO (LAN internet) |
 | **Pós-LAN B-01** | ✅ SESSION_152 (NetFs PASS; TLS BLOCKED; WiFi AWAITING) |
 
