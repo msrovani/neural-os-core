@@ -148,7 +148,7 @@ pub fn run_wasm(
         let a = |i: usize| args.get(i).copied().unwrap_or(0);
         let r: Result<i32, _> = match n_params {
             0 => instance.get_typed_func::<(), i32>(&store, func_name)
-                .and_then(|f| f.call(&mut store, (())).map_err(|e| e.into())),
+                .and_then(|f| f.call(&mut store, ()).map_err(|e| e.into())),
             1 => instance.get_typed_func::<(i32,), i32>(&store, func_name)
                 .and_then(|f| f.call(&mut store, (a(0),)).map_err(|e| e.into())),
             2 => instance.get_typed_func::<(i32, i32), i32>(&store, func_name)

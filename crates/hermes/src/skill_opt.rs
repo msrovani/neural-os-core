@@ -2,6 +2,7 @@
 //! Escalonamento Evolutivo de Código (JIT Cognitivo):
 //! Python efêmero → WASM persistente → Rust no_std via Cortex LLM.
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;

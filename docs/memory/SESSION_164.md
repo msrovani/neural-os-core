@@ -2,7 +2,7 @@
 
 **Data:** 2026-07-19  
 **IDEA:** #468  
-**Marco:** pós v1.9.2 — sem bump de versão nesta leva
+**Marco:** pós v1.9.5 — sem bump de versão nesta leva
 
 ## Objetivo
 

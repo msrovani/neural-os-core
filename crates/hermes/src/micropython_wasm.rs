@@ -5,7 +5,6 @@
 //! (dev). O bytecode real é gerado por tools/build_micropython_wasm.py.
 
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 

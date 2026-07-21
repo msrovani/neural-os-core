@@ -1,11 +1,11 @@
 ﻿# Neural OS Hermes — AI-native Bare-metal Operating System
 
-**Versão:** **v1.9.2** (teste / não estável) · codename **K³CHJ Core — Cognição**
+**Versão:** **v1.9.5** (teste / não estável) · codename **K³CHJ Core — Cognição**
 Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de compilação.
 
 ```
 ╔══════════════════════════════════╗
-║  Neural OS Hermes v1.9.2 TEST   ║
+║  Neural OS Hermes v1.9.5 TEST   ║
 ║  "K³CHJ Core — Cognição"        ║
 ╚══════════════════════════════════╝
 
@@ -30,7 +30,7 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 
 | Métrica | Valor |
 |---------|-------|
-| **Versão release** | **v1.9.2 teste / não estável** (2026-07-19) |
+| **Versão release** | **v1.9.5 teste / não estável** (2026-07-19) |
 | **Gate v2.0.0** | **Fechado** — review, `por_fazer` e OK do maintainer pendentes |
 | Sprints completos | 106 + 107 fechada |
 | Arquivos Rust | ~180+ (6 crates K³CHJ + bin `neural-kernel`) |

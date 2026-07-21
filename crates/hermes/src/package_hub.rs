@@ -8,8 +8,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::hash::{Hash, Hasher};
-use core::mem;
+use core::hash::Hasher;
 use lazy_static::lazy_static;
 use ticket_lock::TicketLock;
 
@@ -66,6 +65,11 @@ impl Hasher for SimpleHasher {
 }
 
 impl PackageKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PackageKind::Skill => "skill",
+            PackageKind::Agent => "agent",
+            PackageKind::AgentWasm => "agent-wasm",
             PackageKind::Workflow => "workflow",
             PackageKind::Plugin => "plugin",
             PackageKind::Mcp => "mcp",

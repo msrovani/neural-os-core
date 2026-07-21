@@ -40,9 +40,9 @@
 - Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados
 - Glossário: ADR-0042 §0; INDEX “Nome do produto”
 
-## [1.9.2] — 2026-07-19 — Emagrecer neural-kernel cutover (TEST)
+## [1.9.5] — 2026-07-19 — Emagrecer neural-kernel cutover (TEST)
 
-**Versão:** v1.9.2 TEST / NÃO ESTÁVEL — **não** v2.0.0.
+**Versão:** v1.9.5 TEST / NÃO ESTÁVEL — **não** v2.0.0.
 
 ### Emagrecer neural-kernel (SESSION_163 / IDEA #467)
 - Cutover seguro bin→crates K³CHJ (ondas 0–6): stubs `pub use` + promote truth do bin

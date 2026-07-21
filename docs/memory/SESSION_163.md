@@ -1,7 +1,7 @@
 # SESSION_163 — Emagrecer neural-kernel (cutover seguro, zero perda) + ADR-0057/0058
 
 **Data:** 2026-07-19 (Emagrecer) / 2026-07-21 (ADR-0057/0058)  
-**Release:** **v1.9.2 TEST** (não v2.0.0)  
+**Release:** **v1.9.5 TEST** (não v2.0.0)  
 
 ---
 

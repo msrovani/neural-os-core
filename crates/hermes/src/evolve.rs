@@ -1,6 +1,7 @@
 //! EvolveAgent WASM hot-swap + rollback ledger (ADR-0047 Pilar 2).
 //! Complementa self_evolve.rs (SKILL.md). Sandbox test → promote | rollback.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;

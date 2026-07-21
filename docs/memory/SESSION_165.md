@@ -1,7 +1,7 @@
 # SESSION_165 — ADR-0059 F3–F7 + Cleanup
 
 **Data:** 2026-07-21
-**Release:** v1.9.2 TEST (mesma leva — sem bump)
+**Release:** v1.9.5 TEST (bumped)
 **Marco:** F3–F7 da ADR-0059 Runtime App Factory implementados; `cargo check --release` pendente.
 **ADR:** [0059-runtime-app-factory.md](../architecture/0059-runtime-app-factory.md)
 

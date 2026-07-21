@@ -11,7 +11,6 @@
 //! ## Upgrade path
 //! Quando o crate `wat` suportar no_std, substituir por `wat::parse_str()` real.
 
-use alloc::string::String;
 use alloc::vec::Vec;
 use crate::wasmi_rt;
 use crate::structured_decode::{StructuredDecoder, DecodeMode};
