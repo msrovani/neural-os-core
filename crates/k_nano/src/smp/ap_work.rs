@@ -76,7 +76,18 @@ pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
     }
 }
 
-/// Loop de idle do AP: processa jobs, tenta steal, ou HLT.
+/// Loop de idle do AP: processa jobs enfileirados, tenta steal, senão `hlt`.
+///
+/// ADR-0057 WS-F: os APs sobem **sem IDT próprio** e com IF=0 (o trampoline faz
+/// `cli` e `ap_entry` não faz `lidt`/`sti`). Enquanto assim, um AP que dorme com
+/// `hlt` só pode ser acordado por trabalho já enfileirado antes do `hlt`, e o
+/// `parallel_*` (WS-B) por isso é **gated** por `ap_pollable()` (hoje `false`):
+/// o BSP faz o matmul (AVX2/scalar) e nenhum AP é enfileirado → sem deadlock.
+///
+/// Para transformar os APs em workers vivos sob demanda (F1-full) é preciso:
+/// IDT compartilhada + LAPIC habilitado + handler do reschedule-IPI + `wake_aps`.
+/// Isso mexe em interrupções por-core (risco de #DF) e exige **validação em HW**
+/// (residual WS-F). `hlt` mantém o wake sequencial confiável e baixo custo no TCG.
 pub fn ap_idle_loop(worker_id: usize) -> ! {
     loop {
         if let Some((f, jid)) = try_dequeue() {

@@ -10,7 +10,7 @@ pub mod work_stealing;
 use crate::apic;
 use crate::memory;
 use crate::println;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::structures::paging::{
     Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
@@ -59,6 +59,31 @@ pub fn ap_entry_count() -> u64 {
     AP_ENTRY_COUNTER.load(Ordering::Relaxed)
 }
 
+/// ADR-0057 WS-F: APs só podem ser usados como workers vivos (WS-B) quando
+/// `true`. Requer o path de reschedule-IPI/IDT (residual HW). Enquanto `false`,
+/// o `parallel_*` roda no BSP (AVX2/scalar) — sem enfileirar/esperar APs.
+static AP_POLLABLE: AtomicBool = AtomicBool::new(false);
+/// Fn-ptr do reschedule-IPI do APIC vivo (instalado pelo binário). Seam WS-F.
+static WAKE_FN: AtomicUsize = AtomicUsize::new(0);
+
+pub fn ap_pollable() -> bool {
+    AP_POLLABLE.load(Ordering::Acquire)
+}
+pub fn set_ap_pollable(v: bool) {
+    AP_POLLABLE.store(v, Ordering::Release);
+}
+pub fn install_wake_fn(f: unsafe fn()) {
+    WAKE_FN.store(f as usize, Ordering::Release);
+}
+/// Acorda APs adormecidos (só efetivo com IDT/IPI habilitados — WS-F residual).
+pub unsafe fn wake_aps() {
+    let s = WAKE_FN.load(Ordering::Acquire);
+    if s != 0 {
+        let f: unsafe fn() = core::mem::transmute::<usize, unsafe fn()>(s);
+        f();
+    }
+}
+
 fn busy_wait_us(us: u64) {
     for _ in 0..us * 40 {
         core::hint::spin_loop();
@@ -101,23 +126,28 @@ pub unsafe fn wake_aps_sequential(
         trampoline::init_trampoline(tramp_phys, cr3_val, ap_stack, percpu_addr, ap_entry);
 
         let before = AP_ENTRY_COUNTER.load(Ordering::Acquire);
-        send_init_to(dest);
-        wait_delivery();
-        busy_wait_us(10000);
-        send_sipi_to(dest, tramp_vector);
-        wait_delivery();
-        busy_wait_us(200);
-        send_sipi_to(dest, tramp_vector);
-        wait_delivery();
-
-        // Espera ESTE AP sinalizar antes de acordar o próximo (timeout ~100 ms).
+        // ADR-0057 WS-F: retry INIT-SIPI-SIPI (até 3x). Firmware real também
+        // repete; robustez contra jitter de agendamento (ex.: TCG) onde o AP
+        // pode demorar a receber ciclos e estourar um timeout curto.
         let mut ok = false;
-        for _ in 0..2000 {
-            if AP_ENTRY_COUNTER.load(Ordering::Acquire) > before {
-                ok = true;
-                break;
+        'attempts: for _attempt in 0..3 {
+            send_init_to(dest);
+            wait_delivery();
+            busy_wait_us(10000);
+            send_sipi_to(dest, tramp_vector);
+            wait_delivery();
+            busy_wait_us(200);
+            send_sipi_to(dest, tramp_vector);
+            wait_delivery();
+
+            // Espera ESTE AP sinalizar antes de acordar o próximo (~250 ms/try).
+            for _ in 0..5000 {
+                if AP_ENTRY_COUNTER.load(Ordering::Acquire) > before {
+                    ok = true;
+                    break 'attempts;
+                }
+                busy_wait_us(50);
             }
-            busy_wait_us(50);
         }
         if ok {
             woke += 1;

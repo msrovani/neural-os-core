@@ -27,6 +27,7 @@ pub mod global_arena;
 pub mod r3;
 pub mod bitnet_avx2;
 pub mod compute;
+pub mod decode;
 pub mod bpe;
 pub mod burn_flex;
 pub mod cortex;

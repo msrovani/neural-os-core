@@ -67,9 +67,11 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
         }
     }
 
-    // Ring 1 fallback — P-cores (APs) via WS-B.
+    // Ring 1 fallback — P-cores (APs) via WS-B. Só se os APs forem workers
+    // vivos (`ap_pollable`, WS-F); senão o `parallel_*` degrada e caímos em CPU.
     if big
         && k_nano::platform_probe::allow_smp()
+        && k_nano::smp::ap_pollable()
         && k_nano::smp::ap_entry_count() > 0
     {
         if let Some(r) = crate::parallel_matmul::parallel_ternary_matmul(w, x) {

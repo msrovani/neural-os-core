@@ -56,11 +56,13 @@ impl Tensor {
             return None;
         }
         let mut result = Tensor::new((m, n));
-        // ADR-0057 WS-B: f32 grande distribui linhas entre P-cores (APs).
+        // ADR-0057 WS-B: f32 grande distribui linhas entre P-cores (APs), só
+        // quando os APs são workers vivos (`ap_pollable`, WS-F).
         if m >= 8
             && n >= 8
             && k >= 8
             && k_nano::platform_probe::allow_smp()
+            && k_nano::smp::ap_pollable()
             && k_nano::smp::ap_entry_count() > 0
         {
             if let Some(r) = crate::parallel_matmul::parallel_matmul(self, other) {

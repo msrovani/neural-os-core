@@ -2108,6 +2108,17 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // cortex (só registra se `Ready`/HW real; senão CPU/SMP). NPU = Layer S.
     k_hal::gpu::compute_dispatch::register_compute_if_ready();
     k_hal::npu::init_npu();
+    // ADR-0057 WS-G (#412): valida o primitivo de structured-decode sem modelo.
+    let _ = cortex_crate::decode::self_test();
+    // ADR-0057 WS-F: instala o seam de wake (reschedule-IPI do APIC vivo). APs
+    // como workers vivos (ap_pollable) exigem IDT/IPI por-core = residual HW.
+    k_nano::smp::install_wake_fn(crate::apic::send_ipi_reschedule);
+    k_nano::slog_bin!(
+        "SMP",
+        "info",
+        "AP workers pollable={} (WS-F on-demand wake = residual HW/IDT)",
+        k_nano::smp::ap_pollable()
+    );
 
     publish_boot_phase(BootPhase::DriverInit, "NIC/ATA/AHCI/xHCI/GPU probes concluidos");
 

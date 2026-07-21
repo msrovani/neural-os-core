@@ -54,7 +54,9 @@ pub fn parallel_matmul(a: &Tensor, b: &Tensor) -> Option<Tensor> {
     let mut c_data = Vec::with_capacity(m * n);
     c_data.resize(m * n, 0.0f32);
 
-    let smp_ok = k_nano::platform_probe::allow_smp() && k_nano::smp::ap_entry_count() > 0;
+    let smp_ok = k_nano::platform_probe::allow_smp()
+        && k_nano::smp::ap_pollable()
+        && k_nano::smp::ap_entry_count() > 0;
 
     if !smp_ok || m < 8 {
         // Single-core path
@@ -168,7 +170,10 @@ pub fn parallel_ternary_matmul(
     if k != k2 {
         return None;
     }
-    let smp_ok = k_nano::platform_probe::allow_smp() && k_nano::smp::ap_entry_count() > 0;
+    // ADR-0057 WS-F: só usa APs quando são workers vivos (`ap_pollable`).
+    let smp_ok = k_nano::platform_probe::allow_smp()
+        && k_nano::smp::ap_pollable()
+        && k_nano::smp::ap_entry_count() > 0;
     if !smp_ok || n < 16 {
         return None;
     }
