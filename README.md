@@ -93,6 +93,7 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | **Sound** pipeline voz | ✅ parcial honesto |
 | 108 Self-Evolving Agents | ✅ |
 | ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |
+| **ADR-0057** Compute Dispatch SMP+GPU+NPU | ✅ WS-A wake multi-AP (`-smp 4`→APs=3) + dispatcher + #412; GPU/NPU/on-demand = Layer S/HW |
 | **Residuals 0–7** | ✅ FECHADO (LAN internet) |
 | **Pós-LAN B-01** | ✅ SESSION_152 (NetFs PASS; TLS BLOCKED; WiFi AWAITING) |
 

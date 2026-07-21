@@ -16,6 +16,7 @@
 - **HalOffer** API R3 + Cap grant; VirtIO = transporte BE
 - Sprint 108 Self-Evolve ✅ · Sprint Sound ✅ parcial · NeuralFS/AirLLM/ADR-0047 MVPs
 - ADRs GPU 0048–0050 ⏳
+- **ADR-0057** Compute Dispatch SMP+GPU+NPU: WS-A wake multi-AP (`-smp 4`→APs=3, CorePools r0=1 r1=2 r2=1) + `cortex::compute` dispatcher + WS-G #412 structured decode ✅; GPU/NPU hooks + on-demand AP-worker (IDT/IPI) = Layer S/HW
 - **Não** é declaração de `v2.0.0`
 
 **Arquitetura K³CHJ:**
