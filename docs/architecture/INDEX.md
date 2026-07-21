@@ -52,8 +52,8 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0028-gguf-format-research.md` | Proposed | `pesquisa` | #375–377 | GGUF research |
 | `0029-gpu-architecture.md` | Proposed | `modernizada` | #378–382, #406 | Base GPU evoluída |
 | `0030-disk-intelligence-agent.md` | Proposed | `modernizada` | #303a–f | Agente implementado e expandido |
-| `0031-aios-self-update-wasm-jarvis.md` | Accepted | `modernizada` | #306–310, #383–390 | Implementada com desvios documentados |
-| `0032-wasm-agent-apps.md` | Proposed | `modernizada` | #391–396 | Runtime/ABI implementados |
+| `0031-aios-self-update-wasm-jarvis.md` | **Superseded (parcial, WASM)** | `substituida` | #306–310, #383–390 → **0059** | Desvio wasmi→Op VM revertido por ADR-0059; Self-Update/JARVIS mantidos |
+| `0032-wasm-agent-apps.md` | **Superseded** | `substituida` | #391–396 → **0059** | Visão absorvida; Op VM + wasm.rs aposentados por wasmi (ADR-0059) |
 | `0033-on-device-micro-learning.md` | Proposed | `modernizada` | #397–401 | Base de micro-learning implementada |
 | `0034-jarvis-conscious-interaction-layer.md` | Superseded | `substituida` | #310/#315 | Substituída pela ADR-0036 |
 | `0035-jarvis-deep-research-ecosystem-convergence.md` | Superseded | `substituida` | #315 | Substituída pela ADR-0036 |
@@ -82,6 +82,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0056-neural-device-lego.md` | Accepted (MVP) | `fazendo` | #464 | L0/L1/L2 DeviceRecipe; UnlockDAG; trust Ed25519; community hub; H1 bind table |
 | `0057-compute-dispatch-smp-gpu-npu.md` | Accepted | `fazendo` | #20–42, #211, #329–331, #345–346, #454–456 | **Dispatch de compute** LLM: WS-A wake multi-AP ✅ (QEMU -smp 4 APs=3); WS-B/C dispatcher wired; WS-D GPU hook (Ready gate) + WS-E NPU XDNA/Intel = **Layer S/HW** honesto |
 | `0058-generative-card-desktop.md` | Accepted | `fazendo` | #79/#80/#82/#279d/#283/#448/#452/#465 + #468 | **UI/Desktop Jarbas:** embedded-graphics `DrawTarget` + `UiDeclaration`/`UiRenderer` (cards). **S1–S4 ✅** (QEMU: 3 cards + orb + HUD; self-tests PASS). Supersede parcial 0047-HMI (H3 ❌). S5 + A/V real residual |
+| `0059-runtime-app-factory.md` | Proposed | `fazendo` | #103/#309a/#385–396/#402/#411/#8/#11/#306 + #469 | **App feita por IA em runtime:** runtime real **wasmi** (no_std) + pipeline gerar(WAT/DSL, gramática #412)→assembler→sandbox-teste→promover (ADR-0052 agent-wasm). Supersede ADR-0031(WASM)/0032; aposenta Op VM. Aguarda validação |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)

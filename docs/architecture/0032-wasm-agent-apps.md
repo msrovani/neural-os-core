@@ -1,7 +1,7 @@
 # ADR-0032: WASM Agent Apps — O Formato Nativo do Neural AIOS
 
 **Data:** 2026-07-03
-**Status:** Draft
+**Status:** **Superseded → [ADR-0059](0059-runtime-app-factory.md)** — a visão (`.wasm` = agente, syscalls = skills) é absorvida e concretizada pela ADR-0059 com runtime real `wasmi`; a VM `Op` custom e o interpretador parcial `wasm.rs` são aposentados. Conteúdo abaixo = visão histórica.
 **Sprint Target:** 76-77
 
 ---

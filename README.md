@@ -95,6 +95,7 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |
 | **ADR-0057** Compute Dispatch SMP+GPU+NPU | ✅ WS-A wake multi-AP (`-smp 4`→APs=3) + dispatcher + #412; GPU/NPU/on-demand = Layer S/HW |
 | **ADR-0058** Generative Card Desktop (UI/Jarbas) | ✅ **S1–S4** — embedded-graphics + `UiDeclaration`/`UiRenderer` (cards por LLM #412 / skill WASM); orb + HUD preservados; supersede parcial 0047-HMI. S5/A-V = residual |
+| **ADR-0059** Runtime App Factory (app por IA) | 🟡 Proposed — runtime **wasmi** real + gerar(WAT/DSL, gramática)→sandbox-teste→promover `agent-wasm`; supersede 0031(WASM)/0032; aposenta Op VM |
 | **Residuals 0–7** | ✅ FECHADO (LAN internet) |
 | **Pós-LAN B-01** | ✅ SESSION_152 (NetFs PASS; TLS BLOCKED; WiFi AWAITING) |
 

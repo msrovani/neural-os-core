@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Runtime App Factory — ADR-0059 (2026-07-21, Proposed)
+- Plano para "app feita por IA em runtime": runtime WASM real **wasmi** (no_std, fuel) substituindo a VM `Op` custom; pipeline **gerar (WAT/DSL sob gramática #412) → assembler WAT→wasm no_std → testar em sandbox wasmi (unit-tests + adversarial + fuel + CapGate) → promover assinado a PackageHub `agent-wasm` (ADR-0052) → registrar tickável → card (ADR-0058)**
+- Bare-metal sem `rustc` → IA emite **WAT/DSL**, não Rust compilado (Rust→wasm on-device = residual host)
+- **Supersede** ADR-0031 (tema WASM; desvio wasmi→Op revertido) e ADR-0032 (Op VM + `wasm.rs` aposentados); reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306
+- Fases F1–F6 (wasmi → host ABI/CapGate → bridges → geração validada → promover → Python opcional). Status: **Proposed** — aguardando validação
+- Refs: wasmi, AAGT, GBNF/Outlines/XGrammar, arXiv SelfEvolve/ARISE/Tool-Making/MCP-SandboxScan
+
 ### Generative Card Desktop (UI/Desktop Jarbas) — ADR-0058 (2026-07-21) — S1–S4 ✅
 - Planejamento unificado do UI/desktop: fundação **embedded-graphics** (`DrawTarget` sobre `DoubleBuffer`) + toolkit no_std (matrix-gui/embedded-gui/kolibri, MIT/Apache) + camada declarativa **`UiDeclaration`/`UiRenderer`** (cards)
 - Cards gerados como **dados** por Hermes/Trinity/Cortex (constrangidos pelo structured decoding ADR-0057 #412) ou por **skill WASM** (RustCoder/Codex, ADR-0052) + repetição Cron. Ex.: "clima de amanhã" → WeatherCard
