@@ -25,6 +25,7 @@
 #   SESSION_160: WiFi pivô ath10k QCA6174 Note1050; A0–A2; iwlwifi secondary
 #   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
 #   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
+#   SESSION_163: ADR-0057 Compute Dispatch (WS-A wake multi-AP -smp4 APs=3; WS-B/C dispatch; WS-G #412) + ADR-0058 Generative Card Desktop (embedded-graphics; cards close/mover/resize; orb+HUD preservados)
 #   ADR-0056 H1 runtime: unlock_dag + recipe FAT gate + HalOffer NeedsFw/Escalate (#464)
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
 #   PreFlight: tools/preflight_wave.py · cache docs/memory/.preflight_cache/ · depends_on: lan · AWAITING_HW

@@ -273,6 +273,9 @@ Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 - **Hermes net espelho (SESSION_152):** Browser/Search/Market **não** usam `hermes::net` (NETSTACK vazio). Registrar `hermes::net_bridge` no boot → `neural-kernel::net::resolve_and_http_get_safe`.
 - **Deadlock NETSTACK (SESSION_152):** nunca chamar `tcp_exchange` / NetFs smoke **dentro** de `NETSTACK.lock()` em `bootstrap_early` — hang pós-L5. Smoke só após return do bootstrap.
 - **HTTPS:** deny `tls_not_ready` até TLS real; **nunca** strip `https://` → porta 80. Stub: `[TLS] VERDICT=BLOCKED reason=softfloat_or_crate`.
+- **SMP wake multi-AP (ADR-0057 WS-A, SESSION_163):** SIPI **broadcast** (`all-excl-self`) + stack real/32b/64b e GS.base compartilhados só acorda **1 AP** (0 com ≥2 — corrompem a stack na transição de modo). Fix: IPI **direcionado** por LAPIC ID + wake **sequencial** + **stack/PerCpu por-AP** (`AP_PCPU`) + **retry INIT-SIPI-SIPI 3x** (TCG é flaky). `-smp 4`→APs=3. Contador único = `k_nano::smp::AP_ENTRY_COUNTER` (bin reusa `k_nano::smp::ap_entry`).
+- **APs sem IDT (ADR-0057 WS-F):** AP sobe com IF=0 e sem `lidt`; `hlt` sem trabalho **trava o AP**. Por isso `cortex::parallel_*` (WS-B) é **gated por `k_nano::smp::ap_pollable()`** (hoje false) → BSP faz o matmul, sem deadlock. Usar APs como workers vivos exige IDT compartilhada + reschedule-IPI (Layer S/HW).
+- **embedded-graphics em bare-metal (ADR-0058):** `embedded-graphics` 0.8 compila limpo no `x86_64-unknown-none` soft-float. Seam = implementar `DrawTarget` p/ o `DoubleBuffer` (`jarbas/src/display/eg.rs`); UI declarativa em `card.rs` (`UiDeclaration`/`UiRenderer`). Orb (`draw_orb_layer`) e HUD (`gauges::draw_status_gauges`) **não** são substituídos — cards ficam por cima (Layer 2b). Fontes embedded-graphics são **ASCII 0x20–0x7E**: evitar `—`/acentos nos títulos (viram `?`).
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

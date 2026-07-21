@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 163 | UI/SMP | ADR-0057/0058 | Compute Dispatch + Generative Card Desktop | wake multi-AP sequencial (-smp4 APs=3); dispatch NPU→GPU→SMP; #412 decode; embedded-graphics cards (close/mover/resize); orb+HUD preservados |
 | 162 | LLM | BitNet ladder 850 | #PF AVX2 + BPE SP32/MRG1 | OOB store n%4; encode=HF; coh semântica residual |
 | 161 | WiFi | ath10k A3 | BMI→fw_ready | CE0/1+LZ; FW_IMAGE 681KB; PASS só FW_IND pós-DONE |
 | 160 | WiFi | ath10k | pivô Note1050 QCA6174 | 168C:003E; FW 1.45MB; BMI/CE scaffold; iwl secondary |
