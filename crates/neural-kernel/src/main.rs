@@ -1734,6 +1734,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
+    // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
+    let _ = hermes_crate::wasmi_rt::self_test();
+    let _ = hermes_crate::app_factory::self_test();
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
     crate::display::fb::boot_ckpt(36, "package_hub");
