@@ -88,7 +88,7 @@ WakeWord/Enter → Hermes (intent) → skill `weather` (RustCoder/Trinity, WASM)
 
 - [x] S1: `DrawTarget` adapter (`FbTarget`) — embedded-graphics desenha no FB; boot self-test PASS; 0 regressão.
 - [x] S2: `UiDeclaration` + parser + `UiRenderer` (Text/KeyValue/Gauge/Bars/List/Divider/Button/Panel); self-test PASS.
-- [x] S3: `CardWindow` retido + `UI_SPEC` spawn/close + mouse (close/drag/botão→`CARD_ACTION`/foco); orb + HUD preservados. (`AppId` coexiste; remoção total = follow-up.)
+- [x] S3: `CardWindow` retido + `UI_SPEC` spawn/close + mouse (close X, **mover** por título, **redimensionar** pelo canto inf-dir, botão→`CARD_ACTION`, foco); orb + HUD preservados. (`AppId` coexiste; remoção total = follow-up.)
 - [x] S4: cards demo (status/clima/videochamada) + `card_json_schema_hint()` p/ #412. (Skill WASM `weather` + HTTP live + Cron = pipeline documentado; A/V real via HDA/UVC gated.)
 - [x] `cargo check --release` 0 erros; boot QEMU sem panic; screenshot dos 3 cards.
 - [ ] S5: widgets ricos (embedded-gui charts/gauges), `theme.rs` wired, TTF; A/V real da videochamada.

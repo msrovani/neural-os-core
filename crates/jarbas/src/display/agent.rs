@@ -163,6 +163,12 @@ impl DisplayAgent {
                         drop(comp);
                         return "card:drag";
                     }
+                    crate::display::compositor::CardClick::ResizeStart => {
+                        self.dragging = true;
+                        self.drag_id = AppId::None; // resize de card é do compositor
+                        drop(comp);
+                        return "card:resize";
+                    }
                     crate::display::compositor::CardClick::Button(id, idx) => {
                         card_action = Some((id, idx));
                     }
@@ -564,6 +570,7 @@ impl Agent for DisplayAgent {
             let mut comp = COMPOSITOR.lock();
             if let Some(ref mut desktop) = *comp {
                 desktop.card_drag_step(mx as i32, my as i32, (btn & 1) != 0);
+                desktop.card_resize_step(mx as i32, my as i32, (btn & 1) != 0);
             }
         } else if self.dragging {
             if (btn & 1) == 0 {

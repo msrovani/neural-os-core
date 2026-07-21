@@ -101,6 +101,7 @@ pub enum CardClick {
     Focus,
     Close,
     DragStart,
+    ResizeStart,
     Button(u32, usize),
 }
 
@@ -112,16 +113,17 @@ pub struct JarvisDesktop {
     pub avatar_visible: bool,
     pub w: usize, pub h: usize, pub tick: u64,
     icon_cache: BTreeMap<String, [u8; 64]>,
-    // ADR-0058 S3: cards declarativos + estado de arraste.
+    // ADR-0058 S3: cards declarativos + estado de arraste/resize.
     pub cards: Vec<CardWindow>,
     dragging_card: Option<u32>,
     card_drag_off: (i32, i32),
+    resizing_card: Option<u32>,
 }
 
 impl JarvisDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
-        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0) }
+        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0), resizing_card: None }
     }
 
     // ─── ADR-0058 S3: cards declarativos ──────────────────────────────────
@@ -138,6 +140,9 @@ impl JarvisDesktop {
         self.cards.retain(|c| c.decl.id != id);
         if self.dragging_card == Some(id) {
             self.dragging_card = None;
+        }
+        if self.resizing_card == Some(id) {
+            self.resizing_card = None;
         }
     }
 
@@ -156,6 +161,13 @@ impl JarvisDesktop {
                     self.close_card(id);
                     return CardClick::Close;
                 }
+            }
+            // Canto inferior-direito → inicia resize.
+            if cx >= x + w - 14 && cx <= x + w + 2 && cy >= y + h - 14 && cy <= y + h + 2 {
+                self.resizing_card = Some(id);
+                let cw = self.cards.remove(i);
+                self.cards.push(cw);
+                return CardClick::ResizeStart;
             }
             // Botões do corpo.
             for b in &self.cards[i].buttons {
@@ -195,6 +207,19 @@ impl JarvisDesktop {
         if let Some(c) = self.cards.iter_mut().find(|c| c.decl.id == id) {
             c.decl.x = (cx - ox).clamp(0, maxx.saturating_sub(60));
             c.decl.y = (cy - oy).clamp(24, maxy.saturating_sub(40));
+        }
+    }
+
+    /// Passo de resize do card (canto inf-dir segue o cursor; mínimo 160×90).
+    pub fn card_resize_step(&mut self, cx: i32, cy: i32, btn_down: bool) {
+        let Some(id) = self.resizing_card else { return };
+        if !btn_down {
+            self.resizing_card = None;
+            return;
+        }
+        if let Some(c) = self.cards.iter_mut().find(|c| c.decl.id == id) {
+            c.decl.w = (cx - c.decl.x).clamp(160, self.w as i32);
+            c.decl.h = (cy - c.decl.y).clamp(90, self.h as i32);
         }
     }
 
@@ -349,6 +374,10 @@ impl JarvisDesktop {
             let decl = self.cards[i].decl.clone();
             let hits = crate::display::card::render_card(&mut self.fb, &decl);
             self.cards[i].buttons = hits;
+            // Handle de resize (canto inf-dir).
+            let hx = (decl.x + decl.w - 10).max(0) as usize;
+            let hy = (decl.y + decl.h - 10).max(0) as usize;
+            self.fb.fill_rect(hx, hy, 10, 10, 0, 120, 180);
         }
 
         // ═══════════════════════════════════════════════════════
