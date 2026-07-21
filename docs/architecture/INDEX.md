@@ -70,7 +70,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0046-airllm-gguf-streaming.md` | Accepted (MVP) | `completa` | #377, #449 | MVP AirLLM ✅; hot-swap ATA+Net code ✅ SESSION_128 (RX runtime gate); residuals: DMA prefetch / stream-to-disk / K-quants / e2e GGUF grande |
 | `0047-latent-space-ai-os.md` | Accepted (MVP parcial) | `completa` | LatentBus/Evolve/Probe PoC | **Canônico base**; SESSION_126; defer cross-modelo/Genesis/ISA plena |
 | `0047-gpu-compute-pipeline.md` | Accepted (MVP parcial) | `completa` | Extensão GPU | G1+G2 PoC; G3–G5 + DP4A defer |
-| `0047-hmi-neural-desktop.md` | Accepted (MVP parcial) | `completa` | Extensão HMI | H1+H4 PoC; H2/H3/H5 defer |
+| `0047-hmi-neural-desktop.md` | **Superseded (parcial)** | `substituida` | Extensão HMI → **0058** | H1/H2/H4/H5 absorvidos por ADR-0058; H3 ❌; MVP PoC histórico |
 | `0048-nvidia-compute-multigeracao.md` | Proposed | `fazendo` | #454; NVIDIA ACR/GSP/Kernel Pack | P0 PMC+DID; P1 NKP+session; ACR dual-shadow; canário HW aberto |
 | `0049-amd-compute-multigeracao.md` | Proposed | `fazendo` | #455; AMD PSP/KIQ/MES/Kernel Pack | Discovery parse+PSP Degrau+KIQ/MES+pack gfx1030; golden HW aberto |
 | `0050-intel-compute-multigeracao.md` | Proposed | `fazendo` | #456; Intel GuC/walkers/Kernel Pack | GMD+DID; GuC/Gen9 Degrau; dual iGPU/dGPU; golden HW aberto |
@@ -81,6 +81,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0055-smp-revision.md` | Accepted | `fazendo` | #16–42, #20–33, #35–41, #317, #319–324, #347 | **Canônica SMP** — FeatureGate; TCG APs=1; WHPX BSP-only (SESSION_141); residuals HW hybrid/matmul |
 | `0056-neural-device-lego.md` | Accepted (MVP) | `fazendo` | #464 | L0/L1/L2 DeviceRecipe; UnlockDAG; trust Ed25519; community hub; H1 bind table |
 | `0057-compute-dispatch-smp-gpu-npu.md` | Accepted | `fazendo` | #20–42, #211, #329–331, #345–346, #454–456 | **Dispatch de compute** LLM: WS-A wake multi-AP ✅ (QEMU -smp 4 APs=3); WS-B/C dispatcher wired; WS-D GPU hook (Ready gate) + WS-E NPU XDNA/Intel = **Layer S/HW** honesto |
+| `0058-generative-card-desktop.md` | Proposed | `fazendo` | #79/#80/#82/#279d/#283/#448/#452/#465 + #468–470 | **UI/Desktop Jarbas:** embedded-graphics `DrawTarget` + matrix-gui/embedded-gui + `UiDeclaration`/`UiRenderer` (cards gerados por LLM #412 / skill WASM). Supersede parcial 0047-HMI (H3 ❌). Aguarda confirmação |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)

@@ -193,6 +193,7 @@
 - ADR-0047 Latent/Evolve/Probe/GPU/HMI ✅ MVP/PoC
 - ADRs 0048–0050 GPU multigeração ⏳ propostas
 - ADR-0057 Compute Dispatch SMP+GPU+NPU ✅ WS-A (wake multi-AP `-smp 4`→APs=3) + WS-B/C dispatcher + WS-G #412 structured decode; WS-D/E GPU/NPU + WS-F on-demand AP-worker = residual HW/Layer S
+- ADR-0058 Generative Card Desktop (UI/Jarbas) 🟡 Proposed — embedded-graphics + `UiDeclaration`/`UiRenderer` (cards gerados por LLM #412 / skill WASM); supersede parcial 0047-HMI; aguarda confirmação
 
 **Uso:** integração e testes. Não é release estável e não altera o gate de v2.0.0.
 

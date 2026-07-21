@@ -223,6 +223,10 @@
 | ADR-0057 WS-E NPU AMD XDNA driver (💰 sponsor, firmware/overlay Vitis) | ~2.000 LOC |
 | ADR-0057 WS-E NPU Intel (Meteor/Lunar Lake, NCE) (💰 sponsor, firmware) | ~1.500 LOC |
 | ADR-0057 WS-F scheduler heterogêneo (IPI reschedule, run-queues, per-CPU slab) | ~1.000 LOC |
+| ADR-0058 S1 `DrawTarget` adapter (embedded-graphics sobre DoubleBuffer) | ~150 LOC |
+| ADR-0058 S2 `UiDeclaration`+`UiRenderer` (cards) sobre toolkit no_std | ~600 LOC |
+| ADR-0058 S3 árvore de janelas retida + `UI_SPEC` spawn/close/focus (remove `AppId`) | ~400 LOC |
+| ADR-0058 S4 card-answer Hermes (#412 grammar) + skill WASM `weather` + Cron | ~400 LOC |
 | ARM/RISC-V port (💰 sponsor) | ~5.000 LOC |
 
 ---

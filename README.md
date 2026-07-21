@@ -94,6 +94,7 @@ SafeHarbor → MemoryCore → … → AgentFleet → Runtime. LLM/Cortex antes d
 | 108 Self-Evolving Agents | ✅ |
 | ADR-0040/0046/0047 MVPs | ✅ parcial / residuals abertos |
 | **ADR-0057** Compute Dispatch SMP+GPU+NPU | ✅ WS-A wake multi-AP (`-smp 4`→APs=3) + dispatcher + #412; GPU/NPU/on-demand = Layer S/HW |
+| **ADR-0058** Generative Card Desktop (UI/Jarbas) | 🟡 Proposed — embedded-graphics + `UiDeclaration`/`UiRenderer` (cards por LLM #412 / skill WASM); supersede parcial 0047-HMI |
 | **Residuals 0–7** | ✅ FECHADO (LAN internet) |
 | **Pós-LAN B-01** | ✅ SESSION_152 (NetFs PASS; TLS BLOCKED; WiFi AWAITING) |
 
