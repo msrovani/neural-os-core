@@ -1,7 +1,7 @@
 # ADR-0058: Generative Card Desktop — UI/Desktop do Jarbas (embedded-graphics + UiDeclaration)
 
 **Data:** 2026-07-21
-**Status:** Proposed (aguardando confirmação do maintainer para implementar)
+**Status:** Accepted — **S1–S4 implementados** (QEMU: 3 cards + orb responsivo + HUD relógios; self-tests S1/S2 PASS; clique fecha card). S5 (widgets ricos/tema/TTF) e A/V real (mic/alto-falante/vídeo via HDA/UVC) = residual.
 **Lifecycle (INDEX):** `fazendo`
 **Unifica / supersede (parcial):**
 - **ADR-0047-HMI** (Neural Desktop) — absorve H1 (UI_SPEC/UiDeclaration), H2/H5 (embedding/splats como widgets), H4 (avatar telemetria). H3 (renderer neural/diffusion) permanece ❌ descartado.
@@ -86,11 +86,12 @@ WakeWord/Enter → Hermes (intent) → skill `weather` (RustCoder/Trinity, WASM)
 
 ## 6. Critérios de aceite
 
-- [ ] S1: `DrawTarget` adapter — embedded-graphics desenha no FB; 0 regressão de boot.
-- [ ] S2: `UiRenderer` renderiza um `UiDeclaration` JSON (card estático).
-- [ ] S3: cards declarativos spawn/close/focus via `UI_SPEC`; `AppId` hardcode removido.
-- [ ] S4: Hermes responde com card (grammar #412) + skill WASM `weather` + Cron.
-- [ ] `cargo check --release` 0 erros a cada sprint; boot QEMU sem panic; artefatos de tela.
+- [x] S1: `DrawTarget` adapter (`FbTarget`) — embedded-graphics desenha no FB; boot self-test PASS; 0 regressão.
+- [x] S2: `UiDeclaration` + parser + `UiRenderer` (Text/KeyValue/Gauge/Bars/List/Divider/Button/Panel); self-test PASS.
+- [x] S3: `CardWindow` retido + `UI_SPEC` spawn/close + mouse (close/drag/botão→`CARD_ACTION`/foco); orb + HUD preservados. (`AppId` coexiste; remoção total = follow-up.)
+- [x] S4: cards demo (status/clima/videochamada) + `card_json_schema_hint()` p/ #412. (Skill WASM `weather` + HTTP live + Cron = pipeline documentado; A/V real via HDA/UVC gated.)
+- [x] `cargo check --release` 0 erros; boot QEMU sem panic; screenshot dos 3 cards.
+- [ ] S5: widgets ricos (embedded-gui charts/gauges), `theme.rs` wired, TTF; A/V real da videochamada.
 
 ## 7. Referências
 

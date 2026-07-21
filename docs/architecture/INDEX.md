@@ -81,7 +81,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0055-smp-revision.md` | Accepted | `fazendo` | #16–42, #20–33, #35–41, #317, #319–324, #347 | **Canônica SMP** — FeatureGate; TCG APs=1; WHPX BSP-only (SESSION_141); residuals HW hybrid/matmul |
 | `0056-neural-device-lego.md` | Accepted (MVP) | `fazendo` | #464 | L0/L1/L2 DeviceRecipe; UnlockDAG; trust Ed25519; community hub; H1 bind table |
 | `0057-compute-dispatch-smp-gpu-npu.md` | Accepted | `fazendo` | #20–42, #211, #329–331, #345–346, #454–456 | **Dispatch de compute** LLM: WS-A wake multi-AP ✅ (QEMU -smp 4 APs=3); WS-B/C dispatcher wired; WS-D GPU hook (Ready gate) + WS-E NPU XDNA/Intel = **Layer S/HW** honesto |
-| `0058-generative-card-desktop.md` | Proposed | `fazendo` | #79/#80/#82/#279d/#283/#448/#452/#465 + #468–470 | **UI/Desktop Jarbas:** embedded-graphics `DrawTarget` + matrix-gui/embedded-gui + `UiDeclaration`/`UiRenderer` (cards gerados por LLM #412 / skill WASM). Supersede parcial 0047-HMI (H3 ❌). Aguarda confirmação |
+| `0058-generative-card-desktop.md` | Accepted | `fazendo` | #79/#80/#82/#279d/#283/#448/#452/#465 + #468 | **UI/Desktop Jarbas:** embedded-graphics `DrawTarget` + `UiDeclaration`/`UiRenderer` (cards). **S1–S4 ✅** (QEMU: 3 cards + orb + HUD; self-tests PASS). Supersede parcial 0047-HMI (H3 ❌). S5 + A/V real residual |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)

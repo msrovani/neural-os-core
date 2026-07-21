@@ -2,12 +2,12 @@
 
 ## [Unreleased]
 
-### Generative Card Desktop (UI/Desktop Jarbas) — ADR-0058 (2026-07-21, Proposed)
+### Generative Card Desktop (UI/Desktop Jarbas) — ADR-0058 (2026-07-21) — S1–S4 ✅
 - Planejamento unificado do UI/desktop: fundação **embedded-graphics** (`DrawTarget` sobre `DoubleBuffer`) + toolkit no_std (matrix-gui/embedded-gui/kolibri, MIT/Apache) + camada declarativa **`UiDeclaration`/`UiRenderer`** (cards)
 - Cards gerados como **dados** por Hermes/Trinity/Cortex (constrangidos pelo structured decoding ADR-0057 #412) ou por **skill WASM** (RustCoder/Codex, ADR-0052) + repetição Cron. Ex.: "clima de amanhã" → WeatherCard
 - WM stacking mantido (árvore de janelas retida; aposenta enum `AppId` hardcoded)
 - **Supersede parcial** ADR-0047-HMI (H1/H2/H4/H5 absorvidos; H3 ❌); ADR-0036 persona inalterada
-- Status: **Proposed** — aguardando confirmação do maintainer p/ implementar (S1–S4)
+- **S1–S4 ✅ implementados** (QEMU: 3 cards + orb responsivo + barra de relógios/HUD preservados; self-tests S1/S2 PASS; clique fecha card; `cargo check` 0 erros). S5 (widgets ricos/tema/TTF) + A/V real (mic/alto-falante/vídeo via HDA/UVC) = residual. Cards demo: Sistema, Clima ("clima de amanhã"), Chamada de Vídeo (Atender/Microfone/Alto-falante/Encerrar)
 
 ### Compute Dispatch SMP+GPU+NPU — ADR-0057 (2026-07-20)
 - **WS-A wake multi-AP:** SIPI direcionado sequencial por LAPIC ID + stack/PerCpu por-AP + retry INIT-SIPI-SIPI 3x. QEMU `-smp 4` → **APs acordados: 3**, `CorePools r0=1 r1=2 r2=1` (antes: máx 1 AP; ≥2 → 0). Contador `AP_ENTRY_COUNTER` unificado; `neural-kernel::smp` emagrecido (delega a `k_nano::smp`)

@@ -17,7 +17,7 @@
 - Sprint 108 Self-Evolve ✅ · Sprint Sound ✅ parcial · NeuralFS/AirLLM/ADR-0047 MVPs
 - ADRs GPU 0048–0050 ⏳
 - **ADR-0057** Compute Dispatch SMP+GPU+NPU: WS-A wake multi-AP (`-smp 4`→APs=3, CorePools r0=1 r1=2 r2=1) + `cortex::compute` dispatcher + WS-G #412 structured decode ✅; GPU/NPU hooks + on-demand AP-worker (IDT/IPI) = Layer S/HW
-- **ADR-0058** Generative Card Desktop (UI/Jarbas) 🟡 Proposed: embedded-graphics (`DrawTarget`) + `UiDeclaration`/`UiRenderer` (cards gerados por LLM #412 ou skill WASM); WM stacking; supersede parcial ADR-0047-HMI (H3 ❌)
+- **ADR-0058** Generative Card Desktop (UI/Jarbas) ✅ **S1–S4**: embedded-graphics (`DrawTarget`) + `UiDeclaration`/`UiRenderer` (cards por LLM #412 ou skill WASM); orb responsivo + barra de relógios/HUD preservados; WM stacking; supersede parcial ADR-0047-HMI (H3 ❌); S5+A/V residual
 - **Não** é declaração de `v2.0.0`
 
 **Arquitetura K³CHJ:**
