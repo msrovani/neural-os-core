@@ -1467,7 +1467,8 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     while step < max_gen {
         if tokens.len() >= max_seq { break; }
 
-        let model_next = argmax_row(&last_logits, 0);
+        // ADR-0057 WS-G (#412): argmax respeitando structured-decode (no-op sem máscara).
+        let model_next = crate::decode::argmax_constrained(&last_logits, 0);
         if model_next == eos { break; }
 
         let draft = spec.propose();

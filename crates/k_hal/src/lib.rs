@@ -32,6 +32,7 @@ pub mod virtio;
 pub mod net;
 pub mod audio;
 pub mod gpu;
+pub mod npu;
 
 /// Bring-up H1: DeviceTree + UnlockDAG tokens + HalOffer (ADR-0056).
 pub fn init_h1() -> usize {

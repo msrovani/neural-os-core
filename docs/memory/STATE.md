@@ -26,7 +26,7 @@
 #   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
 #   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
 #   SESSION_164: FitPolicy Neural (#468) — host pack_filter + cortex::model_fit; cargo nk 0e
-#   SESSION_163: Emagrecer neural-kernel Onda 0–6 — stubs/promotes; ATA+TIMER únicos; pending_route; cargo nk 0e
+#   SESSION_163: Emagrecer neural-kernel Onda 0–6 + ADR-0057 Compute Dispatch + ADR-0058 Generative Card Desktop
 #   ADR-0056 H1 runtime: unlock_dag + recipe FAT gate + HalOffer NeedsFw/Escalate (#464)
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer
 #   PreFlight: tools/preflight_wave.py · cache docs/memory/.preflight_cache/ · depends_on: lan · AWAITING_HW

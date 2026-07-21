@@ -87,6 +87,24 @@ pub const TARGET_FRAME_TICKS: u64 = 3; // ~60 FPS (assumindo ~5ms/tick)
 #[derive(Clone)]
 pub struct WasmIcon { pub name: String, pub description: String, pub idx: usize }
 
+/// ADR-0058 S3 — janela de card declarativo (retida, genérica; sem enum AppId).
+pub struct CardWindow {
+    pub decl: crate::display::card::UiDeclaration,
+    pub buttons: Vec<crate::display::card::ButtonHit>,
+}
+
+/// Resultado de um clique sobre a área dos cards.
+pub enum CardClick {
+    /// Nenhum card sob o cursor (o compositor deve tratar dock/app).
+    Miss,
+    /// Clique no corpo do card (consome; só traz p/ o topo/foco).
+    Focus,
+    Close,
+    DragStart,
+    ResizeStart,
+    Button(u32, usize),
+}
+
 pub struct JarvisDesktop {
     pub fb: DoubleBuffer,
     pub apps: Vec<AppWindow>,
@@ -95,12 +113,114 @@ pub struct JarvisDesktop {
     pub avatar_visible: bool,
     pub w: usize, pub h: usize, pub tick: u64,
     icon_cache: BTreeMap<String, [u8; 64]>,
+    // ADR-0058 S3: cards declarativos + estado de arraste/resize.
+    pub cards: Vec<CardWindow>,
+    dragging_card: Option<u32>,
+    card_drag_off: (i32, i32),
+    resizing_card: Option<u32>,
 }
 
 impl JarvisDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
-        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new() }
+        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0), resizing_card: None }
+    }
+
+    // ─── ADR-0058 S3: cards declarativos ──────────────────────────────────
+    /// Cria/atualiza um card (por `id`). Se já existe, substitui a declaração.
+    pub fn spawn_card(&mut self, decl: crate::display::card::UiDeclaration) {
+        if let Some(c) = self.cards.iter_mut().find(|c| c.decl.id == decl.id) {
+            c.decl = decl;
+        } else {
+            self.cards.push(CardWindow { decl, buttons: Vec::new() });
+        }
+    }
+
+    pub fn close_card(&mut self, id: u32) {
+        self.cards.retain(|c| c.decl.id != id);
+        if self.dragging_card == Some(id) {
+            self.dragging_card = None;
+        }
+        if self.resizing_card == Some(id) {
+            self.resizing_card = None;
+        }
+    }
+
+    /// Hit-testing dos cards (chamado antes das AppWindows — cards ficam por cima).
+    pub fn card_click(&mut self, cx: i32, cy: i32) -> CardClick {
+        // Itera do topo (último desenhado) para baixo.
+        for i in (0..self.cards.len()).rev() {
+            let (id, x, y, w, h, closable) = {
+                let d = &self.cards[i].decl;
+                (d.id, d.x, d.y, d.w, d.h, d.closable)
+            };
+            // Botão fechar.
+            if closable {
+                let (rx, ry, rw, rh) = self.cards[i].decl.close_rect();
+                if cx >= rx && cx <= rx + rw && cy >= ry && cy <= ry + rh {
+                    self.close_card(id);
+                    return CardClick::Close;
+                }
+            }
+            // Canto inferior-direito → inicia resize.
+            if cx >= x + w - 14 && cx <= x + w + 2 && cy >= y + h - 14 && cy <= y + h + 2 {
+                self.resizing_card = Some(id);
+                let cw = self.cards.remove(i);
+                self.cards.push(cw);
+                return CardClick::ResizeStart;
+            }
+            // Botões do corpo.
+            for b in &self.cards[i].buttons {
+                if cx >= b.x && cx <= b.x + b.w && cy >= b.y && cy <= b.y + b.h {
+                    return CardClick::Button(id, b.index);
+                }
+            }
+            // Barra de título → inicia arraste.
+            if cx >= x && cx <= x + w && cy >= y && cy <= y + 20 {
+                self.dragging_card = Some(id);
+                self.card_drag_off = (cx - x, cy - y);
+                // Traz para o topo.
+                let cw = self.cards.remove(i);
+                self.cards.push(cw);
+                return CardClick::DragStart;
+            }
+            // Clique dentro do corpo consome (foco), mas sem ação.
+            if cx >= x && cx <= x + w && cy >= y && cy <= y + h {
+                let cw = self.cards.remove(i);
+                self.cards.push(cw);
+                return CardClick::Focus;
+            }
+        }
+        CardClick::Miss
+    }
+
+    /// Passo de arraste do card por frame (chamado enquanto o botão está pressionado).
+    pub fn card_drag_step(&mut self, cx: i32, cy: i32, btn_down: bool) {
+        let Some(id) = self.dragging_card else { return };
+        if !btn_down {
+            self.dragging_card = None;
+            return;
+        }
+        let (ox, oy) = self.card_drag_off;
+        let maxx = self.w as i32;
+        let maxy = self.h as i32;
+        if let Some(c) = self.cards.iter_mut().find(|c| c.decl.id == id) {
+            c.decl.x = (cx - ox).clamp(0, maxx.saturating_sub(60));
+            c.decl.y = (cy - oy).clamp(24, maxy.saturating_sub(40));
+        }
+    }
+
+    /// Passo de resize do card (canto inf-dir segue o cursor; mínimo 160×90).
+    pub fn card_resize_step(&mut self, cx: i32, cy: i32, btn_down: bool) {
+        let Some(id) = self.resizing_card else { return };
+        if !btn_down {
+            self.resizing_card = None;
+            return;
+        }
+        if let Some(c) = self.cards.iter_mut().find(|c| c.decl.id == id) {
+            c.decl.w = (cx - c.decl.x).clamp(160, self.w as i32);
+            c.decl.h = (cy - c.decl.y).clamp(90, self.h as i32);
+        }
     }
 
     pub fn register_app(&mut self, id: AppId, title: &str, z: Layer) {
@@ -245,6 +365,19 @@ impl JarvisDesktop {
             draw_text(&mut self.fb, app.x + app.w - 18, app.y + 4, "X", self.w, 255, 255, 255);
             self.fb.fill_rect(app.x + app.w - 10, app.y + app.h - 10, 10, 10, 60, 70, 85);
             render_app_content(&mut self.fb, app, self.w, self.h);
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // LAYER 2b: Cards declarativos (ADR-0058) — por cima das AppWindows
+        // ═══════════════════════════════════════════════════════
+        for i in 0..self.cards.len() {
+            let decl = self.cards[i].decl.clone();
+            let hits = crate::display::card::render_card(&mut self.fb, &decl);
+            self.cards[i].buttons = hits;
+            // Handle de resize (canto inf-dir).
+            let hx = (decl.x + decl.w - 10).max(0) as usize;
+            let hy = (decl.y + decl.h - 10).max(0) as usize;
+            self.fb.fill_rect(hx, hy, 10, 10, 0, 120, 180);
         }
 
         // ═══════════════════════════════════════════════════════

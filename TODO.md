@@ -218,7 +218,22 @@
 | Item | Esforço |
 |------|---------|
 | GGUF v3 loader (modelos 9B+) | ~500 LOC |
-| NPU AMD XDNA driver (💰 sponsor) | ~2.000 LOC |
+| ADR-0057 WS-B speedup matmul multicore (HW real; AVX2 off no TCG) | validação HW |
+| ADR-0057 WS-D GPU BitLinearW2A8 kernel + KernelPack assinado (Layer S/HW) | ~800 LOC + HW |
+| ADR-0057 WS-E NPU AMD XDNA driver (💰 sponsor, firmware/overlay Vitis) | ~2.000 LOC |
+| ADR-0057 WS-E NPU Intel (Meteor/Lunar Lake, NCE) (💰 sponsor, firmware) | ~1.500 LOC |
+| ADR-0057 WS-F scheduler heterogêneo (IPI reschedule, run-queues, per-CPU slab) | ~1.000 LOC |
+| ADR-0058 S1 `DrawTarget` adapter (embedded-graphics sobre DoubleBuffer) | ~150 LOC |
+| ADR-0058 S2 `UiDeclaration`+`UiRenderer` (cards) sobre toolkit no_std | ~600 LOC |
+| ADR-0058 S3 árvore de janelas retida + `UI_SPEC` spawn/close/focus (remove `AppId`) | ~400 LOC |
+| ADR-0058 S4 card-answer Hermes (#412 grammar) + skill WASM `weather` + Cron | ~400 LOC |
+| ADR-0059 F1 runtime **wasmi** no_std (validar compila soft-float) + WasmiRuntime | ~300 LOC |
+| ADR-0059 F2 host ABI `aios::*` + CapGate imports + fuel/mem limits | ~250 LOC |
+| ADR-0059 F3 bridges (register_wasm_skill/DynamicSkill/agent-wasm→spawn) | ~300 LOC |
+| ADR-0059 F4 gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste | ~800 LOC |
+| ADR-0059 F5 promover/persistir (ADR-0052 sign + PackageHub + SkillOpt cravado) | ~250 LOC |
+| ADR-0059 F6 Python via MicroPython/quickpython.wasm no wasmi (opcional) | ~200 LOC + off-device build |
+| ADR-0059 aposentar `Op` VM (`wasm_exec.rs`) + `wasm.rs` parcial | limpeza |
 | ARM/RISC-V port (💰 sponsor) | ~5.000 LOC |
 
 ---

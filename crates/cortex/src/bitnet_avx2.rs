@@ -21,6 +21,12 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     let (m, k2) = input.shape;
     if k != k2 { return None; }
 
+    // ADR-0057 WS-C: choke point de dispatch (NPU → GPU → CPU-SMP). Se nenhum
+    // acelerador/paralelo tratou, segue no caminho AVX2/scalar abaixo.
+    if let Some(r) = crate::compute::dispatch_ternary(weight, input) {
+        return Some(r);
+    }
+
     // NÃO usar avx2_bitwise_matmul aqui:
     // - quando n%4 != 0 (vocab BitNet 32002) o store _mm_storeu_ps passa do fim
     //   do buffer de logits → heap corrupt → #PF apos FWD (850 tied-embed unembed);

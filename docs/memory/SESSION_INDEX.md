@@ -9,7 +9,7 @@
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
 | 164 | FitPolicy | llmfit-inspired | #468 host+guest fit | pack_filter FIT_GATE; cortex::model_fit; ModelHub escalate |
-| 163 | emagrecer | Onda 0–6 | cutover bin→crates | diff_bin_crate; ATA único; TIMER_TICKS; pending_route; cargo nk 0e |
+| 163 | emagrecer + ADR-0057/0058 | Onda 0–6 + Compute + UI | cutover bin→crates + compute dispatch + card desktop | diff_bin_crate; wake multi-AP (-smp4 APs=3); #412 decode; embedded-graphics cards (close/mover/resize); orb+HUD |
 | 162 | LLM | BitNet ladder 850 | #PF AVX2 + BPE SP32/MRG1 | OOB store n%4; encode=HF; coh semântica residual |
 
 | 161 | WiFi | ath10k A3 | BMI→fw_ready | CE0/1+LZ; FW_IMAGE 681KB; PASS só FW_IND pós-DONE |

@@ -1716,6 +1716,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
+    // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
+    let _ = hermes_crate::wasmi_rt::self_test();
+    let _ = hermes_crate::app_factory::self_test();
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
     crate::display::fb::boot_ckpt(36, "package_hub");
@@ -2086,7 +2089,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     }
 
-
+    // ADR-0057 WS-D/WS-E: conecta aceleradores ao dispatcher de compute do
+    // cortex (só registra se `Ready`/HW real; senão CPU/SMP). NPU = Layer S.
+    k_hal::gpu::compute_dispatch::register_compute_if_ready();
+    k_hal::npu::init_npu();
+    // ADR-0057 WS-G (#412): valida o primitivo de structured-decode sem modelo.
+    let _ = cortex_crate::decode::self_test();
+    // ADR-0057 WS-F: instala o seam de wake (reschedule-IPI do APIC vivo). APs
+    // como workers vivos (ap_pollable) exigem IDT/IPI por-core = residual HW.
+    k_nano::smp::install_wake_fn(crate::apic::send_ipi_reschedule);
+    k_nano::slog_bin!(
+        "SMP",
+        "info",
+        "AP workers pollable={} (WS-F on-demand wake = residual HW/IDT)",
+        k_nano::smp::ap_pollable()
+    );
 
     publish_boot_phase(BootPhase::DriverInit, "NIC/ATA/AHCI/xHCI/GPU probes concluidos");
 

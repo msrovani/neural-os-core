@@ -8,6 +8,33 @@
 - MemoryAgent loga `[FIT]`; ModelHub `select_generator_slot` cai se TooTight/Deny
 - Guia: `docs/guides/model-fit-and-pack.md` — inspirado em llmfit, sem port do binário
 
+### Runtime App Factory — ADR-0059 (2026-07-21) — Caminho A ✅ implementado
+- **Viabilidade CONFIRMADA:** `wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float (0 erros)
+- **Caminho A (wasmi) real:** `hermes::wasmi_rt` executa **módulos WASM padrão** em sandbox (fuel + CapGate host-imports `aios::*`); self-test de boot roda um `.wasm` real → `add(2,3)=5` PASS
+- **Seletor por IA (`hermes::app_factory`):** IA recomenda backend **A/B/C**; usuário/HITL decide; CapGate + HW-gate (ring de isolamento) aplicados. B/C (Cranelift, feature `jit-cranelift`) geram nativo → execução **GATED** por ring (ADR-0041) + HITL forte (honesto `AWAITING`)
+- **Integração** self-improve/self-heal/self-update: App Factory é o motor de execução do ciclo evolutivo (testa no sandbox → promove assinado ADR-0052 → hot-swap)
+- Plano restante: bridges (F3), gramática+assembler (F4), promover (F5), ring de isolamento (F6/F7). Aposentar VM `Op` após migração
+- Bare-metal sem `rustc` → IA emite **WAT/DSL**, não Rust compilado (Rust→wasm on-device = residual host)
+- **Supersede** ADR-0031 (tema WASM; desvio wasmi→Op revertido) e ADR-0032 (Op VM + `wasm.rs` aposentados); reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306
+- Fases F1–F6 (wasmi → host ABI/CapGate → bridges → geração validada → promover → Python opcional). Status: **Proposed** — aguardando validação
+- Refs: wasmi, AAGT, GBNF/Outlines/XGrammar, arXiv SelfEvolve/ARISE/Tool-Making/MCP-SandboxScan
+
+### Generative Card Desktop (UI/Desktop Jarbas) — ADR-0058 (2026-07-21) — S1–S4 ✅
+- Planejamento unificado do UI/desktop: fundação **embedded-graphics** (`DrawTarget` sobre `DoubleBuffer`) + toolkit no_std (matrix-gui/embedded-gui/kolibri, MIT/Apache) + camada declarativa **`UiDeclaration`/`UiRenderer`** (cards)
+- Cards gerados como **dados** por Hermes/Trinity/Cortex (constrangidos pelo structured decoding ADR-0057 #412) ou por **skill WASM** (RustCoder/Codex, ADR-0052) + repetição Cron. Ex.: "clima de amanhã" → WeatherCard
+- WM stacking mantido (árvore de janelas retida; aposenta enum `AppId` hardcoded)
+- **Supersede parcial** ADR-0047-HMI (H1/H2/H4/H5 absorvidos; H3 ❌); ADR-0036 persona inalterada
+- **S1–S4 ✅ implementados** (QEMU: 3 cards + orb responsivo + barra de relógios/HUD preservados; self-tests S1/S2 PASS; clique fecha card; `cargo check` 0 erros). S5 (widgets ricos/tema/TTF) + A/V real (mic/alto-falante/vídeo via HDA/UVC) = residual. Cards demo: Sistema, Clima ("clima de amanhã"), Chamada de Vídeo (Atender/Microfone/Alto-falante/Encerrar)
+
+### Compute Dispatch SMP+GPU+NPU — ADR-0057 (2026-07-20)
+- **WS-A wake multi-AP:** SIPI direcionado sequencial por LAPIC ID + stack/PerCpu por-AP + retry INIT-SIPI-SIPI 3x. QEMU `-smp 4` → **APs acordados: 3**, `CorePools r0=1 r1=2 r2=1` (antes: máx 1 AP; ≥2 → 0). Contador `AP_ENTRY_COUNTER` unificado; `neural-kernel::smp` emagrecido (delega a `k_nano::smp`)
+- **WS-B:** `parallel_ternary_matmul` (particiona colunas; decode `m=1` escala) + `Tensor::matmul` f32 nos APs — **gated por `ap_pollable`** (deadlock-proof: BSP faz o matmul enquanto APs em `hlt`)
+- **WS-C:** `cortex::compute` — dispatcher único (`NPU→GPU→CPU-SMP→AVX2→scalar`) nos choke points; backends via fn-pointer
+- **WS-D:** `k_hal::gpu::compute_dispatch` registra GPU só se `BackendState::Ready` (canário silício); kernel W2A8 = Layer S/HW
+- **WS-E:** `k_hal::npu` — detecção PCI XDNA/Intel + `[NPU-HW] VERDICT=SOFTWARE` honesto + fallback software (Ring0 MLP CPU). Driver/firmware = Layer S/sponsor
+- **WS-F:** wake robusto (retry) + `hlt` idle + gate `ap_pollable` + seam `install_wake_fn`/`wake_aps`. On-demand AP-worker (IDT+reschedule-IPI) = residual HW
+- **WS-G #412:** `cortex::decode` structured decoding (máscara de tokens antes do argmax); default no-op; self-test de boot **PASS**. Medusa/FlashAttention/PagedAttention/huge-pages/burn-flex/codebook = residual (validação com modelo)
+
 ### Rebrand K³CHJ (2026-07-18)
 - Nome canônico **K³CHJ** = `k_nano` + `k_hal` + `k_ai` + Cortex + Hermes + Jarbas
 - Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados

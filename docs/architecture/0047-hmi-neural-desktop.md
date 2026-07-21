@@ -1,7 +1,7 @@
 # ADR-0047-HMI: Neural Desktop — HMI Generativa, Embedding Space Visual, Avatar Vivo
 
 **Data:** 2026-07-16
-**Status:** Accepted (MVP parcial) — SESSION_126; H1 UI_SPEC JSON + H4 avatar telemetria; H2/H3/H5 defer
+**Status:** **Superseded (parcial) → [ADR-0058](0058-generative-card-desktop.md)** — H1 (UI_SPEC/UiDeclaration), H2/H5 (embedding/splats) e H4 (avatar telemetria) absorvidos pela ADR-0058 "Generative Card Desktop"; H3 (renderer neural/diffusion) permanece ❌ descartado. Histórico do MVP parcial (SESSION_126) preservado abaixo.
 **Complemento de:** ADR-0047 (Pilares 1-3), ADR-0047-GPU (Compute Pipeline)
 **Depende de:** ADR-0042 N5 (Jarbas persona), ADR-0036 (JARVIS Interaction Layer)
 **Sprint:** 110+ (paralelo com ADR-0042, ADR-0047, ADR-0047-GPU)

@@ -17,9 +17,16 @@ k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 k_ai = { path = "../k_ai" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+# ADR-0059 Caminho A: runtime WASM real no_std (sandbox SFI + fuel). Default.
+wasmi = { version = "0.47", default-features = false }
+# ADR-0059 Caminhos B/C: backend Cranelift (wasm→nativo JIT / Rust-subset). Opt-in
+# (pesado ~4.5MB); execução nativa exige ring de isolamento + HITL (gated).
+cranelift-codegen = { version = "0.133", default-features = false, features = ["core"], optional = true }
 
 [features]
 kernel = []
+# Habilita os caminhos B/C (Cranelift JIT). Off por default (custo/segurança).
+jit-cranelift = ["dep:cranelift-codegen"]
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }
