@@ -1803,6 +1803,121 @@ fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u32>) -> u32 
     best
 }
 
+// ── F1: Coherence buffer (temperature + top-k + repetition penalty + Gumbel-max) ──
+
+/// Gate: set true to enable temperature-based sampling instead of argmax.
+pub static COHERENCE_ENABLED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Coherence sampling parameters (F2: configurable at runtime).
+pub static COHERENCE_TEMP: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(f32::to_bits(0.7));
+pub static COHERENCE_TOP_K: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(16);
+pub static COHERENCE_REPEAT: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(f32::to_bits(1.2));
+pub static COHERENCE_TOP_P: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(f32::to_bits(0.0)); // 0 = disabled
+
+/// Convenience: enable coherence + set all params in one call.
+pub fn set_coherence(enabled: bool, temp: f32, top_k: usize, repeat: f32) {
+    COHERENCE_ENABLED.store(enabled, core::sync::atomic::Ordering::Relaxed);
+    COHERENCE_TEMP.store(f32::to_bits(temp), core::sync::atomic::Ordering::Relaxed);
+    COHERENCE_TOP_K.store(top_k, core::sync::atomic::Ordering::Relaxed);
+    COHERENCE_REPEAT.store(f32::to_bits(repeat), core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_bin!("GEN", "info",
+        "coherence set enabled={} temp={} top_k={} repeat={}",
+        enabled as u8, temp, top_k, repeat);
+}
+
+/// Fast non-crypto PRNG seeded once from hardware RNG.
+struct SampleRng(u32);
+
+impl SampleRng {
+    fn seed() -> Self {
+        let s = crate::hw_rng::HardwareRandom::next_u64_retry(4)
+            .unwrap_or(0xDEAD_BEEF) as u32;
+        Self(s)
+    }
+    fn next_u32(&mut self) -> u32 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 17;
+        self.0 ^= self.0 << 5;
+        self.0
+    }
+    fn uniform(&mut self) -> f32 {
+        (self.next_u32() >> 8) as f32 * 1.0 / (1u64 << 24) as f32
+    }
+    /// Gumbel noise: -ln(-ln(u)).
+    fn gumbel(&mut self) -> f32 {
+        let u = self.uniform()
+            .max(core::f32::EPSILON)
+            .min(1.0 - core::f32::EPSILON);
+        -libm::logf(-libm::logf(u))
+    }
+}
+
+/// Sample token with configurable temperature, top-k, repetition penalty.
+/// Uses Gumbel-max trick for correct sampling from softmax over top-k.
+fn sample_token_coherence(logits: &crate::tensor::Tensor, row: usize, recent: &[u32]) -> u32 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+
+    let temp = f32::from_bits(COHERENCE_TEMP.load(core::sync::atomic::Ordering::Relaxed));
+    let top_k = COHERENCE_TOP_K.load(core::sync::atomic::Ordering::Relaxed);
+    let repeat = f32::from_bits(COHERENCE_REPEAT.load(core::sync::atomic::Ordering::Relaxed));
+
+    // 1) Collect top-64 candidates (same as argmax_row_hf_vocab)
+    let mut cand: [(u32, f32); 64] = [(0, core::f32::NEG_INFINITY); 64];
+    let mut n = 0usize;
+    for j in 0..hi {
+        let id = j as u32;
+        if recent.iter().any(|&p| p == id) { continue; }
+        if crate::bpe::is_special_id(id) { continue; }
+        let v = logits.data[start + j];
+        if v.is_nan() { continue; }
+        if n < 64 {
+            cand[n] = (id, v);
+            n += 1;
+        } else {
+            let mut worst = 0usize;
+            for i in 1..64 { if cand[i].1 < cand[worst].1 { worst = i; } }
+            if v > cand[worst].1 { cand[worst] = (id, v); }
+        }
+    }
+    if n == 0 { return crate::bpe::eos_id(); }
+
+    // 2) Repetition penalty
+    if (repeat - 1.0).abs() > 0.001 {
+        for i in 0..n {
+            if recent.iter().any(|&p| p == cand[i].0) {
+                let v = cand[i].1;
+                cand[i].1 = if v >= 0.0 { v / repeat } else { v * repeat };
+            }
+        }
+    }
+
+    // 3) Temperature scaling (clamped to avoid division by zero)
+    let t = if temp < 0.001 { 0.7 } else { temp };
+    for i in 0..n { cand[i].1 /= t; }
+
+    // 4) Top-k sort (descending)
+    cand[..n].sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+    let k = n.min(if top_k > 0 { top_k } else { n });
+
+    // 5) Gumbel-max = sample from softmax over top-k
+    let mut rng = SampleRng::seed();
+    let mut best = cand[0].0;
+    let mut best_val = core::f32::NEG_INFINITY;
+    for i in 0..k {
+        let noisy = cand[i].1 + rng.gumbel();
+        if noisy > best_val { best_val = noisy; best = cand[i].0; }
+    }
+    k_nano::slog_bin!("GEN", "info", "coherence temp={} top_k={} best={} n_cand={}", t, k, best, n);
+    best
+}
+
 /// Soft-float 2B: encurta prompt sem deixar sozinho o EOS (encode CHAR termina em EOS).
 fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
     let mut t: Vec<u32> = tokens.iter().copied().collect();
@@ -1916,7 +2031,9 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
         if step == 0 {
             dump_logits_top(&logits, 16);
         }
-        let next = if use_bpe {
+        let next = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
+            sample_token_coherence(&logits, 0, &recent)
+        } else if use_bpe {
             // Soft-float 2B Llama: lexicon saudacao/clima. SP32 / vocab≤33k: argmax HF pleno.
             let sp32ish = model.vocab_size > 0 && model.vocab_size <= 33_000;
             if !sp32ish && model.hidden >= 2048 && is_greeting {
@@ -1986,6 +2103,27 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     crate::projection::publish_thought(&last_hidden.data);
 
     let gen = &tokens[prompt_len..];
+    // Fase 0: structured log for parity/bench
+    let bpe_label = if use_bpe {
+        if model.vocab_size > 0 && model.vocab_size <= 33_000 { "SP32" } else { "LLAMA" }
+    } else {
+        "CHAR"
+    };
+    let stop_label = if gen.last().copied().map_or(false, |t| {
+        let eos = if use_bpe { crate::bpe::eos_id() } else { EOS as u32 };
+        let eot = if use_bpe { crate::bpe::eot_id() } else { EOS as u32 };
+        t == eos || t == eot || t >= 128000
+    }) { "EOS" } else { "MAX_GEN" };
+    let coh = COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_bin!("GEN", "info",
+        "result first={} last={} stop={} bpe={} coherence={} ids={:?}",
+        gen.first().copied().unwrap_or(0xFFFF),
+        gen.last().copied().unwrap_or(0xFFFF),
+        stop_label,
+        bpe_label,
+        coh as u8,
+        gen);
+
     let out = if use_bpe {
         crate::bpe::decode(gen)
     } else {

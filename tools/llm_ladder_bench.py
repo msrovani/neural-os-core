@@ -42,6 +42,14 @@ FWD_LOGITS_RE = re.compile(
     r"\[FWD\].*?logits_top_n=(\d+)\s+ids=\[([^\]]+)\]\s+logits_bits=\[([^\]]+)\]"
 )
 EARLY_EXIT_RE = re.compile(r"\[GEN\].*?early_exit\s+(\S+)\s+step=(\d+)")
+# Fase 0: structured result summary
+GEN_RESULT_RE = re.compile(
+    r"\[GEN\].*?\bresult\b.*?"
+    r"first=(\d+)\s+last=(\d+)\s+"
+    r"stop=(\S+)\s+bpe=(\S+)\s+"
+    r"coherence=(\d+)\s+"
+    r"ids=\[([^\]]*)\]",
+)
 
 # QEMU sendkey names (PS/2 set1 / QEMU key names)
 CHAR_KEY = {
@@ -289,9 +297,12 @@ def parse_gen_steps(log_text: str) -> list[dict]:
 
 
 def parse_gen_detail(log_text: str) -> dict | None:
-    """Extrai token_ids, stop reason, bpe type e logits_top do log."""
+    """Extrai token_ids, stop reason, bpe type, first/last token, logits_top do log.
+
+    Tenta o novo log estruturado ``[GEN] result``; fallback para step-level parsing.
+    """
     out: dict = {}
-    # BPE type: kernel log "BPB1 LOADED ... sp32=true/false"
+    # ── BPE type (BPB1 LOADED) ──
     bpe_sp32 = re.search(r"BPB1 LOADED.*sp32=(true|false)", log_text)
     if bpe_sp32:
         out["bpe"] = "sp32" if bpe_sp32.group(1) == "true" else "llama"
@@ -299,23 +310,47 @@ def parse_gen_detail(log_text: str) -> dict | None:
         out["bpe"] = "sp32" if "sp32" in log_text.lower() else "llama"
     if re.search(r"BPB1 LOADED.*vocab_n=(\d+)", log_text):
         out["vocab_n"] = int(re.search(r"vocab_n=(\d+)", log_text).group(1))
-    # token ids do gen
+
+    # ── Result line estruturado (Fase 0) ──
+    res = GEN_RESULT_RE.search(log_text)
+    if res:
+        out["first_token"] = int(res.group(1))
+        out["last_token"] = int(res.group(2))
+        out["stop_reason"] = res.group(3)
+        out["bpe"] = res.group(4).lower()
+        out["coherence"] = int(res.group(5)) == 1
+        ids_str = res.group(6).strip()
+        if ids_str:
+            out["token_ids"] = [int(x.strip()) for x in ids_str.split(",") if x.strip()]
+        # SP32 se bpe=sp32 AND vocab_n <= 33000
+        bpe_raw = res.group(4).upper()
+        out["sp32"] = (bpe_raw == "SP32")
+
+    # ── Step-level parsing (detail extra) ──
     steps = parse_gen_steps(log_text)
     if steps:
-        out["token_ids"] = [s["next_id"] for s in steps]
-        stop_reasons = [s.get("stop") for s in steps if s.get("stop")]
-        if stop_reasons:
-            out["stop_reason"] = stop_reasons[0]
-        else:
-            out["stop_reason"] = "max_gen"
+        out["gen_steps"] = steps
         if any(s.get("ticks_kv") for s in steps):
             out["kv_ticks_sum"] = sum(s.get("ticks_kv", 0) for s in steps)
-    # logits top do FWD (primeiro dump apenas)
+        # fallback: token_ids da result line
+        if "token_ids" not in out:
+            out["token_ids"] = [s["next_id"] for s in steps]
+        # fallback first/last dos steps
+        if "first_token" not in out and out["token_ids"]:
+            out["first_token"] = out["token_ids"][0]
+            out["last_token"] = out["token_ids"][-1]
+        # fallback stop_reason
+        if "stop_reason" not in out:
+            stop_reasons = [s.get("stop") for s in steps if s.get("stop")]
+            out["stop_reason"] = stop_reasons[0] if stop_reasons else "max_gen"
+    else:
+        out["gen_steps"] = []
+
+    # ── Logits top FWD ──
     fwd = FWD_LOGITS_RE.search(log_text)
     if fwd:
         out["logits_top_n"] = int(fwd.group(1))
         out["logits_ids"] = [int(x.strip()) for x in fwd.group(2).split(",") if x.strip()]
-    out["gen_steps"] = steps
     return out or None
 
 
@@ -524,8 +559,8 @@ def summarize(results: list[dict]) -> str:
     lines = [
         "# LLM ladder — viabilidade",
         "",
-        "| Degrau | Blob MB | Load s | Load file | Infer ~s (med) | Coh med | BPE | Tokens | Stop | Notas |",
-        "|--------|---------|--------|-----------|----------------|---------|-----|--------|------|-------|",
+        "| Degrau | Blob MB | Load s | Load file | Infer ~s (med) | Coh med | BPE | First | Last | Tokens | Stop | Sample | Notas |",
+        "|--------|---------|--------|-----------|----------------|---------|-----|-------|------|--------|------|--------|-------|",
     ]
     for r in results:
         blob = r.get("blob", {}).get("mb", "?")
@@ -542,12 +577,16 @@ def summarize(results: list[dict]) -> str:
         token_ids = gd.get("token_ids", [])
         n_tok = len(token_ids)
         stop = gd.get("stop_reason", "")
+        first = gd.get("first_token", "")
+        last = gd.get("last_token", "")
+        sample = "✓" if gd.get("coherence") else ""
         tok_str = ",".join(str(t) for t in token_ids[:8])
         if len(token_ids) > 8:
             tok_str += "…"
         lines.append(
             f"| {r.get('step')} | {blob} | {load.get('seconds', '-')} | "
-            f"{load.get('loaded')} | {med_s} | {med_c} | {bpe} | {tok_str} | {stop} | {note} |"
+            f"{load.get('loaded')} | {med_s} | {med_c} | {bpe} | {first} | {last} | "
+            f"{tok_str} | {stop} | {sample} | {note} |"
         )
     lines.append("")
     lines.append("## Respostas")

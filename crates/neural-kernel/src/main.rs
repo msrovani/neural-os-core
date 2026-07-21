@@ -3059,6 +3059,11 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         let _ = crate::audio::stt::try_load_from_fat();
     }
 
+    // F1/F2: Enable coherence sampling for all BPE models (default: temp=0.7, top_k=16, repeat=1.2)
+    if crate::bpe::is_loaded() {
+        crate::cortex::set_coherence(true, 0.7, 16, 1.2);
+    }
+
     // LLM test + telemetria N1.1 — ladder prompts (coerencia/tempo) no boot serial
     if model_loaded || crate::cortex::model_is_loaded() {
         let prompts: &[&str] = &[
