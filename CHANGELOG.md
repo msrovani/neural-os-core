@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 
-### Runtime App Factory — ADR-0059 (2026-07-21, Proposed)
-- Plano para "app feita por IA em runtime": runtime WASM real **wasmi** (no_std, fuel) substituindo a VM `Op` custom; pipeline **gerar (WAT/DSL sob gramática #412) → assembler WAT→wasm no_std → testar em sandbox wasmi (unit-tests + adversarial + fuel + CapGate) → promover assinado a PackageHub `agent-wasm` (ADR-0052) → registrar tickável → card (ADR-0058)**
+### Runtime App Factory — ADR-0059 (2026-07-21) — Caminho A ✅ implementado
+- **Viabilidade CONFIRMADA:** `wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float (0 erros)
+- **Caminho A (wasmi) real:** `hermes::wasmi_rt` executa **módulos WASM padrão** em sandbox (fuel + CapGate host-imports `aios::*`); self-test de boot roda um `.wasm` real → `add(2,3)=5` PASS
+- **Seletor por IA (`hermes::app_factory`):** IA recomenda backend **A/B/C**; usuário/HITL decide; CapGate + HW-gate (ring de isolamento) aplicados. B/C (Cranelift, feature `jit-cranelift`) geram nativo → execução **GATED** por ring (ADR-0041) + HITL forte (honesto `AWAITING`)
+- **Integração** self-improve/self-heal/self-update: App Factory é o motor de execução do ciclo evolutivo (testa no sandbox → promove assinado ADR-0052 → hot-swap)
+- Plano restante: bridges (F3), gramática+assembler (F4), promover (F5), ring de isolamento (F6/F7). Aposentar VM `Op` após migração
 - Bare-metal sem `rustc` → IA emite **WAT/DSL**, não Rust compilado (Rust→wasm on-device = residual host)
 - **Supersede** ADR-0031 (tema WASM; desvio wasmi→Op revertido) e ADR-0032 (Op VM + `wasm.rs` aposentados); reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306
 - Fases F1–F6 (wasmi → host ABI/CapGate → bridges → geração validada → promover → Python opcional). Status: **Proposed** — aguardando validação

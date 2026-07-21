@@ -82,7 +82,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0056-neural-device-lego.md` | Accepted (MVP) | `fazendo` | #464 | L0/L1/L2 DeviceRecipe; UnlockDAG; trust Ed25519; community hub; H1 bind table |
 | `0057-compute-dispatch-smp-gpu-npu.md` | Accepted | `fazendo` | #20–42, #211, #329–331, #345–346, #454–456 | **Dispatch de compute** LLM: WS-A wake multi-AP ✅ (QEMU -smp 4 APs=3); WS-B/C dispatcher wired; WS-D GPU hook (Ready gate) + WS-E NPU XDNA/Intel = **Layer S/HW** honesto |
 | `0058-generative-card-desktop.md` | Accepted | `fazendo` | #79/#80/#82/#279d/#283/#448/#452/#465 + #468 | **UI/Desktop Jarbas:** embedded-graphics `DrawTarget` + `UiDeclaration`/`UiRenderer` (cards). **S1–S4 ✅** (QEMU: 3 cards + orb + HUD; self-tests PASS). Supersede parcial 0047-HMI (H3 ❌). S5 + A/V real residual |
-| `0059-runtime-app-factory.md` | Proposed | `fazendo` | #103/#309a/#385–396/#402/#411/#8/#11/#306 + #469 | **App feita por IA em runtime:** runtime real **wasmi** (no_std) + pipeline gerar(WAT/DSL, gramática #412)→assembler→sandbox-teste→promover (ADR-0052 agent-wasm). Supersede ADR-0031(WASM)/0032; aposenta Op VM. Aguarda validação |
+| `0059-runtime-app-factory.md` | Accepted | `fazendo` | #103/#309a/#385–396/#402/#411/#8/#11/#306 + #469 | **App feita por IA em runtime:** **Caminho A (wasmi) ✅ implementado** (QEMU: `.wasm` real `add(2,3)=5` PASS; seletor A/B/C PASS). B/C (Cranelift, feature) exec **gated** por ring+HITL. Supersede ADR-0031(WASM)/0032; aposenta Op VM (após bridges) |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)

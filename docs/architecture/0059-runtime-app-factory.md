@@ -1,7 +1,7 @@
 # ADR-0059: Runtime App Factory — WASM real (wasmi) + geração validada de apps por IA
 
 **Data:** 2026-07-21
-**Status:** Proposed (aguardando validação do maintainer para implementar)
+**Status:** Accepted — **viabilidade CONFIRMADA** (`wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float, 0 erros). **Caminho A (wasmi) IMPLEMENTADO e validado** (QEMU: `.wasm` real `add(2,3)=5` PASS; seletor A/B/C PASS). Caminhos B/C: backend Cranelift presente (feature `jit-cranelift`), **execução nativa GATED** por ring de isolamento (ADR-0041) + HITL forte — F6/F7.
 **Lifecycle (INDEX):** `fazendo`
 **Depreca / supersede:**
 - **ADR-0031** (Self-Update/WASM/JARVIS): reverte o desvio "wasmi → VM `Op` custom"; runtime real passa a ser **wasmi**. Self-update/JARVIS permanecem (não são tema desta ADR).
@@ -22,6 +22,25 @@ Hoje o OS **roteia** intents (Hermes→Trinity→skill/LLM), **gera texto** (Rus
 - **Sem `rustc`/LLVM no kernel** → compilar Rust on-device é inviável em bare-metal.
 
 Estado da arte (2026) converge: **gerar → validar em sandbox WASM/WASI (unit-tests + adversarial + fuel) → promover a uma _tool library_ persistente e versionada** (arXiv SelfEvolve 2604.16314, ARISE/EvolveTool-Bench 2604.00392, Tool-Making 2607.08010, MCP-SandboxScan 2601.01241; framework AAGT). Gramática restrita (GBNF/Outlines/XGrammar) garante **sintaxe válida** do código gerado.
+
+## 2A. Os 3 caminhos (IA recomenda, usuário/HITL decide) — a critério do usuário
+
+`hermes::app_factory::analyze_and_recommend` faz a IA **analisar o pedido e recomendar** um backend; o **usuário/HITL decide**; `execute()` aplica **CapGate + HW-gate (ring de isolamento) + HITL**.
+
+| Caminho | IA emite | Backend | Isolamento | Status |
+|---|---|---|---|---|
+| **A `WasmInterp`** | WAT/DSL→wasm | `wasmi` (interpretador) | ✅ sandbox SFI + fuel + CapGate (default p/ código de IA não-confiável) | **✅ implementado** (self-test `add`) |
+| **B `WasmJit`** | WAT/DSL→wasm | Cranelift wasm→nativo | mantém semântica wasm; **código nativo → exige ring** | 🟡 backend compila (feature); exec **gated** (ring+HITL) |
+| **C `NativeRustSubset`** | Rust (subset) | Cranelift (à la `rustc-lite`) | **sem sandbox wasm → exige ring + HITL forte** | 🟡 backend compila; exec **gated**; trilha self-hosting |
+
+Política (honesta): não-confiável→**A**; confiável+perf→**B** (HITL+ring); Rust/self-hosting→**C** (HITL forte+ring). Enquanto o **ring de isolamento** (ADR-0041 Ring3/AS) não existe, B/C retornam `VERDICT=AWAITING_ISOLATION` (não executam nativo — segurança primeiro).
+
+## 2B. Integração self-heal / self-update / self-improve
+
+A App Factory é o motor de execução do ciclo evolutivo (Sprint 108 + ADR-0047):
+- **self-improve:** `self_evolve`/`SkillOpt` geram skill → **testada no sandbox wasmi (A)** → promovida assinada (ADR-0052) → tickável. Cron amortiza (tool library).
+- **self-heal:** `SelfHealAgent` detecta gap (firmware/skill ausente) → App Factory gera/roda a correção em sandbox → aplica sob CapGate/HITL.
+- **self-update:** módulos WASM assinados atualizados a quente (`evolve::hot_swap`) no runtime wasmi, sem reboot; update nativo (C) só via ring+HITL.
 
 ## 2. Decisão
 
@@ -110,12 +129,16 @@ flowchart TB
 
 ## 6. Critérios de aceite (gate da ADR)
 
-- [ ] F1: wasmi roda `.wasm` real (add) no bare-metal; self-test PASS; `cargo check` 0 erros.
-- [ ] F2: host imports gated (deny sem Cap); fuel/mem limitam.
-- [ ] F3: `register_wasm_skill`/`DynamicSkill`/`agent-wasm` executam via wasmi.
-- [ ] F4: LLM gera WAT/DSL válido (gramática) → testado em sandbox → skill executável.
-- [ ] F5: app assinada persiste (ADR-0052) + reexecuta via Cron.
-- [ ] `Op` VM + `wasm.rs` aposentados; boot QEMU sem panic; evidência de tela/log.
+- [x] **F1: wasmi roda `.wasm` real (`add(2,3)=5`) no bare-metal; self-test PASS; `cargo check` 0 erros.** (`hermes::wasmi_rt`)
+- [x] **Seletor A/B/C (IA recomenda, HITL decide) + CapGate/HW-gate; self-test PASS.** (`hermes::app_factory`)
+- [x] **Viabilidade B/C: `cranelift-codegen` no_std compila (feature `jit-cranelift`).**
+- [~] F2: host ABI `aios::log` gated instalado; fuel ✅. (mem-max/mais imports = follow-up)
+- [ ] F3: bridge `register_wasm_skill`/`DynamicSkill`/`agent-wasm`→wasmi (runtime pronto; bridge = próxima fase).
+- [ ] F4: gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste.
+- [ ] F5: promover assinado (ADR-0052) + Cron.
+- [ ] F6/F7: ring de isolamento (ADR-0041 Ring3) → destrava execução nativa B/C.
+- [ ] aposentar `Op` VM + `wasm.rs` após bridges migrarem para wasmi.
+- [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]` PASS).
 
 ## 7. Referências
 
