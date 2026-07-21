@@ -34,6 +34,14 @@ LLM_TEST_RE = re.compile(
     r"LLM-TEST.*?prompt='([^']*)'.*?ticks=(\d+).*?\(~(\d+)s\).*?response='([^']*)'",
     re.S,
 )
+# Fase 0: parse token-level gen info
+GEN_STEP_RE = re.compile(r"\[GEN\].*?step=(\d+)\s+next=(\d+)\s+cols=(\d+)")
+GEN_EOS_RE = re.compile(r"\[GEN\].*?eos/special at step=(\d+)\s+id=(\d+)")
+GEN_KV_RE = re.compile(r"\[GEN\].*?step=(\d+)\s+token=(\d+)\s+kv_cache:\s*(\d+)\s+ticks")
+FWD_LOGITS_RE = re.compile(
+    r"\[FWD\].*?logits_top_n=(\d+)\s+ids=\[([^\]]+)\]\s+logits_bits=\[([^\]]+)\]"
+)
+EARLY_EXIT_RE = re.compile(r"\[GEN\].*?early_exit\s+(\S+)\s+step=(\d+)")
 
 # QEMU sendkey names (PS/2 set1 / QEMU key names)
 CHAR_KEY = {
@@ -250,6 +258,67 @@ def coherence_score(prompt: str, reply: str) -> dict:
     return {"score": max(0, score), "reasons": reasons}
 
 
+def parse_gen_steps(log_text: str) -> list[dict]:
+    """Extrai steps individuais de geracao do log serial."""
+    steps: list[dict] = []
+    for m in GEN_STEP_RE.finditer(log_text):
+        steps.append({
+            "step": int(m.group(1)),
+            "next_id": int(m.group(2)),
+            "cols": int(m.group(3)),
+        })
+    # marcar stop reason e kv ticks
+    step_map = {s["step"]: s for s in steps}
+    for m in GEN_EOS_RE.finditer(log_text):
+        sid = int(m.group(1))
+        if sid in step_map:
+            step_map[sid]["stop"] = "eos"
+    for m in EARLY_EXIT_RE.finditer(log_text):
+        sid = int(m.group(2))
+        if sid in step_map:
+            step_map[sid]["stop"] = f"early_{m.group(1)}"
+    for m in GEN_KV_RE.finditer(log_text):
+        sid = int(m.group(1))
+        if sid in step_map:
+            step_map[sid]["ticks_kv"] = int(m.group(3))
+    # se o ultimo step nao tem stop, e max_gen
+    if steps:
+        if "stop" not in steps[-1]:
+            steps[-1]["stop"] = "max_gen"
+    return steps
+
+
+def parse_gen_detail(log_text: str) -> dict | None:
+    """Extrai token_ids, stop reason, bpe type e logits_top do log."""
+    out: dict = {}
+    # BPE type: kernel log "BPB1 LOADED ... sp32=true/false"
+    bpe_sp32 = re.search(r"BPB1 LOADED.*sp32=(true|false)", log_text)
+    if bpe_sp32:
+        out["bpe"] = "sp32" if bpe_sp32.group(1) == "true" else "llama"
+    elif "BPB1" in log_text:
+        out["bpe"] = "sp32" if "sp32" in log_text.lower() else "llama"
+    if re.search(r"BPB1 LOADED.*vocab_n=(\d+)", log_text):
+        out["vocab_n"] = int(re.search(r"vocab_n=(\d+)", log_text).group(1))
+    # token ids do gen
+    steps = parse_gen_steps(log_text)
+    if steps:
+        out["token_ids"] = [s["next_id"] for s in steps]
+        stop_reasons = [s.get("stop") for s in steps if s.get("stop")]
+        if stop_reasons:
+            out["stop_reason"] = stop_reasons[0]
+        else:
+            out["stop_reason"] = "max_gen"
+        if any(s.get("ticks_kv") for s in steps):
+            out["kv_ticks_sum"] = sum(s.get("ticks_kv", 0) for s in steps)
+    # logits top do FWD (primeiro dump apenas)
+    fwd = FWD_LOGITS_RE.search(log_text)
+    if fwd:
+        out["logits_top_n"] = int(fwd.group(1))
+        out["logits_ids"] = [int(x.strip()) for x in fwd.group(2).split(",") if x.strip()]
+    out["gen_steps"] = steps
+    return out or None
+
+
 def parse_metrics(log_text: str, prompt: str) -> dict:
     loaded = re.findall(r"LLM LOADED file=(\S+) size=(\d+)KB", log_text)
     hub = re.findall(r"ModelHub:[^\n]+", log_text)
@@ -396,6 +465,11 @@ def run_step(
                 if m2:
                     found.append(m2)
 
+        # Fase 0: gen detail global (primeiro prompt)
+        gen_detail = parse_gen_detail(full)
+        if gen_detail:
+            result["gen_detail"] = gen_detail
+
         if found:
             for m2 in found:
                 prompt, ticks, secs, text = m2.group(1), m2.group(2), m2.group(3), m2.group(4)
@@ -410,6 +484,11 @@ def run_step(
                     "coherence": coh,
                     "source": "llm-test-boot",
                 }
+                # Fase 0: attach gen detail per-prompt (token_ids, stop_reason)
+                if gen_detail:
+                    entry["token_ids"] = gen_detail.get("token_ids", [])
+                    entry["stop_reason"] = gen_detail.get("stop_reason")
+                    entry["logits_top_ids"] = gen_detail.get("logits_ids", [])
                 result["prompts"].append(entry)
                 print(
                     f"  [ASK] {prompt!r} -> {text!r} ticks={ticks} ~{secs}s "
@@ -445,8 +524,8 @@ def summarize(results: list[dict]) -> str:
     lines = [
         "# LLM ladder — viabilidade",
         "",
-        "| Degrau | Blob MB | Load s | Load file | Infer ~s (med) | Coh med | Notas |",
-        "|--------|---------|--------|-----------|----------------|---------|-------|",
+        "| Degrau | Blob MB | Load s | Load file | Infer ~s (med) | Coh med | BPE | Tokens | Stop | Notas |",
+        "|--------|---------|--------|-----------|----------------|---------|-----|--------|------|-------|",
     ]
     for r in results:
         blob = r.get("blob", {}).get("mb", "?")
@@ -457,16 +536,32 @@ def summarize(results: list[dict]) -> str:
         med_s = round(sum(secs) / len(secs), 1) if secs else "-"
         med_c = round(sum(cohs) / len(cohs), 1) if cohs else 0
         note = r.get("error") or (load.get("loaded") and str(load.get("loaded"))) or ""
+        # Fase 0: gen detail
+        gd = r.get("gen_detail") or {}
+        bpe = gd.get("bpe", "")
+        token_ids = gd.get("token_ids", [])
+        n_tok = len(token_ids)
+        stop = gd.get("stop_reason", "")
+        tok_str = ",".join(str(t) for t in token_ids[:8])
+        if len(token_ids) > 8:
+            tok_str += "…"
         lines.append(
             f"| {r.get('step')} | {blob} | {load.get('seconds', '-')} | "
-            f"{load.get('loaded')} | {med_s} | {med_c} | {note} |"
+            f"{load.get('loaded')} | {med_s} | {med_c} | {bpe} | {tok_str} | {stop} | {note} |"
         )
     lines.append("")
     lines.append("## Respostas")
     for r in results:
         lines.append(f"### {r.get('step')}")
         for p in r.get("prompts") or []:
-            lines.append(f"- Q: `{p['prompt']}` → `{p.get('reply','')}` (coh={p.get('coherence',{}).get('score')})")
+            extra = ""
+            if p.get("token_ids"):
+                extra += f" ids={p['token_ids']}"
+            if p.get("stop_reason"):
+                extra += f" stop={p['stop_reason']}"
+            if p.get("logits_top_ids"):
+                extra += f" top5={p['logits_top_ids'][:5]}"
+            lines.append(f"- Q: `{p['prompt']}` → `{p.get('reply','')}` (coh={p.get('coherence',{}).get('score')}){extra}")
         lines.append("")
     # veredicto simples
     viable = []

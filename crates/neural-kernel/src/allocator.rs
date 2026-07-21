@@ -242,7 +242,7 @@ pub fn init_heap(
     }
 
     unsafe {
-        crate::slab::SLAB_ALLOCATOR.lock().init(SLAB_START);
+        k_nano::slab::SLAB_ALLOCATOR.lock().init(SLAB_START);
         let span = Span::from_base_size(LARGE_HEAP_START as *mut u8, LARGE_HEAP_SIZE);
         let claimed = TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?;
         *CLAIMED_HEAP.lock() = Some(claimed);

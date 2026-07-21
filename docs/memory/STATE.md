@@ -25,6 +25,7 @@
 #   SESSION_160: WiFi pivô ath10k QCA6174 Note1050; A0–A2; iwlwifi secondary
 #   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
 #   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
+#   SESSION_164: FitPolicy Neural (#468) — host pack_filter + cortex::model_fit; cargo nk 0e
 #   SESSION_163: Emagrecer neural-kernel Onda 0–6 — stubs/promotes; ATA+TIMER únicos; pending_route; cargo nk 0e
 #   ADR-0056 H1 runtime: unlock_dag + recipe FAT gate + HalOffer NeedsFw/Escalate (#464)
 #   Gate v2.0.0: por_fazer zerado ou residual replanejado + OK maintainer

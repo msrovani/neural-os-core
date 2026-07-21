@@ -2,40 +2,22 @@
 #![allow(dead_code)]
 extern crate alloc;
 
-pub mod crew;
-pub mod flow;
-pub mod state_graph;
-
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
-use crate::crew::CrewPool;
-use crate::state_graph::StateGraph;
-use crate::flow::should_poll_flow;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AgentTier {
-    /// Agentes do sistema (nunca suspensos)
     Permanent,
-    /// Agentes ativados sob demanda do sistema (PCI, ACPI)
-    System,
-    /// Agentes ativados por demanda do usuario
     User,
-    /// Agentes com schedule periodico (baixa prioridade)
-    Periodic,
-    /// Agentes de aprendizado (mínima prioridade, executa quando idle)
-    Learning,
 }
 
 impl AgentTier {
     pub fn priority(&self) -> u8 {
         match self {
             AgentTier::Permanent => 0,
-            AgentTier::System => 1,
-            AgentTier::User => 2,
-            AgentTier::Periodic => 3,
-            AgentTier::Learning => 4,
+            AgentTier::User => 1,
         }
     }
 }
@@ -71,6 +53,21 @@ pub enum FlowTrigger {
     Listen(&'static str),
     /// Acorda, le o payload do topico, roteia para handler baseado no conteudo
     Router(&'static str),
+}
+
+/// Determina se um agente com FlowTrigger deve ser pollado neste tick
+fn should_poll_flow(flow: &FlowTrigger, tick: u64, last_poll: u64, has_event: bool) -> bool {
+    match flow {
+        FlowTrigger::Schedule(sched) => match sched {
+            ScheduleKind::Continuous => true,
+            ScheduleKind::PollEvery(n) => last_poll == 0 || tick - last_poll >= *n,
+            ScheduleKind::Oneshot => true,
+            ScheduleKind::EventDriven => has_event,
+        },
+        FlowTrigger::Start => last_poll == 0,
+        FlowTrigger::Listen(_) => has_event,
+        FlowTrigger::Router(_) => has_event,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -171,38 +168,13 @@ impl AgentInstance {
 pub struct AgentRegistry {
     pub agents: Vec<AgentInstance>,
     pub skill_map: BTreeMap<String, usize>,
-    pub crews: CrewPool,
-    pub graph: Option<StateGraph>,
 }
 
 impl AgentRegistry {
     pub fn new() -> Self {
         AgentRegistry {
             agents: Vec::new(), skill_map: BTreeMap::new(),
-            crews: CrewPool::new(), graph: None,
         }
-    }
-
-    /// Cria um crew e retorna seu ID
-    pub fn create_crew(&mut self, name: &str, goal: &str, process: crew::ProcessType) -> crew::CrewId {
-        self.crews.create(name, goal, process)
-    }
-
-    /// Associa um agente a um crew
-    pub fn assign_to_crew(&mut self, crew_id: crew::CrewId, agent_idx: usize) {
-        self.crews.assign_to_crew(crew_id, agent_idx);
-        if let Some(_crew) = self.crews.get_mut(crew_id) {
-            for agent in self.agents.iter_mut() {
-                if agent.crew.crew_id.is_none() {
-                    agent.crew.crew_id = Some(crew_id);
-                }
-            }
-        }
-    }
-
-    /// Inicializa StateGraph (substitui scheduler round-robin)
-    pub fn init_graph(&mut self, graph: StateGraph) {
-        self.graph = Some(graph);
     }
 
     pub fn register(&mut self, agent: Box<dyn Agent>) -> usize {
@@ -229,33 +201,6 @@ impl AgentRegistry {
 
     pub fn active_count(&self) -> usize {
         self.agents.iter().filter(|a| a.state == AgentState::Active).count()
-    }
-
-    /// Migra um agente para um novo tier. Learning/Periodic ganham menos ticks.
-    pub fn migrate_to_tier(&mut self, idx: usize, new_tier: AgentTier) -> Result<(), &'static str> {
-        if idx >= self.agents.len() {
-            return Err("migrate_to_tier: indice invalido");
-        }
-        self.agents[idx].tier = new_tier;
-        Ok(())
-    }
-
-    /// Migra um agente por nome
-    pub fn migrate_to_tier_by_name(&mut self, name: &str, new_tier: AgentTier) -> Result<(), &'static str> {
-        if let Some(inst) = self.agents.iter_mut().find(|a| a.agent.manifest().name == name) {
-            inst.tier = new_tier;
-            Ok(())
-        } else {
-            Err("migrate_to_tier_by_name: agente nao encontrado")
-        }
-    }
-
-    /// Filtra agentes por tier
-    pub fn agents_by_tier(&self, tier: AgentTier) -> Vec<usize> {
-        self.agents.iter().enumerate()
-            .filter(|(_, a)| a.tier == tier)
-            .map(|(i, _)| i)
-            .collect()
     }
 
     /// ADR-0055: índices por affinity_ring (0=BSP/critical, 1=compute, 2=event).
@@ -351,39 +296,6 @@ impl AgentRegistry {
                 }
             }
             let mut polled: u32 = 0;
-            // Se StateGraph ativo, usa ele para decidir qual agente pollar
-            if let Some(ref mut graph) = self.graph {
-                let node_idx = graph.advance();
-                if node_idx < self.agents.len() {
-                    let i = node_idx;
-                    self.agents[i].last_poll = tick_id;
-                    self.agents[i].tick_counter += 1;
-                    let tc = self.agents[i].tick_counter;
-                    let result = self.agents[i].agent.tick(tick_id, tc);
-                    polled = 1;
-                    match result {
-                        AgentTickResult::Pending => {
-                            self.agents[i].consecutive_pending += 1;
-                            if self.agents[i].consecutive_pending > 10000 {
-                                self.agents[i].state = AgentState::Crashed;
-                            }
-                        }
-                        AgentTickResult::Done => {
-                            self.agents[i].consecutive_pending = 0;
-                            if self.agents[i].schedule == ScheduleKind::Oneshot {
-                                self.agents[i].state = AgentState::Done;
-                            }
-                        }
-                        AgentTickResult::Crashed => {
-                            self.agents[i].state = AgentState::Crashed;
-                        }
-                        _ => {}
-                    }
-                }
-                maybe_log_sched_metrics(tick_id, self.agents.len(), polled);
-                halt();
-                continue;
-            }
             // Scheduler por affinity ring R0→R1→R2 (ADR-0055) + FlowTrigger
             let order = self.poll_order_by_affinity();
             for &i in &order {

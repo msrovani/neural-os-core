@@ -1,6 +1,6 @@
 # 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-19 — IDEA #467 Emagrecer bin; #466 BitNet ladder; #465 Metrics HUD.
+**Última atualização:** 2026-07-19 — IDEA #468 FitPolicy; #467 Emagrecer bin; #466 BitNet ladder.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -61,6 +61,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#465** Metrics HUD → skill/WASM | ADR-0052 + 0047-HMI (+ 0041 Cap) | 🟡 agendada | MVP nativo `sys_metrics`; destino Hermes+WASM |
 | **#466** BitNet ladder coerência | ADR-0019 | 🟡 agendada | 850 #PF+BPE ✅; forward host vs kernel + stop `</s>`; 13/2B/3B |
 | **#467** Emagrecer neural-kernel | ADR-0042 (+ #439) | ✅ parcial → marco **v1.9.2** | ondas 0–6 stubs/promotes; residuals cortex/agents/net/audio |
+| **#468** FitPolicy Neural (llmfit-inspired) | ADR-0019 (+ #466) | ✅ SESSION_164 | host `llmfit_pack_filter` + `cortex::model_fit` / MemoryAgent / ModelHub |
 
 #### Gaps — triagem Onda 0 ✅ (2026-07-18)
 
@@ -1739,3 +1740,4 @@ Itens adicionados via changelog (2026-07-06 a 2026-07-07).
 | 2026-07-18 | **464** | **Neural Device LEGO** — L0 Bus / L1 HalOffer / L2 DeviceRecipe; UnlockDAG; trust Ed25519+blob_hash; community Adopt-a-Chip; SDIO≠bring-up; H1 bind table; NeuralFS `ecosystem/devices/`; slot `/market fetch` v3. | 🟡 MVP docs+H1 | ADR-0056 | community + `device_recipe.rs` | Install≠Ready |
 | 2026-07-19 | **465** | **Metrics HUD → skill Hermes → agent-wasm** — Relógios CPU/MEM/GPU/HD no Jarbas. **MVP atual:** `MetricsAgent` nativo hardcoded (`sys_metrics`, poll ~0,5s) + snapshot + compositor. **Destino:** skill ADR-0052 (`acionaveis: poll_every:N`) orquestrada pelo Hermes; HUD só consome EventBus (`SYS_METRICS`); evolução `agent-wasm` sob CapGate. Leituras HW (frames/ATA/VRAM/sched) ficam atrás de Cap/HalOffer observe-only — WASM SFI **não** toca MMIO. Sem stub Agency. | 🟡 agendada (MVP nativo ✅) | ADR-0052 + 0047-HMI + 0041 | `metrics_agent.rs` + `gauges.rs` | Cap métricas + PackageHub |
 | 2026-07-19 | **467** | **Emagrecer neural-kernel** — Cutover cirúrgico bin→crates: promote-if-bin-ahead → `pub use` stub; `tools/diff_bin_crate.py`; unificar `ATA_DRIVER`/`TIMER_TICKS`; pending_route em cortex. Residuals: cortex/bpe/agents/net/audio/smp/boot_logger. Marco **v1.9.2 TEST**. | ✅ parcial | ADR-0042 + #439 | SESSION_163 | BIN_CRATE_DIFF.md |
+| 2026-07-19 | **468** | **FitPolicy Neural (llmfit-inspired)** — Host `llmfit_pack_filter.py` + `FIT_GATE`; guest `cortex::model_fit` (re-export k_ai) → MemoryAgent + ModelHub; sem port llmfit/`std`. | ✅ | ADR-0019 + #466 | SESSION_164 | model-fit-and-pack.md |

@@ -26,7 +26,9 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     //   do buffer de logits → heap corrupt → #PF apos FWD (850 tied-embed unembed);
     // - o kernel FMA 4x4 tambem nao e matmul row-major correcto.
     // Caminho seguro: unpack-por-linha (AVX2) ou scalar.
-    if avx2_available() && k >= 8 && n >= 8 {
+    // Guard n%4==0: unpack_row_into com n%4!=0 requer acesso elemento-a-elemento
+    // (embed/unembed vocab=32002 cai no else lento e correto).
+    if avx2_available() && k >= 8 && n >= 8 && n % 4 == 0 {
         return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
     }
     Some(scalar_ternary_matmul(weight, input, m, k, n))
@@ -132,16 +134,32 @@ unsafe fn avx2_bitwise_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: u
 
 #[cfg(target_arch = "x86_64")]
 fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut [i8]) {
-    let packed_row_words = n.div_ceil(4);
-    let row_start = row * packed_row_words;
-    for pw in 0..packed_row_words {
-        if row_start + pw >= weight.packed_data.len() { break; }
-        let p = weight.packed_data[row_start + pw];
-        let base = pw * 4;
-        if base < n { buf[base] = match p & 3 { 1 => 1, 2 => -1, _ => 0 }; }
-        if base + 1 < n { buf[base + 1] = match (p >> 2) & 3 { 1 => 1, 2 => -1, _ => 0 }; }
-        if base + 2 < n { buf[base + 2] = match (p >> 4) & 3 { 1 => 1, 2 => -1, _ => 0 }; }
-        if base + 3 < n { buf[base + 3] = match (p >> 6) & 3 { 1 => 1, 2 => -1, _ => 0 }; }
+    if n % 4 == 0 {
+        let words = n / 4;
+        let row_start = row * words;
+        for pw in 0..words {
+            let p = weight.packed_data[row_start + pw];
+            let base = pw * 4;
+            buf[base] = match p & 3 { 1 => 1, 2 => -1, _ => 0 };
+            buf[base + 1] = match (p >> 2) & 3 { 1 => 1, 2 => -1, _ => 0 };
+            buf[base + 2] = match (p >> 4) & 3 { 1 => 1, 2 => -1, _ => 0 };
+            buf[base + 3] = match (p >> 6) & 3 { 1 => 1, 2 => -1, _ => 0 };
+        }
+    } else {
+        // Flat packing: row t starts at element t*n, no byte boundary alignment.
+        // Element-by-element access when n%4 != 0 (e.g. embed vocab=32002).
+        let start = row * n;
+        for j in 0..n {
+            let idx = start + j;
+            let byte = idx >> 2;
+            let shift = (idx & 3) << 1;
+            let bits = (weight.packed_data[byte] >> shift) & 0b11;
+            buf[j] = match bits {
+                0b01 => 1,
+                0b10 => -1,
+                _ => 0,
+            };
+        }
     }
 }
 

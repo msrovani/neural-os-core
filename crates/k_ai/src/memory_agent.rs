@@ -39,14 +39,35 @@ impl MemoryAgent {
 
     pub fn calculate_budget(model_params: u64, total_ram_mb: u64, total_vram_mb: u64) -> MemoryBudget {
         k_nano::slog_kai!("MEM", "info", "Calculando budget: params={} ram={} vram={}", model_params, total_ram_mb, total_vram_mb);
-        let model_gb: f64 = model_params as f64 / 1_000_000_000.0;
-        let model_mb = (model_params * 2 / 8 / 1024 / 1024) as usize;
+        crate::model_fit::set_host_memory(total_ram_mb, total_vram_mb);
 
-        let heap_mb = ((model_gb * 100.0) as usize).clamp(128, 2048);
-        let kv_mb = (model_params as usize / 40 / 1024 / 1024).clamp(8, 4096);
+        let model_mb = crate::model_fit::estimate_bitnet_mb(model_params) as usize;
+        let heap_mb = crate::model_fit::estimate_heap_mb(model_params) as usize;
+        let kv_mb = crate::model_fit::estimate_kv_mb(model_params) as usize;
         let arc_mb = (heap_mb / 2).clamp(64, 2048);
         let vram_mb = if total_vram_mb > 0 && model_mb <= total_vram_mb as usize {
-            model_mb } else { 0 };
+            model_mb
+        } else {
+            0
+        };
+
+        let fit = crate::model_fit::score_fit(
+            model_mb as u64,
+            kv_mb as u64,
+            heap_mb as u64,
+            total_ram_mb,
+            total_vram_mb,
+        );
+        k_nano::slog_kai!(
+            "FIT",
+            "info",
+            "class={} usage={} model={}MB free={}MB tok_s_est={}",
+            fit.class.as_str(),
+            fit.usage_pct_x100,
+            fit.model_mb,
+            fit.free_after_mb,
+            fit.tok_s_est
+        );
 
         let used = (heap_mb + model_mb + kv_mb + arc_mb) as u64;
         let free = total_ram_mb.saturating_sub(used);
@@ -125,11 +146,12 @@ impl Agent for MemoryAgent {
         let budget = if model_params > 0 {
             Self::calculate_budget(model_params, total_ram, total_vram)
         } else {
+            crate::model_fit::set_host_memory(total_ram, total_vram);
             MemoryBudget {
                 total_ram_mb: total_ram, total_vram_mb: total_vram,
                 heap_target_mb: 128, model_ram_mb: 0, kv_cache_mb: 0,
                 arc_cache_mb: 64, vram_model_mb: 0,
-                free_after_mb: total_ram - 192, is_gpu: total_vram > 0,
+                free_after_mb: total_ram.saturating_sub(192), is_gpu: total_vram > 0,
             }
         };
 

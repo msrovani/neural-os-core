@@ -8,13 +8,16 @@ use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::{PrivilegeLevel, VirtAddr};
+
+// Classify error code for self-heal
+use k_ai::self_heal::classify_by_code;
 
 pub use k_nano::interrupts::{
     TIMER_TICKS, MOUSE_ABS_X, MOUSE_ABS_Y, MOUSE_ABS_BTN, MOUSE_PREV_BTN, MOUSE_CLICK_FLASH,
     MOUSE_MAX_X, MOUSE_MAX_Y,
+    PAGE_FAULT_COUNT,
 };
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -172,6 +175,18 @@ extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFram
         dump_exception("#GP", &f, Some(code));
         crate::user_mode::fault_abort("P6 #GP in Ring3 demo");
     }
+    
+    // Self-heal: classify error code and publish KERNEL_ERROR
+    let fc = classify_by_code(code as u32);
+    let msg = alloc::format!("#GP err={:#x} class={:?}", code, fc);
+    let _ = crate::EVENT_BUS.publish(crate::Event {
+        id: 0,
+        topic: alloc::string::String::from("KERNEL_ERROR"),
+        payload: msg.clone().into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+    k_nano::slog_bin!("SELF", "HEAL", "{}", msg);
+    
     dump_exception("#GP", &f, Some(code));
     loop {
         x86_64::instructions::hlt();
@@ -210,6 +225,19 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
         return;
     }
+    
+    // Self-heal: classify error code and publish KERNEL_ERROR
+    let err_code = code.bits() as u32;
+    let fc = classify_by_code(err_code);
+    let msg = alloc::format!("#PF @ {:#x} err={:#x} class={:?}", cr2.as_u64(), err_code, fc);
+    let _ = crate::EVENT_BUS.publish(crate::Event {
+        id: 0,
+        topic: alloc::string::String::from("KERNEL_ERROR"),
+        payload: msg.clone().into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+    k_nano::slog_bin!("SELF", "HEAL", "{}", msg);
+    
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;

@@ -4,6 +4,7 @@ Uso: python tools/mkfat32.py [--size 3072] [--label NEURAL-OS] [--output target/
 
 PACK_LLM=850|13|2b|3b|all  — progressivo (default: 850). Ex: PACK_LLM=850,13
   850 → BITNET850; 13 → BITNET13 (~1.3B xl); 2b → BITNET2B; 3b → BITNET3B; all → tudo
+FIT_GATE=1 — filtra PACK_LLM via tools/llmfit_pack_filter.py (nunca sobe degrau).
 FAT32: partição pode ser 3GB+; limite ~4GB-1 é por *arquivo*. Modelos grandes (>PIO):
   preferir AirLLM (/model GGUF ATA) em vez de PIO full-RAM.
 BOOT_MODE via env BOOT_MODE=qemu|hw (default: inferido do nome do arquivo).
@@ -14,8 +15,25 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_SIZE_MB = 3072  # 3GB dados — cabe 850+1.3B+2B; arquivo FAT32 máx ~4GB-1
 
 
+def _apply_fit_gate_if_enabled() -> None:
+    """FIT_GATE=1 → reescreve PACK_LLM com degraus que cabem na RAM host."""
+    if os.environ.get("FIT_GATE", "").strip() not in ("1", "true", "yes", "on"):
+        return
+    tools_dir = os.path.join(ROOT, "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    try:
+        import llmfit_pack_filter as fit
+
+        code = fit.run_fit_gate_from_env()
+        print(f"[FIT_GATE] applied exit={code} PACK_LLM={os.environ.get('PACK_LLM')}")
+    except Exception as e:
+        print(f"[FIT_GATE] ERROR skipped: {e}")
+
+
 def pack_llm_set() -> set[str]:
     """Tokens normalizados: 850, 13, 2b, 3b. Default só 850 (primeiro degrau)."""
+    _apply_fit_gate_if_enabled()
     raw = os.environ.get("PACK_LLM", "850").strip().lower()
     if not raw or raw in ("none", "0", "off"):
         return set()

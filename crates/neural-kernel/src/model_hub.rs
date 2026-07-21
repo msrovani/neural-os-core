@@ -155,30 +155,81 @@ fn hub_has_blob(slot: ModelSlot) -> bool {
     ) && HUB.lock().slots[idx(slot)].is_some()
 }
 
+fn fit_ok(slot: ModelSlot) -> bool {
+    !k_ai::model_fit::slot_too_tight(slot.name())
+}
+
+fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
+    let order = [
+        ModelSlot::GeneratorPro,
+        ModelSlot::GeneratorFast,
+        ModelSlot::TinyStories,
+        ModelSlot::Active,
+    ];
+    for s in order {
+        let loaded = if s == ModelSlot::Active {
+            slot_loaded(s)
+        } else {
+            hub_has_blob(s) || slot_loaded(s)
+        };
+        if loaded && fit_ok(s) {
+            if s != preferred {
+                k_nano::slog_bin!(
+                    "FIT",
+                    "info",
+                    "escalate slot={} → {} reason=too_tight",
+                    preferred.name(),
+                    s.name()
+                );
+            }
+            return s;
+        }
+    }
+    k_nano::slog_bin!(
+        "FIT",
+        "info",
+        "escalate slot={} reason=too_tight (no Good+ fallback)",
+        preferred.name()
+    );
+    if hub_has_blob(ModelSlot::GeneratorFast) {
+        ModelSlot::GeneratorFast
+    } else {
+        ModelSlot::Active
+    }
+}
+
+fn maybe_fit(slot: ModelSlot) -> ModelSlot {
+    if fit_ok(slot) {
+        slot
+    } else {
+        pick_fit_fallback(slot)
+    }
+}
+
 pub fn select_generator_slot(prompt: &str) -> ModelSlot {
     if wants_tinystories(prompt) && hub_has_blob(ModelSlot::TinyStories) {
-        return ModelSlot::TinyStories;
+        return maybe_fit(ModelSlot::TinyStories);
     }
     // Complexo: blob Pro separado → Pro; senão Active (2B/3B no CURRENT).
     if is_complex_conversation(prompt) {
         if hub_has_blob(ModelSlot::GeneratorPro) {
-            return ModelSlot::GeneratorPro;
+            return maybe_fit(ModelSlot::GeneratorPro);
         }
         if slot_loaded(ModelSlot::Active) {
-            return ModelSlot::Active;
+            return maybe_fit(ModelSlot::Active);
         }
     }
     if slot_loaded(ModelSlot::Active) {
-        return ModelSlot::Active;
+        return maybe_fit(ModelSlot::Active);
     }
     if hub_has_blob(ModelSlot::GeneratorFast) {
-        return ModelSlot::GeneratorFast;
+        return maybe_fit(ModelSlot::GeneratorFast);
     }
     if hub_has_blob(ModelSlot::GeneratorPro) {
-        return ModelSlot::GeneratorPro;
+        return maybe_fit(ModelSlot::GeneratorPro);
     }
     if hub_has_blob(ModelSlot::TinyStories) {
-        return ModelSlot::TinyStories;
+        return maybe_fit(ModelSlot::TinyStories);
     }
     ModelSlot::Active
 }

@@ -1497,6 +1497,46 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     Some(model)
 }
 
+/// Fase 0: dump top-N logit values + token IDs para parity host vs kernel.
+fn dump_logits_top(logits: &Tensor, n: usize) {
+    let cols = logits.shape.1;
+    let n = n.min(cols).min(64);
+    // fixed-size array; `n` será ≤64
+    let mut top: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
+    let mut filled = 0usize;
+    for j in 0..cols {
+        let v = logits.data[j];
+        if v.is_nan() || v == NEG_INFINITY { continue; }
+        if filled < n {
+            top[filled] = (j as u32, v);
+            filled += 1;
+        } else {
+            let mut worst = 0usize;
+            for i in 1..n {
+                if top[i].1 < top[worst].1 { worst = i; }
+            }
+            if v > top[worst].1 {
+                top[worst] = (j as u32, v);
+            }
+        }
+    }
+    if filled == 0 { return; }
+    // sort descending by value
+    for i in 0..filled.min(n) {
+        for j in i + 1..filled.min(n) {
+            if top[j].1 > top[i].1 {
+                top.swap(i, j);
+            }
+        }
+    }
+    let ids: alloc::vec::Vec<u32> = top[..filled.min(n)].iter().map(|(id, _)| *id).collect();
+    let vals: alloc::vec::Vec<u32> = top[..filled.min(n)].iter().map(|(_, v)| v.to_bits()).collect();
+    k_nano::slog_bin!("FWD", "info", "logits_top_n={} ids={:?} logits_bits={:?}",
+        filled.min(n),
+        ids,
+        vals);
+}
+
 fn argmax_row(logits: &Tensor, row: usize) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
@@ -1872,6 +1912,10 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
         } else {
             model.unembed.matmul_hybrid(&last_hidden).unwrap()
         };
+        // ponytail: Fase 0 parity — dump top-16 logits no 1º step
+        if step == 0 {
+            dump_logits_top(&logits, 16);
+        }
         let next = if use_bpe {
             // Soft-float 2B Llama: lexicon saudacao/clima. SP32 / vocab≤33k: argmax HF pleno.
             let sp32ish = model.vocab_size > 0 && model.vocab_size <= 33_000;

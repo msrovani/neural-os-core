@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### FitPolicy Neural (SESSION_164 / IDEA #468)
+- Host: `tools/llmfit_pack_filter.py` + `FIT_GATE=1` em mkfat32/mkexfat (filtra `PACK_LLM` para baixo)
+- Guest: `cortex::model_fit` (re-export `k_ai::model_fit`) — Perfect/Good/Marginal/TooTight/Deny
+- MemoryAgent loga `[FIT]`; ModelHub `select_generator_slot` cai se TooTight/Deny
+- Guia: `docs/guides/model-fit-and-pack.md` — inspirado em llmfit, sem port do binário
+
 ### Rebrand K³CHJ (2026-07-18)
 - Nome canônico **K³CHJ** = `k_nano` + `k_hal` + `k_ai` + Cortex + Hermes + Jarbas
 - Histórico **K²CHJ** = 5 crates (sem `k_hal` na marca); paths ADR `*k2chj*` inalterados

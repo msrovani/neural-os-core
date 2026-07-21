@@ -92,7 +92,6 @@ mod mhi;
 
 mod pci;
 
-mod slab;
 
 mod smp;
 
@@ -204,7 +203,6 @@ mod disk_agent;
 
 mod memory_agent;
 
-mod alloc_adapter;
 
 mod audit;
 
@@ -968,6 +966,7 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
                 "safety" => Some(Box::new(safety::SafetyAgent::new())),
                 "optimizer" => Some(Box::new(optimizer::OptimizerAgent::new())),
                 "mouse" => Some(Box::new(agents::mouse_agent::MouseAgent::new())),
+                "self_heal" => Some(Box::new(k_ai::self_heal_agent::SelfHealAgent::new())),
                 _ => None,
             };
             agent
@@ -1460,7 +1459,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
-    let slab_metrics = { let s = crate::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
+    let slab_metrics = { let s = k_nano::slab::SLAB_ALLOCATOR.lock(); (s.metrics().0, s.metrics().1) };
 
     k_nano::slog_bin!("Boot", "dbg", "slab metrics: {} {}", slab_metrics.0, slab_metrics.1);
 
@@ -2216,6 +2215,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // ADR-0042 N2: Trust antes de SelfHeal para (token,agent,skill) já estar concedido
     registry.register(Box::new(agents::BootTrustAgent));
     registry.register(Box::new(agents::BootSelfHealAgent));
+
+    // Continuous SelfHealAgent for KERNEL_ERROR processing + silent failure detection
+    registry.register(Box::new(k_ai::self_heal_agent::SelfHealAgent::new()));
 
     registry.register(Box::new(crate::memory_agent::MemoryAgent::new()));
 

@@ -763,7 +763,6 @@ dependencies = [
  "k_ai",
  "lazy_static",
  "libm",
- "linked_list_allocator",
  "p256",
  "rand_core",
  "sha2",

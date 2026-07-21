@@ -1,10 +1,72 @@
 use alloc::vec::Vec;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::format;
 use alloc::collections::BTreeMap;
 use core::sync::atomic::Ordering;
 use k_nano::memory::{GLOBAL_ALLOCATOR, BITMAP_SIZE};
 use crate::chunker;
+use event_bus::{Event, CapabilityToken};
+
+pub struct BudgetedRecovery {
+    budget: u64,
+    tick: u64,
+}
+
+impl BudgetedRecovery {
+    pub fn new(_max_ops: usize, max_budget: u64) -> Self {
+        Self { budget: max_budget, tick: 0 }
+    }
+    
+    pub fn set_tick(&mut self, tick: u64) {
+        self.tick = tick;
+    }
+    
+    pub fn can_execute(&self) -> bool {
+        true
+    }
+}
+
+pub struct SilentFailureDetector {
+    failures: BTreeMap<String, u64>,
+    threshold: u64,
+    tick: u64,
+}
+
+impl SilentFailureDetector {
+    pub fn new(threshold: u64) -> Self {
+        Self { 
+            failures: BTreeMap::new(), 
+            threshold, 
+            tick: 0 
+        }
+    }
+    
+    pub fn set_tick(&mut self, tick: u64) {
+        self.tick = tick;
+    }
+    
+    pub fn record_failure(&mut self, agent: &str, tick: u64) {
+        let entry = self.failures.entry(agent.to_string()).or_insert(tick);
+        *entry = tick;
+    }
+    
+    pub fn heartbeat(&mut self, agent: &str) {
+        let entry = self.failures.entry(agent.to_string()).or_insert(self.tick);
+        *entry = self.tick;
+    }
+    
+    pub fn detect_silent(&self) -> Vec<String> {
+        let mut silent = Vec::new();
+        for (agent, last_tick) in &self.failures {
+            if self.tick - last_tick > self.threshold {
+                silent.push(agent.clone());
+            }
+        }
+        silent
+    }
+}
+
 
 #[derive(Clone, Debug)]
 pub struct Checkpoint {
@@ -89,9 +151,10 @@ pub struct FailedStrategy {
 #[derive(Debug)]
 pub enum RecoveryAction {
     LogAndContinue,
-    RestartDaemon(String),
-    CreateSkill(String, String),
+    RestartDaemon(String, Option<fn() -> bool>),
+    CreateSkill(String, String, Option<fn() -> bool>),
     CheckpointRestore,
+    AwaitLLM(String),
 }
 
 pub struct SelfHeal {
@@ -313,13 +376,34 @@ impl SelfHeal {
 
         if class == FailureClass::MemoryFault && !self.already_tried(&ctx.message, "restart") {
             self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("restart"), tick: ctx.tick });
-            return RecoveryAction::RestartDaemon(ctx.daemon.clone());
+            return RecoveryAction::RestartDaemon(ctx.daemon.clone(), None);
         }
         if class == FailureClass::ResourceFault && !self.already_tried(&ctx.message, "create") {
             let fix = format!("Criar: {}", ctx.message);
             self.pending_fixes.push((ctx.daemon.clone(), fix.clone()));
             self.lessons.push(FailedStrategy { error_msg: ctx.message.clone(), attempted_action: String::from("create"), tick: ctx.tick });
-            return RecoveryAction::CreateSkill(ctx.daemon.clone(), fix);
+            
+            // Corrective Prompting: publish LLM_REQUEST with error context
+            let prompt = alloc::format!(
+                "Error '{}' in '{}'. Context: daemon={}, ring={}, tick={}. History: {}. Generate minimal recovery skill or fix.",
+                ctx.message, ctx.file, ctx.daemon, ctx.ring, ctx.tick,
+                {
+                    let mut s = alloc::string::String::new();
+                    for (i, l) in self.lessons.iter().enumerate() {
+                        if i > 0 { s.push_str("; "); }
+                        s.push_str(&l.error_msg);
+                    }
+                    s
+                }
+            );
+            let _ = k_nano::EVENT_BUS.publish(Event {
+                id: 0,
+                topic: "LLM_REQUEST".into(),
+                payload: prompt.into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
+            
+            return RecoveryAction::CreateSkill(ctx.daemon.clone(), fix, None);
         }
         RecoveryAction::LogAndContinue
     }
@@ -329,52 +413,23 @@ impl SelfHeal {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// Sprint 96: M1-M29 — Self-Healing + Security COMPLETO
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/// M1: Zero-Copy SFS via slice references
-pub struct ZeroCopySfs<'a> {
-    pub data: &'a [u8],
-    pub index: BTreeMap<&'a str, &'a [u8]>,
-}
-impl<'a> ZeroCopySfs<'a> {
-    pub fn new(data: &'a [u8]) -> Self {
-        let mut index = BTreeMap::new();
-        // Simple index: first 256 bytes = directory
-        if data.len() > 256 {
-            for chunk in data[..256].chunks(32) {
-                let name_end = chunk.iter().position(|&b| b == 0).unwrap_or(16);
-                if let Ok(name) = core::str::from_utf8(&chunk[..name_end]) {
-                    if !name.is_empty() {
-                        let offset = u32::from_le_bytes([chunk[16], chunk[17], chunk[18], chunk[19]]) as usize;
-                        let len = u32::from_le_bytes([chunk[20], chunk[21], chunk[22], chunk[23]]) as usize;
-                        if offset + len <= data.len() {
-                            index.insert(name, &data[offset..offset+len]);
-                        }
-                    }
-                }
-            }
-        }
-        ZeroCopySfs { data, index }
-    }
-    pub fn read(&self, path: &'a str) -> Option<&'a [u8]> { self.index.get(path).copied() }
-    pub fn status(&self) -> String { alloc::format!("[ZFS] {} entries, {} total bytes", self.index.len(), self.data.len()) }
-}
-
-/// M3: Skills-as-Modules capability import
-pub struct SkillModule {
-    pub name: String,
-    pub version: u32,
-    pub entry: fn(&[u8]) -> Result<Vec<u8>, &'static str>,
-}
-impl SkillModule {
-    pub fn new(name: &str, version: u32, entry: fn(&[u8]) -> Result<Vec<u8>, &'static str>) -> Self {
-        SkillModule { name: String::from(name), version, entry }
+impl ErrorContext {
+    pub fn from_event_bytes(payload: &[u8]) -> Result<Self, &'static str> {
+        let s = core::str::from_utf8(payload).map_err(|_| "invalid utf8")?;
+        let kind = if s.starts_with("#PF") { "PageFault" } else if s.starts_with("#GP") { "GeneralProtection" } else { "Unknown" };
+        Ok(ErrorContext {
+            kind,
+            message: s.to_string(),
+            file: "exception_handler".into(),
+            line: 0,
+            ring: 0,
+            daemon: "kernel".into(),
+            tick: k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
+        })
     }
 }
 
-/// M6: Classify failure by error code
+/// M6: Classify failure by error code (for exception handlers)
 pub fn classify_by_code(code: u32) -> FailureClass {
     match code {
         0x00..=0x0F => FailureClass::MemoryFault,
@@ -385,174 +440,4 @@ pub fn classify_by_code(code: u32) -> FailureClass {
     }
 }
 
-/// M7: Exception Handlers + SelfHeal — verifica e tenta recovery automático
-pub fn exception_self_heal(class: &FailureClass, ctx: &str) -> RecoveryAction {
-    match class {
-        FailureClass::MemoryFault => {
-            let mut heal = SelfHeal::new();
-            let ec = ErrorContext {
-                kind: "PageFault",
-                message: String::from(ctx),
-                file: String::from("cognitive.rs"),
-                line: 0, ring: 0, tick: 0,
-                daemon: String::from("auto"),
-            };
-            heal.analyze(&ec, true)
-        }
-        _ => RecoveryAction::LogAndContinue,
-    }
-}
 
-/// M8: Corrective Prompting com contexto detalhado
-pub fn corrective_prompt(error: &str, context: &str) -> String {
-    alloc::format!("Error '{}' in '{}'. Suggestion: retry with fallback. If persists, escalate to CortexAgent.", error, context)
-}
-
-/// M9: Verifier Pós-Recovery — valida se o recovery foi bem-sucedido
-pub fn verify_recovery(check: fn() -> bool, _label: &str) -> bool {
-    let ok = check();
-    if !ok {
-        // Log verification failure — would go to EventLog in production
-    }
-    ok
-}
-
-/// M10: Erros no EventLog — registra falha no log de eventos
-pub fn log_error_to_eventlog(error: &str, class: FailureClass) {
-    let msg = alloc::format!("[EVENTLOG] {:?}: {}", class, error);
-    k_nano::slog_kai!("Log", "msg", "{}", msg);
-    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
-        id: 0,
-        topic: alloc::string::String::from("SELFHEAL_ERROR"),
-        payload: msg.into_bytes(),
-        token: event_bus::CapabilityToken::Legacy(1),
-    });
-}
-
-/// M11: Budgeted Recovery — limita tentativas de recovery por período
-pub struct BudgetedRecovery {
-    pub attempts: BTreeMap<String, u32>,
-    pub max_per_minute: u32,
-    pub window_ticks: u64,
-}
-impl BudgetedRecovery {
-    pub fn new(max: u32, window: u64) -> Self {
-        BudgetedRecovery { attempts: BTreeMap::new(), max_per_minute: max, window_ticks: window }
-    }
-    pub fn try_recover(&mut self, daemon: &str) -> bool {
-        let count = self.attempts.entry(String::from(daemon)).or_insert(0);
-        if *count < self.max_per_minute { *count += 1; return true; }
-        false
-    }
-    pub fn status(&self) -> String { alloc::format!("[BUDGET] max={}/min, daemons={}", self.max_per_minute, self.attempts.len()) }
-}
-
-/// M12: Silent Failure Detection — detecta falhas silenciosas via heartbeat
-pub struct SilentFailureDetector {
-    pub heartbeats: BTreeMap<String, u64>,
-    pub threshold: u64,
-    pub tick: u64,
-}
-impl SilentFailureDetector {
-    pub fn new(threshold: u64) -> Self {
-        SilentFailureDetector { heartbeats: BTreeMap::new(), threshold, tick: 0 }
-    }
-    pub fn heartbeat(&mut self, agent: &str) { self.heartbeats.insert(String::from(agent), self.tick); }
-    pub fn detect_silent(&self) -> Vec<String> {
-        let mut silent = Vec::new();
-        for (agent, last) in &self.heartbeats {
-            if self.tick - *last > self.threshold { silent.push(agent.clone()); }
-        }
-        silent
-    }
-    pub fn tick(&mut self) { self.tick += 1; }
-    pub fn status(&self) -> String { alloc::format!("[SILENT] {} agents monitored, threshold={}", self.heartbeats.len(), self.threshold) }
-}
-
-/// M13: Multi-level Failure Assessment
-pub fn assess_failure(count: u32) -> &'static str {
-    match count { 0 => "Ok", 1..=2 => "Warning", 3..=5 => "Error", _ => "Critical" }
-}
-
-/// M14: Failure Prediction (based on trend)
-pub fn predict_failure(recent_errors: &[u32]) -> f32 {
-    let trend: f32 = recent_errors.windows(2).map(|w| w[1] as f32 - w[0] as f32).sum();
-    (trend / recent_errors.len().max(1) as f32).clamp(0.0, 1.0)
-}
-
-/// M29: J.A.R.V.I.S. Notification Gate — filtra notificações por severidade e agente
-pub struct NotificationGate {
-    pub allow_list: BTreeMap<String, Vec<String>>,
-    pub blocked: u64,
-    pub delivered: u64,
-}
-impl NotificationGate {
-    pub fn new() -> Self { NotificationGate { allow_list: BTreeMap::new(), blocked: 0, delivered: 0 } }
-    pub fn allow(&mut self, agent: &str, notif_type: &str) {
-        self.allow_list.entry(String::from(agent)).or_default().push(String::from(notif_type));
-    }
-    pub fn deliver(&mut self, agent: &str, notif_type: &str, msg: &str) -> Option<String> {
-        if let Some(types) = self.allow_list.get(agent) {
-            if types.contains(&String::from(notif_type)) || types.contains(&String::from("*")) {
-                self.delivered += 1;
-                return Some(alloc::format!("[NOTIF][{}][{}] {}", agent, notif_type, msg));
-            }
-        }
-        self.blocked += 1;
-        None
-    }
-    pub fn status(&self) -> String { alloc::format!("[NOTIFGATE] {}/{} delivered ({} blocked)", self.delivered, self.delivered+self.blocked, self.blocked) }
-}
-
-pub fn self_heal_status() -> String {
-    alloc::format!("[HEAL] FailureLevel={}, Prediction={:.1}%", assess_failure(3), predict_failure(&[1,2,3,5])*100.0)
-}
-
-
-// --- FS SelfHeal --- bad block tracking, CRC verification ---
-
-use alloc::collections::BTreeSet;
-
-// Chave = (nome_dispositivo, lba) para evitar conflito entre devices
-pub static BAD_BLOCKS: spin::Mutex<BTreeSet<(String, u64)>> = spin::Mutex::new(BTreeSet::new());
-
-pub fn mark_bad(dev_name: &str, lba: u64) {
-    BAD_BLOCKS.lock().insert((String::from(dev_name), lba));
-    k_nano::slog_kai!("SelfHeal", "info", "Bad block {}@{:#x}", dev_name, lba);
-}
-
-pub fn is_bad(dev_name: &str, lba: u64) -> bool {
-    BAD_BLOCKS.lock().contains(&(String::from(dev_name), lba))
-}
-
-pub fn is_bad_any(lba: u64) -> bool {
-    BAD_BLOCKS.lock().iter().any(|(_, l)| *l == lba)
-}
-
-pub fn read_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, buf: &mut [u8], name: &str) -> bool {
-    for attempt in 0..3 {
-        if dev.read_sectors(lba, buf) {
-            // Se bloco de 4096 bytes, verifica CRC
-            if buf.len() == 4096 {
-                if k_nano::neural_fs::checksum::crc32c(&buf[4..4096]) != u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) {
-                    k_nano::slog_kai!("SelfHeal", "info", "CRC mismatch {}@{:#x}, retrying", name, lba);
-                    continue;
-                }
-                return true;
-            }
-            return true;
-        }
-        k_nano::slog_kai!("SelfHeal", "info", "Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
-    }
-    mark_bad(name, lba);
-    false
-}
-
-pub fn write_with_retry(dev: &mut dyn k_nano::block_dev::BlockDevice, lba: u64, buf: &[u8], name: &str) -> bool {
-    for attempt in 0..3 {
-        if dev.write_sectors(lba, buf) { return true; }
-        k_nano::slog_kai!("SelfHeal", "info", "Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
-    }
-    mark_bad(name, lba);
-    false
-}

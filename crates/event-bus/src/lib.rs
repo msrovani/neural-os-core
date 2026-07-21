@@ -6,7 +6,6 @@ pub mod bus;
 pub mod capability;
 pub mod event;
 pub mod latent;
-pub mod dedup;
 
 pub use bus::{EventBus, Receiver};
 pub use capability::CapabilityToken;

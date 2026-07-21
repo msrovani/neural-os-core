@@ -7,7 +7,6 @@ use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
 use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
-static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
 
@@ -17,6 +16,7 @@ pub const PIC_2_OFFSET: u8 = 40;
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
+pub static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
 /// Posição absoluta atualizada no IRQ/poll (não depende do MouseAgent / Hermes).
 pub static MOUSE_ABS_X: AtomicU32 = AtomicU32::new(640);
 pub static MOUSE_ABS_Y: AtomicU32 = AtomicU32::new(360);

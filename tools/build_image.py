@@ -13,6 +13,7 @@ Uso:
 Pendrive 32 GB: tamanho generoso ok - nao pular BITNET-2B.
 Fluxo QEMU: cargo build --release -> python tools/build_image.py -> .\\run-qemu-uefi.ps1 -Window
 HW 1 stick: cargo build -p boot + python tools/build_image.py --hw --unified
+FIT_GATE=1: filtra PACK_LLM via llmfit_pack_filter (propagado ao mkfat/mkexfat).
 """
 from __future__ import annotations
 

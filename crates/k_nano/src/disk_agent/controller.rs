@@ -1,10 +1,57 @@
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
 use core::cell::UnsafeCell;
+use core::sync::atomic::Ordering;
 use crate::ata::AtaDriver;
 use crate::usb_msc::UsbMassStorage;
 use super::disk_info::*;
 use super::nvme::NvmeDriver;
+use crate::neural_fs::checksum::crc32c;
+use spin::Mutex;
+
+/// Global bad block tracking — key = (device_name, lba)
+pub static BAD_BLOCKS: Mutex<BTreeSet<(String, u64)>> = Mutex::new(BTreeSet::new());
+
+pub fn mark_bad(dev_name: &str, lba: u64) {
+    BAD_BLOCKS.lock().insert((String::from(dev_name), lba));
+    crate::slog_nano!("SelfHeal", "info", "Bad block {}@{:#x}", dev_name, lba);
+}
+
+pub fn is_bad(dev_name: &str, lba: u64) -> bool {
+    BAD_BLOCKS.lock().contains(&(String::from(dev_name), lba))
+}
+
+pub fn is_bad_any(lba: u64) -> bool {
+    BAD_BLOCKS.lock().iter().any(|(_, l)| *l == lba)
+}
+
+/// Default retry-with-CRC logic for block devices (3 attempts)
+pub fn read_with_retry(ctrl: &dyn StorageController, disk: u8, lba: u64, buf: &mut [u8], name: &str) -> bool {
+    for attempt in 0..3 {
+        if ctrl.read_blocks(disk, lba, buf, (buf.len() + 511) / 512) {
+            if buf.len() == 4096 {
+                if crc32c(&buf[4..]) != u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) {
+                    crate::slog_nano!("SelfHeal", "info", "CRC mismatch {}@{:#x}, retrying", name, lba);
+                    continue;
+                }
+            }
+            return true;
+        }
+        crate::slog_nano!("SelfHeal", "info", "Retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+    }
+    mark_bad(name, lba);
+    false
+}
+
+pub fn write_with_retry(ctrl: &dyn StorageController, disk: u8, lba: u64, buf: &[u8], name: &str) -> bool {
+    for attempt in 0..3 {
+        if ctrl.write_blocks(disk, lba, buf, (buf.len() + 511) / 512) { return true; }
+        crate::slog_nano!("SelfHeal", "info", "Write retry {} {:#x} (attempt {})", name, lba, attempt + 1);
+    }
+    mark_bad(name, lba);
+    false
+}
 
 pub trait StorageController: Send {
     fn name(&self) -> &str;
@@ -16,9 +63,9 @@ pub trait StorageController: Send {
     fn read_smart(&self, _disk: u8) -> Option<SmartData> { None }
     fn measure_bandwidth(&self, disk: u8) -> u32 {
         let mut buf = alloc::vec![0u8; 512 * 256];
-        let start = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed);
         if !self.read_blocks(disk, 0, &mut buf, 256) { return 0; }
-        let elapsed = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) - start;
+        let elapsed = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) - start;
         if elapsed == 0 { return 0; }
         (256 * 512 / (elapsed as u32 * 55 / 1000).max(1) / 1024 / 1024).max(1)
     }

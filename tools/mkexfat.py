@@ -22,8 +22,25 @@ SPC = 1 << SPC_SHIFT
 CLUSTER_BYTES = BPS * SPC
 
 
+def _apply_fit_gate_if_enabled() -> None:
+    """FIT_GATE=1 → reescreve PACK_LLM com degraus que cabem na RAM host."""
+    if os.environ.get("FIT_GATE", "").strip() not in ("1", "true", "yes", "on"):
+        return
+    tools_dir = os.path.join(ROOT, "tools")
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    try:
+        import llmfit_pack_filter as fit
+
+        code = fit.run_fit_gate_from_env()
+        print(f"[FIT_GATE] applied exit={code} PACK_LLM={os.environ.get('PACK_LLM')}")
+    except Exception as e:
+        print(f"[FIT_GATE] ERROR skipped: {e}")
+
+
 def pack_llm_set() -> set[str]:
-    """PACK_LLM=850|13|2b|3b|all — default 850 (primeiro degrau)."""
+    """PACK_LLM=850|13|2b|3b|all — default 850 (primeiro degrau). FIT_GATE=1 filtra."""
+    _apply_fit_gate_if_enabled()
     raw = os.environ.get("PACK_LLM", "850").strip().lower()
     if not raw or raw in ("none", "0", "off"):
         return set()
