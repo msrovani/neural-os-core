@@ -147,8 +147,44 @@ impl DisplayAgent {
         }
 
         let mut hit: &'static str = "miss";
+        let mut card_action: Option<(u32, usize)> = None;
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {
+            // ADR-0058 S3: cards ficam por cima — testa antes de dock/app.
+            if (btn & 1) != 0 {
+                match desktop.card_click(cx as i32, cy as i32) {
+                    crate::display::compositor::CardClick::Close => {
+                        drop(comp);
+                        return "card:close";
+                    }
+                    crate::display::compositor::CardClick::DragStart => {
+                        self.dragging = true;
+                        self.drag_id = AppId::None; // arraste de card é do compositor
+                        drop(comp);
+                        return "card:drag";
+                    }
+                    crate::display::compositor::CardClick::Button(id, idx) => {
+                        card_action = Some((id, idx));
+                    }
+                    crate::display::compositor::CardClick::Focus => {
+                        drop(comp);
+                        return "card:focus";
+                    }
+                    crate::display::compositor::CardClick::Miss => {}
+                }
+            }
+            if card_action.is_some() {
+                drop(comp);
+                if let Some((id, idx)) = card_action {
+                    let _ = EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("CARD_ACTION"),
+                        payload: alloc::format!("{}:{}", id, idx).into_bytes(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                }
+                return "card:btn";
+            }
             let apps_clone = desktop.apps.clone();
             let dock_y = desktop.h.saturating_sub(36);
             if cy >= dock_y {
@@ -208,6 +244,18 @@ impl DisplayAgent {
     }
 
     fn apply_ui_spec(&mut self, json: &str) {
+        // ADR-0058: se o JSON traz "body", é um card declarativo → spawn.
+        if json.contains("\"body\"") {
+            if let Some(decl) = crate::display::card::parse_card(json) {
+                if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                    let title = decl.title.clone();
+                    desktop.spawn_card(decl);
+                    ui_spec::mark_ui_ok();
+                    k_nano::slog_jarbas!("UI", "info", "card spawn title={} (ADR-0058)", title);
+                }
+                return;
+            }
+        }
         if let Some(spec) = ui_spec::parse_window_spec(json) {
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                 if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
@@ -266,6 +314,13 @@ impl Agent for DisplayAgent {
                 desktop.register_app(AppId::Camera, "Camera", Layer::AppWindows);
                 desktop.register_app(AppId::AudioViz, "Audio Visualizer", Layer::AppWindows);
                 desktop.ensure_hermes_overlay();
+                // ADR-0058 S1/S2 self-tests (sem modelo) + cards demo (S4).
+                let _ = crate::display::eg::self_test(&mut desktop.fb);
+                let _ = crate::display::card::self_test();
+                desktop.spawn_card(crate::display::card::demo_status_card());
+                desktop.spawn_card(crate::display::card::demo_weather_card());
+                desktop.spawn_card(crate::display::card::demo_call_card());
+                k_nano::slog_jarbas!("UI", "info", "ADR-0058 cards demo: sistema + clima + chamada");
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(av);
                 // Limites + centro para IRQ mouse
@@ -501,7 +556,16 @@ impl Agent for DisplayAgent {
         while self.click_receiver.try_receive().is_some() {}
 
         // Drag: solta no release do botão esquerdo; move enquanto pressionado.
-        if self.dragging {
+        if self.dragging && self.drag_id == AppId::None {
+            // ADR-0058 S3: arraste de card (estado no compositor).
+            if (btn & 1) == 0 {
+                self.dragging = false;
+            }
+            let mut comp = COMPOSITOR.lock();
+            if let Some(ref mut desktop) = *comp {
+                desktop.card_drag_step(mx as i32, my as i32, (btn & 1) != 0);
+            }
+        } else if self.dragging {
             if (btn & 1) == 0 {
                 self.dragging = false;
             } else {

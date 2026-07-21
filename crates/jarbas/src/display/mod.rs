@@ -9,6 +9,8 @@
 //! Interface simplificada (NousResearch-style, sem multi-window compositor).
 
 pub mod fb;
+pub mod eg;
+pub mod card;
 pub mod console;
 pub mod font;
 pub mod agent;
