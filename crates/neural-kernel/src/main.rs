@@ -2104,7 +2104,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     }
 
-
+    // ADR-0057 WS-D/WS-E: conecta aceleradores ao dispatcher de compute do
+    // cortex (só registra se `Ready`/HW real; senão CPU/SMP). NPU = Layer S.
+    k_hal::gpu::compute_dispatch::register_compute_if_ready();
+    k_hal::npu::init_npu();
 
     publish_boot_phase(BootPhase::DriverInit, "NIC/ATA/AHCI/xHCI/GPU probes concluidos");
 

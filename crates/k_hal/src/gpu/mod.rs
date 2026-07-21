@@ -23,6 +23,7 @@ pub mod amd_kiq;
 pub mod amd_mes;
 pub mod amd_mad;
 pub mod backend;
+pub mod compute_dispatch;
 // cube FE (DoubleBuffer) permanece em jarbas — não MMIO
 pub mod ring;
 pub mod firmware;
