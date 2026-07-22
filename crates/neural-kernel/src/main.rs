@@ -225,6 +225,7 @@ mod cognitive;
 mod audio;
 
 mod address_space;
+mod exec_arena;
 mod syscall;
 mod ipc;
 mod capability_gate;
@@ -1737,6 +1738,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
     let _ = hermes_crate::wasmi_rt::self_test();
     let _ = hermes_crate::app_factory::self_test();
+    // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
+    let _ = crate::exec_arena::self_test();
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
     crate::display::fb::boot_ckpt(36, "package_hub");
