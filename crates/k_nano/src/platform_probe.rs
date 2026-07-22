@@ -66,6 +66,7 @@ pub enum IsaPath {
     Scalar = 0,
     Sse42 = 1,
     Avx2Fma = 2,
+    Avx512F = 3,
 }
 
 /// Topologia de cache (bytes).
@@ -97,6 +98,7 @@ impl Default for CacheTopology {
 pub struct FeatureGate {
     pub allow_smp: bool,
     pub allow_avx2: bool,
+    pub allow_avx512: bool,
     pub allow_fma: bool,
     pub allow_ipi_broadcast: bool,
     pub prefer_serial_tunnel: bool,
@@ -112,6 +114,7 @@ impl FeatureGate {
         Self {
             allow_smp: false,
             allow_avx2: false,
+            allow_avx512: false,
             allow_fma: false,
             allow_ipi_broadcast: false,
             prefer_serial_tunnel: false,
@@ -135,12 +138,13 @@ static PROBED: AtomicU8 = AtomicU8::new(0);
 
 const BIT_SMP: u32 = 1 << 0;
 const BIT_AVX2: u32 = 1 << 1;
-const BIT_FMA: u32 = 1 << 2;
-const BIT_IPI: u32 = 1 << 3;
-const BIT_SERIAL: u32 = 1 << 4;
-const BIT_EP: u32 = 1 << 5;
-const BIT_PREFETCH: u32 = 1 << 6;
-const BIT_CLFLUSHOPT: u32 = 1 << 7;
+const BIT_AVX512: u32 = 1 << 2;
+const BIT_FMA: u32 = 1 << 3;
+const BIT_IPI: u32 = 1 << 4;
+const BIT_SERIAL: u32 = 1 << 5;
+const BIT_EP: u32 = 1 << 6;
+const BIT_PREFETCH: u32 = 1 << 7;
+const BIT_CLFLUSHOPT: u32 = 1 << 8;
 
 static mut CPU_FEATURES: CpuFeatures = CpuFeatures {
     sse42: false,
@@ -356,9 +360,12 @@ pub fn build_gate(hv: HypervisorKind, isa: &CpuFeatures) -> FeatureGate {
     let tcg = hv == HypervisorKind::Tcg;
     // Gate usa XSAVE (capacidade), não OSXSAVE (já habilitado) — senão AVX2 nunca liga pré-CR4.
     let allow_avx2 = isa.avx2 && isa.xsave && isa.avx && !tcg;
+    let allow_avx512 = isa.avx512f && isa.xsave && isa.avx && !tcg;
     let allow_fma = allow_avx2 && isa.fma;
 
-    let isa_path = if allow_avx2 {
+    let isa_path = if allow_avx512 {
+        IsaPath::Avx512F
+    } else if allow_avx2 {
         IsaPath::Avx2Fma
     } else if isa.sse42 {
         IsaPath::Sse42
@@ -369,6 +376,7 @@ pub fn build_gate(hv: HypervisorKind, isa: &CpuFeatures) -> FeatureGate {
     FeatureGate {
         allow_smp,
         allow_avx2,
+        allow_avx512,
         allow_fma,
         allow_ipi_broadcast: allow_smp,
         prefer_serial_tunnel: prefer_serial,
@@ -395,6 +403,9 @@ pub fn detect() {
     }
     if gate.allow_avx2 {
         bits |= BIT_AVX2;
+    }
+    if gate.allow_avx512 {
+        bits |= BIT_AVX512;
     }
     if gate.allow_fma {
         bits |= BIT_FMA;
@@ -436,17 +447,19 @@ pub fn detect() {
     crate::slog_nano!(
         "ENV",
         "info",
-        "hv={} sandbox={} smp={} avx2={} fma={} max_aps={} isa={}",
+        "hv={} sandbox={} smp={} avx2={} avx512={} fma={} max_aps={} isa={}",
         hv.name(),
         hv.is_sandbox(),
         gate.allow_smp,
         gate.allow_avx2,
+        gate.allow_avx512,
         gate.allow_fma,
         gate.max_aps,
         match gate.isa_path {
             IsaPath::Scalar => "scalar",
             IsaPath::Sse42 => "sse42",
             IsaPath::Avx2Fma => "avx2+fma",
+            IsaPath::Avx512F => "avx512f",
         }
     );
     crate::slog_nano!(
@@ -483,6 +496,7 @@ pub fn hypervisor() -> HypervisorKind {
 pub fn gate() -> FeatureGate {
     let bits = GATE_BITS.load(Ordering::Acquire);
     let isa_path = match ISA_PATH.load(Ordering::Acquire) {
+        3 => IsaPath::Avx512F,
         2 => IsaPath::Avx2Fma,
         1 => IsaPath::Sse42,
         _ => IsaPath::Scalar,
@@ -490,6 +504,7 @@ pub fn gate() -> FeatureGate {
     FeatureGate {
         allow_smp: bits & BIT_SMP != 0,
         allow_avx2: bits & BIT_AVX2 != 0,
+        allow_avx512: bits & BIT_AVX512 != 0,
         allow_fma: bits & BIT_FMA != 0,
         allow_ipi_broadcast: bits & BIT_IPI != 0,
         prefer_serial_tunnel: bits & BIT_SERIAL != 0,
@@ -517,6 +532,10 @@ pub fn cache_topology() -> CacheTopology {
 
 pub fn allow_avx2() -> bool {
     gate().allow_avx2
+}
+
+pub fn allow_avx512() -> bool {
+    gate().allow_avx512
 }
 
 pub fn allow_smp() -> bool {

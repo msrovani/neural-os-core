@@ -1499,42 +1499,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
 
 /// Fase 0: dump top-N logit values + token IDs para parity host vs kernel.
 fn dump_logits_top(logits: &Tensor, n: usize) {
-    let cols = logits.shape.1;
-    let n = n.min(cols).min(64);
-    // fixed-size array; `n` será ≤64
-    let mut top: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
-    let mut filled = 0usize;
-    for j in 0..cols {
-        let v = logits.data[j];
-        if v.is_nan() || v == NEG_INFINITY { continue; }
-        if filled < n {
-            top[filled] = (j as u32, v);
-            filled += 1;
-        } else {
-            let mut worst = 0usize;
-            for i in 1..n {
-                if top[i].1 < top[worst].1 { worst = i; }
-            }
-            if v > top[worst].1 {
-                top[worst] = (j as u32, v);
-            }
-        }
-    }
-    if filled == 0 { return; }
-    // sort descending by value
-    for i in 0..filled.min(n) {
-        for j in i + 1..filled.min(n) {
-            if top[j].1 > top[i].1 {
-                top.swap(i, j);
-            }
-        }
-    }
-    let ids: alloc::vec::Vec<u32> = top[..filled.min(n)].iter().map(|(id, _)| *id).collect();
-    let vals: alloc::vec::Vec<u32> = top[..filled.min(n)].iter().map(|(_, v)| v.to_bits()).collect();
-    k_nano::slog_bin!("FWD", "info", "logits_top_n={} ids={:?} logits_bits={:?}",
-        filled.min(n),
-        ids,
-        vals);
+    cortex_crate::cortex::dump_logits_top(logits, n);
 }
 
 fn argmax_row(logits: &Tensor, row: usize) -> u32 {
@@ -1555,399 +1520,50 @@ fn argmax_row(logits: &Tensor, row: usize) -> u32 {
     best
 }
 
-/// Argmax HF vocab: top-64 brutos → re-score com BPE (letras > lixo); evita janela recente.
+/// Argmax HF vocab: delegates to cortex-crate's u16 version.
 fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
-    let cols = logits.shape.1;
-    let start = row * cols;
-    let hi = cols.min(128000);
-    // 1) junta candidatos brutos (top-64) sem alocar heap grande
-    let mut top: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
-    let mut filled = 0usize;
-    for j in 0..hi {
-        let id = j as u32;
-        if recent.iter().any(|&p| p == id) {
-            continue;
-        }
-        if crate::bpe::is_special_id(id) {
-            continue;
-        }
-        let v = logits.data[start + j];
-        if v.is_nan() { continue; }
-        // inserção parcial no top
-        if filled < 64 {
-            top[filled] = (id, v);
-            filled += 1;
-        } else {
-            // substitui o pior se melhor
-            let mut worst = 0usize;
-            for i in 1..64 {
-                if top[i].1 < top[worst].1 { worst = i; }
-            }
-            if v > top[worst].1 {
-                top[worst] = (id, v);
-            }
-        }
-    }
-    // Soft-float: forçar lexicon clima no pool (fora do top-64 bruto → mash EN).
-    let weather = crate::bpe::weather_candidate_ids();
-    let mut wx: [(u32, f32); 24] = [(0, NEG_INFINITY); 24];
-    let mut wx_n = 0usize;
-    for &id in weather.iter() {
-        if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| p == id) { continue; }
-        let v = logits.data[start + id as usize];
-        if v.is_nan() { continue; }
-        if wx_n < 24 {
-            wx[wx_n] = (id, v);
-            wx_n += 1;
-        }
-    }
-    if filled == 0 && wx_n == 0 {
-        return crate::bpe::eos_id();
-    }
-    // 2) re-score com peça BPE (+bias clima)
-    let mut best = if filled > 0 { top[0].0 } else { wx[0].0 };
-    let mut best_val = NEG_INFINITY;
-    for i in 0..filled {
-        let (id, v) = top[i];
-        let s = v + crate::bpe::score_piece(id);
-        if s > best_val {
-            best_val = s;
-            best = id;
-        }
-    }
-    for i in 0..wx_n {
-        let (id, v) = wx[i];
-        let s = v + crate::bpe::score_piece(id);
-        if s > best_val {
-            best_val = s;
-            best = id;
-        }
-    }
-    let _ = best_val;
-    best
+    let r: Vec<u16> = recent.iter().map(|&t| t as u16).collect();
+    cortex_crate::cortex::argmax_row_hf_vocab(logits, row, &r) as u32
 }
 
 /// Soft-float saudacao: lexicon BPB1 (Good/Hello/systems/online…) + logits reais.
 fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
-    let cols = logits.shape.1;
-    let start = row * cols;
-    let hi = cols.min(128000);
-    let step = recent.len().saturating_sub(1);
-    let prev = recent.last().copied();
-    let masked = crate::bpe::greeting_step_candidates(step, prev);
-    let pool = if masked.is_empty() {
-        crate::bpe::greeting_candidate_ids()
-    } else {
-        masked
-    };
-    let mut best = pool[0];
-    let mut best_val = NEG_INFINITY;
-    let mut any = false;
-    for &id in pool.iter() {
-        if (id as usize) >= hi {
-            continue;
-        }
-        if recent.iter().any(|&p| p == id) {
-            continue;
-        }
-        let v = logits.data[start + id as usize];
-        if v.is_nan() {
-            continue;
-        }
-        let mut s = v + crate::bpe::score_piece(id);
-        s += crate::bpe::greeting_position_bias(id, step);
-        s += crate::bpe::greeting_bigram_bias(prev, id);
-        if !any || s > best_val {
-            best_val = s;
-            best = id;
-            any = true;
-        }
-    }
-    let _ = best_val;
-    if any {
-        best
-    } else {
-        let fb = crate::bpe::greeting_candidate_ids();
-        let mut best2 = fb[0];
-        let mut best2_val = NEG_INFINITY;
-        for &id in fb.iter() {
-            if (id as usize) >= hi {
-                continue;
-            }
-            let v = logits.data[start + id as usize];
-            if v.is_nan() {
-                continue;
-            }
-            let mut s = v + crate::bpe::score_piece(id);
-            s += crate::bpe::greeting_position_bias(id, step);
-            s += crate::bpe::greeting_bigram_bias(prev, id);
-            if s > best2_val {
-                best2_val = s;
-                best2 = id;
-            }
-        }
-        best2
-    }
+    let r: Vec<u16> = recent.iter().map(|&t| t as u16).collect();
+    cortex_crate::cortex::argmax_row_greeting_only(logits, row, &r) as u32
 }
 
-/// Soft-float clima: escolhe só entre lexicon climático (logits reais; sem string canned).
-/// Sem fallback HF — evita "tempo" + lixo EN (Lie/maze).
-/// Bias de posição/bigram PT: favorece "O tempo esta bom/claro/hoje" sobre "tempo rain".
+/// Soft-float clima: delegates to cortex-crate's u16 version.
 fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u32]) -> u32 {
-    let cols = logits.shape.1;
-    let start = row * cols;
-    let hi = cols.min(128000);
-    let step = recent.len().saturating_sub(1); // 0 no 1º token gerado após prompt
-    let prev = recent.last().copied();
-    // Máscara dura por passo + lexicon completo como fallback
-    let masked = crate::bpe::weather_step_candidates(step, prev);
-    let weather = if masked.is_empty() {
-        crate::bpe::weather_candidate_ids()
-    } else {
-        masked
-    };
-    let mut best = weather[0];
-    let mut best_val = NEG_INFINITY;
-    let mut any = false;
-    for &id in weather.iter() {
-        if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| p == id) { continue; }
-        if crate::bpe::weather_same_stem(prev, id) { continue; }
-        if recent.iter().any(|&p| crate::bpe::weather_same_stem(Some(p), id)) { continue; }
-        let v = logits.data[start + id as usize];
-        if v.is_nan() { continue; }
-        let mut s = v + crate::bpe::score_piece(id);
-        s += crate::bpe::weather_position_bias(id, step);
-        s += crate::bpe::weather_bigram_bias(prev, id);
-        if crate::bpe::weather_is_en_loan(id) {
-            s -= 2.0;
-        }
-        if !any || s > best_val {
-            best_val = s;
-            best = id;
-            any = true;
-        }
-    }
-    let _ = best_val;
-    if any {
-        best
-    } else {
-        let fallback = crate::bpe::weather_candidate_ids();
-        let mut best2 = fallback[0];
-        let mut best2_val = NEG_INFINITY;
-        for &id in fallback.iter() {
-            if (id as usize) >= hi { continue; }
-            let v = logits.data[start + id as usize];
-            if v.is_nan() { continue; }
-            let mut s = v + crate::bpe::score_piece(id);
-            s += crate::bpe::weather_position_bias(id, step);
-            s += crate::bpe::weather_bigram_bias(prev, id);
-            if s > best2_val {
-                best2_val = s;
-                best2 = id;
-            }
-        }
-        best2
-    }
+    let r: Vec<u16> = recent.iter().map(|&t| t as u16).collect();
+    cortex_crate::cortex::argmax_row_weather_only(logits, row, &r) as u32
 }
 
 /// Argmax restrito ao vocab CHAR (ASCII imprimível) quando BPE ausente.
 /// Preferência: letras > outros; evita dígito repetido (root de "6666").
 fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u32>) -> u32 {
-    let cols = logits.shape.1;
-    let start = row * cols;
-    let hi = (VOCAB_SIZE as usize).min(cols);
-    let lo = CHAR_OFFSET as usize;
-
-    let score = |j: usize, v: f32| -> f32 {
-        let ch = ((j as u16).wrapping_sub(CHAR_OFFSET).wrapping_add(32)) as u8;
-        let mut s = v;
-        // Prefer letters (PT words) over digits/punct
-        if ch.is_ascii_alphabetic() {
-            s += 2.0;
-        } else if ch.is_ascii_digit() {
-            s -= 4.0;
-            if let Some(p) = prev {
-                let pch = ((p as u16).wrapping_sub(CHAR_OFFSET).wrapping_add(32)) as u8;
-                if pch.is_ascii_digit() {
-                    s -= 8.0; // quebra lock de dígito
-                }
-            }
-        }
-        if let Some(p) = prev {
-            if j as u32 == p {
-                s -= 10.0;
-            }
-        }
-        s
-    };
-
-    let mut best = CHAR_OFFSET as u32;
-    let mut best_val = NEG_INFINITY;
-    let mut any = false;
-    for j in lo..hi {
-        let v = logits.data[start + j];
-        if v.is_nan() { continue; }
-        let s = score(j, v);
-        if !any || s > best_val {
-            best_val = s;
-            best = j as u32;
-            any = true;
-        }
-    }
-    if !any {
-        return EOS as u32;
-    }
-    let _ = best_val;
-    best
+    let prev_u16 = prev.map(|t| t as u16);
+    cortex_crate::cortex::argmax_row_char_vocab(logits, row, prev_u16) as u32
 }
 
-// ── F1: Coherence buffer (temperature + top-k + repetition penalty + Gumbel-max) ──
+// ── F1–F3: Coherence + helpers delegated to cortex-crate ──
 
-/// Gate: set true to enable temperature-based sampling instead of argmax.
-pub static COHERENCE_ENABLED: core::sync::atomic::AtomicBool =
-    core::sync::atomic::AtomicBool::new(false);
-
-/// Coherence sampling parameters (F2: configurable at runtime).
-pub static COHERENCE_TEMP: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(f32::to_bits(0.7));
-pub static COHERENCE_TOP_K: core::sync::atomic::AtomicUsize =
-    core::sync::atomic::AtomicUsize::new(16);
-pub static COHERENCE_REPEAT: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(f32::to_bits(1.2));
-pub static COHERENCE_TOP_P: core::sync::atomic::AtomicU32 =
-    core::sync::atomic::AtomicU32::new(f32::to_bits(0.0)); // 0 = disabled
-
-/// Convenience: enable coherence + set all params in one call.
+/// Thin wrapper: delegates to cortex-crate's set_coherence + local log.
 pub fn set_coherence(enabled: bool, temp: f32, top_k: usize, repeat: f32) {
-    COHERENCE_ENABLED.store(enabled, core::sync::atomic::Ordering::Relaxed);
-    COHERENCE_TEMP.store(f32::to_bits(temp), core::sync::atomic::Ordering::Relaxed);
-    COHERENCE_TOP_K.store(top_k, core::sync::atomic::Ordering::Relaxed);
-    COHERENCE_REPEAT.store(f32::to_bits(repeat), core::sync::atomic::Ordering::Relaxed);
+    cortex_crate::cortex::set_coherence(enabled, temp, top_k, repeat);
     k_nano::slog_bin!("GEN", "info",
         "coherence set enabled={} temp={} top_k={} repeat={}",
         enabled as u8, temp, top_k, repeat);
 }
 
-/// Fast non-crypto PRNG seeded once from hardware RNG.
-struct SampleRng(u32);
-
-impl SampleRng {
-    fn seed() -> Self {
-        let s = crate::hw_rng::HardwareRandom::next_u64_retry(4)
-            .unwrap_or(0xDEAD_BEEF) as u32;
-        Self(s)
-    }
-    fn next_u32(&mut self) -> u32 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 17;
-        self.0 ^= self.0 << 5;
-        self.0
-    }
-    fn uniform(&mut self) -> f32 {
-        (self.next_u32() >> 8) as f32 * 1.0 / (1u64 << 24) as f32
-    }
-    /// Gumbel noise: -ln(-ln(u)).
-    fn gumbel(&mut self) -> f32 {
-        let u = self.uniform()
-            .max(core::f32::EPSILON)
-            .min(1.0 - core::f32::EPSILON);
-        -libm::logf(-libm::logf(u))
-    }
-}
-
-/// Sample token with configurable temperature, top-k, repetition penalty.
-/// Uses Gumbel-max trick for correct sampling from softmax over top-k.
 fn sample_token_coherence(logits: &crate::tensor::Tensor, row: usize, recent: &[u32]) -> u32 {
-    let cols = logits.shape.1;
-    let start = row * cols;
-    let hi = cols.min(128000);
-
-    let temp = f32::from_bits(COHERENCE_TEMP.load(core::sync::atomic::Ordering::Relaxed));
-    let top_k = COHERENCE_TOP_K.load(core::sync::atomic::Ordering::Relaxed);
-    let repeat = f32::from_bits(COHERENCE_REPEAT.load(core::sync::atomic::Ordering::Relaxed));
-
-    // 1) Collect top-64 candidates (same as argmax_row_hf_vocab)
-    let mut cand: [(u32, f32); 64] = [(0, core::f32::NEG_INFINITY); 64];
-    let mut n = 0usize;
-    for j in 0..hi {
-        let id = j as u32;
-        if recent.iter().any(|&p| p == id) { continue; }
-        if crate::bpe::is_special_id(id) { continue; }
-        let v = logits.data[start + j];
-        if v.is_nan() { continue; }
-        if n < 64 {
-            cand[n] = (id, v);
-            n += 1;
-        } else {
-            let mut worst = 0usize;
-            for i in 1..64 { if cand[i].1 < cand[worst].1 { worst = i; } }
-            if v > cand[worst].1 { cand[worst] = (id, v); }
-        }
-    }
-    if n == 0 { return crate::bpe::eos_id(); }
-
-    // 2) Repetition penalty
-    if (repeat - 1.0).abs() > 0.001 {
-        for i in 0..n {
-            if recent.iter().any(|&p| p == cand[i].0) {
-                let v = cand[i].1;
-                cand[i].1 = if v >= 0.0 { v / repeat } else { v * repeat };
-            }
-        }
-    }
-
-    // 3) Temperature scaling (clamped to avoid division by zero)
-    let t = if temp < 0.001 { 0.7 } else { temp };
-    for i in 0..n { cand[i].1 /= t; }
-
-    // 4) Top-k sort (descending)
-    cand[..n].sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
-    let k = n.min(if top_k > 0 { top_k } else { n });
-
-    // 5) Gumbel-max = sample from softmax over top-k
-    let mut rng = SampleRng::seed();
-    let mut best = cand[0].0;
-    let mut best_val = core::f32::NEG_INFINITY;
-    for i in 0..k {
-        let noisy = cand[i].1 + rng.gumbel();
-        if noisy > best_val { best_val = noisy; best = cand[i].0; }
-    }
-    k_nano::slog_bin!("GEN", "info", "coherence temp={} top_k={} best={} n_cand={}", t, k, best, n);
-    best
+    let r: Vec<u16> = recent.iter().map(|&t| t as u16).collect();
+    cortex_crate::cortex::sample_token_coherence(logits, row, &r) as u32
 }
 
-/// Soft-float 2B: encurta prompt sem deixar sozinho o EOS (encode CHAR termina em EOS).
 fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
-    let mut t: Vec<u32> = tokens.iter().copied().collect();
-    if use_bpe {
-        // Chat frame Llama curto (≤8). Não colapsar para BOS+1 — perde moldura assistant.
-        const MAX_CHAT: usize = 8;
-        if t.len() > MAX_CHAT {
-            t.truncate(MAX_CHAT);
-        }
-        return t;
-    }
-    if t.last() == Some(&(EOS as u32)) {
-        t.pop();
-    }
-    // Mantem BOS + 1 char de conteudo. KEEP>1 explode tempo no soft-float 2B.
-    const KEEP: usize = 1;
-    if t.is_empty() {
-        return vec![BOS as u32];
-    }
-    if t[0] != BOS as u32 {
-        t.insert(0, BOS as u32);
-    }
-    if t.len() > KEEP + 1 {
-        let mut slim = vec![BOS as u32];
-        let from = t.len() - KEEP;
-        slim.extend_from_slice(&t[from..]);
-        slim
-    } else {
-        t
-    }
+    let t_u16: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
+    let result = cortex_crate::cortex::slim_prompt_tokens_for_heavy(&t_u16, use_bpe);
+    result.into_iter().map(|t| t as u32).collect()
 }
 
 pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
@@ -2031,7 +1647,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
         if step == 0 {
             dump_logits_top(&logits, 16);
         }
-        let next = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
+        let next = if cortex_crate::cortex::COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
             sample_token_coherence(&logits, 0, &recent)
         } else if use_bpe {
             // Soft-float 2B Llama: lexicon saudacao/clima. SP32 / vocab≤33k: argmax HF pleno.
@@ -2114,7 +1730,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
         let eot = if use_bpe { crate::bpe::eot_id() } else { EOS as u32 };
         t == eos || t == eot || t >= 128000
     }) { "EOS" } else { "MAX_GEN" };
-    let coh = COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed);
+    let coh = cortex_crate::cortex::COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_bin!("GEN", "info",
         "result first={} last={} stop={} bpe={} coherence={} ids={:?}",
         gen.first().copied().unwrap_or(0xFFFF),

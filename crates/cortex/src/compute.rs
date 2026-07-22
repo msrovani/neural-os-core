@@ -19,10 +19,11 @@ pub type TernaryFn = fn(&PackedTernaryTensor, &Tensor) -> Option<Tensor>;
 static GPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
 static NPU_TERNARY: AtomicUsize = AtomicUsize::new(0);
 
-// Telemetria (ADR-0057): quantas ops cada anel tratou.
+// Telemetria (ADR-0057 + ADR-0061): quantas ops cada anel tratou.
 static N_NPU: AtomicU64 = AtomicU64::new(0);
 static N_GPU: AtomicU64 = AtomicU64::new(0);
 static N_SMP: AtomicU64 = AtomicU64::new(0);
+static N_AVX512: AtomicU64 = AtomicU64::new(0);
 static N_CPU: AtomicU64 = AtomicU64::new(0);
 
 /// Ring 0 (intent/router) — registrado por `k_ai` quando uma NPU fica pronta.
@@ -85,12 +86,13 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     None
 }
 
-/// (npu, gpu, smp, cpu) — contadores de dispatch para telemetria/serial.
-pub fn dispatch_summary() -> (u64, u64, u64, u64) {
+/// (npu, gpu, smp, avx512, cpu) — contadores de dispatch para telemetria/serial.
+pub fn dispatch_summary() -> (u64, u64, u64, u64, u64) {
     (
         N_NPU.load(Ordering::Relaxed),
         N_GPU.load(Ordering::Relaxed),
         N_SMP.load(Ordering::Relaxed),
+        N_AVX512.load(Ordering::Relaxed),
         N_CPU.load(Ordering::Relaxed),
     )
 }

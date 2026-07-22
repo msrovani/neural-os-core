@@ -110,6 +110,13 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 4.5 | **WiFi Agnostic Engine** | 🔄 WifiChipset trait + AgnosticWifiEngine com DMA rings. Suporte a Intel, Realtek, Atheros, Broadcom via tabela de 50+ VID/DID. | iwlwifi, rtlwifi, ath drivers | GPLv2 | `generic_wifi.rs` | ✅ 0 err |
 | 4.6 | **BrowserAgent HTTP Real** | 🏆 `fetch_page()` com DNS resolve + HTTP GET real via smoltcp. Antes: retornava placeholder HTML. Agora: requisição real. | Chromium networking (conceito) | BSD | `browser_agent.rs` | ✅ 0 err |
 | 4.7 | **Serial SLIP Tunnel** | 🏆 Bridge serial TCP para rede em sandbox (QEMU TCG). `serial_bridge.py` com watchdog + rate limiting. | SLIP protocol (RFC 1055), QEMU serial | — (padrão internet) | `slip.rs`, `tools/serial_bridge.py` | ✅ 0 err |
+| 4.8 | **P2P Orchestration — Lamport Clocks** | 🏆 Relógio lógico de Lamport atômico para ordenação de eventos distribuídos sem NTP/RTC. `tick()` no envio, `update()` no recebimento (max+1). | Lamport timestamps paper (1978) | — (conhecimento científico) | `p2p/clock.rs` | ✅ 0 err |
+| 4.9 | **P2P Orchestration — Vector Clocks** | 🏆 Vector Clock para rastreamento de causalidade multi-nó (até 16 nós). Detecção de eventos concorrentes e relações happens-before. | Vector Clocks papers | — (conhecimento científico) | `p2p/clock.rs` | ✅ 0 err |
+| 4.10 | **P2P Orchestration — NoProto Zero-Copy** | 🏆 Parser zero-copy com `#[repr(C, packed)]` para deserialização direta sobre buffer de rede. Slice-overlay sem alocação de memória. | NoProto (conceito), flatbuffers | — (conhecimento científico) | `p2p/noproto.rs` | ✅ 0 err |
+| 4.11 | **P2P Orchestration — APIC Async Executor** | 🏆 Executor async baseado em APIC Timer com SPSC lock-free ring buffer (`WakerQueue`). Interrupções de hardware → `waker.wake()` sem CPU ociosa. | Embassy async (conceito), APIC spec | — (conhecimento científico) | `async_rt.rs` | ✅ 0 err |
+| 4.12 | **P2P Orchestration — NVMe Driver** | 🏆 Driver NVMe bare-metal via PCIe MMIO. Admin SQ/CQ, `nvme_read_block()`, `nvme_write_block()`. | NVMe spec, Linux nvme driver | GPLv2 | `storage/nvme.rs` | ✅ 0 err |
+| 4.13 | **P2P Orchestration — TicKV Integration** | 🏆 Flash Driver trait para TicKV sobre NVMe. Persistência de audit logs e resultados de inferência. | TicKV (Tencent) | Apache 2.0 | `storage/tickv.rs` | ✅ 0 err |
+| 4.14 | **P2P Orchestration — Hybrid Transport** | 🏆 Transporte híbrido: Raw L2 Ethernet (mesma sub-rede) ou UDP/IP smoltcp (roteado). Seleção automática por `TransportMode`. | smoltcp, Ethernet spec | MIT | `net/transport.rs` | ✅ 0 err |
 
 ---
 

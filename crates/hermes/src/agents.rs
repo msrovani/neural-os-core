@@ -18,6 +18,8 @@ use k_nano::{println, kjson};
 use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
             CONVERSATION_TRACKER, PENDING_SKILL, SELF_HEAL, BITNET_TRAINER,
             APPROVAL_GATE, boot_log_agent, agency, hw_agents, inventory};
+use crate::structured_decode::{StructuredDecoder, DecodeMode};
+use crate::decode_harness::recognize;
 
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
@@ -295,7 +297,21 @@ impl Agent for CortexAgent {
             };
             k_nano::slog_cortex!("LLM", "info", "Calling generate_via_model...");
             let t0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let output = cortex::cortex::generate_via_model(&prompt);
+            // F4: structured decode when pattern is recognized
+            let pattern = recognize(&user_text);
+            let output = match pattern {
+                crate::decode_harness::SkillPattern::Add => {
+                    let mut dec = StructuredDecoder::new(DecodeMode::Number);
+                    cortex::cortex::generate_via_model_with_decoder(&prompt, &mut dec)
+                }
+                crate::decode_harness::SkillPattern::Echo => {
+                    let mut dec = StructuredDecoder::new(DecodeMode::Alpha);
+                    cortex::cortex::generate_via_model_with_decoder(&prompt, &mut dec)
+                }
+                crate::decode_harness::SkillPattern::Default => {
+                    cortex::cortex::generate_via_model(&prompt)
+                }
+            };
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
             let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {

@@ -22,8 +22,14 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
     if k != k2 { return None; }
 
     // ADR-0057 WS-C: choke point de dispatch (NPU → GPU → CPU-SMP). Se nenhum
-    // acelerador/paralelo tratou, segue no caminho AVX2/scalar abaixo.
+    // acelerador/paralelo tratou, segue no caminho AVX-512/AVX2/scalar abaixo.
     if let Some(r) = crate::compute::dispatch_ternary(weight, input) {
+        return Some(r);
+    }
+
+    // ADR-0061: AVX-512 (ZMM 512-bit, 256 pesos/ciclo) antes de AVX2.
+    // Só ativa se FeatureGate.allow_avx512 e shape compatível (n>=16, n%4==0).
+    if let Some(r) = crate::bitnet_avx512::ternary_matmul_avx512(weight, input) {
         return Some(r);
     }
 

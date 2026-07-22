@@ -12,8 +12,7 @@ extern crate alloc;
 pub mod agency;
 pub mod agency_importer;
 pub mod agency_seed;
-// ponytail: arch module disabled (pre-existing SIMD intrinsics errors, unrelated to BEI)
-// pub mod arch;
+pub mod arch;
 pub mod audit;
 pub mod boot_log_agent;
 pub mod chunker;

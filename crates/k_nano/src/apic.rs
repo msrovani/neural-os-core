@@ -617,3 +617,15 @@ pub unsafe fn send_ipi_call_function() {
         write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
     }
 }
+
+/// Send End of Interrupt (EOI) to the Local APIC
+/// Used by interrupt handlers to signal completion
+pub unsafe fn end_of_interrupt() {
+    let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_EOI));
+        msr.write(0);
+    } else {
+        write_volatile((base + LAPIC_EOI) as *mut u32, 0);
+    }
+}

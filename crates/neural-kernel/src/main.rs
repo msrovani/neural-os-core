@@ -108,7 +108,7 @@ pub use cortex_crate::{
 mod model_hub;
 // ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
-    actor_registry, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
+    actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp,
     memory_store, net_bridge, optimizer, package_hub, plugin_hub, rustpython_no_std, safety,
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
@@ -1429,12 +1429,30 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     #[cfg(target_arch = "x86_64")]
     {
         let avx = k_nano::platform_probe::allow_avx2();
+        let avx512 = k_nano::platform_probe::allow_avx512();
         let path = match k_nano::platform_probe::isa_path() {
+            k_nano::platform_probe::IsaPath::Avx512F => "avx512f",
             k_nano::platform_probe::IsaPath::Avx2Fma => "avx2+fma",
             k_nano::platform_probe::IsaPath::Sse42 => "sse42",
             k_nano::platform_probe::IsaPath::Scalar => "scalar",
         };
-        k_nano::slog_bin!("SIMD", "info", "AVX2={} isa={}", if avx { "SIM" } else { "NAO" }, path);
+        k_nano::slog_bin!("SIMD", "info", "AVX2={} AVX512={} isa={}", if avx { "SIM" } else { "NAO" }, if avx512 { "SIM" } else { "NAO" }, path);
+    }
+
+    // ADR-0061: Cognitive adaptation — Hermes decide política de execução
+    // baseada na topologia de hardware detectada (Xeon/EPYC/Client).
+    {
+        let xeon_report = k_nano::hardware::xeon::discover_xeon_topology();
+        let _policy = adaptation::cognitive_adaptation(&xeon_report);
+        k_nano::slog_bin!(
+            "ADAPT",
+            "info",
+            "Xeon gen={:?} sockets={} cores={} simd={}",
+            xeon_report.generation,
+            xeon_report.sockets.len(),
+            xeon_report.total_physical_cores,
+            k_nano::hardware::xeon::recommended_simd_width(&xeon_report)
+        );
     }
 
 

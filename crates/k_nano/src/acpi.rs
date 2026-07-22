@@ -410,3 +410,206 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         slp_typa,
     })
 }
+
+// ─── ADR-0061: ACPI SRAT (NUMA topology) ────────────────────────────────
+
+/// Faixa de memória física pertencente a um Proximity Domain NUMA.
+#[derive(Debug, Clone, Copy)]
+pub struct NumaMemoryRange {
+    pub base: u64,
+    pub length: u64,
+    pub proximity_domain: u32,
+}
+
+/// Mapeamento APIC_ID → Proximity Domain NUMA.
+#[derive(Debug, Clone, Copy)]
+pub struct NumaApicAffinity {
+    pub apic_id: u32,
+    pub proximity_domain: u32,
+}
+
+/// Mapa de topologia NUMA extraído da tabela ACPI SRAT.
+#[derive(Debug, Clone, Default)]
+pub struct NumaTopologyMap {
+    pub memory_ranges: Vec<NumaMemoryRange>,
+    pub apic_affinities: Vec<NumaApicAffinity>,
+    pub proximity_domain_count: u32,
+}
+
+impl NumaTopologyMap {
+    pub fn is_multi_domain(&self) -> bool {
+        self.proximity_domain_count > 1
+    }
+
+    /// Encontra o Proximity Domain para um endereço físico.
+    pub fn domain_for_phys(&self, phys: u64) -> Option<u32> {
+        for r in &self.memory_ranges {
+            if phys >= r.base && phys < r.base + r.length {
+                return Some(r.proximity_domain);
+            }
+        }
+        None
+    }
+
+    /// Encontra o Proximity Domain para um APIC ID.
+    pub fn domain_for_apic(&self, apic_id: u32) -> Option<u32> {
+        for a in &self.apic_affinities {
+            if a.apic_id == apic_id {
+                return Some(a.proximity_domain);
+            }
+        }
+        None
+    }
+}
+
+/// Parseia a tabela ACPI SRAT (System Resource Affinity Table).
+///
+/// SRAT contém:
+/// - Memory Affinity Structure (type 1): PhysRange → ProximityDomain
+/// - x2APIC Local Domain Structure (type 3): APIC_ID → ProximityDomain
+///
+/// # Safety
+/// `table_ptr` deve apontar para uma tabela SRAT válida.
+pub unsafe fn parse_srat(table_ptr: *const u8) -> NumaTopologyMap {
+    let mut map = NumaTopologyMap::default();
+
+    // SRAT header: signature(4) + length(4) + revision(1) + checksum(1) + oem_id(6) + oem_table_id(8) + ...
+    let len = read_volatile(table_ptr.add(4) as *const u32) as usize;
+    if len < 48 {
+        crate::slog_nano!("SRAT", "info", "SRAT muito pequeno: {} bytes", len);
+        return map;
+    }
+
+    let mut max_domain = 0u32;
+    let mut offset = 48usize; // após header ACPI padrão (36 bytes + 12 reserved)
+
+    while offset + 2 <= len {
+        let entry_type = read_volatile(table_ptr.add(offset));
+        let entry_len = read_volatile(table_ptr.add(offset + 1)) as usize;
+
+        if entry_len < 2 || offset + entry_len > len {
+            break;
+        }
+
+        match entry_type {
+            // Memory Affinity (type 1)
+            1 => {
+                if entry_len >= 24 {
+                    let domain = read_volatile(table_ptr.add(offset + 2) as *const u32);
+                    let base_lo = read_volatile(table_ptr.add(offset + 8) as *const u32);
+                    let base_hi = read_volatile(table_ptr.add(offset + 12) as *const u32);
+                    let len_lo = read_volatile(table_ptr.add(offset + 16) as *const u32);
+                    let len_hi = read_volatile(table_ptr.add(offset + 20) as *const u32);
+                    let base = (base_hi as u64) << 32 | (base_lo as u64);
+                    let length = (len_hi as u64) << 32 | (len_lo as u64);
+                    if length > 0 {
+                        map.memory_ranges.push(NumaMemoryRange {
+                            base,
+                            length,
+                            proximity_domain: domain,
+                        });
+                        if domain > max_domain {
+                            max_domain = domain;
+                        }
+                    }
+                }
+            }
+            // x2APIC Affinity (type 3)
+            3 => {
+                if entry_len >= 24 {
+                    let domain = read_volatile(table_ptr.add(offset + 4) as *const u32);
+                    let apic_id = read_volatile(table_ptr.add(offset + 8) as *const u32);
+                    map.apic_affinities.push(NumaApicAffinity {
+                        apic_id,
+                        proximity_domain: domain,
+                    });
+                    if domain > max_domain {
+                        max_domain = domain;
+                    }
+                }
+            }
+            // Processor Local APIC Affinity (type 0) — legacy
+            0 => {
+                if entry_len >= 16 {
+                    let apic_id = read_volatile(table_ptr.add(offset + 3));
+                    let domain = read_volatile(table_ptr.add(offset + 11) as *const u32);
+                    map.apic_affinities.push(NumaApicAffinity {
+                        apic_id: apic_id as u32,
+                        proximity_domain: domain,
+                    });
+                    if domain > max_domain {
+                        max_domain = domain;
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        offset += entry_len;
+    }
+
+    map.proximity_domain_count = max_domain + 1;
+
+    crate::slog_nano!(
+        "SRAT",
+        "info",
+        "NUMA: {} domínios, {} faixas de memória, {} APICs",
+        map.proximity_domain_count,
+        map.memory_ranges.len(),
+        map.apic_affinities.len()
+    );
+
+    map
+}
+
+/// Parseia SRAT a partir do RSDP já conhecido.
+/// Retorna None se SRAT não for encontrada.
+pub unsafe fn parse_srat_from_rsdp(physical_memory_offset: u64) -> Option<NumaTopologyMap> {
+    let rsdp_phys = find_rsdp(physical_memory_offset)?;
+    let rsdp_virt = VirtAddr::new(physical_memory_offset + rsdp_phys);
+    let rsdp = &*(rsdp_virt.as_u64() as *const RsdpDescriptor);
+
+    let rsdt_phys = if rsdp.revision >= 2 && rsdp.xsdt_address != 0 {
+        rsdp.xsdt_address
+    } else {
+        rsdp.rsdt_address as u64
+    };
+
+    let rsdt_virt = VirtAddr::new(physical_memory_offset + rsdt_phys);
+    let rsdt_ptr = rsdt_virt.as_u64() as *const u8;
+
+    let mut sig = [0u8; 4];
+    for i in 0..4 {
+        sig[i] = read_volatile(rsdt_ptr.add(i));
+    }
+
+    let is_xsdt = &sig == b"XSDT";
+    if &sig != b"RSDT" && !is_xsdt {
+        return None;
+    }
+
+    let rsdt_len = read_volatile(rsdt_ptr.add(4) as *const u32) as usize;
+    let entry_size: usize = if is_xsdt { 8 } else { 4 };
+    let entry_count = (rsdt_len - 36) / entry_size;
+
+    for i in 0..entry_count {
+        let entry_offset = 36 + i * entry_size;
+        let table_phys = if is_xsdt {
+            read_volatile(rsdt_ptr.add(entry_offset) as *const u64)
+        } else {
+            read_volatile(rsdt_ptr.add(entry_offset) as *const u32) as u64
+        };
+        let table_virt = VirtAddr::new(physical_memory_offset + table_phys);
+        let table_ptr = table_virt.as_u64() as *const u8;
+
+        let mut table_sig = [0u8; 4];
+        for j in 0..4 {
+            table_sig[j] = read_volatile(table_ptr.add(j));
+        }
+
+        if &table_sig == b"SRAT" {
+            return Some(parse_srat(table_ptr));
+        }
+    }
+    None
+}

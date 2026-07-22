@@ -18,6 +18,7 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
   ✦ Sprint 107 Voice ✅ (PASS parcial forte+)
   ✦ **ADR-0059 Runtime App Factory:** wasmi real (`.wasm` bare-metal) + decode harness + promote
   ✦ BitNet 2B LOADED · HW Expert v3 · SelfHeal I3/I4
+  ✦ **P2P Orchestration:** Lamport clocks, NoProto zero-copy, APIC async executor, NVMe driver, TicKV integration
   ✦ HDA capture + playback · Piper TTS · STT CTC
   ✦ 3 camadas visuais · GPU multi-vendor · WiFi iwlwifi (AWAITING RF)
   ✦ Skills a quente via LLM + **promote automático** (efêmero → WASM persistente)
@@ -47,7 +48,7 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 
 | Crate | Anel | Função |
 |-------|------|--------|
-| `k_nano` | 0 | HAL base, drivers, PCI, memory, interrupts |
+| `k_nano` | 0 | HAL base, drivers, PCI, memory, interrupts, P2P orchestration, NVMe, async runtime |
 | `k_hal` | 1 | DeviceCap, HalOffer, MMIO BE, VirtIO transporte |
 | `k_ai` | 2 | SelfHeal, Trust, inventário HW |
 | `cortex` | 2 | LLM BitNet, Trinity MoE, tensores |
