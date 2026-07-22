@@ -42,6 +42,7 @@ pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_market;
 pub mod memory_store;
+pub mod memory;
 pub mod marketplace;
 pub mod cognitive_bridge;
 pub mod expert_skills;
