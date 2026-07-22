@@ -177,6 +177,24 @@ pub fn execute(
     }
 }
 
+/// ADR-0059 F3 — fim-a-fim "IA gera → monta → executa": recebe a **op-IR**
+/// (gerada por Cortex/Trinity/LLM, constrangida por #412), monta o wasm e roda
+/// pelo caminho recomendado. Código de IA = não-confiável → **A (wasmi)**.
+pub fn generate_and_run(ops: &[crate::wasm_build::Op], a: i32, b: i32) -> FactoryOutcome {
+    let req = AppRequest {
+        desc: String::from("skill gerada por IA (op-IR)"),
+        trusted: false,
+        perf_critical: false,
+        wants_rust: false,
+    };
+    let rec = analyze_and_recommend(&req);
+    let wasm = match crate::wasm_build::build_run_module(2, ops) {
+        Ok(w) => w,
+        Err(e) => return FactoryOutcome::Denied(e),
+    };
+    execute(&rec, &wasm, "run", a, b)
+}
+
 /// HW-gate: ring de isolamento para código nativo (ADR-0060 / Ring3). Reflete
 /// se um ring nativo **validado** foi registrado (`register_native_ring`).
 /// Hoje `false` até o F6 (ADR-0060) passar o gate — B/C nativo fica gated.
@@ -201,7 +219,15 @@ pub fn self_test() -> bool {
     let req_c = AppRequest { desc: String::from("x"), trusted: true, perf_critical: false, wants_rust: true };
     let rec_c = analyze_and_recommend(&req_c);
     let ok_c = rec_c.backend == AppBackend::NativeRustSubset && rec_c.requires_hitl && rec_c.requires_isolation_ring;
-    let ok = ok_rec && ran && ok_c;
+    // F3/F4: pipeline fim-a-fim gera(op-IR)→monta(wasm)→sandbox(wasmi).
+    // op-IR de (a+b)*2 : [LocalGet0, LocalGet1, I32Add, I32Const2, I32Mul]
+    use crate::wasm_build::Op;
+    let ops = [Op::LocalGet(0), Op::LocalGet(1), Op::I32Add, Op::I32Const(2), Op::I32Mul];
+    let ok_gen = matches!(generate_and_run(&ops, 3, 4), FactoryOutcome::RanWasm(14));
+    if ok_gen {
+        k_nano::slog_hermes!("APPFACTORY", "info", "gera→monta→sandbox PASS ((3+4)*2=14) — ADR-0059 F3/F4");
+    }
+    let ok = ok_rec && ran && ok_c && ok_gen;
     if ok {
         k_nano::slog_hermes!("APPFACTORY", "info", "path-selector self-test PASS (A=run, C=HITL+ring gated) — ADR-0059");
     } else {

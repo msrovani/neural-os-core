@@ -54,6 +54,7 @@ pub mod wasm;
 pub mod wasm_exec;
 pub mod wasm_rt;
 pub mod wasmi_rt;
+pub mod wasm_build;
 pub mod app_factory;
 pub mod gguf_wasm;
 pub mod micropython_wasm;

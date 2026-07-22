@@ -9,7 +9,9 @@
 - **Integração** self-improve/self-heal/self-update: App Factory é o motor de execução do ciclo evolutivo (testa no sandbox → promove assinado ADR-0052 → hot-swap)
 - **F7 (arena W^X) ✅:** `exec_arena` executa **código nativo gerado on-device** (self-test `mov eax,42;ret`→42 PASS) — base do JIT Cranelift (Caminhos B/C). É Ring 0 (não isolado): só código próprio/confiável até o Ring3
 - **F6 (Ring3 isolamento) → ADR-0060 dedicada:** BLOQUEADOR (habilitar=triple-fault reboot loop). Porto seguro do kernel documentado (ring gated, boot OK). **Conectores no código:** `hermes::app_factory::register_native_ring` (seam) + `neural-kernel::isolation_ring` (site de impl, não registra ainda) → `isolation_ring_available()` reflete o registro. B/C nativo gated até a ADR-0060 passar o gate
-- Plano restante: bridges (F3), gramática+assembler (F4), promover (F5), **F6 Ring3** (destrava B/C). Aposentar VM `Op` após migração
+- **F4 (montador op-IR→wasm) ✅:** `hermes::wasm_build` monta **wasm válido a partir de op-IR** (`Op` i32) + `validate()`; self-test `a*b+7`→49 PASS. A op-IR é o **alvo constrangido da gramática #412** (IA só escolhe ops → wasm sempre válido)
+- **F3 (bridge gera→monta→executa) ✅:** `app_factory::generate_and_run(op-IR)` monta o wasm e roda pelo caminho recomendado (A/wasmi); self-test `(3+4)*2`→14 PASS
+- Plano restante: LLM emitir op-IR (integração #412) + registrar `Skill`/`agent-wasm` persistente (F3+), promover (F5), **F6 Ring3** (ADR-0060, destrava B/C). Aposentar VM `Op` após migração
 - Bare-metal sem `rustc` → IA emite **WAT/DSL**, não Rust compilado (Rust→wasm on-device = residual host)
 - **Supersede** ADR-0031 (tema WASM; desvio wasmi→Op revertido) e ADR-0032 (Op VM + `wasm.rs` aposentados); reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306
 - Fases F1–F6 (wasmi → host ABI/CapGate → bridges → geração validada → promover → Python opcional). Status: **Proposed** — aguardando validação

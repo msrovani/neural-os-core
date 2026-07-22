@@ -133,8 +133,8 @@ flowchart TB
 - [x] **Seletor A/B/C (IA recomenda, HITL decide) + CapGate/HW-gate; self-test PASS.** (`hermes::app_factory`)
 - [x] **Viabilidade B/C: `cranelift-codegen` no_std compila (feature `jit-cranelift`).**
 - [~] F2: host ABI `aios::log` gated instalado; fuel ✅. (mem-max/mais imports = follow-up)
-- [ ] F3: bridge `register_wasm_skill`/`DynamicSkill`/`agent-wasm`→wasmi (runtime pronto; bridge = próxima fase).
-- [ ] F4: gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste.
+- [x] **F4 (montador + harness): `hermes::wasm_build`** monta **wasm válido a partir de op-IR** (`Op`: LocalGet/I32Const/Add/Sub/Mul) + `validate()`; self-test `a*b+7`→49 PASS. A **op-IR é o alvo constrangido da gramática** (#412): a IA só escolhe `Op`s permitidos → wasm sempre válido por construção (mais seguro que WAT livre). WAT-text livre + CFG/PDA plenos = refinamento futuro.
+- [x] **F3 (bridge gera→monta→executa): `app_factory::generate_and_run(op-IR)`** monta o wasm e roda pelo caminho recomendado (A/wasmi). Self-test `(3+4)*2`→14 PASS (`RanWasm backend=A`). Falta: LLM emitir a op-IR (integração #412) e registrar como `Skill`/`agent-wasm` persistente.
 - [ ] F5: promover assinado (ADR-0052) + Cron.
 - [x] **F7 (W^X exec arena):** `exec_arena` executa **código nativo gerado on-device** (self-test `mov eax,42;ret`→42 PASS). Base do JIT Cranelift. **É Ring 0 (não isolado)** — só para código próprio/confiável até o Ring3.
 - [ ] **F6 (Ring3 isolamento):** **movido para a [ADR-0060](0060-ring3-isolation-ring.md)** (ADR dedicada). Resumo: habilitar hoje = **triple-fault → reboot loop**; `isolation_ring_available()` reflete o **seam de registro** (`app_factory::register_native_ring`) que a ADR-0060 preencherá quando o ring passar o gate. Enquanto não registrado, **B/C nativo permanece gated (segurança)**. Conectores já no código (`neural-kernel::isolation_ring`).

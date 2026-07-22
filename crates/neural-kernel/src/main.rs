@@ -1738,7 +1738,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::micropython_wasm::try_init_at_boot();
     // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
     let _ = hermes_crate::wasmi_rt::self_test();
-    let _ = hermes_crate::app_factory::self_test();
+    let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
+    let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
     let _ = crate::exec_arena::self_test();
     // ADR-0060: conectores do Ring3 isolation ring (F6). NÃO registra ainda —
