@@ -62,6 +62,7 @@ pub mod app_factory;
 pub mod dynskill;
 pub mod gguf_wasm;
 pub mod micropython_wasm;
+pub mod affect;
 pub mod aios_api;
 pub mod skill_opt;
 pub mod rustpython_no_std;
