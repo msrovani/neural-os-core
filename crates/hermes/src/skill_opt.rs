@@ -28,7 +28,7 @@ pub struct EvolvingSkill {
     pub success_rate: f32,
 }
 
-static EVOLVING: Mutex<BTreeMap<String, EvolvingSkill>> = Mutex::new(BTreeMap::new());
+pub static EVOLVING: Mutex<BTreeMap<String, EvolvingSkill>> = Mutex::new(BTreeMap::new());
 
 /// Registra execução Python efêmera (primeiro uso).
 pub fn record_python_run(name: &str, source: &str, success: bool) {
