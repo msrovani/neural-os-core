@@ -45,6 +45,6 @@ pub mod ngram_spec;
 pub mod projection;
 pub mod neuos_probe;
 pub mod kv_h2o;
-// ponytail: pre-existing compile errors from F4/MoE skeleton (untracked, not BEI)
+// ponytail: structured_decode module disabled (pre-existing, F4)
 // pub mod structured_decode;
-// pub mod moe;
+pub mod moe;
