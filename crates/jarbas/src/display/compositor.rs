@@ -29,8 +29,8 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
 use spin::Mutex;
-use libm::sinf;
 use crate::display::fb::DoubleBuffer;
+use crate::display::soul_mirror::{SoulMirrorRenderer, SoulMirrorState};
 
 pub static COMPOSITOR: Mutex<Option<JarvisDesktop>> = Mutex::new(None);
 /// Banner power (confirm / shutting) — set pelo DisplayAgent.
@@ -118,12 +118,14 @@ pub struct JarvisDesktop {
     dragging_card: Option<u32>,
     card_drag_off: (i32, i32),
     resizing_card: Option<u32>,
+    // Onda 7: Soul Mirror — visual afetivo do BEI.
+    pub soul_mirror: SoulMirrorRenderer,
 }
 
 impl JarvisDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
-        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0), resizing_card: None }
+        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0), resizing_card: None, soul_mirror: SoulMirrorRenderer::new(w, h) }
     }
 
     // ─── ADR-0058 S3: cards declarativos ──────────────────────────────────
@@ -419,26 +421,19 @@ impl JarvisDesktop {
         self.fb.swap();
     }
 
-    /// Orb gráfico proporcional ao FB (não retângulo + label "JARVIS").
-    fn draw_orb_layer(&mut self, tick: u64, w: usize, h: usize) {
-        let cx = (w / 2) as isize;
-        let cy = (h / 2) as isize;
-        let base = (core::cmp::min(w, h) as f32 * 0.09).max(28.0);
-        let pulse = base + sinf(tick as f32 * 0.04) * (base * 0.22);
+    /// Soul Mirror — orb afetivo (Onda 7) substitui o orb cyan fixo.
+    /// Cor/brilho/pulsação/anéis/rotação vêm do AffectVector + LoopPhase.
+    fn draw_orb_layer(&mut self, _tick: u64, _w: usize, _h: usize) {
+        // Tenta puxar affect do ExecutiveSupervisor (se hermes já registrou).
+        if let Some(sup) = hermes::globals::EXECUTIVE_SUPERVISOR.lock().as_ref() {
+            let mirror = SoulMirrorState::from_affect(
+                &sup.affect.affect,
+                sup.phase.rotation_deg(),
+            );
+            self.soul_mirror.update_state(mirror);
+        }
         let fft_energy = crate::display::avatar::read_audio_energy();
-        let bri = if fft_energy > 0.0 {
-            130.0 + fft_energy.min(1.0) * 100.0
-        } else {
-            130.0 + sinf(tick as f32 * 0.05) * 40.0
-        };
-        let bri_u8 = bri.clamp(40.0, 255.0) as u8;
-        let glow_r = (pulse * 1.55) as isize;
-        let core_r = pulse as isize;
-        let hot_r = (pulse * 0.28).max(4.0) as isize;
-        // Halo externo → núcleo → highlight (cyan JARVIS)
-        self.fb.fill_circle_glow(cx, cy, glow_r, 0, 40, 90, 35);
-        self.fb.fill_circle_glow(cx, cy, core_r, 0, bri_u8, 255, 70);
-        self.fb.fill_circle_glow(cx, cy, hot_r, 220, 245, 255, 90);
+        self.soul_mirror.render(&mut self.fb, fft_energy);
     }
 }
 

@@ -12,6 +12,7 @@ use k_ai::self_heal::SelfHeal;
 use k_ai::audit::AuditTrail;
 use k_ai::inventory::SystemArchitecture;
 use cortex::trinity::TrinityRouter;
+use crate::executive::ExecutiveSupervisor;
 
 pub use k_nano::{EVENT_BUS, SKILL_REGISTRY};
 
@@ -50,6 +51,7 @@ lazy_static! {
     pub static ref SYSTEM_ARCH: Mutex<Option<SystemArchitecture>> = Mutex::new(None);
     pub static ref MEMORY_HIERARCHY: Mutex<Option<k_nano::mhi::MemoryHierarchy>> = Mutex::new(None);
     pub static ref AUDIT_TRAIL: Mutex<AuditTrail> = Mutex::new(AuditTrail::new());
+    pub static ref EXECUTIVE_SUPERVISOR: Mutex<Option<ExecutiveSupervisor>> = Mutex::new(None);
     static ref VFS_BRIDGE: TicketLock<Option<VfsBridge>> = TicketLock::new(None);
 }
 
