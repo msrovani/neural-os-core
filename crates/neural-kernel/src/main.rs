@@ -226,6 +226,7 @@ mod audio;
 
 mod address_space;
 mod exec_arena;
+mod isolation_ring;
 mod syscall;
 mod ipc;
 mod capability_gate;
@@ -1740,6 +1741,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _ = hermes_crate::app_factory::self_test();
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
     let _ = crate::exec_arena::self_test();
+    // ADR-0060: conectores do Ring3 isolation ring (F6). NÃO registra ainda —
+    // porto seguro: B/C nativo gated até o ring passar o gate.
+    crate::isolation_ring::init_connectors();
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
     crate::display::fb::boot_ckpt(36, "package_hub");

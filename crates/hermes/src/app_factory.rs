@@ -17,6 +17,23 @@
 //! (AWAITING + requires-HITL). O Caminho A executa já, com segurança total.
 
 use alloc::string::String;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// ADR-0060 seam — ring de isolamento nativo (Ring3). O `neural-kernel`
+/// registra aqui um executor nativo isolado QUANDO o F6 estiver validado
+/// (§6 da ADR-0060). Enquanto não registrado, B/C nativo fica gated.
+pub type NativeRingFn = fn(code: &[u8], caps: u32) -> Result<i64, &'static str>;
+static NATIVE_RING: AtomicUsize = AtomicUsize::new(0);
+
+/// Registrado por `neural-kernel::isolation_ring` só após o ring passar o gate.
+pub fn register_native_ring(f: NativeRingFn) {
+    NATIVE_RING.store(f as usize, Ordering::Release);
+    k_nano::slog_hermes!("APPFACTORY", "info", "native isolation ring REGISTRADO (ADR-0060) — B/C liberável sob HITL");
+}
+
+pub fn native_ring_registered() -> bool {
+    NATIVE_RING.load(Ordering::Acquire) != 0
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppBackend {
@@ -100,6 +117,8 @@ pub fn analyze_and_recommend(req: &AppRequest) -> Recommendation {
 pub enum FactoryOutcome {
     /// Executado no sandbox wasmi (Caminho A). Valor de retorno i32.
     RanWasm(i32),
+    /// Executado no ring de isolamento nativo (B/C) — só após ADR-0060.
+    RanNative(i64),
     /// Backend nativo (B/C) pendente de ring de isolamento + HITL — honesto.
     AwaitingIsolation(AppBackend),
     /// Negado por CapGate/HITL.
@@ -135,24 +154,34 @@ pub fn execute(
             }
             Err(e) => FactoryOutcome::Denied(e),
         },
-        // B/C: backend Cranelift existe (feature jit-cranelift) mas a execução
-        // nativa exige o ring de isolamento (residual F6/F7). Honesto: AWAITING.
+        // B/C: se o ring nativo (ADR-0060) foi registrado, executa nele; senão
+        // AWAITING (residual F6). Chegar aqui já passou pelo HW-gate acima.
         AppBackend::WasmJit | AppBackend::NativeRustSubset => {
-            k_nano::slog_hermes!(
-                "APPFACTORY",
-                "info",
-                "VERDICT=AWAITING_JIT backend={:?} reason=cranelift_ring_pending (Layer S)",
-                rec.backend
-            );
-            FactoryOutcome::AwaitingIsolation(rec.backend)
+            let slot = NATIVE_RING.load(Ordering::Acquire);
+            if slot != 0 {
+                let f: NativeRingFn = unsafe { core::mem::transmute::<usize, NativeRingFn>(slot) };
+                match f(wasm_or_src, rec.caps_needed) {
+                    Ok(v) => FactoryOutcome::RanNative(v),
+                    Err(e) => FactoryOutcome::Denied(e),
+                }
+            } else {
+                k_nano::slog_hermes!(
+                    "APPFACTORY",
+                    "info",
+                    "VERDICT=AWAITING_ISOLATION backend={:?} reason=ring3_pending (ADR-0060)",
+                    rec.backend
+                );
+                FactoryOutcome::AwaitingIsolation(rec.backend)
+            }
         }
     }
 }
 
-/// HW-gate: ring de isolamento para código nativo (ADR-0041 Ring3/AS). Hoje
-/// `false` (execução nativa fica gated); vira `true` quando o ring landar.
+/// HW-gate: ring de isolamento para código nativo (ADR-0060 / Ring3). Reflete
+/// se um ring nativo **validado** foi registrado (`register_native_ring`).
+/// Hoje `false` até o F6 (ADR-0060) passar o gate — B/C nativo fica gated.
 pub fn isolation_ring_available() -> bool {
-    false
+    native_ring_registered()
 }
 
 /// Self-test (sem modelo): valida o seletor + execução A end-to-end.

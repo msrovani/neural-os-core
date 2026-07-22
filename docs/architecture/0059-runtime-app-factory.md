@@ -137,7 +137,7 @@ flowchart TB
 - [ ] F4: gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste.
 - [ ] F5: promover assinado (ADR-0052) + Cron.
 - [x] **F7 (W^X exec arena):** `exec_arena` executa **código nativo gerado on-device** (self-test `mov eax,42;ret`→42 PASS). Base do JIT Cranelift. **É Ring 0 (não isolado)** — só para código próprio/confiável até o Ring3.
-- [ ] **F6 (Ring3 isolamento):** **BLOQUEADOR CONFIRMADO (diagnóstico 2026-07-22)** — habilitar `TRY_ENTER_RING3=true` causa **triple-fault → reboot loop** (o boot reinicia: "P6 demo"+"Cap deny OK" repetem 3×, sem scheduler). O `iretq` faz `#PF err=0x10` após `mov cr3` (kernel text/IDT/handler não confiáveis no clone raso ao trocar CR3), e o próprio #PF handler não roda sob o CR3 do user → **double→triple fault → reset**. **Não habilitado** (bricaria o boot). Fix requer sessão de **debug dedicada**: garantir kernel text + IDT + handlers de falta + **IST** mapeados/alcançáveis no AS do user (clone), e `fault_abort` sem storm. Enquanto não passar, `isolation_ring_available()=false` → **B/C nativo permanece gated (segurança)**.
+- [ ] **F6 (Ring3 isolamento):** **movido para a [ADR-0060](0060-ring3-isolation-ring.md)** (ADR dedicada). Resumo: habilitar hoje = **triple-fault → reboot loop**; `isolation_ring_available()` reflete o **seam de registro** (`app_factory::register_native_ring`) que a ADR-0060 preencherá quando o ring passar o gate. Enquanto não registrado, **B/C nativo permanece gated (segurança)**. Conectores já no código (`neural-kernel::isolation_ring`).
 - [ ] aposentar `Op` VM + `wasm.rs` após bridges migrarem para wasmi.
 - [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]`/`[EXEC-ARENA]` PASS).
 
