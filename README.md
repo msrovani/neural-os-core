@@ -19,6 +19,8 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
   ✦ **ADR-0059 Runtime App Factory:** wasmi real (`.wasm` bare-metal) + decode harness + promote
   ✦ BitNet 2B LOADED · HW Expert v3 · SelfHeal I3/I4
   ✦ **P2P Orchestration:** Lamport clocks, NoProto zero-copy, APIC async executor, NVMe driver, TicKV integration
+  ✦ **Elastic Scheduler:** CorePairAllocator, MWAIT power management, bipole mode (2-core fallback)
+  ✦ **Brain Mesh Engine:** Auto-discovery, CapacityScore, autonomous Master election, dynamic role assignment
   ✦ HDA capture + playback · Piper TTS · STT CTC
   ✦ 3 camadas visuais · GPU multi-vendor · WiFi iwlwifi (AWAITING RF)
   ✦ Skills a quente via LLM + **promote automático** (efêmero → WASM persistente)

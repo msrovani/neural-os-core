@@ -46,6 +46,8 @@ pub mod hw_rng;
 pub mod identity;
 pub mod interrupts;
 pub mod io_scheduler;
+pub mod ipc;
+pub mod scheduler;
 pub mod memory;
 pub mod mhi;
 pub mod multi_user;

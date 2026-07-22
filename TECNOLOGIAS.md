@@ -117,6 +117,14 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 4.12 | **P2P Orchestration — NVMe Driver** | 🏆 Driver NVMe bare-metal via PCIe MMIO. Admin SQ/CQ, `nvme_read_block()`, `nvme_write_block()`. | NVMe spec, Linux nvme driver | GPLv2 | `storage/nvme.rs` | ✅ 0 err |
 | 4.13 | **P2P Orchestration — TicKV Integration** | 🏆 Flash Driver trait para TicKV sobre NVMe. Persistência de audit logs e resultados de inferência. | TicKV (Tencent) | Apache 2.0 | `storage/tickv.rs` | ✅ 0 err |
 | 4.14 | **P2P Orchestration — Hybrid Transport** | 🏆 Transporte híbrido: Raw L2 Ethernet (mesma sub-rede) ou UDP/IP smoltcp (roteado). Seleção automática por `TransportMode`. | smoltcp, Ethernet spec | MIT | `net/transport.rs` | ✅ 0 err |
+| 4.15 | **Elastic Scheduler — CorePairAllocator** | 🏆 Alocação de núcleos em pares físicos (SMT/L2/L3 cache sharing) para evitar cache thrashing. MWAIT power management, wake-up por afeto (uncertainty/urgency). | Linux CFS, CPU topology | GPLv2 | `scheduler/core_pair.rs` | ✅ 0 err |
+| 4.16 | **Elastic Scheduler — Bipole Mode** | 🏆 Modo fallback 2-core (i3): Core 0 (System: k-nano/hermes/jarbas), Core 1 (Compute: BitNet). Comunicação via SpscChannel 64-byte. | Bare-metal patterns | — | `scheduler/core_pair.rs` | ✅ 0 err |
+| 4.17 | **Elastic Scheduler — Affect Wake-Up** | 🏆 Wake-up de pares ociosos via IPI quando hermes detecta high uncertainty (>0.75) ou urgency. Nanosecond wake time. | Affective computing | — (conhecimento científico) | `scheduler/core_pair.rs` | ✅ 0 err |
+| 4.18 | **Brain Mesh Engine — Auto-Discovery** | 🏆 "Brain Beaconing": broadcast Ethernet/UDP para descobrir nós Neural-OS-Core na rede local. Pacote `NodeCapabilities`. | mDNS, SSDP (conceito) | MIT | `net/brain_mesh.rs` | ✅ 0 err |
+| 4.19 | **Brain Mesh Engine — CapacityScore** | 🏆 Fórmula: (Cores × Clock) + (RAM × SIMD_Weight) + L3_Cache. SIMD_Weight: AVX-512=4.0, AVX2=2.0, SSE4.2=1.0. Bonus 3D V-Cache/Anchored. | HPC benchmarks | — (conhecimento científico) | `net/brain_mesh.rs` | ✅ 0 err |
+| 4.20 | **Brain Mesh Engine — Master Election** | 🏆 Eleição autônoma: maior CapacityScore ou nó ancorado (jarbas UI). Re-election dinâmico. Raft/Paxos (conceito). | Raft consensus, Paxos | MIT | `net/brain_mesh.rs` | ✅ 0 err |
+| 4.21 | **Brain Mesh Engine — Dynamic Roles** | 🏆 Atribuição: Master (hermes/jarbas), Memory (VFS L0-L7), Compute (MoE experts), Worker (verificação). Auto-scaling. | Kubernetes scheduler (conceito) | Apache 2.0 | `net/brain_mesh.rs` | ✅ 0 err |
+| 4.22 | **CellChannel — Transparent Messaging** | 🏆 Trait unificado: Local (SpscChannel, ~10ns) vs Remote (RawEth, sub-ms). Mesma interface para hermes/cortex. | ZeroMQ, MPI | MIT | `ipc/mesh.rs` | ✅ 0 err |
 
 ---
 
