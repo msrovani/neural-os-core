@@ -22,6 +22,8 @@ pub struct HardwareRegisterMap {
     pub rx_buf_len: usize,
 }
 
+pub mod cellular;
+pub mod evolution;
 pub mod arena;
 pub mod global_arena;
 pub mod r3;
