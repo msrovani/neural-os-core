@@ -7,7 +7,9 @@
 - **Caminho A (wasmi) real:** `hermes::wasmi_rt` executa **módulos WASM padrão** em sandbox (fuel + CapGate host-imports `aios::*`); self-test de boot roda um `.wasm` real → `add(2,3)=5` PASS
 - **Seletor por IA (`hermes::app_factory`):** IA recomenda backend **A/B/C**; usuário/HITL decide; CapGate + HW-gate (ring de isolamento) aplicados. B/C (Cranelift, feature `jit-cranelift`) geram nativo → execução **GATED** por ring (ADR-0041) + HITL forte (honesto `AWAITING`)
 - **Integração** self-improve/self-heal/self-update: App Factory é o motor de execução do ciclo evolutivo (testa no sandbox → promove assinado ADR-0052 → hot-swap)
-- Plano restante: bridges (F3), gramática+assembler (F4), promover (F5), ring de isolamento (F6/F7). Aposentar VM `Op` após migração
+- **F7 (arena W^X) ✅:** `exec_arena` executa **código nativo gerado on-device** (self-test `mov eax,42;ret`→42 PASS) — base do JIT Cranelift (Caminhos B/C). É Ring 0 (não isolado): só código próprio/confiável até o Ring3
+- **F6 (Ring3 isolamento) = BLOQUEADOR:** o `iretq` real dá `#PF err=0x10` (kernel text no clone raso); habilitar arrisca travar o boot → **não habilitado** (proteger boot). Requer sessão de debug dedicada. `isolation_ring_available()=false` → **B/C nativo gated** (segurança)
+- Plano restante: bridges (F3), gramática+assembler (F4), promover (F5), **F6 Ring3** (destrava B/C). Aposentar VM `Op` após migração
 - Bare-metal sem `rustc` → IA emite **WAT/DSL**, não Rust compilado (Rust→wasm on-device = residual host)
 - **Supersede** ADR-0031 (tema WASM; desvio wasmi→Op revertido) e ADR-0032 (Op VM + `wasm.rs` aposentados); reaponta IDEAs #103/#309a/#385–396/#402/#411/#8/#11/#306
 - Fases F1–F6 (wasmi → host ABI/CapGate → bridges → geração validada → promover → Python opcional). Status: **Proposed** — aguardando validação

@@ -1,7 +1,7 @@
 # ADR-0059: Runtime App Factory — WASM real (wasmi) + geração validada de apps por IA
 
 **Data:** 2026-07-21
-**Status:** Accepted — **viabilidade CONFIRMADA** (`wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float, 0 erros). **Caminho A (wasmi) IMPLEMENTADO e validado** (QEMU: `.wasm` real `add(2,3)=5` PASS; seletor A/B/C PASS). Caminhos B/C: backend Cranelift presente (feature `jit-cranelift`), **execução nativa GATED** por ring de isolamento (ADR-0041) + HITL forte — F6/F7.
+**Status:** Accepted — **viabilidade CONFIRMADA** (`wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float, 0 erros). **Caminho A (wasmi) IMPLEMENTADO e validado** (QEMU: `.wasm` real `add(2,3)=5` PASS; seletor A/B/C PASS). **F7 (arena W^X) IMPLEMENTADO** (execução nativa on-device: `mov eax,42;ret`→42 PASS — base do JIT). Caminhos B/C: backend Cranelift presente (feature `jit-cranelift`), **execução nativa GATED** por **F6 (ring Ring3, BLOQUEADOR)** + HITL forte.
 **Lifecycle (INDEX):** `fazendo`
 **Depreca / supersede:**
 - **ADR-0031** (Self-Update/WASM/JARVIS): reverte o desvio "wasmi → VM `Op` custom"; runtime real passa a ser **wasmi**. Self-update/JARVIS permanecem (não são tema desta ADR).
@@ -136,9 +136,19 @@ flowchart TB
 - [ ] F3: bridge `register_wasm_skill`/`DynamicSkill`/`agent-wasm`→wasmi (runtime pronto; bridge = próxima fase).
 - [ ] F4: gramática CFG (#412→PDA) + assembler WAT→wasm + harness de teste.
 - [ ] F5: promover assinado (ADR-0052) + Cron.
-- [ ] F6/F7: ring de isolamento (ADR-0041 Ring3) → destrava execução nativa B/C.
+- [x] **F7 (W^X exec arena):** `exec_arena` executa **código nativo gerado on-device** (self-test `mov eax,42;ret`→42 PASS). Base do JIT Cranelift. **É Ring 0 (não isolado)** — só para código próprio/confiável até o Ring3.
+- [ ] **F6 (Ring3 isolamento):** **BLOQUEADOR** — `iretq` real (`TRY_ENTER_RING3`) dá `#PF err=0x10` (supervisor instruction-fetch, not-present) logo após `mov cr3`: hipótese = **kernel text não confiável no clone raso** ao trocar de CR3 (ou storm no `fault_abort`). Habilitar arrisca **travar o boot** (storm→ABORTING→hlt). Decisão: **não habilitar** neste turno para não desestabilizar o boot; requer sessão de **debug dedicada** (reproduzir + instrumentar o clone/CR3/IST). Enquanto não passar, `isolation_ring_available()=false` → **B/C nativo permanece gated (segurança)**.
 - [ ] aposentar `Op` VM + `wasm.rs` após bridges migrarem para wasmi.
-- [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]` PASS).
+- [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]`/`[EXEC-ARENA]` PASS).
+
+### Nota F6/F7 (isolamento — honesto)
+`isolation_ring_available()` só vira `true` quando **F6 (Ring3)** estiver validado
+(rodar blob nativo em CPL=3, syscall gated, faltas contidas — "mata sandbox, não
+kernel"). O **exec arena (F7)** entrega a *codegen/execução nativa*; a *isolação*
+depende do Ring3. Rodar código de IA **não-confiável** em nativo sem Ring3 seria
+código com privilégio de kernel — por isso permanece **gated + HITL** (exatamente
+a premissa de isolamento forte pedida). Próximo passo real: sessão debug do Ring3
+(clone CR3 mapeando kernel text corretamente + IST + fault-abort sem storm).
 
 ## 7. Referências
 
