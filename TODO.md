@@ -1,13 +1,13 @@
 # 📋 TODO MASTER — neural-os-core
 
-**Versão release:** v1.9.0 TESTE / NÃO ESTÁVEL
-**Data:** 2026-07-18
+**Versão release:** v1.9.5 TEST / BEI planejado
+**Data:** 2026-07-21
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **Pós-LAN B-01 unlock ✅** (SESSION_152; NetFs PASS). Próximo: `/model-fetch` e2e · WiFi AWAITING · TLS real · gate v2.0.0 review.
+**Pista ativa:** **BEI BitNet Cognitivo** — ADR-0060 aprovado (7 ondas, ~2470 LOC). Próximo: implementação Onda 0 (MPMC).
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
-**Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW**
+**Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · WiFi AWAITING · TLS BLOCKED · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
