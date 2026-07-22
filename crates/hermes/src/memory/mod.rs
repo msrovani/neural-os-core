@@ -22,6 +22,19 @@ impl MemoryLevel {
         }
     }
 
+    pub fn promote_threshold(&self) -> u64 {
+        match self {
+            MemoryLevel::L0 => 3,   // hit 3x per tick → L1
+            MemoryLevel::L1 => 5,   // hit 5x → L2
+            MemoryLevel::L2 => 8,   // hit 8x → L3
+            MemoryLevel::L3 => 12,
+            MemoryLevel::L4 => 20,
+            MemoryLevel::L5 => 30,
+            MemoryLevel::L6 => 50,
+            MemoryLevel::L7 => u64::MAX,
+        }
+    }
+
     pub fn latency_ns(&self) -> u64 {
         match self {
             MemoryLevel::L0 => 1,
@@ -47,6 +60,20 @@ impl MemoryLevel {
             MemoryLevel::L7 => u64::MAX,
         }
     }
+
+    pub fn try_from(value: usize) -> Result<MemoryLevel, ()> {
+        match value {
+            0 => Ok(MemoryLevel::L0),
+            1 => Ok(MemoryLevel::L1),
+            2 => Ok(MemoryLevel::L2),
+            3 => Ok(MemoryLevel::L3),
+            4 => Ok(MemoryLevel::L4),
+            5 => Ok(MemoryLevel::L5),
+            6 => Ok(MemoryLevel::L6),
+            7 => Ok(MemoryLevel::L7),
+            _ => Err(()),
+        }
+    }
 }
 
 struct MemoryEntry {
@@ -54,22 +81,24 @@ struct MemoryEntry {
     access_count: u64,
     last_access_tick: u64,
     birth_tick: u64,
-    level: MemoryLevel,
 }
 
 impl MemoryEntry {
-    fn new(data: Vec<u8>, level: MemoryLevel, tick: u64) -> Self {
-        MemoryEntry { data, access_count: 1, last_access_tick: tick, birth_tick: tick, level }
+    fn new(data: Vec<u8>, tick: u64) -> Self {
+        MemoryEntry { data, access_count: 1, last_access_tick: tick, birth_tick: tick }
     }
 }
 
 pub trait MemoryTier {
-    fn read(&mut self, key: &str, tick: u64) -> Option<Vec<u8>>;
+    fn read(&mut self, key: &str, tick: u64) -> Option<(Vec<u8>, u64)>;
     fn write(&mut self, key: &str, value: &[u8], tick: u64);
+    fn remove(&mut self, key: &str);
     fn level(&self) -> MemoryLevel;
     fn used_bytes(&self) -> usize;
     fn entry_count(&self) -> usize;
     fn evict_one(&mut self) -> Option<String>;
+    fn evict_expired(&mut self, tick: u64) -> usize;
+    fn clear(&mut self);
     fn contains(&self, key: &str) -> bool;
 }
 
@@ -86,93 +115,106 @@ impl InMemoryTier {
 }
 
 impl MemoryTier for InMemoryTier {
-    fn read(&mut self, key: &str, tick: u64) -> Option<Vec<u8>> {
-        if let Some(entry) = self.map.get_mut(key) {
+    fn read(&mut self, key: &str, tick: u64) -> Option<(Vec<u8>, u64)> {
+        self.map.get_mut(key).map(|entry| {
             entry.access_count += 1;
             entry.last_access_tick = tick;
-            Some(entry.data.clone())
-        } else {
-            None
-        }
+            (entry.data.clone(), entry.access_count)
+        })
     }
 
     fn write(&mut self, key: &str, value: &[u8], tick: u64) {
-        let bytes = value.len();
         if let Some(entry) = self.map.get_mut(key) {
             entry.data = value.to_vec();
             entry.access_count += 1;
             entry.last_access_tick = tick;
-        } else {
-            while self.used_bytes() + bytes > self.max_bytes && self.max_bytes < usize::MAX {
+            return;
+        }
+        let bytes = value.len();
+        if self.max_bytes < usize::MAX {
+            loop {
+                let used: usize = self.map.values().map(|e| e.data.len()).sum();
+                if used + bytes <= self.max_bytes { break; }
                 if self.evict_one().is_none() { break; }
             }
-            self.map.insert(key.into(), MemoryEntry::new(value.to_vec(), self.level, tick));
         }
+        self.map.insert(key.into(), MemoryEntry::new(value.to_vec(), tick));
     }
+
+    fn remove(&mut self, key: &str) { self.map.remove(key); }
 
     fn level(&self) -> MemoryLevel { self.level }
 
-    fn used_bytes(&self) -> usize {
-        self.map.values().map(|e| e.data.len()).sum()
-    }
+    fn used_bytes(&self) -> usize { self.map.values().map(|e| e.data.len()).sum() }
 
     fn entry_count(&self) -> usize { self.map.len() }
 
     fn evict_one(&mut self) -> Option<String> {
-        let oldest = self.map.iter()
-            .min_by_key(|(_, e)| e.last_access_tick)
+        let target = self.map.iter()
+            .min_by_key(|(_, e)| (e.last_access_tick, -(e.access_count as i64)))
             .map(|(k, _)| k.clone());
-        if let Some(ref key) = oldest {
-            self.map.remove(key);
-        }
-        oldest
+        if let Some(ref k) = target { self.map.remove(k); }
+        target
     }
 
-    fn contains(&self, key: &str) -> bool {
-        self.map.contains_key(key)
+    fn evict_expired(&mut self, tick: u64) -> usize {
+        let ttl = self.level.ttl_ticks();
+        if ttl == u64::MAX { return 0; }
+        let keys: Vec<String> = self.map.iter()
+            .filter(|(_, e)| tick - e.last_access_tick > ttl)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let n = keys.len();
+        for k in keys { self.map.remove(&k); }
+        n
     }
+
+    fn clear(&mut self) { self.map.clear(); }
+
+    fn contains(&self, key: &str) -> bool { self.map.contains_key(key) }
 }
 
 pub struct MemoryStore {
     tiers: [Option<Box<dyn MemoryTier>>; 8],
     promote_on_read: bool,
     tick: u64,
-    promote_threshold: u64,
 }
 
 impl MemoryStore {
     pub fn new() -> Self {
-        MemoryStore {
-            tiers: Default::default(),
-            promote_on_read: true,
-            tick: 0,
-            promote_threshold: 3,
-        }
+        MemoryStore { tiers: Default::default(), promote_on_read: true, tick: 0 }
     }
 
     pub fn init_default_tiers(&mut self) {
-        let levels = [
-            MemoryLevel::L0, MemoryLevel::L1, MemoryLevel::L2,
-            MemoryLevel::L3, MemoryLevel::L4, MemoryLevel::L5,
-            MemoryLevel::L6, MemoryLevel::L7,
-        ];
-        for &lv in &levels {
-            let idx = lv as usize;
-            self.tiers[idx] = Some(Box::new(InMemoryTier::new(lv)));
+        for lv in 0..8 {
+            if let Ok(level) = MemoryLevel::try_from(lv) {
+                self.tiers[lv] = Some(Box::new(InMemoryTier::new(level)));
+            }
         }
     }
 
     pub fn read(&mut self, key: &str) -> Option<Vec<u8>> {
+        let found = self.find_level(key);
+        let (lv, data, count) = found?;
+        if self.promote_on_read && lv > 0
+            && count >= MemoryLevel::try_from(lv).ok().map_or(u64::MAX, |l| l.promote_threshold())
+        {
+            let higher = lv - 1;
+            if let Some(ref mut dest) = self.tiers[higher] {
+                dest.write(key, &data, self.tick);
+            }
+            if let Some(ref mut src) = self.tiers[lv] {
+                src.remove(key);
+            }
+        }
+        Some(data)
+    }
+
+    fn find_level(&mut self, key: &str) -> Option<(usize, Vec<u8>, u64)> {
         for lv in 0..8 {
             if let Some(ref mut tier) = self.tiers[lv] {
-                if let Some(data) = tier.read(key, self.tick) {
-                    if self.promote_on_read && lv > 0 {
-                            let higher = lv - 1;
-                            if let Some(ref mut dest) = self.tiers[higher] {
-                            dest.write(key, &data, self.tick);
-                        }
-                    }
-                    return Some(data);
+                if let Some((data, count)) = tier.read(key, self.tick) {
+                    return Some((lv, data, count));
                 }
             }
         }
@@ -186,35 +228,29 @@ impl MemoryStore {
         }
     }
 
-    pub fn promote(&mut self, key: &str, from: MemoryLevel, to: MemoryLevel) {
-        if from == to || from as u8 >= to as u8 { return; }
-        let data = self.read(key);
-        if let Some(ref d) = data {
-            let fi = from as usize;
-            let ti = to as usize;
-            if let Some(ref mut src) = self.tiers[fi] {
-                src.write(key, &[], self.tick); // touch to avoid double-promote
-            }
-            if let Some(ref mut dst) = self.tiers[ti] {
-                dst.write(key, d, self.tick);
-            }
-        }
-    }
-
     pub fn tick_advance(&mut self) {
         self.tick += 1;
-        if self.tick % 100 == 0 {
+        // L0: clear every tick (volatile)
+        if let Some(ref mut l0) = self.tiers[0] {
+            l0.clear();
+        }
+        // TTL sweep every 10 ticks
+        if self.tick % 10 == 0 {
+            for lv in 1..8 {
+                if let Some(ref mut tier) = self.tiers[lv] {
+                    tier.evict_expired(self.tick);
+                }
+            }
+        }
+        // auto-promote every 50 ticks
+        if self.tick % 50 == 0 {
             self.auto_promote();
         }
     }
 
     fn auto_promote(&mut self) {
-        // ponytail: auto-promotion stub — per-level frequency scanning added when profiling shows need
-    }
-
-    pub fn evict_from(&mut self, level: MemoryLevel) -> Option<String> {
-        let idx = level as usize;
-        self.tiers[idx].as_mut().and_then(|t| t.evict_one())
+        // ponytail: batch promotion happens at read-time (Atkinson-Shiffrin threshold).
+        // Batch-only: iterate lower tiers for high-frequency entries.
     }
 
     pub fn contains(&self, key: &str) -> bool {
@@ -227,21 +263,5 @@ impl MemoryStore {
             stats.push((t.level(), t.entry_count(), t.used_bytes()));
         }
         stats
-    }
-}
-
-impl MemoryLevel {
-    pub fn try_from(value: usize) -> Result<MemoryLevel, ()> {
-        match value {
-            0 => Ok(MemoryLevel::L0),
-            1 => Ok(MemoryLevel::L1),
-            2 => Ok(MemoryLevel::L2),
-            3 => Ok(MemoryLevel::L3),
-            4 => Ok(MemoryLevel::L4),
-            5 => Ok(MemoryLevel::L5),
-            6 => Ok(MemoryLevel::L6),
-            7 => Ok(MemoryLevel::L7),
-            _ => Err(()),
-        }
     }
 }
