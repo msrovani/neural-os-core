@@ -45,6 +45,7 @@ pub mod memory_store;
 pub mod memory;
 pub mod marketplace;
 pub mod cognitive_bridge;
+pub mod executive;
 pub mod expert_skills;
 pub mod skill_observer;
 pub mod self_evolve;
