@@ -9,6 +9,7 @@
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
 | 166 | ADR-0060 | BEI BitNet Cognitivo | **7/7 ondas** MPMC+Economia+Células+MoE+Memória+Afeto+Supervisor+Soul Mirror | Onda 6 v2: EgoLayer (EMA, latência), PonderNet (parada sigmoidal, lambda), SupervisorVerdict::Train/PromoteSkill/Ponder; Onda 7: SoulMirrorRenderer (AffectVector→visual), Avatar8State (8 estados), EXECUTIVE_SUPERVISOR global; ~2900 LOC, 11 commits, 0 erros |
+| 167 | ADR-0062 | SGDB TicKV+NoProto+Índices IA | **Proposed** — TicKV NVMe + NoProto Zero-Copy + ART + BQ Flat SIMD | FASE 0: FlashController NVMe; FASE 1: TicKV append/get/GC; FASE 2: NoProto schemas L0-L7; FASE 3: AiosDatabaseEngine ponte; FASE 4: ART Index L0-L3; FASE 5: BQ Flat SIMD L4-L5; FASE 6: Integração L0-L7; FASE 7: SIMD Dispatch; FASE 8: Power-loss + carga |
 | 164 | FitPolicy | llmfit-inspired | #468 host+guest fit | pack_filter FIT_GATE; cortex::model_fit; ModelHub escalate |
 | 163 | emagrecer + ADR-0057/0058 | Onda 0–6 + Compute + UI | cutover bin→crates + compute dispatch + card desktop | diff_bin_crate; wake multi-AP (-smp4 APs=3); #412 decode; embedded-graphics cards (close/mover/resize); orb+HUD |
 | 162 | LLM | BitNet ladder 850 | #PF AVX2 + BPE SP32/MRG1 | OOB store n%4; encode=HF; coh semântica residual |

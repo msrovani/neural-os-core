@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### ADR-0062: TicKV + NoProto + Índices IA como SGDB Primário (2026-07-22) — Proposed
+- **Arquitetura:** TicKV (Storage Engine, Append-Only NVMe via PCIe MMIO) + NoProto (Schema & Layout Zero-Copy) + ART (Chaves/Fatos L0-L3) + BQ Flat SIMD (Vetores L4-L5)
+- **Componentes:**
+  - `k_nano::storage::tickv` — wrapper TicKV sobre `FlashController` NVMe (read_page/write_page)
+  - `k_nano::schema::noproto` — schemas L0-L7 (MemoryDoc, VectorClock, BitNetTensor, BitVector)
+  - `k_nano::storage::engine` — `AiosDatabaseEngine` ponte NoProto ↔ TicKV + Vector Clock Lamport
+  - `k_nano::index::art` — Adaptive Radix Tree (nós 4/16/48/256, busca SIMD `_mm_cmpeq_epi8`)
+  - `k_ai::index::bitvec` — BQ + Flat SIMD Scan (Quantização Binária 1-bit, XOR + POPCNT via AVX-512/AVX2/scalar)
+  - `k_ai::arch::x86_64` — `select_best_hamming_kernel()` boot (AVX-512/AVX2/scalar)
+- **Integração Camadas Memória:**
+  - L0/L1: NoProto RAM only
+  - L2/L3: TicKV + NoProto + ART (timestamp key)
+  - L4/L5: TicKV + NoProto + BQ Flat SIMD (Hamming distance)
+  - L7: TicKV + NoProto + ART (chave fixa)
+- **Benchmarks alvo:** ART 10M chaves < 100ns P99; BQ 100k vetores top-1 < 0.3ms (AVX2) / 0.05ms (AVX-512); Power-loss kill -9 → boot → recall 100%
+- **Gate v2.0.0:** permanece fechado (review formal pendente)
+
 ### ADR-0060 BEI BitNet Cognitivo (2026-07-21) — 7/7 Ondas ✅
 - **Onda 0:** `k_nano::sync::mpmc` — MPMC lock-free queue (Vyukov CAS, power-of-2)
 - **Onda 1:** `k_ai::economy` + `expert_lifecycle` — CompressionTier (1bit→f32), BudgetManager, ExpertLifecycleManager (merge/split/stale)

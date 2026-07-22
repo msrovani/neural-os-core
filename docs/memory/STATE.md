@@ -17,14 +17,14 @@
 #   SESSION_152: Pós-LAN — net_bridge DNS/HTTP; NetFs peer; SelfUpdate HTTP; TLS BLOCKED
 #   SESSION_153: Release v1.9.0 TEST (docs + tag)
 #   SESSION_154: TLS pesquisa (B) opções A–D; WiFi inventário API77 + plano S0–S5
-#   SESSION_155: TLS #123 probe A PASS — embedded-tls 0.19 soft-float
-#   SESSION_156: TLS N4 wire — https_get; trust=unsecure
-#   SESSION_157: TLS smoke PASS — google 80952 B; soft crypto cfgs; WHPX qemu64
-#   SESSION_158: TLS PKI híbrido — root_learn→root_pin; pins+TOFU RAM
-#   SESSION_159: WiFi S0 honesty + prep S1 DID/FAT; fw_resolve=SKIP QEMU; sem ALIVE
-#   SESSION_160: WiFi pivô ath10k QCA6174 Note1050; A0–A2; iwlwifi secondary
-#   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
-#   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
+#   SESSION_154: TLS #123 probe A PASS — embedded-tls 0.19 soft-float
+#   SESSION_155: TLS N4 wire — https_get; trust=unsecure
+#   SESSION_156: TLS smoke PASS — google 80952 B; soft crypto cfgs; WHPX qemu64
+#   SESSION_157: TLS PKI híbrido — root_learn→root_pin; pins+TOFU RAM
+#   SESSION_158: WiFi S0 honesty + prep S1 DID/FAT; fw_resolve=SKIP QEMU; sem ALIVE
+#   SESSION_159: WiFi pivô ath10k QCA6174 Note1050; A0–A2; iwlwifi secondary
+#   SESSION_160: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
+#   SESSION_161: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
 #   SESSION_166: ADR-0060 BEI BitNet Cognitivo — 7/7 ondas implementadas (MPMC→economia→células→MoE→memória→afeto→supervisor→Soul Mirror)
 #   SESSION_164: FitPolicy Neural (#468) — host pack_filter + cortex::model_fit; cargo nk 0e
 #   SESSION_165: ADR-0059 F3-F7 — bridges + decode_harness + promote + micropython_fix + cleanup
@@ -48,6 +48,29 @@
 
 ## Roadmap Atual
 **Versão:** **v1.9.5 TESTE / NÃO ESTÁVEL** (2026-07-21) — ADR-0060 BEI 7/7 ondas SESSION_166; base v1.9.1 BitNet/TLS/WiFi.
+
+## ADR-0062: TicKV + NoProto + Índices IA como SGDB (2026-07-22)
+**Status:** Proposed / `por_fazer`  
+**Lifecycle:** `por_fazer`  
+**Ideias:** #491–#510  
+**Fases:**
+- FASE 0: Dependências + FlashController NVMe (k_nano)
+- FASE 1: TicKV wrapper + append/get + GC
+- FASE 2: NoProto schemas L0-L7 + encode/decode zero-copy
+- FASE 3: AiosDatabaseEngine (ponte NoProto ↔ TicKV + Vector Clock)
+- FASE 4: ART Index (Chaves/Fatos L0-L3) — Adaptive Radix Tree
+- FASE 5: BQ + Flat SIMD Scan (Vetores L4-L5) — Quantização Binária + XOR/POPCNT
+- FASE 6: Integração Camadas Memória (Hermes/Cortex/Jarbas)
+- FASE 7: SIMD Dispatch Unificado (k-ai + k-nano)
+- FASE 8: Testes Integração + Power-Loss + Carga
+
+**Critérios de Aceite:**
+- Hermes `recall(L4, query)` < 1ms end-to-end
+- Jarbas boot < 500ms (L7 do TicKV)
+- Power-loss: kill -9 durante write → boot → recall 100%
+- 100k vetores BQ top-1 < 0.3ms (AVX2) / 0.05ms (AVX-512)
+- ART 10M chaves lookup P99 < 100ns
+- Zero alocação heap em hot path (NoProto zero-copy)
 **Base:** v1.8.0 = ADR-0042 N1–N5 + wire; v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Residuals 0–7.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
