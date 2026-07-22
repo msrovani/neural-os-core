@@ -25,6 +25,7 @@
 #   SESSION_160: WiFi pivô ath10k QCA6174 Note1050; A0–A2; iwlwifi secondary
 #   SESSION_161: ath10k A3 BMI CE+LZ → fw_ready; runtime Note AWAITING
 #   SESSION_162: BitNet ladder 850 — AVX2 OOB #PF fix; BPB1 SP32+MRG1; LLM-TEST BPE (coh semântica residual)
+#   SESSION_166: ADR-0060 BEI BitNet Cognitivo — 7/7 ondas implementadas (MPMC→economia→células→MoE→memória→afeto→supervisor→Soul Mirror)
 #   SESSION_164: FitPolicy Neural (#468) — host pack_filter + cortex::model_fit; cargo nk 0e
 #   SESSION_165: ADR-0059 F3-F7 — bridges + decode_harness + promote + micropython_fix + cleanup
 #   SESSION_163: Emagrecer neural-kernel Onda 0–6 + ADR-0057 Compute Dispatch + ADR-0058 Generative Card Desktop
@@ -46,7 +47,7 @@
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
-**Versão:** **v1.9.5 TESTE / NÃO ESTÁVEL** (2026-07-19) — Emagrecer bin→crates SESSION_163; base v1.9.1 BitNet/TLS/WiFi.
+**Versão:** **v1.9.5 TESTE / NÃO ESTÁVEL** (2026-07-21) — ADR-0060 BEI 7/7 ondas SESSION_166; base v1.9.1 BitNet/TLS/WiFi.
 **Base:** v1.8.0 = ADR-0042 N1–N5 + wire; v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Residuals 0–7.  
 **Runtime marco:** v1.7.2 clima PASS parcial forte+; gates N2–N5 `logs/boot_n2_20260716_131837.txt` … `logs/boot_n5_20260716_145943.txt`.  
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  

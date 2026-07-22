@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### ADR-0060 BEI BitNet Cognitivo (2026-07-21) — 7/7 Ondas ✅
+- **Onda 0:** `k_nano::sync::mpmc` — MPMC lock-free queue (Vyukov CAS, power-of-2)
+- **Onda 1:** `k_ai::economy` + `expert_lifecycle` — CompressionTier (1bit→f32), BudgetManager, ExpertLifecycleManager (merge/split/stale)
+- **Onda 2:** `cortex::cellular` — CognitiveCell (per-cell inbox, O(1) routing) + `cortex::evolution` — PlasticityController (entropy/error]
+- **Onda 3:** `cortex::moe` — Int8Router + DynamicMoE (birth/merge/split + self-test 6 asserts)
+- **Onda 4:** `hermes::memory` — 8 tiers L0-L7, Atkinson-Shiffrin promote, LRU+LFU evict, TTL sweep
+- **Onda 5:** `hermes::affect` — AffectVector 8D, AffectRegulator, EmotionState, SoulMirror
+- **Onda 6:** `hermes::executive` — ExecutiveSupervisor (EgoLayer EMA, PonderNet sigmoidal, SkillOpt/BitNetTrainer bridges, 7-phase loop)
+  - **v1 (65cec5a):** LoopPhase, EntropyMonitor, SupervisorVerdict
+  - **v2 (bb464af):** EgoLayer (EMA confiança/latência), PonderNet (parada sigmoidal, lambda), `SupervisorVerdict::Train`/`PromoteSkill`/`Ponder`, bridges SkillOpt+BitNetTrainer
+- **Onda 7:** `jarbas::display::soul_mirror` + `avatar8` — Soul Mirror visual (cor/valência, pulsação/arousal, anéis/curiosidade, rotação/LoopPhase, brilho/coerência); Avatar8State (8 estados com partículas)
+- **Integração:** `hermes::globals::EXECUTIVE_SUPERVISOR` global para ponte hermes→jarbas
+- ~2900 LOC, 24 arquivos, 11 commits (`4eaf54e..bb464af`), 0 erros
+- **Gate v2.0.0** permanece fechado (review formal pendente)
+
 ### FitPolicy Neural (SESSION_164 / IDEA #468)
 - Host: `tools/llmfit_pack_filter.py` + `FIT_GATE=1` em mkfat32/mkexfat (filtra `PACK_LLM` para baixo)
 - Guest: `cortex::model_fit` (re-export `k_ai::model_fit`) — Perfect/Good/Marginal/TooTight/Deny
