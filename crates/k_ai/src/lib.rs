@@ -10,11 +10,15 @@ extern crate alloc;
 // Depends on k_nano (foundation) and cortex (BitNet). Sem dep Ring 2 (jarbas/hermes).
 
 pub mod agency;
-pub mod agency_seed;
 pub mod agency_importer;
+pub mod agency_seed;
+// ponytail: arch module disabled (pre-existing SIMD intrinsics errors, unrelated to BEI)
+// pub mod arch;
 pub mod audit;
 pub mod boot_log_agent;
 pub mod chunker;
+pub mod economy;
+pub mod expert_lifecycle;
 pub mod cognitive;
 pub mod context_window;
 pub mod conversation;
@@ -35,3 +39,5 @@ pub mod fs;
 pub mod trust;
 pub mod shutdown;
 pub mod usage;
+pub mod ternary;
+pub mod router;

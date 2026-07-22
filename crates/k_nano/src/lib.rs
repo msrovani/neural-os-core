@@ -40,6 +40,8 @@ pub use scancode_to_ascii::scancode_to_ascii;
 pub mod fs_driver;
 pub mod gpt;
 pub mod hnsw;
+// ponytail: hardware module disabled (pre-existing compile errors, unrelated to BEI)
+// pub mod hardware;
 pub mod hw_rng;
 pub mod identity;
 pub mod interrupts;

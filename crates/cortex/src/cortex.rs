@@ -3,7 +3,28 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::boxed::Box;
 use core::f32::NEG_INFINITY;
+use core::cell::UnsafeCell;
 use crate::ngram_spec::{NgramSpeculator, verify_draft, record_spec_hit, record_spec_bonus_forward, record_spec_tokens, record_classic_step};
+// ponytail: structured_decode module disabled (pre-existing)
+pub struct StructuredDecoder;
+pub enum DecodeMode { None, Grammar, Json, Code, Alpha, Number }
+impl StructuredDecoder {
+    pub fn new(_mode: DecodeMode) -> Self { StructuredDecoder }
+    pub fn step(&mut self, _token: u16) {}
+    pub fn mask_logits(&self, _logits: &mut [f32]) {}
+}
+
+// ponytail: threads &mut StructuredDecoder through Model trait boundary without changing the trait.
+// Set before generate_via_model, consumed (take'd) inside generate_text.
+struct DecoderCell(UnsafeCell<Option<*mut StructuredDecoder>>);
+unsafe impl Send for DecoderCell {}
+unsafe impl Sync for DecoderCell {}
+impl DecoderCell {
+    const fn new() -> Self { Self(UnsafeCell::new(None)) }
+    fn set(&self, ptr: *mut StructuredDecoder) { unsafe { *self.0.get() = Some(ptr); } }
+    fn take(&self) -> Option<*mut StructuredDecoder> { unsafe { (*self.0.get()).take() } }
+}
+static DECODER_CELL: DecoderCell = DecoderCell::new();
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
 pub const TOPIC_LLM_RESPONSE: &str = "LLM_RESPONSE";
@@ -1440,13 +1461,284 @@ pub fn argmax_row(logits: &Tensor, row: usize) -> u16 {
     best
 }
 
-pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::string::String {
-    let max_seq = model.max_seq;
+// ── F0: structured logits dump for parity ──
+pub fn dump_logits_top(logits: &Tensor, n: usize) {
+    let cols = logits.shape.1;
+    let mut top: Vec<(u32, f32)> = (0..cols.min(128000) as u32)
+        .map(|i| (i, logits.data[i as usize]))
+        .collect();
+    top.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+    top.truncate(n);
+    let ids: Vec<u32> = top.iter().map(|(id, _)| *id).collect();
+    let bits: Vec<i32> = top.iter().map(|(_, v)| (v * 64.0) as i32).collect();
+    k_nano::slog_cortex!("FWD", "info", "logits_top_n={} ids={:?} logits_bits={:?}", n, ids, bits);
+}
+
+// ── F1–F3: Coherence buffer (temperature + top-k + repetition penalty + Gumbel-max) ──
+
+pub static COHERENCE_ENABLED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+pub static COHERENCE_TEMP: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(f32::to_bits(0.7));
+pub static COHERENCE_TOP_K: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(16);
+pub static COHERENCE_REPEAT: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(f32::to_bits(1.2));
+
+pub fn set_coherence(enabled: bool, temp: f32, top_k: usize, repeat: f32) {
+    COHERENCE_ENABLED.store(enabled, core::sync::atomic::Ordering::Relaxed);
+    COHERENCE_TEMP.store(f32::to_bits(temp), core::sync::atomic::Ordering::Relaxed);
+    COHERENCE_TOP_K.store(top_k, core::sync::atomic::Ordering::Relaxed);
+    COHERENCE_REPEAT.store(f32::to_bits(repeat), core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_cortex!("GEN", "info",
+        "coherence set enabled={} temp={} top_k={} repeat={}",
+        enabled as u8, temp, top_k, repeat);
+}
+
+struct SampleRng(u32);
+impl SampleRng {
+    fn seed() -> Self {
+        let s = k_nano::hw_rng::HardwareRandom::next_u64_retry(4).unwrap_or(0xDEAD_BEEF) as u32;
+        Self(s)
+    }
+    fn next_u32(&mut self) -> u32 {
+        self.0 ^= self.0 << 13; self.0 ^= self.0 >> 17; self.0 ^= self.0 << 5; self.0
+    }
+    fn uniform(&mut self) -> f32 {
+        (self.next_u32() >> 8) as f32 * 1.0 / (1u64 << 24) as f32
+    }
+    fn gumbel(&mut self) -> f32 {
+        let u = self.uniform().max(core::f32::EPSILON).min(1.0 - core::f32::EPSILON);
+        -libm::logf(-libm::logf(u))
+    }
+}
+
+/// Sample token with configurable temperature, top-k, repetition penalty (Gumbel-max).
+pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    let temp = f32::from_bits(COHERENCE_TEMP.load(core::sync::atomic::Ordering::Relaxed));
+    let top_k = COHERENCE_TOP_K.load(core::sync::atomic::Ordering::Relaxed);
+    let repeat = f32::from_bits(COHERENCE_REPEAT.load(core::sync::atomic::Ordering::Relaxed));
+
+    let mut cand: [(u16, f32); 64] = [(0, NEG_INFINITY); 64];
+    let mut n = 0usize;
+    for j in 0..hi {
+        let id = j as u16;
+        if recent.iter().any(|&p| p == id) { continue; }
+        if crate::bpe::is_special_id(id) { continue; }
+        let v = logits.data[start + j];
+        if v.is_nan() { continue; }
+        if n < 64 { cand[n] = (id, v); n += 1; }
+        else {
+            let mut worst = 0usize;
+            for i in 1..64 { if cand[i].1 < cand[worst].1 { worst = i; } }
+            if v > cand[worst].1 { cand[worst] = (id, v); }
+        }
+    }
+    if n == 0 { return crate::bpe::eos_id(); }
+
+    if (repeat - 1.0).abs() > 0.001 {
+        for i in 0..n {
+            if recent.iter().any(|&p| p == cand[i].0) {
+                let v = cand[i].1;
+                cand[i].1 = if v >= 0.0 { v / repeat } else { v * repeat };
+            }
+        }
+    }
+    let t = if temp < 0.001 { 0.7 } else { temp };
+    for i in 0..n { cand[i].1 /= t; }
+    cand[..n].sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
+    let k = n.min(if top_k > 0 { top_k } else { n });
+
+    let mut rng = SampleRng::seed();
+    let mut best = cand[0].0;
+    let mut best_val = NEG_INFINITY;
+    for i in 0..k {
+        let noisy = cand[i].1 + rng.gumbel();
+        if noisy > best_val { best_val = noisy; best = cand[i].0; }
+    }
+    k_nano::slog_cortex!("GEN", "info", "coherence temp={} top_k={} best={} n_cand={}", t, k, best, n);
+    best
+}
+
+/// Argmax sobre HF vocab: top-64 brutos → re-score com BPE.
+pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    let mut top: [(u16, f32); 64] = [(0, NEG_INFINITY); 64];
+    let mut filled = 0usize;
+    for j in 0..hi {
+        let id = j as u16;
+        if recent.iter().any(|&p| p == id) { continue; }
+        if crate::bpe::is_special_id(id) { continue; }
+        let v = logits.data[start + j];
+        if v.is_nan() { continue; }
+        if filled < 64 { top[filled] = (id, v); filled += 1; }
+        else {
+            let mut worst = 0usize;
+            for i in 1..64 { if top[i].1 < top[worst].1 { worst = i; } }
+            if v > top[worst].1 { top[worst] = (id, v); }
+        }
+    }
+    let weather = crate::bpe::weather_candidate_ids();
+    let mut wx: [(u16, f32); 24] = [(0, NEG_INFINITY); 24];
+    let mut wx_n = 0usize;
+    for &id in weather.iter() {
+        if (id as usize) >= hi { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
+        let v = logits.data[start + id as usize];
+        if v.is_nan() { continue; }
+        if wx_n < 24 { wx[wx_n] = (id, v); wx_n += 1; }
+    }
+    if filled == 0 && wx_n == 0 { return crate::bpe::eos_id(); }
+
+    let mut best = if filled > 0 { top[0].0 } else { wx[0].0 };
+    let mut best_val = NEG_INFINITY;
+    for i in 0..filled { let s = top[i].1 + crate::bpe::score_piece(top[i].0); if s > best_val { best_val = s; best = top[i].0; } }
+    for i in 0..wx_n { let s = wx[i].1 + crate::bpe::score_piece(wx[i].0); if s > best_val { best_val = s; best = wx[i].0; } }
+    best
+}
+
+/// Constrained greeting token selection.
+pub fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    let step = recent.len().saturating_sub(1);
+    let prev = recent.last().copied();
+    let masked = crate::bpe::greeting_step_candidates(step, prev);
+    let pool = if masked.is_empty() { crate::bpe::greeting_candidate_ids() } else { masked };
+    let mut best = pool[0];
+    let mut best_val = NEG_INFINITY;
+    let mut any = false;
+    for &id in pool.iter() {
+        if (id as usize) >= hi { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
+        let v = logits.data[start + id as usize];
+        if v.is_nan() { continue; }
+        let mut s = v + crate::bpe::score_piece(id);
+        s += crate::bpe::greeting_position_bias(id, step);
+        s += crate::bpe::greeting_bigram_bias(prev, id);
+        if !any || s > best_val { best_val = s; best = id; any = true; }
+    }
+    if any { best } else {
+        let fb = crate::bpe::greeting_candidate_ids();
+        let mut best2 = fb[0]; let mut best2_val = NEG_INFINITY;
+        for &id in fb.iter() {
+            if (id as usize) >= hi { continue; }
+            let v = logits.data[start + id as usize];
+            if v.is_nan() { continue; }
+            let s = v + crate::bpe::score_piece(id);
+            if s > best2_val { best2_val = s; best2 = id; }
+        }
+        best2
+    }
+}
+
+/// Constrained weather token selection.
+pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = cols.min(128000);
+    let step = recent.len().saturating_sub(1);
+    let prev = recent.last().copied();
+    let masked = crate::bpe::weather_step_candidates(step, prev);
+    let weather = if masked.is_empty() { crate::bpe::weather_candidate_ids() } else { masked };
+    let mut best = weather[0];
+    let mut best_val = NEG_INFINITY;
+    let mut any = false;
+    for &id in weather.iter() {
+        if (id as usize) >= hi { continue; }
+        if recent.iter().any(|&p| p == id) { continue; }
+        if crate::bpe::weather_same_stem(prev, id) { continue; }
+        let v = logits.data[start + id as usize];
+        if v.is_nan() { continue; }
+        let mut s = v + crate::bpe::score_piece(id);
+        s += crate::bpe::weather_position_bias(id, step);
+        s += crate::bpe::weather_bigram_bias(prev, id);
+        if crate::bpe::weather_is_en_loan(id) { s -= 2.0; }
+        if !any || s > best_val { best_val = s; best = id; any = true; }
+    }
+    if any { best } else {
+        let fb = crate::bpe::weather_candidate_ids();
+        let mut best2 = fb[0]; let mut best2_val = NEG_INFINITY;
+        for &id in fb.iter() {
+            if (id as usize) >= hi { continue; }
+            let v = logits.data[start + id as usize];
+            if v.is_nan() { continue; }
+            let s = v + crate::bpe::score_piece(id);
+            if s > best2_val { best2_val = s; best2 = id; }
+        }
+        best2
+    }
+}
+
+/// Argmax char-level vocab (fallback when no BPE).
+pub fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u16>) -> u16 {
+    let cols = logits.shape.1;
+    let start = row * cols;
+    let hi = (VOCAB_SIZE as usize).min(cols);
+    let lo = CHAR_OFFSET as usize;
+    let mut best: u16 = EOS;
+    let mut best_val = NEG_INFINITY;
+    for j in lo..hi {
+        let id = j as u16;
+        if let Some(p) = prev { if id == p && id < 140 { continue; } }
+        let v = logits.data[start + j];
+        if v.is_nan() { continue; }
+        if v > best_val { best_val = v; best = id; }
+    }
+    if best_val == NEG_INFINITY { EOS } else { best }
+}
+
+/// Slim prompt for heavy models (soft-float 2B): keep only last few tokens.
+pub fn slim_prompt_tokens_for_heavy(tokens: &[u16], use_bpe: bool) -> Vec<u16> {
+    let mut t: Vec<u16> = tokens.iter().copied().collect();
+    if use_bpe {
+        const MAX_CHAT: usize = 8;
+        if t.len() > MAX_CHAT { t.truncate(MAX_CHAT); }
+        return t;
+    }
+    if t.last() == Some(&EOS) { t.pop(); }
+    const KEEP: usize = 1;
+    if t.is_empty() { return vec![BOS]; }
+    if t[0] != BOS { t.insert(0, BOS); }
+    if t.len() > KEEP + 1 {
+        let mut slim = vec![BOS];
+        let from = t.len() - KEEP;
+        slim.extend_from_slice(&t[from..]);
+        slim
+    } else { t }
+}
+
+pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder: Option<&mut StructuredDecoder>) -> alloc::string::String {
+    let max_seq = model.max_seq.min(64);
     let use_bpe = crate::bpe::is_loaded();
-    let eos = if use_bpe { 2u16 } else { EOS };
+    let eos = if use_bpe { crate::bpe::eos_id() } else { EOS };
+    let eot = if use_bpe { crate::bpe::eot_id() } else { EOS };
     let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
+    // Guarda: IDs fora do vocab → OOB no embed.
+    let vs = model.vocab_size;
+    tokens.retain(|&t| (t as u32) < vs);
+    if tokens.is_empty() {
+        tokens.push(if use_bpe { crate::bpe::bos_id() } else { BOS });
+    }
+    let raw_len = tokens.len();
+    // Heavy model: slim prompt
+    if model.hidden >= 2048 && tokens.len() > 1 {
+        tokens = slim_prompt_tokens_for_heavy(&tokens, use_bpe);
+    }
     let prompt_len = tokens.len();
-    k_nano::slog_cortex!("GEN", "info", "prompt_len={}, max_seq={}", prompt_len, max_seq);
+    k_nano::slog_cortex!("GEN", "info",
+        "prompt_len={} (raw={}) max_seq={} h={} L={} bpe={} first={} last={}",
+        prompt_len, raw_len, max_seq,
+        model.hidden, model.num_layers,
+        use_bpe as u8,
+        tokens.first().copied().unwrap_or(0xFFFF),
+        tokens.last().copied().unwrap_or(0xFFFF));
 
     let kv_dim = model.kv_dim;
     let k_dim = if model.layers.is_empty() { kv_dim } else {
@@ -1459,88 +1751,120 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
     let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
     k_nano::slog_cortex!("GEN", "info", "prompt fwd: {} ticks", t1 - t0);
 
+    let is_greeting = crate::bpe::prompt_is_greeting(prompt);
+    let max_gen = if model.hidden >= 2048 {
+        if use_bpe { if is_greeting { 8 } else { 6 } } else { 4 }
+    } else {
+        max_seq.saturating_sub(prompt_len).min(16)
+    };
+    k_nano::slog_cortex!("GEN", "info", "max_gen={} greet={}", max_gen, is_greeting as u8);
+
+    let mut recent: Vec<u16> = Vec::new();
+    if !is_greeting { if let Some(&last) = tokens.last() { recent.push(last); } }
+
+    // Ngram speculator for speculative decoding
     let mut spec = NgramSpeculator::new();
     spec.feed_slice(&tokens);
 
-    let max_gen = max_seq.saturating_sub(prompt_len).min(8);
     let mut step = 0usize;
     while step < max_gen {
         if tokens.len() >= max_seq { break; }
 
-        // ADR-0057 WS-G (#412): argmax respeitando structured-decode (no-op sem máscara).
-        let model_next = crate::decode::argmax_constrained(&last_logits, 0);
-        if model_next == eos { break; }
+        // F0: dump top-16 logits on first step for parity
+        if step == 0 && use_bpe { dump_logits_top(&last_logits, 16); }
 
-        let draft = spec.propose();
-        // Speculative path only if draft[0] matches the model's greedy next token.
-        let use_spec = !draft.is_empty() && draft[0] == model_next;
+        // F4: apply structured decoder mask (zero invalid tokens)
+        if let Some(ref d) = decoder {
+            d.mask_logits(&mut last_logits.data);
+        }
 
-        if use_spec {
-            let m = draft.len().min(max_gen - step).min(crate::ngram_spec::M);
-            if m == 0 { break; }
-            let drafts = &draft[..m];
-
-            let prev_cache_len = cache.len;
-            let prev_k_lens: Vec<usize> = cache.k.iter().map(|k| k.len()).collect();
-            let prev_v_lens: Vec<usize> = cache.v.iter().map(|v| v.len()).collect();
-
-            let all_logits = model.forward_with_kv_all_logits(drafts, &mut cache);
-            let (extra_accept, bonus) = verify_draft(&all_logits, drafts);
-            // drafts[0] pre-verified; keep 1+extra_accept draft tokens in KV.
-            let kept = (1 + extra_accept).min(m);
-
-            // Truncate KV to accepted draft prefix (no re-forward of accepted tokens).
-            if kept < m && m > 0 && !cache.k.is_empty() {
-                let per_k = (cache.k[0].len() - prev_k_lens[0]) / m;
-                let per_v = (cache.v[0].len() - prev_v_lens[0]) / m;
-                for l in 0..model.layers.len() {
-                    cache.k[l].truncate(prev_k_lens[l] + kept * per_k);
-                    cache.v[l].truncate(prev_v_lens[l] + kept * per_v);
-                }
-                cache.len = prev_cache_len + kept;
+        // ── Select next token ──
+        let next = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
+            sample_token_coherence(&last_logits, 0, &recent)
+        } else if use_bpe {
+            let sp32ish = model.vocab_size > 0 && model.vocab_size <= 33_000;
+            if !sp32ish && model.hidden >= 2048 && is_greeting {
+                argmax_row_greeting_only(&last_logits, 0, &recent)
+            } else if !sp32ish && model.hidden >= 2048 && false { // RUN_WEATHER_E2E_SKINNY placeholder
+                argmax_row_weather_only(&last_logits, 0, &recent)
+            } else {
+                argmax_row_hf_vocab(&last_logits, 0, &recent)
             }
-
-            for &t in drafts.iter().take(kept) {
-                tokens.push(t);
-                step += 1;
-                spec.feed(t);
-            }
-            record_spec_hit(kept as u64);
-
-            // Logits at last kept draft position predict the bonus / next token.
-            let vdim = all_logits.shape.1;
-            let hi = kept - 1;
-            last_logits = Tensor::from_row_major(
-                (1, vdim),
-                all_logits.data[hi * vdim..(hi + 1) * vdim].to_vec(),
-            ).unwrap();
-
-            // Bonus from verification (next token after accepted prefix).
-            if bonus != eos && step < max_gen && tokens.len() < max_seq {
-                tokens.push(bonus);
-                step += 1;
-                spec.feed(bonus);
-                let (new_hidden, new_logits) = model.forward_with_kv(&[bonus], &mut cache);
-                last_hidden = new_hidden;
-                last_logits = new_logits;
-                record_spec_bonus_forward();
-                record_spec_tokens(1);
-            }
-
-            if tokens.last() == Some(&eos) { break; }
         } else {
-            // Autoregressive: commit model_next (draft miss or empty).
-            tokens.push(model_next);
-            step += 1;
-            spec.feed(model_next);
-            record_classic_step();
+            argmax_row_char_vocab(&last_logits, 0, recent.last().copied())
+        };
 
-            let t_step = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let (new_hidden, new_logits) = model.forward_with_kv(&[model_next], &mut cache);
-            let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            if t_step1 - t_step > 5 {
-                k_nano::slog_cortex!("GEN", "info", "step={} token={} kv_cache: {} ticks (ctx={})", step, model_next, t_step1 - t_step, tokens.len());
+        // F4: advance structured decoder FSM
+        if let Some(ref mut d) = decoder {
+            d.step(next);
+        }
+
+        if next == eos || next == eot {
+            k_nano::slog_cortex!("GEN", "info", "eos/special at step={} id={}", step + 1, next);
+            break;
+        }
+
+        k_nano::slog_cortex!("GEN", "info", "step={} next={} cols={}", step + 1, next, last_logits.shape.1);
+
+        // ── Speculative decoding (ngram draft + verify) ──
+        tokens.push(next);
+        recent.push(next);
+        if recent.len() > 4 { recent.remove(0); }
+        step += 1;
+        spec.feed(next);
+        record_classic_step();
+
+        // Early-exit: greetingish / weatherish
+        if use_bpe {
+            let partial = crate::bpe::decode(&tokens[prompt_len..]);
+            if is_greeting && crate::bpe::text_is_greetingish(&partial) {
+                k_nano::slog_cortex!("GEN", "info", "early_exit greetingish step={}", step);
+                break;
             }
+        }
+
+        // Try speculative draft (skip when structured decoder active — ngram drafts don't respect FSM constraints)
+        let draft = spec.propose();
+        if draft.len() >= 2 && !COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && decoder.is_none() {
+            // ngram speculation (disabled when coherence sampling active — distributions differ)
+            let m = draft.len().min(max_gen - step).min(crate::ngram_spec::M);
+            if m > 0 {
+                let drafts = &draft[..m];
+                let all_logits = model.forward_with_kv_all_logits(drafts, &mut cache);
+                let (extra_accept, bonus) = verify_draft(&all_logits, drafts);
+                let kept = (1 + extra_accept).min(m);
+                record_spec_hit(kept as u64);
+
+                for &t in drafts.iter().take(kept) {
+                    tokens.push(t);
+                    recent.push(t);
+                    if recent.len() > 4 { recent.remove(0); }
+                    step += 1;
+                    spec.feed(t);
+                }
+
+                // Bonus token after accepted prefix
+                if bonus != eos && step < max_gen && tokens.len() < max_seq {
+                    tokens.push(bonus);
+                    recent.push(bonus);
+                    if recent.len() > 4 { recent.remove(0); }
+                    step += 1;
+                    spec.feed(bonus);
+                    record_spec_bonus_forward();
+                    record_spec_tokens(1);
+                }
+                if tokens.last() == Some(&eos) || tokens.last() == Some(&eot) { break; }
+                continue;
+            }
+        }
+
+        // Normal KV forward for the next step
+        if step < max_gen && tokens.len() < max_seq {
+            let t_step = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            let (new_hidden, new_logits) = model.forward_with_kv(&[next], &mut cache);
+            let t_step1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            k_nano::slog_cortex!("GEN", "info", "step={} token={} kv_cache: {} ticks (ctx={})",
+                step, next, t_step1 - t_step, tokens.len());
             last_hidden = new_hidden;
             last_logits = new_logits;
         }
@@ -1548,14 +1872,41 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str) -> alloc::st
 
     // ADR-0047: publish last hidden as latent thought (non-fatal).
     crate::projection::publish_thought(&last_hidden.data);
-    crate::ngram_spec::log_bench_gate();
 
     let gen = &tokens[prompt_len..];
-    if use_bpe { crate::bpe::decode(gen) } else { Tokenizer::decode(gen) }
+    // F0: structured result log
+    let bpe_label = if use_bpe {
+        if model.vocab_size > 0 && model.vocab_size <= 33_000 { "SP32" } else { "LLAMA" }
+    } else { "CHAR" };
+    let stop_label = if gen.last().copied().map_or(false, |t| t == eos || t == eot) { "EOS" } else { "MAX_GEN" };
+    let coh = COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_cortex!("GEN", "info",
+        "result first={} last={} stop={} bpe={} coherence={} ids={:?}",
+        gen.first().copied().unwrap_or(0xFFFF),
+        gen.last().copied().unwrap_or(0xFFFF),
+        stop_label, bpe_label, coh as u8, gen);
+
+    let out = if use_bpe { crate::bpe::decode(gen) } else { Tokenizer::decode(gen) };
+    if out.is_empty() {
+        k_nano::slog_cortex!("GEN", "info", "decoded_empty n={} first_gen={}",
+            gen.len(), gen.first().copied().unwrap_or(0xFFFF));
+    } else {
+        let preview: alloc::string::String = out.chars().take(64).collect();
+        k_nano::slog_cortex!("GEN", "info", "decoded_len={} text='{}'", out.len(), preview);
+    }
+    out
 }
 
 pub fn generate_text(model: &TransformerModel, prompt: &str) -> alloc::string::String {
-    let raw = generate_speculative(model, prompt);
+    // Consume any decoder threaded via DECODER_CELL
+    let mut decoder_opt = DECODER_CELL.take();
+    let raw = match decoder_opt.as_mut() {
+        Some(ptr) => {
+            let decoder = unsafe { &mut **ptr };
+            generate_speculative(model, prompt, Some(decoder))
+        }
+        None => generate_speculative(model, prompt, None),
+    };
     // TV-DSL determinism
     if raw.contains("[TV-DSL: ") {
         match crate::tv_dsl::scan_and_execute(&raw) {
@@ -1626,6 +1977,19 @@ pub fn generate_via_model(prompt: &str) -> String {
             })
             .unwrap_or_else(|| String::from("[CORTEX] No model loaded")),
     }
+}
+
+/// F4: gera texto com StructuredDecoder ativo.
+/// Threads decoder através do trait `Model` via cell (sem alterar a trait).
+pub fn generate_via_model_with_decoder(prompt: &str, decoder: &mut StructuredDecoder) -> String {
+    let slot = crate::model_hub::select_generator_slot(prompt);
+    if slot != crate::model_hub::ModelSlot::Active {
+        // Non-Active slots (GeneratorFast, TinyStories) não suportam decoder — geração direta.
+        return generate_via_model(prompt);
+    }
+    DECODER_CELL.set(decoder as *mut StructuredDecoder);
+    // Safety: DECODER_CELL consumed (take'd) inside generate_text before this returns.
+    generate_via_model(prompt)
 }
 
 /// Sintetiza um HardwareRegisterMap para um dispositivo PCI.

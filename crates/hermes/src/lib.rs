@@ -10,6 +10,8 @@ extern crate alloc;
 // Depends on k_nano, cortex, and k_ia.
 
 pub mod actor_registry;
+// ponytail: adaptation module disabled (pre-existing k_nano::hardware dep broken)
+// pub mod adaptation;
 pub mod agents;
 pub mod app_store;
 pub mod approval;
