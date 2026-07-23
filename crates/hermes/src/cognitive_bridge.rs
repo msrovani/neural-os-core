@@ -529,15 +529,29 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
         emo
     ));
 
-    // BGE RAG — diferencial vs HANR FTS5-only
-    let rag = k_ai::memory_systems::semantic_search(user_intent, 3);
-    if !rag.is_empty() {
-        s.push_str("[BGE-RAG]\n");
-        for (label, score) in rag {
-            if score > 0.05 {
-                s.push_str(&format!("  ({:.2}) {}\n", score, label));
+    // ADR-0064 TF-IDF RAG (L1 lexical) — fallback BGE embeddings se store vazio
+    let tfidf = cortex::vector_db::rag_context_prefix(user_intent, 5);
+    if !tfidf.is_empty() {
+        s.push_str(&tfidf);
+        s.push('\n');
+        k_nano::slog_bin!("vectordb", "search", "query injected top context");
+    } else {
+        let rag = k_ai::memory_systems::semantic_search(user_intent, 3);
+        if !rag.is_empty() {
+            s.push_str("[BGE-RAG]\n");
+            for (label, score) in rag {
+                if score > 0.05 {
+                    s.push_str(&format!("  ({:.2}) {}\n", score, label));
+                }
             }
+            s.push('\n');
         }
+    }
+
+    // ADR-0063 F6: working/episodic MemoryDoc (L1/L2)
+    let sgdb = k_ai::sgdb::prompt_slice(400);
+    if !sgdb.is_empty() {
+        s.push_str(&sgdb);
         s.push('\n');
     }
 
@@ -597,7 +611,20 @@ fn last_latent_snip() -> Option<String> {
 pub fn after_exchange(user: &str, response: &str, tick: u64) {
     session_record("user", user, tick);
     session_record("assistant", response, tick);
-    // Index BGE para RAG futuro
+    // ADR-0064: TF-IDF remember + persist TicKV
+    let _ = cortex::vector_db::rag_remember("user", user, cortex::vector_db::EntryKind::Memory);
+    let _ = cortex::vector_db::rag_remember(
+        "cortex",
+        response,
+        cortex::vector_db::EntryKind::Memory,
+    );
+    let bytes = cortex::vector_db::global_persist_bytes();
+    let _ = k_ai::sgdb::put_vdb_blob(&bytes);
+    // ADR-0063 F6: MemoryDoc L1/L2 + TickvLite
+    k_ai::sgdb::remember_exchange(user, response);
+    // Audit flush periódico (cada exchange — compacto)
+    crate::globals::AUDIT_TRAIL.lock().flush_to_sgdb();
+    // BGE paralelo (embeddings residual)
     k_ai::memory_systems::index_embedding("user", user);
     k_ai::memory_systems::index_embedding("assistant", response);
     budget_reset();

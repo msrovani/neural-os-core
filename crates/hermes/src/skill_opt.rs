@@ -108,7 +108,8 @@ pub fn promote_skill_to_wasm(name: &str, source: &str) -> Result<(), &'static st
     let skill = crate::dynskill::DynamicSkill::with_wasm(name, source, "", wasm);
     crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
     k_nano::slog_hermes!("SkillOpt", "info", "'{}' promoted to WASM (wasmi)", name);
-    // ponytail: persistência em disco é residual — ADR-0059 post-gate
+    // ADR-0063: índice skill no SGDB (meta; bytecode WASM residual)
+    let _ = k_ai::sgdb::put_skill_blob(name, source);
     Ok(())
 }
 

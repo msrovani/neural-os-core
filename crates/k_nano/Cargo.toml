@@ -24,6 +24,8 @@ smoltcp = { version = "0.13", default-features = false, features = ["alloc", "me
 default = []
 # Apenas bins standalone que não definem seu próprio #[global_allocator].
 global-alloc = []
+# Soft-reboot 0xCF9 para flush BOOT.LOG — **OFF em produto** (loop HW sem NEURDONE).
+soft-reboot-bootlog = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog"))'] }

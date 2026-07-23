@@ -1,0 +1,22 @@
+---
+description: Emagreçer neural-kernel — novas features nas crates K³CHJ, bin só integra
+alwaysApply: true
+---
+
+# Emagreçer neural-kernel (cutover)
+
+Premissa permanente (ADR-0057+ / SESSION_163+): o bin `neural-kernel` é **integração + residuals**, não o lugar de lógica nova.
+
+## Ao implementar features
+
+1. **Preferir crates** `k_nano` / `k_hal` / `k_ai` / `cortex` / `hermes` / `jarbas` — código novo nasce lá.
+2. **No bin:** só `pub use`, bridge, wire de boot, e residuals que ainda não migraram.
+3. **Proibido engordar** o monólito com cópias paralelas (`disk_agent/`, `xhci/`, drivers) quando a crate já tem a verdade — use `pub use k_nano::…` ou delete o espelho.
+4. **Antes de editar** `crates/neural-kernel/src/**` com lógica substantiva: pergunte se cabe em `k_nano` (ou outra crate do anel certo).
+5. Target dirs isolados: `target/agent-*`, nunca `target-*` na raiz.
+
+## Checklist rápido
+
+- [ ] Feature está na crate do anel correto?
+- [ ] Bin só registra/chama (sem duplicar driver/FS/net)?
+- [ ] Espelho legado removido ou virado re-export fino?

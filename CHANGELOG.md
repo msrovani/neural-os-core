@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### v1.9.8 TEST — SGDB AIOS + Storage (2026-07-23) — SESSION_171–173
+- **ADR-0063/0064 MVP + adoção:** crate `vector-db` (TF-IDF), TickvLite+FlashController, `k_ai::sgdb` (MemoryDoc/ART/BQ + **SgdbStore** facade).
+- **Consumidores:** HANR híbrido SGDB→VFS; Audit flush/load; Episodic L2; PackageHub meta (`persist_backend`); SkillOpt index; Hermes RAG `vdb/blob`.
+- **ADR-0062 parcial:** NVMe I/O real, StorageBus, FAT policy NVMe>AHCI>ATA, HID keyboard bringup; emagreçer `disk_agent` → `k_nano`.
+- **Honesty:** FAT permanece blobs/firmware/WIFI/BOOT.LOG; sem fake Ready; residual AVX2/GC/Node48/TrustCache.
+- **Docs:** SESSION_171–173, TECNOLOGIAS 4.13b, INDEX/STATE/IDEA_BANK.
+- **Tag:** `v1.9.8`
+
 ### Display Splash Persistente (2026-07-22) — SESSION_168
 - **Problema:** Tela preta entre `claim_graphics()` limpar o FB e o primeiro render do compositor (gap de ~6341 ticks durante LLM generation)
 - **Causa:** `clear_fb_pixels()` em `fb.rs:27` apaga o splash da P4 demo; compositor só renderiza no segundo tick do DisplayAgent

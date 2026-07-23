@@ -71,7 +71,7 @@ static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
 const FLUSH_EVERY: usize = 8;
 
 fn buffer_log(msg: &str) {
-    // Espelho físico → soft-reboot UEFI grava BOOT.LOG sem USB-MSC.
+    // Espelho físico (ramlog); persistência FAT só via MSC/ATA — sem soft-reboot.
     k_nano::boot_ramlog::append(msg);
     if !HEAP_READY.load(Ordering::Relaxed) {
         return;
@@ -349,15 +349,30 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
 }
 
 /// Init imediato após USB-MSC (caminho notebook sem serial).
+/// Grava BOOT.LOG só se BlockDevice (MSC/ATA) existir — sem soft-reboot.
 pub fn init_after_usb() {
     #[cfg(feature = "fat-boot-log")]
     {
         log("BOOT: fat-boot-log init_after_usb");
+        let has_msc = crate::USB_MSC.lock().is_some();
+        let has_ata = crate::ATA_DRIVER.lock().is_some();
         let ok = persist_now(None);
-        k_nano::slog_bin!("LOG", "info", "init_after_usb BOOT.LOG ok={} (procure BOOT.LOG na raiz FAT32)", ok);
+        k_nano::slog_bin!(
+            "LOG",
+            "info",
+            "init_after_usb BOOT.LOG ok={} msc={} ata={} (procure BOOT.LOG na raiz FAT32)",
+            ok,
+            has_msc,
+            has_ata
+        );
         // NÃO boot_splash aqui — limpar a tela no meio do boot causa “ghost” com logs.
         if ok {
             crate::display::fb::console_print("LOG: BOOT.LOG ok (FAT32 stick)");
+        } else if !has_msc && !has_ata {
+            crate::display::fb::console_print(
+                "LOG: BOOT.LOG skip — USB-MSC/ATA AUSENTE (sem soft-reboot)",
+            );
+            k_nano::boot_ramlog::mark_skip_flush_reboot();
         }
     }
 }
@@ -408,7 +423,7 @@ pub fn flush() {
 }
 
 /// Sem USB-MSC/ATA: grava ramlog + pausa curta p/ foto, **continua o boot**.
-/// Soft-reboot p/ BOOT.LOG fica para `flush_bootlog_after_greeting` (pos-JARVIS).
+/// Nunca soft-reboot (0xCF9) — isso causava loop em HW quando `NEURDONE` nao existia.
 pub fn maybe_uefi_flush_reboot(reason: &str) {
     #[cfg(feature = "fat-boot-log")]
     {
@@ -427,19 +442,19 @@ pub fn maybe_uefi_flush_reboot(reason: &str) {
         k_nano::slog_bin!(
             "RAMLOG",
             "info",
-            "sem FAT (K{}) — {} — continue; BOOT.LOG apos saudacao",
+            "sem FAT (K{}) — {} — continue Runtime (sem soft-reboot)",
             k,
             reason
         );
-        for sec in (0..5u32).rev() {
+        for sec in (0..3u32).rev() {
             let msg = alloc::format!(">>> FOTO K{} | go boot {}s <<<", k, sec);
             crate::display::fb::console_print(&msg);
             for _ in 0..40_000_000 {
                 core::hint::spin_loop();
             }
         }
-        // Nao marca skip permanente — ainda vamos flush apos JARVIS.
-        crate::display::fb::console_print(">>> continue (BOOT.LOG apos JARVIS)");
+        k_nano::boot_ramlog::mark_skip_flush_reboot();
+        crate::display::fb::console_print(">>> BOOT.LOG indisponivel (sem MSC/ATA) — continue Runtime");
         crate::display::fb::boot_ckpt(38, "continue sem MSC");
     }
     #[cfg(not(feature = "fat-boot-log"))]
@@ -448,17 +463,18 @@ pub fn maybe_uefi_flush_reboot(reason: &str) {
     }
 }
 
-/// Pos-saudacao JARVIS: soft-reboot 1× → UEFI grava `E:\BOOT.LOG` e HALT.
-/// Sem isto o FAT fica so com o seed vazio do mkfat32 (USB-MSC AUSENTE).
-pub fn flush_bootlog_after_greeting(reason: &str) -> ! {
+/// Pos-saudacao JARVIS: persiste BOOT.LOG via MSC/ATA se houver; senao ramlog+FB e
+/// **continua Runtime**. Soft-reboot 0xCF9 foi removido do path de produto (loop HW).
+/// Retorna `true` se gravou no FAT; `false` se so ramlog/FB.
+pub fn flush_bootlog_after_greeting(reason: &str) -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
         if FAT_READY.load(Ordering::Relaxed) {
-            // Ja gravou via MSC/ATA — nao precisa reboot.
-            crate::display::fb::console_print(">>> BOOT.LOG ja no FAT (MSC/ATA)");
-            loop {
-                core::hint::spin_loop();
-            }
+            flush();
+            crate::display::fb::console_print(">>> BOOT.LOG no FAT (MSC/ATA) — continue");
+            crate::display::fb::boot_ckpt(51, "BOOT.LOG FAT ok");
+            k_nano::boot_ramlog::mark_skip_flush_reboot();
+            return true;
         }
         let content = build_session_bytes();
         let s = core::str::from_utf8(&content).unwrap_or(reason);
@@ -466,30 +482,29 @@ pub fn flush_bootlog_after_greeting(reason: &str) -> ! {
             k_nano::boot_ramlog::append(line);
         }
         k_nano::boot_ramlog::append(reason);
-        k_nano::boot_ramlog::append("[JARVIS] greet OK — flush BOOT.LOG via UEFI soft-reboot");
+        k_nano::boot_ramlog::append("[JARVIS] greet OK — BOOT.LOG so ramlog (sem soft-reboot)");
         let k = k_nano::boot_ramlog::last_ckpt();
-        crate::display::fb::boot_ckpt(51, "flush BOOT.LOG");
-        for sec in (0..12u32).rev() {
-            let msg = alloc::format!(
-                ">>> BOOT.LOG via UEFI | K{} | reboot {}s — depois leia FAT <<<",
-                k,
-                sec
-            );
-            crate::display::fb::console_print(&msg);
-            for _ in 0..50_000_000 {
-                core::hint::spin_loop();
-            }
-        }
-        crate::display::fb::console_print(">>> soft-reboot gravando BOOT.LOG...");
-        unsafe { k_nano::boot_ramlog::request_flush_and_reboot(reason) }
+        crate::display::fb::boot_ckpt(51, "BOOT.LOG skip reboot");
+        let msg = alloc::format!(
+            ">>> BOOT.LOG indisponivel K{} — continue Runtime (sem reboot)",
+            k
+        );
+        crate::display::fb::console_print(&msg);
+        k_nano::boot_ramlog::mark_skip_flush_reboot();
+        k_nano::slog_bin!(
+            "RAMLOG",
+            "info",
+            "pos-JARVIS sem FAT — {} — Runtime segue (soft-reboot OFF)",
+            reason
+        );
+        false
     }
     #[cfg(not(feature = "fat-boot-log"))]
     {
         let _ = reason;
-        crate::display::fb::console_print(">>> fat-boot-log OFF — halt");
-        loop {
-            core::hint::spin_loop();
-        }
+        crate::display::fb::console_print(">>> fat-boot-log OFF — continue Runtime");
+        k_nano::boot_ramlog::mark_skip_flush_reboot();
+        false
     }
 }
 

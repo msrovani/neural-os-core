@@ -115,4 +115,95 @@ impl AuditTrail {
             self.verify()
         )
     }
+
+    /// Flush compacto: last entry_hash + até 32 entries (tick+hashes) → `audit/head`.
+    pub fn flush_to_sgdb(&self) -> bool {
+        if !crate::sgdb::ready() {
+            return false;
+        }
+        const MAX: usize = 32;
+        let slice = self.last_n(MAX);
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"AUD1");
+        buf.extend_from_slice(&(self.count as u64).to_le_bytes());
+        let last = self.ring.last().map(|e| e.entry_hash).unwrap_or([0u8; 32]);
+        buf.extend_from_slice(&last);
+        buf.extend_from_slice(&(slice.len() as u32).to_le_bytes());
+        for e in slice {
+            buf.extend_from_slice(&e.tick.to_le_bytes());
+            buf.extend_from_slice(&e.entry_hash);
+            buf.extend_from_slice(&e.payload_hash);
+            let al = (e.agent.len().min(32)) as u8;
+            let cl = (e.action.len().min(32)) as u8;
+            buf.push(al);
+            buf.push(cl);
+            buf.extend_from_slice(&e.agent.as_bytes()[..al as usize]);
+            buf.extend_from_slice(&e.action.as_bytes()[..cl as usize]);
+        }
+        crate::sgdb::put_kv("audit/head", &buf).is_ok()
+    }
+
+    /// Load checkpoint: reconstrói ring mínimo (sem re-verificar assinaturas session).
+    /// Retorna true se carregou ≥1 entry.
+    pub fn load_from_sgdb(&mut self) -> bool {
+        let Ok(Some(buf)) = crate::sgdb::get_kv("audit/head") else {
+            return false;
+        };
+        if buf.len() < 4 + 8 + 32 + 4 || &buf[0..4] != b"AUD1" {
+            return false;
+        }
+        let mut off = 4;
+        let count = u64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+        off += 8;
+        off += 32; // last hash skip
+        let n = u32::from_le_bytes(buf[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        self.ring.clear();
+        self.head = 0;
+        self.count = 0;
+        for _ in 0..n {
+            if off + 8 + 32 + 32 + 2 > buf.len() {
+                break;
+            }
+            let tick = u64::from_le_bytes(buf[off..off + 8].try_into().unwrap());
+            off += 8;
+            let mut entry_hash = [0u8; 32];
+            entry_hash.copy_from_slice(&buf[off..off + 32]);
+            off += 32;
+            let mut payload_hash = [0u8; 32];
+            payload_hash.copy_from_slice(&buf[off..off + 32]);
+            off += 32;
+            let al = buf[off] as usize;
+            let cl = buf[off + 1] as usize;
+            off += 2;
+            if off + al + cl > buf.len() {
+                break;
+            }
+            let agent = core::str::from_utf8(&buf[off..off + al])
+                .unwrap_or("?")
+                .into();
+            off += al;
+            let action = core::str::from_utf8(&buf[off..off + cl])
+                .unwrap_or("?")
+                .into();
+            off += cl;
+            let prev_hash = self
+                .ring
+                .last()
+                .map(|e| e.entry_hash)
+                .unwrap_or([0u8; 32]);
+            self.ring.push(AuditEntry {
+                tick,
+                agent,
+                action,
+                payload_hash,
+                prev_hash,
+                entry_hash,
+                signature: [0u8; SIGNATURE_LEN],
+            });
+            self.count = self.count.saturating_add(1);
+        }
+        let _ = count;
+        !self.ring.is_empty()
+    }
 }

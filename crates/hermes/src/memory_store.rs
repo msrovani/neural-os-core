@@ -42,30 +42,70 @@ fn write_path(path: &str, body: &str) -> Result<(), &'static str> {
     crate::globals::write_vfs(path, body.as_bytes())
 }
 
+/// Lê HANR: SGDB primeiro; miss → VFS e hydrate SGDB.
+fn read_hanr(name: &str, vfs_path: &str) -> String {
+    if let Ok(Some(s)) = k_ai::sgdb::get_hanr(name) {
+        if !s.is_empty() {
+            return s;
+        }
+    }
+    let from_vfs = read_path(vfs_path);
+    if !from_vfs.is_empty() && k_ai::sgdb::ready() {
+        let _ = k_ai::sgdb::put_hanr(name, &from_vfs);
+        k_nano::slog_hermes!("sgdb", "hanr", "hydrate {} from vfs", name);
+    }
+    from_vfs
+}
+
+/// Escreve HANR: SGDB sempre (se ready); VFS best-effort.
+fn write_hanr(name: &str, vfs_path: &str, body: &str) -> Result<(), &'static str> {
+    let mut sgdb_ok = false;
+    if k_ai::sgdb::ready() {
+        match k_ai::sgdb::put_hanr(name, body) {
+            Ok(()) => sgdb_ok = true,
+            Err(e) => k_nano::slog_hermes!("sgdb", "hanr", "put {} FAIL {}", name, e),
+        }
+    }
+    let vfs_ok = write_path(vfs_path, body).is_ok();
+    if sgdb_ok || vfs_ok {
+        k_nano::slog_hermes!(
+            "sgdb",
+            "hanr",
+            "write {} sgdb={} vfs={}",
+            name,
+            sgdb_ok,
+            vfs_ok
+        );
+        Ok(())
+    } else {
+        Err("hanr persist fail (no sgdb/vfs)")
+    }
+}
+
 pub fn read_user() -> String {
-    read_path(USER_PATH)
+    read_hanr("user", USER_PATH)
 }
 pub fn read_memory() -> String {
-    read_path(MEMORY_PATH)
+    read_hanr("memory", MEMORY_PATH)
 }
 pub fn read_soul() -> String {
-    read_path(SOUL_PATH)
+    read_hanr("soul", SOUL_PATH)
 }
 pub fn read_persona() -> String {
-    read_path(PERSONA_PATH)
+    read_hanr("persona", PERSONA_PATH)
 }
 
 pub fn write_user(body: &str) -> Result<(), &'static str> {
-    write_path(USER_PATH, &clamp_chars(body, USER_MAX))
+    write_hanr("user", USER_PATH, &clamp_chars(body, USER_MAX))
 }
 pub fn write_memory(body: &str) -> Result<(), &'static str> {
-    write_path(MEMORY_PATH, &clamp_chars(body, MEMORY_MAX))
+    write_hanr("memory", MEMORY_PATH, &clamp_chars(body, MEMORY_MAX))
 }
 pub fn write_soul(body: &str) -> Result<(), &'static str> {
-    write_path(SOUL_PATH, &clamp_chars(body, SOUL_MAX))
+    write_hanr("soul", SOUL_PATH, &clamp_chars(body, SOUL_MAX))
 }
 pub fn write_persona(body: &str) -> Result<(), &'static str> {
-    write_path(PERSONA_PATH, &clamp_chars(body, PERSONA_MAX))
+    write_hanr("persona", PERSONA_PATH, &clamp_chars(body, PERSONA_MAX))
 }
 
 pub fn remember(fact: &str) -> Result<String, &'static str> {

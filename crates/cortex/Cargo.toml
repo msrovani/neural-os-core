@@ -11,6 +11,7 @@ libm = "0.2"
 event-bus = { path = "../event-bus" }
 ticket-lock = { path = "../ticket-lock" }
 k-nano = { path = "../k_nano" }
+vector-db = { path = "../vector-db" }
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel"))'] }

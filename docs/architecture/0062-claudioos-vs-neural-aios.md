@@ -151,15 +151,15 @@ Foram lidos integralmente: `main.rs` (boot sequence completo), `agent_loop.rs` (
 |---|---|---|
 | AHCI | ✅ `claudio-ahci` (2.139 LOC, HBA, port state machine, PRDT) | ✅ `k_nano/ahci.rs` (re-export) |
 | NVMe | ✅ `claudio-nvme` (2.563 LOC, queue pairs, doorbell, PRP) | ⚠️ `k_nano/storage/nvme.rs` (básico) |
-| USB Storage | ✅ `claudio-usb-storage` (1.357 LOC, BOT + SCSI) | ❌ |
+| USB Storage | ✅ `claudio-usb-storage` (1.357 LOC, BOT + SCSI) | ✅ parcial `k_nano/xhci` bringup + `usb_msc` BOT (SESSION_170) |
 | ATA PIO | ✅ | ✅ (bug corrigido v1.1.5) |
 
-### 2.9 USB — **ClaudioOS tem xHCI + USB Storage, neural-os-core só xHCI**
+### 2.9 USB — **ClaudioOS tem xHCI + USB Storage; neural-os-core: xHCI + MSC MVP**
 
 | Componente | ClaudioOS | neural-os-core |
 |---|---|---|
-| xHCI | ✅ `crates/xhci/` (context, device, driver, hid, registers, ring) | ✅ `k_nano/xhci.rs` (port scan apenas) |
-| USB Storage | ✅ `crates/usb-storage/` (BOT + SCSI) | ❌ |
+| xHCI | ✅ `crates/xhci/` (context, device, driver, hid, registers, ring) | ✅ parcial `k_nano/xhci/` — CRCR + Address Device + bulk (SESSION_170) |
+| USB Storage | ✅ `crates/usb-storage/` (BOT + SCSI) | ✅ parcial BOT+SCSI stick boot / BOOT.LOG (P11 MVP) |
 | HID | ✅ `crates/xhci/src/hid.rs` | ❌ |
 
 ### 2.10 HDA Audio — **Ambos têm, implementações diferentes**
@@ -244,9 +244,9 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 
 | # | Item | Origem ClaudioOS | Aderência neural | Esforço | Nova ADR |
 |---|---|---|---|---|---|
-| P1 | **TLS 1.3 via embedded-tls** | `crates/net/src/tls.rs` | Desbloqueia SelfUpdate HTTPS, Browser, Market. Substitui stub `tls_not_ready`. | Médio — `embedded-tls` já é no_std; trabalho = bridge smoltcp↔embedded_io + alinhamento 16-byte | ADR própria |
-| P2 | **VFS layer + BlockDevice trait** | `claudio-vfs` (2.871 LOC) | Unifica storage. Prepara para AHCI/NVMe. `Filesystem` trait plug-and-play. | Alto — design de referência sólida | ADR própria |
-| P3 | **AHCI + NVMe drivers** | `claudio-ahci` + `claudio-nvme` | Desbloqueia SSDs modernos. Neural está preso a ATA PIO legacy. | Alto | ADR própria |
+| P1 | **TLS 1.3 via embedded-tls** ✅ MVP | `crates/net/src/tls.rs` | `embedded-tls` 0.19 + bridge smoltcp (`tls_client.rs`); smoke `[TLS] VERDICT=PASS` (SESSION_157/158). Residual: CertVerify persistente em FAT. | Médio | — |
+| P2 | **VFS layer + BlockDevice trait** ✅ MVP | `claudio-vfs` (2.871 LOC) | `StorageBus` + `FilesystemDriver`/exFAT detect + mounts `/mnt/data|/mnt/sata|/mnt/hdd|/mnt/usb` (SESSION_171). Residual: POSIX open/fd. | Alto | — |
+| P3 | **AHCI + NVMe drivers** ✅ MVP | `claudio-ahci` + `claudio-nvme` | NVMe I/O qid=1 + `BlockDevice` + boot policy **NVMe>AHCI>ATA** (SESSION_171). Residual: multi-queue/PRP. | Alto | — |
 | P4 | **Migrar para Limine bootloader** | `main.rs` boot sequence | Elimina bugs bootloader 0.11 (triple-fault BIOS, #PF stack top). HHDM simplifica DMA. | Médio — migração bem documentada | ADR própria (supersede ADR-0039 parcial) |
 | P5 | **GPU (NVIDIA) driver** | `crates/gpu/` | Desbloqueia GPU compute para LLM/MoE. Trinity MoE precisa GPU. | Muito Alto — GSP-RM firmware complexo | ADR própria |
 | P6 | **WiFi (Intel) driver** | `crates/wifi/src/intel/` | Desbloqueia conectividade wireless real. AX200/201/210/211. | Alto — firmware ucode complexo | ADR própria |
@@ -259,7 +259,7 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 | P8 | **ext4 read-write** | `claudio-ext4` (3.013 LOC) | Montar partições Linux nativas. Depende de P2 (VFS) + P3 (BlockDevice). | Alto |
 | P9 | **btrfs read-write** | `claudio-btrfs` (4.006 LOC) | COW, snapshots, CRC32C. Para dados persistentes robustos. | Alto |
 | P10 | **NTFS read-write** | `claudio-ntfs` (3.561 LOC) | Interop Windows real. MFT, data runs, B+ tree. | Alto |
-| P11 | **USB Storage driver** | `claudio-usb-storage` (1.357 LOC) | BOT + SCSI. Para pendrives/HDs USB. Depende de xHCI (já temos). | Médio |
+| P11 | **USB Storage driver** ✅ MVP (SESSION_170) | `claudio-usb-storage` (1.357 LOC) | BOT + SCSI no stick boot (`bringup_boot_msc` + BOOT.LOG). Residual: hubs/SS/EP parse. | Médio |
 | P12 | **Vulkan driver** | `crates/vulkan/` | GPU compute alternative. Para AMD/Intel GPUs. | Muito Alto |
 | P13 | **SMP completo (trampoline + work-stealing)** | `crates/smp/` | AP boot confiável, scheduler work-stealing. Melhor que tick-based para I/O. | Alto |
 | P14 | **IPC MessageBus + Channels** | `ipc.rs` (783 LOC) | Colaboração direta entre agentes (Cortex→RustCoder→HwIdentify). Complementa EventBus. | Médio |
@@ -277,7 +277,7 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 | P21 | **Firewall stateful** | `firewall.rs` (788 LOC) | Packet filtering, allow/deny rules. Segurança de rede. | Médio |
 | P22 | **Disk encryption LUKS** | `encryption.rs` (905 LOC) | Criptografia de disco persistente. | Médio |
 | P23 | **HDA Audio completo** | `crates/hda/` | Codec parsing, widgets, multi-stream. Para TTS/STT real. | Médio |
-| P24 | **xHCI completo (HID + hubs)** | `crates/xhci/` | Teclado/mouse USB, hubs. Complementa port scan atual. | Médio |
+| P24 | **xHCI completo (HID + hubs)** ✅ parcial | `crates/xhci/` | **P24a:** HID boot keyboard via bringup multi-porta (SESSION_171). Residual P24b: hubs + mouse. | Médio |
 
 ### 4.4 PRIORIDADE BAIXA (polish — baixo esforço, alto valor percebido)
 
@@ -307,7 +307,7 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 | Vulkan/DXVK | GPU compute já coberto por ADR-0048–0050 (NVIDIA/AMD/Intel) |
 | 12 linguagens interpretadas | WASM (ADR-0059) é caminho unificado; linguagens altas via WASM sidecar |
 | DevRng xorshift64* | Já temos RDRAND/CSPRNG melhor (csprng.rs no ClaudioOS é referência, mas o nosso é superior) |
-| TF-IDF vector DB | Ver ADR-0063 (RAG DB in-kernel) — abordagem própria |
+| TF-IDF vector DB | Ver **ADR-0064** (RAG DB in-kernel) — abordagem própria; persiste via ADR-0063 TicKV |
 
 ---
 
@@ -335,9 +335,9 @@ Ao adotar TLS (P1), **não copiar** `NoVerify` (implementar verificação de cer
 
 | # | Ideia | Destino | Status |
 |---|---|---|---|
-| #479 | TLS 1.3 via embedded-tls no neural-os-core | ADR própria (P1) | ⏳ |
-| #480 | VFS layer + BlockDevice trait unificado | ADR própria (P2) | ⏳ |
-| #481 | AHCI + NVMe drivers | ADR própria (P3) | ⏳ |
+| #479 | TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
+| #480 | VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |
+| #481 | AHCI + NVMe drivers | ADR-0062 P3 / SESSION_171 | ✅ MVP (I/O q + policy; residual multi-q) |
 | #482 | Migrar bootloader 0.11 → Limine 0.5 | ADR própria (P4, supersede ADR-0039) | ⏳ |
 | #483 | IPC MessageBus + Channels entre agentes | ADR própria (P14) | ⏳ |
 | #484 | Async executor híbrido (I/O async + compute ticks) | ADR própria (P16) | ⏳ |
@@ -346,7 +346,7 @@ Ao adotar TLS (P1), **não copiar** `NoVerify` (implementar verificação de cer
 | #487 | WiFi (Intel AX200/201/210/211) driver | ADR própria (P6) | ⏳ |
 | #488 | Intel i225 2.5G NIC driver | ADR própria (P7) | ⏳ |
 | #489 | ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ |
-| #490 | USB Storage driver | ADR própria (P11) | ⏳ |
+| #490 | USB Storage driver | ADR-0062 P11 / SESSION_170 | ✅ MVP (bringup+BOT; residual hubs/SS) |
 | #491 | Vulkan driver | ADR própria (P12) | ⏳ |
 | #492 | SMP completo (trampoline + work-stealing) | ADR própria (P13) | ⏳ |
 | #492 | IPC MessageBus + Channels | ADR própria (P14) | ⏳ |
@@ -369,7 +369,8 @@ ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que
 - ClaudioOS docs: `AGENTS.md`, `networking.md`, `HARDWARE.md`, `SHELL.md`, `FILESYSTEMS.md`, `ROADMAP.md`
 - Código lido integralmente: `main.rs`, `agent_loop.rs`, `vectordb.rs`, `ipc.rs`, `tls.rs`, `kex.rs`, `win32/lib.rs`, `Cargo.toml`
 - ADRs neural-os-core: 0016 (Network), 0039 (Boot), 0040 (Filesystem), 0041 (Capability), 0055 (SMP), 0057 (Compute), 0059 (Runtime App Factory)
-- ADR-0063: RAG DB in-kernel (companheira — vector DB)
+- ADR-0063: TicKV + NoProto + Índices IA (SGDB)
+- ADR-0064: RAG DB in-kernel (companheira — vector TF-IDF; persiste via 0063)
 
 ---
 
@@ -387,8 +388,8 @@ ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que
 | `crates/btrfs/` | ❌ | **Gap** |
 | `crates/ntfs/` | ❌ (reader apenas) | **Gap** |
 | `crates/ahci/` | `k_nano/ahci.rs` (re-export) | OK |
-| `crates/usb-storage/` | ❌ | **Gap** |
-| `crates/xhci/` | `k_nano/xhci.rs` | Parcial (port scan apenas) |
+| `crates/usb-storage/` | `k_nano/xhci` + `usb_msc` | ✅ MVP SESSION_170 |
+| `crates/xhci/` | `k_nano/xhci/` | Parcial (CRCR+Address+bulk+HID kb P24a; hubs residual) |
 | `crates/hda/` | `neural-kernel/src/audio/hda.rs` | Parcial |
 | `crates/vulkan/` | ❌ | **Gap** |
 | `crates/ext4/` | ❌ | **Gap** |
@@ -400,8 +401,8 @@ ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que
 | `crates/claudio-ntfs/` | ❌ | **Gap** |
 | `crates/claudio-ahci/` | `k_nano/ahci.rs` | OK |
 | `crates/claudio-nvme/` | `k_nano/storage/nvme.rs` | Parcial |
-| `crates/claudio-usb-storage/` | ❌ | **Gap** |
-| `crates/claudio-xhci/` | `k_nano/xhci.rs` | Parcial |
+| `crates/claudio-usb-storage/` | `k_nano/xhci` + `usb_msc` | ✅ MVP SESSION_170 |
+| `crates/claudio-xhci/` | `k_nano/xhci/` | Parcial (CRCR+Address+bulk) |
 | `crates/claudio-hda/` | `neural-kernel/src/audio/hda.rs` | Parcial |
 | `crates/claudio-vulkan/` | ❌ | **Gap** |
 | `crates/claudio-elf-loader/` | ❌ | **Gap** |

@@ -64,7 +64,9 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#468** FitPolicy Neural (llmfit-inspired) | ADR-0019 (+ #466) | ✅ SESSION_164 | host `llmfit_pack_filter` + `cortex::model_fit` / MemoryAgent / ModelHub |
 | **#469** Runtime App Factory | ADR-0059 | 🟢 completo | wasmi real + seletor A/B/C ✅ |
 | **#470–#478** BEI BitNet Cognitivo | ADR-0060 | ✅ **7/7 ondas** SESSION_166 | MPMC, economia, células, MoE, memória, afeto, supervisor + EgoLayer/PonderNet, Soul Mirror visual. ~2900 LOC |
-| **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0062 | 🟡 agendada | **#491** TicKV NVMe driver + FlashController trait · **#492** NoProto schemas L0-L7 · **#493** AiosDatabaseEngine ponte · **#494** ART Index (L0-L3) · **#495** BQ Flat SIMD Index (L4-L5) · **#496** Hamming kernels AVX-512/AVX2/scalar · **#497** Dynamic SIMD dispatch boot · **#498** Integração camadas L0-L7 · **#499** Power-loss test suite · **#500** Benchmark ART 10M chaves · **#501** Benchmark BQ 100k vetores · **#502** GC TicKV stress · **#503** Integração Hermes/Cortex/Jarbas · **#504** Power-loss kill -9 validation · **#505** E2E latency P50/P99/P999 |
+| **#486** Vector DB in-kernel TF-IDF (RAG) | ADR-0064 | ✅ MVP | crate `vector-db`; persist TicKV `vdb/blob`; residual F6 embeddings |
+| **#487** Embeddings neurais in-kernel L4+ | ADR-0064 F6 | ⏳ residual | gated VRAM; BGE paralelo até lá |
+| **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **MVP F0–F8 lite + SgdbStore** SESSION_173 (HANR/Audit/Pkg/Skills). Residual: #497 AVX2, #502 GC, Node48, TrustCache |
 
 #### Gaps — triagem Onda 0 ✅ (2026-07-18)
 

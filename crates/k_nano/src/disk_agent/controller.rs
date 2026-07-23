@@ -6,7 +6,6 @@ use core::sync::atomic::Ordering;
 use crate::ata::AtaDriver;
 use crate::usb_msc::UsbMassStorage;
 use super::disk_info::*;
-use super::nvme::NvmeDriver;
 use crate::neural_fs::checksum::crc32c;
 use spin::Mutex;
 
@@ -380,31 +379,49 @@ impl StorageController for UsbMscCtrl {
     }
 }
 
-// ── NvmeCtrl ──────────────────────────────────────────────
+// ── NvmeCtrl (usa NVME_DRIVER global — ADR-0062 P3) ───────
 pub struct NvmeCtrl {
-    nvme: core::cell::UnsafeCell<NvmeDriver>,
     probed: bool,
     disks: Vec<RawDisk>,
 }
 
 impl NvmeCtrl {
-    pub fn new(nvme: NvmeDriver) -> Self {
-        NvmeCtrl { nvme: core::cell::UnsafeCell::new(nvme), probed: false, disks: Vec::new() }
+    pub fn new() -> Self {
+        NvmeCtrl {
+            probed: false,
+            disks: Vec::new(),
+        }
     }
 }
 
 impl StorageController for NvmeCtrl {
-    fn name(&self) -> &str { "nvme0" }
-    fn controller_type(&self) -> ControllerType { ControllerType::Nvme }
-    fn pci_bdf(&self) -> Option<(u8, u8, u8)> { None }
+    fn name(&self) -> &str {
+        "nvme0"
+    }
+    fn controller_type(&self) -> ControllerType {
+        ControllerType::Nvme
+    }
+    fn pci_bdf(&self) -> Option<(u8, u8, u8)> {
+        None
+    }
 
     fn probe_disks(&mut self) -> Vec<RawDisk> {
-        if self.probed { return self.disks.clone(); }
+        if self.probed {
+            return self.disks.clone();
+        }
         self.probed = true;
-        let nm = unsafe { &mut *self.nvme.get() };
-        if nm.lba_count == 0 { return Vec::new(); }
+        let g = super::nvme::NVME_DRIVER.lock();
+        let Some(ref nm) = *g else {
+            return Vec::new();
+        };
+        if nm.lba_count == 0 {
+            return Vec::new();
+        }
 
-        let model = core::str::from_utf8(&nm.model).unwrap_or("NVMe").trim().into();
+        let model = core::str::from_utf8(&nm.model)
+            .unwrap_or("NVMe")
+            .trim()
+            .into();
         let raw = RawDisk {
             name: alloc::format!("nvme0n1"),
             controller: self.name().into(),
@@ -412,23 +429,44 @@ impl StorageController for NvmeCtrl {
             capacity_bytes: nm.lba_count * nm.lba_size as u64,
             sector_size: nm.lba_size as u16,
             interface: InterfaceType::Nvme,
-            is_removable: false, is_volatile: false,
-            model, serial: String::new(), firmware_rev: String::new(),
+            is_removable: false,
+            is_volatile: false,
+            model,
+            serial: String::new(),
+            firmware_rev: String::new(),
             max_read_bw_mbs: 3000,
             rotational: false,
-            partitions: Vec::new(), volume_groups: Vec::new(), smart: None,
-            is_opal: false, security_frozen: false,
+            partitions: Vec::new(),
+            volume_groups: Vec::new(),
+            smart: None,
+            is_opal: false,
+            security_frozen: false,
         };
         self.disks.push(raw);
         self.disks.clone()
     }
 
     fn read_blocks(&self, _disk: u8, lba: u64, buf: &mut [u8], blocks: usize) -> bool {
-        let nm = unsafe { &mut *self.nvme.get() };
-        unsafe { nm.read_blocks(lba, buf.as_mut_ptr(), blocks as u32) }
+        let mut g = super::nvme::NVME_DRIVER.lock();
+        let Some(ref mut nm) = *g else {
+            return false;
+        };
+        let need = blocks * 512;
+        if buf.len() < need {
+            return false;
+        }
+        unsafe { nm.read_sectors_bounce(lba, &mut buf[..need]) }
     }
 
-    fn write_blocks(&self, _disk: u8, _lba: u64, _data: &[u8], _blocks: usize) -> bool {
-        false
+    fn write_blocks(&self, _disk: u8, lba: u64, data: &[u8], blocks: usize) -> bool {
+        let mut g = super::nvme::NVME_DRIVER.lock();
+        let Some(ref mut nm) = *g else {
+            return false;
+        };
+        let need = blocks * 512;
+        if data.len() < need {
+            return false;
+        }
+        unsafe { nm.write_sectors_bounce(lba, &data[..need]) }
     }
 }

@@ -1,319 +1,224 @@
-//! TicKV Integration for NVMe Storage
-//! 
-/// Implements the Flash Driver Trait for TicKV using the NVMe driver.
-/// Provides persistent storage for audit logs and inference results.
+//! ADR-0063 F1a — TickvLite: append-log KV mínimo (honesty: não é crate tickv upstream).
+//! Record: magic TKLV | u32 key_len | u32 val_len | u32 crc | key | val | pad to 16.
 
-use super::nvme::{NvmeController, NvmeResult};
-use core::sync::atomic::{AtomicBool, Ordering};
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec;
+use alloc::vec::Vec;
+use spin::Mutex;
 
-/// TicKV Flash Driver Trait (simplified interface)
-/// 
-/// This trait mimics the TicKV flash driver interface for integration.
-pub trait FlashDriver {
-    /// Read data from flash at the given offset
-    fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str>;
+use super::flash::{init_flash, ActiveFlash, FlashController, FLASH};
 
-    /// Write data to flash at the given offset
-    fn write(&self, offset: u64, data: &[u8]) -> Result<(), &'static str>;
+const MAGIC: &[u8; 4] = b"TKLV";
+const HEADER: usize = 16; // magic4 + klen4 + vlen4 + crc4
 
-    /// Erase a block of flash (for NVMe, this is a no-op or trim operation)
-    fn erase(&self, offset: u64, size: u64) -> Result<(), &'static str>;
-
-    /// Get the total flash size
-    fn size(&self) -> u64;
+fn crc32(data: &[u8]) -> u32 {
+    // IEEE CRC32 simples
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = if crc & 1 != 0 { 0xEDB8_8320 } else { 0 };
+            crc = (crc >> 1) ^ mask;
+        }
+    }
+    !crc
 }
 
-/// NVMe Flash Driver for TicKV
-/// 
-/// Implements the FlashDriver trait using NVMe block operations.
-/// Maps flash offsets to NVMe LBAs (Logical Block Addresses).
-pub struct NvmeFlashDriver {
-    /// NVMe controller
-    controller: *mut NvmeController,
-    /// Base LBA for TicKV storage
-    base_lba: u64,
-    /// Total number of LBAs allocated for TicKV
-    total_lbas: u64,
-    /// Driver initialized flag
-    initialized: AtomicBool,
+pub struct TickvLite {
+    /// Índice em RAM: key → offset no flash
+    index: BTreeMap<String, u64>,
+    /// Próximo offset livre (append)
+    append_off: u64,
+    ready: bool,
+    backend: &'static str,
 }
 
-impl NvmeFlashDriver {
-    /// Create a new NVMe flash driver
-    /// 
-    /// # Safety
-    /// The controller pointer must be valid for the lifetime of the driver
-    #[must_use]
-    pub unsafe fn new(controller: *mut NvmeController, base_lba: u64, total_lbas: u64) -> Self {
-        Self {
-            controller,
-            base_lba,
-            total_lbas,
-            initialized: AtomicBool::new(false),
+impl TickvLite {
+    pub fn new() -> Self {
+        TickvLite {
+            index: BTreeMap::new(),
+            append_off: 0,
+            ready: false,
+            backend: "none",
         }
     }
 
-    /// Initialize the flash driver
-    pub fn init(&self) -> NvmeResult<()> {
-        // Validate that the controller is ready
-        unsafe {
-            let controller = &*self.controller;
-            if !controller.is_ready() {
-                return Err("NVMe controller not ready");
-            }
-        }
+    pub fn backend(&self) -> &str {
+        self.backend
+    }
+    pub fn is_ready(&self) -> bool {
+        self.ready
+    }
 
-        self.initialized.store(true, Ordering::Release);
+    pub fn mount(&mut self) -> Result<(), &'static str> {
+        self.backend = init_flash();
+        self.recover()?;
+        self.ready = true;
         Ok(())
     }
 
-    /// Convert byte offset to LBA
-    fn offset_to_lba(&self, offset: u64) -> Option<u64> {
-        if offset % 512 != 0 {
-            return None; // Offset must be block-aligned
-        }
-        let lba = self.base_lba + (offset / 512);
-        if lba >= self.base_lba + self.total_lbas {
-            return None; // Out of allocated range
-        }
-        Some(lba)
+    fn with_flash<R>(&self, f: impl FnOnce(&mut ActiveFlash) -> R) -> Result<R, &'static str> {
+        let mut g = FLASH.lock();
+        let flash = g.as_mut().ok_or("no flash")?;
+        Ok(f(flash))
     }
 
-    /// Convert LBA to byte offset
-    fn lba_to_offset(&self, lba: u64) -> Option<u64> {
-        if lba < self.base_lba || lba >= self.base_lba + self.total_lbas {
-            return None;
-        }
-        Some((lba - self.base_lba) * 512)
-    }
-}
-
-impl FlashDriver for NvmeFlashDriver {
-    fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str> {
-        if !self.initialized.load(Ordering::Acquire) {
-            return Err("Driver not initialized");
-        }
-
-        let lba = self.offset_to_lba(offset).ok_or("Invalid offset")?;
-
-        // Read block by block
-        let mut read_offset = 0;
-        while read_offset < buffer.len() {
-            let block_offset = read_offset % 512;
-            let bytes_to_read = core::cmp::min(buffer.len() - read_offset, 512 - block_offset);
-
-            if block_offset == 0 && bytes_to_read == 512 {
-                // Full block read
-                unsafe {
-                    let controller = &*self.controller;
-                    let block_buffer = &mut buffer[read_offset..read_offset + 512];
-                    controller.read_block(lba + (read_offset / 512) as u64, block_buffer)?;
-                }
+    fn recover(&mut self) -> Result<(), &'static str> {
+        self.index.clear();
+        self.append_off = 0;
+        let size = self.with_flash(|fl| fl.size_bytes())?;
+        let mut off = 0u64;
+        let mut hdr = [0u8; HEADER];
+        while off + HEADER as u64 <= size {
+            self.with_flash(|fl| fl.read(off, &mut hdr))??;
+            if &hdr[0..4] != MAGIC {
+                break;
+            }
+            let klen = u32::from_le_bytes(hdr[4..8].try_into().unwrap()) as usize;
+            let vlen = u32::from_le_bytes(hdr[8..12].try_into().unwrap()) as usize;
+            let want_crc = u32::from_le_bytes(hdr[12..16].try_into().unwrap());
+            let body_len = klen + vlen;
+            let padded = (body_len + 15) & !15;
+            if off + HEADER as u64 + padded as u64 > size {
+                break;
+            }
+            let mut body = vec![0u8; body_len];
+            self.with_flash(|fl| fl.read(off + HEADER as u64, &mut body))??;
+            let got = crc32(&body);
+            if got != want_crc {
+                break; // corrupt → stop append chain
+            }
+            let key = core::str::from_utf8(&body[..klen])
+                .map_err(|_| "utf8")?
+                .to_string();
+            // tombstone: vlen==0 means delete
+            if vlen == 0 {
+                self.index.remove(&key);
             } else {
-                // Partial block read - need to read full block and extract
-                let mut temp_block = [0u8; 512];
-                unsafe {
-                    let controller = &*self.controller;
-                    controller.read_block(lba + (read_offset / 512) as u64, &mut temp_block)?;
-                }
-                buffer[read_offset..read_offset + bytes_to_read]
-                    .copy_from_slice(&temp_block[block_offset..block_offset + bytes_to_read]);
+                self.index.insert(key, off);
             }
-
-            read_offset += bytes_to_read;
+            let rec_body = HEADER + padded;
+            let total = (rec_body + 511) & !511;
+            off += total as u64;
         }
-
+        self.append_off = off;
         Ok(())
     }
 
-    fn write(&self, offset: u64, data: &[u8]) -> Result<(), &'static str> {
-        if !self.initialized.load(Ordering::Acquire) {
-            return Err("Driver not initialized");
+    pub fn put(&mut self, key: &str, val: &[u8]) -> Result<(), &'static str> {
+        if !self.ready {
+            return Err("not mounted");
         }
-
-        let lba = self.offset_to_lba(offset).ok_or("Invalid offset")?;
-
-        // Write block by block
-        let mut write_offset = 0;
-        while write_offset < data.len() {
-            let block_offset = write_offset % 512;
-            let bytes_to_write = core::cmp::min(data.len() - write_offset, 512 - block_offset);
-
-            if block_offset == 0 && bytes_to_write == 512 {
-                // Full block write
-                unsafe {
-                    let controller = &*self.controller;
-                    let block_data = &data[write_offset..write_offset + 512];
-                    controller.write_block(lba + (write_offset / 512) as u64, block_data)?;
-                }
-            } else {
-                // Partial block write - need read-modify-write
-                let mut temp_block = [0u8; 512];
-                unsafe {
-                    let controller = &*self.controller;
-                    controller.read_block(lba + (write_offset / 512) as u64, &mut temp_block)?;
-                }
-                temp_block[block_offset..block_offset + bytes_to_write]
-                    .copy_from_slice(&data[write_offset..write_offset + bytes_to_write]);
-                unsafe {
-                    let controller = &*self.controller;
-                    controller.write_block(lba + (write_offset / 512) as u64, &temp_block)?;
-                }
-            }
-
-            write_offset += bytes_to_write;
-        }
-
+        let k = key.as_bytes();
+        let body_len = k.len() + val.len();
+        let padded = (body_len + 15) & !15;
+        let mut body = vec![0u8; padded];
+        body[..k.len()].copy_from_slice(k);
+        body[k.len()..k.len() + val.len()].copy_from_slice(val);
+        let crc = crc32(&body[..body_len]);
+        let mut rec = vec![0u8; HEADER + padded];
+        rec[0..4].copy_from_slice(MAGIC);
+        rec[4..8].copy_from_slice(&(k.len() as u32).to_le_bytes());
+        rec[8..12].copy_from_slice(&(val.len() as u32).to_le_bytes());
+        rec[12..16].copy_from_slice(&crc.to_le_bytes());
+        rec[HEADER..HEADER + padded].copy_from_slice(&body);
+        // pad whole record to 512
+        let total = (rec.len() + 511) & !511;
+        rec.resize(total, 0);
+        let off = self.append_off;
+        self.with_flash(|fl| fl.write(off, &rec))??;
+        self.index.insert(String::from(key), off);
+        self.append_off = off + total as u64;
         Ok(())
     }
 
-    fn erase(&self, _offset: u64, _size: u64) -> Result<(), &'static str> {
-        // NVMe doesn't require erase like flash memory
-        // This is a no-op for NVMe
-        Ok(())
+    pub fn get(&mut self, key: &str) -> Result<Vec<u8>, &'static str> {
+        if !self.ready {
+            return Err("not mounted");
+        }
+        let off = *self.index.get(key).ok_or("missing")?;
+        let mut hdr = [0u8; HEADER];
+        self.with_flash(|fl| fl.read(off, &mut hdr))??;
+        let klen = u32::from_le_bytes(hdr[4..8].try_into().unwrap()) as usize;
+        let vlen = u32::from_le_bytes(hdr[8..12].try_into().unwrap()) as usize;
+        let mut body = vec![0u8; klen + vlen];
+        self.with_flash(|fl| fl.read(off + HEADER as u64, &mut body))??;
+        Ok(body[klen..].to_vec())
     }
 
-    fn size(&self) -> u64 {
-        self.total_lbas * 512
+    pub fn delete(&mut self, key: &str) -> Result<(), &'static str> {
+        self.put(key, &[])?;
+        self.index.remove(key);
+        Ok(())
     }
 }
 
-/// TicKV Storage Interface
-/// 
-/// High-level interface for storing and retrieving data using TicKV.
-pub struct TicKVStorage {
-    /// Flash driver
-    driver: NvmeFlashDriver,
-    /// Persistence enabled flag
-    persist_enabled: AtomicBool,
-}
+pub static TICKV: Mutex<Option<TickvLite>> = Mutex::new(None);
 
-impl TicKVStorage {
-    /// Create a new TicKV storage instance
-    /// 
-    /// # Safety
-    /// The controller pointer must be valid
-    #[must_use]
-    pub unsafe fn new(controller: *mut NvmeController, base_lba: u64, total_lbas: u64) -> Self {
-        Self {
-            driver: NvmeFlashDriver::new(controller, base_lba, total_lbas),
-            persist_enabled: AtomicBool::new(false),
-        }
+/// Boot smoke: mount + put/get. Retorna true se PASS.
+pub fn smoke() -> bool {
+    let mut g = TICKV.lock();
+    let kv = g.get_or_insert_with(TickvLite::new);
+    if kv.mount().is_err() {
+        return false;
     }
-
-    /// Initialize the TicKV storage
-    pub fn init(&mut self) -> NvmeResult<()> {
-        self.driver.init()?;
-        Ok(())
+    if kv.put("smoke", b"ok").is_err() {
+        return false;
     }
-
-    /// Enable persistence
-    pub fn enable_persistence(&self) {
-        self.persist_enabled.store(true, Ordering::Release);
-    }
-
-    /// Disable persistence
-    pub fn disable_persistence(&self) {
-        self.persist_enabled.store(false, Ordering::Release);
-    }
-
-    /// Check if persistence is enabled
-    #[must_use]
-    pub fn is_persistence_enabled(&self) -> bool {
-        self.persist_enabled.load(Ordering::Acquire)
-    }
-
-    /// Store audit log entry
-    /// 
-    /// # Arguments
-    /// * `key` - Key for the log entry
-    /// * `data` - Log data to store
-    pub fn store_audit_log(&self, key: &[u8], data: &[u8]) -> NvmeResult<()> {
-        if !self.is_persistence_enabled() {
-            return Ok(()); // Silently skip if persistence disabled
-        }
-
-        // In a real implementation, this would use TicKV's key-value store
-        // For now, we'll store at a fixed offset based on a simple hash
-        let offset = self.simple_hash(key) % self.driver.size();
-        self.driver.write(offset, data)
-    }
-
-    /// Retrieve audit log entry
-    /// 
-    /// # Arguments
-    /// * `key` - Key for the log entry
-    /// * `buffer` - Buffer to store the retrieved data
-    pub fn retrieve_audit_log(&self, key: &[u8], buffer: &mut [u8]) -> NvmeResult<()> {
-        let offset = self.simple_hash(key) % self.driver.size();
-        self.driver.read(offset, buffer)
-    }
-
-    /// Store inference result
-    /// 
-    /// # Arguments
-    /// * `task_id` - Task identifier
-    /// * `result` - Inference result data
-    pub fn store_inference_result(&self, task_id: u64, result: &[u8]) -> NvmeResult<()> {
-        if !self.is_persistence_enabled() {
-            return Ok(());
-        }
-
-        // Store at offset based on task ID
-        let offset = (task_id % (self.driver.size() / 512)) * 512;
-        self.driver.write(offset, result)
-    }
-
-    /// Retrieve inference result
-    /// 
-    /// # Arguments
-    /// * `task_id` - Task identifier
-    /// * `buffer` - Buffer to store the retrieved data
-    pub fn retrieve_inference_result(&self, task_id: u64, buffer: &mut [u8]) -> NvmeResult<()> {
-        let offset = (task_id % (self.driver.size() / 512)) * 512;
-        self.driver.read(offset, buffer)
-    }
-
-    /// Simple hash function for key-to-offset mapping
-    fn simple_hash(&self, key: &[u8]) -> u64 {
-        let mut hash: u64 = 5381;
-        for &byte in key {
-            hash = hash.wrapping_mul(33).wrapping_add(byte as u64);
-        }
-        hash
-    }
-
-    /// Get the flash driver
-    #[must_use]
-    pub const fn driver(&self) -> &NvmeFlashDriver {
-        &self.driver
+    match kv.get("smoke") {
+        Ok(v) => v.as_slice() == b"ok",
+        Err(_) => false,
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_flash_driver_trait() {
-        // This is a placeholder test
-        // Real tests would require a mock NVMe controller
+/// Persist blob sob key (ex. vdb/blob).
+pub fn put_blob(key: &str, data: &[u8]) -> Result<(), &'static str> {
+    let mut g = TICKV.lock();
+    let kv = g.get_or_insert_with(TickvLite::new);
+    if !kv.is_ready() {
+        kv.mount()?;
     }
+    kv.put(key, data)
+}
 
-    #[test]
-    fn test_simple_hash() {
-        let driver = NvmeFlashDriver {
-            controller: core::ptr::null_mut(),
-            base_lba: 0,
-            total_lbas: 1000,
-            initialized: AtomicBool::new(false),
-        };
+pub fn get_blob(key: &str) -> Result<Vec<u8>, &'static str> {
+    let mut g = TICKV.lock();
+    let kv = g.as_mut().ok_or("no tickv")?;
+    if !kv.is_ready() {
+        return Err("not mounted");
+    }
+    kv.get(key)
+}
 
-        let hash1 = driver.simple_hash(b"test_key");
-        let hash2 = driver.simple_hash(b"test_key");
-        let hash3 = driver.simple_hash(b"different_key");
+pub fn is_ready() -> bool {
+    TICKV.lock().as_ref().map(|k| k.is_ready()).unwrap_or(false)
+}
 
-        assert_eq!(hash1, hash2);
-        assert_ne!(hash1, hash3);
+pub fn backend_name() -> &'static str {
+    let g = TICKV.lock();
+    match g.as_ref().map(|k| k.backend) {
+        Some("nvme") => "nvme",
+        Some("ram") => "ram",
+        Some(_) => "unknown",
+        None => "none",
+    }
+}
+
+/// F8 lite: put → drop índice RAM → remount/recover → get deve sobreviver (CRC).
+pub fn power_loss_smoke() -> bool {
+    if put_blob("pl/test", b"survive").is_err() {
+        return false;
+    }
+    // Simula crash: perde TickvLite em RAM; flash mantém append-log.
+    *TICKV.lock() = None;
+    let mut g = TICKV.lock();
+    let kv = g.get_or_insert_with(TickvLite::new);
+    if kv.mount().is_err() {
+        return false;
+    }
+    match kv.get("pl/test") {
+        Ok(v) => v.as_slice() == b"survive",
+        Err(_) => false,
     }
 }

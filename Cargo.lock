@@ -207,6 +207,7 @@ dependencies = [
  "libm",
  "spin",
  "ticket-lock",
+ "vector-db",
  "x86_64",
 ]
 
@@ -1445,6 +1446,13 @@ dependencies = [
  "getrandom",
  "js-sys",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "vector-db"
+version = "0.1.0"
+dependencies = [
+ "spin",
 ]
 
 [[package]]

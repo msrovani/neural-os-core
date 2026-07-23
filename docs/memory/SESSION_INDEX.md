@@ -8,6 +8,11 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 173 | ADR-0063 | SGDB AIOS adoção | SgdbStore + HANR/Audit/Pkg/Skills | Facade namespaces; memory_store híbrido; persist_backend honesty; FAT=blobs |
+| 172 | ADR-0063+64 | RAG+SGDB MVP | vector-db + TickvLite + Hermes RAG + F2–F7 | Ondas 0–5; SESSION_173 = adoção consumidores |
+| 171 | ADR-0062 | P1+P2+P3+P24a | StorageBus + NVMe I/O + HID kb | Emagreçer disk_agent→k_nano; NVMe qid=1 BlockDevice; policy NVMe>AHCI>ATA; HID bringup multi-porta |
+| 170 | HW USB | MSC bring-up stick boot | Address Device+BOT p/ BOOT.LOG | Fix Cap regs/CRCR; bringup_boot_msc; ADR-0062 P11 |
+| 169 | HW boot | soft-reboot BOOT.LOG | Loop reinício HW pós-JARVIS | `NEURLOG!` sem `NEURDONE` → soft-reboot loop; flush agora retorna; feature soft-reboot OFF |
 | 168 | Display | Splash persistente pós-claim_graphics | Tela preta no gap entre `clear_fb_pixels()` e primeiro render do compositor (LLM 6K+ ticks) | Fix: `splash_draw_text()` após clear reusa font 8x16. `DENY MAP_FB` é do P4 demo (Cap::EMPTY), não bloqueia DisplayAgent (escreve direto no FB via write_volatile). 1 file, 14 linhas |
 | 167 | ADR-0062 | SGDB TicKV+NoProto+Índices IA | **Proposed** — TicKV NVMe + NoProto Zero-Copy + ART + BQ Flat SIMD | FASE 0: FlashController NVMe; FASE 1: TicKV append/get/GC; FASE 2: NoProto schemas L0-L7; FASE 3: AiosDatabaseEngine ponte; FASE 4: ART Index L0-L3; FASE 5: BQ Flat SIMD L4-L5; FASE 6: Integração L0-L7; FASE 7: SIMD Dispatch; FASE 8: Power-loss + carga |
 | 166 | ADR-0060 | BEI BitNet Cognitivo | **7/7 ondas** MPMC+Economia+Células+MoE+Memória+Afeto+Supervisor+Soul Mirror | Onda 6 v2: EgoLayer (EMA, latência), PonderNet (parada sigmoidal, lambda), SupervisorVerdict::Train/PromoteSkill/Ponder; Onda 7: SoulMirrorRenderer (AffectVector→visual), Avatar8State (8 estados), EXECUTIVE_SUPERVISOR global; ~2900 LOC, 11 commits, 0 erros |

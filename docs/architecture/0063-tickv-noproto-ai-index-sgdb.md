@@ -1,11 +1,13 @@
-# ADR-0062: TicKV + NoProto + Índices IA como SGDB Primário do Neural-OS-Core
+# ADR-0063: TicKV + NoProto + Índices IA como SGDB Primário do Neural-OS-Core
 
-**Status:** Proposed  
-**Lifecycle:** `por_fazer`  
+**Status:** Proposed / `fazendo` (MVP Flash+TickvLite + F2–F8 lite + **adoção AIOS SgdbStore** — SESSION_173)  
+**Lifecycle:** `fazendo`  
 **Data:** 2026-07-22  
 **Ideias:** #491–#510  
 **Supersede:** —  
-**Relacionado:** ADR-0061 (CPU-First BitNet), ADR-0040 (NeuralFS), ADR-0057 (Compute Dispatch)
+**Relacionado:** ADR-0061 (CPU-First BitNet), ADR-0040 (NeuralFS), ADR-0057 (Compute Dispatch), **ADR-0064** (RAG TF-IDF L1 lexical — persiste via TicKV)
+
+> **Cruzamento ADR-0064:** a camada L1 lexical (`VectorStore` TF-IDF) é o front-end RAG do agente; a persistência durável usa keys TicKV `vdb/*` deste SGDB. L1 structured (NoProto working docs) permanece escopo desta ADR.
 
 ---
 
@@ -170,6 +172,24 @@ Adotar **TicKV + NoProto + ART + BQ Flat SIMD** como SGDB (Sistema Gerenciador d
 | #503 | FlashController trait para NVMe driver | 🟡 agendada |
 | #504 | Benchmark suite automatizada | 🟡 agendada |
 | #505 | CI pipeline com QEMU NVMe | 🟡 agendada |
+
+---
+
+## Consumidores AIOS (SESSION_173 — adoção SgdbStore)
+
+Facade: `k_ai::sgdb::store` (namespaces `hanr/` `md/` `pkg/` `skill/` `audit/` `vdb/` `sys/`).
+
+| Consumidor | Path | Backend |
+|------------|------|---------|
+| HANR USER/MEMORY/SOUL/PERSONA | `hermes/memory_store.rs` | SGDB L7 primário + VFS espelho |
+| RAG TF-IDF | `vector-db` + `put_vdb_blob` | TickvLite `vdb/blob` |
+| L1/L2 last turn | `sgdb::layers` | MemoryDoc |
+| AuditTrail | `k_ai/audit.rs` flush/load | `audit/head` compact |
+| EpisodicMemory | `k_ai/cognitive.rs` | L2 + `sys/episodic_tail` |
+| PackageHub | `hermes/package_hub.rs` | meta SGDB; body VFS ou Tickv ≤4KiB |
+| SkillOpt promote | `hermes/skill_opt.rs` | `skill/{name}` + ART L3 |
+
+**Fora do SGDB (honesty):** WIFI.CFG, firmware, modelos, BOOT.LOG, TrustCache dump, bodies PackageHub grandes.
 
 ---
 

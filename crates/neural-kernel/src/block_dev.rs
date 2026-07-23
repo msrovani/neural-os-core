@@ -37,4 +37,7 @@ impl BlockDevice for UsbMassStorage {
     fn total_sectors(&self) -> u64 {
         self.max_lba.saturating_add(1)
     }
+    fn name(&self) -> &str {
+        "usb0"
+    }
 }

@@ -1,5 +1,8 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.7 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.8 TEST — NÃO ESTÁVEL
+#   SESSION_173: SGDB adoção AIOS — SgdbStore + HANR/Audit/Pkg/Skills/Episodic
+#   SESSION_172: ADR-0063/0064 — Onda 0–5: vector-db + TickvLite + Hermes RAG + k_ai::sgdb F2–F5 MVP
+#   SESSION_171: ADR-0062 P1✅ P2 StorageBus✅ P3 NVMe/AHCI✅ P24a HID parcial; emagreçer disk_agent
 #   SESSION_168: Display splash persistente pós-claim_graphics
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
@@ -42,7 +45,7 @@
 - **HW Expert:** precisa só `HWEXPRT.BIN` (não precisa linux-firmware).
 - **GPU/WiFi/NIC:** precisam blobs `firmware/` no FAT.
 - **E2e clima QEMU:** gated — default off; `cargo nk --features weather-e2e` para HIT.
-- **Log HW sem serial:** `BOOT.LOG` no volume FAT (`fat-boot-log` on); tela = `console_print` / `boot_ckpt` K0–K17 (SESSION_139). COM1 ainda útil em bancada.
+- **Log HW sem serial:** `BOOT.LOG` no FAT (`fat-boot-log`) via **USB-MSC bring-up** (SESSION_170 / ADR-0062 P11: Address Device+BOT) ou ATA; soft-reboot 0xCF9 **OFF** (SESSION_169). Opt-in debug: `fat-boot-log-soft-reboot`. COM1 útil em bancada.
 - **Bootloader vendor:** `vendor/bootloader` patch BltOnly→SetMode Rgb/Bgr (Intel HD 620).
 - Serial `[STATUS]`/`[HWEXPERT]`/`[GEN]`/`[TTS]`/`[BGE]` **mantidos**.
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
@@ -50,20 +53,18 @@
 ## Roadmap Atual
 **Versão:** **v1.9.5 TESTE / NÃO ESTÁVEL** (2026-07-21) — ADR-0060 BEI 7/7 ondas SESSION_166; base v1.9.1 BitNet/TLS/WiFi.
 
-## ADR-0062: TicKV + NoProto + Índices IA como SGDB (2026-07-22)
-**Status:** Proposed / `por_fazer`  
-**Lifecycle:** `por_fazer`  
+## ADR-0063: TicKV + NoProto + Índices IA como SGDB (2026-07-22)
+**Status:** Proposed / `fazendo` (MVP + **adoção AIOS SgdbStore** SESSION_173)  
+**Lifecycle:** `fazendo`  
 **Ideias:** #491–#510  
+**Companheira:** ADR-0064 RAG TF-IDF (persist `vdb/*`)  
 **Fases:**
-- FASE 0: Dependências + FlashController NVMe (k_nano)
-- FASE 1: TicKV wrapper + append/get + GC
-- FASE 2: NoProto schemas L0-L7 + encode/decode zero-copy
-- FASE 3: AiosDatabaseEngine (ponte NoProto ↔ TicKV + Vector Clock)
-- FASE 4: ART Index (Chaves/Fatos L0-L3) — Adaptive Radix Tree
-- FASE 5: BQ + Flat SIMD Scan (Vetores L4-L5) — Quantização Binária + XOR/POPCNT
-- FASE 6: Integração Camadas Memória (Hermes/Cortex/Jarbas)
-- FASE 7: SIMD Dispatch Unificado (k-ai + k-nano)
-- FASE 8: Testes Integração + Power-Loss + Carga
+- FASE 0–5: Flash/TickvLite/MemoryDoc/Engine/ART/BQ ✅ MVP
+- FASE 6: Hermes L1/L2 + **HANR L7 híbrido** + PackageHub meta ✅ SESSION_173
+- FASE 7: micro-bench ART+BQ ✅ lite
+- FASE 8: power-loss remount ✅ lite
+- **SgdbStore facade** + Audit flush + Episodic L2 + Skill index ✅
+- Residual: AVX2 BQ, GC TicKV, ART Node48/256, TrustCache persist, carga 100k
 
 **Critérios de Aceite:**
 - Hermes `recall(L4, query)` < 1ms end-to-end

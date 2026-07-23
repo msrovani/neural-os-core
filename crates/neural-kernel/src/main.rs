@@ -1631,17 +1631,20 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             crate::display::fb::boot_ckpt(16, "USB-MSC OK");
         } else {
             crate::display::fb::boot_ckpt(16, "USB-MSC AUSENTE");
-            // Honestidade: xHCI sobe controller; enum+BOT do stick ainda residual.
             k_nano::slog_nano!(
                 "USB",
                 "msc",
-                "AUSENTE — xHCI sem Address Device/BOT no stick (residual); boot continua"
+                "AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)"
             );
         }
         *crate::USB_MSC.lock() = msc;
         crate::display::fb::boot_ckpt(25, "antes BOOT.LOG flush");
         crate::boot_logger::init_after_usb();
         crate::display::fb::boot_ckpt(17, "BOOT.LOG flush tentado");
+        // ADR-0062 P24a: HID boot keyboard (porta ≠ MSC)
+        if unsafe { crate::xhci::bringup_hid_keyboard() } {
+            crate::boot_logger::log("BOOT: P24a HID keyboard ready");
+        }
     }
 
     crate::display::fb::boot_ckpt(26, "pos-K17 publish");
@@ -1718,11 +1721,48 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         crate::boot_logger::log("BOOT: DiskAgent USB-MSC available (global USB_MSC)");
     }
 
+    // StorageBus ordem: NVMe > AHCI > ATA > USB (ADR-0062 P2/P3)
     crate::display::fb::boot_ckpt(32, "NVMe probe");
-    if let Some(nvme) = unsafe { crate::disk_agent::nvme::NvmeDriver::probe() } {
-        let ctrl = crate::disk_agent::controller::NvmeCtrl::new(nvme);
+    if let Some(nvme) = unsafe { k_nano::disk_agent::nvme::NvmeDriver::probe() } {
+        *k_nano::disk_agent::nvme::NVME_DRIVER.lock() = Some(nvme);
+        {
+            let mut g = k_nano::disk_agent::nvme::NVME_DRIVER.lock();
+            if let Some(ref mut n) = *g {
+                k_nano::storage_bus::STORAGE_BUS.lock().register_probe(
+                    k_nano::storage_bus::BusKind::Nvme,
+                    "nvme0",
+                    n,
+                );
+            }
+        }
+        let ctrl = crate::disk_agent::controller::NvmeCtrl::new();
         disk_agent.register_controller(Box::new(ctrl));
         crate::boot_logger::log("BOOT: DiskAgent NVMe controller registered");
+    }
+    {
+        let mut bus = k_nano::storage_bus::STORAGE_BUS.lock();
+        {
+            let mut ahci_g = crate::AHCI_DRIVER.lock();
+            if let Some(ref mut ahci) = *ahci_g {
+                bus.register_probe(k_nano::storage_bus::BusKind::Ahci, "ahci0", ahci);
+            }
+        }
+        {
+            let mut ata_g = crate::ATA_DRIVER.lock();
+            if let Some(ref mut ata) = *ata_g {
+                bus.register_probe(k_nano::storage_bus::BusKind::Ata, "ata0", ata);
+            }
+        }
+        {
+            let mut usb_g = crate::USB_MSC.lock();
+            if let Some(ref mut msc) = *usb_g {
+                bus.register_probe(k_nano::storage_bus::BusKind::Usb, "usb0", msc);
+            }
+        }
+        crate::boot_logger::log(&alloc::format!(
+            "BOOT: StorageBus devices={}",
+            bus.device_count()
+        ));
     }
 
     let disk_agent_box = Box::new(disk_agent);
@@ -1742,14 +1782,69 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     let _ = hermes_crate::wasmi_rt::self_test();
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
     let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
-    // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
-    let _ = crate::exec_arena::self_test();
+    // ADR-0064 F1: VectorStore TF-IDF demo
+    if cortex_crate::vector_db::demo() {
+        k_nano::slog_bin!("vectordb", "demo", "PASS");
+        crate::boot_logger::log("BOOT: [vectordb] demo PASS");
+    } else {
+        k_nano::slog_bin!("vectordb", "demo", "FAIL");
+        crate::boot_logger::log("BOOT: [vectordb] demo FAIL");
+    }
+    // ADR-0063 F0/F1a: TickvLite mount + smoke (NVMe ou RAM)
+    if k_nano::storage::tickv_smoke() {
+        k_nano::slog_bin!(
+            "TICKV",
+            "smoke",
+            "put/get PASS backend={}",
+            k_nano::storage::backend_name()
+        );
+        crate::boot_logger::log("BOOT: [TICKV] put/get smoke PASS");
+        // ADR-0064↔0063: load VectorStore via SgdbStore
+        if let Ok(Some(bytes)) = k_ai::sgdb::get_vdb_blob() {
+            match cortex_crate::vector_db::global_load_bytes(&bytes) {
+                Ok(()) => {
+                    k_nano::slog_bin!("vectordb", "load", "from TicKV vdb/blob OK");
+                    crate::boot_logger::log("BOOT: [vectordb] loaded from TicKV");
+                }
+                Err(e) => {
+                    k_nano::slog_bin!("vectordb", "load", "FAIL {}", e);
+                }
+            }
+        }
+    } else {
+        k_nano::slog_bin!("TICKV", "smoke", "FAIL or skip");
+        crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");
+    }
+    // ADR-0063: facade + demo
+    k_ai::sgdb::boot_init();
+    if k_ai::sgdb::demo() {
+        k_nano::slog_bin!("sgdb", "demo", "F2-F7+facade PASS");
+        crate::boot_logger::log("BOOT: [sgdb] facade demo PASS");
+    } else {
+        k_nano::slog_bin!("sgdb", "demo", "F2-F7+facade FAIL");
+        crate::boot_logger::log("BOOT: [sgdb] facade demo FAIL");
+    }
+    // Audit checkpoint load (Onda C)
+    {
+        let mut trail = hermes_globals::AUDIT_TRAIL.lock();
+        if trail.load_from_sgdb() {
+            k_nano::slog_bin!("sgdb", "audit", "loaded from TickvLite");
+        }
+    }
+    // ADR-0063 F8 lite: power-loss remount
+    if k_nano::storage::is_ready() && k_nano::storage::power_loss_smoke() {
+        k_nano::slog_bin!("TICKV", "power_loss", "PASS");
+        crate::boot_logger::log("BOOT: [TICKV] power-loss remount PASS");
+    } else if k_nano::storage::is_ready() {
+        k_nano::slog_bin!("TICKV", "power_loss", "FAIL");
+        crate::boot_logger::log("BOOT: [TICKV] power-loss FAIL");
+    }
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();
     crate::display::fb::boot_ckpt(36, "package_hub");
     crate::package_hub::init_package_hub();
     crate::display::fb::boot_ckpt(37, "hub ok");
-    // Sem MSC/ATA: ramlog + foto curta, mas NAO soft-reboot (bloqueava JARVIS no HW).
+    // Sem MSC/ATA: ramlog + foto curta; soft-reboot OFF (loop HW). Runtime segue.
     if crate::USB_MSC.lock().is_none() && crate::ATA_DRIVER.lock().is_none() {
         crate::boot_logger::maybe_uefi_flush_reboot("K37 hub ok — sem MSC/ATA");
     }
@@ -1764,7 +1859,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     // Pendrive HW: sem USB-MSC/ATA o BOOT.LOG nao grava e FAT PIO pode travar (AHCI
     // interno sozinho nao conta — disco errado / portas vazias). QEMU-loader continua.
-    let has_fat_block = crate::ATA_DRIVER.lock().is_some() || crate::USB_MSC.lock().is_some();
+    let has_fat_block = crate::ATA_DRIVER.lock().is_some()
+        || crate::USB_MSC.lock().is_some()
+        || crate::AHCI_DRIVER.lock().is_some()
+        || k_nano::disk_agent::nvme::NVME_DRIVER.lock().is_some();
     if !has_fat_block {
         crate::display::fb::boot_ckpt(38, "sem MSC/ATA — skip FAT");
         k_nano::slog_nano!(
@@ -1938,8 +2036,22 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 }
             }
         }
-        // FAT só com ATA/USB-MSC (evita hang AHCI em notebook USB-boot sem MSC)
+        // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
         if has_fat_block {
+            if !loaded {
+                let mut nvme_g = k_nano::disk_agent::nvme::NVME_DRIVER.lock();
+                if let Some(ref mut nvme) = *nvme_g {
+                    if let Some(bge_data) = read_file_from_dev(nvme, "BGE.BIN") {
+                        found = true;
+                        k_nano::slog_bin!("BGE", "info", "BGE.BIN lido NVMe ({} KB) — parse…", bge_data.len() / 1024);
+                        if crate::memory_systems::load_bge(&bge_data) {
+                            k_nano::slog_bin!("Asset", "bge", "Embedding model LOADED from NVMe FAT!");
+                            crate::boot_logger::log("BOOT: BGE embedding loaded (NVMe)");
+                            loaded = true;
+                        }
+                    }
+                }
+            }
             let mut ahci_guard = crate::AHCI_DRIVER.lock();
             if let Some(ref mut ahci) = *ahci_guard {
                 if !loaded {

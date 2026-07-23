@@ -112,7 +112,7 @@ impl JarvisAgent {
 }
 
 /// Chamado logo apos `register(JarvisAgent)` no boot HW.
-/// Emite template + soft-reboot p/ BOOT.LOG (nao espera tick — hang comum pos-K44).
+/// Emite template + tenta BOOT.LOG (MSC/ATA); **nunca soft-reboot** — Runtime segue.
 pub fn emit_hw_greeting_at_register() {
     if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
         return;
@@ -154,11 +154,14 @@ pub fn emit_hw_greeting_at_register() {
         payload: line.into_bytes(),
         token: CapabilityToken::Legacy(1),
     });
-    if no_fat {
-        crate::boot_logger::flush_bootlog_after_greeting(
-            "pos-JARVIS @register K44 — USB-MSC AUSENTE",
-        );
-    }
+    // Sempre tenta persistir/avisar; retorna e deixa AgentFleet/Runtime vivos.
+    let _ = crate::boot_logger::flush_bootlog_after_greeting(
+        if no_fat {
+            "pos-JARVIS @register K44 — USB-MSC AUSENTE"
+        } else {
+            "pos-JARVIS @register K44 — HW bare"
+        },
+    );
 }
 
 impl Agent for JarvisAgent {
@@ -209,11 +212,13 @@ impl Agent for JarvisAgent {
                 let line = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
                 crate::display::fb::console_print(&line);
                 crate::display::fb::boot_ckpt(50, "jarvis greet OK");
-                if no_fat {
-                    crate::boot_logger::flush_bootlog_after_greeting(
-                        "pos-JARVIS greet — USB-MSC AUSENTE",
-                    );
-                }
+                let _ = crate::boot_logger::flush_bootlog_after_greeting(
+                    if no_fat {
+                        "pos-JARVIS greet — USB-MSC AUSENTE"
+                    } else {
+                        "pos-JARVIS greet — HW bare"
+                    },
+                );
                 return AgentTickResult::Pending;
             }
 

@@ -71,6 +71,7 @@ pub mod slab;
 pub mod slip;
 pub mod smp;
 pub mod storage_manager;
+pub mod storage_bus;
 pub mod sync;
 // ponytail: time_utils.rs moved to LEGACY/v1.5-dead-k2chj/k_nano/ (dead code)
 pub mod tpm;

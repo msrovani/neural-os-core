@@ -49,3 +49,6 @@ pub mod kv_h2o;
 // ponytail: structured_decode module disabled (pre-existing, F4)
 // pub mod structured_decode;
 pub mod moe;
+
+/// ADR-0064 RAG TF-IDF — re-export (emagreçer: lógica na crate vector-db).
+pub use vector_db;

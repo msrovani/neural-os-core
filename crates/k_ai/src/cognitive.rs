@@ -533,7 +533,7 @@ impl WorkspaceIsolation {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// M2 Episodic Memory — persistente via NVMe
+// M2 Episodic Memory — persistente via SGDB MemoryDoc L2 (ADR-0063)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 pub struct EpisodicMemory {
@@ -541,13 +541,54 @@ pub struct EpisodicMemory {
     pub max_episodes: usize,
 }
 impl EpisodicMemory {
-    pub fn new(max: usize) -> Self { EpisodicMemory { episodes: Vec::new(), max_episodes: max } }
-    pub fn record(&mut self, event: &str) {
-        if self.episodes.len() >= self.max_episodes { self.episodes.remove(0); }
-        self.episodes.push(String::from(event));
+    pub fn new(max: usize) -> Self {
+        EpisodicMemory {
+            episodes: Vec::new(),
+            max_episodes: max,
+        }
     }
-    pub fn replay(&self, n: usize) -> Vec<String> { self.episodes.iter().rev().take(n).cloned().collect() }
-    pub fn status(&self) -> String { alloc::format!("[EPISODIC] {}/{} episodes", self.episodes.len(), self.max_episodes) }
+    pub fn record(&mut self, event: &str) {
+        if self.episodes.len() >= self.max_episodes {
+            self.episodes.remove(0);
+        }
+        self.episodes.push(String::from(event));
+        // Persist last episode as MemoryDoc L2 (key rotativo por índice)
+        if crate::sgdb::ready() {
+            let idx = self.episodes.len().saturating_sub(1);
+            let key = alloc::format!("epi_{}", idx % self.max_episodes.max(1));
+            let doc = crate::sgdb::MemoryDoc::new(
+                crate::sgdb::MemoryLayer::L2EpisodicShort,
+                &key,
+                event.as_bytes().to_vec(),
+            );
+            let _ = crate::sgdb::put_doc(doc);
+            let joined = self.episodes.join("\n");
+            let _ = crate::sgdb::put_kv("sys/episodic_tail", joined.as_bytes());
+        }
+    }
+    pub fn replay(&self, n: usize) -> Vec<String> {
+        self.episodes.iter().rev().take(n).cloned().collect()
+    }
+    pub fn load_from_sgdb(&mut self) {
+        if let Ok(Some(bytes)) = crate::sgdb::get_kv("sys/episodic_tail") {
+            if let Ok(s) = core::str::from_utf8(&bytes) {
+                self.episodes.clear();
+                for line in s.lines().take(self.max_episodes) {
+                    if !line.is_empty() {
+                        self.episodes.push(String::from(line));
+                    }
+                }
+            }
+        }
+    }
+    pub fn status(&self) -> String {
+        alloc::format!(
+            "[EPISODIC] {}/{} episodes sgdb={}",
+            self.episodes.len(),
+            self.max_episodes,
+            crate::sgdb::ready()
+        )
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

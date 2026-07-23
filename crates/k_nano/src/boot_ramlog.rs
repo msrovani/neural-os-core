@@ -1,9 +1,11 @@
-//! Boot RAM log — buffer físico para soft-reboot → BOOT.LOG via UEFI.
+//! Boot RAM log — buffer físico espelhando checkpoints (FB/serial sem COM).
 //!
 //! Phys default `0x1000_0000` (256 MiB) — low mem (16–32 MiB) costuma ser
 //! zerada no warm-reset de notebooks (ex.: Note 1050). CRC32 valida sobrevivência.
 //!
-//! Magic `NEURLOG!` = flush pendente; `NEURDONE` = já gravado.
+//! Magic `NEURLOG!` = flush pendente (legado soft-reboot); `NEURDONE` = consumido.
+//! Soft-reboot 0xCF9 é **opt-in** (`feature = "soft-reboot-bootlog"`) — default OFF
+//! porque nenhum UEFI writer gravava `NEURDONE` → loop infinito em HW real.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
@@ -48,10 +50,6 @@ fn pack_crc_ckpt(crc: u32, ckpt: u8) -> u32 {
     (crc & 0x00FF_FFFF) | ((ckpt as u32) << 24)
 }
 
-fn unpack_crc(v: u32) -> u32 {
-    v & 0x00FF_FFFF
-}
-
 fn unpack_ckpt(v: u32) -> u8 {
     (v >> 24) as u8
 }
@@ -77,7 +75,11 @@ pub fn last_ckpt() -> u8 {
     LAST_CKPT.load(Ordering::Relaxed)
 }
 
-/// Após map_phys: se bootloader já gravou BOOT.LOG, evita loop de reboot.
+/// Após map_phys: consome magic legado e **sempre** evita rearmar soft-reboot loop.
+///
+/// - `NEURDONE` → skip (flush consumido)
+/// - `NEURLOG!` → tentativa incompleta do boot anterior (UEFI nunca escreveu DONE) → skip
+/// - outro → zera buffer
 pub unsafe fn init_from_phys() {
     if INITED.swap(true, Ordering::Relaxed) {
         return;
@@ -91,8 +93,28 @@ pub unsafe fn init_from_phys() {
         }
         core::ptr::write_volatile(&mut (*hdr_mut()).magic, 0);
         core::ptr::write_volatile(&mut (*hdr_mut()).len, 0);
-        crate::slog_nano!("RAMLOG", "info", "BOOT.LOG gravado (ckpt K{}) — skip novo soft-reboot", k);
-    } else if h.magic != MAGIC_NEED_FLUSH {
+        crate::slog_nano!(
+            "RAMLOG",
+            "info",
+            "BOOT.LOG consumido (ckpt K{}) — skip soft-reboot",
+            k
+        );
+    } else if h.magic == MAGIC_NEED_FLUSH {
+        // Soft-reboot anterior deixou NEURLOG! sem UEFI writer → loop se não skiparmos.
+        let k = unpack_ckpt(h.crc_and_ckpt);
+        if k != 0 {
+            LAST_CKPT.store(k, Ordering::Relaxed);
+        }
+        SKIP_FLUSH_REBOOT.store(true, Ordering::Relaxed);
+        // Marca consumido localmente (não depende de UEFI fantasma).
+        core::ptr::write_volatile(&mut (*hdr_mut()).magic, MAGIC_FLUSHED);
+        crate::slog_nano!(
+            "RAMLOG",
+            "info",
+            "NEURLOG! pendente (ckpt K{}) — skip soft-reboot; Runtime segue",
+            k
+        );
+    } else {
         core::ptr::write_bytes(va() as *mut u8, 0, BOOT_RAMLOG_CAP);
     }
 }
@@ -172,7 +194,9 @@ pub fn append(msg: &str) {
     }
 }
 
-/// Finaliza CRC + magic e warm-reset.
+/// Finaliza CRC + magic e warm-reset — **somente** com `soft-reboot-bootlog`.
+/// Builds de produto não ligam essa feature (evita loop HW).
+#[cfg(feature = "soft-reboot-bootlog")]
 pub unsafe fn request_flush_and_reboot(reason: &str) -> ! {
     append(reason);
     append("=== RAMLOG flush via soft-reboot UEFI ===");
@@ -184,19 +208,38 @@ pub unsafe fn request_flush_and_reboot(reason: &str) -> ! {
     core::ptr::write_volatile(&mut h.crc_and_ckpt, pack_crc_ckpt(crc, ckpt));
     core::ptr::write_volatile(&mut h.magic, MAGIC_NEED_FLUSH);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
-    crate::slog_nano!("RAMLOG", "info", "soft-reboot flush BOOT.LOG ckpt=K{} len={} crc={:#x}",
+    crate::slog_nano!(
+        "RAMLOG",
+        "info",
+        "soft-reboot flush BOOT.LOG ckpt=K{} len={} crc={:#x}",
         ckpt,
         len,
-        crc);
-    // Pausa curta — a contagem longa fica no caller (FB).
+        crc
+    );
     for _ in 0..2_000_000 {
         core::hint::spin_loop();
     }
     soft_reboot()
 }
 
+/// Stub produto: nunca reinicia; marca skip e gira (nao deve ser chamado).
+#[cfg(not(feature = "soft-reboot-bootlog"))]
+pub unsafe fn request_flush_and_reboot(reason: &str) -> ! {
+    append(reason);
+    append("=== soft-reboot DISABLED (product) — nao reinicia ===");
+    mark_skip_flush_reboot();
+    crate::slog_nano!(
+        "RAMLOG",
+        "warn",
+        "request_flush_and_reboot chamado sem feature soft-reboot-bootlog — spin"
+    );
+    loop {
+        core::hint::spin_loop();
+    }
+}
+
+#[cfg(feature = "soft-reboot-bootlog")]
 unsafe fn soft_reboot() -> ! {
-    // Preferir pulse 0x64 (às vezes preserva RAM melhor que CF9 full).
     for _ in 0..1000 {
         core::arch::asm!(
             "mov al, 0xFE",
@@ -205,7 +248,6 @@ unsafe fn soft_reboot() -> ! {
         );
         core::hint::spin_loop();
     }
-    // CF9 warm reset bit1+bit2
     core::arch::asm!(
         "mov al, 0x06",
         "mov dx, 0xCF9",
@@ -217,7 +259,7 @@ unsafe fn soft_reboot() -> ! {
     }
 }
 
-/// Soft-reboot para gravar BOOT.LOG. Caller deve garantir que FAT ainda nao gravou.
+/// Soft-reboot opt-in. Sem feature: no-op (produto).
 pub fn maybe_flush_reboot(reason: &str) {
     if SKIP_FLUSH_REBOOT.load(Ordering::Relaxed) {
         return;
@@ -225,5 +267,14 @@ pub fn maybe_flush_reboot(reason: &str) {
     if crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
         return;
     }
-    unsafe { request_flush_and_reboot(reason) }
+    #[cfg(feature = "soft-reboot-bootlog")]
+    {
+        unsafe { request_flush_and_reboot(reason) }
+    }
+    #[cfg(not(feature = "soft-reboot-bootlog"))]
+    {
+        let _ = reason;
+        mark_skip_flush_reboot();
+        append("maybe_flush_reboot: soft-reboot OFF — continue");
+    }
 }

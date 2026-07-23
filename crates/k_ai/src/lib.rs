@@ -40,3 +40,9 @@ pub mod shutdown;
 pub mod usage;
 pub mod ternary;
 pub mod router;
+/// ADR-0063 F2–F5 SGDB (MemoryDoc · Engine · ART · BQ) — MVP Onda 5.
+pub mod sgdb;
+/// Compat: re-export status do stub antigo.
+pub mod sgdb_residual {
+    pub use crate::sgdb::status_line as sgdb_residual_status;
+}

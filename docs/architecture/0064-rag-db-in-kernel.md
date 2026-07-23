@@ -1,11 +1,13 @@
-# ADR-0063: RAG DB in-kernel — Vector store TF-IDF + cosine para RAG on-device
+# ADR-0064: RAG DB in-kernel — Vector store TF-IDF + cosine para RAG on-device
 
 **Data:** 2026-07-22
-**Status:** Proposed — especificação técnica de um vector database in-kernel para RAG (Retrieval-Augmented Generation) on-device, sem dependência de MemPalace externo. Sem implementação nesta ADR.
-**Lifecycle (INDEX):** `por_fazer`
-**Estende:** ADR-0019 (Cortex/BitNet), ADR-0033 (On-Device Micro-Learning), ADR-0047 (Latent Space AI-OS), ADR-0060 (BitNet Cognitivo BEI — memória L0-L7)
+**Status:** Proposed / `fazendo` (F1–F3 MVP — plano unificado 0063+0064)
+**Lifecycle (INDEX):** `fazendo`
+**Estende:** ADR-0019 (Cortex/BitNet), ADR-0033 (On-Device Micro-Learning), ADR-0047 (Latent Space AI-OS), ADR-0060 (BitNet Cognitivo BEI — memória L0-L7), **ADR-0063** (TicKV SGDB — backend de persistência)
 **Referência:** ClaudioOS `kernel/src/vectordb.rs` (1.062 LOC) — especificação técnica extraída do código-fonte lido integralmente
-**IDEA_BANK:** #486 (ver §7)
+**IDEA_BANK:** #486, #487 (ver §7)
+
+> **Cruzamento ADR-0063:** L1 lexical = este VectorStore; persistência = TicKV keys `vdb/*` (não JSON FAT no hot path). L4+ embeddings = F6 residual (BGE paralelo até lá).
 
 ---
 
@@ -375,7 +377,7 @@ fn demo() {
 
 | # | Ideia | Destino | Status |
 |---|---|---|---|
-| #486 | Vector DB in-kernel TF-IDF para RAG on-device | Esta ADR (F1-F5) | ⏳ |
+| #486 | Vector DB in-kernel TF-IDF para RAG on-device | Esta ADR (F1-F5) + persist ADR-0063 | 🟡 |
 | #487 | Embeddings neurais in-kernel (L4+ residual) | F6 residual | ⏳ |
 
 ---

@@ -1,5 +1,12 @@
+//! xHCI host — init + bulk + MSC bring-up (ADR-0062 P11 / #490).
+//! Registradores: Cap @ BAR0; Op = Cap+CAPLENGTH; DBOFF/RTSOFF no Cap space.
+
 use core::sync::atomic::Ordering;
 use crate::memory::{PHYS_MEM_OFFSET, GLOBAL_ALLOCATOR};
+
+mod bringup;
+pub use bringup::{bringup_boot_msc, bringup_hid_keyboard};
+
 pub struct XhciDev {
     pub port: u8,
     pub slot: u8,
@@ -9,8 +16,8 @@ pub struct XhciDev {
 }
 
 fn mmio32(base: u64, off: u64) -> *mut u32 { (base as *mut u32).wrapping_add(off as usize / 4) }
-unsafe fn r32(base: u64, off: u64) -> u32 { mmio32(base, off).read_volatile() }
-unsafe fn w32(base: u64, off: u64, v: u32) { mmio32(base, off).write_volatile(v) }
+pub(crate) unsafe fn r32(base: u64, off: u64) -> u32 { mmio32(base, off).read_volatile() }
+pub(crate) unsafe fn w32(base: u64, off: u64, v: u32) { mmio32(base, off).write_volatile(v) }
 
 /// USB HID Usage → PS/2 scancode (set 1, make)
 fn hid_to_scancode(usage: u8) -> Option<u8> {
@@ -41,11 +48,33 @@ fn hid_to_scancode(usage: u8) -> Option<u8> {
 pub static XHCI_STATE: spin::Mutex<Option<XhciState>> = spin::Mutex::new(None);
 
 pub struct XhciState {
-    op: u64, capl: u64, base: u64, pmoff: u64,
-    dcbaa_va: u64, er_va: u64,
-    slot: u8, db_off: u64,
-    tr_va: u64, report_va: u64,
-    last_report: [u8; 8],
+    pub(crate) op: u64,
+    pub(crate) capl: u64,
+    pub(crate) base: u64,
+    pub(crate) pmoff: u64,
+    pub(crate) dcbaa_va: u64,
+    pub(crate) er_va: u64,
+    pub(crate) slot: u8,
+    /// Byte offset from Cap base to Doorbell Array (DBOFF).
+    pub(crate) db_off: u64,
+    pub(crate) tr_va: u64,
+    pub(crate) report_va: u64,
+    pub(crate) last_report: [u8; 8],
+    pub(crate) cmd_ring_pa: u64,
+    pub(crate) cmd_ring_va: u64,
+    pub(crate) cmd_enqueue: u16,
+    pub(crate) cmd_cycle: bool,
+    pub(crate) max_slots: u8,
+    pub(crate) max_ports: u8,
+    pub(crate) er_dequeue: u16,
+    /// Porta reservada pelo MSC (0 = nenhuma) — HID não rouba o stick.
+    pub(crate) msc_port: u8,
+    /// HID boot keyboard ready
+    pub(crate) hid_ready: bool,
+    pub(crate) hid_slot: u8,
+    pub(crate) hid_tr_va: u64,
+    pub(crate) hid_report_va: u64,
+    pub(crate) hid_last_usage: u8,
 }
 
 pub unsafe fn init_xhci() {
@@ -58,128 +87,170 @@ pub unsafe fn init_xhci() {
         let base = mmio + pmoff;
         let capl = r32(base, 0) as u64 & 0xFF;
         let op = base + capl;
-        let hcc1 = r32(base + capl, 8);
-        let db_off = (hcc1 >> 16) as u64 & !0x3 ;
 
+        // Cap space (NÃO Operational): HCSPARAMS1, DBOFF, RTSOFF
+        let hcs1 = r32(base, 0x04);
+        let max_slots = (hcs1 & 0xFF) as u8;
+        let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
+        let db_off = (r32(base, 0x14) & !0x3) as u64;
+        let rtsoff = (r32(base, 0x18) & !0x1F) as u64;
+
+        // Halt controller
         w32(op, 0, r32(op, 0) & !0x01);
-        for _ in 0..1000 { if r32(op, 0) & 0x01 == 0 { break; } core::hint::spin_loop(); }
+        for _ in 0..100_000 {
+            if r32(op, 0x04) & 0x01 != 0 { break; } // HCH
+            core::hint::spin_loop();
+        }
+
+        // HCRST
+        w32(op, 0, r32(op, 0) | 0x02);
+        for _ in 0..100_000 {
+            if r32(op, 0) & 0x02 == 0 { break; }
+            core::hint::spin_loop();
+        }
 
         let dcbaa = match alloc_phys(1) {
             Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (DCBAA) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (DCBAA)"); continue; }
         };
         core::ptr::write_bytes(dcbaa.1, 0, 4096);
-        w32(op, 0x10, dcbaa.0 as u32); w32(op, 0x14, (dcbaa.0 >> 32) as u32);
+        // DCBAAP @ Op+0x30
+        w32(op, 0x30, dcbaa.0 as u32);
+        w32(op, 0x34, (dcbaa.0 >> 32) as u32);
 
-        let er = match alloc_phys(2) {
+        // Command ring @ Op+0x18 (CRCR)
+        let cmd = match alloc_phys(1) {
             Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (Event Ring) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (CRCR)"); continue; }
         };
-        core::ptr::write_bytes(er.1, 0, 8192);
-        w32(base + capl, 0x38, er.0 as u32); w32(base + capl, 0x3C, (er.0 >> 32) as u32);
-        w32(base + capl, 0x30, 0); w32(base + capl, 0x34, er.0 as u32 | 0x01);
+        core::ptr::write_bytes(cmd.1, 0, 4096);
+        w32(op, 0x18, cmd.0 as u32 | 0x1); // RCS=1
+        w32(op, 0x1C, (cmd.0 >> 32) as u32);
 
-        let hcs1 = r32(op, 4); let slots = ((hcs1 >> 8) & 0xFF) as u8;
+        // Event ring + ERST @ Runtime (Cap+RTSOFF)
+        let erst_mem = match alloc_phys(1) {
+            Some(p) => p,
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (ERST)"); continue; }
+        };
+        let er = match alloc_phys(1) {
+            Some(p) => p,
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (Event Ring)"); continue; }
+        };
+        core::ptr::write_bytes(erst_mem.1, 0, 4096);
+        core::ptr::write_bytes(er.1, 0, 4096);
+        // ERST entry: addr + size (TRBs)
+        let erst = erst_mem.1 as *mut u64;
+        erst.write_volatile(er.0);
+        erst.add(1).write_volatile(256u64);
+        let rt = base + rtsoff;
+        w32(rt, 0x28, 1); // ERSTSZ
+        w32(rt, 0x30, erst_mem.0 as u32);
+        w32(rt, 0x34, (erst_mem.0 >> 32) as u32);
+        w32(rt, 0x38, er.0 as u32);
+        w32(rt, 0x3C, (er.0 >> 32) as u32);
+
+        // CONFIG MaxSlotsEn
+        let slots = if max_slots == 0 { 8 } else { max_slots.min(64) };
         w32(op, 0x38, slots as u32);
-        w32(op, 0, r32(op, 0) | 0x01);
-        for _ in 0..1000 { if r32(op, 0) & 0x01 != 0 { break; } core::hint::spin_loop(); }
 
-        // Allocate transfer ring + report buffer
+        // Run
+        w32(op, 0, r32(op, 0) | 0x01);
+        for _ in 0..100_000 {
+            if r32(op, 0x04) & 0x01 == 0 { break; }
+            core::hint::spin_loop();
+        }
+
         let tr = match alloc_phys(1) {
             Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (transfer ring) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (TR)"); continue; }
         };
         core::ptr::write_bytes(tr.1, 0, 4096);
         let report = match alloc_phys(1) {
             Some(p) => p,
-            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (report buffer) — abortando init"); continue; }
+            None => { crate::slog_nano!("USB", "xhci", "alloc_phys falhou (report)"); continue; }
         };
         core::ptr::write_bytes(report.1, 0, 4096);
 
         *XHCI_STATE.lock() = Some(XhciState {
             op, capl, base, pmoff,
-            dcbaa_va: dcbaa.0 + pmoff, er_va: er.0 + pmoff,
-            slot: 1, db_off, tr_va: tr.0 + pmoff, report_va: report.0 + pmoff,
+            dcbaa_va: dcbaa.0 + pmoff,
+            er_va: er.0 + pmoff,
+            slot: 1,
+            db_off,
+            tr_va: tr.0 + pmoff,
+            report_va: report.0 + pmoff,
             last_report: [0; 8],
+            cmd_ring_pa: cmd.0,
+            cmd_ring_va: cmd.0 + pmoff,
+            cmd_enqueue: 0,
+            cmd_cycle: true,
+            max_slots: slots,
+            max_ports: if max_ports == 0 { 8 } else { max_ports },
+            er_dequeue: 0,
+            msc_port: 0,
+            hid_ready: false,
+            hid_slot: 0,
+            hid_tr_va: 0,
+            hid_report_va: 0,
+            hid_last_usage: 0,
         });
-        crate::slog_nano!("USB", "xhci", "Inicializado. db_off={:#x}", db_off);
+        crate::slog_nano!(
+            "USB",
+            "xhci",
+            "Inicializado. slots={} ports={} db_off={:#x} rtsoff={:#x}",
+            slots,
+            max_ports,
+            db_off,
+            rtsoff
+        );
         return;
     }
 }
 
-/// Poll do teclado USB — chamado pelo InputAgent a cada 5 ticks.
-/// Retorna scancode PS/2 (make) ou None.
+/// Poll do teclado USB HID boot — InputAgent. Requer `bringup_hid_keyboard` (P24a).
 pub unsafe fn poll_keyboard() -> Option<u8> {
     let mut state_lock = XHCI_STATE.lock();
-    let state = match &mut *state_lock { Some(s) => s, None => return None };
+    let state = match &mut *state_lock {
+        Some(s) if s.hid_ready => s,
+        _ => return None,
+    };
 
-    // Se primeiro poll, configura HID boot
-    if state.last_report[0] == 0 && state.slot > 0 {
-        // Setup device context slot
-        let ctx_phys = match alloc_phys(2) {
-            Some(c) => c,
-            None => { return None; }
-        };
-        core::ptr::write_bytes(ctx_phys.1, 0, 8192);
-        let dcbaa = state.dcbaa_va as *mut u64;
-        dcbaa.add(state.slot as usize).write_volatile(ctx_phys.0);
+    let report = state.hid_report_va as *const u8;
+    let usage = report.add(2).read_volatile();
+    let mods = report.read_volatile();
 
-        // Input Control Context + Slot Context
-        let icc = ctx_phys.1 as *mut u32;
-        icc.add(0).write_volatile(0x03);
-        icc.add(2).write_volatile(0x10); // slot.context_entries=1
-        icc.add(4).write_volatile((state.slot as u32) << 24); // route string
-        icc.add(5).write_volatile(0x0000_0000);
-        // EP0 context (control endpoint)
-        let ep0 = ctx_phys.1.add(32 + 32) as *mut u32;
-        ep0.add(0).write_volatile(0x0000_0808);
-        ep0.add(1).write_volatile(0x0000_0000);
-        ep0.add(2).write_volatile(0x0000_0000);
-        ep0.add(3).write_volatile(0x0000_0000);
-
-        // Set device context pointer in DCBAA + ring doorbell 0
-        // (simplified: assumes xHC accepts default slot context)
-
-        state.last_report[0] = 0xFF; // mark as configured
-        crate::slog_bin!("USB", "info", "HID boot configurado.");
+    // CAD: LCtrl+LAlt+Delete
+    if mods & 0x05 == 0x05 && usage == 0x4C {
+        return Some(0x53);
     }
 
-    // Ler Event Ring para completions
-    let evt = state.er_va as *const u64;
-    let ctrl = state.er_va as *const u32;
-    let _cycle = ctrl.add(3).read_volatile() & 0x01;
-
-    for i in 0..8u16 {
-        let trb = evt.add(i as usize * 4);
-        let flags = (trb.add(2).read_volatile() >> 24) as u8;
-        if flags & 0x01 == 0 { continue; } // not completed
-        if flags & 0x20 != 0 {
-            // Transfer event
-            let _len = (trb.add(2).read_volatile() >> 24) & 0xFFFFFF;
-            // Ler HID report do buffer
-            let report = state.report_va as *const u8;
-            let mods = report.read_volatile();    // byte 0: modifiers
-            let usage = report.add(2).read_volatile(); // byte 2: first key
-
-            // Detect CAD: LCtrl(bit0) + LAlt(bit2) + Delete(0x4C)
-            if mods & 0x05 == 0x05 && usage == 0x4C {
-                return Some(0x53); // scancode DEL (make)
-            }
-
-            // Converter HID usage para scancode
-            if let Some(sc) = hid_to_scancode(usage) {
-                if usage != state.last_report[2] {
-                    state.last_report[2] = usage;
-                    return Some(sc);
-                }
-            }
-        }
-        break;
+    if usage == 0 || usage == state.hid_last_usage {
+        // Re-armar transfer interrupt (Normal TRB 8 bytes) se idle
+        queue_hid_interrupt_read(state);
+        return None;
     }
-    None
+    state.hid_last_usage = usage;
+    let sc = hid_to_scancode(usage)?;
+    queue_hid_interrupt_read(state);
+    Some(sc)
 }
 
-unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {
+pub(crate) unsafe fn queue_hid_interrupt_read(state: &mut XhciState) {
+    if state.hid_tr_va == 0 || state.hid_report_va == 0 || state.hid_slot == 0 {
+        return;
+    }
+    let trb = state.hid_tr_va as *mut u32;
+    let report_pa = state.hid_report_va - state.pmoff;
+    trb.add(0).write_volatile(report_pa as u32);
+    trb.add(1).write_volatile((report_pa >> 32) as u32);
+    trb.add(2).write_volatile(8); // 8-byte boot report
+    trb.add(3).write_volatile((1u32 << 10) | (1 << 5) | 1); // Normal, IOC, C=1
+    core::arch::asm!("sfence", options(nostack, preserves_flags));
+    // DCI 3 = EP1 IN
+    w32(state.base, state.db_off + (state.hid_slot as u64) * 4, 3);
+}
+
+pub(crate) unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {
     
     let mut g = GLOBAL_ALLOCATOR.lock();
     let a = (*g).as_mut()?;
@@ -253,7 +324,14 @@ pub unsafe fn configure_msc_endpoints(slot: u8, max_packet: u16) -> Option<(Bulk
 
 /// Executa transferencia bulk com gerenciamento de ring + IOC + ERDP advance.
 /// direction: 0=OUT (host→device), 1=IN (device→host)
-pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, ep: &mut BulkEndpoint, data_pa: u64, len: u32, direction: u8) -> bool {
+pub unsafe fn bulk_transfer(
+    slot: u8,
+    _endpoint: u8,
+    ep: &mut BulkEndpoint,
+    data_pa: u64,
+    len: u32,
+    direction: u8,
+) -> bool {
     let state = XHCI_STATE.lock();
     let st = match state.as_ref() { Some(s) => s, None => return false };
 
@@ -286,10 +364,9 @@ pub unsafe fn bulk_transfer(slot: u8, endpoint: u8, ep: &mut BulkEndpoint, data_
     ep.enqueue_idx = if next == max - 1 { 0 } else { next as u16 };
     if next == max - 1 { ep.cycle = !ep.cycle; }
 
-    // Ring doorbell
-    let db_off = st.db_off + (slot as u64 * 2 + endpoint as u64) * 4;
-    let db_val = if direction == 0 { 2u32 } else { 3u32 };
-    w32(st.base, db_off, db_val);
+    // Ring doorbell[Slot] = DCI (xHCI 4.2.1)
+    let dci = if direction == 0 { 2u32 } else { 3u32 }; // EP1 OUT=2, EP1 IN=3
+    w32(st.base, st.db_off + (slot as u64) * 4, dci);
 
     // Wait for completion event (poll ER with timeout curto — HW real sem EP MSC).
     for _ in 0..80_000 {
@@ -332,14 +409,8 @@ pub unsafe fn try_read_config_descriptor(buf: &mut [u8]) -> Option<(usize, u16, 
 }
 
 /// PORTSC base = op + 0x400 + (port-1)*0x10 (xHCI 1.1).
-unsafe fn portsc_addr(st: &XhciState, port: u8) -> Option<u64> {
-    if port == 0 {
-        return None;
-    }
-    // HCSPARAMS1 @ cap+0x04: MaxPorts[31:24]
-    let hcs1 = r32(st.base, 0x04);
-    let max_ports = ((hcs1 >> 24) & 0xFF) as u8;
-    if port > max_ports || max_ports == 0 {
+pub(crate) unsafe fn portsc_addr(st: &XhciState, port: u8) -> Option<u64> {
+    if port == 0 || port > st.max_ports {
         return None;
     }
     Some(st.op + 0x400 + ((port as u64 - 1) * 0x10))

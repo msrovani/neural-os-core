@@ -13,6 +13,7 @@ members = [
     "crates/cortex",
     "crates/hermes",
     "crates/jarbas",
+    "crates/vector-db",
 ]
 default-members = ["crates/boot"]
 # Host-only kernel logic / packers — never linked into boot/neural-kernel

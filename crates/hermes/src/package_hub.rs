@@ -130,6 +130,8 @@ pub struct PackageRecord {
     pub content_hash: String,
     pub caps_hint: String,
     pub persisted: bool,
+    /// Honesty: "none" | "sgdb" | "vfs" | "both"
+    pub persist_backend: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -769,6 +771,7 @@ impl PackageHub {
                 content_hash: String::from("0"),
                 caps_hint: String::from("device-recipe"),
                 persisted: false,
+                persist_backend: "none",
             };
             self.packages
                 .insert(pkg_key(PackageKind::DeviceRecipe, name), rec);
@@ -865,6 +868,7 @@ impl PackageHub {
             content_hash: hash_fm,
             caps_hint: String::from("required_tokens:[1]"),
             persisted,
+            persist_backend: if persisted { "vfs" } else { "none" },
         };
         self.packages
             .insert(pkg_key(PackageKind::Agent, &id), record);
@@ -886,6 +890,7 @@ impl PackageHub {
             content_hash: hash_fm,
             caps_hint: String::from("required_tokens:[1]"),
             persisted: false,
+            persist_backend: "none",
         };
         self.packages
             .insert(pkg_key(PackageKind::Skill, name), rec);
@@ -951,6 +956,7 @@ impl PackageHub {
             caps_hint: extract_fm_field(body, "required_tokens")
                 .unwrap_or_else(|| String::from("-")),
             persisted: false,
+            persist_backend: "none",
         };
         Ok((level, PendingPackageOp::Create(rec)))
     }
@@ -990,6 +996,7 @@ impl PackageHub {
             caps_hint: extract_fm_field(body, "required_tokens")
                 .unwrap_or_else(|| String::from("-")),
             persisted: false,
+            persist_backend: "none",
         };
         Ok((level, PendingPackageOp::Update(rec)))
     }
@@ -1022,20 +1029,26 @@ impl PackageHub {
         let op = self.pending.remove(&id).ok_or("no_pending_pkg")?;
         match op {
             PendingPackageOp::Create(mut rec) => {
-                rec.persisted = self.try_persist(&rec);
+                let (ok, backend) = self.try_persist(&rec);
+                rec.persisted = ok;
+                rec.persist_backend = backend;
                 let skill_md = if rec.kind == PackageKind::Skill {
                     Some(rec.body.clone())
                 } else {
                     None
                 };
                 let message = format!(
-                    "created {} '{}' signed={} persisted={}",
+                    "created {} '{}' signed={} persisted={} via={}",
                     rec.kind.as_str(),
                     rec.name,
                     rec.signed,
-                    rec.persisted
+                    rec.persisted,
+                    rec.persist_backend
                 );
                 Self::audit_pkg("create", &message);
+                if rec.kind == PackageKind::Skill {
+                    let _ = k_ai::sgdb::put_skill_blob(&rec.name, &rec.purpose);
+                }
                 self.packages
                     .insert(pkg_key(rec.kind, &rec.name), rec);
                 Ok(ApplyOutcome {
@@ -1045,19 +1058,25 @@ impl PackageHub {
                 })
             }
             PendingPackageOp::Update(mut rec) => {
-                rec.persisted = self.try_persist(&rec);
+                let (ok, backend) = self.try_persist(&rec);
+                rec.persisted = ok;
+                rec.persist_backend = backend;
                 let skill_md = if rec.kind == PackageKind::Skill {
                     Some(rec.body.clone())
                 } else {
                     None
                 };
                 let message = format!(
-                    "updated {} '{}' persisted={}",
+                    "updated {} '{}' persisted={} via={}",
                     rec.kind.as_str(),
                     rec.name,
-                    rec.persisted
+                    rec.persisted,
+                    rec.persist_backend
                 );
                 Self::audit_pkg("update", &message);
+                if rec.kind == PackageKind::Skill {
+                    let _ = k_ai::sgdb::put_skill_blob(&rec.name, &rec.purpose);
+                }
                 self.packages
                     .insert(pkg_key(rec.kind, &rec.name), rec);
                 Ok(ApplyOutcome {
@@ -1091,21 +1110,61 @@ impl PackageHub {
         self.pending.remove(&id).is_some()
     }
 
-    fn try_persist(&self, rec: &PackageRecord) -> bool {
-        if !self.vfs_ok {
-            k_nano::slog_hermes!("PKG", "info", "persist skip (vfs_ok=false) path={}", rec.path);
-            return false;
+    /// Meta sempre no SGDB; body VFS se ok; fallback TickvLite se body ≤4KiB e sem VFS.
+    /// Retorna (persisted_any, backend: none|sgdb|vfs|both).
+    fn try_persist(&self, rec: &PackageRecord) -> (bool, &'static str) {
+        let package_id = pkg_key(rec.kind, &rec.name);
+        let meta = format!(
+            "name={}\nkind={}\nhash={}\npath={}\nsigned={}\n",
+            rec.name,
+            rec.kind.as_str(),
+            rec.content_hash,
+            rec.path,
+            rec.signed
+        );
+        let mut sgdb_meta = false;
+        if k_ai::sgdb::ready() {
+            sgdb_meta = k_ai::sgdb::put_pkg_meta(&package_id, &meta).is_ok();
         }
-        match crate::globals::write_vfs(&rec.path, rec.body.as_bytes()) {
-            Ok(()) => {
-                k_nano::slog_hermes!("PKG", "info", "persisted {}", rec.path);
-                true
-            }
-            Err(e) => {
-                k_nano::slog_hermes!("PKG", "info", "persist fail {}: {}", rec.path, e);
-                false
+
+        let mut vfs_ok = false;
+        if self.vfs_ok {
+            match crate::globals::write_vfs(&rec.path, rec.body.as_bytes()) {
+                Ok(()) => {
+                    vfs_ok = true;
+                    k_nano::slog_hermes!("PKG", "info", "persisted vfs {}", rec.path);
+                }
+                Err(e) => {
+                    k_nano::slog_hermes!("PKG", "info", "persist vfs fail {}: {}", rec.path, e);
+                }
             }
         }
+
+        let mut sgdb_body = false;
+        if !vfs_ok && k_ai::sgdb::ready() && rec.body.len() <= 4096 {
+            sgdb_body = k_ai::sgdb::put_pkg_body(&package_id, rec.body.as_bytes()).is_ok();
+            if sgdb_body {
+                k_nano::slog_hermes!("PKG", "info", "persisted sgdb body {}", package_id);
+            }
+        }
+
+        let sgdb_any = sgdb_meta || sgdb_body;
+        let backend = match (sgdb_any, vfs_ok) {
+            (true, true) => "both",
+            (true, false) => "sgdb",
+            (false, true) => "vfs",
+            (false, false) => "none",
+        };
+        if backend == "none" {
+            k_nano::slog_hermes!(
+                "PKG",
+                "info",
+                "persist none path={} vfs_ok={}",
+                rec.path,
+                self.vfs_ok
+            );
+        }
+        (sgdb_any || vfs_ok, backend)
     }
 }
 
