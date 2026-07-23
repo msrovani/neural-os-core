@@ -253,6 +253,7 @@ Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 - **Skills a quente via LLM**: Nenhum skill é hardcoded. O LLM gera skills sob demanda e o SkillObserver registra. Ex: "grava video", "imprime formulario" viram skills gerados pelo LLM, não por enum Rust.
 
 # Lições Críticas Aprendidas
+- **Cursor auto-checkpoint ao trocar de branch/agente:** mensagem `checkpoint before checking out cursor/…` engole **todo** o working tree dirty (código + `.cursor/plans/*`) num commit com mensagem ruim. Ritual: `git status` limpo (commit nomeado ou stash) **antes** de checkout de outra sessão/agente. Tag pode apontar pro commit errado se criada na branch errada — sempre `git show <tag>`. Ver SESSION_176 “Pós-release — commit intermediário”.
 - **Extração SDIO**: Sempre usar `7z x -r *.inf` (não sem `-r`), verificar se extraiu >0 arquivos ANTES de apagar o .7z
 - **HW Expert treinado**: 95.4% com 43K devices PCI+USB. .bitnet v4 com header proprio (vocab=64, hidden=32, 4 layers)
 - **.bitnet export bug**: vocab_size (u32) e num_medusa (u32) sao 4 bytes, nao 2 como os outros campos u16

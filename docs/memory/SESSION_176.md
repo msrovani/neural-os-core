@@ -35,3 +35,24 @@ D-series tinha despacho/ckpt/bench; memória AIOS ainda frágil: SleepCycle igno
 
 ## Residual
 crates tickv/noproto; HNSW; SQL; AEAD; DoD 10M/100k; kill-9 HW
+
+## Pós-release — commit intermediário (não perder)
+
+**Fato:** `main` `a491cea` (tag `v1.9.9`) **não** foi um “agente SGDB” commitando de propósito.
+Foi **auto-checkpoint do Cursor** ao checkout da branch `cursor/compute-dispatch-smp-gpu-npu-ff0d` (ADR-0059).
+
+| Efeito | Detalhe |
+|--------|---------|
+| Engoliu | Todo D/E-series ainda uncommitted (conteúdo certo) |
+| Engoliu também | `.cursor/plans/hw_boot_reboot_fix_7972b37b.plan.md` (plano HW soft-reboot — outro tema) |
+| Mensagem | `checkpoint before checking out …` (ruim; author = git local) |
+| Tag | `v1.9.9` → `a491cea` (após retarget; conteúdo SGDB ok) |
+
+**Utilidade desta nota:** evita panic (“perdi o trabalho”), evita force-rewrite de `main`, e ensina o ritual antes de trocar de branch/agente.
+
+**Ritual anti-perda (fazer sempre):**
+1. `git status` — se dirty, **commit nomeado** ou stash **antes** de checkout de outra branch/agente.
+2. Não deixar série grande só em working tree + “commit depois”.
+3. Após checkpoint espúrio: conferir `git show HEAD --stat`; se conteúdo ok, só documentar / commit de anotação; **não** `reset --hard` sem backup.
+4. Tag: `git show vX.Y.Z` deve apontar pro commit da feature, não pro tip de outra branch.
+5. Plans em `.cursor/plans/`: ou commit consciente, ou `.gitignore` — senão o checkpoint mistura temas.
