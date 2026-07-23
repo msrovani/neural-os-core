@@ -2,7 +2,7 @@
 ## Registro de Propriedade Intelectual e Inovação
 
 **~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
-**Versão release:** v1.9.5 TESTE / NÃO ESTÁVEL (2026-07-19)
+**Versão release:** v1.9.7 TESTE / NÃO ESTÁVEL (2026-07-22)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
 **Repositório:** [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)

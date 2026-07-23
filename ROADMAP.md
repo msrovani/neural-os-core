@@ -1,9 +1,9 @@
 # Roadmap — neural-os-core
 
-**Última atualização:** 2026-07-18
-**Versão release:** **v1.9.0 TESTE / NÃO ESTÁVEL**
+**Última atualização:** 2026-07-22
+**Versão release:** **v1.9.7 TESTE / NÃO ESTÁVEL**
 **Estado:** ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros (`cargo nk`)
-**Pista ativa:** v1.9.0 TEST — `/model-fetch` e2e · TLS real · WiFi AWAITING · gate v2.0.0 review.
+**Pista ativa:** v1.9.7 TEST — SESSION_168 splash persistente; LLM gerando saudação; tela preta fixada; gate v2.0.0 review.
 
 ---
 
