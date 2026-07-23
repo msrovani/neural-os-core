@@ -6,4 +6,4 @@ pub mod nvme;
 pub mod tickv;
 
 pub use nvme::{NvmeController, NvmeQueue, NvmeResult};
-pub use tickv::{TicKVAdapter, TicKVStorage};
+pub use tickv::TicKVStorage;

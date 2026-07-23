@@ -3,7 +3,8 @@
 /// Minimal NVMe controller driver using PCIe MMIO.
 /// Configures Admin Submission/Completion Queues and provides block I/O.
 
-use core::ptr::{read_volatile, write_volatile};
+use core::cell::UnsafeCell;
+use core::ptr::{addr_of_mut, read_volatile, write_volatile};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// NVMe Controller registers (BAR0)
@@ -77,10 +78,10 @@ pub struct CompletionEntry {
     pub phase: u16,
 }
 
-/// NVMe Command Opcodes
+/// NVMe Admin Command Opcodes
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NvmeOpcode {
+pub enum NvmeAdminOpcode {
     /// Delete I/O Submission Queue
     DeleteIoSq = 0x00,
     /// Create I/O Submission Queue
@@ -113,6 +114,12 @@ pub enum NvmeOpcode {
     NamespaceAttachment = 0x15,
     /// Keep Alive
     KeepAlive = 0x18,
+}
+
+/// NVMe NVM Command Opcodes
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NvmeNvmOpcode {
     /// Flush
     Flush = 0x00,
     /// Write
@@ -208,7 +215,7 @@ impl NvmeQueue {
     }
 
     /// Poll for completion
-    pub unsafe fn poll_completion(&self) -> Option<CompletionEntry> {
+    pub unsafe fn poll_completion(&mut self) -> Option<CompletionEntry> {
         let head = self.cq_head.load(Ordering::Acquire);
         let tail = self.cq_tail.load(Ordering::Acquire);
 
@@ -241,8 +248,8 @@ impl NvmeQueue {
 pub struct NvmeController {
     /// Base address of MMIO registers
     base: u64,
-    /// Admin queue pair
-    admin_queue: Option<NvmeQueue>,
+    /// Admin queue pair (UnsafeCell for interior mutability — poll_completion needs &mut)
+    admin_queue: UnsafeCell<Option<NvmeQueue>>,
     /// Controller ready flag
     ready: AtomicBool,
     /// Namespace ID (for I/O operations)
@@ -258,7 +265,7 @@ impl NvmeController {
     pub unsafe fn new(base: u64) -> Self {
         Self {
             base,
-            admin_queue: None,
+            admin_queue: UnsafeCell::new(None),
             ready: AtomicBool::new(false),
             nsid: 1, // Default to namespace 1
         }
@@ -272,15 +279,16 @@ impl NvmeController {
 
     /// Initialize the NVMe controller
     pub unsafe fn init(&mut self) -> NvmeResult<()> {
-        let regs = self.regs();
+        // ponytail: use raw pointer to avoid borrow conflict with self.admin_queue assignment
+        let regs = self.base as *mut NvmeRegisters;
 
         // Check if controller is ready
-        let csts = read_volatile(&regs.csts);
+        let csts = read_volatile(&(*regs).csts);
         if csts & 0x1 == 0 {
             // Controller not ready, wait for it
             let mut timeout = 1000000;
             while timeout > 0 {
-                let csts = read_volatile(&regs.csts);
+                let csts = read_volatile(&(*regs).csts);
                 if csts & 0x1 != 0 {
                     break;
                 }
@@ -292,14 +300,14 @@ impl NvmeController {
         }
 
         // Disable controller before configuration
-        let mut cc = read_volatile(&regs.cc);
+        let mut cc = read_volatile(&(*regs).cc);
         cc &= !0x1; // Clear enable bit
-        write_volatile(&regs.cc, cc);
+        write_volatile(addr_of_mut!((*regs).cc), cc);
 
         // Wait for controller to disable
         let mut timeout = 1000000;
         while timeout > 0 {
-            let csts = read_volatile(&regs.csts);
+            let csts = read_volatile(&(*regs).csts);
             if csts & 0x1 == 0 {
                 break;
             }
@@ -317,23 +325,23 @@ impl NvmeController {
 
         // Configure queue attributes
         let aqa = ((CQ_SIZE - 1) << 16) | (SQ_SIZE - 1);
-        write_volatile(&regs.aqa, aqa);
-        write_volatile(&regs.asq, sq_base);
-        write_volatile(&regs.acq, cq_base);
+        write_volatile(addr_of_mut!((*regs).aqa), aqa);
+        write_volatile(addr_of_mut!((*regs).asq), sq_base);
+        write_volatile(addr_of_mut!((*regs).acq), cq_base);
 
         // Create admin queue
-        self.admin_queue = Some(NvmeQueue::new(sq_base, cq_base, SQ_SIZE, 0));
+        *self.admin_queue.get() = Some(NvmeQueue::new(sq_base, cq_base, SQ_SIZE, 0));
 
         // Configure controller
         // Enable controller, set IO queue entry size = 0, IO completion queue entry size = 0
         // Admin queue entry size = 0 (16 bytes), Admin completion queue entry size = 0 (16 bytes)
         cc = 0x46000001; // Enable, AMS = Round Robin, MPS = 0 (4K pages), CSS = NVM command set
-        write_volatile(&regs.cc, cc);
+        write_volatile(addr_of_mut!((*regs).cc), cc);
 
         // Wait for controller to become ready
         let mut timeout = 1000000;
         while timeout > 0 {
-            let csts = read_volatile(&regs.csts);
+            let csts = read_volatile(&(*regs).csts);
             if csts & 0x1 != 0 {
                 break;
             }
@@ -362,11 +370,11 @@ impl NvmeController {
             return Err("Buffer too small");
         }
 
-        let admin_queue = self.admin_queue.as_ref().ok_or("No admin queue")?;
+        let admin_queue = (*self.admin_queue.get()).as_mut().ok_or("No admin queue")?;
 
         // Build read command
         let mut entry = SubmissionEntry {
-            cdw0: (NvmeOpcode::Read as u32) | (0 << 8), // Opcode, FUSE=0
+            cdw0: (NvmeNvmOpcode::Read as u32) | (0 << 8), // Opcode, FUSE=0
             nsid: self.nsid,
             rsvd1: [0; 2],
             mptr: 0,
@@ -414,11 +422,11 @@ impl NvmeController {
             return Err("Buffer too small");
         }
 
-        let admin_queue = self.admin_queue.as_ref().ok_or("No admin queue")?;
+        let admin_queue = (*self.admin_queue.get()).as_mut().ok_or("No admin queue")?;
 
         // Build write command
         let mut entry = SubmissionEntry {
-            cdw0: (NvmeOpcode::Write as u32) | (0 << 8), // Opcode, FUSE=0
+            cdw0: (NvmeNvmOpcode::Write as u32) | (0 << 8), // Opcode, FUSE=0
             nsid: self.nsid,
             rsvd1: [0; 2],
             mptr: 0,

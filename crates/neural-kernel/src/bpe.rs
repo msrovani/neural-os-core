@@ -411,76 +411,87 @@ pub fn init_from_bpb1(data: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// QEMU `-device loader,file=bpe_vocab.bin,addr=0x150000000`.
+/// Scan QEMU loader region for `BPB1` magic.
+/// The PS1 auto-loader places files sequentially from `0x100000000`,
+/// so we scan 1MB-aligned addresses looking for the magic.
 pub fn try_load_from_qemu_loader() -> bool {
-    const LOAD_ADDR: u64 = 0x150000000;
     let phys_off = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     if phys_off == 0 {
         return false;
     }
-    let va = (LOAD_ADDR + phys_off) as *const u8;
-    // Lê magic + size via offsets: precisamos do heap_len do header.
-    // Header: 6 + 16 + (vocab_n+1)*4 ; vocab_n em offset 18.
-    unsafe {
-        let magic = core::slice::from_raw_parts(va, 4);
-        if magic != b"BPB1" {
-            k_nano::slog_bin!("BPE", "info", "QEMU-loader @0x150000000 magic={:02x?} (ausente)", magic);
-            return false;
-        }
-        let vocab_n = u32::from_le_bytes([
-            *va.add(18),
-            *va.add(19),
-            *va.add(20),
-            *va.add(21),
-        ]) as usize;
-        if vocab_n == 0 || vocab_n > 200_000 {
-            k_nano::slog_bin!("BPE", "info", "bad vocab_n={}", vocab_n);
-            return false;
-        }
-        let header = 6 + 16 + (vocab_n + 1) * 4;
-        let heap_off_ptr = va.add(6 + 16 + vocab_n * 4);
-        let heap_len = u32::from_le_bytes([
-            *heap_off_ptr,
-            *heap_off_ptr.add(1),
-            *heap_off_ptr.add(2),
-            *heap_off_ptr.add(3),
-        ]) as usize;
-        let mut total = header + heap_len;
-        // MRG1 opcional após heap (merges BPE SP32)
-        let mrg = va.add(total);
-        if core::slice::from_raw_parts(mrg, 4) == b"MRG1" {
-            let merge_n = u32::from_le_bytes([
-                *mrg.add(4),
-                *mrg.add(5),
-                *mrg.add(6),
-                *mrg.add(7),
-            ]) as usize;
-            let mut o = total + 8;
-            for _ in 0..merge_n {
-                let la = u16::from_le_bytes([*va.add(o), *va.add(o + 1)]) as usize;
-                o += 2 + la;
-                let lb = u16::from_le_bytes([*va.add(o), *va.add(o + 1)]) as usize;
-                o += 2 + lb;
-                if o > 12 * 1024 * 1024 {
-                    break;
+    scan_and_load_bpb1(phys_off, 0x100000000, 0x200000000, 0x100000)
+}
+
+/// Scan address range [start..end) at `step` for BPB1 magic, load first match.
+fn scan_and_load_bpb1(phys_off: u64, start: u64, end: u64, step: u64) -> bool {
+    let mut addr = start;
+    while addr < end {
+        let va = (addr + phys_off) as *const u8;
+        unsafe {
+            let magic = core::slice::from_raw_parts(va, 4);
+            if magic == b"BPB1" {
+                k_nano::slog_bin!("BPE", "info", "BPB1 found @0x{:x} (scan)",
+                    addr);
+                let vocab_n = u32::from_le_bytes([
+                    *va.add(18), *va.add(19), *va.add(20), *va.add(21),
+                ]) as usize;
+                if vocab_n == 0 || vocab_n > 200_000 {
+                    k_nano::slog_bin!("BPE", "info", "bad vocab_n={} @0x{:x}",
+                        vocab_n, addr);
+                    addr = addr.saturating_add(step);
+                    continue;
+                }
+                let header = 6 + 16 + (vocab_n + 1) * 4;
+                let heap_off_ptr = va.add(6 + 16 + vocab_n * 4);
+                let heap_len = u32::from_le_bytes([
+                    *heap_off_ptr,
+                    *heap_off_ptr.add(1),
+                    *heap_off_ptr.add(2),
+                    *heap_off_ptr.add(3),
+                ]) as usize;
+                let mut total = header + heap_len;
+                // MRG1 opcional após heap
+                let mrg = va.add(total);
+                if total < 12 * 1024 * 1024
+                    && core::slice::from_raw_parts(mrg, 4) == b"MRG1"
+                {
+                    let merge_n = u32::from_le_bytes([
+                        *mrg.add(4), *mrg.add(5), *mrg.add(6), *mrg.add(7),
+                    ]) as usize;
+                    let mut o = total + 8;
+                    for _ in 0..merge_n {
+                        if o + 4 > 12 * 1024 * 1024 { break; }
+                        let la =
+                            u16::from_le_bytes([*va.add(o), *va.add(o + 1)])
+                                as usize;
+                        o += 2 + la;
+                        if o + 2 > 12 * 1024 * 1024 { break; }
+                        let lb =
+                            u16::from_le_bytes([*va.add(o), *va.add(o + 1)])
+                                as usize;
+                        o += 2 + lb;
+                    }
+                    if o < 12 * 1024 * 1024 { total = o; }
+                }
+                if total > 12 * 1024 * 1024 {
+                    addr = addr.saturating_add(step);
+                    continue;
+                }
+                let slice = core::slice::from_raw_parts(va, total);
+                match init_from_bpb1(slice) {
+                    Ok(()) => return true,
+                    Err(e) => {
+                        k_nano::slog_bin!("BPE", "info",
+                            "BPB1 parse FAILED @0x{:x}: {}", addr, e);
+                    }
                 }
             }
-            total = o;
         }
-        // Caps: ~12MB (vocab+merges SP32 ~1MB)
-        if total > 12 * 1024 * 1024 {
-            k_nano::slog_bin!("BPE", "info", "refuse size={}KB", total / 1024);
-            return false;
-        }
-        let slice = core::slice::from_raw_parts(va, total);
-        match init_from_bpb1(slice) {
-            Ok(()) => true,
-            Err(e) => {
-                k_nano::slog_bin!("BPE", "info", "parse FAILED: {}", e);
-                false
-            }
-        }
+        addr = addr.saturating_add(step);
     }
+    k_nano::slog_bin!("BPE", "info",
+        "QEMU-loader scan [{:#x}..{:#x}] — BPB1 ausente", start, end);
+    false
 }
 
 /// FAT32 `BPE.BIN` / `BPEVOCAB.BIN` — path HW real (sem QEMU-loader).

@@ -39,6 +39,51 @@ pub static POWER_BANNER: Mutex<Option<&'static str>> = Mutex::new(None);
 pub const POWER_BTN_W: usize = 48;
 pub const POWER_BTN_H: usize = 28;
 
+/// Diálogo de confirmação de desligamento (modal central).
+/// Botões: Cancel (esquerda) e Turn off (direita).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PowerDialogAction {
+    None,
+    Cancel,
+    TurnOff,
+}
+
+/// Geometria do diálogo de power (calculada em runtime conforme scr_w/scr_h).
+pub fn power_dialog_rect(scr_w: usize, scr_h: usize) -> (usize, usize, usize, usize) {
+    let dw = 360;
+    let dh = 140;
+    let dx = scr_w.saturating_sub(dw) / 2;
+    let dy = scr_h.saturating_sub(dh) / 2;
+    (dx, dy, dw, dh)
+}
+
+/// Retorna a ação correspondente ao clique dentro do diálogo, ou None.
+pub fn hit_power_dialog(cx: usize, cy: usize, scr_w: usize, scr_h: usize) -> PowerDialogAction {
+    let (dx, dy, dw, dh) = power_dialog_rect(scr_w, scr_h);
+    if cx < dx || cx >= dx + dw || cy < dy || cy >= dy + dh {
+        return PowerDialogAction::None;
+    }
+    // Botões na linha inferior: Cancel (esq) e Turn off (dir)
+    let btn_y = dy + dh - 40;
+    let btn_h = 28;
+    if cy < btn_y || cy >= btn_y + btn_h {
+        return PowerDialogAction::None;
+    }
+    let btn_w = 120;
+    let gap = 20;
+    let total_w = btn_w * 2 + gap;
+    let start_x = dx + (dw.saturating_sub(total_w)) / 2;
+    let cancel_x = start_x;
+    let off_x = start_x + btn_w + gap;
+    if cx >= cancel_x && cx < cancel_x + btn_w {
+        PowerDialogAction::Cancel
+    } else if cx >= off_x && cx < off_x + btn_w {
+        PowerDialogAction::TurnOff
+    } else {
+        PowerDialogAction::None
+    }
+}
+
 pub fn power_btn_rect(scr_w: usize) -> (usize, usize, usize, usize) {
     let x = scr_w.saturating_sub(POWER_BTN_W + 8);
     (x, 4, POWER_BTN_W, POWER_BTN_H)
@@ -120,12 +165,24 @@ pub struct JarvisDesktop {
     resizing_card: Option<u32>,
     // Onda 7: Soul Mirror — visual afetivo do BEI.
     pub soul_mirror: SoulMirrorRenderer,
+    // Diálogo de confirmação de desligamento (None = fechado).
+    pub power_dialog: bool,
 }
 
 impl JarvisDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
-        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0), resizing_card: None, soul_mirror: SoulMirrorRenderer::new(w, h) }
+        JarvisDesktop { fb, apps: Vec::new(), wasm_skills: Vec::new(), active: AppId::None, avatar_visible: true, w, h, tick: 0, icon_cache: BTreeMap::new(), cards: Vec::new(), dragging_card: None, card_drag_off: (0, 0), resizing_card: None, soul_mirror: SoulMirrorRenderer::new(w, h), power_dialog: false }
+    }
+
+    /// Abre o diálogo de confirmação de desligamento.
+    pub fn open_power_dialog(&mut self) {
+        self.power_dialog = true;
+    }
+
+    /// Fecha o diálogo de confirmação de desligamento.
+    pub fn close_power_dialog(&mut self) {
+        self.power_dialog = false;
     }
 
     // ─── ADR-0058 S3: cards declarativos ──────────────────────────────────
@@ -411,6 +468,39 @@ impl JarvisDesktop {
             let bx = w.saturating_sub(280) / 2;
             self.fb.fill_rect(bx, 40, 280, 28, 40, 20, 20);
             draw_text(&mut self.fb, bx + 8, 48, banner, self.w, 255, 200, 120);
+        }
+
+        // Diálogo de confirmação de desligamento (modal central)
+        if self.power_dialog {
+            let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
+            // Sombra
+            self.fb.fill_rect(dx + 6, dy + 6, dw, dh, 0, 0, 0);
+            // Fundo do diálogo
+            self.fb.fill_rect(dx, dy, dw, dh, 30, 30, 40);
+            // Borda
+            self.fb.fill_rect(dx, dy, dw, 2, 180, 60, 60);
+            self.fb.fill_rect(dx, dy + dh - 2, dw, 2, 180, 60, 60);
+            self.fb.fill_rect(dx, dy, 2, dh, 180, 60, 60);
+            self.fb.fill_rect(dx + dw - 2, dy, 2, dh, 180, 60, 60);
+            // Título
+            draw_text(&mut self.fb, dx + 16, dy + 12, "Desligamento solicitado", self.w, 255, 220, 220);
+            // Mensagem
+            draw_text(&mut self.fb, dx + 16, dy + 44, "O sistema sera desligado.", self.w, 200, 200, 200);
+            draw_text(&mut self.fb, dx + 16, dy + 60, "Salve seu trabalho antes.", self.w, 200, 200, 200);
+            // Botões
+            let btn_y = dy + dh - 40;
+            let btn_h = 28;
+            let btn_w = 120;
+            let gap = 20;
+            let total_w = btn_w * 2 + gap;
+            let start_x = dx + (dw.saturating_sub(total_w)) / 2;
+            // Cancel (cinza)
+            self.fb.fill_rect(start_x, btn_y, btn_w, btn_h, 80, 80, 90);
+            draw_text(&mut self.fb, start_x + 30, btn_y + 8, "Cancel", self.w, 220, 220, 230);
+            // Turn off (vermelho)
+            let off_x = start_x + btn_w + gap;
+            self.fb.fill_rect(off_x, btn_y, btn_w, btn_h, 160, 40, 40);
+            draw_text(&mut self.fb, off_x + 22, btn_y + 8, "Turn off", self.w, 255, 220, 220);
         }
 
         // Cursor do mouse — seta visível (não só cruz 1px)

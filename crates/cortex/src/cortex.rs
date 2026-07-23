@@ -1045,7 +1045,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let estimated = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
         let cur_mb = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
         if estimated > cur_mb {
-            let total_mb = estimated + (estimated / 4).max(64);
+            let total_mb = (estimated + (estimated / 4).max(64)).min(2048);
             k_nano::allocator::resize_heap_to_mb(total_mb);
         }
     }

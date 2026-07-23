@@ -154,48 +154,45 @@ function Build-QemuArgs {
     if ($disk) {
         $a += @("-drive", "format=raw,file=$disk,if=ide,index=1")
     }
-    # Phys loader map (igual run-qemu-whpx.ps1; precisa -m 6G+):
-    #   0x100000000 bitnet_2B | 0x130000000 Piper | 0x150000000 BPE
-    #   0x160000000 HW Expert | 0x161000000 RustCoder | 0x162000000 BGE | 0x163000000 STT
-    $bitnet2b = Join-Path $Root "target\bitnet_2B.bitnet"
-    if (Test-Path $bitnet2b) {
-        $a += @("-device", "loader,file=$bitnet2b,addr=0x100000000")
-        Write-Host "BitNet2B loader: $bitnet2b @0x100000000" -ForegroundColor Green
+    # ─── MoE Model Loaders — AUTO-SCAN da pasta target/ ───
+    # Descobre TODOS os arquivos .bitnet / .BIN / .bin na pasta target/
+    # e os carrega em endereços sequenciais (gap de 1MB entre modelos).
+    # O usuário só precisa colocar o arquivo na pasta — o script descobre.
+    # Prioridade: arquivos maiores primeiro (LLM base), depois os pequenos (experts).
+    # Endereço base: 0x100000000 (4GB), sobe em passos de 0x100000 (1MB) + tamanho.
+    $modelDir = Join-Path $Root "target"
+    $modelFiles = @(Get-ChildItem -Path $modelDir -Filter "*.bitnet" -ErrorAction SilentlyContinue) +
+                  @(Get-ChildItem -Path $modelDir -Filter "*.BIN" -ErrorAction SilentlyContinue) +
+                  @(Get-ChildItem -Path $modelDir -Filter "*.bin" -ErrorAction SilentlyContinue)
+    # Remove duplicatas (mesmo nome, extensões diferentes) e ordena por tamanho decrescente
+    $seen = @{}
+    $unique = @()
+    foreach ($f in $modelFiles) {
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($f.Name).ToUpper()
+        if (-not $seen.ContainsKey($base)) {
+            $seen[$base] = $true
+            $unique += $f
+        }
     }
-    $piper = Join-Path $Root "target\PIPER_PT_BR.BIN"
-    if (-not (Test-Path $piper)) { $piper = Join-Path $Root "target\PIPER.BIN" }
-    if (Test-Path $piper) {
-        $a += @("-device", "loader,file=$piper,addr=0x130000000")
-        Write-Host "Piper loader: $piper @0x130000000" -ForegroundColor Green
+    $unique = $unique | Sort-Object -Property Length -Descending
+    # Filtra placeholders vazios (<10KB) e modelos grandes (>70MB = OOM no heap 1024MB)
+    $unique = @($unique | Where-Object { $_.Length -gt 10240 -and $_.Length -le 70MB })
+    $modelAddr = 0x100000000  # 4GB base
+    $modelGap = 0x100000      # 1MB gap entre modelos
+    $loaded = 0
+    foreach ($f in $unique) {
+        $sizeMB = [math]::Round($f.Length / 1MB, 1)
+        $hexAddr = [Convert]::ToString($modelAddr, 16).ToUpper()
+        $a += @("-device", "loader,file=$($f.FullName),addr=$modelAddr")
+        Write-Host "MoE loader: $($f.Name) ($sizeMB MB) @0x$hexAddr" -ForegroundColor Green
+        $loaded++
+        # Próximo endereço: atual + tamanho arredondado para 1MB + gap
+        $modelAddr += [math]::Ceiling($f.Length / $modelGap) * $modelGap + $modelGap
     }
-    $bpe = Join-Path $Root "target\bpe_vocab.bin"
-    if (Test-Path $bpe) {
-        $a += @("-device", "loader,file=$bpe,addr=0x150000000")
-        Write-Host "BPE vocab loader: $bpe @0x150000000" -ForegroundColor Green
-    }
-    $hwExpert = Join-Path $Root "target\hw_expert_v3.bitnet"
-    if (-not (Test-Path $hwExpert)) { $hwExpert = Join-Path $Root "target\hw_expert_tf.bitnet" }
-    if (-not (Test-Path $hwExpert)) { $hwExpert = Join-Path $Root "target\hw_expert.bitnet" }
-    if (Test-Path $hwExpert) {
-        $a += @("-device", "loader,file=$hwExpert,addr=0x160000000")
-        Write-Host "HW Expert loader: $hwExpert @0x160000000" -ForegroundColor Green
-    }
-    $rustCoder = Join-Path $Root "target\rust_coder.bitnet"
-    if (-not (Test-Path $rustCoder)) { $rustCoder = Join-Path $Root "tools\target\rust_coder.bitnet" }
-    if (Test-Path $rustCoder) {
-        $a += @("-device", "loader,file=$rustCoder,addr=0x161000000")
-        Write-Host "RustCoder loader: $rustCoder @0x161000000" -ForegroundColor Green
-    }
-    $bge = Join-Path $Root "target\bge-small.bitnet"
-    if (-not (Test-Path $bge)) { $bge = Join-Path $Root "target\BGE.BIN" }
-    if (Test-Path $bge) {
-        $a += @("-device", "loader,file=$bge,addr=0x162000000")
-        Write-Host "BGE loader: $bge @0x162000000" -ForegroundColor Green
-    }
-    $stt = Join-Path $Root "target\STT.BIN"
-    if (Test-Path $stt) {
-        $a += @("-device", "loader,file=$stt,addr=0x163000000")
-        Write-Host "STT loader: $stt @0x163000000" -ForegroundColor Green
+    if ($loaded -eq 0) {
+        Write-Host "MoE: nenhum modelo .bitnet/.BIN encontrado em target/" -ForegroundColor Yellow
+    } else {
+        Write-Host "MoE: $loaded modelo(s) carregados via QEMU loader" -ForegroundColor Cyan
     }
     # COM1=log; COM2=SLIP (QEMU cliente → bridge TCP server; SEM server=on)
     $a += @(

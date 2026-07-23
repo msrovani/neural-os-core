@@ -1,4 +1,0 @@
-# PreFlight cache wave=1
-lan_rx_ok=True
-logs_scanned=8
-422-evidence	PARTIAL	presente; falta evidência runtime/aceite

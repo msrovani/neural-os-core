@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Display Splash Persistente (2026-07-22) — SESSION_168
+- **Problema:** Tela preta entre `claim_graphics()` limpar o FB e o primeiro render do compositor (gap de ~6341 ticks durante LLM generation)
+- **Causa:** `clear_fb_pixels()` em `fb.rs:27` apaga o splash da P4 demo; compositor só renderiza no segundo tick do DisplayAgent
+- **Fix:** `splash_draw_text()` centralizado após o clear, reusa font 8x16 existente
+- **Esclarecimento CapGate:** `DENY MAP_FB/WRITE_FB` são do P4 demo testando `Cap::EMPTY` — não bloqueiam DisplayAgent (escreve direto no FB via `write_volatile`)
+- **Arquivo:** `crates/jarbas/src/display/fb.rs` (+14/-0 linhas)
+- **Tag:** `v1.9.7`
+
 ### ADR-0062: TicKV + NoProto + Índices IA como SGDB Primário (2026-07-22) — Proposed
 - **Arquitetura:** TicKV (Storage Engine, Append-Only NVMe via PCIe MMIO) + NoProto (Schema & Layout Zero-Copy) + ART (Chaves/Fatos L0-L3) + BQ Flat SIMD (Vetores L4-L5)
 - **Componentes:**

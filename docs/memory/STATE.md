@@ -1,10 +1,11 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.5 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.7 TEST — NÃO ESTÁVEL
+#   SESSION_168: Display splash persistente pós-claim_graphics
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: v1.9.5 TEST — Emagrecer SESSION_163 ✅ parcial; BitNet 850 (162); ath10k A3 (161)
+#   Pista ativa: v1.9.7 TEST — Display splash SESSION_168; Emagrecer SESSION_163 ✅ parcial
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer

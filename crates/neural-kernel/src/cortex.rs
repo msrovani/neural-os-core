@@ -1065,9 +1065,12 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         };
         let cur_mb = crate::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
         k_nano::slog_cortex!("LLM", "info", "load_model ver={} h={} L={} file={}MB est={}MB heap={}MB", version, hidden, num_layers, file_mb, estimated, cur_mb);
-        if estimated > cur_mb {
-            let total_mb = (estimated + 64).min(1536); // teto 1.5G — evita remap infinito
-            k_nano::slog_cortex!("LLM", "info", "resize_heap {} → {} MB...", cur_mb, total_mb);
+        // estimated = quanto load_model precisa alocar (tensors). Mas o arquivo
+        // ja esta no heap (file_mb). Total real = file_mb + estimated.
+        let total_needed = file_mb + estimated + 64;
+        if total_needed > cur_mb {
+            let total_mb = total_needed.min(2048); // cap 2GB
+            k_nano::slog_cortex!("LLM", "info", "resize_heap {} → {} MB (file={} est={})...", cur_mb, total_mb, file_mb, estimated);
             crate::allocator::resize_heap_to_mb(total_mb);
             k_nano::slog_cortex!("LLM", "info", "resize_heap done");
         }

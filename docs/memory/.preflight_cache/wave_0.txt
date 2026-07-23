@@ -1,4 +1,0 @@
-# PreFlight cache wave=0
-lan_rx_ok=True
-logs_scanned=8
-gaps	PARTIAL	presente; falta evidência runtime/aceite

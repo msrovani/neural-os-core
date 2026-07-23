@@ -31,6 +31,20 @@ pub fn claim_graphics() {
                 gpu.bytes_per_pixel(),
                 gpu.rgb_order,
             );
+            // Splash persistente ate o compositor assumir (LLM pode levar 6K+ ticks)
+            let msg = "Neural OS Core — Inicializando...";
+            let x0 = (gpu.fb_width as usize).saturating_sub(msg.len() * 8) / 2;
+            let y0 = gpu.fb_height as usize / 2 - 8;
+            splash_draw_text(
+                gpu.fb_addr as usize,
+                gpu.fb_width as usize,
+                gpu.fb_height as usize,
+                gpu.stride_bytes(),
+                gpu.bytes_per_pixel(),
+                gpu.rgb_order,
+                x0, y0, msg,
+            );
+            // ponytail: splash_DrawText simples, reusa font 8x16 existente
             // Cursor IRQ-safe enquanto Hermes THINK bloqueia o DisplayAgent
             k_nano::interrupts::FB_ADDR.store(gpu.fb_addr, Ordering::Release);
             k_nano::interrupts::FB_STRIDE.store(gpu.fb_stride, Ordering::Release);

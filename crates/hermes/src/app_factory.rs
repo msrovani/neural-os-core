@@ -17,6 +17,23 @@
 //! (AWAITING + requires-HITL). O Caminho A executa já, com segurança total.
 
 use alloc::string::String;
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// ADR-0060 seam — ring de isolamento nativo (Ring3). O `neural-kernel`
+/// registra aqui um executor nativo isolado QUANDO o F6 estiver validado
+/// (§6 da ADR-0060). Enquanto não registrado, B/C nativo fica gated.
+pub type NativeRingFn = fn(code: &[u8], caps: u32) -> Result<i64, &'static str>;
+static NATIVE_RING: AtomicUsize = AtomicUsize::new(0);
+
+/// Registrado por `neural-kernel::isolation_ring` só após o ring passar o gate.
+pub fn register_native_ring(f: NativeRingFn) {
+    NATIVE_RING.store(f as usize, Ordering::Release);
+    k_nano::slog_hermes!("APPFACTORY", "info", "native isolation ring REGISTRADO (ADR-0060) — B/C liberável sob HITL");
+}
+
+pub fn native_ring_registered() -> bool {
+    NATIVE_RING.load(Ordering::Acquire) != 0
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppBackend {
@@ -100,6 +117,8 @@ pub fn analyze_and_recommend(req: &AppRequest) -> Recommendation {
 pub enum FactoryOutcome {
     /// Executado no sandbox wasmi (Caminho A). Valor de retorno i32.
     RanWasm(i32),
+    /// Executado no ring de isolamento nativo (B/C) — só após ADR-0060.
+    RanNative(i64),
     /// Backend nativo (B/C) pendente de ring de isolamento + HITL — honesto.
     AwaitingIsolation(AppBackend),
     /// Negado por CapGate/HITL.
@@ -135,24 +154,52 @@ pub fn execute(
             }
             Err(e) => FactoryOutcome::Denied(e),
         },
-        // B/C: backend Cranelift existe (feature jit-cranelift) mas a execução
-        // nativa exige o ring de isolamento (residual F6/F7). Honesto: AWAITING.
+        // B/C: se o ring nativo (ADR-0060) foi registrado, executa nele; senão
+        // AWAITING (residual F6). Chegar aqui já passou pelo HW-gate acima.
         AppBackend::WasmJit | AppBackend::NativeRustSubset => {
-            k_nano::slog_hermes!(
-                "APPFACTORY",
-                "info",
-                "VERDICT=AWAITING_JIT backend={:?} reason=cranelift_ring_pending (Layer S)",
-                rec.backend
-            );
-            FactoryOutcome::AwaitingIsolation(rec.backend)
+            let slot = NATIVE_RING.load(Ordering::Acquire);
+            if slot != 0 {
+                let f: NativeRingFn = unsafe { core::mem::transmute::<usize, NativeRingFn>(slot) };
+                match f(wasm_or_src, rec.caps_needed) {
+                    Ok(v) => FactoryOutcome::RanNative(v),
+                    Err(e) => FactoryOutcome::Denied(e),
+                }
+            } else {
+                k_nano::slog_hermes!(
+                    "APPFACTORY",
+                    "info",
+                    "VERDICT=AWAITING_ISOLATION backend={:?} reason=ring3_pending (ADR-0060)",
+                    rec.backend
+                );
+                FactoryOutcome::AwaitingIsolation(rec.backend)
+            }
         }
     }
 }
 
-/// HW-gate: ring de isolamento para código nativo (ADR-0041 Ring3/AS). Hoje
-/// `false` (execução nativa fica gated); vira `true` quando o ring landar.
+/// ADR-0059 F3 — fim-a-fim "IA gera → monta → executa": recebe a **op-IR**
+/// (gerada por Cortex/Trinity/LLM, constrangida por #412), monta o wasm e roda
+/// pelo caminho recomendado. Código de IA = não-confiável → **A (wasmi)**.
+pub fn generate_and_run(ops: &[crate::wasm_build::Op], a: i32, b: i32) -> FactoryOutcome {
+    let req = AppRequest {
+        desc: String::from("skill gerada por IA (op-IR)"),
+        trusted: false,
+        perf_critical: false,
+        wants_rust: false,
+    };
+    let rec = analyze_and_recommend(&req);
+    let wasm = match crate::wasm_build::build_run_module(2, ops) {
+        Ok(w) => w,
+        Err(e) => return FactoryOutcome::Denied(e),
+    };
+    execute(&rec, &wasm, "run", a, b)
+}
+
+/// HW-gate: ring de isolamento para código nativo (ADR-0060 / Ring3). Reflete
+/// se um ring nativo **validado** foi registrado (`register_native_ring`).
+/// Hoje `false` até o F6 (ADR-0060) passar o gate — B/C nativo fica gated.
 pub fn isolation_ring_available() -> bool {
-    false
+    native_ring_registered()
 }
 
 /// Self-test (sem modelo): valida o seletor + execução A end-to-end.
@@ -172,7 +219,15 @@ pub fn self_test() -> bool {
     let req_c = AppRequest { desc: String::from("x"), trusted: true, perf_critical: false, wants_rust: true };
     let rec_c = analyze_and_recommend(&req_c);
     let ok_c = rec_c.backend == AppBackend::NativeRustSubset && rec_c.requires_hitl && rec_c.requires_isolation_ring;
-    let ok = ok_rec && ran && ok_c;
+    // F3/F4: pipeline fim-a-fim gera(op-IR)→monta(wasm)→sandbox(wasmi).
+    // op-IR de (a+b)*2 : [LocalGet0, LocalGet1, I32Add, I32Const2, I32Mul]
+    use crate::wasm_build::Op;
+    let ops = [Op::LocalGet(0), Op::LocalGet(1), Op::I32Add, Op::I32Const(2), Op::I32Mul];
+    let ok_gen = matches!(generate_and_run(&ops, 3, 4), FactoryOutcome::RanWasm(14));
+    if ok_gen {
+        k_nano::slog_hermes!("APPFACTORY", "info", "gera→monta→sandbox PASS ((3+4)*2=14) — ADR-0059 F3/F4");
+    }
+    let ok = ok_rec && ran && ok_c && ok_gen;
     if ok {
         k_nano::slog_hermes!("APPFACTORY", "info", "path-selector self-test PASS (A=run, C=HITL+ring gated) — ADR-0059");
     } else {

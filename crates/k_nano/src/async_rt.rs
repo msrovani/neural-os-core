@@ -27,7 +27,7 @@ impl<T> SpscChannel<T> {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            buffer: UnsafeCell::new([MaybeUninit::uninit(); 256]),
+            buffer: UnsafeCell::new([const { MaybeUninit::uninit() }; 256]),
             head: AtomicUsize::new(0),
             tail: AtomicUsize::new(0),
             mask: 255, // 256 - 1
@@ -71,7 +71,7 @@ impl<T> SpscChannel<T> {
         unsafe {
             let buffer = &*self.buffer.get();
             let idx = head & self.mask;
-            let value = buffer[idx].read();
+            let value = core::ptr::read(buffer[idx].as_ptr());
             self.head.store(head.wrapping_add(1), Ordering::Release);
             Some(value)
         }
@@ -155,6 +155,10 @@ pub struct WakerQueue {
     /// Count of active wakers
     count: AtomicUsize,
 }
+
+// ponytail: UnsafeCell is not Sync by default, but WakerQueue is only accessed
+// from the BSP with interrupts disabled — safe for static.
+unsafe impl Sync for WakerQueue {}
 
 impl WakerQueue {
     /// Create a new waker queue
@@ -315,7 +319,7 @@ impl AsyncExecutor {
 
     /// Wake a future by index (called from interrupt handler)
     pub fn wake_future(&self, index: usize) {
-        self.wake_queue.wake_by_index(index);
+        self.waker_queue.wake_by_index(index);
         // Also push to wake channel for processing
         let _ = self.wake_channel.try_push(index);
     }

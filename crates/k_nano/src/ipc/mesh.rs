@@ -3,7 +3,9 @@
 //! Implements unified messaging abstraction that works transparently
 //! between local cores (L3 cache) and remote nodes (network).
 
-use core::sync::atomic::{AtomicPtr, Ordering};
+use alloc::boxed::Box;
+use alloc::vec;
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use crate::async_rt::SpscChannel;
 use crate::net::transport::HybridTransport;
 

@@ -87,7 +87,7 @@ impl CorePair {
 
 /// Bipole mode configuration (2-core fallback)
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 pub struct BipoleMode {
     /// Core 0 (System Core)
     pub system_core: u8,
@@ -112,7 +112,7 @@ impl BipoleMode {
     }
 
     /// Activate bipole mode
-    pub fn activate(&self, channel: *mut SpscChannel<u8>) {
+    pub fn activate(&mut self, channel: *mut SpscChannel<u8>) {
         self.channel = channel;
         self.active.store(true, Ordering::Release);
     }
@@ -295,24 +295,59 @@ impl CorePairAllocator {
         let priority = affect.wake_priority();
         let pairs_to_wake = if priority > 0.9 { 4 } else { 2 };
 
-        let mut woken = 0;
-        for pair in &mut self.pairs {
+        // Pass 1: collect indices of MWait pairs to wake (immutable borrow of self.pairs)
+        let mut wake_indices: [Option<usize>; 32] = [None; 32];
+        let mut woken = 0usize;
+        for (i, pair) in self.pairs.iter().enumerate() {
             if woken >= pairs_to_wake {
                 break;
             }
             if let Some(p) = pair {
                 if p.state == CorePairState::MWait {
-                    p.state = CorePairState::Waking;
-                    // Send IPI to wake cores
-                    self.send_wake_ipi(p.core0);
-                    self.send_wake_ipi(p.core1);
-                    p.state = CorePairState::Active;
-                    p.last_wake = self.get_timestamp();
-                    self.active_pairs.fetch_add(1, Ordering::Release);
+                    wake_indices[i] = Some(i);
                     woken += 1;
                 }
             }
         }
+
+        // Pass 2: mutate state and send IPIs (mutable borrow of self.pairs)
+        let timestamp = self.get_timestamp();
+        let mut actually_woken = 0u8;
+        for i in 0..32 {
+            if wake_indices[i].is_some() {
+                // ponytail: extract core IDs before mutable borrow to avoid conflict with send_wake_ipi
+                let (core0, core1) = {
+                    if let Some(p) = &self.pairs[i] {
+                        if p.state == CorePairState::MWait {
+                            (p.core0, p.core1)
+                        } else {
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                };
+                // Mutate state in a block that drops the mutable borrow before calling send_wake_ipi
+                {
+                    if let Some(p) = &mut self.pairs[i] {
+                        if p.state == CorePairState::MWait {
+                            p.state = CorePairState::Waking;
+                        }
+                    }
+                }
+                self.send_wake_ipi(core0);
+                self.send_wake_ipi(core1);
+                {
+                    if let Some(p) = &mut self.pairs[i] {
+                        p.state = CorePairState::Active;
+                        p.last_wake = timestamp;
+                    }
+                }
+                self.active_pairs.fetch_add(1, Ordering::Release);
+                actually_woken += 1;
+            }
+        }
+        let _ = actually_woken;
     }
 
     /// Send wake IPI to a specific core
@@ -394,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_bipole_mode() {
-        let bipole = BipoleMode::new(0, 1);
+        let mut bipole = BipoleMode::new(0, 1);
         assert!(!bipole.is_active());
         
         let mut channel = SpscChannel::new();

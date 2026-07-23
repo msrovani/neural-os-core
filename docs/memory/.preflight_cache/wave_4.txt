@@ -1,7 +1,0 @@
-# PreFlight cache wave=4
-lan_rx_ok=True
-logs_scanned=8
-84	AWAITING_HW	path/log AWAITING — não reimplementar; coletar log HW
-6	PARTIAL	presente; falta evidência runtime/aceite
-12-15	PARTIAL	presente; falta evidência runtime/aceite
-soft-float	BLOCKED	defer honesto — blocker soft-float (nao fakear VITS)

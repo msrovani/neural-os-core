@@ -117,30 +117,53 @@ impl DisplayAgent {
 
     /// Clique canônico: edge de `MOUSE_ABS_BTN` (não EventBus). Retorna hit p/ log.
     fn handle_pointer_click(&mut self, btn: u8, cx: usize, cy: usize) -> &'static str {
-        let scr_w = COMPOSITOR
-            .lock()
-            .as_ref()
-            .map(|d| d.w)
-            .unwrap_or(1280);
-        // OFF canto SD — antes da dock
-        if hit_power_button(cx, cy, scr_w) {
-            let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            if tick <= self.power_armed_until && self.power_armed_until != 0 {
-                *POWER_BANNER.lock() = Some("Shutting down...");
-                let _ = EVENT_BUS.publish(event_bus::Event {
-                    id: 0,
-                    topic: alloc::string::String::from("SYSTEM_SHUTDOWN"),
-                    payload: b"ui_off".to_vec(),
-                    token: event_bus::CapabilityToken::Legacy(1),
-                });
-                self.power_armed_until = 0;
-                return "power_off";
+        let (scr_w, scr_h, dialog_open) = {
+            let comp = COMPOSITOR.lock();
+            match comp.as_ref() {
+                Some(d) => (d.w, d.h, d.power_dialog),
+                None => (1280, 800, false),
             }
-            self.power_armed_until = tick.saturating_add(90);
-            *POWER_BANNER.lock() = Some("Confirme: clique OFF de novo");
-            return "power_arm";
+        };
+
+        // Se o diálogo de power está aberto, processa cliques nele primeiro
+        if dialog_open {
+            let action = crate::display::compositor::hit_power_dialog(cx, cy, scr_w, scr_h);
+            match action {
+                crate::display::compositor::PowerDialogAction::Cancel => {
+                    COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
+                    *POWER_BANNER.lock() = None;
+                    self.power_armed_until = 0;
+                    k_nano::slog_jarbas!("JARBAS", "POWER", "dialog CANCELADO pelo usuario");
+                    return "power_cancel";
+                }
+                crate::display::compositor::PowerDialogAction::TurnOff => {
+                    COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
+                    *POWER_BANNER.lock() = Some("Shutting down...");
+                    k_nano::slog_jarbas!("JARBAS", "POWER", "dialog CONFIRMADO — publicando SYSTEM_SHUTDOWN");
+                    let _ = EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("SYSTEM_SHUTDOWN"),
+                        payload: b"ui_off".to_vec(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                    self.power_armed_until = 0;
+                    return "power_off";
+                }
+                crate::display::compositor::PowerDialogAction::None => {
+                    // Clique fora do diálogo (mas diálogo aberto) — ignora
+                    return "power_dialog_bg";
+                }
+            }
         }
-        // Clique fora desarma OFF
+
+        // OFF canto SD — abre diálogo de confirmação
+        if hit_power_button(cx, cy, scr_w) {
+            COMPOSITOR.lock().as_mut().map(|d| d.open_power_dialog());
+            *POWER_BANNER.lock() = Some("Confirme o desligamento");
+            k_nano::slog_jarbas!("JARBAS", "POWER", "dialog de desligamento ABERTO");
+            return "power_dialog_open";
+        }
+        // Clique fora desarma banner antigo (se houver)
         if self.power_armed_until != 0 {
             self.power_armed_until = 0;
             *POWER_BANNER.lock() = None;

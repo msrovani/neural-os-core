@@ -1,6 +1,0 @@
-# PreFlight cache wave=6
-lan_rx_ok=True
-logs_scanned=8
-airllm-ata	PARTIAL	presente; falta evidência runtime/aceite
-airllm-dma	AWAITING_HW	path/log AWAITING — não reimplementar; coletar log HW
-airllm-net	PARTIAL	presente; falta evidência runtime/aceite
