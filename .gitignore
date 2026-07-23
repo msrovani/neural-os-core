@@ -50,6 +50,8 @@ firmware/**/gsp-*.bin
 
 # Chave privada de assinatura do kernel
 keys/kernel_secret.key
+# Chave pública (deve ser rastreada para verificação de assinatura)
+!keys/kernel_public.bin
 
 tools/model_cache/
 tools/debug_build.py
