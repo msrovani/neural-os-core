@@ -91,7 +91,71 @@ pub fn bge_status() -> String {
     if BGE_LOADED.load(Ordering::Relaxed) {
         alloc::format!("[BGE] {} dim, loaded=true", unsafe { BGE_HIDDEN })
     } else {
-        String::from("[BGE] ausente — use build_image.py --all")
+        String::from("[BGE] ausente — emb=pseudo (hash/TF bits)")
+    }
+}
+
+/// Dimensão do embedding pseudo quando BGE não está no FAT (honesty: não é BGE).
+pub const PSEUDO_EMB_DIMS: usize = 64;
+
+/// Hash/TF-IDF leve → vetor denso em [-1,1]. Sem BGE; path `emb=pseudo`.
+pub fn pseudo_embed(text: &str, dims: usize) -> Vec<f32> {
+    let d = dims.max(8);
+    let mut out = vec![0.0f32; d];
+    let mut counts = vec![0u32; d];
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in text.bytes() {
+        if b.is_ascii_whitespace() || b == b',' || b == b'.' || b == b';' || b == b'?' {
+            if counts.iter().any(|&c| c > 0) || h != 0xcbf29ce484222325 {
+                let idx = (h as usize) % d;
+                out[idx] += 1.0;
+                counts[idx] = counts[idx].saturating_add(1);
+            }
+            h = 0xcbf29ce484222325;
+            continue;
+        }
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    if h != 0xcbf29ce484222325 {
+        let idx = (h as usize) % d;
+        out[idx] += 1.0;
+        counts[idx] = counts[idx].saturating_add(1);
+    }
+    // Char bigrams espalhados
+    let bytes = text.as_bytes();
+    for w in bytes.windows(2) {
+        let mut g = 0xcbf29ce484222325u64;
+        g ^= w[0] as u64;
+        g = g.wrapping_mul(0x100000001b3);
+        g ^= w[1] as u64;
+        g = g.wrapping_mul(0x100000001b3);
+        let idx = (g as usize) % d;
+        out[idx] += 0.5;
+        counts[idx] = counts[idx].saturating_add(1);
+    }
+    let mut norm = 0.0f32;
+    for x in &out {
+        norm += *x * *x;
+    }
+    let inv = if norm > 1e-8 {
+        1.0 / libm::sqrtf(norm)
+    } else {
+        0.0
+    };
+    for x in &mut out {
+        *x *= inv;
+    }
+    out
+}
+
+/// BGE se carregado; senão pseudo. Retorna (vec, path) com `bge` | `pseudo`.
+pub fn embed_or_pseudo(text: &str) -> (Vec<f32>, &'static str) {
+    let emb = bge_embed(text);
+    if !emb.is_empty() {
+        (emb, "bge")
+    } else {
+        (pseudo_embed(text, PSEUDO_EMB_DIMS), "pseudo")
     }
 }
 
@@ -105,15 +169,23 @@ pub(crate) static EMBED_INDEX: spin::Mutex<Vec<EmbeddingEntry>> = spin::Mutex::n
 
 /// Indexa um texto para busca semântica futura
 pub fn index_embedding(label: &str, text: &str) {
-    let emb = bge_embed(text);
-    if emb.is_empty() { return; }
-    EMBED_INDEX.lock().push(EmbeddingEntry { label: String::from(label), embedding: emb });
+    let (emb, path) = embed_or_pseudo(text);
+    if emb.is_empty() {
+        return;
+    }
+    let _ = path;
+    EMBED_INDEX.lock().push(EmbeddingEntry {
+        label: String::from(label),
+        embedding: emb,
+    });
 }
 
 /// Busca semântica: top-k por similaridade cosseno
 pub fn semantic_search(query: &str, top_k: usize) -> Vec<(String, f32)> {
-    let q_emb = bge_embed(query);
-    if q_emb.is_empty() { return Vec::new(); }
+    let (q_emb, _) = embed_or_pseudo(query);
+    if q_emb.is_empty() {
+        return Vec::new();
+    }
     let index = EMBED_INDEX.lock();
     let mut results: Vec<(String, f32)> = index.iter().map(|entry| {
         let dot: f32 = entry.embedding.iter().zip(q_emb.iter()).map(|(a,b)| a*b).sum();

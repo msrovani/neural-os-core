@@ -63,3 +63,6 @@ tools/disk_*
 MICRO.BITNET
 tools/MICRO.BITNET
 pipenv
+
+# Cursor plan drafts — não misturar com releases (hazard SESSION_176)
+.cursor/plans/

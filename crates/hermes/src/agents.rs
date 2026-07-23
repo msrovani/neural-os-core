@@ -16,7 +16,7 @@ use crate::hermes::{self, IntentCache, WorkflowEngine};
 use k_ai::conversation;
 use k_nano::{println, kjson};
 use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
-            CONVERSATION_TRACKER, PENDING_SKILL, SELF_HEAL, BITNET_TRAINER,
+            CONVERSATION_TRACKER, PENDING_SKILL, SELF_HEAL, BITNET_TRAINER, TRINITY,
             APPROVAL_GATE, boot_log_agent, agency, hw_agents, inventory};
 use crate::structured_decode::{StructuredDecoder, DecodeMode};
 use crate::decode_harness::recognize;
@@ -2067,14 +2067,43 @@ impl SleepCycleAgent {
         let _tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         match self.phase {
             1 => {
-                let mut t = BITNET_TRAINER.lock();
-                let (w,i,o) = (alloc::vec![0i8;64], alloc::vec![1.0f32;64], alloc::vec![1.0f32;64]);
-                let mut w_mut = w.clone();
-                let loss = t.train_step(&mut w_mut, &i, &o);
-                k_nano::slog_hermes!("SLEEP", "info", "REPLAY: loss={:.4} step={}", loss, t.trained);
+                // R3 REPLAY canônico (crate): traces em cortex::global_arena
+                let mut traces = [cortex::r3::RouteTrace {
+                    embedding_addr: 0,
+                    logits_addr: 0,
+                    num_experts: 0,
+                    selected_expert: 0,
+                    old_log_prob: 0.0,
+                    token_ids_addr: 0,
+                    token_count: 0,
+                }; 64];
+                let n = cortex::global_arena::snapshot_route_traces(&mut traces);
+                let mut weights = alloc::vec![0i8; 64 * 6];
+                let mut loss = 0.0f32;
+                if n > 0 {
+                    let trinity = TRINITY.lock();
+                    for t in traces.iter().take(n) {
+                        loss += cortex::r3::update_with_replay(&trinity, t, 0.7, &mut weights, 0.03);
+                    }
+                    drop(trinity);
+                    let mut t = BITNET_TRAINER.lock();
+                    t.trained += n as u64;
+                    k_nano::slog_hermes!(
+                        "SLEEP",
+                        "info",
+                        "REPLAY R3: {} traces loss={:.4} step={} tokens={}",
+                        n,
+                        loss,
+                        t.trained,
+                        cortex::global_arena::token_steps()
+                    );
+                } else {
+                    k_nano::slog_hermes!("SLEEP", "info", "REPLAY R3: sem traces — skip");
+                }
+                cortex::global_arena::clear_route_traces();
+                cortex::global_arena::reset_moe_cache();
             }
             2 => {
-                // ADR-0047: DREAM dispara evolve hot-swap demo
                 let st = crate::evolve::evolve_dream_tick();
                 self.insights.push(alloc::format!(
                     "[DREAM] ciclo #{} evolve={}", self.cycle_count, st
@@ -2082,7 +2111,6 @@ impl SleepCycleAgent {
                 k_nano::slog_hermes!("SLEEP", "info", "DREAM evolve={}", st);
             }
             3 => {
-                // E1: SGDB L0/L1 → Tickv + compact
                 match k_ai::sgdb::checkpoint_working() {
                     Ok(n) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "n={}", n),
                     Err(e) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "FAIL {}", e),
@@ -2103,8 +2131,18 @@ impl SleepCycleAgent {
                 );
             }
             5 => {
-                let r = crate::cognitive_bridge::reflect_and_nudge(self.cycle_count);
-                k_nano::slog_hermes!("SLEEP", "info", "REFLECT: ciclo #{} — {}", self.cycle_count, r);
+                let detail = crate::self_evolve::reflect(
+                    k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
+                );
+                self.insights.push(alloc::format!("[REFLECT] {}", detail));
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(crate::self_evolve::TOPIC_SELF_EVOLVE),
+                    payload: detail.into_bytes(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                let nudge = crate::cognitive_bridge::reflect_and_nudge(self.cycle_count);
+                k_nano::slog_hermes!("SLEEP", "info", "REFLECT nudge: {}", nudge);
                 cortex::neuos_probe::log_probe(None);
             }
             _ => {}

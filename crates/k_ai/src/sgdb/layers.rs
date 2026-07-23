@@ -35,7 +35,7 @@ pub fn remember_exchange(user: &str, response: &str) {
     });
 }
 
-/// Indexa embedding L4 (BQ) quando BGE/latent disponível — não inventa dims.
+/// Indexa embedding L4 (BQ). Aceita BGE ou pseudo; `emb` vazio = no-op.
 pub fn remember_semantic(key: &str, text: &str, emb: &[f32]) {
     if emb.is_empty() {
         return;
@@ -51,6 +51,87 @@ pub fn remember_semantic(key: &str, text: &str, emb: &[f32]) {
     let _ = text;
 }
 
+fn payload_f32(payload: &[u8]) -> Vec<f32> {
+    let n = payload.len() / 4;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let o = i * 4;
+        out.push(f32::from_le_bytes([
+            payload[o],
+            payload[o + 1],
+            payload[o + 2],
+            payload[o + 3],
+        ]));
+    }
+    out
+}
+
+/// Distância 1−cos em escala u32 (0 = idêntico). Sem floats no payload → None.
+fn fp32_dist_u32(query: &[f32], payload: &[u8]) -> Option<u32> {
+    let doc = payload_f32(payload);
+    if doc.is_empty() || query.is_empty() {
+        return None;
+    }
+    let n = query.len().min(doc.len());
+    let mut dot = 0.0f32;
+    let mut nq = 0.0f32;
+    let mut nd = 0.0f32;
+    for i in 0..n {
+        dot += query[i] * doc[i];
+        nq += query[i] * query[i];
+        nd += doc[i] * doc[i];
+    }
+    let denom = libm::sqrtf(nq) * libm::sqrtf(nd) + 1e-8;
+    let cos = (dot / denom).clamp(-1.0, 1.0);
+    let dist = 1.0 - cos;
+    Some((dist * 10_000.0) as u32)
+}
+
+/// Recall L4: BQ top-k, depois rescore FP32 nos candidatos (padrão Qdrant).
+/// path = `bq+fp32` | `bq` | `empty`.
+pub fn recall_semantic(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
+    ensure_ready();
+    if query.is_empty() {
+        return (Vec::new(), "empty");
+    }
+    let k = k.max(1);
+    let cand = (k * 4).max(k);
+    let Some((hits, n_bq, rescored)) = with_engine(|e| {
+        let n = e.bq_len();
+        let raw = e.bq_top_k_f32(query, cand);
+        let mut out: Vec<(String, u32)> = Vec::new();
+        let mut any_fp = false;
+        for (id, ham) in raw {
+            let Some(sk) = e.storage_key_of(id).map(String::from) else {
+                continue;
+            };
+            let score = match e.get_by_storage_key(&sk) {
+                Ok(Some(doc)) => match fp32_dist_u32(query, &doc.payload) {
+                    Some(d) => {
+                        any_fp = true;
+                        d
+                    }
+                    None => ham,
+                },
+                _ => ham,
+            };
+            out.push((sk, score));
+        }
+        out.sort_by_key(|(_, d)| *d);
+        out.truncate(k);
+        (out, n, any_fp)
+    }) else {
+        return (Vec::new(), "empty");
+    };
+    if n_bq == 0 || hits.is_empty() {
+        (hits, "empty")
+    } else if rescored {
+        (hits, "bq+fp32")
+    } else {
+        (hits, "bq")
+    }
+}
+
 /// Fato L3 (ART) — usado por memory_store::remember.
 pub fn remember_fact(fact: &str) {
     ensure_ready();
@@ -62,32 +143,6 @@ pub fn remember_fact(fact: &str) {
         fact.as_bytes().to_vec(),
     );
     let _ = with_engine(|e| e.put(doc));
-}
-
-/// Recall semântico L4 via BQ; path = `bq` | `empty`.
-pub fn recall_semantic(query: &[f32], k: usize) -> (Vec<(String, u32)>, &'static str) {
-    ensure_ready();
-    if query.is_empty() {
-        return (Vec::new(), "empty");
-    }
-    let Some((hits, n_bq)) = with_engine(|e| {
-        let n = e.bq_len();
-        let hits = e.bq_top_k_f32(query, k);
-        let mut out = Vec::new();
-        for (id, dist) in hits {
-            if let Some(sk) = e.storage_key_of(id) {
-                out.push((String::from(sk), dist));
-            }
-        }
-        (out, n)
-    }) else {
-        return (Vec::new(), "empty");
-    };
-    if n_bq == 0 || hits.is_empty() {
-        (hits, "empty")
-    } else {
-        (hits, "bq")
-    }
 }
 
 /// Prefixo de prompt a partir de docs L1/L2 recentes.

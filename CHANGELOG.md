@@ -2,7 +2,16 @@
 
 ## [Unreleased]
 
+### F-series ROI (pós-v1.9.9) — SESSION_177
+- **F1:** smoke e2e L1→`checkpoint_working`→remount Tickv→get (`memory_checkpoint_e2e_smoke`)
+- **F2:** SleepCycle canônico só em `hermes`; bin `pub use`
+- **F3:** `embed_or_pseudo` (hash/TF→64d) quando BGE ausente; log `emb=pseudo`
+- **F4:** rescore FP32 (1−cos) nos top-k BQ → path `bq+fp32`
+- **F5/F6:** anota `a491cea` sem force-rewrite; remove plan file acidental + ignore `.cursor/plans/`
+- **Skip:** page-hash TicKV (7), crates tickv/noproto (8), HNSW/DoD 10M (9)
+
 ### v1.9.9 TEST — SGDB D-series + Memory Quality (2026-07-23) — SESSION_174–176
+- **Commit anotado:** `a491cea` = conteúdo D/E correto, mas mensagem = Cursor auto-checkpoint (não “release consciente”). Tag `v1.9.9` → esse SHA. Ver SESSION_176 “Pós-release”.
 - **D-series:** Hamming dispatch (`scalar`/`avx2_lut`/`avx512`+VPOPCNTDQ); L0/L1 RAM-only + `checkpoint_working`; Tickv `sys/tickv_ckpt` + stress GC; bench ART 100k / BQ 10k×1024.
 - **E-series Memory Quality:** SleepCycle CONSOLIDATE→SGDB flush; Hermes recall L4 BQ hybrid; TickvLite Valid-flag invalidate; ART Node16 SSE; NMD1 `patch_payload` + `ts/` keys.
 - **Honesty:** ≠ crates `tickv`/`noproto` upstream; ≠ DoD 10M/100k; HNSW/SQL/AEAD residual.

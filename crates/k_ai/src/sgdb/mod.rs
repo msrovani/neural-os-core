@@ -3,6 +3,7 @@
 pub mod art;
 pub mod bench;
 pub mod bq;
+pub mod e2e_smoke;
 pub mod engine;
 pub mod hamming_dispatch;
 pub mod layers;
@@ -21,6 +22,7 @@ pub use layers::{
     remember_fact, remember_semantic,
 };
 pub use memory_doc::{MemoryDoc, MemoryDocView, MemoryLayer, VectorClock};
+pub use e2e_smoke::memory_checkpoint_e2e_smoke;
 pub use metrics::report_line as metrics_report;
 pub use store::{
     backend, boot_init, checkpoint_working, get_doc, get_hanr, get_kv, get_pkg_body, get_pkg_meta,

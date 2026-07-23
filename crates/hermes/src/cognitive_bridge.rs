@@ -552,11 +552,11 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
         }
     }
 
-    // E2: BQ L4 se índice populado (hybrid)
-    let q_emb = k_ai::memory_systems::bge_embed(user_intent);
+    // E2: BQ L4 — BGE se disponível, senão emb=pseudo (honesty)
+    let (q_emb, emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
     let (bq_hits, bq_path) = k_ai::sgdb::recall_semantic(&q_emb, 3);
-    if bq_path == "bq" && !bq_hits.is_empty() {
-        s.push_str("[SGDB-L4-BQ]\n");
+    if (bq_path == "bq" || bq_path == "bq+fp32") && !bq_hits.is_empty() {
+        s.push_str(&format!("[SGDB-L4-BQ emb={} path={}]\n", emb_path, bq_path));
         for (sk, dist) in &bq_hits {
             s.push_str(&format!("  d={} {}\n", dist, sk));
         }
@@ -567,7 +567,7 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
             "hybrid"
         };
     }
-    k_nano::slog_bin!("sgdb", "recall", "{}", recall_path);
+    k_nano::slog_bin!("sgdb", "recall", "path={} emb={}", recall_path, emb_path);
 
     // ADR-0063 F6: working/episodic MemoryDoc (L1/L2)
     let sgdb = k_ai::sgdb::prompt_slice(400);
@@ -643,11 +643,12 @@ pub fn after_exchange(user: &str, response: &str, tick: u64) {
     let _ = k_ai::sgdb::put_vdb_blob(&bytes);
     // ADR-0063 F6: MemoryDoc L1/L2 + TickvLite
     k_ai::sgdb::remember_exchange(user, response);
-    // E2: L4 BQ se BGE embedding disponível
-    let emb_u = k_ai::memory_systems::bge_embed(user);
+    // E2: L4 BQ — BGE ou emb=pseudo (nunca deixar L4 morto sem honesty)
+    let (emb_u, path_u) = k_ai::memory_systems::embed_or_pseudo(user);
     k_ai::sgdb::remember_semantic("turn_user", user, &emb_u);
-    let emb_a = k_ai::memory_systems::bge_embed(response);
+    let (emb_a, path_a) = k_ai::memory_systems::embed_or_pseudo(response);
     k_ai::sgdb::remember_semantic("turn_asst", response, &emb_a);
+    k_nano::slog_bin!("sgdb", "emb", "user={} asst={}", path_u, path_a);
     // Audit flush periódico (cada exchange — compacto)
     crate::globals::AUDIT_TRAIL.lock().flush_to_sgdb();
     // BGE paralelo (embeddings residual)

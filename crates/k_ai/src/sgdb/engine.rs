@@ -160,15 +160,20 @@ impl AiosDatabaseEngine {
     }
 
     pub fn get(&mut self, layer: MemoryLayer, key: &str) -> Result<Option<MemoryDoc>, &'static str> {
-        self.gets += 1;
         let sk = alloc::format!("md/{}/{}", layer.as_str(), key);
-        if let Some(bytes) = self.ram_l0l1.get(&sk) {
+        self.get_by_storage_key(&sk)
+    }
+
+    /// Load por storage key canônica `md/Lx/...` (RAM L0/L1 ou Tickv).
+    pub fn get_by_storage_key(&mut self, sk: &str) -> Result<Option<MemoryDoc>, &'static str> {
+        self.gets += 1;
+        if let Some(bytes) = self.ram_l0l1.get(sk) {
             return Ok(Some(MemoryDoc::decode(bytes)?));
         }
         if !k_nano::storage::is_ready() {
             return Ok(None);
         }
-        match k_nano::storage::get_blob(&sk) {
+        match k_nano::storage::get_blob(sk) {
             Ok(bytes) => Ok(Some(MemoryDoc::decode(&bytes)?)),
             Err("missing") => Ok(None),
             Err("corrupt") => Err("corrupt"),

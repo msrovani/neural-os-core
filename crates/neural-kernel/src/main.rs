@@ -1829,6 +1829,15 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         k_nano::slog_bin!("sgdb", "demo", "Q-jump FAIL");
         crate::boot_logger::log("BOOT: [sgdb] quality demo FAIL");
     }
+    if k_nano::storage::is_ready() {
+        if k_ai::sgdb::memory_checkpoint_e2e_smoke() {
+            k_nano::slog_bin!("sgdb", "e2e_ckpt", "PASS");
+            crate::boot_logger::log("BOOT: [sgdb] L1 checkpoint e2e PASS");
+        } else {
+            k_nano::slog_bin!("sgdb", "e2e_ckpt", "FAIL");
+            crate::boot_logger::log("BOOT: [sgdb] L1 checkpoint e2e FAIL");
+        }
+    }
     {
         let m = k_ai::sgdb::metrics_report();
         k_nano::slog_bin!("sgdb", "bench", "{}", m);
