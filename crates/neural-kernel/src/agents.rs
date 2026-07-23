@@ -2377,8 +2377,26 @@ impl SleepCycleAgent {
                 ));
                 k_nano::slog_bin!("SLEEP", "info", "DREAM evolve={}", st);
             }
-            3 => { k_nano::slog_bin!("SLEEP", "info", "CONSOLIDATE"); }
-            4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } k_nano::slog_bin!("SLEEP", "info", "PRUNE: {} insights", self.insights.len()); }
+            3 => {
+                match k_ai::sgdb::checkpoint_working() {
+                    Ok(n) => k_nano::slog_bin!("sgdb", "sleep_ckpt", "n={}", n),
+                    Err(e) => k_nano::slog_bin!("sgdb", "sleep_ckpt", "FAIL {}", e),
+                }
+                k_nano::slog_bin!("SLEEP", "info", "CONSOLIDATE");
+            }
+            4 => {
+                if self.insights.len() > 100 {
+                    self.insights.drain(0..50);
+                }
+                let pruned = k_ai::sgdb::prune_working_ram();
+                k_nano::slog_bin!(
+                    "SLEEP",
+                    "info",
+                    "PRUNE: {} insights ram_l0l1={}",
+                    self.insights.len(),
+                    pruned
+                );
+            }
             5 => {
                 // Sprint 108: REFLECT → meta-cognição self_evolve + memory nudge HITL
                 let detail = crate::self_evolve::reflect(crate::interrupts::TIMER_TICKS

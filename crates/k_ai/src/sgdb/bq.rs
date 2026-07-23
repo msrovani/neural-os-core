@@ -1,10 +1,10 @@
-//! ADR-0063 F5 — Binary Quantization (BQ) Flat + Hamming (popcnt).
-//! SIMD AVX2: usa popcnt por u64; caminho escalar sempre; AVX2 quando disponível no host.
+//! ADR-0063 — BQ Flat + Hamming via `hamming_dispatch`.
 
 use alloc::vec;
 use alloc::vec::Vec;
 
-/// Empacota f32 → bit (sign bit / threshold 0).
+use super::hamming_dispatch::{self, hamming as hamming_dispatch_fn};
+
 pub fn quantize_f32(v: &[f32]) -> Vec<u64> {
     let n_bits = v.len();
     let n_words = (n_bits + 63) / 64;
@@ -17,53 +17,84 @@ pub fn quantize_f32(v: &[f32]) -> Vec<u64> {
     out
 }
 
-/// Distância de Hamming entre dois vetores binários (mesmo comprimento em words).
-#[inline]
-pub fn hamming(a: &[u64], b: &[u64]) -> u32 {
-    let n = a.len().min(b.len());
-    let mut d = 0u32;
-    for i in 0..n {
-        d += (a[i] ^ b[i]).count_ones();
-    }
-    // bits extras no mais longo contam como 1s
-    let longer = if a.len() > b.len() { a } else { b };
-    for i in n..longer.len() {
-        d += longer[i].count_ones();
-    }
-    d
+/// Quantiza para exatamente 16 words (1024 dims) — pad/trunc.
+pub fn quantize_f32_1024(v: &[f32]) -> [u64; 16] {
+    let q = quantize_f32(v);
+    let mut out = [0u64; 16];
+    let n = q.len().min(16);
+    out[..n].copy_from_slice(&q[..n]);
+    out
 }
 
-/// Flat index: lista de (id, bitvec).
+pub fn hamming_path() -> &'static str {
+    hamming_dispatch::path_name()
+}
+
+#[inline]
+pub fn hamming(a: &[u64], b: &[u64]) -> u32 {
+    hamming_dispatch_fn(a, b)
+}
+
 pub struct BqFlatIndex {
     pub ids: Vec<u64>,
-    pub vecs: Vec<Vec<u64>>,
+    pub flat: Vec<u64>,
+    pub words_per_vec: usize,
 }
 
 impl BqFlatIndex {
     pub fn new() -> Self {
         BqFlatIndex {
             ids: Vec::new(),
-            vecs: Vec::new(),
+            flat: Vec::new(),
+            words_per_vec: 0,
         }
     }
 
     pub fn insert(&mut self, id: u64, bits: Vec<u64>) {
+        if self.words_per_vec == 0 {
+            self.words_per_vec = bits.len().max(1);
+        }
+        let w = self.words_per_vec;
         self.ids.push(id);
-        self.vecs.push(bits);
+        if bits.len() >= w {
+            self.flat.extend_from_slice(&bits[..w]);
+        } else {
+            self.flat.extend_from_slice(&bits);
+            for _ in bits.len()..w {
+                self.flat.push(0);
+            }
+        }
     }
 
     pub fn insert_f32(&mut self, id: u64, v: &[f32]) {
         self.insert(id, quantize_f32(v));
     }
 
-    /// Top-k por menor Hamming. Retorna (id, distance).
+    pub fn insert_1024(&mut self, id: u64, bits: &[u64; 16]) {
+        if self.words_per_vec == 0 {
+            self.words_per_vec = 16;
+        }
+        self.ids.push(id);
+        self.flat.extend_from_slice(bits);
+    }
+
+    pub fn clear(&mut self) {
+        self.ids.clear();
+        self.flat.clear();
+        self.words_per_vec = 0;
+    }
+
     pub fn top_k(&self, query: &[u64], k: usize) -> Vec<(u64, u32)> {
-        let mut scored: Vec<(u64, u32)> = self
-            .ids
-            .iter()
-            .zip(self.vecs.iter())
-            .map(|(id, v)| (*id, hamming(query, v)))
-            .collect();
+        let w = self.words_per_vec;
+        if w == 0 || self.ids.is_empty() {
+            return Vec::new();
+        }
+        let mut scored: Vec<(u64, u32)> = Vec::with_capacity(self.ids.len());
+        for (i, id) in self.ids.iter().enumerate() {
+            let start = i * w;
+            let vec = &self.flat[start..start + w];
+            scored.push((*id, hamming(query, vec)));
+        }
         scored.sort_by_key(|(_, d)| *d);
         scored.truncate(k);
         scored
@@ -84,12 +115,12 @@ impl Default for BqFlatIndex {
     }
 }
 
-/// Smoke: 3 vetores, query, top-1 deve ser o mais próximo.
 pub fn smoke() -> bool {
+    hamming_dispatch::select_best_hamming_kernel();
     let mut idx = BqFlatIndex::new();
     idx.insert_f32(1, &[1.0, -1.0, 1.0, -1.0]);
     idx.insert_f32(2, &[-1.0, -1.0, -1.0, -1.0]);
     idx.insert_f32(3, &[1.0, 1.0, 1.0, 1.0]);
     let hits = idx.top_k_f32(&[1.0, -1.0, 1.0, -1.0], 1);
-    hits.len() == 1 && hits[0].0 == 1 && hits[0].1 == 0
+    hits.len() == 1 && hits[0].0 == 1 && hits[0].1 == 0 && hamming_dispatch::smoke_1024()
 }

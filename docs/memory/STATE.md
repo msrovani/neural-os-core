@@ -1,5 +1,8 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.8 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.9 TEST — NÃO ESTÁVEL
+#   SESSION_176: SGDB Memory Quality E1–E5 — SleepCycle ckpt, recall L4, V-flag, ART SIMD
+#   SESSION_175: SGDB D-series — Hamming dispatch, L0/L1 RAM, Tickv ckpt, bench 100k/10k
+#   SESSION_174: SGDB quality jump Q1–Q5 (GC, ART48/256, BQ popcnt, AUD2, View, bench)
 #   SESSION_173: SGDB adoção AIOS — SgdbStore + HANR/Audit/Pkg/Skills/Episodic
 #   SESSION_172: ADR-0063/0064 — Onda 0–5: vector-db + TickvLite + Hermes RAG + k_ai::sgdb F2–F5 MVP
 #   SESSION_171: ADR-0062 P1✅ P2 StorageBus✅ P3 NVMe/AHCI✅ P24a HID parcial; emagreçer disk_agent
@@ -8,7 +11,7 @@
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: v1.9.7 TEST — Display splash SESSION_168; Emagrecer SESSION_163 ✅ parcial
+#   Pista ativa: v1.9.9 TEST — SGDB Memory Quality SESSION_176; Emagrecer SESSION_163 ✅ parcial
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer
@@ -64,7 +67,10 @@
 - FASE 7: micro-bench ART+BQ ✅ lite
 - FASE 8: power-loss remount ✅ lite
 - **SgdbStore facade** + Audit flush + Episodic L2 + Skill index ✅
-- Residual: AVX2 BQ, GC TicKV, ART Node48/256, TrustCache persist, carga 100k
+- **Quality jump SESSION_174:** Tickv GC ✅; ART Node48/256 ✅; BQ POPCNT ✅; AUD2 ✅; MemoryDocView ✅; bench 10k/1k ✅
+- **D-series SESSION_175:** Hamming dispatch scalar/avx2_lut/avx512 ✅; L0/L1 RAM-only ✅; Tickv ckpt+stress ✅; bench ART 100k / BQ 10k×1024 ✅; Visão vs Ship na ADR
+- **Memory Quality SESSION_176:** SleepCycle CONSOLIDATE→checkpoint ✅; Hermes recall L4 BQ hybrid ✅; TickvLite V-flag invalidate ✅; ART Node16 SIMD ✅; NMD1 patch/sortable ✅
+- Residual DoD pleno: 10M/100k, kill-9 HW, NVMe erase real, crates tickv/noproto upstream
 
 **Critérios de Aceite:**
 - Hermes `recall(L4, query)` < 1ms end-to-end

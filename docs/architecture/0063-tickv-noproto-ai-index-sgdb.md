@@ -1,6 +1,6 @@
 # ADR-0063: TicKV + NoProto + Índices IA como SGDB Primário do Neural-OS-Core
 
-**Status:** Proposed / `fazendo` (MVP Flash+TickvLite + F2–F8 lite + **adoção AIOS SgdbStore** — SESSION_173)  
+**Status:** Proposed / `fazendo` (MVP + adoção + quality jump + **D-series SESSION_175**)  
 **Lifecycle:** `fazendo`  
 **Data:** 2026-07-22  
 **Ideias:** #491–#510  
@@ -141,15 +141,66 @@ Adotar **TicKV + NoProto + ART + BQ Flat SIMD** como SGDB (Sistema Gerenciador d
 
 ## Critérios de Aceite (Definition of Done)
 
-- [ ] `cargo check --release` 0 erros em todo workspace
+### Aceite intermediário (v1.9.x — SESSION_174 quality jump) — evidência serial/QEMU
+
+- [x] `cargo check --release` 0 erros (k_ai / hermes / neural-kernel)
+- [x] TickvLite GC + `gc_smoke` / `corrupt_smoke` / `power_loss_smoke`
+- [x] ART Node4→16→48→256 + rebuild pós-mount `md/*`
+- [x] BQ flat + POPCNT path (`allow_avx2`) / scalar TCG
+- [x] Audit **AUD2** com signatures + `verify_chain` no subset
+- [x] `MemoryDocView` overlay zero-copy parse
+- [x] Bench intermediário 10k ART + 1k BQ (ciclos TSC no serial)
+
+### Aceite D-series (SESSION_175 — visão ↔ código) — entre intermediário e DoD pleno
+
+- [x] Hamming dispatch `scalar | avx2_lut | avx512` + log `[sgdb] hamming=…`
+- [x] L0/L1 RAM-only (checkpoint explícito); ART id lógico + key `md/…` estável pós-GC
+- [x] Tickv `sys/tickv_ckpt` + `stress_gc_smoke` (1k overwrites → append bounded)
+- [x] Bench D-series: ART **100k** + BQ **10k** × 1024-dim (TSC; **sem** claim P99 DoD)
+- [ ] DoD 10M keys / 100k vecs / kill-9 HW — residual
+
+### Aceite E-series / Memory Quality (SESSION_176 — pós-pesquisa)
+
+- [x] SleepCycle CONSOLIDATE → `checkpoint_working` + compact; PRUNE → `prune_working_ram`
+- [x] Hermes recall L4 BQ + hybrid log `[sgdb] recall=…`; facts → L3 `ts/`
+- [x] TickvLite Valid-flag invalidate (herança TicKV V=0)
+- [x] ART Node16 `_mm_cmpeq_epi8`; Hamming VPOPCNTDQ se CPUID
+- [x] NMD1 `patch_payload` + `sortable_ts_key`
+
+### DoD pleno (residual — Layer S/HW + números reais)
+
 - [ ] Hermes `recall(L4, query)` < 1ms end-to-end (100k vetores)
 - [ ] Hermes `recall(L2, timestamp)` < 100µs (10M chaves)
 - [ ] Jarbas boot + carregar L7 do TicKV < 500ms
 - [ ] Power-loss test: 10k `put` + `kill -9` aleatório → boot → 100% recall
-- [ ] CRC corruption test: flip 1 bit no NVMe → `get` retorna erro, não lixo
-- [ ] GC stress: NVMe 95% cheio → `put` continua (GC automático)
-- [ ] Benchmarks: P50/P99/P999 documentados para `recall(L4)`, `recall(L2)`, `put(L7)`
-- [ ] SIMD dispatch correto em 3 perfis: AVX-512, AVX2, scalar (CI)
+- [ ] CRC corruption test em NVMe HW (não só RAM flash)
+- [ ] GC stress: NVMe 95% cheio → `put` continua
+- [ ] Benchmarks P50/P99/P999 documentados
+- [ ] SIMD AVX-512 `vpopcntdq` path + CI 3 perfis
+
+---
+
+## Visão vs Ship (SESSION_175–176)
+
+| Visão | Implementação atual | Gap |
+|-------|---------------------|-----|
+| TicKV append + CRC + GC | `TickvLite` + V-flag invalidate + ckpt/stress | ≠ crate `tickv` upstream; page-hash wear residual |
+| NoProto zero-copy | `NMD1` + `MemoryDocView` + `patch_payload` | ≠ crate `noproto`; put ainda encode owned |
+| `AiosDatabaseEngine` | `sgdb/engine.rs` + `SgdbStore` | L0/L1 RAM + SleepCycle checkpoint ✅ |
+| ART O(k) Node4/16/48/256 | `sgdb/art.rs` + Node16 SSE | Sem 10M DoD |
+| BQ + Flat SIMD | `hamming_dispatch` + Hermes recall hybrid | HNSW fora; rescore FP32 leve residual |
+| Power-loss / corrupt | smokes SESSION_174–176 | ≠ kill-9 HW + 10k puts golden |
+
+### Pesquisa → aplicação (SESSION_176)
+
+| Fonte | Padrão adotado | Não adotado (residual) |
+|-------|----------------|------------------------|
+| Tock TicKV | Invalidate in-place (V=0), GC skip | Page-fit 2037B, async Flash HIL, crate |
+| NoProto | patch payload, sortable `ts/` keys | Runtime schema factory crate |
+| ART paper | Node16 `_mm_cmpeq_epi8` | Prefetch / 10M claim |
+| Elastic/Qdrant BQ | Flat scan + AVX2 LUT + VPOPCNTDQ | HNSW + oversample rescore full |
+
+**Default:** aprofundar TickvLite/NMD1 (não portar crates upstream nesta série).
 
 ---
 
@@ -157,21 +208,21 @@ Adotar **TicKV + NoProto + ART + BQ Flat SIMD** como SGDB (Sistema Gerenciador d
 
 | ID | Título | Status |
 |----|--------|--------|
-| #491 | TicKV wrapper para NVMe PCIe MMIO | 🟡 agendada |
-| #492 | NoProto schemas para MemoryDoc L0-L7 | 🟡 agendada |
-| #493 | AiosDatabaseEngine (ponte NoProto↔TicKV) | 🟡 agendada |
-| #494 | ART Index para chaves/fatos L0-L3 | 🟡 agendada |
-| #495 | BQ + Flat SIMD Scan para vetores L4-L5 | 🟡 agendada |
-| #496 | Dynamic SIMD Dispatch (AVX-512/AVX2/scalar) | 🟡 agendada |
-| #497 | Integração camadas L0-L7 no Hermes | 🟡 agendada |
-| #498 | Power-loss resilience tests | 🟡 agendada |
-| #499 | BQ recall vs FP32 benchmark | 🟡 agendada |
-| #500 | ART memory profiling & tuning | 🟡 agendada |
-| #501 | TicKV GC tuning para NVMe | 🟡 agendada |
-| #502 | NoProto Vector Clock encoding | 🟡 agendada |
-| #503 | FlashController trait para NVMe driver | 🟡 agendada |
-| #504 | Benchmark suite automatizada | 🟡 agendada |
-| #505 | CI pipeline com QEMU NVMe | 🟡 agendada |
+| #491 | TicKV wrapper para NVMe PCIe MMIO | 🟡 fazendo |
+| #492 | NoProto schemas para MemoryDoc L0-L7 | 🟡 fazendo |
+| #493 | AiosDatabaseEngine (ponte NoProto↔TicKV) | 🟡 fazendo |
+| #494 | ART Index para chaves/fatos L0-L3 | 🟡 fazendo |
+| #495 | BQ + Flat SIMD Scan para vetores L4-L5 | 🟡 fazendo |
+| #496 | Dynamic SIMD Dispatch (AVX-512/AVX2/scalar) | 🟡 D-series ✅ path |
+| #497 | Integração camadas L0-L7 no Hermes | 🟡 fazendo |
+| #498 | Power-loss resilience tests | 🟡 smokes ✅ / HW residual |
+| #499 | BQ recall vs FP32 benchmark | ⏳ |
+| #500 | ART memory profiling & tuning | ⏳ |
+| #501 | TicKV GC tuning para NVMe | 🟡 ckpt+stress ✅ |
+| #502 | NoProto Vector Clock encoding | 🟡 MVP |
+| #503 | FlashController trait para NVMe driver | 🟡 MVP |
+| #504 | Benchmark suite automatizada | 🟡 D-series 100k/10k ✅ |
+| #505 | CI pipeline com QEMU NVMe | ⏳ |
 
 ---
 

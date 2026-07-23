@@ -118,6 +118,8 @@ pub fn remember(fact: &str) -> Result<String, &'static str> {
     cur.push('\n');
     let clamped = clamp_chars(&cur, MEMORY_MAX);
     write_memory(&clamped)?;
+    // E2: também L3 MemoryDoc (ART + Tickv)
+    k_ai::sgdb::remember_fact(fact.trim());
     Ok(format!("[MEMORY] saved ({} chars)", clamped.len()))
 }
 

@@ -66,7 +66,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#470–#478** BEI BitNet Cognitivo | ADR-0060 | ✅ **7/7 ondas** SESSION_166 | MPMC, economia, células, MoE, memória, afeto, supervisor + EgoLayer/PonderNet, Soul Mirror visual. ~2900 LOC |
 | **#486** Vector DB in-kernel TF-IDF (RAG) | ADR-0064 | ✅ MVP | crate `vector-db`; persist TicKV `vdb/blob`; residual F6 embeddings |
 | **#487** Embeddings neurais in-kernel L4+ | ADR-0064 F6 | ⏳ residual | gated VRAM; BGE paralelo até lá |
-| **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **MVP F0–F8 lite + SgdbStore** SESSION_173 (HANR/Audit/Pkg/Skills). Residual: #497 AVX2, #502 GC, Node48, TrustCache |
+| **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **Memory Quality SESSION_176:** SleepCycle ckpt✅ recall L4 hybrid✅ V-flag✅ ART SIMD✅. Residual: crates upstream, HNSW, DoD 10M/100k |
 
 #### Gaps — triagem Onda 0 ✅ (2026-07-18)
 

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### v1.9.9 TEST — SGDB D-series + Memory Quality (2026-07-23) — SESSION_174–176
+- **D-series:** Hamming dispatch (`scalar`/`avx2_lut`/`avx512`+VPOPCNTDQ); L0/L1 RAM-only + `checkpoint_working`; Tickv `sys/tickv_ckpt` + stress GC; bench ART 100k / BQ 10k×1024.
+- **E-series Memory Quality:** SleepCycle CONSOLIDATE→SGDB flush; Hermes recall L4 BQ hybrid; TickvLite Valid-flag invalidate; ART Node16 SSE; NMD1 `patch_payload` + `ts/` keys.
+- **Honesty:** ≠ crates `tickv`/`noproto` upstream; ≠ DoD 10M/100k; HNSW/SQL/AEAD residual.
+- **Docs:** SESSION_174–176, ADR-0063 Visão vs Ship + Pesquisa→aplicação, TECNOLOGIAS 4.13c/d.
+- **Tag:** `v1.9.9`
+
 ### v1.9.8 TEST — SGDB AIOS + Storage (2026-07-23) — SESSION_171–173
 - **ADR-0063/0064 MVP + adoção:** crate `vector-db` (TF-IDF), TickvLite+FlashController, `k_ai::sgdb` (MemoryDoc/ART/BQ + **SgdbStore** facade).
 - **Consumidores:** HANR híbrido SGDB→VFS; Audit flush/load; Episodic L2; PackageHub meta (`persist_backend`); SkillOpt index; Hermes RAG `vdb/blob`.

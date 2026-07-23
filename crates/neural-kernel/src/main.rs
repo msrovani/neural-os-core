@@ -1815,14 +1815,24 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         k_nano::slog_bin!("TICKV", "smoke", "FAIL or skip");
         crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");
     }
-    // ADR-0063: facade + demo
+    // ADR-0063: facade + demo + Hamming dispatch
     k_ai::sgdb::boot_init();
+    {
+        let p = k_ai::sgdb::hamming_kernel_name();
+        k_nano::slog_bin!("sgdb", "hamming", "{}", p);
+        crate::boot_logger::log("BOOT: [sgdb] hamming kernel selected");
+    }
     if k_ai::sgdb::demo() {
-        k_nano::slog_bin!("sgdb", "demo", "F2-F7+facade PASS");
-        crate::boot_logger::log("BOOT: [sgdb] facade demo PASS");
+        k_nano::slog_bin!("sgdb", "demo", "Q-jump PASS");
+        crate::boot_logger::log("BOOT: [sgdb] quality demo PASS");
     } else {
-        k_nano::slog_bin!("sgdb", "demo", "F2-F7+facade FAIL");
-        crate::boot_logger::log("BOOT: [sgdb] facade demo FAIL");
+        k_nano::slog_bin!("sgdb", "demo", "Q-jump FAIL");
+        crate::boot_logger::log("BOOT: [sgdb] quality demo FAIL");
+    }
+    {
+        let m = k_ai::sgdb::metrics_report();
+        k_nano::slog_bin!("sgdb", "bench", "{}", m);
+        crate::boot_logger::log("BOOT: [sgdb] bench metrics logged");
     }
     // Audit checkpoint load (Onda C)
     {
@@ -1838,6 +1848,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     } else if k_nano::storage::is_ready() {
         k_nano::slog_bin!("TICKV", "power_loss", "FAIL");
         crate::boot_logger::log("BOOT: [TICKV] power-loss FAIL");
+    }
+    if k_nano::storage::is_ready() {
+        if k_nano::storage::gc_smoke() {
+            k_nano::slog_bin!("TICKV", "gc", "PASS");
+            crate::boot_logger::log("BOOT: [TICKV] gc smoke PASS");
+        } else {
+            k_nano::slog_bin!("TICKV", "gc", "FAIL");
+        }
+        if k_nano::storage::stress_gc_smoke() {
+            k_nano::slog_bin!("TICKV", "stress_gc", "PASS");
+            crate::boot_logger::log("BOOT: [TICKV] stress_gc 1k PASS");
+        } else {
+            k_nano::slog_bin!("TICKV", "stress_gc", "FAIL");
+        }
+        if k_nano::storage::corrupt_smoke() {
+            k_nano::slog_bin!("TICKV", "corrupt", "PASS");
+            crate::boot_logger::log("BOOT: [TICKV] corrupt smoke PASS");
+        } else {
+            k_nano::slog_bin!("TICKV", "corrupt", "FAIL");
+        }
+        k_nano::slog_bin!("TICKV", "stats", "{}", k_nano::storage::tickv_status());
     }
     crate::display::fb::boot_ckpt(35, "session identity");
     k_nano::identity::init_session_identity();

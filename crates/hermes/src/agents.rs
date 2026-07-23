@@ -2081,8 +2081,27 @@ impl SleepCycleAgent {
                 ));
                 k_nano::slog_hermes!("SLEEP", "info", "DREAM evolve={}", st);
             }
-            3 => { k_nano::slog_hermes!("SLEEP", "info", "CONSOLIDATE"); }
-            4 => { if self.insights.len() > 100 { self.insights.drain(0..50); } k_nano::slog_hermes!("SLEEP", "info", "PRUNE: {} insights", self.insights.len()); }
+            3 => {
+                // E1: SGDB L0/L1 → Tickv + compact
+                match k_ai::sgdb::checkpoint_working() {
+                    Ok(n) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "n={}", n),
+                    Err(e) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "FAIL {}", e),
+                }
+                k_nano::slog_hermes!("SLEEP", "info", "CONSOLIDATE");
+            }
+            4 => {
+                if self.insights.len() > 100 {
+                    self.insights.drain(0..50);
+                }
+                let pruned = k_ai::sgdb::prune_working_ram();
+                k_nano::slog_hermes!(
+                    "SLEEP",
+                    "info",
+                    "PRUNE: {} insights ram_l0l1={}",
+                    self.insights.len(),
+                    pruned
+                );
+            }
             5 => {
                 let r = crate::cognitive_bridge::reflect_and_nudge(self.cycle_count);
                 k_nano::slog_hermes!("SLEEP", "info", "REFLECT: ciclo #{} — {}", self.cycle_count, r);

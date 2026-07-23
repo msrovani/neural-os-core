@@ -8,6 +8,9 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 176 | ADR-0063 | SGDB Memory Quality | SleepCycle ckpt + recall L4 + V-flag + ART SIMD | Pós-pesquisa TicKV/NoProto/ART/BQ; AIOS memória e2e |
+| 175 | ADR-0063 | SGDB D-series | Hamming + L0/L1 RAM + Tickv ckpt + bench 100k/10k | Aceite D-series; Visão vs Ship; DoD pleno residual |
+| 174 | ADR-0063 | SGDB quality jump | Q1–Q5 GC/ART48/BQ/AUD2/View/bench | Aceite intermediário; DoD 10M/100k residual |
 | 173 | ADR-0063 | SGDB AIOS adoção | SgdbStore + HANR/Audit/Pkg/Skills | Facade namespaces; memory_store híbrido; persist_backend honesty; FAT=blobs |
 | 172 | ADR-0063+64 | RAG+SGDB MVP | vector-db + TickvLite + Hermes RAG + F2–F7 | Ondas 0–5; SESSION_173 = adoção consumidores |
 | 171 | ADR-0062 | P1+P2+P3+P24a | StorageBus + NVMe I/O + HID kb | Emagreçer disk_agent→k_nano; NVMe qid=1 BlockDevice; policy NVMe>AHCI>ATA; HID bringup multi-porta |

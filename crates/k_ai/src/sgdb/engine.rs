@@ -1,15 +1,21 @@
-//! ADR-0063 F3 — AiosDatabaseEngine: MemoryDoc ↔ TickvLite + ART (L0–L3) + BQ (L4–L5).
+//! ADR-0063 F3/D2 — AiosDatabaseEngine: MemoryDoc ↔ TickvLite + ART + BQ.
+//! L0/L1: RAM-only por default (checkpoint explícito). ART guarda id lógico; key = md/...
 
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 use spin::Mutex;
 
 use super::art::ArtIndex;
 use super::bq::BqFlatIndex;
-use super::memory_doc::{MemoryDoc, MemoryLayer};
+use super::memory_doc::{MemoryDoc, MemoryDocView, MemoryLayer};
 
 /// Contador monotônico de handles internos (ART / BQ ids).
 static NEXT_ID: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(1);
+
+fn is_ram_layer(layer: MemoryLayer) -> bool {
+    matches!(layer, MemoryLayer::L0Sensory | MemoryLayer::L1Working)
+}
 
 pub struct AiosDatabaseEngine {
     pub art: ArtIndex,
@@ -18,6 +24,12 @@ pub struct AiosDatabaseEngine {
     pub node_id: u8,
     pub puts: u64,
     pub gets: u64,
+    /// D2: blobs L0/L1 encoded (storage_key → NMD1); não toca Tickv até checkpoint.
+    ram_l0l1: BTreeMap<String, Vec<u8>>,
+    /// Puts L0/L1 que bypassaram Tickv (métrica honesty).
+    pub ram_puts: u64,
+    /// E2: id lógico → storage_key (recall BQ → doc).
+    id_to_sk: BTreeMap<u64, String>,
 }
 
 impl AiosDatabaseEngine {
@@ -28,33 +40,64 @@ impl AiosDatabaseEngine {
             node_id,
             puts: 0,
             gets: 0,
+            ram_l0l1: BTreeMap::new(),
+            ram_puts: 0,
+            id_to_sk: BTreeMap::new(),
         }
     }
 
-    /// Persiste doc em TickvLite (`md/Lx/key`) e indexa.
+    /// Persiste doc: L0/L1 → RAM; demais → TickvLite (`md/Lx/key`) + indexa.
     pub fn put(&mut self, mut doc: MemoryDoc) -> Result<u64, &'static str> {
         doc.clock.tick(self.node_id);
         let id = NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         let sk = doc.storage_key();
         let blob = doc.encode();
 
-        // Persistência: TickvLite se pronto; senão só índice em RAM (honesty).
-        if k_nano::storage::is_ready() {
+        if is_ram_layer(doc.layer) {
+            self.ram_l0l1.insert(sk.clone(), blob);
+            self.ram_puts = self.ram_puts.saturating_add(1);
+        } else if k_nano::storage::is_ready() {
             k_nano::storage::put_blob(&sk, &blob).map_err(|_| "tickv put")?;
         }
 
+        self.index_doc(id, &doc, &sk);
+        self.puts += 1;
+        Ok(id)
+    }
+
+    /// HITL / SleepCycle: flush L0/L1 RAM → Tickv. Honesty: sem isto, reboot perde L0/L1.
+    pub fn checkpoint_l0l1(&mut self) -> Result<usize, &'static str> {
+        if !k_nano::storage::is_ready() {
+            return Err("tickv not ready");
+        }
+        let mut n = 0usize;
+        for (sk, blob) in self.ram_l0l1.iter() {
+            k_nano::storage::put_blob(sk, blob).map_err(|_| "tickv put")?;
+            n += 1;
+        }
+        Ok(n)
+    }
+
+    /// Pós-checkpoint: drop arena RAM (docs já no Tickv sob `md/L0|L1/…`).
+    pub fn prune_ram_l0l1(&mut self) -> usize {
+        let n = self.ram_l0l1.len();
+        self.ram_l0l1.clear();
+        n
+    }
+
+    fn index_doc(&mut self, id: u64, doc: &MemoryDoc, sk: &str) {
+        self.id_to_sk.insert(id, String::from(sk));
         match doc.layer {
             MemoryLayer::L0Sensory
             | MemoryLayer::L1Working
             | MemoryLayer::L2EpisodicShort
             | MemoryLayer::L3EpisodicLong => {
-                self.art.insert(&sk, id);
+                self.art.insert(sk, id);
             }
             MemoryLayer::L4Semantic | MemoryLayer::L5Procedural => {
                 if let Some(ref bv) = doc.bitvec {
                     self.bq.insert(id, bv.clone());
                 } else if !doc.payload.is_empty() {
-                    // heurística: primeiros bytes → f32 LE se múltiplo de 4
                     let n = doc.payload.len() / 4;
                     if n > 0 {
                         let mut f = Vec::with_capacity(n);
@@ -71,27 +114,87 @@ impl AiosDatabaseEngine {
                         self.bq.insert_f32(id, &f);
                     }
                 }
-                // também indexa chave no ART para lookup por id textual
-                self.art.insert(&sk, id);
+                self.art.insert(sk, id);
             }
             MemoryLayer::L6Reserved | MemoryLayer::L7Identity => {
-                self.art.insert(&sk, id);
+                self.art.insert(sk, id);
             }
         }
+    }
 
-        self.puts += 1;
-        let _ = id;
-        Ok(id)
+    /// Q2: reconstrói ART/BQ a partir de keys Tickv `md/*` (pós-remount).
+    /// Não limpa ram_l0l1 (sessão viva).
+    pub fn rebuild_indices_from_tickv(&mut self) -> usize {
+        self.art.clear();
+        self.bq.clear();
+        self.id_to_sk.clear();
+        // Reindex RAM L0/L1 first (logical ids fresh)
+        let mut n = 0usize;
+        let ram_keys: Vec<(String, Vec<u8>)> = self
+            .ram_l0l1
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        for (sk, bytes) in ram_keys {
+            if let Ok(doc) = MemoryDoc::decode(&bytes) {
+                let id = NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                self.index_doc(id, &doc, &sk);
+                n += 1;
+            }
+        }
+        let keys = k_nano::storage::with_tickv(|kv| kv.keys_with_prefix("md/")).unwrap_or_default();
+        for sk in keys {
+            // skip if already in RAM (live session wins)
+            if self.ram_l0l1.contains_key(&sk) {
+                continue;
+            }
+            if let Ok(bytes) = k_nano::storage::get_blob(&sk) {
+                if let Ok(doc) = MemoryDoc::decode(&bytes) {
+                    let id = NEXT_ID.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                    self.index_doc(id, &doc, &sk);
+                    n += 1;
+                }
+            }
+        }
+        n
     }
 
     pub fn get(&mut self, layer: MemoryLayer, key: &str) -> Result<Option<MemoryDoc>, &'static str> {
         self.gets += 1;
         let sk = alloc::format!("md/{}/{}", layer.as_str(), key);
+        if let Some(bytes) = self.ram_l0l1.get(&sk) {
+            return Ok(Some(MemoryDoc::decode(bytes)?));
+        }
         if !k_nano::storage::is_ready() {
             return Ok(None);
         }
         match k_nano::storage::get_blob(&sk) {
             Ok(bytes) => Ok(Some(MemoryDoc::decode(&bytes)?)),
+            Err("missing") => Ok(None),
+            Err("corrupt") => Err("corrupt"),
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn get_view_bytes(
+        &mut self,
+        layer: MemoryLayer,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>, &'static str> {
+        self.gets += 1;
+        let sk = alloc::format!("md/{}/{}", layer.as_str(), key);
+        if let Some(bytes) = self.ram_l0l1.get(&sk) {
+            let _ = MemoryDocView::parse(bytes)?;
+            return Ok(Some(bytes.clone()));
+        }
+        if !k_nano::storage::is_ready() {
+            return Ok(None);
+        }
+        match k_nano::storage::get_blob(&sk) {
+            Ok(bytes) => {
+                let _ = MemoryDocView::parse(&bytes)?;
+                Ok(Some(bytes))
+            }
             Err("missing") => Ok(None),
             Err(e) => Err(e),
         }
@@ -103,6 +206,18 @@ impl AiosDatabaseEngine {
 
     pub fn bq_top_k_f32(&self, query: &[f32], k: usize) -> Vec<(u64, u32)> {
         self.bq.top_k_f32(query, k)
+    }
+
+    pub fn storage_key_of(&self, id: u64) -> Option<&str> {
+        self.id_to_sk.get(&id).map(|s| s.as_str())
+    }
+
+    pub fn ram_l0l1_len(&self) -> usize {
+        self.ram_l0l1.len()
+    }
+
+    pub fn bq_len(&self) -> usize {
+        self.bq.len()
     }
 }
 

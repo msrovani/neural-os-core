@@ -530,12 +530,14 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
     ));
 
     // ADR-0064 TF-IDF RAG (L1 lexical) — fallback BGE embeddings se store vazio
+    let mut recall_path = "tfidf";
     let tfidf = cortex::vector_db::rag_context_prefix(user_intent, 5);
     if !tfidf.is_empty() {
         s.push_str(&tfidf);
         s.push('\n');
         k_nano::slog_bin!("vectordb", "search", "query injected top context");
     } else {
+        recall_path = "bge";
         let rag = k_ai::memory_systems::semantic_search(user_intent, 3);
         if !rag.is_empty() {
             s.push_str("[BGE-RAG]\n");
@@ -545,8 +547,27 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
                 }
             }
             s.push('\n');
+        } else {
+            recall_path = "empty";
         }
     }
+
+    // E2: BQ L4 se índice populado (hybrid)
+    let q_emb = k_ai::memory_systems::bge_embed(user_intent);
+    let (bq_hits, bq_path) = k_ai::sgdb::recall_semantic(&q_emb, 3);
+    if bq_path == "bq" && !bq_hits.is_empty() {
+        s.push_str("[SGDB-L4-BQ]\n");
+        for (sk, dist) in &bq_hits {
+            s.push_str(&format!("  d={} {}\n", dist, sk));
+        }
+        s.push('\n');
+        recall_path = if recall_path == "empty" {
+            "bq"
+        } else {
+            "hybrid"
+        };
+    }
+    k_nano::slog_bin!("sgdb", "recall", "{}", recall_path);
 
     // ADR-0063 F6: working/episodic MemoryDoc (L1/L2)
     let sgdb = k_ai::sgdb::prompt_slice(400);
@@ -622,6 +643,11 @@ pub fn after_exchange(user: &str, response: &str, tick: u64) {
     let _ = k_ai::sgdb::put_vdb_blob(&bytes);
     // ADR-0063 F6: MemoryDoc L1/L2 + TickvLite
     k_ai::sgdb::remember_exchange(user, response);
+    // E2: L4 BQ se BGE embedding disponível
+    let emb_u = k_ai::memory_systems::bge_embed(user);
+    k_ai::sgdb::remember_semantic("turn_user", user, &emb_u);
+    let emb_a = k_ai::memory_systems::bge_embed(response);
+    k_ai::sgdb::remember_semantic("turn_asst", response, &emb_a);
     // Audit flush periódico (cada exchange — compacto)
     crate::globals::AUDIT_TRAIL.lock().flush_to_sgdb();
     // BGE paralelo (embeddings residual)

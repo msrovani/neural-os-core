@@ -33,9 +33,14 @@ pub fn backend() -> &'static str {
     }
 }
 
-/// Boot / init: sobe engine (TickvLite já deve estar montado pelo smoke).
+/// Boot / init: Hamming dispatch + engine + rebuild ART/BQ.
 pub fn boot_init() {
+    super::hamming_dispatch::select_best_hamming_kernel();
     ensure_ready();
+    if k_nano::storage::is_ready() {
+        let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
+        let _ = n;
+    }
 }
 
 /// KV cru sob key absoluta (ex. `hanr/user`, `pkg/foo`, `audit/head`).
@@ -68,6 +73,22 @@ pub fn put_doc(doc: MemoryDoc) -> Result<u64, &'static str> {
 pub fn get_doc(layer: MemoryLayer, key: &str) -> Result<Option<MemoryDoc>, &'static str> {
     ensure_ready();
     with_engine(|e| e.get(layer, key)).unwrap_or(Err("engine down"))
+}
+
+/// SleepCycle CONSOLIDATE: flush L0/L1 RAM → Tickv (+ compact best-effort).
+pub fn checkpoint_working() -> Result<usize, &'static str> {
+    ensure_ready();
+    let n = with_engine(|e| e.checkpoint_l0l1()).unwrap_or(Err("engine down"))?;
+    if ready() {
+        let _ = k_nano::storage::with_tickv(|kv| kv.compact());
+    }
+    Ok(n)
+}
+
+/// SleepCycle PRUNE: limpa arena L0/L1 já persistida (get cai no Tickv).
+pub fn prune_working_ram() -> usize {
+    ensure_ready();
+    with_engine(|e| e.prune_ram_l0l1()).unwrap_or(0)
 }
 
 /// Texto HANR L7 (identity): keys lógicas user|memory|soul|persona → `hanr/{name}` + md/L7.

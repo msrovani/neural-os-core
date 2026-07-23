@@ -125,6 +125,17 @@ impl MemoryDoc {
         alloc::format!("md/{}/{}", self.layer.as_str(), self.key)
     }
 
+    /// NoProto-pattern: troca payload (+ clock tick) sem mudar layer/key.
+    pub fn patch_payload(&mut self, new_payload: Vec<u8>, node_id: u8) {
+        self.payload = new_payload;
+        self.clock.tick(node_id);
+    }
+
+    /// Key temporal byte-wise sortable (u64 BE hex) — scan_prefix `ts/`.
+    pub fn sortable_ts_key(tick: u64) -> String {
+        alloc::format!("ts/{:016x}", tick)
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(MAGIC);
@@ -208,5 +219,71 @@ impl MemoryDoc {
             payload,
             bitvec,
         })
+    }
+}
+
+/// Q4 — overlay zero-copy sobre buffer NMD1 (sem clonar payload).
+pub struct MemoryDocView<'a> {
+    data: &'a [u8],
+    layer: MemoryLayer,
+    key: &'a str,
+    payload: &'a [u8],
+    clock_off: usize,
+}
+
+impl<'a> MemoryDocView<'a> {
+    pub fn parse(data: &'a [u8]) -> Result<Self, &'static str> {
+        if data.len() < 5 || &data[0..4] != MAGIC {
+            return Err("bad magic");
+        }
+        let layer = MemoryLayer::from_u8(data[4]).ok_or("bad layer")?;
+        let mut off = 5;
+        if off + 4 > data.len() {
+            return Err("trunc keylen");
+        }
+        let klen = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if off + klen > data.len() {
+            return Err("trunc key");
+        }
+        let key = core::str::from_utf8(&data[off..off + klen]).map_err(|_| "utf8")?;
+        off += klen;
+        let clock_off = off;
+        if off + 72 > data.len() {
+            return Err("trunc clock");
+        }
+        off += 72; // VectorClock fixed size
+        if off + 4 > data.len() {
+            return Err("trunc plen");
+        }
+        let plen = u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+        off += 4;
+        if off + plen > data.len() {
+            return Err("trunc payload");
+        }
+        let payload = &data[off..off + plen];
+        Ok(MemoryDocView {
+            data,
+            layer,
+            key,
+            payload,
+            clock_off,
+        })
+    }
+
+    pub fn layer(&self) -> MemoryLayer {
+        self.layer
+    }
+    pub fn key(&self) -> &str {
+        self.key
+    }
+    pub fn payload(&self) -> &[u8] {
+        self.payload
+    }
+    pub fn clock_bytes(&self) -> &[u8] {
+        &self.data[self.clock_off..self.clock_off + 72]
+    }
+    pub fn to_owned_doc(&self) -> Result<MemoryDoc, &'static str> {
+        MemoryDoc::decode(self.data)
     }
 }
