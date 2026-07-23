@@ -72,7 +72,6 @@ def pack_disk(step: str, size_mb: int) -> None:
     cmd = [
         sys.executable,
         str(ROOT / "tools" / "build_image.py"),
-        "--fat32",
         "--size",
         str(size_mb),
         "--output",
