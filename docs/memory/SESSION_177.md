@@ -12,10 +12,13 @@
 | 4 | Rescore FP32 top-k BQ | `recall_semantic` path `bq+fp32` |
 | 5 | Anotar a491cea sem force | CHANGELOG + esta SESSION; mensagem consciente no commit F |
 | 6 | Tirar plan do tree | `git rm` `.cursor/plans/hw_boot_reboot_fix_*.plan.md` + ignore |
-| 10 | GitHub Release v1.9.9 | `gh release create` (meta) |
+| 10 | GitHub Release v1.9.9 | notas em `docs/releases/v1.9.9.md`; **`gh` ausente neste host** — criar com `gh release create` após instalar CLI |
 
 ## Skip (honesty)
 7 page-hash wear TicKV · 8 port crates tickv/noproto · 9 HNSW/DoD 10M
 
 ## Gate
 `cargo check --release -p k_ai -p hermes -p neural-kernel --features fat-boot-log` = 0
+
+## Commit
+`2282e15` — F-series ROI (main ahead 1 vs origin; push + `gh release` pendente no maintainer)
