@@ -571,7 +571,7 @@ pub fn stream_to_disk_deferred(url: &str, dest: &str) -> Result<(), &'static str
 
 fn stream_to_disk_impl(url: &str, dest: &str) -> Result<(), &'static str> {
     let (host, port, path) = crate::net::parse_http_url(url).map_err(|e| match e {
-        "tls_not_ready" => "stream-to-disk: https not ready (tls)",
+        "bad_url" | "bad_port" => "stream-to-disk: bad URL",
         _ => "stream-to-disk: bad URL",
     })?;
     let ip = unsafe { crate::net::dns_resolve_host(&host) }.ok_or("stream-to-disk: DNS failed")?;
@@ -676,7 +676,6 @@ fn stream_to_disk_impl(url: &str, dest: &str) -> Result<(), &'static str> {
 /// Parse + resolve via `net::resolve_and_http_get` path components.
 fn parse_http_url(url: &str) -> Result<(alloc::string::String, u16, alloc::string::String), &'static str> {
     crate::net::parse_http_url(url).map_err(|e| match e {
-        "tls_not_ready" => "hot_swap Net: https requires TLS (#123)",
         "bad_url" | "bad_port" => "hot_swap Net: bad URL",
         other => other,
     })
@@ -724,7 +723,7 @@ pub fn hot_swap_from_net(spec: &str) -> Result<alloc::string::String, &'static s
     let dest_opt = parts.next().map(|s| s.trim()).filter(|s| !s.is_empty());
 
     let (host, port, path) = crate::net::parse_http_url(url).map_err(|e| match e {
-        "tls_not_ready" => "hot_swap Net: https not ready (tls)",
+        "bad_url" | "bad_port" => "hot_swap Net: bad URL",
         _ => "hot_swap Net: bad URL",
     })?;
     let dest = dest_from_url_path(&path, dest_opt);

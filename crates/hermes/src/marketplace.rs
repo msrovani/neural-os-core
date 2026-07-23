@@ -129,13 +129,17 @@ pub fn host_allowed(host: &str) -> bool {
     ALLOWLIST_HOSTS.iter().any(|a| *a == h)
 }
 
-/// Parse URL http://host[:port]/path — só HTTP plain (smoltcp).
+/// Parse URL http://host[:port]/path or https://host[:port]/path.
+/// HTTPS supported via TLS N4 (embedded-tls).
 pub fn parse_http_url(url: &str) -> Result<(String, u16, String), &'static str> {
     let u = url.trim();
-    if u.starts_with("https://") {
-        return Err("tls_not_ready");
-    }
-    let rest = u.strip_prefix("http://").ok_or("only_http")?;
+    let (rest, default_port) = if u.starts_with("https://") || u.starts_with("HTTPS://") {
+        (u.strip_prefix("https://").or_else(|| u.strip_prefix("HTTPS://")).ok_or("bad_https")?, 443u16)
+    } else if u.starts_with("http://") || u.starts_with("HTTP://") {
+        (u.strip_prefix("http://").or_else(|| u.strip_prefix("HTTP://")).ok_or("bad_http")?, 80u16)
+    } else {
+        return Err("only_http_or_https");
+    };
     let (hostport, path) = match rest.find('/') {
         Some(i) => (&rest[..i], &rest[i..]),
         None => (rest, "/"),
@@ -146,10 +150,10 @@ pub fn parse_http_url(url: &str) -> Result<(String, u16, String), &'static str> 
             let p: u16 = maybe.parse().map_err(|_| "bad_port")?;
             (&hostport[..i], p)
         } else {
-            (hostport, 80u16)
+            (hostport, default_port)
         }
     } else {
-        (hostport, 80u16)
+        (hostport, default_port)
     };
     if !host_allowed(host) {
         return Err("host_not_allowlisted");
@@ -158,16 +162,17 @@ pub fn parse_http_url(url: &str) -> Result<(String, u16, String), &'static str> 
 }
 
 /// Fetch allowlisted URL → validate → resign → stage install (DNS via net_bridge).
+/// Supports HTTP and HTTPS (TLS N4).
 pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
-    let (host, _port, path) = match parse_http_url(url) {
+    let (host, port, path) = match parse_http_url(url) {
         Ok(v) => v,
         Err(e) => {
             k_nano::slog_hermes!("Market", "info", "fetch=deny reason={}", e);
             return format!("[MARKET] fetch denied: {}", e);
         }
     };
-    k_nano::slog_hermes!("Market", "info", "fetch host={} path={}", host, path);
-    let bytes = match crate::net_bridge::http_get_url(url.trim()) {
+    k_nano::slog_hermes!("Market", "info", "fetch host={} port={} path={}", host, port, path);
+    let bytes = match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
         Ok(b) => b,
         Err(e) => {
             k_nano::slog_hermes!("Market", "info", "fetch=fail {}", e);

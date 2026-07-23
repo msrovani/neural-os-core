@@ -37,77 +37,189 @@ Foram lidos integralmente: `main.rs` (boot sequence completo), `agent_loop.rs` (
 
 ---
 
-## 2. Inventário do que ClaudioOS faz melhor (validado no código)
+## 2. Inventário COMPLETO de Hardware — ClaudioOS vs neural-os-core
 
-### 2.1 TLS 1.3 real e funcional — **CRÍTICO**
+### 2.1 GPU (NVIDIA) — **ClaudioOS tem, neural-os-core NÃO tem**
 
-`crates/net/src/tls.rs`: `TlsStream` sobre `embedded-tls` 0.17 com `Aes128GcmSha256`. Buffers heap-alocados com `alloc_aligned_buf()` (alinhamento 16-byte para AES-NI, evita #GP/#DF). `SmoltcpSocket` bridge `embedded_io::Read+Write` sobre smoltcp TCP. `https_request()` helper: DNS → TCP → TLS → HTTP → close. `NoVerify` em dev (gap de segurança, mas funcional).
+| Componente | ClaudioOS (`crates/gpu/`) | neural-os-core |
+|---|---|---|
+| PCI detection | ✅ Vendor 0x10DE, BAR0/BAR1 mapping | ❌ |
+| MMIO registers | ✅ `GpuRegs` com offsets completos | ❌ |
+| Falcon firmware | ✅ PMU + GSP-RM (Turing+) | ❌ |
+| VRAM allocator | ✅ `VramAllocator` com free list | ❌ |
+| PFIFO engine | ✅ `Pfifo` init + channel alloc | ❌ |
+| Compute channel | ✅ `Channel` + `ComputeEngine` | ❌ |
+| Tensor engine | ✅ `TensorEngine` high-level ops | ❌ |
+| GSP-RM loading | ✅ Para Turing+ (RTX 20xx+) | ❌ |
+| GPU topology | ✅ GPCs, TPCs/GPC, SMs/TPC | ❌ |
+| Interrupt handling | ✅ PFIFO, PGRAPH, PTIMER | ❌ |
+| VRAM aperture | ✅ BAR1 mapping | ❌ |
 
-**neural-os-core:** TLS é stub (`tls_not_ready`, deny https). Sem TLS real. SelfUpdate HTTP só funciona em plain HTTP.
+**Arquivos-chave:** `crates/gpu/src/driver.rs`, `crates/gpu/src/falcon.rs`, `crates/gpu/src/fifo.rs`, `crates/gpu/src/compute.rs`, `crates/gpu/src/tensor.rs`, `crates/gpu/src/memory.rs`, `crates/gpu/src/mmio.rs`, `crates/gpu/src/pci_config.rs`
 
-### 2.2 SSH pós-quântico real (ML-KEM-768 + X25519)
+### 2.2 NVMe — **ClaudioOS tem implementação mais completa**
 
-`crates/sshd/src/kex.rs`: `mlkem768x25519-sha256@openssh.com` hybrid KEX. `MlKem768::generate()`, `dk.decapsulate(ct)` — chamadas reais à crate `ml-kem`. X25519 via `x25519-dalek`. Verificação de all-zero DH output (proteção low-order point). `derive_keys()` per RFC 4253 §7.2. Fallback clássico `curve25519-sha256`.
+| Componente | ClaudioOS (`crates/nvme/`) | neural-os-core (`k_nano/storage/nvme.rs`) |
+|---|---|---|
+| Admin queue | ✅ QueuePair completo | ✅ Básico |
+| I/O queue pairs | ✅ Múltiplos | ❌ Apenas admin |
+| Identify Controller | ✅ Completo | ✅ |
+| Identify Namespace | ✅ Completo | ❌ |
+| Read/Write/Flush | ✅ Com PRP scatter-gather | ✅ Básico |
+| BlockDevice trait | ✅ Implementado | ✅ |
+| Queue management | ✅ Doorbell + completion polling | ⚠️ Parcial |
+| PRP/SGL | ✅ PRP scatter-gather | ❌ |
 
-**neural-os-core:** Sem SSH. Sem crypto pós-quântica.
+**Arquivos-chave:** `crates/nvme/src/driver.rs`, `crates/nvme/src/queue.rs`, `crates/nvme/src/admin.rs`, `crates/nvme/src/io.rs`, `crates/nvme/src/registers.rs`
 
-### 2.3 Filesystem stack completa (ext4 + btrfs + NTFS + VFS)
+### 2.3 Intel NIC (e1000 + i225) — **ClaudioOS tem i225, neural-os-core só e1000**
 
-4 crates reais read-write: `claudio-ext4` (3.013 LOC, extent tree, bitmap), `claudio-btrfs` (4.006 LOC, B-trees, CRC32C, COW), `claudio-ntfs` (3.561 LOC, MFT, data runs, B+ tree, $UpCase), `claudio-vfs` (2.871 LOC, mount table longest-prefix-match, POSIX API, GPT/MBR auto-detect). `BlockDevice` trait unificado.
+| Componente | ClaudioOS (`crates/intel-nic/`) | neural-os-core |
+|---|---|---|
+| e1000 (82540EM) | ✅ `crates/intel-nic/src/e1000.rs` | ✅ `neural-kernel/src/e1000.rs` |
+| i225 (2.5G) | ✅ `crates/intel-nic/src/i225.rs` | ❌ |
+| Descriptors | ✅ RX/TX ring completos | ✅ Básico |
+| PHY management | ✅ MDIO read/write | ⚠️ Parcial |
+| Registers | ✅ Offsets completos | ⚠️ Parcial |
+| DHCP | ✅ Integrado | ✅ |
 
-**neural-os-core:** FAT32 apenas (via `fatfs` crate). ATA PIO. Sem ext4/btrfs/NTFS. Sem VFS layer abstraído.
+**Arquivos-chave:** `crates/intel-nic/src/driver.rs`, `crates/intel-nic/src/e1000.rs`, `crates/intel-nic/src/i225.rs`, `crates/intel-nic/src/phy.rs`, `crates/intel-nic/src/regs.rs`
 
-### 2.4 Storage drivers modernos (AHCI + NVMe + USB storage)
+### 2.4 WiFi (Intel) — **ClaudioOS tem, neural-os-core NÃO tem**
 
-`claudio-ahci` (2.139 LOC): HBA registers, port state machine, PRDT. `claudio-nvme` (2.563 LOC): queue pairs, doorbell, PRP scatter-gather. `claudio-usb-storage` (1.357 LOC): BOT + SCSI.
+| Componente | ClaudioOS (`crates/wifi/src/intel/`) | neural-os-core |
+|---|---|---|
+| AX200/AX201/AX210/AX211 | ✅ `crates/wifi/src/intel/driver.rs` | ❌ |
+| Firmware loading | ✅ ucode parsing + upload | ❌ |
+| Scan | ✅ Active/passive, canais configuráveis | ❌ |
+| Connect | ✅ Auth + Assoc + WPA2 4-way handshake | ❌ |
+| WPA2 | ✅ 4-way handshake + PTK/GTK | ❌ |
+| CCMP | ✅ AES-CCMP encrypt/decrypt | ❌ |
+| DHCP | ✅ Integration point documentado | ❌ |
+| Variants | ✅ AX200, AX201, AX210, AX211 | ❌ |
 
-**neural-os-core:** ATA PIO apenas (bug `in ax, dx` corrigido em v1.1.5). Sem AHCI, NVMe, USB storage.
+**Arquivos-chave:** `crates/wifi/src/intel/driver.rs`, `crates/wifi/src/intel/commands.rs`, `crates/wifi/src/intel/firmware.rs`, `crates/wifi/src/intel/pci.rs`, `crates/wifi/src/intel/tx_rx.rs`, `crates/wifi/src/scan.rs`, `crates/wifi/src/wpa.rs`
 
-### 2.5 Windows binary compatibility (PE + Win32 + .NET CLR + WinRT + Vulkan + DXVK)
+### 2.5 SMP — **ClaudioOS tem implementação mais completa**
 
-Camada real (não Wine): `claudio-pe-loader` (1.497 LOC), `claudio-win32` (10.458 LOC, 8 DLLs + DirectWrite/D2D/WASAPI/XInput/WIC), `claudio-dotnet-clr` (5.179 LOC, PE/CLI + IL interpreter + GC + BCL), `claudio-winrt` (1.676 LOC), `claudio-vulkan` (3.811 LOC, Vulkan 1.3), `claudio-dxvk-bridge` (2.039 LOC, DX9/10/11→Vulkan).
+| Componente | ClaudioOS (`crates/smp/`) | neural-os-core (`k_nano/smp/`) |
+|---|---|---|
+| ACPI MADT parsing | ✅ `MadtInfo` completo | ✅ Básico |
+| Local APIC | ✅ Configuração completa | ✅ |
+| I/O APIC | ✅ `IoApicManager` + routing | ⚠️ Parcial |
+| AP boot | ✅ INIT-SIPI-SIPI + trampoline | ✅ Básico |
+| Per-CPU data | ✅ `PerCpu` struct | ✅ |
+| Scheduler | ✅ Work-stealing | ✅ Tick-based |
+| IPI | ✅ Fixed + NMI | ⚠️ Parcial |
+| IRQ routing | ✅ GSI → vector → core | ❌ |
+| Trampoline | ✅ `ApTrampoline` em phys fixo | ✅ |
 
-**neural-os-core:** Sem compat Windows. Sem Vulkan. Sem PE loader.
+**Arquivos-chave:** `crates/smp/src/driver.rs`, `crates/smp/src/apic.rs`, `crates/smp/src/ioapic.rs`, `crates/smp/src/trampoline.rs`, `crates/smp/src/scheduler.rs`, `crates/smp/src/percpu.rs`
 
-### 2.6 Linux binary compatibility (ELF + syscall translation)
+### 2.6 VFS — **ClaudioOS tem API POSIX-like completa**
 
-`claudio-elf-loader` (1.213 LOC): ELF64 parsing, relocation, execution. `claudio-linux-compat` (4.090 LOC): syscall translation, /proc emulation, signal dispatch.
+| Componente | ClaudioOS (`crates/vfs/`) | neural-os-core (`k_nano/vfs/` + `neural-kernel/src/vfs/`) |
+|---|---|---|
+| Mount table | ✅ Longest-prefix-match | ✅ |
+| POSIX API | ✅ open/read/write/close/stat/mkdir/readdir/rm/cp/mv | ⚠️ Parcial |
+| Partition detection | ✅ GPT + MBR auto-detect | ❌ |
+| BlockDevice trait | ✅ Unificado | ✅ |
+| Multiple FS | ✅ ext4/btrfs/NTFS/FAT32 | ⚠️ FAT32/exFAT apenas |
+| Working dir | ✅ pwd/cd | ❌ |
+| File ops | ✅ open/read/write/seek/close | ⚠️ Parcial |
+| Dir ops | ✅ mkdir/readdir/rmdir | ❌ |
+| High-level | ✅ cp/mv/rename/sync | ❌ |
 
-**neural-os-core:** Sem ELF loader. Sem Linux compat.
+**Arquivos-chave:** `crates/vfs/src/vfs.rs`, `crates/vfs/src/mount.rs`, `crates/vfs/src/file.rs`, `crates/vfs/src/dir.rs`, `crates/vfs/src/path.rs`, `crates/vfs/src/device.rs`, `crates/vfs/src/fs_trait.rs`
 
-### 2.7 12 linguagens nativas interpretadas
+### 2.7 Filesystems — **ClaudioOS tem 4 RW, neural-os-core só 1 RW**
 
-python-lite (2.388 LOC, 28 tests), js-lite (5.229 LOC), rustc-lite (Cranelift JIT), go-lite, cpp-lite, lua-lite, ts-lite, jvm-lite, wasm-runtime, cc-lite, asm-x86, + editor nano-like (534 LOC, 11 tests).
+| FS | ClaudioOS | neural-os-core |
+|---|---|---|
+| ext4 | ✅ `claudio-ext4` (3.013 LOC, extent tree, bitmap) | ❌ (ext2 reader apenas) |
+| btrfs | ✅ `claudio-btrfs` (4.006 LOC, B-trees, CRC32C, COW) | ❌ |
+| NTFS | ✅ `claudio-ntfs` (3.561 LOC, MFT, data runs, B+ tree) | ❌ (reader apenas) |
+| FAT32 | ✅ Via `fatfs` crate | ✅ `fatfs` crate |
+| exFAT | ✅ | ✅ |
+| ext2 | ✅ | ✅ Reader apenas |
 
-**neural-os-core:** WASM via wasmi (ADR-0059 Caminho A ✅). RustCoder expert. Sem Python/JS/Go/C++ interpreters nativos.
+**Arquivos-chave:** `crates/ext4/src/lib.rs`, `crates/btrfs/src/lib.rs`, `crates/ntfs/src/lib.rs`
 
-### 2.8 Limine bootloader 0.5 (HHDM)
+### 2.8 Storage Drivers — **ClaudioOS tem AHCI + NVMe + USB Storage**
 
-Limine com HHDM (Higher-Half Direct Map): toda RAM física mapeada em virtual. Requests via `#[link_section = ".requests"]`. SSE/SSE2/AVX habilitados explicitamente em `_start` antes de qualquer coisa. `BaseRevision`, `StackSizeRequest`, `FramebufferRequest`, `HhdmRequest`, `MemoryMapRequest`, `RsdpRequest`, `ModuleRequest`.
+| Driver | ClaudioOS | neural-os-core |
+|---|---|---|
+| AHCI | ✅ `claudio-ahci` (2.139 LOC, HBA, port state machine, PRDT) | ✅ `k_nano/ahci.rs` (re-export) |
+| NVMe | ✅ `claudio-nvme` (2.563 LOC, queue pairs, doorbell, PRP) | ⚠️ `k_nano/storage/nvme.rs` (básico) |
+| USB Storage | ✅ `claudio-usb-storage` (1.357 LOC, BOT + SCSI) | ❌ |
+| ATA PIO | ✅ | ✅ (bug corrigido v1.1.5) |
 
-**neural-os-core:** bootloader 0.11.15 (vendor-patched). Bugs conhecidos: BIOS triple-fault, stack top boundary #PF em `0x180000000+`, `physical_memory_offset` runtime.
+### 2.9 USB — **ClaudioOS tem xHCI + USB Storage, neural-os-core só xHCI**
 
-### 2.9 Async executor cooperativo
+| Componente | ClaudioOS | neural-os-core |
+|---|---|---|
+| xHCI | ✅ `crates/xhci/` (context, device, driver, hid, registers, ring) | ✅ `k_nano/xhci.rs` (port scan apenas) |
+| USB Storage | ✅ `crates/usb-storage/` (BOT + SCSI) | ❌ |
+| HID | ✅ `crates/xhci/src/hid.rs` | ❌ |
 
-`executor.rs` (287 LOC): interrupt-driven com `hlt` quando idle. Sessions de agentes = async tasks. Eficiente para I/O-bound (rede, TLS, SSE).
+### 2.10 HDA Audio — **Ambos têm, implementações diferentes**
 
-**neural-os-core:** Scheduler por ticks. Melhor para compute-bound (LLM, MoE). Pior para I/O-bound.
+| Componente | ClaudioOS (`crates/hda/`) | neural-os-core |
+|---|---|---|
+| Codec communication | ✅ CORB/RIRB | ✅ |
+| Stream descriptors | ✅ SD0-SD3 | ✅ SD0 (capture) + SD1 (playback) |
+| DMA buffers | ✅ | ✅ |
+| Widget parsing | ✅ | ❌ |
 
-### 2.10 Dashboard tmux-style (6 pane types)
+### 2.11 Vulkan — **ClaudioOS tem, neural-os-core NÃO tem**
 
-`dashboard.rs` (2.024 LOC): split panes com layout binary tree, 6 tipos (Agent, Shell, Browser, FileManager, SysMonitor, Screensaver). Ctrl+B prefix (tmux compat). VTE parser + character grid.
+| Componente | ClaudioOS (`crates/vulkan/`) | neural-os-core |
+|---|---|---|
+| Instance/Device | ✅ | ❌ |
+| Buffer/Image | ✅ | ❌ |
+| Commands | ✅ | ❌ |
+| Descriptors | ✅ | ❌ |
+| Pipeline | ✅ | ❌ |
+| Renderpass | ✅ | ❌ |
+| Sync | ✅ | ❌ |
+| Memory | ✅ | ❌ |
+| Swapchain | ✅ | ❌ |
 
-**neural-os-core:** DisplayAgent com framebuffer BGRA32 + compositor + cards (ADR-0058). Orb + HUD. Mais rico visualmente, sem split panes tmux-style.
+### 2.12 Bootloader — **ClaudioOS usa Limine 0.5 HHDM**
 
-### 2.11 IPC entre agentes (message bus + channels + shared memory)
+| Aspecto | ClaudioOS | neural-os-core |
+|---|---|---|
+| Bootloader | **Limine 0.5** (HHDM, revision 2) | bootloader 0.11.15 (vendor-patched) |
+| HHDM | ✅ Toda RAM física mapeada em virtual | ❌ |
+| Requests | ✅ `#[link_section = ".requests"]` | ❌ |
+| SSE/SSE2/AVX | ✅ Habilitados em `_start` | ⚠️ |
+| Bugs conhecidos | Mínimos | BIOS triple-fault, #PF stack top `0x180000000+` |
 
-`ipc.rs` (783 LOC): `MessageBus` (inboxes per-agent, send/broadcast/recv), `Channel` (SPSC ring buffer 4KB named pipes), `SharedMemory` (named byte buffers grow-on-demand). 8 tools expostos ao Claude.
+### 2.13 Outras Features de Infraestrutura — **ClaudioOS tem mais polish**
 
-**neural-os-core:** EventBus (pub/sub). Sem message bus direta, sem channels SPSC, sem shared memory regions.
-
-### 2.12 Features de infraestrutura e polish
-
-Git client nativo (2.120 LOC, clone/push/pull over HTTPS), Email (967 LOC, SMTP/IMAP/MIME), NTP (383 LOC, drift correction), Browser DOM (wraith, 659 LOC), Firewall stateful (788 LOC), Disk encryption LUKS (905 LOC), Swap (499 LOC), Virtual consoles (372 LOC), Clipboard (108 LOC), Power management ACPI S3/S5 (921 LOC), Touchpad com gestures (734 LOC), Color themes 9 (365 LOC), Screensaver 5 modes (951 LOC), Boot splash + chime (325 LOC), Image viewer com dithering (413 LOC), Full-text search (494 LOC), Notifications (300 LOC), User accounts SHA-256+SSH key (440 LOC), Man pages (674 LOC), Cloudflare challenge solver, fw_cfg session persistence.
+| Feature | ClaudioOS | neural-os-core |
+|---|---|---|
+| Git client | ✅ 2.120 LOC (clone/push/pull HTTPS) | ❌ |
+| Email | ✅ 967 LOC (SMTP/IMAP/MIME) | ❌ |
+| NTP | ✅ 383 LOC (drift correction) | ❌ |
+| Browser DOM | ✅ 659 LOC (wraith) | ❌ |
+| Firewall | ✅ 788 LOC (stateful) | ❌ |
+| LUKS encryption | ✅ 905 LOC | ❌ |
+| Swap | ✅ 499 LOC | ❌ |
+| Virtual consoles | ✅ 372 LOC (Ctrl+Alt+F1-F6) | ❌ |
+| Clipboard | ✅ 108 LOC | ❌ |
+| Power mgmt | ✅ 921 LOC (ACPI S3/S5) | ❌ |
+| Touchpad | ✅ 734 LOC (gestures) | ❌ |
+| Color themes | ✅ 365 LOC (9 temas, ANSI 24-bit) | ❌ |
+| Screensaver | ✅ 951 LOC (5 modes) | ❌ |
+| Boot splash | ✅ 325 LOC | ❌ |
+| Image viewer | ✅ 413 LOC (dithering) | ❌ |
+| Full-text search | ✅ 494 LOC | ❌ |
+| Notifications | ✅ 300 LOC | ❌ |
+| User accounts | ✅ 440 LOC (SHA-256+SSH key) | ❌ |
+| Man pages | ✅ 674 LOC | ❌ |
+| Cloudflare solver | ✅ | ❌ |
+| fw_cfg persistence | ✅ | ❌ |
 
 ---
 
@@ -136,43 +248,53 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 | P2 | **VFS layer + BlockDevice trait** | `claudio-vfs` (2.871 LOC) | Unifica storage. Prepara para AHCI/NVMe. `Filesystem` trait plug-and-play. | Alto — design de referência sólida | ADR própria |
 | P3 | **AHCI + NVMe drivers** | `claudio-ahci` + `claudio-nvme` | Desbloqueia SSDs modernos. Neural está preso a ATA PIO legacy. | Alto | ADR própria |
 | P4 | **Migrar para Limine bootloader** | `main.rs` boot sequence | Elimina bugs bootloader 0.11 (triple-fault BIOS, #PF stack top). HHDM simplifica DMA. | Médio — migração bem documentada | ADR própria (supersede ADR-0039 parcial) |
+| P5 | **GPU (NVIDIA) driver** | `crates/gpu/` | Desbloqueia GPU compute para LLM/MoE. Trinity MoE precisa GPU. | Muito Alto — GSP-RM firmware complexo | ADR própria |
+| P6 | **WiFi (Intel) driver** | `crates/wifi/src/intel/` | Desbloqueia conectividade wireless real. AX200/201/210/211. | Alto — firmware ucode complexo | ADR própria |
+| P7 | **Intel i225 NIC driver** | `crates/intel-nic/src/i225.rs` | Suporte 2.5G Ethernet. Complementa e1000 existente. | Médio | ADR própria |
 
 ### 4.2 PRIORIDADE ALTA
 
 | # | Item | Origem ClaudioOS | Aderência neural | Esforço |
 |---|---|---|---|---|
-| P5 | **ext4 read-write** | `claudio-ext4` (3.013 LOC) | Montar partições Linux nativas. Depende de P2 (VFS) + P3 (BlockDevice). | Alto |
-| P6 | **IPC MessageBus + Channels** | `ipc.rs` (783 LOC) | Colaboração direta entre agentes (Cortex→RustCoder→HwIdentify). Complementa EventBus. | Médio |
-| P7 | **Linux binary compatibility** | `claudio-elf-loader` + `claudio-linux-compat` | Rodar binários Linux no bare-metal. Útil para ferramentas que não vale reescrever. | Alto |
-| P8 | **Async executor para I/O** (híbrido) | `executor.rs` (287 LOC) | Manter scheduler por ticks para compute (LLM/MoE). Adicionar async para I/O-bound (rede, TLS, SSE). Híbrido. | Médio |
+| P8 | **ext4 read-write** | `claudio-ext4` (3.013 LOC) | Montar partições Linux nativas. Depende de P2 (VFS) + P3 (BlockDevice). | Alto |
+| P9 | **btrfs read-write** | `claudio-btrfs` (4.006 LOC) | COW, snapshots, CRC32C. Para dados persistentes robustos. | Alto |
+| P10 | **NTFS read-write** | `claudio-ntfs` (3.561 LOC) | Interop Windows real. MFT, data runs, B+ tree. | Alto |
+| P11 | **USB Storage driver** | `claudio-usb-storage` (1.357 LOC) | BOT + SCSI. Para pendrives/HDs USB. Depende de xHCI (já temos). | Médio |
+| P12 | **Vulkan driver** | `crates/vulkan/` | GPU compute alternative. Para AMD/Intel GPUs. | Muito Alto |
+| P13 | **SMP completo (trampoline + work-stealing)** | `crates/smp/` | AP boot confiável, scheduler work-stealing. Melhor que tick-based para I/O. | Alto |
+| P14 | **IPC MessageBus + Channels** | `ipc.rs` (783 LOC) | Colaboração direta entre agentes (Cortex→RustCoder→HwIdentify). Complementa EventBus. | Médio |
+| P15 | **Linux binary compatibility** | `claudio-elf-loader` + `claudio-linux-compat` | Rodar binários Linux no bare-metal. Útil para ferramentas que não vale reescrever. | Alto |
+| P16 | **Async executor para I/O (híbrido)** | `executor.rs` (287 LOC) | Manter scheduler por ticks para compute (LLM/MoE). Adicionar async para I/O-bound (rede, TLS, SSE). Híbrido. | Médio |
 
 ### 4.3 PRIORIDADE MÉDIA
 
 | # | Item | Origem ClaudioOS | Aderência neural | Esforço |
 |---|---|---|---|---|
-| P9 | **Git client nativo** | `git.rs` (2.120 LOC) | SelfUpdate via pull. Útil para dev workflow. Depende de P1 (TLS). | Médio |
-| P10 | **NTP client** | `ntp.rs` (383 LOC) | Timestamps precisos para SESSION, logs, Cron. | Baixo |
-| P11 | **Bluetooth stack** | `claudio-bluetooth` (3.075 LOC) | HCI/L2CAP/GAP/GATT. Útil para periféricos sem fio. | Alto |
-| P12 | **Power management ACPI S3/S5** | `power.rs` (921 LOC) | Suspend/resume, battery. HW real. | Médio |
-| P13 | **Firewall stateful** | `firewall.rs` (788 LOC) | Packet filtering, allow/deny rules. Segurança de rede. | Médio |
-| P14 | **Disk encryption LUKS** | `encryption.rs` (905 LOC) | Criptografia de disco persistente. | Médio |
+| P17 | **Git client nativo** | `git.rs` (2.120 LOC) | SelfUpdate via pull. Útil para dev workflow. Depende de P1 (TLS). | Médio |
+| P18 | **NTP client** | `ntp.rs` (383 LOC) | Timestamps precisos para SESSION, logs, Cron. | Baixo |
+| P19 | **Bluetooth stack** | `claudio-bluetooth` (3.075 LOC) | HCI/L2CAP/GAP/GATT. Útil para periféricos sem fio. | Alto |
+| P20 | **Power management ACPI S3/S5** | `power.rs` (921 LOC) | Suspend/resume, battery. HW real. | Médio |
+| P21 | **Firewall stateful** | `firewall.rs` (788 LOC) | Packet filtering, allow/deny rules. Segurança de rede. | Médio |
+| P22 | **Disk encryption LUKS** | `encryption.rs` (905 LOC) | Criptografia de disco persistente. | Médio |
+| P23 | **HDA Audio completo** | `crates/hda/` | Codec parsing, widgets, multi-stream. Para TTS/STT real. | Médio |
+| P24 | **xHCI completo (HID + hubs)** | `crates/xhci/` | Teclado/mouse USB, hubs. Complementa port scan atual. | Médio |
 
 ### 4.4 PRIORIDADE BAIXA (polish — baixo esforço, alto valor percebido)
 
 | # | Item | Origem ClaudioOS | LOC | Esforço |
 |---|---|---|---|---|
-| P15 | Boot chime (PC speaker C5-E5-G5) | `boot_sound.rs` | 111 | Baixo |
-| P16 | Color themes (9 temas, ANSI 24-bit) | `themes.rs` | 365 | Baixo |
-| P17 | Virtual consoles (Ctrl+Alt+F1-F6) | `vconsole.rs` | 372 | Baixo |
-| P18 | Clipboard system-wide | `clipboard.rs` | 108 | Baixo |
-| P19 | Man pages built-in | `manpages.rs` | 674 | Baixo |
-| P20 | Screensaver (5 modes) | `screensaver.rs` | 951 | Baixo |
-| P21 | Notifications framework | `notifications.rs` | 300 | Baixo |
-| P22 | Image viewer com dithering | `image_viewer.rs` | 413 | Baixo |
-| P23 | Full-text search | `search.rs` | 494 | Médio |
-| P24 | User accounts (SHA-256+SSH key) | `users.rs` | 440 | Médio |
-| P25 | fw_cfg session persistence | `main.rs` | — | Baixo |
-| P26 | Cloudflare challenge solver | `main.rs` `https_with_cf()` | — | Médio |
+| P25 | Boot chime (PC speaker C5-E5-G5) | `boot_sound.rs` | 111 | Baixo |
+| P26 | Color themes (9 temas, ANSI 24-bit) | `themes.rs` | 365 | Baixo |
+| P27 | Virtual consoles (Ctrl+Alt+F1-F6) | `vconsole.rs` | 372 | Baixo |
+| P28 | Clipboard system-wide | `clipboard.rs` | 108 | Baixo |
+| P29 | Man pages built-in | `manpages.rs` | 674 | Baixo |
+| P30 | Screensaver (5 modes) | `screensaver.rs` | 951 | Baixo |
+| P31 | Notifications framework | `notifications.rs` | 300 | Baixo |
+| P32 | Image viewer com dithering | `image_viewer.rs` | 413 | Baixo |
+| P33 | Full-text search | `search.rs` | 494 | Médio |
+| P34 | User accounts (SHA-256+SSH key) | `users.rs` | 440 | Médio |
+| P35 | fw_cfg session persistence | `main.rs` | — | Baixo |
+| P36 | Cloudflare challenge solver | `main.rs` `https_with_cf()` | — | Médio |
 
 ### 4.5 NÃO ADOTAR (divergência arquitetural)
 
@@ -180,7 +302,7 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 |---|---|
 | Single-address-space sem isolamento | Mantemos Capability rings (ADR-0041) |
 | Thin-client Claude (nuvem) | Mantemos LLM on-device (BitNet + Trinity MoE) |
-| Async-only executor | Mantemos scheduler por ticks para compute; async só para I/O (P8 híbrido) |
+| Async-only executor | Mantemos scheduler por ticks para compute; async só para I/O (P16 híbrido) |
 | Win32/.NET/WinRT compat | Baixa aderência ao foco AI-nativo; esforço desproporcional |
 | Vulkan/DXVK | GPU compute já coberto por ADR-0048–0050 (NVIDIA/AMD/Intel) |
 | 12 linguagens interpretadas | WASM (ADR-0059) é caminho unificado; linguagens altas via WASM sidecar |
@@ -217,15 +339,25 @@ Ao adotar TLS (P1), **não copiar** `NoVerify` (implementar verificação de cer
 | #480 | VFS layer + BlockDevice trait unificado | ADR própria (P2) | ⏳ |
 | #481 | AHCI + NVMe drivers | ADR própria (P3) | ⏳ |
 | #482 | Migrar bootloader 0.11 → Limine 0.5 | ADR própria (P4, supersede ADR-0039) | ⏳ |
-| #483 | IPC MessageBus + Channels entre agentes | ADR própria (P6) | ⏳ |
-| #484 | Async executor híbrido (I/O async + compute ticks) | ADR própria (P8) | ⏳ |
-| #485 | Git client nativo over HTTPS | ADR própria (P9) | ⏳ |
+| #483 | IPC MessageBus + Channels entre agentes | ADR própria (P14) | ⏳ |
+| #484 | Async executor híbrido (I/O async + compute ticks) | ADR própria (P16) | ⏳ |
+| #485 | Git client nativo over HTTPS | ADR própria (P17) | ⏳ |
+| #486 | GPU (NVIDIA) driver para compute | ADR própria (P5) | ⏳ |
+| #487 | WiFi (Intel AX200/201/210/211) driver | ADR própria (P6) | ⏳ |
+| #488 | Intel i225 2.5G NIC driver | ADR própria (P7) | ⏳ |
+| #489 | ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ |
+| #490 | USB Storage driver | ADR própria (P11) | ⏳ |
+| #491 | Vulkan driver | ADR própria (P12) | ⏳ |
+| #492 | SMP completo (trampoline + work-stealing) | ADR própria (P13) | ⏳ |
+| #492 | IPC MessageBus + Channels | ADR própria (P14) | ⏳ |
+| #493 | Linux binary compatibility | ADR própria (P15) | ⏳ |
+| #494 | Async executor híbrido | ADR própria (P16) | ⏳ |
 
 ---
 
 ## 7. Conclusão
 
-ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que neural-os-core ainda não tem (TLS, VFS, AHCI/NVMe, Limine, IPC). A adoção é **seletiva**: priorizar o que desbloqueia capacidades essenciais (TLS para HTTPS, VFS para storage moderno, Limine para estabilidade de boot) sem comprometer a arquitetura cognitiva on-device que é nossa vantagem fundamental. Cada item adotado recebe ADR própria e entra no ciclo IDEA→ADR→sprint→TODO→STATE→SESSION.
+ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que neural-os-core ainda não tem (TLS, VFS, AHCI/NVMe, Limine, IPC, GPU, WiFi, NIC 2.5G, filesystems modernos, USB storage, Vulkan, SMP completo). A adoção é **seletiva**: priorizar o que desbloqueia capacidades essenciais (TLS para HTTPS, VFS para storage moderno, Limine para estabilidade de boot, GPU para compute, WiFi/NIC para conectividade real) sem comprometer a arquitetura cognitiva on-device que é nossa vantagem fundamental. Cada item adotado recebe ADR própria e entra no ciclo IDEA→ADR→sprint→TODO→STATE→SESSION.
 
 **Não adotar:** o modelo thin-client, single-address-space, async-only, Win32/.NET compat, Vulkan/DXVK, 12 linguagens — divergem do foco AI-nativo cognitivo ou são cobertos por ADRs existentes.
 
@@ -238,3 +370,58 @@ ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que
 - Código lido integralmente: `main.rs`, `agent_loop.rs`, `vectordb.rs`, `ipc.rs`, `tls.rs`, `kex.rs`, `win32/lib.rs`, `Cargo.toml`
 - ADRs neural-os-core: 0016 (Network), 0039 (Boot), 0040 (Filesystem), 0041 (Capability), 0055 (SMP), 0057 (Compute), 0059 (Runtime App Factory)
 - ADR-0063: RAG DB in-kernel (companheira — vector DB)
+
+---
+
+## Apêndice A: Mapeamento de Crates ClaudioOS → neural-os-core
+
+| ClaudioOS Crate | neural-os-core Equivalente | Status |
+|---|---|---|
+| `crates/gpu/` | ❌ Nenhum | **Gap crítico** |
+| `crates/nvme/` | `k_nano/storage/nvme.rs` | Parcial |
+| `crates/intel-nic/` | `neural-kernel/src/e1000.rs` | Parcial (falta i225) |
+| `crates/wifi/` | ❌ Nenhum | **Gap crítico** |
+| `crates/smp/` | `k_nano/smp/` | Parcial |
+| `crates/vfs/` | `k_nano/vfs/` + `neural-kernel/src/vfs/` | Parcial |
+| `crates/ext4/` | ❌ (ext2 reader apenas) | **Gap** |
+| `crates/btrfs/` | ❌ | **Gap** |
+| `crates/ntfs/` | ❌ (reader apenas) | **Gap** |
+| `crates/ahci/` | `k_nano/ahci.rs` (re-export) | OK |
+| `crates/usb-storage/` | ❌ | **Gap** |
+| `crates/xhci/` | `k_nano/xhci.rs` | Parcial (port scan apenas) |
+| `crates/hda/` | `neural-kernel/src/audio/hda.rs` | Parcial |
+| `crates/vulkan/` | ❌ | **Gap** |
+| `crates/ext4/` | ❌ | **Gap** |
+| `crates/btrfs/` | ❌ | **Gap** |
+| `crates/ntfs/` | ❌ | **Gap** |
+| `crates/claudio-vfs/` | `k_nano/vfs/` | Parcial |
+| `crates/claudio-ext4/` | ❌ | **Gap** |
+| `crates/claudio-btrfs/` | ❌ | **Gap** |
+| `crates/claudio-ntfs/` | ❌ | **Gap** |
+| `crates/claudio-ahci/` | `k_nano/ahci.rs` | OK |
+| `crates/claudio-nvme/` | `k_nano/storage/nvme.rs` | Parcial |
+| `crates/claudio-usb-storage/` | ❌ | **Gap** |
+| `crates/claudio-xhci/` | `k_nano/xhci.rs` | Parcial |
+| `crates/claudio-hda/` | `neural-kernel/src/audio/hda.rs` | Parcial |
+| `crates/claudio-vulkan/` | ❌ | **Gap** |
+| `crates/claudio-elf-loader/` | ❌ | **Gap** |
+| `crates/claudio-linux-compat/` | ❌ | **Gap** |
+| `crates/claudio-pe-loader/` | ❌ | Não adotar |
+| `crates/claudio-win32/` | ❌ | Não adotar |
+| `crates/claudio-dotnet-clr/` | ❌ | Não adotar |
+| `crates/claudio-winrt/` | ❌ | Não adotar |
+| `crates/claudio-dxvk-bridge/` | ❌ | Não adotar |
+
+---
+
+## Apêndice B: Estimativa de Esforço Total (Prioridade Máxima + Alta)
+
+| Prioridade | Itens | Esforço Estimado (LOC) | ADRs Necessárias |
+|---|---|---|---|
+| **Máxima** | P1-P7 | ~15.000 LOC | 7 |
+| **Alta** | P8-P16 | ~35.000 LOC | 9 |
+| **Média** | P17-P24 | ~12.000 LOC | 8 |
+| **Baixa** | P25-P36 | ~5.000 LOC | 12 |
+| **Total** | **36 itens** | **~67.000 LOC** | **36 ADRs** |
+
+> **Nota:** Esforço baseado em LOC do ClaudioOS + overhead de integração no neural-os-core (adaptação de traits, testes em HW real, documentação). Itens "Não adotar" excluídos.

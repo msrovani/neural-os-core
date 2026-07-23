@@ -43,16 +43,9 @@ impl BrowserAgent {
         }
     }
 
-    /// Fetch via net_bridge → neural-kernel NETSTACK (DNS + HTTP). HTTPS deny até #123.
+    /// Fetch via net_bridge → neural-kernel NETSTACK (DNS + HTTP/HTTPS).
     fn fetch_page(url: &str) -> Result<(String, Vec<u8>), &'static str> {
-        if url.starts_with("https://") || url.starts_with("HTTPS://") {
-            k_nano::slog_hermes!("BROWSER", "info", "HTTPS denied (tls_not_ready #123)");
-            return Err("tls_not_ready");
-        }
-        if !url.starts_with("http://") && !url.starts_with("HTTP://") {
-            return Err("Invalid URL");
-        }
-        match crate::net_bridge::http_get_url(url.trim()) {
+        match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
             Ok(response) => {
                 k_nano::slog_hermes!("BROWSER", "info", "{} bytes de {}", response.len(), url);
                 Ok((String::from(url), response))

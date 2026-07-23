@@ -857,11 +857,8 @@ impl Agent for HermesAgent {
                             let preview = if text.len() > 200 { &text[..200] } else { text };
                             alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
                         }
-                        Err("tls_not_ready") => {
-                            String::from("Fetch: HTTPS requer TLS (#123) — use http://")
-                        }
                         Err(e) => alloc::format!(
-                            "Fetch falhou: {} (formato: /fetch http://host[:port]/path)",
+                            "Fetch falhou: {} (formato: /fetch http://host[:port]/path ou https://host[:port]/path)",
                             e
                         ),
                     }

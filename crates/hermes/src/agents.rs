@@ -763,17 +763,14 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::Fetch(ref url) => {
-                    match crate::net_bridge::http_get_url(url.trim()) {
+                    match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
                         Ok(body) => {
                             let text = core::str::from_utf8(&body).unwrap_or("(binary)");
                             let preview = if text.len() > 200 { &text[..200] } else { text };
                             alloc::format!("Fetch OK ({} bytes):\n{}", body.len(), preview)
                         }
-                        Err("tls_not_ready") => {
-                            String::from("Fetch: HTTPS requer TLS (#123) — use http://")
-                        }
                         Err(e) => alloc::format!(
-                            "Fetch falhou: {} (formato: /fetch http://host[:port]/path)",
+                            "Fetch falhou: {} (formato: /fetch http://host[:port]/path ou https://host[:port]/path)",
                             e
                         ),
                     }

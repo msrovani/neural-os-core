@@ -13,10 +13,6 @@ impl RssAgent {
     }
 
     pub fn fetch(&self, feed_url: &str, max_items: usize) -> Vec<(String, String)> {
-        if feed_url.starts_with("https://") {
-            kjson!("RSS", "agent", "err", "msg", "tls_not_ready");
-            return Vec::new();
-        }
         match crate::net::resolve_and_http_get_safe(feed_url) {
             Ok(data) => {
                 let text = from_utf8(&data).unwrap_or("");

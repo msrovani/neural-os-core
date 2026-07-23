@@ -1,11 +1,13 @@
 //! ADR-0016 N4 — cliente TLS 1.3 (`embedded-tls`) sobre NETSTACK.
-//! Trust: UnsecureProvider (sem verify de cert) até PKI/TOFU real.
+//! Trust: HybridProvider (pins + TOFU) — ver tls_trust.rs.
 //! Soft crypto: `polyval_force_soft` + `aes_force_soft` + `sha2/force-soft` (.cargo/config).
+//! Alinhamento 16-byte para AES-NI via `alloc_aligned_buf()`.
 
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
+use core::mem::align_of;
 
 use embedded_io::{ErrorType, Read, Write};
 use embedded_tls::blocking::TlsConnection;
@@ -16,6 +18,18 @@ use smoltcp::iface::SocketHandle;
 use crate::hw_rng::HardwareRandom;
 use crate::netstack::NetStack;
 use crate::tls_trust::HybridProvider;
+
+/// Aloca buffer com alinhamento 16-byte para AES-NI (evita #GP/#DF).
+/// Retorna Vec com capacidade `size` e ponteiro alinhado a 16 bytes.
+pub fn alloc_aligned_buf(size: usize) -> Vec<u8> {
+    let align = 16;
+    let layout = core::alloc::Layout::from_size_align(size, align).expect("alloc_aligned_buf layout");
+    let ptr = unsafe { alloc::alloc::alloc(layout) };
+    if ptr.is_null() {
+        alloc::alloc::handle_alloc_error(layout);
+    }
+    unsafe { Vec::from_raw_parts(ptr, 0, size) }
+}
 
 /// RNG kernel → `rand_core` / `embedded-tls`.
 pub struct KernelRng;
@@ -131,8 +145,9 @@ pub fn https_get_on_stack(
         .ok_or("tls_tcp_connect")?;
     k_nano::slog_bin!("TLS", "info", "step=tcp_ok");
 
-    let mut read_buf = vec![0u8; 16_384];
-    let mut write_buf = vec![0u8; 16_384];
+    // Buffers alinhados a 16-byte para AES-NI (ClaudioOS pattern)
+    let mut read_buf = alloc_aligned_buf(16_384);
+    let mut write_buf = alloc_aligned_buf(16_384);
 
     let result = (|| {
         let io = NetTcpIo::new(stack, handle, now);

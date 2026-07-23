@@ -5,13 +5,19 @@ use alloc::vec::Vec;
 use spin::Mutex;
 
 pub type HttpGetUrlFn = fn(&str) -> Result<Vec<u8>, &'static str>;
+pub type ResolveAndHttpGetSafeFn = fn(&str) -> Result<Vec<u8>, &'static str>;
 pub type TcpXferFn = fn([u8; 4], u16, &[u8]) -> Option<Vec<u8>>;
 
 static HTTP_GET_URL: Mutex<Option<HttpGetUrlFn>> = Mutex::new(None);
+static RESOLVE_AND_HTTP_GET_SAFE: Mutex<Option<ResolveAndHttpGetSafeFn>> = Mutex::new(None);
 static TCP_XFER: Mutex<Option<TcpXferFn>> = Mutex::new(None);
 
 pub fn register_http_get_url(f: HttpGetUrlFn) {
     *HTTP_GET_URL.lock() = Some(f);
+}
+
+pub fn register_resolve_and_http_get_safe(f: ResolveAndHttpGetSafeFn) {
+    *RESOLVE_AND_HTTP_GET_SAFE.lock() = Some(f);
 }
 
 pub fn register_tcp_xfer(f: TcpXferFn) {
@@ -22,6 +28,13 @@ pub fn http_get_url(url: &str) -> Result<Vec<u8>, &'static str> {
     match *HTTP_GET_URL.lock() {
         Some(f) => f(url),
         None => Err("net_bridge: kernel HTTP not registered"),
+    }
+}
+
+pub fn resolve_and_http_get_safe(url: &str) -> Result<Vec<u8>, &'static str> {
+    match *RESOLVE_AND_HTTP_GET_SAFE.lock() {
+        Some(f) => f(url),
+        None => Err("net_bridge: kernel HTTPS not registered"),
     }
 }
 

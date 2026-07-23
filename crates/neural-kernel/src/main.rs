@@ -1554,6 +1554,7 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     crate::network_agent::bootstrap_early();
     // Hermes FE → bin NETSTACK (Browser/Search/Market/SelfUpdate)
     hermes_crate::net_bridge::register_http_get_url(crate::net::resolve_and_http_get_safe);
+    hermes_crate::net_bridge::register_resolve_and_http_get_safe(crate::net::resolve_and_http_get_safe);
     hermes_crate::net_bridge::register_tcp_xfer(|host, port, data| unsafe {
         crate::net::tcp_exchange(host, port, data)
     });
