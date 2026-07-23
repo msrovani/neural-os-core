@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Gera imagem exFAT (default) ou FAT32 para QEMU e HW real.
+"""Gera imagem FAT32 (default) ou exFAT para QEMU e HW real.
+BOOT.LOG em disco funciona em FAT32 (pré-alocado 256KB). exFAT opt-in com --exfat.
 Inclui: .bitnet (incl. BITNET-2B se existir), firmware blobs, CONFIG.TXT,
 Device LEGO goldens (LEGO*.MD / LEGOIDX.TXT — ADR-0056).
 
 Uso:
-  python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (exFAT)
-  python tools/build_image.py --fat32          # legado FAT32
+  python tools/build_image.py                  # QEMU -> target/disk_qemu.raw (FAT32)
+  python tools/build_image.py --exfat          # experimental exFAT (sem BOOT.LOG)
   python tools/build_image.py --hw             # HW   -> target/disk_hw.raw
   python tools/build_image.py --hw --unified   # USB  -> target/usb_hw.img (ESP+dados)
   python tools/build_image.py --size 512 --output target/disk_qemu.raw
@@ -58,9 +59,9 @@ def parse_args():
         help="Com --unified: se faltar uefi.img, roda cargo build -p boot",
     )
     p.add_argument(
-        "--fat32",
+        "--exfat",
         action="store_true",
-        help="Usar mkfat32.py em vez de mkexfat.py (legado)",
+        help="Usar mkexfat.py em vez de mkfat32.py (experimental, sem BOOT.LOG)",
     )
     return p.parse_args()
 
@@ -131,8 +132,8 @@ def main():
         print(f"[ERRO] pack_device_legos.py exit={r_lego.returncode}: {(r_lego.stderr or '')[:400]}")
         sys.exit(r_lego.returncode)
 
-    maker = "mkfat32.py" if args.fat32 else "mkexfat.py"
-    fs_name = "FAT32" if args.fat32 else "exFAT"
+    maker = "mkexfat.py" if args.exfat else "mkfat32.py"
+    fs_name = "exFAT" if args.exfat else "FAT32"
     cmd = [
         sys.executable,
         os.path.join(ROOT, "tools", maker),
