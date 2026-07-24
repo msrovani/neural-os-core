@@ -1,5 +1,4 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
-use alloc::vec::Vec;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompressionTier {

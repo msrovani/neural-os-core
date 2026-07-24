@@ -107,14 +107,37 @@ pub unsafe fn bringup_boot_msc() -> Option<MscDevice> {
 
 /// ADR-0062 P24a: HID boot keyboard em porta CCS distinta do MSC.
 pub unsafe fn bringup_hid_keyboard() -> bool {
-    let (max_ports, msc_port) = {
+    bringup_hid_boot(HidBootKind::Keyboard)
+}
+
+/// ADR-0062 P24b: HID boot mouse em porta CCS ≠ MSC e ≠ kb.
+pub unsafe fn bringup_hid_mouse() -> bool {
+    bringup_hid_boot(HidBootKind::Mouse)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HidBootKind {
+    Keyboard,
+    Mouse,
+}
+
+unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
+    let (max_ports, msc_port, hid_port, mouse_port) = {
         let g = XHCI_STATE.lock();
         let Some(st) = g.as_ref() else { return false };
-        (st.max_ports, st.msc_port)
+        (st.max_ports, st.msc_port, st.hid_port, st.mouse_port)
+    };
+    let want_proto: u8 = match kind {
+        HidBootKind::Keyboard => 1,
+        HidBootKind::Mouse => 2,
+    };
+    let tag = match kind {
+        HidBootKind::Keyboard => "P24a",
+        HidBootKind::Mouse => "P24b",
     };
 
     for port in 1..=max_ports {
-        if port == msc_port {
+        if port == msc_port || port == hid_port || port == mouse_port {
             continue;
         }
         let ccs = {
@@ -135,7 +158,7 @@ pub unsafe fn bringup_hid_keyboard() -> bool {
             let s = ((v >> 10) & 0xF) as u8;
             if s == 0 { 3 } else { s }
         };
-        crate::slog_nano!("USB", "hid", "tentando porta {} speed={}", port, speed);
+        crate::slog_nano!("USB", "hid", "{} tentando porta {} speed={}", tag, port, speed);
 
         if !reset_port(port) {
             continue;
@@ -145,49 +168,148 @@ pub unsafe fn bringup_hid_keyboard() -> bool {
             _ => continue,
         };
         let max_packet: u16 = match speed {
-            2 => 8, // Low-speed keyboard
+            2 => 8, // Low-speed
             1 => 64,
             _ => 64,
         };
         if !address_device(slot, port, speed, max_packet) {
-            crate::slog_nano!("USB", "hid", "Address FAIL slot={}", slot);
+            crate::slog_nano!("USB", "hid", "{} Address FAIL slot={}", tag, slot);
             continue;
         }
+
+        // Hub class (0x09) — Labor 15: hub descriptor + port power (ADR-0073)
+        if let Some(dev_class) = ep0_get_device_class(slot, max_packet) {
+            if dev_class == 0x09 {
+                let mut hdesc = [0u8; 16];
+                if ep0_control_in(slot, max_packet, 0xA0, 0x06, 0x2900, 0, &mut hdesc) {
+                    let nports = hdesc[2];
+                    super::hub::mark_hub_ok(nports);
+                    // PORT_POWER (feature 8) ports 1..min(nports,8)
+                    for p in 1..=nports.min(8) {
+                        let _ = ep0_class_no_data(slot, max_packet, 0x23, 3, 8, p as u16);
+                    }
+                    // Labor 21: GetPortStatus (class IN) — CCS bit0
+                    let mut child_n = 0u8;
+                    for p in 1..=nports.min(8) {
+                        let mut st = [0u8; 4];
+                        if ep0_control_in(slot, max_packet, 0xA3, 0, 0, p as u16, &mut st) {
+                            let status = u16::from_le_bytes([st[0], st[1]]);
+                            if status & 0x1 != 0 {
+                                child_n = child_n.saturating_add(1);
+                                if !super::hub::hub_child_ok() {
+                                    super::hub::mark_hub_child(p);
+                                    crate::slog_nano!(
+                                        "USB",
+                                        "hub",
+                                        "hub=CHILD port={} ccs=1 (TT enum MVP; Address Device residual)",
+                                        p
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    crate::slog_nano!(
+                        "USB",
+                        "hub",
+                        "hub=OK port={} slot={} ports={} children={} (P24c L21)",
+                        port,
+                        slot,
+                        nports,
+                        child_n
+                    );
+                } else {
+                    crate::slog_nano!(
+                        "USB",
+                        "hub",
+                        "hub=AWAITING port={} slot={} (hub desc fail)",
+                        port,
+                        slot
+                    );
+                }
+                continue;
+            }
+        }
+        let proto = ep0_peek_hid_boot_protocol(slot, max_packet).unwrap_or(0);
+        if proto != 0 && proto != want_proto {
+            crate::slog_nano!(
+                "USB",
+                "hid",
+                "{} skip port={} proto={} (want {})",
+                tag,
+                port,
+                proto,
+                want_proto
+            );
+            continue;
+        }
+        // proto==0: best-effort (descriptor curto) — tenta mesmo assim
+
         let _ = ep0_set_configuration(slot, max_packet, 1);
-        // SET_PROTOCOL(0) boot — class interface request
         let _ = ep0_hid_set_protocol(slot, max_packet, 0);
         let _ = ep0_hid_set_idle(slot, max_packet);
 
-        if !configure_hid_interrupt_ep(slot, port, speed, 8) {
-            crate::slog_nano!("USB", "hid", "Configure EP FAIL slot={}", slot);
+        let report_mps: u16 = match kind {
+            HidBootKind::Keyboard => 8,
+            HidBootKind::Mouse => 4,
+        };
+        if !configure_hid_interrupt_ep(slot, port, speed, report_mps, kind) {
+            crate::slog_nano!("USB", "hid", "{} Configure EP FAIL slot={}", tag, slot);
             continue;
         }
 
         {
             let mut g = XHCI_STATE.lock();
             if let Some(ref mut st) = *g {
-                st.hid_ready = true;
-                st.hid_slot = slot;
-                st.hid_last_usage = 0;
-                crate::slog_nano!(
-                    "USB",
-                    "hid",
-                    "P24a HID boot keyboard OK slot={} port={}",
-                    slot,
-                    port
-                );
+                match kind {
+                    HidBootKind::Keyboard => {
+                        st.hid_ready = true;
+                        st.hid_slot = slot;
+                        st.hid_port = port;
+                        st.hid_last_usage = 0;
+                        crate::slog_nano!(
+                            "USB",
+                            "hid",
+                            "P24a HID boot keyboard OK slot={} port={}",
+                            slot,
+                            port
+                        );
+                    }
+                    HidBootKind::Mouse => {
+                        st.mouse_ready = true;
+                        st.mouse_slot = slot;
+                        st.mouse_port = port;
+                        st.mouse_last = [0; 4];
+                        crate::slog_nano!(
+                            "USB",
+                            "hid",
+                            "P24b HID boot mouse OK slot={} port={}",
+                            slot,
+                            port
+                        );
+                    }
+                }
             }
         }
-        // Arm first interrupt read
         {
             let mut g = XHCI_STATE.lock();
             if let Some(ref mut st) = *g {
-                super::queue_hid_interrupt_read(st);
+                match kind {
+                    HidBootKind::Keyboard => super::queue_hid_interrupt_read(st),
+                    HidBootKind::Mouse => super::queue_mouse_interrupt_read(st),
+                }
             }
         }
         return true;
     }
-    crate::slog_nano!("USB", "hid", "P24a: nenhum HID boot em root ports (skip MSC port={})", msc_port);
+    crate::slog_nano!(
+        "USB",
+        "hid",
+        "{}: nenhum HID boot em root ports (skip MSC={} kb={} mouse={})",
+        tag,
+        msc_port,
+        hid_port,
+        mouse_port
+    );
     false
 }
 
@@ -258,7 +380,130 @@ unsafe fn ep0_class_no_data(
     true // best-effort — alguns devices ignoram SET_PROTOCOL
 }
 
-unsafe fn configure_hid_interrupt_ep(slot: u8, port: u8, speed: u8, max_packet: u16) -> bool {
+unsafe fn ep0_get_device_class(slot: u8, ep0_mps: u16) -> Option<u8> {
+    let mut buf = [0u8; 18];
+    if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0100, 0, &mut buf) {
+        return None;
+    }
+    // bDescriptorType == 1 (DEVICE), bDeviceClass @ offset 4
+    if buf[1] != 0x01 {
+        return None;
+    }
+    Some(buf[4])
+}
+
+/// Procura bInterfaceProtocol em config truncada (HID boot: 1=kbd, 2=mouse).
+unsafe fn ep0_peek_hid_boot_protocol(slot: u8, ep0_mps: u16) -> Option<u8> {
+    let mut buf = [0u8; 64];
+    if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0200, 0, &mut buf) {
+        return None;
+    }
+    let mut i = 0usize;
+    while i + 9 <= buf.len() {
+        let blen = buf[i] as usize;
+        if blen < 2 {
+            break;
+        }
+        let dtype = buf[i + 1];
+        if dtype == 0x04 && blen >= 9 {
+            // Interface: class@5 subclass@6 protocol@7
+            let class = buf[i + 5];
+            let sub = buf[i + 6];
+            let proto = buf[i + 7];
+            if class == 0x03 && sub == 0x01 && (proto == 1 || proto == 2) {
+                return Some(proto);
+            }
+        }
+        i += blen;
+    }
+    None
+}
+
+/// Control IN: Setup + Data IN + Status OUT.
+unsafe fn ep0_control_in(
+    slot: u8,
+    _ep0_mps: u16,
+    bm_req: u8,
+    b_req: u8,
+    w_value: u16,
+    w_index: u16,
+    data: &mut [u8],
+) -> bool {
+    let data_pa = match alloc_phys(1) {
+        Some(p) => p,
+        None => return false,
+    };
+    core::ptr::write_bytes(data_pa.1, 0, 4096);
+    let len = data.len().min(512) as u16;
+    let pkt: [u8; 8] = [
+        bm_req,
+        b_req,
+        (w_value & 0xFF) as u8,
+        (w_value >> 8) as u8,
+        (w_index & 0xFF) as u8,
+        (w_index >> 8) as u8,
+        (len & 0xFF) as u8,
+        (len >> 8) as u8,
+    ];
+
+    let tr_va = {
+        let g = XHCI_STATE.lock();
+        g.as_ref().unwrap().tr_va
+    };
+    let trb0 = tr_va as *mut u32;
+    // Setup Stage, TRT=IN data (3), IDT=1
+    trb0.add(0).write_volatile(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]));
+    trb0.add(1).write_volatile(u32::from_le_bytes([pkt[4], pkt[5], pkt[6], pkt[7]]));
+    trb0.add(2).write_volatile(8);
+    trb0.add(3).write_volatile((2u32 << 10) | (3u32 << 16) | (1 << 6) | 1);
+
+    // Data Stage IN (type 3), DIR=IN
+    let trb1 = (tr_va as *mut u32).add(4);
+    trb1.add(0).write_volatile(data_pa.0 as u32);
+    trb1.add(1).write_volatile((data_pa.0 >> 32) as u32);
+    trb1.add(2).write_volatile(len as u32);
+    trb1.add(3).write_volatile((3u32 << 10) | (1 << 16) | 1);
+
+    // Status Stage OUT (type 4), DIR=OUT (0), IOC
+    let trb2 = (tr_va as *mut u32).add(8);
+    trb2.add(0).write_volatile(0);
+    trb2.add(1).write_volatile(0);
+    trb2.add(2).write_volatile(0);
+    trb2.add(3).write_volatile((4u32 << 10) | (1 << 5) | 1);
+
+    core::arch::asm!("sfence", options(nostack, preserves_flags));
+    {
+        let g = XHCI_STATE.lock();
+        let st = g.as_ref().unwrap();
+        w32(st.base, st.db_off + (slot as u64) * 4, 1);
+    }
+    let mut ok = false;
+    for _ in 0..200_000 {
+        let g = XHCI_STATE.lock();
+        let Some(st) = g.as_ref() else { return false };
+        let evt = st.er_va as *const u32;
+        let trb_type = (evt.add(3).read_volatile() >> 10) & 0x3F;
+        if trb_type == 32 {
+            let cc = (evt.add(2).read_volatile() >> 24) & 0xFF;
+            ok = cc == 1 || cc == 13;
+            break;
+        }
+        drop(g);
+        core::hint::spin_loop();
+    }
+    if ok {
+        core::ptr::copy_nonoverlapping(data_pa.1, data.as_mut_ptr(), data.len());
+    }
+    ok
+}
+
+unsafe fn configure_hid_interrupt_ep(
+    slot: u8,
+    port: u8,
+    speed: u8,
+    max_packet: u16,
+    kind: HidBootKind,
+) -> bool {
     let tr = match alloc_phys(1) {
         Some(t) => t,
         None => return false,
@@ -292,7 +537,8 @@ unsafe fn configure_hid_interrupt_ep(slot: u8, port: u8, speed: u8, max_packet: 
     ep_in.add(2).write_volatile(tr.0 as u32 | 1);
     ep_in.add(3).write_volatile((tr.0 >> 32) as u32);
     // Average TRB length / Interval
-    ep_in.add(4).write_volatile(8 | ((4u32) << 16)); // interval ~8ms for FS/LS
+    let avg = max_packet as u32;
+    ep_in.add(4).write_volatile(avg | ((4u32) << 16)); // interval ~8ms for FS/LS
 
     if !issue_address_or_config_cmd(ctx.0, slot, 12) {
         return false;
@@ -305,8 +551,16 @@ unsafe fn configure_hid_interrupt_ep(slot: u8, port: u8, speed: u8, max_packet: 
     {
         let mut g = XHCI_STATE.lock();
         if let Some(ref mut st) = *g {
-            st.hid_tr_va = tr.0 + pmoff;
-            st.hid_report_va = report.0 + pmoff;
+            match kind {
+                HidBootKind::Keyboard => {
+                    st.hid_tr_va = tr.0 + pmoff;
+                    st.hid_report_va = report.0 + pmoff;
+                }
+                HidBootKind::Mouse => {
+                    st.mouse_tr_va = tr.0 + pmoff;
+                    st.mouse_report_va = report.0 + pmoff;
+                }
+            }
         }
     }
     true

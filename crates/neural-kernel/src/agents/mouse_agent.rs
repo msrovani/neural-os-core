@@ -200,6 +200,10 @@ impl Agent for MouseAgent {
 
         // Poll aux + IRQ — WHPX às vezes atrasa IRQ12
         k_nano::interrupts::mouse_poll_bytes();
+        // ADR-0062 P24b: USB HID boot mouse → mesmo path ABS/packet
+        unsafe {
+            let _ = crate::xhci::poll_mouse();
+        }
 
         let packet = LAST_MOUSE_PACKET.swap(0, core::sync::atomic::Ordering::Acquire);
         if packet == 0 {

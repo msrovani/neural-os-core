@@ -110,6 +110,9 @@ fn isa_from_u32(v: u32) -> Option<IsaTag> {
         7 => Some(IsaTag::Gfx1030),
         8 => Some(IsaTag::Gen9),
         9 => Some(IsaTag::Dg2),
+        10 => Some(IsaTag::Sm52),
+        11 => Some(IsaTag::Sm70),
+        12 => Some(IsaTag::Sm80),
         _ => None,
     }
 }

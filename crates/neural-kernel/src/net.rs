@@ -1,5 +1,6 @@
 use crate::rtl8139::Rtl8139Driver;
 use crate::e1000::{E1000Driver, REG_STATUS};
+use crate::i225::I225Driver;
 use crate::{println};
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
@@ -11,6 +12,7 @@ pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
 pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
 pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
+pub static I225: spin::Mutex<Option<I225Driver>> = spin::Mutex::new(None);
 pub static VIRTIO_DEV: spin::Mutex<Option<crate::virtio_net::VirtIoDevice>> = spin::Mutex::new(None);
 pub static NETSTACK: spin::Mutex<Option<crate::netstack::NetStack>> = spin::Mutex::new(None);
 
@@ -187,6 +189,62 @@ pub unsafe fn init_driver_e1000() -> bool {
         }
     }
     k_nano::slog_hermes!("Net", "info", "e1000 nao encontrado.");
+    false
+}
+
+/// ADR-0062 P7 / Labor 2: Intel I225/I226 (igc). Fallback quando e1000 ausente.
+/// Honesty: QEMU não emula i225 — path real = HW; aqui só probe+init se DID casa.
+pub unsafe fn init_driver_i225() -> bool {
+    if I225.lock().is_some() {
+        return true;
+    }
+    let pci_devices = crate::pci::scan_pci();
+    for dev in &pci_devices {
+        if !crate::i225::is_i225_family(dev.vendor_id, dev.device_id) {
+            continue;
+        }
+        k_nano::slog_hermes!(
+            "Net",
+            "i225",
+            "detectado {:02x}:{:02x}.{:x} DID={:#06x}",
+            dev.bus,
+            dev.device,
+            dev.function,
+            dev.device_id
+        );
+        let mut driver = match I225Driver::new(dev) {
+            Some(d) => d,
+            None => {
+                k_nano::slog_hermes!("Net", "i225", "new() FAIL");
+                return false;
+            }
+        };
+        if driver.init() {
+            let mac = driver.mac();
+            NET_CONFIG.lock().mac = mac;
+            *I225.lock() = Some(driver);
+            k_nano::slog_hermes!(
+                "Net",
+                "i225",
+                "iniciado MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                mac[0],
+                mac[1],
+                mac[2],
+                mac[3],
+                mac[4],
+                mac[5]
+            );
+            let _ = crate::EVENT_BUS.publish(crate::Event {
+                id: 0,
+                topic: alloc::string::String::from("HW_NET_I225"),
+                payload: alloc::vec![mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]],
+                token: crate::CapabilityToken::Legacy(1),
+            });
+            return true;
+        }
+        k_nano::slog_hermes!("Net", "i225", "init() FAIL DID={:#06x}", dev.device_id);
+    }
+    k_nano::slog_hermes!("Net", "i225", "nao encontrado (esperado em QEMU — sem emu i225)");
     false
 }
 
@@ -377,6 +435,18 @@ pub unsafe fn dns_resolve_host(hostname: &str) -> Option<[u8; 4]> {
     stack.dns_resolve(hostname, dns)
 }
 
+/// UDP exchange raw (NTP etc.) — payload in/out sem headers L2/L3/L4.
+pub fn udp_exchange_safe(dst: [u8; 4], dst_port: u16, payload: &[u8]) -> Option<Vec<u8>> {
+    let mut stack_guard = NETSTACK.lock();
+    let stack = stack_guard.as_mut()?;
+    stack.udp_exchange_raw(dst, dst_port, payload)
+}
+
+/// DNS resolve safe (bridge Hermes).
+pub fn dns_resolve_host_safe(hostname: &str) -> Option<[u8; 4]> {
+    unsafe { dns_resolve_host(hostname) }
+}
+
 /// Resolve hostname + HTTP(S) GET. Body only (headers stripped).
 /// `https://` → TLS N4 (`https_get`); never silently strip to port 80.
 pub unsafe fn resolve_and_http_get(url: &str) -> Result<Vec<u8>, &'static str> {
@@ -462,7 +532,7 @@ pub fn log_tls_status_boot() {
         k_nano::slog_bin!(
             "TLS",
             "info",
-            "VERDICT=WIRED trust=hybrid crate=embedded-tls-0.19"
+            "VERDICT=WIRED trust=hybrid+certverify crate=embedded-tls-0.19 pins=TLSPINS.BIN"
         );
     }
 }

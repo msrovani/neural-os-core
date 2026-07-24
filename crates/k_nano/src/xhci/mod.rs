@@ -1,11 +1,15 @@
-//! xHCI host — init + bulk + MSC bring-up (ADR-0062 P11 / #490).
+//! xHCI host — init + bulk + MSC + HID kb/mouse (ADR-0062 P11/P24).
 //! Registradores: Cap @ BAR0; Op = Cap+CAPLENGTH; DBOFF/RTSOFF no Cap space.
 
 use core::sync::atomic::Ordering;
 use crate::memory::{PHYS_MEM_OFFSET, GLOBAL_ALLOCATOR};
 
 mod bringup;
-pub use bringup::{bringup_boot_msc, bringup_hid_keyboard};
+mod hub;
+pub use bringup::{bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse};
+pub use hub::{
+    hub_address_boot_smoke, hub_address_ok, hub_child_ok, hub_ok, hub_ports, mark_hub_address_device,
+};
 
 pub struct XhciDev {
     pub port: u8,
@@ -72,9 +76,17 @@ pub struct XhciState {
     /// HID boot keyboard ready
     pub(crate) hid_ready: bool,
     pub(crate) hid_slot: u8,
+    pub(crate) hid_port: u8,
     pub(crate) hid_tr_va: u64,
     pub(crate) hid_report_va: u64,
     pub(crate) hid_last_usage: u8,
+    /// ADR-0062 P24b: HID boot mouse
+    pub(crate) mouse_ready: bool,
+    pub(crate) mouse_slot: u8,
+    pub(crate) mouse_port: u8,
+    pub(crate) mouse_tr_va: u64,
+    pub(crate) mouse_report_va: u64,
+    pub(crate) mouse_last: [u8; 4],
 }
 
 pub unsafe fn init_xhci() {
@@ -190,9 +202,16 @@ pub unsafe fn init_xhci() {
             msc_port: 0,
             hid_ready: false,
             hid_slot: 0,
+            hid_port: 0,
             hid_tr_va: 0,
             hid_report_va: 0,
             hid_last_usage: 0,
+            mouse_ready: false,
+            mouse_slot: 0,
+            mouse_port: 0,
+            mouse_tr_va: 0,
+            mouse_report_va: 0,
+            mouse_last: [0; 4],
         });
         crate::slog_nano!(
             "USB",
@@ -235,6 +254,35 @@ pub unsafe fn poll_keyboard() -> Option<u8> {
     Some(sc)
 }
 
+/// Poll HID boot mouse — injeta no path PS/2 canônico (`mouse_inject_hid_boot`).
+pub unsafe fn poll_mouse() -> bool {
+    let mut state_lock = XHCI_STATE.lock();
+    let state = match &mut *state_lock {
+        Some(s) if s.mouse_ready => s,
+        _ => return false,
+    };
+    if state.mouse_report_va == 0 {
+        return false;
+    }
+    let report = state.mouse_report_va as *const u8;
+    let mut cur = [0u8; 4];
+    for i in 0..4 {
+        cur[i] = report.add(i).read_volatile();
+    }
+    if cur == state.mouse_last {
+        queue_mouse_interrupt_read(state);
+        return false;
+    }
+    state.mouse_last = cur;
+    let buttons = cur[0];
+    let dx = cur[1] as i8;
+    let dy = cur[2] as i8;
+    queue_mouse_interrupt_read(state);
+    drop(state_lock);
+    crate::interrupts::mouse_inject_hid_boot(buttons, dx, dy);
+    true
+}
+
 pub(crate) unsafe fn queue_hid_interrupt_read(state: &mut XhciState) {
     if state.hid_tr_va == 0 || state.hid_report_va == 0 || state.hid_slot == 0 {
         return;
@@ -248,6 +296,20 @@ pub(crate) unsafe fn queue_hid_interrupt_read(state: &mut XhciState) {
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     // DCI 3 = EP1 IN
     w32(state.base, state.db_off + (state.hid_slot as u64) * 4, 3);
+}
+
+pub(crate) unsafe fn queue_mouse_interrupt_read(state: &mut XhciState) {
+    if state.mouse_tr_va == 0 || state.mouse_report_va == 0 || state.mouse_slot == 0 {
+        return;
+    }
+    let trb = state.mouse_tr_va as *mut u32;
+    let report_pa = state.mouse_report_va - state.pmoff;
+    trb.add(0).write_volatile(report_pa as u32);
+    trb.add(1).write_volatile((report_pa >> 32) as u32);
+    trb.add(2).write_volatile(4); // 4-byte boot mouse
+    trb.add(3).write_volatile((1u32 << 10) | (1 << 5) | 1);
+    core::arch::asm!("sfence", options(nostack, preserves_flags));
+    w32(state.base, state.db_off + (state.mouse_slot as u64) * 4, 3);
 }
 
 pub(crate) unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {

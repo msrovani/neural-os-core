@@ -23,7 +23,10 @@ embedded-tls = { version = "0.19", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 embedded-io = { version = "0.7", default-features = false }
 sha2 = { version = "0.10", default-features = false, features = ["force-soft"] }
+digest = { version = "0.10", default-features = false }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
+# Labor 23: RSA-PSS SHA256 CertificateVerify (hosts RSA).
+rsa = { version = "0.9", default-features = false, features = ["sha2"] }
 # ADR-0042 N2.5: k_nano sem global-alloc (bin mantém allocator.rs); k_ai trust/self_heal.
 k-nano = { path = "../k_nano" }
 k-hal = { path = "../k_hal" }
@@ -45,12 +48,14 @@ fat-boot-log = []
 # Soft-reboot 0xCF9 para BOOT.LOG — **default OFF**. Nunca ligar em HW produto
 # (loop: NEURLOG! sem UEFI writer de NEURDONE). Debug/experimento apenas.
 fat-boot-log-soft-reboot = ["fat-boot-log", "k-nano/soft-reboot-bootlog"]
+# ADR-0065 Labor 3: dual-boot Limine (HHDM/memmap/FB/RSDP). Default OFF = bootloader 0.11.
+limine-boot = []
 # ttf-parser não é compatível com no_std puro.
 # Usamos ferramenta Python tools/convert_ttf_to_bitmap.py para converter TTF
 # em arrays Rust embutidos, sem runtime parsing.
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "fat-boot-log", "fat-boot-log-soft-reboot", "weather-e2e"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "fat-boot-log", "fat-boot-log-soft-reboot", "weather-e2e", "limine-boot"))'] }
 
 [package.metadata.bootimage]
 run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139", "-smp", "2", "-accel", "whpx"]

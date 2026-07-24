@@ -31,7 +31,7 @@ pub fn example_early_boot() -> XeonTopologyReport {
 /// 
 /// This should be called after hermes is initialized but before
 /// AI operations begin.
-pub fn example_mid_boot(topology: &XeonTopologyReport) {
+pub fn example_mid_boot(_topology: &XeonTopologyReport) {
     // Step 2: Generate adaptation policy (would be called by hermes)
     // In real implementation, this would be:
     // let policy = hermes::adaptation::cognitive_adaptation(topology);

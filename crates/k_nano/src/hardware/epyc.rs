@@ -12,7 +12,6 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
-use core::mem::MaybeUninit;
 
 /// EPYC Generation Classification
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -402,7 +401,7 @@ pub fn is_epyc() -> bool {
         let ext_model = ((leaf1.eax >> 16) & 0xF) as u16;
         
         let actual_family = if family == 0xF { family + ext_family } else { family };
-        let actual_model = if family == 0xF || family == 0x6 {
+        let _actual_model = if family == 0xF || family == 0x6 {
             model + (ext_model << 4)
         } else {
             model
@@ -471,7 +470,7 @@ pub fn detect_epyc_flags() -> EpycCpuFlags {
         let leaf1 = cpuid(1);
         let leaf7 = cpuid_count(7, 0);
         let leaf8000_0001 = cpuid(0x8000_0001);
-        let leaf8000_0008 = cpuid(0x8000_0008);
+        let _leaf8000_0008 = cpuid(0x8000_0008);
         
         EpycCpuFlags {
             sse42: (leaf1.ecx & (1 << 20)) != 0,
@@ -654,7 +653,7 @@ pub fn discover_epyc_topology() -> EpycTopologyReport {
     let generation = classify_epyc_generation();
     let socket_count = detect_epyc_socket_count();
     let (total_cores, total_threads) = detect_epyc_core_thread_count();
-    let (ccd_count, mut ccds) = detect_epyc_ccd_topology();
+    let (ccd_count, ccds) = detect_epyc_ccd_topology();
     let flags = detect_epyc_flags();
     let memory_type = detect_epyc_memory_type(generation);
     

@@ -211,6 +211,32 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     send_eoi(33);
 }
 
+/// ADR-0062 P24b: report HID boot mouse → mesmo caminho que PS/2 (ABS + LAST_MOUSE_PACKET).
+/// `buttons`: bits 0..2; `dx`/`dy`: relativos (HID: +Y = up → tela inverte como PS/2).
+pub fn mouse_inject_hid_boot(buttons: u8, dx: i8, dy: i8) {
+    let b0 = (buttons & 0x07) | 0x08;
+    let b1 = dx as u8;
+    let b2 = dy as u8;
+    let packet = b0 as u32 | ((b1 as u32) << 8) | ((b2 as u32) << 16);
+    LAST_MOUSE_PACKET.store(packet, Ordering::Release);
+
+    let dx_i = dx as i32;
+    let dy_i = -(dy as i32);
+    let max_x = MOUSE_MAX_X.load(Ordering::Relaxed) as i32;
+    let max_y = MOUSE_MAX_Y.load(Ordering::Relaxed) as i32;
+    let nx = (MOUSE_ABS_X.load(Ordering::Relaxed) as i32 + dx_i).clamp(0, max_x);
+    let ny = (MOUSE_ABS_Y.load(Ordering::Relaxed) as i32 + dy_i).clamp(0, max_y);
+    MOUSE_ABS_X.store(nx as u32, Ordering::Release);
+    MOUSE_ABS_Y.store(ny as u32, Ordering::Release);
+    let btn = buttons & 0x07;
+    let prev = MOUSE_ABS_BTN.swap(btn, Ordering::AcqRel);
+    mouse_paint_irq_cursor(nx as u32, ny as u32);
+    let pressed = btn & !prev;
+    if pressed != 0 {
+        MOUSE_CLICK_FLASH.store(12, Ordering::Release);
+    }
+}
+
 /// Alimenta a máquina de estados do pacote PS/2 (3 bytes). Usado por IRQ e poll.
 pub fn mouse_feed_byte(byte: u8) {
     let n = MOUSE_BYTE_LOG.fetch_add(1, Ordering::Relaxed);

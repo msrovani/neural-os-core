@@ -15,7 +15,7 @@ use x86_64::{PrivilegeLevel, VirtAddr};
 use k_ai::self_heal::classify_by_code;
 
 pub use k_nano::interrupts::{
-    TIMER_TICKS, MOUSE_ABS_X, MOUSE_ABS_Y, MOUSE_ABS_BTN, MOUSE_PREV_BTN, MOUSE_CLICK_FLASH,
+    TIMER_TICKS, MOUSE_ABS_X, MOUSE_ABS_Y, MOUSE_ABS_BTN, MOUSE_CLICK_FLASH,
     MOUSE_MAX_X, MOUSE_MAX_Y,
     PAGE_FAULT_COUNT,
 };

@@ -15,11 +15,49 @@ pub enum GpuVendor { Intel, Nvidia, Amd, VirtIo, Unknown }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GpuArch {
     IntelGen9, IntelGen12, IntelXe, IntelXe2,
-    NvidiaPascal, NvidiaTuring, NvidiaAmpere, NvidiaAda, NvidiaBlackwell,
+    /// Maxwell (GM10x) — LegacyAcr / pré-GSP
+    NvidiaMaxwell,
+    NvidiaPascal,
+    /// Volta (GV100) — LegacyAcr até GspBackend existir
+    NvidiaVolta,
+    NvidiaTuring, NvidiaAmpere, NvidiaAda, NvidiaBlackwell,
     AmdRdna1, AmdRdna2, AmdRdna3, AmdRdna4,
     AmdGcn, // Vega/APU pré-RDNA (ex. Renoir hint)
     VirtIo,
     Unknown,
+}
+
+/// Família NVIDIA para slog / VERDICT (não é SKU).
+pub fn nvidia_family_str(arch: GpuArch) -> &'static str {
+    match arch {
+        GpuArch::NvidiaMaxwell => "maxwell",
+        GpuArch::NvidiaPascal => "pascal",
+        GpuArch::NvidiaVolta => "volta",
+        GpuArch::NvidiaTuring => "turing",
+        GpuArch::NvidiaAmpere => "ampere",
+        GpuArch::NvidiaAda => "ada",
+        GpuArch::NvidiaBlackwell => "blackwell",
+        _ => "none",
+    }
+}
+
+/// Maxwell / Pascal / Volta → caminho LegacyAcr (ACR/WPR), não GSP-RM.
+pub fn is_nvidia_legacy_acr(arch: GpuArch) -> bool {
+    matches!(
+        arch,
+        GpuArch::NvidiaMaxwell | GpuArch::NvidiaPascal | GpuArch::NvidiaVolta
+    )
+}
+
+/// Turing+ → GspBackend (scaffold até RPC pleno).
+pub fn is_nvidia_gsp_family(arch: GpuArch) -> bool {
+    matches!(
+        arch,
+        GpuArch::NvidiaTuring
+            | GpuArch::NvidiaAmpere
+            | GpuArch::NvidiaAda
+            | GpuArch::NvidiaBlackwell
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -157,12 +195,15 @@ fn select_backend_family(
 ) -> (ComputeBackendKind, IsaTag, bool) {
     match vendor {
         GpuVendor::Nvidia => match arch {
+            GpuArch::NvidiaMaxwell => (ComputeBackendKind::LegacyAcr, IsaTag::Sm52, true),
             GpuArch::NvidiaPascal => (ComputeBackendKind::LegacyAcr, IsaTag::Sm61, true),
+            GpuArch::NvidiaVolta => (ComputeBackendKind::LegacyAcr, IsaTag::Sm70, true),
             GpuArch::NvidiaTuring => (ComputeBackendKind::Gsp, IsaTag::Sm75, true),
-            GpuArch::NvidiaAmpere | GpuArch::NvidiaAda | GpuArch::NvidiaBlackwell => {
+            GpuArch::NvidiaAmpere => (ComputeBackendKind::Gsp, IsaTag::Sm80, true),
+            GpuArch::NvidiaAda | GpuArch::NvidiaBlackwell => {
                 (ComputeBackendKind::Gsp, IsaTag::Sm89, true)
             }
-            _ => (ComputeBackendKind::Unknown, IsaTag::None, false),
+            _ => (ComputeBackendKind::CpuFallback, IsaTag::None, false),
         },
         GpuVendor::Intel => match arch {
             GpuArch::IntelGen9 => (ComputeBackendKind::Gen9Ring, IsaTag::Gen9, true),
@@ -357,11 +398,42 @@ unsafe fn read_intel_gmd_id(bar0_phys: u64) -> Option<(GpuArch, &'static str, bo
 /// Faixas PCI DID comuns + `NV_PMC_BOOT_0` (Nouveau chipset = bits [28:20]).
 fn identify_nvidia_unknown(dev: &PciDevice, did: u16) -> (GpuArch, &'static str, u64, bool) {
     let by_did = match did {
-        0x1B00..=0x1CFF => Some((GpuArch::NvidiaPascal, "NVIDIA Pascal (DID range)", 2048 * 1024 * 1024)),
-        0x1E00..=0x1FFF => Some((GpuArch::NvidiaTuring, "NVIDIA Turing (DID range)", 6144 * 1024 * 1024)),
-        0x2200..=0x25FF => Some((GpuArch::NvidiaAmpere, "NVIDIA Ampere (DID range)", 8192 * 1024 * 1024)),
-        0x2600..=0x27FF => Some((GpuArch::NvidiaAda, "NVIDIA Ada (DID range)", 8192 * 1024 * 1024)),
-        0x2C00..=0x2FFF => Some((GpuArch::NvidiaBlackwell, "NVIDIA Blackwell (DID range)", 16384 * 1024 * 1024)),
+        // Maxwell GM10x (ex. 9xx / M) — faixa larga; PMC confirma
+        0x1340..=0x17FF => Some((
+            GpuArch::NvidiaMaxwell,
+            "NVIDIA Maxwell (DID range)",
+            2048 * 1024 * 1024,
+        )),
+        0x1B00..=0x1CFF => Some((
+            GpuArch::NvidiaPascal,
+            "NVIDIA Pascal (DID range)",
+            2048 * 1024 * 1024,
+        )),
+        0x1D00..=0x1DFF => Some((
+            GpuArch::NvidiaVolta,
+            "NVIDIA Volta (DID range)",
+            8192 * 1024 * 1024,
+        )),
+        0x1E00..=0x1FFF => Some((
+            GpuArch::NvidiaTuring,
+            "NVIDIA Turing (DID range)",
+            6144 * 1024 * 1024,
+        )),
+        0x2200..=0x25FF => Some((
+            GpuArch::NvidiaAmpere,
+            "NVIDIA Ampere (DID range)",
+            8192 * 1024 * 1024,
+        )),
+        0x2600..=0x27FF => Some((
+            GpuArch::NvidiaAda,
+            "NVIDIA Ada (DID range)",
+            8192 * 1024 * 1024,
+        )),
+        0x2C00..=0x2FFF => Some((
+            GpuArch::NvidiaBlackwell,
+            "NVIDIA Blackwell (DID range)",
+            16384 * 1024 * 1024,
+        )),
         _ => None,
     };
 
@@ -409,8 +481,9 @@ unsafe fn read_nvidia_pmc_boot0(bar0_phys: u64) -> Option<u32> {
 fn arch_from_pmc_boot0(boot0: u32) -> Option<(GpuArch, &'static str)> {
     let chipset = (boot0 & 0x1ff0_0000) >> 20;
     let arch = match chipset {
-        0x130..=0x13f => GpuArch::NvidiaPascal, // GP100–GP108
-        0x140..=0x14f => GpuArch::NvidiaPascal, // Volta tratado LegacyAcr/CPU se sem GSP
+        0x110..=0x12f => GpuArch::NvidiaMaxwell, // GM107–GM20x
+        0x130..=0x13f => GpuArch::NvidiaPascal,  // GP100–GP108
+        0x140..=0x14f => GpuArch::NvidiaVolta,   // GV100
         0x160..=0x16f => GpuArch::NvidiaTuring,
         0x170..=0x17f => GpuArch::NvidiaAmpere,
         0x190..=0x19f => GpuArch::NvidiaAda,
@@ -418,7 +491,9 @@ fn arch_from_pmc_boot0(boot0: u32) -> Option<(GpuArch, &'static str)> {
         _ => return None,
     };
     let name = match arch {
+        GpuArch::NvidiaMaxwell => "NVIDIA Maxwell (PMC_BOOT_0)",
         GpuArch::NvidiaPascal => "NVIDIA Pascal (PMC_BOOT_0)",
+        GpuArch::NvidiaVolta => "NVIDIA Volta (PMC_BOOT_0)",
         GpuArch::NvidiaTuring => "NVIDIA Turing (PMC_BOOT_0)",
         GpuArch::NvidiaAmpere => "NVIDIA Ampere (PMC_BOOT_0)",
         GpuArch::NvidiaAda => "NVIDIA Ada (PMC_BOOT_0)",

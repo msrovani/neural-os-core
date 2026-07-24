@@ -11,7 +11,7 @@ pub struct SettingsApp {
 impl SettingsApp {
     pub fn new() -> Self {
         SettingsApp {
-            theme_names: Vec::new() /* TODO: jarbas::display::theme::list_names */,
+            theme_names: crate::theme_bridge::list_names(),
             profile_names: vec!["engineer", "gamer", "student", "office", "browsing", "multimedia"],
         }
     }
@@ -27,7 +27,7 @@ impl App for SettingsApp {
         if y >= 30 && y < 60 {
             let idx = (x / 120) as usize;
             if idx < self.theme_names.len() {
-                // TODO: jarbas::display::theme::apply
+                let _ = crate::theme_bridge::apply(self.theme_names[idx]);
                 return Some(alloc::format!("theme {}", self.theme_names[idx]));
             }
         }

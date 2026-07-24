@@ -89,10 +89,18 @@ impl Agent for CronAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         let now = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         let _ = _tick; let _ = _count;
+        // Labor 10: uma tentativa NTP se ainda não synced (non-fatal)
+        if !crate::ntp::is_synced() && now > 200 {
+            let _ = crate::ntp::try_sync();
+        }
         for job in &mut self.jobs {
             if now >= job.last_run + job.interval {
                 job.last_run = now;
-                k_nano::slog_hermes!("Cron", "info", "Job '{}' disparado @ tick {}", job.name, now);
+                if let Some(u) = crate::ntp::now_unix() {
+                    k_nano::slog_hermes!("Cron", "info", "Job '{}' disparado @ tick {} unix={}", job.name, now, u);
+                } else {
+                    k_nano::slog_hermes!("Cron", "info", "Job '{}' disparado @ tick {}", job.name, now);
+                }
 
                 // Skill review é executado inline, não via EventBus
                 if job.name == "skill_review" {

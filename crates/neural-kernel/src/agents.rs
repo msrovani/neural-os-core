@@ -1662,6 +1662,7 @@ impl Agent for NetDriverAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         // Pacote B: NIC ja init no boot sync → no-op (evita re-init)
         let nic_ok = crate::net::E1000.lock().is_some()
+            || crate::net::I225.lock().is_some()
             || crate::net::RTL8139.lock().is_some()
             || crate::net::VIRTIO_DEV.lock().is_some();
         if nic_ok {
@@ -1671,10 +1672,12 @@ impl Agent for NetDriverAgent {
         unsafe {
             if crate::virtio_net::init_driver_virtio() {
                 k_nano::slog_hermes!("Net", "info", "VirtIO-net OK.");
-            } else if crate::net::init_driver_rtl8139() {
-                k_nano::slog_hermes!("Net", "info", "RTL8139 OK.");
             } else if crate::net::init_driver_e1000() {
                 k_nano::slog_hermes!("Net", "info", "e1000 OK.");
+            } else if crate::net::init_driver_i225() {
+                k_nano::slog_hermes!("Net", "i225", "OK (P7).");
+            } else if crate::net::init_driver_rtl8139() {
+                k_nano::slog_hermes!("Net", "info", "RTL8139 OK.");
             } else {
                 k_nano::slog_hermes!("Net", "info", "Sem hardware de rede. Modo offline.");
             }

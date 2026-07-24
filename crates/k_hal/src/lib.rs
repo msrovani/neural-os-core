@@ -19,6 +19,7 @@ pub mod device_recipe;
 pub mod fat_assets;
 pub mod lego_boot;
 pub mod unlock_dag;
+pub mod hw_gate;
 pub mod discovery;
 pub mod pci_bar;
 pub mod compute_port;

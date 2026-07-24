@@ -3,6 +3,9 @@
 
 pub mod ath10k_ce_bmi;
 pub mod ath10k_fw;
+pub mod ath10k_htc_wmi;
+pub mod ath10k_wmi_scan;
+pub mod ath10k_wmi_assoc;
 pub mod generic_wifi;
 pub mod iwl_fw;
 pub mod wifi_ath10k;
@@ -10,6 +13,7 @@ pub mod wifi_compat;
 pub mod wifi_crypto;
 pub mod wifi_iwlwifi;
 pub mod wifi_msix;
+pub mod wifi_softmac;
 
 use crate::device_cap::DeviceClass;
 use crate::discovery;

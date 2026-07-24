@@ -19,6 +19,12 @@ pub enum CapToken {
     GpuCompute = 9,
     GpuDisplay = 10,
     BtHciReady = 11,
+    /// Labor 8 — MemoryCore alcançado (BOOT_011_SMOKE).
+    BootSmokeOk = 12,
+    /// Labor 14 — ath10k assoc OK com RF (ATH10K_ASSOC).
+    WifiAssociated = 13,
+    /// Labor 15 — xHCI hub enumerated (USB_HUB).
+    UsbHubOk = 14,
 }
 
 impl CapToken {
@@ -36,6 +42,9 @@ impl CapToken {
             CapToken::GpuCompute => "GpuCompute",
             CapToken::GpuDisplay => "GpuDisplay",
             CapToken::BtHciReady => "BtHciReady",
+            CapToken::BootSmokeOk => "BootSmokeOk",
+            CapToken::WifiAssociated => "WifiAssociated",
+            CapToken::UsbHubOk => "UsbHubOk",
         }
     }
 

@@ -369,6 +369,9 @@ impl Agent for DisplayAgent {
 
         // Poll mouse todo frame (IRQ pode ter atualizado MOUSE_ABS_* durante Hermes)
         k_nano::interrupts::mouse_poll_bytes();
+        unsafe {
+            let _ = k_nano::xhci::poll_mouse();
+        }
         // Expira arm do OFF
         {
             let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);

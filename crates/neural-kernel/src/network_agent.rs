@@ -45,7 +45,7 @@ fn init_netstack(mac: [u8; 6]) {
 }
 
 fn has_ethernet_nic() -> bool {
-    crate::net::E1000.lock().is_some()
+    crate::net::E1000.lock().is_some() || crate::net::I225.lock().is_some()
         || crate::net::VIRTIO_DEV.lock().is_some()
         || crate::net::RTL8139.lock().is_some()
 }
@@ -467,6 +467,9 @@ pub fn bootstrap_early() {
 }
 
 pub fn network_agent_tick() {
+    // Labor 11 / ADR-0070: I/O cooperativo sem stallar o tick LLM.
+    let _ = hermes_crate::async_io::poll_budget(4);
+
     let mut s = NET_STATE.lock();
     let tick = s.tick;
     s.tick = tick.wrapping_add(1);

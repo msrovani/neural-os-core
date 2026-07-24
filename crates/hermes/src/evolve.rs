@@ -47,7 +47,7 @@ impl EvolveLedger {
         &mut self,
         name: &str,
         wasm: &[u8],
-        origin: WasmOrigin,
+        _origin: WasmOrigin,
     ) -> Result<(), &'static str> {
         let gen = self.bump_gen(name);
         if gen > MAX_GEN_PER_GAP {
@@ -159,7 +159,7 @@ static GENESIS_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::Atomic
 const MAX_GENESIS: u32 = 1;
 
 /// Evolve Genesis PoC: one agent may spawn one child WASM agent (ratchet).
-pub fn genesis_spawn(parent: &str, child_desc: &str) -> Result<alloc::string::String, &'static str> {
+pub fn genesis_spawn(parent: &str, _child_desc: &str) -> Result<alloc::string::String, &'static str> {
     let n = GENESIS_COUNT.load(core::sync::atomic::Ordering::Relaxed);
     if n >= MAX_GENESIS {
         return Err("genesis limit");

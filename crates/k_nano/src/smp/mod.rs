@@ -72,6 +72,37 @@ pub fn ap_pollable() -> bool {
 pub fn set_ap_pollable(v: bool) {
     AP_POLLABLE.store(v, Ordering::Release);
 }
+
+/// Labor 53: tenta ligar workers AP se feature `ap-pollable` + wake_fn instalado.
+/// Default OFF — sem IDT/IPI pleno = deadlock risk.
+pub fn try_enable_ap_workers_from_feature() {
+    #[cfg(feature = "ap-pollable")]
+    {
+        let wake = WAKE_FN.load(Ordering::Acquire);
+        if wake != 0 && ap_entry_count() > 0 {
+            set_ap_pollable(true);
+            crate::slog_nano!(
+                "SMP",
+                "info",
+                "step=ap_pollable status=OK VERDICT=PARTIAL reason=feature_on wake=1"
+            );
+        } else {
+            crate::slog_nano!(
+                "SMP",
+                "info",
+                "step=ap_pollable status=SKIP VERDICT=SKIP reason=no_wake_or_aps"
+            );
+        }
+    }
+    #[cfg(not(feature = "ap-pollable"))]
+    {
+        crate::slog_nano!(
+            "SMP",
+            "info",
+            "step=ap_pollable status=SKIP VERDICT=SKIP reason=feature_off (safe default)"
+        );
+    }
+}
 pub fn install_wake_fn(f: unsafe fn()) {
     WAKE_FN.store(f as usize, Ordering::Release);
 }

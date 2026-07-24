@@ -19,7 +19,7 @@
 
 #![allow(dead_code)]
 
-use crate::acpi::{NumaMemoryRange, NumaTopologyMap};
+use crate::acpi::NumaTopologyMap;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Máximo de nós NUMA suportados (Dual-Socket EPYC NPS4 = 8 nós).

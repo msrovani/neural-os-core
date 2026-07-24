@@ -90,6 +90,54 @@ impl BitmapFrameAllocator {
         self.next_free_bit = 256;
     }
 
+    /// Init a partir de ranges usable `(base, length)` — path Limine (ADR-0065).
+    /// `ranges` = regiões MEMMAP_USABLE (e opcionalmente reclaimable).
+    pub fn init_from_usable_ranges(&mut self, ranges: &[(u64, u64)]) {
+        self.bitmap = [0xFFu8; BITMAP_SIZE];
+        let mut last_end: u64 = 0;
+        let mut usable_count: usize = 0;
+
+        for &(base, length) in ranges.iter() {
+            if length == 0 {
+                continue;
+            }
+            let end = base.saturating_add(length);
+            let start_frame =
+                PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(base));
+            let end_frame =
+                PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(end.saturating_sub(1)));
+            let start_idx = start_frame.start_address().as_u64() / FRAME_SIZE;
+            let end_idx = end_frame.start_address().as_u64() / FRAME_SIZE;
+            for i in start_idx..=end_idx {
+                if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
+                    self.clear_bit(i as usize);
+                    usable_count += 1;
+                }
+            }
+            if end > last_end {
+                last_end = end;
+            }
+        }
+
+        for i in 2..160 {
+            if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
+                self.clear_bit(i as usize);
+                usable_count += 1;
+            }
+        }
+
+        self.total_frames = core::cmp::min(
+            (last_end / FRAME_SIZE) as usize,
+            BITMAP_SIZE * BITS_PER_BYTE,
+        );
+        if self.total_frames == 0 {
+            self.total_frames = BITMAP_SIZE * BITS_PER_BYTE;
+        }
+        self.usable_frames = usable_count;
+        self.allocated_count = 0;
+        self.next_free_bit = 256;
+    }
+
     /// Marca um bit como 0 (frame livre).
     #[inline]
     fn clear_bit(&mut self, index: usize) {

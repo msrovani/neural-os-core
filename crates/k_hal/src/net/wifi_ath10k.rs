@@ -1,10 +1,15 @@
-//! ath10k QCA6174 A3 — wake → target_init → BMI → fw_ready (Note 1050).
+//! ath10k QCA6174 A3→A6 — wake → BMI → fw_ready → HTC/WMI → scan → assoc (Note 1050).
 //! fw_ready=PASS só com FW_IND_INITIALIZED após BMI_DONE.
+//! A5: scan RF; A6: assoc (Labor 14). Connected só com CapToken::WifiAssociated.
 
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use crate::net::ath10k_ce_bmi::{CeBmi, PATCH_LOAD_ADDR};
 use crate::net::ath10k_fw;
+use crate::net::ath10k_htc_wmi::{self, A4Status};
+use crate::net::ath10k_wmi_assoc;
+use crate::net::ath10k_wmi_scan;
 
 /// QCA6174 register map (Linux ath10k qca6174_regs).
 const SOC_CHIP_ID: usize = 0x0000_00f0;
@@ -15,6 +20,34 @@ const RTC_STATE_V_ON: u32 = 3;
 const RTC_STATE_V_MASK: u32 = 0x7;
 const FW_INDICATOR: usize = 0x0003_a028;
 const FW_IND_INITIALIZED: u32 = 2;
+
+/// 0=none, 1=fw_ready_pass, 2=a4/a5_partial, 3=a4_htc_fail, 4=fail_early, 5=a5_scan_rf_pass, 6=a6_assoc
+static LAST_VERDICT_CODE: AtomicU8 = AtomicU8::new(0);
+static LAST_BAR: AtomicU64 = AtomicU64::new(0);
+static LAST_WMI_EID: AtomicUsize = AtomicUsize::new(0);
+
+/// Último VERDICT ath10k para WifiAgent / slog.
+pub fn last_verdict() -> &'static str {
+    match LAST_VERDICT_CODE.load(Ordering::Relaxed) {
+        0 => "none",
+        1 => "PASS_fw_ready",
+        2 => "PARTIAL_scan_awaiting_note",
+        3 => "PARTIAL_htc_awaiting_note",
+        4 => "FAIL_or_PARTIAL_early",
+        5 => "PASS_scan_rf",
+        6 => "PASS_assoc",
+        _ => "unknown",
+    }
+}
+
+/// BSS do último A5 (cópia). Vazio se sem RF.
+pub fn last_scan_bss() -> alloc::vec::Vec<ath10k_wmi_scan::ScanBss> {
+    ath10k_wmi_scan::last_scan_bss()
+}
+
+pub fn scan_had_rf() -> bool {
+    ath10k_wmi_scan::scan_had_rf()
+}
 
 pub struct Ath10kDevice {
     bar: usize,
@@ -114,11 +147,12 @@ impl Ath10kDevice {
         Err("fw_ready_timeout")
     }
 
-    /// A3 bring-up completo. PASS só com fw_ready medido.
+    /// A3 bring-up + A4 HTC/WMI. PASS fw_ready; A4 sem scan → PARTIAL honesty.
     pub fn a3_bringup(&mut self) {
         self.probe_log();
 
         if self.bar == 0 {
+            LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
             k_nano::slog_hal!(
                 "ATH10K",
                 "info",
@@ -128,11 +162,13 @@ impl Ath10kDevice {
         }
 
         if let Err(e) = self.soc_wake() {
+            LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
             k_nano::slog_hal!("ATH10K", "info", "VERDICT=FAIL reason={}", e);
             return;
         }
 
         if let Err(e) = self.wait_target_init() {
+            LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
             k_nano::slog_hal!("ATH10K", "info", "VERDICT=FAIL reason={}", e);
             return;
         }
@@ -140,6 +176,7 @@ impl Ath10kDevice {
         let spec = match ath10k_fw::resolve_ath10k_fw(self.did) {
             Some(s) => s,
             None => {
+                LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
                 k_nano::slog_hal!(
                     "ATH10K",
                     "info",
@@ -152,6 +189,7 @@ impl Ath10kDevice {
         let blobs = match ath10k_fw::load_ath10k_blobs(&spec) {
             Ok(b) => b,
             Err(e) => {
+                LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
                 k_nano::slog_hal!("ATH10K", "info", "VERDICT=FAIL reason={}", e);
                 return;
             }
@@ -160,6 +198,7 @@ impl Ath10kDevice {
         let mut ce = match CeBmi::init(self.bar) {
             Ok(c) => c,
             Err(e) => {
+                LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
                 k_nano::slog_hal!(
                     "ATH10K",
                     "info",
@@ -171,6 +210,7 @@ impl Ath10kDevice {
         };
 
         if let Err(e) = ce.get_target_info() {
+            LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
             k_nano::slog_hal!(
                 "ATH10K",
                 "info",
@@ -215,6 +255,7 @@ impl Ath10kDevice {
         }
 
         if let Err(e) = ce.lz_download(PATCH_LOAD_ADDR, &blobs.fw_image) {
+            LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
             k_nano::slog_hal!(
                 "ATH10K",
                 "info",
@@ -230,6 +271,7 @@ impl Ath10kDevice {
         }
 
         if let Err(e) = ce.done() {
+            LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
             k_nano::slog_hal!(
                 "ATH10K",
                 "info",
@@ -242,14 +284,50 @@ impl Ath10kDevice {
         match self.wait_fw_ready() {
             Ok(()) => {
                 crate::unlock_dag::grant(crate::unlock_dag::CapToken::WifiFwAlive);
+                LAST_VERDICT_CODE.store(1, Ordering::Relaxed);
                 k_nano::slog_hal!(
                     "ATH10K",
                     "info",
                     "VERDICT=PASS fw_ready=1 image={}",
                     blobs.fw_image.len()
                 );
+
+                // A4 — HTC + WMI; A5 — WMI scan (ADR-0066 Labor 6)
+                let (a4, wmi_eid) = ath10k_htc_wmi::a4_htc_wmi_bringup(&mut ce);
+                match a4 {
+                    A4Status::HtcAwaiting => {
+                        LAST_VERDICT_CODE.store(3, Ordering::Relaxed);
+                    }
+                    _ => {
+                        LAST_VERDICT_CODE.store(2, Ordering::Relaxed);
+                    }
+                }
+                k_nano::slog_hal!(
+                    "ATH10K",
+                    "info",
+                    "VERDICT=PARTIAL reason={} a4={}",
+                    a4.verdict_reason(),
+                    a4.as_str()
+                );
+
+                if matches!(a4, A4Status::HtcWmiOkScanAwaiting) {
+                    let eid = wmi_eid.unwrap_or(1);
+                    LAST_BAR.store(self.bar as u64, Ordering::Relaxed);
+                    LAST_WMI_EID.store(eid as usize, Ordering::Relaxed);
+                    let n = ath10k_wmi_scan::a5_start_scan(&mut ce, eid);
+                    if n > 0 {
+                        LAST_VERDICT_CODE.store(5, Ordering::Relaxed);
+                    }
+                } else {
+                    k_nano::slog_hal!(
+                        "ATH10K",
+                        "info",
+                        "step=scan status=SKIP reason=a4_not_ready"
+                    );
+                }
             }
             Err(e) => {
+                LAST_VERDICT_CODE.store(4, Ordering::Relaxed);
                 k_nano::slog_hal!(
                     "ATH10K",
                     "info",
@@ -261,13 +339,46 @@ impl Ath10kDevice {
     }
 }
 
-/// Bind ath10k — A3 bring-up (Note). QEMU sem 003E não chama.
+/// Bind ath10k — A3+A4+A5 bring-up (Note). QEMU sem 003E não chama.
 pub fn a3_on_bind(bar: usize, did: u16, pci_rev: u8) {
     let mut dev = Ath10kDevice::new(bar, did, pci_rev);
     dev.a3_bringup();
 }
 
-/// Compat A2 nome — redireciona para A3.
+/// Compat A2 nome — redireciona para A3+A4+A5.
 pub fn scaffold_on_bind(bar: usize, did: u16, pci_rev: u8) {
     a3_on_bind(bar, did, pci_rev);
+}
+
+/// Labor 14: WMI assoc ao SSID (ou primeiro BSS do scan).
+pub fn try_assoc(ssid: &str) -> bool {
+    if crate::unlock_dag::has(crate::unlock_dag::CapToken::WifiAssociated) {
+        return true;
+    }
+    let bar = LAST_BAR.load(Ordering::Relaxed) as usize;
+    let eid = LAST_WMI_EID.load(Ordering::Relaxed) as u8;
+    if bar == 0 || eid == 0 {
+        k_nano::slog_hal!(
+            "ATH10K",
+            "info",
+            "step=assoc status=SKIP reason=no_bar_or_eid"
+        );
+        return false;
+    }
+    let mut ce = match CeBmi::init(bar) {
+        Ok(c) => c,
+        Err(_) => {
+            k_nano::slog_hal!(
+                "ATH10K",
+                "info",
+                "step=assoc status=FAIL reason=ce_reinit"
+            );
+            return false;
+        }
+    };
+    let ok = ath10k_wmi_assoc::a6_try_assoc(&mut ce, eid, ssid);
+    if ok {
+        LAST_VERDICT_CODE.store(6, Ordering::Relaxed);
+    }
+    ok
 }

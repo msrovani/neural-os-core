@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 pub mod path;
+pub mod fd;
 
 use spin::Mutex;
 

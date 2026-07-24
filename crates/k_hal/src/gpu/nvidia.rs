@@ -1,9 +1,9 @@
-//! NVIDIA PFIFO + PUSH_BUFFER + bring-up LegacyAcr (Pascal) / Gsp (Turing+).
-//! Kernel Pack = CUBIN offline (CUDA 12.9); ISA pública via CUBIN/PRM — sem NDA claim.
+//! NVIDIA PFIFO + PUSH_BUFFER + bring-up LegacyAcr (Maxwell/Pascal/Volta) / Gsp (Turing+).
+//! Kernel Pack = CUBIN offline; ISA via pack — sem hardcode de SKU (GTX 1050 = teste).
 //! Degrau ACR: `nvidia_pascal_acr` (antes do probe). Degrau 2–4: `nvidia_pascal`.
 
 use crate::gpu::compute_abi::ComputeBackendKind;
-use crate::gpu::detect::{GpuArch, GpuInfo};
+use crate::gpu::detect::{self, GpuInfo};
 use crate::gpu::nvidia_pascal::{self, PascalD2};
 
 pub struct NvidiaGpu {
@@ -51,18 +51,32 @@ impl NvidiaGpu {
             if vram_ok { "OK" } else { "SEM FIRMWARE (P8 mode)" });
 
         let pfifo_ready = Self::probe_pfifo(mmio);
-        let backend = match gpu.arch {
-            GpuArch::NvidiaPascal => ComputeBackendKind::LegacyAcr,
-            GpuArch::NvidiaTuring
-            | GpuArch::NvidiaAmpere
-            | GpuArch::NvidiaAda
-            | GpuArch::NvidiaBlackwell => ComputeBackendKind::Gsp,
-            _ => gpu.backend_kind,
+        // Família genérica: respeitar backend_kind do detect (DID|PMC); não hardcode SKU.
+        let backend = match gpu.backend_kind {
+            ComputeBackendKind::LegacyAcr | ComputeBackendKind::Gsp => gpu.backend_kind,
+            _ if detect::is_nvidia_legacy_acr(gpu.arch) => ComputeBackendKind::LegacyAcr,
+            _ if detect::is_nvidia_gsp_family(gpu.arch) => ComputeBackendKind::Gsp,
+            _ => ComputeBackendKind::CpuFallback,
         };
-        k_nano::slog_hal!("GPU", "nvidia", "backend={:?} (Pascal=LegacyAcr; Turing+=Gsp — zero offset cross-gen)", backend);
+        k_nano::slog_hal!(
+            "GPU",
+            "nvidia",
+            "family={} isa={} backend={:?} (LegacyAcr=Maxwell/Pascal/Volta; Gsp=Turing+ scaffold; SKU-agnostic)",
+            detect::nvidia_family_str(gpu.arch),
+            gpu.isa_tag.as_str(),
+            backend
+        );
 
         let mut d2 = if backend == ComputeBackendKind::LegacyAcr {
             unsafe { nvidia_pascal::bring_up_d2(gpu, mmio) }
+        } else if backend == ComputeBackendKind::Gsp {
+            k_nano::slog_hal!(
+                "GPU",
+                "nvidia",
+                "step=gsp status=PARTIAL reason=gsp_rm_scaffold family={}",
+                detect::nvidia_family_str(gpu.arch)
+            );
+            None
         } else {
             None
         };
@@ -252,8 +266,13 @@ pub unsafe fn try_vector_add_legacy(
         k_nano::slog_hal!("NVIDIA", "C1", "LegacyAcr: CUBIN vazio");
         return false;
     }
-    if gpu.arch != GpuArch::NvidiaPascal {
-        k_nano::slog_hal!("NVIDIA", "C1", "LegacyAcr recusado em non-Pascal");
+    if !detect::is_nvidia_legacy_acr(gpu.arch) {
+        k_nano::slog_hal!(
+            "NVIDIA",
+            "C1",
+            "LegacyAcr recusado family={}",
+            detect::nvidia_family_str(gpu.arch)
+        );
         return false;
     }
     k_nano::slog_hal!("NVIDIA", "C1", "LegacyAcr: use try_vector_add_d4 via backend (pack {}B, QMD={:#x})",
@@ -271,13 +290,24 @@ pub unsafe fn try_vector_add_gsp(
     expect: &[f32],
 ) -> bool {
     let _ = (a, b, expect);
-    if matches!(gpu.arch, GpuArch::NvidiaPascal) {
-        k_nano::slog_hal!("NVIDIA", "C1b", "GSP recusado em Pascal");
+    if detect::is_nvidia_legacy_acr(gpu.arch) {
+        k_nano::slog_hal!(
+            "NVIDIA",
+            "C1b",
+            "GSP recusado family={} (use LegacyAcr)",
+            detect::nvidia_family_str(gpu.arch)
+        );
         return false;
     }
     if cubin.is_empty() {
         return false;
     }
-    k_nano::slog_hal!("NVIDIA", "C1b", "GspBackend: pack {}B; GSP-RM/channel incompleto — quarantine", cubin.len());
+    k_nano::slog_hal!(
+        "NVIDIA",
+        "C1b",
+        "GspBackend scaffold: family={} pack {}B; GSP-RM incompleto — quarantine",
+        detect::nvidia_family_str(gpu.arch),
+        cubin.len()
+    );
     false
 }

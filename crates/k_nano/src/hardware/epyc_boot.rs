@@ -299,7 +299,7 @@ pub fn example_epyc_early_boot() -> EpycTopologyReport {
 }
 
 /// Example: Mid-boot EPYC cognitive adaptation
-pub fn example_epyc_mid_boot(topology: &EpycTopologyReport) {
+pub fn example_epyc_mid_boot(_topology: &EpycTopologyReport) {
     // Step 2: Generate adaptation policy (would be called by hermes)
     // In real implementation, this would be:
     // let policy = hermes::adaptation::epyc::epyc_cognitive_adaptation(topology);

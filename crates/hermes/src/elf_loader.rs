@@ -32,3 +32,29 @@ impl BinaryLoader {
     pub fn load_apk(_data: &[u8]) -> LoadResult { LoadResult::Unsupported }
     pub fn status(&self) -> String { String::from("[BINARY] ELF+PE loader pronto, Mach-O+APK stub") }
 }
+
+/// Labor 60: ELF thin smoke — WASM preferido; detect+entry only.
+pub fn elf_thin_boot_smoke() -> bool {
+    // Minimal ELF64 header stub (not executable)
+    let mut elf = [0u8; 64];
+    elf[0] = 0x7f;
+    elf[1] = b'E';
+    elf[2] = b'L';
+    elf[3] = b'F';
+    elf[4] = 2; // 64-bit
+    elf[5] = 1; // LE
+    elf[16] = 2; // ET_EXEC
+    // e_entry at 24
+    elf[24..32].copy_from_slice(&0x401000u64.to_le_bytes());
+    let fmt = BinaryLoader::detect(&elf);
+    let ok = matches!(fmt, BinaryFormat::Elf)
+        && matches!(BinaryLoader::load_elf(&elf), LoadResult::Ok(_));
+    k_nano::slog_bin!(
+        "ELF",
+        "info",
+        "step=thin status={} VERDICT={} reason=detect_entry (WASM preferred ADR-0059)",
+        if ok { "OK" } else { "FAIL" },
+        if ok { "PARTIAL" } else { "FAIL" }
+    );
+    ok
+}

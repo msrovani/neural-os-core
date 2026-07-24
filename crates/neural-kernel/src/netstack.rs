@@ -201,11 +201,20 @@ impl TxToken for PhyToken {
 }
 
 unsafe fn nic_send(data: Vec<u8>) {
+    // Labor 29: SoftMAC wifi path (Note) — antes dos NICs wired QEMU
+    if k_hal::net::wifi_softmac::is_enabled() {
+        if k_hal::net::wifi_softmac::push_tx_eth(&data) {
+            return;
+        }
+    }
     // VirtIO-Net (mais rapido em QEMU)
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         nic.send(&data); return;
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
+        nic.send(&data); return;
+    }
+    if let Some(ref mut nic) = *crate::net::I225.lock() {
         nic.send(&data); return;
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
@@ -218,11 +227,20 @@ unsafe fn nic_send(data: Vec<u8>) {
 }
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
+    // Labor 29: SoftMAC RX first when armed
+    if k_hal::net::wifi_softmac::is_enabled() {
+        if let Some(pkt) = k_hal::net::wifi_softmac::pop_rx_eth() {
+            return Some(pkt);
+        }
+    }
     // VirtIO-Net first (mais rapido em QEMU)
     if let Some(ref mut nic) = *VIRTIO_DEV.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::E1000.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    if let Some(ref mut nic) = *crate::net::I225.lock() {
         if let Some(pkt) = nic.recv() { return Some(pkt); }
     }
     if let Some(ref mut nic) = *crate::net::RTL8139.lock() {
@@ -769,6 +787,93 @@ impl NetStack {
             }
         }
         None
+    }
+
+    /// UDP request/response raw no NIC (mesmo caminho DNS SESSION_149).
+    /// Retorna payload UDP (sem headers Ethernet/IP/UDP) se `sport==dst_port` e `dport==src_port`.
+    pub fn udp_exchange_raw(
+        &mut self,
+        dst: [u8; 4],
+        dst_port: u16,
+        payload: &[u8],
+    ) -> Option<Vec<u8>> {
+        let (sip, smac) = {
+            let cfg = crate::net::NET_CONFIG.lock();
+            let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+            (sip, cfg.mac)
+        };
+        if smac == [0; 6] || payload.is_empty() {
+            return None;
+        }
+        let dmac = Self::arp_resolve_raw(sip, dst, smac)?;
+        let src_port: u16 = 54323;
+        let udp_len = (8 + payload.len()) as u16;
+        let mut udp = Vec::with_capacity(udp_len as usize);
+        udp.extend_from_slice(&src_port.to_be_bytes());
+        udp.extend_from_slice(&dst_port.to_be_bytes());
+        udp.extend_from_slice(&udp_len.to_be_bytes());
+        udp.extend_from_slice(&[0x00, 0x00]);
+        udp.extend_from_slice(payload);
+
+        let total_len = (20 + udp.len()) as u16;
+        let mut ip = [0u8; 20];
+        ip[0] = 0x45;
+        ip[2..4].copy_from_slice(&total_len.to_be_bytes());
+        ip[8] = 64;
+        ip[9] = 17;
+        ip[12..16].copy_from_slice(&sip);
+        ip[16..20].copy_from_slice(&dst);
+        let cs = ip_checksum(&ip);
+        ip[10..12].copy_from_slice(&cs.to_be_bytes());
+
+        let mut frame = Vec::with_capacity(14 + 20 + udp.len());
+        frame.extend_from_slice(&dmac);
+        frame.extend_from_slice(&smac);
+        frame.extend_from_slice(&[0x08, 0x00]);
+        frame.extend_from_slice(&ip);
+        frame.extend_from_slice(&udp);
+
+        for _attempt in 0..6u32 {
+            unsafe { nic_send(frame.clone()) };
+            NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+            for _ in 0..800u32 {
+                wall_pause_us(500);
+                let pkt = unsafe { nic_recv() };
+                let Some(pkt) = pkt else { continue };
+                NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+                if let Some(pl) = Self::parse_udp_payload(&pkt, src_port, dst_port) {
+                    return Some(pl);
+                }
+            }
+        }
+        None
+    }
+
+    fn parse_udp_payload(pkt: &[u8], local_port: u16, expect_sport: u16) -> Option<Vec<u8>> {
+        if pkt.len() < 14 + 20 + 8 {
+            return None;
+        }
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            return None;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 {
+            return None;
+        }
+        if pkt[14 + 9] != 17 {
+            return None;
+        }
+        let udp = 14 + ihl;
+        let sport = u16::from_be_bytes([pkt[udp], pkt[udp + 1]]);
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if sport != expect_sport || dport != local_port {
+            return None;
+        }
+        let ulen = u16::from_be_bytes([pkt[udp + 4], pkt[udp + 5]]) as usize;
+        if ulen < 8 || pkt.len() < udp + ulen {
+            return None;
+        }
+        Some(pkt[udp + 8..udp + ulen].to_vec())
     }
 
     fn parse_dns_udp_reply(pkt: &[u8], txid: u16, local_port: u16) -> Option<[u8; 4]> {

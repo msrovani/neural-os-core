@@ -18,7 +18,7 @@ fn is_stopword(w: &str) -> bool {
             | "could" | "should" | "there" | "their" | "these" | "those" | "other"
             // PT-BR
             | "o" | "a" | "de" | "que" | "em" | "um" | "para" | "com" | "nao" | "não" | "uma"
-            | "os" | "as" | "dos" | "das" | "ao" | "aos" | "pelo" | "pela" | "seu" | "sua" | "mais"
+            | "os" | "dos" | "das" | "ao" | "aos" | "pelo" | "pela" | "seu" | "sua" | "mais"
             | "mas" | "nem" | "tambem" | "também" | "ja" | "já" | "quando" | "onde" | "como"
             | "porque" | "entao" | "então"
     )

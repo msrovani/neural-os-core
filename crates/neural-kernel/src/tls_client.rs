@@ -4,10 +4,8 @@
 //! Alinhamento 16-byte para AES-NI via `alloc_aligned_buf()`.
 
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::num::NonZeroU32;
-use core::mem::align_of;
 
 use embedded_io::{ErrorType, Read, Write};
 use embedded_tls::blocking::TlsConnection;

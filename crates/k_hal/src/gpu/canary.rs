@@ -19,10 +19,55 @@ pub enum CanaryResult {
     SkipCpu,
 }
 
-/// Canário Pascal com handle vivo (D2/D3 do probe) — Degrau 4.
+/// Canário Pascal com handle vivo (D2/D3 do probe) — Degrau 4 / Labor 7 golden.
 pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> CanaryResult {
     if gpu.vendor != GpuVendor::Nvidia || !gpu.compute_candidate {
         return CanaryResult::SkipVirtIo;
+    }
+
+    let acr_ok = crate::unlock_dag::has(crate::unlock_dag::CapToken::GpuAcrBooted);
+    let family = crate::gpu::detect::nvidia_family_str(gpu.arch);
+    let legacy = matches!(gpu.backend_kind, ComputeBackendKind::LegacyAcr);
+
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "step=golden status=START family={} isa={} backend={:?} acr={} name={}",
+        family,
+        gpu.isa_tag.as_str(),
+        gpu.backend_kind,
+        acr_ok as u8,
+        gpu.name
+    );
+
+    // Labor 7: LegacyAcr sem HsBooted → nunca Pass (honesty).
+    if legacy && !acr_ok {
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=FAIL reason=acr_not_hs_booted family={} isa={}",
+            family,
+            gpu.isa_tag.as_str()
+        );
+        k_nano::slog_hal!(
+            "GPU",
+            "canary",
+            "{}: ACR≠HsBooted — D4 estrutural; sem GpuCompute",
+            gpu.name
+        );
+        // Ainda tenta D4 estrutural abaixo se quiser diagnóstico; mas Pass blocked.
+        // Early return evita falso Pass se fence somehow ok sem ACR.
+        let a = [1.0f32, 2.0, 3.0, 4.0];
+        let b = [10.0f32, 20.0, 30.0, 40.0];
+        let mut expect = [0.0f32; 4];
+        let _ = vector_add_cpu(&a, &b, &mut expect);
+        let pack = kernel_pack::find_active_pack(gpu.vendor, gpu.isa_tag, PackOp::VectorAdd);
+        let payload = match &pack {
+            Some(p) => p.payload.as_slice(),
+            None => b"CPU_VECTOR_ADD_STUB\0sm_61",
+        };
+        let _ = nv.try_vector_add_d4(payload, &a, &b, &expect);
+        return CanaryResult::FailDispatch;
     }
 
     let a = [1.0f32, 2.0, 3.0, 4.0];
@@ -49,22 +94,57 @@ pub unsafe fn run_vector_add_canary_nv(gpu: &GpuInfo, nv: &mut NvidiaGpu) -> Can
         }
     }
 
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "step=golden status=dispatch pack={} verified={} bytes={}",
+        if no_pack { 0 } else { 1 },
+        verified as u8,
+        payload.len()
+    );
+
     let hw_ok = nv.try_vector_add_d4(payload, &a, &b, &expect);
 
     if no_pack {
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=FAIL reason=kernel_pack_missing isa={}",
+            gpu.isa_tag.as_str()
+        );
         return CanaryResult::FailNoPack;
     }
     if !verified {
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=FAIL reason=kernel_pack_unsigned isa={}",
+            gpu.isa_tag.as_str()
+        );
         return CanaryResult::FailUnsigned;
     }
     if !hw_ok {
         k_nano::slog_hal!("GPU", "canary", "{}: D4 dispatch sem golden (fence/CUBIN/ACR) — CPU_FALLBACK", gpu.name);
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=FAIL reason=canary_dispatch_fail family={} isa={}",
+            family,
+            gpu.isa_tag.as_str()
+        );
         return CanaryResult::FailDispatch;
     }
 
     k_nano::slog_hal!("GPU", "canary", "{}: vector_add PASS isa={} — has_compute=true",
         gpu.name,
         gpu.isa_tag.as_str());
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "step=golden status=OK family={} isa={} acr=1 pack=1",
+        family,
+        gpu.isa_tag.as_str()
+    );
     let _ = vector_add_check(&expect, &expect, 1e-5);
     CanaryResult::Pass
 }

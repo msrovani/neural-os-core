@@ -10,7 +10,6 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
-use core::mem::MaybeUninit;
 
 /// NUMA Node information
 #[derive(Debug, Clone, Copy, Default)]
@@ -412,7 +411,7 @@ pub fn detect_topology() -> (u8, u8, u8) {
         
         // Estimate socket count from APIC ID space
         let leaf1 = cpuid(1);
-        let initial_apic_id = (leaf1.ebx >> 24) as u32;
+        let _initial_apic_id = (leaf1.ebx >> 24) as u32;
         
         // For dual-socket systems, APIC IDs are typically offset by core count
         if physical_cores > 8 {

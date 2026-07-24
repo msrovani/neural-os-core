@@ -21,6 +21,27 @@ pub fn execute(cmd: &str) -> String {
         "meminfo" | "memory" => { let ctx = k_nano::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
         "pci" => pci_ls(),
         "theme" => theme_cmd(args),
+        "man" => crate::manpages::man(args),
+        "search" => {
+            let hits = k_nano::fts_search::search(args);
+            if hits.is_empty() {
+                String::from("No hits\n")
+            } else {
+                let mut s = String::new();
+                for h in hits {
+                    s.push_str(&alloc::format!("{}\n", h));
+                }
+                s
+            }
+        }
+        "clipboard" => {
+            if args.is_empty() {
+                // bridge via slog — jarbas clipboard no bin
+                String::from("(use clipboard_notify from UI)\n")
+            } else {
+                alloc::format!("clipboard set note: {}\n", args)
+            }
+        }
         "shutdown" => {
             k_ai::shutdown::request_shutdown();
             String::from("Shutdown...\n")
@@ -29,7 +50,15 @@ pub fn execute(cmd: &str) -> String {
             k_ai::shutdown::request_reboot();
             String::from("Reboot...\n")
         }
-        "date" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
+        "date" => {
+            if let Some(u) = crate::ntp::now_unix() {
+                let (h, m, s) = crate::ntp::format_hms(u);
+                alloc::format!("{:02}:{:02}:{:02} UTC (NTP unix={})\n", h, m, s, u)
+            } else {
+                let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18;
+                alloc::format!("{:02}:{:02}:{:02} (ticks; {})\n", (t/3600)%24, (t/60)%60, t%60, crate::ntp::status_line())
+            }
+        }
         "uname" => String::from("Neural OS Hermes v0.109\n"),
         "cpuinfo" => alloc::format!("CPUs: {}\n", k_nano::smp::ap_entry_count() + 1),
         "ls" => ls(args),
@@ -116,9 +145,22 @@ fn pci_ls() -> String {
 }
 
 fn theme_cmd(args: &str) -> String {
-    let themes: alloc::vec::Vec<alloc::string::String> = alloc::vec![] /* TODO: jarbas::display::theme::list_names */;
-    if args.is_empty() { let mut s = String::from("Themes:\n"); for t in &themes { s.push_str(&alloc::format!("  {}\n", t)); } s }
-    else { let r: Result<(), &str> = Err("stub"); /* TODO: jarbas::display::theme::apply */ match r { Ok(_) => alloc::format!("Theme: {}\n", args), Err(e) => alloc::format!("Error: {}\n", e) } }
+    let themes = crate::theme_bridge::list_names();
+    if args.is_empty() {
+        let mut s = String::from("Themes:\n");
+        for t in &themes {
+            s.push_str(&alloc::format!("  {}\n", t));
+        }
+        if themes.is_empty() {
+            s.push_str("  (bridge unregistered)\n");
+        }
+        s
+    } else {
+        match crate::theme_bridge::apply(args) {
+            Ok(_) => alloc::format!("Theme: {}\n", args),
+            Err(e) => alloc::format!("Error: {}\n", e),
+        }
+    }
 }
 
 fn ls(args: &str) -> String {
@@ -130,8 +172,33 @@ fn ls(args: &str) -> String {
 }
 
 fn cat(args: &str) -> String {
-    if args.is_empty() { return String::from("Usage: cat <path>\n"); }
-    String::from("cat: not implemented for binary files\n")
+    if args.is_empty() {
+        return String::from("Usage: cat <path>\n");
+    }
+    match k_nano::vfs::fd::open(args) {
+        Ok(fd) => {
+            let mut out = String::new();
+            let mut buf = [0u8; 256];
+            loop {
+                match k_nano::vfs::fd::read(fd, &mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        out.push_str(core::str::from_utf8(&buf[..n]).unwrap_or(""));
+                    }
+                    Err(e) => {
+                        out.push_str(&alloc::format!("\n[cat read err {}]\n", e));
+                        break;
+                    }
+                }
+                if out.len() > 4096 {
+                    break;
+                }
+            }
+            let _ = k_nano::vfs::fd::close(fd);
+            out
+        }
+        Err(e) => alloc::format!("cat: {}: {}\n", args, e),
+    }
 }
 
 fn learn(args: &str) -> String {

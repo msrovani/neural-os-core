@@ -259,7 +259,7 @@ impl CellChannel for RemoteCellChannel {
 
     fn receive(&self, descriptor: &mut CellMessageDescriptor, payload: &mut [u8]) -> Result<usize, &'static str> {
         let transport = self.transport();
-        let mut buffer = [0u8; 2048];
+        let buffer = [0u8; 2048];
 
         // Receive from transport
         let size = transport

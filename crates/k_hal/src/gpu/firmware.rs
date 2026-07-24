@@ -156,8 +156,14 @@ pub fn has_named_blob(name: &str) -> bool {
 ///
 /// `SecureBootResult::Ok` = `HsBooted` apenas (não compute Ready).
 pub unsafe fn nvidia_acr_load(gpu: &GpuInfo, pmoff: u64) -> SecureBootResult {
-    if !matches!(gpu.arch, crate::gpu::detect::GpuArch::NvidiaPascal) {
-        k_nano::slog_hal!("ACR", "info", "NVIDIA {}: skip LegacyAcr (arch={:?}) — use GSP path", gpu.name, gpu.arch);
+    if !crate::gpu::detect::is_nvidia_legacy_acr(gpu.arch) {
+        k_nano::slog_hal!(
+            "ACR",
+            "info",
+            "NVIDIA {}: skip LegacyAcr family={} — use GSP path",
+            gpu.name,
+            crate::gpu::detect::nvidia_family_str(gpu.arch)
+        );
         return SecureBootResult::NoFirmware;
     }
 
@@ -284,13 +290,21 @@ pub fn test_load_firmware() -> bool {
 pub unsafe fn secure_boot_gpu(gpu: &GpuInfo, pmoff: u64) -> SecureBootResult {
     k_nano::slog_hal!("SECURE", "BOOT", "{}: iniciando...", gpu.name);
     let result = match gpu.vendor {
-        GpuVendor::Nvidia => match gpu.arch {
-            crate::gpu::detect::GpuArch::NvidiaPascal => nvidia_acr_load(gpu, pmoff),
-            _ => {
-                k_nano::slog_hal!("SECURE", "BOOT", "NVIDIA GSP firmware: stub (open-gpu-kernel-modules)");
+        GpuVendor::Nvidia => {
+            if crate::gpu::detect::is_nvidia_legacy_acr(gpu.arch) {
+                nvidia_acr_load(gpu, pmoff)
+            } else if crate::gpu::detect::is_nvidia_gsp_family(gpu.arch) {
+                k_nano::slog_hal!(
+                    "SECURE",
+                    "BOOT",
+                    "NVIDIA GSP family={} — scaffold (GSP-RM residual)",
+                    crate::gpu::detect::nvidia_family_str(gpu.arch)
+                );
+                SecureBootResult::NoFirmware
+            } else {
                 SecureBootResult::NoFirmware
             }
-        },
+        }
         GpuVendor::Amd => amd_psp_load(gpu, pmoff),
         GpuVendor::Intel => intel_guc_load(gpu, pmoff),
         _ => SecureBootResult::NoFirmware,

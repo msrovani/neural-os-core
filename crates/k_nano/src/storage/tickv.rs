@@ -299,7 +299,7 @@ impl TickvLite {
                 continue;
             }
             let body_len = klen + vlen;
-            let padded = (body_len + 15) & !15;
+            let _padded = (body_len + 15) & !15;
             let total = rec_total(klen, vlen) as u64;
             if off + total > size {
                 break;

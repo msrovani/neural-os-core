@@ -73,6 +73,14 @@ pub mod link_watcher;
 pub mod globals;
 pub mod wifi_agent;
 pub mod wifi_protocol;
+pub mod wpa2_hs;
+pub mod ipc_bus;
+pub mod ntp;
+pub mod async_io;
+pub mod git_thin;
+pub mod theme_bridge;
+pub mod manpages;
+pub mod cf_challenge;
 // ADR-0041 H3: MMIO WiFi BE em k-hal; hermes = FE
 pub use k_hal::net::generic_wifi;
 pub use k_hal::net::wifi_compat;

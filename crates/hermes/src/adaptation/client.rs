@@ -13,7 +13,7 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Re-export client topology types from k-nano
 pub use k_nano::hardware::topology::{
@@ -292,28 +292,21 @@ fn generate_intel_hybrid_modern_policy(report: &ClientTopologyReport) -> ClientA
     let mut e_cores = [0u8; 16];
     let mut lpe_cores = [0u8; 4];
     
-    let mut p_idx = 0;
-    let mut e_idx = 0;
-    let mut lpe_idx = 0;
-    
     for i in 0..hybrid.p_cores as usize {
         if i < 16 {
             p_cores[i] = i as u8;
-            p_idx += 1;
         }
     }
     
     for i in 0..hybrid.e_cores as usize {
         if i < 16 {
-            e_cores[i] = (hybrid.p_cores as u8 + i as u8);
-            e_idx += 1;
+            e_cores[i] = hybrid.p_cores as u8 + i as u8;
         }
     }
     
     for i in 0..hybrid.lpe_cores as usize {
         if i < 4 {
-            lpe_cores[i] = (hybrid.p_cores as u8 + hybrid.e_cores as u8 + i as u8);
-            lpe_idx += 1;
+            lpe_cores[i] = hybrid.p_cores as u8 + hybrid.e_cores as u8 + i as u8;
         }
     }
     
@@ -365,7 +358,7 @@ fn generate_intel_hybrid_legacy_policy(report: &ClientTopologyReport) -> ClientA
     
     for i in 0..hybrid.e_cores as usize {
         if i < 16 {
-            e_cores[i] = (hybrid.p_cores as u8 + i as u8);
+            e_cores[i] = hybrid.p_cores as u8 + i as u8;
         }
     }
     

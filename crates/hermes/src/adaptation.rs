@@ -12,7 +12,7 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub mod client;
 pub mod epyc;

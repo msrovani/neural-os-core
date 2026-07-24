@@ -373,7 +373,7 @@ impl NvmeController {
         let admin_queue = (*self.admin_queue.get()).as_mut().ok_or("No admin queue")?;
 
         // Build read command
-        let mut entry = SubmissionEntry {
+        let entry = SubmissionEntry {
             cdw0: (NvmeNvmOpcode::Read as u32) | (0 << 8), // Opcode, FUSE=0
             nsid: self.nsid,
             rsvd1: [0; 2],
@@ -425,7 +425,7 @@ impl NvmeController {
         let admin_queue = (*self.admin_queue.get()).as_mut().ok_or("No admin queue")?;
 
         // Build write command
-        let mut entry = SubmissionEntry {
+        let entry = SubmissionEntry {
             cdw0: (NvmeNvmOpcode::Write as u32) | (0 << 8), // Opcode, FUSE=0
             nsid: self.nsid,
             rsvd1: [0; 2],

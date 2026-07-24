@@ -82,7 +82,7 @@ impl CellNetwork {
     pub fn spawn_cell(&mut self, cell_type: CellType, region: usize) -> Option<CellId> {
         let id = self.next_id;
         self.next_id += 1;
-        let idx = self.cells.len();
+        let _idx = self.cells.len();
         let cell = CognitiveCell::new(id, cell_type, region, self.inbox_capacity)?;
         self.cells.push(cell);
         Some(id)

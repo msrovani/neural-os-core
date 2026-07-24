@@ -3,7 +3,7 @@
 //! Implements core pair allocation with MWAIT power management and wake-up
 //! triggers based on affect vector (uncertainty/urgency) from hermes.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use crate::async_rt::SpscChannel;
 
 /// Core role in the system

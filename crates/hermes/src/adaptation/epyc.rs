@@ -12,7 +12,7 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Re-export EPYC topology types from k-nano
 pub use k_nano::hardware::epyc::{

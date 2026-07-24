@@ -10,6 +10,8 @@ lazy_static! {
     pub static ref EVENT_BUS: event_bus::EventBus = event_bus::EventBus::new();
     /// ADR-0047 LatentBus — hidden-state channel (parallel to EventBus).
     pub static ref LATENT_BUS: event_bus::LatentBus = event_bus::LatentBus::new();
+    /// ADR-0068 MessageBus — ponto-a-ponto entre agentes (complementa EventBus).
+    pub static ref MESSAGE_BUS: event_bus::MessageBus = event_bus::MessageBus::new();
 }
 
 // ponytail: SKILL_REGISTRY stub for cross-crate access.

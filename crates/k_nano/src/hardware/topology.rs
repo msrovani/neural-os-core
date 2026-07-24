@@ -12,7 +12,6 @@
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
-use core::mem::MaybeUninit;
 
 /// CPU Vendor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

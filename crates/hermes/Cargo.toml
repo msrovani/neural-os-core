@@ -17,6 +17,8 @@ k-hal = { path = "../k_hal" }
 cortex = { path = "../cortex" }
 k_ai = { path = "../k_ai" }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+# Labor 19: inflate zlib de objetos pack Git (no_std).
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 # ADR-0059 Caminho A: runtime WASM real no_std (sandbox SFI + fuel). Default.
 wasmi = { version = "0.47", default-features = false }
 # ADR-0059 Caminhos B/C: backend Cranelift (wasm→nativo JIT / Rust-subset). Opt-in

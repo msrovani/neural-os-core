@@ -109,14 +109,17 @@ mod model_hub;
 // ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
     actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
-    gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, marketplace, mcp,
-    memory_store, net_bridge, optimizer, package_hub, plugin_hub, rustpython_no_std, safety,
+    gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
+    memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, rustpython_no_std, safety,
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
     skill_observer, skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent,
     wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
 };
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
+
+#[cfg(feature = "limine-boot")]
+mod limine_boot;
 
 mod serial;
 
@@ -144,6 +147,8 @@ mod tls_client;
 
 mod tls_trust;
 
+mod labor_smokes;
+
 mod slip;
 
 mod env;
@@ -157,6 +162,8 @@ mod proto;
 mod rtl8139;
 
 mod e1000;
+
+mod i225;
 
 mod usb_msc;
 mod usb_trust;
@@ -914,22 +921,16 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 
 
+#[cfg(not(feature = "limine-boot"))]
 bootloader_api::entry_point!(kernel_main, config = &CONFIG);
 
-
-
 /// Bootloader config: mapeamento de memoria fisica para acesso a VGA/APIC
-
+#[cfg(not(feature = "limine-boot"))]
 const CONFIG: bootloader_api::BootloaderConfig = {
-
     let mut config = bootloader_api::BootloaderConfig::new_default();
-
     config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
-
     config.kernel_stack_size = 2048 * 1024;
-
     config
-
 };
 
 
@@ -1311,7 +1312,13 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     }
 }
 
+#[cfg(not(feature = "limine-boot"))]
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
+    kernel_boot(Some(boot_info))
+}
+
+/// Boot comum: `Some(BootInfo)` = rust-bootloader 0.11; `None` = Limine (ADR-0065).
+pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     // Probe serial port (sem lazy_static, funciona antes do heap)
 
@@ -1325,17 +1332,32 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     
 
-    let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
+    let pm_offset = match boot_info.as_ref() {
+        Some(bi) => bi.physical_memory_offset.into_option().unwrap_or(0),
+        None => crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed),
+    };
     // ADR-0055: RSDP UEFI via bootloader — sem isto MADT/APIC/SMP falham no QEMU OVMF
-    crate::acpi::set_boot_rsdp(boot_info.rsdp_addr.into_option());
+    if let Some(bi) = boot_info.as_ref() {
+        crate::acpi::set_boot_rsdp(bi.rsdp_addr.into_option());
+    }
+    // Limine path já chamou set_boot_rsdp em limine_boot
 
     // Sonda framebuffer ANTES do VGA text mode para evitar escrever nos registros
 
     // VGA CRTC (0x3D4/0x3D5) em hardware Intel 6xx com UEFI GOP, o que causa xuvisco.
 
     // probe pinta K0 se GOP ok — prova que kernel_main rodou.
-    display::fb::probe_uefi_framebuffer(boot_info);
+    if let Some(bi) = boot_info.as_ref() {
+        display::fb::probe_uefi_framebuffer(bi);
+    }
+    // Limine: probe_raw_framebuffer já rodou
+    let boot_tag = if boot_info.is_some() {
+        "rust-bootloader"
+    } else {
+        "limine"
+    };
     crate::display::fb::boot_ckpt(1, "pos-probe + serial");
+    k_nano::slog_bin!("Boot", "info", "boot={}", boot_tag);
 
     // Se framebuffer disponivel, NAO inicializa VGA text mode.
     // Desliga o VGA plane via sequenciador (0x3C4/0x3C5) em vez de
@@ -1373,10 +1395,27 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // SafeHarbor / MemoryCore publicados após heap (publish precisa de alloc)
 
     let mut frame_allocator = memory::BitmapFrameAllocator::empty();
-    frame_allocator.init(&boot_info.memory_regions);
+    match boot_info.as_ref() {
+        Some(bi) => {
+            frame_allocator.init(&bi.memory_regions);
+            kjson!("DBG", "MEM", "regions", "n", bi.memory_regions.len());
+        }
+        None => {
+            #[cfg(feature = "limine-boot")]
+            {
+                let (ranges, n) = limine_boot::usable_ranges();
+                frame_allocator.init_from_usable_ranges(&ranges[..n]);
+                kjson!("DBG", "MEM", "limine_usable", "n", n as u64);
+            }
+            #[cfg(not(feature = "limine-boot"))]
+            {
+                k_nano::slog_bin!("Boot", "error", "kernel_boot(None) sem limine-boot");
+            }
+        }
+    }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
 
-    kjson!("DBG", "MEM", "regions", "n", boot_info.memory_regions.len());
+    kjson!("DBG", "MEM", "boot", "tag", if boot_info.is_some() { 0u32 } else { 1u32 });
 
     {
         crate::display::fb::boot_ckpt(8, "antes init_memory");
@@ -1420,6 +1459,61 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     publish_boot_phase(BootPhase::SafeHarbor, "Serial+Display+IDT prontos");
     publish_boot_phase(BootPhase::MemoryCore, "Frame allocator + page tables + heap");
     crate::display::fb::boot_ckpt(13, "SafeHarbor+MemoryCore");
+
+    // Labor 8: smoke = MemoryCore → BootSmokeOk; HW-GATE early (Limine pode #PF antes WifiAgent)
+    k_hal::hw_gate::mark_boot_smoke(boot_tag);
+    k_hal::hw_gate::emit_all();
+
+    // Labor 9: MessageBus A→B smoke (ADR-0068) — pós-heap
+    let _ = hermes_crate::ipc_bus::boot_smoke();
+
+    // Labor 11: async I/O híbrido smoke (ADR-0070) — pós-heap
+    let _ = hermes_crate::async_io::boot_smoke();
+
+    // Labor 16: Git thin parse smoke (ADR-0074) — net opcional
+    let _ = hermes_crate::git_thin::boot_smoke();
+
+    // Labor 22 SoftMAC
+    k_hal::net::wifi_softmac::boot_smoke();
+    // Labor 30 WPA2 + Labor 31 wifi net path
+    hermes_crate::wpa2_hs::boot_smoke();
+    k_hal::net::wifi_softmac::dhcp_http_path_smoke();
+
+    // ADR-0062 L28–L62 smokes (honesty; Note labs SKIP)
+    labor_smokes::limine_esp_evidence_smoke(boot_tag);
+    labor_smokes::ath10k_note_smoke();
+    let _ = crate::tls_trust::ca_chain_boot_smoke();
+    let _ = hermes_crate::self_update::boot_smoke();
+    hermes_crate::ntp::residual_boot_smoke();
+    hermes_crate::theme_bridge::register(
+        || jarbas_crate::display::theme::list_names(),
+        |n| jarbas_crate::display::theme::apply(n),
+    );
+    let _ = hermes_crate::theme_bridge::boot_smoke();
+    let _ = jarbas_crate::clipboard_notify::boot_smoke();
+    k_nano::boot_chime::boot_smoke();
+    let _ = jarbas_crate::vconsole::boot_smoke();
+    let _ = jarbas_crate::screensaver::boot_smoke();
+    let _ = hermes_crate::manpages::boot_smoke();
+    let _ = jarbas_crate::image_viewer::boot_smoke();
+    let _ = k_nano::fts_search::boot_smoke();
+    let _ = k_nano::user_accounts::boot_smoke();
+    let _ = k_nano::fw_cfg::boot_smoke();
+    hermes_crate::cf_challenge::boot_smoke();
+    k_nano::xhci::hub_address_boot_smoke();
+    k_nano::btrfs_reader::boot_smoke();
+    k_nano::luks_open::boot_smoke();
+    labor_smokes::ext4_multiblock_smoke();
+    labor_smokes::vfs_storage_bridge_smoke();
+    k_nano::smp::try_enable_ap_workers_from_feature();
+    labor_smokes::note_gpu_or_i225_smoke();
+    labor_smokes::hda_multistream_smoke();
+    labor_smokes::acpi_s3_smoke();
+    let _ = k_nano::firewall::boot_smoke();
+    let _ = hermes_crate::ipc_bus::capgate_boot_smoke();
+    labor_smokes::bt_hci_smoke();
+    let _ = hermes_crate::elf_loader::elf_thin_boot_smoke();
+    labor_smokes::gsp_conditional_smoke();
 
     // ADR-0055: probe HV/ISA/cache → FeatureGate antes de SIMD/SMP
     k_nano::platform_probe::detect();
@@ -1519,14 +1613,21 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     unsafe { crate::net::init_driver_e1000(); }
     publish_boot_phase(BootPhase::DriverInit, "E1000 init");
 
-    // Fallback: RTL8139
+    // ADR-0062 P7: I225/I226 se e1000 ausente (HW real; QEMU skip esperado)
     if crate::net::E1000.lock().is_none() {
+        unsafe { crate::net::init_driver_i225(); }
+        publish_boot_phase(BootPhase::DriverInit, "I225 init (fallback)");
+    }
+
+    // Fallback: RTL8139
+    if crate::net::E1000.lock().is_none() && crate::net::I225.lock().is_none() {
         unsafe { crate::net::init_driver_rtl8139(); }
         publish_boot_phase(BootPhase::DriverInit, "RTL8139 init (fallback)");
     }
 
     // Decisão final: se NIC real encontrada → HW real. Se não → sandbox ou offline.
     let nic_found = crate::net::E1000.lock().is_some()
+        || crate::net::I225.lock().is_some()
         || crate::net::RTL8139.lock().is_some();
     if nic_found {
         if !is_sandbox {
@@ -1558,12 +1659,16 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     hermes_crate::net_bridge::register_tcp_xfer(|host, port, data| unsafe {
         crate::net::tcp_exchange(host, port, data)
     });
+    hermes_crate::net_bridge::register_udp_xfer(crate::net::udp_exchange_safe);
+    hermes_crate::net_bridge::register_dns_resolve(crate::net::dns_resolve_host_safe);
     crate::net::log_tls_status_boot();
     // NetFs #418 smoke (best-effort; also from network_agent after L5_OK)
     crate::netfs::smoke_if_online();
     // TLS N4 smoke — só com L5_OK; fora do lock do bootstrap
     crate::net::smoke_https_if_online();
-    publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP/TLS smoke)");
+    // Labor 10: NTP sync non-fatal (ADR-0069)
+    let _ = hermes_crate::ntp::try_sync();
+    publish_boot_phase(BootPhase::DriverInit, "Net bootstrap_early (static/DNS/HTTP/TLS/NTP smoke)");
 
     let ata_found = {
         let ata_dev = unsafe { ata::AtaDriver::probe() };
@@ -1572,6 +1677,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         *ATA_DRIVER.lock() = ata_dev;
         is_some
     };
+
+    // Labor 12: pins FAT após ATA (smoke HTTPS pode ter aprendido em RAM antes).
+    crate::tls_trust::load_pins_from_fat();
+    crate::tls_trust::persist_pins_to_fat();
 
     publish_boot_phase(BootPhase::DriverInit, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
@@ -1645,6 +1754,12 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
         if unsafe { crate::xhci::bringup_hid_keyboard() } {
             crate::boot_logger::log("BOOT: P24a HID keyboard ready");
         }
+        // ADR-0062 P24b: HID boot mouse (porta ≠ MSC/kb); hub=AWAITING se class 09h
+        if unsafe { crate::xhci::bringup_hid_mouse() } {
+            crate::boot_logger::log("BOOT: P24b HID mouse ready");
+        } else {
+            crate::boot_logger::log("BOOT: P24b HID mouse SKIP");
+        }
     }
 
     crate::display::fb::boot_ckpt(26, "pos-K17 publish");
@@ -1685,6 +1800,8 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     drop(vfs_guard);
     k_nano::slog_bin!("VFS", "info", "Init OK. {} mounts.", mcount);
     crate::boot_logger::log(&alloc::format!("BOOT: VFS {} mounts", mcount));
+    // Labor 25: fd table após mounts
+    let _ = k_nano::vfs::fd::boot_smoke();
 
     crate::display::fb::boot_ckpt(29, "FS agents");
     crate::fs::init_fs_agents();
@@ -1763,6 +1880,28 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             "BOOT: StorageBus devices={}",
             bus.device_count()
         ));
+    }
+    // Labor 13 / ADR-0072: smoke EXT
+    {
+        let bus = k_nano::storage_bus::STORAGE_BUS.lock();
+        let has_ext = bus.entries().iter().any(|e| {
+            e.mounts
+                .iter()
+                .any(|m| m.fs_type.starts_with("ext") || m.mount_point == "/mnt/ext")
+        });
+        if has_ext {
+            k_nano::slog_bin!(
+                "EXT4",
+                "info",
+                "step=smoke status=OK VERDICT=PASS reason=ext_mount_listed"
+            );
+        } else {
+            k_nano::slog_bin!(
+                "EXT4",
+                "info",
+                "step=smoke status=SKIP VERDICT=SKIP reason=no_ext_partition"
+            );
+        }
     }
 
     let disk_agent_box = Box::new(disk_agent);
@@ -2600,6 +2739,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     k_nano::slog_bin!("Boot", "register", "WifiAgent");
 
+    // Late refresh: GPU CapTokens (GpuCompute) podem ter sido grantados após early emit
+    k_hal::hw_gate::emit_all_refresh();
+
     // BootLogAgent ja registrado no inicio do registry (BOOT_PHASE consumer)
 
     registry.register(Box::new(agents::log_analyst_agent::LogAnalystAgent::new()));
@@ -2628,28 +2770,25 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 
     let mut model_loaded = false;
 
-    let ramdisk_data_opt = match boot_info.ramdisk_addr {
-
-        bootloader_api::info::Optional::Some(addr) => {
-
-            let len = boot_info.ramdisk_len as usize;
-
-            if len > 1024 {
-
-                Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
-
-            } else {
-
-                k_nano::slog_bin!("Asset", "ramdisk", "Ramdisk too small ({} bytes) — trying QEMU loader.", len);
-
-                None
-
+    let ramdisk_data_opt = match boot_info.as_ref() {
+        Some(bi) => match bi.ramdisk_addr {
+            bootloader_api::info::Optional::Some(addr) => {
+                let len = bi.ramdisk_len as usize;
+                if len > 1024 {
+                    Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
+                } else {
+                    k_nano::slog_bin!(
+                        "Asset",
+                        "ramdisk",
+                        "Ramdisk too small ({} bytes) — trying QEMU loader.",
+                        len
+                    );
+                    None
+                }
             }
-
-        }
-
-        _ => None,
-
+            _ => None,
+        },
+        None => None,
     };
 
     if let Some(data) = ramdisk_data_opt {
@@ -2695,8 +2834,29 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     // Tamanho EXATO via FAT (850/13/2B/3B) — slice > arquivo mapeado → #PF no forward.
     if !model_loaded {
         let load_addr: u64 = 0x100000000;
-        let pm_offset = boot_info.physical_memory_offset.into_option().unwrap_or(0);
-        let mem_has_4gb = boot_info.memory_regions.iter().any(|r| r.start <= load_addr && r.end > load_addr);
+        let pm_offset = match boot_info.as_ref() {
+            Some(bi) => bi.physical_memory_offset.into_option().unwrap_or(0),
+            None => crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed),
+        };
+        let mem_has_4gb = match boot_info.as_ref() {
+            Some(bi) => bi
+                .memory_regions
+                .iter()
+                .any(|r| r.start <= load_addr && r.end > load_addr),
+            None => {
+                #[cfg(feature = "limine-boot")]
+                {
+                    let (ranges, n) = limine_boot::usable_ranges();
+                    ranges[..n]
+                        .iter()
+                        .any(|&(base, len)| base <= load_addr && base.saturating_add(len) > load_addr)
+                }
+                #[cfg(not(feature = "limine-boot"))]
+                {
+                    false
+                }
+            }
+        };
         let (fat_name, fat_sz): (Option<&'static str>, Option<usize>) = unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             (*ata_guard).as_ref().map(|ata| {
@@ -2739,14 +2899,34 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
                 // Fallback so se FAT nao tiver blob (loader-only legacy 2B).
                 const BITNET_2B_V4_BYTES: usize = 604_856_373;
                 let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
-                for r in boot_info.memory_regions.iter() {
-                    if r.start <= load_addr && r.end > load_addr {
-                        let region = (r.end - load_addr) as usize;
-                        if region < model_len {
-                            k_nano::slog_bin!("Asset", "ramdisk", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
-                            model_len = region;
+                if let Some(r_end) = {
+                    let mut end_opt = None;
+                    if let Some(bi) = boot_info.as_ref() {
+                        for r in bi.memory_regions.iter() {
+                            if r.start <= load_addr && r.end > load_addr {
+                                end_opt = Some(r.end);
+                                break;
+                            }
                         }
-                        break;
+                    } else {
+                        #[cfg(feature = "limine-boot")]
+                        {
+                            let (ranges, n) = limine_boot::usable_ranges();
+                            for &(base, len) in &ranges[..n] {
+                                let end = base.saturating_add(len);
+                                if base <= load_addr && end > load_addr {
+                                    end_opt = Some(end);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    end_opt
+                } {
+                    let region = (r_end - load_addr) as usize;
+                    if region < model_len {
+                        k_nano::slog_bin!("Asset", "ramdisk", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
+                        model_len = region;
                     }
                 }
                 k_nano::slog_bin!(
@@ -2797,7 +2977,26 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
             } else {
                 k_nano::slog_bin!("RAMDISK", "info", "No model at 0x100000000 — trying 0x120000000...");
                 let load_addr2: u64 = 0x120000000;
-                if boot_info.memory_regions.iter().any(|r| r.start <= load_addr2 && r.end > load_addr2) {
+                let has_addr2 = match boot_info.as_ref() {
+                    Some(bi) => bi
+                        .memory_regions
+                        .iter()
+                        .any(|r| r.start <= load_addr2 && r.end > load_addr2),
+                    None => {
+                        #[cfg(feature = "limine-boot")]
+                        {
+                            let (ranges, n) = limine_boot::usable_ranges();
+                            ranges[..n].iter().any(|&(base, len)| {
+                                base <= load_addr2 && base.saturating_add(len) > load_addr2
+                            })
+                        }
+                        #[cfg(not(feature = "limine-boot"))]
+                        {
+                            false
+                        }
+                    }
+                };
+                if has_addr2 {
                     let probe2 = (load_addr2 + pm_offset) as *const u32;
                     let magic2 = unsafe { core::ptr::read_volatile(probe2) };
                     if magic2 == 0xBE11BE11 {

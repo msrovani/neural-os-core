@@ -560,13 +560,13 @@ pub unsafe fn dispatch_vector_add(
         return false;
     };
 
-    // CB0 = VectorAddParams com IOVAs do canal.
+    // CB0 = VectorAddParams nvcc ABI (a*, b*, c*, n) — Labor 7.
     let params = VectorAddParams {
-        n: n as u32,
-        _pad: 0,
         a_pa: vecs_iova + a_off as u64,
         b_pa: vecs_iova + b_off as u64,
         c_pa: vecs_iova + c_off as u64,
+        n: n as u32,
+        _pad: 0,
     };
     core::ptr::write_volatile(cb.virt as *mut VectorAddParams, params);
 
@@ -624,6 +624,13 @@ pub unsafe fn dispatch_vector_add(
         fence_iova,
         pb_len,
         is_cpu_stub_payload(cubin));
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "step=golden status=dispatched fence={:#x} stub={}",
+        fence_iova,
+        is_cpu_stub_payload(cubin) as u8
+    );
 
     // Poll fence (buffers ainda vivos).
     let mut hit = false;
@@ -639,6 +646,11 @@ pub unsafe fn dispatch_vector_add(
     if !hit {
         d2.d4 = PascalD4Status::FenceTimeout;
         k_nano::slog_hal!("NVIDIA", "D4", "fence timeout (esperado sem ACR/GR/CUBIN em QEMU) — sem has_compute");
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=FAIL reason=fence_timeout"
+        );
         let _keep = (code, cb, qmd_buf, fence, vecs, pb);
         return false;
     }
@@ -660,10 +672,22 @@ pub unsafe fn dispatch_vector_add(
     if pass {
         d2.d4 = PascalD4Status::GoldenPass;
         k_nano::slog_hal!("NVIDIA", "D4", "GOLDEN PASS n={} — has_compute elegível", n);
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=OK n={} detail=fence_plus_check",
+            n
+        );
         true
     } else {
         d2.d4 = PascalD4Status::GoldenMismatch;
         k_nano::slog_hal!("NVIDIA", "D4", "fence ok mas golden mismatch");
+        k_nano::slog_bin!(
+            "GPU-HW",
+            "info",
+            "step=golden status=FAIL reason=golden_mismatch n={}",
+            n
+        );
         false
     }
 }

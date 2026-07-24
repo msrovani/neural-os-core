@@ -26,6 +26,10 @@ default = []
 global-alloc = []
 # Soft-reboot 0xCF9 para flush BOOT.LOG — **OFF em produto** (loop HW sem NEURDONE).
 soft-reboot-bootlog = []
+# Labor 39: PC speaker boot chime — OFF default.
+boot-chime = []
+# Labor 53: AP workers vivos (`ap_pollable`) — OFF default (deadlock sem IDT/IPI pleno).
+ap-pollable = []
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog"))'] }

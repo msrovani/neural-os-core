@@ -157,6 +157,55 @@ pub fn fb_remap_uc() {
     }
 }
 
+/// Framebuffer Limine / raw (ADR-0065) — `pitch_bytes` = bytes por scanline; `bpp_bits` = bits/pixel.
+pub fn probe_raw_framebuffer(
+    addr: u64,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
+    bpp_bits: u16,
+    rgb_order: bool,
+) {
+    if addr == 0 || width == 0 || height == 0 {
+        k_nano::slog_jarbas!("Display", "info", "Sem framebuffer raw — VGA text mode.");
+        return;
+    }
+    let reported_bpp = ((bpp_bits as u32) + 7) / 8;
+    let stride_px = if reported_bpp > 0 {
+        pitch_bytes / reported_bpp
+    } else {
+        width
+    };
+    let gpu = GpuDevice::from_probe(addr, width, height, stride_px, reported_bpp, rgb_order);
+    let bpp = gpu.fb_bpp;
+    let fb_stride = gpu.fb_stride;
+    k_nano::slog_jarbas!(
+        "Display",
+        "info",
+        "Limine/raw fb: {}x{} bpp={} stride={} pitch={} @{:x} rgb={}",
+        gpu.fb_width,
+        gpu.fb_height,
+        bpp,
+        fb_stride,
+        pitch_bytes,
+        addr,
+        rgb_order
+    );
+    *GPU.lock() = Some(gpu);
+    console_clear();
+    boot_ckpt(0, "probe FB ok (limine/raw)");
+    k_nano::slog_jarbas!(
+        "Display",
+        "info",
+        "Framebuffer raw configurado: {}x{} bpp={} stride={} @{:x}",
+        width,
+        height,
+        bpp,
+        fb_stride,
+        addr
+    );
+}
+
 pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
     if let Some(fb) = boot_info.framebuffer.as_ref().and_then(|f| Some(f)) {
         let info = fb.info();

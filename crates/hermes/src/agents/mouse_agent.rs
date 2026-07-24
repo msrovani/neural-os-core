@@ -126,6 +126,11 @@ impl Agent for MouseAgent {
             self.inited = true;
         }
 
+        k_nano::interrupts::mouse_poll_bytes();
+        unsafe {
+            let _ = k_nano::xhci::poll_mouse();
+        }
+
         let packet = LAST_MOUSE_PACKET.swap(0, core::sync::atomic::Ordering::Acquire);
         if packet == 0 {
             return AgentTickResult::Pending;

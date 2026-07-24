@@ -91,6 +91,12 @@ pub enum IsaTag {
     Gfx1030 = 7,
     Gen9 = 8,
     Dg2 = 9,
+    /// Maxwell (ex. sm_52) — pack específico residual
+    Sm52 = 10,
+    /// Volta sm_70
+    Sm70 = 11,
+    /// Ampere sm_80
+    Sm80 = 12,
 }
 
 impl IsaTag {
@@ -106,6 +112,9 @@ impl IsaTag {
             IsaTag::Gfx1030 => "gfx1030",
             IsaTag::Gen9 => "gen9",
             IsaTag::Dg2 => "dg2",
+            IsaTag::Sm52 => "sm_52",
+            IsaTag::Sm70 => "sm_70",
+            IsaTag::Sm80 => "sm_80",
         }
     }
 }
@@ -188,14 +197,15 @@ impl ComputeJob {
 }
 
 /// Parâmetros POD canário vector_add (CPU golden + device).
+/// Layout CB0 = ABI nvcc `(a*, b*, c*, n)` — Labor 7 / ADR-0067.
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct VectorAddParams {
-    pub n: u32,
-    pub _pad: u32,
     pub a_pa: u64,
     pub b_pa: u64,
     pub c_pa: u64,
+    pub n: u32,
+    pub _pad: u32,
 }
 
 /// Golden CPU: c[i] = a[i] + b[i] (f32).

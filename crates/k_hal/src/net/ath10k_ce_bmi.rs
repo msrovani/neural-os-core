@@ -127,6 +127,49 @@ impl CeBmi {
         }
     }
 
+    /// CE1 RX-only poll (HTC READY / WMI events pós-BMI). Sem TX.
+    pub fn recv_poll(&mut self, resp: &mut [u8]) -> Result<usize, &'static str> {
+        let rx_pa = self.rx_buf_pa();
+        unsafe {
+            core::ptr::write_bytes(self.rx_buf_va(), 0, resp.len().min(BMI_MAX_DATA));
+        }
+        let ce1_desc = (self.dma_pa + (RING_N * DESC_SIZE) as u64) as usize;
+        let d1 = ce1_desc as *mut CeDesc;
+        unsafe {
+            (*d1).addr = rx_pa as u32;
+            (*d1).nbytes = 0;
+            (*d1).flags = 0;
+        }
+        self.ce_w(CE1_BASE, DST_WR_INDEX, 1);
+
+        let mut waited = 0u32;
+        loop {
+            let drri = self.ce_r(CE1_BASE, CURRENT_DRRI);
+            if drri >= 1 {
+                break;
+            }
+            self.pause();
+            waited += 1;
+            // HTC ready pode demorar mais que BMI — timeout generoso mas finito
+            if waited > 80_000 {
+                self.ce_w(CE1_BASE, DST_WR_INDEX, 0);
+                return Err("ce_rx_timeout");
+            }
+        }
+
+        let n = unsafe { (*d1).nbytes as usize }.min(resp.len());
+        unsafe {
+            core::ptr::copy_nonoverlapping(self.rx_buf_va(), resp.as_mut_ptr(), n);
+        }
+        self.ce_w(CE1_BASE, DST_WR_INDEX, 0);
+        self.ce_w(
+            CE1_BASE,
+            DR_BA,
+            (self.dma_pa + (RING_N * DESC_SIZE) as u64) as u32,
+        );
+        Ok(n)
+    }
+
     /// BMI exchange via CE0 send + CE1 recv (poll).
     pub fn exchange(
         &mut self,

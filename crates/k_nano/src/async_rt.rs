@@ -5,7 +5,6 @@
 
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
-use core::ptr::NonNull;
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Lock-free single-producer single-consumer ring buffer

@@ -171,9 +171,14 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
 
     crate::gpu::firmware::test_load_firmware();
     // ACR → sw_* (dentro de nvidia_acr_load) → depois D2/D3 no probe.
-    let _sb = crate::gpu::firmware::secure_boot_gpu(gpu, pmoff);
+    let sb = crate::gpu::firmware::secure_boot_gpu(gpu, pmoff);
     if let Some(acr) = crate::gpu::firmware::last_acr_report() {
         k_nano::slog_hal!("GPU", "BACKEND", "ACR stage={:?} (Ok=HsBooted only; ≠ has_compute)", acr.stage);
+        if acr.hs_booted() {
+            crate::unlock_dag::grant(crate::unlock_dag::CapToken::GpuAcrBooted);
+        }
+    } else if sb == crate::gpu::firmware::SecureBootResult::Ok {
+        // Outros vendors (ex. GuC/PSP) — não grant Nvidia ACR token
     }
 
     *COMPUTE_STATE.lock() = BackendState::BringingUp;
@@ -212,6 +217,7 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             k_nano::slog_hal!("GPU", "BACKEND", "VirtIO-GPU: display apenas (sem compute)");
             *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
             *COMPUTE_STATE.lock() = BackendState::CpuOnly;
+            log_gpu_verdict_unified(gpu, "CPU_FALLBACK", "virtio_display_only");
             return;
         }
         _ => {
@@ -246,21 +252,68 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
             if let Some(GpuAccel::Amd(ref mut a)) = CURRENT_BACKEND.lock().as_mut() {
                 a.compute_ready = true;
             }
+            crate::unlock_dag::grant(crate::unlock_dag::CapToken::GpuCompute);
             k_nano::slog_hal!("GPU", "BACKEND", "compute Ready (canário PASS)");
-            k_nano::slog_bin!(
-                "GPU-HW",
-                "info",
-                "VERDICT=PASS vendor={} canary=vector_add",
-                gpu.name
-            );
+            log_gpu_verdict_unified(gpu, "PASS", "canary_vector_add_golden");
+        }
+        CanaryResult::SkipVirtIo | CanaryResult::SkipCpu => {
+            k_nano::slog_hal!("GPU", "BACKEND", "compute skip ({:?}) — CPU_FALLBACK", canary);
+            log_gpu_verdict_unified(gpu, "CPU_FALLBACK", "skip_no_discrete_compute");
         }
         _ => {
             k_nano::slog_hal!("GPU", "BACKEND", "compute Quarantine/CPU — display owner preservado ({:?})", canary);
-            log_gpu_hw_verdict("canary_not_pass");
+            let reason = match canary {
+                CanaryResult::FailNoPack => "kernel_pack_missing",
+                CanaryResult::FailUnsigned => "kernel_pack_unsigned",
+                CanaryResult::FailDispatch => "canary_dispatch_fail",
+                CanaryResult::FailGolden => "canary_golden_fail",
+                _ => "canary_not_pass",
+            };
+            // NVIDIA Gsp scaffold → PARTIAL; resto AWAITING até HW golden
+            let verdict = if gpu.vendor == GpuVendor::Nvidia
+                && gpu.backend_kind == crate::gpu::compute_abi::ComputeBackendKind::Gsp
+            {
+                "PARTIAL"
+            } else if gpu.vendor == GpuVendor::Nvidia {
+                "AWAITING_REAL_HW"
+            } else {
+                "AWAITING_REAL_HW"
+            };
+            log_gpu_verdict_unified(gpu, verdict, reason);
         }
     }
     let _ = crate::gpu::direct_storage::probe_gds();
     crate::compute_port::sync_from_backend();
+}
+
+/// VERDICT unificado Labor 5 — family/isa/backend; nunca Ready implícito sem Pass.
+fn log_gpu_verdict_unified(gpu: &GpuInfo, verdict: &str, reason: &str) {
+    let family = if gpu.vendor == GpuVendor::Nvidia {
+        crate::gpu::detect::nvidia_family_str(gpu.arch)
+    } else {
+        "n/a"
+    };
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "step=compute status={} detail={} family={} isa={} backend={:?} name={}",
+        verdict,
+        reason,
+        family,
+        gpu.isa_tag.as_str(),
+        gpu.backend_kind,
+        gpu.name
+    );
+    k_nano::slog_bin!(
+        "GPU-HW",
+        "info",
+        "VERDICT={} reason={} family={} isa={} backend={:?}",
+        verdict,
+        reason,
+        family,
+        gpu.isa_tag.as_str(),
+        gpu.backend_kind
+    );
 }
 
 fn log_gpu_hw_verdict(reason: &str) {

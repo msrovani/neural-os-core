@@ -66,29 +66,46 @@ pub struct WifiAgent {
 
 impl WifiAgent {
     pub fn new() -> Self {
-        // S0/S1-prep: probe no registro (antes do scheduler) — QEMU sem RF + evidência
-        // serial mesmo se NetAgent falhar depois.
-        if generic_wifi::detect_wifi() {
+        // S0/A4 honesty: probe + amarra CapToken::WifiFwAlive / VERDICT ath10k (ADR-0066).
+        // QEMU sem RF / sem 003E → AWAITING; never Connected aqui.
+        let has_radio = generic_wifi::detect_wifi();
+        let fw_alive = k_hal::unlock_dag::has(k_hal::unlock_dag::CapToken::WifiFwAlive);
+        let ath_v = k_hal::net::wifi_ath10k::last_verdict();
+        if has_radio {
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "step=boot_probe status=PRESENT detail=pci_wifi_bound"
+                "step=boot_probe status=PRESENT detail=pci_wifi_bound fw_alive={} ath10k={}",
+                fw_alive as u8,
+                ath_v
             );
-            k_nano::slog_bin!(
-                "WIFI-HW",
-                "info",
-                "VERDICT=AWAITING_REAL_HW reason=iwlwifi_scan_unwired_onda7"
-            );
+            if fw_alive {
+                k_nano::slog_bin!(
+                    "WIFI-HW",
+                    "info",
+                    "VERDICT=AWAITING_REAL_HW reason=ath10k_scan_awaiting_note ath10k={}",
+                    ath_v
+                );
+            } else {
+                k_nano::slog_bin!(
+                    "WIFI-HW",
+                    "info",
+                    "VERDICT=AWAITING_REAL_HW reason=wifi_fw_not_alive ath10k={}",
+                    ath_v
+                );
+            }
         } else {
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "step=boot_probe status=UNSUPPORTED detail=no_wifi_pci"
+                "step=boot_probe status=UNSUPPORTED detail=no_wifi_pci ath10k={}",
+                ath_v
             );
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio_onda7"
+                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio ath10k={}",
+                ath_v
             );
         }
         WifiAgent {
@@ -147,16 +164,69 @@ impl WifiAgent {
             }
         });
 
-        // Scan real ainda depende de ucode/HW — lista demo NÃO é Ready (S0).
+        // A5: lista RF se ath10k LAST_SCAN n>0; senão demo + AWAITING (Labor 6).
+        let fw_alive = k_hal::unlock_dag::has(k_hal::unlock_dag::CapToken::WifiFwAlive);
+        let ath_v = k_hal::net::wifi_ath10k::last_verdict();
+        let rf = k_hal::net::wifi_ath10k::last_scan_bss();
+
+        if !rf.is_empty() {
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=scan status=OK detail=ath10k_rf ssids={} fw_alive={} ath10k={}",
+                rf.len(),
+                fw_alive as u8,
+                ath_v
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=PASS reason=ath10k_scan_rf ath10k={}",
+                ath_v
+            );
+            let mut aps = Vec::new();
+            for b in rf.iter() {
+                aps.push(AccessPoint {
+                    ssid: b.ssid.clone(),
+                    bssid: b.bssid,
+                    signal_dbm: b.signal_dbm,
+                    channel: if b.channel == 0 { 6 } else { b.channel },
+                    security: SecurityType::WPA2,
+                });
+            }
+            let mut msg = alloc::format!(
+                "RF scan ath10k A5 — {} redes (nao Connected; assoc=ATH10K_ASSOC):\n",
+                aps.len()
+            );
+            for (i, ap) in aps.iter().enumerate() {
+                msg.push_str(&alloc::format!(
+                    "  [{}] {} {} ({}dBm) ch.{} {}\n",
+                    i,
+                    ap.lock(),
+                    ap.ssid,
+                    ap.signal_dbm,
+                    ap.channel,
+                    ap.bars()
+                ));
+            }
+            msg.push_str("\nConnect ainda bloqueado (Labor 6 = scan only).");
+            self.publish(&msg);
+            self.state = WifiState::ScanDone(aps);
+            return;
+        }
+
         k_nano::slog_bin!(
             "WIFI-HW",
             "info",
-            "step=scan status=UNSUPPORTED detail=demo_ap_list_not_rf"
+            "step=scan status=UNSUPPORTED detail=demo_ap_list_not_rf fw_alive={} ath10k={}",
+            fw_alive as u8,
+            ath_v
         );
         k_nano::slog_bin!(
             "WIFI-HW",
             "info",
-            "VERDICT=AWAITING_REAL_HW reason=iwlwifi_scan_unwired_onda7"
+            "VERDICT=AWAITING_REAL_HW reason=ath10k_scan_awaiting_note ath10k={}",
+            ath_v
         );
         let aps = vec![
             AccessPoint { ssid: String::from("JARVIS-NET"),   bssid: [0xAA;6], signal_dbm: -45, channel: 6,  security: SecurityType::WPA2 },
@@ -165,7 +235,7 @@ impl WifiAgent {
         ];
 
         let mut msg = alloc::format!(
-            "DEMO AP list (nao e RF; scan iwlwifi AWAITING) — {} entradas:\n",
+            "DEMO AP list (nao e RF; ath10k A5 scan AWAITING Note) — {} entradas:\n",
             aps.len()
         );
         for (i, ap) in aps.iter().enumerate() {
@@ -180,36 +250,75 @@ impl WifiAgent {
     // ── Conexão ───────────────────────────────────────────────
 
     fn do_connect(&mut self, ap: &AccessPoint, _password: &str) {
-        // S0 honesty: nunca Connected/Ready sem RF + assoc real.
+        // A4 honesty: nunca Connected/Ready sem RF + assoc real (ADR-0066).
         let has_radio = generic_wifi::WIFI_PRESENT.load(Ordering::Relaxed);
+        let fw_alive = k_hal::unlock_dag::has(k_hal::unlock_dag::CapToken::WifiFwAlive);
+        let ath_v = k_hal::net::wifi_ath10k::last_verdict();
         if !has_radio {
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "step=connect status=UNSUPPORTED detail=no_wifi_pci ssid={}",
-                ap.ssid
+                "step=connect status=UNSUPPORTED detail=no_wifi_pci ssid={} ath10k={}",
+                ap.ssid,
+                ath_v
             );
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio"
+                "VERDICT=AWAITING_REAL_HW reason=no_wifi_radio ath10k={}",
+                ath_v
+            );
+        } else if !fw_alive {
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "step=connect status=UNSUPPORTED detail=no_WifiFwAlive ssid={} ath10k={}",
+                ap.ssid,
+                ath_v
+            );
+            k_nano::slog_bin!(
+                "WIFI-HW",
+                "info",
+                "VERDICT=AWAITING_REAL_HW reason=wifi_fw_not_alive ath10k={}",
+                ath_v
             );
         } else {
+            // Labor 14: WMI assoc — Connected só com CapToken WifiAssociated
+            let ok = k_hal::net::wifi_ath10k::try_assoc(&ap.ssid);
+            if ok {
+                k_hal::net::wifi_softmac::enable_if_associated();
+                k_nano::slog_bin!(
+                    "WIFI-HW",
+                    "info",
+                    "step=connect status=OK ssid={} ath10k={} VERDICT=PASS",
+                    ap.ssid,
+                    ath_v
+                );
+                self.state = WifiState::Connected {
+                    ssid: ap.ssid.clone(),
+                };
+                self.publish(&alloc::format!("Connected: {}", ap.ssid));
+                return;
+            }
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "step=connect status=UNSUPPORTED detail=link_unwired ssid={}",
-                ap.ssid
+                "step=connect status=UNSUPPORTED detail=assoc_awaiting ssid={} ath10k={}",
+                ap.ssid,
+                ath_v
             );
             k_nano::slog_bin!(
                 "WIFI-HW",
                 "info",
-                "VERDICT=AWAITING_REAL_HW reason=iwlwifi_link_unwired"
+                "VERDICT=AWAITING_REAL_HW reason=ath10k_assoc_awaiting_note ath10k={}",
+                ath_v
             );
         }
         self.publish(&alloc::format!(
-            "Connect bloqueado: sem RF/ucode (S0) — \"{}\"",
-            ap.ssid
+            "Connect bloqueado: ath10k sem assoc RF — \"{}\" (fw_alive={} verdict={})",
+            ap.ssid,
+            fw_alive,
+            ath_v
         ));
         self.state = WifiState::Failed("WiFi RF AWAITING");
     }

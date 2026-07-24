@@ -305,7 +305,7 @@ pub fn example_client_early_boot() -> ClientTopologyReport {
 /// 
 /// This should be called after hermes is initialized but before
 /// AI operations begin.
-pub fn example_client_mid_boot(topology: &ClientTopologyReport) {
+pub fn example_client_mid_boot(_topology: &ClientTopologyReport) {
     // Step 2: Generate adaptation policy (would be called by hermes)
     // In real implementation, this would be:
     // let policy = hermes::adaptation::client::client_cognitive_adaptation(topology);

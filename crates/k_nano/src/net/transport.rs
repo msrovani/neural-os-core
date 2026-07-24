@@ -3,7 +3,7 @@
 /// Provides transport layer selection between Raw L2 (Ethernet) and UDP/IP (smoltcp)
 /// for sending NoProto packets between AIOS nodes.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Transport mode selection
 #[repr(u8)]

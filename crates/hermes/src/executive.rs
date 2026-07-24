@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use crate::affect::{AffectVector, AffectEvent, AffectRegulator};
+use crate::affect::{AffectEvent, AffectRegulator};
 
 // ─── LoopPhase: 7-stage Meta-Cognitive Loop ───────────────────────────
 
@@ -64,7 +64,7 @@ impl EgoLayer {
         EgoLayer { domains: BTreeMap::new(), interactions: 0, ema_alpha: 0.9 }
     }
 
-    pub fn record(&mut self, domain: &str, success: bool, confidence: f32, latency: f32, tick: u64) {
+    pub fn record(&mut self, domain: &str, success: bool, _confidence: f32, latency: f32, tick: u64) {
         self.interactions += 1;
         let entry = self.domains.entry(String::from(domain))
             .or_insert_with(|| DomainConfidence::new(tick));
