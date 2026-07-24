@@ -32,7 +32,7 @@ impl XpuEngine {
     }
 
     /// Prefill: CPU forward do prompt completo com KV cache
-    pub fn prefill(&mut self, model: &TransformerModel, prompt: &[u16], cache: &mut KvCache, tick_start: u64) {
+    pub fn prefill(&mut self, model: &TransformerModel, prompt: &[u32], cache: &mut KvCache, tick_start: u64) {
         if prompt.is_empty() { return; }
         let (_logits, _hidden) = model.forward_with_kv(prompt, cache);
         self.prefill_ticks += now_ticks().wrapping_sub(tick_start);
@@ -40,7 +40,7 @@ impl XpuEngine {
     }
 
     /// Decode: gera 1 token (sempre CPU por enquanto — GPU é stub futuro)
-    pub fn decode(&mut self, model: &TransformerModel, ctx: &[u16], _cache: &mut KvCache, tick_start: u64) -> u16 {
+    pub fn decode(&mut self, model: &TransformerModel, ctx: &[u32], _cache: &mut KvCache, tick_start: u64) -> u32 {
         let token = model.generate_next(ctx);
         self.total_tokens = self.total_tokens.wrapping_add(1);
         self.decode_ticks += now_ticks().wrapping_sub(tick_start);
@@ -48,8 +48,8 @@ impl XpuEngine {
     }
 
     /// Geração completa: prefill + N steps decode (CPU sempre)
-    pub fn generate(&mut self, model: &TransformerModel, prompt: &[u16], max_tokens: usize,
-                    cache: &mut KvCache) -> Vec<u16> {
+    pub fn generate(&mut self, model: &TransformerModel, prompt: &[u32], max_tokens: usize,
+                    cache: &mut KvCache) -> Vec<u32> {
         let t0 = now_ticks();
         self.prefill(model, prompt, cache, t0);
         let mut output = prompt.to_vec();

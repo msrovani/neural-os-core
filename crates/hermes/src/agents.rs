@@ -6,6 +6,7 @@ pub mod log_analyst_agent;
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 use event_bus::{CapabilityToken, Event, Receiver};
@@ -662,6 +663,7 @@ impl Agent for HermesAgent {
                 hermes::Command::HardwareInfo => "HardwareInfo",
                 hermes::Command::NetDiag => "NetDiag",
                 hermes::Command::Fetch(_) => "Fetch",
+                hermes::Command::Scrape(_) => "Scrape",
                 hermes::Command::Ping(_) => "Ping",
                 hermes::Command::Usage => "Usage",
                 hermes::Command::Conversation => "Conversation",
@@ -773,6 +775,81 @@ impl Agent for HermesAgent {
                             "Fetch falhou: {} (formato: /fetch http://host[:port]/path ou https://host[:port]/path)",
                             e
                         ),
+                    }
+                }
+                hermes::Command::Scrape(ref url_or_site) => {
+                    // Resolve site conhecido ou usa URL direta
+                    let url_result: Result<String, String> = {
+                        // ponytail: separate closure to avoid returning String from AgentTickResult fn
+                        let s = url_or_site.trim();
+                        if s.starts_with("http://") || s.starts_with("https://") {
+                            Ok(s.to_string())
+                        } else {
+                            match s {
+                                "g1" | "g1 globo" => Ok("http://g1.globo.com/".to_string()),
+                                "uol" => Ok("http://www.uol.com.br/".to_string()),
+                                "wikipedia" | "wiki" => Ok("http://pt.wikipedia.org/".to_string()),
+                                "github" => Ok("http://github.com/".to_string()),
+                                other if other.contains('.') => Ok(alloc::format!("http://{}", other)),
+                                other => Err(alloc::format!("Site '{}' nao reconhecido. Use /scrape <url> ou um nome conhecido (g1, uol, wikipedia, github).", other)),
+                            }
+                        }
+                    };
+                    match url_result {
+                        Err(msg) => msg,
+                        Ok(url) => {
+                    // Fetch + extrai texto + retorna markdown
+                    match crate::net_bridge::resolve_and_http_get_safe(&url) {
+                        Ok(body) => {
+                            let title = if let Ok(html) = core::str::from_utf8(&body) {
+                                html.find("<title>").and_then(|s| {
+                                    let start = s + 7;
+                                    html[start..].find("</title>").map(|e| html[start..start+e].trim().to_string())
+                                }).unwrap_or_else(|| "(no title)".to_string())
+                            } else { "(binary)".to_string() };
+                            // Extrai texto (mesma logica do BrowserAgent.extract_text)
+                            let text = {
+                                let raw = core::str::from_utf8(&body).unwrap_or("");
+                                let mut out = String::new();
+                                let mut in_tag = false;
+                                let mut in_script = false;
+                                let mut in_style = false;
+                                let bytes = raw.as_bytes();
+                                let mut i = 0;
+                                while i < bytes.len() {
+                                    let b = bytes[i];
+                                    if b == b'<' {
+                                        if i + 6 < bytes.len() && &bytes[i..i+7] == b"<script" { in_script = true; }
+                                        if i + 5 < bytes.len() && &bytes[i..i+6] == b"<style" { in_style = true; }
+                                        in_tag = true;
+                                    } else if b == b'>' {
+                                        in_tag = false;
+                                        if in_script && i + 8 < bytes.len() && &bytes[i-8..i+1] == b"</script>" { in_script = false; }
+                                        if in_style && i + 7 < bytes.len() && &bytes[i-7..i+1] == b"</style>" { in_style = false; }
+                                    } else if !in_tag && !in_script && !in_style {
+                                        if b.is_ascii_graphic() || b == b' ' || b == b'\n' {
+                                            out.push(b as char);
+                                        }
+                                    }
+                                    i += 1;
+                                }
+                                let mut cleaned = String::new();
+                                let mut prev_space = false;
+                                for c in out.chars() {
+                                    if c.is_whitespace() { if !prev_space { cleaned.push(' '); } prev_space = true; }
+                                    else { cleaned.push(c); prev_space = false; }
+                                }
+                                cleaned
+                            };
+                            let trimmed = if text.len() > 2000 { &text[..2000] } else { &text };
+                            alloc::format!(
+                                "# {}\n> Fonte: {}\n> {} bytes extraidos\n\n{}\n\n_Para ler o conteudo completo, use `/fetch {}`_",
+                                title, url, body.len(), trimmed, url
+                            )
+                        }
+                        Err(e) => alloc::format!("Erro ao acessar {}: {} (rede indisponivel? use `--nic-promisc1 allow-all` no VBox)", url, e),
+                    }
+                        }
                     }
                 }
                 hermes::Command::Ping(ref target) => {
@@ -1113,11 +1190,11 @@ impl Agent for HermesAgent {
                                 msg.push_str("[MODEL] Failed to parse model file.\n");
                             }
                         } else { msg.push_str("[MODEL] Empty file.\n"); }
-                    } else if let Some(_model) = k_ai::gguf::load_gguf_model_from_disk(path) {
+                    } else if let Some(_model) = cortex::gguf::load_gguf_model_from_disk(path) {
                         msg.push_str("[MODEL] GGUF model loaded from disk.\n");
                     } else {
                         msg.push_str("[MODEL] GGUF header NOTICE: streaming not yet supported.\n");
-                        msg.push_str(&k_ai::gguf::print_supported_formats());
+                        msg.push_str(&cortex::gguf::print_supported_formats());
                     }
                     msg
                 }

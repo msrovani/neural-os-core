@@ -45,7 +45,7 @@ use bootloader_api::BootInfo;
 
 use event_bus::{CapabilityToken, Event};
 
-use skill_registry::{McpManifest, Skill, SkillRegistry, OutputSchema};
+use skill_registry::{McpManifest, Skill, OutputSchema};
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
@@ -612,41 +612,8 @@ lazy_static! {
 
     // Locks IRQ-safe: SELF_HEAL e RESPAWN_QUEUE são acessados de handlers de exceção
 
-    static ref SKILL_REGISTRY: ticket_lock::TicketLock<SkillRegistry> = {
-
-        let mut reg = SkillRegistry::new();
-
-        reg.register(alloc::boxed::Box::new(EchoSkill));
-
-        reg.register(alloc::boxed::Box::new(SystemStatusSkill));
-
-        reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
-
-        reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
-
-        reg.register(alloc::boxed::Box::new(HwIdentifySkill));
-
-        reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill));
-
-        reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill));
-
-        reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
-
-        reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));
-
-        reg.register(alloc::boxed::Box::new(audio::settings::AudioGetSettingsSkill));
-
-        reg.register(alloc::boxed::Box::new(audio::settings::AudioSetVolumeSkill));
-
-        reg.register(alloc::boxed::Box::new(audio::settings::AudioToggleVoiceCloneSkill));
-
-        reg.register(alloc::boxed::Box::new(audio::context::EmotionalContextSkill));
-
-        reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
-
-        ticket_lock::TicketLock::new(reg)
-
-    };
+    // P001: SKILL_REGISTRY canônico agora em k_nano::globals (cross-crate).
+    // Skills builtin registrados via register_builtin_skills() no boot.
 
     static ref TRUST_CACHE: ticket_lock::TicketLock<trust::TrustCache> = ticket_lock::TicketLock::new(trust::TrustCache::new());
 
@@ -798,7 +765,7 @@ impl Agent for SystemAgent {
         };
         if let Some(event) = rx.try_receive() {
 
-            let reg = SKILL_REGISTRY.lock();
+            let reg = k_nano::SKILL_REGISTRY.lock();
 
             // DiagnosticSkill no boot (registrada na AgentFleet)
             match reg.execute_skill("diagnostic", &[], &event.token) {
@@ -1119,7 +1086,7 @@ fn n3_cortex_gate(gen: Option<bool>) {
 /// ADR-0042 N4 — gate serial honesto do orquestrador (hermes).
 /// `intent_e2e`: Some(true/false) se weather-e2e exercitou STT→USER_INTENT→cortex; None = gated no boot default.
 fn n4_hermes_gate(intent_e2e: Option<bool>) {
-    let skills = crate::SKILL_REGISTRY.lock().skill_count();
+    let skills = k_nano::SKILL_REGISTRY.lock().skill_count();
     let cap_allow = crate::capability_gate::allow_count();
     let cap_deny = crate::capability_gate::deny_count();
     // PluginHub builtins carregados em init_wasm_runtime (echo,calc,counter,fib,mul,fact,mem).
@@ -2539,7 +2506,8 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     crate::skill_observer::watch_task("boot", &["PCI scan", "GPU init", "Agent registry"], 0);
 
-
+    // P001: registra skills builtin no SKILL_REGISTRY canônico (k_nano) ANTES do AgentFleet.
+    register_builtin_skills();
 
     let mut registry = agent_core::AgentRegistry::new();
 
@@ -2756,11 +2724,11 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     let diag_skill = agents::DiagnosticSkill::new();
 
-    SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(diag_skill));
+    k_nano::SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(diag_skill));
 
     {
         let tok = crate::CapabilityToken::Legacy(1);
-        match SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
+        match k_nano::SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
             Ok(out) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill executada ({} bytes)", out.len()),
             Err(e) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill falhou: {}", e),
         }
@@ -3804,6 +3772,28 @@ fn drain_boot_phase_consumer() {
     if let Some(ref mut rx) = *BOOT_PHASE_RX.lock() {
         while rx.try_receive().is_some() {}
     }
+}
+
+/// P001: Registra skills builtin no SKILL_REGISTRY canônico (k_nano::globals).
+/// Antes isto era um `lazy_static` privado no bin — shadowing deixava hermes/k_ai
+/// vendo um registry vazio. Agora todos compartilham `k_nano::SKILL_REGISTRY`.
+pub fn register_builtin_skills() {
+    let mut reg = k_nano::SKILL_REGISTRY.lock();
+    reg.register(alloc::boxed::Box::new(EchoSkill));
+    reg.register(alloc::boxed::Box::new(SystemStatusSkill));
+    reg.register(alloc::boxed::Box::new(HardwareInfoSkill));
+    reg.register(alloc::boxed::Box::new(net::NetDiagnosticSkill));
+    reg.register(alloc::boxed::Box::new(HwIdentifySkill));
+    reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill));
+    reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill));
+    reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
+    reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));
+    reg.register(alloc::boxed::Box::new(audio::settings::AudioGetSettingsSkill));
+    reg.register(alloc::boxed::Box::new(audio::settings::AudioSetVolumeSkill));
+    reg.register(alloc::boxed::Box::new(audio::settings::AudioToggleVoiceCloneSkill));
+    reg.register(alloc::boxed::Box::new(audio::context::EmotionalContextSkill));
+    reg.set_policy("*", skill_registry::ToolPolicy { enabled: true, auto_approve: false });
+    k_nano::slog_bin!("SKILL", "init", "{} builtin skills registered", reg.skill_count());
 }
 
 

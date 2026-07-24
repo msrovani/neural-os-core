@@ -6,6 +6,7 @@ pub mod log_analyst_agent;
 
 use alloc::boxed::Box;
 use alloc::string::String;
+use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
 use event_bus::{CapabilityToken, Event, Receiver};
@@ -15,8 +16,10 @@ use crate::cortex;
 use crate::hermes::{self, IntentCache, WorkflowEngine};
 use crate::conversation;
 use crate::{println, kjson};
-use crate::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
+use crate::{EVENT_BUS, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
             CONVERSATION_TRACKER, PENDING_SKILL, TRINITY};
+// P001: SKILL_REGISTRY canônico agora em k_nano::globals (cross-crate).
+use k_nano::SKILL_REGISTRY;
 
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
@@ -791,6 +794,7 @@ impl Agent for HermesAgent {
                 hermes::Command::Commands => "Commands",
                 hermes::Command::Chat(_) => "Chat",
                 hermes::Command::ModelSwap(_) => "ModelSwap",
+                hermes::Command::Scrape(_) => "Scrape",
             };
             let intent_info = crate::hermes::IntentInfo {
                 intent_name: String::from(intent_name),
@@ -861,6 +865,22 @@ impl Agent for HermesAgent {
                             "Fetch falhou: {} (formato: /fetch http://host[:port]/path ou https://host[:port]/path)",
                             e
                         ),
+                    }
+                }
+                // ponytail: Scrape = Fetch + HTML extração stubs (futuro, hermes crate tem real)
+                hermes::Command::Scrape(ref target) => {
+                    let url = if target.trim().starts_with("http://") || target.trim().starts_with("https://") {
+                        target.trim().to_string()
+                    } else {
+                        alloc::format!("http://{}", target.trim())
+                    };
+                    match crate::net::resolve_and_http_get_safe(&url) {
+                        Ok(body) => {
+                            let text = core::str::from_utf8(&body).unwrap_or("(binary)");
+                            let preview = if text.len() > 200 { &text[..200] } else { text };
+                            alloc::format!("Scrape OK ({} bytes):\n{}\n\n_Use hermes crate Scrape para extração completa com parse HTML._", body.len(), preview)
+                        }
+                        Err(e) => alloc::format!("Scrape falhou: {} (use hermes crate para parse HTML real)", e),
                     }
                 }
                 hermes::Command::Ping(ref target) => {
@@ -1895,10 +1915,32 @@ impl Agent for SpecialistAgent {
 
 /// Registra SpecialistAgents Agency **somente** se PackageHub tiver AGENT.md
 /// agency assinados (ADR-0052). Seed compilado vazio — stubs não entram no fleet.
+/// Fallback: se specs vazio, registra 2 AgentSpecs mínimos (SystemDiagnostics, HwMonitor).
 pub fn register_agency_agents(registry: &mut agent_core::AgentRegistry) {
     let specs = crate::package_hub::PACKAGE_HUB.lock().agency_specs();
     if specs.is_empty() {
-        k_nano::slog_bin!("AGENCY", "info", "0 agentes — ADR-0052: sem AGENT.md agency assinado (stubs removidos)");
+        // ponytail: 2 specs fallback — boot log mostra >0 agentes sem AGENT.md assinado.
+        let fallback = vec![
+            crate::agency::AgentSpec {
+                name: String::from("SystemDiagnostics"),
+                division: String::from("qa"),
+                mission: String::from("Diagnóstico de saúde do kernel e invariantes"),
+                skills: vec![String::from("diagnostic"), String::from("health")],
+                deliverable: String::from("auto"),
+            },
+            crate::agency::AgentSpec {
+                name: String::from("HwMonitor"),
+                division: String::from("infrastructure"),
+                mission: String::from("Monitora hardware detectado e publica estado"),
+                skills: vec![String::from("hw"), String::from("monitor")],
+                deliverable: String::from("auto"),
+            },
+        ];
+        for spec in &fallback {
+            let agent = SpecialistAgent::new(spec.clone());
+            registry.register(Box::new(agent));
+        }
+        k_nano::slog_bin!("AGENCY", "info", "2 agentes fallback registrados (ADR-0052: sem AGENT.md agency assinado)");
         return;
     }
     let agency = crate::agency::Agency::from_specs(specs);

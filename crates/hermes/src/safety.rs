@@ -154,6 +154,7 @@ pub fn check_safety(input: &str) -> SafetyVerdict {
 pub struct SafetyAgent {
     receiver: event_bus::Receiver,
     violations: Vec<(u8, String, u64)>,
+    verify_counter: u64,
 }
 
 impl SafetyAgent {
@@ -161,6 +162,7 @@ impl SafetyAgent {
         SafetyAgent {
             receiver: EVENT_BUS.subscribe("SAFETY_CHECK"),
             violations: Vec::new(),
+            verify_counter: 0,
         }
     }
 
@@ -198,6 +200,15 @@ impl Agent for SafetyAgent {
                     payload: b"ALLOW".to_vec(), token: event_bus::CapabilityToken::Legacy(1),
                 });
             }
+        }
+        // I4: periodic Merkle chain verify — every 100 ticks audita a trilha.
+        self.verify_counter = self.verify_counter.wrapping_add(1);
+        if self.verify_counter % 100 == 0 {
+            let (ok, count) = {
+                let trail = crate::globals::AUDIT_TRAIL.lock();
+                (trail.verify(), trail.entry_count())
+            };
+            k_nano::slog_hermes!("SAFETY", "I4", "Merkle chain verify={} (entries={})", ok, count);
         }
         AgentTickResult::Pending
     }

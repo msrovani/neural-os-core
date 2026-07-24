@@ -32,7 +32,13 @@ pub fn is_sandbox() -> bool {
 }
 
 pub fn is_online() -> bool {
-    get() == SystemEnv::HwReal
+    if get() == SystemEnv::HwReal {
+        return true;
+    }
+    // ponytail: check if any NIC driver is initialized
+    crate::nic_globals::E1000.lock().is_some()
+        || crate::nic_globals::RTL8139.lock().is_some()
+        || crate::nic_globals::VIRTIO_DEV.lock().is_some()
 }
 
 pub fn name() -> &'static str {

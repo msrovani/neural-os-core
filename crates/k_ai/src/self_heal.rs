@@ -78,6 +78,11 @@ pub struct Checkpoint {
     pub allocated_count: usize,
     pub mhi_dram_bytes: u64,
     pub tick: u64,
+    pub heap_start: u64,           // heap region start address (0 = unknown)
+    pub heap_size: u64,             // heap region size in bytes
+    pub page_table_pml4_addr: u64,  // CR3 / PML4 physical address (0 = unknown)
+    pub driver_state_hash: u64,     // FNV-1a hash of driver init flags (0 = not captured)
+    pub checkpoint_version: u8,     // format version (increment to 2)
 }
 
 impl Checkpoint {
@@ -87,6 +92,9 @@ impl Checkpoint {
             next_free_bit: 0, total_frames: 0,
             usable_frames: 0, allocated_count: 0,
             mhi_dram_bytes: 0, tick: 0,
+            heap_start: 0, heap_size: 0,
+            page_table_pml4_addr: 0, driver_state_hash: 0,
+            checkpoint_version: 0,
         }
     }
 }
@@ -305,6 +313,22 @@ impl SelfHeal {
         drop(guard);
         self.checkpoint.mhi_dram_bytes = Self::get_mhi_dram_bytes();
         self.checkpoint.tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        self.checkpoint.heap_start = 0x_4000_0000_0000; // ponytail: fixed heap addr from AGENTS.md
+        self.checkpoint.heap_size = 512 * 1024 * 1024;  // 512MB heap
+        self.checkpoint.page_table_pml4_addr = unsafe {
+            x86_64::registers::control::Cr3::read().0.start_address().as_u64()
+        };
+        // ponytail: driver state hash — FNV-1a over ATA + E1000 init flags (1 if Some, 0 if None)
+        let driver_flags: [u8; 2] = [
+            k_nano::globals::ATA_DRIVER.lock().is_some() as u8,
+            k_nano::nic_globals::E1000.lock().is_some() as u8,
+        ];
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for &byte in &driver_flags {
+            hash = hash.wrapping_mul(0x100000001b3) ^ (byte as u64);
+        }
+        self.checkpoint.driver_state_hash = hash;
+        self.checkpoint.checkpoint_version = 2;
         self.checkpoint.valid = true;
         k_nano::slog_kai!("CHECKPOINT", "info", "Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
             self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
@@ -355,7 +379,14 @@ impl SelfHeal {
             alloc.allocated_count = self.checkpoint.allocated_count;
         }
         drop(guard);
-        k_nano::slog_kai!("CHECKPOINT", "info", "Bitmap restaurado @ {} frames — AVISO: page tables/heap/drivers NAO restaurados (P09)", self.checkpoint.allocated_count);
+        k_nano::slog_kai!("CHECKPOINT", "info",
+            "v{}: heap={:#x}+{}MB pml4={:#x} drivers_hash={:#x} — AVISO: page tables/heap/drivers NAO restaurados (P09)",
+            self.checkpoint.checkpoint_version,
+            self.checkpoint.heap_start,
+            self.checkpoint.heap_size / (1024 * 1024),
+            self.checkpoint.page_table_pml4_addr,
+            self.checkpoint.driver_state_hash
+        );
         true
     }
 

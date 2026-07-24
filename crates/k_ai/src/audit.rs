@@ -95,6 +95,11 @@ impl AuditTrail {
         self.verify_chain()
     }
 
+    /// Total entries ever pushed (ring may have wrapped; count is monotonic).
+    pub fn entry_count(&self) -> usize {
+        self.count
+    }
+
     pub fn last_n(&self, n: usize) -> &[AuditEntry] {
         let start = self.ring.len().saturating_sub(n);
         &self.ring[start..]

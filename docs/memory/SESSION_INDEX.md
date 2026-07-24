@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 217 | — | E1a+P001+Boot+CKPT | Cortex crate promotion + P001 SKILL_REGISTRY + boot path + checkpoint expand | SKILL_REGISTRY shadow fix; Agency fallback; Safety I4 Merkle verify; Checkpoint v2 (CR3+heap+driver hash); env/block_dev drift |
 | 216 | — | SGDB Agent (A-026) | Bridge EventBus ↔ SGDB + versionamento skills | SgdbAgent EventDriven: store_version, rollback, list_versions, list_skills, store_skill, recall. 229 LOC, 0 erros |
 | 176 | ADR-0063 | SGDB Memory Quality | SleepCycle ckpt + recall L4 + V-flag + ART SIMD | Pós-pesquisa TicKV/NoProto/ART/BQ; AIOS memória e2e |
 | 175 | ADR-0063 | SGDB D-series | Hamming + L0/L1 RAM + Tickv ckpt + bench 100k/10k | Aceite D-series; Visão vs Ship; DoD pleno residual |

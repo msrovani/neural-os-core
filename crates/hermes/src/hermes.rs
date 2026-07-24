@@ -292,7 +292,7 @@ const VOCAB: [&str; 17] = [
 #[derive(Debug, Clone)]
 pub enum Command {
     Status, Echo(String), Help, HardwareInfo, NetDiag,
-    Fetch(String), Ping(String), TrustAllow(u64, String), TrustDeny(u64, String),
+    Fetch(String), Scrape(String), Ping(String), TrustAllow(u64, String), TrustDeny(u64, String),
     Usage, Conversation, Chat(String),
     ShowSkills, AddSkill(String, String), RmSkill(String), ReloadSkills,
     Profile,
@@ -561,6 +561,9 @@ pub fn parse_command(line: &str) -> Command {
         }
         if name.eq_ignore_ascii_case("fetch") || name.eq_ignore_ascii_case("get") {
             return Command::Fetch(parts.next().unwrap_or("").trim().to_string());
+        }
+        if name.eq_ignore_ascii_case("scrape") || name.eq_ignore_ascii_case("web") || name.eq_ignore_ascii_case("site") {
+            return Command::Scrape(parts.next().unwrap_or("").trim().to_string());
         }
         if name.eq_ignore_ascii_case("ping") {
             return Command::Ping(parts.next().unwrap_or("").trim().to_string());

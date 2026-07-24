@@ -129,7 +129,16 @@
 
 > **Origem:** auditoria Cursor k_nano (Sprint/Jul 2026). Bugs de código já corrigidos (AHCI MMIO/TFES, VA→PA, FAT32 read_sectors, ATA PIO write, IrqSafeLock CAS, journal recover, BlockDevice len, xHCI init, PCI multi-function BARs, warnings/stubs). Resta dívida arquitetural + validação em runtime.
 
+- [x] **P001** Unificar globals (`EVENT_BUS` / `GLOBAL_ALLOCATOR` / `SKILL_REGISTRY`) em `k_nano` como singleton único — SKILL_REGISTRY shadow removido; `register_builtin_skills()` em k_nano
 - [ ] Migrar `neural-kernel` para depender de `k_nano` e eliminar ~66 módulos duplicados (maior drift)
+  - [x] `env.rs` drift fix — `is_online()` movido para k_nano; bin é `pub use k_nano::env::*`
+  - [x] `block_dev.rs` — bin mantém `impl BlockDevice for UsbMassStorage` local (tipo difere de k_nano)
+  - [ ] Demais drifts (net, interrupts, boot_logger, virtio_net, vfs, smp, serial, vga_buffer, usb_msc, hnsw, ipc) — futuras ondas
+- [ ] **P08** Um só `SELF_HEAL` / `TRUST_CACHE` no path boot (hoje: monólito × hermes/k_ai)
+- [x] **Checkpoint SelfHeal** — `restore_checkpoint` expandido: heap_start/size, PML4/CR3 addr, driver_state_hash FNV-1a, checkpoint_version=2
+- [x] **Boot path — Agency fallback** — `register_agency_agents` cria 2 AgentSpecs (SystemDiagnostics, HwMonitor) quando PACKAGE_HUB vazio
+- [x] **Safety I4 Merkle verify** — `verify_counter` + `AUDIT_TRAIL.lock().verify()` a cada 100 ticks
+- [x] **AuditTrail::entry_count()** — adicionado em k_ai/audit.rs (pré-requisito do I4 verify)
 - [ ] Validar AHCI em QEMU (`-device ahci`) e/ou HW real — read/write + detecção TFES
 - [ ] Validar `dma_va_to_pa` com buffers fora do heap (stack/.bss) vs identity map
 - [ ] Validar FAT32 com falha de I/O real (erro visível no chamador)

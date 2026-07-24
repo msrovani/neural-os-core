@@ -13,9 +13,7 @@ impl StructuredDecoder {
     pub fn step(&mut self, _token: u16) {}
     pub fn mask_logits(&self, _logits: &mut [f32]) {}
 }
-
 // ponytail: threads &mut StructuredDecoder through Model trait boundary without changing the trait.
-// Set before generate_via_model, consumed (take'd) inside generate_text.
 struct DecoderCell(UnsafeCell<Option<*mut StructuredDecoder>>);
 unsafe impl Send for DecoderCell {}
 unsafe impl Sync for DecoderCell {}
@@ -106,7 +104,7 @@ fn softmax_inplace(logits: &mut [f32]) {
     for v in logits.iter_mut() { *v *= inv; }
 }
 
-fn rope_precompute(max_seq: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Vec<f32>) {
+pub fn rope_precompute(max_seq: usize, head_dim: usize, theta: f32) -> (Vec<f32>, Vec<f32>) {
     let half = head_dim / 2;
     let n = max_seq * half;
     let mut cos_table = vec![0.0f32; n];
@@ -214,13 +212,12 @@ impl KvCache {
         }
     }
 
-    pub fn k_dim(&self) -> usize { self.k_dim }
-    pub fn kv_dim(&self) -> usize { self.kv_dim }
-
     pub fn append(&mut self, layer: usize, k_new: &Tensor, v_new: &Tensor) {
         self.k[layer].extend_from_slice(&k_new.data);
         self.v[layer].extend_from_slice(&v_new.data);
     }
+
+    pub fn k_dim(&self) -> usize { self.k_dim }
 
     pub fn advance(&mut self, n: usize) {
         self.len += n;
@@ -334,8 +331,8 @@ impl TransformerModel {
         }
     }
 
-    fn embed_lookup(&self, token: u16) -> Tensor {
-        let t = (token as usize).min(self.embed.shape.1 - 1);
+    fn embed_lookup(&self, token: u32) -> Tensor {
+        let t = (token as usize).min(self.embed.shape.1.saturating_sub(1));
         let mut data = Vec::with_capacity(self.hidden);
         for row in 0..self.hidden {
             let idx = row * self.embed.shape.1 + t;
@@ -350,7 +347,7 @@ impl TransformerModel {
         t
     }
 
-    pub fn forward_with_kv(&self, tokens: &[u16], cache: &mut KvCache) -> (Tensor, Tensor) {
+    pub fn forward_with_kv(&self, tokens: &[u32], cache: &mut KvCache) -> (Tensor, Tensor) {
         let seq_len = tokens.len();
         let is_first_pass = cache.len == 0;
         let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
@@ -377,7 +374,21 @@ impl TransformerModel {
         let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
 
         let _layer_count = self.layers.len();
+        // Soft-float 2B: stride=3 (~⅓ layers) libera budget p/ chat frame 8 toks + gen.
+        let soft_stride: usize = if self.hidden >= 2048 { 3 } else { 1 };
+        if is_first_pass && soft_stride > 1 {
+            k_nano::slog_cortex!("FWD", "info", "soft_stride={} layers≈{}/{}",
+                soft_stride,
+                (_layer_count + soft_stride - 1) / soft_stride,
+                _layer_count);
+        }
         for (layer_idx, layer) in self.layers.iter().enumerate() {
+            if soft_stride > 1 && (layer_idx % soft_stride) != 0 {
+                continue;
+            }
+            if is_first_pass && (layer_idx % 5 == 0 || layer_idx + 1 == _layer_count) {
+                k_nano::slog_cortex!("FWD", "info", "layer {}/{}", layer_idx, _layer_count);
+            }
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
 
             // QKV for new tokens — fallback silencioso se matmul falhar
@@ -394,11 +405,6 @@ impl TransformerModel {
 
             // Append new K,V to cache (K is RoPE-rotated)
             cache.append(layer_idx, &k, &v);
-
-            // Advance cache.len only once after all layers
-            if layer_idx + 1 == self.layers.len() {
-                cache.advance(new_len);
-            }
 
             // Full K,V from cache for attention
             let total_k = cache.k_all(layer_idx, total_seq);
@@ -547,6 +553,8 @@ impl TransformerModel {
                 }
             }
         }
+        // Advance uma vez após layers ativas (compatível com soft_stride)
+        cache.advance(new_len);
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let last_hidden = Tensor::from_row_major((1, self.hidden),
@@ -560,7 +568,7 @@ impl TransformerModel {
     }
 
     /// Forward new tokens with KV cache; returns logits [new_len × vocab] (one row per input token).
-    pub fn forward_with_kv_all_logits(&self, tokens: &[u16], cache: &mut KvCache) -> Tensor {
+    pub fn forward_with_kv_all_logits(&self, tokens: &[u32], cache: &mut KvCache) -> Tensor {
         let seq_len = tokens.len();
         let is_first_pass = cache.len == 0;
         let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
@@ -732,7 +740,204 @@ impl TransformerModel {
         Tensor::from_row_major((new_len, vocab_size), all_logits).unwrap()
     }
 
-    pub fn forward_hidden(&self, tokens: &[u16]) -> (Tensor, Tensor) {
+    /// AirLLM: apply one transformer layer then return; caller drops weights.
+    /// Uses the same attention/FFN path as forward_with_kv (no soft_stride skip).
+    pub fn apply_one_layer(
+        &self,
+        layer_idx: usize,
+        layer: &LayerWeights,
+        x: &mut Tensor,
+        cache: &mut KvCache,
+        start_pos: usize,
+        new_len: usize,
+        total_seq: usize,
+        mask: &Tensor,
+    ) {
+        let norm = self.rms_norm_tensor(x, &layer.rms_attn);
+
+        let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+        let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+        let v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+
+        let qk_head_dim = self.kv_dim / self.num_heads.max(1);
+        rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
+            &self.rope_cos, &self.rope_sin, start_pos);
+        rope_apply_heads(&mut k.data, new_len, self.num_kv_heads, qk_head_dim,
+            &self.rope_cos, &self.rope_sin, start_pos);
+
+        cache.append(layer_idx, &k, &v);
+
+        let total_k = cache.k_all(layer_idx, total_seq);
+        let total_v = cache.v_all(layer_idx, total_seq);
+
+        let num_heads = self.num_heads.max(1);
+        let num_kv_heads = self.num_kv_heads.max(1);
+        let kv_dim = self.kv_dim;
+        let q_group_size = (num_heads / num_kv_heads).max(1);
+        let k_dim = total_k.shape.1;
+        let v_dim = total_v.shape.1;
+        let mut attn_out_data = vec![0.0f32; new_len * kv_dim];
+        let block_size = crate::tensor::optimal_attention_block(qk_head_dim);
+
+        for kv_g in 0..num_kv_heads {
+            let kv_start = kv_g * qk_head_dim;
+            let mut k_g = Tensor::new((total_seq, qk_head_dim));
+            let mut v_g = Tensor::new((total_seq, qk_head_dim));
+            for s in 0..total_seq {
+                for d in 0..qk_head_dim {
+                    let kd = kv_start + d;
+                    if kd < k_dim { k_g.data[s * qk_head_dim + d] = total_k.data[s * k_dim + kd]; }
+                    if kd < v_dim { v_g.data[s * qk_head_dim + d] = total_v.data[s * v_dim + kd]; }
+                }
+            }
+
+            for qh in 0..q_group_size {
+                let head_idx = kv_g * q_group_size + qh;
+                let head_start = head_idx * qk_head_dim;
+
+                for qb in (0..new_len).step_by(block_size) {
+                    let qb_end = (qb + block_size).min(new_len);
+                    let qb_len = qb_end - qb;
+                    let mut q_block = Tensor::new((qb_len, qk_head_dim));
+                    for s in 0..qb_len {
+                        for d in 0..qk_head_dim {
+                            q_block.data[s * qk_head_dim + d] =
+                                q.data[(qb + s) * kv_dim + head_start + d];
+                        }
+                    }
+
+                    for kb in (0..total_seq).step_by(block_size) {
+                        let kb_end = (kb + block_size).min(total_seq);
+                        let kb_len = kb_end - kb;
+                        let mut k_block = Tensor::new((kb_len, qk_head_dim));
+                        for s in 0..kb_len {
+                            for d in 0..qk_head_dim {
+                                k_block.data[s * qk_head_dim + d] =
+                                    k_g.data[(kb + s) * qk_head_dim + d];
+                            }
+                        }
+                        let k_block_t = k_block.transposed();
+                        let mut scores = q_block.matmul(&k_block_t).unwrap();
+                        let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
+                        let mask_row_start = qb * total_seq + kb;
+                        for si in 0..qb_len {
+                            for sj in 0..kb_len {
+                                let idx = si * kb_len + sj;
+                                scores.data[idx] *= scale;
+                                scores.data[idx] += mask.data[mask_row_start + si * total_seq + sj];
+                            }
+                        }
+                        for si in 0..qb_len {
+                            let start = si * kb_len;
+                            let end = start + kb_len;
+                            for sj in 0..kb_len {
+                                if (qb + si) < (kb + sj) {
+                                    scores.data[start + sj] = -1e9;
+                                }
+                            }
+                            softmax_inplace(&mut scores.data[start..end]);
+                        }
+                        let mut v_block = Tensor::new((kb_len, qk_head_dim));
+                        for s in 0..kb_len {
+                            for d in 0..qk_head_dim {
+                                v_block.data[s * qk_head_dim + d] =
+                                    v_g.data[(kb + s) * qk_head_dim + d];
+                            }
+                        }
+                        let attn_block = scores.matmul(&v_block).unwrap();
+                        for s in 0..qb_len {
+                            for d in 0..qk_head_dim {
+                                attn_out_data[(qb + s) * kv_dim + head_start + d] +=
+                                    attn_block.data[s * qk_head_dim + d];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap();
+        let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
+        let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::new((new_len, self.hidden)));
+        if let Some(summed) = x.add(&proj) {
+            *x = summed;
+        }
+
+        let norm2 = self.rms_norm_tensor(x, &layer.rms_ffn);
+        let gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        let up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        let ffn_group = gate.shape.1.max(1);
+        let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
+        for (i, g) in gated.data.iter_mut().enumerate() {
+            *g = silu(*g) * up.data.get(i).copied().unwrap_or(0.0);
+        }
+
+        let intermediate_size = layer.intermediate_size.max(ffn_group);
+        let down_out = layer.down.shape.1;
+        let num_groups = (intermediate_size / ffn_group).max(1);
+        let mut gated_full = Tensor::new((new_len, intermediate_size));
+        for s in 0..new_len {
+            for g in 0..num_groups {
+                let g_off = g * ffn_group;
+                for d in 0..ffn_group {
+                    gated_full.data[s * intermediate_size + g_off + d] = gated.data[s * ffn_group + d];
+                }
+            }
+        }
+
+        let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
+        let down = layer.down.matmul_hybrid(&gated_norm)
+            .unwrap_or_else(|| Tensor::new((new_len, down_out.max(1))));
+        for s in 0..new_len {
+            for d in 0..down_out.min(self.hidden) {
+                x.data[s * self.hidden + d] += down.data[s * down_out + d];
+            }
+        }
+    }
+
+    /// Embed new tokens for a KV forward pass (AirLLM helper).
+    pub fn embed_for_kv(&self, tokens: &[u32], cache: &KvCache) -> (Tensor, Tensor, usize, usize, usize) {
+        let seq_len = tokens.len();
+        let is_first_pass = cache.len == 0;
+        let new_len = if is_first_pass { seq_len.min(self.max_seq) } else { seq_len };
+        let total_seq = if is_first_pass { new_len } else { cache.len + seq_len };
+        let start_pos = if is_first_pass { 0 } else { cache.len };
+
+        let mut x = Tensor::new((new_len, self.hidden));
+        for (i, &t) in tokens.iter().enumerate().take(new_len) {
+            let emb = self.embed_lookup(t);
+            for j in 0..self.hidden {
+                x.data[i * self.hidden + j] = emb.data[j];
+            }
+        }
+
+        let mut mask_data = vec![0.0f32; new_len * total_seq];
+        for i in 0..new_len {
+            let global_i = start_pos + i;
+            for j in (global_i + 1)..total_seq {
+                mask_data[i * total_seq + j] = NEG_INFINITY;
+            }
+        }
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
+        (x, mask, start_pos, new_len, total_seq)
+    }
+
+    /// Final RMS + unembed after all layers (AirLLM helper).
+    pub fn finalize_logits(&self, x: &Tensor, new_len: usize) -> (Tensor, Tensor) {
+        let final_norm = self.rms_norm_tensor(x, &self.rms_final);
+        let last_hidden = Tensor::from_row_major(
+            (1, self.hidden),
+            final_norm.data[(new_len - 1) * self.hidden..new_len * self.hidden].to_vec(),
+        ).unwrap();
+        let logits = if self.tie_embeddings {
+            self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::new((1, self.vocab_size as usize)))
+        } else {
+            self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::new((1, self.vocab_size as usize)))
+        };
+        (last_hidden, logits)
+    }
+
+    pub fn forward_hidden(&self, tokens: &[u32]) -> (Tensor, Tensor) {
         let seq_len = tokens.len().min(self.max_seq);
         let num_heads = self.num_heads;
         let num_kv_heads = self.num_kv_heads;
@@ -938,16 +1143,16 @@ impl TransformerModel {
         (last_hidden, logits)
     }
 
-    pub fn forward(&self, tokens: &[u16]) -> Tensor {
+    pub fn forward(&self, tokens: &[u32]) -> Tensor {
         self.forward_hidden(tokens).1
     }
 
-pub fn generate_next(&self, tokens: &[u16]) -> u16 {
+pub fn generate_next(&self, tokens: &[u32]) -> u32 {
     let logits = self.forward(tokens);
     argmax_row(&logits, 0)
 }
 
-pub fn sample(&self, tokens: &[u16], top_k: usize, temperature: f32) -> u16 {
+pub fn sample(&self, tokens: &[u32], top_k: usize, temperature: f32) -> u32 {
     let logits = self.forward(tokens);
     let mut probs: Vec<(usize, f32)> = logits.data.iter().enumerate()
         .map(|(i, &v)| (i, v / temperature.max(0.01))).collect();
@@ -963,7 +1168,7 @@ pub fn sample(&self, tokens: &[u16], top_k: usize, temperature: f32) -> u16 {
     for &(idx, prob) in &probs {
         let p = prob / sum;
         r -= p;
-        if r <= 0.0 { return idx as u16; }
+        if r <= 0.0 { return idx as u32; }
     }
     argmax_row(&logits, 0)
 }
@@ -1039,14 +1244,30 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let _ms = read_u16(data, &mut off)? as usize;
         let isize = read_u16(data, &mut off)? as usize;
         let embed_bytes = (hidden * vs / 4) as u64;
-        // 4 aten tensors (q,k,v,o: hidden² each) + 3 FFN tensors (gate,up,down: hidden×isize each)
-        let layer_bytes = (4u64 * hidden as u64 * hidden as u64 / 4 + 3u64 * hidden as u64 * isize as u64 / 4) * num_layers as u64;
+        // Naive (v1 dense) — superestima GQA/BitFFN v3+ e forçava resize 900MB+
+        // (= ~100k map_page no TCG → hang sem log). v3+: pesos packed ≈ arquivo.
+        let layer_bytes = (4u64 * hidden as u64 * hidden as u64 / 4
+            + 3u64 * hidden as u64 * isize as u64 / 4)
+            * num_layers as u64;
         let unembed_bytes = (hidden as u64 * vs as u64 / 4) as u64;
-        let estimated = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
+        let naive_mb = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
+        let file_mb = (data.len() + 1024 * 1024 - 1) / (1024 * 1024);
+        let estimated = if version >= 3 {
+            // Ternário packed + headroom; heap já inicia em 1024MB (allocator).
+            file_mb + 64
+        } else {
+            naive_mb
+        };
         let cur_mb = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
-        if estimated > cur_mb {
-            let total_mb = (estimated + (estimated / 4).max(64)).min(2048);
+        k_nano::slog_cortex!("LLM", "info", "load_model ver={} h={} L={} file={}MB est={}MB heap={}MB", version, hidden, num_layers, file_mb, estimated, cur_mb);
+        // estimated = quanto load_model precisa alocar (tensors). Mas o arquivo
+        // ja esta no heap (file_mb). Total real = file_mb + estimated.
+        let total_needed = file_mb + estimated + 64;
+        if total_needed > cur_mb {
+            let total_mb = total_needed.min(2048); // cap 2GB
+            k_nano::slog_cortex!("LLM", "info", "resize_heap {} → {} MB (file={} est={})...", cur_mb, total_mb, file_mb, estimated);
             k_nano::allocator::resize_heap_to_mb(total_mb);
+            k_nano::slog_cortex!("LLM", "info", "resize_heap done");
         }
     }
     // Reset offset past magic+version+num_params+hidden+num_layers for main parsing
@@ -1089,8 +1310,8 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let has_ffn_layernorm = (layer_features & 0x02) != 0;
         let has_rope = (layer_features & 0x04) != 0;
 
-        // BitNet-b1.58-2B-4T mis-export: only rewrite q_dim if the file is the
-        // legacy ~203MB dump (header q_dim=2560 but packed as 640).
+        // BitNet-b1.58-2B-4T: HF packed shape (out/4,in) → q_dim=2560 (head_dim=128).
+        // Dump legado ~203MB (q_dim header 2560 mas pesos 640) → corrigir só se ficheiro cabe.
         {
             let k_try = num_kv_heads * (q_dim / num_heads.max(1));
             let ffn_try = intermediate_size * q_dim / hidden.max(1);
@@ -1106,7 +1327,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 && num_kv_heads == 5
                 && q_dim == hidden
             {
-                k_nano::slog_cortex!("LLM", "info", "q_dim header {} → 640 (legacy dump; need~{}MB)",
+                k_nano::slog_cortex!("LLM", "info", "q_dim header {} → 640 (legacy dump ~203MB; need~{}MB)",
                     q_dim,
                     need / (1024 * 1024));
                 q_dim = 640;
@@ -1115,24 +1336,30 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
 
         let embed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
 
-        // GQA/BitFFN dimensions from header
+        // GQA/BitFFN dimensions from header (2B: q_dim=2560, head_dim=128, k_dim=640)
         let kv_head_dim = q_dim / num_heads.max(1);
         let k_dim = num_kv_heads * kv_head_dim;
         let ffn_group = intermediate_size * q_dim / hidden.max(1);
         let down_out = q_dim;
 
+        // Alguns dumps omitem vetores RMS f32; escolhe layout que fecha no ficheiro.
+        // (sem closures — soft-float / LLVM "offset not multiple of 16")
         let tern_per = (hidden * q_dim + 3) / 4
             + 2 * ((hidden * k_dim + 3) / 4)
             + (q_dim * hidden + 3) / 4
             + 2 * ((hidden * ffn_group + 3) / 4)
             + (intermediate_size * down_out + 3) / 4;
         let rem = data.len().saturating_sub(off);
-        // v4 export (prepare_extra_models): SEMPRE grava input+post RMS; feat bits = sub-norms.
-        // Heuristica rem/need preferia rms=0 no slice exacto → desalinhamento → #PF.
-        let has_basic_rms = version >= 4 || {
+        // v4 + prepare_extra_models: SEMPRE grava input/post RMS; feat bits = sub-norms
+        // em tamanho `hidden` (ones). Heuristica rem/need preferia rms=0 → #PF no FWD.
+        let (has_basic_rms, best_d) = if version >= 4 {
+            (true, 0usize)
+        } else {
             let mut best_basic = true;
             let mut best_d = usize::MAX;
-            for basic in [true, false] {
+            let mut bi = 0u8;
+            while bi < 2 {
+                let basic = bi == 0;
                 let mut per = tern_per;
                 if basic {
                     per = per.saturating_add(hidden.saturating_mul(8));
@@ -1141,8 +1368,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                     per = per.saturating_add(hidden.saturating_mul(4));
                 }
                 if has_ffn_layernorm {
-                    // exporter legado gravava hidden; v4 tipico = intermediate
-                    per = per.saturating_add(intermediate_size.saturating_mul(4));
+                    per = per.saturating_add(hidden.saturating_mul(4));
                 }
                 let need = per.saturating_mul(num_layers);
                 let d = if rem > need { rem - need } else { need - rem };
@@ -1150,15 +1376,27 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                     best_d = d;
                     best_basic = basic;
                 }
+                bi += 1;
             }
-            best_basic
+            (best_basic, best_d)
         };
-        // prepare_extra_models feat=0x03: sub-norms em tamanho `hidden` (ones), nao intermediate.
-        // Ler intermediate aqui desalinha o resto do ficheiro.
-        let rms_ffn_norm_dim = hidden;
+        // Nao sobrescrever feat bits com heuristica (inner/ffn).
+        k_nano::slog_cortex!("LLM", "info", "q_dim={} head_dim={} k_dim={} ffn_g={} layout rms={} inner={} ffn_ln={} rem={}KB d={}KB",
+            q_dim,
+            kv_head_dim,
+            k_dim,
+            ffn_group,
+            has_basic_rms as u8,
+            has_inner_attn_ln as u8,
+            has_ffn_layernorm as u8,
+            rem / 1024,
+            best_d / 1024);
 
         let mut layers = Vec::with_capacity(num_layers);
-        for _ in 0..num_layers {
+        for li in 0..num_layers {
+            if li % 5 == 0 || li + 1 == num_layers {
+                k_nano::slog_cortex!("LLM", "info", "loading layer {}/{} off={}KB", li, num_layers, off / 1024);
+            }
             let rms_attn = if has_basic_rms {
                 read_f32_vec(data, &mut off, hidden)?
             } else {
@@ -1170,13 +1408,14 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
                 vec![1.0; hidden]
             };
             let rms_inner_attn = if has_inner_attn_ln {
+                // prepare_extra_models grava `hidden` (nao so kv*heads quando diverge)
                 read_f32_vec(data, &mut off, hidden)?
             } else {
                 vec![1.0; kv_head_dim * num_heads]
             };
             let rms_ffn_norm = if has_ffn_layernorm {
-                let v = read_f32_vec(data, &mut off, rms_ffn_norm_dim)?;
-                // Forward aplica em gated (intermediate); pad/trunc para tamanho certo
+                // Blobs atuais: ones(hidden). Forward precisa intermediate — pad.
+                let v = read_f32_vec(data, &mut off, hidden)?;
                 if v.len() == intermediate_size {
                     v
                 } else {
@@ -1241,14 +1480,21 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             }
         }
 
+        // BitNet attn precisa RoPE. feat bit2 = theta no EOF; senão default 10000.
+        // Nunca confiar em theta<=1 (lixo pós-pesos / soft-float print edge).
         let rope_seq = (max_seq as usize).min(2048).max(64);
-        let (rope_cos, rope_sin) = if has_rope {
-            let rope_theta_val = read_f32(data, &mut off)?;
-            rope_precompute(rope_seq, kv_head_dim, rope_theta_val)
-        } else {
-            // convert_bitnet omite feat bit2 — RoPE ainda é obrigatório no attn
-            rope_precompute(rope_seq, kv_head_dim, 10000.0)
-        };
+        let mut theta = 10000.0f32;
+        if has_rope && off + 4 <= data.len() {
+            if let Some(t) = read_f32(data, &mut off) {
+                if t > 1.0 {
+                    theta = t;
+                }
+            }
+        }
+        k_nano::slog_cortex!("LLM", "info", "RoPE precompute seq={} theta={} feat_rope={}", rope_seq, theta as u32, has_rope as u8);
+        let (rope_cos, rope_sin) = rope_precompute(rope_seq, kv_head_dim, theta);
+
+        k_nano::slog_cortex!("LLM", "info", "model OK layers={} q_dim={} tied={} off={}KB", num_layers, q_dim, tie_embeddings as u8, off / 1024);
 
         let model = TransformerModel {
             embed, layers, rms_final, unembed, medusa_heads,
@@ -1449,14 +1695,14 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     Some(model)
 }
 
-pub fn argmax_row(logits: &Tensor, row: usize) -> u16 {
+pub fn argmax_row(logits: &Tensor, row: usize) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
-    let mut best = 0u16;
+    let mut best = 0u32;
     let mut best_val = NEG_INFINITY;
     for j in 0..cols {
         let v = logits.data[start + j];
-        if v > best_val { best_val = v; best = j as u16; }
+        if v > best_val { best_val = v; best = j as u32; }
     }
     best
 }
@@ -1514,7 +1760,7 @@ impl SampleRng {
 }
 
 /// Sample token with configurable temperature, top-k, repetition penalty (Gumbel-max).
-pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     let hi = cols.min(128000);
@@ -1522,11 +1768,11 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u1
     let top_k = COHERENCE_TOP_K.load(core::sync::atomic::Ordering::Relaxed);
     let repeat = f32::from_bits(COHERENCE_REPEAT.load(core::sync::atomic::Ordering::Relaxed));
 
-    let mut cand: [(u16, f32); 64] = [(0, NEG_INFINITY); 64];
+    let mut cand: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
     let mut n = 0usize;
     for j in 0..hi {
-        let id = j as u16;
-        if recent.iter().any(|&p| p == id) { continue; }
+        let id = j as u32;
+        if recent.iter().any(|&p| p as usize == j) { continue; }
         if crate::bpe::is_special_id(id) { continue; }
         let v = logits.data[start + j];
         if v.is_nan() { continue; }
@@ -1541,7 +1787,7 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u1
 
     if (repeat - 1.0).abs() > 0.001 {
         for i in 0..n {
-            if recent.iter().any(|&p| p == cand[i].0) {
+            if recent.iter().any(|&p| u32::from(p) == cand[i].0) {
                 let v = cand[i].1;
                 cand[i].1 = if v >= 0.0 { v / repeat } else { v * repeat };
             }
@@ -1564,15 +1810,15 @@ pub fn sample_token_coherence(logits: &Tensor, row: usize, recent: &[u16]) -> u1
 }
 
 /// Argmax sobre HF vocab: top-64 brutos → re-score com BPE.
-pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     let hi = cols.min(128000);
-    let mut top: [(u16, f32); 64] = [(0, NEG_INFINITY); 64];
+    let mut top: [(u32, f32); 64] = [(0, NEG_INFINITY); 64];
     let mut filled = 0usize;
     for j in 0..hi {
-        let id = j as u16;
-        if recent.iter().any(|&p| p == id) { continue; }
+        let id = j as u32;
+        if recent.iter().any(|&p| p as u32 == id) { continue; }
         if crate::bpe::is_special_id(id) { continue; }
         let v = logits.data[start + j];
         if v.is_nan() { continue; }
@@ -1584,11 +1830,11 @@ pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
         }
     }
     let weather = crate::bpe::weather_candidate_ids();
-    let mut wx: [(u16, f32); 24] = [(0, NEG_INFINITY); 24];
+    let mut wx: [(u32, f32); 24] = [(0, NEG_INFINITY); 24];
     let mut wx_n = 0usize;
     for &id in weather.iter() {
         if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| p == id) { continue; }
+        if recent.iter().any(|&p| p as u32 == id) { continue; }
         let v = logits.data[start + id as usize];
         if v.is_nan() { continue; }
         if wx_n < 24 { wx[wx_n] = (id, v); wx_n += 1; }
@@ -1603,12 +1849,12 @@ pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
 }
 
 /// Constrained greeting token selection.
-pub fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+pub fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     let hi = cols.min(128000);
     let step = recent.len().saturating_sub(1);
-    let prev = recent.last().copied();
+    let prev = recent.last().copied().map(|p| p as u32);
     let masked = crate::bpe::greeting_step_candidates(step, prev);
     let pool = if masked.is_empty() { crate::bpe::greeting_candidate_ids() } else { masked };
     let mut best = pool[0];
@@ -1616,7 +1862,7 @@ pub fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u16]) -> 
     let mut any = false;
     for &id in pool.iter() {
         if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| p == id) { continue; }
+        if recent.iter().any(|&p| u32::from(p) == id) { continue; }
         let v = logits.data[start + id as usize];
         if v.is_nan() { continue; }
         let mut s = v + crate::bpe::score_piece(id);
@@ -1639,12 +1885,12 @@ pub fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u16]) -> 
 }
 
 /// Constrained weather token selection.
-pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u16 {
+pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     let hi = cols.min(128000);
     let step = recent.len().saturating_sub(1);
-    let prev = recent.last().copied();
+    let prev = recent.last().copied().map(|p| p as u32);
     let masked = crate::bpe::weather_step_candidates(step, prev);
     let weather = if masked.is_empty() { crate::bpe::weather_candidate_ids() } else { masked };
     let mut best = weather[0];
@@ -1652,7 +1898,7 @@ pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u
     let mut any = false;
     for &id in weather.iter() {
         if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| p == id) { continue; }
+        if recent.iter().any(|&p| u32::from(p) == id) { continue; }
         if crate::bpe::weather_same_stem(prev, id) { continue; }
         let v = logits.data[start + id as usize];
         if v.is_nan() { continue; }
@@ -1677,37 +1923,37 @@ pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u
 }
 
 /// Argmax char-level vocab (fallback when no BPE).
-pub fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u16>) -> u16 {
+pub fn argmax_row_char_vocab(logits: &Tensor, row: usize, prev: Option<u16>) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;
     let hi = (VOCAB_SIZE as usize).min(cols);
     let lo = CHAR_OFFSET as usize;
-    let mut best: u16 = EOS;
+    let mut best = EOS as u32;
     let mut best_val = NEG_INFINITY;
     for j in lo..hi {
-        let id = j as u16;
-        if let Some(p) = prev { if id == p && id < 140 { continue; } }
+        let id = j as u32;
+        if let Some(p) = prev { if id as u16 == p && id < 140 { continue; } }
         let v = logits.data[start + j];
         if v.is_nan() { continue; }
         if v > best_val { best_val = v; best = id; }
     }
-    if best_val == NEG_INFINITY { EOS } else { best }
+    if best_val == NEG_INFINITY { EOS as u32 } else { best }
 }
 
 /// Slim prompt for heavy models (soft-float 2B): keep only last few tokens.
-pub fn slim_prompt_tokens_for_heavy(tokens: &[u16], use_bpe: bool) -> Vec<u16> {
-    let mut t: Vec<u16> = tokens.iter().copied().collect();
+pub fn slim_prompt_tokens_for_heavy(tokens: &[u32], use_bpe: bool) -> Vec<u32> {
+    let mut t: Vec<u32> = tokens.to_vec();
     if use_bpe {
         const MAX_CHAT: usize = 8;
         if t.len() > MAX_CHAT { t.truncate(MAX_CHAT); }
         return t;
     }
-    if t.last() == Some(&EOS) { t.pop(); }
+    if t.last() == Some(&(EOS as u32)) { t.pop(); }
     const KEEP: usize = 1;
-    if t.is_empty() { return vec![BOS]; }
-    if t[0] != BOS { t.insert(0, BOS); }
+    if t.is_empty() { return vec![BOS as u32]; }
+    if t[0] != BOS as u32 { t.insert(0, BOS as u32); }
     if t.len() > KEEP + 1 {
-        let mut slim = vec![BOS];
+        let mut slim = vec![BOS as u32];
         let from = t.len() - KEEP;
         slim.extend_from_slice(&t[from..]);
         slim
@@ -1717,14 +1963,20 @@ pub fn slim_prompt_tokens_for_heavy(tokens: &[u16], use_bpe: bool) -> Vec<u16> {
 pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder: Option<&mut StructuredDecoder>) -> alloc::string::String {
     let max_seq = model.max_seq.min(64);
     let use_bpe = crate::bpe::is_loaded();
-    let eos = if use_bpe { crate::bpe::eos_id() } else { EOS };
-    let eot = if use_bpe { crate::bpe::eot_id() } else { EOS };
-    let mut tokens = if use_bpe { crate::bpe::encode(prompt) } else { Tokenizer::encode(prompt) };
+    let eos: u32 = if use_bpe { crate::bpe::eos_id() as u32 } else { EOS as u32 };
+    let eot: u32 = if use_bpe { crate::bpe::eot_id() as u32 } else { EOS as u32 };
+    let eos_u16 = eos as u16;
+    let eot_u16 = eot as u16;
+    let mut tokens: Vec<u32> = if use_bpe {
+        crate::bpe::encode(prompt)
+    } else {
+        Tokenizer::encode(prompt).into_iter().map(|t| t as u32).collect()
+    };
     // Guarda: IDs fora do vocab → OOB no embed.
     let vs = model.vocab_size;
-    tokens.retain(|&t| (t as u32) < vs);
+    tokens.retain(|&t| t < vs);
     if tokens.is_empty() {
-        tokens.push(if use_bpe { crate::bpe::bos_id() } else { BOS });
+        tokens.push(if use_bpe { crate::bpe::bos_id().min(vs.saturating_sub(1)) } else { BOS as u32 });
     }
     let raw_len = tokens.len();
     // Heavy model: slim prompt
@@ -1759,12 +2011,15 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     };
     k_nano::slog_cortex!("GEN", "info", "max_gen={} greet={}", max_gen, is_greeting as u8);
 
-    let mut recent: Vec<u16> = Vec::new();
-    if !is_greeting { if let Some(&last) = tokens.last() { recent.push(last); } }
+    // recent is Vec<u16> for u16-based argmax/sample functions
+    let mut recent_u16: Vec<u16> = Vec::new();
+    if !is_greeting { if let Some(&last) = tokens.last() { recent_u16.push(last as u16); } }
 
-    // Ngram speculator for speculative decoding
+    // Ngram speculator for speculative decoding (works with u16 tokens internally)
+    let mut tokens_u16: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
     let mut spec = NgramSpeculator::new();
-    spec.feed_slice(&tokens);
+    let tokens_u16_slice: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
+    spec.feed_slice(&tokens_u16_slice);
 
     let mut step = 0usize;
     while step < max_gen {
@@ -1778,25 +2033,26 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             d.mask_logits(&mut last_logits.data);
         }
 
-        // ── Select next token ──
-        let next = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
-            sample_token_coherence(&last_logits, 0, &recent)
+        // ── Select next token (returns u16) ──
+        let next_u16 = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
+            sample_token_coherence(&last_logits, 0, &recent_u16)
         } else if use_bpe {
             let sp32ish = model.vocab_size > 0 && model.vocab_size <= 33_000;
             if !sp32ish && model.hidden >= 2048 && is_greeting {
-                argmax_row_greeting_only(&last_logits, 0, &recent)
+                argmax_row_greeting_only(&last_logits, 0, &recent_u16)
             } else if !sp32ish && model.hidden >= 2048 && false { // RUN_WEATHER_E2E_SKINNY placeholder
-                argmax_row_weather_only(&last_logits, 0, &recent)
+                argmax_row_weather_only(&last_logits, 0, &recent_u16)
             } else {
-                argmax_row_hf_vocab(&last_logits, 0, &recent)
+                argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
             }
         } else {
-            argmax_row_char_vocab(&last_logits, 0, recent.last().copied())
+            argmax_row_char_vocab(&last_logits, 0, recent_u16.last().copied())
         };
+        let next = next_u16 as u32;
 
         // F4: advance structured decoder FSM
         if let Some(ref mut d) = decoder {
-            d.step(next);
+            d.step(next_u16 as u16);
         }
 
         if next == eos || next == eot {
@@ -1808,10 +2064,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
 
         // ── Speculative decoding (ngram draft + verify) ──
         tokens.push(next);
-        recent.push(next);
-        if recent.len() > 4 { recent.remove(0); }
+        recent_u16.push(next_u16 as u16);
+        if recent_u16.len() > 4 { recent_u16.remove(0); }
+        tokens_u16.push(next_u16 as u16);
         step += 1;
-        spec.feed(next);
+        spec.feed(next_u16 as u16);
         record_classic_step();
 
         // Early-exit: greetingish / weatherish
@@ -1829,27 +2086,31 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
             // ngram speculation (disabled when coherence sampling active — distributions differ)
             let m = draft.len().min(max_gen - step).min(crate::ngram_spec::M);
             if m > 0 {
-                let drafts = &draft[..m];
-                let all_logits = model.forward_with_kv_all_logits(drafts, &mut cache);
-                let (extra_accept, bonus) = verify_draft(&all_logits, drafts);
+                let drafts_u16 = &draft[..m];
+                // Convert u16 drafts to u32 for forward_with_kv_all_logits
+                let drafts_u32: Vec<u32> = drafts_u16.iter().map(|&t| t as u32).collect();
+                let all_logits = model.forward_with_kv_all_logits(&drafts_u32, &mut cache);
+                let (extra_accept, bonus_u16) = verify_draft(&all_logits, drafts_u16);
                 let kept = (1 + extra_accept).min(m);
                 record_spec_hit(kept as u64);
 
-                for &t in drafts.iter().take(kept) {
-                    tokens.push(t);
-                    recent.push(t);
-                    if recent.len() > 4 { recent.remove(0); }
+                for &t in drafts_u16.iter().take(kept) {
+                    tokens.push(t as u32);
+                    recent_u16.push(t);
+                    if recent_u16.len() > 4 { recent_u16.remove(0); }
+                    tokens_u16.push(t);
                     step += 1;
                     spec.feed(t);
                 }
 
                 // Bonus token after accepted prefix
-                if bonus != eos && step < max_gen && tokens.len() < max_seq {
-                    tokens.push(bonus);
-                    recent.push(bonus);
-                    if recent.len() > 4 { recent.remove(0); }
+                if bonus_u16 as u16 != eos_u16 && step < max_gen && tokens.len() < max_seq {
+                    tokens.push(bonus_u16);
+                    recent_u16.push(bonus_u16 as u16);
+                    if recent_u16.len() > 4 { recent_u16.remove(0); }
+                    tokens_u16.push(bonus_u16 as u16);
                     step += 1;
-                    spec.feed(bonus);
+                    spec.feed(bonus_u16 as u16);
                     record_spec_bonus_forward();
                     record_spec_tokens(1);
                 }
@@ -1886,7 +2147,10 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         gen.last().copied().unwrap_or(0xFFFF),
         stop_label, bpe_label, coh as u8, gen);
 
-    let out = if use_bpe { crate::bpe::decode(gen) } else { Tokenizer::decode(gen) };
+    let out = if use_bpe { crate::bpe::decode(gen) } else {
+        let u16s: Vec<u16> = gen.iter().map(|&t| t as u16).collect();
+        Tokenizer::decode(&u16s)
+    };
     if out.is_empty() {
         k_nano::slog_cortex!("GEN", "info", "decoded_empty n={} first_gen={}",
             gen.len(), gen.first().copied().unwrap_or(0xFFFF));
@@ -1929,28 +2193,42 @@ pub trait Model: Send {
     fn max_seq(&self) -> usize;
 }
 
-static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+pub static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+/// Dimensão do CURRENT_MODEL (p/ skip LLM-TEST em 2B).
+pub static CURRENT_MODEL_EMBED_DIM: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
 
 pub fn set_model(model: Box<dyn Model>) {
+    CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
     *CURRENT_MODEL.lock() = Some(model);
-    crate::model_hub::mark(crate::model_hub::ModelSlot::Active, true);
-    k_nano::slog_cortex!("CORTEX", "info", "Model swapped.");
+    crate::model_hub::mark_active(true);
+    // ponytail: bin registra load_status via callback após retorno
+    k_nano::slog_cortex!("CORTEX", "info", "Model swapped (Active+hub).");
 }
 
-pub fn set_rustcoder_model(model: Box<dyn Model>) {
-    *RUSTCODER_MODEL.lock() = Some(model);
-    crate::model_hub::mark(crate::model_hub::ModelSlot::RustCoder, true);
-    k_nano::slog_cortex!("CORTEX", "info", "RustCoder expert model loaded.");
+/// Generate text using the currently loaded model (simplified, no Trinity routing).
+/// Called by hermes (crate dependency) — bin's version adds Trinity routing.
+pub fn generate_via_model(prompt: &str) -> String {
+    let guard = CURRENT_MODEL.lock();
+    match guard.as_ref() {
+        Some(m) => m.generate(prompt),
+        None => String::from("[CORTEX] No model loaded"),
+    }
 }
 
-pub fn set_hwexpert_model(model: Box<dyn Model>) {
-    *HWEXPERT_MODEL.lock() = Some(model);
-    crate::model_hub::mark(crate::model_hub::ModelSlot::HwExpert, true);
-    k_nano::slog_cortex!("CORTEX", "info", "HW Expert model loaded (SDIO MoE).");
+/// Generate text with structured decoding using the currently loaded model.
+pub fn generate_via_model_with_decoder(prompt: &str, dec: &mut StructuredDecoder) -> String {
+    DECODER_CELL.set(dec as *mut StructuredDecoder);
+    let guard = CURRENT_MODEL.lock();
+    match guard.as_ref() {
+        Some(m) => m.generate(prompt),
+        None => String::from("[CORTEX] No model loaded"),
+    }
 }
 
+/// Registra .bitnet em slot nomeado sem necessariamente virar Active.
 pub fn register_model_slot(slot: crate::model_hub::ModelSlot, model: Box<dyn Model>) {
     match slot {
         crate::model_hub::ModelSlot::Active => set_model(model),
@@ -1960,36 +2238,66 @@ pub fn register_model_slot(slot: crate::model_hub::ModelSlot, model: Box<dyn Mod
     }
 }
 
-pub fn generate_via_model(prompt: &str) -> String {
-    // Sub-rota ModelHub (crate); Trinity completo no bin.
-    let slot = crate::model_hub::select_generator_slot(prompt);
-    if slot != crate::model_hub::ModelSlot::Active {
-        if let Some(out) = crate::model_hub::generate_from_slot(slot, prompt) {
-            return out;
+/// Aceita múltiplos blobs: cada um vai para slot heurístico por tamanho (ou `hint`).
+pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
+    let mut n = 0usize;
+    for (data, hint) in blobs {
+        let Some(m) = load_model(data) else {
+            continue;
+        };
+        let slot = hint
+            .and_then(crate::model_hub::ModelSlot::from_name)
+            .unwrap_or_else(|| crate::model_hub::slot_from_bitnet_bytes(data.len()));
+        // Primeiro modelo “grande” ou Active vazio → CURRENT; demais → slots.
+        let boxed = alloc::boxed::Box::new(m);
+        if !model_is_loaded()
+            && matches!(
+                slot,
+                crate::model_hub::ModelSlot::Active
+                    | crate::model_hub::ModelSlot::GeneratorPro
+                    | crate::model_hub::ModelSlot::GeneratorFast
+            )
+        {
+            let also_pro = slot == crate::model_hub::ModelSlot::GeneratorPro
+                || crate::model_hub::slot_from_bitnet_bytes(data.len())
+                    == crate::model_hub::ModelSlot::GeneratorPro;
+            set_model(boxed);
+            if also_pro {
+                crate::model_hub::mark_pro_alias(true);
+            }
+        } else {
+            register_model_slot(slot, boxed);
         }
+        n += 1;
     }
-    let guard = CURRENT_MODEL.lock();
-    match guard.as_ref() {
-        Some(m) => m.generate(prompt),
-        None => crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorFast, prompt)
-            .or_else(|| {
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::TinyStories, prompt)
-            })
-            .unwrap_or_else(|| String::from("[CORTEX] No model loaded")),
-    }
+    n
 }
 
-/// F4: gera texto com StructuredDecoder ativo.
-/// Threads decoder através do trait `Model` via cell (sem alterar a trait).
-pub fn generate_via_model_with_decoder(prompt: &str, decoder: &mut StructuredDecoder) -> String {
-    let slot = crate::model_hub::select_generator_slot(prompt);
-    if slot != crate::model_hub::ModelSlot::Active {
-        // Non-Active slots (GeneratorFast, TinyStories) não suportam decoder — geração direta.
-        return generate_via_model(prompt);
-    }
-    DECODER_CELL.set(decoder as *mut StructuredDecoder);
-    // Safety: DECODER_CELL consumed (take'd) inside generate_text before this returns.
-    generate_via_model(prompt)
+/// True se CURRENT_MODEL está setado (LLM LOADED).
+pub fn model_is_loaded() -> bool {
+    CURRENT_MODEL.lock().is_some()
+}
+
+/// True se HW Expert MoE está setado.
+pub fn hwexpert_is_loaded() -> bool {
+    HWEXPERT_MODEL.lock().is_some()
+}
+
+/// True se RustCoder expert está setado.
+pub fn rustcoder_is_loaded() -> bool {
+    RUSTCODER_MODEL.lock().is_some()
+}
+
+pub fn set_rustcoder_model(model: Box<dyn Model>) {
+    *RUSTCODER_MODEL.lock() = Some(model);
+    crate::model_hub::mark_slot(crate::model_hub::ModelSlot::RustCoder, true);
+    k_nano::slog_cortex!("CORTEX", "info", "RustCoder expert model loaded (hub).");
+}
+
+pub fn set_hwexpert_model(model: Box<dyn Model>) {
+    *HWEXPERT_MODEL.lock() = Some(model);
+    crate::model_hub::mark_slot(crate::model_hub::ModelSlot::HwExpert, true);
+    k_nano::slog_cortex!("CORTEX", "info", "HW Expert model loaded (SDIO MoE).");
 }
 
 /// Sintetiza um HardwareRegisterMap para um dispositivo PCI.
@@ -2027,9 +2335,7 @@ pub fn generate_register_map(vid: u16, did: u16) -> Option<crate::HardwareRegist
     };
     if let Some(m) = direct { return Some(m); }
 
-    // Nivel 2 (legado free-text HW Expert) REMOVIDO — gerava lixo (OA5US…).
-    // Médio prazo: HW Expert v4 classifica HWID empacotado → family_id no schema
-    // `k_ai::hw_capability`. Até lá, heurística vendor (nível 3).
+    // Nivel 2 free-text HW Expert REMOVIDO (lixo OA5US…). v4 → k_ai::hw_capability.
 
     // Nivel 3: heuristica por vendor ID
     let vendor_map = match vid {
@@ -2097,7 +2403,7 @@ pub fn gaussian_noise(mean: f32, std: f32) -> f32 {
 
 /// PTRM: gera texto com ruído + trajetórias paralelas + Q-head
 pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
-    let tokens = Tokenizer::encode(prompt);
+    let tokens: Vec<u32> = Tokenizer::encode(prompt).into_iter().map(|t| t as u32).collect();
     let mut best_text = alloc::string::String::new();
     let mut best_score = -1000.0f32;
 
@@ -2123,11 +2429,11 @@ pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
                 *v += gaussian_noise(0.0, 0.05);
             }
 
-            let next = argmax_from_slice(&noisy_logits, 0);
+            let next = argmax_from_slice(&noisy_logits, 0) as u32;
 
-            if next == EOS || next >= VOCAB_SIZE { break; }
+            if next == EOS as u32 || next >= VOCAB_SIZE as u32 { break; }
             t.push(next);
-            traj_text.push(Tokenizer::decode_char(next).unwrap_or('?'));
+            traj_text.push(Tokenizer::decode_char(next as u16).unwrap_or('?'));
 
             // Atualiza best score
             if q > best_score && traj_text.len() > 3 {
@@ -2137,7 +2443,12 @@ pub fn ptrm_generate(model: &TransformerModel, prompt: &str) -> String {
         }
     }
 
-    if best_text.is_empty() { Tokenizer::decode(&tokens) } else { best_text }
+    if best_text.is_empty() {
+        let u16s: Vec<u16> = tokens.iter().map(|&t| t as u16).collect();
+        Tokenizer::decode(&u16s)
+    } else {
+        best_text
+    }
 }
 
 fn argmax_from_slice(data: &[f32], row: usize) -> u16 {
@@ -2161,6 +2472,7 @@ impl Cortex {
 
     pub fn think(&self, text: &str) -> Intent {
         let lower = text.to_ascii_lowercase();
+        // Controles HW antes de chat/status (evita LLM para "ajuste o volume").
         if lower.contains("volume")
             || lower.contains("mute")
             || lower.contains("brilho")

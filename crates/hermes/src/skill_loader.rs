@@ -153,9 +153,11 @@ pub fn load_embedded_skills() -> SkillLoader {
     let mut loader = SkillLoader::new();
 
     // Skills embutidas via include_str! (path relativo ao workspace root)
-    let skills_raw: [&str; 2] = [
+    let skills_raw: [&str; 4] = [
         include_str!("../../../skills/hw_identify/SKILL.md"),
         include_str!("../../../skills/self_heal/SKILL.md"),
+        include_str!("../../../skills/web_scrape/SKILL.md"),
+        include_str!("../../../skills/skill_writer/SKILL.md"),
     ];
 
     for content in &skills_raw {

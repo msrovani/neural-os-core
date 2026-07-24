@@ -1,5 +1,4 @@
-//! ModelHub — slots nomeados para múltiplos .bitnet sem quebrar CURRENT_MODEL.
-//! TinyStories (smoke) · generator_fast (850M) · generator_pro (3B) · experts.
+//! ModelHub (bin) — slots .bitnet multi-modelo; truth do boot (ADR multi-model).
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -8,21 +7,14 @@ use spin::Mutex;
 
 use crate::cortex::Model;
 
-/// Slot lógico de modelo BitNet / expert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ModelSlot {
-    /// Alias do ativo (compat `set_model` / CURRENT_MODEL).
     Active = 0,
-    /// Fallback rápido (~850M ou MICRO).
     GeneratorFast = 1,
-    /// Generator "pro" (BitNet b1.58 3B / 2B grande).
     GeneratorPro = 2,
-    /// Dev/test/smoke TinyStories 1M–15M.
     TinyStories = 3,
-    /// Expert código (RustCoder 2B/3B substitui o pequeno).
     RustCoder = 4,
-    /// Expert HW identify.
     HwExpert = 5,
 }
 
@@ -62,15 +54,13 @@ struct HubInner {
 static HUB: Mutex<HubInner> = Mutex::new(HubInner {
     slots: [None, None, None, None, None, None],
 });
-
-/// Máscara de slots ocupados (bit i = slot i).
 static SLOT_MASK: AtomicU8 = AtomicU8::new(0);
 
 fn idx(slot: ModelSlot) -> usize {
     slot as usize
 }
 
-pub fn mark(slot: ModelSlot, filled: bool) {
+fn mark(slot: ModelSlot, filled: bool) {
     let bit = 1u8 << (slot as u8);
     if filled {
         SLOT_MASK.fetch_or(bit, Ordering::Release);
@@ -83,49 +73,45 @@ pub fn slot_loaded(slot: ModelSlot) -> bool {
     (SLOT_MASK.load(Ordering::Acquire) & (1u8 << (slot as u8))) != 0
 }
 
-/// Registra modelo em slot. Não remove CURRENT externo — caller sincroniza Active.
 pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
+    // Active / RustCoder / HwExpert vivem nos Mutex legados — só marca flag.
     if matches!(
         slot,
         ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert
     ) {
         mark(slot, true);
+        k_nano::slog_bin!("MODEL", "info", "hub mark slot={}", slot.name());
         return;
     }
     let i = idx(slot);
-    let mut hub = HUB.lock();
-    hub.slots[i] = Some(model);
+    HUB.lock().slots[i] = Some(model);
     mark(slot, true);
-    k_nano::slog_cortex!(
-        "MODEL",
-        "info",
-        "hub slot={} loaded",
-        slot.name()
-    );
+    k_nano::slog_bin!("MODEL", "info", "hub slot={} loaded", slot.name());
 }
 
-pub fn take_model(slot: ModelSlot) -> Option<Box<dyn Model>> {
-    let mut hub = HUB.lock();
-    let m = hub.slots[idx(slot)].take();
-    if m.is_some() {
-        mark(slot, false);
-    }
-    m
+pub fn mark_active(filled: bool) {
+    mark(ModelSlot::Active, filled);
 }
 
-/// Gera com slot específico; None se vazio.
+pub fn mark_slot(slot: ModelSlot, filled: bool) {
+    mark(slot, filled);
+}
+
+/// Active grande (2B/3B) também conta como Pro para select_generator_slot.
+pub fn mark_pro_alias(filled: bool) {
+    mark(ModelSlot::GeneratorPro, filled);
+}
+
+/// Clona referência lógica: move para slot sem dropar Active se for o mesmo ptr — use register.
 pub fn generate_from_slot(slot: ModelSlot, prompt: &str) -> Option<String> {
     let hub = HUB.lock();
     hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
 }
 
-/// Heurística: conversation complexa → prefer Pro.
 pub fn is_complex_conversation(prompt: &str) -> bool {
     if prompt.len() > 160 {
         return true;
     }
-    let lower = prompt.as_bytes();
-    // ASCII-ish contains without alloc
     contains_ci(prompt, "detalhad")
         || contains_ci(prompt, "analis")
         || contains_ci(prompt, "explain")
@@ -133,10 +119,9 @@ pub fn is_complex_conversation(prompt: &str) -> bool {
         || contains_ci(prompt, "porque")
         || contains_ci(prompt, "why ")
         || contains_ci(prompt, "architect")
-        || (lower.len() > 80 && (contains_ci(prompt, "como ") || contains_ci(prompt, "how ")))
+        || (prompt.len() > 80 && (contains_ci(prompt, "como ") || contains_ci(prompt, "how ")))
 }
 
-/// Smoke / TinyStories intent.
 pub fn wants_tinystories(prompt: &str) -> bool {
     contains_ci(prompt, "tinystories")
         || contains_ci(prompt, "[smoke]")
@@ -154,9 +139,7 @@ fn contains_ci(hay: &str, needle: &str) -> bool {
     }
     'outer: for i in 0..=(h.len() - n.len()) {
         for j in 0..n.len() {
-            let a = h[i + j].to_ascii_lowercase();
-            let b = n[j].to_ascii_lowercase();
-            if a != b {
+            if h[i + j].to_ascii_lowercase() != n[j].to_ascii_lowercase() {
                 continue 'outer;
             }
         }
@@ -177,7 +160,6 @@ fn fit_ok(slot: ModelSlot) -> bool {
 }
 
 fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
-    // Maior slot Good+/Marginal carregado: Pro → Fast → Tiny → Active
     let order = [
         ModelSlot::GeneratorPro,
         ModelSlot::GeneratorFast,
@@ -192,7 +174,7 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
         };
         if loaded && fit_ok(s) {
             if s != preferred {
-                k_nano::slog_cortex!(
+                k_nano::slog_bin!(
                     "FIT",
                     "info",
                     "escalate slot={} → {} reason=too_tight",
@@ -203,7 +185,7 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
             return s;
         }
     }
-    k_nano::slog_cortex!(
+    k_nano::slog_bin!(
         "FIT",
         "info",
         "escalate slot={} reason=too_tight (no Good+ fallback)",
@@ -224,12 +206,11 @@ fn maybe_fit(slot: ModelSlot) -> ModelSlot {
     }
 }
 
-/// Escolhe slot generator por intent (sem alterar Trinity expert name).
-/// FitPolicy: Deny/TooTight → cai para maior slot carregado aceitável.
 pub fn select_generator_slot(prompt: &str) -> ModelSlot {
     if wants_tinystories(prompt) && hub_has_blob(ModelSlot::TinyStories) {
         return maybe_fit(ModelSlot::TinyStories);
     }
+    // Complexo: blob Pro separado → Pro; senão Active (2B/3B no CURRENT).
     if is_complex_conversation(prompt) {
         if hub_has_blob(ModelSlot::GeneratorPro) {
             return maybe_fit(ModelSlot::GeneratorPro);
@@ -253,7 +234,6 @@ pub fn select_generator_slot(prompt: &str) -> ModelSlot {
     ModelSlot::Active
 }
 
-/// Relatório curto para logs/gates.
 pub fn hub_status() -> String {
     let mut s = String::from("ModelHub:");
     for slot in [
@@ -272,15 +252,40 @@ pub fn hub_status() -> String {
     s
 }
 
-/// Inferir slot a partir do tamanho do blob .bitnet (heurística boot).
 pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
     const MB: usize = 1024 * 1024;
     if len < 20 * MB {
         ModelSlot::TinyStories
     } else if len < 450 * MB {
-        // 850M (~174MB) e 1.3B/xl (~250–400MB)
         ModelSlot::GeneratorFast
     } else {
         ModelSlot::GeneratorPro
+    }
+}
+
+/// FAT 8.3 candidatos por slot (ordem de preferência).
+pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
+    match slot {
+        ModelSlot::TinyStories => &["TINYSTOR.BIN", "TINY.BIN", "STORIES.BIN"],
+        ModelSlot::GeneratorFast => &[
+            "BITNET13.BIN",
+            "BITN13.BIN",
+            "BITNET850.BIN",
+            "BITN850.BIN",
+            "MICRO.BIN",
+            "MICRO.BITNET",
+        ],
+        ModelSlot::GeneratorPro => &["BITNET3B.BIN", "BITN3B.BIN", "BITNET2B.BIN"],
+        ModelSlot::RustCoder => &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
+        ModelSlot::HwExpert => &["HWEXPRT.BIN", "HWEXPERT.BIN"],
+        ModelSlot::Active => &[
+            "BITNET13.BIN",
+            "BITNET850.BIN",
+            "BITNET2B.BIN",
+            "BITNET3B.BIN",
+            "BITNET.BIN",
+            "MICRO.BITNET",
+            "MICRO.BIN",
+        ],
     }
 }

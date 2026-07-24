@@ -168,11 +168,11 @@ impl NgramSpeculator {
 
 /// Verify draft[1..] against per-position logits from a parallel forward of `drafts`.
 /// Caller must already have verified drafts[0] against the previous-step logits.
-pub fn verify_draft(all_logits: &Tensor, drafts: &[u16]) -> (usize, u16) {
+pub fn verify_draft(all_logits: &Tensor, drafts: &[u16]) -> (usize, u32) {
     let mut accept = 0usize;
     for i in 0..drafts.len().saturating_sub(1) {
         let predicted = argmax_row(all_logits, i);
-        if predicted == drafts[i + 1] {
+        if predicted == drafts[i + 1] as u32 {
             accept += 1;
         } else {
             return (accept, predicted);

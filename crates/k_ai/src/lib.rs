@@ -21,7 +21,7 @@ pub mod expert_lifecycle;
 pub mod cognitive;
 pub mod context_window;
 pub mod conversation;
-pub mod gguf;
+// E1a: gguf moved to cortex_crate
 // ponytail: hal.rs moved to LEGACY/v1.5-dead-k2chj/k_ia/ (dead code)
 pub mod hw_agents;
 pub mod hw_capability;
