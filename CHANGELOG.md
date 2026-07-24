@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### ADR-0075 Emagrecer neural-kernel (2026-07-23) — SESSION_215
+- **Plano cirúrgico E0–E4:** E0 (freeze CI) → E1a (cortex/bpe/gguf) → E1b (agents/neural_fs) → E1c (boot_logger/virtio/usb) → E2 (Limine handoff) → E3 (infra crates) → E4 (audio ADR-0045).
+- **Dados reais do recon:** bin 29.431 LOC, 12k bin_ahead (41%), 6.5k role_diff (22%), 5k glue (17%), 2.9k audio (10%).
+- **Alvo realista:** ~11.000 LOC (redução 62%), não 3-5k como o dashboard estimava (main.rs só já é 3.102 LOC).
+- **Checkpoint sprints 178-214:** 4d8f0d5 (139 arquivos de sprints anteriores isolados).
+- **Tag:** `v1.9.10-emagrecer-plan`
+- **Docs:** ADR-0075, SESSION_215, IDEA #511.
+
 ### F-series ROI (pós-v1.9.9) — SESSION_177
 - **F1:** smoke e2e L1→`checkpoint_working`→remount Tickv→get (`memory_checkpoint_e2e_smoke`)
 - **F2:** SleepCycle canônico só em `hermes`; bin `pub use`

@@ -1,5 +1,7 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.9 TEST — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.10-emagrecer-plan — NÃO ESTÁVEL
+#   SESSION_215: Emagrecer neural-kernel — análise profunda + ADR-0075 + plano E0–E4
+#   Checkpoint sprints 178-214: commit 4d8f0d5
 #   SESSION_176: SGDB Memory Quality E1–E5 — SleepCycle ckpt, recall L4, V-flag, ART SIMD
 #   SESSION_175: SGDB D-series — Hamming dispatch, L0/L1 RAM, Tickv ckpt, bench 100k/10k
 #   SESSION_174: SGDB quality jump Q1–Q5 (GC, ART48/256, BQ popcnt, AUD2, View, bench)
@@ -54,7 +56,7 @@
 - **Pista HW:** kernel chega APIC/x2APIC; falta PLATFORM sync / USB flush em várias máquinas — ver SESSION_139.
 
 ## Roadmap Atual
-**Versão:** **v1.9.5 TESTE / NÃO ESTÁVEL** (2026-07-21) — ADR-0060 BEI 7/7 ondas SESSION_166; base v1.9.1 BitNet/TLS/WiFi.
+**Versão:** **v1.9.10-emagrecer-plan** (2026-07-23) — checkpoint sprints 178-214 (4d8f0d5) + plano ADR-0075 emagrecer neural-kernel E0–E4. Base v1.9.9 SGDB Memory Quality.
 
 ## ADR-0063: TicKV + NoProto + Índices IA como SGDB (2026-07-22)
 **Status:** Proposed / `fazendo` (MVP + **adoção AIOS SgdbStore** SESSION_173)  
@@ -84,6 +86,35 @@
 **Gate `v2.0.0`:** pré-requisitos funcionais ✅ — **review + `por_fazer` zerado + OK explícito do maintainer**. **Não** declarar v2.0 automaticamente.  
 **Cadeia canônica:** `k-nano → k-hal → k-ai → cortex → hermes → jarbas`.  
 **Nota:** 1.6.0-dev absorvida por 1.7.0 (sem tag `v1.6.0`).
+
+## ADR-0075: Emagrecer neural-kernel E0–E4 (2026-07-23)
+**Status:** Proposed / `fazendo` — plano aprovado, E0 (freeze CI) em execução.
+**Ideias:** #467 / #511
+**Sessão:** SESSION_215
+**Ondas anteriores:** ondas 0-6 (SESSION_163) — 40 stubs cutover.
+
+### Estado atual do bin
+| Classe | LOC | % | Destino |
+|--------|----:|---|---------|
+| bin_ahead (crate versão canônica) | ~12.000 | 41% | Promover bin→crate, depois stub |
+| role_diff (bin tem papel único) | ~6.500 | 22% | Ficam no bin |
+| glue (main.rs, IDT, allocator, shell) | ~5.000 | 17% | Permanente |
+| audio (truth no bin ADR-0045) | ~2.900 | 10% | E4 — mover p/ jarbas crate (ADR-0045 revisado) |
+| stubs (pub use puro) | ~100 | 0,3% | Já cutover |
+
+### Sequência E0–E4
+| Fase | Trabalho | LOC removido | Risco |
+|------|----------|-------------:|------:|
+| **E0** | Freeze + diff_bin_crate.py --strict em CI | 0 | 🟢 |
+| **E1a** | cortex/bpe/gguf/gguf_streaming/model_hub → cortex crate | ~5.200 | 🔴 |
+| **E1b** | agents/neural_fs/vfs/fs → hermes crate | ~3.100 | 🔴 |
+| **E1c** | boot_logger/virtio_net/usb_msc → k_nano crate | ~1.120 | 🟡 |
+| **E2** | Limine handoff trait (adapter) | +200 / -50 | 🟡 |
+| **E3** | GPU/WiFi wire k_hal (pub use) | +10 | 🟢 |
+| **E4** | audio → jarbas crate (ADR-0045) | ~2.900 | 🟡 |
+
+### Alvo final
+**~11.000 LOC** (redução 62%). Alvo não inclui role_diff + glue (mínimo estrutural ~11.600).
 
 ### Consolidação pós-v1.8.0 — v1.8.6 TEST (pós 1.8.5)
 - **SESSION_142:** ModelHub multi-.bitnet (TinyStories / generator_fast 850M / generator_pro 3B) + `gguf_wasm` SkillMarket + RustCoder 2B/3B FAT; Trinity router inalterado.
