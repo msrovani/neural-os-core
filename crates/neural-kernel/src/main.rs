@@ -108,7 +108,7 @@ pub use cortex_crate::{
 mod model_hub;
 // ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
-    actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi,
+    actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi, sgdb_agent,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
     memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, rustpython_no_std, safety,
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
@@ -2734,6 +2734,10 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
 
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
+
+    k_nano::slog_bin!("Boot", "register", "SgdbAgent");
+
+    registry.register(Box::new(sgdb_agent::SgdbAgent::new()));
 
     registry.register(Box::new(wifi_agent::WifiAgent::new()));
 

@@ -1,6 +1,7 @@
 # ═════════════════════════════════════════════════════════
 #   STATE — neural-os-core v1.9.10-emagrecer-plan — NÃO ESTÁVEL
 #   SESSION_215: Emagrecer neural-kernel — análise profunda + ADR-0075 + plano E0–E4
+#   SESSION_216: SGDB Agent (A-026) — bridge EventBus ↔ SGDB + versionamento de skills
 #   Checkpoint sprints 178-214: commit 4d8f0d5
 #   SESSION_176: SGDB Memory Quality E1–E5 — SleepCycle ckpt, recall L4, V-flag, ART SIMD
 #   SESSION_175: SGDB D-series — Hamming dispatch, L0/L1 RAM, Tickv ckpt, bench 100k/10k

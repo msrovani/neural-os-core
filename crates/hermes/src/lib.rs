@@ -36,6 +36,7 @@ pub mod safety;
 pub mod search_agent;
 pub mod security;
 pub mod self_update;
+pub mod sgdb_agent;
 pub mod shell;
 pub mod skill_gen;
 pub mod skill_loader;

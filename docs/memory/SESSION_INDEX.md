@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 216 | — | SGDB Agent (A-026) | Bridge EventBus ↔ SGDB + versionamento skills | SgdbAgent EventDriven: store_version, rollback, list_versions, list_skills, store_skill, recall. 229 LOC, 0 erros |
 | 176 | ADR-0063 | SGDB Memory Quality | SleepCycle ckpt + recall L4 + V-flag + ART SIMD | Pós-pesquisa TicKV/NoProto/ART/BQ; AIOS memória e2e |
 | 175 | ADR-0063 | SGDB D-series | Hamming + L0/L1 RAM + Tickv ckpt + bench 100k/10k | Aceite D-series; Visão vs Ship; DoD pleno residual |
 | 174 | ADR-0063 | SGDB quality jump | Q1–Q5 GC/ART48/BQ/AUD2/View/bench | Aceite intermediário; DoD 10M/100k residual |
