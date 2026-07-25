@@ -67,6 +67,7 @@ mod ata;
 mod block_dev;
 // ADR-0062 E2 — BootHandler (bootloader + Limine)
 mod boot_handoff;
+mod bei_init;
 mod cortex;
 mod fat32;
 mod global_arena;
@@ -897,6 +898,8 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
     registry.init_phase();
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
+    // ADR-0060: BEI tick hook — runs every scheduler tick
+    agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
     registry.run(
         || { x86_64::instructions::hlt(); },
         || {
@@ -1511,6 +1514,10 @@ pub(crate) fn kernel_boot(
     // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
 
     memory::init_global_allocator(frame_allocator);
+
+    // ADR-0060: Initialize BEI (BitNet Ecosystem Intelligence) — 8 waves
+    let _bei_state = bei_init::init_bei();
+    k_nano::slog_bin!("BEI", "init", "BitNet Ecosystem Intelligence initialized (8 waves)");
 
     publish_boot_phase(BootPhase::Diagnostics, "Allocator global pronto (DiagnosticSkill depois)");
 

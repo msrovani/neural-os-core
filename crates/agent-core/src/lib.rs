@@ -349,6 +349,9 @@ impl AgentRegistry {
 /// Hook opcional de métricas (N1.3). Kernel registra `serial_println` via `set_sched_metrics_hook`.
 static mut SCHED_METRICS_HOOK: Option<fn(u64, usize, u32)> = None;
 
+/// Hook opcional para BEI tick (ADR-0060). Kernel registra via `set_bei_tick_hook`.
+static mut BEI_TICK_HOOK: Option<fn(u64)> = None;
+
 /// Snapshot para HUD Jarbas (atualizado a cada tick do scheduler).
 pub static LAST_SCHED_AGENTS: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
@@ -362,6 +365,11 @@ pub fn set_sched_metrics_hook(hook: Option<fn(u64, usize, u32)>) {
     unsafe { SCHED_METRICS_HOOK = hook; }
 }
 
+/// Registra hook para BEI tick (ADR-0060). Chamado a cada tick do scheduler.
+pub fn set_bei_tick_hook(hook: Option<fn(u64)>) {
+    unsafe { BEI_TICK_HOOK = hook; }
+}
+
 fn maybe_log_sched_metrics(tick_id: u64, n_agents: usize, polled: u32) {
     LAST_SCHED_AGENTS.store(n_agents, core::sync::atomic::Ordering::Relaxed);
     LAST_SCHED_POLLED.store(polled, core::sync::atomic::Ordering::Relaxed);
@@ -369,5 +377,9 @@ fn maybe_log_sched_metrics(tick_id: u64, n_agents: usize, polled: u32) {
         if let Some(hook) = unsafe { SCHED_METRICS_HOOK } {
             hook(tick_id, n_agents, polled);
         }
+    }
+    // BEI tick hook (ADR-0060)
+    if let Some(hook) = unsafe { BEI_TICK_HOOK } {
+        hook(tick_id);
     }
 }
