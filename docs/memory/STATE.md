@@ -1,5 +1,6 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.10-emagrecer-plan — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.11-emagrecer — NÃO ESTÁVEL
+#   SESSION_217: Emagrecer E0–E4 completo — E1c USB_MSC/virtio_net→k_nano, E2 BootHandoff trait, E3 GPU/WiFi wire, E4 audio→jarbas
 #   SESSION_215: Emagrecer neural-kernel — análise profunda + ADR-0075 + plano E0–E4
 #   SESSION_216: SGDB Agent (A-026) — bridge EventBus ↔ SGDB + versionamento de skills
 #   Checkpoint sprints 178-214: commit 4d8f0d5
@@ -14,7 +15,7 @@
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)
 #   ADR-0055 FeatureGate+SMP ✅ SESSION_141 (TCG APs=1; WHPX BSP-only)
 #   Multi-model hub ✅ SESSION_142 (TinyStories/3B/GGUF-WASM/RustCoder)
-#   Pista ativa: v1.9.9 TEST — SGDB Memory Quality SESSION_176; Emagrecer SESSION_163 ✅ parcial
+#   Pista ativa: v1.9.11-emagrecer — Emagrecer SESSION_217 E0–E4 ✅; cargo check 0 errors
 #   SESSION_143: auditoria ideias antigas ✅
 #   SESSION_144: Onda 3 — exFAT write opt-in (#417); FS agents 282e–g ✅; #418 BLOCKED lan
 #   SESSION_145: Onda 4 — USB Trust #6/#12–15; #84 UAC-HW AWAITING_REAL_HW; soft-float defer

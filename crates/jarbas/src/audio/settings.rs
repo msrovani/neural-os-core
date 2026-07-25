@@ -1,5 +1,5 @@
-//! Configurações compartilhadas do stack de voz (espelho ADR-0045 / Sprint Sound).
-//! Truth runtime = neural-kernel/src/audio — este módulo mantém contrato alinhado.
+//! Configurações compartilhadas do stack de voz (ADR-0045 / Sprint Sound).
+//! Thresholds, timeouts e skills de volume/voz.
 
 use alloc::vec::Vec;
 use alloc::string::String;
@@ -11,10 +11,15 @@ pub static VOICE_CLONE_ENABLED: AtomicBool = AtomicBool::new(false);
 pub static WAKEWORD_SENSITIVITY: AtomicU8 = AtomicU8::new(5);
 pub static CURRENT_VOICE: spin::Mutex<Option<String>> = spin::Mutex::new(None);
 
+/// Janela de escuta pós-WAKEWORD em ticks do agente (~1 tick ≈ 1 frame scheduler).
 pub static WAKE_LISTEN_TICKS: AtomicU32 = AtomicU32::new(800);
+/// Threshold VAD base (RMS). Noise-floor adaptativo ajusta em cima disso.
 pub static VAD_THRESHOLD: AtomicU32 = AtomicU32::new(300);
+/// Score mínimo do MLP wakeword (0–100 → /100.0).
 pub static WAKE_ML_THRESHOLD: AtomicU8 = AtomicU8::new(50);
+/// Cooldown wakeword em ticks após detecção.
 pub static WAKE_COOLDOWN_TICKS: AtomicU32 = AtomicU32::new(100);
+/// Amostras mínimas de emoção (SER) antes de classificar.
 pub static SER_MIN_SAMPLES: AtomicU32 = AtomicU32::new(1600);
 
 pub fn init_audio_settings() {
@@ -24,17 +29,26 @@ pub fn init_audio_settings() {
 pub fn wake_listen_ticks() -> u32 {
     WAKE_LISTEN_TICKS.load(Ordering::Relaxed)
 }
+
 pub fn vad_threshold() -> f32 {
     VAD_THRESHOLD.load(Ordering::Relaxed) as f32
 }
+
 pub fn wake_ml_threshold() -> f32 {
     WAKE_ML_THRESHOLD.load(Ordering::Relaxed) as f32 / 100.0
 }
+
 pub fn wake_cooldown_ticks() -> u32 {
     WAKE_COOLDOWN_TICKS.load(Ordering::Relaxed)
 }
+
 pub fn ser_min_samples() -> usize {
     SER_MIN_SAMPLES.load(Ordering::Relaxed) as usize
+}
+
+/// Bypass do gate wake: e2e clima e boot skinny (feature weather-e2e).
+pub fn wake_gate_bypassed() -> bool {
+    cfg!(feature = "weather-e2e")
 }
 
 pub struct AudioGetSettingsSkill;
@@ -57,11 +71,15 @@ impl Skill for AudioGetSettingsSkill {
         let voice = CURRENT_VOICE.lock();
         let voice_name = voice.as_deref().unwrap_or("default");
         let info = alloc::format!(
-            "Volume: {}%\nVoice: {}\nWake Word: Jarvis\nSensitivity: {}\nWakeListenTicks: {}\n(espelho jarbas; truth=neural-kernel)",
+            "Volume: {}%\nVoice: {}\nWake Word: Jarvis\nSensitivity: {}\nWakeListenTicks: {}\nVadThreshold: {}\nWakeMl: {}\nVoice Clone: {}\nWakeGateBypass: {}",
             AUDIO_VOLUME.load(Ordering::Relaxed),
             voice_name,
             WAKEWORD_SENSITIVITY.load(Ordering::Relaxed),
             wake_listen_ticks(),
+            vad_threshold() as u32,
+            WAKE_ML_THRESHOLD.load(Ordering::Relaxed),
+            if VOICE_CLONE_ENABLED.load(Ordering::Relaxed) { "on" } else { "off" },
+            wake_gate_bypassed(),
         );
         Ok(info.into_bytes())
     }
@@ -85,7 +103,37 @@ impl Skill for AudioSetVolumeSkill {
 
     fn execute(&self, input: &[u8]) -> Result<Vec<u8>, &'static str> {
         let s = core::str::from_utf8(input).unwrap_or("80");
-        let vol: u8 = s.trim().parse().unwrap_or(80).min(100);
+        let lower = s.to_ascii_lowercase();
+        let vol: u8 = if lower.contains("unmute") {
+            80
+        } else if lower.contains("mute") {
+            0
+        } else {
+            // Aceita "80", "80%" ou "ajuste o volume para 80%"
+            let mut parsed = None;
+            let b = lower.as_bytes();
+            let mut i = 0usize;
+            while i < b.len() {
+                if b[i].is_ascii_digit() {
+                    let start = i;
+                    while i < b.len() && b[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    if let Some(n) = core::str::from_utf8(&b[start..i])
+                        .ok()
+                        .and_then(|t| t.parse::<u32>().ok())
+                    {
+                        if n <= 100 {
+                            parsed = Some(n as u8);
+                            break;
+                        }
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            parsed.unwrap_or(80)
+        };
         AUDIO_VOLUME.store(vol, Ordering::Relaxed);
         Ok(alloc::format!("Volume definido para {}%", vol).into_bytes())
     }

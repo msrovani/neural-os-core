@@ -4,6 +4,7 @@ use spin::Mutex;
 use lazy_static::lazy_static;
 
 pub static ATA_DRIVER: Mutex<Option<crate::ata::AtaDriver>> = Mutex::new(None); // ponytail: Option::None is const
+pub static USB_MSC: Mutex<Option<crate::usb_msc::UsbMassStorage>> = Mutex::new(None);
 
 lazy_static! {
     /// Shared event bus for all K²CHJ crates.

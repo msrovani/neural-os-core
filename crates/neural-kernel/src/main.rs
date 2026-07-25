@@ -59,54 +59,28 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 
 
 mod acpi;
-
-mod agents;
-
-mod allocator;
-
-mod apic;
-
-mod ata;
-
-mod block_dev;
-
-mod cortex;
-
-mod fat32;
-
-mod hw_agents;
-
 mod agency;
-
+pub mod agents;
+mod allocator;
+mod apic;
+mod ata;
+mod block_dev;
+// ADR-0062 E2 — BootHandler (bootloader + Limine)
+mod boot_handoff;
+mod cortex;
+mod fat32;
 mod global_arena;
-
+mod hw_agents;
 mod identity;
-
 mod interrupts;
-
 mod inventory;
-
 mod memory;
-
 mod mhi;
-
+mod model_hub;
 mod pci;
-
-
 mod smp;
-
 mod sync;
 
-pub use k_ai::{self_heal, trust};
-pub use k_nano::globals::EVENT_BUS;
-pub use k_nano::globals::LATENT_BUS;
-// ADR-0042 N3.5: engine cortex wired; residuals = cortex.rs, bpe.rs, global_arena.rs, cortex_mmap.rs
-pub use cortex_crate::{
-    arena, bitnet_avx2, burn_flex, delta, kv_h2o, neuos_probe, nn,
-    ngram_spec, projection, r3, tensor, trinity, tv_dsl,
-};
-mod model_hub;
-// ADR-0042 N4.6: engine hermes wired; residuals = agents.rs, cognitive.rs, net*, aios_api.rs, micropython_wasm.rs
 pub use hermes_crate::{
     actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi, sgdb_agent,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
@@ -114,7 +88,14 @@ pub use hermes_crate::{
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
     skill_observer, skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent,
     wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
+    // ADR-0062 E3 — SoftMAC BE via hermes re-export
+    wifi_softmac,
+    // E1b: fs, vfs, neural_fs moved to hermes crate
+    fs, vfs, neural_fs,
 };
+pub use k_ai::{self_heal, trust};
+pub use k_nano::globals::EVENT_BUS;
+pub use k_nano::globals::LATENT_BUS;
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
 
@@ -165,7 +146,6 @@ mod e1000;
 
 mod i225;
 
-mod usb_msc;
 mod usb_trust;
 
 mod virtio_net;
@@ -174,10 +154,6 @@ mod profile;
 
 mod gguf;
 mod gguf_streaming;
-
-mod vfs;
-
-mod fs;
 
 mod bpe;
 
@@ -197,8 +173,9 @@ mod tpm;
 mod exfat;
 mod exfat_write;
 mod gpt;
-mod neural_fs;
+
 mod fs_driver;
+
 mod ntfs_reader;
 mod ext2_reader;
 mod io_scheduler;
@@ -242,9 +219,17 @@ mod user_mode;
 mod virtio_vring;
 mod gguf_mmap;
 
-mod load_status;
+pub use k_nano::load_status;
 
 mod jarbas_bridge;
+mod nn;
+mod r3;
+mod arena;
+mod kv_h2o;
+mod neuos_probe;
+mod ngram_spec;
+mod tensor;
+mod trinity;
 
 use lazy_static::lazy_static;
 
@@ -267,8 +252,8 @@ pub use k_nano::ATA_DRIVER;
 
 pub static AHCI_DRIVER: spin::Mutex<Option<crate::ahci::AhciDriver>> = spin::Mutex::new(None);
 
-/// USB Mass Storage (pendrive unificado boot+dados em HW real)
-pub static USB_MSC: spin::Mutex<Option<crate::usb_msc::UsbMassStorage>> = spin::Mutex::new(None);
+/// USB Mass Storage — canônico em k_nano
+pub use k_nano::globals::USB_MSC;
 
 /// Merkle Audit Trail global (#315.19)
 
@@ -1281,11 +1266,20 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
 
 #[cfg(not(feature = "limine-boot"))]
 fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    kernel_boot(Some(boot_info))
+    // Reborrow imutável — o BootloaderHandoff + kernel_boot dividem a mesma ref.
+    let bi: &'static bootloader_api::BootInfo = &*boot_info;
+    // Early RSDP + framebuffer (antes de kernel_boot)
+    crate::acpi::set_boot_rsdp(bi.rsdp_addr.into_option());
+    display::fb::probe_uefi_framebuffer(bi);
+    let ho = boot_handoff::BootloaderHandoff::new(bi);
+    kernel_boot(&ho)
 }
 
-/// Boot comum: `Some(BootInfo)` = rust-bootloader 0.11; `None` = Limine (ADR-0065).
-pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
+/// Boot comum (ADR-0062 E2): `handoff` = trait unificado.
+/// Ramdisk acessado via `handoff.raw_boot_info()` (bootloader-only).
+pub(crate) fn kernel_boot(
+    handoff: &impl k_nano::boot_handoff::BootHandoff,
+) -> ! {
 
     // Probe serial port (sem lazy_static, funciona antes do heap)
 
@@ -1299,30 +1293,19 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     
 
-    let pm_offset = match boot_info.as_ref() {
-        Some(bi) => bi.physical_memory_offset.into_option().unwrap_or(0),
-        None => crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed),
-    };
-    // ADR-0055: RSDP UEFI via bootloader — sem isto MADT/APIC/SMP falham no QEMU OVMF
-    if let Some(bi) = boot_info.as_ref() {
-        crate::acpi::set_boot_rsdp(bi.rsdp_addr.into_option());
-    }
-    // Limine path já chamou set_boot_rsdp em limine_boot
+    let pm_offset = handoff.phys_mem_offset();
+    // ADR-0055: RSDP via handoff (cada entry define o seu antes ou via trait)
+    // Chamada idempotente — bootloader fez em kernel_main, Limine em limine_entry.
+    crate::acpi::set_boot_rsdp(handoff.rsdp_addr());
+    // Limine: probe_raw_framebuffer já rodou em limine_entry
 
     // Sonda framebuffer ANTES do VGA text mode para evitar escrever nos registros
 
     // VGA CRTC (0x3D4/0x3D5) em hardware Intel 6xx com UEFI GOP, o que causa xuvisco.
 
     // probe pinta K0 se GOP ok — prova que kernel_main rodou.
-    if let Some(bi) = boot_info.as_ref() {
-        display::fb::probe_uefi_framebuffer(bi);
-    }
-    // Limine: probe_raw_framebuffer já rodou
-    let boot_tag = if boot_info.is_some() {
-        "rust-bootloader"
-    } else {
-        "limine"
-    };
+    // Bootloader: probe_uefi_framebuffer já rodou em kernel_main
+    let boot_tag = handoff.boot_tag();
     crate::display::fb::boot_ckpt(1, "pos-probe + serial");
     k_nano::slog_bin!("Boot", "info", "boot={}", boot_tag);
 
@@ -1362,27 +1345,17 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
     // SafeHarbor / MemoryCore publicados após heap (publish precisa de alloc)
 
     let mut frame_allocator = memory::BitmapFrameAllocator::empty();
-    match boot_info.as_ref() {
-        Some(bi) => {
-            frame_allocator.init(&bi.memory_regions);
-            kjson!("DBG", "MEM", "regions", "n", bi.memory_regions.len());
+    {
+        let usable = handoff.usable_regions();
+        let mut buf = [(0u64, 0u64); 64];
+        let n = core::cmp::min(usable.len(), 64);
+        for i in 0..n {
+            buf[i] = (usable[i].base, usable[i].len);
         }
-        None => {
-            #[cfg(feature = "limine-boot")]
-            {
-                let (ranges, n) = limine_boot::usable_ranges();
-                frame_allocator.init_from_usable_ranges(&ranges[..n]);
-                kjson!("DBG", "MEM", "limine_usable", "n", n as u64);
-            }
-            #[cfg(not(feature = "limine-boot"))]
-            {
-                k_nano::slog_bin!("Boot", "error", "kernel_boot(None) sem limine-boot");
-            }
-        }
+        frame_allocator.init_from_usable_ranges(&buf[..n]);
+        kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
-
-    kjson!("DBG", "MEM", "boot", "tag", if boot_info.is_some() { 0u32 } else { 1u32 });
 
     {
         crate::display::fb::boot_ckpt(8, "antes init_memory");
@@ -1441,10 +1414,10 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
     let _ = hermes_crate::git_thin::boot_smoke();
 
     // Labor 22 SoftMAC
-    k_hal::net::wifi_softmac::boot_smoke();
+    crate::wifi_softmac::boot_smoke();
     // Labor 30 WPA2 + Labor 31 wifi net path
     hermes_crate::wpa2_hs::boot_smoke();
-    k_hal::net::wifi_softmac::dhcp_http_path_smoke();
+    crate::wifi_softmac::dhcp_http_path_smoke();
 
     // ADR-0062 L28–L62 smokes (honesty; Note labs SKIP)
     labor_smokes::limine_esp_evidence_smoke(boot_tag);
@@ -1701,7 +1674,7 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     crate::display::fb::boot_ckpt(24, "antes USB-MSC probe");
     {
-        let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+        let msc = unsafe { k_nano::usb_msc::UsbMassStorage::probe() };
         if msc.is_some() {
             k_nano::slog_nano!("USB", "msc", "stored for FAT model load (unified USB)");
             crate::display::fb::boot_ckpt(16, "USB-MSC OK");
@@ -2380,7 +2353,7 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     // ADR-0057 WS-D/WS-E: conecta aceleradores ao dispatcher de compute do
     // cortex (só registra se `Ready`/HW real; senão CPU/SMP). NPU = Layer S.
-    k_hal::gpu::compute_dispatch::register_compute_if_ready();
+    crate::gpu::compute_dispatch::register_compute_if_ready();
     k_hal::npu::init_npu();
     // ADR-0057 WS-G (#412): valida o primitivo de structured-decode sem modelo.
     let _ = cortex_crate::decode::self_test();
@@ -2742,26 +2715,24 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
 
     let mut model_loaded = false;
 
-    let ramdisk_data_opt = match boot_info.as_ref() {
-        Some(bi) => match bi.ramdisk_addr {
-            bootloader_api::info::Optional::Some(addr) => {
-                let len = bi.ramdisk_len as usize;
-                if len > 1024 {
-                    Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
-                } else {
-                    k_nano::slog_bin!(
-                        "Asset",
-                        "ramdisk",
-                        "Ramdisk too small ({} bytes) — trying QEMU loader.",
-                        len
-                    );
-                    None
-                }
+    // Ramdisk — só bootloader (via raw_boot_info); Limine usa módulos.
+    let ramdisk_data_opt = handoff.raw_boot_info().and_then(|bi| match bi.ramdisk_addr {
+        bootloader_api::info::Optional::Some(addr) => {
+            let len = bi.ramdisk_len as usize;
+            if len > 1024 {
+                Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
+            } else {
+                k_nano::slog_bin!(
+                    "Asset",
+                    "ramdisk",
+                    "Ramdisk too small ({} bytes) — trying QEMU loader.",
+                    len
+                );
+                None
             }
-            _ => None,
-        },
-        None => None,
-    };
+        }
+        _ => None,
+    });
 
     if let Some(data) = ramdisk_data_opt {
 
@@ -2806,29 +2777,8 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
     // Tamanho EXATO via FAT (850/13/2B/3B) — slice > arquivo mapeado → #PF no forward.
     if !model_loaded {
         let load_addr: u64 = 0x100000000;
-        let pm_offset = match boot_info.as_ref() {
-            Some(bi) => bi.physical_memory_offset.into_option().unwrap_or(0),
-            None => crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed),
-        };
-        let mem_has_4gb = match boot_info.as_ref() {
-            Some(bi) => bi
-                .memory_regions
-                .iter()
-                .any(|r| r.start <= load_addr && r.end > load_addr),
-            None => {
-                #[cfg(feature = "limine-boot")]
-                {
-                    let (ranges, n) = limine_boot::usable_ranges();
-                    ranges[..n]
-                        .iter()
-                        .any(|&(base, len)| base <= load_addr && base.saturating_add(len) > load_addr)
-                }
-                #[cfg(not(feature = "limine-boot"))]
-                {
-                    false
-                }
-            }
-        };
+        // pm_offset já calculado via handoff no início de kernel_boot
+        let mem_has_4gb = handoff.has_addr_in_any_region(load_addr);
         let (fat_name, fat_sz): (Option<&'static str>, Option<usize>) = unsafe {
             let ata_guard = crate::ATA_DRIVER.lock();
             (*ata_guard).as_ref().map(|ata| {
@@ -2871,30 +2821,7 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
                 // Fallback so se FAT nao tiver blob (loader-only legacy 2B).
                 const BITNET_2B_V4_BYTES: usize = 604_856_373;
                 let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
-                if let Some(r_end) = {
-                    let mut end_opt = None;
-                    if let Some(bi) = boot_info.as_ref() {
-                        for r in bi.memory_regions.iter() {
-                            if r.start <= load_addr && r.end > load_addr {
-                                end_opt = Some(r.end);
-                                break;
-                            }
-                        }
-                    } else {
-                        #[cfg(feature = "limine-boot")]
-                        {
-                            let (ranges, n) = limine_boot::usable_ranges();
-                            for &(base, len) in &ranges[..n] {
-                                let end = base.saturating_add(len);
-                                if base <= load_addr && end > load_addr {
-                                    end_opt = Some(end);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    end_opt
-                } {
+                if let Some(r_end) = handoff.region_end_containing(load_addr) {
                     let region = (r_end - load_addr) as usize;
                     if region < model_len {
                         k_nano::slog_bin!("Asset", "ramdisk", "region {}MB < model {}MB — truncando", region / (1024*1024), model_len / (1024*1024));
@@ -2949,25 +2876,7 @@ pub(crate) fn kernel_boot(boot_info: Option<&'static mut BootInfo>) -> ! {
             } else {
                 k_nano::slog_bin!("RAMDISK", "info", "No model at 0x100000000 — trying 0x120000000...");
                 let load_addr2: u64 = 0x120000000;
-                let has_addr2 = match boot_info.as_ref() {
-                    Some(bi) => bi
-                        .memory_regions
-                        .iter()
-                        .any(|r| r.start <= load_addr2 && r.end > load_addr2),
-                    None => {
-                        #[cfg(feature = "limine-boot")]
-                        {
-                            let (ranges, n) = limine_boot::usable_ranges();
-                            ranges[..n].iter().any(|&(base, len)| {
-                                base <= load_addr2 && base.saturating_add(len) > load_addr2
-                            })
-                        }
-                        #[cfg(not(feature = "limine-boot"))]
-                        {
-                            false
-                        }
-                    }
-                };
+                let has_addr2 = handoff.has_addr_in_any_region(load_addr2);
                 if has_addr2 {
                     let probe2 = (load_addr2 + pm_offset) as *const u32;
                     let magic2 = unsafe { core::ptr::read_volatile(probe2) };

@@ -70,6 +70,8 @@ pub mod skill_opt;
 pub mod rustpython_no_std;
 pub mod email_agent;
 pub mod fs;
+pub mod neural_fs;
+pub mod vfs;
 pub mod link_watcher;
 pub mod globals;
 pub mod wifi_agent;
@@ -87,4 +89,12 @@ pub use k_hal::net::generic_wifi;
 pub use k_hal::net::wifi_compat;
 pub use k_hal::net::wifi_iwlwifi;
 pub use k_hal::net::wifi_msix;
+// ADR-0062 E3 — SoftMAC BE via k-hal; hermes re-exporta
+pub use k_hal::net::wifi_softmac;
 pub mod voice_skill;
+
+
+
+
+
+

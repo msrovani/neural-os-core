@@ -82,7 +82,7 @@ impl PocketTtsEngine {
                 let cols = self.dw3.as_ref().unwrap().shape.1;
                 self.db3 = Some(Tensor::new((1, cols)));
             }
-            k_nano::slog_jarbas!("TTS", "NEURAL", "Pocket TTS loaded: embed={:?}, decoder={:?}",
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS loaded: embed={:?}, decoder={:?}",
                 self.embed_w.as_ref().map(|t| t.shape),
                 self.dw3.as_ref().map(|t| t.shape));
         }
@@ -93,7 +93,7 @@ impl PocketTtsEngine {
 
     pub fn generate(&self, text: &str) -> Vec<i16> {
         if !self.loaded { return crate::audio::tts::synthesize(text); }
-        let tokens = cortex::bpe::encode(text);
+        let tokens = cortex::cortex::Tokenizer::encode(text);
         if tokens.is_empty() { return vec![0i16; SAMPLE_RATE as usize / 10]; }
 
         let embed = self.embed_w.as_ref().unwrap();
@@ -141,13 +141,23 @@ fn gelu_gpu(input: &Tensor, w: &Tensor, b: &Tensor) -> Tensor {
     out
 }
 
-/// Carrega Pocket TTS via VFS (ring2→ring2) - isolamento de camadas
+/// Carrega Pocket TTS do FAT32 (HW real). Sem fallback QEMU loader.
 fn try_load_fat(filename: &str) -> Option<alloc::vec::Vec<u8>> {
-    if let Ok(data) = hermes::globals::read_vfs(filename) {
-        Some(data)
-    } else {
-        None
+    unsafe {
+        let ata_guard = k_nano::ATA_DRIVER.lock();
+        if let Some(ref ata) = *ata_guard {
+            let parts = k_nano::fat32::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                if let Some(fs) = k_nano::fat32::Fat32Reader::new(ata, p) {
+                    if let Some(data) = fs.read_file(filename) {
+                        return Some(data);
+                    }
+                }
+            }
+        }
     }
+    None
 }
 
 fn try_load_qemu(addr: u64, max_mb: usize) -> Option<alloc::vec::Vec<u8>> {
@@ -156,7 +166,7 @@ fn try_load_qemu(addr: u64, max_mb: usize) -> Option<alloc::vec::Vec<u8>> {
         let probe = (addr + pm) as *const u32;
         if core::ptr::read_volatile(probe) == 0xBE11BE11 {
             let data = core::slice::from_raw_parts(probe as *const u8, max_mb * 1024 * 1024);
-            k_nano::slog_jarbas!("TTS", "NEURAL", "Pocket TTS encontrado em QEMU loader 0x{:x}", addr);
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS encontrado em QEMU loader 0x{:x}", addr);
             return Some(data.to_vec());
         }
     }
@@ -168,7 +178,7 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     if let Some(data) = try_load_fat("POCKETTTS.BIN") {
         let mut eng = PocketTtsEngine::new();
         if eng.load(&data) {
-            k_nano::slog_jarbas!("TTS", "NEURAL", "Pocket TTS 100M loaded from FAT! GPU offload ativo");
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS 100M loaded from FAT! GPU offload ativo");
             return Some(eng);
         }
     }
@@ -176,11 +186,11 @@ pub fn try_load_pocket_tts() -> Option<PocketTtsEngine> {
     if let Some(data) = try_load_qemu(0x100000000, 420) {
         let mut eng = PocketTtsEngine::new();
         if eng.load(&data) {
-            k_nano::slog_jarbas!("TTS", "NEURAL", "Pocket TTS 100M loaded from QEMU loader! GPU offload ativo");
+            k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS 100M loaded from QEMU loader! GPU offload ativo");
             return Some(eng);
         }
     }
-    k_nano::slog_jarbas!("TTS", "NEURAL", "Pocket TTS ausente — formant synth ativo");
+    k_nano::slog_bin!("TTS", "NEURAL", "Pocket TTS ausente — formant synth ativo");
     None
 }
 

@@ -268,6 +268,98 @@ pub fn apply_hhdm(offset: u64) -> u64 {
     offset
 }
 
+// ─── BootHandoff impl (ADR-0062 E2) ──────────────────────────────────────
+use crate::boot_handoff::{BootHandoff, MemRegion};
+
+/// Coleta os dados do handoff Limine para o trait `BootHandoff`.
+/// Copia as informações dos requests; as seções `.requests` ficam no bin.
+pub struct LimineHandoff {
+    pub pm_offset: u64,
+    pub rsdp: Option<u64>,
+    pub regions: [MemRegion; 64],
+    pub region_count: usize,
+}
+
+impl LimineHandoff {
+    pub const fn new() -> Self {
+        Self {
+            pm_offset: 0,
+            rsdp: None,
+            regions: [MemRegion { base: 0, len: 0 }; 64],
+            region_count: 0,
+        }
+    }
+
+    /// Lê os responses dos requests HHDM, memmap e RSDP.
+    /// `apply_hhdm` e `set_boot_rsdp` continuam a cargo do entry.
+    pub fn collect_from_requests(
+        hhdm: &HhdmRequest,
+        memmap: &MemmapRequest,
+        rsdp: &RsdpRequest,
+    ) -> Self {
+        let mut h = Self::new();
+
+        // HHDM offset
+        let offset = if !hhdm.response.is_null() {
+            unsafe { (*hhdm.response).offset }
+        } else {
+            0
+        };
+        h.pm_offset = offset;
+
+        // Memmap — apenas usable
+        if !memmap.response.is_null() {
+            let mm = unsafe { &*memmap.response };
+            let count = mm.entry_count as usize;
+            for i in 0..core::cmp::min(count, 64) {
+                let e = unsafe { *mm.entries.add(i) };
+                if !e.is_null() {
+                    let ent = unsafe { &*e };
+                    if ent.entry_type == MEMMAP_USABLE {
+                        h.regions[h.region_count] = MemRegion {
+                            base: ent.base,
+                            len: ent.length,
+                        };
+                        h.region_count += 1;
+                    }
+                }
+            }
+        }
+
+        // RSDP — subtrai HHDM para obter físico
+        if !rsdp.response.is_null() {
+            let r = unsafe { &*rsdp.response };
+            let virt = r.address as u64;
+            h.rsdp = if virt != 0 {
+                if offset != 0 && virt >= offset {
+                    Some(virt - offset)
+                } else {
+                    Some(virt)
+                }
+            } else {
+                None
+            };
+        }
+
+        h
+    }
+}
+
+impl BootHandoff for LimineHandoff {
+    fn phys_mem_offset(&self) -> u64 {
+        self.pm_offset
+    }
+    fn rsdp_addr(&self) -> Option<u64> {
+        self.rsdp
+    }
+    fn boot_tag(&self) -> &'static str {
+        "limine"
+    }
+    fn usable_regions(&self) -> &[MemRegion] {
+        &self.regions[..self.region_count]
+    }
+}
+
 /// Converte ponteiro RSDP Limine → físico (rev 2: address é HHDM virt).
 pub fn rsdp_phys(hhdm: u64, addr: *mut u8, base_rev_requested: u64) -> Option<u64> {
     if addr.is_null() {

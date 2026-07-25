@@ -202,8 +202,8 @@ impl TxToken for PhyToken {
 
 unsafe fn nic_send(data: Vec<u8>) {
     // Labor 29: SoftMAC wifi path (Note) — antes dos NICs wired QEMU
-    if k_hal::net::wifi_softmac::is_enabled() {
-        if k_hal::net::wifi_softmac::push_tx_eth(&data) {
+    if crate::wifi_softmac::is_enabled() {
+        if crate::wifi_softmac::push_tx_eth(&data) {
             return;
         }
     }
@@ -228,8 +228,8 @@ unsafe fn nic_send(data: Vec<u8>) {
 
 unsafe fn nic_recv() -> Option<Vec<u8>> {
     // Labor 29: SoftMAC RX first when armed
-    if k_hal::net::wifi_softmac::is_enabled() {
-        if let Some(pkt) = k_hal::net::wifi_softmac::pop_rx_eth() {
+    if crate::wifi_softmac::is_enabled() {
+        if let Some(pkt) = crate::wifi_softmac::pop_rx_eth() {
             return Some(pkt);
         }
     }

@@ -1,6 +1,11 @@
-//! Audio subsystem — espelho Jarbas (Sprint Sound / ADR-0045).
-//! Truth runtime do bin = `neural-kernel/src/audio/*` (nao re-exportado aqui).
-//! Contrato TOPIC_* + VAD/settings/wake Continuous alinhados ao monólito.
+//! Audio subsystem — JARVIS voice pipeline (Sprint Sound / ADR-0045)
+//!
+//! Mic (HDA|UAC) → AUDIO_IN → WakeWord → WAKEWORD
+//! JarvisVoiceAgent (wake-gated): VAD → STT → USER_INTENT
+//! JarvisAgent: USER_INTENT → LLM_REQUEST → LLM_RESPONSE → HERMES_RESPONSE
+//! JarvisVoiceAgent: HERMES_RESPONSE → Piper/formant → AUDIO_OUT → Mixer → speaker
+//! AudioPipelineAgent: barge-in via MIC_CAPTURE_RING
+//! Skills: TtsSkill, SttSkill, AudioGetSettingsSkill, AudioSetVolumeSkill
 
 pub mod frame;
 pub mod ringbuf;
@@ -25,7 +30,7 @@ pub mod stt;
 
 pub fn init_audio() {
     crate::audio::settings::init_audio_settings();
-    k_nano::slog_jarbas!("Audio", "info", "Configuracoes de audio inicializadas");
+    k_nano::slog_bin!("Audio", "info", "Configuracoes de audio inicializadas");
 }
 
 pub const TOPIC_AUDIO_IN: &str = "AUDIO_IN";

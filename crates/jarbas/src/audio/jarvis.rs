@@ -1,10 +1,14 @@
-//! JarvisAgent — persona JARVIS. Saudacao: LLM se fluente; senao template (soft-float 2B).
+//! JarvisAgent — persona JARVIS. Saudacao: LLM se fluente; senao template honesto (soft-float 2B).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use alloc::string::String;
 use event_bus::{CapabilityToken, Event, Receiver};
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::jarvis::{JarvisEngine, Emotion, EmotionAnalysis};
 use crate::audio::context::build_emotional_context;
+
+/// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
+static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
 
 const JARVIS_MANIFEST: AgentManifest = AgentManifest {
     name: "jarvis",
@@ -14,6 +18,7 @@ const JARVIS_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// Soft-float BitNet 2B + max_gen=6 produz mash BPE (ex: "LOA,BLOA,BLOA,BL") — nao e frase.
 fn is_fluent_boot_text(text: &str) -> bool {
     let t = text.trim();
     if t.len() < 12 {
@@ -26,6 +31,7 @@ fn is_fluent_boot_text(text: &str) -> bool {
         .count();
     let spaces = t.bytes().filter(|&b| b == b' ').count();
     let commas = t.bytes().filter(|&b| b == b',').count();
+    // Mash tipico: poucas vogais, sem espacos, muitas virgulas / repeticao
     if spaces == 0 {
         return false;
     }
@@ -92,15 +98,78 @@ impl JarvisAgent {
             greet_agents: 0,
         }
     }
+
+    fn publish_greeting(&self, body: &str) {
+        let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
+        k_nano::slog_bin!("Log", "msg", "{}", greeting);
+        let _ = k_nano::EVENT_BUS.publish(Event {
+            id: 0,
+            topic: String::from("HERMES_RESPONSE"),
+            payload: greeting.into_bytes(),
+            token: CapabilityToken::Legacy(1),
+        });
+    }
+}
+
+/// Chamado logo apos `register(JarvisAgent)` no boot HW.
+/// Emite template + tenta BOOT.LOG (MSC/ATA); **nunca soft-reboot** — Runtime segue.
+pub fn emit_hw_greeting_at_register() {
+    if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let bare = matches!(
+        k_nano::platform_probe::hypervisor(),
+        k_nano::platform_probe::HypervisorKind::None
+    );
+            let no_fat = k_nano::globals::USB_MSC.lock().is_none() && k_nano::ATA_DRIVER.lock().is_none();
+    if !(bare || no_fat) {
+        return;
+    }
+
+    let mem_mb = {
+        let g = k_nano::memory::GLOBAL_ALLOCATOR.lock();
+        g.as_ref()
+            .map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024))
+            .unwrap_or(0)
+    };
+    let cpu = k_nano::smp::percpu::CPU_COUNT.load(Ordering::Relaxed);
+    let agents = {
+        let tr = hermes::globals::TRINITY.lock();
+        tr.agent_count()
+    };
+    let body = compose_boot_greeting(mem_mb, cpu, agents);
+    let line = alloc::format!("[JARVIS] JARVIS: {}", body);
+    k_nano::slog_jarbas!(
+        "Jarbas",
+        "info",
+        "saudacao @register K44 (bare={} no_fat={})",
+        bare,
+        no_fat
+    );
+    crate::display::fb::console_print(&line);
+    crate::display::fb::boot_ckpt(50, "jarvis greet OK");
+    let _ = k_nano::EVENT_BUS.publish(Event {
+        id: 0,
+        topic: String::from("HERMES_RESPONSE"),
+        payload: line.into_bytes(),
+        token: CapabilityToken::Legacy(1),
+    });
+    // boot_logger skipped (jarbas crate — bin-only)
+    let _ = true;
 }
 
 impl Agent for JarvisAgent {
-    fn manifest(&self) -> &AgentManifest { &JARVIS_MANIFEST }
+    fn manifest(&self) -> &AgentManifest {
+        &JARVIS_MANIFEST
+    }
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
-        // ── Saudação inicial ──────────────────────────────────
-        // tick>2: TCG soft-float 2B FWD não completa a tempo → template imediato.
-        // WHPX/HW: LLM primeiro; se lixo → template (abaixo).
+        // Ja saudou no register (HW) — nao repetir.
+        if HW_GREET_EMITTED.load(Ordering::Relaxed) {
+            self.greeted = true;
+            self.greeting_prompt_sent = true;
+        }
+        // tick>2: BareMetal/sem FAT → template (LLM soft-float nao completa sem modelo).
         if !self.greeted && !self.greeting_prompt_sent && tick > 2 {
             self.greeting_prompt_sent = true;
 
@@ -116,104 +185,94 @@ impl Agent for JarvisAgent {
                 tr.agent_count()
             };
 
-            let tcg = matches!(
+            let bare = matches!(
                 k_nano::platform_probe::hypervisor(),
-                k_nano::platform_probe::HypervisorKind::Tcg
+                k_nano::platform_probe::HypervisorKind::None
             );
-            if tcg {
+    let no_fat = k_nano::globals::USB_MSC.lock().is_none() && k_nano::ATA_DRIVER.lock().is_none();
+            if bare || no_fat {
                 self.greeted = true;
+                HW_GREET_EMITTED.store(true, Ordering::Relaxed);
                 let body =
                     compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents);
-                let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
                 k_nano::slog_jarbas!(
                     "Jarbas",
                     "info",
-                    "saudacao template TCG (skip LLM soft-float FWD)"
+                    "saudacao template HW (skip LLM; bare={} no_fat={})",
+                    bare,
+                    no_fat
                 );
-                k_nano::slog_jarbas!("Log", "msg", "{}", greeting);
-                let bytes = greeting.as_bytes().to_vec();
-                let _ = k_nano::EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: String::from("HERMES_RESPONSE"),
-                    payload: bytes.clone(),
-                    token: CapabilityToken::Legacy(1),
-                });
-                let _ = k_nano::EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: String::from(crate::audio::TOPIC_TTS_CMD),
-                    payload: bytes,
-                    token: CapabilityToken::Legacy(1),
-                });
-            } else {
-                let tts_mode = "formant";
-                let prompt = alloc::format!(
-                    "You are JARVIS, an AI operating system. Generate a single short sentence \
-                     greeting the user. Include that the system has {}MB RAM, {} CPU cores, \
-                     {} agents, running in {} TTS mode. Be creative and match the personality \
-                     based on these specs:\n\
-                     - If memory < 256MB: humble, 'small but mighty'\n\
-                     - If 256-1024MB: modest, capable\n\
-                     - If > 1024MB: confident, powerful\n\
-                     - If > 4096MB: cocky, 'I could run a small country'\n\
-                     - If agents > 200: 'managing a small army'\n\
-                     Speak as JARVIS. One sentence only, no emojis, no markdown.",
-                    self.greet_mem_mb, self.greet_cpu, self.greet_agents, tts_mode
-                );
-                k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao a LLM...");
-                let _ = k_nano::EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: alloc::string::String::from("LLM_REQUEST"),
-                    payload: prompt.into_bytes(),
-                    token: CapabilityToken::Legacy(1),
-                });
+                self.publish_greeting(&body);
+                let line = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
+                crate::display::fb::console_print(&line);
+                crate::display::fb::boot_ckpt(50, "jarvis greet OK");
+                // boot_logger skipped (jarbas crate)
+                let _ = true;
+                return AgentTickResult::Pending;
             }
+
+            let tts_mode = "formant";
+            let prompt = alloc::format!(
+                "You are JARVIS, an AI operating system. Generate a single short sentence \
+                 greeting the user. Include that the system has {}MB RAM, {} CPU cores, \
+                 {} agents, running in {} TTS mode. Be creative and match the personality \
+                 based on these specs:\n\
+                 - If memory < 256MB: humble, 'small but mighty'\n\
+                 - If 256-1024MB: modest, capable\n\
+                 - If > 1024MB: confident, powerful\n\
+                 - If > 4096MB: cocky, 'I could run a small country'\n\
+                 - If agents > 200: 'managing a small army'\n\
+                 Speak as JARVIS. One sentence only, no emojis, no markdown.",
+                self.greet_mem_mb, self.greet_cpu, self.greet_agents, tts_mode
+            );
+
+            k_nano::slog_jarbas!("Jarbas", "info", "Solicitando saudacao a LLM...");
+            let _ = k_nano::EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from("LLM_REQUEST"),
+                payload: prompt.into_bytes(),
+                token: CapabilityToken::Legacy(1),
+            });
         }
 
-        // ── Resposta da LLM (saudacao ou conversa) ──────────
         while let Some(ev) = self.llm_response.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if text.is_empty() { continue; }
+            if text.is_empty() {
+                continue;
+            }
 
             if !self.greeted {
                 self.greeted = true;
-                let body = if is_fluent_boot_text(text) {
+                // Decode constrito greeting (logits a quente). Template so se vazio/total mash.
+                let body = if cortex::bpe::text_is_greetingish(text) || is_fluent_boot_text(text) {
+                    k_nano::slog_jarbas!("Jarbas", "info", "saudacao LLM a quente");
                     String::from(text.trim())
+                } else if text.trim().is_empty() {
+                    k_nano::slog_jarbas!("Jarbas", "info", "saudacao vazia — template specs");
+                    compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents)
                 } else {
                     k_nano::slog_jarbas!(
                         "Jarbas",
                         "info",
-                        "saudacao LLM lixo — template specs"
+                        "saudacao mash ('{}') — template specs",
+                        text.chars().take(48).collect::<String>()
                     );
                     compose_boot_greeting(self.greet_mem_mb, self.greet_cpu, self.greet_agents)
                 };
-                let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
-                k_nano::slog_jarbas!("Log", "msg", "{}", greeting);
-                let bytes = greeting.as_bytes().to_vec();
-                let _ = k_nano::EVENT_BUS.publish(Event {
-                    id: 0, topic: String::from("HERMES_RESPONSE"),
-                    payload: bytes.clone(), token: CapabilityToken::Legacy(1),
-                });
-                let _ = k_nano::EVENT_BUS.publish(Event {
-                    id: 0, topic: String::from(crate::audio::TOPIC_TTS_CMD),
-                    payload: bytes, token: CapabilityToken::Legacy(1),
-                });
+                self.publish_greeting(&body);
                 continue;
             }
 
             let response = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, text);
-            k_nano::slog_jarbas!("Log", "msg", "{}", response);
-            let bytes = response.as_bytes().to_vec();
+            k_nano::slog_bin!("Log", "msg", "{}", response);
             let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from("HERMES_RESPONSE"),
-                payload: bytes.clone(), token: CapabilityToken::Legacy(1),
-            });
-            let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from(crate::audio::TOPIC_TTS_CMD),
-                payload: bytes, token: CapabilityToken::Legacy(1),
+                id: 0,
+                topic: String::from("HERMES_RESPONSE"),
+                payload: response.into_bytes(),
+                token: CapabilityToken::Legacy(1),
             });
         }
 
-        // ── Input do usuario ─────────────────────────────────
         while let Some(ev) = self.user_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             k_nano::slog_jarbas!("Jarbas", "info", "\"{}\"", text);
@@ -231,8 +290,10 @@ impl Agent for JarvisAgent {
             }
 
             let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0, topic: alloc::string::String::from("LLM_REQUEST"),
-                payload: enhanced_prompt.into_bytes(), token: CapabilityToken::Legacy(1),
+                id: 0,
+                topic: String::from("LLM_REQUEST"),
+                payload: enhanced_prompt.into_bytes(),
+                token: CapabilityToken::Legacy(1),
             });
         }
 

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### E0–E4 Emagrecer completo (2026-07-25) — SESSION_217
+- **E1c:** `usb_msc` deletado do bin, singletons via `k_nano::globals::USB_MSC`; `virtio_net` = `pub use k_nano::virtio_net::*` + trait `rx_queue_phys()`/`tx_queue_phys()`.
+- **E2:** `BootHandoff` trait em `k_nano/src/boot_handoff.rs`; `kernel_boot()` refatorada de `boot_info: Option<&BootInfo>` → `handoff: &impl BootHandoff` (7+ branches eliminadas).
+- **E3:** GPU/WiFi wire via k_hal→hermes→bin. Zero `k_hal::gpu`/`k_hal::net::wifi_softmac` no bin; tudo via `crate::gpu::*` / `crate::wifi_softmac::*`.
+- **E4:** Audio ADR-0045 truth migrada para `crates/jarbas/src/audio/` (21 arquivos sincronizados com path fixes). `load_status` movido para `k_nano`. Bin = `pub use jarbas_crate::audio::*;` — 20 arquivos duplicados deletados.
+- **Outros:** `rust-toolchain.toml` corrigido para MSVC (GNU causava `dlltool.exe not found`).
+- **cargo check --release --workspace:** 0 errors.
+
 ### ADR-0075 Emagrecer neural-kernel (2026-07-23) — SESSION_215
 - **Plano cirúrgico E0–E4:** E0 (freeze CI) → E1a (cortex/bpe/gguf) → E1b (agents/neural_fs) → E1c (boot_logger/virtio/usb) → E2 (Limine handoff) → E3 (infra crates) → E4 (audio ADR-0045).
 - **Dados reais do recon:** bin 29.431 LOC, 12k bin_ahead (41%), 6.5k role_diff (22%), 5k glue (17%), 2.9k audio (10%).
