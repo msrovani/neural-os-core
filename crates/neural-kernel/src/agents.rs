@@ -20,6 +20,7 @@ use crate::{EVENT_BUS, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
             CONVERSATION_TRACKER, PENDING_SKILL, TRINITY};
 // P001: SKILL_REGISTRY canônico agora em k_nano::globals (cross-crate).
 use k_nano::SKILL_REGISTRY;
+use jarbas_crate::vconsole;
 
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
@@ -168,6 +169,13 @@ impl InputAgent {
             0x1D => { self.ctrl = pressed; }
             0x38 => { self.alt = pressed; }
             0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
+            // F1-F6 (0x3B-0x40) with Ctrl+Alt for virtual console switching
+            k @ 0x3B..=0x40 if self.ctrl && self.alt && pressed => {
+                let fn_idx = k - 0x3B; // F1=0, F2=1, ..., F6=5
+                if fn_idx < 6 {
+                    vconsole::on_ctrl_alt_fn(fn_idx);
+                }
+            }
             _ => {}
         }
         if !pressed { return; }

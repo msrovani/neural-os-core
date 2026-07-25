@@ -12,12 +12,19 @@ const NTP_UNIX_DELTA: u64 = 2_208_988_800;
 const NTP_PORT: u16 = 123;
 /// Cloudflare time.anycast — fallback sem DNS.
 const FALLBACK_NTP_IP: [u8; 4] = [162, 159, 200, 1];
+/// Resync interval: ~200s at 18 Hz
+const RESYNC_INTERVAL_TICKS: u64 = 3600;
+/// Cooldown after failed attempt: ~30s
+const FAIL_COOLDOWN_TICKS: u64 = 540;
 
 static SYNCED: AtomicBool = AtomicBool::new(false);
 static UNIX_AT_SYNC: AtomicU64 = AtomicU64::new(0);
 static TICKS_AT_SYNC: AtomicU64 = AtomicU64::new(0);
 static LAST_SERVER: Mutex<[u8; 4]> = Mutex::new([0; 4]);
-static TRIED: AtomicBool = AtomicBool::new(false);
+static LAST_ATTEMPT_TICKS: AtomicU64 = AtomicU64::new(0);
+static LAST_SERVER_IDX: Mutex<usize> = Mutex::new(0);
+
+const NTP_SERVERS: &[&str] = &["time.cloudflare.com", "time.google.com", "pool.ntp.org"];
 
 pub fn is_synced() -> bool {
     SYNCED.load(Ordering::Relaxed)
@@ -70,15 +77,31 @@ fn apply_sync(unix: u64, server: [u8; 4]) {
     TICKS_AT_SYNC.store(ticks, Ordering::Relaxed);
     SYNCED.store(true, Ordering::Relaxed);
     *LAST_SERVER.lock() = server;
+    LAST_ATTEMPT_TICKS.store(ticks, Ordering::Relaxed);
 }
 
 /// Sync one-shot. Non-fatal. Retorna true se PASS.
 pub fn sync_once() -> bool {
     k_nano::slog_bin!("NTP", "info", "step=sync status=START");
 
-    let server = crate::net_bridge::dns_resolve("time.cloudflare.com")
-        .or_else(|| crate::net_bridge::dns_resolve("time.google.com"))
-        .unwrap_or(FALLBACK_NTP_IP);
+    // Try servers in rotation
+    let mut server_idx = LAST_SERVER_IDX.lock();
+    let start_idx = *server_idx;
+    let mut server = [0u8; 4];
+    let mut resolved = false;
+
+    for i in 0..NTP_SERVERS.len() {
+        let idx = (start_idx + i) % NTP_SERVERS.len();
+        if let Some(ip) = crate::net_bridge::dns_resolve(NTP_SERVERS[idx]) {
+            server = ip;
+            *server_idx = (idx + 1) % NTP_SERVERS.len();
+            resolved = true;
+            break;
+        }
+    }
+    if !resolved {
+        server = FALLBACK_NTP_IP;
+    }
 
     let req = build_request();
     let resp = match crate::net_bridge::udp_xfer(server, NTP_PORT, &req) {
@@ -128,14 +151,28 @@ pub fn sync_once() -> bool {
     true
 }
 
-/// Boot/Cron: no máximo uma tentativa automática (evita flood UDP).
+/// Boot/Cron: tenta sync com cooldown (não one-shot gate).
+/// Se já synced, faz resync periódico a cada RESYNC_INTERVAL_TICKS.
 pub fn try_sync() -> bool {
+    let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let last = LAST_ATTEMPT_TICKS.load(Ordering::Relaxed);
+
     if is_synced() {
+        // Periodic resync
+        if now.saturating_sub(last) >= RESYNC_INTERVAL_TICKS {
+            k_nano::slog_bin!("NTP", "info", "step=resync status=START periodic");
+            if sync_once() {
+                return true;
+            }
+        }
         return true;
     }
-    if TRIED.swap(true, Ordering::Relaxed) {
+
+    // Not synced yet: respect fail cooldown
+    if last != 0 && now.saturating_sub(last) < FAIL_COOLDOWN_TICKS {
         return false;
     }
+
     sync_once()
 }
 
@@ -144,7 +181,7 @@ pub fn status_line() -> alloc::string::String {
     if let Some(u) = now_unix() {
         let (h, m, s) = format_hms(u);
         alloc::format!("NTP synced unix={} utc={:02}:{:02}:{:02}", u, h, m, s)
-    } else if TRIED.load(Ordering::Relaxed) {
+    } else if LAST_ATTEMPT_TICKS.load(Ordering::Relaxed) != 0 {
         alloc::string::String::from("NTP AWAITING_NET (ticks only)")
     } else {
         alloc::string::String::from("NTP not attempted")
@@ -177,3 +214,9 @@ pub fn residual_boot_smoke() {
         );
     }
 }
+
+
+
+
+
+

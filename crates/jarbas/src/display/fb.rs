@@ -385,6 +385,10 @@ pub fn console_print(text: &str) {
     if text.is_empty() {
         return;
     }
+    // Route through vconsole for virtual console support
+    crate::vconsole::write_to_active(text);
+    crate::vconsole::write_to_active("\n");
+    
     if GRAPHICS_OWNED.load(Ordering::Relaxed) {
         return;
     }

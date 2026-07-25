@@ -8,6 +8,7 @@ use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button};
 use crate::display::avatar::{AvatarState, JarvisAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
+use crate::clipboard_notify::TOPIC_TOAST;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -26,6 +27,7 @@ pub struct DisplayAgent {
     hitl_receiver: event_bus::Receiver,
     hitl_term_receiver: event_bus::Receiver,
     memory_nudge_receiver: event_bus::Receiver,
+    toast_receiver: event_bus::Receiver,
     latent_receiver: Option<event_bus::LatentReceiver>,
     gpu_inited: bool,
     demo_ui_sent: bool,
@@ -54,6 +56,7 @@ impl DisplayAgent {
             hitl_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_REQUEST),
             hitl_term_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_TERMINAL),
             memory_nudge_receiver: EVENT_BUS.subscribe(hermes::cognitive_bridge::TOPIC_MEMORY_NUDGE),
+            toast_receiver: EVENT_BUS.subscribe(TOPIC_TOAST),
             latent_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
@@ -431,6 +434,35 @@ impl Agent for DisplayAgent {
         while let Some(ev) = self.ui_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             self.apply_ui_spec(text);
+        }
+
+        // Toast notifications — drain TOAST topic and render via compositor
+        if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+            let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+            while let Some(ev) = self.toast_receiver.try_receive() {
+                let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+                if !text.is_empty() {
+                    crate::clipboard_notify::toast_push(text);
+                }
+            }
+            // Get active toasts and render as overlay
+            let toasts = crate::clipboard_notify::toast_get_active(now);
+            if !toasts.is_empty() {
+                // Render toasts at bottom of screen
+                let (w, h) = (desktop.w, desktop.h);
+                let toast_h = 24;
+                let start_y = h.saturating_sub(toast_h * toasts.len().min(4) + 10);
+                for (i, msg) in toasts.iter().rev().take(4).enumerate() {
+                    let y = start_y + i * toast_h;
+                    // Semi-transparent background
+                    desktop.fb.fill_rect(10, y, w.saturating_sub(20), toast_h - 4, 20, 25, 35);
+                    // Border
+                    desktop.fb.fill_rect(10, y, w.saturating_sub(20), 1, 80, 100, 120);
+                    desktop.fb.fill_rect(10, y + toast_h - 5, w.saturating_sub(20), 1, 80, 100, 120);
+                    // Text
+                    crate::display::compositor::draw_text(&mut desktop.fb, 16, y + 4, msg, w, 200, 220, 255);
+                }
+            }
         }
 
         // H4: avatar telemetria from LatentBus norm + H2/H5 viz

@@ -63,3 +63,9 @@ pub fn capgate_boot_smoke() -> bool {
         }
     }
 }
+
+
+
+
+
+

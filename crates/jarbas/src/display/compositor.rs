@@ -503,6 +503,25 @@ impl JarvisDesktop {
             draw_text(&mut self.fb, off_x + 22, btn_y + 8, "Turn off", self.w, 255, 220, 220);
         }
 
+        // Virtual console overlay (Ctrl+Alt+F1-F6)
+        let vcon_active = crate::vconsole::active();
+        if vcon_active != 0 {
+            let lines = crate::vconsole::get_active_visible();
+            let ch = 16usize;
+            let cw = 8usize;
+            let start_y = 0;
+            for (i, line) in lines.iter().enumerate() {
+                let y = start_y + i * ch;
+                if y + ch > self.h { break; }
+                // Background
+                self.fb.fill_rect(0, y, self.w, ch, line.bg.0, line.bg.1, line.bg.2);
+                // Text
+                draw_text(&mut self.fb, 0, y, &line.text, self.w, line.fg.0, line.fg.1, line.fg.2);
+            }
+            // Show console indicator at top-right
+            draw_text(&mut self.fb, self.w.saturating_sub(60), 0, &alloc::format!("F{}", vcon_active + 1), self.w, 255, 255, 100);
+        }
+
         // Cursor do mouse — seta visível (não só cruz 1px)
         let mx = *MOUSE_X.lock();
         let my = *MOUSE_Y.lock();

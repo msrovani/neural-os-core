@@ -190,6 +190,8 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     if ticks < 5 {
         crate::slog_nano!("TIMER", "info", "Interrupt fired! tick={}", ticks);
     }
+    // Process async executor wake notifications
+    crate::async_rt::global_executor().process_wakes();
     send_eoi(32);
 }
 

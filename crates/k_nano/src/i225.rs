@@ -76,26 +76,26 @@ const TCTL_PSP: u32 = 1 << 3;
 const TX_N: usize = 64;
 const RX_N: usize = 64;
 
-#[repr(C, packed)]
-struct TxDesc {
-    addr: u64,
-    length: u16,
-    cso: u8,
-    cmd: u8,
-    status: u8,
-    css: u8,
-    vlan: u16,
-}
+// Descriptor sizes (legacy 16-byte)
+const TX_DESC_SIZE: usize = 16;
+const RX_DESC_SIZE: usize = 16;
 
-#[repr(C, packed)]
-struct RxDesc {
-    addr: u64,
-    length: u16,
-    csum: u16,
-    status: u8,
-    errors: u8,
-    special: u16,
-}
+// TX descriptor field offsets
+const TX_OFF_ADDR: usize = 0;
+const TX_OFF_LENGTH: usize = 8;
+const TX_OFF_CSO: usize = 10;
+const TX_OFF_CMD: usize = 11;
+const TX_OFF_STATUS: usize = 12;
+const TX_OFF_CSS: usize = 13;
+const TX_OFF_VLAN: usize = 14;
+
+// RX descriptor field offsets
+const RX_OFF_ADDR: usize = 0;
+const RX_OFF_LENGTH: usize = 8;
+const RX_OFF_CSUM: usize = 10;
+const RX_OFF_STATUS: usize = 12;
+const RX_OFF_ERRORS: usize = 13;
+const RX_OFF_SPECIAL: usize = 14;
 
 pub struct I225Driver {
     mmio_base: u64,
@@ -161,6 +161,55 @@ impl I225Driver {
             .unwrap_or(0)
     }
 
+    /// Get TX descriptor base pointer
+    unsafe fn tx_desc_base(&self) -> *mut u8 {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        (self.tx_ring_paddr + pmoff) as *mut u8
+    }
+
+    /// Get RX descriptor base pointer
+    unsafe fn rx_desc_base(&self) -> *mut u8 {
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        (self.rx_ring_paddr + pmoff) as *mut u8
+    }
+
+    /// Write TX descriptor using raw byte pointers (avoid packed struct UB)
+    unsafe fn write_tx_desc(&self, idx: usize, buf_paddr: u64, len: u16, cmd: u8) {
+        let base = self.tx_desc_base();
+        let d = base.add(idx * TX_DESC_SIZE);
+        core::ptr::write_volatile(d.add(TX_OFF_ADDR) as *mut u64, buf_paddr);
+        core::ptr::write_volatile(d.add(TX_OFF_LENGTH) as *mut u16, len);
+        core::ptr::write_volatile(d.add(TX_OFF_CSO), 0);
+        core::ptr::write_volatile(d.add(TX_OFF_CMD), cmd);
+        core::ptr::write_volatile(d.add(TX_OFF_STATUS), 0);
+        core::ptr::write_volatile(d.add(TX_OFF_CSS), 0);
+        core::ptr::write_volatile(d.add(TX_OFF_VLAN) as *mut u16, 0);
+    }
+
+    /// Read RX descriptor DD bit using raw pointers + clflush
+    unsafe fn read_rx_dd(&self, idx: usize) -> u8 {
+        let base = self.rx_desc_base();
+        let d = base.add(idx * RX_DESC_SIZE);
+        // clflush before reading DD (belt-and-suspenders vs UC map)
+        core::arch::x86_64::_mm_clflush(d.add(RX_OFF_STATUS) as *const _);
+        core::arch::asm!("lfence", options(nostack, preserves_flags));
+        core::ptr::read_volatile(d.add(RX_OFF_STATUS))
+    }
+
+    /// Read RX descriptor length using raw pointers
+    unsafe fn read_rx_len(&self, idx: usize) -> u16 {
+        let base = self.rx_desc_base();
+        let d = base.add(idx * RX_DESC_SIZE);
+        core::ptr::read_volatile(d.add(RX_OFF_LENGTH) as *const u16)
+    }
+
+    /// Clear RX descriptor DD bit using raw pointers
+    unsafe fn clear_rx_dd(&self, idx: usize) {
+        let base = self.rx_desc_base();
+        let d = base.add(idx * RX_DESC_SIZE);
+        core::ptr::write_volatile(d.add(RX_OFF_STATUS), 0);
+    }
+
     pub unsafe fn init(&mut self) -> bool {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         // igc BAR spans farther (Q0 @ 0xC000/0xE000) — map 64KB
@@ -176,6 +225,7 @@ impl I225Driver {
             }
             core::hint::spin_loop();
         }
+        // Re-check Bus Master after reset (some HW clears it)
         crate::pci::enable_pci_bus_master_unsafe(self.pci_bus, self.pci_device, self.pci_func);
 
         // MAC from RAL0 (flash/NVM may already program it)
@@ -230,10 +280,11 @@ impl I225Driver {
             }
             crate::apic::map_page_uc(b, pmoff);
             self.tx_buf_paddrs[i] = b;
-            let d = (tx_ring + pmoff) as *mut TxDesc;
-            (*d.add(i)).addr = b;
-            (*d.add(i)).cmd = 0;
-            (*d.add(i)).status = 1; // DD free
+            // Initialize TX descriptor as free (DD=1)
+            self.write_tx_desc(i, b, 0, 0);
+            // Set DD=1 to mark free
+            let base = self.tx_desc_base();
+            core::ptr::write_volatile(base.add(i * TX_DESC_SIZE + TX_OFF_STATUS), 1);
         }
         for i in 0..RX_N {
             let b = Self::alloc_frame();
@@ -242,20 +293,21 @@ impl I225Driver {
             }
             crate::apic::map_page_uc(b, pmoff);
             self.rx_buf_paddrs[i] = b;
-            let d = (rx_ring + pmoff) as *mut RxDesc;
-            (*d.add(i)).addr = b;
-            (*d.add(i)).status = 0;
+            // Initialize RX descriptor
+            let base = self.rx_desc_base();
+            core::ptr::write_volatile((base.add(i * RX_DESC_SIZE + RX_OFF_ADDR)) as *mut u64, b);
+            core::ptr::write_volatile(base.add(i * RX_DESC_SIZE + RX_OFF_STATUS), 0);
         }
 
         self.write32(REG_TDBAL, tx_ring as u32);
         self.write32(REG_TDBAH, (tx_ring >> 32) as u32);
-        self.write32(REG_TDLEN, (core::mem::size_of::<TxDesc>() * TX_N) as u32);
+        self.write32(REG_TDLEN, (TX_DESC_SIZE * TX_N) as u32);
         self.write32(REG_TDH, 0);
         self.write32(REG_TDT, 0);
 
         self.write32(REG_RDBAL, rx_ring as u32);
         self.write32(REG_RDBAH, (rx_ring >> 32) as u32);
-        self.write32(REG_RDLEN, (core::mem::size_of::<RxDesc>() * RX_N) as u32);
+        self.write32(REG_RDLEN, (RX_DESC_SIZE * RX_N) as u32);
         self.write32(REG_RDH, 0);
         self.write32(REG_RDT, (RX_N as u32).wrapping_sub(1));
 
@@ -293,22 +345,17 @@ impl I225Driver {
         if data.is_empty() || data.len() > 1518 {
             return false;
         }
-        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let idx = self.tx_cur;
-        let desc = (self.tx_ring_paddr + pmoff) as *mut TxDesc;
-        let d = &mut *desc.add(idx);
-        if d.status & 1 == 0 {
+        // Check DD bit using raw pointer
+        let base = self.tx_desc_base();
+        let d = base.add(idx * TX_DESC_SIZE);
+        if core::ptr::read_volatile(d.add(TX_OFF_STATUS)) & 1 == 0 {
             return false; // still owned by HW
         }
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let buf = (self.tx_buf_paddrs[idx] + pmoff) as *mut u8;
         core::ptr::copy_nonoverlapping(data.as_ptr(), buf, data.len());
-        d.addr = self.tx_buf_paddrs[idx];
-        d.length = data.len() as u16;
-        d.cso = 0;
-        d.cmd = 0x0B; // EOP|IFCS|RS
-        d.status = 0;
-        d.css = 0;
-        d.vlan = 0;
+        self.write_tx_desc(idx, self.tx_buf_paddrs[idx], data.len() as u16, 0x0B); // EOP|IFCS|RS
         core::arch::asm!("sfence", options(nostack, preserves_flags));
         let next = (idx + 1) % TX_N;
         self.write32(REG_TDT, next as u32);
@@ -317,30 +364,112 @@ impl I225Driver {
     }
 
     pub unsafe fn recv(&mut self) -> Option<Vec<u8>> {
-        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let idx = self.rx_cur;
-        let desc = (self.rx_ring_paddr + pmoff) as *mut RxDesc;
-        let d = &mut *desc.add(idx);
-        if d.status & 1 == 0 {
+        let dd = self.read_rx_dd(idx);
+        if dd & 1 == 0 {
             return None;
         }
-        let len = d.length as usize;
+        let len = self.read_rx_len(idx) as usize;
         if len < 14 || len > 2048 {
-            d.status = 0;
+            self.clear_rx_dd(idx);
             self.write32(REG_RDT, idx as u32);
             self.rx_cur = (idx + 1) % RX_N;
             return None;
         }
+        let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
         let mut out = Vec::with_capacity(len);
         let src = (self.rx_buf_paddrs[idx] + pmoff) as *const u8;
         for i in 0..len {
             out.push(src.add(i).read_volatile());
         }
-        d.status = 0;
+        self.clear_rx_dd(idx);
         core::arch::asm!("sfence", options(nostack, preserves_flags));
         self.write32(REG_RDT, idx as u32);
         self.rx_cur = (idx + 1) % RX_N;
         Some(out)
+    }
+
+    /// Kick RX on link transition (disable→clear→re-enable→RDT=N-1)
+    pub unsafe fn kick_rx(&mut self) {
+        // Disable RX
+        let rctl = self.read32(REG_RCTL);
+        self.write32(REG_RCTL, rctl & !RCTL_EN);
+        // Clear all RX descriptors
+        for i in 0..RX_N {
+            self.clear_rx_dd(i);
+        }
+        // Re-enable RX
+        self.write32(REG_RCTL, rctl | RCTL_EN);
+        // Make all descriptors available
+        self.write32(REG_RDT, (RX_N as u32).wrapping_sub(1));
+        crate::slog_nano!("Net", "i225", "kick_rx done");
+    }
+
+    /// Prove RX works: send ARP who-has, wait TX DD, poll RX DD
+    pub unsafe fn prove_rx(&mut self) -> bool {
+        // Build minimal ARP who-has for 192.168.1.1 (gateway)
+        let mut arp = [0u8; 60];
+        // Ethernet header
+        arp[0..6].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]); // dst MAC broadcast
+        arp[6..12].copy_from_slice(&self.mac_addr); // src MAC
+        arp[12..14].copy_from_slice(&[0x08, 0x06]); // EtherType ARP
+        // ARP payload
+        arp[14..16].copy_from_slice(&[0x00, 0x01]); // HTYPE Ethernet
+        arp[16..18].copy_from_slice(&[0x08, 0x00]); // PTYPE IPv4
+        arp[18] = 6; // HLEN
+        arp[19] = 4; // PLEN
+        arp[20..22].copy_from_slice(&[0x00, 0x01]); // OPER request
+        arp[22..28].copy_from_slice(&self.mac_addr); // SHA
+        arp[28..32].copy_from_slice(&[192, 168, 1, 100]); // SPA (our IP)
+        arp[32..38].copy_from_slice(&[0, 0, 0, 0, 0, 0]); // THA
+        arp[38..42].copy_from_slice(&[192, 168, 1, 1]); // TPA (gateway)
+        // Pad to 60 bytes (min Ethernet frame)
+
+        // Send ARP
+        if !self.send(&arp) {
+            crate::slog_nano!("Net", "i225", "prove_rx: send FAIL");
+            return false;
+        }
+        // Wait TX DD
+        for _ in 0..100_000 {
+            let base = self.tx_desc_base();
+            let d = base.add(self.tx_cur * TX_DESC_SIZE);
+            if core::ptr::read_volatile(d.add(TX_OFF_STATUS)) & 1 != 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        // Poll RX DD with wall-clock delay
+        for _ in 0..50_000 {
+            if self.recv().is_some() {
+                crate::slog_nano!("Net", "i225", "prove_rx: RX PASS");
+                return true;
+            }
+            core::hint::spin_loop();
+        }
+        crate::slog_nano!("Net", "i225", "prove_rx: RX TIMEOUT");
+        false
+    }
+
+    /// Check if any RX descriptor has DD bit set
+    pub unsafe fn any_rx_dd(&self) -> bool {
+        for i in 0..RX_N {
+            if self.read_rx_dd(i) & 1 != 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Count RX descriptors with DD bit set
+    pub unsafe fn count_rx_dd(&self) -> usize {
+        let mut count = 0;
+        for i in 0..RX_N {
+            if self.read_rx_dd(i) & 1 != 0 {
+                count += 1;
+            }
+        }
+        count
     }
 
     pub unsafe fn dump_status(&self) {

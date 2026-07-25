@@ -54,6 +54,8 @@ impl CronAgent {
         self.schedule("health", 200, "CRON_HEALTH", "Health check");
         self.schedule("memory_report", 500, "CRON_REPORT", "Memory report");
         self.schedule("skill_review", 3000, "SKILL_REVIEW", "Comprehensive skill review");
+        // NTP periodic resync every ~200s (3600 ticks at 18Hz)
+        self.schedule("ntp_resync", 3600, "NTP_RESYNC", "NTP periodic resync");
         k_nano::slog_hermes!("Cron", "info", "{} jobs default registrados", self.jobs.len());
     }
 
@@ -107,6 +109,11 @@ impl Agent for CronAgent {
                     Self::run_review();
                     continue;
                 }
+                // NTP periodic resync
+                if job.name == "ntp_resync" {
+                    let _ = crate::ntp::try_sync();
+                    continue;
+                }
 
                 let _ = EVENT_BUS.publish(event_bus::Event {
                     id: 0,
@@ -119,3 +126,9 @@ impl Agent for CronAgent {
         AgentTickResult::Pending
     }
 }
+
+
+
+
+
+

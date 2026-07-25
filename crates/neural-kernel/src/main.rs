@@ -1439,6 +1439,8 @@ pub(crate) fn kernel_boot(
     let _ = k_nano::fts_search::boot_smoke();
     let _ = k_nano::user_accounts::boot_smoke();
     let _ = k_nano::fw_cfg::boot_smoke();
+    // Initialize async runtime (P16)
+    k_nano::async_rt::init_async_rt();
     hermes_crate::cf_challenge::boot_smoke();
     k_nano::xhci::hub_address_boot_smoke();
     k_nano::btrfs_reader::boot_smoke();
@@ -3418,6 +3420,7 @@ pub(crate) fn kernel_boot(
     let bpe_ok = crate::bpe::is_loaded();
 
     if model_ok && bpe_ok {
+        crate::display::fb::boot_ckpt(49, "Gerando saudacao LLM...");
         k_nano::slog_bin!("JARBAS", "GREETING",
             "model LOADED + BPE LOADED — gerando saudacao via LLM");
         let greeting_prompt =
@@ -3606,6 +3609,8 @@ pub(crate) fn kernel_boot(
     k_nano::slog_bin!("COG", "info", "{}", crate::memory_systems::bge_status());
 
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
+
+    crate::display::fb::boot_ckpt(50, "Runtime OK — iniciando scheduler");
 
     k_nano::slog_bin!("Sched", "info", "{} runtime agents. Iniciando scheduler...", registry.agents.len());
 
