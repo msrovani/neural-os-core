@@ -13,6 +13,7 @@ pub mod audio;
 pub mod clipboard_notify;
 pub mod display;
 pub mod gpu;
+pub mod ide;
 pub mod image_viewer;
 pub mod jarvis;
 pub mod screensaver;

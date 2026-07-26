@@ -223,6 +223,74 @@ pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
     }
 }
 
+/// Search remote plugin registry via HTTP (IDEA #395).
+/// ponytail: single registry URL, hardcoded host. Make configurable when >1 registry exists.
+pub fn search_remote(query: &str) -> String {
+    let q = query.trim();
+    if q.is_empty() {
+        return String::from("[MARKET] search_remote <query>");
+    }
+    // ponytail: registry on host bridge IP (VirtualBox 10.0.2.2, QEMU host)
+    let encoded: String = q
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+            c
+        } else {
+            '%' // ponytail: simple percent-encode for spaces etc.
+        })
+        .collect();
+    let url = format!("http://10.0.2.2:8080/api/search?q={}", encoded);
+    let bytes = match crate::net_bridge::resolve_and_http_get_safe(&url) {
+        Ok(b) => b,
+        Err(e) => return format!("[MARKET] remote search failed: {}", e),
+    };
+    let body = core::str::from_utf8(&bytes).unwrap_or("");
+    // Strip HTTP headers
+    let md = if let Some(idx) = body.find("\r\n\r\n") {
+        &body[idx + 4..]
+    } else if let Some(idx) = body.find("\n\n") {
+        &body[idx + 2..]
+    } else {
+        body
+    };
+    format!("[MARKET] remote search '{}':\n{}", q, md)
+}
+
+/// Install com AI security scan antes de stage.
+/// Bloqueia Plugin/AgentWasm com ScanVerdict::Blocked.
+/// Suspicious loga alerta mas prossegue (HITL no approval gate).
+pub fn install_scanned(url: &str, kind: PackageKind, name: &str) -> String {
+    let _ = match parse_http_url(url) {
+        Ok(v) => v,
+        Err(e) => return format!("[MARKET] scan-install denied: {}", e),
+    };
+    let bytes = match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
+        Ok(b) => b,
+        Err(e) => return format!("[MARKET] scan-install fetch failed: {}", e),
+    };
+
+    // Run security scan for Plugin/AgentWasm kinds
+    if kind == PackageKind::Plugin || kind == PackageKind::AgentWasm {
+        let mut ph = crate::plugin_hub::PLUGIN_HUB.lock();
+        let scan = ph.scan(name, &bytes);
+        match scan.veredict {
+            crate::plugin_hub::ScanVerdict::Blocked => {
+                let details = scan.details.join("; ");
+                k_nano::slog_hermes!("Market", "info", "scan BLOCKED '{}': {}", name, details);
+                return format!("[MARKET] scan BLOCKED '{}': {}", name, details);
+            }
+            crate::plugin_hub::ScanVerdict::Suspicious => {
+                k_nano::slog_hermes!("Market", "info", "scan SUSPICIOUS '{}': {:?}", name, scan.details);
+                // Continua — approval gate pode pedir HITL
+            }
+            crate::plugin_hub::ScanVerdict::Safe => {}
+        }
+    }
+
+    // Proceed with normal install flow
+    install_from_url(url, kind, name)
+}
+
 /// Regenera INDEX.json textual no ecosystem (busca O(n) local).
 pub fn rebuild_index() -> String {
     let hub = PACKAGE_HUB.lock();
