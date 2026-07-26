@@ -11,6 +11,7 @@ pub mod intel_gen9;
 pub mod intel_guc;
 pub mod intel_arc;
 pub mod intel_mad;
+pub mod intel_display;
 pub mod nvidia;
 pub mod nvidia_pascal;
 pub mod nvidia_pascal_acr;

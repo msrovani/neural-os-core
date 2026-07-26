@@ -13,10 +13,10 @@ static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOn
 static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
 
 pub const HEAP_START: usize = 0x_4000_0000_0000;
-/// 2GB: BitNet 2B (~577MB packed) + copia + load_model sem resize_heap lento (WHPX).
-pub const HEAP_SIZE: usize = 2048 * 1024 * 1024;
+/// 4GB: BitNet 1.3B/2B (~320-604MB packed) + copia + load_model sem resize_heap lento (WHPX).
+pub const HEAP_SIZE: usize = 4096 * 1024 * 1024;
 
-pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(2048);
+pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(4096);
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;

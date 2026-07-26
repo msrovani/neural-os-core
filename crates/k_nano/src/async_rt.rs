@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 use core::cell::UnsafeCell;
 use core::mem::MaybeUninit;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 /// Lock-free single-producer single-consumer ring buffer
@@ -408,11 +408,59 @@ pub fn init_async_rt() {
     let executor = global_executor();
     executor.start();
 
+    // Register a demo TimerFuture that fires every 100 ticks
+    let _ = executor.register_future(Box::pin(TimerFuture::new(100)));
+
     // Configure APIC timer (this would call into the apic module)
     // For now, this is a stub - the timer handler is already registered in IDT
     // unsafe {
     //     crate::apic::configure_timer(32, 0x800000); // Vector 32, count
     // }
+}
+
+/// TimerFuture — wakes after N scheduler ticks
+/// 
+/// Simple timer future for testing the async executor.
+/// Uses the global executor's wake mechanism.
+pub struct TimerFuture {
+    ticks_remaining: AtomicU64,
+    total_ticks: u64,
+    index: AtomicUsize,
+}
+
+impl TimerFuture {
+    /// Create a new TimerFuture that completes after `ticks` scheduler ticks
+    pub fn new(ticks: u64) -> Self {
+        Self {
+            ticks_remaining: AtomicU64::new(ticks),
+            total_ticks: ticks,
+            index: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl core::future::Future for TimerFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        
+        // Register waker on first poll
+        if this.index.load(Ordering::Acquire) == 0 {
+            let idx = global_executor().register_future(Box::pin(async {})).unwrap_or(0);
+            this.index.store(idx, Ordering::Release);
+        }
+        
+        let remaining = this.ticks_remaining.load(Ordering::Acquire);
+        if remaining == 0 {
+            Poll::Ready(())
+        } else {
+            // Store waker for when timer fires
+            this.ticks_remaining.fetch_sub(1, Ordering::Release);
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    }
 }
 
 #[cfg(test)]
