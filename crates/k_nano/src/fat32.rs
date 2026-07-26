@@ -342,8 +342,8 @@ pub struct Fat32Reader<'a> {
     fat_count: u8,
     sectors_per_fat32: u32,
     root_cluster: u32,
-    fat_lba: u32,
-    data_lba: u32,
+    fat_lba: u64,
+    data_lba: u64,
 }
 
 impl<'a> Fat32Reader<'a> {
@@ -367,8 +367,8 @@ impl<'a> Fat32Reader<'a> {
 
         if bytes_per_sector == 0 || sectors_per_cluster == 0 { return None; }
 
-        let fat_lba = part.lba_start + reserved_sectors as u32;
-        let data_lba = fat_lba + fat_count as u32 * sectors_per_fat32;
+        let fat_lba = part.lba_start as u64 + reserved_sectors as u64;
+        let data_lba = fat_lba + fat_count as u64 * sectors_per_fat32 as u64;
 
         crate::slog_nano!("FAT32", "info", "BPB: bps={} spc={} fats={} spf={} root_cluster={}",
             bytes_per_sector, sectors_per_cluster, fat_count, sectors_per_fat32, root_cluster);
@@ -383,11 +383,11 @@ impl<'a> Fat32Reader<'a> {
 
     /// Le o valor da FAT para um cluster (cada entrada tem 28 bits)
     pub unsafe fn read_fat_entry(&self, cluster: u32) -> u32 {
-        let fat_offset = cluster * 4; // cada entrada = 4 bytes
-        let fat_sector = self.fat_lba + fat_offset / self.bytes_per_sector as u32;
+        let fat_offset = cluster as u64 * 4;
+        let fat_sector_u64 = self.fat_lba + fat_offset / self.bytes_per_sector as u64;
         let mut sector = [0u8; 512];
-        if !self.ata.read_sectors(fat_sector, &mut sector, 1) { return 0xFFF_FFFF; }
-        let byte_off = (fat_offset % self.bytes_per_sector as u32) as usize;
+        if !self.ata.read_sectors(fat_sector_u64 as u32, &mut sector, 1) { return 0xFFF_FFFF; }
+        let byte_off = (fat_offset % self.bytes_per_sector as u64) as usize;
         let val = u32::from_le_bytes([
             sector[byte_off], sector[byte_off+1],
             sector[byte_off+2], sector[byte_off+3],
@@ -397,7 +397,8 @@ impl<'a> Fat32Reader<'a> {
 
     /// LBA do primeiro setor de um cluster
     pub fn cluster_lba(&self, cluster: u32) -> u32 {
-        self.data_lba + (cluster - 2) as u32 * self.sectors_per_cluster as u32
+        // u64 internamente para evitar overflow u32. Cast PRÉ-operação.
+        (self.data_lba + (cluster as u64).saturating_sub(2) * self.sectors_per_cluster as u64) as u32
     }
 
     /// Le o diretorio root FAT32 (cluster chain) e lista arquivos
@@ -657,14 +658,14 @@ impl<'a> Fat32Writer<'a> {
 
     /// Escreve entrada FAT para um cluster
     unsafe fn write_fat_entry(&self, cluster: u32, value: u32) -> bool {
-        let fat_offset = cluster * 4;
-        let fat_sector = self.reader.fat_lba + fat_offset / self.reader.bytes_per_sector as u32;
-        let byte_off = (fat_offset % self.reader.bytes_per_sector as u32) as usize;
+        let fat_offset = cluster as u64 * 4;
+        let fat_sector_u64 = self.reader.fat_lba + fat_offset / self.reader.bytes_per_sector as u64;
+        let byte_off = (fat_offset % self.reader.bytes_per_sector as u64) as usize;
         let mut sector = [0u8; 512];
-        if !self.reader.ata.read_sectors(fat_sector, &mut sector, 1) { return false; }
+        if !self.reader.ata.read_sectors(fat_sector_u64 as u32, &mut sector, 1) { return false; }
         let val = value & 0x0FFF_FFFF;
         sector[byte_off..byte_off+4].copy_from_slice(&val.to_le_bytes());
-        self.reader.ata.write_sectors(fat_sector, &sector, 1)
+        self.reader.ata.write_sectors(fat_sector_u64 as u32, &sector, 1)
     }
 
     /// Varre a FAT por N clusters livres (le FAT por setor — nao 1 I/O por entrada).
@@ -678,8 +679,8 @@ impl<'a> Fat32Writer<'a> {
         let mut sector_buf = [0u8; 512];
         for sec in 0..fat_sectors {
             if result.len() >= count as usize { break; }
-            let lba = self.reader.fat_lba + sec;
-            if !self.reader.ata.read_sectors(lba, &mut sector_buf, 1) {
+            let lba_u64 = self.reader.fat_lba + sec as u64;
+            if !self.reader.ata.read_sectors(lba_u64 as u32, &mut sector_buf, 1) {
                 continue;
             }
             let base = sec * entries_per_sector;

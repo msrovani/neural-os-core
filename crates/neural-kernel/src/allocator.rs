@@ -71,8 +71,8 @@ static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOn
 static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
 
 pub const HEAP_START: usize = 0x_4000_0000_0000;
-pub const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512MB; resize pós-boot
-pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
+pub const HEAP_SIZE: usize = 256 * 1024 * 1024; // 256MB boot; resize pós-boot
+pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(256);
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
