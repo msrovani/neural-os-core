@@ -1286,6 +1286,8 @@ pub(crate) fn kernel_boot(
     // PASSO 0 ABSOLUTO: init_heap() sem parâmetros — heap estática no .bss já mapeada pelo Limine
     allocator::init_heap().expect("heap init failed");
     crate::boot_logger::mark_heap_ready();
+    // Tenta estender heap (pode falhar silenciosamente se frame allocator não estiver pronto)
+    allocator::resize_bump_heap(512);
 
     let pm_offset = handoff.phys_mem_offset();
     // ADR-0055: RSDP via handoff (cada entry define o seu antes ou via trait)
@@ -1362,6 +1364,9 @@ pub(crate) fn kernel_boot(
                 k_nano::slog_bin!("Warn", "info", "cortex arena init failed: {}", e);
             }
         }
+
+        // Estende heap: frame allocator + mapper prontos após init_memory + arena
+        allocator::resize_bump_heap(1024);
 
         crate::boot_logger::log("BOOT: Heap init OK");
         crate::display::fb::boot_ckpt(12, "arena+boot_logger");

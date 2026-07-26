@@ -38,7 +38,7 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
             let aligned_ptr = (current_ptr + align - 1) & !(align - 1);
             let next_offset = (aligned_ptr - heap_start) + size;
 
-            if next_offset > HEAP_SIZE {
+            if next_offset > HEAP_LIMIT.load(Ordering::Relaxed) {
                 return core::ptr::null_mut(); // OOM: heap estourou
             }
 
@@ -71,8 +71,11 @@ static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOn
 static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
 
 pub const HEAP_START: usize = 0x_4000_0000_0000;
-pub const HEAP_SIZE: usize = 256 * 1024 * 1024; // 256MB boot; resize pós-boot
+pub const HEAP_SIZE: usize = 256 * 1024 * 1024; // 256MB .bss inicial (estende via resize)
 pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(256);
+
+/// Limite dinâmico do LazyBumpAllocator — começa = HEAP_SIZE, cresce via resize_bump_heap()
+pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(256 * 1024 * 1024);
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
@@ -271,3 +274,39 @@ fn oom(layout: core::alloc::Layout) -> ! {
 }
 
 pub fn init_heap() -> Result<(), &'static str> { Ok(()) }
+
+/// Estende o LazyBumpAllocator com mais páginas mapeadas após o .bss.
+/// Aloca frames físicos, mapeia logo após HEAP_BUFFER, e atualiza HEAP_LIMIT.
+pub fn resize_bump_heap(target_mb: usize) {
+    let current = CURRENT_HEAP_MB.load(Ordering::Relaxed);
+    if target_mb <= current { return; }
+    let diff_mb = target_mb - current;
+    let diff_pages = diff_mb * 256; // 256 páginas de 4KB por MB
+    let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
+    let base = VirtAddr::new(crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed));
+    if base.as_u64() == 0 { return; }
+
+    let mut allocated = 0usize;
+    for i in 0..diff_pages {
+        let phys = {
+            let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
+            match g.as_mut().and_then(|a| a.allocate_frame()) {
+                Some(f) => f.start_address().as_u64(),
+                None => break,
+            }
+        };
+        let virt = VirtAddr::new((heap_start + HEAP_SIZE + allocated * 4096) as u64);
+        unsafe {
+            // Mapeia usando o mesmo padrão de map_page_direct (HEAP_START em 0x4000_0000_0000)
+            map_page_direct(base, virt, phys);
+        }
+        allocated += 1;
+    }
+    if allocated > 0 {
+        let new_limit = HEAP_SIZE + allocated * 4096;
+        HEAP_LIMIT.store(new_limit, Ordering::Release);
+        let new_mb = (new_limit + 1024*1024 - 1) / (1024*1024);
+        CURRENT_HEAP_MB.store(new_mb, Ordering::SeqCst);
+        k_nano::slog_bin!("HEAP", "BUMP", "extendido para {} MB ({} páginas)", new_mb, allocated);
+    }
+}
