@@ -7,6 +7,7 @@
 //! Policy: modelo X params -> heap = X/10 MB, cache = heap/2, KV = X/40
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
+use crate::economy::CompressionTier;
 
 pub struct MemoryBudget {
     pub total_ram_mb: u64,
@@ -18,6 +19,8 @@ pub struct MemoryBudget {
     pub vram_model_mb: usize,
     pub free_after_mb: u64,
     pub is_gpu: bool,
+    /// Nível de compressão atual (ajustado pelo BudgetManager)
+    pub compression_tier: CompressionTier,
 }
 
 pub struct MemoryAgent {
@@ -82,6 +85,7 @@ impl MemoryAgent {
             kv_cache_mb: kv_mb, arc_cache_mb: arc_mb,
             vram_model_mb: vram_mb, free_after_mb: free,
             is_gpu: total_vram_mb > 0,
+            compression_tier: CompressionTier::recommended(free),
         }
     }
 
@@ -152,6 +156,7 @@ impl Agent for MemoryAgent {
                 heap_target_mb: 128, model_ram_mb: 0, kv_cache_mb: 0,
                 arc_cache_mb: 64, vram_model_mb: 0,
                 free_after_mb: total_ram.saturating_sub(192), is_gpu: total_vram > 0,
+                compression_tier: CompressionTier::recommended(total_ram),
             }
         };
 

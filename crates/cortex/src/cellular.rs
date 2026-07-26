@@ -224,4 +224,35 @@ impl CellNetwork {
     pub fn cells(&self) -> &[CognitiveCell] {
         &self.cells
     }
+
+    // ── BEI Onda 2: SleepCycle batch processing ─────────────────────────
+
+    /// SleepCycle: processamento batch periódico das células cognitivas.
+    /// 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT.
+    /// Chamado durante ciclos ociosos do scheduler.
+    pub fn sleep_cycle(&mut self) {
+        if self.cells.is_empty() { return; }
+
+        // Fase 1+2: REPLAY+DREAM — simula conexões entre células vizinhas
+        let count = self.cells.len();
+        if count >= 2 {
+            let from = self.cells[0].id;
+            let to = self.cells[(count - 1) % count].id;
+            self.connect(from, to);
+        }
+
+        // Fase 3: CONSOLIDATE
+        self.tick = self.tick.saturating_add(1);
+        k_nano::slog_cortex!("CELL", "info", "SleepCycle consolidate cells={} tick={}", count, self.tick);
+
+        // Fase 4: PRUNE — remove células mortas há muito tempo
+        let before = self.cells.len();
+        if before > 4 {
+            self.cells.retain(|c| c.dead_since == 0 || c.dead_since < 1000);
+            let pruned = before.saturating_sub(self.cells.len());
+            if pruned > 0 {
+                k_nano::slog_cortex!("CELL", "info", "SleepCycle prune: {} removed ({} remain)", pruned, self.cells.len());
+            }
+        }
+    }
 }

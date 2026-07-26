@@ -17,33 +17,17 @@ fn avx2_available() -> bool {
 // ─── Main Dispatch ──────────────────────────────────────────────────────
 
 pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Tensor> {
-    let (k, n) = weight.shape;
-    let (m, k2) = input.shape;
+    let (k, _n) = weight.shape;
+    let (_m, k2) = input.shape;
     if k != k2 { return None; }
 
-    // ADR-0057 WS-C: choke point de dispatch (NPU → GPU → CPU-SMP). Se nenhum
-    // acelerador/paralelo tratou, segue no caminho AVX-512/AVX2/scalar abaixo.
+    // ADR-0057 WS-C: NPU/GPU/parallel dispatch
     if let Some(r) = crate::compute::dispatch_ternary(weight, input) {
         return Some(r);
     }
 
-    // ADR-0061: AVX-512 (ZMM 512-bit, 256 pesos/ciclo) antes de AVX2.
-    // Só ativa se FeatureGate.allow_avx512 e shape compatível (n>=16, n%4==0).
-    if let Some(r) = crate::bitnet_avx512::ternary_matmul_avx512(weight, input) {
-        return Some(r);
-    }
-
-    // NÃO usar avx2_bitwise_matmul aqui:
-    // - quando n%4 != 0 (vocab BitNet 32002) o store _mm_storeu_ps passa do fim
-    //   do buffer de logits → heap corrupt → #PF apos FWD (850 tied-embed unembed);
-    // - o kernel FMA 4x4 tambem nao e matmul row-major correcto.
-    // Caminho seguro: unpack-por-linha (AVX2) ou scalar.
-    // Guard n%4==0: unpack_row_into com n%4!=0 requer acesso elemento-a-elemento
-    // (embed/unembed vocab=32002 cai no else lento e correto).
-    if avx2_available() && k >= 8 && n >= 8 && n % 4 == 0 {
-        return Some(unsafe { avx2_ternary_matmul_impl(weight, input, m, k, n) });
-    }
-    Some(scalar_ternary_matmul(weight, input, m, k, n))
+    // ADR-0061 unified dispatch: AVX-512 → AVX2 → SSE4.2 → scalar
+    crate::bitnet_sse::ternary_matmul(weight, input)
 }
 
 // ─── Scalar Fallback ────────────────────────────────────────────────────
@@ -176,7 +160,7 @@ fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut
 }
 
 #[cfg(target_arch = "x86_64")]
-unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
+pub(super) unsafe fn avx2_ternary_matmul_impl(weight: &PackedTernaryTensor, input: &Tensor, m: usize, k: usize, n: usize) -> Tensor {
     use core::arch::x86_64::*;
 
     let mut result = Tensor::new((m, n));

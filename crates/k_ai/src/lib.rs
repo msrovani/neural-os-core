@@ -17,6 +17,7 @@ pub mod audit;
 pub mod boot_log_agent;
 pub mod chunker;
 pub mod economy;
+pub use economy::{CompressionTier, BudgetManager};
 pub mod expert_lifecycle;
 pub mod cognitive;
 pub mod context_window;

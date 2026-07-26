@@ -1,6 +1,5 @@
 use alloc::vec::Vec;
 use alloc::string::String;
-use crate::economy::CompressionTier;
 
 #[derive(Debug, Clone)]
 pub struct ExpertMetadata {
@@ -10,7 +9,8 @@ pub struct ExpertMetadata {
     pub hits: u64,
     pub avg_confidence: f32,
     pub entropy: f32,
-    pub tier: CompressionTier,
+    /// Bits per weight (quantização): 1, 2, 4, 8, 16, 32
+    pub bits_per_weight: u8,
     pub last_active: u64,
 }
 
@@ -33,7 +33,7 @@ impl ExpertLifecycleManager {
         }
     }
 
-    pub fn register(&mut self, name: String, tier: CompressionTier, current_tick: u64) -> u64 {
+    pub fn register(&mut self, name: String, bits_per_weight: u8, current_tick: u64) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         self.experts.push(ExpertMetadata {
@@ -43,7 +43,7 @@ impl ExpertLifecycleManager {
             hits: 0,
             avg_confidence: 0.0,
             entropy: 0.0,
-            tier,
+            bits_per_weight,
             last_active: current_tick,
         });
         id
@@ -76,7 +76,7 @@ impl ExpertLifecycleManager {
                 let ej = &self.experts[active[j]];
                 if ei.entropy < self.merge_entropy_threshold
                     && ej.entropy < self.merge_entropy_threshold
-                    && ei.tier == ej.tier
+                    && ei.bits_per_weight == ej.bits_per_weight
                 {
                     candidates.push((active[i], active[j]));
                 }

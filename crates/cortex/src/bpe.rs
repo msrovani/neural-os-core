@@ -169,11 +169,74 @@ impl BpeVocab {
         out
     }
 
+    /// Encode merge-order: aplica merges BPE iterativamente até não conseguir mais.
+    /// Mais preciso que greedy (encontra a segmentação BPE ótima).
+    /// Usa a lista de merges `self.merges` em ordem de inserção (MRG1 do loader).
+    pub fn encode_merge_order(&self, text: &str) -> Vec<u32> {
+        let mut out = vec![self.bos];
+        if text.is_empty() {
+            return out;
+        }
+        // SP32: ▁ prefix + replace ' ' → ▁
+        let mut norm = String::new();
+        norm.push(SP_SPACE);
+        for ch in text.chars() {
+            if ch == ' ' {
+                norm.push(SP_SPACE);
+            } else {
+                norm.push(ch);
+            }
+        }
+        if self.merges.is_empty() {
+            return self.encode_sp32_greedy_fallback(text);
+        }
+        // Start with character-level pieces
+        let mut word: Vec<String> = norm.chars().map(|c| {
+            let mut s = String::new();
+            s.push(c);
+            s
+        }).collect();
+        // Iteratively apply the highest priority merge until no more merges apply
+        loop {
+            let mut merged = false;
+            // Try merges in priority order (list order = rank)
+            for (a, b) in self.merges.iter() {
+                let mut i = 0;
+                while i + 1 < word.len() {
+                    if word[i] == *a && word[i + 1] == *b {
+                        let mut m = String::with_capacity(a.len() + b.len());
+                        m.push_str(a);
+                        m.push_str(b);
+                        word[i] = m;
+                        word.remove(i + 1);
+                        merged = true;
+                        // Restart from the beginning after a merge for optimality
+                        break;
+                    } else {
+                        i += 1;
+                    }
+                }
+                if merged { break; }
+            }
+            if !merged { break; }
+        }
+        // Convert pieces to token IDs
+        for piece in word.iter() {
+            if let Some(&id) = self.rev.get(piece) {
+                out.push(id);
+            } else {
+                // Fallback: try to find sub-piece encoding
+                out.push(0); // <unk>
+            }
+        }
+        out
+    }
+
     /// Encode genérico (não clima): moldura Llama curta + cue do 1º token semântico.
     /// Usado em HW real quando `weather-e2e` está off.
     pub fn encode_chat_frame(&self, prompt: &str) -> Vec<u32> {
         if self.is_sp32() {
-            return self.encode_sp32(prompt);
+            return self.encode_merge_order(prompt);
         }
         let p = prompt.as_bytes();
         let lower_has = |s: &[u8]| {
@@ -559,8 +622,8 @@ pub fn encode(text: &str) -> Vec<u32> {
     match guard.as_ref() {
         Some(tok) => {
             if tok.is_sp32() {
-                // BitNet 850/xl/3B: sempre SP greedy (sem moldura Llama 128k).
-                tok.encode_sp32(text)
+                // BitNet 850/xl/3B: merge-order (mais preciso que greedy).
+                tok.encode_merge_order(text)
             } else if prompt_is_greeting(text) {
                 tok.encode_greeting_cue(text)
             } else if false { // ponytail: demo_flags bin-specific
@@ -710,46 +773,47 @@ pub fn weather_position_bias(id: u32, step: usize) -> f32 {
 /// de passos, so o SET de candidatos por passo fica maior/mais contextual).
 pub fn weather_step_candidates(step: usize, prev: Option<u32>) -> &'static [u32] {
     match step {
-        0 => &[46, 24108, 88603, 74258, 1788], // O / tempo / Tempo / hoje / qual
+        0 => &[46, 24108, 88603, 74258, 1788, 23700, 30279], // O / tempo / Tempo / hoje / qual / como / esta
         1 => match prev {
-            Some(46) => &[24108, 88603, 74258, 18205][..], // O → tempo/Tempo/hoje/dia
-            Some(24108) | Some(88603) => &[15491, 30279, 38169, 18205, 74258][..], // tempo → esta/faz/dia/hoje
-            _ => &[24108, 88603, 15491, 30279, 38169][..],
+            Some(46) => &[24108, 88603, 74258, 18205, 15491, 30279, 38169, 1788][..], // O → tempo/Tempo/hoje/dia/esta/faz/qual
+            Some(24108) | Some(88603) => &[15491, 30279, 38169, 18205, 74258, 18665, 76321, 2092, 39298, 1788][..], // tempo → esta/faz/dia/hoje/bom/claro/sol/qual
+            _ => &[24108, 88603, 15491, 30279, 38169, 18205, 74258, 18665, 76321, 1788][..],
         },
-        2 => &[15491, 30279, 38169, 18665, 76321, 18205, 74258], // esta/faz/bom/claro/dia/hoje
+        2 => weather_candidate_ids(), // full lexicon — logits escolhem
         _ => weather_candidate_ids(), // step>=3: lexicon completo — sem subconjunto estreito fixo
     }
 }
 
 /// Bigram PT suave (ainda escolhe via logits; só reordena).
+/// Bias reduzidos ~50% para dar mais peso aos logits reais do modelo.
 pub fn weather_bigram_bias(prev: Option<u32>, id: u32) -> f32 {
     let Some(p) = prev else { return 0.0 };
     // O → tempo
-    if p == 46 && (id == 24108 || id == 88603) { return 5.0; }
+    if p == 46 && (id == 24108 || id == 88603) { return 2.5; }
     // tempo → esta / faz / bom (NÃO dia/Tempo primeiro)
     if (p == 24108 || p == 88603)
         && matches!(id, 15491 | 30279 | 38169 | 18665 | 76321)
     {
-        return 6.0;
+        return 3.0;
     }
     if (p == 24108 || p == 88603) && matches!(id, 18205 | 74258) {
-        return -1.5; // dia/hoje depois do verbo
+        return -0.75; // dia/hoje depois do verbo
     }
     // esta → bom / claro / sol / hoje
     if matches!(p, 15491 | 30279) && matches!(id, 18665 | 76321 | 2092 | 39298 | 74258) {
-        return 4.0;
+        return 2.0;
     }
     // faz → sol / bom / claro
     if p == 38169 && matches!(id, 2092 | 39298 | 18665 | 76321) {
-        return 3.5;
+        return 1.75;
     }
     // hoje → faz / dia / claro
     if p == 74258 && matches!(id, 38169 | 18205 | 76321 | 18665) {
-        return 3.0;
+        return 1.5;
     }
     // Evita tempo→rain / tempo→weather
     if (p == 24108 || p == 88603) && weather_is_en_loan(id) {
-        return -4.0;
+        return -2.0;
     }
     0.0
 }

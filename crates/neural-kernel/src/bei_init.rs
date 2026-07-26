@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use alloc::vec;
 use spin::Mutex;
 use k_nano::sync::mpmc::MpmcQueue;
-use k_ai::{economy::{BudgetManager, TierPolicy, CompressionTier}, expert_lifecycle::ExpertLifecycleManager};
+use k_ai::{economy::BudgetManager, expert_lifecycle::ExpertLifecycleManager};
 use cortex_crate::{cellular::{CellNetwork, CellType, CellId}, evolution::PlasticityController, moe::DynamicMoE};
 use hermes_crate::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, LoopPhase, SupervisorVerdict}};
 use jarbas_crate::display::soul_mirror::SoulMirrorState;
@@ -61,7 +61,7 @@ impl BeiState {
         
         // ─── Wave 1: Economy + Expert Lifecycle ───
         let budget_manager = Arc::new(Mutex::new(
-            BudgetManager::new(64 * 1024 * 1024, TierPolicy::Balanced) // 64MB budget
+            BudgetManager::new(64 * 1024 * 1024) // 64MB budget
         ));
         let expert_lifecycle = Arc::new(Mutex::new(ExpertLifecycleManager::new()));
         k_nano::slog_bin!("BEI", "wave1", "BudgetManager + ExpertLifecycleManager created");
