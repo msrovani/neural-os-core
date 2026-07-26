@@ -24,3 +24,12 @@ pub mod ui_spec;
 pub mod embed_viz;
 pub mod gauges;
 pub mod metrics_agent;
+
+// FASE 1.1 — WM cosmic-like (ADR-0065)
+pub mod workspaces;
+pub mod focus;
+pub mod shortcuts;
+pub mod dock;
+pub mod window;
+pub mod tiling;
+pub mod notifications;

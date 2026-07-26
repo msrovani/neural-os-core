@@ -67,6 +67,10 @@ pub fn draw_attention_graph(fb: &mut crate::display::fb::DoubleBuffer, x: usize,
     }
 }
 
+// Re-export embedded-graphics mono fonts for convenience.
+pub use embedded_graphics::mono_font::ascii::FONT_6X10;
+pub use embedded_graphics::mono_font::ascii::FONT_9X15_BOLD;
+
 // Fonte VGA 8x16 — ASCII 32 a 126 (95 chars × 16 bytes = 1520 bytes)
 static FONT_DATA: [[u8; 16]; 95] = [
     [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00], //  

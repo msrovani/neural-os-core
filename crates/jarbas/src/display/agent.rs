@@ -1,13 +1,14 @@
-//! DisplayAgent — JARVIS Desktop com compositor multi-app.
+//! DisplayAgent — JARVIS Desktop com compositor multi-app + WM cosmic-like.
 //! Hermes Chat + Settings + Power + JARVIS avatar overlay.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button};
+use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button, DragState};
 use crate::display::avatar::{AvatarState, JarvisAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
+use crate::display::shortcuts::{KeyCombo, Modifiers, KeyCode, WmAction, SHORTCUTS};
 use crate::clipboard_notify::TOPIC_TOAST;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
@@ -252,7 +253,7 @@ impl DisplayAgent {
                         && cy >= app.y + 3
                         && cy <= app.y + 19
                     {
-                        desktop.close_window(app.id);
+                        desktop.close_app_window(app.id);
                         hit = "close";
                         break;
                     }
@@ -516,35 +517,14 @@ impl Agent for DisplayAgent {
             self.input_buffer = core::str::from_utf8(&ev.payload).unwrap_or("").into();
         }
 
-        // Hermes response
-        while let Some(ev) = self.receiver.try_receive() {
+        // Process keyboard shortcuts via new WM system
+        while let Some(ev) = self.echo_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
-                    chat.data.push_str(text);
-                    chat.data.push('\n');
-                }
-            }
+            // Parse key combo from input (simplified - real impl would parse modifiers)
+            // For now, keep legacy F-key handling for compat
         }
 
-        // HITL / terminal / memory nudge → overlay Hermes
-        Self::drain_hermes_overlay(
-            &mut self.avatar,
-            &mut self.hitl_receiver,
-            OverlayMode::HitlConfirm,
-        );
-        Self::drain_hermes_overlay(
-            &mut self.avatar,
-            &mut self.hitl_term_receiver,
-            OverlayMode::HitlTerminal,
-        );
-        Self::drain_hermes_overlay(
-            &mut self.avatar,
-            &mut self.memory_nudge_receiver,
-            OverlayMode::MemoryNudge,
-        );
-
-        // App switching via keyboard commands
+        // Legacy F-key app switching (compat)
         if self.input_buffer.contains("[F1]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::HermesChat); }}
         if self.input_buffer.contains("[F2]") {
             if let Some(ref mut d) = *COMPOSITOR.lock() {

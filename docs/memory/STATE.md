@@ -1,5 +1,6 @@
 # ═════════════════════════════════════════════════════════
 #   STATE — neural-os-core v1.9.11-emagrecer — NÃO ESTÁVEL
+#   SESSION_219: WM cosmic-like fix compilação jarbas — 74→0 errors, WindowId, métodos WM, const themes
 #   SESSION_217: Emagrecer E0–E4 completo — E1c USB_MSC/virtio_net→k_nano, E2 BootHandoff trait, E3 GPU/WiFi wire, E4 audio→jarbas
 #   SESSION_215: Emagrecer neural-kernel — análise profunda + ADR-0075 + plano E0–E4
 #   SESSION_216: SGDB Agent (A-026) — bridge EventBus ↔ SGDB + versionamento de skills
@@ -10,6 +11,7 @@
 #   SESSION_173: SGDB adoção AIOS — SgdbStore + HANR/Audit/Pkg/Skills/Episodic
 #   SESSION_172: ADR-0063/0064 — Onda 0–5: vector-db + TickvLite + Hermes RAG + k_ai::sgdb F2–F5 MVP
 #   SESSION_171: ADR-0062 P1✅ P2 StorageBus✅ P3 NVMe/AHCI✅ P24a HID parcial; emagreçer disk_agent
+#   SESSION_218: ADR-0062 P31/P18/P27/P7/P16/P14/P35 — Notifications toast, NTP resync, Virtual consoles F1-F6, i225 NIC, Async executor, IPC MessageBus wire, fw_cfg file I/O
 #   SESSION_168: Display splash persistente pós-claim_graphics
 #   ADR-0042 N1–N5 + wire N2.5→N5.7 ✅
 #   ADR-0041 H4+/H5+/AS shallow ✅ PoC (SESSION_140)

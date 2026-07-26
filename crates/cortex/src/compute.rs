@@ -1,7 +1,7 @@
 //! ADR-0057 WS-C: camada de dispatch de compute (ComputeBackend).
 //!
 //! Choke point único de roteamento do matmul da LLM. Ordem de fallback honesta:
-//! `NPU → GPU → CPU-SMP (P-cores) → AVX2 → scalar`. Cada camada só entra se o
+//! `NPU → GPU → CPU-SMP (P-cores) → AVX-512 → AVX2 → scalar`. Cada camada só entra se o
 //! seu gate passou; nada é "fingido".
 //!
 //! GPU (`k_hal`) e NPU (`k_ai`) registram-se por fn-pointer porque dependem de
@@ -49,7 +49,7 @@ fn call_slot(slot: usize, w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor>
 }
 
 /// Roteia um matmul ternário. `Some` = tratado por acelerador/paralelo;
-/// `None` = chamador segue no caminho AVX2/scalar existente.
+/// `None` = chamador segue no caminho AVX-512/AVX2/scalar existente.
 pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let (k, n) = w.shape;
     let big = n >= 64 && k >= 64;
@@ -77,6 +77,14 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     {
         if let Some(r) = crate::parallel_matmul::parallel_ternary_matmul(w, x) {
             N_SMP.fetch_add(1, Ordering::Relaxed);
+            return Some(r);
+        }
+    }
+
+    // Ring 2 — AVX-512 (ADR-0061): antes de AVX2, se FeatureGate permite.
+    if big && k_nano::platform_probe::allow_avx512() {
+        if let Some(r) = crate::bitnet_avx512::ternary_matmul_avx512(w, x) {
+            N_AVX512.fetch_add(1, Ordering::Relaxed);
             return Some(r);
         }
     }

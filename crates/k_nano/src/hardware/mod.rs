@@ -4,5 +4,6 @@ pub mod client_boot;
 pub mod epyc;
 pub mod epyc_boot;
 pub mod example_boot;
+pub mod probe;
 pub mod topology;
 pub mod xeon;

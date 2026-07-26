@@ -34,7 +34,7 @@ const C_ACCENT: Rgb888 = Rgb888::new(0, 200, 255);
 const C_GAUGE_BG: Rgb888 = Rgb888::new(30, 40, 55);
 const C_BTN: Rgb888 = Rgb888::new(0, 90, 140);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Widget {
     Text(String),
     KeyValue(String, String),
@@ -47,7 +47,7 @@ pub enum Widget {
     Panel { label: String, height: i32 },
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct UiDeclaration {
     pub id: u32,
     pub title: String,

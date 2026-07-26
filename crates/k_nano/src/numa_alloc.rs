@@ -1,266 +1,428 @@
-//! ADR-0061: NUMA-aware frame allocator.
-//!
-//! Alocador de frames físicos isolado por Proximity Domain NUMA.
-//! Cada nó tem um bump allocator lock-free (AtomicUsize) que gerencia
-//! exclusivamente o intervalo de memória RAM física pertencente àquele nó.
-//!
-//! # Uso
-//! ```ignore
-//! // No boot, após parse_srat():
-//! numa_alloc::init_from_topology(&numa_map);
-//!
-//! // Em qualquer thread:
-//! let phys = numa_alloc::alloc_local_page(4096, 4096);
-//! ```
-//!
-//! # Fast path (UMA)
-//! Se NUMA não foi detectado (1 domínio), `alloc_local_page` cai no
-//! allocator global sem overhead de RDPID/APIC lookup.
+//! NUMA-aware frame allocator (ADR-0061 Phase 2).
+//! 
+//! Provides per-NUMA-node frame allocation using the ACPI SRAT topology.
+//! Each NUMA node gets its own BitmapFrameAllocator instance for local allocation.
 
-#![allow(dead_code)]
-
-use crate::acpi::NumaTopologyMap;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use ticket_lock::TicketLock;
+use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size4KiB};
+use x86_64::PhysAddr;
 
-/// Máximo de nós NUMA suportados (Dual-Socket EPYC NPS4 = 8 nós).
-pub const MAX_NUMA_NODES: usize = 8;
+use crate::acpi::{NumaTopologyMap, NumaMemoryRange, NumaApicAffinity};
 
-/// Tamanho mínimo de alinhamento (4 KiB page).
-pub const PAGE_SIZE: usize = 4096;
+/// Maximum number of NUMA nodes supported
+pub const MAX_NUMA_NODES: usize = 16;
 
-/// Bump allocator lock-free para um nó NUMA.
-#[derive(Debug)]
-pub struct NumaPhysicalNode {
-    pub node_id: u32,
-    pub phys_start: u64,
-    pub phys_end: u64,
-    pub current_ptr: AtomicUsize,
+/// Per-NUMA-node frame allocator
+pub struct NumaFrameAllocator {
+    /// Bitmap allocator for this NUMA node
+    allocator: BitmapFrameAllocator,
+    /// NUMA node ID (proximity domain)
+    node_id: u32,
+    /// Memory ranges belonging to this node
+    ranges: Vec<NumaMemoryRange>,
+    /// APIC IDs associated with this node
+    apic_ids: Vec<u32>,
 }
 
-impl NumaPhysicalNode {
-    pub const fn empty() -> Self {
+impl NumaFrameAllocator {
+    /// Create a new NUMA frame allocator for a specific node
+    pub fn new(node_id: u32, ranges: Vec<NumaMemoryRange>, apic_ids: Vec<u32>) -> Self {
         Self {
-            node_id: 0,
-            phys_start: 0,
-            phys_end: 0,
-            current_ptr: AtomicUsize::new(0),
+            allocator: BitmapFrameAllocator::empty(),
+            node_id,
+            ranges,
+            apic_ids,
         }
     }
 
-    /// Aloca frames de 4 KiB estritamente dentro da faixa física local do nó.
-    /// Retorna o endereço físico ou None se OOM no nó local.
-    pub fn alloc_local_frame(&self, size_bytes: usize) -> Option<u64> {
-        let aligned_size = (size_bytes + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
-        let mut current = self.current_ptr.load(Ordering::Relaxed);
-        loop {
-            let next = current + aligned_size;
-            if next > self.phys_end as usize {
-                return None; // OOM no nó local
-            }
-            match self.current_ptr.compare_exchange_weak(
-                current,
-                next,
-                Ordering::SeqCst,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => return Some(current as u64),
-                Err(actual) => current = actual,
+    /// Initialize the allocator with memory ranges from SRAT
+    pub fn init(&mut self, _physical_memory_offset: u64) {
+        // Convert SRAT ranges to usable ranges for the bitmap allocator
+        let mut usable_ranges = Vec::new();
+        for range in &self.ranges {
+            if range.length > 0 {
+                usable_ranges.push((range.base, range.length));
             }
         }
+        self.allocator.init_from_usable_ranges(&usable_ranges);
+        
+        crate::slog_nano!("NUMA", "init", "Node {} initialized with {} ranges, {} APICs", 
+            self.node_id, self.ranges.len(), self.apic_ids.len());
+    }
+
+    /// Get the NUMA node ID
+    pub fn node_id(&self) -> u32 {
+        self.node_id
+    }
+
+    /// Get APIC IDs for this node
+    pub fn apic_ids(&self) -> &[u32] {
+        &self.apic_ids
+    }
+
+    /// Get memory ranges for this node
+    pub fn ranges(&self) -> &[NumaMemoryRange] {
+        &self.ranges
+    }
+
+    /// Allocate a frame from this NUMA node
+    pub fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        self.allocator.allocate_frame()
+    }
+
+    /// Allocate contiguous frames from this NUMA node
+    pub fn allocate_contiguous(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+        self.allocator.allocate_contiguous(count)
+    }
+
+    /// Allocate 2MB huge page from this NUMA node
+    pub fn allocate_huge_2mb(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+        self.allocator.allocate_huge_2mb(count)
+    }
+
+    /// Allocate 1GB huge page from this NUMA node
+    pub fn allocate_huge_1gb(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        self.allocator.allocate_huge_1gb()
+    }
+
+    /// Deallocate a frame back to this NUMA node
+    pub unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) {
+        self.allocator.deallocate_frame(frame);
+    }
+
+    /// Get usable memory bytes for this node
+    pub fn usable_memory_bytes(&self) -> u64 {
+        self.allocator.usable_memory_bytes()
+    }
+
+    /// Get allocated frame count for this node
+    pub fn allocated_frame_count(&self) -> usize {
+        self.allocator.allocated_frame_count()
+    }
+
+    /// Get hardware context tensor for this node
+    pub fn hardware_context_tensor(&self) -> [f32; 2] {
+        self.allocator.hardware_context_tensor()
     }
 }
 
-/// Array global de alocadores por nó NUMA.
-static mut NUMA_DOMAINS: [NumaPhysicalNode; MAX_NUMA_NODES] = [
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-    NumaPhysicalNode::empty(),
-];
+/// Global NUMA allocator registry
+static NUMA_ALLOCATORS: TicketLock<Option<Vec<NumaFrameAllocator>>> = TicketLock::new(None);
+static NUMA_TOPOLOGY: TicketLock<Option<crate::acpi::NumaTopologyMap>> = TicketLock::new(None);
 
-/// Contador de nós NUMA inicializados.
-static NUMA_INITIALIZED: AtomicUsize = AtomicUsize::new(0);
-
-/// Inicializa os alocadores NUMA a partir do mapa de topologia SRAT.
-///
-/// Cada nó NUMA recebe um intervalo de memória física. Se houver múltiplas
-/// faixas para o mesmo domínio, elas são concatenadas em ordem.
-pub fn init_from_topology(map: &NumaTopologyMap) {
-    if !map.is_multi_domain() {
-        crate::slog_nano!(
-            "NUMA",
-            "info",
-            "NUMA fast path (UMA): {} domínios",
-            map.proximity_domain_count
-        );
-        return;
+/// Initialize NUMA allocators from SRAT topology
+/// Called after ACPI SRAT parsing during boot
+pub fn init_numa_allocators(topology: crate::acpi::NumaTopologyMap, physical_memory_offset: u64) {
+    let mut allocators = Vec::new();
+    
+    // Group memory ranges by proximity domain
+    let mut ranges_by_domain: alloc::collections::BTreeMap<u32, Vec<crate::acpi::NumaMemoryRange>> = 
+        alloc::collections::BTreeMap::new();
+    for range in &topology.memory_ranges {
+        ranges_by_domain.entry(range.proximity_domain).or_default().push(*range);
     }
-
-    // Agrupa faixas por proximity_domain
-    let mut domains: [(u64, u64); MAX_NUMA_NODES] = [(0, 0); MAX_NUMA_NODES];
-    let mut domain_count = 0usize;
-
-    for range in &map.memory_ranges {
-        let d = range.proximity_domain as usize;
-        if d >= MAX_NUMA_NODES {
-            continue;
-        }
-        if domains[d].0 == 0 && domains[d].1 == 0 {
-            domains[d] = (range.base, range.base + range.length);
-            if d + 1 > domain_count {
-                domain_count = d + 1;
-            }
-        } else {
-            // Concatena faixas adicionais
-            let end = range.base + range.length;
-            if end > domains[d].1 {
-                domains[d].1 = end;
-            }
-        }
+    
+    // Group APIC affinities by proximity domain
+    let mut apics_by_domain: alloc::collections::BTreeMap<u32, Vec<u32>> = 
+        alloc::collections::BTreeMap::new();
+    for apic in &topology.apic_affinities {
+        apics_by_domain.entry(apic.proximity_domain).or_default().push(apic.apic_id);
     }
-
-    unsafe {
-        for i in 0..domain_count {
-            let (start, end) = domains[i];
-            if start == 0 && end == 0 {
-                continue;
-            }
-            NUMA_DOMAINS[i].node_id = i as u32;
-            NUMA_DOMAINS[i].phys_start = start;
-            NUMA_DOMAINS[i].phys_end = end;
-            NUMA_DOMAINS[i]
-                .current_ptr
-                .store(start as usize, Ordering::Release);
-        }
+    
+    // Create allocator for each domain
+    for (domain, ranges) in ranges_by_domain {
+        let apic_ids = apics_by_domain.remove(&domain).unwrap_or_default();
+        let mut allocator = NumaFrameAllocator::new(domain, ranges, apic_ids);
+        allocator.init(physical_memory_offset);
+        allocators.push(allocator);
     }
-
-    NUMA_INITIALIZED.store(domain_count, Ordering::Release);
-
-    crate::slog_nano!(
-        "NUMA",
-        "info",
-        "NUMA inicializado: {} domínios, {} faixas de memória",
-        domain_count,
-        map.memory_ranges.len()
-    );
+    
+    let node_count = allocators.len();
+    *NUMA_ALLOCATORS.lock() = Some(allocators);
+    *NUMA_TOPOLOGY.lock() = Some(topology);
+    
+    crate::slog_nano!("NUMA", "init", "Initialized {} NUMA node allocators", node_count);
 }
 
-/// Lê o APIC ID do núcleo atual via CPUID leaf 0x0B (x2APIC ID).
-#[cfg(target_arch = "x86_64")]
-fn current_apic_id() -> u32 {
-    unsafe {
-        // CPUID leaf 0x0B, subleaf 0: EDX = x2APIC ID (32 bits)
-        let result = core::arch::x86_64::__cpuid_count(0x0B, 0);
-        result.edx
-    }
+/// Get the NUMA allocator for a specific node and execute a closure with it
+pub fn with_numa_allocator<F, R>(node_id: u32, f: F) -> Option<R>
+where
+    F: FnOnce(&mut NumaFrameAllocator) -> Option<R>,
+{
+    let mut allocators = NUMA_ALLOCATORS.lock();
+    let allocator = allocators.as_mut()?.iter_mut().find(|a| a.node_id() == node_id)?;
+    f(allocator)
 }
 
-#[cfg(not(target_arch = "x86_64"))]
-fn current_apic_id() -> u32 {
-    0
+/// Allocate a frame from a specific NUMA node
+pub fn numa_allocate_frame(node_id: u32) -> Option<PhysFrame<Size4KiB>> {
+    with_numa_allocator(node_id, |a| a.allocate_frame())
 }
 
-/// Aloca uma página de memória física estritamente no nó NUMA local do núcleo atual.
-///
-/// # Argumentos
-/// - `size`: tamanho em bytes (será arredondado para múltiplo de 4 KiB)
-/// - `_align`: alinhamento desejado (atualmente sempre PAGE_SIZE)
-///
-/// # Retorno
-/// - `Some(phys_addr)` se a alocação foi bem-sucedida
-/// - `None` se NUMA não foi inicializado ou se o nó local está OOM
-///
-/// # Fast path (UMA)
-/// Se NUMA não foi inicializado (1 domínio), retorna o endereço físico
-/// do heap global sem overhead de RDPID/APIC lookup.
-pub fn alloc_local_page(size: usize, _align: usize) -> Option<u64> {
-    let count = NUMA_INITIALIZED.load(Ordering::Acquire);
-    if count <= 1 {
-        // UMA fast path — alocação global sem NUMA
-        return Some(alloc_global_fallback(size));
-    }
-
-    let apic_id = current_apic_id();
-    let node_id = apic_id_to_node(apic_id);
-    if node_id >= MAX_NUMA_NODES {
-        return Some(alloc_global_fallback(size));
-    }
-
-    unsafe {
-        let node = &NUMA_DOMAINS[node_id];
-        if node.phys_start == 0 && node.phys_end == 0 {
-            return Some(alloc_global_fallback(size));
-        }
-        node.alloc_local_frame(size)
-    }
+/// Allocate a frame from the local NUMA node (based on current APIC ID)
+pub fn numa_allocate_local() -> Option<PhysFrame<Size4KiB>> {
+    // Get current APIC ID
+    let apic_id = crate::apic::lapic_id() as u32;
+    
+    // Find which NUMA node this APIC belongs to
+    let topology = NUMA_TOPOLOGY.lock();
+    let topology = topology.as_ref()?;
+    
+    let domain = topology.domain_for_apic(apic_id)?;
+    drop(topology);
+    
+    numa_allocate_frame(domain)
 }
 
-/// Mapeia APIC ID → node_id NUMA via lookup simples.
-/// Em produção, deveria usar o `NumaTopologyMap` para lookup exato.
-fn apic_id_to_node(apic_id: u32) -> usize {
-    // Heurística: APIC IDs em sistemas NUMA são tipicamente agrupados por socket.
-    // Socket 0 = APIC IDs 0..N/2, Socket 1 = APIC IDs N/2..N.
-    // Para Dual-Socket EPYC NPS4, cada socket tem 4 nós NUMA.
-    let count = NUMA_INITIALIZED.load(Ordering::Acquire);
-    if count == 0 {
-        return 0;
-    }
-    // Distribuição simples: assume APIC ID mod node_count
-    (apic_id as usize) % count
+/// Allocate contiguous frames from a specific NUMA node
+pub fn numa_allocate_contiguous(node_id: u32, count: usize) -> Option<PhysFrame<Size4KiB>> {
+    with_numa_allocator(node_id, |a| a.allocate_contiguous(count))
 }
 
-/// Fallback global quando NUMA não está disponível.
-/// Usa o heap global do kernel (talc).
-fn alloc_global_fallback(size: usize) -> u64 {
-    // Retorna um endereço físico fictício no heap global.
-    // Em produção, isso chamaria o frame allocator global do k_nano::memory.
-    // Por enquanto, retorna 0 como sentinel — callers devem tratar.
-    let _ = size;
-    0
+/// Allocate 2MB huge page from a specific NUMA node
+pub fn numa_allocate_huge_2mb(node_id: u32, count: usize) -> Option<PhysFrame<Size4KiB>> {
+    with_numa_allocator(node_id, |a| a.allocate_huge_2mb(count))
 }
 
-/// Retorna o número de nós NUMA inicializados.
+/// Allocate 1GB huge page from a specific NUMA node
+pub fn numa_allocate_huge_1gb(node_id: u32) -> Option<PhysFrame<Size4KiB>> {
+    with_numa_allocator(node_id, |a| a.allocate_huge_1gb())
+}
+
+/// Deallocate a frame to its NUMA node
+pub unsafe fn numa_deallocate_frame(node_id: u32, frame: PhysFrame<Size4KiB>) {
+    with_numa_allocator(node_id, |a| {
+        a.deallocate_frame(frame);
+        Some(())
+    });
+}
+
+/// Get the NUMA topology map
+pub fn numa_topology() -> Option<crate::acpi::NumaTopologyMap> {
+    NUMA_TOPOLOGY.lock().as_ref().cloned()
+}
+
+/// Get count of NUMA nodes
+pub fn numa_node_count() -> usize {
+    NUMA_ALLOCATORS.lock().as_ref().map_or(0, |a| a.len())
+}
+
+/// Alias for compatibility
 pub fn initialized_node_count() -> usize {
-    NUMA_INITIALIZED.load(Ordering::Acquire)
+    numa_node_count()
 }
 
-/// Retorna informações de um nó NUMA específico.
-pub fn node_info(node_id: usize) -> Option<(u64, u64)> {
-    if node_id >= MAX_NUMA_NODES {
-        return None;
-    }
-    unsafe {
-        let n = &NUMA_DOMAINS[node_id];
-        if n.phys_start == 0 && n.phys_end == 0 {
-            None
-        } else {
-            Some((n.phys_start, n.phys_end))
-        }
-    }
+/// Get all NUMA node IDs
+pub fn numa_node_ids() -> Vec<u32> {
+    NUMA_ALLOCATORS.lock().as_ref().map_or(Vec::new(), |a| a.iter().map(|n| n.node_id()).collect())
 }
 
-/// Log de diagnóstico do estado NUMA.
-pub fn log_numa_state() {
-    let count = NUMA_INITIALIZED.load(Ordering::Acquire);
-    if count == 0 {
-        crate::slog_nano!("NUMA", "info", "NUMA não inicializado (UMA)");
-        return;
-    }
-    for i in 0..count {
-        if let Some((start, end)) = node_info(i) {
-            crate::slog_nano!(
-                "NUMA",
-                "info",
-                "Nó {}: phys 0x{:x}..0x{:x} ({} MiB)",
-                i,
-                start,
-                end,
-                (end - start) / (1024 * 1024)
+/// Get NUMA node for a physical address
+pub fn numa_node_for_phys(phys: u64) -> Option<u32> {
+    let topology = NUMA_TOPOLOGY.lock();
+    topology.as_ref()?.domain_for_phys(phys)
+}
+
+/// Get NUMA node for an APIC ID
+pub fn numa_node_for_apic(apic_id: u32) -> Option<u32> {
+    let topology = NUMA_TOPOLOGY.lock();
+    topology.as_ref()?.domain_for_apic(apic_id)
+}
+
+/// Print NUMA allocator statistics
+pub fn numa_stats() {
+    if let Some(allocators) = NUMA_ALLOCATORS.lock().as_ref() {
+        for alloc in allocators {
+            crate::slog_nano!("NUMA", "stats", 
+                "Node {}: usable={}MB allocated={} frames APICs={:?}",
+                alloc.node_id(),
+                alloc.usable_memory_bytes() / (1024 * 1024),
+                alloc.allocated_frame_count(),
+                alloc.apic_ids()
             );
         }
     }
 }
+
+/// BitmapFrameAllocator for NumaFrameAllocator
+mod bitmap_allocator {
+    use super::*;
+    
+    pub const BITMAP_SIZE: usize = 262144; // 256KB covers 8GB physical
+    const BITS_PER_BYTE: usize = 8;
+    const FRAME_SIZE: u64 = 4096;
+
+    pub struct BitmapFrameAllocator {
+        pub bitmap: [u8; BITMAP_SIZE],
+        pub next_free_bit: usize,
+        pub total_frames: usize,
+        pub usable_frames: usize,
+        pub allocated_count: usize,
+    }
+
+    impl BitmapFrameAllocator {
+        pub const fn empty() -> Self {
+            BitmapFrameAllocator {
+                bitmap: [0xFFu8; BITMAP_SIZE],
+                next_free_bit: 0,
+                total_frames: 0,
+                usable_frames: 0,
+                allocated_count: 0,
+            }
+        }
+
+        pub fn init_from_usable_ranges(&mut self, ranges: &[(u64, u64)]) {
+            self.bitmap = [0xFFu8; BITMAP_SIZE];
+            let mut last_end: u64 = 0;
+            let mut usable_count: usize = 0;
+
+            for &(base, length) in ranges.iter() {
+                if length == 0 { continue; }
+                let end = base.saturating_add(length);
+                let start_frame = base / 4096;
+                let end_frame = (end.saturating_sub(1)) / 4096;
+                
+                for i in start_frame..=end_frame {
+                    if (i as usize) < BITMAP_SIZE * 8 {
+                        self.clear_bit(i as usize);
+                        usable_count += 1;
+                    }
+                }
+                if end > last_end { last_end = end; }
+            }
+
+            for i in 2..160 {
+                if (i as usize) < BITMAP_SIZE * 8 {
+                    self.clear_bit(i as usize);
+                    usable_count += 1;
+                }
+            }
+
+            self.total_frames = core::cmp::min(
+                (last_end / 4096) as usize,
+                BITMAP_SIZE * 8,
+            );
+            if self.total_frames == 0 {
+                self.total_frames = BITMAP_SIZE * 8;
+            }
+            self.usable_frames = usable_count;
+            self.allocated_count = 0;
+            self.next_free_bit = 256;
+        }
+
+        #[inline]
+        fn clear_bit(&mut self, index: usize) {
+            let byte_idx = index / 8;
+            let bit_idx = index % 8;
+            self.bitmap[byte_idx] &= !(1u8 << bit_idx);
+        }
+
+        #[inline]
+        fn set_bit(&mut self, index: usize) {
+            let byte_idx = index / 8;
+            let bit_idx = index % 8;
+            self.bitmap[byte_idx] |= 1u8 << bit_idx;
+        }
+
+        #[inline]
+        fn test_bit(&self, index: usize) -> bool {
+            let byte_idx = index / 8;
+            let bit_idx = index % 8;
+            (self.bitmap[byte_idx] & (1u8 << bit_idx)) != 0
+        }
+
+        fn find_free_frame(&self, start_index: usize) -> Option<usize> {
+            let mut i = start_index;
+            while i < self.total_frames {
+                if !self.test_bit(i) { return Some(i); }
+                i += 1;
+            }
+            None
+        }
+
+        pub fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+            let idx = self.find_free_frame(self.next_free_bit)?;
+            self.set_bit(idx);
+            self.next_free_bit = idx + 1;
+            self.allocated_count += 1;
+            Some(PhysFrame::containing_address(PhysAddr::new(idx as u64 * 4096)))
+        }
+
+        pub fn allocate_contiguous(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+            if count == 0 { return None; }
+            let mut i = self.next_free_bit;
+            while i <= self.total_frames.saturating_sub(count) {
+                let mut found = true;
+                for j in 0..count {
+                    if self.test_bit(i + j) { found = false; i += j + 1; break; }
+                }
+                if found {
+                    for j in 0..count { self.set_bit(i + j); }
+                    self.next_free_bit = i + count;
+                    return Some(PhysFrame::containing_address(PhysAddr::new(i as u64 * 4096)));
+                }
+            }
+            None
+        }
+
+        pub fn allocate_huge_2mb(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+            if count == 0 || count % 512 != 0 { return self.allocate_contiguous(count); }
+            for h in 0.. {
+                let start_bit = self.next_free_bit + h * 512;
+                if start_bit % 512 != 0 { continue; }
+                if start_bit + count > self.total_frames { break; }
+                let mut ok = true;
+                for j in 0..count { if self.test_bit(start_bit + j) { ok = false; break; } }
+                if ok {
+                    for j in 0..count { self.set_bit(start_bit + j); }
+                    self.next_free_bit = start_bit + count;
+                    self.allocated_count += count;
+                    return Some(PhysFrame::containing_address(PhysAddr::new(start_bit as u64 * 4096)));
+                }
+            }
+            None
+        }
+
+        pub fn allocate_huge_1gb(&mut self) -> Option<PhysFrame<Size4KiB>> {
+            self.allocate_huge_2mb(262144)
+        }
+
+        pub fn usable_memory_bytes(&self) -> u64 {
+            self.usable_frames as u64 * 4096
+        }
+
+        pub fn allocated_frame_count(&self) -> usize {
+            self.allocated_count
+        }
+
+        pub fn hardware_context_tensor(&self) -> [f32; 2] {
+            let total = core::cmp::max(self.usable_frames, 1);
+            [self.allocated_count as f32 / total as f32, self.allocated_count as f32]
+        }
+    }
+
+    unsafe impl FrameAllocator<Size4KiB> for BitmapFrameAllocator {
+        fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+            let idx = self.find_free_frame(self.next_free_bit)?;
+            self.set_bit(idx);
+            self.next_free_bit = idx + 1;
+            self.allocated_count += 1;
+            Some(PhysFrame::containing_address(PhysAddr::new(idx as u64 * 4096)))
+        }
+    }
+
+    impl FrameDeallocator<Size4KiB> for BitmapFrameAllocator {
+        unsafe fn deallocate_frame(&mut self, frame: PhysFrame<Size4KiB>) {
+            let idx = (frame.start_address().as_u64() / 4096) as usize;
+            if idx < self.total_frames {
+                self.clear_bit(idx);
+                if idx < self.next_free_bit { self.next_free_bit = idx; }
+                if self.allocated_count > 0 { self.allocated_count -= 1; }
+            }
+        }
+    }
+}
+
+use bitmap_allocator::BitmapFrameAllocator;
