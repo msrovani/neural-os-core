@@ -2,6 +2,9 @@
 #![allow(dead_code)]
 extern crate alloc;
 
+pub mod budget;
+pub mod hooks;
+
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;

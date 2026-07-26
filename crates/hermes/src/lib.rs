@@ -22,6 +22,7 @@ pub mod elf_loader;
 pub mod hermes;
 pub mod hub;
 pub mod mcp;
+pub mod mcp_server;
 pub mod net;
 pub mod net_bridge;
 pub mod netdiag;
@@ -65,6 +66,12 @@ pub mod dynskill;
 pub mod gguf_wasm;
 pub mod micropython_wasm;
 pub mod affect;
+pub mod emotion;
+pub mod soul;
+pub use affect::*;
+pub use emotion::*;
+pub use soul::*;
+pub mod notification_gate;
 pub mod aios_api;
 pub mod skill_opt;
 pub mod rustpython_no_std;
@@ -92,6 +99,7 @@ pub use k_hal::net::wifi_msix;
 // ADR-0062 E3 — SoftMAC BE via k-hal; hermes re-exporta
 pub use k_hal::net::wifi_softmac;
 pub mod voice_skill;
+pub mod proactive;
 
 
 

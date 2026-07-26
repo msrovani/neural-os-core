@@ -15,6 +15,7 @@ pub mod agency_seed;
 pub mod arch;
 pub mod audit;
 pub mod boot_log_agent;
+pub mod merkle_audit;
 pub mod chunker;
 pub mod economy;
 pub use economy::{CompressionTier, BudgetManager};
@@ -22,6 +23,9 @@ pub mod expert_lifecycle;
 pub mod cognitive;
 pub mod context_window;
 pub mod conversation;
+pub mod success_engine;
+pub mod feedback_agent;
+pub mod data_collector;
 // E1a: gguf moved to cortex_crate
 // ponytail: hal.rs moved to LEGACY/v1.5-dead-k2chj/k_ia/ (dead code)
 pub mod hw_agents;
@@ -39,8 +43,12 @@ pub mod fs;
 pub mod trust;
 pub mod shutdown;
 pub mod usage;
+pub mod workflow_learner;
 pub mod ternary;
 pub mod router;
+pub mod safety_invariants;
+pub mod security_detectors;
+pub mod self_optimizing_scheduler;
 /// ADR-0063 F2–F5 SGDB (MemoryDoc · Engine · ART · BQ) — MVP Onda 5.
 pub mod sgdb;
 /// Compat: re-export status do stub antigo.

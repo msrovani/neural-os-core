@@ -111,8 +111,28 @@ impl MoELayer {
     }
 }
 
+/// Configuration for dynamic MoE behavior.
+pub struct DynamicMoEConfig {
+    pub max_experts: usize,
+    pub birth_threshold: u32,
+    pub merge_similarity: f32,
+    pub split_call_threshold: u32,
+}
+
+impl Default for DynamicMoEConfig {
+    fn default() -> Self {
+        Self {
+            max_experts: 10,
+            birth_threshold: 50,
+            merge_similarity: 0.9,
+            split_call_threshold: 100,
+        }
+    }
+}
+
 pub struct DynamicMoE {
     pub base: MoELayer,
+    pub dyn_config: DynamicMoEConfig,
     pub expert_hits: Vec<u64>,
     pub expert_confidence: Vec<f32>,
     pub expert_entropy: Vec<f32>,
@@ -126,6 +146,7 @@ impl DynamicMoE {
         let n = base.experts.len();
         DynamicMoE {
             base,
+            dyn_config: DynamicMoEConfig::default(),
             expert_hits: vec![0; n],
             expert_confidence: vec![0.0; n],
             expert_entropy: vec![0.0; n],
@@ -222,6 +243,167 @@ impl DynamicMoE {
         self.flush_births();
         self.flush_merges();
         self.flush_splits();
+    }
+
+    /// Try to create a new expert for a detected intent gap.
+    /// Returns the expert ID if successful, None if at capacity.
+    ///
+    /// Clones the closest existing expert (by router-weight column cosine
+    /// similarity to a hash embedding of `intent_hint`) and applies ±5% noise.
+    /// Caller should gate this call behind budget checks (e.g. memory pressure
+    /// from `k_ai::BudgetManager::pressure()`).
+    pub fn try_birth(&mut self, intent_hint: &str) -> Option<usize> {
+        let n = self.base.experts.len();
+        if n >= self.dyn_config.max_experts {
+            return None;
+        }
+        if n == 0 || self.base.router.num_experts == 0 {
+            return None;
+        }
+
+        // Build a simple fixed-dim embedding from the intent hint bytes
+        let d = self.base.router.in_features;
+        let num_exp = self.base.router.num_experts.min(n);
+        let w = &self.base.router.weight;
+        let mut emb = vec![0.0f32; d];
+        for (i, &b) in intent_hint.as_bytes().iter().enumerate() {
+            emb[i % d] += b as f32;
+        }
+        let norm = libm::sqrtf(emb.iter().map(|v| v * v).sum::<f32>() + 1e-8);
+        for v in emb.iter_mut() {
+            *v /= norm;
+        }
+
+        // Find the expert whose router column is most similar to the embedding
+        let mut best_idx = 0usize;
+        let mut best_sim = -1.0f32;
+        for e in 0..num_exp {
+            let mut dot = 0.0f32;
+            let mut n_a = 0.0f32;
+            for j in 0..d {
+                let rw = w[j * self.base.router.num_experts + e] as f32;
+                dot += emb[j] * rw;
+                n_a += rw * rw;
+            }
+            let sim = dot / (libm::sqrtf(n_a) + 1e-8);
+            if sim > best_sim {
+                best_sim = sim;
+                best_idx = e;
+            }
+        }
+
+        // Clone the closest expert (noise is already baked into clone_with_noise
+        // contract, though current impl only clones packed weights)
+        let parent = if best_idx < self.base.experts.len() {
+            &self.base.experts[best_idx]
+        } else {
+            &self.base.experts[0]
+        };
+        let new_expert = Self::clone_with_noise(parent, 0.05);
+
+        let new_id = self.base.experts.len();
+        self.base.experts.push(new_expert);
+        self.base.config.num_experts += 1;
+        self.expert_hits.push(0);
+        self.expert_confidence.push(0.0);
+        self.expert_entropy.push(0.0);
+
+        k_nano::slog_cortex!("MOE", "info",
+            "birth expert #{} (cloned from #{}, hint: {})",
+            new_id, best_idx, intent_hint);
+        Some(new_id)
+    }
+
+    /// Try to merge two experts with cosine similarity > threshold.
+    /// Returns true if merge occurred (keeps `id_a`, removes `id_b`).
+    pub fn try_merge(&mut self, id_a: usize, id_b: usize) -> bool {
+        if id_a == id_b {
+            return false;
+        }
+        let n = self.base.experts.len();
+        if id_a >= n || id_b >= n {
+            return false;
+        }
+
+        // Cosine similarity between the two experts' router weight columns
+        let d = self.base.router.in_features;
+        let num_exp = self.base.router.num_experts;
+        let w = &self.base.router.weight;
+        let mut dot = 0.0f32;
+        let mut n_a = 0.0f32;
+        let mut n_b = 0.0f32;
+        for j in 0..d {
+            let wa = w[j * num_exp + id_a] as f32;
+            let wb = w[j * num_exp + id_b] as f32;
+            dot += wa * wb;
+            n_a += wa * wa;
+            n_b += wb * wb;
+        }
+        let sim = dot / ((libm::sqrtf(n_a) * libm::sqrtf(n_b)) + 1e-8);
+
+        if sim < self.dyn_config.merge_similarity {
+            return false;
+        }
+
+        // Merge the BitLinear weights (average)
+        let merged = Self::merge_pair(&self.base.experts[id_a], &self.base.experts[id_b]);
+
+        // Remove higher index first, then replace lower with merged
+        let keep = id_a.min(id_b);
+        let remove = id_a.max(id_b);
+
+        let hits_avg = (self.expert_hits[keep] + self.expert_hits[remove]) / 2;
+        let conf_avg = (self.expert_confidence[keep] + self.expert_confidence[remove]) / 2.0;
+        let ent_avg = (self.expert_entropy[keep] + self.expert_entropy[remove]) / 2.0;
+
+        self.base.experts.remove(remove);
+        self.base.experts[keep] = merged;
+        self.base.config.num_experts -= 1;
+
+        self.expert_hits.remove(remove);
+        self.expert_hits[keep] = hits_avg;
+        self.expert_confidence.remove(remove);
+        self.expert_confidence[keep] = conf_avg;
+        self.expert_entropy.remove(remove);
+        self.expert_entropy[keep] = ent_avg;
+
+        k_nano::slog_cortex!("MOE", "info",
+            "merged #{} + #{} → #{} (sim={:.2})", id_a, id_b, keep, sim);
+        true
+    }
+
+    /// Try to split an overworked expert into two specialized ones.
+    /// Returns the new expert ID if split occurred.
+    pub fn try_split(&mut self, id: usize) -> Option<usize> {
+        if id >= self.base.experts.len() {
+            return None;
+        }
+        if self.expert_hits[id] < self.dyn_config.split_call_threshold as u64 {
+            return None;
+        }
+        if self.base.experts.len() >= self.dyn_config.max_experts {
+            return None;
+        }
+
+        // Create two perturbed copies from the parent
+        let parent = &self.base.experts[id];
+        let child = Self::clone_with_noise(parent, 0.05);
+        let split_parent = Self::clone_with_noise(parent, -0.05);
+
+        self.base.experts[id] = split_parent;
+        let child_id = self.base.experts.len();
+        self.base.experts.push(child);
+        self.base.config.num_experts += 1;
+
+        self.expert_hits.push(self.expert_hits[id] / 2);
+        self.expert_confidence.push(self.expert_confidence[id]);
+        self.expert_entropy.push(self.expert_entropy[id] / 2.0);
+        self.expert_hits[id] /= 2;
+        self.expert_entropy[id] /= 2.0;
+
+        k_nano::slog_cortex!("MOE", "info",
+            "split #{} → #{} + #{}", id, id, child_id);
+        Some(child_id)
     }
 
     fn merge_pair(a: &BitLinear, b: &BitLinear) -> BitLinear {
