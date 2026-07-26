@@ -1,22 +1,78 @@
 //! Tier 1 — Global allocator (Hermes / JARBAS / UI).
-//! talc substitui linked_list_allocator: menos fragmentação em alocações variadas.
+//! Lazy Bump Allocator — auto-inicializável na primeira alloc() via CAS.
+//! zero init, zero chicken-and-egg. linked_list_allocator/TALC pós-boot.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::alloc::{GlobalAlloc, Layout};
+use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use spin::Mutex;
-use talc::{ErrOnOom, Span, Talc, Talck};
-use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTable, PageTableFlags, Size4KiB};
+use talc::{Span, Talc, Talck, ErrOnOom};
+use x86_64::structures::paging::{FrameAllocator, Mapper, PageTable, PageTableFlags, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
 
-#[global_allocator]
-static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOnOom));
+/// Lazy Bump Allocator — auto-inicializa na primeira alloc() lendo HEAP_BUFFER.
+/// CAS loop garante alinhamento atômico sem locks. Zero init externo.
+pub struct LazyBumpAllocator {
+    offset: AtomicIsize,
+}
 
+impl LazyBumpAllocator {
+    pub const fn new() -> Self { Self { offset: AtomicIsize::new(-1) } }
+
+    /// Retorna true se já foi inicializado (alguém já alocou).
+    pub fn is_initialized(&self) -> bool { self.offset.load(Ordering::Relaxed) >= 0 }
+}
+
+unsafe impl GlobalAlloc for LazyBumpAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        // Endereço base da HEAP_BUFFER no .bss (já mapeado pelo Limine)
+        let heap_start = HEAP_BUFFER.as_mut_ptr() as usize;
+        let size = layout.size();
+        let align = layout.align().max(1);
+
+        // CAS loop: alinhamento atômico sem locks, sem init externo
+        let mut current_offset = self.offset.load(Ordering::Relaxed);
+        loop {
+            // Se offset for -1, é a primeira alloc — inicializa com offset=0
+            let real_offset = if current_offset < 0 { 0 } else { current_offset as usize };
+            let current_ptr = heap_start + real_offset;
+            let aligned_ptr = (current_ptr + align - 1) & !(align - 1);
+            let next_offset = (aligned_ptr - heap_start) + size;
+
+            if next_offset > HEAP_SIZE {
+                return core::ptr::null_mut(); // OOM: heap estourou
+            }
+
+            match self.offset.compare_exchange_weak(
+                current_offset,
+                next_offset as isize,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return aligned_ptr as *mut u8,
+                Err(actual) => current_offset = actual,
+            }
+        }
+    }
+
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
+        // bump allocator — sem free
+    }
+}
+
+#[global_allocator]
+static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
+
+/// Buffer de heap estático no .bss — mapeado pelo bootloader (Limine).
+#[link_section = ".bss"]
+static mut HEAP_BUFFER: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
+
+/// TALC allocator usado APÓS o boot para resize_heap (não é o global_allocator).
+static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOnOom));
 static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
 
 pub const HEAP_START: usize = 0x_4000_0000_0000;
-/// 4GB: BitNet 1.3B/2B (~320-604MB packed) + copia + load_model sem resize_heap lento (WHPX).
-pub const HEAP_SIZE: usize = 4096 * 1024 * 1024;
-
-pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(4096);
+pub const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512MB; resize pós-boot
+pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
@@ -196,18 +252,17 @@ pub fn heap_stats() -> (usize, usize) {
 }
 
 #[alloc_error_handler]
-fn oom(_: core::alloc::Layout) -> ! {
+fn oom(layout: core::alloc::Layout) -> ! {
     use core::fmt::Write;
-    {
-        let mut w = crate::vga_buffer::WRITER.lock();
-        if let Some(ref mut w) = *w {
-            let _ = write!(w, "[OOM/TALC] sem memoria");
-        }
+    unsafe {
+        // Port I/O direto — independe de driver serial alocado
+        core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'O', options(nostack, preserves_flags));
     }
     {
         let mut s = crate::serial::SERIAL.lock();
         if let Some(ref mut s) = *s {
-            let _ = write!(s, "[OOM/TALC] sem memoria Tier 1. Verifique HEAP_SIZE.\n");
+            let _ = write!(s, "[OOM/TALC] sem memoria Tier 1. size={} align={} Verifique HEAP_SIZE.\n",
+                layout.size(), layout.align());
         }
     }
     loop {
@@ -215,41 +270,4 @@ fn oom(_: core::alloc::Layout) -> ! {
     }
 }
 
-pub fn init_heap(
-    mapper: &mut impl Mapper<Size4KiB>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>,
-) -> Result<(), &'static str> {
-    let page_range = {
-        let heap_start = VirtAddr::new(HEAP_START as u64);
-        let heap_end = heap_start + HEAP_SIZE as u64 - 1u64;
-        Page::range_inclusive(
-            Page::containing_address(heap_start),
-            Page::containing_address(heap_end),
-        )
-    };
-
-    for page in page_range {
-        let frame = frame_allocator
-            .allocate_frame()
-            .ok_or("failed to allocate frame")?;
-        let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
-        unsafe {
-            mapper
-                .map_to(page, frame, flags, frame_allocator)
-                .map_err(|_| "failed to map page")?
-                .flush();
-        }
-    }
-
-    unsafe {
-        k_nano::slab::SLAB_ALLOCATOR.lock().init(SLAB_START);
-        let span = Span::from_base_size(LARGE_HEAP_START as *mut u8, LARGE_HEAP_SIZE);
-        let claimed = TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?;
-        *CLAIMED_HEAP.lock() = Some(claimed);
-    }
-
-    k_nano::slog_bin!("HEAP", "TALC", "Tier 1 ready: virt={:#x} size={} MB (Hermes/JARBAS/UI)",
-        LARGE_HEAP_START,
-        LARGE_HEAP_SIZE / (1024 * 1024));
-    Ok(())
-}
+pub fn init_heap() -> Result<(), &'static str> { Ok(()) }

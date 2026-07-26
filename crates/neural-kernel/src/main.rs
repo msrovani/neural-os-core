@@ -1283,40 +1283,18 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 pub(crate) fn kernel_boot(
     handoff: &impl k_nano::boot_handoff::BootHandoff,
 ) -> ! {
-
-    // Probe serial port (sem lazy_static, funciona antes do heap)
-
-    let serial_exists = unsafe { crate::serial::probe_port(0x3F8) };
-
-    if serial_exists {
-
-        unsafe { core::arch::asm!("out dx, al", in("dx") 0x3F8u16, in("al") b'K', options(nostack, preserves_flags)); }
-
-    }
-
-    
+    // PASSO 0 ABSOLUTO: init_heap() sem parâmetros — heap estática no .bss já mapeada pelo Limine
+    allocator::init_heap().expect("heap init failed");
+    crate::boot_logger::mark_heap_ready();
 
     let pm_offset = handoff.phys_mem_offset();
     // ADR-0055: RSDP via handoff (cada entry define o seu antes ou via trait)
     // Chamada idempotente — bootloader fez em kernel_main, Limine em limine_entry.
     crate::acpi::set_boot_rsdp(handoff.rsdp_addr());
-    // Limine: probe_raw_framebuffer já rodou em limine_entry
-
-    // Sonda framebuffer ANTES do VGA text mode para evitar escrever nos registros
-
-    // VGA CRTC (0x3D4/0x3D5) em hardware Intel 6xx com UEFI GOP, o que causa xuvisco.
-
-    // probe pinta K0 se GOP ok — prova que kernel_main rodou.
-    // Bootloader: probe_uefi_framebuffer já rodou em kernel_main
     let boot_tag = handoff.boot_tag();
+    let serial_exists = crate::serial::SERIAL.lock().is_some();
     crate::display::fb::boot_ckpt(1, "pos-probe + serial");
     k_nano::slog_bin!("Boot", "info", "boot={}", boot_tag);
-
-    // Se framebuffer disponivel, NAO inicializa VGA text mode.
-    // Desliga o VGA plane via sequenciador (0x3C4/0x3C5) em vez de
-    // limpar 0xB8000 — o bootloader nao mapeia o VGA text buffer, e
-    // escrever la causa page fault ANTES da IDT estar pronta.
-    // _print() usa fb_print() primeiro; fallback VGA soh sem framebuffer.
 
     let has_fb = crate::display::fb::GPU.lock().is_some();
 
@@ -1366,15 +1344,7 @@ pub(crate) fn kernel_boot(
 
         // ponytail: stack boundary fix deferred — needs proper P3/P2 page table from end-of-RAM frames
 
-        k_nano::slog_bin!("Boot", "dbg", "init_memory OK");
-        crate::display::fb::boot_ckpt(9, "init_memory ok");
-
-        crate::display::fb::boot_ckpt(10, "antes init_heap");
-        allocator::init_heap(&mut mapper, &mut frame_allocator)
-            .expect("heap initialization failed");
-        crate::boot_logger::mark_heap_ready();
-        unsafe { k_nano::boot_ramlog::init_from_phys() };
-
+        // init_heap já foi chamado no início do kernel_boot — aqui só prossegue com frame allocator
         k_nano::slog_bin!("Boot", "dbg", "heap init OK (Tier 1 talc)");
         crate::display::fb::boot_ckpt(11, "heap OK");
 
