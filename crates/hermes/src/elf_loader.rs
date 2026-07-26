@@ -58,3 +58,9 @@ pub fn elf_thin_boot_smoke() -> bool {
     );
     ok
 }
+
+
+
+
+
+

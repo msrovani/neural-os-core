@@ -473,3 +473,9 @@ pub fn counters() -> (u32, u32, u32, u32, u32) {
 mod tests {
     // no_std: sem testes std; verificação via QEMU serial.
 }
+
+
+
+
+
+

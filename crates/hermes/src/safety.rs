@@ -267,3 +267,9 @@ pub fn check_command(cmd: &str) -> Result<(), &'static str> {
 //     }
 //     Ok(())
 // }
+
+
+
+
+
+

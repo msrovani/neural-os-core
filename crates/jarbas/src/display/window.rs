@@ -67,6 +67,10 @@ impl FloatingWindow {
 pub enum HitArea {
     TitleBar,
     Client,
+    CloseButton,
+    MaximizeButton,
+    MinimizeButton,
+    Body,
     ResizeTopLeft,
     ResizeTopRight,
     ResizeBottomLeft,
@@ -80,26 +84,42 @@ pub enum HitArea {
 #[derive(Debug, Clone)]
 pub struct Window {
     pub id: WindowId,
+    pub app_id: Option<AppId>,
     pub content: WindowContent,
     pub rect: Rect,
     pub workspace: usize,
     pub focused: bool,
     pub decorated: bool,
     pub floating: bool,
+    pub minimized: bool,
+    pub maximized: bool,
     pub title: String,
+    pub visible: bool,
+    pub data: String,
+    pub z: super::compositor::Layer,
 }
 
 impl Window {
-    pub fn new(id: WindowId, content: WindowContent, title: &str, floating: bool) -> Self {
+    pub fn new(id: WindowId, app_id: Option<AppId>, content: WindowContent, title: &str, floating: bool) -> Self {
         Self {
             id,
+            app_id,
             content,
             rect: Rect { x: 0, y: 0, width: 100, height: 100 },
             workspace: 0,
             focused: true,
             decorated: true,
             floating,
+            minimized: false,
+            maximized: false,
             title: String::from(title),
+            visible: false,
+            data: String::new(),
+            z: super::compositor::Layer::AppWindows,
         }
+    }
+
+    pub fn app_id(&self) -> AppId {
+        self.app_id.unwrap_or(AppId::None)
     }
 }

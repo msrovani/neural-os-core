@@ -20,3 +20,9 @@ impl AppForge {
     pub fn disable(&mut self, name: &str) { if let Some(a) = self.apps.get_mut(name) { a.enabled = false; } }
     pub fn status(&self) -> String { alloc::format!("[APPFORGE] {} apps instalados", self.apps.len()) }
 }
+
+
+
+
+
+

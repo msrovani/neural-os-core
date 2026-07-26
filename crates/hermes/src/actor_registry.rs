@@ -89,3 +89,9 @@ impl ActorRegistry {
         alloc::format!("[ACTOR] {} alive / {} total", alive, self.actors.len())
     }
 }
+
+
+
+
+
+

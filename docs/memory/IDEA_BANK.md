@@ -68,6 +68,24 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#487** Embeddings neurais in-kernel L4+ | ADR-0064 F6 | ⏳ residual | gated VRAM; BGE paralelo até lá |
 | **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **Memory Quality SESSION_176:** SleepCycle ckpt✅ recall L4 hybrid✅ V-flag✅ ART SIMD✅. Residual: crates upstream, HNSW, DoD 10M/100k |
 
+| **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
+| **#480** VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |
+| **#481** AHCI + NVMe drivers | ADR-0062 P3 / SESSION_171 | ✅ MVP (I/O q + policy; residual multi-q) |
+| **#482** Migrar bootloader 0.11 → Limine 0.5 | ADR própria (P4, supersede ADR-0039) | ⏳ |
+| **#483** IPC MessageBus + Channels entre agentes | ADR própria (P14) | ✅ SESSION_217 (wire mailbox_drain no scheduler) |
+| **#484** Async executor híbrido (I/O async + compute ticks) | ADR própria (P16) | ✅ SESSION_217 (std Future + Waker + APIC timer handler) |
+| **#485** Git client nativo over HTTPS | ADR própria (P17) | ⏳ |
+| **#486** GPU (NVIDIA) driver para compute | ADR própria (P5) | ⏳ |
+| **#487** WiFi (Intel AX200/201/210/211) driver | ADR própria (P6) | ⏳ |
+| **#488** Intel i225 2.5G NIC driver | ADR própria (P7) | ✅ SESSION_217 (raw ptrs, kick_rx, prove_rx, clflush) |
+| **#489** ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ |
+| **#490** USB Storage driver | ADR-0062 P11 / SESSION_170 | ✅ MVP (bringup+BOT; residual hubs/SS) |
+| **#491** Vulkan driver | ADR própria (P12) | ⏳ |
+| **#492** SMP completo (trampoline + work-stealing) | ADR própria (P13) | ⏳ |
+| **#493** IPC MessageBus + Channels | ADR própria (P14) | 🔄 Fundido em #483 |
+| **#494** Linux binary compatibility | ADR própria (P15) | ⏳ |
+| **#495** Async executor híbrido | ADR própria (P16) | 🔄 Fundido em #484 |
+
 #### Gaps — triagem Onda 0 ✅ (2026-07-18)
 
 Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.

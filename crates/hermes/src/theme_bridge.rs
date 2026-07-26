@@ -68,3 +68,8 @@ pub fn status_line() -> String {
     let names = list_names();
     alloc::format!("[THEME] bridge names={}", names.len())
 }
+
+
+
+
+

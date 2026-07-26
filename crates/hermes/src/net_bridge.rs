@@ -70,3 +70,9 @@ pub fn dns_resolve(hostname: &str) -> Option<[u8; 4]> {
         None => None,
     }
 }
+
+
+
+
+
+

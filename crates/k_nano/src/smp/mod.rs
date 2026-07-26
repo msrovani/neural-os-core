@@ -10,7 +10,7 @@ pub mod work_stealing;
 use crate::apic;
 use crate::memory;
 use crate::println;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use spin::Mutex;
 use x86_64::structures::paging::{
     Mapper, OffsetPageTable, Page, PageTable, PageTableFlags, PhysFrame, Size4KiB,
@@ -22,6 +22,11 @@ static AP_ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Set by PlatformAgent before calling init_smp().
 pub static AP_COUNT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+/// ADR-0057 WS-F / ADR-0065 FASE 3.1 P13: Barrier for APs that have loaded IDT.
+static AP_IDT_READY: AtomicU8 = AtomicU8::new(0);
+/// Total APs expected to load IDT (set before wake).
+static AP_EXPECTED: AtomicU8 = AtomicU8::new(0);
 
 #[allow(dead_code)]
 const AP_STACK_SIZE: u64 = 16384;
@@ -51,12 +56,44 @@ pub extern "C" fn ap_entry(_cpu_id: u64) -> ! {
         }
     }
 
+// P13: Initialize per-AP TSS/IST and load IDT
+    let ap_index = (cpu_id - 1) as usize;
+    let ist_tops = unsafe { percpu::init_ap_ist(ap_index) };
+    // Convert u64 stack tops to VirtAddr
+    let ist_tops_va = [
+        x86_64::VirtAddr::new(ist_tops[0]),
+        x86_64::VirtAddr::new(ist_tops[1]),
+        x86_64::VirtAddr::new(ist_tops[2]),
+    ];
+    let ap_tss = crate::interrupts::init_ap_tss(ap_index, ist_tops_va);
+    // Store TSS selector in PerCpu for later use
+    unsafe {
+        let pcpu = percpu::AP_PCPU.0[ap_index].get();
+        (*pcpu).tss_ptr = &ap_tss.tss as *const _ as u64;
+    }
+    // Load IDT + TSS + enable interrupts
+    unsafe { crate::interrupts::ap_load_idt_and_tss(ap_tss.selector); }
+
+    // Signal IDT ready
+    let ready = AP_IDT_READY.fetch_add(1, Ordering::SeqCst) + 1;
+    let expected = AP_EXPECTED.load(Ordering::Acquire);
+    if ready == expected {
+        // Last AP — enable AP workers
+        set_ap_pollable(true);
+        crate::slog_nano!("SMP", "info", "All {} APs IDT ready — ap_pollable=true", expected);
+    }
+
     AP_ENTRY_COUNTER.fetch_add(1, Ordering::SeqCst);
     ap_work::ap_idle_loop(cpu_id as usize);
 }
 
 pub fn ap_entry_count() -> u64 {
     AP_ENTRY_COUNTER.load(Ordering::Relaxed)
+}
+
+/// Returns the total number of logical cores (BSP + APs).
+pub fn total_cores() -> u32 {
+    crate::smp::percpu::CPU_COUNT.load(Ordering::Relaxed) as u32
 }
 
 /// ADR-0057 WS-F: APs só podem ser usados como workers vivos (WS-B) quando

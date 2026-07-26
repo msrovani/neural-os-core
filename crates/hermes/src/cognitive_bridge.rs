@@ -11,7 +11,7 @@ use spin::Mutex;
 use ticket_lock::TicketLock;
 
 use crate::memory_store;
-use k_nano::EVENT_BUS;
+use k_nano::globals::EVENT_BUS;
 
 pub const TOPIC_MEMORY_NUDGE: &str = "MEMORY_NUDGE";
 pub const TOPIC_COG_STATUS: &str = "COG_STATUS";
@@ -529,43 +529,15 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
         emo
     ));
 
-    // ADR-0064 TF-IDF RAG (L1 lexical) — fallback BGE embeddings se store vazio
-    let mut recall_path = "tfidf";
-    let tfidf = cortex::vector_db::rag_context_prefix(user_intent, 5);
-    if !tfidf.is_empty() {
-        s.push_str(&tfidf);
-        s.push('\n');
-        k_nano::slog_bin!("vectordb", "search", "query injected top context");
-    } else {
-        recall_path = "bge";
-        let rag = k_ai::memory_systems::semantic_search(user_intent, 3);
-        if !rag.is_empty() {
-            s.push_str("[BGE-RAG]\n");
-            for (label, score) in rag {
-                if score > 0.05 {
-                    s.push_str(&format!("  ({:.2}) {}\n", score, label));
-                }
-            }
-            s.push('\n');
-        } else {
-            recall_path = "empty";
-        }
-    }
-
-    // E2: BQ L4 — BGE se disponível, senão emb=pseudo (honesty)
+    // RAG context: BQ L4 + texto formatado (substitui legado vector-db)
+    let mut recall_path = "rag";
     let (q_emb, emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
-    let (bq_hits, bq_path) = k_ai::sgdb::recall_semantic(&q_emb, 3);
-    if (bq_path == "bq" || bq_path == "bq+fp32") && !bq_hits.is_empty() {
-        s.push_str(&format!("[SGDB-L4-BQ emb={} path={}]\n", emb_path, bq_path));
-        for (sk, dist) in &bq_hits {
-            s.push_str(&format!("  d={} {}\n", dist, sk));
-        }
+    let rag = k_ai::sgdb::rag_context(&q_emb, 5);
+    if !rag.is_empty() {
+        s.push_str(&rag);
         s.push('\n');
-        recall_path = if recall_path == "empty" {
-            "bq"
-        } else {
-            "hybrid"
-        };
+    } else {
+        recall_path = "no_rag";
     }
     k_nano::slog_bin!("sgdb", "recall", "path={} emb={}", recall_path, emb_path);
 
@@ -632,22 +604,10 @@ fn last_latent_snip() -> Option<String> {
 pub fn after_exchange(user: &str, response: &str, tick: u64) {
     session_record("user", user, tick);
     session_record("assistant", response, tick);
-    // ADR-0064: TF-IDF remember + persist TicKV
-    let _ = cortex::vector_db::rag_remember("user", user, cortex::vector_db::EntryKind::Memory);
-    let _ = cortex::vector_db::rag_remember(
-        "cortex",
-        response,
-        cortex::vector_db::EntryKind::Memory,
-    );
-    let bytes = cortex::vector_db::global_persist_bytes();
-    let _ = k_ai::sgdb::put_vdb_blob(&bytes);
-    // ADR-0063 F6: MemoryDoc L1/L2 + TickvLite
-    k_ai::sgdb::remember_exchange(user, response);
-    // E2: L4 BQ — BGE ou emb=pseudo (nunca deixar L4 morto sem honesty)
+    // ADR-0063: texto + embedding com chave temporal (RAG via SGDB TicKV+NoProto+BQ)
     let (emb_u, path_u) = k_ai::memory_systems::embed_or_pseudo(user);
-    k_ai::sgdb::remember_semantic("turn_user", user, &emb_u);
     let (emb_a, path_a) = k_ai::memory_systems::embed_or_pseudo(response);
-    k_ai::sgdb::remember_semantic("turn_asst", response, &emb_a);
+    k_ai::sgdb::remember_exchange_full(user, response, &emb_u, &emb_a, tick);
     k_nano::slog_bin!("sgdb", "emb", "user={} asst={}", path_u, path_a);
     // Audit flush periódico (cada exchange — compacto)
     crate::globals::AUDIT_TRAIL.lock().flush_to_sgdb();
@@ -671,3 +631,9 @@ pub fn status_line() -> String {
         k_ai::memory_systems::bge_status()
     )
 }
+
+
+
+
+
+

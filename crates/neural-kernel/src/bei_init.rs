@@ -3,18 +3,22 @@
 //! This module creates and connects all BEI components.
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use alloc::vec;
 use spin::Mutex;
 use k_nano::sync::mpmc::MpmcQueue;
 use k_ai::{economy::{BudgetManager, TierPolicy, CompressionTier}, expert_lifecycle::ExpertLifecycleManager};
-use cortex::{cellular::{CellNetwork, CellType, CellId}, evolution::PlasticityController, moe::DynamicMoE};
-use hermes::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, LoopPhase, SupervisorVerdict}};
-use jarbas::display::SoulMirror;
+use cortex_crate::{cellular::{CellNetwork, CellType, CellId}, evolution::PlasticityController, moe::DynamicMoE};
+use hermes_crate::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, LoopPhase, SupervisorVerdict}};
+use jarbas_crate::display::soul_mirror::SoulMirrorState;
+
 
 /// Global BEI state container
 pub struct BeiState {
     // Wave 0: Communication
-    pub cell_message_queue: Arc<MpmcQueue<cortex::cellular::CellMessage>>,
+    pub cell_message_queue: Arc<MpmcQueue<cortex_crate::cellular::CellMessage>>,
     
     // Wave 1: Economy + Lifecycle
     pub budget_manager: Arc<Mutex<BudgetManager>>,
@@ -36,8 +40,8 @@ pub struct BeiState {
     // Wave 6: Supervisor
     pub executive_supervisor: Arc<Mutex<ExecutiveSupervisor>>,
     
-    // Wave 7: Soul Mirror
-    pub soul_mirror: Arc<Mutex<SoulMirror>>,
+    // Wave 7: Soul Mirror (state synced in tick; render owned by compositor)
+    pub soul_mirror_state: Arc<Mutex<SoulMirrorState>>,
     
     // Current tick for synchronization
     pub current_tick: Arc<Mutex<u64>>,
@@ -50,7 +54,7 @@ impl BeiState {
         
         // ─── Wave 0: MPMC Queue ───
         let cell_message_queue = Arc::new(
-            MpmcQueue::<cortex::cellular::CellMessage>::new(256)
+            MpmcQueue::<cortex_crate::cellular::CellMessage>::new(256)
                 .expect("Failed to create MPMC queue for cell messages")
         );
         k_nano::slog_bin!("BEI", "wave0", "MPMC queue created (cap=256)");
@@ -105,8 +109,8 @@ impl BeiState {
         k_nano::slog_bin!("BEI", "wave6", "ExecutiveSupervisor created (7-phase loop)");
         
         // ─── Wave 7: Soul Mirror ───
-        let soul_mirror = Arc::new(Mutex::new(SoulMirror));
-        k_nano::slog_bin!("BEI", "wave7", "SoulMirror created");
+        let soul_mirror_state = Arc::new(Mutex::new(SoulMirrorState::neutral()));
+        k_nano::slog_bin!("BEI", "wave7", "SoulMirrorState created");
         
         // ─── Cross-connections ───
         Self::connect_components(
@@ -132,25 +136,25 @@ impl BeiState {
             memory_store,
             affect_regulator,
             executive_supervisor,
-            soul_mirror,
+            soul_mirror_state,
             current_tick: Arc::new(Mutex::new(0)),
         }
     }
     
     fn create_dynamic_moe() -> DynamicMoE {
-        use cortex::{moe::{MoELayer, MoEConfig, Int8Router}, nn::BitLinear, tensor::PackedTernaryTensor};
+        use cortex_crate::{moe::{MoELayer, MoEConfig, Int8Router}, nn::BitLinear, tensor::PackedTernaryTensor};
         
         let hidden = 64;
         let n = 4;
         let top_k = 2;
         
         let make_linear = || BitLinear::new(
-            PackedTernaryTensor { shape: (hidden, hidden), packed_data: vec![0u8; (hidden * hidden + 3) / 4] },
+            PackedTernaryTensor { shape: (hidden, hidden), packed_data: alloc::vec![0u8; (hidden * hidden + 3) / 4] },
             None,
         );
         let shared = make_linear();
         let router = Int8Router::new(hidden, n);
-        let mut experts = Vec::with_capacity(n);
+        let mut experts = alloc::vec::Vec::with_capacity(n);
         for _ in 0..n { experts.push(make_linear()); }
         
         let config = MoEConfig::new(n, top_k, hidden);
@@ -226,11 +230,15 @@ impl BeiState {
                 if pc.should_prune(region) {
                     k_nano::slog_bin!("BEI", "plasticity", "Region {} should PRUNE (activation={:.2})", region, pc.region_activation[region]);
                     // Mark lowest-activation cell in region for death
-                    let mut net = self.cell_network.lock();
-                    if let Some(cell) = net.cells().iter()
-                        .filter(|c| c.region == region && c.state != cortex::cellular::CellState::Dead)
-                        .min_by(|a, b| a.unprocessed().cmp(&b.unprocessed())) {
-                        net.mark_dead(cell.id);
+                    let dead_id = {
+                        let net = self.cell_network.lock();
+                        net.cells().iter()
+                            .filter(|c| c.region == region && c.state != cortex_crate::cellular::CellState::Dead)
+                            .min_by(|a, b| a.unprocessed().cmp(&b.unprocessed()))
+                            .map(|c| c.id)
+                    };
+                    if let Some(id) = dead_id {
+                        self.cell_network.lock().mark_dead(id);
                     }
                 }
             }
@@ -281,11 +289,11 @@ impl BeiState {
             }
         }
         
-        // 6. Sync SoulMirror with AffectVector
+        // 6. Sync SoulMirrorState with AffectVector
         {
             let affect = self.affect_regulator.lock().affect;
-            let _update = SoulMirror::from_affect(&affect);
-            // In real implementation, this would update the display
+            let _state = SoulMirrorState::from_affect(&affect, 0);
+            *self.soul_mirror_state.lock() = _state;
         }
         
         // 7. DynamicMoE lifecycle (birth/merge/split)
@@ -297,7 +305,7 @@ impl BeiState {
             // Check for expert births (high entropy regions)
             let high_entropy = dmoe.high_entropy_indices(0.8);
             for idx in high_entropy {
-                lifecycle.update_entropy(idx, dmoe.expert_entropy[idx]);
+                lifecycle.update_entropy(idx as u64, dmoe.expert_entropy[idx]);
                 if lifecycle.candidates_for_split(current_tick).contains(&idx) {
                     dmoe.queue_split(idx);
                     k_nano::slog_bin!("BEI", "dmoe", "Queued split for expert {}", idx);
@@ -382,7 +390,7 @@ pub fn bei_state() -> &'static BeiState {
 }
 
 /// BEI tick function (call from scheduler or timer interrupt)
-pub fn bei_tick() {
+pub fn bei_tick(_tick: u64) {
     if let Some(state) = unsafe { BEI_STATE.as_ref() } {
         state.tick();
     }

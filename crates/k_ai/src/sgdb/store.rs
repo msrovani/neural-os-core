@@ -152,15 +152,6 @@ pub fn put_skill_blob(name: &str, description: &str) -> Result<(), &'static str>
     )
 }
 
-/// Persist RAG blob (bridge 0064).
-pub fn put_vdb_blob(data: &[u8]) -> Result<(), &'static str> {
-    put_kv("vdb/blob", data)
-}
-
-pub fn get_vdb_blob() -> Result<Option<Vec<u8>>, &'static str> {
-    get_kv("vdb/blob")
-}
-
 pub fn with_store<R>(f: impl FnOnce(&mut AiosDatabaseEngine) -> R) -> Option<R> {
     ensure_ready();
     with_engine(f)

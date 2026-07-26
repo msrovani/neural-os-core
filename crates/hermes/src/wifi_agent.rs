@@ -9,6 +9,14 @@ use alloc::vec::Vec;
 use alloc::vec;
 use crate::generic_wifi::{self, ACTIVE_DRIVER};
 use core::sync::atomic::Ordering;
+/// Ponte SGDB via k_ai (namespace sys/). Fallback silencioso se SGDB não pronto.
+fn sgdb_put(key: &str, data: &[u8]) -> bool {
+    k_ai::sgdb::store::put_kv(key, data).is_ok()
+}
+fn sgdb_get(key: &str) -> Option<Vec<u8>> {
+    k_ai::sgdb::store::get_kv(key).ok()?
+}
+
 const WIFI_MANIFEST: AgentManifest = AgentManifest {
     name: "wifi_agent",
     kind: AgentKind::Network,
@@ -326,8 +334,17 @@ impl WifiAgent {
     // ── Persistência ──────────────────────────────────────────
 
     fn save_credentials(&self, ssid: &str, password: &str) {
-        // Salva no FAT32 como WIFI.CFG (SSID + senha cifrada)
-        // Reutilizado no proximo boot para auto-conexao
+        // Salva no SGDB `sys/wifi` (TickvLite/NoProto)
+        let cfg = alloc::format!("{} {}\n", ssid, password);
+        if sgdb_put("sys/wifi", cfg.as_bytes()) {
+            k_nano::slog_hermes!("Wifi", "info", "Credenciais salvas (SGDB sys/wifi)");
+        } else {
+            // Fallback FAT32
+            self.save_credentials_fat(ssid, password);
+        }
+    }
+
+    fn save_credentials_fat(&self, ssid: &str, password: &str) {
         let cfg = alloc::format!("{} {}\n", ssid, password);
         unsafe {
             let ata_guard = k_nano::ATA_DRIVER.lock();
@@ -337,7 +354,7 @@ impl WifiAgent {
                     if p.type_code == 0x1C || p.type_code == 0x0C || p.type_code == 0x0B {
                         if let Some(w) = k_nano::fat32::Fat32Writer::new(ata, p) {
                             if w.write_file("WIFI.CFG", cfg.as_bytes()) {
-                                k_nano::slog_hermes!("Wifi", "info", "Credenciais salvas (WIFI.CFG)");
+                                k_nano::slog_hermes!("Wifi", "info", "Credenciais salvas (FAT32 WIFI.CFG fallback)");
                                 break;
                             }
                         }
@@ -348,6 +365,22 @@ impl WifiAgent {
     }
 
     fn load_credentials(&self) -> Option<(String, String)> {
+        // Tenta SGDB primeiro
+        if let Some(data) = sgdb_get("sys/wifi") {
+            let s = core::str::from_utf8(&data).unwrap_or("");
+            let mut parts = s.splitn(2, ' ');
+            let ssid = parts.next().unwrap_or("").trim();
+            let pass = parts.next().unwrap_or("").trim();
+            if !ssid.is_empty() && !ssid.eq_ignore_ascii_case("none") {
+                k_nano::slog_hermes!("Wifi", "info", "Credenciais carregadas (SGDB sys/wifi)");
+                return Some((String::from(ssid), String::from(pass)));
+            }
+        }
+        // Fallback FAT32
+        self.load_credentials_fat()
+    }
+
+    fn load_credentials_fat(&self) -> Option<(String, String)> {
         unsafe {
             let ata_guard = k_nano::ATA_DRIVER.lock();
             if let Some(ref ata) = *ata_guard {
@@ -433,3 +466,9 @@ impl Agent for WifiAgent {
         AgentTickResult::Pending
     }
 }
+
+
+
+
+
+

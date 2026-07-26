@@ -144,3 +144,9 @@ pub fn generate_skill_md(name: &str, steps: &[&str]) -> String {
     out.push_str("- [ ] Confirm all steps completed\n");
     out
 }
+
+
+
+
+
+

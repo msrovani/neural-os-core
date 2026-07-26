@@ -12,6 +12,7 @@ use lazy_static::lazy_static;
 use ticket_lock::TicketLock;
 
 use crate::approval::ApprovalLevel;
+use crate::memory_store;
 
 /// Root canônico (NeuralFS §12).
 pub const ECOSYSTEM_ROOT: &str = "/mnt/neural/ecosystem";
@@ -1179,7 +1180,14 @@ pub fn init_package_hub() {
     }
     // Lock solto ANTES de ensure_defaults/rebuild_index —
     // rebuild_index faz PACKAGE_HUB.lock() de novo (TicketLock não-reentrante → hang pós-K33).
-    crate::memory_store::ensure_defaults();
+    memory_store::ensure_defaults();
     let _ = crate::marketplace::rebuild_index();
     k_nano::slog_hermes!("Log", "msg", "{}", crate::globals::AUDIT_TRAIL.lock().status());
 }
+
+
+
+
+
+
+

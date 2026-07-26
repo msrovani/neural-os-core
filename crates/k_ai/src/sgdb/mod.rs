@@ -18,16 +18,16 @@ pub use engine::{
 };
 pub use hamming_dispatch::{path_name as hamming_kernel_name, select_best_hamming_kernel};
 pub use layers::{
-    art_prefix, ensure_ready, index_skill, prompt_slice, recall_semantic, remember_exchange,
-    remember_fact, remember_semantic,
+    art_prefix, ensure_ready, index_skill, prompt_slice, rag_context, recall_semantic,
+    remember_exchange, remember_exchange_full, remember_fact, remember_semantic,
 };
 pub use memory_doc::{MemoryDoc, MemoryDocView, MemoryLayer, VectorClock};
 pub use e2e_smoke::memory_checkpoint_e2e_smoke;
 pub use metrics::report_line as metrics_report;
 pub use store::{
     backend, boot_init, checkpoint_working, get_doc, get_hanr, get_kv, get_pkg_body, get_pkg_meta,
-    get_vdb_blob, ns, prune_working_ram, put_doc, put_hanr, put_kv, put_pkg_body, put_pkg_meta,
-    put_skill_blob, put_vdb_blob, ready, status as store_status, with_store,
+    ns, prune_working_ram, put_doc, put_hanr, put_kv, put_pkg_body, put_pkg_meta,
+    put_skill_blob, ready, status as store_status, with_store,
 };
 
 use alloc::vec::Vec;

@@ -280,3 +280,9 @@ pub fn skill_view(name: &str) -> String {
     }
     format!("[SKILL] '{}' not found — try /skills", name)
 }
+
+
+
+
+
+

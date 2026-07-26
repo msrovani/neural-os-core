@@ -307,3 +307,9 @@ pub fn list_offers_text() -> String {
 pub fn release_device(handle: BindHandle) {
     offer::release(handle);
 }
+
+
+
+
+
+

@@ -257,3 +257,9 @@ pub fn boot_smoke() -> bool {
     }
     ok
 }
+
+
+
+
+
+

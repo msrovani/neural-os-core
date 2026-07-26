@@ -729,3 +729,9 @@ pub fn parse_command(line: &str) -> Command {
     }
     Command::Chat(trimmed.to_string())
 }
+
+
+
+
+
+

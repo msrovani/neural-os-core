@@ -361,3 +361,9 @@ fn head_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: head <file>\n"); }
     alloc::format!("head: {} (first lines)\n", args)
 }
+
+
+
+
+
+

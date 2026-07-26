@@ -97,6 +97,74 @@ impl Checkpoint {
             checkpoint_version: 0,
         }
     }
+
+    /// Serialize checkpoint to binary blob for SGDB storage.
+    fn serialize(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(1 + BITMAP_SIZE + 8 * 8 + 1);
+        buf.push(if self.valid { 1 } else { 0 });
+        buf.extend_from_slice(&self.bitmap);
+        buf.extend_from_slice(&(self.next_free_bit as u64).to_le_bytes());
+        buf.extend_from_slice(&(self.total_frames as u64).to_le_bytes());
+        buf.extend_from_slice(&(self.usable_frames as u64).to_le_bytes());
+        buf.extend_from_slice(&(self.allocated_count as u64).to_le_bytes());
+        buf.extend_from_slice(&self.mhi_dram_bytes.to_le_bytes());
+        buf.extend_from_slice(&self.tick.to_le_bytes());
+        buf.extend_from_slice(&self.heap_start.to_le_bytes());
+        buf.extend_from_slice(&self.heap_size.to_le_bytes());
+        buf.extend_from_slice(&self.page_table_pml4_addr.to_le_bytes());
+        buf.extend_from_slice(&self.driver_state_hash.to_le_bytes());
+        buf.push(self.checkpoint_version);
+        buf
+    }
+
+    /// Deserialize checkpoint from binary blob.
+    fn deserialize(data: &[u8]) -> Option<Self> {
+        if data.len() < 1 + BITMAP_SIZE + 8 * 8 + 1 {
+            return None;
+        }
+        let mut off = 0;
+        let valid = data[off] != 0;
+        off += 1;
+        let mut bitmap = [0u8; BITMAP_SIZE];
+        bitmap.copy_from_slice(&data[off..off + BITMAP_SIZE]);
+        off += BITMAP_SIZE;
+        let next_free_bit = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
+        off += 8;
+        let total_frames = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
+        off += 8;
+        let usable_frames = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
+        off += 8;
+        let allocated_count = u64::from_le_bytes(data[off..off + 8].try_into().ok()?) as usize;
+        off += 8;
+        let mhi_dram_bytes = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
+        off += 8;
+        let tick = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
+        off += 8;
+        let heap_start = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
+        off += 8;
+        let heap_size = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
+        off += 8;
+        let page_table_pml4_addr = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
+        off += 8;
+        let driver_state_hash = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
+        off += 8;
+        let checkpoint_version = data[off];
+        Some(Checkpoint {
+            valid,
+            bitmap,
+            next_free_bit,
+            total_frames,
+            usable_frames,
+            allocated_count,
+            mhi_dram_bytes,
+            tick,
+            heap_start,
+            heap_size,
+            page_table_pml4_addr,
+            driver_state_hash,
+            checkpoint_version,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -332,6 +400,12 @@ impl SelfHeal {
         self.checkpoint.valid = true;
         k_nano::slog_kai!("CHECKPOINT", "info", "Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
             self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
+        // Persist to SGDB
+        let blob = self.checkpoint.serialize();
+        match crate::sgdb::put_kv("sys/checkpoint", &blob) {
+            Ok(()) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB persist OK bytes={}", blob.len()),
+            Err(e) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB persist SKIP {:?}", e),
+        }
     }
 
     /// Snapshot semântico: aplica CDC Rabin no bitmap para chunking.
@@ -365,6 +439,19 @@ impl SelfHeal {
     }
 
     pub fn restore_checkpoint(&mut self) -> bool {
+        // Try SGDB first
+        if crate::sgdb::ready() {
+            match crate::sgdb::get_kv("sys/checkpoint") {
+                Ok(Some(data)) => {
+                    if let Some(cp) = Checkpoint::deserialize(&data) {
+                        self.checkpoint = cp;
+                        k_nano::slog_kai!("CHECKPOINT", "info", "SGDB load OK @ tick {}", self.checkpoint.tick);
+                    }
+                }
+                Ok(None) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB miss"),
+                Err(e) => k_nano::slog_kai!("CHECKPOINT", "info", "SGDB load error {:?}", e),
+            }
+        }
         if !self.checkpoint.valid {
             k_nano::slog_kai!("CHECKPOINT", "info", "Nenhum checkpoint valido para restaurar.");
             return false;

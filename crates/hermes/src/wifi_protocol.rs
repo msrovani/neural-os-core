@@ -144,3 +144,9 @@ pub fn scan_networks<D: k_hal::net::generic_wifi::WifiChipset>(
     }
     Ok(found)
 }
+
+
+
+
+
+

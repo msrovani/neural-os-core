@@ -171,3 +171,9 @@ pub fn load_embedded_skills() -> SkillLoader {
     k_nano::slog_hermes!("SKILL", "info", "{} skill(s) carregadas, prompt de {} bytes", count, system.len());
     loader
 }
+
+
+
+
+
+

@@ -179,6 +179,81 @@ pub fn prompt_slice(max_chars: usize) -> String {
     }
 }
 
+/// Pós-turno completo: texto L1/L2 constantes + L2 timestamped + L4 BQ temporal.
+pub fn remember_exchange_full(
+    user: &str,
+    response: &str,
+    emb_u: &[f32],
+    emb_a: &[f32],
+    tick: u64,
+) {
+    ensure_ready();
+    let ts = MemoryDoc::sortable_ts_key(tick);
+    let ts_u = alloc::format!("{}/u", ts);
+    let ts_a = alloc::format!("{}/a", ts);
+
+    // L1/L2 constant keys (prompt_slice compat)
+    let _ = with_engine(|e| {
+        let u = MemoryDoc::new(MemoryLayer::L1Working, "last_user", user.as_bytes().to_vec());
+        let _ = e.put(u);
+        let a = MemoryDoc::new(
+            MemoryLayer::L2EpisodicShort,
+            "last_asst",
+            response.as_bytes().to_vec(),
+        );
+        e.put(a)
+    });
+
+    // L2 timestamped text (acumula para recall RAG)
+    let _ = super::engine::remember_text(MemoryLayer::L2EpisodicShort, &ts_u, user);
+    let _ = super::engine::remember_text(MemoryLayer::L2EpisodicShort, &ts_a, response);
+
+    // L4 timestamped embeddings
+    remember_semantic(&ts_u, user, emb_u);
+    remember_semantic(&ts_a, response, emb_a);
+}
+
+/// RAG context: BQ recall + fetch payload + formato string pro prompt.
+/// path = `recall_semantic`.
+pub fn rag_context(query: &[f32], k: usize) -> String {
+    ensure_ready();
+    let (hits, _path) = recall_semantic(query, k);
+    if hits.is_empty() {
+        return String::new();
+    }
+    let header = alloc::format!("[SGDB-RAG top-{}]\n", hits.len());
+    let mut out = String::new();
+    for (i, (sk, dist)) in hits.iter().enumerate() {
+        let text_sk = sk.replace("/L4/", "/L2/");
+        let text = with_engine(|e| match e.get_by_storage_key(&text_sk) {
+            Ok(Some(doc)) => core::str::from_utf8(&doc.payload)
+                .map(String::from)
+                .unwrap_or_default(),
+            _ => String::new(),
+        })
+        .unwrap_or_default();
+        if text.is_empty() {
+            continue;
+        }
+        let line = alloc::format!("  #{}) d={} {}\n", i + 1, dist, clamp_public(&text, 200));
+        out.push_str(&line);
+    }
+    if out.is_empty() {
+        return String::new();
+    }
+    alloc::format!("{}{}", header, out)
+}
+
+fn clamp_public(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        String::from(s)
+    } else {
+        let mut t = String::from(&s[..max]);
+        t.push('…');
+        t
+    }
+}
+
 fn clamp(s: &str, max: usize) -> String {
     if s.len() <= max {
         String::from(s)

@@ -77,9 +77,9 @@ impl VisionAgent {
 
         if let Some(ref mut desk) = *crate::display::compositor::COMPOSITOR.lock() {
             if let Some(cam) = desk
-                .apps
+                .windows
                 .iter_mut()
-                .find(|a| a.id == crate::display::compositor::AppId::Camera)
+                .find(|w| w.app_id == Some(crate::display::compositor::AppId::Camera))
             {
                 let desc = if avg_edge > 80 {
                     "Objeto/texto detectado"

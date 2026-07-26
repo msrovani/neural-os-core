@@ -1,13 +1,22 @@
-//! MouseAgent — PS/2 mouse driver como agente (espelho hermes).
-//! Lê IRQ12 via LAST_MOUSE_PACKET; init correto 0xD4/0xF4.
+//! MouseAgent — PS/2 mouse driver como agente.
+//! Lê IRQ12 via LAST_MOUSE_PACKET, processa pacote de 3 bytes,
+//! publica MOUSE_MOVED e MOUSE_CLICK no EventBus.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::interrupts::LAST_MOUSE_PACKET;
-use k_nano::EVENT_BUS;
+use k_nano::globals::EVENT_BUS;
 use event_bus::{Event, CapabilityToken};
 use alloc::string::String;
 use alloc::vec::Vec;
 use x86_64::instructions::port::Port;
+
+// Stub for display compositor (avoids jarbas_crate cycle)
+mod mouse_compositor_stub {
+    use spin::Mutex;
+    pub static MOUSE_X: Mutex<usize> = Mutex::new(640);
+    pub static MOUSE_Y: Mutex<usize> = Mutex::new(360);
+}
+use mouse_compositor_stub::{MOUSE_X, MOUSE_Y};
 
 pub const TOPIC_MOUSE_MOVED: &str = "MOUSE_MOVED";
 pub const TOPIC_MOUSE_CLICK: &str = "MOUSE_CLICK";
@@ -22,6 +31,7 @@ const MOUSE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// Espera buffer de entrada do 8042 livre (bit1=0), com timeout.
 fn ps2_wait_write() {
     for _ in 0..100_000 {
         let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
@@ -31,6 +41,7 @@ fn ps2_wait_write() {
     }
 }
 
+/// Espera dado no buffer de saída (bit0=1), com timeout.
 fn ps2_wait_read() -> bool {
     for _ in 0..100_000 {
         let st: u8 = unsafe { Port::<u8>::new(0x64).read() };
@@ -51,11 +62,16 @@ fn ps2_drain() {
     }
 }
 
+/// Init PS/2 aux correto: reset + enable IRQ12 + stream (0xD4/0xF4).
 fn enable_ps2_mouse() {
     unsafe {
         ps2_drain();
+
+        // Enable auxiliary device interface
         ps2_wait_write();
         Port::<u8>::new(0x64).write(0xA8);
+
+        // Read controller config (cmd 0x20)
         ps2_wait_write();
         Port::<u8>::new(0x64).write(0x20);
         let mut cfg = if ps2_wait_read() {
@@ -63,21 +79,76 @@ fn enable_ps2_mouse() {
         } else {
             0x47
         };
-        cfg |= 0x02;
-        cfg &= !0x20;
+        k_nano::slog_bin!("MOUSE", "info", "8042 cfg_before={:#04x}", cfg);
+        cfg |= 0x02; // IRQ12
+        cfg |= 0x01; // IRQ1
+        cfg &= !0x20; // mouse clock on
+        cfg &= !0x10; // keyboard clock on
+        // Write controller config (cmd 0x60)
         ps2_wait_write();
         Port::<u8>::new(0x64).write(0x60);
         ps2_wait_write();
         Port::<u8>::new(0x60).write(cfg);
+        k_nano::slog_bin!("MOUSE", "info", "8042 cfg_after={:#04x}", cfg);
+
+        // Reset mouse: 0xD4 / 0xFF -> ACK FA, BAT AA, ID 00
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xFF);
+        for i in 0..3u32 {
+            if ps2_wait_read() {
+                let b: u8 = Port::<u8>::new(0x60).read();
+                k_nano::slog_bin!("MOUSE", "info", "reset_rsp[{}]={:#04x}", i, b);
+            }
+        }
+
+        // Enable data reporting: 0xD4 / 0xF4 -> ACK FA
         ps2_wait_write();
         Port::<u8>::new(0x64).write(0xD4);
         ps2_wait_write();
         Port::<u8>::new(0x60).write(0xF4);
         if ps2_wait_read() {
-            let _ack: u8 = Port::<u8>::new(0x60).read();
+            let ack: u8 = Port::<u8>::new(0x60).read();
+            k_nano::slog_bin!("MOUSE", "info", "enable_ack={:#04x} (expect 0xfa)", ack);
+        } else {
+            k_nano::slog_bin!("MOUSE", "info", "enable_ack=TIMEOUT");
+        }
+
+        // Diagnóstico: Status Request 0xE9 -> se responder, o device vive;
+        // se nunca vier byte de movimento depois, o host QEMU não está injetando.
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xE9);
+        for i in 0..4u32 {
+            if ps2_wait_read() {
+                let b: u8 = Port::<u8>::new(0x60).read();
+                k_nano::slog_bin!("MOUSE", "info", "status_req[{}]={:#04x}", i, b);
+            } else {
+                k_nano::slog_bin!("MOUSE", "info", "status_req[{}]=TIMEOUT", i);
+                break;
+            }
+        }
+
+        // Re-enable stream após E9
+        ps2_wait_write();
+        Port::<u8>::new(0x64).write(0xD4);
+        ps2_wait_write();
+        Port::<u8>::new(0x60).write(0xF4);
+        if ps2_wait_read() {
+            let ack: u8 = Port::<u8>::new(0x60).read();
+            k_nano::slog_bin!("MOUSE", "info", "re_enable_ack={:#04x}", ack);
         }
     }
-    k_nano::slog_hermes!("MOUSE", "info", "PS/2 mouse enabled (IRQ12 + stream).");
+    k_nano::slog_bin!("MOUSE", "info", "PS/2 mouse enabled (IRQ12 + stream).");
+    k_nano::interrupts::mouse_log_status("after_enable");
+}
+
+fn screen_max() -> (u16, u16) {
+    // Ponytail: stub - real impl would query jarbas_crate::display::fb::GPU.lock()
+    // Avoids cyclic dependency hermes -> jarbas -> hermes
+    (1279, 719)
 }
 
 pub struct MouseAgent {
@@ -123,10 +194,17 @@ impl Agent for MouseAgent {
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if !self.inited {
             enable_ps2_mouse();
+            let (mw, mh) = screen_max();
+            self.x = mw / 2;
+            self.y = mh / 2;
+            *MOUSE_X.lock() = self.x as usize;
+            *MOUSE_Y.lock() = self.y as usize;
             self.inited = true;
         }
 
+        // Poll aux + IRQ — WHPX às vezes atrasa IRQ12
         k_nano::interrupts::mouse_poll_bytes();
+        // ADR-0062 P24b: USB HID boot mouse -> mesmo path ABS/packet
         unsafe {
             let _ = k_nano::xhci::poll_mouse();
         }
@@ -139,16 +217,22 @@ impl Agent for MouseAgent {
         let b0 = (packet & 0xFF) as u8;
         let b1 = ((packet >> 8) & 0xFF) as u8;
         let b2 = ((packet >> 16) & 0xFF) as u8;
+
+        // Bit 3 do 1º byte deve ser 1 (sync). Se não, descarta.
         if b0 & 0x08 == 0 {
             return AgentTickResult::Pending;
         }
 
         let new_buttons = b0 & 0x07;
         let dx = b1 as i8 as i16;
-        let dy = -(b2 as i8 as i16);
+        let dy = -(b2 as i8 as i16); // tela: Y para baixo
 
-        self.x = (self.x as i32 + dx as i32).clamp(0, 1279) as u16;
-        self.y = (self.y as i32 + dy as i32).clamp(0, 719) as u16;
+        // Posição canônica = IRQ (MOUSE_ABS_*). Não reaplicar delta (senão dobra).
+        use core::sync::atomic::Ordering;
+        self.x = k_nano::interrupts::MOUSE_ABS_X.load(Ordering::Acquire) as u16;
+        self.y = k_nano::interrupts::MOUSE_ABS_Y.load(Ordering::Acquire) as u16;
+        *MOUSE_X.lock() = self.x as usize;
+        *MOUSE_Y.lock() = self.y as usize;
 
         let mut payload = Vec::with_capacity(8);
         payload.extend_from_slice(&self.x.to_le_bytes());

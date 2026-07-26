@@ -1966,7 +1966,7 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
     let eos: u32 = if use_bpe { crate::bpe::eos_id() as u32 } else { EOS as u32 };
     let eot: u32 = if use_bpe { crate::bpe::eot_id() as u32 } else { EOS as u32 };
     let eos_u16 = eos as u16;
-    let eot_u16 = eot as u16;
+    let _eot_u16 = eot as u16;
     let mut tokens: Vec<u32> = if use_bpe {
         crate::bpe::encode(prompt)
     } else {

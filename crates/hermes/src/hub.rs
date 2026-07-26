@@ -93,3 +93,9 @@ impl HubDiscovery {
     pub fn list(&self) -> &[(String, u64)] { &self.instances }
     pub fn status(&self) -> String { alloc::format!("[HUB] {} instancias", self.instances.len()) }
 }
+
+
+
+
+
+

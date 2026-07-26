@@ -50,7 +50,7 @@ pub fn piper_is_loaded() -> bool {
 }
 
 fn try_load_piper() -> Option<PiperEngine> {
-    // 1) QEMU -device loader @0x130000000 (WHPX rápido; evita PIO ~61MB)
+    // 1) QEMU -device loader @0x124200000 (WHPX rápido; evita PIO ~61MB)
     if let Some(eng) = try_load_piper_from_loader() {
         return Some(eng);
     }
@@ -74,35 +74,19 @@ fn try_load_piper() -> Option<PiperEngine> {
                                 continue;
                             };
                             found_any = true;
-                            k_nano::slog_jarbas!("Audio", "piper", "{} presente ({} KB) — carregando via PIO…",
+                            k_nano::slog_jarbas!("Audio", "piper", "{} presente ({} KB) — carregando via PIO (read_file)…",
                                 name,
                                 sz / 1024);
-                            let chunk = 4 * 1024 * 1024;
-                            let mut data = alloc::vec::Vec::with_capacity(sz);
-                            let mut off = 0usize;
-                            let mut ok = true;
-                            while off < sz {
-                                let n = (sz - off).min(chunk);
-                                match fs.read_file_range(name, off, n) {
-                                    Some(part) => {
-                                        data.extend_from_slice(&part);
-                                        off += part.len();
-                                        let pct = if sz > 0 { (off * 100) / sz } else { 100 };
-                                        k_nano::slog_jarbas!("Audio", "piper", "leitura {} KB / {} KB ({}%)",
-                                            off / 1024,
-                                            sz / 1024,
-                                            pct);
-                                        if part.len() < n {
-                                            break;
-                                        }
-                                    }
-                                    None => {
-                                        ok = false;
-                                        break;
-                                    }
+                            let data = match fs.read_file(name) {
+                                Some(d) => d,
+                                None => {
+                                    k_nano::slog_jarbas!("Audio", "piper", "{} I/O read FAILED",
+                                        name);
+                                    load_failed = true;
+                                    continue;
                                 }
-                            }
-                            if !ok || data.len() < sz.min(16) {
+                            };
+                            if data.len() < sz.min(16) {
                                 k_nano::slog_jarbas!("Audio", "piper", "{} I/O read FAILED ({} / {} KB)",
                                     name,
                                     data.len() / 1024,
@@ -149,10 +133,11 @@ fn try_load_piper() -> Option<PiperEngine> {
     None
 }
 
-/// WHPX: `-device loader,file=PIPER_PT_BR.BIN,addr=0x130000000` + `-m 6G`.
+/// WHPX: `-device loader,file=PIPER_PT_BR_CADU_MEDIUM.bitnet,addr=0x124200000` + `-m 6G`.
 /// Usa PHYS_MEM_OFFSET (igual BitNet @0x100000000) — VA = PA + offset.
 fn try_load_piper_from_loader() -> Option<PiperEngine> {
-    const LOAD_ADDR: u64 = 0x130000000;
+    // QEMU launch: -device loader,PIPER_PT_BR_CADU_MEDIUM.bitnet,addr=0x124200000
+    const LOAD_ADDR: u64 = 0x124200000;
     // Tamanho via FAT (mesmo nome no disco) — loader sozinho nao reporta len.
     let mut size_hint: Option<usize> = None;
     unsafe {
@@ -188,14 +173,14 @@ fn try_load_piper_from_loader() -> Option<PiperEngine> {
     let ptr = (LOAD_ADDR + pm) as *const u8;
     let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
     if magic != 0xBE11BE11 {
-        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x130000000 magic=0x{:08X} (sem Piper; FAT PIO a seguir)", magic);
+        k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x124200000 magic=0x{:08X} (sem Piper; FAT PIO a seguir)", magic);
         return None;
     }
-    k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x130000000 magic OK — parse {} KB…", sz / 1024);
+    k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader @0x124200000 magic OK — parse {} KB…", sz / 1024);
     let data = unsafe { core::slice::from_raw_parts(ptr, sz) };
     let mut eng = PiperEngine::new();
     if eng.load(data) {
-        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS LOADED (QEMU-loader @0x130000000) size={} KB", sz / 1024);
+        k_nano::slog_jarbas!("Audio", "piper", "Piper TTS LOADED (QEMU-loader @0x124200000) size={} KB", sz / 1024);
         Some(eng)
     } else {
         k_nano::slog_jarbas!("Audio", "piper", "QEMU-loader parse FAILED — fallback FAT PIO");

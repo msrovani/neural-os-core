@@ -6,13 +6,15 @@
 //! - IntelHybrid: Core Ultra (P/E/LPE-core separation)
 //! - StandardUma: i3/i5/Ryzen 5/7 monolithic (fast path)
 
+use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use alloc::alloc::{alloc, Layout};
 use crate::acpi::NumaTopologyMap;
 use crate::hardware::topology::{ClientTopologyReport, CpuVendor};
 use crate::hardware::xeon::XeonTopologyReport;
 use crate::hardware::epyc::EpycTopologyReport;
 use crate::platform_probe::{FeatureGate, IsaPath};
-use crate::numa_alloc::{numa_node_for_apic, numa_allocate_frame, numa_topology, numa_allocate_local, numa_allocate_contiguous, numa_allocate_huge_2mb, numa_allocate_huge_1gb, numa_node_for_phys, numa_node_count, numa_node_ids, numa_stats, init_numa_allocators};
+use crate::core_pinning::{CoreRole, CorePool, PinningStrategy, pool_for, active_strategy};
+use crate::numa_alloc::{numa_node_for_apic, numa_allocate_frame, numa_topology};
 use crate::apic::lapic_id;
 
 /// Hardware profile classification for CPU-First BitNet dispatch
@@ -79,6 +81,23 @@ pub struct HardwareReport {
     
     /// Total logical threads
     pub total_threads: u16,
+}
+
+impl HardwareReport {
+    pub fn new() -> Self {
+        Self {
+            profile: HardwareProfile::StandardUma,
+            feature_gate: FeatureGate::disabled(),
+            isa_path: IsaPath::Scalar,
+            numa_topology: None,
+            client_topology: None,
+            xeon_topology: None,
+            epyc_topology: None,
+            vendor: CpuVendor::Unknown,
+            total_cores: 0,
+            total_threads: 0,
+        }
+    }
 }
 
 /// Detect and classify hardware profile
@@ -158,7 +177,6 @@ fn classify_profile(vendor: &CpuVendor, numa: &Option<NumaTopologyMap>, total_co
         }
         CpuVendor::Intel => {
             // Check for hybrid architecture
-            // Need client topology for full check
             if total_cores >= 6 {
                 HardwareProfile::IntelHybrid
             } else {
@@ -178,6 +196,77 @@ pub fn refine_profile(report: &mut HardwareReport) {
                 | crate::hardware::topology::ClientGeneration::IntelHybridLegacy => HardwareProfile::IntelHybrid,
             _ => HardwareProfile::StandardUma,
         };
+    }
+}
+
+/// ADR-0061 Phase 3: Global profile + strategy state
+static ACTIVE_PROFILE: AtomicU8 = AtomicU8::new(3); // StandardUma default
+static PROFILE_STORED: AtomicBool = AtomicBool::new(false);
+
+/// Store the active hardware profile (call once after probe)
+pub fn set_active_profile(profile: HardwareProfile) {
+    ACTIVE_PROFILE.store(profile as u8, Ordering::Release);
+    PROFILE_STORED.store(true, Ordering::Release);
+}
+
+/// Get the active hardware profile
+pub fn active_profile() -> HardwareProfile {
+    match ACTIVE_PROFILE.load(Ordering::Acquire) {
+        0 => HardwareProfile::MultiDomainNuma,
+        1 => HardwareProfile::AsymmetricCcd,
+        2 => HardwareProfile::IntelHybrid,
+        _ => HardwareProfile::StandardUma,
+    }
+}
+
+/// Returns true if profile has been probed and stored
+pub fn is_probed() -> bool {
+    PROFILE_STORED.load(Ordering::Acquire)
+}
+
+/// Select the appropriate MemoryAndThreadStrategy based on the profile.
+/// Returns a static reference to the strategy implementation.
+pub fn select_strategy(profile: HardwareProfile) -> &'static dyn MemoryAndThreadStrategy {
+    match profile {
+        HardwareProfile::MultiDomainNuma => {
+            static STRAT: MultiDomainNumaStrategy = MultiDomainNumaStrategy;
+            &STRAT
+        }
+        HardwareProfile::AsymmetricCcd => {
+            static STRAT: AsymmetricCcdStrategy = AsymmetricCcdStrategy;
+            &STRAT
+        }
+        HardwareProfile::IntelHybrid => {
+            static STRAT: IntelHybridStrategy = IntelHybridStrategy;
+            &STRAT
+        }
+        HardwareProfile::StandardUma => {
+            static STRAT: StandardUmaStrategy = StandardUmaStrategy;
+            &STRAT
+        }
+    }
+}
+
+/// Apply adaptation strategy — configures subsystems based on the probe result.
+/// Call this once during boot, after init_platform_sync().
+pub fn apply_strategy(report: &HardwareReport) {
+    set_active_profile(report.profile);
+    let _strategy = select_strategy(report.profile);
+
+    // Log adaptation decision
+    crate::slog_nano!(
+        "ADAPT", "info",
+        "profile={} vendor={:?} cores={} threads={} isa={:?} numa={}",
+        report.profile.name(),
+        report.vendor,
+        report.total_cores,
+        report.total_threads,
+        report.isa_path,
+        if report.numa_topology.is_some() { "SRAT" } else { "none" }
+    );
+
+    if let Some(ref numa) = report.numa_topology {
+        crate::slog_nano!("ADAPT", "info", "NUMA multi_domain={}", numa.is_multi_domain());
     }
 }
 
@@ -234,22 +323,6 @@ pub trait MemoryAndThreadStrategy {
     fn pool_for(&self, role: CoreRole) -> &CorePool;
 }
 
-/// Core role for pinning
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoreRole {
-    Hermes,      // Supervisor, UI, VFS
-    Cortex,      // BitNet inference
-    Memory,      // External memory VFS, fact indexing
-    Worker,      // Small logical verification cells
-}
-
-/// Core pool for a role
-#[derive(Debug, Clone, Copy)]
-pub struct CorePool {
-    pub core_ids: &'static [u8],
-    pub count: u8,
-}
-
 /// Standard UMA strategy (fast path)
 pub struct StandardUmaStrategy;
 
@@ -260,13 +333,13 @@ impl MemoryAndThreadStrategy for StandardUmaStrategy {
         Some(unsafe { alloc(layout) })
     }
     
-    fn pin_thread(&self, _role: CoreRole) {
+    fn pin_thread(&self, role: CoreRole) {
         // No pinning needed on UMA
+        let _ = role;
     }
     
-    fn pool_for(&self, _role: CoreRole) -> &CorePool {
-        static POOL: CorePool = CorePool { core_ids: &[], count: 0 };
-        &POOL
+    fn pool_for(&self, role: CoreRole) -> &CorePool {
+        pool_for(role)
     }
 }
 
@@ -286,6 +359,7 @@ impl MemoryAndThreadStrategy for MultiDomainNumaStrategy {
             let socket = match role {
                 CoreRole::Hermes | CoreRole::Memory => 0,
                 CoreRole::Cortex | CoreRole::Worker => 1,
+                CoreRole::Jarbas | CoreRole::Io => 0,
             };
             // Implementation would set thread affinity
             let _ = socket;
@@ -293,8 +367,7 @@ impl MemoryAndThreadStrategy for MultiDomainNumaStrategy {
     }
     
     fn pool_for(&self, role: CoreRole) -> &CorePool {
-        static POOL: CorePool = CorePool { core_ids: &[], count: 0 };
-        &POOL
+        pool_for(role)
     }
 }
 
@@ -315,11 +388,11 @@ impl MemoryAndThreadStrategy for AsymmetricCcdStrategy {
         if vcache_ccd != 255 {
             // Pin to V-Cache CCD cores
         }
+        let _ = role;
     }
     
     fn pool_for(&self, role: CoreRole) -> &CorePool {
-        static POOL: CorePool = CorePool { core_ids: &[], count: 0 };
-        &POOL
+        pool_for(role)
     }
 }
 
@@ -348,11 +421,13 @@ impl MemoryAndThreadStrategy for IntelHybridStrategy {
             CoreRole::Memory => {
                 // Pin to P-cores for memory bandwidth
             }
+            CoreRole::Jarbas | CoreRole::Io => {
+                // Pin to E-cores
+            }
         }
     }
     
     fn pool_for(&self, role: CoreRole) -> &CorePool {
-        static POOL: CorePool = CorePool { core_ids: &[], count: 0 };
-        &POOL
+        pool_for(role)
     }
 }

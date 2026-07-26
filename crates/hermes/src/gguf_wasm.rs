@@ -139,3 +139,9 @@ impl Skill for GgufCatalogSkill {
 
 /// Re-export tipo para quem registra bytecode tipado.
 pub type GgufWasmSkill = WasmSkill;
+
+
+
+
+
+

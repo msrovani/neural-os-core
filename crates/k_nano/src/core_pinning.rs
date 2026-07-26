@@ -50,6 +50,8 @@ pub enum CoreRole {
     Io = 3,
     /// Worker genérico (Cognitive Cell)
     Worker = 4,
+    /// Memory (External memory VFS, fact indexing)
+    Memory = 5,
 }
 
 /// Pool de cores disponíveis para uma função.
@@ -172,7 +174,7 @@ pub fn detect_pinning_strategy() -> PinningStrategy {
         CoreClass::AmdCcdVCache | CoreClass::AmdCcdStandard => PinningStrategy::AmdX3D,
         _ => {
             // Verifica se NUMA está ativo
-            if crate::numa_alloc::initialized_node_count() > 1 {
+            if crate::smp::total_cores() > 1 {
                 PinningStrategy::NumaSocket
             } else {
                 PinningStrategy::None
@@ -264,17 +266,20 @@ pub fn init_pools(total_cores: u32) {
 }
 
 /// Retorna o pool de cores para uma função.
-pub fn pool_for(role: CoreRole) -> Option<CorePool> {
+pub fn pool_for(role: CoreRole) -> &'static CorePool {
     if POOLS_INITIALIZED.load(Ordering::Acquire) == 0 {
-        return None;
+        // Return empty pool reference if not initialized
+        static EMPTY_POOL: CorePool = CorePool::empty(CoreRole::Worker);
+        return &EMPTY_POOL;
     }
     unsafe {
         match role {
-            CoreRole::Hermes => Some(HERMES_POOL),
-            CoreRole::Cortex => Some(CORTEX_POOL),
-            CoreRole::Jarbas => Some(JARBAS_POOL),
-            CoreRole::Io => Some(IO_POOL),
-            CoreRole::Worker => Some(CORTEX_POOL),
+            CoreRole::Hermes => &HERMES_POOL,
+            CoreRole::Cortex => &CORTEX_POOL,
+            CoreRole::Jarbas => &JARBAS_POOL,
+            CoreRole::Io => &IO_POOL,
+            CoreRole::Worker => &CORTEX_POOL,
+            CoreRole::Memory => &CORTEX_POOL,
         }
     }
 }
@@ -294,13 +299,10 @@ pub fn active_strategy() -> PinningStrategy {
 pub fn log_pinning_state() {
     let strategy = active_strategy();
     crate::slog_nano!("PIN", "info", "Pinning strategy: {:?}", strategy);
-    if let Some(p) = pool_for(CoreRole::Hermes) {
-        crate::slog_nano!("PIN", "info", "Hermes pool: {} cores", p.count);
-    }
-    if let Some(p) = pool_for(CoreRole::Cortex) {
-        crate::slog_nano!("PIN", "info", "Cortex pool: {} cores", p.count);
-    }
-    if let Some(p) = pool_for(CoreRole::Jarbas) {
-        crate::slog_nano!("PIN", "info", "Jarbas pool: {} cores", p.count);
-    }
+    let p = pool_for(CoreRole::Hermes);
+    crate::slog_nano!("PIN", "info", "Hermes pool: {} cores", p.count);
+    let p = pool_for(CoreRole::Cortex);
+    crate::slog_nano!("PIN", "info", "Cortex pool: {} cores", p.count);
+    let p = pool_for(CoreRole::Jarbas);
+    crate::slog_nano!("PIN", "info", "Jarbas pool: {} cores", p.count);
 }

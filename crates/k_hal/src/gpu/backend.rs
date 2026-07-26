@@ -2,6 +2,7 @@
 
 use alloc::vec::Vec;
 use crate::gpu::amd::AmdGpu;
+use crate::gpu::blit::{init_blit, run_blit_canary};
 use crate::gpu::canary::{self, CanaryResult};
 use crate::gpu::compute_abi::{BackendState, TensorOp};
 use crate::gpu::detect::{GpuInfo, GpuVendor};
@@ -192,6 +193,15 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
                 let bcs = BcsRing::probe(gpu.bar0 + pmoff);
                 k_nano::slog_hal!("GPU", "BACKEND", "Intel probe OK: {}", gpu.name);
                 *CURRENT_BACKEND.lock() = Some(GpuAccel::Intel(ring, bcs));
+                
+                // Initialize blit engine and run canary
+                unsafe { init_blit(gpu, pmoff); }
+                let blit_ok = unsafe { run_blit_canary(gpu) };
+                if blit_ok {
+                    k_nano::slog_hal!("GPU", "BACKEND", "blit canary PASS");
+                } else {
+                    k_nano::slog_hal!("GPU", "BACKEND", "blit canary FAIL — CPU fallback");
+                }
             } else {
                 *CURRENT_BACKEND.lock() = Some(GpuAccel::CpuOnly);
             }

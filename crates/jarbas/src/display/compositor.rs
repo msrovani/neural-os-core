@@ -29,6 +29,7 @@ use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
 use spin::Mutex;
+use crate::display::decorations;
 use crate::display::fb::DoubleBuffer;
 use crate::display::soul_mirror::{SoulMirrorRenderer, SoulMirrorState};
 use crate::display::workspaces::Workspaces;
@@ -120,11 +121,10 @@ pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, _w: usize, _
     draw_text(fb, x, y+135, "Scores", fb.info.width, 0,200,100);
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer { OrbBackground, HermesOverlay, AppWindows, DockBar }
 
-#[derive(Clone)]
-pub struct AppWindow { pub id: AppId, pub title: String, pub x: usize, pub y: usize, pub w: usize, pub h: usize, pub visible: bool, pub data: String, pub z: Layer }
+
 
 // Estado global do mouse para o compositor
 pub static MOUSE_X: spin::Mutex<usize> = spin::Mutex::new(640);
@@ -138,23 +138,7 @@ pub const TARGET_FRAME_TICKS: u64 = 3; // ~60 FPS (assumindo ~5ms/tick)
 #[derive(Clone)]
 pub struct WasmIcon { pub name: String, pub description: String, pub idx: usize }
 
-/// ADR-0058 S3 — janela de card declarativo (retida, genérica; sem enum AppId).
-pub struct CardWindow {
-    pub decl: crate::display::card::UiDeclaration,
-    pub buttons: Vec<crate::display::card::ButtonHit>,
-}
 
-/// Resultado de um clique sobre a área dos cards.
-pub enum CardClick {
-    /// Nenhum card sob o cursor (o compositor deve tratar dock/app).
-    Miss,
-    /// Clique no corpo do card (consome; só traz p/ o topo/foco).
-    Focus,
-    Close,
-    DragStart,
-    ResizeStart,
-    Button(u32, usize),
-}
 
 pub struct JarvisDesktop {
     // Compositor base
@@ -172,18 +156,17 @@ pub struct JarvisDesktop {
     pub windows: Vec<Window>,
     pub next_window_id: u64,
 
-    // Legacy (compatibilidade)
-    pub apps: Vec<AppWindow>,
+    // WASM skills (icons)
     pub wasm_skills: Vec<WasmIcon>,
     pub active: AppId,
     pub avatar_visible: bool,
     pub w: usize, pub h: usize, pub tick: u64,
     icon_cache: BTreeMap<String, [u8; 64]>,
-    // ADR-0058 S3: cards declarativos + estado de arraste/resize.
-    pub cards: Vec<CardWindow>,
-    dragging_card: Option<u32>,
+    // ADR-0065 FASE 1.1: card interaction state (temporary between click/eventbus)
+    pub card_hit_button: Option<(u32, usize)>,
+    dragging_card_id: Option<WindowId>,
     card_drag_off: (i32, i32),
-    resizing_card: Option<u32>,
+    resizing_card_id: Option<WindowId>,
     // Onda 7: Soul Mirror — visual afetivo do BEI.
     pub soul_mirror: SoulMirrorRenderer,
     // Diálogo de confirmação de desligamento (None = fechado).
@@ -227,16 +210,15 @@ impl JarvisDesktop {
             theme_mode: crate::display::theme::ThemeMode::Dark,
             windows: Vec::new(),
             next_window_id: 1,
-            apps: Vec::new(), 
             wasm_skills: Vec::new(), 
             active: AppId::None, 
             avatar_visible: true, 
             w, h, tick: 0, 
             icon_cache: BTreeMap::new(), 
-            cards: Vec::new(), 
-            dragging_card: None, 
-            card_drag_off: (0, 0), 
-            resizing_card: None, 
+            card_hit_button: None,
+            dragging_card_id: None,
+            card_drag_off: (0, 0),
+            resizing_card_id: None,
             soul_mirror: SoulMirrorRenderer::new(w, h), 
             power_dialog: false,
             drag_state: None,
@@ -267,13 +249,22 @@ impl JarvisDesktop {
 
         let window = Window {
             id,
+            app_id: match &content {
+                WindowContent::App(a) => Some(*a),
+                _ => None,
+            },
             content,
             rect,
             workspace: active_ws,
             focused: true,
             decorated: true,
             floating,
+            minimized: false,
+            maximized: false,
             title: alloc::string::String::from(title),
+            visible: true,
+            data: alloc::string::String::new(),
+            z: Layer::AppWindows,
         };
 
         let dock_app = match &window.content {
@@ -303,8 +294,8 @@ impl JarvisDesktop {
     }
 
     pub fn close_app_window(&mut self, id: AppId) {
-        if let Some(idx) = self.apps.iter().position(|a| a.id == id) {
-            self.apps[idx].visible = false;
+        if let Some(win) = self.windows.iter_mut().find(|w| w.app_id == Some(id)) {
+            win.visible = false;
         }
     }
 
@@ -406,14 +397,14 @@ impl JarvisDesktop {
         // ═══════════════════════════════════════════════════════
         // LAYER 2b: Cards declarativos (ADR-0058) — por cima das janelas
         // ═══════════════════════════════════════════════════════
-        for i in 0..self.cards.len() {
-            let decl = self.cards[i].decl.clone();
-            let hits = crate::display::card::render_card(&mut self.fb, &decl);
-            self.cards[i].buttons = hits;
-            // Handle de resize (canto inf-dir).
-            let hx = (decl.x + decl.w - 10).max(0) as usize;
-            let hy = (decl.y + decl.h - 10).max(0) as usize;
-            self.fb.fill_rect(hx, hy, 10, 10, 0, 120, 180);
+        for win in &self.windows {
+            if let WindowContent::Card(ref decl) = win.content {
+                let _hits = crate::display::card::render_card(&mut self.fb, decl);
+                // Handle de resize (canto inf-dir).
+                let hx = (decl.x + decl.w - 10).max(0) as usize;
+                let hy = (decl.y + decl.h - 10).max(0) as usize;
+                self.fb.fill_rect(hx, hy, 10, 10, 0, 120, 180);
+            }
         }
 
         // ═══════════════════════════════════════════════════════
@@ -422,7 +413,7 @@ impl JarvisDesktop {
         self.dock.render(&mut self.fb, theme);
 
         // Notifications (top-right)
-        self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 });
+        self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
 
         // Botão OFF — canto superior direito (sempre visível)
         {
@@ -499,12 +490,21 @@ if let Some(banner) = *POWER_BANNER.lock() {
     // ── Métodos cosméticos do WM (ADR-0065) ────────────────────────────
 
     pub fn register_app(&mut self, app_id: AppId, title: &str, layer: Layer) {
-        if self.apps.iter().any(|a| a.id == app_id) { return; }
-        self.apps.push(AppWindow {
-            id: app_id,
+        if self.windows.iter().any(|w| w.app_id == Some(app_id)) { return; }
+        let next_id = self.next_window_id;
+        self.next_window_id += 1;
+        self.windows.push(Window {
+            id: WindowId(next_id),
+            app_id: Some(app_id),
+            content: WindowContent::App(app_id),
+            rect: Rect { x: 0, y: 28, width: 400, height: 300 },
+            workspace: self.workspaces.active,
+            focused: false,
+            decorated: true,
+            floating: false,
+            minimized: false,
+            maximized: false,
             title: alloc::string::String::from(title),
-            x: 0, y: 28,
-            w: 400, h: 300,
             visible: false,
             data: alloc::string::String::new(),
             z: layer,
@@ -512,10 +512,10 @@ if let Some(banner) = *POWER_BANNER.lock() {
     }
 
     pub fn ensure_hermes_overlay(&mut self) {
-        if !self.apps.iter().any(|a| a.id == AppId::HermesChat) {
+        if !self.windows.iter().any(|w| w.app_id == Some(AppId::HermesChat)) {
             self.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
         }
-        if let Some(chat) = self.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+        if let Some(chat) = self.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
             chat.visible = true;
         }
     }
@@ -528,69 +528,105 @@ if let Some(banner) = *POWER_BANNER.lock() {
     pub fn close_power_dialog(&mut self) { self.power_dialog = false; }
 
     pub fn spawn_card(&mut self, decl: crate::display::card::UiDeclaration) {
-        self.cards.push(CardWindow { decl, buttons: Vec::new() });
+        let id = WindowId(self.next_window_id);
+        self.next_window_id += 1;
+        let title = decl.title.clone();
+        let rect = Rect { x: decl.x, y: decl.y, width: decl.w as u32, height: decl.h as u32 };
+        self.windows.push(Window {
+            id,
+            app_id: None,
+            content: WindowContent::Card(decl),
+            rect,
+            workspace: self.workspaces.active,
+            focused: false,
+            decorated: false,
+            floating: true,
+            minimized: false,
+            maximized: false,
+            title,
+            visible: true,
+            data: alloc::string::String::new(),
+            z: Layer::AppWindows,
+        });
     }
 
-    pub fn card_click(&mut self, cx: i32, cy: i32) -> CardClick {
-        for i in (0..self.cards.len()).rev() {
-            let d = &self.cards[i].decl;
-            if cx >= d.x && cx < d.x + d.w && cy >= d.y && cy < d.y + d.h {
-                let (crx, cry, crw, crh) = d.close_rect();
-                if d.closable && cx >= crx && cx < crx + crw && cy >= cry && cy < cry + crh {
-                    self.cards.remove(i);
-                    return CardClick::Close;
-                }
-                for btn in &self.cards[i].buttons {
-                    if cx >= btn.x && cx < btn.x + btn.w && cy >= btn.y && cy < btn.y + btn.h {
-                        return CardClick::Button(d.id, btn.index);
+    pub fn card_click(&mut self, cx: i32, cy: i32) -> &'static str {
+        self.card_hit_button = None;
+        for i in (0..self.windows.len()).rev() {
+            let content = self.windows[i].content.clone();
+            if let WindowContent::Card(ref decl) = content {
+                if cx >= decl.x && cx < decl.x + decl.w && cy >= decl.y && cy < decl.y + decl.h {
+                    // Close button
+                    let (crx, cry, crw, crh) = decl.close_rect();
+                    if decl.closable && cx >= crx && cx < crx + crw && cy >= cry && cy < cry + crh {
+                        self.windows.remove(i);
+                        return "close";
                     }
+                    // Resize handle (bottom-right corner)
+                    let hx = decl.x + decl.w - 10;
+                    let hy = decl.y + decl.h - 10;
+                    if cx >= hx && cx < hx + 10 && cy >= hy && cy < hy + 10 {
+                        self.resizing_card_id = Some(self.windows[i].id);
+                        return "resize";
+                    }
+                    // Title bar drag
+                    if cy < decl.y + 22 {
+                        self.dragging_card_id = Some(self.windows[i].id);
+                        self.card_drag_off = (cx - decl.x, cy - decl.y);
+                        return "drag";
+                    }
+                    // Button check — compute hits via render_card (render is overwritten next frame)
+                    let hits = crate::display::card::render_card(&mut self.fb, decl);
+                    for btn in &hits {
+                        if cx >= btn.x && cx < btn.x + btn.w && cy >= btn.y && cy < btn.y + btn.h {
+                            self.card_hit_button = Some((decl.id, btn.index));
+                            return "btn";
+                        }
+                    }
+                    return "focus";
                 }
-                let hx = d.x + d.w - 10;
-                let hy = d.y + d.h - 10;
-                if cx >= hx && cx < hx + 10 && cy >= hy && cy < hy + 10 {
-                    self.resizing_card = Some(i as u32);
-                    return CardClick::ResizeStart;
-                }
-                if cy < d.y + 22 {
-                    self.dragging_card = Some(i as u32);
-                    self.card_drag_off = (cx - d.x, cy - d.y);
-                    return CardClick::DragStart;
-                }
-                return CardClick::Focus;
             }
         }
-        CardClick::Miss
+        "miss"
     }
 
     pub fn card_drag_step(&mut self, mx: i32, my: i32, btn_down: bool) {
-        if !btn_down { self.dragging_card = None; return; }
-        if let Some(idx) = self.dragging_card {
-            if let Some(card) = self.cards.get_mut(idx as usize) {
-                card.decl.x = mx - self.card_drag_off.0;
-                card.decl.y = my - self.card_drag_off.1;
+        if !btn_down { self.dragging_card_id = None; return; }
+        if let Some(card_id) = self.dragging_card_id {
+            if let Some(win) = self.windows.iter_mut().find(|w| w.id == card_id) {
+                if let WindowContent::Card(ref mut decl) = win.content {
+                    decl.x = mx - self.card_drag_off.0;
+                    decl.y = my - self.card_drag_off.1;
+                    win.rect.x = decl.x;
+                    win.rect.y = decl.y;
+                }
             }
         }
     }
 
     pub fn card_resize_step(&mut self, mx: i32, my: i32, btn_down: bool) {
-        if !btn_down { self.resizing_card = None; return; }
-        if let Some(idx) = self.resizing_card {
-            if let Some(card) = self.cards.get_mut(idx as usize) {
-                card.decl.w = (mx - card.decl.x).max(100);
-                card.decl.h = (my - card.decl.y).max(60);
+        if !btn_down { self.resizing_card_id = None; return; }
+        if let Some(card_id) = self.resizing_card_id {
+            if let Some(win) = self.windows.iter_mut().find(|w| w.id == card_id) {
+                if let WindowContent::Card(ref mut decl) = win.content {
+                    decl.w = (mx - decl.x).max(100);
+                    decl.h = (my - decl.y).max(60);
+                    win.rect.width = decl.w.max(0) as u32;
+                    win.rect.height = decl.h.max(0) as u32;
+                }
             }
         }
     }
 
     pub fn toggle_app(&mut self, app_id: AppId) {
-        // Count visible apps first (immutable), then mutate via index.
-        let cnt = self.apps.iter().filter(|a| a.visible).count();
-        let idx = self.apps.iter().position(|a| a.id == app_id);
+        // Count visible windows first (immutable), then mutate via index.
+        let cnt = self.windows.iter().filter(|w| w.visible).count();
+        let idx = self.windows.iter().position(|w| w.app_id == Some(app_id));
         if let Some(idx) = idx {
-            self.apps[idx].visible = !self.apps[idx].visible;
-            if self.apps[idx].visible {
-                self.apps[idx].x = 40 + (cnt % 5) * 20;
-                self.apps[idx].y = 60 + (cnt % 4) * 20;
+            self.windows[idx].visible = !self.windows[idx].visible;
+            if self.windows[idx].visible {
+                self.windows[idx].rect.x = (40 + (cnt % 5) * 20) as i32;
+                self.windows[idx].rect.y = (60 + (cnt % 4) * 20) as i32;
             }
         }
         if app_id != AppId::HermesChat {
@@ -631,26 +667,7 @@ fn draw_window_fb(fb: &mut DoubleBuffer, win: &Window, theme: &Theme, scr_w: usi
         win.rect.width as usize, win.rect.height as usize,
         bg_color.0, bg_color.1, bg_color.2,
     );
-    if win.decorated {
-        let title_bar_h = 24;
-        fb.fill_rect(
-            win.rect.x as usize, win.rect.y as usize,
-            win.rect.width as usize, title_bar_h,
-            theme.accent.0, theme.accent.1, theme.accent.2,
-        );
-        draw_text(fb, win.rect.x as usize + 4, win.rect.y as usize + 4,
-            &win.title, scr_w, theme.fg.0, theme.fg.1, theme.fg.2);
-        let cx = win.rect.x as usize + win.rect.width as usize - 20;
-        fb.fill_rect(cx, win.rect.y as usize + 3, 16, 16,
-            theme.error.0, theme.error.1, theme.error.2);
-        draw_text(fb, cx + 4, win.rect.y as usize + 4, "X", scr_w,
-            theme.fg.0, theme.fg.1, theme.fg.2);
-        fb.fill_rect(
-            win.rect.x as usize, win.rect.y as usize,
-            win.rect.width as usize, 1,
-            theme.border.0, theme.border.1, theme.border.2,
-        );
-    }
+    decorations::draw_window_decorations(fb, win, theme, scr_w);
 }
 
 fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, scr_h: usize) {
@@ -710,18 +727,19 @@ fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, 
     }
 }
 
-fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr_h: usize) {
-    let cx = app.x + 4; let cy = app.y + 28;
-    match app.id {
+fn render_app_content(fb: &mut DoubleBuffer, win: &Window, scr_w: usize, _scr_h: usize) {
+    let cx = win.rect.x as usize + 4; let cy = win.rect.y as usize + 28;
+    let h = win.rect.height as usize;
+    match win.app_id() {
         AppId::HermesChat => {
-            let lines: Vec<&str> = app.data.lines().collect();
-            for (i, line) in lines.iter().enumerate().take(((app.h - 40) / 16).max(1)) { draw_text(fb, cx, cy + i * 16, line, scr_w, 180, 200, 220); }
-            draw_text(fb, cx, cy + (app.h - 40) / 16, "> ", scr_w, 0, 255, 100);
+            let lines: Vec<&str> = win.data.lines().collect();
+            for (i, line) in lines.iter().enumerate().take(((h - 40) / 16).max(1)) { draw_text(fb, cx, cy + i * 16, line, scr_w, 180, 200, 220); }
+            draw_text(fb, cx, cy + (h - 40) / 16, "> ", scr_w, 0, 255, 100);
         }
         AppId::Settings => {
             let items = ["[1] Theme", "[2] Sound", "[3] Memory: BGE", "[4] Avatar", "[5] Network"];
             for (i, item) in items.iter().enumerate() { draw_text(fb, cx, cy + i * 16, item, scr_w, 180, 200, 220); }
-            if app.data.contains("[2]") || app.data.contains("sound") || app.data.contains("som") {
+            if win.data.contains("[2]") || win.data.contains("sound") || win.data.contains("som") {
                 let vol = crate::audio::settings::AUDIO_VOLUME.load(core::sync::atomic::Ordering::Relaxed);
                 let clone = if crate::audio::settings::VOICE_CLONE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) { "ON" } else { "OFF" };
                 let voice = crate::audio::settings::CURRENT_VOICE.lock();
@@ -746,7 +764,7 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr
         AppId::Ide => {
             draw_text(fb, cx, cy, "BitNet IDE v0.1", scr_w, 0, 200, 255);
             draw_text(fb, cx, cy + 20, "Describe a skill:", scr_w, 180, 200, 220);
-            draw_text(fb, cx, cy + 40, &app.data, scr_w, 200, 200, 200);
+            draw_text(fb, cx, cy + 40, &win.data, scr_w, 200, 200, 200);
             draw_text(fb, cx, cy + 60, "[Enter] Generate WASM skill", scr_w, 100, 200, 100);
         }
         AppId::WasmSkill(idx) => {
@@ -768,7 +786,7 @@ fn render_app_content(fb: &mut DoubleBuffer, app: &AppWindow, scr_w: usize, _scr
             fb.fill_rect(cx, cy, 200, 150, 30, 35, 40);
             draw_text(fb, cx + 4, cy + 4, "[CAM]", scr_w, 0, 200, 100);
             draw_text(fb, cx + 4, cy + 140, "[F10] Stop capture", scr_w, 200, 100, 100);
-            if let Some(desc) = app.data.split('\n').next() {
+            if let Some(desc) = win.data.split('\n').next() {
                 draw_text(fb, cx + 60, cy + 70, &desc, scr_w, 180, 200, 200);
             }
         }

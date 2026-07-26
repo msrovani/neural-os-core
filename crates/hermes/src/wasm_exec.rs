@@ -150,3 +150,9 @@ mod tests {
         assert_eq!(vm.run(&code).unwrap(), 1);
     }
 }
+
+
+
+
+
+

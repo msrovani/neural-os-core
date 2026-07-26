@@ -14,6 +14,7 @@ use event_bus::latent::{LatentReceiver, TOPIC_THOUGHT_LLM};
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 
 use crate::hermes::{self, IntentCache, WorkflowEngine};
+use crate::memory_store;
 use k_ai::conversation;
 use k_nano::{println, kjson};
 use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
@@ -1044,19 +1045,19 @@ impl Agent for HermesAgent {
                         }
                     }
                 }
-                hermes::Command::ShowSkills => crate::memory_store::skills_l0(),
-                hermes::Command::SkillView(ref name) => crate::memory_store::skill_view(name),
+                hermes::Command::ShowSkills => memory_store::skills_l0(),
+                hermes::Command::SkillView(ref name) => memory_store::skill_view(name),
                 hermes::Command::Remember(ref fact) => {
-                    match crate::memory_store::remember(fact) {
+                    match memory_store::remember(fact) {
                         Ok(m) => m,
                         Err(e) => alloc::format!("[MEMORY] fail: {}", e),
                     }
                 }
                 hermes::Command::Soul(ref text) => {
                     if text.trim().is_empty() {
-                        crate::memory_store::read_soul()
+                        memory_store::read_soul()
                     } else {
-                        match crate::memory_store::write_soul(text) {
+                        match memory_store::write_soul(text) {
                             Ok(()) => alloc::format!("[SOUL] Hermes orchestrator saved ({} chars)", text.len()),
                             Err(e) => alloc::format!("[SOUL] fail: {}", e),
                         }
@@ -1064,15 +1065,15 @@ impl Agent for HermesAgent {
                 }
                 hermes::Command::Persona(ref text) => {
                     if text.trim().is_empty() {
-                        crate::memory_store::persona_slice()
+                        memory_store::persona_slice()
                     } else {
-                        match crate::memory_store::write_persona(text) {
+                        match memory_store::write_persona(text) {
                             Ok(()) => alloc::format!("[PERSONA] Jarbas saved ({} chars)", text.len()),
                             Err(e) => alloc::format!("[PERSONA] fail: {}", e),
                         }
                     }
                 }
-                hermes::Command::MemoryShow => crate::memory_store::prompt_slice(),
+                hermes::Command::MemoryShow => memory_store::prompt_slice(),
                 hermes::Command::SessionSearch(ref q) => {
                     crate::cognitive_bridge::session_search(q, 8)
                 }
@@ -2407,3 +2408,9 @@ impl Skill for DiagnosticSkill {
         Ok(report.into_bytes())
     }
 }
+
+
+
+
+
+

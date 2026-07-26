@@ -104,5 +104,8 @@ overflow-checks = true
 [build-dependencies]
 llvm-tools = "0.1.1"
 
+[lints.rust]
+unexpected_cfgs = { level = "allow" }
+
 [package.metadata.docs.rs]
 rustc-args = ["--cfg", "docsrs_dummy_build"]

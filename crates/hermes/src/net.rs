@@ -257,6 +257,28 @@ pub unsafe fn http_get_raw(host: [u8; 4], port: u16, data: &[u8]) -> Option<Vec<
     None
 }
 
+/// Persiste config DHCP (gateway_ip, dns_ip) no SGDB `sys/net_config`.
+/// Formato: 8 bytes raw (gw_ip4 + dns_ip4). Chamado pós-DHCP OK.
+pub fn persist_dhcp_config() {
+    let cfg = NET_CONFIG.lock();
+    if !cfg.configured { return; }
+    let mut buf = [0u8; 8];
+    buf[0..4].copy_from_slice(&cfg.gateway_ip);
+    buf[4..8].copy_from_slice(&cfg.dns_ip);
+    let _ = k_ai::sgdb::store::put_kv("sys/net_config", &buf);
+}
+
+/// Restaura config DHCP do SGDB. Retorna true se restaurou.
+pub fn restore_dhcp_config() -> bool {
+    let Ok(Some(buf)) = k_ai::sgdb::store::get_kv("sys/net_config") else { return false; };
+    if buf.len() < 8 { return false; }
+    let mut cfg = NET_CONFIG.lock();
+    cfg.gateway_ip.copy_from_slice(&buf[0..4]);
+    cfg.dns_ip.copy_from_slice(&buf[4..8]);
+    cfg.configured = true;
+    true
+}
+
 pub unsafe fn ping(_target_ip: [u8; 4]) -> Option<u64> { None }
 
 pub fn run_network_diagnostics() -> alloc::string::String {
@@ -315,3 +337,9 @@ impl skill_registry::Skill for NetDiagnosticSkill {
         Ok(report.into_bytes())
     }
 }
+
+
+
+
+
+

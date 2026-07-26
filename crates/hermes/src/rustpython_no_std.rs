@@ -16,3 +16,9 @@ pub const RECOMMENDED_ROUTE: &str = "micropython_wasm";
 pub fn viability_report() -> &'static str {
     "[RustPython] no_std nativo indisponível — use MicroPython/WASM (Sprint 106-6)"
 }
+
+
+
+
+
+

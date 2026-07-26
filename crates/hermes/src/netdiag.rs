@@ -86,3 +86,9 @@ pub fn run_network_test() -> String {
     report.push_str("\n======= FIM DIAGNOSTICO =======\n");
     report
 }
+
+
+
+
+
+

@@ -443,3 +443,9 @@ pub fn cognitive_adaptation(report: &XeonTopologyReport) -> AdaptationPolicy {
     log_adaptation_policy(&policy);
     policy
 }
+
+
+
+
+
+

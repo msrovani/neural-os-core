@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### SGDB Migration Round 2 — TLSPINS + SelfHeal Checkpoint (2026-07-25) — SESSION_220
+- **TLSPINS.BIN** (TLS trust pins): FAT32 → SGDB `sys/tls_pins` (dual-path: SGDB primary + FAT32 fallback). `load_pins_from_fat()` now tries SGDB first; `persist_pins_to_fat()` writes both.
+- **SelfHeal checkpoint**: RAM-only → SGDB `sys/checkpoint` (serialize/deserialize full 33KB bitmap + heap/CR3/driver state). `save_checkpoint()` persists to SGDB; `restore_checkpoint()` loads from SGDB with RAM fallback.
+- **Pre-existing k_nano SMP fixes** (ADR-0057 WS-F): `AtomicU8` import, `ApPcpuArray` field visibility, `init_ap_ist()` allocator fix, `init_ap_tss()` call signature.
+
 ### E0–E4 Emagrecer completo (2026-07-25) — SESSION_217
 - **E1c:** `usb_msc` deletado do bin, singletons via `k_nano::globals::USB_MSC`; `virtio_net` = `pub use k_nano::virtio_net::*` + trait `rx_queue_phys()`/`tx_queue_phys()`.
 - **E2:** `BootHandoff` trait em `k_nano/src/boot_handoff.rs`; `kernel_boot()` refatorada de `boot_info: Option<&BootInfo>` → `handoff: &impl BootHandoff` (7+ branches eliminadas).
@@ -9,6 +14,15 @@
 - **E4:** Audio ADR-0045 truth migrada para `crates/jarbas/src/audio/` (21 arquivos sincronizados com path fixes). `load_status` movido para `k_nano`. Bin = `pub use jarbas_crate::audio::*;` — 20 arquivos duplicados deletados.
 - **Outros:** `rust-toolchain.toml` corrigido para MSVC (GNU causava `dlltool.exe not found`).
 - **cargo check --release --workspace:** 0 errors.
+
+### ADR-0062 P31/P18/P27/P7/P16/P14/P35 (2026-07-25) — SESSION_218
+- **P31 Notifications:** Toast ring buffer → compositor overlay (TOPIC_TOAST, fade-out 120 ticks). `clipboard_notify::toast_push()`/`toast_get_active()` + render no `DisplayAgent::tick()`.
+- **P18 NTP:** Removido gate `TRIED` one-shot; `try_sync()` agora faz resync periódico a cada 3600 ticks (~200s), rotação de servidores (`time.cloudflare.com` → `time.google.com` → `pool.ntp.org` → fallback IP), cooldown 540 ticks pós-falha. Job `ntp_resync` no CronAgent.
+- **P27 Virtual consoles:** 6 buffers independentes (80×50 + scrollback 200 linhas), `Ctrl+Alt+F1–F6` via `InputAgent` (scancodes 0x3B–0x40), render no compositor com indicador `F{n}` no canto.
+- **P7 i225 NIC:** Raw ptrs p/ descritores (fix UB packed struct), `kick_rx()` (disable→clear→re-enable→RDT=N-1), `prove_rx()` (ARP who-has + wait TX DD + poll RX DD), `any_rx_dd()`/`count_rx_dd()`, `clflush`+`lfence` antes de ler DD, Bus Master re-check pós-reset.
+- **P16 Async executor:** `std::future::Future` + `Waker` + `RawWakerVTable` compatíveis, `AsyncExecutor::spawn()`/`poll_task()`, APIC timer handler → `process_wakes()`, `init_async_rt()` no boot.
+- **P14 IPC MessageBus:** `mailbox_drain(agent, 8)` no scheduler `run()` para todos agentes; mailboxes abertas no registro + respawn.
+- **P35 fw_cfg:** `read_file(selector)`, `read_file_by_name(name)` (scan dir 0x0019), `write_file(selector, data)` — modo I/O legacy (0x510/0x511). `boot_smoke()` testa leitura de diretório.
 
 ### ADR-0075 Emagrecer neural-kernel (2026-07-23) — SESSION_215
 - **Plano cirúrgico E0–E4:** E0 (freeze CI) → E1a (cortex/bpe/gguf) → E1b (agents/neural_fs) → E1c (boot_logger/virtio/usb) → E2 (Limine handoff) → E3 (infra crates) → E4 (audio ADR-0045).

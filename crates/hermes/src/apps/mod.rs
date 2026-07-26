@@ -41,3 +41,9 @@ pub fn init_apps() {
     let names = app_names();
     k_nano::slog_hermes!("APPS", "info", "{} apps registrados no Hermes Chat.", names.len());
 }
+
+
+
+
+
+

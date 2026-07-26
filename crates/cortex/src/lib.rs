@@ -51,5 +51,3 @@ pub mod kv_h2o;
 pub mod moe;
 pub mod gguf;
 
-/// ADR-0064 RAG TF-IDF — re-export (emagreçer: lógica na crate vector-db).
-pub use vector_db;

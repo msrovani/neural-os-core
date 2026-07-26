@@ -1545,6 +1545,32 @@ pub(crate) fn kernel_boot(
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
 
+    // ADR-0061 Phase 3: Probe hardware profile after platform init (SRAT + SMP ready)
+    {
+        let hw_report = k_nano::hardware::probe::probe();
+        k_nano::hardware::probe::apply_strategy(&hw_report);
+        k_nano::slog_bin!(
+            "ADAPT", "info",
+            "ADR-0061 profile={} simd={}bit topology={:?}",
+            hw_report.profile.name(),
+            k_nano::hardware::probe::recommended_simd_width(),
+            hw_report.vendor
+        );
+        let simd_width = k_nano::hardware::probe::recommended_simd_width();
+        let expert_size = k_nano::hardware::probe::recommended_expert_size();
+        k_nano::slog_bin!(
+            "ADAPT", "info",
+            "SIMD dispatch={}bit expert_size={}KB",
+            simd_width, expert_size / 1024
+        );
+        // MoE expert sizing based on probe
+        if hw_report.numa_topology.is_some() {
+            k_nano::slog_bin!("ADAPT", "info", "NUMA detected — per-node frame allocator active");
+        }
+        // Log core pinning pools after adaptation
+        k_nano::core_pinning::log_pinning_state();
+    }
+
     publish_boot_phase(BootPhase::DriverInit, "Drivers de HW (NIC/ATA/USB/GPU)");
 
     // Detecta ambiente: QEMU sandbox vs HW real
@@ -1870,14 +1896,6 @@ pub(crate) fn kernel_boot(
     let _ = hermes_crate::wasmi_rt::self_test();
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
     let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
-    // ADR-0064 F1: VectorStore TF-IDF demo
-    if cortex_crate::vector_db::demo() {
-        k_nano::slog_bin!("vectordb", "demo", "PASS");
-        crate::boot_logger::log("BOOT: [vectordb] demo PASS");
-    } else {
-        k_nano::slog_bin!("vectordb", "demo", "FAIL");
-        crate::boot_logger::log("BOOT: [vectordb] demo FAIL");
-    }
     // ADR-0063 F0/F1a: TickvLite mount + smoke (NVMe ou RAM)
     if k_nano::storage::tickv_smoke() {
         k_nano::slog_bin!(
@@ -1887,18 +1905,6 @@ pub(crate) fn kernel_boot(
             k_nano::storage::backend_name()
         );
         crate::boot_logger::log("BOOT: [TICKV] put/get smoke PASS");
-        // ADR-0064↔0063: load VectorStore via SgdbStore
-        if let Ok(Some(bytes)) = k_ai::sgdb::get_vdb_blob() {
-            match cortex_crate::vector_db::global_load_bytes(&bytes) {
-                Ok(()) => {
-                    k_nano::slog_bin!("vectordb", "load", "from TicKV vdb/blob OK");
-                    crate::boot_logger::log("BOOT: [vectordb] loaded from TicKV");
-                }
-                Err(e) => {
-                    k_nano::slog_bin!("vectordb", "load", "FAIL {}", e);
-                }
-            }
-        }
     } else {
         k_nano::slog_bin!("TICKV", "smoke", "FAIL or skip");
         crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");

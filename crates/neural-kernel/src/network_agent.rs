@@ -218,6 +218,14 @@ pub fn bootstrap_early() {
 
     // L3: user/slirp → static; bridge/TAP → DHCP (never force 10.0.2.15 on bridge)
     if s.bridge_mode {
+        // Tenta restaurar config DHCP anterior (pula warmup de 27s)
+        if hermes_crate::net::restore_dhcp_config() {
+            log(0, "bootstrap_early L3: cached DHCP config restored from SGDB, skipping DHCP poll");
+            publish_configured();
+            s.static_applied = true;
+            s.phase = 7;
+            return;
+        }
         log(0, "bootstrap_early L3: DHCP poll (bridge/TAP)");
         let mut dhcp_ok = false;
         if let Some(ref mut ns) = *NETSTACK.lock() {
@@ -234,8 +242,8 @@ pub fn bootstrap_early() {
                         cfg.dns_ip = dns;
                     }
                     drop(cfg);
+                    hermes_crate::net::persist_dhcp_config();
                     publish_configured();
-                    dhcp_ok = true;
                     log(
                         0,
                         &alloc::format!(
@@ -611,6 +619,7 @@ pub fn network_agent_tick() {
                                     cfg.ip = [10, 0, 2, 15];
                                 }
                                 drop(cfg);
+                                hermes_crate::net::persist_dhcp_config();
                                 log(
                                     tick,
                                     &alloc::format!(

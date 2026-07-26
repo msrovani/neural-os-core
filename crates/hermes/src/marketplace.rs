@@ -245,3 +245,9 @@ pub fn rebuild_index() -> String {
     let ok = crate::globals::write_vfs(&path, idx.as_bytes()).is_ok();
     format!("[MARKET] INDEX.json entries={} vfs_ok={}", list.len(), ok)
 }
+
+
+
+
+
+

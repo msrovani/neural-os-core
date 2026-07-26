@@ -10,7 +10,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use spin::Mutex;
-use k_nano::fs::FilesystemAgent;
+use crate::fs::FilesystemAgent;
 const HISTORY_MAX: usize = 50;
 
 static CHAT_HISTORY: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -21,7 +21,7 @@ pub struct HermesFsAgent;
 
 impl HermesFsAgent {
     pub fn new() -> Self {
-        k_nano::slog_hermes!("CHAT", "FS", "/chat/ pronto.");
+        k_nano::slog_bin!("CHAT", "FS", "/chat/ pronto.");
         HermesFsAgent
     }
 }
@@ -67,7 +67,7 @@ impl FilesystemAgent for HermesFsAgent {
                 CHAT_COUNTER.fetch_add(1, Ordering::Relaxed);
 
                 // Publish to EventBus for LLM processing
-                let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                let _ = k_nano::globals::EVENT_BUS.publish(event_bus::Event {
                     id: CHAT_COUNTER.load(Ordering::Relaxed),
                     topic: String::from(cortex::cortex::TOPIC_LLM_REQUEST),
                     payload: data.to_vec(),
@@ -81,14 +81,14 @@ impl FilesystemAgent for HermesFsAgent {
                 hist.push_back(reply);
                 if hist.len() > HISTORY_MAX { hist.pop_front(); }
 
-                k_nano::slog_hermes!("CHAT", "FS", "Sent: {}", text.trim());
+                k_nano::slog_bin!("CHAT", "FS", "Sent: {}", text.trim());
                 Ok(())
             }
             "clear" | "reset" => {
                 let mut hist = CHAT_HISTORY.lock();
                 hist.clear();
                 LAST_RESPONSE.lock().clear();
-                k_nano::slog_hermes!("CHAT", "FS", "History cleared.");
+                k_nano::slog_bin!("CHAT", "FS", "History cleared.");
                 Ok(())
             }
             _ => Err("file not found"),
@@ -106,3 +106,10 @@ impl FilesystemAgent for HermesFsAgent {
         }
     }
 }
+
+
+
+
+
+
+

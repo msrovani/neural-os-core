@@ -66,3 +66,9 @@ pub fn maybe_auto_skill(name: &str) -> Option<String> {
     }
     None
 }
+
+
+
+
+
+

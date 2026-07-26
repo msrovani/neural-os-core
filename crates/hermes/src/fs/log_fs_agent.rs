@@ -4,15 +4,14 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use crate::fs::RingBufStore;
-use k_nano::fs::FilesystemAgent;
+use crate::fs::{FilesystemAgent, RingBufStore};
 static STORE: RingBufStore = RingBufStore::new(256 * 1024);
 
 pub struct LogFsAgent;
 
 impl LogFsAgent {
     pub fn new() -> Self {
-        k_nano::slog_hermes!("LOG", "FS", "/logs/ pronto. Max: 256KB (ring)");
+        k_nano::slog_bin!("LOG", "FS", "/logs/ pronto. Max: 256KB (ring)");
         LogFsAgent
     }
 }
@@ -47,3 +46,10 @@ impl FilesystemAgent for LogFsAgent {
         }
     }
 }
+
+
+
+
+
+
+

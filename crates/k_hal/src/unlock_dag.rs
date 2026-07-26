@@ -25,6 +25,8 @@ pub enum CapToken {
     WifiAssociated = 13,
     /// Labor 15 — xHCI hub enumerated (USB_HUB).
     UsbHubOk = 14,
+    /// Blit 2D acelerado verificado via canário gradiente.
+    GpuBlitReady = 15,
 }
 
 impl CapToken {
@@ -45,6 +47,7 @@ impl CapToken {
             CapToken::BootSmokeOk => "BootSmokeOk",
             CapToken::WifiAssociated => "WifiAssociated",
             CapToken::UsbHubOk => "UsbHubOk",
+            CapToken::GpuBlitReady => "GpuBlitReady",
         }
     }
 

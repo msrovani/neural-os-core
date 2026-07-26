@@ -1571,6 +1571,8 @@ pub unsafe fn init_platform_sync() {
     crate::display::fb::boot_ckpt(20, "PLATFORM smp");
     // Nao forca SMP: trampoline stub → BSP only (sem hang SIPI)
     crate::smp::init_smp();
+    // ADR-0061: Initialize core pinning pools after SMP (k_nano owns core_pinning + smp)
+    k_nano::core_pinning::init_pools(k_nano::smp::total_cores());
     // STI so depois de SMP — timer IRQ nao pode reentrar serial/FB spinlock
     x86_64::instructions::interrupts::enable();
     PLATFORM_READY.store(true, Ordering::Release);

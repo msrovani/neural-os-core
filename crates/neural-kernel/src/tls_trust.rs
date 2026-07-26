@@ -1,6 +1,6 @@
 //! ADR-0016 N4 + ADR-0071 — trust híbrido: pins (hosts conhecidos) + TOFU (resto).
 //! Identidade = SHA-256(leaf X.509 DER). CertificateVerify = ECDSA P-256 + RSA-PSS (L12/L23).
-//! Persistência: RAM + FAT `TLSPINS.BIN` (non-fatal sem disco).
+//! Persistência: RAM + SGDB (primário) + FAT `TLSPINS.BIN` (fallback, non-fatal sem disco).
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -344,8 +344,13 @@ fn tls13_certverify_msg(transcript: Sha256) -> ([u8; 130], usize) {
     (msg, 64 + ctx.len() + 32)
 }
 
-/// Carrega pins de `TLSPINS.BIN` (ATA FAT). Non-fatal.
+/// Carrega pins de SGDB (primário) ou FAT (fallback). Non-fatal.
 pub fn load_pins_from_fat() {
+    // Try SGDB first
+    if load_pins_from_sgdb() {
+        return;
+    }
+    // Fall back to FAT32
     let Some(data) = crate::gguf::read_fat_range(PIN_FILE, 0, 4096) else {
         k_nano::slog_bin!("TLS", "info", "pins=FAT miss file={}", PIN_FILE);
         return;
@@ -364,6 +369,9 @@ pub fn load_pins_from_fat() {
 /// Persiste pins em FAT. Non-fatal.
 pub fn persist_pins_to_fat() {
     let blob = PINS.lock().serialize();
+    // Always write to SGDB
+    let _ = k_ai::sgdb::put_kv("sys/tls_pins", &blob);
+    // Also write to FAT32 (fallback)
     match crate::gguf::write_fat_file(PIN_FILE, &blob) {
         Ok(()) => {
             k_nano::slog_bin!(
@@ -382,6 +390,28 @@ pub fn persist_pins_to_fat() {
                 e,
                 PIN_FILE
             );
+        }
+    }
+}
+
+/// Carrega pins de SGDB. Non-fatal.
+fn load_pins_from_sgdb() -> bool {
+    if !k_ai::sgdb::ready() {
+        return false;
+    }
+    match k_ai::sgdb::get_kv("sys/tls_pins") {
+        Ok(Some(data)) => {
+            let n = PINS.lock().load_bytes(&data);
+            k_nano::slog_bin!("TLS", "info", "pins=SGDB load n={} bytes={}", n, data.len());
+            n > 0
+        }
+        Ok(None) => {
+            k_nano::slog_bin!("TLS", "info", "pins=SGDB miss");
+            false
+        }
+        Err(e) => {
+            k_nano::slog_bin!("TLS", "info", "pins=SGDB load error={:?}", e);
+            false
         }
     }
 }

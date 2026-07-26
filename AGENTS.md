@@ -287,6 +287,9 @@ Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 - **`ToString` em no_std (SESSION_217):** Importar explicitamente `use alloc::string::ToString;` — não está no prelude. Erros `method not found for &str` = trait faltando.
 - **Checkpoint SelfHeal v2 (SESSION_217):** `restore_checkpoint` agora captura CR3/PML4 (`x86_64::registers::control::Cr3::read().0.start_address()`), heap addr (0x_4000_0000_0000 + 512MB), FNV-1a hash de driver init flags. Ainda não restaura page tables (P09 pendente) — log diagnóstico apenas.
 - **Boot path Agency (SESSION_217):** Agency specs vazio quando sem AGENT.md assinados — fallback cria 2 AgentSpecs (`SystemDiagnostics`, `HwMonitor`) p/ garantir >0 agentes no boot log.
+- **Free function > method para render com borrow conflitante (SESSION_219):** `draw_window_fb(fb, win, theme, scr_w)` — função livre separa o borrow de `fb` (mutable) do borrow de `win` (immutable), evitando E0502 quando `&mut self` e `&self.windows[idx]` precisam coexistir.
+- **Index antes de mutable borrow (SESSION_219):** `self.apps.iter().position(|a| ...)` + acesso por índice resolve conflito `iter_mut` + `iter` no `toggle_app`. Computar count visível primeiro, depois mutar.
+- **const Theme com const fn (SESSION_219):** `Theme::new(...)` é `const fn` — `const COSMIC_DARK: Theme = Theme::new(...)` evita o `&temporary` pattern (E0515) de `current_theme()`.
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

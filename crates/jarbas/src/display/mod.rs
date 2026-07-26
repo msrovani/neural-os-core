@@ -26,6 +26,7 @@ pub mod gauges;
 pub mod metrics_agent;
 
 // FASE 1.1 — WM cosmic-like (ADR-0065)
+pub mod decorations;
 pub mod workspaces;
 pub mod focus;
 pub mod shortcuts;

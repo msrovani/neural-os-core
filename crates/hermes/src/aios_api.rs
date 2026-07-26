@@ -75,3 +75,9 @@ pub fn aios_net_http_get(url: &str) -> Result<String, &'static str> {
     // Integração completa via BrowserAgent no monólito; stub seguro para crate isolado.
     Err("aios_net.http_get: requer kernel runtime (BrowserAgent)")
 }
+
+
+
+
+
+

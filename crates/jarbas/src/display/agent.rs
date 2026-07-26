@@ -6,6 +6,8 @@ use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button, DragState};
+use alloc::vec::Vec;
+use crate::display::window::{Window, WindowContent};
 use crate::display::avatar::{AvatarState, JarvisAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 use crate::display::shortcuts::{KeyCombo, Modifiers, KeyCode, WmAction, SHORTCUTS};
@@ -81,7 +83,7 @@ impl DisplayAgent {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                 desktop.ensure_hermes_overlay();
-                if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                if let Some(chat) = desktop.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
                     chat.visible = true;
                     match mode {
                         OverlayMode::HitlConfirm => {
@@ -174,62 +176,62 @@ impl DisplayAgent {
         }
 
         let mut hit: &'static str = "miss";
-        let mut card_action: Option<(u32, usize)> = None;
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {
-            // ADR-0058 S3: cards ficam por cima — testa antes de dock/app.
+            // ADR-0065 FASE 1.1: cards via WindowContent::Card — check before dock/app.
             if (btn & 1) != 0 {
                 match desktop.card_click(cx as i32, cy as i32) {
-                    crate::display::compositor::CardClick::Close => {
+                    "close" => {
                         drop(comp);
                         return "card:close";
                     }
-                    crate::display::compositor::CardClick::DragStart => {
+                    "drag" => {
                         self.dragging = true;
-                        self.drag_id = AppId::None; // arraste de card é do compositor
+                        self.drag_id = AppId::None;
                         drop(comp);
                         return "card:drag";
                     }
-                    crate::display::compositor::CardClick::ResizeStart => {
+                    "resize" => {
                         self.dragging = true;
-                        self.drag_id = AppId::None; // resize de card é do compositor
+                        self.drag_id = AppId::None;
                         drop(comp);
                         return "card:resize";
                     }
-                    crate::display::compositor::CardClick::Button(id, idx) => {
-                        card_action = Some((id, idx));
+                    "btn" => {
+                        if let Some((id, idx)) = desktop.card_hit_button {
+                            let _ = EVENT_BUS.publish(event_bus::Event {
+                                id: 0,
+                                topic: alloc::string::String::from("CARD_ACTION"),
+                                payload: alloc::format!("{}:{}", id, idx).into_bytes(),
+                                token: event_bus::CapabilityToken::Legacy(1),
+                            });
+                        }
+                        drop(comp);
+                        return "card:btn";
                     }
-                    crate::display::compositor::CardClick::Focus => {
+                    "focus" => {
                         drop(comp);
                         return "card:focus";
                     }
-                    crate::display::compositor::CardClick::Miss => {}
+                    _ => {}
                 }
             }
-            if card_action.is_some() {
-                drop(comp);
-                if let Some((id, idx)) = card_action {
-                    let _ = EVENT_BUS.publish(event_bus::Event {
-                        id: 0,
-                        topic: alloc::string::String::from("CARD_ACTION"),
-                        payload: alloc::format!("{}:{}", id, idx).into_bytes(),
-                        token: event_bus::CapabilityToken::Legacy(1),
-                    });
-                }
-                return "card:btn";
-            }
-            let apps_clone = desktop.apps.clone();
+            let app_wins: Vec<Window> = desktop.windows.iter()
+                .filter(|w| matches!(w.content, WindowContent::App(_)))
+                .cloned()
+                .collect();
             let dock_y = desktop.h.saturating_sub(36);
             if cy >= dock_y {
                 hit = "dock";
-                for (idx, app) in apps_clone.iter().enumerate() {
-                    if !app.visible {
+                for (idx, win) in app_wins.iter().enumerate() {
+                    if !win.visible {
                         continue;
                     }
                     let rx = 10 + idx * 66;
                     if cx >= rx && cx <= rx + 60 {
-                        desktop.toggle_app(app.id);
-                        hit = match app.id {
+                        let aid = win.app_id();
+                        desktop.toggle_app(aid);
+                        hit = match aid {
                             AppId::HermesChat => "dock:chat",
                             AppId::Settings => "dock:settings",
                             AppId::Power => "dock:power",
@@ -243,29 +245,32 @@ impl DisplayAgent {
                     }
                 }
             } else if (btn & 1) != 0 {
-                for app in &apps_clone {
-                    if !app.visible {
+                for win in &app_wins {
+                    if !win.visible {
                         continue;
                     }
-                    let cx_btn = app.x + app.w - 20;
+                    let wx = win.rect.x as usize;
+                    let wy = win.rect.y as usize;
+                    let ww = win.rect.width as usize;
+                    let cx_btn = wx + ww - 20;
                     if cx >= cx_btn
                         && cx <= cx_btn + 16
-                        && cy >= app.y + 3
-                        && cy <= app.y + 19
+                        && cy >= wy + 3
+                        && cy <= wy + 19
                     {
-                        desktop.close_app_window(app.id);
+                        desktop.close_app_window(win.app_id());
                         hit = "close";
                         break;
                     }
-                    if cx >= app.x
-                        && cx <= app.x + app.w
-                        && cy >= app.y
-                        && cy <= app.y + 24
+                    if cx >= wx
+                        && cx <= wx + ww
+                        && cy >= wy
+                        && cy <= wy + 24
                     {
                         self.dragging = true;
-                        self.drag_id = app.id;
-                        self.drag_off_x = cx as isize - app.x as isize;
-                        self.drag_off_y = cy as isize - app.y as isize;
+                        self.drag_id = win.app_id();
+                        self.drag_off_x = cx as isize - wx as isize;
+                        self.drag_off_y = cy as isize - wy as isize;
                         hit = "titlebar";
                         break;
                     }
@@ -291,7 +296,7 @@ impl DisplayAgent {
         }
         if let Some(spec) = ui_spec::parse_window_spec(json) {
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                if let Some(chat) = desktop.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                if let Some(chat) = desktop.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
                     chat.data.push_str(&alloc::format!(
                         "[UI] {} @{},{} {}x{}\n",
                         spec.title, spec.x, spec.y, spec.w, spec.h
@@ -301,14 +306,14 @@ impl DisplayAgent {
                     }
                 }
                 // Also surface as Settings window content
-                if let Some(settings) = desktop.apps.iter_mut().find(|a| a.id == AppId::Settings) {
+                if let Some(settings) = desktop.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) {
                     settings.data = alloc::format!("{} | {}", spec.title,
                         spec.widgets.first().map(|w| w.text.as_str()).unwrap_or(""));
                     settings.visible = true;
-                    settings.x = spec.x.max(0) as usize;
-                    settings.y = spec.y.max(0) as usize;
-                    settings.w = spec.w.max(120) as usize;
-                    settings.h = spec.h.max(80) as usize;
+                    settings.rect.x = spec.x.max(0);
+                    settings.rect.y = spec.y.max(0);
+                    settings.rect.width = spec.w.max(120) as u32;
+                    settings.rect.height = spec.h.max(80) as u32;
                 }
             }
             ui_spec::mark_ui_ok();
@@ -322,6 +327,47 @@ enum OverlayMode {
     HitlConfirm,
     HitlTerminal,
     MemoryNudge,
+}
+
+// === Keyboard shortcut helper functions (ADR-0065 FASE 1.1) ===
+fn parse_input_to_keycombo(input: &str) -> Option<WmAction> {
+    use KeyCode::*;
+    // Check for exact key sequences
+    for (combo, action) in SHORTCUTS {
+        if let Some(text) = shortcut_to_text(*combo) {
+            if input.contains(&text) {
+                return Some(*action);
+            }
+        }
+    }
+    // Fallback: check F-keys as direct matches
+    let trimmed = input.trim();
+    match trimmed {
+        "[F1]" => Some(WmAction::LaunchApp(AppId::HermesChat)),
+        "[F2]" => Some(WmAction::LaunchApp(AppId::Settings)),
+        "[F3]" => Some(WmAction::LaunchApp(AppId::Power)),
+        "[F4]" => Some(WmAction::LaunchApp(AppId::Ide)),
+        "[F10]" => Some(WmAction::LaunchApp(AppId::Camera)),
+        "[F11]" => Some(WmAction::LaunchApp(AppId::AudioViz)),
+        _ => None,
+    }
+}
+
+fn shortcut_to_text(combo: KeyCombo) -> Option<&'static str> {
+    use KeyCode::*;
+    let _prefix = if combo.modifiers.super_key { "Super+" } else if combo.modifiers.alt { "Alt+" } else if combo.modifiers.ctrl { "Ctrl+" } else { "" };
+    let _shift = if combo.modifiers.shift && _prefix.is_empty() { "Shift+" } else if combo.modifiers.shift && !_prefix.is_empty() { "" } else { "" };
+    let _key = match combo.key {
+        Key1 => "1", Key2 => "2", Key3 => "3", Key4 => "4", Key5 => "5",
+        Key6 => "6", Key7 => "7", Key8 => "8", Key9 => "9",
+        Q => "Q", W => "W", H => "H", V => "V", D => "D", T => "T",
+        M => "M", N => "N", Enter => "Enter", Space => "Space",
+        Left => "Left", Right => "Right", Up => "Up", Down => "Down",
+        Tab => "Tab",
+        _ => return None,
+    };
+    // We return None for unsupported combos — rely on direct match instead
+    None
 }
 
 impl Agent for DisplayAgent {
@@ -512,16 +558,49 @@ impl Agent for DisplayAgent {
             } // while pkt
         } // if latent_receiver
 
-        // Keyboard echo
-        while let Some(ev) = self.echo_receiver.try_receive() {
-            self.input_buffer = core::str::from_utf8(&ev.payload).unwrap_or("").into();
-        }
-
-        // Process keyboard shortcuts via new WM system
+        // Process keyboard shortcuts via WmAction dispatch (ADR-0065 FASE 1.1)
+        // First drain echo receiver into input buffer
         while let Some(ev) = self.echo_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            // Parse key combo from input (simplified - real impl would parse modifiers)
-            // For now, keep legacy F-key handling for compat
+            self.input_buffer.push_str(text);
+        }
+
+        // Parse input for key combos and dispatch WmActions
+        let input = self.input_buffer.clone();
+        if !input.is_empty() {
+            if let Some(action) = parse_input_to_keycombo(&input) {
+                let mut comp = COMPOSITOR.lock();
+                if let Some(ref mut desktop) = *comp {
+                    match action {
+                        WmAction::WorkspaceSwitch(idx) => { desktop.workspaces.switch(idx); }
+                        WmAction::WorkspacePrev => { desktop.workspaces.prev(); }
+                        WmAction::WorkspaceNext => { desktop.workspaces.next(); }
+                        WmAction::WorkspacePrevious => { desktop.workspaces.switch_previous(); }
+                        WmAction::CycleWindow => { /* FASE 1.2: desktop.cycle_focus(true) */ }
+                        WmAction::CycleWindowReverse => { /* FASE 1.2: desktop.cycle_focus(false) */ }
+                        WmAction::CloseWindow => { /* FASE 1.2: desktop.close_window() */ }
+                        WmAction::MaximizeWindow => { /* FASE 1.2: desktop.maximize_window() */ }
+                        WmAction::MinimizeWindow => { /* FASE 1.2: desktop.minimize_window() */ }
+                        WmAction::ToggleTiling => { desktop.tiling_enabled = !desktop.tiling_enabled; }
+                        WmAction::ToggleDock => { /* FASE 1.2: desktop.toggle_dock() */ }
+                        WmAction::ToggleFloating => { /* FASE 1.2: desktop.toggle_floating() */ }
+                        WmAction::TileSplitHorizontal => { /* FASE 1.2: desktop.split_focused(Horizontal) */ }
+                        WmAction::TileSplitVertical => { /* FASE 1.2: desktop.split_focused(Vertical) */ }
+                        WmAction::TileResizeLeft => { /* FASE 1.2: desktop.resize_split(Left, 20) */ }
+                        WmAction::TileResizeRight => { /* FASE 1.2: desktop.resize_split(Right, 20) */ }
+                        WmAction::TileResizeUp => { /* FASE 1.2: desktop.resize_split(Up, 20) */ }
+                        WmAction::TileResizeDown => { /* FASE 1.2: desktop.resize_split(Down, 20) */ }
+                        WmAction::LaunchApp(a) => { desktop.toggle_app(a); }
+                        WmAction::ShowLauncher => { desktop.toggle_app(AppId::HermesChat); }
+                    }
+                }
+                drop(comp);
+                self.input_buffer.clear();
+                // Shortcut dispatched — skip legacy F-key handling for this input
+                // But still need to process mouse/events below
+            } else {
+                // No shortcut matched — keep input_buffer content for legacy F-key handling
+            }
         }
 
         // Legacy F-key app switching (compat)
@@ -529,7 +608,7 @@ impl Agent for DisplayAgent {
         if self.input_buffer.contains("[F2]") {
             if let Some(ref mut d) = *COMPOSITOR.lock() {
                 d.toggle_app(AppId::Settings);
-                if let Some(s) = d.apps.iter_mut().find(|a| a.id == AppId::Settings) { s.data.clear(); }
+                if let Some(s) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) { s.data.clear(); }
             }
         }
         if self.input_buffer.contains("[F3]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Power); }}
@@ -540,14 +619,14 @@ impl Agent for DisplayAgent {
         // Settings navigation
         if self.input_buffer.contains("[2]") || self.input_buffer.contains("sound") || self.input_buffer.contains("som") {
             if let Some(ref mut d) = *COMPOSITOR.lock() {
-                if let Some(s) = d.apps.iter_mut().find(|a| a.id == AppId::Settings) {
+                if let Some(s) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) {
                     s.data = alloc::string::String::from("[2] sound");
                 }
             }
         }
         if self.input_buffer.contains("[B]") || self.input_buffer.contains("back") {
             if let Some(ref mut d) = *COMPOSITOR.lock() {
-                if let Some(s) = d.apps.iter_mut().find(|a| a.id == AppId::Settings) {
+                if let Some(s) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) {
                     s.data.clear();
                 }
             }
@@ -568,7 +647,7 @@ impl Agent for DisplayAgent {
                 let mut comp = COMPOSITOR.lock();
                 let mut name = alloc::string::String::new();
                 if let Some(ref mut d) = *comp {
-                    if let Some(ide) = d.apps.iter_mut().find(|a| a.id == AppId::Ide) {
+                    if let Some(ide) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Ide)) {
                         name = alloc::string::String::from(ide.data.trim());
                         ide.data.clear();
                     }
@@ -580,7 +659,7 @@ impl Agent for DisplayAgent {
                 let mut comp2 = COMPOSITOR.lock();
                 if let Some(ref mut d2) = *comp2 {
                     d2.publish_wasm_skill(&skill_name, &alloc::format!("WASM: {}", skill_name));
-                    if let Some(chat) = d2.apps.iter_mut().find(|a| a.id == AppId::HermesChat) {
+                    if let Some(chat) = d2.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
                         chat.data.push_str(&alloc::format!("[IDE] WASM '{}' published! Icon on desktop.\n", skill_name));
                     }
                 }
@@ -616,15 +695,15 @@ impl Agent for DisplayAgent {
             } else {
                 let mut comp = COMPOSITOR.lock();
                 if let Some(ref mut desktop) = *comp {
-                    let app = desktop
-                        .apps
+                    let win = desktop
+                        .windows
                         .iter_mut()
-                        .find(|a| a.id == self.drag_id && a.visible);
-                    if let Some(a) = app {
-                        let nx = (mx as isize - self.drag_off_x).max(0) as usize;
-                        let ny = (my as isize - self.drag_off_y).max(28) as usize;
-                        a.x = nx.min(desktop.w.saturating_sub(100));
-                        a.y = ny.min(desktop.h.saturating_sub(100));
+                        .find(|w| w.app_id == Some(self.drag_id) && w.visible);
+                    if let Some(w) = win {
+                        let nx = (mx as isize - self.drag_off_x).max(0) as i32;
+                        let ny = (my as isize - self.drag_off_y).max(28) as i32;
+                        w.rect.x = nx.min(desktop.w.saturating_sub(100) as i32);
+                        w.rect.y = ny.min(desktop.h.saturating_sub(100) as i32);
                     } else {
                         self.dragging = false;
                     }

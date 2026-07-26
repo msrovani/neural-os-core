@@ -239,3 +239,9 @@ impl skill_registry::Skill for WasmSkill {
         }
     }
 }
+
+
+
+
+
+

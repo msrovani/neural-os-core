@@ -190,3 +190,9 @@ pub fn register_browser_agent(registry: &mut agent_core::AgentRegistry) {
     registry.register(Box::new(BrowserAgent::new()));
     k_nano::slog_hermes!("BROWSER", "info", "BrowserAgent registrado. Skills: fetch, search, extract, render");
 }
+
+
+
+
+
+

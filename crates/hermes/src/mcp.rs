@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::EVENT_BUS;
+use crate::memory_store;
 
 const MCP_MANIFEST: AgentManifest = AgentManifest {
     name: "mcp",
@@ -94,10 +95,10 @@ impl McpAgent {
 
     fn dispatch_tool(&mut self, tool: &str, arg: &str) -> String {
         match tool {
-            "skills_list" => crate::memory_store::skills_l0(),
-            "skill_view" => crate::memory_store::skill_view(arg),
+            "skills_list" => memory_store::skills_l0(),
+            "skill_view" => memory_store::skill_view(arg),
             "market_search" => crate::marketplace::search(arg),
-            "remember" => crate::memory_store::remember(arg).unwrap_or_else(|e| String::from(e)),
+            "remember" => memory_store::remember(arg).unwrap_or_else(|e| String::from(e)),
             "user_intent" | "" => {
                 let text = if arg.is_empty() { tool } else { arg };
                 let _ = EVENT_BUS.publish(event_bus::Event {
@@ -127,7 +128,7 @@ impl McpAgent {
         match cmd {
             "echo" => Some(alloc::format!("OK: {}", arg)),
             "status" => Some(crate::net::run_network_diagnostics()),
-            "skill" if arg == "list" || arg.is_empty() => Some(crate::memory_store::skills_l0()),
+            "skill" if arg == "list" || arg.is_empty() => Some(memory_store::skills_l0()),
             "tools/list" => Some(Self::tools_list_json()),
             "help" => Some(
                 "MCP: tools/list | tools/call | echo | status | skill list | JSON-RPC line"
@@ -216,3 +217,10 @@ pub fn handle_mcp_line(line: &str) -> String {
     let mut a = McpAgent::new();
     a.handle_line(line)
 }
+
+
+
+
+
+
+

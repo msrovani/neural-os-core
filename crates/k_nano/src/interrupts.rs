@@ -9,6 +9,7 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
+use crate::smp::percpu::{MAX_APS, IST_STACK_SIZE, IST_COUNT};
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
@@ -49,9 +50,15 @@ const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
 
+// Pre-allocate TSS for BSP + all APs (MAX_APS + 1 total).
+// Each TSS gets its own IST stacks allocated at runtime for APs.
+// BSP uses static stacks; APs will have their IST stacks allocated via init_ap_ist().
+static mut TSS_ARRAY: [TaskStateSegment; MAX_APS + 1] = [TaskStateSegment::new(); MAX_APS + 1];
+
 lazy_static! {
-    static ref TSS: TaskStateSegment = {
-        let mut tss = TaskStateSegment::new();
+    static ref TSS: &'static TaskStateSegment = {
+        // BSP TSS at index 0
+        let tss = unsafe { &mut TSS_ARRAY[0] };
         tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
             const STACK_SIZE: usize = 4096 * 5;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
@@ -84,14 +91,20 @@ lazy_static! {
     static ref GDT: (GlobalDescriptorTable, Selectors) = {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
-        let tss_selector = gdt.add_entry(Descriptor::tss_segment(&TSS));
-        (gdt, Selectors { code_selector, tss_selector })
+        
+        // Add TSS entries for BSP + all APs
+        let mut tss_selectors = [SegmentSelector(0); MAX_APS + 1];
+        for i in 0..=MAX_APS {
+            tss_selectors[i] = gdt.add_entry(Descriptor::tss_segment(unsafe { &TSS_ARRAY[i] }));
+        }
+        
+        (gdt, Selectors { code_selector, tss_selectors })
     };
 }
 
 struct Selectors {
     code_selector: SegmentSelector,
-    tss_selector: SegmentSelector,
+    tss_selectors: [SegmentSelector; MAX_APS + 1],
 }
 
 // --------------------------------------------------------------------------
@@ -502,12 +515,50 @@ lazy_static! {
     // Fim do lazy_static IDT
 }
 
+// --------------------------------------------------------------------------
+// Per-AP TSS/IDT support (ADR-0057 WS-F / ADR-0065 FASE 3.1 P13)
+// --------------------------------------------------------------------------
+
+/// Per-CPU TSS with IST stacks. Created at runtime for each AP.
+pub struct ApTss {
+    pub tss: &'static mut TaskStateSegment,
+    pub ist_stacks: [VirtAddr; 3], // DF, PF, GP
+    pub selector: SegmentSelector,
+}
+
+/// Initialize TSS for an AP with given IST stack tops.
+/// Uses pre-allocated TSS slot from TSS_ARRAY.
+pub fn init_ap_tss(ap_index: usize, ist_tops: [VirtAddr; 3]) -> ApTss {
+    // ap_index is 0-based for APs, TSS_ARRAY[0] is BSP, so AP i uses index i+1
+    let tss_idx = ap_index + 1;
+    let tss = unsafe { &mut TSS_ARRAY[tss_idx] };
+    
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = ist_tops[0];
+    tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = ist_tops[1];
+    tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = ist_tops[2];
+    // Timer IST can reuse DF stack
+    tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = ist_tops[0];
+    
+    let selector = GDT.1.tss_selectors[tss_idx];
+    ApTss { tss, ist_stacks: ist_tops, selector }
+}
+
+/// Load shared IDT + this CPU's TSS on AP, then enable interrupts.
+pub unsafe fn ap_load_idt_and_tss(tss_selector: SegmentSelector) {
+    IDT.load();
+    x86_64::instructions::tables::load_tss(tss_selector);
+    // Enable interrupts
+    x86_64::instructions::interrupts::enable();
+}
+
+// --------------------------------------------------------------------------
+
 /// Carrega GDT + TSS + IDT
 pub fn init_idt() {
     GDT.0.load();
     unsafe {
         x86_64::instructions::segmentation::CS::set_reg(GDT.1.code_selector);
-        x86_64::instructions::tables::load_tss(GDT.1.tss_selector);
+        x86_64::instructions::tables::load_tss(GDT.1.tss_selectors[0]); // BSP uses index 0
         // Recarrega SS com um seletor nulo (evita #GP no iretq quando
         // o bootloader usa seletor diferente do nosso GDT)
         core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
