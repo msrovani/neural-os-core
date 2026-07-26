@@ -1,5 +1,14 @@
 # ═════════════════════════════════════════════════════════
 #   STATE — neural-os-core v1.9.11-emagrecer — NÃO ESTÁVEL
+#   BitNet Recommendations FULL ✅ (commit 5ea319a, tag bitnet-recommendations-v1):
+#     ALTA: soft_stride=1, max_gen 32/24, constrained decode relaxado, BPE encode pleno (merge-order)
+#     ALTA: ADR-0061 SSE4.2 dispatch (AVX-512→AVX2→SSE4.2→scalar), bitnet_sse.rs criado
+#     ALTA: export_bpe_bin.py MRG1 v2 com merge rank u32
+#     MÉDIA: MPMC queue lock-free (k_nano::p2p::mpmc) — BEI Onda 0
+#     MÉDIA: BudgetManager adaptativo (k_ai::economy) — CompressionTier Lossless→Aggressive
+#     MÉDIA: Cellular SleepCycle batch processing (cortex::cellular)
+#     Itens já existentes: L0-L7 memory (SGDB), AffectVector 5D, ExecutiveSupervisor 7-phase
+#   SESSION_220: BitNet Recommendations implementação completa
 #   ADR-0065 FASES 1.1/1.2/2.1/2.2/3.1/3.2 ✅ COMPLETE (commits 289339c + 0fdf20e):
 #     WM cosmic-like (decorations/notifications/shortcuts/Window unificada)
 #     BlitBackend GPU 2D (blit.rs Cpu/IntelBcs + canary + CapToken::GpuBlitReady=15)
