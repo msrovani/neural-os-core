@@ -147,3 +147,67 @@ pub static SHORTCUTS: &[(KeyCombo, WmAction)] = &[
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::T }, WmAction::ToggleTiling),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::Space }, WmAction::ShowLauncher),
 ];
+
+/// Mapeia scancode PS/2 set 1 → KeyCode. Retorna None se não é tecla WM-mappable.
+/// Cobre: letras, números, F1-F12, setas, Enter, Esc, Space, Tab, modificadores.
+pub fn scancode_to_keycode(scancode: u8) -> Option<KeyCode> {
+    match scancode {
+        // Letras
+        0x10 => Some(KeyCode::Q),
+        0x11 => Some(KeyCode::W),
+        0x12 => Some(KeyCode::E),
+        0x13 => Some(KeyCode::R),
+        0x14 => Some(KeyCode::T),
+        0x15 => Some(KeyCode::Y),
+        0x16 => Some(KeyCode::U),
+        0x17 => Some(KeyCode::I),
+        0x18 => Some(KeyCode::O),
+        0x19 => Some(KeyCode::P),
+        0x1E => Some(KeyCode::A),
+        0x1F => Some(KeyCode::S),
+        0x20 => Some(KeyCode::D),
+        0x21 => Some(KeyCode::F),
+        0x22 => Some(KeyCode::G),
+        0x23 => Some(KeyCode::H),
+        0x24 => Some(KeyCode::J),
+        0x25 => Some(KeyCode::K),
+        0x26 => Some(KeyCode::L),
+        0x2C => Some(KeyCode::Z),
+        0x2D => Some(KeyCode::X),
+        0x2E => Some(KeyCode::C),
+        0x2F => Some(KeyCode::V),
+        0x30 => Some(KeyCode::B),
+        0x31 => Some(KeyCode::N),
+        0x32 => Some(KeyCode::M),
+        // Números (top row)
+        0x02 => Some(KeyCode::Key1),
+        0x03 => Some(KeyCode::Key2),
+        0x04 => Some(KeyCode::Key3),
+        0x05 => Some(KeyCode::Key4),
+        0x06 => Some(KeyCode::Key5),
+        0x07 => Some(KeyCode::Key6),
+        0x08 => Some(KeyCode::Key7),
+        0x09 => Some(KeyCode::Key8),
+        0x0A => Some(KeyCode::Key9),
+        // F1-F12
+        0x3B => Some(KeyCode::F1),
+        0x3C => Some(KeyCode::F2),
+        0x3D => Some(KeyCode::F3),
+        0x3E => Some(KeyCode::F4),
+        0x3F => Some(KeyCode::F5),
+        0x40 => Some(KeyCode::F6),
+        0x41 => Some(KeyCode::F7),
+        0x42 => Some(KeyCode::F8),
+        0x43 => Some(KeyCode::F9),
+        0x44 => Some(KeyCode::F10),
+        0x57 => Some(KeyCode::F11),
+        0x58 => Some(KeyCode::F12),
+        // Setas (extended — prefix 0xE0 + byte; tratado fora desta fn)
+        // Especiais
+        0x1C => Some(KeyCode::Enter),
+        0x01 => Some(KeyCode::Escape),
+        0x39 => Some(KeyCode::Space),
+        0x0F => Some(KeyCode::Tab),
+        _ => None,
+    }
+}

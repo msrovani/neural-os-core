@@ -106,6 +106,39 @@ fn text(t: &mut FbTarget, s: &str, x: i32, y: i32, c: Rgb888) {
     let _ = Text::with_baseline(s, Point::new(x, y), style, Baseline::Top).draw(t);
 }
 
+/// Hit-test puro: retorna os rects dos botões do card SEM renderizar.
+/// Mesma fórmula geométrica de `render_card` — use em handlers de clique
+/// para evitar side-effect visual.
+pub fn hit_test_buttons(d: &UiDeclaration) -> Vec<ButtonHit> {
+    let mut hits: Vec<ButtonHit> = Vec::new();
+    let pad = 8;
+    let mut cy = d.y + 26;
+    for wg in &d.body {
+        if let Widget::Button(lbl) = wg {
+            let bw = (lbl.len() as i32) * 6 + 16;
+            let bx = d.x + pad;
+            let by = cy;
+            hits.push(ButtonHit { x: bx, y: by, w: bw, h: 16, index: hits.len() });
+            cy += 22;
+        } else {
+            // Espelha o avanço de cy do render para manter alinhamento.
+            match wg {
+                Widget::Text(_) | Widget::KeyValue(_, _) | Widget::List(_) => cy += 13,
+                Widget::Gauge { .. } => cy += 26,
+                Widget::Bars { .. } => cy += 56,
+                Widget::Divider => cy += 8,
+                Widget::Panel { height, .. } => {
+                    let ph = (*height).clamp(20, d.h - (cy - d.y) - 24);
+                    cy += ph + 6;
+                }
+                _ => {}
+            }
+        }
+        if cy > d.y + d.h - 10 { break; }
+    }
+    hits
+}
+
 /// Renderiza o card e retorna os rects dos botões (para clique).
 pub fn render_card(fb: &mut DoubleBuffer, d: &UiDeclaration) -> Vec<ButtonHit> {
     let mut hits: Vec<ButtonHit> = Vec::new();

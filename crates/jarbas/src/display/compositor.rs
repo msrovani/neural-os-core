@@ -575,8 +575,8 @@ if let Some(banner) = *POWER_BANNER.lock() {
                         self.card_drag_off = (cx - decl.x, cy - decl.y);
                         return "drag";
                     }
-                    // Button check — compute hits via render_card (render is overwritten next frame)
-                    let hits = crate::display::card::render_card(&mut self.fb, decl);
+                    // Button check — usa hit_test_buttons puro (sem side-effect de render).
+                    let hits = crate::display::card::hit_test_buttons(decl);
                     for btn in &hits {
                         if cx >= btn.x && cx < btn.x + btn.w && cy >= btn.y && cy < btn.y + btn.h {
                             self.card_hit_button = Some((decl.id, btn.index));
@@ -631,6 +631,101 @@ if let Some(banner) = *POWER_BANNER.lock() {
         }
         if app_id != AppId::HermesChat {
             self.ensure_hermes_overlay();
+        }
+    }
+
+    // ── WM actions (ADR-0065 FASE 1.2 — implementação real) ───────────────
+
+    /// Cycle focus: próximo WindowId no MRU stack. Se nada focado, foca o primeiro visível.
+    pub fn cycle_focus(&mut self, reverse: bool) {
+        let next = if reverse {
+            self.focus_stack.cycle_prev()
+        } else {
+            self.focus_stack.cycle_next()
+        };
+        let target = next.or_else(|| {
+            self.windows.iter()
+                .find(|w| w.visible && matches!(w.content, WindowContent::App(_)))
+                .map(|w| w.id)
+        });
+        if let Some(id) = target {
+            // Desfoca todos, foca o target
+            for w in &mut self.windows { w.focused = false; }
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                w.focused = true;
+            }
+            self.focus_stack.focus(id);
+            self.bring_to_front(id);
+        }
+    }
+
+    /// Fecha a janela focada (ou a última focada se nenhuma marcada).
+    pub fn close_focused_window(&mut self) {
+        let target = self.focus_stack.focused()
+            .or_else(|| self.windows.iter().find(|w| w.visible).map(|w| w.id));
+        if let Some(id) = target {
+            self.close_tiled_window(id);
+        }
+    }
+
+    /// Maximiza a janela focada (rect = screen minus dock).
+    pub fn maximize_focused(&mut self) {
+        if let Some(id) = self.focus_stack.focused() {
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                w.maximized = !w.maximized;
+                if w.maximized {
+                    w.rect = Rect {
+                        x: 0,
+                        y: 28,
+                        width: self.w as u32,
+                        height: (self.h as u32).saturating_sub(self.dock.height + 28),
+                    };
+                }
+            }
+        }
+    }
+
+    /// Minimiza a janela focada (visible=false).
+    pub fn minimize_focused(&mut self) {
+        if let Some(id) = self.focus_stack.focused() {
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                w.minimized = true;
+                w.visible = false;
+            }
+        }
+    }
+
+    /// Toggle dock visibility.
+    pub fn toggle_dock(&mut self) {
+        self.dock.visible = !self.dock.visible;
+    }
+
+    /// Toggle floating da janela focada.
+    pub fn toggle_floating_focused(&mut self) {
+        if let Some(id) = self.focus_stack.focused() {
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                w.floating = !w.floating;
+            }
+        }
+    }
+
+    /// Split a janela focada no tiling tree (Horizontal ou Vertical).
+    pub fn split_focused(&mut self, direction: SplitDirection) {
+        if let Some(id) = self.focus_stack.focused() {
+            let ws = self.workspaces.active_mut();
+            ws.add_window_tiled(id, direction);
+            self.relayout_active_workspace();
+        }
+    }
+
+    /// Resize split da janela focada (delta em % fixed-point: 20 = 2%).
+    pub fn resize_split_focused(&mut self, delta: i32) {
+        if let Some(id) = self.focus_stack.focused() {
+            let ws = self.workspaces.active_mut();
+            if let Some(root) = ws.tiling_root.as_mut() {
+                root.resize_split(id, delta);
+            }
+            self.relayout_active_workspace();
         }
     }
 

@@ -1,5 +1,12 @@
 # ═════════════════════════════════════════════════════════
 #   STATE — neural-os-core v1.9.11-emagrecer — NÃO ESTÁVEL
+#   ADR-0065 FASES 1.1/1.2/2.1/2.2/3.1/3.2 ✅ COMPLETE (commits 289339c + 0fdf20e):
+#     WM cosmic-like (decorations/notifications/shortcuts/Window unificada)
+#     BlitBackend GPU 2D (blit.rs Cpu/IntelBcs + canary + CapToken::GpuBlitReady=15)
+#     intel_display.rs (page_flip_hw DSPSURF + cursor HW CURBASE/CURPOS/CURCNTR 64x64 ARGB + canaries)
+#     P13 APs-IDT (TSS_ARRAY[8] pré-alocada + init_ap_tss + ap_load_idt_and_tss + AP_IDT_READY barrier)
+#     P16 Async (TimerFuture AtomicU64 + init_async_rt demo + process_wakes)
+#     Heap 2GB→4GB (BitNet 1.3B/2B sem resize_heap lento WHPX)
 #   SESSION_219: WM cosmic-like fix compilação jarbas — 74→0 errors, WindowId, métodos WM, const themes
 #   SESSION_217: Emagrecer E0–E4 completo — E1c USB_MSC/virtio_net→k_nano, E2 BootHandoff trait, E3 GPU/WiFi wire, E4 audio→jarbas
 #   SESSION_215: Emagrecer neural-kernel — análise profunda + ADR-0075 + plano E0–E4

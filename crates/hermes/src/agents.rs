@@ -134,11 +134,25 @@ pub struct InputAgent {
     buffer: String,
     ctrl: bool,
     alt: bool,
+    shift: bool,
+    /// Super key (Win/Cmd) — scancode 0x5B (Left Win) / 0x5C (Right Win).
+    super_key: bool,
 }
+
+/// Tópico publicado pelo InputAgent com payload `[scancode, ctrl, alt, shift, super_key]`.
+/// Consumido pelo DisplayAgent para dispatch de atalhos WM (Super+H, Alt+Tab, etc).
+pub const TOPIC_KEY_EVENT: &str = "KEY_EVENT";
 
 impl InputAgent {
     pub fn new() -> Self {
-        InputAgent { receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"), buffer: String::new(), ctrl: false, alt: false }
+        InputAgent {
+            receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"),
+            buffer: String::new(),
+            ctrl: false,
+            alt: false,
+            shift: false,
+            super_key: false,
+        }
     }
 }
 
@@ -169,9 +183,28 @@ impl InputAgent {
         match key {
             0x1D => { self.ctrl = pressed; }
             0x38 => { self.alt = pressed; }
+            // Left Shift = 0x2A, Right Shift = 0x36
+            0x2A | 0x36 => { self.shift = pressed; }
+            // Left Win (Super) = 0x5B, Right Win = 0x5C
+            0x5B | 0x5C => { self.super_key = pressed; }
             0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
             _ => {}
         }
+        // Publica KEY_EVENT com modifiers para o DisplayAgent (atalhos WM).
+        // Payload: [scancode, ctrl, alt, shift, super_key, pressed]
+        let _ = EVENT_BUS.publish(Event {
+            id: 0,
+            topic: String::from(TOPIC_KEY_EVENT),
+            payload: alloc::vec![
+                scancode,
+                self.ctrl as u8,
+                self.alt as u8,
+                self.shift as u8,
+                self.super_key as u8,
+                pressed as u8,
+            ],
+            token: CapabilityToken::Legacy(1),
+        });
         if !pressed { return; }
         if scancode >= 0x80 { return; }
         match scancode {

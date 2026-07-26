@@ -10,7 +10,8 @@ use alloc::vec::Vec;
 use crate::display::window::{Window, WindowContent};
 use crate::display::avatar::{AvatarState, JarvisAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
-use crate::display::shortcuts::{KeyCombo, Modifiers, KeyCode, WmAction, SHORTCUTS};
+use crate::display::shortcuts::{KeyCombo, Modifiers, KeyCode, WmAction, SHORTCUTS, scancode_to_keycode};
+use hermes::agents::TOPIC_KEY_EVENT;
 use crate::clipboard_notify::TOPIC_TOAST;
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
@@ -31,6 +32,8 @@ pub struct DisplayAgent {
     hitl_term_receiver: event_bus::Receiver,
     memory_nudge_receiver: event_bus::Receiver,
     toast_receiver: event_bus::Receiver,
+    /// FIX 1: subscreve KEY_EVENT do InputAgent para dispatch de atalhos WM.
+    key_event_receiver: event_bus::Receiver,
     latent_receiver: Option<event_bus::LatentReceiver>,
     gpu_inited: bool,
     demo_ui_sent: bool,
@@ -60,6 +63,7 @@ impl DisplayAgent {
             hitl_term_receiver: EVENT_BUS.subscribe(hermes::hitl_ui::TOPIC_HITL_TERMINAL),
             memory_nudge_receiver: EVENT_BUS.subscribe(hermes::cognitive_bridge::TOPIC_MEMORY_NUDGE),
             toast_receiver: EVENT_BUS.subscribe(TOPIC_TOAST),
+            key_event_receiver: EVENT_BUS.subscribe(TOPIC_KEY_EVENT),
             latent_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
@@ -173,6 +177,22 @@ impl DisplayAgent {
         if self.power_armed_until != 0 {
             self.power_armed_until = 0;
             *POWER_BANNER.lock() = None;
+        }
+
+        // FIX 11: Notification click — testa antes do dock/app.
+        if (btn & 1) != 0 {
+            let notif_hit = {
+                let comp = COMPOSITOR.lock();
+                comp.as_ref().and_then(|d| d.notifications.hit_test(cx, cy, scr_w))
+            };
+            if let Some(notif_id) = notif_hit {
+                let mut comp = COMPOSITOR.lock();
+                if let Some(ref mut d) = *comp {
+                    d.notifications.handle_click(notif_id);
+                    d.notifications.dismiss(notif_id);
+                }
+                return "notification";
+            }
         }
 
         let mut hit: &'static str = "miss";
@@ -329,45 +349,26 @@ enum OverlayMode {
     MemoryNudge,
 }
 
-// === Keyboard shortcut helper functions (ADR-0065 FASE 1.1) ===
-fn parse_input_to_keycombo(input: &str) -> Option<WmAction> {
-    use KeyCode::*;
-    // Check for exact key sequences
-    for (combo, action) in SHORTCUTS {
-        if let Some(text) = shortcut_to_text(*combo) {
-            if input.contains(&text) {
-                return Some(*action);
-            }
-        }
-    }
-    // Fallback: check F-keys as direct matches
-    let trimmed = input.trim();
-    match trimmed {
-        "[F1]" => Some(WmAction::LaunchApp(AppId::HermesChat)),
-        "[F2]" => Some(WmAction::LaunchApp(AppId::Settings)),
-        "[F3]" => Some(WmAction::LaunchApp(AppId::Power)),
-        "[F4]" => Some(WmAction::LaunchApp(AppId::Ide)),
-        "[F10]" => Some(WmAction::LaunchApp(AppId::Camera)),
-        "[F11]" => Some(WmAction::LaunchApp(AppId::AudioViz)),
-        _ => None,
-    }
-}
-
-fn shortcut_to_text(combo: KeyCombo) -> Option<&'static str> {
-    use KeyCode::*;
-    let _prefix = if combo.modifiers.super_key { "Super+" } else if combo.modifiers.alt { "Alt+" } else if combo.modifiers.ctrl { "Ctrl+" } else { "" };
-    let _shift = if combo.modifiers.shift && _prefix.is_empty() { "Shift+" } else if combo.modifiers.shift && !_prefix.is_empty() { "" } else { "" };
-    let _key = match combo.key {
-        Key1 => "1", Key2 => "2", Key3 => "3", Key4 => "4", Key5 => "5",
-        Key6 => "6", Key7 => "7", Key8 => "8", Key9 => "9",
-        Q => "Q", W => "W", H => "H", V => "V", D => "D", T => "T",
-        M => "M", N => "N", Enter => "Enter", Space => "Space",
-        Left => "Left", Right => "Right", Up => "Up", Down => "Down",
-        Tab => "Tab",
-        _ => return None,
+// === Keyboard shortcut dispatch (ADR-0065 FASE 1.1 — FIX 1) ===
+//
+// FIX 1: parse_input_to_keycombo era broken (shortcut_to_text retornava None sempre).
+// Substituído por dispatch direto via KEY_EVENT topic do InputAgent.
+// Payload: [scancode, ctrl, alt, shift, super_key, pressed]
+fn dispatch_key_event(payload: &[u8]) -> Option<WmAction> {
+    if payload.len() < 6 { return None; }
+    let scancode = payload[0];
+    let ctrl = payload[1] != 0;
+    let alt = payload[2] != 0;
+    let shift = payload[3] != 0;
+    let super_key = payload[4] != 0;
+    let pressed = payload[5] != 0;
+    if !pressed { return None; }
+    let key = scancode_to_keycode(scancode)?;
+    let combo = KeyCombo {
+        modifiers: Modifiers { super_key, ctrl, alt, shift },
+        key,
     };
-    // We return None for unsupported combos — rely on direct match instead
-    None
+    WmAction::from_keycombo(combo)
 }
 
 impl Agent for DisplayAgent {
@@ -558,17 +559,10 @@ impl Agent for DisplayAgent {
             } // while pkt
         } // if latent_receiver
 
-        // Process keyboard shortcuts via WmAction dispatch (ADR-0065 FASE 1.1)
-        // First drain echo receiver into input buffer
-        while let Some(ev) = self.echo_receiver.try_receive() {
-            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            self.input_buffer.push_str(text);
-        }
-
-        // Parse input for key combos and dispatch WmActions
-        let input = self.input_buffer.clone();
-        if !input.is_empty() {
-            if let Some(action) = parse_input_to_keycombo(&input) {
+        // Process keyboard shortcuts via WmAction dispatch (ADR-0065 FASE 1.1 — FIX 1)
+        // Drena KEY_EVENT do InputAgent (payload: [scancode, ctrl, alt, shift, super_key, pressed]).
+        while let Some(ev) = self.key_event_receiver.try_receive() {
+            if let Some(action) = dispatch_key_event(&ev.payload) {
                 let mut comp = COMPOSITOR.lock();
                 if let Some(ref mut desktop) = *comp {
                     match action {
@@ -576,31 +570,32 @@ impl Agent for DisplayAgent {
                         WmAction::WorkspacePrev => { desktop.workspaces.prev(); }
                         WmAction::WorkspaceNext => { desktop.workspaces.next(); }
                         WmAction::WorkspacePrevious => { desktop.workspaces.switch_previous(); }
-                        WmAction::CycleWindow => { /* FASE 1.2: desktop.cycle_focus(true) */ }
-                        WmAction::CycleWindowReverse => { /* FASE 1.2: desktop.cycle_focus(false) */ }
-                        WmAction::CloseWindow => { /* FASE 1.2: desktop.close_window() */ }
-                        WmAction::MaximizeWindow => { /* FASE 1.2: desktop.maximize_window() */ }
-                        WmAction::MinimizeWindow => { /* FASE 1.2: desktop.minimize_window() */ }
+                        WmAction::CycleWindow => { desktop.cycle_focus(false); }
+                        WmAction::CycleWindowReverse => { desktop.cycle_focus(true); }
+                        WmAction::CloseWindow => { desktop.close_focused_window(); }
+                        WmAction::MaximizeWindow => { desktop.maximize_focused(); }
+                        WmAction::MinimizeWindow => { desktop.minimize_focused(); }
                         WmAction::ToggleTiling => { desktop.tiling_enabled = !desktop.tiling_enabled; }
-                        WmAction::ToggleDock => { /* FASE 1.2: desktop.toggle_dock() */ }
-                        WmAction::ToggleFloating => { /* FASE 1.2: desktop.toggle_floating() */ }
-                        WmAction::TileSplitHorizontal => { /* FASE 1.2: desktop.split_focused(Horizontal) */ }
-                        WmAction::TileSplitVertical => { /* FASE 1.2: desktop.split_focused(Vertical) */ }
-                        WmAction::TileResizeLeft => { /* FASE 1.2: desktop.resize_split(Left, 20) */ }
-                        WmAction::TileResizeRight => { /* FASE 1.2: desktop.resize_split(Right, 20) */ }
-                        WmAction::TileResizeUp => { /* FASE 1.2: desktop.resize_split(Up, 20) */ }
-                        WmAction::TileResizeDown => { /* FASE 1.2: desktop.resize_split(Down, 20) */ }
+                        WmAction::ToggleDock => { desktop.toggle_dock(); }
+                        WmAction::ToggleFloating => { desktop.toggle_floating_focused(); }
+                        WmAction::TileSplitHorizontal => { desktop.split_focused(crate::display::tiling::SplitDirection::Right); }
+                        WmAction::TileSplitVertical => { desktop.split_focused(crate::display::tiling::SplitDirection::Down); }
+                        WmAction::TileResizeLeft => { desktop.resize_split_focused(-20); }
+                        WmAction::TileResizeRight => { desktop.resize_split_focused(20); }
+                        WmAction::TileResizeUp => { desktop.resize_split_focused(-20); }
+                        WmAction::TileResizeDown => { desktop.resize_split_focused(20); }
                         WmAction::LaunchApp(a) => { desktop.toggle_app(a); }
                         WmAction::ShowLauncher => { desktop.toggle_app(AppId::HermesChat); }
                     }
+                    k_nano::slog_jarbas!("WM", "info", "action={:?}", action);
                 }
-                drop(comp);
-                self.input_buffer.clear();
-                // Shortcut dispatched — skip legacy F-key handling for this input
-                // But still need to process mouse/events below
-            } else {
-                // No shortcut matched — keep input_buffer content for legacy F-key handling
             }
+        }
+
+        // Echo buffer (legacy F-key fallback para compat com input ASCII).
+        while let Some(ev) = self.echo_receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            self.input_buffer.push_str(text);
         }
 
         // Legacy F-key app switching (compat)
