@@ -7,6 +7,9 @@
 #     e1000 guard: if pmoff==0 { return None } — protege contra buffer overflow do static
 #     BPE scan fix: bound 0x200000000→0x180000000 (6GB RAM, não 8GB)
 #     Desktop Jarbas na tela do QEMU! Soft power off via botão Power → ACPI PM1a_CNT OK
+#     WHPX PIT skip: CPUID leaf 0x40000000 → skip PIT init (LAPIC only) — sem warning vector 0
+#     NeuralFS CRC fix: zero CRC field before computing em k_nano + hermes superblock.rs
+#     NTP silenciado em sandbox, skill body size 64KB→512KB, Power menu 3 opções (Designer)
 #     Legados removidos: build_esp.ps1, limine.cfg, .gitignore esp/
 #     cargo check --release: 0 erros
 #   SESSION_224: ADR-0076 Implementação Pesada — 23 entregas (2026-07-27)

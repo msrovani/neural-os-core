@@ -1504,6 +1504,11 @@ pub(crate) fn kernel_boot(
     
 
     // Pacote B: plataforma (PCI+ACPI+APIC[+SMP]) ANTES dos drivers
+    // ponytail: detect WHPX early para pular PIT init (WHPX ignora vector 0)
+    let hv_name = crate::net::detect_hypervisor_name();
+    if hv_name.contains("Microsoft") {
+        crate::apic::SKIP_PIT.store(true, core::sync::atomic::Ordering::Relaxed);
+    }
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
 
@@ -1543,6 +1548,10 @@ pub(crate) fn kernel_boot(
             crate::env::set(crate::env::SystemEnv::VBoxSandbox);
         } else {
             crate::env::set(crate::env::SystemEnv::QemuSandbox);
+        }
+        // ponytail: WHPX ignora PIT vector 0 — skip PIT, usa só LAPIC timer
+        if hv_name.contains("Microsoft") {
+            crate::apic::SKIP_PIT.store(true, core::sync::atomic::Ordering::Relaxed);
         }
         k_nano::slog_bin!("ENV", "info", "Sandbox detectado: {} — usando bypass serial", hv_name.trim_end());
     }

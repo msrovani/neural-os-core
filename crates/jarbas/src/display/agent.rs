@@ -5,7 +5,7 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button, DragState};
+use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, POWER_STATE, PowerState, PowerDialogAction, hit_power_button, DragState};
 use alloc::vec::Vec;
 use crate::display::window::{Window, WindowContent};
 use crate::display::avatar::{AvatarState, JarbasAvatar};
@@ -27,6 +27,8 @@ pub struct DisplayAgent {
     echo_receiver: event_bus::Receiver,
     user_intent_receiver: event_bus::Receiver,
     stt_text_receiver: event_bus::Receiver,
+    render_receiver: event_bus::Receiver,
+    render_window_receiver: event_bus::Receiver,
     mouse_receiver: event_bus::Receiver,
     click_receiver: event_bus::Receiver,
     ui_receiver: event_bus::Receiver,
@@ -70,6 +72,8 @@ impl DisplayAgent {
             key_event_receiver: EVENT_BUS.subscribe(TOPIC_KEY_EVENT),
             llm_stream_receiver: EVENT_BUS.subscribe(hermes::stream_packet::TOPIC_LLM_STREAM),
             stt_text_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_STT_TEXT),
+            render_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_REGISTER),
+            render_window_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_WINDOW),
             latent_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
@@ -141,21 +145,25 @@ impl DisplayAgent {
             }
         };
 
-        // Se o diálogo de power está aberto, processa cliques nele primeiro
+        // Se o diálogo de energia está aberto, processa cliques
         if dialog_open {
             let action = crate::display::compositor::hit_power_dialog(cx, cy, scr_w, scr_h);
             match action {
-                crate::display::compositor::PowerDialogAction::Cancel => {
+                PowerDialogAction::Cancel | PowerDialogAction::None => {
+                    // Cancel ou clique fora → fecha diálogo
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
                     *POWER_BANNER.lock() = None;
+                    *POWER_STATE.lock() = PowerState::None;
                     self.power_armed_until = 0;
-                    k_nano::slog_jarbas!("JARBAS", "POWER", "dialog CANCELADO pelo usuario");
-                    return "power_cancel";
+                    let tag = if action == PowerDialogAction::Cancel { "power_cancel" } else { "power_outside" };
+                    k_nano::slog_jarbas!("JARBAS", "POWER", "dialog CANCELADO ({})", tag);
+                    return tag;
                 }
-                crate::display::compositor::PowerDialogAction::TurnOff => {
+                PowerDialogAction::ShutDown => {
                     COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
-                    *POWER_BANNER.lock() = Some("Shutting down...");
-                    k_nano::slog_jarbas!("JARBAS", "POWER", "dialog CONFIRMADO — publicando SYSTEM_SHUTDOWN");
+                    *POWER_STATE.lock() = PowerState::ShuttingDown;
+                    *POWER_BANNER.lock() = Some("Desligando...");
+                    k_nano::slog_jarbas!("JARBAS", "POWER", "DESLIGAR — publicando SYSTEM_SHUTDOWN");
                     let _ = EVENT_BUS.publish(event_bus::Event {
                         id: 0,
                         topic: alloc::string::String::from("SYSTEM_SHUTDOWN"),
@@ -163,20 +171,45 @@ impl DisplayAgent {
                         token: event_bus::CapabilityToken::Legacy(1),
                     });
                     self.power_armed_until = 0;
-                    return "power_off";
+                    return "power_shutdown";
                 }
-                crate::display::compositor::PowerDialogAction::None => {
-                    // Clique fora do diálogo (mas diálogo aberto) — ignora
-                    return "power_dialog_bg";
+                PowerDialogAction::Hibernate => {
+                    COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
+                    *POWER_STATE.lock() = PowerState::Hibernating;
+                    *POWER_BANNER.lock() = Some("Hibernando...");
+                    k_nano::slog_jarbas!("JARBAS", "POWER", "HIBERNAR — publicando SYSTEM_HIBERNATE");
+                    let _ = EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("SYSTEM_HIBERNATE"),
+                        payload: b"ui_off".to_vec(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                    self.power_armed_until = 0;
+                    return "power_hibernate";
+                }
+                PowerDialogAction::Reboot => {
+                    COMPOSITOR.lock().as_mut().map(|d| d.close_power_dialog());
+                    *POWER_STATE.lock() = PowerState::Rebooting;
+                    *POWER_BANNER.lock() = Some("Reiniciando...");
+                    k_nano::slog_jarbas!("JARBAS", "POWER", "REINICIAR — publicando SYSTEM_REBOOT");
+                    let _ = EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from("SYSTEM_REBOOT"),
+                        payload: b"ui_off".to_vec(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                    self.power_armed_until = 0;
+                    return "power_reboot";
                 }
             }
         }
 
-        // OFF canto SD — abre diálogo de confirmação
+        // OFF canto SD — abre diálogo de energia
         if hit_power_button(cx, cy, scr_w) {
             COMPOSITOR.lock().as_mut().map(|d| d.open_power_dialog());
-            *POWER_BANNER.lock() = Some("Confirme o desligamento");
-            k_nano::slog_jarbas!("JARBAS", "POWER", "dialog de desligamento ABERTO");
+            *POWER_STATE.lock() = PowerState::Dialog;
+            *POWER_BANNER.lock() = None;
+            k_nano::slog_jarbas!("JARBAS", "POWER", "dialog ABERTO");
             return "power_dialog_open";
         }
         // Clique fora desarma banner antigo (se houver)
@@ -427,10 +460,40 @@ impl Agent for DisplayAgent {
                     *cw = Some(crate::display::chat_window::ChatWindow::new(0));
                 }
                 if let Some(ref mut chat) = *cw {
-                    // Alimenta o input buffer com o texto transcrito
                     chat.input_buffer = alloc::string::String::from(text);
                     chat.input_cursor = text.len();
                     chat.dirty = true;
+                }
+            }
+        }
+
+        // ── RENDER_REGISTER: skills de renderização dinâmica ──
+        while let Some(ev) = self.render_receiver.try_receive() {
+            crate::display::render_registry::process_event(
+                crate::display::render_registry::TOPIC_RENDER_REGISTER,
+                &ev.payload,
+            );
+        }
+
+        // ── RENDER_WINDOW: executa skill de render no framebuffer ──
+        while let Some(ev) = self.render_window_receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            if let Some((name, data)) = text.split_once('|') {
+                let registry = crate::display::render_registry::RENDER_REGISTRY.lock();
+                // Obtém framebuffer + rect do compositor
+                let mut comp = COMPOSITOR.lock();
+                if let Some(ref mut desktop) = *comp {
+                    let rect = crate::display::tiling::Rect {
+                        x: 60, y: 60,
+                        width: (desktop.w.saturating_sub(120)) as u32,
+                        height: (desktop.h.saturating_sub(120)) as u32,
+                    };
+                    let theme = crate::display::theme::current_theme();
+                    if registry.render(name, &mut desktop.fb, rect, &theme, data.as_bytes()) {
+                        k_nano::slog_jarbas!("RENDER", "info", "window '{}' ({} bytes)", name, data.len());
+                    } else {
+                        k_nano::slog_jarbas!("RENDER", "warn", "skill '{}' nao registrada", name);
+                    }
                 }
             }
         }

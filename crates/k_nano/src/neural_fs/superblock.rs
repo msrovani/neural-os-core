@@ -43,19 +43,33 @@ impl Superblock {
     }
 
     fn read_block(dev: &mut dyn BlockDevice, start_lba: u64, block_num: u64) -> Option<[u8; 4096]> {
-        let block_lba = block_num.checked_mul(8)?;
+        let block_lba = block_num.checked_mul(8);
+        if block_lba.is_none() { crate::slog_nano!("NEURALFS", "info", "read_block FAIL: checked_mul block={}", block_num); return None; }
+        let block_lba = block_lba.unwrap();
         let mut block = [0u8; 4096];
         for i in 0..8 {
             let off = i * 512;
-            let lba = start_lba.checked_add(block_lba.checked_add(i as u64)?)?;
-            if !dev.read_sectors(lba, &mut block[off..off + 512]) {
+            let sum = block_lba.checked_add(i as u64);
+            if sum.is_none() { crate::slog_nano!("NEURALFS", "info", "read_block FAIL: checked_add1 block={} i={}", block_num, i); return None; }
+            let lba = start_lba.checked_add(sum.unwrap());
+            if lba.is_none() { crate::slog_nano!("NEURALFS", "info", "read_block FAIL: checked_add2 block={} i={}", block_num, i); return None; }
+            if !dev.read_sectors(lba.unwrap(), &mut block[off..off + 512]) {
+                crate::slog_nano!("NEURALFS", "info", "read_block FAIL: read_sectors block={} i={} lba={}", block_num, i, lba.unwrap());
                 return None;
             }
         }
-        if &block[0..8] != SUPERBLOCK_MAGIC { return None; }
+        if &block[0..8] != SUPERBLOCK_MAGIC {
+            crate::slog_nano!("NEURALFS", "info", "read_block: magic FAIL block={} (got={:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x})",
+                block_num, block[0], block[1], block[2], block[3], block[4], block[5], block[6], block[7]);
+            return None;
+        }
         let stored_crc = u32::from_le_bytes([block[12], block[13], block[14], block[15]]);
+        block[12..16].copy_from_slice(&0u32.to_le_bytes());
         let computed_crc = crate::neural_fs::checksum::crc32c(&block[4..4096]);
-        if stored_crc != computed_crc { return None; }
+        if stored_crc != computed_crc {
+            crate::slog_nano!("NEURALFS", "info", "read_block: CRC FAIL block={} stored={:#x} computed={:#x}", block_num, stored_crc, computed_crc);
+            return None;
+        }
         Some(block)
     }
 

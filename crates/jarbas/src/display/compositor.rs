@@ -53,52 +53,68 @@ pub enum FocusMode {
     Ambient,
 }
 pub static FOCUS_MODE: Mutex<FocusMode> = Mutex::new(FocusMode::Ambient);
-/// Banner power (confirm / shutting) — set pelo DisplayAgent.
+/// Banner power (mensagem de estado) — set pelo DisplayAgent.
 pub static POWER_BANNER: Mutex<Option<&'static str>> = Mutex::new(None);
+
+/// Estado da ação de energia: None (normal), Dialog (confirmação), ou ação em andamento.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerState {
+    None,
+    Dialog,
+    ShuttingDown,
+    Hibernating,
+    Rebooting,
+}
+pub static POWER_STATE: Mutex<PowerState> = Mutex::new(PowerState::None);
 
 pub const POWER_BTN_W: usize = 48;
 pub const POWER_BTN_H: usize = 28;
 
-/// Diálogo de confirmação de desligamento (modal central).
-/// Botões: Cancel (esquerda) e Turn off (direita).
+/// Diálogo de energia (modal central) com 3 opções.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PowerDialogAction {
     None,
     Cancel,
-    TurnOff,
+    ShutDown,
+    Hibernate,
+    Reboot,
 }
 
-/// Geometria do diálogo de power (calculada em runtime conforme scr_w/scr_h).
+/// Geometria do diálogo de energia (calculada em runtime conforme scr_w/scr_h).
 pub fn power_dialog_rect(scr_w: usize, scr_h: usize) -> (usize, usize, usize, usize) {
-    let dw = 360;
-    let dh = 140;
+    let dw = 260;
+    let dh = 150;
     let dx = scr_w.saturating_sub(dw) / 2;
     let dy = scr_h.saturating_sub(dh) / 2;
     (dx, dy, dw, dh)
 }
 
-/// Retorna a ação correspondente ao clique dentro do diálogo, ou None.
+/// Retorna a ação correspondente ao clique dentro do diálogo de energia.
+/// Clique fora retorna `None` (usado para cancelar).
 pub fn hit_power_dialog(cx: usize, cy: usize, scr_w: usize, scr_h: usize) -> PowerDialogAction {
     let (dx, dy, dw, dh) = power_dialog_rect(scr_w, scr_h);
     if cx < dx || cx >= dx + dw || cy < dy || cy >= dy + dh {
         return PowerDialogAction::None;
     }
-    // Botões na linha inferior: Cancel (esq) e Turn off (dir)
-    let btn_y = dy + dh - 40;
+    // 3 botões na linha inferior: Desligar | Hibernar | Reiniciar
+    let btn_y = dy + dh - 44;
     let btn_h = 28;
     if cy < btn_y || cy >= btn_y + btn_h {
         return PowerDialogAction::None;
     }
-    let btn_w = 120;
-    let gap = 20;
-    let total_w = btn_w * 2 + gap;
+    let btn_w = 68;
+    let gap = 10;
+    let total_w = btn_w * 3 + gap * 2;
     let start_x = dx + (dw.saturating_sub(total_w)) / 2;
-    let cancel_x = start_x;
-    let off_x = start_x + btn_w + gap;
-    if cx >= cancel_x && cx < cancel_x + btn_w {
-        PowerDialogAction::Cancel
-    } else if cx >= off_x && cx < off_x + btn_w {
-        PowerDialogAction::TurnOff
+    let desligar_x = start_x;
+    let hibernar_x = start_x + btn_w + gap;
+    let reiniciar_x = start_x + (btn_w + gap) * 2;
+    if cx >= desligar_x && cx < desligar_x + btn_w {
+        PowerDialogAction::ShutDown
+    } else if cx >= hibernar_x && cx < hibernar_x + btn_w {
+        PowerDialogAction::Hibernate
+    } else if cx >= reiniciar_x && cx < reiniciar_x + btn_w {
+        PowerDialogAction::Reboot
     } else {
         PowerDialogAction::None
     }
@@ -345,6 +361,29 @@ impl JarbasDesktop {
         let mode = *FOCUS_MODE.lock();
 
         // ═════════════════════════════════════════════════════════════
+        // ESTADO DE ENERGIA: tela preta + mensagem centralizada
+        // ═════════════════════════════════════════════════════════════
+        {
+            let pstate = POWER_STATE.lock();
+            if *pstate == PowerState::ShuttingDown
+                || *pstate == PowerState::Hibernating
+                || *pstate == PowerState::Rebooting
+            {
+                drop(pstate);
+                self.fb.fill_rect(0, 0, w, h, 0, 0, 0);
+                let msg = if let Some(banner) = *POWER_BANNER.lock() { banner } else { "" };
+                if !msg.is_empty() {
+                    let tw = msg.len() * 8; // approx pixel width
+                    let tx = w.saturating_sub(tw) / 2;
+                    draw_text(&mut self.fb, tx, h / 2 - 8, msg, w, 255, 200, 80);
+                }
+                draw_mouse_cursor(&mut self.fb, *MOUSE_X.lock(), *MOUSE_Y.lock(), w, h);
+                self.fb.swap();
+                return;
+            }
+        }
+
+        // ═════════════════════════════════════════════════════════════
         // CAMADA 0: Fundo escuro + Orb responsivo (tela inteira)
         // ═════════════════════════════════════════════════════════════
         self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
@@ -460,33 +499,43 @@ impl JarbasDesktop {
         draw_text(&mut self.fb, w/2 - 90, h - 18, mode_str, self.w,
                   theme.accent.0, theme.accent.1, theme.accent.2);
 
-        if let Some(banner) = *POWER_BANNER.lock() {
-            let bx = (w - 280) / 2;
-            self.fb.fill_rect(bx, 40, 280, 28, 8, 10, 16);
-            draw_text(&mut self.fb, bx + 8, 48, banner, self.w, theme.warning.0, theme.warning.1, theme.warning.2);
-        }
-
-        // Diálogo de desligamento (modal central)
+        // Diálogo de energia (modal central) — 3 opções
         if self.power_dialog {
             let (dx, dy, dw, dh) = power_dialog_rect(self.w, self.h);
-            self.fb.fill_rect(dx + 6, dy + 6, dw, dh, 0, 0, 0);
+            // Sombra
+            self.fb.fill_rect(dx + 4, dy + 4, dw, dh, 0, 0, 0);
+            // Fundo
             self.fb.fill_rect(dx, dy, dw, dh, theme.bg_alt.0, theme.bg_alt.1, theme.bg_alt.2);
+            // Borda superior de acento
             self.fb.fill_rect(dx, dy, dw, 2, theme.accent.0, theme.accent.1, theme.accent.2);
-            self.fb.fill_rect(dx, dy + dh - 2, dw, 2, theme.accent.0, theme.accent.1, theme.accent.2);
-            self.fb.fill_rect(dx, dy, 2, dh, theme.accent.0, theme.accent.1, theme.accent.2);
-            self.fb.fill_rect(dx + dw - 2, dy, 2, dh, theme.accent.0, theme.accent.1, theme.accent.2);
-            draw_text(&mut self.fb, dx + 16, dy + 12, "Desligamento solicitado", self.w, theme.fg.0, theme.fg.1, theme.fg.2);
-            draw_text(&mut self.fb, dx + 16, dy + 44, "O sistema sera desligado.", self.w, theme.fg_muted.0, theme.fg_muted.1, theme.fg_muted.2);
-            let btn_y = dy + dh - 40;
+            // Título
+            draw_text(&mut self.fb, dx + 16, dy + 12, "Opcoes de Energia", self.w,
+                      theme.fg.0, theme.fg.1, theme.fg.2);
+            // Instrução
+            draw_text(&mut self.fb, dx + 16, dy + 36, "Selecione uma acao:", self.w,
+                      theme.fg_muted.0, theme.fg_muted.1, theme.fg_muted.2);
+            // 3 botões em linha
+            let btn_y = dy + dh - 44;
             let btn_h = 28;
-            let btn_w = 120;
-            let gap = 20;
-            let total_w = btn_w * 2 + gap;
+            let btn_w = 68;
+            let gap = 10;
+            let total_w = btn_w * 3 + gap * 2;
             let start_x = dx + (dw.saturating_sub(total_w)) / 2;
-            self.fb.fill_rect(start_x, btn_y, btn_w, btn_h, theme.border.0, theme.border.1, theme.border.2);
-            draw_text(&mut self.fb, start_x + 30, btn_y + 8, "Cancel", self.w, theme.fg.0, theme.fg.1, theme.fg.2);
-            self.fb.fill_rect(start_x + btn_w + gap, btn_y, btn_w, btn_h, theme.error.0, theme.error.1, theme.error.2);
-            draw_text(&mut self.fb, start_x + btn_w + gap + 22, btn_y + 8, "Turn off", self.w, theme.fg.0, theme.fg.1, theme.fg.2);
+
+            // Desligar (error)
+            self.fb.fill_rect(start_x, btn_y, btn_w, btn_h,
+                              theme.error.0, theme.error.1, theme.error.2);
+            draw_text(&mut self.fb, start_x + 8, btn_y + 6, "Desligar", self.w, 255, 255, 255);
+
+            // Hibernar (success - energia)
+            self.fb.fill_rect(start_x + btn_w + gap, btn_y, btn_w, btn_h,
+                              theme.success.0, theme.success.1, theme.success.2);
+            draw_text(&mut self.fb, start_x + btn_w + gap + 8, btn_y + 6, "Hibernar", self.w, 255, 255, 255);
+
+            // Reiniciar (warning)
+            self.fb.fill_rect(start_x + (btn_w + gap) * 2, btn_y, btn_w, btn_h,
+                              theme.warning.0, theme.warning.1, theme.warning.2);
+            draw_text(&mut self.fb, start_x + (btn_w + gap) * 2 + 8, btn_y + 6, "Reiniciar", self.w, 255, 255, 255);
         }
 
         // Virtual console

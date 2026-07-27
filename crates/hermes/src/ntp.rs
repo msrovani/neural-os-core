@@ -154,6 +154,8 @@ pub fn sync_once() -> bool {
 /// Boot/Cron: tenta sync com cooldown (não one-shot gate).
 /// Se já synced, faz resync periódico a cada RESYNC_INTERVAL_TICKS.
 pub fn try_sync() -> bool {
+    // ponytail: NTP via UDP não funciona em sandbox (SLIRP/TCG bloqueia UDP)
+    if k_nano::env::is_sandbox() { return false; }
     let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     let last = LAST_ATTEMPT_TICKS.load(Ordering::Relaxed);
 

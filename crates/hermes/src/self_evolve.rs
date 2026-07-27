@@ -188,7 +188,7 @@ pub fn verify_skill_md(content: &str) -> VerifyVerdict {
     if body.trim().len() < 24 {
         return VerifyVerdict::Reject("body_too_short");
     }
-    if body.len() > 16 * 1024 {
+    if body.len() > 256 * 1024 {
         return VerifyVerdict::Reject("body_too_large");
     }
     // Injection patterns (espelha loader + extras)

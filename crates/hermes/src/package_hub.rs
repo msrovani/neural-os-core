@@ -448,7 +448,7 @@ pub fn verify_artifact_md(kind: PackageKind, content: &str) -> Result<(), &'stat
     }
     let fm = parts[1];
     let body = parts[2];
-    if body.len() > 64 * 1024 {
+    if body.len() > 512 * 1024 {
         return Err("body_too_large");
     }
 

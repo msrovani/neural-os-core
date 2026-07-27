@@ -54,6 +54,7 @@ impl Superblock {
         }
         if &block[0..8] != SUPERBLOCK_MAGIC { return None; }
         let stored_crc = u32::from_le_bytes([block[12], block[13], block[14], block[15]]);
+        block[12..16].copy_from_slice(&0u32.to_le_bytes());
         let computed_crc = crate::neural_fs::checksum::crc32c(&block[4..4096]);
         if stored_crc != computed_crc { return None; }
         Some(block)

@@ -30,15 +30,38 @@ Migração do bootloader 0.11 para Limine (higher-half kernel). Correção de m�
 - `tools/limine/limine.cfg` — deletado (só limine.conf é usado)
 - `.gitignore` em `tools/limine/esp/`
 
+### 6. NTP silenciado em sandbox
+- **Causa**: NTP sync em loop (UDP bloqueado pelo SLIRP)
+- **Fix**: `if is_sandbox() { return false }` em `hermes/src/ntp.rs:try_sync()`
+
+### 7. Skill body size aumentado
+- `package_hub.rs`: 64KB→512KB
+- `self_evolve.rs`: 16KB→256KB
+
+### 8. Power menu (Designer)
+- Substituído diálogo simples de confirmação por menu com 3 opções: **Desligar**, **Hibernar**, **Reiniciar**
+- Botões coloridos (vermelho/verde/âmbar) com eventos distintos (SYSTEM_SHUTDOWN/HIBERNATE/REBOOT)
+- Tela preta com mensagem centralizada antes do ACPI cortar
+
+### 9. WHPX PIT skip
+- **Causa**: WHPX emite `Ignoring request for interrupt vector 0` quando o kernel programa o PIT
+- **Fix**: Detecção de WHPX via CPUID leaf 0x40000000 em `apic.rs:pit_init()` → skip do PIT (LAPIC only)
+
+### 10. NeuralFS RAM mount (CRC fix)
+- **Causa**: `superblock.rs:read_block()` calculava CRC32C sem zerar o campo CRC (diferente de `encode_block()` que zera antes de calcular). CRC nunca batia → mount retornava None.
+- **Fix**: `block[12..16].copy_from_slice(&0u32.to_le_bytes())` antes de computar o CRC, em AMBAS as cópias (k_nano e hermes).
+
 ## Resultados
-- Boot Limine → desktop Jarbas na tela do QEMU
+- Boot Limine → desktop Jarbas na tela do QEMU (WHPX + janela)
 - e1000: ARP, DNS, HTTP funcionam durante boot
 - P6-P9 capability demos OK (non-fatal)
 - 55 agentes registrados, scheduler rodando
 - Soft power off via botão Power → ACPI PM1a_CNT (0xb004) → QEMU desliga
-- WHPX com warning "Ignoring request for interrupt vector 0" — pendente
+- WHPX sem warning (PIT skip funciona)
+- NeuralFS montado: RAM 4MB free_blocks=1010 inodes=2
+- Boot rápido: T+107 NeuralFS, T+333 Desktop (WHPX)
 
-## Arquivos Modificados (21)
+## Arquivos Modificados (31+)
 - `crates/neural-kernel/src/main.rs` — PHYS_MEM_OFFSET early store, organização boot
 - `crates/neural-kernel/src/user_mode.rs` — TRY_ENTER_RING3=false + guard topo
 - `crates/neural-kernel/src/elf_loader.rs` — PHYS_MEM_OFFSET guard

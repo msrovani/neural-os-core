@@ -169,7 +169,14 @@ impl IoApic {
         println!("[APIC] PIC 8259 desabilitado.");
     }
 
+    /// ponytail: setada antes de pit_init() quando hv=WHPX (PIT ignora vector 0)
+    pub static SKIP_PIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
     pub unsafe fn pit_init() {
+        if SKIP_PIT.load(core::sync::atomic::Ordering::Relaxed) {
+            crate::slog_nano!("PIT", "info", "WHPX detectado — PIT skip (LAPIC only)");
+            return;
+        }
         core::arch::asm!("out 0x43, al", in("al") 0x36u8, options(nostack, preserves_flags));
         core::arch::asm!("out 0x40, al", in("al") 0x00u8, options(nostack, preserves_flags));
         core::arch::asm!("out 0x40, al", in("al") 0x00u8, options(nostack, preserves_flags));
