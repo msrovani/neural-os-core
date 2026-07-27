@@ -78,11 +78,12 @@ pub struct Checkpoint {
     pub allocated_count: usize,
     pub mhi_dram_bytes: u64,
     pub tick: u64,
-    pub heap_start: u64,           // heap region start address (0 = unknown)
-    pub heap_size: u64,             // heap region size in bytes
-    pub page_table_pml4_addr: u64,  // CR3 / PML4 physical address (0 = unknown)
-    pub driver_state_hash: u64,     // FNV-1a hash of driver init flags (0 = not captured)
-    pub checkpoint_version: u8,     // format version (increment to 2)
+    pub heap_start: u64,             // heap region start address (0 = unknown)
+    pub heap_size: u64,               // heap region size in bytes
+    pub page_table_pml4_addr: u64,    // CR3 / PML4 physical address (0 = unknown)
+    pub driver_state_hash: u64,       // FNV-1a hash of driver init flags (0 = not captured)
+    pub checkpoint_version: u8,       // serialization format version (v2=10 u64s, v3=+save_count)
+    pub save_count: u64,              // incremented on each save_checkpoint() call
 }
 
 impl Checkpoint {
@@ -95,12 +96,13 @@ impl Checkpoint {
             heap_start: 0, heap_size: 0,
             page_table_pml4_addr: 0, driver_state_hash: 0,
             checkpoint_version: 0,
+            save_count: 0,
         }
     }
 
     /// Serialize checkpoint to binary blob for SGDB storage.
     fn serialize(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(1 + BITMAP_SIZE + 8 * 8 + 1);
+        let mut buf = Vec::with_capacity(1 + BITMAP_SIZE + 11 * 8 + 1);
         buf.push(if self.valid { 1 } else { 0 });
         buf.extend_from_slice(&self.bitmap);
         buf.extend_from_slice(&(self.next_free_bit as u64).to_le_bytes());
@@ -114,12 +116,16 @@ impl Checkpoint {
         buf.extend_from_slice(&self.page_table_pml4_addr.to_le_bytes());
         buf.extend_from_slice(&self.driver_state_hash.to_le_bytes());
         buf.push(self.checkpoint_version);
+        buf.extend_from_slice(&self.save_count.to_le_bytes());
         buf
     }
 
     /// Deserialize checkpoint from binary blob.
+    /// Supports v2 (10 u64s) and v3 (10 u64s + save_count) formats.
     fn deserialize(data: &[u8]) -> Option<Self> {
-        if data.len() < 1 + BITMAP_SIZE + 8 * 8 + 1 {
+        // minimum: valid(1) + bitmap(BITMAP_SIZE) + 10*u64(80) + version(1) = BITMAP_SIZE + 82
+        // v3 adds save_count(8) = BITMAP_SIZE + 90
+        if data.len() < 1 + BITMAP_SIZE + 80 + 1 {
             return None;
         }
         let mut off = 0;
@@ -149,6 +155,13 @@ impl Checkpoint {
         let driver_state_hash = u64::from_le_bytes(data[off..off + 8].try_into().ok()?);
         off += 8;
         let checkpoint_version = data[off];
+        off += 1;
+        // v3+: save_count appended after checkpoint_version
+        let save_count = if checkpoint_version >= 3 && data.len() >= off + 8 {
+            u64::from_le_bytes(data[off..off + 8].try_into().ok()?)
+        } else {
+            0
+        };
         Some(Checkpoint {
             valid,
             bitmap,
@@ -163,6 +176,7 @@ impl Checkpoint {
             page_table_pml4_addr,
             driver_state_hash,
             checkpoint_version,
+            save_count,
         })
     }
 }
@@ -396,10 +410,11 @@ impl SelfHeal {
             hash = hash.wrapping_mul(0x100000001b3) ^ (byte as u64);
         }
         self.checkpoint.driver_state_hash = hash;
-        self.checkpoint.checkpoint_version = 2;
+        self.checkpoint.save_count = self.checkpoint.save_count.wrapping_add(1);
+        self.checkpoint.checkpoint_version = 3; // v3 = save_count field
         self.checkpoint.valid = true;
-        k_nano::slog_kai!("CHECKPOINT", "info", "Salvo @ tick {} — {} frames alocados ({} KB bitmap)",
-            self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
+        k_nano::slog_kai!("CHECKPOINT", "info", "Salvo #{} @ tick {} — {} frames alocados ({} KB bitmap)",
+            self.checkpoint.save_count, self.checkpoint.tick, self.checkpoint.allocated_count, BITMAP_SIZE / 1024);
         // Persist to SGDB
         let blob = self.checkpoint.serialize();
         match crate::sgdb::put_kv("sys/checkpoint", &blob) {
@@ -438,6 +453,29 @@ impl SelfHeal {
         (chunker::chunk_data(&current_bmp), nonzero)
     }
 
+    /// Restore checkpoint state.
+    ///
+    /// # Best-effort semantics
+    ///
+    /// This is a **best-effort** restore. Only the frame allocator bitmap is
+    /// actually written back to the running allocator. The following state is
+    /// **saved but NOT restored** (until subsystems become checkpoint-aware):
+    ///
+    /// | State                  | Saved? | Restored? | Reason |
+    /// |------------------------|--------|-----------|-------|
+    /// | Frame allocator bitmap | ✅     | ✅        | Written back to `GLOBAL_ALLOCATOR` |
+    /// | Frame allocator cursor | ✅     | ✅        | `next_free_bit`, totals |
+    /// | Heap region (start/sz) | ✅     | ❌        | `talc` heap not snapshot-aware |
+    /// | Page tables (PML4/CR3) | ✅     | ❌        | P09 — would need full PML4 walk |
+    /// | Driver init state      | ✅     | ❌        | Driver structs not snapshot-aware |
+    /// | MHI DRAM bytes         | ✅     | ❌        | MHI state lives in hermes crate |
+    /// | Timestamp (tick)       | ✅     | ❌        | Informational only |
+    /// | Save count (#)         | ✅     | ❌        | Informational only |
+    ///
+    /// To add restore for a new subsystem:
+    ///   1. Add save/load fields to `Checkpoint`
+    ///   2. Implement a `checkpoint_restore(&self)` method on the subsystem
+    ///   3. Call it here after the bitmap restore
     pub fn restore_checkpoint(&mut self) -> bool {
         // Try SGDB first
         if crate::sgdb::ready() {
@@ -456,7 +494,8 @@ impl SelfHeal {
             k_nano::slog_kai!("CHECKPOINT", "info", "Nenhum checkpoint valido para restaurar.");
             return false;
         }
-        k_nano::slog_kai!("CHECKPOINT", "info", "Restaurando estado @ tick {}...", self.checkpoint.tick);
+        k_nano::slog_kai!("CHECKPOINT", "info", "Restaurando checkpoint #{} v{} @ tick {}...",
+            self.checkpoint.save_count, self.checkpoint.checkpoint_version, self.checkpoint.tick);
         let mut guard = GLOBAL_ALLOCATOR.lock();
         if let Some(ref mut alloc) = *guard {
             alloc.bitmap = self.checkpoint.bitmap;
@@ -467,13 +506,21 @@ impl SelfHeal {
         }
         drop(guard);
         k_nano::slog_kai!("CHECKPOINT", "info",
-            "v{}: heap={:#x}+{}MB pml4={:#x} drivers_hash={:#x} — AVISO: page tables/heap/drivers NAO restaurados (P09)",
-            self.checkpoint.checkpoint_version,
+            "RESTORED bitmap={}/{} frames allocated_count={} heap={:#x}+{}MB",
+            self.checkpoint.next_free_bit, self.checkpoint.total_frames,
+            self.checkpoint.allocated_count,
             self.checkpoint.heap_start,
-            self.checkpoint.heap_size / (1024 * 1024),
+            self.checkpoint.heap_size / (1024 * 1024));
+        k_nano::slog_kai!("CHECKPOINT", "warn",
+            "BEST-EFFORT: page_tables(pml4={:#x}) heap_talc drivers(mhi={},hash={:#x}) NOT restored — subsystems not checkpoint-aware (P09)",
             self.checkpoint.page_table_pml4_addr,
-            self.checkpoint.driver_state_hash
-        );
+            self.checkpoint.mhi_dram_bytes,
+            self.checkpoint.driver_state_hash);
+        k_nano::slog_kai!("SELF-HEAL", "info",
+            "checkpoint loaded: saved={} version={} heap={}",
+            self.checkpoint.save_count,
+            self.checkpoint.checkpoint_version,
+            self.checkpoint.heap_size);
         true
     }
 

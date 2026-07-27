@@ -88,6 +88,7 @@ pub mod storage_manager;
 pub mod storage_bus;
 pub mod sync;
 // ponytail: time_utils.rs moved to LEGACY/v1.5-dead-k2chj/k_nano/ (dead code)
+pub mod telemetry;
 pub mod tpm;
 pub mod tracer;
 pub mod usb_msc;
@@ -99,7 +100,8 @@ pub mod virtio_gpu;
 pub mod virtio_net;
 pub mod xhci;
 
-// Macros (serial_println!, println!, kjson!, klogc!) are exported via
+// Macros (serial_println!, println!, kjson!, klogc!, slog_bin!) are exported via
 // #[macro_export] from their respective source files.
-// Nota: `debug_rl!` (rate-limited debug log) existe apenas no monólito
-// neural-kernel (main.rs) — não foi portado para k_nano ainda.
+// DEPRECATED: `debug_rl!` (rate-limited debug log) existia no monólito mas
+// foi substituído por `slog_bin!`. Mantido apenas como histórico em main.rs
+// com atributo #[deprecated]. Não portar para k_nano.

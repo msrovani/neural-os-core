@@ -1265,8 +1265,7 @@ impl Agent for HermesAgent {
                 hermes::Command::Chat(ref msg) => {
                     // ── Hermes pre-flight: skill_writer OBRIGATORIO para criacao de skill ──
                     if crate::cognitive_bridge::is_skill_creation_request(msg) {
-                        k_nano::slog_hermes!("HERMES", "info",
-                            "skill_writer pre-flight: skill creation detected — enforcing skill_writer consultation");
+
                         // SKILL_WRITER_CONTENT e constante compile-time, sempre carregada.
                         // Esta guarda garante rastreabilidade: toda criacao de skill passa por aqui.
                         let _ = crate::skill_loader::SKILL_WRITER_CONTENT;
@@ -2006,6 +2005,8 @@ struct LearnNeed {
     triggered: bool,         // ja iniciou aprendizado?
 }
 
+// Ring 1 ownership: permanece em hermes (R3) por depender de EVENT_BUS e crate::net_bridge.
+// ADR-0060 A.4: AutoLearnAgent mantido em hermes; aprendizado base (workflow_learner) em k_ai.
 pub struct AutoLearnAgent {
     needs: Vec<LearnNeed>,
     tick_count: u64,
@@ -2069,6 +2070,8 @@ impl AutoLearnAgent {
         let loss = trainer.train_step(&mut weights, &inputs, &targets);
         k_nano::slog_hermes!("TRINITY", "Learn", "{}: fine-tuning concluido (loss={:.4}, steps={})", topic, loss, trainer.trained);
         k_nano::slog_hermes!("TRINITY", "Learn", "{}: TRINITY APRENDEU!", topic);
+        // Nova skill ou expert → invalida cache R3 (MoE routing) para forçar re-avaliação
+        cortex::global_arena::reset_moe_cache();
     }
 
     fn load_knowledge(&self, topic: &str) -> Vec<u8> {
@@ -2175,6 +2178,8 @@ const SLEEPCYCLE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+// Ring 1 ownership: permanece em hermes (R3) por depender de crate::self_evolve e cortex::global_arena.
+// ADR-0060 A.4: SleepCycle mantido em hermes; PlasticityController em k_ai.
 pub struct SleepCycleAgent {
     phase: u8, cycle_count: u64, phase_tick: u64, insights: Vec<String>,
 }
@@ -2241,6 +2246,7 @@ impl SleepCycleAgent {
                     self.insights.drain(0..50);
                 }
                 let pruned = k_ai::sgdb::prune_working_ram();
+                k_ai::sgdb::update_with_replay();
                 k_nano::slog_hermes!(
                     "SLEEP",
                     "info",

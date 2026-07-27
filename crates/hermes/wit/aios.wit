@@ -1,0 +1,71 @@
+// WIT-typed ABI para host functions do neural-os-core (ADR-0076 Onda 3.2).
+// Inspirado por Astrid: `astrid:fs`, `astrid:net`, `astrid:http` — pacotes WIT versionados.
+//
+// Esse arquivo descreve as interfaces que o runtime WASM expõe para skills WASM.
+// Compatível com wasm-tools e ferramentas do ecossistema WASM.
+
+package aios:v1;
+
+// ─── Interface de I/O básica ───
+interface log {
+    /// Escreve mensagem no buffer de saída da skill.
+    /// Retorna void. Cap necessária: CAP_LOG (bit 0).
+    log: func(ptr: u32, len: u32)
+
+    /// Debug: recebe i32, retorna o mesmo valor.
+    /// Usado para debug de pipelines WASM.
+    debug: func(val: s32) -> s32
+
+    /// Retorna o tick atual do timer do kernel.
+    get-tick: func() -> s64
+}
+
+// ─── Interface de rede ───
+interface network {
+    /// HTTP GET request.
+    /// `ptr` e `len` apontam para URL na memória WASM.
+    /// Retorna status code ou -1 se stub.
+    http-get: func(ptr: u32, len: u32) -> s32
+}
+
+// ─── Interface de filesystem ───
+interface filesystem {
+    /// Leitura de arquivo.
+    /// `ptr`/`len` = path, `max` = tamanho máximo.
+    /// Retorna bytes lidos.
+    fs-read: func(ptr: u32, len: u32, max: u32) -> s32
+
+    /// Escrita de arquivo.
+    /// `ptr`/`len` = path + conteúdo.
+    /// Retorna bytes escritos.
+    fs-write: func(ptr: u32, len: u32) -> s32
+}
+
+// ─── Interface WASI Preview 1 ───
+// Stubs implementados em wasi_host.rs para compatibilidade com wasm32-wasi.
+// Ver wasi_snapshot_preview1 para spec completa.
+interface wasi-stubs {
+    fd-write: func(fd: u32, iovs: u32, iovs-len: u32, nwritten: u32) -> u32
+    fd-close: func(fd: u32) -> u32
+    fd-seek: func(fd: u32, offset: s64, whence: u32, newoffset: u32) -> u32
+    fd-prestat-get: func(fd: u32, buf: u32) -> u32
+    fd-prestat-dir-name: func(fd: u32, path: u32, path-len: u32) -> u32
+    environ-sizes-get: func(count: u32, buf-size: u32) -> u32
+    environ-get: func(environ: u32, environ-buf: u32) -> u32
+    args-sizes-get: func(count: u32, buf-size: u32) -> u32
+    args-get: func(argv: u32, argv-buf: u32) -> u32
+    proc-exit: func(code: u32)
+    random-get: func(buf: u32, buf-len: u32) -> u32
+    clock-time-get: func(id: u32, precision: s64, time: u32) -> u32
+    path-open: func(fd: u32, dirflags: u32, path: u32, path-len: u32, oflags: u32, fs-rights-base: s64, fs-rights-inheriting: s64, fdflags: u32, result-fd: u32) -> u32
+    fd-read: func(fd: u32, iovs: u32, iovs-len: u32, nread: u32) -> u32
+    fd-fdstat-get: func(fd: u32, buf: u32) -> u32
+}
+
+// ─── Namespace canônico ───
+world aios-world {
+    import log
+    import network
+    import filesystem
+    import wasi-stubs
+}

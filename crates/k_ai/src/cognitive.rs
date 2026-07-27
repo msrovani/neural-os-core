@@ -412,6 +412,7 @@ impl CodebookVQ {
 #[derive(Clone, Debug)]
 pub enum ReActStep { Thought(String), Action(String, Vec<String>), Observation(String) }
 
+// ponytail: no-op — real ReAct loop when Hermes intent routing wires LLM
 pub struct ReActLoop {
     pub history: Vec<ReActStep>,
     pub max_iter: usize,
@@ -640,6 +641,7 @@ impl BitNetTrainer {
 // M39 Candle Trainer sidecar — stub para treino externo
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ponytail: no-op — real sidecar when on-device Candle/PyTorch bridge lands
 pub struct CandleSidecar {
     pub connected: bool,
     pub last_loss: f32,
@@ -655,6 +657,7 @@ impl CandleSidecar {
 // M40 Task Spawner — ELF loader wrapper
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ponytail: no-op — real spawner when Ring3 isolation (ADR-0060) enables ELF load
 pub struct TaskSpawner {
     pub spawned: u64,
     pub max_children: usize,

@@ -11,13 +11,26 @@
 //! (`wasm.rs`) — aposentados pela ADR-0059.
 
 use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
 use wasmi::{Config, Engine, Linker, Module, Store};
+
+// ─── Capability bitmask constants ───
+// Usado pelo check_cap() para gate de host functions.
+pub const CAP_LOG: u32     = 1 << 0;
+pub const CAP_NET: u32     = 1 << 1;
+pub const CAP_FS: u32      = 1 << 2;
+pub const CAP_DISPLAY: u32 = 1 << 3;
+pub const CAP_AUDIO: u32   = 1 << 4;
+pub const CAP_CRYPTO: u32  = 1 << 5;
+pub const CAP_IO: u32      = 1 << 6;
+pub const CAP_DMA: u32     = 1 << 7;
+pub const CAP_SYS: u32     = 1 << 8;
+pub const CAP_ALL: u32     = 0xFFFF_FFFF;
+pub const CAP_NONE: u32    = 0;
 
 /// Estado do host visível às funções importadas (capabilities concedidas).
 pub struct HostState {
-    /// Bitmask de capabilities concedidas ao módulo (ADR-0041 CapGate).
     pub caps: u32,
-    /// Buffer de saída textual do módulo (via `aios::log`).
     pub out: Vec<u8>,
 }
 
@@ -27,37 +40,95 @@ impl HostState {
     }
 }
 
-/// Fuel default por execução (determinístico; evita loop infinito).
+/// Fuel default por execução.
 pub const DEFAULT_FUEL: u64 = 5_000_000;
 
-/// Instala os host-imports `aios::*` e `wasi_snapshot_preview1` no linker,
-/// cada um **gated por CapGate**. Sem a capability correspondente, a chamada
-/// faz trap (deny honesto).
+/// Verifica cap bitmask e roteia Escalate para PermissionGate.
+fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &str, name: &str) -> Result<(), wasmi::core::Trap> {
+    let held = caller.data().caps;
+    // 1. Bitmask check
+    if held & required == 0 {
+        k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
+        return Err(wasmi::core::Trap::new("capability denied (bitmask)"));
+    }
+    // 2. PermissionGate escalate check
+    // Membrane::check é chamado pelo PermissionGate internamente
+    let verdict = crate::permission_gate::PermissionGate::check(namespace, name, crate::membrane::Verdict::Allow);
+    match verdict {
+        crate::permission_gate::PermissionVerdict::Allow => Ok(()),
+        crate::permission_gate::PermissionVerdict::Deny => {
+            k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
+            Err(wasmi::core::Trap::new("permission denied (gate)"))
+        }
+        crate::permission_gate::PermissionVerdict::Pending { id } => {
+            // O PermissionGate já fez spin-wait; se chegou aqui é Allow ou Deny
+            k_nano::slog_hermes!("WASMI", "warn", "Pending HITL #{} — should not reach here", id);
+            Err(wasmi::core::Trap::new("HITL pending"))
+        }
+    }
+}
+
+/// Instala os host-imports `aios::*`, `aios_net::*`, `aios_fs::*`
+/// e `wasi_snapshot_preview1` no linker, **gated por CapGate + PermissionGate**.
 fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> {
-    // aios::log(ptr,len) — escreve no buffer de saída (sempre permitido: observe-only).
-    linker
-        .func_wrap(
-            "aios",
-            "log",
-            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
-                // Lê a memória exportada "memory" do guest (se houver) e copia.
-                if let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") {
-                    let data = mem.data(&caller);
-                    let (p, l) = (ptr as usize, len as usize);
-                    if p.saturating_add(l) <= data.len() {
-                        let mut buf = Vec::with_capacity(l);
-                        buf.extend_from_slice(&data[p..p + l]);
-                        caller.data_mut().out.extend_from_slice(&buf);
-                    }
+    // ── aios::log(ptr,len) ────────────────────────────────────────────────
+    linker.func_wrap("aios", "log",
+        |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
+            check_cap(&caller, CAP_LOG, "aios", "log").unwrap();
+            if let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") {
+                let data = mem.data(&caller);
+                let (p, l) = (ptr as usize, len as usize);
+                if p.saturating_add(l) <= data.len() {
+                    let mut buf = Vec::with_capacity(l);
+                    buf.extend_from_slice(&data[p..p + l]);
+                    caller.data_mut().out.extend_from_slice(&buf);
                 }
-            },
-        )
-        .map_err(|_| "linker aios::log")?;
+            }
+            k_nano::telemetry::TELEMETRY.push(3, 0, &[0; 32]); // EV_WASM_CALL
+        },
+    ).map_err(|_| "linker aios::log")?;
+
+    // ── aios::debug(i32) -> i32 ─────────────────────────────────────────────
+    linker.func_wrap("aios", "debug",
+        |caller: wasmi::Caller<'_, HostState>, val: i32| -> i32 {
+            check_cap(&caller, CAP_LOG, "aios", "debug").unwrap();
+            val
+        },
+    ).map_err(|_| "linker aios::debug")?;
+
+    // ── aios::get_tick() -> i64 ─────────────────────────────────────────────
+    linker.func_wrap("aios", "get_tick",
+        |caller: wasmi::Caller<'_, HostState>| -> i64 {
+            check_cap(&caller, CAP_LOG, "aios", "get_tick").unwrap();
+            k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as i64
+        },
+    ).map_err(|_| "linker aios::get_tick")?;
+
+    // ── aios_net::http_get(ptr,len) -> i32 ──────────────────────────────────
+    linker.func_wrap("aios_net", "http_get",
+        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> i32 {
+            check_cap(&caller, CAP_NET, "aios_net", "http_get").unwrap();
+            -1 // ponytail: stub — sem HTTP real
+        },
+    ).map_err(|_| "linker aios_net::http_get")?;
+
+    // ── aios_fs::fs_read(ptr,len,max) -> i32 ────────────────────────────────
+    linker.func_wrap("aios_fs", "fs_read",
+        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32, _max: i32| -> i32 {
+            check_cap(&caller, CAP_FS, "aios_fs", "fs_read").unwrap();
+            0 // ponytail: stub
+        },
+    ).map_err(|_| "linker aios_fs::fs_read")?;
+
+    // ── aios_fs::fs_write(ptr,len) -> i32 ───────────────────────────────────
+    linker.func_wrap("aios_fs", "fs_write",
+        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> i32 {
+            check_cap(&caller, CAP_FS, "aios_fs", "fs_write").unwrap();
+            0 // ponytail: stub
+        },
+    ).map_err(|_| "linker aios_fs::fs_write")?;
 
     // ── wasi_snapshot_preview1 ──────────────────────────────────────────────
-    // Register WASI Preview 1 stubs (wasi_host.rs) — fd_write, clock_time_get,
-    // random_get, path_open, environ/args, proc_exit, etc. Required for any
-    // wasm32-wasi module to initialize (wasi-libc calls fd_prestat_get on startup).
     super::wasi_host::register_wasi_host_functions(linker)
         .map_err(|_| "linker wasi_snapshot_preview1")?;
 

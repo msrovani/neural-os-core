@@ -1,7 +1,7 @@
 //! AIOS API — Sprint 106-8
 //! Bibliotecas internas (aios_net, aios_fs) expostas como system prompt / RAG
 //! para agentes Python (MicroPython WASM) e skills gerados pelo Cortex.
-//! P3: wrappers de rede passam por CapabilityGate (Cap::SEND_TCP).
+//! P3: wrappers de rede passam por CapabilityGate (Cap::RING_OP, ADR-0076 §4.3).
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -81,12 +81,12 @@ pub fn aios_net_http_get(url: &str) -> Result<String, &'static str> {
         .map_err(|_| "aios_net.http_get: not utf8")
 }
 
-/// Host sensível: TCP send exige Cap::SEND_TCP (Hermes WASM / skills).
+/// Host sensível: TCP send exige Cap::RING_OP (Hermes WASM / skills).
 pub fn aios_send_tcp(held: Cap, host: &str, port: u16) -> Result<u64, &'static str> {
     capability_gate::host_send_tcp(held, host, port)
 }
 
-/// Host sensível: write ring IPC exige Cap::WRITE_RING.
+/// Host sensível: write ring IPC exige Cap::RING_OP (ADR-0076 §4.3).
 pub fn aios_write_ring(held: Cap) -> Result<u64, &'static str> {
     capability_gate::host_write_ring(held)
 }

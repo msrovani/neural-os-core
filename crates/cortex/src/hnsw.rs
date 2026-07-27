@@ -1,8 +1,6 @@
 //! HNSW (Hierarchical Navigable Small World) index para busca aproximada.
 //! Multi-layer graph, O(log N) search. Baseado em Malkov & Yashunin (2016).
-//!
-//! Canonical copy lives here in k_nano (needed by VFS).
-//! cortex has a secondary copy for the inference engine's search layer.
+//! Moved from k_nano — search/heuristics is part of the inference engine.
 
 use alloc::vec::Vec;
 use alloc::vec;
@@ -52,7 +50,7 @@ impl HnswIndex {
     pub fn is_empty(&self) -> bool { self.nodes.is_empty() }
 
     fn random_level() -> usize {
-        let r = crate::hw_rng::HardwareRandom::next_u64_retry(5).unwrap_or(42);
+        let r = k_nano::hw_rng::HardwareRandom::next_u64_retry(5).unwrap_or(42);
         let f = (r & 0xFFFF) as f32 / 65536.0;
         (-libm::logf(f.max(0.0001)) * ML) as usize
     }

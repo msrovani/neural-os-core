@@ -1,3 +1,6 @@
+//! Ring 1 ownership: permanece em hermes (R3) por depender de EVENT_BUS (tópicos NET_EVENT, SYSTEM_EVENT).
+//! ADR-0060 A.4: SecurityPipeline mantido em hermes; detectores base em k_ai::security_detectors.
+//!
 //! Security Pipeline — EventBus → Detector → Correlation → Response.
 //! #260: 5 detectores iniciais para ameaças de rede e sistema.
 //! Conectado ao EventBus: subscribe NET_EVENT + SYSTEM_EVENT, publish SECURITY_ALERT.

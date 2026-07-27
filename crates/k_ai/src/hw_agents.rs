@@ -44,6 +44,13 @@ impl HwRegistry {
             let (class, subclass) = (dev.class as u16, dev.subclass as u16);
             let caps = Self::class_to_capabilities(class, subclass);
             let desc = Self::device_description(dev.vendor_id, dev.device_id);
+            // ponytail: class_name lookup for known classes only
+            let class_desc = Self::class_name(dev.class);
+            k_nano::slog_kai!("HW-DETECT", "pci",
+                "PCI: {:02X}:{:02X}.{} {:04X}:{:04X} ({})",
+                dev.bus, dev.device, dev.function,
+                dev.vendor_id, dev.device_id,
+                class_desc);
             self.agents.push(HwAgent {
                 name: desc.clone(),
                 device_id: alloc::format!("{:04x}:{:04x}", dev.vendor_id, dev.device_id),
@@ -128,6 +135,35 @@ impl HwRegistry {
             (0x1AF4, 0x1050) => String::from("VirtIO GPU"),
             (0x1234, 0x1111) => String::from("QEMU VGA"),
             _ => alloc::format!("PCI {:04x}:{:04x}", vendor, device),
+        }
+    }
+
+    /// Nome legível da classe PCI — cobertura para os casos mais comuns.
+    fn class_name(class: u8) -> &'static str {
+        match class {
+            0x00 => "Unclassified",
+            0x01 => "Mass Storage",
+            0x02 => "Network",
+            0x03 => "Display",
+            0x04 => "Multimedia",
+            0x05 => "Memory",
+            0x06 => "Bridge",
+            0x07 => "Comm",
+            0x08 => "System Peripheral",
+            0x09 => "Input",
+            0x0A => "Docking",
+            0x0B => "Processor",
+            0x0C => "Serial Bus",
+            0x0D => "Wireless",
+            0x0E => "Intelligent IO",
+            0x0F => "Satellite",
+            0x10 => "Encryption",
+            0x11 => "Data/Acquisition",
+            0x12 => "Processing Accelerator",
+            0x13 => "Non-Essential Instrumentation",
+            0x40 => "Co-Processor",
+            0xFF => "Vendor",
+            _ => "Other",
         }
     }
 }

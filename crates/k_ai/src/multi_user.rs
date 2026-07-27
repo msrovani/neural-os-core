@@ -1,7 +1,5 @@
 //! Multi-User + Multi-Persona — #187. Vários usuários com memória isolada, trust tiers.
-//!
-//! Canonical copy lives here in k_nano.
-//! k_ai has a secondary copy for the cognitive layer.
+//! Moved from k_nano — multi-user management belongs to the AI/cognitive layer.
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;

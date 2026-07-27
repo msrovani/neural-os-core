@@ -219,6 +219,9 @@ impl TrustCache {
         k_nano::slog_kai!("Trust", "info", "exempt token={} (sistema)", token);
     }
 
+    // ponytail: Contain — skill sem trust_allow é negada pós-boot.
+    // ponytail: Enforce — skills de sistema com Legacy(1) passam (add_exempt_token(1)).
+    // Ambos verificados por check_or_cache() antes de cada execute_skill.
     /// Verifica confiança. NÃO auto-concede TotalAccess (P05).
     /// Observe/Warn: permite transitório sem cachear. Contain/Enforce: nega até trust_allow.
     pub fn check_or_cache(&mut self, token: u64, skill: &str, now: u64, _ttl: u64) -> bool {

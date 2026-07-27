@@ -1,4 +1,6 @@
 //! Syscall / trap mínimo — int 0x90 + Cap bitflags (MVP C / ADR-0041).
+//! Consolidado para 9 syscalls por ADR-0076 §4.3: SYS_WRITE_RING + SYS_READ_RING
+//! → SYS_RING_OP (subcomando em arg); SYS_SEND_TCP e SYS_VRING_SETUP removidos.
 //! Vetores 0x80–0x82 ficam com IPI SMP; ABI staging via atomics até Ring3.
 //! P6: Cap::ENTER_USER + SYS_EXIT_USER para retorno CPL=3 → kernel.
 
@@ -9,27 +11,28 @@ use x86_64::structures::idt::InterruptStackFrame;
 pub const SYSCALL_VECTOR: u8 = 0x90;
 
 pub const SYS_PING: u64 = 1;
-pub const SYS_WRITE_RING: u64 = 2;
-pub const SYS_READ_RING: u64 = 3;
-pub const SYS_SEND_TCP: u64 = 4;
+/// Ring IPC operação (subcomando em arg: RING_OP_WRITE / RING_OP_READ).
+pub const SYS_RING_OP: u64 = 2;
 /// JARBAS: mapear páginas FB no AddressSpace (ADR-0041 P4).
-pub const SYS_MAP_FB: u64 = 5;
+pub const SYS_MAP_FB: u64 = 3;
 /// JARBAS: present/flip backbuffer → FB físico.
-pub const SYS_PRESENT_FB: u64 = 6;
+pub const SYS_PRESENT_FB: u64 = 4;
 /// K-IA: pin frames DMA não-reclaimáveis (ADR-0041 P5).
-pub const SYS_PIN_DMA: u64 = 7;
+pub const SYS_PIN_DMA: u64 = 5;
 /// K-IA: mapear buffer pinado no AS (ADR-0041 P5).
-pub const SYS_MAP_DMA: u64 = 8;
+pub const SYS_MAP_DMA: u64 = 6;
 /// Cortex: mmap páginas de peso LLM (ADR-0041 P5).
-pub const SYS_MAP_WEIGHTS: u64 = 9;
+pub const SYS_MAP_WEIGHTS: u64 = 7;
 /// P6: stub user → kernel (após marcador / Cap check).
-pub const SYS_EXIT_USER: u64 = 10;
+pub const SYS_EXIT_USER: u64 = 8;
 /// P7: demand-paging / lazy map de páginas (ADR-0041).
-pub const SYS_DEMAND_PAGE: u64 = 11;
-/// P8: setup VirtIO vring sobre DMA pinado (ADR-0041).
-pub const SYS_VRING_SETUP: u64 = 12;
+pub const SYS_DEMAND_PAGE: u64 = 9;
 /// P9: mmap file-backed (GGUF/FAT) sobre demand-paging (ADR-0041).
-pub const SYS_MAP_FILE: u64 = 13;
+pub const SYS_MAP_FILE: u64 = 10;
+
+/// Subcomandos para SYS_RING_OP (passados no argumento `arg`).
+pub const RING_OP_WRITE: u64 = 0;
+pub const RING_OP_READ: u64 = 1;
 
 /// Capability de operação (independente do CapabilityToken do EventBus).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,29 +40,26 @@ pub struct Cap(pub u64);
 
 impl Cap {
     pub const EMPTY: Cap = Cap(0);
+    /// Permite usar SYS_PING.
     pub const PING: Cap = Cap(1 << 0);
-    pub const WRITE_RING: Cap = Cap(1 << 1);
-    pub const READ_RING: Cap = Cap(1 << 2);
-    /// Hermes/WASM: host `aios_send_tcp` / skill net (ADR-0041 P3).
-    pub const SEND_TCP: Cap = Cap(1 << 3);
+    /// Permite SYS_RING_OP (write e read, consolidado ADR-0076).
+    pub const RING_OP: Cap = Cap(1 << 1);
     /// JARBAS: mapear FB MMIO no AS do processo (ADR-0041 P4).
-    pub const MAP_FB: Cap = Cap(1 << 4);
+    pub const MAP_FB: Cap = Cap(1 << 2);
     /// JARBAS: escrever / present no framebuffer.
-    pub const WRITE_FB: Cap = Cap(1 << 5);
+    pub const WRITE_FB: Cap = Cap(1 << 3);
     /// K-IA: pin frames físicos para DMA (ADR-0041 P5).
-    pub const PIN_DMA: Cap = Cap(1 << 6);
+    pub const PIN_DMA: Cap = Cap(1 << 4);
     /// K-IA: mapear buffer DMA pinado no AddressSpace.
-    pub const MAP_DMA: Cap = Cap(1 << 7);
+    pub const MAP_DMA: Cap = Cap(1 << 5);
     /// Cortex: mapear páginas de pesos LLM (mmap PoC).
-    pub const MAP_WEIGHTS: Cap = Cap(1 << 8);
+    pub const MAP_WEIGHTS: Cap = Cap(1 << 6);
     /// P6: permitir enter_user_mode / trap de volta do stub Ring3.
-    pub const ENTER_USER: Cap = Cap(1 << 9);
+    pub const ENTER_USER: Cap = Cap(1 << 7);
     /// P7: registrar/curar demand-paging (lazy mmap pesos).
-    pub const DEMAND_PAGE: Cap = Cap(1 << 10);
-    /// P8: montar/bind Virtqueue (desc+avail+used) sobre DMA pinado.
-    pub const VRING_SETUP: Cap = Cap(1 << 11);
+    pub const DEMAND_PAGE: Cap = Cap(1 << 8);
     /// P9: mmap file-backed (FAT/GGUF/.bitnet) via demand-paging.
-    pub const MAP_FILE: Cap = Cap(1 << 12);
+    pub const MAP_FILE: Cap = Cap(1 << 9);
 
     #[inline]
     pub fn bits(self) -> u64 {
@@ -102,6 +102,8 @@ pub fn stage_syscall(nr: u64, arg: u64, cap: Cap) {
 }
 
 /// Despacho capability-gated (chamável direto ou via int 0x90).
+/// ADR-0076 §4.3: 9 syscalls — SEND_TCP e VRING_SETUP removidos,
+/// WRITE_RING + READ_RING consolidados em SYS_RING_OP (subcomando em arg).
 pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
     match nr {
         SYS_PING => {
@@ -110,23 +112,12 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
             }
             Ok(PING_COUNT.fetch_add(1, Ordering::Relaxed) + 1)
         }
-        SYS_WRITE_RING => {
-            if !cap.contains(Cap::WRITE_RING) {
-                return Err("EPERM: Cap::WRITE_RING");
+        SYS_RING_OP => {
+            if !cap.contains(Cap::RING_OP) {
+                return Err("EPERM: Cap::RING_OP");
             }
-            Ok(0)
-        }
-        SYS_READ_RING => {
-            if !cap.contains(Cap::READ_RING) {
-                return Err("EPERM: Cap::READ_RING");
-            }
-            Ok(0)
-        }
-        SYS_SEND_TCP => {
-            if !cap.contains(Cap::SEND_TCP) {
-                return Err("EPERM: Cap::SEND_TCP");
-            }
-            Ok(0)
+            // subcomando em _arg: RING_OP_WRITE ou RING_OP_READ
+            Ok(0) // stub
         }
         SYS_MAP_FB => {
             if !cap.contains(Cap::MAP_FB) {
@@ -167,12 +158,6 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
         SYS_DEMAND_PAGE => {
             if !cap.contains(Cap::DEMAND_PAGE) {
                 return Err("EPERM: Cap::DEMAND_PAGE");
-            }
-            Ok(0)
-        }
-        SYS_VRING_SETUP => {
-            if !cap.contains(Cap::VRING_SETUP) {
-                return Err("EPERM: Cap::VRING_SETUP");
             }
             Ok(0)
         }

@@ -1,7 +1,6 @@
-//! VirtIO-GPU — STUB. Não implementado no k_nano (fora de escopo desta tarefa;
-//! reimplementação completa do driver VirtIO-GPU é sprint separada).
-//! Sempre retorna `false` (driver indisponível) para permitir fallback seguro
-//! ao caller (ex: framebuffer legado/VGA), sem alocar MMIO nem tocar hardware.
+//! VirtIO-GPU: device probe + resource management (Ring 0). Rendering em jarbas.
+//!
+//! STUB — retorna `false`; a implementação real de rendering está em `crates/jarbas/src/virtio_gpu.rs`.
 
 pub unsafe fn init_driver_virtio_gpu() -> bool {
     false

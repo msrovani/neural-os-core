@@ -85,6 +85,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.22 | **APERF/MPERF — Frequência Real** | 🏆 IA32_APERF (0xE8) / IA32_MPERF (0xE7) — contagem de ciclos reais vs máximos. `actual_ratio()` retorna frequência efetiva, detecta thermal throttle. | Intel SDM Vol 3 (17.17.4) | — (especificação HW) | `k_nano/src/cpufreq.rs` | ✅ 0 err |
 | 2.23 | **ACPI S3 Suspend/Resume** | 🏆 Suspend-to-RAM completo: `\_S3` DSDT parser, FACS waking vector, device save/restore (e1000 16 regs + MTA), AP parking, trampoline 64-bit (0x7000) que restaura CR3+RSP e salta para `s3_resume_entry()`. Handler re-inicializa APIC, PIT, EPB. | ClaudioOS power.rs (921 LOC, ADR-0062 P20), ACPI Spec 6.4 | MIT | `k_nano/src/suspend_resume.rs`, `k_nano/src/acpi.rs` | ✅ S3 entry / 🟡 resume trampoline |
 | 2.24 | **Ondemand Tick no Scheduler Loop** | 🏆 Governor Ondemand integrado ao scheduler loop. `halt` closure do `registry.run()` chama `cpufreq::ondemand_tick(ap_work::has_pending())`. Frequência escala por carga real da fila de APs. | Linux cpufreq ondemand governor (conceito) | GPLv2 | `neural-kernel/src/main.rs` | ✅ 0 err |
+| 2.25 | **CMOS RTC Driver** | 🏆 Driver do relógio CMOS MC146818: leitura segura com loop wait-snapshot-verify contra RTC update in progress. Formata data/hora ISO. | MC146818 / CMOS RTC spec | — (especificação HW) | `k_nano/src/rtc.rs` | ✅ 0 err |
 
 ---
 
@@ -172,6 +173,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 6.5 | **NeuralFS (B-tree CoW + CRC32C)** | ✅ FS CoW: leaf B-tree mutavel, journal, create/read/write, agent `/mnt/neural` RAM 4MB. Disco fisico / multi-level = `por_fazer`. | BAFS, Btrfs, ZFS | MIT | `neural_fs/` | ✅ I/O RAM / ⏳ `por_fazer` disco |
 | 6.6 | **exFAT FilesystemDriver** | 🔄 Detect/mount + list root cache; write arquivo = `por_fazer` (bitmap/FAT; risco mídia). BlockDevice+write nos backends. ADR-0040 MVP. | Microsoft exFAT 1.0 | — (especificação) | `exfat.rs`, `block_dev.rs` | ✅ MVP r / ⏳ w |
 | 6.7 | **MHI soft-migrate** | 🏆 `mhi_tick` metadata + DRAM memcpy seguro; registry unico k_nano; DMA NVMe/VRAM deferido. | ZFS ARC | MIT | `k_nano/mhi.rs` | ✅ soft-MVP |
+| 6.8 | **SysInstaller (ADR-0040 #421)** | 🏆 Instalador de sistema que copia partições boot + dados entre discos em runtime. Detecta discos (ATA + StorageBus), copia setores MBR/GPT, publica evento SYS_INSTALL. MVP: scan+copy+verify. | ADR-0040 §SysInstaller | MIT | `k_nano/src/sys_installer.rs` | ✅ MVP / ⏳ write HD |
 
 ---
 
@@ -199,6 +201,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 7.5j | **KV H2O + SASOS + G5 pipe** | 🔄 H2O eviction CPU; SASOS-lite map; pipeline timing CPU. | H2O / PagedAttention / neurOS | MIT | `kv_h2o.rs` `sasos.rs` `pipeline_g5.rs` | ✅ MVP |
 | 7.5k | **Embed viz H2+H5** | 🔄 Latent→2D points + thought splats no FB. | leOS / NeuralOS viz | MIT | `display/embed_viz.rs` | ✅ MVP |
 | 7.6 | **RustCoder Expert** | 🏆 **Modelo especialista em geração de código Rust treinado com 263KB.** hidden=128, 6 layers, loss=2.79. Gera skills WASM sob demanda. | Fine-tuning de LLM para código (CodeLlama, StarCoder) | MIT | `rust_coder.bitnet` | ✅ 0 err |
+| 7.7 | **BEI — BitNet Ecosystem Intelligence (ADR-0060)** | 🏆 Ecossistema cognitivo de 8 ondas: Onda 0 (MPMC queue); Onda 1 (BudgetManager + ExpertLifecycleManager); Onda 2 (CellNetwork 8 regiões + PlasticityController); Onda 3 (DynamicMoE birth/merge/split); Onda 4 (MemoryStore L0-L7); Onda 5 (AffectRegulator); Onda 6 (ExecutiveSupervisor 7-fase — EgoLayer/PonderNet/Train/PromoteSkill); Onda 7 (SoulMirror 8 estados). ~2900 LOC, 7/7 ondas implementadas. | ADR-0060 (BitNet Cognitivo), neurociência, sistemas multi-agente | MIT | `neural-kernel/src/bei_init.rs`, `docs/architecture/0060-bitnet-cognitivo-bei.md` | ✅ 7/7 ondas |
 
 ---
 
@@ -211,8 +214,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 8.2 | **Consciousness Metrics (10 métricas)** | 🏆 Sistema de "consciência" com 10 métricas cognitivas (skills_ok, errors_resolved, anomaly_count, memories, etc.). Self-Improvement Loop periódico. | JARVIS C# (autor), Lethe brain regions | MIT | `cortex.rs` (Consciousness) | ✅ 0 err |
 | 8.2b | **Self-Evolve Engine (Sprint 108)** | 🏆 observe→generate→verify→improve→reflect: auto-skill por padrão/LLM, verificação estrutural, SIL wired, meta-reflect no SleepCycle. | Cratos / SkillObserver | MIT | `hermes/self_evolve.rs`, `agents.rs` (SelfEvolveAgent) | ✅ S108 |
 | 8.3 | **Auto-Learn + R3 Replay** | 🏆 Trinity AutoLearnAgent: monitora intents não classificados, detecta padrões (≥3), carrega conhecimento, **update_with_replay()** com RouteTrace congelados da TensorArena (sem re-rotear / sem train_step dummy), reset_moe_cache O(1). | Active Learning, GRPO/R3 papers | MIT | `agents.rs`, `r3.rs` | ✅ 0 err |
-
----
+| 8.4 | **Cross-OS Ecosystem — ADR-0076** | 🏆 Ecossistema multiplataforma: CrossOsAgent (LEARN→PROPOSE→AUTO), CrossOsDiscoverer (PackageHub local + HTTP GitHub + MCP FYY/Wetware/WeftOS), Membrane (zero ambient authority), MCP bridge, JAIL sandbox (Membrane + wasmi + Merkle audit), IntentBus canônico. Skills encontradas em qualquer OS → instaladas localmente. | ADR-0076, FYY, Wetware, WeftOS, Oreulius, WAeasi | MIT | `hermes/src/cross_os/`, `hermes/src/membrane.rs`, `hermes/src/jail.rs`, `hermes/src/mcp_client.rs`, `hermes/src/intent_bus.rs`, `docs/architecture/0076-cross-os-ecosystem.md` | 🟡 waves |
 
 ## 9. 🛡️ SEGURANÇA — Trust e Safety
 

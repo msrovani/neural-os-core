@@ -217,3 +217,9 @@ pub unsafe fn init_trampoline(
 pub unsafe fn trampoline_size() -> usize {
     offset_of(&trampoline_start as *const u8, &trampoline_end as *const u8)
 }
+
+/// Returns true if SMP is allowed by the platform probe (FeatureGate).
+#[inline]
+pub fn sipi_ready() -> bool {
+    crate::platform_probe::allow_smp()
+}

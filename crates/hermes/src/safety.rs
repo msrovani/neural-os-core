@@ -1,3 +1,6 @@
+//! Ring 1 ownership: permanece em hermes (R3) por depender de agent tick model e k_nano::EVENT_BUS.
+//! ADR-0060 A.4: SafetyAgent mantido em hermes; invariantes I1-I4 em k_ai::safety_invariants.
+//!
 //! Safety Interceptor — Asimov's Four Laws + Fail-Closed Safety Invariant (#315.18).
 //! Invariantes SMT-proof: process separation, pre-action, fail-closed, signed evidence.
 //!

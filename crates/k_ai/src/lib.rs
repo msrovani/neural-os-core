@@ -33,6 +33,8 @@ pub mod inventory;
 pub mod memory_agent;
 pub mod model_fit;
 pub mod memory_systems;
+pub mod multi_user;
+
 pub mod native_agent_seed;
 pub mod profile;
 pub mod self_heal;

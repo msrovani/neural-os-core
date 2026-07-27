@@ -1,5 +1,31 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.12-power — NÃO ESTÁVEL
+# STATE — neural-os-core v1.9.99-crossos — NÃO ESTÁVEL
+#   SESSION_223: Cross-OS Ecosystem + BEI + P01 drift cleanup + TLS + ADR-0040
+#     ADR-0076 Cross-OS Ecosystem (7 fases): Skill Manifest, Membrane, Discoverer, JAIL, WASI, MCP bridge, Ciclo aprendizado
+#       skill_manifest.rs (RiskLevel, SkillType, Permissions, SkillManifest)
+#       membrane.rs (Membrane + CapGate + Verdict Allow/Deny/Escalate)
+#       jail.rs (Jail sandbox + Membrane check + Merkle audit trail)
+#       wasi_host.rs (15 wasi_snapshot_preview1 stubs: fd_write, fd_close, fd_seek, fd_prestat_get, proc_exit, random_get, clock_time_get, path_open...)
+#       mcp_client.rs (bridge discoverer->mcp_server) + mcp_server.rs estendido (SearchFyy/WeftOS/Skills)
+#       agent.rs (LearningState Learn->Propose->Auto, WorkflowLearner integration)
+#     ADR-0060 BEI — todas 7 ondas implementadas (lifecycle INDEX.md atualizado)
+#       Onda 3: Dynamic MoE birth/merge/split + self_test (cortex::moe)
+#       Onda 4: Memory L0-L7 MemoryStore (hermes::memory)
+#       Onda 7: Soul Mirror 8 estados Avatar8State (jarbas::display)
+#     ADR-0040 residuals: SysInstaller #421 (k_nano::sys_installer), Storage UI #419 (jarbas::cards::storage_card)
+#     TLS: embedded-tls integration feature-gated (hermes::tls)
+#     P01 drift fix: NIC globals unificados (nic_globals.rs), BSP_PCPU unificado, wasmi Error type fix
+#     P08: SELF_HEAL/TRUST_CACHE movidos para k_ai como singletons
+#     Drift massivo: 14 módulos reconciliados (boot_logger, allocator, serial, vfs, smp, fs, disk_power, usb_trust)
+#     NeuralFS: 9 arquivos idênticos deletados do bin, pub use k_nano
+#     RTC driver: k_nano::rtc (CMOS MC146818)
+#     BGE alignment: static mut->Mutex/Atomic, f32 alignment fix
+#     HwRegistry detect_all: loga PCI devices no serial
+#     restore_checkpoint: save_count, best-effort doc, v3 format
+#     ring 1 ownership: safety/security/optimizer/SleepCycle/AutoLearn documentados em hermes
+#     Toys: CandleSidecar/TaskSpawner/ReActLoop ponytail no-op comments
+#     Trust: check_or_cache wired em 3 execute_skill paths
+#     59+ arquivos modificados, 8 deletados. cargo check --release = 0 erros
 #   SESSION_222: Power Management completo — cpufreq (P-state) + MWAIT (C-state) + S3 suspend/resume
 #     cpufreq.rs MSR IA32_PERF_CTL/STATUS/ENERGY_PERF_BIAS; governor Performance/Powersave/Ondemand
 #     MWAIT real no AP idle loop (monitor/mwait, fallback hlt) + MONITOR_FLAG wake em enqueue()

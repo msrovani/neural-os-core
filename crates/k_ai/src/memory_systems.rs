@@ -3,13 +3,13 @@
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::collections::BTreeMap;
 
 pub static BGE_LOADED: AtomicBool = AtomicBool::new(false);
-static mut BGE_WEIGHTS: Option<Vec<f32>> = None;
-static mut BGE_VOCAB: usize = 0;
-static mut BGE_HIDDEN: usize = 384;
+static BGE_WEIGHTS: spin::Mutex<Option<Vec<f32>>> = spin::Mutex::new(None);
+static BGE_VOCAB: AtomicUsize = AtomicUsize::new(0);
+static BGE_HIDDEN: AtomicUsize = AtomicUsize::new(384);
 
 /// Carrega modelo BGE do .bitnet v3 (embedding table apenas).
 /// Formato: magic(4) + ver(4) + vocab(4) + hidden(4) + layers(4) + ffn(4) + heads(4) + max_seq(4)
@@ -42,35 +42,43 @@ pub fn load_bge(data: &[u8]) -> bool {
 
         if name.contains("word_embeddings_weight") {
             if pos + f32_bytes <= data.len() {
-                let floats: &[f32] = unsafe {
-                    core::slice::from_raw_parts(data[pos..].as_ptr() as *const f32, n_orig)
-                };
-                unsafe {
-                    BGE_VOCAB = n_orig / hidden;
-                    BGE_HIDDEN = hidden;
-                    BGE_WEIGHTS = Some(floats.to_vec());
-                }
+                // Safe byte-by-byte copy avoids UB from potentially unaligned f32 load
+                let floats: Vec<f32> = data[pos..pos + f32_bytes]
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect();
+                let n_vocab = n_orig / hidden;
+                BGE_VOCAB.store(n_vocab, Ordering::Relaxed);
+                BGE_HIDDEN.store(hidden, Ordering::Relaxed);
+                *BGE_WEIGHTS.lock() = Some(floats);
             }
         }
         pos += f32_bytes + n_quant;
     }
 
-    let loaded = unsafe { BGE_WEIGHTS.is_some() };
-    BGE_LOADED.store(loaded, Ordering::Relaxed);
+    let loaded = BGE_WEIGHTS.lock().is_some();
+    BGE_LOADED.store(loaded, Ordering::Release);
     if loaded {
+        let (vocab, hidden, mb) = {
+            let guard = BGE_WEIGHTS.lock();
+            let v = BGE_VOCAB.load(Ordering::Relaxed);
+            let h = BGE_HIDDEN.load(Ordering::Relaxed);
+            let m = guard.as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024);
+            (v, h, m)
+        };
         k_nano::slog_kai!("Asset", "bge", "Carregado: vocab={} hidden={} ({} MB)",
-            unsafe { BGE_VOCAB }, unsafe { BGE_HIDDEN },
-            unsafe { BGE_WEIGHTS.as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024) });
+            vocab, hidden, mb);
     }
     loaded
 }
 
 /// Gera embedding de 384 dims por media dos embeddings dos tokens.
 pub fn bge_embed(text: &str) -> Vec<f32> {
-    if !BGE_LOADED.load(Ordering::Relaxed) { return Vec::new(); }
-    let hidden = unsafe { BGE_HIDDEN };
-    let Some(weights) = (unsafe { BGE_WEIGHTS.as_ref() }) else { return Vec::new(); };
-    let vocab = unsafe { BGE_VOCAB };
+    if !BGE_LOADED.load(Ordering::Acquire) { return Vec::new(); }
+    let guard = BGE_WEIGHTS.lock();
+    let Some(weights) = guard.as_ref() else { return Vec::new(); };
+    let hidden = BGE_HIDDEN.load(Ordering::Relaxed);
+    let vocab = BGE_VOCAB.load(Ordering::Relaxed);
 
     let tokens = cortex::bpe::encode(text);
     if tokens.is_empty() { return vec![0.0f32; hidden]; }
@@ -88,8 +96,8 @@ pub fn bge_embed(text: &str) -> Vec<f32> {
 }
 
 pub fn bge_status() -> String {
-    if BGE_LOADED.load(Ordering::Relaxed) {
-        alloc::format!("[BGE] {} dim, loaded=true", unsafe { BGE_HIDDEN })
+    if BGE_LOADED.load(Ordering::Acquire) {
+        alloc::format!("[BGE] {} dim, loaded=true", BGE_HIDDEN.load(Ordering::Relaxed))
     } else {
         String::from("[BGE] ausente — emb=pseudo (hash/TF bits)")
     }

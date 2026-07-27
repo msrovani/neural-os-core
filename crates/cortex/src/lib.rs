@@ -51,4 +51,6 @@ pub mod kv_h2o;
 // pub mod structured_decode;
 pub mod moe;
 pub mod gguf;
+pub mod hnsw;
+
 

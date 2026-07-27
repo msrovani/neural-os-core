@@ -1,3 +1,6 @@
+//! Ring 1 ownership: permanece em hermes (R3) por depender de crate::globals e agent_core::Agent.
+//! ADR-0060 A.4: OptimizerAgent mantido em hermes; self_optimizing_scheduler base em k_ai.
+//!
 //! Self-Optimization — Usage Patterns, Workflow, Scheduling, Config Learning.
 //! Bloco 14 — itens #157 a #163 + #135, #136.
 

@@ -118,6 +118,26 @@ pub fn demo() -> bool {
     b_ok
 }
 
+/// Ponte entre SleepCycle PRUNE e R3 replay: flushes SGDB memory state so
+/// the next `cortex::r3::update_with_replay()` cycle reads fresh cached traces.
+/// The actual GRPO/R3 update lives in cortex; this is a coordination signal
+/// between memory tiers (SGDB) and routing replay (R3 MoE).
+pub fn update_with_replay() {
+    if !ready() {
+        k_nano::slog_kai!("SGDB", "update_with_replay", "SGDB not ready — skip");
+        return;
+    }
+    // Flush ephemeral L0/L1 docs so R3 replay can pull from persisted
+    // working memory rather than stale arena cache.
+    let flushed = prune_working_ram();
+    k_nano::slog_kai!(
+        "SGDB",
+        "update_with_replay",
+        "flushed {} RAM docs → R3 replay ready",
+        flushed
+    );
+}
+
 pub fn status_line() -> alloc::string::String {
     metrics::report_line()
 }

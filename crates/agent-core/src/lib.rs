@@ -136,6 +136,13 @@ pub struct AgentInstance {
     pub tier: AgentTier,
     /// ADR-0055: pool ring 0=BSP/critical, 1=compute, 2=event/WASM
     pub affinity_ring: u8,
+    // ─── Goal-aware scheduling (ADR-0076 Onda 4.3) ───
+    /// VayuOS: goal urgency 0-255 (255=critical, must-run-now).
+    pub goal_urgency: u8,
+    /// RuVix: novelty score 0-255 (decays 1/tick, boosted on new events).
+    pub novelty_score: u8,
+    /// RuVix: coherence pressure — agents that comm together stay together.
+    pub coherence_partner: Option<usize>,  // agent index to schedule near
 }
 
 impl AgentInstance {
@@ -164,6 +171,9 @@ impl AgentInstance {
             },
             tier: AgentTier::Permanent,
             affinity_ring,
+            goal_urgency: 0,
+            novelty_score: 0,
+            coherence_partner: None,
         }
     }
 }
@@ -217,10 +227,21 @@ impl AgentRegistry {
     }
 
     /// Ordem de poll: ring0 → ring1 → ring2 (CorePools R0/R1/R2).
+    /// Dentro de cada ring, ordena por goal_urgency + novelty_score (goal-aware).
+    /// VayuOS + RuVix pattern: agentes com objetivo urgente ou novidade alta pollam primeiro.
     pub fn poll_order_by_affinity(&self) -> Vec<usize> {
         let mut order = Vec::with_capacity(self.agents.len());
         for ring in 0u8..3 {
-            order.extend(self.agents_by_affinity_ring(ring));
+            let mut ring_agents: Vec<usize> = self.agents_by_affinity_ring(ring);
+            // Goal-aware sort: urgency (weight 2) + novelty (weight 1)
+            ring_agents.sort_by(|&a, &b| {
+                let score_a = (self.agents[a].goal_urgency as u16) * 2
+                    + self.agents[a].novelty_score as u16;
+                let score_b = (self.agents[b].goal_urgency as u16) * 2
+                    + self.agents[b].novelty_score as u16;
+                score_b.cmp(&score_a) // descending: higher score = earlier poll
+            });
+            order.extend(ring_agents);
         }
         // Qualquer ring fora 0..2
         for (i, a) in self.agents.iter().enumerate() {
@@ -308,8 +329,10 @@ impl AgentRegistry {
                 }
                 let flow = &self.agents[i].crew.flow;
                 // Rate-limiting: passive agents (Pending >50x consec) skipped 80% of ticks
+                // Goal-aware: agents with urgency > 0 are NOT rate-limited
                 let consecutive = self.agents[i].consecutive_pending;
-                if consecutive > 50 && tick_id % 5 != 0 {
+                let urgency = self.agents[i].goal_urgency;
+                if urgency == 0 && consecutive > 50 && tick_id % 5 != 0 {
                     continue;
                 }
                 let schedule = self.agents[i].schedule;
@@ -341,6 +364,12 @@ impl AgentRegistry {
                         self.agents[i].state = AgentState::Crashed;
                     }
                     _ => {}
+                }
+            }
+            // Novelty decay (RuVix): decrease all novelty scores by 1 each tick
+            for agent in &mut self.agents {
+                if agent.novelty_score > 0 {
+                    agent.novelty_score -= 1;
                 }
             }
             maybe_log_sched_metrics(tick_id, self.agents.len(), polled);

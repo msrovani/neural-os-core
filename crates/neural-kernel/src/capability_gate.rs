@@ -9,7 +9,7 @@
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use crate::syscall::{self, Cap, SYS_WRITE_RING};
+use crate::syscall::{self, Cap, SYS_RING_OP, RING_OP_WRITE};
 
 static DENY_COUNT: AtomicU64 = AtomicU64::new(0);
 static ALLOW_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -34,17 +34,17 @@ pub const HOST_FN_MAP_FILE: &str = "aios_map_file";
 /// Cap exigida por nome de host-function.
 pub fn required_cap(host_fn: &str) -> Option<Cap> {
     match host_fn {
-        HOST_FN_SEND_TCP | "send_tcp" | "net_send" => Some(Cap::SEND_TCP),
-        HOST_FN_WRITE_RING | "write_ring" => Some(Cap::WRITE_RING),
+        HOST_FN_SEND_TCP | "send_tcp" | "net_send" => Some(Cap::RING_OP),
+        HOST_FN_WRITE_RING | "write_ring" => Some(Cap::RING_OP),
         "ping" | "aios_ping" => Some(Cap::PING),
-        "read_ring" | "aios_read_ring" => Some(Cap::READ_RING),
+        "read_ring" | "aios_read_ring" => Some(Cap::RING_OP),
         HOST_FN_MAP_FB | "map_fb" => Some(Cap::MAP_FB),
         HOST_FN_PRESENT_FB | "present_fb" | "write_fb" => Some(Cap::WRITE_FB),
         HOST_FN_PIN_DMA | "pin_dma" => Some(Cap::PIN_DMA),
         HOST_FN_MAP_DMA | "map_dma" => Some(Cap::MAP_DMA),
         HOST_FN_MAP_WEIGHTS | "map_weights" => Some(Cap::MAP_WEIGHTS),
         HOST_FN_DEMAND_PAGE | "demand_page" => Some(Cap::DEMAND_PAGE),
-        HOST_FN_VRING_SETUP | "vring_setup" => Some(Cap::VRING_SETUP),
+        HOST_FN_VRING_SETUP | "vring_setup" => Some(Cap::RING_OP),
         HOST_FN_MAP_FILE | "map_file" => Some(Cap::MAP_FILE),
         _ => None,
     }
@@ -75,10 +75,10 @@ pub fn host_send_tcp(held: Cap, _host: &str, _port: u16) -> Result<u64, &'static
     Ok(0)
 }
 
-/// Host `aios_write_ring` — reutiliza SYS_WRITE_RING do trap Cap.
+/// Host `aios_write_ring` — reutiliza SYS_RING_OP do trap Cap (ADR-0076 §4.3).
 pub fn host_write_ring(held: Cap) -> Result<u64, &'static str> {
     check(HOST_FN_WRITE_RING, held)?;
-    syscall::dispatch(SYS_WRITE_RING, 0, held)
+    syscall::dispatch(SYS_RING_OP, RING_OP_WRITE, held)
 }
 
 pub fn deny_count() -> u64 {
@@ -89,19 +89,19 @@ pub fn allow_count() -> u64 {
     ALLOW_COUNT.load(Ordering::Relaxed)
 }
 
-/// Demo non-fatal: deny sem Cap, allow com Cap::SEND_TCP | WRITE_RING.
+/// Demo non-fatal: deny sem Cap, allow com Cap::RING_OP.
 pub fn demo_hermes_caps() -> Result<(), &'static str> {
     k_nano::slog_bin!("Cap", "p3", "CapabilityGate demo (Hermes host Caps)");
 
     if host_send_tcp(Cap::EMPTY, "127.0.0.1", 80).is_ok() {
         return Err("p3: Cap vazia nao deveria enviar tcp");
     }
-    host_send_tcp(Cap::SEND_TCP, "127.0.0.1", 80)?;
+    host_send_tcp(Cap::RING_OP, "127.0.0.1", 80)?;
 
     if host_write_ring(Cap::EMPTY).is_ok() {
         return Err("p3: Cap vazia nao deveria write_ring");
     }
-    host_write_ring(Cap::WRITE_RING.union(Cap::SEND_TCP))?;
+    host_write_ring(Cap::RING_OP)?;
 
     k_nano::slog_bin!("Cap", "p3", "SUCCESS CapGate allow={} deny={}",
         allow_count(),

@@ -9,7 +9,11 @@
 
 /// Macro para serial_println rate-limited. So imprime a cada N chamadas.
 /// Uso: debug_rl!("msg", 100, "formato", args...);
+/// DEPRECATED: Use `k_nano::slog_bin!` diretamente. `debug_rl!` não é usado em
+/// lugar nenhum do código ativo — só existe em LEGACY/. Mantida apenas para
+/// referência histórica. Não portar para k_nano.
 #[macro_export]
+#[deprecated(note = "Use k_nano::slog_bin! diretamente — debug_rl! não é mais usado")]
 macro_rules! debug_rl {
     ($msg:expr, $rate:expr, $($arg:tt)*) => {{
         // Taxa efetiva = max(1, $rate)
@@ -97,6 +101,8 @@ pub use hermes_crate::{
 pub use k_ai::{self_heal, trust};
 pub use k_nano::globals::EVENT_BUS;
 pub use k_nano::globals::LATENT_BUS;
+// Macros re-exported from k_nano (drift cleanup — bin delegates serial to k_nano)
+pub use k_nano::{kjson, klog, klogc, serial_print, serial_println};
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
 
@@ -753,13 +759,29 @@ impl Agent for SystemAgent {
         if let Some(event) = rx.try_receive() {
 
             let reg = k_nano::SKILL_REGISTRY.lock();
+            let now = _tick;
+            let token_val = event.token.as_legacy();
 
             // DiagnosticSkill no boot (registrada na AgentFleet)
+            {
+                let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(token_val, "diagnostic", now, 360);
+                if !trust_ok {
+                    k_nano::slog_bin!("Trust", "deny", "diagnostic skill denied before execute_skill");
+                    return AgentTickResult::Crashed;
+                }
+            }
             match reg.execute_skill("diagnostic", &[], &event.token) {
                 Ok(out) => k_nano::slog_bin!("Agent", "info", "DiagnosticSkill OK ({} bytes)", out.len()),
                 Err(e) => k_nano::slog_bin!("Agent", "info", "DiagnosticSkill: {}", e),
             }
 
+            {
+                let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(token_val, "echo", now, 360);
+                if !trust_ok {
+                    k_nano::slog_bin!("Trust", "deny", "echo skill denied before execute_skill");
+                    return AgentTickResult::Crashed;
+                }
+            }
             let out = reg.execute_skill("echo", &event.payload, &event.token);
 
             drop(reg);
@@ -2711,9 +2733,15 @@ pub(crate) fn kernel_boot(
 
     {
         let tok = crate::CapabilityToken::Legacy(1);
-        match k_nano::SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
-            Ok(out) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill executada ({} bytes)", out.len()),
-            Err(e) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill falhou: {}", e),
+        let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        let trust_ok = crate::TRUST_CACHE.lock().check_or_cache(1, "diagnostic", now, 360);
+        if !trust_ok {
+            k_nano::slog_bin!("Trust", "deny", "boot diagnostic: trust deny");
+        } else {
+            match k_nano::SKILL_REGISTRY.lock().execute_skill("diagnostic", &[], &tok) {
+                Ok(out) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill executada ({} bytes)", out.len()),
+                Err(e) => k_nano::slog_bin!("Boot", "info", "DiagnosticSkill falhou: {}", e),
+            }
         }
     }
 

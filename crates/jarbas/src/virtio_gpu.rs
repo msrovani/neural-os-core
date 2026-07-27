@@ -1,4 +1,6 @@
-//! VirtIO-GPU FE — Display via HalOffer; BE/notify em k-hal (ADR-0041 H4+).
+//! VirtIO-GPU: rendering (R3). Device probe em k_nano.
+//!
+//! FE — Display via HalOffer; BE/notify em k-hal (ADR-0041 H4+).
 //! Sem map BAR / MMIO no R3. Framebuffer = UEFI GOP (já em display::fb).
 
 use k_hal::device_cap::DeviceClass;

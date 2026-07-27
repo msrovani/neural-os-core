@@ -1,12 +1,12 @@
 //! VirtIO vring sobre DMA pinado (ADR-0041 P8).
-//! Layout layout-compatible com `virtio_net` (desc+avail+used); Cap VRING_SETUP.
+//! Layout layout-compatible com `virtio_net` (desc+avail+used); Cap RING_OP.
 //! Path paralelo Cap-gated — não altera filas live do NIC.
 
 use core::sync::atomic::Ordering;
 
 use crate::k_ia_dma::{self, PinnedDmaBuf};
 use crate::memory::PHYS_MEM_OFFSET;
-use crate::syscall::{self, Cap, SYS_PIN_DMA, SYS_VRING_SETUP};
+use crate::syscall::{self, Cap, SYS_PIN_DMA, SYS_RING_OP};
 
 /// Queue size PoC (layout-compatible; NIC live usa 64).
 pub const QUEUE_SIZE: u16 = 4;
@@ -69,11 +69,11 @@ fn phys_va(pa: u64) -> *mut u8 {
 /// Monta Virtqueue layout-compatible em `buf` (VRING_PIN_PAGES frames).
 /// Zero-copy: `Desc.addr` aponta para página pinnada de payload (não heap scratch).
 pub fn setup_vring(buf: &PinnedDmaBuf, held: Cap) -> Result<VringHandle, &'static str> {
-    if !held.contains(Cap::VRING_SETUP) {
-        k_nano::slog_bin!("CapGate", "info", "DENY VRING_SETUP held=0x{:x}", held.bits());
-        return Err("EPERM: Cap::VRING_SETUP");
+    if !held.contains(Cap::RING_OP) {
+        k_nano::slog_bin!("CapGate", "info", "DENY RING_OP held=0x{:x}", held.bits());
+        return Err("EPERM: Cap::RING_OP");
     }
-    let _ = syscall::dispatch(SYS_VRING_SETUP, buf.phys, held)?;
+    let _ = syscall::dispatch(SYS_RING_OP, buf.phys, held)?;
     if buf.pages < VRING_PIN_PAGES {
         return Err("p8: precisa de 4 pages pinadas");
     }
@@ -152,8 +152,9 @@ fn probe_live_virtio() -> Option<(u64, u64)> {
 }
 
 /// Demo non-fatal: deny Cap → pin+setup SUCCESS → log phys/indices → NIC untouched.
+/// ADR-0076 §4.3: usa SYS_RING_OP + Cap::RING_OP no lugar de SYS_VRING_SETUP.
 pub fn demo_virtio_vring() -> Result<(), &'static str> {
-    k_nano::slog_bin!("Cap", "p8", "VirtIO vring + DMA pin demo");
+    k_nano::slog_bin!("Cap", "p8", "VirtIO vring + DMA pin demo (ADR-0076)");
 
     if setup_vring(
         &PinnedDmaBuf {
@@ -165,30 +166,30 @@ pub fn demo_virtio_vring() -> Result<(), &'static str> {
     )
     .is_ok()
     {
-        return Err("p8: Cap vazia nao deveria VRING_SETUP");
+        return Err("p8: Cap vazia nao deveria RING_OP");
     }
-    if syscall::dispatch(SYS_VRING_SETUP, 0, Cap::EMPTY).is_ok() {
-        return Err("p8: Cap vazia nao deveria SYS_VRING_SETUP");
+    if syscall::dispatch(SYS_RING_OP, 0, Cap::EMPTY).is_ok() {
+        return Err("p8: Cap vazia nao deveria SYS_RING_OP");
     }
 
-    let caps = Cap::PIN_DMA.union(Cap::MAP_DMA).union(Cap::VRING_SETUP);
+    let caps = Cap::PIN_DMA.union(Cap::MAP_DMA).union(Cap::RING_OP);
     let buf = match k_ia_dma::pin_frames(VRING_PIN_PAGES, Cap::PIN_DMA) {
         Ok(b) => b,
         Err(e) => {
             k_nano::slog_bin!("Cap", "p8", "WARN pin_frames: {} — Cap-only path", e);
             syscall::dispatch(SYS_PIN_DMA, VRING_PIN_PAGES as u64, Cap::PIN_DMA)?;
-            syscall::dispatch(SYS_VRING_SETUP, 0, Cap::VRING_SETUP)?;
-            k_nano::slog_bin!("Cap", "p8", "SUCCESS Cap VRING_SETUP (layout-only sem frames)");
+            syscall::dispatch(SYS_RING_OP, 0, Cap::RING_OP)?;
+            k_nano::slog_bin!("Cap", "p8", "SUCCESS Cap RING_OP (layout-only sem frames)");
             return Ok(());
         }
     };
 
-    let handle = match setup_vring(&buf, Cap::VRING_SETUP) {
+    let handle = match setup_vring(&buf, Cap::RING_OP) {
         Ok(h) => h,
         Err(e) => {
             k_nano::slog_bin!("Cap", "p8", "WARN setup_vring: {} — Cap path", e);
-            syscall::dispatch(SYS_VRING_SETUP, buf.phys, Cap::VRING_SETUP)?;
-            k_nano::slog_bin!("Cap", "p8", "SUCCESS Cap VRING_SETUP (sem layout write)");
+            syscall::dispatch(SYS_RING_OP, buf.phys, Cap::RING_OP)?;
+            k_nano::slog_bin!("Cap", "p8", "SUCCESS Cap RING_OP (sem layout write)");
             return Ok(());
         }
     };

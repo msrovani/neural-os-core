@@ -28,8 +28,8 @@ digest = { version = "0.10", default-features = false }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 # Labor 23: RSA-PSS SHA256 CertificateVerify (hosts RSA).
 rsa = { version = "0.9", default-features = false, features = ["sha2"] }
-# ADR-0042 N2.5: k_nano sem global-alloc (bin mantém allocator.rs); k_ai trust/self_heal.
-k-nano = { path = "../k_nano" }
+# ADR-0042 N2.5: k_nano com global-alloc (bin delega allocator para k_nano via drift cleanup).
+k-nano = { path = "../k_nano", features = ["global-alloc"] }
 k-hal = { path = "../k_hal" }
 k_ai = { path = "../k_ai" }
 # ADR-0042 N3.5: dep direta cortex (tensor/trinity/arena…); bin mantém mod cortex integração.

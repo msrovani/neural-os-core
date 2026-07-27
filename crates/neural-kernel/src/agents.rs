@@ -427,11 +427,10 @@ impl HermesAgent {
     fn execute_skill(&mut self, name: &str, payload: &[u8], token: &CapabilityToken) -> Result<Vec<u8>, &'static str> {
         let token_val = token.as_legacy();
         let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-        // P3: skills de rede exigem Cap::SEND_TCP (além do CapabilityToken legado).
-        // Token Legacy(1) = boot/trustado → concede SEND_TCP; demais = Cap vazia.
+        // P3: skills de rede exigem Cap::RING_OP (além do CapabilityToken legado).
+        // Token Legacy(1) = boot/trustado → concede RING_OP; demais = Cap vazia.
         let held = if matches!(token, CapabilityToken::Legacy(1)) {
-            crate::syscall::Cap::SEND_TCP
-                .union(crate::syscall::Cap::WRITE_RING)
+            crate::syscall::Cap::RING_OP
                 .union(crate::syscall::Cap::PING)
         } else {
             crate::syscall::Cap::EMPTY
@@ -1799,6 +1798,7 @@ impl Agent for BootSelfHealAgent {
                     "Ultimo desligamento foi INESPERADO. Iniciando analise de erros.");
                 // Ja lemos o log em read_last_shutdown; reusa a mesma API budgeted
                 if let Some(log) = crate::boot_log_agent::BootLogAgent::read_last_boot_log() {
+                    k_nano::slog_bin!("SELF-HEAL", "info", "previous boot log available: FAT32 //logs/BOOT.LOG ({} chars)", log.len());
                     let diagnostics = crate::boot_log_agent::BootLogAgent::analyze_log(&log);
                     for (kind, msg) in &diagnostics {
                         k_nano::slog_bin!("SELF", "HEAL", "Diagnostico: {} — {}", kind, msg);

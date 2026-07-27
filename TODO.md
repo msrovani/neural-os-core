@@ -147,7 +147,7 @@
 - [ ] Validar PCI multi-function BARs em device real multi-função
 - [ ] Wire-up / ownership único VirtIO-GPU (stub k_nano vs impl jarbas/neural-kernel)
 - [ ] Implementar `disk_power` real ou mover para agente (hoje stub)
-- [ ] Driver RTC (mencionado em AGENTS.md, sem módulo) ou atualizar docs
+- [x] Driver RTC (mencionado em AGENTS.md, sem módulo) ou atualizar docs
 - [ ] Exportar ou deprecar claramente `debug_rl!` no ecossistema crate
 - [ ] Adicionar `k-ia` ao workspace ou deprecar em favor de `k_ai`
 - [ ] Reorganizar `hnsw` / `multi_user` fora do Ring 0 (candidatos cortex/k_ai)
@@ -163,7 +163,7 @@
 - [ ] **P01** Unificar globals (`EVENT_BUS` / `GLOBAL_ALLOCATOR` / `SKILL_REGISTRY`) em `k_nano` como singleton único
 - [ ] **P01** Após singleton: `neural-kernel` depender de `k_ai` e eliminar mods locais (`self_heal`, `trust`, `agency`, `cognitive`, `audit`, …)
 - [ ] **P08** Um só `SELF_HEAL` / `TRUST_CACHE` no path boot (hoje: monólito × hermes/k_ai)
-- [ ] Mover **safety / security / optimizer / SleepCycle / AutoLearn** para `k_ai` **ou** manter em hermes e congelar docs (decidir ownership Ring 1)
+- [x] Mover **safety / security / optimizer / SleepCycle / AutoLearn** para `k_ai` **ou** manter em hermes e congelar docs (decidir ownership Ring 1) — **decidido: manter em hermes (R3)** por dependerem de EVENT_BUS, agent tick model, net_bridge, self_evolve e globals do hermes. Documentado via header comments em cada módulo. ADR-0060 A.4.
 - [x] Arquivar `crates/k_ia` em `LEGACY/k_ia` (legado pós-rename; 2026-07-16)
 - [ ] Arquivar `hermes/src/monolith_stubs.rs` residual
 
@@ -176,7 +176,7 @@
 
 - [ ] Validar Contain/Enforce: skill sem `trust_allow` é negada pós-boot
 - [ ] Validar skills de sistema com `Legacy(1)` após exempt explícito (EventBus interno não quebra)
-- [ ] Wire `check_or_cache` em todos os execute_skill paths (hermes + neural-kernel)
+- [x] Wire `check_or_cache` em todos os execute_skill paths (hermes + neural-kernel)
 
 ### Cognitive / treino (hollow → real)
 
@@ -193,10 +193,10 @@
 - [x] Hermes agentico PnP — card→decide→efêmera→WASM (`hw_pnp` + SkillOpt + evolve)
 - [x] ADR-0051 Package Hub — ecosystem folders + CRUD HITL + Cortex catalog (SESSION_133)
 - [x] Agency/nativos → AGENT.md + seed embutido + VFS bridge (SESSION_134)
-- [ ] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
-- [ ] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
+- [x] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
+- [x] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
 - [x] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)
-- [ ] Atualizar TECNOLOGIAS.md se ownership Ring 1 mudar pós-migração
+- [x] Atualizar TECNOLOGIAS.md se ownership Ring 1 mudar p�s-migra��o Ring 1 mudar pós-migração
 
 ---
 
@@ -300,3 +300,4 @@
 **Detalhes completos:** `TODO.md`
 **Catálogo de tecnologias:** `TECNOLOGIAS.md`
 **Roadmap completo:** `ROADMAP.md`
+

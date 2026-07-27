@@ -13,9 +13,13 @@ use ticket_lock::TicketLock;
 
 use crate::approval::ApprovalLevel;
 use crate::memory_store;
+use event_bus::{CapabilityToken, Event};
 
 /// Root canônico (NeuralFS §12).
 pub const ECOSYSTEM_ROOT: &str = "/mnt/neural/ecosystem";
+
+/// EventBus topic: published when a package is created/updated/deleted (live capsule lifecycle).
+pub const TOPIC_PKG_CHANGED: &str = "PKG_CHANGED";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PackageKind {
@@ -1043,11 +1047,21 @@ impl PackageHub {
                     rec.persist_backend
                 );
                 Self::audit_pkg("create", &message);
-                if rec.kind == PackageKind::Skill {
+                let is_skill = rec.kind == PackageKind::Skill;
+                let kind_str = alloc::string::String::from(rec.kind.as_str());
+                let name_clone = rec.name.clone();
+                if is_skill {
                     let _ = k_ai::sgdb::put_skill_blob(&rec.name, &rec.purpose);
                 }
                 self.packages
                     .insert(pkg_key(rec.kind, &rec.name), rec);
+                let _ = k_nano::EVENT_BUS.publish(
+                    Event { id: 0, topic: String::from(TOPIC_PKG_CHANGED),
+                        payload: alloc::format!("{{\"op\":\"create\",\"kind\":\"{}\",\"name\":\"{}\"}}",
+                            kind_str, name_clone).into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    }
+                );
                 Ok(ApplyOutcome {
                     message,
                     skill_md,
@@ -1058,24 +1072,31 @@ impl PackageHub {
                 let (ok, backend) = self.try_persist(&rec);
                 rec.persisted = ok;
                 rec.persist_backend = backend;
-                let skill_md = if rec.kind == PackageKind::Skill {
+                let is_skill = rec.kind == PackageKind::Skill;
+                let kind_str = alloc::string::String::from(rec.kind.as_str());
+                let name_clone = rec.name.clone();
+                let skill_md = if is_skill {
                     Some(rec.body.clone())
                 } else {
                     None
                 };
                 let message = format!(
                     "updated {} '{}' persisted={} via={}",
-                    rec.kind.as_str(),
-                    rec.name,
-                    rec.persisted,
-                    rec.persist_backend
+                    kind_str, name_clone, rec.persisted, rec.persist_backend
                 );
                 Self::audit_pkg("update", &message);
-                if rec.kind == PackageKind::Skill {
-                    let _ = k_ai::sgdb::put_skill_blob(&rec.name, &rec.purpose);
+                if is_skill {
+                    let _ = k_ai::sgdb::put_skill_blob(&name_clone, &rec.purpose);
                 }
                 self.packages
                     .insert(pkg_key(rec.kind, &rec.name), rec);
+                let _ = k_nano::EVENT_BUS.publish(
+                    Event { id: 0, topic: String::from(TOPIC_PKG_CHANGED),
+                        payload: alloc::format!("{{\"op\":\"update\",\"kind\":\"{}\",\"name\":\"{}\"}}",
+                            kind_str, name_clone).into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    }
+                );
                 Ok(ApplyOutcome {
                     message,
                     skill_md,
@@ -1084,6 +1105,13 @@ impl PackageHub {
             }
             PendingPackageOp::Delete { kind, name } => {
                 self.packages.remove(&pkg_key(kind, &name));
+                let _ = k_nano::EVENT_BUS.publish(
+                    Event { id: 0, topic: String::from(TOPIC_PKG_CHANGED),
+                        payload: alloc::format!("{{\"op\":\"delete\",\"kind\":\"{}\",\"name\":\"{}\"}}",
+                            kind.as_str(), name).into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    }
+                );
                 if self.vfs_ok {
                     let path = Self::package_path(kind, &name);
                     let _ = crate::globals::write_vfs(&path, b"");

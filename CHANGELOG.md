@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### SESSION_223: Cross-OS Ecosystem + BEI + P01 Drift + TLS + ADR-0040 (2026-07-26)
+- **ADR-0076 Cross-OS Ecosystem (7 fases):** Skill Manifest (skill_manifest.rs: RiskLevel, SkillType, Permissions, SkillManifest, validate, to_json, office_spreadsheet factory). Membrane + CapGate (membrane.rs: Membrane struct, Operation, Capability, Verdict Allow/Deny/Escalate, for_legacy/for_wasm, glob FS, net allowlist, demo self-test). JAIL sandbox (jail.rs: Jail struct, Membrane::check, Merkle audit trail, check_file_read/write/net/capability, report, demo). WASI Preview 2 (wasi_host.rs: 15 wasi_snapshot_preview1 stubs — fd_write, fd_close, fd_seek, fd_prestat_get, environ_*, args_*, proc_exit, random_get, clock_time_get, path_open). MCP bridge (mcp_client.rs: search_marketplace/search_fyy/search_weftos → mcp_server.rs: SearchFyy/WeftOS/Skills MCP methods + search_skills/search_fyy_skills/search_weftos_skills). Ciclo aprendizado (cross_os/agent.rs: LearningState Learn→Propose→Auto, WorkflowLearner pattern_registered integration).
+- **ADR-0060 BEI (7 ondas completas):** Onda 3 Dynamic MoE (cortex::moe: try_birth/try_merge/try_split + stale_indices/high_entropy_indices + self_test). Onda 4 Memory L0-L7 (hermes::memory: MemoryLevel 8 tiers, MemoryTier trait, InMemoryTier, MemoryStore read/write/promote/tick_advance). Onda 7 Soul Mirror (jarbas::display: SoulMirrorState/SoulMirrorRenderer, Avatar8State 8 estados Idle/Listening/Processing/Speaking/Thinking/Dreaming/Alert/Updating). Lifecycle INDEX.md atualizado Accepted/completa.
+- **ADR-0040 Residuals:** SysInstaller #421 (k_nano::sys_installer: scan_disks, install ATA copy, verify, EventBus SYS_INSTALL publish). Storage UI #419 (jarbas::cards::storage_card: gauge, disk list, format button via UiDeclaration/UiRenderer).
+- **TLS:** embedded-tls integration (hermes::tls: TlsStatus, https_get/https_get_fallback bridges, feature-gated `tls`). Cargo.toml feature + kernel bridge registration.
+- **P01 Type-drift fix:** NIC globals unificados (k_nano::nic_globals → pub use no bin). BSP_PCPU unificado (BspPcpu wrapper). wasmi Error type fix (wasmi::core::Trap → wasmi::Error).
+- **P08 SELF_HEAL/TRUST_CACHE:** Movidos para k_ai como singletons. Bin agora pub use.
+- **Drift massivo (14 módulos):** boot_logger (FAT persistence bin→k_nano), serial (pub use), allocator (LazyBumpAllocator bin→k_nano), vfs (append/exists/mkdir bin→k_nano), smp/trampoline (pub use), smp/work_stealing (pub use), fs/ata_agent (pub use), disk_power (pub use), usb_trust (pub use), NeuralFS (9 arquivos idênticos deletados do bin), hnsw/multi_user (cópias em k_nano + cortex/k_ai).
+- **RTC driver:** k_nano::rtc (CMOS MC146818: cmos_read, bcd_to_bin, read_rtc, RtcDateTime, format_rtc, demo).
+- **BGE alignment:** static mut BGE_WEIGHTS→spin::Mutex, BGE_VOCAB/HIDDEN→AtomicUsize, f32 alignment chunks_exact(4)+from_le_bytes safe copy.
+- **HwRegistry detect_all:** PCI class_name() helper + slog_kai! log por device no boot.
+- **restore_checkpoint:** save_count field, best-effort doc table, v3 serialization format. Boot log FAT32 validation log.
+- **Ring 1 ownership:** safety/security/optimizer/SleepCycle/AutoLearn documentados como permanência em hermes.
+- **Toys no-op:** CandleSidecar/TaskSpawner/ReActLoop ponytail comments (k_ai::cognitive).
+- **Trust validation:** check_or_cache wired em 3 execute_skill diretos + audit 17/17 paths.
+- **debug_rl! deprecation** em favor de slog_bin!.
+- **TECNOLOGIAS.md:** 4 novas entradas (RTC, SysInstaller, BEI, Cross-OS).
+- **59+ arquivos modificados, 8 deletados, 5 novos.** cargo check --release = 0 erros.
+
 ### Power Management completo — P-state, C-state, S3 Suspend/Resume (2026-07-26) — SESSION_222
 - **cpufreq.rs (novo):** MSR IA32_PERF_CTL (0x199) + IA32_PERF_STATUS (0x198) + IA32_ENERGY_PERF_BIAS (0x1B0). Governor Performance/Powersave/Ondemand. CPUID leaf 0x16 + probe MSR write-take-effect. APERF/MPERF actual_ratio() via MSR 0xE8/0xE7 para frequência real.
 - **MWAIT real:** AP idle loop usa `monitor`/`mwait` quando CPU suporta (CPUID.1:ECX[3]), fallback `hlt`. MONITOR_FLAG (AtomicU8, cache-line aligned) escrito no enqueue() para wake sem IPI. `set_mwait_hint(cstate)` para C1–C6.

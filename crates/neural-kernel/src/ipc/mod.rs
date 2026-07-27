@@ -92,7 +92,7 @@ pub fn demo_two_spaces() -> Result<(), &'static str> {
     let _ = syscall::dispatch(
         SYS_PING,
         0,
-        Cap::PING.union(Cap::WRITE_RING).union(Cap::READ_RING),
+        Cap::PING.union(Cap::RING_OP),
     )?;
 
     k_nano::slog_bin!("MVP", "C", "SUCCESS cr3-switch + shared-ring + Cap::PING (count={})", syscall::ping_count());
