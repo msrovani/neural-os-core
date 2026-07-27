@@ -137,6 +137,11 @@ pub fn https_get_on_stack(
     now: u64,
 ) -> Result<Vec<u8>, &'static str> {
     let _ = stack.prime_neighbor_for_http();
+    // ponytail: TLS com cert validation quebra em sandbox (NTP sem sync, sem PKI). Skip.
+    if k_nano::env::is_sandbox() {
+        k_nano::slog_bin!("TLS", "info", "step=sandbox_skip (sem cert PKI)");
+        return Err("tls_sandbox_skip");
+    }
     k_nano::slog_bin!("TLS", "info", "step=tcp_connect");
     let handle = stack
         .tcp_session_connect(ip, port, now)

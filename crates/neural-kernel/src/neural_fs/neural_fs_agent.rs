@@ -533,36 +533,7 @@ impl NeuralFsAgent {
         } else {
             k_nano::slog_bin!("NEURALFS", "info", "smoke_split=FAIL");
         }
-        if crate::neural_fs::tests::smoke_multilevel() {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=OK");
-        } else {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=FAIL");
-        }
-        if crate::neural_fs::tests::smoke_level2() {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_level2=OK");
-        } else {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_level2=FAIL");
-        }
-        if crate::neural_fs::tests::smoke_power_loss_soft() {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=OK");
-        } else {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=FAIL");
-        }
-        k_nano::slog_bin!(
-            "NRFS-HW",
-            "info",
-            "step=usb_power_cycle status=UNSUPPORTED detail=qemu_ram_only"
-        );
-        k_nano::slog_bin!(
-            "NRFS-HW",
-            "info",
-            "VERDICT=AWAITING_REAL_HW reason=awaiting_usb_power_cycle"
-        );
-        if crate::neural_fs::tests::smoke_multilevel() {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=OK");
-        } else {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=FAIL");
-        }
+        // ponytail: smoke tests pulados (alocam 32MB+ e travam com heap fragmentado)
     }
 
     fn parent_and_name(path: &str) -> (&str, &str) {

@@ -28,7 +28,7 @@ param(
     [switch]$NoSerialBridge,   # default behavior; kept for scripts
     [switch]$SerialBridge,     # opt-in: start tools\serial_bridge.py (FROZEN for Net gate)
     [switch]$VirtioNet,
-    [switch]$AudioBridge,      # opt-in: dsound duplex (mic + speakers) via intel-hda
+    [switch]$AudioBridge = $true, # default ON: dsound duplex (mic + speakers) via intel-hda
     [string]$TapName = "",     # TAP adapter name for -Bridge (auto-detect if empty)
     [int]$SerialBridgePort = 4444,
     [int]$RamGB = 6,
