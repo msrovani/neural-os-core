@@ -127,6 +127,32 @@ pub fn set_target_ratio(ratio: u8) {
     LAST_RATIO.store(ratio, Ordering::Release);
 }
 
+// ─── APERF/MPERF — frequência real ─────────────────────────────────────────
+// IA32_APERF (0xE8) / IA32_MPERF (0xE7) contam ciclos reais vs máximos desde
+// o último reset (ou último write-zero). Razão = frequência real atual, que
+// pode ser menor que a pedida se o CPU está throttleado por thermal/power.
+
+const IA32_APERF: u32 = 0xE8;
+const IA32_MPERF: u32 = 0xE7;
+
+/// Read APERF/MPERF and return actual operating ratio (100 MHz units).
+/// Returns 0 if MPERF hasn't ticked yet (boot edge case).
+///
+/// ## ponytail
+/// APERF/MPERF wraparound after years of uptime. For a system that reboots
+/// daily for firmware updates, this is fine. Add saturation handling when
+/// we pass 2^48 cycles without reboot.
+pub fn actual_ratio() -> u8 {
+    let aperf = unsafe { Msr::new(IA32_APERF).read() };
+    let mperf = unsafe { Msr::new(IA32_MPERF).read() };
+    if mperf == 0 {
+        return 0;
+    }
+    let p0 = P0_RATIO.load(Ordering::Acquire) as u64;
+    let r = (aperf * p0) / mperf;
+    r.min(255) as u8
+}
+
 // ─── Probe & init ───────────────────────────────────────────────────────────
 
 /// Probe P-state capabilities at boot.

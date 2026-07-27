@@ -81,6 +81,10 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 2.18 | **Async Executor Híbrido (ADR-0062 P16)** | 🏆 `std::future::Future` + `Waker` + `RawWakerVTable` compatíveis, `AsyncExecutor::spawn()`/`poll_task()`, APIC timer handler → `process_wakes()`, `init_async_rt()` no boot. | Embassy async, async-std patterns | MIT | `k_nano/src/async_rt.rs`, `k_nano/src/interrupts.rs` | ✅ 0 err |
 | 2.19 | **IPC MessageBus Wire (ADR-0062 P14)** | 🏆 `mailbox_drain(agent, 8)` no scheduler `run()` para todos agentes; mailboxes abertas no registro + respawn. | ClaudioOS ipc.rs (783 LOC), ADR-0068 | MIT | `event-bus/src/message_bus.rs`, `hermes/src/ipc_bus.rs`, `agent-core/src/lib.rs` | ✅ 0 err |
 | 2.20 | **fw_cfg File I/O (ADR-0062 P35)** | 🏆 `read_file(selector)`, `read_file_by_name(name)` (scan dir 0x0019), `write_file(selector, data)` — modo I/O legacy (0x510/0x511). `boot_smoke()` testa leitura de diretório. | QEMU fw_cfg spec, ClaudioOS fw_cfg | MIT | `k_nano/src/fw_cfg.rs` | ✅ 0 err |
+| 2.21 | **cpufreq — P-state Driver (IA32_PERF_CTL)** | 🏆 Driver de frequência de CPU via MSR IA32_PERF_CTL (0x199) / IA32_PERF_STATUS (0x198) / IA32_ENERGY_PERF_BIAS (0x1B0). Governor Performance/Powersave/Ondemand. CPUID leaf 0x16 (Skylake+) + probe MSR write-take-effect. QEMU-safe (writes são no-op). | Intel SDM Vol 3 (14.1.4), ClaudioOS power.rs | — (especificação HW) | `k_nano/src/cpufreq.rs` | ✅ 0 err |
+| 2.22 | **APERF/MPERF — Frequência Real** | 🏆 IA32_APERF (0xE8) / IA32_MPERF (0xE7) — contagem de ciclos reais vs máximos. `actual_ratio()` retorna frequência efetiva, detecta thermal throttle. | Intel SDM Vol 3 (17.17.4) | — (especificação HW) | `k_nano/src/cpufreq.rs` | ✅ 0 err |
+| 2.23 | **ACPI S3 Suspend/Resume** | 🏆 Suspend-to-RAM completo: `\_S3` DSDT parser, FACS waking vector, device save/restore (e1000 16 regs + MTA), AP parking, trampoline 64-bit (0x7000) que restaura CR3+RSP e salta para `s3_resume_entry()`. Handler re-inicializa APIC, PIT, EPB. | ClaudioOS power.rs (921 LOC, ADR-0062 P20), ACPI Spec 6.4 | MIT | `k_nano/src/suspend_resume.rs`, `k_nano/src/acpi.rs` | ✅ S3 entry / 🟡 resume trampoline |
+| 2.24 | **Ondemand Tick no Scheduler Loop** | 🏆 Governor Ondemand integrado ao scheduler loop. `halt` closure do `registry.run()` chama `cpufreq::ondemand_tick(ap_work::has_pending())`. Frequência escala por carga real da fila de APs. | Linux cpufreq ondemand governor (conceito) | GPLv2 | `neural-kernel/src/main.rs` | ✅ 0 err |
 
 ---
 
@@ -127,7 +131,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 4.13c | **SGDB Hamming dispatch + D-series** | 🏆 Despacho Hamming `scalar`/`avx2_lut`/`avx512f` no boot; L0/L1 RAM-only; Tickv `sys/tickv_ckpt` + stress GC; bench ART 100k / BQ 10k×1024. | ADR-0061 ISA gate; BQ papers | — | `sgdb/hamming_dispatch.rs`, `bq.rs`, `tickv.rs` | ✅ SESSION_175 |
 | 4.13d | **SGDB Memory Quality (E-series)** | 🏆 SleepCycle↔checkpoint; Hermes recall L4 BQ hybrid; TickvLite V-flag; ART Node16 SIMD; NMD1 patch/sortable keys. | Tock TicKV, NoProto patterns, ART paper, Elastic simdvec | — | `sgdb/*`, `hermes/agents`, `cognitive_bridge` | ✅ SESSION_176 |
 | 4.14 | **P2P Orchestration — Hybrid Transport** | 🏆 Transporte híbrido: Raw L2 Ethernet (mesma sub-rede) ou UDP/IP smoltcp (roteado). Seleção automática por `TransportMode`. | smoltcp, Ethernet spec | MIT | `net/transport.rs` | ✅ 0 err |
-| 4.15 | **Elastic Scheduler — CorePairAllocator** | 🏆 Alocação de núcleos em pares físicos (SMT/L2/L3 cache sharing) para evitar cache thrashing. MWAIT power management, wake-up por afeto (uncertainty/urgency). | Linux CFS, CPU topology | GPLv2 | `scheduler/core_pair.rs` | ✅ 0 err |
+| 4.15 | **Elastic Scheduler — CorePairAllocator + MWAIT** | 🏆 Alocação de núcleos em pares físicos (SMT/L2/L3 cache sharing). MWAIT **real** no AP idle loop: `monitor`/`mwait` com hint C1–C6, flag cache-line aligned para wake sem IPI. Fallback `hlt` em CPUs sem MWAIT. Wake-up por afeto (uncertainty/urgency). | Linux CFS, CPU topology, Intel SDM (MWAIT/MONITOR Cap 9) | GPLv2 | `scheduler/core_pair.rs`, `smp/ap_work.rs` | ✅ 0 err |
 | 4.16 | **Elastic Scheduler — Bipole Mode** | 🏆 Modo fallback 2-core (i3): Core 0 (System: k-nano/hermes/jarbas), Core 1 (Compute: BitNet). Comunicação via SpscChannel 64-byte. | Bare-metal patterns | — | `scheduler/core_pair.rs` | ✅ 0 err |
 | 4.17 | **Elastic Scheduler — Affect Wake-Up** | 🏆 Wake-up de pares ociosos via IPI quando hermes detecta high uncertainty (>0.75) ou urgency. Nanosecond wake time. | Affective computing | — (conhecimento científico) | `scheduler/core_pair.rs` | ✅ 0 err |
 | 4.18 | **Brain Mesh Engine — Auto-Discovery** | 🏆 "Brain Beaconing": broadcast Ethernet/UDP para descobrir nós Neural-OS-Core na rede local. Pacote `NodeCapabilities`. | mDNS, SSDP (conceito) | MIT | `net/brain_mesh.rs` | ✅ 0 err |
@@ -313,7 +317,7 @@ $ cargo clean -p neural-kernel && cargo nk
 | ADRs | 47+ |
 | Firmware blobs | 116 (~12.5 MB) |
 | HWIDs HW Expert v3 | **61.453 VID/DID** |
-| Tags release | v1.0.0 → **v1.9.5 TEST** (gate v2.0.0 = review + `por_fazer` + OK humano) |
+| Tags release | v1.0.0 → **v1.9.12-power** (gate v2.0.0 = review + `por_fazer` + OK humano) |
 | Crates K³CHJ wired | k_nano, k_ai, cortex, hermes, jarbas |
 | Erros (`cargo nk`) | **0** |
 

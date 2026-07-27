@@ -205,8 +205,15 @@ unsafe fn parse_s3_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {
 // ─── S3 (Suspend-to-RAM) ────────────────────────────────────────────────────
 
 static SLP_TYP3: AtomicU8 = AtomicU8::new(0xFF);
-/// Waking vector from FACS (physical address of S3 resume trampoline).
+/// Physical address of the FACS table (0 = unknown).
+static FACS_PHYS: AtomicU64 = AtomicU64::new(0);
+/// Waking vector from FACS (for resume detection).
 static FACS_WAKE_VECTOR: AtomicU64 = AtomicU64::new(0);
+
+/// Internal: return the physical address of FACS (for writing wake vector).
+pub fn internal_facs_phys() -> u64 {
+    FACS_PHYS.load(Ordering::Acquire)
+}
 
 pub fn set_s3_slp_typa(typ3: u8) {
     SLP_TYP3.store(typ3, Ordering::Release);
@@ -235,6 +242,7 @@ pub fn facs_wake_vector() -> u64 {
 /// # Safety
 /// `facs_phys` must be a valid physical address to a FACS.
 unsafe fn parse_facs(facs_phys: u64, phys_off: u64) {
+    FACS_PHYS.store(facs_phys, Ordering::Release);
     let virt = VirtAddr::new(phys_off.wrapping_add(facs_phys));
     let ptr = virt.as_u64() as *const u8;
 

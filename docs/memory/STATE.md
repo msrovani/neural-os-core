@@ -1,5 +1,12 @@
 # ═════════════════════════════════════════════════════════
-#   STATE — neural-os-core v1.9.11-emagrecer — NÃO ESTÁVEL
+#   STATE — neural-os-core v1.9.12-power — NÃO ESTÁVEL
+#   SESSION_222: Power Management completo — cpufreq (P-state) + MWAIT (C-state) + S3 suspend/resume
+#     cpufreq.rs MSR IA32_PERF_CTL/STATUS/ENERGY_PERF_BIAS; governor Performance/Powersave/Ondemand
+#     MWAIT real no AP idle loop (monitor/mwait, fallback hlt) + MONITOR_FLAG wake em enqueue()
+#     APERF/MPERF actual_ratio() — frequência real via MSR 0xE8/0xE7
+#     S3 entry ACPI (SLP_TYP=3+SLP_EN via PM1a_CNT) + device save/restore (e1000 16 regs+MTA)
+#     S3 resume trampoline 64-bit (restaura CR3+RSP → jump s3_resume_entry) + FACS wake vector
+#     Ondemand tick no scheduler loop (halt closure chama cpufreq::ondemand_tick)
 #   SESSION_221: 247+ Agents refatorado — AGENCY_SEEDS removido, SKILL.md pipeline, Hermes enforcement
 #     AGENCY_SEEDS (sempre vazio) deletado — Agency::new() retorna vazio
 #     NATIVE_AGENT_SEEDS substituído por skills/agents/*/SKILL.md (41 includes)

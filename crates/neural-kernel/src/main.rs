@@ -901,7 +901,11 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
     registry.run(
-        || { x86_64::instructions::hlt(); },
+        || {
+            // Governor ondemand tick — escala frequência por carga da fila de AP
+            k_nano::cpufreq::ondemand_tick(k_nano::smp::ap_work::has_pending());
+            x86_64::instructions::hlt();
+        },
         || {
             let q = RESPAWN_QUEUE.lock().clone();
             if !q.is_empty() { RESPAWN_QUEUE.lock().clear(); }

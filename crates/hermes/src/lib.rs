@@ -18,6 +18,7 @@ pub mod hitl_ui;
 pub mod apps;
 pub mod browser_agent;
 pub mod cron;
+pub mod cross_os;
 pub mod elf_loader;
 pub mod hermes;
 pub mod hub;

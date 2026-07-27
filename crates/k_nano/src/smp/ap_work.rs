@@ -59,6 +59,8 @@ pub fn enqueue(f: ApJobFn, job_id: usize) -> bool {
         };
     }
     TAIL.store(t + 1, Ordering::Release);
+    // Wake APs: write the monitor flag so MWAIT-idle APs see store-before-IPI.
+    MONITOR_FLAG.0.store(MONITOR_FLAG.0.load(Ordering::Relaxed).wrapping_add(1), Ordering::Release);
     true
 }
 
@@ -88,8 +90,8 @@ pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
 /// after enqueuing jobs so the AP wakes from MWAIT even without an IPI.
 /// Aligned to 64 bytes (cache line) as required by `monitor`.
 #[repr(align(64))]
-struct MonitorFlag(u8);
-static MONITOR_FLAG: MonitorFlag = MonitorFlag(0);
+struct MonitorFlag(core::sync::atomic::AtomicU8);
+static MONITOR_FLAG: MonitorFlag = MonitorFlag(core::sync::atomic::AtomicU8::new(0));
 
 /// MWAIT hint currently in use. Written by `set_mwait_hint`.
 static MWAIT_HINT: AtomicU8 = AtomicU8::new(0); // 0 = C1
@@ -113,7 +115,7 @@ pub fn has_pending() -> bool {
 /// # Safety
 /// Must only be called if `crate::platform_probe::has_mwait()` is true.
 unsafe fn mwait_idle() {
-    let flag_ptr = &MONITOR_FLAG as *const _ as u64;
+    let flag_ptr = &MONITOR_FLAG.0 as *const _ as u64;
     let hint = MWAIT_HINT.load(Ordering::Relaxed) as u32;
     // EAX[7:4] = C-state hint, EAX[0] = break on interrupt
     let eax = (hint.min(6) as u32) << 4;

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Power Management completo — P-state, C-state, S3 Suspend/Resume (2026-07-26) — SESSION_222
+- **cpufreq.rs (novo):** MSR IA32_PERF_CTL (0x199) + IA32_PERF_STATUS (0x198) + IA32_ENERGY_PERF_BIAS (0x1B0). Governor Performance/Powersave/Ondemand. CPUID leaf 0x16 + probe MSR write-take-effect. APERF/MPERF actual_ratio() via MSR 0xE8/0xE7 para frequência real.
+- **MWAIT real:** AP idle loop usa `monitor`/`mwait` quando CPU suporta (CPUID.1:ECX[3]), fallback `hlt`. MONITOR_FLAG (AtomicU8, cache-line aligned) escrito no enqueue() para wake sem IPI. `set_mwait_hint(cstate)` para C1–C6.
+- **S3 suspend:** ACPI _S3 DSDT parser + FACS waking vector. `suspend()` salva CR3/RSP, set FACS wake vector → trampoline 64-bit em 0x7000, park APs, set powersave, write SLP_TYP=3+SLP_EN via PM1a_CNT.
+- **S3 resume trampoline:** Blob de 64 bytes na posição física 0x7000: restaura CR3 + RSP, jump para `s3_resume_entry()`. Handler re-inicializa APIC, PIT, EPB. Save/restore e1000 (16 regs + MTA 128 entradas).
+- **Scheduler integration:** Ondemand tick no closure `halt` do `registry.run()` — chama `cpufreq::ondemand_tick(ap_work::has_pending())`.
+- **10 arquivos modificados:** cpufreq.rs (novo), suspend_resume.rs (novo), acpi.rs (+_S3 parse +FACS), ap_work.rs (+MWAIT), platform_probe.rs (+mwait), apic.rs (+send_ipi_reschedule_to), e1000.rs (regs pub), core_pair.rs (send_wake_ipi real), lib.rs (+2 mod), hardware/probe.rs (+cpufreq init). 0 erros.
+
 ### 247+ Agents refatorado — AGENCY_SEEDS removido, SKILL.md pipeline, Hermes enforcement (2026-07-26) — SESSION_221
 - **AGENCY_SEEDS removido:** `agency_seed.rs` deletado (era sempre &[]). `Agency::new()` retorna vazio. Código morto eliminado.
 - **skills/agents/ criado:** 41 SKILL.md para agentes nativos. Cada agente tem seu próprio SKILL.md como fonte da verdade.
