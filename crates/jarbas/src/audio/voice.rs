@@ -54,6 +54,7 @@ impl JarbasVoiceAgent {
 
     fn can_listen(&self) -> bool {
         settings::wake_gate_bypassed() || self.wake_window > 0
+            || crate::display::chat_window::MIC_ACTIVE.load(core::sync::atomic::Ordering::Relaxed)
     }
 }
 

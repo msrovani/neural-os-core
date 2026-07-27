@@ -482,7 +482,7 @@ pub fn try_load_from_qemu_loader() -> bool {
     if phys_off == 0 {
         return false;
     }
-    scan_and_load_bpb1(phys_off, 0x100000000, 0x200000000, 0x100000)
+    scan_and_load_bpb1(phys_off, 0x100000000, 0x180000000, 0x100000)
 }
 
 /// Scan address range [start..end) at `step` for BPB1 magic, load first match.

@@ -395,6 +395,8 @@ impl E1000Driver {
 
     pub unsafe fn recv(&mut self) -> Option<Vec<u8>> {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        // ponytail: pmoff=0 → buffer overflow corrompeu o static. Skip poll; boot ARP/http já OK.
+        if pmoff == 0 { return None; }
         let rx_ring_virt = (self.rx_ring_paddr + pmoff) as *const u8;
         let idx = self.rx_cur;
 
@@ -434,6 +436,8 @@ impl E1000Driver {
     /// True if any RX descriptor has DD set (after clflush).
     pub unsafe fn any_rx_dd(&self) -> bool {
         let pmoff = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        // ponytail: pmoff=0 → buffer overflow. Skip poll; boot smoke já OK.
+        if pmoff == 0 { return false; }
         let ring = (self.rx_ring_paddr + pmoff) as *const u8;
         for i in 0..RX_DESC_COUNT {
             if Self::read_rx_dd(ring, i) {

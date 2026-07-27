@@ -43,6 +43,11 @@ impl ElfLoader {
     /// - `"ELF: map failed"` — `AddressSpace::map_user_page` failed
     /// - `"ELF: empty — no PT_LOAD"` — no loadable segments found
     pub fn load(data: &[u8], aspace: &mut AddressSpace) -> Result<ElfLoadResult, &'static str> {
+        // Higher-half safety: PHYS_MEM_OFFSET must be valid for HHDM access.
+        if PHYS_MEM_OFFSET.load(Ordering::Relaxed) == 0 {
+            return Err("ELF: PHYS_MEM_OFFSET=0 — higher-half not available");
+        }
+
         // --- ELF header (64 bytes minimum) ---
         if data.len() < 64 {
             return Err("ELF: invalid magic");

@@ -1,5 +1,14 @@
 # ═════════════════════════════════════════════════════════
-# STATE — neural-os-core v1.9.99-adr0076 — NÃO ESTÁVEL
+# STATE — neural-os-core v1.9.99-s225 — TEST (Limine Desktop)
+#   SESSION_225: Limine Migration + Higher-Half Fixes + Desktop Jarbas + Soft Power Off (2026-07-27)
+#     Limine boot (uefi.img): kernel higher-half 0xffffffff80000000+, framebuffer @0xffff8000c0000000
+#     P6 raw_vec fix: TRY_ENTER_RING3=false + guard topo de demo_ring3() — subtração VA wrap isize::MAX
+#     e1000 #PF fix: PHYS_MEM_OFFSET.store() no início de kernel_boot() ANTES dos drivers
+#     e1000 guard: if pmoff==0 { return None } — protege contra buffer overflow do static
+#     BPE scan fix: bound 0x200000000→0x180000000 (6GB RAM, não 8GB)
+#     Desktop Jarbas na tela do QEMU! Soft power off via botão Power → ACPI PM1a_CNT OK
+#     Legados removidos: build_esp.ps1, limine.cfg, .gitignore esp/
+#     cargo check --release: 0 erros
 #   SESSION_224: ADR-0076 Implementação Pesada — 23 entregas (2026-07-27)
 #     Skill Manifest FYY canônico: RemoteConfig, Pricing, QualityIndicators, Interop 5 standards, parser from_slice
 #     Native agents: 25 manifests system_skill (A-001 a A-025)

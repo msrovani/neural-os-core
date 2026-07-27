@@ -31,7 +31,7 @@ static mut SAVED_RSP: u64 = 0;
 
 /// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
 /// Cap deny path ainda roda; reativar quando clone CR3 mapear kernel text.
-pub const TRY_ENTER_RING3: bool = true;
+pub const TRY_ENTER_RING3: bool = false; // ponytail: higher-half raw_vec overflow no clone_current()
 
 #[inline]
 pub fn demo_active() -> bool {
@@ -198,7 +198,19 @@ fn write_stub(code: PhysFrame<Size4KiB>) {
 
 /// Demo non-fatal: deny Cap → map stub USER → iretq → marker → EXIT → SUCCESS.
 pub fn demo_ring3() -> Result<(), &'static str> {
+    // ponytail: higher-half raw_vec overflow in clone_current(). P6 gated until fixed.
+    if !TRY_ENTER_RING3 {
+        return Ok(());
+    }
     k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo");
+
+    // Higher-half safety check: PHYS_MEM_OFFSET must be valid (non-zero).
+    // Without it, HHDM access and pointer arithmetic will overflow isize::MAX.
+    let pm_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pm_off == 0 {
+        k_nano::slog_bin!("P6", "info", "PHYS_MEM_OFFSET=0 — Ring3 demo SKIP (higher-half req)");
+        return Ok(());
+    }
 
     let deny = unsafe {
         enter_user_mode(

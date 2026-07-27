@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### SESSION_225: Limine Migration + Higher-Half Fixes + Desktop Jarbas na Tela + Soft Power Off (2026-07-27)
+- **Limine boot (uefi.img):** Migração bootloader 0.11 → Limine 6.x. Kernel higher-half 0xffffffff80000000+. Framebuffer @0xffff8000c0000000 via HHDM.
+- **PHYS_MEM_OFFSET early store:** main.rs:1268 — setado ANTES de qualquer driver. e1000/HDA/NetAgent enxergam offset correto em vez de 0.
+- **P6 raw_vec capacity overflow fix:** TRY_ENTER_RING3=false. Subtração entre VA higher-half e user-space (0x7000..) estourava isize::MAX → Vec::with_capacity overflow.
+- **e1000 RX #PF loop fix:** ponytail guard `if pmoff == 0 { return None }` em recv()/any_rx_dd(). Buffer overflow corrompe o static PHYS_MEM_OFFSET.
+- **BPE scan bound fix:** cortex/src/bpe.rs:485 — 0x200000000→0x180000000 (RAM 6GB, não 8GB).
+- **Desktop Jarbas na tela do QEMU:** Compositor, 3 apps (HermesChat + Settings + Power), 55 agentes, scheduler rodando.
+- **Soft power off OK:** Botão Power → confirmação → ACPI PM1a_CNT (0xb004) → shutdown.
+- **Cleanup:** build_esp.ps1 removido (build.rs gera ESP). limine.cfg removido. .gitignore em tools/limine/esp/.
+- **WHPX:** "Ignoring request for interrupt vector 0" — pendente investigação ACIP/IDT.
+
 ### SESSION_224: ADR-0076 Implementação Pesada — 23 entregas (2026-07-27)
 - **Skill Manifest FYY canônico (Onda 1):** struct expandida com RemoteConfig, Pricing, QualityIndicators, Interop (a2a/clawhub/skillnet), parser from_slice/from_json_str, 12 testes. 25 manifests agentes nativos A-001 a A-025.
 - **WASM Runtime expansion (Onda 2):** host functions 1→6 (aios, aios_net, aios_fs), 11 cap constants + check_cap() com cap check. WASI Preview 1 stubs conectados ao linker. WAT test suite com 18 testes. Telemetry ring lock-free SPSC 4096 slots + shell trace cmd.

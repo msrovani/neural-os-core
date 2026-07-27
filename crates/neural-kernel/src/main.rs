@@ -839,62 +839,10 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 
 
-    // Registrar causa inesperada e tentar salvar no boot log
-
-    crate::shutdown::set_cause(crate::shutdown::ShutdownCause::Unexpected);
-
-    crate::shutdown::write_persistent_shutdown_log(crate::shutdown::ShutdownCause::Unexpected);
-
-
-
-    // Tentative path: SelfHeal + LLM (pode falhar se OOM)
-
-    let alloc_ok = crate::allocator::try_alloc_check();
-
-    if alloc_ok {
-
-        let msg = alloc::format!("{}", info);
-
-        let kind = if msg.contains("PageFault") { "PageFault" }
-
-            else if msg.contains("DoubleFault") { "DoubleFault" } else { "Panic" };
-
-        let class = self_heal::FailureClass::classify(kind, &msg);
-
-        k_nano::slog_bin!("SELF-HEAL", "info", "Class: {:?} — {}", class, class.default_recovery());
-
-        let ctx = self_heal::ErrorContext {
-
-            kind, message: msg.clone(), file: String::from(info.location().map_or("?", |l| l.file())),
-
-            line: info.location().map_or(0, |l| l.line()), ring: 0,
-
-            daemon: String::from("kernel"),
-
-            tick: crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
-
-        };
-
-        let mut heal = SELF_HEAL.lock();
-
-        let action = heal.analyze(&ctx, true);
-
-        drop(heal);
-
-        k_nano::slog_bin!("PANIC", "info", "SelfHeal acionado. {:?}", action);
-
-    } else {
-
-        k_nano::slog_bin!("PANIC", "info", "OOM detectado — SelfHeal ignorado (sem memoria).");
-
-        k_nano::slog_bin!("PANIC", "info", "Aumente HEAP_SIZE em allocator.rs ou reduza alocacoes no boot.");
-
-    }
-
-
-
+    // HALT — não aloca (raw_vec capacity overflow em higher-half faz format!() estourar isize::MAX)
+    k_nano::boot_ramlog::append("[PANIC] halt");
+    x86_64::instructions::interrupts::disable();
     loop { x86_64::instructions::hlt(); }
-
 }
 
 
@@ -1317,6 +1265,9 @@ pub(crate) fn kernel_boot(
     // O LazyBumpAllocator auto-inicia nas primeiras alloc() usando HEAP_BUFFER em .bss.
 
     let pm_offset = handoff.phys_mem_offset();
+    // ponytail: set PHYS_MEM_OFFSET atomic EARLY so e1000/HDA can translate PA→VA.
+    // init_memory() also sets it, but by then P4 demo/HDA probe have already read 0.
+    crate::memory::PHYS_MEM_OFFSET.store(pm_offset, core::sync::atomic::Ordering::Release);
     // ADR-0055: RSDP via handoff (cada entry define o seu antes ou via trait)
     // Chamada idempotente — bootloader fez em kernel_main, Limine em limine_entry.
     crate::acpi::set_boot_rsdp(handoff.rsdp_addr());

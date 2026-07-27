@@ -25,6 +25,8 @@ const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
 pub struct DisplayAgent {
     receiver: event_bus::Receiver,
     echo_receiver: event_bus::Receiver,
+    user_intent_receiver: event_bus::Receiver,
+    stt_text_receiver: event_bus::Receiver,
     mouse_receiver: event_bus::Receiver,
     click_receiver: event_bus::Receiver,
     ui_receiver: event_bus::Receiver,
@@ -35,6 +37,7 @@ pub struct DisplayAgent {
     /// FIX 1: subscreve KEY_EVENT do InputAgent para dispatch de atalhos WM.
     key_event_receiver: event_bus::Receiver,
     latent_receiver: Option<event_bus::LatentReceiver>,
+    llm_stream_receiver: event_bus::Receiver,
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
@@ -56,6 +59,7 @@ impl DisplayAgent {
         DisplayAgent {
             receiver: EVENT_BUS.subscribe(hermes::hermes::TOPIC_HERMES_RESPONSE),
             echo_receiver: EVENT_BUS.subscribe("KEYBOARD_ECHO"),
+            user_intent_receiver: EVENT_BUS.subscribe(hermes::hermes::TOPIC_USER_INTENT),
             mouse_receiver: EVENT_BUS.subscribe(hermes::agents::mouse_agent::TOPIC_MOUSE_MOVED),
             click_receiver: EVENT_BUS.subscribe(hermes::agents::mouse_agent::TOPIC_MOUSE_CLICK),
             ui_receiver: EVENT_BUS.subscribe(TOPIC_UI_SPEC),
@@ -64,6 +68,8 @@ impl DisplayAgent {
             memory_nudge_receiver: EVENT_BUS.subscribe(hermes::cognitive_bridge::TOPIC_MEMORY_NUDGE),
             toast_receiver: EVENT_BUS.subscribe(TOPIC_TOAST),
             key_event_receiver: EVENT_BUS.subscribe(TOPIC_KEY_EVENT),
+            llm_stream_receiver: EVENT_BUS.subscribe(hermes::stream_packet::TOPIC_LLM_STREAM),
+            stt_text_receiver: EVENT_BUS.subscribe(crate::audio::TOPIC_STT_TEXT),
             latent_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
@@ -484,6 +490,52 @@ impl Agent for DisplayAgent {
             self.apply_ui_spec(text);
         }
 
+        // ── LLM_STREAM: processa pacotes streaming no ChatWindow ──
+        while let Some(ev) = self.llm_stream_receiver.try_receive() {
+            if let Some(pkt) = hermes::stream_packet::StreamPacket::decode(&ev.payload) {
+                let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if cw.is_none() {
+                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+                }
+                if let Some(ref mut chat) = *cw {
+                    chat.process_packet(pkt);
+                }
+            }
+        }
+
+        // ── USER_INTENT: registra mensagem do usuário no ChatWindow ──
+        while let Some(ev) = self.user_intent_receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            if !text.is_empty() {
+                let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if cw.is_none() {
+                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+                }
+                if let Some(ref mut chat) = *cw {
+                    chat.process_packet(hermes::stream_packet::StreamPacket::UserMessage {
+                        content: alloc::string::String::from(text),
+                    });
+                }
+            }
+        }
+
+        // ── STT_TEXT: transcrição de voz → input buffer do ChatWindow ──
+        while let Some(ev) = self.stt_text_receiver.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            if !text.is_empty() {
+                let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if cw.is_none() {
+                    *cw = Some(crate::display::chat_window::ChatWindow::new(0));
+                }
+                if let Some(ref mut chat) = *cw {
+                    // Alimenta o input buffer com o texto transcrito
+                    chat.input_buffer = alloc::string::String::from(text);
+                    chat.input_cursor = text.len();
+                    chat.dirty = true;
+                }
+            }
+        }
+
         // Toast notifications — drain TOAST topic and render via compositor
         if let Some(ref mut desktop) = *COMPOSITOR.lock() {
             let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
@@ -593,9 +645,17 @@ impl Agent for DisplayAgent {
         }
 
         // Echo buffer (legacy F-key fallback para compat com input ASCII).
+        // KEYBOARD_ECHO contém o buffer completo. Atualiza input_buffer + ChatWindow.
         while let Some(ev) = self.echo_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            self.input_buffer.push_str(text);
+            self.input_buffer = alloc::string::String::from(text);
+            // Sincroniza input buffer com ChatWindow
+            let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+            if let Some(ref mut chat) = *cw {
+                chat.input_buffer = alloc::string::String::from(text);
+                chat.input_cursor = text.len();
+                chat.dirty = true;
+            }
         }
 
         // Legacy F-key app switching (compat)

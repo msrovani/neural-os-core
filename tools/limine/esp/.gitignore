@@ -1,0 +1,4 @@
+# Build artifacts — regenerados por cargo build --release (boot/build.rs)
+*
+*/**/*
+!.gitignore

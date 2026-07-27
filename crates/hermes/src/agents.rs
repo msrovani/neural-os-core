@@ -1411,7 +1411,29 @@ impl Agent for HermesAgent {
                 }
                 let _ = EVENT_BUS.publish(Event {
                     id: 0, topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
-                    payload: response.into_bytes(), token: CapabilityToken::Legacy(1),
+                    payload: response.as_bytes().to_vec(), token: CapabilityToken::Legacy(1),
+                });
+                // Também publica StreamPackets para o ChatWindow
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0, topic: String::from(crate::stream_packet::TOPIC_LLM_STREAM),
+                    payload: crate::stream_packet::StreamPacket::MessageStart {
+                        pre_answer_seconds: None,
+                    }.encode(),
+                    token: CapabilityToken::Legacy(1),
+                });
+                if !response.is_empty() {
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0, topic: String::from(crate::stream_packet::TOPIC_LLM_STREAM),
+                        payload: crate::stream_packet::StreamPacket::MessageDelta {
+                            content: response.clone(),
+                        }.encode(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                }
+                let _ = EVENT_BUS.publish(Event {
+                    id: 0, topic: String::from(crate::stream_packet::TOPIC_LLM_STREAM),
+                    payload: crate::stream_packet::StreamPacket::Stop.encode(),
+                    token: CapabilityToken::Legacy(1),
                 });
             } else {
                 EVENT_LOG.lock().push(conversation::EventKind::UserInput, event.payload.clone(), now);

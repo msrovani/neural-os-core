@@ -34,3 +34,4 @@ pub mod dock;
 pub mod window;
 pub mod tiling;
 pub mod notifications;
+pub mod chat_window;

@@ -827,9 +827,16 @@ fn render_app_content(fb: &mut DoubleBuffer, win: &Window, scr_w: usize, _scr_h:
     let h = win.rect.height as usize;
     match win.app_id() {
         AppId::HermesChat => {
-            let lines: Vec<&str> = win.data.lines().collect();
-            for (i, line) in lines.iter().enumerate().take(((h - 40) / 16).max(1)) { draw_text(fb, cx, cy + i * 16, line, scr_w, 180, 200, 220); }
-            draw_text(fb, cx, cy + (h - 40) / 16, "> ", scr_w, 0, 255, 100);
+            // ChatWindow render (Onyx-style) — substitui o texto plano
+            let cw = crate::display::chat_window::CHAT_WINDOW.lock();
+            if let Some(ref chat) = *cw {
+                chat.render(fb, cx - 4, cy - 28, win.rect.width as usize, win.rect.height as usize, scr_w);
+            } else {
+                // Fallback: texto plano (legado)
+                let lines: Vec<&str> = win.data.lines().collect();
+                for (i, line) in lines.iter().enumerate().take(((h - 40) / 16).max(1)) { draw_text(fb, cx, cy + i * 16, line, scr_w, 180, 200, 220); }
+                draw_text(fb, cx, cy + (h - 40) / 16, "> ", scr_w, 0, 255, 100);
+            }
         }
         AppId::Settings => {
             let items = ["[1] Theme", "[2] Sound", "[3] Memory: BGE", "[4] Avatar", "[5] Network"];
