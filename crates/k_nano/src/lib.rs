@@ -75,6 +75,7 @@ pub mod neural_fs;
 pub mod ntfs_reader;
 pub mod pci;
 pub mod platform_probe;
+pub mod rtc;
 pub mod rtl8139;
 pub mod scancode_to_ascii;
 pub mod serial;

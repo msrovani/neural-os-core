@@ -1876,6 +1876,11 @@ pub(crate) fn kernel_boot(
     let _ = hermes_crate::wasmi_rt::self_test();
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
     let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
+    // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
+    let _ = crate::exec_arena::self_test();
+    // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
+    // porto seguro: B/C nativo gated até o ring passar o gate.
+    crate::isolation_ring::init_connectors();
     // ADR-0063 F0/F1a: TickvLite mount + smoke (NVMe ou RAM)
     if k_nano::storage::tickv_smoke() {
         k_nano::slog_bin!(

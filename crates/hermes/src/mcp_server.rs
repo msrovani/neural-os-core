@@ -79,6 +79,7 @@ fn handle_list_tools() -> String {
 }
 
 fn handle_call_tool(params: &BTreeMap<String, String>) -> String {
+    // ponytail: mock — replace with real SKILL_REGISTRY invoke when live
     let tool = params.get("name").map(|s| s.as_str()).unwrap_or("unknown");
     alloc::format!(r#"{{"tool":"{}","status":"executed"}}"#, tool)
 }
@@ -89,6 +90,7 @@ fn handle_list_resources() -> String {
 }
 
 fn handle_read_resource(params: &BTreeMap<String, String>) -> String {
+    // ponytail: mock — replace with real VFS read when live
     let uri = params.get("uri").map(|s| s.as_str()).unwrap_or("");
     alloc::format!(r#"{{"uri":"{}","content":"placeholder"}}"#, uri)
 }

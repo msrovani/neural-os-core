@@ -1,4 +1,4 @@
-//! ADR-0077 — Conectores do Ring3 Isolation Ring (ex-ADR-0059 F6).
+//! ADR-0077 — Conectores do Ring3 Isolation Ring (ex-ADR-0059 F6, ex-ADR-0060).
 //!
 //! **Porto seguro:** HOJE este módulo **NÃO registra** nenhum ring nativo — o
 //! ring Ring3 tem um BLOQUEADOR conhecido (habilitar o `iretq` real hoje causa
@@ -13,12 +13,9 @@
 //! Este é o **site de implementação**.
 //!
 //! Blocos a reusar (já no kernel):
-//! - `crate::exec_arena` → W^X codegen (mapear RX; futuro: página USER no AS do
-//!   sandbox)
-//! - `crate::user_mode` → `enter_user_mode` (iretq p/ CPL=3), `fault_abort`,
-//!   `TRY_ENTER_RING3`
-//! - `crate::address_space` → AS/CR3 isolado (kernel supervisor-only + páginas
-//!   user)
+//! - `crate::exec_arena` → W^X codegen (mapear RX; futuro: página USER no AS do sandbox)
+//! - `crate::user_mode` → `enter_user_mode` (iretq p/ CPL=3), `fault_abort`, `TRY_ENTER_RING3`
+//! - `crate::address_space` → AS/CR3 isolado (kernel supervisor-only + páginas user)
 //! - `crate::syscall` + `crate::capability_gate` → gate de syscall + CapGate
 //! - `crate::interrupts` → GDT user segs + TSS RSP0 + IST + handlers de falta
 
@@ -39,8 +36,7 @@ pub fn init_connectors() {
 ///
 /// Implementação futura (resumo §7):
 ///  1. montar código no `exec_arena` como página **USER RX** no AS do sandbox;
-///  2. `AddressSpace` isolado (kernel supervisor-only; IST/IDT/handlers
-///     alcançáveis);
+///  2. `AddressSpace` isolado (kernel supervisor-only; IST/IDT/handlers alcançáveis);
 ///  3. `enter_user_mode` (iretq CPL=3) com `Cap` mínima;
 ///  4. syscalls do sandbox mediadas por `capability_gate` (DMA/MMIO negadas);
 ///  5. falta no sandbox → `fault_abort` (mata sandbox, kernel vive).

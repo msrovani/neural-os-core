@@ -195,7 +195,7 @@
 - [x] Agency/nativos → AGENT.md + seed embutido + VFS bridge (SESSION_134)
 - [ ] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
 - [ ] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
-- [ ] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)
+- [x] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)
 - [ ] Atualizar TECNOLOGIAS.md se ownership Ring 1 mudar pós-migração
 
 ---

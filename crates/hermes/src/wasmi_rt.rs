@@ -1,10 +1,11 @@
 //! ADR-0059 Caminho A — Runtime WASM real (`wasmi`, no_std, fuel).
 //!
 //! Executa **módulos WebAssembly padrão** em sandbox (SFI + fuel + limite de
-//! memória), com host-imports `aios::*` **gated por CapGate**. É o backend
-//! **seguro por default** para apps/skills geradas por IA (código não-confiável):
-//! nada de MMIO/DMA, tudo mediado por capabilities, execução determinística com
-//! fuel (evita loop infinito) — padrão MCP-SandboxScan / SelfEvolve.
+//! memória), com host-imports `aios::*` **gated por CapGate** e
+//! `wasi_snapshot_preview1` stubs. É o backend **seguro por default** para
+//! apps/skills geradas por IA (código não-confiável): nada de MMIO/DMA, tudo
+//! mediado por capabilities, execução determinística com fuel (evita loop
+//! infinito) — padrão MCP-SandboxScan / SelfEvolve.
 //!
 //! Substitui a VM `Op` custom (`wasm_exec.rs`) e o interpretador parcial
 //! (`wasm.rs`) — aposentados pela ADR-0059.
@@ -29,8 +30,9 @@ impl HostState {
 /// Fuel default por execução (determinístico; evita loop infinito).
 pub const DEFAULT_FUEL: u64 = 5_000_000;
 
-/// Instala os host-imports `aios::*` no linker, cada um **gated por CapGate**.
-/// Sem a capability correspondente, a chamada faz trap (deny honesto).
+/// Instala os host-imports `aios::*` e `wasi_snapshot_preview1` no linker,
+/// cada um **gated por CapGate**. Sem a capability correspondente, a chamada
+/// faz trap (deny honesto).
 fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> {
     // aios::log(ptr,len) — escreve no buffer de saída (sempre permitido: observe-only).
     linker
@@ -51,6 +53,14 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
             },
         )
         .map_err(|_| "linker aios::log")?;
+
+    // ── wasi_snapshot_preview1 ──────────────────────────────────────────────
+    // Register WASI Preview 1 stubs (wasi_host.rs) — fd_write, clock_time_get,
+    // random_get, path_open, environ/args, proc_exit, etc. Required for any
+    // wasm32-wasi module to initialize (wasi-libc calls fd_prestat_get on startup).
+    super::wasi_host::register_wasi_host_functions(linker)
+        .map_err(|_| "linker wasi_snapshot_preview1")?;
+
     Ok(())
 }
 
@@ -98,6 +108,14 @@ const ADD_WASM: &[u8] = &[
 
 /// Gera um módulo WASM mínimo com uma função exportada que retorna i32(42).
 /// Usado pelo bridge ADR-0059 F3/F5 para criar bytecode dummy para evolução/hot-swap.
+///
+/// **Imports disponíveis no runtime:**
+/// - `aios::log`, `aios::debug`, `aios::get_tick` (CAP_LOG)
+/// - `aios_net::http_get` (CAP_NET)
+/// - `aios_fs::fs_read`, `aios_fs::fs_write` (CAP_FS)
+/// - `wasi_snapshot_preview1` (15 stubs: fd_write, clock_time_get, random_get,
+///   path_open, proc_exit, fd_read, fd_fdstat_get, environ/args, etc.)
+///
 /// ponytail: módulo minimalista — só `_start` exportado, sem imports.
 pub fn generate_wasm_module() -> Vec<u8> {
     let mut wasm = Vec::with_capacity(64);

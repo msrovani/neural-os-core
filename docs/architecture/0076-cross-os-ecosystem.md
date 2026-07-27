@@ -190,7 +190,70 @@ pub async fn discover(intent: &IntentResult) -> Vec<SkillCandidate> {
 
 ---
 
-## 4. Segurança — Membrana (Wetware + WeftOS)
+## 4. Syscall Audit — Minimalismo (Oxide OS + RuVix)
+
+### 4.1 Situação Atual
+
+Temos **13 syscalls** definidos em `neural-kernel/src/syscall.rs`: PING, WRITE_RING, READ_RING, SEND_TCP, MAP_FB, PRESENT_FB, PIN_DMA, MAP_DMA, MAP_WEIGHTS, EXIT_USER, DEMAND_PAGE, VRING_SETUP, MAP_FILE.
+
+**Problema:** Todos os 13 são **stubs PoC** — retornam `Ok(0)` após o cap check. Nenhum tem implementação real além de `PING` (incrementa contador). A existência de 13 syscalls stub dá uma falsa sensação de completude enquanto nenhum faz I/O real.
+
+### 4.2 Benchmark: Oxide OS (20 syscalls, 11 impl) + RuVix (12 syscalls)
+
+| Projeto | Syscalls | Impl | Kernel LOC | Agent model |
+|---------|----------|------|------------|-------------|
+| **Oxide OS** | 20 defined, **11 implemented** | HTTP, virtio, IPC, scheduling | 5.1K | Agent-native monocultura |
+| **RuVix** | **12** (hard constraint) | Proof, capability, region, queue, timer, sched, boot, vecgraph | ~8K em 9 crates | 6 kernel primitives: Task, Cap, Region, Queue, Timer, Proof |
+| **neural-os-core** | 13 defined, **2 implemented** (PING + stage/dispatch) | PING real, resto stub | ~17K bin | 250 agents via EventBus, não syscall |
+
+**Lições:**
+- **Oxide OS** prova que 11 syscalls implementadas bastam para um kernel com HTTP, disco e IPC reais
+- **RuVix** prova que **12 syscalls é um limite arquitetural** — qualquer funcionalidade nova vai como RVF component (userspace), não syscall nova
+- Nosso kernel tem 13 syscalls mas **0 faz I/O de verdade** — I/O real acontece via `k_nano` drivers (MMIO, DMA, port I/O) diretamente no Ring 0, não via syscall
+
+### 4.3 Proposta: Consolidar para 9 syscalls
+
+| # | Syscall | Cap | Uso real? | Status | Destino |
+|---|---------|-----|-----------|--------|---------|
+| 1 | SYS_PING | PING | ✅ contador debug | **Manter** | Monitor SNMP-like |
+| 2 | SYS_WRITE_RING | WRITE_RING | ❌ stub | **Unificar** com READ_RING → SYS_RING_OP (write/read por subcomando) |
+| 3 | SYS_READ_RING | READ_RING | ❌ stub | **Unificar** com WRITE_RING (acima) |
+| 4 | SYS_SEND_TCP | SEND_TCP | ❌ stub | **Remover** — WASM faz TCP via host function `aios_net::http_get`, não syscall |
+| 5 | SYS_MAP_FB | MAP_FB | ❌ stub | **Manter** — Jarbas precisa mmap FB real para Ring-3 |
+| 6 | SYS_PRESENT_FB | WRITE_FB | ❌ stub | **Manter** — necessário para double-buffer |
+| 7 | SYS_PIN_DMA | PIN_DMA | ❌ stub | **Manter** — DMA real (NVMe, GPU) |
+| 8 | SYS_MAP_DMA | MAP_DMA | ❌ stub | **Manter** — DMA buffer mmap |
+| 9 | SYS_MAP_WEIGHTS | MAP_WEIGHTS | ❌ stub | **Manter** — LLM weight mmap |
+| 10 | SYS_EXIT_USER | ENTER_USER | ❌ stub | **Manter** — necessário para Ring-3 (ADR-0041 P6) |
+| 11 | SYS_DEMAND_PAGE | DEMAND_PAGE | ❌ stub | **Manter** — lazy allocation |
+| 12 | SYS_VRING_SETUP | VRING_SETUP | ❌ stub | **Remover** — VirtIO setup via HAL, não syscall |
+| 13 | SYS_MAP_FILE | MAP_FILE | ❌ stub | **Manter** — GGUF/FAT mmap |
+
+**Resultado:** 9 syscalls (remove 2, unifica 2 → 1):
+| # | Syscall | Função | Benchmark |
+|---|---------|--------|-----------|
+| 1 | SYS_PING | Health check | → PING (Oxide OS) |
+| 2 | SYS_RING_OP | Ring buffer write/read | → io_uring (RuVix queue) |
+| 3 | SYS_MAP_FB | FB mmap | → MAP_FB (Oxide OS) |
+| 4 | SYS_PRESENT_FB | FB flip | → MAP_FB extended |
+| 5 | SYS_PIN_DMA | DMA pin | → PIN_DMA |
+| 6 | SYS_MAP_DMA | DMA mmap | → MAP_DMA |
+| 7 | SYS_MAP_WEIGHTS | Weight mmap | → MAP_WEIGHTS |
+| 8 | SYS_EXIT_USER | Ring-3 return | → ENTER_USER |
+| 9 | SYS_DEMAND_PAGE | Lazy page | → DEMAND_PAGE |
+| 10 | SYS_MAP_FILE | File mmap | → MAP_FILE |
+
+### 4.4 Plano de Implementação
+
+| # | Tarefa | Esforço | Critério |
+|---|--------|---------|----------|
+| 4.4.1 | Consolidar WRITE_RING + READ_RING → SYS_RING_OP com subcomando | ☆ | `cargo check` |
+| 4.4.2 | Remover SYS_SEND_TCP + SYS_VRING_SETUP | ☆ | `cargo check` |
+| 4.4.3 | Renumerar syscalls de 1..10 | ☆ | `cargo check` |
+| 4.4.4 | Implementar SYS_MAP_FB real (mmap BAR0 do GPU) | ☆☆☆ | Jarbas consegue mmap FB via syscall |
+| 4.4.5 | Implementar SYS_PIN_DMA real | ☆☆☆ | DMA buffer pinned |
+
+## 5. Segurança — Membrana (Wetware + WeftOS)
 
 | Camada | Inspiração | O que bloqueia | Implementação |
 |--------|-----------|---------------|---------------|

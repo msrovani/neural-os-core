@@ -1,7 +1,7 @@
 # ADR-0059: Runtime App Factory — WASM real (wasmi) + geração validada de apps por IA
 
 **Data:** 2026-07-21
-**Status:** Accepted — **viabilidade CONFIRMADA** (`wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float, 0 erros). **Caminho A (wasmi) IMPLEMENTADO e validado** (QEMU: `.wasm` real `add(2,3)=5` PASS; seletor A/B/C PASS). Caminhos B/C: backend Cranelift presente (feature `jit-cranelift`), **execução nativa GATED** por ring de isolamento (ADR-0041) + HITL forte — F6/F7.
+**Status:** Accepted — **viabilidade CONFIRMADA** (`wasmi` v0.47 **e** `cranelift-codegen` v0.133 compilam `no_std` em `x86_64-unknown-none` soft-float, 0 erros). **Caminho A (wasmi) IMPLEMENTADO e validado** (QEMU: `.wasm` real `add(2,3)=5` PASS; seletor A/B/C PASS). **F7 (arena W^X) IMPLEMENTADO** (execução nativa on-device: `mov eax,42;ret`→42 PASS — base do JIT). Caminhos B/C: backend Cranelift presente (feature `jit-cranelift`), **execução nativa GATED** por **F6 (ring Ring3, BLOQUEADOR)** + HITL forte.
 **Lifecycle (INDEX):** `fazendo`
 **Depreca / supersede:**
 - **ADR-0031** (Self-Update/WASM/JARVIS): reverte o desvio "wasmi → VM `Op` custom"; runtime real passa a ser **wasmi**. Self-update/JARVIS permanecem (não são tema desta ADR).
@@ -134,12 +134,12 @@ flowchart TB
 - [x] **Viabilidade B/C: `cranelift-codegen` no_std compila (feature `jit-cranelift`).**
 - [~] F2: host ABI `aios::log` gated instalado; fuel ✅. (mem-max/mais imports = follow-up)
 - [x] F3: `wasm.rs` reescrito → `wasmi_rt::run_wasm`; `WasmSkill.execute()` usa wasmi real; `WasmExecutor` removido.
-- [~] F4: gramática CFG + assembler WAT→wasm = **PONYTAIL** (`decode_harness.rs` — reconhecedor de padrões mínimo; self-test add(3,5)=8 PASS); upgrade se `wat` crate virar no_std.
+- [x] **F4: `hermes::wasm_build` monta wasm válido a partir de op-IR** (`Op`: LocalGet/I32Const/Add/Sub/Mul) + `validate()`; self-test `a*b+7`→49 PASS. A op-IR é o alvo constrangido da gramática (#412).
 - [x] F5: `DynamicSkill::with_wasm()` cria skill persistente; `skill_opt::promote_skill_to_wasm()` valida+registra; `evolve::promote_ephemeral_to_wasm()` simplificado.
-- [~] F6: MicroPython.wasm → `wasmi_rt::run_wasm`; fallback stub dev; `micropython_wasm.rs` reescrita.
-- [x] F7: `isolation_ring_available()=false` (hardcoded); B/C → `AwaitingIsolation` com log; só A executa.
-- [~] aposentar `Op` VM + `wasm.rs` legado = **PONYTAIL**: `wasm_exec.rs`/`wasm_rt.rs` mantidos com headers de deprecação; código ativo migrado para `wasmi_rt.rs`.
-- [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]` PASS).
+- [~] F6: MicroPython.wasm → `wasmi_rt::run_wasm`; fallback stub dev; `micropython_wasm.rs` reescrita. Ring3 isolamento → **ADR-0077** (ex-ADR-0060). Bloqueador: triple-fault reboot loop.
+- [x] **F7 (W^X exec arena):** `exec_arena` executa código nativo gerado on-device (self-test `mov eax,42;ret`→42 PASS). Base do JIT Cranelift. Ring 0 (não isolado).
+- [~] aposentar `Op` VM + `wasm.rs` legado: `wasm_exec.rs`/`wasm_rt.rs` mantidos com headers de deprecação; código ativo migrado para `wasmi_rt.rs`.
+- [x] boot QEMU sem panic; evidência em log (`[WASMI]`/`[APPFACTORY]`/`[EXEC-ARENA]` PASS).
 
 ## 7. Referências
 
