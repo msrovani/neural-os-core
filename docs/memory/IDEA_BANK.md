@@ -64,8 +64,8 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#468** FitPolicy Neural (llmfit-inspired) | ADR-0019 (+ #466) | ✅ SESSION_164 | host `llmfit_pack_filter` + `cortex::model_fit` / MemoryAgent / ModelHub |
 | **#469** Runtime App Factory | ADR-0059 | 🟢 completo | wasmi real + seletor A/B/C ✅ |
 | **#470–#478** BEI BitNet Cognitivo | ADR-0060 | ✅ **7/7 ondas** SESSION_166 | MPMC, economia, células, MoE, memória, afeto, supervisor + EgoLayer/PonderNet, Soul Mirror visual. ~2900 LOC |
-| **#486** Vector DB in-kernel TF-IDF (RAG) | ADR-0064 | ✅ MVP | crate `vector-db`; persist TicKV `vdb/blob`; residual F6 embeddings |
-| **#487** Embeddings neurais in-kernel L4+ | ADR-0064 F6 | ⏳ residual | gated VRAM; BGE paralelo até lá |
+| **#486** Vector DB in-kernel TF-IDF (RAG) | ADR-0064 | ❌ rejeitada | crate `vector-db` criada mas nunca integrada → deletada. SGDB real = ADR-0063 `k_ai::sgdb` (BQ Flat SIMD). |
+| **#487** Embeddings neurais in-kernel L4+ | ADR-0064 F6 | ✅ implementado | BGE embedding em `k_ai::memory_systems` (`bge_embed()`, `load_bge()`). Usado via `k_ai::sgdb::layers::remember_semantic()` + BQ L4. |
 | **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **Memory Quality SESSION_176:** SleepCycle ckpt✅ recall L4 hybrid✅ V-flag✅ ART SIMD✅. Residual: crates upstream, HNSW, DoD 10M/100k |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
@@ -131,7 +131,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | # | Item | Destino | Target | Motivação |
 |---|---|---|---|---|
 | 277a | HwRegistry: cada PCI/USB vira HwAgent com capabilities | ✅ SESSION_134 | v1.8.5 | LLM pergunta "o que tem de HW" → ativa agentes |
-| 277b | Agency: 214 specs → AGENT.md + seed (ADR-0051) | ✅ SESSION_134 | v1.8.5 | Catálogo data-driven; nativos mantêm código no bin |
+| 277b | Agency: AGENT.md + seed → SKILL.md pipeline (ADR-0051) | ✅ SESSION_221 | v1.9.11 | AGENCY_SEEDS removido (dead code). skills/agents/*/SKILL.md é a fonte da verdade. 41 agents carregados via include_str! |
 | 277c | LLM-aware hardware activation por intent | 🟡 ADR-0041 HalOffer / PnP | pós-PnP | SESSION_143: VIABLE; intent net → `depends_on: lan` |
 
 ### 1.2. GGUF Format Support (IDEA #278)

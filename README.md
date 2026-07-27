@@ -9,7 +9,7 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 ║  "K³CHJ Core — Cognição"        ║
 ╚══════════════════════════════════╝
 
-  ✦ ~26.000 LOC · 180+ arquivos Rust · 247+ agentes
+  ✦ ~26.000 LOC · 180+ arquivos Rust · ~50 agentes nativos
   ✦ K³CHJ: k_nano → k_hal → k_ai → cortex → hermes → jarbas
   ✦ ADR-0042 N1–N5 ✅ + wire crates N2.5→N5.7 ✅ (v1.8.0)
   ✦ ADR-0041 H4+/H5+/AS shallow ✅ PoC (HalOffer Cap; QUEUE_NOTIFY)
@@ -38,7 +38,7 @@ Bare-metal Rust (`no_std`, `no_main`). Sem Linux. Sem POSIX. **0 erros** de comp
 | Sprints completos | 106 + 107 fechada |
 | Arquivos Rust | ~180+ (6 crates K³CHJ + bin `neural-kernel`) |
 | LOC total | ~26.000 |
-| Agentes | 247+ |
+| Agentes | ~50 nativos |
 | IDEIAS (IDEA_BANK) | 440+ |
 | Compilação | `cargo nk` → **0 erros** |
 | Boot dev | QEMU UEFI/WHPX, VirtualBox |

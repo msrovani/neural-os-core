@@ -350,11 +350,12 @@ impl CorePairAllocator {
         let _ = actually_woken;
     }
 
-    /// Send wake IPI to a specific core
+    /// Send wake IPI to a specific core via APIC directed IPI.
+    ///
+    /// Falls back silently if APIC is not initialized (stub fallback for QEMU
+    /// without LAPIC or early boot before APIC init).
     fn send_wake_ipi(&self, core: u8) {
-        // In a real implementation, this would use APIC IPI
-        // For now, this is a stub
-        let _ = core;
+        unsafe { crate::apic::send_ipi_reschedule_to(core) }
     }
 
     /// Get current timestamp

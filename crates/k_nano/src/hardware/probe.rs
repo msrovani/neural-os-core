@@ -139,6 +139,10 @@ pub fn probe() -> HardwareReport {
         }
     };
     
+    // 7. Initialize cpufreq (P-state + governor).
+    //     Safe even in QEMU (MSR writes are no-ops).
+    crate::cpufreq::probe_and_init();
+
     HardwareReport {
         profile,
         feature_gate: gate,

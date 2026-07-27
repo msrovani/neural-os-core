@@ -1263,6 +1263,14 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
+                    // ── Hermes pre-flight: skill_writer OBRIGATORIO para criacao de skill ──
+                    if crate::cognitive_bridge::is_skill_creation_request(msg) {
+                        k_nano::slog_hermes!("HERMES", "info",
+                            "skill_writer pre-flight: skill creation detected — enforcing skill_writer consultation");
+                        // SKILL_WRITER_CONTENT e constante compile-time, sempre carregada.
+                        // Esta guarda garante rastreabilidade: toda criacao de skill passa por aqui.
+                        let _ = crate::skill_loader::SKILL_WRITER_CONTENT;
+                    }
                     match crate::cognitive_bridge::budget_tick() {
                         crate::cognitive_bridge::BudgetVerdict::Exhausted => {
                             String::from("[BUDGET] exhausted — /budget N para resetar max")

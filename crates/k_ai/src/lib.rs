@@ -11,7 +11,6 @@ extern crate alloc;
 
 pub mod agency;
 pub mod agency_importer;
-pub mod agency_seed;
 pub mod arch;
 pub mod audit;
 pub mod boot_log_agent;

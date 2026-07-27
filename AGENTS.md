@@ -1,6 +1,6 @@
 # ════════════════════════════════════════════════════════
 #   PLANO DIRETOR — neural-os-core v2.0 "K³CHJ Core" 🏆
-#   ~26.000 LOC, 180+ arquivos Rust, 247+ agentes, 0 erros
+#   ~26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
 #   Sprint 100: Code Freeze — 07/2026
 #   Sprints 101→105: v2.0 "Cognição" — Kernel, Cortex, Hermes, K-IA, JARVIS
@@ -40,7 +40,7 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 
 # Core Architecture & Constraints
 1. **Bare-Metal Rust:** `no_std` + `no_main`. No std, no POSIX, no Linux legacy.
-2. **Agent/Skill-First:** Every entity is an Agent. 247+ agents: 20 nativos + 147 The Agency + ~80 importados + HW + FS.
+2. **Agent/Skill-First:** Every entity is an Agent. ~50 native agents with manifests, plus variable HW agents at runtime.
 3. **Hardware Rings:** Ring 0 (NPU — intent routing), Ring 1 (GPU — tensor), Ring 2 (CPU — agents/skills).
 4. **HW Real First:** QEMU/VirtualBox são apenas **desenvolvimento e debug**. Validação final sempre em HW real.
 5. **Trinity MoE:** LLM + router treinável + experts (RustCoder, HWIdentify, etc). AutoLearn: detecta necessidade → treina → registra.

@@ -42,26 +42,18 @@ Paralelizável em 4 engenheiros.
 
 ---
 
-### §1 — VectorStore TF-IDF (RAG in-kernel)
+### §1 — VectorStore TF-IDF (RAG in-kernel) — ❌ REJEITADO
 
 **Fonte:** ADR-0064 · **Conexões:** ADR-0063 (SGDB persistência), ClaudioOS `vectordb.rs` (1.062 LOC referência)
-**Prioridade:** 🔴 Alta · **LOC:** ~1.000 · **Dias:** 3-5
+**Decisão:** A crate `vector-db` foi criada (F1, ~1.000 LOC) mas **jamais integrada**. O SGDB real (`k_ai::sgdb`, ADR-0063) cobre o caso via MemoryDoc/ART/BQ/TickvLite — persistência L0–L7 + busca vetorial BQ Flat SIMD + embedding BGE (`k_ai::memory_systems`). TF-IDF lexical não é necessário.
+**Ação:** crate deletada. ADR-0064 marcada como `descartada`.
 
-| Step | Ação | Arquivo(s) | Verificação |
-|------|------|-----------|-------------|
-| 1.1 | Criar crate `crates/vector-db` com Cargo.toml no_std+alloc | `vector-db/Cargo.toml`, `vector-db/src/lib.rs` | `cargo check -p vector-db` |
-| 1.2 | `tokenize()` — lowercase, split não-alfanumérico, stopwords EN+PT-BR | `vector-db/src/tokenize.rs` | "Rust kernel" → `["rust","kernel"]` |
-| 1.3 | `ln_f32()` + `sqrt_f32()` sem libm (IEEE 754 bit tricks) | `vector-db/src/tfidf.rs` | acurácia > 4 dígitos decimais |
-| 1.4 | `compute_tfidf()` + `cosine_similarity()` | `vector-db/src/tfidf.rs` | identity=1.0, orthogonal=0.0 |
-| 1.5 | `VectorStore` struct — insert, search(top_k), delete, update | `vector-db/src/store.rs` | search devolve top-k relevante |
-| 1.6 | Serialização JSON — to_json/from_json (reusa serde_json existente) | `vector-db/src/json.rs` | roundtrip: insert→serialize→load→assert |
-| 1.7 | `demo()` self-check assert-based | `vector-db/src/lib.rs` | 3 docs → search "Rust kernel" → top resultado contém "Rust" |
-| 1.8 | Thread-safety: `spin::Mutex<VectorStore>` global | `vector-db/src/store.rs` | acesso concorrente seguro (2 agents simultâneos) |
-| 1.9 | Integrar Cortex: search() antes de LLM request, insert() pós-resposta | `cortex/src/cortex.rs` ou `cognitive_bridge.rs` | log `[VECTORDB] search top: ...` no serial |
-| 1.10 | Integrar Hermes: RAG para skills (kind=Skill query no search) | `hermes/src/cognitive_bridge.rs` | "preciso ler arquivo" → recupera skill file_read |
+| Step | Ação | Verificação |
+|------|------|-------------|
+| ~~1.1–1.8~~ | ❌ Crate `vector-db` existia mas nunca integrada → **deletada** | — |
+| ~~1.9–1.10~~ | ❌ Integração nunca feita | — |
 
-**Resultado esperado:** RAG on-device, zero dependência de MCP externo. Segunda pergunta de uma conversa recupera contexto da primeira.
-**Goal:** Boot QEMU, conversa 2-turn: 1º "qual o clima?" → 2º "e amanhã?" → contexto do 1º preservado.
+**Alternativa real (SGDB):** `k_ai::sgdb::layers::rag_context()` + `remember_semantic()` + BQ L4 BQ hybrid recall. Embedding BGE via `k_ai::memory_systems::bge_embed()`.
 
 ---
 

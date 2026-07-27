@@ -48,7 +48,7 @@ J.A.R.V.I.S. (**J**ust **A** **R**ather **V**ery **I**ntelligent **S**ystem) é 
 │                              │                                        │
 │  ┌──────────────────────────▼──────────────────────────────────────┐ │
 │  │  LAYER 2: KERNEL — Base do Sistema                              │ │
-│  │  ├─ 247+ Agentes (20 nativos + 147 Agency + 80 importados)     │ │
+│  │  ├─ ~50 Agentes Nativos                                        │ │
 │  │  ├─ SkillRegistry + SafetyAgent + SecurityAgent                 │ │
 │  │  ├─ DiskIntelligenceAgent (6 ctrl, 10+ FS, SMART, NVMe, ARC)  │ │
 │  │  ├─ MemoryAgent (adaptive heap, MHI, dynamic tick)              │ │
@@ -65,7 +65,7 @@ J.A.R.V.I.S. (**J**ust **A** **R**ather **V**ery **I**ntelligent **S**ystem) é 
 │  │  ├─ Diagnostics → DiagnosticSkill                               │ │
 │  │  ├─ HardwareDiscovery → PCI + ACPI + APIC + SMP + GPU           │ │
 │  │  ├─ DriverInit → Net + USB + ATA + NVMe                         │ │
-│  │  ├─ AgentFleet → 247+ agentes registrados                       │ │
+│  │  ├─ AgentFleet → ~50 agentes nativos registrados                  │ │
 │  │  └─ Runtime → HermesAgent + AgentScheduler::run()               │ │
 │  └─────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────┘
@@ -944,7 +944,7 @@ impl VoicePipeline {
 | # | Feature | Componente | Validação Externa |
 |---|---|---|---|
 | 1 | Intent routing | HermesAgent | AgentOS KDD paper |
-| 2 | Multi-agent orchestration | AgentScheduler + 247 agents | SynkraAI, Qualixar OS |
+| 2 | Multi-agent orchestration | AgentScheduler + ~50 agents | SynkraAI, Qualixar OS |
 | 3 | Safety interceptor (Asimov) | SafetyAgent | Aegis paper |
 | 4 | Model orchestration (MoE) | Trinity MoE | TabNews "small > big" |
 | 5 | Knowledge Graph | event-bus KG | mem0-supabase Graphic Layer |

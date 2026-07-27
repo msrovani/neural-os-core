@@ -94,7 +94,7 @@ Os pilares rodam **em paralelo** com ADR-0042 N2→N5. Nenhum bloqueia v2.0.0.
 ### 2.1 Estado atual do neural-os-core (v1.7.3)
 
 ```
-~26.000 LOC | 180+ arquivos Rust | 247+ agentes | 0 erros de compilação
+~26.000 LOC | 180+ arquivos Rust | ~50 agentes nativos | 0 erros de compilação
 ┌──────────────────────────────────────────────────────────────┐
 │  Cadeia K³CHJ: k_nano → k_ai → cortex → hermes → jarbas     │
 │                                                              │

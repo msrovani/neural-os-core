@@ -54,6 +54,7 @@ pub struct CpuFeatures {
     pub clflushopt: bool,
     pub clwb: bool,
     pub waitpkg: bool,
+    pub mwait: bool,
     pub avx512f: bool,
     pub amx_tile: bool,
     pub hybrid: bool,
@@ -160,6 +161,7 @@ static mut CPU_FEATURES: CpuFeatures = CpuFeatures {
     clflushopt: false,
     clwb: false,
     waitpkg: false,
+    mwait: false,
     avx512f: false,
     amx_tile: false,
     hybrid: false,
@@ -259,6 +261,7 @@ pub fn detect_cpu_features() -> CpuFeatures {
             bmi2: (l7.ebx & (1 << 8)) != 0,
             clflushopt: (l7.ebx & (1 << 23)) != 0,
             clwb: (l7.ebx & (1 << 24)) != 0,
+            mwait: (l1.ecx & (1 << 3)) != 0,
             avx512f: (l7.ebx & (1 << 16)) != 0,
             amx_tile: (l7.edx & (1 << 24)) != 0,
             waitpkg: (l7.ecx & (1 << 5)) != 0,
@@ -465,12 +468,13 @@ pub fn detect() {
     crate::slog_nano!(
         "CPU",
         "info",
-        "sse42={} avx={} avx2={} fma={} bmi2={} clflushopt={} amx={} hybrid={}",
+        "sse42={} avx={} avx2={} fma={} bmi2={} mwait={} clflushopt={} amx={} hybrid={}",
         isa.sse42,
         isa.avx,
         isa.avx2,
         isa.fma,
         isa.bmi2,
+        isa.mwait,
         isa.clflushopt,
         isa.amx_tile,
         isa.hybrid
@@ -528,6 +532,11 @@ pub fn cache_topology() -> CacheTopology {
         return CacheTopology::default();
     }
     unsafe { CACHE_TOPO }
+}
+
+/// Returns true if the CPU supports the MWAIT/MONITOR instruction pair.
+pub fn has_mwait() -> bool {
+    cpu_features().mwait
 }
 
 pub fn allow_avx2() -> bool {

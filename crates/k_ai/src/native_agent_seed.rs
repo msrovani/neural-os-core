@@ -1,55 +1,124 @@
-//! Manifestos nativos gerados por tools/export_agent_packages.py.
+//! Agent seed definitions loaded from embedded SKILL.md files at compile time.
+//! Each `skills/agents/<name>/SKILL.md` is the canonical source.
+//! Replaces the old NATIVE_AGENT_SEEDS compile-time constant.
 
-pub struct NativeAgentSeed {
-    pub name: &'static str,
-    pub division: &'static str,
-    pub mission: &'static str,
-    pub schedule: &'static str,
-    pub native_impl: &'static str,
-    pub kind: &'static str,
-    pub skills: &'static [&'static str],
+use alloc::string::String;
+use alloc::vec::Vec;
+
+#[derive(Debug)]
+pub struct AgentSeed {
+    pub name: String,
+    pub division: String,
+    pub mission: String,
+    pub schedule: String,
+    pub native_impl: String,
+    pub kind: String,
+    pub skills: Vec<String>,
 }
 
-pub const NATIVE_AGENT_SEEDS: &[NativeAgentSeed] = &[
-    NativeAgentSeed { name: "boot_log", division: "system", mission: "Persistir e analisar o log de boot", schedule: "Continuous", native_impl: "BootLogAgent", kind: "System", skills: &["boot", "log"] },
-    NativeAgentSeed { name: "platform", division: "system", mission: "Inicializar PCI, ACPI, APIC e SMP", schedule: "Oneshot", native_impl: "PlatformAgent", kind: "System", skills: &["pci", "acpi", "apic", "smp"] },
-    NativeAgentSeed { name: "memory", division: "system", mission: "Inicializar orçamento e hierarquia de memória", schedule: "Oneshot", native_impl: "MemoryAgent", kind: "System", skills: &["memory", "mhi"] },
-    NativeAgentSeed { name: "trust", division: "security", mission: "Inicializar trust tokens do boot", schedule: "Oneshot", native_impl: "BootTrustAgent", kind: "System", skills: &["trust", "token"] },
-    NativeAgentSeed { name: "self_heal", division: "security", mission: "Inicializar autorrecuperação do boot", schedule: "Oneshot", native_impl: "BootSelfHealAgent", kind: "System", skills: &["self-heal", "recovery"] },
-    NativeAgentSeed { name: "MemoryAgent", division: "system", mission: "Calibrar heap e orçamento adaptativo", schedule: "Oneshot", native_impl: "memory_agent::MemoryAgent", kind: "System", skills: &["heap", "budget"] },
-    NativeAgentSeed { name: "net_driver", division: "drivers", mission: "Inicializar drivers de rede", schedule: "Oneshot", native_impl: "NetDriverAgent", kind: "Driver", skills: &["e1000", "rtl8139"] },
-    NativeAgentSeed { name: "usb_driver", division: "drivers", mission: "Inicializar controlador e dispositivos USB", schedule: "Oneshot", native_impl: "UsbDriverAgent", kind: "Driver", skills: &["xhci", "usb"] },
-    NativeAgentSeed { name: "hda_audio", division: "drivers", mission: "Inicializar captura e reprodução Intel HDA", schedule: "Oneshot", native_impl: "HdaAudioAgent", kind: "Driver", skills: &["hda", "audio"] },
-    NativeAgentSeed { name: "usb_audio", division: "drivers", mission: "Descobrir dispositivos USB Audio Class", schedule: "Oneshot", native_impl: "UsbAudioAgent", kind: "Driver", skills: &["uac", "usb", "audio"] },
-    NativeAgentSeed { name: "uvc_driver", division: "drivers", mission: "Inicializar câmera USB UVC", schedule: "Oneshot", native_impl: "UvcDriverAgent", kind: "Driver", skills: &["uvc", "camera"] },
-    NativeAgentSeed { name: "gpu_driver", division: "drivers", mission: "Selecionar backend de GPU", schedule: "Oneshot", native_impl: "GpuDriverAgent", kind: "Driver", skills: &["gpu", "display"] },
-    NativeAgentSeed { name: "fs_bridge", division: "storage", mission: "Conectar VFS, agentes de filesystem e MHI", schedule: "PollEvery(500)", native_impl: "FsBridgeAgent", kind: "System", skills: &["vfs", "filesystem"] },
-    NativeAgentSeed { name: "hw_detect", division: "hardware", mission: "Detectar hardware e produzir capability cards", schedule: "Oneshot", native_impl: "HwDetectAgent", kind: "System", skills: &["pci", "hw-identify"] },
-    NativeAgentSeed { name: "auto_learn", division: "learning", mission: "Detectar necessidades e treinar especialistas", schedule: "PollEvery(200)", native_impl: "AutoLearnAgent", kind: "System", skills: &["training", "moe"] },
-    NativeAgentSeed { name: "sleep_cycle", division: "learning", mission: "Executar replay, dream, consolidate, prune e reflect", schedule: "PollEvery(1000)", native_impl: "SleepCycleAgent", kind: "System", skills: &["sleep", "reflection"] },
-    NativeAgentSeed { name: "self_evolve", division: "learning", mission: "Gerar, verificar e promover skills", schedule: "PollEvery(100)", native_impl: "SelfEvolveAgent", kind: "System", skills: &["evolve", "skill"] },
-    NativeAgentSeed { name: "DiskIntelligenceAgent", division: "storage", mission: "Diagnosticar controladores, volumes e filesystems", schedule: "Oneshot", native_impl: "DiskIntelligenceAgent", kind: "System", skills: &["disk", "filesystem"] },
-    NativeAgentSeed { name: "cortex_llm", division: "cortex", mission: "Executar inferência LLM e Trinity MoE", schedule: "Continuous", native_impl: "CortexAgent", kind: "Inference", skills: &["llm", "moe"] },
-    NativeAgentSeed { name: "system", division: "system", mission: "Coordenar inicialização e prontidão do sistema", schedule: "Oneshot", native_impl: "SystemAgent", kind: "System", skills: &["boot", "ready"] },
-    NativeAgentSeed { name: "monitor", division: "system", mission: "Publicar e observar estado do sistema", schedule: "Oneshot", native_impl: "MonitorAgent", kind: "System", skills: &["monitor", "status"] },
-    NativeAgentSeed { name: "hw_bridge", division: "hardware", mission: "Encaminhar eventos de hardware ao EventBus", schedule: "Continuous", native_impl: "HwBridgeAgent", kind: "Router", skills: &["irq", "eventbus"] },
-    NativeAgentSeed { name: "network_agent", division: "network", mission: "Operar smoltcp, DHCP, DNS e HTTP", schedule: "Continuous", native_impl: "NetAgent", kind: "Network", skills: &["network", "http"] },
-    NativeAgentSeed { name: "input", division: "interaction", mission: "Processar teclado PS/2 e USB", schedule: "Continuous", native_impl: "InputAgent", kind: "Console", skills: &["keyboard", "input"] },
-    NativeAgentSeed { name: "intent_router", division: "hermes", mission: "Interpretar intenção e orquestrar skills", schedule: "Continuous", native_impl: "HermesAgent", kind: "Router", skills: &["intent", "react"] },
-    NativeAgentSeed { name: "display", division: "interaction", mission: "Compor framebuffer e interface visual", schedule: "Continuous", native_impl: "DisplayAgent", kind: "Console", skills: &["framebuffer", "compositor"] },
-    NativeAgentSeed { name: "vision", division: "interaction", mission: "Processar entrada visual e câmera", schedule: "Continuous", native_impl: "VisionAgent", kind: "Skill", skills: &["vision", "camera"] },
-    NativeAgentSeed { name: "jarvis", division: "interaction", mission: "Coordenar persona e comandos de voz", schedule: "Continuous", native_impl: "JarvisAgent", kind: "Console", skills: &["voice", "persona"] },
-    NativeAgentSeed { name: "jarvis_voice", division: "interaction", mission: "Executar pipeline Mic para STT e TTS", schedule: "Continuous", native_impl: "JarvisVoiceAgent", kind: "Console", skills: &["stt", "tts"] },
-    NativeAgentSeed { name: "wakeword", division: "interaction", mission: "Detectar palavra de ativação Jarvis", schedule: "Continuous", native_impl: "WakeWordAgent", kind: "Skill", skills: &["wakeword", "audio"] },
-    NativeAgentSeed { name: "audio_pipeline", division: "interaction", mission: "Coordenar captura, VAD, STT e reprodução", schedule: "Continuous", native_impl: "AudioPipelineAgent", kind: "System", skills: &["audio", "vad"] },
-    NativeAgentSeed { name: "audio_mixer", division: "interaction", mission: "Misturar streams e aplicar barge-in", schedule: "Continuous", native_impl: "AudioMixerAgent", kind: "System", skills: &["audio", "mixer"] },
-    NativeAgentSeed { name: "cron", division: "hermes", mission: "Disparar eventos periódicos declarados", schedule: "Continuous", native_impl: "CronAgent", kind: "System", skills: &["cron", "schedule"] },
-    NativeAgentSeed { name: "mcp", division: "hermes", mission: "Expor ferramentas MCP ao EventBus", schedule: "Continuous", native_impl: "McpAgent", kind: "Network", skills: &["mcp", "tools"] },
-    NativeAgentSeed { name: "security", division: "security", mission: "Detectar abuso e anomalias de segurança", schedule: "Continuous", native_impl: "SecurityAgent", kind: "System", skills: &["security", "detect"] },
-    NativeAgentSeed { name: "safety", division: "security", mission: "Aplicar invariantes de segurança I1 a I4", schedule: "Continuous", native_impl: "SafetyAgent", kind: "System", skills: &["safety", "invariant"] },
-    NativeAgentSeed { name: "optimizer", division: "learning", mission: "Otimizar schedules e recursos dos agentes", schedule: "Continuous", native_impl: "OptimizerAgent", kind: "System", skills: &["optimize", "scheduler"] },
-    NativeAgentSeed { name: "mouse", division: "interaction", mission: "Processar mouse PS/2 e interação visual", schedule: "Continuous", native_impl: "MouseAgent", kind: "Console", skills: &["mouse", "pointer"] },
-    NativeAgentSeed { name: "browser", division: "network", mission: "Buscar páginas por HTTP real", schedule: "Continuous", native_impl: "BrowserAgent", kind: "Skill", skills: &["browser", "http"] },
-    NativeAgentSeed { name: "wifi_agent", division: "network", mission: "Descobrir e operar interfaces Wi-Fi", schedule: "Continuous", native_impl: "WifiAgent", kind: "Network", skills: &["wifi", "scan"] },
-    NativeAgentSeed { name: "log_analyst", division: "support", mission: "Analisar logs e propor diagnóstico", schedule: "PollEvery(500)", native_impl: "LogAnalystAgent", kind: "Skill", skills: &["log", "diagnostic"] },
+/// All embedded agent SKILL.md files.
+const AGENT_SKILL_SOURCES: &[&str] = &[
+    include_str!("../../../skills/agents/audio_mixer/SKILL.md"),
+    include_str!("../../../skills/agents/audio_pipeline/SKILL.md"),
+    include_str!("../../../skills/agents/auto_learn/SKILL.md"),
+    include_str!("../../../skills/agents/boot_log/SKILL.md"),
+    include_str!("../../../skills/agents/browser/SKILL.md"),
+    include_str!("../../../skills/agents/cortex_llm/SKILL.md"),
+    include_str!("../../../skills/agents/cron/SKILL.md"),
+    include_str!("../../../skills/agents/disk_intelligence/SKILL.md"),
+    include_str!("../../../skills/agents/display/SKILL.md"),
+    include_str!("../../../skills/agents/fs_bridge/SKILL.md"),
+    include_str!("../../../skills/agents/gpu_driver/SKILL.md"),
+    include_str!("../../../skills/agents/hda_audio/SKILL.md"),
+    include_str!("../../../skills/agents/hw_bridge/SKILL.md"),
+    include_str!("../../../skills/agents/hw_detect/SKILL.md"),
+    include_str!("../../../skills/agents/input/SKILL.md"),
+    include_str!("../../../skills/agents/intent_router/SKILL.md"),
+    include_str!("../../../skills/agents/jarvis/SKILL.md"),
+    include_str!("../../../skills/agents/jarvis_voice/SKILL.md"),
+    include_str!("../../../skills/agents/log_analyst/SKILL.md"),
+    include_str!("../../../skills/agents/mcp/SKILL.md"),
+    include_str!("../../../skills/agents/memory/SKILL.md"),
+    include_str!("../../../skills/agents/memory_agent/SKILL.md"),
+    include_str!("../../../skills/agents/monitor/SKILL.md"),
+    include_str!("../../../skills/agents/mouse/SKILL.md"),
+    include_str!("../../../skills/agents/net_driver/SKILL.md"),
+    include_str!("../../../skills/agents/network_agent/SKILL.md"),
+    include_str!("../../../skills/agents/optimizer/SKILL.md"),
+    include_str!("../../../skills/agents/platform/SKILL.md"),
+    include_str!("../../../skills/agents/safety/SKILL.md"),
+    include_str!("../../../skills/agents/security/SKILL.md"),
+    include_str!("../../../skills/agents/self_evolve/SKILL.md"),
+    include_str!("../../../skills/agents/self_heal/SKILL.md"),
+    include_str!("../../../skills/agents/sleep_cycle/SKILL.md"),
+    include_str!("../../../skills/agents/system/SKILL.md"),
+    include_str!("../../../skills/agents/trust/SKILL.md"),
+    include_str!("../../../skills/agents/usb_audio/SKILL.md"),
+    include_str!("../../../skills/agents/usb_driver/SKILL.md"),
+    include_str!("../../../skills/agents/uvc_driver/SKILL.md"),
+    include_str!("../../../skills/agents/vision/SKILL.md"),
+    include_str!("../../../skills/agents/wakeword/SKILL.md"),
+    include_str!("../../../skills/agents/wifi_agent/SKILL.md"),
 ];
+
+/// Parse and return all agent seed definitions from embedded SKILL.md files.
+pub fn load_all() -> Vec<AgentSeed> {
+    AGENT_SKILL_SOURCES.iter().map(|src| parse(src)).collect()
+}
+
+fn parse(content: &str) -> AgentSeed {
+    // Extract frontmatter between `---` markers
+    let fm = content.split("---").nth(1).unwrap_or("");
+    let mut name = String::new();
+    let mut division = String::new();
+    let mut mission = String::new();
+    let mut schedule = String::new();
+    let mut native_impl = String::new();
+    let mut kind = String::new();
+    let mut skills: Vec<String> = Vec::new();
+
+    for line in fm.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(pos) = line.find(':') {
+            let key = line[..pos].trim();
+            let val = line[pos + 1..].trim();
+            match key {
+                "name" => name = String::from(val),
+                "division" => division = String::from(val),
+                "mission" => mission = String::from(val),
+                "schedule" => schedule = String::from(val),
+                "native_impl" => native_impl = String::from(val),
+                "kind" => kind = String::from(val),
+                "skills" => {
+                    let inner = val
+                        .trim_start_matches('[')
+                        .trim_end_matches(']');
+                    skills = inner
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').trim().into())
+                        .filter(|s: &String| !s.is_empty())
+                        .collect();
+                }
+                _ => {}
+            }
+        }
+    }
+
+    AgentSeed {
+        name,
+        division,
+        mission,
+        schedule,
+        native_impl,
+        kind,
+        skills,
+    }
+}
+
+/// Convenience: number of embedded agent seeds (at compile time).
+pub const fn count() -> usize {
+    AGENT_SKILL_SOURCES.len()
+}

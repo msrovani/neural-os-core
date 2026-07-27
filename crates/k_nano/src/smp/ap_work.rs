@@ -1,6 +1,12 @@
 //! Fila de trabalho para APs — jobs com barreira (ADR-0055 Fase A/B).
+//!
+//! ## Idle power management
+//! APs usam `hlt` (C1) por padrão. Se a CPU suporta MWAIT (CPUID.1:ECX[3]),
+//! o loop idle emite `monitor`/`mwait` com hint configurável, permitindo
+//! C-states mais profundos (C1E, C2, C6). O wake é atômico: o BSP enfileira
+//! um job no slot por-AP e o IPI de reschedule acorda o AP dormindo.
 
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 pub type ApJobFn = unsafe fn(job_id: usize, worker: usize);
 
@@ -76,19 +82,72 @@ pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
     }
 }
 
-/// Loop de idle do AP: processa jobs enfileirados, tenta steal, senão `hlt`.
+// ─── MWAIT support ──────────────────────────────────────────────────────────
+
+/// Cache-line aligned flag for the `monitor` instruction. The BSP writes this
+/// after enqueuing jobs so the AP wakes from MWAIT even without an IPI.
+/// Aligned to 64 bytes (cache line) as required by `monitor`.
+#[repr(align(64))]
+struct MonitorFlag(u8);
+static MONITOR_FLAG: MonitorFlag = MonitorFlag(0);
+
+/// MWAIT hint currently in use. Written by `set_mwait_hint`.
+static MWAIT_HINT: AtomicU8 = AtomicU8::new(0); // 0 = C1
+
+/// Set the MWAIT C-state hint used by APs.
+/// 0 = C1 (fast wake, ~same as HLT), 1 = C1E, 2 = C2, 3..6 = C3..C6.
+/// Ignored on CPUs without MWAIT (they use `hlt` unconditionally).
+pub fn set_mwait_hint(cstate: u8) {
+    let hint = cstate.min(6);
+    MWAIT_HINT.store(hint, Ordering::Release);
+}
+
+/// Returns true if there are pending jobs in the global queue.
+/// Used by governor `ondemand_tick` to decide frequency scaling.
+pub fn has_pending() -> bool {
+    HEAD.load(Ordering::Acquire) < TAIL.load(Ordering::Acquire)
+}
+
+/// Emit `monitor` then `mwait` with the current hint.
 ///
-/// ADR-0057 WS-F: os APs sobem **sem IDT próprio** e com IF=0 (o trampoline faz
-/// `cli` e `ap_entry` não faz `lidt`/`sti`). Enquanto assim, um AP que dorme com
-/// `hlt` só pode ser acordado por trabalho já enfileirado antes do `hlt`, e o
-/// `parallel_*` (WS-B) por isso é **gated** por `ap_pollable()` (hoje `false`):
-/// o BSP faz o matmul (AVX2/scalar) e nenhum AP é enfileirado → sem deadlock.
+/// # Safety
+/// Must only be called if `crate::platform_probe::has_mwait()` is true.
+unsafe fn mwait_idle() {
+    let flag_ptr = &MONITOR_FLAG as *const _ as u64;
+    let hint = MWAIT_HINT.load(Ordering::Relaxed) as u32;
+    // EAX[7:4] = C-state hint, EAX[0] = break on interrupt
+    let eax = (hint.min(6) as u32) << 4;
+    core::arch::asm!(
+        "monitor",
+        in("rax") flag_ptr,
+        in("ecx") 0u32,
+        in("edx") 0u32,
+        options(nostack, preserves_flags)
+    );
+    core::arch::asm!(
+        "mwait",
+        in("eax") eax,
+        in("ecx") 0u32,
+        options(nostack, preserves_flags)
+    );
+}
+
+/// Loop de idle do AP: processa jobs enfileirados, tenta steal, senão dorme
+/// com `hlt` (C1) ou `mwait` (C1–C6 se a CPU suportar).
 ///
-/// Para transformar os APs em workers vivos sob demanda (F1-full) é preciso:
-/// IDT compartilhada + LAPIC habilitado + handler do reschedule-IPI + `wake_aps`.
-/// Isso mexe em interrupções por-core (risco de #DF) e exige **validação em HW**
-/// (residual WS-F). `hlt` mantém o wake sequencial confiável e baixo custo no TCG.
+/// ## Wake
+/// O BSP enfileira jobs no slot circular e dispara IPI de reschedule.
+/// O AP acorda do `hlt`/`mwait` com o IPI, re-entra no topo do loop e
+/// processa o job. Sem IPI, o `mwait` também acorda via `monitor` store
+/// (quando o BSP escreve MONITOR_FLAG após enfileirar).
+///
+/// ## Segurança (AP IDT)
+/// Os APs já carregam IDT + TSS (via `ap_load_idt_and_tss`) e habilitam
+/// interrupções (`sti`). Portanto `hlt`/`mwait` acordam por IPI sem risco.
+/// O trampoline faz `cli`, mas `ap_entry` faz `sti` depois de carregar IDT.
 pub fn ap_idle_loop(worker_id: usize) -> ! {
+    let use_mwait = crate::platform_probe::has_mwait();
+
     loop {
         if let Some((f, jid)) = try_dequeue() {
             unsafe { f(jid, worker_id) };
@@ -105,7 +164,12 @@ pub fn ap_idle_loop(worker_id: usize) -> ! {
             unsafe { task(core::ptr::null_mut()) };
             continue;
         }
-        x86_64::instructions::hlt();
+
+        if use_mwait {
+            unsafe { mwait_idle() };
+        } else {
+            x86_64::instructions::hlt();
+        }
     }
 }
 

@@ -5,9 +5,7 @@
 **Data:** 2026-07-22  
 **Ideias:** #491–#510  
 **Supersede:** —  
-**Relacionado:** ADR-0061 (CPU-First BitNet), ADR-0040 (NeuralFS), ADR-0057 (Compute Dispatch), **ADR-0064** (RAG TF-IDF L1 lexical — persiste via TicKV)
-
-> **Cruzamento ADR-0064:** a camada L1 lexical (`VectorStore` TF-IDF) é o front-end RAG do agente; a persistência durável usa keys TicKV `vdb/*` deste SGDB. L1 structured (NoProto working docs) permanece escopo desta ADR.
+**Relacionado:** ADR-0061 (CPU-First BitNet), ADR-0040 (NeuralFS), ADR-0057 (Compute Dispatch). **Nota:** ADR-0064 (RAG TF-IDF) — ❌ rejeitada; busca vetorial coberta por BQ Flat SIMD desta ADR.
 
 ---
 
@@ -233,7 +231,7 @@ Facade: `k_ai::sgdb::store` (namespaces `hanr/` `md/` `pkg/` `skill/` `audit/` `
 | Consumidor | Path | Backend |
 |------------|------|---------|
 | HANR USER/MEMORY/SOUL/PERSONA | `hermes/memory_store.rs` | SGDB L7 primário + VFS espelho |
-| RAG TF-IDF | `vector-db` + `put_vdb_blob` | TickvLite `vdb/blob` |
+| RAG TF-IDF | ~~`vector-db`~~ ❌ rejeitada | BGE embedding (`k_ai::memory_systems`) → BQ L4 |
 | L1/L2 last turn | `sgdb::layers` | MemoryDoc |
 | AuditTrail | `k_ai/audit.rs` flush/load | `audit/head` compact |
 | EpisodicMemory | `k_ai/cognitive.rs` | L2 + `sys/episodic_tail` |

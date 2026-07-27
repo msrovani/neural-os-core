@@ -16,6 +16,21 @@ use k_nano::globals::EVENT_BUS;
 pub const TOPIC_MEMORY_NUDGE: &str = "MEMORY_NUDGE";
 pub const TOPIC_COG_STATUS: &str = "COG_STATUS";
 
+/// Ponte de guarda do Hermes: detecta se a mensagem e sobre criacao de skill.
+/// Se for, o Hermes DEVE garantir que o skill_writer esteja no contexto do LLM.
+/// Usado no Chat handler do HermesAgent como pre-flight check.
+pub fn is_skill_creation_request(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("cria") && lower.contains("skill")
+        || lower.contains("create") && lower.contains("skill")
+        || lower.contains("novo skill")
+        || lower.contains("new skill")
+        || lower.contains("/add_skill")
+        || lower.contains("/learn")
+        || lower.contains("registra") && lower.contains("skill")
+        || lower.contains("register") && lower.contains("skill")
+}
+
 // ─── IterationBudget (HANR-class, bare-metal) ─────────────────────────────
 
 static BUDGET_MAX: AtomicU16 = AtomicU16::new(12);
@@ -529,7 +544,7 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
         emo
     ));
 
-    // RAG context: BQ L4 + texto formatado (substitui legado vector-db)
+    // RAG context: BQ L4 + texto formatado (embedding BGE ou pseudo sobre SGDB real)
     let mut recall_path = "rag";
     let (q_emb, emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
     let rag = k_ai::sgdb::rag_context(&q_emb, 5);

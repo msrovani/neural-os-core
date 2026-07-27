@@ -74,7 +74,6 @@ pub use soul::*;
 pub mod notification_gate;
 pub mod aios_api;
 pub mod skill_opt;
-pub mod rustpython_no_std;
 pub mod email_agent;
 pub mod fs;
 pub mod neural_fs;

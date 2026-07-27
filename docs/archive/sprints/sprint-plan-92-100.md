@@ -18,7 +18,7 @@ v1.0 = **A Era do Silício**. Fundação onde o Rust bare-metal prova que conseg
 - Carregar tensores ternários (BitNet LLM)
 - Gerir disco (ATA/NVMe/AHCI/FAT32)
 - Estabelecer comunicação de rede (serial tunnel TCP/IP + DNS)
-- Executar agents + skills em ecossistema agent-first (247+ agents)
+- Executar agents + skills em ecossistema agent-first (~50 agentes nativos)
 - Renderizar framebuffer + compositor multi-window
 
 Após v1.0, avançamos para **v2.0 — A Era da Cognição**: Kernel, Cortex, Hermes e JARVIS como entidade viva.

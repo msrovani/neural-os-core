@@ -6,23 +6,20 @@
 
 ---
 
-## 1. ADR-0064 — VectorStore TF-IDF (RAG in-kernel)
+## 1. ADR-0064 — VectorStore TF-IDF (RAG in-kernel) — ❌ REJEITADO
 
 **Fonte:** `docs/architecture/0064-rag-db-in-kernel.md`
-**Lifecycle original:** `por_fazer`
+**Lifecycle original:** `descartada`
 
-Item não implementado. A crate `crates/vector-db` nunca foi criada. O VectorStore TF-IDF com cosine similarity (inspirado no ClaudioOS `vectordb.rs`) seria a camada L1 lexical de RAG on-device, persistindo via ADR-0063 TicKV `vdb/*`.
+Item rejeitado. A crate `crates/vector-db` foi criada (F1) mas **jamais integrada** — deletada em 2026-07-26. O SGDB real (`k_ai::sgdb`, ADR-0063) cobre o caso via MemoryDoc/ART/BQ/TickvLite + embedding BGE (`k_ai::memory_systems`). TF-IDF lexical separado não é necessário.
 
-| Subitem | Descrição | Esforço |
+| Subitem | Descrição | Destino |
 |---------|-----------|---------|
-| F1 | crate `vector-db` — VectorStore, VectorEntry, tokenize EN+PT-BR, tfidf, cosine, ln_f32, sqrt_f32, demo() | ~1.000 LOC |
-| F2 | Serialização JSON + persistência VFS FAT32 | ~300 LOC |
-| F3 | Integração Cortex/Trinity — search antes de LLM, insert pós-resposta | ~200 LOC |
-| F4 | Integração Hermes — RAG para skills | ~150 LOC |
-| F5 | Thread-safety spin::Mutex + multi-store | ~100 LOC |
-| F6 | Embeddings neurais (MiniLM) gated por VRAM — residual do residual | — |
+| F1 | crate `vector-db` | Foi criada, nunca integrada → **deletada** |
+| F2–F5 | Integração | Nunca feita — SGDB real (`k_ai::sgdb`) cobre |
+| F6 | Embeddings neurais | Já existe em `k_ai::memory_systems` (BGE) |
 
-**Total estimado:** ~1.750 LOC
+**Alternativa real:** `k_ai::sgdb::layers::rag_context()` + BQ L4 hybrid + `bge_embed()`. ADR-0064 descartada, manter como referência histórica.
 
 ---
 

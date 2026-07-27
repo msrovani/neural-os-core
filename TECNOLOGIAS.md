@@ -1,7 +1,7 @@
 # CATÁLOGO DE TECNOLOGIAS — AIOS K³CHJ (neural-os-core)
 ## Registro de Propriedade Intelectual e Inovação
 
-**~26.000 LOC, 180+ arquivos Rust, 247+ agentes**
+**~26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos**
 **Versão release:** v1.9.7 TESTE / NÃO ESTÁVEL (2026-07-22)
 **Build:** `cargo clean -p neural-kernel && cargo nk` = 0 erros (warnings dead-code = política conhecida)
 **Licença:** MIT (código próprio) / MIT, GPL, Apache 2.0 (componentes inspirados/portados)
@@ -31,7 +31,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|
-| 1.1 | **AIOS Runtime — Agente como Unidade Ontológica Única** | 🏆 Unifica tasks, skills, drivers, daemons em UM único trait `Agent`. Todos os 247+ componentes seguem o mesmo lifecycle: manifest → tick → EventBus → skill. Nenhum outro OS bare-metal ou Linux faz isso. | Projetos de agentes (CrewAI, OpenAI Swarm, AutoGen) — todos em userspace/std | Apache 2.0 / MIT | `agent-core/`, `agents.rs` | ✅ 0 err |
+| 1.1 | **AIOS Runtime — Agente como Unidade Ontológica Única** | 🏆 Unifica tasks, skills, drivers, daemons em UM único trait `Agent`. Todos os ~50 agentes nativos seguem o mesmo lifecycle: manifest → tick → EventBus → skill. Nenhum outro OS bare-metal ou Linux faz isso. | Projetos de agentes (CrewAI, OpenAI Swarm, AutoGen) — todos em userspace/std | Apache 2.0 / MIT | `agent-core/`, `agents.rs` | ✅ 0 err |
 | 1.2 | **HW Expert v3 — Identificação de Hardware por Rede Neural em Kernel** | 🏆 **61.453 VID/DID** reconhecidos por BitNet ternário (1M params, 259KB) rodando em no_std. Primeiro modelo de ML a rodar DENTRO do kernel para identificar hardware em tempo real. Nenhum OS conhecido faz isso. | pci.ids (almanaque), usb.ids, SDIO DriverPacks (lista de HWIDs) | MIT (pci.ids: domínio público) | `cortex.rs`, `hw_expert_v3.bitnet` | ✅ 0 err |
 | 1.3 | **SelfHealing Firmware Pipeline I3/I4** | 🏆 HW novo é instalado → detectado → identificado → firmware baixado (HTTP) → carregado hot → skill gerada (LLM) → registrada → funcional. Tudo automático, sem reboot, sem configuração. | linux-firmware.git (blobs), Self-Healing Agents papers (arXiv) | MIT (linux-firmware) | `self_heal.rs`, `firmware.rs`, `agents.rs` | ✅ 0 err |
 | 1.4 | **SleepCycle — Ciclo de Sono em Bare-Metal** | 🏆 **Primeiro (e único) sistema bare-metal com ciclo sono/aprendizado.** 5 fases: REPLAY → DREAM → CONSOLIDATE → PRUNE → REFLECT. Inspirado em neurociência humana. Sem internet. Sem humano. Cada boot melhora o sistema. | Neurociência (Atkinson-Shiffrin, Ebbinghaus), SleepCycle papers | — (conhecimento científico) | `agents.rs` (SleepCycleAgent) | ✅ 0 err |
@@ -123,7 +123,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 4.11 | **P2P Orchestration — APIC Async Executor** | 🏆 Executor async baseado em APIC Timer com SPSC lock-free ring buffer (`WakerQueue`). Interrupções de hardware → `waker.wake()` sem CPU ociosa. | Embassy async (conceito), APIC spec | — (conhecimento científico) | `async_rt.rs` | ✅ 0 err |
 | 4.12 | **P2P Orchestration — NVMe Driver** | 🏆 Driver NVMe bare-metal via PCIe MMIO. Admin SQ/CQ, `nvme_read_block()`, `nvme_write_block()`. | NVMe spec, Linux nvme driver | GPLv2 | `storage/nvme.rs` | ✅ 0 err |
 | 4.13 | **P2P Orchestration — TicKV Integration** | 🏆 Flash Driver trait para TicKV sobre NVMe. Persistência de audit logs e resultados de inferência. | TicKV (Tencent) | Apache 2.0 | `storage/tickv.rs` | ✅ 0 err |
-| 4.13b | **SGDB AIOS — SgdbStore + MemoryDoc/ART/BQ** | 🏆 Store cognitivo unificado no_std: facade `SgdbStore` (hanr/pkg/skill/audit/vdb), MemoryDoc L0–L7, ART lite, BQ Hamming, TickvLite. HANR/PackageHub/Audit/Episodic/RAG adotam SGDB; FAT fica blobs/firmware/WiFi. | TicKV, NoProto, ART, BQ papers; ClaudioOS vectordb (TF-IDF) | Apache/MIT | `k_ai/sgdb/*`, `vector-db`, `storage/tickv.rs` | ✅ MVP SESSION_173 |
+| 4.13b | **SGDB AIOS — SgdbStore + MemoryDoc/ART/BQ** | 🏆 Store cognitivo unificado no_std: facade `SgdbStore` (hanr/pkg/skill/audit), MemoryDoc L0–L7, ART lite, BQ Hamming, TickvLite. HANR/PackageHub/Audit/Episodic/RAG adotam SGDB; FAT fica blobs/firmware/WiFi. | TicKV, NoProto, ART, BQ papers | Apache/MIT | `k_ai/sgdb/*`, `storage/tickv.rs` | ✅ MVP SESSION_173 |
 | 4.13c | **SGDB Hamming dispatch + D-series** | 🏆 Despacho Hamming `scalar`/`avx2_lut`/`avx512f` no boot; L0/L1 RAM-only; Tickv `sys/tickv_ckpt` + stress GC; bench ART 100k / BQ 10k×1024. | ADR-0061 ISA gate; BQ papers | — | `sgdb/hamming_dispatch.rs`, `bq.rs`, `tickv.rs` | ✅ SESSION_175 |
 | 4.13d | **SGDB Memory Quality (E-series)** | 🏆 SleepCycle↔checkpoint; Hermes recall L4 BQ hybrid; TickvLite V-flag; ART Node16 SIMD; NMD1 patch/sortable keys. | Tock TicKV, NoProto patterns, ART paper, Elastic simdvec | — | `sgdb/*`, `hermes/agents`, `cognitive_bridge` | ✅ SESSION_176 |
 | 4.14 | **P2P Orchestration — Hybrid Transport** | 🏆 Transporte híbrido: Raw L2 Ethernet (mesma sub-rede) ou UDP/IP smoltcp (roteado). Seleção automática por `TransportMode`. | smoltcp, Ethernet spec | MIT | `net/transport.rs` | ✅ 0 err |
@@ -309,7 +309,7 @@ $ cargo clean -p neural-kernel && cargo nk
 |---------|-------|
 | Linhas de código (Rust) | ~26.000 |
 | Arquivos Rust | 180+ |
-| Agentes | 247+ |
+| Agentes | ~50 nativos |
 | ADRs | 47+ |
 | Firmware blobs | 116 (~12.5 MB) |
 | HWIDs HW Expert v3 | **61.453 VID/DID** |
@@ -341,7 +341,7 @@ $ cargo clean -p neural-kernel && cargo nk
 ---
 
 > **AIOS K³CHJ — Neural OS Hermes v1.9.5 TEST / NÃO ESTÁVEL**
-> *26.000 LOC, 180+ arquivos Rust, 247+ agentes, 5 crates K³CHJ wired, cargo nk = 0 erros.*
+> *26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 5 crates K³CHJ wired, cargo nk = 0 erros.*
 > *"O hardware real não perdoa. O silício obedece."*
 > [github.com/msrovani/neural-os-core](https://github.com/msrovani/neural-os-core)
 > [huggingface.co/aios-k2chj](https://huggingface.co/aios-k2chj)

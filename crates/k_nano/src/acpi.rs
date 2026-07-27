@@ -103,7 +103,7 @@ fn power_off_s5_try(port: u16, types: &[u8]) -> bool {
     true
 }
 
-/// Extrai PM1a_CNT + SLP_TYPa de uma tabela FACP (+ DSDT \_S5_ se possível).
+/// Extrai PM1a_CNT + SLP_TYPa de uma tabela FACP (+ DSDT \_S5_ e \_S3_ se possível).
 pub unsafe fn parse_fadt_power(table_ptr: *const u8, phys_off: u64) -> (u16, Option<u8>) {
     let len = read_volatile(table_ptr.add(4) as *const u32) as usize;
     if len < 90 {
@@ -122,6 +122,19 @@ pub unsafe fn parse_fadt_power(table_ptr: *const u8, phys_off: u64) -> (u16, Opt
     }
 
     let mut slp: Option<u8> = None;
+
+    // ─── FACS (Firmware ACPI Control Structure) ──────────────
+    // FIRMWARE_CTRL @36 (32-bit) or X_FIRMWARE_CTRL @132 (64-bit, rev≥3 / len≥148).
+    let facs_phys = if len >= 148 {
+        let x_facs = read_volatile(table_ptr.add(132) as *const u64);
+        if x_facs != 0 { x_facs } else { read_volatile(table_ptr.add(36) as *const u32) as u64 }
+    } else {
+        read_volatile(table_ptr.add(36) as *const u32) as u64
+    };
+    if facs_phys != 0 {
+        parse_facs(facs_phys, phys_off);
+    }
+
     // DSDT phys: legacy @40; X_DSDT @140 se len>=148
     let mut dsdt_phys = read_volatile(table_ptr.add(40) as *const u32) as u64;
     if len >= 148 {
@@ -132,16 +145,121 @@ pub unsafe fn parse_fadt_power(table_ptr: *const u8, phys_off: u64) -> (u16, Opt
     }
     if dsdt_phys != 0 {
         slp = parse_s5_from_dsdt(dsdt_phys, phys_off);
+        // Also parse _S3 for suspend
+        let s3_typ = parse_s3_from_dsdt(dsdt_phys, phys_off);
+        if let Some(typ3) = s3_typ {
+            set_s3_slp_typa(typ3);
+        }
     }
 
     crate::slog_nano!(
         "ACPI",
         "info",
-        "FADT PM1a_CNT={:#x} SLP_TYPa={:?}",
+        "FADT PM1a_CNT={:#x} SLP_TYPa={:?} SLP_TYP3={:?}",
         pm1a,
-        slp
+        slp,
+        SLP_TYP3.load(Ordering::Relaxed)
     );
     (pm1a, slp)
+}
+
+/// Parse `\_S3` (suspend-to-RAM) from DSDT AML bytecode.
+/// Same pattern as `\_S5`, looking for the BytePrefix 0x0A + typ.
+unsafe fn parse_s3_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {
+    let virt = VirtAddr::new(phys_off.wrapping_add(dsdt_phys)).as_u64() as *const u8;
+    let mut sig = [0u8; 4];
+    for i in 0..4 {
+        sig[i] = read_volatile(virt.add(i));
+    }
+    if &sig != b"DSDT" && &sig != b"SSDT" {
+        return None;
+    }
+    let len = read_volatile(virt.add(4) as *const u32) as usize;
+    if len < 36 || len > 2 * 1024 * 1024 {
+        return None;
+    }
+    let needle = b"_S3_";
+    let end = len.saturating_sub(needle.len() + 4);
+    for i in 36..end {
+        let mut ok = true;
+        for (j, &b) in needle.iter().enumerate() {
+            if read_volatile(virt.add(i + j)) != b {
+                ok = false;
+                break;
+            }
+        }
+        if !ok {
+            continue;
+        }
+        for k in (i + 4)..(i + 64).min(len.saturating_sub(1)) {
+            if read_volatile(virt.add(k)) == 0x0A {
+                let typ = read_volatile(virt.add(k + 1));
+                crate::slog_nano!("ACPI", "info", "DSDT _S3_ SLP_TYP3={}", typ);
+                return Some(typ);
+            }
+        }
+    }
+    None
+}
+
+// ─── S3 (Suspend-to-RAM) ────────────────────────────────────────────────────
+
+static SLP_TYP3: AtomicU8 = AtomicU8::new(0xFF);
+/// Waking vector from FACS (physical address of S3 resume trampoline).
+static FACS_WAKE_VECTOR: AtomicU64 = AtomicU64::new(0);
+
+pub fn set_s3_slp_typa(typ3: u8) {
+    SLP_TYP3.store(typ3, Ordering::Release);
+}
+
+pub fn s3_slp_typa() -> Option<u8> {
+    let v = SLP_TYP3.load(Ordering::Acquire);
+    if v == 0xFF { None } else { Some(v) }
+}
+
+pub fn facs_wake_vector() -> u64 {
+    FACS_WAKE_VECTOR.load(Ordering::Acquire)
+}
+
+/// Parse FACS (Firmware ACPI Control Structure) for the S3 waking vector.
+///
+/// FACS layout (offset 0):
+///   +0  signature[4]  "FACS"
+///   +4  length (u32)
+///   +8  hardware_signature (u32)
+///   +12 firmware_waking_vector (u32) — 32-bit real-mode address
+///   +16 global_lock (u32)
+///   +20 flags (u32)
+///   +24 x_firmware_waking_vector (u64) — 64-bit address (FACS v2, length ≥ 32)
+///
+/// # Safety
+/// `facs_phys` must be a valid physical address to a FACS.
+unsafe fn parse_facs(facs_phys: u64, phys_off: u64) {
+    let virt = VirtAddr::new(phys_off.wrapping_add(facs_phys));
+    let ptr = virt.as_u64() as *const u8;
+
+    let len = read_volatile(ptr.add(4) as *const u32) as usize;
+    crate::slog_nano!("ACPI", "info", "FACS em 0x{:x} ({} bytes)", facs_phys, len);
+
+    // 32-bit waking vector
+    let wake32 = read_volatile(ptr.add(12) as *const u32) as u64;
+    if wake32 != 0 {
+        crate::slog_nano!("ACPI", "info", "FACS waking_vector=0x{:x}", wake32);
+    }
+
+    // 64-bit waking vector (FACS v2, length ≥ 32)
+    let wake64 = if len >= 32 {
+        read_volatile(ptr.add(24) as *const u64)
+    } else {
+        0
+    };
+    let wake = if wake64 != 0 { wake64 } else { wake32 };
+    if wake != 0 {
+        FACS_WAKE_VECTOR.store(wake, Ordering::Release);
+        crate::slog_nano!("ACPI", "info", "FACS usando wake_vector=0x{:x}", wake);
+    } else {
+        crate::slog_nano!("ACPI", "warn", "FACS sem waking vector — S3 resume pode nao funcionar");
+    }
 }
 
 unsafe fn parse_s5_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {

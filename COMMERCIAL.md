@@ -18,7 +18,7 @@ A Commercial License exempts you from AGPLv3's copyleft requirements — you can
 |---|---|---|
 | Full kernel source code | ✅ | ✅ |
 | GPU drivers + detection | ✅ | ✅ |
-| 247 agents | ✅ | ✅ |
+| ~50 native agents | ✅ | ✅ |
 | FAT32 + WASM parser | ✅ | ✅ |
 | **Use in proprietary product / SaaS** | ❌ Requires AGPL compliance | ✅ **Fully exempt** |
 | **Private modifications (no source release)** | ❌ | ✅ |

@@ -19,11 +19,11 @@ O projeto [ClaudioOS](https://github.com/suhteevah/claudio-os) (Ridge Cell Repai
 | Modelo | Thin client para Claude (nuvem) | OS cognitivo autossuficiente (on-device) |
 | LLM | Claude via TLS 1.3 + SSE streaming | BitNet ternário on-device + Trinity MoE |
 | Concorrência | Async cooperativo + SMP work-stealing | Scheduler por ticks (PollEvery/Continuous/EventDriven) |
-| Ontologia | Agentes = async tasks Claude | Tudo é Agent com manifesto (247+) |
+| Ontologia | Agentes = async tasks Claude | Tudo é Agent com manifesto (~50 agents) |
 | Isolamento | Single-address-space, sem Ring3 | Capability PoC (ADR-0041 Ring3/SFI) |
 | Bootloader | **Limine 0.5** (HHDM, revision 2) | bootloader 0.11.15 (vendor-patched, bugs conhecidos) |
 
-**ClaudioOS é mais amplo em superfície** (52 crates, Windows/Linux compat, Vulkan, 4 filesystems, SSH PQ, TLS real) mas **mais raso em cognição** (sem LLM on-device, sem SelfHeal/AutoLearn/SleepCycle, 100% dependente de nuvem). **neural-os-core é mais profundo em cognição** (BitNet, MoE, 247+ agentes, HW Expert treinado, K³CHJ por anéis) mas **mais estreito em infraestrutura OS**.
+**ClaudioOS é mais amplo em superfície** (52 crates, Windows/Linux compat, Vulkan, 4 filesystems, SSH PQ, TLS real) mas **mais raso em cognição** (sem LLM on-device, sem SelfHeal/AutoLearn/SleepCycle, 100% dependente de nuvem). **neural-os-core é mais profundo em cognição** (BitNet, MoE, ~50 agentes nativos, HW Expert treinado, K³CHJ por anéis) mas **mais estreito em infraestrutura OS**.
 
 ### 1.2 Validação de claims (código-fonte lido, não só README)
 
@@ -226,7 +226,7 @@ Foram lidos integralmente: `main.rs` (boot sequence completo), `agent_loop.rs` (
 ## 3. O que neural-os-core faz melhor (nossas vantagens — preservar)
 
 1. **LLM on-device** (BitNet ternário, 2-bit packing, zero FPU em matmul, Trinity MoE com router treinável, AutoLearn, SleepCycle 5 fases). ClaudioOS não tem LLM on-device funcional (GGUF loading falha em HW real).
-2. **Arquitetura Agent/Skill-first ontológica** (247+ agentes com manifesto explícito, trust por agente). ClaudioOS tem agentes = async tasks Claude.
+2. **Arquitetura Agent/Skill-first ontológica** (~50 agentes nativos com manifesto explícito, trust por agente). ClaudioOS tem agentes = async tasks Claude.
 3. **Boot event-driven de 8 fases** com EventBus. ClaudioOS é boot linear.
 4. **HW Expert v3 treinado** (61.453 VID/DID, 259KB). ClaudioOS tem PCI enumeration básico.
 5. **K³CHJ Workspace por anéis** (k_nano R0 → k_hal R1 → cortex/k_ai R2 → hermes/jarbas R3). ClaudioOS é flat.
@@ -307,7 +307,7 @@ Adotar do ClaudioOS **apenas onde há ganho técnico real e aderência arquitetu
 | Vulkan/DXVK | GPU compute já coberto por ADR-0048–0050 (NVIDIA/AMD/Intel) |
 | 12 linguagens interpretadas | WASM (ADR-0059) é caminho unificado; linguagens altas via WASM sidecar |
 | DevRng xorshift64* | Já temos RDRAND/CSPRNG melhor (csprng.rs no ClaudioOS é referência, mas o nosso é superior) |
-| TF-IDF vector DB | Ver **ADR-0064** (RAG DB in-kernel) — abordagem própria; persiste via ADR-0063 TicKV |
+| TF-IDF vector DB | ~~ADR-0064~~ ❌ rejeitada. Nosso SGDB real = ADR-0063 (`k_ai::sgdb`): BQ Flat SIMD + BGE embedding (`k_ai::memory_systems`). ClaudioOS `vectordb.rs` inspirou mas não seguimos — TF-IDF não foi integrado. |
 
 ---
 
@@ -370,7 +370,7 @@ ClaudioOS é uma **referência arquitetural valiosa** para infraestrutura OS que
 - Código lido integralmente: `main.rs`, `agent_loop.rs`, `vectordb.rs`, `ipc.rs`, `tls.rs`, `kex.rs`, `win32/lib.rs`, `Cargo.toml`
 - ADRs neural-os-core: 0016 (Network), 0039 (Boot), 0040 (Filesystem), 0041 (Capability), 0055 (SMP), 0057 (Compute), 0059 (Runtime App Factory)
 - ADR-0063: TicKV + NoProto + Índices IA (SGDB)
-- ADR-0064: RAG DB in-kernel (companheira — vector TF-IDF; persiste via 0063)
+- ~~ADR-0064~~: RAG DB in-kernel (**❌ rejeitada** — crate criada mas nunca integrada; deletada. Coberto por ADR-0063 BQ + BGE embedding)
 
 ---
 

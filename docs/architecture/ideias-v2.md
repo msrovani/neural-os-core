@@ -31,7 +31,7 @@ Cada ideia foi classificada em 4 dimensões:
 
 | # | Ideia | Origem | Viab | Ader | Custo | Resultado |
 |---|-------|--------|------|------|-------|-----------|
-| 486 | **VectorStore TF-IDF** (RAG in-kernel) | ADR-0064 | 🟢 | 🎯 | 🗓️ 1-3d | RAG on-device sem MCP externo. 1.750 LOC |
+| 486 | ~~VectorStore TF-IDF~~ (RAG in-kernel) | ADR-0064 | ❌ | 🎯 | — | **Rejeitado.** Crate criada mas nunca integrada. SGDB real = ADR-0063 (`k_ai::sgdb`). BGE embedding em `k_ai::memory_systems`. |
 | A.3 | **Dynamic MoE** (birth/merge/split) | ADR-0060 | 🟡 | 🎯 | 📆 1-2sem | Experts que nascem/morrem em runtime. 1.600 LOC |
 | — | **GPU golden HW validation** | ADR-48/49/50 | 🟡 | 🎯 | 📆 1-2sem | Validação NVIDIA/AMD/Intel em silício real |
 | P09 | **Ring3/SFI produção** | ADR-0041 | 🔴 | 🎯 | 🏗️ 1m+ | Isolamento Ring3 real. 3.000 LOC |
@@ -192,7 +192,7 @@ Com base na auditoria, o mapa de calor do IDEA_BANK evoluiu:
 | 🟡 Agendado (v2.0) | ~45 | 13% | Nos itens 2.1-2.8 acima |
 | 🟡 Agendado (v2.1+) | ~30 | 9% | GPU compute, Security Pipeline |
 | ⏳ Pós-MVP / defer | ~40 | 12% | Self-Optimization pleno, FlashAttention |
-| 📌 pre-v2 (transportado) | ~8 | 2% | VectorStore, Dynamic MoE, GPU golden |
+| 📌 pre-v2 (transportado) | ~7 | 2% | Dynamic MoE, GPU golden, Ring3, NPU, Perci |
 | 💤 Hibernar | ~15 | 4% | Requer HW/parceria |
 | 💰 Sponsor | ~8 | 2% | NPU XDNA, ARM/RISC-V |
 | ❌ Descartado | ~10 | 3% | Supersedido/inviável |
@@ -207,7 +207,7 @@ Com base na auditoria, o mapa de calor do IDEA_BANK evoluiu:
 
 | Prioridade | Item | Esforço | Impacto |
 |-----------|------|---------|---------|
-| 1 | VectorStore TF-IDF (RAG on-device) | 🗓️ 1-3d | 🔴 Elimina dependência MCP externo |
+| — | ~~VectorStore TF-IDF~~ ❌ Rejeitado | — | Coberto por ADR-0063 `k_ai::sgdb` (BQ + BGE embedding) |
 | 2 | Usage Pattern Analyzer (#157) | 🗓️ 1-3d | 🟡 Scheduler adaptativo |
 | 3 | Feedback loop (#149) | 🍕 4h | 🟢 Melhora qualidade respostas |
 | 4 | DataCollector (#313a) | 🍕 4h | 🟢 Auto-aprendizado |

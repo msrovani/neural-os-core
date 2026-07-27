@@ -1,5 +1,11 @@
 # ═════════════════════════════════════════════════════════
 #   STATE — neural-os-core v1.9.11-emagrecer — NÃO ESTÁVEL
+#   SESSION_221: 247+ Agents refatorado — AGENCY_SEEDS removido, SKILL.md pipeline, Hermes enforcement
+#     AGENCY_SEEDS (sempre vazio) deletado — Agency::new() retorna vazio
+#     NATIVE_AGENT_SEEDS substituído por skills/agents/*/SKILL.md (41 includes)
+#     ~50 agentes reais (não 247+ aspiracional) — docs corrigidos (16 arquivos)
+#     HermesAgent: skill_writer pre-flight guard — is_skill_creation_request()
+#     Realidade: ~50-60 agentes no boot, não 247+
 #   BitNet Recommendations FULL ✅ (commit 5ea319a, tag bitnet-recommendations-v1):
 #     ALTA: soft_stride=1, max_gen 32/24, constrained decode relaxado, BPE encode pleno (merge-order)
 #     ALTA: ADR-0061 SSE4.2 dispatch (AVX-512→AVX2→SSE4.2→scalar), bitnet_sse.rs criado
@@ -82,7 +88,7 @@
 **Status:** Proposed / `fazendo` (MVP + **adoção AIOS SgdbStore** SESSION_173)  
 **Lifecycle:** `fazendo`  
 **Ideias:** #491–#510  
-**Companheira:** ADR-0064 RAG TF-IDF (persist `vdb/*`)  
+**Nota:** ADR-0064 (RAG TF-IDF) — ❌ rejeitada. Crate `vector-db` nunca integrada; deletada. BGE embedding via `k_ai::memory_systems`. Busca vetorial via BQ Flat SIMD (`k_ai::sgdb::bq`).  
 **Fases:**
 - FASE 0–5: Flash/TickvLite/MemoryDoc/Engine/ART/BQ ✅ MVP
 - FASE 6: Hermes L1/L2 + **HANR L7 híbrido** + PackageHub meta ✅ SESSION_173

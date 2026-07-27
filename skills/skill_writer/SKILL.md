@@ -7,7 +7,16 @@ requires_network: false
 
 # Skill Writer — Meta-Skill para Criar Skills
 
-Quando o usuario pedir para criar um novo skill, automatizar uma tarefa repetitiva, ou quando voce identificar um padrao que merece virar skill, siga este workflow.
+## ⚠️ REGRA OBRIGATORIA: Leia este skill ANTES de criar qualquer SKILL.md
+
+Antes de criar, modificar ou registrar qualquer skill, voce DEVE:
+1. **Carregar este skill_writer** — suas instrucoes definem o formato e as regras vigentes
+2. **Verificar se ja existe** em `skills/<name>/SKILL.md` ou `skills/agents/<name>/SKILL.md`
+3. **Usar `/skills`** para listar skills ja carregados no sistema
+
+Este skill e a **fonte da verdade** do formato SKILL.md. Nenhum skill deve ser criado sem consulta-lo primeiro.
+
+Criar um skill sem seguir este formato = formato invalido, rejeitado na auditoria.
 
 ## Quando Criar um Skill
 
@@ -18,9 +27,16 @@ Crie um novo SKILL.md quando detectar:
 4. **Comando complexo**: algo que o usuario sempre explica com detalhes (ex: "procura noticia sobre Y, extrai, traduz, salva")
 5. **Pergunta do usuario**: "isso nao daria um skill?" ou "como faco para automatizar X?"
 
-### Skill vs App: Quando Sugerir um App
+### Skill vs Agent Skill: Dois Formatos
 
-Para tarefas mais complexas ou com interface visual, sugira criar um **App WASM** (Runtime App Factory, ADR-0059) em vez de um skill:
+| Tipo | Diretorio | Frontmatter | Backend | Pipeline de carga |
+|------|-----------|-------------|---------|-------------------|
+| **Skill de usuario** | `skills/<nome>/SKILL.md` | name, description, required_tokens, requires_network | Instrucoes LLM apenas — sem Rust | `crates/hermes/src/skill_loader.rs` via `include_str!` |
+| **Agent skill** | `skills/agents/<nome>/SKILL.md` | name, division, mission, schedule, native_impl, kind, skills | Struct Rust compilada (`impl Agent`) | `crates/k_ai/src/native_agent_seed.rs` via `include_str!` |
+
+**Agent skills** tem implementacao nativa em Rust (ex: `InputAgent`, `NetAgent`, `DisplayAgent`). Crie um agent skill apenas quando existir um backend compilado correspondente. Para habilidades puramente procedurais (LLM decide os passos), crie um **skill de usuario**.
+
+### Skill vs App: Quando Sugerir um App
 
 | Cenário | Skill | App |
 |---------|-------|-----|
@@ -40,7 +56,9 @@ Para tarefas mais complexas ou com interface visual, sugira criar um **App WASM*
 
 Atualmente Apps são criados em Rust (WASM compilado). O skill pode documentar o **spec do App** para um dev implementar depois.
 
-Todo skill segue este formato obrigatorio:
+Todo skill segue um dos dois formatos abaixo.
+
+### Formato A: Skill de Usuario (LLM-guiado)
 
 ```yaml
 ---
@@ -69,14 +87,44 @@ Output: "exemplo de saida esperada"
 - (liste restricoes especificas deste skill)
 ```
 
+### Formato B: Agent Skill (backend Rust compilado)
+
+```yaml
+---
+name: nome_do_agent
+division: divisao_de_pertencimento
+mission: Missao em uma linha
+schedule: Continuous|Oneshot|PollEvery(N)
+native_impl: NomeDaStructRust
+kind: System|Driver|Router|Console|Network|Inference|Skill
+skills: [tag1, tag2]
+---
+
+# Nome do Agent Skill
+
+Descricao detalhada do agente e seu proposito no sistema.
+```
+
 ### Regras do Frontmatter
 
+#### Skill de Usuario
 | Campo | Obrigatorio | Regras |
 |-------|-------------|--------|
 | `name` | sim | `[a-z_]+`, sem espacos, sem acentos, unico no sistema |
 | `description` | sim | max 120 chars, verbo no presente (ex: "Busca clima por cidade") |
 | `required_tokens` | sim | sempre `[1]` para skills do usuario; `[0]` apenas para skills de sistema |
 | `requires_network` | nao | `true` se o skill fizer HTTP requests |
+
+#### Agent Skill
+| Campo | Obrigatorio | Regras |
+|-------|-------------|--------|
+| `name` | sim | `[a-z_]+`, sem espacos, sem acentos |
+| `division` | sim | divisao funcional (ex: system, drivers, network, interaction, security, learning, hermes, storage, hardware, cortex, support) |
+| `mission` | sim | max 100 chars, descreve o proposito unico do agente |
+| `schedule` | sim | `Continuous`, `Oneshot`, `PollEvery(N)`, `EventDriven` |
+| `native_impl` | sim | nome exato da struct Rust que implementa `trait Agent` |
+| `kind` | sim | `System`, `Driver`, `Router`, `Console`, `Network`, `Inference`, `Skill` |
+| `skills` | sim | lista de tags de habilidade, ex: `[boot, log]` |
 
 ### Regras das Instrucoes
 
@@ -171,14 +219,29 @@ Toda skill nova DEVE passar por esta verificacao antes de registrar:
 
 ## Registro de Skills
 
-### Via codigo (com Rust):
-Skills sao registradas em `crates/hermes/src/skill_loader.rs` na funcao `load_embedded_skills()`:
+### Skill de Usuario — via codigo Rust
+
+Em `crates/hermes/src/skill_loader.rs` na funcao `load_embedded_skills()`:
 ```rust
 let skills_raw: [&str; N] = [
     include_str!("../../../skills/hw_identify/SKILL.md"),
-    // ... adicione aqui
+    include_str!("../../../skills/web_scrape/SKILL.md"),
+    // ... skills de usuario sao carregadas aqui
 ];
 ```
+
+### Agent Skill — via codigo Rust
+
+Em `crates/k_ai/src/native_agent_seed.rs`, cada agent skill e embutido via `include_str!`:
+```rust
+const AGENT_SKILL_SOURCES: &[&str] = &[
+    include_str!("../../../skills/agents/boot_log/SKILL.md"),
+    include_str!("../../../skills/agents/platform/SKILL.md"),
+    // ... todos os 41 agent skills
+];
+```
+
+O arquivo `native_agent_seed.rs` ja lista todos os agent skills existentes. Para adicionar um novo, crie o SKILL.md em `skills/agents/<nome>/SKILL.md` e adicione o `include_str!` na lista.
 
 ### Via comando (runtime):
 Use `/add_skill <nome> <descricao>` para criar um skill rapido.
@@ -189,7 +252,7 @@ Use `/skills` para listar todos os skills carregados.
 1. **Observe**: SkillObserver registra pads de uso
 2. **Generate**: `skill_gen.rs` gera SKILL.md a partir de observacoes
 3. **Verify**: `self_evolve.rs` valida estrutura e seguranca
-4. **Register**: skill vai pro SkillLoader
+4. **Register**: skill vai pro SkillLoader (skills de usuario) ou native_agent_seed.rs (agent skills)
 5. **Improve**: se falhar, `self_evolve` regenera com correcoes
 6. **Reflect**: insights de meta-cognicao sao registrados
 
@@ -320,7 +383,8 @@ Output:
 
    Deliberacao: esta secao e **GERAL** — toda skill se beneficia de uma verificacao pre-execucao.
 
-   Skills afetadas: hw_identify, self_heal, web_scrape (3/3)
+   Skills afetadas: hw_identify, self_heal, web_scrape (3 skills de usuario de 4)
+   Agent skills em skills/agents/ tem formato proprio (division, mission, native_impl) — so sao afetadas se a mudanca for nos campos compartilhados (name, description).
 
    Sugiro adicionar `## Pre-Flight Verification` nas 3 skills com itens especificos de cada uma.
 
@@ -354,7 +418,7 @@ Output:
 3. **Instrucoes passo-a-passo**: numeradas, claras, com exemplos
 4. **Tratamento de erros**: SEMPRE inclua o que fazer quando algo falha
 5. **Limite de escopo**: um skill = uma responsabilidade. Se precisar de 10 passos, divida em sub-skills
-6. **Reuso**: antes de criar, veja se ja existe skill similar (`/skills` ou `/search`)
+6. **Reuso**: antes de criar, veja se ja existe skill similar (`/skills`, `/search` ou `skills/` e `skills/agents/` diretorios). Nao duplique agent skills que ja existem como backend Rust compilado.
 
 ## Exemplos
 

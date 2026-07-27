@@ -80,7 +80,7 @@ struct CacheSlot {
 }
 ```
 
-**Por que é relevante:** Nosso sistema de dispatch de agentes/skills (247+ agentes) faz lookup por nome + trust token em toda chamada. Um cache dual (tipo + instância) eliminaria o overhead de lookup para agentes chamados com frequência.
+**Por que é relevante:** Nosso sistema de dispatch de agentes/skills (~50 agentes nativos) faz lookup por nome + trust token em toda chamada. Um cache dual (tipo + instância) eliminaria o overhead de lookup para agentes chamados com frequência.
 
 **Adoção:** Implementar `SkillCacheSlot` no Hermes: (1) cache por tipo de skill (scalar: io, compute, network), (2) cache por instância de agente específico. Promoção após N hits, deopt em type change.
 

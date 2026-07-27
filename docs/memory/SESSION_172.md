@@ -2,6 +2,7 @@
 
 **Data:** 2026-07-23  
 **Premissa:** emagreçer bin — lógica em crates.
+**Nota pós-facto (2026-07-26):** A Onda 1 (crate `vector-db`) foi criada mas **nunca integrada** — nem re-export cortex, nem boot demo, nem persist. Crate deletada. O SGDB real é `k_ai::sgdb` (ADR-0063). Esta sessão documenta o plano original; a execução real seguiu só ADR-0063.
 
 ## Onda 0 — Docs
 - Títulos ADR-0063 (SGDB) / ADR-0064 (RAG) corrigidos; INDEX/STATE/`fazendo`; IDEA #486/#487/#491–#505; cross-links.

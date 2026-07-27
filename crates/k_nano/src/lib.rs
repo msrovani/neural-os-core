@@ -58,6 +58,7 @@ pub mod interrupts;
 pub mod io_scheduler;
 pub mod ipc;
 pub mod scheduler;
+pub mod suspend_resume;
 pub mod limine;
 pub mod memory;
 pub mod mhi;
@@ -68,6 +69,7 @@ pub mod p2p;
 pub mod storage;
 pub mod numa_alloc;
 pub mod core_pinning;
+pub mod cpufreq;
 
 pub mod neural_fs;
 pub mod ntfs_reader;

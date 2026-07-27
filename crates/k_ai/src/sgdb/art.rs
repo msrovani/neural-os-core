@@ -454,12 +454,47 @@ fn insert_rec(node: Box<Node>, key: &[u8], depth: usize, value: u64, len: &mut u
                     n: 5,
                 })
             } else {
-                Box::new(Node::Inner4 {
-                    prefix,
-                    keys,
-                    children,
-                    n,
-                })
+                // Prefix mismatch: split into parent Inner4 + old node + new leaf
+                let np = prefix;
+                let kr = &key[depth..];
+                let cp = common_prefix(&np, kr);
+                if cp >= np.len() || cp >= kr.len() {
+                    Box::new(Node::Inner4 {
+                        prefix: np,
+                        keys,
+                        children,
+                        n,
+                    })
+                } else {
+                    let shared = np[..cp].to_vec();
+                    let nb = np[cp];
+                    let kb = kr[cp];
+                    let old_prefix = np[cp + 1..].to_vec();
+                    let old = Box::new(Node::Inner4 {
+                        prefix: old_prefix,
+                        keys,
+                        children,
+                        n,
+                    });
+                    let leaf = Box::new(Node::Leaf {
+                        key: key.to_vec(),
+                        value,
+                        dead: false,
+                    });
+                    let mut pk = [0u8; 4];
+                    let mut pc: [Option<Box<Node>>; 4] = [None, None, None, None];
+                    pk[0] = nb;
+                    pk[1] = kb;
+                    pc[0] = Some(old);
+                    pc[1] = Some(leaf);
+                    *len += 1;
+                    Box::new(Node::Inner4 {
+                        prefix: shared,
+                        keys: pk,
+                        children: pc,
+                        n: 2,
+                    })
+                }
             }
         }
         Node::Inner16 {
@@ -528,12 +563,47 @@ fn insert_rec(node: Box<Node>, key: &[u8], depth: usize, value: u64, len: &mut u
                     n: 17,
                 })
             } else {
-                Box::new(Node::Inner16 {
-                    prefix,
-                    keys,
-                    children,
-                    n,
-                })
+                // Prefix mismatch: split into parent Inner4 + old node + new leaf
+                let np = prefix;
+                let kr = &key[depth..];
+                let cp = common_prefix(&np, kr);
+                if cp >= np.len() || cp >= kr.len() {
+                    Box::new(Node::Inner16 {
+                        prefix: np,
+                        keys,
+                        children,
+                        n,
+                    })
+                } else {
+                    let shared = np[..cp].to_vec();
+                    let nb = np[cp];
+                    let kb = kr[cp];
+                    let old_prefix = np[cp + 1..].to_vec();
+                    let old = Box::new(Node::Inner16 {
+                        prefix: old_prefix,
+                        keys,
+                        children,
+                        n,
+                    });
+                    let leaf = Box::new(Node::Leaf {
+                        key: key.to_vec(),
+                        value,
+                        dead: false,
+                    });
+                    let mut pk = [0u8; 4];
+                    let mut pc: [Option<Box<Node>>; 4] = [None, None, None, None];
+                    pk[0] = nb;
+                    pk[1] = kb;
+                    pc[0] = Some(old);
+                    pc[1] = Some(leaf);
+                    *len += 1;
+                    Box::new(Node::Inner4 {
+                        prefix: shared,
+                        keys: pk,
+                        children: pc,
+                        n: 2,
+                    })
+                }
             }
         }
         Node::Inner48 {
@@ -600,12 +670,47 @@ fn insert_rec(node: Box<Node>, key: &[u8], depth: usize, value: u64, len: &mut u
                     n: 49,
                 })
             } else {
-                Box::new(Node::Inner48 {
-                    prefix,
-                    keys,
-                    children,
-                    n,
-                })
+                // Prefix mismatch: split into parent Inner4 + old node + new leaf
+                let np = prefix;
+                let kr = &key[depth..];
+                let cp = common_prefix(&np, kr);
+                if cp >= np.len() || cp >= kr.len() {
+                    Box::new(Node::Inner48 {
+                        prefix: np,
+                        keys,
+                        children,
+                        n,
+                    })
+                } else {
+                    let shared = np[..cp].to_vec();
+                    let nb = np[cp];
+                    let kb = kr[cp];
+                    let old_prefix = np[cp + 1..].to_vec();
+                    let old = Box::new(Node::Inner48 {
+                        prefix: old_prefix,
+                        keys,
+                        children,
+                        n,
+                    });
+                    let leaf = Box::new(Node::Leaf {
+                        key: key.to_vec(),
+                        value,
+                        dead: false,
+                    });
+                    let mut pk = [0u8; 4];
+                    let mut pc: [Option<Box<Node>>; 4] = [None, None, None, None];
+                    pk[0] = nb;
+                    pk[1] = kb;
+                    pc[0] = Some(old);
+                    pc[1] = Some(leaf);
+                    *len += 1;
+                    Box::new(Node::Inner4 {
+                        prefix: shared,
+                        keys: pk,
+                        children: pc,
+                        n: 2,
+                    })
+                }
             }
         }
         Node::Inner256 {
@@ -640,11 +745,45 @@ fn insert_rec(node: Box<Node>, key: &[u8], depth: usize, value: u64, len: &mut u
                     n,
                 })
             } else {
-                Box::new(Node::Inner256 {
-                    prefix,
-                    children,
-                    n,
-                })
+                // Prefix mismatch: split into parent Inner4 + old node + new leaf
+                let np = prefix;
+                let kr = &key[depth..];
+                let cp = common_prefix(&np, kr);
+                if cp >= np.len() || cp >= kr.len() {
+                    Box::new(Node::Inner256 {
+                        prefix: np,
+                        children,
+                        n,
+                    })
+                } else {
+                    let shared = np[..cp].to_vec();
+                    let nb = np[cp];
+                    let kb = kr[cp];
+                    let old_prefix = np[cp + 1..].to_vec();
+                    let old = Box::new(Node::Inner256 {
+                        prefix: old_prefix,
+                        children,
+                        n,
+                    });
+                    let leaf = Box::new(Node::Leaf {
+                        key: key.to_vec(),
+                        value,
+                        dead: false,
+                    });
+                    let mut pk = [0u8; 4];
+                    let mut pc: [Option<Box<Node>>; 4] = [None, None, None, None];
+                    pk[0] = nb;
+                    pk[1] = kb;
+                    pc[0] = Some(old);
+                    pc[1] = Some(leaf);
+                    *len += 1;
+                    Box::new(Node::Inner4 {
+                        prefix: shared,
+                        keys: pk,
+                        children: pc,
+                        n: 2,
+                    })
+                }
             }
         }
     }

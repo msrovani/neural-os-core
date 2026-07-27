@@ -87,7 +87,7 @@ pub struct PciRegisters { vendor: Register<u16>, device: Register<u16>, command:
 **Arquivo:** `crates/neural-kernel/src/mmio.rs`
 
 ## 6. VRSEN/agency-swarm ★ 4.5k — Hierarchical Agent Teams
-**Conexão:** Já temos 12 divisões com 147 agentes. Agency Swarm adiciona delegação em cadeia.
+**Conexão:** Já temos ~50 agentes nativos. Agency Swarm adiciona delegação em cadeia.
 
 **Padrão portado:** TeamAgent com supervisor + membros:
 ```rust

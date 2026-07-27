@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### 247+ Agents refatorado — AGENCY_SEEDS removido, SKILL.md pipeline, Hermes enforcement (2026-07-26) — SESSION_221
+- **AGENCY_SEEDS removido:** `agency_seed.rs` deletado (era sempre &[]). `Agency::new()` retorna vazio. Código morto eliminado.
+- **skills/agents/ criado:** 41 SKILL.md para agentes nativos. Cada agente tem seu próprio SKILL.md como fonte da verdade.
+- **NativeAgentSeed → SKILL.md:** `native_agent_seed.rs` reescrito com `include_str!` dos 41 SKILL.md + parse de frontmatter em runtime. PackageHub chama `load_all()`.
+- **Docs corrigidos (16 arquivos):** "247+ agentes" → "~50 agentes nativos". "147 The Agency" e "~80 importados" removidos.
+- **Skill writer atualizado:** auto-consulta obrigatória, formato Agent Skill documentado, pipeline de registro dual.
+- **Hermes enforcement:** `SKILL_WRITER_CONTENT` em `skill_loader.rs`, `is_skill_creation_request()` em `cognitive_bridge.rs`, guarda no Chat handler do HermesAgent.
+- **cargo check --release:** 0 errors.
+
 ### SGDB Migration Round 2 — TLSPINS + SelfHeal Checkpoint (2026-07-25) — SESSION_220
 - **TLSPINS.BIN** (TLS trust pins): FAT32 → SGDB `sys/tls_pins` (dual-path: SGDB primary + FAT32 fallback). `load_pins_from_fat()` now tries SGDB first; `persist_pins_to_fat()` writes both.
 - **SelfHeal checkpoint**: RAM-only → SGDB `sys/checkpoint` (serialize/deserialize full 33KB bitmap + heap/CR3/driver state). `save_checkpoint()` persists to SGDB; `restore_checkpoint()` loads from SGDB with RAM fallback.
@@ -49,7 +58,7 @@
 - **Tag:** `v1.9.9`
 
 ### v1.9.8 TEST — SGDB AIOS + Storage (2026-07-23) — SESSION_171–173
-- **ADR-0063/0064 MVP + adoção:** crate `vector-db` (TF-IDF), TickvLite+FlashController, `k_ai::sgdb` (MemoryDoc/ART/BQ + **SgdbStore** facade).
+- **ADR-0063 MVP + adoção:** TickvLite+FlashController, `k_ai::sgdb` (MemoryDoc/ART/BQ + **SgdbStore** facade).
 - **Consumidores:** HANR híbrido SGDB→VFS; Audit flush/load; Episodic L2; PackageHub meta (`persist_backend`); SkillOpt index; Hermes RAG `vdb/blob`.
 - **ADR-0062 parcial:** NVMe I/O real, StorageBus, FAT policy NVMe>AHCI>ATA, HID keyboard bringup; emagreçer `disk_agent` → `k_nano`.
 - **Honesty:** FAT permanece blobs/firmware/WIFI/BOOT.LOG; sem fake Ready; residual AVX2/GC/Node48/TrustCache.
@@ -736,7 +745,7 @@ PoC capability no monólito `neural-kernel` (commits `9bb1382`…`49c4301`). Pac
 
 ### Mudanças desde v0.109.x
 
-- 165+ arquivos Rust, ~19.000 LOC, 247+ agentes, 0 erros de compilação
+- 165+ arquivos Rust, ~19.000 LOC, ~50 agentes nativos, 0 erros de compilação
 - 461 commits desde o primeiro boot
 
 All notable changes to this project will be documented in this file.
@@ -1600,11 +1609,11 @@ Browser/curl → WiFi Windows → localhost:4444 → QEMU TCP → COM2 serial
   - TransformerOptimus/SuperAGI (16k★) → `skill_market.rs`: SkillScore scoring table
 - `cargo check --release`: 0 errors ✅
 
-## [0.59.1] — 2026-06-29 — HW Agents + The Agency (147 agents)
+## [0.59.1] — 2026-06-29 — HW Agents + Native Agent Fleet
 
 ### Added
 - **HW Agents**: `hw_agents.rs` — HwRegistry por PCI, HwAgent por dispositivo, `class_to_capabilities()`, `activate_for_intent()`
-- **The Agency (147 agentes)**: `agency.rs` — 12 divisões (engineering, design, product, qa, support, marketing, infra, data-science, creative, legal, spatial, research)
+- **Especialistas nativos**: `agency.rs` — 12 divisões (engineering, design, product, qa, support, marketing, infra, data-science, creative, legal, spatial, research)
 - **SpecialistAgent** struct genérica com missão, skills, entregável
 - `register_agency_agents()` registra todos no boot
 

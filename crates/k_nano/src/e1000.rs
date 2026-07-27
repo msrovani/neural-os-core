@@ -13,34 +13,34 @@ pub const E1000_DEVICE_82574L: u16 = 0x10D3;
 pub const E1000_DEVICE_82579LM: u16 = 0x1502;
 
 // Register offsets (MMIO)
-const REG_CTRL: u64 = 0x0000;
+pub const REG_CTRL: u64 = 0x0000;
 pub const REG_STATUS: u64 = 0x0008;
-const REG_EEPROM: u64 = 0x0014;
-const REG_CTRL_EXT: u64 = 0x0018;
-const REG_ICR: u64 = 0x00C0;
-const REG_IMASK: u64 = 0x00D0;
-const REG_IMC: u64 = 0x00D8;
-const REG_RCTRL: u64 = 0x0100;
-const REG_TCTRL: u64 = 0x0400;
+pub const REG_EEPROM: u64 = 0x0014;
+pub const REG_CTRL_EXT: u64 = 0x0018;
+pub const REG_ICR: u64 = 0x00C0;
+pub const REG_IMASK: u64 = 0x00D0;
+pub const REG_IMC: u64 = 0x00D8;
+pub const REG_RCTRL: u64 = 0x0100;
+pub const REG_TCTRL: u64 = 0x0400;
 // TX ring: offsets canônicos Intel 8254x / QEMU e1000 (NÃO os aliases 0x0420..0x0438 —
 // QEMU não wireia TDBAL_A/TDT_A; write em alias = no-op → TDT fica 0 e ARP nunca sai).
-const REG_TDBAL: u64 = 0x3800;
-const REG_TDBAH: u64 = 0x3804;
-const REG_TDLEN: u64 = 0x3808;
-const REG_TDH: u64 = 0x3810;
-const REG_TDT: u64 = 0x3818;
-const REG_RDBAL: u64 = 0x2800;
-const REG_RDBAH: u64 = 0x2804;
-const REG_RDLEN: u64 = 0x2808;
+pub const REG_TDBAL: u64 = 0x3800;
+pub const REG_TDBAH: u64 = 0x3804;
+pub const REG_TDLEN: u64 = 0x3808;
+pub const REG_TDH: u64 = 0x3810;
+pub const REG_TDT: u64 = 0x3818;
+pub const REG_RDBAL: u64 = 0x2800;
+pub const REG_RDBAH: u64 = 0x2804;
+pub const REG_RDLEN: u64 = 0x2808;
 pub const REG_RDH: u64 = 0x2810;
 pub const REG_RDT: u64 = 0x2818;
-const REG_RAL: u64 = 0x5400;
-const REG_RAH: u64 = 0x5404;
-const REG_MTA: u64 = 0x5200;
-const REG_RXDCTL: u64 = 0x3828;
-const REG_TIPG: u64 = 0x0410;
-const REG_RDTR: u64 = 0x2820;
-const REG_IPAV: u64 = 0x00C0;
+pub const REG_RAL: u64 = 0x5400;
+pub const REG_RAH: u64 = 0x5404;
+pub const REG_MTA: u64 = 0x5200;
+pub const REG_RXDCTL: u64 = 0x3828;
+pub const REG_TIPG: u64 = 0x0410;
+pub const REG_RDTR: u64 = 0x2820;
+pub const REG_IPAV: u64 = 0x00C0;
 
 // CTRL bits
 const CTRL_RST: u32 = 0x04000000;

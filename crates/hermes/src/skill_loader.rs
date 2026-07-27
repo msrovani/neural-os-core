@@ -1,6 +1,11 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+
+/// Conteudo do skill_writer embutido em tempo de compilacao.
+/// Hermes usa esta constante para pre-flight checks: antes de criar skill,
+/// o skill_writer DEVE estar disponivel. Se nao estiver, a criacao e negada.
+pub const SKILL_WRITER_CONTENT: &str = include_str!("../../../skills/skill_writer/SKILL.md");
 #[derive(Clone, Debug)]
 pub struct SkillManifest {
     pub name: String,

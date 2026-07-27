@@ -5,8 +5,6 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::agency_seed::AGENCY_SEEDS;
-
 #[derive(Debug, Clone)]
 pub struct AgentSpec {
     pub name: String,
@@ -29,21 +27,9 @@ pub struct Agency {
 impl Agency {
     /// Fallback compilado, gerado deterministicamente dos AGENT.md.
     pub fn new() -> Self {
-        let specs = AGENCY_SEEDS
-            .iter()
-            .map(|seed| AgentSpec {
-                name: String::from(seed.name),
-                division: String::from(seed.division),
-                mission: String::from(seed.mission),
-                skills: seed
-                    .skills
-                    .iter()
-                    .map(|skill| String::from(*skill))
-                    .collect(),
-                deliverable: String::from("auto"),
-            })
-            .collect();
-        Self::from_specs(specs)
+        // Agency loads from SKILL.md seeds via PackageHub, not compile-time const.
+        // Empty by default — specialists are registered via register_agency_agents().
+        Self { divisions: Vec::new() }
     }
 
     /// Constrói as divisões a partir do catálogo PackageHub/NeuralFS.

@@ -1601,13 +1601,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "vector-db"
-version = "0.1.0"
-dependencies = [
- "spin",
-]
-
-[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -2,7 +2,7 @@
 
 **Para desenvolvedores, entusiastas, e agentes de IA (OpenCode, Claude Code, Codex, etc.)**
 
-Este documento guia a configuração completa do ambiente de desenvolvimento do **AIOS K³CHJ (neural-os-core)** — um sistema operacional bare-metal em Rust (`no_std`, `no_main`) com 247+ agentes, IA nativa, GPU compute, e auto-recuperação.
+Este documento guia a configuração completa do ambiente de desenvolvimento do **AIOS K³CHJ (neural-os-core)** — um sistema operacional bare-metal em Rust (`no_std`, `no_main`) com ~50 agentes nativos, IA nativa, GPU compute, e auto-recuperação.
 
 ---
 

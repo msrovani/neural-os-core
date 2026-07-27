@@ -20,7 +20,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_CONFIG = ROOT / "tools" / "native_agents.toml"
-AGENCY_SEED = ROOT / "crates" / "k_ai" / "src" / "agency_seed.rs"
 NATIVE_SEED = ROOT / "crates" / "k_ai" / "src" / "native_agent_seed.rs"
 SPEC_RE = re.compile(
     r'spec\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*"([^"]*)"\s*,\s*&\[(.*?)\]\s*\)',
@@ -105,27 +104,13 @@ def load_native() -> list[Agent]:
     ]
 
 
-def write_empty_agency_seed() -> None:
-    AGENCY_SEED.write_text(
-        "//! Seed Agency — ADR-0052: stubs copiados NÃO são artefatos.\n"
-        "//! Fleet Agency só sobe via PackageHub com AGENT.md assinado + hash + acionaveis.\n"
-        "//! Não regenerar em massa com export_agent_packages.py.\n\n"
-        "pub struct AgentSeedRecord {\n"
-        "    pub name: &'static str,\n"
-        "    pub division: &'static str,\n"
-        "    pub mission: &'static str,\n"
-        "    pub skills: &'static [&'static str],\n"
-        "}\n\n"
-        "/// Vazio de propósito: SpecialistAgent stub sem missão executável = deny.\n"
-        "pub const AGENCY_SEEDS: &[AgentSeedRecord] = &[];\n",
-        encoding="utf-8",
-    )
 
-
-def write_native_seed(agents: list[Agent]) -> None:
+def write_native_seed_legacy(agents: list[Agent]) -> None:
+    # ponytail: SKILL.md em skills/agents/ é a fonte da verdade.
+    # Esta função gera o native_agent_seed.rs legado para compatibilidade.
     lines = [
-        "//! Seed nativo curated (tools/native_agents.toml). Manifesto = catálogo;",
-        "//! código Ring0/IRQ/HAL permanece no bin (ADR-0052 native_compiled).",
+        "//! Legacy seed gerado de tools/native_agents.toml.",
+        "//! A fonte da verdade são skills/agents/*/SKILL.md.",
         "",
         "pub struct NativeAgentSeed {",
         "    pub name: &'static str,",
@@ -162,7 +147,7 @@ def main() -> None:
     parser.add_argument(
         "--refresh-native-seed",
         action="store_true",
-        help="regenera apenas native_agent_seed.rs + agency_seed vazio",
+        help="[deprecated] SKILL.md em skills/agents/ é a fonte da verdade. Gera native_agent_seed.rs legado.",
     )
     parser.add_argument(
         "--force-stub-export",
@@ -182,14 +167,13 @@ def main() -> None:
     if args.legacy_count:
         n = load_agency_legacy_count()
         print(f"[INFO] Agency histórico (git HEAD specs): {n}")
-        print("[INFO] Runtime atual: AGENCY_SEEDS=&[] — fleet Agency=0 até pacotes assinados")
+        print("[INFO] Runtime atual: AGENCY_SEEDS removido — fleet Agency via SKILL.md")
         return
 
     if args.refresh_native_seed:
-        write_empty_agency_seed()
         native = load_native()
-        write_native_seed(native)
-        print(f"[OK] agency_seed vazio; native_agent_seed={len(native)}")
+        write_native_seed_legacy(native)
+        print(f"[OK] native_agent_seed legado gerado ({len(native)} SKILL.md agents)")
         return
 
     print(

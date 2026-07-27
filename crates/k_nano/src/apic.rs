@@ -567,6 +567,22 @@ pub fn lapic_id() -> u8 {
     }
 }
 
+/// Envia IPI de reschedule para UMA AP específica (directed, LAPIC ID).
+pub unsafe fn send_ipi_reschedule_to(dest_apic: u8) {
+    icr_wait_idle();
+    if USING_X2APIC.load(Ordering::Relaxed) {
+        // x2APIC: ICR[63:32] = dest LAPIC ID, delivery=Fixed(0), vector=0x80
+        let icr_val: u64 = ((dest_apic as u64) << 32) | 0x80u64;
+        let mut msr = x86_64::registers::model_specific::Msr::new(lapic_msr(LAPIC_ICR_LOW));
+        msr.write(icr_val);
+    } else {
+        let base = LAPIC_VIRT_BASE.load(Ordering::Relaxed);
+        write_volatile((base + LAPIC_ICR_HIGH) as *mut u32, (dest_apic as u32) << 24);
+        let icr_val = 0x80u32;
+        write_volatile((base + LAPIC_ICR_LOW) as *mut u32, icr_val);
+    }
+}
+
 /// Envia IPI de reschedule para todas as APs
 pub unsafe fn send_ipi_reschedule() {
     icr_wait_idle();

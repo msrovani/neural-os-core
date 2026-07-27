@@ -726,6 +726,16 @@ impl PackageHub {
             b"ADR-0051\n",
         )
         .is_ok();
+        // Se VFS falhou, SGDB (TickV) pode servir como backend de persistência.
+        let sgdb_ok = k_ai::sgdb::ready();
+        let persist_ok = self.vfs_ok || sgdb_ok;
+        if !persist_ok {
+            k_nano::slog_hermes!("PKG", "info",
+                "VFS {} indisponivel e SGDB nao pronto — catalogo RAM only", ECOSYSTEM_ROOT);
+        } else if !self.vfs_ok && sgdb_ok {
+            k_nano::slog_hermes!("PKG", "info",
+                "VFS {} indisponivel — SGDB ativo como backend de persistencia", ECOSYSTEM_ROOT);
+        }
         self.seed_embedded_skill(
             "hw_identify",
             include_str!("../../../skills/hw_identify/SKILL.md"),
@@ -740,8 +750,6 @@ impl PackageHub {
         self.seed_native_device_recipes();
         if self.vfs_ok {
             k_nano::slog_hermes!("PKG", "info", "VFS ecosystem montado em {}", ECOSYSTEM_ROOT);
-        } else {
-            k_nano::slog_hermes!("PKG", "info", "VFS {} indisponivel — catalogo RAM only (persisted=false)", ECOSYSTEM_ROOT);
         }
         k_nano::slog_hermes!("Log", "msg", "{}", self.report());
     }
@@ -785,35 +793,23 @@ impl PackageHub {
     }
 
     fn seed_embedded_agents(&mut self) {
-        for seed in k_ai::agency_seed::AGENCY_SEEDS {
+        let agent_seeds = k_ai::native_agent_seed::load_all();
+        let count = agent_seeds.len();
+        for seed in &agent_seeds {
+            let skills_refs: Vec<&str> = seed.skills.iter().map(|s| s.as_str()).collect();
             self.seed_agent(
-                seed.name,
-                seed.name,
-                seed.division,
-                seed.mission,
-                seed.skills,
-                "agency",
-                "EventDriven",
-                "SpecialistAgent",
-                "Skill",
-            );
-        }
-        for seed in k_ai::native_agent_seed::NATIVE_AGENT_SEEDS {
-            self.seed_agent(
-                seed.name,
-                seed.name,
-                seed.division,
-                seed.mission,
-                seed.skills,
+                &seed.name,
+                &seed.name,
+                &seed.division,
+                &seed.mission,
+                &skills_refs,
                 "native",
-                seed.schedule,
-                seed.native_impl,
-                seed.kind,
+                &seed.schedule,
+                &seed.native_impl,
+                &seed.kind,
             );
         }
-        k_nano::slog_hermes!("PKG", "info", "seed agents agency={} native={}",
-            k_ai::agency_seed::AGENCY_SEEDS.len(),
-            k_ai::native_agent_seed::NATIVE_AGENT_SEEDS.len());
+        k_nano::slog_hermes!("PKG", "info", "seed agents native={}", count);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -876,17 +872,18 @@ impl PackageHub {
 
     fn seed_embedded_skill(&mut self, name: &str, body: &str, purpose: &str) {
         let sealed = sign_artifact_md(body).unwrap_or_else(|_| String::from(body));
-        let signed = Self::check_signature(&sealed);
         let hash_fm = extract_fm_field(&sealed, "content_hash")
             .map(unquote)
             .unwrap_or_else(|| format!("{:016x}", fnv1a64(body_for_sign(&sealed).as_bytes())));
+        // Seed skills são compilados no kernel — trusted-by-provenance, não por assinatura.
+        // O signing runtime serve skills importados (provenance != native_compiled).
         let rec = PackageRecord {
             kind: PackageKind::Skill,
             name: String::from(name),
             purpose: String::from(purpose),
             path: Self::package_path(PackageKind::Skill, name),
             body: sealed,
-            signed,
+            signed: true,
             content_hash: hash_fm,
             caps_hint: String::from("required_tokens:[1]"),
             persisted: false,
@@ -894,7 +891,7 @@ impl PackageHub {
         };
         self.packages
             .insert(pkg_key(PackageKind::Skill, name), rec);
-        k_nano::slog_hermes!("PKG", "info", "seed skill '{}' signed={}", name, signed);
+        k_nano::slog_hermes!("PKG", "info", "seed skill '{}' signed=true (trusted-by-compilation)", name);
     }
 
     fn check_signature(content: &str) -> bool {

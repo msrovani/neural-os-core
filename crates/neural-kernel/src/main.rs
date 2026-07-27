@@ -85,7 +85,7 @@ mod sync;
 pub use hermes_crate::{
     actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi, sgdb_agent,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
-    memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, rustpython_no_std, safety,
+    memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, safety,
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
     skill_observer, skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent,
     wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
@@ -1899,7 +1899,10 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: [sgdb] quality demo FAIL");
     }
     if k_nano::storage::is_ready() {
-        if k_ai::sgdb::memory_checkpoint_e2e_smoke() {
+        if k_nano::storage::backend_name() == "ram" {
+            k_nano::slog_bin!("sgdb", "e2e_ckpt", "SKIP (ram)");
+            crate::boot_logger::log("BOOT: [sgdb] L1 checkpoint e2e SKIP (ram backend)");
+        } else if k_ai::sgdb::memory_checkpoint_e2e_smoke() {
             k_nano::slog_bin!("sgdb", "e2e_ckpt", "PASS");
             crate::boot_logger::log("BOOT: [sgdb] L1 checkpoint e2e PASS");
         } else {
@@ -1920,12 +1923,17 @@ pub(crate) fn kernel_boot(
         }
     }
     // ADR-0063 F8 lite: power-loss remount
-    if k_nano::storage::is_ready() && k_nano::storage::power_loss_smoke() {
-        k_nano::slog_bin!("TICKV", "power_loss", "PASS");
-        crate::boot_logger::log("BOOT: [TICKV] power-loss remount PASS");
-    } else if k_nano::storage::is_ready() {
-        k_nano::slog_bin!("TICKV", "power_loss", "FAIL");
-        crate::boot_logger::log("BOOT: [TICKV] power-loss FAIL");
+    if k_nano::storage::is_ready() {
+        if k_nano::storage::backend_name() == "ram" {
+            k_nano::slog_bin!("TICKV", "power_loss", "SKIP (ram)");
+            crate::boot_logger::log("BOOT: [TICKV] power-loss SKIP (ram backend)");
+        } else if k_nano::storage::power_loss_smoke() {
+            k_nano::slog_bin!("TICKV", "power_loss", "PASS");
+            crate::boot_logger::log("BOOT: [TICKV] power-loss remount PASS");
+        } else {
+            k_nano::slog_bin!("TICKV", "power_loss", "FAIL");
+            crate::boot_logger::log("BOOT: [TICKV] power-loss FAIL");
+        }
     }
     if k_nano::storage::is_ready() {
         if k_nano::storage::gc_smoke() {
@@ -1958,7 +1966,6 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::maybe_uefi_flush_reboot("K37 hub ok — sem MSC/ATA");
     }
     k_nano::slog_bin!("Log", "msg", "{}", hermes_globals::AUDIT_TRAIL.lock().status());
-    k_nano::slog_bin!("Log", "msg", "{}", crate::rustpython_no_std::viability_report());
     k_nano::slog_bin!("Log", "msg", "{}", crate::skill_opt::status());
 
     kjson!("BOOT", "WASM", "runtime", "skills", 2);
