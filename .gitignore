@@ -66,3 +66,8 @@ pipenv
 
 # Cursor plan drafts — não misturar com releases (hazard SESSION_176)
 .cursor/plans/
+
+# Modelos grandes (>100 MB) - apenas local
+*.safetensors
+models/llm_moe/bitnet_2B.bitnet
+models/tokenizer/BGE_M3.BIN
