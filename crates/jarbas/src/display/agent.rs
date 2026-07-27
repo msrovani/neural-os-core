@@ -201,110 +201,20 @@ impl DisplayAgent {
             }
         }
 
-        let mut hit: &'static str = "miss";
-        let mut comp = COMPOSITOR.lock();
-        if let Some(ref mut desktop) = *comp {
-            // ADR-0065 FASE 1.1: cards via WindowContent::Card — check before dock/app.
-            if (btn & 1) != 0 {
-                match desktop.card_click(cx as i32, cy as i32) {
-                    "close" => {
-                        drop(comp);
-                        return "card:close";
-                    }
-                    "drag" => {
-                        self.dragging = true;
-                        self.drag_id = AppId::None;
-                        drop(comp);
-                        return "card:drag";
-                    }
-                    "resize" => {
-                        self.dragging = true;
-                        self.drag_id = AppId::None;
-                        drop(comp);
-                        return "card:resize";
-                    }
-                    "btn" => {
-                        if let Some((id, idx)) = desktop.card_hit_button {
-                            let _ = EVENT_BUS.publish(event_bus::Event {
-                                id: 0,
-                                topic: alloc::string::String::from("CARD_ACTION"),
-                                payload: alloc::format!("{}:{}", id, idx).into_bytes(),
-                                token: event_bus::CapabilityToken::Legacy(1),
-                            });
-                        }
-                        drop(comp);
-                        return "card:btn";
-                    }
-                    "focus" => {
-                        drop(comp);
-                        return "card:focus";
-                    }
-                    _ => {}
-                }
+        // ── FocusMode: clique no painel esquerdo = Chat, fora = Ambient ──
+        let left_w = scr_w * 35 / 100;
+        if cx < left_w {
+            *crate::display::compositor::FOCUS_MODE.lock() = crate::display::compositor::FocusMode::Chat;
+            // Repassa clique pro ChatWindow (handle_click para toggle mic, etc.)
+            let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
+            if let Some(ref mut chat) = *cw {
+                chat.handle_click(cx, cy, 2, 0, left_w.saturating_sub(4), scr_h);
             }
-            let app_wins: Vec<Window> = desktop.windows.iter()
-                .filter(|w| matches!(w.content, WindowContent::App(_)))
-                .cloned()
-                .collect();
-            let dock_y = desktop.h.saturating_sub(36);
-            if cy >= dock_y {
-                hit = "dock";
-                for (idx, win) in app_wins.iter().enumerate() {
-                    if !win.visible {
-                        continue;
-                    }
-                    let rx = 10 + idx * 66;
-                    if cx >= rx && cx <= rx + 60 {
-                        let aid = win.app_id();
-                        desktop.toggle_app(aid);
-                        hit = match aid {
-                            AppId::HermesChat => "dock:chat",
-                            AppId::Settings => "dock:settings",
-                            AppId::Power => "dock:power",
-                            AppId::Ide => "dock:ide",
-                            AppId::Camera => "dock:camera",
-                            AppId::AudioViz => "dock:audio",
-                            AppId::WasmSkill(_) => "dock:skill",
-                            AppId::None => "dock",
-                        };
-                        break;
-                    }
-                }
-            } else if (btn & 1) != 0 {
-                for win in &app_wins {
-                    if !win.visible {
-                        continue;
-                    }
-                    let wx = win.rect.x as usize;
-                    let wy = win.rect.y as usize;
-                    let ww = win.rect.width as usize;
-                    let cx_btn = wx + ww - 20;
-                    if cx >= cx_btn
-                        && cx <= cx_btn + 16
-                        && cy >= wy + 3
-                        && cy <= wy + 19
-                    {
-                        desktop.close_app_window(win.app_id());
-                        hit = "close";
-                        break;
-                    }
-                    if cx >= wx
-                        && cx <= wx + ww
-                        && cy >= wy
-                        && cy <= wy + 24
-                    {
-                        self.dragging = true;
-                        self.drag_id = win.app_id();
-                        self.drag_off_x = cx as isize - wx as isize;
-                        self.drag_off_y = cy as isize - wy as isize;
-                        hit = "titlebar";
-                        break;
-                    }
-                }
-            }
+            return "focus:chat";
+        } else {
+            *crate::display::compositor::FOCUS_MODE.lock() = crate::display::compositor::FocusMode::Ambient;
+            return "focus:ambient";
         }
-        drop(comp);
-        hit
     }
 
     fn apply_ui_spec(&mut self, json: &str) {
@@ -393,20 +303,9 @@ impl Agent for DisplayAgent {
             };
             if let Some((fb, av, fw, fh)) = built {
                 let mut desktop = JarbasDesktop::new(fb);
-                desktop.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
-                desktop.register_app(AppId::Settings, "Settings", Layer::AppWindows);
-                desktop.register_app(AppId::Power, "Power", Layer::AppWindows);
-                desktop.register_app(AppId::Ide, "BitNet IDE", Layer::AppWindows);
-                desktop.register_app(AppId::Camera, "Camera", Layer::AppWindows);
-                desktop.register_app(AppId::AudioViz, "Audio Visualizer", Layer::AppWindows);
+                desktop.register_app(AppId::HermesChat, "Jarbas Chat", Layer::AppWindows);
                 desktop.ensure_hermes_overlay();
-                // ADR-0058 S1/S2 self-tests (sem modelo) + cards demo (S4).
-                let _ = crate::display::eg::self_test(&mut desktop.fb);
-                let _ = crate::display::card::self_test();
-                desktop.spawn_card(crate::display::card::demo_status_card());
-                desktop.spawn_card(crate::display::card::demo_weather_card());
-                desktop.spawn_card(crate::display::card::demo_call_card());
-                k_nano::slog_jarbas!("UI", "info", "ADR-0058 cards demo: sistema + clima + chamada");
+                k_nano::slog_jarbas!("UI", "info", "Jarbas Chat — desktop 3 painéis");
                 *COMPOSITOR.lock() = Some(desktop);
                 self.avatar = Some(av);
                 // Limites + centro para IRQ mouse
@@ -644,80 +543,16 @@ impl Agent for DisplayAgent {
             }
         }
 
-        // Echo buffer (legacy F-key fallback para compat com input ASCII).
-        // KEYBOARD_ECHO contém o buffer completo. Atualiza input_buffer + ChatWindow.
+        // Echo buffer — KEYBOARD_ECHO contém o buffer completo do input.
+        // Sincroniza com o ChatWindow para exibição.
         while let Some(ev) = self.echo_receiver.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             self.input_buffer = alloc::string::String::from(text);
-            // Sincroniza input buffer com ChatWindow
             let mut cw = crate::display::chat_window::CHAT_WINDOW.lock();
             if let Some(ref mut chat) = *cw {
                 chat.input_buffer = alloc::string::String::from(text);
                 chat.input_cursor = text.len();
                 chat.dirty = true;
-            }
-        }
-
-        // Legacy F-key app switching (compat)
-        if self.input_buffer.contains("[F1]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::HermesChat); }}
-        if self.input_buffer.contains("[F2]") {
-            if let Some(ref mut d) = *COMPOSITOR.lock() {
-                d.toggle_app(AppId::Settings);
-                if let Some(s) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) { s.data.clear(); }
-            }
-        }
-        if self.input_buffer.contains("[F3]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Power); }}
-        if self.input_buffer.contains("[F4]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Ide); }}
-        if self.input_buffer.contains("[F10]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::Camera); }}
-        if self.input_buffer.contains("[F11]") { if let Some(ref mut d) = *COMPOSITOR.lock() { d.toggle_app(AppId::AudioViz); }}
-
-        // Settings navigation
-        if self.input_buffer.contains("[2]") || self.input_buffer.contains("sound") || self.input_buffer.contains("som") {
-            if let Some(ref mut d) = *COMPOSITOR.lock() {
-                if let Some(s) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) {
-                    s.data = alloc::string::String::from("[2] sound");
-                }
-            }
-        }
-        if self.input_buffer.contains("[B]") || self.input_buffer.contains("back") {
-            if let Some(ref mut d) = *COMPOSITOR.lock() {
-                if let Some(s) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Settings)) {
-                    s.data.clear();
-                }
-            }
-        }
-        // Volume controls
-        if self.input_buffer.contains("+") {
-            let v = crate::audio::settings::AUDIO_VOLUME.load(core::sync::atomic::Ordering::Relaxed);
-            crate::audio::settings::AUDIO_VOLUME.store((v + 5).min(100), core::sync::atomic::Ordering::Relaxed);
-        }
-        if self.input_buffer.contains("-") {
-            let v = crate::audio::settings::AUDIO_VOLUME.load(core::sync::atomic::Ordering::Relaxed);
-            crate::audio::settings::AUDIO_VOLUME.store(v.saturating_sub(5), core::sync::atomic::Ordering::Relaxed);
-        }
-
-        // IDE: Generate WASM skill
-        if self.input_buffer.contains("[GEN]") {
-            let skill_name = {
-                let mut comp = COMPOSITOR.lock();
-                let mut name = alloc::string::String::new();
-                if let Some(ref mut d) = *comp {
-                    if let Some(ide) = d.windows.iter_mut().find(|w| w.app_id == Some(AppId::Ide)) {
-                        name = alloc::string::String::from(ide.data.trim());
-                        ide.data.clear();
-                    }
-                }
-                drop(comp);
-                name
-            };
-            if !skill_name.is_empty() {
-                let mut comp2 = COMPOSITOR.lock();
-                if let Some(ref mut d2) = *comp2 {
-                    d2.publish_wasm_skill(&skill_name, &alloc::format!("WASM: {}", skill_name));
-                    if let Some(chat) = d2.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
-                        chat.data.push_str(&alloc::format!("[IDE] WASM '{}' published! Icon on desktop.\n", skill_name));
-                    }
-                }
             }
         }
 

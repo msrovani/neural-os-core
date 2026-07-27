@@ -41,87 +41,44 @@ pub fn draw_window_decorations(
     let y = win.rect.y as usize;
     let w = win.rect.width as usize;
 
-    // ── 1px top border line ────────────────────────────────────────────
-    fb.fill_rect(x, y, w, BORDER_WIDTH, theme.border.0, theme.border.1, theme.border.2);
+    // ── Borda 1px no topo com cor de acento se focado ──────────────────
+    let border_c = if win.focused { theme.accent } else { theme.border };
+    fb.fill_rect(x, y, w, BORDER_WIDTH, border_c.0, border_c.1, border_c.2);
 
     // ── Title bar background ───────────────────────────────────────────
-    let (bar_r, bar_g, bar_b) = if win.focused {
-        (theme.accent.0, theme.accent.1, theme.accent.2)
-    } else {
-        (theme.bg_alt.0, theme.bg_alt.1, theme.bg_alt.2)
-    };
-    fb.fill_rect(
-        x,
-        y + BORDER_WIDTH,
-        w,
-        TITLE_BAR_H - BORDER_WIDTH,
-        bar_r,
-        bar_g,
-        bar_b,
-    );
+    let bar = if win.focused { theme.accent } else { theme.bg_alt };
+    draw_rounded_rect(fb, x, y + BORDER_WIDTH, w, TITLE_BAR_H - BORDER_WIDTH, 4,
+                      bar.0, bar.1, bar.2);
 
-    // ── Title text (left-aligned at x+6, y+6) ──────────────────────────
-    let text_color = if win.focused {
-        theme.fg
-    } else {
-        theme.fg_muted
-    };
-    crate::display::font::draw_text_scaled(
-        fb,
-        x + 6,
-        y + 6,
-        &win.title,
-        1,
-        scr_w,
-        text_color.0,
-        text_color.1,
-        text_color.2,
-    );
+    // ── Title text (left-aligned at x+8, y+6) ──────────────────────────
+    let text_color = if win.focused { theme.fg } else { theme.fg_muted };
+    crate::display::font::draw_text_scaled(fb, x + 8, y + 6, &win.title, 1, scr_w,
+                                           text_color.0, text_color.1, text_color.2);
 
-    // ── Control buttons (right-aligned) ────────────────────────────────
+    // ── Control buttons (right-aligned, COSMIC style) ──────────────────
     let btn_y = y + (TITLE_BAR_H - BUTTON_SIZE) / 2;
     let close_x = x + w - BUTTON_SIZE - BTN_GAP;
     let max_x = close_x - BUTTON_SIZE - BTN_GAP;
     let min_x = max_x - BUTTON_SIZE - BTN_GAP;
 
-    // Close [×] — red
-    fb.fill_rect(
-        close_x,
-        btn_y,
-        BUTTON_SIZE,
-        BUTTON_SIZE,
-        theme.error.0,
-        theme.error.1,
-        theme.error.2,
-    );
-    crate::display::font::draw_text_scaled(fb, close_x + 5, btn_y + 2, "×", 1, scr_w, 255, 255, 255);
+    // Close [×]
+    draw_rounded_rect(fb, close_x, btn_y, BUTTON_SIZE, BUTTON_SIZE, 4,
+                      theme.error.0, theme.error.1, theme.error.2);
+    crate::display::font::draw_text_scaled(fb, close_x + 5, btn_y + 2, "×",
+                                           1, scr_w, 255, 255, 255);
 
-    // Maximize [□] or Restore [R] — card_bg
-    fb.fill_rect(
-        max_x,
-        btn_y,
-        BUTTON_SIZE,
-        BUTTON_SIZE,
-        theme.card_bg.0,
-        theme.card_bg.1,
-        theme.card_bg.2,
-    );
+    // Maximize [□] / Restore
+    draw_rounded_rect(fb, max_x, btn_y, BUTTON_SIZE, BUTTON_SIZE, 4,
+                      theme.card_bg.0, theme.card_bg.1, theme.card_bg.2);
     let max_label = if win.maximized { "R" } else { "□" };
-    crate::display::font::draw_text_scaled(
-        fb, max_x + 5, btn_y + 2, max_label, 1, scr_w, 255, 255, 255,
-    );
+    crate::display::font::draw_text_scaled(fb, max_x + 5, btn_y + 2, max_label,
+                                           1, scr_w, 255, 255, 255);
 
-    // Minimize [─] — card_bg
-    fb.fill_rect(
-        min_x,
-        btn_y,
-        BUTTON_SIZE,
-        BUTTON_SIZE,
-        theme.card_bg.0,
-        theme.card_bg.1,
-        theme.card_bg.2,
-    );
-    crate::display::font::draw_text_scaled(fb, min_x + 5, btn_y + 2, "─", 1, scr_w, 255, 255, 255);
+    // Minimize [─]
+    draw_rounded_rect(fb, min_x, btn_y, BUTTON_SIZE, BUTTON_SIZE, 4,
+                      theme.card_bg.0, theme.card_bg.1, theme.card_bg.2);
+    crate::display::font::draw_text_scaled(fb, min_x + 5, btn_y + 2, "─",
+                                           1, scr_w, 255, 255, 255);
 }
 
 /// Draw a rectangle with simulated rounded corners.

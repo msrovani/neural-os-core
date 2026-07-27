@@ -734,4 +734,13 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 
 ---
 
-**Estado canônico:** v1.9.5 teste/não estável — Emagrecer SESSION_163; ADR-0059 F3-F7 SESSION_165; base v1.9.1; `v2.0.0` não declarado.
+**Estado canônico:** v1.9.99-s225 — Test / SESSION_225—226.
+- SESSION_226: Onyx Chat Window + StreamPacket Protocol + Render Registry + COSMIC UI refinements (2026-07-27)
+  - StreamPacket protocol: 14 packet types (ReasoningStart/Delta/Done, ToolStart/Delta/Done, MessageStart/Delta, Stop, etc.)
+  - ChatWindow: Onyx-style timeline + messages + input bar + mic button + recording indicator
+  - Audio integration: mic button → VoiceAgent → STT → text input → TTS auto
+  - FocusMode: Chat (keyboard→input) vs Ambient (wake-word + auto-listen)
+  - COSMIC visual refinements: rounded corners (r=4/8), tile gaps (4px), better padding, translucent Hermes panel
+  - Render Registry: RENDER_REGISTER / RENDER_WINDOW topics for dynamic agent-created windows
+  - Cleanup: NeuralConsole removed (~287 LOC dead code eliminated), AppId legados removidos
+  - cargo check --release: 0 erros

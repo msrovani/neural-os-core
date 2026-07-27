@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### SESSION_226: Onyx ChatWindow + StreamPacket Protocol + Render Registry + COSMIC UI (2026-07-27)
+- **StreamPacket protocol** (`hermes/src/stream_packet.rs`): 14 typed packet types (ReasoningStart/Delta/Done, ToolStart/Delta/Done, MessageStart/Delta, Stop, etc.) com encode/decode compacto para EventBus.
+- **ChatSession tree** (`hermes/src/chat_tree.rs`): Árvore de conversa com branching (parent/children), ChatNode, display_nodes().
+- **ChatWindow** (`jarbas/src/display/chat_window.rs`): UI Onyx-style com timeline de tools expansível/colapsável, mensagens streaming, histórico, input bar, botão mic toggle `[MIC]`/`[REC]`.
+- **Áudio integrado**: `MIC_ACTIVE` flag → VoiceAgent escuta sem wake word → STT transcreve → texto no input buffer. TTS automático na resposta.
+- **FocusMode** (`compositor.rs`): Chat (clique no chat → teclado vai pro input) vs Ambient (fundo → wake-word "Jarvis").
+- **COSMIC visual refinements**: `decorations.rs` com `draw_rounded_rect(r=4)`, gaps entre tiles (4px), painel Hermes translúcido (bg_alt/2 + r=8), barra de status estilo COSMIC.
+- **Render Registry** (`jarbas/src/display/render_registry.rs`): `RENDER_REGISTER` / `RENDER_WINDOW` topics. Agentes registram `RenderFn` e publicam janelas dinâmicas sem modificar compositor.
+- **Cleanup**: NeuralConsole removido (~287 LOC), F-keys legados, Settings/Power/Ide/Camera/AudioViz AppIds descartados. render_app_content só trata HermesChat.
+- **cargo check --release: 0 erros**.
+
 ### SESSION_225: Limine Migration + Higher-Half Fixes + Desktop Jarbas na Tela + Soft Power Off (2026-07-27)
 - **Limine boot (uefi.img):** Migração bootloader 0.11 → Limine 6.x. Kernel higher-half 0xffffffff80000000+. Framebuffer @0xffff8000c0000000 via HHDM.
 - **PHYS_MEM_OFFSET early store:** main.rs:1268 — setado ANTES de qualquer driver. e1000/HDA/NetAgent enxergam offset correto em vez de 0.
