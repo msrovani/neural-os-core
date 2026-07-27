@@ -5,8 +5,8 @@
 use alloc::string::String;
 use k_nano::EVENT_BUS;
 
-/// Tópico para mensagens proativas do JARVIS.
-pub const TOPIC_JARVIS_PROACTIVE: &str = "JARVIS_PROACTIVE";
+/// Tópico para mensagens proativas do JARBAS.
+pub const TOPIC_JARBAS_PROACTIVE: &str = "JARBAS_PROACTIVE";
 
 /// Tipos de heartbeat proativo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +54,7 @@ pub fn generate_proactive(msg_type: ProactiveType) -> Option<String> {
 pub fn publish_proactive(msg: &str) {
     let _ = EVENT_BUS.publish(event_bus::Event {
         id: 0,
-        topic: String::from(TOPIC_JARVIS_PROACTIVE),
+        topic: String::from(TOPIC_JARBAS_PROACTIVE),
         payload: msg.as_bytes().to_vec(),
         token: event_bus::CapabilityToken::Legacy(1),
     });

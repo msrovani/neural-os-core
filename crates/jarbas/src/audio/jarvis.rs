@@ -1,17 +1,17 @@
-//! JarvisAgent — persona JARVIS. Saudacao: LLM se fluente; senao template honesto (soft-float 2B).
+//! JarbasAgent — persona JARVIS. Saudacao: LLM se fluente; senao template honesto (soft-float 2B).
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use alloc::string::String;
 use event_bus::{CapabilityToken, Event, Receiver};
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::jarvis::{JarvisEngine, Emotion, EmotionAnalysis};
+use crate::jarvis::{JarbasEngine, Emotion, EmotionAnalysis};
 use crate::audio::context::build_emotional_context;
 
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
 
 const JARVIS_MANIFEST: AgentManifest = AgentManifest {
-    name: "jarvis",
+    name: "JARBAS",
     kind: AgentKind::Console,
     schedule: ScheduleKind::Continuous,
     auto_start: true,
@@ -62,7 +62,7 @@ fn compose_boot_greeting(mem_mb: u64, cpu_count: u8, agent_count: usize) -> Stri
         ""
     };
     alloc::format!(
-        "Good day. JARVIS online — {}MB RAM, {} CPU core{}, {} agents{}. {}.",
+        "Good day. JARBAS online — {}MB RAM, {} CPU core{}, {} agents{}. {}.",
         mem_mb,
         cpu_count,
         if cpu_count == 1 { "" } else { "s" },
@@ -72,10 +72,10 @@ fn compose_boot_greeting(mem_mb: u64, cpu_count: u8, agent_count: usize) -> Stri
     )
 }
 
-pub struct JarvisAgent {
+pub struct JarbasAgent {
     user_receiver: Receiver,
     llm_response: Receiver,
-    engine: JarvisEngine,
+    engine: JarbasEngine,
     last_text_emotion: Option<Emotion>,
     greeted: bool,
     greeting_prompt_sent: bool,
@@ -84,12 +84,12 @@ pub struct JarvisAgent {
     greet_agents: usize,
 }
 
-impl JarvisAgent {
+impl JarbasAgent {
     pub fn new() -> Self {
-        JarvisAgent {
+        JarbasAgent {
             user_receiver: k_nano::EVENT_BUS.subscribe("USER_INTENT"),
             llm_response: k_nano::EVENT_BUS.subscribe("LLM_RESPONSE"),
-            engine: JarvisEngine::new(),
+            engine: JarbasEngine::new(),
             last_text_emotion: None,
             greeted: false,
             greeting_prompt_sent: false,
@@ -100,7 +100,7 @@ impl JarvisAgent {
     }
 
     fn publish_greeting(&self, body: &str) {
-        let greeting = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
+        let greeting = alloc::format!("[JARBAS] {}: {}", self.engine.soul.name, body);
         k_nano::slog_bin!("Log", "msg", "{}", greeting);
         let _ = k_nano::EVENT_BUS.publish(Event {
             id: 0,
@@ -111,7 +111,7 @@ impl JarvisAgent {
     }
 }
 
-/// Chamado logo apos `register(JarvisAgent)` no boot HW.
+/// Chamado logo apos `register(JarbasAgent)` no boot HW.
 /// Emite template + tenta BOOT.LOG (MSC/ATA); **nunca soft-reboot** — Runtime segue.
 pub fn emit_hw_greeting_at_register() {
     if HW_GREET_EMITTED.swap(true, Ordering::SeqCst) {
@@ -138,7 +138,7 @@ pub fn emit_hw_greeting_at_register() {
         tr.agent_count()
     };
     let body = compose_boot_greeting(mem_mb, cpu, agents);
-    let line = alloc::format!("[JARVIS] JARVIS: {}", body);
+    let line = alloc::format!("[JARBAS] JARVIS: {}", body);
     k_nano::slog_jarbas!(
         "Jarbas",
         "info",
@@ -158,7 +158,7 @@ pub fn emit_hw_greeting_at_register() {
     let _ = true;
 }
 
-impl Agent for JarvisAgent {
+impl Agent for JarbasAgent {
     fn manifest(&self) -> &AgentManifest {
         &JARVIS_MANIFEST
     }
@@ -203,7 +203,7 @@ impl Agent for JarvisAgent {
                     no_fat
                 );
                 self.publish_greeting(&body);
-                let line = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, body);
+                let line = alloc::format!("[JARBAS] {}: {}", self.engine.soul.name, body);
                 crate::display::fb::console_print(&line);
                 crate::display::fb::boot_ckpt(50, "jarvis greet OK");
                 // boot_logger skipped (jarbas crate)
@@ -263,7 +263,7 @@ impl Agent for JarvisAgent {
                 continue;
             }
 
-            let response = alloc::format!("[JARVIS] {}: {}", self.engine.soul.name, text);
+            let response = alloc::format!("[JARBAS] {}: {}", self.engine.soul.name, text);
             k_nano::slog_bin!("Log", "msg", "{}", response);
             let _ = k_nano::EVENT_BUS.publish(Event {
                 id: 0,

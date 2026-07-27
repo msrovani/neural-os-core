@@ -1,9 +1,9 @@
 //! Audio subsystem — JARVIS voice pipeline (Sprint Sound / ADR-0045)
 //!
 //! Mic (HDA|UAC) → AUDIO_IN → WakeWord → WAKEWORD
-//! JarvisVoiceAgent (wake-gated): VAD → STT → USER_INTENT
-//! JarvisAgent: USER_INTENT → LLM_REQUEST → LLM_RESPONSE → HERMES_RESPONSE
-//! JarvisVoiceAgent: HERMES_RESPONSE → Piper/formant → AUDIO_OUT → Mixer → speaker
+//! JarbasVoiceAgent (wake-gated): VAD → STT → USER_INTENT
+//! JarbasAgent: USER_INTENT → LLM_REQUEST → LLM_RESPONSE → HERMES_RESPONSE
+//! JarbasVoiceAgent: HERMES_RESPONSE → Piper/formant → AUDIO_OUT → Mixer → speaker
 //! AudioPipelineAgent: barge-in via MIC_CAPTURE_RING
 //! Skills: TtsSkill, SttSkill, AudioGetSettingsSkill, AudioSetVolumeSkill
 

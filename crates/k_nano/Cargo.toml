@@ -19,6 +19,10 @@ ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
 ed25519-compact = { version = "2", default-features = false }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
+ruvix-proof = { version = "0.1", default-features = false, features = ["alloc"] }
+ruvix-vecgraph = { version = "0.1", default-features = false, features = ["alloc"] }
+ruvix-types = { version = "0.1", default-features = false, features = ["alloc"] }
+ruvix-region = { version = "0.1", default-features = false, features = ["alloc"] }
 
 [features]
 default = []

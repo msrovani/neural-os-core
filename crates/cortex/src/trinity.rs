@@ -301,7 +301,7 @@ impl TrinityRouter {
             || lower.contains("como vai")
             || lower.contains("tudo bem")
             || lower.contains("single short sentence greeting")
-            || ((has_word("jarbas") || has_word("jarvis"))
+            || ((has_word("jarbas") || has_word("JARBAS"))
                 && !is_hw_control
                 && (has_word("oi")
                     || has_word("ola")

@@ -42,7 +42,7 @@ use crate::display::theme::{Theme, ThemeMode};
 use crate::display::tiling::{TilingNode, Rect, SplitDirection, WindowId};
 use crate::display::notifications::NotificationQueue;
 
-pub static COMPOSITOR: Mutex<Option<JarvisDesktop>> = Mutex::new(None);
+pub static COMPOSITOR: Mutex<Option<JarbasDesktop>> = Mutex::new(None);
 /// Banner power (confirm / shutting) — set pelo DisplayAgent.
 pub static POWER_BANNER: Mutex<Option<&'static str>> = Mutex::new(None);
 
@@ -140,7 +140,7 @@ pub struct WasmIcon { pub name: String, pub description: String, pub idx: usize 
 
 
 
-pub struct JarvisDesktop {
+pub struct JarbasDesktop {
     // Compositor base
     pub fb: DoubleBuffer,
     pub layers: [Layer; 4], // mantém Z-order fixo para background/overlay
@@ -188,7 +188,7 @@ pub enum DragState {
     Resize { window_id: WindowId, area: crate::display::window::HitArea },
 }
 
-impl JarvisDesktop {
+impl JarbasDesktop {
     pub fn new(fb: DoubleBuffer) -> Self {
         let w = fb.info.width; let h = fb.info.height;
         let mut dock = Dock::new(w as u32, h as u32);
@@ -200,7 +200,7 @@ impl JarvisDesktop {
         dock.add_launcher(AppId::Camera, "Camera");
         dock.add_launcher(AppId::AudioViz, "Audio");
 
-        JarvisDesktop { 
+        JarbasDesktop { 
             fb, 
             layers: [Layer::OrbBackground, Layer::HermesOverlay, Layer::AppWindows, Layer::DockBar],
             workspaces: Workspaces::default(),
@@ -323,7 +323,7 @@ impl JarvisDesktop {
         }
     }
 
-    pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar::JarvisAvatar>) {
+    pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar::JarbasAvatar>) {
         self.tick = tick; let (w, h) = (self.w, self.h);
 
         // ── FPS control: skip frame se estiver muito rapido ──

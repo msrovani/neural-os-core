@@ -989,7 +989,7 @@ pub fn text_is_greetingish(text: &str) -> bool {
     if spaces < 1 || text.trim().len() < 10 {
         return false;
     }
-    let open = has(b"good") || has(b"hello") || has(b"all systems") || has(b"jarvis");
+    let open = has(b"good") || has(b"hello") || has(b"all systems") || has(b"JARBAS");
     let body = has(b"online")
         || has(b"ready")
         || has(b"operational")

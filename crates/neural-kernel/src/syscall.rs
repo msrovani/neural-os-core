@@ -104,7 +104,7 @@ pub fn stage_syscall(nr: u64, arg: u64, cap: Cap) {
 /// Despacho capability-gated (chamável direto ou via int 0x90).
 /// ADR-0076 §4.3: 9 syscalls — SEND_TCP e VRING_SETUP removidos,
 /// WRITE_RING + READ_RING consolidados em SYS_RING_OP (subcomando em arg).
-pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
+pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
     match nr {
         SYS_PING => {
             if !cap.contains(Cap::PING) {
@@ -116,14 +116,68 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
             if !cap.contains(Cap::RING_OP) {
                 return Err("EPERM: Cap::RING_OP");
             }
-            // subcomando em _arg: RING_OP_WRITE ou RING_OP_READ
+            // subcomando em arg: RING_OP_WRITE ou RING_OP_READ
             Ok(0) // stub
         }
         SYS_MAP_FB => {
             if !cap.contains(Cap::MAP_FB) {
                 return Err("EPERM: Cap::MAP_FB");
             }
-            Ok(0)
+            // Mapa páginas do framebuffer no address space atual
+            // arg = physical address base, retorna virtual address onde foi mapeado
+            let fb_phys = arg;
+            if fb_phys == 0 {
+                return Err("ENODEV: FB phys address is 0");
+            }
+            let fb_va = crate::jarbas_fb::JARBAS_FB_VA;
+            let flags = x86_64::structures::paging::PageTableFlags::PRESENT
+                | x86_64::structures::paging::PageTableFlags::WRITABLE
+                | x86_64::structures::paging::PageTableFlags::NO_CACHE;
+            let pages = crate::jarbas_fb::DEMO_MAP_PAGES;
+            for i in 0..pages {
+                let va = x86_64::VirtAddr::new(fb_va + (i as u64) * 4096);
+                let frame = x86_64::structures::paging::PhysFrame::<x86_64::structures::paging::Size4KiB>
+                    ::containing_address(x86_64::PhysAddr::new(fb_phys + (i as u64) * 4096));
+                // Mapeia usando page tables do CR3 atual
+                use x86_64::registers::control::Cr3;
+                let (l4_frame, _) = Cr3::read();
+                let l4_virt = x86_64::VirtAddr::new(
+                    crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire)
+                    + l4_frame.start_address().as_u64()
+                );
+                let l4_ptr = l4_virt.as_mut_ptr::<x86_64::structures::paging::PageTable>();
+                let l4 = unsafe { &mut *l4_ptr };
+                // Walk/Build page table entries para a VA
+                let p4 = va.p4_index();
+                let p3 = va.p3_index();
+                let p2 = va.p2_index();
+                let p1 = va.p1_index();
+                // Garantir que L3 existe
+                let pm_offset = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+                if !l4[p4].flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+                    // Alocar frame para L3
+                    let l3_frame = match k_nano::memory::alloc_physical_frame() {
+                        Some(f) => f,
+                        None => return Err("ENOMEM: L3 frame"),
+                    };
+                    l4[p4].set_addr(l3_frame.start_address(), flags);
+                }
+                let l3_phys = l4[p4].addr();
+                let l3_virt = x86_64::VirtAddr::new(pm_offset + l3_phys.as_u64());
+                let l3 = unsafe { &mut *l3_virt.as_mut_ptr::<x86_64::structures::paging::PageTable>() };
+                if !l3[p3].flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+                    let l2_frame = match k_nano::memory::alloc_physical_frame() {
+                        Some(f) => f,
+                        None => return Err("ENOMEM: L2 frame"),
+                    };
+                    l3[p3].set_addr(l2_frame.start_address(), flags);
+                }
+                let l2_phys = l3[p3].addr();
+                let l2_virt = x86_64::VirtAddr::new(pm_offset + l2_phys.as_u64());
+                let l2 = unsafe { &mut *l2_virt.as_mut_ptr::<x86_64::structures::paging::PageTable>() };
+                l2[p2].set_addr(frame.start_address(), flags);
+            }
+            Ok(fb_va)
         }
         SYS_PRESENT_FB => {
             if !cap.contains(Cap::WRITE_FB) {
@@ -159,6 +213,42 @@ pub fn dispatch(nr: u64, _arg: u64, cap: Cap) -> Result<u64, &'static str> {
             if !cap.contains(Cap::DEMAND_PAGE) {
                 return Err("EPERM: Cap::DEMAND_PAGE");
             }
+            // Demand paging: allocate a physical frame and map it
+            // arg = virtual address that faulted
+            let fault_va = arg;
+            if fault_va == 0 {
+                return Err("ENODEV: fault_va is 0");
+            }
+            let frame = k_nano::memory::alloc_physical_frame()
+                .ok_or("ENOMEM: demand page")?;
+            let va = x86_64::VirtAddr::new(fault_va);
+            let pm_offset = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+            let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+            let l4_virt = x86_64::VirtAddr::new(pm_offset + l4_frame.start_address().as_u64());
+            let l4 = unsafe { &mut *l4_virt.as_mut_ptr::<x86_64::structures::paging::PageTable>() };
+            let flags = x86_64::structures::paging::PageTableFlags::PRESENT
+                | x86_64::structures::paging::PageTableFlags::WRITABLE
+                | x86_64::structures::paging::PageTableFlags::USER_ACCESSIBLE;
+            let p4 = va.p4_index();
+            let p3 = va.p3_index();
+            let p2 = va.p2_index();
+            let _p1 = va.p1_index();
+            // Ensure intermediate tables exist
+            if !l4[p4].flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+                let l3_f = k_nano::memory::alloc_physical_frame().ok_or("ENOMEM: L3")?;
+                l4[p4].set_addr(l3_f.start_address(), flags);
+            }
+            let l3_phys = l4[p4].addr();
+            let l3_virt = x86_64::VirtAddr::new(pm_offset + l3_phys.as_u64());
+            let l3 = unsafe { &mut *l3_virt.as_mut_ptr::<x86_64::structures::paging::PageTable>() };
+            if !l3[p3].flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+                let l2_f = k_nano::memory::alloc_physical_frame().ok_or("ENOMEM: L2")?;
+                l3[p3].set_addr(l2_f.start_address(), flags);
+            }
+            let l2_phys = l3[p3].addr();
+            let l2_virt = x86_64::VirtAddr::new(pm_offset + l2_phys.as_u64());
+            let l2 = unsafe { &mut *l2_virt.as_mut_ptr::<x86_64::structures::paging::PageTable>() };
+            l2[p2].set_addr(frame.start_address(), flags);
             Ok(0)
         }
         SYS_MAP_FILE => {

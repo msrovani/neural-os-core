@@ -1,5 +1,31 @@
 # ═════════════════════════════════════════════════════════
-# STATE — neural-os-core v1.9.99-crossos — NÃO ESTÁVEL
+# STATE — neural-os-core v1.9.99-adr0076 — NÃO ESTÁVEL
+#   SESSION_224: ADR-0076 Implementação Pesada — 23 entregas (2026-07-27)
+#     Skill Manifest FYY canônico: RemoteConfig, Pricing, QualityIndicators, Interop 5 standards, parser from_slice
+#     Native agents: 25 manifests system_skill (A-001 a A-025)
+#     WASM expansion: host functions 1→6 (aios, aios_net, aios_fs), 11 cap constants, check_cap
+#     WASI Preview 1: 15 stubs conectados ao linker
+#     WAT test suite: 18 testes, 6 módulos pré-compilados
+#     Telemetry ring: SPSC lock-free 4096 slots, 12 eventos, shell trace cmd
+#     Membrane two-layer gate: bitmask + Membrane::check(Escalate)
+#     Permission Gate: RiskLevel classification + HITL spin-wait approve/deny
+#     Live capsule lifecycle: PKG_CHANGED events no EventBus
+#     Cascading capability revoke: CapRegistry create/delegate/revoke
+#     Goal-aware scheduler: goal_urgency + novelty_score + coherence_partner
+#     Intent Bus canônico: 33 intents, 10 categorias
+#     Glass Box inspect: inspect cmd com 25 agentes nativos
+#     Quarantine Gate: 4-layer sanitization (pattern/length/repetition/structural)
+#     WIT-typed ABI: aios.wit
+#     Syscalls consolidados: 13→9 (removeu SEND_TCP+VRING_SETUP, unificou WRITE_RING+READ_RING→RING_OP)
+#     GEMM benchmark: ternário 64×64 FNV-1a golden checksum
+#     SYS_MAP_FB real: page table walk no syscall dispatch
+#     Proof-gated mutations: ruvix-proof crate (3-tier, 6 tests)
+#     Kernel HNSW: ruvix-vecgraph crate (slab-allocated, patches no_std)
+#     Ring-3 Userspace: ELF loader + ProcessManager + SYS_DEMAND_PAGE + TRY_ENTER_RING3=true
+#     JARVIS→JARBAS rename: 16 arquivos, persona renomeada para JARBAS (Just Another Really BADASS Intelligence System)
+#     Built-in skills: 13 skills registradas (Echo, SystemStatus, HardwareInfo, NetDiag, HwIdentify, DiskDiag, Security, TTS, STT, AudioGetSettings, AudioSetVolume, AudioToggleVoiceClone, EmotionalContext)
+#     ADR-0076 atualizada: patterns de 16 projetos, syscall audit, planos
+#     cargo check --release: 0 erros
 #   SESSION_223: Cross-OS Ecosystem + BEI + P01 drift cleanup + TLS + ADR-0040
 #     ADR-0076 Cross-OS Ecosystem (7 fases): Skill Manifest, Membrane, Discoverer, JAIL, WASI, MCP bridge, Ciclo aprendizado
 #       skill_manifest.rs (RiskLevel, SkillType, Permissions, SkillManifest)

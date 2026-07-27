@@ -1,5 +1,5 @@
 //! Wake word detection — MLP classifier + energia temporal.
-//! MLP ternario (16→8→1) treinado para reconhecer "jarvis" vs nao-jarvis.
+//! MLP ternario (16→8→1) treinado para reconhecer "JARBAS" vs nao-jarvis.
 //! Schedule Continuous (Sprint Sound) — evita dormência EventDriven após 20 ticks.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};

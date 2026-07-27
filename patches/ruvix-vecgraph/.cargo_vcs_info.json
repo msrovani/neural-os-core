@@ -1,0 +1,6 @@
+{
+  "git": {
+    "sha1": "0723812ce778c07d8312e2ed80a66a5250b4c883"
+  },
+  "path_in_vcs": "crates/ruvix/crates/vecgraph"
+}

@@ -87,7 +87,7 @@ mod smp;
 mod sync;
 
 pub use hermes_crate::{
-    actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, elf_loader, evolve, generic_wifi, sgdb_agent,
+    actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, evolve, generic_wifi, sgdb_agent,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
     memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, safety,
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
@@ -238,6 +238,8 @@ mod neuos_probe;
 mod ngram_spec;
 mod tensor;
 mod trinity;
+mod process;
+mod elf_loader;
 
 use lazy_static::lazy_static;
 
@@ -1193,7 +1195,7 @@ fn registry_has_agent(registry: &agent_core::AgentRegistry, name: &str) -> bool 
 /// `voice_e2e`: Some(true/false) se weather-e2e exercitou TTS+FB paint; None = gated no boot default.
 fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>) {
     let display_reg = registry_has_agent(registry, "display");
-    let jarvis_reg = registry_has_agent(registry, "jarvis");
+    let jarvis_reg = registry_has_agent(registry, "JARBAS");
     let voice_reg = registry_has_agent(registry, "jarvis_voice");
     let wake_reg = registry_has_agent(registry, "wakeword");
     let mixer_reg = registry_has_agent(registry, "audio_mixer");
@@ -1215,7 +1217,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
         "CAP-ONLY"
     };
 
-    let soul = crate::jarvis::SoulProfile::default_jarvis();
+    let soul = crate::jarvis::SoulProfile::default_jarbas();
     let persona_desc = soul.describe();
 
     k_nano::slog_jarbas!(
@@ -2659,15 +2661,15 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(vision_agent::VisionAgent::new()));
     crate::display::fb::boot_ckpt(43, "VisionAgent OK");
 
-    k_nano::slog_bin!("Boot", "register", "JarvisAgent");
-    registry.register(Box::new(audio::jarvis::JarvisAgent::new()));
-    crate::display::fb::boot_ckpt(44, "JarvisAgent OK");
+    k_nano::slog_bin!("Boot", "register", "JarbasAgent");
+    registry.register(Box::new(audio::jarvis::JarbasAgent::new()));
+    crate::display::fb::boot_ckpt(44, "JarbasAgent OK");
     // HW sem MSC: saudacao + BOOT.LOG AGORA (hang comum logo apos K44 nos agents audio).
     audio::jarvis::emit_hw_greeting_at_register();
 
     crate::display::fb::boot_ckpt(45, "antes JarvisVoice");
-    k_nano::slog_bin!("Boot", "register", "JarvisVoiceAgent");
-    registry.register(Box::new(audio::voice::JarvisVoiceAgent::new()));
+    k_nano::slog_bin!("Boot", "register", "JarbasVoiceAgent");
+    registry.register(Box::new(audio::voice::JarbasVoiceAgent::new()));
     crate::display::fb::boot_ckpt(46, "JarvisVoice OK");
 
     k_nano::slog_bin!("Boot", "register", "WakeWordAgent");

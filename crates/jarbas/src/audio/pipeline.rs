@@ -1,5 +1,5 @@
 //! AudioPipelineAgent — barge-in a partir do MIC_CAPTURE_RING.
-//! TTS é responsabilidade de JarvisVoiceAgent (HERMES_RESPONSE → synthesize_tts).
+//! TTS é responsabilidade de JarbasVoiceAgent (HERMES_RESPONSE → synthesize_tts).
 //! Sprint Sound: sem rota LLM_RESPONSE duplicada / formant paralelo.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};

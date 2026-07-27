@@ -52,7 +52,7 @@ pub fn set_mode(mode: HitlMode) {
 
 pub fn set_mode_str(s: &str) -> Result<HitlMode, &'static str> {
     let m = match s.trim().to_ascii_lowercase().as_str() {
-        "jarbas" | "jarvis" | "ui" | "persona" => HitlMode::Jarbas,
+        "jarbas" | "JARBAS" | "ui" | "persona" => HitlMode::Jarbas,
         "terminal" | "term" | "cli" | "hanr" | "slash" => HitlMode::Terminal,
         _ => return Err("use: /ui jarbas | /ui terminal"),
     };

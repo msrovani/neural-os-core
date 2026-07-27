@@ -24,11 +24,11 @@ pub struct SoulProfile {
 }
 
 impl SoulProfile {
-    pub fn default_jarvis() -> Self { SoulProfile { name: String::from("JARVIS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
+    pub fn default_jarbas() -> Self { SoulProfile { name: String::from("JARBAS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
 
     /// Carrega PERSONA.md (Jarbas) — fallback SOUL.md só se PERSONA ausente.
     pub fn load_from_vfs() -> Self {
-        let mut profile = Self::default_jarvis();
+        let mut profile = Self::default_jarbas();
         let data = hermes::globals::read_vfs("/mnt/neural/PERSONA.md")
             .or_else(|_| hermes::globals::read_vfs("/mnt/neural/SOUL.md"))
             .or_else(|_| hermes::globals::read_vfs("/SOUL.MD"));
@@ -47,7 +47,7 @@ impl SoulProfile {
                 else if let Some(val) = l.strip_prefix("empathy:") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
                 else if let Some(val) = l.strip_prefix("empathy=") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
             }
-            if profile.name == "JARVIS" && text.contains("Hermes") {
+            if profile.name == "JARBAS" && text.contains("Hermes") {
                 profile.name = String::from("Hermes");
                 profile.tone = String::from("precise");
             }
@@ -522,9 +522,9 @@ impl Heartbeat {
     pub fn tick(&mut self, tick: u64, disk_pct: f32, mem_pct: f32, net_online: bool) {
         if tick.wrapping_sub(self.last_beat) < 200 { return; }
         self.last_beat = tick;
-        if disk_pct > 0.9 { self.messages.push(alloc::format!("[JARVIS] Disk {:.0}% full, sir.", disk_pct * 100.0)); }
-        if mem_pct > 0.85 { self.messages.push(alloc::format!("[JARVIS] Memory at {:.0}%, sir.", mem_pct * 100.0)); }
-        if !net_online { self.messages.push(String::from("[JARVIS] Network is offline, sir.")); }
+        if disk_pct > 0.9 { self.messages.push(alloc::format!("[JARBAS] Disk {:.0}% full, sir.", disk_pct * 100.0)); }
+        if mem_pct > 0.85 { self.messages.push(alloc::format!("[JARBAS] Memory at {:.0}%, sir.", mem_pct * 100.0)); }
+        if !net_online { self.messages.push(String::from("[JARBAS] Network is offline, sir.")); }
         while self.messages.len() > 10 { self.messages.remove(0); }
     }
     pub fn status(&self) -> String { alloc::format!("[HB] {} proactive messages", self.messages.len()) }
@@ -597,7 +597,7 @@ impl BabelIndex {
 // JARVIS Engine Unificada
 // ═══════════════════════════════════════════════════════════════════════════════
 
-pub struct JarvisEngine {
+pub struct JarbasEngine {
     pub soul: SoulProfile,
     pub ipw: IpwMonitor,
     pub session: SessionHistory,
@@ -617,15 +617,15 @@ pub struct JarvisEngine {
     pub avatar_state: AvatarState,
 }
 
-impl JarvisEngine {
+impl JarbasEngine {
     pub fn new() -> Self {
         let mut consent = ConsentGate::new();
         consent.register("read_file", ConsentLevel::Safe, "read files from VFS");
         consent.register("write_file", ConsentLevel::Moderate, "write files to VFS");
         consent.register("exec", ConsentLevel::Dangerous, "execute system commands");
         consent.register("network", ConsentLevel::Moderate, "network access");
-        JarvisEngine {
-            soul: SoulProfile::default_jarvis(), ipw: IpwMonitor::new(),
+        JarbasEngine {
+            soul: SoulProfile::default_jarbas(), ipw: IpwMonitor::new(),
             session: SessionHistory::new(256), notifications: NotificationGate::new(),
             thread: SessionlessThread::new(500), emotion: EmotionAnalysis::analyze(""),
             consent, discovery: SkillDiscovery::new(), cache: SemanticCache::new(),

@@ -5,10 +5,10 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::{COMPOSITOR, JarvisDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button, DragState};
+use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, hit_power_button, DragState};
 use alloc::vec::Vec;
 use crate::display::window::{Window, WindowContent};
-use crate::display::avatar::{AvatarState, JarvisAvatar};
+use crate::display::avatar::{AvatarState, JarbasAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 use crate::display::shortcuts::{KeyCombo, Modifiers, KeyCode, WmAction, SHORTCUTS, scancode_to_keycode};
 use hermes::agents::TOPIC_KEY_EVENT;
@@ -38,7 +38,7 @@ pub struct DisplayAgent {
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
-    avatar: Option<JarvisAvatar>,
+    avatar: Option<JarbasAvatar>,
     dragging: bool,
     drag_id: AppId,
     drag_off_x: isize,
@@ -79,7 +79,7 @@ impl DisplayAgent {
 
     /// Drena receiver → overlay Hermes (HITL / terminal / memory nudge).
     fn drain_hermes_overlay(
-        avatar: &mut Option<JarvisAvatar>,
+        avatar: &mut Option<JarbasAvatar>,
         rx: &mut event_bus::Receiver,
         mode: OverlayMode,
     ) {
@@ -381,12 +381,12 @@ impl Agent for DisplayAgent {
                 let gpu = GPU.lock();
                 gpu.as_ref().map(|gpu_dev| {
                     let fb = DoubleBuffer::from_gpu(gpu_dev);
-                    let av = JarvisAvatar::new(gpu_dev);
+                    let av = JarbasAvatar::new(gpu_dev);
                     (fb, av, gpu_dev.fb_width, gpu_dev.fb_height)
                 })
             };
             if let Some((fb, av, fw, fh)) = built {
-                let mut desktop = JarvisDesktop::new(fb);
+                let mut desktop = JarbasDesktop::new(fb);
                 desktop.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
                 desktop.register_app(AppId::Settings, "Settings", Layer::AppWindows);
                 desktop.register_app(AppId::Power, "Power", Layer::AppWindows);

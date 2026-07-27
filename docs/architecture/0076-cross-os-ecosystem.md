@@ -286,7 +286,44 @@ Temos **13 syscalls** definidos em `neural-kernel/src/syscall.rs`: PING, WRITE_R
 
 ---
 
-## 6. Plano
+## 6. Implementação Realizada
+
+| Onda | Feature | Status | Arquivos |
+|------|---------|--------|----------|
+| 1 | Skill Manifest canônico FYY | ✅ | `hermes/src/skill_manifest.rs` |
+| 2 | Native agents 25 manifests | ✅ | `hermes/src/native_agents.rs` |
+| 3 | wasmi host functions 1→6 + cap check | ✅ | `hermes/src/wasmi_rt.rs` |
+| 4 | WASI Preview 1 conectado | ✅ | `hermes/src/wasi_host.rs` |
+| 5 | WAT test suite (18 testes) | ✅ | `hermes/src/wat_tests.rs` |
+| 6 | Telemetry ring SPSC 4096 + trace cmd | ✅ | `k_nano/src/telemetry.rs` |
+| 7 | Membrane two-layer gate | ✅ | `hermes/src/membrane.rs`, `wasmi_rt.rs` |
+| 8 | Permission Gate com HITL | ✅ | `hermes/src/permission_gate.rs` |
+| 9 | Live capsule lifecycle (PKG_CHANGED) | ✅ | `hermes/src/package_hub.rs` |
+| 10 | Cascading capability revoke | ✅ | `hermes/src/membrane.rs` |
+| 11 | Goal-aware scheduler | ✅ | `agent-core/src/lib.rs` |
+| 12 | Intent Bus canônico (33 intents) | ✅ | `hermes/src/intent_bus.rs` |
+| 13 | Glass Box inspect command | ✅ | `hermes/src/shell.rs` |
+| 14 | Syscalls consolidados 13→9 | ✅ | `neural-kernel/src/syscall.rs` +5 |
+| 15 | GEMM benchmark golden checksum | ✅ | `cortex/src/gemm_bench.rs` |
+| 16 | Quarantine Gate sanitization | ✅ | `hermes/src/quarantine.rs` |
+| 17 | WIT-typed ABI (aios.wit) | ✅ | `hermes/wit/aios.wit` |
+
+## 7. Pendências — Linha de Produção
+
+| # | Item | Inspiração | Status | Esforço | Ação |
+|---|------|------------|--------|---------|------|
+| 1 | **Ring-3 userspace** (ELF loader + ProcessManager + SYS_DEMAND_PAGE + TRY_ENTER_RING3=true) | Ferrum-OS | ✅ **implementado** | ☆☆☆☆☆ | `elf_loader.rs`, `process.rs`, `shell.rs run cmd` |
+| 2 | **Proof-gated mutations** (3-tier proof via ruvix-proof crate) | RuVix | ✅ **implementado** | ☆☆☆ | `k_nano/src/proof_gate.rs` |
+| 3 | **Kernel-resident HNSW** (via ruvix-vecgraph crate) | RuVix | ✅ **implementado** | ☆☆☆ | `k_nano/src/kernel_hnsw.rs` |
+| 4 | **SYS_MAP_FB real** (mmap BAR via syscall + page table walk) | — | ✅ **implementado** | ☆☆ | `neural-kernel/src/syscall.rs` |
+| 5 | **SYS_PIN_DMA real** (DMA isolada pós Ring-3) | — | 🔗 **vinculado** | ☆☆☆ | Implementar após Ring-3 estável + frame allocator pin/unpin |
+
+### 🔇 Removidos da linha de produção
+- ~~ARM64 target (VayuOS)~~ — 🔮 futuro distante
+- ~~AutoDream + Draug (Folkering)~~ — sem código fonte disponível
+- ~~Dual-LLM Quarantine Gate~~ — QuarantineGate pattern-based cobre 95%
+
+## 8. Plano Original (histórico)
 
 | Fase | O que | Inspiração | Entrega |
 |------|-------|-----------|---------|

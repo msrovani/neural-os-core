@@ -56,7 +56,7 @@ pub struct Particle {
     pub life: f32,
 }
 
-pub struct JarvisAvatar {
+pub struct JarbasAvatar {
     pub state: AvatarState,
     progress: f32,       // 0.0..1.0 animation progress
     particles: [Particle; 64],
@@ -68,9 +68,9 @@ pub struct JarvisAvatar {
     fb_bpp: usize,
 }
 
-impl JarvisAvatar {
+impl JarbasAvatar {
     pub fn new(gpu: &GpuDevice) -> Self {
-        JarvisAvatar {
+        JarbasAvatar {
             state: AvatarState::Idle,
             progress: 0.0,
             particles: [Particle { x: 0.0, y: 0.0, vx: 0.0, vy: 0.0, r: 0, g: 0, b: 0, a: 0, size: 0.0, life: 0.0 }; 64],

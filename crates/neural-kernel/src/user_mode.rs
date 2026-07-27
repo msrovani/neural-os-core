@@ -31,7 +31,7 @@ static mut SAVED_RSP: u64 = 0;
 
 /// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
 /// Cap deny path ainda roda; reativar quando clone CR3 mapear kernel text.
-pub const TRY_ENTER_RING3: bool = false;
+pub const TRY_ENTER_RING3: bool = true;
 
 #[inline]
 pub fn demo_active() -> bool {

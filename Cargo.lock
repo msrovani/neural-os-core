@@ -849,6 +849,10 @@ dependencies = [
  "lazy_static",
  "libm",
  "linked_list_allocator",
+ "ruvix-proof",
+ "ruvix-region",
+ "ruvix-types",
+ "ruvix-vecgraph",
  "skill-registry",
  "smoltcp",
  "spin",
@@ -1292,6 +1296,47 @@ name = "rustversion"
 version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+
+[[package]]
+name = "ruvix-cap"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e6e7b2e55d046c886b34bd590b13144414f360909e3f02b11ee2a48dd39faa5"
+dependencies = [
+ "ruvix-types",
+]
+
+[[package]]
+name = "ruvix-proof"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8757cd3b9bbeb7eb127213c5232a2920fefbf3973213aa7f9be31c40a4529f0"
+dependencies = [
+ "ruvix-cap",
+ "ruvix-types",
+]
+
+[[package]]
+name = "ruvix-region"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "ruvix-types",
+]
+
+[[package]]
+name = "ruvix-types"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b15d7336559f05b8fe88d312d5465134fc65a101439096d01596323b6cb1ffcd"
+
+[[package]]
+name = "ruvix-vecgraph"
+version = "0.1.0"
+dependencies = [
+ "ruvix-region",
+ "ruvix-types",
+]
 
 [[package]]
 name = "scopeguard"

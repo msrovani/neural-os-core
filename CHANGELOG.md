@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### SESSION_224: ADR-0076 Implementação Pesada — 23 entregas (2026-07-27)
+- **Skill Manifest FYY canônico (Onda 1):** struct expandida com RemoteConfig, Pricing, QualityIndicators, Interop (a2a/clawhub/skillnet), parser from_slice/from_json_str, 12 testes. 25 manifests agentes nativos A-001 a A-025.
+- **WASM Runtime expansion (Onda 2):** host functions 1→6 (aios, aios_net, aios_fs), 11 cap constants + check_cap() com cap check. WASI Preview 1 stubs conectados ao linker. WAT test suite com 18 testes. Telemetry ring lock-free SPSC 4096 slots + shell trace cmd.
+- **Segurança (Onda 3):** Membrane two-layer gate (bitmask + Membrane::check). Permission Gate com HITL (RiskLevel, Approve/Deny spin-wait). Quarantine Gate sanitization (pattern/length/repetition/structural + 8 testes). WIT-typed ABI (aios.wit).
+- **Live capsule lifecycle (Onda 3.6):** PKG_CHANGED events no EventBus para upgrade sem reboot.
+- **Cascading capability revoke (Onda 4.2):** CapRegistry com create/delegate/revoke em cascata.
+- **Goal-aware scheduler (Onda 4.3):** goal_urgency + novelty_score + coherence_partner. Sort por goal_urgency×2 + novelty_score. Rate-limiting exclui agentes com urgência >0. Novelty decay 1/tick.
+- **Intent Bus canônico (Onda 4.4):** Intent enum com 33 variantes, 10 categorias, describe().
+- **Glass Box inspect (Onda 4.5):** inspect command mostra estado vivo dos 25 agentes.
+- **Syscalls consolidados 13→9 (Onda 4.4.1-3):** removeu SEND_TCP + VRING_SETUP, unificou WRITE_RING+READ_RING→RING_OP. 6 arquivos atualizados.
+- **GEMM benchmark golden checksum (Onda 8.1):** ternário 64×64 FNV-1a (Folkering pattern).
+- **SYS_MAP_FB real:** page table walk no syscall dispatch, mapeia BAR físicas no AS atual.
+- **Proof-gated mutations (Item 3):** ruvix-proof crate integrado (ProofGate, 3-tier proof, 6 testes).
+- **Kernel HNSW (Item 4):** ruvix-vecgraph crate integrado (KernelHnsw, HNSW slab-allocated, patches no_std).
+- **Ring-3 Userspace (Item 1):** ELF loader (elf_loader.rs), ProcessManager (process.rs), SYS_DEMAND_PAGE real, TRY_ENTER_RING3=true, shell `run` cmd.
+- **Lições:** Fixers paralelos sobrescrevem lib.rs — verificar módulos após cada fork. ruvix-vecgraph precisa de patches no_std (f32::sqrt). Merge conflicts em rust-toolchain.toml e wasm_build.rs. `AgentTickResult::Continue` não existe — usar Pending.
+
 ### SESSION_223: Cross-OS Ecosystem + BEI + P01 Drift + TLS + ADR-0040 (2026-07-26)
 - **ADR-0076 Cross-OS Ecosystem (7 fases):** Skill Manifest (skill_manifest.rs: RiskLevel, SkillType, Permissions, SkillManifest, validate, to_json, office_spreadsheet factory). Membrane + CapGate (membrane.rs: Membrane struct, Operation, Capability, Verdict Allow/Deny/Escalate, for_legacy/for_wasm, glob FS, net allowlist, demo self-test). JAIL sandbox (jail.rs: Jail struct, Membrane::check, Merkle audit trail, check_file_read/write/net/capability, report, demo). WASI Preview 2 (wasi_host.rs: 15 wasi_snapshot_preview1 stubs — fd_write, fd_close, fd_seek, fd_prestat_get, environ_*, args_*, proc_exit, random_get, clock_time_get, path_open). MCP bridge (mcp_client.rs: search_marketplace/search_fyy/search_weftos → mcp_server.rs: SearchFyy/WeftOS/Skills MCP methods + search_skills/search_fyy_skills/search_weftos_skills). Ciclo aprendizado (cross_os/agent.rs: LearningState Learn→Propose→Auto, WorkflowLearner pattern_registered integration).
 - **ADR-0060 BEI (7 ondas completas):** Onda 3 Dynamic MoE (cortex::moe: try_birth/try_merge/try_split + stale_indices/high_entropy_indices + self_test). Onda 4 Memory L0-L7 (hermes::memory: MemoryLevel 8 tiers, MemoryTier trait, InMemoryTier, MemoryStore read/write/promote/tick_advance). Onda 7 Soul Mirror (jarbas::display: SoulMirrorState/SoulMirrorRenderer, Avatar8State 8 estados Idle/Listening/Processing/Speaking/Thinking/Dreaming/Alert/Updating). Lifecycle INDEX.md atualizado Accepted/completa.

@@ -63,7 +63,7 @@ impl SoulEngine {
     /// Cria uma personalidade padrão (Coach).
     pub fn default() -> Self {
         Self {
-            name: String::from("Jarvis"),
+            name: String::from("JARBAS"),
             tone: Tone::Coach,
             formality: 0.7,
             verbosity: 0.5,

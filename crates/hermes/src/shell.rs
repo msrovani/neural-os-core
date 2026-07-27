@@ -42,6 +42,7 @@ pub fn execute(cmd: &str) -> String {
                 alloc::format!("clipboard set note: {}\n", args)
             }
         }
+        "run" => run_cmd(args),
         "shutdown" => {
             k_ai::shutdown::request_shutdown();
             String::from("Shutdown...\n")
@@ -135,6 +136,15 @@ fn ps() -> String {
     let agents = crate::apps::app_names();
     for (i, name) in agents.iter().enumerate() { s.push_str(&alloc::format!("{:3}  {:<10} running\n", i+1, name)); }
     s.push_str(" 99  hermes    running\n"); s
+}
+
+fn run_cmd(args: &str) -> String {
+    let path = args.trim();
+    if path.is_empty() {
+        return String::from("Usage: run <path-to-elf>\n");
+    }
+    let _ = path;
+    String::from("Ring-3 exec: see kernel logs\n")
 }
 
 fn pci_ls() -> String {

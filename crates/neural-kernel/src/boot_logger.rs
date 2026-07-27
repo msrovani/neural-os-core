@@ -482,7 +482,7 @@ pub fn flush_bootlog_after_greeting(reason: &str) -> bool {
             k_nano::boot_ramlog::append(line);
         }
         k_nano::boot_ramlog::append(reason);
-        k_nano::boot_ramlog::append("[JARVIS] greet OK — BOOT.LOG so ramlog (sem soft-reboot)");
+        k_nano::boot_ramlog::append("[JARBAS] greet OK — BOOT.LOG so ramlog (sem soft-reboot)");
         let k = k_nano::boot_ramlog::last_ckpt();
         crate::display::fb::boot_ckpt(51, "BOOT.LOG skip reboot");
         let msg = alloc::format!(

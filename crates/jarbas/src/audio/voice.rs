@@ -1,4 +1,4 @@
-//! JarvisVoiceAgent — ouvidos (mic → VAD → wake-gated STT) e boca (TTS → speaker).
+//! JarbasVoiceAgent — ouvidos (mic → VAD → wake-gated STT) e boca (TTS → speaker).
 //! Sprint Sound: gate pós-WAKEWORD com timeout; MIC_CAPTURE_RING separado do playback.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
@@ -26,7 +26,7 @@ const VOICE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
-pub struct JarvisVoiceAgent {
+pub struct JarbasVoiceAgent {
     audio_in: Receiver,
     hermes_out: Receiver,
     wakeword_in: Receiver,
@@ -38,9 +38,9 @@ pub struct JarvisVoiceAgent {
     wake_window: u32,
 }
 
-impl JarvisVoiceAgent {
+impl JarbasVoiceAgent {
     pub fn new() -> Self {
-        JarvisVoiceAgent {
+        JarbasVoiceAgent {
             audio_in: k_nano::EVENT_BUS.subscribe(crate::audio::TOPIC_AUDIO_IN),
             hermes_out: k_nano::EVENT_BUS.subscribe("HERMES_RESPONSE"),
             wakeword_in: k_nano::EVENT_BUS.subscribe(crate::audio::TOPIC_WAKEWORD),
@@ -57,7 +57,7 @@ impl JarvisVoiceAgent {
     }
 }
 
-impl Agent for JarvisVoiceAgent {
+impl Agent for JarbasVoiceAgent {
     fn manifest(&self) -> &AgentManifest {
         &VOICE_MANIFEST
     }
@@ -173,14 +173,14 @@ impl Agent for JarvisVoiceAgent {
         // Boca: HERMES_RESPONSE → Piper neural-lite / formant → AUDIO_OUT
         while let Some(ev) = self.hermes_out.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
-            if text.is_empty() || text.starts_with("[JARVIS] Escutando") || text.starts_with("[JARVIS] 🎤")
+            if text.is_empty() || text.starts_with("[JARBAS] Escutando") || text.starts_with("[JARBAS] 🎤")
             {
                 continue;
             }
 
             k_nano::slog_jarbas!("Jarbas", "info", "TTS: \"{}\"", text);
             let clean = text
-                .trim_start_matches("[JARVIS] ")
+                .trim_start_matches("[JARBAS] ")
                 .trim_start_matches("JARVIS: ");
             let pcm = crate::audio::skills::synthesize_tts(clean);
 
