@@ -1,6 +1,6 @@
 # ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s225 — TEST (Limine Desktop)
-#   SESSION_225: Limine Migration + Higher-Half Fixes + Desktop Jarbas + Soft Power Off (2026-07-27)
+#   SESSION_225: Megasessão — Limine + Modelos IA + Desktop + WHPX (2026-07-27)
 #     Limine boot (uefi.img): kernel higher-half 0xffffffff80000000+, framebuffer @0xffff8000c0000000
 #     P6 raw_vec fix: TRY_ENTER_RING3=false + guard topo de demo_ring3() — subtração VA wrap isize::MAX
 #     e1000 #PF fix: PHYS_MEM_OFFSET.store() no início de kernel_boot() ANTES dos drivers
@@ -9,7 +9,15 @@
 #     Desktop Jarbas na tela do QEMU! Soft power off via botão Power → ACPI PM1a_CNT OK
 #     WHPX PIT skip: CPUID leaf 0x40000000 → skip PIT init (LAPIC only) — sem warning vector 0
 #     NeuralFS CRC fix: zero CRC field before computing em k_nano + hermes superblock.rs
+#     NeuralFS smoke tests removidos (alocavam 32MB+ e travavam o boot)
+#     TLS skip em sandbox (embedded-tls sem PKI/NTP sync)
 #     NTP silenciado em sandbox, skill body size 64KB→512KB, Power menu 3 opções (Designer)
+#     Audio: dsound ativo por padrão no run-qemu-whpx.ps1
+#     Modelos treinados na GTX 1050: HW Expert v3 (loss 0.3407, 345KB), STT (217KB)
+#     Modelos convertidos: BitNet 2B (577MB), Piper TTS PT-BR (59.9MB), E5 Multilingual (28MB),
+#       BGE-m3 (135MB, 1024d), BPE tokenizer (331KB)
+#     Datasets HF: SDIO HWIDs (16K), PCI+USB IDs (43K), firmware metadata, regulatory.db
+#     SDIO indices: 73 .bin files (21.8MB) em models/SDIO/
 #     Legados removidos: build_esp.ps1, limine.cfg, .gitignore esp/
 #     cargo check --release: 0 erros
 #   SESSION_224: ADR-0076 Implementação Pesada — 23 entregas (2026-07-27)
