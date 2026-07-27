@@ -217,6 +217,7 @@ mod k_ia_dma;
 mod cortex_mmap;
 mod demand_page;
 mod user_mode;
+mod isolation_ring;
 mod virtio_vring;
 mod gguf_mmap;
 
@@ -2439,6 +2440,9 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P6 Ring3 WARN (non-fatal)");
         }
     }
+
+    // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0059 F6) — gated
+    crate::isolation_ring::init_connectors();
 
     // P7 (ADR-0041): demand-paging via #PF (lazy Cortex weights) — non-fatal
     match crate::cortex_mmap::demo_demand_paging() {
