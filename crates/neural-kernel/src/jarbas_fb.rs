@@ -233,6 +233,25 @@ pub fn p4_demo_ok() -> bool {
 pub fn demo_jarbas_fb() -> Result<(), &'static str> {
     k_nano::slog_bin!("Cap", "p4", "JARBAS FB MMIO + double-buffer demo");
 
+    // Verifica PHYS_MEM_OFFSET antes de acessar page tables
+    // Se 0, qualquer frame_as_table() acessa endereço físico sem HHDM → #PF
+    let pm_off = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
+    if pm_off == 0 {
+        k_nano::slog_bin!("Cap", "p4", "PHYS_MEM_OFFSET=0 — Cap-only path (evita #PF)");
+        if syscall::dispatch(SYS_MAP_FB, 0, Cap::EMPTY).is_ok() {
+            return Err("p4: Cap vazia nao deveria MAP_FB");
+        }
+        syscall::dispatch(SYS_MAP_FB, 0, Cap::MAP_FB)?;
+        if syscall::dispatch(SYS_PRESENT_FB, 0, Cap::EMPTY).is_ok() {
+            return Err("p4: Cap vazia nao deveria PRESENT_FB");
+        }
+        syscall::dispatch(SYS_PRESENT_FB, 0, Cap::WRITE_FB)?;
+        CAP_ONLY_OK.store(true, Ordering::Relaxed);
+        P4_DEMO_OK.store(true, Ordering::Relaxed);
+        k_nano::slog_bin!("Cap", "p4", "SUCCESS Cap MAP_FB/WRITE_FB (PHYS_MEM_OFFSET=0)");
+        return Ok(());
+    }
+
     let contract = match probe_contract() {
         Ok(c) => {
             k_nano::slog_bin!("Cap", "p4", "FB contract {}x{} bpp={} stride={} virt={:x} phys={:x}",

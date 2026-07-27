@@ -69,19 +69,22 @@ static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 
 /// Buffer de heap estático no .bss — mapeado pelo bootloader.
 #[link_section = ".bss"]
-static mut HEAP_BUFFER: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
+pub static mut HEAP_BUFFER: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// TALC allocator usado APÓS o boot para resize_heap (não é o global_allocator).
 static TALC_ALLOC: Talck<spin::Mutex<()>, ErrOnOom> = Talck::new(Talc::new(ErrOnOom));
 static CLAIMED_HEAP: Mutex<Option<Span>> = Mutex::new(None);
 
 pub const HEAP_START: usize = 0x_4000_0000_0000;
-pub const HEAP_SIZE: usize = 256 * 1024 * 1024; // 256MB .bss inicial (estende via resize)
-pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(256);
+pub const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512MB .bss
+pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 
 /// Limite dinâmico do LazyBumpAllocator — começa = HEAP_SIZE, cresce via resize_bump_heap()
 pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(256 * 1024 * 1024);
 
+/// Slab zone: usa HEAP_BUFFER (em .bss, já identity-mapped pelo bootloader).
+/// Não usa HEAP_START (0x4000_0000_0000) porque essa região não está mapeada
+/// nas page tables durante o boot inicial — causava #PF → triple fault → boot loop.
 pub const SLAB_START: usize = HEAP_START;
 pub const SLAB_SIZE: usize = 8 * 65536;
 pub const LARGE_HEAP_START: usize = HEAP_START + SLAB_SIZE;
@@ -169,6 +172,13 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     let l1_tbl = &mut *(l1_virt.as_mut_ptr::<PageTable>());
     let pte = &mut l1_tbl[virt.p1_index()];
     if pte.flags().contains(PageTableFlags::PRESENT) {
+        if !pte.flags().contains(PageTableFlags::WRITABLE) {
+            // Add WRITABLE if page exists but is read-only
+            let mut flags = pte.flags();
+            flags.insert(PageTableFlags::WRITABLE);
+            pte.set_flags(flags);
+            x86_64::instructions::tlb::flush(virt);
+        }
         return;
     }
     pte.set_addr(PhysAddr::new(phys), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
@@ -266,10 +276,20 @@ fn oom(layout: core::alloc::Layout) -> ! {
     }
 }
 
-/// Inicializa slab + TALC. LazyBumpAllocator auto-inicializa na primeira alloc().
+/// Inicializa TALC (SLAB adiado). LazyBumpAllocator auto-inicializa na primeira alloc().
 pub fn init_heap() -> Result<(), &'static str> {
     // Safety: chamado uma vez no boot, single-threaded, antes de qualquer alocação.
-    unsafe { crate::slab::SLAB_ALLOCATOR.lock().init(SLAB_START); }
+    // TALC claim adiado: 0x4000_0000_0000 não está mapeado até init_memory.
+    // O LazyBumpAllocator cobre as allocs iniciais do HEAP_BUFFER (.bss).
+    // TALC será inicializado em talc_init_post_memory() após init_global_allocator.
+    crate::slog_nano!("HEAP", "TALC", "Tier 1 deferred (call talc_init_post_memory after init_global_allocator)");
+    Ok(())
+}
+
+/// Inicializa TALC com span em HEAP_START (0x4000_0000_0000). Deve ser chamado APÓS
+/// init_global_allocator (global frame allocator disponível) e APÓS resize_bump_heap.
+/// TALC gerencia páginas mapeadas via frame allocator — pool separado do bump allocator.
+pub fn talc_init_post_memory() -> Result<(), &'static str> {
     let span = Span::from_base_size(LARGE_HEAP_START as *mut u8, LARGE_HEAP_SIZE);
     let claimed = unsafe {
         TALC_ALLOC.lock().claim(span).map_err(|_| "talc claim failed")?

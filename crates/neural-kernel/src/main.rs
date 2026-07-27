@@ -1312,11 +1312,9 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
 pub(crate) fn kernel_boot(
     handoff: &impl k_nano::boot_handoff::BootHandoff,
 ) -> ! {
-    // PASSO 0 ABSOLUTO: init_heap() sem parâmetros — heap estática no .bss já mapeada pelo Limine
-    allocator::init_heap().expect("heap init failed");
-    crate::boot_logger::mark_heap_ready();
-    // Tenta estender heap (pode falhar silenciosamente se frame allocator não estiver pronto)
-    allocator::resize_bump_heap(512);
+    // HEAP ADIADO: init_heap precisa de PHYS_MEM_OFFSET (setado por init_memory) para que
+    // try_fault_in_heap mapeie páginas do TALC (0x4000_0000_0000) sob demanda.
+    // O LazyBumpAllocator auto-inicia nas primeiras alloc() usando HEAP_BUFFER em .bss.
 
     let pm_offset = handoff.phys_mem_offset();
     // ADR-0055: RSDP via handoff (cada entry define o seu antes ou via trait)
@@ -1375,7 +1373,12 @@ pub(crate) fn kernel_boot(
 
         // ponytail: stack boundary fix deferred — needs proper P3/P2 page table from end-of-RAM frames
 
-        // init_heap já foi chamado no início do kernel_boot — aqui só prossegue com frame allocator
+        // init_heap AGORA — TALC usa HEAP_BUFFER+SLAB_SIZE como span (.bss, páginas iniciais mapeadas)
+        // Slab init removido (escreve em .bss identity não-mapeado).
+        // TALC só registra o span (não escreve nele) — o LazyBumpAllocator cobre as allocs iniciais.
+        allocator::init_heap().expect("heap init failed");
+        crate::boot_logger::mark_heap_ready();
+        allocator::resize_bump_heap(512);
         k_nano::slog_bin!("Boot", "dbg", "heap init OK (Tier 1 talc)");
         crate::display::fb::boot_ckpt(11, "heap OK");
 
@@ -1518,6 +1521,10 @@ pub(crate) fn kernel_boot(
     // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
 
     memory::init_global_allocator(frame_allocator);
+    // Extende bump allocator — agora GLOBAL_ALLOCATOR está disponível (frame allocator funcional)
+    allocator::resize_bump_heap(2048);
+    // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
+    allocator::talc_init_post_memory().expect("talc post-init failed");
 
     // ADR-0060: Initialize BEI (BitNet Ecosystem Intelligence) — 8 waves
     let _bei_state = bei_init::init_bei();
