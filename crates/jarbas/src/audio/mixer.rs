@@ -57,7 +57,7 @@ impl Agent for AudioMixerAgent {
         let mut buf = [0i16; 1024];
         let n = self.out_ring.pop(&mut buf);
         if n > 0 {
-            crate::audio::hda::write_hda_playback(&buf[..n]);
+            k_hal::audio::hda::write_hda_playback(&buf[..n]);
             crate::audio::usb::write_uac_playback(&buf[..n]);
         }
         AgentTickResult::Pending

@@ -2546,7 +2546,7 @@ pub(crate) fn kernel_boot(
 
     registry.register(Box::new(agents::UsbDriverAgent));
 
-    registry.register(Box::new(audio::hda::HdaAudioAgent::new()));
+    registry.register(Box::new(k_hal::audio::hda::HdaAudioAgent::new()));
 
     registry.register(Box::new(audio::usb::UsbAudioAgent::new()));
 

@@ -63,7 +63,7 @@ impl Agent for JarbasVoiceAgent {
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        crate::audio::hda::poll_hda_audio();
+        k_hal::audio::hda::poll_hda_audio();
         crate::audio::usb::poll_uac_audio();
 
         if self.wake_window > 0 {

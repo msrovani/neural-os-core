@@ -21,7 +21,6 @@ pub mod settings;
 pub mod mixer;
 pub mod jarvis;
 pub mod wakeword;
-pub mod hda;
 pub mod usb;
 pub mod pipeline;
 pub mod token;

@@ -79,7 +79,13 @@ unsafe fn init_hda() -> bool {
     let devices = pci::scan_pci();
     for dev in &devices {
         if dev.class == 0x04 && dev.subclass == 0x03 {
-            let bar = (dev.bar0 as u64 & !0xF) + k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+            let pm_off = k_nano::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+            if pm_off == 0 {
+                k_nano::slog_hal!("HDA", "warn", "PHYS_MEM_OFFSET=0 — HDA MMIO via BAR0 físico sem HHDM — usando fallback formant");
+                HDA_INIT_DONE.store(true, Ordering::Relaxed);
+                return true; // fallback formant synth funciona sem HDA
+            }
+            let bar = (dev.bar0 as u64 & !0xF) + pm_off;
             k_nano::slog_hal!("HDA", "info", "Intel HDA: {:04x}:{:04x} BAR0={:#x}", dev.vendor_id, dev.device_id, dev.bar0);
 
             w32(bar, HDA_GCTL, r32(bar, HDA_GCTL) | HDA_GCTL_RESET);
