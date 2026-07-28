@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### SESSION_228: Hardware Boot + Mouse Agent PS/2 Timeout Fix (2026-07-28)
+- **Hardware boot em notebook real**: pendrive unified (GPT/ESP + dados FAT32) bootou
+  Limine UEFI até interface Jarbas. Primeiro boot HW real da história do projeto.
+- **fix(mouse): `ps2_check_exists()`** — detecta controlador 8042 antes de init PS/2.
+  Em notebook moderno sem 8042, `enable_ps2_mouse()` fazia 100K-loop timeouts em
+  cada operação de porta 0x64/0x60, tornando o sistema lentíssimo e sem mouse.
+  Agora: self-test 0xAA→0x55 com timeout curto 5K loops. Fallback para USB HID.
+- **fix(boot): `mk_esp_fat.py` GPT** — migrado de MBR-only para GPT completo
+  (protective MBR 0xEE + EFI PART header + partition entries + backup GPT).
+  Limine bootloader exige GPT/ESP padrão UEFI. `build_usb_unified.py` depende
+  de GPT no `uefi.img` para criar pendrive bootável unificado (`usb_hw.img`).
+- **Decks (diário de bordo)**: identificados challenges do bare-metal real:
+  sem 8042, sem ATA PIO (USB boot), trackpad I2C-HID sem driver, xHCI depende
+  de enumeração bem-sucedida. SMP com retry 3×250ms adequado.
+
 ### SESSION_227: ADR-0079 Neural AutoInstaller — M0 a M4 (2026-07-27)
 - **ADR-0079 Neural AutoInstaller**: Instalador inteligente pendrive→HD/SSD/NVMe com IA.
   Detecta HW alvo, copia só o que a máquina precisa, cria GPT dual (ESP+NeuralFS).

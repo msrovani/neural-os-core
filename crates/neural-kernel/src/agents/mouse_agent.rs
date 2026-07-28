@@ -23,6 +23,39 @@ const MOUSE_MANIFEST: AgentManifest = AgentManifest {
     persist: true,
 };
 
+/// Verifica se o controlador 8042 existe lendo status e tentando self-test (0xAA).
+/// Em hardware moderno (notebook sem PS/2) a porta 0x64 flutua ou retorna 0xFF,
+/// e o self-test timeouta — evitamos 100K-loops de espera em cada operação.
+fn ps2_check_exists() -> bool {
+    unsafe {
+        // Leitura rápida: se status retornar 0xFF (barramento flutuante sem device),
+        // não há 8042. Real 8042 sempre tem bits 0/1 variando.
+        let st: u8 = Port::<u8>::new(0x64).read();
+        if st == 0xFF {
+            k_nano::slog_bin!("MOUSE", "info", "8042 status=0xFF — ausente");
+            return false;
+        }
+        // Self-test: 0xAA → 0x55 se 8042 presente
+        // Timer curto (5000 loops vs 100000) pra não travar boot em HW sem 8042.
+        for _ in 0..3 {
+            Port::<u8>::new(0x64).write(0xAA);
+        }
+        for _ in 0..5000 {
+            let s: u8 = Port::<u8>::new(0x64).read();
+            if s & 0x01 != 0 {
+                let d: u8 = Port::<u8>::new(0x60).read();
+                let ok = d == 0x55;
+                k_nano::slog_bin!("MOUSE", "info", "8042 self-test=0x{:02x} exist={}", d, ok);
+                // Re-enable keyboard (self-test desativa interface)
+                Port::<u8>::new(0x64).write(0xAE);
+                return ok;
+            }
+        }
+        k_nano::slog_bin!("MOUSE", "info", "8042 self-test TIMEOUT — ausente");
+        false
+    }
+}
+
 /// Espera buffer de entrada do 8042 livre (bit1=0), com timeout.
 fn ps2_wait_write() {
     for _ in 0..100_000 {
@@ -55,6 +88,7 @@ fn ps2_drain() {
 }
 
 /// Init PS/2 aux correto: reset + enable IRQ12 + stream (0xD4/0xF4).
+/// Só deve ser chamada se `ps2_check_exists()` retornar true.
 fn enable_ps2_mouse() {
     unsafe {
         ps2_drain();
@@ -189,7 +223,11 @@ impl Agent for MouseAgent {
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         if !self.inited {
-            enable_ps2_mouse();
+            if ps2_check_exists() {
+                enable_ps2_mouse();
+            } else {
+                k_nano::slog_bin!("MOUSE", "info", "PS/2 ausente — só USB HID mouse");
+            }
             let (mw, mh) = screen_max();
             self.x = mw / 2;
             self.y = mh / 2;

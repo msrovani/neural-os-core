@@ -1,4 +1,16 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s228 — TEST (HW Boot + Fixes)
+#   SESSION_228: Hardware Boot Notebook Real + ESP GPT + Mouse Fix (2026-07-28)
+#     Pendrive unified bootou Limine UEFI → interface Jarbas no notebook real!
+#     mk_esp_fat.py: MBR-only → GPT (protective 0xEE + EFI PART + backup)
+#     mouse_agent.rs: ps2_check_exists() — detecta 8042 antes de init PS/2
+#       Em HW sem 8042, self-test 0xAA→0x55 timeout curto (5K loops vs 100K)
+#     SMP: 250ms×3 retry adequado para bare-metal
+#     BOOT.LOG: persist_now já varre USB→ATA→AHCI→NVMe
+#     Desafios abertos: trackpad I2C-HID sem driver, ATA ausente em USB boot
+#     cargo check --release: 0 erros
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s227 — TEST (AutoInstaller)
 #   SESSION_227: ADR-0079 Neural AutoInstaller M0-M4 (2026-07-27)
 #     SysInstaller reativado (pub mod sys_installer) — install(source,target,kernel_elf)
