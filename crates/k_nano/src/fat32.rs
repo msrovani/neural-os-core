@@ -678,7 +678,7 @@ impl<'a> Fat32Writer<'a> {
     /// Varre a FAT por N clusters livres (le FAT por setor — nao 1 I/O por entrada).
     /// Budget: no maximo MAX_FAT_SCAN_SECTORS para nao travar o boot em PIO (spf pode ser 16K+).
     unsafe fn find_free_clusters(&self, count: u32) -> Option<Vec<u32>> {
-        const MAX_FAT_SCAN_SECTORS: u32 = 512;
+        const MAX_FAT_SCAN_SECTORS: u32 = 65535;
         let bps = self.reader.bytes_per_sector as u32;
         let fat_sectors = self.reader.sectors_per_fat32.min(MAX_FAT_SCAN_SECTORS);
         let entries_per_sector = bps / 4;

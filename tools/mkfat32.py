@@ -101,9 +101,10 @@ def create_fat32(path, size_mb, label):
         data_start = reserved + fat_count * fat_sectors
         data_sectors = part_sectors - data_start
         total_clusters = data_sectors // spc
-    # Create file
+    # Create file (sparse: seek to last byte, avoids 5GB+ Python memory allocation)
     with open(path, "wb") as f:
-        f.write(b'\x00' * size)
+        f.seek(size - 1)
+        f.write(b'\x00')
     # Write MBR
     mbr = bytearray(512)
     mbr[0x1BE] = 0x00; mbr[0x1BF] = 0x01; mbr[0x1C0] = 0x01; mbr[0x1C1] = 0x00
