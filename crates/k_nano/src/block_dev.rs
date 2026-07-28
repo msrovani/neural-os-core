@@ -13,6 +13,10 @@ pub trait BlockDevice {
     fn name(&self) -> &str {
         "blk"
     }
+    /// Flush write cache (ex: SCSI SYNCHRONIZE_CACHE). No-op default.
+    fn sync_cache(&mut self) -> bool {
+        true
+    }
 }
 
 impl BlockDevice for AtaDriver {
@@ -103,6 +107,9 @@ impl BlockDevice for crate::usb_msc::UsbMassStorage {
             }
         }
         true
+    }
+    fn sync_cache(&mut self) -> bool {
+        unsafe { self.scsi_sync_cache() }
     }
     fn total_sectors(&self) -> u64 {
         self.max_lba.saturating_add(1)

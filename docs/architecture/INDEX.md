@@ -92,6 +92,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0075-emagrecer-neural-kernel.md` | Proposed | `completa` | #467/#511 | **Emagrecer neural-kernel:** E0-E4 implementados SESSION_217; USB_MSC/virtio_net→k_nano, BootHandoff trait, GPU/WiFi wire, audio→jarbas. Bin ~16.890 LOC alvo atingido |
 | `0076-cross-os-ecosystem.md` | Proposed | `fazendo` | #512+ | **Cross-OS Ecosystem:** ADR-0076 + CrossOsAgent + padrões de FYY/Wetware/WeftOS |
 | `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426 | **Ring3 Isolation Ring (ex-ADR-0060):** seams + boot wire; porto seguro (triple-fault blocker). Conectores no código, ring gated. Sessão debug dedicada |
+| `0078-multi-slot-multimodal-learner.md` | Proposed | `por_fazer` | GGUF→ternário, 6 slots, visão, learner | **Multi-slot multimodal:** conversão GGUF→ternário com threshold adaptativo, 6 slots reais (Active/Fast/Pro/Coder/HwExp/Learner), visão SigLIP, aprendizado contínuo on-device. Cabe em 8GB RAM total ~5.8GB. Fases 1-4 sequenciais |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)

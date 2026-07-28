@@ -147,6 +147,10 @@ pub fn run_i32_2(
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
+    // ponytail: verificar integridade basica antes de chamar parser (evita #PF em wasmparser)
+    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
+        return Err("wasm: bytes inválidos (sem magic)");
+    }
     let module = Module::new(&engine, wasm).map_err(|_| "wasm: módulo inválido")?;
     let mut store = Store::new(&engine, HostState::new(caps));
     store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;
@@ -223,6 +227,9 @@ pub fn run_wasm(
     let mut config = Config::default();
     config.consume_fuel(true);
     let engine = Engine::new(&config);
+    if wasm.len() < 8 || wasm[0..4] != [0x00, 0x61, 0x73, 0x6D] {
+        return Err("wasm: bytes inválidos (sem magic)");
+    }
     let module = Module::new(&engine, wasm).map_err(|_| "wasm: módulo inválido")?;
     let mut store = Store::new(&engine, HostState::new(caps));
     store.set_fuel(DEFAULT_FUEL).map_err(|_| "wasm: set_fuel")?;

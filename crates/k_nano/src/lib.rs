@@ -44,6 +44,7 @@ pub mod fat32;
 pub mod fs;
 pub mod globals;
 pub use globals::ATA_DRIVER;
+pub use globals::AHCI_DRIVER;
 pub use globals::EVENT_BUS;
 pub use globals::LATENT_BUS;
 pub use globals::SKILL_REGISTRY;

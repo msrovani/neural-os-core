@@ -220,7 +220,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
     false
 }
 
-fn build_session_bytes() -> Vec<u8> {
+pub fn build_session_bytes() -> Vec<u8> {
     let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     let ver = env!("CARGO_PKG_VERSION");
     let mut content = alloc::format!(
@@ -246,16 +246,35 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
     let ok = if let Some(d) = dev {
         unsafe { overwrite_boot_log(d, &content) }
     } else {
+        // Tenta USB-MSC → ATA PIO → AHCI SATA → NVMe — nesta ordem.
+        // USB-MSC tem sync_cache após cada write.
         let mut ok = false;
         if let Some(mut g) = crate::globals::USB_MSC.try_lock() {
             if let Some(ref mut msc) = *g {
                 ok = unsafe { overwrite_boot_log(msc, &content) };
+                if ok {
+                    msc.sync_cache();
+                }
             }
         }
         if !ok {
             if let Some(mut g) = crate::globals::ATA_DRIVER.try_lock() {
                 if let Some(ref mut ata) = *g {
                     ok = unsafe { overwrite_boot_log(ata, &content) };
+                }
+            }
+        }
+        if !ok {
+            if let Some(mut g) = crate::globals::AHCI_DRIVER.try_lock() {
+                if let Some(ref mut ahci) = *g {
+                    ok = unsafe { overwrite_boot_log(ahci, &content) };
+                }
+            }
+        }
+        if !ok {
+            if let Some(mut g) = crate::disk_agent::nvme::NVME_DRIVER.try_lock() {
+                if let Some(ref mut nvme) = *g {
+                    ok = unsafe { overwrite_boot_log(nvme, &content) };
                 }
             }
         }
@@ -335,15 +354,18 @@ pub fn log_quiet(msg: &str) {
     }
 }
 
-/// Flush forçado (checkpoints críticos).
-pub fn flush() {
+/// Flush forçado (checkpoints críticos). Retorna true se gravou em FAT.
+pub fn flush() -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
         let ok = persist_now(None);
         crate::slog_nano!("LOG", "info", "flush BOOT.LOG ok={} bytes~{}",
             ok,
             build_session_bytes().len());
+        return ok;
     }
+    #[cfg(not(feature = "fat-boot-log"))]
+    { false }
 }
 
 /// Anexa texto sem `serial_println` (evita recursão no path sem-COM do serial.rs).

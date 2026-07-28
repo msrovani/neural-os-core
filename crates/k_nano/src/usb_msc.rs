@@ -12,6 +12,7 @@ const SCSI_INQUIRY: u8 = 0x12;
 const SCSI_READ_CAPACITY: u8 = 0x25;
 const SCSI_TEST_UNIT_READY: u8 = 0x00;
 const SCSI_REQUEST_SENSE: u8 = 0x03;
+const SCSI_SYNCHRONIZE_CACHE: u8 = 0x35;
 
 pub struct UsbMassStorage {
     slot: u8,
@@ -213,6 +214,19 @@ impl UsbMassStorage {
         cmd[0] = SCSI_REQUEST_SENSE;
         cmd[4] = 18;
         self.bot_transfer(&cmd, true, &mut buf)
+    }
+
+    /// SCSI SYNCHRONIZE_CACHE (0x35) — flushes device write cache to media.
+    /// Essential after BOOT.LOG writes so data survives power loss.
+    pub unsafe fn scsi_sync_cache(&mut self) -> bool {
+        let mut cmd = [0u8; 16];
+        cmd[0] = SCSI_SYNCHRONIZE_CACHE;
+        cmd[1] = 0; // IMMED=0 (return after cache flush completes)
+        cmd[2..6].copy_from_slice(&0u32.to_be_bytes()); // LBA=0 (entire device)
+        cmd[6] = 0; // reserved
+        cmd[7..10].copy_from_slice(&0u32.to_be_bytes()); // count=0 (all LBAs)
+        let mut empty = [0u8; 0];
+        self.bot_transfer(&cmd, false, &mut empty)
     }
 
     unsafe fn alloc_dma(size: usize) -> Option<u64> {

@@ -258,9 +258,8 @@ pub const LOG_SECTOR: u32 = 2048;
 /// ATA driver global — canônico em k_nano (Onda 4: sem mirror duplo).
 pub use k_nano::ATA_DRIVER;
 
-/// Unidade de armazenamento primária (AHCI ou ATA) para FAT32
-
-pub static AHCI_DRIVER: spin::Mutex<Option<crate::ahci::AhciDriver>> = spin::Mutex::new(None);
+/// Unidade de armazenamento primária (AHCI ou ATA) para FAT32 — canônico em k_nano
+pub use k_nano::AHCI_DRIVER;
 
 /// USB Mass Storage — canônico em k_nano
 pub use k_nano::globals::USB_MSC;
