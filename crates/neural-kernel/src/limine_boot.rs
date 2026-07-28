@@ -115,12 +115,10 @@ unsafe extern "C" fn limine_entry() -> ! {
             let fbp = *fb_resp.framebuffers;
             if !fbp.is_null() {
                 let f = &*fbp;
-                let fb_phys = f.address as u64;
-                let hhdm_offset = k_nano::memory::PHYS_MEM_OFFSET
-                    .load(core::sync::atomic::Ordering::Relaxed);
-                let fb_virt = fb_phys + hhdm_offset;
+                // Limine rev 2+: framebuffer address is ALREADY HHDM-virtual
+                // Do NOT add PHYS_MEM_OFFSET again — that would double-offset.
                 jarbas_crate::display::fb::probe_raw_framebuffer(
-                    fb_virt,
+                    f.address as u64,
                     f.width as u32,
                     f.height as u32,
                     f.pitch as u32,
