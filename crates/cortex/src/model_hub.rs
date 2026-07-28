@@ -11,48 +11,54 @@ use crate::cortex::Model;
 #[repr(u8)]
 pub enum ModelSlot {
     Active = 0,
-    GeneratorFast = 1,
+    Vision = 1,
     GeneratorPro = 2,
-    TinyStories = 3,
+    Reranker = 3,
     RustCoder = 4,
     HwExpert = 5,
+    Learner = 6,
+    Agent = 7,
 }
 
 impl ModelSlot {
     pub fn name(self) -> &'static str {
         match self {
             Self::Active => "active",
-            Self::GeneratorFast => "generator_fast",
+            Self::Vision => "vision",
             Self::GeneratorPro => "generator_pro",
-            Self::TinyStories => "tinystories",
+            Self::Reranker => "reranker",
             Self::RustCoder => "rust_coder",
             Self::HwExpert => "hw_identify",
+            Self::Learner => "learner",
+            Self::Agent => "agent",
         }
     }
 
     pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "active" | "current" | "generator" => Some(Self::Active),
-            "generator_fast" | "fast" | "850m" | "bitnet850" | "1p3" | "1.3b" | "xl" => {
-                Some(Self::GeneratorFast)
+            "vision" | "siglip" | "vit" | "encoder" => {
+                Some(Self::Vision)
             }
             "generator_pro" | "pro" | "3b" | "bitnet3b" => Some(Self::GeneratorPro),
-            "tinystories" | "tiny" | "smoke" => Some(Self::TinyStories),
+            "reranker" | "rerank" | "cross_encoder" | "bge_reranker" => Some(Self::Reranker),
             "rust_coder" | "rustcoder" => Some(Self::RustCoder),
             "hw_identify" | "hwexpert" => Some(Self::HwExpert),
+            "learner" | "qwen05" | "qwen0.5b" => Some(Self::Learner),
+            "agent" | "qwen3b" | "agentic" | "orchestrator" => Some(Self::Agent),
             _ => None,
         }
     }
 }
 
-const N_SLOTS: usize = 6;
+const N_SLOTS: usize = 8;
 
 struct HubInner {
     slots: [Option<Box<dyn Model>>; N_SLOTS],
 }
 
 static HUB: Mutex<HubInner> = Mutex::new(HubInner {
-    slots: [None, None, None, None, None, None],
+    slots: [None, None, None, None, None, None, None, None],
 });
 static SLOT_MASK: AtomicU8 = AtomicU8::new(0);
 
@@ -122,15 +128,6 @@ pub fn is_complex_conversation(prompt: &str) -> bool {
         || (prompt.len() > 80 && (contains_ci(prompt, "como ") || contains_ci(prompt, "how ")))
 }
 
-pub fn wants_tinystories(prompt: &str) -> bool {
-    contains_ci(prompt, "tinystories")
-        || contains_ci(prompt, "[smoke]")
-        || contains_ci(prompt, "smoke test")
-        || contains_ci(prompt, "storytime")
-        || contains_ci(prompt, "once upon")
-        || contains_ci(prompt, "conta uma historia")
-}
-
 fn contains_ci(hay: &str, needle: &str) -> bool {
     let h = hay.as_bytes();
     let n = needle.as_bytes();
@@ -151,7 +148,7 @@ fn contains_ci(hay: &str, needle: &str) -> bool {
 fn hub_has_blob(slot: ModelSlot) -> bool {
     matches!(
         slot,
-        ModelSlot::GeneratorFast | ModelSlot::GeneratorPro | ModelSlot::TinyStories
+        ModelSlot::Vision | ModelSlot::GeneratorPro | ModelSlot::Reranker
     ) && HUB.lock().slots[idx(slot)].is_some()
 }
 
@@ -162,8 +159,8 @@ fn fit_ok(slot: ModelSlot) -> bool {
 fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
     let order = [
         ModelSlot::GeneratorPro,
-        ModelSlot::GeneratorFast,
-        ModelSlot::TinyStories,
+        ModelSlot::Vision,
+        ModelSlot::Reranker,
         ModelSlot::Active,
     ];
     for s in order {
@@ -191,8 +188,8 @@ fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
         "escalate slot={} reason=too_tight (no Good+ fallback)",
         preferred.name()
     );
-    if hub_has_blob(ModelSlot::GeneratorFast) {
-        ModelSlot::GeneratorFast
+    if hub_has_blob(ModelSlot::Vision) {
+        ModelSlot::Vision
     } else {
         ModelSlot::Active
     }
@@ -207,9 +204,6 @@ fn maybe_fit(slot: ModelSlot) -> ModelSlot {
 }
 
 pub fn select_generator_slot(prompt: &str) -> ModelSlot {
-    if wants_tinystories(prompt) && hub_has_blob(ModelSlot::TinyStories) {
-        return maybe_fit(ModelSlot::TinyStories);
-    }
     // Complexo: blob Pro separado → Pro; senão Active (2B/3B no CURRENT).
     if is_complex_conversation(prompt) {
         if hub_has_blob(ModelSlot::GeneratorPro) {
@@ -222,14 +216,12 @@ pub fn select_generator_slot(prompt: &str) -> ModelSlot {
     if slot_loaded(ModelSlot::Active) {
         return maybe_fit(ModelSlot::Active);
     }
-    if hub_has_blob(ModelSlot::GeneratorFast) {
-        return maybe_fit(ModelSlot::GeneratorFast);
-    }
+    // Vision encoder não é gerador de texto — não entra no select_generator
     if hub_has_blob(ModelSlot::GeneratorPro) {
         return maybe_fit(ModelSlot::GeneratorPro);
     }
-    if hub_has_blob(ModelSlot::TinyStories) {
-        return maybe_fit(ModelSlot::TinyStories);
+    if hub_has_blob(ModelSlot::Reranker) {
+        return maybe_fit(ModelSlot::Reranker);
     }
     ModelSlot::Active
 }
@@ -238,11 +230,13 @@ pub fn hub_status() -> String {
     let mut s = String::from("ModelHub:");
     for slot in [
         ModelSlot::Active,
-        ModelSlot::GeneratorFast,
+        ModelSlot::Vision,
         ModelSlot::GeneratorPro,
-        ModelSlot::TinyStories,
+        ModelSlot::Reranker,
         ModelSlot::RustCoder,
         ModelSlot::HwExpert,
+        ModelSlot::Learner,
+        ModelSlot::Agent,
     ] {
         s.push(' ');
         s.push_str(slot.name());
@@ -255,9 +249,11 @@ pub fn hub_status() -> String {
 pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
     const MB: usize = 1024 * 1024;
     if len < 20 * MB {
-        ModelSlot::TinyStories
+        ModelSlot::Reranker
+    } else if len < 200 * MB {
+        ModelSlot::Learner
     } else if len < 450 * MB {
-        ModelSlot::GeneratorFast
+        ModelSlot::Vision
     } else {
         ModelSlot::GeneratorPro
     }
@@ -266,18 +262,18 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
 /// FAT 8.3 candidatos por slot (ordem de preferência).
 pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
     match slot {
-        ModelSlot::TinyStories => &["TINYSTOR.BIN", "TINY.BIN", "STORIES.BIN"],
-        ModelSlot::GeneratorFast => &[
-            "BITNET13.BIN",
-            "BITN13.BIN",
-            "BITNET850.BIN",
-            "BITN850.BIN",
-            "MICRO.BIN",
-            "MICRO.BITNET",
+        ModelSlot::Reranker => &["RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
+        ModelSlot::Vision => &["VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
+        ModelSlot::GeneratorPro => &[
+            "BITNET3B.BIN",
+            "BITN3B.BIN",
+            "LLAMA8B.BIN",
+            "BITNET2B.BIN",
         ],
-        ModelSlot::GeneratorPro => &["BITNET3B.BIN", "BITN3B.BIN", "BITNET2B.BIN"],
         ModelSlot::RustCoder => &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
         ModelSlot::HwExpert => &["HWEXPRT.BIN", "HWEXPERT.BIN"],
+        ModelSlot::Learner => &["LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
+        ModelSlot::Agent => &["AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
             "BITNET13.BIN",
             "BITNET850.BIN",

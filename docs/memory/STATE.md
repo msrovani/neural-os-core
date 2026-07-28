@@ -1,4 +1,28 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s227 — TEST (AutoInstaller)
+#   SESSION_227: ADR-0079 Neural AutoInstaller M0-M4 (2026-07-27)
+#     SysInstaller reativado (pub mod sys_installer) — install(source,target,kernel_elf)
+#     gpt_format_multi() — GPT com N partições, CRC32C, backup
+#     Dual partition: ESP (512MB FAT32) + NeuralFS (restante)
+#     ESP copy setor a setor do source — bootloader preservado
+#     HwProfiler: PCI scan + RAM detect via TOTAL_RAM_MB + GPU/NIC/WiFi flags
+#     AutoInstallerAgent EventDriven: orquestra install, copia skills+config pro target
+#     Jarbas install_card: gauge progresso + step + botão Reboot
+#     Hermes shell `install` — exibe perfil HW
+#     Cortex::install_adviser: recomendação via ModelHub slots (GeneratorPro→Active→fallback)
+#     self_check: CRC32C checksum dos arquivos instalados
+#     rollback: 3 tentativas + fallback pendrive
+#     hw_change: detecta troca GPU/NIC/WiFi comparando perfil salvo
+#     self_heal_disk: migração para disco alternativo via StorageBus
+#     net_fallback: busca firmware ausente (NetFs→GitHub→HF aios-k2chj)
+#     detect_ram_mb() real — TOTAL_RAM_MB atomic do frame allocator
+#     format_fat32_esp() — FAT32 do zero (BPB, FSInfo, FATs, root dir)
+#     InstallAdviser roteia via ModelHub (compatível com multi-LLM hub)
+#     N_SLOTS=8 para comportar ModelSlot::Agent
+#     ADR-0079 docs + plano de implementação
+#     cargo check --release: 0 erros
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s225 — TEST (Limine Desktop)
 #   SESSION_225: Megasessão — Limine + Modelos IA + Desktop + WHPX (2026-07-27)
 #     Limine boot (uefi.img): kernel higher-half 0xffffffff80000000+, framebuffer @0xffff8000c0000000

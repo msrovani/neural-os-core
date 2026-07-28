@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### SESSION_227: ADR-0079 Neural AutoInstaller — M0 a M4 (2026-07-27)
+- **ADR-0079 Neural AutoInstaller**: Instalador inteligente pendrive→HD/SSD/NVMe com IA.
+  Detecta HW alvo, copia só o que a máquina precisa, cria GPT dual (ESP+NeuralFS).
+  Nenhum projeto AIOS no_std pesquisado (ClaudioOS, FYY, Wetware, WeftOS, Oreulius,
+  WAeasi, coconutOS, ArceOS) tem self-installer — território inédito.
+- **M0 — SysInstaller reativado**: `pub mod sys_installer` linkado na lib.rs.
+  `install(target, kernel_elf)` aceita `&mut dyn BlockDevice` genérico em vez de ATA hardcoded.
+  Cria GPT via `gpt_format_single()`, copia kernel.elf setor a setor, verifica MBR+GPT.
+  demo() com MemoryDisk testa o ciclo completo.
+- **M0.1 — gpt_format_multi()**: Cria GPT com N partições (128 entradas, header+backup, CRC32C).
+  `GptPartitionDef` struct para definir type_guid, start, end, label.
+- **M1 — Dual partition + ESP copy**: `install(source, target, kernel_elf)` — cria GPT com
+  ESP (FAT32, 512MB) + NeuralFS (restante). Copia ESP setor a setor do source (pendrive).
+  Formata NeuralFS, copia kernel.elf via `NeuralVolume::create_file()+write_file()`.
+  Verifica MBR + GPT header + FAT32 BPB.
+- **M2 — AutoInstallerAgent + HwProfiler + Jarbas card**: `HwProfile` com PCI scan + RAM detect +
+  GPU/NIC/WiFi flags. `AutoInstallerAgent` EventDriven que orquestra instalação completa,
+  copia catálogo de skills `/skills/CATALOG.MD` e perfil HW `/config/hw_profile.txt` para o target.
+  `install_progress_card()` no Jarbas com gauge + step + botão Reboot.
+  Hermes shell comando `install` exibe perfil HW.
+- **M3 — AI-Native installation**: `Cortex::install_adviser` gera recomendação via ModelHub slots
+  (GeneratorPro→Active→fallback). `self_check` salva/verifica CRC32C dos arquivos instalados.
+  `rollback` com 3 tentativas + fallback pendrive.
+- **M4 — HW Swap + Recovery**: `hw_change` detecta troca de GPU/NIC/WiFi comparando perfil salvo.
+  `self_heal_disk` escaneia StorageBus, escolhe maior disco alternativo, propõe migração.
+  `net_fallback` busca firmware ausente via NetFs→GitHub→HuggingFace aios-k2chj.
+- **detect_ram_mb() real**: `TOTAL_RAM_MB` atomic populado pelo frame allocator no boot.
+  Substitui hardcoded 512MB.
+- **format_fat32_esp()**: Cria FAT32 válido do zero (BPB, FSInfo, FATs, root dir).
+  Partição ≥ 65525 clusters (~32MB mínimo). Sem depender de source ESP.
+- **Ajuste hub multi-LLM**: InstallAdviser roteia via `model_hub::generate_from_slot()`.
+  `N_SLOTS=8` para comportar `ModelSlot::Agent`.
+- **Lições:** `scan_pci()` é unsafe (precisa `unsafe {}`). `PciDevice` tem `bar0..bar5` individuais,
+  não `bars[]`. `NeuralVolume::write_file()` precisa de `dev + ino + data`. `list_skills()` retorna
+  `Vec<(String, ToolPolicy)>`, não String. `StorageBus.entries()` devolve `&[StorageEntry]` com
+  campos nomeados, não tuplas. Sempre verificar `N_SLOTS` ao adicionar `ModelSlot`.
+- **cargo check --release: 0 erros**.
+
 ### SESSION_226: Onyx ChatWindow + StreamPacket Protocol + Render Registry + COSMIC UI (2026-07-27)
 - **StreamPacket protocol** (`hermes/src/stream_packet.rs`): 14 typed packet types (ReasoningStart/Delta/Done, ToolStart/Delta/Done, MessageStart/Delta, Stop, etc.) com encode/decode compacto para EventBus.
 - **ChatSession tree** (`hermes/src/chat_tree.rs`): Árvore de conversa com branching (parent/children), ChatNode, display_nodes().

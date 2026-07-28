@@ -34,11 +34,13 @@ pub mod memory_agent;
 pub mod model_fit;
 pub mod memory_systems;
 pub mod multi_user;
+pub mod vision;
 
 pub mod native_agent_seed;
 pub mod profile;
 pub mod self_heal;
 pub mod self_heal_agent;
+pub mod self_heal_disk;
 pub mod training_agent;
 pub mod fs;
 pub mod trust;

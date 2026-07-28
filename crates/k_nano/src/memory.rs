@@ -13,6 +13,8 @@ const FRAME_SIZE: u64 = 4096;
 
 pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> = TicketLock::new(None);
 pub static PHYS_MEM_OFFSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Total RAM em MB, detectado no boot via memory map.
+pub static TOTAL_RAM_MB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(512);
 
 /// Alocador de frames físicos baseado em bitmap.
 
@@ -136,6 +138,11 @@ impl BitmapFrameAllocator {
         self.usable_frames = usable_count;
         self.allocated_count = 0;
         self.next_free_bit = 256;
+        // Armazena RAM total para hw_profiler
+        let ram_mb = (last_end / (1024 * 1024)) as u64;
+        if ram_mb > 0 {
+            TOTAL_RAM_MB.store(ram_mb, core::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// Marca um bit como 0 (frame livre).

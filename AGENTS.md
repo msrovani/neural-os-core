@@ -294,6 +294,16 @@ Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 - **GDT lazy_static + TSS multi-AP (ADR-0065 FASE 3.1):** GDT é `lazy_static` — não dá pra adicionar entradas em runtime. Solução: pré-alocar `TSS_ARRAY: [TaskStateSegment; MAX_APS+1]` + `tss_selectors: [u16; MAX_APS+1]` no init. `init_ap_tss(ap_index, ist_tops)` preenche slot pré-alocado e monta o descriptor no GDT. APs chamam `ap_load_idt_and_tss(ap_index)` → `lidt` + `ltr tss_selectors[ap_index]` + `sti`.
 - **AP sem IDT trava (ADR-0065 FASE 3.1):** AP sobe com IF=0 e sem `lidt`. `hlt` sem trabalho trava o AP. Por isso `cortex::parallel_*` é gated por `k_nano::smp::ap_pollable()` (hoje false até AP_IDT_READY barrier). ap_entry faz: init_ap_ist → init_ap_tss → ap_load_idt_and_tss → AP_IDT_READY barrier → set_ap_pollable(true).
 - **TimerFuture poll não pode registrar future dentro do poll (ADR-0065 FASE 3.2):** `TimerFuture::poll` chamar `register_future(Box::pin(async {}))` só pra pegar um índice é feio mas funciona. Padrão correto: registrar o TimerFuture no `init_async_rt` ANTES do primeiro poll, e o poll só decrementa `ticks_remaining` + `wake_by_ref` quando >0. `process_wakes` (chamado do timer IRQ) faz o wake.
+- **AutoInstaller (ADR-0079, SESSION_227):** O único self-installer no ecossistema AIOS no_std.
+  `scan_pci()` é unsafe — precisa `unsafe {}`. `PciDevice` tem `bar0..bar5` individuais, não `bars[]`.
+  `NeuralVolume::write_file(dev, ino, data)` requer device + inode + dados — não é `write_file(path, data)`.
+  `SkillRegistry::list_skills()` retorna `Vec<(String, ToolPolicy)>`, não String.
+  `StorageBus::entries()` devolve `&[StorageEntry]` com campos nomeados, não tuplas.
+  Sempre sincronizar `N_SLOTS` com o número de variantes de `ModelSlot` ao adicionar novo slot.
+  Fazer o boot frame allocator já setar `TOTAL_RAM_MB` ao final de `init_from_usable_ranges()`.
+  `format_fat32_esp()` exige ≥65525 clusters (~32MB) — FAT32 real não funciona com menos.
+  Nenhum projeto AIOS no_std pesquisado (ClaudioOS, FYY, Wetware, WeftOS, Oreulius, WAeasi, coconutOS, ArceOS) tem self-installer.
+  ADR-0079 + plano de implementação em `docs/architecture/0079-neural-auto-installer.md`.
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

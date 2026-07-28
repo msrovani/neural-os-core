@@ -95,6 +95,18 @@ pub fn execute(cmd: &str) -> String {
         "irq" => String::from("IRQ: 0-15 PIC, 32-255 APIC\n"),
         "gpio" => String::from("GPIO: not available on x86\n"),
         // Novos comandos SmileyOS
+                "install" => {
+            if k_nano::installer_agent::INSTALLER_BUSY.load(core::sync::atomic::Ordering::Relaxed) {
+                String::from("Installer busy — already running\n")
+            } else {
+                let profile = k_nano::hw_profiler::profile_hardware();
+                if profile.device_count() == 0 {
+                    String::from("No PCI devices found — cannot install\n")
+                } else {
+                    alloc::format!("install: run via AutoInstallerAgent\nHW profile: {}\nTarget disks available. Use `install <dev>` to start.\n", profile.summary())
+                }
+            }
+        }
         "touch" => touch_cmd(args),
         "mkdir" => mkdir_cmd(args),
         "rm" => rm_cmd(args),

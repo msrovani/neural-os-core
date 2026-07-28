@@ -2,3 +2,4 @@
 //! Each card returns a `UiDeclaration` for the compositor to render.
 
 pub mod storage_card;
+pub mod install_card;

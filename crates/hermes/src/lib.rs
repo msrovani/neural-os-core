@@ -108,6 +108,7 @@ pub use k_hal::net::wifi_msix;
 pub use k_hal::net::wifi_softmac;
 pub mod voice_skill;
 pub mod proactive;
+pub mod net_fallback;
 pub mod stream_packet;
 pub mod chat_tree;
 
