@@ -12,6 +12,8 @@ import argparse
 import os
 import struct
 import sys
+import uuid
+import zlib
 
 SECTOR = 512
 # Microsoft: volume com < 65525 clusters NÃO é FAT32 (vira FAT16 na prática).
@@ -86,6 +88,82 @@ def dir_entry_83(name83: bytes, attr: int, cluster: int, size: int) -> bytes:
     return bytes(e)
 
 
+def crc32(data: bytes) -> int:
+    """Standard CRC-32 (zlib)."""
+    return zlib.crc32(data) & 0xFFFFFFFF
+
+
+def write_gpt(
+    img: bytearray, total_sectors: int, part_lba: int, part_sectors: int
+) -> None:
+    """Escreve GPT header (LBA 1), entries (LBA 2-33), backup entries (últimos LBAs - 32),
+    backup header (último LBA). FAT32 em part_lba permanece inalterado.
+    """
+    esp_type_guid = bytes.fromhex("C12A7328F81F11D2BA4B00A0C93EC93B")
+    last_lba = total_sectors - 1
+    end_lba = part_lba + part_sectors - 1
+    last_usable_lba = last_lba - 33  # = total_sectors - 34
+
+    # --- Partition entry (128 bytes) ---
+    entry = bytearray(128)
+    entry[0:16] = esp_type_guid
+    entry[16:32] = uuid.uuid4().bytes_le  # unique partition GUID
+    struct.pack_into("<Q", entry, 32, part_lba)   # Start LBA
+    struct.pack_into("<Q", entry, 40, end_lba)    # End LBA
+    struct.pack_into("<Q", entry, 48, 0)           # Attributes
+    name_bytes = "EFI System Partition".encode("utf-16-le")[:72]
+    entry[56 : 56 + len(name_bytes)] = name_bytes
+
+    # --- Partition entries area (32 sectors, 128 entries × 128 bytes) ---
+    entries_bytes = bytearray(32 * SECTOR)
+    entries_bytes[0:128] = entry
+
+    # Write primary partition entries at LBA 2
+    img[2 * SECTOR : 2 * SECTOR + 32 * SECTOR] = entries_bytes
+
+    # --- Primary GPT header at LBA 1 ---
+    hdr = bytearray(SECTOR)
+    hdr[0:8] = b"EFI PART"
+    struct.pack_into("<I", hdr, 8, 0x00010000)     # Revision 1.0
+    struct.pack_into("<I", hdr, 12, 92)             # Header size
+    struct.pack_into("<I", hdr, 16, 0)              # CRC32 (placeholder)
+    struct.pack_into("<I", hdr, 20, 0)              # Reserved
+    struct.pack_into("<Q", hdr, 24, 1)              # This LBA (primary)
+    struct.pack_into("<Q", hdr, 32, last_lba)       # Backup LBA
+    struct.pack_into("<Q", hdr, 40, 34)             # First usable LBA
+    struct.pack_into("<Q", hdr, 48, last_usable_lba)  # Last usable LBA
+    hdr[56:72] = uuid.uuid4().bytes_le              # Disk GUID
+    struct.pack_into("<Q", hdr, 72, 2)              # Partition entries LBA
+    struct.pack_into("<I", hdr, 80, 128)            # Number of partition entries
+    struct.pack_into("<I", hdr, 84, 128)            # Size of partition entry
+    entries_crc = crc32(bytes(entries_bytes))
+    struct.pack_into("<I", hdr, 88, entries_crc)    # CRC32 of entries
+    # Compute header CRC (with CRC32 field zeroed)
+    hdr_crc = crc32(bytes(hdr[:92]))
+    struct.pack_into("<I", hdr, 16, hdr_crc)
+
+    # Write primary header at LBA 1
+    img[SECTOR : 2 * SECTOR] = hdr
+
+    # --- Backup GPT ---
+    # Backup partition entries at last_lba - 32 (32 sectors)
+    backup_entries_lba = last_lba - 32
+    bak_off = backup_entries_lba * SECTOR
+    img[bak_off : bak_off + 32 * SECTOR] = entries_bytes
+
+    # Backup GPT header at last_lba
+    hdr_bak = bytearray(hdr)  # copy primary (entries CRC is same)
+    struct.pack_into("<Q", hdr_bak, 24, last_lba)           # This LBA = backup
+    struct.pack_into("<Q", hdr_bak, 32, 1)                  # Backup LBA = primary
+    struct.pack_into("<Q", hdr_bak, 72, backup_entries_lba) # Partition entries LBA
+    # Recompute header CRC
+    struct.pack_into("<I", hdr_bak, 16, 0)
+    hdr_crc_bak = crc32(bytes(hdr_bak[:92]))
+    struct.pack_into("<I", hdr_bak, 16, hdr_crc_bak)
+
+    img[last_lba * SECTOR : (last_lba + 1) * SECTOR] = hdr_bak
+
+
 def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
     """MBR + partição ESP FAT32 real. Nunca FAT16."""
     if size_mb < 64:
@@ -96,7 +174,9 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
     size = size_mb * 1024 * 1024
     total_sectors = size // SECTOR
     part_lba = 2048
-    part_sectors = total_sectors - part_lba
+    # Account for backup GPT (32 entry sectors + 1 header sector at end)
+    part_sectors = total_sectors - 34 - part_lba + 1
+    last_usable_lba = part_lba + part_sectors - 1
 
     reserved = 32
     fats = 2
@@ -139,10 +219,10 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
 
     img[510:512] = b"\x55\xaa"
     part = bytearray(16)
-    part[0] = 0x80
-    part[4] = 0xEF  # ESP
-    struct.pack_into("<I", part, 8, part_lba)
-    struct.pack_into("<I", part, 12, part_sectors)
+    part[0] = 0x00
+    part[4] = 0xEE  # Protective GPT
+    struct.pack_into("<I", part, 8, 1)  # start at LBA 1
+    struct.pack_into("<I", part, 12, total_sectors - 1)  # covers whole disk except LBA 0
     img[446:462] = part
 
     off = part_lba * SECTOR
@@ -343,6 +423,9 @@ def build_esp(esp_dir: str, out_path: str, size_mb: int = 128) -> None:
     for i in range(fats):
         s = fat0 + i * fat_sectors * SECTOR
         img[s : s + len(fat)] = fat
+
+    # Write GPT structures (primary at LBA 0-33, backup at final 33 sectors)
+    write_gpt(img, total_sectors, part_lba, part_sectors)
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "wb") as f:
