@@ -151,6 +151,7 @@ pub fn slot_footprint_mb(slot_name: &str) -> Option<u64> {
         "tinystories" | "tiny" | "smoke" => Some(4),
         "rust_coder" | "rustcoder" => Some(260),
         "hw_identify" | "hwexpert" => Some(1),
+        "learner" | "qwen05" | "qwen0.5b" => Some(125),
         "13" | "1.3b" | "xl" => Some(320),
         "2b" => Some(590),
         _ => None,

@@ -2,7 +2,9 @@
 
 **Data:** 2026-07-27
 **ADR:** `docs/architecture/0078-multi-slot-multimodal-learner.md`
-**RAM alvo:** 8GB disponíveis, ~5.8GB utilizados, ~2.2GB de sobra
+**RAM alvo:** 8GB disponíveis, ~5.95GB utilizados, ~2.05GB de sobra
+
+**Slots:** 8 (Active, Fast, Pro, RustCoder, Reranker, HwExpert, Learner, TinyStories)
 
 ---
 

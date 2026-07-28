@@ -5,12 +5,10 @@ use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult}
 use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
-use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, POWER_STATE, PowerState, PowerDialogAction, hit_power_button, DragState};
-use alloc::vec::Vec;
-use crate::display::window::{Window, WindowContent};
+use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, POWER_STATE, PowerState, PowerDialogAction, hit_power_button};
 use crate::display::avatar::{AvatarState, JarbasAvatar};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
-use crate::display::shortcuts::{KeyCombo, Modifiers, KeyCode, WmAction, SHORTCUTS, scancode_to_keycode};
+use crate::display::shortcuts::{KeyCombo, Modifiers, WmAction, scancode_to_keycode};
 use hermes::agents::TOPIC_KEY_EVENT;
 use crate::clipboard_notify::TOPIC_TOAST;
 

@@ -42,6 +42,12 @@ impl Tensor {
         }
     }
 
+    /// Creates a zero-initialized tensor of the given shape (fallback for failed ops).
+    pub fn zero(shape: (usize, usize)) -> Self {
+        let size = shape.0 * shape.1;
+        Self { data: vec![0.0; size], shape }
+    }
+
     pub fn from_row_major(shape: (usize, usize), data: Vec<f32>) -> Option<Self> {
         if data.len() != shape.0 * shape.1 {
             return None;

@@ -256,6 +256,11 @@ impl I225Driver {
         let _ = self.read32(REG_CTRL_EXT);
         self.write32(REG_TIPG, 0x0060_2008);
 
+        // I225 defaults to advanced 32-byte descriptors (RXDCTL.DEXT=1).
+        // Driver uses legacy 16-byte descriptors — clear DEXT for Q0.
+        self.write32(0xC028, 0x00000000);  // RXDCTL(0): DEXT=0, legacy RX descriptors
+        self.write32(0xE028, 0x00000000);  // TXDCTL(0): DEXT=0, legacy TX descriptors
+
         for i in 0..128 {
             self.write32(REG_MTA + (i as u64) * 4, 0);
         }

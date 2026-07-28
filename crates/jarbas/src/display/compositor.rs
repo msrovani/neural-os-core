@@ -28,21 +28,20 @@ pub fn generate_llm_icon(description: &str) -> [u8; 64] {
 use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use spin::Mutex;
+use k_nano::sync::IrqSafeLock;
 use crate::display::decorations;
 use crate::display::fb::DoubleBuffer;
 use crate::display::soul_mirror::{SoulMirrorRenderer, SoulMirrorState};
 use crate::display::workspaces::Workspaces;
-use crate::display::window::FloatingWindow;
 use crate::display::focus::{FocusStack, FocusPolicy};
 use crate::display::dock::Dock;
 pub use crate::display::window::AppId;
 use crate::display::window::{Window, WindowContent};
-use crate::display::theme::{Theme, ThemeMode};
-use crate::display::tiling::{TilingNode, Rect, SplitDirection, WindowId};
+use crate::display::theme::Theme;
+use crate::display::tiling::{Rect, SplitDirection, WindowId};
 use crate::display::notifications::NotificationQueue;
 
-pub static COMPOSITOR: Mutex<Option<JarbasDesktop>> = Mutex::new(None);
+pub static COMPOSITOR: IrqSafeLock<Option<JarbasDesktop>> = IrqSafeLock::new(None);
 
 /// Modo de foco do Jarbas:
 /// - Chat: interação por turnos via ChatWindow (teclado → input buffer)
@@ -52,9 +51,9 @@ pub enum FocusMode {
     Chat,
     Ambient,
 }
-pub static FOCUS_MODE: Mutex<FocusMode> = Mutex::new(FocusMode::Ambient);
+pub static FOCUS_MODE: IrqSafeLock<FocusMode> = IrqSafeLock::new(FocusMode::Ambient);
 /// Banner power (mensagem de estado) — set pelo DisplayAgent.
-pub static POWER_BANNER: Mutex<Option<&'static str>> = Mutex::new(None);
+pub static POWER_BANNER: IrqSafeLock<Option<&'static str>> = IrqSafeLock::new(None);
 
 /// Estado da ação de energia: None (normal), Dialog (confirmação), ou ação em andamento.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +64,7 @@ pub enum PowerState {
     Hibernating,
     Rebooting,
 }
-pub static POWER_STATE: Mutex<PowerState> = Mutex::new(PowerState::None);
+pub static POWER_STATE: IrqSafeLock<PowerState> = IrqSafeLock::new(PowerState::None);
 
 pub const POWER_BTN_W: usize = 48;
 pub const POWER_BTN_H: usize = 28;
@@ -153,9 +152,9 @@ pub enum Layer { OrbBackground, HermesOverlay, AppWindows, DockBar }
 
 
 // Estado global do mouse para o compositor
-pub static MOUSE_X: spin::Mutex<usize> = spin::Mutex::new(640);
-pub static MOUSE_Y: spin::Mutex<usize> = spin::Mutex::new(360);
-pub static MOUSE_BUTTONS: spin::Mutex<u8> = spin::Mutex::new(0);
+pub static MOUSE_X: IrqSafeLock<usize> = IrqSafeLock::new(640);
+pub static MOUSE_Y: IrqSafeLock<usize> = IrqSafeLock::new(360);
+pub static MOUSE_BUTTONS: IrqSafeLock<u8> = IrqSafeLock::new(0);
 
 // Timing de frame para FPS control
 pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -415,7 +414,7 @@ impl JarbasDesktop {
 
         // Botão OFF — canto SD, COSMIC-style rounded
         {
-            let (bxp, by, bw, bh) = power_btn_rect(w);
+            let (_bxp, by, bw, bh) = power_btn_rect(w);
             let off_x = w.saturating_sub(bw + 10);
             decorations::draw_rounded_rect(&mut self.fb, off_x, by, bw, bh, 4,
                                            theme.error.0, theme.error.1, theme.error.2);

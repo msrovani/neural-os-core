@@ -13,7 +13,7 @@ use crate::hardware::topology::{ClientTopologyReport, CpuVendor};
 use crate::hardware::xeon::XeonTopologyReport;
 use crate::hardware::epyc::EpycTopologyReport;
 use crate::platform_probe::{FeatureGate, IsaPath};
-use crate::core_pinning::{CoreRole, CorePool, PinningStrategy, pool_for, active_strategy};
+use crate::core_pinning::{CoreRole, CorePool, pool_for};
 use crate::numa_alloc::{numa_node_for_apic, numa_allocate_frame, numa_topology};
 use crate::apic::lapic_id;
 
@@ -351,7 +351,7 @@ impl MemoryAndThreadStrategy for StandardUmaStrategy {
 pub struct MultiDomainNumaStrategy;
 
 impl MemoryAndThreadStrategy for MultiDomainNumaStrategy {
-    fn alloc_local(&self, size: usize, align: usize) -> Option<*mut u8> {
+    fn alloc_local(&self, _size: usize, _align: usize) -> Option<*mut u8> {
         // Allocate from local NUMA node
         let node = numa_node_for_apic(lapic_id() as u32)?;
         numa_allocate_frame(node).map(|f| f.start_address().as_u64() as *mut u8)
@@ -359,7 +359,7 @@ impl MemoryAndThreadStrategy for MultiDomainNumaStrategy {
     
     fn pin_thread(&self, role: CoreRole) {
         // Pin to socket based on role
-        if let Some(topology) = numa_topology() {
+        if let Some(_topology) = numa_topology() {
             let socket = match role {
                 CoreRole::Hermes | CoreRole::Memory => 0,
                 CoreRole::Cortex | CoreRole::Worker => 1,

@@ -6,7 +6,15 @@
 //! C-states mais profundos (C1E, C2, C6). O wake é atômico: o BSP enfileira
 //! um job no slot por-AP e o IPI de reschedule acorda o AP dormindo.
 
+use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+
+/// A wrapper around UnsafeCell that implements Sync.
+/// SAFETY: Access to SLOTS is guarded by atomic HEAD/TAIL indices:
+/// BSP writes at TAIL, APs read at HEAD, and the atomic compare-exchange
+/// ensures no concurrent read/write of the same slot.
+struct SyncCell<T>(UnsafeCell<T>);
+unsafe impl<T> Sync for SyncCell<T> {}
 
 pub type ApJobFn = unsafe fn(job_id: usize, worker: usize);
 
@@ -18,10 +26,12 @@ struct JobSlot {
     job_id: usize,
 }
 
-static mut SLOTS: [JobSlot; MAX_JOBS] = [JobSlot {
+// SAFETY: SLOTS is only written by BSP (enqueue) and read by APs (try_dequeue).
+// HEAD/TAIL atomic indices ensure no concurrent read/write of the same slot.
+static SLOTS: SyncCell<[JobSlot; MAX_JOBS]> = SyncCell(UnsafeCell::new([JobSlot {
     f: None,
     job_id: 0,
-}; MAX_JOBS];
+}; MAX_JOBS]));
 static HEAD: AtomicUsize = AtomicUsize::new(0);
 static TAIL: AtomicUsize = AtomicUsize::new(0);
 static PENDING: AtomicU32 = AtomicU32::new(0);
@@ -53,7 +63,7 @@ pub fn enqueue(f: ApJobFn, job_id: usize) -> bool {
         return false;
     }
     unsafe {
-        SLOTS[t % MAX_JOBS] = JobSlot {
+        (*SLOTS.0.get())[t % MAX_JOBS] = JobSlot {
             f: Some(f),
             job_id,
         };
@@ -78,7 +88,7 @@ pub fn try_dequeue() -> Option<(ApJobFn, usize)> {
         return None;
     }
     unsafe {
-        let slot = &SLOTS[h % MAX_JOBS];
+        let slot = &(*SLOTS.0.get())[h % MAX_JOBS];
         let f = slot.f?;
         Some((f, slot.job_id))
     }

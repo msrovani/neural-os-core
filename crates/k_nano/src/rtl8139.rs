@@ -40,6 +40,9 @@ const RX_BUF_SIZE: usize = RX_BUF_LEN + RX_BUF_PAD + RX_BUF_WRAP;
 pub struct Rtl8139Driver {
     io_base: u16,
     mac_addr: [u8; 6],
+    pci_bus: u8,
+    pci_device: u8,
+    pci_func: u8,
     tx_cur: usize,
     tx_buf_paddrs: [u64; 4],
     rx_buf_paddr: u64,
@@ -57,9 +60,15 @@ impl Rtl8139Driver {
         for i in 0..6 {
             mac[i] = Port::new(io_base + REG_MAC + i as u16).read();
         }
+        // Enable PCI Bus Master for DMA operation (required on real HW)
+        crate::pci::enable_pci_bus_master(dev);
+
         Some(Rtl8139Driver {
             io_base,
             mac_addr: mac,
+            pci_bus: dev.bus,
+            pci_device: dev.device,
+            pci_func: dev.function,
             tx_cur: 0,
             tx_buf_paddrs: [0; 4],
             rx_buf_paddr: 0,
@@ -89,7 +98,13 @@ impl Rtl8139Driver {
 
     fn alloc_page() -> u64 {
         let mut guard = GLOBAL_ALLOCATOR.lock();
-        let allocator = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized in alloc_page");
+        let allocator = match guard.as_mut() {
+            Some(a) => a,
+            None => {
+                crate::slog_nano!("RTL8139", "error", "GLOBAL_ALLOCATOR not initialized");
+                return 0;
+            }
+        };
         let frame = allocator.allocate_contiguous(1);
         match frame {
             Some(f) => f.start_address().as_u64(),
@@ -99,7 +114,13 @@ impl Rtl8139Driver {
 
     fn alloc_pages(n: usize) -> u64 {
         let mut guard = GLOBAL_ALLOCATOR.lock();
-        let allocator = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized in alloc_pages");
+        let allocator = match guard.as_mut() {
+            Some(a) => a,
+            None => {
+                crate::slog_nano!("RTL8139", "error", "GLOBAL_ALLOCATOR not initialized");
+                return 0;
+            }
+        };
         let frame = allocator.allocate_contiguous(n);
         match frame {
             Some(f) => f.start_address().as_u64(),
@@ -117,6 +138,13 @@ impl Rtl8139Driver {
             }
             core::hint::spin_loop();
         }
+        // Re-check PCI Bus Master after reset (CR_RST pode ter limpado)
+        let cmd = crate::pci::read_config_word(self.pci_bus, self.pci_device, self.pci_func, 0x04);
+        if cmd & 0x04 == 0 {
+            crate::slog_nano!("Net", "rtl8139", "Bus Master lost after reset! Re-enabling...");
+            crate::pci::enable_pci_bus_master_unsafe(self.pci_bus, self.pci_device, self.pci_func);
+        }
+
         crate::slog_nano!("Net", "rtl8139", "Reset OK. MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
             self.mac_addr[0], self.mac_addr[1], self.mac_addr[2],
             self.mac_addr[3], self.mac_addr[4], self.mac_addr[5]);
@@ -205,7 +233,8 @@ impl Rtl8139Driver {
             buf_virt.add(i).write_volatile(data[i]);
         }
 
-        self.write32(tsd_reg, (data.len() as u32) << TSD_SIZE_SHIFT);
+        let truncated_len = core::cmp::min(data.len(), u32::MAX as usize) as u32;
+        self.write32(tsd_reg, truncated_len << TSD_SIZE_SHIFT);
 
         // Debug TX na primeira ocorrencia
         let tx_dbg = idx;

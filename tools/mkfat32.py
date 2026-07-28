@@ -53,7 +53,8 @@ def pack_llm_set() -> set[str]:
     return out
 
 def find_file(name):
-    for d in [ROOT, os.path.join(ROOT, "target"), os.path.join(ROOT, "firmware"),
+    for d in [os.path.join(ROOT, "models"), ROOT, os.path.join(ROOT, "target"),
+              os.path.join(ROOT, "firmware"),
               os.path.join(ROOT, "crates/neural-kernel"), os.path.join(ROOT, "tools/target")]:
         p = os.path.join(d, name)
         if os.path.exists(p): return p
@@ -210,6 +211,13 @@ def populate(path):
         ("BITNET.BIN", None),  # alias legado; não empacota stub
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
+        # Novos modelos ADR-0078: Fast (Llama 1B), Pro (Llama 8B), Coder (DeepSeek), Reranker, Learner
+        ("VISION.BIN", find_file("VISION.BIN")),
+        ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") if "3b" in llm else None),
+        ("RUSTCDR3.BIN", find_file("RUSTCDR3.BIN")),
+        ("RERANKER.BIN", find_file("RERANKER.BIN")),
+        ("LEARNER.BIN", find_file("LEARNER.BIN")),
+        ("AGENT.BIN", find_file("AGENT.BIN")),
     ]
     # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
     _inject_device_legos(files)

@@ -170,10 +170,9 @@ impl NotificationQueue {
             // Linha 2: mensagem truncada em ~36 chars
             // ponytail: slice assume ASCII (byte idx == char idx); usar chars() se UTF-8 multibyte aparecer
             let max_chars = 36usize;
-            let display = if n.message.len() > max_chars {
-                let mut truncated = String::from(&n.message[..max_chars]);
-                truncated.push_str("...");
-                truncated
+            let display = if n.message.chars().count() > max_chars {
+                let truncated: String = n.message.chars().take(max_chars).collect();
+                alloc::format!("{}...", truncated)
             } else {
                 n.message.clone()
             };

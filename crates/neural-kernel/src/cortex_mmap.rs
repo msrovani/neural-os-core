@@ -2,6 +2,7 @@
 //! P5: eager map; P7: lazy reserve + demand-paging via #PF.
 
 use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Mutex;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::VirtAddr;
 
@@ -37,7 +38,7 @@ impl WeightStore {
     }
 }
 
-static mut WEIGHT_STORE: WeightStore = WeightStore::empty();
+static WEIGHT_STORE: Mutex<WeightStore> = Mutex::new(WeightStore::empty());
 
 /// Handle do mmap de pesos (VA Cortex + phys first page).
 #[derive(Clone, Copy, Debug)]
@@ -52,7 +53,7 @@ unsafe fn alloc_weight_frames(n: usize) -> Result<(usize, PhysFrame<Size4KiB>), 
     if n == 0 || n > MAX_WEIGHT_FRAMES {
         return Err("p5: weight pages invalido");
     }
-    let store = &mut *core::ptr::addr_of_mut!(WEIGHT_STORE);
+    let mut store = WEIGHT_STORE.lock();
     if store.len + n > MAX_WEIGHT_FRAMES {
         return Err("p5: weight store cheio");
     }
@@ -91,7 +92,7 @@ pub unsafe fn mmap_weights(
     }
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
     let (start, first) = alloc_weight_frames(n)?;
-    let store = &mut *core::ptr::addr_of_mut!(WEIGHT_STORE);
+    let mut store = WEIGHT_STORE.lock();
     store.eager = true;
     let flags = address_space::rw_flags();
     for i in 0..n {
@@ -121,7 +122,7 @@ pub unsafe fn mmap_weights_lazy(
     let _ = syscall::dispatch(SYS_MAP_WEIGHTS, n as u64, held)?;
     let _ = syscall::dispatch(SYS_DEMAND_PAGE, n as u64, held)?;
     let (start, first) = alloc_weight_frames(n)?;
-    let store = &mut *core::ptr::addr_of_mut!(WEIGHT_STORE);
+    let mut store = WEIGHT_STORE.lock();
     store.eager = false;
     let mut frames = [PhysFrame::containing_address(x86_64::PhysAddr::new(0)); MAX_WEIGHT_FRAMES];
     for i in 0..n {

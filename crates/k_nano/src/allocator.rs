@@ -8,7 +8,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use spin::Mutex;
 use talc::{Span, Talc, Talck, ErrOnOom};
-use x86_64::structures::paging::{FrameAllocator, Mapper, Page, PageTable, PageTableFlags, Size4KiB};
+use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags};
 use x86_64::{PhysAddr, VirtAddr};
 
 // ─── LazyBumpAllocator ───
@@ -99,7 +99,7 @@ pub fn resize_heap_to_mb(target_mb: usize) {
     if target_mb <= current {
         return;
     }
-    let diff_pages = (target_mb - current) * 256;
+    let diff_pages = (target_mb - current).saturating_mul(256);
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     let base = VirtAddr::new(pmoff);
     let start_virt = HEAP_START as u64 + (current as u64 * 1024 * 1024);
@@ -312,7 +312,7 @@ pub fn resize_bump_heap(target_mb: usize) {
     if base.as_u64() == 0 { return; }
 
     let mut allocated = 0usize;
-    for i in 0..diff_pages {
+    for _i in 0..diff_pages {
         let phys = {
             let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
             match g.as_mut().and_then(|a| a.allocate_frame()) {

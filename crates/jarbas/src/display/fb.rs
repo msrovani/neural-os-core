@@ -51,6 +51,7 @@ pub fn claim_graphics() {
             k_nano::interrupts::FB_BPP.store(gpu.fb_bpp.max(3), Ordering::Release);
             k_nano::interrupts::FB_W.store(gpu.fb_width, Ordering::Release);
             k_nano::interrupts::FB_H.store(gpu.fb_height, Ordering::Release);
+            k_nano::interrupts::FB_RGB_ORDER.store(gpu.rgb_order, Ordering::Release);
         }
     }
 }
@@ -132,28 +133,51 @@ impl GpuDevice {
     }
 }
 
-pub static GPU: spin::Mutex<Option<GpuDevice>> = spin::Mutex::new(None);
+pub static GPU: k_nano::sync::IrqSafeLock<Option<GpuDevice>> = k_nano::sync::IrqSafeLock::new(None);
 
-/// Força coerência de cache no framebuffer + desliga VGA plane Intel (via k-hal R1).
+/// Força coerência de cache no framebuffer: remapeia páginas do FB como
+/// Uncacheable (NO_CACHE|WRITE_THROUGH) e desliga VGA plane Intel (via k-hal R1).
 /// Em Intel Skylake+ (6xx), o VGA plane NÃO é completamente desligado pelo
 /// sequenciador (0x3C4/0x3C5) — VGACNTRL (0x71400) vive no BE k-hal.
-/// Também aplica sfence para garantir que writes cheguem ao display controller.
+/// DEVE ser chamada APÓS memory init (Phase 2+) — map_page_uc() aloca frames
+/// para page tables e precisa do frame allocator pronto.
 pub fn fb_remap_uc() {
     let gpu = GPU.lock();
     if let Some(ref gpu_dev) = *gpu {
         if gpu_dev.fb_addr == 0 { return; }
 
-        // MMIO BAR → k-hal only (ADR-0041 Fase 2)
+        // HW-6: FB pages mapped as WB by firmware — CPU writes stay in cache,
+        // display controller never sees them → garbled/stale output on real HW.
+        // Walk every 4K page of FB and set PTE to NO_CACHE | WRITE_THROUGH.
+        let pm = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+        let phys = (gpu_dev.fb_addr as u64).saturating_sub(pm);
+        let fb_size = (gpu_dev.fb_height as usize).saturating_mul(gpu_dev.stride_bytes());
+        let pages = (fb_size + 4095) / 4096;
+        let mut mapped_count = 0usize;
+        for i in 0..pages {
+            let page_phys = phys.saturating_add((i as u64) * 4096);
+            // overflow guard
+            if page_phys < phys && i > 0 { break; }
+            unsafe {
+                k_nano::apic::map_page_uc(page_phys, pm);
+            }
+            mapped_count += 1;
+        }
+
+        // HW-6: MMIO BAR UC → k-hal only (ADR-0041 Fase 2)
         unsafe {
             k_hal::gpu::backend::disable_intel_vga_plane();
         }
 
-        // Sfence + barreira de escrita garantem visibilidade
+        // Sfence + barreira de escrita garantem visibilidade das PTE + writes
         unsafe {
             core::arch::asm!("sfence", options(nostack, preserves_flags));
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         }
-        k_nano::slog_jarbas!("Display", "info", "FB sfence aplicado @{:x} ({}x{})", gpu_dev.fb_addr, gpu_dev.fb_width, gpu_dev.fb_height);
+        k_nano::slog_jarbas!("Display", "info",
+            "FB remapped as UC: {} pages @phys={:x} stride={} ({}x{})",
+            mapped_count, phys, gpu_dev.stride_bytes(),
+            gpu_dev.fb_width, gpu_dev.fb_height);
     }
 }
 
@@ -296,7 +320,7 @@ pub fn paint_tts_response(text: &str) {
             for y in 0..h {
                 for x in 0..w {
                     let off = y * stride + x * bpp;
-                    if off + 2 >= clear_size {
+                    if off + bpp > clear_size {
                         continue;
                     }
                     write_volatile(ptr.add(off), c0);
@@ -395,6 +419,9 @@ pub fn console_print(text: &str) {
     if !CONSOLE_INITED.load(Ordering::Relaxed) {
         console_clear();
     }
+    // SAFETY: spin::Mutex is NOT IRQ-safe. GPU.lock() must not be held
+    // across an IRQ that might call console_print(). Currently no IRQ path
+    // calls this function, but future changes must respect this constraint.
     let guard = GPU.lock();
     let Some(gpu) = guard.as_ref() else {
         return;
@@ -476,11 +503,15 @@ fn draw_console_line(
     } else {
         (12u8, 8u8, 8u8)
     };
+    let clear_size = h * stride;
     unsafe {
         let ptr = addr as *mut u8;
         for y in y0..(y0 + ch) {
             for x in 0..w {
                 let off = y * stride + x * bpp;
+                if off + bpp > clear_size {
+                    continue;
+                }
                 write_volatile(ptr.add(off), bg0);
                 write_volatile(ptr.add(off + 1), bg1);
                 write_volatile(ptr.add(off + 2), bg2);
@@ -632,7 +663,7 @@ pub struct DoubleBuffer {
 
 impl DoubleBuffer {
     pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize, rgb_order: bool) -> Self {
-        let size = height * stride;
+        let size = height.saturating_mul(stride);
         DoubleBuffer {
             info: FramebufferInfo { addr, width, height, stride, bpp, rgb_order },
             back: alloc::vec![0u8; size],
@@ -760,16 +791,38 @@ impl DoubleBuffer {
     }
 
     /// Copia back buffer para o framebuffer fisico (sem cintilacao).
-    /// Otimizado: escreve apenas linhas modificadas se dirty tracking for implementado.
+    /// HW-8: usa chunked copy (u64) em vez de byte-a-byte, reduzindo o numero
+    /// de bus writes de ~8M para ~1M em 1920x1080x4. Otimizacao adicional
+    /// (rep movsb / dirty tracking) e possivel se o perfil mostrar gargalo.
     pub fn swap(&mut self) {
+        // Acquire cursor lock to prevent data race with IRQ cursor draw
+        while k_nano::interrupts::CURSOR_LOCK.swap(true, Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
         let addr = self.info.addr;
         let len = self.back.len();
         unsafe {
-            let ptr = addr as *mut u8;
-            for i in 0..len {
-                write_volatile(ptr.add(i), self.back[i]);
+            let src = self.back.as_ptr();
+            let dst = addr as *mut u8;
+            let mut i = 0usize;
+            // Align destination pointer to 8 bytes
+            while i < len && (dst.add(i) as usize) & 7 != 0 {
+                write_volatile(dst.add(i), src.add(i).read());
+                i += 1;
+            }
+            // Copy 8 bytes at a time
+            while i + 8 <= len {
+                let val = (src.add(i) as *const u64).read_unaligned();
+                write_volatile(dst.add(i) as *mut u64, val);
+                i += 8;
+            }
+            // Remaining bytes
+            while i < len {
+                write_volatile(dst.add(i), src.add(i).read());
+                i += 1;
             }
         }
+        k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
     }
 }
 
@@ -786,7 +839,9 @@ impl Framebuffer {
     pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
         if x >= self.info.width || y >= self.info.height { return; }
         let bpp = self.info.bpp;
+        let fb_size = self.info.height.saturating_mul(self.info.stride);
         let offset = y * self.info.stride + x * bpp;
+        if offset + bpp > fb_size { return; }
         unsafe {
             let ptr = self.info.addr as *mut u8;
             write_volatile(ptr.wrapping_add(offset + 0), b);

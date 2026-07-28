@@ -3,7 +3,7 @@ use crate::e1000::{E1000Driver, REG_STATUS};
 use crate::i225::I225Driver;
 use crate::{println};
 use alloc::vec::Vec;
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 pub const TOPIC_HW_NET_RTL8139: &str = "HW_NET_RTL8139";
 pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
@@ -259,7 +259,7 @@ pub unsafe fn init_serial_tunnel() -> bool {
 }
 
 /// Track last known link state for RX kick logic
-static mut E1000_LINK_WAS_UP: bool = false;
+static E1000_LINK_WAS_UP: AtomicBool = AtomicBool::new(false);
 
 pub unsafe fn dump_e1000_status() {
     let mut guard = E1000.lock();
@@ -268,10 +268,10 @@ pub unsafe fn dump_e1000_status() {
         let status = nic.read32(REG_STATUS);
         let link_up = status & 0x02 != 0;
         // Kick ONLY on link-up transition (NOT every time RDH==0 — that resets RX mid-poll).
-        if link_up && !E1000_LINK_WAS_UP {
+        if link_up && !E1000_LINK_WAS_UP.load(Ordering::Relaxed) {
             nic.kick_rx();
         }
-        E1000_LINK_WAS_UP = link_up;
+        E1000_LINK_WAS_UP.store(link_up, Ordering::Relaxed);
     }
 }
 

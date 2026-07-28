@@ -152,8 +152,8 @@ unsafe fn bringup_hid_boot(kind: HidBootKind) -> bool {
         }
         let speed = {
             let g = XHCI_STATE.lock();
-            let st = g.as_ref().unwrap();
-            let addr = portsc_addr(st, port).unwrap();
+            let st = match g.as_ref() { Some(s) => s, None => return false };
+            let addr = match portsc_addr(st, port) { Some(a) => a, None => continue };
             let v = r32(st.base, addr - st.base);
             let s = ((v >> 10) & 0xF) as u8;
             if s == 0 { 3 } else { s }
@@ -348,7 +348,7 @@ unsafe fn ep0_class_no_data(
     core::ptr::copy_nonoverlapping(pkt.as_ptr(), setup_pa.1, 8);
     let tr_va = {
         let g = XHCI_STATE.lock();
-        g.as_ref().unwrap().tr_va
+        match g.as_ref() { Some(s) => s.tr_va, None => return false }
     };
     let trb0 = tr_va as *mut u32;
     trb0.add(0).write_volatile(u32::from_le_bytes([pkt[0], pkt[1], pkt[2], pkt[3]]));
@@ -363,7 +363,7 @@ unsafe fn ep0_class_no_data(
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
         let g = XHCI_STATE.lock();
-        let st = g.as_ref().unwrap();
+        let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
     for _ in 0..100_000 {
@@ -448,7 +448,7 @@ unsafe fn ep0_control_in(
 
     let tr_va = {
         let g = XHCI_STATE.lock();
-        g.as_ref().unwrap().tr_va
+        match g.as_ref() { Some(s) => s.tr_va, None => return false }
     };
     let trb0 = tr_va as *mut u32;
     // Setup Stage, TRT=IN data (3), IDT=1
@@ -474,7 +474,7 @@ unsafe fn ep0_control_in(
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
         let g = XHCI_STATE.lock();
-        let st = g.as_ref().unwrap();
+        let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
     let mut ok = false;
@@ -546,7 +546,7 @@ unsafe fn configure_hid_interrupt_ep(
 
     let pmoff = {
         let g = XHCI_STATE.lock();
-        g.as_ref().unwrap().pmoff
+        match g.as_ref() { Some(s) => s.pmoff, None => return false }
     };
     {
         let mut g = XHCI_STATE.lock();
@@ -652,8 +652,8 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
                 let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
                 let rt = st.base + rtsoff;
                 let erdp = er_pa + (st.er_dequeue as u64) * 16;
-                w32(rt, 0x38, erdp as u32);
-                w32(rt, 0x3C, (erdp >> 32) as u32);
+                w32(rt, 0x18, erdp as u32);
+                w32(rt, 0x1C, (erdp >> 32) as u32);
                 if cc == 1 {
                     return Some((slot, cc));
                 }
@@ -671,7 +671,7 @@ unsafe fn wait_cmd_completion() -> Option<(u8, u8)> {
 unsafe fn issue_address_or_config_cmd(input_ctx_pa: u64, slot: u8, trb_type: u32) -> bool {
     {
         let mut g = XHCI_STATE.lock();
-        let st = g.as_mut().unwrap();
+        let st = match g.as_mut() { Some(s) => s, None => return false };
         let idx = st.cmd_enqueue as usize;
         let cycle = st.cmd_cycle;
         let trb = (st.cmd_ring_va as *mut u32).add(idx * 4);
@@ -705,7 +705,7 @@ unsafe fn address_device(slot: u8, port: u8, speed: u8, ep0_mps: u16) -> bool {
     core::ptr::write_bytes(out_ctx.1, 0, 8192);
     {
         let g = XHCI_STATE.lock();
-        let st = g.as_ref().unwrap();
+        let st = match g.as_ref() { Some(s) => s, None => return false };
         let dcbaa = st.dcbaa_va as *mut u64;
         dcbaa.add(slot as usize).write_volatile(out_ctx.0);
     }
@@ -820,10 +820,9 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
     let pkt: [u8; 8] = [0x00, 0x09, config, 0, 0, 0, 0, 0];
     core::ptr::copy_nonoverlapping(pkt.as_ptr(), setup_pa.1, 8);
 
-    let (tr_va, tr_pa) = {
+    let tr_va = {
         let g = XHCI_STATE.lock();
-        let st = g.as_ref().unwrap();
-        (st.tr_va, st.tr_va - st.pmoff)
+        match g.as_ref() { Some(s) => s.tr_va, None => return false }
     };
 
     // Setup Stage TRB (type 2), IDT=1, TRT=No Data (0)
@@ -840,11 +839,11 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
     trb1.add(2).write_volatile(0);
     trb1.add(3).write_volatile((4u32 << 10) | (1 << 16) | (1 << 5) | 1); // Status, DIR, IOC, C
 
-    let _ = (tr_pa, ep0_mps, setup_pa);
+    let _ = (ep0_mps, setup_pa);
     core::arch::asm!("sfence", options(nostack, preserves_flags));
     {
         let g = XHCI_STATE.lock();
-        let st = g.as_ref().unwrap();
+        let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1); // EP0 DCI=1
     }
 

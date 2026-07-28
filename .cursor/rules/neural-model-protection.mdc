@@ -1,0 +1,43 @@
+---
+description: Proteção dos modelos LLM .BIN — NUNCA apagar/mover arquivos de models/
+globs: models/*.BIN, models/*.bitnet
+---
+
+# ⚠️ REGRA DE OURO: Modelos LLM são INVOLÁVEIS
+
+Os arquivos em `models/*.BIN` e `models/*.bitnet` são o **ativo mais caro do projeto**.
+Cada arquivo leva **30–90 minutos para ser gerado** a partir de modelos GGUF.
+
+## Onde os modelos VIVEM (seguro)
+
+```
+📁 models/          ← DIREÓRIO PERMANENTE (gitignored, NUNCA apagar)
+  ├── AGENT.BIN      Qwen 2.5 3B (752 MB) — slot Agent
+  ├── LEARNER.BIN    Qwen 2.5 0.5B (124 MB) — slot Learner
+  ├── VISION.BIN     SigLIP ViT-B (33 MB) — slot Vision
+  ├── RERANKER.BIN   BGE Reranker v2 M3 (165 MB) — slot Reranker
+  ├── RUSTCDR3.BIN   DeepSeek Coder 1.3B (321 MB) — slot Coder
+  ├── LLAMA8B.BIN    Llama 3.1 8B (1.9 GB) — slot Pro
+  └── BITNET2B.BIN   BitNet 2B (590 MB) — slot Active
+```
+
+## Onde NUNCA guardar
+
+❌ `target/` — VOLÁTIL! Cargo clean, mkfat32, builds apagam sem dó.
+❌ `target/models/` — idem, subdiretório de target.
+
+## Regras
+
+1. **NUNCA** apagar, mover ou renomear arquivos em `models/`
+2. **NUNCA** rodar `Remove-Item`, `rm`, `cargo clean` em `models/`
+3. Para copiar para a imagem FAT: `Copy-Item models/X.BIN target/X.BIN`
+4. mkfat32.py já busca em `models/` primeiro
+5. Se precisar de espaço: apague o .gguf bruto do cache HF, não o .BIN convertido
+
+## Recuperação
+
+Se um modelo for perdido (deus me livre), o cache HF ainda tem os .gguf:
+```powershell
+# Cache: C:\Users\msrov\.cache\huggingface\hub\models--*/snapshots/*/*.gguf
+python tools/convert_gguf_to_bitnet.py --model <cached_gguf_path> --output models/MODELO.BIN
+```

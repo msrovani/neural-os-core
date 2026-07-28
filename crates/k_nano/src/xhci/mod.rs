@@ -155,11 +155,11 @@ pub unsafe fn init_xhci() {
         erst.write_volatile(er.0);
         erst.add(1).write_volatile(256u64);
         let rt = base + rtsoff;
-        w32(rt, 0x28, 1); // ERSTSZ
-        w32(rt, 0x30, erst_mem.0 as u32);
-        w32(rt, 0x34, (erst_mem.0 >> 32) as u32);
-        w32(rt, 0x38, er.0 as u32);
-        w32(rt, 0x3C, (er.0 >> 32) as u32);
+        w32(rt, 0x08, 1); // ERSTSZ (Interrupter 0)
+        w32(rt, 0x10, erst_mem.0 as u32); // ERSTBA (Interrupter 0)
+        w32(rt, 0x14, (erst_mem.0 >> 32) as u32);
+        w32(rt, 0x18, er.0 as u32); // ERDP (Interrupter 0)
+        w32(rt, 0x1C, (er.0 >> 32) as u32);
 
         // CONFIG MaxSlotsEn
         let slots = if max_slots == 0 { 8 } else { max_slots.min(64) };
@@ -433,12 +433,16 @@ pub unsafe fn bulk_transfer(
     // Wait for completion event (poll ER with timeout curto — HW real sem EP MSC).
     for _ in 0..80_000 {
         let evt = st.er_va as *const u32;
-        let flags = (evt.add(11).read_volatile() >> 24) as u8;
-        if flags & 0x20 != 0 {
-            let comp = evt.add(10).read_volatile() & 0xFF;
+        let dw3 = evt.add(3).read_volatile();
+        let trb_type = (dw3 >> 10) & 0x3F;
+        if trb_type == 32 {
+            let comp = ((evt.add(2).read_volatile() >> 24) & 0xFF) as u8;
             let erdp_phys = st.er_va - st.pmoff;
-            w32(st.base + st.capl, 0x38, erdp_phys as u32);
-            w32(st.base + st.capl, 0x3C, (erdp_phys >> 32) as u32 | 0x01);
+            // ERDP advance via Runtime space (Interrupter 0)
+            let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
+            let rt = st.base + rtsoff;
+            w32(rt, 0x18, erdp_phys as u32);
+            w32(rt, 0x1C, (erdp_phys >> 32) as u32 | 0x01);
             if comp == 0 {
                 return true;
             }

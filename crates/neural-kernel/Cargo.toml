@@ -40,6 +40,8 @@ hermes-crate = { path = "../hermes", package = "hermes" }
 jarbas-crate = { path = "../jarbas", package = "jarbas" }
 
 [features]
+default = ["ring3"]
+ring3 = []
 # Sprint 107 QEMU HIT clima (STT-sim seed + lexicon constrained). Off = HW real.
 weather-e2e = []
 # Persiste B*.LOG no FAT32 (útil em pendrive sem cabo serial). Off por default

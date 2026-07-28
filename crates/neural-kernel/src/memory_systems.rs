@@ -3,13 +3,13 @@
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use alloc::collections::BTreeMap;
 
 pub static BGE_LOADED: AtomicBool = AtomicBool::new(false);
-static mut BGE_WEIGHTS: Option<Vec<f32>> = None;
-static mut BGE_VOCAB: usize = 0;
-static mut BGE_HIDDEN: usize = 384;
+static BGE_WEIGHTS: spin::Mutex<Option<Vec<f32>>> = spin::Mutex::new(None);
+static BGE_VOCAB: AtomicUsize = AtomicUsize::new(0);
+static BGE_HIDDEN: AtomicUsize = AtomicUsize::new(384);
 
 /// Carrega modelo BGE do .bitnet v3 (embedding table apenas).
 /// Formato: magic(4) + ver(4) + vocab(4) + hidden(4) + layers(4) + ffn(4) + heads(4) + max_seq(4)
@@ -45,17 +45,15 @@ pub fn load_bge(data: &[u8]) -> bool {
                 let floats: &[f32] = unsafe {
                     core::slice::from_raw_parts(data[pos..].as_ptr() as *const f32, n_orig)
                 };
-                unsafe {
-                    BGE_VOCAB = n_orig / hidden;
-                    BGE_HIDDEN = hidden;
-                    BGE_WEIGHTS = Some(floats.to_vec());
-                }
+                BGE_VOCAB.store(n_orig / hidden, Ordering::Relaxed);
+                BGE_HIDDEN.store(hidden, Ordering::Relaxed);
+                *BGE_WEIGHTS.lock() = Some(floats.to_vec());
             }
         }
         pos += f32_bytes + n_quant;
     }
 
-    let loaded = unsafe { BGE_WEIGHTS.is_some() };
+    let loaded = BGE_WEIGHTS.lock().is_some();
     BGE_LOADED.store(loaded, Ordering::Relaxed);
     if loaded {
         crate::load_status::set(
@@ -63,8 +61,8 @@ pub fn load_bge(data: &[u8]) -> bool {
             crate::load_status::LoadStatus::Loaded,
         );
         k_nano::slog_bin!("Asset", "bge", "Carregado: vocab={} hidden={} ({} MB)",
-            unsafe { BGE_VOCAB }, unsafe { BGE_HIDDEN },
-            unsafe { BGE_WEIGHTS.as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024) });
+            BGE_VOCAB.load(Ordering::Relaxed), BGE_HIDDEN.load(Ordering::Relaxed),
+            BGE_WEIGHTS.lock().as_ref().map_or(0, |w| w.len() * 4 / 1024 / 1024));
     } else {
         crate::load_status::set(
             crate::load_status::AssetKind::Bge,
@@ -77,9 +75,10 @@ pub fn load_bge(data: &[u8]) -> bool {
 /// Gera embedding de 384 dims por media dos embeddings dos tokens.
 pub fn bge_embed(text: &str) -> Vec<f32> {
     if !BGE_LOADED.load(Ordering::Relaxed) { return Vec::new(); }
-    let hidden = unsafe { BGE_HIDDEN };
-    let Some(weights) = (unsafe { BGE_WEIGHTS.as_ref() }) else { return Vec::new(); };
-    let vocab = unsafe { BGE_VOCAB };
+    let hidden = BGE_HIDDEN.load(Ordering::Relaxed);
+    let vocab = BGE_VOCAB.load(Ordering::Relaxed);
+    let weights_guard = BGE_WEIGHTS.lock();
+    let Some(weights) = weights_guard.as_ref() else { return Vec::new(); };
 
     let tokens = crate::cortex::Tokenizer::encode(text);
     if tokens.is_empty() { return vec![0.0f32; hidden]; }
@@ -102,7 +101,7 @@ pub fn bge_status() -> String {
             crate::load_status::AssetKind::Bge,
             crate::load_status::LoadStatus::Loaded,
         );
-        alloc::format!("[BGE] {} dim, loaded=true", unsafe { BGE_HIDDEN })
+        alloc::format!("[BGE] {} dim, loaded=true", BGE_HIDDEN.load(Ordering::Relaxed))
     } else {
         crate::load_status::set_if_upgrade(
             crate::load_status::AssetKind::Bge,

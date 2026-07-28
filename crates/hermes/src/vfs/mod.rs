@@ -277,7 +277,7 @@ impl VectorFs {
             let dot: f32 = q.iter().zip(v.iter()).map(|(a,b)| a*b).sum();
             (dot, k.as_str())
         }).collect();
-        scored.sort_by(|a,b| b.0.partial_cmp(&a.0).unwrap_or(core::cmp::Ordering::Equal));
+        scored.sort_by(|a,b| b.0.total_cmp(&a.0));
         scored.into_iter().take(limit).map(|(_,k)| String::from(k)).collect()
     }
     pub fn status(&self) -> String { alloc::format!("[VECFS] {} paths, dim={}", self.paths.len(), self.dim) }

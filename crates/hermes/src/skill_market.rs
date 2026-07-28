@@ -5,7 +5,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
-use alloc::format;
 use core::sync::atomic::{AtomicBool, Ordering};
 use lazy_static::lazy_static;
 use ticket_lock::TicketLock;

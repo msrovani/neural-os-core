@@ -96,7 +96,10 @@ impl PocketTtsEngine {
         let tokens = cortex::cortex::Tokenizer::encode(text);
         if tokens.is_empty() { return vec![0i16; SAMPLE_RATE as usize / 10]; }
 
-        let embed = self.embed_w.as_ref().unwrap();
+        let embed = match self.embed_w.as_ref() {
+            Some(e) => e,
+            None => return crate::audio::tts::synthesize(text),
+        };
         let h = self.hidden;
         let ntok = tokens.len().max(1) as f32;
         let mut latent = Tensor::new((1, h));
@@ -113,8 +116,14 @@ impl PocketTtsEngine {
             } else { h1 }
         } else { latent };
 
-        let w3 = self.dw3.as_ref().unwrap();
-        let b3 = self.db3.as_ref().unwrap();
+        let w3 = match self.dw3.as_ref() {
+            Some(w) => w,
+            None => return crate::audio::tts::synthesize(text),
+        };
+        let b3 = match self.db3.as_ref() {
+            Some(b) => b,
+            None => return crate::audio::tts::synthesize(text),
+        };
         let w3t = w3.transposed();
         let raw = crate::gpu::backend::gpu_matmul(&features, &w3t).unwrap();
         let cols = raw.shape.1;

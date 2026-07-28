@@ -150,15 +150,22 @@ fn rope_apply_heads(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim
 pub struct LayerWeights {
     pub rms_attn: Vec<f32>,
     pub q: PackedTernaryTensor,
+    pub q_scale: f32,
     pub k: PackedTernaryTensor,
+    pub k_scale: f32,
     pub v: PackedTernaryTensor,
+    pub v_scale: f32,
     pub o: PackedTernaryTensor,
+    pub o_scale: f32,
     pub rms_ffn: Vec<f32>,
     pub rms_inner_attn: Vec<f32>,
     pub rms_ffn_norm: Vec<f32>,
     pub gate: PackedTernaryTensor,
+    pub gate_scale: f32,
     pub up: PackedTernaryTensor,
+    pub up_scale: f32,
     pub down: PackedTernaryTensor,
+    pub down_scale: f32,
     // GQA fields
     pub kv_dim: usize,
     pub num_kv_heads: usize,
@@ -169,9 +176,11 @@ pub struct LayerWeights {
 
 pub struct TransformerModel {
     pub embed: PackedTernaryTensor,
+    pub embed_scale: f32,
     pub layers: Vec<LayerWeights>,
     pub rms_final: Vec<f32>,
     pub unembed: PackedTernaryTensor,
+    pub unembed_scale: f32,
     pub medusa_heads: Vec<MedusaHead>,
     pub vocab_size: u32,
     pub hidden: usize,
@@ -248,15 +257,18 @@ const MEDUSA_HEADS: usize = 3;
 
 pub struct MedusaHead {
     pub w: PackedTernaryTensor,
+    pub w_scale: f32,
 }
 
 impl MedusaHead {
     pub fn new_random(seed: &mut u32, hidden: usize, vocab: usize) -> Self {
-        MedusaHead { w: random_ternary(seed, hidden, vocab) }
+        MedusaHead { w: random_ternary(seed, hidden, vocab), w_scale: 1.0 }
     }
 
     pub fn forward(&self, hidden: &Tensor) -> Tensor {
-        self.w.matmul_hybrid(hidden).unwrap()
+        let mut out = self.w.matmul_hybrid(hidden).unwrap();
+        out.mul_scalar(self.w_scale);
+        out
     }
 }
 
@@ -291,15 +303,22 @@ impl TransformerModel {
             layers.push(LayerWeights {
                 rms_attn: rms_default.clone(),
                 q: random_ternary(&mut seed, HIDDEN, HIDDEN),
+                q_scale: 1.0,
                 k: random_ternary(&mut seed, HIDDEN, HIDDEN),
+                k_scale: 1.0,
                 v: random_ternary(&mut seed, HIDDEN, HIDDEN),
+                v_scale: 1.0,
                 o: random_ternary(&mut seed, HIDDEN, HIDDEN),
+                o_scale: 1.0,
                 rms_ffn: rms_default.clone(),
                 rms_inner_attn: rms_default.clone(),
                 rms_ffn_norm: vec![1.0; FFN_DIM * 2],
                 gate: random_ternary(&mut seed, HIDDEN, FFN_DIM),
+                gate_scale: 1.0,
                 up: random_ternary(&mut seed, HIDDEN, FFN_DIM),
+                up_scale: 1.0,
                 down: random_ternary(&mut seed, FFN_DIM, HIDDEN),
+                down_scale: 1.0,
                 kv_dim: HIDDEN,
                 num_kv_heads: NUM_HEADS,
                 intermediate_size: FFN_DIM,
@@ -310,9 +329,11 @@ impl TransformerModel {
         let medusa_heads = (0..MEDUSA_HEADS).map(|_| MedusaHead::new_random(&mut seed, HIDDEN, VOCAB_SIZE as usize)).collect();
         TransformerModel {
             embed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
+            embed_scale: 1.0,
             layers,
             rms_final: rms_default,
             unembed: random_ternary(&mut seed, HIDDEN, VOCAB_SIZE as usize),
+            unembed_scale: 1.0,
             medusa_heads,
             vocab_size: VOCAB_SIZE as u32,
             hidden: HIDDEN,
@@ -336,7 +357,7 @@ impl TransformerModel {
         let mut data = Vec::with_capacity(self.hidden);
         for row in 0..self.hidden {
             let idx = row * self.embed.shape.1 + t;
-            data.push(self.embed.get_weight(idx) as f32);
+            data.push((self.embed.get_weight(idx) as f32) * self.embed_scale);
         }
         Tensor::from_row_major((1, self.hidden), data).unwrap()
     }
@@ -371,7 +392,7 @@ impl TransformerModel {
                 mask_data[i * total_seq + j] = NEG_INFINITY;
             }
         }
-        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap_or_else(|| Tensor::zero((new_len, total_seq)));
 
         let _layer_count = self.layers.len();
         // Soft-float 2B: stride=3 (~⅓ layers) libera budget p/ chat frame 8 toks + gen.
@@ -393,8 +414,11 @@ impl TransformerModel {
 
             // QKV for new tokens — fallback silencioso se matmul falhar
             let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+            q.mul_scalar(layer.q_scale);
             let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
-            let v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            k.mul_scalar(layer.k_scale);
+            let mut v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            v.mul_scalar(layer.v_scale);
 
             // RoPE on Q and K before cache storage
             let qk_head_dim = self.kv_dim / self.num_heads;
@@ -470,7 +494,7 @@ impl TransformerModel {
                                 }
                             }
                             let k_block_t = k_block.transposed();
-                            let mut scores = q_block.matmul(&k_block_t).unwrap();
+                            let mut scores = q_block.matmul(&k_block_t).unwrap_or_else(|| Tensor::zero((qb_len, kb_len)));
                             let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
 
                             // Scale + causal mask
@@ -505,7 +529,7 @@ impl TransformerModel {
                                         v_g.data[(kb + s) * qk_head_dim + d];
                                 }
                             }
-                            let attn_block = scores.matmul(&v_block).unwrap();
+                            let attn_block = scores.matmul(&v_block).unwrap_or_else(|| Tensor::zero((qb_len, qk_head_dim)));
 
                             // Acumula no output
                             for s in 0..qb_len {
@@ -519,17 +543,20 @@ impl TransformerModel {
                 }
             }
 
-            let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap();
+            let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap_or_else(|| Tensor::zero((new_len, kv_dim)));
             let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-            let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap();
-            x = x.add(&proj).unwrap();
+            let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::zero((new_len, self.hidden)));
+            proj.mul_scalar(layer.o_scale);
+            x = x.add(&proj).unwrap_or_else(|| Tensor::zero(x.shape));
 
             // BitFFN
             let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
-            let gate = layer.gate.matmul_hybrid(&norm2).unwrap();
-            let up = layer.up.matmul_hybrid(&norm2).unwrap();
+            let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((new_len, layer.ffn_group_size)));
+            gate.mul_scalar(layer.gate_scale);
+            let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((new_len, layer.ffn_group_size)));
+            up.mul_scalar(layer.up_scale);
             let ffn_group = gate.shape.1;
-            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
+            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap_or_else(|| Tensor::zero(gate.shape));
             for (i, g) in gated.data.iter_mut().enumerate() { *g = silu(*g) * up.data[i]; }
 
             let intermediate_size = layer.intermediate_size;
@@ -546,7 +573,8 @@ impl TransformerModel {
             }
 
             let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-            let down = layer.down.matmul_hybrid(&gated_norm).unwrap();
+            let mut down = layer.down.matmul_hybrid(&gated_norm).unwrap_or_else(|| Tensor::zero((new_len, layer.down.shape.1)));
+            down.mul_scalar(layer.down_scale);
             for s in 0..new_len {
                 for d in 0..down_out.min(self.hidden) {
                     x.data[s * self.hidden + d] += down.data[s * down_out + d];
@@ -558,12 +586,22 @@ impl TransformerModel {
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let last_hidden = Tensor::from_row_major((1, self.hidden),
-            final_norm.data[(new_len - 1) * self.hidden..new_len * self.hidden].to_vec()).unwrap();
-        let logits = if self.tie_embeddings {
-            self.embed.matmul_hybrid(&last_hidden).unwrap()
+            final_norm.data[(new_len - 1) * self.hidden..new_len * self.hidden].to_vec())
+            .unwrap_or_else(|| {
+                let start = ((new_len - 1) * self.hidden).min(final_norm.data.len().saturating_sub(1));
+                let end = (new_len * self.hidden).min(final_norm.data.len());
+                let mut padded = vec![0.0f32; self.hidden];
+                for (i, &v) in final_norm.data[start..end].iter().enumerate() {
+                    if i < self.hidden { padded[i] = v; }
+                }
+                Tensor { shape: (1, self.hidden), data: padded }
+            });
+        let mut logits = if self.tie_embeddings {
+            self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
         } else {
-            self.unembed.matmul_hybrid(&last_hidden).unwrap()
+            self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
         };
+        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
         (last_hidden, logits)
     }
 
@@ -590,13 +628,16 @@ impl TransformerModel {
                 mask_data[i * total_seq + j] = NEG_INFINITY;
             }
         }
-        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap();
+        let mask = Tensor::from_row_major((new_len, total_seq), mask_data).unwrap_or_else(|| Tensor::zero((new_len, total_seq)));
 
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let norm = self.rms_norm_tensor(&x, &layer.rms_attn);
             let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+            q.mul_scalar(layer.q_scale);
             let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
-            let v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            k.mul_scalar(layer.k_scale);
+            let mut v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+            v.mul_scalar(layer.v_scale);
             let qk_head_dim = self.kv_dim / self.num_heads;
             rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
                 &self.rope_cos, &self.rope_sin, start_pos);
@@ -652,7 +693,7 @@ impl TransformerModel {
                                 }
                             }
                             let k_block_t = k_block.transposed();
-                            let mut scores = q_block.matmul(&k_block_t).unwrap();
+                            let mut scores = q_block.matmul(&k_block_t).unwrap_or_else(|| Tensor::zero((qb_len, kb_len)));
                             let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
                             let mask_row_start = (qb) * total_seq + kb;
                             for si in 0..qb_len {
@@ -679,7 +720,7 @@ impl TransformerModel {
                                         v_g.data[(kb + s) * qk_head_dim + d];
                                 }
                             }
-                            let attn_block = scores.matmul(&v_block).unwrap();
+                            let attn_block = scores.matmul(&v_block).unwrap_or_else(|| Tensor::zero((qb_len, qk_head_dim)));
                             for s in 0..qb_len {
                                 for d in 0..qk_head_dim {
                                     attn_out_data[(qb + s) * kv_dim + head_start + d] +=
@@ -691,15 +732,18 @@ impl TransformerModel {
                 }
             }
 
-            let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap();
+            let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap_or_else(|| Tensor::zero((new_len, kv_dim)));
             let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-            let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap();
-            x = x.add(&proj).unwrap();
+            let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::zero((new_len, self.hidden)));
+            proj.mul_scalar(layer.o_scale);
+            x = x.add(&proj).unwrap_or_else(|| Tensor::zero(x.shape));
             let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
-            let gate = layer.gate.matmul_hybrid(&norm2).unwrap();
-            let up = layer.up.matmul_hybrid(&norm2).unwrap();
+            let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((new_len, layer.ffn_group_size)));
+            gate.mul_scalar(layer.gate_scale);
+            let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((new_len, layer.ffn_group_size)));
+            up.mul_scalar(layer.up_scale);
             let ffn_group = gate.shape.1;
-            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
+            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap_or_else(|| Tensor::zero(gate.shape));
             for (i, g) in gated.data.iter_mut().enumerate() { *g = silu(*g) * up.data[i]; }
             let intermediate_size = layer.intermediate_size;
             let down_out = layer.down.shape.1;
@@ -714,7 +758,8 @@ impl TransformerModel {
                 }
             }
             let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-            let down = layer.down.matmul_hybrid(&gated_norm).unwrap();
+            let mut down = layer.down.matmul_hybrid(&gated_norm).unwrap_or_else(|| Tensor::zero((new_len, layer.down.shape.1)));
+            down.mul_scalar(layer.down_scale);
             for s in 0..new_len {
                 for d in 0..down_out.min(self.hidden) {
                     x.data[s * self.hidden + d] += down.data[s * down_out + d];
@@ -727,17 +772,19 @@ impl TransformerModel {
         let mut all_logits = vec![0.0f32; new_len * vocab_size];
         for i in 0..new_len {
             let hidden = Tensor::from_row_major((1, self.hidden),
-                final_norm.data[i * self.hidden..(i + 1) * self.hidden].to_vec()).unwrap();
-            let logits = if self.tie_embeddings {
-                self.embed.matmul_hybrid(&hidden).unwrap()
+                final_norm.data[i * self.hidden..(i + 1) * self.hidden].to_vec())
+                .unwrap_or_else(|| Tensor::zero((1, self.hidden)));
+            let mut logits = if self.tie_embeddings {
+                self.embed.matmul_hybrid(&hidden).unwrap_or_else(|| Tensor::zero((1, vocab_size)))
             } else {
-                self.unembed.matmul_hybrid(&hidden).unwrap()
+                self.unembed.matmul_hybrid(&hidden).unwrap_or_else(|| Tensor::zero((1, vocab_size)))
             };
+            logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
             for j in 0..vocab_size {
                 all_logits[i * vocab_size + j] = logits.data[j];
             }
         }
-        Tensor::from_row_major((new_len, vocab_size), all_logits).unwrap()
+        Tensor::from_row_major((new_len, vocab_size), all_logits).unwrap_or_else(|| Tensor::zero((new_len, vocab_size)))
     }
 
     /// AirLLM: apply one transformer layer then return; caller drops weights.
@@ -756,8 +803,11 @@ impl TransformerModel {
         let norm = self.rms_norm_tensor(x, &layer.rms_attn);
 
         let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, self.kv_dim)));
+        q.mul_scalar(layer.q_scale);
         let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
-        let v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+        k.mul_scalar(layer.k_scale);
+        let mut v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::new((new_len, layer.kv_dim)));
+        v.mul_scalar(layer.v_scale);
 
         let qk_head_dim = self.kv_dim / self.num_heads.max(1);
         rope_apply_heads(&mut q.data, new_len, self.num_heads, qk_head_dim,
@@ -858,14 +908,17 @@ impl TransformerModel {
 
         let attn_out = Tensor::from_row_major((new_len, kv_dim), attn_out_data).unwrap();
         let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-        let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::new((new_len, self.hidden)));
+        let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::new((new_len, self.hidden)));
+        proj.mul_scalar(layer.o_scale);
         if let Some(summed) = x.add(&proj) {
             *x = summed;
         }
 
         let norm2 = self.rms_norm_tensor(x, &layer.rms_ffn);
-        let gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
-        let up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        gate.mul_scalar(layer.gate_scale);
+        let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::new((new_len, layer.ffn_group_size)));
+        up.mul_scalar(layer.up_scale);
         let ffn_group = gate.shape.1.max(1);
         let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
         for (i, g) in gated.data.iter_mut().enumerate() {
@@ -886,8 +939,9 @@ impl TransformerModel {
         }
 
         let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-        let down = layer.down.matmul_hybrid(&gated_norm)
+        let mut down = layer.down.matmul_hybrid(&gated_norm)
             .unwrap_or_else(|| Tensor::new((new_len, down_out.max(1))));
+        down.mul_scalar(layer.down_scale);
         for s in 0..new_len {
             for d in 0..down_out.min(self.hidden) {
                 x.data[s * self.hidden + d] += down.data[s * down_out + d];
@@ -929,11 +983,12 @@ impl TransformerModel {
             (1, self.hidden),
             final_norm.data[(new_len - 1) * self.hidden..new_len * self.hidden].to_vec(),
         ).unwrap();
-        let logits = if self.tie_embeddings {
+        let mut logits = if self.tie_embeddings {
             self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::new((1, self.vocab_size as usize)))
         } else {
             self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::new((1, self.vocab_size as usize)))
         };
+        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
         (last_hidden, logits)
     }
 
@@ -958,7 +1013,7 @@ impl TransformerModel {
                 mask_data[i * seq_len + j] = NEG_INFINITY;
             }
         }
-        let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap();
+        let mask = Tensor::from_row_major((seq_len, seq_len), mask_data).unwrap_or_else(|| Tensor::zero((seq_len, seq_len)));
 
         let layer_count = self.layers.len();
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -967,11 +1022,14 @@ impl TransformerModel {
 
             // QKV projections with GQA dimensions
             let t_q0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let mut q = layer.q.matmul_hybrid(&norm).unwrap();  // (seq, kv_dim)
+            let mut q = layer.q.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::zero((seq_len, self.kv_dim)));  // (seq, kv_dim)
+            q.mul_scalar(layer.q_scale);
             let t_q1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let mut k = layer.k.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
+            let mut k = layer.k.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::zero((seq_len, layer.kv_dim)));  // (seq, k_dim)
+            k.mul_scalar(layer.k_scale);
             let _t_k1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-            let v = layer.v.matmul_hybrid(&norm).unwrap();  // (seq, k_dim)
+            let mut v = layer.v.matmul_hybrid(&norm).unwrap_or_else(|| Tensor::zero((seq_len, layer.kv_dim)));  // (seq, k_dim)
+            v.mul_scalar(layer.v_scale);
             let t_v1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
             // RoPE on Q and K
@@ -1032,7 +1090,7 @@ impl TransformerModel {
                                 }
                             }
                             let k_block_t = k_block.transposed();
-                            let mut scores = q_block.matmul(&k_block_t).unwrap();
+                            let mut scores = q_block.matmul(&k_block_t).unwrap_or_else(|| Tensor::zero((qb_len, kb_len)));
                             let scale = 1.0 / libm::sqrtf(qk_head_dim as f32);
 
                             for si in 0..qb_len {
@@ -1060,7 +1118,7 @@ impl TransformerModel {
                                         v_g.data[(kb + s) * qk_head_dim + d];
                                 }
                             }
-                            let attn_block = scores.matmul(&v_block).unwrap();
+                            let attn_block = scores.matmul(&v_block).unwrap_or_else(|| Tensor::zero((qb_len, qk_head_dim)));
 
                             for s in 0..qb_len {
                                 for d in 0..qk_head_dim {
@@ -1075,19 +1133,22 @@ impl TransformerModel {
 
             let t_attn1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
-            let attn_out = Tensor::from_row_major((seq_len, kv_dim), attn_out_data).unwrap();
+            let attn_out = Tensor::from_row_major((seq_len, kv_dim), attn_out_data).unwrap_or_else(|| Tensor::zero((seq_len, kv_dim)));
             let attn_out_norm = self.rms_norm_tensor(&attn_out, &layer.rms_inner_attn);
-            let proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap();  // (seq, kv_dim) @ (kv_dim, hidden) = (seq, hidden)
-            x = x.add(&proj).unwrap();
+            let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::zero((seq_len, self.hidden)));
+            proj.mul_scalar(layer.o_scale);
+            x = x.add(&proj).unwrap_or_else(|| Tensor::zero(x.shape));
             let t_proj1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
             // BitFFN
             let norm2 = self.rms_norm_tensor(&x, &layer.rms_ffn);
-            let gate = layer.gate.matmul_hybrid(&norm2).unwrap();  // (seq, ffn_group_size)
-            let up = layer.up.matmul_hybrid(&norm2).unwrap();      // (seq, ffn_group_size)
+            let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((seq_len, layer.ffn_group_size)));
+            gate.mul_scalar(layer.gate_scale);
+            let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((seq_len, layer.ffn_group_size)));
+            up.mul_scalar(layer.up_scale);
             let t_ffn1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             let ffn_group = gate.shape.1;
-            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
+            let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap_or_else(|| Tensor::zero(gate.shape));
             for (i, g) in gated.data.iter_mut().enumerate() {
                 *g = silu(*g) * up.data[i];
             }
@@ -1108,7 +1169,8 @@ impl TransformerModel {
             }
 
             let gated_norm = self.rms_norm_tensor(&gated_full, &layer.rms_ffn_norm);
-            let down = layer.down.matmul_hybrid(&gated_norm).unwrap();  // (seq, intermediate) @ (intermediate, down_out) = (seq, down_out)
+            let mut down = layer.down.matmul_hybrid(&gated_norm).unwrap_or_else(|| Tensor::zero((seq_len, layer.down.shape.1)));
+            down.mul_scalar(layer.down_scale);
 
             // Add FFN output to residual (first down_out dims)
             for s in 0..seq_len {
@@ -1129,13 +1191,23 @@ impl TransformerModel {
 
         let final_norm = self.rms_norm_tensor(&x, &self.rms_final);
         let last_hidden = Tensor::from_row_major((1, self.hidden),
-            final_norm.data[(seq_len - 1) * self.hidden..seq_len * self.hidden].to_vec()).unwrap();
+            final_norm.data[(seq_len - 1) * self.hidden..seq_len * self.hidden].to_vec())
+            .unwrap_or_else(|| {
+                let start = ((seq_len - 1) * self.hidden).min(final_norm.data.len().saturating_sub(1));
+                let end = (seq_len * self.hidden).min(final_norm.data.len());
+                let mut padded = vec![0.0f32; self.hidden];
+                for (i, &v) in final_norm.data[start..end].iter().enumerate() {
+                    if i < self.hidden { padded[i] = v; }
+                }
+                Tensor { shape: (1, self.hidden), data: padded }
+            });
         let t_unembed0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        let logits = if self.tie_embeddings {
-            self.embed.matmul_hybrid(&last_hidden).unwrap()
+        let mut logits = if self.tie_embeddings {
+            self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
         } else {
-            self.unembed.matmul_hybrid(&last_hidden).unwrap()
+            self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
         };
+        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
         let t_unembed1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         if t_unembed1 - t_unembed0 > 10 {
             k_nano::slog_cortex!("FWD", "info", "unembed: {} ticks", t_unembed1 - t_unembed0);
@@ -1158,7 +1230,11 @@ pub fn sample(&self, tokens: &[u32], top_k: usize, temperature: f32) -> u32 {
         .map(|(i, &v)| (i, v / temperature.max(0.01))).collect();
 
     if top_k > 0 && top_k < probs.len() {
-        probs.select_nth_unstable_by(top_k - 1, |a, b| b.1.partial_cmp(&a.1).unwrap());
+        probs.select_nth_unstable_by(top_k - 1, |a, b| {
+            if b.1 > a.1 { core::cmp::Ordering::Less }
+            else if b.1 < a.1 { core::cmp::Ordering::Greater }
+            else { core::cmp::Ordering::Equal }
+        });
         probs.truncate(top_k);
     }
     let max_logit = probs.iter().map(|(_, v)| *v).fold(NEG_INFINITY, |a, b| a.max(b));
@@ -1195,6 +1271,13 @@ fn read_u8(data: &[u8], offset: &mut usize) -> Option<u8> {
     Some(v)
 }
 
+fn read_u64(data: &[u8], offset: &mut usize) -> Option<u64> {
+    if *offset + 8 > data.len() { return None; }
+    let v = u64::from_le_bytes(data[*offset..*offset + 8].try_into().ok()?);
+    *offset += 8;
+    Some(v)
+}
+
 fn read_u32(data: &[u8], offset: &mut usize) -> Option<u32> {
     if *offset + 4 > data.len() { return None; }
     let bytes = data[*offset..*offset + 4].try_into().ok()?;
@@ -1203,11 +1286,19 @@ fn read_u32(data: &[u8], offset: &mut usize) -> Option<u32> {
 }
 
 fn read_ternary_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<PackedTernaryTensor> {
-    let count = (rows * cols + 3) / 4;
+    let product = rows.checked_mul(cols).unwrap_or(0);
+    if product == 0 { return None; }
+    let count = (product + 3) / 4;
     if *offset + count > data.len() { return None; }
     let packed = data[*offset..*offset + count].to_vec();
     *offset += count;
     Some(PackedTernaryTensor { shape: (rows, cols), packed_data: packed })
+}
+
+fn read_ternary_tensor_with_scale(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<(PackedTernaryTensor, f32)> {
+    let packed = read_ternary_tensor(data, offset, rows, cols)?;
+    let scale = read_f32(data, offset)?;
+    Some((packed, scale))
 }
 
 fn read_f32_tensor(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<Tensor> {
@@ -1234,7 +1325,12 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     let magic = read_u32(data, &mut off)?;
     if magic != 0xBE11BE11 { return None; }
     let version = read_u16(data, &mut off)?;
-    let _num_params = read_u32(data, &mut off)?;
+    // v4: u32 num_params; v5+: u64 num_params
+    let _num_params = if version >= 5 {
+        read_u64(data, &mut off)? as u64
+    } else {
+        read_u32(data, &mut off)? as u64
+    };
     let hidden = read_u16(data, &mut off)? as usize;
     let num_layers = read_u16(data, &mut off)? as usize;
     // Auto-expand heap based on header (before main parsing)
@@ -1334,7 +1430,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             }
         }
 
-        let embed = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
+        let (embed, embed_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, vocab_size as usize)?;
 
         // GQA/BitFFN dimensions from header (2B: q_dim=2560, head_dim=128, k_dim=640)
         let kv_head_dim = q_dim / num_heads.max(1);
@@ -1427,18 +1523,25 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             } else {
                 vec![1.0; intermediate_size]
             };
+            let (q, q_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, q_dim)?;
+            let (k, k_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, k_dim)?;
+            let (v, v_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, k_dim)?;
+            let (o, o_scale) = read_ternary_tensor_with_scale(data, &mut off, q_dim, hidden)?;
+            let (gate, gate_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, ffn_group)?;
+            let (up, up_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, ffn_group)?;
+            let (down, down_scale) = read_ternary_tensor_with_scale(data, &mut off, intermediate_size, down_out)?;
             layers.push(LayerWeights {
                 rms_attn,
-                q: read_ternary_tensor(data, &mut off, hidden, q_dim)?,
-                k: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
-                v: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
-                o: read_ternary_tensor(data, &mut off, q_dim, hidden)?,
+                q, q_scale,
+                k, k_scale,
+                v, v_scale,
+                o, o_scale,
                 rms_ffn,
                 rms_inner_attn,
                 rms_ffn_norm,
-                gate: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
-                up: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
-                down: read_ternary_tensor(data, &mut off, intermediate_size, down_out)?,
+                gate, gate_scale,
+                up, up_scale,
+                down, down_scale,
                 kv_dim: q_dim,
                 num_kv_heads,
                 intermediate_size,
@@ -1458,25 +1561,25 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         // reads as all-zero (past end of actual file in QEMU device-loader memory region),
         // allocate a zero tensor and mark tie_embeddings.
         let expected = (hidden * vocab_size as usize + 3) / 4;
-        let unembed = if !tie_embeddings && off + expected <= data.len() {
+        let (unembed, unembed_scale) = if !tie_embeddings && off + expected <= data.len() {
             // Check first 16 bytes are non-zero (zero = past file end = tied)
             let is_zeroed = data[off..(off + 16).min(data.len())].iter().all(|&b| b == 0);
             if is_zeroed {
                 tie_embeddings = true;
-                PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![0u8; expected] }
+                (PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![0u8; expected] }, 1.0)
             } else {
-                read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?
+                read_ternary_tensor_with_scale(data, &mut off, hidden, vocab_size as usize)?
             }
         } else {
             tie_embeddings = true;
-            PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![0u8; expected] }
+            (PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![0u8; expected] }, 1.0)
         };
 
         let mut medusa_heads = Vec::with_capacity(num_medusa);
         if num_medusa > 0 {
             for _ in 0..num_medusa {
-                let w = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
-                medusa_heads.push(MedusaHead { w });
+                let (w, w_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, vocab_size as usize)?;
+                medusa_heads.push(MedusaHead { w, w_scale });
             }
         }
 
@@ -1497,7 +1600,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         k_nano::slog_cortex!("LLM", "info", "model OK layers={} q_dim={} tied={} off={}KB", num_layers, q_dim, tie_embeddings as u8, off / 1024);
 
         let model = TransformerModel {
-            embed, layers, rms_final, unembed, medusa_heads,
+            embed, embed_scale, layers, rms_final, unembed, unembed_scale, medusa_heads,
             vocab_size, hidden, num_layers, max_seq: max_seq as usize,
             num_heads, num_kv_heads, head_dim: kv_head_dim, kv_dim: q_dim,
             intermediate_size,
@@ -1580,15 +1683,22 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             layers.push(LayerWeights {
                 rms_attn,
                 q: read_ternary_tensor(data, &mut off, hidden, q_dim)?,
+                q_scale: 1.0,
                 k: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
+                k_scale: 1.0,
                 v: read_ternary_tensor(data, &mut off, hidden, k_dim)?,
+                v_scale: 1.0,
                 o: read_ternary_tensor(data, &mut off, q_dim, hidden)?,
+                o_scale: 1.0,
                 rms_ffn,
                 rms_inner_attn,
                 rms_ffn_norm,
                 gate: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
+                gate_scale: 1.0,
                 up: read_ternary_tensor(data, &mut off, hidden, ffn_group)?,
+                up_scale: 1.0,
                 down: read_ternary_tensor(data, &mut off, intermediate_size, down_out)?,
+                down_scale: 1.0,
                 kv_dim: q_dim,
                 num_kv_heads,
                 intermediate_size,
@@ -1603,15 +1713,22 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             layers.push(LayerWeights {
                 rms_attn,
                 q: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                q_scale: 1.0,
                 k: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                k_scale: 1.0,
                 v: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                v_scale: 1.0,
                 o: read_ternary_tensor(data, &mut off, hidden, hidden)?,
+                o_scale: 1.0,
                 rms_ffn,
                 rms_inner_attn,
                 rms_ffn_norm,
                 gate: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
+                gate_scale: 1.0,
                 up: read_ternary_tensor(data, &mut off, ffn_dim, hidden)?,
+                up_scale: 1.0,
                 down: read_ternary_tensor(data, &mut off, hidden, ffn_dim)?,
+                down_scale: 1.0,
                 kv_dim: hidden,
                 num_kv_heads,
                 intermediate_size,
@@ -1655,7 +1772,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     if num_medusa > 0 {
         for _ in 0..num_medusa {
             let w = read_ternary_tensor(data, &mut off, hidden, vocab_size as usize)?;
-            medusa_heads.push(MedusaHead { w });
+            medusa_heads.push(MedusaHead { w, w_scale: 1.0 });
         }
     }
 
@@ -1681,7 +1798,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     };
 
     let model = TransformerModel {
-        embed, layers, rms_final, unembed, medusa_heads,
+        embed, embed_scale: 1.0, layers, rms_final, unembed, unembed_scale: 1.0, medusa_heads,
         vocab_size, hidden, num_layers, max_seq: max_seq as usize,
         num_heads, num_kv_heads, head_dim, kv_dim: q_dim,
         intermediate_size,
@@ -2255,7 +2372,7 @@ pub fn load_models_multi(blobs: &[(&[u8], Option<&str>)]) -> usize {
                 slot,
                 crate::model_hub::ModelSlot::Active
                     | crate::model_hub::ModelSlot::GeneratorPro
-                    | crate::model_hub::ModelSlot::GeneratorFast
+                    | crate::model_hub::ModelSlot::Vision
             )
         {
             let also_pro = slot == crate::model_hub::ModelSlot::GeneratorPro

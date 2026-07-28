@@ -1566,6 +1566,10 @@ pub unsafe fn init_platform_sync() {
         if lapic_count > 1 {
             crate::smp::AP_COUNT.store(lapic_count - 1, Ordering::Relaxed);
         }
+    } else {
+        // HW-3: Fallback PIT timer quando ACPI/APIC/LAPIC timer não disponível
+        k_nano::slog_bin!("PLATFORM", "warn", "ACPI not found — falling back to PIT timer");
+        crate::interrupts::remap_pic_pit_fallback();
     }
     crate::display::fb::boot_ckpt(20, "PLATFORM smp");
     // Nao forca SMP: trampoline stub → BSP only (sem hang SIPI)

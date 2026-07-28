@@ -134,7 +134,7 @@ pub fn self_test() -> bool {
             return false;
         }
     };
-    let f: unsafe extern "C" fn() -> u32 = unsafe { core::mem::transmute(va) };
+    let f: unsafe extern "C" fn() -> u32 = unsafe { core::mem::transmute::<*const (), unsafe extern "C" fn() -> u32>(va as *const ()) };
     let r = unsafe { f() };
     if r == 42 {
         k_nano::slog_bin!(

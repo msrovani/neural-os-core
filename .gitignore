@@ -71,3 +71,4 @@ pipenv
 *.safetensors
 models/llm_moe/bitnet_2B.bitnet
 models/tokenizer/BGE_M3.BIN
+.slim/deepwork/

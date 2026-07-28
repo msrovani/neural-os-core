@@ -2,6 +2,7 @@
 
 use crate::device_cap::DeviceId;
 use crate::gpu::compute_abi::BackendState;
+use spin::Mutex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PortStatus {
@@ -18,17 +19,17 @@ pub struct ComputeStatus {
     pub device: Option<DeviceId>,
 }
 
-static mut COMPUTE_STATUS: ComputeStatus = ComputeStatus {
+static COMPUTE_STATUS: Mutex<ComputeStatus> = Mutex::new(ComputeStatus {
     status: PortStatus::NotBound,
     device: None,
-};
+});
 
 pub fn status() -> ComputeStatus {
-    unsafe { COMPUTE_STATUS }
+    *COMPUTE_STATUS.lock()
 }
 
 pub fn set_status(s: ComputeStatus) {
-    unsafe { COMPUTE_STATUS = s; }
+    *COMPUTE_STATUS.lock() = s;
 }
 
 /// Sincroniza porta com estado real do backend GPU (pós-canário).

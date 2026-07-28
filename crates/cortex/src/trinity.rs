@@ -121,6 +121,12 @@ impl TrinityRouter {
         text: &str,
         arena: &mut crate::arena::TensorArena,
     ) -> (&Expert, crate::r3::RouteTrace) {
+        if self.experts.is_empty() {
+            return (&FALLBACK_GENERATOR, crate::r3::RouteTrace {
+                embedding_addr: 0, logits_addr: 0, num_experts: 1, selected_expert: 0,
+                old_log_prob: 0.0, token_ids_addr: 0, token_count: 0,
+            });
+        }
         let text = extract_user_utterance(text);
         if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {
             let tokens = encode(text);
@@ -187,6 +193,9 @@ impl TrinityRouter {
     }
 
     pub fn classify_intent(&self, text: &str) -> &Expert {
+        if self.experts.is_empty() {
+            return &FALLBACK_GENERATOR;
+        }
         let text = extract_user_utterance(text);
         // Tenta router neural primeiro (só no utterance)
         if let (Some(ref embed_table), Some(ref weight)) = (&self.router_embed, &self.router_weight) {

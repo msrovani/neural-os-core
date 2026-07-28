@@ -6,6 +6,10 @@ use core::ptr::read_volatile;
 use core::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use x86_64::VirtAddr;
 
+/// HW-5: Real APIC IDs coletados do MADT (não guess sequencial).
+/// Populado durante `init_acpi()`, consumido por `smp::wake_aps_sequential()`.
+pub static BOOT_APIC_IDS: spin::Mutex<alloc::vec::Vec<u32>> = spin::Mutex::new(alloc::vec::Vec::new());
+
 static BOOT_RSDP_PHYS: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_boot_rsdp(phys: Option<u64>) {
@@ -38,15 +42,33 @@ pub struct AcpiInfo {
     pub pm1a_cnt_port: u16,
     /// SLP_TYPa de \_S5_ (None = tentar fallbacks 5 depois 0).
     pub slp_typa: Option<u8>,
+    /// HW-7: SMI_CMD port address from FADT (0 = ausente).
+    pub smi_cmd: u32,
+    /// HW-7: Value to write to SMI_CMD to enable ACPI.
+    pub acpi_enable: u8,
+    /// HW-7: I/O port PM1b_CNT (0 = ausente).
+    pub pm1b_cnt_blk: u16,
 }
 
 /// Registradores S5 descobertos no boot (power_off_s5).
 static PM1A_CNT_PORT: AtomicU64 = AtomicU64::new(0);
 static SLP_TYPA_STORED: AtomicU8 = AtomicU8::new(0xFF);
+/// HW-7: SMI command port and ACPI enable value.
+static SMI_CMD_PORT: AtomicU64 = AtomicU64::new(0);
+static ACPI_ENABLE_VAL: AtomicU8 = AtomicU8::new(0);
+/// HW-7: PM1b_CNT alternate port (0 = absent).
+static PM1B_CNT_PORT: AtomicU64 = AtomicU64::new(0);
 
 pub fn set_s5_regs(pm1a_cnt_port: u16, slp_typa: Option<u8>) {
     PM1A_CNT_PORT.store(pm1a_cnt_port as u64, Ordering::Release);
     SLP_TYPA_STORED.store(slp_typa.unwrap_or(0xFF), Ordering::Release);
+}
+
+/// HW-7: Store SMI_CMD / ACPI_ENABLE / PM1b_CNT_BLK from FADT.
+pub fn set_power_mgmt_regs(smi_cmd: u32, acpi_enable: u8, pm1b_cnt_blk: u16) {
+    SMI_CMD_PORT.store(smi_cmd as u64, Ordering::Release);
+    ACPI_ENABLE_VAL.store(acpi_enable, Ordering::Release);
+    PM1B_CNT_PORT.store(pm1b_cnt_blk as u64, Ordering::Release);
 }
 
 pub fn pm1a_cnt_port() -> u16 {
@@ -76,6 +98,22 @@ pub fn power_off_s5() -> bool {
 }
 
 fn power_off_s5_try(port: u16, types: &[u8]) -> bool {
+    // HW-7 Step 1: Disable SMI via SMI_CMD if available
+    let smi_cmd = SMI_CMD_PORT.load(Ordering::Acquire) as u16;
+    let acpi_enable = ACPI_ENABLE_VAL.load(Ordering::Acquire);
+    if smi_cmd != 0 && acpi_enable != 0 {
+        unsafe {
+            core::arch::asm!("out dx, al", in("dx") smi_cmd, in("al") acpi_enable, options(nostack, preserves_flags));
+        }
+        crate::slog_nano!("ACPI", "info", "SMI disabled via SMI_CMD={:#x} val={}", smi_cmd, acpi_enable);
+    }
+
+    // HW-7 Step 2: WBINVD — flush all caches
+    unsafe {
+        core::arch::asm!("wbinvd", options(nostack, preserves_flags));
+    }
+
+    // HW-7 Step 3: Write PM1a_CNT with each SLP_TYP
     for &typ in types {
         // PM1_CNT: SLP_TYP[12:10] | SLP_EN[13]
         let val: u16 = ((typ as u16) << 10) | (1u16 << 13);
@@ -100,6 +138,27 @@ fn power_off_s5_try(port: u16, types: &[u8]) -> bool {
             core::hint::spin_loop();
         }
     }
+
+    // HW-7 Step 4: If PM1b_CNT_BLK is valid and different from PM1a, write there too
+    let pm1b = PM1B_CNT_PORT.load(Ordering::Acquire) as u16;
+    if pm1b != 0 && pm1b != port {
+        for &typ in types {
+            let val: u16 = ((typ as u16) << 10) | (1u16 << 13);
+            crate::slog_nano!("ACPI", "info", "S5 write PM1b={:#x} typ={} val={:#x}", pm1b, typ, val);
+            unsafe {
+                core::arch::asm!(
+                    "out dx, ax",
+                    in("dx") pm1b,
+                    in("ax") val,
+                    options(nostack, preserves_flags)
+                );
+            }
+            for _ in 0..100_000 {
+                core::hint::spin_loop();
+            }
+        }
+    }
+
     true
 }
 
@@ -270,6 +329,39 @@ unsafe fn parse_facs(facs_phys: u64, phys_off: u64) {
     }
 }
 
+unsafe fn parse_s5_values(dsdt: *const u8, pos: usize, max_len: usize) -> Option<(u8, u8)> {
+    // Procura SLP_TYPa e SLP_TYPb após "_S5_" no bytecode AML.
+    // Padrões comuns de BIOS:
+    //   _S5_ → 0x12 0x04 ... 0x0A XX 0x0A XX    (Package com BytePrefix)
+    //   _S5_ → 0x08 ... 0x0A XX 0x0A XX          (Name com BytePrefix)
+    //   _S5_ → 0x0A XX 0x0A XX                    (BytePrefix direto)
+    let search_start = pos + 5; // após "_S5_"
+    let search_end = (search_start + 128).min(max_len); // janela maior
+
+    let mut values = [0u8; 2];
+    let mut found = 0;
+    let mut i = search_start;
+
+    while i < search_end && found < 2 {
+        let b = read_volatile(dsdt.add(i));
+        if b == 0x0A && i + 2 <= search_end {
+            // BytePrefix (0x0A) followed by byte value
+            values[found] = read_volatile(dsdt.add(i + 1));
+            found += 1;
+            i += 2;
+        } else if b == 0x0B && i + 3 <= search_end {
+            // WordPrefix (0x0B) followed by word value
+            values[found] = read_volatile(dsdt.add(i + 1)); // low byte
+            found += 1;
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+
+    if found == 2 { Some((values[0], values[1])) } else { None }
+}
+
 unsafe fn parse_s5_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {
     let virt = VirtAddr::new(phys_off.wrapping_add(dsdt_phys)).as_u64() as *const u8;
     let mut sig = [0u8; 4];
@@ -283,7 +375,7 @@ unsafe fn parse_s5_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {
     if len < 36 || len > 2 * 1024 * 1024 {
         return None;
     }
-    // Procurar "_S5_" e BytePrefix 0x0A + typ
+    // Procurar "_S5_" e extrair SLP_TYPa / SLP_TYPb
     let needle = b"_S5_";
     let end = len.saturating_sub(needle.len() + 4);
     for i in 36..end {
@@ -297,13 +389,10 @@ unsafe fn parse_s5_from_dsdt(dsdt_phys: u64, phys_off: u64) -> Option<u8> {
         if !ok {
             continue;
         }
-        // Janela à frente: 0x0A <byte>
-        for k in (i + 4)..(i + 64).min(len.saturating_sub(1)) {
-            if read_volatile(virt.add(k)) == 0x0A {
-                let typ = read_volatile(virt.add(k + 1));
-                crate::slog_nano!("ACPI", "info", "DSDT _S5_ SLP_TYPa={}", typ);
-                return Some(typ);
-            }
+        // Usa parser robusto de bytecodes AML
+        if let Some((typa, _typb)) = parse_s5_values(virt, i, len) {
+            crate::slog_nano!("ACPI", "info", "DSDT _S5_ SLP_TYPa={}", typa);
+            return Some(typa);
         }
     }
     None
@@ -436,6 +525,9 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
     let mut iso_overrides = Vec::new();
     let mut pm1a_cnt_port = 0u16;
     let mut slp_typa: Option<u8> = None;
+    let mut smi_cmd_val = 0u32;
+    let mut acpi_enable_val = 0u8;
+    let mut pm1b_cnt_val = 0u16;
 
     for i in 0..entry_count {
         let entry_ptr = rsdt_virt.as_u64() as *const u8;
@@ -460,6 +552,21 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                 pm1a_cnt_port = pm1a;
                 slp_typa = slp;
                 set_s5_regs(pm1a, slp);
+                // HW-7: Extrair SMI_CMD, ACPI_ENABLE, PM1b_CNT_BLK do FADT
+                let fadt_len = read_volatile(table_ptr.add(4) as *const u32) as usize;
+                smi_cmd_val = read_volatile(table_ptr.add(52) as *const u32);
+                acpi_enable_val = read_volatile(table_ptr.add(56));
+                let mut pm1b = read_volatile(table_ptr.add(72) as *const u32) as u16;
+                // X_PM1b_CNT_BLK GAS (FADT rev >= 5, length >= 196)
+                if fadt_len >= 196 {
+                    let space = read_volatile(table_ptr.add(184));
+                    let addr = read_volatile(table_ptr.add(188) as *const u64);
+                    if space == 1 && addr != 0 {
+                        pm1b = addr as u16;
+                    }
+                }
+                pm1b_cnt_val = pm1b;
+                set_power_mgmt_regs(smi_cmd_val, acpi_enable_val, pm1b_cnt_val);
             }
             b"APIC" => {
                 crate::slog_nano!("ACPI", "info", "MADT encontrado em 0x{:x}", table_phys);
@@ -480,6 +587,9 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
 
                     match entry_type {
                         0 => {
+                            // HW-5: LAPIC entry — extract real APIC ID
+                            let apic_id = read_volatile(table_ptr.add(offset + 3)) as u32;
+                            BOOT_APIC_IDS.lock().push(apic_id);
                             lapic_count += 1;
                         }
                         1 => {
@@ -506,6 +616,9 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
                             }
                         }
                         9 => {
+                            // HW-5: x2APIC entry — extract real x2APIC ID
+                            let x2apic_id = read_volatile(table_ptr.add(offset + 4) as *const u32);
+                            BOOT_APIC_IDS.lock().push(x2apic_id);
                             lapic_count += 1;
                             has_x2apic = true;
                         }
@@ -534,6 +647,9 @@ pub unsafe fn init_acpi(physical_memory_offset: u64) -> Option<AcpiInfo> {
         iso_overrides,
         pm1a_cnt_port,
         slp_typa,
+        smi_cmd: smi_cmd_val,
+        acpi_enable: acpi_enable_val,
+        pm1b_cnt_blk: pm1b_cnt_val,
     })
 }
 

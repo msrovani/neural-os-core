@@ -115,8 +115,12 @@ unsafe extern "C" fn limine_entry() -> ! {
             let fbp = *fb_resp.framebuffers;
             if !fbp.is_null() {
                 let f = &*fbp;
+                let fb_phys = f.address as u64;
+                let hhdm_offset = k_nano::memory::PHYS_MEM_OFFSET
+                    .load(core::sync::atomic::Ordering::Relaxed);
+                let fb_virt = fb_phys + hhdm_offset;
                 jarbas_crate::display::fb::probe_raw_framebuffer(
-                    f.address as u64,
+                    fb_virt,
                     f.width as u32,
                     f.height as u32,
                     f.pitch as u32,

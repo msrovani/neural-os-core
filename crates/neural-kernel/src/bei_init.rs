@@ -373,25 +373,29 @@ impl BeiState {
     }
 }
 
-/// Global BEI state (initialized during boot)
-static mut BEI_STATE: Option<BeiState> = None;
+use core::sync::atomic::{AtomicPtr, Ordering};
+
+/// Global BEI state (initialized during boot).
+/// After init_bei(), the Box is leaked and the AtomicPtr points to the leaked
+/// allocation, guaranteeing 'static lifetime for subsequent read-only access.
+static BEI_STATE: AtomicPtr<BeiState> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Initialize BEI (call after heap init in main.rs)
-pub fn init_bei() -> &'static BeiState {
-    unsafe {
-        BEI_STATE = Some(BeiState::new());
-        BEI_STATE.as_ref().unwrap()
-    }
+pub fn init_bei() {
+    let state = BeiState::new();
+    let ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(state));
+    BEI_STATE.store(ptr, Ordering::Release);
 }
 
 /// Get BEI state (call from agents/ticks)
-pub fn bei_state() -> &'static BeiState {
-    unsafe { BEI_STATE.as_ref().expect("BEI not initialized") }
+pub fn bei_state() -> Option<&'static BeiState> {
+    let ptr = BEI_STATE.load(Ordering::Acquire);
+    if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
 }
 
 /// BEI tick function (call from scheduler or timer interrupt)
 pub fn bei_tick(_tick: u64) {
-    if let Some(state) = unsafe { BEI_STATE.as_ref() } {
+    if let Some(state) = bei_state() {
         state.tick();
     }
 }

@@ -91,8 +91,8 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
         });
         let slot = match expert_name {
             "generator_pro" => crate::model_hub::ModelSlot::GeneratorPro,
-            "generator_fast" => crate::model_hub::ModelSlot::GeneratorFast,
-            "tinystories" => crate::model_hub::ModelSlot::TinyStories,
+            "generator_fast" => crate::model_hub::ModelSlot::Vision,
+            "tinystories" => crate::model_hub::ModelSlot::Reranker,
             _ => crate::model_hub::select_generator_slot(prompt),
         };
         k_nano::slog_cortex!(
@@ -108,7 +108,7 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
             // Pro miss → Fast → Active
             if slot == crate::model_hub::ModelSlot::GeneratorPro {
                 if let Some(out) =
-                    crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorFast, prompt)
+                    crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Vision, prompt)
                 {
                     k_nano::slog_cortex!("TRINITY", "info", "pro miss → generator_fast");
                     return out;
@@ -121,7 +121,7 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
         Some(m) => m.generate(prompt),
         None => {
             if let Some(out) =
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorFast, prompt)
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Vision, prompt)
             {
                 return out;
             }
@@ -131,7 +131,7 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
                 return out;
             }
             if let Some(out) =
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::TinyStories, prompt)
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Reranker, prompt)
             {
                 return out;
             }

@@ -8,8 +8,6 @@
 //! Para adicionar novo teste: codificar o WAT → wasm offline com `wat2wasm`,
 //! extrair os bytes, adicionar como constante + test.
 
-use alloc::vec::Vec;
-use crate::wasmi_rt;
 
 // ─── Módulos WASM de teste pré-compilados ───
 

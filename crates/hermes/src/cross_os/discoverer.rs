@@ -137,7 +137,7 @@ impl CrossOsDiscoverer {
         }
     }
 
-    fn search_github(query: &str, candidates: &mut Vec<SkillCandidate>) {
+    fn search_github(query: &str, _candidates: &mut Vec<SkillCandidate>) {
         // GitHub search stub — em runtime, consultaria API do GitHub
         // TODO: conectar ao NetAgent para consultar GitHub API
         let _ = query;

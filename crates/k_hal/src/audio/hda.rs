@@ -19,25 +19,25 @@ const HDA_RIRB_CTL: u64 = 0x5C;
 const HDA_ICW: u64 = 0x60;
 const HDA_ICR: u64 = 0x64;
 
-// SD0 = capture (microfone)
+// SD0 = capture (microfone) — HDA 1.0a §3.3.2, SD0 base=0x80
 const SD0_CTL: u64 = 0x80;
-const SD0_STS: u64 = 0x84;
-const SD0_FIFOS: u64 = 0x94;
-const SD0_LVI: u64 = 0x96;
-const SD0_CBL: u64 = 0x98;
-const SD0_FORMAT: u64 = 0x92;
-const SD0_BDLPL: u64 = 0xA0;
-const SD0_BDLPU: u64 = 0xA4;
+const SD0_STS: u64 = 0x82;
+const SD0_CBL: u64 = 0x84;
+const SD0_LVI: u64 = 0x88;
+const SD0_FIFOS: u64 = 0x8A;
+const SD0_FORMAT: u64 = 0x8C;
+const SD0_BDLPL: u64 = 0x90;
+const SD0_BDLPU: u64 = 0x94;
 
-// SD1 = playback (auto-falante)
+// SD1 = playback (auto-falante) — SD1 base=0xA0 = 0x80 + 0x20
 const SD1_CTL: u64 = 0xA0;
-const SD1_STS: u64 = 0xA4;
-const SD1_FIFOS: u64 = 0xB4;
-const SD1_LVI: u64 = 0xB6;
-const SD1_CBL: u64 = 0xB8;
-const SD1_FORMAT: u64 = 0xB2;
-const SD1_BDLPL: u64 = 0xC0;
-const SD1_BDLPU: u64 = 0xC4;
+const SD1_STS: u64 = 0xA2;
+const SD1_CBL: u64 = 0xA4;
+const SD1_LVI: u64 = 0xA8;
+const SD1_FIFOS: u64 = 0xAA;
+const SD1_FORMAT: u64 = 0xAC;
+const SD1_BDLPL: u64 = 0xB0;
+const SD1_BDLPU: u64 = 0xB4;
 
 static HDA_INIT_DONE: AtomicBool = AtomicBool::new(false);
 static HDA_BAR: AtomicU64 = AtomicU64::new(0);

@@ -177,6 +177,7 @@ impl TickvLite {
                 break;
             }
             // lê só a key; CRC completo só se for ckpt
+            let klen = if klen > 4096 { 4096 } else { klen };
             let mut keybuf = vec![0u8; klen];
             self.with_flash(|fl| fl.read(off + HEADER as u64, &mut keybuf))??;
             let is_ckpt = core::str::from_utf8(&keybuf)

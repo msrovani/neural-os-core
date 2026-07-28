@@ -59,7 +59,7 @@ impl SilentFailureDetector {
     pub fn detect_silent(&self) -> Vec<String> {
         let mut silent = Vec::new();
         for (agent, last_tick) in &self.failures {
-            if self.tick - last_tick > self.threshold {
+            if self.tick.saturating_sub(*last_tick) > self.threshold {
                 silent.push(agent.clone());
             }
         }

@@ -1,25 +1,30 @@
 //! NetPort — FE hermes; BE k-hal (H3). Cap enforce H5+.
 
 use crate::cap_gate::{self, CapResult, HalCap};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum NetPortStatus {
-    NotBound,
-    Bound,
-    Up,
-    Denied,
+    NotBound = 0,
+    Bound = 1,
+    Up = 2,
+    Denied = 3,
 }
 
-static mut NET_STATUS: NetPortStatus = NetPortStatus::NotBound;
+static NET_STATUS: AtomicU8 = AtomicU8::new(NetPortStatus::NotBound as u8);
 
 pub fn status() -> NetPortStatus {
-    unsafe { NET_STATUS }
+    match NET_STATUS.load(Ordering::Relaxed) {
+        1 => NetPortStatus::Bound,
+        2 => NetPortStatus::Up,
+        3 => NetPortStatus::Denied,
+        _ => NetPortStatus::NotBound,
+    }
 }
 
 pub fn set_status(s: NetPortStatus) {
-    unsafe {
-        NET_STATUS = s;
-    }
+    NET_STATUS.store(s as u8, Ordering::Relaxed);
 }
 
 /// FE R3: exige Cap FeNet (HalOffer bind). Sem Cap → Denied.

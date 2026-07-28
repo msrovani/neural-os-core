@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Converte modelos GGUF (HuggingFace) para .bitnet v4 com RTN + scale.
 
 Uso:
@@ -20,10 +20,25 @@ from pathlib import Path
 
 import numpy as np
 
+# ─── GPU/CPU device detection ──────────────────────────────────────────────────
+_DEVICE = "cpu"
+_TORCH_AVAIL = False
+try:
+    import torch
+    _TORCH_AVAIL = True
+    if torch.cuda.is_available():
+        _DEVICE = "cuda"
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        _DEVICE = "xpu"
+    elif hasattr(torch, "mps") and torch.mps.is_available():
+        _DEVICE = "mps"
+except ImportError:
+    pass
+
 # ─── .bitnet v4 format ───────────────────────────────────────────────────────
 MAGIC = 0xBE11BE11
 
-# Arquiteturas suportadas: mapeamento de nome GGUF → template de tensor names
+# Arquiteturas suportadas: mapeamento de nome GGUF -> template de tensor names
 ARCH_MAP = {
     "llama": {
         "token_embd": "token_embd.weight",
@@ -123,9 +138,37 @@ ARCH_MAP = {
         "output": "output.weight",
         "rms_final": "output_norm.weight",
     },
+    "vit": {
+        "token_embd": "patch_embed.weight",
+        "blk_attn_q": "enc.{i}.attn.q.weight",
+        "blk_attn_k": "enc.{i}.attn.k.weight",
+        "blk_attn_v": "enc.{i}.attn.v.weight",
+        "blk_attn_o": "enc.{i}.attn.o.weight",
+        "blk_ffn_gate": "enc.{i}.ffn.fc1.weight",
+        "blk_ffn_up": "enc.{i}.ffn.fc1.weight",
+        "blk_ffn_down": "enc.{i}.ffn.fc2.weight",
+        "blk_attn_norm": "enc.{i}.ln1.weight",
+        "blk_ffn_norm": "enc.{i}.ln2.weight",
+        "output": "head.probe",
+        "rms_final": "post_ln.weight",
+    },
+    "bert": {
+        "token_embd": "token_embd.weight",
+        "blk_attn_q": "blk.{i}.attn_q.weight",
+        "blk_attn_k": "blk.{i}.attn_k.weight",
+        "blk_attn_v": "blk.{i}.attn_v.weight",
+        "blk_attn_o": "blk.{i}.attn_output.weight",
+        "blk_ffn_gate": "blk.{i}.ffn_gate.weight",
+        "blk_ffn_up": "blk.{i}.ffn_up.weight",
+        "blk_ffn_down": "blk.{i}.ffn_down.weight",
+        "blk_attn_norm": "blk.{i}.attn_output_norm.weight",
+        "blk_ffn_norm": "blk.{i}.layer_output_norm.weight",
+        "output": "output.weight",
+        "rms_final": "output_norm.weight",
+    },
 }
 
-# Mapeamento reverso: prefixos de nomes HF → arquitetura
+# Mapeamento reverso: prefixos de nomes HF -> arquitetura
 HF_ARCH_PREFIX = {
     "model.embed_tokens": "qwen2",
     "model.layers": "qwen2",
@@ -164,13 +207,45 @@ def get_metadata_int(metadata: dict, *keys: str, default: int = 0) -> int:
 
 
 def read_gguf_reader(model_path: str, cache_dir: str | None):
-    """Importa gguf e retorna GGUFReader."""
+    """Importa GGUFReader — se model_path for repo HF, baixa com huggingface_hub primeiro."""
     try:
         from gguf import GGUFReader
     except ImportError:
         print("[ERRO] pip install gguf (pip install gguf numpy huggingface-hub)")
         sys.exit(1)
-    return GGUFReader(model_path, cache_dir=cache_dir)
+
+    # Se já é arquivo local, abre direto
+    if os.path.isfile(model_path):
+        return GGUFReader(model_path)
+
+    # Tenta baixar de HuggingFace
+    print(f"  Baixando {model_path} do HuggingFace...")
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        print("[ERRO] pip install huggingface-hub")
+        sys.exit(1)
+
+    # Lista .gguf no repo para achar o primeiro
+    try:
+        from huggingface_hub import list_repo_files
+        files = [f for f in list_repo_files(model_path) if f.endswith(".gguf")]
+        if not files:
+            raise ValueError(f"Nenhum arquivo .gguf encontrado em {model_path}")
+        # Pega o menor (Q2_K ou Q3_K geralmente) — mais rápido de baixar
+        # Mas se pedir explícito "arquivo.gguf" no model_path, usa esse
+        gguf_file = files[0]  # default: primeiro encontrado
+        print(f"  Arquivo GGUF encontrado: {gguf_file}")
+    except Exception as e:
+        raise ValueError(f"Não foi possível listar {model_path}: {e}")
+
+    local_path = hf_hub_download(
+        repo_id=model_path,
+        filename=gguf_file,
+        cache_dir=cache_dir,
+    )
+    print(f"  Cache local: {local_path}")
+    return GGUFReader(local_path)
 
 
 # ─── Dequantização GGUF ──────────────────────────────────────────────────────
@@ -211,7 +286,7 @@ def dequantize_f32(data: bytes, n_elems: int) -> np.ndarray:
 
 
 def dequantize_f16(data: bytes, n_elems: int) -> np.ndarray:
-    """F16 → F32."""
+    """F16 -> F32."""
     u16 = np.frombuffer(data, dtype=np.uint16, count=n_elems)
     # FP16: sign(1) + exp(5) + mant(10)
     sign = ((u16 >> 15) & 1).astype(np.float32)
@@ -225,7 +300,7 @@ def dequantize_f16(data: bytes, n_elems: int) -> np.ndarray:
 
 
 def dequantize_bf16(data: bytes, n_elems: int) -> np.ndarray:
-    """BF16 → F32 (zerar lower 16 bits)."""
+    """BF16 -> F32 (zerar lower 16 bits)."""
     arr = np.frombuffer(data, dtype=np.uint16, count=n_elems).astype(np.uint32) << 16
     return arr.view(np.float32)
 
@@ -294,7 +369,7 @@ def dequantize_q8_0(data: bytes, n_elems: int) -> np.ndarray:
 
 
 def dequantize_q5_0(data: bytes, n_elems: int) -> np.ndarray:
-    """Q5_0: f16 scale + uint32 qh + 16 packed nibbles = 22 bytes → 32 f32."""
+    """Q5_0: f16 scale + uint32 qh + 16 packed nibbles = 22 bytes -> 32 f32."""
     out = np.empty(n_elems, dtype=np.float32)
     block_size = 32
     n_blocks = (n_elems + block_size - 1) // block_size
@@ -507,6 +582,64 @@ def optimize_ternary(weights: np.ndarray, verbose: bool = False
     return best_q, best_scale
 
 
+def optimize_ternary_gpu(weights: np.ndarray, verbose: bool = False
+                         ) -> tuple[np.ndarray, float]:
+    """Versão GPU via PyTorch -- mesma lógica RTN, usa torch.sort no CUDA.
+
+    Útil para tensores >100M elementos onde a ordenação na GPU é ~5-10× mais rápida.
+    """
+    import torch
+    torch_dev = torch.device(_DEVICE)
+
+    flat = torch.from_numpy(weights.flatten()).to(torch_dev)
+    abs_w = flat.abs()
+    sorted_abs, _ = torch.sort(abs_w)
+    n = flat.size(0)
+
+    best_mse = float('inf')
+    best_q_np = None
+    best_scale = 1.0
+
+    for pct in range(5, 55, 5):
+        t_idx = int(n * pct / 100)
+        threshold = sorted_abs[min(t_idx, n - 1)].item()
+
+        # q = sign(w) se |w| >= threshold, senão 0
+        q = torch.where(flat > threshold, 1, torch.where(flat < -threshold, -1, 0)).to(torch.int8)
+        abs_flat = abs_w.clone()
+        # mask de não-zero
+        nonzero_mask = q != 0
+        nz_count = nonzero_mask.sum().item()
+
+        if nz_count == 0:
+            continue
+
+        scale_val = float(abs_flat[nonzero_mask].mean().item())
+        if scale_val < 1e-8:
+            continue
+
+        mse = float(torch.mean((flat - scale_val * q.float()) ** 2).item())
+
+        if mse < best_mse:
+            best_mse = mse
+            best_q_np = q.cpu().numpy()
+            best_scale = scale_val
+
+    if best_q_np is None:
+        threshold = sorted_abs[int(n * 0.85)].item()
+        q = torch.where(flat > threshold, 1, torch.where(flat < -threshold, -1, 0)).to(torch.int8)
+        best_scale = float(abs_w[q != 0].mean().item() or 1.0)
+        q_np = q.cpu().numpy()
+        if verbose:
+            print(f"    RTN[GPU] fallback: threshold={threshold:.4f} scale={best_scale:.4f}")
+        return q_np, best_scale
+
+    if verbose:
+        sparsity = 100.0 * (best_q_np == 0).sum() / n
+        print(f"    RTN[GPU]: scale={best_scale:.4f} MSE={best_mse:.6f} esparsidade={sparsity:.1f}%")
+    return best_q_np, best_scale
+
+
 def pack_ternary(weights: np.ndarray, scale: float) -> tuple[bytes, float]:
     """Pack int8 {-1,0,+1} para 2-bit (4 pesos/byte), column-major.
 
@@ -570,8 +703,8 @@ def write_header(f, hidden: int, num_layers: int, num_heads: int,
                                 2 * hidden + q_dim) +
                   hidden * vocab_size)
     f.write(struct.pack("<I", MAGIC))
-    f.write(struct.pack("<H", 4))  # version
-    f.write(struct.pack("<I", num_params))
+    f.write(struct.pack("<H", 5))  # version 5 (u64 num_params)
+    f.write(struct.pack("<Q", num_params))  # u64, suporta >4B params
     f.write(struct.pack("<H", hidden))
     f.write(struct.pack("<H", num_layers))
     f.write(struct.pack("<H", num_heads))
@@ -595,10 +728,15 @@ def write_rms_vec(f, vec: np.ndarray):
 
 
 def write_ternary_tensor(f, weights_f32: np.ndarray, name: str = "",
-                         verbose: bool = False):
-    """Otimiza, pack e escreve tensor ternário + scale f32."""
-    # weights_f32 shape (rows, cols) como no kernel: (in, out) para projeções
-    q_vals, scale = optimize_ternary(weights_f32, verbose=verbose)
+                         verbose: bool = False, use_gpu: bool = False):
+    """Otimiza, pack e escreve tensor ternário + scale f32.
+    
+    use_gpu: usa torch CUDA para otimização RTN em tensores grandes.
+    """
+    if use_gpu and _TORCH_AVAIL and _DEVICE != "cpu":
+        q_vals, scale = optimize_ternary_gpu(weights_f32, verbose=verbose)
+    else:
+        q_vals, scale = optimize_ternary(weights_f32, verbose=verbose)
     packed, scale = pack_ternary_fast(q_vals, scale)
     f.write(packed)
     f.write(struct.pack("<f", scale))
@@ -647,18 +785,39 @@ def get_tensor(tensors, name: str):
 def convert_model(model_name: str, output_path: str,
                   cache_dir: str | None = None,
                   verbose: bool = False,
-                  self_test: bool = False):
-    """Pipeline principal: download GGUF → .bitnet v4."""
+                  self_test: bool = False,
+                  use_gpu: bool = False):
+    """Pipeline principal: download GGUF -> .bitnet v4."""
     t0 = time.time()
-    print(f"=== Convertendo {model_name} → {output_path} ===")
+    print(f"=== Convertendo {model_name} -> {output_path} ===")
 
     # 1. Abre GGUF
     reader = read_gguf_reader(model_name, cache_dir)
-    metadata = {kv.key: kv.value for kv in reader.metadata}
+    # GGUFReader 0.19+: fields é OrderDict de ReaderField com .contents()
+    # Versões antigas: .metadata (iterável de .key/.value)
+    if hasattr(reader, 'metadata'):
+        metadata = {kv.key: kv.value for kv in reader.metadata}
+    elif hasattr(reader, 'fields'):
+        metadata = {}
+        for k, v in reader.fields.items():
+            try:
+                val = v.contents()
+                if isinstance(val, bytes):
+                    val = val.decode('utf-8', errors='replace')
+                metadata[k] = val
+            except Exception:
+                # Fallback: tenta extrair das parts
+                if len(v.parts) == 1:
+                    metadata[k] = v.parts[0][0] if hasattr(v.parts[0], '__getitem__') else v.parts[0]
+                else:
+                    metadata[k] = str(v.parts)
+    else:
+        raise RuntimeError("GGUFReader: nem metadata nem fields encontrados")
 
     # Lista de tensores (nome, tipo, shape)
     tensor_list = reader.tensors
     tensor_names = [t.name for t in tensor_list]
+    tensor_dict = {t.name: t for t in tensor_list}
     if verbose:
         print(f"  Metadata keys: {len(metadata)}")
         print(f"  Tensors: {len(tensor_list)}")
@@ -802,7 +961,7 @@ def convert_model(model_name: str, output_path: str,
             # Q projection: (hidden, q_dim)
             q_w = get_tensor_weight("blk_attn_q", li)
             if q_w is not None:
-                # GGUF shape pode ser (q_dim, hidden) — transpor se necessário
+                # GGUF shape pode ser (q_dim, hidden) -- transpor se necessário
                 if q_w.shape[0] == q_dim and q_w.shape[1] == hidden:
                     q_w = q_w.T
                 write_ternary_tensor(f, q_w, name=f"L{li}.q", verbose=verbose)
@@ -1055,13 +1214,13 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
         for e in errors:
             print(f"    - {e}")
     else:
-        print(f"  [OK] self-test passou — {len(data)} bytes, "
+        print(f"  [OK] self-test passou -- {len(data)} bytes, "
               f"{embed_total + per_layer_total * num_layers}B de pesos")
 
     # Verifica ranges básicos
-    print(f"  Magic: 0x{MAGIC:X} ✓")
-    print(f"  Version: {version} ✓")
-    print(f"  Layers: {nl} ✓")
+    print(f"  Magic: 0x{MAGIC:X} OK")
+    print(f"  Version: {version} OK")
+    print(f"  Layers: {nl} OK")
     print(f"  Layer features: 0x{lf:02X} ({'RoPE ' if lf & 4 else ''}"
           f"{'InnerLN ' if lf & 1 else ''}{'FFNLN ' if lf & 2 else ''})")
 
@@ -1101,15 +1260,23 @@ Exemplos:
                     help="Log detalhado de cada tensor")
     ap.add_argument("--self-test", action="store_true",
                     help="Verifica integridade do .bitnet gerado")
+    ap.add_argument("--gpu", action="store_true",
+                    help="Usa GPU (CUDA/ROCm/MPS) se disponível. Nota: conversão é CPU-bound, "
+                         "GPU só acelera MSE computation em tensores >100M elementos")
     args = ap.parse_args()
 
     try:
+        if args.gpu and _DEVICE != "cpu":
+            print(f"Usando GPU: {_DEVICE}")
+        elif args.gpu:
+            print("GPU solicitada mas não disponível. Usando CPU.")
         convert_model(
             model_name=args.model,
             output_path=args.output,
             cache_dir=args.cache_dir,
             verbose=args.verbose,
             self_test=args.self_test,
+            use_gpu=args.gpu and _DEVICE != "cpu",
         )
     except Exception as e:
         print(f"\n[ERRO] {e}", file=sys.stderr)

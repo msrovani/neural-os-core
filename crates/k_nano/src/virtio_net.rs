@@ -240,7 +240,7 @@ impl VirtIoDevice {
             // Write descriptor
             let d = &mut *d.add(desc_idx as usize);
             d.addr = buf_pa;
-            d.len = data.len() as u32;
+            d.len = core::cmp::min(data.len(), u32::MAX as usize) as u32;
             d.flags = 0;     // TX = driver write, device read
             d.next = 0;
 

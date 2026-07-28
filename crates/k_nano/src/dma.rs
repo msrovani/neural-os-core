@@ -13,6 +13,26 @@ pub struct DmaBuf {
 
 unsafe impl Send for DmaBuf {}
 
+impl Drop for DmaBuf {
+    fn drop(&mut self) {
+        if self.phys != 0 && self.size > 0 {
+            let pages = (self.size + 4095) / 4096;
+            restore_page_wb(self.phys, pages);
+            unsafe {
+                use x86_64::structures::paging::{FrameDeallocator, PhysFrame, Size4KiB};
+                use x86_64::PhysAddr;
+                let mut guard = GLOBAL_ALLOCATOR.lock();
+                if let Some(alloc) = (*guard).as_mut() {
+                    for i in 0..pages {
+                        let f = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(self.phys + i as u64 * 4096));
+                        alloc.deallocate_frame(f);
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl DmaBuf {
     pub fn as_ptr(&self) -> *const u8 { self.virt }
     pub fn as_mut_ptr(&mut self) -> *mut u8 { self.virt }
@@ -63,10 +83,20 @@ pub fn dma_alloc(size: usize) -> Option<DmaBuf> {
     Some(DmaBuf { phys: pa, virt, size: pages * 4096 })
 }
 
+/// Restore page attributes from UC back to WB (should be called when freeing DMA pages)
+fn restore_page_wb(phys: u64, pages: usize) {
+    let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    for i in 0..pages {
+        let addr = phys + i as u64 * 4096;
+        unsafe { crate::apic::set_page_wb(addr, pm); }
+    }
+}
+
 /// Libera páginas DMA
 pub fn dma_free(buf: DmaBuf) {
     let phys = buf.phys;
     let pages = (buf.size + 4095) / 4096;
+    restore_page_wb(phys, pages);
     unsafe {
         use x86_64::structures::paging::{FrameDeallocator, PhysFrame, Size4KiB};
         use x86_64::PhysAddr;

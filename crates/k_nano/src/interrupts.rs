@@ -1,7 +1,6 @@
 //! Interrupt and exception handling — IDT, GDT, TSS, PIC, handlers.
 
-use crate::{println};
-use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 // ponytail: PICS/pic8259 removed — kernel só usa APIC
 use x86_64::instructions::segmentation::Segment;
@@ -9,7 +8,7 @@ use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable, SegmentSelector
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::VirtAddr;
-use crate::smp::percpu::{MAX_APS, IST_STACK_SIZE, IST_COUNT};
+use crate::smp::percpu::MAX_APS;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
@@ -34,6 +33,11 @@ pub static FB_STRIDE: AtomicU32 = AtomicU32::new(0);
 pub static FB_BPP: AtomicU32 = AtomicU32::new(4);
 pub static FB_W: AtomicU32 = AtomicU32::new(0);
 pub static FB_H: AtomicU32 = AtomicU32::new(0);
+pub static FB_RGB_ORDER: AtomicBool = AtomicBool::new(false);
+/// Spinlock for cursor-area FB access between IRQ handler and compositor swap().
+/// IRQ side uses swap(true) — never blocks (skips draw if locked).
+/// Compositor side spins until lock acquired.
+pub static CURSOR_LOCK: AtomicBool = AtomicBool::new(false);
 static MOUSE_PHASE: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B0: AtomicU8 = AtomicU8::new(0);
 static MOUSE_B1: AtomicU8 = AtomicU8::new(0);
@@ -125,6 +129,14 @@ fn puthex(mut n: u64) {
     }
 }
 
+fn putdec(mut n: u64) {
+    if n == 0 { putc(b'0'); return; }
+    let mut buf = [0u8; 20];
+    let mut i = 20;
+    while n > 0 { i -= 1; buf[i] = (n % 10) as u8 + b'0'; n /= 10; }
+    for &c in &buf[i..] { putc(c); }
+}
+
 fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
     puts(b"[EXC] ");
     puts(name.as_bytes());
@@ -138,7 +150,7 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { dump_exception("#DB", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("#NMI", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { crate::slog_nano!("EXCEPTION", "info", "#BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
+extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { puts(b"[EXC] #BP Breakpoint\n"); }
 extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { dump_exception("#UD", &f, None); loop { x86_64::instructions::hlt(); } }
@@ -201,7 +213,7 @@ fn send_eoi(vector: u8) {
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     let ticks = TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     if ticks < 5 {
-        crate::slog_nano!("TIMER", "info", "Interrupt fired! tick={}", ticks);
+        puts(b"[TIMER] Interrupt fired! tick="); putdec(ticks as u64); putc(b'\n');
     }
     // Process async executor wake notifications
     crate::async_rt::global_executor().process_wakes();
@@ -255,21 +267,18 @@ pub fn mouse_inject_hid_boot(buttons: u8, dx: i8, dy: i8) {
 /// Alimenta a máquina de estados do pacote PS/2 (3 bytes). Usado por IRQ e poll.
 pub fn mouse_feed_byte(byte: u8) {
     let n = MOUSE_BYTE_LOG.fetch_add(1, Ordering::Relaxed);
+    // ponytail: lock-free byte-level logging for IRQ context
     if n < 64 {
-        crate::slog_nano!(
-            "MOUSE",
-            "info",
-            "byte[{}]={:#04x} status_phase={} aux",
-            n,
-            byte,
-            MOUSE_PHASE.load(Ordering::Relaxed)
-        );
+        puts(b"[MOUSE] byte["); putdec(n as u64); puts(b"]=");
+        puthex(byte as u64); puts(b" phase=");
+        putdec(MOUSE_PHASE.load(Ordering::Relaxed) as u64);
+        puts(b" aux\n");
     }
 
     let phase = MOUSE_PHASE.load(Ordering::Relaxed);
     if phase == 0 && (byte & 0x08) == 0 {
         if n < 64 {
-            crate::slog_nano!("MOUSE", "info", "byte[{}] discard (no sync bit3)", n);
+            puts(b"[MOUSE] byte["); putdec(n as u64); puts(b"] discard (no sync bit3)\n");
         }
         return;
     }
@@ -301,42 +310,22 @@ pub fn mouse_feed_byte(byte: u8) {
             let pressed = btn & !prev;
             if pressed != 0 {
                 MOUSE_CLICK_FLASH.store(12, Ordering::Release);
-                crate::slog_nano!(
-                    "MOUSE",
-                    "info",
-                    "CLICK press={:#x} release_edge={:#x} @{}x{} (irq)",
-                    pressed,
-                    prev & !btn,
-                    nx,
-                    ny
-                );
+                puts(b"[MOUSE] CLICK press="); puthex(pressed as u64);
+                puts(b" @"); putdec(nx as u64); putc(b','); putdec(ny as u64);
+                puts(b" (irq)\n");
             } else if (prev & !btn) != 0 {
-                crate::slog_nano!(
-                    "MOUSE",
-                    "info",
-                    "CLICK release={:#x} @{}x{} (irq)",
-                    prev & !btn,
-                    nx,
-                    ny
-                );
+                puts(b"[MOUSE] CLICK release="); puthex((prev & !btn) as u64);
+                puts(b" @"); putdec(nx as u64); putc(b','); putdec(ny as u64);
+                puts(b" (irq)\n");
             }
 
             let pkt_n = n / 3;
             if pkt_n < 32 || pressed != 0 {
-                crate::slog_nano!(
-                    "MOUSE",
-                    "info",
-                    "pkt #{} raw={:02x}{:02x}{:02x} d={},{} pos={}x{} btn={:#x}",
-                    pkt_n,
-                    b0,
-                    b1,
-                    b2,
-                    dx,
-                    dy,
-                    nx,
-                    ny,
-                    btn
-                );
+                puts(b"[MOUSE] pkt #"); putdec(pkt_n as u64);
+                puts(b" raw="); puthex(b0 as u64); puthex(b1 as u64); puthex(b2 as u64);
+                puts(b" d="); putdec(dx as u64); putc(b','); putdec(dy as u64);
+                puts(b" pos="); putdec(nx as u64); putc(b'x'); putdec(ny as u64);
+                puts(b" btn="); puthex(btn as u64); putc(b'\n');
             }
         }
         _ => {}
@@ -345,6 +334,10 @@ pub fn mouse_feed_byte(byte: u8) {
 
 /// Pinta seta mínima no FB físico (visível mesmo com Hermes bloqueado).
 fn mouse_paint_irq_cursor(x: u32, y: u32) {
+    // Try-lock from IRQ: skip if compositor is rendering (never spin in IRQ)
+    if CURSOR_LOCK.swap(true, Ordering::Acquire) {
+        return;
+    }
     let addr = FB_ADDR.load(Ordering::Relaxed);
     if addr == 0 {
         return;
@@ -356,6 +349,7 @@ fn mouse_paint_irq_cursor(x: u32, y: u32) {
     }
     let w = FB_W.load(Ordering::Relaxed) as usize;
     let h = FB_H.load(Ordering::Relaxed) as usize;
+    let rgb_order = FB_RGB_ORDER.load(Ordering::Relaxed);
     let ptr = addr as *mut u8;
     // Bloco 8×12 branco com borda preta — barato no IRQ
     for row in 0..12u32 {
@@ -369,16 +363,27 @@ fn mouse_paint_irq_cursor(x: u32, y: u32) {
             let (r, g, b) = if edge { (0u8, 0u8, 0u8) } else { (255, 255, 255) };
             let off = py * stride + px * bpp;
             unsafe {
-                core::ptr::write_volatile(ptr.add(off), b);
-                if bpp > 1 {
-                    core::ptr::write_volatile(ptr.add(off + 1), g);
-                }
-                if bpp > 2 {
-                    core::ptr::write_volatile(ptr.add(off + 2), r);
+                if rgb_order {
+                    core::ptr::write_volatile(ptr.add(off), r);
+                    if bpp > 1 {
+                        core::ptr::write_volatile(ptr.add(off + 1), g);
+                    }
+                    if bpp > 2 {
+                        core::ptr::write_volatile(ptr.add(off + 2), b);
+                    }
+                } else {
+                    core::ptr::write_volatile(ptr.add(off), b);
+                    if bpp > 1 {
+                        core::ptr::write_volatile(ptr.add(off + 1), g);
+                    }
+                    if bpp > 2 {
+                        core::ptr::write_volatile(ptr.add(off + 2), r);
+                    }
                 }
             }
         }
     }
+    CURSOR_LOCK.store(false, Ordering::Release);
 }
 
 /// Poll do buffer aux (bit5) — fallback se IRQ12 falhar no QEMU/WHPX.
@@ -399,21 +404,17 @@ pub fn mouse_poll_bytes() {
 }
 
 /// Log periódico do status 8042 (diagnóstico QEMU grab / IRQ).
+/// ponytail: lock-free putc/puts — this may be called from IRQ context
 pub fn mouse_log_status(tag: &str) {
     use x86_64::instructions::port::Port;
     let status: u8 = unsafe { Port::<u8>::new(0x64).read() };
-    crate::slog_nano!(
-        "MOUSE",
-        "info",
-        "{} status={:#04x} obf={} ibf={} aux={} pos={}x{}",
-        tag,
-        status,
-        status & 1,
-        (status >> 1) & 1,
-        (status >> 5) & 1,
-        MOUSE_ABS_X.load(Ordering::Relaxed),
-        MOUSE_ABS_Y.load(Ordering::Relaxed)
-    );
+    puts(b"[MOUSE] "); puts(tag.as_bytes());
+    puts(b" status="); puthex(status as u64);
+    puts(b" obf="); putdec((status & 1) as u64);
+    puts(b" ibf="); putdec(((status >> 1) & 1) as u64);
+    puts(b" aux="); putdec(((status >> 5) & 1) as u64);
+    puts(b" pos="); putdec(MOUSE_ABS_X.load(Ordering::Relaxed) as u64);
+    putc(b'x'); putdec(MOUSE_ABS_Y.load(Ordering::Relaxed) as u64); putc(b'\n');
 }
 
 extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFrame) {
@@ -427,7 +428,7 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStackFrame) {
-    crate::slog_nano!("IRQ", "info", "Interrupção não tratada ip={:#x}", stack_frame.instruction_pointer.as_u64());
+    puts(b"[IRQ] Unhandled ip="); puthex(stack_frame.instruction_pointer.as_u64()); putc(b'\n');
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
         unsafe { crate::apic::apic_eoi(); }
     } else {
@@ -441,20 +442,20 @@ extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStac
 // IPI handlers para SMP
 extern "x86-interrupt" fn ipi_reschedule_handler(_stack_frame: InterruptStackFrame) {
     IPI_RESCHEDULE.fetch_add(1, Ordering::Relaxed);
-    crate::slog_nano!("IPI", "info", "Reschedule received on CPU {}", crate::smp::percpu::cpu_id());
+    puts(b"[IPI] Reschedule on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
 }
 
 extern "x86-interrupt" fn ipi_halt_handler(_stack_frame: InterruptStackFrame) {
     IPI_HALT.fetch_add(1, Ordering::Relaxed);
-    crate::slog_nano!("IPI", "info", "Halt received on CPU {}", crate::smp::percpu::cpu_id());
+    puts(b"[IPI] Halt on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
     loop { x86_64::instructions::hlt(); }
 }
 
 extern "x86-interrupt" fn ipi_call_function_handler(_stack_frame: InterruptStackFrame) {
     IPI_CALL_FUNCTION.fetch_add(1, Ordering::Relaxed);
-    crate::slog_nano!("IPI", "info", "Call function received on CPU {}", crate::smp::percpu::cpu_id());
+    puts(b"[IPI] Call function on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
 }
 
@@ -569,8 +570,35 @@ pub fn init_idt() {
 
 // ponytail: init_pics removed — kernel só usa APIC
 
+/// HW-3: Remap PIC + program PIT channel 0 — fallback quando APIC/LAPIC timer
+/// não está disponível (ex.: `init_acpi()` retornou `None` em HW real sem ACPI).
+/// Se o APIC já estiver ativo (`USING_APIC == true`), não faz nada.
+pub fn remap_pic_pit_fallback() {
+    if crate::apic::USING_APIC.load(Ordering::Relaxed) {
+        return;
+    }
+    unsafe {
+        // ICW1: begin init, expect ICW4
+        core::arch::asm!("out dx, al", in("dx") 0x20u16, in("al") 0x11u8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0xA0u16, in("al") 0x11u8, options(nostack, preserves_flags));
+        // ICW2: remap IRQs → 32–39 / 40–47
+        core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") PIC_1_OFFSET, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") PIC_2_OFFSET, options(nostack, preserves_flags));
+        // ICW3: slave on IRQ2
+        core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x04u8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x02u8, options(nostack, preserves_flags));
+        // ICW4: 8086 mode
+        core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nostack, preserves_flags));
+        // Mask: IRQ0 (PIT) + IRQ2 (cascade) abertos; resto mascarado
+        core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFAu8, options(nostack, preserves_flags));
+        core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nostack, preserves_flags));
+    }
+    unsafe { crate::apic::pit_init(); }
+    crate::slog_nano!("PIC", "info", "Fallback 8259 remapado (IRQ0→vec32). PIT ativo.");
+}
+
 pub fn enable_interrupts() {
     x86_64::instructions::interrupts::enable();
-    crate::slog_nano!("CPU", "info", "Interrupcoes de hardware habilitadas (IF=1).");
-    println!("[CPU] Interrupcoes de hardware habilitadas (IF=1).");
+    puts(b"[CPU] Interrupcoes de hardware habilitadas (IF=1).\n");
 }

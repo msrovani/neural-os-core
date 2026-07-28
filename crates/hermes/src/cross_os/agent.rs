@@ -40,7 +40,7 @@ impl CrossOsAgent {
         }
     }
 
-    fn process(&mut self, text: &str, tick: u64) {
+    fn process(&mut self, text: &str, _tick: u64) {
         // 1. ANALISAR intencao
         let intent = CrossOsIntent::analyze(text);
         let intent_key = Self::key_for_intent(&intent);

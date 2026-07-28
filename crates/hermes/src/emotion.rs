@@ -80,7 +80,7 @@ impl EmotionAnalyzer {
         // Find primary emotion
         let total: f32 = scores.iter().sum();
         let (max_idx, &max_score) = scores.iter().enumerate()
-            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).unwrap_or((6, &1.0));
+            .max_by(|(_, a), (_, b)| a.total_cmp(b)).unwrap_or((6, &1.0));
 
         let primary = match max_idx {
             0 => Emotion::Joy, 1 => Emotion::Sadness, 2 => Emotion::Anger,

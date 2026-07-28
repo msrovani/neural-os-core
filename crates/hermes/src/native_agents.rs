@@ -2,7 +2,7 @@
 //! Cada agente tem um SkillManifest FYY-compatível com system_skill=true + auto_install=true.
 //! ADR-0076 Onda 1.5: agentes nativos expostos como skills do sistema.
 
-use crate::skill_manifest::{SkillManifest, SkillType, RiskLevel, Interop};
+use crate::skill_manifest::{SkillManifest, RiskLevel, Interop};
 
 /// Retorna a lista completa de manifests dos agentes nativos.
 pub fn all_native_agent_manifests() -> alloc::vec::Vec<SkillManifest> {

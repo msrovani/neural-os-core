@@ -9,9 +9,6 @@
 //! 4. Se Auto → Allow, se Deny → trap, se Confirm/Escalate → submete HITL
 //! 5. Spincia até usuário aprovar/negar (fail-closed I3: timeout → Deny)
 
-use alloc::string::String;
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
 use crate::membrane::Verdict;
 
 /// Nível de risco de uma host function.

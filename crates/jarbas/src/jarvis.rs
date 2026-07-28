@@ -112,7 +112,7 @@ impl EmotionAnalysis {
     pub fn dominant(&self) -> Emotion {
         let vals = [(Emotion::Joy, self.joy), (Emotion::Sadness, self.sadness), (Emotion::Anger, self.anger),
             (Emotion::Fear, self.fear), (Emotion::Surprise, self.surprise), (Emotion::Disgust, self.disgust)];
-        vals.into_iter().max_by(|a,b| a.1.partial_cmp(&b.1).unwrap()).map(|(e,_)| e).unwrap_or(Emotion::Neutral)
+        vals.into_iter().max_by(|a,b| a.1.total_cmp(&b.1)).map(|(e,_)| e).unwrap_or(Emotion::Neutral)
     }
     pub fn describe(&self) -> String {
         alloc::format!("[EMO] joy={:.1} sad={:.1} ang={:.1} fear={:.1} surp={:.1} sarc={:.1} → {:?}",

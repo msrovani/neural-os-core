@@ -34,7 +34,7 @@ impl BootLog {
     }
 }
 
-pub static BOOT_LOG: spin::Mutex<BootLog> = spin::Mutex::new(BootLog { buf: [0u8; 65536], pos: 0, start_tick: 0 });
+pub static BOOT_LOG: crate::sync::IrqSafeLock<BootLog> = crate::sync::IrqSafeLock::new(BootLog { buf: [0u8; 65536], pos: 0, start_tick: 0 });
 
 /// Probes serial port: writes scratch reg, reads back. Returns true if port exists.
 pub unsafe fn probe_port(port: u16) -> bool {
@@ -48,11 +48,11 @@ pub unsafe fn probe_port(port: u16) -> bool {
 }
 
 use lazy_static::lazy_static;
-use spin::Mutex;
+use crate::sync::IrqSafeLock;
 use uart_16550::SerialPort;
 
 lazy_static! {
-    pub static ref SERIAL: Mutex<Option<SerialPort>> = {
+    pub static ref SERIAL: IrqSafeLock<Option<SerialPort>> = {
         let mut port = None;
         unsafe {
             let addrs = [0x3F8u16, 0x2F8, 0x3E8, 0x2E8];
@@ -65,7 +65,7 @@ lazy_static! {
                 }
             }
         }
-        Mutex::new(port)
+        IrqSafeLock::new(port)
     };
 }
 
@@ -86,32 +86,36 @@ pub fn _print(args: fmt::Arguments) {
     use fmt::Write;
     let tick = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
 
-    // Tenta serial com timestamp
+    // 1. Formata para buffer (sem locks)
+    let mut buf = [0u8; 256];
+    let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
+    let n = buf.iter().position(|&b| b == 0).unwrap_or(256);
+    let msg = &buf[..n];
+
+    // 2. Serial port (lock, escreve, unlock) — nunca segura lock ao chamar outros destinos
     let serial_avail = {
         let mut serial = SERIAL.lock();
         if let Some(ref mut s) = *serial {
             let mut ts_buf = [0u8; 24];
             let ts_len = format_timestamp_into(&mut ts_buf, tick);
             let _ = s.write_str(core::str::from_utf8(&ts_buf[..ts_len]).unwrap_or("[T+?] "));
-            let _ = s.write_fmt(args);
+            let _ = s.write_str(core::str::from_utf8(msg).unwrap_or("(invalid utf8)"));
             true
         } else { false }
-    };
+    }; // SERIAL lock dropped aqui
 
-    // Registra no boot log (com timestamp proprio do BootLog)
-    let mut log = BOOT_LOG.lock();
-    if log.start_tick == 0 { log.start_tick = tick; }
-    let mut buf = [0u8; 256];
-    let _ = fmt::write(&mut LogBuf(&mut buf, 0), args);
-    let n = buf.iter().position(|&b| b == 0).unwrap_or(256);
-    log.write(&buf[..n], tick);
+    // 3. Boot log (lock, escreve, unlock) — SERIAL já liberado
+    {
+        let mut log = BOOT_LOG.lock();
+        if log.start_tick == 0 { log.start_tick = tick; }
+        log.write(msg, tick);
+    } // BOOT_LOG lock dropped aqui
 
-    if serial_avail {
-        // Serial presente — log ja foi escrito acima
-    } else {
-        // Sem serial (HW real): escreve no disco FAT32 + fallback framebuffer
+    if !serial_avail {
+        // Sem serial (HW real): fallback framebuffer + disco
+        // Nenhum lock retido — write_to_disk_journal pega seus próprios locks sem cadeia
         let _ = crate::vga_buffer::fb_print(args);
-        write_to_disk_journal(&buf[..n], tick);
+        write_to_disk_journal(msg, tick);
     }
 }
 

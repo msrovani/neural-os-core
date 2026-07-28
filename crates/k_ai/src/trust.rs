@@ -53,54 +53,18 @@ const SECRET_PATTERNS: &[&str] = &[
     "sk-", "ghp_", "gho_", "ghu_", "xoxb-", "xoxp-",
 ];
 
-/// Substitui padrões sensíveis por "*" em uma string (UTF-8 safe).
-pub fn mask_secrets(input: &str) -> String {
-    let lower = input.to_ascii_lowercase();
-    let mut result = String::with_capacity(input.len());
-    let mut i = 0;
-    let bytes = input.as_bytes();
-    let lower_bytes = lower.as_bytes();
-    while i < bytes.len() {
-        let mut matched = None;
-        for pattern in SECRET_PATTERNS {
-            let p = pattern.to_ascii_lowercase();
-            let pb = p.as_bytes();
-            if i + pb.len() <= lower_bytes.len() && &lower_bytes[i..i + pb.len()] == pb {
-                matched = Some(pb.len().max(8).min(32));
-                break;
-            }
-        }
-        if let Some(redact_len) = matched {
-            let end = core::cmp::min(i + redact_len, bytes.len());
-            // Avança por boundaries UTF-8
-            let mut j = i;
-            while j < end {
-                let ch_len = match bytes[j] {
-                    b if b & 0x80 == 0 => 1,
-                    b if b & 0xE0 == 0xC0 => 2,
-                    b if b & 0xF0 == 0xE0 => 3,
-                    _ => 4,
-                };
-                result.push('*');
-                j += ch_len;
-                if j > end {
-                    break;
-                }
-            }
-            i = j;
-        } else {
-            let ch_len = match bytes[i] {
-                b if b & 0x80 == 0 => 1,
-                b if b & 0xE0 == 0xC0 => 2,
-                b if b & 0xF0 == 0xE0 => 3,
-                _ => 4,
-            };
-            if let Ok(s) = core::str::from_utf8(&bytes[i..i + ch_len.min(bytes.len() - i)]) {
-                result.push_str(s);
-            }
-            i += ch_len;
-        }
+/// Substitui todas as ocorrências de `mask` por `*` em uma string (UTF-8 safe).
+pub fn mask_secrets(input: &str, mask: &str) -> alloc::string::String {
+    let mut result = alloc::string::String::with_capacity(input.len());
+    let mut remaining = input;
+    while let Some(pos) = remaining.find(mask) {
+        // Copy everything before the mask
+        result.push_str(&remaining[..pos]);
+        // Replace mask with asterisks
+        result.push_str(&"*".repeat(mask.len()));
+        remaining = &remaining[pos + mask.len()..];
     }
+    result.push_str(remaining);
     result
 }
 
@@ -304,7 +268,11 @@ impl TrustCache {
     }
 
     pub fn mask_sensitive(&self, data: &str) -> String {
-        mask_secrets(data)
+        let mut result = String::from(data);
+        for pattern in SECRET_PATTERNS {
+            result = mask_secrets(&result, pattern);
+        }
+        result
     }
 
     /// #364: Zero-Trust Syscall — avalia permissão por classe

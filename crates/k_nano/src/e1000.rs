@@ -40,7 +40,7 @@ pub const REG_MTA: u64 = 0x5200;
 pub const REG_RXDCTL: u64 = 0x3828;
 pub const REG_TIPG: u64 = 0x0410;
 pub const REG_RDTR: u64 = 0x2820;
-pub const REG_IPAV: u64 = 0x00C0;
+// pub const REG_IPAV: u64 = 0x00C0; // reserved for I225, not used in e1000
 
 // CTRL bits
 const CTRL_RST: u32 = 0x04000000;
@@ -169,7 +169,13 @@ impl E1000Driver {
 
     fn alloc_frame() -> u64 {
         let mut guard = GLOBAL_ALLOCATOR.lock();
-        let alloc = guard.as_mut().expect("GLOBAL_ALLOCATOR not initialized in alloc_frame");
+        let alloc = match guard.as_mut() {
+            Some(a) => a,
+            None => {
+                crate::slog_nano!("E1000", "error", "GLOBAL_ALLOCATOR not initialized");
+                return 0;
+            }
+        };
         let frame = alloc.allocate_contiguous(1);
         match frame {
             Some(f) => f.start_address().as_u64(),

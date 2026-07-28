@@ -1,4 +1,5 @@
 use core::fmt;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use spin::Mutex;
 
 const BUFFER_HEIGHT: usize = 25;
@@ -117,6 +118,9 @@ impl fmt::Write for Writer { fn write_str(&mut self, s: &str) -> fmt::Result { s
 pub static WRITER: Mutex<Option<Writer>> = Mutex::new(None);
 
 pub fn init(physical_memory_offset: u64) {
+    if physical_memory_offset == 0 {
+        return; // No HHDM mapping yet — VGA not available
+    }
     let vga_addr = (0xB8000 + physical_memory_offset) as *mut u8;
     *WRITER.lock() = Some(Writer::new(vga_addr));
 }
@@ -154,12 +158,16 @@ fn get_font_char(c: char, dest: &mut [u8; 16]) {
 }
 
 fn fb_write_text(fb_addr: usize, width: usize, height: usize, stride: usize, bpp: usize, text: &str) {
-    static mut LINE: usize = 0;
+    static LINE: AtomicUsize = AtomicUsize::new(0);
     let ch = 16usize;
     let cw = 8usize;
     let max_lines = height / ch;
     if max_lines == 0 || bpp == 0 { return; }
-    let line = unsafe { let l = LINE; LINE = (LINE + 1) % max_lines; l };
+    let line = LINE.fetch_update(
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+        |old| Some((old + 1) % max_lines),
+    ).unwrap_or(0);
     let y = line * ch;
     let mut x = 2usize;
     for c in text.chars() {

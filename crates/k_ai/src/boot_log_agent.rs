@@ -32,7 +32,7 @@ impl BootLogAgent {
                             let cs = fat32.sectors_per_cluster as usize * fat32.bytes_per_sector as usize;
                             let mut buf = alloc::vec![0u8; cs];
                             for i in 0..fat32.sectors_per_cluster as u32 {
-                                unsafe { ata.read_sectors(lba + i, &mut buf[i as usize * 512..(i+1) as usize * 512], 1); }
+                                unsafe { ata.read_sectors(lba.wrapping_add(i), &mut buf[i as usize * 512..(i+1) as usize * 512], 1); }
                             }
                             for entry_off in (0..buf.len()).step_by(32) {
                                 let first = buf[entry_off];

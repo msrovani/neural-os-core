@@ -275,6 +275,8 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::Learner => &["LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
         ModelSlot::Agent => &["AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
+            "AGENT.BIN",
+            "LLAMA8B.BIN",
             "BITNET13.BIN",
             "BITNET850.BIN",
             "BITNET2B.BIN",

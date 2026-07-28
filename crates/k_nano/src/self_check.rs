@@ -57,7 +57,7 @@ pub fn verify_install_checksum(
     neural_start_lba: u64,
     kernel_hash: u32,
 ) -> IntegrityVerdict {
-    let mut vol = match NeuralVolume::mount(target, neural_start_lba) {
+    let vol = match NeuralVolume::mount(target, neural_start_lba) {
         Some(v) => v,
         None => return IntegrityVerdict::Skipped("NeuralFS not mounted on target"),
     };

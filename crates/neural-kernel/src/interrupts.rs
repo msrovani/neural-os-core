@@ -2,7 +2,6 @@
 //! P6: segmentos user (Ring3) + TSS.RSP0 para trap de CPL=3.
 //! Onda 5: TIMER_TICKS + MOUSE_ABS_* canônicos em k_nano (Hermes/Jarbas leem o mesmo).
 
-use crate::{println};
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
@@ -11,13 +10,11 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, Pag
 use x86_64::structures::tss::TaskStateSegment;
 use x86_64::{PrivilegeLevel, VirtAddr};
 
-// Classify error code for self-heal
-use k_ai::self_heal::classify_by_code;
-
 pub use k_nano::interrupts::{
     TIMER_TICKS, MOUSE_ABS_X, MOUSE_ABS_Y, MOUSE_ABS_BTN, MOUSE_CLICK_FLASH,
     MOUSE_MAX_X, MOUSE_MAX_Y,
     PAGE_FAULT_COUNT,
+    remap_pic_pit_fallback,
 };
 
 pub const PIC_1_OFFSET: u8 = 32;
@@ -147,6 +144,14 @@ fn puthex(mut n: u64) {
     }
 }
 
+fn putdec(mut n: u64) {
+    if n == 0 { putc(b'0'); return; }
+    let mut buf = [0u8; 20];
+    let mut i = 20;
+    while n > 0 { i -= 1; buf[i] = (n % 10) as u8 + b'0'; n /= 10; }
+    for &c in &buf[i..] { putc(c); }
+}
+
 fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Option<u64>) {
     puts(b"[EXC] ");
     puts(name.as_bytes());
@@ -160,7 +165,7 @@ fn dump_exception(name: &str, stack_frame: &InterruptStackFrame, error_code: Opt
 extern "x86-interrupt" fn divide_error_handler(f: InterruptStackFrame) { dump_exception("#DE", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn debug_handler(f: InterruptStackFrame) { dump_exception("#DB", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn nmi_handler(f: InterruptStackFrame) { dump_exception("#NMI", &f, None); loop { x86_64::instructions::hlt(); } }
-extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { k_nano::slog_bin!("EXCEPTION", "info", "#BP Breakpoint"); println!("[EXCEPTION] Breakpoint"); }
+extern "x86-interrupt" fn breakpoint_handler(_f: InterruptStackFrame) { puts(b"[EXC] #BP Breakpoint\n"); }
 extern "x86-interrupt" fn overflow_handler(f: InterruptStackFrame) { dump_exception("#OF", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn bound_range_handler(f: InterruptStackFrame) { dump_exception("#BR", &f, None); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn invalid_opcode_handler(f: InterruptStackFrame) { dump_exception("#UD", &f, None); loop { x86_64::instructions::hlt(); } }
@@ -175,22 +180,8 @@ extern "x86-interrupt" fn general_protection_fault_handler(f: InterruptStackFram
         dump_exception("#GP", &f, Some(code));
         crate::user_mode::fault_abort("P6 #GP in Ring3 demo");
     }
-    
-    // Self-heal: classify error code and publish KERNEL_ERROR
-    let fc = classify_by_code(code as u32);
-    let msg = alloc::format!("#GP err={:#x} class={:?}", code, fc);
-    let _ = crate::EVENT_BUS.publish(crate::Event {
-        id: 0,
-        topic: alloc::string::String::from("KERNEL_ERROR"),
-        payload: msg.clone().into_bytes(),
-        token: event_bus::CapabilityToken::Legacy(1),
-    });
-    k_nano::slog_bin!("SELF", "HEAL", "{}", msg);
-    
     dump_exception("#GP", &f, Some(code));
-    loop {
-        x86_64::instructions::hlt();
-    }
+    loop { x86_64::instructions::hlt(); }
 }
 extern "x86-interrupt" fn alignment_check_handler(f: InterruptStackFrame, code: u64) { dump_exception("#AC", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
 extern "x86-interrupt" fn security_exception_handler(f: InterruptStackFrame, code: u64) { dump_exception("#CP", &f, Some(code)); loop { x86_64::instructions::hlt(); } }
@@ -225,19 +216,6 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     if crate::allocator::try_fault_in_heap(cr2.as_u64()) {
         return;
     }
-    
-    // Self-heal: classify error code and publish KERNEL_ERROR
-    let err_code = code.bits() as u32;
-    let fc = classify_by_code(err_code);
-    let msg = alloc::format!("#PF @ {:#x} err={:#x} class={:?}", cr2.as_u64(), err_code, fc);
-    let _ = crate::EVENT_BUS.publish(crate::Event {
-        id: 0,
-        topic: alloc::string::String::from("KERNEL_ERROR"),
-        payload: msg.clone().into_bytes(),
-        token: event_bus::CapabilityToken::Legacy(1),
-    });
-    k_nano::slog_bin!("SELF", "HEAL", "{}", msg);
-    
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
@@ -321,7 +299,7 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStackFrame) {
-    k_nano::slog_bin!("IRQ", "info", "Interrupção não tratada ip={:#x}", stack_frame.instruction_pointer.as_u64());
+    puts(b"[IRQ] Unhandled ip="); puthex(stack_frame.instruction_pointer.as_u64()); putc(b'\n');
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
         unsafe { crate::apic::apic_eoi(); }
     } else {
@@ -335,20 +313,20 @@ extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStac
 // IPI handlers para SMP
 extern "x86-interrupt" fn ipi_reschedule_handler(_stack_frame: InterruptStackFrame) {
     IPI_RESCHEDULE.fetch_add(1, Ordering::Relaxed);
-    k_nano::slog_bin!("IPI", "info", "Reschedule received on CPU {}", crate::smp::percpu::cpu_id());
+    puts(b"[IPI] Reschedule on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
 }
 
 extern "x86-interrupt" fn ipi_halt_handler(_stack_frame: InterruptStackFrame) {
     IPI_HALT.fetch_add(1, Ordering::Relaxed);
-    k_nano::slog_bin!("IPI", "info", "Halt received on CPU {}", crate::smp::percpu::cpu_id());
+    puts(b"[IPI] Halt on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
     loop { x86_64::instructions::hlt(); }
 }
 
 extern "x86-interrupt" fn ipi_call_function_handler(_stack_frame: InterruptStackFrame) {
     IPI_CALL_FUNCTION.fetch_add(1, Ordering::Relaxed);
-    k_nano::slog_bin!("IPI", "info", "Call function received on CPU {}", crate::smp::percpu::cpu_id());
+    puts(b"[IPI] Call function on CPU "); putdec(crate::smp::percpu::cpu_id()); putc(b'\n');
     unsafe { crate::apic::apic_eoi(); }
 }
 
@@ -430,8 +408,7 @@ pub fn init_idt() {
 
 pub fn enable_interrupts() {
     x86_64::instructions::interrupts::enable();
-    k_nano::slog_bin!("CPU", "info", "Interrupcoes de hardware habilitadas (IF=1).");
-    println!("[CPU] Interrupcoes de hardware habilitadas (IF=1).");
+    puts(b"[CPU] Interrupcoes de hardware habilitadas (IF=1).\n");
 }
 
 /// PIC8259 mínimo + PIT + STI — acordável em hlt() se APIC nunca subir.

@@ -159,7 +159,7 @@ impl TilingNode {
                     }
                 }
             }
-            Self::Group { children, orientation, .. } => {
+            Self::Group { children, orientation: _, .. } => {
                 // Recursivo: insere no filho que tem foco (ou primeiro não-placeholder)
                 let target = if matches!(direction, SplitDirection::Left | SplitDirection::Up) {
                     &mut children[0]

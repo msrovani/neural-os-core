@@ -1,6 +1,6 @@
 use core::cell::UnsafeCell;
 use core::sync::atomic::AtomicU8;
-use x86_64::{PhysAddr, VirtAddr};
+use x86_64::PhysAddr;
 
 #[repr(C)]
 pub struct PerCpu {
@@ -124,15 +124,15 @@ pub fn cpu_id() -> u64 {
 /// ADR-0057 WS-F / ADR-0065 FASE 3.1 P13: Allocate IST stacks for an AP.
 /// Allocates 3 × 16KB contiguous frames via the global allocator.
 /// Returns array of stack tops (virtual addresses) for #DF, #PF, #GP.
-pub unsafe fn init_ap_ist(ap_index: usize) -> [u64; 3] {
+pub unsafe fn init_ap_ist(_ap_index: usize) -> [u64; 3] {
     use crate::memory::GLOBAL_ALLOCATOR;
     use x86_64::VirtAddr;
-    use x86_64::structures::paging::{FrameAllocator, PhysFrame, Size4KiB};
+    use x86_64::structures::paging::FrameAllocator;
 
     const IST_STACK_SIZE: usize = 16384; // 16KB
     const IST_COUNT: usize = 3;
 
-    let layout = alloc::alloc::Layout::from_size_align(IST_STACK_SIZE * IST_COUNT, 4096)
+    let _layout = alloc::alloc::Layout::from_size_align(IST_STACK_SIZE * IST_COUNT, 4096)
         .expect("IST layout");
     let ptr = {
         let mut guard = GLOBAL_ALLOCATOR.lock();

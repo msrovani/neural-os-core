@@ -4,7 +4,6 @@
 
 use alloc::string::String;
 use alloc::format;
-use alloc::vec::Vec;
 
 /// Resultado da busca de firmware.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,7 +57,7 @@ fn try_huggingface(hw_name: &str) -> Option<FirmwareFetchResult> {
 }
 
 /// Mapeia dispositivo PCI para nome de firmware conhecido.
-pub fn hw_to_firmware_name(vendor_id: u16, device_id: u16, class: u8, subclass: u8) -> Option<&'static str> {
+pub fn hw_to_firmware_name(vendor_id: u16, _device_id: u16, class: u8, subclass: u8) -> Option<&'static str> {
     match (class, subclass, vendor_id) {
         (0x03, 0x00, 0x10DE) => Some("nvidia"),       // NVIDIA GPU
         (0x03, 0x00, 0x8086) => Some("i915"),          // Intel GPU

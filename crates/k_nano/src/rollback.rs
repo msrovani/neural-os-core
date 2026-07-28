@@ -3,7 +3,6 @@
 //! faz fallback para o próximo boot entry (o pendrive). Nosso instalador garante
 //! que o pendrive permanece intacto e é configurado como fallback no NVRAM.
 
-use alloc::string::String;
 use alloc::format;
 
 /// Estado do boot: qual dispositivo foi o último boot bem-sucedido.

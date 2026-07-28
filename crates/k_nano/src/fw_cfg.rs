@@ -105,7 +105,8 @@ pub fn write_file(selector: u16, data: &[u8]) -> bool {
     unsafe {
         outw(0x510, selector);
         // Write size (4 bytes, big-endian)
-        let size_bytes = (data.len() as u32).to_be_bytes();
+        let truncated_len = core::cmp::min(data.len(), u32::MAX as usize) as u32;
+        let size_bytes = truncated_len.to_be_bytes();
         for &b in &size_bytes {
             core::arch::asm!("out dx, al", in("dx") 0x511u16, in("al") b, options(nostack, preserves_flags));
         }

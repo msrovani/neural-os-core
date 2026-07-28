@@ -161,11 +161,11 @@ impl AhciDriver {
         // PRDT entry
         core::ptr::write_volatile((prdt_va + 0x00) as *mut u32, buf_pa as u32);       // DBA
         core::ptr::write_volatile((prdt_va + 0x04) as *mut u32, (buf_pa >> 32) as u32); // DBA upper
-        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x80000000); // DBC + interrupt
+        core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x40000000); // DBC + IOC
 
         // Command Header (32 bytes) at CLB + slot*32
         let ch_va = (port.clb_pa + pmoff) as *mut u8;
-        core::ptr::write_volatile(ch_va as *mut u16, (0x80 | 0x27) as u16);
+        core::ptr::write_volatile(ch_va as *mut u16, (0x80 | 0x25) as u16);
         core::ptr::write_volatile(ch_va.add(0x04) as *mut u16, 1);
         core::ptr::write_volatile(ch_va.add(0x08) as *mut u32, ct_pa as u32);
         core::ptr::write_volatile(ch_va.add(0x0C) as *mut u32, (ct_pa >> 32) as u32);
@@ -228,7 +228,7 @@ impl AhciDriver {
         core::ptr::write_volatile((prdt_va + 0x08) as *mut u32, ((count * 512 - 1) as u32) | 0x40000000);
 
         let ch_va = (port.clb_pa + pmoff) as *mut u8;
-        core::ptr::write_volatile(ch_va as *mut u16, (0x80 | 0x27 | 0x40) as u16);
+        core::ptr::write_volatile(ch_va as *mut u16, (0x40 | 0x25) as u16);
         core::ptr::write_volatile(ch_va.add(0x04) as *mut u16, 1);
         core::ptr::write_volatile(ch_va.add(0x08) as *mut u32, ct_pa as u32);
         core::ptr::write_volatile(ch_va.add(0x0C) as *mut u32, (ct_pa >> 32) as u32);

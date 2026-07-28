@@ -3,7 +3,6 @@
 //! Hermes já roteia comandos via `Command` enum — este módulo formaliza o padrão.
 
 use alloc::string::String;
-use alloc::vec::Vec;
 
 /// Categoria do intent (usada para roteamento de alto nível).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

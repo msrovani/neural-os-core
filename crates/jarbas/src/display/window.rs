@@ -1,6 +1,5 @@
 //! Window system — unified window content (legacy AppId, Card, Tiled, Floating).
 
-use alloc::vec::Vec;
 use alloc::string::String;
 use alloc::boxed::Box;
 use super::tiling::{TilingNode, WindowId, Rect};

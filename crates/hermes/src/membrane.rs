@@ -4,11 +4,9 @@
 //!
 //! AIOS na veia: segurança por default deny, não por default allow.
 
-use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Capacidade que pode ser concedida a uma skill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

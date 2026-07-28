@@ -4,12 +4,11 @@
 //! Each NUMA node gets its own BitmapFrameAllocator instance for local allocation.
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicUsize, Ordering};
 use ticket_lock::TicketLock;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, PhysFrame, Size4KiB};
 use x86_64::PhysAddr;
 
-use crate::acpi::{NumaTopologyMap, NumaMemoryRange, NumaApicAffinity};
+use crate::acpi::NumaMemoryRange;
 
 /// Maximum number of NUMA nodes supported
 pub const MAX_NUMA_NODES: usize = 16;

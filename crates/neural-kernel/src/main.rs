@@ -18,13 +18,10 @@ macro_rules! debug_rl {
     ($msg:expr, $rate:expr, $($arg:tt)*) => {{
         // Taxa efetiva = max(1, $rate)
         #[export_name = concat!("_rl_counter_", $msg)]
-        static mut COUNTER: u64 = 0;
-        unsafe {
-            let c = COUNTER.wrapping_add(1);
-            COUNTER = c;
-            if c % ($rate as u64) == 0 {
-                k_nano::slog_bin!("Boot", "rl", concat!($msg, " ", $($arg)*));
-            }
+        static COUNTER: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let c = COUNTER.fetch_add(1, core::sync::atomic::Ordering::Relaxed).wrapping_add(1);
+        if c % ($rate as u64) == 0 {
+            k_nano::slog_bin!("Boot", "rl", concat!($msg, " ", $($arg)*));
         }
     }};
     ($msg:expr, $rate:expr) => {
@@ -879,8 +876,9 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
             x86_64::instructions::hlt();
         },
         || {
-            let q = RESPAWN_QUEUE.lock().clone();
-            if !q.is_empty() { RESPAWN_QUEUE.lock().clear(); }
+            let mut guard = RESPAWN_QUEUE.lock();
+            let q = guard.clone();
+            guard.clear();
             q
         },
         |name| {
@@ -1637,8 +1635,8 @@ pub(crate) fn kernel_boot(
                 let cr = crate::pci::read_config_word(bus, slot, func, 0x0A);
                 if (cr >> 8) as u8 == 0x01 && (cr & 0xFF) as u8 == 0x06 {
                     let pi = (crate::pci::read_config_word(bus, slot, func, 0x08) >> 8) as u8;
-                    let bar0_val = crate::pci::read_bar_value(bus, slot, func, 0) as u32;
-                    let bar5_val = crate::pci::read_bar_value(bus, slot, func, 5) as u32;
+                    let bar0_val = crate::pci::read_bar_value(bus, slot, func, 0);
+                    let bar5_val = crate::pci::read_bar_value(bus, slot, func, 5);
                     let dev = crate::pci::PciDevice {
                         bus, device: slot, function: func,
                         vendor_id: vid, device_id: did,
@@ -2134,6 +2132,11 @@ pub(crate) fn kernel_boot(
                     let magic = core::ptr::read_volatile(ptr as *const u32);
                     if magic == 0xBE11BE11 {
                         found = true;
+                        // Bounds check: não ler além do fim da região de memória
+                        if let Some(r_end) = handoff.region_end_containing(addr) {
+                            let max_read = (r_end - addr) as usize;
+                            if size_hint > max_read { size_hint = max_read; }
+                        }
                         let data = core::slice::from_raw_parts(ptr, size_hint);
                         k_nano::slog_bin!("Asset", "bge", "magic 0xBE11BE11 found @{:#x} — parse {} KB…", addr, size_hint / 1024);
                         if crate::memory_systems::load_bge(data) {
@@ -2725,7 +2728,9 @@ pub(crate) fn kernel_boot(
     let ramdisk_data_opt = handoff.raw_boot_info().and_then(|bi| match bi.ramdisk_addr {
         bootloader_api::info::Optional::Some(addr) => {
             let len = bi.ramdisk_len as usize;
-            if len > 1024 {
+            // ponytail: max ramdisk 256MB, > que isso é provável bootloader corrupto
+            const MAX_RAMDISK: usize = 256 * 1024 * 1024;
+            if len > 1024 && len <= MAX_RAMDISK {
                 Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
             } else {
                 k_nano::slog_bin!(
@@ -2888,9 +2893,17 @@ pub(crate) fn kernel_boot(
                     let magic2 = unsafe { core::ptr::read_volatile(probe2) };
                     if magic2 == 0xBE11BE11 {
                         const BITNET_2B_V4_BYTES: usize = 604_856_373;
-                        let model_len2 = fat_sz
+                        let mut model_len2 = fat_sz
                             .filter(|&sz| sz >= 50 * 1024 * 1024)
                             .unwrap_or(BITNET_2B_V4_BYTES);
+                        // Bounds check: truncar ao fim da região de memória
+                        if let Some(r_end) = handoff.region_end_containing(load_addr2) {
+                            let region2 = (r_end - load_addr2) as usize;
+                            if region2 < model_len2 {
+                                k_nano::slog_bin!("Asset", "ramdisk", "region2 {}MB < model2 {}MB — truncando", region2 / (1024*1024), model_len2 / (1024*1024));
+                                model_len2 = region2;
+                            }
+                        }
                         let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
                         if let Some(big_model) = crate::cortex::load_model(model_data2) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
@@ -3069,6 +3082,13 @@ pub(crate) fn kernel_boot(
                 let ptr = (addr + pm) as *const u8;
                 let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
                 if magic == 0xBE11BE11 {
+                    // Bounds check: não ler além do fim do range do scan
+                    if addr + (size as u64) > end {
+                        k_nano::slog_bin!("Asset", "loader",
+                            "{} @{:#x} size {} bytes beyond scan end — skipping", label, addr, size);
+                        addr = addr.saturating_add(0x100000);
+                        continue;
+                    }
                     k_nano::slog_bin!("Asset", "loader",
                         "{} magic 0xBE11BE11 found @{:#x} — tentando parse {} KB",
                         label, addr, size / 1024);
@@ -3222,9 +3242,9 @@ pub(crate) fn kernel_boot(
             if crate::model_hub::slot_loaded(slot)
                 && matches!(
                     slot,
-                    crate::model_hub::ModelSlot::GeneratorFast
+                    crate::model_hub::ModelSlot::Vision
                         | crate::model_hub::ModelSlot::GeneratorPro
-                        | crate::model_hub::ModelSlot::TinyStories
+                        | crate::model_hub::ModelSlot::Reranker
                 )
             {
                 // Pode estar só marcado (pro-alias); ainda tenta blob dedicado
@@ -3247,13 +3267,13 @@ pub(crate) fn kernel_boot(
             const PIO_QEMU: usize = 48 * 1024 * 1024;
             let pio_cap = if qemu_loader_2b {
                 match slot {
-                    crate::model_hub::ModelSlot::TinyStories => 32 * 1024 * 1024,
+                    crate::model_hub::ModelSlot::Reranker => 32 * 1024 * 1024,
                     _ => PIO_QEMU,
                 }
             } else {
                 match slot {
-                    crate::model_hub::ModelSlot::GeneratorFast => PIO_FAST,
-                    crate::model_hub::ModelSlot::TinyStories => 32 * 1024 * 1024,
+                    crate::model_hub::ModelSlot::Vision => PIO_FAST,
+                    crate::model_hub::ModelSlot::Reranker => 32 * 1024 * 1024,
                     _ => PIO_HW,
                 }
             };
@@ -3262,7 +3282,7 @@ pub(crate) fn kernel_boot(
                 && crate::cortex::model_is_loaded()
                 && matches!(
                     slot,
-                    crate::model_hub::ModelSlot::GeneratorFast
+                    crate::model_hub::ModelSlot::Vision
                         | crate::model_hub::ModelSlot::GeneratorPro
                 )
             {
@@ -3307,7 +3327,7 @@ pub(crate) fn kernel_boot(
                                             && matches!(
                                                 slot,
                                                 crate::model_hub::ModelSlot::GeneratorPro
-                                                    | crate::model_hub::ModelSlot::GeneratorFast
+                                                    | crate::model_hub::ModelSlot::Vision
                                             )
                                         {
                                             crate::cortex::set_model(alloc::boxed::Box::new(m));
@@ -3337,9 +3357,10 @@ pub(crate) fn kernel_boot(
                 }
             }
         }
-        try_hub_slot_fat(crate::model_hub::ModelSlot::TinyStories);
-        try_hub_slot_fat(crate::model_hub::ModelSlot::GeneratorFast);
+        try_hub_slot_fat(crate::model_hub::ModelSlot::Reranker);
+        try_hub_slot_fat(crate::model_hub::ModelSlot::Vision);
         try_hub_slot_fat(crate::model_hub::ModelSlot::GeneratorPro);
+        try_hub_slot_fat(crate::model_hub::ModelSlot::Learner);
         // Se Active é grande (≥200MB heurística via embed), marca pro-alias
         let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
         if dim >= 2048 {

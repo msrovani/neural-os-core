@@ -1,7 +1,7 @@
 //! Decode PCI BAR (32/64-bit mem + I/O) — evita OR errado de bar1 em BAR 32-bit.
 
 /// Extrai endereço físico de um par BAR low/high.
-pub fn decode_bar(bar_lo: u32, bar_hi: u32) -> u64 {
+pub fn decode_bar(bar_lo: u64, bar_hi: u64) -> u64 {
     if bar_lo & 1 != 0 {
         // I/O space
         return (bar_lo as u64) & !0x3;

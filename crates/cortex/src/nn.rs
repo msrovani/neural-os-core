@@ -53,6 +53,7 @@ pub fn silu(x: f32) -> f32 {
 }
 
 pub fn rms_norm(tensor: &mut Tensor, weight: &[f32], eps: f32) {
+    if weight.is_empty() { return; }
     let len = tensor.data.len() as f32;
     let sq_sum: f32 = tensor.data.iter().map(|x| x * x).sum();
     let rms = libm::sqrtf(sq_sum / len + eps);

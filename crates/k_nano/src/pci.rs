@@ -14,12 +14,12 @@ pub struct PciDevice {
     pub class: u8,
     pub subclass: u8,
     pub prog_if: u8,
-    pub bar0: u32,
-    pub bar1: u32,
-    pub bar2: u32,
-    pub bar3: u32,
-    pub bar4: u32,
-    pub bar5: u32,
+    pub bar0: u64,
+    pub bar1: u64,
+    pub bar2: u64,
+    pub bar3: u64,
+    pub bar4: u64,
+    pub bar5: u64,
 }
 
 pub unsafe fn read_config_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
@@ -77,12 +77,12 @@ unsafe fn scan_bus(bus: u8, visited: &mut alloc::vec::Vec<u8>) -> alloc::vec::Ve
         let subclass = (class_raw & 0xFF) as u8;
         let is_bridge = class == 0x06 && subclass == 0x04;
         let prog_if = (read_config_word(bus, device, 0, 0x08) >> 8) as u8;
-        let bar0 = read_bar(bus, device, 0, 0);
-        let bar1 = read_bar(bus, device, 0, 1);
-        let bar2 = read_bar(bus, device, 0, 2);
-        let bar3 = read_bar(bus, device, 0, 3);
-        let bar4 = read_bar(bus, device, 0, 4);
-        let bar5 = read_bar(bus, device, 0, 5);
+        let bar0 = read_bar_value(bus, device, 0, 0);
+        let bar1 = read_bar_value(bus, device, 0, 1);
+        let bar2 = read_bar_value(bus, device, 0, 2);
+        let bar3 = read_bar_value(bus, device, 0, 3);
+        let bar4 = read_bar_value(bus, device, 0, 4);
+        let bar5 = read_bar_value(bus, device, 0, 5);
         devices.push(PciDevice {
             bus, device, function: 0,
             vendor_id, device_id, class, subclass, prog_if,
@@ -100,16 +100,17 @@ unsafe fn scan_bus(bus: u8, visited: &mut alloc::vec::Vec<u8>) -> alloc::vec::Ve
                     let pi = (read_config_word(bus, device, function, 0x08) >> 8) as u8;
                     // Le todas as 6 BARs, exatamente como a function 0 (funcoes 1-7
                     // podem ter recursos MMIO/IO proprios, ex: multi-porta NIC/SATA).
-                    let b0 = read_bar(bus, device, function, 0);
-                    let b1 = read_bar(bus, device, function, 1);
-                    let b2 = read_bar(bus, device, function, 2);
-                    let b3 = read_bar(bus, device, function, 3);
-                    let b4 = read_bar(bus, device, function, 4);
-                    let b5 = read_bar(bus, device, function, 5);
+                    let b0 = read_bar_value(bus, device, function, 0);
+                    let b1 = read_bar_value(bus, device, function, 1);
+                    let b2 = read_bar_value(bus, device, function, 2);
+                    let b3 = read_bar_value(bus, device, function, 3);
+                    let b4 = read_bar_value(bus, device, function, 4);
+                    let b5 = read_bar_value(bus, device, function, 5);
                     devices.push(PciDevice {
                         bus, device, function,
                         vendor_id: vf, device_id: df, class: cl, subclass: sc, prog_if: pi,
-                        bar0: b0, bar1: b1, bar2: b2, bar3: b3, bar4: b4, bar5: b5,
+                        bar0: b0, bar1: b1, bar2: b2,
+                        bar3: b3, bar4: b4, bar5: b5,
                     });
                 }
             }
@@ -165,12 +166,9 @@ pub unsafe fn find_device_by_class(class: u8, subclass: u8) -> Option<(u8, u8, u
 
 pub unsafe fn scan_pci() -> Vec<PciDevice> {
     let mut visited = alloc::vec::Vec::new();
-    let mut all = alloc::vec::Vec::new();
-    // Escaneia todos os barramentos da root hierarchy
-    for bus in 0..=255u8 {
-        all.extend(scan_bus(bus, &mut visited));
-    }
-    all
+    // Escaneia barramento 0 apenas; bridges são seguidas recursivamente por scan_bus.
+    // Real HW: sondar bus inexistente causa master abort → só bus 0 + bridge-traversal.
+    scan_bus(0, &mut visited)
 }
 
 pub unsafe fn init_pci() -> Vec<PciDevice> {
@@ -197,7 +195,9 @@ pub struct VirtioPciCap {
 pub unsafe fn read_pci_capabilities(bus: u8, device: u8, function: u8) -> alloc::vec::Vec<(u8, u8)> {
     let mut caps = alloc::vec::Vec::new();
     let mut ptr = read_config_byte(bus, device, function, 0x34) as u8;
-    while ptr != 0 {
+    let mut max_iter = 256u16;
+    while ptr != 0 && max_iter > 0 {
+        max_iter -= 1;
         let cap_id = read_config_byte(bus, device, function, ptr);
         let next = read_config_byte(bus, device, function, ptr + 1);
         caps.push((cap_id, ptr));

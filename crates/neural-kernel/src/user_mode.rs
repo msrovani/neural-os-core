@@ -26,7 +26,11 @@ static SAVED_CR3: AtomicU64 = AtomicU64::new(0);
 static SAVED_CR3_FLAGS: AtomicU64 = AtomicU64::new(0);
 
 // Continuação kernel (CLI; single-threaded na demo P6).
+// Gated by feature=ring3 (default on); cfg-d out when off since these are only
+// accessed from enter_user_mode() and jump_back_to_kernel() (both TRY_ENTER_RING3-gated).
+#[cfg(feature = "ring3")]
 static mut SAVED_RIP: u64 = 0;
+#[cfg(feature = "ring3")]
 static mut SAVED_RSP: u64 = 0;
 
 /// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
@@ -70,8 +74,14 @@ unsafe fn jump_back_to_kernel() -> ! {
         let flags = Cr3Flags::from_bits_truncate(cr3_flags);
         address_space::restore_cr3(frame, flags);
     }
+    #[cfg(feature = "ring3")]
     let rip = SAVED_RIP;
+    #[cfg(not(feature = "ring3"))]
+    let rip = 0u64;
+    #[cfg(feature = "ring3")]
     let rsp = SAVED_RSP;
+    #[cfg(not(feature = "ring3"))]
+    let rsp = 0u64;
     // Sem return point salvo (fault pré-asm) → não jmp 0 (nova storm).
     if rip == 0 || rsp == 0 {
         ABORTING.store(false, Ordering::SeqCst);
@@ -123,8 +133,14 @@ pub unsafe fn enter_user_mode(
     core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack));
     rflags &= !0x200; // IF=0; int software ainda funciona
 
+    #[cfg(feature = "ring3")]
     let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
+    #[cfg(not(feature = "ring3"))]
+    let rip_ptr = core::ptr::null_mut::<u64>();
+    #[cfg(feature = "ring3")]
     let rsp_ptr = core::ptr::addr_of_mut!(SAVED_RSP);
+    #[cfg(not(feature = "ring3"))]
+    let rsp_ptr = core::ptr::null_mut::<u64>();
     let cr3_val = user_l4.start_address().as_u64();
 
     // Salva RIP/RSP no mesmo asm que o CR3 switch — clone AS pode omitir text → #PF.

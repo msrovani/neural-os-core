@@ -66,11 +66,7 @@ impl Dock {
     }
 
     pub fn render(&self, target: &mut super::fb::DoubleBuffer, theme: &super::theme::Theme) {
-        use embedded_graphics::{
-            prelude::*,
-            primitives::{Rectangle, PrimitiveStyle, PrimitiveStyleBuilder},
-            pixelcolor::Rgb888,
-        };
+        
 
         // Background (native fill_rect avoids FbTarget borrow conflict)
         target.fill_rect(self.rect.x as usize, self.rect.y as usize,

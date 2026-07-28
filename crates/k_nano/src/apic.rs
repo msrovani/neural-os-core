@@ -253,6 +253,67 @@ pub unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     x86_64::instructions::tlb::flush(virt);
 }
 
+/// Restore page attributes from UC (NO_CACHE | WRITE_THROUGH) back to WB (Write-Back).
+/// Clears the PCD (Page Cache Disable) and PWT (Page Write Through) bits in the PTE.
+pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
+    let virt = VirtAddr::new(phys_addr + phys_mem_offset);
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let base = VirtAddr::new(phys_mem_offset);
+
+    let l4_virt = base + l4_frame.start_address().as_u64();
+    let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
+    let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+
+    if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut flags = l3_entry.flags();
+        flags.remove(PageTableFlags::NO_CACHE);
+        flags.remove(PageTableFlags::WRITE_THROUGH);
+        l3_entry.set_flags(flags);
+        x86_64::instructions::tlb::flush(virt);
+        return;
+    }
+
+    let l3_virt = base + l3_entry.addr().as_u64();
+    let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
+    let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+
+    if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut flags = l2_entry.flags();
+        flags.remove(PageTableFlags::NO_CACHE);
+        flags.remove(PageTableFlags::WRITE_THROUGH);
+        l2_entry.set_flags(flags);
+        x86_64::instructions::tlb::flush(virt);
+        return;
+    }
+
+    let l2_virt = base + l2_entry.addr().as_u64();
+    let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
+    let l1_entry = &mut l2_table[usize::from(virt.p2_index())];
+    if !l1_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+
+    if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
+        let mut flags = l1_entry.flags();
+        flags.remove(PageTableFlags::NO_CACHE);
+        flags.remove(PageTableFlags::WRITE_THROUGH);
+        l1_entry.set_flags(flags);
+        x86_64::instructions::tlb::flush(virt);
+        return;
+    }
+
+    let l1_virt = base + l1_entry.addr().as_u64();
+    let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
+    let pte = &mut l1_table[usize::from(virt.p1_index())];
+
+    let mut flags = pte.flags();
+    flags.remove(PageTableFlags::NO_CACHE);
+    flags.remove(PageTableFlags::WRITE_THROUGH);
+    pte.set_flags(flags);
+
+    x86_64::instructions::tlb::flush(virt);
+}
+
 /// Mapa uma pagina de 4KB para MMIO no endereco fisico `phys_addr`,
 /// criando entradas de tabela se necessario, e marca como NO_CACHE + WRITE_THROUGH.
 /// Se uma huge page (2MB/1GB) ja cobrir o endereco, modifica as flags diretamente.

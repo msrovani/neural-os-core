@@ -2,6 +2,7 @@
 //! P8: `virtio_vring.rs` monta Virtqueue layout-compatible sobre frames pinados.
 
 use core::sync::atomic::{AtomicU64, Ordering};
+use spin::Mutex;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::VirtAddr;
 
@@ -31,7 +32,7 @@ impl PinRegistry {
     }
 }
 
-static mut PIN_REG: PinRegistry = PinRegistry::empty();
+static PIN_REG: Mutex<PinRegistry> = Mutex::new(PinRegistry::empty());
 
 /// Handle: buffer DMA pinado pronto para VirtIO (phys contiguidade best-effort).
 #[derive(Clone, Copy, Debug)]
@@ -51,7 +52,7 @@ pub fn pin_frames(n: usize, held: Cap) -> Result<PinnedDmaBuf, &'static str> {
     if n == 0 || n > MAX_PINNED {
         return Err("p5: n frames invalido");
     }
-    let reg = unsafe { &mut *core::ptr::addr_of_mut!(PIN_REG) };
+    let mut reg = PIN_REG.lock();
     if reg.len + n > MAX_PINNED {
         return Err("p5: pin registry cheio");
     }
@@ -91,7 +92,7 @@ pub unsafe fn map_pinned(
         return Err("EPERM: Cap::MAP_DMA");
     }
     let _ = syscall::dispatch(SYS_MAP_DMA, buf.phys, held)?;
-    let reg = &*core::ptr::addr_of!(PIN_REG);
+    let reg = PIN_REG.lock();
     let flags = address_space::rw_flags();
     // Localiza slot do first phys (últimos `pages` pinados com esse phys).
     let mut start = None;
@@ -118,7 +119,7 @@ pub fn unpin_frames(buf: &PinnedDmaBuf, held: Cap) -> Result<(), &'static str> {
     if !held.contains(Cap::PIN_DMA) {
         return Err("EPERM: Cap::PIN_DMA");
     }
-    let reg = unsafe { &mut *core::ptr::addr_of_mut!(PIN_REG) };
+    let mut reg = PIN_REG.lock();
     let mut start = None;
     for i in 0..reg.len {
         if let Some(f) = reg.frames[i] {
@@ -160,7 +161,7 @@ pub fn pinned_phys_at(buf: &PinnedDmaBuf, page_idx: usize) -> Result<u64, &'stat
     if page_idx >= buf.pages {
         return Err("p5: page_idx fora do range");
     }
-    let reg = unsafe { &*core::ptr::addr_of!(PIN_REG) };
+    let reg = PIN_REG.lock();
     let mut start = None;
     for i in 0..reg.len {
         if let Some(f) = reg.frames[i] {

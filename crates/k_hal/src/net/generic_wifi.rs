@@ -5,9 +5,9 @@
 //!   Tabela Massiva → runtime_probe_and_bind(vid, did, bar) → escolhe HardwareRegisterMap
 //!   → instancia AgnosticWifiEngine na union → send_packet/receive_packet via DMA ring
 
-use core::cell::RefCell;
 use core::mem::{MaybeUninit, ManuallyDrop};
 use core::ptr::{read_volatile, write_volatile};
+use spin::Mutex;
 use core::sync::atomic::{AtomicBool, Ordering, compiler_fence};
 
 // ── 1. TRAIT UNIFICADA ─────────────────────────────────────────
@@ -302,22 +302,17 @@ pub union DriverStorage {
     ethernet: ManuallyDrop<FallbackEthernet>,
 }
 
-pub struct CriticalSectionMutex<T> { data: RefCell<T> }
+pub struct CriticalSectionMutex<T> { inner: Mutex<T> }
 impl<T> CriticalSectionMutex<T> {
-    pub const fn new(v: T) -> Self { Self { data: RefCell::new(v) } }
+    pub const fn new(v: T) -> Self { Self { inner: Mutex::new(v) } }
     pub fn lock<F, R>(&self, f: F) -> R where F: FnOnce(&mut T) -> R {
-        // Desabilita interrupcoes para evitar data race com ISRs MSI-X
-        let flags: u64;
-        unsafe { core::arch::asm!("pushfq; pop {0}; cli", out(reg) flags, options(nostack)); }
-        let r = f(&mut *self.data.borrow_mut());
-        // Restaura flags originais (reabilita se estava ativo)
-        unsafe { core::arch::asm!("push {0}; popfq", in(reg) flags, options(nostack, preserves_flags)); }
-        r
+        let mut guard = self.inner.lock();
+        f(&mut *guard)
     }
 }
 unsafe impl<T> Sync for CriticalSectionMutex<T> {}
 
-static mut DRIVER_STORAGE: MaybeUninit<DriverStorage> = MaybeUninit::uninit();
+static DRIVER_STORAGE: Mutex<MaybeUninit<DriverStorage>> = Mutex::new(MaybeUninit::uninit());
 pub static ACTIVE_DRIVER: CriticalSectionMutex<Option<&'static mut dyn WifiChipset>>
     = CriticalSectionMutex::new(None);
 pub static WIFI_PRESENT: AtomicBool = AtomicBool::new(false);
@@ -326,7 +321,8 @@ pub static WIFI_PRESENT: AtomicBool = AtomicBool::new(false);
 
 pub unsafe fn runtime_probe_and_bind(vid: u16, did: u16, bar: usize)
     -> Result<(), &'static str> {
-    let ptr = DRIVER_STORAGE.as_mut_ptr();
+    let mut storage = DRIVER_STORAGE.lock();
+    let ptr = storage.as_mut_ptr() as *mut DriverStorage;
 
     ACTIVE_DRIVER.lock(|active| {
         *active = None;

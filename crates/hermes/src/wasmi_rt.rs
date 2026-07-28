@@ -28,6 +28,9 @@ pub const CAP_SYS: u32     = 1 << 8;
 pub const CAP_ALL: u32     = 0xFFFF_FFFF;
 pub const CAP_NONE: u32    = 0;
 
+/// Maximum allocation size for WASM-allocated buffers (1MB cap).
+const MAX_WASM_ALLOC: usize = 1024 * 1024;
+
 /// Estado do host visível às funções importadas (capabilities concedidas).
 pub struct HostState {
     pub caps: u32,
@@ -78,6 +81,7 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
             if let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") {
                 let data = mem.data(&caller);
                 let (p, l) = (ptr as usize, len as usize);
+                let l = l.min(MAX_WASM_ALLOC);
                 if p.saturating_add(l) <= data.len() {
                     let mut buf = Vec::with_capacity(l);
                     buf.extend_from_slice(&data[p..p + l]);

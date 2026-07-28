@@ -201,7 +201,8 @@ pub unsafe fn init_serial_tunnel() -> bool {
 }
 
 /// Track last known link state for RX kick logic
-static mut E1000_LINK_WAS_UP: bool = false;
+// dead — use neural-kernel::net::E1000_LINK_WAS_UP (AtomicBool)
+// static mut E1000_LINK_WAS_UP: bool = false;
 
 pub unsafe fn dump_e1000_status() {
     let mut guard = E1000.lock();
@@ -212,10 +213,10 @@ pub unsafe fn dump_e1000_status() {
         let link_up = status & 0x02 != 0;
         let rdh = nic.read32(REG_RDH);
         // If link just came up or RDH never moved, kick RX
-        if (link_up && !E1000_LINK_WAS_UP) || (link_up && rdh == 0) {
+        // Uses neural-kernel::net::E1000_LINK_WAS_UP (AtomicBool) — not this local copy
+        if link_up && rdh == 0 {
             nic.kick_rx();
         }
-        E1000_LINK_WAS_UP = link_up;
     }
 }
 

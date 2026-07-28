@@ -1,8 +1,6 @@
 //! Keyboard shortcuts — KeyCombo → WmAction mapping.
 //! Tabela estática (não no SkillRegistry — WM é core).
 
-use alloc::vec::Vec;
-use super::tiling::WindowId;
 use super::window::AppId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

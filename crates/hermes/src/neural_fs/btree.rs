@@ -250,12 +250,21 @@ impl BTreeNode {
         };
         // shift right
         if pos < count {
-            let src = Self::item_off(pos).unwrap();
-            let dst = Self::item_off(pos + 1).unwrap();
+            let src = match Self::item_off(pos) {
+                Some(s) => s,
+                None => { k_nano::slog_bin!("BTREE", "error", "item_off overflow in insert shift"); return false; }
+            };
+            let dst = match Self::item_off(pos + 1) {
+                Some(d) => d,
+                None => { k_nano::slog_bin!("BTREE", "error", "item_off overflow in insert shift+1"); return false; }
+            };
             let bytes = (count - pos) * LEAF_ITEM_SIZE;
             self.data.copy_within(src..src + bytes, dst);
         }
-        let off = Self::item_off(pos).unwrap();
+        let off = match Self::item_off(pos) {
+            Some(o) => o,
+            None => { k_nano::slog_bin!("BTREE", "error", "item_off overflow in insert off"); return false; }
+        };
         key.to_bytes(&mut self.data[off..off + 17]);
         self.data[off + 17..off + 48].copy_from_slice(&value.raw);
         self.set_item_count((count + 1) as u16);
@@ -268,8 +277,14 @@ impl BTreeNode {
             return false;
         }
         if idx + 1 < count {
-            let src = Self::item_off(idx + 1).unwrap();
-            let dst = Self::item_off(idx).unwrap();
+            let src = match Self::item_off(idx + 1) {
+                Some(s) => s,
+                None => { k_nano::slog_bin!("BTREE", "error", "item_off overflow in delete_at shift"); return false; }
+            };
+            let dst = match Self::item_off(idx) {
+                Some(d) => d,
+                None => { k_nano::slog_bin!("BTREE", "error", "item_off overflow in delete_at shift dst"); return false; }
+            };
             let bytes = (count - idx - 1) * LEAF_ITEM_SIZE;
             self.data.copy_within(src..src + bytes, dst);
         }

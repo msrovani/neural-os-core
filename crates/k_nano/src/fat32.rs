@@ -820,7 +820,7 @@ impl<'a> Fat32Writer<'a> {
             // Alocar novos e escrever
             if !self.write_cluster_chain(first_cluster, data) { return false; }
             // Atualizar tamanho na entrada
-            self.update_file_size(name, data.len() as u32)
+            self.update_file_size(name, core::cmp::min(data.len(), u32::MAX as usize) as u32)
         } else {
             // Arquivo novo: alocar clusters e criar entrada
             let clusters = match self.find_free_clusters(num_clusters as u32) {
@@ -828,7 +828,7 @@ impl<'a> Fat32Writer<'a> {
                 None => { crate::slog_nano!("FAT32", "info", "Sem clusters livres!"); return false; }
             };
             if !self.write_cluster_chain(clusters[0], data) { return false; }
-            self.create_entry(name, clusters[0], data.len() as u32)
+            self.create_entry(name, clusters[0], core::cmp::min(data.len(), u32::MAX as usize) as u32)
         }
     }
 
@@ -986,7 +986,7 @@ impl<'a> Fat32Writer<'a> {
             size += remaining.len();
         }
 
-        self.update_file_size(name, size as u32)
+        self.update_file_size(name, core::cmp::min(size, u32::MAX as usize) as u32)
     }
 
     /// Atualiza tamanho do arquivo na entrada de diretorio

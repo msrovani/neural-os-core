@@ -3,9 +3,8 @@
 //! Dispara eventos para SelfHeal ou NetFs fallback.
 
 use alloc::string::String;
-use alloc::format;
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::hw_profiler::{self, HwProfile};
+use crate::hw_profiler::{self};
 
 /// Resultado da comparação entre HW atual e perfil salvo.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,7 +82,7 @@ pub fn load_saved_profile(target: &mut dyn crate::block_dev::BlockDevice) -> Opt
     let esp_size = 1_048_576u64.min(total_lba.saturating_sub(2048 + 64) / 2);
     let neural_start = 2048u64 + esp_size;
 
-    let mut vol = crate::neural_fs::volume::NeuralVolume::mount(target, neural_start)?;
+    let vol = crate::neural_fs::volume::NeuralVolume::mount(target, neural_start)?;
     // ponytail: lookup de /config/hw_profile.txt via inode conhecido
     let _ = vol; // placeholder — walk de diretório virá na Fase 1
     None

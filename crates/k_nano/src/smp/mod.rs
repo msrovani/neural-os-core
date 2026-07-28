@@ -147,7 +147,7 @@ pub fn install_wake_fn(f: unsafe fn()) {
 pub unsafe fn wake_aps() {
     let s = WAKE_FN.load(Ordering::Acquire);
     if s != 0 {
-        let f: unsafe fn() = core::mem::transmute::<usize, unsafe fn()>(s);
+        let f: unsafe fn() = core::mem::transmute::<*const (), unsafe fn()>(s as *const ());
         f();
     }
 }
@@ -373,9 +373,29 @@ pub unsafe fn init_smp() {
     let heap_top2 = crate::allocator::HEAP_START as u64 + crate::allocator::HEAP_SIZE as u64;
     let n_aps = (ap_expected as usize).min(percpu::MAX_APS);
     let region_base = heap_top2 - ((n_aps as u64) + 1) * stack_per_ap;
+    // HW-5: Usa IDs reais do MADT em vez de guess sequencial
     let mut ap_ids = [0u8; percpu::MAX_APS];
-    for i in 0..n_aps {
-        ap_ids[i] = bsp_lapic_id.wrapping_add((i as u8) + 1);
+    {
+        let ids = crate::acpi::BOOT_APIC_IDS.lock();
+        if ids.len() > 0 {
+            let mut idx = 0;
+            for &id in ids.iter() {
+                if id as u8 != bsp_lapic_id && idx < n_aps {
+                    ap_ids[idx] = id as u8;
+                    idx += 1;
+                }
+            }
+            // Se MADT deu menos IDs que esperado, complete com guess
+            while idx < n_aps {
+                ap_ids[idx] = bsp_lapic_id.wrapping_add((idx as u8) + 1);
+                idx += 1;
+            }
+        } else {
+            // Sem MADT — fallback guess sequencial (original)
+            for i in 0..n_aps {
+                ap_ids[i] = bsp_lapic_id.wrapping_add((i as u8) + 1);
+            }
+        }
     }
 
     crate::slog_nano!(

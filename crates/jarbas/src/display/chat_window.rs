@@ -200,7 +200,7 @@ impl ChatWindow {
             StreamPacket::MessageDelta { content } => {
                 self.streaming_msg.push_str(&content);
             }
-            StreamPacket::Citation { doc_id, text, url } => {
+            StreamPacket::Citation { doc_id: _, text: _, url: _ } => {
                 // Será anexado à mensagem quando finalizar
             }
             StreamPacket::UserMessage { content } => {
@@ -244,7 +244,7 @@ impl ChatWindow {
         // ── Área de conteúdo (entre título e input) ──
         let content_top = y + TITLE_H + 4;
         let content_bot = y + h - INPUT_H;
-        let content_h = content_bot.saturating_sub(content_top);
+        let _content_h = content_bot.saturating_sub(content_top);
         let content_x = x + PAD;
 
         let mut line_y = content_bot.saturating_sub(LH);  // começa de baixo p/ cima
@@ -386,7 +386,7 @@ impl ChatWindow {
 
     /// Handle click dentro do chat window
     /// Retorna true se o clique foi consumido
-    pub fn handle_click(&mut self, cx: usize, cy: usize, win_x: usize, win_y: usize, w: usize, h: usize) -> bool {
+    pub fn handle_click(&mut self, cx: usize, cy: usize, win_x: usize, win_y: usize, _w: usize, h: usize) -> bool {
         let input_y = win_y + h - INPUT_H;
         if cy >= input_y {
             // Mic button click (primeiros 5 chars do input bar)

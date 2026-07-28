@@ -3,6 +3,8 @@
 //! Histerese: evita flapping com janela temporal e margem de recuperacao.
 
 use core::ptr::{read_volatile, write_volatile};
+use core::sync::atomic::Ordering;
+use k_nano::memory::PHYS_MEM_OFFSET;
 
 // ── 1. STATUS DE LINK ─────────────────────────────────────────
 
@@ -39,7 +41,8 @@ impl NetworkInterface for WlanInterface {
     fn check_health(&mut self) -> LinkStatus {
         if self.drops > 10 { return LinkStatus::Down; }
         // Le RSSI do registrador do chip WiFi (offset 0x90)
-        let rssi = unsafe { read_volatile((0x10000000 + 0x90) as *const u32) };
+        let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+        let rssi = unsafe { read_volatile((0x10000000 + 0x90 + pm as usize) as *const u32) };
         self.rssi = (rssi & 0xFF) as i8;
         if self.rssi < -85 { LinkStatus::Degraded(self.rssi) } else { LinkStatus::Up }
     }
@@ -123,7 +126,8 @@ impl FailoverEngine {
             self.profile_idx = next;
             self.switch_to(1, &mut EthInterface, _wlan);
             // Comando de reassociacao via register MMIO
-            unsafe { write_volatile(0x1000000C as *mut u32, 0x02); }
+            let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed) as usize;
+            unsafe { write_volatile((0x1000000C + pm) as *mut u32, 0x02); }
         }
     }
 }

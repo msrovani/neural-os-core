@@ -56,6 +56,7 @@ Ganho estimado: **0.5-1.0 PPL** recuperado sem custo de runtime.
 | **Fast** | Llama 3.2 1B convertido | 310MB | Consultas triviais, fallback rápido |
 | **Pro** | Llama 3.1 8B convertido | 2.0GB | Diagnóstico profundo, auto-healing |
 | **RustCoder** | DeepSeek Coder 1.3B convertido | 350MB | Geração de código para patches |
+| **Reranker** | BGE Reranker v2 M3 | 140MB | Re-rank cross-encoder para RAG (ex-TinyStories) |
 | **HwExpert** | SDIO HW ID model (existente) | 1MB | Identificação de hardware |
 | **Learner** | Qwen2.5 0.5B convertido | 125MB | ⭐ Aprendizado contínuo on-device |
 

@@ -139,6 +139,7 @@ pub struct GgufFile {
 
 /// Le u32 little-endian de um slice
 fn read_u32(data: &[u8], offset: &mut usize) -> u32 {
+    if *offset + 4 > data.len() { return 0; }
     let val = u32::from_le_bytes([
         data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
     ]);
@@ -148,6 +149,7 @@ fn read_u32(data: &[u8], offset: &mut usize) -> u32 {
 
 /// Le u64 little-endian de um slice
 fn read_u64(data: &[u8], offset: &mut usize) -> u64 {
+    if *offset + 8 > data.len() { return 0; }
     let val = u64::from_le_bytes([
         data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
         data[*offset + 4], data[*offset + 5], data[*offset + 6], data[*offset + 7],
@@ -158,6 +160,7 @@ fn read_u64(data: &[u8], offset: &mut usize) -> u64 {
 
 /// Le string (length-prefixed) de um slice
 fn read_string(data: &[u8], offset: &mut usize) -> String {
+    if *offset + 8 > data.len() { return String::new(); }
     let len = read_u64(data, offset) as usize;
     let end = core::cmp::min(*offset + len, data.len());
     let s = core::str::from_utf8(&data[*offset..end]).unwrap_or("(invalid utf8)");
@@ -170,21 +173,25 @@ fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
     let val_type = read_u32(data, offset);
     match val_type {
         0 => { // uint8
+            if *offset >= data.len() { return String::new(); }
             let v = data[*offset];
             *offset += 1;
             alloc::format!("{}", v)
         }
         1 => { // int8
+            if *offset >= data.len() { return String::new(); }
             let v = data[*offset] as i8;
             *offset += 1;
             alloc::format!("{}", v)
         }
         2 => { // uint16
+            if *offset + 2 > data.len() { return String::new(); }
             let v = u16::from_le_bytes([data[*offset], data[*offset + 1]]);
             *offset += 2;
             alloc::format!("{}", v)
         }
         3 => { // int16
+            if *offset + 2 > data.len() { return String::new(); }
             let v = i16::from_le_bytes([data[*offset], data[*offset + 1]]);
             *offset += 2;
             alloc::format!("{}", v)
@@ -194,6 +201,7 @@ fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
             alloc::format!("{}", v)
         }
         5 => { // int32
+            if *offset + 4 > data.len() { return String::new(); }
             let v = i32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
             *offset += 4;
             alloc::format!("{}", v)
@@ -203,6 +211,7 @@ fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
             alloc::format!("{}", v)
         }
         7 => { // int64
+            if *offset + 8 > data.len() { return String::new(); }
             let v = i64::from_le_bytes([
                 data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3],
                 data[*offset + 4], data[*offset + 5], data[*offset + 6], data[*offset + 7],
@@ -211,11 +220,13 @@ fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
             alloc::format!("{}", v)
         }
         8 => { // float32
+            if *offset + 4 > data.len() { return String::new(); }
             let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
             *offset += 4;
             alloc::format!("{:.4}", v)
         }
         9 => { // bool
+            if *offset >= data.len() { return String::new(); }
             let v = data[*offset] != 0;
             *offset += 1;
             String::from(if v { "true" } else { "false" })
@@ -241,13 +252,20 @@ fn read_metadata_value(data: &[u8], offset: &mut usize) -> String {
 fn read_metadata_value_inner(data: &[u8], offset: &mut usize, val_type: u32) -> String {
     match val_type {
         8 => { // float32
+            if *offset + 4 > data.len() { return String::new(); }
             let v = f32::from_le_bytes([data[*offset], data[*offset + 1], data[*offset + 2], data[*offset + 3]]);
             *offset += 4;
             alloc::format!("{:.4}", v)
         }
         10 => read_string(data, offset),
         _ => {
-            *offset += 1;
+            // Unknown inner type: try length-prefixed skip if possible
+            if *offset + 4 <= data.len() {
+                let len = u32::from_le_bytes(data[*offset..*offset + 4].try_into().unwrap_or([0; 4])) as usize;
+                *offset += 4 + len.min(data.len().saturating_sub(*offset + 4));
+            } else {
+                *offset = data.len();
+            }
             String::from("?")
         }
     }
@@ -344,10 +362,16 @@ pub fn dequantize_q4_0(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
     for b in 0..num_blocks {
         let block_start = b * block_bytes;
         let block_end = core::cmp::min(block_start + block_bytes, data.len());
-        if let Ok(values) = dequantize_q4_0_block(&data[block_start..block_end]) {
-            let remaining = total_weights - tensor_data.len();
-            let to_copy = core::cmp::min(32, remaining);
-            tensor_data.extend_from_slice(&values[..to_copy]);
+        match dequantize_q4_0_block(&data[block_start..block_end]) {
+            Ok(values) => {
+                let remaining = total_weights - tensor_data.len();
+                let to_copy = core::cmp::min(32, remaining);
+                tensor_data.extend_from_slice(&values[..to_copy]);
+            }
+            Err(_) => {
+                // ponytail: truncated GGUF - partial block, weights stay zero
+                continue;
+            }
         }
     }
 
@@ -603,7 +627,11 @@ fn optimal_threshold(data: &[f32]) -> f32 {
         data.iter().map(|v| v.abs()).collect()
     };
     let mut sorted = sampled.clone();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted.sort_by(|a, b| {
+        if a > b { core::cmp::Ordering::Greater }
+        else if a < b { core::cmp::Ordering::Less }
+        else { core::cmp::Ordering::Equal }
+    });
     let p85 = sorted[(sorted.len() * 85 / 100).min(sorted.len() - 1)];
     p85.max(0.01) // mínimo 0.01 evita threshold zero para tensor zerado
 }
@@ -688,15 +716,22 @@ impl GgufBackedModel {
             layers.push(crate::cortex::LayerWeights {
                 rms_attn: rms_default.clone(),
                 q: f32_to_ternary_packed(&q, qr, qc),
+                q_scale: 1.0,
                 k: f32_to_ternary_packed(&k, kr, kc),
+                k_scale: 1.0,
                 v: f32_to_ternary_packed(&v, vr, vc),
+                v_scale: 1.0,
                 o: f32_to_ternary_packed(&o, or_, oc),
+                o_scale: 1.0,
                 rms_ffn: rms_default,
                 rms_inner_attn,
                 rms_ffn_norm,
                 gate: f32_to_ternary_packed(&gate, gr, gc),
+                gate_scale: 1.0,
                 up: f32_to_ternary_packed(&up, ur, uc),
+                up_scale: 1.0,
                 down: f32_to_ternary_packed(&down, dr, dc),
+                down_scale: 1.0,
                 kv_dim: self.hidden_dim,
                 num_kv_heads: self.hidden_dim / 64,
                 intermediate_size: ffn_dim,
@@ -713,9 +748,11 @@ impl GgufBackedModel {
         let rms_final = alloc::vec![1.0f32; self.hidden_dim];
         Some(crate::cortex::TransformerModel {
             embed,
+            embed_scale: 1.0,
             layers,
             rms_final,
             unembed,
+            unembed_scale: 1.0,
             medusa_heads: Vec::new(),
             vocab_size: crate::cortex::VOCAB_SIZE as u32,
             hidden: self.hidden_dim,
