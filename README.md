@@ -109,6 +109,31 @@ cargo check --release
 
 ---
 
+## 🧠 Modelos Multi-Slot (ADR-0078)
+
+```
+target/disk_qemu.raw — 5GB FAT32 com 8 modelos:
+
+┌──────────┬──────────────────────────┬────────┬──────────────────────┐
+│ Slot     │ Modelo                   │ RAM    │ Função               │
+├──────────┼──────────────────────────┼────────┼──────────────────────┤
+│ Active   │ BitNet 2B                │ 576MB  │ Conversa + trivia     │
+│ Vision   │ SigLIP ViT-B/16         │  33MB  │ Encoder visual        │
+│ Pro      │ Llama 3.1 8B             │ 1.9GB  │ Diagnóstico + visão   │
+│ Agent    │ Qwen 2.5 3B              │ 752MB  │ Tarefas agenticas     │
+│ Coder    │ DeepSeek Coder 1.3B      │ 321MB  │ Auto-healing patches  │
+│ Reranker │ BGE Reranker v2 M3       │ 165MB  │ RAG cross-encoder     │
+│ HwExpert │ SDIO HW ID              │   1MB  │ Identificação HW      │
+│ Learner  │ Qwen 2.5 0.5B            │ 124MB  │ Aprendizado contínuo  │
+└──────────┴──────────────────────────┴────────┴──────────────────────┘
+Total ~3.9GB + runtime ≈ ~6GB  ✅ Cabe em 8GB
+```
+
+Modelos convertidos com RTN+scale + threshold adaptativo por tensor.
+Arquivos .BIN permanentes em `models/` (fora de `target/`, nunca apagar).
+
+---
+
 ## 🏛 Architecture
 
 ### Ring Architecture (K³CHJ)
