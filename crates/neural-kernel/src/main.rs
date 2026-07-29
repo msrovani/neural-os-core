@@ -2295,9 +2295,11 @@ pub(crate) fn kernel_boot(
             // Sem isso o jarbas só vê ATA; no boot USB puro o MSC é a fonte.
             let has_nvidia_fw = gpus.iter().any(|g| matches!(g.vendor, k_hal::gpu::detect::GpuVendor::Nvidia));
             crate::display::fb::boot_ckpt(44, "GP108 firmware");
-            // Ponytail: GP108 preload só via USB-MSC (pendrive). ATA em HW real
-            // pode ter controlador mas sem disco respondendo, travando o boot.
-            if has_nvidia_fw && crate::USB_MSC.lock().is_some() {
+            // Ponytail: GP108 preload — tenta ATA (read_sectors retorna false
+            // se sem disco, nao trava mais — commit e154edc mudou assinatura).
+            // USB-MSC é tentado como fallback.
+            let has_nvidia_fw = gpus.iter().any(|g| matches!(g.vendor, k_hal::gpu::detect::GpuVendor::Nvidia));
+            if has_nvidia_fw {
                 const GP108: &[(&str, &str)] = &[
                     ("fecs_bl.bin", "FECS_BL.BIN"),
                     ("fecs_data.bin", "FECS_DAT.BIN"),
@@ -2348,8 +2350,9 @@ pub(crate) fn kernel_boot(
             crate::display::fb::boot_ckpt(45, "GP108 done");
 
             // Plano coex dirige backend (display owner intocado em falha compute)
+            crate::display::fb::boot_ckpt(46, "Backend init start");
             crate::gpu::backend::init_backend_with_plan(&gpus, &plan);
-            crate::display::fb::boot_ckpt(46, "Backend init done");
+            crate::display::fb::boot_ckpt(47, "Backend init done");
 
             k_nano::slog_hal!("GPU", "info", "{} GPU(s) detectadas. Backend: {}",
 
@@ -3689,7 +3692,28 @@ pub(crate) fn kernel_boot(
         let heap_stack = alloc::vec![0u8; SCHED_STACK_SIZE].into_boxed_slice();
         let sp = (heap_stack.as_ptr() as u64 + SCHED_STACK_SIZE as u64) & !0xFu64;
         core::mem::forget(heap_stack);
-        let reg = &mut registry as *mut agent_core::AgentRegistry;
+        // ── BootReport: publica resumo do boot no EventBus ──
+    let report = k_nano::boot_report::finalize_and_publish();
+    k_nano::slog_bin!("BOOT", "REPORT", "storage={} usb_msc={} log_written={} ckpt=K{}",
+        report.storage_ok, report.usb_msc, report.boot_log_written, report.last_ckpt);
+
+    // ── Dump boot_ramlog no FB antes do Runtime ──
+    // Última tentativa de persistir BOOT.LOG (ATA agora retorna false sem travar)
+    crate::boot_logger::flush();
+    // Mostra o log completo no FB pra foto
+    let session = k_nano::boot_logger::build_session_bytes();
+    let session_str = core::str::from_utf8(&session).unwrap_or("");
+    if !session_str.is_empty() {
+        crate::display::fb::console_print(">>> BOOT.LOG (RAM) <<<");
+        for line in session_str.lines().take(40) {
+            crate::display::fb::console_print(line);
+        }
+        crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
+        // Pausa curta pra dar tempo de ler/fotografar
+        for _ in 0..20_000_000 { core::hint::spin_loop(); }
+    }
+
+    let reg = &mut registry as *mut agent_core::AgentRegistry;
         core::arch::asm!(
             "mov rsp, {sp}",
             "mov rdi, {reg}",

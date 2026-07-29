@@ -22,6 +22,7 @@ pub mod block_dev;
 pub mod boot_chime;
 pub mod boot_handoff;
 pub mod boot_logger;
+pub mod boot_report;
 pub mod btrfs_reader;
 pub mod firewall;
 pub mod fts_search;
