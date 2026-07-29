@@ -3,6 +3,7 @@
 //! Gatilho: CronAgent detecta idle > 30s sem interação do usuário.
 
 use alloc::string::String;
+use core::sync::atomic::Ordering;
 use k_nano::EVENT_BUS;
 
 /// Tópico para mensagens proativas do JARBAS.
@@ -44,7 +45,11 @@ pub fn generate_proactive(msg_type: ProactiveType) -> Option<String> {
         }
         ProactiveType::StatusReport => {
             let uptime = get_uptime_ticks();
-            String::from(alloc::format!("Sistema operacional estável há {} ticks. {} agentes ativos.", uptime, 259))
+            let n_ag = agent_core::LAST_SCHED_AGENTS.load(Ordering::Relaxed);
+            String::from(alloc::format!(
+                "Sistema estável há {} ticks. {} agentes ativos (nativos + carregados sob demanda, sandbox WASM).",
+                uptime, n_ag
+            ))
         }
     };
     Some(msg)
