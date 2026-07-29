@@ -196,7 +196,7 @@
 - [x] Boot path hermes (jarbas): Agency registra >0 agentes (não stub vazio)
 - [x] Boot path hermes: `HwRegistry::detect_all` lista PCI reais no serial
 - [x] Safety I4 escreve trilha Merkle verificável (`AuditTrail::verify()`)
-- [x] Atualizar TECNOLOGIAS.md se ownership Ring 1 mudar p�s-migra��o Ring 1 mudar pós-migração
+- [x] Atualizar TECNOLOGIAS.md se ownership Ring 1 mudar p�s-migra��o Ring 1 mudar pós-migração
 
 ---
 

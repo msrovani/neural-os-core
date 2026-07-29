@@ -214,6 +214,14 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 }
 
 pub fn init_tpm(phys_mem_offset: u64) {
+    // ponytail: Only probe TPM if firmware reported a TPM2 ACPI table.
+    // On AMD AM5 (Ryzen 7000/X670), the fixed address 0xFED4_0000 may
+    // not have a device behind it → MMIO read stalls the bus silently.
+    if !unsafe { crate::acpi::has_tpm2_table(phys_mem_offset) } {
+        TPM_PRESENT.call_once(|| false);
+        crate::slog_nano!("TPM", "info", "ausente (sem tabela ACPI TPM2).");
+        return;
+    }
     PHYS_MEM_OFFSET.store(phys_mem_offset, Ordering::Relaxed);
     unsafe {
         crate::apic::map_page_uc(TPM_BASE, phys_mem_offset);

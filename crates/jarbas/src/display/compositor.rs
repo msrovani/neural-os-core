@@ -36,7 +36,7 @@ use crate::display::workspaces::Workspaces;
 use crate::display::focus::{FocusStack, FocusPolicy};
 use crate::display::dock::Dock;
 pub use crate::display::window::AppId;
-use crate::display::window::{Window, WindowContent};
+use crate::display::window::{FloatingWindow, Window, WindowContent};
 use crate::display::theme::Theme;
 use crate::display::tiling::{Rect, SplitDirection, WindowId};
 use crate::display::notifications::NotificationQueue;
@@ -544,10 +544,11 @@ impl JarbasDesktop {
         self.next_window_id += 1;
         let title = decl.title.clone();
         let rect = Rect { x: decl.x, y: decl.y, width: decl.w as u32, height: decl.h as u32 };
+        let content = WindowContent::Card(decl);
         self.windows.push(Window {
             id,
             app_id: None,
-            content: WindowContent::Card(decl),
+            content: content.clone(),
             rect,
             workspace: self.workspaces.active,
             focused: false,
@@ -560,6 +561,10 @@ impl JarbasDesktop {
             data: alloc::string::String::new(),
             z: Layer::AppWindows,
         });
+        // Também adiciona às floating windows da workspace para ser renderizado
+        self.workspaces.active_mut().add_window_floating(
+            crate::display::window::FloatingWindow::new(id, rect, content)
+        );
     }
 
     pub fn card_click(&mut self, cx: i32, cy: i32) -> &'static str {

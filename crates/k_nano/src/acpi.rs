@@ -402,6 +402,60 @@ fn checksum_valid(data: &[u8]) -> bool {
     data.iter().fold(0u8, |a, b| a.wrapping_add(*b)) == 0
 }
 
+/// ponytail: Check ACPI for a "TPM2" table before touching 0xFED4_0000.
+/// On AMD AM5 the TIS fixed address may not respond → bus stall.
+/// Returns true only if firmware actually reports a TPM2 table.
+pub unsafe fn has_tpm2_table(physical_memory_offset: u64) -> bool {
+    let rsdp_phys = match find_rsdp(physical_memory_offset) {
+        Some(p) => p,
+        None => return false,
+    };
+    let rsdp_virt = VirtAddr::new(physical_memory_offset + rsdp_phys);
+    let rsdp = &*(rsdp_virt.as_u64() as *const RsdpDescriptor);
+
+    let rsdt_phys = if rsdp.revision >= 2 && rsdp.xsdt_address != 0 {
+        rsdp.xsdt_address
+    } else {
+        rsdp.rsdt_address as u64
+    };
+    let rsdt_virt = VirtAddr::new(physical_memory_offset + rsdt_phys);
+
+    let mut sig = [0u8; 4];
+    for i in 0..4 {
+        sig[i] = read_volatile((rsdt_virt.as_u64() as *const u8).add(i));
+    }
+    let is_xsdt = &sig == b"XSDT";
+    if &sig != b"RSDT" && !is_xsdt {
+        return false;
+    }
+
+    let rsdt_len = read_volatile((rsdt_virt.as_u64() as *const u32).add(1)) as usize;
+    let entry_size: usize = if is_xsdt { 8 } else { 4 };
+    let entry_count = (rsdt_len - 36) / entry_size;
+
+    for i in 0..entry_count {
+        let entry_ptr = rsdt_virt.as_u64() as *const u8;
+        let off = 36 + i * entry_size;
+        let table_phys = if is_xsdt {
+            read_volatile(entry_ptr.add(off) as *const u64)
+        } else {
+            read_volatile(entry_ptr.add(off) as *const u32) as u64
+        };
+        if table_phys == 0 {
+            continue;
+        }
+        let table_virt = physical_memory_offset + table_phys;
+        let mut tbl_sig = [0u8; 4];
+        for j in 0..4 {
+            tbl_sig[j] = read_volatile((table_virt as *const u8).add(j));
+        }
+        if &tbl_sig == b"TPM2" {
+            return true;
+        }
+    }
+    false
+}
+
 unsafe fn find_rsdp(physical_memory_offset: u64) -> Option<u64> {
     let boot_rsdp = BOOT_RSDP_PHYS.load(Ordering::Acquire);
     if boot_rsdp != 0 {
