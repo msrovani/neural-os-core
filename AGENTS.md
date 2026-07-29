@@ -204,6 +204,35 @@ python tools\preflight_wave.py --wave 7   # PreFlight residuals
 Config: WHPX + Haswell/TCG, e1000 + `-netdev user`, VirtIO-GPU. SLIP/COM2 frozen.
 Disk: `if=ide`. Ver `run-qemu-whpx.ps1` + `SESSION_149`/`150`.
 
+# HW Boot — Pendrive Unified (Limine UEFI + dados FAT32)
+Gera imagem USB bootável para notebook real (Secure Boot OFF).
+
+```powershell
+# Limpeza e build (0 erros)
+cargo clean -p neural-kernel && cargo build --release -p boot
+
+# Gera target/usb_hw.img (~3.2GB) — GPT com:
+#   Part 0:   ESP FAT32 (Limine BOOTX64.EFI + kernel.elf) @ LBA 34
+#   Part 1:   Dados FAT32 (modelos, firmware, CONFIG.TXT, BOOT.LOG) @ LBA 262144
+#   MBR:      Protective 0xEE (GPT legacy guard, NÃO bootável)
+#   Windows:  Monta partição de dados como NEURAL-OS (letra E:)
+python tools/build_image.py --hw --unified
+
+# Gravar no pendrive (≥8GB) via Rufus — modo Imagem DD
+# Rufus → selecionar target/usb_hw.img → Imagem DD → gravar
+# Conectar no notebook → F2/F12 → selecionar USB → Secure Boot OFF → boot
+```
+
+**Pipeline interno:** `crates/boot/build.rs` → `tools/limine/mk_esp_fat.py` (gera GPT,
+não MBR) → `limine-esp.img` → `uefi.img` → `build_usb_unified.py` → `usb_hw.img`.
+`mk_esp_fat.py` foi migrado de MBR-only para GPT completo (protective MBR 0xEE +
+EFI PART header + entries + backup) em SESSION_228 — essencial para pendrive real.
+
+**BOOT.LOG:** A partição de dados tem `BOOT.LOG` pré-alocado (256KB). O kernel
+tenta escrever via USB-MSC/ATA/AHCI/NVMe (persist_now, ordem). Em HW real sem
+ATA, o flush pode falhar se USB-MSC não enumerar a tempo. SysInfoAgent (card
+ID=9001) retry periódico até FAT_READY=true.
+
 # Sprint 100 — Code Freeze v1.0.0
 - `cargo clean -p neural-kernel && cargo check --release` — 0 erros
 - QEMU boot limpo (BIOS + UEFI + serial tunnel + AHCI + SMP)

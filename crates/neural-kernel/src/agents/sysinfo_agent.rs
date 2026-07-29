@@ -131,6 +131,12 @@ impl Agent for SysInfoAgent {
     }
 
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
+        // Retry BOOT.LOG flush se ainda não foi escrito (USB-MSC pode demorar
+        // a enumerar em HW real). O SysInfoAgent roda a cada 50 ticks (~2.7s).
+        if !k_nano::boot_logger::FAT_READY.load(Ordering::Relaxed) {
+            crate::boot_logger::flush();
+        }
+
         if !self.spawned {
             // First tick: spawn the card
             let body = self.collect_body();
