@@ -77,6 +77,13 @@ impl Avatar8 {
         }
     }
 
+    pub fn resize(&mut self, fb_w: usize, fb_h: usize) {
+        self.fb_w = fb_w;
+        self.fb_h = fb_h;
+        self.cx = fb_w as f32 / 2.0;
+        self.cy = fb_h as f32 / 2.0;
+    }
+
     pub fn set_state(&mut self, new: Avatar8State) {
         if self.state != new {
             self.state = new;

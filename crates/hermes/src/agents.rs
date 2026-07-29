@@ -187,7 +187,6 @@ impl InputAgent {
             0x2A | 0x36 => { self.shift = pressed; }
             // Left Win (Super) = 0x5B, Right Win = 0x5C
             0x5B | 0x5C => { self.super_key = pressed; }
-            0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
             _ => {}
         }
         // Publica KEY_EVENT com modifiers para o DisplayAgent (atalhos WM).
@@ -220,7 +219,11 @@ impl InputAgent {
                 }
             }
             0x0E => { self.buffer.pop(); }
-            _ => { if let Some(ch) = k_nano::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
+            _ => {
+                // Skip keyboard shortcuts that shouldn't type
+                if scancode == 0x53 || scancode == 0x39 { }  // Delete and Space handled by WM
+                else if let Some(ch) = k_nano::scancode_to_ascii(scancode) { self.buffer.push(ch); }
+            }
         }
         // Echo tecla para o display em tempo real
         let _ = EVENT_BUS.publish(Event {
@@ -228,10 +231,6 @@ impl InputAgent {
             payload: self.buffer.clone().into_bytes(),
             token: CapabilityToken::Legacy(1),
         });
-    }
-    fn handle_cad(&self) {
-        k_nano::slog_hermes!("Sys", "info", "Ctrl+Alt+Del → SYSTEM_SHUTDOWN");
-        k_ai::shutdown::request_shutdown();
     }
 }
 

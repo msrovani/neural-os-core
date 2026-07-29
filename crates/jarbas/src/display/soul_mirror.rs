@@ -13,13 +13,29 @@ pub struct SoulMirrorState {
     pub ring_count: u32,
     pub rotation_deg: u32,
     pub brightness: f32,
+    pub avatar_override: Option<(u8, u8, u8)>,  // Jarbas palette override
 }
 
 impl SoulMirrorState {
-    pub fn from_affect(affect: &hermes::affect::AffectVector, phase_deg: u32) -> Self {
+    /// Jarbas palette: override color based on avatar state.
+    /// Returns Some(color) if the state has a dedicated Jarbas color.
+    pub fn jarbas_color(state: &str) -> Option<(u8, u8, u8)> {
+        match state {
+            "DREAM" => Some((75, 0, 130)),    // Indigo — SleepCycle
+            "THINK" => Some((180, 60, 255)),  // Purple — inferência
+            "IDLE"  => Some((106, 13, 173)),  // Deep purple — Jarbas identity
+            "ALERT" => Some((224, 17, 95)),   // Ruby — emergência
+            _ => None,                         // Estados emocionais mantêm valence
+        }
+    }
+
+    pub fn from_affect(affect: &hermes::affect::AffectVector, phase_deg: u32, avatar_state: Option<&str>) -> Self {
         let (r, g, b) = affect.valence_to_rgb();
+        let avatar_override = avatar_state.and_then(Self::jarbas_color);
+        let color = avatar_override.unwrap_or((r, g, b));
         SoulMirrorState {
-            color: (r, g, b),
+            color,
+            avatar_override,
             pulse_speed: 0.5 + affect.arousal * 0.5,
             size_scale: 0.5 + affect.dominance * 0.5,
             ring_count: (affect.curiosity * 6.0) as u32,
@@ -31,6 +47,7 @@ impl SoulMirrorState {
     pub fn neutral() -> Self {
         SoulMirrorState {
             color: (0, 150, 255),
+            avatar_override: None,
             pulse_speed: 0.5,
             size_scale: 0.8,
             ring_count: 2,
@@ -52,7 +69,7 @@ pub struct SoulMirrorRenderer {
 
 impl SoulMirrorRenderer {
     pub fn new(fb_w: usize, fb_h: usize) -> Self {
-        let base = (core::cmp::min(fb_w, fb_h) as f32 * 0.09).max(28.0);
+        let base = (core::cmp::min(fb_w, fb_h) as f32 * 0.15).max(28.0);
         SoulMirrorRenderer {
             state: SoulMirrorState::neutral(),
             frame: 0,
@@ -68,7 +85,7 @@ impl SoulMirrorRenderer {
         self.fb_h = fb_h;
         self.cx = (fb_w / 2) as isize;
         self.cy = (fb_h / 2) as isize;
-        self.base_r = (core::cmp::min(fb_w, fb_h) as f32 * 0.09).max(28.0);
+        self.base_r = (core::cmp::min(fb_w, fb_h) as f32 * 0.15).max(28.0);
     }
 
     pub fn update_state(&mut self, state: SoulMirrorState) {
@@ -85,7 +102,7 @@ impl SoulMirrorRenderer {
         let cy = self.cy;
 
         let r = self.base_r * self.state.size_scale;
-        let pulse_offset = sinf(tick as f32 * 0.05 * self.state.pulse_speed) * (r * 0.22);
+        let pulse_offset = sinf(tick as f32 * 0.05 * self.state.pulse_speed) * (r * 0.35);
         let pulse_r = r + pulse_offset;
         let bri = if fft_energy > 0.0 {
             (130.0 + fft_energy.min(1.0) * 125.0) * self.state.brightness
@@ -111,17 +128,18 @@ impl SoulMirrorRenderer {
             fb.fill_circle_glow(cx, cy, ring_r, rr, gg, bb, ring_alpha);
         }
 
-        // Main orb body
+        // Main orb body — use avatar_override color if set
+        let (body_r, body_g, body_b) = self.state.avatar_override.unwrap_or((cr, cg, cb));
         let glow_r = (pulse_r * 1.5) as isize;
         let core_r = pulse_r as isize;
-        fb.fill_circle_glow(cx, cy, glow_r, cr, cg, cb, 40);
-        fb.fill_circle_glow(cx, cy, core_r, cr, cg, cb, bri_u8 / 3);
+        fb.fill_circle_glow(cx, cy, glow_r, body_r, body_g, body_b, 40);
+        fb.fill_circle_glow(cx, cy, core_r, body_r, body_g, body_b, bri_u8 / 3);
 
         // Hot core
         let hot_r = (pulse_r * 0.28).max(4.0) as isize;
-        let hc_r = (255u8).min(cr.saturating_add(60));
-        let hc_g = (255u8).min(cg.saturating_add(60));
-        let hc_b = (255u8).min(cb.saturating_add(60));
+        let hc_r = (255u8).min(body_r.saturating_add(60));
+        let hc_g = (255u8).min(body_g.saturating_add(60));
+        let hc_b = (255u8).min(body_b.saturating_add(60));
         fb.fill_circle_glow(cx, cy, hot_r, hc_r, hc_g, hc_b, 90);
 
         // Rotation arc — animated dash from LoopPhase rotation

@@ -348,7 +348,7 @@ impl JarbasDesktop {
         }
     }
 
-    pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar::JarbasAvatar>) {
+    pub fn render(&mut self, tick: u64, avatar: Option<&mut crate::display::avatar8::Avatar8>, avatar_state: Option<&str>) {
         self.tick = tick; let (w, h) = (self.w, self.h);
 
         // ── FPS control ──
@@ -386,9 +386,23 @@ impl JarbasDesktop {
         // CAMADA 0: Fundo escuro + Orb responsivo (tela inteira)
         // ═════════════════════════════════════════════════════════════
         self.fb.fill_rect(0, 0, w, h, theme.bg.0, theme.bg.1, theme.bg.2);
+
+        // Subtle neural grid (ambient animation)
+        // ponytail: grid dots at intersections, very subtle
+        let grid_spacing = 64usize;
+        for x in (grid_spacing..w).step_by(grid_spacing) {
+            for y in (grid_spacing..h).step_by(grid_spacing) {
+                self.fb.fill_rect(x, y, 2, 2,
+                    (theme.accent.0 as u16 * 5 / 255) as u8,
+                    (theme.accent.1 as u16 * 5 / 255) as u8,
+                    (theme.accent.2 as u16 * 5 / 255) as u8);
+            }
+        }
+        self.draw_ambient_particles(tick, w, h);
+
         if self.avatar_visible {
-            self.draw_orb_layer(tick, w, h);
-            if let Some(av) = avatar { av.render_particles(&mut self.fb); }
+            self.draw_orb_layer(tick, w, h, avatar_state);
+            if let Some(av) = avatar { av.render(&mut self.fb); }
         }
 
         // ═════════════════════════════════════════════════════════════
@@ -810,17 +824,33 @@ impl JarbasDesktop {
 
     /// Soul Mirror — orb afetivo (Onda 7) substitui o orb cyan fixo.
     /// Cor/brilho/pulsação/anéis/rotação vêm do AffectVector + LoopPhase.
-    fn draw_orb_layer(&mut self, _tick: u64, _w: usize, _h: usize) {
+    fn draw_orb_layer(&mut self, _tick: u64, _w: usize, _h: usize, avatar_state: Option<&str>) {
         // Tenta puxar affect do ExecutiveSupervisor (se hermes já registrou).
         if let Some(sup) = hermes::globals::EXECUTIVE_SUPERVISOR.lock().as_ref() {
             let mirror = SoulMirrorState::from_affect(
                 &sup.affect.affect,
                 sup.phase.rotation_deg(),
+                avatar_state,  // Jarbas palette override per state
             );
             self.soul_mirror.update_state(mirror);
         }
         let fft_energy = crate::display::avatar::read_audio_energy();
         self.soul_mirror.render(&mut self.fb, fft_energy);
+    }
+
+    /// Subtle ambient particles floating across the background
+    fn draw_ambient_particles(&mut self, tick: u64, _w: usize, _h: usize) {
+        use libm::{sinf, cosf};
+        for i in 0..12 {
+            let seed = (tick.wrapping_add(i as u64 * 137)) as f32;
+            let px = (sinf(seed * 0.01) * 0.5 + 0.5) * _w as f32;
+            let py = (cosf(seed * 0.013 + i as f32) * 0.5 + 0.5) * _h as f32;
+            let alpha = (sinf(seed * 0.007) * 0.5 + 0.5) * 8.0; // 0-8 alpha
+            if alpha as u8 > 1 {
+                self.fb.set_pixel(px as usize, py as usize, 
+                    80, 60, 120);  // subtle purple
+            }
+        }
     }
 }
 

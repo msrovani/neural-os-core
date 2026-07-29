@@ -292,7 +292,7 @@ impl BeiState {
         // 6. Sync SoulMirrorState with AffectVector
         {
             let affect = self.affect_regulator.lock().affect;
-            let _state = SoulMirrorState::from_affect(&affect, 0);
+            let _state = SoulMirrorState::from_affect(&affect, 0, None);
             *self.soul_mirror_state.lock() = _state;
         }
         

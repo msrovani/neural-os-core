@@ -6,7 +6,7 @@ use hermes;
 use k_nano::EVENT_BUS;
 use crate::display::fb::{DoubleBuffer, GPU};
 use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_X, MOUSE_Y, MOUSE_BUTTONS, POWER_BANNER, POWER_STATE, PowerState, PowerDialogAction, hit_power_button};
-use crate::display::avatar::{AvatarState, JarbasAvatar};
+use crate::display::avatar8::{Avatar8State, Avatar8};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 use crate::display::shortcuts::{KeyCombo, Modifiers, WmAction, scancode_to_keycode};
 use hermes::agents::TOPIC_KEY_EVENT;
@@ -41,7 +41,9 @@ pub struct DisplayAgent {
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
-    avatar: Option<JarbasAvatar>,
+    avatar: Option<Avatar8>,
+    /// Current avatar state label for Jarbas palette override
+    avatar_state_label: Option<&'static str>,
     dragging: bool,
     drag_id: AppId,
     drag_off_x: isize,
@@ -77,6 +79,7 @@ impl DisplayAgent {
             demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
             avatar: None,
+            avatar_state_label: None,
             dragging: false,
             drag_id: AppId::None,
             drag_off_x: 0,
@@ -87,7 +90,7 @@ impl DisplayAgent {
 
     /// Drena receiver → overlay Hermes (HITL / terminal / memory nudge).
     fn drain_hermes_overlay(
-        avatar: &mut Option<JarbasAvatar>,
+        avatar: &mut Option<Avatar8>,
         rx: &mut event_bus::Receiver,
         mode: OverlayMode,
     ) {
@@ -122,7 +125,7 @@ impl DisplayAgent {
             }
             if matches!(mode, OverlayMode::HitlConfirm | OverlayMode::MemoryNudge) {
                 if let Some(ref mut av) = avatar {
-                    av.set_state(AvatarState::Listening);
+                    av.set_state(Avatar8State::Listening);
                 }
             }
             match mode {
@@ -328,7 +331,7 @@ impl Agent for DisplayAgent {
                 let gpu = GPU.lock();
                 gpu.as_ref().map(|gpu_dev| {
                     let fb = DoubleBuffer::from_gpu(gpu_dev);
-                    let av = JarbasAvatar::new(gpu_dev);
+                    let av = Avatar8::new(gpu_dev.fb_width as usize, gpu_dev.fb_height as usize);
                     (fb, av, gpu_dev.fb_width, gpu_dev.fb_height)
                 })
             };
@@ -533,17 +536,18 @@ impl Agent for DisplayAgent {
         if let Some(ref rx) = self.latent_receiver {
             while let Some(pkt) = rx.try_receive() {
             let norm = f32::from_bits(pkt.norm_bits);
-            if let Some(ref mut avatar) = self.avatar {
+            if let Some(ref mut avatar8) = self.avatar {
                 let st = if norm > 8.0 {
-                    AvatarState::Speaking
+                    Avatar8State::Speaking
                 } else if norm > 2.0 {
-                    AvatarState::Processing
+                    Avatar8State::Processing
                 } else if norm > 0.1 {
-                    AvatarState::Listening
+                    Avatar8State::Listening
                 } else {
-                    AvatarState::Idle
+                    Avatar8State::Idle
                 };
-                avatar.set_state(st);
+                avatar8.set_state(st);
+                self.avatar_state_label = Some(st.label());
                 ui_spec::mark_avatar_telem();
             }
             if let Some(ref mut desktop) = *COMPOSITOR.lock() {
@@ -598,6 +602,16 @@ impl Agent for DisplayAgent {
                         WmAction::TileResizeDown => { desktop.resize_split_focused(20); }
                         WmAction::LaunchApp(a) => { desktop.toggle_app(a); }
                         WmAction::ShowLauncher => { desktop.toggle_app(AppId::HermesChat); }
+                        WmAction::OpenChat => { desktop.toggle_app(AppId::HermesChat); }
+                        WmAction::PowerMenu => { desktop.open_power_dialog(); }
+                        WmAction::ShowHelp => {
+                            let decl = crate::display::card::UiDeclaration::new(
+                                9999, "Keyboard Shortcuts", 60, 40, 480, 360,
+                            ).push(crate::display::card::Widget::Text(
+                                alloc::string::String::from(crate::display::shortcuts::help_text())
+                            ));
+                            desktop.spawn_card(decl);
+                        }
                     }
                     k_nano::slog_jarbas!("WM", "info", "action={:?}", action);
                 }
@@ -665,7 +679,7 @@ impl Agent for DisplayAgent {
         // Render desktop: orb circular no compositor (avatar partículas após clear interno)
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {
-            desktop.render(tick, self.avatar.as_mut());
+            desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
         }
         drop(comp);
 

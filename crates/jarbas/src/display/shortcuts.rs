@@ -34,6 +34,7 @@ pub enum KeyCode {
     A, S, D, F, G, H, J, K, L,
     Z, X, C, V, B, N, M,
     F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +59,9 @@ pub enum WmAction {
     ToggleDock,                  // Super+D
     ToggleTiling,                // Super+T
     ShowLauncher,                // Super+Space
+    OpenChat,                    // Space — abre/foca o chat do Jarbas
+    PowerMenu,                   // Ctrl+Alt+Del — mostra menu de desligar
+    ShowHelp,                    // H — mostra card de atalhos do teclado
 }
 
 impl WmAction {
@@ -95,6 +99,17 @@ impl WmAction {
             (Modifiers::SUPER, M) => Some(MaximizeWindow),
             (Modifiers::SUPER, N) => Some(MinimizeWindow),
             (Modifiers::SUPER_SHIFT, Space) => Some(ToggleFloating),
+
+            // Bare Space (no modifiers) → OpenChat
+            (Modifiers::NONE, Space) => Some(OpenChat),
+            // Ctrl+Alt+Delete → PowerMenu
+            (Modifiers { ctrl: true, alt: true, .. }, Delete) => Some(PowerMenu),
+            // Bare H (no modifiers) → ShowHelp
+            (Modifiers::NONE, H) => Some(ShowHelp),
+
+            // Standard close shortcuts
+            (Modifiers::ALT, F4) => Some(CloseWindow),
+            (Modifiers::CTRL, Q) => Some(CloseWindow),
 
             // System
             (Modifiers::SUPER, Enter) => Some(LaunchApp(AppId::HermesChat)),
@@ -140,6 +155,11 @@ pub static SHORTCUTS: &[(KeyCombo, WmAction)] = &[
     (KeyCombo { modifiers: Modifiers::SUPER_SHIFT, key: KeyCode::Space }, WmAction::ToggleFloating),
 
     // System
+    (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::Space }, WmAction::OpenChat),
+    (KeyCombo { modifiers: Modifiers { ctrl: true, alt: true, ..Modifiers::NONE }, key: KeyCode::Delete }, WmAction::PowerMenu),
+    (KeyCombo { modifiers: Modifiers::NONE, key: KeyCode::H }, WmAction::ShowHelp),
+    (KeyCombo { modifiers: Modifiers::ALT, key: KeyCode::F4 }, WmAction::CloseWindow),
+    (KeyCombo { modifiers: Modifiers::CTRL, key: KeyCode::Q }, WmAction::CloseWindow),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::Enter }, WmAction::LaunchApp(AppId::HermesChat)),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::D }, WmAction::ToggleDock),
     (KeyCombo { modifiers: Modifiers::SUPER, key: KeyCode::T }, WmAction::ToggleTiling),
@@ -206,6 +226,37 @@ pub fn scancode_to_keycode(scancode: u8) -> Option<KeyCode> {
         0x01 => Some(KeyCode::Escape),
         0x39 => Some(KeyCode::Space),
         0x0F => Some(KeyCode::Tab),
+        0x53 => Some(KeyCode::Delete),   // Delete key / Keypad period
         _ => None,
     }
+}
+
+pub fn help_text() -> &'static str {
+    "ATALHOS DO TECLADO\n\
+     \n\
+     [Workspace]\n\
+     Super+1-9     — Trocar workspace\n\
+     Super+Left    — Workspace anterior\n\
+     Super+Right   — Workspace seguinte\n\
+     \n\
+     [Janelas]\n\
+     Alt+Tab       — Ciclar janelas\n\
+     Super+Q       — Fechar janela\n\
+     Alt+F4        — Fechar janela\n\
+     Ctrl+Q        — Fechar janela\n\
+     Super+M       — Maximizar\n\
+     Super+N       — Minimizar\n\
+     \n\
+     [Sistema]\n\
+     Espaco        — Abrir Chat Jarbas\n\
+     H             — Ajuda (esta tela)\n\
+     Ctrl+Alt+Del  — Menu de energia\n\
+     \n\
+     [Layout]\n\
+     Super+H       — Tile horizontal\n\
+     Super+V       — Tile vertical\n\
+     Super+Shift+Seta  — Redimensionar tile\n\
+     Super+Shift+Space — Alternar flutuante\n\
+     Super+D       — Alternar dock\n\
+     Super+T       — Alternar tiling"
 }
