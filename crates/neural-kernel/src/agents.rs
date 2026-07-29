@@ -2,6 +2,7 @@
 //! Cada struct implementa agent_core::Agent. Substituem as 7 async fn legacy.
 
 pub mod mouse_agent;
+pub mod sysinfo_agent;
 pub mod log_analyst_agent;
 
 use alloc::boxed::Box;

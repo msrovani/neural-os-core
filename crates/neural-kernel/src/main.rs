@@ -2586,6 +2586,10 @@ pub(crate) fn kernel_boot(
     k_nano::slog_bin!("Boot", "register", "MouseAgent");
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
 
+    // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
+    k_nano::slog_bin!("Boot", "register", "SysInfoAgent");
+    registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));
+
     // Display + Metrics ANTES do Hermes: Continuous ring0 polla por ordem de
     // registro. Hermes THINK/LLM soft-float pode bloquear o tick por minutos —
     // se Display vier depois, o orb/HUD nunca sobe (QEMU e HW). Claim graphics

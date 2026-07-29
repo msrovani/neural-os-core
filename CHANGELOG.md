@@ -2,7 +2,16 @@
 
 ## [Unreleased]
 
-### SESSION_228: Hardware Boot + Mouse Agent PS/2 Timeout Fix (2026-07-28)
+### SESSION_228: Hardware Boot + SysInfo Debug Card + Mouse Fix (2026-07-28)
+- **hardware boot**: pendrive unified (GPT/ESP) bootou Limine UEFI até Jarbas em notebook real
+- **fix(compositor)**: `render_app_content` agora renderiza `WindowContent::Card` via
+  `card::render_card()`. Cards existiam como código mas nunca apareciam na tela.
+- **feat: SysInfoAgent** — agente `PollEvery(50)` que coleta CPU/cores, memória/RAM/heap,
+  agentes totais, uptime, rede e storage de fontes lock-free e exibe como card Jarbas.
+  Card ID=9001, atualizado in-place a cada ~2.7s.
+- **feat: status bar** — linha de status agora mostra mais info (implícito no SysInfoAgent)
+- **fix(mouse): `ps2_check_exists()`** — detecta controlador 8042 antes de init PS/2
+- **fix(boot): `mk_esp_fat.py` GPT** — migrado de MBR-only para GPT completo
 - **Hardware boot em notebook real**: pendrive unified (GPT/ESP + dados FAT32) bootou
   Limine UEFI até interface Jarbas. Primeiro boot HW real da história do projeto.
 - **fix(mouse): `ps2_check_exists()`** — detecta controlador 8042 antes de init PS/2.

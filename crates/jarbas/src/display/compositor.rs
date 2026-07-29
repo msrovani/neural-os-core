@@ -895,12 +895,21 @@ fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, 
 /// Renderiza conteúdo interno da janela.
 /// No WM cosmic, só o ChatWindow (HermesChat) tem conteúdo ativo.
 fn render_app_content(fb: &mut DoubleBuffer, win: &Window, scr_w: usize, _scr_h: usize) {
-    if win.app_id() == AppId::HermesChat {
-        let cw = crate::display::chat_window::CHAT_WINDOW.lock();
-        if let Some(ref chat) = *cw {
+    match &win.content {
+        WindowContent::Card(decl) => {
             let cx = win.rect.x as usize;
             let cy = win.rect.y as usize;
-            chat.render(fb, cx, cy, win.rect.width as usize, win.rect.height as usize, scr_w);
+            let _buttons = crate::display::card::render_card(fb, decl);
+        }
+        _ => {
+            if win.app_id() == AppId::HermesChat {
+                let cw = crate::display::chat_window::CHAT_WINDOW.lock();
+                if let Some(ref chat) = *cw {
+                    let cx = win.rect.x as usize;
+                    let cy = win.rect.y as usize;
+                    chat.render(fb, cx, cy, win.rect.width as usize, win.rect.height as usize, scr_w);
+                }
+            }
         }
     }
 }
