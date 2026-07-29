@@ -173,11 +173,10 @@ def write_removable_mbr(
     data_sectors: int,
     data_mbr_type: int = 0x0C,
 ) -> None:
-    """MBR para pendrive: dados PRIMEIRO (Windows removable so olha MBR).
-
-    Slot 0 = FAT32/exFAT (letra no Explorer).
-    Slot 1 = ESP 0xEF (firmware MBR-UEFI; GPT continua sendo a fonte do boot UEFI).
-    Sem 0xEE: em media removable o Windows nao monta GPT atras de protective-only.
+    """MBR para pendrive: só partição de dados (Windows Explorer).
+    
+    Slot 0 = FAT32/exFAT (letra no Explorer). Sem ESP no MBR — UEFI
+    boot usa a GPT. Sem 0xEE: Windows ignora GPT em media removable.
     """
     mbr = bytearray(SECTOR)
     # Part 0 — dados (Explorer)
@@ -185,11 +184,6 @@ def write_removable_mbr(
     mbr[0x1BE + 4] = data_mbr_type & 0xFF
     struct.pack_into("<I", mbr, 0x1BE + 8, data_start)
     struct.pack_into("<I", mbr, 0x1BE + 12, min(data_sectors, 0xFFFFFFFF))
-    # Part 1 — ESP
-    mbr[0x1CE] = 0x80  # bootable (alguns firmware MBR-UEFI)
-    mbr[0x1CE + 4] = 0xEF
-    struct.pack_into("<I", mbr, 0x1CE + 8, esp_start)
-    struct.pack_into("<I", mbr, 0x1CE + 12, min(esp_sectors, 0xFFFFFFFF))
     mbr[0x1FE], mbr[0x1FF] = 0x55, 0xAA
     f.seek(0)
     f.write(mbr)

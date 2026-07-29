@@ -865,10 +865,13 @@ fn sched_metrics_hook(tick: u64, n_agents: usize, polled: u32) {
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // init_phase AQUI (stack ≥2MB): round-robin Oneshot + timeout — seguro com System/Monitor
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
+    crate::display::fb::boot_ckpt(51, "init_phase start");
     registry.init_phase();
+    crate::display::fb::boot_ckpt(52, "init_phase done");
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
+    crate::display::fb::boot_ckpt(53, "scheduler run start");
     registry.run(
         || {
             // Governor ondemand tick — escala frequência por carga da fila de AP
