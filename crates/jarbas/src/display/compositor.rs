@@ -406,15 +406,77 @@ impl JarbasDesktop {
         }
 
         // ═════════════════════════════════════════════════════════════
-        // CAMADA 1: Cards e janelas flutuantes (tela inteira, sem chrome fixo)
+        // CAMADA 1: Barra de status (topo) — COSMIC-style panel
         // ═════════════════════════════════════════════════════════════
-        let gap = 8usize;
+        let sb_h = 28usize;
+        // Fundo escuro com borda inferior sutil (COSMIC top bar)
+        self.fb.fill_rect(0, 0, w, sb_h, 8, 10, 16);
+        self.fb.fill_rect(0, sb_h - 1, w, 1, theme.accent.0, theme.accent.1, theme.accent.2);
+
+        // Métricas — alinhado à esquerda
+        let mem_ctx = k_nano::memory::global_hardware_context();
+        let mem_pct = mem_ctx.get(0).copied().unwrap_or(0.0);
+        let agent_count = self.windows.len();
+        let llm_busy = crate::display::console::get_overlay_text().contains("[CORTEX]");
+
+        let status = alloc::format!(
+            "t:{}  ag:{}  mem:{:.0}%  {}  {}",
+            tick, agent_count, mem_pct * 100.0,
+            if llm_busy { "LLM:gen" } else { "LLM:idle" },
+            if k_nano::env::is_online() { "NET:on" } else { "NET:off" });
+        draw_text(&mut self.fb, 10, 6, &status, self.w, theme.fg.0, theme.fg.1, theme.fg.2);
+
+        // Botão OFF — canto SD, COSMIC-style rounded
+        {
+            let (_bxp, by, bw, bh) = power_btn_rect(w);
+            let off_x = w.saturating_sub(bw + 10);
+            decorations::draw_rounded_rect(&mut self.fb, off_x, by, bw, bh, 4,
+                                           theme.error.0, theme.error.1, theme.error.2);
+            draw_text(&mut self.fb, off_x + 10, by + 6, "OFF", self.w, theme.fg.0, theme.fg.1, theme.fg.2);
+        }
+
+        // ═════════════════════════════════════════════════════════════
+        // CAMADA 2: Painel Hermes (direito 35%, translúcido COSMIC)
+        // ═════════════════════════════════════════════════════════════
+        let gap = 4usize; // COSMIC tile gap
+        let right_w = w * 35 / 100;
+        let rx = w.saturating_sub(right_w + gap);
+        let panel_y = sb_h + gap;
+        let panel_h = h.saturating_sub(sb_h + gap * 2);
+
+        // Fundo translúcido COSMIC (bg_alt com cantos arredondados)
+        decorations::draw_rounded_rect(&mut self.fb, rx, panel_y, right_w, panel_h, 8,
+                                       theme.bg_alt.0/2, theme.bg_alt.1/2, theme.bg_alt.2/2);
+        // Borda sutil
+        decorations::draw_rounded_rect(&mut self.fb, rx, panel_y, right_w, 1, 0,
+                                       theme.border.0/3, theme.border.1/3, theme.border.2/3);
+        // Título
+        draw_text(&mut self.fb, rx + 8, panel_y + 6, "[Hermes Console]", self.w,
+                  theme.accent.0, theme.accent.1, theme.accent.2);
+
+        let cli_content = crate::display::console::get_overlay_text();
+        let hermes_lines: Vec<&str> = cli_content.lines().collect();
+        let available_h = panel_h.saturating_sub(28);
+        let max_visible = available_h / 16;
+        let start = hermes_lines.len().saturating_sub(max_visible.max(1));
+        for (i, line) in hermes_lines.iter().enumerate().skip(start).take(max_visible) {
+            let color = if line.contains("[ERROR]") { (255u8,80u8,80u8) }
+                else if line.contains("[SKILL]") { (80u8,130u8,220u8) }
+                else if line.contains("[CORTEX]") || line.contains("[LLM]") { (220u8,200u8,0u8) }
+                else { theme.fg_muted };
+            draw_text(&mut self.fb, rx + 8, panel_y + 26 + (i - start) * 16, line,
+                      self.w, color.0, color.1, color.2);
+        }
+
+        // ═════════════════════════════════════════════════════════════
+        // CAMADA 3: Workspace — ChatWindow (esquerdo, opaco, com gap)
+        // ═════════════════════════════════════════════════════════════
+        let left_w = w.saturating_sub(right_w + gap * 3); // sobra após painel direito
         let window_updates = {
             let ws = self.workspaces.active();
             let screen_rect = Rect {
-                x: gap as i32, y: gap as i32,
-                width: (w.saturating_sub(gap * 2)) as u32,
-                height: (h.saturating_sub(gap * 2)) as u32,
+                x: gap as i32, y: (sb_h + gap) as i32,
+                width: left_w as u32, height: panel_h as u32,
             };
             let mut updates: Vec<(WindowId, Rect)> = Vec::new();
             if self.tiling_enabled { updates.extend(ws.layout_tiled(screen_rect)); }
@@ -423,11 +485,13 @@ impl JarbasDesktop {
         };
         for (wid, rect) in window_updates {
             if let Some(idx) = self.windows.iter().position(|w| w.id == wid) {
+                // Aplica gap COSMIC entre tiles
+                let gap = 4i32;
                 let gapped = Rect {
-                    x: rect.x + gap as i32 / 2,
-                    y: rect.y + gap as i32 / 2,
-                    width: (rect.width as i32 - gap as i32).max(0) as u32,
-                    height: (rect.height as i32 - gap as i32).max(0) as u32,
+                    x: rect.x + gap / 2,
+                    y: rect.y + gap / 2,
+                    width: (rect.width as i32 - gap).max(0) as u32,
+                    height: (rect.height as i32 - gap).max(0) as u32,
                 };
                 self.windows[idx].rect = gapped;
                 draw_window_fb(&mut self.fb, &self.windows[idx], theme, self.w);
@@ -436,9 +500,17 @@ impl JarbasDesktop {
         }
 
         // ═════════════════════════════════════════════════════════════
-        // CAMADA 2: Notificações + power dialog
+        // CAMADA 4: Notificações + foco + power dialog
         // ═════════════════════════════════════════════════════════════
         self.notifications.render(&mut self.fb, theme, Rect { x: 0, y: 0, width: w as u32, height: h as u32 }, self.tick);
+
+        // Indicador de foco no centro (sobre o orb)
+        let mode_str = match mode {
+            FocusMode::Chat => "[Focado no Chat]",
+            FocusMode::Ambient => "[Modo Ambiente - wake word]",
+        };
+        draw_text(&mut self.fb, w/2 - 90, h - 18, mode_str, self.w,
+                  theme.accent.0, theme.accent.1, theme.accent.2);
 
         // Diálogo de energia (modal central) — 3 opções
         if self.power_dialog {
