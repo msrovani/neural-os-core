@@ -3709,8 +3709,6 @@ pub(crate) fn kernel_boot(
             crate::display::fb::console_print(line);
         }
         crate::display::fb::console_print(">>> FIM BOOT.LOG <<<");
-        // Pausa curta pra dar tempo de ler/fotografar
-        for _ in 0..20_000_000 { core::hint::spin_loop(); }
     }
 
     let reg = &mut registry as *mut agent_core::AgentRegistry;
