@@ -148,7 +148,11 @@ fn contains_ci(hay: &str, needle: &str) -> bool {
 fn hub_has_blob(slot: ModelSlot) -> bool {
     matches!(
         slot,
-        ModelSlot::Vision | ModelSlot::GeneratorPro | ModelSlot::Reranker
+        ModelSlot::Vision
+            | ModelSlot::GeneratorPro
+            | ModelSlot::Reranker
+            | ModelSlot::Agent
+            | ModelSlot::Learner
     ) && HUB.lock().slots[idx(slot)].is_some()
 }
 
@@ -159,6 +163,7 @@ fn fit_ok(slot: ModelSlot) -> bool {
 fn pick_fit_fallback(preferred: ModelSlot) -> ModelSlot {
     let order = [
         ModelSlot::GeneratorPro,
+        ModelSlot::Agent,
         ModelSlot::Vision,
         ModelSlot::Reranker,
         ModelSlot::Active,
@@ -254,7 +259,11 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
         ModelSlot::Learner
     } else if len < 450 * MB {
         ModelSlot::Vision
+    } else if len < 1100 * MB {
+        // Falcon3-3B (~771MB) e modelos 3B → Agent
+        ModelSlot::Agent
     } else {
+        // Falcon3-7B (~1781MB) e maiores → GeneratorPro
         ModelSlot::GeneratorPro
     }
 }
@@ -265,6 +274,7 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::Reranker => &["RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
         ModelSlot::Vision => &["VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
         ModelSlot::GeneratorPro => &[
+            "PRO.BIN",
             "BITNET3B.BIN",
             "BITN3B.BIN",
             "LLAMA8B.BIN",
@@ -275,15 +285,14 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
         ModelSlot::Learner => &["LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
         ModelSlot::Agent => &["AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
-            "AGENT.BIN",
-            "LLAMA8B.BIN",
+            "BITNET2B.BIN",
             "BITNET13.BIN",
             "BITNET850.BIN",
-            "BITNET2B.BIN",
             "BITNET3B.BIN",
             "BITNET.BIN",
             "MICRO.BITNET",
             "MICRO.BIN",
+            "LLAMA8B.BIN",
         ],
     }
 }
