@@ -2293,8 +2293,11 @@ pub(crate) fn kernel_boot(
 
             // Pré-carrega firmware NVIDIA GP108 (8.3 no FAT) via ATA/USB antes do ACR.
             // Sem isso o jarbas só vê ATA; no boot USB puro o MSC é a fonte.
+            let has_nvidia_fw = gpus.iter().any(|g| matches!(g.vendor, k_hal::gpu::detect::GpuVendor::Nvidia));
             crate::display::fb::boot_ckpt(44, "GP108 firmware");
-            {
+            // Ponytail: GP108 preload só via USB-MSC (pendrive). ATA em HW real
+            // pode ter controlador mas sem disco respondendo, travando o boot.
+            if has_nvidia_fw && crate::USB_MSC.lock().is_some() {
                 const GP108: &[(&str, &str)] = &[
                     ("fecs_bl.bin", "FECS_BL.BIN"),
                     ("fecs_data.bin", "FECS_DAT.BIN"),
@@ -2338,10 +2341,15 @@ pub(crate) fn kernel_boot(
                     }
                 }
                 k_nano::slog_bin!("FW", "info", "GP108 preload: {}/{} blobs (ATA/USB)", n, GP108.len());
+            } else {
+                k_nano::slog_bin!("FW", "info", "GP108 preload SKIP (no NVIDIA or no storage)");
             }
+
+            crate::display::fb::boot_ckpt(45, "GP108 done");
 
             // Plano coex dirige backend (display owner intocado em falha compute)
             crate::gpu::backend::init_backend_with_plan(&gpus, &plan);
+            crate::display::fb::boot_ckpt(46, "Backend init done");
 
             k_nano::slog_hal!("GPU", "info", "{} GPU(s) detectadas. Backend: {}",
 
