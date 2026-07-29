@@ -2293,6 +2293,7 @@ pub(crate) fn kernel_boot(
 
             // Pré-carrega firmware NVIDIA GP108 (8.3 no FAT) via ATA/USB antes do ACR.
             // Sem isso o jarbas só vê ATA; no boot USB puro o MSC é a fonte.
+            crate::display::fb::boot_ckpt(44, "GP108 firmware");
             {
                 const GP108: &[(&str, &str)] = &[
                     ("fecs_bl.bin", "FECS_BL.BIN"),
@@ -2433,6 +2434,7 @@ pub(crate) fn kernel_boot(
     }
 
     // P6 (ADR-0041): Ring3 real via iretq — non-fatal
+    crate::display::fb::boot_ckpt(44, "ADR-0041 demos start");
     match crate::user_mode::demo_ring3() {
         Ok(()) => {
             k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo OK");
@@ -2484,6 +2486,7 @@ pub(crate) fn kernel_boot(
     }
 
     // Skill Observer: registra observação inicial
+    crate::display::fb::boot_ckpt(45, "ADR-0041 demos done");
 
     crate::skill_observer::watch_task("boot", &["PCI scan", "GPU init", "Agent registry"], 0);
 
@@ -2533,10 +2536,12 @@ pub(crate) fn kernel_boot(
     
 
     // HwRegistry: detecta hardware e cria HwAgents
+    crate::display::fb::boot_ckpt(46, "HwRegistry detect");
 
     let mut hw_reg = crate::hw_agents::HwRegistry::new();
 
     unsafe { hw_reg.detect_all(); }
+    crate::display::fb::boot_ckpt(47, "HwRegistry done");
 
     k_nano::slog_bin!("HW-AGENTS", "info", "{} dispositivos detectados como HwAgents.", hw_reg.agents.len());
 
@@ -2549,8 +2554,8 @@ pub(crate) fn kernel_boot(
 
 
     // CortexAgent ja foi criado antes do HW discovery — registrar primeiro
-
     // para que o LLM esteja disponivel para decisoes de hardware
+    crate::display::fb::boot_ckpt(48, "CortexAgent register");
 
     registry.register(Box::new(cortex_agent));
 
