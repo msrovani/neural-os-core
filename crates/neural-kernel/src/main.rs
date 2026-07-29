@@ -1991,6 +1991,7 @@ pub(crate) fn kernel_boot(
         }
     }
 
+    crate::display::fb::boot_ckpt(39, "inicio model loading");
     // Carrega modelos do FAT32: BGE.BIN — tenta AHCI primeiro, fallback ATA
     unsafe fn read_file_from_dev(dev: &mut dyn crate::block_dev::BlockDevice, name: &str) -> Option<alloc::vec::Vec<u8>> {
         // Le MBR (+ GPT se USB unificado / protective EE)
@@ -2104,6 +2105,7 @@ pub(crate) fn kernel_boot(
     unsafe {
         let mut loaded = false;
         let mut found = false;
+        crate::display::fb::boot_ckpt(40, "QEMU loader scan start");
         // QEMU-loader scan: varre [0x100000000..0x180000000) step=1MB por magic 0xBE11BE11 (BGE.BIN)
         {
             let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
@@ -2155,6 +2157,7 @@ pub(crate) fn kernel_boot(
                 }
             }
         }
+        crate::display::fb::boot_ckpt(41, "QEMU loader scan done");
         // FAT policy: NVMe > AHCI > ATA > USB-MSC (ADR-0062 P3)
         if has_fat_block {
             if !loaded {
@@ -2256,6 +2259,7 @@ pub(crate) fn kernel_boot(
     crate::address_space::demo_as_r1_r3_shallow();
 
     // GPU: detecta hardware, separa display/compute, inicializa backend (k_hal BE)
+    crate::display::fb::boot_ckpt(42, "GPU detect");
 
     unsafe {
 
