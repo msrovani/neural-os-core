@@ -3,8 +3,6 @@
 //! lock-free (atômicas) e atualiza um card na tela a cada ~50 ticks.
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
-use crate::EVENT_BUS;
-use crate::{Event, CapabilityToken};
 use alloc::string::String;
 use alloc::format;
 use alloc::vec::Vec;
@@ -61,7 +59,7 @@ impl SysInfoAgent {
         let heap_used = k_nano::allocator::HEAP_LIMIT.load(Ordering::Relaxed) / (1024 * 1024);
         // Frame allocator
         let frames = k_nano::memory::GLOBAL_ALLOCATOR.lock();
-        let (frame_pct, frame_used, frame_total) = if let Some(fa) = frames.as_ref() {
+        let (frame_pct, _frame_used, _frame_total) = if let Some(fa) = frames.as_ref() {
             let pct = if fa.usable_frames > 0 {
                 fa.allocated_count as f32 / fa.usable_frames as f32 * 100.0
             } else { 0.0 };
@@ -137,25 +135,23 @@ impl Agent for SysInfoAgent {
             crate::boot_logger::flush();
         }
 
-        if !self.spawned {
-            // First tick: spawn the card
-            let body = self.collect_body();
-            let mut decl = UiDeclaration::new(
-                CARD_ID,
-                CARD_TITLE,
-                CARD_X, CARD_Y, CARD_W, CARD_H,
-            );
-            decl.body = body;
-
-            // Spawn via compositor global
-            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+        // Só tenta spawn se o compositor já existe (DisplayAgent precisa ter
+        // inicializado antes). Se não, tenta de novo no próximo tick.
+        if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+            if !self.spawned {
+                // First successful spawn
+                let body = self.collect_body();
+                let mut decl = UiDeclaration::new(
+                    CARD_ID,
+                    CARD_TITLE,
+                    CARD_X, CARD_Y, CARD_W, CARD_H,
+                );
+                decl.body = body;
                 desktop.spawn_card(decl);
-            }
-            self.spawned = true;
-        } else {
-            // Subsequent ticks: update card body in-place
-            let body = self.collect_body();
-            if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                self.spawned = true;
+            } else {
+                // Subsequent ticks: update card body in-place
+                let body = self.collect_body();
                 for win in &mut desktop.windows {
                     if let WindowContent::Card(ref mut existing) = win.content {
                         if existing.id == CARD_ID {
