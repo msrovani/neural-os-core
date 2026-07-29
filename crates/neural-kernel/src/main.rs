@@ -2264,6 +2264,7 @@ pub(crate) fn kernel_boot(
     unsafe {
 
         let gpus = crate::gpu::detect::detect_all();
+        crate::display::fb::boot_ckpt(43, "GPU detect done");
 
         if !gpus.is_empty() {
 
