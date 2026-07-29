@@ -323,7 +323,7 @@ def build_data_volume(size_mb: int, tmp_path: str, *, use_fat32: bool) -> int:
         "NEURAL-OS",
     ]
     print(f"=== Dados {fs_name} {size_mb}MB (BOOT_MODE=hw) + Device LEGO ===")
-    r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=600)
+    r = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=1200)
     if r.stdout:
         sys.stdout.write(r.stdout)
         if not r.stdout.endswith("\n"):
