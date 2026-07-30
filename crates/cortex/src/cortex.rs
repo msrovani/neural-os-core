@@ -235,9 +235,9 @@ pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
     // Auto-expand heap
     {
         let _nh = read_u16(data, &mut off)? as usize;
-        let vs = read_u32(data, &mut off)? as usize;
+        let _vs = read_u32(data, &mut off)? as usize;
         let _ms = read_u16(data, &mut off)? as usize;
-        let isize = read_u16(data, &mut off)? as usize;
+        let _isize = read_u16(data, &mut off)? as usize;
         let _nkv = read_u16(data, &mut off)? as usize;
         let _qd = read_u16(data, &mut off)? as usize;
         let _medusa = read_u32(data, &mut off)? as usize;

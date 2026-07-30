@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### SESSION_231: HW Expert v4 + ADR-0082 — HardwareInfo Registry (2026-07-30)
+- **ADR-0082** — criada e implementada: HardwareInfo Registry, 489 linhas, Anexo A pesquisa de mercado
+- **feat: HardwareInfo struct** — `platform_probe.rs`: registro público de HW unificado. `hw_info()` accessor. `avx2_ready()`, `avx512_ready()`.
+- **feat: HW Expert v4 multi-head** — 5 heads (family, fw, agent, caps, next_action). 59.905 amostras de treino. 260KB. v5 .bitnet format.
+- **feat: Rust v5 loader** — `cortex.rs`: `HwExpertV4Model`, `load_hwexpert_v5()`, `predict_hw_v4()`, `hwexpert_v4_predict()` API pública.
+- **feat: build_card() integrado com ML** — `hw_capability.rs`: tenta HW Expert v4 → tabela → heurística.
+- **feat: Boot loading HWEXPRT4.BIN** — QEMU loader scan + FAT32 fallback.
+- **feat: SGDB /hw/pci/** — `predict_all_pci()` escreve predições do HW Expert v4 no SGDB por device PCI.
+- **fix: xsave gate AVX2** — WHPX filtra CPUID xsave. `allow_avx2` agora só depende de `isa.avx2 && isa.avx && !tcg`.
+- **fix: find_child_byte16_sse runtime dispatch** — ART: `art_ok=false` com `art_len==n_art` por SSE2 mal compilado em soft-float. Agora usa `#[target_feature(enable = "sse2")]` + runtime check.
+- **feat: Windows DriverStore extractor** — `tools/extract_wdm_hwids.py`: 478 HWIDs extraídos.
+- **feat: Q-jump per-step logging** — `mod.rs`: cada passo Q1-Q7 loga PASS/FAIL individualmente.
+- **feat: ART benchmark monitorado** — `bench.rs`: `art_len=` no output mostra quantas chaves realmente inseridas.
+- **tools**: `train_hw_expert_v4.py` (multi-head training), `unify_hwids_v4.py` (59.905 amostras), `extract_wdm_hwids.py`
+- **models**: `hw_expert_v4.bitnet` (260KB), `dataset.json` (59.905 amostras), `vocab.json`
+- **docs**: ADR-0082 completa com anexo de mercado, mapa fornecedores/consumidores, ring isolation.
+- **cargo check --release**: 0 erros
+
 ### SESSION_230: Boot acelerado — skip Ed25519 + VFS I/O para seed agents (2026-07-30)
 - **perf: seed_agent()** — pula `sign_artifact_md()` (Ed25519, ~50-100ms/agent) e
   `read_vfs`+`write_vfs` (NeuralFS I/O) quando `tier == "native"`. Seeds são

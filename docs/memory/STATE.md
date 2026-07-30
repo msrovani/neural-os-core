@@ -1,4 +1,17 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s231 — HW Expert v4 + ADR-0082
+#   SESSION_231: HW Expert v4 multi-head + HardwareInfo Registry (2026-07-30)
+#     ADR-0082 criada e implementada: HardwareInfo + HW Expert v4 + SGDB /hw/pci/
+#     HW Expert v4 treinado: 59.905 amostras, 5 heads, 260KB, 97% acc(fw)
+#     build_card() tenta ML → tabela → heurística
+#     Boot carrega HWEXPRT4.BIN via QEMU loader / FAT
+#     predict_all_pci() escreve /hw/pci/* no SGDB
+#     xsave removido da gate AVX2 (WHPX filtra CPUID)
+#     find_child_byte16_sse runtime dispatch (cfg + target_feature fix)
+#     ADR-0082: 489 linhas, Anexo A pesquisa de mercado, mapa fornecedores/consumidores
+#     cargo check --release: 0 erros
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s230 — Boot Speed (Seed Agent I/O Skip)
 #   SESSION_230: Boot acelerado — skip Ed25519 + VFS I/O em seed agents (2026-07-30)
 #     seed_agent() pulava sign_artifact_md (Ed25519 ~50-100ms/agent) + read/write_vfs
