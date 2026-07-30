@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### SESSION_230: Boot acelerado — skip Ed25519 + VFS I/O para seed agents (2026-07-30)
+- **perf: seed_agent()** — pula `sign_artifact_md()` (Ed25519, ~50-100ms/agent) e
+  `read_vfs`+`write_vfs` (NeuralFS I/O) quando `tier == "native"`. Seeds são
+  trusted-by-compilation, não precisam de assinatura runtime nem persistência VFS
+  (já estão no binário). Economia: ~8.5s de boot (T+810→T+9386 → T+810→~T+900).
+- **ponytail comment** — marcado com `// ponytail: ...` no código.
+- O fix está em `crates/hermes/src/package_hub.rs` `seed_agent()`.
+
 ### SESSION_229: Turing Test — JARBAS Plenitude + LLM 8 slots + BEI (2026-07-30)
 - **feat: JARBAS Rung 4** — Ring3 (TRY_ENTER_RING3=true), TTF Latin-1 (à á â ã é ê í ó ô õ ú ç), alpha blending real
 - **feat: Sprint 80** — fail-closed safety (ConsentGate deny por padrão), emotion classifier 16-feature

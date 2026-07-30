@@ -1,4 +1,14 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s230 — Boot Speed (Seed Agent I/O Skip)
+#   SESSION_230: Boot acelerado — skip Ed25519 + VFS I/O em seed agents (2026-07-30)
+#     seed_agent() pulava sign_artifact_md (Ed25519 ~50-100ms/agent) + read/write_vfs
+#     para cada um dos 41 agentes nativos. Seeds são trusted-by-compilation,
+#     não precisam de assinatura runtime nem persistência VFS.
+#     Economia: ~8.5s de boot (8576ms entre T+810 e T+9386 → T+810→~T+900)
+#     Fix: `crates/hermes/src/package_hub.rs` — guard `tier == "native"` em seed_agent()
+#     cargo check --release: 0 erros
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s229 — Turing Test (LLM + JARBAS + BEI)
 #   SESSION_229: Maturidade Plena JARBAS + Turing Test Pipeline LLM (2026-07-30)
 #     JARBAS Rung 4: TTF Latin-1, alpha blending, Ring3 (TRY_ENTER_RING3=true)

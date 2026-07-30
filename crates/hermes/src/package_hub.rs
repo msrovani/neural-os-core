@@ -844,9 +844,12 @@ impl PackageHub {
             native_impl,
             agent_kind,
         );
-        let body = sign_artifact_md(&raw).unwrap_or(raw);
+        let is_native = tier == "native";
+        // ponytail: native seeds trusted-by-compilation — skip Ed25519 (~50ms each)
+        let body = if is_native { raw } else { sign_artifact_md(&raw).unwrap_or(raw) };
         let path = Self::package_path(PackageKind::Agent, &id);
-        let persisted = if self.vfs_ok {
+        // ponytail: native seeds já estão no binário — skip VFS I/O (~slow ATA PIO)
+        let persisted = if self.vfs_ok && !is_native {
             crate::globals::read_vfs(&path)
                 .map(|data| !data.is_empty())
                 .unwrap_or(false)

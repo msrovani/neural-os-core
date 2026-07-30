@@ -260,7 +260,8 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Firmware paths**: NVIDIA GP108 em `firmware/nvidia/gp108/` (FECS+GPCCS, 8 blobs, 39KB). Intel i915 SKL+KBL em `firmware/i915/` (24 blobs, 3.8MB). Realtek NIC em `firmware/rtl_nic/` (41 blobs). Realtek WiFi em `firmware/rtlwifi/` (38 blobs).
 - **mkfat32.py**: inclui firmware no FAT32 como `FW_FECS_BL_BIN` etc. NVIDIA mantém nome curto `FW_FECS_BL_BIN` (compatível com `firmware.rs`). Intel/Realtek usam prefixo `FW_I915_`, `FW_RTL_NIC_`, `FW_RTLWIFI_`.
 - **SDIO extraction bug**: py7zr não suporta BCJ2 filter. Usar `7z.exe` (7-Zip CLI) para os DriverPacks SDIO. `extract_sdio_hw.py` alterado para usar `subprocess.run([7z, x, path, -otmpdir])`.
-- **SDIO extraction**: 65 DriverPacks → 171.003 HWIDs de 20.054 .inf em ~36 min. DriverPacks de vídeo AMD/Intel >1GB frequentemente corrompidos (download incompleto) — verificar "Unexpected end of archive".
+- **SDIO extraction**: 65 DriverPacks → 171.003 HWID strings raw de 20.054 .inf em ~36 min. Após colapso de variantes SUBSYS/REV → 16.126 únicos; (vid,did) únicos → ~1.005. A maior parte (~44K unique vid/did) vem de pci.ids + usb.ids. DriverPacks de vídeo AMD/Intel >1GB frequentemente corrompidos (download incompleto) — verificar "Unexpected end of archive".
+- **171K é o número bruto de strings HWID antes de qualquer colapso.** O dataset real de treino (v4) tem ~44K devices únicos (vid,did) + ~16K variantes = ~60K amostras. Usar "44K unique devices" em vez de "171K" em comunicações precisas.
 - **pci.ids fonte oficial**: `https://pci-ids.ucw.cz/v2.2/pci.ids` (1613KB, 2506 vendors, 21382 devices). Usar regex `^([0-9A-Fa-f]{4})\s+(.+)$` para vendors.
 - **usb.ids fonte oficial**: `http://www.linux-usb.org/usb.ids` (713KB, 3427 vendors, 20537 devices).
 - **WHENCE file**: manifesto oficial do linux-firmware (462KB, 998 entries). Cada firmware tem File/Version/License/Driver/Source. Parsing: block separator = `---` ou blank line.
@@ -333,6 +334,7 @@ ID=9001) retry periódico até FAT_READY=true.
   `format_fat32_esp()` exige ≥65525 clusters (~32MB) — FAT32 real não funciona com menos.
   Nenhum projeto AIOS no_std pesquisado (ClaudioOS, FYY, Wetware, WeftOS, Oreulius, WAeasi, coconutOS, ArceOS) tem self-installer.
   ADR-0079 + plano de implementação em `docs/architecture/0079-neural-auto-installer.md`.
+- **Seed agents: Ed25519 + VFS I/O desperdício no boot (SESSION_230):** `seed_embedded_agents()` chamava `sign_artifact_md()` (Ed25519 signing ~50-100ms cada) + `read_vfs`+`write_vfs` (NeuralFS I/O) para cada um dos 41 agentes nativos. Só que seeds são `trusted-by-compilation` — não precisam de assinatura runtime nem de persistência VFS (já estão no binário). Custo total: ~8.5s de boot. Fix: pular signing e VFS I/O quando `tier == "native"`. Ver `crates/hermes/src/package_hub.rs` linha 847.
 
 # Referências
 - ADR-0036: JARVIS Unified Interaction Layer

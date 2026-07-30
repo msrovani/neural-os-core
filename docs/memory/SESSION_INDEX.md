@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 230 | — | Boot Speed | skip Ed25519 + VFS I/O em seed agents | seed_agent() ~8.5s de boot por Ed25519 signing 41× + VFS I/O 82×. Fix: guard `tier=="native"` skip signing + I/O. Seeds são trusted-by-compilation, não precisam runtime. `crates/hermes/src/package_hub.rs`. |
 | 227 | ADR-0079 | Neural AutoInstaller M0-M4 | Installer completo pendrive→HD/SSD/NVMe com IA | SysInstaller reativado + dual partition ESP+NeuralFS + HwProfiler + AutoInstallerAgent + Cortex InstallAdviser + self_check + rollback + hw_change + self_heal_disk + net_fallback + detect_ram_mb() real + format_fat32_esp() + ModelHub compat. 0 erros |
 | 217 | — | E1a+P001+Boot+CKPT | Cortex crate promotion + P001 SKILL_REGISTRY + boot path + checkpoint expand | SKILL_REGISTRY shadow fix; Agency fallback; Safety I4 Merkle verify; Checkpoint v2 (CR3+heap+driver hash); env/block_dev drift |
 | 216 | — | SGDB Agent (A-026) | Bridge EventBus ↔ SGDB + versionamento skills | SgdbAgent EventDriven: store_version, rollback, list_versions, list_skills, store_skill, recall. 229 LOC, 0 erros |
