@@ -2,7 +2,7 @@ use crate::tensor::PackedTernaryTensor;
 use alloc::vec::Vec;
 use alloc::vec;
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ExpertKind {
     HwIdentify,
     /// Controles de plataforma (volume, mute, brilho) — skill/HW, sem LLM.

@@ -43,6 +43,9 @@ pub mod self_heal_agent;
 pub mod self_heal_disk;
 pub mod training_agent;
 pub mod fine_tuning_pipeline;
+/// ADR-0081 C5: Federated Gradient Sharing (#312f).
+pub mod fl_trainer;
+pub use fl_trainer::FederatedTrainer;
 pub mod fs;
 pub mod trust;
 pub mod shutdown;
