@@ -5,6 +5,7 @@
 //! permanece truth da execução HW (`begin_orderly_*`). Não `pub use` cego.
 
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use k_nano::hal::Architecture;
 
 pub const TOPIC_SYSTEM_SHUTDOWN: &str = "SYSTEM_SHUTDOWN";
 pub const TOPIC_SYSTEM_REBOOT: &str = "SYSTEM_REBOOT";
@@ -192,26 +193,13 @@ fn halt_aps() {
 }
 
 fn qemu_acpi_shutdown() {
-    unsafe {
-        core::arch::asm!(
-            "out dx, ax",
-            in("dx") 0x604u16,
-            in("ax") 0x2000u16,
-            options(nostack, preserves_flags)
-        );
-    }
+    k_nano::slog_bin!("SHUTDOWN", "info", "ARCH.poweroff via 0x604/0x2000");
+    k_nano::hal::ARCH.poweroff();
 }
 
 fn ps2_reset() {
-    k_nano::slog_bin!("SHUTDOWN", "info", "fallback=ps2_reset (0x64/FE) — nao e power-off");
-    unsafe {
-        core::arch::asm!(
-            "out dx, al",
-            in("dx") 0x64u16,
-            in("al") 0xFEu8,
-            options(nostack, preserves_flags)
-        );
-    }
+    k_nano::slog_bin!("SHUTDOWN", "info", "ARCH.reboot via 0x64/FE");
+    k_nano::hal::ARCH.reboot();
 }
 
 fn power_off_cascade() -> ! {

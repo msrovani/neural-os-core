@@ -109,3 +109,70 @@ pub fn dma_free(buf: DmaBuf) {
         }
     }
 }
+
+// ─── PhysicalBuffer ────────────────────────────────────────────────────────
+// ponytail: PhysicalBuffer<{N}> — buffer DMA com alinhamento 4K e clflushopt.
+// Usado por e1000 TX/RX rings, AHCI command lists, NVMe submission/completion queues.
+// Garante cache coherence entre CPU e dispositivos DMA.
+
+/// Buffer DMA de tamanho fixo em compilação, fisicamente contíguo, mapeado UC.
+///
+/// Aloca N bytes via frame allocator (arredondado para cima até página de 4K)
+/// e mapeia como uncacheable para DMA. Cache coherence via clflushopt + sfence.
+///
+/// `new()` retorna `None` se a alocação falhar.
+///
+/// # Example
+/// ```ignore
+/// let buf = PhysicalBuffer::<4096>::new().expect("DMA allocation failed");
+/// let phys = buf.phys_addr();   // escrever no registrador de endereço do device
+/// unsafe { buf.invalidate_cache(); }
+/// ```
+pub struct PhysicalBuffer<const N: usize> {
+    inner: DmaBuf,
+}
+
+impl<const N: usize> PhysicalBuffer<N> {
+    /// Aloca N bytes contíguos fisicamente, mapeados UC, zerados.
+    pub fn new() -> Option<Self> {
+        let inner = dma_alloc(N)?;
+        Some(Self { inner })
+    }
+
+    /// Endereço físico do buffer — para programar registradores DMA do device.
+    #[inline(always)]
+    pub fn phys_addr(&self) -> u64 {
+        self.inner.phys
+    }
+
+    /// Ponteiro virtual para leitura.
+    #[inline(always)]
+    pub fn as_ptr(&self) -> *const u8 {
+        self.inner.virt
+    }
+
+    /// Ponteiro virtual para escrita.
+    #[inline(always)]
+    pub fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.inner.virt
+    }
+
+    /// Invalida cache para range [virt, virt+N) via clflushopt + sfence.
+    ///
+    /// ## Safety
+    /// - O buffer NÃO pode ter referências mutáveis ativas durante a chamada.
+    /// - O chamador deve garantir que o dispositivo DMA não está lendo o buffer
+    ///   concorrentemente (ou, se lê, que a leitura obsoleta é tolerável).
+    #[inline(always)]
+    pub unsafe fn invalidate_cache(&self) {
+        let mut addr = self.inner.virt as usize;
+        let end = addr + N;
+        while addr < end {
+            core::arch::asm!("clflushopt [{0}]", in(reg) addr, options(nostack, preserves_flags));
+            addr += 64;
+        }
+        core::arch::asm!("sfence", options(nostack, preserves_flags));
+    }
+}
+
+// Drop automaticamente via DmaBuf (desaloca frames + restaura WB).

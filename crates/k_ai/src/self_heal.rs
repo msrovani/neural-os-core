@@ -437,20 +437,29 @@ impl SelfHeal {
         };
 
         if prev_bitmap.is_empty() || prev_bitmap.len() != BITMAP_SIZE {
-            let chunks = chunker::chunk_data(&current_bmp);
+            let ranges = chunker::chunk_data(&current_bmp);
+            let chunks: Vec<Vec<u8>> = ranges.iter()
+                .map(|&(off, len)| current_bmp[off..off + len].to_vec())
+                .collect();
             k_nano::slog_kai!("SNAPSHOT", "info", "Primeiro: {} chunks CDC", chunks.len());
             return (chunks, Vec::new());
         }
 
         let delta_data = xor_buffers(&current_bmp, prev_bitmap);
-        let delta_chunks = chunker::chunk_data(&delta_data);
-        let nonzero: Vec<Vec<u8>> = delta_chunks.into_iter()
-            .filter(|c| c.iter().any(|&b| b != 0))
+        let delta_ranges = chunker::chunk_data(&delta_data);
+        let nonzero: Vec<Vec<u8>> = delta_ranges.iter()
+            .filter(|&&(off, len)| delta_data[off..off + len].iter().any(|&b| b != 0))
+            .map(|&(off, len)| delta_data[off..off + len].to_vec())
             .collect();
 
-        k_nano::slog_kai!("SNAPSHOT", "info", "Delta: {}/{} chunks modificados", nonzero.len(), chunker::chunk_data(&current_bmp).len());
+        let full_ranges = chunker::chunk_data(&current_bmp);
+        let full_chunks: Vec<Vec<u8>> = full_ranges.iter()
+            .map(|&(off, len)| current_bmp[off..off + len].to_vec())
+            .collect();
 
-        (chunker::chunk_data(&current_bmp), nonzero)
+        k_nano::slog_kai!("SNAPSHOT", "info", "Delta: {}/{} chunks modificados", nonzero.len(), full_chunks.len());
+
+        (full_chunks, nonzero)
     }
 
     /// Restore checkpoint state.

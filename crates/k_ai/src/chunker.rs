@@ -2,19 +2,88 @@
 //! Útil para dividir bitmaps, logs e snapshots em chunks de tamanho variável
 //! baseados no conteúdo, não em posição fixa.
 //!
-//! Algoritmo: polinômio Rabin de 64 bits sobre janela deslizante de 8 bytes.
-//! Um chunk termina quando os N bits inferiores do hash são zero.
+//! Algoritmo: polinômio Rabin de 64 bits sobre janela deslizante de 8 bytes
+//! (WINDOW_SIZE). Um chunk termina quando os N bits inferiores do hash são zero.
+//!
+//! Integração: SelfHealAgent usa chunk_data() para dividir o frame allocator bitmap
+//! em chunks content-defined antes de compressão delta. k_ai::checkpoint::compress()
+//! chama chunk_data() internamente.
 
 use alloc::vec::Vec;
 
-/// Tamanho mínimo e máximo de chunk para evitar chunks microscópicos ou gigantes
-const CHUNK_MIN: usize = 64;
-const CHUNK_MAX: usize = 4096;
+/// Tamanho mínimo e máximo de chunk para evitar chunks microscópios ou gigantes.
+pub const CHUNK_MIN: usize = 64;
+pub const CHUNK_MAX: usize = 4096;
+/// Janela deslizante (em bytes) para o rolling hash.
+pub const WINDOW_SIZE: usize = 8;
+
 const CHUNK_MASK: u64 = 0x3F; // 6 bits → chunk médio de ~64 bytes
 
-/// Polinômio Rabin (irredutível de 64 bits)
+/// Polinômio Rabin (irredutível de 64 bits) e seed da janela inicial.
 const POLY: u64 = 0x0000_0000_0000_001B;
 const INIT_WINDOW: u64 = 0xB168_9B41_7A2F_CD05;
+
+/// Rolling hash Rabin de 64 bits sobre janela deslizante.
+///
+/// Mantém o hash atual e os bytes da janela para permitir chunking
+/// incremental sem depender do buffer original.
+#[derive(Clone, Debug)]
+pub struct RabinFingerprint {
+    hash: u64,
+    window: [u8; WINDOW_SIZE],
+    pos: usize,
+}
+
+impl RabinFingerprint {
+    /// Cria um novo fingerprint inicializado com a semente.
+    pub fn new() -> Self {
+        Self {
+            hash: INIT_WINDOW,
+            window: [0u8; WINDOW_SIZE],
+            pos: 0,
+        }
+    }
+
+    /// Reinicia o estado do hash (como se fosse recém-criado).
+    pub fn reset(&mut self) {
+        self.hash = INIT_WINDOW;
+        self.window = [0u8; WINDOW_SIZE];
+        self.pos = 0;
+    }
+
+    /// Alimenta um byte e retorna o hash atualizado.
+    pub fn feed(&mut self, byte: u8) -> u64 {
+        if self.pos < WINDOW_SIZE {
+            // Ainda enchendo a janela inicial: XOR + mul simples.
+            self.hash ^= byte as u64;
+            self.hash = self.hash.wrapping_mul(POLY);
+            self.window[self.pos] = byte;
+            self.pos += 1;
+        } else {
+            // Janela cheia: desloca um byte para fora, um para dentro.
+            let out = self.window[self.pos % WINDOW_SIZE];
+            self.window[self.pos % WINDOW_SIZE] = byte;
+            self.hash = self.hash.wrapping_sub((out as u64) << 56);
+            self.hash = self.hash.wrapping_mul(POLY);
+            self.hash ^= byte as u64;
+            self.pos += 1;
+        }
+        self.hash
+    }
+
+    /// Retorna o hash atual sem consumir mais bytes.
+    pub fn current(&self) -> u64 {
+        self.hash
+    }
+}
+
+impl Default for RabinFingerprint {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ─── Funções livres (interface simples) ───
 
 /// Rolling hash: atualiza o hash ao deslizar um byte para fora
 /// e um byte para dentro da janela.
@@ -25,7 +94,7 @@ fn rabin_hash(curr: u64, out_byte: u8, in_byte: u8) -> u64 {
     h
 }
 
-/// Inicializa o hash sobre uma janela de 8 bytes
+/// Inicializa o hash sobre uma janela de até 8 bytes.
 fn rabin_init(window: &[u8]) -> u64 {
     let mut h = INIT_WINDOW;
     for &b in window {
@@ -36,53 +105,63 @@ fn rabin_init(window: &[u8]) -> u64 {
 }
 
 /// Divide o buffer em chunks baseados no conteúdo (Rabin fingerprint).
-/// Cada chunk é um `Vec<u8>` que pode ser processado independentemente.
-pub fn chunk_data(data: &[u8]) -> Vec<Vec<u8>> {
-    let mut chunks = Vec::new();
-    if data.is_empty() { return chunks; }
+///
+/// Retorna `Vec<(offset, length)>` — pares (offset, tamanho) relativos ao início
+/// de `data`. O chunking é content-defined: marcas de corte são determinadas pelo
+/// rolling hash, não por posições fixas. Isso garante que inserções/remoções no
+/// meio do dado só afetem os chunks localmente (propriedade de boundary-shift
+/// resistance).
+///
+/// A função **não copia** os dados — o caller fatia `data[offset..offset+len]`
+/// quando precisar do conteúdo.
+pub fn chunk_data(data: &[u8]) -> Vec<(usize, usize)> {
+    let mut chunks: Vec<(usize, usize)> = Vec::new();
+    if data.is_empty() {
+        return chunks;
+    }
 
     let mut chunk_start = 0;
 
-    // Primeira janela
     while chunk_start < data.len() {
         let end = core::cmp::min(chunk_start + CHUNK_MAX, data.len());
-        let mut hash = if data.len() - chunk_start >= 8 {
-            rabin_init(&data[chunk_start..chunk_start + 8])
+        let mut hash = if data.len() - chunk_start >= WINDOW_SIZE {
+            rabin_init(&data[chunk_start..chunk_start + WINDOW_SIZE])
         } else {
             rabin_init(&data[chunk_start..end])
         };
 
         let mut chunk_end = chunk_start;
         let search_end = if data.len() >= chunk_start + CHUNK_MAX {
-            chunk_start + CHUNK_MAX - 8
+            chunk_start + CHUNK_MAX - WINDOW_SIZE
         } else {
             chunk_start
         };
 
-        while chunk_end + 8 < search_end {
-            hash = rabin_hash(hash, data[chunk_end], data[chunk_end + 8]);
+        while chunk_end + WINDOW_SIZE < search_end {
+            hash = rabin_hash(hash, data[chunk_end], data[chunk_end + WINDOW_SIZE]);
             chunk_end += 1;
             if hash & CHUNK_MASK == 0 && (chunk_end - chunk_start) >= CHUNK_MIN {
                 break;
             }
         }
 
-        let actual_end = core::cmp::min(chunk_end + 8, data.len());
-        let mut chunk = Vec::with_capacity(actual_end - chunk_start);
-        chunk.extend_from_slice(&data[chunk_start..actual_end]);
-        chunks.push(chunk);
+        let actual_end = core::cmp::min(chunk_end + WINDOW_SIZE, data.len());
+        chunks.push((chunk_start, actual_end - chunk_start));
         chunk_start = actual_end;
     }
 
     chunks
 }
 
-/// Recombina chunks em ordem → dados originais
-pub fn merge_chunks(chunks: &[Vec<u8>]) -> Vec<u8> {
-    let total: usize = chunks.iter().map(|c| c.len()).sum();
+/// Recombina chunks (offset, length) a partir do buffer original → dados completos.
+///
+/// Útil para verificação de roundtrip. Se o buffer original não estiver disponível
+/// use `merge_owned` com os dados copiados.
+pub fn merge_chunks(data: &[u8], chunks: &[(usize, usize)]) -> Vec<u8> {
+    let total: usize = chunks.iter().map(|&(_, len)| len).sum();
     let mut out = Vec::with_capacity(total);
-    for chunk in chunks {
-        out.extend_from_slice(chunk);
+    for &(offset, len) in chunks {
+        out.extend_from_slice(&data[offset..offset + len]);
     }
     out
 }
@@ -90,11 +169,29 @@ pub fn merge_chunks(chunks: &[Vec<u8>]) -> Vec<u8> {
 #[cfg(test)]
 mod test {
     use super::*;
+
     #[test]
     fn roundtrip() {
         let data = (0..4096).map(|i| (i % 251) as u8).collect::<Vec<_>>();
         let chunks = chunk_data(&data);
-        let merged = merge_chunks(&chunks);
+        let merged = merge_chunks(&data, &chunks);
         assert_eq!(data, merged);
+    }
+
+    #[test]
+    fn fingerprint_incremental() {
+        let data = b"Hello, World! Rabin chunking test.";
+        let mut fp = RabinFingerprint::new();
+        for &b in data {
+            fp.feed(b);
+        }
+        // O hash da janela completa deve ser determinístico.
+        let full_init = rabin_init(&data[data.len().saturating_sub(WINDOW_SIZE)..]);
+        assert_eq!(fp.current(), full_init);
+    }
+
+    #[test]
+    fn no_chunks_on_empty() {
+        assert!(chunk_data(b"").is_empty());
     }
 }

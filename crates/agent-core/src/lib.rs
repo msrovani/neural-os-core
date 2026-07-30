@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod budget;
+pub mod hooks;
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -188,6 +189,8 @@ pub struct AgentRegistry {
     pub agents: Vec<AgentInstance>,
     pub skill_map: BTreeMap<String, usize>,
     pub budget_manager: BudgetManager,
+    /// HookRegistry — PreTick/PostTick/OnCrash/OnSpawn hooks.
+    pub hooks: hooks::HookRegistry,
 }
 
 impl AgentRegistry {
@@ -196,6 +199,7 @@ impl AgentRegistry {
             agents: Vec::new(),
             skill_map: BTreeMap::new(),
             budget_manager: BudgetManager::new(),
+            hooks: hooks::HookRegistry::new(),
         }
     }
 
@@ -216,6 +220,16 @@ impl AgentRegistry {
     }
 
     /// Override tick budget for an agent (default: 100).
+    /// Register a hook callback.
+    pub fn register_hook(&mut self, hook: hooks::Hook) {
+        self.hooks.register(hook);
+    }
+
+    /// Access the hook registry (for direct manipulation).
+    pub fn hook_registry(&mut self) -> &mut hooks::HookRegistry {
+        &mut self.hooks
+    }
+
     pub fn set_budget(&mut self, name: &str, max_ticks_per_call: u64) {
         self.budget_manager.register(name, Some(max_ticks_per_call));
     }
@@ -381,6 +395,8 @@ impl AgentRegistry {
                     self.budget_manager.register(name, None);
                     self.agents[idx].state = AgentState::Active;
                     self.agents[idx].agent.on_activate();
+                    // OnSpawn hook: notify registrados
+                    self.hooks.run(hooks::HookType::OnSpawn, name, tick_id);
                 }
             }
             let mut polled: u32 = 0;
@@ -412,10 +428,20 @@ impl AgentRegistry {
                     continue;
                 }
 
+                // PreTick hook: block agent execution if any hook returns Block
+                let agent_name = self.agents[i].agent.manifest().name;
+                if !self.hooks.check(hooks::HookType::PreTick, agent_name, tick_id) {
+                    continue;
+                }
+
                 self.agents[i].tick_counter += 1;
                 let tc = self.agents[i].tick_counter;
                 let result = self.agents[i].agent.tick(tick_id, tc);
                 polled = polled.saturating_add(1);
+
+                // PostTick hook: always run, even after Pending
+                self.hooks.run(hooks::HookType::PostTick, agent_name, tick_id);
+
                 // Watchdog: detecta loops infinitos (10000+ ticks sem Done)
                 match result {
                     AgentTickResult::Pending => {
@@ -432,6 +458,8 @@ impl AgentRegistry {
                     }
                     AgentTickResult::Crashed => {
                         self.agents[i].state = AgentState::Crashed;
+                        // OnCrash hook: notify registered crash handlers
+                        self.hooks.run(hooks::HookType::OnCrash, agent_name, tick_id);
                     }
                     _ => {}
                 }

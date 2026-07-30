@@ -1,6 +1,9 @@
 //! HAL — Hardware Abstraction Layer (AxiomOS-inspired).
 //! Isola arquitetura x86_64 por tras de traits, permitindo
 //! futuramente portar para aarch64 (RPi5) e riscv64.
+// ponytail: Architecture trait — única abstração cross-arch.
+// X86_64 é a impl ativa. aarch64/riscv64 quando portados.
+// SystemAgent usa ARCH.reboot() e ARCH.poweroff() nos handlers de shutdown.
 
 use core::sync::atomic::Ordering;
 
@@ -60,7 +63,8 @@ impl Architecture for X86_64 {
 
     fn poweroff(&self) {
         // ponytail: shutdown logging dropped — no k_nano::shutdown module
-        unsafe { core::arch::asm!("out dx, al", in("dx") 0x604u16, in("al") 0x10u8, options(nostack)); }
+        // QEMU ACPI S5: 0x604 port, value 0x2000 = SLP_TYP=5 (S5) | SLP_EN
+        unsafe { core::arch::asm!("out dx, ax", in("dx") 0x604u16, in("ax") 0x2000u16, options(nostack, preserves_flags)); }
     }
 
     fn read_timestamp(&self) -> u64 {
