@@ -1,3 +1,4 @@
+pub mod clock;
 pub mod irq_lock;
 pub mod mpmc;
 

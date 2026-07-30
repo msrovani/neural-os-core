@@ -3,7 +3,9 @@
 extern crate alloc;
 
 pub mod budget;
+pub mod crew;
 pub mod hooks;
+pub mod state_graph;
 
 use alloc::boxed::Box;
 use alloc::string::String;
