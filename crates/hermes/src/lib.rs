@@ -44,6 +44,7 @@ pub mod skill_gen;
 pub mod skill_loader;
 pub mod skill_manifest;
 pub mod skill_market;
+pub mod skill_marketplace;
 pub mod memory_store;
 pub mod memory;
 pub mod marketplace;

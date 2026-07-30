@@ -9,6 +9,7 @@
 //! Depende de: smoltcp UDP socket no NETSTACK (hermes).
 
 use crate::net::noproto::{AiosTaskPacket, TaskType, PacketFlags};
+use crate::identity;
 use alloc::vec::Vec;
 use alloc::vec;
 use core::mem;
@@ -76,4 +77,37 @@ pub fn parse(data: &[u8]) -> Option<AiosTaskPacket> {
         return None;
     }
     Some(packet)
+}
+
+// ── Step 6: Ed25519 signing / verification ──────────────────────────
+
+/// Assina o payload serializado do pacote NoProto com a chave de sessão.
+/// Retorna o pacote original + assinatura de 64 bytes concatenada.
+///
+/// Uso: `let signed = sign_packet(&serialize(&pkt));`
+pub fn sign_packet(serialized: &[u8]) -> Option<Vec<u8>> {
+    let sig = identity::sign_session(serialized)?;
+    let mut out = Vec::with_capacity(serialized.len() + identity::SIGNATURE_LEN);
+    out.extend_from_slice(serialized);
+    out.extend_from_slice(&sig);
+    Some(out)
+}
+
+/// Verifica a assinatura Ed25519 no final de um pacote recebido.
+/// O pacote deve ter: [NoProto header] + [64-byte signature].
+/// Retorna o payload sem assinatura se a verificação passar.
+pub fn verify_packet<'a>(data: &'a [u8], pk: &[u8; identity::PUBLIC_KEY_LEN]) -> Option<&'a [u8]> {
+    if data.len() < mem::size_of::<AiosTaskPacket>() + identity::SIGNATURE_LEN {
+        return None;
+    }
+    let sig_offset = data.len() - identity::SIGNATURE_LEN;
+    let pkt_data = &data[..sig_offset];
+    let sig_bytes = &data[sig_offset..];
+    let mut sig = [0u8; identity::SIGNATURE_LEN];
+    sig.copy_from_slice(sig_bytes);
+    if identity::verify_signature(pk, pkt_data, &sig) {
+        Some(pkt_data)
+    } else {
+        None
+    }
 }

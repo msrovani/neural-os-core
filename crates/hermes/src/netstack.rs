@@ -279,6 +279,8 @@ pub struct NetStack {
     pub has_static_ip: bool,
     pub tx_count: u64,
     pub rx_count: u64,
+    /// P2P UDP broadcast socket handle (port 42069)
+    udp_handle: SocketHandle,
 }
 
 fn ip_to_u32(ip: [u8; 4]) -> u32 {
@@ -298,7 +300,24 @@ impl NetStack {
         let dhcp = DhcpSocket::new();
         let dhcp_handle = sockets.add(dhcp);
 
-        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0 }
+        // P2P UDP broadcast socket — Brain Mesh discovery na porta 42069
+        let udp_meta_rx = vec![smoltcp::storage::PacketMetadata::<udp_socket::UdpMetadata>::EMPTY; 16];
+        let udp_buf_rx = vec![0u8; 2048];
+        let udp_meta_tx = vec![smoltcp::storage::PacketMetadata::<udp_socket::UdpMetadata>::EMPTY; 4];
+        let udp_buf_tx = vec![0u8; 512];
+        let udp = udp_socket::Socket::new(
+            udp_socket::PacketBuffer::new(udp_meta_rx, udp_buf_rx),
+            udp_socket::PacketBuffer::new(udp_meta_tx, udp_buf_tx),
+        );
+        let udp_handle = sockets.add(udp);
+        // Bind after adding to socket set — bind on 0.0.0.0:42069
+        {
+            let socket = sockets.get_mut::<udp_socket::Socket>(udp_handle);
+            let _ = socket.bind(42069);
+        }
+        k_nano::slog_hermes!("P2P", "info", "UDP broadcast socket ativo na porta 42069");
+
+        NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0, udp_handle }
     }
 
     /// Configura IP estatico para QEMU user-mode (10.0.2.15/24)
@@ -548,6 +567,31 @@ impl NetStack {
         }
         self.sockets.remove(handle);
         None
+    }
+
+    // ── P2P UDP broadcast — Brain Mesh discovery ────────────────
+
+    /// Envia pacote para 255.255.255.255:42069 (broadcast LAN).
+    pub fn udp_broadcast_send(&mut self, data: &[u8]) -> Result<(), ()> {
+        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
+        let addr = (IpAddress::v4(255, 255, 255, 255), 42069u16);
+        udp.send_slice(data, addr).map_err(|_| ())
+    }
+
+    /// Recebe um pacote UDP broadcast, se disponível.
+    pub fn udp_broadcast_recv(&mut self) -> Option<Vec<u8>> {
+        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
+        if udp.can_recv() {
+            udp.recv().ok().map(|(data, _meta)| Vec::from(data))
+        } else {
+            None
+        }
+    }
+
+    /// Verifica se há dados UDP broadcast pendentes.
+    pub fn has_udp_broadcast(&mut self) -> bool {
+        let udp = self.sockets.get_mut::<udp_socket::Socket>(self.udp_handle);
+        udp.can_recv()
     }
 
     fn encode_dns_name(name: &str) -> Vec<u8> {
