@@ -485,3 +485,29 @@ impl BrainMeshEngine {
         self.check_election();
     }
 }
+
+/// Static global mesh engine instance.
+/// Inicializado via `mesh::init(caps)` no boot, depois chamado via `mesh_tick()`.
+use spin::Mutex;
+pub static MESH_ENGINE: Mutex<Option<BrainMeshEngine>> = Mutex::new(None);
+
+/// Inicializa o mesh engine com as capacidades locais.
+pub fn init(caps: NodeCapabilities) {
+    *MESH_ENGINE.lock() = Some(BrainMeshEngine::new(caps));
+}
+
+/// Tick do mesh: chamado pelo NetAgent a cada ciclo do scheduler.
+/// Executa heartbeat logico, cleanup de nos mortos, e re-eleicao.
+pub fn mesh_tick() {
+    if let Some(ref mut engine) = *MESH_ENGINE.lock() {
+        engine.step();
+    }
+}
+
+/// Retorna o papel local no mesh (Master, Worker, etc).
+pub fn local_role() -> NodeRole {
+    MESH_ENGINE.lock()
+        .as_ref()
+        .map(|e| e.local_role())
+        .unwrap_or(NodeRole::Undecided)
+}

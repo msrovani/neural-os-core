@@ -252,6 +252,8 @@ impl Agent for NetAgent {
     fn manifest(&self) -> &AgentManifest { &NETAGENT_MANIFEST }
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         crate::network_agent::network_agent_tick();
+        // ADR-0081 B1: mesh tick — heartbeat → cleanup → election
+        k_nano::net::mesh::mesh_tick();
         AgentTickResult::Pending
     }
 }
