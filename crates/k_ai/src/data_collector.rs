@@ -115,6 +115,22 @@ impl DataCollector {
         self.pairs.len()
     }
 
+    /// Convert collected TrainingPairs to float embeddings for on-device training.
+    /// Each string is embedded as 64 floats (byte / 255.0).
+    pub fn collect(&self) -> Vec<(Vec<f32>, Vec<f32>)> {
+        self.pairs.iter().map(|pair| {
+            let mut input = alloc::vec![0.0f32; 64];
+            let mut output = alloc::vec![0.0f32; 64];
+            for (i, b) in pair.input.bytes().take(64).enumerate() {
+                input[i] = (b as f32) / 255.0;
+            }
+            for (i, b) in pair.output.bytes().take(64).enumerate() {
+                output[i] = (b as f32) / 255.0;
+            }
+            (input, output)
+        }).collect()
+    }
+
     /// Total de pares coletados desde o boot.
     pub fn total(&self) -> u64 {
         self.total_collected

@@ -103,27 +103,4 @@ impl BudgetManager {
     pub fn status(&self) -> Vec<&AgentBudget> {
         self.budgets.values().collect()
     }
-
-    /// Get the current watchdog state for an agent.
-    pub fn get_state(&self, name: &str) -> Option<AgentWatchdogState> {
-        self.budgets.get(name).map(|b| b.watchdog)
-    }
-
-    /// Recover a paused agent back to Normal and reset counters.
-    pub fn recover(&mut self, name: &str) {
-        if let Some(budget) = self.budgets.get_mut(name) {
-            budget.ticks_used = 0;
-            budget.overruns = 0;
-            budget.watchdog = AgentWatchdogState::Normal;
-        }
-    }
-
-    /// Snapshot of all budget states for Hermes monitoring.
-    /// Returns `(name, ticks_used, watchdog_state)` tuples.
-    pub fn stats(&self) -> Vec<(String, u64, AgentWatchdogState)> {
-        self.budgets
-            .values()
-            .map(|b| (b.agent_name.clone(), b.ticks_used, b.watchdog))
-            .collect()
-    }
 }

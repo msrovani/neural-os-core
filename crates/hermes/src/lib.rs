@@ -63,12 +63,8 @@ pub mod permission_gate;
 pub mod quarantine;
 pub mod decode_harness;
 pub mod structured_decode;
-pub mod wasm;
-pub mod wasm_exec;
-pub mod wasm_rt;
 pub mod wasi_host;
 pub mod wasmi_rt;
-pub mod wat_tests;
 pub mod wasm_build;
 pub mod app_factory;
 pub mod dynskill;
@@ -111,6 +107,8 @@ pub mod proactive;
 pub mod net_fallback;
 pub mod stream_packet;
 pub mod chat_tree;
+pub mod graph_engine;
+pub mod matrix_learn;
 
 
 

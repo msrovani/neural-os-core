@@ -56,6 +56,32 @@ fn dispatch_hw_control(utterance: &str) -> String {
     String::from("[HW] controle nao reconhecido — diga ex: ajuste o volume para 80%")
 }
 
+/// Fallback: try CURRENT_MODEL, then ModelHub slots (Vision → GeneratorPro → Reranker).
+fn fallback_generate(prompt: &str) -> String {
+    let guard = CURRENT_MODEL.lock();
+    match guard.as_ref() {
+        Some(m) => m.generate(prompt),
+        None => {
+            if let Some(out) =
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Vision, prompt)
+            {
+                return out;
+            }
+            if let Some(out) =
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorPro, prompt)
+            {
+                return out;
+            }
+            if let Some(out) =
+                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Reranker, prompt)
+            {
+                return out;
+            }
+            String::from("[CORTEX] No model loaded")
+        }
+    }
+}
+
 fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
     if expert_name == "hw_control" {
         let utterance = crate::trinity::extract_user_utterance(prompt);
@@ -70,6 +96,8 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
                 prompt
             ));
         }
+        k_nano::slog_cortex!("TRINITY", "info", "MoE routing: RustCoder expert unloaded, fallback CURRENT_MODEL");
+        return fallback_generate(prompt);
     }
     if expert_name == "hw_identify" {
         let guard = HWEXPERT_MODEL.lock();
@@ -77,6 +105,18 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
             k_nano::slog_cortex!("TRINITY", "info", "MoE routing: HWIdentify expert");
             return m.generate(&alloc::format!("identifique hardware {}", prompt));
         }
+        k_nano::slog_cortex!("TRINITY", "info", "MoE routing: HWIdentify expert unloaded, fallback CURRENT_MODEL");
+        return fallback_generate(prompt);
+    }
+    if expert_name == "agent" || expert_name == "orchestrator" || expert_name == "agentic" {
+        k_nano::slog_cortex!("TRINITY", "info", "MoE routing: Agent expert");
+        if let Some(out) =
+            crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Agent, prompt)
+        {
+            return out;
+        }
+        k_nano::slog_cortex!("TRINITY", "info", "MoE routing: Agent expert unloaded, fallback CURRENT_MODEL");
+        return fallback_generate(prompt);
     }
     if expert_name == "generator"
         || expert_name == "generator_pro"
@@ -116,28 +156,7 @@ fn dispatch_expert(prompt: &str, expert_name: &str) -> String {
             }
         }
     }
-    let guard = CURRENT_MODEL.lock();
-    match guard.as_ref() {
-        Some(m) => m.generate(prompt),
-        None => {
-            if let Some(out) =
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Vision, prompt)
-            {
-                return out;
-            }
-            if let Some(out) =
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::GeneratorPro, prompt)
-            {
-                return out;
-            }
-            if let Some(out) =
-                crate::model_hub::generate_from_slot(crate::model_hub::ModelSlot::Reranker, prompt)
-            {
-                return out;
-            }
-            String::from("[CORTEX] No model loaded")
-        }
-    }
+    fallback_generate(prompt)
 }
 
 /// Gera resposta usando rota já decidida pelo caller (Hermes R3) — sem re-classificar.

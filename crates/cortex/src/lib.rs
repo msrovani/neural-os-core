@@ -48,8 +48,7 @@ pub mod ngram_spec;
 pub mod projection;
 pub mod neuos_probe;
 pub mod kv_h2o;
-// ponytail: structured_decode module disabled (pre-existing, F4)
-// pub mod structured_decode;
+pub mod structured_decode;
 pub mod moe;
 pub mod gguf;
 pub mod hnsw;

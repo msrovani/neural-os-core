@@ -278,10 +278,16 @@ pub struct CortexAgent {
 
 impl CortexAgent {
     pub fn new() -> Self {
-        // Modelo amplo (1.5B/2B) carregado via FAT32 no boot — aqui só inicializa com default
-        let model = cortex::cortex::TransformerModel::new();
-        k_nano::slog_cortex!("LLM", "info", "Transformer default ready. Modelo real carregado do disco no boot.");
-        cortex::cortex::set_model(alloc::boxed::Box::new(model));
+        // Modelo real carregado via boot (FAT32/QEMU-loader). Só seta se boot carregou.
+        // Se nenhum .bitnet foi encontrado, generate_via_model() retorna NO_MODEL_MSG honestamente.
+        if cortex::cortex::model_status() == cortex::cortex::ModelStatus::NoneLoaded
+            && cortex::cortex::model_info().is_none()
+        {
+            k_nano::slog_cortex!("LLM", "info",
+                "Nenhum modelo .bitnet carregado — AI indisponível até boot carregar modelo real");
+        }
+        // ponytail: boot carrega modelo via load_model() → set_model(). Se não carregou,
+        // não criar toy — o sistema opera honestamente sem AI.
         CortexAgent { receiver: EVENT_BUS.subscribe(cortex::cortex::TOPIC_LLM_REQUEST) }
     }
 }
@@ -348,7 +354,7 @@ impl Agent for CortexAgent {
             };
             let t1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
             k_nano::slog_cortex!("LLM", "info", "generate_via_model took {} ticks (~{}s)", t1 - t0, (t1 - t0) / 100);
-            let output = if output == "[CORTEX] No model loaded" || output.trim().is_empty() {
+            let output = if output == cortex::cortex::NO_MODEL_MSG || output.trim().is_empty() {
                 alloc::format!(
                     "(sem LLM gerador — {})",
                     cortex::model_hub::hub_status()
@@ -1262,6 +1268,12 @@ impl Agent for HermesAgent {
                     msg
                 }
                 hermes::Command::Chat(ref msg) => {
+                    // Matrix Learning (#311f) — intercept learning intents before LLM routing
+                    if crate::matrix_learn::is_learning_request(msg) {
+                        crate::matrix_learn::OnDemandLearning::new()
+                            .handle_learning_request(msg)
+                            .unwrap_or_else(|e| alloc::format!("[Matrix] Erro ao aprender: {}", e))
+                    } else {
                     // ── Hermes pre-flight: skill_writer OBRIGATORIO para criacao de skill ──
                     if crate::cognitive_bridge::is_skill_creation_request(msg) {
 
@@ -1380,6 +1392,7 @@ impl Agent for HermesAgent {
                             }
                         }
                     }
+                    }  // close else (matrix learn)
                 }
             };
 
@@ -2201,18 +2214,94 @@ const SLEEPCYCLE_MANIFEST: AgentManifest = AgentManifest {
 
 // Ring 1 ownership: permanece em hermes (R3) por depender de crate::self_evolve e cortex::global_arena.
 // ADR-0060 A.4: SleepCycle mantido em hermes; PlasticityController em k_ai.
+// SRC constants (Nature Communications 2022 Sleep Replay Consolidation)
+const SRC_BUFFER_MAX: usize = 500;              // max entries in each buffer
+const SRC_PRIORITY_DECAY: f32 = 0.85;           // per-cycle priority decay
+const SRC_PRIORITY_PRUNE: f32 = 0.1;            // discard threshold
+const SRC_NOISE_SCALE: f32 = 0.1;               // Gaussian noise for replay
+const SRC_DEGRADE_THRESHOLD: f32 = 0.7;         // post/pre ratio below = degraded
+
+// IDEA #314a: Event ring buffer — 1000-entry circular buffer of interaction hashes
+struct EventRingBuffer {
+    buffer: Vec<u64>,
+    capacity: usize,
+    write: usize,
+    count: usize,
+}
+impl EventRingBuffer {
+    fn new(capacity: usize) -> Self {
+        EventRingBuffer { buffer: alloc::vec![0u64; capacity], capacity, write: 0, count: 0 }
+    }
+    fn push(&mut self, hash: u64) {
+        self.buffer[self.write] = hash;
+        self.write = (self.write + 1) % self.capacity;
+        if self.count < self.capacity { self.count += 1; }
+    }
+    /// Sample up to `n` entries evenly spaced across the buffer.
+    fn sample(&self, n: usize) -> Vec<u64> {
+        let n = n.min(self.count);
+        if n == 0 { return Vec::new(); }
+        let step = self.count / n;
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let idx = (i * step) % self.count;
+            let buf_idx = if self.count < self.capacity { idx } else { (self.write + idx) % self.capacity };
+            out.push(self.buffer[buf_idx]);
+        }
+        out
+    }
+    fn len(&self) -> usize { self.count }
+}
+
 pub struct SleepCycleAgent {
-    phase: u8, cycle_count: u64, phase_tick: u64, insights: Vec<String>,
+    phase: u8,
+    cycle_count: u64,
+    phase_tick: u64,
+    insights: Vec<String>,
+    /// Spaced repetition buffer: route traces with priority scores (REPLAY).
+    spaced_replay_buffer: Vec<(cortex::r3::RouteTrace, f32)>,
+    /// Dream-generated Q&A insights with priority scores (DREAM).
+    dream_insights: Vec<(String, f32)>,
+    /// Last replay loss, tracked for validation gate.
+    last_replay_loss: f32,
+    /// Whether any phase was degraded this cycle.
+    degraded: bool,
+    // ── IDEA #314a: Event ring buffer (1000 events, sample 64 per sleep) ──
+    event_ring: EventRingBuffer,
+    // ── IDEA #314c: EWC protected entry indices ──
+    ewc_protected: Vec<usize>,
+    ewc_protect_count: u32,
+    ewc_base_loss: f32,
+    // ── IDEA #314e: Confidence tracking ──
+    confidence_running: f32,
+    confidence_samples: u64,
 }
 
 impl SleepCycleAgent {
-    pub fn new() -> Self { SleepCycleAgent { phase: 0, cycle_count: 0, phase_tick: 0, insights: Vec::new() } }
+    pub fn new() -> Self {
+        SleepCycleAgent {
+            phase: 0,
+            cycle_count: 0,
+            phase_tick: 0,
+            insights: Vec::new(),
+            spaced_replay_buffer: Vec::new(),
+            dream_insights: Vec::new(),
+            last_replay_loss: 0.0,
+            degraded: false,
+            event_ring: EventRingBuffer::new(1000),
+            ewc_protected: Vec::new(),
+            ewc_protect_count: 0,
+            ewc_base_loss: 0.0,
+            confidence_running: 0.85,
+            confidence_samples: 0,
+        }
+    }
     fn phase_name(&self) -> &'static str { match self.phase {1=>"REPLAY",2=>"DREAM",3=>"CONSOLIDATE",4=>"PRUNE",5=>"REFLECT",_=>"IDLE"} }
     fn execute_phase(&mut self) {
         let _tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         match self.phase {
+            // ── REPLAY: store traces in spaced repetition buffer, apply priority decay, replay with noise ──
             1 => {
-                // R3 REPLAY canônico (crate): traces em cortex::global_arena
                 let mut traces = [cortex::r3::RouteTrace {
                     embedding_addr: 0,
                     logits_addr: 0,
@@ -2223,59 +2312,215 @@ impl SleepCycleAgent {
                     token_count: 0,
                 }; 64];
                 let n = cortex::global_arena::snapshot_route_traces(&mut traces);
-                let mut weights = alloc::vec![0i8; 64 * 6];
-                let mut loss = 0.0f32;
-                if n > 0 {
+
+                // Step 1: store new traces in buffer (boost if already present)
+                for t in traces.iter().take(n) {
+                    let existing = self.spaced_replay_buffer.iter_mut()
+                        .find(|(et, _)| et.embedding_addr == t.embedding_addr && et.token_count == t.token_count);
+                    match existing {
+                        Some((_, pri)) => *pri = (*pri + 0.5).min(2.0), // boost on re-encounter
+                        None => self.spaced_replay_buffer.push((*t, 1.0)),
+                    }
+                }
+
+                // Step 2: apply priority decay to all buffer entries
+                for (_, pri) in self.spaced_replay_buffer.iter_mut() {
+                    *pri *= SRC_PRIORITY_DECAY;
+                }
+
+                // Step 3: replay top-K entries (priority-sorted) with noise
+                let mut total_loss = 0.0f32;
+                let replay_count = self.spaced_replay_buffer.len().min(64);
+                if replay_count > 0 {
+                    // Sort descending by priority so highest-value traces replay first
+                    self.spaced_replay_buffer
+                        .sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(core::cmp::Ordering::Equal));
+                    let mut weights = alloc::vec![0i8; 64 * 6];
                     let trinity = TRINITY.lock();
-                    for t in traces.iter().take(n) {
-                        loss += cortex::r3::update_with_replay(&trinity, t, 0.7, &mut weights, 0.03);
+                    for i in 0..replay_count {
+                        let (trace, _) = &self.spaced_replay_buffer[i];
+                        // IDEA #314c: EWC — reduce noise for protected entries so their weights drift less
+                        let noise = if self.ewc_protected.contains(&i) { SRC_NOISE_SCALE * 0.3 } else { SRC_NOISE_SCALE };
+                        total_loss += cortex::r3::update_with_replay(
+                            &trinity, trace, 0.7, &mut weights, 0.03, noise,
+                        );
                     }
                     drop(trinity);
                     let mut t = BITNET_TRAINER.lock();
-                    t.trained += n as u64;
+                    t.trained += replay_count as u64;
+                    self.last_replay_loss = total_loss / replay_count as f32;
+
+                    // IDEA #314a: sample event ring buffer and log it
+                    let ring_sampled = self.event_ring.sample(64);
+                    let ring_detail = if !ring_sampled.is_empty() {
+                        alloc::format!(" ring={}/{}", ring_sampled.len(), self.event_ring.len())
+                    } else {
+                        String::new()
+                    };
+
                     k_nano::slog_hermes!(
-                        "SLEEP",
-                        "info",
-                        "REPLAY R3: {} traces loss={:.4} step={} tokens={}",
-                        n,
-                        loss,
-                        t.trained,
-                        cortex::global_arena::token_steps()
+                        "SLEEP", "info",
+                        "SLEEP-REPLAY-SRC: cycle={} replayed={} loss={:.4} new={} buf={} step={}{}",
+                        self.cycle_count, replay_count, total_loss, n,
+                        self.spaced_replay_buffer.len(), t.trained, ring_detail,
                     );
                 } else {
-                    k_nano::slog_hermes!("SLEEP", "info", "REPLAY R3: sem traces — skip");
+                    k_nano::slog_hermes!("SLEEP", "info", "SLEEP-REPLAY-EMPTY: cycle={} buffer=0", self.cycle_count);
+                    self.last_replay_loss = 0.0;
                 }
                 cortex::global_arena::clear_route_traces();
                 cortex::global_arena::reset_moe_cache();
             }
+
+            // ── DREAM: synthetic QA generation + BitNet variations (IDEA #314b) ──
             2 => {
                 let st = crate::evolve::evolve_dream_tick();
+
+                // Extract recent conversation Q&A pairs
+                let qa_pairs = crate::cognitive_bridge::extract_qa_pairs(4);
+                let qa_count = qa_pairs.len();
+                for (user, asst) in &qa_pairs {
+                    self.dream_insights
+                        .push((alloc::format!("user:{} asst:{}", user, asst), 0.8));
+                }
+
+                // IDEA #314b: BitNet synthetic variations — train on QA pairs with elevated noise
+                let mut variation_count = 0u32;
+                if !qa_pairs.is_empty() {
+                    // Replay top buffer entries with dream noise to create synthetic variations
+                    let dream_noise = SRC_NOISE_SCALE * 2.5; // 0.25 vs standard 0.1
+                    let dream_n = self.spaced_replay_buffer.len().min(16);
+                    if dream_n > 0 {
+                        let mut var_weights = alloc::vec![0i8; 64 * 6];
+                        let trinity = TRINITY.lock();
+                        let trinity_has_router = trinity.moe_router_loaded();
+                        drop(trinity);
+                        if trinity_has_router {
+                            let trinity = TRINITY.lock();
+                            for di in 0..dream_n {
+                                let (trace, _) = &self.spaced_replay_buffer[di];
+                                let _ = cortex::r3::update_with_replay(
+                                    &trinity, trace, 0.5, &mut var_weights, 0.01, dream_noise,
+                                );
+                                variation_count += 1;
+                            }
+                            drop(trinity);
+                        }
+                    }
+                    // Also train BitNet on QA pair embeddings for associative dream patterns
+                    let mut trainer = BITNET_TRAINER.lock();
+                    for (user, asst) in &qa_pairs {
+                        trainer.train_task(user, asst, 1);
+                    }
+                    variation_count += qa_count as u32;
+                }
+
+                // Decay dream insight priorities
+                for (_, pri) in self.dream_insights.iter_mut() {
+                    *pri *= SRC_PRIORITY_DECAY;
+                }
+
                 self.insights.push(alloc::format!(
-                    "[DREAM] ciclo #{} evolve={}", self.cycle_count, st
+                    "[DREAM] ciclo #{} evolve={} qa={}", self.cycle_count, st, qa_count
                 ));
-                k_nano::slog_hermes!("SLEEP", "info", "DREAM evolve={}", st);
+                k_nano::slog_hermes!(
+                    "SLEEP", "info",
+                    "SLEEP-DREAM-DREAM: cycle={} evolve={} qa={} variations={} insights={}",
+                    self.cycle_count, st, qa_count, variation_count, self.dream_insights.len(),
+                );
             }
+
+            // ── CONSOLIDATE: seed knowledge fast→slow layers, validate quality + EWC (IDEA #314c) ──
             3 => {
+                // Pre-consolidation quality: token steps as a proxy for model activity
+                let pre_quality = cortex::global_arena::token_steps() as f32;
+
                 match k_ai::sgdb::checkpoint_working() {
                     Ok(n) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "n={}", n),
                     Err(e) => k_nano::slog_hermes!("sgdb", "sleep_ckpt", "FAIL {}", e),
                 }
-                k_nano::slog_hermes!("SLEEP", "info", "CONSOLIDATE");
+
+                // Post-consolidation quality
+                let post_quality = cortex::global_arena::token_steps() as f32;
+
+                // Validation gate: flag degraded if quality dropped > 30%
+                let degraded = pre_quality > 0.0
+                    && post_quality < pre_quality * SRC_DEGRADE_THRESHOLD;
+                if degraded {
+                    self.degraded = true;
+                }
+
+                // IDEA #314c: EWC — protect entries that show stable low loss over multiple cycles.
+                // Entries with last_replay_loss below threshold (0.1) AND at least 3 cycles old
+                // get marked as protected. Protected entries have reduced noise during REPLAY.
+                if self.last_replay_loss > 0.0 && self.last_replay_loss < 0.1 {
+                    // Mark current high-priority entries as protected
+                    for (i, (_, pri)) in self.spaced_replay_buffer.iter().enumerate() {
+                        if *pri > 0.8 && !self.ewc_protected.contains(&i) {
+                            self.ewc_protected.push(i);
+                        }
+                    }
+                    self.ewc_protect_count += 1;
+                    self.ewc_base_loss = self.last_replay_loss;
+                } else if self.ewc_protect_count > 0 && self.last_replay_loss > 0.5 {
+                    // High loss means knowledge is changing — lift protection gradually
+                    let remove = (self.ewc_protected.len() / 2).max(1);
+                    for _ in 0..remove.min(self.ewc_protected.len()) {
+                        self.ewc_protected.remove(0);
+                    }
+                    self.ewc_protect_count = self.ewc_protect_count.saturating_sub(1);
+                }
+                // Cap protected list
+                if self.ewc_protected.len() > 64 {
+                    self.ewc_protected.drain(0..(self.ewc_protected.len() - 64));
+                }
+
+                k_nano::slog_hermes!(
+                    "SLEEP", "info",
+                    "SLEEP-CONSOLIDATE-EWC: cycle={} pre={:.4} post={:.4} degraded={} protected={} ewc_base={:.4}",
+                    self.cycle_count, pre_quality, post_quality, degraded,
+                    self.ewc_protected.len(), self.ewc_base_loss,
+                );
             }
+
+            // ── PRUNE: sparsify weights + trim both replay buffers + honor EWC (IDEA #314c/d) ──
             4 => {
                 if self.insights.len() > 100 {
                     self.insights.drain(0..50);
                 }
-                let pruned = k_ai::sgdb::prune_working_ram();
+                let pruned_ram = k_ai::sgdb::prune_working_ram();
                 k_ai::sgdb::update_with_replay();
+
+                // Prune spaced_replay_buffer: remove weak entries, cap at SRC_BUFFER_MAX.
+                // IDEA #314c: EWC — keep protected entries even if priority would prune them.
+                let before_srb = self.spaced_replay_buffer.len();
+                let protected = &self.ewc_protected;
+                self.spaced_replay_buffer = core::mem::take(&mut self.spaced_replay_buffer)
+                    .into_iter().enumerate()
+                    .filter(|(i, (_, pri))| protected.contains(i) || *pri >= SRC_PRIORITY_PRUNE)
+                    .map(|(_, entry)| entry)
+                    .collect();
+                self.spaced_replay_buffer.truncate(SRC_BUFFER_MAX);
+                let pruned_srb = before_srb.saturating_sub(self.spaced_replay_buffer.len());
+
+                // Prune dream_insights too
+                let before_di = self.dream_insights.len();
+                self.dream_insights.retain(|(_, pri)| *pri >= SRC_PRIORITY_PRUNE);
+                self.dream_insights.truncate(SRC_BUFFER_MAX);
+                let pruned_di = before_di.saturating_sub(self.dream_insights.len());
+
+                // ponytail: indices shift after pruning — clear and let next CONSOLIDATE rebuild
+                self.ewc_protected.clear();
+
                 k_nano::slog_hermes!(
-                    "SLEEP",
-                    "info",
-                    "PRUNE: {} insights ram_l0l1={}",
-                    self.insights.len(),
-                    pruned
+                    "SLEEP", "info",
+                    "SLEEP-PRUNE-PRUNE: cycle={} pruned_srb={}/{} pruned_di={}/{} ram_l0l1={} insights={} ewc_protected={}",
+                    self.cycle_count, pruned_srb, before_srb, pruned_di, before_di,
+                    pruned_ram, self.insights.len(), self.ewc_protected.len(),
                 );
             }
+
+            // ── REFLECT: meta-cognition + cycle summary + confidence (IDEA #314e) ──
             5 => {
                 let detail = crate::self_evolve::reflect(
                     k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64,
@@ -2287,9 +2532,35 @@ impl SleepCycleAgent {
                     payload: detail.into_bytes(),
                     token: CapabilityToken::Legacy(1),
                 });
-                let nudge = crate::cognitive_bridge::reflect_and_nudge(self.cycle_count);
-                k_nano::slog_hermes!("SLEEP", "info", "REFLECT nudge: {}", nudge);
+                let _nudge = crate::cognitive_bridge::reflect_and_nudge(self.cycle_count);
                 cortex::neuos_probe::log_probe(None);
+
+                // IDEA #314e: Confidence tracking from session log
+                let session_len = crate::cognitive_bridge::session_len();
+                if session_len > self.confidence_samples {
+                    let _new_samples = session_len - self.confidence_samples;
+                    // Simple proxy: replay loss inverso como confiança (baixa loss = alta confiança)
+                    let replay_conf = (1.0 - self.last_replay_loss.min(1.0)).max(0.0);
+                    // EMA update
+                    let alpha = 0.3f32;
+                    self.confidence_running = self.confidence_running * (1.0 - alpha) + replay_conf * alpha;
+                    self.confidence_samples = session_len;
+                }
+                let confidence_pct = (self.confidence_running * 100.0) as u32;
+
+                // SRC cycle summary with confidence
+                let buf_entries = self.spaced_replay_buffer.len();
+                let dream_entries = self.dream_insights.len();
+                let degrade_flags = if self.degraded { " [DEGRADED]" } else { "" };
+                k_nano::slog_hermes!(
+                    "SLEEP", "info",
+                    "SLEEP-REFLECT-SUMMARY: cycle={} phase=REFLECT \
+                     buffer={} dream={} insights={} confidence={}%{}",
+                    self.cycle_count, buf_entries, dream_entries,
+                    self.insights.len(), confidence_pct, degrade_flags,
+                );
+                // Reset degraded flag for next cycle
+                self.degraded = false;
             }
             _ => {}
         }

@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 use skill_registry::{McpManifest, OutputSchema, Skill};
 
 use crate::skill_market;
-use crate::wasm::{register_wasm_skill, WasmSkill};
+use crate::wasmi_rt::{register_wasm_skill, WasmSkill};
 
 /// Metadados de um pacote GGUF exposto como skill WASM.
 #[derive(Clone)]

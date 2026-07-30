@@ -194,7 +194,7 @@ impl InputAgent {
                 }
             }
             0x0E => { self.buffer.pop(); }
-            _ => { if let Some(ch) = crate::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
+            _ => { if let Some(ch) = k_nano::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
         }
         // Echo tecla para o display em tempo real
         let _ = EVENT_BUS.publish(Event {
@@ -2241,7 +2241,7 @@ impl AutoLearnAgent {
             let trinity = TRINITY.lock();
             for t in traces.iter().take(n) {
                 // reward heurístico: conhecimento carregado → reforço positivo
-                loss += crate::r3::update_with_replay(&trinity, t, 1.0, &mut weights, 0.05);
+                loss += crate::r3::update_with_replay(&trinity, t, 1.0, &mut weights, 0.05, 0.0);
                 steps += 1;
             }
             drop(trinity);
@@ -2265,7 +2265,7 @@ impl AutoLearnAgent {
                 token_count: 0,
             };
             let trinity = TRINITY.lock();
-            loss = crate::r3::update_with_replay(&trinity, &dummy_trace, 0.5, &mut weights, 0.01);
+            loss = crate::r3::update_with_replay(&trinity, &dummy_trace, 0.5, &mut weights, 0.01, 0.0);
             drop(trinity);
             let _ = &mut dummy_trace;
             let mut trainer = crate::BITNET_TRAINER.lock();

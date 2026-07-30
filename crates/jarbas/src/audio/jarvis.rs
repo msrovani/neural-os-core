@@ -6,6 +6,7 @@ use event_bus::{CapabilityToken, Event, Receiver};
 use core::sync::atomic::{AtomicBool, Ordering};
 use crate::jarvis::{JarbasEngine, Emotion, EmotionAnalysis};
 use crate::audio::context::build_emotional_context;
+use crate::audio::voice::PLAYBACK_RING;
 
 /// Saudacao HW emitida no register (K44) — evita depender do scheduler (hang pos-K44).
 static HW_GREET_EMITTED: AtomicBool = AtomicBool::new(false);
@@ -72,9 +73,17 @@ fn compose_boot_greeting(mem_mb: u64, cpu_count: u8, agent_count: usize) -> Stri
     )
 }
 
+/// Estado da síntese TTS em streaming.
+/// Gera o buffer completo em uma chamada e drena em chunks de ~50ms no tick().
+enum StreamingTtsState {
+    Idle,
+    Streaming { buffer: alloc::vec::Vec<i16>, pos: usize },
+}
+
 pub struct JarbasAgent {
     user_receiver: Receiver,
     llm_response: Receiver,
+    hermes_response: Receiver,
     engine: JarbasEngine,
     last_text_emotion: Option<Emotion>,
     greeted: bool,
@@ -82,6 +91,12 @@ pub struct JarbasAgent {
     greet_mem_mb: u64,
     greet_cpu: u8,
     greet_agents: usize,
+    /// Streaming TTS state machine.
+    stream_tts: StreamingTtsState,
+    /// Histórico de conversa: pares (user, assistant).
+    conversation: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>,
+    /// Máximo de turnos no histórico.
+    max_conversation: usize,
 }
 
 impl JarbasAgent {
@@ -89,6 +104,7 @@ impl JarbasAgent {
         JarbasAgent {
             user_receiver: k_nano::EVENT_BUS.subscribe("USER_INTENT"),
             llm_response: k_nano::EVENT_BUS.subscribe("LLM_RESPONSE"),
+            hermes_response: k_nano::EVENT_BUS.subscribe("HERMES_RESPONSE"),
             engine: JarbasEngine::new(),
             last_text_emotion: None,
             greeted: false,
@@ -96,6 +112,9 @@ impl JarbasAgent {
             greet_mem_mb: 0,
             greet_cpu: 1,
             greet_agents: 0,
+            stream_tts: StreamingTtsState::Idle,
+            conversation: alloc::vec::Vec::new(),
+            max_conversation: 10,
         }
     }
 
@@ -235,6 +254,19 @@ impl Agent for JarbasAgent {
             });
         }
 
+        // --- Streaming TTS: push next chunk to PLAYBACK_RING ---
+        if let StreamingTtsState::Streaming { ref buffer, ref mut pos } = self.stream_tts {
+            const CHUNK: usize = 2560;
+            let n = buffer.len().saturating_sub(*pos).min(CHUNK);
+            if n > 0 {
+                let pushed = PLAYBACK_RING.push(&buffer[*pos..*pos + n]);
+                *pos += pushed;
+            }
+            if *pos >= buffer.len() {
+                self.stream_tts = StreamingTtsState::Idle;
+            }
+        }
+
         while let Some(ev) = self.llm_response.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty() {
@@ -271,6 +303,37 @@ impl Agent for JarbasAgent {
                 payload: response.into_bytes(),
                 token: CapabilityToken::Legacy(1),
             });
+        }
+
+        // --- HERMES_RESPONSE → streaming TTS ---
+        while let Some(ev) = self.hermes_response.try_receive() {
+            let text = core::str::from_utf8(&ev.payload).unwrap_or("");
+            if text.is_empty()
+                || text.starts_with("[JARBAS] Escutando")
+                || text.starts_with("[JARBAS] 🎤")
+            {
+                continue;
+            }
+
+            let clean = text
+                .trim_start_matches("[JARBAS] ")
+                .trim_start_matches("JARVIS: ");
+
+            // Gera buffer TTS completo (uma chamada bloqueante), depois drena em chunks.
+            let pcm = crate::audio::skills::synthesize_tts(clean);
+            let total = pcm.len();
+            if total > 0 {
+                const CHUNK: usize = 2560;
+                let n = total.min(CHUNK);
+                let _ = PLAYBACK_RING.push(&pcm[..n]);
+                if total > n {
+                    self.stream_tts = StreamingTtsState::Streaming {
+                        buffer: pcm,
+                        pos: n,
+                    };
+                }
+                k_nano::slog_jarbas!("Jarbas", "info", "TTS streaming: {} frames, chunk {}", total, CHUNK);
+            }
         }
 
         while let Some(ev) = self.user_receiver.try_receive() {

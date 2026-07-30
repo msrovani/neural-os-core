@@ -212,13 +212,13 @@ def populate(path):
         ("BITNET.BIN", None),  # alias legado; não empacota stub
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
-        # Novos modelos ADR-0078: Fast (Llama 1B), Pro (Llama 8B), Coder (DeepSeek), Reranker, Learner
+        # ADR-0078/0079: todos os slots ModelHub (fat_names_for em cortex::model_hub)
         ("VISION.BIN", find_file("VISION.BIN")),
-        ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") if "3b" in llm else None),
-        ("RUSTCDR3.BIN", find_file("RUSTCDR3.BIN")),
-        ("RERANKER.BIN", find_file("RERANKER.BIN")),
-        ("LEARNER.BIN", find_file("LEARNER.BIN")),
-        ("AGENT.BIN", find_file("AGENT.BIN")),
+        ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
+        ("RUSTCDR3.BIN", find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
+        ("RERANKER.BIN", find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
+        ("LEARNER.BIN", find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
+        ("AGENT.BIN", find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
     ]
     # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
     _inject_device_legos(files)
@@ -400,9 +400,13 @@ def populate(path):
         reserved = struct.unpack_from("<H", bpb, 0x0E)[0]
         fat_count = bpb[0x10]
         fat_sectors = struct.unpack_from("<I", bpb, 0x24)[0]
+        part_sectors = struct.unpack_from("<I", bpb, 0x20)[0]
         root_cluster = struct.unpack_from("<I", bpb, 0x2C)[0]
         data_lba = 2048 + reserved + fat_count * fat_sectors
         fat_lba = 2048 + reserved
+        # Calculate total_clusters from partition sectors
+        data_sectors = part_sectors - reserved - fat_count * fat_sectors
+        total_clusters = data_sectors // spc
 
         for name, src in files:
             data = src if isinstance(src, bytes) else (open(src, "rb").read() if src else None)
@@ -412,8 +416,13 @@ def populate(path):
             clusters_needed = (len(data) + spc * bps - 1) // (spc * bps)
             # Find free clusters in FAT
             free = []
-            for cl in range(2, 0x0FFFFFF0):
-                fat_sec_lba = fat_lba + (cl * 4) // bps
+            max_cluster = total_clusters + 2  # root cluster is 2, so add 2 for safety
+            max_fat_sector = fat_sectors * fat_count
+            for cl in range(2, max_cluster):
+                fat_sec_offset = (cl * 4) // bps
+                if fat_sec_offset >= max_fat_sector:
+                    break  # Beyond FAT table bounds
+                fat_sec_lba = fat_lba + fat_sec_offset
                 f.seek(fat_sec_lba * 512 + (cl * 4) % bps)
                 entry = struct.unpack("<I", f.read(4))[0] & 0x0FFFFFFF
                 if entry == 0:
@@ -449,6 +458,9 @@ def populate(path):
             struct.pack_into("<H", entry_data, 20, (free[0] >> 16) & 0xFFFF)
 
             def fat_get(cl):
+                fat_sec_offset = (cl * 4) // bps
+                if fat_sec_offset >= max_fat_sector:
+                    return 0x0FFFFFFF  # Return EOC if beyond FAT bounds
                 f.seek(fat_lba * 512 + cl * 4)
                 return struct.unpack("<I", f.read(4))[0] & 0x0FFFFFFF
 
@@ -459,7 +471,8 @@ def populate(path):
             def find_any_free_cluster():
                 # start after last used free chain to avoid O(n^2) from 2
                 start = free[-1] + 1 if free else 3
-                for cl in range(start, 0x0FFFFFF0):
+                max_cluster = total_clusters + 2  # root cluster is 2, so add 2 for safety
+                for cl in range(start, max_cluster):
                     if fat_get(cl) == 0:
                         return cl
                 for cl in range(3, start):

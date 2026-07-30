@@ -84,11 +84,11 @@ mod smp;
 mod sync;
 
 pub use hermes_crate::{
-    actor_registry, adaptation, app_store, approval, apps, browser_agent, cron, evolve, generic_wifi, sgdb_agent,
+    actor_registry, app_store, approval, apps, browser_agent, cron, evolve, generic_wifi, sgdb_agent,
     gguf_wasm, globals as hermes_globals, hermes, hitl_ui, hub, hw_pnp, ipc_bus, marketplace, mcp,
     memory_store, net_bridge, ntp, optimizer, package_hub, plugin_hub, safety,
     search_agent, security, self_evolve, self_update, skill_gen, skill_loader, skill_market,
-    skill_observer, skill_opt, structured_decode, voice_skill, wasm, wasm_exec, wasm_rt, wifi_agent,
+    skill_observer, skill_opt, structured_decode, voice_skill, wifi_agent,
     wifi_compat, wifi_iwlwifi, wifi_msix, wifi_protocol,
     // ADR-0062 E3 — SoftMAC BE via hermes re-export
     wifi_softmac,
@@ -1440,21 +1440,8 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("SIMD", "info", "AVX2={} AVX512={} isa={}", if avx { "SIM" } else { "NAO" }, if avx512 { "SIM" } else { "NAO" }, path);
     }
 
-    // ADR-0061: Cognitive adaptation — Hermes decide política de execução
-    // baseada na topologia de hardware detectada (Xeon/EPYC/Client).
-    {
-        let xeon_report = k_nano::hardware::xeon::discover_xeon_topology();
-        let _policy = adaptation::cognitive_adaptation(&xeon_report);
-        k_nano::slog_bin!(
-            "ADAPT",
-            "info",
-            "Xeon gen={:?} sockets={} cores={} simd={}",
-            xeon_report.generation,
-            xeon_report.sockets.len(),
-            xeon_report.total_physical_cores,
-            k_nano::hardware::xeon::recommended_simd_width(&xeon_report)
-        );
-    }
+    // ponytail: adaptation moved to LEGACY — speculative Xeon/EPYC/Client topology detection.
+    // SIMD width is already determined above; HW profile strategy is StandardUma always.
 
 
 
@@ -1513,31 +1500,17 @@ pub(crate) fn kernel_boot(
     publish_boot_phase(BootPhase::HardwareDiscovery, "PCI+ACPI+APIC+SMP sync");
     unsafe { agents::init_platform_sync(); }
 
-    // ADR-0061 Phase 3: Probe hardware profile after platform init (SRAT + SMP ready)
-    {
-        let hw_report = k_nano::hardware::probe::probe();
-        k_nano::hardware::probe::apply_strategy(&hw_report);
-        k_nano::slog_bin!(
-            "ADAPT", "info",
-            "ADR-0061 profile={} simd={}bit topology={:?}",
-            hw_report.profile.name(),
-            k_nano::hardware::probe::recommended_simd_width(),
-            hw_report.vendor
-        );
-        let simd_width = k_nano::hardware::probe::recommended_simd_width();
-        let expert_size = k_nano::hardware::probe::recommended_expert_size();
-        k_nano::slog_bin!(
-            "ADAPT", "info",
-            "SIMD dispatch={}bit expert_size={}KB",
-            simd_width, expert_size / 1024
-        );
-        // MoE expert sizing based on probe
-        if hw_report.numa_topology.is_some() {
-            k_nano::slog_bin!("ADAPT", "info", "NUMA detected — per-node frame allocator active");
-        }
-        // Log core pinning pools after adaptation
-        k_nano::core_pinning::log_pinning_state();
-    }
+    // ponytail: hardware/ probe moved to LEGACY — StandardUma is always the detected profile.
+    let simd_width = match k_nano::platform_probe::isa_path() {
+        k_nano::platform_probe::IsaPath::Avx512F => 512,
+        k_nano::platform_probe::IsaPath::Avx2Fma => 256,
+        k_nano::platform_probe::IsaPath::Sse42 => 128,
+        k_nano::platform_probe::IsaPath::Scalar => 64,
+    };
+    let expert_size: usize = 8 * 1024 * 1024; // 8MB default expert (fits L3 cache)
+    k_nano::slog_bin!("ADAPT", "info", "profile=StandardUma simd={}bit", simd_width);
+    k_nano::slog_bin!("ADAPT", "info", "SIMD dispatch={}bit expert_size={}KB", simd_width, expert_size / 1024);
+    k_nano::core_pinning::log_pinning_state();
 
     publish_boot_phase(BootPhase::DriverInit, "Drivers de HW (NIC/ATA/USB/GPU)");
 
@@ -1861,7 +1834,6 @@ pub(crate) fn kernel_boot(
     audio::init_audio();
     jarbas_bridge::log_bridge_status();
 
-    let _wasm_rt = crate::wasm_rt::init_wasm_runtime();
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
     // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
@@ -2526,19 +2498,12 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(k_ai::self_heal_agent::SelfHealAgent::new()));
 
     registry.register(Box::new(crate::memory_agent::MemoryAgent::new()));
-
     registry.register(Box::new(agents::NetDriverAgent));
-
     registry.register(Box::new(agents::UsbDriverAgent));
-
     registry.register(Box::new(k_hal::audio::hda::HdaAudioAgent::new()));
-
     registry.register(Box::new(audio::usb::UsbAudioAgent::new()));
-
     registry.register(Box::new(uvc_driver::UvcDriverAgent::new()));
-
     registry.register(Box::new(agents::GpuDriverAgent));
-
     registry.register(Box::new(agents::FsBridgeAgent::new()));
 
     registry.register(Box::new(agents::HwDetectAgent));
@@ -2547,8 +2512,6 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(agents::SelfEvolveAgent::new()));
 
     registry.register(disk_agent_box);
-
-    
 
     // HwRegistry: detecta hardware e cria HwAgents
     crate::display::fb::boot_ckpt(46, "HwRegistry detect");
@@ -2560,13 +2523,10 @@ pub(crate) fn kernel_boot(
 
     k_nano::slog_bin!("HW-AGENTS", "info", "{} dispositivos detectados como HwAgents.", hw_reg.agents.len());
 
-    
-
     klogc!("BOOT", "AGENTS", "registered", "{} agents", registry.agents.len());
 
     // init_phase NÃO aqui (stack do bootloader): roda em raw_sched_run após switch ≥2MB.
     // Redesign round-robin+timeout em agent-core: hang impossível mesmo com SystemAgent.
-
 
     // CortexAgent ja foi criado antes do HW discovery — registrar primeiro
     // para que o LLM esteja disponivel para decisoes de hardware
@@ -2574,23 +2534,11 @@ pub(crate) fn kernel_boot(
 
     registry.register(Box::new(cortex_agent));
 
-    
-
     // Runtime agents — HermesAgent acorda logo apos o Cortex
 
-    k_nano::slog_bin!("Boot", "register", "SystemAgent");
-
     registry.register(Box::new(SystemAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "MonitorAgent");
-
     registry.register(Box::new(agents::MonitorAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "HwBridgeAgent");
-
     registry.register(Box::new(agents::HwBridgeAgent));
-
-    k_nano::slog_bin!("Boot", "register", "NetAgent");
 
     let net_agent = Box::new(agents::NetAgent::new());
 
@@ -2601,18 +2549,14 @@ pub(crate) fn kernel_boot(
 
     registry.register(net_agent);
 
-    k_nano::slog_bin!("Boot", "register", "InputAgent");
-
     registry.register(Box::new(agents::InputAgent::new()));
 
     // Mouse ANTES do Hermes: Continuous na ordem de registro. Hermes THINK
     // soft-float bloqueia o scheduler — mouse depois do Hermes nunca polla.
     // Posição também atualiza no IRQ (MOUSE_ABS_*) independente do tick.
-    k_nano::slog_bin!("Boot", "register", "MouseAgent");
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
 
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
-    k_nano::slog_bin!("Boot", "register", "SysInfoAgent");
     registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));
 
     // Display + Metrics ANTES do Hermes: Continuous ring0 polla por ordem de
@@ -2622,67 +2566,45 @@ pub(crate) fn kernel_boot(
     display::fb::fb_remap_uc();
     crate::display::fb::boot_ckpt(40, "pos fb_remap");
     crate::display::fb::boot_ckpt(41, "antes DisplayAgent");
-    k_nano::slog_bin!("Boot", "register", "DisplayAgent");
     registry.register(Box::new(display::agent::DisplayAgent::new()));
     crate::display::fb::boot_ckpt(42, "DisplayAgent OK");
-    k_nano::slog_bin!("Boot", "register", "MetricsAgent");
     registry.register(Box::new(display::metrics_agent::MetricsAgent::new()));
     crate::display::fb::boot_ckpt(51, "MetricsAgent OK");
 
-    k_nano::slog_bin!("Boot", "register", "HermesAgent");
-
     registry.register(Box::new(agents::HermesAgent::new()));
-
-    
 
     // The Agency: 30+ agentes especialistas
 
-    k_nano::slog_bin!("Boot", "register", "agency agents");
-
     agents::register_agency_agents(&mut registry);
-
-    
 
     // HW Agents: um agente por dispositivo PCI
 
-    k_nano::slog_bin!("Boot", "register", "HW agents");
-
     agents::register_hw_agents(&mut registry);
-
-    
 
     // Display/Metrics já registrados antes do Hermes (ver acima).
 
     kjson!("BOOT", "AGENTS", "www", "search", 1);
 
-    k_nano::slog_bin!("Boot", "register", "VisionAgent");
     registry.register(Box::new(vision_agent::VisionAgent::new()));
     crate::display::fb::boot_ckpt(43, "VisionAgent OK");
 
-    k_nano::slog_bin!("Boot", "register", "JarbasAgent");
     registry.register(Box::new(audio::jarvis::JarbasAgent::new()));
     crate::display::fb::boot_ckpt(44, "JarbasAgent OK");
     // HW sem MSC: saudacao + BOOT.LOG AGORA (hang comum logo apos K44 nos agents audio).
     audio::jarvis::emit_hw_greeting_at_register();
 
     crate::display::fb::boot_ckpt(45, "antes JarvisVoice");
-    k_nano::slog_bin!("Boot", "register", "JarbasVoiceAgent");
     registry.register(Box::new(audio::voice::JarbasVoiceAgent::new()));
     crate::display::fb::boot_ckpt(46, "JarvisVoice OK");
 
-    k_nano::slog_bin!("Boot", "register", "WakeWordAgent");
     registry.register(Box::new(audio::wakeword::WakeWordAgent::new()));
     crate::display::fb::boot_ckpt(47, "WakeWord OK");
 
-    k_nano::slog_bin!("Boot", "register", "AudioPipelineAgent (barge-in)");
     registry.register(Box::new(audio::pipeline::AudioPipelineAgent::new()));
     crate::display::fb::boot_ckpt(48, "AudioPipeline OK");
 
-    k_nano::slog_bin!("Boot", "register", "AudioMixerAgent");
     registry.register(Box::new(audio::mixer::AudioMixerAgent::new()));
     crate::display::fb::boot_ckpt(49, "AudioMixer OK");
-
-    k_nano::slog_bin!("Boot", "register", "CronAgent");
 
     let mut cron = cron::CronAgent::new();
 
@@ -2690,31 +2612,13 @@ pub(crate) fn kernel_boot(
 
     registry.register(Box::new(cron));
 
-    k_nano::slog_bin!("Boot", "register", "McpAgent");
-
     registry.register(Box::new(mcp::McpAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "SecurityAgent");
-
     registry.register(Box::new(security::SecurityAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "SafetyAgent");
-
     registry.register(Box::new(safety::SafetyAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "OptimizerAgent");
-
     registry.register(Box::new(optimizer::OptimizerAgent::new()));
-
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "SgdbAgent");
-
     registry.register(Box::new(sgdb_agent::SgdbAgent::new()));
-
     registry.register(Box::new(wifi_agent::WifiAgent::new()));
-
-    k_nano::slog_bin!("Boot", "register", "WifiAgent");
 
     // Late refresh: GPU CapTokens (GpuCompute) podem ter sido grantados após early emit
     k_hal::hw_gate::emit_all_refresh();
@@ -2722,8 +2626,6 @@ pub(crate) fn kernel_boot(
     // BootLogAgent ja registrado no inicio do registry (BOOT_PHASE consumer)
 
     registry.register(Box::new(agents::log_analyst_agent::LogAnalystAgent::new()));
-
-    
 
     // DiagnosticSkill — SystemAgent no SYSTEM_READY + execucao explicita no boot
 
@@ -2830,6 +2732,7 @@ pub(crate) fn kernel_boot(
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
                         for name in &[
+                            "LLAMA8B.BIN",
                             "BITNET850.BIN",
                             "BITNET13.BIN",
                             "BITNET2B.BIN",
@@ -2976,6 +2879,7 @@ pub(crate) fn kernel_boot(
                         // Degrau: PACK_LLM=850 só empacota 850; depois 13, 2b, 3b.
                         // Modelos GGUF grandes: /model (AirLLM ATA) em vez de PIO full-RAM.
                         for name in &[
+                            "LLAMA8B.BIN",
                             "BITNET13.BIN",
                             "BITN13.BIN",
                             "BITNET850.BIN",
@@ -3038,6 +2942,7 @@ pub(crate) fn kernel_boot(
                 if let Some(ref mut msc) = *usb_guard {
                     const PIO_HW: usize = 700 * 1024 * 1024;
                     for name in &[
+                        "LLAMA8B.BIN",
                         "BITNET13.BIN",
                         "BITN13.BIN",
                         "BITNET850.BIN",
@@ -3390,6 +3295,8 @@ pub(crate) fn kernel_boot(
         try_hub_slot_fat(crate::model_hub::ModelSlot::Vision);
         try_hub_slot_fat(crate::model_hub::ModelSlot::GeneratorPro);
         try_hub_slot_fat(crate::model_hub::ModelSlot::Learner);
+        try_hub_slot_fat(crate::model_hub::ModelSlot::Agent);
+        k_nano::slog_bin!("HUB", "info", "Agent slot load attempted");
         // Se Active é grande (≥200MB heurística via embed), marca pro-alias
         let dim = crate::cortex::CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
         if dim >= 2048 {
@@ -3482,7 +3389,7 @@ pub(crate) fn kernel_boot(
              Generate a single short warm greeting sentence in Portuguese. \
              Be concise, one sentence.";
         let raw = crate::cortex::generate_via_model(greeting_prompt);
-        if raw.is_empty() || raw == "[CORTEX] No model loaded" {
+        if raw.is_empty() || raw == crate::cortex::NO_MODEL_MSG {
             k_nano::slog_bin!("JARBAS", "GREETING",
                 "LLM generate vazio — fallback para saudacao fixa");
             n3_gen = Some(false);
@@ -3503,7 +3410,7 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("JARBAS", "GREETING",
             "model LOADED mas BPE ausente — generate com CHAR fallback");
         let raw = crate::cortex::generate_via_model("ola");
-        if !raw.is_empty() && raw != "[CORTEX] No model loaded" {
+        if !raw.is_empty() && raw != crate::cortex::NO_MODEL_MSG {
             k_nano::slog_bin!("JARBAS", "GREETING", "CHAR LLM: \"{}\"", raw);
             n3_gen = Some(true);
             n4_intent = Some(true);
@@ -3606,6 +3513,16 @@ pub(crate) fn kernel_boot(
             if n3_gen.is_none() { n3_gen = Some(false); }
             if n4_intent.is_none() { n4_intent = Some(false); }
             if n5_voice.is_none() { n5_voice = Some(false); }
+        }
+    }
+
+    // Load Trinity MoE router weights (deterministic seed=42) before the N3 gate
+    {
+        let mut trinity = TRINITY.lock();
+        if !trinity.moe_router_loaded() {
+            let n_exp = trinity.agent_count();
+            let (embed, weight) = trinity::generate_router_weights(n_exp);
+            trinity.load_router(embed, weight);
         }
     }
 

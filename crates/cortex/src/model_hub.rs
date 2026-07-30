@@ -114,6 +114,19 @@ pub fn generate_from_slot(slot: ModelSlot, prompt: &str) -> Option<String> {
     hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
 }
 
+/// Generate with structured decoding from a specific slot.
+/// Masks logits at each token step to enforce the output grammar.
+pub fn generate_structured_from_slot(
+    slot: ModelSlot,
+    prompt: &str,
+    grammar: crate::structured_decode::OutputGrammar,
+) -> Option<String> {
+    let mut dec = crate::structured_decode::StructuredDecoder::new(grammar.into());
+    crate::cortex::DECODER_CELL.set(&mut dec as *mut crate::structured_decode::StructuredDecoder);
+    let hub = HUB.lock();
+    hub.slots[idx(slot)].as_ref().map(|m| m.generate(prompt))
+}
+
 pub fn is_complex_conversation(prompt: &str) -> bool {
     if prompt.len() > 160 {
         return true;

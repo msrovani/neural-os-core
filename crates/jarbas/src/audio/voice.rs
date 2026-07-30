@@ -4,6 +4,7 @@
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use event_bus::{CapabilityToken, Event, Receiver};
 use core::sync::atomic::{AtomicU8, Ordering};
+use alloc::string::ToString;
 use crate::audio::ringbuf::AudioRingBuffer;
 use crate::audio::vad::{VAD, VadTransition};
 use crate::audio::ser::{extract_features, classify_emotion};
@@ -36,6 +37,12 @@ pub struct JarbasVoiceAgent {
     emotion_samples: alloc::vec::Vec<i16>,
     /// Ticks restantes na janela pós-wake (0 = dormindo).
     wake_window: u32,
+    /// Texto do usuário pendente (aguardando resposta do assistente para parear).
+    pending_user_text: Option<alloc::string::String>,
+    /// Histórico de conversa: pares (user, assistant).
+    conversation: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>,
+    /// Máximo de turnos no histórico.
+    max_conversation: usize,
 }
 
 impl JarbasVoiceAgent {
@@ -49,6 +56,9 @@ impl JarbasVoiceAgent {
             listening: false,
             emotion_samples: alloc::vec::Vec::new(),
             wake_window: 0,
+            pending_user_text: None,
+            conversation: alloc::vec::Vec::new(),
+            max_conversation: 10,
         }
     }
 
@@ -138,16 +148,32 @@ impl Agent for JarbasVoiceAgent {
                     let text = crate::audio::stt::transcribe_global(&self.pcm_buffer);
                     if !text.is_empty() {
                         k_nano::slog_jarbas!("Jarbas", "info", "STT: \"{}\"", text);
+
+                        // --- Conversation continuity: prepend contexto das últimas 3 trocas ---
+                        let original = text.clone();
+                        self.pending_user_text = Some(original.clone());
+
+                        let enhanced = if !self.conversation.is_empty() {
+                            let mut ctx = alloc::string::String::new();
+                            let start = self.conversation.len().saturating_sub(3);
+                            for (u, a) in &self.conversation[start..] {
+                                ctx.push_str(&alloc::format!("User: {}\nAssistant: {}\n", u, a));
+                            }
+                            alloc::format!("{}\nUser: {}", ctx, text)
+                        } else {
+                            text
+                        };
+
                         let _ = k_nano::EVENT_BUS.publish(Event {
                             id: 0,
                             topic: alloc::string::String::from(crate::audio::TOPIC_STT_TEXT),
-                            payload: text.clone().into_bytes(),
+                            payload: original.into_bytes(),
                             token: CapabilityToken::Legacy(1),
                         });
                         let _ = k_nano::EVENT_BUS.publish(Event {
                             id: 0,
                             topic: alloc::string::String::from("USER_INTENT"),
-                            payload: text.into_bytes(),
+                            payload: enhanced.into_bytes(),
                             token: CapabilityToken::Legacy(1),
                         });
                         // Fecha janela após comando útil (economiza false STT).
@@ -171,7 +197,8 @@ impl Agent for JarbasVoiceAgent {
             }
         }
 
-        // Boca: HERMES_RESPONSE → Piper neural-lite / formant → AUDIO_OUT
+        // --- Conversation tracking: HERMES_RESPONSE → parear (user, assistant) ---
+        // TTS foi movido para JarbasAgent (jarvis.rs) que faz streaming para PLAYBACK_RING.
         while let Some(ev) = self.hermes_out.try_receive() {
             let text = core::str::from_utf8(&ev.payload).unwrap_or("");
             if text.is_empty() || text.starts_with("[JARBAS] Escutando") || text.starts_with("[JARBAS] 🎤")
@@ -179,18 +206,19 @@ impl Agent for JarbasVoiceAgent {
                 continue;
             }
 
-            k_nano::slog_jarbas!("Jarbas", "info", "TTS: \"{}\"", text);
-            let clean = text
-                .trim_start_matches("[JARBAS] ")
-                .trim_start_matches("JARVIS: ");
-            let pcm = crate::audio::skills::synthesize_tts(clean);
-
-            let _ = k_nano::EVENT_BUS.publish(Event {
-                id: 0,
-                topic: alloc::string::String::from(crate::audio::TOPIC_AUDIO_OUT),
-                payload: pcm.iter().flat_map(|s| s.to_le_bytes()).collect(),
-                token: CapabilityToken::Legacy(1),
-            });
+            if let Some(user_text) = self.pending_user_text.take() {
+                let clean = text
+                    .trim_start_matches("[JARBAS] ")
+                    .trim_start_matches("JARVIS: ");
+                self.conversation.push((user_text, clean.to_string()));
+                while self.conversation.len() > self.max_conversation {
+                    self.conversation.remove(0);
+                }
+                k_nano::slog_jarbas!("Jarbas", "info", "Conversa turno {}: user=\"{}\" asst=\"{}\"",
+                    self.conversation.len(),
+                    &self.conversation.last().map(|(u,_)| u.as_str()).unwrap_or("?"),
+                    &self.conversation.last().map(|(_,a)| a.as_str()).unwrap_or("?"));
+            }
         }
 
         AgentTickResult::Pending

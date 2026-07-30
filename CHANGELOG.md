@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### SESSION_229: Turing Test — JARBAS Plenitude + LLM 8 slots + BEI (2026-07-30)
+- **feat: JARBAS Rung 4** — Ring3 (TRY_ENTER_RING3=true), TTF Latin-1 (à á â ã é ê í ó ô õ ú ç), alpha blending real
+- **feat: Sprint 80** — fail-closed safety (ConsentGate deny por padrão), emotion classifier 16-feature
+- **feat: Streaming TTS** — primeiro áudio em ~50ms via StreamingTtsState, PLAYBACK_RING streaming
+- **feat: HW→Persona** — 4 perfis (StandardUma→Tool, AsymmetricCcd→Coach, IntelHybrid→Tutor, MultiDomainNuma→Auto)
+- **feat: AutoSkillGen→AppFactory** — gera WASM real no 3º matching
+- **feat: Matrix learning #311f** — OnDemandLearning + MatrixLearningAgent (454 LOC)
+- **feat: 8 modelos no ModelHub** — BITNET2B, VISION, LLAMA8B, RERANKER, RUSTCDR3, HWEXPRT, LEARNER, AGENT
+- **feat: dispatch_expert** — RUSTCODER_MODEL + HWEXPERT_MODEL + Agent slot roteados para modelos dedicados
+- **feat: MoE router neural** — load_router() no boot substitui keyword matching
+- **feat: Fine-tuning #312b** — FineTuningPipeline (DataCollector→TrainingAgent→BitNetTrainer)
+- **feat: Self-Learning OS #313** — SelfLearningAgent (PollEvery 5000, DataCollector→Hub)
+- **feat: SleepCycle #314a-f** — 6/6 itens (EWC, ring buffer 1000, Dream sintético, Pruning, Confidence, Ciclo)
+- **feat: Structured Decoding #412** — OutputGrammar, mask_logits, generate_structured, 10 self-tests
+- **feat: BudgetManager→scheduler** — watchdog Normal→Warning→Paused→Crashed
+- **fix: Model loading honesty** — ModelStatus, NO_MODEL_MSG, CortexAgent não cria toy model no boot
+- **fix: wasmi unwrap→Trap** — 6 call sites convertidos de panic para Trap seguro
+- **refactor: LEGACY migrations** — hardware/, adaptation/, p2p/, brain_mesh, core_pair, budget, hooks, wasm* (7.845 LOC)
+- **restore: LEGACY gems** — hardware topology, adaptation engine, MPMC queue, budget watchdog, dedup, HAL trait (3.500 LOC)
+- **docs: ADR INDEX** — ADR-0057 completa, ADR-0075 completa(parcial)
+
 ### SESSION_228: Hardware Boot + SysInfo Debug Card + Mouse Fix (2026-07-28)
 - **hardware boot**: pendrive unified (GPT/ESP) bootou Limine UEFI até Jarbas em notebook real
 - **fix(compositor)**: `render_app_content` agora renderiza `WindowContent::Card` via

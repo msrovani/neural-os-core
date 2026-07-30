@@ -5,24 +5,19 @@ use alloc::boxed::Box;
 use core::f32::NEG_INFINITY;
 use core::cell::UnsafeCell;
 use crate::ngram_spec::{NgramSpeculator, verify_draft, record_spec_hit, record_spec_bonus_forward, record_spec_tokens, record_classic_step};
-// ponytail: structured_decode module disabled (pre-existing)
-pub struct StructuredDecoder;
-pub enum DecodeMode { None, Grammar, Json, Code, Alpha, Number }
-impl StructuredDecoder {
-    pub fn new(_mode: DecodeMode) -> Self { StructuredDecoder }
-    pub fn step(&mut self, _token: u16) {}
-    pub fn mask_logits(&self, _logits: &mut [f32]) {}
-}
+// Structured decoder types from the real module (JSON/Shell/Skill grammar FSMs)
+pub use crate::structured_decode::{StructuredDecoder, DecodeMode, OutputGrammar};
+
 // ponytail: threads &mut StructuredDecoder through Model trait boundary without changing the trait.
-struct DecoderCell(UnsafeCell<Option<*mut StructuredDecoder>>);
+pub(crate) struct DecoderCell(UnsafeCell<Option<*mut StructuredDecoder>>);
 unsafe impl Send for DecoderCell {}
 unsafe impl Sync for DecoderCell {}
 impl DecoderCell {
     const fn new() -> Self { Self(UnsafeCell::new(None)) }
-    fn set(&self, ptr: *mut StructuredDecoder) { unsafe { *self.0.get() = Some(ptr); } }
-    fn take(&self) -> Option<*mut StructuredDecoder> { unsafe { (*self.0.get()).take() } }
+    pub(crate) fn set(&self, ptr: *mut StructuredDecoder) { unsafe { *self.0.get() = Some(ptr); } }
+    pub(crate) fn take(&self) -> Option<*mut StructuredDecoder> { unsafe { (*self.0.get()).take() } }
 }
-static DECODER_CELL: DecoderCell = DecoderCell::new();
+pub(crate) static DECODER_CELL: DecoderCell = DecoderCell::new();
 
 pub const TOPIC_LLM_REQUEST: &str = "LLM_REQUEST";
 pub const TOPIC_LLM_RESPONSE: &str = "LLM_RESPONSE";
@@ -2317,12 +2312,77 @@ pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::ne
 pub static CURRENT_MODEL_EMBED_DIM: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
 
+/// Diagnóstico honesto do modelo carregado
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ModelStatus {
+    NoneLoaded = 0,
+    ToyFallback = 1,
+    BitNetReal = 2,
+}
+
+impl ModelStatus {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NoneLoaded => "none",
+            Self::ToyFallback => "toy-fallback",
+            Self::BitNetReal => "bitnet-real",
+        }
+    }
+    pub fn is_ai_ready(self) -> bool {
+        matches!(self, Self::BitNetReal)
+    }
+}
+
+pub static MODEL_STATUS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+pub fn model_status() -> ModelStatus {
+    match MODEL_STATUS.load(core::sync::atomic::Ordering::Acquire) {
+        2 => ModelStatus::BitNetReal,
+        1 => ModelStatus::ToyFallback,
+        _ => ModelStatus::NoneLoaded,
+    }
+}
+
+/// Structured info about the currently loaded model
+pub struct ModelInfo {
+    pub status: ModelStatus,
+    pub embed_dim: usize,
+    pub vocab_size: u32,
+    pub num_layers: usize,
+    pub max_seq: usize,
+    pub hidden: usize,
+}
+
+impl core::fmt::Display for ModelInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "model={} dim={} vocab={} layers={} max_seq={} hidden={}",
+            self.status.name(), self.embed_dim, self.vocab_size, self.num_layers, self.max_seq, self.hidden)
+    }
+}
+
+pub fn model_info() -> Option<ModelInfo> {
+    let guard = CURRENT_MODEL.lock();
+    let st = model_status();
+    guard.as_ref().map(|m| ModelInfo {
+        status: st,
+        embed_dim: m.embed_dim(),
+        vocab_size: m.vocab_size(),
+        num_layers: 0, // ponytail: trait doesn't expose num_layers yet
+        max_seq: m.max_seq(),
+        hidden: 0,
+    })
+}
+
+pub const NO_MODEL_MSG: &str = "[CORTEX] AI indisponível — nenhum modelo carregado";
+
 pub fn set_model(model: Box<dyn Model>) {
     CURRENT_MODEL_EMBED_DIM.store(model.embed_dim(), core::sync::atomic::Ordering::Relaxed);
     *CURRENT_MODEL.lock() = Some(model);
+    MODEL_STATUS.store(ModelStatus::BitNetReal as u8, core::sync::atomic::Ordering::Release);
     crate::model_hub::mark_active(true);
-    // ponytail: bin registra load_status via callback após retorno
-    k_nano::slog_cortex!("CORTEX", "info", "Model swapped (Active+hub).");
+    let dim = CURRENT_MODEL_EMBED_DIM.load(core::sync::atomic::Ordering::Relaxed);
+    k_nano::slog_cortex!("CORTEX", "info", "model=bitnet-real dim={} status=AI_READY", dim);
 }
 
 /// Generate text using the currently loaded model (simplified, no Trinity routing).
@@ -2331,7 +2391,7 @@ pub fn generate_via_model(prompt: &str) -> String {
     let guard = CURRENT_MODEL.lock();
     match guard.as_ref() {
         Some(m) => m.generate(prompt),
-        None => String::from("[CORTEX] No model loaded"),
+        None => String::from(NO_MODEL_MSG),
     }
 }
 
@@ -2343,6 +2403,20 @@ pub fn generate_via_model_with_decoder(prompt: &str, dec: &mut StructuredDecoder
         Some(m) => m.generate(prompt),
         None => String::from("[CORTEX] No model loaded"),
     }
+}
+
+/// Generate text with structured decoding by grammar constraint.
+/// Selects the appropriate FSM and masks logits at each step to enforce
+/// the output format (JSON, shell-safe commands, skill commands, or free text).
+///
+/// # Examples (conceptual)
+/// ```
+/// let json = cortex::generate_structured("list 3 colors", OutputGrammar::Json);
+/// assert!(json.starts_with('{') && json.ends_with('}'));
+/// ```
+pub fn generate_structured(prompt: &str, grammar: OutputGrammar) -> String {
+    let mut dec = StructuredDecoder::new(grammar.into());
+    generate_via_model_with_decoder(prompt, &mut dec)
 }
 
 /// Registra .bitnet em slot nomeado sem necessariamente virar Active.

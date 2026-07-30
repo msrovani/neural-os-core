@@ -10,6 +10,10 @@
 //! Substitui a VM `Op` custom (`wasm_exec.rs`) e o interpretador parcial
 //! (`wasm.rs`) — aposentados pela ADR-0059.
 
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 use wasmi::{Config, Engine, Linker, Module, Store};
@@ -47,12 +51,13 @@ impl HostState {
 pub const DEFAULT_FUEL: u64 = 5_000_000;
 
 /// Verifica cap bitmask e roteia Escalate para PermissionGate.
-fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &str, name: &str) -> Result<(), wasmi::core::Trap> {
+/// Returns `Err(wasmi::Error)` (trap) on denial.
+fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &str, name: &str) -> Result<(), wasmi::Error> {
     let held = caller.data().caps;
     // 1. Bitmask check
     if held & required == 0 {
         k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
-        return Err(wasmi::core::Trap::new("capability denied (bitmask)"));
+        return Err(wasmi::Error::new("capability denied (bitmask)"));
     }
     // 2. PermissionGate escalate check
     // Membrane::check é chamado pelo PermissionGate internamente
@@ -61,12 +66,12 @@ fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &s
         crate::permission_gate::PermissionVerdict::Allow => Ok(()),
         crate::permission_gate::PermissionVerdict::Deny => {
             k_nano::telemetry::TELEMETRY.push(4, 0, &required.to_ne_bytes());
-            Err(wasmi::core::Trap::new("permission denied (gate)"))
+            Err(wasmi::Error::new("permission denied (gate)"))
         }
         crate::permission_gate::PermissionVerdict::Pending { id } => {
             // O PermissionGate já fez spin-wait; se chegou aqui é Allow ou Deny
             k_nano::slog_hermes!("WASMI", "warn", "Pending HITL #{} — should not reach here", id);
-            Err(wasmi::core::Trap::new("HITL pending"))
+            Err(wasmi::Error::new("HITL pending"))
         }
     }
 }
@@ -76,8 +81,8 @@ fn check_cap(caller: &wasmi::Caller<'_, HostState>, required: u32, namespace: &s
 fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> {
     // ── aios::log(ptr,len) ────────────────────────────────────────────────
     linker.func_wrap("aios", "log",
-        |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| {
-            check_cap(&caller, CAP_LOG, "aios", "log").unwrap();
+        |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
+            check_cap(&caller, CAP_LOG, "aios", "log")?;
             if let Some(wasmi::Extern::Memory(mem)) = caller.get_export("memory") {
                 let data = mem.data(&caller);
                 let (p, l) = (ptr as usize, len as usize);
@@ -89,46 +94,47 @@ fn install_host_abi(linker: &mut Linker<HostState>) -> Result<(), &'static str> 
                 }
             }
             k_nano::telemetry::TELEMETRY.push(3, 0, &[0; 32]); // EV_WASM_CALL
+            Ok(())
         },
     ).map_err(|_| "linker aios::log")?;
 
     // ── aios::debug(i32) -> i32 ─────────────────────────────────────────────
     linker.func_wrap("aios", "debug",
-        |caller: wasmi::Caller<'_, HostState>, val: i32| -> i32 {
-            check_cap(&caller, CAP_LOG, "aios", "debug").unwrap();
-            val
+        |caller: wasmi::Caller<'_, HostState>, val: i32| -> Result<i32, wasmi::Error> {
+            check_cap(&caller, CAP_LOG, "aios", "debug")?;
+            Ok(val)
         },
     ).map_err(|_| "linker aios::debug")?;
 
     // ── aios::get_tick() -> i64 ─────────────────────────────────────────────
     linker.func_wrap("aios", "get_tick",
-        |caller: wasmi::Caller<'_, HostState>| -> i64 {
-            check_cap(&caller, CAP_LOG, "aios", "get_tick").unwrap();
-            k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as i64
+        |caller: wasmi::Caller<'_, HostState>| -> Result<i64, wasmi::Error> {
+            check_cap(&caller, CAP_LOG, "aios", "get_tick")?;
+            Ok(k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as i64)
         },
     ).map_err(|_| "linker aios::get_tick")?;
 
     // ── aios_net::http_get(ptr,len) -> i32 ──────────────────────────────────
     linker.func_wrap("aios_net", "http_get",
-        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> i32 {
-            check_cap(&caller, CAP_NET, "aios_net", "http_get").unwrap();
-            -1 // ponytail: stub — sem HTTP real
+        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> Result<i32, wasmi::Error> {
+            check_cap(&caller, CAP_NET, "aios_net", "http_get")?;
+            Ok(-1) // ponytail: stub — sem HTTP real
         },
     ).map_err(|_| "linker aios_net::http_get")?;
 
     // ── aios_fs::fs_read(ptr,len,max) -> i32 ────────────────────────────────
     linker.func_wrap("aios_fs", "fs_read",
-        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32, _max: i32| -> i32 {
-            check_cap(&caller, CAP_FS, "aios_fs", "fs_read").unwrap();
-            0 // ponytail: stub
+        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32, _max: i32| -> Result<i32, wasmi::Error> {
+            check_cap(&caller, CAP_FS, "aios_fs", "fs_read")?;
+            Ok(0) // ponytail: stub
         },
     ).map_err(|_| "linker aios_fs::fs_read")?;
 
     // ── aios_fs::fs_write(ptr,len) -> i32 ───────────────────────────────────
     linker.func_wrap("aios_fs", "fs_write",
-        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> i32 {
-            check_cap(&caller, CAP_FS, "aios_fs", "fs_write").unwrap();
-            0 // ponytail: stub
+        |caller: wasmi::Caller<'_, HostState>, _ptr: i32, _len: i32| -> Result<i32, wasmi::Error> {
+            check_cap(&caller, CAP_FS, "aios_fs", "fs_write")?;
+            Ok(0) // ponytail: stub
         },
     ).map_err(|_| "linker aios_fs::fs_write")?;
 
@@ -287,7 +293,208 @@ pub fn self_test() -> bool {
     }
 }
 
+// ─── WASM Bridge — ADR-0059 F3: `register_wasm_skill` → wasmi_rt ─────────────
 
+const WASM_MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6D]; // \0asm
+const WASM_VERSION: [u8; 4] = [0x01, 0x00, 0x00, 0x00];
+
+#[derive(Debug, Clone)]
+pub struct WasmExport {
+    pub name: String,
+    pub kind: u8, // 0=func, 1=table, 2=mem, 3=global
+    pub index: u32,
+}
+
+#[derive(Debug, Clone)]
+struct WasmModule {
+    pub functions: u32,
+    pub exports: Vec<WasmExport>,
+}
+
+/// Parseia cabeçalho WASM e tabela de exports
+fn parse_wasm(bytecode: &[u8]) -> Result<WasmModule, &'static str> {
+    if bytecode.len() < 8 {
+        return Err("Wasm too short");
+    }
+    if bytecode[0..4] != WASM_MAGIC {
+        return Err("Invalid WASM magic");
+    }
+    if bytecode[4..8] != WASM_VERSION {
+        return Err("Unsupported WASM version");
+    }
+
+    let mut off = 8u32;
+    let mut functions = 0u32;
+    let mut exports = Vec::new();
+
+    while (off as usize) < bytecode.len() {
+        let section_id = bytecode[off as usize];
+        off += 1;
+        if off as usize + 4 > bytecode.len() { break; }
+        let section_len = u32::from_le_bytes([
+            bytecode[off as usize],
+            bytecode[off as usize + 1],
+            bytecode[off as usize + 2],
+            bytecode[off as usize + 3],
+        ]);
+        off += 4;
+
+        let section_end = off + section_len;
+        if section_end as usize > bytecode.len() { break; }
+
+        match section_id {
+            1 => { /* Type section */ }
+            3 => { // Function section
+                if (off as usize) < bytecode.len() {
+                    functions = bytecode[off as usize] as u32;
+                }
+            }
+            7 => { // Export section
+                if off as usize >= bytecode.len() { break; }
+                let count = bytecode[off as usize] as usize;
+                off += 1;
+                for _ in 0..count {
+                    if off as usize + 1 > bytecode.len() { break; }
+                    let name_len = bytecode[off as usize] as usize;
+                    off += 1;
+                    if off as usize + name_len > bytecode.len() { break; }
+                    let name = core::str::from_utf8(&bytecode[off as usize..off as usize + name_len])
+                        .unwrap_or("?")
+                        .to_string();
+                    off += name_len as u32;
+                    if off as usize + 2 > bytecode.len() { break; }
+                    let kind = bytecode[off as usize];
+                    let index = u32::from_le_bytes([
+                        bytecode[off as usize],
+                        bytecode[off as usize + 1],
+                        bytecode[off as usize + 2],
+                        bytecode[off as usize + 3],
+                    ]);
+                    off += 2;
+                    if kind == 0 {
+                        exports.push(WasmExport { name, kind, index });
+                    }
+                }
+            }
+            _ => {}
+        }
+        off = section_end;
+    }
+
+    Ok(WasmModule { functions, exports })
+}
+
+// ─── WASI→Skill Bridge ───────────────────────────────────────────────────────
+
+struct WasmSkillBridge {
+    skill_name: String,
+    registered: bool,
+}
+
+static WASM_SKILL_BRIDGE: spin::Mutex<WasmSkillBridge> = spin::Mutex::new(WasmSkillBridge {
+    skill_name: String::new(),
+    registered: false,
+});
+
+/// Registra uma skill WASM no SkillRegistry
+pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<(), &'static str> {
+    let module = parse_wasm(bytecode)?;
+    k_nano::slog_hermes!("Wasm", "info", "Registrando '{}' ({} exports)...", name, module.exports.len());
+
+    let skill = WasmSkill::new(bytecode, name, desc, module.exports.clone());
+    crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
+    {
+        let mut bridge = WASM_SKILL_BRIDGE.lock();
+        bridge.skill_name = String::from(name);
+        bridge.registered = true;
+    }
+    k_nano::slog_hermes!("Wasm", "info", "Skill '{}' registrada com {} exports.", name, module.exports.len());
+    Ok(())
+}
+
+/// Skill que executa WASM bytecode via wasmi real.
+pub struct WasmSkill {
+    bytecode: Vec<u8>,
+    name: String,
+    desc: String,
+    exports: Vec<WasmExport>,
+}
+
+impl WasmSkill {
+    pub fn new(bytecode: &[u8], name: &str, desc: &str, exports: Vec<WasmExport>) -> Self {
+        WasmSkill {
+            bytecode: bytecode.to_vec(),
+            name: String::from(name),
+            desc: String::from(desc),
+            exports,
+        }
+    }
+}
+
+/// Heurística para converter payload em argumentos i32 para WASM.
+/// Tenta: parse como int, depois byte len, depois 0.
+fn payload_to_args(payload: &[u8]) -> Vec<i32> {
+    if payload.is_empty() {
+        vec![0]
+    } else if let Ok(text) = core::str::from_utf8(payload) {
+        match text.trim().parse::<i32>() {
+            Ok(n) => vec![n],
+            Err(_) => vec![payload.len() as i32],
+        }
+    } else {
+        vec![payload.len() as i32]
+    }
+}
+
+impl skill_registry::Skill for WasmSkill {
+    fn manifest(&self) -> skill_registry::McpManifest {
+        skill_registry::McpManifest {
+            name: self.name.clone(),
+            description: self.desc.clone(),
+            required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: skill_registry::OutputSchema::Any,
+            idempotent: false,
+            contracts: Vec::new(),
+        }
+    }
+
+    fn verify(&self, _payload: &[u8]) -> Result<(), &'static str> {
+        // Verifica se o bytecode WASM é válido pelo wasmi
+        let mut c = wasmi::Config::default();
+        c.consume_fuel(true);
+        wasmi::Module::new(&wasmi::Engine::new(&c), &self.bytecode)
+            .map(|_| ())
+            .map_err(|_| "WASM: bytecode inválido")
+    }
+
+    fn execute(&self, payload: &[u8]) -> Result<Vec<u8>, &'static str> {
+        // Tenta "main" primeiro, depois "_start", depois primeira export
+        let func_name = self.exports.iter().find(|e| e.name == "main" || e.name == "_start")
+            .or_else(|| self.exports.first())
+            .map(|e| &e.name[..])
+            .unwrap_or("");
+
+        if func_name.is_empty() {
+            return Err("WASM: nenhuma função exportada");
+        }
+
+        let args = payload_to_args(payload);
+        match run_wasm(&self.bytecode, func_name, &args, 1) {
+            Ok(result) => Ok(alloc::format!("[WASM] {} → {}", func_name, result).into_bytes()),
+            Err(e) => {
+                if func_name == "main" || func_name == "_start" {
+                    run_wasm(&self.bytecode, func_name, &[], 1)
+                        .map(|r| alloc::format!("[WASM] {} → {}", func_name, r).into_bytes())
+                        .map_err(|_| e)
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+}
 
 
 

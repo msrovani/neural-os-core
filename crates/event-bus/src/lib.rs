@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub mod bus;
 pub mod capability;
+pub mod dedup;
 pub mod channel;
 pub mod event;
 pub mod latent;

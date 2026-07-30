@@ -433,6 +433,47 @@ impl TrinityRouter {
     }
 }
 
+/// Generate deterministic router weights using LCG with seed 42.
+/// Embedding table: VOCAB×HIDDEN random f32 in [-0.1, 0.1].
+/// Weight matrix: HIDDEN×num_experts PackedTernaryTensor (-1/0/1).
+pub fn generate_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor) {
+    let mut seed: u32 = 42;
+    let embed_size = VOCAB * ROUTER_HIDDEN;
+
+    // Embedding table: LCG → f32 in [-0.1, 0.1]
+    let mut embed = vec![0.0f32; embed_size];
+    for v in embed.iter_mut() {
+        seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+        let r = (seed >> 16) & 0x7FFF;
+        *v = (r as f32 / 32767.0) * 0.2 - 0.1;
+    }
+
+    // PackedTernaryTensor: same LCG as cortex::random_ternary
+    let rows = ROUTER_HIDDEN;
+    let cols = num_experts;
+    let packed_len = (rows * cols + 3) / 4;
+    let mut packed = vec![0u8; packed_len];
+    for byte in packed.iter_mut() {
+        let mut b = 0u8;
+        for j in 0..4 {
+            seed = seed.wrapping_mul(1103515245).wrapping_add(12345);
+            let r = (seed % 3) as i8;
+            let tv = if r == 2 { -1i8 } else { r };
+            let bits = match tv {
+                -1 => 0b10,
+                0 => 0b00,
+                1 => 0b01,
+                _ => 0b00,
+            };
+            b |= bits << (j * 2);
+        }
+        *byte = b;
+    }
+    let weight = PackedTernaryTensor { shape: (rows, cols), packed_data: packed };
+
+    (embed, weight)
+}
+
 pub fn init_trinity() -> TrinityRouter {
     let mut router = TrinityRouter::new();
     // Generator primeiro = default seguro se find() falhar (Sprint 107 Loop2).

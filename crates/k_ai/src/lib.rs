@@ -42,6 +42,7 @@ pub mod self_heal;
 pub mod self_heal_agent;
 pub mod self_heal_disk;
 pub mod training_agent;
+pub mod fine_tuning_pipeline;
 pub mod fs;
 pub mod trust;
 pub mod shutdown;
@@ -53,6 +54,7 @@ pub mod safety_invariants;
 pub mod security_detectors;
 pub mod self_optimizing_scheduler;
 /// ADR-0063 F2–F5 SGDB (MemoryDoc · Engine · ART · BQ) — MVP Onda 5.
+pub mod self_learning;
 pub mod sgdb;
 /// Compat: re-export status do stub antigo.
 pub mod sgdb_residual {

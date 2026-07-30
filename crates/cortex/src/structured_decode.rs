@@ -1,10 +1,6 @@
 //! Structured Decoding — FSM comprimido para geracao constraint.
 //! Baseado em SGLang compressed FSM (arXiv 2405.16818).
-//! Mascara logits no BitNet decoder para tokens validos (JSON, SKILL.md, shell).
-
-//! Structured Decoding — FSM comprimido para geracao constraint.
-//! Baseado em SGLang compressed FSM (arXiv 2405.16818).
-//! Mascara logits no BitNet decoder para tokens validos (JSON, numbers, alpha, shell).
+//! Mascara logits no BitNet decoder para tokens validos (JSON, numbers, shell, skill).
 
 use alloc::vec::Vec;
 use alloc::vec;
@@ -26,6 +22,51 @@ pub enum DecodeMode {
     Alpha,         // apenas letras
     SkillCmd,      // comandos (/status, /ping, etc)
     ShellSafe,     // comandos shell seguros (sem pipe, redirect, etc)
+}
+
+/// Gramática de saída para decodificação estruturada — API pública.
+///
+/// Mapeia para o `DecodeMode` interno que implementa o FSM comprimido
+/// (SGLang-style, arXiv 2405.16818).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutputGrammar {
+    /// JSON válido: only `{}[]""` `true/false/null` `0-9` `:` `,` whitespace
+    Json,
+    /// Shell seguro: alphanumeric + `/` `-` `_` `.` ` ` — sem `|` `>` `<` `;` `&` `` ` `` `$`
+    Shell,
+    /// Skill command: comandos estilo `/skill` — full text structural (futuro LLM)
+    Skill,
+    /// Sem constraint (free text, passthrough)
+    Raw,
+}
+
+impl From<OutputGrammar> for DecodeMode {
+    fn from(g: OutputGrammar) -> Self {
+        match g {
+            OutputGrammar::Json => DecodeMode::Json,
+            OutputGrammar::Shell => DecodeMode::ShellSafe,
+            OutputGrammar::Skill => DecodeMode::Free,  // ponytail: full-text structural is a future concern
+            OutputGrammar::Raw => DecodeMode::Free,
+        }
+    }
+}
+
+/// Verifica se um caractere é perigoso em contexto shell (pipe, redirect, etc).
+/// Usado pelo self-test para validar saída em modo Shell.
+pub fn is_shell_dangerous(c: char) -> bool {
+    matches!(c, '|' | '>' | '<' | ';' | '&' | '`' | '$' | '(' | ')')
+}
+
+/// Verificação básica de estrutura JSON: começa com `{`/`[` e termina com `}`/`]`.
+/// Não é um parser completo — suficiente para self-test do FSM.
+pub fn looks_like_json(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    let first = s.as_bytes()[0];
+    let last = s.as_bytes()[s.len() - 1];
+    (first == b'{' && last == b'}') || (first == b'[' && last == b']')
 }
 
 /// Maquina de estados finita comprimida para decode constraint
@@ -180,5 +221,173 @@ impl StructuredDecoder {
 
     pub fn status(&self) -> String {
         alloc::format!("[DECODE] mode={:?} state={} valid={}", self.mode, self.state, self.valid_tokens.len())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test 1: OutputGrammar → DecodeMode mapping
+    #[test]
+    fn test_output_grammar_mapping() {
+        assert_eq!(DecodeMode::from(OutputGrammar::Json), DecodeMode::Json);
+        assert_eq!(DecodeMode::from(OutputGrammar::Shell), DecodeMode::ShellSafe);
+        assert_eq!(DecodeMode::from(OutputGrammar::Skill), DecodeMode::Free);
+        assert_eq!(DecodeMode::from(OutputGrammar::Raw), DecodeMode::Free);
+    }
+
+    /// Test 2: JSON FSM — starts with { and follows valid transitions
+    #[test]
+    fn test_json_fsm_transitions() {
+        let mut dec = StructuredDecoder::new(DecodeMode::Json);
+        // Initial state should allow JSON starters: { [ " t f n 0-9 -
+        assert!(dec.valid_tokens.contains(&(b'{' as u16 + CHAR_OFFSET)));
+        assert!(dec.valid_tokens.contains(&(b'[' as u16 + CHAR_OFFSET)));
+        assert!(dec.valid_tokens.contains(&(b'"' as u16 + CHAR_OFFSET)));
+        // After {, we expect " }
+        dec.step(b'{' as u16 + CHAR_OFFSET);
+        assert!(dec.valid_tokens.contains(&(b'"' as u16 + CHAR_OFFSET)));
+        assert!(dec.valid_tokens.contains(&(b'}' as u16 + CHAR_OFFSET)));
+        // Close the object
+        dec.step(b'}' as u16 + CHAR_OFFSET);
+        // After closing, back to state 0 (can start a new value)
+        assert!(dec.valid_tokens.contains(&(b'{' as u16 + CHAR_OFFSET)));
+    }
+
+    /// Test 3: JSON FSM — basic object {} closing
+    #[test]
+    fn test_json_object_complete() {
+        let mut dec = StructuredDecoder::new(DecodeMode::Json);
+        // {} — simulate the token sequence
+        assert!(dec.valid_tokens.contains(&(b'{' as u16 + CHAR_OFFSET)), "state 0 should allow {{");
+        dec.step(b'{' as u16 + CHAR_OFFSET);
+        assert!(dec.valid_tokens.contains(&(b'}' as u16 + CHAR_OFFSET)), "state 1 should allow }}");
+        dec.step(b'}' as u16 + CHAR_OFFSET);
+        // Back to state 0 — should allow starters again
+        assert!(dec.valid_tokens.contains(&(b'{' as u16 + CHAR_OFFSET)), "back to state 0");
+    }
+
+    /// Test 4: Shell FSM — rejects dangerous characters
+    #[test]
+    fn test_shell_safe_rejects_dangerous() {
+        let dec = StructuredDecoder::new(DecodeMode::ShellSafe);
+        let dangerous_chars = b"|><;&`$()";
+        for &c in dangerous_chars {
+            let tok = c as u16 + CHAR_OFFSET;
+            assert!(
+                !dec.valid_tokens.contains(&tok),
+                "ShellSafe should reject '{}' (token {})",
+                c as char, tok
+            );
+        }
+        // Safe chars should be allowed
+        let safe_chars = b"ls -la /tmp/file.txt";
+        for &c in safe_chars {
+            let tok = c as u16 + CHAR_OFFSET;
+            assert!(
+                dec.valid_tokens.contains(&tok),
+                "ShellSafe should allow '{}' (token {})",
+                c as char, tok
+            );
+        }
+    }
+
+    /// Test 5: Shell FSM — round-trip through mask_logits
+    #[test]
+    fn test_shell_mask_logits() {
+        let dec = StructuredDecoder::new(DecodeMode::ShellSafe);
+        let mut logits = [0.0f32; VOCAB_SIZE as usize];
+        dec.mask_logits(&mut logits);
+        // Dangerous char tokens should be NEG_INFINITY
+        let dangerous = b"|><;&`$()";
+        for &c in dangerous {
+            let tok = (c as u16 + CHAR_OFFSET) as usize;
+            if tok < logits.len() {
+                assert!(
+                    logits[tok] == f32::NEG_INFINITY,
+                    "char '{}' should be masked",
+                    c as char
+                );
+            }
+        }
+        // Safe char tokens should be 0.0 (unmasked)
+        let safe = b"ls -la";
+        for &c in safe {
+            let tok = (c as u16 + CHAR_OFFSET) as usize;
+            if tok < logits.len() {
+                assert_eq!(logits[tok], 0.0, "char '{}' should not be masked", c as char);
+            }
+        }
+    }
+
+    /// Test 6: JSON mask_logits — first token must be a JSON starter
+    #[test]
+    fn test_json_mask_logits_first_token() {
+        let dec = StructuredDecoder::new(DecodeMode::Json);
+        let mut logits = [0.0f32; VOCAB_SIZE as usize];
+        dec.mask_logits(&mut logits);
+        // '{' must be valid (not masked)
+        let brace_open = (b'{' as u16 + CHAR_OFFSET) as usize;
+        assert_eq!(logits[brace_open], 0.0, "{{ should not be masked at start");
+        // '|' must be masked
+        let pipe = (b'|' as u16 + CHAR_OFFSET) as usize;
+        assert_eq!(logits[pipe], f32::NEG_INFINITY, "pipe should be masked in JSON mode");
+    }
+
+    /// Test 7: OutputGrammar JSON — verify generated tokens start with { and end with }
+    #[test]
+    fn test_json_output_structure() {
+        // We cannot run the full model in no_std test context,
+        // but we verify the FSM transitions produce a valid starting sequence.
+        let mut dec = StructuredDecoder::new(DecodeMode::Json);
+        // Step 1: '{'
+        let t1 = b'{' as u16 + CHAR_OFFSET;
+        assert!(dec.valid_tokens.contains(&t1), "state 0 must allow {{");
+        dec.step(t1);
+        // Step 2: '}'
+        let t2 = b'}' as u16 + CHAR_OFFSET;
+        assert!(dec.valid_tokens.contains(&t2), "after {{ must allow }}");
+        dec.step(t2);
+        // State is back to 0 — verified by allow {{ again
+        let t3 = b'{' as u16 + CHAR_OFFSET;
+        assert!(dec.valid_tokens.contains(&t3), "after {{}} must return to state 0");
+    }
+
+    /// Test 8: Shell safe chars — is_shell_dangerous helper
+    #[test]
+    fn test_is_shell_dangerous() {
+        assert!(is_shell_dangerous('|'));
+        assert!(is_shell_dangerous('>'));
+        assert!(is_shell_dangerous('<'));
+        assert!(is_shell_dangerous(';'));
+        assert!(is_shell_dangerous('&'));
+        assert!(is_shell_dangerous('`'));
+        assert!(is_shell_dangerous('$'));
+        assert!(!is_shell_dangerous('a'));
+        assert!(!is_shell_dangerous('/'));
+        assert!(!is_shell_dangerous('-'));
+    }
+
+    /// Test 9: looks_like_json helper
+    #[test]
+    fn test_looks_like_json() {
+        assert!(looks_like_json("{}"));
+        assert!(looks_like_json("[]"));
+        assert!(looks_like_json(r#"{"a":1}"#));
+        assert!(looks_like_json("[1,2,3]"));
+        assert!(!looks_like_json("hello"));
+        assert!(!looks_like_json(""));
+    }
+
+    /// Test 10: Free mode passes everything through
+    #[test]
+    fn test_free_mode_no_masking() {
+        let dec = StructuredDecoder::new(DecodeMode::Free);
+        let mut logits = [42.0f32; VOCAB_SIZE as usize];
+        dec.mask_logits(&mut logits);
+        for v in logits.iter() {
+            assert_eq!(*v, 42.0, "Free mode should not modify logits");
+        }
     }
 }

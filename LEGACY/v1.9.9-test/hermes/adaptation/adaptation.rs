@@ -8,144 +8,44 @@
 //! 2. Classify hardware generation (Old vs Modern Xeon)
 //! 3. Generate ExecutionStrategy based on hardware capabilities
 //! 4. Apply policies: socket isolation, core pinning, SIMD dispatch, MoE sizing
-//!
-//! Restored from LEGACY/v1.9.9-test/hermes/adaptation/adaptation.rs
-//! Xeon topology types inlined (hardware/ module is in LEGACY).
 
 #![allow(dead_code)]
 #![allow(unused_unsafe)]
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-// ─── Xeon topology types (inlined from LEGACY k_nano/hardware/xeon.rs) ───
+pub mod client;
+pub mod epyc;
 
-/// Xeon Generation Classification
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum XeonGeneration {
-    Unknown = 0,
-    Old = 1,
-    Modern = 2,
-    Latest = 3,
-}
-
-/// Interconnect Type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum InterconnectType {
-    Unknown = 0,
-    QPI = 1,
-    UPI = 2,
-    DMI = 3,
-}
-
-/// CPU Instruction Flags
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-pub struct CpuFlags {
-    pub avx2: bool,
-    pub avx512f: bool,
-    pub avx512vnni: bool,
-    pub amx: bool,
-    pub bmi2: bool,
-    pub fma: bool,
-    pub popcnt: bool,
-    pub sse42: bool,
-}
-
-/// Cache information per socket
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-pub struct CacheInfo {
-    pub l1d: u32,
-    pub l1i: u32,
-    pub l2: u32,
-    pub l3: u32,
-    pub line_size: u32,
-    pub associativity: u8,
-}
-
-/// Physical Socket information
-#[derive(Debug, Clone, Copy, Default)]
-#[repr(C)]
-pub struct SocketInfo {
-    pub socket_id: u8,
-    pub physical_cores: u8,
-    pub logical_threads: u8,
-    pub apic_start: u32,
-    pub cache: CacheInfo,
-    pub numa_nodes: [u8; 4],
-    pub numa_count: u8,
-}
-
-/// Complete Xeon Topology Report
-#[derive(Debug, Clone, Copy)]
-#[repr(C)]
-pub struct XeonTopologyReport {
-    pub socket_count: u8,
-    pub total_physical_cores: u16,
-    pub total_logical_threads: u16,
-    pub sockets: [SocketInfo; 2],
-    pub flags: CpuFlags,
-    pub generation: XeonGeneration,
-    pub total_memory: u64,
-    pub interconnect: InterconnectType,
-}
-
-impl Default for XeonTopologyReport {
-    fn default() -> Self {
-        Self {
-            socket_count: 1,
-            total_physical_cores: 1,
-            total_logical_threads: 1,
-            sockets: [SocketInfo::default(), SocketInfo::default()],
-            flags: CpuFlags::default(),
-            generation: XeonGeneration::Unknown,
-            total_memory: 0,
-            interconnect: InterconnectType::Unknown,
-        }
-    }
-}
-
-/// Get L3 cache size per socket (bytes)
-pub fn l3_cache_per_socket(report: &XeonTopologyReport) -> u32 {
-    if report.socket_count > 0 {
-        report.sockets[0].cache.l3
-    } else {
-        0
-    }
-}
-
-/// Calculate optimal MoE size to fit in L3 cache
-pub fn optimal_moe_expert_size(report: &XeonTopologyReport, num_experts: usize) -> usize {
-    let l3_size = l3_cache_per_socket(report) as usize;
-    let available = (l3_size * 80) / 100;
-    available / num_experts.max(1)
-}
-
-pub fn has_avx512(report: &XeonTopologyReport) -> bool { report.flags.avx512f }
-pub fn has_amx(report: &XeonTopologyReport) -> bool { report.flags.amx }
-pub fn is_old_xeon(report: &XeonTopologyReport) -> bool { report.generation == XeonGeneration::Old }
-pub fn is_modern_xeon(report: &XeonTopologyReport) -> bool {
-    report.generation == XeonGeneration::Modern || report.generation == XeonGeneration::Latest
-}
-
-pub fn recommended_simd_width(report: &XeonTopologyReport) -> u32 {
-    if report.flags.amx { 512 }
-    else if report.flags.avx512f { 512 }
-    else if report.flags.avx2 { 256 }
-    else { 128 }
-}
-
-// ─── Core adaptation logic ───
+/// Re-export Xeon topology types from k-nano
+pub use k_nano::hardware::xeon::{
+    XeonTopologyReport, XeonGeneration, InterconnectType,
+    l3_cache_per_socket, optimal_moe_expert_size,
+    has_avx512, has_amx, is_old_xeon, is_modern_xeon, recommended_simd_width,
+};
 
 /// Execution Strategy determined by Hermes based on hardware
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ExecutionStrategy {
+    /// Unknown or unsupported hardware
     Unknown = 0,
+    
+    /// Old Xeon Strategy (E5 v3/v4 - AVX2, QPI, DDR4)
+    /// - Socket isolation: Socket 0 for hermes/jarbas/VFS, Socket 1 for cortex/k-ai
+    /// - Limited inter-socket traffic via async MPMC messages
+    /// - MoE sized to fit in L3 cache (~35MB per expert for 45MB L3)
+    /// - AVX2 SIMD dispatch (256-bit, 128 weights/cycle)
     OldXeon = 1,
+    
+    /// Modern Xeon Strategy (Sapphire/Emerald/Granite - AVX-512, AMX, DDR5)
+    /// - Massive cellular distribution across all cores
+    /// - Core pinning with dedicated threads (Cognitive Cells A.2)
+    /// - AVX-512/AMX dispatch (512-bit, 256 weights/cycle)
+    /// - High-bandwidth UPI interconnect
     ModernXeon = 2,
+    
+    /// Fallback strategy for unsupported hardware
     Fallback = 3,
 }
 
@@ -164,9 +64,13 @@ impl ExecutionStrategy {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct SocketIsolationPolicy {
+    /// Socket ID for hermes, jarbas, and VFS (Memory L0-L7)
     pub hermes_socket: u8,
+    /// Socket ID for cortex and k-ai
     pub cortex_socket: u8,
+    /// Enable strict isolation (no cross-socket traffic except async messages)
     pub strict_isolation: bool,
+    /// Maximum inter-socket message rate (messages/sec)
     pub max_inter_socket_rate: u32,
 }
 
@@ -174,10 +78,15 @@ pub struct SocketIsolationPolicy {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct CorePinningPolicy {
+    /// Enable core pinning (thread affinity)
     pub enable_pinning: bool,
+    /// Use spin-loop instead of preemption for critical threads
     pub spin_loop_critical: bool,
+    /// Number of cognitive cells (worker threads) to spawn
     pub cognitive_cell_count: u16,
+    /// Core IDs for hermes threads
     pub hermes_cores: [u8; 8],
+    /// Core IDs for cortex threads
     pub cortex_cores: [u8; 64],
 }
 
@@ -197,20 +106,29 @@ impl Default for CorePinningPolicy {
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct SimdDispatchPolicy {
+    /// SIMD width in bits (128, 256, or 512)
     pub simd_width: u32,
+    /// Use AVX-512 if available
     pub use_avx512: bool,
+    /// Use AMX if available
     pub use_amx: bool,
+    /// Use AVX2 if available
     pub use_avx2: bool,
+    /// Weights processed per cycle (128 for AVX2, 256 for AVX-512)
     pub weights_per_cycle: u32,
 }
 
-/// MoE sizing policy
+/// MoE (Mixture of Experts) sizing policy
 #[derive(Debug, Clone, Copy, Default)]
 #[repr(C)]
 pub struct MoESizingPolicy {
+    /// Maximum expert size in bytes (must fit in L3)
     pub max_expert_size_bytes: usize,
+    /// Number of experts per socket
     pub experts_per_socket: u8,
+    /// Force in-cache execution (no spillover to RAM)
     pub force_in_cache: bool,
+    /// L3 cache utilization percentage (0-100)
     pub l3_utilization_percent: u8,
 }
 
@@ -218,10 +136,15 @@ pub struct MoESizingPolicy {
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct AdaptationPolicy {
+    /// Execution strategy
     pub strategy: ExecutionStrategy,
+    /// Socket isolation policy
     pub socket_isolation: SocketIsolationPolicy,
+    /// Core pinning policy
     pub core_pinning: CorePinningPolicy,
+    /// SIMD dispatch policy
     pub simd_dispatch: SimdDispatchPolicy,
+    /// MoE sizing policy
     pub moe_sizing: MoESizingPolicy,
 }
 
@@ -238,7 +161,7 @@ impl Default for AdaptationPolicy {
 }
 
 /// Global adaptation policy (set once during boot)
-static ADAPTATION_POLICY: core::sync::atomic::AtomicPtr<AdaptationPolicy> =
+static ADAPTATION_POLICY: core::sync::atomic::AtomicPtr<AdaptationPolicy> = 
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
 /// Flag indicating if adaptation has been performed
@@ -250,6 +173,7 @@ pub fn generate_strategy(report: &XeonTopologyReport) -> ExecutionStrategy {
         XeonGeneration::Old => ExecutionStrategy::OldXeon,
         XeonGeneration::Modern | XeonGeneration::Latest => ExecutionStrategy::ModernXeon,
         XeonGeneration::Unknown => {
+            // Fallback based on available features
             if report.flags.avx2 {
                 ExecutionStrategy::OldXeon
             } else if report.flags.sse42 {
@@ -261,15 +185,18 @@ pub fn generate_strategy(report: &XeonTopologyReport) -> ExecutionStrategy {
     }
 }
 
+/// Generate socket isolation policy for old Xeon systems
 fn generate_old_xeon_socket_isolation(report: &XeonTopologyReport) -> SocketIsolationPolicy {
     if report.socket_count >= 2 {
+        // Dual-socket: strict isolation
         SocketIsolationPolicy {
             hermes_socket: 0,
             cortex_socket: 1,
             strict_isolation: true,
-            max_inter_socket_rate: 1000,
+            max_inter_socket_rate: 1000, // Limit QPI traffic
         }
     } else {
+        // Single-socket: no isolation needed
         SocketIsolationPolicy {
             hermes_socket: 0,
             cortex_socket: 0,
@@ -279,13 +206,15 @@ fn generate_old_xeon_socket_isolation(report: &XeonTopologyReport) -> SocketIsol
     }
 }
 
+/// Generate socket isolation policy for modern Xeon systems
 fn generate_modern_xeon_socket_isolation(report: &XeonTopologyReport) -> SocketIsolationPolicy {
+    // Modern Xeon with UPI can handle more inter-socket traffic
     if report.socket_count >= 2 {
         SocketIsolationPolicy {
             hermes_socket: 0,
             cortex_socket: 1,
-            strict_isolation: false,
-            max_inter_socket_rate: 10000,
+            strict_isolation: false, // UPI is faster than QPI
+            max_inter_socket_rate: 10000, // Higher limit for UPI
         }
     } else {
         SocketIsolationPolicy {
@@ -297,58 +226,75 @@ fn generate_modern_xeon_socket_isolation(report: &XeonTopologyReport) -> SocketI
     }
 }
 
+/// Generate core pinning policy for old Xeon systems
 fn generate_old_xeon_core_pinning(report: &XeonTopologyReport) -> CorePinningPolicy {
     let total_cores = report.total_physical_cores;
     let hermes_cores_count = ((total_cores as u16) / 4).min(8) as u16;
     let cortex_cores_count = total_cores as u16 - hermes_cores_count;
-
+    
     let mut hermes_cores = [0u8; 8];
     let mut cortex_cores = [0u8; 64];
-
+    
+    // Allocate first cores to hermes
     for i in 0..hermes_cores_count as usize {
-        if i < 8 { hermes_cores[i] = i as u8; }
+        if i < 8 {
+            hermes_cores[i] = i as u8;
+        }
     }
+    
+    // Allocate remaining cores to cortex
     for i in 0..cortex_cores_count as usize {
-        if i < 64 { cortex_cores[i] = (hermes_cores_count as u8 + i as u8).min(255); }
+        if i < 64 {
+            cortex_cores[i] = (hermes_cores_count as u8 + i as u8).min(255);
+        }
     }
-
+    
     CorePinningPolicy {
         enable_pinning: true,
-        spin_loop_critical: true,
+        spin_loop_critical: true, // Old Xeon benefits from spin-loop
         cognitive_cell_count: cortex_cores_count,
         hermes_cores,
         cortex_cores,
     }
 }
 
+/// Generate core pinning policy for modern Xeon systems
 fn generate_modern_xeon_core_pinning(report: &XeonTopologyReport) -> CorePinningPolicy {
     let total_cores = report.total_physical_cores;
     let hermes_cores_count = ((total_cores as u16) / 8).min(8) as u16;
     let cortex_cores_count = total_cores as u16 - hermes_cores_count;
-
+    
     let mut hermes_cores = [0u8; 8];
     let mut cortex_cores = [0u8; 64];
-
+    
+    // Allocate first cores to hermes
     for i in 0..hermes_cores_count as usize {
-        if i < 8 { hermes_cores[i] = i as u8; }
+        if i < 8 {
+            hermes_cores[i] = i as u8;
+        }
     }
+    
+    // Allocate remaining cores to cortex (massive cellular distribution)
     for i in 0..cortex_cores_count as usize {
-        if i < 64 { cortex_cores[i] = (hermes_cores_count as u8 + i as u8).min(255); }
+        if i < 64 {
+            cortex_cores[i] = (hermes_cores_count as u8 + i as u8).min(255);
+        }
     }
-
+    
     CorePinningPolicy {
         enable_pinning: true,
-        spin_loop_critical: false,
+        spin_loop_critical: false, // Modern Xeon has better scheduling
         cognitive_cell_count: cortex_cores_count,
         hermes_cores,
         cortex_cores,
     }
 }
 
+/// Generate SIMD dispatch policy
 fn generate_simd_dispatch(report: &XeonTopologyReport) -> SimdDispatchPolicy {
     let simd_width = recommended_simd_width(report);
     let weights_per_cycle = if simd_width >= 512 { 256 } else if simd_width >= 256 { 128 } else { 64 };
-
+    
     SimdDispatchPolicy {
         simd_width,
         use_avx512: report.flags.avx512f,
@@ -358,23 +304,27 @@ fn generate_simd_dispatch(report: &XeonTopologyReport) -> SimdDispatchPolicy {
     }
 }
 
+/// Generate MoE sizing policy for old Xeon systems
 fn generate_old_xeon_moe_sizing(report: &XeonTopologyReport) -> MoESizingPolicy {
     let l3_size = l3_cache_per_socket(report) as usize;
+    // Reserve 20% for other data, divide among 4 experts
     let max_expert_size = (l3_size * 80 / 100) / 4;
-
+    
     MoESizingPolicy {
         max_expert_size_bytes: max_expert_size,
         experts_per_socket: 4,
-        force_in_cache: true,
+        force_in_cache: true, // Force in-cache execution
         l3_utilization_percent: 80,
     }
 }
 
+/// Generate MoE sizing policy for modern Xeon systems
 fn generate_modern_xeon_moe_sizing(report: &XeonTopologyReport) -> MoESizingPolicy {
     let l3_size = l3_cache_per_socket(report) as usize;
+    // Modern Xeon has larger L3, can fit more experts
     let experts = (report.total_physical_cores as u8 / 4).max(4).min(16);
     let max_expert_size = (l3_size * 75 / 100) / (experts as usize);
-
+    
     MoESizingPolicy {
         max_expert_size_bytes: max_expert_size,
         experts_per_socket: experts,
@@ -383,6 +333,7 @@ fn generate_modern_xeon_moe_sizing(report: &XeonTopologyReport) -> MoESizingPoli
     }
 }
 
+/// Generate fallback policy for unsupported hardware
 fn generate_fallback_policy() -> AdaptationPolicy {
     AdaptationPolicy {
         strategy: ExecutionStrategy::Fallback,
@@ -415,11 +366,11 @@ fn generate_fallback_policy() -> AdaptationPolicy {
     }
 }
 
-/// Main adaptation function — generates complete policy from topology report
+/// Main adaptation function - generates complete policy from topology report
 pub fn adapt_to_hardware(report: &XeonTopologyReport) -> AdaptationPolicy {
     let strategy = generate_strategy(report);
-
-    match strategy {
+    
+    let policy = match strategy {
         ExecutionStrategy::OldXeon => AdaptationPolicy {
             strategy,
             socket_isolation: generate_old_xeon_socket_isolation(report),
@@ -435,11 +386,14 @@ pub fn adapt_to_hardware(report: &XeonTopologyReport) -> AdaptationPolicy {
             moe_sizing: generate_modern_xeon_moe_sizing(report),
         },
         _ => generate_fallback_policy(),
-    }
+    };
+    
+    policy
 }
 
 /// Set the global adaptation policy (call once during boot)
 pub fn set_adaptation_policy(policy: AdaptationPolicy) {
+    // In no_std, we'd use a static allocation. For now, this is a stub.
     let _ = policy;
     ADAPTED.store(true, Ordering::Release);
 }
@@ -447,7 +401,8 @@ pub fn set_adaptation_policy(policy: AdaptationPolicy) {
 /// Get the current adaptation policy
 pub fn get_adaptation_policy() -> Option<AdaptationPolicy> {
     if ADAPTED.load(Ordering::Acquire) {
-        None // Stub — real impl would return stored policy
+        // In a real implementation, this would return the stored policy
+        None // Stub for now
     } else {
         None
     }
@@ -469,14 +424,17 @@ pub fn get_strategy() -> ExecutionStrategy {
 
 /// Log the adaptation policy for debugging
 pub fn log_adaptation_policy(policy: &AdaptationPolicy) {
-    let _ = (policy,);
+    let _ = (policy,); // Suppress unused warning
+    
+    // In a real implementation, this would use the logging system
+    // For now, we structure the data for the caller
 }
 
-/// Cognitive adaptation entry point — called by Hermes during boot
-///
+/// Cognitive adaptation entry point - called by Hermes during boot
+/// 
 /// # Arguments
-/// * `report` — Xeon topology report from k-nano
-///
+/// * `report` - Xeon topology report from k-nano
+/// 
 /// # Returns
 /// The generated adaptation policy
 pub fn cognitive_adaptation(report: &XeonTopologyReport) -> AdaptationPolicy {
@@ -485,3 +443,9 @@ pub fn cognitive_adaptation(report: &XeonTopologyReport) -> AdaptationPolicy {
     log_adaptation_policy(&policy);
     policy
 }
+
+
+
+
+
+

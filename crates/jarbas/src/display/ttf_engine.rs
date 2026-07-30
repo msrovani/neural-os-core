@@ -126,7 +126,92 @@ pub struct FontManager {
 
 impl FontManager {
     pub fn new() -> Self {
-        FontManager { fonts: BTreeMap::new(), active: String::from("vga"), use_ttf: false }
+        let mut fm = FontManager { fonts: BTreeMap::new(), active: String::from("vga"), use_ttf: false };
+        // Auto-register embedded Latin-1 font for PT-BR accent support
+        fm.register_latin1_default();
+        fm.activate("latin1"); // TTF ativado por padrão — acentuação PT-BR funciona
+        fm
+    }
+
+    /// Register embedded Latin-1 raster font covering ASCII 32-255 (incl. à,á,â,ã,é,ê,í,ó,ô,õ,ú,ç)
+    fn register_latin1_default(&mut self) {
+        let mut font = TtfRasterFont::new("latin1", 16);
+        // Build glyphs for Latin-1 range (32-255) using VGA bitmap data + extended chars
+        // ponytail: Latin-1 extended chars use decomposed diacritics via bitmap composition
+        for code in 32u8..=255u8 {
+            let c = code as char;
+            let w: u16 = 8;
+            let h: u16 = 16;
+            let mut pixels = alloc::vec![0u8; (w as usize) * (h as usize)];
+            // Base glyph from VGA font data (ASCII range)
+            if code >= 32 && code <= 126 {
+                if let Some(base) = crate::display::font::get_char_bitmap(c) {
+                    for dy in 0..16 {
+                        let row = base[dy];
+                        for dx in 0..8 {
+                            if (row >> (7 - dx)) & 1 == 1 {
+                                pixels[dy * (w as usize) + dx] = 255;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Extended Latin-1: compose from base ASCII + accent marks
+                let base_char = match c {
+                    'à' | 'á' | 'â' | 'ã' => 'a',
+                    'é' | 'ê' => 'e',
+                    'í' => 'i',
+                    'ó' | 'ô' | 'õ' => 'o',
+                    'ú' => 'u',
+                    'ç' => 'c',
+                    'À' | 'Á' | 'Â' | 'Ã' => 'A',
+                    'É' | 'Ê' => 'E',
+                    'Í' => 'I',
+                    'Ó' | 'Ô' | 'Õ' => 'O',
+                    'Ú' => 'U',
+                    'Ç' => 'C',
+                    _ => continue,
+                };
+                if let Some(base) = crate::display::font::get_char_bitmap(base_char) {
+                    for dy in 0..16 {
+                        let row = base[dy];
+                        for dx in 0..8 {
+                            if (row >> (7 - dx)) & 1 == 1 {
+                                pixels[dy * (w as usize) + dx] = 255;
+                            }
+                        }
+                    }
+                    // Add accent mark on row 1-2 (´: dx=4, `: dx=2, ^: dx=3, ~: dx=3, ¸: dy=14)
+                    let accent_bitmap: [u8; 2] = match c {
+                        'á' | 'Á' | 'é' | 'É' | 'í' | 'Í' | 'ó' | 'Ó' | 'ú' | 'Ú' => [0b00010000, 0b00101000], // acute
+                        'à' | 'À' => [0b00101000, 0b00010000], // grave
+                        'â' | 'Â' | 'ê' | 'Ê' | 'ô' | 'Ô' => [0b00010000, 0b00111000], // circumflex
+                        'ã' | 'Ã' | 'õ' | 'Õ' => [0b00000000, 0b00101000], // tilde
+                        'ç' | 'Ç' => [0b00000000, 0b10000000], // cedilla at row 14
+                        _ => continue,
+                    };
+                    if matches!(c, 'ç' | 'Ç') {
+                        // Cedilla on row 14
+                        for dx in 0..8 {
+                            if (accent_bitmap[0] >> (7 - dx)) & 1 == 1 {
+                                pixels[14 * (w as usize) + dx] = 255;
+                            }
+                        }
+                    } else {
+                        // Accent on row 1-2
+                        for dy in 0..2 {
+                            for dx in 0..8 {
+                                if (accent_bitmap[dy] >> (7 - dx)) & 1 == 1 {
+                                    pixels[(dy + 1) * (w as usize) + dx] = 255;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            font.glyphs.insert(c, RasterGlyph { w, h, x: 0, y: 0, pixels });
+        }
+        self.fonts.insert(String::from("latin1"), font);
     }
 
     pub fn register(&mut self, name: &str, size: u16, data: &[u8]) {

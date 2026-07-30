@@ -3,7 +3,7 @@
 //! O FSM `StructuredDecoder` e o enum `DecodeMode` foram movidos para
 //! cortex-crate (`cortex_crate::structured_decode`) para uso direto no
 //! `generate_speculative` durante a geração constrita.
-//! `SkillOptimizer` permanece aqui porque depende de `crate::wasm_rt::SkillMarket`.
+//! `SkillOptimizer` permanece aqui porque depende de `crate::skill_market::SkillMarket`.
 
 // ponytail: structured_decode module disabled in cortex; stubs defined in cortex::cortex
 pub use cortex::cortex::{StructuredDecoder, DecodeMode};
@@ -24,7 +24,7 @@ impl SkillOptimizer {
     }
 
     /// Analisa metricas do SkillMarket e sugere otimizacoes
-    pub fn analyze(&mut self, market: &crate::wasm_rt::SkillMarket) -> Vec<String> {
+    pub fn analyze(&mut self, market: &crate::skill_market::SkillMarket) -> Vec<String> {
         let mut suggestions = Vec::new();
         for s in market.top(10) {
             if s.calls >= self.min_calls && s.success_rate < self.min_success {

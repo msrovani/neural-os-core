@@ -632,6 +632,29 @@ pub fn after_exchange(user: &str, response: &str, tick: u64) {
     budget_reset();
 }
 
+/// Extract recent (user, assistant) Q&A pairs from the session log for DREAM replay.
+/// Returns at most `max_pairs` pairs by matching consecutive user→assistant entries.
+pub fn extract_qa_pairs(max_pairs: usize) -> Vec<(String, String)> {
+    let log = SESSION.lock();
+    let mut pairs = Vec::new();
+    let mut i = log.entries.len();
+    while i >= 2 && pairs.len() < max_pairs {
+        i -= 1;
+        if log.entries[i].role == "assistant" && i > 0 && log.entries[i - 1].role == "user" {
+            let user = log.entries[i - 1].text.clone();
+            let asst = log.entries[i].text.clone();
+            pairs.push((user, asst));
+            if i > 0 { i -= 1; } // skip the user entry we just consumed
+        }
+    }
+    pairs
+}
+
+/// Returns the number of entries in the session log (IDEA #314e confidence tracking).
+pub fn session_len() -> u64 {
+    SESSION.lock().entries.len() as u64
+}
+
 pub fn status_line() -> String {
     format!(
         "{} | session_n={} | nudges={} | route={} | {}",

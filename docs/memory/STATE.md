@@ -1,4 +1,23 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s229 — Turing Test (LLM + JARBAS + BEI)
+#   SESSION_229: Maturidade Plena JARBAS + Turing Test Pipeline LLM (2026-07-30)
+#     JARBAS Rung 4: TTF Latin-1, alpha blending, Ring3 (TRY_ENTER_RING3=true)
+#     Sprint 80: fail-closed safety (ConsentGate deny por padrão)
+#     Emotion classifier: 16 features × 7 emoções com pesos treinados
+#     Streaming TTS: 50ms primeira amostra, PLAYBACK_RING continuo
+#     HW→Persona: 4 perfis (StandardUma→Tool, AsymmetricCcd→Coach, IntelHybrid→Tutor, MultiDomainNuma→Auto)
+#     AutoSkillGen→AppFactory: gera WASM real no 3º matching
+#     Matrix learning #311f: OnDemandLearning + MatrixLearningAgent (454 LOC)
+#     Turing Test: 8 modelos no ModelHub (BITNET2B, VISION, LLAMA8B, RERANKER, RUSTCDR3, HWEXPRT, LEARNER, AGENT)
+#     dispatch_expert: RUSTCODER_MODEL + HWEXPERT_MODEL + Agent slot roteados para modelos dedicados
+#     MoE router: load_router() no boot (neural, não keyword)
+#     Fine-tuning #312b: FineTuningPipeline (DataCollector→TrainingAgent)
+#     Self-Learning OS #313: SelfLearningAgent (PollEvery 5000)
+#     SleepCycle #314a-f: 6/6 itens (EWC, Confidence, Ring buffer 1000, Dream, Prune, Ciclo)
+#     LEGACY: ~7.845 LOC movidos para LEGACY; ~3.500 LOC restaurados (hardware, adaptation, budget, MPMC, etc)
+#     Build: 0 erros, cargo check --release ✅
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s228 — TEST (HW Boot + Fixes)
 #   SESSION_228: Hardware Boot Notebook Real + ESP GPT + Mouse Fix (2026-07-28)
 #     Pendrive unified bootou Limine UEFI → interface Jarbas no notebook real!

@@ -3,12 +3,14 @@
 extern crate alloc;
 
 pub mod budget;
-pub mod hooks;
 
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::collections::BTreeMap;
+use budget::{AgentWatchdogState, BudgetManager};
+use core::sync::atomic::AtomicPtr;
+use core::ptr::null_mut;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AgentTier {
@@ -143,6 +145,9 @@ pub struct AgentInstance {
     pub novelty_score: u8,
     /// RuVix: coherence pressure — agents that comm together stay together.
     pub coherence_partner: Option<usize>,  // agent index to schedule near
+    // ─── Budget watchdog (ADR-0078) ───
+    /// Ticks spent in Paused state; auto-recover at 1000, crash at 10000.
+    pub paused_ticks: u64,
 }
 
 impl AgentInstance {
@@ -174,6 +179,7 @@ impl AgentInstance {
             goal_urgency: 0,
             novelty_score: 0,
             coherence_partner: None,
+            paused_ticks: 0,
         }
     }
 }
@@ -181,19 +187,24 @@ impl AgentInstance {
 pub struct AgentRegistry {
     pub agents: Vec<AgentInstance>,
     pub skill_map: BTreeMap<String, usize>,
+    pub budget_manager: BudgetManager,
 }
 
 impl AgentRegistry {
     pub fn new() -> Self {
         AgentRegistry {
-            agents: Vec::new(), skill_map: BTreeMap::new(),
+            agents: Vec::new(),
+            skill_map: BTreeMap::new(),
+            budget_manager: BudgetManager::new(),
         }
     }
 
     pub fn register(&mut self, agent: Box<dyn Agent>) -> usize {
+        let name = agent.manifest().name;
         let idx = self.agents.len();
         let instance = AgentInstance::new(agent);
         self.agents.push(instance);
+        self.budget_manager.register(name, None);
         idx
     }
 
@@ -202,6 +213,11 @@ impl AgentRegistry {
             self.agents[idx].state = AgentState::Active;
             self.agents[idx].agent.on_activate();
         }
+    }
+
+    /// Override tick budget for an agent (default: 100).
+    pub fn set_budget(&mut self, name: &str, max_ticks_per_call: u64) {
+        self.budget_manager.register(name, Some(max_ticks_per_call));
     }
 
     pub fn get(&self, name: &str) -> Option<&AgentInstance> {
@@ -254,6 +270,50 @@ impl AgentRegistry {
 }
 
 impl AgentRegistry {
+    /// Budget watchdog check before calling agent.tick().
+    /// Returns `true` if tick should proceed, `false` if agent is paused/crashed.
+    fn check_budget(&mut self, idx: usize) -> bool {
+        let name = self.agents[idx].agent.manifest().name;
+
+        // If already Paused: track pause time, maybe auto-recover, skip tick
+        if self.agents[idx].paused_ticks > 0 {
+            self.agents[idx].paused_ticks += 1;
+            if self.agents[idx].paused_ticks >= 1000 {
+                // Auto-recover after 1000 ticks in Paused
+                self.budget_manager.recover(name);
+                self.agents[idx].paused_ticks = 0;
+                maybe_log_budget(name, "recovered");
+            } else if self.agents[idx].paused_ticks >= 10000 {
+                // Safety net: too long paused → crash
+                self.agents[idx].state = AgentState::Crashed;
+                maybe_log_budget(name, "crashed_timeout");
+                return false;
+            }
+            return false; // skip tick while paused
+        }
+
+        // Consume 1 tick from budget
+        if !self.budget_manager.consume(name, 1) {
+            let wd = self.budget_manager
+                .get_state(name)
+                .unwrap_or(AgentWatchdogState::Normal);
+            match wd {
+                AgentWatchdogState::Paused | AgentWatchdogState::Crashed => {
+                    // First tick entering Paused — mark it and skip
+                    self.agents[idx].paused_ticks = 1;
+                    maybe_log_budget(name, "paused");
+                    return false;
+                }
+                AgentWatchdogState::Warning => {
+                    // Over budget but still Warning — log it but allow tick
+                    maybe_log_budget(name, "budget_warning");
+                }
+                _ => {}
+            }
+        }
+        true
+    }
+
     /// Boot Oneshot round-robin até todos Done **ou** timeout.
     /// NÃO processa agentes um-a-um até Done (hang se A espera evento de B).
     /// Pendentes após timeout ficam Active para o `run()` — impossível hangar o boot.
@@ -306,6 +366,9 @@ impl AgentRegistry {
                 self.agents[i].agent.on_activate();
             }
         }
+        // Expose BudgetManager for Hermes monitoring via agent_budget_stats()
+        set_budget_stats_ref(&mut self.budget_manager);
+
         let mut tick_id: u64 = 0;
         loop {
             tick_id += 1;
@@ -315,6 +378,7 @@ impl AgentRegistry {
                 if let Some(agent) = spawn_agent(name) {
                     let idx = self.agents.len();
                     self.agents.push(AgentInstance::new(agent));
+                    self.budget_manager.register(name, None);
                     self.agents[idx].state = AgentState::Active;
                     self.agents[idx].agent.on_activate();
                 }
@@ -342,6 +406,12 @@ impl AgentRegistry {
                     continue;
                 }
                 self.agents[i].last_poll = tick_id;
+
+                // Budget watchdog guard — skip tick if budget exhausted
+                if !self.check_budget(i) {
+                    continue;
+                }
+
                 self.agents[i].tick_counter += 1;
                 let tc = self.agents[i].tick_counter;
                 let result = self.agents[i].agent.tick(tick_id, tc);
@@ -400,6 +470,44 @@ pub fn set_sched_metrics_hook(hook: Option<fn(u64, usize, u32)>) {
 /// Registra hook para BEI tick (ADR-0060). Chamado a cada tick do scheduler.
 pub fn set_bei_tick_hook(hook: Option<fn(u64)>) {
     unsafe { BEI_TICK_HOOK = hook; }
+}
+
+// ─── Budget watchdog global reference ───
+/// Raw pointer to the AgentRegistry's BudgetManager, set during kernel init.
+/// Used by `agent_budget_stats()` for Hermes monitoring without passing the registry around.
+static BUDGET_MGR_PTR: AtomicPtr<BudgetManager> = AtomicPtr::new(null_mut());
+
+/// Set the global BudgetManager reference for the stats free function.
+/// Called once during kernel agent registry initialization.
+pub fn set_budget_stats_ref(bm: &mut BudgetManager) {
+    BUDGET_MGR_PTR.store(bm, core::sync::atomic::Ordering::Release);
+}
+
+/// Public API for Hermes monitoring: returns snapshot of all agent budgets.
+/// Each entry: `(agent_name, ticks_used, watchdog_state)`.
+pub fn agent_budget_stats() -> Vec<(String, u64, AgentWatchdogState)> {
+    let ptr = BUDGET_MGR_PTR.load(core::sync::atomic::Ordering::Acquire);
+    if ptr.is_null() {
+        return Vec::new();
+    }
+    // SAFETY: BudgetManager lives as long as AgentRegistry, which is a kernel static.
+    // `set_budget_stats_ref` is called once at init; the reference stays valid.
+    unsafe { (*ptr).stats() }
+}
+
+// ─── Budget event logging hook ───
+static mut BUDGET_EVENT_HOOK: Option<fn(&str, &str)> = None;
+
+/// Register a hook for budget watchdog events (paused, recovered, crashed, warning).
+/// Kernel provides `serial_println`-based logging via this hook.
+pub fn set_budget_event_hook(hook: Option<fn(&str, &str)>) {
+    unsafe { BUDGET_EVENT_HOOK = hook; }
+}
+
+fn maybe_log_budget(name: &str, event: &str) {
+    if let Some(hook) = unsafe { BUDGET_EVENT_HOOK } {
+        hook(name, event);
+    }
 }
 
 fn maybe_log_sched_metrics(tick_id: u64, n_agents: usize, polled: u32) {

@@ -114,7 +114,7 @@ pub fn promote_skill_to_wasm(name: &str, source: &str) -> Result<(), &'static st
 }
 
 /// Pipeline completo: analisa mercado WASM + skills evolutivos pendentes.
-pub fn run_evolution_pass(market: &crate::wasm_rt::SkillMarket) -> Vec<String> {
+pub fn run_evolution_pass(market: &crate::skill_market::SkillMarket) -> Vec<String> {
     let mut opt = SkillOptimizer::new();
     let mut actions = opt.analyze(market);
 

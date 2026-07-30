@@ -113,17 +113,45 @@ pub fn generate_and_record_routes(
     (response_len, trace)
 }
 
+/// Deterministic Gaussian noise (Box-Muller) seeded from trace fields,
+/// so the same trace always gets the same noise — prevents overfitting without
+/// a PRNG dependency.
+fn gaussian_noise(trace: &RouteTrace) -> f32 {
+    // Mix trace fields into a seed via wrapping ops
+    let seed = trace
+        .embedding_addr
+        .wrapping_mul(2654435761)
+        .wrapping_add((trace.token_count as usize).wrapping_mul(2246822519))
+        .wrapping_add((trace.selected_expert as usize).wrapping_mul(3266489917));
+    // xorshift32
+    let mut x = seed as u32;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    // Box-Muller: two uniforms → gaussian
+    let u1 = ((x & 0x7FFF) as f32 + 1.0) / 32768.0; // (0, 1]
+    let u2 = ((x >> 16) & 0x7FFF) as f32 / 32768.0; // [0, 1)
+    let r = libm::sqrtf(-2.0 * libm::logf(u1));
+    let theta = 6.2831853 * u2;
+    r * libm::cosf(theta)
+}
+
 pub fn update_with_replay(
     _router: &TrinityRouter,
     trace: &RouteTrace,
     reward: f32,
     router_weights: &mut [i8],
     lr: f32,
+    noise_scale: f32,
 ) -> f32 {
     let advantage = (reward - 0.5).clamp(-1.0, 1.0);
     let policy_ratio = libm::expf(trace.old_log_prob.clamp(-8.0, 0.0));
     let clipped = policy_ratio.clamp(0.8, 1.2);
-    let grad_scale = advantage * clipped * lr;
+    let mut grad_scale = advantage * clipped * lr;
+    // Inject Gaussian noise to prevent overfitting (SRC replay)
+    if noise_scale > 0.0 {
+        grad_scale += gaussian_noise(trace) * noise_scale;
+    }
 
     let selected = trace.selected_expert as usize;
     let num_exp = (trace.num_experts as usize).max(1);
