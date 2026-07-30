@@ -9,8 +9,8 @@ Nada nesta pasta participa do build padrão.
 | `jarvis/` | `crates/jarvis/` | Nome e implementação anteriores ao crate ativo `jarbas` |
 | `v1.5-neural-kernel-src/` | `crates/neural-kernel/src/` | Snapshot do monólito v1.5 |
  | `v1.5-dead-k2chj/` | crates K²CHJ | Módulos mortos removidos na Ponytail Audit |
-| `v1.9.9-test/k_nano/p2p/` | `crates/k_nano/src/p2p/` | P2P networking (NoProto, clock, MPMC) — especulativo, sem runtime real |
-| `v1.9.9-test/k_nano/net/brain_mesh.rs` | `crates/k_nano/src/net/brain_mesh.rs` | Neural P2P mesh engine — especulativo, apenas testes |
+| `v1.9.9-test/k_nano/p2p/` | `crates/k_nano/src/p2p/` | P2P networking (NoProto, clock, MPMC) — **transferido para ADR-0081** (Malha Cognitiva Distribuída) |
+| `v1.9.9-test/k_nano/net/brain_mesh.rs` | `crates/k_nano/src/net/brain_mesh.rs` | Neural P2P mesh engine — **transferido para ADR-0081** (Malha Cognitiva Distribuída) |
 | `v1.9.9-test/k_nano/scheduler/core_pair.rs` | `crates/k_nano/src/scheduler/core_pair.rs` | Core pair allocator + Bipole — substituído pelo scheduler em agent-core |
 | `v1.9.9-test/agent-core/budget.rs` | `crates/agent-core/src/budget.rs` | AgentBudget/BudgetManager — nunca conectado ao scheduler |
 | `v1.9.9-test/agent-core/hooks.rs` | `crates/agent-core/src/hooks.rs` | HookRegistry — nunca registrado |

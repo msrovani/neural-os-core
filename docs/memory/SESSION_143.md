@@ -37,6 +37,7 @@ Reclassificar ideias antigas 🟡/⏳ frente a v1.8.6 / ondas 0–7 / ADR-0052 /
 | #68–69, #72, #81, #92–93, #97–98, #100–101, #106, #108, #136, #149–150, #152, #156, #160, #162 | polish / pesquisa |
 | #278b, #279a–b, #279e, #280l, #283a, #306c–d, #307, #309b | UX/compat/macro fora do gate |
 | #315.26–27 | sync/SKYNET + `depends_on: lan` |
+📋 Transferido para ADR-0081 (Malha Cognitiva Distribuída) — Fase C pós-gate v2.0.0
 
 ### Em onda / AWAITING / lan (🟡 / ▶️)
 

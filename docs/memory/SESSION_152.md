@@ -3,6 +3,7 @@
 **Data:** 2026-07-18  
 **Escopo:** Destravar fila `depends_on: lan` / histórico B-01 após L3.5–L5 (SESSION_149/150).  
 **Fora:** WiFi (`depends_on: wifi`), CRDT/SKYNET, SoftMAC, fake HTTPS.
+📋 CRDT/SKYNET transferido para ADR-0081 (Malha Cognitiva Distribuída) — Fase C pós-gate
 
 ## Entregas
 

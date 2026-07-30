@@ -61,6 +61,14 @@ impl Default for LogicalClock {
     }
 }
 
+/// Static global logical clock for P2P mesh ordering.
+pub static GLOBAL_LOGICAL_CLOCK: LogicalClock = LogicalClock::new();
+
+/// Convenience: tick do logical clock global.
+pub fn logical_tick() -> u64 {
+    GLOBAL_LOGICAL_CLOCK.tick()
+}
+
 /// Vector Clock for tracking causality across multiple nodes
 ///
 /// Extends Lamport clocks to track per-node counters, enabling
