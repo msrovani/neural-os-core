@@ -167,8 +167,8 @@ def create_fat32(path, size_mb, label):
             f.seek((part_lba + reserved + i * fat_sectors) * 512)
             fat = bytearray(fat_sectors * 512)
             # FAT[0] = media descriptor + dirty flags
-            struct.pack_into("<I", fat, 0, 0x0FFFFF8)
-            struct.pack_into("<I", fat, 4, 0x0FFFFFF)
+            struct.pack_into("<I", fat, 0, 0x0FFFFFF8)
+            struct.pack_into("<I", fat, 4, 0x0FFFFFFF)
             # FAT[2] = root directory (EOC) — nunca alocar como data
             struct.pack_into("<I", fat, 8, 0x0FFFFFFF)
             f.write(fat)
