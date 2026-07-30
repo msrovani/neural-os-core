@@ -205,7 +205,8 @@ mod context_window;
 mod training_agent;
 
 mod micropython_wasm;
-mod aios_api;
+// ponytail: aios_api.rs deleted — YAGNI. Nada importava dela. As 2 funções CapGate
+// vivem em capability_gate::host_send_tcp / host_write_ring.
 mod cognitive;
 
 mod audio;
