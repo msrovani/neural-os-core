@@ -51,8 +51,15 @@ fn has_ethernet_nic() -> bool {
 }
 
 fn apply_static_qemu(ns: &mut crate::netstack::NetStack, tick: u64) {
-    ns.set_static_ip(); // também atualiza NET_CONFIG
-    log(tick, "Static IP 10.0.2.15/24 gw=10.0.2.2 dns=10.0.2.3 (QEMU user/slirp)");
+    // Extrai IP customizado do netmode (se for Static) ou usa 10.0.2.15 padrao
+    let custom_ip = match crate::net::detect_qemu_net_mode() {
+        crate::net::QemuNetMode::Static(ip) => Some(ip),
+        _ => None,
+    };
+    let ip = custom_ip.unwrap_or([10, 0, 2, 15]);
+    ns.set_static_ip(custom_ip);
+    log(tick, &alloc::format!("Static IP {}.{}.{}.{}/24 gw={}.{}.{}.1 dns={}.{}.{}.3 (QEMU user/slirp)",
+        ip[0], ip[1], ip[2], ip[3], ip[0], ip[1], ip[2], ip[0], ip[1], ip[2]));
     publish_configured();
 }
 
@@ -181,6 +188,9 @@ pub fn bootstrap_early() {
         }
         QemuNetMode::User => {
             log(0, "bootstrap_early: netmode=USER (slirp) — static 10.0.2.15")
+        }
+        QemuNetMode::Static(ip) => {
+            log(0, &alloc::format!("bootstrap_early: netmode=STATIC {}.{}.{}.{} — mesh P2P", ip[0], ip[1], ip[2], ip[3]))
         }
     }
 

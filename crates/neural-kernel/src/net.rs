@@ -275,16 +275,19 @@ pub unsafe fn dump_e1000_status() {
     }
 }
 
-/// Phys loader @0x164000000: 'B' = bridge/TAP (DHCP), 'U'/other = user/slirp (static 10.0.2.15).
+/// Phys loader @0x164000000: 'B' = bridge/TAP (DHCP), 'U' = user/slirp (static 10.0.2.15),
+/// 'S' + 4 bytes = static IP customizado (ex: S\x02\x00\x03\x02 = 10.0.3.2).
 pub const NETMODE_LOADER_PHYS: u64 = 0x1640_0000_00;
 
+/// Modo de rede detectado + IP customizado (se 'S').
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum QemuNetMode {
-    User,
-    Bridge,
+    User,           // 10.0.2.15 padrao
+    Bridge,         // DHCP
+    Static([u8;4]), // IP customizado ex: 10.0.3.2
 }
 
-/// Read netmode.flag from QEMU loader window (written by run-qemu-whpx.ps1).
+/// Read netmode.flag from QEMU loader window (written by run-qemu-*.ps1).
 /// Maps the phys page first — HHDM may omit high loader windows until touch.
 pub fn detect_qemu_net_mode() -> QemuNetMode {
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
@@ -298,7 +301,16 @@ pub fn detect_qemu_net_mode() -> QemuNetMode {
         let b = core::ptr::read_volatile(p);
         match b {
             b'B' | b'b' => QemuNetMode::Bridge,
-            b'U' | b'u' => QemuNetMode::User,
+            b'S' | b's' => {
+                // Read 4-byte IP after the 'S' marker
+                let ip = [
+                    core::ptr::read_volatile(p.add(1)),
+                    core::ptr::read_volatile(p.add(2)),
+                    core::ptr::read_volatile(p.add(3)),
+                    core::ptr::read_volatile(p.add(4)),
+                ];
+                QemuNetMode::Static(ip)
+            }
             _ => QemuNetMode::User, // missing/garbage → user/slirp default
         }
     }

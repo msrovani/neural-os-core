@@ -54,12 +54,23 @@ $baseArgs = @(
     "-no-reboot"
 )
 
+# ─── NetMode flags: IP customizado para cada instancia ───
+$netmodeAddr = 0x16400000000  # NETMODE_LOADER_PHYS
+$netmodeA = Join-Path $target "netmode_a.flag"
+$netmodeB = Join-Path $target "netmode_b.flag"
+
+# Instance A: 10.0.3.2 → 'S' + [10, 0, 3, 2]
+[System.IO.File]::WriteAllBytes($netmodeA, [byte[]]@([byte][char]'S', 10, 0, 3, 2))
+# Instance B: 10.0.3.3 → 'S' + [10, 0, 3, 3]
+[System.IO.File]::WriteAllBytes($netmodeB, [byte[]]@([byte][char]'S', 10, 0, 3, 3))
+
 # ─── Instance A: Cloverleaf (10.0.3.2) ───
 $logA = Join-Path $logDir "boot_mesh_a.txt"
 $argsA = $baseArgs + @(
     "-name", "mesh-cloverleaf",
     "-netdev", "socket,mcast=230.0.0.1:1234,id=n0",
     "-device", "e1000,netdev=n0,mac=52:54:00:AA:00:01",
+    "-device", "loader,file=$netmodeA,addr=$netmodeAddr",
     "-serial", "file:$logA"
 )
 if ($disk) { $argsA += @("-drive", "format=raw,file=$disk,if=ide,index=1") }
@@ -70,6 +81,7 @@ $argsB = $baseArgs + @(
     "-name", "mesh-hal9000",
     "-netdev", "socket,mcast=230.0.0.1:1234,id=n0",
     "-device", "e1000,netdev=n0,mac=52:54:00:BB:00:02",
+    "-device", "loader,file=$netmodeB,addr=$netmodeAddr",
     "-serial", "file:$logB"
 )
 if ($disk) { $argsB += @("-drive", "format=raw,file=$disk,if=ide,index=1") }

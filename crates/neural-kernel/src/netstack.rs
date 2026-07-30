@@ -349,26 +349,34 @@ impl NetStack {
         NetStack { iface, sockets, phy, dhcp_handle, dhcp_done: false, has_static_ip: false, tx_count: 0, rx_count: 0 }
     }
 
-    /// Configura IP estatico para QEMU user-mode (10.0.2.15/24)
-    pub fn set_static_ip(&mut self) {
-        let ip = Ipv4Address::new(10, 0, 2, 15);
+    /// Configura IP estatico para QEMU user-mode (10.0.2.15/24 padrao) ou custom (mesh P2P)
+    pub fn set_static_ip(&mut self, custom_ip: Option<[u8; 4]>) {
+        let (ip_bytes, gw_byte3): ([u8; 4], u8) = match custom_ip {
+            Some(ip) => (ip, ip[2]),
+            None => ([10, 0, 2, 15], 2),
+        };
+        let ip = Ipv4Address::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]);
         let cidr = IpCidr::new(IpAddress::Ipv4(ip), 24);
         self.iface.update_ip_addrs(|addrs| { addrs.push(cidr).ok(); });
-        let gw = Ipv4Address::new(10, 0, 2, 2);
+        let gw = Ipv4Address::new(ip_bytes[0], ip_bytes[1], gw_byte3, 1);
         self.iface.routes_mut().add_default_ipv4_route(gw.into()).ok();
         self.dhcp_done = true;
         self.has_static_ip = true;
-        // Espelha em NET_CONFIG (diag / agentes / is_online)
+        let dns_ip = [ip_bytes[0], ip_bytes[1], gw_byte3, 3];
         {
             let mut cfg = crate::net::NET_CONFIG.lock();
-            cfg.ip = [10, 0, 2, 15];
-            cfg.gateway_ip = [10, 0, 2, 2];
+            cfg.ip = ip_bytes;
+            cfg.gateway_ip = [ip_bytes[0], ip_bytes[1], gw_byte3, 1];
             cfg.subnet_mask = [255, 255, 255, 0];
-            cfg.dns_ip = [10, 0, 2, 3];
+            cfg.dns_ip = dns_ip;
             cfg.configured = true;
             cfg.online = true;
         }
-        k_nano::slog_hermes!("Net", "info", "Static IP: 10.0.2.15/24 gw=10.0.2.2 dns=10.0.2.3");
+        k_nano::slog_hermes!("Net", "info",
+            "Static IP: {}.{}.{}.{}/24 gw={}.{}.{}.1 dns={}.{}.{}.3",
+            ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3],
+            ip_bytes[0], ip_bytes[1], gw_byte3,
+            ip_bytes[0], ip_bytes[1], gw_byte3);
     }
 
     pub fn poll(&mut self, now_ms: i64) {
