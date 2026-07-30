@@ -1,149 +1,223 @@
-# ADR-0075: Emagrecer neural-kernel — cutover cirúrgico bin→crates
+# ADR-0075: Emagrecer neural-kernel — relatório pós-execução + revisão
 
-**Data:** 2026-07-23
-**Status:** Proposed — plano aprovado, E0 (freeze) em execução.
+**Data original:** 2026-07-23
+**Revisão:** 2026-07-29 — SESSION_217 executada, diagnóstico pós-fato
+**Status:** Em implementação — E0 parcial, E1a/E1c/E2/E3/E4 concluídos, E1b pendente
 **Lifecycle (INDEX):** `fazendo`
 **Estende:** ADR-0042 (K³CHJ workspace), ADR-0062 (ClaudioOS), IDEA #467/#511
-**Base:** v1.9.9 TEST (a216ca8), checkpoint sprints 178-214 (4d8f0d5)
-**SESSION:** SESSION_215
+**Base:** v1.9.9 TEST → v1.9.11-emagrecer
+**Sessões:** SESSION_215 (plano), SESSION_217 (execução E1a/E1c/E4), SESSION_163 (ondas 0-6)
 
 ---
 
-## 1. Contexto e problema
+## 1. Contexto e problema (revisado)
 
-O crate `neural-kernel` (bin) carrega ~29.431 LOC em ~150 arquivos. Destes, **~12.000 LOC (41%)** são `bin_ahead` — módulos que já têm versão canônica em crates K³CHJ mas não estão wired. O produto cognitivo já vive nos crates (~68k LOC K³CHJ), e o bin duplica caminhos críticos (LLM, fleet, net, audio, FS) que divergem silenciosamente.
+O crate `neural-kernel` (bin) carrega **~20.430 LOC em 136 arquivos** `.rs`. Destes, **~4.943 LOC (24%)** ainda são `bin_ahead` — módulos que têm versão canônica em crates K³CHJ mas não foram stubados/promovidos. O produto cognitivo vive nos crates (~68k LOC K³CHJ), e o bin historicamente duplicava caminhos críticos; ~8.998 LOC já foram removidos por cutover.
 
-### 1.1 Estado atual
+### 1.1 Estado atual (Jul 2026)
 
 | Classe | LOC | % | Descrição |
 |--------|----:|---|-----------|
-| bin_ahead | ~12.000 | 41% | Módulos que existem no bin e também (melhor) nos crates |
-| role_diff | ~6.500 | 22% | Módulos que só o bin pode ter (HW state, page tables, IRQs) |
-| glue | ~5.000 | 17% | main.rs, interrupt handlers, global_allocator, shell |
-| audio | ~2.900 | 10% | Truth no bin per ADR-0045; deferido para E4 |
-| stubs | ~100 | 0,3% | pub use puro — já cutover |
+| bin_ahead | ~3.971 | 19% | Módulos no bin que têm versão canônica melhor nos crates (agents, shutdown, boot_log_agent, memory_agent, aios_api, vga_buffer) |
+| role_diff | ~4.500 | 22% | Só o bin pode ter: net stack real (751), smp AP worker (421), HW state, page tables, IRQs, boot_handoff |
+| glue | ~5.500 | 27% | main.rs, IDT, GDT, allocator, shell, PCI init, APIC init — não migrável |
+| já cutover (stubs + crate_ahead) | ~6.500 | 32% | 34 módulos stub + 12 crate_ahead que podem virar pub use — já redirecionados para crates |
 
-### 1.2 Problemas conhecidos
+**Mudanças desde o plano original:**
+- audio (antes ~2.900 LOC, 10%) → re-export de jarbas (4 LOC) — E4 concluído
+- bin_ahead (antes ~12.000 LOC, 41%) → ~3.971 LOC (19%) — redução de ~67%
+- stubs (antes ~100 LOC) → ~6.500 LOC (32%) — cutover consolidado
 
-1. **Dual-source LLM:** `crates/neural-kernel/src/cortex.rs` (versão antiga, VOCAB=99) vs `crates/cortex/src/cortex.rs` (canônica, AirLLM+FlashAttention, 2.463 LOC). Divergência silenciosa.
-2. **Dual-source fleet:** `crates/neural-kernel/src/agents.rs` (versão antiga, 2.388 LOC) vs `crates/hermes/src/agents.rs` (canônica, 2.332 LOC).
-3. **Código órfão:** `bpe.rs`, `gguf.rs`, `gguf_streaming.rs` só existem no bin — crates não têm.
-4. **Net stack role_diff:** `net.rs` + `netstack.rs` + `network_agent.rs` (~2.458 LOC) só existem no bin com versão rica; crates têm subset.
-5. **Audio truth no bin:** `audio/*` (~2.900 LOC, 21 arquivos) — mirror no jarbas crate per ADR-0045.
+### 1.2 Problemas conhecidos (atualizado)
 
-## 2. Solução proposta
+| # | Problema | Status |
+|---|----------|--------|
+| 1 | **Dual-source LLM** — `neural-kernel/src/cortex.rs` vs `crates/cortex/src/cortex.rs` | ✅ Resolvido. Bin é stub (182 LOC, só boot path); crate é truth (2.892 LOC) |
+| 2 | **Dual-source fleet** — `agents.rs` bin vs hermes crate | 🟡 Aberto. bin=2.620 LOC, crate=2.484 LOC. Drift: +136 LOC, 20 impls Agent |
+| 3 | **Código órfão** — `bpe.rs`, `gguf.rs` no bin sem crate | ✅ Resolvido. Ambos stub/promovidos |
+| 4 | **Net stack role_diff** — `net.rs` + `netstack.rs` + `network_agent.rs` (~2.458 LOC) | 🟡 Mantido. `net.rs` (751 LOC) é role_diff — bin tem stack real (smoltcp) |
+| 5 | **Audio truth no bin** — `audio/*` (~2.900 LOC, 21 arquivos) | ✅ Resolvido. Tudo via `pub use jarbas_crate::audio::*` |
 
-Cutover cirúrgico em 5 fases (E0–E4), migrando código legado para `LEGACY/`, nunca apagando nada.
+---
 
-### 2.1 Princípios
+## 2. O que foi feito
 
-1. **Promover antes de stub:** código `bin_ahead` é movido para o crate antes de substituir por `pub use`.
-2. **Zero perda:** código migrado vai para `LEGACY/` — snapshot preservado.
-3. **1 commit por wave:** rollback é `git revert`.
-4. **Gate universal:** `cargo nk` 0 erros + boot 8 fases + `[TIMER] tick=` + `diff_bin_crate.py limpo`.
-5. **Ordem forte:** E0 → E1a → E1b → E1c → E2 → E3 → E4. Paralelo só com handoff trait.
+### 2.1 Ondas 0–6 (prévias, SESSION_163)
 
-### 2.2 E0 — Freeze (imediato)
+- 40 stubs cutover: `identity.rs`, `memory.rs`, `mhi.rs`, `sync/`, `gpt.rs`, `exfat.rs`, `tpm.rs`, `hw_rng.rs`, `slip.rs`, `rtl8139.rs`, `ahci.rs`, `pci.rs`, `serial.rs`, `xhci.rs`, `usb_msc.rs`, `simd.rs`, `fat32.rs`, `ata.rs`, `e1000.rs`, `acpi.rs`, `apic.rs`, `interrupts.rs`, e mais.
+- `diff_bin_crate.py` — ferramenta de diff criada.
 
-- PR policy: módulos >200 LOC novos no bin exigem ADR.
-- CI gate: `python docs/archive/migration/diff_bin_crate.py --strict`.
-- Nenhum módulo `bin_ahead` pode ser ampliado sem promover primeiro.
+### 2.2 E1a — cortex/bpe/gguf/gguf_streaming/model_hub → cortex crate ✅
 
-### 2.3 E1a — Wave 7a: cortex/bpe/gguf/gguf_streaming/model_hub → cortex crate
+| Ação | LOC removido | Resultado |
+|------|-------------:|-----------|
+| `bpe.rs` stub | 990 | ✅ stub (2 LOC) |
+| `gguf.rs` stub | 895 | ✅ stub (2 LOC) |
+| `gguf_streaming.rs` mantido (net-dependent) | 0 | ✅ mantido no bin |
+| `model_hub.rs` stub | 264 | ✅ stub (2 LOC) |
+| `cortex.rs` → thin boot path | 2.300 | ✅ só 182 LOC (vs 2.892 no crate) |
+| **Total removido** | **~4.449** | |
 
-| Ação | LOC migrado | LOC removido do bin | Risco |
-|------|-----------:|-------------------:|------:|
-| Mover bpe.rs → cortex crate | 990 | 990 | 🔴 API incompatível |
-| Mover gguf.rs → cortex crate | 895 | 895 | 🔴 crate não tem |
-| Mover gguf_streaming.rs → cortex crate | 757 | 757 | 🔴 crate não tem |
-| Stub cortex.rs → pub use | 0 | 2.300 | 🔴 API diferente |
-| Stub model_hub.rs → pub use | 0 | 264 | 🟡 duplicado |
-| **Total** | **2.642** | **5.206** | |
+### 2.3 E1b — agents/neural_fs/vfs/fs → hermes crate ❌ NÃO EXECUTADO
 
-### 2.4 E1b — Wave 7b: agents/neural_fs/vfs/fs → hermes crate
+| Ação | Previsto | Status |
+|------|----------|--------|
+| agents.rs → hermes crate sync | 2.388 | ❌ bin ainda tem 2.620 LOC (divergência +136) |
+| neural_fs → crate | 657 | 🟡 crate_ahead (809 bin vs 2.318 crate) |
+| vfs/* → pub use | 256 | ❌ mantido (257 LOC) |
+| fs/* → pub use | 149 | ❌ mantido (602 LOC) |
 
-| Ação | LOC migrado | LOC removido do bin | Risco |
-|------|-----------:|-------------------:|------:|
-| Verificar/corrigir lista agentes (25×25) | ~56 | 2.388 | 🔴 |
-| Promover neural_fs/agent → hermes | 657 | 657 | 🟡 |
-| Stub vfs/* → pub use | 0 | 256 | 🟡 |
-| Stub fs/* → pub use | 0 | 149 | 🟡 |
-| **Total** | **713** | **3.450** | |
+### 2.4 E1c — boot_logger/virtio_net/usb_msc → k_nano ✅
 
-### 2.5 E1c — Wave 7c: boot_logger/virtio_net/usb_msc → k_nano crate
+| Ação | LOC | Resultado |
+|------|----:|-----------|
+| `boot_logger.rs` → crate | 507 | ✅ crate_ahead (118 bin vs 395 crate) |
+| `virtio_net.rs` stub | 408 | ✅ stub (3 LOC) |
+| `usb_msc.rs` stub | 205 | ✅ removido do bin |
+| **Total removido** | **~1.117** | |
 
-| Ação | LOC migrado | LOC removido do bin | Risco |
-|------|-----------:|-------------------:|------:|
-| Promover boot_logger.rs → k_nano | 507 | 507 | 🟡 |
-| Stub virtio_net.rs → pub use | 0 | 408 | 🟡 |
-| Stub usb_msc.rs → pub use | 0 | 205 | 🟢 |
-| **Total** | **507** | **1.120** | |
+### 2.5 E2 — BootHandoff trait ✅
 
-### 2.6 E2 — Limine handoff trait (P1)
+`boot_handoff.rs` implementa wrapper de `Bootloader011Handoff` + trait `BootHandoff`. Não pode mover p/ crate (depende de `bootloader_api::BootInfo` — dep do bin). Mantido no bin.
 
-- Criar trait `BootHandoff` com métodos: `physical_memory_offset()`, `framebuffer()`, `rsdp()`.
-- Implementar `Bootloader011Handoff` + `LimineHandoff`.
-- Refatorar `kernel_boot()` para aceitar `dyn BootHandoff`.
-- Feature `limine-boot` já existe como gated (`limine_boot.rs`).
-- **Pré-requisito:** E1 completo.
+### 2.6 E3 — GPU/WiFi wire k_hal ✅
 
-### 2.7 E3 — Infra ADR-0062 nos crates (P2/P3/P5/P6)
+`pub use jarbas_crate::{display, gpu, ...}` em main.rs. Wire completo.
 
-- P2 VFS, P3 AHCI/NVMe, P5 GPU, P6 WiFi: todos já nos crates.
-- Só wire `pub use` no bin (~10 LOC).
+### 2.7 E4 — Audio → jarbas crate ✅
 
-### 2.8 E4 — Audio cutover (P2, ADR-0045 revisado)
+- `audio/mod.rs` virou re-export: `pub use jarbas_crate::audio::*`
+- `jarbas_bridge.rs` mantido para verificação de contract sync
+- **~2.900 LOC removidos** do bin
 
-- Mover `audio/*` (21 arquivos, ~2.900 LOC) → jarbas crate.
-- Atualizar imports, verificar contract sync (`jarbas_bridge.rs`).
-- **Pré-requisito:** ADR-0045 revisado e aprovado.
+### 2.8 Resumo
 
-## 3. Alvo final
+| Fase | Previsto | Real | Status |
+|------|---------:|-----:|:------:|
+| Ondas 0-6 | ~40 stubs | 40 stubs | ✅ |
+| E1a | -5.206 | -4.449 | ✅ (gguf_streaming ficou) |
+| E1b | -3.450 | 0 | ❌ |
+| E1c | -1.120 | -1.117 | ✅ |
+| E2 | +200/-50 | ±0 | ✅ (wrapper mantido) |
+| E3 | +10 | +10 | ✅ |
+| E4 | -2.900 | -2.900 | ✅ |
+| **Total** | **-12.516** | **-8.998** | **~72% do plano** |
 
-| Fase | Bin LOC | Acumulado removido |
-|------|--------:|-------------------:|
-| Hoje | 29.431 | 0 |
-| Pós-E1a | ~24.200 | 5.206 |
-| Pós-E1b | ~20.750 | 8.656 |
-| Pós-E1c | ~19.630 | 9.776 |
-| Pós-E2 | ~19.780 | 9.726 (+200 Limine adapter) |
-| Pós-E3 | ~19.790 | 9.716 (+10 wire) |
-| Pós-E4 | ~16.890 | 12.616 (com audio) |
+---
 
-**Alvo realista mínimo:** **~11.000 LOC** sem audio (~16.890 - 2.900 audio - 3.000 main.rs encolhido + stubs).
-**O dashboard diz 3-5k:** inviável — main.rs (3.102) + glue (2.000) + role_diff (6.500) = 11.600 LOC mínimo.
+## 3. O que caducou / não se sustentou
 
-## 4. Anti-padrões
+### 3.1 E0 — Freeze CI gate (nunca implementado)
 
-1. **Portar ClaudioOS P2–P7 para dentro do bin** — engorda o monólito. Implementar só nos crates.
-2. **Limine no meio de promote cortex/agents** — dois refactors no mesmo caminho de boot. Isolar handoff OU terminar E1 antes.
-3. **Stub cego de net.rs** — role_diff: bin=stack, k_nano=nic_globals. Manter bridge; promover stack p/ hermes se um dia unificar.
-4. **Copiar AGPL ClaudioOS kernel** — preferir crates MIT/Apache publicadas.
+- A política de CI `diff_bin_crate.py --strict` **nunca foi integrada** a nenhum pipeline.
+- O script estava quebrado (`parents[1]` em vez de `parents[3]` no path do ROOT) até 2026-07-29.
+- O arquivo `.cursor/rules/neural-emagrecer-bin.mdc` **não existe mais** — perdido em checkpoint/merge.
 
-## 5. Gate checklist (por wave)
+### 3.2 Alvo 16.890 LOC → 20.430 LOC
 
-1. `python docs/archive/migration/diff_bin_crate.py --onda N --strict` — sem `bin_ahead` nos alvos
+O alvo de ~16.890 LOC (pós-E4) não foi atingido porque:
+- Crescimento orgânico: main.rs cresceu (novos agents, bridges, boot paths)
+- Glue aumentou (SMP AP worker, async executor, isolation ring, etc.)
+- O piso real (~11.600 glue+role_diff) sempre foi subestimado — só glue+role_diff hoje soma ~10.000 LOC
+
+### 3.3 Ordem forte E0→E1a→E1b→E1c→E2→E3→E4
+
+A execução real foi E1a+E1c+E4 em paralelo (SESSION_217), E2 e E3 já existiam independentemente. A ordem forte não se sustentou na prática — cada fase era mais independente do que o plano supunha.
+
+---
+
+## 4. O que ainda pode ser feito (~3.771 LOC recuperáveis)
+
+### 4.1 Módulos bin_ahead — promover conteúdo duplicado
+
+Onde o bin tem uma cópia que diverge do crate. Ação: sync drift + stub.
+
+| Módulo | LOC bin | LOC crate | Diferença | Esforço | Risco |
+|--------|--------:|----------:|----------:|---------|:-----:|
+| **`agents.rs`** | 2.620 | 2.484 | +136 | Alto (~4h) | 🟡 20 impls Agent; boot path complexo |
+| **`shutdown.rs`** | 360 | 233 | +127 (parcial) | Médio | 🟡 split deliberado (HW exec no bin, cause/arm no crate) |
+| **`boot_log_agent.rs`** | 118 | 147 | stub compatível | Baixo | 🟢 ~118 LOC de FAT walk; crate tem versão maior (147) |
+| **`memory_agent.rs`** | 193 | 189 | +4 | Baixo | 🟢 divergência mínima |
+| **`aios_api.rs`** | 92 | 83 | +9 | Baixo | 🟢 quase idêntico |
+| **`vga_buffer.rs`** | 216 | 204 | +12 (macros) | Médio | 🟡 macros bin-specific precisam port p/ crate |
+| **Total** | **~3.599** | | | | |
+
+### 4.2 Módulos crate_ahead (já efetivamente stubs)
+
+12 módulos onde o crate tem mais código que o bin. Em geral já são stubs (3-4 LOC de `pub use`) ou thin wrappers legítimos. **Não vale o esforço de mexer:**
+
+- Já stubs/triviais (3-4 LOC): `gpt.rs`, `exfat_write.rs`, `dma.rs`, `io_scheduler.rs`, `storage_manager.rs`, `chunker.rs`, `context_window.rs`, `training_agent.rs` ✅
+- Thin wrapper justificado: `neural_fs/` (809 LOC no bin, mas 2.318 no crate — bin tem o agent que consome o crate), `interrupts.rs` (441 LOC — role_diff legítimo), `cortex.rs` (182 LOC — boot path), `boot_logger.rs` (118 LOC — FAT walk, crate maior)
+
+### 4.3 Missing_bin (já removidos, verificar stubs)
+
+| Módulo | LOC crate | Ação |
+|--------|----------:|------|
+| `sync/` | 234 | Já movido p/ k_nano; bin usa via dep |
+| `slab.rs` | 152 | Já movido p/ k_nano |
+| `usb_msc.rs` | 239 | Já movido p/ k_nano |
+
+---
+
+## 5. O que NÃO pode ser feito
+
+### 5.1 Role-diff estrutural (~4.500 LOC)
+
+| Módulo | LOC | Motivo |
+|--------|----:|--------|
+| `net.rs` | 751 | Bin tem stack real (smoltcp + HTTP + DNS raw + TLS). `k_nano` só tem nic_globals (7 LOC). Unificação exigiria refatorar smoltcp p/ dentro da crate — decisão adiada. |
+| `smp/` (parallel_matmul.rs) | ~200 | AP worker acoplado ao gating `ap_pollable()` do bin. Mover quebraria dependência circular. |
+| `boot_handoff.rs` | ~150 | Depende de `bootloader_api::BootInfo` (dep do bin, não da crate). |
+| `interrupts.rs`, `apic.rs` | ~1.100 | Role_diff legítimo — HW state, page tables, IRQ handlers não migram. |
+
+### 5.2 Glue (~5.500 LOC)
+
+main.rs (boot sequence, agent registration, integração), IDT, GDT, allocator, shell, PCI scan, APIC init — tudo que cola as crates. **Não emagrece além de fatoração marginal.**
+
+### 5.3 Piso mínimo
+
+glue (5.500) + role_diff (4.500) = **~10.000 LOC irreduzíveis**. O bin nunca será mais magro que isso.
+
+---
+
+## 6. Anti-padrões (atualizado)
+
+1. ~~Portar ClaudioOS P2–P7 para dentro do bin~~ → Nunca ocorreu. ✅
+2. ~~Limine no meio de promote E1~~ → E2 já estava independente. ✅
+3. **Stub cego de net.rs** — role_diff mantido. Decisão correta. ✅
+4. **Copiar AGPL ClaudioOS kernel** — Não ocorreu. ✅
+5. **Ampliar bin_ahead sem promover primeiro** — Ocorreu parcialmente (agents.rs e main.rs cresceram). ⚠️ E0 não gateou.
+
+---
+
+## 7. Alvo realista revisado
+
+| Cenário | LOC bin | Redução |
+|---------|--------:|--------:|
+| Atual | 20.430 | — |
+| Pós-promover agents.rs + boot_log_agent + memory_agent + aios_api | ~17.400 | −3.000 |
+| Pós-sincronizar shutdown.rs (parcial) + vga_buffer.rs | ~16.850 | −550 |
+| **Alvo realista** | **~16.500–17.500** | **(após promover bin_ahead restante)** |
+| **Piso intransponível** | **~10.000** | **(glue + role_diff)** |
+
+---
+
+## 8. Gate checklist revisado
+
+1. `python docs/archive/migration/diff_bin_crate.py --onda N` — sem `bin_ahead` nos alvos
 2. `cargo clean -p neural-kernel && cargo nk` = 0 erros
 3. Boot WHPX: 8 fases + `[TIMER] tick=`
-4. Rollback: 1 commit atômico por wave, `git revert` se gate falha
+4. Rollback: 1 commit por promoção, `git revert` se gate falha
+5. **Novo:** Todo PR que adiciona >200 LOC ao bin deve incluir justificativa por que não pode ir para crate
 
-## 6. Rollback path
+---
 
-| Wave | Rollback | Verificação |
-|------|----------|-------------|
-| E0 | git revert policy | CI gate |
-| E1a | git revert cortex/bpe/gguf | boot LLM carrega modelo |
-| E1b | git revert agents/neural_fs | AgentFleet 25 agentes |
-| E1c | git revert boot_logger/virtio_net/usb_msc | BOOT.LOG flush |
-| E2 | git revert Limine adapter | boot 0.11 OK |
-| E3 | git revert GPU/WiFi wire | HW detect |
-| E4 | git revert audio move | audio init |
+## 9. Referências
 
-## 7. Referências
-
-- SESSION_215 — análise profunda + dados do recon
-- SESSION_163 — emagrecer ondas 0-6
-- IDEA #467 / #511 — emagrecer neural-kernel
-- BIN_CRATE_DIFF.md — diff tool output
+- SESSION_215 — análise profunda + plano E0–E4 original
+- SESSION_217 — execução E1a/E1c/E4 + P001 + boot path + checkpoint
+- SESSION_163 — emagrecer ondas 0-6 + diff_bin_crate
+- BIN_CRATE_DIFF.md — diff tool output (pré-SESSION_217)
+- `diff_bin_crate.py` — ferramenta de diff (corrigida 2026-07-29)
 - AGENTS.md — plano diretor K³CHJ
-- .cursor/rules/neural-emagrecer-bin.mdc — regra de emagrecimento
+- IDEA #467 / #511 — emagrecer neural-kernel
