@@ -5,6 +5,8 @@ pub use crate::nic_globals::*;
 pub mod mesh;
 pub mod noproto;
 pub mod transport;
+pub mod udp_broadcast;
+#[cfg(test)] pub mod p2p_sim;
 
 pub use noproto::{AiosTaskPacket, NoProtoParser, PacketFlags, TaskType, AIOS_MAGIC, PACKET_HEADER_SIZE};
 pub use transport::{HybridTransport, TransportConfig, TransportMode, TransportError};
