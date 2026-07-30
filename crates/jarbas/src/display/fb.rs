@@ -230,63 +230,6 @@ pub fn probe_raw_framebuffer(
     );
 }
 
-pub fn probe_uefi_framebuffer(boot_info: &bootloader_api::BootInfo) {
-    if let Some(fb) = boot_info.framebuffer.as_ref().and_then(|f| Some(f)) {
-        let info = fb.info();
-        let pixel_name = match info.pixel_format {
-            bootloader_api::info::PixelFormat::Bgr => "BGR",
-            bootloader_api::info::PixelFormat::Rgb => "RGB",
-            _ => "OTHER",
-        };
-        // Fonte de verdade: info.bytes_per_pixel do bootloader/GOP.
-        // PixelFormat só define ordem dos canais (Bgr/Rgb), NÃO o bpp.
-        let reported_bpp = info.bytes_per_pixel as u32;
-        let rgb_order = matches!(info.pixel_format, bootloader_api::info::PixelFormat::Rgb);
-        let gpu = GpuDevice::from_probe(
-            fb.buffer().as_ptr() as u64,
-            info.width as u32,
-            info.height as u32,
-            info.stride as u32,
-            reported_bpp,
-            rgb_order,
-        );
-        let bpp = gpu.fb_bpp;
-        let fb_stride = gpu.fb_stride;
-        let fb_width = gpu.fb_width;
-        let fb_height = gpu.fb_height;
-        let fb_buf_len = fb.buffer().len();
-
-        match info.pixel_format {
-            bootloader_api::info::PixelFormat::Bgr => k_nano::slog_jarbas!("Display", "info", "PixelFormat: Bgr (B primeiro) bytes/pixel={} (gop_reported={})", bpp, reported_bpp),
-            bootloader_api::info::PixelFormat::Rgb => k_nano::slog_jarbas!("Display", "info", "PixelFormat: Rgb (R primeiro) bytes/pixel={} (gop_reported={})", bpp, reported_bpp),
-            _ => k_nano::slog_jarbas!("Display", "info", "PixelFormat: {} bytes/pixel={} (gop_reported={})", pixel_name, bpp, reported_bpp),
-        };
-
-        // Validacao: stride derivado vs tamanho real do buffer
-        let expected_min = (fb_height as usize).saturating_sub(1) * fb_stride as usize
-            + fb_width as usize * bpp as usize;
-        if expected_min > fb_buf_len {
-            k_nano::slog_jarbas!("Display", "info", "ALERTA: stride {} pode exceder buffer ({} bytes, esperado min {})", fb_stride, fb_buf_len, expected_min);
-        }
-
-        k_nano::slog_jarbas!("Display", "info", "UEFI fb: {}x{} bpp={} stride={}({}px) buf={} @{:x}",
-            fb_width, fb_height, bpp, fb_stride, info.stride, fb_buf_len, fb.buffer().as_ptr() as u64);
-
-        // NOTA: NAO remapear como UC aqui — map_page_uc() aloca frames para
-        // page tables, mas o frame allocator e a IDT ainda nao foram init.
-        // O remapeamento UC sera feito em fb_remap_uc(), chamado apos memory init.
-        *GPU.lock() = Some(gpu);
-
-        // Limpa TRACE do bootloader — texto sobreposto ficava ilegível.
-        console_clear();
-        boot_ckpt(0, "probe FB ok (kernel entrou)");
-
-        k_nano::slog_jarbas!("Display", "info", "UEFI framebuffer configurado: {}x{} bpp={} stride={} @{:x}", gpu.fb_width, gpu.fb_height, bpp, gpu.fb_stride, gpu.fb_addr);
-    } else {
-        k_nano::slog_jarbas!("Display", "info", "Sem framebuffer UEFI — VGA text mode.");
-    }
-}
-
 /// Pinta resposta TTS/LLM no FB (antes do scheduler / DisplayAgent).
 pub fn paint_tts_response(text: &str) {
     let guard = GPU.lock();

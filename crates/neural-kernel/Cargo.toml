@@ -4,7 +4,6 @@ version = "1.0.0"
 edition = "2021"
 
 [dependencies]
-bootloader_api = "0.11.15"
 spin = "0.9"
 lazy_static = { version = "1.4", features = ["spin_no_std"] }
 uart_16550 = "0.2"
@@ -51,14 +50,12 @@ fat-boot-log = []
 # Soft-reboot 0xCF9 para BOOT.LOG — **default OFF**. Nunca ligar em HW produto
 # (loop: NEURLOG! sem UEFI writer de NEURDONE). Debug/experimento apenas.
 fat-boot-log-soft-reboot = ["fat-boot-log", "k-nano/soft-reboot-bootlog"]
-# ADR-0065 Labor 3: dual-boot Limine (HHDM/memmap/FB/RSDP). Default OFF = bootloader 0.11.
-limine-boot = []
 # ttf-parser não é compatível com no_std puro.
 # Usamos ferramenta Python tools/convert_ttf_to_bitmap.py para converter TTF
 # em arrays Rust embutidos, sem runtime parsing.
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "fat-boot-log", "fat-boot-log-soft-reboot", "weather-e2e", "limine-boot"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "fat-boot-log", "fat-boot-log-soft-reboot", "weather-e2e"))'] }
 
 [package.metadata.bootimage]
 run-args = ["-m", "2G", "-serial", "stdio", "-nic", "user,model=rtl8139", "-smp", "2", "-accel", "whpx"]

@@ -1,4 +1,16 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s232 — Bootloader 0.11 Removal
+#   SESSION_232: Bootloader 0.11 cleanup — Limine path único (2026-07-30)
+#     vendor/bootloader/ removido (~1.8MB, image builder 0.11)
+#     bootloader_api dep removida de k_nano, neural-kernel, jarbas
+#     limine-boot feature removida — Limine é unconditional
+#     Dead code removido: BootloaderHandoff, probe_uefi_framebuffer,
+#       raw_boot_info(), BitmapFrameAllocator::init(), ramdisk path
+#     LEGACY/build-tools/mk_uefi/ + build_usb_bios.py deletados
+#     [patch.crates-io] bootloader removido do workspace Cargo.toml
+#     cargo check --release: 0 erros
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s231 — HW Expert v4 + ADR-0082
 #   SESSION_231: HW Expert v4 multi-head + HardwareInfo Registry (2026-07-30)
 #     ADR-0082 criada e implementada: HardwareInfo + HW Expert v4 + SGDB /hw/pci/

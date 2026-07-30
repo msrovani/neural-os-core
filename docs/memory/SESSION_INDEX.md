@@ -8,6 +8,7 @@
 
 | Sessão | Sprint | Bloco | Título | Principais Descobertas |
 |--------|--------|-------|--------|----------------------|
+| 232 | — | Bootloader 0.11 cleanup | Limine path único | vendor/bootloader/ removido (~1.8MB). bootloader_api dep removida de 3 crates. limine-boot feature removida (unconditional). BootloaderHandoff, probe_uefi_framebuffer, raw_boot_info(), init(), ramdisk bootloader path removidos. LEGACY mk_uefi + build_usb_bios.py deletados. `[patch.crates-io]` bootloader removido. 0 erros. |
 | 231 | — | HW Expert v4 + ADR-0082 | HardwareInfo Registry + HW Expert v4 multi-head + SGDB /hw/pci/ | ADR-0082 criada e implementada. HW Expert v4: 59.905 amostras, 5 heads, 260KB. build_card() tenta ML→tabela→heurística. Boot carrega HWEXPRT4.BIN. xsave removido da gate AVX2. find_child_byte16_sse runtime dispatch. |
 | 230 | — | Boot Speed | skip Ed25519 + VFS I/O em seed agents | seed_agent() ~8.5s de boot por Ed25519 signing 41× + VFS I/O 82×. Fix: guard `tier=="native"` skip signing + I/O. Seeds são trusted-by-compilation, não precisam runtime. `crates/hermes/src/package_hub.rs`. |
 | 227 | ADR-0079 | Neural AutoInstaller M0-M4 | Installer completo pendrive→HD/SSD/NVMe com IA | SysInstaller reativado + dual partition ESP+NeuralFS + HwProfiler + AutoInstallerAgent + Cortex InstallAdviser + self_check + rollback + hw_change + self_heal_disk + net_fallback + detect_ram_mb() real + format_fat32_esp() + ModelHub compat. 0 erros |

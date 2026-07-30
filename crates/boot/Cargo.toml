@@ -4,10 +4,5 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-[features]
-# Limine bootloader (HHDM/memmap/FB/RSDP). Default OFF = bootloader 0.11.
-limine-boot = []
-
 [build-dependencies]
-bootloader = "0.11"
-neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none", features = ["fat-boot-log", "limine-boot"] }
+neural-kernel = { path = "../neural-kernel", artifact = "bin", target = "x86_64-unknown-none", features = ["fat-boot-log"] }

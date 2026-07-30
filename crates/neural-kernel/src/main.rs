@@ -42,8 +42,6 @@ use alloc::vec;
 
 use alloc::vec::Vec;
 
-use bootloader_api::BootInfo;
-
 use event_bus::{CapabilityToken, Event};
 
 use skill_registry::{McpManifest, Skill, OutputSchema};
@@ -66,8 +64,6 @@ mod allocator;
 mod apic;
 mod ata;
 mod block_dev;
-// ADR-0062 E2 — BootHandler (bootloader + Limine)
-mod boot_handoff;
 mod bei_init;
 mod cortex;
 mod fat32;
@@ -103,7 +99,6 @@ pub use k_nano::{kjson, klog, klogc, serial_print, serial_println};
 // ADR-0042 N5.7: engine jarbas wired; residuals = audio/* (ADR-0045 truth + Sprint107 wakeword), jarbas_fb.rs
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
 
-#[cfg(feature = "limine-boot")]
 mod limine_boot;
 
 mod serial;
@@ -844,20 +839,6 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 
 
-#[cfg(not(feature = "limine-boot"))]
-bootloader_api::entry_point!(kernel_main, config = &CONFIG);
-
-/// Bootloader config: mapeamento de memoria fisica para acesso a VGA/APIC
-#[cfg(not(feature = "limine-boot"))]
-const CONFIG: bootloader_api::BootloaderConfig = {
-    let mut config = bootloader_api::BootloaderConfig::new_default();
-    config.mappings.physical_memory = Some(bootloader_api::config::Mapping::Dynamic);
-    config.kernel_stack_size = 2048 * 1024;
-    config
-};
-
-
-
 // ponytail: runs scheduler on heap-allocated stack (avoids bootloader v0.11 stack boundary #PF)
 fn sched_metrics_hook(tick: u64, n_agents: usize, polled: u32) {
     k_nano::slog_bin!("SCHED", "info", "tick={} agents={} polled={}", tick, n_agents, polled);
@@ -1245,19 +1226,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
     }
 }
 
-#[cfg(not(feature = "limine-boot"))]
-fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
-    // Reborrow imutável — o BootloaderHandoff + kernel_boot dividem a mesma ref.
-    let bi: &'static bootloader_api::BootInfo = &*boot_info;
-    // Early RSDP + framebuffer (antes de kernel_boot)
-    crate::acpi::set_boot_rsdp(bi.rsdp_addr.into_option());
-    display::fb::probe_uefi_framebuffer(bi);
-    let ho = boot_handoff::BootloaderHandoff::new(bi);
-    kernel_boot(&ho)
-}
-
 /// Boot comum (ADR-0062 E2): `handoff` = trait unificado.
-/// Ramdisk acessado via `handoff.raw_boot_info()` (bootloader-only).
 pub(crate) fn kernel_boot(
     handoff: &impl k_nano::boot_handoff::BootHandoff,
 ) -> ! {
@@ -2649,70 +2618,9 @@ pub(crate) fn kernel_boot(
 
     
 
-    // Ramdisk: carrega modelo .bitnet grande se disponivel
-
-    // Se o ramdisk estiver vazio/pequeno, tenta QEMU loader em 4GB
+    // Ramdisk — só bootloader 0.11 (removido); Limine usa módulos QEMU loader.
 
     let mut model_loaded = false;
-
-    // Ramdisk — só bootloader (via raw_boot_info); Limine usa módulos.
-    let ramdisk_data_opt = handoff.raw_boot_info().and_then(|bi| match bi.ramdisk_addr {
-        bootloader_api::info::Optional::Some(addr) => {
-            let len = bi.ramdisk_len as usize;
-            // ponytail: max ramdisk 256MB, > que isso é provável bootloader corrupto
-            const MAX_RAMDISK: usize = 256 * 1024 * 1024;
-            if len > 1024 && len <= MAX_RAMDISK {
-                Some(unsafe { core::slice::from_raw_parts(addr as *const u8, len) })
-            } else {
-                k_nano::slog_bin!(
-                    "Asset",
-                    "ramdisk",
-                    "Ramdisk too small ({} bytes) — trying QEMU loader.",
-                    len
-                );
-                None
-            }
-        }
-        _ => None,
-    });
-
-    if let Some(data) = ramdisk_data_opt {
-
-        let mut m = [0u8; 4]; m.copy_from_slice(&data[..4]);
-
-        let magic = u32::from_le_bytes(m);
-
-        if magic == 0xBE11BE11 {
-
-            k_nano::slog_bin!("Asset", "ramdisk", ".bitnet model found ({} bytes). Loading...", data.len());
-
-            if let Some(big_model) = crate::cortex::load_model(data) {
-
-                crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-
-                k_nano::slog_bin!("RAMDISK", "info", "Big model loaded. CortexAgent upgraded.");
-
-                // ponytail: skip 2B self-test — forward pass ~1min em soft-float; QEMU WHPX crash layer 15
-                // let r = crate::cortex::generate_via_model("hello world");
-                // k_nano::slog_bin!("LLM-2B", "info", "prompt='hello world' response='{}'", r);
-
-                crate::boot_logger::log("BOOT: Ramdisk .bitnet model loaded");
-
-                model_loaded = true;
-
-            } else {
-
-                k_nano::slog_bin!("RAMDISK", "info", ".bitnet load FAILED — keeping micro model.");
-
-            }
-
-        } else {
-
-            k_nano::slog_bin!("Asset", "ramdisk", "Unknown magic {:02X?} — skipping model load.", &magic);
-
-        }
-
-    }
 
     // N3: QEMU -device loader ANTES do FAT — PIO de ~200MB no TCG trava/é inviável.
     // Host: -device loader,file=<bitnet>,addr=0x100000000 + -m 6G+

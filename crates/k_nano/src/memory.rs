@@ -1,4 +1,3 @@
-use bootloader_api::info::MemoryRegionKind;
 use ticket_lock::TicketLock;
 use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB};
 use x86_64::PhysAddr;
@@ -42,54 +41,6 @@ impl BitmapFrameAllocator {
             usable_frames: 0,
             allocated_count: 0,
         }
-    }
-
-    /// Varre o mapa de memória UEFI e marca como ocupados apenas os frames
-    /// que NÃO são `Usable`. Frames utilizáveis ficam com bit = 0 (livre).
-    pub fn init(&mut self, memory_regions: &bootloader_api::info::MemoryRegions) {
-        self.bitmap = [0xFFu8; BITMAP_SIZE];
-        let mut last_end: u64 = 0;
-        let mut usable_count: usize = 0;
-
-        for region in memory_regions.iter() {
-            if region.kind == MemoryRegionKind::Usable {
-                let start_frame = PhysFrame::<Size4KiB>::containing_address(
-                    PhysAddr::new(region.start),
-                );
-                let end_frame = PhysFrame::<Size4KiB>::containing_address(
-                    PhysAddr::new(region.end - 1),
-                );
-                let start_idx = start_frame.start_address().as_u64() / FRAME_SIZE;
-                let end_idx = end_frame.start_address().as_u64() / FRAME_SIZE;
-
-                for i in start_idx..=end_idx {
-                    if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
-                        self.clear_bit(i as usize);
-                        usable_count += 1;
-                    }
-                }
-                last_end = region.end;
-            }
-        }
-
-        // Marca frames 2-159 (0x8000 a 0x9F000) como utilizáveis
-        // para uso exclusivo do trampoline SMP (BIOS não reporta esta região).
-        // Frames 0 (IVT) e 1 (BDA) permanecem ocupados.
-        for i in 2..160 {
-            if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
-                self.clear_bit(i as usize);
-                usable_count += 1;
-            }
-        }
-
-        self.total_frames = core::cmp::min(
-            (last_end / FRAME_SIZE) as usize,
-            BITMAP_SIZE * BITS_PER_BYTE,
-        );
-        self.usable_frames = usable_count;
-        self.allocated_count = 0;
-        // Pula frames 0-255 (abaixo de 1 MB) — reservados para trampoline SMP
-        self.next_free_bit = 256;
     }
 
     /// Init a partir de ranges usable `(base, length)` — path Limine (ADR-0065).

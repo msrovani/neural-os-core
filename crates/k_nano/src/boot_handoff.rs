@@ -46,9 +46,4 @@ pub trait BootHandoff {
         })
     }
 
-    /// Acesso cru ao `BootInfo` do bootloader 0.11, se disponível.
-    /// Só existe no caminho `rust-bootloader`; Limine retorna `None`.
-    fn raw_boot_info(&self) -> Option<&'static bootloader_api::BootInfo> {
-        None
-    }
 }

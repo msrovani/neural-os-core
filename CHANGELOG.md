@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### SESSION_232: Bootloader 0.11 cleanup — Limine path único (2026-07-30)
+- **clean: vendor/bootloader/** — crate do image builder 0.11 removida (~1.8MB, 65+ arquivos)
+- **clean: bootloader_api dep** — removida de k_nano, neural-kernel, jarbas Cargo.tomls
+- **clean: limine-boot feature** — removida; Limine é agora unconditional (sem feature gates)
+- **clean: bootloader 0.11 entry point** — `kernel_main(boot_info)`, `BootloaderConfig`, `entry_point!` removidos
+- **clean: BootloaderHandoff** — `neural-kernel/src/boot_handoff.rs` deletado (wrapper `bootloader_api::BootInfo`)
+- **clean: probe_uefi_framebuffer** — `jarbas/src/display/fb.rs` — só chamada no entry 0.11
+- **clean: raw_boot_info()** — removido do trait `BootHandoff` em `k_nano/src/boot_handoff.rs`
+- **clean: BitmapFrameAllocator::init()** — método morto (só `init_from_usable_ranges` usado)
+- **clean: ramdisk bootloader path** — código que destrinchava `bootloader_api::Optional` (nunca dispara no Limine)
+- **clean: LEGACY/build-tools/mk_uefi/** + **build_usb_bios.py** — builders 0.11 deletados
+- **clean: [patch.crates-io] bootloader** — patch morto removido do workspace Cargo.toml
+- **cargo check --release**: 0 erros
+
 ### SESSION_231: HW Expert v4 + ADR-0082 — HardwareInfo Registry (2026-07-30)
 - **ADR-0082** — criada e implementada: HardwareInfo Registry, 489 linhas, Anexo A pesquisa de mercado
 - **feat: HardwareInfo struct** — `platform_probe.rs`: registro público de HW unificado. `hw_info()` accessor. `avx2_ready()`, `avx512_ready()`.
