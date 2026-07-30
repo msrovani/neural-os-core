@@ -518,12 +518,7 @@ impl NeuralVolume {
         n: usize,
     ) -> Result<u8, &'static str> {
         use super::inode::Inode;
-        let log_every = if n >= 500 { n / 10 } else { core::cmp::max(1, n / 5) };
         for i in 0..n {
-            if i % log_every == 0 {
-                let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-                k_nano::slog_nano!("NEURALFS", "perf", "test_insert_many {}/{} tick={}", i, n, t);
-            }
             self.begin_tx();
             let ino = 1000 + i as u64;
             let key = Inode::make_key(ino);

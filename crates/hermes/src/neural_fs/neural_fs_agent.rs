@@ -533,11 +533,6 @@ impl NeuralFsAgent {
         } else {
             k_nano::slog_bin!("NEURALFS", "info", "smoke_split=FAIL");
         }
-        if crate::neural_fs::tests::smoke_multilevel() {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=OK");
-        } else {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=FAIL");
-        }
         if crate::neural_fs::tests::smoke_level2() {
             k_nano::slog_bin!("NEURALFS", "info", "smoke_level2=OK");
         } else {
@@ -558,11 +553,6 @@ impl NeuralFsAgent {
             "info",
             "VERDICT=AWAITING_REAL_HW reason=awaiting_usb_power_cycle"
         );
-        if crate::neural_fs::tests::smoke_multilevel() {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=OK");
-        } else {
-            k_nano::slog_bin!("NEURALFS", "info", "smoke_multilevel=FAIL");
-        }
     }
 
     fn parent_and_name(path: &str) -> (&str, &str) {

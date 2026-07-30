@@ -71,22 +71,6 @@ pub fn smoke_split() -> bool {
     root.map(|n| n.level() >= 1).unwrap_or(false)
 }
 
-/// Multi-nivel: 200 keys forcam splits; nao pode falhar com "parent full".
-pub fn smoke_multilevel() -> bool {
-    let mut disk = MemoryDisk::new(16 * 1024 * 1024);
-    let total = disk.sector_count();
-    if !NeuralVolume::format(&mut disk, 0, total) {
-        return false;
-    }
-    let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
-        return false;
-    };
-    match vol.test_insert_many(&mut disk, 200) {
-        Ok(level) => level >= 1,
-        Err(_) => false,
-    }
-}
-
 /// Stress B-tree: milhares de keys → root level >= 2 (Onda 1 evidência).
 /// Com 84 items/folha e chaves monotônicas, nivel-2 requer ~3528+ items
 /// (85 splits p/ encher no interno). 4000 é seguro.

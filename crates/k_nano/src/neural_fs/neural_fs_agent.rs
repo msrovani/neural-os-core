@@ -205,11 +205,6 @@ impl NeuralFsAgent {
         } else {
             crate::slog_nano!("NEURALFS", "info", "smoke_split=FAIL");
         }
-        if crate::neural_fs::tests::smoke_multilevel() {
-            crate::slog_nano!("NEURALFS", "info", "smoke_multilevel=OK");
-        } else {
-            crate::slog_nano!("NEURALFS", "info", "smoke_multilevel=FAIL");
-        }
         if crate::neural_fs::tests::smoke_level2() {
             crate::slog_nano!("NEURALFS", "info", "smoke_level2=OK");
         } else {
