@@ -88,8 +88,10 @@ pub fn smoke_multilevel() -> bool {
 }
 
 /// Stress B-tree: milhares de keys → root level >= 2 (Onda 1 evidência).
+/// Com 84 items/folha e chaves monotônicas, nivel-2 requer ~3528+ items
+/// (85 splits p/ encher no interno). 4000 é seguro.
 pub fn smoke_level2() -> bool {
-    let mut disk = MemoryDisk::new(32 * 1024 * 1024);
+    let mut disk = MemoryDisk::new(64 * 1024 * 1024);
     let total = disk.sector_count();
     if !NeuralVolume::format(&mut disk, 0, total) {
         return false;
@@ -97,9 +99,12 @@ pub fn smoke_level2() -> bool {
     let Some(mut vol) = NeuralVolume::mount(&mut disk, 0) else {
         return false;
     };
-    match vol.test_insert_many(&mut disk, 2500) {
+    match vol.test_insert_many(&mut disk, 4000) {
         Ok(level) => level >= 2,
-        Err(_) => false,
+        Err(e) => {
+            crate::slog_nano!("NEURALFS", "info", "smoke_level2 erro={}", e);
+            false
+        }
     }
 }
 

@@ -957,7 +957,7 @@ pub fn read_fat_range(path: &str, offset: usize, size: usize) -> Option<Vec<u8>>
     let ata = ata.as_ref()?;
     let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
-        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 || part.type_code == 0xEF {
             let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part)? };
             return unsafe { fs.read_file_range(&name, offset, size) };
         }
@@ -975,7 +975,7 @@ pub fn write_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     let ata = ata.as_ref().ok_or("FAT write: ATA driver missing")?;
     let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
-        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 || part.type_code == 0xEF {
             let writer = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) }
                 .ok_or("FAT write: Fat32Writer::new failed")?;
             let ok = unsafe { writer.write_file(&name, data) };
@@ -1004,7 +1004,7 @@ pub fn append_fat_file(path: &str, data: &[u8]) -> Result<(), &'static str> {
     let ata = ata.as_ref().ok_or("FAT append: ATA driver missing")?;
     let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
-        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 || part.type_code == 0xEF {
             let writer = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) }
                 .ok_or("FAT append: Fat32Writer::new failed")?;
             let ok = unsafe { writer.append_file(&name, data) };

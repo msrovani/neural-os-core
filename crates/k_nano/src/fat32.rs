@@ -348,11 +348,17 @@ pub struct Fat32Reader<'a> {
 }
 
 impl<'a> Fat32Reader<'a> {
-    /// Tenta abrir particao FAT32 (type 0x0B, 0x0C, 0x1C ou 0x73)
+    /// Tenta abrir particao FAT32 (type 0x0B, 0x0C, 0x1C, 0x73 ou ESP 0xEF)
     pub unsafe fn new(ata: &'a AtaDriver, part: &Partition) -> Option<Self> {
-        if part.type_code != 0x0B && part.type_code != 0x0C && part.type_code != 0x1C && part.type_code != 0x73 { return None; }
+        if part.type_code != 0x0B && part.type_code != 0x0C && part.type_code != 0x1C && part.type_code != 0x73 && part.type_code != 0xEF {
+            crate::slog_nano!("FAT32", "info", "new: type {:#04x} nao compatível (req 0B/0C/1C/73)", part.type_code);
+            return None;
+        }
         let mut bpb = [0u8; 512];
-        if !ata.read_sectors(part.lba_start, &mut bpb, 1) { return None; }
+        if !ata.read_sectors(part.lba_start, &mut bpb, 1) {
+            crate::slog_nano!("FAT32", "info", "new: falha leitura BPB em LBA {}", part.lba_start);
+            return None;
+        }
 
         let bytes_per_sector = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]);
         let sectors_per_cluster = bpb[0x0D];
@@ -361,12 +367,18 @@ impl<'a> Fat32Reader<'a> {
         let root_entry_count = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
 
         // Rejeita FAT12/FAT16 — so FAT32 (root_entry_count == 0)
-        if root_entry_count > 0 { return None; }
+        if root_entry_count > 0 {
+            crate::slog_nano!("FAT32", "info", "new: root_entry_count={} nao e FAT32 (FAT12/16 ou BPB inválido)", root_entry_count);
+            return None;
+        }
 
         let sectors_per_fat32 = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
         let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
 
-        if bytes_per_sector == 0 || sectors_per_cluster == 0 { return None; }
+        if bytes_per_sector == 0 || sectors_per_cluster == 0 {
+            crate::slog_nano!("FAT32", "info", "new: bps={} spc={} invalido (zero)", bytes_per_sector, sectors_per_cluster);
+            return None;
+        }
 
         let fat_lba = part.lba_start as u64 + reserved_sectors as u64;
         let data_lba = fat_lba + fat_count as u64 * sectors_per_fat32 as u64;
