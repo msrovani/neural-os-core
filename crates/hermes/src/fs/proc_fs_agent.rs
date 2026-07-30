@@ -48,7 +48,8 @@ impl FilesystemAgent for ProcFsAgent {
             }
             "uptime" => {
                 let ticks = TIMER_TICKS.load(Ordering::Relaxed);
-                let secs = ticks / 18;
+                let hz = k_nano::interrupts::TIMER_HZ.load(Ordering::Relaxed) as usize;
+                let secs = ticks / hz;
                 let s = alloc::format!("{} ticks ({} seconds)\n", ticks, secs);
                 Ok(s.into_bytes())
             }

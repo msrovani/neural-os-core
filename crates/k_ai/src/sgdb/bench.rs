@@ -62,12 +62,14 @@ pub fn bench_smoke(n_art: usize, n_bq: usize) -> (bool, String) {
     let t4 = rdtsc();
     let bq_ok = !hits.is_empty() && hits[0].0 == 0;
 
-    let ok = art_ok && bq_ok && art.len == n_art && bq_idx.len() == n_bq;
+    let art_len = art.len;
+    let ok = art_ok && bq_ok && art_len == n_art && bq_idx.len() == n_bq;
     (
         ok,
         format!(
-            "art_n={} bq_n={} art_ok={} bq_ok={} path={} insert_cyc≈{} lookup_cyc≈{} topk_cyc≈{}",
+            "art_n={} art_len={} bq_n={} art_ok={} bq_ok={} path={} insert_cyc≈{} lookup_cyc≈{} topk_cyc≈{}",
             n_art,
+            art_len,
             n_bq,
             art_ok,
             bq_ok,

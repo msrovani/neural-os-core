@@ -3168,6 +3168,65 @@ pub(crate) fn kernel_boot(
         if rust_ok {
             crate::boot_logger::log("BOOT: RustCoder expert loaded");
         }
+        // ── HW Expert v4 multi-head ──────────────────────────────
+        // Carrega modelo v5 (multi-head) separado do v3 (free-text).
+        // HWEXPRT4.BIN pode vir do QEMU-loader ou FAT.
+        {
+            let pm = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+            let mut v4_ok = false;
+            if pm != 0 {
+                // Scan QEMU loader range para HWEXPRT4.BIN
+                let scan_start: u64 = 0x129400000;
+                let scan_end: u64 = 0x180000000;
+                let scan_sz: usize = 1024 * 1024;
+                let mut addr = scan_start;
+                while addr < scan_end && !v4_ok {
+                    let ptr = (addr + pm) as *const u8;
+                    let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
+                    if magic == 0xBE11BE11 {
+                        if addr + (scan_sz as u64) <= scan_end {
+                            let data = unsafe { core::slice::from_raw_parts(ptr, scan_sz) };
+                            if let Some(v4model) = cortex_crate::cortex::load_hwexpert_v5(data) {
+                                cortex_crate::cortex::set_hwexpert_v4_model(v4model);
+                                k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (QEMU-loader @{:#x})", addr);
+                                v4_ok = true;
+                            }
+                        }
+                    }
+                    addr = addr.saturating_add(0x100000);
+                }
+            }
+            // FAT32 fallback
+            if !v4_ok {
+                unsafe {
+                    let ata_guard = crate::ATA_DRIVER.lock();
+                    if let Some(ref ata) = *ata_guard {
+                        let parts = crate::fat32::read_mbr(ata);
+                        for p in &parts {
+                            if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B {
+                                continue;
+                            }
+                            if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
+                                if let Some(v4data) = fs.read_file("HWEXPRT4.BIN") {
+                                    if let Some(v4model) = crate::cortex::load_hwexpert_v5(&v4data) {
+                                        crate::cortex::set_hwexpert_v4_model(v4model);
+                                        k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (FAT) size={}KB", v4data.len() / 1024);
+                                        v4_ok = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if v4_ok {
+                crate::boot_logger::log("BOOT: HW Expert v4 multi-head loaded");
+                // Pós-carga: escreve predições no SGDB /hw/pci/*
+                crate::boot_logger::log("BOOT: HW Expert v4 predictions → SGDB /hw/pci/");
+                let _ = k_ai::sgdb::store::predict_all_pci();
+            }
+        }
     }
 
     // ModelHub extras: TinyStories / 850M fast / 3B pro — não substituem Active se já carregado

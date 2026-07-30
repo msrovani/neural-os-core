@@ -299,6 +299,16 @@ impl CodebookVQ {
     }
 }
 
+/// Resultado da predição do HW Expert v4 multi-head.
+/// Espelha os 5 heads do modelo BitNet.
+pub struct HwPrediction {
+    pub family_id: u8,    // 0-16 (17 classes)
+    pub fw_id: u8,        // 0-7 (8 firmwares)
+    pub agent_id: u8,     // 0-8 (9 agents)
+    pub caps_bits: u32,   // 10-bit bitmap
+    pub next_action: u8,  // 0-8 (9 actions)
+}
+
 pub fn quantize_to_packed(tensor: &Tensor, threshold: f32) -> PackedTernaryTensor {
     let mut ternary = Vec::with_capacity(tensor.data.len());
     for &val in tensor.data.iter() {

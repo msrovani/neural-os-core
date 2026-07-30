@@ -197,7 +197,332 @@ pub struct TransformerModel {
     pub rope_sin: Vec<f32>,
 }
 
+/// HW Expert v4 — classificador multi-head (5 heads) em vez de texto livre.
+/// Reusa o backbone transformer do v3, mas substitui `unembed` por 5 heads
+/// de classificação: family, fw, agent, caps, next_action.
+pub struct HwExpertV4Model {
+    pub hidden: usize,
+    pub num_layers: usize,
+    pub embed: PackedTernaryTensor,
+    pub embed_scale: f32,
+    pub layers: Vec<LayerWeights>,
+    pub rms_final: Vec<f32>,
+    // 5 heads multi-head (em vez de unembed)
+    pub family_head: PackedTernaryTensor,  // (hidden, 17)
+    pub fw_head: PackedTernaryTensor,      // (hidden, 8)
+    pub agent_head: PackedTernaryTensor,   // (hidden, 9)
+    pub caps_head: PackedTernaryTensor,    // (hidden, 10)
+    pub next_head: PackedTernaryTensor,    // (hidden, 9)
+    pub q_dim: usize,
+    pub ff_dim: usize,
+}
+
+// ─── HW Expert v5 multi-head ─────────────────────────────────────────
+
+/// Carrega modelo v5 multi-head (.bitnet version 5).
+/// Lê o backbone (embed + layers) igual ao v4, depois lê 5 heads pequenos.
+pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
+    let mut off = 0;
+    let magic = read_u32(data, &mut off)?;
+    if magic != 0xBE11BE11 { return None; }
+    let version = read_u16(data, &mut off)?;
+    if version < 5 { return None; }  // v5 required for multi-head
+    let _num_params = read_u64(data, &mut off).unwrap_or(read_u32(data, &mut off)? as u64);
+
+    let hidden = read_u16(data, &mut off)? as usize;
+    let num_layers = read_u16(data, &mut off)? as usize;
+
+    // Auto-expand heap
+    {
+        let _nh = read_u16(data, &mut off)? as usize;
+        let vs = read_u32(data, &mut off)? as usize;
+        let _ms = read_u16(data, &mut off)? as usize;
+        let isize = read_u16(data, &mut off)? as usize;
+        let _nkv = read_u16(data, &mut off)? as usize;
+        let _qd = read_u16(data, &mut off)? as usize;
+        let _medusa = read_u32(data, &mut off)? as usize;
+        off += 4; // tie_flag
+        off += 1; // tok_type
+        let tok_len = read_u32(data, &mut off).unwrap_or(0) as usize;
+        off = off.saturating_add(tok_len);
+        off += 1; // layer_features
+        // now off is past the header
+    }
+
+    // Full re-parse from offset 4+2+4+2+2 = 14
+    off = 4 + 2 + 4 + 2 + 2;  // magic(4) + version(2) + num_params(4) + hidden(2) + layers(2)
+    let num_heads = read_u16(data, &mut off)? as usize;
+    let _vocab_size = read_u32(data, &mut off)?;
+    let _max_seq = read_u16(data, &mut off)?;
+    let intermediate_size = read_u16(data, &mut off)? as usize;
+    let num_kv_heads = read_u16(data, &mut off)? as usize;
+    let q_dim = read_u16(data, &mut off)? as usize;
+    let _num_medusa = read_u32(data, &mut off)? as usize;
+
+    // tie_flag
+    let tie = if off + 4 <= data.len() { &data[off..off+4] == b"MH\x00\x00" } else { false };
+    off += 4;
+    let _tok_type = if off < data.len() { data[off] } else { 0 }; off += 1;
+    let tok_len = read_u32(data, &mut off).unwrap_or(0) as usize;
+    off = off.saturating_add(tok_len);
+    let layer_features = if version >= 4 && off < data.len() { data[off] } else { 0u8 }; off += 1;
+    let _has_inner_attn_ln = (layer_features & 0x01) != 0;
+    let _has_ffn_layernorm = (layer_features & 0x02) != 0;
+    let _has_rope = (layer_features & 0x04) != 0;
+
+    // Multi-head sanity: tok_type should be 5
+    if _tok_type != 5 && !tie {
+        k_nano::slog_cortex!("HWEXPERT", "warn", "v5 model without multi-head marker (tok_type={})", _tok_type);
+    }
+
+    let kv_head_dim = q_dim / num_heads.max(1);
+    let k_dim = num_kv_heads * kv_head_dim;
+    let ffn_group = intermediate_size * q_dim / hidden.max(1);
+    let down_out = q_dim;
+
+    // Embed
+    let (embed, embed_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, _vocab_size as usize)?;
+
+    // Layers
+    let mut layers = Vec::with_capacity(num_layers);
+    for _i in 0..num_layers {
+        let rms_attn = read_f32_vec(data, &mut off, hidden)?;
+        let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
+        let rms_inner_attn = if _has_inner_attn_ln { read_f32_vec(data, &mut off, hidden)? }
+                              else { vec![1.0; kv_head_dim * num_heads] };
+        let rms_ffn_norm = if _has_ffn_layernorm { read_f32_vec(data, &mut off, intermediate_size)? }
+                            else { vec![1.0; intermediate_size] };
+
+        let (q, q_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, q_dim)?;
+        let (k, k_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, k_dim)?;
+        let (v, v_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, k_dim)?;
+        let (o, o_scale) = read_ternary_tensor_with_scale(data, &mut off, q_dim, hidden)?;
+        let (gate, gate_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, ffn_group)?;
+        let (up, up_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, ffn_group)?;
+        let (down, down_scale) = read_ternary_tensor_with_scale(data, &mut off, intermediate_size, down_out)?;
+
+        layers.push(LayerWeights {
+            rms_attn, q, q_scale, k, k_scale, v, v_scale, o, o_scale,
+            rms_ffn, rms_inner_attn, rms_ffn_norm,
+            gate, gate_scale, up, up_scale, down, down_scale,
+            kv_dim: q_dim, num_kv_heads, intermediate_size, ffn_group_size: ffn_group,
+        });
+    }
+
+    let rms_final = read_f32_vec(data, &mut off, hidden)?;
+
+    // 5 heads (em vez de unembed + medusa)
+    let family_head = read_ternary_tensor(data, &mut off, hidden, 17)?;
+    let fw_head = read_ternary_tensor(data, &mut off, hidden, 8)?;
+    let agent_head = read_ternary_tensor(data, &mut off, hidden, 9)?;
+    let caps_head = read_ternary_tensor(data, &mut off, hidden, 10)?;
+    let next_head = read_ternary_tensor(data, &mut off, hidden, 9)?;
+
+    k_nano::slog_cortex!("HWEXPERT", "info", "v5 multi-head loaded: hidden={} layers={} heads=[17,8,9,10,9] {}KB",
+        hidden, num_layers, data.len() / 1024);
+    GLOBAL_MODEL_PARAMS.store(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
+
+    Some(HwExpertV4Model {
+        hidden, num_layers, embed, embed_scale, layers, rms_final,
+        family_head, fw_head, agent_head, caps_head, next_head,
+        q_dim, ff_dim: intermediate_size,
+    })
+}
+
+/// Pack 4 tokens from VID/DID (same packing as Python pack_vid_did)
+fn pack_vid_did(vid: u16, did: u16, vocab: u32) -> [u32; 4] {
+    let v = vocab as u16;
+    [
+        ((vid >> 8) % v) as u32,
+        (vid % v) as u32,
+        ((did >> 8) % v) as u32,
+        (did % v) as u32,
+    ]
+}
+
+/// RMS Normalization inline (evita depender do decoder)
+fn rms_norm_hw(x: &mut [f32], weight: &[f32]) {
+    let n = x.len();
+    let ss: f32 = x.iter().map(|v| v * v).sum::<f32>() / n as f32;
+    let rms = libm::sqrtf(ss) + 1e-6;
+    for i in 0..n {
+        x[i] = x[i] / rms * weight[i.min(weight.len().saturating_sub(1))];
+    }
+}
+
+/// SwiGLU activation: out = gate * sigmoid(gate) * up
+fn swiglu(gate: &[f32], up: &[f32]) -> Vec<f32> {
+    gate.iter().zip(up.iter()).map(|(&g, &u)| {
+        let sig = 1.0 / (1.0 + libm::expf(-g));
+        g * sig * u
+    }).collect()
+}
+
+/// HW Expert v4: predict structured card from VID/DID.
+pub fn predict_hw_v4(model: &HwExpertV4Model, vid: u16, did: u16) -> crate::tensor::HwPrediction {
+    use crate::tensor::Tensor;
+
+    let h = model.hidden;
+    let tokens = pack_vid_did(vid, did, 64);
+    let seq = 4;
+
+    // Embed tokens: [seq, 1] → matmul com [hidden, vocab] → [seq, hidden]
+    let mut hidden_vec = vec![0.0f32; seq * h];
+    for (ti, &tok) in tokens.iter().enumerate() {
+        if (tok as usize) < model.embed.shape.1 {
+            // Lookup column da matriz embed
+            let col_offset = tok as usize;
+            for row in 0..h {
+                let idx = col_offset * h + row; // column-major na verdade row-major
+                // embed é (hidden, vocab) — cada coluna é um embedding
+                let byte_idx = idx / 4;
+                let bit_shift = (idx % 4) * 2;
+                let packed = model.embed.packed_data.get(byte_idx).copied().unwrap_or(0);
+                let sign = ((packed >> bit_shift) & 0x03) as i8;
+                let val = match sign {
+                    0b01 => 1.0,
+                    0b10 => -1.0,
+                    _ => 0.0,
+                };
+                hidden_vec[ti * h + row] = val * model.embed_scale;
+            }
+        }
+    }
+
+    // Transformer layers
+    for layer in &model.layers {
+        // RMS norm pre-attention
+        for pos in 0..seq {
+            let start = pos * h;
+            rms_norm_hw(&mut hidden_vec[start..start + h], &layer.rms_attn);
+        }
+
+        // QKV projections + output (simplificado: projeta cada pos)
+        let mut attn_out = vec![0.0f32; seq * model.q_dim];
+        for pos in 0..seq {
+            let inp_start = pos * h;
+            let inp = &hidden_vec[inp_start..inp_start + h];
+            let inp_t = Tensor::from_row_major((1, h), inp.to_vec()).unwrap();
+            let out_t = layer.o.matmul_hybrid(&layer.v.matmul_hybrid(&inp_t).unwrap()).unwrap();
+            let out_start = pos * model.q_dim;
+            for j in 0..model.q_dim {
+                attn_out[out_start + j] = out_t.data[j];
+            }
+        }
+
+        // Residual add + RMS norm pre-FFN
+        for pos in 0..seq {
+            let h_start = pos * h;
+            let a_start = pos * model.q_dim;
+            for j in 0..h.min(model.q_dim) {
+                hidden_vec[h_start + j] += attn_out[a_start + j];
+            }
+            rms_norm_hw(&mut hidden_vec[h_start..h_start + h], &layer.rms_ffn);
+        }
+
+        // SwiGLU FFN
+        let mut ffn_out = vec![0.0f32; seq * h];
+        for pos in 0..seq {
+            let inp_start = pos * h;
+            let inp = &hidden_vec[inp_start..inp_start + h];
+            let inp_t = Tensor::from_row_major((1, h), inp.to_vec()).unwrap();
+
+            let gate_t = layer.gate.matmul_hybrid(&inp_t).unwrap();
+            let up_t = layer.up.matmul_hybrid(&inp_t).unwrap();
+            let sw = swiglu(&gate_t.data, &up_t.data);
+            let sw_t = Tensor::from_row_major((1, layer.intermediate_size), sw).unwrap();
+            let down_t = layer.down.matmul_hybrid(&sw_t).unwrap();
+
+            let out_start = pos * h;
+            for j in 0..h.min(down_t.data.len()) {
+                ffn_out[out_start + j] = down_t.data[j];
+            }
+        }
+
+        // Residual add
+        for pos in 0..seq {
+            let h_start = pos * h;
+            for j in 0..h {
+                hidden_vec[h_start + j] += ffn_out[h_start + j];
+            }
+        }
+    }
+
+    // Final RMS norm
+    for pos in 0..seq {
+        let start = pos * h;
+        rms_norm_hw(&mut hidden_vec[start..start + h], &model.rms_final);
+    }
+
+    // Mean pool sobre seq
+    let mut pooled = vec![0.0f32; h];
+    for pos in 0..seq {
+        let start = pos * h;
+        for j in 0..h {
+            pooled[j] += hidden_vec[start + j];
+        }
+    }
+    for j in 0..h {
+        pooled[j] /= seq as f32;
+    }
+
+    // Apply heads (matmul_hybrid)
+    let h_t = Tensor::from_row_major((1, h), pooled).unwrap();
+
+    let family_logits = model.family_head.matmul_hybrid(&h_t).unwrap();
+    let fw_logits = model.fw_head.matmul_hybrid(&h_t).unwrap();
+    let agent_logits = model.agent_head.matmul_hybrid(&h_t).unwrap();
+    let caps_logits = model.caps_head.matmul_hybrid(&h_t).unwrap();
+    let next_logits = model.next_head.matmul_hybrid(&h_t).unwrap();
+
+    fn argmax(v: &[f32]) -> usize {
+        v.iter().enumerate().max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap()).map(|(i, _)| i).unwrap_or(0)
+    }
+
+    let family_id = argmax(&family_logits.data) as u8;
+    let fw_id = argmax(&fw_logits.data) as u8;
+    let agent_id = argmax(&agent_logits.data) as u8;
+    let next_action = argmax(&next_logits.data) as u8;
+
+    // Caps: binary threshold at 0.0 (logits, sem sigmoid)
+    let mut caps_bits: u32 = 0;
+    for k in 0..10 {
+        if k < caps_logits.data.len() && caps_logits.data[k] > 0.0 {
+            caps_bits |= 1 << k;
+        }
+    }
+
+    k_nano::slog_cortex!("HWEXPERT", "info", "predict {:04x}:{:04x} → family={} fw={} agent={} caps={:#x} next={}", 
+        vid, did, family_id, fw_id, agent_id, caps_bits, next_action);
+
+    crate::tensor::HwPrediction { family_id, fw_id, agent_id, caps_bits, next_action }
+}
+
+/// Static para o modelo v5 carregado
+pub static HWEXPERT_V4_MODEL: spin::Mutex<Option<HwExpertV4Model>> = spin::Mutex::new(None);
+
+pub fn hwexpert_v4_is_loaded() -> bool {
+    HWEXPERT_V4_MODEL.lock().is_some()
+}
+
+pub fn set_hwexpert_v4_model(model: HwExpertV4Model) {
+    *HWEXPERT_V4_MODEL.lock() = Some(model);
+    k_nano::slog_cortex!("HWEXPERT", "info", "HW Expert v4 model loaded (multi-head).");
+}
+
+/// Predict HW card from VID/DID using loaded v4 model. Returns None if model not loaded.
+pub fn hwexpert_v4_predict(vid: u16, did: u16) -> Option<crate::tensor::HwPrediction> {
+    let guard = HWEXPERT_V4_MODEL.lock();
+    match guard.as_ref() {
+        Some(model) => Some(predict_hw_v4(model, vid, did)),
+        None => None,
+    }
+}
+
+// ─── Fim HW Expert v5 ─────────────────────────────────────────────────
+
 /// Cache de Key/Value para geracao autoregressiva.
+/// Armazena K e V por layer, evitando reprocessar tokens anteriores.
 /// Armazena K e V por layer, evitando reprocessar tokens anteriores.
 pub struct KvCache {
     pub k: Vec<Vec<f32>>,

@@ -15,7 +15,7 @@ pub fn execute(cmd: &str) -> String {
         "help" | "?" => help(args),
         "echo" => alloc::format!("{}\n", args),
         "clear" => String::new(),
-        "uptime" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Uptime: {} ticks ({}s)\n", t, t/18) }
+        "uptime" => { let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Uptime: {} ticks ({}s)\n", t, t / hz as usize) }
         "ps" => ps(),
         "kill" => alloc::format!("kill: signal sent\n"),
         "meminfo" | "memory" => { let ctx = k_nano::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
@@ -56,8 +56,10 @@ pub fn execute(cmd: &str) -> String {
                 let (h, m, s) = crate::ntp::format_hms(u);
                 alloc::format!("{:02}:{:02}:{:02} UTC (NTP unix={})\n", h, m, s, u)
             } else {
-                let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18;
-                alloc::format!("{:02}:{:02}:{:02} (ticks; {})\n", (t/3600)%24, (t/60)%60, t%60, crate::ntp::status_line())
+                let t = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                let hz = k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed) as u64;
+                let secs = t / hz;
+                alloc::format!("{:02}:{:02}:{:02} (ticks; {})\n", (secs/3600)%24, (secs/60)%60, secs%60, crate::ntp::status_line())
             }
         }
         "uname" => String::from("Neural OS Hermes v0.109\n"),

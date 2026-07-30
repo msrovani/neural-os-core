@@ -1,0 +1,11 @@
+{
+  "inf_files_scanned": 827,
+  "inf_files_with_hwids": 30,
+  "pci_count": 322,
+  "usb_count": 102,
+  "acpi_count": 39,
+  "pci_gen_count": 13,
+  "usb_gen_count": 2,
+  "total_hwids": 478,
+  "errors": []
+}

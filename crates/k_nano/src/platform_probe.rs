@@ -1,5 +1,9 @@
 //! PlatformProbe — HypervisorKind + CpuFeatures + CacheTopology + FeatureGate (ADR-0055).
 //! Fonte única de verdade cedo no boot; ISA ∩ política sandbox.
+//!
+//! ## HardwareInfo — registro público de capacidades
+//! Qualquer crate/agente consulta `k_nano::platform_probe::hw_info()` para saber
+//! CPU, SIMD, GPU, storage, memória — e se auto-adaptar sem recompilar.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
@@ -94,6 +98,44 @@ impl Default for CacheTopology {
     }
 }
 
+/// Registro consolidado de capacidades de HW, populado no boot.
+/// Qualquer crate/agente consulta via `hw_info()` — sem chamar funções internas.
+#[derive(Debug, Clone)]
+pub struct HardwareInfo {
+    /// Ambiente de execução (baremetal, WHPX, KVM, TCG…)
+    pub hv: HypervisorKind,
+    /// Features de CPU (SSE, AVX, AVX2, AVX-512, BMI…)
+    pub cpu: CpuFeatures,
+    /// Topologia de cache (L1/L2/L3, line size)
+    pub cache: CacheTopology,
+    /// Path SIMD efetivo (já aplicada a política sandbox/hypervisor)
+    pub isa: IsaPath,
+    /// Capacidade de storage detectada no boot (preenchido por StorageBus)
+    pub storage_bytes: u64,
+    /// MHz estimados (0 se não calibrado)
+    pub cpu_mhz: u32,
+}
+
+impl HardwareInfo {
+    /// Atalho: AVX2 disponível E permitido pela política?
+    pub fn avx2_ready(&self) -> bool {
+        self.isa == IsaPath::Avx2Fma || self.isa == IsaPath::Avx512F
+    }
+    /// Atalho: AVX-512 disponível E permitido?
+    pub fn avx512_ready(&self) -> bool {
+        self.isa == IsaPath::Avx512F
+    }
+    /// Nome amigável do SIMD path
+    pub fn isa_name(&self) -> &'static str {
+        match self.isa {
+            IsaPath::Avx512F => "avx512",
+            IsaPath::Avx2Fma => "avx2+fma",
+            IsaPath::Sse42 => "sse4.2",
+            IsaPath::Scalar => "scalar",
+        }
+    }
+}
+
 /// FeatureGate atômico — bits de política efetiva.
 #[derive(Debug, Clone, Copy)]
 pub struct FeatureGate {
@@ -129,6 +171,27 @@ impl FeatureGate {
 }
 
 // ─── Globals ───────────────────────────────────────────────────────────
+
+/// Registro público de capacidades de HW — populado em `detect()`, imutável após boot.
+/// Qualquer crate/agente consulta via `hw_info()`.
+static mut HW_INFO: HardwareInfo = HardwareInfo {
+    hv: HypervisorKind::None,
+    cpu: CpuFeatures {
+        sse42: false, popcnt: false, avx: false, avx2: false,
+        fma: false, bmi1: false, bmi2: false,
+        osxsave: false, xsave: false,
+        rdrand: false, clflushopt: false, clwb: false,
+        waitpkg: false, mwait: false, avx512f: false,
+        amx_tile: false, hybrid: false,
+    },
+    cache: CacheTopology {
+        l1d: 32768, l1i: 32768, l2: 262144, l3: 4194304,
+        line_size: 64, clflush_line_size: 64,
+    },
+    isa: IsaPath::Scalar,
+    storage_bytes: 0,
+    cpu_mhz: 0,
+};
 
 static HV_KIND: AtomicU8 = AtomicU8::new(0);
 static GATE_BITS: AtomicU32 = AtomicU32::new(0);
@@ -361,9 +424,10 @@ pub fn build_gate(hv: HypervisorKind, isa: &CpuFeatures) -> FeatureGate {
     };
 
     let tcg = hv == HypervisorKind::Tcg;
-    // Gate usa XSAVE (capacidade), não OSXSAVE (já habilitado) — senão AVX2 nunca liga pré-CR4.
-    let allow_avx2 = isa.avx2 && isa.xsave && isa.avx && !tcg;
-    let allow_avx512 = isa.avx512f && isa.xsave && isa.avx && !tcg;
+    // AVX2 implica XSAVE em HW real. WHPX filtra CPUID.1:ECX[26] mesmo com AVX2.
+    // isa.xsave removido da gate — #[target_feature] protege contra ILLEGAL_INSTRUCTION.
+    let allow_avx2 = isa.avx2 && isa.avx && !tcg;
+    let allow_avx512 = isa.avx512f && isa.avx && !tcg;
     let allow_fma = allow_avx2 && isa.fma;
 
     let isa_path = if allow_avx512 {
@@ -446,6 +510,17 @@ pub fn detect() {
     }
 
     PROBED.store(1, Ordering::Release);
+
+    unsafe {
+        HW_INFO = HardwareInfo {
+            hv,
+            cpu: isa,
+            cache,
+            isa: gate.isa_path,
+            storage_bytes: 0,
+            cpu_mhz: 0,
+        };
+    }
 
     crate::slog_nano!(
         "ENV",
@@ -539,12 +614,20 @@ pub fn has_mwait() -> bool {
     cpu_features().mwait
 }
 
+/// Registro consolidado de capacidades de HW.
+/// Populado em `detect()`, imutável após boot. Qualquer crate/agente consulta.
+pub fn hw_info() -> &'static HardwareInfo {
+    // Safety: HW_INFO é `static mut` escrito uma vez em detect() single-threaded,
+    // depois só leitura. Inicializado com defaults seguros antes de detect().
+    unsafe { &HW_INFO }
+}
+
 pub fn allow_avx2() -> bool {
-    gate().allow_avx2
+    hw_info().avx2_ready()
 }
 
 pub fn allow_avx512() -> bool {
-    gate().allow_avx512
+    hw_info().avx512_ready()
 }
 
 pub fn allow_smp() -> bool {

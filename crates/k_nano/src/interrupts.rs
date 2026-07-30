@@ -14,6 +14,8 @@ pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = 40;
 
 pub static TIMER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Timer frequency em Hz (calibrado na inicializaçao). Fallback 18 Hz (PIT).
+pub static TIMER_HZ: AtomicU64 = AtomicU64::new(18);
 pub static LAST_SCANCODE: AtomicU8 = AtomicU8::new(0);
 pub static LAST_MOUSE_PACKET: AtomicU32 = AtomicU32::new(0);
 pub static PAGE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -181,9 +183,10 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-    if count <= 10 {
+    if count <= 3 {
         return;
     }
+    puts(b"[SELF-HEAL] #PF threshold exceeded -- halting.\n");
     loop { x86_64::instructions::hlt(); }
 }
 
@@ -601,4 +604,83 @@ pub fn remap_pic_pit_fallback() {
 pub fn enable_interrupts() {
     x86_64::instructions::interrupts::enable();
     puts(b"[CPU] Interrupcoes de hardware habilitadas (IF=1).\n");
+}
+
+/// Estima a frequência da TSC via CPUID leaf 0x15 (Intel) ou fallback.
+fn estimate_tsc_hz() -> u64 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        let max = core::arch::x86_64::__cpuid(0).eax;
+        if max >= 0x15 {
+            let leaf = core::arch::x86_64::__cpuid(0x15);
+            let num = leaf.ebx as u64;
+            let den = leaf.eax as u64;
+            let crystal = leaf.ecx as u64;
+            if den > 0 {
+                if crystal > 0 {
+                    return crystal * num / den;
+                }
+                // crystal desconhecido — tenta leaf 0x16 como fallback
+                if max >= 0x16 {
+                    let l16 = core::arch::x86_64::__cpuid(0x16);
+                    let base_mhz = (l16.eax & 0xFFFF) as u64;
+                    if base_mhz > 0 {
+                        return base_mhz * 1_000_000 * num / den;
+                    }
+                }
+                // sem crystal e sem leaf 0x16: assume num/den = 1
+            }
+        }
+        // Fallback: leaf 0x16 base MHz
+        if max >= 0x16 {
+            let l16 = core::arch::x86_64::__cpuid(0x16);
+            let base_mhz = (l16.eax & 0xFFFF) as u64;
+            if base_mhz > 0 {
+                return base_mhz * 1_000_000;
+            }
+        }
+    }
+    2_000_000_000 // fallback conservador 2 GHz
+}
+
+/// Calibra TIMER_HZ — método primário: LAPIC_CURRENT_COUNT (HW direto).
+/// Fallback: busy-wait 0.5s contando TIMER_TICKS.
+/// Fallback final: mantém 18 Hz se tudo falhar.
+pub fn calibrate_timer_hz() {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let tsc_hz = estimate_tsc_hz();
+        if crate::apic::USING_APIC.load(core::sync::atomic::Ordering::Relaxed) {
+            let hz = crate::apic::estimate_timer_hz(tsc_hz);
+            if hz > 0 {
+                crate::slog_nano!("TIMER", "info", "LAPIC direct: {} Hz (tsc_hz={})", hz, tsc_hz);
+                TIMER_HZ.store(hz, core::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+        }
+
+        // Fallback: busy-wait 0.5s
+        let sample_tsc = tsc_hz / 2;
+        let tsc_start = unsafe { core::arch::x86_64::_rdtsc() };
+        let tick_start = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        loop {
+            let tsc_now = unsafe { core::arch::x86_64::_rdtsc() };
+            if tsc_now.wrapping_sub(tsc_start) >= sample_tsc { break; }
+            core::hint::spin_loop();
+        }
+        let tsc_end = unsafe { core::arch::x86_64::_rdtsc() };
+        let tick_end = TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
+        let elapsed_ticks = tick_end.wrapping_sub(tick_start);
+        let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
+        if elapsed_ticks > 0 && elapsed_tsc > 0 {
+            let hz_fb = (tsc_hz as u128).saturating_mul(elapsed_ticks as u128) / elapsed_tsc as u128;
+            let hz_fb = hz_fb.min(1_000_000).max(1) as u64;
+            TIMER_HZ.store(hz_fb, core::sync::atomic::Ordering::Relaxed);
+            crate::slog_nano!("TIMER", "info", "calibrado {} Hz via busy-wait (ticks={})", hz_fb, elapsed_ticks);
+            return;
+        }
+        crate::slog_nano!("TIMER", "warn", "calibraçao falhou — mantendo fallback 18 Hz");
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    { TIMER_HZ.store(18, core::sync::atomic::Ordering::Relaxed); }
 }

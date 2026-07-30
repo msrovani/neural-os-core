@@ -23,7 +23,10 @@ const LAPIC_ICR_LOW: u64 = 0x300;
 const LAPIC_ICR_HIGH: u64 = 0x310;
 const LAPIC_LVT_TIMER: u64 = 0x320;
 const LAPIC_INIT_COUNT: u64 = 0x380;
+const LAPIC_CURRENT_COUNT: u64 = 0x390;
 const LAPIC_DIVIDE_CONFIG: u64 = 0x3E0;
+/// Valor fixo programado em `start_timer()`.
+const LAPIC_TIMER_INIT_COUNT_VAL: u32 = 0x800000;
 
 const IOAPIC_IOREGSEL: u64 = 0x00;
 const IOAPIC_IOWIN: u64 = 0x10;
@@ -79,9 +82,9 @@ impl Lapic {
     unsafe fn start_timer(&self) {
         self.write(LAPIC_LVT_TIMER, 32 | 0x20000);
         self.write(LAPIC_DIVIDE_CONFIG, 0b1011);
-        self.write(LAPIC_INIT_COUNT, 0x800000);
+        self.write(LAPIC_INIT_COUNT, LAPIC_TIMER_INIT_COUNT_VAL);
 
-        crate::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count=8388608, div=1.");
+        crate::slog_nano!("APIC", "info", "LAPIC timer iniciado: vetor 32, count={}, div=1.", LAPIC_TIMER_INIT_COUNT_VAL);
     }
 }
 
@@ -484,7 +487,7 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
 }
 
 /// Lê registrador LAPIC (compatível xAPIC/x2APIC)
-unsafe fn lapic_read_reg(reg: u64) -> u32 {
+pub unsafe fn lapic_read_reg(reg: u64) -> u32 {
     if USING_X2APIC.load(Ordering::Relaxed) {
         x86_64::registers::model_specific::Msr::new(lapic_msr(reg)).read() as u32
     } else {
@@ -712,4 +715,40 @@ pub unsafe fn end_of_interrupt() {
     } else {
         write_volatile((base + LAPIC_EOI) as *mut u32, 0);
     }
+}
+
+/// Estima TIMER_HZ lendo o registrador LAPIC_CURRENT_COUNT.
+/// O timer decrementa a cada ciclo do barramento APIC.
+/// timer_freq = decremento * tsc_hz / (elapsed_tsc * initial_count)
+/// Nao depende de TIMER_TICKS (interrupção) nem de busy-wait longo.
+pub fn estimate_timer_hz(tsc_hz: u64) -> u64 {
+    let initial = LAPIC_TIMER_INIT_COUNT_VAL as u64;
+    if initial == 0 { return 0; }
+    let target_decrement = initial / 8; // espera ~12.5% do periodo
+    unsafe {
+        let count_start = lapic_read_reg(LAPIC_CURRENT_COUNT) as u64;
+        // RDTSC antes do loop
+        let tsc_start = core::arch::x86_64::_rdtsc();
+        loop {
+            let count_now = lapic_read_reg(LAPIC_CURRENT_COUNT) as u64;
+            if count_start.wrapping_sub(count_now) >= target_decrement { break; }
+            core::hint::spin_loop();
+            // timeout de seguranca: ~10ms em TSC (evita hang se timer parado)
+            let tsc_now = core::arch::x86_64::_rdtsc();
+            if tsc_now.wrapping_sub(tsc_start) > tsc_hz / 100 { break; }
+        }
+        let tsc_end = core::arch::x86_64::_rdtsc();
+        let count_now = lapic_read_reg(LAPIC_CURRENT_COUNT) as u64;
+        let decrement = count_start.wrapping_sub(count_now);
+        let elapsed_tsc = tsc_end.wrapping_sub(tsc_start);
+        if decrement > 0 && elapsed_tsc > 0 {
+            // timer_freq = decrement * tsc_hz / (elapsed_tsc * initial)
+            let hz = (decrement as u128)
+                .saturating_mul(tsc_hz as u128)
+                .checked_div((elapsed_tsc as u128).saturating_mul(initial as u128))
+                .unwrap_or(0) as u64;
+            return hz.min(1_000_000).max(1);
+        }
+    }
+    0 // falha
 }

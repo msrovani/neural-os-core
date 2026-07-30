@@ -5,17 +5,19 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
 
-/// PIT ~18.2 Hz — shell já usa `/18` (honesty aproximado).
-const TICKS_PER_SEC: u64 = 18;
+/// Calibrado em boot por `calibrate_timer_hz()`.
+fn ticks_per_sec() -> u64 {
+    k_nano::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed).max(1)
+}
 /// Segundos NTP (1900) → Unix (1970).
 const NTP_UNIX_DELTA: u64 = 2_208_988_800;
 const NTP_PORT: u16 = 123;
 /// Cloudflare time.anycast — fallback sem DNS.
 const FALLBACK_NTP_IP: [u8; 4] = [162, 159, 200, 1];
-/// Resync interval: ~200s at 18 Hz
-const RESYNC_INTERVAL_TICKS: u64 = 3600;
+/// Resync interval: ~200s
+fn resync_interval_ticks() -> u64 { ticks_per_sec() * 200 }
 /// Cooldown after failed attempt: ~30s
-const FAIL_COOLDOWN_TICKS: u64 = 540;
+fn fail_cooldown_ticks() -> u64 { ticks_per_sec() * 30 }
 
 static SYNCED: AtomicBool = AtomicBool::new(false);
 static UNIX_AT_SYNC: AtomicU64 = AtomicU64::new(0);
@@ -38,7 +40,7 @@ pub fn now_unix() -> Option<u64> {
     let unix0 = UNIX_AT_SYNC.load(Ordering::Relaxed);
     let ticks0 = TICKS_AT_SYNC.load(Ordering::Relaxed);
     let now = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
-    let elapsed = now.saturating_sub(ticks0) / TICKS_PER_SEC;
+    let elapsed = now.saturating_sub(ticks0) / ticks_per_sec();
     Some(unix0.saturating_add(elapsed))
 }
 
@@ -152,7 +154,7 @@ pub fn sync_once() -> bool {
 }
 
 /// Boot/Cron: tenta sync com cooldown (não one-shot gate).
-/// Se já synced, faz resync periódico a cada RESYNC_INTERVAL_TICKS.
+/// Se já synced, faz resync periódico.
 pub fn try_sync() -> bool {
     // ponytail: NTP via UDP não funciona em sandbox (SLIRP/TCG bloqueia UDP)
     if k_nano::env::is_sandbox() { return false; }
@@ -161,7 +163,7 @@ pub fn try_sync() -> bool {
 
     if is_synced() {
         // Periodic resync
-        if now.saturating_sub(last) >= RESYNC_INTERVAL_TICKS {
+        if now.saturating_sub(last) >= resync_interval_ticks() {
             k_nano::slog_bin!("NTP", "info", "step=resync status=START periodic");
             if sync_once() {
                 return true;
@@ -171,7 +173,7 @@ pub fn try_sync() -> bool {
     }
 
     // Not synced yet: respect fail cooldown
-    if last != 0 && now.saturating_sub(last) < FAIL_COOLDOWN_TICKS {
+    if last != 0 && now.saturating_sub(last) < fail_cooldown_ticks() {
         return false;
     }
 

@@ -1,0 +1,65 @@
+{
+  "family": [
+    "unknown",
+    "intel_e1000",
+    "virtio_net",
+    "realtek_eth",
+    "intel_iwlwifi",
+    "realtek_wifi",
+    "atheros_wifi",
+    "broadcom_wifi",
+    "nvidia_gpu",
+    "intel_i915",
+    "amd_gpu",
+    "qemu_vga",
+    "virtio_gpu",
+    "usb_xhci",
+    "intel_hda",
+    "storage_ata",
+    "pci_bridge"
+  ],
+  "fw": [
+    "-",
+    "intel/iwlwifi",
+    "rtlwifi",
+    "ath9k",
+    "brcmfmac",
+    "nvidia/gp108",
+    "i915",
+    "amdgpu"
+  ],
+  "agent": [
+    "HwBridgeAgent",
+    "NetAgent",
+    "WifiAgent",
+    "DisplayAgent",
+    "GpuBackend",
+    "UsbDriverAgent",
+    "HdaAudioAgent",
+    "DiskAgent",
+    "PlatformAgent"
+  ],
+  "next": [
+    "ready",
+    "load_firmware",
+    "bind_network",
+    "bind_wifi_scan",
+    "bind_gpu_compute",
+    "bind_usb_host",
+    "bind_audio",
+    "bind_storage",
+    "observe_only"
+  ],
+  "caps": [
+    "NET",
+    "WIFI",
+    "DISPLAY",
+    "COMPUTE",
+    "AUDIO",
+    "USB_HOST",
+    "STORAGE",
+    "NEEDS_FW",
+    "SCAN",
+    "CAPTURE"
+  ]
+}

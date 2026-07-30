@@ -15,7 +15,7 @@ pub fn execute(cmd: &str) -> String {
         "help" | "?" => help(args),
         "echo" => alloc::format!("{}\n", args),
         "clear" => String::new(),
-        "uptime" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); alloc::format!("Uptime: {} ticks ({}s)\n", t, t/18) }
+        "uptime" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed); let hz = crate::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed) as usize; alloc::format!("Uptime: {} ticks ({}s)\n", t, t / hz) }
         "ps" => ps(),
         "kill" => alloc::format!("kill: signal sent\n"),
         "meminfo" | "memory" => { let ctx = crate::memory::global_hardware_context(); alloc::format!("Memory: {:.0}%\n", ctx[0]*100.0) }
@@ -29,7 +29,7 @@ pub fn execute(cmd: &str) -> String {
             crate::shutdown::request_reboot();
             String::from("Reboot...\n")
         }
-        "date" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64 / 18; alloc::format!("{:02}:{:02}:{:02}\n", (t/3600)%24, (t/60)%60, t%60) }
+        "date" => { let t = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64; let hz = crate::interrupts::TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed) as u64; let secs = t / hz; alloc::format!("{:02}:{:02}:{:02}\n", (secs/3600)%24, (secs/60)%60, secs%60) }
         "uname" => String::from("Neural OS Hermes v0.109\n"),
         "cpuinfo" => alloc::format!("CPUs: {}\n", crate::smp::ap_entry_count() + 1),
         "ls" => ls(args),

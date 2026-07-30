@@ -1579,6 +1579,7 @@ pub unsafe fn init_platform_sync() {
     k_nano::core_pinning::init_pools(k_nano::smp::total_cores());
     // STI so depois de SMP — timer IRQ nao pode reentrar serial/FB spinlock
     x86_64::instructions::interrupts::enable();
+    k_nano::interrupts::calibrate_timer_hz();
     PLATFORM_READY.store(true, Ordering::Release);
     crate::display::fb::boot_ckpt(21, "PLATFORM sync OK");
     k_nano::slog_bin!("PLATFORM", "info", "sync OK (PCI+ACPI+APIC+SMP) STI=1");

@@ -160,7 +160,11 @@ impl HwCapabilityCard {
     }
 }
 
-/// Monta card a partir de PCI (tabela + heurística). Sem free-text LLM.
+/// Monta card a partir de PCI (tabela + heurística + HW Expert v4).
+/// Ordem de precedência:
+///   1. HW Expert v4 (ML multi-head, se carregado)
+///   2. Tabela direta HWID (plug-and-play conhecido)
+///   3. Heurística por class/vendor (fallback)
 pub fn build_card(
     vid: u16,
     did: u16,
@@ -168,12 +172,94 @@ pub fn build_card(
     subclass: u8,
     name: &str,
 ) -> HwCapabilityCard {
-    // --- Tabela direta HWID (plug-and-play conhecido) ---
+    // --- 1. HW Expert v4 ML (se carregado) ---
+    if cortex::cortex::hwexpert_v4_is_loaded() {
+        if let Some(pred) = cortex::cortex::hwexpert_v4_predict(vid, did) {
+            if let Some(c) = prediction_to_card(vid, did, class, subclass, name, &pred) {
+                return c;
+            }
+        }
+    }
+    // --- 2. Tabela direta HWID (plug-and-play conhecido) ---
     if let Some(c) = table_lookup(vid, did, class, subclass, name) {
         return c;
     }
-    // --- Heurística por class/vendor ---
+    // --- 3. Heurística por class/vendor ---
     heuristic_card(vid, did, class, subclass, name)
+}
+
+/// Converte predição do HW Expert v4 para HwCapabilityCard.
+/// Retorna None se a predição for inválida (family=unknown).
+fn prediction_to_card(
+    vid: u16, did: u16, class: u8, subclass: u8, name: &str,
+    pred: &cortex::tensor::HwPrediction,
+) -> Option<HwCapabilityCard> {
+    if pred.family_id == 0 { return None; } // Unknown
+
+    let family = match pred.family_id {
+        1 => HwFamily::IntelE1000,
+        2 => HwFamily::VirtioNet,
+        3 => HwFamily::RealtekEth,
+        4 => HwFamily::IntelIwlWifi,
+        5 => HwFamily::RealtekWifi,
+        6 => HwFamily::AtherosWifi,
+        7 => HwFamily::BroadcomWifi,
+        8 => HwFamily::NvidiaGpu,
+        9 => HwFamily::IntelI915,
+        10 => HwFamily::AmdGpu,
+        11 => HwFamily::QemuVga,
+        12 => HwFamily::VirtioGpu,
+        13 => HwFamily::UsbHostXhci,
+        14 => HwFamily::IntelHda,
+        15 => HwFamily::StorageAta,
+        16 => HwFamily::PciBridge,
+        _ => return None,
+    };
+
+    let agent = match pred.agent_id {
+        0 => "HwBridgeAgent",
+        1 => "NetAgent",
+        2 => "WifiAgent",
+        3 => "DisplayAgent",
+        4 => "GpuBackend",
+        5 => "UsbDriverAgent",
+        6 => "HdaAudioAgent",
+        7 => "DiskAgent",
+        8 => "PlatformAgent",
+        _ => "PlatformAgent",
+    };
+
+    let firmware = match pred.fw_id {
+        1 => Some("intel/iwlwifi"),
+        2 => Some("rtlwifi"),
+        3 => Some("ath9k"),
+        4 => Some("brcmfmac"),
+        5 => Some("nvidia/gp108"),
+        6 => Some("i915"),
+        7 => Some("amdgpu"),
+        _ => None,
+    };
+
+    let next_action = match pred.next_action {
+        1 => HwNextAction::LoadFirmware,
+        2 => HwNextAction::BindNetwork,
+        3 => HwNextAction::BindWifiScan,
+        4 => HwNextAction::BindGpuCompute,
+        5 => HwNextAction::BindUsbHost,
+        6 => HwNextAction::BindAudio,
+        7 => HwNextAction::BindStorage,
+        8 => HwNextAction::ObserveOnly,
+        _ => HwNextAction::Ready,
+    };
+
+    Some(HwCapabilityCard {
+        vid, did, class, subclass,
+        name: alloc::string::String::from(name),
+        family, agent, firmware,
+        caps_bits: pred.caps_bits,
+        next_action, source: "expert_v4",
+        reg_tx: 0, reg_rx: 0, reg_db_tx: 0, reg_db_rx: 0, ring_size: 0,
+    })
 }
 
 fn table_lookup(

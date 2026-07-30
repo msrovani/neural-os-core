@@ -1,0 +1,3826 @@
+[
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 58112,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 12292,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 58208,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 58224,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 58624,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 58368,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 57351,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 58113,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 57353,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 57360,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 1161,
+  "did": 57506,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3315,
+  "did": 21339,
+  "subsys": null,
+  "class": "bluetooth",
+  "source": "atheros_bth.inf_amd64_45507020beea9035\\atheros_bth.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3400",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3401",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3402",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3403",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3404",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3405",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3406",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3407",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3408",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3409",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT340A",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT340B",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT340C",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT340D",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT343D",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3530",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3532",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1040",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1043",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1044",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1045",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1047",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1050",
+  "class": "system",
+  "source": "dptf_acpi.inf_amd64_3e57360bec7af08c\\dptf_acpi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 259,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 339,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 3075,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2563,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 3331,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 5635,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6403,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 8924,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2700,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6796,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19084,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23180,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23043,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12684,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 35331,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 38944,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39427,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19459,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19971,
+  "subsys": null,
+  "class": "pci",
+  "source": "dptf_cpu.inf_amd64_c2c5b0e17a28a48f\\dptf_cpu.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 1208,
+  "did": 2216,
+  "subsys": null,
+  "class": "camera",
+  "source": "ese2.inf_amd64_0aa749b8c06f2db4\\ese2.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 566,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 598,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 597,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 664,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 549,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 1640,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 2151,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 665,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 2201,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 661,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 628,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 649,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci_gen",
+  "vid": 4332,
+  "did": 533,
+  "subsys": null,
+  "class": "pci",
+  "source": "hdxdellsstcsmb2018.inf_amd64_b86308209af37e10\\hdxdellsstcsmb2018.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40122,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40250,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41274,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41658,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40416,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41824,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 15840,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13536,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14560,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6355,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39136,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41402,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41530,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19936,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 736,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 1760,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41914,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41184,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41188,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17376,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17380,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 7136,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19312,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31464,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31468,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20960,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20964,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 32368,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 32372,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_a54e540558404ee5\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21728,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31336,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 30576,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 32616,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 43120,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 58224,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 58480,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19824,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 28264,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 53872,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 54128,
+  "subsys": null,
+  "class": "pci",
+  "source": "heci.inf_amd64_e0e9fcf6c047b9a7\\heci.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT33D5",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1051",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1054",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1070",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1076",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1077",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1078",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC107B",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC10CB",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC10CC",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC10F1",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC10F2",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC110E",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INTC1134",
+  "class": "acpi",
+  "source": "hideventfilter.inf_amd64_ccf8d4bd300fba25\\hideventfilter.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31337,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31338,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31339,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31301,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31302,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31436,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31437,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31438,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31439,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31484,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31485,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20968,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20969,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20970,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20971,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20933,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20934,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20952,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 20953,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21736,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21737,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21738,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21739,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21701,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21702,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21720,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 21721,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2732,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2734,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2736,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2738,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2740,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2742,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2744,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 2746,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6828,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6830,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6832,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6834,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6836,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6838,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6840,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6842,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23212,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23214,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23216,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23218,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23220,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23222,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23224,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 23226,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40424,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40425,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40426,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40427,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40389,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40390,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41832,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41833,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41834,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41835,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 744,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 745,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 746,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 747,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 709,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 710,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 1768,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 1769,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 1770,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 1771,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19320,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19321,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19322,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19323,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19275,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19276,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19268,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 19269,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12716,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12718,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12720,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12722,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12724,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12726,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12728,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 12730,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13544,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13545,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13546,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13547,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13509,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 13510,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14568,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14569,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14570,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14571,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14533,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 14534,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39144,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39145,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39146,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39147,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39109,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 39110,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31308,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31309,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31310,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31311,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31356,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 31357,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40288,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40289,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40290,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40291,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40292,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 40293,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41312,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41313,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41314,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41315,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41696,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41697,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41698,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41699,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41192,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41193,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41194,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41195,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41157,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41158,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41176,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41177,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17384,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17385,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17386,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17387,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17325,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17326,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17368,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17369,
+  "subsys": null,
+  "class": "pci",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3446",
+  "class": "system",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "acpi",
+  "vid": 0,
+  "did": 0,
+  "acpi_id": "INT3447",
+  "class": "system",
+  "source": "ialpss2_i2c.inf_amd64_f422ad00469ed21a\\ialpss2_i2c.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22784,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22785,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22788,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22789,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22793,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22796,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22799,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22800,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22804,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22808,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 22815,
+  "subsys": null,
+  "class": "pci",
+  "source": "kabylakesystem.inf_amd64_12d7c9e283ba5cab\\kabylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 5772,
+  "did": 66,
+  "subsys": 403705896,
+  "class": "pci",
+  "source": "netathr10x.inf_amd64_117b0e4bce1b76ce\\netathr10x.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 5772,
+  "did": 62,
+  "subsys": 51384360,
+  "class": "pci",
+  "source": "netathr10x.inf_amd64_117b0e4bce1b76ce\\netathr10x.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4928,
+  "subsys": 34873364,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4929,
+  "subsys": 103485480,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4932,
+  "subsys": 110235688,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4934,
+  "subsys": 118100008,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4941,
+  "subsys": 121573416,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4942,
+  "subsys": 128389160,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4992,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 4993,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5009,
+  "subsys": 109056040,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5010,
+  "subsys": 107614248,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5011,
+  "subsys": 106106920,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5018,
+  "subsys": 119083048,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5019,
+  "subsys": 111349800,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5056,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5058,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5079,
+  "subsys": 95096872,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5080,
+  "subsys": 95096872,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5081,
+  "subsys": 109383720,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5121,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5122,
+  "subsys": 126881832,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5126,
+  "subsys": 120262696,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5159,
+  "subsys": 117903400,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 5965,
+  "subsys": 132780072,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 6044,
+  "subsys": 131141672,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 6082,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 6088,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 6912,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7040,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7041,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7072,
+  "subsys": 124981288,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7073,
+  "subsys": 124850216,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7136,
+  "subsys": 130027560,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7137,
+  "subsys": 130027560,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7170,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7171,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7200,
+  "subsys": 124588072,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7201,
+  "subsys": 124719144,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7202,
+  "subsys": 124719144,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7264,
+  "subsys": 130027560,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7265,
+  "subsys": 130027560,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7297,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7298,
+  "subsys": 109776936,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7308,
+  "subsys": 127406120,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7309,
+  "subsys": 125571112,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7312,
+  "subsys": 152637480,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7313,
+  "subsys": 153227304,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7316,
+  "subsys": 165154856,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7440,
+  "subsys": 134811688,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7441,
+  "subsys": 156569640,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7443,
+  "subsys": 143986728,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 4318,
+  "did": 7446,
+  "subsys": 165023784,
+  "class": "pci",
+  "source": "nvdmi.inf_amd64_ed02e74d55d2ca32\\nvdmi.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 2389,
+  "did": 36864,
+  "subsys": null,
+  "class": "audio",
+  "source": "nvvad.inf_amd64_3328072030df5d56\\nvvad.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 313,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 297,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 320,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 261,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 293,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 281,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 259,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 260,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 262,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 263,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 264,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 273,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 275,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 277,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 278,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 279,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 280,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 288,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 289,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 310,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 312,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 336,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 337,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 338,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 339,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 341,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 342,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 343,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 344,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 345,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 355,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 353,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 360,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 358,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 359,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 361,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 369,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 374,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 375,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 376,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 385,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 386,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 132,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 388,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 389,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 390,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 391,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 392,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 769,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 770,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 771,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 773,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 774,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 775,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 776,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 777,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 785,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 786,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 788,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 789,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 790,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 791,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 792,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 793,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 801,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 802,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 806,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 807,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 808,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 809,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 1,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 9,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 17,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 41,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3034,
+  "did": 822,
+  "subsys": null,
+  "class": "usb",
+  "source": "rtsuer.inf_amd64_41a7ec7b3e12688e\\rtsuer.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6400,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6401,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6405,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6409,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6415,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6416,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 6431,
+  "subsys": null,
+  "class": "pci",
+  "source": "skylakesystem.inf_amd64_75ffbf5dc850994b\\skylakesystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 17949,
+  "subsys": null,
+  "class": "pci",
+  "source": "socthermalprovider_ext.inf_amd64_714bde2f40f49563\\socthermalprovider_ext.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 42781,
+  "subsys": null,
+  "class": "pci",
+  "source": "socthermalprovider_ext.inf_amd64_714bde2f40f49563\\socthermalprovider_ext.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 32003,
+  "subsys": null,
+  "class": "pci",
+  "source": "socthermalprovider_ext.inf_amd64_714bde2f40f49563\\socthermalprovider_ext.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 44291,
+  "subsys": null,
+  "class": "pci",
+  "source": "socthermalprovider_ext.inf_amd64_714bde2f40f49563\\socthermalprovider_ext.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 25629,
+  "subsys": null,
+  "class": "pci",
+  "source": "socthermalprovider_ext.inf_amd64_714bde2f40f49563\\socthermalprovider_ext.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41232,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41233,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41234,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41235,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41236,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41237,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41238,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41239,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41240,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41241,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41242,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41243,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41244,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41245,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41246,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41247,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41248,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41249,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41251,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41252,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41254,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41281,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41282,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41283,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41284,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41285,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41286,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41287,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41288,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41289,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41290,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41291,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41292,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41293,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41294,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41296,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41297,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41298,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41299,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41300,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41301,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41319,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41320,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41321,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41322,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystem.inf_amd64_740fb7d1e7f50afa\\sunrisepoint-hsystem.inf"
+ },
+ {
+  "bus": "pci",
+  "vid": 32902,
+  "did": 41265,
+  "subsys": null,
+  "class": "pci",
+  "source": "sunrisepoint-hsystemthermal.inf_amd64_04364f2e3a15ee33\\sunrisepoint-hsystemthermal.inf"
+ },
+ {
+  "bus": "usb_gen",
+  "vid": 1118,
+  "did": 2394,
+  "subsys": null,
+  "class": "usb",
+  "source": "voiceclarityep_audio_component.inf_amd64_d5f0f6f169848993\\voiceclarityep_audio_component.inf"
+ },
+ {
+  "bus": "usb_gen",
+  "vid": 1118,
+  "did": 3084,
+  "subsys": null,
+  "class": "usb",
+  "source": "voiceclarityep_audio_component.inf_amd64_d5f0f6f169848993\\voiceclarityep_audio_component.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8200,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8202,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8210,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8214,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8215,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8221,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8216,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8217,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8220,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8225,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8226,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8230,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ },
+ {
+  "bus": "usb",
+  "vid": 3725,
+  "did": 8234,
+  "subsys": null,
+  "class": "usb",
+  "source": "wpdmtp.inf_amd64_241cde3f19409216\\wpdmtp.inf"
+ }
+]

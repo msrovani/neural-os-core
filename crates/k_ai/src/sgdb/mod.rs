@@ -35,43 +35,62 @@ use alloc::vec::Vec;
 
 /// Self-test F2–F7 + view + facade.
 pub fn demo() -> bool {
+    // Q1: MemoryDoc encode/decode
     let mut doc = MemoryDoc::new(MemoryLayer::L1Working, "hello", b"world".to_vec());
     doc.clock.tick(1);
     let enc = doc.encode();
     let view = match MemoryDocView::parse(&enc) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(_) => {
+            k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: MemoryDocView::parse error");
+            return false;
+        }
     };
     if view.key() != "hello" || view.payload() != b"world" {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: view key/payload mismatch");
         return false;
     }
     let dec = match MemoryDoc::decode(&enc) {
         Ok(d) => d,
-        Err(_) => return false,
+        Err(_) => {
+            k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: MemoryDoc::decode error");
+            return false;
+        }
     };
     if dec.key != "hello" || dec.payload.as_slice() != b"world" {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q1 FAIL: decoded key/payload mismatch");
         return false;
     }
+    k_nano::slog_kai!("SGDB", "Q-jump", "Q1 PASS: MemoryDoc roundtrip");
 
+    // Q2: ART smoke (3 inserts + get + scan_prefix + delete)
     let mut art = ArtIndex::new();
     art.insert("md/L1/a", 10);
     art.insert("md/L1/b", 20);
     art.insert("md/L2/c", 30);
     if art.get("md/L1/a") != Some(10) || art.get("md/L1/b") != Some(20) {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q2 FAIL: ART get after insert");
         return false;
     }
     if art.scan_prefix("md/L1/").len() < 2 {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q2 FAIL: ART scan_prefix <2");
         return false;
     }
     let _ = art.delete("md/L1/b");
     if art.get("md/L1/b").is_some() {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q2 FAIL: ART delete did not remove");
         return false;
     }
+    k_nano::slog_kai!("SGDB", "Q-jump", "Q2 PASS: ART smoke");
 
+    // Q3: BQ smoke (hamming + top_k)
     if !bq::smoke() {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q3 FAIL: BQ smoke");
         return false;
     }
+    k_nano::slog_kai!("SGDB", "Q-jump", "Q3 PASS: BQ smoke");
 
+    // Q4: Engine L1 put/get + L4/BQ top_k
     init_global(1);
     let ok = with_engine(|e| {
         let d = MemoryDoc::new(MemoryLayer::L1Working, "smoke", b"sgdb".to_vec());
@@ -99,23 +118,41 @@ pub fn demo() -> bool {
         hits.len() == 1 && hits[0].1 == 0
     });
     if ok != Some(true) {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q4 FAIL: engine put/get or L4 top_k");
         return false;
     }
+    k_nano::slog_kai!("SGDB", "Q-jump", "Q4 PASS: engine + BQ");
 
+    // Q5: remember_exchange + prompt_slice
     layers::remember_exchange("ping", "pong");
     let _ = layers::prompt_slice(512);
+    k_nano::slog_kai!("SGDB", "Q-jump", "Q5 PASS: remember_exchange + prompt_slice");
 
+    // Q6: HANR put/get
     if store::ready() {
         if store::put_hanr("demo", "ok").is_err() {
+            k_nano::slog_kai!("SGDB", "Q-jump", "Q6 FAIL: HANR put");
             return false;
         }
         match store::get_hanr("demo") {
             Ok(Some(s)) if s == "ok" => {}
-            _ => return false,
+            _ => {
+                k_nano::slog_kai!("SGDB", "Q-jump", "Q6 FAIL: HANR get mismatch");
+                return false;
+            }
         }
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q6 PASS: HANR");
+    } else {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q6 SKIP: store not ready");
     }
 
-    let (b_ok, _) = bench::bench_smoke(128, 64);
+    // Q7: mini-bench 128/64
+    let (b_ok, msg) = bench::bench_smoke(128, 64);
+    if b_ok {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q7 PASS: bench 128/64 ({})", msg);
+    } else {
+        k_nano::slog_kai!("SGDB", "Q-jump", "Q7 FAIL: bench 128/64 ({})", msg);
+    }
     b_ok
 }
 
