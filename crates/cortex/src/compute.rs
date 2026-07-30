@@ -25,6 +25,8 @@ static N_GPU: AtomicU64 = AtomicU64::new(0);
 static N_SMP: AtomicU64 = AtomicU64::new(0);
 static N_AVX512: AtomicU64 = AtomicU64::new(0);
 static N_CPU: AtomicU64 = AtomicU64::new(0);
+// ADR-0081 C1: ops despachadas para o mesh (Worker → Master)
+static N_MESH: AtomicU64 = AtomicU64::new(0);
 
 /// Ring 0 (intent/router) — registrado por `k_ai` quando uma NPU fica pronta.
 pub fn register_npu_ternary(f: TernaryFn) {
@@ -53,6 +55,21 @@ fn call_slot(slot: usize, w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor>
 pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let (k, n) = w.shape;
     let big = n >= 64 && k >= 64;
+
+    // ADR-0081 C1: Mesh-aware dispatch.
+    // Se o no local e Worker, o ideal e despachar para o Master via P2P.
+    // Ponte: quando P2P transport estiver vivo, esta secao serializa o matmul
+    // e envia para o Master. Por enquanto, cai no fallback local.
+    #[cfg(feature = "p2p")]
+    {
+        let role = k_nano::net::mesh::local_role();
+        if role == k_nano::net::mesh::NodeRole::Worker {
+            N_MESH.fetch_add(1, Ordering::Relaxed);
+            // ponytail: P2P dispatch pendente — requer udp_broadcast + NoProto
+            // Quando ativo: serializa w + x, envia para Master, recebe resultado.
+            // Por enquanto, cai no fallback local (CPU/scalar).
+        }
+    }
 
     // Ring 0 — NPU (router/intent, latência-crítico). Só se registrado.
     if let Some(r) = call_slot(NPU_TERNARY.load(Ordering::Acquire), w, x) {
