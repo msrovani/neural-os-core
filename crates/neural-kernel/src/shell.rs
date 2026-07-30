@@ -77,6 +77,7 @@ pub fn execute(cmd: &str) -> String {
         "trust" => trust_cmd(args),
         "logs" => logs_cmd(args),
         "inspect" => inspect_cmd(args),
+        "run" => run_process_cmd(args),
         "font" => font_cmd(args),
         "wallpaper" => wallpaper_cmd(args),
         "backtrace" => backtrace_cmd(),
@@ -312,4 +313,15 @@ fn du_cmd(args: &str) -> String {
 fn head_cmd(args: &str) -> String {
     if args.is_empty() { return String::from("Usage: head <file>\n"); }
     alloc::format!("head: {} (first lines)\n", args)
+}
+
+fn run_process_cmd(args: &str) -> String {
+    let pid = args.trim().parse::<u64>();
+    match pid {
+        Ok(pid) => match crate::user_mode::run_process(pid) {
+            Ok(()) => alloc::format!("Process {} exited OK\n", pid),
+            Err(e) => alloc::format!("Process {} error: {}\n", pid, e),
+        },
+        Err(_) => String::from("Usage: run <pid>\n"),
+    }
 }

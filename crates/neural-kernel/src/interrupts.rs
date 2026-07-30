@@ -2,6 +2,7 @@
 //! P6: segmentos user (Ring3) + TSS.RSP0 para trap de CPL=3.
 //! Onda 5: TIMER_TICKS + MOUSE_ABS_* canônicos em k_nano (Hermes/Jarbas leem o mesmo).
 
+use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
@@ -38,9 +39,12 @@ const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
 
 lazy_static! {
-    static ref TSS: TaskStateSegment = {
+    /// TSS mutável via UnsafeCell para permitir RSP0 por processo (Phase 2).
+    /// IST stacks são configuradas uma vez na init e não mudam.
+    static ref TSS: UnsafeCell<TaskStateSegment> = UnsafeCell::new({
         let mut tss = TaskStateSegment::new();
         // RSP0: stack kernel ao trapear de CPL=3 (int 0x90 / exceções)
+        // Default inicial; set_rsp0() altera por processo.
         tss.privilege_stack_table[0] = {
             const STACK_SIZE: usize = 4096 * 4;
             static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
@@ -72,7 +76,21 @@ lazy_static! {
             stack_start + STACK_SIZE
         };
         tss
-    };
+    });
+}
+
+/// Atualiza RSP0 do TSS para o processo atual (Phase 2).
+/// Chamado antes de enter_user_mode() para que o CPU use a stack kernel
+/// correta ao trapear de CPL=3.
+/// Safe porque: single-threaded durante transição Ring3 (CLI), CPU não lê
+/// RSP0 concorrentemente enquanto escrevemos.
+pub fn set_rsp0(stack_top: VirtAddr) {
+    unsafe { (*TSS.get()).privilege_stack_table[0] = stack_top; }
+}
+
+/// Retorna referência ao TSS para init da GDT.
+fn tss_ref() -> &'static TaskStateSegment {
+    unsafe { &*TSS.get() }
 }
 
 lazy_static! {
@@ -83,7 +101,7 @@ lazy_static! {
         let data_selector = gdt.add_entry(Descriptor::kernel_data_segment());
         let user_code_selector = gdt.add_entry(Descriptor::user_code_segment());
         let user_data_selector = gdt.add_entry(Descriptor::user_data_segment());
-        let tss_selector = gdt.add_entry(Descriptor::tss_segment(&TSS));
+        let tss_selector = gdt.add_entry(Descriptor::tss_segment(tss_ref()));
         (
             gdt,
             Selectors {

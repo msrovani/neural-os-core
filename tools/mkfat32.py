@@ -198,6 +198,7 @@ def populate(path):
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET") or find_file("RUSTCDR2.BIN")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet")),
+        ("HWEXPRT4.BIN", find_file("hw_expert_v4.bitnet") or find_file("HWEXPRT4.BIN")),
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN") or find_file("PIPER_PT_BR_CADU_MEDIUM.bitnet")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),

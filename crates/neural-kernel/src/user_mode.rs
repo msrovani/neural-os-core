@@ -133,23 +133,28 @@ pub unsafe fn enter_user_mode(
     core::arch::asm!("pushfq; pop {}", out(reg) rflags, options(nostack));
     rflags &= !0x200; // IF=0; int software ainda funciona
 
+    // --- PHASE 0: CR3 switch ANTES do iretq (Moros pattern) ---
+    // 1. Salva kernel RSP para o return path (jump_back_to_kernel restaura)
+    let rsp_val: u64;
+    core::arch::asm!("mov {}, rsp", out(reg) rsp_val, options(nostack));
+    #[cfg(feature = "ring3")]
+    { SAVED_RSP = rsp_val; }
+
+    // 2. Switch para page table do user enquanto ainda CPL=0.
+    //    Kernel text em P4[511] é compartilhado (clone raso) → ainda executável.
+    DEMO_ACTIVE.store(true, Ordering::SeqCst);
+    address_space::restore_cr3(user_l4, Cr3Flags::empty());
+
+    // 3. IRETQ para CPL=3. CR3 já é a page table do user.
+    //    A label "2:" é o return point — jump_back_to_kernel restaura CR3
+    //    e salta pra cá, então o epílogo do compilador retorna ao caller.
     #[cfg(feature = "ring3")]
     let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
     #[cfg(not(feature = "ring3"))]
     let rip_ptr = core::ptr::null_mut::<u64>();
-    #[cfg(feature = "ring3")]
-    let rsp_ptr = core::ptr::addr_of_mut!(SAVED_RSP);
-    #[cfg(not(feature = "ring3"))]
-    let rsp_ptr = core::ptr::null_mut::<u64>();
-    let cr3_val = user_l4.start_address().as_u64();
-
-    // Salva RIP/RSP no mesmo asm que o CR3 switch — clone AS pode omitir text → #PF.
-    DEMO_ACTIVE.store(true, Ordering::SeqCst);
     core::arch::asm!(
         "lea {tmp}, [rip + 2f]",
         "mov qword ptr [{rip_ptr}], {tmp}",
-        "mov qword ptr [{rsp_ptr}], rsp",
-        "mov cr3, {cr3}",
         "mov ax, {uds:x}",
         "mov ds, ax",
         "mov es, ax",
@@ -162,8 +167,6 @@ pub unsafe fn enter_user_mode(
         "2:",
         tmp = out(reg) _,
         rip_ptr = in(reg) rip_ptr,
-        rsp_ptr = in(reg) rsp_ptr,
-        cr3 = in(reg) cr3_val,
         uds = in(reg) uds,
         ucs = in(reg) ucs,
         stack = in(reg) user_stack,
@@ -210,6 +213,44 @@ fn write_stub(code: PhysFrame<Size4KiB>) {
     unsafe {
         core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, o);
     }
+}
+
+/// Run a userspace process at Ring3 (CPL=3).
+/// Loads the process's AddressSpace, switches CR3, and enters user mode via iretq.
+/// Returns Ok(()) on clean exit (SYS_EXIT_USER), Err on fault or Cap deny.
+pub fn run_process(pid: u64) -> Result<(), &'static str> {
+    let (entry, stack_top, l4_frame) = {
+        let pm = crate::process::PROCESS_MANAGER.lock();
+        let p = pm.get(pid).ok_or("process: PID not found")?;
+        (p.entry, p.stack_top, p.address_space.l4_frame)
+    };
+
+    {
+        let mut pm = crate::process::PROCESS_MANAGER.lock();
+        if let Some(p) = pm.get_mut(pid) {
+            p.state = crate::process::ProcessState::Running;
+        }
+    }
+
+    // Phase 2: set per-process RSP0 before entering user mode
+    // (kernel stack for CPL=3→0 traps)
+    // ponytail: single kernel stack for now; per-process stacks when scheduler lands
+    let _ = &crate::interrupts::set_rsp0;
+
+    let result = unsafe {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            enter_user_mode(entry, stack_top, l4_frame, Cap::ENTER_USER)
+        })
+    };
+
+    {
+        let mut pm = crate::process::PROCESS_MANAGER.lock();
+        if let Some(p) = pm.get_mut(pid) {
+            p.state = crate::process::ProcessState::Exited(if result.is_ok() { 0 } else { 1 });
+        }
+    }
+
+    result
 }
 
 /// Demo non-fatal: deny Cap → map stub USER → iretq → marker → EXIT → SUCCESS.

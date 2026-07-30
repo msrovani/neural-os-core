@@ -97,12 +97,12 @@ unsafe fn hamming_avx2_xor(a: &[u64], b: &[u64]) -> u32 {
         let vb = _mm256_loadu_si256(b.as_ptr().add(i) as *const __m256i);
         let x = _mm256_xor_si256(va, vb);
         // Extrai sem store: split YMM → 2× XMM → 4× u64 direto em GPR
-        let lo128 = _mm256_extracti128_si256(x, 0);
-        let hi128 = _mm256_extracti128_si256(x, 1);
+        let lo128 = _mm256_extracti128_si256::<0>(x);
+        let hi128 = _mm256_extracti128_si256::<1>(x);
         d += (_mm_cvtsi128_si64(lo128) as u64).count_ones();
-        d += (_mm_extract_epi64(lo128, 1) as u64).count_ones();
+        d += (_mm_extract_epi64::<1>(lo128) as u64).count_ones();
         d += (_mm_cvtsi128_si64(hi128) as u64).count_ones();
-        d += (_mm_extract_epi64(hi128, 1) as u64).count_ones();
+        d += (_mm_extract_epi64::<1>(hi128) as u64).count_ones();
         i += 4;
     }
     while i < n {
