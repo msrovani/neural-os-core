@@ -117,10 +117,19 @@ impl Default for BqFlatIndex {
 
 pub fn smoke() -> bool {
     hamming_dispatch::select_best_hamming_kernel();
+    let kernel = hamming_dispatch::path_name();
     let mut idx = BqFlatIndex::new();
     idx.insert_f32(1, &[1.0, -1.0, 1.0, -1.0]);
     idx.insert_f32(2, &[-1.0, -1.0, -1.0, -1.0]);
     idx.insert_f32(3, &[1.0, 1.0, 1.0, 1.0]);
     let hits = idx.top_k_f32(&[1.0, -1.0, 1.0, -1.0], 1);
-    hits.len() == 1 && hits[0].0 == 1 && hits[0].1 == 0 && hamming_dispatch::smoke_1024()
+    let hits_ok = hits.len() == 1 && hits[0].0 == 1 && hits[0].1 == 0;
+    if !hits_ok {
+        k_nano::slog_kai!("SGDB", "BQ", "top_k FAIL kernel={} len={} id={} dist={}", kernel, hits.len(), hits.first().map(|h| h.0).unwrap_or(99), hits.first().map(|h| h.1).unwrap_or(99));
+    }
+    let s1024 = hamming_dispatch::smoke_1024();
+    if !s1024 {
+        k_nano::slog_kai!("SGDB", "BQ", "smoke_1024 FAIL kernel={}", kernel);
+    }
+    hits_ok && s1024
 }
