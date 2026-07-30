@@ -1,8 +1,8 @@
 # ADR-0075: Emagrecer neural-kernel — relatório pós-execução + revisão
 
 **Data original:** 2026-07-23
-**Revisão:** 2026-07-29 — SESSION_217 executada, diagnóstico pós-fato
-**Status:** Em implementação — E0 parcial, E1a/E1c/E2/E3/E4 concluídos, E1b pendente
+**Revisão:** 2026-07-29 — SESSION_217 executada; segunda rodada: aios_api.rs stub
+**Status:** Parcial — E1a/E1c/E2/E3/E4 ✅, aios_api stub ✅, agents/fs/vfs mantidos como role_diff
 **Lifecycle (INDEX):** `fazendo`
 **Estende:** ADR-0042 (K³CHJ workspace), ADR-0062 (ClaudioOS), IDEA #467/#511
 **Base:** v1.9.9 TEST → v1.9.11-emagrecer
@@ -90,18 +90,24 @@ O crate `neural-kernel` (bin) carrega **~20.430 LOC em 136 arquivos** `.rs`. Des
 - `jarbas_bridge.rs` mantido para verificação de contract sync
 - **~2.900 LOC removidos** do bin
 
-### 2.8 Resumo
+### 2.8 Sessão adicional (2026-07-29) — aios_api.rs stub ✅
+
+`aios_api.rs` (92 LOC) convertido para re-export do crate hermes + 3 funções bin-specific (CapGate).  
+Redução: 92 → 20 LOC (-72). **Único módulo onde o stub limpo foi viável** — os demais têm drift estrutural profundo.
+
+### 2.9 Resumo
 
 | Fase | Previsto | Real | Status |
 |------|---------:|-----:|:------:|
 | Ondas 0-6 | ~40 stubs | 40 stubs | ✅ |
 | E1a | -5.206 | -4.449 | ✅ (gguf_streaming ficou) |
-| E1b | -3.450 | 0 | ❌ |
+| E1b | -3.450 | 0 | ❌ veja §4 |
 | E1c | -1.120 | -1.117 | ✅ |
 | E2 | +200/-50 | ±0 | ✅ (wrapper mantido) |
 | E3 | +10 | +10 | ✅ |
 | E4 | -2.900 | -2.900 | ✅ |
-| **Total** | **-12.516** | **-8.998** | **~72% do plano** |
+| aios_api stub | -72 | -72 | ✅ |
+| **Total** | **-12.588** | **-9.070** | **~72% do plano** |
 
 ---
 
@@ -126,36 +132,31 @@ A execução real foi E1a+E1c+E4 em paralelo (SESSION_217), E2 e E3 já existiam
 
 ---
 
-## 4. O que ainda pode ser feito (~3.771 LOC recuperáveis)
+## 4. Status real pós-implementação
 
-### 4.1 Módulos bin_ahead — promover conteúdo duplicado
+Após tentativa prática de stub dos módulos listados, **apenas `aios_api.rs` pôde ser convertido limpa- mente** (re-export do crate hermes + 3 funções bin-specific CapGate, 92→20 LOC). Os demais têm **drift estrutural profundo** que impede stub direto:
 
-Onde o bin tem uma cópia que diverge do crate. Ação: sync drift + stub.
+### 4.1 Por que os outros módulos NÃO podem ser stubs
 
-| Módulo | LOC bin | LOC crate | Diferença | Esforço | Risco |
-|--------|--------:|----------:|----------:|---------|:-----:|
-| **`agents.rs`** | 2.620 | 2.484 | +136 | Alto (~4h) | 🟡 20 impls Agent; boot path complexo |
-| **`shutdown.rs`** | 360 | 233 | +127 (parcial) | Médio | 🟡 split deliberado (HW exec no bin, cause/arm no crate) |
-| **`boot_log_agent.rs`** | 118 | 147 | stub compatível | Baixo | 🟢 ~118 LOC de FAT walk; crate tem versão maior (147) |
-| **`memory_agent.rs`** | 193 | 189 | +4 | Baixo | 🟢 divergência mínima |
-| **`aios_api.rs`** | 92 | 83 | +9 | Baixo | 🟢 quase idêntico |
-| **`vga_buffer.rs`** | 216 | 204 | +12 (macros) | Médio | 🟡 macros bin-specific precisam port p/ crate |
-| **Total** | **~3.599** | | | | |
+| Módulo | LOC bin | Problema |
+|--------|--------:|----------|
+| **`agents.rs`** | 2.620 | 20 impls Agent com `crate::` paths (net, pci, interrupt, virtio, SELF_HEAL, TRUST_CACHE etc) que não existem no crate. Cada impl referencia módulos bin-specific. Re-export do crate exigiria toda a infra hermes (globals, structured_decode, memory_store) — que já existe, mas as impls do crate usam paths diferentes e registram agents diferentes (ex: `register_hw_agents` registra `k_ai::hw_agents` vs bin registra `crate::hw_agents`). |
+| **`shutdown.rs`** | 360 | Split deliberado: `k_ai::shutdown` tem cause/arm/phrases; o bin tem a execução HW real (`begin_orderly_*`) que chama ACPI S5, PS/2, QEMU fallback — tudo bin-specific. |
+| **`boot_log_agent.rs`** | 290 | Bin tem budgeted FAT walk (MAX_ROOT_CLUSTERS, MAX_BOOT_LOG_BYTES), SelfHeal integration, EventBus BOOT_PHASE subscription, sandbox detection — tudo ausente no crate (147 LOC simplificado). |
+| **`memory_agent.rs`** | 193 | Bin tem VRAM integration (`crate::gpu::vram::VRAM_BUDDY`, MHI registry), que o crate (k_ai, Ring 1) deliberadamente não tem (stub `total_vram = 0`). Crate tem `compression_tier` que bin não tem. Drift bidirecional. |
+| **`vga_buffer.rs`** | 216 | Macros bin-specific (`crate::serial::WRITER`) que não existem no crate. |
+| **`aios_api.rs`** | **20** | ✅ **FEITO.** Re-export do crate + 3 funções CapGate. |
 
-### 4.2 Módulos crate_ahead (já efetivamente stubs)
+### 4.2 Lição: diff LOC não captura drift estrutural
 
-12 módulos onde o crate tem mais código que o bin. Em geral já são stubs (3-4 LOC de `pub use`) ou thin wrappers legítimos. **Não vale o esforço de mexer:**
+O `diff_bin_crate.py` compara LOC e diz "só +136 LOC de drift no agents.rs". Na prática, o drift são **caminhos de import diferentes**, **módulos que só existem no bin**, e **comportamentos que o crate não tem**. A diferença LOC é um indicador fraco — o verdadeiro custo é entender e reconciliar cada referência.
+
+### 4.3 Módulos crate_ahead (já efetivamente stubs)
+
+12 módulos onde o crate tem mais código que o bin. Já são stubs (3-4 LOC de `pub use`) ou thin wrappers legítimos. **Não vale o esforço de mexer:**
 
 - Já stubs/triviais (3-4 LOC): `gpt.rs`, `exfat_write.rs`, `dma.rs`, `io_scheduler.rs`, `storage_manager.rs`, `chunker.rs`, `context_window.rs`, `training_agent.rs` ✅
-- Thin wrapper justificado: `neural_fs/` (809 LOC no bin, mas 2.318 no crate — bin tem o agent que consome o crate), `interrupts.rs` (441 LOC — role_diff legítimo), `cortex.rs` (182 LOC — boot path), `boot_logger.rs` (118 LOC — FAT walk, crate maior)
-
-### 4.3 Missing_bin (já removidos, verificar stubs)
-
-| Módulo | LOC crate | Ação |
-|--------|----------:|------|
-| `sync/` | 234 | Já movido p/ k_nano; bin usa via dep |
-| `slab.rs` | 152 | Já movido p/ k_nano |
-| `usb_msc.rs` | 239 | Já movido p/ k_nano |
+- Thin wrapper justificado: `neural_fs/` (809 LOC — agent que consome o crate), `interrupts.rs` (441 LOC — role_diff), `cortex.rs` (182 LOC — boot path), `boot_logger.rs` (118 LOC — FAT walk)
 
 ---
 
@@ -190,15 +191,18 @@ glue (5.500) + role_diff (4.500) = **~10.000 LOC irreduzíveis**. O bin nunca se
 
 ---
 
-## 7. Alvo realista revisado
+## 7. Alvo realista revisado (2026-07-29)
 
-| Cenário | LOC bin | Redução |
-|---------|--------:|--------:|
-| Atual | 20.430 | — |
-| Pós-promover agents.rs + boot_log_agent + memory_agent + aios_api | ~17.400 | −3.000 |
-| Pós-sincronizar shutdown.rs (parcial) + vga_buffer.rs | ~16.850 | −550 |
-| **Alvo realista** | **~16.500–17.500** | **(após promover bin_ahead restante)** |
-| **Piso intransponível** | **~10.000** | **(glue + role_diff)** |
+| Cenário | LOC bin | Redução | Notas |
+|---------|--------:|--------:|-------|
+| Antes do emagrecer (Jul 2026) | 29.431 | — | Baseline ADR-0075 |
+| Pós-ondas 0-6 + E1a/E1c/E2/E3/E4 | 20.430 | −9.001 | SESSION_217 |
+| Pós-aios_api.rs stub | **20.403** | **−9.028** | **Atual** ✅ |
+| Stub agents.rs | ~17.800 | −2.620 | Inviável (drift profundo) |
+| **Alvo realista (sem agents/fs/vfs)** | **~20.000** | **−9.400** | **Fim do emagrecimento factível** |
+| **Piso intransponível** | **~10.000** | | **(glue + role_diff)** |
+
+**Conclusão:** Os módulos restantes (`agents.rs`, `shutdown.rs`, `boot_log_agent.rs`, `memory_agent.rs`, `vga_buffer.rs`) têm drift estrutural que impede stub. O custo de reconciliar cada referência supera o benefício de ~3.600 LOC recuperáveis. O emagrecimento cirúrgico está essencialmente completo — ~20.400 LOC é o novo normal do bin.
 
 ---
 
