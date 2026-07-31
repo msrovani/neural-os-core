@@ -1,4 +1,18 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s235 — Mesh apps reais (ADR-0081 1+2+3)
+#   SESSION_235: Marketplace + PROMOTE + Papéis (2026-07-31)
+#     1 Marketplace real: activate_global popula SKILL_REGISTRY (14 skills,
+#       dedupe); throttle TIMER_TICKS. A broadcast 14 offers sent=true.
+#     2 PROMOTE real: Worker→Master 'PROMOTE\0name\0desc' (Sync) → registra.
+#     3 Papéis reais: assign_roles envia 'ROLE\0target\0role_u8' (Sync, throttle
+#       110 ticks) → receptor filtra node_id() → set_role. B aplicou Memory.
+#     Fix eleição: lazy-init usava MAC completo vs peers [source_id,0,..] →
+#       todos Worker. Local agora [node_id(),0,0,0,0,0].
+#     VALIDADO 2 QEMUs: A=Master node=2 (15 push + 14 offers), B=Worker node=3
+#       (RX type=4 + role Memory). Commits 9239ac9/e4917c1/50bdf6b. 0 erros.
+#     Next: item 4 cortex::compute distribuído (plano → implementar → testar).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s234 — Mesh P2P real + transporte R0 (ADR-0081)
 #   SESSION_234: P2P Mesh entre 2 QEMUs + migração transporte→k_nano (2026-07-31)
 #     ✅ DOIS KERNELS AIOS SE DESCOBREM E TROCAM SKILLS VIA REDE REAL:

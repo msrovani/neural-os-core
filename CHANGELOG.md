@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### SESSION_235: Mesh P2P aplicações reais — Marketplace + PROMOTE + Papéis (2026-07-31) ✅
+- **feat(marketplace): broadcast real** — `activate_global` popula `local_skills` do
+  SKILL_REGISTRY canônico (14 skills, dedupe); antes nunca era chamado → nada enviado.
+  Throttle por TIMER_TICKS (scheduler rate-limited: 200 CALLS demoravam minutos sob TCG).
+- **feat(promote): PROMOTE_SKILL real** — Worker envia `PROMOTE\0name\0desc` (NoProto Sync
+  via k_nano); Master detecta prefixo e registra `DynamicSkill("promoted from mesh worker")`.
+- **feat(roles): propagação de papéis real** — `assign_roles` envia `ROLE\0target\0role_u8`
+  (broadcast, throttle 110 ticks); receptor filtra por `node_id()` e aplica via `set_role`
+  (era ponytail "send role-assignment"). Primeiro uso de destino no mesh.
+- **fix(eleição): todos-Worker** — lazy-init do MESH_ENGINE usava MAC completo vs peers
+  `[source_id,0,..]` → comparação lexicográfica sempre favorecia o peer. Fix: local usa
+  `[node_id(),0,0,0,0,0]` (mesmo formato).
+- **VALIDADO (2 QEMUs)**: A=Master node=2 (15 skills push + 14 offers broadcast sent=true),
+  B=Worker node=3 (RX type=4 ModelUpdate + `role aplicado node=3 role=Memory`). 0 erros.
+- Commits: `50bdf6b` (1+2+3), `e4917c1` (fix .data), `9239ac9` (node_id+tie-break).
+
 ### SESSION_234: P2P Mesh real entre 2 QEMUs + migração transporte→k_nano (2026-07-31) 🏆
 - **feat(mesh): descoberta P2P funcionando de verdade** — duas instâncias QEMU
   (10.0.3.2/10.0.3.3) trocam heartbeats via broadcast UDP 42069 na NIC real
