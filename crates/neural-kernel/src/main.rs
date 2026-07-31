@@ -1550,6 +1550,8 @@ pub(crate) fn kernel_boot(
     });
     hermes_crate::net_bridge::register_udp_xfer(crate::net::udp_exchange_safe);
     hermes_crate::net_bridge::register_dns_resolve(crate::net::dns_resolve_host_safe);
+    // SESSION_234: transporte P2P (ADR-0081) movido para k_nano — hermes
+    // consome via EVENT_BUS "P2P_PACKET" (skill_sync/skill_marketplace poll).
     crate::net::log_tls_status_boot();
     // NetFs #418 smoke (best-effort; also from network_agent after L5_OK)
     crate::netfs::smoke_if_online();

@@ -81,17 +81,22 @@ impl MarketplaceAgent {
         self.local_skills.push((String::from(name), String::from(version)));
     }
 
-    /// Envia anuncio das skills locais via broadcast.
-    /// Depende de: P2P Transport (ADR-81 Fase A) — udp_broadcast::send()
+    /// Envia anuncio das skills locais via broadcast NoProto (TaskType::ModelUpdate).
+    /// Depende de: P2P Transport (ADR-81 Fase A) — udp_broadcast_send() do kernel.
     pub fn broadcast_offer(&self, node_id: u8) {
         if !self.active {
             return; // fallback: sem P2P, nao anuncia
         }
         for (name, version) in &self.local_skills {
-            // ponytail: quando udp_broadcast::send() estiver vivo, enviar NoProto
-            // com task_type=Marketplace e payload = (name, version, hash)
+            let pkt = AiosTaskPacket::new(
+                0, node_id, 0xFF, TaskType::ModelUpdate, 1, 0, 0, PacketFlags::new(),
+            );
+            let mut buf = udp_broadcast::serialize(&pkt);
+            let payload = alloc::format!("{}|{}|{}|{}", name, version, "general", "skill offer via mesh").into_bytes();
+            buf.extend_from_slice(&payload);
+            let sent = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
             k_nano::slog_nano!("MKTP", "info",
-                "broadcast skill '{}' v{} from node {}", name, version, node_id);
+                "broadcast skill '{}' v{} from node {} sent={}", name, version, node_id, sent);
         }
     }
 
@@ -101,14 +106,21 @@ impl MarketplaceAgent {
         if !self.active {
             return;
         }
-        // Parse payload como SkillOffer
-        // ponytail: payload NoProto com name|version|category|description|improvement_pct|wasm_hash
+        // Parse payload como "name|version|category|description"
+        let text = core::str::from_utf8(payload).unwrap_or("");
+        let mut fields = text.split('|');
+        let skill_name = fields.next().filter(|s| !s.is_empty()).unwrap_or("unknown");
+        let version = fields.next().filter(|s| !s.is_empty()).unwrap_or("0.0.0");
+        let category = fields.next().filter(|s| !s.is_empty()).unwrap_or("general");
+        let description = fields.next().filter(|s| !s.is_empty())
+            .unwrap_or("Skill offer received via P2P marketplace");
+
         let offer = SkillOffer {
             node_id: packet.source_id,
-            skill_name: String::from("unknown"),
-            version: String::from("0.0.0"),
-            category: String::from("general"),
-            description: String::from("Skill offer received via P2P marketplace"),
+            skill_name: String::from(skill_name),
+            version: String::from(version),
+            category: String::from(category),
+            description: String::from(description),
             improvement_pct: 0.0,
             wasm_hash: [0; 32],
             payload: payload.to_vec(),
@@ -170,14 +182,99 @@ pub fn init() {
     *MARKETPLACE.lock() = Some(MarketplaceAgent::new());
 }
 
-/// Processa pacote NoProto recebido: se for SkillOffer, roteia para Marketplace.
-/// Chamado pelo NetAgent ao receber broadcast UDP.
+/// Processa pacote NoProto recebido: se for SkillOffer (ModelUpdate), roteia
+/// para o Marketplace. Chamado pelo kernel com o payload já fatiado
+/// (`data[PACKET_HEADER_SIZE..]`), então NÃO re-fatia aqui.
 pub fn on_packet_received(packet: &AiosTaskPacket, data: &[u8]) {
-    // Verifica se e um pacote de marketplace
-    let header_size = core::mem::size_of::<AiosTaskPacket>();
-    if data.len() > header_size {
-        if let Some(ref mut mp) = *MARKETPLACE.lock() {
-            mp.on_skill_offer(packet, &data[header_size..]);
+    // Gate: só processa ofertas de skills (ModelUpdate)
+    if packet.task_type != TaskType::ModelUpdate {
+        return;
+    }
+    if let Some(ref mut mp) = *MARKETPLACE.lock() {
+        mp.on_skill_offer(packet, data);
+    }
+}
+
+/// Atalho: lazy-init do marketplace + ativa. Chamado pelo kernel quando há peer.
+pub fn activate_global() {
+    let mut guard = MARKETPLACE.lock();
+    if guard.is_none() {
+        *guard = Some(MarketplaceAgent::new());
+    }
+    if let Some(ref mut mp) = *guard {
+        mp.activate();
+    }
+}
+
+/// Atalho: lazy-init + registra skill local para anunciar. Chamado pelo kernel.
+pub fn register_skill(name: &str, version: &str) {
+    let mut guard = MARKETPLACE.lock();
+    if guard.is_none() {
+        *guard = Some(MarketplaceAgent::new());
+    }
+    if let Some(ref mut mp) = *guard {
+        mp.register_local_skill(name, version);
+    }
+}
+
+/// Tick do marketplace: lazy-init + broadcast das skills locais com throttle
+/// (~200 ticks). Chamado pelo bin a cada tick (bei_tick).
+pub fn marketplace_tick(node_id: u8) {
+    static CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    static LAST: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let n = CALLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    if n.wrapping_sub(LAST.load(core::sync::atomic::Ordering::Relaxed)) < 200 {
+        return;
+    }
+    LAST.store(n, core::sync::atomic::Ordering::Relaxed);
+    let mut guard = MARKETPLACE.lock();
+    if guard.is_none() {
+        *guard = Some(MarketplaceAgent::new());
+    }
+    if let Some(ref mut mp) = *guard {
+        mp.broadcast_offer(node_id);
+    }
+}
+
+// ─── Consumo via EventBus (SESSION_234) ───────────────────────────────────
+// k_nano publica pacotes P2P não-heartbeat no tópico "P2P_PACKET". O bin
+// chama `poll_p2p()` a cada tick (bei_tick) — subscribe lazy na 1ª chamada.
+
+static RECV: Mutex<Option<event_bus::Receiver>> = Mutex::new(None);
+
+/// Inscreve no tópico P2P_PACKET do EventBus (idempotente).
+pub fn subscribe_p2p() {
+    let mut recv = RECV.lock();
+    if recv.is_none() {
+        *recv = Some(k_nano::EVENT_BUS.subscribe(k_nano::net::mesh::TOPIC_P2P_PACKET));
+        k_nano::slog_nano!("MKTP", "info", "subscribed P2P_PACKET (EventBus)");
+    }
+}
+
+/// Drena os pacotes P2P do EventBus e processa ofertas de skills.
+/// Self-activate no primeiro pacote válido.
+pub fn poll_p2p() {
+    subscribe_p2p();
+    loop {
+        let evt = RECV.lock().as_ref().and_then(|r| r.try_receive());
+        let Some(evt) = evt else { break };
+        if evt.topic != k_nano::net::mesh::TOPIC_P2P_PACKET {
+            continue;
+        }
+        if let Some(pkt) = k_nano::net::udp_broadcast::parse(&evt.payload) {
+            if pkt.task_type != TaskType::ModelUpdate {
+                continue;
+            }
+            // Self-activate: oferta recebida ⇒ há peers anunciando.
+            if let Some(ref mut mp) = *MARKETPLACE.lock() {
+                mp.activate();
+            }
+            let payload = if evt.payload.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
+                &evt.payload[k_nano::net::noproto::PACKET_HEADER_SIZE..]
+            } else {
+                &[][..]
+            };
+            on_packet_received(&pkt, payload);
         }
     }
 }

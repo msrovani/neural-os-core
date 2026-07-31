@@ -10,10 +10,10 @@ pub const TOPIC_NETWORK_CONFIGURED: &str = "NETWORK_CONFIGURED";
 pub const TOPIC_NETWORK_DEGRADED: &str = "NETWORK_DEGRADED";
 pub const TOPIC_NETWORK_HEALTH: &str = "NETWORK_HEALTH";
 
-pub static RTL8139: spin::Mutex<Option<Rtl8139Driver>> = spin::Mutex::new(None);
-pub static E1000: spin::Mutex<Option<E1000Driver>> = spin::Mutex::new(None);
+// Driver statics agora vivem em k_nano (transporte P2P R0 usa o mesmo NIC).
+// Re-export: `crate::net::E1000` escreve/le o static canônico de k_nano.
+pub use k_nano::nic_globals::{RTL8139, E1000, VIRTIO_DEV};
 pub static I225: spin::Mutex<Option<I225Driver>> = spin::Mutex::new(None);
-pub static VIRTIO_DEV: spin::Mutex<Option<crate::virtio_net::VirtIoDevice>> = spin::Mutex::new(None);
 pub static NETSTACK: spin::Mutex<Option<crate::netstack::NetStack>> = spin::Mutex::new(None);
 
 pub struct NetConfig {

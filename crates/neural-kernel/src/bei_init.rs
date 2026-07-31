@@ -398,7 +398,22 @@ pub fn bei_tick(_tick: u64) {
     if let Some(state) = bei_state() {
         state.tick();
     }
-    // SESSION_233: P2P Mesh broadcast (ADR-0081) — roda aqui (hook do scheduler,
-    // sempre chamado) em vez de depender do NetAgent agent (rate-limited).
-    crate::network_agent::mesh_p2p_tick(_tick);
+    // SESSION_234: transporte P2P movido para k_nano (ADR-0081) — roda aqui
+    // (hook do scheduler, sempre chamado) em vez de depender do NetAgent agent
+    // (rate-limited). k_nano envia heartbeats, drena o RX 42069 e publica
+    // não-heartbeats no EVENT_BUS ("P2P_PACKET").
+    k_nano::net::mesh::p2p_tick(_tick);
+    // Com peer presente, ativa sync de skills + marketplace (idempotente).
+    // O bin orquestra k_nano↔hermes — k_nano não conhece hermes.
+    if k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1) {
+        hermes_crate::skill_sync::activate_global();
+        hermes_crate::skill_marketplace::activate_global();
+    }
+    // Consumo dos pacotes P2P não-heartbeat (EventBus) — lazy subscribe + dreno.
+    hermes_crate::skill_sync::poll_p2p();
+    hermes_crate::skill_marketplace::poll_p2p();
+    // Sync de skills (Master push / diff) + marketplace broadcast periódico.
+    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    hermes_crate::skill_sync::sync_skills(now);
+    hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::local_role() as u8);
 }

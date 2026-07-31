@@ -13,6 +13,7 @@ use crate::identity;
 use alloc::vec::Vec;
 use alloc::vec;
 use core::mem;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 /// Tamanho do pacote NoProto em bytes (repr(C, packed) = 36 bytes).
 pub const PACKET_SIZE: usize = mem::size_of::<AiosTaskPacket>();
@@ -110,4 +111,143 @@ pub fn verify_packet<'a>(data: &'a [u8], pk: &[u8; identity::PUBLIC_KEY_LEN]) ->
     } else {
         None
     }
+}
+
+// ── Transporte P2P R0 (ADR-0081 Fase A) ──────────────────────────────────
+// Porta 42069, broadcast 255.255.255.255, NIC real (e1000/VirtIO/RTL8139).
+// Movido do bin (SESSION_234): o transporte mesh agora vive em k_nano — o bin
+// só chama `mesh::p2p_tick()` e consome pacotes via EVENT_BUS ("P2P_PACKET").
+
+/// Contadores de RX/TX do transporte P2P (independentes do smoltcp do bin).
+static NET_TX_COUNT: AtomicU64 = AtomicU64::new(0);
+static NET_RX_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Total de frames TX do transporte P2P (k_nano).
+pub fn k_nano_tx_count() -> u64 { NET_TX_COUNT.load(Ordering::Relaxed) }
+
+/// Total de frames RX do transporte P2P (k_nano).
+pub fn k_nano_rx_count() -> u64 { NET_RX_COUNT.load(Ordering::Relaxed) }
+
+/// Checksum IP (RFC 1071) — mesmo algoritmo do bin netstack.
+fn ip_checksum(data: &[u8]) -> u16 {
+    let mut sum = 0u32;
+    for chunk in data.chunks(2) {
+        let word = u16::from_be_bytes([chunk[0], *chunk.get(1).unwrap_or(&0)]);
+        sum = sum.wrapping_add(word as u32);
+    }
+    while sum >> 16 != 0 { sum = (sum & 0xFFFF) + (sum >> 16); }
+    !(sum as u16)
+}
+
+/// Envia via NIC real: VirtIO → E1000 → RTL8139 (gate canônico e1000).
+/// Sem wifi/slip/I225 — esses paths continuam no smoltcp do bin.
+unsafe fn nic_send_k(data: Vec<u8>) {
+    if let Some(ref mut nic) = *crate::nic_globals::VIRTIO_DEV.lock() {
+        nic.send(&data); return;
+    }
+    if let Some(ref mut nic) = *crate::nic_globals::E1000.lock() {
+        nic.send(&data); return;
+    }
+    if let Some(ref mut nic) = *crate::nic_globals::RTL8139.lock() {
+        nic.send(&data); return;
+    }
+}
+
+/// Recebe do NIC real: VirtIO → E1000 → RTL8139.
+unsafe fn nic_recv_k() -> Option<Vec<u8>> {
+    if let Some(ref mut nic) = *crate::nic_globals::VIRTIO_DEV.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    if let Some(ref mut nic) = *crate::nic_globals::E1000.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    if let Some(ref mut nic) = *crate::nic_globals::RTL8139.lock() {
+        if let Some(pkt) = nic.recv() { return Some(pkt); }
+    }
+    None
+}
+
+/// Monta frame Ethernet + IP + UDP com destino broadcast (FF:FF:FF:FF:FF:FF → 255.255.255.255).
+/// Lê (sip, smac) do `nic_globals::NET_CONFIG` (sync via `set_nic_config` pelo bin).
+pub fn build_udp_broadcast_frame(payload: &[u8], port: u16) -> Option<Vec<u8>> {
+    let (sip, smac) = {
+        let cfg = crate::nic_globals::NET_CONFIG.lock();
+        let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+        (sip, cfg.mac)
+    };
+    if smac == [0; 6] || payload.is_empty() {
+        return None;
+    }
+    let src_port: u16 = 42069;
+    let udp_len = (8 + payload.len()) as u16;
+    let mut udp = Vec::with_capacity(udp_len as usize);
+    udp.extend_from_slice(&src_port.to_be_bytes());
+    udp.extend_from_slice(&port.to_be_bytes());
+    udp.extend_from_slice(&udp_len.to_be_bytes());
+    udp.extend_from_slice(&[0x00, 0x00]);
+    udp.extend_from_slice(payload);
+
+    let dst: [u8; 4] = [255, 255, 255, 255];
+    let total_len = (20 + udp.len()) as u16;
+    let mut ip = [0u8; 20];
+    ip[0] = 0x45;
+    ip[2..4].copy_from_slice(&total_len.to_be_bytes());
+    ip[8] = 64;
+    ip[9] = 17; // UDP
+    ip[12..16].copy_from_slice(&sip);
+    ip[16..20].copy_from_slice(&dst);
+    let cs = ip_checksum(&ip);
+    ip[10..12].copy_from_slice(&cs.to_be_bytes());
+
+    let dmac = [0xFF; 6]; // broadcast Ethernet
+    let mut frame = Vec::with_capacity(14 + 20 + udp.len());
+    frame.extend_from_slice(&dmac);
+    frame.extend_from_slice(&smac);
+    frame.extend_from_slice(&[0x08, 0x00]);
+    frame.extend_from_slice(&ip);
+    frame.extend_from_slice(&udp);
+    Some(frame)
+}
+
+/// Envia payload UDP para 255.255.255.255:port (broadcast mesh P2P).
+pub fn udp_broadcast_send(payload: &[u8], port: u16) -> bool {
+    let Some(frame) = build_udp_broadcast_frame(payload, port) else {
+        return false;
+    };
+    unsafe { nic_send_k(frame) };
+    NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Recebe um payload UDP (dst_port == port) do RX do NIC. Não bloqueia.
+pub fn udp_broadcast_recv(port: u16) -> Option<Vec<u8>> {
+    // Drena até achar um pacote UDP para nossa porta (ou esvazia o RX).
+    for _ in 0..16 {
+        let pkt = unsafe { nic_recv_k()? };
+        NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+        if pkt.len() < 14 + 20 + 8 {
+            continue;
+        }
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            continue;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 {
+            continue;
+        }
+        if pkt[14 + 9] != 17 {
+            continue; // não-UDP
+        }
+        let udp = 14 + ihl;
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if dport != port {
+            continue;
+        }
+        let ulen = u16::from_be_bytes([pkt[udp + 4], pkt[udp + 5]]) as usize;
+        if ulen < 8 || pkt.len() < udp + ulen {
+            continue;
+        }
+        return Some(pkt[udp + 8..udp + ulen].to_vec());
+    }
+    None
 }

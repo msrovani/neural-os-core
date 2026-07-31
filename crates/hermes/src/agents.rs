@@ -255,80 +255,14 @@ impl Agent for NetAgent {
         // ADR-0081 B1: mesh tick — heartbeat → cleanup → election
         k_nano::net::mesh::mesh_tick();
 
-        // ── P2P UDP broadcast: send heartbeat + recv discoveries ──
-        p2p_tick(_tick);
+        // ── P2P UDP broadcast: transporte movido para k_nano (SESSION_234) ──
+        // (k_nano::net::mesh::p2p_tick roda no bei_tick do bin — dono único do
+        // RX 42069; não-heartbeats chegam aqui via EventBus "P2P_PACKET" e são
+        // consumidos por skill_sync::poll_p2p() / skill_marketplace::poll_p2p()).
+        // Removido p2p_tick() daqui — competia pelo mesmo buffer RX (nodes=1
+        // instável).
 
         AgentTickResult::Pending
-    }
-}
-
-/// P2P tick: envia heartbeat periodicamente + processa pacotes recebidos.
-/// SESSION_233: usa o broadcast UDP do KERNEL via net_bridge (NIC real/e1000),
-/// não o NETSTACK espelho do hermes (que nunca inicializa o socket 42069).
-fn p2p_tick(_tick: u64) {
-    const P2P_PORT: u16 = 42069;
-
-    // Step 2: envia heartbeat a cada ~55 ticks (~3s)
-    if _tick % 55 == 0 {
-        let node_id = k_nano::net::mesh::local_role() as u8;
-        let pkt = k_nano::net::udp_broadcast::make_heartbeat(node_id, _tick);
-        let data = k_nano::net::udp_broadcast::serialize(&pkt);
-
-        // Step 6: assina com Ed25519 se a sessão estiver pronta
-        match k_nano::net::udp_broadcast::sign_packet(&data) {
-            Some(signed) => {
-                let ok = crate::net_bridge::udp_broadcast_send(&signed, P2P_PORT);
-                k_nano::slog_hermes!("P2P", "TX", "heartbeat node={} tick={} sent={}", node_id, _tick, ok);
-            }
-            None => {
-                let ok = crate::net_bridge::udp_broadcast_send(&data, P2P_PORT);
-                k_nano::slog_hermes!("P2P", "TX", "heartbeat node={} tick={} sent={}", node_id, _tick, ok);
-            }
-        }
-    }
-
-    // Step 3: recebe pacotes pendentes e alimenta o mesh engine
-    while let Some(rx) = crate::net_bridge::udp_broadcast_recv(P2P_PORT) {
-        // Step 6: tenta verificar assinatura Ed25519
-        let data = match k_nano::identity::session_public_key() {
-            Some(pk) => {
-                match k_nano::net::udp_broadcast::verify_packet(&rx, &pk) {
-                    Some(valid) => {
-                        // ponytail: verificado com pk da sessão — aceita
-                        k_nano::slog_hermes!("P2P", "SIG", "assinatura OK");
-                        valid.to_vec()
-                    }
-                    None => {
-                        // Sem assinatura ou inválida — aceita sem verificação
-                        // ponytail: adicionar lista de trusted peers quando necessário
-                        rx
-                    }
-                }
-            }
-            None => rx, // sessão não inicializada — aceita sem verificação
-        };
-
-        // Faz parse do pacote NoProto
-        if let Some(pkt) = k_nano::net::udp_broadcast::parse(&data) {
-            // Copia campos do packed struct para evitar E0793 (unaligned ref)
-            let sid = pkt.source_id;
-            let clk = pkt.clock;
-            let tt = pkt.task_type as u8;
-            k_nano::slog_hermes!("P2P", "RX",
-                "source_id={} clock={} type={}", sid, clk, tt,
-            );
-            // Alimenta o mesh engine com os dados do peer
-            let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
-            let caps = k_nano::net::mesh::NodeCapabilities::new(
-                sender_mac, 1, 1000, 1, 0,
-                k_nano::net::mesh::SimdWeight::None, false, false,
-            );
-            let mut eng = k_nano::net::mesh::MESH_ENGINE.lock();
-            if let Some(ref mut engine) = *eng {
-                engine.add_or_update_node(caps);
-                engine.check_election();
-            }
-        }
     }
 }
 

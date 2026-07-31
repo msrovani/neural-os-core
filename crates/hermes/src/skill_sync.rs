@@ -17,7 +17,9 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use k_nano::net::mesh::{self, NodeRole};
+use k_nano::net::noproto::{AiosTaskPacket, TaskType, PacketFlags};
 use k_nano::slog_hermes;
+use spin::Mutex;
 use ticket_lock::TicketLock;
 
 /// Agente de sincronização de skills entre nós do mesh.
@@ -31,6 +33,8 @@ pub struct SkillSync {
     last_sync_tick: u64,
     /// nomes das skills pendentes de sincronização
     pending_skills: Vec<String>,
+    /// nomes das skills já empurradas pelo Master (diff incremental)
+    synced: Vec<String>,
 }
 
 impl SkillSync {
@@ -40,6 +44,7 @@ impl SkillSync {
             active: false,
             last_sync_tick: 0,
             pending_skills: Vec::new(),
+            synced: Vec::new(),
         }
     }
 
@@ -81,37 +86,73 @@ impl SkillSync {
         }
         self.last_sync_tick = tick;
 
-        // Drena uma skill pendente por ciclo
-        if self.pending_skills.is_empty() {
-            return;
-        }
-
-        let name = self.pending_skills.remove(0);
-
         match role {
             NodeRole::Master => {
-                // Master push: serializa skill e broadcast para Workers
-                // ponytail: udp_broadcast::send(manifest) não implementado — log apenas
-                slog_hermes!(
-                    "SkillSync", "info",
-                    "Master: sync skill='{}' para Workers (broadcast pendente)",
-                    name
-                );
+                // Master push: diff do SkillRegistry e broadcast das skills
+                // ainda não sincronizadas via NoProto (TaskType::Sync).
+                let mut to_broadcast: Vec<(String, String)> = Vec::new();
+                {
+                    let reg = k_nano::SKILL_REGISTRY.lock();
+                    for (entry, _pol) in reg.list_skills() {
+                        // list_skills() devolve "name: desc"
+                        let name = match entry.split_once(": ") {
+                            Some((n, _d)) => n,
+                            None => &entry[..],
+                        };
+                        if self.synced.iter().any(|s| s == name) {
+                            continue;
+                        }
+                        let desc = match entry.split_once(": ") {
+                            Some((_n, d)) => d,
+                            None => "",
+                        };
+                        to_broadcast.push((String::from(name), String::from(desc)));
+                    }
+                }
+                for (name, desc) in to_broadcast {
+                    if self.broadcast_skill(&name, &desc) {
+                        self.synced.push(name);
+                    }
+                }
             }
             NodeRole::Worker | NodeRole::Compute | NodeRole::Memory => {
                 // Worker push: promove skill para o Master
                 // ponytail: udp_broadcast::send(PROMOTE_SKILL) não implementado — log apenas
-                slog_hermes!(
-                    "SkillSync", "info",
-                    "Worker: promovendo skill='{}' para Master (PROMOTE pendente)",
-                    name
-                );
+                if let Some(name) = self.pending_skills.first() {
+                    slog_hermes!(
+                        "SkillSync", "info",
+                        "Worker: promovendo skill='{}' para Master (PROMOTE pendente)",
+                        name
+                    );
+                }
             }
             NodeRole::Undecided => {
                 // Nó ainda não faz parte do mesh — requeue para próxima sync
-                self.pending_skills.push(name);
+                if !self.pending_skills.is_empty() {
+                    let name = self.pending_skills.remove(0);
+                    self.pending_skills.push(name);
+                }
             }
         }
+    }
+
+    /// Master push: serializa "name\0desc" num NoProto TaskType::Sync e faz
+    /// broadcast UDP na porta P2P (42069) via transporte k_nano (R0).
+    /// Retorna `true` se o envio foi ok.
+    fn broadcast_skill(&mut self, name: &str, desc: &str) -> bool {
+        let node_id = mesh::local_role() as u8;
+        let pkt = AiosTaskPacket::new(
+            0, node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+        );
+        let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
+        let payload = alloc::format!("{}\0{}", name, desc).into_bytes();
+        buf.extend_from_slice(&payload);
+        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+        slog_hermes!(
+            "SkillSync", "info",
+            "Master: push skill='{}' broadcast={}", name, ok
+        );
+        ok
     }
 
     /// Marca uma skill para sincronização no próximo ciclo.
@@ -148,4 +189,81 @@ pub fn sync_skills(tick: u64) {
 /// Atalho: retorna o número de skills pendentes no singleton global.
 pub fn pending_sync_count() -> usize {
     SKILL_SYNC.lock().pending_count()
+}
+
+/// Atalho: marca o transporte P2P como ativo no singleton global.
+/// Chamado pelo kernel quando há pelo menos um peer no mesh.
+pub fn activate_global() {
+    SKILL_SYNC.lock().activate();
+}
+
+/// Recebe um pacote NoProto do mesh e aplica skill enviada pelo Master.
+/// Função livre chamada pelo kernel (dono único do RX P2P) com o payload
+/// já fatiado (`data[PACKET_HEADER_SIZE..]`), formato "name\0desc".
+pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
+    if pkt.task_type != TaskType::Sync || data.is_empty() {
+        return;
+    }
+    // Parse payload como "name\0desc"
+    let name = match data.iter().position(|&b| b == 0) {
+        Some(i) => match core::str::from_utf8(&data[..i]) {
+            Ok(s) => s,
+            Err(_) => return,
+        },
+        None => return,
+    };
+    if name.is_empty() {
+        return;
+    }
+    let desc = core::str::from_utf8(&data[name.len() + 1..]).unwrap_or("");
+
+    let mut reg = k_nano::SKILL_REGISTRY.lock();
+    if reg.has_skill(name) {
+        slog_hermes!("SkillSync", "info", "Worker: skill '{}' ja existe", name);
+        return;
+    }
+    reg.register(alloc::boxed::Box::new(
+        skill_registry::DynamicSkill::new(name, desc, "synced from mesh master"),
+    ));
+    slog_hermes!("SkillSync", "info", "Worker: skill '{}' aplicada do Master", name);
+}
+
+// ─── Consumo via EventBus (SESSION_234) ───────────────────────────────────
+// k_nano publica pacotes P2P não-heartbeat no tópico "P2P_PACKET". O bin
+// chama `poll_p2p()` a cada tick (bei_tick) — subscribe lazy na 1ª chamada.
+
+static RECV: Mutex<Option<event_bus::Receiver>> = Mutex::new(None);
+
+/// Inscreve no tópico P2P_PACKET do EventBus (idempotente).
+pub fn subscribe_p2p() {
+    let mut recv = RECV.lock();
+    if recv.is_none() {
+        *recv = Some(k_nano::EVENT_BUS.subscribe(k_nano::net::mesh::TOPIC_P2P_PACKET));
+        slog_hermes!("SkillSync", "info", "subscribed P2P_PACKET (EventBus)");
+    }
+}
+
+/// Drena os pacotes P2P do EventBus e aplica skills enviadas pelo Master.
+/// Self-activate no primeiro pacote válido.
+pub fn poll_p2p() {
+    subscribe_p2p();
+    loop {
+        let evt = RECV.lock().as_ref().and_then(|r| r.try_receive());
+        let Some(evt) = evt else { break };
+        if evt.topic != k_nano::net::mesh::TOPIC_P2P_PACKET {
+            continue;
+        }
+        if let Some(pkt) = k_nano::net::udp_broadcast::parse(&evt.payload) {
+            if pkt.task_type != TaskType::Sync {
+                continue;
+            }
+            SKILL_SYNC.lock().activate();
+            let payload = if evt.payload.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
+                &evt.payload[k_nano::net::noproto::PACKET_HEADER_SIZE..]
+            } else {
+                &[][..]
+            };
+            on_packet_received(&pkt, payload);
+        }
+    }
 }

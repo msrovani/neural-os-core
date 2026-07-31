@@ -67,8 +67,12 @@ static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 #[cfg(not(feature = "global-alloc"))]
 static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 
-/// Buffer de heap estático no .bss — mapeado pelo bootloader.
-#[link_section = ".bss"]
+/// Buffer de heap estático — seção própria `.bss.heap` colocada no FIM da
+/// imagem (limine.ld). Extensão alem dele (resize_bump_heap) só toca espaço
+/// livre — NUNCA corrompe outras statics .bss (GLOBAL_ALLOCATOR, etc).
+/// SESSION_233: sem isso, extender HEAP_LIMIT alem de HEAP_SIZE sobrescrevia
+/// statics adjacentes e zerava total_frames (falsa exaustao de frames).
+#[link_section = ".bss.heap"]
 pub static mut HEAP_BUFFER: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// TALC allocator usado APÓS o boot para resize_heap (não é o global_allocator).
@@ -79,8 +83,10 @@ pub const HEAP_START: usize = 0x_4000_0000_0000;
 pub const HEAP_SIZE: usize = 512 * 1024 * 1024; // 512MB .bss
 pub static CURRENT_HEAP_MB: AtomicUsize = AtomicUsize::new(512);
 
-/// Limite dinâmico do LazyBumpAllocator — começa = HEAP_SIZE, cresce via resize_bump_heap()
-pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(256 * 1024 * 1024);
+/// Limite do LazyBumpAllocator — o array HEAP_BUFFER tem 512MB (todo seguro).
+/// Nunca estender alem de HEAP_SIZE: alem do array .bss ha outras statics
+/// (GLOBAL_ALLOCATOR, etc.) — corrompe total_frames (SESSION_233).
+pub static HEAP_LIMIT: AtomicUsize = AtomicUsize::new(HEAP_SIZE);
 
 /// Slab zone: usa HEAP_BUFFER (em .bss, já identity-mapped pelo bootloader).
 /// Não usa HEAP_START (0x4000_0000_0000) porque essa região não está mapeada
@@ -302,6 +308,9 @@ pub fn talc_init_post_memory() -> Result<(), &'static str> {
 }
 
 /// Estende o LazyBumpAllocator com mais páginas mapeadas após o .bss.
+/// SEGURO (SESSION_233): HEAP_BUFFER agora fica em `.bss.heap` no FIM da
+/// imagem (limine.ld) — a extensão além dele mapeia frames novos em espaço
+/// livre, sem corromper statics .bss adjacentes (GLOBAL_ALLOCATOR, etc).
 pub fn resize_bump_heap(target_mb: usize) {
     let current = CURRENT_HEAP_MB.load(Ordering::Relaxed);
     if target_mb <= current { return; }

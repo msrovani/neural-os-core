@@ -15,7 +15,9 @@
 //! Sem servidor central. Sem configuracao. Zero-touch.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use alloc::string::String;
 use alloc::vec::Vec;
+use event_bus::{Event, CapabilityToken};
 
 // ponytail: transport importado mas nao usado ate UDP broadcast estar pronto
 // use crate::net::transport::HybridTransport;
@@ -510,4 +512,107 @@ pub fn local_role() -> NodeRole {
         .as_ref()
         .map(|e| e.local_role())
         .unwrap_or(NodeRole::Undecided)
+}
+
+// ─── Transporte P2P R0 (ADR-0081 Fase A, SESSION_234) ─────────────────────
+// Movido do bin: o kernel dono único do RX/TX broadcast (porta 42069).
+// Pacotes não-heartbeat (Sync/ModelUpdate/…) são publicados no EVENT_BUS
+// (tópico `TOPIC_P2P_PACKET`) para hermes consumir — sem inversão de
+// dependência (k_nano não conhece hermes).
+
+/// Tópico do EventBus para pacotes P2P não-heartbeat (payload = NoProto + payload bruto).
+pub const TOPIC_P2P_PACKET: &str = "P2P_PACKET";
+
+/// Heartbeat P2P + processamento de descoberta. Usa TIMER_TICKS global
+/// (sempre avança, mesmo com o scheduler rate-limited) — heartbeat a cada
+/// ~110 ticks do timer (~1.1s a 100Hz). Recebe e alimenta o MESH_ENGINE.
+/// Chamado pelo bin a cada tick do scheduler (bei_tick hook).
+pub fn p2p_tick(_tick: u64) {
+    const P2P_PORT: u16 = 42069;
+    // Lazy init do MESH_ENGINE (ADR-0081) — nunca inicializado no boot.
+    {
+        let mut eng = MESH_ENGINE.lock();
+        if eng.is_none() {
+            let mac = crate::nic_globals::NET_CONFIG.lock().mac;
+            let caps = NodeCapabilities::new(
+                mac, 1, 1000, 1, 0,
+                SimdWeight::None, false, false,
+            );
+            *eng = Some(BrainMeshEngine::new(caps));
+            crate::slog_nano!("P2P", "info", "MESH_ENGINE inicializado (ADR-0081)");
+        }
+    }
+
+    // Só após MAC presente (IP opcional — fallback 10.0.2.15 no frame).
+    let ready = crate::nic_globals::NET_CONFIG.lock().mac != [0; 6];
+    if !ready {
+        return;
+    }
+
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+
+    // Heartbeat a cada ~110 ticks do timer (~1.1s a 100Hz). Usa last-sent
+    // tracking (não depende de `now % 110 == 0` exato — o scheduler pode
+    // pular o tick múltiplo).
+    static LAST_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let last = LAST_SENT.load(Ordering::Relaxed);
+    if now.wrapping_sub(last) >= 110 || last == 0 {
+        LAST_SENT.store(now, Ordering::Relaxed);
+        let node_id = local_role() as u8;
+        let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, now);
+        let data = crate::net::udp_broadcast::serialize(&pkt);
+        match crate::net::udp_broadcast::sign_packet(&data) {
+            Some(signed) => {
+                let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
+                crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+            }
+            None => {
+                let ok = crate::net::udp_broadcast::udp_broadcast_send(&data, P2P_PORT);
+                crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+            }
+        }
+    }
+
+    // Recebe descobertas e alimenta o mesh engine
+    while let Some(rx) = crate::net::udp_broadcast::udp_broadcast_recv(P2P_PORT) {
+        let data = match crate::identity::session_public_key() {
+            Some(pk) => match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
+                Some(valid) => valid.to_vec(),
+                None => rx,
+            },
+            None => rx,
+        };
+        if let Some(pkt) = crate::net::udp_broadcast::parse(&data) {
+            let sid = pkt.source_id;
+            let clk = pkt.clock;
+            let tt = pkt.task_type as u8;
+            crate::slog_nano!("P2P", "info", "RX source_id={} clock={} type={}", sid, clk, tt);
+            // Não-heartbeat (Sync/ModelUpdate/…): publica no EVENT_BUS —
+            // hermes consome via skill_sync::poll_p2p() / skill_marketplace::poll_p2p().
+            if tt != 5 {
+                let _ = crate::EVENT_BUS.publish(Event {
+                    id: 0,
+                    topic: String::from(TOPIC_P2P_PACKET),
+                    payload: data.to_vec(),
+                    token: CapabilityToken::Legacy(1),
+                });
+            }
+            // Só heartbeats alimentam o mesh engine (eleição/descoberta)
+            if tt == 5 {
+                let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
+                let caps = NodeCapabilities::new(
+                    sender_mac, 1, 1000, 1, 0,
+                    SimdWeight::None, false, false,
+                );
+                let mut eng = MESH_ENGINE.lock();
+                if let Some(ref mut engine) = *eng {
+                    engine.add_or_update_node(caps);
+                    engine.check_election();
+                    let role = engine.local_role();
+                    let count = engine.node_count();
+                    crate::slog_nano!("P2P", "info", "mesh role={:?} nodes={}", role, count);
+                }
+            }
+        }
+    }
 }

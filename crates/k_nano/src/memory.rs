@@ -10,12 +10,17 @@ pub const BITMAP_SIZE: usize = 262144; // 256KB cobre 8GB fisicos
 const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 
+// Fix (SESSION_233): section .data para evitar que o bump heap estendido
+// sobrescreva estas statics — HEAP_BUFFER (512MB) em .bss é seguido por
+// outras statics; estender HEAP_LIMIT alem de HEAP_SIZE corrompe total_frames.
+#[link_section = ".data"]
 pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> = TicketLock::new(None);
 // Fix: section .data para evitar que resize_bump_heap(2048) sobrescreva
 // esta página com uma frame zerada (HEAP_BUFFER de 512MB em .bss).
 #[link_section = ".data"]
 pub static PHYS_MEM_OFFSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Total RAM em MB, detectado no boot via memory map.
+#[link_section = ".data"]
 pub static TOTAL_RAM_MB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(512);
 
 /// Alocador de frames físicos baseado em bitmap.
