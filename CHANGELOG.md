@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### SESSION_235 (item 4): Compute distribuído Worker→Master via P2P real (2026-07-31) ✅
+- **feat(mesh): matmul ternário distribuído** — cortex feature `p2p` nova; o bloco
+  `#[cfg(feature="p2p")]` do `dispatch_ternary` (que existia mas nunca compilava) agora
+  funciona: Worker serializa w+x (`MW\0` + shapes u32 LE + packed_data 2-bit + x f32 LE,
+  gate MTU 1200B), envia via udp_broadcast (TaskType::Inference), espera síncrona
+  (~200 TIMER_TICKS) a resposta `MR\0` (filtro dest_id); timeout → fallback local.
+- **feat(mesh): Master responde requests** — `poll_mesh_requests()` drena EventBus
+  P2P_PACKET, computa com `ternary_matmul_adaptive` e responde. Gate "só Master"
+  removido (responde mesmo Undecided — sob TCG o Master pode ainda não ter eleito).
+- **feat(mesh): self-test distribuído** — `mesh_matmul_self_test()` 16×16 (1107B ≤ MTU)
+  + retry 5x no bei_tick (DIAG do boot roda antes da eleição — nunca pegava o P2P).
+- **VALIDADO QEMU dual**: `[B] matmul request node=3 size=1107 sent=true` →
+  `[A] matmul resposta node=3 sent=true` → `[B] matmul resposta node=3 ok
+  shape=(16,16) primeiro=120.0 (mesh dispatch)`. Commit `b6ab13b`. 0 erros.
+
 ### SESSION_235: Mesh P2P aplicações reais — Marketplace + PROMOTE + Papéis (2026-07-31) ✅
 - **feat(marketplace): broadcast real** — `activate_global` popula `local_skills` do
   SKILL_REGISTRY canônico (14 skills, dedupe); antes nunca era chamado → nada enviado.

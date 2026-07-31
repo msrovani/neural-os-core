@@ -24,6 +24,14 @@
 - QEMU dual (-NoDisk): A=Master node=2 (15 skills push + 14 offers broadcast), B=Worker node=3 (RX type=4 + role aplicado Memory), RX cruzado type=5 heartbeats.
 - Commit `50bdf6b` (1+2+3), `e4917c1` (fix .data), `9239ac9` (node_id + tie-break).
 
+## Item 4 — Compute distribuído (cortex::compute Worker→Master) ✅
+
+- Feature `p2p` nova no cortex (bloco `#[cfg(feature="p2p")]` do `dispatch_ternary` existia mas nunca compilava).
+- Worker: serializa w+x (`MW\0` + shapes u32 LE + packed_data 2-bit + x f32 LE, gate MTU 1200B), envia via `udp_broadcast` (TaskType::Inference), espera síncrona ~200 TIMER_TICKS a resposta `MR\0` (filtro `dest_id == node_id()`); timeout → fallback local.
+- Master: `poll_mesh_requests()` drena EventBus P2P_PACKET, responde com `ternary_matmul_adaptive`. Gate "só Master" removido — responde mesmo Undecided (sob TCG o Master pode ainda não ter eleito quando o request chega).
+- Self-test `mesh_matmul_self_test()` 16×16 (1107B ≤ MTU) + retry 5x no bei_tick (DIAG do boot roda antes da eleição — role Undecided — nunca pegava o P2P).
+- **VALIDADO QEMU dual**: `[B] matmul request node=3 size=1107 sent=true` → `[A] matmul resposta node=3 sent=true` → `[B] matmul resposta node=3 ok shape=(16,16) primeiro=120.0 (mesh dispatch)`. Commit `b6ab13b`.
+
 ## Next
 
-- Item 4: cortex::compute distribuído (plano em andamento — serializar w+x via NoProto tensor_len/param_len, round-trip Master, fallback local).
+- Fechar loop: LLM emitir op-IR → registrar Skill/agent-wasm persistente (ADR-0059 F3→F5); fragmentação MTU p/ matmul grande (assíncrono); fl_trainer.rs + mesh_distrib.rs desbloqueio (mesmo padrão MW/MR).

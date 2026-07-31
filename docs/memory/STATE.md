@@ -1,4 +1,22 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s235 — Mesh apps reais 1+2+3+4 (ADR-0081)
+#   SESSION_235 (item 4): Compute distribuído Worker→Master (2026-07-31)
+#     cortex feature 'p2p' nova; dispatch_ternary Worker serializa w+x ('MW\0',
+#       shapes u32 LE + packed 2-bit + x f32 LE, gate MTU 1200B) → udp_broadcast
+#       → espera síncrona ~200 ticks 'MR\0' (filtro dest_id); timeout → local.
+#     Master: poll_mesh_requests() drena EventBus, computa ternary_matmul_adaptive;
+#       responde mesmo Undecided (TCG: Master ainda não eleito quando request chega).
+#     Self-test 16×16 (1107B) + retry 5x no bei_tick (DIAG roda pré-eleição).
+#     VALIDADO: [B] request size=1107 → [A] resposta sent=true → [B] ok
+#       shape=(16,16) primeiro=120.0 (mesh dispatch). Commit b6ab13b.
+#     1+2+3 (mercado/promote/papéis): marketplace 14 skills reais broadcast;
+#       PROMOTE Worker→Master; papéis ROLE\0target\0role → set_role (B=Memory).
+#       Fix eleição: local [node_id(),0,0,0,0,0] (era MAC → todos Worker).
+#     Commits: 9239ac9/e4917c1/50bdf6b/b6ab13b. 0 erros.
+#     Next: LLM→op-IR→skill persistente (ADR-0059 F3→F5); fragmentação MTU;
+#       fl_trainer.rs + mesh_distrib.rs (padrão MW/MR).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s235 — Mesh apps reais (ADR-0081 1+2+3)
 #   SESSION_235: Marketplace + PROMOTE + Papéis (2026-07-31)
 #     1 Marketplace real: activate_global popula SKILL_REGISTRY (14 skills,

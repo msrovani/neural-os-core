@@ -1,4 +1,4 @@
-# 🧠 Idea Bank — neural-os-core v2.0
+﻿# 🧠 Idea Bank — neural-os-core v2.0
 
 **Última atualização:** 2026-07-23 — ADR-0075 Emagrecer neural-kernel E0–E4 + SESSION_215.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
@@ -624,8 +624,8 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | 315.23 | **Wake Word (Rustpotter)** — Detecção de "Jarvis" via Rustpotter crate. Publica WAKEWORD_DETECTED no EventBus. Pós B-01 | ❌ supersedido | — | Histórico. Substituído por MLP nativo `wakeword.rs` (**registrado** no boot Loop 5); path Mic→WAKEWORD e2e ainda aberto. ADR-0045. | Priler/jarvis |
 | 315.24 | **Audio Ring Buffer** — Circular buffer PCM lockless para DMA audio entre HDA/USB e voice pipeline. Produtor/consumidor SPSC via EventBus. | ✅ feito | Sprint Sound | `audio/ringbuf.rs` no truth. Não bloqueado por B-01. ADR-0045. | — |
 | 315.25 | **Voice Pipeline** — Pipeline de áudio nativo Rust sobre EventBus: Mic→WakeWord→STT→Cortex→TTS→Speaker. Frame types (AudioFrame, TranscriptionFrame, TTSCommandFrame) + PipelineAgent que orquestra. Ref arquitetural: pipecat pipeline composition pattern. | ❌ supersedido (spec sherpa) / ▶️ Sprint Sound | Sprint Sound (reaberta) | Spec original (sherpa+rustpotter) ❌. Pipeline nativo parcial (107 skinny ✅); fechar loop runtime = Sound. ADR-0045. | EventBus nativo |
-| 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | ⏳ defer → 🟡 ADR-0081 | fora gate | Absorvido pela ADR-0081 — VectorClock + SGDB CRDT + Fase C. **Fase A+B ✅ SESSION_234** (2 QEMUs descobrem-se + skill sync) |
-| 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | ⏳ defer → 🟡 ADR-0081 | fora gate | Absorvido pela ADR-0081 — NodeTier L1-L4 + NoProto + Brain Mesh. **Fase A+B ✅ SESSION_234** (descoberta + eleição + skill sync reais) |
+| 315.26 | **Multi-device sync (CRDT)** — Sincronização de memória/contexto entre dispositivos via CRDT (Automerge-style). Pós B-01 | ⏳ defer → 🟡 ADR-0081 | fora gate | Absorvido pela ADR-0081 — VectorClock + SGDB CRDT + Fase C. **Fases A-D ✅ SESSION_234/235** (descobrem-se + skill sync + compute distribuído) |
+| 315.27 | **SKYNET Mesh Node** — Participa da malha SKYNET como nó L1 (PC) ou L2 (workstation). Speculative decoding distribuído. Pós B-01 | ⏳ defer → 🟡 ADR-0081 | fora gate | Absorvido pela ADR-0081 — NodeTier L1-L4 + NoProto + Brain Mesh. **Fases A-D ✅ SESSION_234/235** (descoberta + eleição + skill sync + matmul distribuído reais) |
 | 315.28 | **Gamification** — Recompensas, streaks, achievements para interação com JARVIS. OptimizerAgent + CronAgent | 🟢 Futuro | N+1 | ~200 | Jotape |
 
 **Total:** ~5650 LOC (Sprints 77-80: ~3550, N+1: ~1600, N+2: ~500). ADR-0036.
