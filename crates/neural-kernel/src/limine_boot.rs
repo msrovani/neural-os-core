@@ -95,12 +95,47 @@ pub unsafe extern "C" fn _start() -> ! {
 unsafe extern "C" fn limine_entry() -> ! {
     early_serial(b"[neural] Limine handoff\r\nL\r\nboot=limine\r\n");
 
+    // Debug: verificar se BaseRevision foi aceito
+    if LIMINE_BASE_REV.supported() {
+        early_serial(b"[HHDM] BaseRevision rev2=OK\r\n");
+    } else {
+        early_serial(b"[HHDM] BaseRevision rev2=UNSUPPORTED\r\n");
+    }
+
+    // Debug: imprimir response pointer do HHDM antes de qualquer deref
+    let hhdm_resp_ptr = LIMINE_HHDM.response as u64;
+    let hhdm_null = hhdm_resp_ptr == 0;
+    early_serial(b"[HHDM] response_ptr=0x");
+    // hex dump do ponteiro (8 nibbles do low 32 bits)
+    let nibbles: [u8; 16] = core::array::from_fn(|i| {
+        let shift = 60 - i * 4;
+        let digit = (hhdm_resp_ptr >> shift) & 0xF;
+        if digit < 10 { b'0' + digit as u8 } else { b'a' + (digit - 10) as u8 }
+    });
+    early_serial(&nibbles);
+    early_serial(if hhdm_null { b" NULL\r\n" } else { b" OK\r\n" });
+
     // 1. Coleta dados do handoff via crate k_nano
     let handoff = k_nano::limine::LimineHandoff::collect_from_requests(
         &LIMINE_HHDM,
         &LIMINE_MEMMAP,
         &LIMINE_RSDP,
     );
+
+    // Debug: log do HHDM offset recebido
+    let po = handoff.pm_offset;
+    if po == 0 {
+        early_serial(b"[HHDM] OFFSET=0 (fallback)\r\n");
+    } else {
+        early_serial(b"[HHDM] offset=0x");
+        let nibbles: [u8; 16] = core::array::from_fn(|i| {
+            let shift = 60 - i * 4;
+            let digit = (po >> shift) & 0xF;
+            if digit < 10 { b'0' + digit as u8 } else { b'a' + (digit - 10) as u8 }
+        });
+        early_serial(&nibbles);
+        early_serial(b"\r\n");
+    }
 
     // 2. Aplica HHDM offset globalmente
     limine::apply_hhdm(handoff.pm_offset);

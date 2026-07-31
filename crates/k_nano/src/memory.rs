@@ -11,6 +11,9 @@ const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 
 pub static GLOBAL_ALLOCATOR: TicketLock<Option<BitmapFrameAllocator>> = TicketLock::new(None);
+// Fix: section .data para evitar que resize_bump_heap(2048) sobrescreva
+// esta página com uma frame zerada (HEAP_BUFFER de 512MB em .bss).
+#[link_section = ".data"]
 pub static PHYS_MEM_OFFSET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 /// Total RAM em MB, detectado no boot via memory map.
 pub static TOTAL_RAM_MB: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(512);

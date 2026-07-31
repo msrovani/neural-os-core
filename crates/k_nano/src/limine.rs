@@ -299,9 +299,23 @@ impl LimineHandoff {
     ) -> Self {
         let mut h = Self::new();
 
-        // HHDM offset
+        // HHDM offset — com safety check p/ ponteiro físico vs HHDM-virtual
         let offset = if !hhdm.response.is_null() {
-            unsafe { (*hhdm.response).offset }
+            let ptr = hhdm.response as u64;
+            // Rev 2+: response ptr é HHDM-virtual (> 0xFFFF800000000000).
+            // Rev 0: response ptr é físico (< 1MB). Sem HHDM conhecido, tentamos
+            // deref direto (bootloader pode ter identity-map baixa memória).
+            unsafe {
+                if ptr >= 0xFFFF800000000000 {
+                    // HHDM-virtual — deref direto
+                    (*hhdm.response).offset
+                } else {
+                    // Possível físico — tenta deref (pode ser identity-mapped)
+                    // ponytail: se #PF aqui, bootloader não identity-maps baixa memória
+                    let phys_ptr = ptr as *const HhdmResponse;
+                    (*phys_ptr).offset
+                }
+            }
         } else {
             0
         };
