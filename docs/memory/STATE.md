@@ -12,6 +12,21 @@
 #     cargo check --release: 0 erros
 #     Teste QEMU pendente: TRY_ENTER_RING3=true, P6 demo esperado OK
 #
+#   ATUALIZADO (fim SESSION_233) — Ring3 FUNCIONANDO no QEMU! ✅
+#     P6 SUCCESS iretq+CPL3 marker=3352494e470001 Cap::ENTER_USER
+#     BOOT: P6 Ring3 OK + scheduler vivo (tick=1 agents=53 polled=32)
+#     Fixes desta sessão:
+#       - Triple-fault RSP=0: "xor ax, ax" clobberava RAX do operando {rsp}
+#         no jump_back_to_kernel (zerar ds/es/ss era desnecessário em long mode)
+#       - Callee-saved (rbx/rbp/r12-r15) clobbered pelo handler x86-interrupt:
+#         restaurar em jump_back_to_kernel (CPL=0+kernel CR3), não no asm return
+#       - PHYS_MEM_OFFSET/GLOBAL_ALLOCATOR/TOTAL_RAM_MB → .data (bump heap
+#         corrompia .bss: total_frames=0 → "sem frame CoW" falso)
+#       - HEAP_BUFFER → seção .bss.heap no FIM da imagem (limine.ld)
+#       - NeuralFS: nunca formatar disco com partições (protect ESP 0xEE)
+#       - build.rs boot: rerun-if-changed (uefi.img stale corrompido)
+#     cargo check --release: 0 erros
+#
 # ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s232 — Bootloader 0.11 Removal
 #   SESSION_232: Bootloader 0.11 cleanup — Limine path único (2026-07-30)

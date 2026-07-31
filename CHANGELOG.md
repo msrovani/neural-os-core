@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### SESSION_233b: Ring3 triple-fault resolvido — boot QEMU 100% (2026-07-30)
+- **fix(ring3): RSP=0 no `jump_back_to_kernel`** — `"xor ax, ax"` para zerar
+  ds/es/ss clobberava o registro RAX que o compilador escolheu para o operando
+  `{rsp}` → `mov rsp, rax` com RAX=0 → ret para RIP=0 → #PF storm (CR2=rodata).
+  Em long mode zerar segmentos era desnecessário (SS.RPL=0 vem do TSS no int 0x90).
+- **fix(ring3): callee-saved restore** — handler `extern "x86-interrupt"` salva
+  rbx/rbp/r12-r15 na stack RSP0 e o `jmp` pulava o epilogue → restaurar em
+  `jump_back_to_kernel` (CPL=0 + kernel CR3, statics acessíveis).
+- **RESULTADO**: `P6 SUCCESS iretq+CPL3 marker=3352494e470001 Cap::ENTER_USER`
+  + `BOOT: P6 Ring3 OK` + scheduler vivo (tick=1 agents=53 polled=32).
+  Boot QEMU 8GB + OVMF + janela completa sem reboot loop. ✅
+- **fix(mem): statics .bss corrompidas pelo bump heap** — `resize_bump_heap(2048)`
+  entregava endereços além do HEAP_BUFFER (512MB) → sobrescrevia
+  GLOBAL_ALLOCATOR/PHYS_MEM_OFFSET/TOTAL_RAM_MB → `total_frames=0` → falsa
+  exaustão de frames ("sem frame CoW"). Fix: statics → `.data` +
+  HEAP_BUFFER → seção `.bss.heap` no fim da imagem (limine.ld).
+- **fix(neuralfs): nunca formatar disco com partições** — `try_format_gpt_virgin`
+  não bloqueava 0xEE (protective GPT do ESP Limine) → kernel formatava o
+  uefi.img como NeuralFS → OVMF "Not Found" no boot seguinte.
+- **fix(boot/build.rs): rerun-if-changed** — sem isso uefi.img ficava stale
+  (corrompido por boot anterior).
+- **cargo check --release**: 0 erros
+
 ### SESSION_233: Ring3 Isolation (ADR-0077) — 6 fases (2026-07-30)
 - **Phase 0 (fix)**: CR3 switch BEFORE iretq asm (Moros pattern). Moveu `mov cr3` do inline asm para `address_space::restore_cr3()` em Rust, eliminando triple-fault após switch de page table.
 - **Phase 1 (feature)**: `user_mode::run_process(pid)` — conecta ELF loader + ProcessManager + `enter_user_mode()`. Comando shell `run <pid>`.
