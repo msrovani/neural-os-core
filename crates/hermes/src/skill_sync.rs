@@ -116,14 +116,33 @@ impl SkillSync {
                 }
             }
             NodeRole::Worker | NodeRole::Compute | NodeRole::Memory => {
-                // Worker push: promove skill para o Master
-                // ponytail: udp_broadcast::send(PROMOTE_SKILL) não implementado — log apenas
-                if let Some(name) = self.pending_skills.first() {
+                // Worker push: promove skill local para o Master via NoProto Sync
+                // payload "PROMOTE\0{name}\0{desc}". SESSION_235: era log-only.
+                if !self.pending_skills.is_empty() {
+                    let name = self.pending_skills.remove(0);
+                    // Desc do SkillRegistry canônico ("name: desc").
+                    let desc = {
+                        let reg = k_nano::SKILL_REGISTRY.lock();
+                        let mut d = String::new();
+                        for (entry, _pol) in reg.list_skills() {
+                            if let Some((n, desc)) = entry.split_once(": ") {
+                                if n == name {
+                                    d = String::from(desc);
+                                    break;
+                                }
+                            }
+                        }
+                        d
+                    };
+                    let ok = self.broadcast_promote(&name, &desc);
                     slog_hermes!(
                         "SkillSync", "info",
-                        "Worker: promovendo skill='{}' para Master (PROMOTE pendente)",
-                        name
+                        "Worker: promote skill='{}' broadcast={}", name, ok
                     );
+                    if !ok {
+                        // Sem envio (ex. sem NIC) — re-tenta na próxima sync.
+                        self.pending_skills.push(name);
+                    }
                 }
             }
             NodeRole::Undecided => {
@@ -154,6 +173,19 @@ impl SkillSync {
             "Master: push skill='{}' broadcast={}", name, ok
         );
         ok
+    }
+
+    /// Worker push: serializa "PROMOTE\0{name}\0{desc}" num NoProto Sync e faz
+    /// broadcast UDP na porta P2P (42069). O Master aplica via on_packet_received.
+    fn broadcast_promote(&self, name: &str, desc: &str) -> bool {
+        let node_id = k_nano::net::mesh::node_id();
+        let pkt = AiosTaskPacket::new(
+            0, node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+        );
+        let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
+        let payload = alloc::format!("PROMOTE\0{}\0{}", name, desc).into_bytes();
+        buf.extend_from_slice(&payload);
+        k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069)
     }
 
     /// Marca uma skill para sincronização no próximo ciclo.
@@ -201,10 +233,46 @@ pub fn activate_global() {
 /// Recebe um pacote NoProto do mesh e aplica skill enviada pelo Master.
 /// Função livre chamada pelo kernel (dono único do RX P2P) com o payload
 /// já fatiado (`data[PACKET_HEADER_SIZE..]`), formato "name\0desc".
+///
+/// SESSION_235: payload "PROMOTE\0{name}\0{desc}" (Worker → Master) é tratado
+/// ANTES do fluxo normal de push — só o Master aplica.
 pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
     if pkt.task_type != TaskType::Sync || data.is_empty() {
         return;
     }
+
+    // ── PROMOTE\0name\0desc — Worker → Master ──
+    if data.starts_with(b"PROMOTE\0") {
+        // Só o Master aplica promotes (payload é para ele).
+        if mesh::local_role() != NodeRole::Master {
+            return;
+        }
+        let mut parts = data[8..].splitn(2, |&b| b == 0);
+        let name = match parts.next().and_then(|s| core::str::from_utf8(s).ok()) {
+            Some(n) if !n.is_empty() => n,
+            _ => return,
+        };
+        let desc = parts
+            .next()
+            .map(|s| core::str::from_utf8(s).unwrap_or(""))
+            .unwrap_or("");
+
+        let mut reg = k_nano::SKILL_REGISTRY.lock();
+        if reg.has_skill(name) {
+            slog_hermes!("SkillSync", "info", "Master: skill '{}' ja existe (promote ignorado)", name);
+            return;
+        }
+        reg.register(alloc::boxed::Box::new(
+            skill_registry::DynamicSkill::new(name, desc, "promoted from mesh worker"),
+        ));
+        slog_hermes!(
+            "SkillSync", "info",
+            "Master: skill '{}' promovida do Worker node={}", name, pkt.source_id
+        );
+        return;
+    }
+
+    // ── Push normal do Master: "name\0desc" ──
     // Parse payload como "name\0desc"
     let name = match data.iter().position(|&b| b == 0) {
         Some(i) => match core::str::from_utf8(&data[..i]) {

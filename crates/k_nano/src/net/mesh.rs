@@ -18,6 +18,7 @@ use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use alloc::string::String;
 use alloc::vec::Vec;
 use event_bus::{Event, CapabilityToken};
+use crate::net::noproto::{AiosTaskPacket, TaskType, PacketFlags};
 
 // ponytail: transport importado mas nao usado ate UDP broadcast estar pronto
 // use crate::net::transport::HybridTransport;
@@ -406,14 +407,33 @@ impl BrainMeshEngine {
         self.local_role.store(NodeRole::Worker as u8, Ordering::Release);
     }
 
+    /// Aplica papel atribuído pelo Master (propagação via ROLE\0{node}\0{role}).
+    /// SESSION_235: receptor filtra pelo node_id e aplica no MESH_ENGINE.
+    pub fn set_role(&self, role: NodeRole) {
+        self.local_role.store(role as u8, Ordering::Release);
+        crate::slog_nano!("P2P", "info", "role aplicado: {:?}", role);
+    }
+
     /// Assign roles to nodes based on capabilities
     ///
     /// Only the Master node performs role assignment.
     /// Simple heuristics: highest RAM → Memory, AVX2/AVX-512 → Compute.
+    /// SESSION_235: envia ROLE\0{node_id}\0{role_u8} via broadcast para cada
+    /// nó conhecido (transporte não tem unicast — receptor filtra pelo node_id).
     fn assign_roles(&self) {
         if !self.is_master.load(Ordering::Acquire) {
             return;
         }
+
+        // Throttle ~110 ticks (espelha o heartbeat): check_election roda a cada
+        // tick via mesh_tick + a cada heartbeat RX — sem throttle, spam de ROLE.
+        static LAST_ASSIGN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        let last = LAST_ASSIGN.load(Ordering::Relaxed);
+        if last != 0 && now.wrapping_sub(last) < 110 {
+            return;
+        }
+        LAST_ASSIGN.store(now, Ordering::Relaxed);
 
         let mut memory_node: Option<usize> = None;
         let mut compute_nodes: Vec<usize> = Vec::new();
@@ -439,9 +459,37 @@ impl BrainMeshEngine {
             }
         }
 
-        // ponytail: in real impl, send role-assignment messages to nodes
-        let _ = memory_node;
-        let _ = compute_nodes;
+        // Envia papel para cada nó conhecido (broadcast — filtro no receptor).
+        for (i, node) in self.nodes.iter().enumerate() {
+            let Some(n) = node else { continue };
+            if !n.online {
+                continue;
+            }
+            // node_id do peer = primeiro byte das capabilities (source_id do
+            // heartbeat que o registrou: sender_mac = [source_id, 0,0,0,0,0]).
+            let target = n.capabilities.node_id[0];
+            let role = if Some(i) == memory_node {
+                NodeRole::Memory
+            } else if compute_nodes.contains(&i) {
+                NodeRole::Compute
+            } else {
+                NodeRole::Worker
+            };
+            self.send_role_assign(target, role);
+        }
+    }
+
+    /// Envia um pacote NoProto Sync com payload "ROLE\0{target}\0{role_u8}"
+    /// via broadcast (porta 42069). Receptor filtra pelo target.
+    fn send_role_assign(&self, target_node: u8, role: NodeRole) {
+        let pkt = AiosTaskPacket::new(
+            0, node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+        );
+        let mut buf = crate::net::udp_broadcast::serialize(&pkt);
+        let payload = alloc::format!("ROLE\0{}\0{}", target_node, role as u8).into_bytes();
+        buf.extend_from_slice(&payload);
+        let ok = crate::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+        crate::slog_nano!("P2P", "info", "role-assign node={} role={:?} sent={}", target_node, role, ok);
     }
 
     /// Get current timestamp (tick-based)
@@ -571,13 +619,18 @@ pub fn p2p_tick(_tick: u64) {
     {
         let mut eng = MESH_ENGINE.lock();
         if eng.is_none() {
-            let mac = crate::nic_globals::NET_CONFIG.lock().mac;
+            // node_id local no MESMO formato dos peers ([node_id(),0,0,0,0,0])
+            // — SESSION_234: usar o MAC completo corrompia o tie-break da
+            // eleição (comparação lexicográfica [3,0,..] < [0x52,0x54,..]
+            // sempre true → todo mundo vira Worker).
+            let nid = node_id();
+            let local_id = [nid, 0, 0, 0, 0, 0];
             let caps = NodeCapabilities::new(
-                mac, 1, 1000, 1, 0,
+                local_id, 1, 1000, 1, 0,
                 SimdWeight::None, false, false,
             );
             *eng = Some(BrainMeshEngine::new(caps));
-            crate::slog_nano!("P2P", "info", "MESH_ENGINE inicializado (ADR-0081)");
+            crate::slog_nano!("P2P", "info", "MESH_ENGINE inicializado (ADR-0081) node_id={}", nid);
         }
     }
 
@@ -628,6 +681,45 @@ pub fn p2p_tick(_tick: u64) {
             let clk = pkt.clock;
             let tt = pkt.task_type as u8;
             crate::slog_nano!("P2P", "info", "RX source_id={} clock={} type={}", sid, clk, tt);
+            // Payload após o header NoProto (já fatiado aqui).
+            let payload = if data.len() > crate::net::noproto::PACKET_HEADER_SIZE {
+                &data[crate::net::noproto::PACKET_HEADER_SIZE..]
+            } else {
+                &[][..]
+            };
+            // SESSION_235: propagação de papéis — ROLE\0{target}\0{role_u8}.
+            // Consumido AQUI (antes do publish P2P_PACKET) — não deve vazar
+            // para skill_sync (que aplicaria "ROLE" como skill).
+            if tt == 3 && payload.starts_with(b"ROLE\0") {
+                let mut parts = payload[5..].splitn(2, |&b| b == 0);
+                let target = match parts.next().and_then(|s| core::str::from_utf8(s).ok())
+                    .and_then(|s| s.parse::<u8>().ok())
+                {
+                    Some(t) => t,
+                    None => continue, // malformado — descarta
+                };
+                let role_u8 = parts.next().and_then(|s| core::str::from_utf8(s).ok())
+                    .and_then(|s| s.parse::<u8>().ok())
+                    .unwrap_or(4); // fallback Undecided
+                if target != node_id() {
+                    continue; // é de outro nó — ignora
+                }
+                let role = match role_u8 {
+                    0 => NodeRole::Master,
+                    1 => NodeRole::Memory,
+                    2 => NodeRole::Compute,
+                    3 => NodeRole::Worker,
+                    _ => NodeRole::Undecided,
+                };
+                {
+                    let eng = MESH_ENGINE.lock();
+                    if let Some(ref engine) = *eng {
+                        engine.set_role(role);
+                    }
+                }
+                crate::slog_nano!("P2P", "info", "role aplicado node={} role={:?}", target, role);
+                continue; // consumido — não publica no EVENT_BUS
+            }
             // Não-heartbeat (Sync/ModelUpdate/…): publica no EVENT_BUS —
             // hermes consome via skill_sync::poll_p2p() / skill_marketplace::poll_p2p().
             if tt != 5 {

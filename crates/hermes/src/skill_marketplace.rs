@@ -195,14 +195,46 @@ pub fn on_packet_received(packet: &AiosTaskPacket, data: &[u8]) {
     }
 }
 
-/// Atalho: lazy-init do marketplace + ativa. Chamado pelo kernel quando há peer.
+/// Atalho: lazy-init do marketplace + ativa + popula skills locais reais.
+/// Chamado pelo kernel quando há peer. SESSION_235: `register_local_skill`
+/// nunca era chamado → `local_skills` vazio → broadcast_offer não enviava nada.
+/// Agora popula a partir do SkillRegistry canônico (name: desc), dedupe por nome.
 pub fn activate_global() {
     let mut guard = MARKETPLACE.lock();
     if guard.is_none() {
         *guard = Some(MarketplaceAgent::new());
     }
     if let Some(ref mut mp) = *guard {
+        // Popula local_skills do SkillRegistry canônico do k_nano.
+        let mut names: Vec<String> = Vec::new();
+        {
+            let reg = k_nano::SKILL_REGISTRY.lock();
+            for (entry, _pol) in reg.list_skills() {
+                let name = match entry.split_once(": ") {
+                    Some((n, _d)) => String::from(n),
+                    None => entry.clone(),
+                };
+                if !names.iter().any(|s| s == &name) {
+                    names.push(name);
+                }
+            }
+        }
+        for name in names {
+            // Evita duplicatas: se já anunciada, skip.
+            if !mp.local_skills.iter().any(|(n, _)| n == &name) {
+                mp.register_local_skill(&name, "1.0");
+            }
+        }
+        let n = mp.local_skills.len();
         mp.activate();
+        // SESSION_235: só loga quando o count muda (activate_global roda a
+        // cada bei_tick com peer — antes spammava "marketplace ativo" a cada tick).
+        static LAST_LOG: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+        let last = LAST_LOG.load(core::sync::atomic::Ordering::Relaxed);
+        if n != last {
+            LAST_LOG.store(n, core::sync::atomic::Ordering::Relaxed);
+            k_nano::slog_nano!("MKTP", "info", "marketplace ativo: {} skills locais anunciadas", n);
+        }
     }
 }
 
@@ -220,13 +252,16 @@ pub fn register_skill(name: &str, version: &str) {
 /// Tick do marketplace: lazy-init + broadcast das skills locais com throttle
 /// (~200 ticks). Chamado pelo bin a cada tick (bei_tick).
 pub fn marketplace_tick(node_id: u8) {
-    static CALLS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    // SESSION_235: throttle por TIMER_TICKS (como o heartbeat) — scheduler é
+    // rate-limited (tick=160 após ~2700 timer ticks) e 200 CALLS demoravam
+    // minutos; broadcast nunca disparava no teste QEMU.
     static LAST: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    let n = CALLS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    if n.wrapping_sub(LAST.load(core::sync::atomic::Ordering::Relaxed)) < 200 {
+    let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let last = LAST.load(core::sync::atomic::Ordering::Relaxed);
+    if now.wrapping_sub(last) < 200 {
         return;
     }
-    LAST.store(n, core::sync::atomic::Ordering::Relaxed);
+    LAST.store(now, core::sync::atomic::Ordering::Relaxed);
     let mut guard = MARKETPLACE.lock();
     if guard.is_none() {
         *guard = Some(MarketplaceAgent::new());
