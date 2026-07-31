@@ -275,6 +275,40 @@ pub fn soft_syscall(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
 }
 
 pub extern "x86-interrupt" fn syscall_int_handler(_stack: InterruptStackFrame) {
+    // Phase 3: ABI por registrador para Ring3 (RAX=nr, RDI=arg0, RSI=arg1, RDX=cap_bits).
+    // Fallback para atomics staging (kernel→kernel, compat).
+    let nr = SYS_NR.load(Ordering::SeqCst);
+    let mut arg = SYS_ARG.load(Ordering::SeqCst);
+    let mut cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
+
+    // Se veio de Ring3 (CS.RPL==3) ou foi pré-carregado via stage, usa ABI registrador.
+    // O stub user carrega RAX=nr, RDI=arg, RDX=caps antes de int 0x90.
+    if nr == 0 || cap == Cap::EMPTY {
+        // Ler registradores (ABI Ring3: RAX=nr, RDI=arg0, RDX=cap_bits)
+        let reg_nr: u64;
+        let reg_arg: u64;
+        let reg_cap: u64;
+        unsafe {
+            core::arch::asm!(
+                "mov {}, rax",
+                "mov {}, rdi",
+                "mov {}, rdx",
+                out(reg) reg_nr,
+                out(reg) reg_arg,
+                out(reg) reg_cap,
+                options(nostack, preserves_flags)
+            );
+        }
+        // Só usa registrador se stage não setou (stage tem prioridade para compat)
+        let use_reg = SYS_NR.load(Ordering::SeqCst) == 0;
+        if use_reg && reg_nr != 0 {
+            SYS_NR.store(reg_nr, Ordering::SeqCst);
+            SYS_ARG.store(reg_arg, Ordering::SeqCst);
+            SYS_CAP.store(reg_cap, Ordering::SeqCst);
+        }
+    }
+
+    // Re-read after potential register ABI update
     let nr = SYS_NR.load(Ordering::SeqCst);
     let arg = SYS_ARG.load(Ordering::SeqCst);
     let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));

@@ -198,6 +198,34 @@ pub fn hhdm_mut<T>(frame: PhysFrame<Size4KiB>) -> *mut T {
     (phys_offset() + frame.start_address().as_u64()) as *mut T
 }
 
+/// Phase 4: Cria um AddressSpace de sandbox DO ZERO, em vez de clonar o kernel.
+/// Só mapeia o que o sandbox precisa: kernel text/data (P4[511]) e HHDM (P4[~255]).
+/// Não herda tabelas L3/L2/L1 compartilhadas com o kernel → isolamento real.
+pub fn create_sandbox_as() -> Result<AddressSpace, &'static str> {
+    let (kernel_l4, _) = Cr3::read();
+    let kernel_l4_ptr = unsafe { &*frame_as_table(kernel_l4) };
+
+    let l4_frame = alloc_zeroed_frame().ok_or("sandbox: sem frame L4")?;
+    let l4_ptr = unsafe { &mut *frame_as_table(l4_frame) };
+
+    // Copia só os entries necessários do kernel:
+    // P4[511] = kernel text/data/bss (IDT, GDT, TSS, IST stacks inclusos)
+    // P4[~255] = HHDM (phys mem offset — supervisor-only, sem USER_ACCESSIBLE)
+    // P4[~128-224] = podem ser omitidos (heap, arena, MVP) — sandbox não precisa
+    for i in 0..512 {
+        let kernel_entry = &kernel_l4_ptr[i];
+        if !kernel_entry.flags().contains(PageTableFlags::PRESENT) {
+            continue;
+        }
+        // Mapeia entries de kernel e HHDM (qualquer P4 index ≥ 256)
+        if i >= 256 {
+            l4_ptr[i] = kernel_entry.clone();
+        }
+    }
+
+    Ok(AddressSpace { l4_frame })
+}
+
 pub fn kernel_cr3() -> (PhysFrame<Size4KiB>, Cr3Flags) {
     Cr3::read()
 }

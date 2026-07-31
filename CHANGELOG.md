@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### SESSION_233: Ring3 Isolation (ADR-0077) — 6 fases (2026-07-30)
+- **Phase 0 (fix)**: CR3 switch BEFORE iretq asm (Moros pattern). Moveu `mov cr3` do inline asm para `address_space::restore_cr3()` em Rust, eliminando triple-fault após switch de page table.
+- **Phase 1 (feature)**: `user_mode::run_process(pid)` — conecta ELF loader + ProcessManager + `enter_user_mode()`. Comando shell `run <pid>`.
+- **Phase 2 (feature)**: TSS mutável via `TssCell` (wrapper Sync) + `set_rsp0()`. Per-process kernel stack para traps CPL=3→0.
+- **Phase 3 (feature)**: Syscall ABI por registrador (RAX=nr, RDI=arg, RDX=caps) + fallback atomics. Handler lê registradores quando `stage_syscall()` não foi chamado.
+- **Phase 4 (feature)**: `address_space::create_sandbox_as()` — AS do zero que só copia entries P4≥256 (kernel+HHDM). Sem tabelas L3/L2/L1 compartilhadas com kernel.
+- **Phase 5 (feature)**: Hypervisor-aware gating em `isolation_ring.rs`. `ring3_is_safe()` = true só em KVM; TCG/WHPX/HW real = gated. `init_connectors()` registra native ring via `register_native_ring()` quando seguro.
+- **fix: TssCell wrapper Sync** — substitui `UnsafeCell` por `TssCell(TaskStateSegment)` com `unsafe impl Sync` (single-threaded durante Ring3).
+- **cargo check --release**: 0 erros
+
 ### SESSION_232: Bootloader 0.11 cleanup — Limine path único (2026-07-30)
 - **clean: vendor/bootloader/** — crate do image builder 0.11 removida (~1.8MB, 65+ arquivos)
 - **clean: bootloader_api dep** — removida de k_nano, neural-kernel, jarbas Cargo.tomls

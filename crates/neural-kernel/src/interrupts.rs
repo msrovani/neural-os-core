@@ -2,7 +2,6 @@
 //! P6: segmentos user (Ring3) + TSS.RSP0 para trap de CPL=3.
 //! Onda 5: TIMER_TICKS + MOUSE_ABS_* canônicos em k_nano (Hermes/Jarbas leem o mesmo).
 
-use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicUsize, Ordering};
 use lazy_static::lazy_static;
 use x86_64::instructions::segmentation::Segment;
@@ -38,10 +37,22 @@ const PAGE_FAULT_IST_INDEX: u16 = 1;
 const GENERAL_PROTECTION_IST_INDEX: u16 = 2;
 const TIMER_IST_INDEX: u16 = 3;
 
+// Wrapper Sync para UnsafeCell<TaskStateSegment> — TSS só é mutado
+// single-threaded durante transições Ring3 (CLI), portanto Sync é seguro.
+struct TssCell(TaskStateSegment);
+unsafe impl Sync for TssCell {}
+impl core::ops::Deref for TssCell {
+    type Target = TaskStateSegment;
+    fn deref(&self) -> &TaskStateSegment { &self.0 }
+}
+impl core::ops::DerefMut for TssCell {
+    fn deref_mut(&mut self) -> &mut TaskStateSegment { &mut self.0 }
+}
+
 lazy_static! {
-    /// TSS mutável via UnsafeCell para permitir RSP0 por processo (Phase 2).
+    /// TSS mutável para permitir RSP0 por processo (Phase 2).
     /// IST stacks são configuradas uma vez na init e não mudam.
-    static ref TSS: UnsafeCell<TaskStateSegment> = UnsafeCell::new({
+    static ref TSS: TssCell = TssCell({
         let mut tss = TaskStateSegment::new();
         // RSP0: stack kernel ao trapear de CPL=3 (int 0x90 / exceções)
         // Default inicial; set_rsp0() altera por processo.
@@ -85,12 +96,12 @@ lazy_static! {
 /// Safe porque: single-threaded durante transição Ring3 (CLI), CPU não lê
 /// RSP0 concorrentemente enquanto escrevemos.
 pub fn set_rsp0(stack_top: VirtAddr) {
-    unsafe { (*TSS.get()).privilege_stack_table[0] = stack_top; }
+    TSS.privilege_stack_table[0] = stack_top;
 }
 
 /// Retorna referência ao TSS para init da GDT.
 fn tss_ref() -> &'static TaskStateSegment {
-    unsafe { &*TSS.get() }
+    &TSS
 }
 
 lazy_static! {

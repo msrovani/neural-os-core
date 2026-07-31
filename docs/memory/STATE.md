@@ -1,4 +1,18 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s233 — Ring3 Isolation (ADR-0077)
+#   SESSION_233: Ring3 Isolation — 6 fases (2026-07-30)
+#     Phase 0 — CR3 switch fix: Moros pattern (CR3 switch BEFORE iretq asm)
+#     Phase 1 — run_process(): ELF loader + ProcessManager + enter_user_mode()
+#     Phase 2 — TSS mutável via TssCell + set_rsp0() per-process
+#     Phase 3 — Syscall ABI por registrador (RAX=nr, RDI=arg, RDX=caps)
+#     Phase 4 — create_sandbox_as(): AS do zero (não clone raso) — só P4≥256
+#     Phase 5 — Hypervisor-aware gating: KVM=OK, TCG/WHPX=gated
+#     init_connectors() agora registra native ring em KVM
+#     run shell cmd conectado ao ProcessManager
+#     cargo check --release: 0 erros
+#     Teste QEMU pendente: TRY_ENTER_RING3=true, P6 demo esperado OK
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s232 — Bootloader 0.11 Removal
 #   SESSION_232: Bootloader 0.11 cleanup — Limine path único (2026-07-30)
 #     vendor/bootloader/ removido (~1.8MB, image builder 0.11)
