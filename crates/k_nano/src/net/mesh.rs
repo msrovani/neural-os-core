@@ -344,12 +344,32 @@ impl BrainMeshEngine {
         let mut max_score = local_score;
         let mut best_node: Option<usize> = None;
 
-        // Find node with highest capacity score
+        // Find node with highest capacity score.
+        // Tie-break (SESSION_234): score igual → menor node_id vence — eleição
+        // determinística entre instâncias idênticas (antes: ambas Master).
         for (i, node) in self.nodes.iter().enumerate() {
             if let Some(n) = node {
                 if n.online {
                     let score = n.capabilities.capacity_score();
-                    if score > max_score {
+                    let beats = match best_node {
+                        None => {
+                            // Peer só vence o local se score maior, ou score
+                            // igual com node_id menor (unicidade por IP).
+                            score > local_score
+                                || (score == local_score
+                                    && n.capabilities.node_id < self.local_capabilities.node_id)
+                        }
+                        Some(bi) => {
+                            if let Some(b) = self.nodes[bi].as_ref() {
+                                score > b.capabilities.capacity_score()
+                                    || (score == b.capabilities.capacity_score()
+                                        && n.capabilities.node_id < b.capabilities.node_id)
+                            } else {
+                                false
+                            }
+                        }
+                    };
+                    if beats {
                         max_score = score;
                         best_node = Some(i);
                     }
@@ -363,8 +383,8 @@ impl BrainMeshEngine {
             return;
         }
 
-        // Check if we should be Master
-        if best_node.is_none() || max_score <= local_score {
+        // Check if we should be Master: Master = nenhum peer venceu o local.
+        if best_node.is_none() {
             self.become_master();
         } else {
             self.become_worker();
@@ -514,6 +534,24 @@ pub fn local_role() -> NodeRole {
         .unwrap_or(NodeRole::Undecided)
 }
 
+/// ID único por instância — usado como source_id nos pacotes NoProto
+/// (heartbeat/Sync/offers) e no node_id das NodeCapabilities do mesh.
+///
+/// SESSION_234: `local_role() as u8` colidia entre instâncias (ambas
+/// enviavam o mesmo ID, ex. Undecided=4) → add_or_update_node deduplicava
+/// pelo node_id → nodes=1 mesmo com 2 instâncias. Deriva do IP real
+/// (10.0.3.2→2, .3→3) para unicidade; fallbacks: MAC byte 5, depois role.
+pub fn node_id() -> u8 {
+    let cfg = crate::nic_globals::NET_CONFIG.lock();
+    if cfg.ip[3] != 0 {
+        cfg.ip[3]
+    } else if cfg.mac[5] != 0 {
+        cfg.mac[5]
+    } else {
+        local_role() as u8
+    }
+}
+
 // ─── Transporte P2P R0 (ADR-0081 Fase A, SESSION_234) ─────────────────────
 // Movido do bin: o kernel dono único do RX/TX broadcast (porta 42069).
 // Pacotes não-heartbeat (Sync/ModelUpdate/…) são publicados no EVENT_BUS
@@ -558,7 +596,10 @@ pub fn p2p_tick(_tick: u64) {
     let last = LAST_SENT.load(Ordering::Relaxed);
     if now.wrapping_sub(last) >= 110 || last == 0 {
         LAST_SENT.store(now, Ordering::Relaxed);
-        let node_id = local_role() as u8;
+        // node_id único por instância (último octeto do IP: 10.0.3.2→2, .3→3).
+        // SESSION_234: usar local_role() colidia — ambas enviavam o mesmo ID
+        // (Undecided=4) → add_or_update_node deduplicava → nodes=1.
+        let node_id = node_id();
         let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, now);
         let data = crate::net::udp_broadcast::serialize(&pkt);
         match crate::net::udp_broadcast::sign_packet(&data) {

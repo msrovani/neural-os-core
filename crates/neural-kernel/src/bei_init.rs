@@ -415,5 +415,5 @@ pub fn bei_tick(_tick: u64) {
     // Sync de skills (Master push / diff) + marketplace broadcast periódico.
     let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     hermes_crate::skill_sync::sync_skills(now);
-    hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::local_role() as u8);
+    hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::node_id());
 }

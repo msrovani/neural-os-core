@@ -140,7 +140,8 @@ impl SkillSync {
     /// broadcast UDP na porta P2P (42069) via transporte k_nano (R0).
     /// Retorna `true` se o envio foi ok.
     fn broadcast_skill(&mut self, name: &str, desc: &str) -> bool {
-        let node_id = mesh::local_role() as u8;
+        // ID único por instância (último octeto do IP) — SESSION_234.
+        let node_id = k_nano::net::mesh::node_id();
         let pkt = AiosTaskPacket::new(
             0, node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
         );
