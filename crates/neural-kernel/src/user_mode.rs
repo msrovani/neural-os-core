@@ -32,6 +32,13 @@ static SAVED_CR3_FLAGS: AtomicU64 = AtomicU64::new(0);
 static mut SAVED_RIP: u64 = 0;
 #[cfg(feature = "ring3")]
 static mut SAVED_RSP: u64 = 0;
+/// Callee-saved regs (rbx, rbp, r12-r15) salvos ANTES do iretq e restaurados
+/// em "2:" (SESSION_233). O syscall handler (extern "x86-interrupt") salva
+/// esses regs na stack do handler (RSP0); jump_back_to_kernel faz `jmp` direto
+/// a "2:" PULANDO o epilogue do handler -> regs lixo -> epilogue de
+/// enter_user_mode usa RBP corrompido -> ret para 0 -> #PF storm.
+#[cfg(feature = "ring3")]
+static mut SAVED_CALLEE: [u64; 6] = [0; 6];
 
 /// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
 /// Cap deny path ainda roda; reativar quando clone CR3 mapear kernel text.
@@ -91,11 +98,32 @@ unsafe fn jump_back_to_kernel() -> ! {
         }
     }
     ABORTING.store(false, Ordering::SeqCst);
+    // CRITICO (SESSION_233): NAO zerar ds/es/ss aqui! Em long mode esses
+    // segmentos tem base ignorada (SS.RPL ja = 0 vindo do TSS no int 0x90).
+    // "xor ax, ax" para zerar os segmentos CLOBBERAVA o registro que o
+    // compilador escolheu para o operando {rsp} (RAX) -> mov rsp, rax com
+    // RAX=0 -> RSP=0 -> ret para RIP=0 -> #PF storm (CR2=rodata).
+    //
+    // Restaura callee-saved (rbx/rbp/r12-r15) que o syscall handler
+    // (extern "x86-interrupt") clobberou na stack RSP0 e cujo epilogue
+    // foi pulado pelo jmp. Aqui estamos em CPL=0 + kernel CR3 — statics
+    // acessiveis. Se NAO restaurar, o epilogue de enter_user_mode usa
+    // RBP lixo -> ret para 0 -> #PF storm.
+    #[cfg(feature = "ring3")]
+    {
+        let sc = core::ptr::addr_of_mut!(SAVED_CALLEE) as u64;
+        core::arch::asm!(
+            "mov rbx, qword ptr [{sc} + 0*8]",
+            "mov rbp, qword ptr [{sc} + 1*8]",
+            "mov r12, qword ptr [{sc} + 2*8]",
+            "mov r13, qword ptr [{sc} + 3*8]",
+            "mov r14, qword ptr [{sc} + 4*8]",
+            "mov r15, qword ptr [{sc} + 5*8]",
+            sc = in(reg) sc,
+            options(nostack)
+        );
+    }
     core::arch::asm!(
-        "xor ax, ax",
-        "mov ds, ax",
-        "mov es, ax",
-        "mov ss, ax",
         "mov rsp, {rsp}",
         "jmp {rip}",
         rsp = in(reg) rsp,
@@ -135,23 +163,45 @@ pub unsafe fn enter_user_mode(
 
     // --- PHASE 0: CR3 switch ANTES do iretq (Moros pattern) ---
     // 1. Salva kernel RSP para o return path (jump_back_to_kernel restaura)
+    crate::interrupts::puts(b"[P6] A: save rsp\n");
     let rsp_val: u64;
     core::arch::asm!("mov {}, rsp", out(reg) rsp_val, options(nostack));
     #[cfg(feature = "ring3")]
     { SAVED_RSP = rsp_val; }
 
-    // 2. Switch para page table do user enquanto ainda CPL=0.
+    // 2. Salva callee-saved (rbx/rbp/r12-r15) que o syscall handler
+    //    clobbera na stack RSP0 e o jump_back_to_kernel nao restaura.
+    #[cfg(feature = "ring3")]
+    {
+        let p = core::ptr::addr_of_mut!(SAVED_CALLEE) as u64;
+        core::arch::asm!(
+            "mov qword ptr [{p} + 0*8], rbx",
+            "mov qword ptr [{p} + 1*8], rbp",
+            "mov qword ptr [{p} + 2*8], r12",
+            "mov qword ptr [{p} + 3*8], r13",
+            "mov qword ptr [{p} + 4*8], r14",
+            "mov qword ptr [{p} + 5*8], r15",
+            p = in(reg) p,
+            options(nostack)
+        );
+    }
+
+    // 3. Switch para page table do user enquanto ainda CPL=0.
     //    Kernel text em P4[511] é compartilhado (clone raso) → ainda executável.
     DEMO_ACTIVE.store(true, Ordering::SeqCst);
+    crate::interrupts::puts(b"[P6] B: cr3->user\n");
     address_space::restore_cr3(user_l4, Cr3Flags::empty());
+    crate::interrupts::puts(b"[P6] C: cr3 switched (CPL0)\n");
 
-    // 3. IRETQ para CPL=3. CR3 já é a page table do user.
-    //    A label "2:" é o return point — jump_back_to_kernel restaura CR3
-    //    e salta pra cá, então o epílogo do compilador retorna ao caller.
+    // 4. IRETQ para CPL=3. CR3 já é a page table do user.
+    //    A label "2:" é o return point — jump_back_to_kernel restaura CR3,
+    //    restaura callee-saved (lê SAVED_CALLEE em CPL=0/kernel CR3) e salta
+    //    pra cá; então o epílogo do compilador retorna ao caller.
     #[cfg(feature = "ring3")]
     let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
     #[cfg(not(feature = "ring3"))]
     let rip_ptr = core::ptr::null_mut::<u64>();
+    crate::interrupts::puts(b"[P6] D: iretq->CPL3\n");
     core::arch::asm!(
         "lea {tmp}, [rip + 2f]",
         "mov qword ptr [{rip_ptr}], {tmp}",
@@ -173,9 +223,14 @@ pub unsafe fn enter_user_mode(
         rflags = in(reg) rflags,
         entry = in(reg) entry,
     );
+    crate::interrupts::puts(b"[P6] E: returned from CPL3\n");
 
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
-    address_space::restore_cr3(k_l4, k_flags);
+    // CRITICO (SESSION_233): NAO chamar restore_cr3(k_l4, k_flags) aqui!
+    // k_l4/k_flags sao locals em registros callee-saved que o
+    // jump_back_to_kernel NAO restaura (clobbered pelo handler
+    // extern "x86-interrupt") — usar lixo aqui = CR3 invalido = triple fault.
+    // O CR3 do kernel JÁ foi restaurado pelo jump_back_to_kernel via SAVED_CR3.
     core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
 
     match EXIT_OK.load(Ordering::SeqCst) {
