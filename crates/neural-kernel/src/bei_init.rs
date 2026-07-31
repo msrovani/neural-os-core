@@ -416,4 +416,19 @@ pub fn bei_tick(_tick: u64) {
     let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     hermes_crate::skill_sync::sync_skills(now);
     hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::node_id());
+    // SESSION_235 (ADR-0081 item 4): matmul distribuído — o Master responde
+    // requests "MW\0" vindos de Workers (EventBus P2P_PACKET, pós p2p_tick).
+    cortex_crate::compute::poll_mesh_requests();
+    // Self-test do matmul distribuído: o Worker exercita o round-trip MW→MR
+    // com o Master (DIAG do boot roda antes da eleição — role Undecided, então
+    // nunca pegava o caminho P2P). Retry até 5x: sob TCG o Master pode ainda
+    // não ter eleito quando o 1º request chega (timeout curto ~200 ticks).
+    static MESH_SELFTEST_TRIES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+    if MESH_SELFTEST_TRIES.load(core::sync::atomic::Ordering::Relaxed) < 5
+        && k_nano::net::mesh::local_role() == k_nano::net::mesh::NodeRole::Worker
+        && k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1)
+    {
+        MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        cortex_crate::compute::mesh_matmul_self_test();
+    }
 }

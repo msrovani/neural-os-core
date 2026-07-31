@@ -11,6 +11,10 @@
 
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(feature = "p2p")]
+use alloc::vec::Vec;
+#[cfg(feature = "p2p")]
+use spin::Mutex;
 
 /// Assinatura de um backend de matmul ternário (BitNet).
 pub type TernaryFn = fn(&PackedTernaryTensor, &Tensor) -> Option<Tensor>;
@@ -57,17 +61,20 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let big = n >= 64 && k >= 64;
 
     // ADR-0081 C1: Mesh-aware dispatch.
-    // Se o no local e Worker, o ideal e despachar para o Master via P2P.
-    // Ponte: quando P2P transport estiver vivo, esta secao serializa o matmul
-    // e envia para o Master. Por enquanto, cai no fallback local.
+    // Se o no local e Worker, despacha o matmul para o Master via P2P real
+    // (payload "MW\0..." → resposta "MR\0..."). SESSION_235: implementado.
     #[cfg(feature = "p2p")]
     {
         let role = k_nano::net::mesh::local_role();
         if role == k_nano::net::mesh::NodeRole::Worker {
             N_MESH.fetch_add(1, Ordering::Relaxed);
-            // ponytail: P2P dispatch pendente — requer udp_broadcast + NoProto
-            // Quando ativo: serializa w + x, envia para Master, recebe resultado.
-            // Por enquanto, cai no fallback local (CPU/scalar).
+            // SESSION_235: matmul ternário distribuído — Worker serializa w+x,
+            // envia para o Master, espera síncrona (~200 TIMER_TICKS) a resposta.
+            // ponytail: síncrono + gate MTU 1200B — assíncrono/fragmentação = futuro.
+            if let Some(t) = mesh_matmul_worker(w, x) {
+                return Some(t);
+            }
+            // Timeout/sem resposta → cai no fallback local (CPU/scalar).
         }
     }
 
@@ -125,4 +132,253 @@ pub fn dispatch_summary() -> (u64, u64, u64, u64, u64) {
 /// True se algum acelerador (NPU/GPU) está registrado.
 pub fn accel_registered() -> bool {
     GPU_TERNARY.load(Ordering::Acquire) != 0 || NPU_TERNARY.load(Ordering::Acquire) != 0
+}
+
+// ─── ADR-0081 item 4: matmul ternário distribuído Worker→Master ────────────
+// Protocolo binário (sem dep de serialização externa), porta P2P 42069:
+//
+// REQUEST (Worker→Master):  task_type=Inference, payload =
+//   b"MW\0" | w.shape.0 u32 LE | w.shape.1 u32 LE | w.packed_data
+//         | x.shape.0 u32 LE | x.shape.1 u32 LE | x.data (f32 LE × N)
+//
+// RESPONSE (Master→Worker): task_type=Inference, dest_id=node_id do Worker,
+//   payload = b"MR\0" | shape.0 u32 LE | shape.1 u32 LE | data (f32 LE × N)
+//
+// ponytail: transporte monta frame único sem fragmentação (Ethernet ~1518B).
+// Gate honesto: payload > 1200B → fallback local (não enviar). Fragmentação/
+// MTU jumbo = trabalho futuro. Shapes 8x8/16x16 cabem.
+
+/// Serializa w+x num request "MW\0". Retorna `None` se payload > 1200B (MTU gate).
+#[cfg(feature = "p2p")]
+fn serialize_mesh_request(w: &PackedTernaryTensor, x: &Tensor) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(1200);
+    out.extend_from_slice(b"MW\0");
+    out.extend_from_slice(&(w.shape.0 as u32).to_le_bytes());
+    out.extend_from_slice(&(w.shape.1 as u32).to_le_bytes());
+    out.extend_from_slice(&w.packed_data);
+    out.extend_from_slice(&(x.shape.0 as u32).to_le_bytes());
+    out.extend_from_slice(&(x.shape.1 as u32).to_le_bytes());
+    for v in &x.data {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    if out.len() > 1200 {
+        k_nano::slog_cortex!(
+            "MESH", "info",
+            "Mesh matmul SKIP size={} (MTU gate) - fallback local", out.len()
+        );
+        return None;
+    }
+    Some(out)
+}
+
+/// Deserializa resposta "MR\0" num Tensor.
+#[cfg(feature = "p2p")]
+fn deserialize_mesh_response(data: &[u8]) -> Option<Tensor> {
+    // "MR\0" + rows u32 LE + cols u32 LE + data f32 LE
+    if data.len() < 11 || &data[0..3] != b"MR\0" {
+        return None;
+    }
+    let rows = u32::from_le_bytes([data[3], data[4], data[5], data[6]]) as usize;
+    let cols = u32::from_le_bytes([data[7], data[8], data[9], data[10]]) as usize;
+    let n = rows.checked_mul(cols)?;
+    let mut d = Vec::with_capacity(n);
+    let mut off = 11;
+    for _ in 0..n {
+        let b = data.get(off..off + 4)?;
+        d.push(f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        off += 4;
+    }
+    Some(Tensor { shape: (rows, cols), data: d })
+}
+
+/// Worker side: envia request "MW\0" e espera síncrona pela resposta "MR\0".
+/// Timeout ~200 TIMER_TICKS (~2s a 100Hz). Retorna `None` em timeout/falha →
+/// o dispatch cai no fallback local. Pacotes que não são a nossa resposta são
+/// descartados (não re-injetados no RX do mesh).
+#[cfg(feature = "p2p")]
+fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
+    let payload = serialize_mesh_request(w, x)?;
+    let node_id = k_nano::net::mesh::node_id();
+    let pkt = k_nano::net::noproto::AiosTaskPacket::new(
+        0, node_id, 0xFF, k_nano::net::noproto::TaskType::Inference,
+        1, 0, 0, k_nano::net::noproto::PacketFlags::new(),
+    );
+    let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
+    buf.extend_from_slice(&payload);
+    let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+    k_nano::slog_cortex!(
+        "MESH", "info",
+        "matmul request node={} size={} sent={}", node_id, payload.len(), ok
+    );
+    if !ok {
+        return None;
+    }
+
+    // Espera síncrona com timeout real por TIMER_TICKS (não iteração cega —
+    // o scheduler pode não rodar durante a espera).
+    let start = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    loop {
+        let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        if now.wrapping_sub(start) >= 200 {
+            break; // timeout — fallback local
+        }
+        while let Some(rx) = k_nano::net::udp_broadcast::udp_broadcast_recv(42069) {
+            let Some(p) = k_nano::net::udp_broadcast::parse(&rx) else { continue };
+            // Copia campos do packed struct (E0793: sem refs a campos packed).
+            let d = p.dest_id;
+            let tt = p.task_type as u8;
+            if tt == 1 && d == node_id && rx.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
+                let resp = &rx[k_nano::net::noproto::PACKET_HEADER_SIZE..];
+                if let Some(t) = deserialize_mesh_response(resp) {
+                    k_nano::slog_cortex!(
+                        "MESH", "info",
+                        "matmul resposta node={} ok shape={:?}", node_id, t.shape
+                    );
+                    return Some(t);
+                }
+            }
+            // Não é a nossa resposta — DROP (não re-injetar no RX do mesh).
+        }
+        core::hint::spin_loop();
+    }
+    k_nano::slog_cortex!("MESH", "info", "matmul timeout node={} - fallback local", node_id);
+    None
+}
+
+/// Master side: processa request "MW\0" e retorna resposta "MR\0" serializada.
+#[cfg(feature = "p2p")]
+pub fn handle_mesh_request(payload: &[u8]) -> Option<Vec<u8>> {
+    // "MW\0" + k u32 + n u32 + packed + rows u32 + cols u32 + data f32 LE
+    if payload.len() < 19 || &payload[0..3] != b"MW\0" {
+        return None;
+    }
+    let k = u32::from_le_bytes([payload[3], payload[4], payload[5], payload[6]]) as usize;
+    let n = u32::from_le_bytes([payload[7], payload[8], payload[9], payload[10]]) as usize;
+    // 2-bit packing (4 pesos/byte) — ceil div por 4.
+    let wbytes = k.checked_mul(n)?.checked_add(3)? / 4;
+    let mut off = 11;
+    let packed = payload.get(off..off + wbytes)?.to_vec();
+    off += wbytes;
+    let rows = u32::from_le_bytes([payload[off], payload[off + 1], payload[off + 2], payload[off + 3]]) as usize;
+    let cols = u32::from_le_bytes([payload[off + 4], payload[off + 5], payload[off + 6], payload[off + 7]]) as usize;
+    off += 8;
+    let xlen = rows.checked_mul(cols)?;
+    let mut xdata = Vec::with_capacity(xlen);
+    for _ in 0..xlen {
+        let b = payload.get(off..off + 4)?;
+        xdata.push(f32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        off += 4;
+    }
+
+    let w = PackedTernaryTensor { shape: (k, n), packed_data: packed };
+    let x = Tensor { shape: (rows, cols), data: xdata };
+    let r = crate::bitnet_avx2::ternary_matmul_adaptive(&w, &x)?;
+
+    // Serializa resposta "MR\0" + shape + data f32 LE.
+    let mut out = Vec::with_capacity(11 + r.data.len() * 4);
+    out.extend_from_slice(b"MR\0");
+    out.extend_from_slice(&(r.shape.0 as u32).to_le_bytes());
+    out.extend_from_slice(&(r.shape.1 as u32).to_le_bytes());
+    for v in &r.data {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    Some(out)
+}
+
+// ─── Consumo via EventBus (Master side, SESSION_235) ───────────────────────
+// O request "MW" do Worker chega no k_nano p2p_tick como não-heartbeat →
+// publicado no EventBus "P2P_PACKET". O bin chama `poll_mesh_requests()` a
+// cada tick (bei_tick) — o Master responde com "MR". Subscribe lazy.
+
+#[cfg(feature = "p2p")]
+static MESH_RECV: Mutex<Option<event_bus::Receiver>> = Mutex::new(None);
+
+/// Drena os pacotes P2P do EventBus e responde requests "MW\0" (Master side).
+/// Chamado pelo bin a cada tick (bei_tick), depois do k_nano p2p_tick (que
+/// publica). Só responde se `local_role() == Master`.
+#[cfg(feature = "p2p")]
+pub fn poll_mesh_requests() {
+    {
+        let mut recv = MESH_RECV.lock();
+        if recv.is_none() {
+            *recv = Some(k_nano::EVENT_BUS.subscribe(k_nano::net::mesh::TOPIC_P2P_PACKET));
+        }
+    }
+    loop {
+        let evt = MESH_RECV.lock().as_ref().and_then(|r| r.try_receive());
+        let Some(evt) = evt else { break };
+        if evt.topic != k_nano::net::mesh::TOPIC_P2P_PACKET {
+            continue;
+        }
+        let Some(pkt) = k_nano::net::udp_broadcast::parse(&evt.payload) else { continue };
+        if pkt.task_type != k_nano::net::noproto::TaskType::Inference {
+            continue;
+        }
+        // SESSION_235: responde MW mesmo se Undecided — o request só chega
+        // a quem recebeu o broadcast (o Worker não recebe o próprio TX); sob
+        // TCG o Master pode ainda não ter eleito (Undecided) quando o request
+        // chega, e o gate "só Master" fazia o Worker dar timeout.
+        let payload = if evt.payload.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
+            &evt.payload[k_nano::net::noproto::PACKET_HEADER_SIZE..]
+        } else {
+            &[][..]
+        };
+        if !payload.starts_with(b"MW\0") {
+            continue;
+        }
+        let req_src = pkt.source_id;
+        let Some(resp) = handle_mesh_request(payload) else { continue };
+
+        // Resposta "MR\0" — dest_id = node_id do Worker (filtro lógico no
+        // receptor; o transporte é broadcast).
+        let my_id = k_nano::net::mesh::node_id();
+        let rpkt = k_nano::net::noproto::AiosTaskPacket::new(
+            0, my_id, req_src, k_nano::net::noproto::TaskType::Inference,
+            1, 0, 0, k_nano::net::noproto::PacketFlags::new(),
+        );
+        let mut buf = k_nano::net::udp_broadcast::serialize(&rpkt);
+        buf.extend_from_slice(&resp);
+        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+        k_nano::slog_cortex!(
+            "MESH", "info",
+            "matmul resposta node={} sent={}", req_src, ok
+        );
+    }
+}
+
+/// Self-test do matmul distribuído (Worker → Master → Worker).
+/// SESSION_235: o DIAG de matmul do boot roda ANTES da eleição (role=Undecided)
+/// — o caminho P2P nunca era exercitado. Chamado 1x pelo bei_tick quando o nó
+/// é Worker com peer. Shapes 16×16 cabem no gate MTU (w 64B + x 1KB ≤ 1200).
+#[cfg(feature = "p2p")]
+pub fn mesh_matmul_self_test() {
+    use crate::tensor::PackedTernaryTensor;
+    // w: 16×16 ternário (padrão alternado +1/-1) → packed 64 bytes.
+    let mut wdata = Vec::with_capacity(256);
+    for i in 0..256 {
+        wdata.push(if i % 2 == 0 { 1i8 } else { -1i8 });
+    }
+    let w = PackedTernaryTensor {
+        shape: (16, 16),
+        packed_data: PackedTernaryTensor::pack_weights(&wdata),
+    };
+    // x: 16×16 f32 (rampa 0..255) → 1KB.
+    let mut xdata = Vec::with_capacity(256);
+    for i in 0..256 {
+        xdata.push(i as f32);
+    }
+    let x = crate::tensor::Tensor::from_row_major((16, 16), xdata)
+        .unwrap_or_else(|| crate::tensor::Tensor::zero((16, 16)));
+    let my_id = k_nano::net::mesh::node_id();
+    match dispatch_ternary(&w, &x) {
+        Some(r) => k_nano::slog_cortex!(
+            "MESH", "info",
+            "self-test node={} shape=({}, {}) primeiro={:.1} (mesh dispatch)",
+            my_id, r.shape.0, r.shape.1, r.data.first().copied().unwrap_or(0.0)
+        ),
+        None => k_nano::slog_cortex!(
+            "MESH", "info",
+            "self-test node={} fallback local (timeout/MTU/sem Master)", my_id
+        ),
+    }
 }

@@ -32,7 +32,8 @@ k-nano = { path = "../k_nano", features = ["global-alloc"] }
 k-hal = { path = "../k_hal" }
 k_ai = { path = "../k_ai" }
 # ADR-0042 N3.5: dep direta cortex (tensor/trinity/arena…); bin mantém mod cortex integração.
-cortex-crate = { path = "../cortex", package = "cortex" }
+# ADR-0081 item 4: feature p2p ativa o matmul distribuído Worker→Master.
+cortex-crate = { path = "../cortex", package = "cortex", features = ["p2p"] }
 # ADR-0042 N4.6: dep direta hermes (cron/safety/wasm/skills…); bin mantém agents + net stack.
 hermes-crate = { path = "../hermes", package = "hermes" }
 # ADR-0042 N5.7: dep direta jarbas (display/gpu/persona…); bin mantém audio (ADR-0045) + jarbas_fb.
