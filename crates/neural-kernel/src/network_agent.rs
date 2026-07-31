@@ -732,4 +732,90 @@ pub fn network_agent_tick() {
             }
         }
     }
+
+    // ─── P2P Mesh broadcast (ADR-0081) — chamado do BEI tick hook ───
+    // (bei_init.rs) para rodar a cada scheduler tick.
+}
+
+/// Heartbeat P2P + processamento de descoberta. Usa TIMER_TICKS global
+/// (sempre avança, mesmo com o scheduler rate-limited) — heartbeat a cada
+/// ~110 ticks do timer (~1.1s a 100Hz). Recebe e alimenta o MESH_ENGINE.
+pub fn mesh_p2p_tick(_tick: u64) {
+    const P2P_PORT: u16 = 42069;
+    // Lazy init do MESH_ENGINE (ADR-0081) — nunca inicializado no boot.
+    {
+        let mut eng = k_nano::net::mesh::MESH_ENGINE.lock();
+        if eng.is_none() {
+            let mac = crate::net::NET_CONFIG.lock().mac;
+            let caps = k_nano::net::mesh::NodeCapabilities::new(
+                mac, 1, 1000, 1, 0,
+                k_nano::net::mesh::SimdWeight::None, false, false,
+            );
+            *eng = Some(k_nano::net::mesh::BrainMeshEngine::new(caps));
+            k_nano::slog_bin!("P2P", "info", "MESH_ENGINE inicializado (ADR-0081)");
+        }
+    }
+
+    // Só após net configurada (MAC/IP presentes) para não spam no boot cedo.
+    let ready = {
+        let cfg = crate::net::NET_CONFIG.lock();
+        cfg.configured && cfg.mac != [0; 6]
+    };
+    if !ready {
+        return;
+    }
+
+    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+
+    // Heartbeat a cada ~110 ticks do timer (~1.1s a 100Hz). Usa last-sent
+    // tracking (não depende de `now % 110 == 0` exato — o scheduler pode
+    // pular o tick múltiplo).
+    static LAST_SENT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let last = LAST_SENT.load(core::sync::atomic::Ordering::Relaxed);
+    if now.wrapping_sub(last) >= 110 || last == 0 {
+        LAST_SENT.store(now, core::sync::atomic::Ordering::Relaxed);
+        let node_id = k_nano::net::mesh::local_role() as u8;
+        let pkt = k_nano::net::udp_broadcast::make_heartbeat(node_id, now as u64);
+        let data = k_nano::net::udp_broadcast::serialize(&pkt);
+        match k_nano::net::udp_broadcast::sign_packet(&data) {
+            Some(signed) => {
+                let ok = crate::netstack::udp_broadcast_send(&signed, P2P_PORT);
+                k_nano::slog_bin!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+            }
+            None => {
+                let ok = crate::netstack::udp_broadcast_send(&data, P2P_PORT);
+                k_nano::slog_bin!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+            }
+        }
+    }
+
+    // Recebe descobertas e alimenta o mesh engine
+    while let Some(rx) = crate::netstack::udp_broadcast_recv(P2P_PORT) {
+        let data = match k_nano::identity::session_public_key() {
+            Some(pk) => match k_nano::net::udp_broadcast::verify_packet(&rx, &pk) {
+                Some(valid) => valid.to_vec(),
+                None => rx,
+            },
+            None => rx,
+        };
+        if let Some(pkt) = k_nano::net::udp_broadcast::parse(&data) {
+            let sid = pkt.source_id;
+            let clk = pkt.clock;
+            let tt = pkt.task_type as u8;
+            k_nano::slog_bin!("P2P", "info", "RX source_id={} clock={} type={}", sid, clk, tt);
+            let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
+            let caps = k_nano::net::mesh::NodeCapabilities::new(
+                sender_mac, 1, 1000, 1, 0,
+                k_nano::net::mesh::SimdWeight::None, false, false,
+            );
+            let mut eng = k_nano::net::mesh::MESH_ENGINE.lock();
+            if let Some(ref mut engine) = *eng {
+                engine.add_or_update_node(caps);
+                engine.check_election();
+                let role = engine.local_role();
+                let count = engine.node_count();
+                k_nano::slog_bin!("P2P", "info", "mesh role={:?} nodes={}", role, count);
+            }
+        }
+    }
 }

@@ -263,12 +263,10 @@ impl Agent for NetAgent {
 }
 
 /// P2P tick: envia heartbeat periodicamente + processa pacotes recebidos.
+/// SESSION_233: usa o broadcast UDP do KERNEL via net_bridge (NIC real/e1000),
+/// não o NETSTACK espelho do hermes (que nunca inicializa o socket 42069).
 fn p2p_tick(_tick: u64) {
-    let mut ns_guard = crate::net::NETSTACK.lock();
-    let ns = match ns_guard.as_mut() {
-        Some(ns) => ns,
-        None => return,
-    };
+    const P2P_PORT: u16 = 42069;
 
     // Step 2: envia heartbeat a cada ~55 ticks (~3s)
     if _tick % 55 == 0 {
@@ -278,13 +276,19 @@ fn p2p_tick(_tick: u64) {
 
         // Step 6: assina com Ed25519 se a sessão estiver pronta
         match k_nano::net::udp_broadcast::sign_packet(&data) {
-            Some(signed) => { let _ = ns.udp_broadcast_send(&signed); }
-            None => { let _ = ns.udp_broadcast_send(&data); }
+            Some(signed) => {
+                let ok = crate::net_bridge::udp_broadcast_send(&signed, P2P_PORT);
+                k_nano::slog_hermes!("P2P", "TX", "heartbeat node={} tick={} sent={}", node_id, _tick, ok);
+            }
+            None => {
+                let ok = crate::net_bridge::udp_broadcast_send(&data, P2P_PORT);
+                k_nano::slog_hermes!("P2P", "TX", "heartbeat node={} tick={} sent={}", node_id, _tick, ok);
+            }
         }
     }
 
     // Step 3: recebe pacotes pendentes e alimenta o mesh engine
-    while let Some(rx) = ns.udp_broadcast_recv() {
+    while let Some(rx) = crate::net_bridge::udp_broadcast_recv(P2P_PORT) {
         // Step 6: tenta verificar assinatura Ed25519
         let data = match k_nano::identity::session_public_key() {
             Some(pk) => {
@@ -306,15 +310,13 @@ fn p2p_tick(_tick: u64) {
 
         // Faz parse do pacote NoProto
         if let Some(pkt) = k_nano::net::udp_broadcast::parse(&data) {
-            if _tick % 55 == 0 {
-                // Copia campos do packed struct para evitar E0793 (unaligned ref)
-                let sid = pkt.source_id;
-                let clk = pkt.clock;
-                let tt = pkt.task_type as u8;
-                k_nano::slog_hermes!("P2P", "RX",
-                    "source_id={} clock={} type={}", sid, clk, tt,
-                );
-            }
+            // Copia campos do packed struct para evitar E0793 (unaligned ref)
+            let sid = pkt.source_id;
+            let clk = pkt.clock;
+            let tt = pkt.task_type as u8;
+            k_nano::slog_hermes!("P2P", "RX",
+                "source_id={} clock={} type={}", sid, clk, tt,
+            );
             // Alimenta o mesh engine com os dados do peer
             let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
             let caps = k_nano::net::mesh::NodeCapabilities::new(

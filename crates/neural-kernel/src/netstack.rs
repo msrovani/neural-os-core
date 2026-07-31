@@ -1154,3 +1154,92 @@ impl NetStack {
         self.sockets.remove(handle);
     }
 }
+
+// ─── P2P Mesh broadcast UDP (ADR-0081 Fase A) ────────────────────────────
+// Porta 42069, broadcast 255.255.255.255. Usa o NIC real (e1000) do kernel —
+// o caminho canônico para descoberta P2P entre instâncias QEMU.
+// SESSION_233: o mesh hermes usava o NETSTACK espelho (vazio) — aqui no kernel.
+
+/// Monta frame Ethernet + IP + UDP com destino broadcast (FF:FF:FF:FF:FF:FF → 255.255.255.255).
+fn build_udp_broadcast_frame(payload: &[u8], port: u16) -> Option<Vec<u8>> {
+    let (sip, smac) = {
+        let cfg = crate::net::NET_CONFIG.lock();
+        let sip = if cfg.ip != [0; 4] { cfg.ip } else { [10, 0, 2, 15] };
+        (sip, cfg.mac)
+    };
+    if smac == [0; 6] || payload.is_empty() {
+        return None;
+    }
+    let src_port: u16 = 42069;
+    let udp_len = (8 + payload.len()) as u16;
+    let mut udp = Vec::with_capacity(udp_len as usize);
+    udp.extend_from_slice(&src_port.to_be_bytes());
+    udp.extend_from_slice(&port.to_be_bytes());
+    udp.extend_from_slice(&udp_len.to_be_bytes());
+    udp.extend_from_slice(&[0x00, 0x00]);
+    udp.extend_from_slice(payload);
+
+    let dst: [u8; 4] = [255, 255, 255, 255];
+    let total_len = (20 + udp.len()) as u16;
+    let mut ip = [0u8; 20];
+    ip[0] = 0x45;
+    ip[2..4].copy_from_slice(&total_len.to_be_bytes());
+    ip[8] = 64;
+    ip[9] = 17; // UDP
+    ip[12..16].copy_from_slice(&sip);
+    ip[16..20].copy_from_slice(&dst);
+    let cs = ip_checksum(&ip);
+    ip[10..12].copy_from_slice(&cs.to_be_bytes());
+
+    let dmac = [0xFF; 6]; // broadcast Ethernet
+    let mut frame = Vec::with_capacity(14 + 20 + udp.len());
+    frame.extend_from_slice(&dmac);
+    frame.extend_from_slice(&smac);
+    frame.extend_from_slice(&[0x08, 0x00]);
+    frame.extend_from_slice(&ip);
+    frame.extend_from_slice(&udp);
+    Some(frame)
+}
+
+/// Envia payload UDP para 255.255.255.255:port (broadcast mesh P2P).
+pub fn udp_broadcast_send(payload: &[u8], port: u16) -> bool {
+    let Some(frame) = build_udp_broadcast_frame(payload, port) else {
+        return false;
+    };
+    unsafe { nic_send(frame) };
+    NET_TX_COUNT.fetch_add(1, Ordering::Relaxed);
+    true
+}
+
+/// Recebe um payload UDP (dst_port == port) do RX do NIC. Não bloqueia.
+pub fn udp_broadcast_recv(port: u16) -> Option<Vec<u8>> {
+    // Drena até achar um pacote UDP para nossa porta (ou esvazia o RX).
+    for _ in 0..16 {
+        let pkt = unsafe { nic_recv()? };
+        NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+        if pkt.len() < 14 + 20 + 8 {
+            continue;
+        }
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            continue;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 {
+            continue;
+        }
+        if pkt[14 + 9] != 17 {
+            continue; // não-UDP
+        }
+        let udp = 14 + ihl;
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if dport != port {
+            continue;
+        }
+        let ulen = u16::from_be_bytes([pkt[udp + 4], pkt[udp + 5]]) as usize;
+        if ulen < 8 || pkt.len() < udp + ulen {
+            continue;
+        }
+        return Some(pkt[udp + 8..udp + ulen].to_vec());
+    }
+    None
+}

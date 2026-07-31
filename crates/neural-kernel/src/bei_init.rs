@@ -398,4 +398,7 @@ pub fn bei_tick(_tick: u64) {
     if let Some(state) = bei_state() {
         state.tick();
     }
+    // SESSION_233: P2P Mesh broadcast (ADR-0081) — roda aqui (hook do scheduler,
+    // sempre chamado) em vez de depender do NetAgent agent (rate-limited).
+    crate::network_agent::mesh_p2p_tick(_tick);
 }

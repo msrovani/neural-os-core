@@ -9,12 +9,17 @@ pub type ResolveAndHttpGetSafeFn = fn(&str) -> Result<Vec<u8>, &'static str>;
 pub type TcpXferFn = fn([u8; 4], u16, &[u8]) -> Option<Vec<u8>>;
 pub type UdpXferFn = fn([u8; 4], u16, &[u8]) -> Option<Vec<u8>>;
 pub type DnsResolveFn = fn(&str) -> Option<[u8; 4]>;
+/// P2P Mesh broadcast UDP (ADR-0081) — usa o NIC real do kernel.
+pub type UdpBroadcastSendFn = fn(&[u8], u16) -> bool;
+pub type UdpBroadcastRecvFn = fn(u16) -> Option<Vec<u8>>;
 
 static HTTP_GET_URL: Mutex<Option<HttpGetUrlFn>> = Mutex::new(None);
 static RESOLVE_AND_HTTP_GET_SAFE: Mutex<Option<ResolveAndHttpGetSafeFn>> = Mutex::new(None);
 static TCP_XFER: Mutex<Option<TcpXferFn>> = Mutex::new(None);
 static UDP_XFER: Mutex<Option<UdpXferFn>> = Mutex::new(None);
 static DNS_RESOLVE: Mutex<Option<DnsResolveFn>> = Mutex::new(None);
+static UDP_BCAST_SEND: Mutex<Option<UdpBroadcastSendFn>> = Mutex::new(None);
+static UDP_BCAST_RECV: Mutex<Option<UdpBroadcastRecvFn>> = Mutex::new(None);
 
 pub fn register_http_get_url(f: HttpGetUrlFn) {
     *HTTP_GET_URL.lock() = Some(f);
@@ -34,6 +39,28 @@ pub fn register_udp_xfer(f: UdpXferFn) {
 
 pub fn register_dns_resolve(f: DnsResolveFn) {
     *DNS_RESOLVE.lock() = Some(f);
+}
+
+pub fn register_udp_broadcast_send(f: UdpBroadcastSendFn) {
+    *UDP_BCAST_SEND.lock() = Some(f);
+}
+
+pub fn register_udp_broadcast_recv(f: UdpBroadcastRecvFn) {
+    *UDP_BCAST_RECV.lock() = Some(f);
+}
+
+pub fn udp_broadcast_send(payload: &[u8], port: u16) -> bool {
+    match *UDP_BCAST_SEND.lock() {
+        Some(f) => f(payload, port),
+        None => false,
+    }
+}
+
+pub fn udp_broadcast_recv(port: u16) -> Option<Vec<u8>> {
+    match *UDP_BCAST_RECV.lock() {
+        Some(f) => f(port),
+        None => None,
+    }
 }
 
 pub fn http_get_url(url: &str) -> Result<Vec<u8>, &'static str> {

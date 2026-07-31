@@ -277,7 +277,11 @@ pub unsafe fn dump_e1000_status() {
 
 /// Phys loader @0x164000000: 'B' = bridge/TAP (DHCP), 'U' = user/slirp (static 10.0.2.15),
 /// 'S' + 4 bytes = static IP customizado (ex: S\x02\x00\x03\x02 = 10.0.3.2).
-pub const NETMODE_LOADER_PHYS: u64 = 0x1640_0000_00;
+/// SESSION_233: corrigido! Era 0x1640_0000_00 = 0x1640000000 (89GB, FORA da RAM
+/// de 8GB) — o QEMU loader escrevia o flag num endereço que o kernel nunca lia
+/// → detect_qemu_net_mode caía no default USER/slirp. Agora 0x164000000 = 5.56GB
+/// (dentro de 8GB), alinhado ao comentário e ao run-qemu-p2p-mesh.ps1.
+pub const NETMODE_LOADER_PHYS: u64 = 0x1640_0000_00 >> 4; // 0x164000000 (5.56GB)
 
 /// Modo de rede detectado + IP customizado (se 'S').
 #[derive(Clone, Copy, PartialEq, Eq)]

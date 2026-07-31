@@ -55,7 +55,11 @@ $baseArgs = @(
 )
 
 # ─── NetMode flags: IP customizado para cada instancia ───
-$netmodeAddr = 0x16400000000  # NETMODE_LOADER_PHYS
+# SESSION_233: endereco corrigido! Kernel espera NETMODE_LOADER_PHYS = 0x164000000
+# (5.56GB, dentro de 8GB de RAM). Os valores antigos (0x16400000000 e 0x1640000000)
+# eram 16x/160x maiores e FORA da RAM -> flag nunca era lido -> ambas caiam no
+# default slirp 10.0.2.15.
+$netmodeAddr = 0x164000000  # NETMODE_LOADER_PHYS (corrigido)
 $netmodeA = Join-Path $target "netmode_a.flag"
 $netmodeB = Join-Path $target "netmode_b.flag"
 
