@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### SESSION_234: P2P Mesh real entre 2 QEMUs + migração transporte→k_nano (2026-07-31) 🏆
+- **feat(mesh): descoberta P2P funcionando de verdade** — duas instâncias QEMU
+  (10.0.3.2/10.0.3.3) trocam heartbeats via broadcast UDP 42069 na NIC real
+  (e1000), com RX cruzado (A recebeu `clock=4796` enviado por B) e eleição.
+  Commits `f240fa4` (Fase A) + `0eec18f` (migração).
+- **feat(skillsync): Master push → Worker apply** — 15 skills empurradas do
+  Master (`broadcast=true`) e processadas no Worker via `poll_p2p` (EventBus
+  topic `P2P_PACKET`). skill_sync (R3 hermes) e marketplace (R3 hermes+jarbas)
+  consomem sem inversão de dependência.
+- **refactor(mesh): transporte+serviço movidos do bin → k_nano (R0)** —
+  decisão do oracle (a intuição do maintainer estava certa: mesh é camada
+  baixa de sistema). `udp_broadcast::{build_frame,send,recv}` + `mesh::p2p_tick`
+  agora vivem em k_nano (que já tinha smoltcp+e1000+nic_globals). O bin
+  `net.rs` re-exporta os statics NIC de k_nano (transporte R0 usa o MESMO NIC);
+  non-heartbeat publicado no EVENT_BUS; `net_bridge` P2P removido (HTTP/TCP/DNS
+  permanecem). `set_nic_config(mac,ip)` só pós-configuração (set_static_ip/DHCP).
+- **fix(script): run-qemu-p2p-mesh.ps1** — ASCII puro (PS 5.1 lê sem BOM como
+  ANSI), `$Root = $PSScriptRoot`, OVMF via caminho 8.3 (`C:\PROGRA~1\...`),
+  `-m 8G` + `-smp 2` (MTTCG), switch `-NoDisk` (teste P2P é rede pura — a
+  leitura FAT32 dos modelos via ATA PIO sob TCG travava o boot).
+- **cargo check --release**: 0 erros
+- **Known**: `nodes=1` na eleição (node_id = `local_role()` colide entre nós) —
+  next: derivar node_id do MAC/IP real (10.0.3.2→2, .3→3).
+
 ### SESSION_233b: Ring3 triple-fault resolvido — boot QEMU 100% (2026-07-30)
 - **fix(ring3): RSP=0 no `jump_back_to_kernel`** — `"xor ax, ax"` para zerar
   ds/es/ss clobberava o registro RAX que o compilador escolheu para o operando

@@ -1,4 +1,26 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s234 — Mesh P2P real + transporte R0 (ADR-0081)
+#   SESSION_234: P2P Mesh entre 2 QEMUs + migração transporte→k_nano (2026-07-31)
+#     ✅ DOIS KERNELS AIOS SE DESCOBREM E TROCAM SKILLS VIA REDE REAL:
+#       [B] TX heartbeat node=4 t=4676 sent=true   (k_nano R0, broadcast UDP 42069)
+#       [A] RX source_id=0 clock=4796              (cruzado! A recebeu o de B)
+#       [A] Master: push skill='audio_get_settings' broadcast=true (15 skills)
+#       [B] Worker: skill 'audio_get_settings' ja existe (Sync via poll_p2p)
+#     Migração arquitetural (oracle review):
+#       - Transporte (udp_broadcast frame/send/recv) + serviço (p2p_tick)
+#         movidos do bin → k_nano R0 (k_nano já tinha smoltcp+e1000+nic_globals)
+#       - k_nano NIC statics: bin net.rs agora re-exporta nic_globals (E1000 etc)
+#       - Non-heartbeat → EventBus topic P2P_PACKET (k_nano não conhece hermes)
+#       - hermes skill_sync/marketplace: TX k_nano direto + subscribe/poll_p2p
+#       - net_bridge P2P removido (HTTP/TCP/DNS permanecem no bin)
+#       - set_nic_config(mac,ip) SÓ pós-config (set_static_ip/DHCP) — driver-init
+#         enviaria heartbeats em sandbox sem NIC (gate ready=MAC!=0)
+#     script run-qemu-p2p-mesh.ps1: ASCII puro (PS5.1), socket listen/connect,
+#       8G RAM, OVMF pflash, -smp 2 (MTTCG), switch -NoDisk, netmode 0x164000000
+#     cargo check --release: 0 erros  (commits f240fa4, 0eec18f)
+#     Known: nodes=1 na eleição (node_id=local_role colide) — next: derivar do MAC/IP
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s233 — Ring3 Isolation (ADR-0077)
 #   SESSION_233: Ring3 Isolation — 6 fases (2026-07-30)
 #     Phase 0 — CR3 switch fix: Moros pattern (CR3 switch BEFORE iretq asm)
