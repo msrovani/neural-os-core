@@ -392,16 +392,13 @@ impl NeuralFsAgent {
         if disk_sectors < 16384 + 2048 {
             return false;
         }
-        // So se nao houver particao de dados/FAT/NeuralFS util
-        let has_data = parts.iter().any(|p| {
-            p.type_code == 0x0B
-                || p.type_code == 0x0C
-                || p.type_code == 0x07
-                || p.type_code == 0x1C
-                || p.type_code == MBR_TYPE_NEURALFS
-                || p.type_code == 0xEF
-        });
+        // NUNCA formatar disco que tem particoes (incl. protective GPT 0xEE =
+        // ESP/bootloader do Limine). Formatacao destrutiva so em disco VIRGEM.
+        let has_data = parts.iter().any(|p| p.type_code != 0);
         if has_data {
+            k_nano::slog_bin!("NEURALFS", "info",
+                "{} SKIP format: disco tem {} particao(es) (protect boot/ESP)",
+                tag, parts.len());
             return false;
         }
         // Vazio, so EE, ou sem assinatura → GPT single NeuralFS

@@ -2,7 +2,15 @@ use std::path::PathBuf;
 use std::fs;
 
 fn main() {
+    // CRITICO: rerun-if-changed nos inputs para o build.rs SEMPRE regenerar o
+    // uefi.img. Sem isso, se o kernel nao muda, o cargo nao reroda este script
+    // e o uefi.img fica stale (kernel pode ter formatado como NeuralFS no boot
+    // anterior -> OVMF "Not Found" -> shell UEFI).
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../neural-kernel/limine.ld");
+
     let kernel = PathBuf::from(std::env::var_os("CARGO_BIN_FILE_NEURAL_KERNEL_neural-kernel").unwrap());
+    println!("cargo:rerun-if-changed={}", kernel.display());
     let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let workspace = manifest.parent().unwrap().parent().unwrap();
     let target_dir = workspace.join("target");
