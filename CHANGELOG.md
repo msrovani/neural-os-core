@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### SESSION_236: Codemap — index completo do repositório (2026-08-01) 🗺️
+- **docs(codemap): atlas + 66 mapas hierárquicos** — skill `codemap` rodado na base
+  inteira: 8 fixers paralelos (1 por crate/tree, escopos disjuntos) geraram
+  `codemap.md` por crate/submódulo (Responsibility / Design Patterns / Data &
+  Control Flow / Integration Points), todos com símbolos verificados por grep
+  contra o código real (zero placeholders, zero mapas vazios).
+- **docs(codemap): atlas raiz** — `codemap.md` na raiz: responsabilidade do
+  projeto, entry points (Limine `_start` → kernel_boot), tabela agregada de 13
+  diretórios com links, cadeia de anéis R0→R3 e comandos de refresh incremental.
+- **docs: `## Repository Map` no AGENTS.md** — seção idempotente para agentes
+  auto-carregarem o atlas a cada sessão.
+- **infra: `.slim/codemap.json`** — estado de change-detection (739 files);
+  refresh incremental via `codemap.mjs changes|update --root ./`.
+- **Drifts docs-vs-código encontrados** (registrados no SESSION_236): 
+  `probe_uefi_framebuffer` removido (→ `probe_raw_framebuffer`, SESSION_232);
+  jarbas/audio agora é a fonte única (nota ADR-0045 stale); `neural-kernel/src/{fs,vfs,neural_fs}`
+  são espelhos legados NÃO compilados; `update_tecnologias.py` não existe;
+  `migrate_k2chj.py` arquivado; claim "bios.img" stale (Limine → só `uefi.img`).
+- **cargo check --release -p neural-kernel**: 0 erros.
+
 ### SESSION_235 (item 4): Compute distribuído Worker→Master via P2P real (2026-07-31) ✅
 - **feat(mesh): matmul ternário distribuído** — cortex feature `p2p` nova; o bloco
   `#[cfg(feature="p2p")]` do `dispatch_ternary` (que existia mas nunca compilava) agora
