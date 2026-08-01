@@ -1,11 +1,11 @@
 # ADR-0081: Malha Cognitiva Distribuída — P2P, Brain Mesh e Ecossistema Global
 
-**Status:** Proposed  
-**Lifecycle:** planejamento  
+**Status:** Active  
+**Lifecycle:** implementação  
 **Criação:** 2026-07-30  
-**Última revisão:** 2026-07-30  
-**Tags:** p2p, mesh, distributed, datacenter, brain-mesh, broadcast, skynet, federated, crdt, depin, safety, ethics, dsd, speculative  
-**Fontes:** `LEGACY/v1.9.9-test/k_nano/p2p/`, `LEGACY/v1.9.9-test/k_nano/net/brain_mesh.rs`, `ADR-0042 §N4`, `IDEA_BANK #189, #312f, #315.26, #315.27`, `SESSION_143`, `SESSION_152`, `ADR-0021 §Life OS`, `ADR-0057`, `SKYNET DePIN (C:\Users\msrov\OneDrive\Área de Trabalho\SKYNET)`, `Petals (bigscience-workshop/petals)`, `Hivemind (learning-at-home/hivemind)`, `exo (exo-explore/exo)`, `Parallax (GradientHQ/parallax)`, `crdt-merge (mgillr/crdt-merge)`, `DeAI (lucasdemeritt-ops/deai)`, `Bacalhau`, `Akash Network`, `io.net`, `Bittensor`, `Gensyn`
+**Última revisão:** 2026-07-31  
+**Tags:** p2p, mesh, distributed, datacenter, brain-mesh, broadcast, skynet, federated, crdt, depin, safety, ethics, dsd, speculative, security, mitm  
+**Fontes:** `LEGACY/v1.9.9-test/k_nano/p2p/`, `LEGACY/v1.9.9-test/k_nano/net/brain_mesh.rs`, `ADR-0042 §N4`, `IDEA_BANK #189, #312f, #315.26, #315.27`, `SESSION_143`, `SESSION_152`, `SESSION_233`, `SESSION_234`, `SESSION_235`, `ADR-0021 §Life OS`, `ADR-0057`, `SKYNET DePIN (C:\Users\msrov\OneDrive\Área de Trabalho\SKYNET)`, `Petals (bigscience-workshop/petals)`, `Hivemind (learning-at-home/hivemind)`, `exo (exo-explore/exo)`, `Parallax (GradientHQ/parallax)`, `crdt-merge (mgillr/crdt-merge)`, `DeAI (lucasdemeritt-ops/deai)`, `Bacalhau`, `Akash Network`, `io.net`, `Bittensor`, `Gensyn`
 
 ---
 
@@ -258,7 +258,7 @@ pub fn mesh() -> Option<&'static MeshEngine> { None }
 | smoltcp não suporta UDP broadcast | Alta | Transporte bloqueado | Usar TCP multicast ou P2P TCP |
 | Split-brain na eleição | Média | Dois mestres | Consensus reforçado (RAFT-like) |
 | Latência de rede inviável para MoE | Média | Compute dispatch local | Threshold: só distribuir >500ms de inferência |
-| Segurança: nós maliciosos | Baixa | Cluster comprometido | Ed25519 identity + trust chain |
+| Segurança: nós maliciosos | Média (rede compartilhada) | Cluster comprometido | **Fase A: TOFU + fail-closed + anti-replay (plano acima); Fase B: X25519+ChaCha20-Poly1305** |
 | CRDT converge lentamente | Baixa | Estado inconsistente | Merkle clock para detectar divergência |
 | Thundering herd no broadcast | Baixa | Storm de resposta | Jitter + backoff (já implementado no mesh) |
 
@@ -317,16 +317,20 @@ pub struct NodeCapabilities {
 | VectorClock | `p2p/clock.rs` — incluso | `k_nano/src/sync/clock.rs` | ✅ Restaurado |
 | MPMC Queue | `p2p/mpmc.rs` ~207 LOC | `k_nano/src/mpmc.rs` | ✅ Restaurado |
 | Brain Mesh Engine | `net/brain_mesh.rs` ~707 LOC | `k_nano/src/net/mesh.rs` | ✅ Restaurado |
-| UDP Broadcast | — | `k_nano/src/net/udp_broadcast.rs` | ❌ Pendente (Fase A) |
-| NetAgent integration | — | `hermes/src/agents.rs` | ❌ Pendente (Fase B) |
-| Compute dispatch via Mesh | — | `cortex/src/compute.rs` | ❌ Pendente (Fase C) |
-| Skill sync | — | `hermes/src/skill_loader.rs` | ❌ Pendente (Fase C) |
+| UDP Broadcast | — | `k_nano/src/net/udp_broadcast.rs` | ✅ **Implementado** (SESSION_234 — frame Ethernet+IP+UDP manual, NIC via nic_globals) |
+| Transporte P2P (heartbeat/RX) | — | `k_nano/src/net/mesh.rs::p2p_tick` | ✅ **Implementado** (SESSION_234 — wired no boot via bei_init.rs) |
+| Marketplace P2P | — | `hermes/src/skill_marketplace.rs` | ✅ **Implementado** (SESSION_235 — 14 skills reais broadcast, throttle TIMER_TICKS) |
+| Skill sync | — | `hermes/src/skill_sync.rs` | ✅ **Implementado** (SESSION_234/235 — Master push + Worker apply + PROMOTE via EventBus) |
+| Role Assignment (propagação) | — | `k_nano/src/net/mesh.rs::assign_roles` | ✅ **Implementado** (SESSION_235 — `ROLE\0target\0role`, receptor aplica set_role) |
+| Compute dispatch via Mesh | — | `cortex/src/compute.rs` | ✅ **Implementado** (SESSION_235 item 4 — feature `p2p`, matmul Worker→Master `MW/MR`) |
+| Node identity Ed25519 | — | `k_nano/src/identity.rs` | ⚠️ **Parcial** — assinatura existe mas verificação é fail-open (ver seção Segurança) |
 | CRDT sync (#315.26) | — | SGDB + CRDT lib | ❌ Pendente (Fase C) |
-| Gradiente share (#312f) | — | TrainingAgent + Mesh | ❌ Pendente (Fase C) |
+| Gradiente share (#312f) | — | `k_ai/src/fl_trainer.rs` | ❌ Pendente (Fase C — padrão MW/MR já validado, desbloqueio direto) |
 | SKYNET protocol (#315.27) | — | NoProto + NodeTier | ❌ Pendente (Fase C) |
 | DSD SpeculativeDecoder | — | `cortex/src/speculative.rs` | ❌ Pendente (Fase C) |
 | SemanticRouter | — | `hermes/src/router.rs` | ❌ Pendente (Fase C) |
 | FedYogi FL | — | `k_ai/src/fl_trainer.rs` | ❌ Pendente (Fase C) |
+| Fragmentação MTU / assíncrono | — | `k_nano/src/net/udp_broadcast.rs` | ❌ Pendente (gate 1200B; matmul grande + FL precisam) |
 
 ---
 
@@ -395,13 +399,70 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 
 ---
 
+## Segurança do Mesh (modelo de ameaças + plano de hardening)
+
+**Estado atual (SESSION_235): o mesh é seguro para rede isolada/QEMU, NÃO para rede confiável.** A assinatura Ed25519 existe (`identity::sign_session`/`verify_signature`) mas é **cosmética**: o caminho RX verifica com a chave pública LOCAL (não a do peer) e, se a verificação falha, **aceita o pacote mesmo assim** (fail-open). Não há registro de chaves de peers, nem criptografia, nem anti-replay.
+
+### Modelo de ameaças (rede compartilhada/L2)
+
+| Vetor | Como | Impacto |
+|-------|------|---------|
+| **Spoof de eleição** | Injetar heartbeat com `node_id` menor → vence tie-break | Atacante vira Master → controla papéis/skills/offers |
+| **Fake ROLE** | Injetar `ROLE\0...` não assinado (aceito) | Rebaixa Master real, reatribui papéis |
+| **Fake MR (compute)** | Responder matmul com tensor forjado | Envenena resultado do Worker (dest_id filtro só lógico) |
+| **Fake MW/DoS** | Flood de requests no Master | Exaustão/negação |
+| **Fake Sync/PROMOTE** | Injetar skill maliciosa | Skill não-autorizada no Master |
+| **Eavesdrop** | Payloads em claro (skills, tensores w/x, papéis) | Confidencialidade zero |
+| **Replay** | Campo `clock` existe mas não é validado | Pacote antigo re-aplicado |
+
+### Causas raiz
+
+1. **Chave errada na verificação** — `mesh.rs` RX usa `session_public_key()` (local) contra assinatura do peer → sempre falha → cai no `None => rx` (aceita).
+2. **Fail-open** — o fallback `None => rx` aceita pacote sem assinatura/inválida. Deveria ser `continue` (drop).
+3. **Sem tabela de peers** — não há `node_id → pk` (TOFU/PKI); grep por `peer_key`/`known_keys`/`TOFU` = vazio.
+4. **Sem criptografia** — única dep cripto no workspace é `ed25519-compact`; nenhuma primitiva simétrica/ECDH.
+
+### Fase A — Autenticação TOFU + fail-closed (PLANEJADA, prioridade 1)
+
+| Item | Detalhe | Custo |
+|------|---------|-------|
+| Tabela de peers | `[Option<(u8, [u8;32])>; 16]` em `k_nano::net::mesh` (array fixo, hot path) | ~40 LOC |
+| Handshake TOFU | 1º heartbeat com assinatura → guarda `(node_id, pk)`; próximos verificam contra a chave guardada | ~40 LOC |
+| Fail-closed | `None => rx` vira `continue` (drop) quando assinatura presente e inválida; pacote sem assinatura → drop (exceto handshake) | ~30 LOC |
+| Anti-replay | Janela de `clock` (±N ticks do último visto) | ~30 LOC |
+| Helper identity | `get_peer_pk`/`put_peer_pk` | ~30 LOC |
+
+**Total Fase A: ~150-200 LOC, 2 arquivos (`mesh.rs` + `identity.rs`), sem deps novas, ~1.5-2h** (inclui revalidar todo o mesh QEMU: descoberta/eleição/skills/matmul). Elimina spoof, fake ROLE/MR/Sync/PROMOTE e replay simples. **Responde o MITM: "não, agora é autenticado".**
+
+### Fase B — Criptografia do payload (PLANEJADA, prioridade 2)
+
+| Item | Detalhe | Custo |
+|------|---------|-------|
+| Deps novas | `chacha20poly1305` + `x25519-dalek` (no_std, ~5 crates transitivos) — **primeira dep cripto além do ed25519** | — |
+| Key exchange | No handshake TOFU: troca X25519 pubkeys (1 pacote extra) | ~60 LOC |
+| Encrypt | Após header NoProto: nonce(12) + ciphertext + tag(16) | ~50 LOC |
+| Decrypt | Antes do parse; falha → drop | ~40 LOC |
+| Modo dev | Pacotes não-encriptados → drop OU aceitar só em modo dev (flag) | ~20 LOC |
+
+**Total Fase B: ~250-350 LOC, 2-3 arquivos, dep nova, risco alto (nonce mgmt, rejeição de reuse), ~4-6h.** Necessária quando houver tráfego sensível (FL com gradientes, matmul de dados reais) em rede não-isolada.
+
+### Sugestões (oracle review recomendado antes de implementar)
+
+1. **Fase A é o 90% do problema por ~30% do esforço** — implementar primeiro, sem deps, mesh continua funcional.
+2. **TOFU tem limitação inerente** (primeira vez sem autenticação): em LAN controlada é aceitável; para SKYNET global, usar TEE attestation + CRA (já mapeado na seção SKYNET — `tee-attestation-layer/`).
+3. **Key rotation**: incluir `generation` no payload assinado para permitir troca de chave de sessão sem quebrar o mesh.
+4. **Rate-limit** no handshake (1 TOFU por node_id por janela) para evitar envenenamento da tabela de peers.
+5. **Nonce management** na Fase B: nonce = (node_id, contador) — nunca aleatório puro.
+
+---
+
 ## Decisões
 
 1. **Feature gate:** Todo o ecossistema P2P fica atrás de `#[cfg(feature = "p2p")]`, default-off
 2. **Separação clara:** P2P NÃO faz parte da reintegração LEGACY geral (ADR-0080). É domínio próprio.
 3. **Prioridade:** Fase A (transporte UDP) antes de qualquer lógica de cluster
 4. **Primeiro passo:** UDP broadcast via smoltcp + e1000 — validar antes de prosseguir
-5. **Segurança:** Ed25519 identity para cada nó, trust chain para mensagens
+5. **Segurança:** Ed25519 identity para cada nó, trust chain para mensagens. **Hardening em 2 fases (ver seção Segurança do Mesh):** Fase A = autenticação TOFU + fail-closed + anti-replay (~150-200 LOC, sem deps, ~2h) antes de qualquer rede não-isolada; Fase B = X25519 + ChaCha20-Poly1305 (~250-350 LOC, dep nova, ~4-6h) quando houver tráfego sensível (FL/matmul real).
 6. **Gate v2.0.0:** Fase C (computação distribuída, CRDT, federated) apenas APÓS v2.0.0
 7. **IDEA_BANK:** As ideias #189, #312f, #315.26, #315.27 são absorvidas por esta ADR. Seus status no IDEA_BANK passam de ⏳ para 🟡 (planejamento) com referência a esta ADR.
 8. **SKYNET:** A arquitetura SKYNET (L1-L4) é a visão de longo prazo. O Brain Mesh é a implementação LAN imediata. O NoProto + NodeTier + CapacityScore formam a ponte entre as duas.
