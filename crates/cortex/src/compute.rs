@@ -205,7 +205,11 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     );
     let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
     buf.extend_from_slice(&payload);
-    let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+    // Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
+    let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
+        return None; // fail-closed: sem sessão não assina
+    };
+    let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
     k_nano::slog_cortex!(
         "MESH", "info",
         "matmul request node={} size={} sent={}", node_id, payload.len(), ok
@@ -227,8 +231,18 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
             // Copia campos do packed struct (E0793: sem refs a campos packed).
             let d = p.dest_id;
             let tt = p.task_type as u8;
+            let sender = p.source_id;
             if tt == 1 && d == node_id && rx.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
-                let resp = &rx[k_nano::net::noproto::PACKET_HEADER_SIZE..];
+                // Fase A (SESSION_236): só aceita resposta do Master — verifica
+                // contra a pk vinculada na tabela TOFU do mesh.
+                let Some(pk) = k_nano::net::mesh::peer_public_key(sender) else { continue };
+                let Some(valid) = k_nano::net::udp_broadcast::verify_packet(&rx, &pk) else {
+                    continue; // assinatura inválida — DROP
+                };
+                if valid.len() <= k_nano::net::noproto::PACKET_HEADER_SIZE {
+                    continue;
+                }
+                let resp = &valid[k_nano::net::noproto::PACKET_HEADER_SIZE..];
                 if let Some(t) = deserialize_mesh_response(resp) {
                     k_nano::slog_cortex!(
                         "MESH", "info",
@@ -338,7 +352,13 @@ pub fn poll_mesh_requests() {
         );
         let mut buf = k_nano::net::udp_broadcast::serialize(&rpkt);
         buf.extend_from_slice(&resp);
-        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+        // Fase A (SESSION_236): assinado — o Worker só aceita MR verificado
+        // contra a pk vinculada do remetente.
+        let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
+            k_nano::slog_cortex!("MESH", "info", "matmul resposta node={} sem sessao - skip", req_src);
+            continue;
+        };
+        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
         k_nano::slog_cortex!(
             "MESH", "info",
             "matmul resposta node={} sent={}", req_src, ok

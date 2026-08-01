@@ -157,6 +157,7 @@ impl SkillSync {
 
     /// Master push: serializa "name\0desc" num NoProto TaskType::Sync e faz
     /// broadcast UDP na porta P2P (42069) via transporte k_nano (R0).
+    /// Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
     /// Retorna `true` se o envio foi ok.
     fn broadcast_skill(&mut self, name: &str, desc: &str) -> bool {
         // ID único por instância (último octeto do IP) — SESSION_234.
@@ -167,7 +168,11 @@ impl SkillSync {
         let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
         let payload = alloc::format!("{}\0{}", name, desc).into_bytes();
         buf.extend_from_slice(&payload);
-        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+        let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
+            slog_hermes!("SkillSync", "info", "Master: push skill='{}' sem sessao - skip", name);
+            return false;
+        };
+        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
         slog_hermes!(
             "SkillSync", "info",
             "Master: push skill='{}' broadcast={}", name, ok
@@ -177,6 +182,7 @@ impl SkillSync {
 
     /// Worker push: serializa "PROMOTE\0{name}\0{desc}" num NoProto Sync e faz
     /// broadcast UDP na porta P2P (42069). O Master aplica via on_packet_received.
+    /// Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
     fn broadcast_promote(&self, name: &str, desc: &str) -> bool {
         let node_id = k_nano::net::mesh::node_id();
         let pkt = AiosTaskPacket::new(
@@ -185,7 +191,10 @@ impl SkillSync {
         let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
         let payload = alloc::format!("PROMOTE\0{}\0{}", name, desc).into_bytes();
         buf.extend_from_slice(&payload);
-        k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069)
+        let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
+            return false;
+        };
+        k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069)
     }
 
     /// Marca uma skill para sincronização no próximo ciclo.

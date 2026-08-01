@@ -94,7 +94,12 @@ impl MarketplaceAgent {
             let mut buf = udp_broadcast::serialize(&pkt);
             let payload = alloc::format!("{}|{}|{}|{}", name, version, "general", "skill offer via mesh").into_bytes();
             buf.extend_from_slice(&payload);
-            let sent = k_nano::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+            // Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
+            let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
+                k_nano::slog_nano!("MKTP", "info", "broadcast skill '{}' v{} sem sessao - skip", name, version);
+                continue;
+            };
+            let sent = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
             k_nano::slog_nano!("MKTP", "info",
                 "broadcast skill '{}' v{} from node {} sent={}", name, version, node_id, sent);
         }

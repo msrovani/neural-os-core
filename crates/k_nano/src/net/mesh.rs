@@ -14,11 +14,12 @@
 //! Nos se auto-descobrem, elegem mestres, distribuem inferencia.
 //! Sem servidor central. Sem configuracao. Zero-touch.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use alloc::string::String;
 use alloc::vec::Vec;
 use event_bus::{Event, CapabilityToken};
 use crate::net::noproto::{AiosTaskPacket, TaskType, PacketFlags};
+use crate::identity::PUBLIC_KEY_LEN;
 
 // ponytail: transport importado mas nao usado ate UDP broadcast estar pronto
 // use crate::net::transport::HybridTransport;
@@ -481,6 +482,7 @@ impl BrainMeshEngine {
 
     /// Envia um pacote NoProto Sync com payload "ROLE\0{target}\0{role_u8}"
     /// via broadcast (porta 42069). Receptor filtra pelo target.
+    /// Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
     fn send_role_assign(&self, target_node: u8, role: NodeRole) {
         let pkt = AiosTaskPacket::new(
             0, node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
@@ -488,7 +490,11 @@ impl BrainMeshEngine {
         let mut buf = crate::net::udp_broadcast::serialize(&pkt);
         let payload = alloc::format!("ROLE\0{}\0{}", target_node, role as u8).into_bytes();
         buf.extend_from_slice(&payload);
-        let ok = crate::net::udp_broadcast::udp_broadcast_send(&buf, 42069);
+        let Some(signed) = crate::net::udp_broadcast::sign_packet(&buf) else {
+            crate::slog_nano!("P2P", "warn", "role-assign skip: sessao nao inicializada node={}", target_node);
+            return;
+        };
+        let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
         crate::slog_nano!("P2P", "info", "role-assign node={} role={:?} sent={}", target_node, role, ok);
     }
 
@@ -600,6 +606,93 @@ pub fn node_id() -> u8 {
     }
 }
 
+// ─── Fase A de segurança do mesh (ADR-0081, SESSION_236) ───────────────────
+// Tabela de peers TOFU: a 1ª assinatura válida de um node_id vincula a pk da
+// sessão dele. Seam SKYNET: futuramente a tabela pode ser pré-preenchida por
+// TEE attestation sem mudar o mesh — o TX/RX só consulta `peer_*`.
+
+/// Slots de peers: (node_id, public_key, last_clock). Slot livre = None.
+/// Tamanho 16 = máximo de nós do mesh (BrainMeshEngine).
+static PEER_KEYS: Mutex<[Option<(u8, [u8; PUBLIC_KEY_LEN], u64)>; 16]> = Mutex::new([None; 16]);
+
+/// Chave pública vinculada a um peer. `None` = desconhecido (nunca visto).
+fn peer_pk(node_id: u8) -> Option<[u8; PUBLIC_KEY_LEN]> {
+    let table = PEER_KEYS.lock();
+    for slot in table.iter() {
+        if let Some((nid, pk, _)) = slot {
+            if *nid == node_id {
+                return Some(*pk);
+            }
+        }
+    }
+    None
+}
+
+/// Vincula node_id → pk (TOFU). Atualiza se já existir; senão, primeiro slot livre.
+fn peer_bind(node_id: u8, pk: [u8; PUBLIC_KEY_LEN]) {
+    let mut table = PEER_KEYS.lock();
+    for slot in table.iter_mut() {
+        if let Some((nid, _, _)) = slot {
+            if *nid == node_id {
+                *slot = Some((node_id, pk, 0));
+                return;
+            }
+        }
+    }
+    for slot in table.iter_mut() {
+        if slot.is_none() {
+            *slot = Some((node_id, pk, 0));
+            return;
+        }
+    }
+}
+
+/// Último clock aceito de um peer (anti-replay do canal de heartbeat).
+fn peer_last_clock(node_id: u8) -> Option<u64> {
+    let table = PEER_KEYS.lock();
+    for slot in table.iter() {
+        if let Some((nid, _, clk)) = slot {
+            if *nid == node_id {
+                return Some(*clk);
+            }
+        }
+    }
+    None
+}
+
+/// Atualiza o clock aceito de um peer.
+fn peer_update_clock(node_id: u8, clk: u64) {
+    let mut table = PEER_KEYS.lock();
+    for slot in table.iter_mut() {
+        if let Some((nid, _, last)) = slot {
+            if *nid == node_id {
+                *last = clk;
+                return;
+            }
+        }
+    }
+}
+
+/// Acesso público à tabela TOFU — usado pelo cortex (Worker verifica a
+/// resposta "MR" do Master) e pela futura TEE attestation (SKYNET seam).
+pub fn peer_public_key(node_id: u8) -> Option<[u8; PUBLIC_KEY_LEN]> {
+    peer_pk(node_id)
+}
+
+// Contadores de segurança (diagnóstico).
+static SEC_DROPPED_UNSIGNED: AtomicU64 = AtomicU64::new(0);
+static SEC_DROPPED_BADSIG: AtomicU64 = AtomicU64::new(0);
+static SEC_DROPPED_REPLAY: AtomicU64 = AtomicU64::new(0);
+
+/// (unsigned, badsig, replay) — drops de segurança do mesh para diagnóstico.
+pub fn sec_stats() -> (u64, u64, u64) {
+    (
+        SEC_DROPPED_UNSIGNED.load(Ordering::Relaxed),
+        SEC_DROPPED_BADSIG.load(Ordering::Relaxed),
+        SEC_DROPPED_REPLAY.load(Ordering::Relaxed),
+    )
+}
+
 // ─── Transporte P2P R0 (ADR-0081 Fase A, SESSION_234) ─────────────────────
 // Movido do bin: o kernel dono único do RX/TX broadcast (porta 42069).
 // Pacotes não-heartbeat (Sync/ModelUpdate/…) são publicados no EVENT_BUS
@@ -654,97 +747,181 @@ pub fn p2p_tick(_tick: u64) {
         // (Undecided=4) → add_or_update_node deduplicava → nodes=1.
         let node_id = node_id();
         let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, now);
-        let data = crate::net::udp_broadcast::serialize(&pkt);
-        match crate::net::udp_broadcast::sign_packet(&data) {
+        let mut buf = crate::net::udp_broadcast::serialize(&pkt);
+        // Fase A (SESSION_236): o heartbeat carrega a pk da sessão ("PK\0"+pk)
+        // para o receptor TOFU vincular node_id → chave. Self-consistent: a
+        // assinatura é verificada contra essa pk embutida.
+        if let Some(pk) = crate::identity::session_public_key() {
+            buf.extend_from_slice(b"PK\0");
+            buf.extend_from_slice(&pk);
+        }
+        match crate::net::udp_broadcast::sign_packet(&buf) {
             Some(signed) => {
                 let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
                 crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
             }
             None => {
-                let ok = crate::net::udp_broadcast::udp_broadcast_send(&data, P2P_PORT);
-                crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+                // Fail-closed: sem sessão não assina → não envia (peers dropariam).
+                crate::slog_nano!("P2P", "warn", "TX heartbeat skip: sessao nao inicializada");
             }
         }
     }
 
+    // Diagnóstico de segurança (throttle ~200 ticks).
+    static LAST_SEC_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let last_sec = LAST_SEC_LOG.load(Ordering::Relaxed);
+    if now.wrapping_sub(last_sec) >= 200 || last_sec == 0 {
+        LAST_SEC_LOG.store(now, Ordering::Relaxed);
+        let (u, b, r) = sec_stats();
+        crate::slog_nano!("P2P", "info", "sec: unsigned={} badsig={} replay={}", u, b, r);
+    }
+
     // Recebe descobertas e alimenta o mesh engine
     while let Some(rx) = crate::net::udp_broadcast::udp_broadcast_recv(P2P_PORT) {
-        let data = match crate::identity::session_public_key() {
-            Some(pk) => match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
-                Some(valid) => valid.to_vec(),
-                None => rx,
-            },
-            None => rx,
+        // ── Fase A de segurança (SESSION_236): fail-closed + TOFU + anti-replay ──
+        let Some(pkt) = crate::net::udp_broadcast::parse(&rx) else {
+            SEC_DROPPED_UNSIGNED.fetch_add(1, Ordering::Relaxed);
+            continue;
         };
-        if let Some(pkt) = crate::net::udp_broadcast::parse(&data) {
-            let sid = pkt.source_id;
-            let clk = pkt.clock;
-            let tt = pkt.task_type as u8;
-            crate::slog_nano!("P2P", "info", "RX source_id={} clock={} type={}", sid, clk, tt);
-            // Payload após o header NoProto (já fatiado aqui).
-            let payload = if data.len() > crate::net::noproto::PACKET_HEADER_SIZE {
-                &data[crate::net::noproto::PACKET_HEADER_SIZE..]
-            } else {
-                &[][..]
-            };
-            // SESSION_235: propagação de papéis — ROLE\0{target}\0{role_u8}.
-            // Consumido AQUI (antes do publish P2P_PACKET) — não deve vazar
-            // para skill_sync (que aplicaria "ROLE" como skill).
-            if tt == 3 && payload.starts_with(b"ROLE\0") {
-                let mut parts = payload[5..].splitn(2, |&b| b == 0);
-                let target = match parts.next().and_then(|s| core::str::from_utf8(s).ok())
-                    .and_then(|s| s.parse::<u8>().ok())
-                {
-                    Some(t) => t,
-                    None => continue, // malformado — descarta
-                };
-                let role_u8 = parts.next().and_then(|s| core::str::from_utf8(s).ok())
-                    .and_then(|s| s.parse::<u8>().ok())
-                    .unwrap_or(4); // fallback Undecided
-                if target != node_id() {
-                    continue; // é de outro nó — ignora
+        let sid = pkt.source_id;
+        let clk = pkt.clock;
+        let tt = pkt.task_type as u8;
+
+        // (a) Todo pacote mesh deve ser assinado — fail-closed, sem exceção.
+        //     O TX assina em todos os caminhos (heartbeat, ROLE, skill, matmul).
+        if rx.len() < crate::net::noproto::PACKET_HEADER_SIZE + crate::identity::SIGNATURE_LEN {
+            SEC_DROPPED_UNSIGNED.fetch_add(1, Ordering::Relaxed);
+            crate::slog_nano!("P2P", "warn", "drop: pacote sem assinatura node={}", sid);
+            continue;
+        }
+        // Payload bruto (após header, sem assinatura) — usado só no TOFU.
+        let raw_payload = &rx[crate::net::noproto::PACKET_HEADER_SIZE..rx.len() - crate::identity::SIGNATURE_LEN];
+
+        // (c) TOFU: peer conhecido verifica contra a pk vinculada. Desconhecido
+        //     só vincula via heartbeat com prefixo "PK\0"+pk (self-consistent:
+        //     assinatura verificada contra a pk embutida — prova posse da chave).
+        //     Não-heartbeat de desconhecido → drop (sem como validar).
+        let data: Vec<u8>;
+        match peer_pk(sid) {
+            Some(pk) => match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
+                Some(valid) => data = valid.to_vec(),
+                None => {
+                    SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                    crate::slog_nano!("P2P", "warn", "drop: assinatura invalida node={}", sid);
+                    continue;
                 }
-                let role = match role_u8 {
-                    0 => NodeRole::Master,
-                    1 => NodeRole::Memory,
-                    2 => NodeRole::Compute,
-                    3 => NodeRole::Worker,
-                    _ => NodeRole::Undecided,
+            },
+            None => {
+                if tt != 5 {
+                    SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                    crate::slog_nano!("P2P", "warn", "drop: peer desconhecido (sem vinculo) node={} type={}", sid, tt);
+                    continue;
+                }
+                let pk = match raw_payload.strip_prefix(b"PK\0") {
+                    Some(p) if p.len() >= PUBLIC_KEY_LEN => {
+                        let mut k = [0u8; PUBLIC_KEY_LEN];
+                        k.copy_from_slice(&p[..PUBLIC_KEY_LEN]);
+                        k
+                    }
+                    _ => {
+                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                        crate::slog_nano!("P2P", "warn", "drop: heartbeat sem PK embutida node={}", sid);
+                        continue;
+                    }
                 };
-                {
-                    let eng = MESH_ENGINE.lock();
-                    if let Some(ref engine) = *eng {
-                        engine.set_role(role);
+                match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
+                    Some(valid) => {
+                        peer_bind(sid, pk);
+                        data = valid.to_vec();
+                    }
+                    None => {
+                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                        crate::slog_nano!("P2P", "warn", "drop: assinatura TOFU invalida node={}", sid);
+                        continue;
                     }
                 }
-                crate::slog_nano!("P2P", "info", "role aplicado node={} role={:?}", target, role);
-                continue; // consumido — não publica no EVENT_BUS
             }
-            // Não-heartbeat (Sync/ModelUpdate/…): publica no EVENT_BUS —
-            // hermes consome via skill_sync::poll_p2p() / skill_marketplace::poll_p2p().
-            if tt != 5 {
-                let _ = crate::EVENT_BUS.publish(Event {
-                    id: 0,
-                    topic: String::from(TOPIC_P2P_PACKET),
-                    payload: data.to_vec(),
-                    token: CapabilityToken::Legacy(1),
-                });
-            }
-            // Só heartbeats alimentam o mesh engine (eleição/descoberta)
-            if tt == 5 {
-                let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
-                let caps = NodeCapabilities::new(
-                    sender_mac, 1, 1000, 1, 0,
-                    SimdWeight::None, false, false,
-                );
-                let mut eng = MESH_ENGINE.lock();
-                if let Some(ref mut engine) = *eng {
-                    engine.add_or_update_node(caps);
-                    engine.check_election();
-                    let role = engine.local_role();
-                    let count = engine.node_count();
-                    crate::slog_nano!("P2P", "info", "mesh role={:?} nodes={}", role, count);
+        }
+
+        // (d) Anti-replay: só o canal de heartbeat tem clock monotônico por
+        //     fonte (não-heartbeats usam clock=0 — são autenticados pela
+        //     assinatura, não pelo clock). LAN confiável: drop se clk <= last.
+        //     ponytail: janela de reordenação (WAN) = trabalho futuro.
+        if tt == 5 {
+            if let Some(last) = peer_last_clock(sid) {
+                if clk <= last {
+                    SEC_DROPPED_REPLAY.fetch_add(1, Ordering::Relaxed);
+                    crate::slog_nano!("P2P", "warn", "drop: replay/stale node={} clk={} last={}", sid, clk, last);
+                    continue;
                 }
+            }
+            peer_update_clock(sid, clk);
+        }
+
+        crate::slog_nano!("P2P", "info", "RX source_id={} clock={} type={}", sid, clk, tt);
+        // Payload após o header NoProto (já fatiado aqui).
+        let payload = if data.len() > crate::net::noproto::PACKET_HEADER_SIZE {
+            &data[crate::net::noproto::PACKET_HEADER_SIZE..]
+        } else {
+            &[][..]
+        };
+        // SESSION_235: propagação de papéis — ROLE\0{target}\0{role_u8}.
+        // Consumido AQUI (antes do publish P2P_PACKET) — não deve vazar
+        // para skill_sync (que aplicaria "ROLE" como skill).
+        if tt == 3 && payload.starts_with(b"ROLE\0") {
+            let mut parts = payload[5..].splitn(2, |&b| b == 0);
+            let target = match parts.next().and_then(|s| core::str::from_utf8(s).ok())
+                .and_then(|s| s.parse::<u8>().ok())
+            {
+                Some(t) => t,
+                None => continue, // malformado — descarta
+            };
+            let role_u8 = parts.next().and_then(|s| core::str::from_utf8(s).ok())
+                .and_then(|s| s.parse::<u8>().ok())
+                .unwrap_or(4); // fallback Undecided
+            if target != node_id() {
+                continue; // é de outro nó — ignora
+            }
+            let role = match role_u8 {
+                0 => NodeRole::Master,
+                1 => NodeRole::Memory,
+                2 => NodeRole::Compute,
+                3 => NodeRole::Worker,
+                _ => NodeRole::Undecided,
+            };
+            {
+                let eng = MESH_ENGINE.lock();
+                if let Some(ref engine) = *eng {
+                    engine.set_role(role);
+                }
+            }
+            crate::slog_nano!("P2P", "info", "role aplicado node={} role={:?}", target, role);
+            continue; // consumido — não publica no EVENT_BUS
+        }
+        // Não-heartbeat (Sync/ModelUpdate/…): publica no EVENT_BUS —
+        // hermes consome via skill_sync::poll_p2p() / skill_marketplace::poll_p2p().
+        if tt != 5 {
+            let _ = crate::EVENT_BUS.publish(Event {
+                id: 0,
+                topic: String::from(TOPIC_P2P_PACKET),
+                payload: data.to_vec(),
+                token: CapabilityToken::Legacy(1),
+            });
+        }
+        // Só heartbeats alimentam o mesh engine (eleição/descoberta)
+        if tt == 5 {
+            let sender_mac = [pkt.source_id, 0, 0, 0, 0, 0];
+            let caps = NodeCapabilities::new(
+                sender_mac, 1, 1000, 1, 0,
+                SimdWeight::None, false, false,
+            );
+            let mut eng = MESH_ENGINE.lock();
+            if let Some(ref mut engine) = *eng {
+                engine.add_or_update_node(caps);
+                engine.check_election();
+                let role = engine.local_role();
+                let count = engine.node_count();
+                crate::slog_nano!("P2P", "info", "mesh role={:?} nodes={}", role, count);
             }
         }
     }
