@@ -422,17 +422,17 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 3. **Sem tabela de peers** — não há `node_id → pk` (TOFU/PKI); grep por `peer_key`/`known_keys`/`TOFU` = vazio.
 4. **Sem criptografia** — única dep cripto no workspace é `ed25519-compact`; nenhuma primitiva simétrica/ECDH.
 
-### Fase A — Autenticação TOFU + fail-closed (PLANEJADA, prioridade 1)
+### Fase A — Autenticação TOFU + fail-closed ✅ IMPLEMENTADA (SESSION_235, commit e56e5d4)
 
-| Item | Detalhe | Custo |
-|------|---------|-------|
-| Tabela de peers | `[Option<(u8, [u8;32])>; 16]` em `k_nano::net::mesh` (array fixo, hot path) | ~40 LOC |
-| Handshake TOFU | 1º heartbeat com assinatura → guarda `(node_id, pk)`; próximos verificam contra a chave guardada | ~40 LOC |
-| Fail-closed | `None => rx` vira `continue` (drop) quando assinatura presente e inválida; pacote sem assinatura → drop (exceto handshake) | ~30 LOC |
-| Anti-replay | Janela de `clock` (±N ticks do último visto) | ~30 LOC |
-| Helper identity | `get_peer_pk`/`put_peer_pk` | ~30 LOC |
+**Estado atual: o MITM de spoof/inject/replay está fechado.** RX fail-closed (pacote sem assinatura → DROP; assinatura inválida vs pk vinculada → DROP), tabela `PEER_KEYS [(node_id, pk, last_clock); 16]`, handshake TOFU via prefixo `PK\0`+pk no heartbeat (self-consistent), anti-replay no canal de heartbeat (`clock <= last` → DROP), todos os TX assinando (heartbeat, ROLE, skill push/promote, offer, MW/MR). Contadores `sec: unsigned/badsig/replay` + log throttled. **VALIDADO QEMU dual: `sec: unsigned=0 badsig=0 replay=0`** (zero drops legítimos) + matmul distribuído OK.
 
-**Total Fase A: ~150-200 LOC, 2 arquivos (`mesh.rs` + `identity.rs`), sem deps novas, ~1.5-2h** (inclui revalidar todo o mesh QEMU: descoberta/eleição/skills/matmul). Elimina spoof, fake ROLE/MR/Sync/PROMOTE e replay simples. **Responde o MITM: "não, agora é autenticado".**
+| Item | Detalhe | Status |
+|------|---------|--------|
+| Tabela de peers | `PEER_KEYS: Mutex<[Option<(u8, [u8;32], u64)>; 16]>` em `k_nano::net::mesh` | ✅ |
+| Handshake TOFU | heartbeat TX carrega `PK\0`+pk da sessão; 1º de node desconhecido vincula (verificado contra a pk embutida); não-heartbeat de desconhecido → DROP | ✅ |
+| Fail-closed | pacote sem assinatura → DROP; assinatura inválida vs pk vinculada → DROP | ✅ |
+| Anti-replay | heartbeats com `clock <= last` → DROP (LAN confiável; janela WAN = futuro) | ✅ |
+| Seam SKYNET | `peer_public_key(node_id)` público — TEE attestation pode pré-preenchê-la sem mudar o mesh | ✅ |
 
 ### Fase B — Criptografia do payload (PLANEJADA, prioridade 2)
 
@@ -453,6 +453,30 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 3. **Key rotation**: incluir `generation` no payload assinado para permitir troca de chave de sessão sem quebrar o mesh.
 4. **Rate-limit** no handshake (1 TOFU por node_id por janela) para evitar envenenamento da tabela de peers.
 5. **Nonce management** na Fase B: nonce = (node_id, contador) — nunca aleatório puro.
+
+---
+
+## Distribuição de Modelos — Veredicto BitTorrent (ora-1 + lib-1, 2026-07-31)
+
+**Pergunta do maintainer:** o protocolo torrent entraria em que camada? Ajuda na segurança? Existe crate no_std? Pesquisa arXiv atual? Licença permite?
+
+**Veredicto: NÃO implementar BitTorrent como protocolo.** É bulk-transfer ponto-a-ponto (swarm, WAN, anônimo, churn alto) — o oposto do mesh (LAN, ≤16 nós, identidade explícita, mensagens ~1KB). Seria ~3-5k LOC para um problema que HTTP Range (`netstack.rs:453 http_new_host_ranged`) + broadcast já cobrem.
+
+| Pergunta | Resposta |
+|----------|----------|
+| **Camada** | Se entrasse, utilitário de content-addressing na **Transport R0** — NÃO é camada nova. Só para distribuição de modelos/firmware (Fase C + ADR-0046), nunca heartbeat/eleição/skills |
+| **Segurança** | Ajuda em **1 ponto** (content-addressing infohash + Merkle pieces = integridade de conteúdo contra "conteúdo forjado"); atrapalha em **2** (DHT sybil-friendly, peers anônimos → zero identidade; BEP-10 MSE é cripto sem autenticação → MITM como TLS sem cert). **Não substitui a Fase A TOFU** (âncora de *peer* vs âncora de *conteúdo* — complementares) |
+| **Crate no_std** | Nenhum cliente completo no_std. Só `bendy` (bencode, BSD-3) é no_std puro; `bittorrent-rs` declara core no_std mas imaturo (13 downloads). Realista: bendy + wire BEP-3 + DHT BEP-5 próprios (~1-2k LOC) |
+| **arXiv 2024-26** | GenTorrent (2504.20101): overlay P2P p/ LLM serving, KV-cache reuso → latência >50% menor; Do LLMs Need a CDN? (2409.13761): KDN entrega KV-caches 40× mais rápida; BasedAI (2403.01008): LLM sob FHE em P2P. Contexto: Petals (2209.01188) — o "torrent de camadas" real |
+| **Licença** | **BEPs são public domain** → BEP-3/5/10 livres p/ AGPLv3 sem royalty. **Exceção: uTP (BEP-29)** — patentes BitTorrent Inc (US 8,385,201 B2, vigente até 19/11/2027) → evitar uTP no kernel |
+
+**Subconjunto aproveitável (quando Fase C + modelos):** o conceito **merkle piece verification**, não o protocolo — infohash + hashes de pieces (SHA-256 de 256KB, ~150 LOC em k_nano, reusando `k_ai::merkle_audit` ADR-0053/0076), transferência via HTTP Range 1:1, verificação incremental antes de servir layer (integra ADR-0046). Pré-requisito real: **fragmentação/unicast UDP** (gate MTU 1200B).
+
+> **"O mesh quer o infohash, não o swarm."**
+
+### Nota SKYNET (trust seam)
+
+A tabela `PEER_KEYS (node_id → pk)` da Fase A é **pré-preenchível**: `k_nano::net::mesh::peer_public_key(node_id)` é público — quando o SKYNET `tee-attestation-layer/` (SGX/SEV/CCA + CRA collective attestation) rodar no kernel, ele popula a mesma tabela via atestação em vez de TOFU (primeira-vez). TOFU = modo LAN; attestation = modo SKYNET global. Zero mudança no mesh entre os dois modos. O infohash (conteúdo) + pk atestada (peer) = o mesh SKYNET completo.
 
 ---
 
