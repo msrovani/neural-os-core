@@ -1,4 +1,21 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s238 — Segurança Fase A + Fragmentação MTU (ADR-0081)
+#   SESSION_238: TOFU/fail-closed + BitTorrent veredicto + FRAG\0 (2026-08-01)
+#     Fase A seguranca (e56e5d4): RX fail-closed (assinatura vs pk vinculada
+#       -> DROP), TOFU via PK\0 no heartbeat (PEER_KEYS[16], seam SKYNET p/ TEE),
+#       anti-replay (clock <= last -> DROP), todos TX assinam. sec=0/0/0 validado.
+#     BitTorrent (e0fe270): NAO implementar — camada=content-addressing R0 (so
+#       modelos/Fase C), ajuda merkle/infohash, atrapalha DHT sybil+MSE, sem
+#       crate no_std (so bendy), BEPs public domain, uTP patenteado ate 2027.
+#     Fragmentacao MTU (916d155): FRAG\0 header 21B (id/total/idx/len u32 LE),
+#       send/recv_fragmented (2 slots, fora-de-ordem OK, bitmask seen, timeout
+#       500 ticks), gate 1200B removido, matmul 64x64 ~17.5KB round-trip OK
+#       (18 frags TX/RX). Fragmentacao apos sign, reassembly antes de verify.
+#     cargo check 0 erros. Commits: e56e5d4, e0fe270, 916d155.
+#     Pendente Fase C: Fase B cripto, CRDT #315.26, SKYNET #315.27, DSD,
+#       SemanticRouter, FedYogi, merkle piece.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s235 — Mesh apps reais 1+2+3+4 (ADR-0081)
 #   SESSION_235 (item 4): Compute distribuído Worker→Master (2026-07-31)
 #     cortex feature 'p2p' nova; dispatch_ternary Worker serializa w+x ('MW\0',

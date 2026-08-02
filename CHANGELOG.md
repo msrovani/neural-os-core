@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### SESSION_238: Segurança Fase A + Fragmentação MTU (2026-08-01) ✅
+- **feat(mesh): Fase A segurança (MITM fechado)** — RX fail-closed (pacote sem
+  assinatura → DROP; assinatura inválida vs pk vinculada → DROP; antes verificava
+  com chave LOCAL contra assinatura do PEER → sempre falhava → fail-open).
+  TOFU via `PK\0`+pk no heartbeat (`PEER_KEYS[(node_id, pk, clock); 16]`, seam
+  SKYNET: `peer_public_key()` pré-preenchível por TEE attestation). Anti-replay
+  (heartbeats `clock <= last` → DROP). Todos os TX assinam (heartbeat, ROLE,
+  skill push/promote, offer, MW/MR). Contadores `sec: unsigned/badsig/replay`.
+  **Validado QEMU dual: sec=0/0/0** (zero drops legítimos). Commit `e56e5d4`.
+- **docs(adr-0081): veredicto BitTorrent** — NÃO implementar (ora-1+lib-1):
+  camada = utilitário content-addressing na Transport R0 (só modelos/Fase C +
+  ADR-0046); ajuda 1 (merkle/infohash integridade) atrapalha 2 (DHT sybil, MSE
+  sem auth); sem crate no_std completo (só `bendy`); arXiv GenTorrent/KDN/
+  BasedAI/Petals; BEPs public domain mas **uTP patenteado até 19/11/2027**.
+  Subconjunto: merkle piece verification (~150 LOC, reusa `k_ai::merkle_audit`).
+  Commit `e0fe270`.
+- **feat(mesh): fragmentação MTU + reassembly** — gate `>1200B → fallback local`
+  removido (limitava matmul grande/FL). `send_fragmented` (≤1200B direto;
+  >1200B → chunks ≤1000B, header `FRAG\0` 21B: id/total/idx/len u32 LE) +
+  `recv_fragmented` (reassembly 2 slots, fora-de-ordem OK, duplicatas via bitmask,
+  timeout 500 ticks). Fragmentação após `sign_packet`, reassembly antes de
+  `verify_packet` (integridade preservada, Fase A intacta). `compute.rs` MW/MR
+  via fragmentado; self-test 64×64. **Validado QEMU dual**: matmul 64×64
+  ~17.5KB round-trip (18 frags TX/RX) `shape=(64,64) primeiro=2016.0`.
+  Commit `916d155`.
+- **cargo check --release**: 0 erros
+
 ### SESSION_237: Jcode-inspired memory integration (2026-08-01) ✅
 - **feat(memory): 4-tier consolidation (IDEA #218)** — `k_ai::tiers::consolidate_tiers(tick)`
   promove Working→Episodic→Semantic→Procedural (SGDB L1→L5): tópicos top por frequência de
