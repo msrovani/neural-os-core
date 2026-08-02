@@ -11,6 +11,112 @@ use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 use crate::display::shortcuts::{KeyCombo, Modifiers, WmAction, scancode_to_keycode};
 use hermes::agents::TOPIC_KEY_EVENT;
 use crate::clipboard_notify::TOPIC_TOAST;
+use k_nano::net::mesh::TOPIC_MESH_HEALTH;
+
+// Simple JSON parser for MESH_HEALTH payload (no_std compatible)
+mod mesh_health_json {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    #[derive(Debug, Clone)]
+    pub struct PeerHealthJson {
+        pub node_id: u8,
+        pub reachable: bool,
+        pub avg_rtt: u64,
+        pub p99_rtt: u64,
+        pub tx: u64,
+        pub ack: u64,
+        pub fail: u8,
+        pub probe_to: u64,
+    }
+
+    /// Parse JSON array: [{"node_id":1,"reachable":true,"avg_rtt":10,"p99_rtt":20,"tx":100,"ack":90,"fail":0,"probe_to":50},...]
+    pub fn parse(json: &str) -> Vec<PeerHealthJson> {
+        let mut result = Vec::new();
+        let mut i = 0;
+        let bytes = json.as_bytes();
+        let len = bytes.len();
+
+        // Skip whitespace and '['
+        while i < len && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\t' || bytes[i] == b'[') {
+            i += 1;
+        }
+
+        while i < len {
+            // Skip whitespace
+            while i < len && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\t' || bytes[i] == b',') {
+                i += 1;
+            }
+            if i >= len || bytes[i] == b']' {
+                break;
+            }
+            if bytes[i] != b'{' {
+                i += 1;
+                continue;
+            }
+
+            // Parse object
+            let mut node_id = 0u8;
+            let mut reachable = false;
+            let mut avg_rtt = 0u64;
+            let mut p99_rtt = 0u64;
+            let mut tx = 0u64;
+            let mut ack = 0u64;
+            let mut fail = 0u8;
+            let mut probe_to = 0u64;
+
+            i += 1; // skip '{'
+            while i < len && bytes[i] != b'}' {
+                // Parse key
+                while i < len && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\t' || bytes[i] == b'"') {
+                    i += 1;
+                }
+                let key_start = i;
+                while i < len && bytes[i] != b'"' {
+                    i += 1;
+                }
+                let key = if key_start < i {
+                    core::str::from_utf8(&bytes[key_start..i]).unwrap_or("")
+                } else { "" };
+                while i < len && bytes[i] != b':' {
+                    i += 1;
+                }
+                i += 1; // skip ':'
+
+                // Parse value
+                while i < len && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\t') {
+                    i += 1;
+                }
+                let val_start = i;
+                while i < len && bytes[i] != b',' && bytes[i] != b'}' {
+                    i += 1;
+                }
+                let val_str = if val_start < i {
+                    core::str::from_utf8(&bytes[val_start..i]).unwrap_or("")
+                } else { "" };
+
+                match key {
+                    "node_id" => node_id = val_str.parse().unwrap_or(0),
+                    "reachable" => reachable = val_str == "true",
+                    "avg_rtt" => avg_rtt = val_str.parse().unwrap_or(0),
+                    "p99_rtt" => p99_rtt = val_str.parse().unwrap_or(0),
+                    "tx" => tx = val_str.parse().unwrap_or(0),
+                    "ack" => ack = val_str.parse().unwrap_or(0),
+                    "fail" => fail = val_str.parse().unwrap_or(0),
+                    "probe_to" => probe_to = val_str.parse().unwrap_or(0),
+                    _ => {}
+                }
+            }
+            if i < len && bytes[i] == b'}' {
+                i += 1;
+            }
+            result.push(PeerHealthJson {
+                node_id, reachable, avg_rtt, p99_rtt, tx, ack, fail, probe_to,
+            });
+        }
+        result
+    }
+}
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -38,6 +144,7 @@ pub struct DisplayAgent {
     key_event_receiver: event_bus::Receiver,
     latent_receiver: Option<event_bus::LatentReceiver>,
     llm_stream_receiver: event_bus::Receiver,
+    mesh_health_receiver: Option<event_bus::Receiver>,
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
@@ -75,6 +182,7 @@ impl DisplayAgent {
             render_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_REGISTER),
             render_window_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_WINDOW),
             latent_receiver: None,
+            mesh_health_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
@@ -84,7 +192,7 @@ impl DisplayAgent {
             drag_id: AppId::None,
             drag_off_x: 0,
             drag_off_y: 0,
-            power_armed_until: 0,
+power_armed_until: 0,
         }
     }
 
@@ -574,6 +682,51 @@ impl Agent for DisplayAgent {
             }
             } // while pkt
         } // if latent_receiver
+
+        // Mesh Health: drena MESH_HEALTH (JSON) e renderiza cards de status dos peers
+        if self.mesh_health_receiver.is_none() {
+            self.mesh_health_receiver = Some(EVENT_BUS.subscribe(TOPIC_MESH_HEALTH));
+        }
+        if let Some(ref rx) = self.mesh_health_receiver {
+            while let Some(ev) = rx.try_receive() {
+                let json_str = core::str::from_utf8(&ev.payload).unwrap_or("");
+                let peers = mesh_health_json::parse(json_str);
+                for health in peers {
+                    if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                        let w = desktop.fb.info.width;
+                        let h = desktop.fb.info.height;
+                        let card_w = 200;
+                        let card_h = 80;
+                        let x = 10;
+                        let y = 10 + (health.node_id as usize % 8) * (card_h + 5);
+                        // Background
+                        let bg_color = if health.reachable { 0x1A_3A_1A } else { 0x3A_1A_1A };
+                        desktop.fb.fill_rect(x, y, card_w, card_h, 
+                            (bg_color >> 16) as u8, (bg_color >> 8) as u8, bg_color as u8);
+                        // Border
+                        let border_color = if health.reachable { 0x00_FF_00 } else { 0xFF_00_00 };
+                        desktop.fb.fill_rect(x, y, card_w, 1, 
+                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
+                        desktop.fb.fill_rect(x, y + card_h - 1, card_w, 1, 
+                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
+                        desktop.fb.fill_rect(x, y, 1, card_h, 
+                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
+                        desktop.fb.fill_rect(x + card_w - 1, y, 1, card_h, 
+                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
+                        // Text
+                        let status = if health.reachable { "ONLINE" } else { "OFFLINE" };
+                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 4,
+                            &alloc::format!("Peer {}: {}", health.node_id, status), w, 0xFF, 0xFF, 0xFF);
+                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 20,
+                            &alloc::format!("RTT: {}ms p99: {}ms", health.avg_rtt, health.p99_rtt), w, 0xAA, 0xAA, 0xAA);
+                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 36,
+                            &alloc::format!("TX:{} ACK:{} Fail:{}", health.tx, health.ack, health.fail), w, 0x88, 0x88, 0x88);
+                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 52,
+                            &alloc::format!("Probe timeout: {}ms", health.probe_to), w, 0x66, 0x66, 0x66);
+                    }
+                }
+            }
+        }
 
         // Process keyboard shortcuts via WmAction dispatch (ADR-0065 FASE 1.1 — FIX 1)
         // Drena KEY_EVENT do InputAgent (payload: [scancode, ctrl, alt, shift, super_key, pressed]).

@@ -467,7 +467,7 @@ pub fn bei_tick(_tick: u64) {
     // ADR-0081 Fase C (C4/C5): CRDT version sync + FL federado via P2P real.
     // k_ai consome o EventBus P2P_PACKET (assinatura já verificada no ingress
     // do k_nano — Fase A fail-closed). No-op quando role == Undecided.
-    k_ai::sgdb::crdt_sync::crdt_sync_global(_tick);
+k_ai::sgdb::crdt_sync::crdt_sync_global(_tick);
     k_ai::fl_trainer::mesh_tick_global(_tick);
     // Diagnóstico FL/CRDT (throttle ~500 ticks do TIMER — SESSION_235).
     static LAST_FL_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -482,6 +482,14 @@ pub fn bei_tick(_tick: u64) {
             "fl round={} global={} grads={} | crdt v={} peers={}",
             r, gr, nw, cv, peers
         );
+    }
+    // Phase 4: Publica MESH_HEALTH snapshot a cada ~500 ticks.
+    static LAST_MESH_HEALTH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let mh_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let mh_last = LAST_MESH_HEALTH.load(core::sync::atomic::Ordering::Relaxed);
+    if mh_last == 0 || mh_now.wrapping_sub(mh_last) >= 500 {
+        LAST_MESH_HEALTH.store(mh_now, core::sync::atomic::Ordering::Relaxed);
+        k_nano::net::mesh::publish_mesh_health();
     }
     // SESSION_237 (ADR-0081 C2): Worker com peer anuncia os experts locais ao
     // Master 1x (static flag — o EventBus do Master segura o pacote até ele

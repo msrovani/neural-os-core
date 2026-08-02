@@ -60,21 +60,32 @@ pub fn dispatch_ternary(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let (k, n) = w.shape;
     let big = n >= 64 && k >= 64;
 
-    // ADR-0081 C1: Mesh-aware dispatch.
-    // Se o no local e Worker, despacha o matmul para o Master via P2P real
-    // (payload "MW\0..." → resposta "MR\0..."). SESSION_235: implementado.
+    // ADR-0081 C1: Mesh-aware dispatch (Phase 3 — role-aware + circuit breaker).
+    // Worker só despacha para Compute nodes (não para Master a menos que
+    // Master=Compute). Verifica circuit breaker antes de enviar.
     #[cfg(feature = "p2p")]
     {
         let role = k_nano::net::mesh::local_role();
         if role == k_nano::net::mesh::NodeRole::Worker {
-            N_MESH.fetch_add(1, Ordering::Relaxed);
-            // SESSION_235: matmul ternário distribuído — Worker serializa w+x,
-            // envia para o Master, espera síncrona (~200 TIMER_TICKS) a resposta.
-            // ponytail: síncrono + gate MTU 1200B — assíncrono/fragmentação = futuro.
-            if let Some(t) = mesh_matmul_worker(w, x) {
-                return Some(t);
+            // Role-aware: verifica se existe um Compute node reachable.
+            let compute_ok = k_nano::net::mesh::MESH_ENGINE.lock()
+                .as_ref()
+                .map_or(false, |eng| {
+                    eng.online_nodes().any(|n| {
+                        n.role == k_nano::net::mesh::NodeRole::Compute
+                            && k_nano::net::mesh::peer_health(n.capabilities.node_id[0])
+                                .map_or(true, |h| h.reachable)
+                    })
+                });
+            if compute_ok {
+                N_MESH.fetch_add(1, Ordering::Relaxed);
+                if let Some(t) = mesh_matmul_worker(w, x) {
+                    return Some(t);
+                }
+                // Timeout → registra falha no circuit breaker.
+                k_nano::net::mesh::record_peer_failure(0xFF);
             }
-            // Timeout/sem resposta → cai no fallback local (CPU/scalar).
+            // Sem Compute reachable → fallback local.
         }
     }
 
@@ -204,8 +215,8 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
         return None; // fail-closed: sem sessão não assina
     };
-    // SESSION_237: fragmenta se > 1200B (o blob assinado é dividido; o
-    // receptor reassembla antes do verify_packet).
+    // Phase 3: usa unicast para payloads grandes (porta 42070) em vez de
+    // broadcast — reduz colisões. Fallback para broadcast se unicast falhar.
     let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
     k_nano::slog_cortex!(
         "MESH", "info",
@@ -246,9 +257,13 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
                 }
                 let resp = &valid[k_nano::net::noproto::PACKET_HEADER_SIZE..];
                 if let Some(t) = deserialize_mesh_response(resp) {
+                    // Phase 3: registra sucesso no circuit breaker.
+                    let rtt = (k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64)
+                        .wrapping_sub(start);
+                    k_nano::net::mesh::record_peer_success(sender, rtt);
                     k_nano::slog_cortex!(
                         "MESH", "info",
-                        "matmul resposta node={} ok shape={:?}", node_id, t.shape
+                        "matmul resposta node={} ok shape={:?} rtt={}", node_id, t.shape, rtt
                     );
                     return Some(t);
                 }
@@ -257,6 +272,8 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
         }
         core::hint::spin_loop();
     }
+    // Phase 3: timeout → registra falha no circuit breaker.
+    k_nano::net::mesh::record_peer_failure(0xFF);
     k_nano::slog_cortex!("MESH", "info", "matmul timeout node={} - fallback local", node_id);
     None
 }

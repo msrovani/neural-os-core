@@ -308,39 +308,6 @@ pub fn udp_broadcast_send(payload: &[u8], port: u16) -> bool {
     true
 }
 
-/// Recebe um payload UDP (dst_port == port) do RX do NIC. Não bloqueia.
-pub fn udp_broadcast_recv(port: u16) -> Option<Vec<u8>> {
-    // Drena até achar um pacote UDP para nossa porta (ou esvazia o RX).
-    for _ in 0..16 {
-        let pkt = unsafe { nic_recv_k()? };
-        NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
-        if pkt.len() < 14 + 20 + 8 {
-            continue;
-        }
-        if pkt[12] != 0x08 || pkt[13] != 0x00 {
-            continue;
-        }
-        let ihl = (pkt[14] & 0x0f) as usize * 4;
-        if ihl < 20 || pkt.len() < 14 + ihl + 8 {
-            continue;
-        }
-        if pkt[14 + 9] != 17 {
-            continue; // não-UDP
-        }
-        let udp = 14 + ihl;
-        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
-        if dport != port {
-            continue;
-        }
-        let ulen = u16::from_be_bytes([pkt[udp + 4], pkt[udp + 5]]) as usize;
-        if ulen < 8 || pkt.len() < udp + ulen {
-            continue;
-        }
-        return Some(pkt[udp + 8..udp + ulen].to_vec());
-    }
-    None
-}
-
 // ─── Unicast P2P (Phase 1 reliability) ──────────────────────────────────────
 // Mesmo formato Ethernet+IP+UDP do broadcast, mas com destino MAC específico
 // (não FF:FF:FF:FF:FF:FF). Usado por send_fragmented_unicast /
@@ -399,7 +366,8 @@ pub fn send_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> bool {
 
 /// Recebe um payload UDP (dst_port == port) do RX do NIC, filtrando por
 /// destino MAC != broadcast (unicast). Não bloqueia.
-pub fn recv_unicast(port: u16) -> Option<Vec<u8>> {
+/// Retorna (payload, src_mac) para permitir ACK direto.
+pub fn recv_unicast_with_mac(port: u16) -> Option<(Vec<u8>, [u8; 6])> {
     // Drena até achar um pacote UDP unicast para nossa porta (ou esvazia o RX).
     for _ in 0..16 {
         let pkt = unsafe { nic_recv_k()? };
@@ -410,6 +378,41 @@ pub fn recv_unicast(port: u16) -> Option<Vec<u8>> {
         // Filtra broadcast Ethernet (FF:FF:FF:FF:FF:FF).
         if pkt[0] == 0xFF && pkt[1] == 0xFF && pkt[2] == 0xFF
             && pkt[3] == 0xFF && pkt[4] == 0xFF && pkt[5] == 0xFF {
+            continue;
+        }
+        let src_mac = [pkt[6], pkt[7], pkt[8], pkt[9], pkt[10], pkt[11]];
+        if pkt[12] != 0x08 || pkt[13] != 0x00 {
+            continue;
+        }
+        let ihl = (pkt[14] & 0x0f) as usize * 4;
+        if ihl < 20 || pkt.len() < 14 + ihl + 8 {
+            continue;
+        }
+        if pkt[14 + 9] != 17 {
+            continue; // não-UDP
+        }
+        let udp = 14 + ihl;
+        let dport = u16::from_be_bytes([pkt[udp + 2], pkt[udp + 3]]);
+        if dport != port {
+            continue;
+        }
+        let ulen = u16::from_be_bytes([pkt[udp + 4], pkt[udp + 5]]) as usize;
+        if ulen < 8 || pkt.len() < udp + ulen {
+            continue;
+        }
+        return Some((pkt[udp + 8..udp + ulen].to_vec(), src_mac));
+    }
+    None
+}
+
+/// Recebe um payload UDP (dst_port == port) do RX do NIC.
+/// Retorna (payload, src_mac) para popular cache ARP.
+pub fn udp_broadcast_recv_with_mac(port: u16) -> Option<(Vec<u8>, [u8; 6])> {
+    // Drena até achar um pacote UDP para nossa porta (ou esvazia o RX).
+    for _ in 0..16 {
+        let pkt = unsafe { nic_recv_k()? };
+        NET_RX_COUNT.fetch_add(1, Ordering::Relaxed);
+        if pkt.len() < 14 + 20 + 8 {
             continue;
         }
         if pkt[12] != 0x08 || pkt[13] != 0x00 {
@@ -431,9 +434,16 @@ pub fn recv_unicast(port: u16) -> Option<Vec<u8>> {
         if ulen < 8 || pkt.len() < udp + ulen {
             continue;
         }
-        return Some(pkt[udp + 8..udp + ulen].to_vec());
+        let src_mac = [pkt[6], pkt[7], pkt[8], pkt[9], pkt[10], pkt[11]];
+        return Some((pkt[udp + 8..udp + ulen].to_vec(), src_mac));
     }
     None
+}
+
+/// Recebe um payload UDP (dst_port == port) do RX do NIC.
+/// Versão compatível que retorna só o payload.
+pub fn udp_broadcast_recv(port: u16) -> Option<Vec<u8>> {
+    udp_broadcast_recv_with_mac(port).map(|(p, _)| p)
 }
 
 // ─── Fragmentação MTU (ADR-0081, SESSION_237) ──────────────────────────────
@@ -508,6 +518,7 @@ static REASSEMBLY: Mutex<[Option<FragReassembly>; 16]> = Mutex::new([const { Non
 /// Recebe um payload UDP: fragmentos "FRAG\0" são reassemblados; qualquer
 /// outro pacote (≤1200B, caminho compatível) retorna direto. Não bloqueia —
 /// retorna None quando o RX esvazia e nenhum reassembly completou.
+/// Phase 2: popula cache MAC (peer_set_mac) ao receber pacotes.
 pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
     let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     // Timeout simples: descarta slots parados há >2000 ticks (Phase 1 mesh).
@@ -522,7 +533,16 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
         }
     }
     loop {
-        let pkt = udp_broadcast_recv(port)?;
+        let Some((pkt, src_mac)) = udp_broadcast_recv_with_mac(port) else { return None; };
+        // Popula cache MAC do remetente.
+        let sender_id = if pkt.len() >= crate::net::noproto::PACKET_HEADER_SIZE {
+            if let Some(p) = crate::net::udp_broadcast::parse(&pkt) {
+                p.source_id
+            } else { 0 }
+        } else { 0 };
+        if sender_id != 0 {
+            crate::net::mesh::peer_set_mac(sender_id, src_mac);
+        }
         if !pkt.starts_with(b"FRAG\0") {
             // Payload normal (compatibilidade) — retorna direto.
             return Some(pkt);
@@ -618,10 +638,31 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
 // Mesmo formato "FRAG\0" do broadcast, mas entrega direcionada ponto-a-ponto
 // via send_unicast/recv_unicast. Compartilha a tabela REASSEMBLY (16 slots)
 // — unicast e broadcast usam frag_id global único por boot.
+//
+// ACK seletivo (Phase 2): cada fragmento "FRAG\0" exige ACK "FRACK\0".
+// send_fragmented_unicast faz stop-and-wait por fragmento (timeout 50 ticks).
+// recv_fragmented_unicast envia ACK automático após inserir fragmento.
+
+/// Header do ACK de fragmento: "FRACK\0" (6B) + frag_id u32 LE + idx u32 LE = 14 bytes.
+const FRACK_HEADER_SIZE: usize = 6 + 8;
+/// Timeout por ACK em ticks (~500ms a 100Hz).
+const FRACK_TIMEOUT_TICKS: u64 = 50;
+/// Max retransmissões por fragmento.
+const FRACK_MAX_RETRIES: u8 = 3;
+
+/// Envia ACK de fragmento via unicast.
+fn send_frack(dest_mac: [u8; 6], port: u16, frag_id: u32, idx: u32) -> bool {
+    let mut ack = Vec::with_capacity(FRACK_HEADER_SIZE);
+    ack.extend_from_slice(b"FRACK\0");
+    ack.extend_from_slice(&frag_id.to_le_bytes());
+    ack.extend_from_slice(&idx.to_le_bytes());
+    send_unicast(&ack, dest_mac, port)
+}
 
 /// Envia payload unicast; fragmenta se > 1200B. O payload deve ser o blob JÁ
 /// assinado (NoProto+payload+assinatura) — a fragmentação é ANTES do wire, o
 /// reassembly é DEPOIS do wire e ANTES do verify_packet no receptor.
+/// Phase 2: stop-and-wait com ACK seletivo por fragmento.
 pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> bool {
     if payload.len() <= FRAG_DIRECT_MAX {
         return send_unicast(payload, dest_mac, port);
@@ -642,17 +683,50 @@ pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> 
         frag.extend_from_slice(&idx.to_le_bytes());
         frag.extend_from_slice(&total_len.to_le_bytes());
         frag.extend_from_slice(chunk);
-        if !send_unicast(&frag, dest_mac, port) {
+        
+        // Stop-and-wait: envia fragmento e espera ACK.
+        let mut retries = 0;
+        let mut acked = false;
+        while retries <= FRACK_MAX_RETRIES && !acked {
+            if send_unicast(&frag, dest_mac, port) {
+                // Espera ACK por FRACK_TIMEOUT_TICKS.
+                let start = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+                loop {
+                    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+                    if now.wrapping_sub(start) >= FRACK_TIMEOUT_TICKS {
+                        break; // timeout → retransmite
+                    }
+                    if let Some((rx, _src_mac)) = recv_unicast_with_mac(port) {
+                        if rx.len() >= FRACK_HEADER_SIZE && &rx[0..6] == b"FRACK\0" {
+                            let ack_id = u32::from_le_bytes([rx[6], rx[7], rx[8], rx[9]]);
+                            let ack_idx = u32::from_le_bytes([rx[10], rx[11], rx[12], rx[13]]);
+                            if ack_id == id && ack_idx == idx {
+                                acked = true;
+                                break;
+                            }
+                        }
+                    }
+                    core::hint::spin_loop();
+                }
+            }
+            if !acked {
+                retries += 1;
+                crate::slog_nano!("P2P", "warn", "frag-unicast retry id={} idx={} attempt={}", id, idx, retries);
+            }
+        }
+        if !acked {
             ok = false;
+            crate::slog_nano!("P2P", "error", "frag-unicast FAILED id={} idx={} after {} retries", id, idx, FRACK_MAX_RETRIES);
         }
     }
-    crate::slog_nano!("P2P", "info", "frag-unicast TX id={} partes={} len={}", id, total_frags, payload.len());
+    crate::slog_nano!("P2P", "info", "frag-unicast TX id={} partes={} len={} ok={}", id, total_frags, payload.len(), ok);
     ok
 }
 
 /// Recebe um payload UDP unicast: fragmentos "FRAG\0" são reassemblados;
 /// qualquer outro pacote (≤1200B, caminho compatível) retorna direto.
 /// Não bloqueia — retorna None quando o RX esvazia e nenhum reassembly completou.
+/// Phase 2: envia ACK "FRACK\0" automático após inserir cada fragmento.
 pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
     let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
     // Timeout simples: descarta slots parados há >2000 ticks (Phase 1 mesh).
@@ -667,7 +741,7 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         }
     }
     loop {
-        let pkt = recv_unicast(port)?;
+        let Some((pkt, src_mac)) = recv_unicast_with_mac(port) else { return None; };
         if !pkt.starts_with(b"FRAG\0") {
             // Payload normal (compatibilidade) — retorna direto.
             return Some(pkt);
@@ -728,7 +802,10 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         let bit = 1u8 << (idx % 8);
         let rs = table[slot_pos].as_mut().unwrap();
         if (rs.seen[byte] & bit) != 0 {
-            continue; // fragmento duplicado — ignora
+            // Fragmento duplicado — envia ACK mesmo assim (idempotente).
+            drop(table);
+            let _ = send_frack(src_mac, port, id, idx);
+            continue;
         }
         rs.seen[byte] |= bit;
         if rs.chunks.len() <= idx as usize {
@@ -737,7 +814,15 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         rs.chunks[idx as usize] = chunk.to_vec();
         rs.received += 1;
         rs.last_tick = now;
-
+        
+        // Envia ACK automático para o remetente.
+        drop(table);
+        let _ = send_frack(src_mac, port, id, idx);
+        
+        // Re-trava para verificar completude.
+        let mut table = REASSEMBLY.lock();
+        let rs = table[slot_pos].as_mut().unwrap();
+        
         // Completo? Concatena por índice e libera o slot.
         if rs.received == rs.total_frags {
             let complete_id = rs.id;

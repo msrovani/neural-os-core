@@ -28,6 +28,22 @@ use crate::identity::PUBLIC_KEY_LEN;
 const CIRCUIT_BREAKER_THRESHOLD: u8 = 3;
 /// Cooldown period (ticks) before retrying an unreachable peer.
 const UNREACHABLE_COOLDOWN_TICKS: u64 = 3000;
+/// Base timeout for probe in ticks (~500ms at 100Hz).
+const PROBE_BASE_TIMEOUT_TICKS: u64 = 50;
+/// Max probe timeout (cap exponential backoff at ~32s).
+const PROBE_MAX_TIMEOUT_TICKS: u64 = 3200;
+/// Max probe failures before giving up (uses circuit breaker).
+const PROBE_MAX_FAILURES: u8 = 5;
+/// TTL para entradas de health (ticks) — 60s a 100Hz = 6000 ticks.
+/// Entradas sem atividade (tx_count + ack_count inalterados) são removidas.
+const PEER_HEALTH_TTL_TICKS: u64 = 6000;
+/// Token bucket para rate limiting broadcast (heartbeats, ROLE, etc).
+/// Refill rate: tokens por tick. Bucket size: max burst.
+const TOKEN_BUCKET_REFILL_PER_TICK: u32 = 1; // 1 token/tick = 100 tokens/s
+const TOKEN_BUCKET_MAX_TOKENS: u32 = 20; // burst máx 20 pacotes
+const TOKEN_BUCKET_COST_HEARTBEAT: u32 = 1;
+const TOKEN_BUCKET_COST_ROLE: u32 = 2;
+const TOKEN_BUCKET_COST_DATA: u32 = 3;
 
 /// SIMD capability weights for CapacityScore calculation
 #[repr(u8)]
@@ -262,6 +278,39 @@ pub struct PeerHealth {
     pub ack_count: u64,
     pub unreachable_since: u64,
     pub reachable: bool,
+    /// Falhas consecutivas de probe (para exponential backoff).
+    pub probe_failures: u8,
+    /// Timeout atual do probe em ticks (base * 2^probe_failures).
+    pub probe_timeout_ticks: u64,
+    /// Última atividade (sucesso ou falha) em ticks — para TTL cleanup.
+    pub last_activity_ticks: u64,
+    /// Média móvel de RTT (ticks) — EWMA com alpha=1/8.
+    pub avg_rtt_ticks: u64,
+    /// Buffer circular de RTTs recentes para p99 (max 32 amostras).
+    pub rtt_samples: [u64; 32],
+    /// Índice de escrita no buffer circular.
+    pub rtt_sample_idx: u8,
+    /// Contador de amostras válidas no buffer.
+    pub rtt_sample_count: u8,
+}
+
+impl PeerHealth {
+    /// Serializa PeerHealth como JSON string (no_std compatível).
+    /// Formato: {"node_id":N,"reachable":bool,"avg_rtt":N,"p99_rtt":N,"tx":N,"ack":N,"fail":N,"probe_to":N}
+    pub fn to_json(&self, node_id: u8) -> alloc::string::String {
+        let p99 = peer_p99_rtt(node_id);
+        alloc::format!(
+            "{{\"node_id\":{},\"reachable\":{},\"avg_rtt\":{},\"p99_rtt\":{},\"tx\":{},\"ack\":{},\"fail\":{},\"probe_to\":{}}}",
+            node_id,
+            self.reachable,
+            self.avg_rtt_ticks / 100,
+            p99 / 100,
+            self.tx_count,
+            self.ack_count,
+            self.consecutive_failures,
+            self.probe_timeout_ticks / 100
+        )
+    }
 }
 
 /// Brain Mesh Engine
@@ -738,7 +787,67 @@ static PEER_KEYS: Mutex<[Option<(u8, [u8; PUBLIC_KEY_LEN], u64)>; 16]> = Mutex::
 /// Health metrics per peer: (node_id, PeerHealth). Slot livre = None.
 static PEER_HEALTH: Mutex<[Option<(u8, PeerHealth)>; 16]> = Mutex::new([const { None }; 16]);
 
-/// Chave pública vinculada a um peer. `None` = desconhecido (nunca visto).
+/// ARP cache: node_id → MAC address. Slot livre = None.
+/// Preenchido ao receber heartbeat (Ethernet src MAC) ou via ARP request/reply.
+static PEER_MAC_CACHE: Mutex<[Option<(u8, [u8; 6])>; 16]> = Mutex::new([const { None }; 16]);
+
+/// Token bucket global para rate limiting broadcast.
+/// (tokens_atual, last_refill_tick).
+static TOKEN_BUCKET: Mutex<(u32, u64)> = Mutex::new((TOKEN_BUCKET_MAX_TOKENS, 0));
+
+/// Tenta consumir tokens do bucket. Retorna true se permitido.
+fn token_bucket_try_consume(cost: u32) -> bool {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let mut bucket = TOKEN_BUCKET.lock();
+    let (mut tokens, last_refill) = *bucket;
+    // Refill baseado em ticks decorridos.
+    let elapsed = now.wrapping_sub(last_refill);
+    if elapsed > 0 {
+        let refill = (elapsed as u32).saturating_mul(TOKEN_BUCKET_REFILL_PER_TICK);
+        tokens = (tokens + refill).min(TOKEN_BUCKET_MAX_TOKENS);
+    }
+    if tokens >= cost {
+        tokens -= cost;
+        *bucket = (tokens, now);
+        true
+    } else {
+        *bucket = (tokens, last_refill);
+        false
+    }
+}
+
+/// Obtém MAC address de um peer do cache.
+pub fn peer_mac(node_id: u8) -> Option<[u8; 6]> {
+    let table = PEER_MAC_CACHE.lock();
+    for slot in table.iter() {
+        if let Some((nid, mac)) = slot {
+            if *nid == node_id {
+                return Some(*mac);
+            }
+        }
+    }
+    None
+}
+
+/// Atualiza/insere MAC address de um peer no cache.
+/// Chamado ao receber heartbeat (src MAC do frame Ethernet) ou ARP reply.
+pub fn peer_set_mac(node_id: u8, mac: [u8; 6]) {
+    let mut table = PEER_MAC_CACHE.lock();
+    for slot in table.iter_mut() {
+        if let Some((nid, _)) = slot {
+            if *nid == node_id {
+                *slot = Some((node_id, mac));
+                return;
+            }
+        }
+    }
+    for slot in table.iter_mut() {
+        if slot.is_none() {
+            *slot = Some((node_id, mac));
+            return;
+        }
+    }
+}
 fn peer_pk(node_id: u8) -> Option<[u8; PUBLIC_KEY_LEN]> {
     let table = PEER_KEYS.lock();
     for slot in table.iter() {
@@ -814,6 +923,306 @@ pub fn sec_stats() -> (u64, u64, u64) {
         SEC_DROPPED_BADSIG.load(Ordering::Relaxed),
         SEC_DROPPED_REPLAY.load(Ordering::Relaxed),
     )
+}
+
+// ─── Health do peer (ADR-0081 Phase 2): probe, circuit breaker ──────────────
+
+/// Retorna health metrics de um peer. `None` = peer desconhecido.
+pub fn peer_health(node_id: u8) -> Option<PeerHealth> {
+    let table = PEER_HEALTH.lock();
+    for slot in table.iter() {
+        if let Some((nid, h)) = slot {
+            if *nid == node_id {
+                return Some(*h);
+            }
+        }
+    }
+    None
+}
+
+/// Registra sucesso de TX/ACK para um peer — reseta contador de falhas.
+pub fn record_peer_success(node_id: u8, rtt_ticks: u64) {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let mut table = PEER_HEALTH.lock();
+    for slot in table.iter_mut() {
+        if let Some((nid, h)) = slot {
+            if *nid == node_id {
+                h.last_rtt_ticks = rtt_ticks;
+                h.consecutive_failures = 0;
+                h.tx_count = h.tx_count.wrapping_add(1);
+                h.ack_count = h.ack_count.wrapping_add(1);
+                h.reachable = true;
+                h.unreachable_since = 0;
+                h.probe_failures = 0;
+                h.probe_timeout_ticks = PROBE_BASE_TIMEOUT_TICKS;
+                h.last_activity_ticks = now;
+                // EWMA para avg_rtt: alpha = 1/8 (shift right 3).
+                if h.avg_rtt_ticks == 0 {
+                    h.avg_rtt_ticks = rtt_ticks;
+                } else {
+                    h.avg_rtt_ticks = h.avg_rtt_ticks - (h.avg_rtt_ticks >> 3) + (rtt_ticks >> 3);
+                }
+                // Buffer circular para p99.
+                h.rtt_samples[h.rtt_sample_idx as usize] = rtt_ticks;
+                h.rtt_sample_idx = (h.rtt_sample_idx + 1) % 32;
+                if h.rtt_sample_count < 32 {
+                    h.rtt_sample_count = h.rtt_sample_count.saturating_add(1);
+                }
+                return;
+            }
+        }
+    }
+    // Primeira vez — cria entrada.
+    for slot in table.iter_mut() {
+        if slot.is_none() {
+            let mut samples = [0u64; 32];
+            samples[0] = rtt_ticks;
+            *slot = Some((node_id, PeerHealth {
+                last_rtt_ticks: rtt_ticks,
+                consecutive_failures: 0,
+                tx_count: 1,
+                ack_count: 1,
+                unreachable_since: 0,
+                reachable: true,
+                probe_failures: 0,
+                probe_timeout_ticks: PROBE_BASE_TIMEOUT_TICKS,
+                last_activity_ticks: now,
+                avg_rtt_ticks: rtt_ticks,
+                rtt_samples: samples,
+                rtt_sample_idx: 1,
+                rtt_sample_count: 1,
+            }));
+            return;
+        }
+    }
+}
+
+/// Registra falha de TX/timeout para um peer — incrementa contador.
+/// Se `consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD`, chama mark_unreachable.
+pub fn record_peer_failure(node_id: u8) {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let mut table = PEER_HEALTH.lock();
+    for slot in table.iter_mut() {
+        if let Some((nid, h)) = slot {
+            if *nid == node_id {
+                h.consecutive_failures = h.consecutive_failures.saturating_add(1);
+                h.tx_count = h.tx_count.wrapping_add(1);
+                h.last_activity_ticks = now;
+                if h.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD {
+                    drop(table);
+                    mark_unreachable(node_id);
+                }
+                return;
+            }
+        }
+    }
+    // Primeira falha — cria entrada.
+    for slot in table.iter_mut() {
+        if slot.is_none() {
+            *slot = Some((node_id, PeerHealth {
+                last_rtt_ticks: 0,
+                consecutive_failures: 1,
+                tx_count: 1,
+                ack_count: 0,
+                unreachable_since: 0,
+                reachable: true,
+                probe_failures: 0,
+                probe_timeout_ticks: PROBE_BASE_TIMEOUT_TICKS,
+                last_activity_ticks: now,
+                avg_rtt_ticks: 0,
+                rtt_samples: [0u64; 32],
+                rtt_sample_idx: 0,
+                rtt_sample_count: 0,
+            }));
+            return;
+        }
+    }
+}
+
+/// Marca um peer como unreachable. Atualiza PEER_HEALTH e MESH_ENGINE.
+pub fn mark_unreachable(node_id: u8) {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    // Atualiza PEER_HEALTH.
+    {
+        let mut table = PEER_HEALTH.lock();
+        for slot in table.iter_mut() {
+            if let Some((nid, h)) = slot {
+                if *nid == node_id {
+                    h.reachable = false;
+                    h.unreachable_since = now;
+                    break;
+                }
+            }
+        }
+    }
+    // Atualiza MESH_ENGINE: seta node.online = false.
+    {
+        let mut eng = MESH_ENGINE.lock();
+        if let Some(ref mut engine) = *eng {
+            for node in engine.nodes.iter_mut() {
+                if let Some(n) = node {
+                    if n.capabilities.node_id[0] == node_id {
+                        n.online = false;
+                        crate::slog_nano!("P2P", "warn",
+                            "node {} marcado unreachable (circuit breaker)", node_id);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Probe ativo: envia PING unicast para o peer e verifica resposta.
+/// Retorna true se o peer respondeu dentro do timeout.
+/// Phase 2: exponential backoff — timeout dobra a cada falha (50→100→200→400→800→1600→3200 ticks).
+pub fn probe_node(target_id: u8) -> bool {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    // Verifica cooldown: se unreachable há < UNREACHABLE_COOLDOWN_TICKS, não probe.
+    if let Some(h) = peer_health(target_id) {
+        if !h.reachable && now.wrapping_sub(h.unreachable_since) < UNREACHABLE_COOLDOWN_TICKS {
+            return false;
+        }
+    }
+    // Calcula timeout com exponential backoff baseado em probe_failures.
+    let probe_timeout = {
+        let h = peer_health(target_id);
+        let failures = h.map(|h| h.probe_failures).unwrap_or(0);
+        let timeout = PROBE_BASE_TIMEOUT_TICKS.saturating_mul(1u64 << failures as u32);
+        timeout.min(PROBE_MAX_TIMEOUT_TICKS)
+    };
+    let local_nid = crate::net::mesh::node_id();
+    let probe_clock = next_data_clock();
+    let pkt = crate::net::noproto::AiosTaskPacket::new(
+        probe_clock, local_nid, target_id, crate::net::noproto::TaskType::Sync,
+        1, 0, 0, crate::net::noproto::PacketFlags::new(),
+    );
+    let mut buf = crate::net::udp_broadcast::serialize(&pkt);
+    buf.extend_from_slice(b"PING\0");
+    buf.push(target_id);
+    let Some(signed) = crate::net::udp_broadcast::sign_packet_authentic(&buf) else {
+        return false;
+    };
+    let sent = crate::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
+    if !sent {
+        return false;
+    }
+    // Espera resposta com timeout exponencial.
+    let deadline = now.wrapping_add(probe_timeout);
+    loop {
+        let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        if tick.wrapping_sub(deadline) > (1u64 << 63) {
+            break; // timeout
+        }
+        if let Some(rx) = crate::net::udp_broadcast::udp_broadcast_recv(42069) {
+            if let Some(p) = crate::net::udp_broadcast::parse(&rx) {
+                if p.source_id == target_id {
+                    let payload = &rx[crate::net::noproto::PACKET_HEADER_SIZE..];
+                    if payload.starts_with(b"PONG\0") {
+                        let rtt = (crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64)
+                            .wrapping_sub(now);
+                        record_peer_success(target_id, rtt);
+                        // Reseta probe_failures no sucesso.
+                        {
+                            let mut table = PEER_HEALTH.lock();
+                            for slot in table.iter_mut() {
+                                if let Some((nid, h)) = slot {
+                                    if *nid == target_id {
+                                        h.probe_failures = 0;
+                                        h.probe_timeout_ticks = PROBE_BASE_TIMEOUT_TICKS;
+                                        break;
+}
+    }
+    // Phase 2: Cleanup TTL de health entries a cada ~500 ticks.
+    static LAST_HEALTH_CLEANUP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let last_cleanup = LAST_HEALTH_CLEANUP.load(Ordering::Relaxed);
+    if last_cleanup == 0 || now.wrapping_sub(last_cleanup) >= 500 {
+        LAST_HEALTH_CLEANUP.store(now, Ordering::Relaxed);
+        cleanup_peer_health_ttl();
+    }
+}
+    }
+}
+                }
+            }
+        }
+    }
+    // Timeout → incrementa probe_failures.
+    {
+        let mut table = PEER_HEALTH.lock();
+        for slot in table.iter_mut() {
+            if let Some((nid, h)) = slot {
+                if *nid == target_id {
+                    h.probe_failures = h.probe_failures.saturating_add(1).min(PROBE_MAX_FAILURES);
+                    h.probe_timeout_ticks = PROBE_BASE_TIMEOUT_TICKS
+                        .saturating_mul(1u64 << h.probe_failures as u32)
+                        .min(PROBE_MAX_TIMEOUT_TICKS);
+                    break;
+                }
+            }
+        }
+    }
+    record_peer_failure(target_id);
+    false
+}
+
+/// Snapshot de todos os peers health para EventBus MESH_HEALTH.
+pub fn peer_health_snapshot() -> Vec<(u8, PeerHealth)> {
+    let table = PEER_HEALTH.lock();
+    let mut out = Vec::with_capacity(16);
+    for slot in table.iter() {
+        if let Some((nid, h)) = slot {
+            out.push((*nid, *h));
+        }
+    }
+    out
+}
+
+/// Remove entradas de health expiradas (sem atividade por > PEER_HEALTH_TTL_TICKS).
+/// Chamado periodicamente pelo p2p_tick/mesh_tick.
+pub fn cleanup_peer_health_ttl() {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    let mut table = PEER_HEALTH.lock();
+    for slot in table.iter_mut() {
+        if let Some((_nid, h)) = slot {
+            if now.wrapping_sub(h.last_activity_ticks) > PEER_HEALTH_TTL_TICKS {
+                *slot = None;
+            }
+        }
+    }
+}
+
+/// Calcula p99 RTT a partir do buffer circular de amostras.
+/// Retorna 0 se não houver amostras suficientes.
+pub fn peer_p99_rtt(node_id: u8) -> u64 {
+    let table = PEER_HEALTH.lock();
+    for slot in table.iter() {
+        if let Some((nid, h)) = slot {
+            if *nid == node_id && h.rtt_sample_count >= 10 {
+                let count = h.rtt_sample_count as usize;
+                let mut samples: [u64; 32] = [0; 32];
+                for i in 0..count {
+                    let idx = (h.rtt_sample_idx as usize + 32 - count + i) % 32;
+                    samples[i] = h.rtt_samples[idx];
+                }
+                // Sort simples (insertion sort para array pequeno).
+                for i in 1..count {
+                    let key = samples[i];
+                    let mut j = i;
+                    while j > 0 && samples[j - 1] > key {
+                        samples[j] = samples[j - 1];
+                        j -= 1;
+                    }
+                    samples[j] = key;
+                }
+                // p99 index: ceil(count * 0.99) - 1, usando aritmética inteira.
+                // ceil(a/b) = (a + b - 1) / b. Aqui: ceil(count * 99 / 100).
+                let p99_idx = ((count * 99 + 99) / 100).min(count).saturating_sub(1);
+                return samples[p99_idx];
+            }
+        }
+    }
+    0
 }
 
 // ─── Tier cripto (ADR-0081): Relativizado (HMAC) vs Full (Ed25519) ──────────
@@ -1123,6 +1532,36 @@ pub fn chunk_self_test() -> bool {
 /// Tópico do EventBus para pacotes P2P não-heartbeat (payload = NoProto + payload bruto).
 pub const TOPIC_P2P_PACKET: &str = "P2P_PACKET";
 
+/// Tópico do EventBus para health snapshot do mesh (payload = Vec<(u8, PeerHealth)> serializado).
+/// Publicado a cada ~500 ticks pelo bei_tick. Consumido por Jarbas (dashboard) e SecurityAgent.
+pub const TOPIC_MESH_HEALTH: &str = "MESH_HEALTH";
+
+/// Publica snapshot de health de todos os peers no EventBus (tópico MESH_HEALTH).
+/// Chamado pelo bei_tick a cada ~500 ticks.
+/// Payload: JSON array de objetos PeerHealth.
+pub fn publish_mesh_health() {
+    let snapshot = peer_health_snapshot();
+    if snapshot.is_empty() {
+        return;
+    }
+    // Serializa como JSON array: [{"node_id":1,"reachable":true,...},...]
+    let mut json = alloc::string::String::from("[");
+    for (i, (nid, h)) in snapshot.iter().enumerate() {
+        if i > 0 {
+            json.push(',');
+        }
+        json.push_str(&h.to_json(*nid));
+    }
+    json.push(']');
+    let payload = json.into_bytes();
+    let _ = crate::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: alloc::string::String::from(TOPIC_MESH_HEALTH),
+        payload,
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+}
+
 /// Heartbeat P2P + processamento de descoberta. Usa TIMER_TICKS global
 /// (sempre avança, mesmo com o scheduler rate-limited) — heartbeat a cada
 /// ~110 ticks do timer (~1.1s a 100Hz). Recebe e alimenta o MESH_ENGINE.
@@ -1167,35 +1606,40 @@ pub fn p2p_tick(_tick: u64) {
         // SESSION_234: usar local_role() colidia — ambas enviavam o mesmo ID
         // (Undecided=4) → add_or_update_node deduplicava → nodes=1.
         let node_id = node_id();
-        // ADR-0081 follow-up: clock monotônico ÚNICO por fonte (heartbeat +
-        // dados) — antes usava TIMER_TICKS, o que misturava fontes e faria o
-        // anti-replay de dados dropar tudo (dados com clock menor que o
-        // heartbeat). `next_data_clock()` (GLOBAL_LOGICAL_CLOCK.tick) é
-        // estritamente crescente e compartilhado por todos os senders.
-        let hb_clock = next_data_clock();
-        let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, hb_clock);
-        let mut buf = crate::net::udp_broadcast::serialize(&pkt);
-        // Fase A (SESSION_236): o heartbeat carrega a pk da sessão ("PK\0"+pk)
-        // para o receptor TOFU vincular node_id → chave. Self-consistent: a
-        // assinatura é verificada contra essa pk embutida.
-        if let Some(pk) = crate::identity::session_public_key() {
-            buf.extend_from_slice(b"PK\0");
-            buf.extend_from_slice(&pk);
-            // Fase B (ADR-0081): anuncia capacidades locais no heartbeat.
-            let caps = local_caps();
-            if caps != 0 {
-                buf.extend_from_slice(b"CAP\0");
-                buf.push(caps);
+        // Phase 2: Token bucket rate limiting para heartbeat.
+        if !token_bucket_try_consume(TOKEN_BUCKET_COST_HEARTBEAT) {
+            crate::slog_nano!("P2P", "debug", "TX heartbeat rate limited");
+        } else {
+            // ADR-0081 follow-up: clock monotônico ÚNICO por fonte (heartbeat +
+            // dados) — antes usava TIMER_TICKS, o que misturava fontes e faria o
+            // anti-replay de dados dropar tudo (dados com clock menor que o
+            // heartbeat). `next_data_clock()` (GLOBAL_LOGICAL_CLOCK.tick) é
+            // estritamente crescente e compartilhado por todos os senders.
+            let hb_clock = next_data_clock();
+            let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, hb_clock);
+            let mut buf = crate::net::udp_broadcast::serialize(&pkt);
+            // Fase A (SESSION_236): o heartbeat carrega a pk da sessão ("PK\0"+pk)
+            // para o receptor TOFU vincular node_id → chave. Self-consistent: a
+            // assinatura é verificada contra essa pk embutida.
+            if let Some(pk) = crate::identity::session_public_key() {
+                buf.extend_from_slice(b"PK\0");
+                buf.extend_from_slice(&pk);
+                // Fase B (ADR-0081): anuncia capacidades locais no heartbeat.
+                let caps = local_caps();
+                if caps != 0 {
+                    buf.extend_from_slice(b"CAP\0");
+                    buf.push(caps);
+                }
             }
-        }
-        match crate::net::udp_broadcast::sign_packet_authentic(&buf) {
-            Some(signed) => {
-                let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
-                crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
-            }
-            None => {
-                // Fail-closed: sem sessão não assina → não envia (peers dropariam).
-                crate::slog_nano!("P2P", "warn", "TX heartbeat skip: sessao nao inicializada");
+            match crate::net::udp_broadcast::sign_packet_authentic(&buf) {
+                Some(signed) => {
+                    let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
+                    crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
+                }
+None => {
+                    // Fail-closed: sem sessão não assina → não envia (peers dropariam).
+                    crate::slog_nano!("P2P", "warn", "TX heartbeat skip: sessao nao inicializada");
+                }
             }
         }
     }

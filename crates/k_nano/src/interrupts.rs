@@ -430,6 +430,16 @@ extern "x86-interrupt" fn mouse_interrupt_handler(_stack_frame: InterruptStackFr
     send_eoi(44);
 }
 
+/// HDA audio capture interrupt handler (SD0 - vector 0x30)
+extern "x86-interrupt" fn hda_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    // Delegate to HDA driver
+    unsafe { crate::audio::hda::hda_irq_handler(); }
+    // EOI via APIC
+    if crate::apic::USING_APIC.load(Ordering::Relaxed) {
+        unsafe { crate::apic::apic_eoi(); }
+    }
+}
+
 extern "x86-interrupt" fn unhandled_interrupt_handler(stack_frame: InterruptStackFrame) {
     puts(b"[IRQ] Unhandled ip="); puthex(stack_frame.instruction_pointer.as_u64()); putc(b'\n');
     if crate::apic::USING_APIC.load(Ordering::Relaxed) {
@@ -500,6 +510,8 @@ lazy_static! {
         unsafe { idt[32].set_handler_fn(timer_handler).set_stack_index(TIMER_IST_INDEX); }
         unsafe { idt[33].set_handler_fn(keyboard_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
         unsafe { idt[44].set_handler_fn(mouse_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
+        // HDA audio capture (SD0) - vector 0x30 (48), routed via IOAPIC
+        unsafe { idt[0x30].set_handler_fn(hda_interrupt_handler).set_stack_index(TIMER_IST_INDEX); }
 
         // IPI handlers para SMP (vetores 0x80-0x82)
         idt[0x80].set_handler_fn(ipi_reschedule_handler);

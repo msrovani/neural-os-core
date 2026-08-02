@@ -113,6 +113,7 @@ pub mod vga_buffer;
 pub mod verify;
 pub mod virtio_gpu;
 pub mod virtio_net;
+pub mod audio;
 pub mod xhci;
 
 // Macros (serial_println!, println!, kjson!, klogc!, slog_bin!) are exported via

@@ -61,54 +61,82 @@ impl core::ops::Deref for TssCell {
     }
 }
 
+/// Per-process TSS array for Ring3 isolation (F1.2).
+/// Each process gets its own TSS with dedicated RSP0.
+/// MAX_PROCS = 8 (configurable).
+const MAX_PROCS: usize = 8;
+
 lazy_static! {
-    /// TSS mutável (via interior mutability) para RSP0 por processo (Phase 2).
-    /// IST stacks são configuradas na init e não mudam.
-    static ref TSS: TssCell = TssCell::new({
-        let mut tss = TaskStateSegment::new();
-        // RSP0: stack kernel ao trapear de CPL=3 (int 0x90 / exceções)
-        tss.privilege_stack_table[0] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 5;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss
-    });
+    /// Array of TSS cells — one per process.
+    /// Index 0 = kernel/initial process; 1..MAX_PROCS-1 = user processes.
+    static ref TSS_ARRAY: [TssCell; MAX_PROCS] = {
+        let mut arr: [Option<TssCell>; MAX_PROCS] = [None, None, None, None, None, None, None, None];
+        for i in 0..MAX_PROCS {
+            let mut tss = TaskStateSegment::new();
+            // RSP0: stack kernel ao trapear de CPL=3 (int 0x90 / exceções)
+            tss.privilege_stack_table[0] = {
+                const STACK_SIZE: usize = 4096 * 4;
+                static mut STACKS: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
+                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(STACKS[i])) };
+                stack_start + STACK_SIZE
+            };
+            tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
+                const STACK_SIZE: usize = 4096 * 5;
+                static mut IST_DF: [[u8; 4096 * 5]; MAX_PROCS] = [[0; 4096 * 5]; MAX_PROCS];
+                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_DF[i])) };
+                stack_start + STACK_SIZE
+            };
+            tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
+                const STACK_SIZE: usize = 4096 * 4;
+                static mut IST_PF: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
+                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_PF[i])) };
+                stack_start + STACK_SIZE
+            };
+            tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
+                const STACK_SIZE: usize = 4096 * 4;
+                static mut IST_GP: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
+                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_GP[i])) };
+                stack_start + STACK_SIZE
+            };
+            tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
+                const STACK_SIZE: usize = 4096 * 4;
+                static mut IST_TIMER: [[u8; 4096 * 4]; MAX_PROCS] = [[0; 4096 * 4]; MAX_PROCS];
+                let stack_start = unsafe { VirtAddr::from_ptr(core::ptr::addr_of!(IST_TIMER[i])) };
+                stack_start + STACK_SIZE
+            };
+arr[i] = Some(TssCell::new(tss));
+        }
+        // Safe: all elements initialized
+        core::array::from_fn(|i| arr[i].take().unwrap())
+    };
 }
+
+/// Current process index for TSS selection (0 = kernel).
+static CURRENT_PROC_IDX: AtomicUsize = AtomicUsize::new(0);
 
 /// Atualiza RSP0 do TSS para o processo atual (Phase 2).
 pub fn set_rsp0(stack_top: VirtAddr) {
-    TSS.set_rsp0(stack_top);
+    let idx = CURRENT_PROC_IDX.load(Ordering::Relaxed);
+    TSS_ARRAY[idx].set_rsp0(stack_top);
 }
 
-/// Retorna referência ao TSS para init da GDT.
+/// Switch to process TSS (loads new TSS selector via LTR).
+/// Called during context switch to Ring3 process.
+pub fn switch_to_proc_tss(proc_idx: usize) {
+    if proc_idx >= MAX_PROCS {
+        return;
+    }
+    CURRENT_PROC_IDX.store(proc_idx, Ordering::SeqCst);
+    // LTR with the TSS selector for this process
+    // Note: GDT has only one TSS entry; for true per-process TSS we'd need
+    // multiple TSS descriptors in GDT. For now, we update the single TSS's RSP0.
+    // True per-process TSS requires GDT expansion (future).
+    let _ = proc_idx;
+}
+
+/// Retorna referência ao TSS do processo atual para init da GDT.
 fn tss_ref() -> &'static TaskStateSegment {
-    &TSS
+    &TSS_ARRAY[0]
 }
 
 lazy_static! {

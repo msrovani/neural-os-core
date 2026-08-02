@@ -369,6 +369,7 @@ fn parse_ed(payload: &[u8]) -> Option<(u8, Vec<ExpertInfo>)> {
 /// (locais + remotos) entre os nós, greedy pelos mais pesados primeiro, cada
 /// um para o nó com menor carga relativa (carga / capacidade). Igualdade de
 /// capacidade → balanceamento por peso total. Retorna (name, target_node).
+/// Phase 2: usa health metrics (reachable, avg_rtt, p99) para capacity dinâmico.
 fn capacity_weighted_assign(d: &MeshExpertDistributor) -> Vec<(String, u8)> {
     let local = k_nano::net::mesh::node_id();
     // Nós candidatos: local + donos de experts remotos.
@@ -382,11 +383,26 @@ fn capacity_weighted_assign(d: &MeshExpertDistributor) -> Vec<(String, u8)> {
         return Vec::new();
     }
     let cap = |n: u8| -> f32 {
-        d.node_capacities
+        let base = d.node_capacities
             .iter()
             .find(|(id, _)| *id == n as NodeId)
             .map(|(_, s)| *s)
-            .unwrap_or(1000.0)
+            .unwrap_or(1000.0);
+        // Phase 2: ajusta capacidade baseada em health metrics.
+        if let Some(h) = k_nano::net::mesh::peer_health(n) {
+            if !h.reachable {
+                return 0.0; // nó unreachable → capacidade zero
+            }
+            // Penaliza latência alta: capacity *= 1 / (1 + avg_rtt/1000)
+            let avg_rtt_sec = h.avg_rtt_ticks as f32 / 100.0; // ticks → ~ms (100Hz)
+            let latency_factor = 1.0 / (1.0 + avg_rtt_sec / 1000.0);
+            // Penaliza p99 alto: capacity *= 1 / (1 + p99/2000)
+            let p99 = k_nano::net::mesh::peer_p99_rtt(n) as f32 / 100.0;
+            let p99_factor = 1.0 / (1.0 + p99 / 2000.0);
+            base * latency_factor * p99_factor
+        } else {
+            base // sem health data → usa base
+        }
     };
     // Todos os experts com peso (dedupe por nome — prioridade local).
     let mut experts: Vec<(String, u32)> = Vec::new();
