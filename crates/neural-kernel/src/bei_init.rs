@@ -446,6 +446,12 @@ pub fn bei_tick(_tick: u64) {
     // SESSION_235 (ADR-0081 item 4): matmul distribuído — o Master responde
     // requests "MW\0" vindos de Workers (EventBus P2P_PACKET, pós p2p_tick).
     cortex_crate::compute::poll_mesh_requests();
+    // SESSION_237 (ADR-0081 C2): distribuição de experts — o Master responde
+    // "ED\0" dos Workers com o assign ponderado ("EDR\0"); Workers aplicam o
+    // EDR recebido.
+    cortex_crate::mesh_distrib::poll_expert_requests();
+    // DSD (ADR-0081 C3): speculative decoding stats (throttle interno ~200 ticks).
+    cortex_crate::speculative::dsd_tick(_tick);
     // Self-test do matmul distribuído: o Worker exercita o round-trip MW→MR
     // com o Master (DIAG do boot roda antes da eleição — role Undecided, então
     // nunca pegava o caminho P2P). Retry até 5x: sob TCG o Master pode ainda
@@ -457,5 +463,35 @@ pub fn bei_tick(_tick: u64) {
     {
         MESH_SELFTEST_TRIES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         cortex_crate::compute::mesh_matmul_self_test();
+    }
+    // ADR-0081 Fase C (C4/C5): CRDT version sync + FL federado via P2P real.
+    // k_ai consome o EventBus P2P_PACKET (assinatura já verificada no ingress
+    // do k_nano — Fase A fail-closed). No-op quando role == Undecided.
+    k_ai::sgdb::crdt_sync::crdt_sync_global(_tick);
+    k_ai::fl_trainer::mesh_tick_global(_tick);
+    // Diagnóstico FL/CRDT (throttle ~500 ticks do TIMER — SESSION_235).
+    static LAST_FL_LOG: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let fl_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let fl_last = LAST_FL_LOG.load(core::sync::atomic::Ordering::Relaxed);
+    if fl_last == 0 || fl_now.wrapping_sub(fl_last) >= 500 {
+        LAST_FL_LOG.store(fl_now, core::sync::atomic::Ordering::Relaxed);
+        let (r, gr, nw) = k_ai::fl_trainer::fl_stats_global();
+        let (cv, peers) = k_ai::sgdb::crdt_sync::crdt_stats_global();
+        k_nano::slog_bin!(
+            "FL", "stats",
+            "fl round={} global={} grads={} | crdt v={} peers={}",
+            r, gr, nw, cv, peers
+        );
+    }
+    // SESSION_237 (ADR-0081 C2): Worker com peer anuncia os experts locais ao
+    // Master 1x (static flag — o EventBus do Master segura o pacote até ele
+    // processar, mesmo que a eleição ainda esteja em andamento).
+    static DISTRIB_BROADCAST_DONE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+    if !DISTRIB_BROADCAST_DONE.load(core::sync::atomic::Ordering::Relaxed)
+        && k_nano::net::mesh::local_role() == k_nano::net::mesh::NodeRole::Worker
+        && k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1)
+    {
+        DISTRIB_BROADCAST_DONE.store(true, core::sync::atomic::Ordering::Relaxed);
+        cortex_crate::mesh_distrib::broadcast_local_experts();
     }
 }

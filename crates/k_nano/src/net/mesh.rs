@@ -51,6 +51,38 @@ impl SimdWeight {
     }
 }
 
+/// Tier do nó (ADR-0081 #315.27 SKYNET): L0 = edge mais simples … L4 = datacenter.
+/// Multiplica o CapacityScore no `capacity_score()` — nós de tier alto tendem
+/// a vencer a eleição e a receber mais experts na distribuição.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeTier {
+    /// Edge/dispositivo simples (ex.: notebook antigo).
+    L0 = 0,
+    /// Workstation padrão (default).
+    L1 = 1,
+    /// Servidor mid-range.
+    L2 = 2,
+    /// Servidor high-end.
+    L3 = 3,
+    /// Datacenter.
+    L4 = 4,
+}
+
+impl NodeTier {
+    /// Bônus de capacidade por tier — aplicado no `capacity_score()`.
+    #[must_use]
+    pub const fn score_bonus(&self) -> f32 {
+        match self {
+            Self::L0 => 1.0,
+            Self::L1 => 1.2,
+            Self::L2 => 1.5,
+            Self::L3 => 2.0,
+            Self::L4 => 3.0,
+        }
+    }
+}
+
 /// Node capabilities descriptor
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -71,12 +103,33 @@ pub struct NodeCapabilities {
     pub has_3d_vcache: bool,
     /// Is this node anchored (has jarbas UI active)
     pub is_anchored: bool,
+    /// Tier SKYNET (L0..L4) — bônus no capacity_score.
+    pub tier: NodeTier,
 }
 
 impl NodeCapabilities {
-    /// Create a new node capabilities descriptor
+    /// Create a new node capabilities descriptor (tier L1 default).
     #[must_use]
     pub const fn new(
+        node_id: [u8; 6],
+        cores: u8,
+        clock_mhz: u32,
+        ram_gb: u32,
+        l3_cache_mb: u32,
+        simd: SimdWeight,
+        has_3d_vcache: bool,
+        is_anchored: bool,
+    ) -> Self {
+        Self::new_tiered(
+            NodeTier::L1, node_id, cores, clock_mhz, ram_gb, l3_cache_mb,
+            simd, has_3d_vcache, is_anchored,
+        )
+    }
+
+    /// Create a new node capabilities descriptor com tier SKYNET explícito.
+    #[must_use]
+    pub const fn new_tiered(
+        tier: NodeTier,
         node_id: [u8; 6],
         cores: u8,
         clock_mhz: u32,
@@ -95,12 +148,14 @@ impl NodeCapabilities {
             simd,
             has_3d_vcache,
             is_anchored,
+            tier,
         }
     }
 
     /// Calculate CapacityScore
     ///
-    /// Formula: (Cores × Clock) + (RAM_GB × SIMD_Weight) + L3_Cache_MB
+    /// Formula: ((Cores × Clock) + (RAM_GB × SIMD_Weight) + L3_Cache_MB)
+    /// × bonus de V-Cache/anchor × bônus de tier SKYNET.
     #[must_use]
     pub fn capacity_score(&self) -> f32 {
         let compute_score = self.cores as f32 * self.clock_mhz as f32;
@@ -118,6 +173,9 @@ impl NodeCapabilities {
         if self.is_anchored {
             score *= 1.2;
         }
+
+        // SESSION_237: bonus de tier SKYNET (L0=1.0 … L4=3.0)
+        score *= self.tier.score_bonus();
 
         score
     }
@@ -609,6 +667,31 @@ pub fn node_id() -> u8 {
     }
 }
 
+// ─── Tier SKYNET local (ADR-0081 #315.27, SESSION_237) ─────────────────────
+// Tier do NÓ LOCAL — usado no capacity_score local (eleição/distribuição).
+// Peers não anunciam tier no heartbeat (formato assinado Fase A inalterado —
+// ponytail: anunciar via bitmask CAP fica para depois).
+
+static LOCAL_TIER: AtomicU8 = AtomicU8::new(NodeTier::L1 as u8);
+
+/// Tier local atual (default L1).
+pub fn local_tier() -> NodeTier {
+    match LOCAL_TIER.load(Ordering::Relaxed) {
+        0 => NodeTier::L0,
+        1 => NodeTier::L1,
+        2 => NodeTier::L2,
+        3 => NodeTier::L3,
+        4 => NodeTier::L4,
+        _ => NodeTier::L1,
+    }
+}
+
+/// Seta o tier local (chamado pelo bin conforme o HW/perfil SKYNET).
+pub fn set_local_tier(t: NodeTier) {
+    LOCAL_TIER.store(t as u8, Ordering::Relaxed);
+    crate::slog_nano!("P2P", "info", "local tier={:?} (score bonus x{:.1})", t, t.score_bonus());
+}
+
 // ─── Fase A de segurança do mesh (ADR-0081, SESSION_236) ───────────────────
 // Tabela de peers TOFU: a 1ª assinatura válida de um node_id vincula a pk da
 // sessão dele. Seam SKYNET: futuramente a tabela pode ser pré-preenchida por
@@ -967,8 +1050,8 @@ pub fn p2p_tick(_tick: u64) {
             // sempre true → todo mundo vira Worker).
             let nid = node_id();
             let local_id = [nid, 0, 0, 0, 0, 0];
-            let caps = NodeCapabilities::new(
-                local_id, 1, 1000, 1, 0,
+            let caps = NodeCapabilities::new_tiered(
+                local_tier(), local_id, 1, 1000, 1, 0,
                 SimdWeight::None, false, false,
             );
             *eng = Some(BrainMeshEngine::new(caps));
