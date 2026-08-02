@@ -13,7 +13,8 @@ use crate::identity;
 use alloc::vec::Vec;
 use alloc::vec;
 use core::mem;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use spin::Mutex;
 
 /// Tamanho do pacote NoProto em bytes (repr(C, packed) = 36 bytes).
 pub const PACKET_SIZE: usize = mem::size_of::<AiosTaskPacket>();
@@ -250,4 +251,182 @@ pub fn udp_broadcast_recv(port: u16) -> Option<Vec<u8>> {
         return Some(pkt[udp + 8..udp + ulen].to_vec());
     }
     None
+}
+
+// ─── Fragmentação MTU (ADR-0081, SESSION_237) ──────────────────────────────
+// Payloads > MTU Ethernet não cabem num frame UDP único. `send_fragmented`
+// divide o blob (JÁ assinado pelo chamador — compute assina e depois chama)
+// em fragmentos "FRAG\0"; o receptor reassembla ANTES do verify_packet, então
+// a verificação continua válida no payload completo. O caminho ≤1200B
+// (heartbeat/ROLE/skills) é inalterado — compatibilidade total.
+
+/// Cabeçalho do fragmento: "FRAG\0" (5B) + frag_id u32 LE + total_frags u32 LE
+/// + frag_idx u32 LE + total_len u32 LE = 21 bytes.
+const FRAG_HEADER_SIZE: usize = 5 + 16;
+/// Tamanho máximo de dados por fragmento (fragmento total ≤ 1021B → frame ≤ 1063B).
+const FRAG_MAX_CHUNK: usize = 1000;
+/// Payloads ≤ 1200B seguem o caminho direto (frame ≤ 1242B, sem fragmentar).
+const FRAG_DIRECT_MAX: usize = 1200;
+/// Máximo de fragmentos por mensagem (bitmask [u8; 8] = 64 bits).
+const FRAG_MAX_PARTS: u32 = 64;
+
+/// Contador global de frag_id (único por boot — suficiente em broadcast LAN).
+static FRAG_ID: AtomicU32 = AtomicU32::new(1);
+
+/// Envia payload; fragmenta se > 1200B. O payload deve ser o blob JÁ assinado
+/// (NoProto+payload+assinatura) — a fragmentação é ANTES do wire, o reassembly
+/// é DEPOIS do wire e ANTES do verify_packet no receptor.
+pub fn send_fragmented(payload: &[u8], port: u16) -> bool {
+    if payload.len() <= FRAG_DIRECT_MAX {
+        return udp_broadcast_send(payload, port);
+    }
+    let id = FRAG_ID.fetch_add(1, Ordering::Relaxed);
+    let total_frags = ((payload.len() + FRAG_MAX_CHUNK - 1) / FRAG_MAX_CHUNK) as u32;
+    let total_len = payload.len() as u32;
+    let mut ok = true;
+    let mut off = 0usize;
+    for idx in 0..total_frags {
+        let end = core::cmp::min(off + FRAG_MAX_CHUNK, payload.len());
+        let chunk = &payload[off..end];
+        off = end;
+        let mut frag = Vec::with_capacity(FRAG_HEADER_SIZE + chunk.len());
+        frag.extend_from_slice(b"FRAG\0");
+        frag.extend_from_slice(&id.to_le_bytes());
+        frag.extend_from_slice(&total_frags.to_le_bytes());
+        frag.extend_from_slice(&idx.to_le_bytes());
+        frag.extend_from_slice(&total_len.to_le_bytes());
+        frag.extend_from_slice(chunk);
+        if !udp_broadcast_send(&frag, port) {
+            ok = false;
+        }
+    }
+    crate::slog_nano!("P2P", "info", "frag TX id={} partes={} len={}", id, total_frags, payload.len());
+    ok
+}
+
+/// Estado de reassembly de um payload fragmentado (2 slots simultâneos bastam).
+struct FragReassembly {
+    id: u32,
+    total_frags: u32,
+    received: u32,
+    total_len: usize,
+    /// bitmask de fragmentos recebidos (64 bits — FRAG_MAX_PARTS).
+    seen: [u8; 8],
+    /// pedaços por índice (fora de ordem ok — concatenação por índice).
+    chunks: Vec<Vec<u8>>,
+    /// TIMER_TICKS da última atualização (timeout simples).
+    last_tick: u64,
+}
+
+/// Tabela de reassembly — 2 slots. Slot livre = None; se ambos ocupados por
+/// outros ids, o mais antigo é descartado (timeout simples por tick).
+static REASSEMBLY: Mutex<[Option<FragReassembly>; 2]> = Mutex::new([None, None]);
+
+/// Recebe um payload UDP: fragmentos "FRAG\0" são reassemblados; qualquer
+/// outro pacote (≤1200B, caminho compatível) retorna direto. Não bloqueia —
+/// retorna None quando o RX esvazia e nenhum reassembly completou.
+pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
+    let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    // Timeout simples: descarta slots parados há >500 ticks (ponytail).
+    {
+        let mut table = REASSEMBLY.lock();
+        for slot in table.iter_mut() {
+            if let Some(rs) = slot {
+                if now.wrapping_sub(rs.last_tick) > 500 {
+                    *slot = None;
+                }
+            }
+        }
+    }
+    loop {
+        let pkt = udp_broadcast_recv(port)?;
+        if !pkt.starts_with(b"FRAG\0") {
+            // Payload normal (compatibilidade) — retorna direto.
+            return Some(pkt);
+        }
+        if pkt.len() < FRAG_HEADER_SIZE {
+            continue; // fragmento malformado — descarta
+        }
+        let id = u32::from_le_bytes([pkt[5], pkt[6], pkt[7], pkt[8]]);
+        let total_frags = u32::from_le_bytes([pkt[9], pkt[10], pkt[11], pkt[12]]);
+        let idx = u32::from_le_bytes([pkt[13], pkt[14], pkt[15], pkt[16]]);
+        let total_len = u32::from_le_bytes([pkt[17], pkt[18], pkt[19], pkt[20]]) as usize;
+        if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 {
+            continue; // cabeçalho inválido — descarta
+        }
+        let chunk = &pkt[FRAG_HEADER_SIZE..];
+        if chunk.is_empty() {
+            continue;
+        }
+        let now = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+        let mut table = REASSEMBLY.lock();
+        // Slot do id; senão um livre; senão o mais antigo (reuso).
+        let slot_pos = {
+            let mut match_pos: Option<usize> = None;
+            let mut free_pos: Option<usize> = None;
+            let mut oldest_pos: Option<usize> = None;
+            let mut oldest_tick = u64::MAX;
+            for (i, slot) in table.iter().enumerate() {
+                match slot {
+                    Some(rs) if rs.id == id => match_pos = Some(i),
+                    Some(rs) => {
+                        if rs.last_tick < oldest_tick {
+                            oldest_tick = rs.last_tick;
+                            oldest_pos = Some(i);
+                        }
+                    }
+                    None => {
+                        if free_pos.is_none() {
+                            free_pos = Some(i);
+                        }
+                    }
+                }
+            }
+            match_pos.or(free_pos).or(oldest_pos)
+        }?;
+        if table[slot_pos].as_ref().map_or(true, |rs| rs.id != id) {
+            // Slot livre ou reutilizado — inicia reassembly deste id.
+            table[slot_pos] = Some(FragReassembly {
+                id,
+                total_frags,
+                received: 0,
+                total_len,
+                seen: [0u8; 8],
+                chunks: Vec::new(),
+                last_tick: now,
+            });
+        }
+        let byte = (idx / 8) as usize;
+        let bit = 1u8 << (idx % 8);
+        let rs = table[slot_pos].as_mut().unwrap();
+        if (rs.seen[byte] & bit) != 0 {
+            continue; // fragmento duplicado — ignora
+        }
+        rs.seen[byte] |= bit;
+        if rs.chunks.len() <= idx as usize {
+            rs.chunks.resize(idx as usize + 1, Vec::new());
+        }
+        rs.chunks[idx as usize] = chunk.to_vec();
+        rs.received += 1;
+        rs.last_tick = now;
+
+        // Completo? Concatena por índice e libera o slot.
+        if rs.received == rs.total_frags {
+            let complete_id = rs.id;
+            let complete_parts = rs.total_frags;
+            let complete_len = rs.total_len;
+            let mut out = Vec::with_capacity(complete_len);
+            for c in &rs.chunks {
+                out.extend_from_slice(c);
+            }
+            table[slot_pos] = None;
+            drop(table);
+            crate::slog_nano!(
+                "P2P", "info",
+                "frag RX id={} partes={} len={}", complete_id, complete_parts, complete_len
+            );
+            return Some(out);
+        }
+        // Ainda incompleto — continua drenando.
+    }
 }

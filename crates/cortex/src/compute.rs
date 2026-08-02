@@ -144,11 +144,11 @@ pub fn accel_registered() -> bool {
 // RESPONSE (Master→Worker): task_type=Inference, dest_id=node_id do Worker,
 //   payload = b"MR\0" | shape.0 u32 LE | shape.1 u32 LE | data (f32 LE × N)
 //
-// ponytail: transporte monta frame único sem fragmentação (Ethernet ~1518B).
-// Gate honesto: payload > 1200B → fallback local (não enviar). Fragmentação/
-// MTU jumbo = trabalho futuro. Shapes 8x8/16x16 cabem.
+// SESSION_237: payloads grandes são fragmentados pelo transporte
+// (send_fragmented/recv_fragmented) — sem gate de tamanho aqui.
 
-/// Serializa w+x num request "MW\0". Retorna `None` se payload > 1200B (MTU gate).
+/// Serializa w+x num request "MW\0". Sem gate de tamanho — payloads grandes
+/// são fragmentados pelo transporte (SESSION_237).
 #[cfg(feature = "p2p")]
 fn serialize_mesh_request(w: &PackedTernaryTensor, x: &Tensor) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(1200);
@@ -160,13 +160,6 @@ fn serialize_mesh_request(w: &PackedTernaryTensor, x: &Tensor) -> Option<Vec<u8>
     out.extend_from_slice(&(x.shape.1 as u32).to_le_bytes());
     for v in &x.data {
         out.extend_from_slice(&v.to_le_bytes());
-    }
-    if out.len() > 1200 {
-        k_nano::slog_cortex!(
-            "MESH", "info",
-            "Mesh matmul SKIP size={} (MTU gate) - fallback local", out.len()
-        );
-        return None;
     }
     Some(out)
 }
@@ -209,7 +202,9 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
         return None; // fail-closed: sem sessão não assina
     };
-    let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
+    // SESSION_237: fragmenta se > 1200B (o blob assinado é dividido; o
+    // receptor reassembla antes do verify_packet).
+    let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
     k_nano::slog_cortex!(
         "MESH", "info",
         "matmul request node={} size={} sent={}", node_id, payload.len(), ok
@@ -226,7 +221,9 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
         if now.wrapping_sub(start) >= 200 {
             break; // timeout — fallback local
         }
-        while let Some(rx) = k_nano::net::udp_broadcast::udp_broadcast_recv(42069) {
+        // SESSION_237: recv_fragmented reassembla a resposta "MR" (ou devolve
+        // pacotes ≤1200B direto). O blob completo volta para o parse/verify.
+        while let Some(rx) = k_nano::net::udp_broadcast::recv_fragmented(42069) {
             let Some(p) = k_nano::net::udp_broadcast::parse(&rx) else { continue };
             // Copia campos do packed struct (E0793: sem refs a campos packed).
             let d = p.dest_id;
@@ -358,7 +355,8 @@ pub fn poll_mesh_requests() {
             k_nano::slog_cortex!("MESH", "info", "matmul resposta node={} sem sessao - skip", req_src);
             continue;
         };
-        let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
+        // SESSION_237: resposta grande (ex: matmul 64x64) fragmentada.
+        let ok = k_nano::net::udp_broadcast::send_fragmented(&signed, 42069);
         k_nano::slog_cortex!(
             "MESH", "info",
             "matmul resposta node={} sent={}", req_src, ok
@@ -369,26 +367,29 @@ pub fn poll_mesh_requests() {
 /// Self-test do matmul distribuído (Worker → Master → Worker).
 /// SESSION_235: o DIAG de matmul do boot roda ANTES da eleição (role=Undecided)
 /// — o caminho P2P nunca era exercitado. Chamado 1x pelo bei_tick quando o nó
-/// é Worker com peer. Shapes 16×16 cabem no gate MTU (w 64B + x 1KB ≤ 1200).
+/// é Worker com peer. SESSION_237: shape 64×64 (w 1KB + x 16KB ≈ 17.5KB) —
+/// EXERCITA a fragmentação MTU (≈18 fragmentos FRAG\0), não mais o caso
+/// ≤1200B direto.
 #[cfg(feature = "p2p")]
 pub fn mesh_matmul_self_test() {
     use crate::tensor::PackedTernaryTensor;
-    // w: 16×16 ternário (padrão alternado +1/-1) → packed 64 bytes.
-    let mut wdata = Vec::with_capacity(256);
-    for i in 0..256 {
+    // w: 64×64 ternário (padrão alternado +1/-1) → packed 1024 bytes.
+    let n = 64 * 64;
+    let mut wdata = Vec::with_capacity(n);
+    for i in 0..n {
         wdata.push(if i % 2 == 0 { 1i8 } else { -1i8 });
     }
     let w = PackedTernaryTensor {
-        shape: (16, 16),
+        shape: (64, 64),
         packed_data: PackedTernaryTensor::pack_weights(&wdata),
     };
-    // x: 16×16 f32 (rampa 0..255) → 1KB.
-    let mut xdata = Vec::with_capacity(256);
-    for i in 0..256 {
+    // x: 64×64 f32 (rampa 0..4095) → 16KB.
+    let mut xdata = Vec::with_capacity(n);
+    for i in 0..n {
         xdata.push(i as f32);
     }
-    let x = crate::tensor::Tensor::from_row_major((16, 16), xdata)
-        .unwrap_or_else(|| crate::tensor::Tensor::zero((16, 16)));
+    let x = crate::tensor::Tensor::from_row_major((64, 64), xdata)
+        .unwrap_or_else(|| crate::tensor::Tensor::zero((64, 64)));
     let my_id = k_nano::net::mesh::node_id();
     match dispatch_ternary(&w, &x) {
         Some(r) => k_nano::slog_cortex!(

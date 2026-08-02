@@ -1032,7 +1032,10 @@ pub fn p2p_tick(_tick: u64) {
     }
 
     // Recebe descobertas e alimenta o mesh engine
-    while let Some(rx) = crate::net::udp_broadcast::udp_broadcast_recv(P2P_PORT) {
+    // SESSION_237: recv_fragmented reassembla payloads > 1200B (ex: MW/MR de
+    // matmul grande) antes do gate de segurança; pacotes ≤1200B (heartbeat/
+    // ROLE/skills) retornam direto — caminho inalterado.
+    while let Some(rx) = crate::net::udp_broadcast::recv_fragmented(P2P_PORT) {
         // ── Fase A de segurança (SESSION_236): fail-closed + TOFU + anti-replay ──
         let Some(pkt) = crate::net::udp_broadcast::parse(&rx) else {
             SEC_DROPPED_UNSIGNED.fetch_add(1, Ordering::Relaxed);
