@@ -23,6 +23,10 @@ use crate::globals::{EVENT_BUS, SKILL_REGISTRY, SKILL_STORAGE, TRUST_CACHE, USAG
 use crate::structured_decode::{StructuredDecoder, DecodeMode};
 use crate::decode_harness::recognize;
 
+/// Input pendente aguardando resposta do LLM — alimenta o SelfLearningAgent
+/// (k_ai) com o par (input → resposta) quando o LLM responder.
+static PENDING_LEARNER_INPUT: spin::Mutex<Option<String>> = spin::Mutex::new(None);
+
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
 // ---------------------------------------------------------------------------
@@ -599,6 +603,33 @@ impl Agent for HermesAgent {
                     CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
                     crate::cognitive_bridge::after_exchange("(LLM)", text, now);
                     responded = alloc::format!("[Hermes] {}", text);
+                    // ── LEARNER feedback: aprende o par (input pendente → resposta
+                    // LLM) via singleton; fine-tune + persistência throttled (1x/200
+                    // ticks). O fleet (PollEvery 5000) também roda o ciclo.
+                    if let Some(input) = PENDING_LEARNER_INPUT.lock().take() {
+                        let mut g = k_ai::self_learning::learner_global().lock();
+                        if let Some(a) = g.as_mut() {
+                            a.remember(&input, text);
+                        }
+                        drop(g);
+                        k_nano::slog_hermes!(
+                            "LEARNER", "info",
+                            "feedback par ({}B → {}B) memória atualizada",
+                            input.len(), text.len()
+                        );
+                    }
+                    static LEARN_TICK_LAST: core::sync::atomic::AtomicU64 =
+                        core::sync::atomic::AtomicU64::new(0);
+                    let lt_now = k_nano::interrupts::TIMER_TICKS
+                        .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    let lt_last = LEARN_TICK_LAST.load(core::sync::atomic::Ordering::Relaxed);
+                    if lt_last == 0 || lt_now.wrapping_sub(lt_last) >= 200 {
+                        LEARN_TICK_LAST.store(lt_now, core::sync::atomic::Ordering::Relaxed);
+                        let loss = k_ai::self_learning::learn_tick_global();
+                        if loss > 0.0 {
+                            k_nano::slog_hermes!("LEARNER", "info", "learn tick loss={:.4}", loss);
+                        }
+                    }
                 }
             }
         }
@@ -778,6 +809,23 @@ impl Agent for HermesAgent {
                     token: CapabilityToken::Legacy(1),
                 });
                 return agent_core::AgentTickResult::Pending;
+            }
+
+            // ── LEARNER (k_ai::self_learning) — recall associativo fast-path ──
+            // Só para intents conversacionais; comandos de sistema (Status/Echo/…)
+            // seguem no dispatch normal. Hit → resposta da memória sem custo de LLM.
+            if matches!(cmd, hermes::Command::Chat(_) | hermes::Command::Conversation) {
+                if let Some(learned) = k_ai::self_learning::recall(text) {
+                    k_nano::slog_hermes!("LEARNER", "info", "recall hit -> \"{}\"", learned);
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                        payload: learned.into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                    // Skip LLM: resposta da memória associativa (fast-path).
+                    return agent_core::AgentTickResult::Pending;
+                }
             }
 
             let response = match cmd {
@@ -1360,6 +1408,7 @@ impl Agent for HermesAgent {
                                                 crate::cognitive_bridge::session_record(
                                                     "user", msg, tick_now,
                                                 );
+                                                *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
                                                 self.workflow_engine.start();
                                                 let _ = EVENT_BUS.publish(Event {
                                                     id: 0,
@@ -1387,6 +1436,7 @@ impl Agent for HermesAgent {
                                     crate::cognitive_bridge::session_record(
                                         "user", msg, tick_now,
                                     );
+                                    *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
                                     self.workflow_engine.start();
                                     let _ = EVENT_BUS.publish(Event {
                                         id: 0,
@@ -2345,8 +2395,13 @@ impl SleepCycleAgent {
                     // Sort descending by priority so highest-value traces replay first
                     self.spaced_replay_buffer
                         .sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(core::cmp::Ordering::Equal));
-                    let mut weights = alloc::vec![0i8; 64 * 6];
+                    // C1 (oracle): inicia do router VIVO (unpack) — posições não
+                    // tocadas preservam o estado atual; buffer zero fazia o delta
+                    // virar 0 e o FEDW zerava o router de toda a frota.
                     let trinity = TRINITY.lock();
+                    let mut weights = trinity
+                        .unpack_router_weights()
+                        .unwrap_or_else(|| cortex::federated::seed_router_weights(6));
                     for i in 0..replay_count {
                         let (trace, _) = &self.spaced_replay_buffer[i];
                         // IDEA #314c: EWC — reduce noise for protected entries so their weights drift less
@@ -2356,6 +2411,10 @@ impl SleepCycleAgent {
                         );
                     }
                     drop(trinity);
+                    // F4: persiste pesos treinados do router no seam federado
+                    // (antes descartados — agora o mesh pode sincronizá-los).
+                    cortex::r3::persist_trained_router(&weights);
+                    k_nano::slog_hermes!("SLEEP", "info", "FED: router persistido ({} bytes)", weights.len());
                     let mut t = BITNET_TRAINER.lock();
                     t.trained += replay_count as u64;
                     self.last_replay_loss = total_loss / replay_count as f32;
@@ -2401,9 +2460,13 @@ impl SleepCycleAgent {
                     let dream_noise = SRC_NOISE_SCALE * 2.5; // 0.25 vs standard 0.1
                     let dream_n = self.spaced_replay_buffer.len().min(16);
                     if dream_n > 0 {
-                        let mut var_weights = alloc::vec![0i8; 64 * 6];
+                        // C1 (oracle): inicia do router VIVO (não zero) — mesmo
+                        // motivo do REPLAY: delta real, não zera o router.
                         let trinity = TRINITY.lock();
                         let trinity_has_router = trinity.moe_router_loaded();
+                        let mut var_weights = trinity
+                            .unpack_router_weights()
+                            .unwrap_or_else(|| cortex::federated::seed_router_weights(6));
                         drop(trinity);
                         if trinity_has_router {
                             let trinity = TRINITY.lock();
@@ -2415,6 +2478,10 @@ impl SleepCycleAgent {
                                 variation_count += 1;
                             }
                             drop(trinity);
+                            if variation_count > 0 {
+                                cortex::r3::persist_trained_router(&var_weights);
+                                k_nano::slog_hermes!("SLEEP", "info", "FED: router persistido dream ({} bytes)", var_weights.len());
+                            }
                         }
                     }
                     // Also train BitNet on QA pair embeddings for associative dream patterns
@@ -2442,12 +2509,13 @@ impl SleepCycleAgent {
 
             // ── CONSOLIDATE: seed knowledge fast→slow layers, validate quality + EWC (IDEA #314c) ──
             3 => {
-                // #218: consolidação 4-tier (L2→L3→L4) — ambient mode (jcode-inspired)
+                // #218: consolidação 4-tier (L2→L3→L4) — ambient mode
                 let stats = k_ai::tiers::consolidate_tiers(tick);
                 k_nano::slog_hermes!(
                     "SLEEP", "CONSOLIDATE",
                     "tiers l3={} l4={} topics={}", stats.promoted_l3, stats.promoted_l4, stats.topics,
                 );
+
                 // Pre-consolidation quality: token steps as a proxy for model activity
                 let pre_quality = cortex::global_arena::token_steps() as f32;
 
@@ -2586,6 +2654,21 @@ impl SleepCycleAgent {
 impl Agent for SleepCycleAgent {
     fn manifest(&self) -> &AgentManifest { &SLEEPCYCLE_MANIFEST }
     fn tick(&mut self, _t: u64, _c: u64) -> AgentTickResult {
+        // ── F4: aprendizado federado (best-effort — try_lock p/ não travar o scheduler) ──
+        cortex::federated::poll_p2p();
+        let node_count = match k_nano::net::mesh::MESH_ENGINE.try_lock() {
+            Some(guard) => guard.as_ref().map(|e| e.node_count()).unwrap_or(0),
+            None => 0,
+        };
+        if cortex::federated::fed_tick(k_nano::net::mesh::local_role(), node_count) {
+            k_nano::slog_hermes!("SLEEP", "FED", "conhecimento trocado no mesh (rounds={})", cortex::federated::fed_rounds());
+        }
+        // Aplica pesos fundidos no router vivo (TRINITY), se houver.
+        if let Some(w) = cortex::federated::pending_live_weights() {
+            if TRINITY.lock().set_router_weights(&w) {
+                k_nano::slog_hermes!("SLEEP", "FED", "router vivo atualizado ({} i8)", w.len());
+            }
+        }
         let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         if self.phase == 0 {
             if self.cycle_count == 0 || now > self.phase_tick + 5000 { self.phase = 1; self.phase_tick = now; }

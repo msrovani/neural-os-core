@@ -23,6 +23,10 @@ use crate::{EVENT_BUS, SKILL_STORAGE, TRUST_CACHE, USAGE_TRACKER, EVENT_LOG,
 use k_nano::SKILL_REGISTRY;
 use jarbas_crate::vconsole;
 
+/// Input pendente aguardando resposta do LLM — alimenta o SelfLearningAgent
+/// (k_ai) com o par (input → resposta) quando o LLM responder.
+static PENDING_LEARNER_INPUT: spin::Mutex<Option<String>> = spin::Mutex::new(None);
+
 // ---------------------------------------------------------------------------
 // MonitorAgent — Oneshot: publica SYSTEM_READY e conclui
 // ---------------------------------------------------------------------------
@@ -619,6 +623,33 @@ impl Agent for HermesAgent {
                     CONVERSATION_TRACKER.lock().record_exchange("(LLM)", text);
                     hermes_crate::cognitive_bridge::after_exchange("(LLM)", text, now);
                     responded = alloc::format!("[Hermes] {}", text);
+                    // ── LEARNER feedback: aprende o par (input pendente → resposta
+                    // LLM) via singleton; fine-tune + persistência throttled (1x/200
+                    // ticks). O fleet (PollEvery 5000) também roda o ciclo.
+                    if let Some(input) = PENDING_LEARNER_INPUT.lock().take() {
+                        let mut g = k_ai::self_learning::learner_global().lock();
+                        if let Some(a) = g.as_mut() {
+                            a.remember(&input, text);
+                        }
+                        drop(g);
+                        k_nano::slog_bin!(
+                            "LEARNER", "info",
+                            "feedback par ({}B → {}B) memória atualizada",
+                            input.len(), text.len()
+                        );
+                    }
+                    static LEARN_TICK_LAST: core::sync::atomic::AtomicU64 =
+                        core::sync::atomic::AtomicU64::new(0);
+                    let lt_now = crate::interrupts::TIMER_TICKS
+                        .load(core::sync::atomic::Ordering::Relaxed) as u64;
+                    let lt_last = LEARN_TICK_LAST.load(core::sync::atomic::Ordering::Relaxed);
+                    if lt_last == 0 || lt_now.wrapping_sub(lt_last) >= 200 {
+                        LEARN_TICK_LAST.store(lt_now, core::sync::atomic::Ordering::Relaxed);
+                        let loss = k_ai::self_learning::learn_tick_global();
+                        if loss > 0.0 {
+                            k_nano::slog_bin!("LEARNER", "info", "learn tick loss={:.4}", loss);
+                        }
+                    }
                 }
             }
         }
@@ -827,6 +858,23 @@ impl Agent for HermesAgent {
                     token: CapabilityToken::Legacy(1),
                 });
                 return agent_core::AgentTickResult::Pending;
+            }
+
+            // ── LEARNER (k_ai::self_learning) — recall associativo fast-path ──
+            // Só para intents conversacionais; comandos de sistema (Status/Echo/…)
+            // seguem no dispatch normal. Hit → resposta da memória sem custo de LLM.
+            if matches!(cmd, hermes::Command::Chat(_) | hermes::Command::Conversation) {
+                if let Some(learned) = k_ai::self_learning::recall(text) {
+                    k_nano::slog_bin!("LEARNER", "info", "recall hit -> \"{}\"", learned);
+                    let _ = EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: String::from(hermes::TOPIC_HERMES_RESPONSE),
+                        payload: learned.into_bytes(),
+                        token: CapabilityToken::Legacy(1),
+                    });
+                    // Skip LLM: resposta da memória associativa (fast-path).
+                    return agent_core::AgentTickResult::Pending;
+                }
             }
 
             let response = match cmd {
@@ -1450,6 +1498,7 @@ impl Agent for HermesAgent {
                                         Err(e) => {
                                             if hermes_crate::cognitive_bridge::llm_allowed(token_val, tick_now).is_ok() {
                                                 hermes_crate::cognitive_bridge::session_record("user", msg, tick_now);
+                                                *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
                                                 self.workflow_engine.start();
                                                 let _ = EVENT_BUS.publish(Event {
                                                     id: 0, topic: String::from(cortex::TOPIC_LLM_REQUEST),
@@ -1469,6 +1518,7 @@ impl Agent for HermesAgent {
                                     hermes_crate::cognitive_bridge::session_record(
                                         "user", msg, tick_now,
                                     );
+                                    *PENDING_LEARNER_INPUT.lock() = Some(String::from(msg));
                                     self.workflow_engine.start();
                                     let _ = EVENT_BUS.publish(Event {
                                         id: 0,

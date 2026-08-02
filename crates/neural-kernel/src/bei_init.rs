@@ -403,6 +403,29 @@ pub fn bei_tick(_tick: u64) {
     // (rate-limited). k_nano envia heartbeats, drena o RX 42069 e publica
     // não-heartbeats no EVENT_BUS ("P2P_PACKET").
     k_nano::net::mesh::p2p_tick(_tick);
+    // F1 (ADR-0081 Fase B): advertise de capabilities no heartbeat — refresh
+    // a cada ~110 ticks (cadência do heartbeat) p/ capturar modelos carregados
+    // tardiamente no boot. Cada heartbeat TX lê `local_caps()`.
+    static LAST_CAPS_REFRESH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let caps_now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    let caps_last = LAST_CAPS_REFRESH.load(core::sync::atomic::Ordering::Relaxed);
+    if caps_last == 0 || caps_now.wrapping_sub(caps_last) >= 110 {
+        LAST_CAPS_REFRESH.store(caps_now, core::sync::atomic::Ordering::Relaxed);
+        let mut caps = k_nano::net::mesh::CAP_COMPUTE;
+        if crate::cortex::model_is_loaded() {
+            caps |= k_nano::net::mesh::CAP_LLM;
+        }
+        if crate::cortex::hwexpert_is_loaded() {
+            caps |= k_nano::net::mesh::CAP_HWEXPERT;
+        }
+        if crate::cortex::rustcoder_is_loaded() {
+            caps |= k_nano::net::mesh::CAP_RUSTCODER;
+        }
+        if k_ai::sgdb::ready() {
+            caps |= k_nano::net::mesh::CAP_SGDB_READY;
+        }
+        k_nano::net::mesh::set_local_caps(caps);
+    }
     // Com peer presente, ativa sync de skills + marketplace (idempotente).
     // O bin orquestra k_nano↔hermes — k_nano não conhece hermes.
     if k_nano::net::mesh::MESH_ENGINE.lock().as_ref().map_or(false, |e| e.node_count() >= 1) {
@@ -416,6 +439,10 @@ pub fn bei_tick(_tick: u64) {
     let now = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
     hermes_crate::skill_sync::sync_skills(now);
     hermes_crate::skill_marketplace::marketplace_tick(k_nano::net::mesh::node_id());
+    // Memória coletiva L4: difunde os pares do SelfLearningAgent (k_ai) como
+    // MemoryDocs (throttled ~500 ticks interno). RX "MEM\0" de qualquer layer
+    // já é aplicado via put_doc no mesh_knowledge::poll_p2p.
+    hermes_crate::mesh_knowledge::broadcast_learner_memory();
     // SESSION_235 (ADR-0081 item 4): matmul distribuído — o Master responde
     // requests "MW\0" vindos de Workers (EventBus P2P_PACKET, pós p2p_tick).
     cortex_crate::compute::poll_mesh_requests();

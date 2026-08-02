@@ -14,7 +14,7 @@
 //! Nos se auto-descobrem, elegem mestres, distribuem inferencia.
 //! Sem servidor central. Sem configuracao. Zero-touch.
 
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use alloc::string::String;
 use alloc::vec::Vec;
 use event_bus::{Event, CapabilityToken};
@@ -442,16 +442,19 @@ impl BrainMeshEngine {
         for (i, node) in self.nodes.iter().enumerate() {
             if let Some(n) = node {
                 if n.online {
-                    // Highest RAM becomes Memory Node
-                    if memory_node.is_none()
+                    // Capacidades anunciadas no heartbeat (CAP\0) do peer.
+                    let caps = peer_caps(n.capabilities.node_id[0]).unwrap_or(0);
+                    // Memory ← maior RAM OU bit memory anunciado (CAP_MEMORY).
+                    if (caps & CAP_MEMORY) != 0
+                        || memory_node.is_none()
                         || n.capabilities.ram_gb
                             > self.nodes[memory_node.unwrap()].as_ref().unwrap().capabilities.ram_gb
                     {
                         memory_node = Some(i);
                     }
-
-                    // High SIMD becomes Compute Node
-                    if n.capabilities.simd == SimdWeight::Avx512
+                    // Compute ← SIMD AVX2/AVX-512 OU bit compute (CAP_COMPUTE).
+                    if (caps & CAP_COMPUTE) != 0
+                        || n.capabilities.simd == SimdWeight::Avx512
                         || n.capabilities.simd == SimdWeight::Avx2
                     {
                         compute_nodes.push(i);
@@ -693,6 +696,252 @@ pub fn sec_stats() -> (u64, u64, u64) {
     )
 }
 
+// ─── Fase B: capacidades locais + peers (ADR-0081) ─────────────────────────
+// Bitmask anunciado no heartbeat ("CAP\0" após a pk). Definido em k_nano; o
+// bin/hermes setam via `set_local_caps` conforme o HW detectado no boot.
+
+/// bit0: LLM (inferência local habilitada)
+pub const CAP_LLM: u8 = 1 << 0;
+/// bit1: expert RustCoder (geração de código)
+pub const CAP_RUSTCODER: u8 = 1 << 1;
+/// bit2: expert HwExpert (identificação de HW)
+pub const CAP_HWEXPERT: u8 = 1 << 2;
+/// bit3: compute (aceita dispatches de matmul distribuído)
+pub const CAP_COMPUTE: u8 = 1 << 3;
+/// bit4: memory (candidato a Memory node — VFS L0-L7/fact-graph)
+pub const CAP_MEMORY: u8 = 1 << 4;
+/// bit5: SGDB pronto (store cognitivo operacional)
+pub const CAP_SGDB_READY: u8 = 1 << 5;
+
+/// Capacidades locais anunciadas no heartbeat. 0 = não anuncia (default).
+static LOCAL_CAPS: AtomicU8 = AtomicU8::new(0);
+
+/// Define as capacidades locais anunciadas no heartbeat (bitmask CAP_*).
+pub fn set_local_caps(bits: u8) {
+    LOCAL_CAPS.store(bits, Ordering::Release);
+    crate::slog_nano!("P2P", "info", "local caps set bits=0x{:02X}", bits);
+}
+
+/// Capacidades locais atuais (0 = nenhuma anunciada).
+pub fn local_caps() -> u8 {
+    LOCAL_CAPS.load(Ordering::Acquire)
+}
+
+/// Capacidades anunciadas por peer (via "CAP\0" no heartbeat): (node_id, caps).
+static PEER_CAPS: Mutex<[Option<(u8, u8)>; 16]> = Mutex::new([None; 16]);
+
+/// Capacidades anunciadas por um peer. `None` = nunca viu heartbeat com CAP.
+pub fn peer_caps(node_id: u8) -> Option<u8> {
+    let table = PEER_CAPS.lock();
+    for slot in table.iter() {
+        if let Some((nid, caps)) = slot {
+            if *nid == node_id {
+                return Some(*caps);
+            }
+        }
+    }
+    None
+}
+
+/// Armazena/atualiza as capacidades anunciadas por um peer.
+fn peer_set_caps(node_id: u8, caps: u8) {
+    let mut table = PEER_CAPS.lock();
+    for slot in table.iter_mut() {
+        if let Some((nid, _)) = slot {
+            if *nid == node_id {
+                *slot = Some((node_id, caps));
+                return;
+            }
+        }
+    }
+    for slot in table.iter_mut() {
+        if slot.is_none() {
+            *slot = Some((node_id, caps));
+            return;
+        }
+    }
+}
+
+// ─── Fase B: chunking de payloads grandes (CHK\0, ADR-0081) ─────────────────
+// Payloads > CHUNK_DATA_MAX são fatiados em chunks Sync assinados:
+//   "CHK\0" + msg_id u32 LE + seq u16 LE + total u16 LE + [dados do chunk]
+// O RX remonta por (source_id, msg_id) e publica o payload original no
+// TOPIC_P2P_PACKET (mesmo Event de um pacote pequeno). TOFU/anti-replay
+// inalterados — cada chunk passa pelo caminho de verificação normal.
+
+/// Bytes de dados por chunk (≤1100 — folga no MTU UDP/Ethernet 1500).
+const CHUNK_DATA_MAX: usize = 1100;
+/// Limite total por slot de remontagem (~64KB).
+const CHUNK_SLOT_MAX_BYTES: usize = 65536;
+/// Número de slots de remontagem (mensagens simultâneas por fonte).
+const CHUNK_SLOTS: usize = 4;
+/// Timeout de slot incompleto (~5s a 100Hz de TIMER_TICKS).
+const CHUNK_TIMEOUT_TICKS: u64 = 500;
+
+/// msg_id global — incrementa a cada `mesh_send_large` (wrap u32 aceito).
+static CHUNK_MSG_ID: AtomicU32 = AtomicU32::new(1);
+
+/// Slot de remontagem de uma mensagem chunked (por (source, msg_id)).
+struct ChunkSlot {
+    source: u8,
+    msg_id: u32,
+    total: u16,
+    last_seen: u64,
+    chunks: Vec<Option<Vec<u8>>>,
+}
+
+/// Tabela de slots de remontagem (estática, estilo PEER_KEYS).
+static CHUNK_SLOTS_TABLE: Mutex<[Option<ChunkSlot>; CHUNK_SLOTS]> = Mutex::new([const { None }; CHUNK_SLOTS]);
+
+/// Envia payload como pacote Sync assinado via broadcast (porta 42069).
+/// Mesmo caminho do ROLE\0 — fail-closed sem sessão.
+fn send_sync_payload(payload: &[u8]) -> bool {
+    let pkt = AiosTaskPacket::new(
+        0, node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+    );
+    let mut buf = crate::net::udp_broadcast::serialize(&pkt);
+    buf.extend_from_slice(payload);
+    let Some(signed) = crate::net::udp_broadcast::sign_packet(&buf) else {
+        crate::slog_nano!("P2P", "warn", "send_sync_payload skip: sessao nao inicializada");
+        return false;
+    };
+    crate::net::udp_broadcast::udp_broadcast_send(&signed, 42069)
+}
+
+/// Envia payload via mesh P2P. Payloads ≤ CHUNK_DATA_MAX vão direto como
+/// pacote Sync assinado (como hoje); maiores são fatiados em chunks "CHK\0"
+/// e remontados no RX. Retorna false se qualquer envio falhou.
+pub fn mesh_send_large(payload: &[u8]) -> bool {
+    if payload.len() <= CHUNK_DATA_MAX {
+        return send_sync_payload(payload);
+    }
+    let msg_id = CHUNK_MSG_ID.fetch_add(1, Ordering::Relaxed);
+    let total = ((payload.len() + CHUNK_DATA_MAX - 1) / CHUNK_DATA_MAX) as u16;
+    let mut ok = true;
+    for (seq, chunk) in payload.chunks(CHUNK_DATA_MAX).enumerate() {
+        let mut body = Vec::with_capacity(12 + chunk.len());
+        body.extend_from_slice(b"CHK\0");
+        body.extend_from_slice(&msg_id.to_le_bytes());
+        body.extend_from_slice(&(seq as u16).to_le_bytes());
+        body.extend_from_slice(&total.to_le_bytes());
+        body.extend_from_slice(chunk);
+        let sent = send_sync_payload(&body);
+        ok = ok && sent;
+        crate::slog_nano!("P2P", "info", "TX chunk msg={} seq={}/{} node={} bytes={} sent={}", msg_id, seq, total, node_id(), chunk.len(), sent);
+    }
+    ok
+}
+
+/// Processa um payload "CHK\0" recebido: insere o chunk no slot
+/// (source_id, msg_id) e, quando o último chega, retorna o payload completo
+/// (sem prefixo CHK). Descarta slots incompletos velhos (timeout por ticks).
+fn chunk_reassemble(sid: u8, payload: &[u8], now: u64) -> Option<Vec<u8>> {
+    if payload.len() < 12 || &payload[0..4] != b"CHK\0" {
+        return None;
+    }
+    let msg_id = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
+    let seq = u16::from_le_bytes([payload[8], payload[9]]) as usize;
+    let total = u16::from_le_bytes([payload[10], payload[11]]) as usize;
+    let chunk = &payload[12..];
+    // M1 (oracle): cap no total ANTES de alocar o slot — total * CHUNK_DATA_MAX
+    // > CHUNK_SLOT_MAX_BYTES (ex. total=65535) alocaria ~1.5MB por slot e
+    // permitiria DoS de remontagem por peer TOFU. Validação também cobre o
+    // branch de slot existente (msg_id reutilizado com total diferente).
+    if total == 0
+        || seq >= total
+        || chunk.len() > CHUNK_DATA_MAX
+        || total.saturating_mul(CHUNK_DATA_MAX) > CHUNK_SLOT_MAX_BYTES
+    {
+        return None;
+    }
+
+    let mut table = CHUNK_SLOTS_TABLE.lock();
+    // Sweep: descarta slots incompletos velhos (timeout por ticks).
+    for slot in table.iter_mut() {
+        if let Some(s) = slot {
+            if now.wrapping_sub(s.last_seen) > CHUNK_TIMEOUT_TICKS {
+                crate::slog_nano!("P2P", "warn", "chunk slot timeout node={} msg={}", s.source, s.msg_id);
+                *slot = None;
+            }
+        }
+    }
+    // Acha slot existente para (sid, msg_id) ou um slot livre.
+    let mut idx: Option<usize> = None;
+    for (i, slot) in table.iter().enumerate() {
+        if let Some(s) = slot {
+            if s.source == sid && s.msg_id == msg_id {
+                idx = Some(i);
+                break;
+            }
+        }
+    }
+    if idx.is_none() {
+        for (i, slot) in table.iter().enumerate() {
+            if slot.is_none() {
+                idx = Some(i);
+                break;
+            }
+        }
+    }
+    let i = idx?;
+    if table[i].is_none() {
+        let mut chunks = alloc::vec![None; total];
+        chunks[seq] = Some(chunk.to_vec());
+        table[i] = Some(ChunkSlot { source: sid, msg_id, total: total as u16, last_seen: now, chunks });
+        return None;
+    }
+    {
+        let slot = table[i].as_mut().unwrap();
+        if slot.total != total as u16 {
+            // msg_id reutilizado com tamanho diferente — reinicia o slot.
+            slot.chunks = alloc::vec![None; total];
+            slot.total = total as u16;
+        }
+        let used: usize = slot.chunks.iter().filter_map(|c| c.as_ref().map(Vec::len)).sum();
+        if used + chunk.len() > CHUNK_SLOT_MAX_BYTES {
+            crate::slog_nano!("P2P", "warn", "chunk slot overflow node={} msg={}", sid, msg_id);
+            table[i] = None;
+            return None;
+        }
+        slot.chunks[seq] = Some(chunk.to_vec());
+        slot.last_seen = now;
+    }
+    if !table[i].as_ref().unwrap().chunks.iter().all(|c| c.is_some()) {
+        return None; // ainda faltam chunks
+    }
+    let slot = table[i].take().unwrap();
+    let mut out = Vec::with_capacity(slot.chunks.len() * CHUNK_DATA_MAX);
+    for c in slot.chunks.into_iter() {
+        if let Some(v) = c {
+            out.extend_from_slice(&v);
+        }
+    }
+    crate::slog_nano!("P2P", "info", "chunk remontado node={} msg={} bytes={}", sid, msg_id, out.len());
+    Some(out)
+}
+
+/// Self-test puro (sem HW): divide payload sintético de ~3000 bytes, remonta
+/// via chunk_reassemble e verifica identidade byte a byte.
+pub fn chunk_self_test() -> bool {
+    let payload: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
+    let msg_id = 0xCAFE_BABEu32;
+    let total = ((payload.len() + CHUNK_DATA_MAX - 1) / CHUNK_DATA_MAX) as u16;
+    let mut ok = false;
+    for (seq, chunk) in payload.chunks(CHUNK_DATA_MAX).enumerate() {
+        let mut body = Vec::with_capacity(12 + chunk.len());
+        body.extend_from_slice(b"CHK\0");
+        body.extend_from_slice(&msg_id.to_le_bytes());
+        body.extend_from_slice(&(seq as u16).to_le_bytes());
+        body.extend_from_slice(&total.to_le_bytes());
+        body.extend_from_slice(chunk);
+        if let Some(full) = chunk_reassemble(0x7F, &body, 1) {
+            ok = full == payload;
+        }
+    }
+    crate::slog_nano!("P2P", "info", "chunk_self_test ok={} bytes={} chunks={}", ok, payload.len(), total);
+    ok
+}
+
 // ─── Transporte P2P R0 (ADR-0081 Fase A, SESSION_234) ─────────────────────
 // Movido do bin: o kernel dono único do RX/TX broadcast (porta 42069).
 // Pacotes não-heartbeat (Sync/ModelUpdate/…) são publicados no EVENT_BUS
@@ -754,6 +1003,12 @@ pub fn p2p_tick(_tick: u64) {
         if let Some(pk) = crate::identity::session_public_key() {
             buf.extend_from_slice(b"PK\0");
             buf.extend_from_slice(&pk);
+            // Fase B (ADR-0081): anuncia capacidades locais no heartbeat.
+            let caps = local_caps();
+            if caps != 0 {
+                buf.extend_from_slice(b"CAP\0");
+                buf.push(caps);
+            }
         }
         match crate::net::udp_broadcast::sign_packet(&buf) {
             Some(signed) => {
@@ -858,6 +1113,20 @@ pub fn p2p_tick(_tick: u64) {
             peer_update_clock(sid, clk);
         }
 
+        // (e) Capacidades anunciadas no heartbeat ("CAP\0" após a pk). Só após
+        //     o anti-replay passar (heartbeat stale não atualiza caps).
+        if tt == 5 {
+            if let Some(rest) = raw_payload.strip_prefix(b"PK\0") {
+                if rest.len() >= PUBLIC_KEY_LEN + 5
+                    && &rest[PUBLIC_KEY_LEN..PUBLIC_KEY_LEN + 4] == b"CAP\0"
+                {
+                    let caps = rest[PUBLIC_KEY_LEN + 4];
+                    peer_set_caps(sid, caps);
+                    crate::slog_nano!("P2P", "info", "caps node={} bits=0x{:02X}", sid, caps);
+                }
+            }
+        }
+
         crate::slog_nano!("P2P", "info", "RX source_id={} clock={} type={}", sid, clk, tt);
         // Payload após o header NoProto (já fatiado aqui).
         let payload = if data.len() > crate::net::noproto::PACKET_HEADER_SIZE {
@@ -897,6 +1166,28 @@ pub fn p2p_tick(_tick: u64) {
             }
             crate::slog_nano!("P2P", "info", "role aplicado node={} role={:?}", target, role);
             continue; // consumido — não publica no EVENT_BUS
+        }
+        // (f) Chunking (Fase B): payload "CHK\0" — insere no slot de remontagem
+        //     e só publica quando a mensagem completa chegar. O chunk isolado
+        //     NÃO é publicado no EVENT_BUS (hermes veria lixo).
+        if tt != 5 && payload.starts_with(b"CHK\0") {
+            match chunk_reassemble(sid, payload, now) {
+                Some(full) => {
+                    let mut full_pkt = data[..crate::net::noproto::PACKET_HEADER_SIZE].to_vec();
+                    full_pkt.extend_from_slice(&full);
+                    let _ = crate::EVENT_BUS.publish(Event {
+                        id: 0,
+                        topic: String::from(TOPIC_P2P_PACKET),
+                        payload: full_pkt,
+                        token: CapabilityToken::Legacy(1),
+                    });
+                    crate::slog_nano!("P2P", "info", "chunk publish node={} bytes={}", sid, full.len());
+                }
+                None => {
+                    crate::slog_nano!("P2P", "debug", "chunk RX node={} aguardando demais chunks", sid);
+                }
+            }
+            continue; // chunk consumido — não publica o chunk isolado
         }
         // Não-heartbeat (Sync/ModelUpdate/…): publica no EVENT_BUS —
         // hermes consome via skill_sync::poll_p2p() / skill_marketplace::poll_p2p().

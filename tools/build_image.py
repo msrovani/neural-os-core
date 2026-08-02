@@ -145,7 +145,9 @@ def main():
     print(f"=== Criando imagem {args.size}MB {fs_name} (BOOT_MODE={boot_mode}) -> {out} ===")
     print("    BITNET-2B incluso se arquivo existir em repo/target/")
     print("    Device LEGO: LEGOVNET/ATHK/GP08/XHCI.MD + LEGOIDX.TXT")
-    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=600, env=env)
+    # ponytail: 1800s — mkfat32 copia ~4.2GB de modelos (LLAMA8B 2GB, AGENT 788MB…);
+    # 600s estourava em disco lento, matando o subprocess no meio da cópia.
+    r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=1800, env=env)
     if r.stdout:
         sys.stdout.buffer.write(r.stdout.encode("utf-8", errors="replace"))
         sys.stdout.buffer.write(b"\n")

@@ -51,6 +51,8 @@ impl SkillSync {
     /// Marca P2P como ativo (chamado pela camada de transporte ao estabelecer link mesh).
     pub fn activate(&mut self) {
         self.active = true;
+        // ADR-0081 C3: conhecimento via mesh ativa junto (peer presente).
+        crate::mesh_knowledge::mark_active();
         slog_hermes!("SkillSync", "info", "P2P ativado — sync de skills habilitada");
     }
 
@@ -155,8 +157,9 @@ impl SkillSync {
         }
     }
 
-    /// Master push: serializa "name\0desc" num NoProto TaskType::Sync e faz
-    /// broadcast UDP na porta P2P (42069) via transporte k_nano (R0).
+    /// Master push: serializa "name\0desc" (ou "SKILL\0name\0desc\0body" quando
+    /// o corpo SKILL.md está disponível — ADR-0081 C3) num NoProto TaskType::Sync
+    /// e faz broadcast UDP na porta P2P (42069) via transporte k_nano (R0).
     /// Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
     /// Retorna `true` se o envio foi ok.
     fn broadcast_skill(&mut self, name: &str, desc: &str) -> bool {
@@ -166,7 +169,13 @@ impl SkillSync {
             0, node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
         );
         let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
-        let payload = alloc::format!("{}\0{}", name, desc).into_bytes();
+        let payload = match skill_body(name) {
+            // Corpo disponível → formato novo com SKILL.md (compat: RX antigo
+            // ignora desconhecido; RX novo aplica o corpo real).
+            Some(body) => alloc::format!("SKILL\0{}\0{}\0{}", name, desc, body).into_bytes(),
+            // Sem corpo → formato legado "name\0desc".
+            None => alloc::format!("{}\0{}", name, desc).into_bytes(),
+        };
         buf.extend_from_slice(&payload);
         let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
             slog_hermes!("SkillSync", "info", "Master: push skill='{}' sem sessao - skip", name);
@@ -175,7 +184,7 @@ impl SkillSync {
         let ok = k_nano::net::udp_broadcast::udp_broadcast_send(&signed, 42069);
         slog_hermes!(
             "SkillSync", "info",
-            "Master: push skill='{}' broadcast={}", name, ok
+            "Master: push skill='{}' broadcast={} bytes={}", name, ok, payload.len()
         );
         ok
     }
@@ -208,6 +217,30 @@ impl SkillSync {
     pub fn pending_count(&self) -> usize {
         self.pending_skills.len()
     }
+}
+
+/// Busca o corpo (SKILL.md) de uma skill para o push com corpo (ADR-0081 C3).
+/// Ordem: PACKAGE_HUB → SKILL_STORAGE → registry. O registry (skill-registry)
+/// não expõe o corpo (só manifest name/description) — se nada achar, retorna
+/// None e o Master mantém o formato legado "name\0desc".
+fn skill_body(name: &str) -> Option<String> {
+    {
+        let hub = crate::package_hub::PACKAGE_HUB.lock();
+        if let Some(p) = hub.get(crate::package_hub::PackageKind::Skill, name) {
+            if !p.body.trim().is_empty() {
+                return Some(p.body.clone());
+            }
+        }
+    }
+    {
+        let storage = crate::globals::SKILL_STORAGE.lock();
+        for s in &storage.skills {
+            if s.name == name {
+                return Some(s.to_skill_md());
+            }
+        }
+    }
+    None
 }
 
 // ─── Singleton global ───
@@ -247,6 +280,52 @@ pub fn activate_global() {
 /// ANTES do fluxo normal de push — só o Master aplica.
 pub fn on_packet_received(pkt: &AiosTaskPacket, data: &[u8]) {
     if pkt.task_type != TaskType::Sync || data.is_empty() {
+        return;
+    }
+
+    // ── Guards de protocolos paralelos (não-skills) ──
+    // MEM\0/SOUL\0/PERS\0 = conhecimento (mesh_knowledge, subscribe próprio);
+    // FED\0/FEDW\0 = aprendizado federado (cortex::federated). Sem o guard o
+    // parse genérico "name\0desc" registraria skills-lixo (ex. "FED").
+    if data.starts_with(b"MEM\0")
+        || data.starts_with(b"SOUL\0")
+        || data.starts_with(b"PERS\0")
+        || data.starts_with(b"FED\0")
+        || data.starts_with(b"FEDW\0")
+    {
+        return;
+    }
+
+    // ── SKILL\0name\0desc\0body — Master push com corpo (ADR-0081 C3) ──
+    // Corpo real do SKILL.md em vez de "synced from mesh master".
+    if data.starts_with(b"SKILL\0") {
+        let mut parts = data[6..].splitn(3, |&b| b == 0);
+        let name = match parts.next().and_then(|s| core::str::from_utf8(s).ok()) {
+            Some(n) if !n.is_empty() => n,
+            _ => return,
+        };
+        let desc = parts
+            .next()
+            .map(|s| core::str::from_utf8(s).unwrap_or(""))
+            .unwrap_or("");
+        let body = parts
+            .next()
+            .map(|s| core::str::from_utf8(s).unwrap_or(""))
+            .unwrap_or("");
+
+        let mut reg = k_nano::SKILL_REGISTRY.lock();
+        if reg.has_skill(name) {
+            slog_hermes!("SkillSync", "info", "Worker: skill '{}' ja existe (SKILL\\0)", name);
+            return;
+        }
+        reg.register(alloc::boxed::Box::new(skill_registry::DynamicSkill::new(
+            name, desc, body,
+        )));
+        crate::self_evolve::publish_change("mesh", name);
+        slog_hermes!(
+            "SkillSync", "info",
+            "Worker: skill '{}' aplicada do Master (SKILL\\0, {} bytes)", name, body.len()
+        );
         return;
     }
 
@@ -344,4 +423,8 @@ pub fn poll_p2p() {
             on_packet_received(&pkt, payload);
         }
     }
+    // ADR-0081 C3: conhecimento via mesh (memórias SGDB + persona coletiva).
+    // Cada módulo tem subscribe próprio (EventBus = fila por assinante); o bin
+    // só chama `skill_sync::poll_p2p()` por tick — repassa sem editar o bin.
+    crate::mesh_knowledge::poll_p2p();
 }

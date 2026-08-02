@@ -1813,6 +1813,11 @@ pub(crate) fn kernel_boot(
     let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
     let _ = crate::exec_arena::self_test();
+    // ADR-0081 Fase B + BEI: self-tests do transporte P2P (chunking CHK\0),
+    // serialização .bitnet roundtrip (save_model) e aprendizado federado.
+    let _ = k_nano::net::mesh::chunk_self_test();
+    let _ = cortex_crate::cortex::model_save_roundtrip_self_test();
+    let _ = cortex_crate::federated::federated_self_test();
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
     // porto seguro: B/C nativo gated até o ring passar o gate.
     crate::isolation_ring::init_connectors();
@@ -2479,6 +2484,10 @@ pub(crate) fn kernel_boot(
 
     registry.register(Box::new(agents::HwDetectAgent));
     registry.register(Box::new(agents::AutoLearnAgent::new()));
+    // LEARNER: coleta pares do EventBus (USER_INTENT/HERMES_RESPONSE), fine-tune
+    // ternário + persiste no SGDB (L4Semantic). PollEvery(5000). Antes era nunca
+    // registrado → aprendizado não rodava em produção.
+    registry.register(Box::new(k_ai::self_learning::SelfLearningAgent::new()));
     registry.register(Box::new(agents::SleepCycleAgent::new()));
     registry.register(Box::new(agents::SelfEvolveAgent::new()));
 

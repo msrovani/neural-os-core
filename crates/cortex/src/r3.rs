@@ -1,6 +1,8 @@
 //! R3 — Rollout Routing Replay (Trinity MoE) — crate cortex.
 //! Rotas e tokens na TensorArena (Tier 2).
 
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use crate::arena::TensorArena;
 use crate::trinity::{Expert, TrinityRouter, ROUTER_HIDDEN, ROUTER_MAX_EXPERTS};
 
@@ -187,4 +189,51 @@ pub fn update_with_replay(
         loss += grad_scale * grad_scale;
     }
     loss
+}
+
+// ── Seam de persistência dos pesos treinados do router (Trinity) ────────────
+// Base p/ aprendizado federado (F4): hermes SleepCycle chama update_with_replay
+// com um buffer descartável; aqui gravamos o resultado treinado para que o mesh
+// detecte (trained_router_changed) e sincronize (router_delta_vs_seed).
+// ponytail: estático global com lock — suficiente p/ 1 writer (SleepCycle) +
+// leitores ocasionais do F4; upgrade p/ SPSC se throughput exigir.
+
+static TRAINED_ROUTER: spin::Mutex<Option<Vec<i8>>> = spin::Mutex::new(None);
+static TRAINED_ROUTER_CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Grava um clone dos pesos treinados e marca a flag de "novo conhecimento".
+pub fn persist_trained_router(weights: &[i8]) {
+    *TRAINED_ROUTER.lock() = Some(weights.to_vec());
+    TRAINED_ROUTER_CHANGED.store(true, Ordering::Relaxed);
+}
+
+/// Grava pesos SEM marcar a flag — usado pela aplicação de pesos federados
+/// vindos do Master (FEDW): o conteúdo já foi sincronizado; marcá-lo como
+/// "novo" causaria echo (worker rebroadcasta o merge como delta próprio).
+pub fn store_trained_router(weights: &[i8]) {
+    *TRAINED_ROUTER.lock() = Some(weights.to_vec());
+}
+
+/// Clone dos pesos persistidos (None se nunca persistido).
+pub fn trained_router_weights() -> Option<Vec<i8>> {
+    TRAINED_ROUTER.lock().clone()
+}
+
+/// True se houve persistência desde o último clear — F4 usa para saber se há
+/// conhecimento novo a sincronizar.
+pub fn trained_router_changed() -> bool {
+    TRAINED_ROUTER_CHANGED.load(Ordering::Relaxed)
+}
+
+/// Reseta a flag após o mesh sincronizar.
+pub fn clear_trained_router_changed() {
+    TRAINED_ROUTER_CHANGED.store(false, Ordering::Relaxed);
+}
+
+/// Delta XOR byte-a-byte entre seed e pesos treinados (i8→u8) — útil p/ F4
+/// transmitir só o que mudou. Tamanho = min(seed, trained).
+pub fn router_delta_vs_seed(seed: &[i8], trained: &[i8]) -> Vec<u8> {
+    let a: Vec<u8> = seed.iter().map(|&x| x as u8).collect();
+    let b: Vec<u8> = trained.iter().map(|&x| x as u8).collect();
+    crate::delta::xor_buffers(&a, &b)
 }

@@ -2132,6 +2132,333 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
     Some(model)
 }
 
+// ── Serialização inversa de load_model (formato .bitnet v4) ────────────────
+// save_model grava SEMPRE version=4: o loader (cortex.rs:1771) fixa
+// has_basic_rms=true para v4, eliminando a heurística de layout RMS do v3
+// (rms_attn/rms_ffn sempre presentes). num_params é u32 em v4 — o reset de
+// offset do loader (off = 4+2+4+2+2) só fecha para esse layout.
+fn write_u16(out: &mut Vec<u8>, v: u16) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn write_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn write_f32(out: &mut Vec<u8>, v: f32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+/// Grava exatamente `n` f32s (o loader lê `n` fixos por campo); padding 1.0
+/// se o vetor for mais curto (nunca acontece p/ modelos vindos de load_model).
+fn write_f32_vec_clamped(out: &mut Vec<u8>, v: &[f32], n: usize) {
+    for i in 0..n {
+        write_f32(out, v.get(i).copied().unwrap_or(1.0));
+    }
+}
+fn tern_packed_len(rows: usize, cols: usize) -> usize {
+    (rows * cols + 3) / 4
+}
+
+/// Serializa o modelo no formato .bitnet v4 — inverso exato de `load_model`.
+/// Round-trip garantido: `load_model(&save_model(m))` reproduz os mesmos
+/// tensores (packed_data + shape), escalas, RMS e flags.
+pub fn save_model(model: &TransformerModel) -> Option<Vec<u8>> {
+    const U16MAX: usize = u16::MAX as usize;
+    if model.hidden == 0 || model.num_heads == 0 || model.vocab_size == 0
+        || model.num_layers == 0 || model.intermediate_size == 0 || model.num_kv_heads == 0
+        || model.hidden > U16MAX || model.num_layers > U16MAX || model.num_heads > U16MAX
+        || model.max_seq > U16MAX || model.intermediate_size > U16MAX
+        || model.num_kv_heads > U16MAX || model.kv_dim > U16MAX
+        || model.layers.len() != model.num_layers
+    {
+        return None;
+    }
+
+    // Dimensões derivadas — espelham o loader (cortex.rs:1756-1759).
+    let q_dim = model.kv_dim.max(1);
+    let kv_head_dim = q_dim / model.num_heads;
+    let k_dim = model.num_kv_heads * kv_head_dim;
+    let ffn_group = model.intermediate_size * q_dim / model.hidden;
+    let down_out = q_dim;
+    let hidden = model.hidden;
+    let vocab = model.vocab_size as usize;
+
+    // Sub-norms: bit set só quando o vetor NÃO é o default que o loader
+    // sintetiza sem o bit (ones com o comprimento derivado). Assim o arquivo
+    // grava exatamente o que o loader lê de volta, sem ambiguidade.
+    let l0 = model.layers.first()?;
+    let inner_default_len = kv_head_dim * model.num_heads;
+    let has_inner_attn_ln = !(l0.rms_inner_attn.len() == inner_default_len
+        && l0.rms_inner_attn.iter().all(|&x| x == 1.0));
+    let has_ffn_layernorm = !(l0.rms_ffn_norm.len() == model.intermediate_size
+        && l0.rms_ffn_norm.iter().all(|&x| x == 1.0));
+    let has_rope = true; // loader pré-computa RoPE sempre; theta >1.0 no EOF
+
+    let mut out = Vec::new();
+    // header (v4)
+    write_u32(&mut out, 0xBE11BE11);
+    write_u16(&mut out, 4); // version
+    write_u32(&mut out, 0); // num_params (u32 em v4)
+    write_u16(&mut out, hidden as u16);
+    write_u16(&mut out, model.num_layers as u16);
+    write_u16(&mut out, model.num_heads as u16);
+    write_u32(&mut out, model.vocab_size);
+    write_u16(&mut out, model.max_seq as u16);
+    write_u16(&mut out, model.intermediate_size as u16);
+    write_u16(&mut out, model.num_kv_heads as u16);
+    write_u16(&mut out, q_dim as u16);
+    write_u32(&mut out, model.medusa_heads.len() as u32);
+    // tie flag (4 bytes) + tokenizer vazio + layer_features
+    if model.tie_embeddings {
+        out.extend_from_slice(b"TIED");
+    } else {
+        out.extend_from_slice(&[0, 0, 0, 0]);
+    }
+    out.push(0); // tok_type
+    write_u32(&mut out, 0); // tok_len
+    let feat = ((has_inner_attn_ln as u8) << 0) | ((has_ffn_layernorm as u8) << 1) | ((has_rope as u8) << 2);
+    out.push(feat);
+
+    // embed (hidden, vocab) + escala — antes dos layers (cortex.rs:1753)
+    if model.embed.packed_data.len() != tern_packed_len(hidden, vocab) {
+        return None;
+    }
+    out.extend_from_slice(&model.embed.packed_data);
+    write_f32(&mut out, model.embed_scale);
+
+    // layers — ordem e tamanhos idênticos ao loader (cortex.rs:1816-1852)
+    for l in &model.layers {
+        write_f32_vec_clamped(&mut out, &l.rms_attn, hidden);       // rms_attn (v4: sempre)
+        write_f32_vec_clamped(&mut out, &l.rms_ffn, hidden);        // rms_ffn (v4: sempre)
+        if has_inner_attn_ln {
+            write_f32_vec_clamped(&mut out, &l.rms_inner_attn, hidden);
+        }
+        if has_ffn_layernorm {
+            // loader lê `hidden` e faz pad p/ intermediate_size — gravar hidden
+            write_f32_vec_clamped(&mut out, &l.rms_ffn_norm, hidden);
+        }
+        let tensors = [
+            (&l.q, hidden, q_dim, l.q_scale),
+            (&l.k, hidden, k_dim, l.k_scale),
+            (&l.v, hidden, k_dim, l.v_scale),
+            (&l.o, q_dim, hidden, l.o_scale),
+            (&l.gate, hidden, ffn_group, l.gate_scale),
+            (&l.up, hidden, ffn_group, l.up_scale),
+            (&l.down, model.intermediate_size, down_out, l.down_scale),
+        ];
+        // Ordem interleaved tensor+escala — espelha read_ternary_tensor_with_scale
+        for (t, rows, cols, scale) in tensors {
+            if t.packed_data.len() != tern_packed_len(rows, cols) {
+                return None;
+            }
+            out.extend_from_slice(&t.packed_data);
+            write_f32(&mut out, scale);
+        }
+    }
+
+    // rms_final (v4 sempre grava; loader cai p/ ones se ausente)
+    write_f32_vec_clamped(&mut out, &model.rms_final, hidden);
+
+    // unembed — só quando não-tied; loader grava zeros p/ tied (cortex.rs:1884)
+    if !model.tie_embeddings {
+        if model.unembed.packed_data.len() != tern_packed_len(hidden, vocab) {
+            return None;
+        }
+        out.extend_from_slice(&model.unembed.packed_data);
+        write_f32(&mut out, model.unembed_scale);
+    }
+
+    // medusa heads
+    for h in &model.medusa_heads {
+        if h.w.packed_data.len() != tern_packed_len(hidden, vocab) {
+            return None;
+        }
+        out.extend_from_slice(&h.w.packed_data);
+        write_f32(&mut out, h.w_scale);
+    }
+
+    // theta RoPE no EOF (loader: só usa se >1.0)
+    write_f32(&mut out, if model.rope_theta > 1.0 { model.rope_theta } else { 10000.0 });
+    Some(out)
+}
+
+fn tern_eq(a: &PackedTernaryTensor, b: &PackedTernaryTensor) -> bool {
+    a.shape == b.shape && a.packed_data == b.packed_data
+}
+
+/// Self-test determinístico de round-trip save→load. Constrói um modelo
+/// sintético mínimo (2 layers, shapes pequenos, GQA/BitFFN reais), salva,
+/// recarrega e compara tensores/escalas/RMS. Retorna true se idêntico.
+pub fn model_save_roundtrip_self_test() -> bool {
+    let hidden = 16usize;
+    let num_layers = 2usize;
+    let num_heads = 2usize;
+    let vocab_size = 32u32;
+    let max_seq = 64usize;
+    let intermediate_size = 32usize;
+    let num_kv_heads = 1usize;
+    let q_dim = 16usize; // kv_dim (divisível por num_heads)
+    let kv_head_dim = q_dim / num_heads; // 8
+    let k_dim = num_kv_heads * kv_head_dim; // 8
+    let ffn_group = intermediate_size * q_dim / hidden; // 32
+    let down_out = q_dim;
+
+    fn tern(rows: usize, cols: usize, seed: u32) -> PackedTernaryTensor {
+        let mut vals = Vec::with_capacity(rows * cols);
+        let mut x = seed;
+        for _ in 0..rows * cols {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            vals.push(match x % 3 { 0 => 1i8, 1 => -1i8, _ => 0i8 });
+        }
+        PackedTernaryTensor { shape: (rows, cols), packed_data: PackedTernaryTensor::pack_weights(&vals) }
+    }
+    fn rms(seed: u32, n: usize) -> Vec<f32> {
+        let mut x = seed;
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            v.push(0.5 + (x % 100) as f32 / 100.0);
+        }
+        v
+    }
+
+    // bit0 (inner_attn_ln) set com valores reais; bit1 (ffn_layernorm) set com
+    // vetor real + padding ones além de `hidden` (como o loader re-pad faz).
+    let rms_inner = rms(101, hidden);
+    let mut rms_ffn_norm = rms(202, hidden);
+    rms_ffn_norm.resize(intermediate_size, 1.0);
+
+    let mut layers = Vec::with_capacity(num_layers);
+    for li in 0..num_layers {
+        layers.push(LayerWeights {
+            rms_attn: rms(300 + li as u32, hidden),
+            q: tern(hidden, q_dim, 10 + li as u32),
+            q_scale: 0.5 + li as f32 * 0.25,
+            k: tern(hidden, k_dim, 20 + li as u32),
+            k_scale: 0.75,
+            v: tern(hidden, k_dim, 30 + li as u32),
+            v_scale: 1.25,
+            o: tern(q_dim, hidden, 40 + li as u32),
+            o_scale: 0.9,
+            rms_ffn: rms(400 + li as u32, hidden),
+            rms_inner_attn: rms_inner.clone(),
+            rms_ffn_norm: rms_ffn_norm.clone(),
+            gate: tern(hidden, ffn_group, 50 + li as u32),
+            gate_scale: 1.1,
+            up: tern(hidden, ffn_group, 60 + li as u32),
+            up_scale: 0.8,
+            down: tern(intermediate_size, down_out, 70 + li as u32),
+            down_scale: 1.05,
+            kv_dim: q_dim,
+            num_kv_heads,
+            intermediate_size,
+            ffn_group_size: ffn_group,
+        });
+    }
+
+    let model = TransformerModel {
+        embed: tern(hidden, vocab_size as usize, 1),
+        embed_scale: 1.5,
+        layers,
+        rms_final: rms(99, hidden),
+        unembed: tern(hidden, vocab_size as usize, 2),
+        unembed_scale: 0.6,
+        medusa_heads: alloc::vec![MedusaHead { w: tern(hidden, vocab_size as usize, 3), w_scale: 1.3 }],
+        vocab_size,
+        hidden,
+        num_layers,
+        max_seq,
+        num_heads,
+        num_kv_heads,
+        head_dim: kv_head_dim,
+        kv_dim: q_dim,
+        intermediate_size,
+        ffn_group_size: ffn_group,
+        tie_embeddings: false,
+        rope_theta: 10000.0,
+        rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
+        rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
+    };
+
+    let bytes = match save_model(&model) {
+        Some(b) => b,
+        None => {
+            k_nano::slog_cortex!("LLM", "warn", "model save/load roundtrip self-test FAIL (save returned None)");
+            return false;
+        }
+    };
+    let loaded = match load_model(&bytes) {
+        Some(m) => m,
+        None => {
+            k_nano::slog_cortex!("LLM", "warn", "model save/load roundtrip self-test FAIL (load returned None, {} bytes)", bytes.len());
+            return false;
+        }
+    };
+
+    let dims_ok = loaded.vocab_size == model.vocab_size
+        && loaded.hidden == model.hidden
+        && loaded.num_layers == model.num_layers
+        && loaded.max_seq == model.max_seq
+        && loaded.num_heads == model.num_heads
+        && loaded.num_kv_heads == model.num_kv_heads
+        && loaded.head_dim == model.head_dim
+        && loaded.kv_dim == model.kv_dim
+        && loaded.intermediate_size == model.intermediate_size
+        && loaded.ffn_group_size == model.ffn_group_size
+        && loaded.tie_embeddings == model.tie_embeddings;
+
+    let mut tensors_ok = dims_ok
+        && tern_eq(&loaded.embed, &model.embed)
+        && loaded.embed_scale == model.embed_scale
+        && tern_eq(&loaded.unembed, &model.unembed)
+        && loaded.unembed_scale == model.unembed_scale
+        && loaded.rms_final == model.rms_final
+        && loaded.medusa_heads.len() == model.medusa_heads.len();
+
+    if tensors_ok {
+        for (lh, mh) in loaded.medusa_heads.iter().zip(model.medusa_heads.iter()) {
+            if !tern_eq(&lh.w, &mh.w) || lh.w_scale != mh.w_scale {
+                tensors_ok = false;
+                break;
+            }
+        }
+    }
+    if tensors_ok && loaded.layers.len() == model.layers.len() {
+        for (ll, ml) in loaded.layers.iter().zip(model.layers.iter()) {
+            if ll.rms_attn != ml.rms_attn
+                || ll.rms_ffn != ml.rms_ffn
+                || ll.rms_inner_attn != ml.rms_inner_attn
+                || ll.rms_ffn_norm != ml.rms_ffn_norm
+                || ll.kv_dim != ml.kv_dim
+                || ll.num_kv_heads != ml.num_kv_heads
+                || ll.intermediate_size != ml.intermediate_size
+                || ll.ffn_group_size != ml.ffn_group_size
+                || !tern_eq(&ll.q, &ml.q) || ll.q_scale != ml.q_scale
+                || !tern_eq(&ll.k, &ml.k) || ll.k_scale != ml.k_scale
+                || !tern_eq(&ll.v, &ml.v) || ll.v_scale != ml.v_scale
+                || !tern_eq(&ll.o, &ml.o) || ll.o_scale != ml.o_scale
+                || !tern_eq(&ll.gate, &ml.gate) || ll.gate_scale != ml.gate_scale
+                || !tern_eq(&ll.up, &ml.up) || ll.up_scale != ml.up_scale
+                || !tern_eq(&ll.down, &ml.down) || ll.down_scale != ml.down_scale
+            {
+                tensors_ok = false;
+                break;
+            }
+        }
+    } else {
+        tensors_ok = false;
+    }
+
+    if tensors_ok {
+        k_nano::slog_cortex!("LLM", "info", "model save/load roundtrip self-test PASS ({} bytes, L={})", bytes.len(), num_layers);
+    } else {
+        k_nano::slog_cortex!("LLM", "warn", "model save/load roundtrip self-test FAIL ({} bytes, L={})", bytes.len(), num_layers);
+    }
+    tensors_ok
+}
+
 pub fn argmax_row(logits: &Tensor, row: usize) -> u32 {
     let cols = logits.shape.1;
     let start = row * cols;

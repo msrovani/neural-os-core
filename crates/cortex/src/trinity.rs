@@ -114,6 +114,44 @@ impl TrinityRouter {
         k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded: {} dim, {} experts", ROUTER_HIDDEN, self.experts.len());
     }
 
+    /// Substitui os pesos do router MoE por pesos treinados/federados (F4).
+    /// Mantém a embedding table; formato row-major HIDDEN×num_experts com
+    /// valores ternários {-1,0,1}. Retorna false se tamanho inválido.
+    pub fn set_router_weights(&mut self, weights: &[i8]) -> bool {
+        let n_exp = weights.len() / ROUTER_HIDDEN;
+        if n_exp == 0 || weights.len() != n_exp * ROUTER_HIDDEN || n_exp > ROUTER_MAX_EXPERTS {
+            return false;
+        }
+        self.router_weight = Some(PackedTernaryTensor {
+            shape: (ROUTER_HIDDEN, n_exp),
+            packed_data: PackedTernaryTensor::pack_weights(weights),
+        });
+        crate::global_arena::reset_moe_cache();
+        k_nano::slog_cortex!(
+            "TRINITY", "info",
+            "Router weights set: {}x{} (MoE cache reset)", ROUTER_HIDDEN, n_exp
+        );
+        true
+    }
+
+    /// Número de experts da matriz de pesos carregada (0 se ausente).
+    pub fn router_num_experts(&self) -> usize {
+        self.router_weight.as_ref().map(|t| t.shape.1).unwrap_or(0)
+    }
+
+    /// Desempacota os pesos do router para Vec<i8> row-major {-1,0,1}
+    /// (inverso de `set_router_weights`). None se o router não tem pesos.
+    /// C1 (oracle): base p/ iniciar o buffer de replay com o router VIVO —
+    /// posições não tocadas preservam o estado atual (não viram 0 no delta).
+    pub fn unpack_router_weights(&self) -> Option<Vec<i8>> {
+        let t = self.router_weight.as_ref()?;
+        let mut out = Vec::with_capacity(t.shape.0 * t.shape.1);
+        for i in 0..(t.shape.0 * t.shape.1) {
+            out.push(t.get_weight(i));
+        }
+        Some(out)
+    }
+
     /// Classifica intent e grava logits na TensorArena (R3 rollout).
     /// Router NÃO deve ser re-chamado no update — usar trace retornado.
     pub fn classify_intent_with_trace(

@@ -53,5 +53,6 @@ pub mod moe;
 pub mod gguf;
 pub mod hnsw;
 pub mod mesh_distrib;
+pub mod federated;
 
 

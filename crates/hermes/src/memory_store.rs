@@ -102,10 +102,19 @@ pub fn write_memory(body: &str) -> Result<(), &'static str> {
     write_hanr("memory", MEMORY_PATH, &clamp_chars(body, MEMORY_MAX))
 }
 pub fn write_soul(body: &str) -> Result<(), &'static str> {
-    write_hanr("soul", SOUL_PATH, &clamp_chars(body, SOUL_MAX))
+    let r = write_hanr("soul", SOUL_PATH, &clamp_chars(body, SOUL_MAX));
+    // ADR-0081 C3: persona coletiva via mesh (best-effort, gated is_active).
+    if r.is_ok() {
+        crate::mesh_knowledge::broadcast_persona();
+    }
+    r
 }
 pub fn write_persona(body: &str) -> Result<(), &'static str> {
-    write_hanr("persona", PERSONA_PATH, &clamp_chars(body, PERSONA_MAX))
+    let r = write_hanr("persona", PERSONA_PATH, &clamp_chars(body, PERSONA_MAX));
+    if r.is_ok() {
+        crate::mesh_knowledge::broadcast_persona();
+    }
+    r
 }
 
 pub fn remember(fact: &str) -> Result<String, &'static str> {
@@ -120,6 +129,8 @@ pub fn remember(fact: &str) -> Result<String, &'static str> {
     write_memory(&clamped)?;
     // E2: também L3 MemoryDoc (ART + Tickv)
     k_ai::sgdb::remember_fact(fact.trim());
+    // ADR-0081 C3: broadcast da L3 episódica via mesh (best-effort, se ativo).
+    crate::mesh_knowledge::broadcast_fact(fact.trim());
     Ok(format!("[MEMORY] saved ({} chars)", clamped.len()))
 }
 
@@ -185,6 +196,8 @@ pub fn ensure_defaults() {
     if read_memory().trim().is_empty() {
         let _ = write_memory("# MEMORY\n- Boot Neural OS\n");
     }
+    // ADR-0081 C3: propaga persona atual para peers (best-effort, gated).
+    crate::mesh_knowledge::broadcast_persona();
 }
 
 fn skill_lines() -> Vec<(String, String, f32, String)> {

@@ -136,6 +136,16 @@ impl DataCollector {
         self.total_collected
     }
 
+    /// Insere um par manualmente (memória associativa / restauração do SGDB).
+    pub fn remember(&mut self, input: &str, output: &str, tick: u64) {
+        self.push(TrainingPair {
+            input: String::from(input),
+            output: String::from(output),
+            source: "self",
+            timestamp: tick,
+        });
+    }
+
     // ── Internals ──────────────────────────────────────────────
 
     fn push(&mut self, pair: TrainingPair) {
