@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### SESSION_239: Fase C ADR-0081 — experts + DSD + NodeTier + FL + CRDT (2026-08-01) ✅
+- **feat(mesh): experts distribuídos (C2)** — `mesh_distrib.rs`: Worker→Master `ED\0`
+  (lista de experts assinada+fragmentável), Master→Worker `EDR\0` (assign ponderado
+  por capacidade, greedy). `capacity_weighted_assign`, `remote_experts`, `my_assignment`.
+  Wire: bei_tick `poll_expert_requests` + `broadcast_local_experts` 1x no Worker.
+- **feat(mesh): DSD SpeculativeDecoder** — `cortex/speculative.rs` (novo): draft_verify
+  local (self-test accepted=8), stats, mesh_tick. Verificação distribuída real = futuro
+  (verifier MLP).
+- **feat(mesh): NodeTier SKYNET (#315.27)** — `NodeTier L0-L4` + `score_bonus`
+  (1.0-3.0) no capacity_score; `NodeCapabilities::new_tiered` (new delega L1);
+  `set_local_caps`/`local_tier`. Heartbeat assinado Fase A inalterado (ponytail).
+- **feat(mesh): FL federado (C5, #312f)** — `fl_trainer.rs`: Worker envia `FD\0`
+  gradiente (packing 2-bit LSB-first) a cada ~200 ticks; Master agrega FedYogi +
+  broadcast `FM\0` modelo global; Worker aplica (LWW global_round).
+  `mesh_tick_global`/`fl_stats_global` wired no bei_tick.
+- **feat(mesh): CRDT sync (C4, #315.26)** — `sgdb/crdt_sync.rs`: `CRDT\0` version
+  sync real — Master publica v, Worker LWW merge, peer_versions. Merge de conteúdo
+  ART/BQ = ponytail (hoje sync de versão).
+- **Padrão**: TaskType::Inference (1) p/ FD/FM/CRDT/ED/EDR — evita colisão com
+  skill_sync (3) e marketplace (4). Fase A preservada (ingress fail-closed).
+- **VALIDADO QEMU dual**: CRDT publish bilateral sent=true (A=Master, B=Worker) +
+  FL stats + matmul 64×64 fragmentado round-trip. Commit `866e0e6`. 0 erros.
+
 ### SESSION_238: Segurança Fase A + Fragmentação MTU (2026-08-01) ✅
 - **feat(mesh): Fase A segurança (MITM fechado)** — RX fail-closed (pacote sem
   assinatura → DROP; assinatura inválida vs pk vinculada → DROP; antes verificava

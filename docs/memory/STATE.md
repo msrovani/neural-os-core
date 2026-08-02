@@ -1,4 +1,17 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s239 — Fase C ADR-0081 (experts/DSD/tier/FL/CRDT)
+#   SESSION_239: Fase C completa (2026-08-01)
+#     C2 experts: ED\0/EDR\0 (capacity_weighted_assign, poll_expert_requests)
+#     DSD: cortex/speculative.rs (draft_verify local, self-test 8)
+#     NodeTier SKYNET #315.27: L0-L4 score_bonus 1.0-3.0, new_tiered
+#     C5 FL #312f: FD\0 gradiente / FM\0 modelo (FedYogi, packing 2-bit)
+#     C4 CRDT #315.26: CRDT\0 version sync (LWW merge)
+#     Padrao: TaskType::Inference, assinado, FRAG\0; Fase A intacta.
+#     VALIDADO QEMU dual: CRDT publish bilateral + FL stats + matmul 64x64 frag.
+#     Commit 866e0e6. Pendente: Fase B cripto, SemanticRouter, merkle piece,
+#       merge conteudo CRDT.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s238 — Segurança Fase A + Fragmentação MTU (ADR-0081)
 #   SESSION_238: TOFU/fail-closed + BitTorrent veredicto + FRAG\0 (2026-08-01)
 #     Fase A seguranca (e56e5d4): RX fail-closed (assinatura vs pk vinculada
