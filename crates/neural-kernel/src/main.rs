@@ -1550,6 +1550,8 @@ pub(crate) fn kernel_boot(
     });
     hermes_crate::net_bridge::register_udp_xfer(crate::net::udp_exchange_safe);
     hermes_crate::net_bridge::register_dns_resolve(crate::net::dns_resolve_host_safe);
+    // TLS N4 bridge → hermes tls::fetch_url dispatcher (embedded-tls 0.19, HybridProvider)
+    hermes_crate::tls::register_https_get(crate::net::https_get);
     // SESSION_234: transporte P2P (ADR-0081) movido para k_nano — hermes
     // consome via EVENT_BUS "P2P_PACKET" (skill_sync/skill_marketplace poll).
     crate::net::log_tls_status_boot();
@@ -1820,6 +1822,11 @@ pub(crate) fn kernel_boot(
     let _ = cortex_crate::federated::federated_self_test();
     // ADR-0081 tier cripto (Relativizado HMAC-SHA256): vetor RFC 4231 caso 1.
     let _ = k_nano::crypto::hmac_self_test();
+    // ADR-0081 Tier F: AEAD X25519 DH + ChaCha20-Poly1305 — self-test com
+    // keypairs fake (DH simétrico → chaves iguais; roundtrip; tamper→None;
+    // nonce diverge por clock). Roda antes de init_session_identity (usa
+    // keypair fake, não a seed da sessão).
+    let _ = k_nano::crypto::aead_self_test();
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
     // porto seguro: B/C nativo gated até o ring passar o gate.
     crate::isolation_ring::init_connectors();

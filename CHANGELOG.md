@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### SESSION_241: TLS Bridge Fix — hermes→kernel wiring (2026-08-02) ✅
+- **Bug:** `hermes::tls` era dead code — `register_https_get()` nunca chamado no boot,
+  consumers usavam HTTP-only (`net_bridge::resolve_and_http_get_safe`), fallback
+  construía `http://host:443/path` (HTTP na porta TLS).
+- **Fix (hermes/tls.rs):** Reescrito com `fetch_url(url)` dispatcher único:
+  `https://` → kernel TLS via bridge, `http://` → net_bridge HTTP. Fallback
+  HTTP na porta 443 removido.
+- **Wire (main.rs):** `hermes_crate::tls::register_https_get(crate::net::https_get)`
+  no Phase 7. Bridge function pointer conectada.
+- **Consumers (11 arquivos):** browser_agent, marketplace (3 calls), self_update (2),
+  agents (/fetch, /scrape, model download), rss_agent, search_agent, git_thin,
+  async_io — todos roteados para `crate::tls::fetch_url`.
+- **lib.rs:** `pub mod tls;` adicionado.
+- **Resultado:** TLS 1.3 (embedded-tls 0.19, HybridProvider, ECDSA+RSA-PSS) agora
+  acessível via `hermes::tls::fetch_url()` para todos os agents. `cargo check --release` 0 erros.
+
 ### SESSION_240: Tier cripto Relativizado (HMAC) vs Full (Ed25519) — ADR-0081 Fase B (2026-08-02) ✅
 - **Decisão (maintainer)**: mesmo range/subnet (datacenter) → cripto "relativizada"
   em troca de velocidade (DADOS com HMAC-SHA256 + chave de segmento); mesh externo

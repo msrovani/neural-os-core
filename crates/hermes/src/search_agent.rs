@@ -14,9 +14,9 @@ impl SearchAgent {
     pub fn search(&self, query: &str, max_results: usize) -> Vec<(String, String)> {
         let mut results = Vec::new();
         let query_encoded: String = query.chars().map(|c| if c == ' ' { '+' } else { c }).collect();
-        let url = alloc::format!("http://lite.duckduckgo.com/lite/?q={}&ia=web", query_encoded);
+        let url = alloc::format!("https://lite.duckduckgo.com/lite/?q={}&ia=web", query_encoded);
 
-        let html = crate::net_bridge::http_get_url(&url);
+        let html = crate::tls::fetch_url(&url);
         if let Ok(data) = html {
             let text = core::str::from_utf8(&data).unwrap_or("");
             let mut count = 0;

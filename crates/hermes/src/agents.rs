@@ -862,7 +862,7 @@ impl Agent for HermesAgent {
                     }
                 }
                 hermes::Command::Fetch(ref url) => {
-                    match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
+                    match crate::tls::fetch_url(url.trim()) {
                         Ok(body) => {
                             let text = core::str::from_utf8(&body).unwrap_or("(binary)");
                             let preview = if text.len() > 200 { &text[..200] } else { text };
@@ -896,7 +896,7 @@ impl Agent for HermesAgent {
                         Err(msg) => msg,
                         Ok(url) => {
                     // Fetch + extrai texto + retorna markdown
-                    match crate::net_bridge::resolve_and_http_get_safe(&url) {
+                    match crate::tls::fetch_url(&url) {
                         Ok(body) => {
                             let title = if let Ok(html) = core::str::from_utf8(&body) {
                                 html.find("<title>").and_then(|s| {
@@ -2203,14 +2203,14 @@ impl AutoLearnAgent {
             payload: url_gw.as_bytes().to_vec(),
             token: CapabilityToken::Legacy(1),
         });
-        match crate::net_bridge::http_get_url(&url_gw) {
+        match crate::tls::fetch_url(&url_gw) {
             Ok(data) if !data.is_empty() => {
                 k_nano::slog_hermes!("TRINITY", "Learn", "download OK {} bytes", data.len());
                 return Some(data);
             }
             _ => {}
         }
-        match crate::net_bridge::http_get_url(&url_dns) {
+        match crate::tls::fetch_url(&url_dns) {
             Ok(data) if !data.is_empty() => Some(data),
             Err(e) => {
                 k_nano::slog_hermes!(

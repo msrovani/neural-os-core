@@ -172,7 +172,7 @@ pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
         }
     };
     k_nano::slog_hermes!("Market", "info", "fetch host={} port={} path={}", host, port, path);
-    let bytes = match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
+    let bytes = match crate::tls::fetch_url(url.trim()) {
         Ok(b) => b,
         Err(e) => {
             k_nano::slog_hermes!("Market", "info", "fetch=fail {}", e);
@@ -240,7 +240,7 @@ pub fn search_remote(query: &str) -> String {
         })
         .collect();
     let url = format!("http://10.0.2.2:8080/api/search?q={}", encoded);
-    let bytes = match crate::net_bridge::resolve_and_http_get_safe(&url) {
+    let bytes = match crate::tls::fetch_url(&url) {
         Ok(b) => b,
         Err(e) => return format!("[MARKET] remote search failed: {}", e),
     };
@@ -264,7 +264,7 @@ pub fn install_scanned(url: &str, kind: PackageKind, name: &str) -> String {
         Ok(v) => v,
         Err(e) => return format!("[MARKET] scan-install denied: {}", e),
     };
-    let bytes = match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
+    let bytes = match crate::tls::fetch_url(url.trim()) {
         Ok(b) => b,
         Err(e) => return format!("[MARKET] scan-install fetch failed: {}", e),
     };

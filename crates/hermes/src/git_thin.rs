@@ -33,11 +33,11 @@ pub fn parse_info_refs(body: &[u8]) -> Vec<(String, String)> {
     out
 }
 
-/// GET `{base}/info/refs?service=git-upload-pack` via net_bridge.
+/// GET `{base}/info/refs?service=git-upload-pack` via tls::fetch_url (HTTP/HTTPS).
 pub fn fetch_refs(repo_https: &str) -> Result<Vec<(String, String)>, &'static str> {
     let base = repo_https.trim_end_matches('/');
     let url = alloc::format!("{}/info/refs?service=git-upload-pack", base);
-    let body = crate::net_bridge::http_get_url(&url)?;
+    let body = crate::tls::fetch_url(&url)?;
     if body.is_empty() {
         return Err("empty_refs");
     }

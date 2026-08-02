@@ -91,7 +91,7 @@ impl Runtime {
                     false
                 }
             }
-            IoKind::HttpGet { url } => match crate::net_bridge::http_get_url(url) {
+            IoKind::HttpGet { url } => match crate::tls::fetch_url(url) {
                 Ok(_) => {
                     slot.status = IoStatus::Ready;
                     true

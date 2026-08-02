@@ -43,9 +43,9 @@ impl BrowserAgent {
         }
     }
 
-    /// Fetch via net_bridge → neural-kernel NETSTACK (DNS + HTTP/HTTPS).
+    /// Fetch via tls::fetch_url → neural-kernel TLS (HTTPS) ou NETSTACK (HTTP).
     fn fetch_page(url: &str) -> Result<(String, Vec<u8>), &'static str> {
-        match crate::net_bridge::resolve_and_http_get_safe(url.trim()) {
+        match crate::tls::fetch_url(url.trim()) {
             Ok(response) => {
                 k_nano::slog_hermes!("BROWSER", "info", "{} bytes de {}", response.len(), url);
                 Ok((String::from(url), response))

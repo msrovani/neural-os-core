@@ -25,9 +25,9 @@ fn fnv1a64(data: &[u8]) -> u64 {
 }
 
 impl SelfUpdate {
-    /// HTTP GET `url` → length>0 + FNV-1a log → write inactive slot via `apply_update`.
+    /// HTTP(S) GET `url` → length>0 + FNV-1a log → write inactive slot via `apply_update`.
     pub fn fetch_update(url: &str) -> Result<usize, &'static str> {
-        let data = crate::net_bridge::http_get_url(url).map_err(|e| {
+        let data = crate::tls::fetch_url(url).map_err(|e| {
             k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err={}", e);
             e
         })?;
@@ -59,7 +59,7 @@ impl SelfUpdate {
 
     /// Optional channel poll stub — GET UPDATE.MANIFEST from host :8080 (serve_tiny_gguf).
     pub fn poll_channel(_ch: &UpdateChannel) -> Result<usize, &'static str> {
-        match crate::net_bridge::http_get_url(CHANNEL_MANIFEST_URL) {
+        match crate::tls::fetch_url(CHANNEL_MANIFEST_URL) {
             Ok(body) if !body.is_empty() => {
                 k_nano::slog_hermes!(
                     "UPDATE",

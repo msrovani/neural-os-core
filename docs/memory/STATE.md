@@ -632,6 +632,7 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 - **✅ SESSION_156:** TLS N4 wire — `https_get` + `NetTcpIo` + `KernelRng`; `trust=unsecure`.
 - **✅ SESSION_157:** TLS smoke PASS — `[TLS] VERDICT=PASS bytes=80952` + `smoke=PASS` (google); PKI residual.
 - **✅ SESSION_158:** TLS PKI híbrido — `trust=root_learn`→`root_pin` (google×2); CertVerify/FAT residual.
+- **✅ SESSION_241:** TLS bridge fix — `hermes::tls::fetch_url()` dispatcher único conectado ao kernel. Todos consumers roteados. `cargo check --release` 0 erros.
 - **✅ SESSION_159:** WiFi S0 + prep S1 — `VERDICT=AWAITING_REAL_HW` + `fw_resolve=SKIP`; DID→FAT; sem ALIVE.
 - **✅ SESSION_160:** WiFi pivô ath10k QCA6174 — `168C:003E`; FW 1.45MB; BMI/CE scaffold; A3 Note AWAITING.
 - **✅ SESSION_161:** ath10k A3 — CE/BMI/LZ wired; `VERDICT=PASS` só com FW_IND pós-DONE no Note.
