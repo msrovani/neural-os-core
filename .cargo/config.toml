@@ -16,6 +16,11 @@ rustflags = [
     "-C", "link-arg=--no-dynamic-linker",
     "--cfg", "polyval_force_soft",
     "--cfg", "aes_force_soft",
+    # ADR-0081 Tier F: chacha20poly1305 (ChaCha20 + Poly1305) — forçar backend
+    # SOFT (sem AVX2/SSE2) no target soft-float (LLVM crash STATUS_ILLEGAL_INSTRUCTION
+    # ao codegen do backend SIMD com -sse). Mesmo padrão do polyval/aes_force_soft.
+    "--cfg", "chacha20_backend=\"soft\"",
+    "--cfg", "poly1305_backend=\"soft\"",
     "-Z", "threads=16",
 ]
 

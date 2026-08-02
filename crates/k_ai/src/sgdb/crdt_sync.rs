@@ -134,7 +134,8 @@ impl CrdtMemorySync {
 
         // (2) TX: publica nossa versão local (assinada).
         let my_id = mesh::node_id();
-        let pkt = AiosTaskPacket::new(0, my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
+        // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
+        let pkt = AiosTaskPacket::new(mesh::next_data_clock(), my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
         let mut buf = udp_broadcast::serialize(&pkt);
         buf.extend_from_slice(b"CRDT\0");
         buf.extend_from_slice(&self.local_version.to_le_bytes());

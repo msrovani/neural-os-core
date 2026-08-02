@@ -320,7 +320,7 @@ pub fn broadcast_local_experts() -> bool {
         payload.extend_from_slice(&(e.weight_bytes as u32).to_le_bytes());
     }
     let pkt = AiosTaskPacket::new(
-        0, node_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new(),
+        k_nano::net::mesh::next_data_clock(), node_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new(),
     );
     let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
     buf.extend_from_slice(&payload);
@@ -426,8 +426,9 @@ fn capacity_weighted_assign(d: &MeshExpertDistributor) -> Vec<(String, u8)> {
 /// Monta blob assinado "EDR\0" para um destino (lista de experts assignados).
 fn build_edr(dest: u8, list: &[(String, u8)]) -> Option<Vec<u8>> {
     let my_id = k_nano::net::mesh::node_id();
+    // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
     let pkt = AiosTaskPacket::new(
-        0, my_id, dest, TaskType::Inference, 1, 0, 0, PacketFlags::new(),
+        k_nano::net::mesh::next_data_clock(), my_id, dest, TaskType::Inference, 1, 0, 0, PacketFlags::new(),
     );
     let mut payload = Vec::with_capacity(16);
     payload.extend_from_slice(b"EDR\0");
@@ -440,7 +441,10 @@ fn build_edr(dest: u8, list: &[(String, u8)]) -> Option<Vec<u8>> {
     }
     let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
     buf.extend_from_slice(&payload);
-    k_nano::net::udp_broadcast::sign_packet(&buf)
+    // ADR-0081 Tier F: EDR\0 é ponto-a-ponto (dest=dest, o Worker alvo) →
+    // SEAL com AEAD quando Tier Full + pk do destino conhecida; senão cai em
+    // sign_packet_tiered (HMAC Relativized / Ed25519 Full).
+    k_nano::net::udp_broadcast::seal_packet_tiered(&buf, dest)
 }
 
 /// Worker: aplica "EDR\0" do Master — preenche `my_assignment`.

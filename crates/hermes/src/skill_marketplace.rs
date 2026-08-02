@@ -88,8 +88,9 @@ impl MarketplaceAgent {
             return; // fallback: sem P2P, nao anuncia
         }
         for (name, version) in &self.local_skills {
+            // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
             let pkt = AiosTaskPacket::new(
-                0, node_id, 0xFF, TaskType::ModelUpdate, 1, 0, 0, PacketFlags::new(),
+                k_nano::net::mesh::next_data_clock(), node_id, 0xFF, TaskType::ModelUpdate, 1, 0, 0, PacketFlags::new(),
             );
             let mut buf = udp_broadcast::serialize(&pkt);
             let payload = alloc::format!("{}|{}|{}|{}", name, version, "general", "skill offer via mesh").into_bytes();

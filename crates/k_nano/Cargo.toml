@@ -16,7 +16,9 @@ event-bus = { path = "../event-bus" }
 skill-registry = { path = "../skill-registry" }
 ticket-lock = { path = "../ticket-lock" }
 agent-core = { path = "../agent-core" }
-ed25519-compact = { version = "2", default-features = false }
+ed25519-compact = { version = "2", default-features = false, features = ["x25519"] }
+# ADR-0081 Tier F: AEAD X25519+ChaCha20-Poly1305 (sem getrandom — bare-metal).
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"] }
 smoltcp = { version = "0.13", default-features = false, features = ["alloc", "medium-ethernet", "proto-ipv4", "socket-tcp", "socket-udp", "socket-dhcpv4", "proto-dhcpv4"] }
 ruvix-proof = { version = "0.1", default-features = false, features = ["alloc"] }
 ruvix-vecgraph = { version = "0.1", default-features = false, features = ["alloc"] }

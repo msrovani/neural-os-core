@@ -165,8 +165,9 @@ impl SkillSync {
     fn broadcast_skill(&mut self, name: &str, desc: &str) -> bool {
         // ID único por instância (último octeto do IP) — SESSION_234.
         let node_id = k_nano::net::mesh::node_id();
+        // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
         let pkt = AiosTaskPacket::new(
-            0, node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+            k_nano::net::mesh::next_data_clock(), node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
         );
         let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
         let payload = match skill_body(name) {
@@ -194,8 +195,9 @@ impl SkillSync {
     /// Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
     fn broadcast_promote(&self, name: &str, desc: &str) -> bool {
         let node_id = k_nano::net::mesh::node_id();
+        // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
         let pkt = AiosTaskPacket::new(
-            0, node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+            k_nano::net::mesh::next_data_clock(), node_id, 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
         );
         let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
         let payload = alloc::format!("PROMOTE\0{}\0{}", name, desc).into_bytes();

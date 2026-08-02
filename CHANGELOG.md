@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### SESSION_241 (cont.): Mesh AEAD Tier F + anti-replay dados + calibração ed25519 — ADR-0081 (2026-08-02) 🎯
+- **AEAD Tier F implementado** — primeira dep cripto simétrica do workspace: `chacha20poly1305 0.11` (`default-features = false, features = ["alloc"]`); X25519 via feature `x25519` do próprio `ed25519-compact` (sem `x25519-dalek`, sem handshake novo no wire).
+- **Wire:** `header NoProto 36B ‖ ciphertext ‖ tag16`; nonce 12B = `source_id` u32 BE ‖ `clock` u64 BE (derivado do header, NÃO vai no wire — anti-replay garante não-repetição, NIST SP 800-38D contador); AAD = header; KDF = `sha256(DH(X25519_local_sk, peer_pk))` via `from_ed25519`.
+- **RX order:** len-check → TOFU → anti-replay CHECK → decrypt → clock UPDATE (update só após auth — previne forged-high-clock DoS).
+- **Escopo:** MR\0/EDR\0 (unicast request/response) encriptados; broadcasts (MW/ED/FD/FM/CRDT/SKILL/PROMOTE/offer/sync) permanecem assinados — sem chave única de recipiente (documentado). Fail-closed: sem chave/peer desconhecido = Full Ed25519, zero regressão.
+- **Anti-replay dados Tier L:** `next_data_clock()` estrito-monotônico via `GLOBAL_LOGICAL_CLOCK.tick()` nos 12 sites `AiosTaskPacket::new` (MW/MR, ED/EDR, FD/FM, CRDT, SKILL, PROMOTE, MEM/CHK, ROLE); RX `clock <= last` → DROP + `SEC_DROPPED_REPLAY++`. **Corrige falso drop cross-type** (heartbeat usava `TIMER_TICKS` ~10000 vs dados `clock=0`).
+- **Build cfg:** `.cargo/config.toml` `--cfg chacha20_backend="soft"` + `--cfg poly1305_backend="soft"` — LLVM crash `STATUS_ILLEGAL_INSTRUCTION` com backend SIMD sob soft-float (mesmo padrão `polyval_force_soft`/`aes_force_soft`).
+- **Calibração ed25519-compact 2.3.1** (source confirmado: SEM SIMD, portable/scalar): verify 68.9µs/69.8µs/114.0µs e sign 65.5µs/68.3µs/162.3µs @ 300B/1200B/17.5KB (~14.3k ops/s) — faixa eBACS 26-46µs do ADR era otimista demais; corrigida.
+- `cargo check --release` 0 erros; `cargo build --release` (boot image) OK. Tag v1.9.9-s241.
+- **Nota:** `cargo nk` direto (O3 + `-Z threads=16`) crasha LLVM no codegen dos kernels AVX512 pré-existentes do k_ai (`arch/x86_64.rs`) — pré-existente, pipeline canônico (boot) não afetado.
+
 ### SESSION_241: TLS Bridge Fix — hermes→kernel wiring (2026-08-02) ✅
 - **Bug:** `hermes::tls` era dead code — `register_https_get()` nunca chamado no boot,
   consumers usavam HTTP-only (`net_bridge::resolve_and_http_get_safe`), fallback

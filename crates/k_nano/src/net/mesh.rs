@@ -24,6 +24,11 @@ use crate::identity::PUBLIC_KEY_LEN;
 // ponytail: transport importado mas nao usado ate UDP broadcast estar pronto
 // use crate::net::transport::HybridTransport;
 
+/// Max consecutive failures before marking unreachable.
+const CIRCUIT_BREAKER_THRESHOLD: u8 = 3;
+/// Cooldown period (ticks) before retrying an unreachable peer.
+const UNREACHABLE_COOLDOWN_TICKS: u64 = 3000;
+
 /// SIMD capability weights for CapacityScore calculation
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,6 +250,18 @@ impl MeshNode {
     pub fn is_stale(&self, current_time: u64) -> bool {
         current_time.saturating_sub(self.last_heartbeat) > 30_000
     }
+}
+
+/// Health metrics for a mesh peer (ADR-0081 Phase 2).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct PeerHealth {
+    pub last_rtt_ticks: u64,
+    pub consecutive_failures: u8,
+    pub tx_count: u64,
+    pub ack_count: u64,
+    pub unreachable_since: u64,
+    pub reachable: bool,
 }
 
 /// Brain Mesh Engine
@@ -545,8 +562,10 @@ impl BrainMeshEngine {
     /// via broadcast (porta 42069). Receptor filtra pelo target.
     /// Fase A (SESSION_236): assinado — o RX fail-closed dropa não-assinados.
     fn send_role_assign(&self, target_node: u8, role: NodeRole) {
+        // ADR-0081 follow-up: clock monotônico único por fonte (controle
+        // também passa pelo anti-replay) — nunca clock=0.
         let pkt = AiosTaskPacket::new(
-            0, node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+            next_data_clock(), node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
         );
         let mut buf = crate::net::udp_broadcast::serialize(&pkt);
         let payload = alloc::format!("ROLE\0{}\0{}", target_node, role as u8).into_bytes();
@@ -668,6 +687,20 @@ pub fn node_id() -> u8 {
     }
 }
 
+// ─── Clock monotônico por fonte (ADR-0081 follow-up) ────────────────────────
+// Anti-replay de DADOS exige que TODO pacote autenticado (heartbeat + ROLE +
+// dados) carregue um clock estritamente crescente por fonte. Usa o
+// GLOBAL_LOGICAL_CLOCK (fetch_add atômico — nunca retorna o mesmo valor duas
+// vezes; monotonicidade estrita por chamada). Precisão de tick não importa —
+// só a ordem por fonte. TODOS os senders de pacotes assinados devem estampar
+// este clock no header AiosTaskPacket (não no FRAG\0 — o clock vive no header
+// do pacote original, reassemblado antes do gate de segurança).
+
+/// Próximo valor de clock para um pacote mesh (estritamente monotônico).
+pub fn next_data_clock() -> u64 {
+    crate::sync::clock::GLOBAL_LOGICAL_CLOCK.tick()
+}
+
 // ─── Tier SKYNET local (ADR-0081 #315.27, SESSION_237) ─────────────────────
 // Tier do NÓ LOCAL — usado no capacity_score local (eleição/distribuição).
 // Peers não anunciam tier no heartbeat (formato assinado Fase A inalterado —
@@ -701,6 +734,9 @@ pub fn set_local_tier(t: NodeTier) {
 /// Slots de peers: (node_id, public_key, last_clock). Slot livre = None.
 /// Tamanho 16 = máximo de nós do mesh (BrainMeshEngine).
 static PEER_KEYS: Mutex<[Option<(u8, [u8; PUBLIC_KEY_LEN], u64)>; 16]> = Mutex::new([None; 16]);
+
+/// Health metrics per peer: (node_id, PeerHealth). Slot livre = None.
+static PEER_HEALTH: Mutex<[Option<(u8, PeerHealth)>; 16]> = Mutex::new([const { None }; 16]);
 
 /// Chave pública vinculada a um peer. `None` = desconhecido (nunca visto).
 fn peer_pk(node_id: u8) -> Option<[u8; PUBLIC_KEY_LEN]> {
@@ -930,8 +966,10 @@ static CHUNK_SLOTS_TABLE: Mutex<[Option<ChunkSlot>; CHUNK_SLOTS]> = Mutex::new([
 /// Envia payload como pacote Sync assinado via broadcast (porta 42069).
 /// Mesmo caminho do ROLE\0 — fail-closed sem sessão.
 fn send_sync_payload(payload: &[u8]) -> bool {
+    // ADR-0081 follow-up: clock monotônico único por fonte — ponto central
+    // do mesh_send_large (MEM\0/SOUL\0/PERS\0/CHK\0/federated do hermes).
     let pkt = AiosTaskPacket::new(
-        0, node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
+        next_data_clock(), node_id(), 0xFF, TaskType::Sync, 1, 0, 0, PacketFlags::new(),
     );
     let mut buf = crate::net::udp_broadcast::serialize(&pkt);
     buf.extend_from_slice(payload);
@@ -1129,7 +1167,13 @@ pub fn p2p_tick(_tick: u64) {
         // SESSION_234: usar local_role() colidia — ambas enviavam o mesmo ID
         // (Undecided=4) → add_or_update_node deduplicava → nodes=1.
         let node_id = node_id();
-        let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, now);
+        // ADR-0081 follow-up: clock monotônico ÚNICO por fonte (heartbeat +
+        // dados) — antes usava TIMER_TICKS, o que misturava fontes e faria o
+        // anti-replay de dados dropar tudo (dados com clock menor que o
+        // heartbeat). `next_data_clock()` (GLOBAL_LOGICAL_CLOCK.tick) é
+        // estritamente crescente e compartilhado por todos os senders.
+        let hb_clock = next_data_clock();
+        let pkt = crate::net::udp_broadcast::make_heartbeat(node_id, hb_clock);
         let mut buf = crate::net::udp_broadcast::serialize(&pkt);
         // Fase A (SESSION_236): o heartbeat carrega a pk da sessão ("PK\0"+pk)
         // para o receptor TOFU vincular node_id → chave. Self-consistent: a
@@ -1182,11 +1226,15 @@ pub fn p2p_tick(_tick: u64) {
         // (a) Todo pacote mesh deve ser autenticado — fail-closed, sem exceção.
         //     ADR-0081 tier cripto: controle (heartbeat/ROLE/PK\0/CAP) SEMPRE
         //     Ed25519 (64B); DADOS usam tiered — HMAC-SHA256 32B em Relativized
-        //     (mesma chave de segmento no range), Ed25519 em Full.
+        //     (mesma chave de segmento no range), Ed25519 em Full; Tier F
+        //     (ADR-0081): dados selados (flags.encrypted) têm tag AEAD de 16B.
         let is_control = tt == 5
             || (rx.len() >= crate::net::noproto::PACKET_HEADER_SIZE + 5
                 && &rx[crate::net::noproto::PACKET_HEADER_SIZE..crate::net::noproto::PACKET_HEADER_SIZE + 5] == b"ROLE\0");
-        let min_auth = if is_control || crypto_tier() == CryptoTier::Full {
+        let is_encrypted = pkt.flags.encrypted;
+        let min_auth = if is_encrypted {
+            crate::crypto::AEAD_TAG_LEN
+        } else if is_control || crypto_tier() == CryptoTier::Full {
             crate::identity::SIGNATURE_LEN
         } else {
             crate::crypto::HMAC_TAG_LEN
@@ -1204,29 +1252,16 @@ pub fn p2p_tick(_tick: u64) {
             &[]
         };
 
-        // (c) TOFU: peer conhecido verifica contra a pk vinculada. Desconhecido
-        //     só vincula via heartbeat com prefixo "PK\0"+pk (self-consistent:
-        //     assinatura verificada contra a pk embutida — prova posse da chave).
-        //     Não-heartbeat de desconhecido → drop (sem como validar).
-        let data: Vec<u8>;
+        // (c) TOFU: resolve a pk vinculada ao peer. Conhecido → pk pronta.
+        //     Desconhecido só vincula via heartbeat com prefixo "PK\0"+pk
+        //     (self-consistent: assinatura verificada contra a pk embutida —
+        //     prova posse da chave). Não-heartbeat de desconhecido → drop
+        //     (sem como validar). O heartbeat TOFU é CONTROLE (Ed25519) —
+        //     verificação aqui é o âncora de confiança.
+        let mut pk_known: Option<[u8; PUBLIC_KEY_LEN]> = None;
+        let mut tofu_data: Option<Vec<u8>> = None;
         match peer_pk(sid) {
-            Some(pk) => {
-                // Controle → SEMPRE Ed25519 (verify_packet); dados → tiered
-                // (HMAC em Relativized, Ed25519 em Full).
-                let verified = if is_control {
-                    crate::net::udp_broadcast::verify_packet(&rx, &pk)
-                } else {
-                    crate::net::udp_broadcast::verify_packet_tiered(&rx, &pk)
-                };
-                match verified {
-                    Some(valid) => data = valid.to_vec(),
-                    None => {
-                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
-                        crate::slog_nano!("P2P", "warn", "drop: autenticacao invalida node={}", sid);
-                        continue;
-                    }
-                }
-            }
+            Some(pk) => pk_known = Some(pk),
             None => {
                 if tt != 5 {
                     SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
@@ -1248,7 +1283,8 @@ pub fn p2p_tick(_tick: u64) {
                 match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
                     Some(valid) => {
                         peer_bind(sid, pk);
-                        data = valid.to_vec();
+                        pk_known = Some(pk);
+                        tofu_data = Some(valid.to_vec());
                     }
                     None => {
                         SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
@@ -1259,23 +1295,51 @@ pub fn p2p_tick(_tick: u64) {
             }
         }
 
-        // (d) Anti-replay: só o canal de heartbeat tem clock monotônico por
-        //     fonte (não-heartbeats usam clock=0 — são autenticados pela
-        //     autenticação, não pelo clock). LAN confiável: drop se clk <= last.
+        // (d) Anti-replay (ADR-0081 follow-up): TODOS os pacotes autenticados
+        //     de peer CONHECIDO (controle + dados) exigem clock estritamente
+        //     maior que o último aceito da fonte. Todos os senders estampam
+        //     `next_data_clock()` (GLOBAL_LOGICAL_CLOCK.tick — monotônico
+        //     estrito, nunca repete), então "dados com clock=0" não existe mais.
+        //     Peer desconhecido: TOFU só via heartbeat (vincula com clock=0;
+        //     o 1º heartbeat clk>=1 passa). LAN confiável: drop se clk <= last.
         //     ponytail: janela de reordenação (WAN) = trabalho futuro.
-        //     Tier L (Relativized): o header AiosTaskPacket TEM campo clock,
-        //     mas os senders de dados usam 0 → anti-replay de DADOS é follow-up
-        //     (exigiria clock monotônico por fonte nos senders de dados).
-        if tt == 5 {
-            if let Some(last) = peer_last_clock(sid) {
-                if clk <= last {
-                    SEC_DROPPED_REPLAY.fetch_add(1, Ordering::Relaxed);
-                    crate::slog_nano!("P2P", "warn", "drop: replay/stale node={} clk={} last={}", sid, clk, last);
-                    continue;
+        //     Ordem ADR-0081: o CHECK vem ANTES do decrypt AEAD (não decifra
+        //     replay/stale — evita reuso de nonce). O UPDATE do clock fica só
+        //     APÓS a verificação passar (senão pacote forjado com clock alto
+        //     avançaria last_clock → DoS de replay nos legítimos seguintes).
+        if let Some(last) = peer_last_clock(sid) {
+            if clk <= last {
+                SEC_DROPPED_REPLAY.fetch_add(1, Ordering::Relaxed);
+                crate::slog_nano!("P2P", "warn", "drop: replay/stale node={} clk={} last={}", sid, clk, last);
+                continue;
+            }
+        }
+
+        // (c2) Verificação/decrypt: heartbeat TOFU já verificado no bind acima;
+        //     peers conhecidos verificam agora. Controle → SEMPRE Ed25519
+        //     (verify_packet); DADOS → AEAD se flags.encrypted (Tier F), senão
+        //     tiered (HMAC em Relativized, Ed25519 em Full).
+        let data: Vec<u8> = match tofu_data {
+            Some(d) => d,
+            None => {
+                let pk = pk_known.expect("pk_known set em ambas as branches TOFU");
+                let verified = if is_control {
+                    crate::net::udp_broadcast::verify_packet(&rx, &pk).map(|v| v.to_vec())
+                } else {
+                    crate::net::udp_broadcast::verify_or_open_tiered(&rx, &pk)
+                };
+                match verified {
+                    Some(valid) => valid,
+                    None => {
+                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                        crate::slog_nano!("P2P", "warn", "drop: autenticacao invalida node={}", sid);
+                        continue;
+                    }
                 }
             }
-            peer_update_clock(sid, clk);
-        }
+        };
+        // Só atualiza o clock APÓS a verificação/decrypt passar (seguro).
+        peer_update_clock(sid, clk);
 
         // (e) Capacidades anunciadas no heartbeat ("CAP\0" após a pk). Só após
         //     o anti-replay passar (heartbeat stale não atualiza caps).

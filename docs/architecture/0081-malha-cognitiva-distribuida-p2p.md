@@ -443,13 +443,14 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 | Primitiva | Heartbeat ~300B | Fragmento ~1.2KB | Payload 17.5KB |
 |-----------|-----------------|-------------------|----------------|
 | Ed25519 sign | ~8-16µs | ~8-16µs | ~8-16µs (1x, já amortizado: sign → fragment, verify pós-reassembly) |
-| Ed25519 verify | ~26-46µs | ~26-46µs | ~26-46µs (1x) |
+| Ed25519 verify (eBACS/lib25519 ref) | ~26-46µs | ~26-46µs | ~26-46µs (1x) |
+| Ed25519 verify (**medido, ed25519-compact 2.3.1**) | ~69µs | ~70µs | ~114µs (1x) |
 | HMAC-SHA256 (Relativizado) | ~0.6µs | ~1.3µs | ~11.5µs |
 | ChaCha20-Poly1305 | ~0.35µs | ~0.85µs | ~12.5µs |
 | AES-256-GCM (AES-NI) | ~0.07µs | ~0.33µs | ~3µs |
 | X25519 handshake | one-time ~19-30µs/peer | — | — |
 
-**Conclusões:** (1) assinatura Ed25519 domina o custo por ~2 ordens de magnitude em pacotes pequenos — custo fixo, independente do tamanho; (2) verify Ed25519 limita throughput a **~37 MB/s/core (~0.3 Gbps)** — satura 1 core antes de 1Gbps; HMAC ~1.3µs → ~8 Gbps; (3) em datacenter (RTT ~0.1-0.5ms) +40µs/pacote = +8-40% do RTT — visível; em WAN (10-100ms) é 0.04-0.4% — invisível; (4) **onde dá pra relativizar o custo é alto; onde não dá, a latência de rede engole o custo** — a diretriz do maintainer é arquiteturalmente correta; (5) implementação importa 3-4x (OpenSSL EVP verify ~100µs vs lib25519 ~32µs) — usamos `ed25519-compact` (sem SIMD; calibrar no target é recomendado); (6) bare-metal: crypto esparsa paga ~14µs de warm-up de unidades vetoriais por rajada.
+**Conclusões:** (1) assinatura Ed25519 domina o custo por ~2 ordens de magnitude em pacotes pequenos — custo fixo, independente do tamanho; (2) verify Ed25519 limita throughput a **~37 MB/s/core (~0.3 Gbps)** — satura 1 core antes de 1Gbps; HMAC ~1.3µs → ~8 Gbps; (3) em datacenter (RTT ~0.1-0.5ms) +40µs/pacote = +8-40% do RTT — visível; em WAN (10-100ms) é 0.04-0.4% — invisível; (4) **onde dá pra relativizar o custo é alto; onde não dá, a latência de rede engole o custo** — a diretriz do maintainer é arquiteturalmente correta; (5) implementação importa 3-4x (OpenSSL EVP verify ~100µs vs lib25519 ~32µs) — **calibração real no target confirmou `ed25519-compact` 2.3.1 sem SIMD (portable/scalar)**: verify 68.9-114µs, sign 65.5-162µs @300B-17.5KB (ver tabela acima) — a faixa eBACS 26-46µs era otimista demais para o nosso crate; verify @1.2KB ≈ 70µs ⇒ ~14.3k ops/s/core, ~0.14 Gbps; (6) bare-metal: crypto esparsa paga ~14µs de warm-up de unidades vetoriais por rajada.
 
 **Implementado (commit desta sessão, sem dep nova):**
 
@@ -462,19 +463,22 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 | RX | Controle (tt==5/`ROLE\0`) sempre Ed25519; dados de peer conhecido → tiered (HMAC ct_eq em Relativized, Ed25519 em Full); falha → DROP + contador | ✅ |
 | Self-test | `hmac_self_test()` no boot (main.rs, seção self-tests ADR-0081) | ✅ |
 
-**Segurança:** a tag HMAC cobre o frame inteiro (header+payload) e é verificada com comparação constant-time — previne injeção/adulteração por nó não-provisionado no segmento. Anti-replay permanece no canal heartbeat (dados usam `clock=0` — anti-replay de dados em Tier L é follow-up: exigiria clock monotônico por fonte nos senders de dados). TOFU/PEER_KEYS inalterados — HMAC não vincula identidade nova (peers desconhecidos só fazem TOFU via heartbeat Ed25519).
+**Segurança:** a tag HMAC cobre o frame inteiro (header+payload) e é verificada com comparação constant-time — previne injeção/adulteração por nó não-provisionado no segmento. **Anti-replay agora cobre TODOS os pacotes autenticados de peer conhecido** (não só heartbeat): `next_data_clock()` em `k_nano::net::mesh` (estrito-monotônico via `GLOBAL_LOGICAL_CLOCK.tick()`) substitui o `clock=0` nos 12 sites de `AiosTaskPacket::new` (MW/MR, ED/EDR, FD/FM, CRDT, SKILL, PROMOTE, MEM/CHK, ROLE); RX rejeita `clock <= last` → DROP + `SEC_DROPPED_REPLAY++`. Corrige o falso drop cross-type (heartbeat usava `TIMER_TICKS` ~10000 vs dados `clock=0`). TOFU/PEER_KEYS inalterados — HMAC não vincula identidade nova (peers desconhecidos só fazem TOFU via heartbeat Ed25519).
 
-**Evolução planejada (quando houver tráfego sensível em rede não-isolada):**
+**AEAD Tier F (externo/não-isolado) ✅ IMPLEMENTADO (SESSION_241, dep nova):**
 
-| Item | Detalhe | Custo |
-|------|---------|-------|
-| Deps novas | `chacha20poly1305` + `x25519-dalek` (no_std, ~5 crates transitivos) — **primeira dep cripto além do ed25519** | — |
-| Key exchange | No handshake TOFU: troca X25519 pubkeys (1 pacote extra) | ~60 LOC |
-| Encrypt | Após header NoProto: nonce(12) + ciphertext + tag(16) | ~50 LOC |
-| Decrypt | Antes do parse; falha → drop | ~40 LOC |
-| Modo dev | Pacotes não-encriptados → drop OU aceitar só em modo dev (flag) | ~20 LOC |
+| Item | Detalhe | Status |
+|------|---------|--------|
+| Dep nova | `chacha20poly1305 0.11` (`default-features = false, features = ["alloc"]`) — X25519 vem da feature `x25519` do próprio `ed25519-compact` (sem `x25519-dalek`) | ✅ |
+| Key exchange | KDF = `sha256(DH(X25519_local_sk, peer_pk))` via `from_ed25519` — sem handshake novo no wire (identidade Ed25519 já vinculada no TOFU PK\0) | ✅ |
+| Encrypt (wire) | `header NoProto 36B ‖ ciphertext ‖ tag(16)` — tag pós-fixada pelo `Aead::encrypt` | ✅ |
+| Nonce | 12B = `source_id` u32 BE ‖ `clock` u64 BE — derivado do header, NÃO vai no wire (anti-replay garante não-repetição; NIST SP 800-38D: nonce contador sem limite 2³²) | ✅ |
+| AAD | header completo (não NoProto) | ✅ |
+| Decrypt (RX order) | len-check → TOFU → anti-replay CHECK → decrypt → clock UPDATE (update só após auth — previne forged-high-clock DoS) | ✅ |
+| Escopo | MR\0/EDR\0 (unicast request/response) encriptados; broadcasts (MW/ED/FD/FM/CRDT/SKILL/PROMOTE/offers/sync) permanecem assinados — sem chave única de recipiente, documentado | ✅ |
+| Build cfg | `.cargo/config.toml`: `--cfg chacha20_backend="soft"` + `--cfg poly1305_backend="soft"` (LLVM crash `STATUS_ILLEGAL_INSTRUCTION` com backend SIMD sob soft-float; mesmo padrão `polyval_force_soft`/`aes_force_soft`) | ✅ |
 
-**Total: ~250-350 LOC, 2-3 arquivos, dep nova, risco alto (nonce mgmt, rejeição de reuse), ~4-6h.** Aplicável ao Tier F (externo) — no mesmo range o HMAC já entrega integridade/autenticidade com custo 30x menor; confidencialidade (AEAD) no datacenter é opcional.
+**Total ~250-350 LOC estimados; entregue com anti-replay de dados na mesma passada.** Risco gerenciado: nonce = contador (nunca aleatório), rejeição de reuse via anti-replay, fail-closed (sem chave/peer desconhecido = Full Ed25519, zero regressão).
 
 ### Sugestões (oracle review recomendado antes de implementar)
 

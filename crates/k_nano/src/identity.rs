@@ -162,6 +162,12 @@ pub fn session_ready() -> bool {
     SESSION_READY.load(Ordering::Acquire)
 }
 
+/// Seed da sessão (32B) — usada pelo `crypto::aead_key_for` para derivar a
+/// sk X25519 local (X25519 DH com o peer). pub(crate): só dentro do k_nano.
+pub(crate) fn session_seed() -> Option<[u8; 32]> {
+    *SESSION_SK.lock()
+}
+
 /// Assina com a chave de sessão. Retorna None se sessão não inicializada.
 pub fn sign_session(message: &[u8]) -> Option<[u8; SIGNATURE_LEN]> {
     use ed25519_compact::{KeyPair, Seed};

@@ -1,4 +1,30 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s241 — Mesh AEAD Tier F + anti-replay dados + calibração (ADR-0081)
+#   SESSION_241 (cont.): TLS bridge ✅ (d05fcab) + mesh cripto (2026-08-02)
+#     AEAD Tier F (chacha20poly1305 0.11 + feature x25519 do ed25519-compact,
+#       sem x25519-dalek): wire = header NoProto 36B ‖ ct ‖ tag16; nonce 12B =
+#       source_id u32 BE ‖ clock u64 BE (do header, não vai no wire; anti-replay
+#       garante não-repetição — NIST SP 800-38D, contador); AAD = header; KDF =
+#       sha256(DH(X25519_local_sk, peer_pk)) via from_ed25519, sem handshake novo.
+#       RX order: len-check → TOFU → anti-replay CHECK → decrypt → clock UPDATE
+#       (update só após auth — previne forged-high-clock DoS). Escopo MR\0/EDR\0
+#       unicast; broadcasts (MW/ED/FD/FM/CRDT/SKILL/PROMOTE/offer/sync) assinados.
+#       .cargo/config.toml: --cfg chacha20_backend="soft" + poly1305_backend="soft"
+#       (LLVM crash STATUS_ILLEGAL_INSTRUCTION com backend SIMD sob soft-float).
+#     Anti-replay dados Tier L: next_data_clock() estrito-monotônico via
+#       GLOBAL_LOGICAL_CLOCK.tick() nos 12 sites AiosTaskPacket::new (MW/MR, ED/EDR,
+#       FD/FM, CRDT, SKILL, PROMOTE, MEM/CHK, ROLE); RX clock <= last → DROP.
+#       Corrige falso drop cross-type (heartbeat usava TIMER_TICKS ~10000 vs dados clock=0).
+#     Calibração ed25519-compact 2.3.1 (sem SIMD, portable): verify 68.9-114µs,
+#       sign 65.5-162µs @300B-17.5KB — faixa eBACS 26-46µs era otimista demais.
+#     cargo check 0 erros; cargo build --release (boot image) OK.
+#     NOTA build: cargo nk direto (O3 + -Z threads=16) crasha LLVM no codegen dos
+#       kernels AVX512 pré-existentes do k_ai (arch/x86_64.rs) — pipeline canônico
+#       (cargo build --release → boot) NÃO é afetado (opt-level 2 no artifact).
+#     Pendente: SemanticRouter, merge conteúdo CRDT, merkle piece, anti-replay
+#       dados Tier L em Tier F externo (clock=0 nos senders WAN).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s240 — Tier cripto L/F (ADR-0081 Fase B)
 #   SESSION_240: Relativizado (HMAC) vs Full (Ed25519) (2026-08-02)
 #     Decisao maintainer: mesmo range/subnet (datacenter) relativiza cripto

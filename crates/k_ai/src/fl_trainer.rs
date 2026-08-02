@@ -328,7 +328,8 @@ impl FederatedTrainer {
             return; // nada a compartilhar ainda
         }
         let my_id = mesh::node_id();
-        let pkt = AiosTaskPacket::new(0, my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
+        // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
+        let pkt = AiosTaskPacket::new(mesh::next_data_clock(), my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
         let mut buf = udp_broadcast::serialize(&pkt);
         buf.extend_from_slice(b"FD\0");
         buf.extend_from_slice(&self.round.to_le_bytes());
@@ -352,7 +353,8 @@ impl FederatedTrainer {
         self.aggregate_fedyogi();
         self.global_round = round;
         let my_id = mesh::node_id();
-        let pkt = AiosTaskPacket::new(0, my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
+        // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay).
+        let pkt = AiosTaskPacket::new(mesh::next_data_clock(), my_id, 0xFF, TaskType::Inference, 1, 0, 0, PacketFlags::new());
         let mut buf = udp_broadcast::serialize(&pkt);
         buf.extend_from_slice(b"FM\0");
         buf.extend_from_slice(&self.global_round.to_le_bytes());

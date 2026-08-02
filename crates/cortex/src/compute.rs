@@ -192,8 +192,10 @@ fn deserialize_mesh_response(data: &[u8]) -> Option<Tensor> {
 fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
     let payload = serialize_mesh_request(w, x)?;
     let node_id = k_nano::net::mesh::node_id();
+    // ADR-0081 follow-up: clock monotônico único por fonte (anti-replay de
+    // dados exige clk estritamente crescente; clock=0 seria dropado).
     let pkt = k_nano::net::noproto::AiosTaskPacket::new(
-        0, node_id, 0xFF, k_nano::net::noproto::TaskType::Inference,
+        k_nano::net::mesh::next_data_clock(), node_id, 0xFF, k_nano::net::noproto::TaskType::Inference,
         1, 0, 0, k_nano::net::noproto::PacketFlags::new(),
     );
     let mut buf = k_nano::net::udp_broadcast::serialize(&pkt);
@@ -232,10 +234,12 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
             if tt == 1 && d == node_id && rx.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
                 // Fase A (SESSION_236): só aceita resposta do Master — verifica
                 // contra a pk vinculada na tabela TOFU do mesh. ADR-0081: dados
-                // usam tiered (HMAC em Relativized, Ed25519 em Full).
+                // usam tiered (HMAC em Relativized, Ed25519 em Full) e, no
+                // Tier F (Full), o seam `verify_or_open_tiered` ABRE o AEAD
+                // (X25519 DH + ChaCha20-Poly1305) de respostas seladas MR\0.
                 let Some(pk) = k_nano::net::mesh::peer_public_key(sender) else { continue };
-                let Some(valid) = k_nano::net::udp_broadcast::verify_packet_tiered(&rx, &pk) else {
-                    continue; // autenticação inválida — DROP
+                let Some(valid) = k_nano::net::udp_broadcast::verify_or_open_tiered(&rx, &pk) else {
+                    continue; // autenticação inválida / AEAD open falhou — DROP
                 };
                 if valid.len() <= k_nano::net::noproto::PACKET_HEADER_SIZE {
                     continue;
@@ -344,15 +348,19 @@ pub fn poll_mesh_requests() {
         // Resposta "MR\0" — dest_id = node_id do Worker (filtro lógico no
         // receptor; o transporte é broadcast).
         let my_id = k_nano::net::mesh::node_id();
+        // ADR-0081 follow-up: clock monotônico único por fonte (a resposta
+        // MR também passa pelo anti-replay do RX no Worker).
         let rpkt = k_nano::net::noproto::AiosTaskPacket::new(
-            0, my_id, req_src, k_nano::net::noproto::TaskType::Inference,
+            k_nano::net::mesh::next_data_clock(), my_id, req_src, k_nano::net::noproto::TaskType::Inference,
             1, 0, 0, k_nano::net::noproto::PacketFlags::new(),
         );
         let mut buf = k_nano::net::udp_broadcast::serialize(&rpkt);
         buf.extend_from_slice(&resp);
-        // Fase A (SESSION_236): assinado — o Worker só aceita MR verificado
-        // contra a pk vinculada do remetente.
-        let Some(signed) = k_nano::net::udp_broadcast::sign_packet(&buf) else {
+        // ADR-0081 Tier F: resposta MR\0 é ponto-a-ponto (dest=req_src) →
+        // SEAL com AEAD quando Tier Full + pk do Worker conhecida; senão cai
+        // em sign_packet_tiered (HMAC Relativized / Ed25519 Full). O Worker só
+        // aceita MR verificado/aberto contra a pk vinculada do remetente.
+        let Some(signed) = k_nano::net::udp_broadcast::seal_packet_tiered(&buf, req_src) else {
             k_nano::slog_cortex!("MESH", "info", "matmul resposta node={} sem sessao - skip", req_src);
             continue;
         };
