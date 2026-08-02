@@ -403,6 +403,7 @@ pub fn register_wasm_skill(bytecode: &[u8], name: &str, desc: &str) -> Result<()
 
     let skill = WasmSkill::new(bytecode, name, desc, module.exports.clone());
     crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
+    crate::self_evolve::publish_change("wasm", name);
     {
         let mut bridge = WASM_SKILL_BRIDGE.lock();
         bridge.skill_name = String::from(name);

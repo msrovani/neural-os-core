@@ -17,6 +17,18 @@ use crate::skill_observer;
 pub const TOPIC_SELF_EVOLVE: &str = "SELF_EVOLVE";
 /// Pedido de geração LLM de skill (payload = prompt SKILL.md).
 pub const TOPIC_SKILL_GEN_REQUEST: &str = "SKILL_GEN_REQUEST";
+/// Notificação "fonte mudou sob você" (swarm): payload "what:name".
+pub const TOPIC_CHANGE: &str = "CHANGE_NOTIFY";
+
+/// Publica CHANGE_NOTIFY quando uma skill foi criada/alterada por outra fonte.
+pub fn publish_change(what: &str, name: &str) {
+    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+        id: 0,
+        topic: String::from(TOPIC_CHANGE),
+        payload: alloc::format!("{}:{}", what, name).into_bytes(),
+        token: event_bus::CapabilityToken::Legacy(1),
+    });
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyVerdict {
@@ -273,6 +285,7 @@ pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<St
                 name.as_bytes(),
             );
             k_nano::slog_hermes!("S108", "info", "skill '{}' verified+registered", name);
+            publish_change("skill", &name);
             Ok(name)
         }
         Err(e) => {

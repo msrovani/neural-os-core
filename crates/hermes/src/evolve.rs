@@ -72,6 +72,7 @@ impl EvolveLedger {
         // Install candidate → registra como DynamicSkill com wasm
         let skill = crate::dynskill::DynamicSkill::with_wasm(name, "hot-swap skill", "", wasm.to_vec());
         crate::globals::SKILL_REGISTRY.lock().register(Box::new(skill));
+        crate::self_evolve::publish_change("skill", name);
 
         if test_ok {
             self.swaps_ok = self.swaps_ok.saturating_add(1);
@@ -97,6 +98,7 @@ impl EvolveLedger {
         let entry = self.prev.get(name).ok_or("no previous version")?;
         let roll = crate::dynskill::DynamicSkill::with_wasm(name, "rollback", "", entry.bytecode.clone());
         crate::globals::SKILL_REGISTRY.lock().register(Box::new(roll));
+        crate::self_evolve::publish_change("skill", name);
         self.rollbacks = self.rollbacks.saturating_add(1);
         k_nano::slog_hermes!("EVOLVE", "info", "rollback skill={} gen={}", name, entry.generations);
         Ok(())
@@ -113,9 +115,13 @@ pub fn promote_ephemeral_to_wasm(name: &str, _description: &str) -> Result<(), &
     if name.is_empty() || name.len() > 64 {
         return Err("bad_name");
     }
-    // ADR-0059 F5: registra como DynamicSkill com campo wasm.
-    // O bytecode real é gerado pelo skill_opt::promote_skill_to_wasm.
-    k_nano::slog_hermes!("EVOLVE", "info", "ephemeral→WASM skill={} (via SkillRegistry)", name);
+    // ADR-0059 F5: gera bytecode wasm candidato e promove via sandbox wasmi.
+    // hot_swap valida em wasmi, registra DynamicSkill com wasm e faz rollback
+    // em falha de sandbox.
+    let wasm = wasmi_rt::generate_wasm_module();
+    let mut ledger = EVOLVE_LEDGER.lock();
+    ledger.hot_swap(name, &wasm, WasmOrigin::Compiled)?;
+    k_nano::slog_hermes!("EVOLVE", "info", "ephemeral→WASM skill={} (via wasmi sandbox)", name);
     Ok(())
 }
 

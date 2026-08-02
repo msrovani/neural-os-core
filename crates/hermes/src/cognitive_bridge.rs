@@ -531,6 +531,62 @@ pub fn note_route(d: &RouteDecision) {
 
 // ─── Prompt enriquecido Cortex (superior ao HANR context dump) ─────────────
 
+/// RAG com gate determinístico ("sideagent verifier", #314): confia no path do
+/// recall (bq+fp32/bq; "empty" = pula), aplica blacklist de injeção e cap de 3.
+fn gated_rag_context(q_emb: &[f32], k: usize) -> String {
+    let (hits, path) = k_ai::sgdb::recall_semantic(q_emb, k);
+    if path == "empty" || hits.is_empty() {
+        return String::new();
+    }
+    // Injection-pattern blacklist (gate #314 — espelha self_evolve.rs).
+    const DANGEROUS: [&str; 10] = [
+        "ignore all",
+        "ignore seus comandos",
+        "you are now",
+        "override",
+        "system prompt",
+        "<s>",
+        "[/INST]",
+        "<<SYS>>",
+        "rm -rf",
+        "format c:",
+    ];
+    let mut out = String::new();
+    let mut n = 0usize;
+    for (sk, dist) in &hits {
+        if n >= 3 {
+            break;
+        }
+        let text_sk = sk.replace("/L4/", "/L2/");
+        let text = k_ai::sgdb::with_engine(|e| match e.get_by_storage_key(&text_sk) {
+            Ok(Some(doc)) => core::str::from_utf8(&doc.payload)
+                .map(String::from)
+                .unwrap_or_default(),
+            _ => String::new(),
+        })
+        .unwrap_or_default();
+        if text.is_empty() {
+            continue;
+        }
+        let lower = text.to_ascii_lowercase();
+        if DANGEROUS.iter().any(|p| lower.contains(p)) {
+            k_nano::slog_hermes!("RECALL", "gate", "bloqueado por padrão injetável");
+            continue;
+        }
+        out.push_str(&format!(
+            "  #{}) d={} {}\n",
+            n + 1,
+            dist,
+            memory_store::clamp_public(&text, 200)
+        ));
+        n += 1;
+    }
+    if out.is_empty() {
+        return String::new();
+    }
+    format!("[SGDB-RAG top-{}]\n{}", n, out)
+}
+
 pub fn cortex_system_prompt(user_intent: &str) -> String {
     let mut s = String::with_capacity(3500);
     s.push_str("[NEURAL-OS COGNITIVE CONTEXT — K²CHJ]\n");
@@ -544,10 +600,11 @@ pub fn cortex_system_prompt(user_intent: &str) -> String {
         emo
     ));
 
-    // RAG context: BQ L4 + texto formatado (embedding BGE ou pseudo sobre SGDB real)
+    // RAG context: BQ L4 + texto formatado (embedding BGE ou pseudo sobre SGDB real).
+    // Gate determinístico (#314): path trust + blacklist + budget 3.
     let mut recall_path = "rag";
     let (q_emb, emb_path) = k_ai::memory_systems::embed_or_pseudo(user_intent);
-    let rag = k_ai::sgdb::rag_context(&q_emb, 5);
+    let rag = gated_rag_context(&q_emb, 5);
     if !rag.is_empty() {
         s.push_str(&rag);
         s.push('\n');

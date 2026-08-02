@@ -2307,7 +2307,7 @@ impl SleepCycleAgent {
         }
     }
     fn phase_name(&self) -> &'static str { match self.phase {1=>"REPLAY",2=>"DREAM",3=>"CONSOLIDATE",4=>"PRUNE",5=>"REFLECT",_=>"IDLE"} }
-    fn execute_phase(&mut self) {
+    fn execute_phase(&mut self, tick: u64) {
         let _tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
         match self.phase {
             // ── REPLAY: store traces in spaced repetition buffer, apply priority decay, replay with noise ──
@@ -2442,6 +2442,12 @@ impl SleepCycleAgent {
 
             // ── CONSOLIDATE: seed knowledge fast→slow layers, validate quality + EWC (IDEA #314c) ──
             3 => {
+                // #218: consolidação 4-tier (L2→L3→L4) — ambient mode (jcode-inspired)
+                let stats = k_ai::tiers::consolidate_tiers(tick);
+                k_nano::slog_hermes!(
+                    "SLEEP", "CONSOLIDATE",
+                    "tiers l3={} l4={} topics={}", stats.promoted_l3, stats.promoted_l4, stats.topics,
+                );
                 // Pre-consolidation quality: token steps as a proxy for model activity
                 let pre_quality = cortex::global_arena::token_steps() as f32;
 
@@ -2586,7 +2592,7 @@ impl Agent for SleepCycleAgent {
             return AgentTickResult::Pending;
         }
         if now < self.phase_tick + 200 { return AgentTickResult::Pending; }
-        self.execute_phase();
+        self.execute_phase(_t);
         self.phase_tick = now;
         if self.phase >= 5 { self.phase = 0; self.cycle_count += 1; }
         else { self.phase += 1; }

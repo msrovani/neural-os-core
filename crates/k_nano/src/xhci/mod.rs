@@ -95,7 +95,13 @@ pub unsafe fn init_xhci() {
         if d.class != 0x0C || d.subclass != 0x03 { continue; }
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let mmio = (d.bar0 & !0xF) as u64;
-        crate::apic::set_page_uc(mmio, pmoff);
+        // xHCI BAR cobre Cap+Op+Runtime+Doorbell (~64KB). Mapeia TODAS as páginas
+        // UC com map_page_uc (cria o mapeamento). set_page_uc só seta flags em
+        // mapeamento EXISTENTE — sem map, o 1º r32() dá #PF (exposto sob TCG;
+        // WHPX mascarava. Ver SESSION_237).
+        for page in 0..16 {
+            crate::apic::map_page_uc(mmio + page * 0x1000, pmoff);
+        }
         let base = mmio + pmoff;
         let capl = r32(base, 0) as u64 & 0xFF;
         let op = base + capl;

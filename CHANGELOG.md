@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### SESSION_237: Jcode-inspired memory integration (2026-08-01) ✅
+- **feat(memory): 4-tier consolidation (IDEA #218)** — `k_ai::tiers::consolidate_tiers(tick)`
+  promove Working→Episodic→Semantic→Procedural (SGDB L1→L5): tópicos top por frequência de
+  palavras (stopword-filtered) → docs L3 `topic/<name>` + L4 `sem/<tick>/<name>` (≥2 ciclos
+  estáveis) + snapshot L5 `proc/skills`; publica transições `MEMORY_TIER` no EventBus; chamado
+  no SleepCycleAgent CONSOLIDATE (`hermes/agents.rs`).
+- **fix(memory): BGE statics single-source** — `neural-kernel/src/memory_systems.rs` era cópia
+  duplicada de `k_ai::memory_systems`; o boot carregava BGE nos statics do bin e `k_ai` nunca via
+  o modelo (recall rodava silenciosamente em pseudo-hashes 64d). Agora o bin é só
+  `pub use k_ai::memory_systems::*;` → recall usa BGE 384d real pós-load.
+- **feat(recall): gate de segurança** — `gated_rag_context` filtra o recall antes da injeção no
+  prompt: skip `"empty"` + blacklist de 10 padrões de injection + cap 3 hits
+  (`hermes/cognitive_bridge.rs`).
+- **feat(skills): hint por embedding (jcode-style)** — skills indexadas como `skill:<name>` via
+  `k_ai::memory_systems::index_embedding`; `find_skill_hint(intent)` faz semantic_search
+  (sim ≥ 0.4) e anexa `[SKILL-HINT] <name>` ao system prompt; `invalidate_skill_index()` reseta
+  (`hermes/skill_loader.rs`).
+- **feat(swarm): CHANGE_NOTIFY** — `TOPIC_CHANGE = "CHANGE_NOTIFY"` + `publish_change(what, name)`
+  nos pontos de mutação de skill (evolve hot_swap/rollback, self_evolve verify_and_register,
+  skill_sync mesh apply, wasmi_rt register_wasm_skill, bin `/learn`); SelfEvolveAgent drena e
+  invalida o índice de skills.
+- **feat(ADR-0059): F5 promote wired** — `promote_ephemeral_to_wasm` (era log-only) agora gera
+  wasm via `wasmi_rt::generate_wasm_module()` e promove via `EVOLVE_LEDGER.hot_swap` (sandboxed,
+  rollback on failure). Native self-dev Ring3 segue gated por ADR-0060 (`TRY_ENTER_RING3=false`).
+- **cargo check --release**: 0 erros.
+
 ### SESSION_236: Codemap — index completo do repositório (2026-08-01) 🗺️
 - **docs(codemap): atlas + 66 mapas hierárquicos** — skill `codemap` rodado na base
   inteira: 8 fixers paralelos (1 por crate/tree, escopos disjuntos) geraram

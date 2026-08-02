@@ -1,6 +1,13 @@
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+/// Índice semântico de skills (jcode-style): rebuild lazy, invalidado por
+/// `invalidate_skill_index()` quando o CHANGE_NOTIFY lane detecta mudança.
+static SKILLS_INDEXED: AtomicBool = AtomicBool::new(false);
+/// Geração monotônica do índice (incrementada a cada rebuild).
+static SKILL_INDEX_GEN: AtomicU32 = AtomicU32::new(0);
 
 /// Conteudo do skill_writer embutido em tempo de compilacao.
 /// Hermes usa esta constante para pre-flight checks: antes de criar skill,
@@ -143,15 +150,60 @@ impl SkillLoader {
         list
     }
 
+    /// (Re)constrói o índice semântico com todas as skills (labels "skill:<name>").
+    /// ponytail: re-indexa tudo a cada rebuild — labels são estáveis e
+    /// semantic_search ordena por similaridade, então sem dedup.
+    fn index_skills(&self) {
+        for (name, desc, _len) in self.list_skills() {
+            k_ai::memory_systems::index_embedding(
+                &alloc::format!("skill:{}", name),
+                &alloc::format!("{}: {}", name, desc),
+            );
+        }
+        SKILLS_INDEXED.store(true, Ordering::Relaxed);
+        SKILL_INDEX_GEN.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Hint semântico jcode-style: busca embedding do intent no índice e
+    /// devolve a 1ª skill relevante (label "skill:" + similaridade >= 0.4).
+    pub fn find_skill_hint(&self, intent: &str) -> Option<String> {
+        if !SKILLS_INDEXED.load(Ordering::Relaxed) {
+            self.index_skills();
+        }
+        for (label, sim) in k_ai::memory_systems::semantic_search(intent, 3) {
+            if let Some(name) = label.strip_prefix("skill:") {
+                if sim >= 0.4 {
+                    return Some(String::from(name));
+                }
+            }
+        }
+        None
+    }
+
     /// Build system prompt — cognitive bridge (BGE+Trinity+SOUL+L0 gated).
     pub fn build_system_prompt(&self) -> String {
         crate::cognitive_bridge::cortex_system_prompt("")
     }
 
-    /// Prompt contextualizado com intent do usuário.
+    /// Prompt contextualizado com intent do usuário (+ hint semântico de skill).
     pub fn build_system_prompt_for(&self, intent: &str) -> String {
-        crate::cognitive_bridge::cortex_system_prompt(intent)
+        let mut prompt = crate::cognitive_bridge::cortex_system_prompt(intent);
+        if !intent.is_empty() {
+            if let Some(name) = self.find_skill_hint(intent) {
+                prompt.push_str(&alloc::format!(
+                    "\n[SKILL-HINT] {} — skill pode ser relevante ao pedido.\n",
+                    name
+                ));
+            }
+        }
+        prompt
     }
+}
+
+/// Invalida o índice de skills — o próximo prompt reconstrói (consumido pelo
+/// CHANGE_NOTIFY lane: skill mudou sob o loader).
+pub fn invalidate_skill_index() {
+    SKILLS_INDEXED.store(false, Ordering::Relaxed);
 }
 
 pub fn load_embedded_skills() -> SkillLoader {

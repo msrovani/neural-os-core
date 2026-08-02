@@ -350,6 +350,7 @@
 - **Quality jump SESSION_174:** Tickv GC ✅; ART Node48/256 ✅; BQ POPCNT ✅; AUD2 ✅; MemoryDocView ✅; bench 10k/1k ✅
 - **D-series SESSION_175:** Hamming dispatch scalar/avx2_lut/avx512 ✅; L0/L1 RAM-only ✅; Tickv ckpt+stress ✅; bench ART 100k / BQ 10k×1024 ✅; Visão vs Ship na ADR
 - **Memory Quality SESSION_176:** SleepCycle CONSOLIDATE→checkpoint ✅; Hermes recall L4 BQ hybrid ✅; TickvLite V-flag invalidate ✅; ART Node16 SIMD ✅; NMD1 patch/sortable ✅
+- **Memory Integration SESSION_237 (jcode-inspired):** 4-tier consolidation `k_ai::tiers` + `MEMORY_TIER` topic ✅; BGE statics single-source (bin `pub use k_ai::memory_systems::*`) → recall BGE 384d ✅; recall gate blacklist ✅; skill embedding `[SKILL-HINT]` ✅; CHANGE_NOTIFY swarm ✅; ADR-0059 F5 promote wired ✅; cargo check 0 erros
 - Residual DoD pleno: 10M/100k, kill-9 HW, NVMe erase real, crates tickv/noproto upstream
 
 **Critérios de Aceite:**

@@ -1257,7 +1257,10 @@ impl Agent for HermesAgent {
                     SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(skill));
                     let mut storage = SKILL_STORAGE.lock();
                     match crate::self_evolve::verify_and_register(&mut storage, &md) {
-                        Ok(n) => alloc::format!("Skill '{}' aprendida+verified! Descricao: {}", n, desc),
+                        Ok(n) => {
+                            hermes_crate::self_evolve::publish_change("skill", name);
+                            alloc::format!("Skill '{}' aprendida+verified! Descricao: {}", n, desc)
+                        }
                         Err(e) => alloc::format!("Skill '{}' rejeitada: {}", name, e),
                     }
                 }
@@ -2556,6 +2559,7 @@ const SELF_EVOLVE_MANIFEST: AgentManifest = AgentManifest {
 
 pub struct SelfEvolveAgent {
     receiver: Receiver,
+    change_receiver: Receiver,
     last_reflect: u64,
     cycles: u64,
 }
@@ -2564,6 +2568,7 @@ impl SelfEvolveAgent {
     pub fn new() -> Self {
         SelfEvolveAgent {
             receiver: EVENT_BUS.subscribe(crate::self_evolve::TOPIC_SELF_EVOLVE),
+            change_receiver: EVENT_BUS.subscribe(hermes_crate::self_evolve::TOPIC_CHANGE),
             last_reflect: 0,
             cycles: 0,
         }
@@ -2586,6 +2591,12 @@ impl Agent for SelfEvolveAgent {
                     k_nano::slog_bin!("S108", "info", "tick_cycle registered/improved={}", n);
                 }
             }
+        }
+
+        // Consome CHANGE_NOTIFY (skills/evolve): reindexa p/ o próximo system prompt
+        while let Some(ev) = self.change_receiver.try_receive() {
+            k_nano::slog_bin!("CHANGE", "info", "{}", core::str::from_utf8(&ev.payload).unwrap_or("?"));
+            hermes_crate::skill_loader::invalidate_skill_index();
         }
 
         // Ciclo periódico: generate + improve
