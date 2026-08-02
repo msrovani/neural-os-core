@@ -77,6 +77,7 @@ pub mod storage;
 pub mod numa_alloc;
 pub mod core_pinning;
 pub mod cpufreq;
+pub mod crypto;
 
 pub mod neural_fs;
 pub mod ntfs_reader;

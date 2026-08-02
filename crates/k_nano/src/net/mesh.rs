@@ -551,7 +551,8 @@ impl BrainMeshEngine {
         let mut buf = crate::net::udp_broadcast::serialize(&pkt);
         let payload = alloc::format!("ROLE\0{}\0{}", target_node, role as u8).into_bytes();
         buf.extend_from_slice(&payload);
-        let Some(signed) = crate::net::udp_broadcast::sign_packet(&buf) else {
+        // Controle/TOFU → SEMPRE Ed25519 (caminho authentic), nunca HMAC.
+        let Some(signed) = crate::net::udp_broadcast::sign_packet_authentic(&buf) else {
             crate::slog_nano!("P2P", "warn", "role-assign skip: sessao nao inicializada node={}", target_node);
             return;
         };
@@ -777,6 +778,56 @@ pub fn sec_stats() -> (u64, u64, u64) {
         SEC_DROPPED_BADSIG.load(Ordering::Relaxed),
         SEC_DROPPED_REPLAY.load(Ordering::Relaxed),
     )
+}
+
+// ─── Tier cripto (ADR-0081): Relativizado (HMAC) vs Full (Ed25519) ──────────
+// Modelo de confiança: mesmo range/datacenter provisiona uma chave de
+// segmento (`set_segment_key`) → DADOS autenticados por HMAC-SHA256 (~1.3µs/
+// pacote @1.2KB, tag 32B). Externo/não provisionado = Tier Full = Ed25519
+// (~26-46µs/pacote, prova de posse da chave de sessão). Fail-closed: sem
+// chave = Full = comportamento atual. O caminho de CONTROLE (heartbeat/ROLE/
+// TOFU) SEMPRE usa Ed25519 — é o que estabelece confiança (TOFU) e é raro
+// (~1.1s). `crypto_tier()` deriva da presença da chave — `set_segment_key`
+// é o seam público (boot/config chama; None = desprovisiona).
+
+/// Tier cripto ativo do mesh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CryptoTier {
+    /// Ed25519 em todos os caminhos (default, fail-closed).
+    Full,
+    /// Dados com HMAC-SHA256 (mesma chave de segmento no range); controle Ed25519.
+    Relativized,
+}
+
+/// Chave de segmento compartilhada (32B) — mesmo range/datacenter. None = não
+/// provisionada → Tier Full.
+static SEGMENT_KEY: Mutex<Option<[u8; 32]>> = Mutex::new(None);
+
+/// Tier cripto atual: Relativized iff SEGMENT_KEY está provisionada.
+pub fn crypto_tier() -> CryptoTier {
+    if SEGMENT_KEY.lock().is_some() {
+        CryptoTier::Relativized
+    } else {
+        CryptoTier::Full
+    }
+}
+
+/// Cópia da chave de segmento (None = não provisionada). pub(crate): usada
+/// pelo udp_broadcast (sign/verify tiered).
+pub(crate) fn segment_key() -> Option<[u8; 32]> {
+    *SEGMENT_KEY.lock()
+}
+
+/// Provisiona/desprovisiona a chave de segmento. Seam público — o boot/
+/// config chama. `Some(key)` → Tier Relativized; `None` → Tier Full.
+pub fn set_segment_key(key: Option<[u8; 32]>) {
+    *SEGMENT_KEY.lock() = key;
+    crate::slog_nano!(
+        "P2P", "info",
+        "segment key {:?} -> tier {:?}",
+        if key.is_some() { "SET" } else { "CLEARED" },
+        crypto_tier()
+    );
 }
 
 // ─── Fase B: capacidades locais + peers (ADR-0081) ─────────────────────────
@@ -1093,7 +1144,7 @@ pub fn p2p_tick(_tick: u64) {
                 buf.push(caps);
             }
         }
-        match crate::net::udp_broadcast::sign_packet(&buf) {
+        match crate::net::udp_broadcast::sign_packet_authentic(&buf) {
             Some(signed) => {
                 let ok = crate::net::udp_broadcast::udp_broadcast_send(&signed, P2P_PORT);
                 crate::slog_nano!("P2P", "info", "TX heartbeat node={} t={} sent={}", node_id, now, ok);
@@ -1128,15 +1179,30 @@ pub fn p2p_tick(_tick: u64) {
         let clk = pkt.clock;
         let tt = pkt.task_type as u8;
 
-        // (a) Todo pacote mesh deve ser assinado — fail-closed, sem exceção.
-        //     O TX assina em todos os caminhos (heartbeat, ROLE, skill, matmul).
-        if rx.len() < crate::net::noproto::PACKET_HEADER_SIZE + crate::identity::SIGNATURE_LEN {
+        // (a) Todo pacote mesh deve ser autenticado — fail-closed, sem exceção.
+        //     ADR-0081 tier cripto: controle (heartbeat/ROLE/PK\0/CAP) SEMPRE
+        //     Ed25519 (64B); DADOS usam tiered — HMAC-SHA256 32B em Relativized
+        //     (mesma chave de segmento no range), Ed25519 em Full.
+        let is_control = tt == 5
+            || (rx.len() >= crate::net::noproto::PACKET_HEADER_SIZE + 5
+                && &rx[crate::net::noproto::PACKET_HEADER_SIZE..crate::net::noproto::PACKET_HEADER_SIZE + 5] == b"ROLE\0");
+        let min_auth = if is_control || crypto_tier() == CryptoTier::Full {
+            crate::identity::SIGNATURE_LEN
+        } else {
+            crate::crypto::HMAC_TAG_LEN
+        };
+        if rx.len() < crate::net::noproto::PACKET_HEADER_SIZE + min_auth {
             SEC_DROPPED_UNSIGNED.fetch_add(1, Ordering::Relaxed);
-            crate::slog_nano!("P2P", "warn", "drop: pacote sem assinatura node={}", sid);
+            crate::slog_nano!("P2P", "warn", "drop: pacote sem autenticacao node={}", sid);
             continue;
         }
-        // Payload bruto (após header, sem assinatura) — usado só no TOFU.
-        let raw_payload = &rx[crate::net::noproto::PACKET_HEADER_SIZE..rx.len() - crate::identity::SIGNATURE_LEN];
+        // Payload bruto (após header, sem autenticação) — usado só no TOFU
+        // (heartbeat sempre Ed25519 → corte SIGNATURE_LEN correto).
+        let raw_payload: &[u8] = if tt == 5 {
+            &rx[crate::net::noproto::PACKET_HEADER_SIZE..rx.len() - crate::identity::SIGNATURE_LEN]
+        } else {
+            &[]
+        };
 
         // (c) TOFU: peer conhecido verifica contra a pk vinculada. Desconhecido
         //     só vincula via heartbeat com prefixo "PK\0"+pk (self-consistent:
@@ -1144,14 +1210,23 @@ pub fn p2p_tick(_tick: u64) {
         //     Não-heartbeat de desconhecido → drop (sem como validar).
         let data: Vec<u8>;
         match peer_pk(sid) {
-            Some(pk) => match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
-                Some(valid) => data = valid.to_vec(),
-                None => {
-                    SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
-                    crate::slog_nano!("P2P", "warn", "drop: assinatura invalida node={}", sid);
-                    continue;
+            Some(pk) => {
+                // Controle → SEMPRE Ed25519 (verify_packet); dados → tiered
+                // (HMAC em Relativized, Ed25519 em Full).
+                let verified = if is_control {
+                    crate::net::udp_broadcast::verify_packet(&rx, &pk)
+                } else {
+                    crate::net::udp_broadcast::verify_packet_tiered(&rx, &pk)
+                };
+                match verified {
+                    Some(valid) => data = valid.to_vec(),
+                    None => {
+                        SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
+                        crate::slog_nano!("P2P", "warn", "drop: autenticacao invalida node={}", sid);
+                        continue;
+                    }
                 }
-            },
+            }
             None => {
                 if tt != 5 {
                     SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
@@ -1186,8 +1261,11 @@ pub fn p2p_tick(_tick: u64) {
 
         // (d) Anti-replay: só o canal de heartbeat tem clock monotônico por
         //     fonte (não-heartbeats usam clock=0 — são autenticados pela
-        //     assinatura, não pelo clock). LAN confiável: drop se clk <= last.
+        //     autenticação, não pelo clock). LAN confiável: drop se clk <= last.
         //     ponytail: janela de reordenação (WAN) = trabalho futuro.
+        //     Tier L (Relativized): o header AiosTaskPacket TEM campo clock,
+        //     mas os senders de dados usam 0 → anti-replay de DADOS é follow-up
+        //     (exigiria clock monotônico por fonte nos senders de dados).
         if tt == 5 {
             if let Some(last) = peer_last_clock(sid) {
                 if clk <= last {

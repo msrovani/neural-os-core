@@ -494,6 +494,7 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 | Achievement | Detail |
 |---|---|
 | **P2P Mesh entre 2 QEMUs** 🏆 | **Dois kernels AIOS se descobrem e trocam skills via rede real** — broadcast UDP 42069, heartbeats cruzados, eleição Master, SkillSync push/apply (SESSION_234). Transporte em R0 (k_nano) |
+| **Tier cripto L/F mesh** 🏆 | **Cripto relativizada por contexto de rede** — mesmo range/datacenter: DADOS com HMAC-SHA256 (chave de segmento, ~30x mais rápido, ~1.3µs/pacote); externo: Ed25519 full. Controle/TOFU sempre Ed25519. Fail-closed sem chave (SESSION_240, ADR-0081 Fase B) |
 | **BitNet b1.58 loaded & running** | 850M params, L=30, forward pass OK. File: `BITNET2B.BIN` (~590MB) |
 | **E1000 RX fixed** | 0 → 184 packets after DMA uncached fix (SESSION_149/150) |
 | **NetFs smoke PASS** | TCP peer at `gateway:4446`, LIST/READ/WRITE (SESSION_152) |

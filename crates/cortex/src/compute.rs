@@ -231,10 +231,11 @@ fn mesh_matmul_worker(w: &PackedTernaryTensor, x: &Tensor) -> Option<Tensor> {
             let sender = p.source_id;
             if tt == 1 && d == node_id && rx.len() > k_nano::net::noproto::PACKET_HEADER_SIZE {
                 // Fase A (SESSION_236): só aceita resposta do Master — verifica
-                // contra a pk vinculada na tabela TOFU do mesh.
+                // contra a pk vinculada na tabela TOFU do mesh. ADR-0081: dados
+                // usam tiered (HMAC em Relativized, Ed25519 em Full).
                 let Some(pk) = k_nano::net::mesh::peer_public_key(sender) else { continue };
-                let Some(valid) = k_nano::net::udp_broadcast::verify_packet(&rx, &pk) else {
-                    continue; // assinatura inválida — DROP
+                let Some(valid) = k_nano::net::udp_broadcast::verify_packet_tiered(&rx, &pk) else {
+                    continue; // autenticação inválida — DROP
                 };
                 if valid.len() <= k_nano::net::noproto::PACKET_HEADER_SIZE {
                     continue;

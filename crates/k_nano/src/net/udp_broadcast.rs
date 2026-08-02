@@ -82,17 +82,47 @@ pub fn parse(data: &[u8]) -> Option<AiosTaskPacket> {
 }
 
 // ── Step 6: Ed25519 signing / verification ──────────────────────────
+// ADR-0081 tier cripto (crates/k_nano/src/crypto.rs):
+// - `sign_packet_authentic`: SEMPRE Ed25519 (64B) — caminho de controle/
+//   TOFU (heartbeat, ROLE, PK\0/CAP). Raro (~1.1s no heartbeat).
+// - `sign_packet_tiered` (= `sign_packet`): DADOS — Tier Relativized anexa
+//   tag HMAC-SHA256 32B (key = SEGMENT_KEY); Tier Full usa Ed25519.
 
 /// Assina o payload serializado do pacote NoProto com a chave de sessão.
 /// Retorna o pacote original + assinatura de 64 bytes concatenada.
+/// Caminho "authentic" (Ed25519): heartbeat/ROLE/TOFU — sempre assimétrica,
+/// prova de posse da chave de sessão.
 ///
-/// Uso: `let signed = sign_packet(&serialize(&pkt));`
-pub fn sign_packet(serialized: &[u8]) -> Option<Vec<u8>> {
+/// Uso: `let signed = sign_packet_authentic(&serialize(&pkt));`
+pub fn sign_packet_authentic(serialized: &[u8]) -> Option<Vec<u8>> {
     let sig = identity::sign_session(serialized)?;
     let mut out = Vec::with_capacity(serialized.len() + identity::SIGNATURE_LEN);
     out.extend_from_slice(serialized);
     out.extend_from_slice(&sig);
     Some(out)
+}
+
+/// Assina conforme o tier cripto do mesh (ADR-0081):
+/// - Tier Relativized (`crypto_tier() == Relativized`): anexa tag
+///   HMAC-SHA256 de 32B (key = SEGMENT_KEY) — ~1.3µs/pacote @1.2KB.
+/// - Tier Full: Ed25519 (idêntico ao caminho authentic).
+pub fn sign_packet_tiered(serialized: &[u8]) -> Option<Vec<u8>> {
+    if let Some(key) = crate::net::mesh::segment_key() {
+        let tag = crate::crypto::hmac_sha256(&key, serialized);
+        let mut out = Vec::with_capacity(serialized.len() + crate::crypto::HMAC_TAG_LEN);
+        out.extend_from_slice(serialized);
+        out.extend_from_slice(&tag);
+        Some(out)
+    } else {
+        sign_packet_authentic(serialized)
+    }
+}
+
+/// Alias do caminho tiered — usado pelos call sites de DADOS (matmul,
+/// experts, FL, skills, CRDT, knowledge). Heartbeat/ROLE usam
+/// `sign_packet_authentic`.
+pub fn sign_packet(serialized: &[u8]) -> Option<Vec<u8>> {
+    sign_packet_tiered(serialized)
 }
 
 /// Verifica a assinatura Ed25519 no final de um pacote recebido.
@@ -111,6 +141,30 @@ pub fn verify_packet<'a>(data: &'a [u8], pk: &[u8; identity::PUBLIC_KEY_LEN]) ->
         Some(pkt_data)
     } else {
         None
+    }
+}
+
+/// Verifica um pacote de DADOS conforme o tier cripto atual:
+/// - Tier Relativized: tag HMAC-SHA256 de 32B no final (key = SEGMENT_KEY),
+///   comparada com `ct_eq` (constant-time).
+/// - Tier Full: delega ao `verify_packet` (Ed25519, comportamento atual).
+/// Heartbeat/ROLE/TOFU devem SEMPRE usar `verify_packet` (Ed25519).
+pub fn verify_packet_tiered<'a>(data: &'a [u8], pk: &[u8; identity::PUBLIC_KEY_LEN]) -> Option<&'a [u8]> {
+    if let Some(key) = crate::net::mesh::segment_key() {
+        if data.len() < mem::size_of::<AiosTaskPacket>() + crate::crypto::HMAC_TAG_LEN {
+            return None;
+        }
+        let tag_offset = data.len() - crate::crypto::HMAC_TAG_LEN;
+        let pkt_data = &data[..tag_offset];
+        let tag = &data[tag_offset..];
+        let expect = crate::crypto::hmac_sha256(&key, pkt_data);
+        if crate::crypto::ct_eq(tag, &expect) {
+            Some(pkt_data)
+        } else {
+            None
+        }
+    } else {
+        verify_packet(data, pk)
     }
 }
 

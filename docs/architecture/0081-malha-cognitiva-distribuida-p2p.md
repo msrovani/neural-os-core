@@ -434,7 +434,37 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 | Anti-replay | heartbeats com `clock <= last` → DROP (LAN confiável; janela WAN = futuro) | ✅ |
 | Seam SKYNET | `peer_public_key(node_id)` público — TEE attestation pode pré-preenchê-la sem mudar o mesh | ✅ |
 
-### Fase B — Criptografia do payload (PLANEJADA, prioridade 2)
+### Fase B — Tier cripto: Relativizado (HMAC, mesmo range) vs Full (Ed25519) ✅ GATE IMPLEMENTADO (2026-08-02)
+
+**Decisão do maintainer (2026-08-02):** a cripto é **relativizada pelo contexto de rede**. Nós no **mesmo range/subnet (em tese um datacenter)** podem relaxar autenticação em troca de velocidade — **DADOS** passam a usar HMAC-SHA256 com chave de segmento compartilhada. **Mesh externo** (WAN/não-isolado) mantém o protocolo completo (Ed25519 por-pacote agora; AEAD na evolução abaixo). O caminho de **CONTROLE (heartbeat/ROLE/TOFU) é SEMPRE Ed25519** — é ele que estabelece/renova confiança e é raro (~1.1s).
+
+**Análise de custo (benchmarks eBACS/lib25519/dalek/OpenSSL, Zen 4-class @4GHz):**
+
+| Primitiva | Heartbeat ~300B | Fragmento ~1.2KB | Payload 17.5KB |
+|-----------|-----------------|-------------------|----------------|
+| Ed25519 sign | ~8-16µs | ~8-16µs | ~8-16µs (1x, já amortizado: sign → fragment, verify pós-reassembly) |
+| Ed25519 verify | ~26-46µs | ~26-46µs | ~26-46µs (1x) |
+| HMAC-SHA256 (Relativizado) | ~0.6µs | ~1.3µs | ~11.5µs |
+| ChaCha20-Poly1305 | ~0.35µs | ~0.85µs | ~12.5µs |
+| AES-256-GCM (AES-NI) | ~0.07µs | ~0.33µs | ~3µs |
+| X25519 handshake | one-time ~19-30µs/peer | — | — |
+
+**Conclusões:** (1) assinatura Ed25519 domina o custo por ~2 ordens de magnitude em pacotes pequenos — custo fixo, independente do tamanho; (2) verify Ed25519 limita throughput a **~37 MB/s/core (~0.3 Gbps)** — satura 1 core antes de 1Gbps; HMAC ~1.3µs → ~8 Gbps; (3) em datacenter (RTT ~0.1-0.5ms) +40µs/pacote = +8-40% do RTT — visível; em WAN (10-100ms) é 0.04-0.4% — invisível; (4) **onde dá pra relativizar o custo é alto; onde não dá, a latência de rede engole o custo** — a diretriz do maintainer é arquiteturalmente correta; (5) implementação importa 3-4x (OpenSSL EVP verify ~100µs vs lib25519 ~32µs) — usamos `ed25519-compact` (sem SIMD; calibrar no target é recomendado); (6) bare-metal: crypto esparsa paga ~14µs de warm-up de unidades vetoriais por rajada.
+
+**Implementado (commit desta sessão, sem dep nova):**
+
+| Item | Detalhe | Status |
+|------|---------|--------|
+| `k_nano::crypto` (novo) | `hmac_sha256` (RFC 2104/4231, reusa `tpm::sha256`), `ct_eq` constant-time, `hmac_self_test` (RFC 4231 caso 1) | ✅ |
+| Seam de provisionamento | `mesh::set_segment_key(Option<[u8;32]>)` — mesmo range/datacenter provisiona a chave; `None` = desprovisiona | ✅ |
+| `crypto_tier()` | `Relativized` iff `SEGMENT_KEY` provisionada; senão `Full` (**fail-closed, zero regressão**) | ✅ |
+| TX dados | `sign_packet` → tiered: Relativized anexa tag HMAC 32B; Full = Ed25519. Heartbeat/ROLE usam `sign_packet_authentic` (sempre Ed25519) | ✅ |
+| RX | Controle (tt==5/`ROLE\0`) sempre Ed25519; dados de peer conhecido → tiered (HMAC ct_eq em Relativized, Ed25519 em Full); falha → DROP + contador | ✅ |
+| Self-test | `hmac_self_test()` no boot (main.rs, seção self-tests ADR-0081) | ✅ |
+
+**Segurança:** a tag HMAC cobre o frame inteiro (header+payload) e é verificada com comparação constant-time — previne injeção/adulteração por nó não-provisionado no segmento. Anti-replay permanece no canal heartbeat (dados usam `clock=0` — anti-replay de dados em Tier L é follow-up: exigiria clock monotônico por fonte nos senders de dados). TOFU/PEER_KEYS inalterados — HMAC não vincula identidade nova (peers desconhecidos só fazem TOFU via heartbeat Ed25519).
+
+**Evolução planejada (quando houver tráfego sensível em rede não-isolada):**
 
 | Item | Detalhe | Custo |
 |------|---------|-------|
@@ -444,7 +474,7 @@ SKYNET e neural-os-core são **altamente complementares**: neural-os-core fornec
 | Decrypt | Antes do parse; falha → drop | ~40 LOC |
 | Modo dev | Pacotes não-encriptados → drop OU aceitar só em modo dev (flag) | ~20 LOC |
 
-**Total Fase B: ~250-350 LOC, 2-3 arquivos, dep nova, risco alto (nonce mgmt, rejeição de reuse), ~4-6h.** Necessária quando houver tráfego sensível (FL com gradientes, matmul de dados reais) em rede não-isolada.
+**Total: ~250-350 LOC, 2-3 arquivos, dep nova, risco alto (nonce mgmt, rejeição de reuse), ~4-6h.** Aplicável ao Tier F (externo) — no mesmo range o HMAC já entrega integridade/autenticidade com custo 30x menor; confidencialidade (AEAD) no datacenter é opcional.
 
 ### Sugestões (oracle review recomendado antes de implementar)
 

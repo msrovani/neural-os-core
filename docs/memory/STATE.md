@@ -1,4 +1,25 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s240 — Tier cripto L/F (ADR-0081 Fase B)
+#   SESSION_240: Relativizado (HMAC) vs Full (Ed25519) (2026-08-02)
+#     Decisao maintainer: mesmo range/subnet (datacenter) relativiza cripto
+#       dos DADOS (HMAC-SHA256 + chave de segmento) em troca de velocidade;
+#       mesh externo = protocolo completo. Controle/TOFU SEMPRE Ed25519.
+#     Custo (eBACS/lib25519/dalek/OpenSSL): Ed25519 verify ~26-46us/pacote
+#       (fixo, ~0.3 Gbps/core) vs HMAC ~1.3us @1.2KB (~8 Gbps) — ~30x. Em
+#       datacenter (RTT 0.1-0.5ms) cripto = +8-40% RTT (visivel); WAN = 0.04%
+#       (invisivel). Onde da p/ relativizar o custo e alto; onde nao da a rede
+#       engole. ed25519-compact sem SIMD — calibrar no target (follow-up).
+#     Impl (sem dep nova): k_nano/src/crypto.rs (hmac_sha256 RFC 2104/4231 +
+#       ct_eq + hmac_self_test RFC 4231 no boot); mesh.rs SEGMENT_KEY +
+#       crypto_tier() + seam set_segment_key(None=Full, fail-closed);
+#       udp_broadcast sign_packet tiered (HMAC 32B Relativized / Ed25519 Full)
+#       + sign_packet_authentic (heartbeat/ROLE); RX controle sempre Ed25519,
+#       dados tiered, falha DROP; compute.rs:237 Worker MR tiered.
+#     ADR-0081 Fase B atualizado (tiers + tabela custo + evolucao AEAD).
+#     cargo check 0 erros. Pendente: SemanticRouter, merge conteudo CRDT,
+#       AEAD Tier F, anti-replay dados Tier L (clock=0 nos senders), merkle.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s239 — Fase C ADR-0081 (experts/DSD/tier/FL/CRDT)
 #   SESSION_239: Fase C completa (2026-08-01)
 #     C2 experts: ED\0/EDR\0 (capacity_weighted_assign, poll_expert_requests)

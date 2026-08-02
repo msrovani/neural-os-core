@@ -1818,6 +1818,8 @@ pub(crate) fn kernel_boot(
     let _ = k_nano::net::mesh::chunk_self_test();
     let _ = cortex_crate::cortex::model_save_roundtrip_self_test();
     let _ = cortex_crate::federated::federated_self_test();
+    // ADR-0081 tier cripto (Relativizado HMAC-SHA256): vetor RFC 4231 caso 1.
+    let _ = k_nano::crypto::hmac_self_test();
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
     // porto seguro: B/C nativo gated até o ring passar o gate.
     crate::isolation_ring::init_connectors();

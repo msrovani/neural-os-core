@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### SESSION_240: Tier cripto Relativizado (HMAC) vs Full (Ed25519) — ADR-0081 Fase B (2026-08-02) ✅
+- **Decisão (maintainer)**: mesmo range/subnet (datacenter) → cripto "relativizada"
+  em troca de velocidade (DADOS com HMAC-SHA256 + chave de segmento); mesh externo
+  → protocolo completo (Ed25519; AEAD na evolução). Controle/TOFU SEMPRE Ed25519.
+- **Análise de custo (eBACS/lib25519/dalek/OpenSSL, Zen 4-class)**: Ed25519 verify
+  ~26-46µs/pacote (custo fixo) vs HMAC ~1.3µs @1.2KB — ~30x; verify limita
+  throughput a ~0.3 Gbps/core vs ~8 Gbps (HMAC); em datacenter (RTT 0.1-0.5ms)
+  a cripto é +8-40% do RTT (visível), em WAN é invisível — onde dá pra relativizar
+  o custo é alto, onde não dá a rede engole. Implementação importa 3-4x (OpenSSL
+  EVP ~100µs vs lib25519 ~32µs; usamos ed25519-compact sem SIMD).
+- **feat(k_nano): `crypto.rs` (novo)** — `hmac_sha256` (RFC 2104/4231, reusa
+  `tpm::sha256`, sem dep nova), `ct_eq` (constant-time), `hmac_self_test`
+  (RFC 4231 caso 1, roda no boot).
+- **feat(mesh): gate L/F** — `SEGMENT_KEY` + `crypto_tier()` + seam
+  `set_segment_key(Option<[u8;32]>)` (`mesh.rs`); TX dados tiered
+  (`sign_packet` → HMAC 32B em Relativized / Ed25519 em Full;
+  `sign_packet_authentic` para heartbeat/ROLE) e RX fail-closed tiered
+  (controle sempre Ed25519; dados de peer conhecido → tiered; falha → DROP)
+  em `udp_broadcast.rs`; Worker MR usa `verify_packet_tiered` (`compute.rs`).
+  Fail-closed: sem chave = Full = comportamento atual (zero regressão).
+- **docs(adr-0081)**: Fase B atualizada com tiers + tabela de custo + evolução
+  AEAD (X25519+ChaCha20) p/ Tier F externo. Anti-replay de dados em Tier L
+  (clock=0 nos senders) = follow-up.
+- **cargo check --release**: 0 erros.
+
 ### SESSION_239: Fase C ADR-0081 — experts + DSD + NodeTier + FL + CRDT (2026-08-01) ✅
 - **feat(mesh): experts distribuídos (C2)** — `mesh_distrib.rs`: Worker→Master `ED\0`
   (lista de experts assinada+fragmentável), Master→Worker `EDR\0` (assign ponderado
