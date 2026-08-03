@@ -41,8 +41,8 @@ static mut SAVED_RSP: u64 = 0;
 static mut SAVED_CALLEE: [u64; 6] = [0; 6];
 
 /// Feature: `iretq` real. Default off — QEMU UEFI storm #PF (CR2=ip, err=0x10).
-/// Cap deny path ainda roda; reativar quando clone CR3 mapear kernel text.
-pub const TRY_ENTER_RING3: bool = true; // Ring3 ativado — páginas USER com USER_ACCESSIBLE, safe HHDM
+/// Cap deny path still runs; re-enable when clone CR3 maps kernel text.
+pub const TRY_ENTER_RING3: bool = false; // Ring3 disabled — pages USER with USER_ACCESSIBLE, safe HHDM
 
 #[inline]
 pub fn demo_active() -> bool {
@@ -344,11 +344,6 @@ pub fn run_elf(data: &[u8]) -> Result<(), &'static str> {
         return Err("P6: Cap vazia nao deveria entrar");
     }
     k_nano::slog_bin!("P6", "info", "Cap::ENTER_USER deny OK");
-
-    if !TRY_ENTER_RING3 {
-        k_nano::slog_bin!("P6", "info", "stub path ready; TRY_ENTER_RING3=false — skip iretq");
-        return Ok(());
-    }
 
     let mut as_user = address_space::create_sandbox_as()?;
     let code_frame = address_space::alloc_frame()?;

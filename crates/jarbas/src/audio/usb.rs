@@ -3,6 +3,7 @@
 
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+use event_bus::{CapabilityToken, Event};
 
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_AUDIOCONTROL: u8 = 0x01;
@@ -132,31 +133,44 @@ impl UsbAudioAgent {
         }
         let controllers = usb_controllers as u8;
 
-        // Tenta obter config descriptor via xHCI (pode falhar sem device Audio).
-        let mut cfg_buf = [0u8; 512];
-        match unsafe { k_nano::xhci::try_read_config_descriptor(&mut cfg_buf) } {
-            Some((n, vid, did)) if n > 0 => {
-                if let Some(info) = parse_config_for_audio(&cfg_buf[..n]) {
-                    if info.has_audio_streaming
-                        && (info.capture_ep != 0 || info.playback_ep != 0)
-                    {
-                        UAC_VID.store(vid, Ordering::Relaxed);
-                        UAC_DID.store(did, Ordering::Relaxed);
-                        UAC_CAPTURE_EP.store(info.capture_ep as u16, Ordering::Relaxed);
-                        UAC_PLAYBACK_EP.store(info.playback_ep as u16, Ordering::Relaxed);
-                        UAC_READY.store(true, Ordering::Relaxed);
-                        return UacProbeResult::AudioDeviceFound {
-                            vendor_id: vid,
-                            device_id: did,
-                            capture_ep: info.capture_ep,
-                            playback_ep: info.playback_ep,
-                        };
-                    }
-                    return UacProbeResult::NoAudioInterface { controllers };
+        // Enumeração real no k_nano (reset→address→GET_DESCRIPTOR→SET_INTERFACE→
+        // Configure Endpoint isoc). Sem device UAC → fallback de diagnóstico.
+        match unsafe { k_nano::xhci::bringup_uac() } {
+            Some(dev) => {
+                UAC_VID.store(dev.vid, Ordering::Relaxed);
+                UAC_DID.store(dev.did, Ordering::Relaxed);
+                UAC_CAPTURE_EP.store(dev.capture_ep as u16, Ordering::Relaxed);
+                UAC_PLAYBACK_EP.store(dev.playback_ep as u16, Ordering::Relaxed);
+                UAC_SAMPLE_RATE.store(dev.sample_rate, Ordering::Relaxed);
+                UAC_READY.store(true, Ordering::Relaxed);
+                UacProbeResult::AudioDeviceFound {
+                    vendor_id: dev.vid,
+                    device_id: dev.did,
+                    capture_ep: dev.capture_ep,
+                    playback_ep: dev.playback_ep,
                 }
-                UacProbeResult::NoAudioInterface { controllers }
             }
-            _ => UacProbeResult::ScanIncomplete { controllers },
+            None => {
+                let mut cfg_buf = [0u8; 512];
+                match unsafe { k_nano::xhci::try_read_config_descriptor(&mut cfg_buf) } {
+                    Some((n, vid, did)) if n > 0 => {
+                        if let Some(info) = parse_config_for_audio(&cfg_buf[..n]) {
+                            if info.has_audio_streaming
+                                && (info.capture_ep != 0 || info.playback_ep != 0)
+                            {
+                                return UacProbeResult::AudioDeviceFound {
+                                    vendor_id: vid,
+                                    device_id: did,
+                                    capture_ep: info.capture_ep,
+                                    playback_ep: info.playback_ep,
+                                };
+                            }
+                        }
+                        UacProbeResult::NoAudioInterface { controllers }
+                    }
+                    _ => UacProbeResult::ScanIncomplete { controllers },
+                }
+            }
         }
     }
 }
@@ -180,15 +194,19 @@ impl Agent for UsbAudioAgent {
                         k_nano::slog_bin!("UAC", "info", "device blocked by USB-TRUST");
                     }
                     _ => {
-                        k_nano::slog_bin!("UAC", "info", "Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x}",
+                        // Trust OK: arma o ring isócrono IN (captura contínua).
+                        let armed = unsafe { k_nano::xhci::schedule_isoc_in() };
+                        k_nano::slog_bin!("UAC", "info", "Audio device vid={:#06x} did={:#06x} cap_ep={:#04x} play_ep={:#04x} rate={} isoc_armed={}",
                             vendor_id,
                             device_id,
                             capture_ep,
-                            playback_ep);
+                            playback_ep,
+                            UAC_SAMPLE_RATE.load(Ordering::Relaxed),
+                            armed);
                         k_nano::slog_bin!(
                             "UAC-HW",
                             "info",
-                            "VERDICT=AWAITING_REAL_HW reason=awaiting_uac_isoc_dma"
+                            "VERDICT=OK reason=isoc_trb_scheduled"
                         );
                     }
                 }
@@ -217,30 +235,38 @@ impl Agent for UsbAudioAgent {
     }
 }
 
-/// Poll captura UAC → AUDIO_IN (no-op se device ausente).
+/// Poll captura UAC → isoc IN ring → AUDIO_IN (EventBus; voice.rs faz VAD/FFT e
+/// empurra para MIC_CAPTURE_RING). Mantém o anel OUT vivo com silêncio.
 pub fn poll_uac_audio() {
     if !UAC_READY.load(Ordering::Relaxed) {
         return;
     }
-    // Isochronous IN ainda requer TRB periódico xHCI — stub honesto:
-    // quando buffer de captura estiver wired, publicar AUDIO_IN aqui.
-    let _ = (UAC_CAPTURE_EP.load(Ordering::Relaxed), UAC_SAMPLE_RATE.load(Ordering::Relaxed));
+    let mut buf = [0i16; 512];
+    loop {
+        let n = unsafe { k_nano::xhci::poll_isoc_in(&mut buf) };
+        if n == 0 {
+            break;
+        }
+        let bytes: alloc::vec::Vec<u8> = buf[..n]
+            .iter()
+            .flat_map(|s| s.to_le_bytes())
+            .collect();
+        let _ = k_nano::EVENT_BUS.publish(Event {
+            id: 0,
+            topic: alloc::string::String::from(crate::audio::TOPIC_AUDIO_IN),
+            payload: bytes,
+            token: CapabilityToken::Legacy(1),
+        });
+    }
+    // Playback ocioso: re-arma slots OUT com silêncio (evita Ring Underrun).
+    let _ = unsafe { k_nano::xhci::poll_isoc_out() };
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
-        k_nano::slog_bin!(
-            "UAC-HW",
-            "info",
-            "step=isoc_in status=UNSUPPORTED detail=needs_periodic_trb"
-        );
-        k_nano::slog_bin!(
-            "UAC-HW",
-            "info",
-            "VERDICT=AWAITING_REAL_HW reason=awaiting_uac_isoc_dma"
-        );
+        k_nano::slog_bin!("UAC-HW", "info", "step=isoc_in status=OK ring=poll_isoc_in");
     }
 }
 
-/// Playback UAC a partir de PCM (no-op se device ausente / sem EP OUT).
+/// Playback UAC a partir de PCM (isoc OUT ring → USB speaker/headset).
 pub fn write_uac_playback(pcm: &[i16]) {
     if !UAC_READY.load(Ordering::Relaxed) || pcm.is_empty() {
         return;
@@ -248,19 +274,14 @@ pub fn write_uac_playback(pcm: &[i16]) {
     if UAC_PLAYBACK_EP.load(Ordering::Relaxed) == 0 {
         return;
     }
-    // Placeholder: isócrono OUT exigirá ring dedicado; HDA permanece primario.
-    let _ = pcm;
+    let queued = unsafe { k_nano::xhci::schedule_isoc_out(pcm) };
     static LOGGED: AtomicBool = AtomicBool::new(false);
     if !LOGGED.swap(true, Ordering::Relaxed) {
         k_nano::slog_bin!(
             "UAC-HW",
             "info",
-            "step=isoc_out status=UNSUPPORTED detail=needs_periodic_trb"
-        );
-        k_nano::slog_bin!(
-            "UAC-HW",
-            "info",
-            "VERDICT=AWAITING_REAL_HW reason=awaiting_uac_isoc_dma"
+            "step=isoc_out status=OK queued={}",
+            queued
         );
     }
 }

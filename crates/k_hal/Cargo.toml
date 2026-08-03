@@ -1,6 +1,6 @@
 [package]
 name = "k-hal"
-version = "0.1.0"
+version = "1.9.9"
 edition = "2021"
 description = "ADR-0041 R1 — device HAL / VirtIO-bound backends (L1 sensório-motor)"
 

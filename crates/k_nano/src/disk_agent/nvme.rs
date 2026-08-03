@@ -61,8 +61,8 @@ impl NvmeDriver {
         let dev = devs.iter().find(|d| d.class == 0x01 && d.subclass == 0x08)?;
         let pmoff = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
         let bar0 = (dev.bar0 & !0xF) as u64 | ((dev.bar1 as u64) << 32);
-        crate::apic::set_page_uc(bar0, pmoff);
-        crate::apic::set_page_uc(bar0 + 0x1000, pmoff);
+        crate::apic::map_page_uc(bar0, pmoff);
+        crate::apic::map_page_uc(bar0 + 0x1000, pmoff);
         crate::pci::enable_pci_bus_master(dev);
 
         let mmio = (bar0 + pmoff) as *mut u32;

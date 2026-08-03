@@ -4,7 +4,7 @@
 //!
 //! Log: `slog_hal!(Item, subitem, "…")` → `[T+n] [R1] [k-hal] [Item] [subitem] - …`
 
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![feature(abi_x86_interrupt)]
 #![allow(dead_code)]
 #![allow(unused_unsafe)]

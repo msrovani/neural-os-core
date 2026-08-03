@@ -1,6 +1,6 @@
 ﻿[package]
 name = "boot"
-version = "0.1.0"
+version = "1.9.9"
 edition = "2021"
 publish = false
 

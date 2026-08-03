@@ -56,7 +56,7 @@ impl SysInfoAgent {
         // ── Memória ──
         let ram_mb = k_nano::memory::TOTAL_RAM_MB.load(Ordering::Relaxed);
         let heap_mb = k_nano::allocator::CURRENT_HEAP_MB.load(Ordering::Relaxed);
-        let heap_used = k_nano::allocator::HEAP_LIMIT.load(Ordering::Relaxed) / (1024 * 1024);
+        let heap_used_mb = k_nano::allocator::heap_used_bytes() / (1024 * 1024);
         // Frame allocator
         let frames = k_nano::memory::GLOBAL_ALLOCATOR.lock();
         let (frame_pct, _frame_used, _frame_total) = if let Some(fa) = frames.as_ref() {
@@ -68,7 +68,7 @@ impl SysInfoAgent {
         drop(frames);
         body.push(Widget::KeyValue(
             String::from("RAM"),
-            format!("{}MB total, heap {}M/{}M used", ram_mb, heap_used, heap_mb),
+            format!("{}MB total, heap {}M/{}M used", ram_mb, heap_used_mb, heap_mb),
         ));
         body.push(Widget::Gauge {
             label: String::from("Frames"),

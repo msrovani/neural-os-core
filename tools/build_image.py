@@ -71,6 +71,21 @@ def main():
     target_dir = os.path.join(ROOT, "target")
     os.makedirs(target_dir, exist_ok=True)
 
+    # Firmware blobs são fetch-at-build (fora do git) — garantir antes de montar
+    fw_policy = os.path.join(ROOT, "firmware", "FW_POLICY.txt")
+    if not os.path.exists(fw_policy):
+        print("[FW] firmware/FW_POLICY.txt ausente — buscando blobs (download_firmware.py)...")
+        r = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "tools", "download_firmware.py")],
+            cwd=ROOT,
+        )
+        if r.returncode != 0 or not os.path.exists(fw_policy):
+            print("[ERRO] firmware indisponivel. Rode manualmente:")
+            print("       python tools/download_firmware.py")
+            print("       (requer git + rede; cria firmware/ + target/firmware/ + SHA256SUMS)")
+            sys.exit(1)
+        print("[FW] fetch ok.")
+
     if args.unified:
         if not args.hw:
             print("[ERRO] --unified requer --hw (USB HW real, nao QEMU)")

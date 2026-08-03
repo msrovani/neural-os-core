@@ -554,7 +554,8 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
         let total_frags = u32::from_le_bytes([pkt[9], pkt[10], pkt[11], pkt[12]]);
         let idx = u32::from_le_bytes([pkt[13], pkt[14], pkt[15], pkt[16]]);
         let total_len = u32::from_le_bytes([pkt[17], pkt[18], pkt[19], pkt[20]]) as usize;
-        if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 {
+        let max_legit_len = (FRAG_MAX_PARTS as usize) * FRAG_MAX_CHUNK;
+        if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 || total_len > max_legit_len {
             continue; // cabeçalho inválido — descarta
         }
         let chunk = &pkt[FRAG_HEADER_SIZE..];
@@ -753,7 +754,8 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         let total_frags = u32::from_le_bytes([pkt[9], pkt[10], pkt[11], pkt[12]]);
         let idx = u32::from_le_bytes([pkt[13], pkt[14], pkt[15], pkt[16]]);
         let total_len = u32::from_le_bytes([pkt[17], pkt[18], pkt[19], pkt[20]]) as usize;
-        if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 {
+        let max_legit_len = (FRAG_MAX_PARTS as usize) * FRAG_MAX_CHUNK;
+        if total_frags == 0 || total_frags > FRAG_MAX_PARTS || idx >= total_frags || total_len == 0 || total_len > max_legit_len {
             continue; // cabeçalho inválido — descarta
         }
         let chunk = &pkt[FRAG_HEADER_SIZE..];

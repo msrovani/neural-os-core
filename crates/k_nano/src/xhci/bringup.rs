@@ -4,6 +4,39 @@
 
 use super::{alloc_phys, portsc_addr, r32, w32, BulkEndpoint, XHCI_STATE};
 
+/// Espera um Transfer Event (type 32) no anel de eventos, varrendo a partir de
+/// `er_dequeue` (padrão wait_cmd_completion) e avançando o ERDP. O poll antigo
+/// lia o índice 0 fixo — nunca via eventos depois do 1º comando consumido.
+/// Retorna true se CC == Success (1) ou Short Packet (13).
+unsafe fn wait_transfer_event(timeout: u32) -> bool {
+    for _ in 0..timeout {
+        let mut g = XHCI_STATE.lock();
+        let Some(st) = g.as_mut() else { return false };
+        let evt = st.er_va as *const u32;
+        for look in 0..16u16 {
+            let i = ((st.er_dequeue as u32 + look as u32) % 256) as usize;
+            let dw2 = evt.add(i * 4 + 2).read_volatile();
+            let dw3 = evt.add(i * 4 + 3).read_volatile();
+            let trb_type = (dw3 >> 10) & 0x3F;
+            if trb_type != 32 {
+                continue;
+            }
+            let cc = ((dw2 >> 24) & 0xFF) as u8;
+            st.er_dequeue = ((i as u32 + 1) % 256) as u16;
+            let er_pa = st.er_va - st.pmoff;
+            let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
+            let rt = st.base + rtsoff;
+            let erdp = er_pa + (st.er_dequeue as u64) * 16;
+            w32(rt, 0x18, erdp as u32);
+            w32(rt, 0x1C, (erdp >> 32) as u32);
+            return cc == 1 || cc == 13;
+        }
+        drop(g);
+        core::hint::spin_loop();
+    }
+    false
+}
+
 /// Resultado do bring-up do pendrive bootável (dados FAT / BOOT.LOG).
 pub struct MscDevice {
     pub slot: u8,
@@ -366,17 +399,7 @@ unsafe fn ep0_class_no_data(
         let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
-    for _ in 0..100_000 {
-        let g = XHCI_STATE.lock();
-        let Some(st) = g.as_ref() else { return false };
-        let evt = st.er_va as *const u32;
-        let trb_type = (evt.add(3).read_volatile() >> 10) & 0x3F;
-        if trb_type == 32 {
-            return true;
-        }
-        drop(g);
-        core::hint::spin_loop();
-    }
+    let _ = wait_transfer_event(100_000);
     true // best-effort — alguns devices ignoram SET_PROTOCOL
 }
 
@@ -477,20 +500,7 @@ unsafe fn ep0_control_in(
         let st = match g.as_ref() { Some(s) => s, None => return false };
         w32(st.base, st.db_off + (slot as u64) * 4, 1);
     }
-    let mut ok = false;
-    for _ in 0..200_000 {
-        let g = XHCI_STATE.lock();
-        let Some(st) = g.as_ref() else { return false };
-        let evt = st.er_va as *const u32;
-        let trb_type = (evt.add(3).read_volatile() >> 10) & 0x3F;
-        if trb_type == 32 {
-            let cc = (evt.add(2).read_volatile() >> 24) & 0xFF;
-            ok = cc == 1 || cc == 13;
-            break;
-        }
-        drop(g);
-        core::hint::spin_loop();
-    }
+    let ok = wait_transfer_event(200_000);
     if ok {
         core::ptr::copy_nonoverlapping(data_pa.1, data.as_mut_ptr(), data.len());
     }
@@ -847,19 +857,380 @@ unsafe fn ep0_set_configuration(slot: u8, ep0_mps: u16, config: u8) -> bool {
         w32(st.base, st.db_off + (slot as u64) * 4, 1); // EP0 DCI=1
     }
 
-    // Poll transfer event (reuse bulk timeout style)
-    for _ in 0..200_000 {
-        let g = XHCI_STATE.lock();
-        let Some(st) = g.as_ref() else { return false };
-        let evt = st.er_va as *const u32;
-        let dw3 = evt.add(3).read_volatile();
-        let trb_type = (dw3 >> 10) & 0x3F;
-        if trb_type == 32 {
-            let cc = (evt.add(2).read_volatile() >> 24) & 0xFF;
-            return cc == 1 || cc == 13; // Success or Short Packet
-        }
-        drop(g);
-        core::hint::spin_loop();
+    wait_transfer_event(200_000)
+}
+
+// ── UAC bring-up (ADR-0045) — isócrono ─────────────────────────────────────
+// Enumera a 1ª porta CCS não usada (MSC/HID), lê o Configuration Descriptor,
+// detecta interface Audio Streaming (class 0x01, subclass 0x02), faz
+// SET_CONFIGURATION + SET_INTERFACE(alt real) e configura os EPs isócronos
+// (Configure Endpoint). Rings ficam em ISOC_IN/ISOC_OUT; o arm inicial é feito
+// por schedule_isoc_in()/schedule_isoc_out() após trust OK (jarbas).
+
+struct UacEpInfo {
+    iface: u8,
+    alt: u8,
+    capture_ep: u8,
+    playback_ep: u8,
+    max_packet: u16,
+    b_interval: u8,
+    sample_rate: u16,
+}
+
+/// Parseia o Configuration Descriptor procurando interface UAC streaming com
+/// EPs isócronos. Prefere o alt setting mais alto que tenha EPs (alt 0 = zero
+/// bandwidth, sem EPs). Extrai taxa de amostragem do descriptor de formato
+/// (CS_INTERFACE 0x24, FORMAT_TYPE PCM) quando presente.
+fn parse_uac_config(cfg: &[u8]) -> Option<UacEpInfo> {
+    if cfg.len() < 9 || cfg[1] != 0x02 {
+        return None;
     }
-    false
+    let total = u16::from_le_bytes([cfg[2], cfg[3]]) as usize;
+    let end = total.min(cfg.len());
+    let mut cur = UacEpInfo {
+        iface: 0,
+        alt: 0,
+        capture_ep: 0,
+        playback_ep: 0,
+        max_packet: 0,
+        b_interval: 1,
+        sample_rate: 48000,
+    };
+    let mut chosen: Option<UacEpInfo> = None;
+    let mut in_streaming = false;
+    let mut i = 0usize;
+    while i + 2 <= end {
+        let blen = cfg[i] as usize;
+        if blen < 2 || i + blen > end {
+            break;
+        }
+        let dtype = cfg[i + 1];
+        match dtype {
+            0x04 if blen >= 9 => {
+                // INTERFACE: fecha o candidato anterior com EPs e abre novo.
+                if cur.capture_ep != 0 || cur.playback_ep != 0 {
+                    chosen = Some(cur);
+                }
+                let if_class = cfg[i + 5];
+                let if_sub = cfg[i + 6];
+                cur = UacEpInfo {
+                    iface: cfg[i + 2],
+                    alt: cfg[i + 3],
+                    capture_ep: 0,
+                    playback_ep: 0,
+                    max_packet: 0,
+                    b_interval: 1,
+                    sample_rate: 48000,
+                };
+                in_streaming = if_class == 0x01 && if_sub == 0x02;
+            }
+            0x05 if blen >= 7 && in_streaming => {
+                // ENDPOINT: isócrono (attr & 0x03 == 0x01).
+                let attr = cfg[i + 3];
+                if attr & 0x03 == 0x01 {
+                    let addr = cfg[i + 2];
+                    let maxp = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+                    cur.b_interval = cfg[i + 6].max(1);
+                    cur.max_packet = cur.max_packet.max(maxp);
+                    if addr & 0x80 != 0 {
+                        cur.capture_ep = addr;
+                    } else {
+                        cur.playback_ep = addr;
+                    }
+                }
+            }
+            0x24 if blen >= 11 && in_streaming => {
+                // CS_INTERFACE FORMAT_TYPE (subtype 1): tSamFreq[0] em +8..+10.
+                if cfg[i + 2] == 0x01 && cfg[i + 7] > 0 {
+                    let rate = u32::from_le_bytes([cfg[i + 8], cfg[i + 9], cfg[i + 10], 0]);
+                    if (8000..=96000).contains(&rate) {
+                        cur.sample_rate = rate as u16;
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += blen;
+    }
+    if cur.capture_ep != 0 || cur.playback_ep != 0 {
+        chosen = Some(cur);
+    }
+    chosen.filter(|c| c.capture_ep != 0 || c.playback_ep != 0)
+}
+
+/// Escreve o Endpoint Context isócrono (32B) no input context, DCI dado.
+unsafe fn write_ep_ctx(ctx: *mut u8, dci: u32, ep_type: u32, max_packet: u16, interval: u8, ring_pa: u64) {
+    let ep = ctx.add(0x20 + (dci as usize) * 0x20) as *mut u32;
+    // DW0: Interval (log2 µframes, bits 23:16) + EP state 0
+    ep.add(0).write_volatile((interval as u32) << 16);
+    // DW1: CErr=3 | EP type (1=isoc OUT, 5=isoc IN) | MaxPacketSize
+    ep.add(1).write_volatile((3u32 << 1) | (ep_type << 3) | ((max_packet as u32) << 16));
+    // DW2/3: TR Dequeue Pointer + DCS=1
+    ep.add(2).write_volatile(ring_pa as u32 | 1);
+    ep.add(3).write_volatile((ring_pa >> 32) as u32);
+    // DW4: Average TRB Length + Max ESIT Payload
+    ep.add(4).write_volatile((max_packet as u32) | ((max_packet as u32) << 16));
+}
+
+/// Configura os EPs isócronos (IN e/ou OUT) via Configure Endpoint e cria os
+/// rings. `cap`/`play` = (endpoint_address, max_packet) do descriptor.
+unsafe fn configure_isoc_endpoints(
+    slot: u8,
+    port: u8,
+    speed: u8,
+    cap: Option<(u8, u16)>,
+    play: Option<(u8, u16)>,
+    interval_field: u8,
+) -> bool {
+    let ctx = match alloc_phys(2) {
+        Some(c) => c,
+        None => return false,
+    };
+    core::ptr::write_bytes(ctx.1, 0, 8192);
+
+    let dci_in = cap.map(|(a, _)| ((a & 0x0F) as u32) * 2 + 1); // IN: 2n+1
+    let dci_out = play.map(|(a, _)| ((a & 0x0F) as u32) * 2); // OUT: 2n
+    let mut add: u32 = 1; // slot context
+    if let Some(d) = dci_in {
+        add |= 1 << d;
+    }
+    if let Some(d) = dci_out {
+        add |= 1 << d;
+    }
+
+    let icc = ctx.1 as *mut u32;
+    icc.add(1).write_volatile(add); // Add flags (DW1 do input control ctx)
+
+    let max_dci = dci_in.unwrap_or(0).max(dci_out.unwrap_or(0));
+    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    slot_ctx.add(0).write_volatile((max_dci << 27) | ((speed as u32) << 20));
+    slot_ctx.add(1).write_volatile((port as u32) << 16);
+
+    let mut ring_in = None;
+    let mut ring_out = None;
+    if let Some((_, mps)) = cap {
+        let d = dci_in.unwrap();
+        let mps = mps.min(super::ISOC_BUF_SIZE as u16);
+        let ring = match super::new_isoc_ring(slot, d as u8, mps) {
+            Some(r) => r,
+            None => {
+                crate::slog_nano!("USB", "uac", "alloc ring IN falhou");
+                return false;
+            }
+        };
+        write_ep_ctx(ctx.1, d, 5, mps, interval_field, ring.trb.phys);
+        ring_in = Some(ring);
+    }
+    if let Some((_, mps)) = play {
+        let d = dci_out.unwrap();
+        let mps = mps.min(super::ISOC_BUF_SIZE as u16);
+        let ring = match super::new_isoc_ring(slot, d as u8, mps) {
+            Some(r) => r,
+            None => {
+                crate::slog_nano!("USB", "uac", "alloc ring OUT falhou");
+                return false;
+            }
+        };
+        write_ep_ctx(ctx.1, d, 1, mps, interval_field, ring.trb.phys);
+        ring_out = Some(ring);
+    }
+
+    if !issue_address_or_config_cmd(ctx.0, slot, 12) {
+        crate::slog_nano!("USB", "uac", "Configure Endpoint FAIL slot={} add={:#x}", slot, add);
+        return false;
+    }
+    *super::ISOC_IN.lock() = ring_in;
+    *super::ISOC_OUT.lock() = ring_out;
+    crate::slog_nano!(
+        "USB",
+        "uac",
+        "Configure Endpoint isoc OK slot={} dci_in={:?} dci_out={:?} interval={}",
+        slot,
+        dci_in,
+        dci_out,
+        interval_field
+    );
+    true
+}
+
+/// Field Interval do endpoint context: log2 do intervalo em µframes (125µs).
+/// FS/LS: bInterval em ms → bInterval*8 µframes. HS/SS: 2^(bInterval-1).
+fn interval_field_for(speed: u8, b_interval: u8) -> u8 {
+    let b = (b_interval.max(1)) as u32;
+    match speed {
+        1 | 2 => {
+            let uf = b * 8;
+            uf.next_power_of_two().trailing_zeros().min(15) as u8
+        }
+        _ => b.saturating_sub(1).min(15) as u8,
+    }
+}
+
+/// Enumera e configura um device USB Audio Class (isócrono). Retorna info para
+/// jarbas preencher os atomics UAC_*. Sem device UAC → None (comportamento
+/// existente inalterado). Idempotente via `uac_port` marcado no 1º try.
+pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
+    let (max_ports, msc_port, hid_port, mouse_port, uac_port) = {
+        let g = XHCI_STATE.lock();
+        let st = g.as_ref()?;
+        (st.max_ports, st.msc_port, st.hid_port, st.mouse_port, st.uac_port)
+    };
+    if uac_port != 0 {
+        return None; // já tentado
+    }
+
+    for port in 1..=max_ports {
+        if port == msc_port || port == hid_port || port == mouse_port {
+            continue;
+        }
+        let ccs = {
+            let g = XHCI_STATE.lock();
+            let Some(st) = g.as_ref() else { return None };
+            let Some(addr) = portsc_addr(st, port) else { continue };
+            r32(st.base, addr - st.base) & 1 != 0
+        };
+        if !ccs {
+            continue;
+        }
+        let speed = {
+            let g = XHCI_STATE.lock();
+            let st = match g.as_ref() { Some(s) => s, None => return None };
+            let addr = match portsc_addr(st, port) { Some(a) => a, None => continue };
+            let s = ((r32(st.base, addr - st.base) >> 10) & 0xF) as u8;
+            if s == 0 { 3 } else { s }
+        };
+        crate::slog_nano!("USB", "uac", "tentando porta {} speed={}", port, speed);
+
+        if !reset_port(port) {
+            continue;
+        }
+        let slot = match cmd_enable_slot() {
+            Some(s) if s > 0 => s,
+            _ => continue,
+        };
+        let ep0_mps: u16 = match speed {
+            2 => 8,
+            1 => 64,
+            3 => 64,
+            4 => 512,
+            _ => 64,
+        };
+        if !address_device(slot, port, speed, ep0_mps) {
+            continue;
+        }
+
+        let mut ddesc = [0u8; 18];
+        if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0100, 0, &mut ddesc) {
+            continue;
+        }
+        let vid = u16::from_le_bytes([ddesc[8], ddesc[9]]);
+        let did = u16::from_le_bytes([ddesc[10], ddesc[11]]);
+
+        let mut cfg = [0u8; 512];
+        if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0200, 0, &mut cfg) {
+            continue;
+        }
+        let Some(info) = parse_uac_config(&cfg) else {
+            crate::slog_nano!(
+                "USB",
+                "uac",
+                "port {} slot {} vid={:04x} did={:04x} — sem interface Audio Streaming",
+                port,
+                slot,
+                vid,
+                did
+            );
+            {
+                let mut g = XHCI_STATE.lock();
+                if let Some(st) = g.as_mut() {
+                    st.uac_port = port;
+                }
+            }
+            continue;
+        };
+
+        let _ = ep0_set_configuration(slot, ep0_mps, 1);
+        if info.alt > 0
+            && !ep0_class_no_data(slot, ep0_mps, 0x01, 0x0B, info.alt as u16, info.iface as u16)
+        {
+            crate::slog_nano!(
+                "USB",
+                "uac",
+                "SET_INTERFACE(iface={} alt={}) FAIL — alt setting ignorado",
+                info.iface,
+                info.alt
+            );
+            {
+                let mut g = XHCI_STATE.lock();
+                if let Some(st) = g.as_mut() {
+                    st.uac_port = port;
+                }
+            }
+            continue;
+        }
+
+        let interval_field = interval_field_for(speed, info.b_interval);
+        let cap = if info.capture_ep != 0 {
+            Some((info.capture_ep, info.max_packet))
+        } else {
+            None
+        };
+        let play = if info.playback_ep != 0 {
+            Some((info.playback_ep, info.max_packet))
+        } else {
+            None
+        };
+        if !configure_isoc_endpoints(slot, port, speed, cap, play, interval_field) {
+            {
+                let mut g = XHCI_STATE.lock();
+                if let Some(st) = g.as_mut() {
+                    st.uac_port = port;
+                }
+            }
+            continue;
+        }
+
+        let cfg_len = (u16::from_le_bytes([cfg[2], cfg[3]]) as usize).min(512);
+        {
+            let mut g = XHCI_STATE.lock();
+            if let Some(st) = g.as_mut() {
+                st.uac_ready = true;
+                st.uac_slot = slot;
+                st.uac_port = port;
+                st.uac_speed = speed;
+                st.uac_vid = vid;
+                st.uac_did = did;
+                st.uac_capture_ep = info.capture_ep;
+                st.uac_playback_ep = info.playback_ep;
+                st.uac_sample_rate = info.sample_rate;
+                st.uac_cfg = cfg;
+                st.uac_cfg_len = cfg_len;
+            }
+        }
+        crate::slog_nano!(
+            "USB",
+            "uac",
+            "UAC OK slot={} port={} vid={:04x} did={:04x} cap_ep={:#04x} play_ep={:#04x} rate={} max_pkt={}",
+            slot,
+            port,
+            vid,
+            did,
+            info.capture_ep,
+            info.playback_ep,
+            info.sample_rate,
+            info.max_packet
+        );
+        return Some(super::UacDevice {
+            slot,
+            port,
+            speed,
+            vid,
+            did,
+            capture_ep: info.capture_ep,
+            playback_ep: info.playback_ep,
+            sample_rate: info.sample_rate,
+            max_packet: info.max_packet,
+        });
+    }
+    None
 }

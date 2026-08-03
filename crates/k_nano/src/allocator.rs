@@ -67,6 +67,12 @@ static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 #[cfg(not(feature = "global-alloc"))]
 static HEAP_ALLOC: LazyBumpAllocator = LazyBumpAllocator::new();
 
+/// Returns the actual heap usage in bytes from the LazyBumpAllocator.
+pub fn heap_used_bytes() -> usize {
+    let offset = HEAP_ALLOC.offset.load(Ordering::Relaxed);
+    if offset < 0 { 0 } else { offset as usize }
+}
+
 /// Buffer de heap estático — seção própria `.bss.heap` colocada no FIM da
 /// imagem (limine.ld). Extensão alem dele (resize_bump_heap) só toca espaço
 /// livre — NUNCA corrompe outras statics .bss (GLOBAL_ALLOCATOR, etc).

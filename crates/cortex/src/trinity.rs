@@ -1,6 +1,7 @@
 use crate::tensor::PackedTernaryTensor;
 use alloc::vec::Vec;
 use alloc::vec;
+use alloc::string::String;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ExpertKind {
@@ -510,6 +511,105 @@ pub fn generate_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTe
     let weight = PackedTernaryTensor { shape: (rows, cols), packed_data: packed };
 
     (embed, weight)
+}
+
+/// Carrega pesos do router MoE a partir de arquivo .bitnet v3+.
+/// Procura tensores chamados "router_embed" (VOCAB*HIDDEN f32) e
+/// "router_weight" (HIDDEN*MAX_EXPERTS i8 ternário).
+/// Retorna true se carregado com sucesso.
+pub fn load_router_from_file(data: &[u8]) -> bool {
+    if data.len() < 32 { return false; }
+    let r4 = |off: usize| u32::from_le_bytes(data[off..off+4].try_into().unwrap_or([0; 4]));
+    if r4(0) != 0xBE11BE11 { return false; }
+
+    let _ver = r4(4);
+    let _vocab = r4(8) as usize;
+    let hidden = r4(12) as usize;
+    let _layers = r4(16);
+
+    if hidden != ROUTER_HIDDEN {
+        k_nano::slog_cortex!("TRINITY", "warn", "Router hidden mismatch: file={} expected={}", hidden, ROUTER_HIDDEN);
+        return false;
+    }
+
+    // Pula até os tensores
+    let off = 32 + 16 + 4; // header + model_type(16) + ntensors(4)
+    if off + 4 > data.len() { return false; }
+    let ntensors = r4(off - 4) as usize;
+
+    let mut pos = off;
+    let mut embed_loaded = false;
+    let mut weight_loaded = false;
+    let mut embed_vec: Option<Vec<f32>> = None;
+    let mut weight_tensor: Option<PackedTernaryTensor> = None;
+
+    for _ in 0..ntensors {
+        if pos + 64 + 8 > data.len() { break; }
+        let name_bytes = &data[pos..pos+64];
+        let name_end = name_bytes.iter().position(|&b| b==0).unwrap_or(64);
+        let name = core::str::from_utf8(&name_bytes[..name_end]).unwrap_or("");
+        let n_orig = r4(pos + 64) as usize;
+        let n_quant = r4(pos + 64 + 4) as usize;
+        let f32_bytes = n_orig * 4;
+        pos += 64 + 8;
+
+        if name.contains("router_embed") {
+            if pos + f32_bytes <= data.len() {
+                let floats: Vec<f32> = data[pos..pos + f32_bytes]
+                    .chunks_exact(4)
+                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                    .collect();
+                if floats.len() == VOCAB * ROUTER_HIDDEN {
+                    embed_vec = Some(floats);
+                    embed_loaded = true;
+                }
+            }
+        } else if name.contains("router_weight") {
+            if pos + n_orig <= data.len() {
+                // n_orig = HIDDEN * MAX_EXPERTS i8 values
+                let weights: Vec<i8> = data[pos..pos + n_orig]
+                    .iter()
+                    .map(|&b| b as i8)
+                    .collect();
+                if weights.len() == ROUTER_HIDDEN * ROUTER_MAX_EXPERTS {
+                    weight_tensor = Some(PackedTernaryTensor {
+                        shape: (ROUTER_HIDDEN, ROUTER_MAX_EXPERTS),
+                        packed_data: PackedTernaryTensor::pack_weights(&weights),
+                    });
+                    weight_loaded = true;
+                }
+            }
+        }
+        pos += f32_bytes + n_quant;
+    }
+
+    if embed_loaded && weight_loaded {
+        // Store in a static for the router to pick up
+        *ROUTER_EMBED.lock() = embed_vec;
+        *ROUTER_WEIGHT.lock() = weight_tensor;
+        k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded from file: {} dim, {} experts", ROUTER_HIDDEN, ROUTER_MAX_EXPERTS);
+        true
+    } else {
+        k_nano::slog_cortex!("TRINITY", "warn", "Router file missing tensors: embed={} weight={}", embed_loaded, weight_loaded);
+        false
+    }
+}
+
+/// Static storage for router weights loaded from file (before TrinityRouter init).
+static ROUTER_EMBED: spin::Mutex<Option<Vec<f32>>> = spin::Mutex::new(None);
+static ROUTER_WEIGHT: spin::Mutex<Option<PackedTernaryTensor>> = spin::Mutex::new(None);
+
+/// Tenta carregar router do arquivo; se falhar, gera determinístico (seed=42).
+/// Deve ser chamado ANTES de TrinityRouter::new() ou load_router().
+pub fn init_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor) {
+    // Try to take from file-loaded statics
+    let embed = ROUTER_EMBED.lock().take();
+    let weight = ROUTER_WEIGHT.lock().take();
+    if let (Some(e), Some(w)) = (embed, weight) {
+        return (e, w);
+    }
+    // Fallback: deterministic LCG
+    generate_router_weights(num_experts)
 }
 
 pub fn init_trinity() -> TrinityRouter {

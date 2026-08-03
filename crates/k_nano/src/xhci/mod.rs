@@ -3,10 +3,11 @@
 
 use core::sync::atomic::Ordering;
 use crate::memory::{PHYS_MEM_OFFSET, GLOBAL_ALLOCATOR};
+use crate::dma::DmaBuf;
 
 mod bringup;
 mod hub;
-pub use bringup::{bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse};
+pub use bringup::{bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac};
 pub use hub::{
     hub_address_boot_smoke, hub_address_ok, hub_child_ok, hub_ok, hub_ports, mark_hub_address_device,
 };
@@ -51,6 +52,64 @@ fn hid_to_scancode(usage: u8) -> Option<u8> {
 /// Global xHCI driver state — inicializado uma vez no boot
 pub static XHCI_STATE: spin::Mutex<Option<XhciState>> = spin::Mutex::new(None);
 
+// ── Isochronous (USB Audio) ────────────────────────────────────────────────
+// ADR-0045 UAC: TRBs isócronos (Type 5, NÃO 8 — o work order dizia 8; o layout
+// correto foi validado contra Linux xhci.h/xhci-ring.c):
+//   DW2: [16:0] TRB length (OUT) | [21:17] TD size (0) | [31:22] interrupter (0)
+//   DW3: [0] cycle | [4] chain (0) | [5] IOC | [9:7] TBC (0) | [15:10] type (5)
+//        | [19:16] TLBPC (0) | [30:20] frame ID (0) | [31] SIA (1 = ASAP)
+// Um TRB por intervalo de serviço; ring mantido cheio (re-arm por evento).
+
+pub const ISOC_SLOTS: usize = 64;      // data TRBs por ring (Link no índice 64)
+pub const ISOC_BUF_SIZE: usize = 1024; // buffer por slot (cobre 48k stereo/ms e mais)
+
+/// Ring de TRBs isócronos (IN ou OUT) + pool de buffers por slot.
+pub struct IsochRing {
+    /// Página do ring (256 TRBs; usamos 0..ISOC_SLOTS + Link em ISOC_SLOTS).
+    pub trb: DmaBuf,
+    /// ISOC_SLOTS × ISOC_BUF_SIZE contíguos, UC (DMA).
+    pub bufs: DmaBuf,
+    /// Próxima posição do anel a escrever (0..=ISOC_SLOTS; ==ISOC_SLOTS = no Link).
+    pub enqueue: u16,
+    /// Cycle bit do produtor (software).
+    pub cycle: bool,
+    pub max_packet: u16,
+    /// xHCI slot id.
+    pub slot: u8,
+    /// Doorbell DCI (IN = 2n+1, OUT = 2n).
+    pub dci: u8,
+    /// TRBs armados (não consumidos pelo controller).
+    pub armed: u16,
+    /// FIFO de buffers liberados por eventos (índices em `bufs`).
+    pub freed: [u16; ISOC_SLOTS],
+    pub freed_head: u16,
+    pub freed_tail: u16,
+    /// Sobra de PCM parcial de chamadas anteriores de schedule_isoc_out.
+    pub pending: [i16; 1024],
+    pub pending_len: u16,
+}
+
+unsafe impl Send for IsochRing {}
+unsafe impl Sync for IsochRing {}
+
+/// Informação de device UAC enumerado (para jarbas preencher seus atomics).
+pub struct UacDevice {
+    pub slot: u8,
+    pub port: u8,
+    pub speed: u8,
+    pub vid: u16,
+    pub did: u16,
+    pub capture_ep: u8,
+    pub playback_ep: u8,
+    pub sample_rate: u16,
+    pub max_packet: u16,
+}
+
+/// Rings isócronos (separados de XhciState p/ evitar borrow conflitante com o
+/// estado global — mesmo padrão de hub.rs / BulkEndpoint).
+pub static ISOC_IN: spin::Mutex<Option<IsochRing>> = spin::Mutex::new(None);
+pub static ISOC_OUT: spin::Mutex<Option<IsochRing>> = spin::Mutex::new(None);
+
 pub struct XhciState {
     pub(crate) op: u64,
     pub(crate) capl: u64,
@@ -87,6 +146,19 @@ pub struct XhciState {
     pub(crate) mouse_tr_va: u64,
     pub(crate) mouse_report_va: u64,
     pub(crate) mouse_last: [u8; 4],
+    /// UAC (USB Audio Class) — device isócrono enumerado (ADR-0045).
+    pub(crate) uac_ready: bool,
+    pub(crate) uac_slot: u8,
+    pub(crate) uac_port: u8,
+    pub(crate) uac_speed: u8,
+    pub(crate) uac_vid: u16,
+    pub(crate) uac_did: u16,
+    pub(crate) uac_capture_ep: u8,
+    pub(crate) uac_playback_ep: u8,
+    pub(crate) uac_sample_rate: u16,
+    /// Blob do Configuration Descriptor do device UAC (p/ try_read_config_descriptor).
+    pub(crate) uac_cfg: [u8; 512],
+    pub(crate) uac_cfg_len: usize,
 }
 
 pub unsafe fn init_xhci() {
@@ -218,6 +290,17 @@ pub unsafe fn init_xhci() {
             mouse_tr_va: 0,
             mouse_report_va: 0,
             mouse_last: [0; 4],
+            uac_ready: false,
+            uac_slot: 0,
+            uac_port: 0,
+            uac_speed: 0,
+            uac_vid: 0,
+            uac_did: 0,
+            uac_capture_ep: 0,
+            uac_playback_ep: 0,
+            uac_sample_rate: 0,
+            uac_cfg: [0; 512],
+            uac_cfg_len: 0,
         });
         crate::slog_nano!(
             "USB",
@@ -325,6 +408,295 @@ pub(crate) unsafe fn alloc_phys(n: usize) -> Option<(u64, *mut u8)> {
     let f = a.allocate_contiguous(n)?;
     let pa = f.start_address().as_u64();
     Some((pa, (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8))
+}
+
+// ── Isochronous TRB scheduling (USB Audio) ─────────────────────────────
+// xHCI 1.2 §4.14-4.15, §6.4.6. Ring sempre cheio: o controller consome 1 TRB
+// por intervalo de serviço e gera 1 Transfer Event (IOC). O poll drena eventos,
+// copia dados e re-arma os slots — os TRBs ficam na memória ≥1 frame antes do
+// serviço (SIA=1 = ASAP + ring cheio satisfaz o requisito de "queue ahead").
+
+/// Cria um ring isócrono: página de TRBs (Link no índice ISOC_SLOTS) + buffers UC.
+pub(crate) unsafe fn new_isoc_ring(slot: u8, dci: u8, max_packet: u16) -> Option<IsochRing> {
+    let trb = crate::dma::dma_alloc(4096)?;
+    let bufs = crate::dma::dma_alloc(ISOC_SLOTS * ISOC_BUF_SIZE)?;
+    let ring = IsochRing {
+        trb,
+        bufs,
+        enqueue: 0,
+        cycle: true,
+        max_packet,
+        slot,
+        dci,
+        armed: 0,
+        freed: [0; ISOC_SLOTS],
+        freed_head: 0,
+        freed_tail: 0,
+        pending: [0; 1024],
+        pending_len: 0,
+    };
+    // Link TRB no fim dos data TRBs: aponta p/ base, Toggle Cycle, C=1 (1ª passada).
+    let l = (ring.trb.virt as *mut u32).add(ISOC_SLOTS * 4);
+    l.add(0).write_volatile(ring.trb.phys as u32);
+    l.add(1).write_volatile((ring.trb.phys >> 32) as u32);
+    l.add(2).write_volatile(0);
+    l.add(3).write_volatile((6u32 << 10) | (1 << 1) | 1);
+    Some(ring)
+}
+
+/// Escreve um TRB isócrono no ring (avança enqueue, atualiza Link no wrap).
+/// `buf_idx` = slot do pool de buffers; `len` = bytes (OUT) / max_packet (IN).
+pub(crate) unsafe fn isoc_arm_trb(ring: &mut IsochRing, buf_idx: usize, len: u16) {
+    if ring.enqueue as usize >= ISOC_SLOTS {
+        // Wrap do produtor: entrega o Link ao HW com o novo cycle.
+        let new_cycle = !ring.cycle;
+        let link = (ring.trb.virt as *mut u32).add(ISOC_SLOTS * 4);
+        link.add(0).write_volatile(ring.trb.phys as u32);
+        link.add(1).write_volatile((ring.trb.phys >> 32) as u32);
+        link.add(2).write_volatile(0);
+        link.add(3).write_volatile((6u32 << 10) | (1 << 1) | if new_cycle { 1 } else { 0 });
+        ring.enqueue = 0;
+        ring.cycle = new_cycle;
+    }
+    let e = ring.enqueue as usize;
+    let buf_pa = ring.bufs.phys + (buf_idx as u64) * ISOC_BUF_SIZE as u64;
+    let trb = (ring.trb.virt as *mut u32).add(e * 4);
+    trb.add(0).write_volatile(buf_pa as u32);
+    trb.add(1).write_volatile((buf_pa >> 32) as u32);
+    trb.add(2).write_volatile((len as u32) & 0x1FFFF); // length (17b) | TD size 0 | intr 0
+    trb.add(3).write_volatile(
+        (5u32 << 10) | (1 << 5) | (1u32 << 31) | if ring.cycle { 1 } else { 0 }, // Type5|IOC|SIA|C
+    );
+    ring.enqueue = (e as u16).wrapping_add(1);
+    ring.armed = ring.armed.saturating_add(1);
+}
+
+/// Sincroniza ERDP (Runtime Interrupter 0) com `er_dequeue`.
+pub(crate) unsafe fn erdp_sync(st: &XhciState) {
+    let er_pa = st.er_va - st.pmoff;
+    let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
+    let rt = st.base + rtsoff;
+    let erdp = er_pa + (st.er_dequeue as u64) * 16;
+    w32(rt, 0x18, erdp as u32);
+    w32(rt, 0x1C, (erdp >> 32) as u32);
+}
+
+/// Drena Transfer Events do slot/dci informados (janela bounded), preenchendo
+/// `freed` com (buffer_idx, bytes_transferidos). Retorna nº de eventos.
+/// Eventos estranhos no caminho são consumidos (avança er_dequeue) — inofensivo:
+/// todos os consumidores são síncronos sob XHCI_STATE lock.
+pub(crate) unsafe fn drain_isoc_events(
+    st: &mut XhciState,
+    slot: u8,
+    dci: u8,
+    ring_pa: u64,
+    freed: &mut [(u16, u16); ISOC_SLOTS],
+) -> u16 {
+    let evt = st.er_va as *const u32;
+    let mut consumed = 0u16;
+    for _ in 0..ISOC_SLOTS {
+        let mut found = false;
+        for look in 0..16u16 {
+            let i = ((st.er_dequeue as u32 + look as u32) % 256) as usize;
+            let dw0 = evt.add(i * 4).read_volatile();
+            let dw1 = evt.add(i * 4 + 1).read_volatile();
+            let dw2 = evt.add(i * 4 + 2).read_volatile();
+            let dw3 = evt.add(i * 4 + 3).read_volatile();
+            let ty = (dw3 >> 10) & 0x3F;
+            if ty != 32 {
+                continue; // não é Transfer Event
+            }
+            let eslot = ((dw3 >> 24) & 0xFF) as u8;
+            let epid = ((dw3 >> 16) & 0x1F) as u8;
+            if eslot != slot || epid != dci {
+                continue;
+            }
+            let trb_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
+            let rel = trb_ptr.wrapping_sub(ring_pa);
+            if rel >= (ISOC_SLOTS as u64) * 16 {
+                continue;
+            }
+            let idx = (rel / 16) as usize;
+            let t = st.er_dequeue.wrapping_add(look) % 256;
+            st.er_dequeue = t.wrapping_add(1) % 256;
+            freed[consumed as usize] = (idx as u16, (dw2 & 0xFFFFFF) as u16);
+            consumed += 1;
+            found = true;
+            break;
+        }
+        if !found {
+            break;
+        }
+    }
+    if consumed > 0 {
+        erdp_sync(st);
+    }
+    consumed
+}
+
+/// MFINDEX (Runtime + 0x00, 14 bits, 125µs/unidade). O work order citava
+/// offset 0x2C do OP — incorreto; a spec/Linux põem MFINDEX em Runtime+0.
+pub(crate) unsafe fn mfindex(st: &XhciState) -> u32 {
+    let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
+    r32(st.base, rtsoff) & 0x3FFF
+}
+
+/// Arma o ring isócrono IN (captura) com ISOC_SLOTS TRBs de `max_packet`.
+/// Deve ser chamado após bringup_uac + trust OK. Retorna nº de TRBs armados.
+pub unsafe fn schedule_isoc_in() -> usize {
+    let mut g = ISOC_IN.lock();
+    let ring = match g.as_mut() {
+        Some(r) => r,
+        None => return 0,
+    };
+    if ring.armed != 0 {
+        return 0; // já armado
+    }
+    for idx in 0..ISOC_SLOTS {
+        isoc_arm_trb(ring, idx, ring.max_packet);
+    }
+    let st_lock = XHCI_STATE.lock();
+    let st = match st_lock.as_ref() {
+        Some(s) => s,
+        None => return 0,
+    };
+    core::arch::asm!("sfence", options(nostack, preserves_flags));
+    let mf0 = mfindex(st);
+    // Doorbell[slot] = DCI — controller passa a servir o EP a cada intervalo.
+    w32(st.base, st.db_off + (ring.slot as u64) * 4, ring.dci as u32);
+    // Espera ≥1 frame de MFINDEX: garante TRBs na memória antes do 1º serviço.
+    for _ in 0..20_000 {
+        if mfindex(st) != mf0 {
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let armed = ring.armed as usize;
+    crate::slog_nano!(
+        "USB",
+        "uac",
+        "isoc IN armado: {} TRBs slot={} dci={} mfindex={:#x}",
+        armed,
+        ring.slot,
+        ring.dci,
+        mf0
+    );
+    drop(st_lock);
+    armed
+}
+
+/// Poll de captura isócrona: drena eventos, copia PCM dos slots completos e
+/// re-arma. Copia pacotes inteiros enquanto couberem em `out` (slots sem espaço
+/// ficam agendados para a próxima chamada). Retorna amostras i16 escritas.
+pub unsafe fn poll_isoc_in(out: &mut [i16]) -> usize {
+    let mut freed = [(0u16, 0u16); ISOC_SLOTS];
+    let mut st = XHCI_STATE.lock();
+    let Some(s) = st.as_mut() else { return 0 };
+    let mut rg = ISOC_IN.lock();
+    let Some(ring) = rg.as_mut() else { return 0 };
+    let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut freed);
+    let mut samples = 0usize;
+    for k in 0..n as usize {
+        let (idx, len) = freed[k];
+        let idx = idx as usize;
+        let max_smps = (ring.max_packet as usize) / 2;
+        let n_smps = ((len as usize).min(ISOC_BUF_SIZE)) / 2;
+        if n_smps == 0 {
+            isoc_arm_trb(ring, idx, ring.max_packet);
+            continue;
+        }
+        let n_smps = n_smps.min(max_smps);
+        if samples + n_smps > out.len() {
+            break; // sem espaço — slot permanece liberado p/ a próxima chamada
+        }
+        let src = (ring.bufs.virt as *const u8).add(idx * ISOC_BUF_SIZE) as *const i16;
+        for smp in 0..n_smps {
+            out[samples + smp] = src.add(smp).read_volatile();
+        }
+        samples += n_smps;
+        isoc_arm_trb(ring, idx, ring.max_packet);
+    }
+    samples
+}
+
+/// Poll de playback: re-arma slots liberados com silêncio (mantém o stream OUT
+/// vivo sem PCM — evita Ring Underrun). Retorna nº de slots re-armados.
+pub unsafe fn poll_isoc_out() -> usize {
+    let mut freed = [(0u16, 0u16); ISOC_SLOTS];
+    let mut st = XHCI_STATE.lock();
+    let Some(s) = st.as_mut() else { return 0 };
+    let mut rg = ISOC_OUT.lock();
+    let Some(ring) = rg.as_mut() else { return 0 };
+    let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut freed);
+    for k in 0..n as usize {
+        let idx = freed[k].0 as usize;
+        core::ptr::write_bytes(
+            (ring.bufs.virt as *mut u8).add(idx * ISOC_BUF_SIZE),
+            0,
+            ring.max_packet as usize,
+        );
+        isoc_arm_trb(ring, idx, ring.max_packet);
+    }
+    n as usize
+}
+
+/// Playback isócrono: copia PCM (i16) para slots liberados (pacotes completos),
+/// fluxo = sobra pendente ++ pcm; o resto dos slots ganha silêncio. A sobra
+/// parcial fica em `ring.pending` p/ a próxima chamada. Retorna amostras i16
+/// novas enfileiradas.
+pub unsafe fn schedule_isoc_out(pcm: &[i16]) -> usize {
+    let mut freed = [(0u16, 0u16); ISOC_SLOTS];
+    let mut st = XHCI_STATE.lock();
+    let Some(s) = st.as_mut() else { return 0 };
+    let mut rg = ISOC_OUT.lock();
+    let Some(ring) = rg.as_mut() else { return 0 };
+    let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut freed);
+    let max_smps = (ring.max_packet as usize) / 2;
+    let pl0 = ring.pending_len as usize;
+    let total = pl0 + pcm.len();
+    let mut stream_off = 0usize;
+    for k in 0..n as usize {
+        let idx = freed[k].0 as usize;
+        let dst = (ring.bufs.virt as *mut u8).add(idx * ISOC_BUF_SIZE) as *mut i16;
+        let remaining = total.saturating_sub(stream_off);
+        let n_use = if remaining >= max_smps { max_smps } else { 0 };
+        if n_use > 0 {
+            for c in 0..n_use {
+                let p = stream_off + c;
+                let v = if p < pl0 { ring.pending[p] } else { pcm[p - pl0] };
+                dst.add(c).write_volatile(v);
+            }
+            stream_off += n_use;
+        } else {
+            core::ptr::write_bytes(dst as *mut u8, 0, ring.max_packet as usize);
+        }
+        isoc_arm_trb(ring, idx, ring.max_packet);
+    }
+    // Guarda a sobra (stream_off..total) de volta em pending (memmove-safe:
+    // leitura sempre em índice >= escrita).
+    let leftover = total.saturating_sub(stream_off);
+    let stash = leftover.min(ring.pending.len());
+    if stash < leftover {
+        // Circuit breaker: anel OUT parado (device sumiu / erro) — dropa PCM.
+        static DROPPED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !DROPPED.swap(true, Ordering::Relaxed) {
+            crate::slog_nano!(
+                "USB",
+                "uac",
+                "isoc OUT: pending overflow ({} amostras) — ring parado?",
+                leftover
+            );
+        }
+    }
+    for i in 0..stash {
+        let p = stream_off + i;
+        let v = if p < pl0 { ring.pending[p] } else { pcm[p - pl0] };
+        ring.pending[i] = v;
+    }
+    ring.pending_len = stash as u16;
+    // Amostras NOVAS enfileiradas = o que saiu do fluxo além do pending inicial.
+    stream_off.saturating_sub(pl0).min(pcm.len())
 }
 
 // ── USB Mass Storage Bulk Transfers ────────────────────────────
@@ -436,26 +808,50 @@ pub unsafe fn bulk_transfer(
     let dci = if direction == 0 { 2u32 } else { 3u32 }; // EP1 OUT=2, EP1 IN=3
     w32(st.base, st.db_off + (slot as u64) * 4, dci);
 
-    // Wait for completion event (poll ER with timeout curto — HW real sem EP MSC).
+    // Wait for completion event: varre de er_dequeue (padrão wait_cmd_completion)
+    // e casa o TRB pointer do evento com o TRB postado (coexiste com eventos
+    // isócronos). O poll antigo lia o índice 0 fixo + escrevia ERDP com bit 32
+    // setado — corrompia o anel quando isoc estava ativo.
+    let my_trb_pa = ep.trb_pa + (idx as u64) * 16;
+    let mut comp = 0u8;
+    let mut done = false;
     for _ in 0..80_000 {
+        let mut g = XHCI_STATE.lock();
+        let st = match g.as_mut() { Some(s) => s, None => return false };
         let evt = st.er_va as *const u32;
-        let dw3 = evt.add(3).read_volatile();
-        let trb_type = (dw3 >> 10) & 0x3F;
-        if trb_type == 32 {
-            let comp = ((evt.add(2).read_volatile() >> 24) & 0xFF) as u8;
-            let erdp_phys = st.er_va - st.pmoff;
-            // ERDP advance via Runtime space (Interrupter 0)
-            let rtsoff = (r32(st.base, 0x18) & !0x1F) as u64;
-            let rt = st.base + rtsoff;
-            w32(rt, 0x18, erdp_phys as u32);
-            w32(rt, 0x1C, (erdp_phys >> 32) as u32 | 0x01);
-            if comp == 0 {
-                return true;
+        let mut found = false;
+        for look in 0..16u16 {
+            let i = st.er_dequeue.wrapping_add(look) % 256;
+            let dw0 = evt.add(i as usize * 4).read_volatile();
+            let dw1 = evt.add(i as usize * 4 + 1).read_volatile();
+            let dw3 = evt.add(i as usize * 4 + 3).read_volatile();
+            let trb_type = (dw3 >> 10) & 0x3F;
+            if trb_type != 32 {
+                continue;
             }
-            crate::slog_nano!("USB", "xhci", "Bulk err: comp={}", comp);
-            return false;
+            let ev_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
+            if ev_ptr != my_trb_pa {
+                continue;
+            }
+            comp = ((evt.add(i as usize * 4 + 2).read_volatile() >> 24) & 0xFF) as u8;
+            st.er_dequeue = i.wrapping_add(1) % 256;
+            erdp_sync(st);
+            found = true;
+            break;
+        }
+        drop(g);
+        if found {
+            done = true;
+            break;
         }
         core::hint::spin_loop();
+    }
+    if done {
+        if comp == 0 {
+            return true;
+        }
+        crate::slog_nano!("USB", "xhci", "Bulk err: comp={}", comp);
+        return false;
     }
     // Uma vez só — flood de timeout ilegível no FB.
     static TIMEOUT_LOGGED: core::sync::atomic::AtomicBool =
@@ -466,18 +862,17 @@ pub unsafe fn bulk_transfer(
     false
 }
 
-/// Tenta ler Configuration Descriptor do device no slot ativo (GET_DESCRIPTOR).
-/// Retorna (bytes_lidos, vid, did) ou None se xHCI/HID-only sem EP0 control genérico.
-///
-/// Sprint Sound: path honesto — sem device UAC no bus QEMU default, retorna None.
-/// Quando EP0 control transfer estiver pleno, preencher `buf` com o descriptor.
+/// Tenta ler Configuration Descriptor do device UAC ativo (gravado no bringup).
+/// Retorna (bytes_lidos, vid, did) ou None se não há device UAC enumerado.
 pub unsafe fn try_read_config_descriptor(buf: &mut [u8]) -> Option<(usize, u16, u16)> {
     let state = XHCI_STATE.lock();
-    let _st = state.as_ref()?;
-    // Control transfer GET_DESCRIPTOR(Configuration) ainda não está wired no
-    // path HID-only. Deixa buffer zerado e sinaliza incompleto ao caller UAC.
-    let _ = buf;
-    None
+    let st = state.as_ref()?;
+    if !st.uac_ready || st.uac_cfg_len == 0 {
+        return None;
+    }
+    let n = st.uac_cfg_len.min(buf.len());
+    core::ptr::copy_nonoverlapping(st.uac_cfg.as_ptr(), buf.as_mut_ptr(), n);
+    Some((n, st.uac_vid, st.uac_did))
 }
 
 /// PORTSC base = op + 0x400 + (port-1)*0x10 (xHCI 1.1).

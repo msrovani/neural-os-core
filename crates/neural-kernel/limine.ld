@@ -5,7 +5,7 @@ ENTRY(_start)
 PHDRS
 {
     limine_requests PT_LOAD FLAGS(4); /* R-- */
-    text PT_LOAD FLAGS(7);            /* RWX (ponytail: R-X quebra escrita no .text — fix pós-migração) */
+    text PT_LOAD FLAGS(5);            /* R-X — W^X enforced */
     rodata PT_LOAD FLAGS(4);          /* R-- */
     data PT_LOAD FLAGS(6);            /* RW- */
 }

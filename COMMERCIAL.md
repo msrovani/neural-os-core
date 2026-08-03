@@ -29,26 +29,21 @@ A Commercial License exempts you from AGPLv3's copyleft requirements — you can
 
 ## Pricing
 
-### Monthly
+Commercial licensing is available **upon contact**. Terms are quoted per deal based on scope of use, support requirements, and negotiation — there is no published price list.
 
-| Tier | Annual Revenue | USD/mo | BRL/mo |
-|---|---|---|---|
-| **Startup** | < $1M | $50 | R$ 50 |
-| **Growth** | $1M – $10M | $500 | R$ 500 |
-| **Mid-Market** | $10M – $50M | $5,000 | R$ 5.000 |
-| **Enterprise** | $50M+ | $50,000 | R$ 50.000 |
-| **Support 24/7 SLA** | any | +50% | +50% |
+A full acquisition / transfer of IP scenario is also possible; terms are negotiated on a case-by-case basis under NDA.
 
-Brazilian customers may pay in BRL at the listed rate.
+> We intentionally don't publish prices before we have paying customers anchoring value. Contact us to discuss your use case.
 
-## Full Acquisition
+## Scope of the Commercial License
 
-| Scenario | Price (USD) |
-|---|---|
-| **Now** (early stage, technology only, no paying customers) | $100k – $500k |
-| **With recurring revenue** (paying customers, proven model) | $2M – $10M |
+The commercial license covers **the Neural OS source code** (the codebase distributed under AGPLv3). It does **not** relicense third-party artifacts bundled for convenience:
 
-Full acquisition transfers all copyright and IP rights. Includes transition support, knowledge transfer, and training. NDA required for negotiations.
+- **Firmware blobs** (`firmware/`, from linux-firmware) are covered by their own vendor licenses (Realtek/AMD/Intel/Qualcomm/NVIDIA). They are redistributable in binary form under those terms, but the commercial license does not grant additional rights to them.
+- **Model weights** (`models/`, e.g. Piper TTS, E5-MULTI, BGE-M3) are MIT-licensed (Piper voices carry their own dataset caveats — see ATTRIBUTIONS.md).
+- **HWID datasets** derived from Windows driver packs (SDIO/WDM) have murky redistribution terms and are **not** part of what the commercial license conveys.
+
+If you need help clearing any of these for your specific use case, we can broker the appropriate agreements.
 
 ## Warranty and Liability
 

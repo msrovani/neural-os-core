@@ -80,13 +80,6 @@ impl BitmapFrameAllocator {
             }
         }
 
-        for i in 2..160 {
-            if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
-                self.clear_bit(i as usize);
-                usable_count += 1;
-            }
-        }
-
         self.total_frames = core::cmp::min(
             (last_end / FRAME_SIZE) as usize,
             BITMAP_SIZE * BITS_PER_BYTE,

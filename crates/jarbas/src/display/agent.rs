@@ -9,6 +9,7 @@ use crate::display::compositor::{COMPOSITOR, JarbasDesktop, AppId, Layer, MOUSE_
 use crate::display::avatar8::{Avatar8State, Avatar8};
 use crate::display::ui_spec::{self, TOPIC_UI_SPEC};
 use crate::display::shortcuts::{KeyCombo, Modifiers, WmAction, scancode_to_keycode};
+use crate::display::gpu_backend;
 use hermes::agents::TOPIC_KEY_EVENT;
 use crate::clipboard_notify::TOPIC_TOAST;
 use k_nano::net::mesh::TOPIC_MESH_HEALTH;
@@ -433,6 +434,13 @@ impl Agent for DisplayAgent {
 
     fn tick(&mut self, tick: u64, _count: u64) -> AgentTickResult {
         if !self.gpu_inited {
+            // Initialize GPU backend (k_hal GPU BE) — check compute state
+            if let Err(e) = gpu_backend::init_gpu_backend() {
+                k_nano::slog_jarbas!("GPU", "init", "backend init: {}", e);
+            } else {
+                k_nano::slog_jarbas!("GPU", "init", "backend READY — compute accelerated");
+            }
+
             // Não segurar GPU.lock() durante claim_graphics (spin::Mutex ≠ reentrante).
             let built = {
                 let gpu = GPU.lock();

@@ -385,8 +385,8 @@ def main() -> None:
     ensure_uefi_img(uefi_path, args.build_boot)
     esp_src_lba, esp_sectors, esp_raw = parse_uefi_esp(uefi_path)
 
-    esp_start = 34
-    if esp_src_lba != 34:
+    esp_start = 2048
+    if esp_src_lba != 2048:
         print(f"[AVISO] ESP fonte em LBA {esp_src_lba}; unificado usa LBA {esp_start}")
     esp_end = esp_start + esp_sectors - 1
     data_mbr_type = 0x0C if use_fat32 else 0x07

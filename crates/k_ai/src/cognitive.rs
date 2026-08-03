@@ -10,6 +10,8 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
+use cortex::cortex::{TransformerModel, KvCache};
+use cortex::tensor::Tensor;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // #105 Intent Planner — goal → skill sequence
@@ -635,6 +637,146 @@ impl BitNetTrainer {
         }
     }
     pub fn status(&self) -> String { alloc::format!("[TRAINER] lr={}, epochs={}, steps={}", self.lr, self.epochs, self.trained) }
+}
+
+/// Backprop skeleton for transformer training (not yet fully implemented).
+/// This provides the structure for future implementation of full backprop
+/// through the ternary transformer (embedding → attention → FFN → unembed).
+pub struct TransformerTrainer {
+    pub lr: f32,
+    pub max_seq: usize,
+    pub hidden: usize,
+    pub vocab_size: usize,
+    pub num_layers: usize,
+    pub trained_steps: u64,
+}
+
+impl TransformerTrainer {
+    pub fn new(hidden: usize, vocab_size: usize, num_layers: usize, max_seq: usize) -> Self {
+        TransformerTrainer {
+            lr: 0.001,
+            max_seq,
+            hidden,
+            vocab_size,
+            num_layers,
+            trained_steps: 0,
+        }
+    }
+
+    /// Forward pass returning activations for backprop.
+    /// Returns (logits, cache) where cache stores intermediate activations.
+    pub fn forward(&self, model: &TransformerModel, tokens: &[u32]) -> (Tensor, TransformerCache) {
+        // This is a placeholder - the actual forward pass is in TransformerModel::forward_with_kv
+        // For backprop, we need to store all intermediate activations
+        let mut cache = TransformerCache::new(self.max_seq, self.hidden, self.num_layers);
+        let (logits, _kv_cache) = model.forward_with_kv(tokens, &mut cache.kv_cache);
+        (logits, cache)
+    }
+
+    /// Backward pass: compute gradients w.r.t. all weights.
+    /// Returns gradients for each parameter tensor.
+    pub fn backward(
+        &self,
+        model: &TransformerModel,
+        cache: &TransformerCache,
+        targets: &[u32],
+    ) -> TransformerGradients {
+        // TODO: Implement full backprop through:
+        // 1. Cross-entropy loss gradient at logits
+        // 2. Unembed weight gradients
+        // 3. RMSNorm final gradients
+        // 4. Per-layer: attention (Q,K,V,O) + FFN (gate,up,down) + RMSNorms
+        // 5. Embedding gradients
+        // 6. Ternary weight update via straight-through estimator
+        k_nano::slog_kai!("TRAIN", "warn", "TransformerTrainer::backward NOT YET IMPLEMENTED - skeleton only");
+        TransformerGradients::empty(self.hidden, self.vocab_size, self.num_layers)
+    }
+
+    /// Update model weights with computed gradients.
+    pub fn update_weights(
+        &mut self,
+        model: &mut TransformerModel,
+        grads: &TransformerGradients,
+    ) {
+        // TODO: Apply gradients with ternary straight-through estimator
+        // For ternary weights: accumulate FP32 gradients, then quantize to {-1,0,1}
+        k_nano::slog_kai!("TRAIN", "warn", "TransformerTrainer::update_weights NOT YET IMPLEMENTED - skeleton only");
+        self.trained_steps += 1;
+    }
+
+    pub fn status(&self) -> String {
+        alloc::format!("[TRANSFORMER_TRAINER] lr={}, steps={}, hidden={}, layers={}",
+            self.lr, self.trained_steps, self.hidden, self.num_layers)
+    }
+}
+
+/// Cache of intermediate activations for backprop.
+pub struct TransformerCache {
+    pub kv_cache: KvCache,
+    // TODO: Store activations for each layer:
+    // - post-attention residual
+    // - post-FFN residual
+    // - RMSNorm inputs/outputs
+    // - Q, K, V, attention scores
+    // - FFN gate/up/down activations
+    pub max_seq: usize,
+    pub hidden: usize,
+    pub num_layers: usize,
+}
+
+impl TransformerCache {
+    pub fn new(max_seq: usize, hidden: usize, num_layers: usize) -> Self {
+        TransformerCache {
+            kv_cache: KvCache::new(max_seq, hidden, num_layers),
+            max_seq,
+            hidden,
+            num_layers,
+        }
+    }
+}
+
+/// Gradients for all transformer parameters.
+pub struct TransformerGradients {
+    pub embed_grad: Option<alloc::vec::Vec<f32>>,
+    pub unembed_grad: Option<alloc::vec::Vec<f32>>,
+    pub rms_final_grad: Option<alloc::vec::Vec<f32>>,
+    pub layer_grads: alloc::vec::Vec<LayerGradients>,
+}
+
+impl TransformerGradients {
+    pub fn empty(_hidden: usize, _vocab_size: usize, num_layers: usize) -> Self {
+        TransformerGradients {
+            embed_grad: None,
+            unembed_grad: None,
+            rms_final_grad: None,
+            layer_grads: (0..num_layers).map(|_| LayerGradients::empty()).collect(),
+        }
+    }
+}
+
+pub struct LayerGradients {
+    pub q_grad: Option<alloc::vec::Vec<f32>>,
+    pub k_grad: Option<alloc::vec::Vec<f32>>,
+    pub v_grad: Option<alloc::vec::Vec<f32>>,
+    pub o_grad: Option<alloc::vec::Vec<f32>>,
+    pub gate_grad: Option<alloc::vec::Vec<f32>>,
+    pub up_grad: Option<alloc::vec::Vec<f32>>,
+    pub down_grad: Option<alloc::vec::Vec<f32>>,
+    pub rms_attn_grad: Option<alloc::vec::Vec<f32>>,
+    pub rms_ffn_grad: Option<alloc::vec::Vec<f32>>,
+    pub rms_inner_attn_grad: Option<alloc::vec::Vec<f32>>,
+    pub rms_ffn_norm_grad: Option<alloc::vec::Vec<f32>>,
+}
+
+impl LayerGradients {
+    pub fn empty() -> Self {
+        LayerGradients {
+            q_grad: None, k_grad: None, v_grad: None, o_grad: None,
+            gate_grad: None, up_grad: None, down_grad: None,
+            rms_attn_grad: None, rms_ffn_grad: None,
+            rms_inner_attn_grad: None, rms_ffn_norm_grad: None,
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

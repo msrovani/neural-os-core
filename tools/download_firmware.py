@@ -6,6 +6,7 @@ Uso:
   python tools/download_firmware.py --pull        # git pull no clone
   python tools/download_firmware.py --gsp-ver 570 # pin GSP alternativo
   python tools/download_firmware.py --list        # só inventário
+  python tools/download_firmware.py --verify [ROOT]  # confere SHA256SUMS + GIT_COMMIT
 
 Destinos:
   firmware/          — catálogo lab git-tracked (MIT/redistrib via WHENCE)
@@ -31,15 +32,24 @@ Lab targets:
   AMD Strix+   → amdgpu/gc_11_5_0_* (MES)
   Intel Gen9   → i915/skl_* + kbl_* (já no tree)
   Intel Arc    → i915/dg2_* + xe/*
+  Realtek NIC  → rtl_nic/* (glob do firmware/ local — rel path upstream idêntico)
+  Realtek WiFi → rtlwifi/* (idem)
+  Intel WiFi   → intel/iwlwifi/* (idem)
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# Windows cp1252 console não imprime →/—; forçar UTF-8 (errors=replace)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parent.parent
 REPO_FW = ROOT / "firmware"
@@ -188,6 +198,26 @@ def ath10k_specs() -> list[tuple[str, str]]:
     return specs
 
 
+def rtl_specs() -> list[tuple[str, str]]:
+    """Realtek NIC/WiFi + Intel iwlwifi — glob do firmware/ local.
+
+    O rel path upstream no linux-firmware é IDÊNTICO ao rel path no repo
+    (ex: firmware/rtl_nic/rtl8168e-1.fw → upstream rtl_nic/rtl8168e-1.fw).
+    Arquivos ausentes no clone são pulados não-fatalmente (padrão copy_one).
+    """
+    specs: list[tuple[str, str]] = []
+    for sub in ("rtl_nic", "rtlwifi", "intel/iwlwifi"):
+        base = REPO_FW / sub
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*")):
+            if not f.is_file():
+                continue
+            rel = f.relative_to(REPO_FW).as_posix()
+            specs.append((rel, rel))
+    return specs
+
+
 # Chips aceitos por FW_FAT_CHIPS (substring match no rel path)
 FAT_CHIP_PATHS = {
     "gp108": ("nvidia/gp108/",),
@@ -205,7 +235,8 @@ FAT_CHIP_PATHS = {
 }
 
 
-def ensure_clone(pull: bool) -> None:
+def ensure_clone(pull: bool) -> str:
+    """Garante o clone; retorna o commit SHA do HEAD ("" se indisponível)."""
     git_bin = shutil.which("git")
     if not git_bin:
         print("[ERRO] git nao encontrado.")
@@ -228,6 +259,14 @@ def ensure_clone(pull: bool) -> None:
         )
     else:
         print(f"[GIT] reusando clone em {GIT_DIR}")
+    try:
+        r = subprocess.run(
+            [git_bin, "-C", str(GIT_DIR), "rev-parse", "HEAD"],
+            capture_output=True, text=True,
+        )
+        return r.stdout.strip() if r.returncode == 0 else ""
+    except OSError:
+        return ""
 
 
 def is_gsp_path(dst_rel: str) -> bool:
@@ -266,7 +305,90 @@ def purge_repo_gsp() -> int:
     return removed
 
 
-def write_policy(gsp_ver: str, roots: list[Path]) -> None:
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def write_sha256sums(root: Path) -> None:
+    """Manifesto `sha256  relative/path` (2 espaços, fwd-slash, sorted)."""
+    if not root.is_dir():
+        return
+    lines = []
+    for f in sorted(root.rglob("*")):
+        if not f.is_file():
+            continue
+        if f.name == "SHA256SUMS":
+            continue
+        if GIT_DIR in f.parents:
+            continue  # linux-firmware clone não entra no manifesto
+        rel = f.relative_to(root).as_posix()
+        lines.append(f"{sha256_file(f)}  {rel}")
+    (root / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def verify(root: Path) -> int:
+    """Re-hash dos arquivos listados em SHA256SUMS; 0 = ok, 1 = qualquer FAIL."""
+    sums = root / "SHA256SUMS"
+    if not sums.is_file():
+        print(f"[VERIFY] {sums} nao encontrado — rode download_firmware.py primeiro")
+        return 1
+    bad = total = 0
+    for line in sums.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        want, rel = parts
+        path = root / rel
+        if not path.is_file():
+            print(f"FAIL {rel} (missing)")
+            bad += 1
+            continue
+        total += 1
+        if sha256_file(path) == want:
+            print(f"OK {rel}")
+        else:
+            print(f"FAIL {rel}")
+            bad += 1
+    print(f"[VERIFY] {total - bad}/{total} ok em {root}")
+    return 1 if bad else 0
+
+
+def check_policy_commit(root: Path) -> None:
+    """Warn (não-fatal) se o clone HEAD != GIT_COMMIT pinado no FW_POLICY.txt."""
+    policy = root / "FW_POLICY.txt"
+    if not policy.is_file():
+        return
+    pinned = None
+    for line in policy.read_text(encoding="utf-8").splitlines():
+        if line.startswith("GIT_COMMIT="):
+            pinned = line.split("=", 1)[1].strip()
+    if not pinned:
+        return
+    git_bin = shutil.which("git")
+    if not git_bin or not GIT_DIR.exists():
+        return
+    try:
+        r = subprocess.run(
+            [git_bin, "-C", str(GIT_DIR), "rev-parse", "HEAD"],
+            capture_output=True, text=True,
+        )
+    except OSError:
+        return
+    if r.returncode != 0:
+        return
+    head = r.stdout.strip()
+    if head != pinned:
+        print(f"[AVISO] clone HEAD {head} != GIT_COMMIT {pinned} ({policy.name})")
+
+
+def write_policy(gsp_ver: str, roots: list[Path], git_commit: str = "") -> None:
     policy = (
         "# Gerado por download_firmware.py\n"
         "# GSP: SO em target/firmware/nvidia/*/gsp/ -- NAO versionar em firmware/\n"
@@ -275,7 +397,9 @@ def write_policy(gsp_ver: str, roots: list[Path]) -> None:
         "GSP_LOCATION=target/firmware/nvidia/{tu102,ad102,ga102}/gsp/\n"
         "FAT_DEFAULT_CHIPS=gp108,skl,kbl,green_sardine\n"
         "FAT_GSP_CHIPS=tu102,ad102,ga102\n"
-        f"NOTE=GSP pin ABI {gsp_ver}; WHENCE MIT/redistrib; 570=opt-in bring-up\n"
+        f"GIT_COMMIT={git_commit}\n"
+        f"NOTE=GSP pin ABI {gsp_ver}; WHENCE MIT/redistrib; 570=opt-in bring-up; "
+        "integridade via SHA256SUMS\n"
     )
     for root in roots:
         try:
@@ -292,9 +416,20 @@ def main() -> None:
     ap.add_argument("--no-repo", action="store_true", help="nao escrever em firmware/")
     ap.add_argument("--no-target", action="store_true", help="nao espelhar em target/firmware/")
     ap.add_argument("--list", action="store_true", help="so listar specs / existencia no clone")
+    ap.add_argument("--verify", nargs="?", const=str(REPO_FW), default=None, metavar="ROOT",
+                    help="verificar SHA256SUMS (default firmware/; ex: --verify target/firmware)")
     args = ap.parse_args()
 
-    specs = nvidia_specs(args.gsp_ver) + amd_specs() + intel_specs() + ath10k_specs()
+    if args.verify is not None:
+        root = Path(args.verify)
+        code = verify(root)
+        check_policy_commit(root)
+        sys.exit(code)
+
+    specs = (
+        nvidia_specs(args.gsp_ver)
+        + amd_specs() + intel_specs() + ath10k_specs() + rtl_specs()
+    )
 
     if args.list:
         ensure_clone(False)
@@ -314,7 +449,7 @@ def main() -> None:
         print(f"[FAT]  set FW_FAT_CHIPS={','.join(FAT_CHIP_PATHS)}  (default mkfat32: sem GSP)")
         return
 
-    ensure_clone(args.pull)
+    git_commit = ensure_clone(args.pull)
 
     use_repo = not args.no_repo
     use_target = not args.no_target
@@ -363,12 +498,16 @@ def main() -> None:
         policy_roots.append(REPO_FW)
     if use_target:
         policy_roots.append(TARGET)
-    write_policy(args.gsp_ver, policy_roots)
+    write_policy(args.gsp_ver, policy_roots, git_commit)
+    for root in policy_roots:
+        write_sha256sums(root)
 
     print(f"\n[OK] {ok} copiados ({gsp_ok} GSP em target/), {miss} ausentes, {total_bytes/1e6:.1f} MB")
     if purged:
         print(f"[PURGE] {purged} arquivos GSP removidos de firmware/ (repo)")
     print(f"[GSP] pin={args.gsp_ver} location=target/firmware/nvidia/*/gsp/")
+    print("[SHA256] manifestos escritos em firmware/SHA256SUMS + target/firmware/SHA256SUMS")
+    print(f"[GIT] clone HEAD={git_commit or '(indisponivel)'} (FW_POLICY.txt GIT_COMMIT)")
     print("[FAT] default exclui */gsp/*; opt-in: FW_FAT_CHIPS=tu102,ad102,ga102")
 
 

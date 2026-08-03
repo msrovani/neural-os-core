@@ -3530,12 +3530,62 @@ pub(crate) fn kernel_boot(
         }
     }
 
-    // Load Trinity MoE router weights (deterministic seed=42) before the N3 gate
+    // Load Trinity MoE router weights (try file first, fallback to deterministic seed=42) before the N3 gate
     {
         let mut trinity = TRINITY.lock();
         if !trinity.moe_router_loaded() {
             let n_exp = trinity.agent_count();
-            let (embed, weight) = trinity::generate_router_weights(n_exp);
+            // Try loading from FAT32 first (ROUTER.BITNET)
+            let router_loaded = {
+                let mut loaded = false;
+                // Try NVMe
+                let mut nvme_g = k_nano::disk_agent::nvme::NVME_DRIVER.lock();
+                if let Some(ref mut nvme) = *nvme_g {
+                    if let Some(data) = unsafe { read_file_from_dev(nvme, "ROUTER.BITNET") } {
+                        loaded = crate::trinity::load_router_from_file(&data);
+                    }
+                }
+                // Try AHCI
+                if !loaded {
+                    let mut ahci_guard = crate::AHCI_DRIVER.lock();
+                    if let Some(ref mut ahci) = *ahci_guard {
+                        if let Some(data) = unsafe { read_file_from_dev(ahci, "ROUTER.BITNET") } {
+                            loaded = crate::trinity::load_router_from_file(&data);
+                        }
+                    }
+                }
+                // Try ATA
+                if !loaded {
+                    let ata_guard = crate::ATA_DRIVER.lock();
+                    if let Some(ref ata) = *ata_guard {
+                        let parts = crate::fat32::read_mbr(ata);
+                        for p in &parts {
+                            if p.type_code != 0x1C && p.type_code != 0x0C && p.type_code != 0x0B { continue; }
+                            if let Some(fs) = unsafe { crate::fat32::Fat32Reader::new(ata, p) } {
+                                if let Some(data) = unsafe { fs.read_file("ROUTER.BITNET") } {
+                                    loaded = crate::trinity::load_router_from_file(&data);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                // Try USB-MSC
+                if !loaded {
+                    let mut usb_guard = crate::USB_MSC.lock();
+                    if let Some(ref mut msc) = *usb_guard {
+                        if let Some(data) = unsafe { read_file_from_dev(msc, "ROUTER.BITNET") } {
+                            loaded = crate::trinity::load_router_from_file(&data);
+                        }
+                    }
+                }
+                loaded
+            };
+            let (embed, weight) = if router_loaded {
+                crate::trinity::init_router_weights(n_exp)
+            } else {
+                crate::trinity::generate_router_weights(n_exp)
+            };
             trinity.load_router(embed, weight);
         }
     }

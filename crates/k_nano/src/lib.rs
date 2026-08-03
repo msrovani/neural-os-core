@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![allow(dead_code)]
 #![allow(static_mut_refs)]
 #![allow(unused_unsafe)]

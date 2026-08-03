@@ -36,3 +36,6 @@ pub mod tiling;
 pub mod notifications;
 pub mod chat_window;
 pub mod render_registry;
+
+// GPU Backend Bridge (Phase 2 — k_hal GPU BE integration)
+pub mod gpu_backend;
