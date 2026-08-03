@@ -363,8 +363,9 @@ pub fn elf_boot_self_test() -> bool {
     elf[18..20].copy_from_slice(&0x3Eu16.to_le_bytes()); // x86_64
     elf[24..32].copy_from_slice(&0x1000u64.to_le_bytes()); // entry
     elf[32..40].copy_from_slice(&64u64.to_le_bytes()); // e_phoff
-    elf[52..54].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
-    elf[54..56].copy_from_slice(&2u16.to_le_bytes()); // e_phnum
+    // ELF64 header: e_phentsize @ 54 (2B), e_phnum @ 56 (2B), e_shentsize @ 58, e_shnum @ 60
+    elf[54..56].copy_from_slice(&56u16.to_le_bytes()); // e_phentsize
+    elf[56..58].copy_from_slice(&2u16.to_le_bytes()); // e_phnum
 
     // PT_LOAD #1: RX @ 0x1000 (código)
     let o = 64;

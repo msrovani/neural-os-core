@@ -176,7 +176,9 @@ pub unsafe fn jit_write_exec_user(
         | PageTableFlags::WRITABLE
         | PageTableFlags::USER_ACCESSIBLE;
     aspace.map_user_page(virt, frame, write_flags)?;
-    let dst = ARENA_VA as *mut u8;
+    // Escreve via HHDM no FRAME (o VA do arena só existe no sandbox AS —
+    // escrever em ARENA_VA aqui, com o CR3 do kernel, daria #PF).
+    let dst = crate::address_space::hhdm_mut::<u8>(frame) as *mut u8;
     core::ptr::copy_nonoverlapping(code.as_ptr(), dst, code.len());
     core::sync::atomic::fence(Ordering::SeqCst);
     // Fase execução: USER RX (remove WRITABLE → W^X). Preserva USER via set_user_leaf_flags.
@@ -185,8 +187,10 @@ pub unsafe fn jit_write_exec_user(
 }
 
 /// Self-test do arena USER (ADR-0082 F3.1): monta sandbox, escreve
-/// `mov eax,42; ret` USER RX, executa em Ring 0 (só p/ validar codegen —
-/// execução real em CPL=3 fica com o `ring3_run_native`) e confere 42.
+/// `mov eax,42; ret` USER RX e valida a folha + bytes via HHDM.
+/// NÃO executa em Ring 0 (o VA do arena só existe no sandbox AS — executar
+/// aqui com o CR3 do kernel daria #PF; a execução real é do
+/// `ring3_run_native` em CPL=3).
 pub fn user_arena_self_test() -> bool {
     let mut aspace = match crate::address_space::create_sandbox_as() {
         Ok(a) => a,
@@ -203,23 +207,31 @@ pub fn user_arena_self_test() -> bool {
             return false;
         }
     };
-    // Verifica que a folha é USER no AS do sandbox (flag de isolamento).
-    let f = aspace.frame_for_virt(VirtAddr::new(va));
-    let _ = f;
-    // Executa (Ring 0) só para provar o codegen — o mesmo blob rodaria em CPL=3.
-    let fn_ptr: unsafe extern "C" fn() -> u32 =
-        unsafe { core::mem::transmute::<*const (), unsafe extern "C" fn() -> u32>(va as *const ()) };
-    let r = unsafe { fn_ptr() };
-    if r == 42 {
-        k_nano::slog_bin!(
-            "EXEC-ARENA",
-            "info",
-            "W^X USER arena self-test PASS (mov eax,42;ret -> {}) — ADR-0082 F3.1",
-            r
-        );
-        true
-    } else {
-        k_nano::slog_bin!("EXEC-ARENA", "warn", "user selftest resultado inesperado: {}", r);
-        false
+    // Valida 1) folha USER mapeada no sandbox; 2) bytes escritos (via HHDM).
+    let frame = match aspace.frame_for_virt(VirtAddr::new(va)) {
+        Some(f) => f,
+        None => {
+            k_nano::slog_bin!("EXEC-ARENA", "warn", "user selftest: folha nao mapeada");
+            return false;
+        }
+    };
+    let ptr = crate::address_space::hhdm_mut::<u8>(frame) as *const u8;
+    let mut ok_bytes = true;
+    for (i, &b) in code.iter().enumerate() {
+        if unsafe { core::ptr::read_volatile(ptr.add(i)) } != b {
+            ok_bytes = false;
+        }
     }
+    if !ok_bytes {
+        k_nano::slog_bin!("EXEC-ARENA", "warn", "user selftest: bytes corrompidos");
+        return false;
+    }
+    k_nano::slog_bin!(
+        "EXEC-ARENA",
+        "info",
+        "W^X USER arena self-test PASS ({} bytes USER RX @{:#x} no sandbox) — ADR-0082 F3.1",
+        code.len(),
+        va
+    );
+    true
 }
