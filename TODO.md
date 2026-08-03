@@ -297,6 +297,25 @@
 
 ---
 
+## 🧹 Higiene de Repositório (2026-08-03, SESSION_245)
+
+**Feito (commits `8d478bd`..`f41aa03`):**
+- Binários versionados: `firmware/**` + `models/tokenizer/*.BIN` untracked + gitignore (download via `tools/download_firmware.py`/`download_models.py`); 157 arquivos removidos do tracking.
+- `LEGACY/` deletado (2,3 MB, 322 arquivos) — coberto por 188 tags git.
+- Dedup fonte-única: `ntfs_reader.rs`, `load_status.rs`, `k_ai::memory_agent` (cópias mortas) deletados; `neural-kernel/src/interrupts.rs` virou facade de `k_nano::interrupts` + `interrupts_ext.rs` (residuais Ring3: TssCell/TSS_ARRAY, seletor user, syscall 0x90, hooks demand-page/allocator, `init_pic_fallback_and_sti`). IDT/GDT com fonte única em k_nano.
+- Evidência de boot: `docs/evidence/boot-whpx-20260802.txt` commitada (logs/ continua gitignored).
+- Política de idiomas: EN para código/comentários/logs; PT para docs/sessões (README §Language Policy).
+- Histórico git NÃO reescrito (612 MiB pack) — decisão do maintainer (editor paralelo ADR-0083 ativo; reescrever exige pausar outras sessões + force-push). Revisitar quando `main` estiver quiescente.
+
+**Deferrals (duplicação, fonte-única) — exigem refactor multi-sprint (emagrecer), NÃO facades cegos:**
+- `agents.rs` (hermes 139 KB ↔ bin 128 KB): **NÃO é facade-safe hoje** — `SKILL_STORAGE`/`TRUST_CACHE`/`USAGE_TRACKER`/`EVENT_LOG` são statics DUPLICADOS (bin `main.rs:622` vs hermes `globals.rs:39`); `EVENT_BUS`/`SKILL_REGISTRY` são compartilhados (k_nano). Facade cego faria agentes hermes gravarem no SKILL_STORAGE do hermes, invisível para o bin → quebra skill path. Passo 1: consolidar os 4 statics; passo 2: facade + mover residuais (sysinfo_agent, SelfEvolveAgent, PLATFORM_READY, dispatch_pnp_action_nk).
+- `boot_log_agent.rs` (k_ai 7,2 KB ↔ bin 13,4 KB): AMBOS vivos (bin registrado + hermes via BootSelfHealAgent). Bin tem fixes de produção (budget FAT, SelfHeal hook) com deps bin-locais; portar budget p/ k_ai + seam ErrorContext, depois facade.
+- `agents/mouse_agent.rs`, `agents/log_analyst_agent.rs` (hermes ↔ bin): idem agents.rs.
+- Espelhos `net/` (netstack, network_agent, net.rs), `fs/` (ata_agent, proc_fs_agent, …), `cortex.rs`/`k_ai` (hnsw, chunker, …): listados pelo guarda `tools/check_duplication.py` (50 DUPs restantes pós-higiene). Programa emagrecer — ver `.cursor/rules/neural-emagrecer-bin.mdc`.
+- `interrupts_ext.rs` (bin): residuais Ring3 referenciam GDT/TSS próprios — o review (oracle, f41aa03) marcou HIGH mascarado por `TRY_ENTER_RING3=false`: GDT user segments não é carregado (k_nano carrega o dele), TSS per-proc `set_rsp0` muta TSS que não é o do LTR, AP RSP0 nunca setado. Resolver ANTES de re-habilitar Ring3 (ADR-0060), não antes.
+
+---
+
 **Detalhes completos:** `TODO.md`
 **Catálogo de tecnologias:** `TECNOLOGIAS.md`
 **Roadmap completo:** `ROADMAP.md`
