@@ -98,11 +98,14 @@ lazy_static! {
         let mut gdt = GlobalDescriptorTable::new();
         let code_selector = gdt.add_entry(Descriptor::kernel_code_segment());
         
-        // Add TSS entries for BSP + all APs
-        let mut tss_selectors = [SegmentSelector(0); MAX_APS + 1];
-        for i in 0..=MAX_APS {
-            tss_selectors[i] = gdt.add_entry(Descriptor::tss_segment(unsafe { &TSS_ARRAY[i] }));
-        }
+        // GDT do x86_64 0.14.13 é FIXO em 8 slots (gdt.rs:49) e cada TSS
+        // (SystemSegment) ocupa 2. O loop per-AP (MAX_APS+1 = 8 TSS) estourava
+        // ("GDT requires two free spaces") — panic em todo boot (f41aa03).
+        // Restaura 1 TSS compartilhado (TSS_ARRAY[0], BSP), design pré-f41aa03
+        // com boot conhecido OK. ISTs per-AP continuam alocadas em TSS_ARRAY
+        // (init_ap_tss preenche; GDT referencia TSS[0] até haver GDT maior).
+        let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(unsafe { &TSS_ARRAY[0] }));
+        let tss_selectors = [shared_tss_selector; MAX_APS + 1];
         
         (gdt, Selectors { code_selector, tss_selectors })
     };

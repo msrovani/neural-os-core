@@ -69,6 +69,25 @@ de confiança documentado:
 - Gate novo é fail-closed por design: conteúdo com `..`, nova linha na description,
   nome fora do charset, ou seção `## Pre-Flight Verification` (agora exige
   `## Pre-Flight` exato) é rejeitado.
+- **Boot QEMU TCG no-disk** (`-smp 2 -accel tcg`, sem disco de dados): fases
+  completas (AgentFleet 54 + Runtime), scheduler vivo, `session_pk` gerada
+  (RDRAND OK), seeds `signed=true (trusted-by-compilation)`, auto-skill PnP
+  `verified+registered`. skill_writer continua rejeitada — comportamento
+  pré-existente (contém "ignore all" no corpo; mesmo no boot pré-auditoria).
+
+## Follow-ups achados na validação (corrigidos)
+- **Bug latente do gate estrito (unquote)**: `sign_artifact_md` grava
+  `signature: "hex"` **com aspas**; `check_signature_content` lia sem `unquote`
+  → `parse_hex_sig` via 130 chars (com aspas) → rejeitava TODO artefato assinado
+  (`missing_or_bad_signature`). O gate fraco antigo nunca exercitava assinatura,
+  por isso o bug nunca aparecia. Fix: `unquote` na leitura da assinatura
+  (consistente com `content_hash`). A auditoria citava o gate como "implementado"
+  sem nunca tê-lo rodado end-to-end com artefato assinado — agora rodou.
+- **Regressão GDT do f41aa03 (sessão concorrente)**: GDT do x86_64 0.14.13 é fixo
+  em 8 slots; o refactor adicionava 1 code + 8 TSS (2 slots cada) = 17 slots →
+  panic `gdt.rs:111` em todo boot. Fix: 1 TSS compartilhado (TSS_ARRAY[0]),
+  design pré-f41aa03 com boot conhecido OK; ISTs per-AP permanecem alocadas.
+  Boot pós-fix: 0 panic, Runtime completo.
 
 ## Lições
 - **Portão duplicado mais fraco = sem portão.** Se existe verificação canônica
