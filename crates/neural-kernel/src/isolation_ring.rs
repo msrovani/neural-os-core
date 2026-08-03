@@ -59,17 +59,23 @@ pub fn ring3_is_safe() -> bool {
     }
 }
 
-/// **Site futuro** da execução isolada de código nativo em Ring3 (ADR-0077 §7).
+/// **Execução isolada de código nativo em Ring3** (ADR-0077 §7 / ADR-0082 F2.3).
 /// Assinatura casa com `hermes_crate::app_factory::NativeRingFn`.
 ///
-/// Implementação futura (resumo §7):
-///  1. montar código no `exec_arena` como página **USER RX** no AS do sandbox;
-///  2. `AddressSpace` isolado (kernel supervisor-only; IST/IDT/handlers alcançáveis);
-///  3. `enter_user_mode` (iretq CPL=3) com `Cap` mínima;
-///  4. syscalls do sandbox mediadas por `capability_gate` (DMA/MMIO negadas);
-///  5. falta no sandbox → `fault_abort` (mata sandbox, kernel vive).
-pub fn ring3_run_native(_code: &[u8], _caps: u32) -> Result<i64, &'static str> {
-    // Phase 4+ completa: usar create_sandbox_as() + enter_user_mode()
-    // para executar o blob nativo em CPL=3.
-    Err("ADR-0077 F6: Ring3 isolation ring nao implementado (ver secoes 6/7)")
+/// Caminho (ADR-0082):
+///  1. `code` deve ser ELF64 (validado via `ElfLoader::is_valid_elf`);
+///  2. `elf_loader::load_and_spawn` → `create_sandbox_as()` (isolamento real)
+///     + RX/RW por segmento + relocations RELATIVE + stack USER;
+///  3. `user_mode::run_process` → `enter_user_mode` (iretq CPL=3) com Cap mínima;
+///  4. fault no sandbox → `fault_abort` (mata sandbox, kernel vive).
+pub fn ring3_run_native(code: &[u8], _caps: u32) -> Result<i64, &'static str> {
+    if !crate::elf_loader::ElfLoader::is_valid_elf(code) {
+        return Err("ring3: code nao e ELF64 valido");
+    }
+    let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
+    k_nano::slog_bin!("ISO-RING", "info", "ring3_run_native: sandbox pid={} executando", pid);
+    match crate::user_mode::run_process(pid) {
+        Ok(()) => Ok(0),
+        Err(e) => Err(e),
+    }
 }

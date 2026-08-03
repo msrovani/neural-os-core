@@ -75,6 +75,31 @@ pub fn host_send_tcp(held: Cap, _host: &str, _port: u16) -> Result<u64, &'static
     Ok(0)
 }
 
+/// ADR-0082 F2.4: host `aios_send_tcp` real — Cap gate + UDP exchange no
+/// net do kernel (funcional no QEMU user-net). `host` em dotted-quad.
+pub fn host_send_tcp_payload(held: Cap, host: &str, port: u16, payload: &[u8]) -> Result<u64, &'static str> {
+    check(HOST_FN_SEND_TCP, held)?;
+    let ip = parse_dotted_ipv4(host).ok_or("CapGate: bad host")?;
+    match crate::net::udp_exchange_safe(ip, port, payload) {
+        Some(resp) => Ok(resp.len() as u64),
+        None => Err("CapGate: udp_exchange falhou (net down?)"),
+    }
+}
+
+/// Parse "a.b.c.d" → [u8; 4]. Retorna None se inválido.
+fn parse_dotted_ipv4(s: &str) -> Option<[u8; 4]> {
+    let mut out = [0u8; 4];
+    let mut parts = s.split('.');
+    for o in out.iter_mut() {
+        let p = parts.next()?;
+        *o = p.parse().ok()?;
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(out)
+}
+
 /// Host `aios_write_ring` — reutiliza SYS_RING_OP do trap Cap (ADR-0076 §4.3).
 pub fn host_write_ring(held: Cap) -> Result<u64, &'static str> {
     check(HOST_FN_WRITE_RING, held)?;

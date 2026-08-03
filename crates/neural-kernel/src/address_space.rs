@@ -159,6 +159,32 @@ impl AddressSpace {
     pub unsafe fn activate(&self) {
         Cr3::write(self.l4_frame, Cr3Flags::empty());
     }
+
+    /// Retorna o frame físico mapeado para `virt` (walk completo, sem alocar).
+    /// Usado pelo loader ELF p/ relocations write-through (ADR-0082 F2.1).
+    pub fn frame_for_virt(&self, virt: VirtAddr) -> Option<PhysFrame<Size4KiB>> {
+        let l4 = unsafe { &*frame_as_table(self.l4_frame) };
+        let e3 = &l4[virt.p4_index()];
+        if !e3.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
+        let l3 = unsafe { &*frame_as_table(PhysFrame::containing_address(e3.addr())) };
+        let e2 = &l3[virt.p3_index()];
+        if !e2.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
+        let l2 = unsafe { &*frame_as_table(PhysFrame::containing_address(e2.addr())) };
+        let e1 = &l2[virt.p2_index()];
+        if !e1.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
+        let l1 = unsafe { &*frame_as_table(PhysFrame::containing_address(e1.addr())) };
+        let leaf = &l1[virt.p1_index()];
+        if !leaf.flags().contains(PageTableFlags::PRESENT) {
+            return None;
+        }
+        Some(PhysFrame::<Size4KiB>::containing_address(leaf.addr()))
+    }
 }
 
 /// Instala leaf PRESENT no CR3 atual sem alocar frames intermediários (#PF-safe).

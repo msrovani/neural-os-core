@@ -307,6 +307,15 @@ pub fn run_process(pid: u64) -> Result<(), &'static str> {
     result
 }
 
+/// ADR-0082 F2.2: executa um ELF64 em Ring3 dentro de um sandbox isolado.
+/// Carrega via `elf_loader` (create_sandbox_as + RX/RW + relocations),
+/// entra em CPL=3 com `enter_user_mode`, e retorna após SYS_EXIT_USER/fault.
+pub fn run_elf(data: &[u8]) -> Result<(), &'static str> {
+    let loaded = crate::elf_loader::load_and_spawn(data, "ring3-elf")?;
+    // load_and_spawn registra no PROCESS_MANAGER; executa o processo recém-criado.
+    run_process(loaded)
+}
+
 /// Demo non-fatal: deny Cap → map stub USER → iretq → marker → EXIT → SUCCESS.
     pub fn demo_ring3() -> Result<(), &'static str> {
         // Fixed: now uses create_sandbox_as() instead of clone_current() (no higher-half overflow)

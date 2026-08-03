@@ -2429,6 +2429,13 @@ pub(crate) fn kernel_boot(
         }
     }
 
+    // ADR-0082 F2.1: ELF64 loader self-test (parse + sandbox + RX/RW + BSS) — non-fatal
+    if crate::elf_loader::elf_boot_self_test() {
+        crate::boot_logger::log("BOOT: ELF loader self-test OK");
+    } else {
+        crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
+    }
+
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0059 F6) — gated
     crate::isolation_ring::init_connectors();
 
