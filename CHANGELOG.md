@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### SESSION_244: NeuralFS fonte única (consolidação triplicata) (2026-08-03)
+
+NeuralFS existia em triplicata (k_nano/hermes/bin) violando a lição SESSION_237.
+Consolidação para fonte única na crate base:
+
+- `k_nano::neural_fs` agora é canônico: agent avançado (USB opt-in, exFAT write,
+  usb_trust, ecosystem tree ADR-0051, GPT virgin) movido do bin, prefixos adaptados
+  para `crate::`, `impl FilesystemAgent` convertido em métodos `pub` inerentes
+  (trait é ring-local; k_nano não pode depender dos rings).
+- `hermes/src/neural_fs/` → facade `pub use k_nano::neural_fs::*` (12 cópias deletadas).
+- `neural-kernel/src/neural_fs/` → facade idêntica (3 arquivos locais deletados).
+- Adapter `impl FilesystemAgent for k_nano::...::NeuralFsAgent` nos dois `fs/mod.rs`
+  (orphan rule OK: trait local + tipo canônico).
+- **Novo guarda `tools/check_duplication.py`**: exit 1 se o mesmo `.rs` (não-facade)
+  existe em ≥2 crates — "nada avisa" resolvido. Primeira execução lista dívida
+  pré-existente (camada fs/, camada net, espelhos cortex/k_ai) como follow-up.
+- `cargo clean -p neural-kernel && cargo check --release`: 0 erros.
+
 ### SESSION_243: Isolamento Ring3 de Produção — ADR-0082 Fases 1–4 (2026-08-03) ✅
 
 **ADR-0082** depreca ADR-0041 §P9+ para escopo Ring3 (docs em `docs/architecture/0082-*.md`).

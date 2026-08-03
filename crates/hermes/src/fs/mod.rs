@@ -169,6 +169,25 @@ pub fn init_fs_agents() {
     ));
 }
 
+// Adapter: NeuralFsAgent canônico (k_nano) → trait FilesystemAgent do hermes.
+impl crate::fs::FilesystemAgent for k_nano::neural_fs::neural_fs_agent::NeuralFsAgent {
+    fn name(&self) -> &str {
+        k_nano::neural_fs::neural_fs_agent::NeuralFsAgent::name(self)
+    }
+    fn mount_point(&self) -> &str {
+        k_nano::neural_fs::neural_fs_agent::NeuralFsAgent::mount_point(self)
+    }
+    fn read(&self, path: &str) -> Result<alloc::vec::Vec<u8>, &str> {
+        k_nano::neural_fs::neural_fs_agent::NeuralFsAgent::read(self, path)
+    }
+    fn write(&mut self, path: &str, data: &[u8]) -> Result<(), &str> {
+        k_nano::neural_fs::neural_fs_agent::NeuralFsAgent::write(self, path, data)
+    }
+    fn list(&self, path: &str) -> Result<alloc::vec::Vec<alloc::string::String>, &str> {
+        k_nano::neural_fs::neural_fs_agent::NeuralFsAgent::list(self, path)
+    }
+}
+
 
 
 
