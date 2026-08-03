@@ -1,0 +1,33 @@
+name: build-and-boot
+
+on: [push, pull_request]
+
+jobs:
+  boot:
+    runs-on: ubuntu-latest
+    env:
+      # rust-toolchain.toml fixa um canal Windows (nightly-x86_64-pc-windows-gnu);
+      # no Linux, override é obrigatório ou o cargo falha com "target tuple in channel name".
+      RUSTUP_TOOLCHAIN: nightly-2026-07-05
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install nightly-2026-07-05 -c rust-src -t x86_64-unknown-none
+      - run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf
+      # crates/boot/build.rs invoca `python mk_esp_fat.py`; Ubuntu só tem python3.
+      - run: sudo ln -sf "$(command -v python3)" /usr/local/bin/python
+      - run: cargo build --release
+      - run: python3 tools/build_image.py
+      - name: Boot no QEMU
+        run: |
+          timeout 300 qemu-system-x86_64 -m 6G -smp 4 -accel tcg \
+            -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+            -drive format=raw,file=target/uefi.img,if=ide,index=0 \
+            -drive format=raw,file=target/disk_qemu.raw,if=ide,index=1 \
+            -serial file:boot.txt -display none || true
+      - name: Verificar boot completo
+        run: |
+          grep -q '\[BOOT:Runtime\]' boot.txt || { echo "FALHA: boot não chegou ao Runtime"; exit 1; }
+          AGENTS=$(grep -oP 'AgentFleet\] \K[0-9]+' boot.txt | head -1)
+          echo "Agentes registrados: $AGENTS"
+      - uses: actions/upload-artifact@v4
+        with: { name: boot-log, path: boot.txt }
