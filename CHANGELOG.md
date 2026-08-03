@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### SESSION_243: Isolamento Ring3 de Produção — ADR-0082 Fases 1–4 (2026-08-03) ✅
+
+**ADR-0082** depreca ADR-0041 §P9+ para escopo Ring3 (docs em `docs/architecture/0082-*.md`).
+
+**Fase 1 — Fundação:**
+- `address_space::create_sandbox_as()` from-scratch (kernel supervisor-only P4[≥256], sem PTs compartilhadas) + `frame_for_virt()`.
+- `interrupts::TSS_ARRAY[8]` per-process (RSP0/IST dedicados) + `switch_to_proc_tss(pid)` no run_process.
+- `demo_ring3` usa `create_sandbox_as` (fix bug higher-half `clone_current`).
+- SYSCALL/SYSRET fast path: `init_syscall_fast_path()` (wrmsr LSTAR/STAR/FMASK) + naked entry + `dispatch_syscall`.
+
+**Fase 2 — ELF Loader + Sandbox:**
+- `elf_loader.rs`: merge com ADR-0076 (preservou API) — create_sandbox_as, flags RX/RW por segmento (PF_X), relocations `R_X86_64_RELATIVE` (PIE base=0), `elf_boot_self_test()`.
+- `run_elf()` no user_mode; `ring3_run_native()` implementado (isolation_ring); `host_send_tcp_payload()` real (udp_exchange).
+
+**Fase 3 — W^X Arena USER + WASM B/C:**
+- `set_user_leaf_flags()` (flip RW→RX preserva USER) + `jit_write_exec_user(aspace, code)` + `user_arena_self_test()`.
+- `ring3_run_native()` dual path: ELF64 | blob nativo (Cranelift B/C).
+- app_factory B/C já gated por `isolation_ring_available()` = `native_ring_registered()`.
+
+**Fase 4 — Validação (3 bugs corrigidos):**
+- SYSCALL/SYSRET gated por hypervisor real: `probe_done() && hv ∈ {None, Kvm}` — WHPX rejeita `wrmsr` dos MSRs → #GP no boot (TCG mascarava). Fallback `int 0x90`.
+- `jit_write_exec_user`: escrita via HHDM no frame (VA do sandbox não existe no CR3 kernel → #PF).
+- `user_arena_self_test`: valida folha+bytes, não executa em Ring 0; `elf_boot_self_test`: offsets ELF64 corrigidos (e_phentsize@54/e_phnum@56).
+
+**Verificação (TCG 2 cores 8G sem disk):** boot completo 8 fases + Runtime + tick — P6 Ring3 OK (marker=3352494e470001), ELF selftest PASS, USER arena PASS, P7/P8/P9 OK, AgentFleet 54 agents, WASMI add(2,3)=5, ISO-RING gated (TCG=UNSAFE, wasmi A). `cargo check --release` = 0 erros.
+**Commits:** `8d3eb90` (F1+2) · `1450108` (F3) · `6b073bf` (fix WHPX) · `4c7a2e9` (fix F4).
+**Pendente:** validação HW real / WHPX estável (canário `ring3_is_safe` = KVM).
+
+---
 ### SESSION_242: Mesh P2P Reliability — ADR-0081 Phase 2 Complete (2026-08-02) ✅
 
 **Short-term (Critical):**

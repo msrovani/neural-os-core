@@ -1,4 +1,27 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v2.0.0-test-s243 — Isolamento Ring3 de Produção (ADR-0082) (2026-08-03)
+#   SESSION_243: ADR-0082 Fases 1–4 — Ring3/SFI produção (depreca ADR-0041 §P9+ p/ Ring3)
+#     F1 Fundação: create_sandbox_as() from-scratch (kernel supervisor-only P4[≥256],
+#       sem PTs compartilhadas) + frame_for_virt(); TSS_ARRAY[8] per-process +
+#       switch_to_proc_tss(pid); demo_ring3 usa create_sandbox_as (fix higher-half);
+#       SYSCALL/SYSRET fast path (init_syscall_fast_path + naked entry + dispatch).
+#     F2 ELF loader: merge ADR-0076 (create_sandbox_as, RX/RW por segmento PF_X,
+#       relocations R_X86_64_RELATIVE PIE base=0, elf_boot_self_test); run_elf();
+#       ring3_run_native() implementado; host_send_tcp_payload() real (udp_exchange).
+#     F3 W^X USER: set_user_leaf_flags() + jit_write_exec_user(aspace,code) +
+#       user_arena_self_test(); ring3_run_native dual path (ELF|blob); app_factory
+#       B/C gated por isolation_ring_available() = native_ring_registered().
+#     F4 Validação: SYSCALL gated por probe_done() && hv∈{None,Kvm} (WHPX rejeita
+#       wrmsr LSTAR/STAR/FMASK → #GP; TCG mascarava; fallback int 0x90);
+#       jit_write_exec_user escreve via HHDM no frame (VA sandbox ∉ CR3 kernel → #PF);
+#       user_arena_self_test valida folha+bytes (sem exec Ring0); elf selftest offsets
+#       ELF64 (e_phentsize@54/e_phnum@56). Boot TCG 2c 8G -NoDisk: P6 Ring3 OK
+#       (marker=3352494e470001), ELF+USER arena PASS, P7/P8/P9 OK, AgentFleet 54,
+#       WASMI add(2,3)=5, ISO-RING gated (TCG=UNSAFE, wasmi A). cargo check = 0 erros.
+#     Commits: 8d3eb90 (F1+2) · 1450108 (F3) · 6b073bf (fix WHPX) · 4c7a2e9 (fix F4).
+#     Pendente: validação HW real / WHPX estável (canário ring3_is_safe = KVM).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s242 — Mesh P2P Reliability (ADR-0081 Phase 2) (2026-08-02)
 #   SESSION_242: ACK seletivo + backoff + health TTL + capacity scoring + token bucket + JSON dashboard
 #     Transporte: REASSEMBLY 2→16 slots; timeout 500→2000 ticks; FRAG\0→FRACK\0
