@@ -1,7 +1,6 @@
 use crate::tensor::PackedTernaryTensor;
 use alloc::vec::Vec;
 use alloc::vec;
-use alloc::string::String;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ExpertKind {

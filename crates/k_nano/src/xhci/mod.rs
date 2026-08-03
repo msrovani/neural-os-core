@@ -7,7 +7,7 @@ use crate::dma::DmaBuf;
 
 mod bringup;
 mod hub;
-pub use bringup::{bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac};
+pub use bringup::{bringup_boot_msc, bringup_hid_keyboard, bringup_hid_mouse, bringup_uac, bringup_uvc};
 pub use hub::{
     hub_address_boot_smoke, hub_address_ok, hub_child_ok, hub_ok, hub_ports, mark_hub_address_device,
 };
@@ -80,8 +80,9 @@ pub struct IsochRing {
     pub dci: u8,
     /// TRBs armados (não consumidos pelo controller).
     pub armed: u16,
-    /// FIFO de buffers liberados por eventos (índices em `bufs`).
-    pub freed: [u16; ISOC_SLOTS],
+    /// FIFO de pacotes pendentes: (buffer_idx, bytes_recebidos) — usado pelo
+    /// poll_isoc_frame (UVC) para devolver UM pacote por chamada sem re-drenar.
+    pub freed: [(u16, u16); ISOC_SLOTS],
     pub freed_head: u16,
     pub freed_tail: u16,
     /// Sobra de PCM parcial de chamadas anteriores de schedule_isoc_out.
@@ -109,6 +110,23 @@ pub struct UacDevice {
 /// estado global — mesmo padrão de hub.rs / BulkEndpoint).
 pub static ISOC_IN: spin::Mutex<Option<IsochRing>> = spin::Mutex::new(None);
 pub static ISOC_OUT: spin::Mutex<Option<IsochRing>> = spin::Mutex::new(None);
+/// Ring isócrono IN do UVC (câmera) — device class 0x0E, mesmo mecanismo.
+pub static ISOC_UVC: spin::Mutex<Option<IsochRing>> = spin::Mutex::new(None);
+
+/// Informação de device UVC enumerado (para jarbas preencher UVC_*).
+pub struct UvcDevice {
+    pub slot: u8,
+    pub port: u8,
+    pub vid: u16,
+    pub did: u16,
+    pub ep: u8,
+    pub width: u16,
+    pub height: u16,
+    pub fps: u16,
+    /// 1 = MJPEG, 0 = YUY2/raw.
+    pub format: u8,
+    pub max_packet: u16,
+}
 
 pub struct XhciState {
     pub(crate) op: u64,
@@ -159,6 +177,21 @@ pub struct XhciState {
     /// Blob do Configuration Descriptor do device UAC (p/ try_read_config_descriptor).
     pub(crate) uac_cfg: [u8; 512],
     pub(crate) uac_cfg_len: usize,
+    /// UVC (USB Video Class) — câmera isócrona (Phase 4).
+    pub(crate) uvc_ready: bool,
+    pub(crate) uvc_slot: u8,
+    pub(crate) uvc_port: u8,
+    pub(crate) uvc_vid: u16,
+    pub(crate) uvc_did: u16,
+    pub(crate) uvc_ep: u8,
+    pub(crate) uvc_width: u16,
+    pub(crate) uvc_height: u16,
+    pub(crate) uvc_fps: u16,
+    /// 1 = MJPEG, 0 = YUY2/raw.
+    pub(crate) uvc_format: u8,
+    pub(crate) uvc_max_packet: u16,
+    /// EP0 ring do device UAC tentado (p/ UVC reusar o slot — webcam c/ mic).
+    pub(crate) uac_ep0_tr_va: u64,
 }
 
 pub unsafe fn init_xhci() {
@@ -301,6 +334,18 @@ pub unsafe fn init_xhci() {
             uac_sample_rate: 0,
             uac_cfg: [0; 512],
             uac_cfg_len: 0,
+            uvc_ready: false,
+            uvc_slot: 0,
+            uvc_port: 0,
+            uvc_vid: 0,
+            uvc_did: 0,
+            uvc_ep: 0,
+            uvc_width: 0,
+            uvc_height: 0,
+            uvc_fps: 0,
+            uvc_format: 1,
+            uvc_max_packet: 0,
+            uac_ep0_tr_va: 0,
         });
         crate::slog_nano!(
             "USB",
@@ -429,7 +474,7 @@ pub(crate) unsafe fn new_isoc_ring(slot: u8, dci: u8, max_packet: u16) -> Option
         slot,
         dci,
         armed: 0,
-        freed: [0; ISOC_SLOTS],
+        freed: [(0, 0); ISOC_SLOTS],
         freed_head: 0,
         freed_tail: 0,
         pending: [0; 1024],
@@ -541,14 +586,9 @@ pub(crate) unsafe fn mfindex(st: &XhciState) -> u32 {
     r32(st.base, rtsoff) & 0x3FFF
 }
 
-/// Arma o ring isócrono IN (captura) com ISOC_SLOTS TRBs de `max_packet`.
-/// Deve ser chamado após bringup_uac + trust OK. Retorna nº de TRBs armados.
-pub unsafe fn schedule_isoc_in() -> usize {
-    let mut g = ISOC_IN.lock();
-    let ring = match g.as_mut() {
-        Some(r) => r,
-        None => return 0,
-    };
+/// Arma o ring inteiro (ISOC_SLOTS TRBs) + doorbell + sync MFINDEX.
+/// Retorna nº de TRBs armados (0 se já armado ou sem controller).
+unsafe fn arm_isoc_ring_full(ring: &mut IsochRing) -> usize {
     if ring.armed != 0 {
         return 0; // já armado
     }
@@ -572,16 +612,29 @@ pub unsafe fn schedule_isoc_in() -> usize {
         core::hint::spin_loop();
     }
     let armed = ring.armed as usize;
-    crate::slog_nano!(
-        "USB",
-        "uac",
-        "isoc IN armado: {} TRBs slot={} dci={} mfindex={:#x}",
-        armed,
-        ring.slot,
-        ring.dci,
-        mf0
-    );
     drop(st_lock);
+    armed
+}
+
+/// Arma o ring isócrono IN (captura) com ISOC_SLOTS TRBs de `max_packet`.
+/// Deve ser chamado após bringup_uac + trust OK. Retorna nº de TRBs armados.
+pub unsafe fn schedule_isoc_in() -> usize {
+    let mut g = ISOC_IN.lock();
+    let ring = match g.as_mut() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let armed = arm_isoc_ring_full(ring);
+    if armed > 0 {
+        crate::slog_nano!(
+            "USB",
+            "uac",
+            "isoc IN armado: {} TRBs slot={} dci={}",
+            armed,
+            ring.slot,
+            ring.dci
+        );
+    }
     armed
 }
 
@@ -638,6 +691,69 @@ pub unsafe fn poll_isoc_out() -> usize {
         isoc_arm_trb(ring, idx, ring.max_packet);
     }
     n as usize
+}
+
+// ── UVC (USB Video Class) — captura isócrona de frames ────────────────
+// Reusa IsochRing/drain_isoc_events/erdp_sync/mfindex do Phase 3. O poll
+// devolve UM pacote cru por chamada (header UVC de 2+ bytes incluído); o
+// caller (jarbas) monta frames MJPEG/YUY2.
+
+/// Arma o ring isócrono IN do UVC (câmera). Deve ser chamado após bringup_uvc.
+/// Retorna nº de TRBs armados.
+pub unsafe fn schedule_isoc_in_frame() -> usize {
+    let mut g = ISOC_UVC.lock();
+    let ring = match g.as_mut() {
+        Some(r) => r,
+        None => return 0,
+    };
+    let armed = arm_isoc_ring_full(ring);
+    if armed > 0 {
+        crate::slog_nano!(
+            "USB",
+            "uvc",
+            "isoc frame armado: {} TRBs slot={} dci={}",
+            armed,
+            ring.slot,
+            ring.dci
+        );
+    }
+    armed
+}
+
+/// Poll de captura UVC: drena eventos (uma vez), enfileira pacotes pendentes e
+/// devolve UM pacote cru por chamada em `out` (header UVC incluído, ≤ max_packet).
+/// Re-arma o slot após copiar. Retorna tamanho do pacote (0 = nada pendente —
+/// o caller deve parar de chamar até o próximo poll).
+pub unsafe fn poll_isoc_frame(out: &mut [u8]) -> usize {
+    let mut st = XHCI_STATE.lock();
+    let Some(s) = st.as_mut() else { return 0 };
+    let mut rg = ISOC_UVC.lock();
+    let Some(ring) = rg.as_mut() else { return 0 };
+    // 1) Enche a fila de pendentes só quando vazia (evita re-drenar eventos).
+    if ring.freed_head == ring.freed_tail {
+        let mut local = [(0u16, 0u16); ISOC_SLOTS];
+        let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut local);
+        for k in 0..n as usize {
+            let t = ring.freed_tail as usize;
+            ring.freed[t % ISOC_SLOTS] = local[k];
+            ring.freed_tail = (t as u16).wrapping_add(1) % ISOC_SLOTS as u16;
+        }
+    }
+    // 2) Pop de um pacote.
+    if ring.freed_head == ring.freed_tail {
+        return 0;
+    }
+    let (idx, len) = ring.freed[ring.freed_head as usize];
+    ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
+    let len = (len as usize).min(ring.max_packet as usize).min(ISOC_BUF_SIZE).min(out.len());
+    if len == 0 {
+        isoc_arm_trb(ring, idx as usize, ring.max_packet);
+        return 0;
+    }
+    let src = (ring.bufs.virt as *const u8).add(idx as usize * ISOC_BUF_SIZE);
+    core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), len);
+    isoc_arm_trb(ring, idx as usize, ring.max_packet);
+    len
 }
 
 /// Playback isócrono: copia PCM (i16) para slots liberados (pacotes completos),

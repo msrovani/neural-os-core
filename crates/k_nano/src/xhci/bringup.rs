@@ -1066,6 +1066,24 @@ fn interval_field_for(speed: u8, b_interval: u8) -> u8 {
     }
 }
 
+/// Registra o device que o UAC tentou (para o UVC reusar o slot — webcam com
+/// mic tem interfaces Audio E Video no MESMO device/slot; re-enumerar mataria o
+/// stream de áudio). Captura o EP0 ring (st.tr_va) antes de outro address.
+unsafe fn mark_uac_tried(slot: u8, port: u8, speed: u8, cfg: Option<&[u8]>) {
+    let mut g = XHCI_STATE.lock();
+    if let Some(st) = g.as_mut() {
+        st.uac_port = port;
+        st.uac_slot = slot;
+        st.uac_speed = speed;
+        st.uac_ep0_tr_va = st.tr_va;
+        if let Some(c) = cfg {
+            let n = c.len().min(512);
+            st.uac_cfg[..n].copy_from_slice(&c[..n]);
+            st.uac_cfg_len = n;
+        }
+    }
+}
+
 /// Enumera e configura um device USB Audio Class (isócrono). Retorna info para
 /// jarbas preencher os atomics UAC_*. Sem device UAC → None (comportamento
 /// existente inalterado). Idempotente via `uac_port` marcado no 1º try.
@@ -1121,6 +1139,7 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
 
         let mut ddesc = [0u8; 18];
         if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0100, 0, &mut ddesc) {
+            mark_uac_tried(slot, port, speed, None);
             continue;
         }
         let vid = u16::from_le_bytes([ddesc[8], ddesc[9]]);
@@ -1128,6 +1147,7 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
 
         let mut cfg = [0u8; 512];
         if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0200, 0, &mut cfg) {
+            mark_uac_tried(slot, port, speed, None);
             continue;
         }
         let Some(info) = parse_uac_config(&cfg) else {
@@ -1140,12 +1160,7 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
                 vid,
                 did
             );
-            {
-                let mut g = XHCI_STATE.lock();
-                if let Some(st) = g.as_mut() {
-                    st.uac_port = port;
-                }
-            }
+            mark_uac_tried(slot, port, speed, Some(&cfg));
             continue;
         };
 
@@ -1160,12 +1175,7 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
                 info.iface,
                 info.alt
             );
-            {
-                let mut g = XHCI_STATE.lock();
-                if let Some(st) = g.as_mut() {
-                    st.uac_port = port;
-                }
-            }
+            mark_uac_tried(slot, port, speed, Some(&cfg));
             continue;
         }
 
@@ -1181,12 +1191,7 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
             None
         };
         if !configure_isoc_endpoints(slot, port, speed, cap, play, interval_field) {
-            {
-                let mut g = XHCI_STATE.lock();
-                if let Some(st) = g.as_mut() {
-                    st.uac_port = port;
-                }
-            }
+            mark_uac_tried(slot, port, speed, Some(&cfg));
             continue;
         }
 
@@ -1205,6 +1210,7 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
                 st.uac_sample_rate = info.sample_rate;
                 st.uac_cfg = cfg;
                 st.uac_cfg_len = cfg_len;
+                st.uac_ep0_tr_va = st.tr_va;
             }
         }
         crate::slog_nano!(
@@ -1233,4 +1239,435 @@ pub unsafe fn bringup_uac() -> Option<super::UacDevice> {
         });
     }
     None
+}
+
+// ── UVC bring-up (Phase 4) — câmera isócrona ───────────────────────────────
+// Device class 0x0E (Video), subclass 0x01 (VideoControl) / 0x02
+// (VideoStreaming). Reusa o mecanismo isócrono do Phase 3.
+
+struct UvcEpInfo {
+    iface: u8,
+    alt: u8,
+    ep: u8,
+    max_packet: u16,
+    b_interval: u8,
+    width: u16,
+    height: u16,
+    fps: u16,
+    /// 1 = MJPEG, 0 = YUY2/raw.
+    format: u8,
+}
+
+/// Parseia o Configuration Descriptor procurando interface UVC VideoStreaming
+/// (class 0x0E, subclass 0x02) com endpoint isócrono IN. Extrai width/height/
+/// fps dos VS_FRAME descriptors (dwDefaultFrameInterval em 100ns → fps =
+/// 10^7/interval) e formato (VS_FORMAT_MJPEG 0x06 / UNCOMPRESSED 0x04).
+/// Prefere o alt setting mais alto com EP; MJPEG se disponível.
+fn parse_uvc_config(cfg: &[u8]) -> Option<UvcEpInfo> {
+    if cfg.len() < 9 || cfg[1] != 0x02 {
+        return None;
+    }
+    let total = u16::from_le_bytes([cfg[2], cfg[3]]) as usize;
+    let end = total.min(cfg.len());
+    let mut cur = UvcEpInfo {
+        iface: 0,
+        alt: 0,
+        ep: 0,
+        max_packet: 0,
+        b_interval: 1,
+        width: 0,
+        height: 0,
+        fps: 0,
+        format: 1,
+    };
+    let mut chosen: Option<UvcEpInfo> = None;
+    let mut width = 0u16;
+    let mut height = 0u16;
+    let mut fps = 0u16;
+    let mut is_mjpeg = false;
+    let mut in_vs = false;
+    let mut i = 0usize;
+    while i + 2 <= end {
+        let blen = cfg[i] as usize;
+        if blen < 2 || i + blen > end {
+            break;
+        }
+        let dtype = cfg[i + 1];
+        match dtype {
+            0x04 if blen >= 9 => {
+                // INTERFACE: fecha candidato anterior e abre novo.
+                if cur.ep != 0 {
+                    chosen = Some(cur);
+                }
+                let class = cfg[i + 5];
+                let sub = cfg[i + 6];
+                cur = UvcEpInfo {
+                    iface: cfg[i + 2],
+                    alt: cfg[i + 3],
+                    ep: 0,
+                    max_packet: 0,
+                    b_interval: 1,
+                    width: 0,
+                    height: 0,
+                    fps: 0,
+                    format: 1,
+                };
+                in_vs = class == 0x0E && sub == 0x02;
+            }
+            0x24 if blen >= 3 && in_vs => {
+                // CS_INTERFACE (dentro do VideoStreaming).
+                let sub = cfg[i + 2];
+                match sub {
+                    0x06 => is_mjpeg = true,          // VS_FORMAT_MJPEG
+                    0x07 if blen >= 24 => {           // VS_FRAME_MJPEG
+                        is_mjpeg = true;
+                        if width == 0 || height == 0 {
+                            width = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+                            height = u16::from_le_bytes([cfg[i + 6], cfg[i + 7]]);
+                        }
+                        if fps == 0 {
+                            let iv = u32::from_le_bytes([
+                                cfg[i + 20],
+                                cfg[i + 21],
+                                cfg[i + 22],
+                                cfg[i + 23],
+                            ]);
+                            if iv != 0 {
+                                fps = (10_000_000u32 / iv).clamp(1, 240) as u16;
+                            }
+                        }
+                    }
+                    0x05 if blen >= 24 => {           // VS_FRAME_UNCOMPRESSED
+                        if width == 0 || height == 0 {
+                            width = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+                            height = u16::from_le_bytes([cfg[i + 6], cfg[i + 7]]);
+                        }
+                        if fps == 0 {
+                            let iv = u32::from_le_bytes([
+                                cfg[i + 20],
+                                cfg[i + 21],
+                                cfg[i + 22],
+                                cfg[i + 23],
+                            ]);
+                            if iv != 0 {
+                                fps = (10_000_000u32 / iv).clamp(1, 240) as u16;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            0x05 if blen >= 7 && in_vs => {
+                // ENDPOINT isócrono IN (alt com bandwidth).
+                let attr = cfg[i + 3];
+                if attr & 0x03 == 0x01 {
+                    let addr = cfg[i + 2];
+                    if addr & 0x80 != 0 {
+                        let maxp = u16::from_le_bytes([cfg[i + 4], cfg[i + 5]]);
+                        if maxp > cur.max_packet {
+                            cur.ep = addr;
+                            cur.max_packet = maxp;
+                            cur.b_interval = cfg[i + 6].max(1);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += blen;
+    }
+    if cur.ep != 0 {
+        chosen = Some(cur);
+    }
+    let mut info = chosen?;
+    info.width = width.max(1);
+    info.height = height.max(1);
+    info.fps = fps.max(1);
+    info.format = if is_mjpeg { 1 } else { 0 };
+    Some(info)
+}
+
+/// Configura o EP isócrono IN do UVC via Configure Endpoint (aditivo: para
+/// webcam com mic, o slot já tem EPs de áudio — `last_ctx` cobre o maior DCI).
+/// Cria o ring e o guarda em ISOC_UVC.
+unsafe fn configure_uvc_endpoint(
+    slot: u8,
+    port: u8,
+    speed: u8,
+    ep_addr: u8,
+    max_packet: u16,
+    interval_field: u8,
+    last_ctx: u32,
+) -> Option<super::IsochRing> {
+    let ctx = match alloc_phys(2) {
+        Some(c) => c,
+        None => return None,
+    };
+    core::ptr::write_bytes(ctx.1, 0, 8192);
+
+    let dci = ((ep_addr & 0x0F) as u32) * 2 + 1; // isoc IN: 2n+1
+    let icc = ctx.1 as *mut u32;
+    icc.add(1).write_volatile(1 | (1 << dci)); // slot + EP do vídeo
+
+    let slot_ctx = ctx.1.add(0x20) as *mut u32;
+    slot_ctx.add(0).write_volatile((last_ctx << 27) | ((speed as u32) << 20));
+    slot_ctx.add(1).write_volatile((port as u32) << 16);
+
+    let mps = max_packet.min(super::ISOC_BUF_SIZE as u16);
+    if mps < max_packet {
+        crate::slog_nano!(
+            "USB",
+            "uvc",
+            "wMaxPacketSize {} > {} — truncado (high-bandwidth parcial)",
+            max_packet,
+            super::ISOC_BUF_SIZE
+        );
+    }
+    let ring = super::new_isoc_ring(slot, dci as u8, mps)?;
+    write_ep_ctx(ctx.1, dci, 5, mps, interval_field, ring.trb.phys);
+
+    if !issue_address_or_config_cmd(ctx.0, slot, 12) {
+        crate::slog_nano!(
+            "USB",
+            "uvc",
+            "Configure Endpoint FAIL slot={} dci={} add={:#x}",
+            slot,
+            dci,
+            1 | (1 << dci)
+        );
+        return None;
+    }
+    *super::ISOC_UVC.lock() = Some(ring);
+    crate::slog_nano!(
+        "USB",
+        "uvc",
+        "Configure Endpoint isoc IN OK slot={} dci={} mps={} interval={}",
+        slot,
+        dci,
+        mps,
+        interval_field
+    );
+    Some(ring)
+}
+
+/// Enumera e configura um device USB Video Class (isócrono IN). Reusa o slot
+/// já endereçado pelo UAC quando o device tem UVC (webcam com mic), senão faz
+/// enumeração completa em portas CCS. Idempotente via `uvc_port`.
+pub unsafe fn bringup_uvc() -> Option<super::UvcDevice> {
+    let (max_ports, msc_port, hid_port, mouse_port, uvc_port) = {
+        let g = XHCI_STATE.lock();
+        let st = g.as_ref()?;
+        (st.max_ports, st.msc_port, st.hid_port, st.mouse_port, st.uvc_port)
+    };
+    if uvc_port != 0 {
+        return None; // já tentado
+    }
+
+    // Caso 1: device endereçado pelo UAC (mesma porta) pode ter UVC no MESMO
+    // slot (webcam com mic). Reusa slot/EP0 — re-enumerar mataria o áudio.
+    {
+        let (uac_ready, uac_slot, uac_port, uac_speed, uac_cfg, uac_cfg_len, uac_ep0_tr_va) = {
+            let g = XHCI_STATE.lock();
+            let st = match g.as_ref() { Some(s) => s, None => None };
+            match st {
+                Some(s) => (
+                    s.uac_ready,
+                    s.uac_slot,
+                    s.uac_port,
+                    s.uac_speed,
+                    s.uac_cfg,
+                    s.uac_cfg_len,
+                    s.uac_ep0_tr_va,
+                ),
+                None => (false, 0, 0, 0, [0u8; 512], 0, 0),
+            }
+        };
+        if uac_slot != 0 && uac_cfg_len > 0 {
+            if let Some(info) = parse_uvc_config(&uac_cfg[..uac_cfg_len]) {
+                crate::slog_nano!(
+                    "USB",
+                    "uvc",
+                    "reuso do slot {} (UAC) — UVC {:.0}x{:.0}@{} format={} ep={:#04x}",
+                    uac_slot,
+                    info.width,
+                    info.height,
+                    info.fps,
+                    if info.format == 1 { "MJPEG" } else { "YUY2" },
+                    info.ep
+                );
+                // Garante o EP0 ring correto p/ SET_CONFIGURATION/SET_INTERFACE.
+                {
+                    let mut g = XHCI_STATE.lock();
+                    if let Some(st) = g.as_mut() {
+                        st.tr_va = uac_ep0_tr_va;
+                    }
+                }
+                if let Some(dev) = configure_uvc_on_slot(uac_slot, uac_port, uac_speed, &uac_cfg[..uac_cfg_len], uac_ready, info) {
+                    return Some(dev);
+                }
+            }
+        }
+    }
+
+    // Caso 2: portas CCS novas (skip MSC/HID/mouse; UAC já tentou a sua).
+    for port in 1..=max_ports {
+        if port == msc_port || port == hid_port || port == mouse_port {
+            continue;
+        }
+        let ccs = {
+            let g = XHCI_STATE.lock();
+            let Some(st) = g.as_ref() else { return None };
+            let Some(addr) = portsc_addr(st, port) else { continue };
+            r32(st.base, addr - st.base) & 1 != 0
+        };
+        if !ccs {
+            continue;
+        }
+        let speed = {
+            let g = XHCI_STATE.lock();
+            let st = match g.as_ref() { Some(s) => s, None => return None };
+            let addr = match portsc_addr(st, port) { Some(a) => a, None => continue };
+            let s = ((r32(st.base, addr - st.base) >> 10) & 0xF) as u8;
+            if s == 0 { 3 } else { s }
+        };
+        crate::slog_nano!("USB", "uvc", "tentando porta {} speed={}", port, speed);
+
+        if !reset_port(port) {
+            continue;
+        }
+        let slot = match cmd_enable_slot() {
+            Some(s) if s > 0 => s,
+            _ => continue,
+        };
+        let ep0_mps: u16 = match speed {
+            2 => 8,
+            1 => 64,
+            3 => 64,
+            4 => 512,
+            _ => 64,
+        };
+        if !address_device(slot, port, speed, ep0_mps) {
+            continue;
+        }
+        let mut cfg = [0u8; 512];
+        if !ep0_control_in(slot, ep0_mps, 0x80, 0x06, 0x0200, 0, &mut cfg) {
+            continue;
+        }
+        let Some(info) = parse_uvc_config(&cfg) else {
+            crate::slog_nano!("USB", "uvc", "port {} slot {} — sem UVC", port, slot);
+            {
+                let mut g = XHCI_STATE.lock();
+                if let Some(st) = g.as_mut() {
+                    st.uvc_port = port;
+                }
+            }
+            continue;
+        };
+        if let Some(dev) = configure_uvc_on_slot(slot, port, speed, &cfg, false, info) {
+            return Some(dev);
+        }
+    }
+    None
+}
+
+/// Configura o UVC num slot dado (reuso ou novo): SET_CONFIGURATION se ainda
+/// não configurado, SET_INTERFACE(alt), Configure Endpoint isócrono IN.
+unsafe fn configure_uvc_on_slot(
+    slot: u8,
+    port: u8,
+    speed: u8,
+    cfg: &[u8],
+    device_configured: bool,
+    info: UvcEpInfo,
+) -> Option<super::UvcDevice> {
+    let ep0_mps: u16 = match speed {
+        2 => 8,
+        1 => 64,
+        3 => 64,
+        4 => 512,
+        _ => 64,
+    };
+    if !device_configured {
+        let _ = ep0_set_configuration(slot, ep0_mps, 1);
+    }
+    if info.alt > 0
+        && !ep0_class_no_data(slot, ep0_mps, 0x01, 0x0B, info.alt as u16, info.iface as u16)
+    {
+        crate::slog_nano!(
+            "USB",
+            "uvc",
+            "SET_INTERFACE(iface={} alt={}) FAIL — streaming não ativado",
+            info.iface,
+            info.alt
+        );
+        return None;
+    }
+
+    // last_ctx cobre o maior DCI: áudio (se UAC no mesmo slot) + vídeo.
+    let video_dci = ((info.ep & 0x0F) as u32) * 2 + 1;
+    let audio_max_dci = {
+        let g = XHCI_STATE.lock();
+        match g.as_ref() {
+            Some(st) if st.uac_slot == slot => {
+                let ci = ((st.uac_capture_ep & 0x0F) as u32) * 2 + 1;
+                let co = ((st.uac_playback_ep & 0x0F) as u32) * 2;
+                ci.max(co).max(1)
+            }
+            _ => 1,
+        }
+    };
+    let interval_field = interval_field_for(speed, info.b_interval);
+    let ring = configure_uvc_endpoint(
+        slot,
+        port,
+        speed,
+        info.ep,
+        info.max_packet,
+        interval_field,
+        audio_max_dci.max(video_dci),
+    )?;
+
+    let vid = 0;
+    let did = 0;
+    {
+        let mut g = XHCI_STATE.lock();
+        if let Some(st) = g.as_mut() {
+            st.uvc_ready = true;
+            st.uvc_slot = slot;
+            st.uvc_port = port;
+            st.uvc_vid = vid;
+            st.uvc_did = did;
+            st.uvc_ep = info.ep;
+            st.uvc_width = info.width;
+            st.uvc_height = info.height;
+            st.uvc_fps = info.fps;
+            st.uvc_format = info.format;
+            st.uvc_max_packet = info.max_packet;
+        }
+    }
+    crate::slog_nano!(
+        "USB",
+        "uvc",
+        "UVC OK slot={} port={} ep={:#04x} {}x{}@{} format={} max_pkt={}",
+        slot,
+        port,
+        info.ep,
+        info.width,
+        info.height,
+        info.fps,
+        if info.format == 1 { "MJPEG" } else { "YUY2" },
+        info.max_packet
+    );
+    Some(super::UvcDevice {
+        slot,
+        port,
+        vid,
+        did,
+        ep: info.ep,
+        width: info.width,
+        height: info.height,
+        fps: info.fps,
+        format: info.format,
+        max_packet: info.max_packet,
+    })
 }

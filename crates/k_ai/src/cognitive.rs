@@ -677,9 +677,9 @@ impl TransformerTrainer {
     /// Returns gradients for each parameter tensor.
     pub fn backward(
         &self,
-        model: &TransformerModel,
-        cache: &TransformerCache,
-        targets: &[u32],
+        _model: &TransformerModel,
+        _cache: &TransformerCache,
+        _targets: &[u32],
     ) -> TransformerGradients {
         // TODO: Implement full backprop through:
         // 1. Cross-entropy loss gradient at logits
@@ -695,8 +695,8 @@ impl TransformerTrainer {
     /// Update model weights with computed gradients.
     pub fn update_weights(
         &mut self,
-        model: &mut TransformerModel,
-        grads: &TransformerGradients,
+        _model: &mut TransformerModel,
+        _grads: &TransformerGradients,
     ) {
         // TODO: Apply gradients with ternary straight-through estimator
         // For ternary weights: accumulate FP32 gradients, then quantize to {-1,0,1}

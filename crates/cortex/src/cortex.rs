@@ -2612,42 +2612,6 @@ pub fn argmax_row_hf_vocab(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
     best
 }
 
-/// Constrained greeting token selection.
-pub fn argmax_row_greeting_only(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
-    let cols = logits.shape.1;
-    let start = row * cols;
-    let hi = cols.min(128000);
-    let step = recent.len().saturating_sub(1);
-    let prev = recent.last().copied().map(|p| p as u32);
-    let masked = crate::bpe::greeting_step_candidates(step, prev);
-    let pool = if masked.is_empty() { crate::bpe::greeting_candidate_ids() } else { masked };
-    let mut best = pool[0];
-    let mut best_val = NEG_INFINITY;
-    let mut any = false;
-    for &id in pool.iter() {
-        if (id as usize) >= hi { continue; }
-        if recent.iter().any(|&p| u32::from(p) == id) { continue; }
-        let v = logits.data[start + id as usize];
-        if v.is_nan() { continue; }
-        let mut s = v + crate::bpe::score_piece(id);
-        s += crate::bpe::greeting_position_bias(id, step);
-        s += crate::bpe::greeting_bigram_bias(prev, id);
-        if !any || s > best_val { best_val = s; best = id; any = true; }
-    }
-    if any { best } else {
-        let fb = crate::bpe::greeting_candidate_ids();
-        let mut best2 = fb[0]; let mut best2_val = NEG_INFINITY;
-        for &id in fb.iter() {
-            if (id as usize) >= hi { continue; }
-            let v = logits.data[start + id as usize];
-            if v.is_nan() { continue; }
-            let s = v + crate::bpe::score_piece(id);
-            if s > best2_val { best2_val = s; best2 = id; }
-        }
-        best2
-    }
-}
-
 /// Constrained weather token selection.
 pub fn argmax_row_weather_only(logits: &Tensor, row: usize, recent: &[u16]) -> u32 {
     let cols = logits.shape.1;
@@ -2801,10 +2765,11 @@ pub fn generate_speculative(model: &TransformerModel, prompt: &str, mut decoder:
         let next_u16 = if COHERENCE_ENABLED.load(core::sync::atomic::Ordering::Relaxed) && use_bpe {
             sample_token_coherence(&last_logits, 0, &recent_u16)
         } else if use_bpe {
-            let sp32ish = model.vocab_size > 0 && model.vocab_size <= 33_000;
-            if !sp32ish && model.hidden >= 2048 && is_greeting {
-                argmax_row_greeting_only(&last_logits, 0, &recent_u16)
-            } else if !sp32ish && model.hidden >= 2048 && false { // RUN_WEATHER_E2E_SKINNY placeholder
+            // Greeting no longer uses a hardcoded token pool — full model argmax.
+            // (Audit 7.5: GREETING_BIAS_IDS was effectively canned output.)
+            if model.vocab_size > 0 && model.vocab_size <= 33_000 {
+                argmax_row_hf_vocab(&last_logits, 0, &recent_u16)
+            } else if false { // RUN_WEATHER_E2E_SKINNY placeholder
                 argmax_row_weather_only(&last_logits, 0, &recent_u16)
             } else {
                 argmax_row_hf_vocab(&last_logits, 0, &recent_u16)

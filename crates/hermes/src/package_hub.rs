@@ -559,6 +559,11 @@ fn check_signature_content(content: &str) -> bool {
     let Some(sig_hex) = extract_fm_field(content, "signature") else {
         return false;
     };
+    // sign_artifact_md grava `signature: "hex"` com aspas — mesmo tratamento
+    // de unquote que content_hash recebe em verify_artifact_md (linha 546).
+    // Sem unquote, parse_hex_sig via 130 chars (com aspas) e rejeitava TODO
+    // artefato assinado (bug latente exposto pela auditoria 6.1).
+    let sig_hex = unquote(sig_hex);
     let Some(sig) = parse_hex_sig(&sig_hex) else {
         return false;
     };
