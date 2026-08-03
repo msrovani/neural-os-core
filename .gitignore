@@ -41,8 +41,10 @@ logs/
 *.img
 neural-os-hwtest.*
 
-# keep firmware/ tracked (MIT blobs needed for WPR boot)
-!firmware/**
+# firmware: baixado via python tools/download_firmware.py (hash verificada) — NÃO versionar
+# FW_POLICY.txt permanece rastreado (política/licença por família)
+firmware/**
+!firmware/FW_POLICY.txt
 # GSP NVIDIA: dezenas de MB, ABI pin (535/570) instável — só em target/firmware/
 # (python tools/download_firmware.py copia GSP só para target/)
 firmware/nvidia/**/gsp/
@@ -71,4 +73,8 @@ pipenv
 *.safetensors
 models/llm_moe/bitnet_2B.bitnet
 models/tokenizer/BGE_M3.BIN
+# Modelos de terceiros (MIT) — baixados via tools/download_models.py
+models/tokenizer/PIPER_PT_BR.BIN
+models/tokenizer/E5_MULTI.BIN
 .slim/deepwork/
+docs/memory/.preflight_cache/
