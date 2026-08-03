@@ -7,7 +7,7 @@ use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::VirtAddr;
 
 use crate::address_space::self;
-use crate::interrupts::{user_code_selector, user_data_selector};
+use crate::interrupts_ext::{user_code_selector, user_data_selector};
 use crate::syscall::{self, Cap, SYS_EXIT_USER};
 
 /// Região user isolada (após Cortex weights VA).
@@ -61,7 +61,7 @@ pub fn fault_abort(msg: &'static str) -> ! {
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
     EXIT_OK.store(3, Ordering::SeqCst);
     // Lock-free: serial_println pode deadlock no IRQ path.
-    crate::interrupts::puts(b"[P6] WARN fault abort - restore CR3 + skip iretq\n");
+    crate::interrupts_ext::puts(b"[P6] WARN fault abort - restore CR3 + skip iretq\n");
     let _ = msg;
     unsafe { jump_back_to_kernel() }
 }
@@ -92,7 +92,7 @@ unsafe fn jump_back_to_kernel() -> ! {
     // Sem return point salvo (fault pré-asm) → não jmp 0 (nova storm).
     if rip == 0 || rsp == 0 {
         ABORTING.store(false, Ordering::SeqCst);
-        crate::interrupts::puts(b"[P6] WARN no SAVED_RIP - spin (no return)\n");
+        crate::interrupts_ext::puts(b"[P6] WARN no SAVED_RIP - spin (no return)\n");
         loop {
             x86_64::instructions::hlt();
         }
@@ -163,7 +163,7 @@ pub unsafe fn enter_user_mode(
 
     // --- PHASE 0: CR3 switch ANTES do iretq (Moros pattern) ---
     // 1. Salva kernel RSP para o return path (jump_back_to_kernel restaura)
-    crate::interrupts::puts(b"[P6] A: save rsp\n");
+    crate::interrupts_ext::puts(b"[P6] A: save rsp\n");
     let rsp_val: u64;
     core::arch::asm!("mov {}, rsp", out(reg) rsp_val, options(nostack));
     #[cfg(feature = "ring3")]
@@ -189,9 +189,9 @@ pub unsafe fn enter_user_mode(
     // 3. Switch para page table do user enquanto ainda CPL=0.
     //    Kernel text em P4[511] é compartilhado (clone raso) → ainda executável.
     DEMO_ACTIVE.store(true, Ordering::SeqCst);
-    crate::interrupts::puts(b"[P6] B: cr3->user\n");
+    crate::interrupts_ext::puts(b"[P6] B: cr3->user\n");
     address_space::restore_cr3(user_l4, Cr3Flags::empty());
-    crate::interrupts::puts(b"[P6] C: cr3 switched (CPL0)\n");
+    crate::interrupts_ext::puts(b"[P6] C: cr3 switched (CPL0)\n");
 
     // 4. IRETQ para CPL=3. CR3 já é a page table do user.
     //    A label "2:" é o return point — jump_back_to_kernel restaura CR3,
@@ -201,7 +201,7 @@ pub unsafe fn enter_user_mode(
     let rip_ptr = core::ptr::addr_of_mut!(SAVED_RIP);
     #[cfg(not(feature = "ring3"))]
     let rip_ptr = core::ptr::null_mut::<u64>();
-    crate::interrupts::puts(b"[P6] D: iretq->CPL3\n");
+    crate::interrupts_ext::puts(b"[P6] D: iretq->CPL3\n");
     core::arch::asm!(
         "lea {tmp}, [rip + 2f]",
         "mov qword ptr [{rip_ptr}], {tmp}",
@@ -223,7 +223,7 @@ pub unsafe fn enter_user_mode(
         rflags = in(reg) rflags,
         entry = in(reg) entry,
     );
-    crate::interrupts::puts(b"[P6] E: returned from CPL3\n");
+    crate::interrupts_ext::puts(b"[P6] E: returned from CPL3\n");
 
     DEMO_ACTIVE.store(false, Ordering::SeqCst);
     // CRITICO (SESSION_233): NAO chamar restore_cr3(k_l4, k_flags) aqui!
@@ -289,7 +289,7 @@ pub fn run_process(pid: u64) -> Result<(), &'static str> {
 
     // ADR-0082 F1.2: per-process TSS — seleciona slot com kernel stack dedicada
     // (RSP0 para traps CPL=3→0). Slot = pid % MAX_PROCS.
-    crate::interrupts::switch_to_proc_tss((pid % 8) as usize);
+    crate::interrupts_ext::switch_to_proc_tss((pid % 8) as usize);
 
     let result = unsafe {
         x86_64::instructions::interrupts::without_interrupts(|| {

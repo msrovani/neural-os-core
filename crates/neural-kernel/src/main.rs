@@ -70,6 +70,7 @@ mod global_arena;
 mod hw_agents;
 mod identity;
 mod interrupts;
+mod interrupts_ext;
 mod inventory;
 mod memory;
 mod mhi;
@@ -174,7 +175,6 @@ mod gpt;
 
 mod fs_driver;
 
-mod ntfs_reader;
 mod ext2_reader;
 mod io_scheduler;
 mod storage_manager;
@@ -1267,7 +1267,8 @@ pub(crate) fn kernel_boot(
     kjson!("BOOT", "KERNEL", "start", "serial", serial_exists as u32, "pm_off", pm_offset);
 
     crate::display::fb::boot_ckpt(5, "antes init_idt");
-    interrupts::init_idt();
+    k_nano::interrupts::init_idt();
+    crate::interrupts_ext::patch_idt();
     crate::display::fb::boot_ckpt(6, "IDT ok");
 
     kjson!("BOOT", "IDT", "ready", "vecs", 256);
@@ -3651,7 +3652,7 @@ pub(crate) fn kernel_boot(
 
     // PIC+STI antes do 1º hlt(): se ACPI=None/APIC nunca sobe, PIT acorda o scheduler.
     // Se PlatformAgent já ativou APIC, USING_APIC→só STI de novo.
-    unsafe { interrupts::init_pic_fallback_and_sti(); }
+    unsafe { crate::interrupts_ext::init_pic_fallback_and_sti(); }
 
     publish_boot_phase(BootPhase::Runtime, "Entrando no AgentScheduler");
 

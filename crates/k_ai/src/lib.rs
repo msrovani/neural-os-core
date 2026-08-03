@@ -30,7 +30,6 @@ pub mod data_collector;
 pub mod hw_agents;
 pub mod hw_capability;
 pub mod inventory;
-pub mod memory_agent;
 pub mod model_fit;
 pub mod memory_systems;
 pub mod multi_user;
