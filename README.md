@@ -626,6 +626,15 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 
 ---
 
+## 🌐 Language Policy
+
+- **Code, comments, log messages, commit messages**: English only.
+- **Project documentation** (`docs/`, `AGENTS.md`, sprint sessions): Portuguese — the project's working language.
+- Log output is English so serial/QEMU logs can be grepped and filtered consistently. Reproducible boot evidence lives in [`docs/evidence/`](docs/evidence/) (real boot logs, committed per milestone).
+- Large binary artifacts (firmware, models, datasets) are **not** versioned — download via `tools/download_firmware.py` / `tools/download_models.py` (hash-verified).
+
+---
+
 <div align="center">
 
 ```
