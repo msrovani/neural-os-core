@@ -2436,6 +2436,13 @@ pub(crate) fn kernel_boot(
         crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
     }
 
+    // ADR-0082 F3.1: arena W^X USER no sandbox AS (base p/ Cranelift B/C) — non-fatal
+    if crate::exec_arena::user_arena_self_test() {
+        crate::boot_logger::log("BOOT: USER arena self-test OK");
+    } else {
+        crate::boot_logger::log("BOOT: USER arena self-test WARN (non-fatal)");
+    }
+
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0059 F6) — gated
     crate::isolation_ring::init_connectors();
 

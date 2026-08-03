@@ -59,22 +59,56 @@ pub fn ring3_is_safe() -> bool {
     }
 }
 
-/// **Execução isolada de código nativo em Ring3** (ADR-0077 §7 / ADR-0082 F2.3).
+/// **Execução isolada de código nativo em Ring3** (ADR-0077 §7 / ADR-0082 F3.2).
 /// Assinatura casa com `hermes_crate::app_factory::NativeRingFn`.
 ///
-/// Caminho (ADR-0082):
-///  1. `code` deve ser ELF64 (validado via `ElfLoader::is_valid_elf`);
-///  2. `elf_loader::load_and_spawn` → `create_sandbox_as()` (isolamento real)
-///     + RX/RW por segmento + relocations RELATIVE + stack USER;
-///  3. `user_mode::run_process` → `enter_user_mode` (iretq CPL=3) com Cap mínima;
+/// Dual path:
+///  1. `code` é ELF64 (`\x7fELF`) → `elf_loader::load_and_spawn` (create_sandbox_as
+///     + RX/RW por segmento + relocations RELATIVE + stack USER);
+///  2. `code` é blob nativo (Cranelift B/C) → `exec_arena::jit_write_exec_user`
+///     (página USER RX no sandbox AS, W^X) + stack USER + `enter_user_mode`;
+///  3. `user_mode::run_process` / `enter_user_mode` (iretq CPL=3) com Cap mínima;
 ///  4. fault no sandbox → `fault_abort` (mata sandbox, kernel vive).
 pub fn ring3_run_native(code: &[u8], _caps: u32) -> Result<i64, &'static str> {
-    if !crate::elf_loader::ElfLoader::is_valid_elf(code) {
-        return Err("ring3: code nao e ELF64 valido");
+    // Path 1: ELF64 completo (loader com relocations).
+    if crate::elf_loader::ElfLoader::is_valid_elf(code) {
+        let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
+        k_nano::slog_bin!("ISO-RING", "info", "ring3_run_native: ELF sandbox pid={}", pid);
+        return match crate::user_mode::run_process(pid) {
+            Ok(()) => Ok(0),
+            Err(e) => Err(e),
+        };
     }
-    let pid = crate::elf_loader::load_and_spawn(code, "sandbox")?;
-    k_nano::slog_bin!("ISO-RING", "info", "ring3_run_native: sandbox pid={} executando", pid);
-    match crate::user_mode::run_process(pid) {
+
+    // Path 2: blob nativo (Cranelift B/C) — arena USER RX no sandbox AS.
+    if code.is_empty() {
+        return Err("ring3: code vazio");
+    }
+    let mut aspace = crate::address_space::create_sandbox_as()?;
+    let entry = unsafe { crate::exec_arena::jit_write_exec_user(&mut aspace, code) }?;
+
+    // Stack USER RW no sandbox (4 páginas, constante do elf_loader).
+    let stack_pages = (crate::elf_loader::USER_STACK_SIZE / 4096) as usize;
+    for j in 0..stack_pages {
+        let va = crate::elf_loader::USER_STACK_BASE + (j as u64) * 4096;
+        let frame = crate::address_space::alloc_frame()?;
+        unsafe {
+            aspace.map_user_page(
+                x86_64::VirtAddr::new(va),
+                frame,
+                crate::address_space::user_data_flags(),
+            )?;
+        }
+    }
+    let stack_top = crate::elf_loader::USER_STACK_BASE + crate::elf_loader::USER_STACK_SIZE;
+
+    k_nano::slog_bin!("ISO-RING", "info", "ring3_run_native: blob @{:#x} stack @{:#x}", entry, stack_top);
+    let result = unsafe {
+        x86_64::instructions::interrupts::without_interrupts(|| {
+            crate::user_mode::enter_user_mode(entry, stack_top, aspace.l4_frame, crate::syscall::Cap::ENTER_USER)
+        })
+    };
+    match result {
         Ok(()) => Ok(0),
         Err(e) => Err(e),
     }

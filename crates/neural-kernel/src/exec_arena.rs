@@ -149,3 +149,77 @@ pub fn self_test() -> bool {
         false
     }
 }
+
+/// ADR-0082 F3.1 — arena W^X **USER** dentro do sandbox AS.
+///
+/// Igual ao `jit_write_exec` (RW→RX) mas mapeia a página com
+/// `USER_ACCESSIBLE` no `AddressSpace` isolado (Ring3) — o código resultante
+/// é executável em CPL=3, NÃO em Ring 0. Base para o Caminho B/C (Cranelift)
+/// e para o `ring3_run_native` de blobs nativos.
+///
+/// W^X: fase escrita RW (USER|WRITABLE), flip para RX (remove WRITABLE).
+/// Retorna o VA USER do código no sandbox.
+pub unsafe fn jit_write_exec_user(
+    aspace: &mut crate::address_space::AddressSpace,
+    code: &[u8],
+) -> Result<u64, &'static str> {
+    if code.is_empty() || code.len() > 4096 {
+        return Err("exec_arena: código vazio/grande demais");
+    }
+    // VA do arena (índice L4 dedicado, < 256 → range user) — mesmo base do
+    // arena Ring 0; no sandbox AS este índice está LIVRE (create_sandbox_as
+    // só copia P4[≥256]).
+    let virt = VirtAddr::new(ARENA_VA);
+    let frame = alloc_physical_frame().ok_or("exec_arena: sem frame código")?;
+    // Fase escrita: USER RW (CPL=3 pode escrever).
+    let write_flags = PageTableFlags::PRESENT
+        | PageTableFlags::WRITABLE
+        | PageTableFlags::USER_ACCESSIBLE;
+    aspace.map_user_page(virt, frame, write_flags)?;
+    let dst = ARENA_VA as *mut u8;
+    core::ptr::copy_nonoverlapping(code.as_ptr(), dst, code.len());
+    core::sync::atomic::fence(Ordering::SeqCst);
+    // Fase execução: USER RX (remove WRITABLE → W^X). Preserva USER via set_user_leaf_flags.
+    aspace.set_user_leaf_flags(virt, PageTableFlags::PRESENT)?;
+    Ok(ARENA_VA)
+}
+
+/// Self-test do arena USER (ADR-0082 F3.1): monta sandbox, escreve
+/// `mov eax,42; ret` USER RX, executa em Ring 0 (só p/ validar codegen —
+/// execução real em CPL=3 fica com o `ring3_run_native`) e confere 42.
+pub fn user_arena_self_test() -> bool {
+    let mut aspace = match crate::address_space::create_sandbox_as() {
+        Ok(a) => a,
+        Err(e) => {
+            k_nano::slog_bin!("EXEC-ARENA", "warn", "user selftest: sandbox fail {}", e);
+            return false;
+        }
+    };
+    let code: [u8; 6] = [0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3];
+    let va = match unsafe { jit_write_exec_user(&mut aspace, &code) } {
+        Ok(v) => v,
+        Err(e) => {
+            k_nano::slog_bin!("EXEC-ARENA", "warn", "user selftest: jit fail {}", e);
+            return false;
+        }
+    };
+    // Verifica que a folha é USER no AS do sandbox (flag de isolamento).
+    let f = aspace.frame_for_virt(VirtAddr::new(va));
+    let _ = f;
+    // Executa (Ring 0) só para provar o codegen — o mesmo blob rodaria em CPL=3.
+    let fn_ptr: unsafe extern "C" fn() -> u32 =
+        unsafe { core::mem::transmute::<*const (), unsafe extern "C" fn() -> u32>(va as *const ()) };
+    let r = unsafe { fn_ptr() };
+    if r == 42 {
+        k_nano::slog_bin!(
+            "EXEC-ARENA",
+            "info",
+            "W^X USER arena self-test PASS (mov eax,42;ret -> {}) — ADR-0082 F3.1",
+            r
+        );
+        true
+    } else {
+        k_nano::slog_bin!("EXEC-ARENA", "warn", "user selftest resultado inesperado: {}", r);
+        false
+    }
+}

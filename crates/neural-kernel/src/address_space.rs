@@ -185,6 +185,41 @@ impl AddressSpace {
         }
         Some(PhysFrame::<Size4KiB>::containing_address(leaf.addr()))
     }
+
+    /// Atualiza flags da folha USER no sandbox AS (ADR-0082 F3.1 — flip RW→RX
+    /// da arena W^X). Caminho intermediário garantido PRESENT (mapeado antes).
+    /// Mantém USER_ACCESSIBLE se a folha já é USER (arena user).
+    pub fn set_user_leaf_flags(&self, virt: VirtAddr, flags: PageTableFlags) -> Result<(), &'static str> {
+        let l4 = unsafe { &mut *frame_as_table(self.l4_frame) };
+        let e3 = &mut l4[virt.p4_index()];
+        if !e3.flags().contains(PageTableFlags::PRESENT) {
+            return Err("wxe: P3 ausente");
+        }
+        let l3 = unsafe { &mut *frame_as_table(PhysFrame::containing_address(e3.addr())) };
+        let e2 = &mut l3[virt.p3_index()];
+        if !e2.flags().contains(PageTableFlags::PRESENT) {
+            return Err("wxe: P2 ausente");
+        }
+        let l2 = unsafe { &mut *frame_as_table(PhysFrame::containing_address(e2.addr())) };
+        let e1 = &mut l2[virt.p2_index()];
+        if !e1.flags().contains(PageTableFlags::PRESENT) {
+            return Err("wxe: P1 ausente");
+        }
+        let l1 = unsafe { &mut *frame_as_table(PhysFrame::containing_address(e1.addr())) };
+        let leaf = &mut l1[virt.p1_index()];
+        if !leaf.flags().contains(PageTableFlags::PRESENT) {
+            return Err("wxe: folha ausente");
+        }
+        // Preserva USER se a folha atual é USER (não rebaixa acidentalmente).
+        let mut f = flags;
+        if leaf.flags().contains(PageTableFlags::USER_ACCESSIBLE) {
+            f.insert(PageTableFlags::USER_ACCESSIBLE);
+        }
+        let frame = PhysFrame::<Size4KiB>::containing_address(leaf.addr());
+        leaf.set_addr(frame.start_address(), f);
+        x86_64::instructions::tlb::flush(virt);
+        Ok(())
+    }
 }
 
 /// Instala leaf PRESENT no CR3 atual sem alocar frames intermediários (#PF-safe).
