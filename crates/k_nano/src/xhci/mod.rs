@@ -526,20 +526,69 @@ pub(crate) unsafe fn erdp_sync(st: &XhciState) {
     w32(rt, 0x1C, (erdp >> 32) as u32);
 }
 
-/// Drena Transfer Events do slot/dci informados (janela bounded), preenchendo
-/// `freed` com (buffer_idx, bytes_transferidos). Retorna nº de eventos.
-/// Eventos estranhos no caminho são consumidos (avança er_dequeue) — inofensivo:
-/// todos os consumidores são síncronos sob XHCI_STATE lock.
-pub(crate) unsafe fn drain_isoc_events(
-    st: &mut XhciState,
-    slot: u8,
-    dci: u8,
-    ring_pa: u64,
-    freed: &mut [(u16, u16); ISOC_SLOTS],
-) -> u16 {
+/// Roteia UM Transfer Event (type 32) para o ring isócrono dono (match por
+/// slot + DCI + faixa do TRB pointer). Eventos sem dono (Missed Service,
+/// Ring Underrun, bulk antigo) são consumidos e descartados — loga 1x.
+/// Retorna true sempre (o evento deve ser avançado no anel de eventos).
+unsafe fn route_isoc_event(eslot: u8, epid: u8, trb_ptr: u64, len: u16) -> bool {
+    let rings: [&spin::Mutex<Option<IsochRing>>; 3] = [&ISOC_IN, &ISOC_OUT, &ISOC_UVC];
+    let mut routed = false;
+    for r in rings {
+        let mut g = r.lock();
+        let Some(ring) = g.as_mut() else { continue };
+        if ring.slot != eslot || ring.dci != epid {
+            continue;
+        }
+        let rel = trb_ptr.wrapping_sub(ring.trb.phys);
+        if rel >= (ISOC_SLOTS as u64) * 16 {
+            continue;
+        }
+        let idx = (rel / 16) as usize;
+        // push (idx, len) no FIFO — bounded; overflow = poll atrasado.
+        let head = ring.freed_head as usize;
+        let tail = ring.freed_tail as usize;
+        if (tail + 1) % ISOC_SLOTS == head {
+            static OVERFLOW_LOGGED: core::sync::atomic::AtomicBool =
+                core::sync::atomic::AtomicBool::new(false);
+            if !OVERFLOW_LOGGED.swap(true, Ordering::Relaxed) {
+                crate::slog_nano!(
+                    "USB",
+                    "isoc",
+                    "FIFO cheio — eventos descartados (poll atrasado, ring drenando)"
+                );
+            }
+        } else {
+            ring.freed[tail] = (idx as u16, len);
+            ring.freed_tail = ((tail + 1) % ISOC_SLOTS) as u16;
+        }
+        ring.armed = ring.armed.saturating_sub(1);
+        routed = true;
+        break;
+    }
+    if !routed {
+        static UNROUTED_LOGGED: core::sync::atomic::AtomicBool =
+            core::sync::atomic::AtomicBool::new(false);
+        if !UNROUTED_LOGGED.swap(true, Ordering::Relaxed) {
+            crate::slog_nano!(
+                "USB",
+                "isoc",
+                "Transfer Event sem dono (slot={} ep={}) — descartado",
+                eslot,
+                epid
+            );
+        }
+    }
+    true
+}
+
+/// Drena Transfer Events do anel e roteia para o ring dono (UAC IN/OUT, UVC).
+/// Único consumidor do anel durante streaming — polls por-ring avançariam
+/// `er_dequeue` por cima de eventos de outros rings (perda de re-arm). Bounded
+/// (ISOC_SLOTS*3 eventos por chamada). Retorna nº de eventos processados.
+pub(crate) unsafe fn drain_isoc_events(st: &mut XhciState) -> u16 {
     let evt = st.er_va as *const u32;
     let mut consumed = 0u16;
-    for _ in 0..ISOC_SLOTS {
+    for _ in 0..(ISOC_SLOTS * 3) {
         let mut found = false;
         for look in 0..16u16 {
             let i = ((st.er_dequeue as u32 + look as u32) % 256) as usize;
@@ -549,22 +598,14 @@ pub(crate) unsafe fn drain_isoc_events(
             let dw3 = evt.add(i * 4 + 3).read_volatile();
             let ty = (dw3 >> 10) & 0x3F;
             if ty != 32 {
-                continue; // não é Transfer Event
+                continue; // Command/Port Status events ficam para outros consumidores
             }
             let eslot = ((dw3 >> 24) & 0xFF) as u8;
             let epid = ((dw3 >> 16) & 0x1F) as u8;
-            if eslot != slot || epid != dci {
-                continue;
-            }
             let trb_ptr = (dw0 as u64) | ((dw1 as u64) << 32);
-            let rel = trb_ptr.wrapping_sub(ring_pa);
-            if rel >= (ISOC_SLOTS as u64) * 16 {
-                continue;
-            }
-            let idx = (rel / 16) as usize;
-            let t = st.er_dequeue.wrapping_add(look) % 256;
-            st.er_dequeue = t.wrapping_add(1) % 256;
-            freed[consumed as usize] = (idx as u16, (dw2 & 0xFFFFFF) as u16);
+            let len = (dw2 & 0xFFFFFF) as u16;
+            let _ = route_isoc_event(eslot, epid, trb_ptr, len);
+            st.er_dequeue = ((i as u32 + 1) % 256) as u16;
             consumed += 1;
             found = true;
             break;
@@ -638,30 +679,38 @@ pub unsafe fn schedule_isoc_in() -> usize {
     armed
 }
 
-/// Poll de captura isócrona: drena eventos, copia PCM dos slots completos e
-/// re-arma. Copia pacotes inteiros enquanto couberem em `out` (slots sem espaço
-/// ficam agendados para a próxima chamada). Retorna amostras i16 escritas.
+/// Poll de captura isócrona: drena eventos (roteia p/ todos os rings) e copia
+/// PCM dos slots completos do ring IN, re-armando. Copia pacotes inteiros
+/// enquanto couberem em `out` (pacotes sem espaço ficam na fila do ring).
+/// Retorna amostras i16 escritas.
 pub unsafe fn poll_isoc_in(out: &mut [i16]) -> usize {
-    let mut freed = [(0u16, 0u16); ISOC_SLOTS];
-    let mut st = XHCI_STATE.lock();
-    let Some(s) = st.as_mut() else { return 0 };
+    {
+        let mut st = XHCI_STATE.lock();
+        let Some(s) = st.as_mut() else { return 0 };
+        drain_isoc_events(s);
+    }
     let mut rg = ISOC_IN.lock();
     let Some(ring) = rg.as_mut() else { return 0 };
-    let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut freed);
     let mut samples = 0usize;
-    for k in 0..n as usize {
-        let (idx, len) = freed[k];
+    loop {
+        if ring.freed_head == ring.freed_tail {
+            break;
+        }
+        let (idx, len) = ring.freed[ring.freed_head as usize];
         let idx = idx as usize;
         let max_smps = (ring.max_packet as usize) / 2;
         let n_smps = ((len as usize).min(ISOC_BUF_SIZE)) / 2;
         if n_smps == 0 {
+            // pacote vazio: pop + re-arm sem copiar.
+            ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
             isoc_arm_trb(ring, idx, ring.max_packet);
             continue;
         }
         let n_smps = n_smps.min(max_smps);
         if samples + n_smps > out.len() {
-            break; // sem espaço — slot permanece liberado p/ a próxima chamada
+            break; // sem espaço — pacote PERMANECE na fila (peek-before-pop)
         }
+        ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
         let src = (ring.bufs.virt as *const u8).add(idx * ISOC_BUF_SIZE) as *const i16;
         for smp in 0..n_smps {
             out[samples + smp] = src.add(smp).read_volatile();
@@ -672,25 +721,31 @@ pub unsafe fn poll_isoc_in(out: &mut [i16]) -> usize {
     samples
 }
 
-/// Poll de playback: re-arma slots liberados com silêncio (mantém o stream OUT
-/// vivo sem PCM — evita Ring Underrun). Retorna nº de slots re-armados.
+/// Poll de playback: drena eventos e re-arma slots liberados do ring OUT com
+/// silêncio (mantém o stream vivo sem PCM — evita Ring Underrun).
+/// Retorna nº de slots re-armados.
 pub unsafe fn poll_isoc_out() -> usize {
-    let mut freed = [(0u16, 0u16); ISOC_SLOTS];
-    let mut st = XHCI_STATE.lock();
-    let Some(s) = st.as_mut() else { return 0 };
+    {
+        let mut st = XHCI_STATE.lock();
+        let Some(s) = st.as_mut() else { return 0 };
+        drain_isoc_events(s);
+    }
     let mut rg = ISOC_OUT.lock();
     let Some(ring) = rg.as_mut() else { return 0 };
-    let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut freed);
-    for k in 0..n as usize {
-        let idx = freed[k].0 as usize;
+    let mut n = 0usize;
+    while ring.freed_head != ring.freed_tail {
+        let (idx, _len) = ring.freed[ring.freed_head as usize];
+        ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
+        let idx = idx as usize;
         core::ptr::write_bytes(
             (ring.bufs.virt as *mut u8).add(idx * ISOC_BUF_SIZE),
             0,
             ring.max_packet as usize,
         );
         isoc_arm_trb(ring, idx, ring.max_packet);
+        n += 1;
     }
-    n as usize
+    n
 }
 
 // ── UVC (USB Video Class) — captura isócrona de frames ────────────────
@@ -720,39 +775,37 @@ pub unsafe fn schedule_isoc_in_frame() -> usize {
     armed
 }
 
-/// Poll de captura UVC: drena eventos (uma vez), enfileira pacotes pendentes e
-/// devolve UM pacote cru por chamada em `out` (header UVC incluído, ≤ max_packet).
+/// Poll de captura UVC: drena eventos (roteia p/ todos os rings) e devolve UM
+/// pacote cru por chamada em `out` (header UVC incluído, ≤ max_packet).
 /// Re-arma o slot após copiar. Retorna tamanho do pacote (0 = nada pendente —
 /// o caller deve parar de chamar até o próximo poll).
 pub unsafe fn poll_isoc_frame(out: &mut [u8]) -> usize {
-    let mut st = XHCI_STATE.lock();
-    let Some(s) = st.as_mut() else { return 0 };
+    {
+        let mut st = XHCI_STATE.lock();
+        let Some(s) = st.as_mut() else { return 0 };
+        drain_isoc_events(s);
+    }
     let mut rg = ISOC_UVC.lock();
     let Some(ring) = rg.as_mut() else { return 0 };
-    // 1) Enche a fila de pendentes só quando vazia (evita re-drenar eventos).
-    if ring.freed_head == ring.freed_tail {
-        let mut local = [(0u16, 0u16); ISOC_SLOTS];
-        let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut local);
-        for k in 0..n as usize {
-            let t = ring.freed_tail as usize;
-            ring.freed[t % ISOC_SLOTS] = local[k];
-            ring.freed_tail = (t as u16).wrapping_add(1) % ISOC_SLOTS as u16;
-        }
-    }
-    // 2) Pop de um pacote.
     if ring.freed_head == ring.freed_tail {
         return 0;
     }
     let (idx, len) = ring.freed[ring.freed_head as usize];
-    ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
-    let len = (len as usize).min(ring.max_packet as usize).min(ISOC_BUF_SIZE).min(out.len());
+    let idx = idx as usize;
+    let len = (len as usize).min(ring.max_packet as usize).min(ISOC_BUF_SIZE);
     if len == 0 {
-        isoc_arm_trb(ring, idx as usize, ring.max_packet);
+        // pacote vazio: pop + re-arm sem copiar.
+        ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
+        isoc_arm_trb(ring, idx, ring.max_packet);
         return 0;
     }
-    let src = (ring.bufs.virt as *const u8).add(idx as usize * ISOC_BUF_SIZE);
+    if len > out.len() {
+        return 0; // buffer pequeno demais — pacote PERMANECE na fila (sem truncar)
+    }
+    ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
+    let src = (ring.bufs.virt as *const u8).add(idx * ISOC_BUF_SIZE);
     core::ptr::copy_nonoverlapping(src, out.as_mut_ptr(), len);
-    isoc_arm_trb(ring, idx as usize, ring.max_packet);
+    isoc_arm_trb(ring, idx, ring.max_packet);
     len
 }
 
@@ -761,18 +814,21 @@ pub unsafe fn poll_isoc_frame(out: &mut [u8]) -> usize {
 /// parcial fica em `ring.pending` p/ a próxima chamada. Retorna amostras i16
 /// novas enfileiradas.
 pub unsafe fn schedule_isoc_out(pcm: &[i16]) -> usize {
-    let mut freed = [(0u16, 0u16); ISOC_SLOTS];
-    let mut st = XHCI_STATE.lock();
-    let Some(s) = st.as_mut() else { return 0 };
+    {
+        let mut st = XHCI_STATE.lock();
+        let Some(s) = st.as_mut() else { return 0 };
+        drain_isoc_events(s);
+    }
     let mut rg = ISOC_OUT.lock();
     let Some(ring) = rg.as_mut() else { return 0 };
-    let n = drain_isoc_events(s, ring.slot, ring.dci, ring.trb.phys, &mut freed);
     let max_smps = (ring.max_packet as usize) / 2;
     let pl0 = ring.pending_len as usize;
     let total = pl0 + pcm.len();
     let mut stream_off = 0usize;
-    for k in 0..n as usize {
-        let idx = freed[k].0 as usize;
+    while ring.freed_head != ring.freed_tail {
+        let (idx, _len) = ring.freed[ring.freed_head as usize];
+        ring.freed_head = ((ring.freed_head as usize + 1) % ISOC_SLOTS) as u16;
+        let idx = idx as usize;
         let dst = (ring.bufs.virt as *mut u8).add(idx * ISOC_BUF_SIZE) as *mut i16;
         let remaining = total.saturating_sub(stream_off);
         let n_use = if remaining >= max_smps { max_smps } else { 0 };

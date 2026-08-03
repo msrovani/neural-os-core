@@ -1389,7 +1389,8 @@ fn parse_uvc_config(cfg: &[u8]) -> Option<UvcEpInfo> {
 
 /// Configura o EP isócrono IN do UVC via Configure Endpoint (aditivo: para
 /// webcam com mic, o slot já tem EPs de áudio — `last_ctx` cobre o maior DCI).
-/// Cria o ring e o guarda em ISOC_UVC.
+/// Cria o ring e o guarda em ISOC_UVC (o ring vive só no static; o poll usa
+/// `ISOC_UVC.lock()` — retornar o ring causava use-after-move).
 unsafe fn configure_uvc_endpoint(
     slot: u8,
     port: u8,
@@ -1398,7 +1399,7 @@ unsafe fn configure_uvc_endpoint(
     max_packet: u16,
     interval_field: u8,
     last_ctx: u32,
-) -> Option<super::IsochRing> {
+) -> Option<()> {
     let ctx = match alloc_phys(2) {
         Some(c) => c,
         None => return None,
@@ -1447,7 +1448,7 @@ unsafe fn configure_uvc_endpoint(
         mps,
         interval_field
     );
-    Some(ring)
+    Some(())
 }
 
 /// Enumera e configura um device USB Video Class (isócrono IN). Reusa o slot
@@ -1465,53 +1466,66 @@ pub unsafe fn bringup_uvc() -> Option<super::UvcDevice> {
 
     // Caso 1: device endereçado pelo UAC (mesma porta) pode ter UVC no MESMO
     // slot (webcam com mic). Reusa slot/EP0 — re-enumerar mataria o áudio.
-    {
-        let (uac_ready, uac_slot, uac_port, uac_speed, uac_cfg, uac_cfg_len, uac_ep0_tr_va) = {
-            let g = XHCI_STATE.lock();
-            let st = match g.as_ref() { Some(s) => s, None => None };
-            match st {
-                Some(s) => (
-                    s.uac_ready,
-                    s.uac_slot,
-                    s.uac_port,
-                    s.uac_speed,
-                    s.uac_cfg,
-                    s.uac_cfg_len,
-                    s.uac_ep0_tr_va,
-                ),
-                None => (false, 0, 0, 0, [0u8; 512], 0, 0),
-            }
-        };
-        if uac_slot != 0 && uac_cfg_len > 0 {
-            if let Some(info) = parse_uvc_config(&uac_cfg[..uac_cfg_len]) {
-                crate::slog_nano!(
-                    "USB",
-                    "uvc",
-                    "reuso do slot {} (UAC) — UVC {:.0}x{:.0}@{} format={} ep={:#04x}",
-                    uac_slot,
-                    info.width,
-                    info.height,
-                    info.fps,
-                    if info.format == 1 { "MJPEG" } else { "YUY2" },
-                    info.ep
-                );
-                // Garante o EP0 ring correto p/ SET_CONFIGURATION/SET_INTERFACE.
-                {
-                    let mut g = XHCI_STATE.lock();
-                    if let Some(st) = g.as_mut() {
-                        st.tr_va = uac_ep0_tr_va;
-                    }
-                }
-                if let Some(dev) = configure_uvc_on_slot(uac_slot, uac_port, uac_speed, &uac_cfg[..uac_cfg_len], uac_ready, info) {
-                    return Some(dev);
+    let (uac_ready, uac_slot, uac_port, uac_speed, uac_cfg, uac_cfg_len, uac_ep0_tr_va) = {
+        let g = XHCI_STATE.lock();
+        match g.as_ref() {
+            Some(s) => (
+                s.uac_ready,
+                s.uac_slot,
+                s.uac_port,
+                s.uac_speed,
+                s.uac_cfg,
+                s.uac_cfg_len,
+                s.uac_ep0_tr_va,
+            ),
+            None => (false, 0, 0, 0, [0u8; 512], 0, 0),
+        }
+    };
+    if uac_slot != 0 && uac_cfg_len > 0 {
+        if let Some(info) = parse_uvc_config(&uac_cfg[..uac_cfg_len]) {
+            crate::slog_nano!(
+                "USB",
+                "uvc",
+                "reuso do slot {} (UAC) — UVC {:.0}x{:.0}@{} format={} ep={:#04x}",
+                uac_slot,
+                info.width,
+                info.height,
+                info.fps,
+                if info.format == 1 { "MJPEG" } else { "YUY2" },
+                info.ep
+            );
+            // Garante o EP0 ring correto p/ SET_CONFIGURATION/SET_INTERFACE.
+            {
+                let mut g = XHCI_STATE.lock();
+                if let Some(st) = g.as_mut() {
+                    st.tr_va = uac_ep0_tr_va;
                 }
             }
+            if let Some(dev) = configure_uvc_on_slot(uac_slot, uac_port, uac_speed, uac_ready, info) {
+                return Some(dev);
+            }
+            // É UVC mas a configuração falhou — desiste (re-enumerar o mesmo
+            // device mataria o áudio num combo e não resolveria o SET_INTERFACE).
+            crate::slog_nano!(
+                "USB",
+                "uvc",
+                "reuso do slot {} falhou — UVC_READY=false (sem re-enumeração)",
+                uac_slot
+            );
+            {
+                let mut g = XHCI_STATE.lock();
+                if let Some(st) = g.as_mut() {
+                    st.uvc_port = uac_port;
+                }
+            }
+            return None;
         }
     }
 
-    // Caso 2: portas CCS novas (skip MSC/HID/mouse; UAC já tentou a sua).
+    // Caso 2: portas CCS novas (skip MSC/HID/mouse; a porta que o UAC tentou
+    // já foi avaliada acima — não re-enumerar).
     for port in 1..=max_ports {
-        if port == msc_port || port == hid_port || port == mouse_port {
+        if port == msc_port || port == hid_port || port == mouse_port || port == uac_port {
             continue;
         }
         let ccs = {
@@ -1563,7 +1577,7 @@ pub unsafe fn bringup_uvc() -> Option<super::UvcDevice> {
             }
             continue;
         };
-        if let Some(dev) = configure_uvc_on_slot(slot, port, speed, &cfg, false, info) {
+        if let Some(dev) = configure_uvc_on_slot(slot, port, speed, false, info) {
             return Some(dev);
         }
     }
@@ -1576,7 +1590,6 @@ unsafe fn configure_uvc_on_slot(
     slot: u8,
     port: u8,
     speed: u8,
-    cfg: &[u8],
     device_configured: bool,
     info: UvcEpInfo,
 ) -> Option<super::UvcDevice> {
@@ -1617,7 +1630,7 @@ unsafe fn configure_uvc_on_slot(
         }
     };
     let interval_field = interval_field_for(speed, info.b_interval);
-    let ring = configure_uvc_endpoint(
+    configure_uvc_endpoint(
         slot,
         port,
         speed,
