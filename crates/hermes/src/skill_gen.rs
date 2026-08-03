@@ -35,24 +35,35 @@ pub fn record_task(name: &str, description: &str, steps: &[&str]) {
     });
 }
 
-/// Gera uma skill no formato SKILL.md a partir de um padrão
+/// Gera uma skill no formato SKILL.md (contrato ADR-0052) a partir de um padrão.
+/// content_hash/signature são adicionados por sign_artifact_md no registro.
 pub fn generate_skill(name: &str) -> Option<String> {
     let patterns = TASK_PATTERNS.lock();
     let pattern = patterns.get(name)?;
     let mut skill = String::new();
     skill.push_str("---\n");
+    skill.push_str("schema: 1\n");
+    skill.push_str("kind: skill\n");
     skill.push_str(&alloc::format!("name: {}\n", pattern.name));
     skill.push_str(&alloc::format!("description: {}\n", pattern.description));
+    skill.push_str("contexto: \"Auto-generated from observed task pattern\"\n");
+    skill.push_str("acionaveis: [\"on_demand\"]\n");
     skill.push_str("required_tokens: [1]\n");
+    skill.push_str("provenance: hermes_created\n");
+    skill.push_str("sandbox_status: none\n");
     skill.push_str("---\n\n");
-    skill.push_str(&alloc::format!("Steps for '{}':\n", pattern.name));
+    skill.push_str(&alloc::format!(
+        "## Contexto\n\nAuto-generated from observed task pattern.\n\n"
+    ));
+    skill.push_str(&alloc::format!("## Goal\n\n{}\n\n", pattern.description));
+    skill.push_str("## Acionaveis\n\n- on_demand\n\n");
+    skill.push_str("## Workflow\n");
     for (i, step) in pattern.steps.iter().enumerate() {
         skill.push_str(&alloc::format!("{}. {}\n", i + 1, step));
     }
-    skill.push_str(&alloc::format!("\nTrigger phrases:\n"));
-    for trigger in &pattern.triggers {
-        skill.push_str(&alloc::format!("- \"{}\"\n", trigger));
-    }
+    skill.push_str("\n## Pre-Flight\n- [ ] Verify output matches expected format\n");
+    skill.push_str("## Success Criteria\n- [ ] All steps completed\n");
+    skill.push_str("## Failure Policy\nReport failure and retry with corrected steps\n");
     Some(skill)
 }
 

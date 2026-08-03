@@ -59,15 +59,28 @@ impl SkillLoader {
         SkillLoader { skills: Vec::new() }
     }
 
-    /// Parse a skill markdown file, validate security, and add to registry
+    /// Parse a skill markdown file, validate security, and add to registry.
+    /// Gate ESTRITO ADR-0052 (delega a verify_skill_md → verify_artifact_md):
+    /// exige schema/kind/name/seções/content_hash/assinatura. Para conteúdo
+    /// selado (sign_artifact_md) apenas; seeds usam register_trusted_skill.
     pub fn register_skill(&mut self, content: &str) -> Result<(), &'static str> {
-        // Sprint 108: verificação estrutural antes do parse completo
         if let crate::self_evolve::VerifyVerdict::Reject(reason) =
             crate::self_evolve::verify_skill_md(content)
         {
             k_nano::slog_hermes!("SKILL", "VERIFY", "REJECT: {}", reason);
             return Err(reason);
         }
+        self.parse_and_store(content)
+    }
+
+    /// ponytail: embedded seeds são trusted-by-compilation (embutidos no
+    /// binário — mesmo trust dos seed agents, precedente SESSION_230). Skip
+    /// do gate runtime de assinatura; parse direto.
+    pub fn register_trusted_skill(&mut self, content: &str) -> Result<(), &'static str> {
+        self.parse_and_store(content)
+    }
+
+    fn parse_and_store(&mut self, content: &str) -> Result<(), &'static str> {
         let content = content.replace("\r\n", "\n");
         let parts: Vec<&str> = content.splitn(3, "---\n").collect();
         if parts.len() < 3 {
@@ -218,7 +231,7 @@ pub fn load_embedded_skills() -> SkillLoader {
     ];
 
     for content in &skills_raw {
-        if let Err(e) = loader.register_skill(content) {
+        if let Err(e) = loader.register_trusted_skill(content) {
             k_nano::slog_hermes!("SKILL", "info", "Erro ao carregar skill: {}", e);
         }
     }

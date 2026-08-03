@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+### SESSION_245: Auditoria Segurança 6.1–6.4 — modelo de confiança unificado (2026-08-03)
+
+Auditoria técnica encontrou 4 lacunas; todas corrigidas (cargo check --release: 0 erros).
+
+- **6.1 — portão único ADR-0052 para skills.** `verify_skill_md` (auto-evolução)
+  agora **delega** para `verify_artifact_md(PackageKind::Skill, …)` — mesmo contrato:
+  schema 1, kind, name sanitizado, goal/contexto/acionaveis/tokens/provenance/
+  sandbox_status, 7 seções `## `, content_hash, assinatura Ed25519. `verify_and_register`
+  reordenado para **sign-first** (assinatura é parte do contrato verificado; fail-closed
+  se assinar falhar). Generators (`skill_gen`, `skill_observer`, `matrix_learn`,
+  `llm_skill_prompt`) passam a emitir o contrato completo. Seeds embedded carregam via
+  novo `register_trusted_skill` (trusted-by-compilation, precedente SESSION_230).
+  Callers extras corrigidos: `/learn` (bin + hermes) e caminho LLM no bin.
+- **6.2 — documentação honesta dos anéis.** AGENTS.md explicita que R0–R3 são
+  organização de código (camada lógica), NÃO fronteira de segurança do processador —
+  tudo executa CPL=0; isolamento real = wasmi (A) + Ring3 gated (ADR-0077).
+- **6.3 — token de capacidade fail-closed.** `CapabilityToken::Ed25519(_)` deixou de
+  retornar `true` cego; agora `false` (payload sem mensagem vinculada + crate leaf
+  sem crypto = não verificável = inválido). Nada construía Ed25519 — sem regressão.
+- **6.4 — entropia real.** `mix_session_seed` usa `k_nano::hw_rng` (RDRAND, fallback
+  ChaCha20) quando `probe_done() && rdrand` (gate ADR-0082); RDTSC/ticks viram stir
+  secundário.
+
 ### SESSION_244: NeuralFS fonte única (consolidação triplicata) (2026-08-03)
 
 NeuralFS existia em triplicata (k_nano/hermes/bin) violando a lição SESSION_237.

@@ -126,22 +126,38 @@ pub fn mark_declined(number: u32) -> bool {
     } else { false }
 }
 
-/// Gera SKILL.md a partir de uma observação de nova skill
+/// Gera SKILL.md (contrato ADR-0052) a partir de uma observação de nova skill.
+/// Seções EXATAS: Contexto/Goal/Acionaveis/Workflow/Pre-Flight/Success Criteria/
+/// Failure Policy. content_hash/signature vêm de sign_artifact_md no registro.
 pub fn generate_skill_md(name: &str, steps: &[&str]) -> String {
     let mut out = String::new();
     out.push_str("---\n");
+    out.push_str("schema: 1\n");
+    out.push_str("kind: skill\n");
     out.push_str(&alloc::format!("name: {}\n", name));
     out.push_str("description: Auto-generated from observation\n");
+    out.push_str("contexto: \"Auto-generated from observed task pattern\"\n");
+    out.push_str("acionaveis: [\"on_demand\"]\n");
     out.push_str("required_tokens: [1]\n");
+    out.push_str("provenance: hermes_created\n");
+    out.push_str("sandbox_status: none\n");
     out.push_str("---\n\n");
-    out.push_str(&alloc::format!("# {} Skill\n\n## Workflow\n", name));
+    out.push_str(&alloc::format!("# {} Skill\n\n", name));
+    out.push_str(&alloc::format!(
+        "## Contexto\n\nAuto-generated from observed task pattern.\n\n"
+    ));
+    out.push_str(&alloc::format!("## Goal\n\nExecute '{}' reliably.\n\n", name));
+    out.push_str("## Acionaveis\n\n- on_demand\n\n");
+    out.push_str(&alloc::format!("## Workflow\n"));
     for (i, step) in steps.iter().enumerate() {
         out.push_str(&alloc::format!("{}. {}\n", i + 1, step));
     }
-    out.push_str("\n## Pre-Flight Verification\n");
+    out.push_str("\n## Pre-Flight\n");
     out.push_str("- [ ] Verify output matches expected format\n");
     out.push_str("- [ ] Check for edge cases\n");
     out.push_str("- [ ] Confirm all steps completed\n");
+    out.push_str("\n## Success Criteria\n- [ ] All steps completed\n");
+    out.push_str("## Failure Policy\nReport failure and retry with corrected steps\n");
     out
 }
 

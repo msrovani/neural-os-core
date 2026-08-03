@@ -16,7 +16,11 @@ impl CapabilityToken {
     pub fn is_valid(&self) -> bool {
         match self {
             CapabilityToken::Legacy(val) => *val > 0,
-            CapabilityToken::Ed25519(_) => true,
+            // Auditoria 6.3: IdentityPayload carrega (public_key, signature) sem
+            // mensagem vinculada — não há como verificar a assinatura aqui (crate
+            // leaf, sem crypto) e o tráfego real usa Legacy. Negação por padrão:
+            // token não verificável é inválido (fail-closed), nunca `true` cego.
+            CapabilityToken::Ed25519(_) => false,
         }
     }
 

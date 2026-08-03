@@ -324,8 +324,19 @@ impl OnDemandLearning {
         };
 
         let skill = format!(
-            "---\nname: learned_{}\ndescription: {}\nrequired_tokens: [1]\n---\n\n\
-             ## Workflow\n{}\n\n## Pre-Flight Verification\n{}\n",
+            "---\nschema: 1\nkind: skill\nname: learned_{}\ndescription: {}\n\
+             contexto: \"Conhecimento adquirido via Matrix Learning\"\n\
+             acionaveis: [\"on_demand\"]\nrequired_tokens: [1]\n\
+             provenance: hermes_created\nsandbox_status: none\n---\n\n\
+             ## Contexto\n\nAprendizado on-demand do dominio '{}'.\n\n\
+             ## Goal\n\n{}\n\n\
+             ## Acionaveis\n\n- on_demand\n\n\
+             ## Workflow\n{}\n\n\
+             ## Pre-Flight\n{}\n\n\
+             ## Success Criteria\n\n- [ ] Skill executavel e verificada\n\n\
+             ## Failure Policy\n\n- Reportar falha e re-gerar com passos corrigidos\n",
+            domain,
+            description,
             domain,
             description,
             steps.join("\n"),
@@ -335,11 +346,17 @@ impl OnDemandLearning {
     }
 
     /// Register the generated skill via the shared SkillLoader.
+    /// Sign FIRST → verificação estrita (ADR-0052) → register. Fail-closed.
     fn register_learned_skill(&self, name: &str, content: &str) -> Result<(), &'static str> {
         let mut storage = SKILL_STORAGE.lock();
         // Remove previous version if re-learning
         storage.remove_skill(name);
-        storage.register_skill(content)
+        let sealed = crate::package_hub::sign_artifact_md(content)
+            .unwrap_or_else(|_| String::from(content));
+        match crate::self_evolve::verify_skill_md(&sealed) {
+            crate::self_evolve::VerifyVerdict::Ok => storage.register_skill(&sealed),
+            crate::self_evolve::VerifyVerdict::Reject(reason) => Err(reason),
+        }
     }
 }
 

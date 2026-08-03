@@ -590,30 +590,20 @@ impl Agent for HermesAgent {
                 let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
                 let pending = PENDING_SKILL.lock().take();
                 if let Some((name, _desc)) = pending {
-                    // Sprint 108: verify before register
-                    match crate::self_evolve::verify_skill_md(text) {
-                        crate::self_evolve::VerifyVerdict::Ok => {
-                            let mut storage = SKILL_STORAGE.lock();
-                            match crate::self_evolve::verify_and_register(&mut storage, text) {
-                                Ok(n) => {
-                                    k_nano::slog_bin!("Skill", "llm", "Skill '{}' gerada+verified ({} bytes)", n, text.len());
-                                    responded = alloc::format!("[Hermes] Skill '{}' criada via LLM!", n);
-                                    if self.sil.needs_create() || self.sil.needs_verify() {
-                                        self.sil.advance(true);
-                                    }
-                                    crate::self_evolve::record_outcome(&n, true, now);
-                                }
-                                Err(e) => {
-                                    responded = alloc::format!("[Hermes] Erro ao criar skill '{}': {}", name, e);
-                                    if self.sil.is_active() { self.sil.advance(false); }
-                                    crate::self_evolve::record_outcome(&name, false, now);
-                                }
+                    // Sign FIRST (verify_and_register) → verificação estrita
+                    // ADR-0052 → register. Sem pre-check em conteúdo cru.
+                    let mut storage = SKILL_STORAGE.lock();
+                    match crate::self_evolve::verify_and_register(&mut storage, text) {
+                        Ok(n) => {
+                            k_nano::slog_bin!("Skill", "llm", "Skill '{}' gerada+verified ({} bytes)", n, text.len());
+                            responded = alloc::format!("[Hermes] Skill '{}' criada via LLM!", n);
+                            if self.sil.needs_create() || self.sil.needs_verify() {
+                                self.sil.advance(true);
                             }
+                            crate::self_evolve::record_outcome(&n, true, now);
                         }
-                        crate::self_evolve::VerifyVerdict::Reject(reason) => {
-                            responded = alloc::format!(
-                                "[Hermes] Skill '{}' rejeitada na verificação: {}", name, reason
-                            );
+                        Err(e) => {
+                            responded = alloc::format!("[Hermes] Erro ao criar skill '{}': {}", name, e);
                             if self.sil.is_active() { self.sil.advance(false); }
                             crate::self_evolve::record_outcome(&name, false, now);
                         }
@@ -1298,8 +1288,18 @@ impl Agent for HermesAgent {
                 hermes::Command::Learn(ref name, ref desc) => {
                     let instructions = alloc::format!("Skill gerada via /learn: {}", desc);
                     let md = alloc::format!(
-                        "---\nname: {}\ndescription: {}\nrequired_tokens: [1]\n---\n{}\n",
-                        name, desc, instructions
+                        "---\nschema: 1\nkind: skill\nname: {}\ndescription: {}\n\
+                         contexto: \"Skill criada via comando /learn\"\n\
+                         acionaveis: [\"on_demand\"]\nrequired_tokens: [1]\n\
+                         provenance: hermes_created\nsandbox_status: none\n---\n\n\
+                         ## Contexto\n\nSkill criada sob demanda via /learn.\n\n\
+                         ## Goal\n\n{}\n\n\
+                         ## Acionaveis\n\n- on_demand\n\n\
+                         ## Workflow\n1. Interpretar o pedido\n2. Executar conforme descricao\n3. Verificar resultado\n\n\
+                         ## Pre-Flight\n- [ ] Descricao nao vazia\n\n\
+                         ## Success Criteria\n- [ ] Resultado conforme descricao\n\n\
+                         ## Failure Policy\n- Reportar falha e pedir esclarecimento\n",
+                        name, desc, desc
                     );
                     let skill = skill_registry::DynamicSkill::new(name, desc, &instructions);
                     SKILL_REGISTRY.lock().register(alloc::boxed::Box::new(skill));

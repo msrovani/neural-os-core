@@ -41,7 +41,7 @@ You are a Senior Systems and AI Engineer building "neural-os-core", an AI-native
 # Core Architecture & Constraints
 1. **Bare-Metal Rust:** `no_std` + `no_main`. No std, no POSIX, no Linux legacy.
 2. **Agent/Skill-First:** Every entity is an Agent. ~50 native agents with manifests, plus variable HW agents at runtime.
-3. **Hardware Rings:** Ring 0 (NPU — intent routing), Ring 1 (GPU — tensor), Ring 2 (CPU — agents/skills).
+3. **Hardware Rings:** Ring 0 (NPU — intent routing), Ring 1 (GPU — tensor), Ring 2 (CPU — agents/skills). ⚠️ **Anéis são organização de código, NÃO fronteira de segurança imposta pelo processador** — tudo executa em Ring 0 real; isolamento efetivo hoje = wasmi (Caminho A) + Ring3 gated (ADR-0077, não registrado).
 4. **HW Real First:** QEMU/VirtualBox são apenas **desenvolvimento e debug**. Validação final sempre em HW real.
 5. **Trinity MoE:** LLM + router treinável + experts (RustCoder, HWIdentify, etc). AutoLearn: detecta necessidade → treina → registra.
 6. **Toda tecnologia nova DEVE ser registrada em `TECNOLOGIAS.md`** com ADR, IDEA, arquivo e sprint. Rodar `tools/update_tecnologias.py` após alterações.
@@ -132,6 +132,9 @@ cargo build --release → python tools/build_image.py --bios → qemu
 # hermes      | R3   | Orquestração, WASM, rede, skills, HalOffer client
 # jarbas      | R3   | Display FE, persona (GPU BE em k_hal)
 # neural-kernel | —  | Bin boot — residuals integração
+# ⚠️ Anel aqui = camada lógica de dependência (R0 fundação → R3 aplicação),
+#    NÃO privilégio do processador: todo o código roda em Ring 0 (CPL=0).
+#    Fronteira de execução não-confiável = wasmi (A) + Ring3 (ADR-0077, gated).
 # ═══════════════════════════════════════════════════════════════
 
 # Active Dependencies (neural-kernel)

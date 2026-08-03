@@ -1,4 +1,22 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.9-s245 — Auditoria Segurança 6.1–6.4 (2026-08-03)
+#   SESSION_245: modelo de confiança unificado — 4 correções de auditoria
+#     6.1 Portão ÚNICO ADR-0052: verify_skill_md agora DELEGA para
+#       verify_artifact_md(PackageKind::Skill) — schema/kind/seções 7×/content_hash/
+#       assinatura Ed25519/sandbox. verify_and_register = SIGN FIRST → verify estrito
+#       → register (fail-closed). Generators (skill_gen/skill_observer/matrix_learn/
+#       llm_skill_prompt) emitem contrato completo. Seeds embedded via
+#       register_trusted_skill (trusted-by-compilation, precedente SESSION_230);
+#       register_skill = verify estrito + parse_and_store. /learn (bin+hermes) e
+#       LLM path ajustados. 6.2 Docs honestos: AGENTS.md diz anéis R0–R3 = organização
+#       de código, NÃO fronteira do processador (tudo CPL=0; isolamento = wasmi A +
+#       Ring3 gated ADR-0077). 6.3 CapabilityToken::Ed25519(_) => false (fail-closed,
+#       payload sem mensagem vinculada). 6.4 mix_session_seed usa hw_rng RDRAND
+#       (gate probe_done && rdrand), RDTSC/ticks só stir. cargo check --release = 0 erros.
+#     Commit: (auditoria separada — 10 arquivos + docs; working tree tinha sessão
+#       concorrente em main.rs NVMe/AHCI/ATA/USB-MSC, não incluída).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v2.0.0-test-s243 — Isolamento Ring3 de Produção (ADR-0082) (2026-08-03)
 #   SESSION_243: ADR-0082 Fases 1–4 — Ring3/SFI produção (depreca ADR-0041 §P9+ p/ Ring3)
 #     F1 Fundação: create_sandbox_as() from-scratch (kernel supervisor-only P4[≥256],

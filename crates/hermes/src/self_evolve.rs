@@ -160,69 +160,16 @@ pub fn record_outcome(name: &str, ok: bool, tick: u64) {
     }
 }
 
-/// Verificação estrutural runtime (além do anti-injection do loader).
+/// Verificação ESTRITA ADR-0052 — delega ao gate único de artifact
+/// (schema 1, kind skill, name sanitizado, goal/contexto/acionaveis/tokens/
+/// provenance/sandbox_status, 7 seções `## ` obrigatórias, injection patterns,
+/// content_hash e assinatura Ed25519 via k_nano::identity::verify_trusted).
+/// Auto-skills entram no fleet apenas com o contrato completo.
 pub fn verify_skill_md(content: &str) -> VerifyVerdict {
-    let content = content.replace("\r\n", "\n");
-    let parts: Vec<&str> = content.splitn(3, "---\n").collect();
-    if parts.len() < 3 {
-        return VerifyVerdict::Reject("missing_frontmatter");
+    match crate::package_hub::verify_artifact_md(crate::package_hub::PackageKind::Skill, content) {
+        Ok(()) => VerifyVerdict::Ok,
+        Err(reason) => VerifyVerdict::Reject(reason),
     }
-    let fm = parts[1];
-    let body = parts[2];
-
-    let mut name = "";
-    let mut desc = "";
-    let mut tokens_ok = false;
-    for line in fm.lines() {
-        if let Some(v) = line.strip_prefix("name: ") {
-            name = v.trim();
-        } else if let Some(v) = line.strip_prefix("description: ") {
-            desc = v.trim();
-        } else if line.starts_with("required_tokens:") {
-            tokens_ok = true;
-        }
-    }
-    if name.is_empty() || name.len() > 64 {
-        return VerifyVerdict::Reject("bad_name");
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return VerifyVerdict::Reject("name_charset");
-    }
-    if desc.is_empty() {
-        return VerifyVerdict::Reject("empty_description");
-    }
-    if !tokens_ok {
-        return VerifyVerdict::Reject("missing_tokens");
-    }
-    if body.trim().len() < 24 {
-        return VerifyVerdict::Reject("body_too_short");
-    }
-    if body.len() > 256 * 1024 {
-        return VerifyVerdict::Reject("body_too_large");
-    }
-    // Injection patterns (espelha loader + extras)
-    let dangerous = [
-        "ignore all",
-        "ignore seus comandos",
-        "you are now",
-        "override",
-        "system prompt",
-        "<s>",
-        "[/INST]",
-        "<<SYS>>",
-        "rm -rf",
-        "format c:",
-    ];
-    let lower = body.to_ascii_lowercase();
-    for p in &dangerous {
-        if lower.contains(p) {
-            return VerifyVerdict::Reject("dangerous_pattern");
-        }
-    }
-    VerifyVerdict::Ok
 }
 
 /// Gera SKILL.md a partir de padrão observado (sem LLM).
@@ -236,22 +183,38 @@ pub fn generate_from_pattern(name: &str) -> Option<String> {
 }
 
 /// Prompt LLM para geração de skill (Hermes publica em TOPIC_LLM_REQUEST).
+/// Instrui o contrato ADR-0052 completo: frontmatter + 7 seções obrigatórias.
+/// content_hash/signature são adicionados por sign_artifact_md no registro.
 pub fn llm_skill_prompt(name: &str, description: &str) -> String {
     format!(
         "Crie uma skill para o Neural OS Hermes (SKILL.md).\n\
          Nome: {}\nDescricao: {}\n\
-         Formato OBRIGATORIO:\n\
-         ---\nname: {}\ndescription: {}\nrequired_tokens: [1]\n---\n\n\
-         ## Workflow\n1. ...\n2. ...\n\n## Pre-Flight\n- [ ] ...\n\
+         Formato OBRIGATORIO (contrato ADR-0052 — nao omita campos):\n\
+         ---\nschema: 1\nkind: skill\nname: <nome a-z 0-9 _ ->\ndescription: <descricao>\n\
+         contexto: <contexto em 1 linha>\n\
+         acionaveis: [\"on_demand\"]\nrequired_tokens: [1]\n\
+         provenance: hermes_created\nsandbox_status: none\n---\n\n\
+         ## Contexto\n<1 linha>\n\n\
+         ## Goal\n<objetivo>\n\n\
+         ## Acionaveis\n- on_demand\n\n\
+         ## Workflow\n1. <passo>\n2. <passo>\n\n\
+         ## Pre-Flight\n- [ ] <check>\n\n\
+         ## Success Criteria\n- [ ] <criterio>\n\n\
+         ## Failure Policy\n- <politica>\n\n\
          Gere APENAS o bloco da skill, sem comentario extra.",
-        name, description, name, description
+        name, description
     )
 }
 
 /// Verifica + registra no SkillLoader. Retorna Ok(nome) ou Err(motivo).
+/// Ordem: SIGN FIRST → verificação ESTRITA do conteúdo selado → register.
+/// Fail-closed: se assinar falhar, sealed==raw e a verificação estrita rejeita.
 pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<String, &'static str> {
     let tick = k_nano::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
-    match verify_skill_md(content) {
+    // Sign FIRST (session key) — hash+assinatura são parte do contrato verificado.
+    let sealed = crate::package_hub::sign_artifact_md(content)
+        .unwrap_or_else(|_| String::from(content));
+    match verify_skill_md(&sealed) {
         VerifyVerdict::Ok => {}
         VerifyVerdict::Reject(reason) => {
             VERIFIED_REJECT.fetch_add(1, Ordering::Relaxed);
@@ -265,9 +228,6 @@ pub fn verify_and_register(loader: &mut SkillLoader, content: &str) -> Result<St
             return Err(reason);
         }
     }
-    // Session-sign se possível (HANR trust wave 0)
-    let sealed = crate::package_hub::sign_artifact_md(content)
-        .unwrap_or_else(|_| String::from(content));
     let name = extract_name(&sealed).unwrap_or_else(|| String::from("unnamed"));
     loader.remove_skill(&name);
     match loader.register_skill(&sealed) {

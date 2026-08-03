@@ -95,24 +95,24 @@ pub fn legacy_token_to_identity(token: u64) -> [u8; PUBLIC_KEY_LEN] {
     key
 }
 
-/// Entropia bare-metal (RDTSC + PIT ticks) — sem getrandom.
+/// Entropia bare-metal: RDRAND (via `hw_rng`, com fallback ChaCha20) quando o
+/// probe de plataforma confirma suporte; RDTSC + PIT ticks como stir adicional.
+/// Auditoria 6.4: RDTSC/ticks puros são previsíveis no boot — RDRAND é a fonte
+/// primária; o stir determinístico não reduz a entropia do RDRAND (bijection).
 fn mix_session_seed() -> [u8; 32] {
     let mut seed = [0u8; 32];
+    // ADR-0082 gate: só executa RDRAND se o probe já rodou e confirmou suporte
+    // (antes do probe, cpu_features() devolve default com rdrand=false).
+    if crate::platform_probe::probe_done() && crate::platform_probe::cpu_features().rdrand {
+        let _ = crate::hw_rng::HardwareRandom::fill_bytes(&mut seed);
+    }
+    // Stir adicional: RDTSC + ticks (não é fonte única de entropia).
     let tsc = unsafe { core::arch::x86_64::_rdtsc() };
     let ticks = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
-    let mix = tsc
-        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        .wrapping_add(ticks.wrapping_mul(0xBF58_476D_1CE4_E5B9));
-    for i in 0..4 {
-        let v = mix
-            .wrapping_mul(0x85EB_CA6B + i as u64)
-            .wrapping_add(tsc.rotate_left((i as u32) * 7));
-        seed[i * 8..(i + 1) * 8].copy_from_slice(&v.to_le_bytes());
-    }
-    // Segunda passagem com RDTSC fresco
-    let tsc2 = unsafe { core::arch::x86_64::_rdtsc() };
     for i in 0..32 {
-        seed[i] ^= ((tsc2 >> (i % 8)) as u8).wrapping_add(i as u8);
+        seed[i] ^= ((tsc >> (i % 8)) as u8)
+            .wrapping_add((ticks >> (i % 8)) as u8)
+            .wrapping_add(i as u8);
     }
     seed
 }
