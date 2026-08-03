@@ -493,6 +493,7 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 
 | Achievement | Detail |
 |---|---|
+| **Mesh P2P Reliability** 🏆 | **ACK seletivo por fragmento (FRAG\0→FRACK\0)**, 16 slots reassembly, exponential backoff no probe, health TTL automático, avg_rtt/p99 metrics, ARP cache, capacity scoring health-aware, token bucket rate limiting, JSON dashboard `MESH_HEALTH` no Jarbas (SESSION_242, ADR-0081 Phase 2) |
 | **P2P Mesh entre 2 QEMUs** 🏆 | **Dois kernels AIOS se descobrem e trocam skills via rede real** — broadcast UDP 42069, heartbeats cruzados, eleição Master, SkillSync push/apply (SESSION_234). Transporte em R0 (k_nano) |
 | **Tier cripto L/F mesh** 🏆 | **Cripto relativizada por contexto de rede** — mesmo range/datacenter: DADOS com HMAC-SHA256 (chave de segmento, ~30x mais rápido, ~1.3µs/pacote); externo: Ed25519 full. Controle/TOFU sempre Ed25519. Fail-closed sem chave (SESSION_240, ADR-0081 Fase B) |
 | **BitNet b1.58 loaded & running** | 850M params, L=30, forward pass OK. File: `BITNET2B.BIN` (~590MB) |
@@ -544,6 +545,7 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 | **ADR-0058** Card Desktop | ✅ | `embedded-graphics` UI, compositor, cards |
 | **ADR-0059** App Factory | ✅ | wasmi, decode harness, promote, W^X arena |
 | **ADR-0079** Self-Installer | ✅ | Auto-detect HW → partition → format → deploy |
+| **ADR-0081** Mesh P2P | ✅ | Fases A–C: transporte, cripto L/F, AEAD, reliability (ACK seletivo, backoff, health, dashboard JSON) |
 | **v2.0.0 Gate** | ⏳ | Review + all backlog zeroed + human OK |
 
 ---
@@ -574,6 +576,7 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 - [ADR-0059](docs/architecture/0059-runtime-app-factory.md) — Runtime app factory (WASM)
 - [ADR-0076](docs/architecture/0076-cross-os-ecosystem.md) — Cross-OS ecosystem (MCP)
 - [ADR-0079](docs/architecture/0079-neural-auto-installer.md) — Self-installer
+- [ADR-0081](docs/architecture/0081-malha-cognitiva-distribuida-p2p.md) — Distributed cognitive mesh (P2P, Brain Mesh, SKYNET)
 
 ---
 
