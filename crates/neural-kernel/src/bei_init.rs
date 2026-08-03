@@ -2,16 +2,13 @@
 //! ADR-0060: Wire all 8 waves into the boot process.
 //! This module creates and connects all BEI components.
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::sync::Arc;
-use alloc::vec::Vec;
-use alloc::vec;
 use spin::Mutex;
 use k_nano::sync::mpmc::MpmcQueue;
 use k_ai::{economy::BudgetManager, expert_lifecycle::ExpertLifecycleManager};
-use cortex_crate::{cellular::{CellNetwork, CellType, CellId}, evolution::PlasticityController, moe::DynamicMoE};
-use hermes_crate::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, LoopPhase, SupervisorVerdict}};
+use cortex_crate::{cellular::{CellNetwork, CellType}, evolution::PlasticityController, moe::DynamicMoE};
+use hermes_crate::{memory::{MemoryStore, MemoryLevel}, affect::{AffectRegulator, AffectVector, AffectEvent}, executive::{ExecutiveSupervisor, SupervisorVerdict}};
 use jarbas_crate::display::soul_mirror::SoulMirrorState;
 
 
@@ -164,14 +161,14 @@ impl BeiState {
     
     /// Connect all BEI components together
     fn connect_components(
-        executive_supervisor: &Arc<Mutex<ExecutiveSupervisor>>,
-        affect_regulator: &Arc<Mutex<AffectRegulator>>,
-        memory_store: &Arc<Mutex<MemoryStore>>,
-        cell_network: &Arc<Mutex<CellNetwork>>,
-        plasticity_controller: &Arc<Mutex<PlasticityController>>,
-        dynamic_moe: &Arc<Mutex<DynamicMoE>>,
-        expert_lifecycle: &Arc<Mutex<ExpertLifecycleManager>>,
-        budget_manager: &Arc<Mutex<BudgetManager>>,
+        _executive_supervisor: &Arc<Mutex<ExecutiveSupervisor>>,
+        _affect_regulator: &Arc<Mutex<AffectRegulator>>,
+        _memory_store: &Arc<Mutex<MemoryStore>>,
+        _cell_network: &Arc<Mutex<CellNetwork>>,
+        _plasticity_controller: &Arc<Mutex<PlasticityController>>,
+        _dynamic_moe: &Arc<Mutex<DynamicMoE>>,
+        _expert_lifecycle: &Arc<Mutex<ExpertLifecycleManager>>,
+        _budget_manager: &Arc<Mutex<BudgetManager>>,
     ) {
         // ExecutiveSupervisor already contains EgoLayer, PonderNet, EntropyMonitor, AffectRegulator
         // The affect_regulator is shared - supervisor has its own but we sync them
@@ -204,7 +201,7 @@ impl BeiState {
             net.tick_advance();
             
             // Round-robin schedule cells
-            while let Some((cell_id, messages)) = net.round_robin() {
+            while let Some((cell_id, _messages)) = net.round_robin() {
                 // Process messages for this cell
                 // In a real implementation, this would invoke the cell's compute
                 net.mark_processed(cell_id);
@@ -300,7 +297,7 @@ impl BeiState {
         if current_tick % 100 == 0 {
             let mut dmoe = self.dynamic_moe.lock();
             let mut lifecycle = self.expert_lifecycle.lock();
-            let mut budget = self.budget_manager.lock();
+            let _budget = self.budget_manager.lock();
             
             // Check for expert births (high entropy regions)
             let high_entropy = dmoe.high_entropy_indices(0.8);

@@ -93,8 +93,8 @@ impl WmAction {
             (Modifiers::SUPER_SHIFT, Down) => Some(TileResizeDown),
 
             // Window management
-            (Modifiers { alt: true, .. }, Tab) => Some(CycleWindow),
             (Modifiers { alt: true, shift: true, .. }, Tab) => Some(CycleWindowReverse),
+            (Modifiers { alt: true, .. }, Tab) => Some(CycleWindow),
             (Modifiers::SUPER, Q) => Some(CloseWindow),
             (Modifiers::SUPER, M) => Some(MaximizeWindow),
             (Modifiers::SUPER, N) => Some(MinimizeWindow),

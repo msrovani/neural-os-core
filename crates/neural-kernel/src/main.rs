@@ -5,7 +5,6 @@
 #![allow(unused_unsafe)]
 #![allow(unreachable_patterns)]
 #![feature(abi_x86_interrupt)]
-#![feature(alloc_error_handler)]
 
 /// Macro para serial_println rate-limited. So imprime a cada N chamadas.
 /// Uso: debug_rl!("msg", 100, "formato", args...);
@@ -1269,6 +1268,8 @@ pub(crate) fn kernel_boot(
 
     crate::display::fb::boot_ckpt(5, "antes init_idt");
     interrupts::init_idt();
+    // ADR-0082 F1.4: SYSCALL/SYSRET MSRs (LSTAR/STAR/FMASK) após GDT/IDT.
+    syscall::init_syscall_fast_path();
     crate::display::fb::boot_ckpt(6, "IDT ok");
 
     kjson!("BOOT", "IDT", "ready", "vecs", 256);
@@ -1576,6 +1577,17 @@ pub(crate) fn kernel_boot(
     crate::tls_trust::persist_pins_to_fat();
 
     publish_boot_phase(BootPhase::DriverInit, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
+
+    // Intel HDA audio capture (SD0) — microphone input for wake word / STT
+    {
+        let hda_ok = unsafe { k_nano::audio::hda::init_hda() };
+        if hda_ok {
+            k_nano::slog_bin!("HDA", "info", "Intel HDA capture driver initialized (SD0)");
+        } else {
+            k_nano::slog_bin!("HDA", "warn", "Intel HDA not found or init failed");
+        }
+        publish_boot_phase(BootPhase::DriverInit, "HDA audio init");
+    }
 
     // AHCI probe (SATA 6G NCQ) — zero alocação via callback
     {
@@ -2254,7 +2266,6 @@ pub(crate) fn kernel_boot(
 
             // Pré-carrega firmware NVIDIA GP108 (8.3 no FAT) via ATA/USB antes do ACR.
             // Sem isso o jarbas só vê ATA; no boot USB puro o MSC é a fonte.
-            let has_nvidia_fw = gpus.iter().any(|g| matches!(g.vendor, k_hal::gpu::detect::GpuVendor::Nvidia));
             crate::display::fb::boot_ckpt(44, "GP108 firmware");
             // Ponytail: GP108 preload — tenta ATA (read_sectors retorna false
             // se sem disco, nao trava mais — commit e154edc mudou assinatura).

@@ -108,7 +108,7 @@ unsafe impl<T: Send> Send for SpscChannel<T> {}
 unsafe impl<T: Send> Sync for SpscChannel<T> {}
 
 /// Task state for the async executor
-struct TaskState {
+pub struct TaskState {
     future: Option<Pin<Box<dyn core::future::Future<Output = ()> + Send>>>,
     waker: Option<Waker>,
     woken: AtomicBool,

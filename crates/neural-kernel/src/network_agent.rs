@@ -264,6 +264,7 @@ pub fn bootstrap_early() {
                             gw[0], gw[1], gw[2], gw[3], dns[0], dns[1], dns[2], dns[3]
                         ),
                     );
+                    dhcp_ok = true;
                     break;
                 }
             }

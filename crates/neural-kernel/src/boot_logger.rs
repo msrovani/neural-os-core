@@ -7,10 +7,14 @@
 //! Notebooks modernos sem COM: BOOT.LOG no FAT32 é o canal de diagnóstico.
 //! Feature `fat-boot-log` ativa no crate `boot` para imagem HW.
 
+#[allow(unused_imports)]
 pub use k_nano::boot_logger::{
-    BOOT_LOG_NAME, BOOT_LOG_CAP, FAT_READY, SESSION_FILENAME,
-    heap_ready, mark_heap_ready, log, log_quiet, flush, append_raw, init,
-    build_session_bytes,
+    FAT_READY,
+    flush,
+    log,
+    log_quiet,
+    mark_heap_ready,
+    init,
 };
 
 /// Init imediato após USB-MSC (caminho notebook sem serial).

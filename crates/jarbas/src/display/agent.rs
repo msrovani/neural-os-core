@@ -15,7 +15,6 @@ use k_nano::net::mesh::TOPIC_MESH_HEALTH;
 
 // Simple JSON parser for MESH_HEALTH payload (no_std compatible)
 mod mesh_health_json {
-    use alloc::string::String;
     use alloc::vec::Vec;
 
     #[derive(Debug, Clone)]
@@ -694,7 +693,7 @@ impl Agent for DisplayAgent {
                 for health in peers {
                     if let Some(ref mut desktop) = *COMPOSITOR.lock() {
                         let w = desktop.fb.info.width;
-                        let h = desktop.fb.info.height;
+                        let _h = desktop.fb.info.height;
                         let card_w = 200;
                         let card_h = 80;
                         let x = 10;

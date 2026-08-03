@@ -3,6 +3,7 @@
 //! → SYS_RING_OP (subcomando em arg); SYS_SEND_TCP e SYS_VRING_SETUP removidos.
 //! Vetores 0x80–0x82 ficam com IPI SMP; ABI staging via atomics até Ring3.
 //! P6: Cap::ENTER_USER + SYS_EXIT_USER para retorno CPL=3 → kernel.
+//! F1.4: SYSCALL/SYSRET fast path (MSR IA32_LSTAR/STAR/FMASK via inline asm).
 
 use core::sync::atomic::{AtomicU64, Ordering};
 use x86_64::structures::idt::InterruptStackFrame;
@@ -101,6 +102,123 @@ pub fn stage_syscall(nr: u64, arg: u64, cap: Cap) {
     SYS_STATUS.store(0, Ordering::SeqCst);
 }
 
+/// Inicializa MSRs para SYSCALL/SYSRET fast path via inline assembly.
+/// Called once during boot (after GDT/IDT init).
+pub fn init_syscall_fast_path() {
+    // IA32_STAR (0xC0000081): CS/SS selectors for SYSCALL/SYSRET
+    // Bits 63:48 = SYSRET CS/SS (user mode)
+    // Bits 47:32 = SYSCALL CS/SS (kernel mode)
+    // Kernel CS = GDT.1.code_selector (index 1 << 3 = 0x08)
+    // Kernel SS = GDT.1.data_selector (index 2 << 3 = 0x10)
+    // User CS = GDT.1.user_code_selector (index 3 << 3 = 0x18) | 3 (RPL=3)
+    // User SS = GDT.1.user_data_selector (index 4 << 3 = 0x20) | 3 (RPL=3)
+    let kernel_cs = 0x08u64;
+    let kernel_ss = 0x10u64;
+    let user_cs = 0x18u64 | 3;  // RPL=3
+    let user_ss = 0x20u64 | 3;  // RPL=3
+    
+    let star = (user_cs << 48) | (kernel_cs << 32) | (user_ss << 16) | kernel_ss;
+    
+    // IA32_LSTAR (0xC0000082): syscall entry point (64-bit)
+    // IA32_FMASK (0xC0000084): RFLAGS mask (clear IF, TF, RF, etc. on syscall entry)
+    // Clear: IF (bit 9), TF (bit 8), RF (bit 16), NT (bit 14)
+    let fmask = (1u64 << 9) | (1u64 << 8) | (1u64 << 16) | (1u64 << 14);
+    
+    unsafe {
+        // Write IA32_STAR (0xC0000081)
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") 0xC0000081u32,
+            in("eax") (star & 0xFFFFFFFF) as u32,
+            in("edx") (star >> 32) as u32,
+            options(nostack, preserves_flags)
+        );
+        
+        // Write IA32_LSTAR (0xC0000082)
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") 0xC0000082u32,
+            in("eax") (syscall_entry as *const () as u64 & 0xFFFFFFFF) as u32,
+            in("edx") ((syscall_entry as *const () as u64) >> 32) as u32,
+            options(nostack, preserves_flags)
+        );
+        
+        // Write IA32_FMASK (0xC0000084)
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") 0xC0000084u32,
+            in("eax") (fmask & 0xFFFFFFFF) as u32,
+            in("edx") (fmask >> 32) as u32,
+            options(nostack, preserves_flags)
+        );
+    }
+    
+    k_nano::slog_bin!("SYSCALL", "info", "SYSCALL/SYSRET MSRs initialized (LSTAR={:#x}, STAR={:#x}, FMASK={:#x})", 
+        syscall_entry as *const () as u64, star, fmask);
+}
+
+/// SYSCALL entry point (naked assembly).
+/// ABI: RAX=nr, RDI=arg0, RSI=arg1, RDX=cap_bits, R10=arg2, R8=arg3, R9=arg4
+/// Returns: RAX=result, RDX=status (0=ok, 1=err)
+#[unsafe(naked)]
+unsafe extern "C" fn syscall_entry() {
+    unsafe {
+        core::arch::naked_asm!(
+        // Save user registers (per x86-64 SYSCALL ABI)
+        "swapgs",                    // Switch to kernel GS
+        "mov gs:[8], rsp",           // Save user RSP in per-CPU area (offset 8)
+        "mov rsp, gs:[0]",           // Load kernel RSP from per-CPU area (offset 0)
+        "push r11",                  // Save user RFLAGS (in R11 per SYSCALL)
+        "push rcx",                  // Save user RIP (in RCX per SYSCALL)
+        "push rax",                  // Save syscall number
+        "push rdi",                  // Save arg0
+        "push rsi",                  // Save arg1
+        "push rdx",                  // Save cap_bits
+        "push r10",                  // Save arg2
+        "push r8",                   // Save arg3
+        "push r9",                   // Save arg4
+        // Call Rust handler
+        "call {dispatch_syscall}",
+        // Restore and return via SYSRET
+        "pop r9",
+        "pop r8",
+        "pop r10",
+        "pop rdx",
+        "pop rsi",
+        "pop rdi",
+        "pop rax",
+        "pop rcx",                   // Restore user RIP
+        "pop r11",                   // Restore user RFLAGS
+        "mov gs:[0], rsp",           // Save kernel RSP
+        "mov rsp, gs:[8]",           // Restore user RSP
+        "swapgs",                    // Switch back to user GS
+        "sysretq",
+        dispatch_syscall = sym dispatch_syscall,
+        );
+    }
+}
+
+/// Syscall return value (FFI-safe).
+#[repr(C)]
+struct SyscallRet {
+    result: u64,
+    status: u64,
+}
+
+/// Rust handler for SYSCALL (called from assembly).
+/// Returns (result, status) in RAX, RDX.
+#[no_mangle]
+unsafe extern "C" fn dispatch_syscall(
+    nr: u64, arg0: u64, _arg1: u64, cap_bits: u64,
+    _arg2: u64, _arg3: u64, _arg4: u64
+) -> SyscallRet {
+    let cap = Cap::from_bits(cap_bits);
+    match dispatch(nr, arg0, cap) {
+        Ok(v) => SyscallRet { result: v, status: 0 },
+        Err(_) => SyscallRet { result: 0, status: 1 },
+    }
+}
+
 /// Despacho capability-gated (chamável direto ou via int 0x90).
 /// ADR-0076 §4.3: 9 syscalls — SEND_TCP e VRING_SETUP removidos,
 /// WRITE_RING + READ_RING consolidados em SYS_RING_OP (subcomando em arg).
@@ -151,7 +269,7 @@ pub fn dispatch(nr: u64, arg: u64, cap: Cap) -> Result<u64, &'static str> {
                 let p4 = va.p4_index();
                 let p3 = va.p3_index();
                 let p2 = va.p2_index();
-                let p1 = va.p1_index();
+                let _p1 = va.p1_index();
                 // Garantir que L3 existe
                 let pm_offset = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Acquire);
                 if !l4[p4].flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
@@ -278,8 +396,8 @@ pub extern "x86-interrupt" fn syscall_int_handler(_stack: InterruptStackFrame) {
     // Phase 3: ABI por registrador para Ring3 (RAX=nr, RDI=arg0, RSI=arg1, RDX=cap_bits).
     // Fallback para atomics staging (kernel→kernel, compat).
     let nr = SYS_NR.load(Ordering::SeqCst);
-    let mut arg = SYS_ARG.load(Ordering::SeqCst);
-    let mut cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
+    let _arg = SYS_ARG.load(Ordering::SeqCst);
+    let cap = Cap::from_bits(SYS_CAP.load(Ordering::SeqCst));
 
     // Se veio de Ring3 (CS.RPL==3) ou foi pré-carregado via stage, usa ABI registrador.
     // O stub user carrega RAX=nr, RDI=arg, RDX=caps antes de int 0x90.

@@ -467,7 +467,6 @@ impl BrainMeshEngine {
     /// Check and perform Master election
     pub fn check_election(&mut self) {
         let local_score = self.local_capabilities.capacity_score();
-        let mut max_score = local_score;
         let mut best_node: Option<usize> = None;
 
         // Find node with highest capacity score.
@@ -496,7 +495,6 @@ impl BrainMeshEngine {
                         }
                     };
                     if beats {
-                        max_score = score;
                         best_node = Some(i);
                     }
                 }
@@ -1702,10 +1700,9 @@ None => {
         //     prova posse da chave). Não-heartbeat de desconhecido → drop
         //     (sem como validar). O heartbeat TOFU é CONTROLE (Ed25519) —
         //     verificação aqui é o âncora de confiança.
-        let mut pk_known: Option<[u8; PUBLIC_KEY_LEN]> = None;
         let mut tofu_data: Option<Vec<u8>> = None;
         match peer_pk(sid) {
-            Some(pk) => pk_known = Some(pk),
+            Some(_pk) => {},
             None => {
                 if tt != 5 {
                     SEC_DROPPED_BADSIG.fetch_add(1, Ordering::Relaxed);
@@ -1727,7 +1724,6 @@ None => {
                 match crate::net::udp_broadcast::verify_packet(&rx, &pk) {
                     Some(valid) => {
                         peer_bind(sid, pk);
-                        pk_known = Some(pk);
                         tofu_data = Some(valid.to_vec());
                     }
                     None => {
@@ -1766,7 +1762,7 @@ None => {
         let data: Vec<u8> = match tofu_data {
             Some(d) => d,
             None => {
-                let pk = pk_known.expect("pk_known set em ambas as branches TOFU");
+                let pk = peer_pk(sid).expect("pk_known set em ambas as branches TOFU");
                 let verified = if is_control {
                     crate::net::udp_broadcast::verify_packet(&rx, &pk).map(|v| v.to_vec())
                 } else {

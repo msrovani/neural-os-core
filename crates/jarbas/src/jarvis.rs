@@ -152,7 +152,7 @@ impl EmotionAnalysis {
         let raw = Self::classify_weighted(&features);
 
         // Normalize to [0, 1] range with softmax-free sigmoid
-        let clamp = |v: f32| (v.max(-3.0).min(3.0) / 6.0 + 0.5);
+        let clamp = |v: f32| v.max(-3.0).min(3.0) / 6.0 + 0.5;
 
         EmotionAnalysis {
             joy: clamp(raw[0]),

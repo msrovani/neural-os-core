@@ -243,9 +243,9 @@ pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
         let _medusa = read_u32(data, &mut off)? as usize;
         off += 4; // tie_flag
         off += 1; // tok_type
-        let tok_len = read_u32(data, &mut off).unwrap_or(0) as usize;
-        off = off.saturating_add(tok_len);
-        off += 1; // layer_features
+        let _tok_len = read_u32(data, &mut off).unwrap_or(0) as usize;
+        // off = off.saturating_add(tok_len); // not used, overwritten below
+        // off += 1; // layer_features // not used, overwritten below
         // now off is past the header
     }
 

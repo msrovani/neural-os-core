@@ -6,7 +6,7 @@ use x86_64::registers::control::Cr3Flags;
 use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::VirtAddr;
 
-use crate::address_space::{self, AddressSpace};
+use crate::address_space::self;
 use crate::interrupts::{user_code_selector, user_data_selector};
 use crate::syscall::{self, Cap, SYS_EXIT_USER};
 
@@ -287,10 +287,9 @@ pub fn run_process(pid: u64) -> Result<(), &'static str> {
         }
     }
 
-    // Phase 2: set per-process RSP0 before entering user mode
-    // (kernel stack for CPL=3→0 traps)
-    // ponytail: single kernel stack for now; per-process stacks when scheduler lands
-    let _ = &crate::interrupts::set_rsp0;
+    // ADR-0082 F1.2: per-process TSS — seleciona slot com kernel stack dedicada
+    // (RSP0 para traps CPL=3→0). Slot = pid % MAX_PROCS.
+    crate::interrupts::switch_to_proc_tss((pid % 8) as usize);
 
     let result = unsafe {
         x86_64::instructions::interrupts::without_interrupts(|| {
@@ -309,9 +308,9 @@ pub fn run_process(pid: u64) -> Result<(), &'static str> {
 }
 
 /// Demo non-fatal: deny Cap → map stub USER → iretq → marker → EXIT → SUCCESS.
-pub fn demo_ring3() -> Result<(), &'static str> {
-    // ponytail: higher-half raw_vec overflow in clone_current(). P6 gated until fixed.
-    if !TRY_ENTER_RING3 {
+    pub fn demo_ring3() -> Result<(), &'static str> {
+        // Fixed: now uses create_sandbox_as() instead of clone_current() (no higher-half overflow)
+        if !TRY_ENTER_RING3 {
         return Ok(());
     }
     k_nano::slog_bin!("P6", "info", "Ring3 user-mode demo");
@@ -342,7 +341,7 @@ pub fn demo_ring3() -> Result<(), &'static str> {
         return Ok(());
     }
 
-    let mut as_user = AddressSpace::clone_current()?;
+    let mut as_user = address_space::create_sandbox_as()?;
     let code_frame = address_space::alloc_frame()?;
     let stack_frame = address_space::alloc_frame()?;
     let marker_frame = address_space::alloc_frame()?;

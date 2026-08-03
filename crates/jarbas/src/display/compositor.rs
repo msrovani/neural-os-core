@@ -36,7 +36,7 @@ use crate::display::workspaces::Workspaces;
 use crate::display::focus::{FocusStack, FocusPolicy};
 use crate::display::dock::Dock;
 pub use crate::display::window::AppId;
-use crate::display::window::{FloatingWindow, Window, WindowContent};
+use crate::display::window::{Window, WindowContent};
 use crate::display::theme::Theme;
 use crate::display::tiling::{Rect, SplitDirection, WindowId};
 use crate::display::notifications::NotificationQueue;
@@ -932,8 +932,8 @@ fn draw_mouse_cursor(fb: &mut DoubleBuffer, mx: usize, my: usize, scr_w: usize, 
 fn render_app_content(fb: &mut DoubleBuffer, win: &Window, scr_w: usize, _scr_h: usize) {
     match &win.content {
         WindowContent::Card(decl) => {
-            let cx = win.rect.x as usize;
-            let cy = win.rect.y as usize;
+            let _cx = win.rect.x as usize;
+            let _cy = win.rect.y as usize;
             let _buttons = crate::display::card::render_card(fb, decl);
         }
         _ => {

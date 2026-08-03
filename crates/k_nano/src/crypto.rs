@@ -194,9 +194,11 @@ fn aead_encrypt(
 ) -> Option<Vec<u8>> {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let key = Key::from(*key);
+    let nonce = Nonce::from(*nonce);
+    let cipher = ChaCha20Poly1305::new(&key);
     cipher
-        .encrypt(Nonce::from_slice(nonce), Payload { msg: payload, aad: header })
+        .encrypt(&nonce, Payload { msg: payload, aad: header })
         .ok()
 }
 
@@ -209,9 +211,11 @@ fn aead_decrypt(
 ) -> Option<Vec<u8>> {
     use chacha20poly1305::aead::{Aead, KeyInit, Payload};
     use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-    let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
+    let key = Key::from(*key);
+    let nonce = Nonce::from(*nonce);
+    let cipher = ChaCha20Poly1305::new(&key);
     cipher
-        .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: header })
+        .decrypt(&nonce, Payload { msg: ct, aad: header })
         .ok()
 }
 

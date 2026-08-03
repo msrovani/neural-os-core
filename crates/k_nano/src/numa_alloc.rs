@@ -170,7 +170,7 @@ pub fn numa_allocate_local() -> Option<PhysFrame<Size4KiB>> {
     let topology = topology.as_ref()?;
     
     let domain = topology.domain_for_apic(apic_id)?;
-    drop(topology);
+    let _ = topology;
     
     numa_allocate_frame(domain)
 }
