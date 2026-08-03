@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+### SESSION_242: Mesh P2P Reliability — ADR-0081 Phase 2 Complete (2026-08-02) ✅
+
+**Short-term (Critical):**
+- **ACK seletivo por fragmento** — `FRAG\0` → `FRACK\0` stop-and-wait (3 retries, 50 tick timeout); elimina retransmissão de payload inteiro quando 1 fragmento perde.
+- **Exponential backoff no probe_node** — timeout dobra a cada falha: 50→100→200→400→800→1600→3200 ticks (cap 3200); reduz carga na rede durante falhas prolongadas.
+- **Health TTL automático** — cleanup a cada 500 ticks remove entradas sem atividade > 60s (6000 ticks); evita vazamento de memória em tabelas estáticas.
+- **Métricas latência** — `avg_rtt_ticks` (EWMA α=1/8), `p99_rtt` via buffer circular 32 amostras + insertion sort; `peer_p99_rtt(node_id)` exposto.
+
+**Medium-term:**
+- **ARP cache / MAC resolution** — `PEER_MAC_CACHE` (16 slots), populado via heartbeat RX; `peer_mac()`/`peer_set_mac()` para unicast futuro.
+- **Capacity scoring dinâmico** — `MeshExpertDistributor` usa `peer_health().reachable`, `avg_rtt`, `p99_rtt` para ajustar capacidade base; nós unreachable → capacidade 0.
+- **Rate limiting broadcast** — token bucket global (1 token/tick, burst 20); heartbeat custa 1, ROLE custa 2, dados custam 3.
+
+**Dashboard JSON:**
+- `PeerHealth::to_json(node_id)` → `{"node_id":N,"reachable":bool,"avg_rtt":N,"p99_rtt":N,"tx":N,"ack":N,"fail":N,"probe_to":N}`
+- `publish_mesh_health()` emite JSON array `[{"node_id":1,...},...]` no tópico `MESH_HEALTH` (EventBus).
+- `mesh_health_json::parse()` no_std no Jarbas → `Vec<PeerHealthJson>`.
+- Lazy subscribe `MESH_HEALTH` no `DisplayAgent::tick()`.
+- Cards coloridos (verde/vermelho) com RTT, p99, TX/ACK, failures, probe timeout.
+
+**Verificação:** `cargo check --release -p k-nano/cortex/jarbas` — 0 erros.
+
+---
+
 ### SESSION_241 (cont.): Mesh AEAD Tier F + anti-replay dados + calibração ed25519 — ADR-0081 (2026-08-02) 🎯
 - **AEAD Tier F implementado** — primeira dep cripto simétrica do workspace: `chacha20poly1305 0.11` (`default-features = false, features = ["alloc"]`); X25519 via feature `x25519` do próprio `ed25519-compact` (sem `x25519-dalek`, sem handshake novo no wire).
 - **Wire:** `header NoProto 36B ‖ ciphertext ‖ tag16`; nonce 12B = `source_id` u32 BE ‖ `clock` u64 BE (derivado do header, NÃO vai no wire — anti-replay garante não-repetição, NIST SP 800-38D contador); AAD = header; KDF = `sha256(DH(X25519_local_sk, peer_pk))` via `from_ed25519`.

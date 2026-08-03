@@ -1,4 +1,23 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s242 — Mesh P2P Reliability (ADR-0081 Phase 2) (2026-08-02)
+#   SESSION_242: ACK seletivo + backoff + health TTL + capacity scoring + token bucket + JSON dashboard
+#     Transporte: REASSEMBLY 2→16 slots; timeout 500→2000 ticks; FRAG\0→FRACK\0
+#       stop-and-wait (3 retries, 50 ticks); recv_unicast_with_mac/udp_broadcast_recv_with_mac
+#       expõem src_mac para ACK direto; ARP cache PEER_MAC_CACHE (16 slots) populado no RX.
+#     Health: PeerHealth expandido (probe_failures, probe_timeout_ticks, last_activity_ticks,
+#       avg_rtt EWMA α=1/8, rtt_samples[32] circular, p99 via peer_p99_rtt); probe_node com
+#       exponential backoff 50→3200 ticks (cap); cleanup_peer_health_ttl a cada 500 ticks (>60s).
+#     Distribuição: capacity_weighted_assign usa peer_health (unreachable→0, latency_factor,
+#       p99_factor) no MeshExpertDistributor; rate limiting broadcast via token bucket
+#       (1 token/tick, burst 20; heartbeat=1, ROLE=2, dados=3).
+#     Observabilidade: PeerHealth::to_json + publish_mesh_health emite JSON array no tópico
+#       MESH_HEALTH; jarbas mesh_health_json::parse (no_std manual) + lazy subscribe no
+#       DisplayAgent; cards coloridos (verde/vermelho) com RTT/p99/TX/ACK/fail/probe_to.
+#     Verificação: cargo check -p k-nano/cortex/jarbas 0 erros. neural-kernel tem erros
+#       PRÉ-EXISTENTES (x86_64 IA32_* imports, #[naked], AddressSpace::create_sandbox_as)
+#       não relacionados ao mesh. Commit 7a97556.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s241 — Mesh AEAD Tier F + anti-replay dados + calibração (ADR-0081)
 #   SESSION_241 (cont.): TLS bridge ✅ (d05fcab) + mesh cripto (2026-08-02)
 #     AEAD Tier F (chacha20poly1305 0.11 + feature x25519 do ed25519-compact,

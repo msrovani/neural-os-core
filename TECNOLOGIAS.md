@@ -141,6 +141,7 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 | 4.20 | **Brain Mesh Engine — Master Election** | 🏆 Eleição autônoma: maior CapacityScore ou nó ancorado (jarbas UI). Re-election dinâmico. Raft/Paxos (conceito). | Raft consensus, Paxos | MIT | `net/brain_mesh.rs` | ✅ 0 err |
 | 4.21 | **Brain Mesh Engine — Dynamic Roles** | 🏆 Atribuição: Master (hermes/jarbas), Memory (VFS L0-L7), Compute (MoE experts), Worker (verificação). Auto-scaling. | Kubernetes scheduler (conceito) | Apache 2.0 | `net/brain_mesh.rs` | ✅ 0 err |
 | 4.22 | **CellChannel — Transparent Messaging** | 🏆 Trait unificado: Local (SpscChannel, ~10ns) vs Remote (RawEth, sub-ms). Mesma interface para hermes/cortex. | ZeroMQ, MPI | MIT | `ipc/mesh.rs` | ✅ 0 err |
+| 4.23 | **Mesh P2P Reliability (ADR-0081 Phase 2)** | 🏆 ACK seletivo por fragmento (FRAG\0→FRACK\0, stop-and-wait), exponential backoff no probe, health TTL automático, avg_rtt/p99_rtt metrics, ARP cache MAC resolution, capacity scoring health-aware, token bucket rate limiting, JSON dashboard (MESH_HEALTH EventBus). | SESSION_242, ADR-0081 | MIT | `k_nano/net/{mesh,udp_broadcast}.rs`, `cortex/mesh_distrib.rs`, `jarbas/display/agent.rs` | ✅ 0 err |
 
 ---
 
