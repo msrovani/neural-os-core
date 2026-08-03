@@ -1268,8 +1268,6 @@ pub(crate) fn kernel_boot(
 
     crate::display::fb::boot_ckpt(5, "antes init_idt");
     interrupts::init_idt();
-    // ADR-0082 F1.4: SYSCALL/SYSRET MSRs (LSTAR/STAR/FMASK) após GDT/IDT.
-    syscall::init_syscall_fast_path();
     crate::display::fb::boot_ckpt(6, "IDT ok");
 
     kjson!("BOOT", "IDT", "ready", "vecs", 256);
@@ -1393,6 +1391,10 @@ pub(crate) fn kernel_boot(
     k_nano::platform_probe::detect();
     k_nano::platform_probe::log_itd_probe();
     simd::enable_simd();
+
+    // ADR-0082 F1.4: SYSCALL/SYSRET MSRs — após o probe (hypervisor real
+    // conhecido; gate por probe_done() evita wrmsr em WHPX/TCG → #GP).
+    syscall::init_syscall_fast_path();
 
     crate::boot_logger::log("BOOT: PlatformProbe+SIMD enabled");
     crate::display::fb::boot_ckpt(14, "SIMD ok");

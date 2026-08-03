@@ -104,7 +104,32 @@ pub fn stage_syscall(nr: u64, arg: u64, cap: Cap) {
 
 /// Inicializa MSRs para SYSCALL/SYSRET fast path via inline assembly.
 /// Called once during boot (after GDT/IDT init).
+///
+/// ADR-0082 §7 (modulações): SYSCALL/SYSRET só é ativado onde o hypervisor
+/// permite `wrmsr` dos MSRs LSTAR/STAR/FMASK. WHPX (MicrosoftHv) e TCG
+/// rejeitam/ignoram a escrita — WHPX gera `#GP` no boot. Nesses ambientes o
+/// fallback `int 0x90` (vetor 0x90, DPL=3) continua ativo e suficiente.
 pub fn init_syscall_fast_path() {
+    // Gate por hypervisor REAL: só KVM e HW real (None) aceitam os MSRs.
+    // Exige `probe_done()` — antes do platform_probe (HardwareDiscovery),
+    // `hypervisor()` retorna `None` (default 0) que seria confundido com HW
+    // real e liberaria o `wrmsr` → #GP no WHPX. Nesses ambientes o fallback
+    // `int 0x90` (vetor 0x90, DPL=3) continua ativo e suficiente.
+    let hv = k_nano::platform_probe::hypervisor();
+    let syscall_ok = k_nano::platform_probe::probe_done()
+        && matches!(hv, k_nano::platform_probe::HypervisorKind::None
+            | k_nano::platform_probe::HypervisorKind::Kvm);
+    if !syscall_ok {
+        k_nano::slog_bin!(
+            "SYSCALL",
+            "info",
+            "SYSCALL/SYSRET gated off (probe={} hv={:?}) — fallback int 0x90",
+            k_nano::platform_probe::probe_done(),
+            hv
+        );
+        return;
+    }
+
     // IA32_STAR (0xC0000081): CS/SS selectors for SYSCALL/SYSRET
     // Bits 63:48 = SYSRET CS/SS (user mode)
     // Bits 47:32 = SYSCALL CS/SS (kernel mode)
@@ -138,8 +163,8 @@ pub fn init_syscall_fast_path() {
         core::arch::asm!(
             "wrmsr",
             in("ecx") 0xC0000082u32,
-            in("eax") (syscall_entry as *const () as u64 & 0xFFFFFFFF) as u32,
-            in("edx") ((syscall_entry as *const () as u64) >> 32) as u32,
+            in("eax") (syscall_entry as u64 & 0xFFFFFFFF) as u32,
+            in("edx") ((syscall_entry as u64) >> 32) as u32,
             options(nostack, preserves_flags)
         );
         
@@ -154,7 +179,7 @@ pub fn init_syscall_fast_path() {
     }
     
     k_nano::slog_bin!("SYSCALL", "info", "SYSCALL/SYSRET MSRs initialized (LSTAR={:#x}, STAR={:#x}, FMASK={:#x})", 
-        syscall_entry as *const () as u64, star, fmask);
+        syscall_entry as u64, star, fmask);
 }
 
 /// SYSCALL entry point (naked assembly).

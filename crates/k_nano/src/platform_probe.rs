@@ -602,6 +602,14 @@ pub fn cpu_features() -> CpuFeatures {
     unsafe { CPU_FEATURES }
 }
 
+/// True se o probe de plataforma (hypervisor + ISA + SMP) já rodou.
+/// ADR-0082: usada para gate de features que dependem do hypervisor real —
+/// antes do probe, `hypervisor()` retorna `None` (default 0), o que é
+/// indistinguível de HW real e liberaria caminhos errados em WHPX/TCG.
+pub fn probe_done() -> bool {
+    PROBED.load(Ordering::Acquire) != 0
+}
+
 pub fn cache_topology() -> CacheTopology {
     if PROBED.load(Ordering::Acquire) == 0 {
         return CacheTopology::default();
