@@ -1,0 +1,60 @@
+{
+  "family": [
+    "unknown",
+    "network",
+    "wifi",
+    "display",
+    "storage",
+    "audio",
+    "usb",
+    "serial_io",
+    "bridge",
+    "multimedia",
+    "input",
+    "other"
+  ],
+  "fw": [
+    "-",
+    "intel/iwlwifi",
+    "rtlwifi",
+    "ath9k",
+    "brcmfmac",
+    "nvidia/gp108",
+    "i915",
+    "amdgpu"
+  ],
+  "agent": [
+    "HwBridgeAgent",
+    "NetAgent",
+    "WifiAgent",
+    "DisplayAgent",
+    "GpuBackend",
+    "UsbDriverAgent",
+    "HdaAudioAgent",
+    "DiskAgent",
+    "PlatformAgent"
+  ],
+  "next": [
+    "ready",
+    "load_firmware",
+    "bind_network",
+    "bind_wifi_scan",
+    "bind_gpu_compute",
+    "bind_usb_host",
+    "bind_audio",
+    "bind_storage",
+    "observe_only"
+  ],
+  "caps": [
+    "NET",
+    "WIFI",
+    "DISPLAY",
+    "COMPUTE",
+    "AUDIO",
+    "USB_HOST",
+    "STORAGE",
+    "NEEDS_FW",
+    "SCAN",
+    "CAPTURE"
+  ]
+}
