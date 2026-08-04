@@ -43,7 +43,11 @@ fn main() {
     // Gera imagem FAT32 (ESP)
     let mk_esp = limine_dir.join("mk_esp_fat.py");
     let esp_img = target_dir.join("limine-esp.img");
-    let status = std::process::Command::new("python")
+    // Windows tem `python`; Linux/macOS têm `python3` (às vezes sem `python`).
+    let python = ["python3", "python"].iter().find(|p|
+        std::process::Command::new(p).arg("--version").output().is_ok())
+        .expect("python3 or python required");
+    let status = std::process::Command::new(python)
         .args([&mk_esp.to_string_lossy(), "--esp-dir",
                &esp_root.to_string_lossy(), "--output", &esp_img.to_string_lossy(), "--size-mb", "128"])
         .status().expect("mk_esp_fat failed");

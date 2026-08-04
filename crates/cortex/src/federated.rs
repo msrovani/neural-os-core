@@ -2,7 +2,7 @@
 //!
 //! Escopo mínimo: só os pesos do router MoE (HIDDEN×num_experts = 384 i8 p/ 6
 //! experts), trocados entre nós do mesh como deltas XOR vs o seed base (LCG
-//! seed 42, idêntico ao `trinity::generate_router_weights`). Modelos grandes
+//! seed 42, idêntico ao `trinity::generate_random_router_weights`). Modelos grandes
 //! (LLM/experts BitNet) ficam fora — futuro.
 //!
 //! Protocolo (prefixos espelham skill_sync — lane paralela):
@@ -56,7 +56,7 @@ pub fn fed_rounds() -> u64 {
 
 // ─── Lógica pura (sem rede/HW) ─────────────────────────────────────────────
 
-/// Seed base idêntico ao `trinity::generate_router_weights` (LCG seed 42).
+/// Seed base idêntico ao `trinity::generate_random_router_weights` (LCG seed 42).
 /// Retorna Vec<i8> ternário {-1,0,1} em ordem row-major HIDDEN×num_experts.
 ///
 /// Conversão: o trinity gera direto no PackedTernaryTensor (2 bits/valor,

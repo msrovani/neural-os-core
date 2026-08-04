@@ -2,7 +2,7 @@
 
 # 🧠 Neural OS Hermes — K³CHJ Core
 
-### *The World's First AI-Native Bare-Metal Operating System*
+### *AI-Native Bare-Metal Operating System — Rust, no_std*
 
 [![Build](https://img.shields.io/badge/build-0%20errors-brightgreen?style=flat-square&logo=rust)](https://github.com/msrovani/neural-os-core)
 [![Version](https://img.shields.io/badge/v1.9.9%20TEST-blueviolet?style=flat-square)](https://github.com/msrovani/neural-os-core/releases)
@@ -20,9 +20,9 @@
 ║              NEURAL OS HERMES — K³CHJ CORE                 ║
 ║    No POSIX. No Linux. No cloud. ~26K LOC. 0 errors.       ║
 ║                                                              ║
-║  "The only OS built from the ground up as an AI-native      ║
-║   cognitive system. Not an OS with AI tacked on —           ║
-║   an OS that IS the AI."                                     ║
+║  An AI-native cognitive OS built from the metal up.           ║
+║  No POSIX. No Linux. No cloud. Every entity is an Agent.      ║
+║  Real boot log: docs/evidence/boot-whpx-20260802.txt          ║
 ╚══════════════════════════════════════════════════════════════╝
 ```
 
@@ -32,25 +32,23 @@
 
 ## 🏆 Why This Exists
 
-We searched the entire AIOS `no_std` ecosystem — **8 competitor projects**:
-ClaudioOS, FYY, Wetware, WeftOS, Oreulius, WAeasi, coconutOS, ArceOS.
-Every single one came up short where it matters:
+Honest, verifiable state — no "world's first" marketing. Where something is not yet measured, it says so.
 
-| Capability | Others | **Neural OS Hermes** |
+| Capability | Status | Evidence |
 |---|---|---|
-| **BitNet LLM on bare-metal** | ❌ None | ✅ **First & only** — 850M ternary params (b1.58), ADD/SUB matmul, zero FPU. Runs in Ring 0. |
-| **Self-Installer** | ❌ Zero | ✅ **First & only** (ADR-0079) — detects PCI hardware, partitions, formats FAT32, deploys bootloader + only the firmware/models you need |
-| **HW Expert Neural Net** | ❌ None | ✅ **First** — 61,453 HW IDs recognized by a 259KB BitNet running INSIDE the kernel |
-| **Agent/Skill ontology** | ❌ Tasks/services | ✅ **Everything is an Agent** — 50 native agents with manifests, capabilities, lifecycle. No drivers, no services, no daemons |
-| **Ring isolation (R0→R3)** | ❌ None | ✅ Capability gates, `int 0x90`, proof-gated mutations. Rings R2/R3 never touch BAR MMIO |
-| **Voice I/O** | ❌ None | ✅ Piper TTS (PT-BR + EN), STT CTC, WakeWord "Jarvis", HDA capture/playback, FFT→Orb visualization |
-| **GPU Compute** | ❌ None | ✅ NVIDIA PUSH_BUFFER (Pascal, HW-real), Intel GEN Ring, AMD compute, VirtIO-GPU |
-| **WASM Runtime** | ❌ None | ✅ wasmi with fuel metering, sandbox, capability-gated host imports |
-| **Self-Healing** | ❌ None | ✅ Detects missing firmware → LLM diagnoses → HTTP downloads → hot-loads. No reboot. No human |
-| **SleepCycle** | ❌ None | ✅ **First** bare-metal cognitive sleep cycle: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT |
-| **Cross-OS Ecosystem** | ❌ Siloed | ✅ MCP bridge to FYY/Wetware/WeftOS — skills discovered anywhere, installed locally |
+| **BitNet LLM (b1.58, ~577MB) em kernel space** | ✅ loader + forward pass | `crates/cortex/` — tokens/s não medidos (milestone 20) |
+| **HW Expert — ID de hardware por rede neural** | ✅ v3/v4 treinados | 61.453 VID/DID; ~345KB (v3) / ~260KB (v4); `tools/train_hw_expert_v*.py` |
+| **Trinity MoE router** | 🟡 keyword routing efetivo | pesos LCG seed=42 UNTRAINED; treino falhou gate ADR-0083 (14.3% vs ≥80%) |
+| **Self-Installer (ADR-0079)** | ✅ implementado | detecta HW, particiona, formata FAT32 ESP, deploya bootloader |
+| **WASM runtime (wasmi)** | ✅ sandbox + fuel + CapGate | self-test `add(2,3)=5`; roda em Ring 0 — Ring 3 gated (ADR-0060/0077) |
+| **Agent/Skill ontology** | ✅ | 25 agentes nativos + ~147 especialistas (~259 no runtime) |
+| **Voice I/O** | ✅ pipeline | Piper PT-BR/EN, STT CTC, WakeWord "Jarvis", HDA full-duplex |
+| **GPU compute** | ✅/🟡 | NVIDIA PUSH_BUFFER Pascal (HW-real); Intel canary; AMD pendente |
+| **Mesh P2P (ADR-0081)** | ✅ Fases A–C | ACK seletivo, cripto L/F, AEAD, dashboard JSON |
+| **Scheduler** | 🟡 cooperativo | sem preempção — decisão explícita (item 22 da auditoria) |
+| **Ring 3 isolation** | ⏳ gated | `TRY_ENTER_RING3=false` (ADR-0060) |
 
-> **We are not "another Rust OS." We are the only OS designed from the silicon up as an AI-native cognitive system. The hardware is not the target — the user's intent is.**
+> **Estado honesto**: o roteamento MoE usa palavras-chave; Ring 3 não roda por default; tokens/s do BitNet 2B e perplexidade não foram medidos. São os próximos marcos (itens 18–23 da auditoria), não alegações.
 
 ---
 
@@ -81,7 +79,7 @@ python tools\build_image.py
 .\run-qemu-whpx.ps1 -Window
 
 # ── Linux ──
-RUSTUP_TOOLCHAIN=nightly-2026-07-05 cargo build --release
+cargo build --release
 python3 tools/build_image.py
 timeout 80 qemu-system-x86_64 -m 6G -smp 4 -accel tcg \
   -drive format=raw,file=target/uefi.img,if=ide,index=0 \
@@ -103,9 +101,9 @@ cargo check --release
 
 > **Prerequisites**: Rust nightly-1.98.0+, `rustup target add x86_64-unknown-none`, Python 3.10+, QEMU 8+
 >
-> **⚠️ Linux/macOS**: The `rust-toolchain.toml` targets Windows. Use env var `RUSTUP_TOOLCHAIN=nightly-2026-07-05`.
+> **Linux/macOS**: `rust-toolchain.toml` pins `nightly-2026-07-05` with no platform suffix — works on Windows, Linux and macOS.
 >
-> **Boot OK if**: `[BOOT] Phase 6: AgentFleet — 259 agents registered`, `[TIMER] tick=1` increments in boot log.
+> **Boot OK if**: `[BOOT:Runtime]` and `[TIMER] tick=` appear in the serial log. Real evidence: [`docs/evidence/boot-whpx-20260802.txt`](docs/evidence/boot-whpx-20260802.txt). CI gates on `[BOOT:Runtime]`.
 
 ---
 
@@ -207,7 +205,7 @@ Arquivos .BIN permanentes em `models/` (fora de `target/`, nunca apagar).
 
 ### 🧠 BitNet b1.58 LLM — 850M Ternary Parameters in Kernel Space
 
-**The first (and still only) bare-metal OS running a full BitNet ternary language model in Ring 0. No cloud. No GPU dependency. No userspace process. The LLM is part of the kernel.**
+**A BitNet ternary language model (b1.58, ~577MB) loaded and executed in kernel space. No cloud. No userspace process. Honest status: loader + forward pass OK; tokens/s, perplexity and an unguided conversation are NOT yet measured (milestone 20).**
 
 ```rust
 // 2-bit packing: 4 ternary weights (-1, 0, +1) per byte
@@ -220,7 +218,7 @@ pub fn bitnet_matmul_avx2(output: &mut [i16], input: &[i16], weights: &[u8]) {
 ```
 
 - **850M parameters** — reverse-engineered from Microsoft's `BitNet-b1.58-2B-4T` (actual count: 850M, not 2B)
-- **Single model**: `BITNET2B.BIN` (~590MB, loaded via QEMU-loader or FAT32). The "2B" in the filename is Microsoft's naming convention, not actual parameter count.
+- **Single model**: `BITNET2B.BIN` (~577MB, loaded via QEMU-loader or FAT32). The "2B" in the filename is Microsoft's naming convention, not actual parameter count.
 - **30 layers, hidden=2560, GQA (20Q/5KV heads)**, vocab=128256 (kernel uses 32002 for speed)
 - **Medusa speculative decoding** — 3 draft heads, 2-3× throughput
 - **N-gram speculative decoding** — rolling LCG hash, zero extra VRAM
@@ -228,11 +226,11 @@ pub fn bitnet_matmul_avx2(output: &mut [i16], input: &[i16], weights: &[u8]) {
 - **Dual-Tier Memory**: Tier 1 `talc` (UI/apps) + Tier 2 `TensorArena` bump allocator (inference hot path)
 - **AVX2 + SSE4.2 + AVX-512** kernels via compute dispatch
 
-> 🥇 **World's first**: BitNet b1.58 running in kernel space of a bare-metal OS. No other OS has achieved this.
+> **Pending measurement**: tokens/s, perplexity, unguided conversation — milestone 20 of the credibility plan.
 
-### 🧩 Trinity Mixture of Experts — Trainable Router in Kernel
+### 🧩 Trinity MoE — Keyword-Routed Expert Selection in Kernel
 
-**6 domain experts + a trainable neural router. All running in Ring 2. No cloud API. Every expert is a lightweight BitNet model loaded from disk.**
+**6 domain experts + a router. Honest status: router weights are LCG-seeded (UNTRAINED); effective routing is keyword-based (`classify_keywords`). A trained router failed the ADR-0083 gate (14.3% holdout vs ≥80%) — confusion matrix in `tools/target/router_confusion_matrix.md`.**
 
 ```
   User Intent →  Trinity Router  ─┬─  HW Identify Expert   (61K HWIDs)
@@ -246,13 +244,10 @@ pub fn bitnet_matmul_avx2(output: &mut [i16], input: &[i16], weights: &[u8]) {
 - **AutoLearnAgent**: detects novel intents (≥3 occurrences) → trains → registers new expert
 - **R3 Replay**: Rollout Routing Replay with frozen TensorArena traces — O(1) cache reset
 - **Structured Decoding**: grammar/JSON token masking before argmax (SGLang-inspired)
-- **Router weights**: trained on-device via feedback loops
-
-> 🥇 **World's first**: Trainable MoE router integrated into a bare-metal kernel scheduler.
 
 ### 🛠 HW Expert v3 — The Neural Net That Knows Every Chip
 
-**61,453 unique VID/DID pairs recognized by a 259KB ternary neural network. Running inside the kernel. Replaces the 40MB `pci.ids` database with a 259KB model.**
+**61,453 unique VID/DID pairs recognized by a ternary neural network (~345KB v3 / ~260KB v4) running inside the kernel. Replaces a 40MB `pci.ids`-style database with a model.**
 
 ```rust
 // 1M params, 128 hidden, 6 layers, 8 heads — loss 0.389
@@ -272,11 +267,9 @@ pub struct HwExpertV3 {
 | **Firmware metadata** | **1,207** entries from linux-firmware | [🤗 Download](https://huggingface.co/datasets/aios-k2chj/aios-k2chj-firmware-metadata) |
 | **PCI kernel tables** | **494** device entries | [🤗 Download](https://huggingface.co/datasets/aios-k2chj) |
 
-> 🥇 **World's first**: A neural network as the hardware identification subsystem of a kernel. No other OS uses ML for PCI/USB device recognition.
-
 ### 🏗 Self-Installer — Moving from USB to Internal Storage
 
-**ADR-0079** — We checked every `no_std` AIOS project. **Zero have a self-installer. We do.** Neural OS detects your hardware, partitions your drive, formats FAT32 ESP, deploys the bootloader, installs only the firmware and models you need, writes config, and verifies integrity. All automatically.
+**ADR-0079** — Neural OS detects your hardware, partitions your drive, formats a FAT32 ESP, deploys the bootloader, installs only the firmware and models you need, writes config, and verifies integrity. All automatically.
 
 ```rust
 pub fn auto_install(target: &mut StorageDevice) -> Result<(), InstallError> {
@@ -295,8 +288,6 @@ pub fn auto_install(target: &mut StorageDevice) -> Result<(), InstallError> {
 - Boot frame allocator sets `TOTAL_RAM_MB` at init
 - `format_fat32_esp()` requires real FAT32 (≥65,525 clusters / ~32MB)
 - Hardware-aware: only installs firmware for detected devices
-
-> 🥇 **World's first**: Self-installer in a `no_std` bare-metal AIOS. Not even ArceOS has this.
 
 ### 🗣 Full Voice I/O
 
@@ -324,7 +315,7 @@ pub fn auto_install(target: &mut StorageDevice) -> Result<(), InstallError> {
 
 ### 🧪 WASM Runtime — Sandboxed Third-Party Code
 
-**`wasmi` — real `no_std` WASM runtime with fuel metering, running in Ring 3. Self-test: `add(2, 3) = 5` — PASS.**
+**`wasmi` — real `no_std` WASM runtime with fuel metering and capability-gated host imports. Self-test: `add(2, 3) = 5` — PASS. Honest status: runs in Ring 0 today; Ring 3 is gated (`TRY_ENTER_RING3=false`, ADR-0060/0077).**
 
 ```rust
 pub fn run_wasm(module: &[u8], fuel: u64) -> Result<i64, WasmError> {
@@ -344,8 +335,6 @@ pub fn run_wasm(module: &[u8], fuel: u64) -> Result<i64, WasmError> {
 - **W^X arena**: native `mov eax, 42` → 42 PASS — Ring 0 JIT base
 - **Skills generated hot by LLM → promoted to WASM → persisted to disk**
 - **CapGate on all `aios::*` host imports**
-
-> 🥇 **World's first**: WASM runtime with capability-gated host imports integrated into a bare-metal kernel. Cranelift JIT compiles in `no_std`.
 
 ### 🛡 Safety + Security + Self-Healing
 
@@ -393,7 +382,7 @@ pub fn run_wasm(module: &[u8], fuel: u64) -> Result<i64, WasmError> {
 
 ### 💤 SleepCycle — The Bare-Metal Sleep/Learn Cycle
 
-**The first bare-metal system with a cognitive sleep cycle. Every boot makes it smarter. No internet. No human intervention.**
+**A cognitive sleep cycle: REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT, running every ~1000 scheduler ticks.**
 
 ```
   ┌─────────┐    ┌─────────┐    ┌───────────┐    ┌─────────┐    ┌─────────┐
@@ -407,8 +396,6 @@ pub fn run_wasm(module: &[u8], fuel: u64) -> Result<i64, WasmError> {
 - Consolidates episodic memories into long-term patterns
 - Prunes dead MoE routes, reflects on past outcomes
 - Inspired by Atkinson-Shiffrin + Ebbinghaus forgetting curves
-
-> 🥇 **World's first**: Cognitive sleep/learn cycle in a bare-metal OS kernel.
 
 ### 🎨 Generative Card Desktop
 
@@ -496,7 +483,7 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 | **Mesh P2P Reliability** 🏆 | **ACK seletivo por fragmento (FRAG\0→FRACK\0)**, 16 slots reassembly, exponential backoff no probe, health TTL automático, avg_rtt/p99 metrics, ARP cache, capacity scoring health-aware, token bucket rate limiting, JSON dashboard `MESH_HEALTH` no Jarbas (SESSION_242, ADR-0081 Phase 2) |
 | **P2P Mesh entre 2 QEMUs** 🏆 | **Dois kernels AIOS se descobrem e trocam skills via rede real** — broadcast UDP 42069, heartbeats cruzados, eleição Master, SkillSync push/apply (SESSION_234). Transporte em R0 (k_nano) |
 | **Tier cripto L/F mesh** 🏆 | **Cripto relativizada por contexto de rede** — mesmo range/datacenter: DADOS com HMAC-SHA256 (chave de segmento, ~30x mais rápido, ~1.3µs/pacote); externo: Ed25519 full. Controle/TOFU sempre Ed25519. Fail-closed sem chave (SESSION_240, ADR-0081 Fase B) |
-| **BitNet b1.58 loaded & running** | 850M params, L=30, forward pass OK. File: `BITNET2B.BIN` (~590MB) |
+| **BitNet b1.58 loaded & running** | 850M params, L=30, forward pass OK. File: `BITNET2B.BIN` (~577MB) |
 | **E1000 RX fixed** | 0 → 184 packets after DMA uncached fix (SESSION_149/150) |
 | **NetFs smoke PASS** | TCP peer at `gateway:4446`, LIST/READ/WRITE (SESSION_152) |
 | **NTP sync + DNS + HTTP** | Raw DNS, HTTP GET via smoltcp, Host header, periodic NTP |
@@ -508,11 +495,13 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 | **W^X arena `mov eax,42`=42** | Native JIT base, Ring 0 |
 | **GPU NVIDIA PUSH_BUFFER** | GPFIFO, doorbell, timeout — works on GTX 1050 (HW-real) |
 | **GPU VRAM Buddy Alloc** | Power-of-2 split/merge over BAR2 UC |
-| **HW Expert v3 trained** | 61,453 VIDs/DIDs, 259KB, 1M params, loss 0.389 |
+| **HW Expert v3 trained** | 61,453 VIDs/DIDs, ~345KB, 1M params, loss 0.389 |
 | **SDIO dataset** | 171,003 HWIDs, 65 DriverPacks, 20,054 .inf files |
 | **ATA PIO bug fixed** | `in al, dx+1` was FEATURES register, not data. Bug since v0.1 |
 
-### Boot Log (Successful)
+### Boot Log — Real Evidence
+
+> Log real versionado: [`docs/evidence/boot-whpx-20260802.txt`](docs/evidence/boot-whpx-20260802.txt) — boot WHPX/Limine, 8 fases, Runtime + tick. Exemplo ilustrativo das fases (mesma sequência):
 ```
 [BOOT] Phase 0: SafeHarbor — exception handlers installed
 [BOOT] Phase 1: MemoryCore — bitmap frame allocator 8GB
@@ -583,10 +572,11 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
 ## 📊 By the Numbers
 
 ```
-  ~26,000     Lines of Rust (no_std, bare-metal, 0 unsafe in high-level crates)
+  ~26,000     Lines of Rust (no_std, bare-metal)
   180+        Rust source files
   6           Production crates (k_nano → jarbas + neural-kernel bin)
-  0           Compilation errors (cargo check --release)
+  0           Compilation errors (cargo check --release — gated by CI)
+  10/12       Crates on version 1.9.9 (cortex/k_nano em 1.5.0 — a unificar)
   ~50         Native agents (25 base + ~147 specialists + ~6 HW + ~6 FS)
   47+         Architecture Decision Records
   61,453      Hardware IDs recognized by kernel neural net (HW Expert v3)
@@ -595,8 +585,7 @@ Plus **~147 SpecialistAgents** (EventDriven) in The Agency — hardware, filesys
   116         Firmware blobs deployed (~12.5 MB, all MIT license)
   440+        Ideas cataloged in IDEA_BANK.md
   108+        Sprints completed (92→100 roadmap → 100→108 v2.0)
-  8           Competitor projects surpassed (every category)
-  1           Self-installer in the entire AIOS no_std ecosystem
+  --          tokens/s BitNet: not yet measured (milestone 20)
 ```
 
 ---

@@ -62,7 +62,7 @@ R2 intelligence: runs the on-device LLM — tokenize (char BPE or SentencePiece)
 | `parallel_matmul.rs` | SMP parallel f32 + ternary matmul: atomic row/col tile claiming, AP work queue, barrier, IPI wake (gated `ap_pollable`) |
 | `decode.rs` | ADR-0057 WS-G: global allow-mask constrained argmax (identity when unset) + deterministic self-test |
 | `structured_decode.rs` | Compressed-FSM (SGLang) `StructuredDecoder`: JSON/Number/Alpha/SkillCmd/ShellSafe grammars, `mask_logits`/`step` |
-| `trinity.rs` | Trinity MoE router: expert registry, trainable ternary router (embed+weight), keyword fallback, `generate_router_weights` (LCG seed 42), `init_trinity` |
+| `trinity.rs` | Trinity MoE router: expert registry, trainable ternary router (embed+weight), keyword fallback, `generate_random_router_weights` (LCG seed 42), `init_trinity` |
 | `moe.rs` | `MoELayer` (shared expert + int8 router + top-k experts) and `DynamicMoE` birth/merge/split lifecycle |
 | `r3.rs` | Rollout routing replay: `RouteTrace`/`TokenRoute` in arena, `update_with_replay` (PPO-style, Gaussian noise), `persist_trained_router` + mesh delta seam |
 | `arena.rs` | Tier-2 bump `TensorArena` (O(1) alloc/reset, 2GB virt region) + boot frame mapping |

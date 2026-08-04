@@ -3585,7 +3585,7 @@ pub(crate) fn kernel_boot(
             let (embed, weight) = if router_loaded {
                 crate::trinity::init_router_weights(n_exp)
             } else {
-                crate::trinity::generate_router_weights(n_exp)
+                crate::trinity::generate_random_router_weights(n_exp)
             };
             trinity.load_router(embed, weight);
         }

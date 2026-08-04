@@ -471,10 +471,12 @@ impl TrinityRouter {
     }
 }
 
-/// Generate deterministic router weights using LCG with seed 42.
+/// Generate RANDOM (UNTRAINED) router weights using LCG with seed 42.
 /// Embedding table: VOCAB×HIDDEN random f32 in [-0.1, 0.1].
 /// Weight matrix: HIDDEN×num_experts PackedTernaryTensor (-1/0/1).
-pub fn generate_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor) {
+/// UNTRAINED — o roteamento efetivo é keyword fallback (classify_keywords)
+/// até um router treinado passar o gate do ADR-0083 (§5.3, >80% holdout).
+pub fn generate_random_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor) {
     let mut seed: u32 = 42;
     let embed_size = VOCAB * ROUTER_HIDDEN;
 
@@ -608,7 +610,7 @@ pub fn init_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor
         return (e, w);
     }
     // Fallback: deterministic LCG
-    generate_router_weights(num_experts)
+    generate_random_router_weights(num_experts)
 }
 
 pub fn init_trinity() -> TrinityRouter {

@@ -1,6 +1,6 @@
 # Contributing to Neural OS Hermes K³CHJ
 
-**Thank you for wanting to help build the world's first AI-native bare-metal OS.**
+**Thank you for wanting to help build an AI-native bare-metal OS.
 
 Before contributing, please read this guide. It covers the legal and practical aspects of contributing to a project that protects its intellectual property while remaining open source.
 
@@ -67,7 +67,7 @@ timeout 80 qemu-system-x86_64 -m 6G -smp 4 -accel tcg \
   -serial file:logs/boot.txt -display none
 ```
 
-> **⚠️** On Linux, `rust-toolchain.toml` targets Windows. Use `RUSTUP_TOOLCHAIN=nightly-2026-07-05` before cargo commands.
+> **Linux/macOS**: `rust-toolchain.toml` pins `nightly-2026-07-05` with no platform suffix — works on Windows, Linux and macOS. Plain `cargo build --release` / `cargo check --release` suffices.
 
 ---
 
