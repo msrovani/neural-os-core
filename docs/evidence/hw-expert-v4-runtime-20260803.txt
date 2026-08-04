@@ -38,17 +38,23 @@ O path NN está ATIVO em runtime (carga v5 ok, predição por device, cards com
 src=expert_v4, gate Trinity hwexpert=LOADED). PORÉM as predições são
 degeneradas: family=16 (pci_bridge) para TODOS os devices QEMU — inclusive
 1234:1111 (VGA std) e 8086:100e (e1000 NIC), que deveriam ser
-display/network. Hipóteses a investigar:
+display/network.
 
-1. Modelo carregado @0x129400000 é o arquivo errado (auto-placement por
-   tamanho desc pode ter colocado outro .bitnet nesse endereço — o parse v3
-   achou magic lá também, leitura de 1024KB).
-2. Modelo v4 shipped (266KB) é degenerado nos chipsets QEMU (generalização
-   zero apesar do holdout ~70% — apontaria para leak de fonte no dataset).
-3. Decode prediction_to_card errado para family=16 (vocab 17 famílias).
+## Veredito (diagnóstico 2026-08-03) — H2 CONFIRMADO
 
-O benchmark holdout (docs/evidence/hw_expert_v4_holdout.md) mostra que o
-modelo DISCRIMINA em devices nunca vistos (family 70.6% dispositivo) — então
-a degeneração em runtime sugere problema de carga/arquivo (hipótese 1) mais
-provável que modelo ruim. Próximo passo: sweep QEMU multi-device com o modelo
-pinado em endereço dedicado + dump do token/magic do arquivo carregado.
+O arquivo shipped `models/hw_expert/hw_expert_v4.bitnet` (266.321 B,
+SHA256 A3173CB1…4CA7, criado 30/07 18:36:43 por export de run NÃO treinado)
+é DEGENERADO: embedding 2002/2048 não-zero, mas todos os 42 tensores backbone
+(q/k/v/o/g/u/d × 6 layers) = 0/4096 e os 5 heads = 0. Causa raiz: `export_v4`
+quantiza com threshold 0.5 (`qpack`: >0.5→+1, <-0.5→-1) e `nn.Linear` inicia
+com ±1/√128 ≈ ±0.088 — todo peso backbone/head vira 0. O kernel NÃO tem bug:
+parse exato (parse_end == tamanho do arquivo), port Python do loader Rust
+reproduz family=0 constante (Rust max_by tie-break = último índice → 16/7/8/8).
+
+Correção: o treino em memória funciona (benchmark holdout 70.6% family é de
+modelo recém-treinado, ver docs/evidence/hw_expert_v4_holdout.md); o problema
+é o ARTEFATO exportado. Fix = retreinar e exportar o v4 com pesos não-zero,
+validar o arquivo (fração não-zero + predições não-constantes) e re-medir o
+holdout do arquivo SHIPPED. Observação de placement: com target/ atual, o
+LLAMA8B.BIN (2GB) cobre a janela 0x129400000..0x180000000 — o re-boot de
+validação deve pinar o modelo via -device loader dedicado, sem auto-placement.

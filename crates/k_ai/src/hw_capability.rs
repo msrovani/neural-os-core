@@ -160,10 +160,10 @@ impl HwCapabilityCard {
     }
 }
 
-/// Monta card a partir de PCI (tabela + heurística + HW Expert v4).
+/// Monta card a partir de PCI (tabela + HW Expert v4 + heurística).
 /// Ordem de precedência:
-///   1. HW Expert v4 (ML multi-head, se carregado)
-///   2. Tabela direta HWID (plug-and-play conhecido)
+///   1. Tabela direta HWID (curada; sempre vence — nunca deixar o ML sobrepor)
+///   2. HW Expert v4 (ML multi-head, se carregado; cobre o que a tabela não tem)
 ///   3. Heurística por class/vendor (fallback)
 pub fn build_card(
     vid: u16,
@@ -172,17 +172,17 @@ pub fn build_card(
     subclass: u8,
     name: &str,
 ) -> HwCapabilityCard {
-    // --- 1. HW Expert v4 ML (se carregado) ---
+    // --- 1. Tabela direta HWID (plug-and-play conhecido) ---
+    if let Some(c) = table_lookup(vid, did, class, subclass, name) {
+        return c;
+    }
+    // --- 2. HW Expert v4 ML (se carregado) ---
     if cortex::cortex::hwexpert_v4_is_loaded() {
         if let Some(pred) = cortex::cortex::hwexpert_v4_predict(vid, did) {
             if let Some(c) = prediction_to_card(vid, did, class, subclass, name, &pred) {
                 return c;
             }
         }
-    }
-    // --- 2. Tabela direta HWID (plug-and-play conhecido) ---
-    if let Some(c) = table_lookup(vid, did, class, subclass, name) {
-        return c;
     }
     // --- 3. Heurística por class/vendor ---
     heuristic_card(vid, did, class, subclass, name)

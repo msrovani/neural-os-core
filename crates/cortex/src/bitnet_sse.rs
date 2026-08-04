@@ -63,15 +63,18 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
 
     // SSE4.2 path (safe, no inline asm — pure scalar with block array processing)
     // Processa em blocos de 4 colunas usando unpack_quad_byte
+    // NB: n pode nao ser multiplo de 4 (ex: heads do HW Expert v4 com 17/9/10
+    // colunas) — limitar o ultimo bloco para nao ler alem de n.
     if n >= 4 {
         let mut result = Tensor::new((m, n));
         for i in 0..m {
             for j in (0..n).step_by(4) {
                 let mut sums = [0.0f32; 4];
+                let lanes = core::cmp::min(4, n - j);
                 for t in 0..k {
                     let w_idx = t * n + j;
-                    // Load 4 weights (assumes n%4==0 guaranteed by model shape)
-                    for lane in 0..4 {
+                    // Load up to 4 weights (n%4==0 guaranteed, tail clamped)
+                    for lane in 0..lanes {
                         let w = weight.get_weight(w_idx + lane);
                         let inp = input.data[i * k + t];
                         sums[lane] += match w {
@@ -81,7 +84,7 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
                         };
                     }
                 }
-                for lane in 0..4 {
+                for lane in 0..lanes {
                     result.data[i * n + j + lane] = sums[lane];
                 }
             }

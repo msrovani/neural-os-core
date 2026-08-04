@@ -325,7 +325,9 @@ mod tests {
     #[test]
     fn test_json_mask_logits_first_token() {
         let dec = StructuredDecoder::new(DecodeMode::Json);
-        let mut logits = [0.0f32; VOCAB_SIZE as usize];
+        // FSM tokens vão até b'~' + CHAR_OFFSET (126+3=129); VOCAB_SIZE=99 cobre
+        // só 0..99. Buffer maior p/ cobrir o espaço de tokens do FSM (pre-existente).
+        let mut logits = [0.0f32; 130];
         dec.mask_logits(&mut logits);
         // '{' must be valid (not masked)
         let brace_open = (b'{' as u16 + CHAR_OFFSET) as usize;

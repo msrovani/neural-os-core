@@ -288,6 +288,10 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Skills a quente via LLM**: Nenhum skill é hardcoded. O LLM gera skills sob demanda e o SkillObserver registra. Ex: "grava video", "imprime formulario" viram skills gerados pelo LLM, não por enum Rust.
 
 # Lições Críticas Aprendidas
+- **Validar o ARTEFATO exportado, não só o treino em memória (SESSION_247):** o holdout em memória do HW Expert v4 passava (70.6%) mas o arquivo `.bitnet` era 100% zeros — `export_v4` quantiza com threshold 0.5 e `nn.Linear` inicializa ±1/√128≈±0.088 → todo peso vira 0. Gate p/ qualquer pipeline de export de modelo: fração não-zero ≥1% + predições não-constantes + holdout do ARQUIVO via port Rust-exact do loader (`tools/validate_hw_expert_v4.py`). **Formato de export é contrato com o loader:** `num_params` u32 (não u64), prefixo `u32 len + u32 scale` por tensor, embed row-major `wt(f, embed.weight)` (não `.T` — o loader lê índice flat `col*h + row`). Tabela curada > ML: `build_card` deve dar precedência à tabela HWID, nunca deixar o modelo sobrepor PnP conhecido.
+- **Gate de host em crate no_std = `#[cfg(target_os = "none")]`, não `cfg(test)` (SESSION_247):** quando a crate é dependência, ela compila SEM `cfg(test)` — um gate só de teste não cobre. Ex.: `probe_port` stub host, IPI no-op host, IDT `cfg(not(windows))` (repr(C, align(16)) quebra codegen MSVC/COFF), p2p_sim gated `feature="p2p-sim"`. `cargo test --workspace --exclude neural-kernel --exclude boot` = 139 testes no host desde 08/2026.
+- **SSE/AVX tails: `n%4 != 0` é real (SESSION_247):** heads do HW Expert v4 têm 17/9/10 colunas — clamp do último bloco (`lanes = min(4, n-j)`) para não ler além de n. Antes disso o SSE path assumia n%4==0 e lia além.
+- **Dead code por case (SESSION_247):** padrões mistos (`[INST]`) contra input lowercased (`lower.contains`) nunca casavam — era o TESTE que estava errado, não o gate. Se um assert de gate não dispara, confira o case do input.
 - **Mesh P2P reliability (SESSION_242):** (1) **2 slots de reassembly + fire-and-forget = perda silenciosa** — 17KB matmul → 18 fragmentos; qualquer perda = reassembly falho. Fix: 16 slots + ACK seletivo (FRAG\0→FRACK\0, stop-and-wait). (2) **no_std sem `f32::ceil`** — p99 index via aritmética inteira `(count*99+99)/100`. (3) **`recv_*` precisa expor src_mac** para ACK direto — `recv_unicast_with_mac()`/`udp_broadcast_recv_with_mac()` retornam `(payload, mac)`. (4) **Jarbas DisplayAgent tem métodos fora do `impl`** (`handle_pointer_click`, `apply_ui_spec` eram `fn` soltas) — falha ao adicionar métodos; dashboard integrado com lazy subscribe + parser JSON externo. (5) **`fill_rect`/`draw_text` APIs RGB**: `fill_rect(x,y,w,h,r,g,b)` 7 args, `draw_text(fb,x,y,text,w,r,g,b)` 8 args — não compactar cor em 1 arg. (6) **Precedência de cast**: `expr as u64.method()` → `(expr as u64).method()`. (7) **param `node_id` sombreia `node_id()` fn** — renomear param (`target_id`).
 - **TLS bridge wiring (SESSION_241):** Módulo declarado + implementado ≠ funcional. O padrão bridge (function pointer registrado no boot) exige: (1) tipo da function pointer na crate FE, (2) `register_*()` na crate FE, (3) chamada de `register_*()` no boot com cast explícito, (4) consumers chamando a API da crate FE. O kernel já tinha TLS 1.3 completo (`embedded-tls 0.19`, `HybridProvider`, ECDSA+RSA-PSS) — o gap era exclusivamente o wiring `hermes↔kernel`. Fallback `http://host:443/path` (HTTP na porta TLS) é bug silencioso. Ver `crates/hermes/src/tls.rs` → `fetch_url()`.
 - **Custo cripto é inverso à latência onde importa (SESSION_240):** Ed25519 verify ~26-46µs/pacote (custo FIXO, ~0.3 Gbps/core) domina o budget por ~2 ordens vs HMAC ~1.3µs @1.2KB (~8 Gbps). Em datacenter (RTT 0.1-0.5ms) +40µs = +8-40% do RTT (visível); em WAN é invisível. Onde dá pra relativizar o custo é alto; onde não dá a rede engole. **Decisão ADR-0081 Fase B:** mesmo range/subnet provisiona `set_segment_key()` → DADOS com HMAC-SHA256 (tag 32B, `k_nano::crypto`, reusa `tpm::sha256`, sem dep nova); controle/TOFU (heartbeat/ROLE/PK\0) SEMPRE Ed25519 (`sign_packet_authentic`) — é a âncora de confiança e é raro (~1.1s). Fail-closed: sem chave = Full = zero regressão. Anti-replay de dados em Tier L é follow-up (senders usam clock=0). Implementação importa 3-4x (OpenSSL EVP ~100µs vs lib25519 ~32µs; `ed25519-compact` sem SIMD — calibrar no target).
@@ -379,15 +383,15 @@ Contexto durável para agentes rodando no VM Linux da Cursor Cloud (não-óbvio;
 setup de dependências já foi feito pelo update script). Comandos padrão de
 build/run continuam em `HOWTO.md`; aqui ficam só as ressalvas do ambiente Linux.
 
-### Toolchain Rust (CRÍTICO — o `rust-toolchain.toml` quebra no Linux)
-- `rust-toolchain.toml` fixa `channel = "nightly-x86_64-pc-windows-gnu"` (um canal
-  **Windows**). No Linux isso faz `cargo`/`rustc`/`rustup` falharem com
-  `target tuple in channel name ...`. **NÃO edite esse arquivo** — ele é necessário
-  para o ambiente Windows do dono do projeto.
-- O VM usa `nightly-2026-07-05` (rustc 1.98.0-nightly) via a env var
-  `RUSTUP_TOOLCHAIN`, já exportada em `~/.bashrc`. Shells interativos pegam isso
-  automaticamente; em contextos sem `~/.bashrc` prefixe os comandos, ex:
-  `RUSTUP_TOOLCHAIN=nightly-2026-07-05 cargo build --release`.
+### Toolchain Rust (histórico — `rust-toolchain.toml` agora é cross-platform)
+- Desde 08/2026 o `rust-toolchain.toml` usa `channel = "nightly-2026-07-05"` **sem
+  sufixo de target** (o antigo `...-x86_64-pc-windows-gnu/msvc` quebrava Linux/macOS
+  com `target tuple in channel name ...`). O rustup resolve o host nativo de cada
+  plataforma; no Windows do dono resolve o mesmo toolchain de sempre. **Não
+  reverta** para o formato com sufixo.
+- A env var `RUSTUP_TOOLCHAIN=nightly-2026-07-05` (exportada em `~/.bashrc` do VM)
+  continua como fallback inofensivo — ela tem precedência sobre o arquivo e aponta
+  para o mesmo nightly 1.98. Em contextos sem `~/.bashrc` o arquivo sozinho resolve.
 - Por que **exatamente** a série nightly 1.98: nightly ≥1.99 adiciona
   `forward_overflowing`/`backward_overflowing` à trait instável `Step`, o que quebra
   o crate `x86_64` 0.14.13 (dep transitiva); nightly ≤1.97 ainda não estabilizou
@@ -400,9 +404,12 @@ build/run continuam em `HOWTO.md`; aqui ficam só as ressalvas do ambiente Linux
   que via `bindeps` compila o kernel para `x86_64-unknown-none` e gera
   `target/bios.img` + `target/uefi.img`). Lint canônico: `cargo check --release`
   (0 erros; 1 warning conhecido de import não usado é esperado).
-- `cargo test` no host **não funciona** (crates `no_std` bare-metal; há bug pré-
-  existente só nos testes, ex. `vec!` sem `use alloc::vec` em `k_nano`). A validação
-  real é `cargo check --release` + boot no QEMU.
+- `cargo test` no host **funciona** desde 08/2026 (SESSION de testes): os lib crates
+  usam `#![cfg_attr(not(test), no_std)]` e HW-only items são gated com
+  `#[cfg(target_os = "none")]` (NÃO `cfg(test)` — é inerte em builds de dependência).
+  Comando: `cargo test --workspace --exclude neural-kernel --exclude boot`
+  (139 testes; os 2 bins bare-metal nunca são testados no host). A validação real
+  continua sendo `cargo check --release` + boot no QEMU (agora também em CI).
 
 ### Rodar o OS no QEMU (equivalente Linux dos `run-qemu-*.ps1`, que são só Windows)
 - Só **UEFI/OVMF** dá boot; a imagem BIOS dá triple-fault. Use `-accel tcg`

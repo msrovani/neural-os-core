@@ -126,8 +126,13 @@ mod tests {
             .generate_for_tier(&hash, ProofTier::Reflex, 1)
             .unwrap();
 
-        // Verification should fail because token is expired
-        let err = gate.verify(&token, &hash).unwrap_err();
+        // Verify at a far-future `now` — explicit, because on host
+        // `ProofGate::now_ns()` reads TIMER_TICKS which never advances (0),
+        // so the token would look not-yet-expired.
+        let err = gate
+            .verifier_mut()
+            .verify(&token, &hash, 1_000_000_000)
+            .unwrap_err();
         assert!(matches!(err, ProofError::Expired { .. }));
     }
 }

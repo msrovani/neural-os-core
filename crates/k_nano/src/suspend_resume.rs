@@ -84,7 +84,7 @@ pub fn is_suspending() -> bool { SUSPEND_PENDING.load(Ordering::Acquire) }
 ///   3. Jumps to `s3_resume_fn` (C handler in higher half)
 ///
 /// Format (x86-64, position-independent once copied):
-/// ```
+/// ```text
 ///   mov rax, <cr3_phys>       ; 48 B8 + 8 bytes imm64
 ///   mov cr3, rax              ; 0F 22 D8
 ///   mov rax, <rsp_virt>       ; 48 B8 + 8 bytes imm64

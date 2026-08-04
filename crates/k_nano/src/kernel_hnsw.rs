@@ -122,6 +122,11 @@ impl KernelHnsw {
     pub fn insert(&mut self, key: u64, vector: &[f32]) -> Result<(), &'static str> {
         let store = self.store.as_mut().ok_or("HNSW not initialized")?;
         let vk = VectorKey::new(key);
+        // ponytail: proof relaxado (sem ProofEngine real) — mas o mutation_hash
+        // PRECISA bater com o que vector_put_proved calcula internamente, senão
+        // o verifier rejeita (ProofRejected). Espelha a função privada
+        // `compute_vector_mutation_hash` do ruvix-vecgraph.
+        let mutation_hash = mutation_hash_for(vk, vector);
         let cap = Capability::new(
             1,
             ObjectType::VectorStore,
@@ -129,12 +134,11 @@ impl KernelHnsw {
             0,
             1,
         );
-        // ponytail: proof relaxado para não depender de ProofToken real no boot
         let proof = ProofToken::new(
-            [0u8; 32],
+            mutation_hash,
             ProofTier::Standard,
             ProofPayload::Hash {
-                hash: [0u8; 32],
+                hash: mutation_hash,
             },
             1_000_000_000,
             0,
@@ -160,6 +164,22 @@ impl KernelHnsw {
     pub fn len(&self) -> usize {
         self.store.as_ref().map_or(0, |s| s.len())
     }
+}
+
+/// Espelho da função privada `ruvix_vecgraph::vector_store::compute_vector_mutation_hash`
+/// (o proof token de `insert` precisa desse hash exato para passar na verificação).
+fn mutation_hash_for(key: VectorKey, data: &[f32]) -> [u8; 32] {
+    let mut hash = [0u8; 32];
+    let key_bytes = key.raw().to_le_bytes();
+    hash[0..8].copy_from_slice(&key_bytes);
+    for (i, &value) in data.iter().enumerate() {
+        let bytes = value.to_le_bytes();
+        let offset = (8 + (i * 4)) % 24; // Stay within remaining space
+        for j in 0..4 {
+            hash[offset + j] ^= bytes[j];
+        }
+    }
+    hash
 }
 
 #[cfg(test)]

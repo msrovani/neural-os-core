@@ -478,7 +478,10 @@ extern "x86-interrupt" fn ipi_call_function_handler(_stack_frame: InterruptStack
 // --------------------------------------------------------------------------
 // IDT init — cobertura total de 0 a 31 + hardware + syscall
 // --------------------------------------------------------------------------
-
+// cfg(not(windows)): InterruptDescriptorTable é repr(C, align(16)) — static em
+// lazy_static dispara `offset is not a multiple of 16` no codegen MSVC/COFF do
+// host (cargo test). IDT é código de boot, morto em builds de host (windows).
+#[cfg(not(windows))]
 lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
@@ -564,6 +567,7 @@ pub fn init_ap_tss(ap_index: usize, ist_tops: [VirtAddr; 3]) -> ApTss {
 
 /// Load shared IDT + this CPU's TSS on AP, then enable interrupts.
 pub unsafe fn ap_load_idt_and_tss(tss_selector: SegmentSelector) {
+    #[cfg(not(windows))]
     IDT.load();
     x86_64::instructions::tables::load_tss(tss_selector);
     // Enable interrupts
@@ -582,6 +586,7 @@ pub fn init_idt() {
         // o bootloader usa seletor diferente do nosso GDT)
         core::arch::asm!("mov ss, ax", in("ax") 0u16, options(nostack, preserves_flags));
     }
+    #[cfg(not(windows))]
     IDT.load();
     crate::slog_nano!("IDT", "info", "IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.");
 }

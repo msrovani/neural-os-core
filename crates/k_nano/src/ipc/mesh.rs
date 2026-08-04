@@ -384,8 +384,8 @@ mod tests {
         
         let local = unsafe { LocalCellChannel::new(&mut channel, buffer.as_mut_ptr(), buffer.len()) };
         
-        let desc = CellMessageDescriptor::new(1, 2, 3, 10, 42);
-        let payload = b"hello_world";
+        let desc = CellMessageDescriptor::new(1, 2, 3, 11, 42);
+        let payload = b"hello_world"; // 11 bytes
         
         let result = local.send(&desc, payload);
         assert!(result.is_ok());
@@ -398,7 +398,7 @@ mod tests {
         
         assert_eq!(recv_desc.source_id, 1);
         assert_eq!(recv_desc.dest_id, 2);
-        assert_eq!(recv_payload[..10], *payload);
+        assert_eq!(recv_payload[..11], *payload);
     }
 
     #[test]
@@ -413,7 +413,9 @@ mod tests {
 
     #[test]
     fn test_remote_cell_channel_type() {
-        let mut transport = HybridTransport::new(crate::net::transport::TransportConfig::default());
+        let mut config = crate::net::transport::TransportConfig::default();
+        config.src_mac = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+        let mut transport = HybridTransport::new(config);
         transport.init().unwrap();
         
         let remote = unsafe { RemoteCellChannel::new(&mut transport, [0xFF; 6], 1, 2) };

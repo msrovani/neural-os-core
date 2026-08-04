@@ -37,6 +37,7 @@ impl BootLog {
 pub static BOOT_LOG: crate::sync::IrqSafeLock<BootLog> = crate::sync::IrqSafeLock::new(BootLog { buf: [0u8; 65536], pos: 0, start_tick: 0 });
 
 /// Probes serial port: writes scratch reg, reads back. Returns true if port exists.
+#[cfg(target_os = "none")]
 pub unsafe fn probe_port(port: u16) -> bool {
     let lsr: u8;
     core::arch::asm!("in al, dx", out("al") lsr, in("dx") (port + 5), options(nostack, preserves_flags, readonly));
@@ -45,6 +46,15 @@ pub unsafe fn probe_port(port: u16) -> bool {
     let mut check: u8;
     core::arch::asm!("in al, dx", out("al") check, in("dx") (port + 7), options(nostack, preserves_flags, readonly));
     check == 0x5A
+}
+
+/// Host build stub: real port I/O (`in`/`out`) is privileged on the host OS
+/// (STATUS_PRIVILEGED_INSTRUCTION). Serial stays unavailable on host — this
+/// also covers host tests, where k_nano is linked as a dependency WITHOUT
+/// `cfg(test)` (so a plain `#[cfg(not(test))]` gate would not apply).
+#[cfg(not(target_os = "none"))]
+pub unsafe fn probe_port(_port: u16) -> bool {
+    false
 }
 
 use lazy_static::lazy_static;

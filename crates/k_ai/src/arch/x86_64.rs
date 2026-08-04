@@ -569,7 +569,7 @@ pub fn self_test() -> bool {
             0, 1, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1, 1,
             0, 1, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1, 1, 0, -1, 1,
         ];
-        let mut out32 = [0i; 32];
+        let mut out32 = [0i32; 32];
         unsafe { bitwise_add_avx2(a32.as_ptr(), b32.as_ptr(), out32.as_mut_ptr(), 32) };
         for j in 0..32 {
             let expected_val = a32[j] as i32 + b32[j] as i32;
@@ -583,7 +583,7 @@ pub fn self_test() -> bool {
     if has_full_avx512() {
         let a64: [i8; 64] = [1i8; 64];
         let b64: [i8; 64] = [-1i8; 64];
-        let mut out64 = [0i; 64];
+        let mut out64 = [0i32; 64];
         unsafe { bitwise_add_avx512(a64.as_ptr(), b64.as_ptr(), out64.as_mut_ptr(), 64) };
         for j in 0..64 {
             if out64[j] != 0 {

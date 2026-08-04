@@ -516,10 +516,12 @@ mod tests {
 
         let packet_data = b"AIOS_PACKET_DATA";
         let mut send_buffer = [0u8; 1024];
-        transport.send_packet(packet_data, &mut send_buffer).unwrap();
+        let sent_size = transport.send_packet(packet_data, &mut send_buffer).unwrap();
 
         let mut receive_buffer = [0u8; 1024];
-        let result = transport.receive_packet(&send_buffer, &mut receive_buffer);
+        // Receive must see only the frame (ethernet header + payload), not the
+        // whole 1024-byte buffer — raw L2 has no length field.
+        let result = transport.receive_packet(&send_buffer[..sent_size], &mut receive_buffer);
         assert!(result.is_ok());
 
         let size = result.unwrap();

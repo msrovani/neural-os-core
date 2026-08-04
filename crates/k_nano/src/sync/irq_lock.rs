@@ -41,6 +41,10 @@ impl<T> IrqSafeLock<T> {
     /// Restaura o estado anterior (IF flag) quando o guard é dropado.
     pub fn lock(&self) -> IrqSafeGuard<'_, T> {
         let irq_was_enabled = are_irqs_enabled();
+        // Host build/tests: `cli` is privileged (STATUS_PRIVILEGED_INSTRUCTION).
+        // Gate on the kernel target so it also applies when k_nano is a
+        // dependency (deps are compiled without `cfg(test)`).
+        #[cfg(target_os = "none")]
         x86_64::instructions::interrupts::disable();
 
         let my_ticket = self.ticket.fetch_add(1, Ordering::Relaxed);
@@ -61,6 +65,7 @@ impl<T> IrqSafeLock<T> {
     /// o ticket perdido).
     pub fn try_lock(&self) -> Option<IrqSafeGuard<'_, T>> {
         let irq_was_enabled = are_irqs_enabled();
+        #[cfg(target_os = "none")]
         x86_64::instructions::interrupts::disable();
 
         let now_serving = self.serving.load(Ordering::Acquire);
@@ -72,6 +77,7 @@ impl<T> IrqSafeLock<T> {
             Err(_) => {
                 // Lock ocupado — restaura IRQ e retorna None (nenhum ticket foi consumido)
                 if irq_was_enabled {
+                    #[cfg(target_os = "none")]
                     unsafe { x86_64::instructions::interrupts::enable(); }
                 }
                 None
@@ -104,7 +110,9 @@ impl<T> Drop for IrqSafeGuard<'_, T> {
         self.lock.serving.fetch_add(1, Ordering::Release);
         // Restaura IRQ ao estado anterior (se estava enabled, re-enable)
         if self.irq_was_enabled {
+            #[cfg(target_os = "none")]
             unsafe { x86_64::instructions::interrupts::enable(); }
         }
     }
 }
+

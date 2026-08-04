@@ -219,15 +219,35 @@ pub struct HwExpertV4Model {
 
 // ─── HW Expert v5 multi-head ─────────────────────────────────────────
 
+/// Lê tensor ternário no formato export_v4 (tools/train_hw_expert_v4.py):
+///   u32 len + u32 scale + packed (rows*cols+3)/4 bytes.
+/// O campo scale do arquivo é sempre 0 (vestigial) — os pesos ternários
+/// já são ±1/0 absolutos, então usamos 1.0 como scale efetiva.
+fn read_prefixed_ternary(data: &[u8], offset: &mut usize, rows: usize, cols: usize) -> Option<(PackedTernaryTensor, f32)> {
+    let _len = read_u32(data, offset)?;
+    let _scale_raw = read_u32(data, offset)?;
+    let packed = read_ternary_tensor(data, offset, rows, cols)?;
+    Some((packed, 1.0))
+}
+
+/// Lê vec f32 no formato export_v4: u32 len prefix + n f32.
+fn read_prefixed_f32_vec(data: &[u8], offset: &mut usize, n: usize) -> Option<Vec<f32>> {
+    let _len = read_u32(data, offset)?;
+    read_f32_vec(data, offset, n)
+}
+
 /// Carrega modelo v5 multi-head (.bitnet version 5).
 /// Lê o backbone (embed + layers) igual ao v4, depois lê 5 heads pequenos.
+/// Formato real do arquivo (export_v4): num_params u32; tensores com
+/// prefixo u32 len + u32 scale; shapes q,k,v,o = (h,h); g,u = (h,ff);
+/// d = (ff,h); rope (16 f32) por layer; 5 heads prefixed.
 pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
     let mut off = 0;
     let magic = read_u32(data, &mut off)?;
     if magic != 0xBE11BE11 { return None; }
     let version = read_u16(data, &mut off)?;
     if version < 5 { return None; }  // v5 required for multi-head
-    let _num_params = read_u64(data, &mut off).unwrap_or(read_u32(data, &mut off)? as u64);
+    let _num_params = read_u32(data, &mut off)? as u64;
 
     let hidden = read_u16(data, &mut off)? as usize;
     let num_layers = read_u16(data, &mut off)? as usize;
@@ -276,30 +296,31 @@ pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
     }
 
     let kv_head_dim = q_dim / num_heads.max(1);
-    let k_dim = num_kv_heads * kv_head_dim;
     let ffn_group = intermediate_size * q_dim / hidden.max(1);
-    let down_out = q_dim;
 
     // Embed
-    let (embed, embed_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, _vocab_size as usize)?;
+    let (embed, embed_scale) = read_prefixed_ternary(data, &mut off, hidden, _vocab_size as usize)?;
 
     // Layers
     let mut layers = Vec::with_capacity(num_layers);
     for _i in 0..num_layers {
-        let rms_attn = read_f32_vec(data, &mut off, hidden)?;
-        let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
-        let rms_inner_attn = if _has_inner_attn_ln { read_f32_vec(data, &mut off, hidden)? }
+        let rms_attn = read_prefixed_f32_vec(data, &mut off, hidden)?;
+        let rms_ffn = read_prefixed_f32_vec(data, &mut off, hidden)?;
+        let rms_inner_attn = if _has_inner_attn_ln { read_prefixed_f32_vec(data, &mut off, hidden)? }
                               else { vec![1.0; kv_head_dim * num_heads] };
-        let rms_ffn_norm = if _has_ffn_layernorm { read_f32_vec(data, &mut off, intermediate_size)? }
+        let rms_ffn_norm = if _has_ffn_layernorm { read_prefixed_f32_vec(data, &mut off, intermediate_size)? }
                             else { vec![1.0; intermediate_size] };
 
-        let (q, q_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, q_dim)?;
-        let (k, k_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, k_dim)?;
-        let (v, v_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, k_dim)?;
-        let (o, o_scale) = read_ternary_tensor_with_scale(data, &mut off, q_dim, hidden)?;
-        let (gate, gate_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, ffn_group)?;
-        let (up, up_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, ffn_group)?;
-        let (down, down_scale) = read_ternary_tensor_with_scale(data, &mut off, intermediate_size, down_out)?;
+        // Export v4 grava q,k,v,o como (h,h) (q/k nao usados no forward),
+        // g,u como (h,ff), d como (ff,h), e um vetor RoPE de 16 f32 por layer.
+        let (q, q_scale) = read_prefixed_ternary(data, &mut off, hidden, hidden)?;
+        let (k, k_scale) = read_prefixed_ternary(data, &mut off, hidden, hidden)?;
+        let (v, v_scale) = read_prefixed_ternary(data, &mut off, hidden, hidden)?;
+        let (o, o_scale) = read_prefixed_ternary(data, &mut off, hidden, hidden)?;
+        let (gate, gate_scale) = read_prefixed_ternary(data, &mut off, hidden, intermediate_size)?;
+        let (up, up_scale) = read_prefixed_ternary(data, &mut off, hidden, intermediate_size)?;
+        let (down, down_scale) = read_prefixed_ternary(data, &mut off, intermediate_size, hidden)?;
+        let _rope = read_prefixed_f32_vec(data, &mut off, 16)?;
 
         layers.push(LayerWeights {
             rms_attn, q, q_scale, k, k_scale, v, v_scale, o, o_scale,
@@ -309,14 +330,14 @@ pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
         });
     }
 
-    let rms_final = read_f32_vec(data, &mut off, hidden)?;
+    let rms_final = read_prefixed_f32_vec(data, &mut off, hidden)?;
 
     // 5 heads (em vez de unembed + medusa)
-    let family_head = read_ternary_tensor(data, &mut off, hidden, 17)?;
-    let fw_head = read_ternary_tensor(data, &mut off, hidden, 8)?;
-    let agent_head = read_ternary_tensor(data, &mut off, hidden, 9)?;
-    let caps_head = read_ternary_tensor(data, &mut off, hidden, 10)?;
-    let next_head = read_ternary_tensor(data, &mut off, hidden, 9)?;
+    let (family_head, _) = read_prefixed_ternary(data, &mut off, hidden, 17)?;
+    let (fw_head, _) = read_prefixed_ternary(data, &mut off, hidden, 8)?;
+    let (agent_head, _) = read_prefixed_ternary(data, &mut off, hidden, 9)?;
+    let (caps_head, _) = read_prefixed_ternary(data, &mut off, hidden, 10)?;
+    let (next_head, _) = read_prefixed_ternary(data, &mut off, hidden, 9)?;
 
     k_nano::slog_cortex!("HWEXPERT", "info", "v5 multi-head loaded: hidden={} layers={} heads=[17,8,9,10,9] {}KB",
         hidden, num_layers, data.len() / 1024);
@@ -3027,8 +3048,11 @@ pub fn generate_via_model_with_decoder(prompt: &str, dec: &mut StructuredDecoder
 /// the output format (JSON, shell-safe commands, skill commands, or free text).
 ///
 /// # Examples (conceptual)
-/// ```
-/// let json = cortex::generate_structured("list 3 colors", OutputGrammar::Json);
+/// ```no_run
+/// let json = cortex::cortex::generate_structured(
+///     "list 3 colors",
+///     cortex::structured_decode::OutputGrammar::Json,
+/// );
 /// assert!(json.starts_with('{') && json.ends_with('}'));
 /// ```
 pub fn generate_structured(prompt: &str, grammar: OutputGrammar) -> String {

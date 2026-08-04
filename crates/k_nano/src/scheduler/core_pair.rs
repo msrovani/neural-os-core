@@ -250,6 +250,7 @@ impl CorePairAllocator {
                 pair.role0 = CoreRole::System;
                 pair.role1 = CoreRole::Compute;
                 pair.state = CorePairState::Active;
+                self.active_pairs.fetch_add(1, Ordering::Release);
             }
         }
     }
@@ -358,7 +359,15 @@ impl CorePairAllocator {
     /// Falls back silently if APIC is not initialized (stub fallback for QEMU
     /// without LAPIC or early boot before APIC init).
     fn send_wake_ipi(&self, core: u8) {
-        unsafe { crate::apic::send_ipi_reschedule_to(core) }
+        // APIC MMIO/MSR writes are privileged — on host builds (tests) this is
+        // a no-op; the wake state machine is what's being exercised. The kernel
+        // target (x86_64-unknown-none) keeps the real IPI.
+        #[cfg(target_os = "none")]
+        unsafe {
+            crate::apic::send_ipi_reschedule_to(core)
+        }
+        #[cfg(not(target_os = "none"))]
+        let _ = core;
     }
 
     /// Get current timestamp

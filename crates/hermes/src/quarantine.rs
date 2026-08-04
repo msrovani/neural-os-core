@@ -63,10 +63,13 @@ impl QuarantineGate {
             ("disregard", "context override"),
             ("new instructions", "instruction override"),
             ("<s>", "token injection"),
-            ("[INST]", "token injection"),
-            ("[/INST]", "token injection"),
-            ("<<SYS>>", "token injection"),
-            ("<</SYS>>", "token injection"),
+            // Ponytail: input é lowercased (lower.contains) — padrões mistos
+            // (ex: "[INST]") nunca casavam → dead code. Token injection de
+            // verdade só existe em maiúsculas; manter tudo lowercase.
+            ("[inst]", "token injection"),
+            ("[/inst]", "token injection"),
+            ("<<sys>>", "token injection"),
+            ("<</sys>>", "token injection"),
         ];
 
         for &(pattern, reason) in &dangerous_patterns {
@@ -186,14 +189,17 @@ mod tests {
 
     #[test]
     fn test_suspicious_base64() {
-        let b64 = "SGVsbG8gVGhpcyBpcyBhIHZlcnkgbG9uZyBiYXNlNjQgc3RyaW5nIHRoYXQgbWlnaHQgYmUgc3VzcGljaW91cw==";
+        // Threshold estrutural: base64_like > 100 e ratio > 0.8. String curta
+        // (88 chars) ficava abaixo do limiar — input longo p/ testar o gate.
+        let b64 = "U0dWc2JHOGdWR2hwY3lCcGN5QmhJSFpsY25rdGJHOXVaeUJpWVhObE5qUWdjM1J5V3k1bklIUm9ZWFJnWW1VZ2MzVnBjQ2xqYTJWdWN3PT0gdGhpcyBpcyBhIHZlcnkgbG9uZyBiYXNlNjQgc3RyaW5nIHRoYXQgbWlnaHQgYmUgc3VzcGljaW91cw==";
         let result = QuarantineGate::sanitize(b64, "user");
         assert!(matches!(result, QuarantineVerdict::Suspicious(_)));
     }
 
     #[test]
     fn test_excessive_repetition() {
-        let spam = "aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa ";
+        // Gate exige len >= 100 (has_excessive_repetition) — spam curto passava.
+        let spam = "aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa aaaa ";
         let result = QuarantineGate::sanitize(spam, "user");
         assert!(matches!(result, QuarantineVerdict::Blocked(_)));
     }

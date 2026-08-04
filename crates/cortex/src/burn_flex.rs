@@ -71,6 +71,9 @@ mod tests {
     fn test_pack() {
         let w = vec![1i8, -1, 0, 1];
         let p = FlexBackend::pack_ternary(&w);
-        assert_eq!(p[0], 0b01_10_00_01); // bit0:1, bit2:-1=10, bit4:0=00, bit6:1=01
+        // w[0]=1 em bits 0-1 (01), w[1]=-1 em bits 2-3 (10), w[2]=0 em bits 4-5 (00),
+        // w[3]=1 em bits 6-7 (01) → byte = 0b0100_1001. O literal antigo (0b01_10_00_01)
+        // lia MSB-first e divergia do código.
+        assert_eq!(p[0], 0b0100_1001);
     }
 }

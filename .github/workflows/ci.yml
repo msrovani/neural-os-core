@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: check + test + build + boot smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins nightly-2026-07-05 (cross-platform);
+      # rustup auto-installs the toolchain + targets/components on first use.
+      - name: Show active toolchain
+        run: rustup show active-toolchain
+
+      - name: cargo check --release (0 errors)
+        run: cargo check --release
+
+      - name: Host unit tests
+        run: cargo test --workspace --exclude neural-kernel --exclude boot --quiet
+
+      # Default member (boot) builds the kernel via bindeps and emits target/uefi.img.
+      - name: Build boot image
+        run: cargo build --release
+
+      # Stdlib-only Python; validates the FAT32 data disk pipeline.
+      - name: Generate data disk
+        run: python3 tools/build_image.py
+
+      - name: Install QEMU + OVMF
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf
+
+      # Boot smoke: UEFI only (BIOS image triple-faults), TCG (no KVM on runner),
+      # no data disk (TCG ATA PIO can hang the boot). Kernel must reach the
+      # AgentFleet phase and the runtime tick loop before timeout kills QEMU.
+      - name: QEMU boot smoke test
+        run: |
+          timeout 150 qemu-system-x86_64 -m 6G -smp 2 -accel tcg \
+            -drive format=raw,file=target/uefi.img,if=ide,index=0 \
+            -drive if=pflash,format=raw,file=/usr/share/ovmf/OVMF.fd,readonly=on \
+            -netdev user,id=n0 -device e1000,netdev=n0 \
+            -display none -serial file:logs/boot.txt || true
+          grep -q "Phase 6" logs/boot.txt && grep -q "tick=" logs/boot.txt \
+            || { echo "BOOT SMOKE FAILED"; tail -50 logs/boot.txt; exit 1; }
+          echo "BOOT SMOKE PASS"

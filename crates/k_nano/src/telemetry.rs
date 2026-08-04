@@ -396,9 +396,10 @@ mod tests {
         let n = ring.drain(&mut out, 5000);
         assert_eq!(n, 4096);
 
-        // The oldest 4 events were dropped (0..3), first should be 4
-        assert_eq!(out[0].agent_id, 4);
-        assert_eq!(out[4095].agent_id, 4099);
+        // Newest-disappear policy (see `push`): when full, the NEW pushes
+        // (4096..4099) are dropped, so the ring holds events 0..4095.
+        assert_eq!(out[0].agent_id, 0);
+        assert_eq!(out[4095].agent_id, 4095);
     }
 
     /// Drain with zero max returns zero.

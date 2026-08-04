@@ -55,8 +55,8 @@ mod tests {
 
     #[test]
     fn test_datetime_known() {
-        // 2026-07-30 12:00:00 UTC = 1783929600
-        assert_eq!(datetime(1783929600), "2026-07-30 12:00:00");
+        // 1783929600 = 2026-07-13 08:00:00 UTC
+        assert_eq!(datetime(1783929600), "2026-07-13 08:00:00");
     }
 
     #[test]

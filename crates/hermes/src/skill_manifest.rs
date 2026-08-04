@@ -594,7 +594,8 @@ mod tests {
         assert!(json.contains(r#""type":"claw""#));
         assert!(json.contains(r#""risk_level":"low""#));
         assert!(json.contains(r#""system_skill":false"#));
-        assert!(json.contains(r#""bio"#)); // interop fields
+        assert!(json.contains(r#""interop""#)); // interop fields
+        assert!(json.contains(r#""mcp":true"#));
     }
 
     #[test]
@@ -664,7 +665,7 @@ mod tests {
     #[test]
     fn test_skill_manifest_fyy_compat() {
         // Testa que o JSON gerado tem campos que o schema FYY espera
-        let m = SkillManifest::new("fyy-compat", "FYY compat test");
+        let mut m = SkillManifest::new("fyy-compat", "FYY compat test");
         m.interop.fyy = true;
         let json = m.to_json();
         // O JSON deve conter todos os campos do schema FYY v1
