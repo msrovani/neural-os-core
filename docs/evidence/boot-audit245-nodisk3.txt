@@ -1,0 +1,1008 @@
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1,0x1)/Ata(Primary,Master,0x0)
+[01;01H[01;01H[01;01Hl[01;02Hi[01;03Hm[01;04Hi[01;05Hn[01;06He[01;07H:[01;08H [01;09HL[01;10Ho[01;11Ha[01;12Hd[01;13Hi[01;14Hn[01;15Hg[01;16H [01;17He[01;18Hx[01;19He[01;20Hc[01;21Hu[01;22Ht[01;23Ha[01;24Hb[01;25Hl[01;26He[01;27H [01;28H`[01;29Hb[01;30Ho[01;31Ho[01;32Ht[01;33H([01;34H)[01;35H:[01;36H/[01;37Hk[01;38He[01;39Hr[01;40Hn[01;41He[01;42Hl[01;43H.[01;44He[01;45Hl[01;46Hf[01;47H`[01;48H.[01;49H.[01;50H.[01;51H[01;01H[02;01Hl[02;02Hi[02;03Hm[02;04Hi[02;05Hn[02;06He[02;07H:[02;08H [02;09HP[02;10Hh[02;11Hy[02;12Hs[02;13Hi[02;14Hc[02;15Ha[02;16Hl[02;17H [02;18Hb[02;19Ha[02;20Hs[02;21He[02;22H:[02;23H [02;24H [02;25H [02;26H0[02;27Hx[02;28H9[02;29H8[02;30H3[02;31H6[02;32H9[02;33H0[02;34H0[02;35H0[02;36H[02;01H[03;01Hl[03;02Hi[03;03Hm[03;04Hi[03;05Hn[03;06He[03;07H:[03;08H [03;09HV[03;10Hi[03;11Hr[03;12Ht[03;13Hu[03;14Ha[03;15Hl[03;16H [03;17Hb[03;18Ha[03;19Hs[03;20He[03;21H:[03;22H [03;23H [03;24H [03;25H [03;26H0[03;27Hx[03;28Hf[03;29Hf[03;30Hf[03;31Hf[03;32Hf[03;33Hf[03;34Hf[03;35Hf[03;36H8[03;37H0[03;38H0[03;39H0[03;40H0[03;41H0[03;42H0[03;43H0[03;44H[03;01H[04;01Hl[04;02Hi[04;03Hm[04;04Hi[04;05Hn[04;06He[04;07H:[04;08H [04;09HS[04;10Hl[04;11Hi[04;12Hd[04;13He[04;14H:[04;15H [04;16H [04;17H [04;18H [04;19H [04;20H [04;21H [04;22H [04;23H [04;24H [04;25H [04;26H0[04;27Hx[04;28H0[04;29H[04;01H[05;01Hl[05;02Hi[05;03Hm[05;04Hi[05;05Hn[05;06He[05;07H:[05;08H [05;09HE[05;10HL[05;11HF[05;12H [05;13He[05;14Hn[05;15Ht[05;16Hr[05;17Hy[05;18H [05;19Hp[05;20Ho[05;21Hi[05;22Hn[05;23Ht[05;24H:[05;25H [05;26H0[05;27Hx[05;28Hf[05;29Hf[05;30Hf[05;31Hf[05;32Hf[05;33Hf[05;34Hf[05;35Hf[05;36H8[05;37H0[05;38H0[05;39H9[05;40H5[05;41Ha[05;42Hb[05;43H0[05;44H[05;01H[06;01Hl[06;02Hi[06;03Hm[06;04Hi[06;05Hn[06;06He[06;07H:[06;08H [06;09HB[06;10Ha[06;11Hs[06;12He[06;13H [06;14Hr[06;15He[06;16Hv[06;17Hi[06;18Hs[06;19Hi[06;20Ho[06;21Hn[06;22H:[06;23H [06;24H [06;25H [06;26H2[06;27H[06;01H[07;01Hl[07;02Hi[07;03Hm[07;04Hi[07;05Hn[07;06He[07;07H:[07;08H [07;09HR[07;10He[07;11Hq[07;12Hu[07;13He[07;14Hs[07;15Ht[07;16Hs[07;17H [07;18Hc[07;19Ho[07;20Hu[07;21Hn[07;22Ht[07;23H:[07;24H [07;25H [07;26H6[07;27H[07;01H[08;01Hl[08;02Hi[08;03Hm[08;04Hi[08;05Hn[08;06He[08;07H:[08;08H [08;09HT[08;10Ho[08;11Hp[08;12H [08;13Ho[08;14Hf[08;15H [08;16HH[08;17HH[08;18HD[08;19HM[08;20H:[08;21H [08;22H [08;23H [08;24H [08;25H [08;26H0[08;27Hx[08;28H1[08;29Hc[08;30H0[08;31H0[08;32H0[08;33H0[08;34H0[08;35H0[08;36H0[08;37H[08;01H[09;01Ha[09;02Hc[09;03Hp[09;04Hi[09;05H:[09;06H [09;07HF[09;08Ho[09;09Hu[09;10Hn[09;11Hd[09;12H [09;13HR[09;14HS[09;15HD[09;16HP[09;17H [09;18Ha[09;19Ht[09;20H [09;21H0[09;22Hx[09;23Hb[09;24Hf[09;25H7[09;26H7[09;27He[09;28H0[09;29H0[09;30H0[09;31H[09;01H[10;01Ha[10;02Hc[10;03Hp[10;04Hi[10;05H:[10;06H [10;07HF[10;08Ho[10;09Hu[10;10Hn[10;11Hd[10;12H [10;13HX[10;14HS[10;15HD[10;16HP[10;17H [10;18Ha[10;19Ht[10;20H [10;21H0[10;22Hx[10;23Hb[10;24Hf[10;25H7[10;26H7[10;27He[10;28H0[10;29H1[10;30H4[10;31H[10;01H[11;01H[neural] Limine handoff
+L
+boot=limine
+[HHDM] BaseRevision rev2=OK
+[HHDM] response_ptr=0xffff8000bde32000 OK
+[HHDM] offset=0xffff800000000000
+[T+0] [R3] [jarbas] [Display] [info] - Limine/raw fb: 1280x800 bpp=4 stride=5120 pitch=5120 @ffff8000c0000000 rgb=false
+[T+0] [R3] [jarbas] [Display] [info] - Framebuffer raw configurado: 1280x800 bpp=4 stride=5120 @ffff8000c0000000
+[T+0] [R0] [nk] [Boot] [info] - boot=limine
+[T+0] J{"t":0,"l":"BOOT","a":"DISPLAY","e":"fb"[T+0] ,"w":1280[T+0] ,"h":800[T+0] ,"bpp":4[T+0] }
+[T+0] [R0] [nk] [Boot] [info] - FB 1280x800 bpp=4 — ckpt OK; continue IDT/mem
+[T+0] J{"t":0,"l":"BOOT","a":"KERNEL","e":"start"[T+0] ,"serial":1[T+0] ,"pm_off":18446603336221196288[T+0] }
+[T+0] [R0] [k-nano] [IDT] [info] - IDT carregada: vetores 0-31 (exceções) + 32-33 (IRQ) + 34-255 (genérico) cobertos.
+[T+0] [R0] [nk] [IDT] [info] - patch_idt: overlays bin instalados (0x90 syscall DPL3, #GP/#PF hooks P6+demand).
+[T+0] J{"t":0,"l":"BOOT","a":"IDT","e":"ready"[T+0] ,"vecs":256[T+0] }
+[T+0] J{"t":0,"l":"DBG","a":"MEM","e":"usable_regions"[T+0] ,"n":9[T+0] ,"boot":limine[T+0] }
+[T+0] [R0] [k-nano] [HEAP] [TALC] - Tier 1 deferred (call talc_init_post_memory after init_global_allocator)
+[T+0] [R0] [nk] [Boot] [dbg] - heap init OK (Tier 1 talc)
+[T+0] [R2] [cortex] [CORTEX] [ARENA] - Tier 2 mapped: virt=0x480000000000 size=512 MB
+[T+0] [R0] [nk] [Boot] [dbg] - cortex arena init OK (Tier 2 bump)
+[T+0] [R0] [k-nano] [LOG] [info] - BOOT: Heap init OK
+[T+0] [R0] [nk] [BOOT] [info] - Consumer BOOT_PHASE inscrito no EventBus
+[T+0] [R0] [nk] [Log] [msg] - [BOOT:SafeHarbor] Serial+Display+IDT prontos
+[T+0] [R0] [nk] [Log] [msg] - [BOOT:MemoryCore] Frame allocator + page tables + heap
+[T+0] [R1] [k-hal] [UnlockDAG] [grant] - token=BootSmokeOk
+[T+0] [R0] [nk] [Boot] [info] - step=smoke status=OK boot=limine detail=MemoryCore
+[T+0] [R0] [nk] [HW-GATE] [info] - step=smoke status=OK boot=limine CapToken=BootSmokeOk
+[T+0] [R0] [nk] [HW-GATE] [info] - begin count=7 (rg HW-GATE no serial)
+[T+0] [R0] [nk] [HW-GATE] [await] - id=ATH10K_A5_SCAN status=AWAITING_REAL_HW need=WMI scan SSID do ar (QCA6174) pass_when=step=scan RF + SSIDs reais grep=ATH10K|WIFI-HW
+[T+0] [R0] [nk] [HW-GATE] [await] - id=ATH10K_ASSOC status=AWAITING_REAL_HW need=assoc/WPA2 link up pass_when=WifiState Connected + smoltcp wifi grep=WIFI-HW
+[T+0] [R0] [nk] [HW-GATE] [await] - id=GPU_CANARY_GOLDEN status=AWAITING_REAL_HW need=vector_add golden LegacyAcr (Note GTX1050=teste) pass_when=VERDICT=PASS + CapToken GpuCompute grep=GPU-HW
+[T+0] [R0] [nk] [HW-GATE] [await] - id=GPU_GSP status=AWAITING_REAL_HW need=GspBackend Turing+ canario pass_when=VERDICT=PASS family=turing|ampere|ada grep=GPU-HW
+[T+0] [R0] [nk] [HW-GATE] [await] - id=I225_E2E status=AWAITING_REAL_HW need=igc TX/RX real (QEMU sem emu) pass_when=DHCP/HTTP via i225 grep=I225|NET
+[T+0] [R0] [nk] [HW-GATE] [await] - id=USB_HUB status=AWAITING_REAL_HW need=xHCI hub TT/route pass_when=hub enumerate (nao hub=AWAITING) grep=xHCI|USB
+[T+0] [R0] [nk] [HW-GATE] [await] - id=BOOT_011_SMOKE status=CLOSED need=boot past MemoryCore (Limine preferido; 0.11 se chegar) pass_when=BootSmokeOk + step=smoke grep=bootloader|Boot
+[T+0] [R0] [nk] [HW-GATE] [info] - end
+[T+0] [R0] [nk] [IPC] [info] - step=bus status=OK VERDICT=PASS reason=messagebus_roundtrip
+[T+0] [R0] [nk] [ASYNC-IO] [info] - step=smoke status=OK VERDICT=PASS reason=poll_budget completed=4 hybrid=ticks+io jobs=http+tcp
+[T+0] [R0] [nk] [GIT] [info] - step=pack status=PARTIAL objs=1 VERDICT=PARTIAL reason=pack_trunc
+[T+0] [R3] [hermes] [TLS] [warn] - fetch_https: bridge not registered, delegating to net_bridge (kernel https_get)
+[T+0] [R0] [nk] [GIT] [info] - step=refs status=SKIP VERDICT=SKIP reason=net_bridge: kernel HTTPS not registered (parse_ok=1 pack_api=1)
+[T+0] [R0] [nk] [WIFI-HW] [info] - step=softmac status=SKIP VERDICT=AWAITING_REAL_HW reason=no_WifiAssociated (e1000=net_gate)
+[T+0] [R0] [nk] [WIFI-HW] [info] - step=wpa2 status=OK phase=pmk ssid_len=8 VERDICT=PARTIAL reason=pmk_derived
+[T+0] [R0] [nk] [WIFI-HW] [info] - step=wpa2 status=OK phase=msg4 VERDICT=PARTIAL reason=hs_demo_no_mmio (inject on Note BAR)
+[T+0] [R0] [nk] [WIFI-HW] [info] - step=wifi_net status=SKIP VERDICT=AWAITING_REAL_HW reason=softmac_off (e1000=net_gate)
+[T+0] [R0] [nk] [BOOT] [info] - step=limine_esp status=OK BootSmokeOk=1 VERDICT=PARTIAL reason=tags_ok esp_qemu=AWAITING_LAB
+[T+0] [R0] [nk] [WIFI-HW] [info] - step=ath10k_note status=SKIP VERDICT=AWAITING_REAL_HW reason=L32_no_lab_serial
+[T+0] [R0] [nk] [TLS] [info] - step=ca_chain status=OK pins=1 VERDICT=PASS
+[T+0] [R3] [hermes] [UPDATE] [info] - step=git_bridge status=OK slot=1 syn_len=35 VERDICT=PARTIAL reason=api_ready
+[T+0] [R0] [nk] [NTP] [info] - step=rtc status=SKIP VERDICT=SKIP reason=cmos_write_off
+[T+0] [R0] [nk] [NTP] [info] - step=nts status=SKIP VERDICT=SKIP reason=nts_not_implemented
+[T+0] [R0] [nk] [NTP] [info] - step=wallclock status=AWAITING VERDICT=PARTIAL reason=ticks_only
+[T+0] [R3] [jarbas] [THEME] [info] - Aplicado: hermes-dark
+[T+0] [R0] [nk] [THEME] [info] - step=bridge status=OK n=5 VERDICT=PASS reason=apply_hermes-dark
+[T+0] [R0] [nk] [NOTIFY] [info] - toast=L38 notify smoke
+[T+0] [R0] [nk] [NOTIFY] [info] - step=clip_notify status=OK VERDICT=PASS
+[T+0] [R0] [k-nano] [CHIME] [info] - step=boot_chime status=SKIP VERDICT=SKIP reason=feature_off
+[T+0] [R3] [jarbas] [VCON] [info] - switch=F1 VERDICT=PARTIAL
+[T+0] [R3] [jarbas] [VCON] [info] - switch=F2 VERDICT=PARTIAL
+[T+0] [R3] [jarbas] [VCON] [info] - switch=F1 VERDICT=PARTIAL
+[T+0] [R3] [jarbas] [VCON] [info] - step=vconsole status=OK n=6 VERDICT=PARTIAL reason=switch_mvp
+[T+0] [R3] [jarbas] [SCREEN] [info] - step=screensaver status=OK modes=Blank,Stars VERDICT=PASS
+[T+0] [R0] [nk] [MAN] [info] - step=manpages status=OK VERDICT=PASS
+[T+0] [R3] [jarbas] [IMG] [info] - step=pbm status=OK VERDICT=PARTIAL reason=parse_p1_mvp
+[T+0] [R0] [k-nano] [SEARCH] [info] - step=fts status=OK hits=1 VERDICT=PARTIAL
+[T+0] [R0] [k-nano] [USERS] [info] - step=sha256_acct status=OK VERDICT=PASS
+[T+0] [R0] [k-nano] [FWCFG] [info] - step=probe status=OK VERDICT=PARTIAL reason=qemu_signature
+[T+0] [R0] [k-nano] [FWCFG] [info] - step=dir_read status=OK VERDICT=PARTIAL entries=0
+[T+0] [R0] [nk] [HTTP] [info] - step=cf_challenge status=SKIP VERDICT=SKIP reason=honesty_no_solver (L47)
+[T+0] [R0] [k-nano] [USB] [hub] - hub=ADDR status=SKIP VERDICT=SKIP reason=no_child_ccs
+[T+0] [R0] [k-nano] [BTRFS] [info] - step=read_mvp status=OK VERDICT=PARTIAL reason=probe_api_ready (no volume=SKIP mount)
+[T+0] [R0] [k-nano] [LUKS] [info] - step=open status=ESCALATE VERDICT=PARTIAL reason=hitl_passphrase device=nvme0p3
+[T+0] [R0] [k-nano] [LUKS] [info] - step=smoke status=OK VERDICT=PARTIAL reason=open_api_no_decrypt
+[T+0] [R0] [nk] [EXT4] [info] - step=multiblock_write status=OK VERDICT=PARTIAL reason=write_file_root_optin journal=absent
+[T+0] [R0] [nk] [VFS] [info] - step=storage_bridge status=OK devices=0 VERDICT=PARTIAL reason=fd_plus_bus
+[T+0] [R0] [k-nano] [SMP] [info] - step=ap_pollable status=SKIP VERDICT=SKIP reason=feature_off (safe default)
+[T+0] [R0] [nk] [HW-GATE] [info] - step=note_lab status=SKIP VERDICT=AWAITING_LAB reason=L54_gpu_or_i225
+[T+0] [R0] [nk] [HDA] [info] - step=multistream status=PARTIAL VERDICT=PARTIAL reason=sd0_capture_sd1_playback_exists widgets=residual
+[T+0] [R0] [nk] [POWER] [info] - step=s3 status=SKIP VERDICT=AWAITING_HW reason=suspend_resume_mvp_stub
+[T+0] [R0] [k-nano] [FW] [info] - step=stateful status=OK deny=1 allow=1 VERDICT=PASS
+[T+0] [R0] [nk] [IPC] [info] - step=capgate status=OK VERDICT=PASS reason=deny_ipc_token_invalid
+[T+0] [R0] [nk] [BT] [info] - step=hci status=SKIP VERDICT=SKIP reason=no_dongle
+[T+0] [R0] [nk] [ELF] [info] - step=thin status=OK VERDICT=PARTIAL reason=detect_entry (WASM preferred ADR-0059)
+[T+0] [R0] [nk] [GPU] [info] - step=gsp status=SKIP VERDICT=SKIP reason=no_gsp_silicon_lab (scaffold ADR-0067)
+[T+0] [R0] [k-nano] [ENV] [info] - hv=TCG sandbox=true smp=true avx2=false avx512=false fma=false max_aps=4 isa=scalar
+[T+0] [R0] [k-nano] [CPU] [info] - sse42=false avx=false avx2=false fma=false bmi2=false mwait=false clflushopt=false amx=false hybrid=false
+[T+0] [R0] [k-nano] [CACHE] [info] - L1D=32768 L1I=32768 L2=262144 L3=4194304 line=64
+[T+0] [R0] [k-nano] [CPU] [info] - ITD/HFI probe=false (scheduling hints absent)
+[T+0] [R0] [nk] [SYSCALL] [info] - SYSCALL/SYSRET gated off (probe=true hv=Tcg) — fallback int 0x90
+[T+0] [R0] [k-nano] [LOG] [info] - BOOT: PlatformProbe+SIMD enabled
+[T+0] [R0] [nk] [SIMD] [info] - AVX2=NAO AVX512=NAO isa=scalar
+[T+0] [R0] [k-nano] [TPM] [info] - ausente (sem tabela ACPI TPM2).
+[T+0] [R0] [k-nano] [LOG] [info] - BOOT: TPM probe done
+[T+0] [R0] [nk] [Log] [msg] - [BOOT:SystemBringup] SIMD+heap+TPM — Cortex/System prontos
+[T+0] [R0] [k-nano] [HEAP] [BUMP] - extendido para 2048 MB (393216 páginas)
+[T+0] [R0] [k-nano] [HEAP] [TALC] - Tier 1 ready: virt=0x400000080000 size=511 MB
+[T+0] [R0] [nk] [BEI] [init] - Starting BEI initialization (8 waves)
+[T+0] [R0] [nk] [BEI] [wave0] - MPMC queue created (cap=256)
+[T+0] [R0] [nk] [BEI] [wave1] - BudgetManager + ExpertLifecycleManager created
+[T+0] [R0] [nk] [BEI] [wave2] - CellNetwork (8 regions) + PlasticityController created
+[T+0] [R0] [nk] [BEI] [wave2] - Spawned 16 cells across 8 regions
+[T+0] [R0] [nk] [BEI] [wave3] - DynamicMoE created
+[T+0] [R0] [nk] [BEI] [wave4] - MemoryStore L0-L7 initialized
+[T+0] [R0] [nk] [BEI] [wave5] - AffectRegulator created (neutral state)
+[T+0] [R0] [nk] [BEI] [wave6] - ExecutiveSupervisor created (7-phase loop)
+[T+0] [R0] [nk] [BEI] [wave7] - SoulMirrorState created
+[T+0] [R0] [nk] [BEI] [connect] - Cross-component connections established
+[T+0] [R0] [nk] [BEI] [init] - All 8 waves initialized and connected
+[T+0] [R0] [nk] [BEI] [init] - BitNet Ecosystem Intelligence initialized (8 waves)
+[T+0] [R0] [nk] [Log] [msg] - [BOOT:Diagnostics] Allocator global pronto (DiagnosticSkill depois)
+[T+0] [R0] [nk] [Boot] [dbg] - slab metrics: 0 0
+[T+0] [R2] [cortex] [LLM] [info] - CortexAgent ativo; aguardando load do modelo.
+[T+0] [R0] [nk] [Log] [msg] - [BOOT:HardwareDiscovery] PCI+ACPI+APIC+SMP sync
+[T+0] J{"t":0,"l":"BOOT","a":"PCI","e":"scan"[T+0] ,"n":6[T+0] }
+[T+0] J{"t":0,"l":"PCI","a":"DEV","e":"found"[T+0] ,"idx":0[T+0] ,"bus":0[T+0] ,"dev":0[T+0] ,"fn":0[T+0] ,"vid":32902[T+0] ,"did":4663[T+0] ,"class":6[T+0] }
+[T+0] J{"t":0,"l":"PCI","a":"DEV","e":"found"[T+0] ,"idx":1[T+0] ,"bus":0[T+0] ,"dev":1[T+0] ,"fn":0[T+0] ,"vid":32902[T+0] ,"did":28672[T+0] ,"class":6[T+0] }
+[T+0] J{"t":0,"l":"PCI","a":"DEV","e":"found"[T+0] ,"idx":2[T+0] ,"bus":0[T+0] ,"dev":1[T+0] ,"fn":1[T+0] ,"vid":32902[T+0] ,"did":28688[T+0] ,"class":1[T+0] }
+[T+0] J{"t":0,"l":"PCI","a":"DEV","e":"found"[T+0] ,"idx":3[T+0] ,"bus":0[T+0] ,"dev":1[T+0] ,"fn":3[T+0] ,"vid":32902[T+0] ,"did":28947[T+0] ,"class":6[T+0] }
+[T+0] J{"t":0,"l":"PCI","a":"DEV","e":"found"[T+0] ,"idx":4[T+0] ,"bus":0[T+0] ,"dev":2[T+0] ,"fn":0[T+0] ,"vid":4660[T+0] ,"did":4369[T+0] ,"class":3[T+0] }
+[T+0] J{"t":0,"l":"PCI","a":"DEV","e":"found"[T+0] ,"idx":5[T+0] ,"bus":0[T+0] ,"dev":3[T+0] ,"fn":0[T+0] ,"vid":32902[T+0] ,"did":4110[T+0] ,"class":2[T+0] }
+[T+0] [R0] [k-nano] [ACPI] [info] - RSDP encontrado em 0xbf77e014. Revisao: 2. RSDT/XSDT em 0xbf77d0e8
+[T+0] [R0] [k-nano] [ACPI] [info] - Tabela RSDT/XSDT: 76 bytes, 5 entradas (8 bytes cada).
+[T+0] [R0] [k-nano] [ACPI] [info] - FADT encontrado em 0xbf779000
+[T+0] [R0] [k-nano] [ACPI] [info] - FACS em 0xbf7dd000 (64 bytes)
+[T+0] [R0] [k-nano] [ACPI] [warn] - FACS sem waking vector — S3 resume pode nao funcionar
+[T+0] [R0] [k-nano] [ACPI] [info] - DSDT _S5_ SLP_TYPa=11
+[T+0] [R0] [k-nano] [ACPI] [info] - DSDT _S3_ SLP_TYP3=2
+[T+0] [R0] [k-nano] [ACPI] [info] - FADT PM1a_CNT=0xb004 SLP_TYPa=Some(11) SLP_TYP3=2
+[T+0] [R0] [k-nano] [ACPI] [info] - MADT encontrado em 0xbf778000
+[T+0] [R0] [k-nano] [ACPI] [info] - IOAPIC ID 0 em 0xfec00000
+[T+0] [R0] [k-nano] [ACPI] [info] - ISO: source=0 gsi=2 flags=0x0000
+[T+0] [R0] [k-nano] [ACPI] [info] - ISO: source=5 gsi=5 flags=0x000d
+[T+0] [R0] [k-nano] [ACPI] [info] - ISO: source=9 gsi=9 flags=0x000d
+[T+0] [R0] [k-nano] [ACPI] [info] - ISO: source=10 gsi=10 flags=0x000d
+[T+0] [R0] [k-nano] [ACPI] [info] - ISO: source=11 gsi=11 flags=0x000d
+[T+0] [R0] [k-nano] [ACPI] [info] - MADT: LAPIC base 0xfee00000, IOAPIC base 0xfec00000, LAPICs: 2, IOAPICs: 1
+[T+0] [R0] [k-nano] [APIC] [info] - Inicializando APIC...
+[T+0] [R0] [k-nano] [APIC] [info] - IOAPIC/LAPIC pages mapped uncacheable.
+[T+0] [R0] [k-nano] [APIC] [info] - SVR set early: 0x1ff
+[T+0] [R0] [k-nano] [APIC] [info] - LAPIC base via MSR: 0xfee00000
+[T+0] [R0] [k-nano] [APIC] [info] - LAPIC inicializado. Base: 0xffff8000fee00000
+[T+0] [R0] [k-nano] [APIC] [info] - PIC 8259 desabilitado (mascara todos IRQs).
+[T+0] [R0] [k-nano] [PIT] [info] - Canal 0 programado: modo 3, divisor 65536 (18.2 Hz).
+[T+0] [R0] [k-nano] [APIC] [info] - IOAPIC em 0xffff8000fec00000. Max redirecionamentos: 23
+[T+0] [R0] [k-nano] [APIC] [info] - IOAPIC verificado: kbd GSI 1 (0x00:0x00000021)
+[T+0] [R0] [k-nano] [APIC] [info] - Teclado (IRQ1) redirecionado para vetor 33. RTEs 0-1 ativos, demais mascarados.
+[T+0] [R0] [k-nano] [APIC] [info] - Mouse (IRQ12) GSI 12 → vetor 44.
+[T+0] [R0] [k-nano] [APIC] [info] - LAPIC timer iniciado: vetor 32, count=8388608, div=1.
+[T+0] [R0] [k-nano] [APIC] [info] - APIC operacional. x2APIC=false (STI deferred)
+[T+0] [R0] [k-nano] [SMP] [info] - Inicializando SMP (SIPI)...
+[T+0] [R0] [k-nano] [SMP] [info] - BSP PerCpu inicializado. LAPIC ID: 0
+[T+0] [R0] [k-nano] [SMP] [info] - Trampoline page em 0x40000
+[T+0] [R0] [k-nano] [SMP] [warn] - map_to tramp 0x40000 falhou/ja-existe — tenta SIPI mesmo assim
+[T+0] [R0] [k-nano] [SMP] [info] - Trampoline em 0x40000 (286 bytes).
+[T+0] [R0] [k-nano] [SMP] [info] - INIT-SIPI-SIPI sequencial (vetor=0x40, APs=1)...
+[T+0] [R0] [k-nano] [SMP] [warn] - AP LAPIC 1 timeout (nao subiu)
+[T+0] [R0] [k-nano] [SMP] [info] - APs acordados: 0
+[T+0] [R0] [k-nano] [SMP] [info] - CorePools r0=1 r1=0 r2=0 bsp_type=P
+[T+0] [R0] [k-nano] [PIN] [info] - Core pinning inicializado: strategy=None hermes=1 cortex=1 jarbas=1
+[TIMER] Interrupt fired! tick=0
+[TIMER] Interrupt fired! tick=1
+[T+2] [R0] [k-nano] [TIMER] [info] - LAPIC direct: 1000000 Hz (tsc_hz=2000000000)
+[TIMER] Interrupt fired! tick=2
+[T+3] [R0] [nk] [PLATFORM] [info] - sync OK (PCI+ACPI+APIC+SMP) STI=1
+[T+3] [R0] [nk] [ADAPT] [info] - profile=StandardUma simd=64bit
+[T+3] [R0] [nk] [ADAPT] [info] - SIMD dispatch=64bit expert_size=8192KB
+[T+3] [R0] [k-nano] [PIN] [info] - Pinning strategy: None
+[T+3] [R0] [k-nano] [PIN] [info] - Hermes pool: 1 cores
+[T+3] [R0] [k-nano] [PIN] [info] - Cortex pool: 1 cores
+[T+3] [R0] [k-nano] [PIN] [info] - Jarbas pool: 1 cores
+[T+3] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] Drivers de HW (NIC/ATA/USB/GPU)
+[T+3] [R3] [hermes] [Net] [info] - Hypervisor detected: TCGTCGTCGTCG
+[TIMER] Interrupt fired! tick=3
+[T+4] [R0] [nk] [ENV] [info] - Sandbox detectado: TCGTCGTCGTCG — usando bypass serial
+[T+4] [R3] [hermes] [Net] [info] - e1000 detectado: 00:03.00 device=0x100e
+[T+4] [R0] [k-nano] [Net] [e1000] - Detectado vendor=0x8086 device=0x100e MMIO=0xc1040000 virt=0xffff8000c1040000
+[T+4] [R0] [k-nano] [Net] [e1000] - Reset OK
+[TIMER] Interrupt fired! tick=4
+[T+5] [R0] [k-nano] [Net] [e1000] - Bus Master OK after reset: cmd=0x0007
+[T+5] [R0] [k-nano] [Net] [e1000] - MAC: 52:54:00:12:34:56
+[T+5] [R0] [k-nano] [Net] [e1000] - MAC re-written: RAL=0x12005452 RAH=0x80005634
+[T+5] [R0] [k-nano] [Net] [e1000] - CTRL forced link UP: wrote=0x00000061 readback=0x00000061
+[T+8] [R0] [k-nano] [Net] [e1000] - Init OK. TX descs=64 RX descs=64 RCTL=0x0400801e
+[T+8] [R3] [hermes] [Net] [info] - e1000 iniciado. MAC: 52:54:00:12:34:56
+[T+9] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] E1000 init
+[T+9] [R0] [nk] [ENV] [info] - Sistema: QEMU | Rede: fisica
+[T+9] [R0] [nk] [Net] [tick] - t=0 bootstrap_early: netmode=USER (slirp) — static 10.0.2.15
+[T+9] [R3] [hermes] [Net] [info] - Hypervisor detected: TCGTCGTCGTCG
+[T+9] [R0] [nk] [Net] [tick] - t=0 bootstrap_early: Dev env — L3 + L3.5 RX + DNS/HTTP smoke best-effort
+[T+10] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L2: NETSTACK init MAC=52:54:00:12:34:56
+[T+11] [R3] [hermes] [Net] [info] - Static IP: 10.0.2.15/24 gw=10.0.2.1 dns=10.0.2.3
+[T+11] [R0] [nk] [Net] [tick] - t=0 Static IP 10.0.2.15/24 gw=10.0.2.1 dns=10.0.2.3 (QEMU user/slirp)
+[T+11] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L3 OK (nic=true configured=true)
+[T+11] [R0] [k-nano] [Net] [e1000] - CTRL=0x00000061 STATUS=0x80080783 link=UP speed=1000Mb AV=1
+[T+11] [R0] [k-nano] [Net] [e1000] - RDH=0 RDT=63 TDH=0 TDT=0 RCTRL=0x0400801e RAH=0x80005634
+[T+11] [R0] [k-nano] [Net] [e1000] - RDBAL=0x814c4000 RDBAH=0x00000000 RDLEN=1024 ICR=0x00000000
+[T+11] [R0] [k-nano] [Net] [e1000] - desc0 status=0x00 len=0 dd=0 addr=0x814c5000
+[T+11] [R0] [k-nano] [Net] [e1000] - desc0 raw: 00504c8100000000 0000|0000|00000000
+[T+12] [R0] [k-nano] [Net] [e1000] - RX kick: RDH=0 RDT=63 RCTL=0x0400801e (no RDH poke)
+[T+12] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L3.5: prove RX (ARP 10.0.2.15 -> 10.0.2.1) tx=0 rx=0
+[T+12] [R0] [k-nano] [Net] [e1000] - RX kick: RDH=0 RDT=63 RCTL=0x0400801e (no RDH poke)
+[T+12] [R0] [k-nano] [Net] [e1000] - prove_rx ARP#1 sent=true tx_dd=true TDH=1 TDT=1
+[T+66] [R0] [k-nano] [Net] [e1000] - prove_rx ARP#2 sent=true tx_dd=true TDH=2 TDT=2
+[T+118] [R0] [k-nano] [Net] [e1000] - prove_rx ARP#3 sent=true tx_dd=true TDH=3 TDT=3
+[T+171] [R0] [nk] [Net] [e1000] - prove_rx: ok=false rdh=0 dd=0 (ARP who-has 10.0.2.1)
+[T+171] [R0] [k-nano] [SLIP] [info] - COM2 (0x2F8) inicializada 115200 8N1
+[T+177] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L3.5 OK: RX alive dtx=2 drx=2 (e1000_ok=false)
+[T+178] [R0] [nk] [NET-HW] [info] - VERDICT=PASS reason=rx_alive dtx=2 drx=2
+[T+178] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L4: DNS google.com via 10.0.2.3 [smoltcp/NIC] tx=2 rx=2
+[T+184] [R0] [nk] [DNS] [info] - OK raw 172.217.162.238 (dtx=4 drx=3 attempt=1)
+[T+184] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L4 OK: 172.217.162.238 (dtx=4 drx=3)
+[T+187] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L5: HTTP GET / smoke (bounded)
+[T+498] [R0] [nk] [Net] [tick] - t=0 bootstrap_early L5 PENDING — handoff NetAgent (tx=27 rx=8)
+[T+498] [R3] [hermes] [TLS] [info] - bridge=registered https_get=OK
+[T+498] [R0] [nk] [TLS] [info] - VERDICT=WIRED trust=hybrid+certverify crate=embedded-tls-0.19 pins=TLSPINS.BIN
+[T+498] [R0] [nk] [NETFS] [info] - smoke skip (net not L5_OK)
+[T+498] [R0] [nk] [TLS] [info] - smoke=SKIP reason=tcg_ud_risk (use WHPX qemu64 p/ smoke=PASS)
+[T+498] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] Net bootstrap_early (static/DNS/HTTP/TLS/NTP smoke)
+[T+498] [R0] [k-nano] [Disk] [ata] - ISA 496: master 262144 setores
+[T+503] [R0] [k-nano] [Disk] [ata] - has_mbr: slave=false 55AA=true bytes510=55511=AA
+[T+504] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+527] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+527] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+529] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+550] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+550] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+551] [R0] [k-nano] [Disk] [ata] - Usando fallback type=0xee
+[T+552] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+576] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+576] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+576] [R0] [nk] [TLS] [info] - pins=FAT miss file=TLSPINS.BIN
+[T+578] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+602] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+602] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+603] [R0] [nk] [TLS] [info] - pins=FAT save SKIP reason=FAT write: no FAT32 partition found file=TLSPINS.BIN
+[T+603] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] ATA probe=found
+[T+603] [R0] [k-nano] [HDA] [info] - Initializing Intel HDA capture driver...
+[T+603] [R0] [k-nano] [HDA] [warn] - No Intel HDA controller found
+[T+603] [R0] [nk] [HDA] [warn] - Intel HDA not found or init failed
+[T+603] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] HDA audio init
+[T+604] [R0] [k-nano] [Disk] [ahci] - Nenhum controlador SATA AHCI encontrado
+[T+607] [R0] [k-nano] [USB] [msc] - AUSENTE — bringup/enum/BOT falhou; BOOT.LOG so ramlog (ADR-0062 P11 residual)
+[T+608] [R0] [k-nano] [LOG] [info] - BOOT: fat-boot-log init_after_usb
+[T+608] [R0] [nk] [LOG] [info] - init_after_usb BOOT.LOG ok=false msc=false ata=true ahci=false (procure BOOT.LOG na raiz FAT32)
+[T+609] [R0] [k-nano] [LOG] [info] - BOOT: P24b HID mouse SKIP
+[T+610] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] xHCI+USB probe done
+[T+612] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+637] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+637] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+637] [R0] [nk] [Sec] [info] - Kernel nao assinado (sem FAT ou KERNEL~1 nao encontrado).
+[T+637] [R0] [k-nano] [LOG] [info] - SKIP fat session write (enable feature fat-boot-log to persist)
+[T+637] [R0] [k-nano] [LOG] [info] - BOOT: ATA+FAT init OK
+[T+640] [R0] [nk] [VFS] [info] - Init OK. 10 mounts.
+[T+640] [R0] [k-nano] [LOG] [info] - BOOT: VFS 10 mounts
+[T+640] [R0] [k-nano] [VFS] [info] - step=fd_smoke status=SKIP VERDICT=SKIP reason=vfs_uninit
+[T+641] [R0] [k-nano] [Disk] [ata] - ISA 496: master 262144 setores
+[T+641] [R0] [k-nano] [Disk] [ata] - has_mbr: slave=false 55AA=true bytes510=55511=AA
+[T+642] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+665] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+665] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+666] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+689] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+689] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+689] [R0] [k-nano] [Disk] [ata] - Usando fallback type=0xee
+[T+689] [R0] [nk] [ATA] [FS] - ATA detectado. /mnt/hdd/ disponivel.
+[T+690] [R0] [nk] [FS] [info] - Agent 'ata' registrado em /mnt/hdd
+[T+690] [R0] [nk] [FS] [info] - Agent 'devfs' registrado em /dev
+[T+690] [R0] [nk] [FS] [info] - Agent 'procfs' registrado em /proc
+[T+690] [R0] [nk] [INFERENCE] [FS] - /inference/ pronto.
+[T+690] [R0] [nk] [FS] [info] - Agent 'inference' registrado em /inference
+[T+690] [R0] [nk] [CHAT] [FS] - /chat/ pronto.
+[T+690] [R0] [nk] [FS] [info] - Agent 'hermes' registrado em /chat
+[T+690] [R0] [nk] [RAM] [FS] - /mnt/ram/ pronto. Max: 1MB
+[T+690] [R0] [nk] [FS] [info] - Agent 'ramfs' registrado em /mnt/ram
+[T+690] [R0] [nk] [LOG] [FS] - /logs/ pronto. Max: 256KB (ring)
+[T+690] [R0] [nk] [FS] [info] - Agent 'logfs' registrado em /logs
+[T+711] [R0] [nk] [NEURALFS] [info] - ATA SKIP format: disco tem 1 particao(es) (protect boot/ESP)
+[T+716] [R0] [nk] [NEURALFS] [info] - RAM 4MB mounted free_blocks=1010 inodes=2
+[T+721] [R0] [nk] [NEURALFS] [info] - smoke_ram_roundtrip=OK
+[T+726] [R0] [nk] [NEURALFS] [info] - smoke_reclaim=OK
+[T+752] [R0] [nk] [NEURALFS] [info] - smoke_split=OK
+[T+755] [R0] [nk] [NEURALFS] [info] - ecosystem/ tree ready (ADR-0051)
+[T+779] [R0] [nk] [USB-TRUST] [info] - sync ok entries=0
+[T+803] [R0] [nk] [EXFAT] [info] - write smoke SKIP (set EXFAT_WRITE=1 in CONFIG.TXT)
+[T+803] [R0] [nk] [FS] [info] - Agent 'neuralfs' registrado em /mnt/neural
+[T+803] [R0] [nk] [VFS] [info] - Hermes bridge -> neural-kernel FS_AGENTS
+[T+803] [R0] [k-nano] [LOG] [info] - BOOT: FS agents OK
+[T+803] [R0] [nk] [ADR] [0040] - MVP wired: BlockDevice+write | exFAT FilesystemDriver | EXT2/NTFS detect | NeuralFS /mnt/neural | MHI soft-migrate (meta=0 copy=0 skip=0)
+[T+803] [R0] [k-nano] [LOG] [info] - BOOT: ADR-0040 FS MVP markers
+[T+804] [R0] [nk] [ADR] [0047-L1] - latent publish/recv OK (pub=1 recv_slots=1)
+[T+840] [R3] [hermes] [EVOLVE] [info] - hot_swap OK skill=echo gen=1
+[T+840] [R0] [nk] [ADR-0047-L2] [info] - evolve swap=OK
+[T+842] [R3] [hermes] [EVOLVE] [info] - hot_swap OK skill=gen_echo_1 gen=1
+[T+842] [R3] [hermes] [GENESIS] [info] - parent=echo spawned=gen_echo_1 (count=1)
+[T+842] [R0] [nk] [ADR-0047-GENESIS] [info] - spawn=OK
+[T+842] [R2] [cortex] [ADR] [0047-L3] - probe=NO_MODEL
+[T+842] [R2] [cortex] [ADR] [0047-NGRAM] - hits=0 misses=0 tokens=0 fwd_spec=0 fwd_ar=0 speedup_est=1.00x micro_hit=53/64 (83%)
+[T+843] [R0] [nk] [ADR-0047-G] [info] - compute=CPU_FALLBACK
+[T+844] [R1] [k-hal] [ADR] [0047-G3] - sasos entries=1 vram=0
+[T+844] [R0] [nk] [ADR-0047-G3] [info] - sasos=OK
+[T+845] [R2] [cortex] [ADR] [0047-G4] - kv_len=12 pages=1 page_size=16 tokens=12 h2o=ready
+[T+845] [R2] [cortex] [ADR] [0047-G4] - h2o before=32 after=12 dropped=20
+[T+845] [R0] [nk] [ADR-0047-G4] [info] - h2o=OK
+[T+846] [R1] [k-hal] [ADR] [0047-G5] - pipeline=CPU decode_avg_ticks=0 target_us=50 (HW shader deferred)
+[T+846] [R0] [nk] [ADR-0047-G5] [info] - pipeline=CPU_PIPELINE
+[T+847] [R0] [nk] [ADR] [0047-H] - ui_spec=OK avatar_telem=ABSENT h2=ABSENT h5=ABSENT
+[T+847] [R0] [k-nano] [LOG] [info] - BOOT: ADR-0047 MVP PoC gates
+[T+849] [R0] [k-nano] [LOG] [info] - BOOT: DiskAgent ATA controller registered
+[T+851] [R0] [k-nano] [StorageBus] [reg] - ata0 sectors=262144 mbr_ok=true
+[T+852] [R0] [k-nano] [StorageBus] [smoke] - ata0 BlockDevice read MBR OK
+[T+859] [R0] [k-nano] [LOG] [info] - BOOT: StorageBus devices=1
+[T+859] [R0] [nk] [EXT4] [info] - step=smoke status=SKIP VERDICT=SKIP reason=no_ext_partition
+[T+859] [R0] [k-nano] [LOG] [info] - BOOT: DiskAgent ready
+[T+860] [R3] [hermes] [APPS] [info] - 3 apps registrados no Hermes Chat.
+[T+860] [R0] [k-nano] [LOG] [info] - BOOT: Desktop apps OK
+[T+860] [R0] [nk] [Audio] [info] - Configuracoes de audio inicializadas
+[T+861] [R0] [nk] [JARBAS] [BRIDGE] - jarbas-crate=linked topics_ok=true settings_ok=true audio_truth=neural-kernel cutover=deferred(ADR-0045)
+[T+861] [R3] [hermes] [MicroPython] [info] - FALLBACK: stub wasmi (dev) — rode tools/build_micropython_wasm.py para bytecode real
+[T+861] [R3] [hermes] [MicroPython] [info] - Sandbox carregado (wasmi, heap=64KB)
+[T+861] [R3] [hermes] [MicroPython] [info] - Skill pronta para registro no SkillRegistry
+[T+862] [R3] [hermes] [MicroPython] [info] - Sandbox ativo
+[T+865] [R3] [hermes] [WASMI] [info] - runtime WASM real self-test PASS (add(2,3)=5) — ADR-0059 A
+[T+866] [R3] [hermes] [WASM-BUILD] [info] - op-IR→wasm→wasmi self-test PASS (a*b+7: 6,7 -> 49) — ADR-0059 F4
+[T+866] [R3] [hermes] [WASMI] [info] - runtime WASM real self-test PASS (add(2,3)=5) — ADR-0059 A
+[T+867] [R3] [hermes] [APPFACTORY] [info] - RanWasm backend=A entry=run ret=14
+[T+867] [R3] [hermes] [APPFACTORY] [info] - gera→monta→sandbox PASS ((3+4)*2=14) — ADR-0059 F3/F4
+[T+867] [R3] [hermes] [APPFACTORY] [info] - path-selector self-test PASS (A=run, C=HITL+ring gated) — ADR-0059
+[T+868] [R0] [nk] [EXEC-ARENA] [info] - W^X JIT self-test PASS (native mov eax,42;ret -> 42) — ADR-0059 F7
+[T+870] [R0] [k-nano] [P2P] [info] - chunk remontado node=127 msg=3405691582 bytes=3000
+[T+870] [R0] [k-nano] [P2P] [info] - chunk_self_test ok=true bytes=3000 chunks=3
+[T+871] [R2] [cortex] [LLM] [info] - load_model ver=4 h=16 L=2 file=1MB est=65MB heap=2048MB
+[T+872] [R2] [cortex] [LLM] [info] - q_dim=16 head_dim=8 k_dim=8 ffn_g=32 layout rms=1 inner=1 ffn_ln=1 rem=2KB d=0KB
+[T+872] [R2] [cortex] [LLM] [info] - loading layer 0/2 off=0KB
+[T+872] [R2] [cortex] [LLM] [info] - loading layer 1/2 off=1KB
+[T+873] [R2] [cortex] [LLM] [info] - RoPE precompute seq=64 theta=10000 feat_rope=1
+[T+875] [R2] [cortex] [LLM] [info] - model OK layers=2 q_dim=16 tied=0 off=2KB
+[T+876] [R2] [cortex] [LLM] [info] - model save/load roundtrip self-test PASS (2226 bytes, L=2)
+[T+877] [R2] [cortex] [FED] [info] - federated self-test PASS (seed=384B merged=384B)
+[T+891] [R0] [nk] [ISO-RING] [info] - Ring3 environment UNSAFE — native ring NOT registered; wasmi (A) ativo
+[T+893] [R0] [nk] [TICKV] [smoke] - put/get PASS backend=ram
+[T+893] [R0] [k-nano] [LOG] [info] - BOOT: [TICKV] put/get smoke PASS
+[T+895] [R0] [nk] [sgdb] [hamming] - scalar
+[T+895] [R0] [k-nano] [LOG] [info] - BOOT: [sgdb] hamming kernel selected
+[T+896] [R2] [k-ai] [SGDB] [Q-jump] - Q1 PASS: MemoryDoc roundtrip
+[T+897] [R2] [k-ai] [SGDB] [Q-jump] - Q2 PASS: ART smoke
+[T+897] [R2] [k-ai] [SGDB] [Q-jump] - Q3 PASS: BQ smoke
+[T+899] [R2] [k-ai] [SGDB] [Q-jump] - Q4 PASS: engine + BQ
+[T+899] [R2] [k-ai] [SGDB] [Q-jump] - Q5 PASS: remember_exchange + prompt_slice
+[T+900] [R2] [k-ai] [SGDB] [Q-jump] - Q6 PASS: HANR
+[T+901] [R2] [k-ai] [SGDB] [Q-jump] - Q7 PASS: bench 128/64 (art_n=128 art_len=128 bq_n=64 art_ok=true bq_ok=true path=scalar insert_cyc≈13537274 lookup_cyc≈1596534 topk_cyc≈9161340)
+[T+901] [R0] [nk] [sgdb] [demo] - Q-jump PASS
+[T+901] [R0] [k-nano] [LOG] [info] - BOOT: [sgdb] quality demo PASS
+[T+902] [R0] [nk] [sgdb] [e2e_ckpt] - SKIP (ram)
+[T+902] [R0] [k-nano] [LOG] [info] - BOOT: [sgdb] L1 checkpoint e2e SKIP (ram backend)
+[T+1375] [R0] [nk] [sgdb] [bench] - sgdb.bench.D ok=true D-series art_n=100000 art_len=100000 bq_n=10000 art_ok=true bq_ok=true path=scalar insert_cyc≈11733486712 lookup_cyc≈126602 topk_cyc≈119931574 hamming=scalar | TICKV live=2560 dead=0 corrupt=0 gc=0 appe[T+1375] [R0] [k-nano] [LOG] [info] - BOOT: [sgdb] bench metrics logged
+[T+1376] [R0] [nk] [TICKV] [power_loss] - SKIP (ram)
+[T+1376] [R0] [k-nano] [LOG] [info] - BOOT: [TICKV] power-loss SKIP (ram backend)
+[T+1377] [R0] [nk] [TICKV] [gc] - PASS
+[T+1378] [R0] [k-nano] [LOG] [info] - BOOT: [TICKV] gc smoke PASS
+[T+1410] [R0] [nk] [TICKV] [stress_gc] - PASS
+[T+1410] [R0] [k-nano] [LOG] [info] - BOOT: [TICKV] stress_gc 1k PASS
+[T+1411] [R0] [nk] [TICKV] [corrupt] - PASS
+[T+1411] [R0] [k-nano] [LOG] [info] - BOOT: [TICKV] corrupt smoke PASS
+[T+1411] [R0] [nk] [TICKV] [stats] - TICKV live=4608 dead=1024 corrupt=0 gc=3 append=5632 keys=9 backend=ram
+[T+1413] [R0] [k-nano] [Trust] [info] - session_pk=0bb811e5b42f09070cf5085114b09e5aaa9f2a0e098fe774c2940ec443c20775
+[T+1420] [R3] [hermes] [PKG] [info] - seed skill 'hw_identify' signed=true (trusted-by-compilation)
+[T+1423] [R3] [hermes] [PKG] [info] - seed skill 'self_heal' signed=true (trusted-by-compilation)
+[T+1429] [R3] [hermes] [PKG] [info] - seed agents native=41
+[T+1429] [R3] [hermes] [PKG] [info] - seed device-recipe goldens=4 FAT=LEGO*.MD bind=GOLDEN_RECIPES
+[T+1429] [R3] [hermes] [PKG] [info] - VFS ecosystem montado em /mnt/neural/ecosystem
+[T+1429] [R3] [hermes] [Log] [msg] - [PKG] 47 packages, 0 pending, vfs_ok=true
+[T+1431] [R3] [hermes] [sgdb] [hanr] - write soul sgdb=true vfs=true
+[T+1432] [R3] [hermes] [sgdb] [hanr] - write persona sgdb=true vfs=true
+[T+1433] [R3] [hermes] [sgdb] [hanr] - write user sgdb=true vfs=true
+[T+1433] [R3] [hermes] [sgdb] [hanr] - write memory sgdb=true vfs=true
+[T+1435] [R3] [hermes] [Log] [msg] - [AUDIT] 0 entradas, signed=0, chain OK=true
+[T+1436] [R0] [nk] [Log] [msg] - [AUDIT] 0 entradas, signed=0, chain OK=true
+[T+1436] [R0] [nk] [Log] [msg] - [SkillOpt] evolving: 0 python, 0 wasm, 0 rust
+[T+1436] J{"t":1436,"l":"BOOT","a":"WASM","e":"runtime"[T+1436] ,"skills":2[T+1436] }
+[T+1436] J{"t":1436,"l":"BOOT","a":"DECODE","e":"structured"[T+1436] ,"ready":1[T+1436] }
+[T+1440] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+1459] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+1459] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+1460] [R0] [nk] [Asset] [bge] - QEMU-loader scan [0x100000000..0x180000000) — 0xBE11BE11 ausente
+[T+1462] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+1481] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+1481] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+1481] [R0] [nk] [Asset] [bge] - BGE.BIN ausente no FAT — STATUS Absent
+[T+1482] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+1502] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+1502] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+1503] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+1522] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+1522] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2568] [R0] [k-nano] [Disk] [ata] - read: DRQ nao pronto LBA=0 s=0/1 slave=true
+[T+2568] [R0] [k-nano] [MBR] [info] - Falha ao ler setor 0
+[T+2568] [R3] [jarbas] [Audio] [piper] - Piper TTS ausente no FAT — formant synth ativo
+[T+2568] [R0] [nk] [Status] [info] - llm=ABSENT bge=ABSENT piper=ABSENT fw_gpu=ABSENT
+[T+2568] [R1] [k-hal] [DeviceTree] [populate] - devices=3
+[T+2569] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2591] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2592] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2592] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2612] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2612] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2614] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2635] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2635] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2636] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2658] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2658] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2659] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2681] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2681] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2682] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2703] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2703] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2704] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2726] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2726] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2727] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2747] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2747] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2748] [R1] [k-hal] [UnlockDAG] [grant] - token=PciEnumerated
+[T+2749] [R1] [k-hal] [UnlockDAG] [grant] - token=ApicReady
+[T+2749] [R1] [k-hal] [UnlockDAG] [boot] - pci=true fat=false mask=0x1003
+[T+2749] [R1] [k-hal] [HalOffer] [refresh] - offers=3
+[T+2749] [R1] [k-hal] [HalOffer] [query] - class=gpu status=Available
+[T+2750] [R1] [k-hal] [HalOffer] [query] - class=net status=Available
+[T+2750] [R1] [k-hal] [HalOffer] [query] - class=block status=Available
+[T+2750] [R1] [k-hal] [DeviceCap] [ready] - devices=3 fat=false unlock=0x1003 compute=NotBound net=NotBound
+[T+2751] [R1] [k-hal] [VirtIO] [select] - sem VID 1AF4 — BE nativo (silicio/QEMU NIC legado)
+[T+2751] [R1] [k-hal] [VirtIO] [select] - BE net=Native gpu=Native (FE unico hermes/jarbas)
+[T+2751] [R1] [k-hal] [VirtIO] [h4] - WARN: nenhum VirtIO PCI (layout-only OK)
+[T+2751] [R1] [k-hal] [SCL] [map] - control=k_ai cognition=cortex action=hermes hal=k_hal virtio=h4+
+[T+2751] [R1] [k-hal] [Cap] [MAP_BAR] - DENY ring=3
+[T+2751] [R1] [k-hal] [Cap] [FE] - DENY FeNet ring=3
+[T+2751] [R1] [k-hal] [Cap] [h5_demo] - R1=Allow R3_no_cap=Deny FE_no_bind=Deny (expect Allow/Deny/Deny)
+[T+2751] [R1] [k-hal] [Cap] [grant] - FeNet granted
+[T+2751] [R1] [k-hal] [Cap] [FE] - Allow FeNet (bound=true)
+[T+2751] [R1] [k-hal] [Cap] [h5_demo] - FE_after_grant=Allow (expect Allow)
+[T+2751] [R1] [k-hal] [Cap] [revoke] - FeNet revoked
+[T+2752] [R1] [k-hal] [AS] [bind] - R1 AS bound bar0=0xc0000000
+[T+2752] [R1] [k-hal] [LEGO] [boot] - note=disk=spec+locate code=GOLDEN_RECIPES CapGate H1 n=4
+[T+2752] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2773] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2773] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2774] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2796] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2796] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2797] [R1] [k-hal] [RECIPE] [info] - promote=OK pkg=net.virtio class=net (≠Ready)
+[T+2797] [R1] [k-hal] [LEGO] [boot] - file=LEGOVNET.MD pkg=net.virtio locate=MISS parse=N/A table=OK promote=OK use=OK
+[T+2797] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2819] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2819] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2820] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2841] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2841] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2843] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2864] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2864] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2865] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2886] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2886] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2886] [R1] [k-hal] [RECIPE] [info] - promote=NEEDS_FW pkg=wifi.qca6174.ath10k
+[T+2886] [R1] [k-hal] [LEGO] [boot] - file=LEGOATHK.MD pkg=wifi.qca6174.ath10k locate=MISS parse=N/A table=OK promote=NEEDS_FW use=OK
+[T+2887] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2909] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2909] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2910] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2930] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2930] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2932] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2952] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2952] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2952] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2972] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2972] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2973] [R1] [k-hal] [RECIPE] [info] - promote=NEEDS_FW pkg=gpu.nvidia.gp108
+[T+2973] [R1] [k-hal] [LEGO] [boot] - file=LEGOGP08.MD pkg=gpu.nvidia.gp108 locate=MISS parse=N/A table=OK promote=NEEDS_FW use=OK
+[T+2974] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+2993] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+2993] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+2994] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3013] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3013] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3014] [R1] [k-hal] [RECIPE] [info] - promote=OK pkg=usb.xhci.host class=usbhost (≠Ready)
+[T+3014] [R1] [k-hal] [LEGO] [boot] - file=LEGOXHCI.MD pkg=usb.xhci.host locate=MISS parse=N/A table=OK promote=OK use=OK
+[T+3014] [R1] [k-hal] [LEGO] [boot] - VERDICT=PARTIAL locate=0/4 table=0/4 use=4/4 (Install!=Ready)
+[T+3014] [R0] [nk] [AS] [r1] - demo shallow start (PoC monólito)
+[T+3014] [R1] [k-hal] [Cap] [MAP_BAR] - DENY ring=3
+[T+3014] [R0] [nk] [AS] [r3] - MAP_BAR Deny (expect Deny — sem BAR no AS R3)
+[T+3014] [R0] [nk] [AS] [r3] - BAR map skipped (Deny honesto)
+[T+3014] [R0] [nk] [AS] [r1] - BAR 0xc0000000 mapped @ 0x700000002000 UC
+[T+3015] [R0] [nk] [AS] [r1] - touch BAR ok val=0xff08080c (CR3 switched @ 0x700000002000)
+[T+3015] [R0] [nk] [AS] [r1] - restore CR3 OK — shallow PoC done (≠ isolamento produção)
+[T+3016] [R1] [k-hal] [GPU] [info] - Unknown GPU: 1234:1111 arch=Unknown backend=CpuFallback isa=none bar0=0xc0000000 bar2=0xc1060000 vram=256MB igpu=false compute_cand=false has_compute=false
+[T+3018] [R0] [nk] [Log] [msg] - [GPU-PLAN] Unica: Unknown GPU compute_cand=false
+[T+3018] [R0] [k-nano] [LOG] [info] - BOOT: GPU plan — SingleGpu { index: 0, compute_ok: false }
+[T+3019] [R0] [nk] [FW] [info] - GP108 preload SKIP (no NVIDIA or no storage)
+[T+3021] [R1] [k-hal] [GPU] [BACKEND] - [GPU-PLAN] Unica: Unknown GPU compute_cand=false
+[T+3021] [R1] [k-hal] [GPU] [BAR] - skip Unknown DID=1111 (QEMU VGA / avoid #PF)
+[T+3021] [R1] [k-hal] [GPU] [BAR] - Unknown vendor, skip validation
+[T+3021] [R1] [k-hal] [GPU] [BACKEND] - DisplayOwner=Unknown GPU: BARs mapped (intocado por falha AI)
+[T+3021] [R0] [nk] [GPU-HW] [info] - step=compute_ready status=UNSUPPORTED detail=no_compute_index
+[T+3021] [R0] [nk] [GPU-HW] [info] - VERDICT=AWAITING_REAL_HW reason=no_compute_index
+[T+3021] [R0] [nk] [GDS-HW] [info] - step=nvme_to_vram status=UNSUPPORTED detail=need_nvme_and_dgpu_p2p
+[T+3021] [R0] [nk] [GDS-HW] [info] - VERDICT=AWAITING_REAL_HW reason=gpu_direct_storage_unwired
+[T+3022] [R1] [k-hal] [GPU] [info] - 1 GPU(s) detectadas. Backend: CPU fallback | state=CpuOnly
+[T+3022] [R0] [k-nano] [LOG] [info] - BOOT: GPU 1 backend
+[T+3023] [R1] [k-hal] [COMPUTE] [info] - GPU nao-Ready (CpuOnly) — dispatcher usa CPU/SMP
+[T+3023] [R1] [k-hal] [NPU-HW] [info] - VERDICT=SOFTWARE reason=no_npu ring0=cpu_mlp
+[T+3023] [R2] [cortex] [DECODE] [info] - structured-decode self-test PASS (free=1 constrained=2)
+[T+3023] [R0] [nk] [SMP] [info] - AP workers pollable=false (WS-F on-demand wake = residual HW/IDT)
+[T+3023] [R0] [nk] [Log] [msg] - [BOOT:DriverInit] NIC/ATA/AHCI/xHCI/GPU probes concluidos
+[T+3023] [R0] [nk] [MVP] [C] - iniciando demo CR3 + ring + capability
+[T+3024] [R0] [nk] [MVP] [C] - SUCCESS cr3-switch + shared-ring + Cap::PING (count=2)
+[T+3024] [R0] [nk] [MVP-C] [info] - demo OK — capability rings PoC
+[T+3025] [R0] [k-nano] [LOG] [info] - BOOT: MVP-C CR3+ring+cap OK
+[T+3025] [R0] [nk] [Cap] [p3] - CapabilityGate demo (Hermes host Caps)
+[T+3025] [R0] [nk] [CapGate] [info] - DENY fn=aios_send_tcp need=0x2 held=0x0
+[T+3025] [R0] [nk] [CapGate] [info] - DENY fn=aios_write_ring need=0x2 held=0x0
+[T+3025] [R0] [nk] [Cap] [p3] - SUCCESS CapGate allow=2 deny=2
+[T+3025] [R0] [nk] [Cap] [p3] - CapGate demo OK
+[T+3025] [R0] [k-nano] [LOG] [info] - BOOT: P3 CapGate OK
+[T+3025] [R0] [nk] [Cap] [p4] - JARBAS FB MMIO + double-buffer demo
+[T+3025] [R0] [nk] [Cap] [p4] - FB contract 1280x800 bpp=4 stride=5120 virt=ffff8000c0000000 phys=c0000000
+[T+3026] [R0] [nk] [CapGate] [info] - DENY MAP_FB held=0x0
+[T+3026] [R0] [nk] [CapGate] [info] - DENY WRITE_FB held=0x0
+[T+3039] [R0] [nk] [Cap] [p4] - SUCCESS MAP_FB+AS+present count=1 vsync_waits=1 (checker cleared+splash)
+[T+3039] [R0] [nk] [Cap] [p4] - JARBAS FB demo OK
+[T+3039] [R0] [k-nano] [LOG] [info] - BOOT: P4 JARBAS FB OK
+[T+3039] [R0] [nk] [P5] [info] - K-IA DMA pin demo
+[T+3040] [R0] [nk] [CapGate] [info] - DENY PIN_DMA held=0x0
+[T+3040] [R0] [nk] [CapGate] [info] - DENY MAP_DMA held=0x0
+[T+3040] [R0] [nk] [P5] [info] - SUCCESS DMA pin pages=2 phys=81539000 va=700000200000 (VirtIO buf stub ready) pinned=2
+[T+3040] [R0] [nk] [P5] [info] - K-IA DMA pin demo OK
+[T+3040] [R0] [k-nano] [LOG] [info] - BOOT: P5 K-IA DMA OK
+[T+3040] [R0] [nk] [P5] [info] - Cortex weight mmap demo (eager; lazy = P7)
+[T+3040] [R0] [nk] [CapGate] [info] - DENY MAP_WEIGHTS held=0x0
+[T+3041] [R0] [nk] [P5] [info] - SUCCESS mmap pesos pages=4 va=700000300000 phys=81543000 count=1
+[T+3041] [R0] [nk] [P5] [info] - Cortex mmap demo OK
+[T+3041] [R0] [k-nano] [LOG] [info] - BOOT: P5 Cortex mmap OK
+[T+3042] [R0] [nk] [P6] [info] - Ring3 user-mode demo OK
+[T+3042] [R0] [k-nano] [LOG] [info] - BOOT: P6 Ring3 OK
+[T+3044] [R0] [nk] [ELF] [selftest] - PASS entry=0x1000 stack_top=0x700000404000 (RX code + RW BSS mapeados no sandbox)
+[T+3044] [R0] [k-nano] [LOG] [info] - BOOT: ELF loader self-test OK
+[T+3044] [R0] [nk] [EXEC-ARENA] [info] - W^X USER arena self-test PASS (6 bytes USER RX @0x500000000000 no sandbox) — ADR-0082 F3.1
+[T+3044] [R0] [k-nano] [LOG] [info] - BOOT: USER arena self-test OK
+[T+3045] [R0] [nk] [ISO-RING] [info] - Ring3 environment UNSAFE — native ring NOT registered; wasmi (A) ativo
+[T+3045] [R0] [nk] [P7] [info] - Demand-paging #PF demo (lazy weights)
+[T+3045] [R0] [nk] [CapGate] [info] - DENY MAP_WEIGHTS|DEMAND_PAGE held=0x40
+[T+3046] [R0] [nk] [P7] [info] - SUCCESS lazy pages=4 va=700000300000 cures=2 lazy_maps=1
+[T+3046] [R0] [nk] [P7] [info] - Demand-paging demo OK
+[T+3046] [R0] [k-nano] [LOG] [info] - BOOT: P7 demand-page OK
+[T+3046] [R0] [nk] [Cap] [p8] - VirtIO vring + DMA pin demo (ADR-0076)
+[T+3046] [R0] [nk] [CapGate] [info] - DENY RING_OP held=0x0
+[T+3047] [R0] [nk] [Cap] [p8] - VirtIO-net ausente — PoC layout-only (Opcao B) = SUCCESS
+[T+3047] [R0] [nk] [Cap] [p8] - SUCCESS vring q=4 desc=81584000 avail=81585000 used=81586000 payload=81587000 avail_idx=1 head=0 caps=0x32 pinned=6
+[T+3047] [R0] [nk] [P8] [info] - VirtIO vring demo OK
+[T+3047] [R0] [k-nano] [LOG] [info] - BOOT: P8 vring OK
+[T+3047] [R0] [nk] [P9] [info] - GGUF/FAT file-backed mmap demo (demand-page + pre-fill)
+[T+3047] [R0] [nk] [CapGate] [info] - DENY MAP_WEIGHTS|DEMAND_PAGE|MAP_FILE held=0x140
+[T+3048] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3067] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3067] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3067] [R0] [nk] [P9] [info] - WARN no model file on FAT — fallback stub frames
+[T+3068] [R0] [nk] [P9] [info] - SUCCESS file-mmap pages=4 va=700000400000 kind=Fallback src=fallback magic=0x4c49464e cures=1 hits=0
+[T+3068] [R0] [nk] [P9] [info] - GGUF/FAT mmap demo OK
+[T+3068] [R0] [k-nano] [LOG] [info] - BOOT: P9 gguf-mmap OK
+[T+3070] [R0] [nk] [SKILL] [init] - 14 builtin skills registered
+[T+3072] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:00.0 8086:1237 (Bridge)
+[T+3072] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.0 8086:7000 (Bridge)
+[T+3072] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.1 8086:7010 (Mass Storage)
+[T+3072] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.3 8086:7113 (Bridge)
+[T+3072] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:02.0 1234:1111 (Display)
+[T+3073] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:03.0 8086:100E (Network)
+[T+3073] [R0] [nk] [HW-AGENTS] [info] - 6 dispositivos detectados como HwAgents.
+[T+3073] [BOOT][AGENTS][registered] 20 agents
+[T+3075] [R0] [nk] [Boot] [info] - NetAgent manifest: name=network_agent, auto_start=true, schedule=Continuous
+[T+3075] [R3] [hermes] [Net] [info] - registered Continuous — ticks após init_phase (SelfHeal/Disk); gate=e1000 [smoltcp/NIC]
+[T+3075] [R1] [k-hal] [GPU] [info] - Unknown GPU: 1234:1111 arch=Unknown backend=CpuFallback isa=none bar0=0xc0000000 bar2=0xc1060000 vram=256MB igpu=false compute_cand=false has_compute=false
+[T+3075] [R1] [k-hal] [GPU] [vga] - Intel GPU display nao encontrada
+[T+3075] [R3] [jarbas] [Display] [info] - FB remapped as UC: 1000 pages @phys=c0000000 stride=5120 (1280x800)
+[T+3080] [R0] [nk] [AGENCY] [info] - 2 agentes fallback registrados (ADR-0052: sem AGENT.md agency assinado)
+[T+3080] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:00.0 8086:1237 (Bridge)
+[T+3080] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.0 8086:7000 (Bridge)
+[T+3080] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.1 8086:7010 (Mass Storage)
+[T+3080] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.3 8086:7113 (Bridge)
+[T+3081] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:02.0 1234:1111 (Display)
+[T+3081] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:03.0 8086:100E (Network)
+[T+3081] [R0] [nk] [HW] [AGENTS] - 6 agentes de hardware registrados
+[T+3081] J{"t":3081,"l":"BOOT","a":"AGENTS","e":"www"[T+3081] ,"search":1[T+3081] }
+[T+3086] [R3] [hermes] [Cron] [info] - Job 'health' agendado: a cada 200 ticks
+[T+3086] [R3] [hermes] [Cron] [info] - Job 'memory_report' agendado: a cada 500 ticks
+[T+3086] [R3] [hermes] [Cron] [info] - Job 'skill_review' agendado: a cada 3000 ticks
+[T+3086] [R3] [hermes] [Cron] [info] - Job 'ntp_resync' agendado: a cada 3600 ticks
+[T+3086] [R3] [hermes] [Cron] [info] - 4 jobs default registrados
+[T+3086] [R1] [k-hal] [ATH10K] [info] - fw_resolve=SKIP reason=no_wifi_pci
+[T+3086] [R1] [k-hal] [IWL] [info] - fw_resolve=SKIP reason=no_wifi_pci
+[T+3086] [R1] [k-hal] [WIFI] [info] - Nenhum adaptador wireless — Ethernet smoltcp ativo
+[T+3086] [R0] [nk] [WIFI-HW] [info] - step=boot_probe status=UNSUPPORTED detail=no_wifi_pci ath10k=none
+[T+3086] [R0] [nk] [WIFI-HW] [info] - VERDICT=AWAITING_REAL_HW reason=no_wifi_radio ath10k=none
+[T+3086] [R0] [nk] [HW-GATE] [info] - begin count=7 (rg HW-GATE no serial)
+[T+3086] [R0] [nk] [HW-GATE] [await] - id=ATH10K_A5_SCAN status=AWAITING_REAL_HW need=WMI scan SSID do ar (QCA6174) pass_when=step=scan RF + SSIDs reais grep=ATH10K|WIFI-HW
+[T+3086] [R0] [nk] [HW-GATE] [await] - id=ATH10K_ASSOC status=AWAITING_REAL_HW need=assoc/WPA2 link up pass_when=WifiState Connected + smoltcp wifi grep=WIFI-HW
+[T+3086] [R0] [nk] [HW-GATE] [await] - id=GPU_CANARY_GOLDEN status=AWAITING_REAL_HW need=vector_add golden LegacyAcr (Note GTX1050=teste) pass_when=VERDICT=PASS + CapToken GpuCompute grep=GPU-HW
+[T+3086] [R0] [nk] [HW-GATE] [await] - id=GPU_GSP status=AWAITING_REAL_HW need=GspBackend Turing+ canario pass_when=VERDICT=PASS family=turing|ampere|ada grep=GPU-HW
+[T+3087] [R0] [nk] [HW-GATE] [await] - id=I225_E2E status=AWAITING_REAL_HW need=igc TX/RX real (QEMU sem emu) pass_when=DHCP/HTTP via i225 grep=I225|NET
+[T+3087] [R0] [nk] [HW-GATE] [await] - id=USB_HUB status=AWAITING_REAL_HW need=xHCI hub TT/route pass_when=hub enumerate (nao hub=AWAITING) grep=xHCI|USB
+[T+3087] [R0] [nk] [HW-GATE] [await] - id=BOOT_011_SMOKE status=CLOSED need=boot past MemoryCore (Limine preferido; 0.11 se chegar) pass_when=BootSmokeOk + step=smoke grep=bootloader|Boot
+[T+3087] [R0] [nk] [HW-GATE] [info] - end
+[T+3087] [R0] [nk] [LOG] [ANALYST] - /logs/ analyst ativo.
+[T+3087] [R2] [k-ai] [Trust] [info] - transient allow (Observe): token=1 skill=diagnostic
+[T+3092] [R0] [nk] [Log] [msg] - [DIAG] Box::new(41) = 41
+[DIAG] Vec = [10, 20, 30]
+[DIAG] Matmul: (1, 1) [32.0]
+[DIAG] SiLU+RMSNorm = [-0.59800255, 0.0, 1.6255394]
+[DIAG] BitNet output = [-0.5, -2.0]
+
+[T+3092] [R0] [nk] [Boot] [info] - DiagnosticSkill executada (168 bytes)
+[T+3093] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3116] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3116] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3116] [R0] [nk] [Asset] [ramdisk] - Probe 4GB: raw=[0x00,0x00,0x00,0x00]
+[T+3116] [R0] [nk] [RAMDISK] [info] - No model at 0x100000000 — trying 0x120000000...
+[T+3117] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3141] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3141] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3142] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3166] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3166] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3167] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3189] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3189] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3189] [R0] [nk] [Asset] [loader] - RUSTCODER QEMU-loader scan [0x129000000..0x129200000] — 0xBE11BE11 ausente
+[T+3189] [R0] [nk] [Asset] [loader] - HWEXPERT QEMU-loader scan [0x129200000..0x180000000] — 0xBE11BE11 ausente
+[T+3190] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3209] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3209] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3210] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3229] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3229] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3230] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3252] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3252] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3253] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3275] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3275] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3276] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3296] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3296] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3297] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3319] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3319] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3319] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3340] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3340] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3340] [R0] [nk] [HUB] [info] - Agent slot load attempted
+[T+3340] [R0] [nk] [MODEL] [info] - ModelHub: active=0 vision=0 generator_pro=0 reranker=0 rust_coder=0 hw_identify=0 learner=0 agent=0
+[T+3340] [R0] [nk] [BPE] [info] - QEMU-loader scan [0x100000000..0x180000000] — BPB1 ausente
+[T+3341] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3361] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3361] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3361] [R0] [nk] [BPE] [info] - FAT ausente (BPE.BIN)
+[T+3361] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3381] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3381] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3382] [R0] [nk] [Audio] [stt] - QEMU-loader @0x163000000 magic=0x00000000 (ausente)
+[T+3382] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3402] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3402] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3402] [R0] [nk] [Audio] [stt] - FAT ausente (STT.BIN)
+[T+3402] [R0] [nk] [LLM-TEST] [info] - no model — ABSENT
+[T+3402] [R0] [k-nano] [LOG] [info] - BOOT: LLM ABSENT — sem ramdisk/loader/FAT modelo utilizavel
+[T+3402] [R0] [nk] [LLM] [info] - ABSENT — BitNet 2B nao carregado (FAT/ramdisk)
+[T+3402] [R0] [nk] [Status] [info] - llm=ABSENT bge=ABSENT piper=ABSENT fw_gpu=ABSENT
+[T+3402] [R0] [nk] [BPE] [info] - QEMU-loader scan [0x100000000..0x180000000] — BPB1 ausente
+[T+3403] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3423] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3423] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3423] [R0] [nk] [BPE] [info] - FAT ausente (BPE.BIN)
+[T+3424] [R0] [nk] [JARBAS] [GREETING] - model ABSENT — saudacao LLM pulada
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'generator' registered: Geracao generica (ModelHub: pro/fast/tiny)
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'hw_control' registered: Controle HW: volume, mute, brilho (skill, sem LLM)
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'hw_identify' registered: Identifica dispositivos de hardware por PCI ID
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'rust_coder' registered: Gera codigo Rust sob demanda (2B/3B se carregado)
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'disk_diag' registered: Diagnostico de disco e armazenamento
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'security' registered: Analise de seguranca e vulnerabilidades
+[T+3424] [R2] [cortex] [TRINITY] [info] - Expert 'speech_synth' registered: Sintese de fala — TTS, voz, audio
+[T+3425] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3446] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3446] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3447] [R2] [cortex] [TRINITY] [warn] - Router MoE weights: DETERMINISTIC FALLBACK (LCG seed=42, UNTRAINED) — 64 dim, 7 experts
+[T+3447] [R2] [cortex] [Gate] [n3] - llm=ABSENT dim=0 bpe=ABSENT
+[T+3447] [R2] [cortex] [Gate] [n3] - MAP_WEIGHTS pages=2 (P5 Cap OK)
+[T+3447] [R2] [cortex] [Gate] [n3] - Trinity experts=7 generator=OK moe_router=LOADED hwexpert=ABSENT rustcoder=ABSENT route=keyword+R3
+[T+3447] [R2] [cortex] [Gate] [n3] - generate=GATED soft-float (boot skip; feature=weather-e2e p/ HIT; prior N3.4 evidence OK)
+[T+3448] [R2] [cortex] [Gate] [n3] - gate complete n3.1=FAIL n3.2=OK n3.3=OK n3.4=FAIL criteria=PARTIAL (N3.5 crate cortex link deferred)
+[T+3448] [R0] [k-nano] [LOG] [info] - BOOT: N3 cortex gate PARTIAL
+[T+3448] [R3] [hermes] [Gate] [n4] - intent_router=REGISTERED topics=USER_INTENT/HERMES_RESPONSE react=7phase
+[T+3448] [R3] [hermes] [Gate] [n4] - skills=15 wasm_sfi=7 CapGate allow=2 deny=2
+[T+3448] [R3] [hermes] [Gate] [n4] - cortex_orchestrate=ABSENT route=global_arena pending→generate_via_model
+[T+3448] [R3] [hermes] [Gate] [n4] - intent_e2e=GATED boot default (feature=weather-e2e; hist Sprint107 != this-boot)
+[T+3448] [R3] [hermes] [Gate] [n4] - this-boot net_smoke=L5_PENDING [smoltcp/NIC] (bootstrap_early; L5_OK so se smoke passou)
+[T+3448] [R3] [hermes] [Gate] [n4] - IPC→jarbas topics_mirror=OK full_wire=OK(hermes-crate)
+[T+3448] [R3] [hermes] [Gate] [n4] - gate complete n4.1=OK n4.2=OK n4.3=FAIL n4.4=OK n4.5=OK criteria=PARTIAL (N4.6 hermes-crate wired)
+[T+3449] [R0] [k-nano] [LOG] [info] - BOOT: N4 hermes gate PARTIAL
+[T+3449] [R3] [jarbas] [Compositor] [register] - display=OK gpu=OK p4_present=OK apps=HermesChat+Settings+Power
+[T+3449] [R3] [jarbas] [Persona] [register] - jarvis=OK pipeline=16stage [PERSONA] mode=Coach tone=witty humor=0.5 formality=0.3 empathy=0.8
+[T+3449] [R3] [jarbas] [Voice] [e2e] - GATED boot default (feature=weather-e2e; prior Sprint107 TTS+FB OK)
+[T+3449] [R3] [jarbas] [Voice] [agents] - jarvis_voice=OK wakeword=OK mixer=OK hermes_only=OK (no direct ATA/PCI)
+[T+3449] [R3] [jarbas] [IPC] [hermes] - topics_mirror=OK full_wire=OK(jarbas-crate)
+[T+3450] [R3] [jarbas] [Gate] [n5] - complete n5.1=OK n5.2=OK n5.3=OK n5.4=OK n5.5=OK n5.6=OK criteria=MET (N5.7 jarbas-crate wired)
+[T+3450] [R0] [k-nano] [LOG] [info] - BOOT: N5 jarbas gate MET
+[T+3450] [R0] [nk] [COG] [info] - [PLANNER] 0 plans, 0 total steps
+[T+3450] [R0] [nk] [COG] [info] - [SUCCESS] 0% life, 0% recent (0/0), streak=0, best=0
+[T+3450] [R0] [nk] [COG] [info] - [FEEDBACK] avg 0.0/10 (0 ratings, 0 comments)
+[T+3451] [R0] [nk] [COG] [info] - [NCACHE] 0 entries, 0% hit, ttl=1000
+[T+3451] [R0] [nk] [COG] [info] - [PREDICTOR] 0 patterns, 0 total, top=""
+[T+3451] [R0] [nk] [COG] [info] - [VQ] 256 codes x 64 dim, 0 indices stored
+[T+3451] [R0] [nk] [COG] [info] - [REACT] 0 steps, max=10
+[T+3452] [R0] [nk] [COG] [info] - [MCP] 4 tools, 0 sessions
+[T+3452] [R0] [nk] [COG] [info] - [AUTOSKILL] 0 generated, 2 templates
+[T+3452] [R0] [nk] [COG] [info] - [SCALER] heap_target=16MB, 0 adjustments
+[T+3452] [R0] [nk] [COG] [info] - [SCHEDOPT] timeslice=100ms, throughput=0.0/s
+[T+3453] [R0] [nk] [COG] [info] - [REPLAY] 0/10000 experiences, 0 writes
+[T+3453] [R0] [nk] [COG] [info] - [TRAINER] lr=0.001, epochs=1, steps=0
+[T+3453] [R0] [nk] [COG] [info] - [EPISODIC] 0/1000 episodes sgdb=true
+[T+3453] [R0] [nk] [COG] [info] - [SPAWNER] 0 tasks spawned, max=16
+[T+3453] [R0] [nk] [COG] [info] - [ISOLATION] 0 workspaces
+[T+3454] [R0] [nk] [COG] [info] - [DELTA] acceptance=0% (0 accepted, 0 rejected)
+[T+3454] [R0] [nk] [COG] [info] - [MLMFREE] loaded=false, dim=512, vocab=32000
+[T+3454] [R0] [nk] [COG] [info] - [TMEM] 0 keys, 0 snapshots
+[T+3454] [R0] [nk] [COG] [info] - [VECFS] 0 paths, dim=384
+[T+3454] [R0] [nk] [COG] [info] - [BGE] ausente — emb=pseudo (hash/TF bits)
+[T+3454] [R0] [nk] [Log] [msg] - [BOOT:AgentFleet] 54 agents + DiagnosticSkill registrados
+[T+3456] [R0] [nk] [Sched] [info] - 54 runtime agents. Iniciando scheduler...
+[CPU] Interrupcoes de hardware habilitadas (IF=1).
+[T+3456] [R0] [nk] [Log] [msg] - [BOOT:Runtime] Entrando no AgentScheduler
+[T+3456] [R0] [nk] [NET-HW] [info] - VERDICT=PASS reason=rx_count=8 at_runtime
+[T+3457] [R0] [nk] [BOOT] [REPORT] - storage=true usb_msc=false log_written=false ckpt=K50
+[T+3495] [R0] [nk] [BOOT] [info] - init_phase (heap stack, round-robin)...
+[T+3495] [R0] [nk] [ARCH] [info] - System architecture: ring0=0 ring1=0 heap=2048MB trust=1 power=0 tensor=0
+[T+3495] [R2] [k-ai] [Trust] [info] - exempt token=1 (sistema)
+[T+3495] [R2] [k-ai] [Trust] [info] - Boot policy loaded: 3 patterns, policy=Contain
+[T+3495] [R2] [k-ai] [Trust] [info] - allow (token,agent,skill)=(1,self_heal,recover)
+[T+3495] [R2] [k-ai] [Trust] [info] - allow (token,agent,skill)=(1,self_heal,inventory_vid)
+[T+3495] J{"t":3495,"l":"AGENT","a":"Trust","e":"ready"[T+3495] ,"tick":1[T+3495] }
+[T+3495] J{"t":3495,"l":"AGENT","a":"SelfHeal","e":"ready"[T+3496] ,"tick":1[T+3496] }
+[T+3496] [R2] [k-ai] [Gate] [n2] - inventory pci=6 fw_gated=0 trust=OK
+[T+3496] [R2] [k-ai] [Gate] [n2] - HEALTH_ISSUE: honest noop (fw_gated=0 — no known VID needs FW)
+[T+3496] [R2] [k-ai] [Gate] [n2] - done scanned=6 noop=6 heal=0 HEALTH_ISSUE=0
+[T+3496] [R2] [k-ai] [Gate] [n2] - gate complete heal=0 noop=6 HEALTH_ISSUE=0 (k_ai crate N2.5)
+[T+3496] [R0] [nk] [SELF] [HEAL] - lendo shutdown cause (FAT boot-log budgeted)...
+[T+3498] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3518] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3518] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3518] [R0] [nk] [SELF] [HEAL] - Primeiro boot ou sem registro de desligamento.
+[T+3518] [R0] [nk] [SELF] [HEAL] - oneshot Done — liberando init_phase p/ NetAgent
+[T+3519] [R0] [nk] [MEM] [info] - Orcamento adaptativo de memoria
+[T+3519] [R0] [nk] [MEM] [info] - RAM: 7168 MB | VRAM: 0 MB | Modelo: 0 params
+[T+3519] [R0] [nk] [MEM] [info] - Heap:128MB Model:0MB KV:0MB ARC:64MB Vram:0MB
+[T+3519] [R0] [nk] [MEM] [info] - Livre apos: 6976 MB
+[T+3529] [R0] [nk] [MEM] [info] - CPU: 243 MHz | 15 agentes ativos | tick init: 2097152
+[T+3529] [R3] [hermes] [Net] [info] - NIC ja inicializada — NetDriverAgent no-op
+[T+3529] [R0] [nk] [USB] [info] - Inicializado via init_xhci().
+[T+3529] [R1] [k-hal] [HDA] [info] - Nenhum controlador Intel HDA encontrado
+[T+3529] [R0] [nk] [UAC] [info] - Nenhum controlador USB (PCI 0x0C)
+[T+3529] [R1] [k-hal] [HalOffer] [query] - class=gpu status=Available
+[T+3529] [R3] [jarbas] [VGPU] [offer] - gpu status=Available
+[T+3529] [R1] [k-hal] [HalOffer] [query] - class=gpu status=Available
+[T+3530] [R1] [k-hal] [HalOffer] [recipe] - gate=ALLOW class=gpu pkg=legacy_l1
+[T+3531] [R1] [k-hal] [Cap] [grant] - FeCompute granted
+[T+3531] [R1] [k-hal] [HalOffer] [bind] - OK class=gpu agent=display slot=1 topic=COMPUTE_JOB
+[T+3531] [R3] [jarbas] [VGPU] [bind] - HalOffer OK topic=COMPUTE_JOB
+[T+3531] [R3] [jarbas] [VGPU] [fe] - GOP=true notify_kick=false (sem MMIO R3)
+[T+3531] [R3] [jarbas] [VGPU] [info] - VirtIO-GPU OK.
+[T+3531] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:00.0 8086:1237 (Bridge)
+[T+3531] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.0 8086:7000 (Bridge)
+[T+3531] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.1 8086:7010 (Mass Storage)
+[T+3531] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:01.3 8086:7113 (Bridge)
+[T+3531] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:02.0 1234:1111 (Display)
+[T+3531] [R2] [k-ai] [HW-DETECT] [pci] - PCI: 00:03.0 8086:100E (Network)
+[T+3532] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:1237 PCI 8086:1237 family=pci_bridge agent=PlatformAgent fw=- next=observe_only caps=0x0 src=heuristic
+[T+3532] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:7000 PCI 8086:7000 family=pci_bridge agent=PlatformAgent fw=- next=observe_only caps=0x0 src=heuristic
+[T+3532] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:7010 PCI 8086:7010 family=storage_ata agent=DiskAgent fw=- next=bind_storage caps=0x40 src=heuristic
+[T+3532] [R0] [nk] [HW] [PnP] - STORAGE 8086:7010 → DiskAgent
+[T+3533] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:7113 PCI 8086:7113 family=pci_bridge agent=PlatformAgent fw=- next=observe_only caps=0x0 src=heuristic
+[T+3533] [R0] [nk] [Log] [msg] - [HW-PnP] 1234:1111 QEMU VGA family=qemu_vga agent=DisplayAgent fw=- next=ready caps=0x4 src=table
+[T+3533] [R0] [nk] [HW] [PnP] - READY 1234:1111 → agent=DisplayAgent (já no boot path)
+[T+3533] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:100E Intel PRO/1000 Network family=intel_e1000 agent=NetAgent fw=- next=bind_network caps=0x1 src=table
+[T+3533] [R0] [nk] [HW] [PnP] - READY 8086:100E → agent=NetAgent (já no boot path)
+[T+3533] [R0] [nk] [HW] [PnP] - published 6 capability cards
+[T+3533] [R0] [nk] [HW] [AI] - Arvore PnP:
+Dispositivos (PnP cards):
+  8086:1237 — PCI 8086:1237
+    → Card: family=pci_bridge agent=PlatformAgent fw=- next=observe_only caps=0x0 src=heuristic
+  8086:7000 — PCI 8086:7000
+    → Card: family=pci_bridge agent=[T+3534] [R0] [k-nano] [DISK] [info] - DiskIntelligenceAgent: probing storage...
+[T+3534] [R0] [k-nano] [DISK] [info] - Controller: ata0 (Ata)
+[T+3535] [R0] [k-nano] [SMART] [info] - sda: S.M.A.R.T. nao disponivel
+[T+3564] [R0] [k-nano] [DISK] [info] - MHI: sda part0 126MB tier=UsbMsc
+[T+3564] [R0] [k-nano] [DISK] [info] - Mount: /mnt/sda/p0 -> NEURAL-ESP
+[T+3564] [R0] [k-nano] [DISK] [info] - === Topology ===
+[T+3564] [R0] [k-nano] [DISK] [info] - sda: 0GB Pata (ata0)
+[T+3564] [R0] [k-nano] [DISK] [info] - p0: 0xee Fat32 
+[T+3564] [R0] [k-nano] [DISK] [info] - === End Topology ===
+[T+3564] [R0] [nk] [AGENT] [info] - SystemAgent ativo. Aguardando SYSTEM_READY...
+[T+3564] [R0] [nk] [Agent] [monitor] - Evento SYSTEM_READY publicado.
+[T+3565] [R0] [nk] [MHI] [info] - 1 tier(s). Best: Dram (4000000000 bytes avail)
+[T+3565] [R2] [k-ai] [Trust] [info] - DENY uncached (Contain): token=1 skill=diagnostic — use trust_allow
+[T+3565] [R0] [nk] [Trust] [deny] - diagnostic skill denied before execute_skill
+[T+3567] [R2] [k-ai] [SELF-LEARN] [info] - SelfLearningAgent activated
+[T+3567] [R3] [jarbas] [Metrics] [info] - snapshot cpu=0% mem=36% gpu=15% hd=55%
+[T+3567] [R3] [jarbas] [Metrics] [info] - MetricsAgent ativo — refresh a cada ~0.5s
+[T+3568] [R0] [nk] [BOOT] [LOG-AGENT] - fase=[BOOT:AgentFleet] 54 agents + DiagnosticSkill registrados
+[T+3568] [R0] [nk] [BOOT] [LOG-AGENT] - fase=[BOOT:Runtime] Entrando no AgentScheduler
+[T+3569] [R0] [k-nano] [MBR] [info] - 1: type=0xee LBA=1 size=127MB
+[T+3589] [R0] [k-nano] [GPT] [info] - 1 particoes
+[T+3589] [R0] [k-nano] [GPT] [info] - 1: type=0xee LBA=2048 size=126MB
+[T+3589] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+3589] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=uvc_driver
+[T+3589] [R3] [jarbas] [UVC] [bind] - HalOffer DENY Absent
+[T+3589] [R3] [hermes] [Net] [info] - Continuous active pós-init (SelfHeal/Disk Done) — gate=e1000 [smoltcp/NIC]
+[T+3589] [R3] [hermes] [Net] [info] - tick 0
+[T+3589] [R0] [nk] [Net] [tick] - t=0 NetAgent tick started (tick=0)
+[T+3590] [R0] [nk] [Net] [tick] - t=0 poll: tx=27 rx=8 slip_tx=0 slip_rx=0 configured=true
+[T+3590] [R0] [k-nano] [Net] [e1000] - CTRL=0x00000061 STATUS=0x80080783 link=UP speed=1000Mb AV=1
+[T+3590] [R0] [k-nano] [Net] [e1000] - RDH=8 RDT=7 TDH=30 TDT=30 RCTRL=0x0400801e RAH=0x80005634
+[T+3590] [R0] [k-nano] [Net] [e1000] - RDBAL=0x814c4000 RDBAH=0x00000000 RDLEN=1024 ICR=0x00000083
+[T+3590] [R0] [k-nano] [Net] [e1000] - desc0 status=0x00 len=590 dd=0 addr=0x814c5000
+[T+3590] [R0] [k-nano] [Net] [e1000] - desc0 raw: 00504c8100000000 4e02|0000|00000000
+[T+3590] [R0] [nk] [Net] [tick] - t=0 Health TX=27 RX=8 online=true
+[T+3591] [R0] [nk] [MOUSE] [info] - 8042 self-test TIMEOUT — ausente
+[T+3591] [R0] [nk] [MOUSE] [info] - PS/2 ausente — só USB HID mouse
+[T+3591] [R3] [jarbas] [GPU] [init] - backend init: GPU backend not initialized (CpuOnly)
+[T+3592] [R3] [jarbas] [UI] [info] - Jarbas Chat — desktop 3 painéis
+[T+3593] [R3] [jarbas] [Jarbas] [info] - Desktop iniciado @ 1280x800
+[MOUSE] desktop_ready status=0x000000000000001c obf=0 ibf=0 aux=0 pos=640x400
+[T+3593] [R0] [nk] [Log] [msg] - 
++------------------------------------+
+|  Hermes vNeural OS v0.51                |
+|  "Thoughtful. Precise. Alive."          |
++------------------------------------+
+[T+3594] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_pci_bridge_observe_only_agent_platformage' python run #1 success_rate=100%
+[T+3595] [R0] [nk] [Log] [msg] - [Hermes-PnP] observe_only family=pci_bridge → observe/boot path (skill efêmera 'hw_pnp_pci_bridge_observe_only_agent_platformage')
+[T+3595] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_pci_bridge_observe_only_agent_platformage' python run #2 success_rate=100%
+[T+3595] [R0] [nk] [Log] [msg] - [Hermes-PnP] observe_only family=pci_bridge → observe/boot path (skill efêmera 'hw_pnp_pci_bridge_observe_only_agent_platformage')
+[T+3596] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_storage_ata_bind_storage_agent_diskagent' python run #1 success_rate=100%
+[T+3596] [R1] [k-hal] [HalOffer] [query] - class=block status=Available
+[T+3596] [R1] [k-hal] [HalOffer] [recipe] - gate=ALLOW class=block pkg=legacy_l1
+[T+3596] [R1] [k-hal] [HalOffer] [bind] - OK class=block agent=DiskAgent slot=2 topic=BLOCK_IO
+[T+3596] [R3] [hermes] [HalOffer] [request] - HalOffer Bound class=block agent=DiskAgent topic=BLOCK_IO
+[T+3596] [R0] [nk] [Log] [msg] - [Hermes-PnP] bind_storage family=storage_ata → HalOffer Bound class=block agent=DiskAgent topic=BLOCK_IO
+[T+3597] [R3] [hermes] [S108] [info] - pattern 'hw_pnp_pci_bridge_observe_only_agent_platformage' hits=3 — candidato auto-skill
+[T+3597] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_pci_bridge_observe_only_agent_platformage' python run #3 success_rate=100%
+[T+3597] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_pci_bridge_observe_only_agent_platformage' elegível WASM (runs=3, rate=100%) → /skills/hw_pnp_pci_bridge_observe_only_agent_platformage.wasm
+[T+3598] [R3] [hermes] [EVOLVE] [info] - hot_swap OK skill=hw_pnp_pci_bridge_observe_only_agent_platformage gen=1
+[T+3598] [R3] [hermes] [EVOLVE] [info] - ephemeral→WASM skill=hw_pnp_pci_bridge_observe_only_agent_platformage (via wasmi sandbox)
+[T+3598] [R3] [hermes] [PnP] [info] - skill 'hw_pnp_pci_bridge_observe_only_agent_platformage' promovida efêmera→WASM (uso rotineiro)
+[T+3598] [R0] [nk] [Log] [msg] - [Hermes-PnP] observe_only family=pci_bridge → skill 'hw_pnp_pci_bridge_observe_only_agent_platformage' → WASM
+[T+3600] [R3] [hermes] [SKILL] [info] - Registrada: 'hw_identify' — Identifica dispositivos de hardware por PCI/USB ID e sugere driver (1 tokens, 1966 bytes)
+[T+3600] [R3] [hermes] [SKILL] [info] - Registrada: 'self_heal' — Analisa erros do kernel e sugere acao de recuperacao automatica (1 tokens, 3083 bytes)
+[T+3600] [R3] [hermes] [SKILL] [info] - Registrada: 'web_scrape' — Busca, extrai e resume conteudo de paginas web para o usuario (1 tokens, 7012 bytes)
+[T+3600] [R3] [hermes] [SKILL] [SEC] - BLOQUEADO: skill 'skill_writer' contem padrao perigoso: 'ignore all'
+[T+3601] [R3] [hermes] [SKILL] [info] - Erro ao carregar skill: Skill: conteudo malicioso detectado
+[T+3602] [R0] [nk] [sgdb] [recall] - path=no_rag emb=pseudo
+[T+3604] [R3] [hermes] [SKILL] [info] - 3 skill(s) carregadas, prompt de 933 bytes
+[T+3615] [R3] [hermes] [SKILL] [info] - Registrada: 'hw_pnp_pci_bridge_observe_only_agent_platformage' — hw_pnp pci_bridge observe_only agent=PlatformAgent (1 tokens, 379 bytes)
+[T+3617] [R3] [hermes] [S108] [info] - skill 'hw_pnp_pci_bridge_observe_only_agent_platformage' verified+registered
+[T+3617] [R0] [nk] [PnP] [info] - auto SKILL.md 'hw_pnp_pci_bridge_observe_only_agent_platformage'
+[T+3617] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_qemu_vga_ready_agent_displayagent' python run #1 success_rate=100%
+[T+3617] [R0] [nk] [Log] [msg] - [Hermes-PnP] ready family=qemu_vga → observe/boot path (skill efêmera 'hw_pnp_qemu_vga_ready_agent_displayagent')
+[T+3618] [R3] [hermes] [SkillOpt] [info] - 'hw_pnp_intel_e1000_bind_network_agent_netagent' python run #1 success_rate=100%
+[T+3618] [R1] [k-hal] [HalOffer] [query] - class=net status=Available
+[T+3618] [R1] [k-hal] [HalOffer] [recipe] - gate=ALLOW class=net pkg=legacy_l1
+[T+3618] [R1] [k-hal] [Cap] [grant] - FeNet granted
+[T+3618] [R1] [k-hal] [HalOffer] [bind] - OK class=net agent=NetAgent slot=3 topic=NET_RX
+[T+3618] [R3] [hermes] [HalOffer] [request] - HalOffer Bound class=net agent=NetAgent topic=NET_RX
+[T+3618] [R0] [nk] [Log] [msg] - [Hermes-PnP] bind_network family=intel_e1000 → HalOffer Bound class=net agent=NetAgent topic=NET_RX
+[T+3618] [R0] [nk] [HERMES] [PnP] - hint-wire observe_only|PlatformAgent|-
+[T+3618] [R0] [nk] [HERMES] [PnP] - hint-wire observe_only|PlatformAgent|-
+[T+3618] [R0] [nk] [HERMES] [PnP] - hint-wire bind_storage|DiskAgent|-
+[T+3618] [R0] [nk] [HERMES] [PnP] - hint-wire observe_only|PlatformAgent|-
+[T+3619] [R0] [nk] [HERMES] [PnP] - hint-wire ready|DisplayAgent|-
+[T+3619] [R0] [nk] [HERMES] [PnP] - hint-wire bind_network|NetAgent|-
+[T+3619] [R3] [hermes] [Hermes] [info] - 🧠 THINK — processando entrada
+[T+3619] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+3619] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+3669] [R0] [nk] [Audio] [tts] - Formant: "[HW-PnP] 6 cards published — Hermes decide" (43040 samples)
+[T+3669] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 43040 frames, chunk 2560
+[T+3732] [R0] [nk] [Audio] [tts] - Formant: "Hermes vNeural OS v0.51 — Thoughtful. Precise. Alive." (57120 samples)
+[T+3732] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 57120 frames, chunk 2560
+[T+3873] [R0] [nk] [Audio] [tts] - Formant: "[Hermes-PnP] observe_only family=pci_bridge → observe/boot path (skill efêmera 'hw_pnp_pci_bridge_observe_only_agent_platformage')" (136160 samples)
+[T+3873] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 136160 frames, chunk 2560
+[T+4017] [R0] [nk] [Audio] [tts] - Formant: "[Hermes-PnP] observe_only family=pci_bridge → observe/boot path (skill efêmera 'hw_pnp_pci_bridge_observe_only_agent_platformage')" (136160 samples)
+[T+4017] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 136160 frames, chunk 2560
+[T+4139] [R0] [nk] [Audio] [tts] - Formant: "[Hermes-PnP] bind_storage family=storage_ata → HalOffer Bound class=block agent=DiskAgent topic=BLOCK_IO" (118880 samples)
+[T+4139] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 118880 frames, chunk 2560
+[T+4253] [R0] [nk] [Audio] [tts] - Formant: "[Hermes-PnP] observe_only family=pci_bridge → skill 'hw_pnp_pci_bridge_observe_only_agent_platformage' → WASM" (113440 samples)
+[T+4254] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 113440 frames, chunk 2560
+[T+4380] [R0] [nk] [Audio] [tts] - Formant: "[Hermes-PnP] ready family=qemu_vga → observe/boot path (skill efêmera 'hw_pnp_qemu_vga_ready_agent_displayagent')" (119520 samples)
+[T+4380] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 119520 frames, chunk 2560
+[T+4488] [R0] [nk] [Audio] [tts] - Formant: "[Hermes-PnP] bind_network family=intel_e1000 → HalOffer Bound class=net agent=NetAgent topic=NET_RX" (104800 samples)
+[T+4488] [R3] [jarbas] [Jarbas] [info] - TTS streaming: 104800 frames, chunk 2560
+[T+4489] [R0] [k-nano] [ENV] [info] - hv=TCG sandbox=true smp=true avx2=false avx512=false fma=false max_aps=4 isa=scalar
+[T+4489] [R0] [k-nano] [CPU] [info] - sse42=false avx=false avx2=false fma=false bmi2=false mwait=false clflushopt=false amx=false hybrid=false
+[T+4489] [R0] [k-nano] [CACHE] [info] - L1D=32768 L1I=32768 L2=262144 L3=4194304 line=64
+[T+4489] [R0] [k-nano] [CPUFREQ] [info] - EPB=6
+[T+4489] [R0] [k-nano] [CPUFREQ] [info] - P0=232 Pn=8 current=232 has_pstate=false (160 MHz base)
+[T+4490] [R3] [hermes] [JARBAS] [persona] - hw_profile=StandardUma mode=Tool
+[T+4490] [R3] [hermes] [Cron] [info] - Job 'health' disparado @ tick 4490
+[T+4490] [R3] [hermes] [Cron] [info] - Job 'memory_report' disparado @ tick 4490
+[T+4491] [R0] [k-nano] [MHI] [info] - Queue migrate UsbMsc->Nvme @100000 size=133152256
+[T+4491] [R0] [nk] [MHI-DMA] [info] - step=peer_dma status=UNSUPPORTED detail=cross_tier_peer_dma
+[T+4491] [R0] [nk] [MHI-DMA] [info] - VERDICT=AWAITING_REAL_HW reason=cross_tier_peer_dma
+[T+4491] [R0] [k-nano] [MHI] [info] - soft-meta UsbMsc->Nvme @100000 (no DMA; ADR-0040 defer)
+[T+4492] [R2] [cortex] [FED] [info] - subscribed P2P_PACKET (EventBus)
+[T+4492] [R0] [nk] [CHANGE] [info] - skill:hw_pnp_pci_bridge_observe_only_agent_platformage
+[T+4492] [R0] [nk] [CHANGE] [info] - skill:hw_pnp_pci_bridge_observe_only_agent_platformage
+[T+4493] [R0] [nk] [SCHED] [info] - tick=1 agents=54 polled=34
+[T+4494] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4494] [R0] [k-nano] [P2P] [info] - MESH_ENGINE inicializado (ADR-0081) node_id=15
+[T+4496] [R0] [k-nano] [P2P] [info] - TX heartbeat node=15 t=4494 sent=true
+[T+4496] [R0] [k-nano] [P2P] [info] - sec: unsigned=0 badsig=0 replay=0
+[T+4497] [R0] [k-nano] [P2P] [info] - local caps set bits=0x28
+[T+4497] [R3] [hermes] [SkillSync] [info] - subscribed P2P_PACKET (EventBus)
+[T+4497] [R3] [hermes] [MeshKnowledge] [info] - subscribed P2P_PACKET (EventBus)
+[T+4497] [R0] [k-nano] [MKTP] [info] - subscribed P2P_PACKET (EventBus)
+[T+4498] [R0] [nk] [FL] [stats] - fl round=0 global=0 grads=0 | crdt v=0 peers=0
+[T+4499] [R3] [hermes] [Net] [info] - tick 1
+[T+4499] [R0] [nk] [Net] [tick] - t=1 NetAgent tick started (tick=1)
+[MOUSE] display_tick status=0x000000000000001c obf=0 ibf=0 aux=0 pos=640x400
+[T+4499] [R3] [jarbas] [ADR] [0047-H] - ui_spec applied title=ADR-0047 UI
+[T+4499] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4499] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4500] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4501] [R3] [hermes] [Net] [info] - tick 2
+[T+4501] [R0] [nk] [Net] [tick] - t=2 NetAgent tick started (tick=2)
+[MOUSE] display_tick status=0x000000000000001c obf=0 ibf=0 aux=0 pos=640x400
+[T+4502] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4502] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4502] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4503] [R3] [hermes] [Net] [info] - tick 3
+[MOUSE] display_tick status=0x000000000000001c obf=0 ibf=0 aux=0 pos=640x400
+[T+4503] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4503] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4503] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4504] [R3] [hermes] [Net] [info] - tick 4
+[MOUSE] display_tick status=0x000000000000001c obf=0 ibf=0 aux=0 pos=640x400
+[T+4504] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4504] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4504] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4505] [R3] [hermes] [Net] [info] - tick 5
+[T+4505] [R0] [nk] [Net] [tick] - t=5 NetAgent tick started (tick=5)
+[MOUSE] display_tick status=0x000000000000001c obf=0 ibf=0 aux=0 pos=640x400
+[T+4506] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4506] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4507] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4508] [R3] [hermes] [Net] [info] - tick 6
+[T+4508] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4508] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4508] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4509] [R3] [hermes] [Net] [info] - tick 7
+[T+4509] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4509] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4509] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4510] [R3] [hermes] [Net] [info] - tick 8
+[T+4511] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4511] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4511] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4512] [R3] [hermes] [Net] [info] - tick 9
+[T+4512] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4512] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4512] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4513] [R3] [hermes] [Net] [info] - tick 10
+[T+4513] [R0] [nk] [Net] [tick] - t=10 NetAgent tick started (tick=10)
+[T+4513] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4513] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4513] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4514] [R3] [hermes] [Net] [info] - tick 11
+[T+4516] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4516] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4516] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4517] [R3] [hermes] [Net] [info] - tick 12
+[T+4517] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4517] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4517] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4518] [R3] [hermes] [Net] [info] - tick 13
+[T+4518] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4518] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4518] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4519] [R3] [hermes] [Net] [info] - tick 14
+[T+4520] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4520] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4520] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4521] [R3] [hermes] [Net] [info] - tick 15
+[T+4521] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4521] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4521] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4522] [R3] [hermes] [Net] [info] - tick 16
+[T+4522] [R1] [k-hal] [HalOffer] [query] - class=video status=Absent
+[T+4522] [R3] [hermes] [HalOffer] [request] - HalOffer Absent class=video agent=vision
+[T+4522] [R0] [nk] [BEI] [supervisor] - ProceedWithBudget: 10
+[T+4523] [R3] [hermes] [Net] [info] - tick 17
