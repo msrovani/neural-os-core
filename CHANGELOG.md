@@ -20,8 +20,10 @@ backprop, saudação demo era pool canado. Correções (cargo check --release: 0
 - **7.5 — Saudação sem pool canado.** Removidos `argmax_row_greeting_only` +
   `GREETING_BIAS_IDS`/`greeting_*` (bpe.rs); saudação usa argmax real do modelo.
   Clima mantém constrained decode (saída estruturada).
-- **Router treinado.** `tools/train_router.py`: dataset 34 amostras/7 experts,
-  gate acurácia ≥80%, exporta `ROUTER.BITNET` (25.988B, 100% acc).
+- **Router treinado.** `tools/train_router.py`: 111 utterances curated PT/EN +
+  ~1863 templates; holdout 31 curated, acurácia **93.5%** (gate ≥80% PASS);
+  artefato `models/ROUTER.BITNET` (27.780B) + matriz de confusão em
+  `docs/evidence/router-confusion-matrix-20260804.md`.
 - **Assets opcionais.** `mkfat32.py`/`mkexfat.py` incluem `ROUTER.BITNET` se existir.
 - **Fixes pré-existentes revelados por `cargo clean`** (xhci): `% ISOC_SLOTS` type
   mismatch, match incompatível, use-after-move do ring UVC (`configure_uvc_endpoint`
