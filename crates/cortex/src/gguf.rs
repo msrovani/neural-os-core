@@ -299,6 +299,11 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
     for _ in 0..tensor_count {
         let name = read_string(data, &mut offset);
         let n_dims = read_u32(data, &mut offset);
+        // GGUF spec: n_dims ∈ 1..=4 — valida antes de with_capacity/dims[0]
+        // (n_dims malformado = panic/OOM em dados de arquivo).
+        if n_dims == 0 || n_dims > 4 {
+            return Err("GGUF: n_dims fora de 1..=4");
+        }
         let mut dims = Vec::with_capacity(n_dims as usize);
         for _ in 0..n_dims {
             dims.push(read_u64(data, &mut offset));
@@ -882,6 +887,11 @@ pub fn load_gguf_meta_only(data: &[u8]) -> Result<GgufFile, &'static str> {
         if offset + 8 > data.len() { return Err("GGUF: tensor info truncado"); }
         let name = read_string(data, &mut offset);
         let n_dims = read_u32(data, &mut offset);
+        // GGUF spec: n_dims ∈ 1..=4 — valida antes de with_capacity/dims[0]
+        // (n_dims malformado = panic/OOM em dados de arquivo).
+        if n_dims == 0 || n_dims > 4 {
+            return Err("GGUF: n_dims fora de 1..=4");
+        }
         let mut dims = Vec::with_capacity(n_dims as usize);
         for _ in 0..n_dims {
             dims.push(read_u64(data, &mut offset));

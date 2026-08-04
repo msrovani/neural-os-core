@@ -145,7 +145,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
         let reserved = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]) as u32;
         let fat_count = bpb[0x10] as u32;
         let root_entries = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
-        if root_entries > 0 || bps == 0 || spc == 0 { continue; }
+        if root_entries > 0 || bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 { continue; }
         let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
         let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
         let fat_lba = lba_start as u32 + reserved;

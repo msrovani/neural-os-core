@@ -26,12 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 DATASET = ROOT / "models" / "hw_expert" / "v4" / "dataset_class_v2.json"
 VOCAB = ROOT / "models" / "hw_expert" / "v4" / "vocab_class_v2.json"
 N_CAPS = 10
-# Kernel layout: load_hwexpert_v5 (cortex.rs:336) hardcodes the family head at
-# 17 columns — the FILE must keep that for parse alignment. Our taxonomy uses
-# columns 0..11; columns 12..16 are dead (zeroed at export → logit 0 → argmax
-# never lands there while any real class logit > 0; ties fall to col 0 =
-# "unknown" → kernel falls back to heuristic_card, safe).
-N_FAMILY_FILE = 17
+# Class-v2 file layout: family head has 12 columns (the 12 generic families in
+# vocab_class_v2.json). The kernel loader is updated to heads=[12,8,9,10,9] by
+# a later lane; this validator is the independent Rust-exact port (12-col).
+N_FAMILY_FILE = 12
 N_FAMILY = 12
 FAMILY_GATE = 70.0
 TEST_GATE = 3
@@ -262,13 +260,11 @@ def predict(model, vid, did):
         return max(range(len(v)), key=lambda i: v[i])
 
     fam_all = matmul_hybrid(model["family_head"], pooled)
-    # 17-col kernel layout: classes 12..16 are dead (zero weights at export).
-    # Clamp to the 12 real classes exactly like the future kernel decode will:
-    # argmax over all 17, but dead columns have logit 0; a tie at 0 resolves to
-    # the lowest index, which is what the kernel's argmax does too.
+    # 12-col family head; clamp guard (dead col can't win with 12 cols, kept
+    # for parity with the future kernel decode).
     fam = argmax(fam_all)
     if fam >= N_FAMILY:
-        fam = 0  # dead column won (all real logits < 0) → unknown, like kernel
+        fam = 0  # out-of-range guard → unknown, like kernel
     fw = argmax(matmul_hybrid(model["fw_head"], pooled))
     ag = argmax(matmul_hybrid(model["agent_head"], pooled))
     caps = 0
@@ -394,8 +390,8 @@ def validate(path, quiet=False):
                  len(m["agent_head"]) // m["hidden"], len(m["caps_head"]) // m["hidden"],
                  len(m["next_head"]) // m["hidden"]]
     out["heads"] = head_cols
-    # Critical parse-alignment property: family head MUST be 17 cols (kernel
-    # loader hardcodes it); hidden/layers are read dynamically by the kernel.
+    # Parse-alignment property: family head MUST be 12 cols (class-v2 taxonomy);
+    # the kernel loader is updated to [12,8,9,10,9] by a later lane.
     out["header_ok"] = head_cols == [N_FAMILY_FILE, 8, 9, 10, 9]
     out["nz_frac"] = nonzero_fraction(m)
     out["nz_gate"] = out["nz_frac"] >= 0.01

@@ -298,6 +298,12 @@ fn apply_rela_dyn(data: &[u8], aspace: &mut AddressSpace) -> Result<(), &'static
                     .frame_for_virt(va)
                     .ok_or("ELF: rela target unmapped")?;
                 let hhdm_base = PHYS_MEM_OFFSET.load(Ordering::Acquire);
+                // Escrita de 8 bytes nao pode cruzar o frame (a frame seguinte e
+                // outra alocacao). Relocs validos sao alinhados a 8 (r_offset&0xfff
+                // <= 0xff8); qualquer outro e ELF malformado -> fail-closed.
+                if (r_offset & 0xfff) > 0xff8 {
+                    return Err("ELF: rela write crosses frame boundary");
+                }
                 let ptr = (hhdm_base + frame.start_address().as_u64() + (r_offset & 0xfff)) as *mut u64;
                 unsafe {
                     core::ptr::write_volatile(ptr, r_addend);

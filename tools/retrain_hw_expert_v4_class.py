@@ -41,16 +41,15 @@ from retrain_hw_expert_v4 import (  # noqa: E402
 )
 import validate_hw_expert_v4_class as V  # noqa: E402
 
-N_FAMILY = 12          # real classes (columns 0..11)
-N_FAMILY_FILE = 17     # kernel loader (cortex.rs:336) hardcodes 17 family cols
+N_FAMILY = 12          # real classes (columns 0..11) — from vocab_class_v2.json
+N_FAMILY_FILE = 12     # file family head = same 12 columns (kernel updated to 12 by a later lane)
 DATASET = ROOT / "models" / "hw_expert" / "v4" / "dataset_class_v2.json"
 
 
 class BitNetRustExactClass(BitNetRustExact):
-    """Same Rust-exact model; family head = 17 columns (kernel layout) with the
-    12 real classes in columns 0..11 and 5 dead columns (12..16) trained NEGATIVE
-    (they are never labels, so CE pushes them down) so the kernel's argmax over
-    all 17 never fires them. The future kernel-decode update reads 0..11."""
+    """Same Rust-exact model; family head = 12 columns, matching the 12-class
+    taxonomy in vocab_class_v2.json (unknown/network/wifi/display/storage/
+    audio/usb/serial_io/bridge/multimedia/input/other)."""
 
     def __init__(self, hidden=128, vocab=64, num_layers=6, num_heads=4, ff_dim=256,
                  t=0.01, tau=16.0, n_family=N_FAMILY_FILE):
@@ -111,8 +110,6 @@ def train_with_early_stop(samples, train_idx, hold_idx, args, log):
     # learned and the model cannot collapse to a single class.
     fam_counts = torch.bincount(Yf, minlength=args.n_family_file).float().clamp(min=1)
     fam_w = (fam_counts.sum() / (args.n_family_file * fam_counts)).sqrt()
-    # dead columns (12..16) never appear as labels; give them weight 1.0
-    fam_w[args.n_family:] = 1.0
     if args.no_class_weights:
         fam_w = torch.ones_like(fam_w)
     crit_ce_fam = nn.CrossEntropyLoss(weight=fam_w.to(DEVICE))
@@ -283,7 +280,7 @@ def main():
                 fam_hits += int(fam_p[k] == int(samples[first_i]["y"].get("family", 0)))
             fam_acc = fam_hits / len(dev_order) * 100.0
             results.append({"thresh": th, "nz": nz, "family": fam_acc, "data": data})
-            print(f"    thresh={th:4.2f}: nz={nz * 100:6.3f}%  holdout dev family={fam_acc:6.2f}%")
+            print(f"    thresh={th:5.3f}: nz={nz * 100:6.3f}%  holdout dev family={fam_acc:6.2f}%")
         except Exception as e:  # noqa: BLE001
             print(f"    thresh={th}: failed ({e})")
 
@@ -315,7 +312,9 @@ def main():
     print(f"    backbone nonzero frac  : {res['nz_frac'] * 100:.3f}%")
     for k in ("family", "fw_id", "agent_id", "caps_bits", "next_action"):
         print(f"    holdout {k:12s} (file): {res['holdout_acc'][k]:.2f}%")
-    print(f"    validation             : PASS (parse/header/nz/test/family gates)")
+    print(f"    validation             : "
+          f"parse={res['parse_ok']} header={res['header_ok']} nz={res['nz_gate']} "
+          f"test={res['test_gate']} family={res['family_gate']}")
     print("=" * 64)
 
 

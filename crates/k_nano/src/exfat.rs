@@ -135,6 +135,11 @@ fn parse_vbr(vbr: &[u8; 512], start_lba: u64) -> Option<ExfatFs> {
     let cluster_count = u32::from_le_bytes([vbr[92], vbr[93], vbr[94], vbr[95]]);
     let root_cluster = u32::from_le_bytes([vbr[96], vbr[97], vbr[98], vbr[99]]);
     let bytes_per_cluster_shift = vbr[109];
+    // exFAT spec: shift 9..=25 (512B..32MB). Shift malicioso (ate 63) vira
+    // alocacao de 2^63 bytes (OOM no boot).
+    if bytes_per_cluster_shift < 9 || bytes_per_cluster_shift > 25 {
+        return None;
+    }
     let bytes_per_cluster = 512u64 << (bytes_per_cluster_shift as u64);
 
     let mut label = String::new();

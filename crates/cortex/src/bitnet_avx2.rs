@@ -110,15 +110,25 @@ unsafe fn avx2_bitwise_matmul(weight: &PackedTernaryTensor, input: &Tensor, m: u
                 let byte_idx = t * packed_cols + j_block;
                 if byte_idx >= weight.packed_data.len() { break; }
                 let p = weight.packed_data[byte_idx];
+                let out_off = j_block * 4;
+                let lanes = core::cmp::min(4, n - out_off);
 
                 // Lookup table: byte → [f32; 4]
                 let lut_base = &lut[(p as usize) * 4] as *const f32;
                 let w_f32 = _mm_loadu_ps(lut_base);
 
-                // FMA: out[j_block*4..] += inp[t*4..] * w[byte]
-                let prev = _mm_loadu_ps(out_row.as_mut_ptr().add(j_block * 4));
-                let updated = _mm_fmadd_ps(inp_vals, w_f32, prev);
-                _mm_storeu_ps(out_row.as_mut_ptr().add(j_block * 4), updated);
+                if lanes == 4 {
+                    // FMA: out[j_block*4..] += inp[t*4..] * w[byte]
+                    let prev = _mm_loadu_ps(out_row.as_mut_ptr().add(out_off));
+                    let updated = _mm_fmadd_ps(inp_vals, w_f32, prev);
+                    _mm_storeu_ps(out_row.as_mut_ptr().add(out_off), updated);
+                } else {
+                    // Tail (n % 4 != 0): escalar, para nao ler/escrever alem da linha.
+                    for q in 0..lanes {
+                        let w = unsafe { *lut_base.add(q) };
+                        out_row[out_off + q] += input.data[i * k + t * 4 + q] * w;
+                    }
+                }
             }
         }
     }

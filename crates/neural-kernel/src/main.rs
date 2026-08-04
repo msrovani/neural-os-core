@@ -2031,7 +2031,7 @@ pub(crate) fn kernel_boot(
             if root_entries > 0 { continue; }
             let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
             let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
-            if bps == 0 || spc == 0 { continue; }
+            if bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 { continue; }
             let fat_lba = lba_start + reserved as u32;
             let data_lba = fat_lba + fat_count as u32 * spf;
 
@@ -2055,6 +2055,8 @@ pub(crate) fn kernel_boot(
                     let fc_lo = u16::from_le_bytes([buf[entry+26], buf[entry+27]]);
                     let fc_hi = u16::from_le_bytes([buf[entry+20], buf[entry+21]]);
                     let start_cluster = ((fc_hi as u32) << 16) | fc_lo as u32;
+                    // fsize e u32 do disco (ate 4GB) — cap contra OOM em boot.
+                    if fsize > 16 << 20 { continue; }
                     let mut data = Vec::with_capacity(fsize);
                     let mut fc = start_cluster;
                     while fc < 0x0FFF_FFF8 && fc >= 2 && data.len() < fsize {

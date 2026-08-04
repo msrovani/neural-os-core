@@ -375,8 +375,10 @@ impl<'a> Fat32Reader<'a> {
         let sectors_per_fat32 = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
         let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
 
-        if bytes_per_sector == 0 || sectors_per_cluster == 0 {
-            crate::slog_nano!("FAT32", "info", "new: bps={} spc={} invalido (zero)", bytes_per_sector, sectors_per_cluster);
+        // bps fora de 512..=4096 ou nao-multiplo de 32 -> scans de diretorio
+        // (step_by(32) com buf[entry+31]) leem OOB. FAT spec: 512/1024/2048/4096.
+        if bytes_per_sector < 512 || bytes_per_sector > 4096 || bytes_per_sector % 32 != 0 || sectors_per_cluster == 0 {
+            crate::slog_nano!("FAT32", "info", "new: bps={} spc={} invalido (spec)", bytes_per_sector, sectors_per_cluster);
             return None;
         }
 

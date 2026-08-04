@@ -212,11 +212,14 @@ impl FeedbackLoop {
     pub fn status(&self) -> String { alloc::format!("[FEEDBACK] avg {:.1}/10 ({} ratings, {} comments)", self.avg(), self.ratings.len(), self.comments.len()) }
 }
 
-/// #150 Ternary weight update: {-1,0,+1} com gradiente
+/// #150 Ternary weight update: {-1,0,+1} com gradiente.
+/// Gradientes sao +dL/dw (verificado por diferenca finita no self_test do
+/// TransformerTrainer), entao o update e DESCENTE: w -= sign(g). O sinal antigo
+/// (+=) era ascent e so "funcionava" por compensacao de gradientes bugados.
 pub fn ternary_update(weights: &mut [i8], grads: &[f32], lr: f32) {
     for (w, &g) in weights.iter_mut().zip(grads.iter()) {
         let update = if g.abs() > lr { g.signum() as i8 } else { 0 };
-        let new = (*w as i32 + update as i32).clamp(-1, 1) as i8;
+        let new = (*w as i32 - update as i32).clamp(-1, 1) as i8;
         *w = new;
     }
 }
@@ -663,7 +666,7 @@ pub struct LayerActivation {
     pub q: Tensor,             // (seq, kv_dim) pós-RoPE
     pub k: Tensor,             // (seq, kv_dim)
     pub v: Tensor,             // (seq, kv_dim)
-    pub attn_w: Tensor,        // (seq, seq) softmax causal
+    pub attn_w: Tensor,        // (seq, heads*seq) softmax causal (1 por head)
     pub attn_out: Tensor,      // (seq, kv_dim)
     pub attn_out_norm: Tensor, // (seq, kv_dim)
     pub proj: Tensor,          // (seq, hidden)
@@ -835,7 +838,7 @@ fn gqa_attn_forward(q: &Tensor, k: &Tensor, v: &Tensor, seq: usize,
     let kw = num_kv_heads * hd;
     let scale = 1.0 / libm::sqrtf(hd as f32);
     let mut out = Tensor::zero((seq, qw));
-    let mut attn_w = Tensor::zero((seq, seq));
+    let mut attn_w = Tensor::zero((seq, num_heads * seq));
     let mut scores = Tensor::zero((seq, seq));
     for kv_g in 0..num_kv_heads {
         let kv_base = kv_g * hd;
@@ -865,7 +868,7 @@ fn gqa_attn_forward(q: &Tensor, k: &Tensor, v: &Tensor, seq: usize,
                 for kk in 0..seq { scores.data[start + kk] *= inv; }
             }
             for s in 0..seq {
-                for kk in 0..seq { attn_w.data[s * seq + kk] = scores.data[s * seq + kk]; }
+                for kk in 0..seq { attn_w.data[s * (num_heads * seq) + h * seq + kk] = scores.data[s * seq + kk]; }
                 for d in 0..hd {
                     let mut acc = 0.0f32;
                     for kk in 0..seq {
@@ -908,12 +911,13 @@ fn gqa_attn_backward(q: &Tensor, k: &Tensor, v: &Tensor, attn_w: &Tensor, dout: 
             }
             for s in 0..seq {
                 let start = s * seq;
+                let wstart = s * (num_heads * seq) + h * seq;
                 let mut dot = 0.0f32;
                 for kk in 0..seq {
-                    dot += attn_w.data[start + kk] * dattn[start + kk];
+                    dot += attn_w.data[wstart + kk] * dattn[start + kk];
                 }
                 for kk in 0..seq {
-                    dscores[start + kk] = attn_w.data[start + kk] * (dattn[start + kk] - dot);
+                    dscores[start + kk] = attn_w.data[wstart + kk] * (dattn[start + kk] - dot);
                 }
             }
             // dQ
@@ -933,7 +937,7 @@ fn gqa_attn_backward(q: &Tensor, k: &Tensor, v: &Tensor, attn_w: &Tensor, dout: 
                     let mut av = 0.0f32;
                     for s in 0..seq {
                         ak += dscores[s * seq + kk] * q.data[s * qw + q_base + d];
-                        av += attn_w.data[s * seq + kk] * dout.data[s * qw + q_base + d];
+                        av += attn_w.data[s * (num_heads * seq) + h * seq + kk] * dout.data[s * qw + q_base + d];
                     }
                     dk.data[kk * kw + kv_base + d] += ak * scale;
                     dv.data[kk * kw + kv_base + d] += av;
@@ -1084,11 +1088,12 @@ impl TransformerTrainer {
         let dlogits = Self::ce_dlogits(&cache.logits, target);
         let mut dlast = alloc::vec![0.0f32; hidden];
         let mut unembed_grad = alloc::vec![0.0f32; hidden * cols];
+        let head_w = if model.tie_embeddings { &model.embed } else { &model.unembed };
         for h in 0..hidden {
             for c in 0..cols {
                 let g = dlogits[c] * scale_out;
                 unembed_grad[h * cols + c] = cache.last_hidden.data[h] * g;
-                dlast[h] += g * (model.unembed.get_weight(h * cols + c) as f32);
+                dlast[h] += g * (head_w.get_weight(h * cols + c) as f32);
             }
         }
         grads.unembed_grad = Some(unembed_grad);
@@ -1115,17 +1120,14 @@ impl TransformerTrainer {
             // down: down = W_d @ gated_norm * down_scale → (seq, intermediate) @ (intermediate, hidden)
             let mut wdown = alloc::vec![0.0f32; intermediate * hidden];
             for i in 0..(intermediate * hidden) { wdown[i] = layer.down.get_weight(i) as f32; }
-            let mut d_gated_norm = alloc::vec![0.0f32; seq * intermediate];
-            mmul_din(&ddown.data, seq, &wdown, intermediate, hidden, &mut d_gated_norm, false);
             let mut down_grad = alloc::vec![0.0f32; intermediate * hidden];
             mmul_dw(&cache.acts[li].gated_norm.data, seq, intermediate, &ddown.data, hidden, &mut down_grad);
             for i in 0..(intermediate * hidden) { down_grad[i] *= layer.down_scale; }
             for s in 0..seq {
                 for h2 in 0..hidden { ddown.data[s * hidden + h2] *= layer.down_scale; }
             }
-            // ddown agora = gradiente de (W_d @ gated_norm); d_gated_norm foi calculado com W puro
-            // (recalcula d_gated_norm com scale: dIn = dy*scale @ W^T)
-            d_gated_norm = alloc::vec![0.0f32; seq * intermediate];
+            // ddown ja com scale: dIn = dy*scale @ W^T
+            let mut d_gated_norm = alloc::vec![0.0f32; seq * intermediate];
             mmul_din(&ddown.data, seq, &wdown, intermediate, hidden, &mut d_gated_norm, false);
             grads.layer_grads[li].down_grad = Some(down_grad);
 
@@ -1149,7 +1151,10 @@ impl TransformerTrainer {
             for i in 0..(seq * ffn_group) {
                 let g = act.gate.data[i];
                 let s = silu(g);
-                let ds = s + g * s * (1.0 - s); // silu'
+                // silu'(x) = sigmoid(x) * (1 + x * (1 - sigmoid(x))); a forma
+                // antiga (s + x*s*(1-s), s=silu) diverge para |x|>1 (sinal errado).
+                let sig = 1.0 / (1.0 + libm::expf(-g));
+                let ds = sig * (1.0 + g * (1.0 - sig));
                 dgate[i] = dgated[i] * ds * act.up.data[i];
                 dup[i] = dgated[i] * s;
             }
@@ -1253,8 +1258,13 @@ impl TransformerTrainer {
         for s in 0..seq {
             let t = (cache.tokens[s] as usize).min(cols.saturating_sub(1));
             for h in 0..hidden {
-                embed_grad[h * cols + t] += dx.data[s * hidden + h];
+                embed_grad[h * cols + t] += dx.data[s * hidden + h] * model.embed_scale;
             }
+        }
+        if model.tie_embeddings {
+            // tied: o gradiente do head (unembed) acumula no embedding compartilhado
+            let ug = grads.unembed_grad.as_ref().unwrap();
+            for i in 0..embed_grad.len() { embed_grad[i] += ug[i]; }
         }
         grads.embed_grad = Some(embed_grad);
         grads
@@ -1262,11 +1272,16 @@ impl TransformerTrainer {
 
     /// Aplica gradientes via straight-through estimator ternário.
     pub fn update_weights(&mut self, model: &mut TransformerModel, grads: &TransformerGradients) {
-        if let Some(ref ug) = grads.unembed_grad {
-            update_ternary_tensor(&mut model.unembed, ug, self.lr);
-        }
-        if let Some(ref eg) = grads.embed_grad {
-            if !model.tie_embeddings {
+        if model.tie_embeddings {
+            // tied: embed recebe head_grad (folded) + embedding_grad; unembed e vestigial
+            if let Some(ref eg) = grads.embed_grad {
+                update_ternary_tensor(&mut model.embed, eg, self.lr);
+            }
+        } else {
+            if let Some(ref ug) = grads.unembed_grad {
+                update_ternary_tensor(&mut model.unembed, ug, self.lr);
+            }
+            if let Some(ref eg) = grads.embed_grad {
                 update_ternary_tensor(&mut model.embed, eg, self.lr);
             }
         }
@@ -1302,8 +1317,8 @@ impl TransformerTrainer {
     }
 
     /// Self-test (critério de aceite ADR-0083 §5.2): CE loss de uma sequência
-    /// sintética DIMINUI após passos de treino, e o gradiente do unembed bate
-    /// com diferença finita (shadow f32).
+    /// sintética DIMINUI após passos de treino, e o sinal de gradientes
+    /// amostrados (unembed, gate, q) bate com diferença finita.
     pub fn self_test(&mut self) -> Result<(), &'static str> {
         let mut seed: u32 = 7;
         let hidden = 16usize;
@@ -1366,6 +1381,72 @@ impl TransformerTrainer {
             k_nano::slog_kai!("TRAIN", "err", "self_test: loss não diminuiu {:.4} -> {:.4}", loss0, loss1);
             return Err("trainer self_test: loss not decreasing");
         }
+        // Verificacao de gradiente por diferenca finita (amostra 3 pesos):
+        // o sinal do gradiente analitico deve bater com a inclinacao numerica da
+        // CE loss — pega regressoes de attn_w compartilhado (H1), derivada do
+        // SiLU (H2) e escalas (H3/embed_scale). Criterio: mismatch so falha
+        // quando ambos os sinais sao significativos (evita flakiness de grad ~0).
+        let tokens_fd = [1u32, 2, 3, 4];
+        let target_fd = 5u32;
+        let (_, cache_fd) = self.train_forward(&model, &tokens_fd);
+        let grads_fd = self.backward(&model, &cache_fd, target_fd);
+        {
+            let n = model.unembed.shape.0 * model.unembed.shape.1;
+            let idx = n / 2;
+            let orig = set_ternary_weight(&mut model.unembed, idx, 1);
+            if orig != 0 {
+                let loss_p = ce_loss_of(self, &model, &tokens_fd, target_fd);
+                let _ = set_ternary_weight(&mut model.unembed, idx, -1);
+                let loss_m = ce_loss_of(self, &model, &tokens_fd, target_fd);
+                let _ = set_ternary_weight(&mut model.unembed, idx, orig);
+                let num_slope = (loss_p - loss_m) / 2.0;
+                let a = grads_fd.unembed_grad.as_ref().unwrap()[idx];
+                if num_slope.abs() > 1e-9 && a.abs() > 1e-3 && a * num_slope < 0.0 {
+                    k_nano::slog_kai!("TRAIN", "err", "self_test: unembed grad sign mismatch idx={} ana={:.6} num={:.6}", idx, a, num_slope);
+                    return Err("trainer self_test: unembed gradient sign mismatch");
+                }
+            } else {
+                let _ = set_ternary_weight(&mut model.unembed, idx, orig);
+            }
+        }
+        {
+            let n = model.layers[0].gate.shape.0 * model.layers[0].gate.shape.1;
+            let idx = n / 2;
+            let orig = set_ternary_weight(&mut model.layers[0].gate, idx, 1);
+            if orig != 0 {
+                let loss_p = ce_loss_of(self, &model, &tokens_fd, target_fd);
+                let _ = set_ternary_weight(&mut model.layers[0].gate, idx, -1);
+                let loss_m = ce_loss_of(self, &model, &tokens_fd, target_fd);
+                let _ = set_ternary_weight(&mut model.layers[0].gate, idx, orig);
+                let num_slope = (loss_p - loss_m) / 2.0;
+                let a = grads_fd.layer_grads[0].gate_grad.as_ref().unwrap()[idx];
+                if num_slope.abs() > 1e-9 && a.abs() > 1e-3 && a * num_slope < 0.0 {
+                    k_nano::slog_kai!("TRAIN", "err", "self_test: gate grad sign mismatch idx={} ana={:.6} num={:.6}", idx, a, num_slope);
+                    return Err("trainer self_test: gate gradient sign mismatch");
+                }
+            } else {
+                let _ = set_ternary_weight(&mut model.layers[0].gate, idx, orig);
+            }
+        }
+        {
+            let n = model.layers[0].q.shape.0 * model.layers[0].q.shape.1;
+            let idx = n / 2;
+            let orig = set_ternary_weight(&mut model.layers[0].q, idx, 1);
+            if orig != 0 {
+                let loss_p = ce_loss_of(self, &model, &tokens_fd, target_fd);
+                let _ = set_ternary_weight(&mut model.layers[0].q, idx, -1);
+                let loss_m = ce_loss_of(self, &model, &tokens_fd, target_fd);
+                let _ = set_ternary_weight(&mut model.layers[0].q, idx, orig);
+                let num_slope = (loss_p - loss_m) / 2.0;
+                let a = grads_fd.layer_grads[0].q_grad.as_ref().unwrap()[idx];
+                if num_slope.abs() > 1e-9 && a.abs() > 1e-3 && a * num_slope < 0.0 {
+                    k_nano::slog_kai!("TRAIN", "err", "self_test: q grad sign mismatch idx={} ana={:.6} num={:.6}", idx, a, num_slope);
+                    return Err("trainer self_test: q gradient sign mismatch");
+                }
+            } else {
+                let _ = set_ternary_weight(&mut model.layers[0].q, idx, orig);
+            }
+        }
         k_nano::slog_kai!("TRAIN", "info", "self_test PASS: CE {:.4} -> {:.4} (20 steps)", loss0, loss1);
         Ok(())
     }
@@ -1393,6 +1474,22 @@ fn update_rms(w: &mut Vec<f32>, grads: &[f32], lr: f32) {
             w[i] -= lr * g;
         }
     }
+}
+
+/// Troca o peso `idx` de `t` para `val`; devolve o valor anterior.
+fn set_ternary_weight(t: &mut PackedTernaryTensor, idx: usize, val: i8) -> i8 {
+    let n = t.shape.0 * t.shape.1;
+    let mut ws: Vec<i8> = (0..n).map(|i| t.get_weight(i)).collect();
+    let prev = ws[idx];
+    ws[idx] = val;
+    t.packed_data = PackedTernaryTensor::pack_weights(&ws);
+    prev
+}
+
+/// CE loss de um forward (para diferenca finita).
+fn ce_loss_of(trainer: &TransformerTrainer, model: &TransformerModel, tokens: &[u32], target: u32) -> f32 {
+    let (logits, _) = trainer.train_forward(model, tokens);
+    TransformerTrainer::ce_loss(&logits, target)
 }
 
 /// Gradients for all transformer parameters.
@@ -1501,4 +1598,15 @@ pub fn sleep_guard_allowed(phase: &str, data: &str) -> bool {
         _ => return true,
     };
     !blocked.iter().any(|b| data.contains(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trainer_self_test_passes() {
+        let mut t = TransformerTrainer::new(16, 16, 1, 8);
+        assert!(t.self_test().is_ok(), "trainer self_test must pass");
+    }
 }
