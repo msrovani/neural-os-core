@@ -175,6 +175,13 @@ recebe apenas o que porta barato (cooldown LR, lerp pressure). Nada disso muda m
    speedrun (eficiência de treino) e Hestia (QAT suave).
 6. **Honestidade** — sem mudança de formato que quebre arquivos legados sem bump de versão; manter
    `bitnet_fwd_parity.py` como gate de paridade para todo item numérico.
+   - **Distinção (de §11.5.4):** "correção de INTERPRETAÇÃO" (loader ≠ exporter; nenhum arquivo
+     legado no formato quebrado) pode ser feita in place, documentando a correção; "evolução de
+     formato" com arquivos legados exige bump de versão + re-conversão.
+7. **Fidelidade também no forward de TREINO** — o modelo deve ser treinado com a MESMA matemática que
+   o kernel executa (§11.5.1, path HW Expert v5: forward de treino divergente em 5 pontos → artefato
+   lia lixo no kernel apesar de métricas boas em memória). Aplica-se a todo treino host de modelo
+   próprio (v6, router v2). Ordem: target válido primeiro (§11.5.5), receita §4 depois.
 
 ---
 
@@ -307,3 +314,44 @@ arXiv 2504.12285, nanoGPT_1GPU_SPEEDRUN, Hestia).
 - **F3:** **bloqueada** até (1) auditoria de layout conversor↔loader, (2) parity gate fortalecido,
   (3) M2 reescopado (eps + truncamento + GGUF identity), (4) dequant Q6_K row-wise especificado.
 - Lifecycle permanece `por_fazer` (Proposed) até Fases 1-3 concluídas e verificadas (§9).
+
+### 11.5 Validação independente — path HW Expert v5 (2026-08-04)
+
+Validação do retreino do HW Expert v4 (formato v5 multi-head) com port Rust-exato do loader +
+sweep QEMU + relabel de labels (SESSION_247; evidência: `docs/evidence/hw_expert_v4_holdout.md`,
+`docs/evidence/hw-expert-v4-runtime-20260803.txt`). É caminho de modelo próprio (não-LLM), mas
+confirma e estende os findings acima na classe de bug loader↔conversor/paridade:
+
+1. 🔴 **Fidelidade aplica-se ao forward de TREINO, não só ao runtime (§2 P1/§6.2)** — o forward de
+   treino (BitNetLMv4) divergia do kernel em 5 pontos: scale simples vs rms_norm real, `g·u` vs
+   SwiGLU, heads com bias, atenção full-dim vs truncada q_dim=32, residual pré-norm vs
+   residual-sobre-normalizado — + embed `.T` embaralhado. Métricas em memória boas (train 72.1% ≈
+   holdout 73.3%) ≠ kernel real (runtime 5% no sweep QEMU; modelo carregado lia lixo). Fix validado:
+   treinar com a MESMA matemática do kernel (`BitNetRustExact`) + STE t=0.05 → export sem perdas
+   (in-mem == FILE em todas as épocas). **Requirement novo p/ §4/§6: o forward de treino deve
+   espelhar o forward do kernel** (aplica-se a v6/router v2 e a qualquer treino host de modelo pequeno).
+2. ✅ **Finding 1 (layout conversor↔loader) RESOLVIDO no path v5**: embed untransposed (índice
+   `col*h+row`), tensores prefixed (`u32 len + u32 scale`), shapes q/k/v/o `(h,h)`, g/u `(h,ff)`,
+   d `(ff,h)`, rope 16 f32 por layer, 5 heads prefixed — loader reescrito para casar com o export
+   (`read_prefixed_ternary`). Precedente direto da reconciliação que a Fase 3 manda fazer.
+3. ✅ **Finding 2 (parity gate) RESOLVIDO no path v5**: `tools/validate_hw_expert_v4.py` (+ variante
+   `_class.py`) — port Rust-exato: magic `0xBE11BE11`, `parse_end==size`, fração não-zero do backbone,
+   predições logit-level (port scalar == vetorizado), holdout DO ARQUIVO EXPORTADO. O path LLM segue
+   com `bitnet_fwd_parity.py` fraco (aberto).
+4. ⚠️ **§6.6 (bump de formato)**: o path v5 foi corrigido in place (loader ≠ exporter) sem bump de
+   versão. Justificável: é correção de INTERPRETAÇÃO (o loader era o lado errado do mismatch; nenhum
+   arquivo legado existia no formato quebrado — só o artefato degenerado). Política deveria distinguir
+   "correção de interpretação" de "evolução de formato com arquivos legados".
+5. 🟡 **Target validity > convergência**: o gargalo do v4 não era otimização — eram labels
+   circulares (`classify_by_vendor` espelha a heurística do kernel) + skew (3 classes = 82% do
+   dataset; runtime colapsava para a família majoritária). Fix: relabel com ground-truth de classe
+   (nomes oficiais pci.ids/usb.ids + fallback WDM; SDIO descartado, class="unknown") →
+   `dataset_class_v2.json` (12 classes genéricas, heads `[12,8,9,10,9]`). A receita §4 (convergência)
+   não conserta target inválido — ordem certa: target válido primeiro, receita depois (v6).
+6. 🟡 **M4 (embed fora do ternário) é sobre LLM de vocabulário grande** — o path v5 de classificação
+   usa embed ternário pequeno (hidden 128 × vocab 64) com validação in-mem==FILE sem degradação; o
+   warning I2_S= N/A permanece para embeds de vocabulário grande (2B4T 128256). Não contradiz §2 M4.
+7. 🔴 **SSE tail nas heads do v5 (OOB)**: as 5 heads têm colunas 17/9/10/9 — não múltiplas dos lanes
+   SIMD. Sem clamp de cauda, o path SSE do `predict` estoura OOB em runtime (descoberto no sweep
+   QEMU; `[HW-PnP]` nem chegava a sair). Fix: clamp do último bloco (`lanes = min(4, n-j)`, mesmo
+   padrão do SESSION_247 SSE/AVX tails). Gate: sweep roda com `src=expert_v4` em todos os cards.
