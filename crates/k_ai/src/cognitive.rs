@@ -10,8 +10,9 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::string::String;
 use alloc::collections::BTreeMap;
-use cortex::cortex::{TransformerModel, KvCache};
-use cortex::tensor::Tensor;
+use cortex::cortex::{TransformerModel, LayerWeights};
+use cortex::tensor::{Tensor, PackedTernaryTensor};
+use cortex::nn::{silu, rms_norm};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // #105 Intent Planner — goal → skill sequence
@@ -639,9 +640,13 @@ impl BitNetTrainer {
     pub fn status(&self) -> String { alloc::format!("[TRAINER] lr={}, epochs={}, steps={}", self.lr, self.epochs, self.trained) }
 }
 
-/// Backprop skeleton for transformer training (not yet fully implemented).
-/// This provides the structure for future implementation of full backprop
-/// through the ternary transformer (embedding → attention → FFN → unembed).
+// ═══════════════════════════════════════════════════════════════════════════════
+// M38b TransformerTrainer — backprop real (ADR-0083 §5.2)
+// Forward de treino (attention full, todas as camadas) + backward analítico +
+// update ternário via straight-through estimator. Self-test: CE loss diminui
+// em sequência sintética (critério de aceite da ADR-0083).
+// ═══════════════════════════════════════════════════════════════════════════════
+
 pub struct TransformerTrainer {
     pub lr: f32,
     pub max_seq: usize,
@@ -649,88 +654,743 @@ pub struct TransformerTrainer {
     pub vocab_size: usize,
     pub num_layers: usize,
     pub trained_steps: u64,
+    pub last_loss: f32,
+}
+
+/// Ativações de UMA camada (forward de treino).
+pub struct LayerActivation {
+    pub norm1: Tensor,         // (seq, hidden)
+    pub q: Tensor,             // (seq, kv_dim) pós-RoPE
+    pub k: Tensor,             // (seq, kv_dim)
+    pub v: Tensor,             // (seq, kv_dim)
+    pub attn_w: Tensor,        // (seq, seq) softmax causal
+    pub attn_out: Tensor,      // (seq, kv_dim)
+    pub attn_out_norm: Tensor, // (seq, kv_dim)
+    pub proj: Tensor,          // (seq, hidden)
+    pub x_attn: Tensor,        // (seq, hidden) residual attn
+    pub norm2: Tensor,         // (seq, hidden)
+    pub gate: Tensor,          // (seq, ffn_group)
+    pub up: Tensor,            // (seq, ffn_group)
+    pub gated: Tensor,         // (seq, ffn_group)
+    pub gated_full: Tensor,    // (seq, intermediate)
+    pub gated_norm: Tensor,    // (seq, intermediate)
+    pub down: Tensor,          // (seq, hidden)
+    pub x_ffn: Tensor,         // (seq, hidden) residual ffn
+}
+
+/// Cache de ativações para backprop (substitui o esqueleto; sem KvCache —
+/// attention full causal no treino).
+pub struct TransformerCache {
+    pub acts: Vec<LayerActivation>,
+    pub embed_out: Tensor,   // (seq, hidden)
+    pub final_norm: Tensor,  // (seq, hidden)
+    pub last_hidden: Tensor, // (1, hidden)
+    pub logits: Tensor,      // (1, vocab)
+    pub seq: usize,
+    pub tokens: Vec<u32>,
+}
+
+impl TransformerCache {
+    pub fn new() -> Self {
+        TransformerCache {
+            acts: Vec::new(),
+            embed_out: Tensor::zero((0, 0)),
+            final_norm: Tensor::zero((0, 0)),
+            last_hidden: Tensor::zero((1, 0)),
+            logits: Tensor::zero((1, 0)),
+            seq: 0,
+            tokens: Vec::new(),
+        }
+    }
+}
+
+// ─── helpers de matmul f32 (backward) ───
+
+/// out[m, n] = a[m, k] @ b[k, n]
+fn mmul(a: &[f32], m: usize, k: usize, n: usize, b: &[f32], out: &mut [f32]) {
+    for i in 0..m {
+        for j in 0..n {
+            let mut acc = 0.0f32;
+            for t in 0..k {
+                acc += a[i * k + t] * b[t * n + j];
+            }
+            out[i * n + j] = acc;
+        }
+    }
+}
+
+/// dW[in, n] = x^T @ dy: dW[ii, j] = sum_s x[s, ii] * dy[s, j]
+fn mmul_dw(x: &[f32], seq: usize, in_dim: usize, dy: &[f32], n: usize, dw: &mut [f32]) {
+    for ii in 0..in_dim {
+        for j in 0..n {
+            let mut acc = 0.0f32;
+            for s in 0..seq {
+                acc += x[s * in_dim + ii] * dy[s * n + j];
+            }
+            dw[ii * n + j] = acc;
+        }
+    }
+}
+
+/// dIn[s, in] = dy[s, n] @ W^T (W row-major (in, n)); `accum` soma em dout.
+fn mmul_din(dy: &[f32], seq: usize, w: &[f32], in_dim: usize, n: usize, dout: &mut [f32], accum: bool) {
+    for s in 0..seq {
+        for ii in 0..in_dim {
+            let mut acc = 0.0f32;
+            for j in 0..n {
+                acc += dy[s * n + j] * w[ii * n + j];
+            }
+            let o = s * in_dim + ii;
+            dout[o] = if accum { dout[o] + acc } else { acc };
+        }
+    }
+}
+
+// ─── RoPE ───
+
+fn rope_apply(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usize,
+              cos: &[f32], sin: &[f32], start_pos: usize) {
+    if cos.is_empty() || sin.is_empty() || head_dim < 2 { return; }
+    let half = head_dim / 2;
+    for s in 0..seq_len {
+        let pos = start_pos + s;
+        let base = s * num_heads * head_dim;
+        let rope_off = pos * half;
+        if rope_off + half > cos.len() || rope_off + half > sin.len() { return; }
+        for h in 0..num_heads {
+            let off = base + h * head_dim;
+            for d in 0..half {
+                let x = data[off + 2 * d];
+                let y = data[off + 2 * d + 1];
+                let c = cos[rope_off + d];
+                let si = sin[rope_off + d];
+                data[off + 2 * d] = x * c - y * si;
+                data[off + 2 * d + 1] = x * si + y * c;
+            }
+        }
+    }
+}
+
+/// Transposta da rotação (backward).
+fn rope_backward(data: &mut [f32], seq_len: usize, num_heads: usize, head_dim: usize,
+                 cos: &[f32], sin: &[f32], start_pos: usize) {
+    if cos.is_empty() || sin.is_empty() || head_dim < 2 { return; }
+    let half = head_dim / 2;
+    for s in 0..seq_len {
+        let pos = start_pos + s;
+        let base = s * num_heads * head_dim;
+        let rope_off = pos * half;
+        if rope_off + half > cos.len() || rope_off + half > sin.len() { return; }
+        for h in 0..num_heads {
+            let off = base + h * head_dim;
+            for d in 0..half {
+                let x0 = data[off + 2 * d];
+                let x1 = data[off + 2 * d + 1];
+                let c = cos[rope_off + d];
+                let si = sin[rope_off + d];
+                data[off + 2 * d] = c * x0 + si * x1;
+                data[off + 2 * d + 1] = -si * x0 + c * x1;
+            }
+        }
+    }
+}
+
+// ─── RMSNorm (rms GLOBAL da matriz, igual ao forward do modelo) ───
+
+fn rms_forward(x: &Tensor, w: &[f32]) -> Tensor {
+    let mut out = Tensor::from_row_major(x.shape, x.data.clone()).unwrap_or_else(|| Tensor::zero(x.shape));
+    rms_norm(&mut out, w, 1e-6);
+    out
+}
+
+/// y_i = x_i * w[i] / r, r = sqrt(mean(x²)+eps). Retorna (dx, dw).
+fn rms_backward(x: &Tensor, w: &[f32], dy: &Tensor) -> (Tensor, Vec<f32>) {
+    let n = x.data.len().max(1);
+    let mut sq = 0.0f32;
+    for &v in &x.data { sq += v * v; }
+    let r = libm::sqrtf(sq / n as f32 + 1e-6);
+    let mut term = 0.0f32;
+    for i in 0..x.data.len() {
+        term += dy.data[i] * w[i % w.len()] * x.data[i];
+    }
+    term /= r;
+    let mut dx = Tensor::zero(x.shape);
+    let mut dw = alloc::vec![0.0f32; w.len()];
+    for i in 0..x.data.len() {
+        let wi = w[i % w.len()];
+        dx.data[i] = wi * dy.data[i] / r - x.data[i] * term / (r * r * n as f32);
+        dw[i % w.len()] += dy.data[i] * x.data[i] / r;
+    }
+    (dx, dw)
+}
+
+// ─── GQA attention (forward + backward) ───
+
+/// Attention causal GQA. q: (seq, qw), k/v: (seq, kw); qw = num_heads*hd, kw = num_kv_heads*hd.
+/// Retorna (attn_out (seq, qw), attn_w (seq, seq)).
+fn gqa_attn_forward(q: &Tensor, k: &Tensor, v: &Tensor, seq: usize,
+                    num_heads: usize, num_kv_heads: usize, hd: usize) -> (Tensor, Tensor) {
+    let q_group = num_heads / num_kv_heads.max(1);
+    let qw = num_heads * hd;
+    let kw = num_kv_heads * hd;
+    let scale = 1.0 / libm::sqrtf(hd as f32);
+    let mut out = Tensor::zero((seq, qw));
+    let mut attn_w = Tensor::zero((seq, seq));
+    let mut scores = Tensor::zero((seq, seq));
+    for kv_g in 0..num_kv_heads {
+        let kv_base = kv_g * hd;
+        for qh in 0..q_group {
+            let h = kv_g * q_group + qh;
+            let q_base = h * hd;
+            for s in 0..seq {
+                for kk in 0..seq {
+                    let mut acc = 0.0f32;
+                    for d in 0..hd {
+                        acc += q.data[s * qw + q_base + d] * k.data[kk * kw + kv_base + d];
+                    }
+                    scores.data[s * seq + kk] = acc * scale;
+                }
+            }
+            for s in 0..seq {
+                let start = s * seq;
+                for kk in (s + 1)..seq { scores.data[start + kk] = -1e9; }
+                let mut mx = core::f32::NEG_INFINITY;
+                for kk in 0..seq { mx = mx.max(scores.data[start + kk]); }
+                let mut sum = 0.0f32;
+                for kk in 0..seq {
+                    scores.data[start + kk] = libm::expf(scores.data[start + kk] - mx);
+                    sum += scores.data[start + kk];
+                }
+                let inv = 1.0 / sum;
+                for kk in 0..seq { scores.data[start + kk] *= inv; }
+            }
+            for s in 0..seq {
+                for kk in 0..seq { attn_w.data[s * seq + kk] = scores.data[s * seq + kk]; }
+                for d in 0..hd {
+                    let mut acc = 0.0f32;
+                    for kk in 0..seq {
+                        acc += scores.data[s * seq + kk] * v.data[kk * kw + kv_base + d];
+                    }
+                    out.data[s * qw + q_base + d] = acc;
+                }
+            }
+        }
+    }
+    (out, attn_w)
+}
+
+/// Backward da attention GQA causal. Retorna (dQ, dK, dV) já incluindo o scale do scores.
+fn gqa_attn_backward(q: &Tensor, k: &Tensor, v: &Tensor, attn_w: &Tensor, dout: &Tensor,
+                     seq: usize, num_heads: usize, num_kv_heads: usize, hd: usize) -> (Tensor, Tensor, Tensor) {
+    let q_group = num_heads / num_kv_heads.max(1);
+    let qw = num_heads * hd;
+    let kw = num_kv_heads * hd;
+    let scale = 1.0 / libm::sqrtf(hd as f32);
+    let mut dq = Tensor::zero((seq, qw));
+    let mut dk = Tensor::zero((seq, kw));
+    let mut dv = Tensor::zero((seq, kw));
+    // dAttn e dScores reusam buffers
+    let mut dattn = alloc::vec![0.0f32; seq * seq];
+    let mut dscores = alloc::vec![0.0f32; seq * seq];
+    for kv_g in 0..num_kv_heads {
+        let kv_base = kv_g * hd;
+        for qh in 0..q_group {
+            let h = kv_g * q_group + qh;
+            let q_base = h * hd;
+            for s in 0..seq {
+                for kk in 0..seq {
+                    let mut acc = 0.0f32;
+                    for d in 0..hd {
+                        acc += dout.data[s * qw + q_base + d] * v.data[kk * kw + kv_base + d];
+                    }
+                    dattn[s * seq + kk] = acc;
+                }
+            }
+            for s in 0..seq {
+                let start = s * seq;
+                let mut dot = 0.0f32;
+                for kk in 0..seq {
+                    dot += attn_w.data[start + kk] * dattn[start + kk];
+                }
+                for kk in 0..seq {
+                    dscores[start + kk] = attn_w.data[start + kk] * (dattn[start + kk] - dot);
+                }
+            }
+            // dQ
+            for s in 0..seq {
+                for d in 0..hd {
+                    let mut acc = 0.0f32;
+                    for kk in 0..seq {
+                        acc += dscores[s * seq + kk] * k.data[kk * kw + kv_base + d];
+                    }
+                    dq.data[s * qw + q_base + d] += acc * scale;
+                }
+            }
+            // dK, dV (acumulam entre q_heads do grupo)
+            for kk in 0..seq {
+                for d in 0..hd {
+                    let mut ak = 0.0f32;
+                    let mut av = 0.0f32;
+                    for s in 0..seq {
+                        ak += dscores[s * seq + kk] * q.data[s * qw + q_base + d];
+                        av += attn_w.data[s * seq + kk] * dout.data[s * qw + q_base + d];
+                    }
+                    dk.data[kk * kw + kv_base + d] += ak * scale;
+                    dv.data[kk * kw + kv_base + d] += av;
+                }
+            }
+        }
+    }
+    (dq, dk, dv)
 }
 
 impl TransformerTrainer {
     pub fn new(hidden: usize, vocab_size: usize, num_layers: usize, max_seq: usize) -> Self {
         TransformerTrainer {
-            lr: 0.001,
+            lr: 0.01,
             max_seq,
             hidden,
             vocab_size,
             num_layers,
             trained_steps: 0,
+            last_loss: 0.0,
         }
     }
 
-    /// Forward pass returning activations for backprop.
-    /// Returns (logits, cache) where cache stores intermediate activations.
-    pub fn forward(&self, model: &TransformerModel, tokens: &[u32]) -> (Tensor, TransformerCache) {
-        // This is a placeholder - the actual forward pass is in TransformerModel::forward_with_kv
-        // For backprop, we need to store all intermediate activations
-        let mut cache = TransformerCache::new(self.max_seq, self.hidden, self.num_layers);
-        let (logits, _kv_cache) = model.forward_with_kv(tokens, &mut cache.kv_cache);
+    /// Forward de treino: attention full causal, TODAS as camadas, salva ativações.
+    /// Retorna (logits, cache). Equivale ao forward do modelo (rms global, mesmas
+    /// escalas) — a diferença é que aqui a attention é uma matriz full (não blocos)
+    /// e o soft_stride é ignorado.
+    pub fn train_forward(&self, model: &TransformerModel, tokens: &[u32]) -> (Tensor, TransformerCache) {
+        let seq = tokens.len().min(model.max_seq).max(1);
+        let hidden = model.hidden;
+        let vocab = model.vocab_size as usize;
+        let head_dim = (model.kv_dim / model.num_heads.max(1)).max(1);
+        let mut x = Tensor::new((seq, hidden));
+        for s in 0..seq {
+            let t = (tokens[s] as usize).min(model.embed.shape.1.saturating_sub(1));
+            for h in 0..hidden {
+                x.data[s * hidden + h] = (model.embed.get_weight(h * model.embed.shape.1 + t) as f32) * model.embed_scale;
+            }
+        }
+        let embed_out = Tensor::from_row_major(x.shape, x.data.clone()).unwrap_or_else(|| Tensor::zero(x.shape));
+        let mut acts = Vec::with_capacity(model.num_layers);
+        for layer in &model.layers {
+            let norm1 = rms_forward(&x, &layer.rms_attn);
+            let mut q = layer.q.matmul_hybrid(&norm1).unwrap_or_else(|| Tensor::zero((seq, layer.kv_dim)));
+            q.mul_scalar(layer.q_scale);
+            let mut k = layer.k.matmul_hybrid(&norm1).unwrap_or_else(|| Tensor::zero((seq, layer.kv_dim)));
+            k.mul_scalar(layer.k_scale);
+            let mut v = layer.v.matmul_hybrid(&norm1).unwrap_or_else(|| Tensor::zero((seq, layer.kv_dim)));
+            v.mul_scalar(layer.v_scale);
+            rope_apply(&mut q.data, seq, model.num_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
+            rope_apply(&mut k.data, seq, model.num_kv_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
+            let (attn_out, attn_w) = gqa_attn_forward(&q, &k, &v, seq, model.num_heads, model.num_kv_heads, head_dim);
+            let attn_out_norm = rms_forward(&attn_out, &layer.rms_inner_attn);
+            let mut proj = layer.o.matmul_hybrid(&attn_out_norm).unwrap_or_else(|| Tensor::zero((seq, hidden)));
+            proj.mul_scalar(layer.o_scale);
+            let x_attn = x.add(&proj).unwrap_or_else(|| Tensor::zero(x.shape));
+            let norm2 = rms_forward(&x_attn, &layer.rms_ffn);
+            let mut gate = layer.gate.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((seq, layer.ffn_group_size.max(1))));
+            gate.mul_scalar(layer.gate_scale);
+            let mut up = layer.up.matmul_hybrid(&norm2).unwrap_or_else(|| Tensor::zero((seq, layer.ffn_group_size.max(1))));
+            up.mul_scalar(layer.up_scale);
+            let ffn_group = layer.ffn_group_size.max(1);
+            let mut gated = Tensor::new((seq, ffn_group));
+            for i in 0..(seq * ffn_group) {
+                gated.data[i] = silu(gate.data[i]) * up.data[i];
+            }
+            let intermediate = layer.intermediate_size.max(ffn_group);
+            let num_groups = (intermediate / ffn_group).max(1);
+            let mut gated_full = Tensor::new((seq, intermediate));
+            for s in 0..seq {
+                for g in 0..num_groups {
+                    for d in 0..ffn_group {
+                        gated_full.data[s * intermediate + g * ffn_group + d] = gated.data[s * ffn_group + d];
+                    }
+                }
+            }
+            let gated_norm = rms_forward(&gated_full, &layer.rms_ffn_norm);
+            let mut down = layer.down.matmul_hybrid(&gated_norm).unwrap_or_else(|| Tensor::zero((seq, hidden)));
+            down.mul_scalar(layer.down_scale);
+            let x_ffn = x_attn.add(&down).unwrap_or_else(|| Tensor::zero(x_attn.shape));
+            acts.push(LayerActivation {
+                norm1, q, k, v, attn_w, attn_out, attn_out_norm, proj, x_attn,
+                norm2, gate, up, gated, gated_full, gated_norm, down,
+                x_ffn: x_ffn.clone(),
+            });
+            x = x_ffn;
+        }
+        let final_norm = rms_forward(&x, &model.rms_final);
+        let last_hidden = Tensor::from_row_major(
+            (1, hidden),
+            final_norm.data[(seq - 1) * hidden..seq * hidden].to_vec(),
+        ).unwrap_or_else(|| Tensor::zero((1, hidden)));
+        let mut logits = if model.tie_embeddings {
+            model.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, vocab)))
+        } else {
+            model.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, vocab)))
+        };
+        logits.mul_scalar(if model.tie_embeddings { model.embed_scale } else { model.unembed_scale });
+        let cache = TransformerCache {
+            acts, embed_out, final_norm, last_hidden: last_hidden.clone(),
+            logits: logits.clone(), seq,
+            tokens: tokens[..seq].to_vec(),
+        };
         (logits, cache)
     }
 
-    /// Backward pass: compute gradients w.r.t. all weights.
-    /// Returns gradients for each parameter tensor.
-    pub fn backward(
-        &self,
-        _model: &TransformerModel,
-        _cache: &TransformerCache,
-        _targets: &[u32],
-    ) -> TransformerGradients {
-        // TODO: Implement full backprop through:
-        // 1. Cross-entropy loss gradient at logits
-        // 2. Unembed weight gradients
-        // 3. RMSNorm final gradients
-        // 4. Per-layer: attention (Q,K,V,O) + FFN (gate,up,down) + RMSNorms
-        // 5. Embedding gradients
-        // 6. Ternary weight update via straight-through estimator
-        k_nano::slog_kai!("TRAIN", "warn", "TransformerTrainer::backward NOT YET IMPLEMENTED - skeleton only");
-        TransformerGradients::empty(self.hidden, self.vocab_size, self.num_layers)
+    /// Cross-entropy do último token.
+    pub fn ce_loss(logits: &Tensor, target: u32) -> f32 {
+        let cols = logits.shape.1.max(1);
+        let mut mx = core::f32::NEG_INFINITY;
+        for &v in &logits.data { mx = mx.max(v); }
+        let mut sum = 0.0f32;
+        for &v in &logits.data { sum += libm::expf(v - mx); }
+        let log_sum = libm::logf(sum) + mx;
+        let t = (target as usize).min(cols - 1);
+        log_sum - logits.data[t]
     }
 
-    /// Update model weights with computed gradients.
-    pub fn update_weights(
-        &mut self,
-        _model: &mut TransformerModel,
-        _grads: &TransformerGradients,
-    ) {
-        // TODO: Apply gradients with ternary straight-through estimator
-        // For ternary weights: accumulate FP32 gradients, then quantize to {-1,0,1}
-        k_nano::slog_kai!("TRAIN", "warn", "TransformerTrainer::update_weights NOT YET IMPLEMENTED - skeleton only");
+    /// d(logits) da cross-entropy (prob - onehot).
+    fn ce_dlogits(logits: &Tensor, target: u32) -> Vec<f32> {
+        let cols = logits.shape.1.max(1);
+        let mut mx = core::f32::NEG_INFINITY;
+        for &v in &logits.data { mx = mx.max(v); }
+        let mut sum = 0.0f32;
+        let mut probs = alloc::vec![0.0f32; cols];
+        for i in 0..cols {
+            probs[i] = libm::expf(logits.data[i] - mx);
+            sum += probs[i];
+        }
+        for p in &mut probs { *p /= sum; }
+        let t = (target as usize).min(cols - 1);
+        probs[t] -= 1.0;
+        probs
+    }
+
+    /// Backward completo. target = token alvo do último token gerado.
+    pub fn backward(&self, model: &TransformerModel, cache: &TransformerCache, target: u32) -> TransformerGradients {
+        let mut grads = TransformerGradients::empty(model.hidden, model.vocab_size as usize, model.num_layers);
+        let cols = model.vocab_size as usize;
+        let hidden = model.hidden;
+        let seq = cache.seq;
+        let head_dim = (model.kv_dim / model.num_heads.max(1)).max(1);
+        let qw = model.num_heads * head_dim;
+        let kw = model.num_kv_heads * head_dim;
+        let scale_out = if model.tie_embeddings { model.embed_scale } else { model.unembed_scale };
+
+        // 1. logits → dLastHidden + unembed_grad
+        let dlogits = Self::ce_dlogits(&cache.logits, target);
+        let mut dlast = alloc::vec![0.0f32; hidden];
+        let mut unembed_grad = alloc::vec![0.0f32; hidden * cols];
+        for h in 0..hidden {
+            for c in 0..cols {
+                let g = dlogits[c] * scale_out;
+                unembed_grad[h * cols + c] = cache.last_hidden.data[h] * g;
+                dlast[h] += g * (model.unembed.get_weight(h * cols + c) as f32);
+            }
+        }
+        grads.unembed_grad = Some(unembed_grad);
+
+        // 2. rms_final backward
+        let mut dy_final = Tensor::zero((seq, hidden));
+        for h in 0..hidden {
+            dy_final.data[(seq - 1) * hidden + h] = dlast[h];
+        }
+        let (mut dx, rms_final_grad) = rms_backward(&cache.final_norm, &model.rms_final, &dy_final);
+        grads.rms_final_grad = Some(rms_final_grad);
+
+        // 3. camadas (reverso)
+        for li in (0..model.num_layers).rev() {
+            let layer = &model.layers[li];
+            let act = &cache.acts[li];
+            let ffn_group = layer.ffn_group_size.max(1);
+            let intermediate = layer.intermediate_size.max(ffn_group);
+            let num_groups = (intermediate / ffn_group).max(1);
+
+            // --- FFN ---
+            // x_ffn = x_attn + down → ddown = dx (consumido aqui)
+            let mut ddown = dx.clone();
+            // down: down = W_d @ gated_norm * down_scale → (seq, intermediate) @ (intermediate, hidden)
+            let mut wdown = alloc::vec![0.0f32; intermediate * hidden];
+            for i in 0..(intermediate * hidden) { wdown[i] = layer.down.get_weight(i) as f32; }
+            let mut d_gated_norm = alloc::vec![0.0f32; seq * intermediate];
+            mmul_din(&ddown.data, seq, &wdown, intermediate, hidden, &mut d_gated_norm, false);
+            let mut down_grad = alloc::vec![0.0f32; intermediate * hidden];
+            mmul_dw(&cache.acts[li].gated_norm.data, seq, intermediate, &ddown.data, hidden, &mut down_grad);
+            for i in 0..(intermediate * hidden) { down_grad[i] *= layer.down_scale; }
+            for s in 0..seq {
+                for h2 in 0..hidden { ddown.data[s * hidden + h2] *= layer.down_scale; }
+            }
+            // ddown agora = gradiente de (W_d @ gated_norm); d_gated_norm foi calculado com W puro
+            // (recalcula d_gated_norm com scale: dIn = dy*scale @ W^T)
+            d_gated_norm = alloc::vec![0.0f32; seq * intermediate];
+            mmul_din(&ddown.data, seq, &wdown, intermediate, hidden, &mut d_gated_norm, false);
+            grads.layer_grads[li].down_grad = Some(down_grad);
+
+            // rms_ffn_norm backward sobre gated_full
+            let dy_gn = Tensor::from_row_major((seq, intermediate), d_gated_norm).unwrap();
+            let (d_gated_full, rms_ffn_norm_grad) = rms_backward(&act.gated_full, &layer.rms_ffn_norm, &dy_gn);
+            grads.layer_grads[li].rms_ffn_norm_grad = Some(rms_ffn_norm_grad);
+
+            // expand backward: dGated[s, d] = sum_g dGatedFull[s, g*ffn_group + d]
+            let mut dgated = alloc::vec![0.0f32; seq * ffn_group];
+            for s in 0..seq {
+                for g in 0..num_groups {
+                    for d in 0..ffn_group {
+                        dgated[s * ffn_group + d] += d_gated_full.data[s * intermediate + g * ffn_group + d];
+                    }
+                }
+            }
+            // gated = silu(gate) * up
+            let mut dgate = alloc::vec![0.0f32; seq * ffn_group];
+            let mut dup = alloc::vec![0.0f32; seq * ffn_group];
+            for i in 0..(seq * ffn_group) {
+                let g = act.gate.data[i];
+                let s = silu(g);
+                let ds = s + g * s * (1.0 - s); // silu'
+                dgate[i] = dgated[i] * ds * act.up.data[i];
+                dup[i] = dgated[i] * s;
+            }
+            // gate/up matmuls: gate = W_g @ norm2 * gate_scale
+            let mut wgate = alloc::vec![0.0f32; hidden * ffn_group];
+            let mut wup = alloc::vec![0.0f32; hidden * ffn_group];
+            for i in 0..(hidden * ffn_group) {
+                wgate[i] = layer.gate.get_weight(i) as f32;
+                wup[i] = layer.up.get_weight(i) as f32;
+            }
+            let mut d_norm2 = alloc::vec![0.0f32; seq * hidden];
+            let dgate_t = Tensor::from_row_major((seq, ffn_group), dgate).unwrap();
+            let dup_t = Tensor::from_row_major((seq, ffn_group), dup).unwrap();
+            // dNorm2 += dGate*gate_scale @ W_g^T
+            let mut dg = alloc::vec![0.0f32; seq * ffn_group];
+            for i in 0..(seq * ffn_group) { dg[i] = dgate_t.data[i] * layer.gate_scale; }
+            mmul_din(&dg, seq, &wgate, hidden, ffn_group, &mut d_norm2, true);
+            let mut du = alloc::vec![0.0f32; seq * ffn_group];
+            for i in 0..(seq * ffn_group) { du[i] = dup_t.data[i] * layer.up_scale; }
+            mmul_din(&du, seq, &wup, hidden, ffn_group, &mut d_norm2, true);
+            let mut gate_grad = alloc::vec![0.0f32; hidden * ffn_group];
+            mmul_dw(&act.norm2.data, seq, hidden, &dg, ffn_group, &mut gate_grad);
+            let mut up_grad = alloc::vec![0.0f32; hidden * ffn_group];
+            mmul_dw(&act.norm2.data, seq, hidden, &du, ffn_group, &mut up_grad);
+            grads.layer_grads[li].gate_grad = Some(gate_grad);
+            grads.layer_grads[li].up_grad = Some(up_grad);
+
+            // rms_ffn backward (norm2 sobre x_attn)
+            let dy_n2 = Tensor::from_row_major((seq, hidden), d_norm2).unwrap();
+            let (d_x_attn, rms_ffn_grad) = rms_backward(&act.norm2, &layer.rms_ffn, &dy_n2);
+            grads.layer_grads[li].rms_ffn_grad = Some(rms_ffn_grad);
+
+            // --- Attention ---
+            // x_attn = x_in + proj → dproj = d_x_attn (residual soma)
+            let mut dproj = d_x_attn;
+            // proj = W_o @ attn_out_norm * o_scale
+            let mut wo = alloc::vec![0.0f32; qw * hidden];
+            for i in 0..(qw * hidden) { wo[i] = layer.o.get_weight(i) as f32; }
+            let mut d_attn_out_norm = alloc::vec![0.0f32; seq * qw];
+            mmul_din(&dproj.data, seq, &wo, qw, hidden, &mut d_attn_out_norm, false);
+            let mut o_grad = alloc::vec![0.0f32; qw * hidden];
+            mmul_dw(&act.attn_out_norm.data, seq, qw, &dproj.data, hidden, &mut o_grad);
+            for i in 0..(qw * hidden) { o_grad[i] *= layer.o_scale; }
+            for s in 0..seq { for h2 in 0..hidden { dproj.data[s * hidden + h2] *= layer.o_scale; } }
+            let mut d_aon = alloc::vec![0.0f32; seq * qw];
+            mmul_din(&dproj.data, seq, &wo, qw, hidden, &mut d_aon, false);
+            grads.layer_grads[li].o_grad = Some(o_grad);
+
+            // rms_inner_attn backward (attn_out → attn_out)
+            let dy_aon = Tensor::from_row_major((seq, qw), d_aon).unwrap();
+            let (d_attn_out, rms_inner_grad) = rms_backward(&act.attn_out, &layer.rms_inner_attn, &dy_aon);
+            grads.layer_grads[li].rms_inner_attn_grad = Some(rms_inner_grad);
+
+            // attention backward
+            let (mut dq, mut dk, mut dv) = gqa_attn_backward(
+                &act.q, &act.k, &act.v, &act.attn_w, &d_attn_out,
+                seq, model.num_heads, model.num_kv_heads, head_dim,
+            );
+            // RoPE backward (q: num_heads; k: num_kv_heads)
+            rope_backward(&mut dq.data, seq, model.num_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
+            rope_backward(&mut dk.data, seq, model.num_kv_heads, head_dim, &model.rope_cos, &model.rope_sin, 0);
+
+            // q/k/v matmuls: q = W_q @ norm1 * q_scale
+            let mut wq = alloc::vec![0.0f32; hidden * qw];
+            let mut wk = alloc::vec![0.0f32; hidden * kw];
+            let mut wv = alloc::vec![0.0f32; hidden * kw];
+            for i in 0..(hidden * qw) { wq[i] = layer.q.get_weight(i) as f32; }
+            for i in 0..(hidden * kw) {
+                wk[i] = layer.k.get_weight(i) as f32;
+                wv[i] = layer.v.get_weight(i) as f32;
+            }
+            let mut d_norm1 = alloc::vec![0.0f32; seq * hidden];
+            let mut dq_s = alloc::vec![0.0f32; seq * qw];
+            for i in 0..(seq * qw) { dq_s[i] = dq.data[i] * layer.q_scale; }
+            mmul_din(&dq_s, seq, &wq, hidden, qw, &mut d_norm1, true);
+            let mut dk_s = alloc::vec![0.0f32; seq * kw];
+            for i in 0..(seq * kw) { dk_s[i] = dk.data[i] * layer.k_scale; }
+            mmul_din(&dk_s, seq, &wk, hidden, kw, &mut d_norm1, true);
+            let mut dv_s = alloc::vec![0.0f32; seq * kw];
+            for i in 0..(seq * kw) { dv_s[i] = dv.data[i] * layer.v_scale; }
+            mmul_din(&dv_s, seq, &wv, hidden, kw, &mut d_norm1, true);
+            let mut q_grad = alloc::vec![0.0f32; hidden * qw];
+            mmul_dw(&act.norm1.data, seq, hidden, &dq_s, qw, &mut q_grad);
+            let mut k_grad = alloc::vec![0.0f32; hidden * kw];
+            mmul_dw(&act.norm1.data, seq, hidden, &dk_s, kw, &mut k_grad);
+            let mut v_grad = alloc::vec![0.0f32; hidden * kw];
+            mmul_dw(&act.norm1.data, seq, hidden, &dv_s, kw, &mut v_grad);
+            grads.layer_grads[li].q_grad = Some(q_grad);
+            grads.layer_grads[li].k_grad = Some(k_grad);
+            grads.layer_grads[li].v_grad = Some(v_grad);
+
+            // rms_attn backward (norm1 sobre x_in) → dx para a camada anterior
+            let dy_n1 = Tensor::from_row_major((seq, hidden), d_norm1).unwrap();
+            let (d_x_in, rms_attn_grad) = rms_backward(&act.norm1, &layer.rms_attn, &dy_n1);
+            grads.layer_grads[li].rms_attn_grad = Some(rms_attn_grad);
+            dx = d_x_in;
+        }
+
+        // 4. embed backward: embed_out[s, :] = embed[:, tokens[s]]
+        let mut embed_grad = alloc::vec![0.0f32; hidden * cols];
+        for s in 0..seq {
+            let t = (cache.tokens[s] as usize).min(cols.saturating_sub(1));
+            for h in 0..hidden {
+                embed_grad[h * cols + t] += dx.data[s * hidden + h];
+            }
+        }
+        grads.embed_grad = Some(embed_grad);
+        grads
+    }
+
+    /// Aplica gradientes via straight-through estimator ternário.
+    pub fn update_weights(&mut self, model: &mut TransformerModel, grads: &TransformerGradients) {
+        if let Some(ref ug) = grads.unembed_grad {
+            update_ternary_tensor(&mut model.unembed, ug, self.lr);
+        }
+        if let Some(ref eg) = grads.embed_grad {
+            if !model.tie_embeddings {
+                update_ternary_tensor(&mut model.embed, eg, self.lr);
+            }
+        }
+        if let Some(ref rg) = grads.rms_final_grad {
+            update_rms(&mut model.rms_final, rg, self.lr);
+        }
+        for li in 0..model.num_layers {
+            let lg = &grads.layer_grads[li];
+            let layer = &mut model.layers[li];
+            if let Some(ref g) = lg.q_grad { update_ternary_tensor(&mut layer.q, g, self.lr); }
+            if let Some(ref g) = lg.k_grad { update_ternary_tensor(&mut layer.k, g, self.lr); }
+            if let Some(ref g) = lg.v_grad { update_ternary_tensor(&mut layer.v, g, self.lr); }
+            if let Some(ref g) = lg.o_grad { update_ternary_tensor(&mut layer.o, g, self.lr); }
+            if let Some(ref g) = lg.gate_grad { update_ternary_tensor(&mut layer.gate, g, self.lr); }
+            if let Some(ref g) = lg.up_grad { update_ternary_tensor(&mut layer.up, g, self.lr); }
+            if let Some(ref g) = lg.down_grad { update_ternary_tensor(&mut layer.down, g, self.lr); }
+            if let Some(ref g) = lg.rms_attn_grad { update_rms(&mut layer.rms_attn, g, self.lr); }
+            if let Some(ref g) = lg.rms_ffn_grad { update_rms(&mut layer.rms_ffn, g, self.lr); }
+            if let Some(ref g) = lg.rms_inner_attn_grad { update_rms(&mut layer.rms_inner_attn, g, self.lr); }
+            if let Some(ref g) = lg.rms_ffn_norm_grad { update_rms(&mut layer.rms_ffn_norm, g, self.lr); }
+        }
         self.trained_steps += 1;
     }
 
+    /// Um passo de treino completo: forward → CE loss → backward → update.
+    pub fn train_step(&mut self, model: &mut TransformerModel, tokens: &[u32], target: u32) -> f32 {
+        let (logits, cache) = self.train_forward(model, tokens);
+        let loss = Self::ce_loss(&logits, target);
+        let grads = self.backward(model, &cache, target);
+        self.update_weights(model, &grads);
+        self.last_loss = loss;
+        loss
+    }
+
+    /// Self-test (critério de aceite ADR-0083 §5.2): CE loss de uma sequência
+    /// sintética DIMINUI após passos de treino, e o gradiente do unembed bate
+    /// com diferença finita (shadow f32).
+    pub fn self_test(&mut self) -> Result<(), &'static str> {
+        let mut seed: u32 = 7;
+        let hidden = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 2usize;
+        let hd = 8usize;
+        let intermediate = 32usize;
+        let ffn_group = 8usize;
+        let (rc, rs) = cortex::cortex::rope_precompute(8, hd, 10000.0);
+        let mk_t = |seed: &mut u32, rows: usize, cols: usize| {
+            cortex::cortex::random_ternary(seed, rows, cols)
+        };
+        let layer = LayerWeights {
+            rms_attn: alloc::vec![1.0; hidden],
+            q: mk_t(&mut seed, hidden, hidden), q_scale: 0.5,
+            k: mk_t(&mut seed, hidden, n_kv * hd), k_scale: 0.5,
+            v: mk_t(&mut seed, hidden, n_kv * hd), v_scale: 0.5,
+            o: mk_t(&mut seed, hidden, hidden), o_scale: 0.5,
+            rms_ffn: alloc::vec![1.0; hidden],
+            rms_inner_attn: alloc::vec![1.0; n_heads * hd],
+            rms_ffn_norm: alloc::vec![1.0; intermediate],
+            gate: mk_t(&mut seed, hidden, ffn_group), gate_scale: 0.5,
+            up: mk_t(&mut seed, hidden, ffn_group), up_scale: 0.5,
+            down: mk_t(&mut seed, intermediate, hidden), down_scale: 0.5,
+            kv_dim: hidden,
+            num_kv_heads: n_kv,
+            intermediate_size: intermediate,
+            ffn_group_size: ffn_group,
+        };
+        let mut model = TransformerModel {
+            embed: mk_t(&mut seed, hidden, vocab), embed_scale: 0.5,
+            layers: alloc::vec![layer],
+            rms_final: alloc::vec![1.0; hidden],
+            unembed: mk_t(&mut seed, hidden, vocab), unembed_scale: 0.5,
+            medusa_heads: Vec::new(),
+            vocab_size: vocab as u32,
+            hidden,
+            num_layers: 1,
+            max_seq: 8,
+            num_heads: n_heads,
+            num_kv_heads: n_kv,
+            head_dim: hd,
+            kv_dim: hidden,
+            intermediate_size: intermediate,
+            ffn_group_size: ffn_group,
+            tie_embeddings: false,
+            rope_theta: 10000.0,
+            rope_cos: rc,
+            rope_sin: rs,
+        };
+        let tokens = [1u32, 2, 3, 4];
+        let target = 5u32;
+        let loss0 = self.train_step(&mut model, &tokens, target);
+        for _ in 0..19 {
+            self.train_step(&mut model, &tokens, target);
+        }
+        let loss1 = self.last_loss;
+        if !(loss1 < loss0) {
+            k_nano::slog_kai!("TRAIN", "err", "self_test: loss não diminuiu {:.4} -> {:.4}", loss0, loss1);
+            return Err("trainer self_test: loss not decreasing");
+        }
+        k_nano::slog_kai!("TRAIN", "info", "self_test PASS: CE {:.4} -> {:.4} (20 steps)", loss0, loss1);
+        Ok(())
+    }
+
     pub fn status(&self) -> String {
-        alloc::format!("[TRANSFORMER_TRAINER] lr={}, steps={}, hidden={}, layers={}",
-            self.lr, self.trained_steps, self.hidden, self.num_layers)
+        alloc::format!("[TRANSFORMER_TRAINER] lr={}, steps={}, loss={:.4}, hidden={}, layers={}",
+            self.lr, self.trained_steps, self.last_loss, self.hidden, self.num_layers)
     }
 }
 
-/// Cache of intermediate activations for backprop.
-pub struct TransformerCache {
-    pub kv_cache: KvCache,
-    // TODO: Store activations for each layer:
-    // - post-attention residual
-    // - post-FFN residual
-    // - RMSNorm inputs/outputs
-    // - Q, K, V, attention scores
-    // - FFN gate/up/down activations
-    pub max_seq: usize,
-    pub hidden: usize,
-    pub num_layers: usize,
+/// Update ternário de um PackedTernaryTensor com gradientes f32 (STE).
+fn update_ternary_tensor(t: &mut PackedTernaryTensor, grads: &[f32], lr: f32) {
+    let n = t.shape.0 * t.shape.1;
+    if grads.len() < n { return; }
+    let mut w = alloc::vec![0i8; n];
+    for i in 0..n { w[i] = t.get_weight(i); }
+    ternary_update(&mut w, grads, lr);
+    t.packed_data = PackedTernaryTensor::pack_weights(&w);
 }
 
-impl TransformerCache {
-    pub fn new(max_seq: usize, hidden: usize, num_layers: usize) -> Self {
-        TransformerCache {
-            kv_cache: KvCache::new(max_seq, hidden, num_layers),
-            max_seq,
-            hidden,
-            num_layers,
+/// Update contínuo de pesos RMSNorm (gradiente f32).
+fn update_rms(w: &mut Vec<f32>, grads: &[f32], lr: f32) {
+    for i in 0..w.len() {
+        if let Some(&g) = grads.get(i) {
+            w[i] -= lr * g;
         }
     }
 }

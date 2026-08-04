@@ -195,6 +195,9 @@ def populate(path):
     print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
     files = [
         ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin") or find_file("BGE.BIN")),
+        # ADR-0083 §5.3: roteador MoE treinado (tools/train_router.py). Opcional —
+        # sem ele o boot usa fallback determinístico com log honesto.
+        ("ROUTER.BITNET", find_file("ROUTER.BITNET")),
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET") or find_file("RUSTCDR2.BIN")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("HWEXPRT.BIN")),

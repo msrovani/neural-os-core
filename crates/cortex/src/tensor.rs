@@ -28,6 +28,7 @@ pub fn has_avx512() -> bool {
     { false }
 }
 
+#[derive(Clone)]
 pub struct Tensor {
     pub shape: (usize, usize),
     pub data: Vec<f32>,

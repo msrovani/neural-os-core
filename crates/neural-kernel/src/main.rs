@@ -1835,6 +1835,14 @@ pub(crate) fn kernel_boot(
     let _ = k_nano::net::mesh::chunk_self_test();
     let _ = cortex_crate::cortex::model_save_roundtrip_self_test();
     let _ = cortex_crate::federated::federated_self_test();
+    // ADR-0083 §5.2: backprop real do TransformerTrainer — CE loss diminui
+    // em sequência sintética (critério de aceite).
+    {
+        let mut t = k_ai::cognitive::TransformerTrainer::new(16, 16, 1, 8);
+        if t.self_test().is_ok() {
+            k_nano::slog_bin!("TRAIN", "info", "{}", t.status());
+        }
+    }
     // ADR-0081 tier cripto (Relativizado HMAC-SHA256): vetor RFC 4231 caso 1.
     let _ = k_nano::crypto::hmac_self_test();
     // ADR-0081 Tier F: AEAD X25519 DH + ChaCha20-Poly1305 — self-test com
@@ -3587,7 +3595,7 @@ pub(crate) fn kernel_boot(
             } else {
                 crate::trinity::generate_random_router_weights(n_exp)
             };
-            trinity.load_router(embed, weight);
+            trinity.load_router(embed, weight, router_loaded);
         }
     }
 

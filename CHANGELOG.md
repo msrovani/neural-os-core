@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### SESSION_246: Auditoria Técnica 7.x — Gap da Camada de IA (2026-08-03, ADR-0083)
+
+Auditoria (seção 7): infra de inferência real; a inteligência que ela deveria servir
+não existia — roteador MoE era ruído LCG, treino era regressão de 64 pesos sem
+backprop, saudação demo era pool canado. Correções (cargo check --release: 0 erros):
+
+- **7.2 — Roteador MoE carregável de arquivo.** `load_router_from_file()` lê
+  `ROUTER.BITNET` (.bitnet v3+: `router_embed` 99×64 f32 + `router_weight` 64×N i8);
+  boot tenta NVMe→AHCI→ATA→USB-MSC. `load_router(embed, weight, trained)` loga
+  **honestamente**: "loaded (trained)" vs warn "DETERMINISTIC FALLBACK (LCG seed=42,
+  UNTRAINED)".
+- **7.3 — Backprop real.** `TransformerTrainer` (k_ai::cognitive): train_forward
+  (attention full causal) + backward analítico (CE→unembed→rms→camadas GQA/RoPE/
+  FFN grouped→embed) + update STE ternário. `self_test()` PASS no boot QEMU:
+  CE 2.7018→1.7487 (20 steps, modelo sintético hidden=16).
+- **7.5 — Saudação sem pool canado.** Removidos `argmax_row_greeting_only` +
+  `GREETING_BIAS_IDS`/`greeting_*` (bpe.rs); saudação usa argmax real do modelo.
+  Clima mantém constrained decode (saída estruturada).
+- **Router treinado.** `tools/train_router.py`: dataset 34 amostras/7 experts,
+  gate acurácia ≥80%, exporta `ROUTER.BITNET` (25.988B, 100% acc).
+- **Assets opcionais.** `mkfat32.py`/`mkexfat.py` incluem `ROUTER.BITNET` se existir.
+- **Fixes pré-existentes revelados por `cargo clean`** (xhci): `% ISOC_SLOTS` type
+  mismatch, match incompatível, use-after-move do ring UVC (`configure_uvc_endpoint`
+  → `Option<()>`).
+- ADR: `docs/architecture/0083-ai-layer-gap-auditoria.md` (Accepted) + INDEX.
+
 ### SESSION_245: Auditoria Segurança 6.1–6.4 — modelo de confiança unificado (2026-08-03)
 
 Auditoria técnica encontrou 4 lacunas; todas corrigidas (cargo check --release: 0 erros).

@@ -106,6 +106,8 @@ def collect_files() -> list[tuple[str, bytes | str | None]]:
     print(f"[PACK_LLM] {sorted(llm) or 'none'} (env PACK_LLM; default=850)")
     files: list[tuple[str, bytes | str | None]] = [
         ("BGE.BIN", find_file("bge-small.bitnet") or find_file("bge.bin")),
+        # ADR-0083 §5.3: roteador MoE treinado (tools/train_router.py). Opcional.
+        ("ROUTER.BITNET", find_file("ROUTER.BITNET")),
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet")),

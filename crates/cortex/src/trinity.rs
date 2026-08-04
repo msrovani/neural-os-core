@@ -105,13 +105,32 @@ impl TrinityRouter {
         self.experts.push(expert);
     }
 
-    /// Carrega pesos do router treinado.
+    /// Carrega pesos do router MoE.
     /// embed: VOCAB * HIDDEN floats (embedding table)
     /// weight: PackedTernaryTensor (HIDDEN x NUM_EXPERTS)
-    pub fn load_router(&mut self, embed: Vec<f32>, weight: PackedTernaryTensor) {
+    /// `trained`: true = pesos vindos de arquivo treinado; false = fallback
+    /// determinístico (LCG seed=42, NÃO treinado). O log distingue os dois —
+    /// nunca anunciar "loaded/trained" para ruído determinístico (auditoria 7.2).
+    pub fn load_router(&mut self, embed: Vec<f32>, weight: PackedTernaryTensor, trained: bool) {
         self.router_embed = Some(embed);
         self.router_weight = Some(weight);
-        k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded: {} dim, {} experts", ROUTER_HIDDEN, self.experts.len());
+        if trained {
+            k_nano::slog_cortex!(
+                "TRINITY",
+                "info",
+                "Router MoE loaded (trained): {} dim, {} experts",
+                ROUTER_HIDDEN,
+                self.experts.len()
+            );
+        } else {
+            k_nano::slog_cortex!(
+                "TRINITY",
+                "warn",
+                "Router MoE weights: DETERMINISTIC FALLBACK (LCG seed=42, UNTRAINED) — {} dim, {} experts",
+                ROUTER_HIDDEN,
+                self.experts.len()
+            );
+        }
     }
 
     /// Substitui os pesos do router MoE por pesos treinados/federados (F4).
@@ -251,11 +270,12 @@ impl TrinityRouter {
                 for v in embedding.iter_mut() {
                     *v /= norm;
                 }
-                let num_exp = self.experts.len();
+                let num_exp = self.experts.len().min(ROUTER_MAX_EXPERTS);
                 let emb_tensor =
                     crate::tensor::Tensor::from_row_major((1, ROUTER_HIDDEN), embedding).unwrap();
                 let scores_t = weight.matmul_hybrid(&emb_tensor).unwrap();
                 let mut scores = scores_t.data.clone();
+                scores.truncate(num_exp);
                 if scores.len() == num_exp {
                     softmax(&mut scores);
                     let mut best_idx = 0;
@@ -533,8 +553,9 @@ pub fn load_router_from_file(data: &[u8]) -> bool {
         return false;
     }
 
-    // Pula até os tensores
-    let off = 32 + 16 + 4; // header + model_type(16) + ntensors(4)
+    // Pula até os tensores. Formato canônico (tools/train_router.py export_bitnet):
+    // header 20B (magic/ver/vocab/hidden/layers) + model_type(16) + ntensors(4) @36.
+    let off = 20 + 16 + 4; // pos do 1º tensor
     if off + 4 > data.len() { return false; }
     let ntensors = r4(off - 4) as usize;
 
@@ -551,12 +572,14 @@ pub fn load_router_from_file(data: &[u8]) -> bool {
         let name = core::str::from_utf8(&name_bytes[..name_end]).unwrap_or("");
         let n_orig = r4(pos + 64) as usize;
         let n_quant = r4(pos + 64 + 4) as usize;
-        let f32_bytes = n_orig * 4;
+        let is_weight = name.contains("router_weight");
+        // Leitura: router_weight = i8 bruto (n_orig bytes); demais = f32 (n_orig*4).
+        let data_bytes = if is_weight { n_orig } else { n_orig * 4 };
         pos += 64 + 8;
 
         if name.contains("router_embed") {
-            if pos + f32_bytes <= data.len() {
-                let floats: Vec<f32> = data[pos..pos + f32_bytes]
+            if pos + data_bytes <= data.len() {
+                let floats: Vec<f32> = data[pos..pos + data_bytes]
                     .chunks_exact(4)
                     .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
                     .collect();
@@ -565,30 +588,37 @@ pub fn load_router_from_file(data: &[u8]) -> bool {
                     embed_loaded = true;
                 }
             }
-        } else if name.contains("router_weight") {
-            if pos + n_orig <= data.len() {
-                // n_orig = HIDDEN * MAX_EXPERTS i8 values
-                let weights: Vec<i8> = data[pos..pos + n_orig]
+        } else if is_weight {
+            if pos + data_bytes <= data.len() {
+                // n_orig = HIDDEN * num_experts i8 values (1..=ROUTER_MAX_EXPERTS)
+                let weights: Vec<i8> = data[pos..pos + data_bytes]
                     .iter()
                     .map(|&b| b as i8)
                     .collect();
-                if weights.len() == ROUTER_HIDDEN * ROUTER_MAX_EXPERTS {
+                let n_exp = weights.len() / ROUTER_HIDDEN;
+                if n_exp >= 1
+                    && weights.len() == n_exp * ROUTER_HIDDEN
+                    && n_exp <= ROUTER_MAX_EXPERTS
+                {
                     weight_tensor = Some(PackedTernaryTensor {
-                        shape: (ROUTER_HIDDEN, ROUTER_MAX_EXPERTS),
+                        shape: (ROUTER_HIDDEN, n_exp),
                         packed_data: PackedTernaryTensor::pack_weights(&weights),
                     });
                     weight_loaded = true;
                 }
             }
         }
-        pos += f32_bytes + n_quant;
+        // Avanço canônico (export_bitnet pado o weight para n_orig*4 + n_quant).
+        pos += n_orig * 4 + n_quant;
     }
 
     if embed_loaded && weight_loaded {
+        // n_exp antes do move (weight_tensor vai para ROUTER_WEIGHT abaixo)
+        let n_exp = weight_tensor.as_ref().map(|t| t.shape.1).unwrap_or(0);
         // Store in a static for the router to pick up
         *ROUTER_EMBED.lock() = embed_vec;
         *ROUTER_WEIGHT.lock() = weight_tensor;
-        k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded from file: {} dim, {} experts", ROUTER_HIDDEN, ROUTER_MAX_EXPERTS);
+        k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded from file: {} dim, {} experts", ROUTER_HIDDEN, n_exp);
         true
     } else {
         k_nano::slog_cortex!("TRINITY", "warn", "Router file missing tensors: embed={} weight={}", embed_loaded, weight_loaded);
