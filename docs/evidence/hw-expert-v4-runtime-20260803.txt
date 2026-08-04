@@ -1,0 +1,54 @@
+# HW Expert v4 — Evidência de runtime (QEMU TCG, boot 2026-08-03)
+
+Boot: `logs/boot_hweval.txt` — QEMU TCG (-accel tcg -cpu max), target/uefi.img,
+modelo injetado via QEMU-loader (auto-placement de target/*.bitnet).
+
+## Carga do modelo (path NN ativo)
+
+```
+[T+2910] [R0] [nk] [Asset] [loader] - HWEXPERT magic 0xBE11BE11 found @0x129400000 - tentando parse 1024 KB
+[T+2913] [R0] [nk] [Asset] [loader] - HWEXPERT LOADED (QEMU-loader @0x129400000) size=1024KB layers=64 hidden=4
+[T+2934] [R2] [cortex] [HWEXPERT] [info] - v5 multi-head loaded: hidden=128 layers=6 heads=[17,8,9,10,9] 1024KB
+[T+2934] [R2] [cortex] [HWEXPERT] [info] - HW Expert v4 model loaded (multi-head).
+[T+2934] [R0] [nk] [HWEXPERT] [info] - v4 multi-head LOADED (QEMU-loader @0x129400000)
+[T+2934] [R0] [k-nano] [LOG] [info] - BOOT: HW Expert v4 multi-head loaded
+[T+4679] [R2] [cortex] [Gate] [n3] - Trinity experts=7 generator=OK moe_router=LOADED hwexpert=LOADED rustcoder=ABSENT route=keyword+R3
+```
+
+## Predição por device + card PnP (src=expert_v4)
+
+```
+[T+5016] [R2] [cortex] [HWEXPERT] [info] - predict 8086:1237  family=16 fw=7 agent=8 caps=0x0 next=8
+[T+5016] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:1237 PCI 8086:1237 family=pci_bridge agent=PlatformAgent fw=amdgpu next=observe_only caps=0x0 src=expert_v4
+[T+5273] [R2] [cortex] [HWEXPERT] [info] - predict 8086:7000  family=16 fw=7 agent=8 caps=0x0 next=8
+[T+5274] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:7000 PCI 8086:7000 family=pci_bridge agent=PlatformAgent fw=amdgpu next=observe_only caps=0x0 src=expert_v4
+[T+5530] [R2] [cortex] [HWEXPERT] [info] - predict 8086:7010  family=16 fw=7 agent=8 caps=0x0 next=8
+[T+5530] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:7010 PCI 8086:7010 family=pci_bridge agent=PlatformAgent fw=amdgpu next=observe_only caps=0x0 src=expert_v4
+[T+5786] [R2] [cortex] [HWEXPERT] [info] - predict 8086:7113  family=16 fw=7 agent=8 caps=0x0 next=8
+[T+5786] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:7113 PCI 8086:7113 family=pci_bridge agent=PlatformAgent fw=amdgpu next=observe_only caps=0x0 src=expert_v4
+[T+6042] [R2] [cortex] [HWEXPERT] [info] - predict 1234:1111  family=16 fw=7 agent=8 caps=0x0 next=8
+[T+6042] [R0] [nk] [Log] [msg] - [HW-PnP] 1234:1111 PCI 1234:1111 family=pci_bridge agent=PlatformAgent fw=amdgpu next=observe_only caps=0x0 src=expert_v4
+[T+6298] [R2] [cortex] [HWEXPERT] [info] - predict 8086:100e  family=16 fw=7 agent=8 caps=0x0 next=8
+[T+6298] [R0] [nk] [Log] [msg] - [HW-PnP] 8086:100e PCI 8086:100e family=pci_bridge agent=PlatformAgent fw=amdgpu next=observe_only caps=0x0 src=expert_v4
+```
+
+## Achado (follow-up necessário)
+
+O path NN está ATIVO em runtime (carga v5 ok, predição por device, cards com
+src=expert_v4, gate Trinity hwexpert=LOADED). PORÉM as predições são
+degeneradas: family=16 (pci_bridge) para TODOS os devices QEMU — inclusive
+1234:1111 (VGA std) e 8086:100e (e1000 NIC), que deveriam ser
+display/network. Hipóteses a investigar:
+
+1. Modelo carregado @0x129400000 é o arquivo errado (auto-placement por
+   tamanho desc pode ter colocado outro .bitnet nesse endereço — o parse v3
+   achou magic lá também, leitura de 1024KB).
+2. Modelo v4 shipped (266KB) é degenerado nos chipsets QEMU (generalização
+   zero apesar do holdout ~70% — apontaria para leak de fonte no dataset).
+3. Decode prediction_to_card errado para family=16 (vocab 17 famílias).
+
+O benchmark holdout (docs/evidence/hw_expert_v4_holdout.md) mostra que o
+modelo DISCRIMINA em devices nunca vistos (family 70.6% dispositivo) — então
+a degeneração em runtime sugere problema de carga/arquivo (hipótese 1) mais
+provável que modelo ruim. Próximo passo: sweep QEMU multi-device com o modelo
+pinado em endereço dedicado + dump do token/magic do arquivo carregado.

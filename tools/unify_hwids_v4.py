@@ -27,9 +27,81 @@ TARGET = MODELS / "hw_expert" / "v4"
 
 # ─── Import vocab from training script ──────────────────────────────────
 sys.path.insert(0, str(ROOT / "tools"))
+# train_hw_expert_v4 define FAMILY/FW/AGENT/NEXT como LISTAS (ordem = índice
+# no vocabulário) + pack_vid_did. CAPS/seed_table_rows/row_to_sample não
+# existem mais lá — definidos localmente abaixo.
 from train_hw_expert_v4 import (
-    FAMILY, FW, AGENT, NEXT, CAPS, pack_vid_did, seed_table_rows, row_to_sample
+    FAMILY, FW, AGENT, NEXT, pack_vid_did,
 )
+
+# ─── CAPS (espelha caps module de hw_capability.rs / vocab.json) ────────
+CAPS = {name: 1 << i for i, name in enumerate([
+    "NET", "WIFI", "DISPLAY", "COMPUTE", "AUDIO", "USB_HOST",
+    "STORAGE", "NEEDS_FW", "SCAN", "CAPTURE",
+])}
+
+
+def _idx(lst, key, default=0):
+    """FAMILY/FW/AGENT/NEXT são listas agora — lookup por índice."""
+    try:
+        return lst.index(key)
+    except ValueError:
+        return default
+
+
+def seed_table_rows() -> list[dict]:
+    """Amostras kernel_seed do dataset.json atual (lê, não regenera nada).
+
+    Antes isso vinha de uma tabela embutida no train_hw_expert_v4.py; hoje o
+    seed vive no próprio dataset (meta.source == "kernel_seed"). Retorna as
+    rows no formato legacy que row_to_sample() consome.
+    """
+    ds = TARGET / "dataset.json"
+    if not ds.exists():
+        return []
+    with open(ds, encoding="utf-8") as f:
+        data = json.load(f)
+    samples = data["samples"] if isinstance(data, dict) else data
+    rows = []
+    for s in samples:
+        m = s.get("meta", {})
+        if m.get("source") != "kernel_seed":
+            continue
+        rows.append({
+            "vid": m["vid"], "did": m["did"], "bus": m.get("bus", "pci"),
+            "family": m.get("family", "pci_bridge"),
+            "fw": m.get("fw", "-"),
+            "agent": m.get("agent", "PlatformAgent"),
+            "caps": m.get("caps", []),
+            "next": m.get("next", "observe_only"),
+            "source": "kernel_seed",
+        })
+    return rows
+
+
+def row_to_sample(row: dict) -> dict:
+    """Converte row (vid/did/family/...) no formato sample do dataset v4."""
+    vid, did = int(row["vid"]), int(row["did"])
+    caps_bits = 0
+    for c in row.get("caps", []):
+        caps_bits |= CAPS.get(c, 0)
+    fam = row.get("family", "pci_bridge")
+    return {
+        "x": pack_vid_did(vid, did),
+        "y": {
+            "family": _idx(FAMILY, fam),
+            "fw_id": _idx(FW, row.get("fw", "-")),
+            "agent_id": _idx(AGENT, row.get("agent", "PlatformAgent")),
+            "caps_bits": caps_bits,
+            "next_action": _idx(NEXT, row.get("next", "observe_only"), 8),
+        },
+        "meta": {
+            "vid": vid, "did": did,
+            "bus": row.get("bus", "pci"),
+            "family": fam,
+            "source": row.get("source", "kernel_seed"),
+        },
+    }
 
 # ─── Sources ─────────────────────────────────────────────────────────────
 
@@ -276,11 +348,11 @@ def unify() -> list[dict]:
         sample = {
             "x": pack_vid_did(vid, did),
             "y": {
-                "family": FAMILY.get(label["family"], 0),
-                "fw_id": FW.get(label["fw"], 0),
-                "agent_id": AGENT.get(label["agent"], 0),
+                "family": _idx(FAMILY, label["family"]),
+                "fw_id": _idx(FW, label["fw"]),
+                "agent_id": _idx(AGENT, label["agent"]),
                 "caps_bits": caps_bits,
-                "next_action": NEXT.get(label["next"], 8),
+                "next_action": _idx(NEXT, label["next"], 8),
             },
             "meta": {
                 "vid": vid,
@@ -313,10 +385,10 @@ def main():
 
     # Write vocab
     vocab = {
-        "family": list(FAMILY.keys()),
-        "fw": list(FW.keys()),
-        "agent": list(AGENT.keys()),
-        "next": list(NEXT.keys()),
+        "family": list(FAMILY),
+        "fw": list(FW),
+        "agent": list(AGENT),
+        "next": list(NEXT),
         "caps": list(CAPS.keys()),
     }
     vocab_path = TARGET / "vocab.json"
