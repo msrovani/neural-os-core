@@ -52,7 +52,7 @@ class BitNetRustExactClass(BitNetRustExact):
     audio/usb/serial_io/bridge/multimedia/input/other)."""
 
     def __init__(self, hidden=128, vocab=64, num_layers=6, num_heads=4, ff_dim=256,
-                 t=0.01, tau=16.0, n_family=N_FAMILY_FILE):
+                 t=0.05, tau=16.0, n_family=N_FAMILY_FILE):
         super().__init__(hidden=hidden, vocab=vocab, num_layers=num_layers,
                          num_heads=num_heads, ff_dim=ff_dim, t=t, tau=tau)
         self.family_head = nn.Linear(hidden, n_family, bias=False)
@@ -105,13 +105,17 @@ def train_with_early_stop(samples, train_idx, hold_idx, args, log):
                                  num_heads=args.heads, ff_dim=args.ff_dim,
                                  n_family=args.n_family_file).to(DEVICE)
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
-    # Class-balanced family loss: majority class ("other", ~52%) must not
-    # dominate; weights = sqrt(N / (n_classes * n_i)) so minorities are
-    # learned and the model cannot collapse to a single class.
+    # Family loss: plain CE by default (class-balanced weights were tried and
+    # HURT — inverse-freq weights collapse the family head to ~20%, sqrt
+    # weights to ~59.6% vs 60.6% plain on the same split; the 12-generic
+    # taxonomy is dominated by "other" (52%) + display (22%) and the ternary
+    # backbone has no headroom for reweighting minorities). --class-weights
+    # opts back into sqrt weights.
     fam_counts = torch.bincount(Yf, minlength=args.n_family_file).float().clamp(min=1)
-    fam_w = (fam_counts.sum() / (args.n_family_file * fam_counts)).sqrt()
-    if args.no_class_weights:
-        fam_w = torch.ones_like(fam_w)
+    if args.class_weights:
+        fam_w = (fam_counts.sum() / (args.n_family_file * fam_counts)).sqrt()
+    else:
+        fam_w = torch.ones(args.n_family_file)
     crit_ce_fam = nn.CrossEntropyLoss(weight=fam_w.to(DEVICE))
     crit_ce = nn.CrossEntropyLoss()
     crit_bce = nn.BCEWithLogitsLoss()
@@ -215,10 +219,15 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--n-family", type=int, default=N_FAMILY)
     ap.add_argument("--n-family-file", type=int, default=N_FAMILY_FILE)
-    ap.add_argument("--no-class-weights", action="store_true")
+    ap.add_argument("--class-weights", action="store_true",
+                    help="use sqrt class-balanced family weights (default off: plain CE — "
+                         "reweighting was measured to HURT family acc on this taxonomy)")
     ap.add_argument("--thresh-list", type=str,
                     default="0.05,0.03,0.02,0.015,0.01,0.008,0.005")
-    ap.add_argument("--probe-threshs", type=str, default="0.02,0.01,0.008,0.005")
+    ap.add_argument("--probe-threshs", type=str, default="0.05,0.03,0.02,0.01",
+                    help="thresholds probed per-epoch for early-stop FILE acc "
+                         "(must include the training t=0.05 regime; lower-only probes "
+                         "measure near-random acc and distort early stopping)")
     ap.add_argument("--out", type=str, default=str(TARGET / "hw_expert_v4.bitnet"))
     args = ap.parse_args()
 

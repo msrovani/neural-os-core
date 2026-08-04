@@ -1,0 +1,69 @@
+{
+  "family": [
+    "unknown",
+    "intel_eth",
+    "realtek_eth",
+    "broadcom_eth",
+    "virtio",
+    "intel_wifi",
+    "realtek_wifi",
+    "atheros_wifi",
+    "broadcom_wifi",
+    "nvidia_gpu",
+    "amd_gpu",
+    "intel_gpu",
+    "audio_hda",
+    "usb_host",
+    "storage",
+    "bridge",
+    "qemu_vga",
+    "chelsio_eth",
+    "mellanox_eth",
+    "marvell_eth",
+    "other"
+  ],
+  "fw": [
+    "-",
+    "intel/iwlwifi",
+    "rtlwifi",
+    "ath9k",
+    "brcmfmac",
+    "nvidia/gp108",
+    "i915",
+    "amdgpu"
+  ],
+  "agent": [
+    "HwBridgeAgent",
+    "NetAgent",
+    "WifiAgent",
+    "DisplayAgent",
+    "GpuBackend",
+    "UsbDriverAgent",
+    "HdaAudioAgent",
+    "DiskAgent",
+    "PlatformAgent"
+  ],
+  "next": [
+    "ready",
+    "load_firmware",
+    "bind_network",
+    "bind_wifi_scan",
+    "bind_gpu_compute",
+    "bind_usb_host",
+    "bind_audio",
+    "bind_storage",
+    "observe_only"
+  ],
+  "caps": [
+    "NET",
+    "WIFI",
+    "DISPLAY",
+    "COMPUTE",
+    "AUDIO",
+    "USB_HOST",
+    "STORAGE",
+    "NEEDS_FW",
+    "SCAN",
+    "CAPTURE"
+  ]
+}
