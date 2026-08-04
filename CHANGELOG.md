@@ -2,6 +2,53 @@
 
 ## [Unreleased]
 
+### SESSION_247: HW Expert v4 artefato degenerado → retreino validado + ADR-0084 + CI + testes host (2026-08-04)
+
+O artefato `models/hw_expert/hw_expert_v4.bitnet` era **100% zeros** (embed 2002/2048
+não-zero; todos os 42 tensores backbone e 5 heads = 0) — root cause confirmada
+(H2): `export_v4` quantiza com threshold 0.5 e `nn.Linear` inicia ±1/√128≈±0.088 →
+todo peso vira 0; o kernel NÃO tinha bug (parse exato; port Python reproduz
+family=0). Correções (cargo check --release: 0 erros; cargo test host 139 testes):
+
+- **Retreino validado.** `tools/retrain_hw_expert_v4.py`: split honesto 90/10 por
+  (vid,did) único seed 42 (holdout nunca visto), early stopping (patience 3),
+  threshold de export tunável (0.5/0.25/0.1/0.05 → escolhe o que maximiza acc do
+  ARQUIVO com fração não-zero ≥1%), embed ROW-MAJOR `wt(f, embed.weight)` (o `.T`
+  embaralhava). `tools/validate_hw_expert_v4.py`: port Rust-exact (parse_end ==
+  file size, header, fração não-zero GATE ≥1%, predições não-constantes, holdout
+  do arquivo).
+- **Loader v5 real do export_v4.** `cortex.rs`: `num_params` u32 (não u64),
+  tensores com prefixo `u32 len + u32 scale` (scale vestigial → 1.0 efetiva),
+  rope 16 f32/layer, 5 heads prefixed — `read_prefixed_ternary`/
+  `read_prefixed_f32_vec`.
+- **SSE tail clamp.** `bitnet_sse.rs`: n%4≠0 real (heads 17/9/10) — clamp do
+  último bloco (`lanes = min(4, n-j)`).
+- **Tabela curada > ML.** `hw_capability.rs`: `build_card` ordem invertida —
+  tabela HWID SEMPRE vence, ML cobre o resto, heurística por último.
+- **cargo test no host.** Lib crates `#![cfg_attr(not(test), no_std)]`; HW-only
+  gated com `#[cfg(target_os = "none")]` (NÃO `cfg(test)` — inerte em dep).
+  Fixes: IDT `cfg(not(windows))` (MSVC/COFF align 16), `probe_port` stub host,
+  IPI no-op host, p2p_sim gated `feature="p2p-sim"` (stale pré-7a97556), ProofGate
+  verify com `now` explícito, `mutation_hash_for` espelha ruvix-vecgraph (senão
+  ProofRejected), transport L2 frame slice + src_mac, telemetry ring
+  newest-disappear (0..4095), datetime fix (1783929600 = 2026-07-13), NVMe layout
+  72B pinado (spec 64B — AWAITING_HW), rabin determinístico, FedYogi honesto
+  (pesos i8 ficam 0 com lr=0.01 — limitação conhecida), quarantine lowercase
+  (`[inst]` — `[INST]` era dead code), skill_manifest interop asserts.
+- **CI.** `.github/workflows/ci.yml`: check + test host + build boot image + disco
+  + QEMU boot smoke (UEFI TCG -NoDisk, grep "Phase 6" + "tick=").
+- **ADR-0084 (Proposed).** Engine BitNet: fidelidade 2B4T (M1 relu2 vs silu, M2
+  SubNorms, M3 theta 500000, M4 embed Q6_K) antes de velocidade; F1 decode
+  branchless → F2 activation-parallel gated por m → F3 fidelity+Q6_K (bump de
+  versão, +190MB RAM) → F4 W2A8 gated → F5 tiling; receita 1-bit p/ próximo treino
+  (tanh 30×, LR constante+cooldown, LRs separados, QAT suave Hestia). Sem retreino
+  de modelos existentes.
+- **Scrub docs.** README reescrito (sem superlativos, status honesto Working/gated,
+  badge CI real); CONTRIBUTING: cessão de IP → DCO + AGPL inbound=outbound;
+  AGENTS.md toolchain cross-platform + seção cargo test.
+- **Sweep runtime.** `tools/hw_sweep/` (3 boots QEMU ~15-20 devices PCI, modelo
+  pinado @0x179000000 — LLAMA8B cobre a janela de auto-placement).
+
 ### SESSION_246: Auditoria Técnica 7.x — Gap da Camada de IA (2026-08-03, ADR-0083)
 
 Auditoria (seção 7): infra de inferência real; a inteligência que ela deveria servir

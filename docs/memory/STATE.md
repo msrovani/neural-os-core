@@ -1,4 +1,32 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s247 — HW Expert v4 validado + ADR-0084 + CI (2026-08-04)
+#   SESSION_247: artefato v4 degenerado → retreino com validação do arquivo
+#     Root cause H2 CONFIRMADO: export_v4 quantiza threshold 0.5 e nn.Linear
+#       inicia ±1/√128≈±0.088 → todos os 42 tensores backbone + 5 heads = 0
+#       (embed 2002/2048 não-zero). Kernel SEM bug (parse_end == file size;
+#       port Python reproduz family=0). Fix: retreino + validação do artefato.
+#     tools/retrain_hw_expert_v4.py: split honesto 90/10 por (vid,did) seed 42,
+#       early stopping (patience 3), threshold de export tunável (0.5/0.25/0.1/
+#       0.05 → acc do ARQUIVO com fração não-zero ≥1%), embed ROW-MAJOR (não .T).
+#     tools/validate_hw_expert_v4.py: port Rust-exact do loader+predictor —
+#       parse_end, header (hidden=128 layers=6 heads=[17,8,9,10,9]), fração
+#       não-zero GATE ≥1%, predições não-constantes, holdout do ARQUIVO.
+#     Loader v5 (cortex.rs): formato export_v4 = num_params u32 + tensores com
+#       prefixo u32 len + u32 scale (scale vestigial → 1.0); read_prefixed_ternary/
+#       read_prefixed_f32_vec. SSE tail clamp (n%4≠0 — heads 17/9/10). build_card:
+#       tabela curada SEMPRE vence o ML (ordem invertida).
+#     cargo test host habilitado (139 testes): gate HW-only `#[cfg(target_os =
+#       "none")]` (não cfg(test) — inerte em dep); IDT cfg(not(windows)); p2p_sim
+#       gated feature; NVMe layout 72B pinado (spec 64B, AWAITING_HW).
+#     CI: .github/workflows/ci.yml (check + test + build + boot smoke Phase 6).
+#     ADR-0084 (Proposed, por_fazer): fidelidade 2B4T (M1 relu2, M2 SubNorms, M3
+#       theta 500000, M4 embed Q6_K) antes de velocidade; F1 decode branchless →
+#       F2 activation-parallel → F3 fidelity+Q6_K → F4 W2A8 gated; receita 1-bit
+#       p/ próximo treino (tanh 30×, LR cooldown, QAT suave). Sem retreino.
+#     Scrub: README sem superlativos, CONTRIBUTING DCO, AGENTS toolchain cross.
+#     cargo check --release 0 erros.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.9-s245 — Auditoria Segurança 6.1–6.4 (2026-08-03)
 #   SESSION_245: modelo de confiança unificado — 4 correções de auditoria
 #     6.1 Portão ÚNICO ADR-0052: verify_skill_md agora DELEGA para
