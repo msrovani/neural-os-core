@@ -228,3 +228,82 @@ Total Fases 1-3: ~1-2 dias de trabalho, **zero custo financeiro, zero retreino**
 - [Deveraux-Parker/nanoGPT_1GPU_SPEEDRUN](https://github.com/Deveraux-Parker/nanoGPT_1GPU_SPEEDRUN) — `train_gpt2_4090_90min_3_25loss.py`
 - [hestia2026/Hestia](https://github.com/hestia2026/Hestia) — `thermo_quantizer.py`, `thermo_scheduler.py`
 - Relacionadas: ADR-0011 (BitLinear), ADR-0012 (packing), ADR-0019 (cortex), ADR-0061 (CPU-first), ADR-0057 (dispatch), ADR-0083 (gap IA); SESSION_162 (bug bitwise OOB)
+
+---
+
+## 11. Revisão (2026-08-04) — validação independente pré-implementação
+
+Revisão em duas frentes: (a) **interna** — verificação claim-a-claim do diagnóstico contra o código real
+(`cortex.rs`, `nn.rs`, `bitnet_avx2/avx512.rs`, `compute.rs`, `gguf.rs`, `convert_bitnet.py`,
+`tools/bitnet_fwd_parity.py`); (b) **externa** — conferência das evidências contra fontes primárias
+(config.json + modeling_bitnet.py do 2B4T, `microsoft/BitNet` src/README.md e ggml-bitnet-mad.cpp,
+arXiv 2504.12285, nanoGPT_1GPU_SPEEDRUN, Hestia).
+
+### 11.1 Veredito externo — verificado (14/17 grupos exatos, 0 refutados)
+
+- ✅ Arquitetura 2B4T (M1–M4 §2): hidden 2560 / 30 camadas / 20 heads / 5 KV / FFN 6912 GLU **ReLU²** /
+  theta 500000 / vocab 128256 LLaMA-3 / tied / BF16 embed / sem scales salvos — tudo confere.
+- ✅ bitnet.cpp: 1.29× weight-parallel (0.058 vs 0.075 EPYC 7V13), activation-parallel 1.85–2.0×,
+  I2_S embed = N/A, Q6_K 17.149 vs 17.109 PPL, 29ms/0.028J (este rotulado "Estimated" no paper).
+- ✅ Receita de treino: tanh 30×, cooldown, betas (0.8,0.95), embed LR ≈12×, Muon+NS-5; Hestia
+  `compress_ratio=0.2`/`anneal_ratio=0.8` — números exatos.
+- ⚠️ **Correção 1:** "4–8× maiores" (§4 Tabela 3) → os baselines PTQ são **3.5–4×** (Falcon3-**7B**,
+  Llama3-**8B** vs 2B). Rephrase.
+- ⚠️ **Correção 2:** citação `modeling_bitnet.py` (§2) — o arquivo não existe mais no repo HF; o código
+  canônico vive em `huggingface/transformers/models/bitnet/`.
+- ⚠️ "Acumulação i32" (Fase 4) é simplificação: o loop interno é i16 com widening i32 a cada 32 blocos.
+
+### 11.2 Veredito interno — kernel e diagnósticos confirmados; M2 refutado
+
+- ✅ M1 (silu em `cortex.rs:901` e nos 4 forwards; `nn.rs:51-53`), M3 (conversor nunca escreve θ/bit2;
+  loader default 10000), F1 (`unpack_row_into` match por peso 139-142; reload/store por t 186-188),
+  F2 (`avx2_bitwise_matmul` L75-127 desativado, zero callers; bug OOB `n%4!=0` confirmado com SESSION_162;
+  `dispatch_ternary` compute.rs:59 nunca lê m; 2 layouts de packing existem), F4 (`bitnet_avx512.rs:34-40`
+  `(pair&1)-(pair>>1)`), justificativas do gate F4 (`soft_stride=3`, `MAX_SEQ=64`, 4-8 tokens) — **confirmados**.
+- ❌ **M2 diagnóstico incorreto**: o forward **já aplica 4 RMSNorms/camada + final** (`rms_attn` 754,
+  `rms_inner_attn` 888, `rms_ffn` 894, `rms_ffn_norm` 916, `rms_final` 928) e o conversor exporta as 4
+  (`convert_bitnet.py:177-180`). O trabalho real de M2 é:
+  1. **eps**: forward 1e-6 (`cortex.rs:708`) vs 2B4T **1e-5**;
+  2. **Truncamento `rms_ffn_norm`**: loader lê só `hidden` (2560) f32 e faz pad para 6912
+     (`cortex.rs:1853-1863`), mas o conversor escreve 6912 → **últimos 4352 pesos descartados
+     silenciosamente**;
+  3. **Caminho GGUF usa normas identidade** (`gguf.rs:712-715`) — M1-M3 no path `.bitnet` não alcançam
+     Falcon3/LLaMA-8B.
+- ⚠️ M5 "scale vestigial" só vale para o path HW Expert v5 (`read_prefixed_ternary`); o loader principal
+  lê e **aplica** scale f32 (`read_ternary_tensor_with_scale`, `mul_scalar` 758-762/890/896-898/918).
+  Conclusão (RMSNorm absorve) segue válida para o 2B4T (conversor não grava scales).
+
+### 11.3 Findings bloqueadores — Fase 3 NÃO está pronta como escrita
+
+1. 🔴 **Mismatch de layout conversor↔loader (baseline quebrado)**: `convert_bitnet.py` escreve v4 **sem
+   scale f32 por tensor** (`:166, 198-204`), mas `load_model` v4 **consome scale incondicionalmente**
+   (`read_ternary_tensor_with_scale`) e lê `rms_ffn_norm` com 2560 vs 6912 gravados. O arquivo 2B4T atual
+   pode **nem parsear limpo**. **Fase 3 deve começar por auditoria/reconciliação de layout**
+   (existe `tools/_probe_bitnet2b.py` para diagnóstico) **antes de qualquer trabalho Q6_K**.
+2. 🔴 **Gate de paridade fraco demais para M1-M3**: `tools/bitnet_fwd_parity.py` (existe, 231 LOC — não é
+   pré-requisito faltante) (a) só aceita magic `B1TM`/`B1` antigo (`bitnet_header` L136-141) — falha em
+   v4/v5 `0xBE11BE11`; (b) usa modelo **850M**, não o 2B4T; (c) gate é overlap **top-5** sem threshold de
+   logits — **não distingue silu de relu²**. Fortalecer (métrica de logits + modelo 2B4T + magic novo)
+   senão a verificação M1-M3 é decorativa.
+3. 🟡 **Armadilha Q6_K**: `dequantize_q6_k` bulk materializa **1.31GB f32** (vocab 128256) → estoura o cap
+   de 2GB com o arquivo ~800MB residente. O cálculo +190MB (82→269MB, verificado correto) **só vale com
+   dequant row-wise dentro do `embed_lookup`** (`cortex.rs:696-704` lê 1 linha/token). Especificar
+   explicitamente; "dequant já existe em gguf.rs" pode induzir ao caminho bulk.
+4. 🟡 **Contradição de ordem**: §2 P1 ("fidelidade antes de velocidade") vs §3 (F1/F2 velocidade antes de
+   F3) vs checklist §9 (M1-M4 primeiro). Tecnicamente **sem impacto**: F1/F2 são bit-exactos
+   (função preservada — a ativação vive fora do matmul, `cortex.rs:901`), então velocidade-primeiro não
+   viola P1. Falta 1 frase na ADR reconciliando.
+5. 🟡 **`soft_stride=3`** (hidden≥2048, `cortex.rs:740-750`) pula ~⅔ das camadas — a **maior divergência de
+   fidelidade** de todas; está só como rationale de gate do F4, deveria ser item de fidelidade explícito
+   (ou declarado intencional/budget).
+6. 🟡 **`model.rope_theta` hardcoded** 10000 (`cortex.rs:1950`) enquanto cos/sin honram θ do EOF
+   (`:1931-1939`) — armadilha para quem ler o campo.
+
+### 11.4 Impacto e status
+
+- **F1 (decode branchless) e F5 (tiling): independentes dos findings — executáveis já.**
+- **F2:** factível, mas o gate por m e a reativação do bitwise exigem a memória de layout
+  (2 layouts de packing) — sem bloqueio, risco médio mantido.
+- **F3:** **bloqueada** até (1) auditoria de layout conversor↔loader, (2) parity gate fortalecido,
+  (3) M2 reescopado (eps + truncamento + GGUF identity), (4) dequant Q6_K row-wise especificado.
+- Lifecycle permanece `por_fazer` (Proposed) até Fases 1-3 concluídas e verificadas (§9).
