@@ -21,6 +21,13 @@
 #     ✅ Boot QEMU v6 VALIDADO (pós-commit): synth_v6.bitnet (108KB h=128 L=2 feat=0x07)
 #       injetado via -device loader@0x100000000 → load_model_v6 parseou, AI_READY,
 #       AgentFleet 54 + Runtime + NetAgent tick. Falta só o 2B real (download 3GB).
+#     SESSION_249b: Fase 7 W2A8 (ADR-0084 F4) IMPLEMENTADA + gated: kernel maddubs
+#       (int8 ativações si-per-token × ternário i8, 32 MACs/inst) + paridade host PASS;
+#       w2a8_enabled()=false (WHPX/HW real + GENERATION_GAPS_RESOLVED pendente). Kernel
+#       real só em host/test — target no_std desabilita -ssse3 → LLVM "split" no
+#       pmaddubsw 256-bit (gate por target, não cfg(test), SESSION_247). Retreino silu
+#       smoke CPU (cuda=False): rust_coder.bitnet v6 canônico (act=0, feat=0x07) — o
+#       caminho silu→export v6 funciona; convergência completa exige GPU.
 #
 # ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s248 — HW Expert NN gated off; kernel = tabela+heurística (2026-08-04)

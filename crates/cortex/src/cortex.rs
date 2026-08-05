@@ -3570,7 +3570,10 @@ pub trait Model: Send {
 
 pub static CURRENT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 pub static RUSTCODER_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
-pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
+/// Gate do W2A8 (ADR-0084 §3 F4): true só quando soft_stride=1, MAX_SEQ
+/// adequado e geração ≥ algo útil. Hoje false — gaps pendentes.
+pub static GENERATION_GAPS_RESOLVED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);pub static HWEXPERT_MODEL: spin::Mutex<Option<Box<dyn Model>>> = spin::Mutex::new(None);
 /// Dimensão do CURRENT_MODEL (p/ skip LLM-TEST em 2B).
 pub static CURRENT_MODEL_EMBED_DIM: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);

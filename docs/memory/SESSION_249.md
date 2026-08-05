@@ -64,8 +64,18 @@
 ## 4. Pendentes (por design)
 
 - **Boot QEMU v6 com 2B re-convertido**: ✅ **parcialmente validado (2026-08-05)** — boot QEMU headless (TCG, -NoDisk) com `synth_v6.bitnet` (108KB, v6 real h=128 L=2 feat=0x07) injetado via `-device loader,addr=0x100000000`: o kernel varreu magic 0xBE11BE11, `load_model_v6` parseou (`v6 LLM h=128 L=2 q_dim=128 vocab=512 act=0 emb=0 feat=0x07`), `AI_READY`, AgentFleet 54 agentes + Runtime + NetAgent tick. **Falta apenas a validação com o 2B real** (download ~3GB safetensors do HuggingFace; `download_models.py` sem entrada). Destravar: `huggingface-cli download microsoft/bitnet-b1.58-2B-4T --local-dir target/` → `python tools/convert_bitnet.py` → boot.
-- **Fase 7 (W2A8 maddubs)**: gated por WHPX/HW real + gaps de geração (`soft_stride=3`, `MAX_SEQ=64`, 4-8 tokens) — ADR-0084 §3 F4.
-- **Retreino TinyStories/RustCoder**: silu já no forward de treino; modelos antigos precisam retreino p/ casar com act_type=0 (ADR-0085 §10.3) — GPU long-running.
+- **Fase 7 (W2A8 maddubs)**: ✅ **implementada e gated (SESSION_249b)** — kernel
+  `cortex::bitnet_w2a8` (ativações int8 si-per-token × ternário i8 via
+  `_mm256_maddubs_epi16`, 32 MACs/inst, acumulação i32, epílogo + desconto do viés 128·Σw)
+  com paridade host PASS. `w2a8_enabled()` = false: exige WHPX/HW real + gaps de geração
+  resolvidos (`GENERATION_GAPS_RESOLVED` static). Kernel real compila só em host/test
+  (`not(target_os="none")`); stub no_std gated — target x86_64-unknown-none desabilita
+  -ssse3 no nível do target e o `pmaddubsw` 256-bit exige split LLVM p/ 128-bit
+  (SESSION_247: gate por target, não cfg(test)).
+- **Retreino TinyStories/RustCoder**: ✅ **caminho validado (SESSION_249b)** — silu já no
+  forward de treino; smoke CPU (`--rustcoder --epochs 3`, cuda=False nesta máquina)
+  exportou `rust_coder.bitnet` v6 canônico (magic 0xBE11BE11, ver=6, act_type=0, feat=0x07),
+  provando silu→export v6 de ponta a ponta. Convergência completa (200 epochs) exige GPU.
 
 ---
 

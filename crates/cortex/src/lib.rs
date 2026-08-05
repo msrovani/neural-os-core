@@ -30,6 +30,7 @@ pub mod r3;
 pub mod bitnet_avx2;
 pub mod bitnet_avx512;
 pub mod bitnet_sse;
+pub mod bitnet_w2a8;
 pub mod compute;
 pub mod decode;
 pub mod bpe;

@@ -42,6 +42,23 @@ Implementação completa das ADRs 0085 (formato canônico + registro K³CHJ) e 0
   parseou (`v6 LLM h=128 L=2 vocab=512 act=0 emb=0 feat=0x07`), `AI_READY`, AgentFleet
   54 agentes + Runtime + NetAgent tick. Falta só a validação com o 2B real.
 
+### SESSION_249b: Fase 7 W2A8 (ADR-0084 F4) + retreino silu (2026-08-05)
+
+- **W2A8 maddubs implementado** (`cortex::bitnet_w2a8`): ativações int8 (si per-token via
+  absmax) × pesos ternários i8 via `_mm256_maddubs_epi16` (32 MACs/instrução), acumulação
+  i32, epílogo com escala f32 + desconto do viés (u8 = q+128 ⇒ subtrai 128·Σw). Repack
+  coluna-major (n,k) i8 p/ maddubs. Self-test de paridade vs referência quantizada PASS.
+- **Gated (ADR-0084 §3 F4):** `w2a8_enabled()` = false — exige WHPX/HW real + gaps de
+  geração resolvidos (`GENERATION_GAPS_RESOLVED` static, hoje false). Kernel real compila
+  só em host/test (`not(target_os="none")`); stub no_std gated (target x86_64-unknown-none
+  desabilita -ssse3 → LLVM "split the result" no pmaddubsw 256-bit; SESSION_247: gate por
+  target, não cfg(test)). Dispatch conectado atrás do gate — não regride TCG.
+- **Retreino silu (#3):** smoke CPU de `train_models_gpu.py --rustcoder --epochs 3`
+  (cuda=False nesta máquina) validou o caminho silu→export v6 de ponta a ponta:
+  RustCoder 1M params, loss 5.35→1.75, `rust_coder.bitnet` = v6 canônico (magic
+  0xBE11BE11, ver=6, act_type=0, feat=0x07). Convergência completa exige GPU.
+- **Verificação:** 20 testes cortex PASS (incl. 2 W2A8), workspace release 0 erros.
+
 ### SESSION_248: Veredito de Arquitetura — HW Expert v4 NN não identifica hardware além da tabela (2026-08-04)
 
 12 lanes de medição exaustiva (explorers + fixers + oracle): diagnóstico H2 (artefato degenerado),

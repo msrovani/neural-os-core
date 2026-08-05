@@ -33,6 +33,17 @@ pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Te
         return Some(r);
     }
 
+    // ADR-0084 F4 (GATED): W2A8 maddubs — só WHPX/HW real + gaps resolvidos.
+    // w2a8_enabled() hoje = false; kernel verificado por self-test de paridade.
+    if crate::bitnet_w2a8::w2a8_enabled() && (m == 1 || m >= 8) {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            if let Some(r) = crate::bitnet_w2a8::w2a8_ternary_matmul(weight, input) {
+                return Some(r);
+            }
+        }
+    }
+
     // ADR-0084 F2: activation-parallel for prefill (m >= 8)
     // bitwise_matmul uses LUT-based FMA per byte-group; wins ~2x at m≥32
     // (src/README bitnet.cpp: activation-parallel 1.85-2.0x at m≥32)
