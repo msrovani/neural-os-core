@@ -43,34 +43,13 @@ pub fn boot_init() {
     }
 }
 
-/// Varre PCI devices encontrados e escreve predições do HW Expert v4 no SGDB /hw/pci/.
-/// Chamado após carregar HWEXPRT4.BIN. Cada device vira chave:
-///   /hw/pci/<idx>/vid, /hw/pci/<idx>/did, /hw/pci/<idx>/family, ...
+/// Varre PCI devices e escreve predições do HW Expert v4 no SGDB /hw/pci/.
+/// GATED OFF (veredito 2026-08-04, docs/evidence/hwexpert-architecture-verdict-20260804.md):
+/// a NN não atinge o gate de 65% em família específica (teto de sinal 59-63%) — predições
+/// erradas não devem entrar no SGDB. Re-habilitar junto com o flip em `build_card`, após
+/// provar o gate no protocolo honesto (split 90/10 por device + sweep QEMU).
 pub fn predict_all_pci() {
-    if !cortex::cortex::hwexpert_v4_is_loaded() {
-        k_nano::slog_kai!("SGDB", "hw_predict", "HW Expert v4 not loaded — skip PCI predict");
-        return;
-    }
-    let devices = unsafe { k_nano::pci::scan_pci() };
-    let mut count = 0usize;
-    for (idx, dev) in devices.iter().enumerate() {
-        let prefix = alloc::format!("/hw/pci/{}", idx);
-        // Write raw PCI info
-        let _ = put_kv(&alloc::format!("{}/vid", prefix), &dev.vendor_id.to_le_bytes());
-        let _ = put_kv(&alloc::format!("{}/did", prefix), &dev.device_id.to_le_bytes());
-        let _ = put_kv(&alloc::format!("{}/class", prefix), &[dev.class, dev.subclass]);
-
-        // HW Expert v4 prediction
-        if let Some(pred) = cortex::cortex::hwexpert_v4_predict(dev.vendor_id, dev.device_id) {
-            let _ = put_kv(&alloc::format!("{}/family", prefix), &[pred.family_id]);
-            let _ = put_kv(&alloc::format!("{}/fw_id", prefix), &[pred.fw_id]);
-            let _ = put_kv(&alloc::format!("{}/agent_id", prefix), &[pred.agent_id]);
-            let _ = put_kv(&alloc::format!("{}/caps_bits", prefix), &pred.caps_bits.to_le_bytes());
-            let _ = put_kv(&alloc::format!("{}/next_action", prefix), &[pred.next_action]);
-            count += 1;
-        }
-    }
-    k_nano::slog_kai!("SGDB", "hw_predict", "{} PCI devices written to /hw/pci/ (HW Expert v4)", count);
+    k_nano::slog_kai!("SGDB", "hw_predict", "HW Expert v4 NN gated off (veredito 2026-08-04) — skip");
 }
 
 /// KV cru sob key absoluta (ex. `hanr/user`, `pkg/foo`, `audit/head`).

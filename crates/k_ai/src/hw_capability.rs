@@ -160,11 +160,16 @@ impl HwCapabilityCard {
     }
 }
 
-/// Monta card a partir de PCI (tabela + HW Expert v4 + heurística).
+/// Monta card a partir de PCI (tabela + heurística).
 /// Ordem de precedência:
-///   1. Tabela direta HWID (curada; sempre vence — nunca deixar o ML sobrepor)
-///   2. HW Expert v4 (ML multi-head, se carregado; cobre o que a tabela não tem)
-///   3. Heurística por class/vendor (fallback)
+///   1. Tabela direta HWID (curada; sempre vence)
+///   2. Heurística por class/vendor (fallback)
+/// NOTA (veredito 2026-08-04, docs/evidence/hwexpert-architecture-verdict-20260804.md):
+/// o caminho HW Expert v4 (NN) foi REMOVIDO — medido: nenhuma arquitetura atinge o gate
+/// de 65% em família específica de devices nunca vistos (teto de sinal 59-63%; transformer
+/// ternário/fp32 e MLP com todas as variantes de loss refutados); carregada, a NN
+/// sobrescrevia a heurística com família errada. Re-habilitar SÓ se um modelo provar o
+/// gate de 65% específico no protocolo honesto (split 90/10 por device + sweep QEMU).
 pub fn build_card(
     vid: u16,
     did: u16,
@@ -176,20 +181,15 @@ pub fn build_card(
     if let Some(c) = table_lookup(vid, did, class, subclass, name) {
         return c;
     }
-    // --- 2. HW Expert v4 ML (se carregado) ---
-    if cortex::cortex::hwexpert_v4_is_loaded() {
-        if let Some(pred) = cortex::cortex::hwexpert_v4_predict(vid, did) {
-            if let Some(c) = prediction_to_card(vid, did, class, subclass, name, &pred) {
-                return c;
-            }
-        }
-    }
-    // --- 3. Heurística por class/vendor ---
+    // --- 2. Heurística por class/vendor (NN v4 removida — ver nota acima) ---
     heuristic_card(vid, did, class, subclass, name)
 }
 
 /// Converte predição do HW Expert v4 para HwCapabilityCard.
+/// GATED OFF (veredito 2026-08-04): mantido para o protocolo de re-habilitação —
+/// restaurar o branch em build_card + provar 65% específico no protocolo honesto.
 /// Retorna None se a predição for inválida (family=unknown).
+#[allow(dead_code)]
 fn prediction_to_card(
     vid: u16, did: u16, class: u8, subclass: u8, name: &str,
     pred: &cortex::tensor::HwPrediction,
