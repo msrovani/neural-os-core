@@ -2698,13 +2698,13 @@ pub(crate) fn kernel_boot(
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         // Ordem = degrau ladder; com PACK_LLM=um so, so esse existe.
                         for name in &[
-                            "LLAMA8B.BIN",
-                            "BITNET850.BIN",
-                            "BITNET13.BIN",
-                            "BITNET2B.BIN",
-                            "BITNET3B.BIN",
-                            "BITNET.BIN",
-                            "MICRO.BIN",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
                         ] {
                             if let Some(sz) = fs.lookup_file_size(name) {
                                 if sz >= 1_000_000 {
@@ -2759,7 +2759,7 @@ pub(crate) fn kernel_boot(
                     let leaked: &'static [u8] = alloc::boxed::Box::leak(owned.into_boxed_slice());
                     if let Some(big_model) = crate::cortex::load_model(leaked) {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
-                        let tag = fat_name.unwrap_or("BITNET2B.BIN");
+                        let tag = fat_name.unwrap_or("llama8b.bin");
                         k_nano::slog_bin!(
                             "Asset",
                             "ramdisk",
@@ -2845,20 +2845,20 @@ pub(crate) fn kernel_boot(
                         // Degrau: PACK_LLM=850 só empacota 850; depois 13, 2b, 3b.
                         // Modelos GGUF grandes: /model (AirLLM ATA) em vez de PIO full-RAM.
                         for name in &[
-                            "LLAMA8B.BIN",
-                            "BITNET13.BIN",
-                            "BITN13.BIN",
-                            "BITNET850.BIN",
-                            "BITN850.BIN",
-                            "MICRO.BIN",
-                            "BITNET2B.BIN",
-                            "BITNET3B.BIN",
-                            "BITNET.BIN",
-                            "MICRO.BITNET",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
+                            "llama8b.bin",
                         ] {
                             let Some(sz) = fs.lookup_file_size(name) else { continue; };
                             // Stub ~13KB não serve para chat fluente
-                            if *name == "MICRO.BITNET" && sz < 1_000_000 {
+                            if *name == "llama8b.bin" && sz < 1_000_000 {
                                 k_nano::slog_nano!(
                                     "FAT",
                                     "info",
@@ -2908,19 +2908,19 @@ pub(crate) fn kernel_boot(
                 if let Some(ref mut msc) = *usb_guard {
                     const PIO_HW: usize = 700 * 1024 * 1024;
                     for name in &[
-                        "LLAMA8B.BIN",
-                        "BITNET13.BIN",
-                        "BITN13.BIN",
-                        "BITNET850.BIN",
-                        "BITN850.BIN",
-                        "MICRO.BIN",
-                        "BITNET2B.BIN",
-                        "BITNET3B.BIN",
-                        "BITNET.BIN",
-                        "MICRO.BITNET",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
+                        "llama8b.bin",
                     ] {
                         let Some(fat_data) = read_file_from_dev(msc, name) else { continue; };
-                        if *name == "MICRO.BITNET" && fat_data.len() < 1_000_000 {
+                        if *name == "llama8b.bin" && fat_data.len() < 1_000_000 {
                             continue;
                         }
                         if fat_data.len() > PIO_HW {
@@ -3032,11 +3032,11 @@ pub(crate) fn kernel_boot(
         // Sprint 107 Part B #8: header fix (vocab_size/num_medusa u16→u32, ver
         // tools/fix_bitnet_header.py) somou +4 bytes: 266126 → 266130.
         let hw_sz = 266130usize.max(fat_size_hint(
-            &["HWEXPRT.BIN", "HW_EXPERT.BITNET"],
+            &["llama8b.bin", "llama8b.bin"],
             266130,
         ));
         let rust_sz = 270222usize.max(fat_size_hint(
-            &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
+            &["llama8b.bin", "llama8b.bin", "llama8b.bin", "llama8b.bin"],
             270222,
         ));
         // Scan QEMU loader region (0x100000000..0x180000000) for expert magics.
@@ -3063,7 +3063,7 @@ pub(crate) fn kernel_boot(
                     }
                     if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                         if !rust_ok {
-                            for rname in &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"] {
+                            for rname in &["llama8b.bin", "llama8b.bin", "llama8b.bin", "llama8b.bin"] {
                                 if let Some(rust_data) = fs.read_file(rname) {
                                     if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
                                         crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(
@@ -3084,7 +3084,7 @@ pub(crate) fn kernel_boot(
                             }
                         }
                         if !hw_ok {
-                            if let Some(hw_data) = fs.read_file("HWEXPRT.BIN") {
+                            if let Some(hw_data) = fs.read_file("llama8b.bin") {
                                 if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
                                     crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(
                                         hw_model,
@@ -3105,7 +3105,7 @@ pub(crate) fn kernel_boot(
                 let mut usb_guard = crate::USB_MSC.lock();
                 if let Some(ref mut msc) = *usb_guard {
                     if !rust_ok {
-                        for rname in &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"] {
+                        for rname in &["llama8b.bin", "llama8b.bin", "llama8b.bin", "llama8b.bin"] {
                             if let Some(rust_data) = read_file_from_dev(msc, rname) {
                                 if let Some(rust_model) = crate::cortex::load_model(&rust_data) {
                                     crate::cortex::set_rustcoder_model(alloc::boxed::Box::new(rust_model));
@@ -3117,7 +3117,7 @@ pub(crate) fn kernel_boot(
                         }
                     }
                     if !hw_ok {
-                        if let Some(hw_data) = read_file_from_dev(msc, "HWEXPRT.BIN") {
+                        if let Some(hw_data) = read_file_from_dev(msc, "llama8b.bin") {
                             if let Some(hw_model) = crate::cortex::load_model(&hw_data) {
                                 crate::cortex::set_hwexpert_model(alloc::boxed::Box::new(hw_model));
                                 k_nano::slog_bin!("FAT", "info", "HW Expert loaded (USB-MSC)!");
@@ -3173,7 +3173,7 @@ pub(crate) fn kernel_boot(
                                 continue;
                             }
                             if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
-                                if let Some(v4data) = fs.read_file("HWEXPRT4.BIN") {
+                                if let Some(v4data) = fs.read_file("llama8b.bin") {
                                     if let Some(v4model) = crate::cortex::load_hwexpert_v5(&v4data) {
                                         crate::cortex::set_hwexpert_v4_model(v4model);
                                         k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (FAT) size={}KB", v4data.len() / 1024);
@@ -3264,7 +3264,7 @@ pub(crate) fn kernel_boot(
                         if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                             for name in crate::model_hub::fat_names_for(slot) {
                                 let Some(sz) = fs.lookup_file_size(name) else { continue };
-                                if *name == "MICRO.BITNET" && sz < 1_000_000 {
+                                if *name == "llama8b.bin" && sz < 1_000_000 {
                                     continue;
                                 }
                                 if sz > pio_cap {

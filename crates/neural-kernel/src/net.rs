@@ -292,31 +292,52 @@ pub enum QemuNetMode {
 }
 
 /// Read netmode.flag from QEMU loader window (written by run-qemu-*.ps1).
-/// Maps the phys page first — HHDM may omit high loader windows until touch.
+/// SESSION_248: os loaders MoE (auto-scan do PS1) começam em 0x100000000 e o
+/// LLAMA8B (1.9GB) cobriria o endereço fixo antigo 0x164000000 — o flag viraria
+/// lixo. Agora o kernel ESCANEIA o flag de TRÁS para frente (do topo da RAM
+/// 8G para baixo, 1MB-aligned): o PS1 escreve o netmode.flag DEPOIS do último
+/// loader, então ele é o primeiro candidato 'S'/'B' achado — a RAM livre acima
+/// dos loaders é zero (QEMU zera o guest) e os dados de modelo nunca são lidos.
 pub fn detect_qemu_net_mode() -> QemuNetMode {
     let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if pmoff == 0 {
         return QemuNetMode::User;
     }
     unsafe {
-        // Avoid #PF: bootloader HHDM may not cover unused high loader slots.
-        crate::apic::map_page_uc(NETMODE_LOADER_PHYS, pmoff);
-        let p = (NETMODE_LOADER_PHYS + pmoff) as *const u8;
-        let b = core::ptr::read_volatile(p);
-        match b {
-            b'B' | b'b' => QemuNetMode::Bridge,
-            b'S' | b's' => {
-                // Read 4-byte IP after the 'S' marker
-                let ip = [
-                    core::ptr::read_volatile(p.add(1)),
-                    core::ptr::read_volatile(p.add(2)),
-                    core::ptr::read_volatile(p.add(3)),
-                    core::ptr::read_volatile(p.add(4)),
-                ];
-                QemuNetMode::Static(ip)
-            }
-            _ => QemuNetMode::User, // missing/garbage → user/slirp default
+        // Topo da RAM = TOTAL_RAM_MB (setado pelo frame allocator no boot).
+        // -m 6G padrão do mesh → 0x180000000. Nunca ler além da RAM real.
+        let ram_end = crate::memory::TOTAL_RAM_MB
+            .load(core::sync::atomic::Ordering::Relaxed)
+            .saturating_mul(1024 * 1024)
+            .min(0x200000000);
+        if ram_end <= 0x100000000 {
+            return QemuNetMode::User;
         }
+        let mut addr: u64 = ram_end;
+        while addr > 0x100000000 {
+            addr -= 0x100000; // 1MB steps (alinhamento dos loaders do PS1)
+            // Evita #PF: bootloader HHDM pode não cobrir janelas altas até touch.
+            crate::apic::map_page_uc(addr, pmoff);
+            let p = (addr + pmoff) as *const u8;
+            let b = core::ptr::read_volatile(p);
+            match b {
+                b'B' | b'b' => return QemuNetMode::Bridge,
+                b'S' | b's' => {
+                    let ip = [
+                        core::ptr::read_volatile(p.add(1)),
+                        core::ptr::read_volatile(p.add(2)),
+                        core::ptr::read_volatile(p.add(3)),
+                        core::ptr::read_volatile(p.add(4)),
+                    ];
+                    // Valida IP plausível (evita falso 'S').
+                    if ip[0] != 0 && ip[0] != 0xFF {
+                        return QemuNetMode::Static(ip);
+                    }
+                }
+                _ => {}
+            }
+        }
+        QemuNetMode::User
     }
 }
 

@@ -1690,8 +1690,13 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         let naive_mb = ((embed_bytes + layer_bytes + unembed_bytes) / (1024 * 1024)) as usize;
         let file_mb = (data.len() + 1024 * 1024 - 1) / (1024 * 1024);
         let estimated = if version >= 3 {
-            // Ternário packed + headroom; heap já inicia em 1024MB (allocator).
-            file_mb + 64
+            // Ternário packed + headroom. Para modelos grandes (BITNET2B:
+            // intermediate=12800, h=2560, L=30 → ~861MB de tensores), o
+            // file_mb+64 era insuficiente (OOM → Vec null → #PF CR2=0).
+            // Dobrar cobre BITNET2B (2×577=1154 > 861 com margem).
+            // LLAMA8B (1915MB) continua excluído (cap 2048MB, total seria
+            // 1915+3830+64=5809 > cap — precisa AirLLM/GGUF streaming).
+            file_mb.saturating_add(file_mb)
         } else {
             naive_mb
         };
@@ -1701,7 +1706,7 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         // ja esta no heap (file_mb). Total real = file_mb + estimated.
         let total_needed = file_mb + estimated + 64;
         if total_needed > cur_mb {
-            let total_mb = total_needed.min(2048); // cap 2GB
+            let total_mb = total_needed.min(4096); // cap 4GB (llama8b: 1915MB×2≈3.9GB)
             k_nano::slog_cortex!("LLM", "info", "resize_heap {} → {} MB (file={} est={})...", cur_mb, total_mb, file_mb, estimated);
             k_nano::allocator::resize_heap_to_mb(total_mb);
             k_nano::slog_cortex!("LLM", "info", "resize_heap done");
