@@ -1,4 +1,27 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s248 — HW Expert NN gated off; kernel = tabela+heurística (2026-08-04)
+#   SESSION_248: Veredito de arquitetura definitivo — 12 lanes de medição:
+#     Transformer ternário colapsa p/ majoritário (60.67% ≈ 60.58%). CONTROLE
+#       DECISIVO: mesmo transformer em fp32 = 60.58% → arquitetura é a vilã
+#       (atenção truncada q_dim=32 + mean pool), não a quantização.
+#     MLP no alvo vendor: plain CE 39.71% específico; inv-freq 58.97%;
+#       stage-2 sem desbalanceamento 63.27% → teto = SINAL (vid:did → família
+#       de driver específica ~59-63%, nomes pci.ids cobrem 54.7%).
+#     Veredito: reivindicação "260KB NN ≥ DB 40MB" REFUTADA pela medição.
+#     Kernel: build_card = tabela (100% conhecidos) → heurística class byte;
+#       NN branch removido (`ea696c3`); prediction_to_card preservado com
+#       #[allow(dead_code)] + protocolo de re-habilitação; predict_all_pci gated.
+#     Dataset v3: 21 famílias de driver dos NOMES pci.ids (canônicos QEMU 11/11).
+#     Infra de prova/refutação: sweep QEMU (tools/hw_sweep/), validator Rust-exato
+#       (validate_hw_expert_v4*.py), split honesto 90/10 device seed 42, controle
+#       contínuo (probe_continuous_arch.py), MLP probes (probe_mlp_vendor*.py),
+#       relabel v2 (12 classes genéricas) e v3 (vendor-specific).
+#     Protocolo de re-habilitação da NN: restaurar branch em build_card + provar
+#       ≥65% específico no protocolo honesto (mesmo split, sweep QEMU).
+#     cargo check --release: 0 erros. Commits: 79ac8e5 f493fcd cbaf1a5 3f9dc51
+#       5d4f67c ea696c3.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s247 — HW Expert v4 validado + ADR-0084 + CI (2026-08-04)
 #   SESSION_247: artefato v4 degenerado → retreino com validação do arquivo
 #     Root cause H2 CONFIRMADO: export_v4 quantiza threshold 0.5 e nn.Linear
