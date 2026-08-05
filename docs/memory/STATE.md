@@ -18,6 +18,9 @@
 #       142+ workspace; cargo check --release --workspace 0 erros.
 #     Pendentes por design: boot QEMU v6 (precisa download 2B safetensors), F7 W2A8
 #       (gated WHPX/HW real), retreino TinyStories/RustCoder (GPU).
+#     ✅ Boot QEMU v6 VALIDADO (pós-commit): synth_v6.bitnet (108KB h=128 L=2 feat=0x07)
+#       injetado via -device loader@0x100000000 → load_model_v6 parseou, AI_READY,
+#       AgentFleet 54 + Runtime + NetAgent tick. Falta só o 2B real (download 3GB).
 #
 # ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s248 — HW Expert NN gated off; kernel = tabela+heurística (2026-08-04)

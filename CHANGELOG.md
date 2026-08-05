@@ -35,8 +35,12 @@ Implementação completa das ADRs 0085 (formato canônico + registro K³CHJ) e 0
 - **Verificação:** 18 testes cortex PASS (parity, `q6k_decode_matches_python`,
   `v6_roundtrip_load` host — desrisca o boot sem o 2B); 142+ testes workspace;
   `cargo check --release --workspace` 0 erros.
-- **Pendentes por design:** boot QEMU v6 (requer download ~3GB safetensors 2B4T),
+- **Pendentes por design:** boot QEMU v6 com 2B real (download ~3GB safetensors 2B4T),
   F7 W2A8 (gated WHPX/HW real + gaps de geração), retreino TinyStories/RustCoder (GPU).
+- ✅ **Boot QEMU v6 validado (pós-commit):** `synth_v6.bitnet` (108KB, h=128 L=2 feat=0x07)
+  injetado via `-device loader,addr=0x100000000` — kernel varreu magic, `load_model_v6`
+  parseou (`v6 LLM h=128 L=2 vocab=512 act=0 emb=0 feat=0x07`), `AI_READY`, AgentFleet
+  54 agentes + Runtime + NetAgent tick. Falta só a validação com o 2B real.
 
 ### SESSION_248: Veredito de Arquitetura — HW Expert v4 NN não identifica hardware além da tabela (2026-08-04)
 
