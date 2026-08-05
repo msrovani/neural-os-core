@@ -1,4 +1,25 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s249 — .bitnet v6 canônico (ADR-0085) + fidelidade 2B4T (ADR-0084)
+#   SESSION_249: Formato canônico v6 + Engine BitNet fidelidade — F0–F6b + F1b:
+#     F0 writer canônico `bitnet_writer.py` + `save_model_v6` + parity byte-exact
+#       (`v6_writer_parity` PASS); golden_v6.bin commitado (un-ignore .gitignore).
+#     F1+F1b: 8 conversores → v6 (bitnet/hwexpert/router/gguf/falcon3/safetensors/
+#       extra_models/train_models_gpu — silu no forward de treino ADR-0085 §10.3).
+#     F2 loader v6 estrito (`load_model_v6`/`load_llm_v6`) + fallback legado WARN;
+#       tied⇒sem unembed (D3), rms_ffn_norm=intermediate (D2), theta só bit2.
+#     F3/F4 kernels: unpack branchless `(pair&1)-(pair>>1)`, activation-parallel
+#       gated m≥8, tiling consts (ADR-0084 F1/F2/F5).
+#     F5 fidelidade M1–M4: act_type relu2/silu nos 4 forwards, eps 1e-5,
+#       embed Q6_K (encoder+loader row-wise+unembed), bitnet_fwd_parity fortalecido.
+#     🔴 Bug latente crítico: f16_to_f32 (gguf.rs) `sign=(bit>>15)*-1.0` → -0.0
+#       p/ todo f16 positivo — quebrava todos os dequants GGUF. Fix: if/else.
+#     F6 `cortex::model` ModelView + `ModelHub::register_bytes` + main.rs LLM sites.
+#     Testes: 18 cortex PASS (parity, Q6_K cross-check Rust↔Python, round-trip v6);
+#       142+ workspace; cargo check --release --workspace 0 erros.
+#     Pendentes por design: boot QEMU v6 (precisa download 2B safetensors), F7 W2A8
+#       (gated WHPX/HW real), retreino TinyStories/RustCoder (GPU).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s248 — HW Expert NN gated off; kernel = tabela+heurística (2026-08-04)
 #   SESSION_248: Veredito de arquitetura definitivo — 12 lanes de medição:
 #     Transformer ternário colapsa p/ majoritário (60.67% ≈ 60.58%). CONTROLE

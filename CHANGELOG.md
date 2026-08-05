@@ -3,6 +3,41 @@
 ## [Unreleased]
 
 
+### SESSION_249: Formato canônico `.bitnet v6` (ADR-0085) + Fidelidade 2B4T (ADR-0084) (2026-08-05)
+
+Implementação completa das ADRs 0085 (formato canônico + registro K³CHJ) e 0084
+(engine BitNet — fidelidade + kernels CPU). Fases F0–F6b + F1b:
+
+- **F0** — `tools/bitnet_writer.py` (writer canônico numpy-only) + `save_model_v6`
+  (cortex.rs) + golden; `v6_writer_parity` byte-exact PASS. Goldens un-ignored no
+  .gitignore (eram engolidos por `*.bin` e quebrariam testes em clone fresco).
+- **F1+F1b** — 8 conversores → v6: convert_bitnet (2B4T: act_type=RELU2, embed Q6_K),
+  train_hw_expert_v4 (model_type=HWEXPERT, sem prefixos), train_router (posicional),
+  convert_gguf (feat só bit2, act_type do metadata, D3 tied), convert_falcon3
+  (2 normas sintéticas removidas; theta no EOF — bug real corrigido),
+  convert_safetensors (container ilegível → body LLM real, fail-loud em schema não-LLaMA),
+  prepare_extra_models (scales 1.0, rms_ffn_norm intermediate), train_models_gpu
+  (**silu no forward de treino** §10.3 — retreino TinyStories/RustCoder pendente).
+- **F2** — `load_model_v6`/`load_llm_v6` estritos: reserved==0, feat bits 3-7 rejeitados,
+  tied⇒zero bytes de unembed (D3), `rms_ffn_norm`=intermediate_size (D2), theta só bit2;
+  fallback v3/v4 com WARN.
+- **F3/F4** — kernels ADR-0084: unpack branchless `(pair&1)-(pair>>1)` (era match/peso),
+  consts de tiling, activation-parallel gated `m>=8`.
+- **F5** — fidelidade M1–M4: `act_type` nos 4 forwards (relu2/silu via `ffn_act`),
+  eps RMSNorm 1e-6→1e-5, embed Q6_K (encoder Python + loader bytes brutos +
+  `embed_lookup` row-wise + `unembed_logits` por super-bloco), theta parametrizado,
+  `bitnet_fwd_parity.py` fortalecido (magic 0xBE11BE11, default 2B4T, gate logit-level ≤0.5%).
+- **F6+F6b** — `cortex::model` (ModelKind/ModelView + dispatcher), `ModelHub::register_bytes`,
+  4 sites LLM do main.rs roteados via `load_model_v6` (fallback legado mantido).
+- 🔴 **Bug latente crítico:** `f16_to_f32` (gguf.rs) — `sign = (bit>>15 as f32) * -1.0`
+  produzia `-0.0` para todo f16 positivo, zerando TODOS os dequants GGUF (Q4_0/Q5_0/Q6_K).
+  Fix: `if bit==1 {-1.0} else {1.0}`. Descoberto pelo teste Q6_K cross-check.
+- **Verificação:** 18 testes cortex PASS (parity, `q6k_decode_matches_python`,
+  `v6_roundtrip_load` host — desrisca o boot sem o 2B); 142+ testes workspace;
+  `cargo check --release --workspace` 0 erros.
+- **Pendentes por design:** boot QEMU v6 (requer download ~3GB safetensors 2B4T),
+  F7 W2A8 (gated WHPX/HW real + gaps de geração), retreino TinyStories/RustCoder (GPU).
+
 ### SESSION_248: Veredito de Arquitetura — HW Expert v4 NN não identifica hardware além da tabela (2026-08-04)
 
 12 lanes de medição exaustiva (explorers + fixers + oracle): diagnóstico H2 (artefato degenerado),
