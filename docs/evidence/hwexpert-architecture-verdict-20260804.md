@@ -55,3 +55,40 @@ prediction_to_card. fw/agent/caps/next idênticos ao vocab v2 (verificado byte-a
 
 Evidência completa: tools/target/hwexp_continuous_control.md, tools/target/hw_expert_v4_vendor_relabel_report.md,
 docs/evidence/hw_expert_v4_holdout.md, docs/evidence/hw-expert-v4-runtime-20260803.txt.
+
+## MLP no alvo vendor-specific — variantes (tools/probe_mlp_vendor.py + probe_mlp_vendor_variants.py, dataset v3, mesmo split 90/10 seed 42)
+
+| Variante (base vocab64/h128 = 202.5KB) | Specific-only acc | Overall | específico→'other' |
+|---|---|---|---|
+| plain CE (baseline reproduz 39.71% exato) | 39.71% | 75.72% | 700/1443 |
+| inverse-freq weights | **58.97%** | 42.10% | 86/1443 |
+| sqrt-freq weights | 54.61% | 70.00% | 342/1443 |
+| focal γ=2 α=0.25 | 40.12% | 75.40% | 693/1443 |
+| concat-embed 4H | 43.73% | 76.69% | 646/1443 |
+| two-stage (s1 específico-vs-other → s2 19-way) | 46.57% (e2e) | 66.94% | 475/1443 (s1 recall 67%, s2 só 63.27%) |
+
+- Desbalanceamento é real (+19.3pt com inv-freq) mas INSUFICIENTE: o stage-2 treinado só com
+  ground-truth específico (zero imbalance) placa em 63.27% — abaixo do gate de 65% mesmo com
+  um stage-1 perfeito. Teto = SINAL (vid:did → família de driver específica em devices nunca
+  vistos ~59-63% com os dados do repo; nomes pci.ids cobrem 54.7%).
+- A MLP adiciona além de 'other' no melhor caso: ~59% dos específicos rotulados corretamente
+  (86/1443 desistências pegas pela heurística de class byte); ~41% das predições específicas
+  são de família ERRADA (nem NN nem heurística pegam).
+
+## VEREDITO FINAL (2026-08-04)
+
+"260KB NN identifica hardware tão bem quanto a DB de 40MB" — **medido e refutado**:
+
+- Tabela curada (exata): **100%** em devices conhecidos (precedência tabela-primeiro commitada).
+- Heurística de class byte: confiável (o hardware fornece o byte em config space).
+- NN — TODAS as arquiteturas testadas: transformer ternário 60.67% ≈ majoritário; transformer
+  fp32 mesmo-arch 60.58%; MLP 202KB-2.1MB com todas as variantes de loss ≤58.97% específico;
+  stage-2 sem imbalance 63.27%. **Nenhuma atinge o gate de 65% em família específica de devices
+  nunca vistos.**
+- O kernel opera corretamente com tabela+heurística (com a NN carregada ela é NOCIVA para
+  devices fora da tabela — sobrescreve a heurística com família errada; hoje está inerte no
+  boot porque o auto-placement não a carrega, mas o gate explícito é recomendado).
+- Infraestrutura entregue para provar/refutar QUALQUER modelo futuro com o mesmo protocolo:
+  sweep QEMU (tools/hw_sweep/), validator Rust-exato (tools/validate_hw_expert_v4*.py), split
+  honesto por device, relabel com ground-truth independente (dataset v2/v3), controle contínuo
+  (tools/probe_continuous_arch.py), probes MLP (tools/probe_mlp_vendor*.py).
