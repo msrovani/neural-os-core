@@ -2757,7 +2757,11 @@ pub(crate) fn kernel_boot(
                     );
                     let owned: alloc::vec::Vec<u8> = model_data.to_vec();
                     let leaked: &'static [u8] = alloc::boxed::Box::leak(owned.into_boxed_slice());
-                    if let Some(big_model) = crate::cortex::load_model(leaked) {
+                    let llm_v6 = cortex_crate::model::load_model_v6(leaked).and_then(|v| match v {
+                        cortex_crate::model::ModelView::Llm(m) => Some(m),
+                        _ => None,
+                    });
+                    if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(leaked)) {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                         let tag = fat_name.unwrap_or("llama8b.bin");
                         k_nano::slog_bin!(
@@ -2803,7 +2807,11 @@ pub(crate) fn kernel_boot(
                             }
                         }
                         let model_data2 = unsafe { core::slice::from_raw_parts(probe2 as *const u8, model_len2) };
-                        if let Some(big_model) = crate::cortex::load_model(model_data2) {
+                        let llm_v6 = cortex_crate::model::load_model_v6(model_data2).and_then(|v| match v {
+                            cortex_crate::model::ModelView::Llm(m) => Some(m),
+                            _ => None,
+                        });
+                        if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(model_data2)) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                             k_nano::slog_bin!("RAMDISK", "info", "LLM LOADED file=BITNET (QEMU-loader @0x120000000)");
                             model_loaded = true;
@@ -2882,7 +2890,11 @@ pub(crate) fn kernel_boot(
                             }
                             k_nano::slog_nano!("FAT", "info", "lendo {} ({}KB) — candidato LLM...", name, sz / 1024);
                             if let Some(fat_data) = fs.read_file(name) {
-                                if let Some(big_model) = crate::cortex::load_model(&fat_data) {
+                                let llm_v6 = cortex_crate::model::load_model_v6(&fat_data).and_then(|v| match v {
+                                    cortex_crate::model::ModelView::Llm(m) => Some(m),
+                                    _ => None,
+                                });
+                                if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(&fat_data)) {
                                     crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                                     k_nano::slog_nano!("FAT", "info", "LLM LOADED file={} size={}KB — CortexAgent upgraded.", name, fat_data.len() / 1024);
                                     crate::boot_logger::log("BOOT: FAT BitNet model loaded");
@@ -2932,7 +2944,11 @@ pub(crate) fn kernel_boot(
                         k_nano::slog_nano!("FAT", "info", "USB lendo {} ({}KB) — candidato LLM...",
                             name,
                             fat_data.len() / 1024);
-                        if let Some(big_model) = crate::cortex::load_model(&fat_data) {
+                        let llm_v6 = cortex_crate::model::load_model_v6(&fat_data).and_then(|v| match v {
+                            cortex_crate::model::ModelView::Llm(m) => Some(m),
+                            _ => None,
+                        });
+                        if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(&fat_data)) {
                             crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                             k_nano::slog_nano!("FAT", "info", "LLM LOADED file={} size={}KB via USB-MSC",
                                 name,

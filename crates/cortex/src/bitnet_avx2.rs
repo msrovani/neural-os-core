@@ -8,6 +8,13 @@
 use crate::tensor::{PackedTernaryTensor, Tensor};
 use alloc::vec;
 
+// ─── Tiling Constants (ADR-0084 F5, tuning por HW) ───────────────────────
+// ponytail: defaults para cache L2 256KB; ajustar por target (faixas:
+// p∈[2,4,8], row∈[2..32], col∈[32..1024])
+pub const ROW_BLOCK_SIZE: usize = 4;
+pub const COL_BLOCK_SIZE: usize = 128;
+pub const PARALLEL_SIZE: usize = 4;
+
 // ─── HW Detection ───────────────────────────────────────────────────────
 
 fn avx2_available() -> bool {
@@ -17,13 +24,24 @@ fn avx2_available() -> bool {
 // ─── Main Dispatch ──────────────────────────────────────────────────────
 
 pub fn ternary_matmul(weight: &PackedTernaryTensor, input: &Tensor) -> Option<Tensor> {
-    let (k, _n) = weight.shape;
-    let (_m, k2) = input.shape;
+    let (k, n) = weight.shape;
+    let (m, k2) = input.shape;
     if k != k2 { return None; }
 
     // ADR-0057 WS-C: NPU/GPU/parallel dispatch
     if let Some(r) = crate::compute::dispatch_ternary(weight, input) {
         return Some(r);
+    }
+
+    // ADR-0084 F2: activation-parallel for prefill (m >= 8)
+    // bitwise_matmul uses LUT-based FMA per byte-group; wins ~2x at m≥32
+    // (src/README bitnet.cpp: activation-parallel 1.85-2.0x at m≥32)
+    let big_m = m >= 8;
+    if big_m && avx2_available() {
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            return Some(avx2_bitwise_matmul(weight, input, m, k, n));
+        }
     }
 
     // ADR-0061 unified dispatch: AVX-512 → AVX2 → SSE4.2 → scalar
@@ -146,25 +164,26 @@ fn unpack_row_into(weight: &PackedTernaryTensor, row: usize, n: usize, buf: &mut
         for pw in 0..words {
             let p = weight.packed_data[row_start + pw];
             let base = pw * 4;
-            buf[base] = match p & 3 { 1 => 1, 2 => -1, _ => 0 };
-            buf[base + 1] = match (p >> 2) & 3 { 1 => 1, 2 => -1, _ => 0 };
-            buf[base + 2] = match (p >> 4) & 3 { 1 => 1, 2 => -1, _ => 0 };
-            buf[base + 3] = match (p >> 6) & 3 { 1 => 1, 2 => -1, _ => 0 };
+            // Branchless unpack: (pair&1) - (pair>>1) — same as AVX-512 pattern
+            // 0b00→0, 0b01→1, 0b10→-1, 0b11→0  (ADR-0084 F1)
+            let p0 = (p & 3) as i8;
+            let p1 = ((p >> 2) & 3) as i8;
+            let p2 = ((p >> 4) & 3) as i8;
+            let p3 = ((p >> 6) & 3) as i8;
+            buf[base] = (p0 & 1) - (p0 >> 1);
+            buf[base + 1] = (p1 & 1) - (p1 >> 1);
+            buf[base + 2] = (p2 & 1) - (p2 >> 1);
+            buf[base + 3] = (p3 & 1) - (p3 >> 1);
         }
     } else {
-        // Flat packing: row t starts at element t*n, no byte boundary alignment.
-        // Element-by-element access when n%4 != 0 (e.g. embed vocab=32002).
+        // Flat packing when n%4 != 0 (e.g. embed vocab=32002)
         let start = row * n;
         for j in 0..n {
             let idx = start + j;
             let byte = idx >> 2;
             let shift = (idx & 3) << 1;
             let bits = (weight.packed_data[byte] >> shift) & 0b11;
-            buf[j] = match bits {
-                0b01 => 1,
-                0b10 => -1,
-                _ => 0,
-            };
+            buf[j] = ((bits & 1) as i8) - ((bits >> 1) as i8); // branchless
         }
     }
 }

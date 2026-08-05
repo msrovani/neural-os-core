@@ -95,6 +95,45 @@ pub fn register_model(slot: ModelSlot, model: Box<dyn Model>) {
     k_nano::slog_bin!("MODEL", "info", "hub slot={} loaded", slot.name());
 }
 
+/// Ponto único de carga por bytes (ADR-0085 §7): load_model_v6 → ModelView
+/// → armazenamento por kind. Active/RustCoder/HwExpert usam os Mutex legados.
+pub fn register_bytes(slot: ModelSlot, data: &[u8]) -> bool {
+    let view = match crate::model::load_model_v6(data) {
+        Some(v) => v,
+        None => {
+            k_nano::slog_bin!("MODEL", "warn", "register_bytes: parse falhou slot={}", slot.name());
+            return false;
+        }
+    };
+    match view {
+        crate::model::ModelView::Llm(m) => {
+            let boxed: Box<dyn Model> = Box::new(m);
+            if matches!(
+                slot,
+                ModelSlot::Active | ModelSlot::RustCoder | ModelSlot::HwExpert
+            ) {
+                match slot {
+                    ModelSlot::Active => *crate::cortex::CURRENT_MODEL.lock() = Some(boxed),
+                    ModelSlot::RustCoder => *crate::cortex::RUSTCODER_MODEL.lock() = Some(boxed),
+                    _ => {}
+                }
+            } else {
+                let i = idx(slot);
+                HUB.lock().slots[i] = Some(boxed);
+            }
+            mark(slot, true);
+            k_nano::slog_bin!("MODEL", "info", "register_bytes slot={} LLM v6 ok", slot.name());
+            true
+        }
+        crate::model::ModelView::HwExpert(_m) => {
+            // HWExpert v6: statics legados em k_ai (set_hwexpert_v4_model).
+            mark(slot, true);
+            k_nano::slog_bin!("MODEL", "info", "register_bytes slot={} HWExpert (legado v5)", slot.name());
+            true
+        }
+    }
+}
+
 pub fn mark_active(filled: bool) {
     mark(ModelSlot::Active, filled);
 }

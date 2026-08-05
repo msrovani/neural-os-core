@@ -2,6 +2,7 @@ target/
 # Builds isolados: usar target/agent-*, target/check-*, target/s106 (sob target/).
 # Rede de segurança para leftovers legados na raiz (não criar novos):
 target-*/
+target1/
 target_*.txt
 *-check*.log
 *-check*.txt
@@ -10,6 +11,10 @@ target_*.txt
 *.bin
 *.o
 *.elf
+# Goldens .bitnet v6 usados por include_bytes! nos testes Rust (cortex) — NÃO ignorar
+!tools/golden_v6.bin
+!tools/golden_q6k.bin
+!tools/golden_q6k_ref.f32
 
 # QEMU artifacts
 *.qcow2

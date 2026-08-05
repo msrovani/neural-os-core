@@ -1,5 +1,7 @@
-﻿#!/usr/bin/env python3
-"""Converte modelos GGUF (HuggingFace) para .bitnet v4 com RTN + scale.
+#!/usr/bin/env python3
+"""Converte modelos GGUF (HuggingFace) para .bitnet v6 (ADR-0085) com RTN + scale.
+
+Usa tools/bitnet_writer.py como writer canônico (byte-exato com save_model_v6).
 
 Uso:
   python tools/convert_gguf_to_bitnet.py --model meta-llama/Llama-3.2-1B \\
@@ -20,6 +22,18 @@ from pathlib import Path
 
 import numpy as np
 
+# tools/ no sys.path para importar o writer canônico (mesmo padrão dos irmãos
+# convert_bitnet.py / train_hw_expert_v4.py — roda com `python tools/...` ou `-m`).
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.bitnet_writer import (
+    write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+    write_q6k, pack_ternary,
+    MODEL_LLM, ACT_SILU, ACT_RELU2, EMBED_TERNARY, EMBED_Q6K, EMBED_BF16,
+)
+
 # ─── GPU/CPU device detection ──────────────────────────────────────────────────
 _DEVICE = "cpu"
 _TORCH_AVAIL = False
@@ -35,7 +49,7 @@ try:
 except ImportError:
     pass
 
-# ─── .bitnet v4 format ───────────────────────────────────────────────────────
+# ─── .bitnet v6 format (ADR-0085) ────────────────────────────────────────────
 MAGIC = 0xBE11BE11
 
 # Arquiteturas suportadas: mapeamento de nome GGUF -> template de tensor names
@@ -640,110 +654,25 @@ def optimize_ternary_gpu(weights: np.ndarray, verbose: bool = False
     return best_q_np, best_scale
 
 
-def pack_ternary(weights: np.ndarray, scale: float) -> tuple[bytes, float]:
-    """Pack int8 {-1,0,+1} para 2-bit (4 pesos/byte), column-major.
-
-    weights: array 2D (rows, cols) em float32 (já quantizado ternário como float
-             com valores -1, 0, 1). A saída packing segue column-major:
-             stride = n_cols, 4 valores por byte ao longo de n_cols.
-
-    Retorna (packed_bytes, scale).
-    """
-    # Se weights veio do optimize_ternary, já é int8. Se float, converte.
-    if weights.dtype == np.float32 or weights.dtype == np.float64:
-        w_int8 = np.round(weights).astype(np.int8)
-    else:
-        w_int8 = weights.astype(np.int8)
-
-    flat = w_int8.flatten()
-    n = len(flat)
-    packed_len = (n + 3) // 4
-    packed = bytearray(packed_len)
-
-    encode = {1: 0b01, 0: 0b00, -1: 0b10}
-    for i, w in enumerate(flat):
-        byte_idx = i // 4
-        bit_pos = (i % 4) * 2
-        packed[byte_idx] |= encode.get(int(w), 0) << bit_pos
-
-    return bytes(packed), scale
-
-
-def pack_ternary_fast(weights: np.ndarray, scale: float) -> tuple[bytes, float]:
-    """Versão vetorizada de pack_ternary."""
-    if weights.dtype == np.float32 or weights.dtype == np.float64:
-        w_int8 = np.round(weights).astype(np.int8)
-    else:
-        w_int8 = weights.astype(np.int8)
-
-    flat = w_int8.reshape(-1)
-    n = flat.size
-    bits = np.zeros(n, dtype=np.uint8)
-    bits[flat > 0] = 0b01
-    bits[flat < 0] = 0b10
-    pad = (-n) % 4
-    if pad:
-        bits = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
-    b = bits.reshape(-1, 4)
-    packed = b[:, 0] | (b[:, 1] << 2) | (b[:, 2] << 4) | (b[:, 3] << 6)
-    return packed.tobytes(), scale
-
-
-# ─── ESCRITA .bitnet ─────────────────────────────────────────────────────────
-
-def write_header(f, hidden: int, num_layers: int, num_heads: int,
-                 vocab_size: int, max_seq: int, intermediate_size: int,
-                 num_kv_heads: int, q_dim: int, num_medusa: int,
-                 tie_embeddings: bool, tok_data: bytes,
-                 layer_features: int) -> int:
-    """Escreve header .bitnet v4. Retorna posição após header."""
-    num_params = (hidden * vocab_size +
-                  num_layers * (4 * hidden * hidden +
-                                3 * hidden * intermediate_size +
-                                2 * hidden + q_dim) +
-                  hidden * vocab_size)
-    f.write(struct.pack("<I", MAGIC))
-    f.write(struct.pack("<H", 5))  # version 5 (u64 num_params)
-    f.write(struct.pack("<Q", num_params))  # u64, suporta >4B params
-    f.write(struct.pack("<H", hidden))
-    f.write(struct.pack("<H", num_layers))
-    f.write(struct.pack("<H", num_heads))
-    f.write(struct.pack("<I", vocab_size))
-    f.write(struct.pack("<H", min(max_seq, 65535)))
-    f.write(struct.pack("<H", intermediate_size))
-    f.write(struct.pack("<H", num_kv_heads))
-    f.write(struct.pack("<H", q_dim))
-    f.write(struct.pack("<I", num_medusa))
-    f.write(b"TIED" if tie_embeddings else b"\x00\x00\x00\x00")
-    f.write(struct.pack("B", 1))  # tokenizer_type: BPE
-    f.write(struct.pack("<I", len(tok_data)))
-    f.write(tok_data)
-    f.write(struct.pack("B", layer_features))
-    return f.tell()
-
-
-def write_rms_vec(f, vec: np.ndarray):
-    """Escreve vetor RMS normalization como f32 LE contíguo."""
-    f.write(np.ascontiguousarray(vec, dtype=np.float32).tobytes())
-
+# ─── ESCRITA .bitnet (v6 — via tools/bitnet_writer.py, ADR-0085) ────────────
 
 def write_ternary_tensor(f, weights_f32: np.ndarray, name: str = "",
                          verbose: bool = False, use_gpu: bool = False):
-    """Otimiza, pack e escreve tensor ternário + scale f32.
-    
+    """Otimiza (RTN) e escreve tensor ternário + scale f32 via writer v6.
+
     use_gpu: usa torch CUDA para otimização RTN em tensores grandes.
+    A escrita em si (packing 2-bit + scale f32 SEMPRE) delega para
+    tools.bitnet_writer.write_ternary — byte-exato com save_model_v6 (ADR-0085 D1).
     """
     if use_gpu and _TORCH_AVAIL and _DEVICE != "cpu":
         q_vals, scale = optimize_ternary_gpu(weights_f32, verbose=verbose)
     else:
         q_vals, scale = optimize_ternary(weights_f32, verbose=verbose)
-    packed, scale = pack_ternary_fast(q_vals, scale)
-    f.write(packed)
-    f.write(struct.pack("<f", scale))
+    write_ternary(f, q_vals, scale)
     if verbose:
         n = q_vals.size
         nonzero = (q_vals != 0).sum()
-        print(f"    {name}: {weights_f32.shape} {len(packed)}B "
+        print(f"    {name}: {weights_f32.shape} {(n + 3) // 4}B "
               f"scale={scale:.4f} esparso={100*(1-nonzero/n):.0f}%")
 
 
@@ -787,7 +716,7 @@ def convert_model(model_name: str, output_path: str,
                   verbose: bool = False,
                   self_test: bool = False,
                   use_gpu: bool = False):
-    """Pipeline principal: download GGUF -> .bitnet v4."""
+    """Pipeline principal: download GGUF -> .bitnet v6 (ADR-0085)."""
     t0 = time.time()
     print(f"=== Convertendo {model_name} -> {output_path} ===")
 
@@ -887,12 +816,32 @@ def convert_model(model_name: str, output_path: str,
     rope_theta = float(metadata.get(f"{arch}.rope.freq_base",
                                     metadata.get("rope.freq_base", 10000.0)))
 
-    layer_features = 0x07  # bit0=inner_attn_ln, bit1=ffn_layernorm, bit2=RoPE
+    # ── v6 (ADR-0085) ──────────────────────────────────────────────────────
+    # num_params: soma de elementos de todos os tensores (informacional)
+    num_params = 0
+    for t in tensor_list:
+        num_params += int(np.prod(t.shape))
+
+    # act_type da metadata GGUF (arch.activation): "silu"→0, "relu2"→1; default SILU
+    act_raw = str(metadata.get(f"{arch}.activation",
+                               metadata.get("activation", "silu"))).lower()
+    act_type = ACT_RELU2 if act_raw == "relu2" else ACT_SILU
+
+    # embed_type: ternary por padrão; Q6_K se vocab gigante (o embed f32
+    # completo está sempre disponível após dequantize_tensor)
+    embed_type = EMBED_Q6K if vocab_size > 100_000 else EMBED_TERNARY
+
+    # feat: NÃO escrevemos rms_inner_attn nem rms_ffn_norm (bits 0/1 limpos);
+    # bit2 (theta) setado porque rope_freq_base sempre disponível (default 10000)
+    theta_present = True
+    feat = compute_feat(False, False, theta_present)
 
     print(f"  Config: h={hidden} L={num_layers} heads={num_heads} "
           f"kv={num_kv_heads} q_dim={q_dim}")
     print(f"  Vocab={vocab_size} max_seq={max_seq} ffn={intermediate_size}")
     print(f"  tie={tie_embeddings} rope_theta={rope_theta}")
+    print(f"  v6: act={act_type} embed_type={embed_type} feat=0x{feat:02X} "
+          f"num_params={num_params}")
 
     # 3. Extrai tokenizer
     tok_data = extract_tokenizer_gguf(metadata, tensor_names,
@@ -924,21 +873,48 @@ def convert_model(model_name: str, output_path: str,
     out_path = Path(output_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 5. Escreve arquivo .bitnet
+    # 5. Escreve arquivo .bitnet v6
     with open(out_path, "wb") as f:
-        write_header(f, hidden, num_layers, num_heads, vocab_size,
-                     max_seq, intermediate_size, num_kv_heads, q_dim,
-                     0, tie_embeddings, tok_data, layer_features)
+        write_header_v6(
+            f,
+            model_type=MODEL_LLM,
+            num_params=num_params,
+            hidden=hidden,
+            layers=num_layers,
+            heads=num_heads,
+            vocab=vocab_size,
+            max_seq=min(max_seq, 65535),  # u16 no header (writer não clampeia)
+            intermediate=intermediate_size,
+            kv_heads=num_kv_heads,
+            q_dim=q_dim,
+            medusa=0,
+            tie=tie_embeddings,
+            tok_type=1,  # BPE (tokenizer serializado como "BPE:vocab_size")
+            tok_data=tok_data,
+            act_type=act_type,
+            embed_type=embed_type,
+            feat=feat,
+        )
 
-        # 5a. Embedding
+        # 5a. Embedding — v6 canônico é (hidden, vocab) row-major
         print("  [embed]")
         embed_w = get_tensor_weight("token_embd")
         if embed_w is None:
             raise ValueError("Tensor token_embd.weight não encontrado no GGUF")
-        # embed esperado shape: (vocab_size, hidden)
-        if len(embed_w.shape) == 2 and embed_w.shape[0] != vocab_size:
+        if len(embed_w.shape) == 2 and embed_w.shape[0] == vocab_size:
+            # GGUF guarda (vocab, hidden) → transpõe para (hidden, vocab)
             embed_w = embed_w.T
-        write_ternary_tensor(f, embed_w, name="embed", verbose=verbose)
+        if embed_type == EMBED_Q6K:
+            # Q6_K bruto (210B/256 pesos) + f32 scale — o reader (cortex.rs)
+            # lê o scale logo após o bloco Q6_K, então sempre o escrevemos
+            write_q6k(f, embed_w.astype(np.float32), hidden, vocab_size)
+            f.write(struct.pack("<f", 1.0))
+        else:
+            q_vals, scale = optimize_ternary(embed_w, verbose=verbose)
+            write_embed(f, q_vals, EMBED_TERNARY, scale)
+            if verbose:
+                print(f"    embed: {embed_w.shape} {(embed_w.size + 3) // 4}B "
+                      f"scale={scale:.4f}")
 
         # 5b. Layers
         for li in range(num_layers):
@@ -948,15 +924,15 @@ def convert_model(model_name: str, output_path: str,
             # RMS norms
             attn_norm = get_tensor_weight("blk_attn_norm", li)
             if attn_norm is not None:
-                write_rms_vec(f, attn_norm.reshape(-1))
+                write_rms(f, attn_norm.reshape(-1))
             else:
-                write_rms_vec(f, np.ones(hidden, dtype=np.float32))
+                write_rms(f, np.ones(hidden, dtype=np.float32))
 
             ffn_norm = get_tensor_weight("blk_ffn_norm", li)
             if ffn_norm is not None:
-                write_rms_vec(f, ffn_norm.reshape(-1))
+                write_rms(f, ffn_norm.reshape(-1))
             else:
-                write_rms_vec(f, np.ones(hidden, dtype=np.float32))
+                write_rms(f, np.ones(hidden, dtype=np.float32))
 
             # Q projection: (hidden, q_dim)
             q_w = get_tensor_weight("blk_attn_q", li)
@@ -1039,14 +1015,14 @@ def convert_model(model_name: str, output_path: str,
         print("  [rms_final]")
         rms_final_w = get_tensor_weight("rms_final")
         if rms_final_w is not None:
-            write_rms_vec(f, rms_final_w.reshape(-1))
+            write_rms(f, rms_final_w.reshape(-1))
         else:
-            write_rms_vec(f, np.ones(hidden, dtype=np.float32))
+            write_rms(f, np.ones(hidden, dtype=np.float32))
 
-        # 5d. Unembed (output weight)
+        # 5d. Unembed (output weight) — v6 D3: tied ⇒ seção NÃO existe (0 bytes)
         print("  [unembed]")
         output_w = get_tensor_weight("output")
-        if output_w is not None and not tie_embeddings:
+        if not tie_embeddings and output_w is not None:
             if len(output_w.shape) == 2:
                 if output_w.shape[0] == hidden and output_w.shape[1] == vocab_size:
                     # Já está (hidden, vocab_size)
@@ -1054,15 +1030,14 @@ def convert_model(model_name: str, output_path: str,
                 elif output_w.shape[0] == vocab_size and output_w.shape[1] == hidden:
                     output_w = output_w.T
             write_ternary_tensor(f, output_w, name="unembed", verbose=verbose)
-        elif tie_embeddings or output_w is None:
+        else:
+            # tied (ou output ausente): NENHUM byte de unembed
             if verbose:
                 print(f"    unembed: skipped (tie_embeddings={tie_embeddings})")
-            # Escreve tensor zero marcado como tied
-            zero_w = np.zeros((hidden, vocab_size), dtype=np.float32)
-            write_ternary_tensor(f, zero_w, name="unembed(tied)", verbose=verbose)
 
-        # 5e. RoPE theta (bit de feature 2 = RoPE)
-        f.write(struct.pack("<f", rope_theta))
+        # 5e. RoPE theta (feat bit2) — f32 no fim do arquivo
+        if feat & 4:
+            f.write(struct.pack("<f", rope_theta))
 
     elapsed = time.time() - t0
     sz = os.path.getsize(output_path)
@@ -1079,7 +1054,7 @@ def convert_model(model_name: str, output_path: str,
         print("\n=== Self-test ===")
         _self_test(output_path, hidden, num_layers, num_heads, vocab_size,
                    max_seq, intermediate_size, num_kv_heads, q_dim,
-                   tie_embeddings, layer_features, verbose)
+                   tie_embeddings, feat, act_type, embed_type, verbose)
 
 
 def tensor_type_name(ttype: int) -> str:
@@ -1092,8 +1067,8 @@ def tensor_type_name(ttype: int) -> str:
 def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
                vocab_size: int, max_seq: int, intermediate_size: int,
                num_kv_heads: int, q_dim: int, tie_embeddings: bool,
-               layer_features: int, verbose: bool):
-    """Verifica integridade do .bitnet gerado."""
+               feat: int, act_type: int, embed_type: int, verbose: bool):
+    """Verifica integridade do .bitnet v6 gerado."""
     with open(path, "rb") as f:
         data = f.read()
 
@@ -1103,6 +1078,12 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
         nonlocal off
         v = struct.unpack_from("<I", data, off)[0]
         off += 4
+        return v
+
+    def r8():
+        nonlocal off
+        v = struct.unpack_from("<Q", data, off)[0]
+        off += 8
         return v
 
     def r2():
@@ -1125,14 +1106,16 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
 
     errors = []
 
-    # Header
+    # Header v6 (ADR-0085)
     magic = r4()
     if magic != MAGIC:
         errors.append(f"magic: 0x{magic:X} != 0x{MAGIC:X}")
     version = r2()
-    if version != 4:
-        errors.append(f"version: {version} != 4")
-    _np = r4()
+    if version != 6:
+        errors.append(f"version: {version} != 6")
+    _np = r8()
+    _mt = r1()
+    off += 3  # reserved
     h = r2()
     nl = r2()
     nh = r2()
@@ -1147,6 +1130,8 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
     _tt = r1()
     tok_len = r4()
     off += tok_len
+    act = r1()
+    emb = r1()
     lf = r1()
 
     checks = [
@@ -1158,18 +1143,25 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
         (qd == q_dim, f"q_dim {qd} != {q_dim}"),
         (tie == (b"TIED" if tie_embeddings else b"\x00\x00\x00\x00"),
          f"tie_embeddings mismatch"),
-        (lf == layer_features, f"layer_features {lf} != {layer_features}"),
+        (act == act_type, f"act_type {act} != {act_type}"),
+        (emb == embed_type, f"embed_type {emb} != {embed_type}"),
+        (lf == feat, f"feat 0x{lf:02X} != 0x{feat:02X}"),
     ]
     for ok, msg in checks:
         if not ok:
             errors.append(msg)
 
     # Tamanhos esperados
-    # embed: packed (hidden, vocab_size) + scale f32
-    embed_packed = (hidden * vocab_size + 3) // 4
+    # embed: ternary → packed (hidden, vocab_size) + scale f32;
+    #        Q6_K → 210B/super-bloco + scale f32
+    if embed_type == EMBED_Q6K:
+        embed_packed = ((hidden * vocab_size + 255) // 256) * 210
+    else:
+        embed_packed = (hidden * vocab_size + 3) // 4
     embed_total = embed_packed + 4
 
     # Por layer: rms_attn + rms_ffn + 7 tensors * (packed + scale)
+    # (sem rms_inner_attn / rms_ffn_norm — feat bits 0/1 limpos)
     k_dim = num_kv_heads * (q_dim // num_heads)
     ffn_group = intermediate_size
 
@@ -1184,11 +1176,15 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
     per_layer_total = per_layer_rms + per_layer_tern
 
     rms_final_total = hidden * 4
-    unembed_total = (hidden * vocab_size + 3) // 4 + 4
-    rope_total = 4
+    # v6 D3: tied ⇒ seção de unembed NÃO existe (0 bytes)
+    unembed_total = ((hidden * vocab_size + 3) // 4 + 4) if not tie_embeddings else 0
+    rope_total = 4 if (feat & 4) else 0
 
-    expected = (4 + 2 + 4 + 2 + 2 + 2 + 4 + 2 + 2 + 2 + 2 + 4 + 4 +
-                1 + 4 + tok_len + 1 +  # header
+    # header v6: magic4 + version2 + num_params8 + model_type1 + reserved3 +
+    #             bloco transformer 26B + tok_type1 + tok_len4 + tok_data +
+    #             act_type1 + embed_type1 + feat1
+    expected = (4 + 2 + 8 + 1 + 3 + 26 +
+                1 + 4 + tok_len + 3 +
                 embed_total +
                 per_layer_total * num_layers +
                 rms_final_total +
@@ -1201,7 +1197,7 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
         print(f"  Per-layer: {per_layer_total}B")
         print(f"  RMS final: {rms_final_total}B")
         print(f"  Unembed: {unembed_total}B")
-        print(f"  RoPE theta: {rope_total}B")
+        print(f"  RoPE theta: {rope_total}B (feat&4={'yes' if feat & 4 else 'no'})")
         print(f"  Expected total: {expected}B")
         print(f"  Actual file size: {len(data)}B")
 
@@ -1229,7 +1225,7 @@ def _self_test(path: str, hidden: int, num_layers: int, num_heads: int,
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Converte modelo GGUF do HuggingFace para .bitnet v4",
+        description="Converte modelo GGUF do HuggingFace para .bitnet v6 (ADR-0085)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Arquiteturas suportadas: llama, qwen2, gemma2, phi3, mistral, starcoder2, deepseek

@@ -25,7 +25,7 @@ pub const TOPIC_KERNEL_ERROR: &str = "KERNEL_ERROR";
 pub const TOPIC_MODEL_UPDATE: &str = "MODEL_UPDATE";
 
 pub static GLOBAL_MODEL_PARAMS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-use crate::nn::{silu, rms_norm};
+use crate::nn::{silu, relu2, rms_norm};
 use crate::tensor::{PackedTernaryTensor, Tensor};
 
 const BOS: u16 = 0;
@@ -191,6 +191,13 @@ pub struct TransformerModel {
     pub ffn_group_size: usize,
     // Embedding tie flag
     pub tie_embeddings: bool,
+    // Ativação FFN (ADR-0085 header): 0=silu, 1=relu2 (2B4T)
+    pub act_type: u8,
+    // Tipo do embedding (ADR-0085): 0=ternary-packed, 1=Q6_K, 2=BF16
+    pub embed_type: u8,
+    // Embedding Q6_K bruto (210B/256 pesos) quando embed_type==1 — decode row-wise
+    // no embed_lookup (evita materializar ~1.31GB f32 do vocab 128256).
+    pub embed_q6k: Option<Vec<u8>>,
     // RoPE
     pub rope_theta: f32,
     pub rope_cos: Vec<f32>,
@@ -687,6 +694,9 @@ impl TransformerModel {
             intermediate_size: FFN_DIM,
             ffn_group_size: FFN_DIM,
             tie_embeddings: false,
+            act_type: 0,
+            embed_type: 0,
+            embed_q6k: None,
             rope_theta: 10000.0,
             rope_cos,
             rope_sin,
@@ -696,17 +706,54 @@ impl TransformerModel {
     fn embed_lookup(&self, token: u32) -> Tensor {
         let t = (token as usize).min(self.embed.shape.1.saturating_sub(1));
         let mut data = Vec::with_capacity(self.hidden);
-        for row in 0..self.hidden {
-            let idx = row * self.embed.shape.1 + t;
-            data.push((self.embed.get_weight(idx) as f32) * self.embed_scale);
+        if self.embed_type == 1 {
+            // Q6_K row-wise (ADR-0085 D6): decode elemento por elemento, sem bulk
+            if let Some(q6k) = &self.embed_q6k {
+                for row in 0..self.hidden {
+                    data.push(crate::gguf::q6k_get(q6k, row * self.embed.shape.1 + t) * self.embed_scale);
+                }
+            } else {
+                return Tensor::zero((1, self.hidden));
+            }
+        } else {
+            for row in 0..self.hidden {
+                let idx = row * self.embed.shape.1 + t;
+                data.push((self.embed.get_weight(idx) as f32) * self.embed_scale);
+            }
         }
         Tensor::from_row_major((1, self.hidden), data).unwrap()
     }
 
     fn rms_norm_tensor(&self, x: &Tensor, weight: &[f32]) -> Tensor {
         let mut t = Tensor::from_row_major(x.shape, x.data.clone()).unwrap();
-        rms_norm(&mut t, weight, 1e-6);
+        // M2 (ADR-0084 §11.2): 2B4T usa eps 1e-5 (era 1e-6)
+        rms_norm(&mut t, weight, 1e-5);
         t
+    }
+
+    /// M1 (ADR-0084): ativação FFN por arquivo — act_type 1 = relu2 (2B4T), 0 = silu.
+    fn ffn_act(&self, x: f32) -> f32 {
+        if self.act_type == 1 { relu2(x) } else { silu(x) }
+    }
+
+    /// Logits de unembed (tied usa embed). Q6_K tied → q6k_matmul_row (ADR-0085 D6).
+    fn unembed_logits(&self, hidden: &Tensor, vocab: usize) -> Tensor {
+        if self.tie_embeddings && self.embed_type == 1 {
+            if let Some(q6k) = &self.embed_q6k {
+                let data = crate::gguf::q6k_matmul_row(q6k, self.hidden, vocab, &hidden.data);
+                let mut t = Tensor::from_row_major((1, vocab), data)
+                    .unwrap_or_else(|| Tensor::zero((1, vocab)));
+                t.mul_scalar(self.embed_scale);
+                return t;
+            }
+        }
+        let mut logits = if self.tie_embeddings {
+            self.embed.matmul_hybrid(hidden).unwrap_or_else(|| Tensor::zero((1, vocab)))
+        } else {
+            self.unembed.matmul_hybrid(hidden).unwrap_or_else(|| Tensor::zero((1, vocab)))
+        };
+        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
+        logits
     }
 
     pub fn forward_with_kv(&self, tokens: &[u32], cache: &mut KvCache) -> (Tensor, Tensor) {
@@ -937,12 +984,7 @@ impl TransformerModel {
                 }
                 Tensor { shape: (1, self.hidden), data: padded }
             });
-        let mut logits = if self.tie_embeddings {
-            self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
-        } else {
-            self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
-        };
-        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
+        let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
         (last_hidden, logits)
     }
 
@@ -1115,12 +1157,7 @@ impl TransformerModel {
             let hidden = Tensor::from_row_major((1, self.hidden),
                 final_norm.data[i * self.hidden..(i + 1) * self.hidden].to_vec())
                 .unwrap_or_else(|| Tensor::zero((1, self.hidden)));
-            let mut logits = if self.tie_embeddings {
-                self.embed.matmul_hybrid(&hidden).unwrap_or_else(|| Tensor::zero((1, vocab_size)))
-            } else {
-                self.unembed.matmul_hybrid(&hidden).unwrap_or_else(|| Tensor::zero((1, vocab_size)))
-            };
-            logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
+            let logits = self.unembed_logits(&hidden, vocab_size);
             for j in 0..vocab_size {
                 all_logits[i * vocab_size + j] = logits.data[j];
             }
@@ -1263,7 +1300,7 @@ impl TransformerModel {
         let ffn_group = gate.shape.1.max(1);
         let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap();
         for (i, g) in gated.data.iter_mut().enumerate() {
-            *g = silu(*g) * up.data.get(i).copied().unwrap_or(0.0);
+            *g = self.ffn_act(*g) * up.data.get(i).copied().unwrap_or(0.0);
         }
 
         let intermediate_size = layer.intermediate_size.max(ffn_group);
@@ -1324,12 +1361,7 @@ impl TransformerModel {
             (1, self.hidden),
             final_norm.data[(new_len - 1) * self.hidden..new_len * self.hidden].to_vec(),
         ).unwrap();
-        let mut logits = if self.tie_embeddings {
-            self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::new((1, self.vocab_size as usize)))
-        } else {
-            self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::new((1, self.vocab_size as usize)))
-        };
-        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
+        let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
         (last_hidden, logits)
     }
 
@@ -1491,7 +1523,7 @@ impl TransformerModel {
             let ffn_group = gate.shape.1;
             let mut gated = Tensor::from_row_major(gate.shape, gate.data.clone()).unwrap_or_else(|| Tensor::zero(gate.shape));
             for (i, g) in gated.data.iter_mut().enumerate() {
-                *g = silu(*g) * up.data[i];
+                *g = self.ffn_act(*g) * up.data[i];
             }
 
             // Expand gated by repeating 4x for full intermediate dim
@@ -1543,12 +1575,7 @@ impl TransformerModel {
                 Tensor { shape: (1, self.hidden), data: padded }
             });
         let t_unembed0 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        let mut logits = if self.tie_embeddings {
-            self.embed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
-        } else {
-            self.unembed.matmul_hybrid(&last_hidden).unwrap_or_else(|| Tensor::zero((1, self.vocab_size as usize)))
-        };
-        logits.mul_scalar(if self.tie_embeddings { self.embed_scale } else { self.unembed_scale });
+        let logits = self.unembed_logits(&last_hidden, self.vocab_size as usize);
         let t_unembed1 = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         if t_unembed1 - t_unembed0 > 10 {
             k_nano::slog_cortex!("FWD", "info", "unembed: {} ticks", t_unembed1 - t_unembed0);
@@ -1952,6 +1979,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
             intermediate_size,
             ffn_group_size: ffn_group,
             tie_embeddings,
+            act_type: 0,
+            embed_type: 0,
+            embed_q6k: None,
             rope_theta: 10000.0,
             rope_cos, rope_sin,
         };
@@ -2150,6 +2180,9 @@ pub fn load_model(data: &[u8]) -> Option<TransformerModel> {
         intermediate_size,
         ffn_group_size: intermediate_size / 4,
         tie_embeddings,
+        act_type: 0,
+        embed_type: 0,
+        embed_q6k: None,
         rope_theta: 10000.0,
         rope_cos: vec![],
         rope_sin: vec![],
@@ -2167,6 +2200,9 @@ fn write_u16(out: &mut Vec<u8>, v: u16) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 fn write_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+fn write_u64(out: &mut Vec<u8>, v: u64) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 fn write_f32(out: &mut Vec<u8>, v: f32) {
@@ -2310,6 +2346,345 @@ fn tern_eq(a: &PackedTernaryTensor, b: &PackedTernaryTensor) -> bool {
     a.shape == b.shape && a.packed_data == b.packed_data
 }
 
+
+// ── Loader .bitnet v6 (ADR-0085) ─────────────────────────────────────
+// load_model_v6: parse estrito, dispatch por model_type. Legacy (3..=5): fallback WARN.
+
+/// Carrega modelo .bitnet v6. Retorna None em erro de parse.
+pub fn load_model_v6(data: &[u8]) -> Option<TransformerModel> {
+    let mut off = 0;
+    let magic = read_u32(data, &mut off)?;
+    if magic != 0xBE11BE11 { return None; }
+    let version = read_u16(data, &mut off)?;
+    if version < 6 {
+        k_nano::slog_cortex!("LLM", "warn",
+            "v{} legacy format — use migrate_bitnet_v6.py", version);
+        if version == 5 { return None; } // HWExpert v5 handled separately
+        return load_model(data); // v3/v4 fallback
+    }
+    if version > 6 { return None; }
+    // v6 preamble
+    let _num_params = read_u64(data, &mut off)?;
+    let model_type = read_u8(data, &mut off)?;
+    if off + 3 > data.len() { return None; }
+    if data[off] != 0 || data[off+1] != 0 || data[off+2] != 0 { return None; }
+    off += 3;
+    match model_type {
+        0 => load_llm_v6(data, &mut off),
+        1 => { k_nano::slog_cortex!("LLM", "info", "v6 HWExpert"); None }
+        2 => { k_nano::slog_cortex!("LLM", "info", "v6 Router"); None }
+        _ => None
+    }
+}
+
+/// Parse LLM body (model_type=0) from v6 format.
+fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
+    let hidden = read_u16(data, off)? as usize;
+    let num_layers = read_u16(data, off)? as usize;
+    let num_heads = read_u16(data, off)? as usize;
+    let vocab_size = read_u32(data, off)?;
+    let max_seq = read_u16(data, off)? as usize;
+    let intermediate_size = read_u16(data, off)? as usize;
+    let num_kv_heads = read_u16(data, off)? as usize;
+    let q_dim = read_u16(data, off)? as usize;
+    let num_medusa = read_u32(data, off)? as usize;
+    let tie_embeddings = *off + 4 <= data.len() && &data[*off..*off+4] == b"TIED";
+    *off += 4;
+    let _tok_type = read_u8(data, off)?;
+    let tok_len = read_u32(data, off)? as usize;
+    *off = off.saturating_add(tok_len);
+    let act_type = read_u8(data, off)?;
+    let embed_type = read_u8(data, off)?;
+    let feat = read_u8(data, off)?;
+    if feat & 0xF8 != 0 { return None; } // bits 3-7 must be 0
+    let has_inner = (feat & 0x01) != 0;
+    let has_ffn = (feat & 0x02) != 0;
+    let has_theta = (feat & 0x04) != 0;
+    if act_type > 1 || embed_type > 2 { return None; }
+
+    let kv_head_dim = q_dim / num_heads.max(1);
+    let k_dim = num_kv_heads * kv_head_dim;
+    let ffn_group = intermediate_size * q_dim / hidden.max(1);
+    let down_out = q_dim;
+
+    k_nano::slog_cortex!("LLM", "info",
+        "v6 LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x}",
+        hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat);
+
+    // Heap resize
+    let file_mb = (data.len() + 1048575) / 1048576;
+    let cur_mb = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
+    if file_mb.saturating_mul(2).saturating_add(64) > cur_mb {
+        k_nano::allocator::resize_heap_to_mb(file_mb.saturating_mul(2).saturating_add(64).min(4096));
+    }
+
+    // Embed (always has scale — ADR-0085 D1). embed_type: 0=ternary, 1=Q6_K, 2=BF16
+    let (embed, embed_scale, embed_q6k) = match embed_type {
+        0 => {
+            let (t, s) = read_ternary_tensor_with_scale(data, off, hidden, vocab_size as usize)?;
+            (t, s, None)
+        }
+        1 => {
+            // Q6_K bruto: 210 bytes por super-bloco de 256 pesos. Decode row-wise
+            // no embed_lookup (ADR-0085 D6) — evita materializar 1.31GB f32.
+            let n_elems = hidden * vocab_size as usize;
+            let n_blocks = (n_elems + 255) / 256;
+            let expected = n_blocks * crate::gguf::Q6_K_BLOCK_BYTES;
+            if *off + expected > data.len() {
+                k_nano::slog_cortex!("LLM", "warn", "v6 Q6_K embed truncated: need {}B have {}B", expected, data.len().saturating_sub(*off));
+                return None;
+            }
+            let raw = data[*off..*off + expected].to_vec();
+            *off += expected;
+            let scale = read_f32(data, off)?;
+            (PackedTernaryTensor { shape: (hidden, vocab_size as usize), packed_data: vec![] }, scale, Some(raw))
+        }
+        _ => {
+            k_nano::slog_cortex!("LLM", "warn", "v6 embed_type={} not yet supported", embed_type);
+            return None;
+        }
+    };
+
+    // Layers
+    let mut layers = Vec::with_capacity(num_layers);
+    for li in 0..num_layers {
+        let rms_attn = read_f32_vec(data, off, hidden)?;
+        let rms_ffn = read_f32_vec(data, off, hidden)?;
+        let rms_inner_attn = if has_inner { read_f32_vec(data, off, hidden)? }
+                             else { vec![1.0; kv_head_dim * num_heads] };
+        let rms_ffn_norm = if has_ffn {
+            read_f32_vec(data, off, intermediate_size)? // CANÔNICO (ADR-0085 D2)
+        } else {
+            vec![1.0; intermediate_size]
+        };
+        let (q, q_scale) = read_ternary_tensor_with_scale(data, off, hidden, q_dim)?;
+        let (k, k_scale) = read_ternary_tensor_with_scale(data, off, hidden, k_dim)?;
+        let (v, v_scale) = read_ternary_tensor_with_scale(data, off, hidden, k_dim)?;
+        let (o, o_scale) = read_ternary_tensor_with_scale(data, off, q_dim, hidden)?;
+        let (gate, gate_scale) = read_ternary_tensor_with_scale(data, off, hidden, ffn_group)?;
+        let (up, up_scale) = read_ternary_tensor_with_scale(data, off, hidden, ffn_group)?;
+        let (down, down_scale) = read_ternary_tensor_with_scale(data, off, intermediate_size, down_out)?;
+        layers.push(LayerWeights {
+            rms_attn, q, q_scale, k, k_scale, v, v_scale, o, o_scale,
+            rms_ffn, rms_inner_attn, rms_ffn_norm,
+            gate, gate_scale, up, up_scale, down, down_scale,
+            kv_dim: q_dim, num_kv_heads, intermediate_size,
+            ffn_group_size: ffn_group,
+        });
+        if li % 10 == 0 || li + 1 == num_layers {
+            k_nano::slog_cortex!("LLM", "info", "v6 layer {}/{} off={}KB", li, num_layers, *off/1024);
+        }
+    }
+
+    let rms_final = read_f32_vec(data, off, hidden)?;
+
+    // Unembed — tied ⇒ ZERO bytes (ADR-0085 D3)
+    let (unembed, unembed_scale) = if !tie_embeddings {
+        read_ternary_tensor_with_scale(data, off, hidden, vocab_size as usize)?
+    } else {
+        (PackedTernaryTensor {
+            shape: (hidden, vocab_size as usize),
+            packed_data: vec![0u8; (hidden * vocab_size as usize + 3) / 4],
+        }, 1.0)
+    };
+
+    // Medusa heads
+    let mut medusa_heads = Vec::with_capacity(num_medusa);
+    for _ in 0..num_medusa {
+        let (w, w_scale) = read_ternary_tensor_with_scale(data, off, hidden, vocab_size as usize)?;
+        medusa_heads.push(MedusaHead { w, w_scale });
+    }
+
+    // Theta (only if feat bit2 — ADR-0085 D3)
+    let mut theta = 10000.0f32;
+    if has_theta {
+        if let Some(t) = read_f32(data, off) {
+            if t > 1.0 { theta = t; }
+        }
+    }
+    let rope_seq = (max_seq as usize).min(2048).max(64);
+    let (rope_cos, rope_sin) = rope_precompute(rope_seq, kv_head_dim, theta);
+
+    let model = TransformerModel {
+        embed, embed_scale, embed_q6k, layers, rms_final, unembed, unembed_scale, medusa_heads,
+        vocab_size, hidden, num_layers, max_seq,
+        num_heads, num_kv_heads, head_dim: kv_head_dim, kv_dim: q_dim,
+        intermediate_size, ffn_group_size: ffn_group,
+        tie_embeddings,
+        act_type, embed_type,
+        rope_theta: theta, rope_cos, rope_sin,
+    };
+    k_nano::slog_cortex!("LLM", "info", "v6 model OK L={} {}KB", num_layers, data.len()/1024);
+    Some(model)
+}
+
+// ── Serialização .bitnet v6 (ADR-0085) ─────────────────────────────────
+// save_model_v6: formato canônico v6. Diferenças do v4:
+// - num_params u64, model_type u8, reserved 3B, act_type/embed_type depois do tokenizer
+// - rms_ffn_norm CANÔNICO = intermediate_size (não hidden)
+// - tied ⇒ NENHUM byte de unembed (nem zeros)
+// - theta só se feat bit2; feat computado do que foi escrito
+// - scales SEMPRE presentes em todo tensor quantizado
+
+/// Serializa o modelo no formato .bitnet v6 — byte-exato com bitnet_writer.py.
+pub fn save_model_v6(model: &TransformerModel) -> Option<Vec<u8>> {
+    const U16MAX: usize = u16::MAX as usize;
+    if model.hidden == 0 || model.num_heads == 0 || model.vocab_size == 0
+        || model.num_layers == 0 || model.intermediate_size == 0 || model.num_kv_heads == 0
+        || model.hidden > U16MAX || model.num_layers > U16MAX || model.num_heads > U16MAX
+        || model.max_seq > U16MAX || model.intermediate_size > U16MAX
+        || model.num_kv_heads > U16MAX || model.kv_dim > U16MAX
+        || model.layers.len() != model.num_layers
+    {
+        return None;
+    }
+
+    let q_dim = model.kv_dim.max(1);
+    let kv_head_dim = q_dim / model.num_heads;
+    let k_dim = model.num_kv_heads * kv_head_dim;
+    let ffn_group = model.intermediate_size * q_dim / model.hidden;
+    let down_out = q_dim;
+    let hidden = model.hidden;
+    let vocab = model.vocab_size as usize;
+
+    // feat computado do que é efetivamente escrito (ADR-0085 D5)
+    let l0 = model.layers.first()?;
+    let inner_default_len = kv_head_dim * model.num_heads;
+    let has_inner_attn_ln = !(l0.rms_inner_attn.len() == inner_default_len
+        && l0.rms_inner_attn.iter().all(|&x| x == 1.0));
+    let has_ffn_layernorm = !(l0.rms_ffn_norm.len() == model.intermediate_size
+        && l0.rms_ffn_norm.iter().all(|&x| x == 1.0));
+    let has_theta = model.rope_theta > 1.0;
+
+    // num_params: soma de todos os elementos de todos os tensores (informativo)
+    let num_params = {
+        let mut n: u64 = (hidden * vocab) as u64; // embed
+        n += (model.intermediate_size * model.num_layers) as u64; // rms_ffn_norm × intermediate
+        let per_layer = (hidden * q_dim) as u64       // q
+            + (hidden * k_dim) as u64 * 2             // k + v
+            + (q_dim * hidden) as u64                 // o
+            + (hidden * ffn_group) as u64 * 2         // gate + up
+            + (model.intermediate_size * down_out) as u64; // down
+        n += per_layer * model.num_layers as u64;
+        if !model.tie_embeddings {
+            n += (hidden * vocab) as u64; // unembed
+        }
+        for _ in &model.medusa_heads {
+            n += (hidden * vocab) as u64;
+        }
+        n
+    };
+
+    let feat = compute_feat(has_inner_attn_ln, has_ffn_layernorm, has_theta);
+
+    let mut out = Vec::new();
+    // header v6
+    write_u32(&mut out, 0xBE11BE11);           // 0: magic
+    write_u16(&mut out, 6);                    // 4: version
+    write_u64(&mut out, num_params);           // 6: num_params u64
+    out.push(0);                               // 14: model_type (0=LLM)
+    out.extend_from_slice(&[0, 0, 0]);         // 15: reserved
+    write_u16(&mut out, hidden as u16);        // 18
+    write_u16(&mut out, model.num_layers as u16);
+    write_u16(&mut out, model.num_heads as u16);
+    write_u32(&mut out, model.vocab_size);
+    write_u16(&mut out, model.max_seq as u16);
+    write_u16(&mut out, model.intermediate_size as u16);
+    write_u16(&mut out, model.num_kv_heads as u16);
+    write_u16(&mut out, q_dim as u16);
+    write_u32(&mut out, model.medusa_heads.len() as u32);
+    // tie_flag
+    if model.tie_embeddings {
+        out.extend_from_slice(b"TIED");
+    } else {
+        out.extend_from_slice(&[0, 0, 0, 0]);
+    }
+    out.push(0);                               // tok_type
+    write_u32(&mut out, 0);                    // tok_len (vazio)
+    out.push(model.act_type.min(1));           // act_type (0=silu, 1=relu2)
+    out.push(model.embed_type.min(2));         // embed_type (0=ternary, 1=Q6_K, 2=BF16)
+    out.push(feat);
+
+    // embed (hidden, vocab) + f32 scale — embed_type 1 = Q6_K raw bytes
+    if model.embed_type == 1 {
+        let q6k = match &model.embed_q6k {
+            Some(q) => q,
+            None => return None,
+        };
+        let n_elems = hidden * vocab;
+        let expected = ((n_elems + 255) / 256) * crate::gguf::Q6_K_BLOCK_BYTES;
+        if q6k.len() != expected { return None; }
+        out.extend_from_slice(q6k);
+        write_f32(&mut out, model.embed_scale);
+    } else {
+        if model.embed.packed_data.len() != tern_packed_len(hidden, vocab) {
+            return None;
+        }
+        out.extend_from_slice(&model.embed.packed_data);
+        write_f32(&mut out, model.embed_scale);
+    }
+
+    // layers
+    for l in &model.layers {
+        write_f32_vec_clamped(&mut out, &l.rms_attn, hidden);
+        write_f32_vec_clamped(&mut out, &l.rms_ffn, hidden);
+        if has_inner_attn_ln {
+            write_f32_vec_clamped(&mut out, &l.rms_inner_attn, hidden);
+        }
+        if has_ffn_layernorm {
+            // CANÔNICO: intermediate_size (ADR-0085 D2)
+            write_f32_vec_clamped(&mut out, &l.rms_ffn_norm, model.intermediate_size);
+        }
+        let tensors = [
+            (&l.q, hidden, q_dim, l.q_scale),
+            (&l.k, hidden, k_dim, l.k_scale),
+            (&l.v, hidden, k_dim, l.v_scale),
+            (&l.o, q_dim, hidden, l.o_scale),
+            (&l.gate, hidden, ffn_group, l.gate_scale),
+            (&l.up, hidden, ffn_group, l.up_scale),
+            (&l.down, model.intermediate_size, down_out, l.down_scale),
+        ];
+        for (t, rows, cols, scale) in tensors {
+            if t.packed_data.len() != tern_packed_len(rows, cols) {
+                return None;
+            }
+            out.extend_from_slice(&t.packed_data);
+            write_f32(&mut out, scale);
+        }
+    }
+
+    // rms_final
+    write_f32_vec_clamped(&mut out, &model.rms_final, hidden);
+
+    // unembed — tied ⇒ ZERO bytes (ADR-0085 D3)
+    if !model.tie_embeddings {
+        if model.unembed.packed_data.len() != tern_packed_len(hidden, vocab) {
+            return None;
+        }
+        out.extend_from_slice(&model.unembed.packed_data);
+        write_f32(&mut out, model.unembed_scale);
+    }
+
+    // medusa heads
+    for h in &model.medusa_heads {
+        if h.w.packed_data.len() != tern_packed_len(hidden, vocab) {
+            return None;
+        }
+        out.extend_from_slice(&h.w.packed_data);
+        write_f32(&mut out, h.w_scale);
+    }
+
+    // theta (só se feat bit2)
+    if has_theta {
+        write_f32(&mut out, model.rope_theta);
+    }
+    Some(out)
+}
+
+fn compute_feat(has_inner: bool, has_ffn: bool, has_theta: bool) -> u8 {
+    ((has_inner as u8) << 0) | ((has_ffn as u8) << 1) | ((has_theta as u8) << 2)
+}
+
 /// Self-test determinístico de round-trip save→load. Constrói um modelo
 /// sintético mínimo (2 layers, shapes pequenos, GQA/BitFFN reais), salva,
 /// recarrega e compara tensores/escalas/RMS. Retorna true se idêntico.
@@ -2403,6 +2778,9 @@ pub fn model_save_roundtrip_self_test() -> bool {
         intermediate_size,
         ffn_group_size: ffn_group,
         tie_embeddings: false,
+        act_type: 0,
+        embed_type: 0,
+        embed_q6k: None,
         rope_theta: 10000.0,
         rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
         rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
@@ -2483,6 +2861,248 @@ pub fn model_save_roundtrip_self_test() -> bool {
         k_nano::slog_cortex!("LLM", "warn", "model save/load roundtrip self-test FAIL ({} bytes, L={})", bytes.len(), num_layers);
     }
     tensors_ok
+}
+
+/// v6 writer parity: compara save_model_v6 byte-a-byte com golden_v6.bin
+/// gerado por tools/bitnet_writer.py --self-check (mesmo LCG, mesma spec).
+#[cfg(test)]
+#[test]
+fn v6_writer_parity() {
+    // Mesma spec do Python self_check + golden_v6.bin
+    let hidden = 16usize;
+    let num_layers = 2usize;
+    let num_heads = 2usize;
+    let vocab_size = 32u32;
+    let max_seq = 64usize;
+    let intermediate_size = 32usize;
+    let num_kv_heads = 1usize;
+    let q_dim = 16usize;
+    let num_medusa = 1usize;
+
+    let kv_head_dim = q_dim / num_heads; // 8
+    let k_dim = num_kv_heads * kv_head_dim; // 8
+    let ffn_group = intermediate_size * q_dim / hidden; // 32
+    let down_out = q_dim; // 16
+
+    // LCG idêntico ao Python: x = (x * 1103515245 + 12345) & 0x7FFFFFFF, seed=42
+    // Python usa precisão arbitrária → Rust precisa de u64 p/ evitar truncamento precoce
+    let lcg_state: core::cell::RefCell<u64> = core::cell::RefCell::new(42);
+    let lcg = || -> u32 {
+        let mut s = lcg_state.borrow_mut();
+        *s = (s.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF;
+        *s as u32
+    };
+
+    // Ordem de consumo de LCG idêntica ao Python self_check
+    let tern_i8 = |rows: usize, cols: usize| -> PackedTernaryTensor {
+        let mut vals = Vec::with_capacity(rows * cols);
+        for _ in 0..rows * cols {
+            let r = lcg() % 3;
+            vals.push(match r { 0 => 1i8, 1 => -1i8, _ => 0i8 });
+        }
+        PackedTernaryTensor {
+            shape: (rows, cols),
+            packed_data: PackedTernaryTensor::pack_weights(&vals),
+        }
+    };
+    let rms_vec = |n: usize| -> Vec<f32> {
+        let mut v = Vec::with_capacity(n);
+        for _ in 0..n {
+            // Python: 0.5 + (lcg()%100) / 100.0  em f64, depois cast p/ f32
+            // Rust: f64 intermediate then cast to match Python rounding
+            v.push((0.5f64 + (lcg() % 100) as f64 / 100.0) as f32);
+        }
+        v
+    };
+
+    // Embed
+    let embed = tern_i8(hidden, vocab_size as usize);
+    let embed_scale = 1.5f32;
+
+    // Layers
+    let mut layers = Vec::with_capacity(num_layers);
+    for li in 0..num_layers {
+        let rms_attn = rms_vec(hidden);
+        let rms_ffn = rms_vec(hidden);
+        let rms_inner_attn = rms_vec(hidden);
+        let rms_ffn_norm = rms_vec(intermediate_size);
+        let q = tern_i8(hidden, q_dim);
+        let k = tern_i8(hidden, k_dim);
+        let v = tern_i8(hidden, k_dim);
+        let o = tern_i8(q_dim, hidden);
+        let gate = tern_i8(hidden, ffn_group);
+        let up = tern_i8(hidden, ffn_group);
+        let down = tern_i8(intermediate_size, down_out);
+        layers.push(LayerWeights {
+            rms_attn,
+            q,
+            q_scale: 0.5 + li as f32 * 0.25,
+            k,
+            k_scale: 0.75,
+            v,
+            v_scale: 1.25,
+            o,
+            o_scale: 0.9,
+            rms_ffn,
+            rms_inner_attn,
+            rms_ffn_norm,
+            gate,
+            gate_scale: 1.1,
+            up,
+            up_scale: 0.8,
+            down,
+            down_scale: 1.05,
+            kv_dim: q_dim,
+            num_kv_heads,
+            intermediate_size,
+            ffn_group_size: ffn_group,
+        });
+    }
+
+    let rms_final = rms_vec(hidden);
+    let unembed = tern_i8(hidden, vocab_size as usize);
+    let unembed_scale = 0.6f32;
+
+    let medusa_head = MedusaHead {
+        w: tern_i8(hidden, vocab_size as usize),
+        w_scale: 1.3f32,
+    };
+
+    let model = TransformerModel {
+        embed,
+        embed_scale,
+        layers,
+        rms_final,
+        unembed,
+        unembed_scale,
+        medusa_heads: alloc::vec![medusa_head],
+        vocab_size,
+        hidden,
+        num_layers,
+        max_seq,
+        num_heads,
+        num_kv_heads,
+        head_dim: kv_head_dim,
+        kv_dim: q_dim,
+        intermediate_size,
+        ffn_group_size: ffn_group,
+        tie_embeddings: false,
+        act_type: 0,
+        embed_type: 0,
+        embed_q6k: None,
+        rope_theta: 10000.0,
+        rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
+        rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
+    };
+
+    let bytes = save_model_v6(&model).expect("save_model_v6 returned None");
+    let golden = include_bytes!("../../../tools/golden_v6.bin");
+
+    if bytes.as_slice() != golden.as_slice() {
+        let diff = bytes.iter().zip(golden.iter())
+            .position(|(a, b)| a != b);
+        let off = diff.unwrap_or(0);
+        let ctx = if off >= 8 { off - 8 } else { off };
+        panic!(
+            "v6 writer parity FAIL: {} bytes Rust vs {} bytes golden. First diff at offset {:?}.\n\
+             Rust[{}..{}]={:02x?}\n\
+             Gold[{}..{}]={:02x?}",
+            bytes.len(), golden.len(), diff,
+            ctx, (ctx+32).min(bytes.len()),
+            &bytes[ctx..(ctx+32).min(bytes.len())],
+            ctx, (ctx+32).min(golden.len()),
+            &golden[ctx..(ctx+32).min(golden.len())],
+        );
+    }
+    // Pass: no panic
+}
+
+/// Round-trip v6 em host: save_model_v6 → load_model_v6 → comparação.
+/// Valida o pipeline completo (writer canônico ↔ loader estrito) sem
+/// depender do modelo 2B — desrisca o boot QEMU v6 (ADR-0085 F2/F4).
+#[cfg(test)]
+#[test]
+fn v6_roundtrip_load() {
+    let hidden = 16usize;
+    let num_layers = 2usize;
+    let num_heads = 2usize;
+    let vocab_size = 32u32;
+    let max_seq = 64usize;
+    let intermediate_size = 32usize;
+    let num_kv_heads = 1usize;
+    let q_dim = 16usize;
+    let kv_head_dim = q_dim / num_heads;
+    let k_dim = num_kv_heads * kv_head_dim;
+    let ffn_group = intermediate_size * q_dim / hidden;
+    let down_out = q_dim;
+
+    // LCG idêntico ao Python (u64 p/ paridade byte-exact)
+    let lcg_state: core::cell::RefCell<u64> = core::cell::RefCell::new(42);
+    let lcg = || -> u32 {
+        let mut s = lcg_state.borrow_mut();
+        *s = (s.wrapping_mul(1103515245).wrapping_add(12345)) & 0x7FFFFFFF;
+        *s as u32
+    };
+    let tern = |rows: usize, cols: usize| -> PackedTernaryTensor {
+        let mut vals = Vec::with_capacity(rows * cols);
+        for _ in 0..rows * cols {
+            let r = lcg() % 3;
+            vals.push(match r { 0 => 1i8, 1 => -1i8, _ => 0i8 });
+        }
+        PackedTernaryTensor { shape: (rows, cols), packed_data: PackedTernaryTensor::pack_weights(&vals) }
+    };
+    let rms = |n: usize| -> Vec<f32> {
+        (0..n).map(|_| 0.5 + (lcg() % 100) as f32 / 100.0).collect()
+    };
+
+    let embed = tern(hidden, vocab_size as usize);
+    let embed_scale = 1.5f32;
+    let mut layers = Vec::with_capacity(num_layers);
+    for li in 0..num_layers {
+        layers.push(LayerWeights {
+            rms_attn: rms(hidden), q: tern(hidden, q_dim), q_scale: 0.5 + li as f32 * 0.25,
+            k: tern(hidden, k_dim), k_scale: 0.75, v: tern(hidden, k_dim), v_scale: 1.25,
+            o: tern(q_dim, hidden), o_scale: 0.9, rms_ffn: rms(hidden),
+            rms_inner_attn: rms(hidden), rms_ffn_norm: rms(intermediate_size),
+            gate: tern(hidden, ffn_group), gate_scale: 1.1,
+            up: tern(hidden, ffn_group), up_scale: 0.8,
+            down: tern(intermediate_size, down_out), down_scale: 1.05,
+            kv_dim: q_dim, num_kv_heads, intermediate_size, ffn_group_size: ffn_group,
+        });
+    }
+    let model = TransformerModel {
+        embed, embed_scale, layers,
+        rms_final: rms(hidden),
+        unembed: tern(hidden, vocab_size as usize), unembed_scale: 0.6,
+        medusa_heads: alloc::vec![MedusaHead { w: tern(hidden, vocab_size as usize), w_scale: 1.3 }],
+        vocab_size, hidden, num_layers, max_seq,
+        num_heads, num_kv_heads, head_dim: kv_head_dim, kv_dim: q_dim,
+        intermediate_size, ffn_group_size: ffn_group,
+        tie_embeddings: false,
+        act_type: 0, embed_type: 0, embed_q6k: None,
+        rope_theta: 10000.0,
+        rope_cos: alloc::vec![0.0; max_seq * kv_head_dim / 2],
+        rope_sin: alloc::vec![0.0; max_seq * kv_head_dim / 2],
+    };
+
+    let bytes = save_model_v6(&model).expect("save_model_v6 None");
+    let view = crate::model::load_model_v6(&bytes).expect("load_model_v6 None");
+    let m = view.as_llm().expect("ModelView não é LLM");
+
+    assert_eq!(m.hidden, hidden);
+    assert_eq!(m.num_layers, num_layers);
+    assert_eq!(m.vocab_size, vocab_size);
+    assert_eq!(m.num_kv_heads, num_kv_heads);
+    assert_eq!(m.intermediate_size, intermediate_size);
+    assert_eq!(m.tie_embeddings, false);
+    assert_eq!(m.act_type, 0, "act_type v6 round-trip");
+    assert_eq!(m.embed_type, 0, "embed_type v6 round-trip");
+    assert_eq!(m.rope_theta, 10000.0);
+    // rms_ffn_norm must be exact intermediate_size (D2 — sem pad)
+    assert_eq!(m.layers[0].rms_ffn_norm.len(), intermediate_size);
+    assert!(tern_eq(&m.embed, &model.embed));
+    assert!(tern_eq(&m.unembed, &model.unembed));
+    assert!(m.embed_scale == 1.5 && m.unembed_scale == 0.6);
 }
 
 pub fn argmax_row(logits: &Tensor, row: usize) -> u32 {

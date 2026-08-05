@@ -227,91 +227,91 @@ def quick_eval(model, X, Yf, Yfw, Ya, Yc, Yn):
     return acc
 
 
-# ─── Export .bitnet v5 (multi-head) ─────────────────────────────────────
+# ─── Export .bitnet v6 (multi-head, ADR-0085 model_type=1) ──────────────
 
-MAGIC = 0xBE11BE11
+import struct as _struct
+from tools.bitnet_writer import (
+    write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+    MODEL_HWEXPERT, ACT_SILU, EMBED_TERNARY, pack_ternary,
+)
 
-def wv(f, v):
-    a = list(v.detach().cpu().numpy().reshape(-1))
-    f.write(struct.pack("<I", len(a)))
-    for x in a:
-        f.write(struct.pack("<f", float(x)))
+MAGIC = 0xBE11BE11  # preserved for legacy readers
 
-def qpack(arr):
-    p = bytearray()
-    for i in range(0, len(arr), 4):
-        b = 0
-        for j in range(4):
-            if i+j < len(arr):
-                v = float(arr[i+j])
-                bits = 0b01 if v > 0.5 else (0b10 if v < -0.5 else 0b00)
-                b |= bits << (j*2)
-        p.append(b)
-    return bytes(p)
-
-def wt(f, t):
-    t = t.detach().cpu().numpy().reshape(-1)
-    f.write(struct.pack("<I", len(t)))
-    f.write(struct.pack("<I", 0))  # scale = 0
-    f.write(qpack(t))
 
 def export_v4(model, path, tok=b"hwexpert_v4"):
-    """Exporta modelo v4 multi-head para .bitnet v5."""
+    """Exporta modelo v4 multi-head para .bitnet v6 (ADR-0085 model_type=1)."""
+    import os as _os
     h, nl, nh, ff = model.h, model.nl, model.nh, model.ff
     qd = h // nh
 
-    # Header v5 (multi-head)
+    # num_params informativo
+    num_params = h * model.v  # embed
+    num_params += ff * nl     # rms_ffn_norm (intermediate_size)
+    per_layer = (h * h * 4 + h * ff * 3)  # q,k,v,o,g,u,d (h,h) shapes
+    num_params += per_layer * nl
+    num_params += h * 17 + h * 8 + h * 9 + h * 10 + h * 9  # 5 heads
+
+    # feat: 0 (rms_inner_attn and rms_ffn_norm are placeholder ones)
+    feat = compute_feat(False, False, False)
+
     with open(path, "wb") as f:
-        # Magic + version
-        f.write(struct.pack("<I", MAGIC))
-        f.write(struct.pack("<H", 5))  # v5 = multi-head
+        write_header_v6(
+            f,
+            model_type=MODEL_HWEXPERT,
+            num_params=num_params,
+            hidden=h,
+            layers=nl,
+            heads=nh,
+            vocab=model.v,
+            max_seq=16,
+            intermediate=ff,
+            kv_heads=nh,
+            q_dim=qd,
+            medusa=0,
+            tie=False,
+            act_type=ACT_SILU,
+            embed_type=EMBED_TERNARY,
+            feat=feat,
+        )
 
-        # Params count (backbone only, heads are small)
-        np_ = h * model.v + nl * (4*h*h + 3*h*ff + 2*h + qd) + h * model.v
-        f.write(struct.pack("<I", np_))
-        f.write(struct.pack("<H", h))
-        f.write(struct.pack("<H", nl))
-        f.write(struct.pack("<H", nh))
-        f.write(struct.pack("<I", model.v))
-        f.write(struct.pack("<H", 16))  # max_seq
-        f.write(struct.pack("<H", ff))
-        f.write(struct.pack("<H", nh))  # num_kv_heads
-        f.write(struct.pack("<H", qd))
-        f.write(struct.pack("<I", 0))   # num_medusa
+        # Embed (ternary + scale)
+        emb = model.embed.weight.detach().cpu().numpy().T  # (hidden, vocab) int8
+        write_embed(f, emb.astype(np.int8), EMBED_TERNARY, scale=1.0)
 
-        # Multi-head marker e configuração dos heads
-        f.write(b"MH\x00\x00")          # tie_flag = "MH" = multi-head marker
-        f.write(b"\x05")                # tok_type: 5 = multi-head structured
-        f.write(struct.pack("<I", len(tok)))
-        f.write(tok)
-
-        # Layout byte: bitmask de heads presentes
-        # bit0=family, bit1=fw, bit2=agent, bit3=caps, bit4=next
-        f.write(b"\x1F")  # 0b11111 = todos os 5 heads
-
-        # Escreve backbone (embed + layers)
-        wt(f, model.embed.weight.T)
+        # Layers
         for i in range(nl):
-            wv(f, model.rms_a[i]); wv(f, model.rms_f[i])
-            wv(f, torch.ones(h)); wv(f, torch.ones(ff))
-            wt(f, model.q[i].weight.T); wt(f, model.k[i].weight.T)
-            wt(f, model.v_[i].weight.T); wt(f, model.o[i].weight.T)
-            wt(f, model.g[i].weight.T); wt(f, model.u[i].weight.T)
-            wt(f, model.d[i].weight.T)
-            wv(f, torch.tensor([10000.**(-2.*j/32) for j in range(16)]))
+            # rms_attn, rms_ffn (real values)
+            write_rms(f, model.rms_a[i].detach().cpu().numpy())
+            write_rms(f, model.rms_f[i].detach().cpu().numpy())
+            # rms_inner_attn, rms_ffn_norm (placeholder ones → feat bit0/bit1 = 0)
+            write_rms(f, torch.ones(h).detach().cpu().numpy())
+            write_rms(f, torch.ones(ff).detach().cpu().numpy())
 
-        # RMS final
-        wv(f, model.rms_o)
+            # 7 weight tensors: q,k,v,o,gate,up,down
+            tensors = [
+                (model.q[i].weight, h, h),
+                (model.k[i].weight, h, h),
+                (model.v_[i].weight, h, h),
+                (model.o[i].weight, h, h),
+                (model.g[i].weight, h, ff),
+                (model.u[i].weight, h, ff),
+                (model.d[i].weight, ff, h),
+            ]
+            for wt_t, rows, cols in tensors:
+                wt_np = wt_t.detach().cpu().numpy().T.ravel()
+                write_ternary(f, wt_np.astype(np.int8), scale=1.0)
 
-        # 5 heads em vez de unembed
-        wt(f, model.family_head.weight.T)
-        wt(f, model.fw_head.weight.T)
-        wt(f, model.agent_head.weight.T)
-        wt(f, model.caps_head.weight.T)
-        wt(f, model.next_head.weight.T)
+        # rms_final
+        write_rms(f, model.rms_o.detach().cpu().numpy())
 
-    size_kb = os.path.getsize(path) // 1024
-    print(f"  [OK] {path} ({size_kb} KB, v5 multi-head)")
+        # 5 heads (replacing unembed)
+        for head in [model.family_head, model.fw_head, model.agent_head,
+                      model.caps_head, model.next_head]:
+            h_np = head.weight.detach().cpu().numpy().T.ravel()
+            write_ternary(f, h_np.astype(np.int8), scale=1.0)
+
+    size_kb = _os.path.getsize(path) // 1024
+    print(f"  [OK] {path} ({size_kb} KB, v6 multi-head)")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────

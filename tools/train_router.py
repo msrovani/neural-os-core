@@ -559,41 +559,33 @@ def top2(probs_row, names):
 
 
 # ---------------------------------------------------------------------------
-# Export — byte-exact ROUTER.BITNET (v3)
+# Export — byte-exact ROUTER.BITNET (v6, ADR-0085 model_type=2)
 # ---------------------------------------------------------------------------
 def quantize(W):
     return np.clip(np.round(W), -1.0, 1.0).astype(np.int8)
 
 
 def export_bitnet(embed, W, path):
+    """Export router v6 (ADR-0085 model_type=2): posicional, sem names/tags."""
+    from tools.bitnet_writer import MAGIC, MODEL_ROUTER
     Wq = quantize(W)
     embed_bytes = embed.astype("<f4").tobytes()
     wbytes = Wq.tobytes()  # row-major (HIDDEN, N_EXPERTS) i8
 
     out = bytearray()
-    out += struct.pack("<IIIII", 0xBE11BE11, 3, VOCAB, HIDDEN, 1)
-    mt = b"trinity_router"
-    out += mt + b"\x00" * (16 - len(mt))
-    out += struct.pack("<I", 2)
+    # Preamble: magic + version + num_params u64 + model_type + reserved
+    out += struct.pack("<I", MAGIC)         # 0:  magic
+    out += struct.pack("<H", 6)             # 4:  version
+    out += struct.pack("<Q", 0)             # 6:  num_params u64 (informativo)
+    out += struct.pack("<B", MODEL_ROUTER)  # 14: model_type=2
+    out += b"\x00\x00\x00"                 # 15: reserved
+    # Router bloco (ADR-0085 §3.3)
+    out += struct.pack("<I", VOCAB)         # 18: vocab u32
+    out += struct.pack("<H", HIDDEN)        # 22: hidden u16
+    out += struct.pack("<H", N_EXPERTS)     # 24: n_experts u16
+    out += embed_bytes                      # 26: embed f32[vocab×hidden]
+    out += wbytes                           #     weight i8[hidden×n_experts]
 
-    # tensor 1: router_embed — n_orig f32, n_quant 0
-    name1 = b"router_embed"
-    out += name1 + b"\x00" * (64 - len(name1))
-    out += struct.pack("<II", VOCAB * HIDDEN, 0)
-    out += embed_bytes
-
-    # tensor 2: router_weight — n_orig i8, n_quant = n_orig
-    name2 = b"router_weight"
-    out += name2 + b"\x00" * (64 - len(name2))
-    out += struct.pack("<II", HIDDEN * N_EXPERTS, HIDDEN * N_EXPERTS)
-    out += wbytes
-
-    # Pad: the Rust reader advances n_orig*4 + n_quant past each tensor
-    # (weight: 1792 + 448). Minimum total per spec:
-    #   52 + (64+8+25344) + (64+8+2240) = 27780
-    min_len = 52 + (64 + 8 + VOCAB * HIDDEN * 4) + (64 + 8 + 2240)
-    if len(out) < min_len:
-        out += b"\x00" * (min_len - len(out))
     path.write_bytes(out)
     return Wq
 

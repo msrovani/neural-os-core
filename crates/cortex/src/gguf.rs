@@ -12,9 +12,9 @@ const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_VERSION: u32 = 3;
 
 /// Super-block size for K-quants (llama.cpp QK_K).
-const QK_K: usize = 256;
+pub(crate) const QK_K: usize = 256;
 const Q4_K_BLOCK_BYTES: usize = 144; // d+dmin+scales[12]+qs[128]
-const Q6_K_BLOCK_BYTES: usize = 210; // ql[128]+qh[64]+scales[16]+d
+pub(crate) const Q6_K_BLOCK_BYTES: usize = 210; // ql[128]+qh[64]+scales[16]+d
 
 #[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types)] // nomes alinhados a ggml/llama.cpp (Q4_K, …)
@@ -325,8 +325,10 @@ pub fn load_gguf(data: &[u8]) -> Result<GgufFile, &'static str> {
 }
 
 /// Converte f16 (u16) para f32
-fn f16_to_f32(half: u16) -> f32 {
-    let sign = ((half >> 15) as f32) * -1.0_f32;
+pub(crate) fn f16_to_f32(half: u16) -> f32 {
+    // sign: bit 0 → +1.0; NUNCA -0.0 (bug latente: 0.0 * -1.0 = -0.0 quebrava
+    // todo dequant Q4_0/Q5_0/Q6_K — d positivo virava -0.0)
+    let sign = if (half >> 15) & 1 == 1 { -1.0_f32 } else { 1.0_f32 };
     let exp = (half >> 10) & 0x1F;
     let mant = half & 0x3FF;
     if exp == 0 {
@@ -580,8 +582,127 @@ pub fn dequantize_q6_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> 
     Tensor::from_row_major((rows, cols), tensor_data)
 }
 
+/// Decode de UM elemento Q6_K no flat index `idx` (ADR-0085 D6 — row-wise).
+/// Evita materializar o tensor inteiro: embed_lookup lê 1 linha/token.
+pub(crate) fn q6k_get(data: &[u8], idx: usize) -> f32 {
+    if data.len() < Q6_K_BLOCK_BYTES { return 0.0; }
+    let block = idx / QK_K;
+    let e = idx % QK_K;
+    let boff = block * Q6_K_BLOCK_BYTES;
+    if boff + Q6_K_BLOCK_BYTES > data.len() { return 0.0; }
+    let ql = &data[boff..boff + 128];
+    let qh = &data[boff + 128..boff + 192];
+    let scales = &data[boff + 192..boff + 208];
+    let d = f16_to_f32(u16::from_le_bytes([data[boff + 208], data[boff + 209]]));
+    // half/lane/l/is — espelha dequantize_q6_k_block
+    let half = e / 128;
+    let rem = e % 128;
+    let lane = rem / 32;   // 0..3 → q1..q4
+    let l = rem % 32;      // 0..31
+    let is = l / 16;       // 0..1
+    let ql_off = half * 64;
+    let qh_off = half * 32;
+    let sc_off = half * 8;
+    let (qb, qs, sn) = match lane {
+        0 => (ql[ql_off + l] & 0xF, (qh[qh_off + l] >> 0) & 3, 0i8),
+        1 => (ql[ql_off + l + 32] & 0xF, (qh[qh_off + l] >> 2) & 3, 0i8),
+        2 => (ql[ql_off + l] >> 4, (qh[qh_off + l] >> 4) & 3, 0i8),
+        _ => (ql[ql_off + l + 32] >> 4, (qh[qh_off + l] >> 6) & 3, 0i8),
+    };
+    let _ = sn; // sn unused — mantido para clareza do layout
+    let q6 = ((qb as i32) | ((qs as i32) << 4)) - 32;
+    let s = scales[sc_off + is + lane * 2] as i8 as f32;
+    d * s * q6 as f32
+}
+
+/// Matmul 1×hidden @ Q6_K(hidden, vocab) → logits[1×vocab] (unembed tied).
+/// Decode por super-bloco (cada bloco 210B → 256 pesos) — ADR-0085 D6.
+pub(crate) fn q6k_matmul_row(data: &[u8], hidden: usize, vocab: usize, x: &[f32]) -> Vec<f32> {
+    let mut out = alloc::vec![0.0f32; vocab];
+    let total = hidden * vocab;
+    let num_blocks = (total + QK_K - 1) / QK_K;
+    let mut scratch = [0.0f32; QK_K];
+    for b in 0..num_blocks {
+        let start = b * Q6_K_BLOCK_BYTES;
+        if start + Q6_K_BLOCK_BYTES > data.len() { break; }
+        if dequantize_q6_k_block(&data[start..start + Q6_K_BLOCK_BYTES], &mut scratch).is_err() {
+            break;
+        }
+        // bloco b cobre flat [b*256, (b+1)*256) → (row, col) row-major
+        let base = b * QK_K;
+        for k in 0..QK_K {
+            let fi = base + k;
+            if fi >= total { break; }
+            let row = fi / vocab;
+            let col = fi % vocab;
+            out[col] += x[row] * scratch[k];
+        }
+    }
+    out
+}
+
 /// Dequantiza bytes brutos conforme tipo GGUF (F32/F16/Q4_0/Q5_0/Q8_0/Q4_K/Q6_K).
-pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Cross-check Rust decoder × Python encoder (ADR-0085 F3).
+    /// golden_q6k.bin gerado por bitnet_writer.py (LCG seed 42, 4×300 f32);
+    /// golden_q6k_ref.f32 é o dequant Python (port de gguf.rs) dos mesmos bytes.
+    #[test]
+    fn q6k_decode_matches_python() {
+        let enc = include_bytes!("../../../tools/golden_q6k.bin");
+        let ref_data = include_bytes!("../../../tools/golden_q6k_ref.f32");
+        let rows = 4usize;
+        let cols = 300usize;
+        let total = rows * cols;
+        assert_eq!(ref_data.len(), total * 4, "ref f32 count");
+
+        let mut max_rel = 0.0f32;
+        let mut first_bad = None;
+        for idx in 0..total {
+            let got = q6k_get(enc, idx);
+            let want = f32::from_le_bytes([
+                ref_data[idx * 4], ref_data[idx * 4 + 1],
+                ref_data[idx * 4 + 2], ref_data[idx * 4 + 3],
+            ]);
+            let denom = want.abs().max(1e-6);
+            let rel = ((got - want).abs() / denom).min(1.0);
+            if rel > max_rel { max_rel = rel; }
+            if rel > 0.05 && first_bad.is_none() {
+                first_bad = Some((idx, got, want));
+            }
+        }
+        if let Some((idx, got, want)) = first_bad {
+            let d = f16_to_f32(u16::from_le_bytes([enc[idx / QK_K * Q6_K_BLOCK_BYTES + 208], enc[idx / QK_K * Q6_K_BLOCK_BYTES + 209]]));
+            let e = idx % QK_K;
+            let half = e / 128;
+            let rem = e % 128;
+            let lane = rem / 32;
+            let l = rem % 32;
+            let ql = enc[idx / QK_K * Q6_K_BLOCK_BYTES + half * 64];
+            let qh = enc[idx / QK_K * Q6_K_BLOCK_BYTES + 128 + half * 32];
+            let sc = enc[idx / QK_K * Q6_K_BLOCK_BYTES + 192 + half * 8 + (l / 16) + lane * 2] as i8;
+            panic!("q6k_get diverge: idx={} got={} want={} d={} ql_byte={} qh_byte={} scale_i8={}",
+                idx, got, want, d, ql, qh, sc);
+        }
+        // Q6_K é lossy; decoder deve casar com o decoder de referência (mesmo layout).
+        assert!(max_rel < 0.05, "q6k_get divergiu do ref: max_rel={:.4}", max_rel);
+
+        // Matmul row-wise: 1×rows @ Q6_K(rows, cols) com x = all-ones
+        let x = vec![1.0f32; rows];
+        let logits = q6k_matmul_row(enc, rows, cols, &x);
+        assert_eq!(logits.len(), cols);
+        // coluna j = soma das linhas = soma do dequant da coluna j
+        for j in 0..cols {
+            let mut want = 0.0f32;
+            for r in 0..rows {
+                want += q6k_get(enc, r * cols + j);
+            }
+            assert!((logits[j] - want).abs() < 1e-3, "matmul col {}: {} vs {}", j, logits[j], want);
+        }
+    }
+}pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
     let ne = rows * cols;
     match qtype {
         GgufType::F32 => {
@@ -770,6 +891,9 @@ impl GgufBackedModel {
             intermediate_size: self.hidden_dim * 4,
             ffn_group_size: self.hidden_dim,
             tie_embeddings: false,
+            act_type: 0,
+            embed_type: 0,
+            embed_q6k: None,
             rope_theta: 10000.0,
             rope_cos: alloc::vec![],
             rope_sin: alloc::vec![],

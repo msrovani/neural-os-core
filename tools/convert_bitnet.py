@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Converte microsoft/bitnet-b1.58-2B-4T safetensors → .bitnet v4 estruturado.
+"""Converte microsoft/bitnet-b1.58-2B-4T safetensors → .bitnet v6 (ADR-0085).
 
-HF guarda projeções uint8 já em packing 2-bit (4 trits/byte) com shape (out/4, in).
-O kernel espera PackedTernaryTensor(k=in, n=out) sem prefixos de comprimento.
+Usa bitnet_writer.py como writer canônico.
 
 Uso: python tools/convert_bitnet.py
 """
@@ -10,72 +9,17 @@ from __future__ import annotations
 
 import json
 import os
-import struct
 from pathlib import Path
 
 import numpy as np
 
+from tools.bitnet_writer import (
+    write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+    MODEL_LLM, ACT_RELU2, EMBED_Q6K,
+)
+
 ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT / "target"
-
-
-def decode_trit(bits: int) -> int:
-    b = bits & 0b11
-    if b == 0b01:
-        return 1
-    if b == 0b10:
-        return -1
-    return 0
-
-
-def encode_trit(v: int) -> int:
-    if v > 0:
-        return 0b01
-    if v < 0:
-        return 0b10
-    return 0b00
-
-
-def unpack_hf_oi(u8: np.ndarray) -> np.ndarray:
-    """HF (out/4, in) uint8 → int8 matrix (out, in). Packing ao longo de `out`."""
-    out4, inn = u8.shape
-    flat = u8.astype(np.uint8).reshape(-1)
-    # 4 trits/byte → códigos 0,1,2 → mapear para 0,+1,-1
-    codes = np.empty((flat.size, 4), dtype=np.uint8)
-    for i in range(4):
-        codes[:, i] = (flat >> (2 * i)) & 3
-    lut = np.array([0, 1, -1, 0], dtype=np.int8)
-    trits = lut[codes]  # (nbytes, 4)
-    return trits.reshape(out4, inn, 4).transpose(0, 2, 1).reshape(out4 * 4, inn)
-
-
-def pack_kn(weights_oi: np.ndarray) -> bytes:
-    """(out, in) → packed row-major (in, out) no formato do kernel."""
-    out, inn = weights_oi.shape
-    # kn[t, j] = oi[j, t]  → flatten row-major (in, out)
-    kn = np.ascontiguousarray(weights_oi.T)  # (in, out)
-    flat = kn.reshape(-1)
-    n = flat.size
-    packed = bytearray((n + 3) // 4)
-    for i, v in enumerate(flat):
-        packed[i // 4] |= encode_trit(int(v)) << ((i % 4) * 2)
-    return bytes(packed)
-
-
-def pack_kn_fast(weights_oi: np.ndarray) -> bytes:
-    """Versão vetorizada de pack_kn."""
-    kn = np.ascontiguousarray(weights_oi.T).reshape(-1)
-    n = kn.size
-    # map -1,0,1 → 2,0,1
-    bits = np.zeros(n, dtype=np.uint8)
-    bits[kn > 0] = 0b01
-    bits[kn < 0] = 0b10
-    pad = (-n) % 4
-    if pad:
-        bits = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
-    b = bits.reshape(-1, 4)
-    packed = b[:, 0] | (b[:, 1] << 2) | (b[:, 2] << 4) | (b[:, 3] << 6)
-    return packed.tobytes()
 
 
 def absmean_quantize(mat_f: np.ndarray) -> np.ndarray:
@@ -86,8 +30,22 @@ def absmean_quantize(mat_f: np.ndarray) -> np.ndarray:
     return np.clip(q, -1, 1).astype(np.int8)
 
 
-def write_f32_vec(f, arr: np.ndarray) -> None:
-    f.write(np.ascontiguousarray(arr, dtype=np.float32).tobytes())
+def unpack_hf_oi(u8: np.ndarray) -> np.ndarray:
+    """HF (out/4, in) uint8 → int8 matrix (out, in). Packing ao longo de `out`."""
+    out4, inn = u8.shape
+    flat = u8.astype(np.uint8).reshape(-1)
+    codes = np.empty((flat.size, 4), dtype=np.uint8)
+    for i in range(4):
+        codes[:, i] = (flat >> (2 * i)) & 3
+    lut = np.array([0, 1, -1, 0], dtype=np.int8)
+    trits = lut[codes]
+    return trits.reshape(out4, inn, 4).transpose(0, 2, 1).reshape(out4 * 4, inn)
+
+
+def hf_proj_packed(state: dict, name: str) -> np.ndarray:
+    """Unpack HF 2-bit packed projection → int8 (out, in) row-major."""
+    u8 = state[name].cpu().numpy().astype(np.uint8)
+    return unpack_hf_oi(u8)
 
 
 def convert() -> None:
@@ -102,7 +60,7 @@ def convert() -> None:
     import torch
     from safetensors.torch import load_file
 
-    print(f"[LOAD] {safetensors_path} ({os.path.getsize(safetensors_path)/1e9:.2f}GB)")
+    print(f"[LOAD] {safetensors_path} ({os.path.getsize(safetensors_path) / 1e9:.2f}GB)")
     state = load_file(str(safetensors_path))
     with open(config_path, encoding="utf-8") as cf:
         cfg = json.load(cf)
@@ -116,7 +74,6 @@ def convert() -> None:
     num_kv_heads = int(cfg.get("num_key_value_heads", num_heads))
     tie = bool(cfg.get("tie_word_embeddings", True))
 
-    # HF packed (out/4,in): q out = num_heads * head_dim_hf = 2560
     q0 = state["model.layers.0.self_attn.q_proj.weight"]
     q_dim = int(q0.shape[0]) * 4  # 640*4 = 2560
     head_dim = q_dim // num_heads
@@ -126,91 +83,91 @@ def convert() -> None:
     print(f"  hidden={hidden} L={num_layers} heads={num_heads} kv={num_kv_heads}")
     print(f"  q_dim={q_dim} head_dim={head_dim} k_dim={k_dim} ffn={ffn_group} tie={tie}")
 
-    MAGIC = 0xBE11BE11
-    # feat: bit0=inner_attn_ln, bit1=ffn_layernorm, bit2=RoPE
-    # Sem rope_theta no stream → nao setar bit2 (reader falharia no EOF).
-    feat = 0x03
+    # num_params informativo (ADR-0085)
+    num_params = hidden * vocab_size  # embed
+    num_params += intermediate_size * num_layers  # rms_ffn_norm
+    per_layer = (hidden * q_dim + hidden * k_dim * 2 + q_dim * hidden
+                 + hidden * ffn_group * 2 + intermediate_size * q_dim)
+    num_params += per_layer * num_layers
+    if not tie:
+        num_params += hidden * vocab_size  # unembed
+
+    # feat: bit0=rms_inner_attn, bit1=rms_ffn_norm, bit2=theta (500000)
+    has_inner = True   # 2B4T has attn_sub_norm
+    has_ffn = True     # 2B4T has ffn_sub_norm
+    has_theta = True   # theta=500000
+    feat = compute_feat(has_inner, has_ffn, has_theta)
+    # ponytail: embed_type=TERNARY for now; upgrade to Q6_K in Phase 5 (ADR-0085 F3)
+    # when encoder is implemented. 2B4T embed decay Q6_K=17.149 vs BF16=17.109 PPL.
 
     with open(output_path, "wb") as f:
-        f.write(struct.pack("<I", MAGIC))
-        f.write(struct.pack("<H", 4))
-        f.write(struct.pack("<I", 849787090))
-        f.write(struct.pack("<H", hidden))
-        f.write(struct.pack("<H", num_layers))
-        f.write(struct.pack("<H", num_heads))
-        f.write(struct.pack("<I", vocab_size))
-        f.write(struct.pack("<H", min(max_seq, 65535)))
-        f.write(struct.pack("<H", intermediate_size))
-        f.write(struct.pack("<H", num_kv_heads))
-        f.write(struct.pack("<H", q_dim))
-        f.write(struct.pack("<I", 0))  # medusa
-        f.write(b"TIED" if tie else b"\x00\x00\x00\x00")
-        f.write(struct.pack("B", 1))
-        tok = b"CHAR:32-126"
-        f.write(struct.pack("<I", len(tok)))
-        f.write(tok)
-        f.write(struct.pack("B", feat))
+        # Header v6 (ADR-0085 §2)
+        write_header_v6(
+            f,
+            model_type=MODEL_LLM,
+            num_params=num_params,
+            hidden=hidden,
+            layers=num_layers,
+            heads=num_heads,
+            vocab=vocab_size,
+            max_seq=min(max_seq, 65535),
+            intermediate=intermediate_size,
+            kv_heads=num_kv_heads,
+            q_dim=q_dim,
+            medusa=0,
+            tie=tie,
+            act_type=ACT_RELU2,       # 2B4T uses ReLU² (ADR-0084 M1)
+            embed_type=EMBED_Q6K,     # embed BF16 → Q6_K (ADR-0085 §10.1, M4)
+            feat=feat,
+        )
 
-        # embed (vocab, hidden) bf16 → quantize → store as (hidden, vocab)
-        emb = state["model.embed_tokens.weight"].to(torch.float32).numpy()
-        emb_q = absmean_quantize(emb)  # (vocab, hidden)
-        # our layout (hidden, vocab): transpose then pack
-        emb_pack = pack_kn_fast(emb_q.T)  # pack_kn expects (out,in)=(vocab,hidden)? 
-        # Wait: pack_kn(weights_oi) with oi=(out,in), stores (in,out).
-        # embed_lookup wants (hidden, vocab): get_weight(row*vocab+tok)
-        # matmul tie: (k=hidden, n=vocab). So shape (hidden, vocab) = (in_for_logits?, vocab)
-        # store as packed (hidden, vocab): treat as oi with out=vocab, in=hidden → pack gives (hidden,vocab) ✓
-        # emb_q is (vocab,hidden)=(out,in) for that convention:
-        emb_pack = pack_kn_fast(emb_q)  # (vocab, hidden) → packed (hidden, vocab)
-        assert len(emb_pack) == (hidden * vocab_size + 3) // 4
-        f.write(emb_pack)
-        print(f"  [T] embed {emb.shape} -> {len(emb_pack)//1024}KB")
-
-        def hf_proj(name: str) -> bytes:
-            u8 = state[name].cpu().numpy().astype(np.uint8)
-            oi = unpack_hf_oi(u8)
-            return pack_kn_fast(oi)
+        # embed (vocab, hidden) BF16 → Q6_K (hidden, vocab) row-major.
+        # write_embed ravel row-major → passar (hidden, vocab) transposto.
+        emb = state["model.embed_tokens.weight"].to(torch.float32).numpy()  # (vocab, hidden)
+        write_embed(f, emb.T, EMBED_Q6K, scale=1.0)
+        print(f"  [T] embed {emb.shape} → Q6_K {(emb.size + 255) // 256 * 210} bytes")
 
         for li in range(num_layers):
             p = f"model.layers.{li}"
-            # RMS f32
-            write_f32_vec(f, state[f"{p}.input_layernorm.weight"].to(torch.float32).numpy())
-            write_f32_vec(f, state[f"{p}.post_attention_layernorm.weight"].to(torch.float32).numpy())
-            write_f32_vec(f, state[f"{p}.self_attn.attn_sub_norm.weight"].to(torch.float32).numpy())
-            write_f32_vec(f, state[f"{p}.mlp.ffn_sub_norm.weight"].to(torch.float32).numpy())
+            # RMS norms — ordem: rms_attn, rms_ffn, rms_inner_attn, rms_ffn_norm
+            write_rms(f, state[f"{p}.input_layernorm.weight"].to(torch.float32).numpy())
+            write_rms(f, state[f"{p}.post_attention_layernorm.weight"].to(torch.float32).numpy())
+            write_rms(f, state[f"{p}.self_attn.attn_sub_norm.weight"].to(torch.float32).numpy())
+            write_rms(f, state[f"{p}.mlp.ffn_sub_norm.weight"].to(torch.float32).numpy())
 
-            q = hf_proj(f"{p}.self_attn.q_proj.weight")
-            k = hf_proj(f"{p}.self_attn.k_proj.weight")
-            v = hf_proj(f"{p}.self_attn.v_proj.weight")
-            o = hf_proj(f"{p}.self_attn.o_proj.weight")
-            gate = hf_proj(f"{p}.mlp.gate_proj.weight")
-            up = hf_proj(f"{p}.mlp.up_proj.weight")
-            down = hf_proj(f"{p}.mlp.down_proj.weight")
+            # 7 weight tensors: q, k, v, o, gate, up, down
+            # Sempre com f32 scale (ADR-0085 D1); scale=1.0 p/ HF-proj (já ternário)
+            tensors = [
+                (hf_proj_packed(state, f"{p}.self_attn.q_proj.weight"), hidden, q_dim),
+                (hf_proj_packed(state, f"{p}.self_attn.k_proj.weight"), hidden, k_dim),
+                (hf_proj_packed(state, f"{p}.self_attn.v_proj.weight"), hidden, k_dim),
+                (hf_proj_packed(state, f"{p}.self_attn.o_proj.weight"), q_dim, hidden),
+                (hf_proj_packed(state, f"{p}.mlp.gate_proj.weight"), hidden, ffn_group),
+                (hf_proj_packed(state, f"{p}.mlp.up_proj.weight"), hidden, ffn_group),
+                (hf_proj_packed(state, f"{p}.mlp.down_proj.weight"), intermediate_size, q_dim),
+            ]
+            for mat, rows, cols in tensors:
+                write_ternary(f, mat.ravel(), scale=1.0)
 
-            assert len(q) == (hidden * q_dim + 3) // 4
-            assert len(k) == (hidden * k_dim + 3) // 4
-            assert len(v) == (hidden * k_dim + 3) // 4
-            assert len(o) == (q_dim * hidden + 3) // 4
-            assert len(gate) == (hidden * ffn_group + 3) // 4
-            assert len(up) == (hidden * ffn_group + 3) // 4
-            assert len(down) == (intermediate_size * q_dim + 3) // 4
-
-            f.write(q)
-            f.write(k)
-            f.write(v)
-            f.write(o)
-            f.write(gate)
-            f.write(up)
-            f.write(down)
             if li % 5 == 0 or li + 1 == num_layers:
-                print(f"  [L] {li}/{num_layers} off={f.tell()//1024}KB")
+                print(f"  [L] {li}/{num_layers} off={f.tell() // 1024}KB")
 
         # rms_final
-        write_f32_vec(f, state["model.norm.weight"].to(torch.float32).numpy())
-        # tied → no unembed
+        write_rms(f, state["model.norm.weight"].to(torch.float32).numpy())
+
+        # theta (feat bit2 = has_theta)
+        theta = float(cfg.get("rope_theta", 10000.0))
+        import struct
+        f.write(struct.pack("<f", theta))
+
+        # tied → no unembed (ADR-0085 D3)
+        if not tie:
+            # ponytail: tied é True p/ 2B4T, este caminho não executa
+            pass
 
     sz = os.path.getsize(output_path)
-    print(f"\n[OK] {output_path}: {sz:,} bytes ({sz/1024/1024:.1f} MB)")
+    print(f"\n[OK] {output_path}: {sz:,} bytes ({sz / 1024 / 1024:.1f} MB)")
+    print(f"  v6: act=RELU2 embed=TERNARY feat=0x{feat:02x} tie={tie} theta={theta}")
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ pub mod bpe;
 pub mod burn_flex;
 pub mod cortex;
 pub mod delta;
+pub mod model;
 pub mod model_hub;
 pub mod model_fit;
 pub mod install_adviser;

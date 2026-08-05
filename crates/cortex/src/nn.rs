@@ -52,6 +52,12 @@ pub fn silu(x: f32) -> f32 {
     x / (1.0 + libm::expf(-x))
 }
 
+/// ReLU² — ativação FFN do 2B4T (ADR-0084 M1): `max(x,0)²`. Só mul, sem exp.
+pub fn relu2(x: f32) -> f32 {
+    let r = if x > 0.0 { x } else { 0.0 };
+    r * r
+}
+
 pub fn rms_norm(tensor: &mut Tensor, weight: &[f32], eps: f32) {
     if weight.is_empty() { return; }
     let len = tensor.data.len() as f32;

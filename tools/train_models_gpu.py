@@ -17,6 +17,11 @@ from pathlib import Path
 
 import numpy as np
 
+from bitnet_writer import (
+    write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+    MODEL_LLM, ACT_SILU, EMBED_TERNARY,
+)
+
 TARGET = Path(__file__).parent / "target"
 TARGET.mkdir(exist_ok=True)
 
@@ -91,6 +96,18 @@ def quantize_ternary(arr_1d, threshold=0.5):
     packed = b[:, 0] | (b[:, 1] << 2) | (b[:, 2] << 4) | (b[:, 3] << 6)
     return packed.tobytes()
 
+def quantize_ternary_i8(arr, threshold=0.5):
+    """Quantiza float -> int8 {-1,0,1} (mesma matematica de quantize_ternary)."""
+    if hasattr(arr, "detach"):
+        a = arr.detach().float().cpu().numpy()
+    else:
+        a = np.asarray(arr, dtype=np.float32)
+    flat = np.ascontiguousarray(a).reshape(-1)
+    q = np.zeros(flat.size, dtype=np.int8)
+    q[flat > threshold] = 1
+    q[flat < -threshold] = -1
+    return q.reshape(a.shape)
+
 def write_tensor(f, tensor_f32):
     if hasattr(tensor_f32, "detach"):
         t = tensor_f32.detach().float().cpu().numpy().reshape(-1)
@@ -149,32 +166,48 @@ class BitNetLM(nn.Module):
             h = h * self.rms_ffn[i]
             g = self.gate_proj[i](h)
             u = self.up_proj[i](h)
-            h = self.down_proj[i](g * u)
+            # ADR-0085 §10.3: silu(g) * u — ativa act_type=0 no export (era g * u).
+            # ⚠️ TinyStories/RustCoder precisam de RETREINO apos esta mudanca.
+            h = self.down_proj[i](F.silu(g) * u)
             h = h + residual
         h = h * self.rms_final
         return self.unembed(h)
 
     def export_bitnet(self, path, tok_data=b""):
+        hidden, layers, heads, vocab, ffn = self.hidden, self.num_layers, self.num_heads, self.vocab, self.ffn_dim
+        q_dim = hidden  # v6: dim total da projecao Q (Linear(hidden, hidden))
+        kv_heads = heads
+        k_dim = kv_heads * (q_dim // heads)  # == hidden (k/v projetam para hidden)
+        num_params = (hidden * vocab +                  # embed
+                      ffn * layers +                    # rms_ffn_norm (D2: ffn_dim)
+                      layers * (hidden * q_dim + hidden * k_dim * 2 + q_dim * hidden +
+                                hidden * ffn * 2 + ffn * q_dim) +
+                      hidden * vocab)                   # unembed (not tied)
+        feat = compute_feat(True, True, True)  # rms_inner + rms_ffn_norm + theta
         with open(path, "wb") as f:
-            write_header(f, self.hidden, self.num_layers, self.num_heads,
-                        self.vocab, 64, self.ffn_dim,
-                        self.num_heads, self.hidden // self.num_heads, 0, False, tok_data)
-            write_tensor(f, self.embed.weight.data.T)
-            for i in range(self.num_layers):
-                write_vec_f32(f, self.rms_attn[i].data.cpu().numpy())
-                write_vec_f32(f, self.rms_ffn[i].data.cpu().numpy())
-                write_vec_f32(f, self.rms_inner[i].data.cpu().numpy())
-                write_vec_f32(f, self.rms_ffn_norm[i].data.cpu().numpy())
-                write_tensor(f, self.q_proj[i].weight.data.T)
-                write_tensor(f, self.k_proj[i].weight.data.T)
-                write_tensor(f, self.v_proj[i].weight.data.T)
-                write_tensor(f, self.o_proj[i].weight.data.T)
-                write_tensor(f, self.gate_proj[i].weight.data.T)
-                write_tensor(f, self.up_proj[i].weight.data.T)
-                write_tensor(f, self.down_proj[i].weight.data.T)
-                rope = np.array([10000.0 ** (-2.0 * i / 32) for i in range(16)])
-                write_vec_f32(f, rope)
-            write_tensor(f, self.unembed.weight.data.T)
+            write_header_v6(
+                f, model_type=MODEL_LLM, num_params=num_params,
+                hidden=hidden, layers=layers, heads=heads, vocab=vocab,
+                max_seq=64, intermediate=ffn, kv_heads=kv_heads, q_dim=q_dim,
+                medusa=0, tie=False, tok_data=tok_data,
+                act_type=ACT_SILU, embed_type=EMBED_TERNARY, feat=feat,
+            )
+            write_embed(f, quantize_ternary_i8(self.embed.weight.data.T), EMBED_TERNARY, 1.0)
+            for i in range(layers):
+                write_rms(f, self.rms_attn[i].data.cpu().numpy())
+                write_rms(f, self.rms_ffn[i].data.cpu().numpy())
+                write_rms(f, self.rms_inner[i].data.cpu().numpy())       # feat bit0
+                write_rms(f, self.rms_ffn_norm[i].data.cpu().numpy())    # feat bit1 (ffn_dim)
+                write_ternary(f, quantize_ternary_i8(self.q_proj[i].weight.data.T), 1.0)
+                write_ternary(f, quantize_ternary_i8(self.k_proj[i].weight.data.T), 1.0)
+                write_ternary(f, quantize_ternary_i8(self.v_proj[i].weight.data.T), 1.0)
+                write_ternary(f, quantize_ternary_i8(self.o_proj[i].weight.data.T), 1.0)
+                write_ternary(f, quantize_ternary_i8(self.gate_proj[i].weight.data.T), 1.0)
+                write_ternary(f, quantize_ternary_i8(self.up_proj[i].weight.data.T), 1.0)
+                write_ternary(f, quantize_ternary_i8(self.down_proj[i].weight.data.T), 1.0)
+            write_rms(f, self.rms_final.data.cpu().numpy())
+            write_ternary(f, quantize_ternary_i8(self.unembed.weight.data.T), 1.0)
+            f.write(struct.pack("<f", 10000.0))  # theta (feat bit2) — rope base unica no fim
         print(f"  [OK] Exportado: {path} ({os.path.getsize(path)//1024}KB)")
 
 # ─── RustCoder ─────────────────────────────────────────────────────────────

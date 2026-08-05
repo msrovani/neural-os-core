@@ -22,7 +22,6 @@ import argparse
 import json
 import os
 import shutil
-import struct
 import sys
 from pathlib import Path
 
@@ -42,6 +41,11 @@ TARGET.mkdir(exist_ok=True)
 CACHE.mkdir(exist_ok=True)
 
 sys.path.insert(0, str(ROOT / "tools"))
+
+from bitnet_writer import (
+    write_header_v6, write_embed, write_rms, write_ternary, compute_feat,
+    MODEL_LLM, ACT_SILU, EMBED_TERNARY, EMBED_Q6K,
+)
 
 # GTX 1050 (sm_61): precisa torch+cu118/cu126 — cu130 detecta GPU mas nao tem kernels.
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -79,23 +83,6 @@ if DEVICE.type == "cuda":
 else:
     print("[WARN] GPU inutilizavel — use cu126 (sm_61). Treino CPU so com --allow-cpu")
 
-MAGIC = 0xBE11BE11
-
-
-def encode_trit_vec(kn: np.ndarray) -> bytes:
-    flat = np.ascontiguousarray(kn, dtype=np.int8).reshape(-1)
-    n = flat.size
-    bits = np.zeros(n, dtype=np.uint8)
-    bits[flat > 0] = 0b01
-    bits[flat < 0] = 0b10
-    pad = (-n) % 4
-    if pad:
-        bits = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
-    b = bits.reshape(-1, 4)
-    packed = b[:, 0] | (b[:, 1] << 2) | (b[:, 2] << 4) | (b[:, 3] << 6)
-    return packed.tobytes()
-
-
 def absmean_quantize_t(t: torch.Tensor) -> np.ndarray:
     """GPU absmean â†’ int8 {-1,0,1}."""
     x = t.detach().to(DEVICE, dtype=torch.float32)
@@ -104,29 +91,19 @@ def absmean_quantize_t(t: torch.Tensor) -> np.ndarray:
     return q
 
 
-def write_f32(f, arr: np.ndarray) -> None:
-    f.write(np.ascontiguousarray(arr, dtype=np.float32).tobytes())
-
-
-def write_header_v4(f, *, hidden, num_layers, num_heads, vocab, max_seq,
-                    intermediate, num_kv, q_dim, tie, tok=b"CHAR:32-126", feat=0x03):
-    f.write(struct.pack("<I", MAGIC))
-    f.write(struct.pack("<H", 4))
-    f.write(struct.pack("<I", 0))  # placeholder params
-    f.write(struct.pack("<H", hidden))
-    f.write(struct.pack("<H", num_layers))
-    f.write(struct.pack("<H", num_heads))
-    f.write(struct.pack("<I", vocab))
-    f.write(struct.pack("<H", min(max_seq, 65535)))
-    f.write(struct.pack("<H", intermediate))
-    f.write(struct.pack("<H", num_kv))
-    f.write(struct.pack("<H", q_dim))
-    f.write(struct.pack("<I", 0))
-    f.write(b"TIED" if tie else b"\x00\x00\x00\x00")
-    f.write(struct.pack("B", 1))
-    f.write(struct.pack("<I", len(tok)))
-    f.write(tok)
-    f.write(struct.pack("B", feat))
+def _v6_num_params(hidden, vocab, layers, intermediate, q_dim, k_dim, tied):
+    """Parametros informacionais do header v6 (mesma contagem do writer canonico)."""
+    n = hidden * vocab  # embed
+    n += intermediate * layers  # rms_ffn_norm (D2: intermediate)
+    per = (hidden * q_dim              # q
+           + hidden * k_dim * 2        # k + v
+           + q_dim * hidden            # o
+           + hidden * intermediate * 2  # gate + up
+           + intermediate * q_dim)      # down
+    n += per * layers
+    if not tied:
+        n += hidden * vocab  # unembed
+    return n
 
 
 def fat_copy(src: Path, fat8: str) -> None:
@@ -189,32 +166,39 @@ def prepare_tinystories(repo: str = "roneneldan/TinyStories-1M", out_name: str =
     print(f"  arch hidden={hidden} L={num_layers} heads={num_heads} vocab={vocab}")
 
     out = TARGET / out_name
+    # MHA full: kv == heads; k_dim = heads * (q_dim // heads) == hidden
+    k_dim = num_heads * (q_dim // num_heads)
+    feat = compute_feat(True, True, False)  # rms_inner + rms_ffn_norm escritos, sem theta
     with open(out, "wb") as f:
-        write_header_v4(
-            f, hidden=hidden, num_layers=num_layers, num_heads=num_heads,
-            vocab=vocab, max_seq=max_seq, intermediate=intermediate,
-            num_kv=num_heads, q_dim=q_dim, tie=True, tok=b"tinystories_v1", feat=0x01,
+        write_header_v6(
+            f, model_type=MODEL_LLM,
+            num_params=_v6_num_params(hidden, vocab, num_layers, intermediate, q_dim, k_dim, tied=True),
+            hidden=hidden, layers=num_layers, heads=num_heads, vocab=vocab,
+            max_seq=max_seq, intermediate=intermediate, kv_heads=num_heads,
+            q_dim=q_dim, medusa=0, tie=True, tok_data=b"tinystories_v1",
+            act_type=ACT_SILU, embed_type=EMBED_TERNARY, feat=feat,
         )
         emb_q = absmean_quantize_t(emb.to(DEVICE) if emb.numel() < 50_000_000 else emb)
-        f.write(encode_trit_vec(np.ascontiguousarray(emb_q.T)))
+        write_embed(f, np.ascontiguousarray(emb_q.T), EMBED_TERNARY, 1.0)
 
-        def pack_oi(oi: np.ndarray, out_d: int, in_d: int) -> bytes:
+        def tern_i8(oi: np.ndarray, out_d: int, in_d: int) -> np.ndarray:
+            """Normaliza (out_d, in_d) e devolve int8 no layout (in_d, out_d)."""
             if oi.shape == (out_d, in_d):
                 pass
             elif oi.shape == (in_d, out_d):
                 oi = oi.T
             else:
                 oi = oi.reshape(out_d, in_d)
-            return encode_trit_vec(np.ascontiguousarray(oi.T))
+            return np.ascontiguousarray(oi.T)
 
         for i in range(num_layers):
             pfx = f"transformer.h.{i}"
             ln1 = get(f"{pfx}.ln_1.weight")
             ln2 = get(f"{pfx}.ln_2.weight")
-            write_f32(f, ln1.float().numpy())
-            write_f32(f, ln2.float().numpy())
-            write_f32(f, np.ones(hidden, dtype=np.float32))
-            write_f32(f, np.ones(hidden, dtype=np.float32))
+            write_rms(f, ln1.float().numpy())                    # rms_attn
+            write_rms(f, ln2.float().numpy())                    # rms_ffn
+            write_rms(f, np.ones(hidden, dtype=np.float32))      # rms_inner_attn (feat bit0)
+            write_rms(f, np.ones(intermediate, dtype=np.float32))  # rms_ffn_norm — CANÔNICO intermediate (D2)
 
             # GPT-Neo: attn.attention.q/k/v_proj ou c_attn
             try:
@@ -245,13 +229,13 @@ def prepare_tinystories(repo: str = "roneneldan/TinyStories-1M", out_name: str =
             up = absmean_quantize_t(fc.to(DEVICE))
             down = absmean_quantize_t(proj.to(DEVICE))
 
-            f.write(pack_oi(q, q_dim, hidden))
-            f.write(pack_oi(k, q_dim, hidden))
-            f.write(pack_oi(v, q_dim, hidden))
-            f.write(pack_oi(o, hidden, q_dim))
-            f.write(pack_oi(gate, intermediate, hidden))
-            f.write(pack_oi(up, intermediate, hidden))
-            f.write(pack_oi(down, hidden, intermediate))
+            write_ternary(f, tern_i8(q, q_dim, hidden), 1.0)
+            write_ternary(f, tern_i8(k, q_dim, hidden), 1.0)
+            write_ternary(f, tern_i8(v, q_dim, hidden), 1.0)
+            write_ternary(f, tern_i8(o, hidden, q_dim), 1.0)
+            write_ternary(f, tern_i8(gate, intermediate, hidden), 1.0)
+            write_ternary(f, tern_i8(up, intermediate, hidden), 1.0)
+            write_ternary(f, tern_i8(down, hidden, intermediate), 1.0)
             if i % 2 == 0:
                 print(f"  [L] {i}/{num_layers}")
             if DEVICE.type == "cuda":
@@ -261,7 +245,7 @@ def prepare_tinystories(repo: str = "roneneldan/TinyStories-1M", out_name: str =
             ln_f = get("transformer.ln_f.weight")
         except KeyError:
             ln_f = torch.ones(hidden)
-        write_f32(f, ln_f.float().numpy())
+        write_rms(f, ln_f.float().numpy())  # rms_final
 
     del state
     if DEVICE.type == "cuda":
@@ -376,6 +360,7 @@ def prepare_bitnet_hf(repo: str, out_name: str, fat8: str):
     tie = bool(cfg.get("tie_word_embeddings", True))
     q_dim = hidden  # MHA full
     head_dim = hidden // num_heads
+    k_dim = num_kv * head_dim
 
     st_path = local / "model.safetensors"
     if not st_path.exists():
@@ -406,16 +391,25 @@ def prepare_bitnet_hf(repo: str, out_name: str, fat8: str):
         return t
 
     with open(out, "wb") as f:
-        write_header_v4(
-            f, hidden=hidden, num_layers=num_layers, num_heads=num_heads,
-            vocab=vocab, max_seq=max_seq, intermediate=intermediate,
-            num_kv=num_kv, q_dim=q_dim, tie=tie, tok=f"bitnet_{repo.split('/')[-1]}".encode()[:32],
-            feat=0x03,
+        embed_type = EMBED_Q6K if vocab > 100_000 else EMBED_TERNARY
+        feat = compute_feat(True, True, False)  # attn_sub_norm + ffn_sub_norm escritos, sem theta
+        write_header_v6(
+            f, model_type=MODEL_LLM,
+            num_params=_v6_num_params(hidden, vocab, num_layers, intermediate, q_dim, k_dim, tied=tie),
+            hidden=hidden, layers=num_layers, heads=num_heads, vocab=vocab,
+            max_seq=max_seq, intermediate=intermediate, kv_heads=num_kv,
+            q_dim=q_dim, medusa=0, tie=tie,
+            tok_data=f"bitnet_{repo.split('/')[-1]}".encode()[:32],
+            act_type=ACT_SILU, embed_type=embed_type, feat=feat,
         )
         emb = get("model.embed_tokens.weight")
-        emb_q = absmean_quantize_t(emb.to(DEVICE) if emb.numel() < 80_000_000 else emb)
-        # (vocab, hidden) â†’ packed (hidden, vocab)
-        f.write(encode_trit_vec(np.ascontiguousarray(emb_q.T)))
+        # (vocab, hidden) -> (hidden, vocab) row-major
+        if embed_type == EMBED_Q6K:
+            emb_f = emb.detach().float().cpu().numpy()
+            write_embed(f, emb_f.T, EMBED_Q6K, 1.0)
+        else:
+            emb_q = absmean_quantize_t(emb.to(DEVICE) if emb.numel() < 80_000_000 else emb)
+            write_embed(f, np.ascontiguousarray(emb_q.T), EMBED_TERNARY, 1.0)
         print(f"  [T] embed done")
 
         for li in range(num_layers):
@@ -425,18 +419,18 @@ def prepare_bitnet_hf(repo: str, out_name: str, fat8: str):
                 f"{p}.input_layernorm.weight",
                 f"{p}.post_attention_layernorm.weight",
             ):
-                write_f32(f, get(nkey).float().numpy())
-            # sub-norms: attn=hidden; ffn=intermediate (alinhado ao cortex load_model)
+                write_rms(f, get(nkey).float().numpy())
+            # sub-norms: attn=hidden; ffn=intermediate (canonical D2)
             if f"{p}.self_attn.attn_sub_norm.weight" in state:
-                write_f32(f, get(f"{p}.self_attn.attn_sub_norm.weight").float().numpy())
+                write_rms(f, get(f"{p}.self_attn.attn_sub_norm.weight").float().numpy())
             else:
-                write_f32(f, np.ones(hidden, dtype=np.float32))
+                write_rms(f, np.ones(hidden, dtype=np.float32))
             if f"{p}.mlp.ffn_sub_norm.weight" in state:
-                write_f32(f, get(f"{p}.mlp.ffn_sub_norm.weight").float().numpy())
+                write_rms(f, get(f"{p}.mlp.ffn_sub_norm.weight").float().numpy())
             else:
-                write_f32(f, np.ones(intermediate, dtype=np.float32))
+                write_rms(f, np.ones(intermediate, dtype=np.float32))
 
-            def proj(name: str, out_d: int, in_d: int) -> bytes:
+            def proj(name: str, out_d: int, in_d: int) -> np.ndarray:
                 w = get(name)
                 # Linear: (out, in)
                 if w.ndim != 2:
@@ -450,22 +444,32 @@ def prepare_bitnet_hf(repo: str, out_name: str, fat8: str):
                     q = absmean_quantize_t(w.float())
                 if q.shape != (out_d, in_d):
                     q = q.reshape(out_d, in_d)
-                return encode_trit_vec(np.ascontiguousarray(q.T))
+                return np.ascontiguousarray(q.T)
 
-            k_dim = num_kv * head_dim
-            f.write(proj(f"{p}.self_attn.q_proj.weight", q_dim, hidden))
-            f.write(proj(f"{p}.self_attn.k_proj.weight", k_dim, hidden))
-            f.write(proj(f"{p}.self_attn.v_proj.weight", k_dim, hidden))
-            f.write(proj(f"{p}.self_attn.o_proj.weight", hidden, q_dim))
-            f.write(proj(f"{p}.mlp.gate_proj.weight", intermediate, hidden))
-            f.write(proj(f"{p}.mlp.up_proj.weight", intermediate, hidden))
-            f.write(proj(f"{p}.mlp.down_proj.weight", hidden, intermediate))
+            write_ternary(f, proj(f"{p}.self_attn.q_proj.weight", q_dim, hidden), 1.0)
+            write_ternary(f, proj(f"{p}.self_attn.k_proj.weight", k_dim, hidden), 1.0)
+            write_ternary(f, proj(f"{p}.self_attn.v_proj.weight", k_dim, hidden), 1.0)
+            write_ternary(f, proj(f"{p}.self_attn.o_proj.weight", hidden, q_dim), 1.0)
+            write_ternary(f, proj(f"{p}.mlp.gate_proj.weight", intermediate, hidden), 1.0)
+            write_ternary(f, proj(f"{p}.mlp.up_proj.weight", intermediate, hidden), 1.0)
+            write_ternary(f, proj(f"{p}.mlp.down_proj.weight", hidden, intermediate), 1.0)
             if DEVICE.type == "cuda":
                 torch.cuda.empty_cache()
             if li % 2 == 0 or li + 1 == num_layers:
                 print(f"  [L] {li+1}/{num_layers} size={f.tell()/1e6:.1f}MB")
 
-        write_f32(f, get("model.norm.weight").float().numpy())
+        write_rms(f, get("model.norm.weight").float().numpy())  # rms_final
+        if not tie:
+            # unembed: lm_head (ou embed, se nao houver lm_head explicito)
+            if "model.lm_head.weight" in state:
+                unemb = get("model.lm_head.weight")
+            else:
+                unemb = emb
+            if unemb.numel() < 80_000_000:
+                unemb_q = absmean_quantize_t(unemb.to(DEVICE))
+            else:
+                unemb_q = absmean_quantize_t(unemb.float())
+            write_ternary(f, np.ascontiguousarray(unemb_q.T), 1.0)
 
     del state
     print(f"  [OK] {out} ({out.stat().st_size/1e6:.1f}MB)")
