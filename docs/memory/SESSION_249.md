@@ -72,10 +72,12 @@
   (`not(target_os="none")`); stub no_std gated — target x86_64-unknown-none desabilita
   -ssse3 no nível do target e o `pmaddubsw` 256-bit exige split LLVM p/ 128-bit
   (SESSION_247: gate por target, não cfg(test)).
-- **Retreino TinyStories/RustCoder**: ✅ **caminho validado (SESSION_249b)** — silu já no
-  forward de treino; smoke CPU (`--rustcoder --epochs 3`, cuda=False nesta máquina)
-  exportou `rust_coder.bitnet` v6 canônico (magic 0xBE11BE11, ver=6, act_type=0, feat=0x07),
-  provando silu→export v6 de ponta a ponta. Convergência completa (200 epochs) exige GPU.
+- **Retreino TinyStories/RustCoder**: ✅ **concluído na GPU (SESSION_249b)** — descoberta
+  chave: a GTX 1050 funciona com o torch 2.13+cu126 (`arch list` inclui sm_61; o drop
+  sm_61 era do cu130, não do cu126). O problema era detecção: sem `CUDA_VISIBLE_DEVICES=0`
+  o torch reporta `device_count=0` apesar da GPU presente. Com ela: GTX 1050 4.3GB.
+  `--rustcoder --epochs 50` (1M params, GPU) → `rust_coder.bitnet` v6 canônico silu
+  (act=0, feat=0x07). Retreino #3 COMPLETO — arquivo pronto para FAT/loader.
 
 ---
 

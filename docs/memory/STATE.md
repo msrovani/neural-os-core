@@ -28,6 +28,15 @@
 #       pmaddubsw 256-bit (gate por target, não cfg(test), SESSION_247). Retreino silu
 #       smoke CPU (cuda=False): rust_coder.bitnet v6 canônico (act=0, feat=0x07) — o
 #       caminho silu→export v6 funciona; convergência completa exige GPU.
+#     ✅ RETREINO RUSTCODER CONCLUÍDO NA GPU (SESSION_249b): GTX 1050 funciona com o
+#       torch 2.13+cu126 — `arch list` inclui sm_61 (o drop sm_61 era do cu130, não do
+#       cu126; AGENTS.md antigo dizia "Treino em CPU" por causa disso). Com
+#       `CUDA_VISIBLE_DEVICES=0`, device_count=1, GTX 1050 4.3GB. 50 epochs (1M params)
+#       → `rust_coder.bitnet` v6 canônico silu (act=0, feat=0x07) exportado. O retreino
+#       #3 está COMPLETO — arquivo pronto para FAT/loader.
+#     ⚠️ Nota: `train_models_gpu.py` já seta `CUDA_VISIBLE_DEVICES=0` (linha 28) — sem
+#       ela, torch reporta device_count=0 ("No CUDA GPUs available") apesar da GPU
+#       presente; com ela, cuda=12.6 + GTX 1050 detectada.
 #
 # ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s248 — HW Expert NN gated off; kernel = tabela+heurística (2026-08-04)

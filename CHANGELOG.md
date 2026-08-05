@@ -53,10 +53,12 @@ Implementação completa das ADRs 0085 (formato canônico + registro K³CHJ) e 0
   só em host/test (`not(target_os="none")`); stub no_std gated (target x86_64-unknown-none
   desabilita -ssse3 → LLVM "split the result" no pmaddubsw 256-bit; SESSION_247: gate por
   target, não cfg(test)). Dispatch conectado atrás do gate — não regride TCG.
-- **Retreino silu (#3):** smoke CPU de `train_models_gpu.py --rustcoder --epochs 3`
-  (cuda=False nesta máquina) validou o caminho silu→export v6 de ponta a ponta:
-  RustCoder 1M params, loss 5.35→1.75, `rust_coder.bitnet` = v6 canônico (magic
-  0xBE11BE11, ver=6, act_type=0, feat=0x07). Convergência completa exige GPU.
+- **Retreino silu (#3):** ✅ **concluído na GPU (SESSION_249b)** — descoberta: a GTX 1050
+  **funciona** com o torch 2.13+cu126 (`arch list` inclui sm_61; o drop sm_61 era do cu130,
+  não do cu126). Sem `CUDA_VISIBLE_DEVICES=0` o torch reporta device_count=0 apesar da GPU
+  presente; com ela: GTX 1050 4.3GB, cuda=12.6. `--rustcoder --epochs 50` (1M params) →
+  `rust_coder.bitnet` v6 canônico silu (act=0, feat=0x07) exportado. Arquivo pronto para
+  FAT/loader. (O script já seta `CUDA_VISIBLE_DEVICES=0` na linha 28.)
 - **Verificação:** 20 testes cortex PASS (incl. 2 W2A8), workspace release 0 erros.
 
 ### SESSION_248: Veredito de Arquitetura — HW Expert v4 NN não identifica hardware além da tabela (2026-08-04)
