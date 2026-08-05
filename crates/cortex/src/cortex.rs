@@ -2411,12 +2411,11 @@ fn load_llm_v6(data: &[u8], off: &mut usize) -> Option<TransformerModel> {
         "v6 LLM h={} L={} q_dim={} vocab={} act={} emb={} feat=0x{:02x}",
         hidden, num_layers, q_dim, vocab_size, act_type, embed_type, feat);
 
-    // Heap resize
-    let file_mb = (data.len() + 1048575) / 1048576;
-    let cur_mb = k_nano::allocator::CURRENT_HEAP_MB.load(core::sync::atomic::Ordering::Relaxed);
-    if file_mb.saturating_mul(2).saturating_add(64) > cur_mb {
-        k_nano::allocator::resize_heap_to_mb(file_mb.saturating_mul(2).saturating_add(64).min(4096));
-    }
+    // Heap: NÃO estimar/resize aqui (premissa AIOS — self-adapting heap).
+    // O bump allocator global cresce sozinho via grow_bump_auto quando a
+    // alocação atinge HEAP_LIMIT (k_nano::allocator). Estimativas hardcoded
+    // (file*2, etc.) eram o bug: estendiam o TALC (que não é o global
+    // allocator) e o extend falhando chamava o handler OOM → hlt no 2B v6.
 
     // Embed (always has scale — ADR-0085 D1). embed_type: 0=ternary, 1=Q6_K, 2=BF16
     let (embed, embed_scale, embed_q6k) = match embed_type {

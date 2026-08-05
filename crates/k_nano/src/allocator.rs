@@ -40,6 +40,13 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
             let next_offset = (aligned_ptr - heap_start) + size;
 
             if next_offset > HEAP_LIMIT.load(Ordering::Relaxed) {
+                // AIOS na veia (premissa 2): heap se auto-adapta à necessidade.
+                // Em vez de retornar null (→ OOM → hlt), mapeia mais frames e
+                // retry. Fallback real de OOM só se o frame allocator esgotar.
+                if grow_bump_auto(next_offset) {
+                    current_offset = self.offset.load(Ordering::Relaxed);
+                    continue;
+                }
                 return core::ptr::null_mut();
             }
 
@@ -59,6 +66,62 @@ unsafe impl GlobalAlloc for LazyBumpAllocator {
         // bump allocator — sem free
     }
 }
+
+/// Auto-crescimento do bump heap (premissa AIOS: self-adapting heap).
+/// Mapeia frames adicionais após o HEAP_BUFFER (.bss.heap) para acomodar
+/// `need` bytes, em blocos de HEAP_GROW_STEP. VERIFICA presença real de cada
+/// página após o mapeamento (map_page_direct falha silenciosamente quando
+/// alloc_pt_frame retorna 0 — não deixar HEAP_LIMIT avançar sem páginas).
+/// Retorna true se `need` ficou coberto; false = OOM real.
+fn grow_bump_auto(need: usize) -> bool {
+    let current_limit = HEAP_LIMIT.load(Ordering::Relaxed);
+    if need <= current_limit {
+        return true; // já coberto
+    }
+    let heap_start = unsafe { HEAP_BUFFER.as_mut_ptr() as usize };
+    let base = VirtAddr::new(crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed));
+    if base.as_u64() == 0 {
+        return false;
+    }
+
+    let want = need.saturating_add(HEAP_GROW_STEP - 1) / HEAP_GROW_STEP * HEAP_GROW_STEP;
+    let extra = want.saturating_sub(current_limit);
+    let diff_pages = extra.div_ceil(4096);
+
+    let mut allocated = 0usize;
+    for _i in 0..diff_pages {
+        // Lock só para allocate_frame — solta ANTES de map_page_direct
+        // (map_page_direct → alloc_pt_frame re-locka; TicketLock não é reentrante).
+        let phys = {
+            let mut g = crate::memory::GLOBAL_ALLOCATOR.lock();
+            match g.as_mut().and_then(|a| a.allocate_frame()) {
+                Some(f) => f.start_address().as_u64(),
+                None => break,
+            }
+        };
+        let virt = VirtAddr::new((heap_start + current_limit + allocated * 4096) as u64);
+        unsafe {
+            map_page_direct(base, virt, phys);
+            // Verificação real (AIOS): mapa apenas se a página ficou PRESENT.
+            if heap_pte_present(base, virt) {
+                allocated += 1;
+            }
+        }
+    }
+    if allocated > 0 {
+        let new_limit = current_limit + allocated * 4096;
+        HEAP_LIMIT.store(new_limit, Ordering::Release);
+        let new_mb = (new_limit + 1024 * 1024 - 1) / (1024 * 1024);
+        CURRENT_HEAP_MB.store(new_mb, Ordering::SeqCst);
+        crate::slog_nano!("HEAP", "BUMP", "auto-grow {} MB → {} MB (need={}MB, {} páginas, AIOS)",
+            current_limit / (1024 * 1024), new_mb, need / (1024 * 1024), allocated);
+    }
+    // Retorna true SÓ se o novo limite cobre `need` (senão o alloc re-tenta).
+    need <= HEAP_LIMIT.load(Ordering::Relaxed)
+}
+
+/// Tamanho mínimo do bloco de auto-crescimento do heap.
+const HEAP_GROW_STEP: usize = 256 * 1024 * 1024; // 256MB por passo
 
 #[cfg(feature = "global-alloc")]
 #[global_allocator]

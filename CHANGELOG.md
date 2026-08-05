@@ -3,6 +3,33 @@
 ## [Unreleased]
 
 
+### SESSION_250: AIOS na veia — RAM física → HMI → auto-adaptação + Boot do 2B (2026-08-05)
+
+Premissa do dono: o AIOS deve **ler a memória física disponível, elencar no HMI
+e se auto-adaptar** (heap sob demanda; AirLLM/layer-streaming se necessário).
+
+- **Heap self-adapting:** `heap_initial_mb = clamp(75% RAM detectada, 512..1536)`
+  no boot (era `resize_bump_heap(2048)` hardcoded) + **`grow_bump_auto`** — o
+  bump cresce sob demanda (+256MB/passo) quando atinge `HEAP_LIMIT`, com
+  verificação `heap_pte_present` pós-mapeamento e re-try. Log:
+  `[HEAP] [AIOS] - heap auto-alvo=1536MB (RAM detectada=9216MB; grow sob demanda)`.
+- **Gate AirLLM:** `model_fit::needs_airllm(params, file_mb)` — modelo + heap
+  > 75% RAM ⇒ layer-streaming (residente vs AirLLM). `estimate_heap_mb` clamp
+  derivado da RAM (não mais hardcoded 128..2048). Logado no load.
+- **HMI:** SysInfoAgent (card 9001) já expõe RAM/heap/frames.
+- **2B v6 convertido:** `target1/bitnet_2B.bitnet` (792MB canônico: act=RELU2,
+  embed=Q6_K, feat=0x07, theta=500000). Encoder Q6_K **vetorizado** (numpy):
+  328M elementos de horas → 0.012s.
+- **Scan autodescritivo:** `cortex::model::v6_file_size` deriva o tamanho do
+  header (era const v4 604MB que truncava o v6 → parse lixo).
+- 🔴 **Wrap 2⁶⁴ no bump heap (diagnóstico oracle):** `HEAP_BUFFER` @ high-half;
+  `heap_start + offset` envolve 2⁶⁴ em ~2044MB — o 2B (offset 2158MB) escrevia
+  em VA 0 → #PF CR2=0 no memcpy (`rep movsq`). Tentativa HEAP_EXT_BASE revertida
+  (map_page_direct sem check HUGE_PAGE em todos os níveis → reboot loop no
+  boot-time resize). Known-issue: check HUGE_PAGE em todos os níveis = fix real.
+- **Verificação:** `cargo check --release --workspace` 0 erros.
+
+
 ### SESSION_249: Formato canônico `.bitnet v6` (ADR-0085) + Fidelidade 2B4T (ADR-0084) (2026-08-05)
 
 Implementação completa das ADRs 0085 (formato canônico + registro K³CHJ) e 0084

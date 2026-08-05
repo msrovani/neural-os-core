@@ -19,7 +19,8 @@ from tools.bitnet_writer import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET = ROOT / "target"
+# Modelos novos vão para target1/ (decisão do dono 2026-08-05)
+TARGET = ROOT / "target1"
 
 
 def absmean_quantize(mat_f: np.ndarray) -> np.ndarray:

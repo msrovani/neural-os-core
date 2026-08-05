@@ -1,4 +1,22 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s250 — AIOS na veia: RAM→HMI→auto-adaptação + Boot 2B
+#   SESSION_250: premissa do dono — ler RAM física, elencar no HMI, se auto-adaptar:
+#     Heap self-adapting: heap_initial = clamp(75% RAM detectada, 512..1536) no
+#       boot (era resize_bump_heap(2048) hardcoded) + grow_bump_auto (auto-grow
+#       sob demanda, verificação heap_pte_present, re-try). Log: heap auto-alvo
+#       =1536MB (RAM detectada=9216MB). NÃO mapear eager 6GB em TCG (reboot loop).
+#     Gate AirLLM: model_fit::needs_airllm(params, file_mb) — modelo+heap > 75%
+#       RAM ⇒ layer-streaming. estimate_heap_mb clamp derivado da RAM.
+#     HMI: SysInfoAgent (9001) já expõe RAM/heap/frames.
+#     2B v6 convertido (target1/bitnet_2B.bitnet, 792MB canônico, encoder Q6_K
+#       vetorizado 0.012s) + scan autodescritivo v6_file_size (era const v4 604MB).
+#     🔴 Wrap 2⁶⁴ no bump heap (oracle): HEAP_BUFFER high-half; heap_start+offset
+#       envolve em ~2044MB → 2B (2158MB) escreve em VA 0 → #PF CR2=0. Fix
+#       HEAP_EXT_BASE revertido (map_page_direct sem check HUGE_PAGE → reboot
+#       loop no boot-time resize). Known-issue: check HUGE_PAGE em todos níveis.
+#     cargo check --release --workspace: 0 erros.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s249 — .bitnet v6 canônico (ADR-0085) + fidelidade 2B4T (ADR-0084)
 #   SESSION_249: Formato canônico v6 + Engine BitNet fidelidade — F0–F6b + F1b:
 #     F0 writer canônico `bitnet_writer.py` + `save_model_v6` + parity byte-exact
@@ -606,7 +624,7 @@
 | bin_ahead (crate versão canônica) | ~12.000 | 41% | Promover bin→crate, depois stub |
 | role_diff (bin tem papel único) | ~6.500 | 22% | Ficam no bin |
 | glue (main.rs, IDT, allocator, shell) | ~5.000 | 17% | Permanente |
-| audio (truth no bin ADR-0045) | ~2.900 | 10% | E4 — mover p/ jarbas crate (ADR-0045 revisado) |
+| audio (truth no bin ADR-0045) | ~2.900 | 10% | E4 — mover p/ jarbas crate (ADR-0045 revisado) — **✅ executado (cutover e51a48b)** |
 | stubs (pub use puro) | ~100 | 0,3% | Já cutover |
 
 ### Sequência E0–E4
@@ -618,7 +636,7 @@
 | **E1c** | boot_logger/virtio_net/usb_msc → k_nano crate | ~1.120 | 🟡 |
 | **E2** | Limine handoff trait (adapter) | +200 / -50 | 🟡 |
 | **E3** | GPU/WiFi wire k_hal (pub use) | +10 | 🟢 |
-| **E4** | audio → jarbas crate (ADR-0045) | ~2.900 | 🟡 |
+| **E4** | audio → jarbas crate (ADR-0045) — **✅ e51a48b** | ~2.900 | 🟡 |
 
 ### Alvo final
 **~11.000 LOC** (redução 62%). Alvo não inclui role_diff + glue (mínimo estrutural ~11.600).
@@ -627,7 +645,7 @@
 - **SESSION_142:** ModelHub multi-.bitnet (TinyStories / generator_fast 850M / generator_pro 3B) + `gguf_wasm` SkillMarket + RustCoder 2B/3B FAT; Trinity router inalterado.
 - **SESSION_141 / ADR-0055:** FeatureGate + CpuFeatures/CacheTopology + SMP real. WHPX `smp=false`; TCG `-smp 2` APs=1 + CorePools; RSDP `BootInfo.rsdp_addr`; OSXSAVE/XCR0; affinity R0→R2. GPU = 0048–0050.
 - **SESSION_140 / ADR-0041:** H4+ QUEUE_NOTIFY; residual MMIO→k-hal; H5+ Cap nos ports + HalOffer grant; AS shallow demo CR3. Lifecycle ADR `fazendo`.
-- **Sprint Sound:** pipeline e ferramentas fechados como parcial honesto; soft-float/VITS, CTC WER, UAC iso e cutover abertos.
+- **Sprint Sound:** pipeline e ferramentas fechados como parcial honesto; soft-float/VITS, CTC WER e UAC iso abertos; cutover jarbas/audio ✅ (e51a48b).
 - **ADR-0040 / NeuralFS:** MVP aceito; mount/GPT/USB ✅; Onda 1 smokes level2+power_loss_soft; USB power-cycle ▶️ AWAITING_HW `[NRFS-HW]`.
 - **ADR-0046:** AirLLM layer-wise + hot-swap ATA/Net code; DMA, stream-to-disk, K-quants e e2e grande abertos.
 - **ADR-0047:** família Latent/Evolve/Probe/GPU/HMI em MVP/PoC; sem promoção indevida a produção.
@@ -644,7 +662,7 @@
 | **ADR-0042 N1–N5** | ✅ **CLOSED** (v1.7.7) — cadeia K³CHJ funcional; **N2.5** ✅ (v1.7.8); **N3.5** ✅ (v1.7.9); **N4.6** ✅ (v1.7.10); **N5.7** ✅ (v1.7.11) |
 | **ADR-0040 FS MVP** | ✅ **CLOSED** (SESSION_124) — soft-migrate MHI; exFAT FilesystemDriver; NeuralFS `/mnt/neural` (SESSION_123 RAM); residuals SESSION_125 → todos `por_fazer` |
 | Sprint 107 Voice | ✅ FECHADA — PASS parcial forte+ |
-| Sprint Sound | ✅ pipeline Mic→Wake→STT→TTS; STT PCM; UAC parse; neural-lite; residual soft-float/VITS + cutover |
+| Sprint Sound | ✅ pipeline Mic→Wake→STT→TTS; STT PCM; UAC parse; neural-lite; cutover jarbas ✅ (e51a48b); residual soft-float/VITS |
 | Sprint 108 | ✅ **CLOSED** — self_evolve + SelfEvolveAgent (observe→gen→verify→improve→reflect) |
 | **N-gram spec (ADR-0047 §3.7)** | ✅ **OK** (SESSION_125/127) — decode + bench empírico `[ADR-0047-NGRAM]` speedup_est |
 | **ADR-0047 família MVP** | ✅ **Accepted parcial** (SESSION_126–127) — L1–L3 + Genesis + G1–G5 PoC + H1/H2/H4/H5; H3/ISA/adapter ❌ descartados |
@@ -667,8 +685,8 @@
 ### Sound / Voice (ADR-0045) — Sprint Sound ✅
 | Item | Estado |
 |------|--------|
-| Truth path | `neural-kernel/src/audio/*` (boot) — residual N5.7 |
-| Espelho | `jarbas/src/audio/*` — sync VAD/settings/wake Continuous; **sem cutover** |
+| Truth path | `jarbas/src/audio/*` (cutover **✅ e51a48b** — bin `pub use jarbas_crate::audio::*`; espelhos bin deletados) |
+| Espelho | ~~`jarbas/src/audio/*` espelho~~ — **eliminado**; antigos truth de `neural-kernel/src/audio/*` deletados (e51a48b) |
 | Stack | HDA + Piper neural-lite (+formant) + STT CTC PCM + VAD adapt + mixer + barge-in |
 | WakeWord | Continuous + gate pós-WAKEWORD (bypass `weather-e2e`) |
 | UAC | parse+probe+USB-TRUST; iso ▶️ `[UAC-HW] VERDICT=AWAITING_REAL_HW` (SESSION_145) |
@@ -829,7 +847,7 @@ Mapa phys (após BPE `@0x150000000`): **HW Expert** `@0x160000000` (`hw_expert_v
 
 ### Próximo
 - **Pista ativa:** Boot Note ath10k A3 (`fw_ready`) · TLS `#123` ✅ · `/model-fetch` · gate v2.0.0 review.
-- **Sound residuals (não pista):** soft-float/VITS defer · UAC `#84` AWAITING_HW · cutover jarbas/audio.
+- **Sound residuals (não pista):** soft-float/VITS defer · UAC `#84` AWAITING_HW · dedup HDA `k_nano`↔`k_hal` (guarda).
 - **Gate `v2.0.0`:** review ADR `fazendo` + `por_fazer`/AWAITING defer + OK maintainer — não auto-declarar.
 - **Sprint 108:** ✅ self-evolving agents.
 - Ops: `CARGO_TARGET_DIR=repo\target`; evidência Pós-LAN: `SESSION_152.md` + `logs/boot_postlan_152c_*.txt`.
@@ -1094,7 +1112,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - Backlog voz → **Sprint Sound (reaberta)** (não bloqueia ADR-42)
 
 ### Residuals conscientes (pós SESSION_152)
-- Sound: soft-float/VITS ⏳ · UAC `#84` ▶️ · jarbas cutover ▶️ (pipeline Mic→Wake→STT→TTS ✅)
+- Sound: soft-float/VITS ⏳ · UAC `#84` ▶️ AWAITING_HW · cutover jarbas/audio ✅ e51a48b (pipeline Mic→Wake→STT→TTS ✅)
 - ADR-0042 N1–N5 + wire ✅ CLOSED (não é pista ativa)
 - ADR-0040: #417/#419/#282e–g ✅ · 282h ⏳ · **#418 peer PASS** (S3/WebDAV residual) · #420/#423 ▶️ · #422 USB AWAITING
 - Onda 5 GPU: #420/#423/#454–456 ▶️ `[MHI-DMA]`/`[GDS-HW]`/`[GPU-HW]`

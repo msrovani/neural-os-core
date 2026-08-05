@@ -1433,8 +1433,19 @@ pub(crate) fn kernel_boot(
     // Box/Vec/Tensor/SiLU/RMSNorm/BitNet MLP agora sao DiagnosticSkill
 
     memory::init_global_allocator(frame_allocator);
-    // Extende bump allocator — agora GLOBAL_ALLOCATOR está disponível (frame allocator funcional)
-    allocator::resize_bump_heap(2048);
+    // AIOS na veia (premissa 4): heap se auto-adapta à RAM física detectada em
+    // runtime. PISO INICIAL modesto (min(75% RAM, 1536MB)) — o grow_bump_auto
+    // estende sob demanda até o budget (evita mapear 6GB eager em TCG, que
+    // exaure frames e reinicia). O 2B v6 (755MB + Q6_K 269MB ≈ 2.3GB) estende
+    // automaticamente; acima do budget o modelo cai para AirLLM (model_fit).
+    let detected_ram_mb = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+    let heap_initial_mb = {
+        let pct = (detected_ram_mb as u64 * 3) / 4;
+        pct.clamp(512, 1536) as usize
+    };
+    allocator::resize_bump_heap(heap_initial_mb);
+    k_nano::slog_bin!("HEAP", "AIOS", "heap auto-alvo={}MB inicial (RAM detectada={}MB; grow sob demanda)",
+        heap_initial_mb, detected_ram_mb);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
     allocator::talc_init_post_memory().expect("talc post-init failed");
 
@@ -2727,9 +2738,17 @@ pub(crate) fn kernel_boot(
             k_nano::slog_bin!("Asset", "ramdisk", "Probe 4GB: raw=[0x{:02x},0x{:02x},0x{:02x},0x{:02x}]", raw0, raw1, raw2, raw3);
             let qemu_magic = u32::from_le_bytes([raw0, raw1, raw2, raw3]);
             if qemu_magic == 0xBE11BE11 {
-                // Fallback so se FAT nao tiver blob (loader-only legacy 2B).
+                // Fallback so se FAT nao tiver blob (loader-only).
+                // v6 é autodescritivo: calcular o tamanho real do arquivo a partir
+                // do header (o const v4 604MB truncava o 2B v6 de 792MB → OOM #PF).
                 const BITNET_2B_V4_BYTES: usize = 604_856_373;
                 let mut model_len = fat_sz.unwrap_or(BITNET_2B_V4_BYTES);
+                if fat_sz.is_none() {
+                    let hdr = unsafe { core::slice::from_raw_parts(probe_ptr, 64) };
+                    if let Some(v6sz) = cortex_crate::model::v6_file_size(hdr) {
+                        model_len = v6sz;
+                    }
+                }
                 if let Some(r_end) = handoff.region_end_containing(load_addr) {
                     let region = (r_end - load_addr) as usize;
                     if region < model_len {
@@ -2764,12 +2783,23 @@ pub(crate) fn kernel_boot(
                     if let Some(big_model) = llm_v6.or_else(|| crate::cortex::load_model(leaked)) {
                         crate::cortex::set_model(alloc::boxed::Box::new(big_model));
                         let tag = fat_name.unwrap_or("llama8b.bin");
+                        // AIOS na veia (premissa 4): loga a decisão de fit com a RAM
+                        // física detectada em runtime — residente vs AirLLM (layer
+                        // streaming). O heap auto-adaptativo já cresce até 75% da RAM;
+                        // acima disso o modelo exige AirLLM (seam em model_fit).
+                        let fit_ram = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+                        let model_mb = (leaked.len() / (1024 * 1024)) as u64;
+                        let params = cortex_crate::cortex::GLOBAL_MODEL_PARAMS
+                            .load(core::sync::atomic::Ordering::Relaxed);
+                        let airllm = cortex_crate::model_fit::needs_airllm(params, model_mb);
                         k_nano::slog_bin!(
                             "Asset",
                             "ramdisk",
-                            "LLM LOADED file={} (QEMU-loader@4G->heap-leak) size={}KB",
+                            "LLM LOADED file={} (QEMU-loader@4G->heap-leak) size={}KB RAM={}MB airllm={}",
                             tag,
-                            leaked.len() / 1024
+                            leaked.len() / 1024,
+                            fit_ram,
+                            airllm
                         );
                         crate::boot_logger::log("BOOT: QEMU loader BitNet loaded");
                         model_loaded = true;

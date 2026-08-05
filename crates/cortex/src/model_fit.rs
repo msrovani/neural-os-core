@@ -79,7 +79,27 @@ pub fn estimate_kv_mb(params: u64) -> u64 {
 pub fn estimate_heap_mb(params: u64) -> u64 {
     let model_gb = params as f64 / 1_000_000_000.0;
     let heap = (model_gb * 100.0) as u64;
-    heap.clamp(128, 2048)
+    // AIOS na veia (premissa 4): clamp derivado da RAM física detectada, não
+    // hardcoded (128..2048). Heap cabe se ≤ 75% da RAM usável (mesma política
+    // do boot resize_bump_heap) — acima disso o modelo requer AirLLM.
+    let ram_cap = {
+        let detected = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
+        (detected * 3 / 4).clamp(128, 6 * 1024)
+    };
+    heap.clamp(128, ram_cap as u64)
+}
+
+/// AIOS: decide se o modelo cabe em RAM residente ou precisa de AirLLM
+/// (layer streaming — carregar 1 layer por vez do storage). Gate honesto:
+/// modelo + heap estimado > 75% da RAM física ⇒ AirLLM.
+pub fn needs_airllm(params: u64, model_file_mb: u64) -> bool {
+    let ram = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed) as u64;
+    if ram == 0 {
+        return false; // sem detecção → assume residente (comportamento legado)
+    }
+    let budget = (ram * 3) / 4;
+    let need = model_file_mb.saturating_add(estimate_heap_mb(params));
+    need > budget
 }
 
 fn classify(usage_x10000: u32) -> FitClass {

@@ -146,8 +146,8 @@ def write_q6k(f, vals: np.ndarray, rows: int, cols: int):
 def _encode_q6k(vals: np.ndarray) -> bytes:
     """Encode f32 ndarray → Q6_K super-blocks (GGUF layout, 210B/256 pesos).
 
-    Espelha dequantize_q6_k_block (gguf.rs): 256 pesos por super-bloco.
-    Dequant de um elemento e (0..255):
+    Vetorizado (numpy) — 328M elementos do embed 2B em segundos (era loops
+    Python por elemento → horas). Layout espelha dequantize_q6_k_block (gguf.rs):
       half = e//128, rem = e%128, lane = rem//32, l = rem%32, is = l//16
       q6 (6-bit) vem de ql/qh por lane; scale = scales[half*8 + is + lane*2]
       value = d * scale * (q6 - 32)
@@ -155,47 +155,59 @@ def _encode_q6k(vals: np.ndarray) -> bytes:
     total = vals.size
     flat = vals.astype(np.float32).ravel()
     num_blocks = (total + 255) // 256
+    padded = np.zeros(num_blocks * 256, dtype=np.float32)
+    padded[:total] = flat
+    blocks = padded.reshape(num_blocks, 256)  # (B, 256)
+
+    # d global por bloco: eff = d*scale_i ≈ sub_max/31 (ADR-0084 M4)
+    block_max = np.max(np.abs(blocks), axis=1)  # (B,)
+    d = np.where(block_max > 0, block_max / (31.0 * 127.0), 1e-9)  # (B,)
+
+    # sub-blocos de 16: (B, 16, 16)
+    subs = blocks.reshape(num_blocks, 16, 16)
+    sb_max = np.max(np.abs(subs), axis=2)  # (B, 16)
+    scale = np.clip(np.round(127.0 * sb_max / block_max[:, None]), 1, 127)
+    scale = np.where((block_max > 0)[:, None], scale, 1).astype(np.int8)  # (B,16)
+
+    eff = d[:, None] * scale.astype(np.float32)  # (B,16)
+    q6 = np.clip(np.round(subs / eff[:, :, None]) + 32, 0, 63).astype(np.int32)
+    q6 = q6.reshape(num_blocks, 256)  # (B, 256)
+
+    # Packing: posições ql/qh por elemento (espelha _store_q6 escalar)
+    e = np.arange(256)
+    half = e // 128
+    rem = e % 128
+    lane = rem // 32
+    l = rem % 32
+    ql_pos = np.where(lane % 2 == 0, half * 64 + l, half * 64 + l + 32)  # lane 0/2 vs 1/3
+    qh_pos = half * 32 + l  # todos os lanes usam qh[half*32 + l]
+
+    low = (q6 & 0xF).astype(np.uint8)      # (B,256)
+    high = ((q6 >> 4) & 3).astype(np.uint8)  # (B,256)
+
+    ql = np.zeros((num_blocks, 128), dtype=np.uint8)
+    qh = np.zeros((num_blocks, 64), dtype=np.uint8)
+    rows = np.broadcast_to(np.arange(num_blocks)[:, None], (num_blocks, 256))
+
+    # ql: lane 0/1 → low nibble (shift 0); lane 2/3 → high nibble (shift 4)
+    m_low = (lane < 2)[None, :]  # (1,256)
+    np.bitwise_or.at(ql, (rows, np.broadcast_to(ql_pos, (num_blocks, 256))),
+                     np.where(m_low, low, 0))
+    np.bitwise_or.at(ql, (rows, np.broadcast_to(ql_pos, (num_blocks, 256))),
+                     np.where(~m_low, low << 4, 0))
+    # qh: lane 0→shift0, 1→shift2, 2→shift4, 3→shift6
+    np.bitwise_or.at(qh, (rows, np.broadcast_to(qh_pos, (num_blocks, 256))),
+                     high << (lane * 2)[None, :])
+
+    # d f16 (RNE via numpy float16 — mesmo layout IEEE half do decoder)
+    d_f16 = d.astype(np.float16).view(np.uint16)  # (B,)
+
     out = bytearray()
-
     for b in range(num_blocks):
-        start = b * 256
-        end = min(start + 256, total)
-        block_vals = np.zeros(256, dtype=np.float32)
-        n_valid = end - start
-        block_vals[:n_valid] = flat[start:end]
-
-        # d global do bloco: escolhido para scales int8 usar a faixa 1..127.
-        # eff = d*scale_i ≈ sub_max/31 → q6=63 reconstroi ≈ sub_max (ADR-0084 M4)
-        block_max = float(np.max(np.abs(block_vals))) if n_valid > 0 else 0.0
-        if block_max > 0:
-            d = block_max / (31.0 * 127.0)
-        else:
-            d = 1e-9
-
-        ql = bytearray(128)
-        qh = bytearray(64)
-        scales = bytearray(16)
-
-        for sb in range(8):  # 8 sub-blocos de 16 por metade
-            for half in range(2):
-                sb_vals = block_vals[half * 128 + sb * 16: half * 128 + sb * 16 + 16]
-                sb_max = float(np.max(np.abs(sb_vals)))
-                if block_max > 0:
-                    scale_i = int(np.clip(np.round(127.0 * sb_max / block_max), 1, 127))
-                else:
-                    scale_i = 1
-                scales[half * 8 + sb] = scale_i
-                eff = d * scale_i
-                for j in range(16):
-                    e = half * 128 + sb * 16 + j
-                    w = block_vals[e]
-                    q6 = int(np.clip(np.round(w / eff) + 32, 0, 63))
-                    _store_q6(ql, qh, e, q6)
-
-        out += bytes(ql)
-        out += bytes(qh)
-        out += bytes(scales)
-        out += struct.pack('<H', _f32_to_f16(d))
+        out += ql[b].tobytes()
+        out += qh[b].tobytes()
+        out += scale[b].tobytes()
+        out += d_f16[b].tobytes()
     return bytes(out)
 
 
