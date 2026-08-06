@@ -156,6 +156,23 @@ robusto é o layout do boot device:
 
 **Gap relacionado:** kernel não lê CONFIG.TXT hoje → criar `boot_media::mode()` (novo gap I9).
 
+### 2.6b Política de FS por estágio (decisão 2026-08-05)
+
+Cada estágio do ciclo de vida usa FS próprios — **pendrive ≠ alvo instalado**:
+
+| Estágio | FS de dados | Por quê |
+|---------|-------------|---------|
+| **Pendrive bootável** (instalador/live) | **FAT32** (default) / **exFAT** (opcional) | Monta no Explorer do host (NEURAL-OS); `mkfat32.py` MBR 0x0C / `mkexfat.py` / `build_usb_unified.py` GPT (ESP FAT + dados FAT32/exFAT) |
+| **Disco alvo instalado** | **Só NeuralFS** | `SysInstaller::install` cria GPT dual `ESP (FAT32, copiada crua) + NeuralFS` — **sem FAT32 de dados**; `/boot/kernel.elf`, `/models/`, `/config/` na NeuralFS |
+| **Dual boot futuro** | NeuralFS lado a lado com partições alheias | readers por-partição (NTFS/EXT já conectados via StorageBus, cobrem USB-MSC e discos) — cada FS na sua partição |
+
+**Implicações confirmadas:**
+- O update do alvo instalado fala **ESP FAT32 (0xEF) + NeuralFS (0x7F)** — não há FAT32 de dados
+  no disco instalado (consistente com U6).
+- O ModelProvisioner persiste `/models/` na NeuralFS (I5); o boot lê da NeuralFS (I5).
+- Pendrives NTFS/EXT (mass storage) montam `/mnt/ext` + `/mnt/ntfs` via StorageBus
+  (BlockDevice genérico — read, não write).
+
 ### 2.7 Princípio AIOS: auto-consciência de localização + domínio do silício
 
 ⚠️ **Este é um AIOS — o fluxo de instalação/update não é um `if (usb) … else …` mecânico.**
