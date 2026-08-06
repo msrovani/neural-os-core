@@ -29,7 +29,7 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 6 | SGDB DoD 10M chaves / 100k docs (benchmark + tuning ART) | 0063 | 2 | ~300 | ⏳ |
 | 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
 | 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | 🟡 SESSION_252: hot-swap ATA+Net reais (stubs → `cortex::gguf` header-only + stream-to-disk Range 4MB chunks + append FAT); DMA prefetch / K-quants avançados = AWAITING |
-| 9 | FS residuals (NTFS/EXT write · **SysInstaller UI** · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | 🟡 **SysInstaller núcleo ✅ ADR-0086 (I3/I6/I8/I12)** — resta seleção de disco UI (A5) |
+| 9 | FS residuals (NTFS/EXT write · **SysInstaller UI** · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | 🟡 **SysInstaller núcleo ✅ ADR-0086 (I3/I6/I8/I12)** — resta seleção de disco UI (A5). **Defer honesto (SESSION_252):** NTFS/EXT **write** (o OS escreve FAT32/exFAT/NeuralFS nativos; risco de corromper disco alheio sem caso de uso), Cloud S3/WebDAV (NetFs HTTP cobre — ADR-0086 §3.6B), SMART (AWAITING_HW). Storage Manager: CLI ✅ (`storage_report`+`smart_report`); card Jarbas = cauda 0058 |
 | 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ |
 | 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ✅ SESSION_252: `train_router.py` 93.5% (gate 0.80) exporta ROUTER.BITNET v6 (25.818B); **loader Rust corrigido v3→v6** (antes nunca carregava → fallback LCG); teste host load_router_v6_roundtrip PASS |
 | 12 | Cross-OS Ecosystem F1–F5 (Skill Manifest, Membrane, …) | 0076 | 3 | ~1.500 | ⏳ |
