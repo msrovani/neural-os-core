@@ -365,6 +365,58 @@ NOTE 1 — DEV (Windows)                          NOTE 2 — TARGET REAL (HW)
   - **com reboot**: kernel → slot inativo → `switch_slot` → reboot
 - **Bloqueio (U6):** o pipeline de update hoje só reconhece FAT32/MBR — não funciona no disco GPT instalado (ver §5 U6)
 
+### 3.5 Loop de telemetria e feedback dev↔neural (decisão 2026-08-05)
+
+Fecha o ciclo: o neural **reporta** seu log ao dev, o dev (opencode) **analisa a quente**,
+gera atualizações e as serve — o neural baixa, instala e continua reportando.
+
+```
+┌──────────────────────────── NOTE 1 (DEV) ────────────────────────────┐
+│                                                                      │
+│  target/logs/2026-08-05.log  ◄─── push: POST /api/logs (BOOT.LOG)   │
+│        │                                                            │
+│        ▼                                                            │
+│  [opencode] analisa o log a quente                                  │
+│        │  (crash? perf? HW estranho? skill falhando?)               │
+│        ▼                                                            │
+│  gera fix/feature → compila kernel/fw/.bitnet                       │
+│        │                                                            │
+│        ▼                                                            │
+│  serve_update.py :8080  (UPDATE.MANIFEST + KERNEL.BIN + MODELS)     │
+└───────────────▲──────────────────────────────────────────────────────┘
+                │ pull (skill update_check — JÁ IMPLEMENTADO)
+┌───────────────┴──────────────────────────────────────────────────────┐
+│  NOTE 2 (neural instalado)                                           │
+│   update_check → baixa → instala → reboot → continua logando         │
+│   → push do BOOT.LOG novo → (ciclo)                                 │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Decisões:**
+
+1. **Push, não pull** — o neural não tem listener TCP (só cliente HTTP); o server não puxa,
+   o neural **empurra** o log (já conhece a URL no UPDATE.CFG). Listener TCP = gap de acesso
+   remoto, overkill para o loop de dev.
+2. **Transporte: HTTP POST `/api/logs`** no server (extensão do TCP client GET→POST no OS +
+   `do_POST` no `serve_update.py`) → grava em `target/logs/<data>.log`. Alternativas avaliadas:
+   UDP mesh (broadcast L2, menos estruturado) e listener TCP (overkill) — rejeitadas p/ MVP.
+3. **Análise assíncrona, em lote** — o opencode não é daemon: monitora `target/logs/` quando
+   solicitado; o loop é **assíncrono** (neural empurra continuamente, dev analisa em lote).
+4. **Latência do ciclo** — de 1 ciclo de `update_check` (kernel) ou hot-swap (llm/fw/skills);
+   telemetria em tempo real fica para o listener TCP futuro (acesso remoto).
+5. **Coerência com a autobiografia (§2.8)** — cada push é episódico ("reportei tick X"),
+   cada update aplicado é episódico ("update v1.9.11, boot OK") — o dev melhora o OS
+   "enquanto ele dorme".
+
+**Componentes novos:**
+
+| Lado | Peça | Esforço |
+|------|------|---------|
+| OS | **LogAgent/skill** que POSTa o tail do BOOT.LOG (`/logs/`) no server | ~40 LOC (padrão `download_knowledge`) |
+| OS | **HTTP POST** no cliente smoltcp (hoje só GET) | pequena extensão |
+| Server | **`do_POST`** em `serve_update.py` → `target/logs/<data>.log` | ~15 LOC |
+| Server | `tools/analyze_logs.py` (opcional, conveniência) | ~30 LOC |
+
 ---
 
 ## 4. Implementação desta sessão (SESSÃO 2026-08-05 — disparo diário)
@@ -435,6 +487,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | I8 | **`self_check::verify_install_checksum` é placeholder** (sem walk de diretório) | Verificação 2026-08-05 | implementar walk /boot + compare |
 | I9 | **Kernel não lê CONFIG.TXT em runtime** — não há `boot_media::mode()`; `detect_boot_source` (rollback.rs) é órfão | Decisão §2.6 | criar `boot_media::mode()` (CONFIG.TXT + GPT do boot device); conectar instalador/update/menu |
 | I10 | **`SELF.STATE` não existe** — o OS não tem autobiografia persistente (quem sou / o que já fiz); episódica/HANR/audit existem mas nada escreve o self do ciclo de vida | Decisão §2.8 | criar `sys/self_state` na SGDB + escrita nos eventos de vida (install/adapt/update/hw_change) |
+| I11 | **Loop de telemetria não existe** — neural não POSTa log, server não recebe; sem `do_POST`, sem HTTP POST no cliente smoltcp | Decisão §3.5 | LogAgent (push BOOT.LOG) + POST no cliente + `do_POST` no serve_update.py |
 
 ---
 
