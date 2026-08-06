@@ -145,6 +145,20 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 
 Ao fechar uma sprint, aplicar o checklist de `docs/GOVERNANCE.md`: atualizar IDEA_BANK, lifecycle deste índice, TODO, STATE e SESSION na mesma passagem.
 
+## Arquivos fora do padrão — absorvidos e movidos (2026-08-05)
+
+Documentos sem numeração ADR foram revisados, absorvidos nas ADRs atuais e movidos para `docs/archive/notes/`:
+
+| Arquivo (origem) | Absorvido em | Estado |
+|-------------------|--------------|--------|
+| `TLS_INTEGRATION_BLUEPRINT.md` | ADR-0016/0062 + TODO #123 (TLS parcial ✅ s156; PKI real pendente) | desatualizado → archive |
+| `cross-os-patterns.md` | **ADR-0076** §2 (Melhor de Cada Mundo já cobre FYY/Wetware/WeftOS/Oreulius/WAeasi) | duplicata → archive |
+| `ideias-v2.md` | IDEA_BANK + ADR-0060/0048-50/0041/0057/0062 (triagem SESSION_220) | já distribuído → archive |
+| `pre-v2-residuals.md` | ADRs fonte (cada item aponta sua ADR) + TODO fila ADR | já distribuído → archive |
+| `pre-v2-implementation-plan.md` | TODO fila ADR (itens 12-17 = os do plano, tiers/ordem preservados) | plano histórico → archive |
+| `NeuralFS.md` | **MANTIDO** — referência canônica do FS (lifecycle `fazendo` no INDEX) | canônico |
+
+
 ## Planos Cursor → ADR (implementados)
 
 Registro dos planos de implementação (Cursor Plans) já refletidos no corpo das ADRs. Fonte dos planos: histórico maintainer / SESSION; **não** versionar `.cursor/plans` no repo.

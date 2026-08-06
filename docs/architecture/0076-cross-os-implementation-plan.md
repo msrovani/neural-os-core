@@ -295,7 +295,7 @@ TOTAL: ~6.500 LOC · 4-6 semanas · 2 engenheiros
 ## Referências
 
 - `docs/architecture/0076-cross-os-ecosystem.md` — ADR-0076
-- `docs/architecture/cross-os-patterns.md` — Catálogo de padrões extraídos
+- `docs/archive/notes/cross-os-patterns.md` — Catálogo de padrões extraídos (absorvido na ADR-0076 §2, movido 2026-08-05)
 - `crates/hermes/src/cross_os/` — Código já iniciado (intent, discoverer, agent)
 - `crates/hermes/src/mcp_server.rs` — MCP Server existente
 - `crates/hermes/src/package_hub.rs` — PackageHub existente

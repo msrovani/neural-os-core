@@ -9,7 +9,7 @@
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
-**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · TLS BLOCKED · R soft-float defer.
+**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
 ---
@@ -254,7 +254,7 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 
 | Item | Esforço | Descrição |
 |------|---------|-----------|
-| **TLS real #123** | ~1.500 | `[TLS] BLOCKED softfloat_or_crate` — sem fake HTTPS |
+| **TLS real #123** | ~1.500 | **Parcial ✅**: compile PASS (s155) + wire `https_get` (s156) + smoke PASS google 80KB (s156, trust=unsecure). **Resta: PKI real** (RootPin/TOFU sem `unsecure`; blueprint absorvido de `TLS_INTEGRATION_BLUEPRINT.md` → legacy) |
 | **WiFi RF** | ~2.000 | `[WIFI-HW]` AWAITING; SoftMAC `#407`/`#408` → `depends_on: wifi` |
 | Cross-OS compat | ~2.000 | PE/ELF/Mach-O/APK (fora gate) |
 | Federated Cluster | ~300 | Mesh multi-máquina (fora gate) |
