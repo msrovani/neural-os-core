@@ -19,6 +19,10 @@ pub struct Superblock {
     pub root_inode: u64,
     pub inode_tree_root: u64,
     pub free_extent_root: u64,
+    /// F4: checksum de dados NÃO implementado — campo reservado (fica 0).
+    /// CRC32C cobre nós B-tree (toda leitura), superblocos e header do journal;
+    /// blocos de DADOS não têm checksum (mitigado downstream: modelos são
+    /// validados pelo parse no load_model). Wire do checksum_tree = evolução.
     pub checksum_tree_root: u64,
     pub journal_start: u64,
     pub journal_blocks: u64,
@@ -28,19 +32,10 @@ pub struct Superblock {
 }
 
 impl Superblock {
-    pub fn new(total_blocks: u64) -> Self {
-        let journal_blocks = (total_blocks / 100).max(256).min(16384);
-        let next_cow = 2 + journal_blocks;
-        Superblock {
-            magic: SUPERBLOCK_MAGIC, version: SUPERBLOCK_VERSION,
-            total_blocks, free_blocks: total_blocks - next_cow - 1,
-            allocated_inodes: 1, last_tx_id: 0, root_inode: 1,
-            inode_tree_root: next_cow, free_extent_root: 0,
-            checksum_tree_root: 0, journal_start: 3, journal_blocks,
-            uuid: [0x4E55, 0x52414C], label: [0; 4],
-            next_cow_block: next_cow + 1,
-        }
-    }
+    // F13: `Superblock::new` removido — era morto e com layout divergente do
+    // format() (journal_blocks/free_blocks/next_cow diferentes). Duas fontes de
+    // verdade do layout on-disk quebrariam o disco. O formato real vive no
+    // `NeuralVolume::format` (volume.rs).
 
     fn read_block(dev: &mut dyn BlockDevice, start_lba: u64, block_num: u64) -> Option<[u8; 4096]> {
         let block_lba = block_num.checked_mul(8);

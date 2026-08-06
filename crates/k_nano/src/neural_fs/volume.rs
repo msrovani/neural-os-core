@@ -99,6 +99,14 @@ impl NeuralVolume {
         if !sb.write(dev, start_lba) {
             return false;
         }
+        // F6: zera o journal no format — evita replay de transação velha de um
+        // formato anterior sobre a árvore nova (CRC/tx_id antigos sobreviviam).
+        let mut zero_journal = [0u8; 4096];
+        for i in 0..journal_blocks {
+            if !Self::write_block_static(dev, start_lba, sb.journal_start + i, &zero_journal) {
+                return false;
+            }
+        }
         // free list vazia
         let mut fl = [0u8; 4096];
         fl[0..8].copy_from_slice(FREE_LIST_MAGIC);
@@ -150,12 +158,23 @@ impl NeuralVolume {
             return None;
         }
         let recover_ok = Journal::recover(dev, start_lba, &sb);
+        if !recover_ok {
+            // F5: journal com CRC inválido / replay falhou = transação possivelmente
+            // parcial. Montar e escrever por cima pode corromper ainda mais —
+            // recusa conservador (não corrompe; exige fsck/format explícito).
+            crate::slog_nano!(
+                "NEURALFS",
+                "error",
+                "mount REJECT: journal corrompido (recover falhou) — exige fsck/format"
+            );
+            return None;
+        }
         let mut vol = NeuralVolume {
             sb,
             start_lba,
             tx_id: 0,
             journal: Journal::new(),
-            dirty: !recover_ok,
+            dirty: false,
             free_stack: Vec::new(),
         };
         vol.load_free_list(dev);
@@ -216,6 +235,41 @@ impl NeuralVolume {
         Some(b)
     }
 
+    /// F1: aloca N blocos CONTÍGUOS para dados de arquivo.
+    /// O extent (first_block, count) exige contiguidade; a free_stack LIFO pode
+    /// entregar blocos invertidos/não-contíguos (corrupção silenciosa na
+    /// re-escrita). Estratégia: popa N da stack, ordena; se não contíguo,
+    /// devolve à stack e usa bump (sempre contíguo por construção).
+    fn alloc_contiguous(&mut self, n: usize) -> Option<(u64, u32)> {
+        if n == 0 {
+            return Some((0, 0));
+        }
+        // Tenta da free_stack: popa n, ordena, verifica contiguidade.
+        if self.free_stack.len() >= n {
+            let mut picked: Vec<u64> = (0..n).filter_map(|_| self.free_stack.pop()).collect();
+            picked.sort_unstable();
+            let contiguous = picked
+                .windows(2)
+                .all(|w| w[1] == w[0] + 1);
+            if contiguous {
+                self.sb.free_blocks = self.sb.free_blocks.saturating_sub(n as u64);
+                return Some((picked[0], n as u32));
+            }
+            // Não contíguo — devolve à stack e cai no bump.
+            for b in picked {
+                self.free_stack.push(b);
+            }
+        }
+        // Bump: contíguo por construção.
+        let start = self.sb.next_cow_block;
+        if self.sb.free_blocks < n as u64 || start + n as u64 > self.sb.total_blocks {
+            return None;
+        }
+        self.sb.next_cow_block += n as u64;
+        self.sb.free_blocks = self.sb.free_blocks.saturating_sub(n as u64);
+        Some((start, n as u32))
+    }
+
     fn reclaim_block(&mut self, block: u64) {
         if block == 0 || block >= self.sb.total_blocks {
             return;
@@ -233,12 +287,18 @@ impl NeuralVolume {
     }
 
     fn commit_tx(&mut self, dev: &mut dyn BlockDevice) -> bool {
+        // LiberFS/BAFS flush barrier: persistir free list → flush → journal →
+        // flush → superblock. Garante que o que o journal nomeia já está na
+        // mídia antes do header de commit (evita commit apontando para dados
+        // não duráveis em disco com write cache — QEMU/RAM mascara isso).
         if !self.persist_free_list(dev) {
             return false;
         }
+        let _ = dev.sync_cache();
         if !self.journal.commit(dev, self.start_lba, &self.sb) {
             return false;
         }
+        let _ = dev.sync_cache();
         self.sb.last_tx_id = self.tx_id;
         self.sb.write(dev, self.start_lba)
     }
@@ -594,14 +654,32 @@ impl NeuralVolume {
         Ok(out)
     }
 
+    /// F10: valida nome de arquivo/dir — rejeita vazio, >22B, "..", '/', '\\',
+    /// NUL e controle. Sem isto, create_file aceitava ".." (dirent literal que
+    /// confunde resolve_path) e separadores (path traversal por construção).
+    fn valid_name(name: &str) -> bool {
+        if name.is_empty() || name.len() > 22 {
+            return false;
+        }
+        if name == ".." || name == "." {
+            return false;
+        }
+        !name
+            .bytes()
+            .any(|b| b == b'/' || b == b'\\' || b == 0 || b < 0x20)
+    }
+
     pub fn create_file(
         &mut self,
         dev: &mut dyn BlockDevice,
         parent: u64,
         name: &str,
     ) -> Result<u64, &'static str> {
-        if name.is_empty() || name.len() > 22 {
+        if !Self::valid_name(name) {
             return Err("bad name");
+        }
+        if self.lookup_dir_entry(dev, parent, name).is_some() {
+            return Err("exists");
         }
         if self.lookup_dir_entry(dev, parent, name).is_some() {
             return Err("exists");
@@ -635,7 +713,7 @@ impl NeuralVolume {
         parent: u64,
         name: &str,
     ) -> Result<u64, &'static str> {
-        if name.is_empty() || name.len() > 22 {
+        if !Self::valid_name(name) {
             return Err("bad name");
         }
         if self.lookup_dir_entry(dev, parent, name).is_some() {
@@ -672,28 +750,26 @@ impl NeuralVolume {
             return Err("not a file");
         }
         self.begin_tx();
-        if old_count > 0 && old_block > 0 {
-            for i in 0..old_count as u64 {
-                self.reclaim_block(old_block + i);
-            }
-        }
 
+        // F2: ordem CoW correta — (1) aloca+escreve dados NOVOS primeiro,
+        // (2) cow da folha, (3) commit, (4) SÓ ENTÃO reclaim antigos.
+        // Reclaim antes do commit destruía a versão boa se ENOSPC/erro/power-loss
+        // no meio (oracle F2 + BAFS b81b43f + LiberFS "freeing adiado por 1 commit").
         let blocks_needed = (data.len() + 4095) / 4096;
-        let mut first_block = 0u64;
-        let mut block_count = 0u32;
+        let (first_block, block_count) = self.alloc_contiguous(blocks_needed).ok_or("no space")?;
         for bi in 0..blocks_needed {
-            let b = self.next_block().ok_or("no space")?;
-            if bi == 0 {
-                first_block = b;
-            }
+            let b = first_block + bi as u64;
             let mut page = [0u8; 4096];
             let start = bi * 4096;
             let end = (start + 4096).min(data.len());
             page[..end - start].copy_from_slice(&data[start..end]);
             if !self.write_block_raw(dev, b, &page) {
+                // F2: no erro, devolve os blocos recém-alocados (sem leak)
+                for j in 0..blocks_needed {
+                    self.reclaim_block(first_block + j as u64);
+                }
                 return Err("data write");
             }
-            block_count += 1;
         }
 
         let inode_key = Inode::make_key(ino);
@@ -726,17 +802,27 @@ impl NeuralVolume {
             }
             self.journal.log_block(leaf.block_addr, &leaf.data);
             if !leaf.write(dev, self.start_lba) {
+                for j in 0..blocks_needed {
+                    self.reclaim_block(first_block + j as u64);
+                }
                 return Err("leaf write");
             }
-            if BTreeNode::read(dev, self.start_lba, self.sb.inode_tree_root)
-                .map(|r| r.level() == 0)
-                .unwrap_or(false)
-            {
-                self.sb.inode_tree_root = leaf.block_addr;
-            }
+            // F15: cow_leaf_for_key já atualiza inode_tree_root em árvore de
+            // folha única — o bloco redundante de re-checagem foi removido.
         }
         if !self.commit_tx(dev) {
+            // F2: commit falhou — os dados novos não são o estado durável;
+            // devolve-os e mantém os antigos intactos (nunca reclaimados).
+            for j in 0..blocks_needed {
+                self.reclaim_block(first_block + j as u64);
+            }
             return Err("commit");
+        }
+        // F2: commit OK — AGORA os blocos antigos podem ser reutilizados.
+        if old_count > 0 && old_block > 0 {
+            for i in 0..old_count as u64 {
+                self.reclaim_block(old_block + i);
+            }
         }
         Ok(())
     }
@@ -785,10 +871,80 @@ impl NeuralVolume {
         Ok(out)
     }
 
-    /// Detecta magic NEURALFS no superbloco primario (bloco 1).
+    /// F8: leitura por intervalo (offset, len) — destrava AirLLM streaming de
+    /// modelos grandes sem materializar o arquivo inteiro na RAM (read_file é
+    /// all-or-nothing; um 2B v6 de 792MB estouraria o heap antes do model_fit).
+    /// Clamps: len além do fim do arquivo é truncado; offset além do fim → vazio.
+    pub fn read_range(
+        &self,
+        dev: &mut dyn BlockDevice,
+        ino: u64,
+        offset: usize,
+        len: usize,
+    ) -> Result<Vec<u8>, &'static str> {
+        let (mode, size, data_block, block_count) =
+            self.lookup_inode(dev, ino).ok_or("no inode")?;
+        if mode & Inode::S_IFREG == 0 {
+            return Err("not a file");
+        }
+        if size == 0 || block_count == 0 || offset >= size as usize {
+            return Ok(Vec::new());
+        }
+        let (start, count) = if let Some(v) = btree_lookup(
+            dev,
+            self.start_lba,
+            self.sb.inode_tree_root,
+            &Key {
+                object_id: ino,
+                item_type: ItemType::FileExtent,
+                offset: 0,
+            },
+        ) {
+            v.as_extent()
+        } else {
+            (data_block, block_count as u64)
+        };
+        // Bloco inicial do offset + quantos blocos o range toca (com clamp ao fim).
+        let first_blk = offset / 4096;
+        let remaining = (size as usize).saturating_sub(offset);
+        let want = remaining.min(len);
+        let last_blk = (offset + want).div_ceil(4096);
+        let blocks = (last_blk.saturating_sub(first_blk)).min(count as usize);
+        let mut out = Vec::with_capacity(want.min(blocks * 4096));
+        for bi in 0..blocks {
+            let mut page = [0u8; 4096];
+            if !self.read_block_raw(dev, start + first_blk as u64 + bi as u64, &mut page) {
+                return Err("data read");
+            }
+            let abs = (first_blk + bi) * 4096;
+            let rel = abs.saturating_sub(offset);
+            let begin = if abs < offset { offset - abs } else { 0 };
+            let take = (4096 - begin).min(want - out.len());
+            out.extend_from_slice(&page[begin..begin + take]);
+            if out.len() >= want {
+                break;
+            }
+            let _ = rel;
+        }
+        out.truncate(want);
+        Ok(out)
+    }
+
+    /// Detecta magic NEURALFS no superbloco PRIMÁRIO (bloco 1) OU BACKUP (bloco 2).
+    /// F3: probe com fallback — um volume com superbloco primário corrompido e
+    /// backup bom não deve ser tratado como "não formatado" (evita wipe via format).
     pub fn probe_magic(dev: &mut dyn BlockDevice, start_lba: u64) -> bool {
+        Self::probe_block_magic(dev, start_lba, 1)
+            || Self::probe_block_magic(dev, start_lba, 2)
+    }
+
+    /// Lê o magic de UM bloco de superbloco (1 ou 2). Distingue "sem magic"
+    /// de "I/O falhou": em I/O fail retorna Err — o caller NÃO deve formatar.
+    fn probe_block_magic(dev: &mut dyn BlockDevice, start_lba: u64, block_num: u64) -> bool {
         let mut sector = [0u8; 512];
-        if !dev.read_sectors(start_lba + 8, &mut sector) {
+        let lba = start_lba + block_num * 8;
+        if !dev.read_sectors(lba, &mut sector) {
+            // F3: I/O fail ≠ "disco vazio" — não formatar sobre falha de leitura.
             return false;
         }
         &sector[0..8] == b"NEURALFS"

@@ -351,3 +351,59 @@ Mount canônico: `/mnt/neural` (NeuralFsAgent). Namespace de pacotes:
 
 **Segurança no FS:** path traversal (`..`) rejeitado no hub; pacotes unsigned exigem ApprovalGate Escalate antes de Create/Update/Delete (detalhe ADR-0051).
 **VFS bridge:** Hermes usa callbacks do bin (`neural-kernel::fs`) após `init_fs_agents` — não o VFS vazio de `k_nano`.
+
+---
+
+## 13. Revisão profunda + correções aplicadas (2026-08-05)
+
+Revisão do FS contra o código real (oracle) + ecossistema externo (BAFS `cl8dep/bazzulto-bafs`, LiberFS, littlefs2 — librarian). **Correções aplicadas** (todas com `cargo check --release` 0 erros + 62 testes host PASS):
+
+### F1 — Alocador contíguo (CRÍTICO — corrupção silenciosa)
+O free-stack LIFO podia entregar blocos **invertidos/não-contíguos** ao extent → re-escrita de arquivo lia lixo. Fix: `alloc_contiguous()` — popa da stack, ordena, valida contiguidade; se não contígua, devolve e usa bump (sempre contíguo). `write_file` usa o extent contíguo.
+
+### F2 — Ordem CoW correta (ALTA — atomicidade)
+Antes: reclaimava blocos antigos **antes** de os novos existirem → power-loss/ENOSPC destruía a versão boa. Fix: dados novos → cow folha → commit → **só então** reclaim antigos; no erro, devolve os recém-alocados (sem leak).
+
+### F3 — Mount seguro (ALTA — wipe do volume)
+`probe_magic` lia só o bloco 1; primário corrompido + backup bom = format destruía tudo. Fix: probe com fallback ao backup (bloco 2); se volume **existe** (probe true) mas mount falha (journal corrompido), **nunca formata** — exige fsck/format explícito.
+
+### F5 — Journal corrompido = recusa mount (MÉDIA)
+`dirty` era setado e nunca lido. Fix: `Journal::recover` falhou → mount **retorna None** (log CRÍTICO) — não monta por cima de transação parcial.
+
+### F6 — Format zera o journal (MÉDIA)
+Re-format podia sofrer replay de transação velha. Fix: zera a região do journal no format.
+
+### F8 — `read_range` (MÉDIA — destrava AirLLM)
+`read_file` materializava 792MB na RAM. Fix: `read_range(dev, ino, offset, len)` — streaming por camadas; clamps de offset/len.
+
+### F10 — `valid_name` (MÉDIA — path traversal)
+`create_file`/`create_dir` aceitavam `".."`, `/`, `\`, NUL. Fix: rejeita todos + controle; `resolve_path` já era seguro por construção.
+
+### F12 — Dead code removido (MÉDIA)
+`extent.rs` + `checksum_tree.rs` inteiros (sem consumers; checksum_tree nunca wireada) — removidos + facades atualizadas.
+
+### F13 — `Superblock::new` removido (BAIXA)
+Era morto e com layout divergente do `format()` (duas fontes de verdade do layout on-disk).
+
+### F14 — Smokes level2/power_loss wireados (BAIXA)
+`smoke_level2` (B-tree nível ≥2) e `smoke_power_loss_soft` (journal recover) existiam sem caller — agora rodam no bootstrap_ram (heap 512MB+ atual comporta).
+
+### F15 — Hack redundante removido (BAIXA)
+`cow_leaf_for_key` já atualiza `inode_tree_root`; o bloco de re-checagem em `write_file` era I/O extra.
+
+### F16 — Flush barrier no commit (padrão LiberFS)
+`commit_tx` agora faz `persist_free_list → sync_cache → journal → sync_cache → superblock` — garante que o que o journal nomeia já está na mídia (QEMU/RAM mascara a ausência disso).
+
+### Licença corrigida
+BAFS é **GPL-3.0** desde v1.2 (repo AGPL-3.0) — TECNOLOGIAS.md marcava "MIT" errado; corrigido. Repo BAFS congelado (v1.2, 0 issues/PRs — sem novidades upstream).
+
+### Estado real vs doc (correções de descrição)
+- **Inodes/dirents são INLINE** na leaf B-tree (48B items, 84/folha) — o "inode de 128B em bloco dedicado" (`inode.rs`) e a checksum tree eram **design-only, código morto** (removidos).
+- **Sem checksum de dados**: CRC32C cobre nós B-tree (toda leitura), superblocos, header do journal. Dados de arquivo sem checksum (`checksum_tree_root` fica 0) — mitigado downstream pelo parse no `load_model`.
+- **Journal não-circular** (1 record) confirmado; `sfence` ≠ flush de dispositivo — flush real via `sync_cache` agora no commit (AWAITING_HW para USB/NVMe write cache).
+
+### Pendências (documentadas, não aplicadas)
+- **F7 — Volume global único**: 6 consumers montam `NeuralVolume` independentes sem serialização global → risco de double-alloc em SMP/async futuro. Estrutural (toca 6 call sites) — documentar como dívida até haver concorrência real.
+- **F9 — Batch read**: `read_file` lê bloco a bloco (1.5M syscalls p/ 792MB) — otimização quando os modelos grandes forem o caso de uso no boot.
+- **F4 — Wire da checksum de dados**: campo reservado; evolução quando precisar de detecção de bit-flip no FS (hoje o parse downstream cobre).
+- **F7b — Free list 510 entradas**: leak além do cap é intencional (ponytail documentado) — free-extent tree (extent.rs removido) seria a evolução.

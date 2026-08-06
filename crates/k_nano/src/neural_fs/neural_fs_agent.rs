@@ -329,6 +329,17 @@ impl NeuralFsAgent {
                         vol.sb.allocated_inodes);
                     return Some(make(start, vol));
                 }
+                // F3+F5: volume EXISTE (probe true) mas mount falhou (journal
+                // corrompido/CRC) — NUNCA formatar por cima. Wipe destruiria os
+                // dados (ex: /models/). Exige fsck/format explícito.
+                crate::slog_bin!(
+                    "NEURALFS",
+                    "error",
+                    "{}: volume LBA={} existe mas mount falhou (corrompido?) — sem format",
+                    tag,
+                    start
+                );
+                return None;
             }
             let total_lba = p.sector_count as u64;
             if allow_format && total_lba >= 16384 {
@@ -529,7 +540,20 @@ impl NeuralFsAgent {
         } else {
             crate::slog_bin!("NEURALFS", "info", "smoke_split=FAIL");
         }
-        // ponytail: smoke tests pulados (alocam 32MB+ e travam com heap fragmentado)
+        // F14: level2 (B-tree nível ≥2, 4000 keys) e power_loss (journal recover
+        // via drop+remount) — os dois caminhos críticos antes só existiam sem
+        // caller. Com heap 512MB+ atual, os 64MB do level2 cabem.
+        if crate::neural_fs::tests::smoke_level2() {
+            crate::slog_bin!("NEURALFS", "info", "smoke_level2=OK");
+        } else {
+            crate::slog_bin!("NEURALFS", "info", "smoke_level2=FAIL");
+        }
+        if crate::neural_fs::tests::smoke_power_loss_soft() {
+            crate::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=OK");
+        } else {
+            crate::slog_bin!("NEURALFS", "info", "smoke_power_loss_soft=FAIL");
+        }
+        // ponytail: smokes em RAM não cobrem flush real de disco (AWAITING_HW)
     }
 
     fn parent_and_name(path: &str) -> (&str, &str) {
