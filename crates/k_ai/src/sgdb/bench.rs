@@ -91,3 +91,76 @@ pub fn bench_d_series() -> (bool, String) {
     let (ok, msg) = bench_smoke(100_000, 10_000);
     (ok, format!("D-series {}", msg))
 }
+
+/// DoD ADR-0063: ART 10M chaves binárias compactas (u64→8B, sem String por iteração)
+/// + BQ 100k × 1024-dim. **Host-only** (QEMU TCG levaria horas); P50 via TSC,
+/// SEM claim de P99 (honestidade ADR-0063). Chaves binárias medem o ART puro
+/// (allocação de String dominaria 10M iterações).
+pub fn bench_dod(art_n: usize, bq_n: usize) -> (bool, String) {
+    hamming_dispatch::select_best_hamming_kernel();
+    let t0 = rdtsc();
+    let mut art = ArtIndex::new();
+    // Chaves ASCII de 8 chars (hex) — válidas em UTF-8, sem alloc por iteração.
+    let mut kb = [0u8; 8];
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for i in 0..art_n {
+        let mut v = i as u32;
+        for j in (0..8).rev() {
+            kb[j] = HEX[(v & 0xF) as usize];
+            v >>= 4;
+        }
+        art.insert(core::str::from_utf8(&kb).unwrap_or(""), i as u64);
+    }
+    let t1 = rdtsc();
+    let art_ok = art.len == art_n;
+    let t2 = rdtsc();
+
+    let mut bq_idx = BqFlatIndex::new();
+    for i in 0..bq_n {
+        let mut bits = [0u64; 16];
+        bits[0] = (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        bits[i % 16] ^= 1u64 << (i % 64);
+        bq_idx.insert_1024(i as u64, &bits);
+    }
+    let t3 = rdtsc();
+    let mut bits0 = [0u64; 16];
+    bits0[0] = 0u64.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let hits = bq_idx.top_k(&bits0, 1);
+    let t4 = rdtsc();
+    let bq_ok = !hits.is_empty() && hits[0].0 == 0;
+
+    let ok = art_ok && bq_ok && bq_idx.len() == bq_n;
+    (
+        ok,
+        format!(
+            "DOD art_n={} bq_n={} ok={} path={} art_insert_cyc≈{} art_len_cyc≈{} bq_ins_cyc≈{} topk_cyc≈{}",
+            art_n,
+            bq_n,
+            ok,
+            bq::hamming_path(),
+            t1.saturating_sub(t0),
+            t2.saturating_sub(t1),
+            t3.saturating_sub(t2),
+            t4.saturating_sub(t3)
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bench_dod, bench_d_series};
+
+    /// DoD ADR-0063: ART 10M chaves binárias + BQ 100k × 1024-dim. Host-only.
+    #[test]
+    fn dod_10m_100k() {
+        let (ok, msg) = bench_dod(10_000_000, 100_000);
+        assert!(ok, "DOD failed: {}", msg);
+    }
+
+    /// D-series continua como aceite intermediário (ART 100k + BQ 10k).
+    #[test]
+    fn d_series_100k() {
+        let (ok, _) = bench_d_series();
+        assert!(ok, "D-series failed");
+    }
+}
