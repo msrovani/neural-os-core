@@ -417,6 +417,54 @@ gera atualizações e as serve — o neural baixa, instala e continua reportando
 | Server | **`do_POST`** em `serve_update.py` → `target/logs/<data>.log` | ~15 LOC |
 | Server | `tools/analyze_logs.py` (opcional, conveniência) | ~30 LOC |
 
+### 3.6 Imagem fixa + evolução do transporte: HTTP → mesh de update (decisão 2026-08-05)
+
+**A. Imagem instalável FIXA — fim do "cabe/não cabe LLM na imagem"**
+
+O `MODELS_SOURCE=network` (ADR-0079 §2.8) é elevado a **default do fluxo instalável**: a imagem
+fica fixa e enxuta (~60MB: kernel + HwExpert + tiny + firmware + UPDATE.CFG, **sem `.bitnet`
+grande**); o **alvo decide em runtime** o que cabe na RAM real:
+
+```
+IMAGEM INSTALÁVEL (fixa ~60MB)          ALVO (decide em runtime)
+┌──────────────────────────────┐       ┌─────────────────────────────┐
+│ kernel + HwExpert + tiny     │       │ 1º boot Residente:          │
+│ + firmware + UPDATE.CFG      │ ───▶  │  HwProfiler → RAM/VRAM real │
+│ (SEM .bitnet grande!)        │       │  ModelPlanner → 2B/7B/tiny  │
+└──────────────────────────────┘       │  ModelProvisioner:          │
+                                       │   baixa só o que cabe       │
+                                       │   (menor→maior, model_fit)  │
+                                       └─────────────────────────────┘
+```
+
+- O teste "cabe/não cabe" **sai do build e vira decisão de runtime** —
+  `model_fit::needs_airllm`/`slot_too_tight` já existem; **uma imagem, qualquer alvo**.
+- Elimina a matriz de imagens por RAM e os testes de build associados.
+
+**B. Transporte: contrato HTTP estável; mesh como otimização futura**
+
+O server de update (`serve_update.py`) é hoje **cliente-servidor HTTP**, separado do mesh
+P2P (ADR-0081). Os dois resolvem problemas diferentes:
+
+| | Update OTA (esta ADR) | Mesh P2P (ADR-0081) |
+|---|---|---|
+| Padrão | 1→N (dev → neurais) | N→N (pares iguais) |
+| Transporte | HTTP :8080 | UDP broadcast :42069 |
+| Papel | server serve, neural puxa | descoberta, roles, heartbeat, compute |
+
+**Decisão (não fixar agora, preservar o contrato):**
+
+1. **O contrato HTTP é o padrão estável** — `UPDATE.MANIFEST` (version + url) + blobs + semver.
+   Semântica de update não depende do transporte.
+2. **O mesh é uma otimização de distribuição futura** — quando houver muitos nós, evitar todos
+   baterem no dev: nó dev publica "tenho v1.9.11" no mesh; os demais baixam dele ou do peer que
+   já baixou (propagação 1→nós). A base já existe na ADR-0081 (transporte, FRAG/FRACK p/ MTU,
+   AEAD/tiers, 16 slots) — falta rotular o update como payload do mesh (como heartbeat/ROLE/PK).
+3. **BitTorrent continua ❌** (veredicto ADR-0081: merkle piece quando tiver modelos) — propagação
+   mesh 1→nós é mais simples e suficiente.
+4. **Migração é troca de transporte mantendo contrato** — o neural pergunta "tem update?" e
+   recebe manifest + blob; hoje via HTTP, amanhã via mesh, sem mudar `check_for_update`.
+
 ---
 
 ## 4. Implementação desta sessão (SESSÃO 2026-08-05 — disparo diário)
@@ -475,7 +523,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | U2 | **Trigger imediato**: 1º check só após 24h de uptime | Sessão atual | comando shell `update` chamando `check_for_update()` |
 | U3 | **Assinatura/TPM**: fetch atual só FNV-1a; Ed25519 (SIG) + TPM PCR[8] previstos na ADR-0031 | ADR-0031 §1.4 | add SHA-256/Ed25519 no fetch + TPM extend |
 | U4 | **Rollback automático** não testado no boot | ADR-0031 / #308c | watchdog de boot (3 tries → last_good) |
-| U5 | Config file fixo (UPDATE.CFG) | Sessão atual | service discovery / mesh (ADR-0081) quando modelos |
+| U5 | Config file fixo (UPDATE.CFG) | Sessão atual | service discovery / mesh (ADR-0081) quando modelos — **decisão §3.6B: contrato HTTP estável; mesh = transporte futuro (1→nós), BitTorrent ❌** |
 | **U6** | **Update não funciona no disco GPT instalado** — pipeline só reconhece FAT32/MBR | Verificação 2026-08-05 | estender filtro p/ NeuralFS `0x7F` (+ESP `0xEF` FAT32); slots na NeuralFS |
 | I1 | **Fases 1–3 do instalador** (ModelPlanner, PartitionPlanner, SmartFileCopier, ConfigGenerator, BootloaderInstaller) não implementadas | ADR-0079-plan | seguir Fases 0→3, marcos M0–M4 |
 | I2 | ~~FAT32 format não implementado~~ → **corrigido**: `format_fat32_esp` existe | ADR-0079-plan 1.4 | ~esforço já coberto por `fat32.rs:1043` |
@@ -488,6 +536,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | I9 | **Kernel não lê CONFIG.TXT em runtime** — não há `boot_media::mode()`; `detect_boot_source` (rollback.rs) é órfão | Decisão §2.6 | criar `boot_media::mode()` (CONFIG.TXT + GPT do boot device); conectar instalador/update/menu |
 | I10 | **`SELF.STATE` não existe** — o OS não tem autobiografia persistente (quem sou / o que já fiz); episódica/HANR/audit existem mas nada escreve o self do ciclo de vida | Decisão §2.8 | criar `sys/self_state` na SGDB + escrita nos eventos de vida (install/adapt/update/hw_change) |
 | I11 | **Loop de telemetria não existe** — neural não POSTa log, server não recebe; sem `do_POST`, sem HTTP POST no cliente smoltcp | Decisão §3.5 | LogAgent (push BOOT.LOG) + POST no cliente + `do_POST` no serve_update.py |
+| I12 | **Imagem instalável fixa não é default** — `MODELS_SOURCE=network` é opt-in (ADR-0079 §2.8); builds atuais ainda embutem modelos na imagem | Decisão §3.6A | elevar `MODELS_SOURCE=network` a default do fluxo instalável; build mini (kernel+HwExpert+tiny) |
 
 ---
 
@@ -516,7 +565,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 - **ADR-0074**: git thin client — referência de código (`git_thin.rs`), sem arquivo; consolidado na §3.3
 - **IDEA_BANK**: #176, #308a/b/c, #421 (deprecados → esta ADR); #417–423 (pré-requisitos storage); #306a–d/#307/#309a–c/#310a/b (contexto cross-OS/WASM/J.A.R.V.I.S.)
 - **ADR-0059**: app_factory A/B/C (WASM por HW no instalador)
-- **ADR-0081**: mesh P2P (evolução futura de discovery do update server)
+- **ADR-0081**: mesh P2P — **decisão §3.6B**: transporte futuro do update (propagação 1→nós, contrato HTTP preservado); BitTorrent ❌ (merkle piece futuro)
 - **ADR-0085 §7**: ModelHub `register_bytes` (ponto único de carga de modelos)
 - **Código**: `k_nano/src/sys_installer.rs`, `k_nano/src/installer_agent.rs`,
   `hermes/src/self_update.rs`, `hermes/src/git_thin.rs`, `hermes/src/cron.rs`,
