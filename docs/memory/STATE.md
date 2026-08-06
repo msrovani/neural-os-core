@@ -1,4 +1,21 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s252 — ADR-0086 Instalação + Update OTA (processo canônico)
+#   SESSION_252: ADR-0086 Accepted — unifica instalação (ADR-0079 deprecada) + update
+#     (ADR-0031 §1 deprecado) + ADR-0074 (lacuna sem arquivo); 10 gaps fechados, 0 erros:
+#     U1 switch_slot promove slot→kernel.elf (zero mudança no Limine) · U2 shell `update`
+#     · U4 rollback (guarda tries + BootSelfHeal em PANIC) · U6 filtro ESP 0xEF + UPDATE.CFG
+#     na ESP · I9 boot_mode::mode() (CONFIG.TXT + NeuralFS 0x7F) · I6 AutoInstallerAgent
+#     registrado + shell `install` · I4 ModelProvisioner (slots via UPDATE.CFG) · I5 leitura
+#     NeuralFS no boot + persist /models/ · I10 SELF.STATE na SGDB (autobiografia) ·
+#     I11 telemetria POST /api/logs (target/logs/) · I7 VRAM real (tamanho BAR0) · I8
+#     self_check real · I12 build_image --mini (imagem fixa ~60MB). Limpeza: stub morto
+#     CHANNEL_MANIFEST_URL removido — URL do server só no UPDATE.CFG (config file).
+#     Decisão ponytail U6: ESP FAT32 (0xEF) em vez de NeuralFS — o update fala o GPT
+#     instalado com ~15 linhas. U3 (Ed25519/TPM) = defer (hardening).
+#     cargo check --release: 0 erros (6 warnings Known). Ciclo de vida AIOS completo:
+#     onde estou → quem sou (SGDB) → instalar → baixar brain → auto-update → telemetria.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s251 — Tier 0+1 ADR + fix raiz reboot loop IST
 #   SESSION_251: fila ADR 1–4 completas + boot desbloqueado:
 #     ✔ 0041 aceite: docs/evidence/boot-whpx-20260805.txt (WHPX) — QUEUE_NOTIFY

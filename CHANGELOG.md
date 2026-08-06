@@ -3,6 +3,44 @@
 ## [Unreleased]
 
 
+### SESSION_252: ADR-0086 Instalação + Update OTA — processo unificado + execução completa (2026-08-05)
+
+ADR canônica consolidando instalação (ADR-0079, deprecada) + update (ADR-0031 §1, deprecado)
++ ADR-0074 (lacuna sem arquivo). **10 gaps fechados em 8 commits, 0 erros.**
+
+- **Update OTA:**
+  - `U1` — `switch_slot()` promove o slot inativo → `kernel.elf` (path fixo do Limine) + BOOTCFG;
+    zero mudança no bootloader (ponytail: usa o kernel.elf que o Limine já carrega)
+  - `U2` — comando shell `update` → `check_for_update()` (teste sem esperar 24h)
+  - `U4` — rollback automático: `rollback()` promove o slot bom com guarda `tries` (1=pendente,
+    0=limpo, evita loop); BootSelfHeal dispara em PANIC/GPU_HUNG pós-desligamento inesperado
+  - `U6` — update no disco GPT instalado: filtro `0xEF` (ESP FAT32) nos 4 pontos do self_update
+    + UPDATE.CFG gravado na ESP pelo build (SysInstaller copia a ESP setor-a-setor → herda)
+- **Ciclo de vida AIOS:**
+  - `I9` — `boot_mode::mode()`: lê CONFIG.TXT (BOOT_MODE) + detecta NeuralFS 0x7F = Installed;
+    cacheado + `set_boot_mode` p/ menu live/install
+  - `I10` — `SELF.STATE` na SGDB (`sys/self_state`) + `record_life_event` (narrativa episódica L3);
+    wiring no boot (fase via boot_mode) e no update — **autobiografia do OS**
+  - `I6` — AutoInstallerAgent registrado no AgentFleet + comando shell `install` (publica SYS_INSTALL)
+  - `I3` — agente **executa** a instalação: `run_install_from_bus()` (source ATA → target AHCI/NVMe/USB)
+  - `I4/I5` — ModelProvisioner baixa slots vazios (URL do UPDATE.CFG) + persiste em `/models/` na
+    NeuralFS + boot lê da NeuralFS (imagem fixa: baixa uma vez, carrega do disco)
+  - `I11` — telemetria dev↔neural: `log_agent` POST `/api/logs` + `do_POST` no serve_update.py
+    (grava `target/logs/neural-*.log`) — opencode analisa a quente
+  - `I7` — VRAM real via técnica PCI de tamanho de BAR0 (fim do 2048 hardcoded)
+  - `I8` — `verify_install_checksum` real (resolve_path + CRC32C vs INSTALL.CHK)
+  - `I12` — `build_image.py --mini`: PACK_LLM=none + MODELS_SOURCE=network (~60MB, alvo baixa o brain)
+- **Limpeza:** removido stub morto `CHANNEL_MANIFEST_URL`/`UpdateChannel`/`poll_channel`/
+  `channel_name` (IP de QEMU hardcoded) — URL do server vive **só** no UPDATE.CFG
+- **Deprecações:** ADR-0079, ADR-0079-plan, ADR-0031 §1 (processo → 0086); ADR-0074 = lacuna
+  registrada no INDEX; IDEA_BANK #308a/b/c/#421 apontam para a 0086
+- **Decisões ponytail:** U6 = ESP FAT32 em vez de NeuralFS; U1 = promover slot→kernel.elf;
+  U3 (Ed25519/TPM) = **defer** (hardening, FNV-1a cobre integridade)
+- **Verificação:** `cargo check --release` 0 erros (6 warnings Known); testes hermes 2/2,
+  k_ai self_state 1/1, k-nano boot_mode 1/1; serve_update smoke (GET/POST/404);
+  `build_image --mini` testado (raiz sem LLMs grandes)
+
+
 ### SESSION_251: Tier 0+1 ADR (0041/0083a/0045/0082) + fix raiz reboot loop IST (2026-08-05)
 
 Implementação da fila ADR por complexidade (itens 1–4 do TODO) + desbloqueio do boot.
