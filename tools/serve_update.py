@@ -29,8 +29,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KERNEL = ROOT / "target" / "limine-esp-tree" / "kernel.elf"
 LOGS_DIR = ROOT / "target" / "logs"
-# Modelos servidos (provision): qualquer .BIN/.bitnet presente em target/models/ ou target/
-MODELS_DIRS = [ROOT / "target" / "models", ROOT / "target"]
+# Modelos servidos (provision): qualquer .BIN/.bitnet presente em target/models/, target/ ou tools/target/
+MODELS_DIRS = [ROOT / "target" / "models", ROOT / "target", ROOT / "tools" / "target"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -41,13 +41,28 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("[OTA] " + (fmt % args) + "\n")
 
     def do_GET(self) -> None:  # noqa: N802
-        path = self.path.split("?", 1)[0]
+        path, _, query = self.path.partition("?")
         if path in ("/UPDATE.MANIFEST", "/update.manifest"):
             body = self.manifest
             ctype = "application/json"
         elif path in ("/KERNEL.BIN", "/kernel.bin", "/kernel.elf"):
             body = self.kernel
             ctype = "application/octet-stream"
+        elif path == "/api/search":
+            # Item 5 ADR-0056: lista pacotes/modelos disponíveis (skill_market).
+            q = query.replace("q=", "").strip().lower()
+            hits = []
+            for d in MODELS_DIRS:
+                if not d.is_dir():
+                    continue
+                for f in sorted(d.iterdir()):
+                    if f.is_file() and 10240 < f.stat().st_size:
+                        name = f.name
+                        if q and q not in name.lower():
+                            continue
+                        hits.append(f"  {name} ({f.stat().st_size} bytes)")
+            body = ("[MARKET] pacotes disponiveis:\n" + "\n".join(hits) + "\n").encode()
+            ctype = "text/plain"
         else:
             # Modelos p/ ModelProvisioner (ADR-0086): /HWEXPRT.BIN etc. de target/models/ ou target/
             fname = path.lstrip("/")

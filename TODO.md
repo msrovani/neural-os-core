@@ -25,7 +25,7 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 2 | Log honesto no fallback LCG + assets FAT (`ROUTER.BITNET`) | 0083 | 1 | ~50 | ✅ SESSION_251 (warn honesto + ROUTER.BITNET no FAT) |
 | 3 | Cutover jarbas pleno (espelho áudio → crate; soft-float/VITS defer honesto) | 0045 | 1 | ~150 | ✅ SESSION_251 (cutover já feito e51a48b; docs reconciliados) |
 | 4 | HardwareInfo expansão em ondas (MVP já em `platform_probe.rs`; snapshot WASM futuro) | 0082 | 1 | ~200 | ✅ Onda CPU (SESSION_251) — expansão restante 🟡 |
-| 5 | Market fetch v3 | 0056 | 2 | ~200 | ⏳ |
+| 5 | Market fetch v3 | 0056 | 2 | ~200 | ✅ SESSION_252: `search_remote` usa base do UPDATE.CFG (não hardcoded 10.0.2.2) + `/api/search` no serve_update.py (testado: ROUTER.BITNET listado) |
 | 6 | SGDB DoD 10M chaves / 100k docs (benchmark + tuning ART) | 0063 | 2 | ~300 | ⏳ |
 | 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
 | 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | ⏳ |

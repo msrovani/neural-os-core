@@ -223,14 +223,26 @@ pub fn install_from_url(url: &str, kind: PackageKind, name: &str) -> String {
     }
 }
 
+/// Base do registry remoto — derivada do UPDATE.CFG (config file, nunca hardcoded).
+/// Item 5 ADR-0056: mesmo server do update OTA (ADR-0086).
+pub fn remote_base() -> Option<String> {
+    let url = crate::self_update::read_update_cfg()?;
+    // UPDATE.CFG tem UPDATE_URL=http://host:port/UPDATE.MANIFEST → base http://host:port
+    let base = url.trim_end_matches('/');
+    let base = base.strip_suffix("/UPDATE.MANIFEST").unwrap_or(base);
+    Some(String::from(base))
+}
+
 /// Search remote plugin registry via HTTP (IDEA #395).
-/// ponytail: single registry URL, hardcoded host. Make configurable when >1 registry exists.
+/// Item 5 ADR-0056: base do UPDATE.CFG (não hardcoded 10.0.2.2).
 pub fn search_remote(query: &str) -> String {
     let q = query.trim();
     if q.is_empty() {
         return String::from("[MARKET] search_remote <query>");
     }
-    // ponytail: registry on host bridge IP (VirtualBox 10.0.2.2, QEMU host)
+    let Some(base) = remote_base() else {
+        return String::from("[MARKET] sem UPDATE.CFG (registry remoto indisponivel)");
+    };
     let encoded: String = q
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
@@ -239,7 +251,7 @@ pub fn search_remote(query: &str) -> String {
             '%' // ponytail: simple percent-encode for spaces etc.
         })
         .collect();
-    let url = format!("http://10.0.2.2:8080/api/search?q={}", encoded);
+    let url = format!("{}/api/search?q={}", base, encoded);
     let bytes = match crate::tls::fetch_url(&url) {
         Ok(b) => b,
         Err(e) => return format!("[MARKET] remote search failed: {}", e),
