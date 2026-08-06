@@ -51,7 +51,8 @@ pub fn save_install_checksum(
 }
 
 /// Verifica checksum no boot do target.
-/// Lê /boot/INSTALL.CHK e compara com estado atual.
+/// Lê /boot/kernel.elf e compara hash com o INSTALL.CHK gravado na instalação.
+/// ponytail: resolve_path já faz o walk — não precisa scan manual de diretório.
 pub fn verify_install_checksum(
     target: &mut dyn BlockDevice,
     neural_start_lba: u64,
@@ -62,13 +63,24 @@ pub fn verify_install_checksum(
         None => return IntegrityVerdict::Skipped("NeuralFS not mounted on target"),
     };
 
-    // Busca /boot/kernel.elf e calcula hash
-    // ponytail: lookup simples por inode conhecido (boot_ino=2, kernel_elf=3)
-    // Na prática precisa walk da árvore de diretórios
-    let _ = vol; // placeholder para M3
-    let _ = kernel_hash;
-
-    IntegrityVerdict::Skipped("verify: full directory walk not yet implemented")
+    // Lê /boot/kernel.elf e recalcula hash
+    let Some(ino) = vol.resolve_path(target, "boot/kernel.elf") else {
+        return IntegrityVerdict::Fail(String::from("boot/kernel.elf not found"));
+    };
+    let data = match vol.read_file(target, ino) {
+        Ok(d) => d,
+        Err(e) => return IntegrityVerdict::Fail(String::from(e)),
+    };
+    let actual = crc32c(&data);
+    if actual == kernel_hash {
+        IntegrityVerdict::Pass
+    } else {
+        IntegrityVerdict::Fail(alloc::format!(
+            "kernel hash mismatch: expected={:#x} actual={:#x}",
+            kernel_hash,
+            actual
+        ))
+    }
 }
 
 /// Calcula CRC32C de um buffer (usado para hash rápido de kernel.elf).
