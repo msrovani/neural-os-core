@@ -31,7 +31,7 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | ⏳ |
 | 9 | FS residuals (NTFS/EXT write · **SysInstaller UI** · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | 🟡 **SysInstaller núcleo ✅ ADR-0086 (I3/I6/I8/I12)** — resta seleção de disco UI (A5) |
 | 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ |
-| 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ⏳ |
+| 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ✅ SESSION_252: `train_router.py` 93.5% (gate 0.80) exporta ROUTER.BITNET v6 (25.818B); **loader Rust corrigido v3→v6** (antes nunca carregava → fallback LCG); teste host load_router_v6_roundtrip PASS |
 | 12 | Cross-OS Ecosystem F1–F5 (Skill Manifest, Membrane, …) | 0076 | 3 | ~1.500 | ⏳ |
 | 13 | SemanticRouter / merge CRDT / merkle piece (BitTorrent ❌) | 0081 | 3 | ~1.500 | ⏳ |
 | 14 | Layer S/HW: APs workers vivos (IDT/IPI reschedule) + GPU W2A8 + driver NPU (pós-v2.0) | 0057 | 3 | ~2.000 + HW | ⏳ |
