@@ -88,7 +88,8 @@ impl SelfUpdate {
         let ata = match ata.as_ref() { Some(a) => a, None => return 1 };
         let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
-            if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C {
+            // ponytail: 0xEF = ESP FAT32 do GPT instalado — U6 ADR-0086
+            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
                 let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
                 if let Some(fs) = fs {
                     if let Some(cfg) = unsafe { fs.read_file(BOOT_CFG) } {
@@ -131,7 +132,8 @@ impl SelfUpdate {
         let ata = match ata.as_ref() { Some(a) => a, None => return false };
         let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
-            if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C {
+            // ponytail: 0xEF = ESP FAT32 do GPT instalado — U6 ADR-0086
+            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
                 if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
                     unsafe { w.write_file(BOOT_CFG, text.as_bytes()); }
                     kjson!("UPDATE", "BOOTCFG", "written", "slot", alloc::format!("\"{}\"", text));
@@ -148,7 +150,8 @@ impl SelfUpdate {
         let ata = match ata.as_ref() { Some(a) => a, None => return false };
         let parts = unsafe { k_nano::fat32::read_mbr(ata) };
         for part in &parts {
-            if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C {
+            // ponytail: 0xEF = ESP FAT32 do GPT instalado — U6 ADR-0086
+            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
                 if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
                     unsafe { w.write_file(name, data); }
                     kjson!("UPDATE", "KERNEL", "written", "slot", name);
@@ -228,7 +231,8 @@ pub fn read_update_cfg() -> Option<String> {
     let ata = ata.as_ref()?;
     let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
-        if matches!(part.type_code, 0x0B | 0x0C | 0x1C) {
+        // ponytail: 0xEF = ESP FAT32 do GPT instalado (SysInstaller) — U6 ADR-0086
+        if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
             let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) }?;
             let data = unsafe { fs.read_file(UPDATE_CFG_NAME) }?;
             let text = core::str::from_utf8(&data).ok()?;

@@ -520,11 +520,11 @@ vida; o ciclo de vida **é** uma expressão dela.
 | # | Gap | Origem | Próximo passo |
 |---|-----|--------|---------------|
 | U1 | **Elo de boot**: update grava KERNEL~1/2 na FAT32 de dados, mas Limine carrega kernel.elf da ESP | Sessão atual | limine.conf/boot path ler slot apontado por BOOTCFG~1 |
-| U2 | **Trigger imediato**: 1º check só após 24h de uptime | Sessão atual | comando shell `update` chamando `check_for_update()` |
+| ~~U2~~ | ~~**Trigger imediato**: 1º check só após 24h de uptime~~ | ✅ **resolvido 2026-08-05** | comando shell `update` → `check_for_update()` (shell.rs) |
 | U3 | **Assinatura/TPM**: fetch atual só FNV-1a; Ed25519 (SIG) + TPM PCR[8] previstos na ADR-0031 | ADR-0031 §1.4 | add SHA-256/Ed25519 no fetch + TPM extend |
 | U4 | **Rollback automático** não testado no boot | ADR-0031 / #308c | watchdog de boot (3 tries → last_good) |
 | U5 | Config file fixo (UPDATE.CFG) | Sessão atual | service discovery / mesh (ADR-0081) quando modelos — **decisão §3.6B: contrato HTTP estável; mesh = transporte futuro (1→nós), BitTorrent ❌** |
-| **U6** | **Update não funciona no disco GPT instalado** — pipeline só reconhece FAT32/MBR | Verificação 2026-08-05 | estender filtro p/ NeuralFS `0x7F` (+ESP `0xEF` FAT32); slots na NeuralFS |
+| ~~U6~~ | ~~**Update não funciona no disco GPT instalado** — pipeline só reconhece FAT32/MBR~~ | ✅ **resolvido 2026-08-05** | filtro `0xEF` (ESP FAT32 do GPT instalado) nos 4 pontos do self_update + UPDATE.CFG na ESP (build.rs) |
 | I1 | **Fases 1–3 do instalador** (ModelPlanner, PartitionPlanner, SmartFileCopier, ConfigGenerator, BootloaderInstaller) não implementadas | ADR-0079-plan | seguir Fases 0→3, marcos M0–M4 |
 | I2 | ~~FAT32 format não implementado~~ → **corrigido**: `format_fat32_esp` existe | ADR-0079-plan 1.4 | ~esforço já coberto por `fat32.rs:1043` |
 | I3 | **Limine no target**: SysInstaller copia a ESP crua por setor (sem escrever limine.conf específico do alvo) | ADR-0079-plan 1.5 | BootloaderInstaller dedicado + limine.conf do target |

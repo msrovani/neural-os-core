@@ -46,6 +46,7 @@ pub fn execute(cmd: &str) -> String {
         "ping" => String::from("pong\n"),
         "dns" => { let ip = [10,0,2,3]; alloc::format!("DNS: {}.{}.{}.{}\n", ip[0], ip[1], ip[2], ip[3]) }
         "http" | "fetch" => { if args.is_empty() { String::from("Usage: fetch <url>\n") } else { fetch_cmd(args) } }
+        "update" => { let r = crate::self_update::check_for_update(); alloc::format!("{}\n", r) }
         "gpu" => crate::gpu::backend::gpu_status().into(),
         "vram" => crate::gpu::vram::vram_status(),
         "agents" => alloc::format!("Agents: 248\n"),

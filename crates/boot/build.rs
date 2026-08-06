@@ -36,6 +36,11 @@ fn main() {
         return;
     }
 
+    // UPDATE.CFG na ESP — a ESP e copiada setor-a-setor pelo SysInstaller, entao o
+    // target instalado herda o endereco do server OTA (U6 ADR-0086). Override via env.
+    let update_url = std::env::var("UPDATE_URL").unwrap_or_else(|_| "http://10.0.2.2:8080/UPDATE.MANIFEST".into());
+    fs::write(esp_root.join("UPDATE.CFG"), format!("UPDATE_URL={}\n", update_url)).unwrap();
+
     // Config (path único: /boot/limine.conf, elimina duplicatas legadas)
     let conf = limine_dir.join("limine.conf");
     if conf.exists() { fs::copy(&conf, boot_dir.join("limine.conf")).unwrap(); }
