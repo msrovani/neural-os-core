@@ -3,6 +3,8 @@
 //! HTTP fetch via `net_bridge::http_get_url` (kernel NETSTACK). Never strip https→http.
 
 use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
 use k_nano::ATA_DRIVER;
 use k_nano::kjson;
 
@@ -214,6 +216,133 @@ pub fn boot_smoke() -> bool {
     );
     let _ = syn;
     true
+}
+
+// ─── ADR-0086 OTA diário: UPDATE.CFG → manifest → slot A/B ──────────────────
+
+const UPDATE_CFG_NAME: &str = "UPDATE.CFG";
+
+/// Lê `UPDATE_URL=...` do UPDATE.CFG na FAT32 (ATA; mesmo padrão do active_slot).
+pub fn read_update_cfg() -> Option<String> {
+    let ata = ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = unsafe { k_nano::fat32::read_mbr(ata) };
+    for part in &parts {
+        if matches!(part.type_code, 0x0B | 0x0C | 0x1C) {
+            let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) }?;
+            let data = unsafe { fs.read_file(UPDATE_CFG_NAME) }?;
+            let text = core::str::from_utf8(&data).ok()?;
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("UPDATE_URL=") {
+                    let url = rest.trim();
+                    if url.starts_with("http") {
+                        return Some(String::from(url));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extrai `"<key>":"..."` de um JSON simples (sem serde — no_std).
+fn json_field(body: &str, key: &str) -> Option<String> {
+    let pat = alloc::format!("\"{}\":\"", key);
+    let i = body.find(&pat)?;
+    let rest = &body[i + pat.len()..];
+    let end = rest.find('"')?;
+    Some(String::from(&rest[..end]))
+}
+
+/// Semver simples major.minor.patch (sufixo pré-release ignorado).
+fn parse_version(v: &str) -> (u64, u64, u64) {
+    let mut it = v.trim().split('.');
+    let maj = it.next().and_then(|s| s.split('-').next()).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let min = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let pat = it.next().and_then(|s| s.split('-').next()).and_then(|s| s.parse().ok()).unwrap_or(0);
+    (maj, min, pat)
+}
+
+/// Rotina diária OTA (ADR-0086): UPDATE.CFG → GET manifest → compara versão →
+/// se nova, baixa pro slot inativo (nunca sobrescreve o slot rodando).
+/// Nunca falha: retorna relatório textual para log/skill.
+pub fn check_for_update() -> String {
+    let Some(url) = read_update_cfg() else {
+        return String::from("[UPDATE] cfg=missing (UPDATE.CFG na FAT32)");
+    };
+    let body = match crate::tls::fetch_url(&url) {
+        Ok(b) if !b.is_empty() => b,
+        Ok(_) => return String::from("[UPDATE] manifest=empty"),
+        Err(e) => return alloc::format!("[UPDATE] manifest=fail err={}", e),
+    };
+    let Ok(text) = core::str::from_utf8(&body) else {
+        return String::from("[UPDATE] manifest=not_utf8");
+    };
+    let Some(remote) = json_field(text, "version") else {
+        return String::from("[UPDATE] manifest=no_version");
+    };
+    let local = env!("CARGO_PKG_VERSION");
+    if parse_version(&remote) <= parse_version(local) {
+        return alloc::format!("[UPDATE] up_to_date local={} remote={}", local, remote);
+    }
+    let Some(kurl) = json_field(text, "url") else {
+        return alloc::format!("[UPDATE] newer={} manifest=no_url", remote);
+    };
+    match SelfUpdate::fetch_update(&kurl) {
+        Ok(n) => alloc::format!(
+            "[UPDATE] applied bytes={} {} -> {} (reboot p/ ativar slot)",
+            n,
+            local,
+            remote
+        ),
+        Err(e) => alloc::format!("[UPDATE] apply=fail err={}", e),
+    }
+}
+
+/// Skill `update_check` — consulta o servidor OTA e aplica se houver versão nova.
+pub struct UpdateCheckSkill;
+
+impl skill_registry::Skill for UpdateCheckSkill {
+    fn manifest(&self) -> skill_registry::McpManifest {
+        skill_registry::McpManifest {
+            name: String::from("update_check"),
+            description: String::from(
+                "Verifica update OTA diario (UPDATE.CFG -> manifest -> slot A/B)",
+            ),
+            required_tokens: vec![1],
+            preconditions: Vec::new(),
+            context_links: Vec::new(),
+            output_schema: skill_registry::OutputSchema::String,
+            idempotent: true,
+            contracts: Vec::new(),
+        }
+    }
+
+    fn execute(&self, _payload: &[u8]) -> Result<alloc::vec::Vec<u8>, &'static str> {
+        Ok(check_for_update().into_bytes())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{json_field, parse_version};
+
+    #[test]
+    fn manifest_field_extraction() {
+        let m = r#"{"channel":"stable","version":"1.9.10","url":"http://10.0.2.2:8080/KERNEL.BIN"}"#;
+        assert_eq!(json_field(m, "version").as_deref(), Some("1.9.10"));
+        assert_eq!(json_field(m, "url").as_deref(), Some("http://10.0.2.2:8080/KERNEL.BIN"));
+        assert_eq!(json_field(m, "nope"), None);
+    }
+
+    #[test]
+    fn version_ordering() {
+        assert!(parse_version("1.9.10") > parse_version("1.9.9"));
+        assert!(parse_version("2.0.0") > parse_version("1.99.99"));
+        assert!(parse_version("1.9.9") == parse_version("1.9.9"));
+        assert!(parse_version("1.9.10-beta") > parse_version("1.9.9"));
+    }
 }
 
 

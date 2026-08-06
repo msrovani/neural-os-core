@@ -1,10 +1,11 @@
 # Plano de Implementação — ADR-0079 Neural AutoInstaller
 
 **Data:** 2026-07-27
-**Status:** Approved
+**Status:** **Superseded (processo) → [ADR-0086](0086-instalacao-e-update-ota.md) §2** — plano consolidado no documento canônico unificado. Mantido como plano de trabalho detalhado (checklists, LOC, topologia).
 **Base:** ADR-0079 (Neural AutoInstaller) + ADR-0040 §SysInstaller
 **Estimativa:** 3 fases · ~3.200 LOC · 5 sprints · 1-2 engenheiros
 **Gate:** v2.0.0 (Fase 0-1); v2.1.0 (Fases 2-3)
+**Deprecação (2026-08-05):** processo de instalação consolidado na ADR-0086 §2 (canônica); Fases 0–3 e marcos M0–M4 continuam válidos como plano de trabalho detalhado.
 
 ---
 

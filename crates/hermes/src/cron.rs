@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use agent_core::{Agent, AgentKind, AgentManifest, ScheduleKind, AgentTickResult};
 use k_nano::interrupts::TIMER_TICKS;
+use k_nano::interrupts::TIMER_HZ;
 use k_nano::EVENT_BUS;
 
 const CRON_MANIFEST: AgentManifest = AgentManifest {
@@ -56,6 +57,9 @@ impl CronAgent {
         self.schedule("skill_review", 3000, "SKILL_REVIEW", "Comprehensive skill review");
         // NTP periodic resync every ~200s (3600 ticks at 18Hz)
         self.schedule("ntp_resync", 3600, "NTP_RESYNC", "NTP periodic resync");
+        // OTA diário (ADR-0086): 86400s a 18Hz ≈ 1.555.200 ticks
+        let hz = TIMER_HZ.load(core::sync::atomic::Ordering::Relaxed).max(1);
+        self.schedule("update_check", 86400 * hz, "UPDATE_CHECK", "Daily OTA check");
         k_nano::slog_hermes!("Cron", "info", "{} jobs default registrados", self.jobs.len());
     }
 
@@ -112,6 +116,12 @@ impl Agent for CronAgent {
                 // NTP periodic resync
                 if job.name == "ntp_resync" {
                     let _ = crate::ntp::try_sync();
+                    continue;
+                }
+                // OTA diário (ADR-0086) — check inline (UPDATE.CFG -> manifest -> slot A/B)
+                if job.name == "update_check" {
+                    let r = crate::self_update::check_for_update();
+                    k_nano::slog_hermes!("Cron", "info", "update_check: {}", r);
                     continue;
                 }
 

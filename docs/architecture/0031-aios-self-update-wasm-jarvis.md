@@ -1,10 +1,11 @@
 # ADR-0031: AIOS Evolution — Self-Update, WASM, J.A.R.V.I.S. & Hybrid Agent Architecture
 
-**Status:** **Superseded (parcial, tema WASM) → [ADR-0059](0059-runtime-app-factory.md)** — o desvio "wasmi → VM `Op` custom" é **revertido** pela ADR-0059 (runtime real = `wasmi`). Self-Update / JARVIS / arquitetura híbrida permanecem válidos aqui.  
+**Status:** **Superseded (parcial)** — o desvio "wasmi → VM `Op` custom" é **revertido** pela ADR-0059 (runtime real = `wasmi`); **§1 Self-Update consolidado na [ADR-0086](0086-instalacao-e-update-ota.md) §3** (processo canônico de update OTA). JARVIS / arquitetura híbrida permanecem válidos aqui.  
 **Date:** 2026-07-03 (revisao: 2026-07-10)  
 **Author:** IDA IA + Dev  
 **Ref:** IDEA_BANK #306–#310  
 **Nota:** O plano original recomendava `wasmi` como runtime WASM. A implementacao real usa um bytecode VM custom (`wasm_exec.rs`) com `Op` enum proprio, mais leve e sem dependencia externa. WASI-to-skill mappings, MemoryPool, fuel metering, e capability tokens foram mantidos conforme o plano.  
+**Deprecação (2026-08-05):** §1 (Self-Update A/B dual-slot, canais, tries/rollback) consolidado na ADR-0086 — processo canônico. Mantido como histórico/referência de design.  
 
 ## Executive Summary
 

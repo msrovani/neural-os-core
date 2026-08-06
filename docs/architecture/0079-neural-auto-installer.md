@@ -1,11 +1,12 @@
 # ADR-0079: Neural AutoInstaller — Migração Inteligente Pendrive → HD/SSD/NVMe
 
 **Data:** 2026-07-27
-**Status:** Accepted
-**Lifecycle:** `fazendo`
+**Status:** **Superseded (processo) → [ADR-0086](0086-instalacao-e-update-ota.md) §2** — processo de instalação consolidado no documento canônico unificado. Mantida como referência de design/detalhes (decisões, arquitetura, riscos).
+**Lifecycle:** `substituida`
 **Inspirado por:** AIOS first principles, HW Expert v3, ADR-0040 §SysInstaller, TenonOS (arXiv 2512.00400), seed (Awis13), bootc
 **Sprint:** v2.0.0+
 **Documentos:** `docs/architecture/0079-neural-auto-installer-plan.md` (plano de implementação)
+**Deprecação (2026-08-05):** processo de instalação consolidado na ADR-0086 §2 (canônica); Fases 0–3 e marcos M0–M4 continuam válidos como plano de trabalho detalhado.
 
 ---
 
@@ -146,6 +147,62 @@ Fallback: `/EFI/BOOT/BOOTX64.EFI` (default UEFI boot path).
 
 Discos < 32GB podem usar FAT32 único (sem NeuralFS) — decidido pelo PartitionPlanner.
 
+### 2.8 Variante: modelos via rede no primeiro boot (`MODELS_SOURCE=network`)
+
+**Modo opt-in** (não substitui o default do pendrive-com-tudo). O pendrive leva
+**só kernel + firmware** (nenhum `.bitnet`); após a rede subir, o sistema baixa
+os **8 modelos** — um por slot do ModelHub — e os registra. Motivação: pendrive
+menor e mais barato de gerar; modelos só onde e quando o HW pede.
+
+#### Fluxo
+
+```
+1. Instalador: manifest SEM models (firmware normal) + `MODELS_SOURCE=network` no CONFIG.TXT
+2. 1º boot: sobe sem modelos — já é non-fatal hoje (BGE "STATUS Absent", experts seguem).
+   Sistema degradado mas bootável.
+3. NetAgent publica NET_READY (DHCP + DNS OK) no EventBus.
+4. ModelProvisioner: para cada slot do ModelHub sem `slot_loaded()`:
+     GET http://repo/neural/models/<slot>.bin
+     → cortex::model_hub::register_bytes(slot, data)   // ponto único de carga (ADR-0085 §7)
+     → grava /models/<slot>.bin na NeuralFS            // reboot não re-baixa
+5. Boots seguintes: leem do disco; provisioner só roda quando falta slot.
+```
+
+#### Decisões
+
+- **Ordem menor → maior**: HwExpert (~266KB) → RustCoder (~326KB) → Reranker
+  (<20MB) → Active (2B, ~604MB) por último, só se `model_fit` OK. O sistema
+  "fica esperto" barato antes de pagar o download grande.
+- **2B**: persistir em disco **antes** do `register_bytes` — não segurar 604MB
+  no heap durante o download (heap auto-grow até 1536MB aguenta, mas duplicar é desperdício).
+- **Integridade**: parse v6 (magic `0xBE11BE11`) + hash/tamanho no manifesto de
+  URLs. HTTP puro aceitável no MVP; o bridge TLS existente (SESSION_241) é hardening.
+- **Seleção por RAM**: reusa `ModelPlanner` / `model_fit::needs_airllm` /
+  `slot_too_tight` — mesma política de escolha 2B/7B/tiny do modo default.
+- **Progresso persistente**: arquivo presente em disco = slot pronto. Offline no
+  1º boot = segue degradado, retry a cada `NET_READY`/backoff (sem loop infinito).
+- **Relação com §1**: o ADR rejeitou "package manager + download" por exigir
+  internet **na instalação**; esta variante adia o download para o **primeiro
+  boot** (padrão cloud-init). Pendrive menor; primeiro boot depende de rede.
+
+#### Componentes novos
+
+| Componente | Responsabilidade | LOC estimado |
+|-----------|------------------|--------------|
+| `cortex/src/model_provisioner.rs` | Espera `NET_READY`, itera slots vazios, download, `register_bytes`, persist | ~150 |
+| Manifesto de URLs por slot | `slot → (url, tamanho, hash)` | ~40 |
+| Leitura NeuralFS de modelos | Boot lê hoje só FAT32/exFAT (`read_file_from_dev`); estender p/ NeuralFS | ~60 |
+| `NET_READY` no EventBus | Sinal DHCP+DNS ok para o provisioner (não tentar no escuro) | ~10 |
+
+#### Já existe (reuso, nada a inventar)
+
+- **8 slots** `ModelSlot` + `register_bytes()` — ponto único de carga, roteia
+  por slot e injeta nos Mutex legados (Active/RustCoder/HwExpert) —
+  `cortex/src/model_hub.rs`
+- **Ausência non-fatal** no boot (BGE `STATUS Absent`, experts seguem)
+- **Padrão GET** de `.BIN`: `AutoLearnAgent::download_knowledge()` (agents.rs:2361)
+- **NeuralFS `write_file`** + **`model_fit` / `needs_airllm` / `slot_too_tight`**
+
 ---
 
 ## 3. Arquitetura
@@ -246,6 +303,10 @@ Discos < 32GB podem usar FAT32 único (sem NeuralFS) — decidido pelo Partition
 | **MHI** | ✅ tiers + migração | `k_nano/src/mhi.rs` |
 | **Limine** | ✅ feature gate + protocol | `k_nano/src/limine.rs` |
 | **Cortex LLM** | ✅ BitNet + MoE | `cortex/src/` |
+| **ModelHub 8 slots** | ✅ `ModelSlot` + `register_bytes()` (ponto único de carga) | `cortex/src/model_hub.rs` |
+| **ModelProvisioner** | ❌ novo (variante §2.8) | `cortex/src/model_provisioner.rs` |
+| **Download HTTP de modelo** | ⚠️ só padrão learn-topic (`download_knowledge`) | `neural-kernel/src/agents.rs:2361` |
+| **Leitura NeuralFS de modelos** | ⚠️ boot lê modelos só de FAT32/exFAT | `neural-kernel/src/main.rs` (load sites) |
 | **app_factory A/B/C** | ✅ wasmi + Cranelift + arena | `hermes/src/app_factory.rs` |
 | **Skill Manifest** | ✅ FYY schema | `hermes/src/skill_manifest.rs` |
 | **Hermes intents** | ✅ framework de intents | `hermes/src/intent_bus.rs` |
@@ -262,6 +323,7 @@ Discos < 32GB podem usar FAT32 único (sem NeuralFS) — decidido pelo Partition
 | HW Expert não reconhece HW | Média | Baixo | Fallback: copiar firmware genérico ou pular; usuário adiciona manual |
 | UEFI boot entry não persiste | Média | Alto | Fallback `/EFI/BOOT/BOOTX64.EFI` (caminho default UEFI) |
 | Instalação interrompida | Baixa | Crítico | Checkpoint por etapa; retomar ou alertar no próximo boot |
+| 1º boot sem rede (variante §2.8) | Alta | Baixo | Sistema degradado mas bootável (comportamento atual sem modelos); retry a cada `NET_READY` com backoff |
 | WASM compile falha para skill | Baixa | Baixo | Fallback: instalar skill genérica (wasmi) em vez da otimizada |
 
 ---
@@ -290,6 +352,8 @@ Nenhum projeto AIOS no_std tem self-installer. O neural-os-core será pioneiro.
 
 **Aceito.** Fazer Fase 0 + Fase 1 (3 sprints) como MVP do Neural AutoInstaller.
 Fase 2 (AI dialog) e Fase 3 (HW swap/recovery) como residuais para v2.1+.
+A variante §2.8 (`MODELS_SOURCE=network`, modelos baixados no 1º boot) é opt-in
+e entra como residual pós-MVP (`ModelProvisioner`).
 
 O plano detalhado está em `docs/architecture/0079-neural-auto-installer-plan.md`.
 

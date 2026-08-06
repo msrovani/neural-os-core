@@ -3811,6 +3811,7 @@ pub fn register_builtin_skills() {
     reg.register(alloc::boxed::Box::new(HwIdentifySkill));
     reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::DiskDiagSkill));
     reg.register(alloc::boxed::Box::new(hermes_crate::expert_skills::SecuritySkill));
+    reg.register(alloc::boxed::Box::new(hermes_crate::self_update::UpdateCheckSkill));
     reg.register(alloc::boxed::Box::new(audio::skills::TtsSkill));
     reg.register(alloc::boxed::Box::new(audio::skills::SttSkill));
     reg.register(alloc::boxed::Box::new(audio::settings::AudioGetSettingsSkill));

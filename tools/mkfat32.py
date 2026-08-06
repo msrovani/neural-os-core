@@ -387,6 +387,10 @@ def populate(path):
         f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\nLOG_TO_FAT32=1\n"
     ).encode()
     files.append(("CONFIG.TXT", config_content))
+    # UPDATE.CFG — endereço do servidor OTA (ADR-0086). Override via env UPDATE_URL
+    # (ex: note 1 no cabo/ICS: UPDATE_URL=http://192.168.137.1:8080/UPDATE.MANIFEST).
+    update_url = os.environ.get("UPDATE_URL", "http://10.0.2.2:8080/UPDATE.MANIFEST").strip()
+    files.append(("UPDATE.CFG", f"UPDATE_URL={update_url}\n".encode()))
     # BOOT.LOG pre-alocado (256 KiB): USB-MSC ou soft-reboot UEFI ramlog.
     boot_log = (
         b"[S] neural-os-core BOOT.LOG\n"
