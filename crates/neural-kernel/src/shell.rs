@@ -57,6 +57,11 @@ pub fn execute(cmd: &str) -> String {
             });
             String::from("Install request sent (SYS_INSTALL)\n")
         }
+        "provision" => {
+            // ADR-0086 I4: baixa os modelos que faltam do server (UPDATE.CFG) — 1º boot Residente
+            let n = crate::model_provisioner::provision_missing();
+            alloc::format!("Provision: {} slots baixados\n", n)
+        }
         "gpu" => crate::gpu::backend::gpu_status().into(),
         "vram" => crate::gpu::vram::vram_status(),
         "agents" => alloc::format!("Agents: 248\n"),

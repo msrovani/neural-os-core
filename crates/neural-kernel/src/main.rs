@@ -75,6 +75,7 @@ mod inventory;
 mod memory;
 mod mhi;
 mod model_hub;
+mod model_provisioner;
 mod pci;
 mod smp;
 mod sync;
