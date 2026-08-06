@@ -102,9 +102,9 @@ AutoInstallerAgent (EventDriven, intent /install)
 | **ModelHub 8 slots** | ✅ `ModelSlot` + `register_bytes()` (ponto único de carga, ADR-0085 §7) | `cortex/src/model_hub.rs` |
 | **HwProfiler/ModelPlanner/PartitionPlanner/FsFormatter/BootloaderInstaller/SmartFileCopier/ConfigGenerator** | ❌ novos (Fase 1 do plano) | `k_nano/src/hw_profiler.rs` etc. |
 | **ModelProvisioner** | ❌ novo (variante §2.8) | `cortex/src/model_provisioner.rs` |
-| **AutoInstallerAgent** | ⚠️ esqueleto existe | `k_nano/src/installer_agent.rs` |
+| **AutoInstallerAgent** | ⚠️ **existe com `run_install()` completo, mas órfão** (não registrado no boot — gap I6) | `k_nano/src/installer_agent.rs` |
 | **InstallAdvisor (IA)** | ❌ Fase 2 | `cortex/src/install_adviser.rs` |
-| **HW swap/recovery** | ❌ Fase 3 | `hw_change.rs`, `self_heal_disk.rs`, `net_fallback.rs` |
+| **HW swap/recovery (Fase 3)** | ⚠️ **existem e linkados** (`self_check`, `rollback`, `hw_change`) — com placeholders (I8) | `k_nano/src/{self_check,rollback,hw_change}.rs` |
 
 ### 2.5 Marcos (plano ADR-0079)
 
@@ -115,6 +115,46 @@ AutoInstallerAgent (EventDriven, intent /install)
 | **M2** | **AutoInstaller MVP:** `install /dev/nvme0n1` com seleção inteligente + progresso Jarbas + reboot |
 | **M3** (Fase 2) | Instalação com diálogo IA natural, rollback funcional |
 | **M4** (Fase 3) | HW swap detection + self-recovery + NetFs fallback |
+
+### 2.6 Detecção de modo de boot: instalador vs sistema (decisão 2026-08-05)
+
+O OS precisa saber **de onde bootou** para escolher o fluxo. Hoje **não há detecção em runtime**
+(o kernel nunca lê `CONFIG.TXT`; `rollback::detect_boot_source` existe mas é órfão).
+
+**Sinal escolhido: assinatura do disco de boot (GPT), não o tipo de barramento.**
+USB vs ATA é ambíguo (o note real pode bootar de USB; o pendrive é USB). O discriminante
+robusto é o layout do boot device:
+
+| Sinal | Pendrive (instalador/live) | Sistema instalado |
+|---|---|---|
+| GPT do boot device | FAT32 única (dados) | **GPT dual: ESP + NeuralFS** (assinatura do SysInstaller) |
+| CONFIG.TXT | `BOOT_MODE=install\|live\|auto` | — (mode = sistema) |
+| Modelos | leitura FAT32 (se houver) | NeuralFS `/models/` |
+| Update | **não busca** (é a fonte) | busca no server (note 1) |
+
+**Decisões:**
+
+1. **`boot_media::mode()`** — função única lendo CONFIG.TXT + GPT do boot device; todos os
+   consumidores (boot, instalador, update) consultam um só ponto.
+2. **Pendrive → MODO INSTALADOR**: não carrega modelos (só HwExpert + tiny p/ o instalador);
+   pergunta "em qual HD instalar?" (`scan_disks` → lista); SysInstaller → GPT dual → reboot.
+   **Não busca atualização** — é a fonte, não o alvo.
+3. **Sistema instalado → MODO SISTEMA**: carrega modelos da NeuralFS; verifica update
+   (a quente: `.bitnet`/fw/skills via `register_bytes`+hot-swap; a frio: kernel → slot A/B → reboot).
+   Depende do gap **U6** (update falar GPT/NeuralFS).
+4. **Menu live/install no boot do pendrive** (UX):
+   ```
+   [L] Live  — default (timeout ~5s; boot degradado, comportamento atual)
+   [I] Instalar no disco — destrutivo; exige tecla
+   ```
+   - **Default = Live + timeout**: instalação é destrutiva; boot não pode travar sem teclado.
+   - **`CONFIG.TXT` pré-definido** (`BOOT_MODE=install|live|auto`): menu só em `auto`;
+     `install` direto = headless (útil no fluxo de dev).
+   - **Instalar NUNCA no disco de boot atual**: validação `target ≠ source` no SysInstaller.
+5. **Live não é modo novo** — é o comportamento atual (pendrive boota degradado sem modelos);
+   o menu só roteia.
+
+**Gap relacionado:** kernel não lê CONFIG.TXT hoje → criar `boot_media::mode()` (novo gap I9).
 
 ---
 
@@ -272,6 +312,7 @@ até o filtro aceitar `0x7F`/`0xEF` e os slots viverem na NeuralFS.
 | I6 | **AutoInstallerAgent órfão**: existe e é linkado (`lib.rs:98`), mas **não registrado no boot** — ninguém publica SYS_INSTALL | Verificação 2026-08-05 | registrar no AgentFleet + intent `/install` |
 | I7 | **`hw_profiler::gpu_vram_mb = 2048` hardcoded** p/ NVIDIA — decisão "GPU 4GB+ VRAM → 7B" depende de VRAM real | Verificação 2026-08-05 | decode de tamanho de BAR0 VRAM |
 | I8 | **`self_check::verify_install_checksum` é placeholder** (sem walk de diretório) | Verificação 2026-08-05 | implementar walk /boot + compare |
+| I9 | **Kernel não lê CONFIG.TXT em runtime** — não há `boot_media::mode()`; `detect_boot_source` (rollback.rs) é órfão | Decisão §2.6 | criar `boot_media::mode()` (CONFIG.TXT + GPT do boot device); conectar instalador/update/menu |
 
 ---
 
