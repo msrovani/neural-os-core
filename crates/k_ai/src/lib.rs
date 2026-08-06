@@ -57,6 +57,7 @@ pub mod security_detectors;
 pub mod self_optimizing_scheduler;
 /// ADR-0063 F2–F5 SGDB (MemoryDoc · Engine · ART · BQ) — MVP Onda 5.
 pub mod self_learning;
+pub mod self_state;
 pub mod sgdb;
 /// #218 4-Tier memory consolidation (SleepCycle CONSOLIDATE).
 pub mod tiers;

@@ -354,6 +354,13 @@ pub fn check_for_update() -> String {
         Ok(n) => {
             // U1: promove o slot inativo → kernel.elf (o Limine carrega) + BOOTCFG
             let switched = SelfUpdate::switch_slot();
+            // ADR-0086 §2.8: evento de vida — o OS lembra que atualizou o cérebro
+            k_ai::self_state::record_life_event(&alloc::format!(
+                "update aplicado {} -> {} (promote={})",
+                local,
+                remote,
+                if switched { "OK" } else { "FAIL" }
+            ));
             alloc::format!(
                 "[UPDATE] applied bytes={} {} -> {} promote={} (reboot p/ ativar slot)",
                 n,

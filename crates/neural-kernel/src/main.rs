@@ -3706,6 +3706,23 @@ pub(crate) fn kernel_boot(
 
     publish_boot_phase(BootPhase::AgentFleet, &alloc::format!("{} agents + DiagnosticSkill registrados", registry.agents.len()));
 
+    // ADR-0086 §2.8 (I10): autobiografia do OS — quem sou, onde estou (SELF.STATE na SGDB).
+    // O boot é releitura, não redescoberta: grava a fase derivada do boot_media::mode().
+    {
+        use k_ai::self_state::{LifePhase, current_phase, record_life_event, write_self_state};
+        let mode = k_nano::boot_mode::boot_mode();
+        let phase = match mode {
+            k_nano::boot_mode::BootMode::Live => LifePhase::Visitante,
+            k_nano::boot_mode::BootMode::Install => LifePhase::Mensageiro,
+            k_nano::boot_mode::BootMode::Installed => LifePhase::Residente,
+            k_nano::boot_mode::BootMode::Unknown => LifePhase::Unknown,
+        };
+        let prev = current_phase();
+        write_self_state(phase, None, prev != phase, None, None);
+        record_life_event(&alloc::format!("boot phase={} (prev={})", phase.as_str(), prev.as_str()));
+        k_nano::slog_bin!("SELF", "info", "SELF.STATE: fase={} (SGDB best-effort)", phase.as_str());
+    }
+
     crate::display::fb::boot_ckpt(50, "Runtime OK — iniciando scheduler");
 
     k_nano::slog_bin!("Sched", "info", "{} runtime agents. Iniciando scheduler...", registry.agents.len());
