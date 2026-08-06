@@ -29,6 +29,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KERNEL = ROOT / "target" / "limine-esp-tree" / "kernel.elf"
 LOGS_DIR = ROOT / "target" / "logs"
+# Modelos servidos (provision): qualquer .BIN/.bitnet presente em target/models/ ou target/
+MODELS_DIRS = [ROOT / "target" / "models", ROOT / "target"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -47,8 +49,22 @@ class Handler(BaseHTTPRequestHandler):
             body = self.kernel
             ctype = "application/octet-stream"
         else:
-            self.send_error(404, "not found")
-            return
+            # Modelos p/ ModelProvisioner (ADR-0086): /HWEXPRT.BIN etc. de target/models/ ou target/
+            fname = path.lstrip("/")
+            if fname and "/" not in fname:
+                for d in MODELS_DIRS:
+                    cand = d / fname
+                    if cand.is_file() and 10240 < cand.stat().st_size < 2_000_000_000:
+                        body = cand.read_bytes()
+                        ctype = "application/octet-stream"
+                        sys.stderr.write(f"[OTA] modelo servido: {cand} ({len(body)} bytes)\n")
+                        break
+                else:
+                    self.send_error(404, "not found")
+                    return
+            else:
+                self.send_error(404, "not found")
+                return
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))

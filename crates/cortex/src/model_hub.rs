@@ -333,7 +333,7 @@ pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
             "BITNET2B.BIN",
         ],
         ModelSlot::RustCoder => &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
-        ModelSlot::HwExpert => &["HWEXPRT.BIN", "HWEXPERT.BIN"],
+        ModelSlot::HwExpert => &["HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
         ModelSlot::Learner => &["LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
         ModelSlot::Agent => &["AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
