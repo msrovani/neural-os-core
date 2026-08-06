@@ -13,9 +13,6 @@ const SLOT_B: &str = "KERNEL~2";
 const BOOT_CFG: &str = "BOOTCFG~1";
 /// Path fixo que o Limine carrega (limine.conf: `boot():/kernel.elf`).
 const KERNEL_ELF: &str = "kernel.elf";
-const CHANNEL_MANIFEST_URL: &str = "http://10.0.2.2:8080/UPDATE.MANIFEST";
-
-pub enum UpdateChannel { Stable, Nightly, Security }
 
 pub struct SelfUpdate;
 
@@ -59,29 +56,6 @@ impl SelfUpdate {
             hash
         );
         Ok(n)
-    }
-
-    /// Optional channel poll stub — GET UPDATE.MANIFEST from host :8080 (serve_tiny_gguf).
-    pub fn poll_channel(_ch: &UpdateChannel) -> Result<usize, &'static str> {
-        match crate::tls::fetch_url(CHANNEL_MANIFEST_URL) {
-            Ok(body) if !body.is_empty() => {
-                k_nano::slog_hermes!(
-                    "UPDATE",
-                    "info",
-                    "channel_poll=OK bytes={}",
-                    body.len()
-                );
-                Ok(body.len())
-            }
-            Ok(_) => {
-                k_nano::slog_hermes!("UPDATE", "info", "channel_poll=FAIL err=empty");
-                Err("manifest_empty")
-            }
-            Err(e) => {
-                k_nano::slog_hermes!("UPDATE", "info", "channel_poll=FAIL err={}", e);
-                Err(e)
-            }
-        }
     }
 
     /// Detecta qual slot esta ativo lendo BOOTCFG~1 da FAT32
@@ -248,10 +222,6 @@ impl SelfUpdate {
             }
         }
         false
-    }
-
-    pub fn channel_name(ch: &UpdateChannel) -> &'static str {
-        match ch { UpdateChannel::Stable => "stable", UpdateChannel::Nightly => "nightly", UpdateChannel::Security => "security" }
     }
 
     pub fn status(&self) -> String {
