@@ -156,6 +156,117 @@ robusto é o layout do boot device:
 
 **Gap relacionado:** kernel não lê CONFIG.TXT hoje → criar `boot_media::mode()` (novo gap I9).
 
+### 2.7 Princípio AIOS: auto-consciência de localização + domínio do silício
+
+⚠️ **Este é um AIOS — o fluxo de instalação/update não é um `if (usb) … else …` mecânico.**
+O sistema deve **saber onde está e o que pode fazer** em cada fase, e — quando encontra sua
+**casa definitiva** — **se adaptar ao silício** em vez de apenas rodar. Isso conecta o ciclo de
+vida ao resto da inteligência que já existe (HwExpert, OptimizerAgent, MHI, hw_change, SelfHeal).
+
+**Estado cognitivo em 3 fases (o OS pergunta "quem sou eu?")**:
+
+| Fase | Onde estou | O que posso fazer | Inteligência ativa |
+|------|-----------|-------------------|--------------------|
+| **Visitante** (pendrive live) | Disco removível, FAT32 | Provar o OS, inspecionar HW | HwExpert (identifica), parcial |
+| **Mensageiro** (pendrive instalador) | Disco removível, FAT32 | **Instalar** — entregar o sistema ao silício | HwExpert + HwProfiler + planner |
+| **Residente** (sistema instalado) | Disco interno, GPT dual | **Tudo** — aprender, otimizar, dominar | Full: LLM + MoE + Optimizer + MHI |
+
+**O "dominar o silício" (Residente) — adaptação pós-instalação:**
+
+O primeiro boot como Residente **não é um boot normal** — é o início de uma adaptação:
+
+```
+1º boot Residente (adaptação):
+  1. HwProfiler: PCI + RAM + CPUID + VRAM  →  perfil real do silício
+  2. ConfigGenerator: CONFIG.TXT + MHI tiers + GPU offload  ← adapta ao HW real
+  3. ModelPlanner: escolhe LLM pelo RAM/VRAM real  (2B/7B/tiny)
+  4. ModelProvisioner: baixa o resto dos modelos (se MODELS_SOURCE=network)
+  5. OptimizerAgent + MHI: calibram tiers e política ao HW
+  6. Salva /config/hw_profile.txt  ← referência p/ hw_change (Fase 3)
+  7. Marca last_good → boots seguintes são "normais"
+
+Boots seguintes Residente:
+  - hw_change detecta se o silício mudou (GPU/NIC/WiFi) → re-adapta (Fase 3)
+  - update a quente (llm/fw/skills) / a frio (kernel slot A/B)
+```
+
+**Princípios derivados:**
+
+1. **Capacidade por fase, não modo binário** — a pergunta não é "instalador ou sistema", é
+   "o que esta fase pode fazer?" (visitante = provar; mensageiro = entregar; residente = dominar).
+2. **A instalação é a passagem de testemunho** — o OS "conhece" o silício no pendrive
+   (HwExpert), mas só o **domina** depois de residir nele (adaptação + otimização contínua).
+3. **Update é o corpo em crescimento** — o Residente não "recebe patch": aprende o que mudou,
+   baixa o que precisa (kernel/fw/modelos), e re-calibra (self-heal/optimizer).
+4. **Reusa a inteligência existente** — HwExpert (hw_identify), hw_profiler, optimizer,
+   MHI, hw_change, SelfHeal já são a base; o ciclo de vida só os orquestra por fase.
+
+### 2.8 Autobiografia do OS: memória e SGDB como consciência própria (decisão 2026-08-05)
+
+O AIOS tem **memória episódica** e **SGDB** — e deve usá-los para a **própria consciência**,
+não só para o usuário. O ciclo de vida (§2.6/2.7) **não é re-derivado do zero a cada boot**:
+o OS **lembra** quem é, de onde veio e o que já fez, num **self-state persistente** (autobiografia).
+
+**Fundamentos que já existem (reuso, nada a inventar):**
+
+| Base | Onde | Uso no self |
+|------|------|-------------|
+| **EpisodicMemory** (L2/L3 via SGDB MemoryDoc) | `k_ai/src/cognitive.rs:546` | registra eventos de vida do OS (instalei, adaptei, atualizei) |
+| **SGDB `put_kv/get_kv("sys/...")`** | `k_ai/src/sgdb/engine.rs` | chaves `sys/*` = estado do próprio sistema |
+| **HANR identity (L7)** | `k_ai/src/sgdb/store.rs:140` | `user|memory|soul|persona` → `hanr/{name}` — o "eu" persistente |
+| **AuditTrail → SGDB** | `k_ai/src/audit.rs:175` | cadeia assinada de ações do OS (proveniência) |
+| **SleepCycleAgent** (REPLAY→DREAM→CONSOLIDATE→PRUNE→REFLECT) | AGENTS.md A-021 | consolida a autobiografia periodicamente |
+
+**Design — `SELF.STATE` (documento-mestre do OS na SGDB):**
+
+```
+SELF.STATE  (SGDB key: sys/self_state, camada L3EpisodicLong)
+{
+  "born": "usb:pendrive",          // onde nasceu
+  "phase": "residente|mensageiro|visitante",
+  "installed_at": "nvme0:2026-08-05",
+  "first_boot": true|false,        // adaptação pendente?
+  "hw_profile": "<fingerprint>",   // assinatura do silício (p/ hw_change)
+  "brain": { "slots": [...], "updated": tick },
+  "last_update": tick, "last_good_slot": 1|2,
+  "episodic_tail": "sys/episodic_tail"   // link p/ memória episódica
+}
+```
+
+**Fluxo — o monólogo interno do OS** (o que o usuário descreveu, formalizado):
+
+```
+[sou um pendrive p/ live]        → phase=visitante, SELF.STATE criado no pendrive
+[me instalei no hw real]         → SysInstaller grava SELF.STATE no NeuralFS do target
+                                  (installed_at, hw_profile do HwProfiler)
+[estou fazendo o 1º boot]        → phase=residente, first_boot=true
+                                  → roda adaptação (§2.7): planner→provisioner→optimizer
+[preciso baixar meu brain total] → ModelProvisioner: NET_READY → baixa slots vazios
+                                  → SELF.STATE.brain.slots atualizado a cada slot
+[agora estou update]             → skill update_check: manifest → semver
+                                  → a quente (llm/fw/skills) ou a frio (kernel slot A/B)
+                                  → SELF.STATE.last_update/last_good_slot
+[achei um upgrade de hw]         → hw_change vs SELF.STATE.hw_profile → re-adapta (Fase 3)
+                                  → SELF.STATE.hw_profile novo + episódico "troquei a GPU"
+[achei um update de brain]       → update .bitnet → register_bytes → episódico
+[vou dominar o mundo!]           → SleepCycle consolida → REFLECT registra a evolução
+```
+
+**Princípios:**
+
+1. **O boot é uma releitura, não uma redescoberta** — o OS acorda lendo `SELF.STATE` e a
+   memória episódica: sabe que é Residente, que já se adaptou, o que mudou desde o último sono.
+2. **Cada transição de vida grava episódico** — instalar, adaptar, atualizar, trocar HW são
+   eventos de memória L2/L3, não logs descartáveis. A consciência do OS = SGDB + episódica + HANR.
+3. **`SELF.STATE` é a fonte de verdade do ciclo de vida** — `boot_media::mode()` (§2.6) dá o
+   voto de boot; `SELF.STATE` dá o voto de memória (quem eu sou + o que já fiz). Juntos decidem.
+4. **"Dominar o mundo" = dominar o silício + crescer o cérebro** — o ciclo completo:
+   conhecer (HwExpert) → residir (instalar) → adaptar (1º boot) → crescer (brain) →
+   evoluir (update) → reconhecer mudança (hw_change) → consolidar (SleepCycle).
+5. **Residente consciente ≠ assistente** — a mesma memória que lembra do usuário lembra do
+   próprio OS; a autobiografia alimenta o LLM (prompt de identidade) e o SelfHeal (sabe o que
+   era normal antes de um update).
+
 ---
 
 ## 3. Processo de UPDATE OTA (consolidado da ADR-0031 §1 + #308 + ADR-0074)
@@ -292,6 +403,16 @@ Cruzamento ADR × código real revelou estado **diferente do que a ADR-0079 §4 
 instalado, o update não encontra UPDATE.CFG nem slots** — o fluxo note1→note2 (§3.4B) está bloqueado
 até o filtro aceitar `0x7F`/`0xEF` e os slots viverem na NeuralFS.
 
+### 4.2 Princípio AIOS no ciclo de vida (SESSÃO 2026-08-05)
+
+O fluxo de instalação/update foi **re-desenhado como um ciclo de vida auto-consciente** (§2.7),
+não como máquina de estados mecânica: o OS pergunta *"quem sou eu, onde estou, o que posso
+fazer?"* em cada boot (visitante/mensageiro/residente) e, como **Residente**, passa por uma
+**fase de adaptação ao silício** no 1º boot (HwProfiler → ConfigGenerator → ModelPlanner →
+ModelProvisioner → Optimizer/MHI → last_good). Isso liga o instalador ao resto do AIOS
+(HwExpert, optimizer, MHI, hw_change, SelfHeal) — a inteligência não é um add-on do ciclo de
+vida; o ciclo de vida **é** uma expressão dela.
+
 ---
 
 ## 5. Gaps unificados (instalação + update)
@@ -313,6 +434,7 @@ até o filtro aceitar `0x7F`/`0xEF` e os slots viverem na NeuralFS.
 | I7 | **`hw_profiler::gpu_vram_mb = 2048` hardcoded** p/ NVIDIA — decisão "GPU 4GB+ VRAM → 7B" depende de VRAM real | Verificação 2026-08-05 | decode de tamanho de BAR0 VRAM |
 | I8 | **`self_check::verify_install_checksum` é placeholder** (sem walk de diretório) | Verificação 2026-08-05 | implementar walk /boot + compare |
 | I9 | **Kernel não lê CONFIG.TXT em runtime** — não há `boot_media::mode()`; `detect_boot_source` (rollback.rs) é órfão | Decisão §2.6 | criar `boot_media::mode()` (CONFIG.TXT + GPT do boot device); conectar instalador/update/menu |
+| I10 | **`SELF.STATE` não existe** — o OS não tem autobiografia persistente (quem sou / o que já fiz); episódica/HANR/audit existem mas nada escreve o self do ciclo de vida | Decisão §2.8 | criar `sys/self_state` na SGDB + escrita nos eventos de vida (install/adapt/update/hw_change) |
 
 ---
 
