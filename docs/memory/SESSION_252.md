@@ -89,3 +89,43 @@ onde estou (I9 boot_mode) → quem sou (I10 SELF.STATE) → instalar (I3/I6 → 
 → telemetria (I11) → opencode analisa target/logs/ → gera fix → ciclo
 → imagem fixa ~60MB (I12): uma imagem, qualquer alvo
 ```
+
+---
+
+## 7. Continuação (mesma sessão) — fila ADR itens 11 e 5
+
+### Item 11 — Backprop real + router treinado (ADR-0083, fechado)
+
+O `TransformerTrainer` backprop real já existia (SESSION_246); o gap real era o **elo
+treino→kernel**: o `train_router.py` exportava ROUTER.BITNET **v6** (ADR-0085 model_type=2,
+posicional), mas o `load_router_from_file` (Rust) parseava o **formato v3 antigo** (header 20B +
+names/tags + ntensors) → **nunca carregava** → fallback LCG (exatamente o log
+`DETERMINISTIC FALLBACK (LCG seed=42)` da SESSION_251).
+
+- `train_router.py`: fix `verify_roundtrip` para o layout v6 (era v3 — assert falhava) +
+  fix import `bitnet_writer` (sys.path do repo raiz). Treino: **93.5% (29/31), gate ≥0.80 PASS**,
+  exporta `tools/target/ROUTER.BITNET` (25.818 bytes) + report de matriz de confusão.
+- `trinity.rs load_router_from_file`: reescrito para o layout v6 posicional (preamble
+  magic/version/num_params/model_type + vocab/hidden/n_experts + embed f32 + weight i8).
+- Teste host `load_router_v6_roundtrip`: blob v6 em memória → loader parseia (PASS).
+- Cadeia completa: treino → export v6 → `find_file` (mkfat32 inclui `tools/target/`) → FAT →
+  boot carrega → **fim do fallback LCG**. Commit 71c4eed.
+
+### Item 5 — Market fetch v3 (ADR-0056, fechado)
+
+`search_remote` tinha **hardcoded `http://10.0.2.2:8080`** — o anti-padrão da lição ADR-0086
+(IP de ambiente é dado, vive no config file).
+
+- `marketplace.rs`: `remote_base()` deriva a URL do **UPDATE.CFG** (reuso `read_update_cfg`) —
+  mesmo server do update OTA; `search_remote` sem hardcoded.
+- `serve_update.py`: endpoint `GET /api/search?q=` lista pacotes/modelos de
+  `target/models/`, `target/` e `tools/target/` (testado: `?q=ROUTER` → ROUTER.BITNET 25.818B).
+- `ALLOWLIST_HOSTS` mantido (é allowlist de hosts permitidos, não URL default).
+- Commit 973bde5.
+
+### Smoke QEMU (A2) — refinamento em andamento
+
+`tools/smoke_ota_cycle.ps1` (base `run-qemu-p2p-mesh.ps1`: TCG puro, OVMF, `-no-reboot`):
+Ato 1 (install no target.raw) alcançou o **Runtime** (evidência parcial) mas o `sendkey`
+via monitor TCP não acionou o shell (pipeline teclado→Hermes). Refinamento pendente: debug do
+envio de scancodes (usb-kbd) ou trigger por outro canal.
