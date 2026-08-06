@@ -4,6 +4,7 @@
 //! (config file), nunca hardcoded. Ordem menor→maior: HwExpert → RustCoder →
 //! Reranker → Active (2B) por último — o sistema "fica esperto" barato primeiro.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use crate::model_hub::{self, ModelSlot};
 
@@ -57,8 +58,28 @@ fn persist_slot(name: &str, data: &[u8]) {
         if vol.write_file(dev, ino, data).is_ok() {
             k_nano::slog_bin!("PROV", "info", "persistido /models/{} ({} bytes)", name, data.len());
         }
+        // C9 (ora-1): ponte NeuralFS↔SGDB — registra meta do modelo no KV.
+        // O boot pode consultar pkg/model/* antes de varrer FAT (integração +
+        // verificação de integridade; corta o scan de nomes).
+        let meta = alloc::format!(
+            "{{\"file\":\"{}\",\"bytes\":{},\"sha256\":\"{}\"}}",
+            name,
+            data.len(),
+            self_update_sha_hex(data)
+        );
+        let _ = k_ai::sgdb::put_kv(&alloc::format!("pkg/model/{}", name), meta.as_bytes());
         return;
     }
+}
+
+/// SHA-256 hex do blob (reuso do self_update — evita duplicar a primitiva).
+fn self_update_sha_hex(data: &[u8]) -> String {
+    let h = k_nano::tpm::sha256(data);
+    let mut s = String::with_capacity(64);
+    for b in h {
+        s.push_str(&alloc::format!("{:02x}", b));
+    }
+    s
 }
 
 /// Tenta o 1º nome FAT 8.3 candidato do slot contra a base URL.

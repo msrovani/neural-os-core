@@ -27,9 +27,22 @@ impl NvmeFlashRegion {
         }
     }
 
-    /// Default: 64K setores (~32MB) a partir de LBA 2048 (pula MBR/GPT).
+    /// C1 (ora-1): região no FIM do disco — LBA 2048 (antigo default) colide com
+    /// ESP@2048 e NeuralFS@4096 do GPT instalado (sys_installer). Brick no 1º boot
+    /// NVMe real. Usa os últimos 32MB ANTES da backup GPT (últimos 34 setores).
     pub fn default_region() -> Self {
-        NvmeFlashRegion::new(2048, 65_536)
+        // Via trait BlockDevice (NvmeDriver implementa total_sectors em 512B units)
+        use crate::block_dev::BlockDevice;
+        let total = NVME_DRIVER.lock()
+            .as_mut()
+            .map(|n| n.total_sectors())
+            .unwrap_or(0);
+        if total > 34 + 65_536 {
+            NvmeFlashRegion::new(total - 34 - 65_536, 65_536)
+        } else {
+            // disco pequeno — ponytail: RAM fallback é melhor que colidir com o GPT
+            NvmeFlashRegion::new(2048, 65_536)
+        }
     }
 }
 
@@ -160,6 +173,8 @@ impl FlashController for ActiveFlash {
 pub static FLASH: Mutex<Option<ActiveFlash>> = Mutex::new(None);
 
 /// Init: NVMe se presente, senão RAM (honesto no log).
+/// C2: RAM é VOLÁTIL — SELF.STATE, vida episódica, HANR e audit evaporam no
+/// reboot sem erro. Log CRÍTICO deixa explícito (não silencioso).
 pub fn init_flash() -> &'static str {
     let mut g = FLASH.lock();
     if NVME_DRIVER.lock().is_some() {
@@ -167,6 +182,11 @@ pub fn init_flash() -> &'static str {
         "nvme"
     } else {
         *g = Some(ActiveFlash::Ram(RamFlash::new(1024 * 1024)));
+        crate::slog_nano!(
+            "TICKV",
+            "error",
+            "backend=RAM (VOLATIL) — memoria IA (SELF.STATE/episodica/HANR/audit) nao persiste entre boots. Sem NVMe, use NeuralFS write-through p/ dados criticos."
+        );
         "ram"
     }
 }

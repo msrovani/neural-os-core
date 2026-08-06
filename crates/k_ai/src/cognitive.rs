@@ -559,7 +559,10 @@ impl EpisodicMemory {
             self.episodes.remove(0);
         }
         self.episodes.push(String::from(event));
-        // Persist last episode as MemoryDoc L2 (key rotativo por índice)
+        // C4 (ora-1): fonte ÚNICA = doc-por-episódio (chave rotativa epi_<i>).
+        // Antes reescrevia o tail COMPLETO (sys/episodic_tail) a cada record —
+        // amplificação de escrita O(n) no flash (2.5MB p/ 50KB de dados) + docs
+        // órfãos. load_from_sgdb agora reconstrói dos docs, sem tail redundante.
         if crate::sgdb::ready() {
             let idx = self.episodes.len().saturating_sub(1);
             let key = alloc::format!("epi_{}", idx % self.max_episodes.max(1));
@@ -569,8 +572,6 @@ impl EpisodicMemory {
                 event.as_bytes().to_vec(),
             );
             let _ = crate::sgdb::put_doc(doc);
-            let joined = self.episodes.join("\n");
-            let _ = crate::sgdb::put_kv("sys/episodic_tail", joined.as_bytes());
         }
     }
     pub fn replay(&self, n: usize) -> Vec<String> {
