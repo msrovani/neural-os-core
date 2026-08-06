@@ -529,7 +529,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | I2 | ~~FAT32 format não implementado~~ → **corrigido**: `format_fat32_esp` existe | ADR-0079-plan 1.4 | ~esforço já coberto por `fat32.rs:1043` |
 | I3 | **Limine no target**: SysInstaller copia a ESP crua por setor (sem escrever limine.conf específico do alvo) | ADR-0079-plan 1.5 | BootloaderInstaller dedicado + limine.conf do target |
 | ~~I4~~ | ~~**ModelProvisioner** (`MODELS_SOURCE=network`) não implementado~~ | ✅ **resolvido 2026-08-05 (MVP)** | `neural-kernel/src/model_provisioner.rs`: `provision_missing()` baixa slots vazios (ordem HwExpert→RustCoder→Reranker→Active) via URL do UPDATE.CFG + `register_bytes`; comando shell `provision`. Auto-disparo no 1º boot (hook NET_READY) = refinamento |
-| I5 | **Leitura NeuralFS de modelos** no boot (hoje só FAT32/exFAT) | ADR-0079 §2.8 | estender load sites |
+| ~~I5~~ | ~~**Leitura NeuralFS de modelos** no boot (hoje só FAT32/exFAT)~~ | ✅ **resolvido 2026-08-05** | `try_hub_slot_neuralfs` (main.rs): monta NeuralFS 0x7F, lê `/models/`+`/boot/`+raiz antes do FAT32; ModelProvisioner persiste em `/models/` — Residente carrega sem re-baixar |
 | ~~I6~~ | ~~**AutoInstallerAgent órfão**: existe e é linkado (`lib.rs:98`), mas **não registrado no boot** — ninguém publica SYS_INSTALL~~ | ✅ **resolvido 2026-08-05** | registrado no AgentFleet (main.rs) + comando shell `install` publica `SYS_INSTALL` |
 | I7 | **`hw_profiler::gpu_vram_mb = 2048` hardcoded** p/ NVIDIA — decisão "GPU 4GB+ VRAM → 7B" depende de VRAM real | Verificação 2026-08-05 | decode de tamanho de BAR0 VRAM |
 | I8 | **`self_check::verify_install_checksum` é placeholder** (sem walk de diretório) | Verificação 2026-08-05 | implementar walk /boot + compare |

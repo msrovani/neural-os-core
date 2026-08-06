@@ -3247,6 +3247,52 @@ pub(crate) fn kernel_boot(
 
     // ModelHub extras: TinyStories / 850M fast / 3B pro — não substituem Active se já carregado
     {
+        // I5 ADR-0086: carrega modelo da NeuralFS do disco instalado (Residente).
+        // O ModelProvisioner persiste em /models/; boot lê daqui sem re-baixar.
+        fn try_hub_slot_neuralfs(slot: crate::model_hub::ModelSlot) -> bool {
+            let mut ata_guard = crate::ATA_DRIVER.lock();
+            let Some(ata) = ata_guard.as_mut() else { return false };
+            let parts = crate::fat32::read_mbr(ata);
+            for p in &parts {
+                if p.type_code != k_nano::neural_fs::volume::MBR_TYPE_NEURALFS {
+                    continue;
+                }
+                let dev: &mut dyn k_nano::block_dev::BlockDevice = ata;
+                let Some(vol) = k_nano::neural_fs::volume::NeuralVolume::mount(
+                    dev,
+                    p.lba_start as u64,
+                ) else {
+                    continue;
+                };
+                // ModelProvisioner grava em /models/<FAT_NAME> (create_file na raiz não cria dirs).
+                // ponytail: procura na raiz e em /boot (kernel.elf fica em /boot).
+                for root in ["models", "boot", ""] {
+                    for name in crate::model_hub::fat_names_for(slot) {
+                        let path = if root.is_empty() {
+                            alloc::string::String::from(*name)
+                        } else {
+                            alloc::format!("{}/{}", root, name)
+                        };
+                        let Some(ino) = vol.resolve_path(dev, &path) else { continue };
+                        let Ok(data) = vol.read_file(dev, ino) else { continue };
+                        if let Some(m) = crate::cortex::load_model(&data) {
+                            crate::cortex::register_model_slot(slot, alloc::boxed::Box::new(m));
+                            k_nano::slog_bin!(
+                                "MODEL",
+                                "info",
+                                "NeuralFS LOADED file={} slot={} size={}KB",
+                                path,
+                                slot.name(),
+                                data.len() / 1024
+                            );
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
         fn try_hub_slot_fat(slot: crate::model_hub::ModelSlot) {
             if crate::model_hub::slot_loaded(slot)
                 && matches!(
@@ -3364,6 +3410,18 @@ pub(crate) fn kernel_boot(
                         }
                     }
                 }
+            }
+        }
+        // I5: NeuralFS do disco instalado primeiro (Residente), depois FAT32 (pendrive/live)
+        for s in [
+            crate::model_hub::ModelSlot::Reranker,
+            crate::model_hub::ModelSlot::Vision,
+            crate::model_hub::ModelSlot::GeneratorPro,
+            crate::model_hub::ModelSlot::Learner,
+            crate::model_hub::ModelSlot::Agent,
+        ] {
+            if !crate::model_hub::slot_loaded(s) && try_hub_slot_neuralfs(s) {
+                k_nano::slog_bin!("HUB", "info", "slot {} via NeuralFS", s.name());
             }
         }
         try_hub_slot_fat(crate::model_hub::ModelSlot::Reranker);
