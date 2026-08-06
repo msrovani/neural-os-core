@@ -11,7 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = $PSScriptRoot
+$Root = Split-Path $PSScriptRoot -Parent
 $target = Join-Path $Root "target"
 $logDir = Join-Path $Root "logs"
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -93,6 +93,24 @@ function Start-Qemu([string]$log, [string[]]$extraDrives) {
     return $p
 }
 
+function Wait-Boot([string]$log, [string]$label) {
+    # Detecta boot pelo log (Runtime/AgentFleet) em vez de sleep fixo.
+    Write-Host "[$label] aguardando boot (Runtime)..." -ForegroundColor Cyan
+    $deadline = (Get-Date).AddSeconds(300)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 3
+        if (Test-Path $log) {
+            $content = Get-Content $log -Raw -ErrorAction SilentlyContinue
+            if ($content -match "Runtime|AgentFleet|SCHEDULER") {
+                Write-Host "[$label] boot OK (Runtime detectado)" -ForegroundColor Green
+                return $true
+            }
+        }
+    }
+    Write-Host "[$label] TIMEOUT no boot" -ForegroundColor Red
+    return $false
+}
+
 function Invoke-ShellCmd([string]$log, [string]$cmd, [string]$expect, [string]$label) {
     Write-Host "[$label] shell: $cmd" -ForegroundColor Cyan
     Send-Key $cmd
@@ -119,7 +137,7 @@ if (-not $SkipInstall) {
                "-drive", "format=raw,file=$target\install_target.raw,if=ide,index=2")
     Write-Host "=== ATO 1: install ===" -ForegroundColor Green
     $p = Start-Qemu $logAto1 $extra
-    Start-Sleep -Seconds 90  # boot TCG ate Runtime
+    if (-not (Wait-Boot $logAto1 "Ato1")) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; exit 1 }
     $ok = Invoke-ShellCmd $logAto1 "install" "SYS-INST" "Ato1"
     if (-not $ok) { Write-Host "FALHA Ato1" -ForegroundColor Red; Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; exit 1 }
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -135,7 +153,7 @@ if (-not $SkipProvision) {
                "-drive", "format=raw,file=$target\disk_mini.raw,if=ide,index=1")
     Write-Host "=== ATO 2: boot do target + provision ===" -ForegroundColor Green
     $p = Start-Qemu $logAto2 $extra
-    Start-Sleep -Seconds 90
+    if (-not (Wait-Boot $logAto2 "Ato2")) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue; exit 1 }
     $ok = Invoke-ShellCmd $logAto2 "provision" "PROV" "Ato2"
     if (-not $ok) { Write-Host "FALHA Ato2" -ForegroundColor Red; Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue; Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue; exit 1 }
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
