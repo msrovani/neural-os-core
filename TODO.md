@@ -9,7 +9,7 @@
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
-**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · WiFi AWAITING · TLS BLOCKED · R soft-float defer.
+**Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · TLS BLOCKED · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
 ---
@@ -29,7 +29,7 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 6 | SGDB DoD 10M chaves / 100k docs (benchmark + tuning ART) | 0063 | 2 | ~300 | ⏳ |
 | 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
 | 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | ⏳ |
-| 9 | FS residuals (NTFS/EXT write · SysInstaller · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | ⏳ |
+| 9 | FS residuals (NTFS/EXT write · **SysInstaller UI** · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | 🟡 **SysInstaller núcleo ✅ ADR-0086 (I3/I6/I8/I12)** — resta seleção de disco UI (A5) |
 | 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ |
 | 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ⏳ |
 | 12 | Cross-OS Ecosystem F1–F5 (Skill Manifest, Membrane, …) | 0076 | 3 | ~1.500 | ⏳ |
@@ -261,14 +261,18 @@ Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 1
 | Multi-device sync | ~300 | CRDT `#315.26` (fora gate) |
 | AppForge | ~3.000 | Apps multi-usuário (fora gate) |
 
+**Relação com ADR-0086:** o update OTA **não depende** destes bloqueadores no cenário cabo/ICS
+(HTTP puro sobre ethernet — §3.4B). Mas: **TLS** desbloqueia o A1 (U3 assinatura) em server público;
+**WiFi** estende o cenário note1→note2 ao sem-fio (hoje o update trafega no cabo). Ver seção ADR-0086 acima.
+
 ### ✅ Desbloqueados (histórico)
 
 | Item | Status |
 |------|--------|
 | **B-01** DHCP/RX + internet QEMU | ✅ L3.5–L5 (SESSION_149/150) + Pós-LAN (SESSION_152) |
 | WWW Agents (HTTP) | ✅ Search/RSS/Browser via net_bridge; Email SMTP residual |
-| Self-Update HTTP #308a | ✅ `fetch_update` + FNV + slot A/B; reboot A/B residual |
-| NetFs #418 peer | ✅ `[NETFS] VERDICT=PASS` (S3/WebDAV backends residual) |
+| **Self-Update HTTP #308a** | ✅ **ADR-0086 completo (SESSION_252)**: A/B + reboot + rollback + GPT — ver seção ADR-0086 acima; U3 (Ed25519/TPM) = A1 defer |
+| NetFs #418 peer | ✅ `[NETFS] VERDICT=PASS` (S3/WebDAV backends residual — **canal HTTP dev↔neural cobre o caso hoje**; S3/WebDAV = evolução de transporte, mesma lógica do mesh §3.6B) |
 
 ---
 
