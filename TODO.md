@@ -5,7 +5,7 @@
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **Fila ADR por complexidade** (abaixo) — próximo: 0041 aceite QEMU slog (Cap/AS non-fatal).
+**Pista ativa:** **ADR-0086 ✅ concluída (SESSION_252, 10 gaps)** — próximo: fila ADR item 5 (Market fetch v3) ou U3 (assinatura/TPM) quando update for público.
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
@@ -20,10 +20,11 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 
 | # | Item | ADR | Tier | Esforço | Status |
 |---|------|-----|------|---------|--------|
+| 0 | **Instalação + Update OTA (processo unificado)** — 10 gaps fechados (U1/U2/U4/U6 + I3–I12): slot→kernel.elf, rollback, GPT, boot_mode, SELF.STATE, ModelProvisioner, NeuralFS boot, telemetria, imagem mini | 0086 | 0 | ~1.200 | ✅ SESSION_252 (U3 Ed25519/TPM = defer p/ update público) |
 | 1 | Aceite QEMU slog (`NotifySent` + Cap/AS non-fatal como evidência) | 0041 | 0 | ~0 (evidência) | ✅ `docs/evidence/boot-whpx-20260805.txt` (WHPX; fix raiz: GDT usa `&*TSS` p/ ISTs) |
-| 2 | Log honesto no fallback LCG + assets FAT (`ROUTER.BITNET`) | 0083 | 1 | ~50 | ⏳ |
-| 3 | Cutover jarbas pleno (espelho áudio → crate; soft-float/VITS defer honesto) | 0045 | 1 | ~150 | ⏳ |
-| 4 | HardwareInfo expansão em ondas (MVP já em `platform_probe.rs`; snapshot WASM futuro) | 0082 | 1 | ~200 | ⏳ |
+| 2 | Log honesto no fallback LCG + assets FAT (`ROUTER.BITNET`) | 0083 | 1 | ~50 | ✅ SESSION_251 (warn honesto + ROUTER.BITNET no FAT) |
+| 3 | Cutover jarbas pleno (espelho áudio → crate; soft-float/VITS defer honesto) | 0045 | 1 | ~150 | ✅ SESSION_251 (cutover já feito e51a48b; docs reconciliados) |
+| 4 | HardwareInfo expansão em ondas (MVP já em `platform_probe.rs`; snapshot WASM futuro) | 0082 | 1 | ~200 | ✅ Onda CPU (SESSION_251) — expansão restante 🟡 |
 | 5 | Market fetch v3 | 0056 | 2 | ~200 | ⏳ |
 | 6 | SGDB DoD 10M chaves / 100k docs (benchmark + tuning ART) | 0063 | 2 | ~300 | ⏳ |
 | 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
@@ -39,6 +40,27 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 17 | Golden silício GPU multi-geração (NVIDIA ACR/GSP · AMD PSP/KIQ/MES · Intel GuC/walkers) | 0048–50 | 4 | ~3.000 + HW | ⏳ ▶️ |
 
 **Regra:** itens ▶️ AWAITING_HW não bloqueiam o gate v2.0.0 se tiverem defer explícito; 🔴 0077 resolve ANTES de re-habilitar Ring3 (ver `interrupts_ext.rs` review HIGH, SESSION_245).
+
+---
+
+## ▶️ ADR-0086 — Instalação + Update OTA (visão completa, SESSION_252)
+
+Processo canônico em `docs/architecture/0086-instalacao-e-update-ota.md`. ✅ 10 gaps fechados;
+**restam os itens de evolução** (U3 = hardening deferido; refinamentos documentados).
+
+| # | Item | Estado | Detalhe |
+|---|------|--------|---------|
+| A1 | **U3 — Assinatura Ed25519 + TPM PCR[8] no update** | ⏳ defer (reabrir p/ update público/mesh) | FNV-1a cobre integridade; Ed25519 = anti-tamper — custo real é o server assinar (quebraria fluxo dev). Server assina KERNEL.BIN → `.SIG`; kernel verifica contra pk embutida (`identity::verify_signature` já existe) |
+| A2 | **Smoke QEMU do ciclo completo** (Ato 1–3: instalar → boot target → provision) | ⏳ | `serve_update.py` → guest 10.0.2.2:8080 → `install` → `provision` → `update` → `telemetry`; evidência de aceite |
+| A3 | **Auto-disparo do ModelProvisioner no 1º boot Residente** | ⏳ | hoje via shell `provision`; hook NET_READY no NetAgent (1º boot, first_boot=true do SELF.STATE) |
+| A4 | **Menu live/install no boot do pendrive** (I9 dá o modo, falta a UI) | ⏳ | `[L]ive` default timeout ~5s / `[I]nstall`; `CONFIG.TXT BOOT_MODE=install/live/auto`; `set_boot_mode()` já existe |
+| A5 | **Comando `install` com seleção de disco** | ⏳ | hoje target = 1º AHCI/NVMe/USB; menu `scan_disks()` → lista → escolha (validação target ≠ source) |
+| A6 | **Update a quente de fw/skills/modelos** (sem reboot) | ⏳ | `register_bytes()` + hot-swap existem; falta o roteamento fw/skills pelo update_check |
+| A7 | **Loop de telemetria com auto-push periódico** | ⏳ | hoje via shell `telemetry`; LogAgent + cron diário (alinhado ao update_check) |
+| A8 | **Rollback: tries > 1 (hoje 1 tentativa)** | ⏳ | BOOTCFG `tries` já estrutura; ampliar p/ 3 com last_good (padrão ChromeOS/Android, ADR-0031 §1.4) |
+| A9 | **Imagem mini como default do fluxo instalável** | ⏳ | `--mini` existe; elevar p/ default do `--hw --unified` (MODELS_SOURCE=network) |
+
+**Relação:** A1 = U3 · A2–A9 = refinamentos da §3.4/§3.5/§3.6 da ADR-0086. A2 desbloqueia a evidência de aceite do ciclo completo.
 
 ---
 
