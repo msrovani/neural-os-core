@@ -62,9 +62,14 @@ pub fn profile_hardware() -> HwProfile {
     // RAM detection via e820-like (fallback: 512MB)
     let total_ram_mb = detect_ram_mb();
 
-    // GPU VRAM: BAR0 para NVIDIA (valor raw, precisa decode de tamanho)
-    // ponytail: BAR0 raw, sem decode de tamanho; VRAM report fica 0 até melhor detecção
-    let gpu_vram_mb = if has_nvidia_gpu { 2048 } else { 0 };
+    // GPU VRAM: tamanho real do BAR0 via técnica PCI (escrever 0xFFFFFFFF, ler
+    // bits de tamanho). NVIDIA mapeia a VRAM no BAR0. Sem hardcode (I7 ADR-0086).
+    let gpu_vram_mb = devices
+        .iter()
+        .filter(|d| d.class == 0x03 && d.subclass == 0x00)
+        .map(|d| unsafe { bar_size_mb(d.bus, d.device, d.function, 0x10) })
+        .max()
+        .unwrap_or(0);
 
     // CPU features — ponytail: assume pelo menos SSE; QEMU sempre tem
     let cpu_has_avx2 = cfg!(target_feature = "avx2");
@@ -90,4 +95,23 @@ pub fn profile_hardware() -> HwProfile {
 fn detect_ram_mb() -> u64 {
     let detected = crate::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
     if detected > 0 { detected } else { 512 }
+}
+
+/// Tamanho do BAR PCI (MB) — técnica padrão: escrever 0xFFFFFFFF, ler bits de
+/// tamanho, restaurar o valor original. ponytail: só BAR de memória (bit 0 = 0);
+/// I/O BAR (bit 0 = 1) retorna 0.
+unsafe fn bar_size_mb(bus: u8, device: u8, function: u8, offset: u8) -> u64 {
+    let orig = crate::pci::read_config_dword(bus, device, function, offset);
+    if orig & 0x1 != 0 {
+        return 0; // I/O BAR — não é memória/VRAM
+    }
+    crate::pci::write_config_dword(bus, device, function, offset, 0xFFFF_FFFF);
+    let mask = crate::pci::read_config_dword(bus, device, function, offset);
+    crate::pci::write_config_dword(bus, device, function, offset, orig);
+    if mask == 0 {
+        return 0;
+    }
+    // bits de tamanho: ~mask & 0xFFFF_FFF0 → potência de 2
+    let size = ((!mask) & 0xFFFF_FFF0) as u64;
+    size / (1024 * 1024)
 }
