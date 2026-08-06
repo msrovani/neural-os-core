@@ -522,7 +522,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | ~~U1~~ | ~~**Elo de boot**: update grava KERNEL~1/2 na FAT32 de dados, mas Limine carrega kernel.elf da ESP~~ | ✅ **resolvido 2026-08-05** | `switch_slot()` promove o slot inativo → `kernel.elf` (path fixo do Limine) + BOOTCFG; `check_for_update` chama switch após aplicar |
 | ~~U2~~ | ~~**Trigger imediato**: 1º check só após 24h de uptime~~ | ✅ **resolvido 2026-08-05** | comando shell `update` → `check_for_update()` (shell.rs) |
 | U3 | **Assinatura/TPM**: fetch atual só FNV-1a; Ed25519 (SIG) + TPM PCR[8] previstos na ADR-0031 | ADR-0031 §1.4 | add SHA-256/Ed25519 no fetch + TPM extend |
-| U4 | **Rollback automático** não testado no boot | ADR-0031 / #308c | watchdog de boot (3 tries → last_good) |
+| ~~U4~~ | ~~**Rollback automático** não testado no boot~~ | ✅ **resolvido 2026-08-05** | `rollback()` promove o slot bom → kernel.elf (guarda `tries` no BOOTCFG: 1=pendente, 0=limpo, evita loop); BootSelfHeal dispara em PANIC/GPU_HUNG pós-desligamento inesperado |
 | U5 | Config file fixo (UPDATE.CFG) | Sessão atual | service discovery / mesh (ADR-0081) quando modelos — **decisão §3.6B: contrato HTTP estável; mesh = transporte futuro (1→nós), BitTorrent ❌** |
 | ~~U6~~ | ~~**Update não funciona no disco GPT instalado** — pipeline só reconhece FAT32/MBR~~ | ✅ **resolvido 2026-08-05** | filtro `0xEF` (ESP FAT32 do GPT instalado) nos 4 pontos do self_update + UPDATE.CFG na ESP (build.rs) |
 | I1 | **Fases 1–3 do instalador** (ModelPlanner, PartitionPlanner, SmartFileCopier, ConfigGenerator, BootloaderInstaller) não implementadas | ADR-0079-plan | seguir Fases 0→3, marcos M0–M4 |

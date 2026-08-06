@@ -1763,6 +1763,13 @@ impl Agent for BootSelfHealAgent {
                             };
                             let mut heal = SELF_HEAL.lock();
                             heal.analyze(&ctx, true);
+                            // U4 ADR-0086: kernel novo falhou → volta o slot bom
+                            if crate::self_update::SelfUpdate::rollback() {
+                                k_nano::slog_hermes!(
+                                    "SELF", "HEAL",
+                                    "rollback OK — reboot no slot anterior (boot feliz no proximo boot)"
+                                );
+                            }
                         }
                     }
                 } else {

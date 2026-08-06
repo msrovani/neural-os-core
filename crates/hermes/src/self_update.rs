@@ -107,15 +107,65 @@ impl SelfUpdate {
 
     /// Ativa o outro slot para o proximo boot.
     /// Promove o slot inativo → kernel.elf (que o Limine carrega) — U1 ADR-0086.
+    /// Antes de promover, faz backup do kernel atual no slot que sai (rollback U4).
     pub fn switch_slot() -> bool {
         let current = Self::active_slot();
         let next = if current == 1 { 2 } else { 1 };
+        let cur_name = if current == 1 { SLOT_A } else { SLOT_B };
         let next_name = if next == 1 { SLOT_A } else { SLOT_B };
+        // Backup do kernel atual → slot que sai (preserva o bom p/ rollback)
+        if let Some(cur) = Self::read_fat_file(KERNEL_ELF) {
+            let _ = Self::write_kernel(cur_name, &cur);
+        }
         if !Self::promote_slot(next_name) {
             return false;
         }
-        let cfg_text = alloc::format!("{{\"boot_slot\":\"{}\",\"kernel\":\"{}\"}}", next, next_name);
+        let cfg_text = alloc::format!(
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":1}}",
+            next, next_name
+        );
         Self::write_bootcfg(&cfg_text)
+    }
+
+    /// Rollback: volta o kernel bom (slot oposto) → kernel.elf.
+    /// Só executa se há update pendente (tries==1, gravado pelo switch_slot);
+    /// após o rollback, tries=0 impede loop de alternância (U4 ADR-0086).
+    pub fn rollback() -> bool {
+        let (active, tries) = Self::boot_state();
+        if tries == 0 {
+            k_nano::slog_hermes!("UPDATE", "info", "rollback skip: no pending update (tries=0)");
+            return false;
+        }
+        let fallback = if active == 1 { 2 } else { 1 };
+        let fb_name = if fallback == 1 { SLOT_A } else { SLOT_B };
+        if !Self::promote_slot(fb_name) {
+            return false;
+        }
+        let cfg_text = alloc::format!(
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":0}}",
+            fallback, fb_name
+        );
+        let ok = Self::write_bootcfg(&cfg_text);
+        k_nano::slog_hermes!(
+            "UPDATE",
+            if ok { "info" } else { "error" },
+            "rollback -> slot {} promote={} cfg={}",
+            fallback,
+            ok,
+            ok
+        );
+        ok
+    }
+
+    /// Lê (slot_ativo, tries) do BOOTCFG~1. Default: (1, 0).
+    fn boot_state() -> (u8, u8) {
+        let Some(cfg) = Self::read_fat_file(BOOT_CFG) else {
+            return (1, 0);
+        };
+        let text = core::str::from_utf8(&cfg).unwrap_or("");
+        let slot = if text.contains("\"boot_slot\":\"2\"") || text.contains("slot_b") { 2 } else { 1 };
+        let tries = if text.contains("\"tries\":1") { 1 } else { 0 };
+        (slot, tries)
     }
 
     /// Lê o slot e grava como kernel.elf na mesma FAT32 (ESP/dados).
@@ -140,19 +190,28 @@ impl SelfUpdate {
         false
     }
 
-    /// Rollback: volta para o slot anterior
-    pub fn rollback() -> bool {
-        let current = Self::active_slot();
-        let fallback = if current == 1 { 2 } else { 1 };
-        let fb_name = if fallback == 1 { SLOT_A } else { SLOT_B };
-        let cfg_text = alloc::format!("{{\"boot_slot\":\"{}\",\"kernel\":\"{}.bak\"}}", fallback, fb_name);
-        Self::write_bootcfg(&cfg_text)
-    }
-
     /// Nova atualizacao recebida do canal — salva no slot inativo
     pub fn apply_update(data: &[u8]) -> bool {
         let slot = if Self::active_slot() == 1 { SLOT_B } else { SLOT_A };
         Self::write_kernel(slot, data)
+    }
+
+    /// Lê arquivo da primeira FAT32 (0x0B/0x0C/0x1C/0xEF) que o contém.
+    fn read_fat_file(name: &str) -> Option<alloc::vec::Vec<u8>> {
+        let ata = ATA_DRIVER.lock();
+        let ata = ata.as_ref()?;
+        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
+        for part in &parts {
+            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+                let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
+                if let Some(fs) = fs {
+                    if let Some(data) = unsafe { fs.read_file(name) } {
+                        return Some(data);
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn write_bootcfg(text: &str) -> bool {
