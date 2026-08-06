@@ -1,4 +1,23 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s251 — Tier 0+1 ADR + fix raiz reboot loop IST
+#   SESSION_251: fila ADR 1–4 completas + boot desbloqueado:
+#     ✔ 0041 aceite: docs/evidence/boot-whpx-20260805.txt (WHPX) — QUEUE_NOTIFY
+#       NotifySent, h5_demo R1=Allow/R3_no_cap=Deny/FE_no_bind=Deny, AS restore CR3
+#       OK, BOOT: MVP-C + P2–P9 OK, 57 agents + Runtime. Sem #GP/#PF fatal.
+#     ✔ 0083a: warn honesto fallback LCG (trinity.rs init_router_weights); ROUTER.BITNET
+#       confirmado no FAT (mkfat32.py:200 + models/).
+#     ✔ 0045: cutover JÁ feito (e51a48b) — docs/bridge reconciliados (jarbas=truth;
+#       residuals: soft-float/VITS, UAC AWAITING_HW, dedup HDA k_nano↔k_hal pendente).
+#     ✔ 0082 Onda CPU: ns::HW + populate_hw_namespace em store.rs boot_init (Fase 6);
+#       log: "Onda CPU: /hw/* populado (isa=avx2+fma, hv=WHPX, ram_mb=7168)".
+#     🔴 FIX RAIZ do reboot loop do commit 2662d50: GDT usava &TSS_ARRAY[0] cru (ISTs
+#       zerados) e o lazy_static TSS (que seta ISTs) nunca era dereferenciado → entrega
+#       de #PF/#GP/timer faz push para VA 0 → #DF (CR2=...fff8) → triple fault em WHPX+TCG.
+#       Fix: Descriptor::tss_segment(&*TSS) (força lazy_static). + checks HUGE_PAGE
+#       e3/e2 no map_page_direct (prescrição SESSION_250 §4).
+#     cargo check --release (neural-kernel/k-nano/k_ai/cortex): 0 erros.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s250 — AIOS na veia: RAM→HMI→auto-adaptação + Boot 2B
 #   SESSION_250: premissa do dono — ler RAM física, elencar no HMI, se auto-adaptar:
 #     Heap self-adapting: heap_initial = clamp(75% RAM detectada, 512..1536) no

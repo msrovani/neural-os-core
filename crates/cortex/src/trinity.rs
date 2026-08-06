@@ -639,7 +639,12 @@ pub fn init_router_weights(num_experts: usize) -> (Vec<f32>, PackedTernaryTensor
     if let (Some(e), Some(w)) = (embed, weight) {
         return (e, w);
     }
-    // Fallback: deterministic LCG
+    // Fallback: deterministic LCG (buraco de log honesto fechado — ADR-0083)
+    k_nano::slog_cortex!(
+        "TRINITY",
+        "warn",
+        "Router MoE: fallback deterministic LCG seed=42 UNTRAINED — nenhum peso de arquivo carregado (statics vazios)"
+    );
     generate_random_router_weights(num_experts)
 }
 

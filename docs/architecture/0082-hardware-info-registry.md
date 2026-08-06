@@ -162,7 +162,7 @@ let avx2 = snapshot.get("cpu/avx2");  // Some("true")
 - [ ] Congelar struct: nenhum campo novo após esta ADR ser aceita
 
 ### População SGDB no boot
-- [ ] `boot_init()` do SGDB (store.rs) escreve /hw/cpu/* após detect()
+- [x] `boot_init()` do SGDB (store.rs) escreve /hw/cpu/* após detect() (Onda CPU — SESSION 2026-08-05)
 - [ ] GPU probe escreve /hw/gpu/* após init
 - [ ] StorageBus escreve /hw/storage/* após probe
 - [ ] NetAgent escreve /hw/net/* após init

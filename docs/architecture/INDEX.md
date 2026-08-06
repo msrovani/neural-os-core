@@ -52,7 +52,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0028-gguf-format-research.md` | Proposed | `pesquisa` | #375–377 | GGUF research |
 | `0029-gpu-architecture.md` | Proposed | `modernizada` | #378–382, #406 | Base GPU evoluída |
 | `0030-disk-intelligence-agent.md` | Proposed | `modernizada` | #303a–f | Agente implementado e expandido |
-| `0031-aios-self-update-wasm-jarvis.md` | **Superseded (parcial, WASM)** | `substituida` | #306–310, #383–390 → **0059** | Desvio wasmi→Op VM revertido por ADR-0059; Self-Update/JARVIS mantidos |
+| `0031-aios-self-update-wasm-jarvis.md` | **Superseded (parcial)** | `substituida` | #306–310, #383–390 → **0059**; §1 Self-Update → **0086** | Desvio wasmi→Op VM revertido por ADR-0059; **§1 Self-Update consolidado na ADR-0086 §3 (deprecado 2026-08-05)**; JARVIS mantidos |
 | `0032-wasm-agent-apps.md` | **Superseded** | `substituida` | #391–396 → **0059** | Visão absorvida; Op VM + wasm.rs aposentados por wasmi (ADR-0059) |
 | `0033-on-device-micro-learning.md` | Proposed | `modernizada` | #397–401 | Base de micro-learning implementada |
 | `0034-jarvis-conscious-interaction-layer.md` | Superseded | `substituida` | #310/#315 | Substituída pela ADR-0036 |
@@ -62,7 +62,7 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0038-ecosystem-optimization.md` | Accepted | `pesquisa` | #355–360 | Auditoria e substituições |
 | `0039-boot-flow.md` | Accepted | `modernizada` | Boot 8 fases | Alinhada a Pacotes A/B |
 | `0040-filesystem-architecture.md` | Accepted | `completa` | #417–423 | MVP aceite 2026-07-16; **residuals `por_fazer`** (não reabrem ADR) |
-| `0041-k2chj-capability-rings.md` | Accepted | `fazendo` | #424–432, **#459–461** | **K³CHJ** capability; P0–P9 ✅; planos H1–H5+HalOffer+H4+/AS ✅ v1.8.6; path file `k2chj` estável |
+| `0041-k2chj-capability-rings.md` | Accepted | `completa` | #424–432, **#459–461** | **K³CHJ** capability; P0–P9 ✅; planos H1–H5+HalOffer+H4+/AS ✅ v1.8.6; aceite QEMU slog ✅ (SESSION_251, `docs/evidence/boot-whpx-20260805.txt`) |
 | `0042-k2chj-adequacao-boot.md` | Accepted | `modernizada` | #433–440, #457, **#461** | N1–N5 + wire v1.8.0; produto **K³CHJ** (§0); tree teste v1.8.6 |
 | `0043-cubecl-patterns-and-technologies.md` | Accepted | `pesquisa` | GPU patterns | Análise tecnológica |
 | `0044-edge-python-patterns.md` | Accepted | `pesquisa` | VM/SSA patterns | Análise tecnológica |
@@ -95,9 +95,12 @@ Status canônico no corpo: `Proposed | Accepted | Rejected | Superseded`. Varia�
 | `0083-ai-layer-gap-auditoria.md` | Accepted | `fazendo` | Auditoria 7.x | **Gap camada IA (2026-08-03):** infra de inferência real; inteligência pendente. Correções: router MoE carregável de arquivo (`ROUTER.BITNET`), esqueleto backprop `TransformerTrainer` (honesto — warn no log), saudação sem pool canado (argmax real). Dívida: log honesto no fallback LCG, backprop real, router treinado, assets FAT. |
 | `0084-bitnet-engine-fidelidade-e-kernels.md` | Proposed | `fazendo` | #126–156, #375–377, #479–490 | **Engine BitNet (2026-08-04):** fidelidade 2B4T (relu2/SubNorms/theta/embed Q6_K) + kernels CPU (decode branchless, activation-parallel, tiling) + receita treino 1-bit (speedrun/Hestia). Ordem: F1 decode → F2 prefill → F3 fidelity+Q6_K → F4 W2A8 gated. Sem retreino. Revisão §11 (2026-08-04): F1/F5 executáveis já; F3 bloqueada até auditoria de layout. **Implementação (SESSÃO 2026-08-05):** F1 decode branchless ✅ (`bitnet_avx2.rs` `(pair&1)-(pair>>1)`), F5 tiling consts ✅, F2 activation-parallel gated `m≥8` ✅, F3 fidelity ✅ (M1 act_type relu2/silu nos 4 forwards, M2 eps 1e-5 + `rms_ffn_norm` intermediate, M3 theta header, M4 embed Q6_K encoder+loader+lookup+unembed). **Bug latente corrigido:** `f16_to_f32` (gguf.rs) tinha `0.0*-1.0=-0.0` — todo f16 positivo virava -0.0, quebrando todos os dequants GGUF. F4 W2A8: gated (WHPX/HW real). |
 | `0085-bitnet-v6-formato-canonico.md` | Proposed | `fazendo` | #491 | **Formato canônico `.bitnet v6` (2026-08-04):** padronização do pipeline inteiro (codificação→escrita→leitura→inferência→propagação K³CHJ). Header autodescritivo (act_type, embed_type, feat computado, num_params u64, tie_flag), body por model_type (llm/hwexpert/router), writer canônico `bitnet_writer.py` + paridade byte-exact Rust, loader v6 estrito com fallback legado WARN, registro `cortex::model` + ModelHub. Formaliza a auditoria de layout da ADR-0084 §11.3.1. **Implementação (SESSÃO 2026-08-05):** F0 ✅ (writer + golden + `v6_writer_parity` byte-exact PASS), F1 ✅ (8 conversores → v6, incl. silu no forward de treino train_models_gpu), F2 ✅ (`load_model_v6` estrito + fallback WARN), F3 ✅ (Q6_K cross-check Rust↔Python PASS), F4 ✅ (`cortex::model` ModelView + `ModelHub::register_bytes` + call sites LLM do main.rs roteados). Fases F0-F4; decisões do dono em §10. |
+| `0086-instalacao-e-update-ota.md` | Accepted | `fazendo` | #308, #421, ADR-0079/0031/0074 | **Processo UNIFICADO Instalação + Update OTA (2026-08-05):** consolida ADR-0079 (AutoInstaller, Fases 0–3, marcos M0–M4) + ADR-0031 §1 (A/B dual-slot, canais, tries/rollback) + ADR-0074 (git thin, referência de código) + IDEA_BANK #176/#306–310/#417–423. Instalação: SysInstaller M1 ✅, Fases 1–3 pendentes (gaps I1–I8, incl. AutoInstallerAgent órfão I6, VRAM hardcoded I7). Update: mecanismo A/B pré-existente agora **disparado** — skill `update_check` diária (CronAgent 86400×HZ ticks) lê `UPDATE.CFG` (FAT32, env `UPDATE_URL` na build) → GET `UPDATE.MANIFEST` → semver → slot inativo. Servidor OTA on-demand `tools/serve_update.py`. ✅ cargo check 0 erros + 2 testes host. **Cenário-alvo dev: note 1 dev serve, note 2 real se auto-atualiza (§3.4).** Gaps U1–U6 (incl. **U6: update não funciona no disco GPT instalado** — pipeline só fala FAT32/MBR). |
 | `0081-malha-cognitiva-distribuida-p2p.md` | Accepted | `completa (parcial)` | #189/#312f/#315.26/#315.27 | **Malha P2P/mesh ADR-0081:** Fase A TOFU/fail-closed ✅ (s238), FRAG\0 MTU ✅ (s238), Fase C experts/DSD/tier/FL/CRDT ✅ (s239), Fase B tiers HMAC/Ed25519 ✅ (s240), AEAD Tier F + anti-replay dados + calibração ed25519 (69-114µs) ✅ (s241). BitTorrent ❌ (merkle piece p/ Fase C futura). Abertos: SemanticRouter, merge CRDT, merkle piece. |
 | `0077-ring3-isolation-ring.md` | Proposed | `fazendo` | ADR-0059 F6; #426 | **Ring3 Isolation Ring (ex-ADR-0060):** seams + boot wire; porto seguro (triple-fault blocker). Conectores no código, ring gated. Sessão debug dedicada |
 | `0078-multi-slot-multimodal-learner.md` | Proposed | `por_fazer` | GGUF→ternário, 6 slots, visão, learner | **Multi-slot multimodal:** conversão GGUF→ternário com threshold adaptativo, 6 slots reais (Active/Fast/Pro/Coder/HwExp/Learner), visão SigLIP, aprendizado contínuo on-device. Cabe em 8GB RAM total ~5.8GB. Fases 1-4 sequenciais |
+| `0079-neural-auto-installer.md` | **Superseded (processo) → 0086** | `substituida` | #421 | **AutoInstaller Neural (2026-07-27):** migração pendrive→HD/SSD/NVMe com seleção por HW (modelo por RAM, firmware por PCI, WASM por CPU), MHI no lugar de swap, Limine, particionamento, `MODELS_SOURCE=network`. **Deprecada 2026-08-05 — processo consolidado na ADR-0086 §2** (canônica); mantida como referência de design/riscos |
+| `0079-neural-auto-installer-plan.md` | **Superseded (processo) → 0086** | `substituida` | #421 | **Plano de implementação AutoInstaller:** Fases 0–3 (~3.550 LOC), marcos M0–M4, topologia, checklists por fase. **Deprecado 2026-08-05 — consolidado na ADR-0086 §2**; Fases/Marcos continuam válidos como plano de trabalho detalhado |
 | `NeuralFS.md` | Proposed | `fazendo` | #422 | SESSION_133: USB lock + GPT + unified exFAT; residual power-loss/stress |
 
 ### Follow-up ADR-0040 (residuals `por_fazer`, MVP intacto)
@@ -122,6 +125,7 @@ Os conflitos são preservados; nenhum arquivo deve ser renomeado sem migração 
 - **0045:** `0045-sound-voice-stack.md` é a decisão canônica Accepted. Perci/Bitwork migrou para `0054-perci-bitwork-integration.md` (pesquisa adiada).
 - **0047:** `0047-latent-space-ai-os.md` é o documento-base. GPU e HMI são extensões nomeadas da família, não novas decisões numeradas.
 - **Lacuna 0008:** não há arquivo ADR-0008 no repositório; o índice não infere conteúdo ausente.
+- **ADR-0074 (lacuna):** sem arquivo próprio; referenciada apenas no código (`hermes/src/git_thin.rs` "git-over-HTTPS thin client (ADR-0074)") e SESSION_241. Conteúdo consolidado na ADR-0086 §3.3.
 
 ## Substituições explícitas
 
@@ -161,7 +165,7 @@ Registro dos planos de implementação (Cursor Plans) já refletidos no corpo da
 | `Neural Device LEGOs` | **0056** (+ 0051–53, NeuralFS §12) | ✅ docs hub+specs+H1 bind; goldens VirtIO/ath10k | community + `device_recipe.rs` |
 | `Sanitizar pasta docs` | INDEX + GOVERNANCE | ✅ ciclo IDEA→ADR | archive + INDEX |
 
-**Próximo aceite operacional (0041):** boot QEMU com slog `NotifySent` + Cap/AS non-fatal — não reabre plano; só evidencia lifecycle.
+**Próximo aceite operacional (0041):** ✅ CONCLUÍDO (SESSION_251) — boot WHPX com slog `NotifySent` + Cap/AS non-fatal evidenciado em `docs/evidence/boot-whpx-20260805.txt`. Fix raiz do reboot loop (commit 2662d50): GDT passa a usar `&*TSS` (lazy_static TSS com ISTs zerados nunca era dereferenciado → entrega #PF/#GP/timer fazia push para 0 → triple fault).
 
 ### Nome do produto
 

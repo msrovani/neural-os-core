@@ -5,6 +5,7 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
 
 use super::engine::{with_engine, AiosDatabaseEngine};
 use super::layers::ensure_ready;
@@ -19,6 +20,7 @@ pub mod ns {
     pub const AUDIT: &str = "audit/";
     pub const VDB: &str = "vdb/";
     pub const SYS: &str = "sys/";
+    pub const HW: &str = "hw/";
 }
 
 pub fn ready() -> bool {
@@ -34,13 +36,48 @@ pub fn backend() -> &'static str {
 }
 
 /// Boot / init: Hamming dispatch + engine + rebuild ART/BQ.
+/// ADR-0082 Onda CPU: popula /hw/* no SGDB (valores string lowercase).
 pub fn boot_init() {
     super::hamming_dispatch::select_best_hamming_kernel();
     ensure_ready();
     if k_nano::storage::is_ready() {
         let n = with_engine(|e| e.rebuild_indices_from_tickv()).unwrap_or(0);
         let _ = n;
+        populate_hw_namespace();
     }
+}
+
+/// ADR-0082 Onda CPU: `hw/<categoria>/<propriedade>` — valores string lowercase,
+/// via `k_nano::platform_probe::hw_info()`. Falhas de put são não-fatais (log warn).
+fn populate_hw_namespace() {
+    let hw = k_nano::platform_probe::hw_info();
+    let write = |key: &str, value: &str| {
+        if let Err(e) = put_kv(key, value.as_bytes()) {
+            k_nano::slog_kai!("SGDB", "hw", "warn put_kv {}: {}", key, e);
+        }
+    };
+    let flag = |b: bool| if b { "true" } else { "false" };
+    write(&format!("{}cpu/isa", ns::HW), hw.isa_name());
+    write(&format!("{}cpu/avx2", ns::HW), flag(hw.avx2_ready()));
+    write(&format!("{}cpu/avx512", ns::HW), flag(hw.avx512_ready()));
+    write(&format!("{}cpu/fma", ns::HW), flag(hw.cpu.fma));
+    write(&format!("{}cpu/hv", ns::HW), hw.hv.name());
+    write(&format!("{}cache/l1d", ns::HW), &format!("{}", hw.cache.l1d));
+    write(&format!("{}cache/l1i", ns::HW), &format!("{}", hw.cache.l1i));
+    write(&format!("{}cache/l2", ns::HW), &format!("{}", hw.cache.l2));
+    write(&format!("{}cache/l3", ns::HW), &format!("{}", hw.cache.l3));
+    write(
+        &format!("{}mem/total_mb", ns::HW),
+        &format!("{}", k_nano::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)),
+    );
+    k_nano::slog_kai!(
+        "SGDB",
+        "hw",
+        "Onda CPU: /hw/* populado (isa={}, hv={}, ram_mb={})",
+        hw.isa_name(),
+        hw.hv.name(),
+        k_nano::memory::TOTAL_RAM_MB.load(Ordering::Relaxed)
+    );
 }
 
 /// Varre PCI devices e escreve predições do HW Expert v4 no SGDB /hw/pci/.

@@ -104,7 +104,11 @@ lazy_static! {
         // Restaura 1 TSS compartilhado (TSS_ARRAY[0], BSP), design pré-f41aa03
         // com boot conhecido OK. ISTs per-AP continuam alocadas em TSS_ARRAY
         // (init_ap_tss preenche; GDT referencia TSS[0] até haver GDT maior).
-        let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(unsafe { &TSS_ARRAY[0] }));
+        // ⚠️ &*TSS (deref do lazy_static) FORÇA o init do TSS — sem isso os
+        // interrupt_stack_table ficam zerados (TaskStateSegment::new) e a
+        // entrega de #PF/#GP/timer com IST faz push para 0 → #DF → triple
+        // (SESSION_250 — reboot loop pós-heap do commit 2662d50).
+        let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(&*TSS));
         let tss_selectors = [shared_tss_selector; MAX_APS + 1];
         
         (gdt, Selectors { code_selector, tss_selectors })

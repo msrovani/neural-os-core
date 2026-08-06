@@ -5,12 +5,40 @@
 **Propósito:** Checklist mestre do roadmap v1.5.x → v2.0.
 **Documento oficial:** AGENTS.md (seção roadmap)
 **Legenda:** ✅ feito | 🟡 em andamento | 🔴 bloqueado | ⏳ agendado
-**Pista ativa:** **BEI BitNet Cognitivo** — ADR-0060 aprovado (7 ondas, ~2470 LOC). Próximo: implementação Onda 0 (MPMC).
+**Pista ativa:** **Fila ADR por complexidade** (abaixo) — próximo: 0041 aceite QEMU slog (Cap/AS non-fatal).
 **PreFlight:** `python tools/preflight_wave.py --wave N` · `--idea 418` · `--anti-fake-ready` · cache `.preflight_cache/`
 **Tags:** `depends_on: lan` (✅ L3.5–L5) / `depends_on: wifi` ▶️ · ▶️ **AWAITING_HW** · **BEI** (BitNet Ecosystem Intelligence)
 **Gate v2.0.0:** `por_fazer` zerado **ou** residual replanejado + OK maintainer. AWAITING_HW bloqueia salvo defer explícito.
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · WiFi AWAITING · TLS BLOCKED · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
+
+---
+
+## ▶️ FILA ADR — pendências ordenadas por complexidade (mais simples → mais complexo)
+
+Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recomendada: 1→2→3→4 (aquecimento), depois 5→6→8→9 (padrão já dominado). 🔴 = blocker · ▶️ = AWAITING_HW.
+
+| # | Item | ADR | Tier | Esforço | Status |
+|---|------|-----|------|---------|--------|
+| 1 | Aceite QEMU slog (`NotifySent` + Cap/AS non-fatal como evidência) | 0041 | 0 | ~0 (evidência) | ✅ `docs/evidence/boot-whpx-20260805.txt` (WHPX; fix raiz: GDT usa `&*TSS` p/ ISTs) |
+| 2 | Log honesto no fallback LCG + assets FAT (`ROUTER.BITNET`) | 0083 | 1 | ~50 | ⏳ |
+| 3 | Cutover jarbas pleno (espelho áudio → crate; soft-float/VITS defer honesto) | 0045 | 1 | ~150 | ⏳ |
+| 4 | HardwareInfo expansão em ondas (MVP já em `platform_probe.rs`; snapshot WASM futuro) | 0082 | 1 | ~200 | ⏳ |
+| 5 | Market fetch v3 | 0056 | 2 | ~200 | ⏳ |
+| 6 | SGDB DoD 10M chaves / 100k docs (benchmark + tuning ART) | 0063 | 2 | ~300 | ⏳ |
+| 7 | F4 W2A8 kernel (gated WHPX/HW real) | 0084 | 2 | ~400 | ⏳ ▶️ |
+| 8 | AirLLM residuals (prefetch DMA / stream-to-disk / K-quants / e2e GGUF grande) | 0046 | 2 | ~500 | ⏳ |
+| 9 | FS residuals (NTFS/EXT write · SysInstaller · Storage Manager UI · Cloud mounts S3/WebDAV; MHI DMA + GPU DS ▶️ AWAITING_HW) | 0040 | 2 | ~800 (vários) | ⏳ |
+| 10 | Cards S5 (widgets ricos/tema/TTF) + A/V real (HDA/UVC) | 0058 | 3 | ~800 | ⏳ |
+| 11 | Backprop real + router treinado (`ROUTER.BITNET`) | 0083 | 3 | ~1.000 | ⏳ |
+| 12 | Cross-OS Ecosystem F1–F5 (Skill Manifest, Membrane, …) | 0076 | 3 | ~1.500 | ⏳ |
+| 13 | SemanticRouter / merge CRDT / merkle piece (BitTorrent ❌) | 0081 | 3 | ~1.500 | ⏳ |
+| 14 | Layer S/HW: APs workers vivos (IDT/IPI reschedule) + GPU W2A8 + driver NPU (pós-v2.0) | 0057 | 3 | ~2.000 + HW | ⏳ |
+| 15 | Ring3 isolation — 🔴 triple-fault blocker (`TRY_ENTER_RING3=false`; sessão debug dedicada) | 0077 | 4 | ~1.500 | 🔴 |
+| 16 | Multi-slot multimodal (GGUF→ternário, 6 slots, visão SigLIP, learning contínuo) | 0078 | 4 | ~2.500 | ⏳ |
+| 17 | Golden silício GPU multi-geração (NVIDIA ACR/GSP · AMD PSP/KIQ/MES · Intel GuC/walkers) | 0048–50 | 4 | ~3.000 + HW | ⏳ ▶️ |
+
+**Regra:** itens ▶️ AWAITING_HW não bloqueiam o gate v2.0.0 se tiverem defer explícito; 🔴 0077 resolve ANTES de re-habilitar Ring3 (ver `interrupts_ext.rs` review HIGH, SESSION_245).
 
 ---
 
@@ -64,7 +92,7 @@
 
 ## ✅ SPRINT SOUND — voz production-path (2026-07-16)
 
-**Truth** = `neural-kernel/src/audio/*` (ADR-0045). Espelho jarbas sincronizado; **sem cutover**.
+**Truth** = `jarbas/src/audio/*` (ADR-0045; cutover **✅ e51a48b** — bin re-exporta `jarbas_crate::audio`, antigos truth de `neural-kernel/src/audio/*` deletados).
 **Check:** `cargo check --release -p neural-kernel` = 0 erros (`target/check-sound`).
 **SESSION:** `docs/memory/SESSION_122.md`.
 
@@ -76,11 +104,11 @@
 | Soft-float voice latency | ⏳ | known blocker; defer honesto (sem fake fix) — Onda 4 |
 | UAC (#84) | ▶️ AWAITING_HW | parse+probe+USB-TRUST; `[UAC-HW] VERDICT=AWAITING_REAL_HW` (iso TRB) |
 | USB Trust #6/#12–15 | ✅ | `usb_trust.rs` + `usb.tbl` + enforce/disable_port (SESSION_145) |
-| jarbas/audio wire | ▶️ | espelho sync (VAD/settings/wake Continuous); cutover re-export = futuro |
+| jarbas/audio wire | ✅ | cutover **e51a48b**: bin `pub use jarbas_crate::audio::*`; espelhos bin deletados |
 | VAD refinements | ✅ | noise-floor EMA + ZCR + histerese |
 | SER refinements | ✅ | confidence gate + thresholds calibrados |
 | Wake ML polish | ✅ | Continuous + sensitivity + telemetria throttled |
-| Unify truth↔espelho | ▶️ | topics+settings contract no bridge; cutover pleno adiado (ADR-0045) |
+| Unify truth↔espelho | ✅ | cutover pleno **e51a48b**; bridge topics+settings agora tautológico (mantido como contrato documental) |
 
 ---
 

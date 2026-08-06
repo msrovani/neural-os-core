@@ -219,6 +219,12 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     let l4_virt = base + l4_frame.start_address().as_u64();
     let l4_tbl = &mut *(l4_virt.as_mut_ptr::<PageTable>());
     let e3 = &mut l4_tbl[virt.p4_index()];
+    // HUGE_PAGE em TODOS os níveis (SESSION_250 §2.3/§4): não descer para um
+    // walk se a entrada já é 1GB/2MB page — lê P2 garbage → páginas não-mapeadas
+    // → #PF → reboot loop. Fix real do known-issue (commit 2662d50).
+    if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return;
+    }
     if !e3.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
         if f == 0 { return; }
@@ -227,6 +233,9 @@ unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
     let l3_virt = base + e3.addr().as_u64();
     let l3_tbl = &mut *(l3_virt.as_mut_ptr::<PageTable>());
     let e2 = &mut l3_tbl[virt.p3_index()];
+    if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return;
+    }
     if !e2.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
         if f == 0 { return; }

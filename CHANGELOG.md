@@ -3,6 +3,30 @@
 ## [Unreleased]
 
 
+### SESSION_251: Tier 0+1 ADR (0041/0083a/0045/0082) + fix raiz reboot loop IST (2026-08-05)
+
+Implementação da fila ADR por complexidade (itens 1–4 do TODO) + desbloqueio do boot.
+
+- **0041 aceite QEMU** — evidência em `docs/evidence/boot-whpx-20260805.txt` (WHPX):
+  `QUEUE_NOTIFY pci` (NotifySent ≥1×), `[VirtIO] [h4] OK: 1/1`, `h5_demo R1=Allow
+  R3_no_cap=Deny FE_no_bind=Deny`, `AS restore CR3 OK`, `BOOT: MVP-C` + `P2–P9` OK,
+  57 agents + Runtime, sem #GP/#PF fatal.
+- **0083a** — warn honesto no fallback LCG (`init_router_weights`); `ROUTER.BITNET`
+  confirmado no FAT.
+- **0045** — cutover de áudio já estava feito (`e51a48b`); ADR-0045, `jarbas_bridge.rs`,
+  TODO e STATE reconciliados (truth=jarbas; residuals: soft-float/VITS, UAC AWAITING_HW,
+  dedup HDA pendente).
+- **0082 Onda CPU** — `ns::HW` + `populate_hw_namespace` em `store.rs` boot_init:
+  `hw/cpu/*`, `hw/cache/*`, `hw/mem/total_mb`; log `Onda CPU: /hw/* populado`.
+- 🔴 **Fix raiz do reboot loop** (commit 2662d50 veio com boot quebrado, SESSION_250):
+  o GDT do k_nano referenciava `TSS_ARRAY[0]` cru (ISTs zerados) e o lazy_static `TSS`
+  que preenche os ISTs nunca era dereferenciado → entrega de #PF/#GP/timer com IST
+  fazia push para VA 0 → #DF (CR2=0xfffffffffffffff8) → triple fault. Fix:
+  `Descriptor::tss_segment(&*TSS)`. Checks `HUGE_PAGE` e3/e2 adicionados ao
+  `map_page_direct` (prescrição SESSION_250 §4).
+- **Verificação:** `cargo check --release -p neural-kernel -p k-nano -p k_ai -p cortex` 0 erros.
+
+
 ### SESSION_250: AIOS na veia — RAM física → HMI → auto-adaptação + Boot do 2B (2026-08-05)
 
 Premissa do dono: o AIOS deve **ler a memória física disponível, elencar no HMI
