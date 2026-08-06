@@ -1,26 +1,34 @@
 #!/usr/bin/env python3
 """Servidor OTA on-demand para neural-os-core (ADR-0086 update).
 
-Sobe HTTP :8080 com os dois endpoints que o OS consome:
-  GET /UPDATE.MANIFEST  -> {"channel","version","url"} (JSON)
+Sobe HTTP :8080 com os endpoints que o OS consome:
+  GET /UPDATE.MANIFEST  -> {"channel","version","url","sha256"} (JSON)
   GET /KERNEL.BIN       -> kernel.elf novo (blob)
+  GET /api/search?q=    -> lista modelos disponíveis (skill_market)
+  GET /<MODEL>.BIN      -> modelos p/ ModelProvisioner
+  POST /api/logs        -> telemetria (BOOT.LOG do neural)
 
-Roda SOMENTE quando o usuário pede (não é daemon). Uso:
-  python tools/serve_update.py                       # serve target/limine-esp-tree/kernel.elf
-  python tools/serve_update.py --version 1.9.10      # anuncia versão 1.9.10
-  python tools/serve_update.py --kernel target/kernel.elf
-  python tools/serve_update.py --bind 0.0.0.0 --port 8080
+Segurança (S1/S2/S8/S9/S10 oracle):
+  - manifest carrega sha256 do kernel (o kernel verifica ANTES de gravar o slot)
+  - token de sessão gerado no start (--token ou aleatório); clientes usam
+    Authorization: Bearer <token> (S2)
+  - --base-url obrigatório quando --bind=0.0.0.0 (senão o KERNEL.BIN anunciado
+    é http://0.0.0.0:8080 e o update nunca baixa) (S8)
+  - path traversal bloqueado (resolve + parent check + \\ e .. rejeitados) (S9)
+  - POST /api/logs com cap de tamanho (1MB) (S10)
+  - DEV-ONLY: sem TLS, sem auth criptográfica — nunca expor em rede não-confiável.
 
-Cenário 2 notes via cabo + ICS do Windows: o note 1 (este) roda o servidor
-e o note 2 (rodando o OS) consulta via UPDATE.CFG na FAT32:
-  UPDATE_URL=http://<ip-do-note-1>:8080/UPDATE.MANIFEST
-No QEMU (user net) o guest alcança o host em 10.0.2.2.
+Roda SOMENTE quando o usuário pede. Uso:
+  python tools/serve_update.py --version 1.9.10
+  python tools/serve_update.py --bind 192.168.137.1 --token meu-token
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import secrets
 import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,16 +39,36 @@ DEFAULT_KERNEL = ROOT / "target" / "limine-esp-tree" / "kernel.elf"
 LOGS_DIR = ROOT / "target" / "logs"
 # Modelos servidos (provision): qualquer .BIN/.bitnet presente em target/models/, target/ ou tools/target/
 MODELS_DIRS = [ROOT / "target" / "models", ROOT / "target", ROOT / "tools" / "target"]
+MAX_LOG_BYTES = 1_048_576  # S10: cap de 1MB no POST /api/logs
 
 
 class Handler(BaseHTTPRequestHandler):
     manifest: bytes = b""
     kernel: bytes = b""
+    token: str = ""
 
     def log_message(self, fmt: str, *args) -> None:
         sys.stderr.write("[OTA] " + (fmt % args) + "\n")
 
+    def _auth_ok(self) -> bool:
+        # S2: se um token foi definido, exige Authorization: Bearer <token>.
+        if not self.token:
+            return True
+        auth = self.headers.get("Authorization", "")
+        return auth == f"Bearer {self.token}"
+
+    def _reject(self, code: int, msg: str) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(msg)))
+        self.end_headers()
+        self.wfile.write(msg.encode())
+        self.close_connection = True
+
     def do_GET(self) -> None:  # noqa: N802
+        if not self._auth_ok():
+            self._reject(401, "unauthorized")
+            return
         path, _, query = self.path.partition("?")
         if path in ("/UPDATE.MANIFEST", "/update.manifest"):
             body = self.manifest
@@ -64,21 +92,24 @@ class Handler(BaseHTTPRequestHandler):
             body = ("[MARKET] pacotes disponiveis:\n" + "\n".join(hits) + "\n").encode()
             ctype = "text/plain"
         else:
-            # Modelos p/ ModelProvisioner (ADR-0086): /HWEXPRT.BIN etc. de target/models/ ou target/
+            # Modelos p/ ModelProvisioner: /HWEXPRT.BIN etc. S9: path traversal bloqueado.
             fname = path.lstrip("/")
-            if fname and "/" not in fname:
+            if fname and "/" not in fname and "\\" not in fname and ".." not in fname:
                 for d in MODELS_DIRS:
-                    cand = d / fname
+                    cand = (d / fname).resolve()
+                    # S9: o resolve() precisa continuar DENTRO do dir raiz
+                    if not cand.is_relative_to(d.resolve()):
+                        continue
                     if cand.is_file() and 10240 < cand.stat().st_size < 2_000_000_000:
                         body = cand.read_bytes()
                         ctype = "application/octet-stream"
                         sys.stderr.write(f"[OTA] modelo servido: {cand} ({len(body)} bytes)\n")
                         break
                 else:
-                    self.send_error(404, "not found")
+                    self._reject(404, "not found")
                     return
             else:
-                self.send_error(404, "not found")
+                self._reject(404, "not found")
                 return
         self.send_response(200)
         self.send_header("Content-Type", ctype)
@@ -89,14 +120,27 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         """ADR-0086 §3.5: neural empurra o BOOT.LOG (telemetria dev↔neural)."""
-        if self.path.split("?", 1)[0] != "/api/logs":
-            self.send_error(404, "not found")
+        if not self._auth_ok():
+            self._reject(401, "unauthorized")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length > 0 else b""
+        if self.path.split("?", 1)[0] != "/api/logs":
+            self._reject(404, "not found")
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self._reject(400, "bad content-length")
+            return
+        if length <= 0 or length > MAX_LOG_BYTES:
+            # S10: cap de tamanho — evita DoS de memória/disco no host dev.
+            self._reject(413, "payload too large")
+            return
+        body = self.rfile.read(length)
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = LOGS_DIR / f"neural-{stamp}.log"
+        # S10: sufixo único evita colisão de POSTs no mesmo segundo
+        seq = secrets.token_hex(2)
+        path = LOGS_DIR / f"neural-{stamp}-{seq}.log"
         path.write_bytes(body)
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
@@ -115,7 +159,9 @@ def main() -> int:
     ap.add_argument("--kernel", type=Path, default=DEFAULT_KERNEL,
                     help="caminho do kernel.elf novo")
     ap.add_argument("--base-url", default=None,
-                    help="URL base para o KERNEL.BIN no manifest (default: http://<bind>:<port>)")
+                    help="URL base para o KERNEL.BIN no manifest (obrigatorio com --bind 0.0.0.0)")
+    ap.add_argument("--token", default=None,
+                    help="token de sessao (Authorization: Bearer). Default: aleatorio")
     args = ap.parse_args()
 
     if not args.kernel.exists():
@@ -123,18 +169,31 @@ def main() -> int:
         print(f"[OTA] Build primeiro: cargo build --release -p boot", file=sys.stderr)
         return 1
 
+    # S8: com bind 0.0.0.0 o manifest nao pode anunciar 0.0.0.0 (inalcancavel).
+    if not args.base_url and args.bind == "0.0.0.0":
+        print("[OTA] ERRO: --base-url obrigatorio com --bind 0.0.0.0 "
+              "(ex: http://192.168.137.1:8080 — IP da placa ethernet/ICS)", file=sys.stderr)
+        return 2
+
     base = args.base_url or f"http://{args.bind}:{args.port}"
+    Handler.kernel = args.kernel.read_bytes()
+    # S1: sha256 do kernel no manifest — o kernel verifica ANTES de gravar o slot.
+    sha = hashlib.sha256(Handler.kernel).hexdigest()
     Handler.manifest = json.dumps({
         "channel": args.channel,
         "version": args.version,
         "url": f"{base}/KERNEL.BIN",
+        "sha256": sha,
     }).encode() + b"\n"
-    Handler.kernel = args.kernel.read_bytes()
+    Handler.token = args.token or secrets.token_hex(8)
 
     print(f"[OTA] version={args.version} kernel={args.kernel} ({len(Handler.kernel)} bytes)")
+    print(f"[OTA] sha256={sha}")
     print(f"[OTA] manifest: {Handler.manifest.decode().strip()}")
+    print(f"[OTA] token (Authorization: Bearer {Handler.token})")
     print(f"[OTA] servindo http://{args.bind}:{args.port}  (Ctrl+C para parar)")
     print(f"[OTA] UPDATE.CFG no note 2: UPDATE_URL={base}/UPDATE.MANIFEST")
+    print("[OTA] DEV-ONLY: sem TLS/auth criptografica — nao expor em rede nao-conciavel")
     try:
         httpd = ThreadingHTTPServer((args.bind, args.port), Handler)
         httpd.serve_forever()

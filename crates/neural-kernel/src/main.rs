@@ -3780,6 +3780,12 @@ pub(crate) fn kernel_boot(
         write_self_state(phase, None, prev != phase, None, None);
         record_life_event(&alloc::format!("boot phase={} (prev={})", phase.as_str(), prev.as_str()));
         k_nano::slog_bin!("SELF", "info", "SELF.STATE: fase={} (SGDB best-effort)", phase.as_str());
+
+        // S5+S6 (ADR-0086 oracle): boot-attempt counter + mark OK.
+        // Chegou ao Runtime = boot OK → zera tries (update confirmado). Se havia
+        // update pendente e isto é a N-ésima tentativa sem confirmar, force rollback.
+        let _ = hermes_crate::self_update::SelfUpdate::note_boot_attempt(3);
+        hermes_crate::self_update::SelfUpdate::mark_boot_ok();
     }
 
     crate::display::fb::boot_ckpt(50, "Runtime OK — iniciando scheduler");

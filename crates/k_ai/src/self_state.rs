@@ -69,11 +69,23 @@ pub fn current_phase() -> LifePhase {
 }
 
 /// Registra evento de vida na memória episódica (L3) — a narrativa do OS.
+/// S11: chave monotônica PERSISTIDA (sys/life_seq) — tick reinicia a cada boot
+/// e sobrescreveria eventos de boots anteriores.
 pub fn record_life_event(event: &str) {
-    let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-    let key = format!("sys/life/t{}", tick);
+    // Lê + incrementa um contador persistido (não depende do tick).
+    let seq = match crate::sgdb::get_kv("sys/life_seq") {
+        Ok(Some(bytes)) => {
+            let n = bytes
+                .iter()
+                .fold(0u64, |acc, &b| acc.wrapping_mul(256) + b as u64);
+            n.saturating_add(1)
+        }
+        _ => 1,
+    };
+    let _ = crate::sgdb::put_kv("sys/life_seq", &seq.to_le_bytes());
+    let key = format!("sys/life/s{:012}", seq);
     let _ = crate::sgdb::put_kv(&key, event.as_bytes());
-    k_nano::slog_kai!("SELF", "life", "{}", event);
+    k_nano::slog_kai!("SELF", "life", "[{}] {}", seq, event);
 }
 
 #[cfg(test)]

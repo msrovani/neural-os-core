@@ -100,18 +100,60 @@ fn detect_ram_mb() -> u64 {
 /// Tamanho do BAR PCI (MB) — técnica padrão: escrever 0xFFFFFFFF, ler bits de
 /// tamanho, restaurar o valor original. ponytail: só BAR de memória (bit 0 = 0);
 /// I/O BAR (bit 0 = 1) retorna 0.
+/// S12: suporta BAR de 64 bits (tipo 0x4/0x6) — dword alto em offset+4. GPUs
+/// NVIDIA/AMD modernas mapeiam a VRAM num BAR 64-bit; sem isto reportariam 0.
 unsafe fn bar_size_mb(bus: u8, device: u8, function: u8, offset: u8) -> u64 {
     let orig = crate::pci::read_config_dword(bus, device, function, offset);
     if orig & 0x1 != 0 {
         return 0; // I/O BAR — não é memória/VRAM
     }
+    let is_64 = orig & 0x6 == 0x4; // tipo 0x4 (64-bit) ou 0x6 (64-bit prefetch)
+    let orig_hi = if is_64 {
+        crate::pci::read_config_dword(bus, device, function, offset + 4)
+    } else {
+        0
+    };
+
     crate::pci::write_config_dword(bus, device, function, offset, 0xFFFF_FFFF);
+    if is_64 {
+        crate::pci::write_config_dword(bus, device, function, offset + 4, 0xFFFF_FFFF);
+    }
     let mask = crate::pci::read_config_dword(bus, device, function, offset);
+    let mask_hi = if is_64 {
+        crate::pci::read_config_dword(bus, device, function, offset + 4)
+    } else {
+        0
+    };
+    // Restaura ambos os dwords
     crate::pci::write_config_dword(bus, device, function, offset, orig);
+    if is_64 {
+        crate::pci::write_config_dword(bus, device, function, offset + 4, orig_hi);
+    }
+
     if mask == 0 {
         return 0;
     }
-    // bits de tamanho: ~mask & 0xFFFF_FFF0 → potência de 2
-    let size = ((!mask) & 0xFFFF_FFF0) as u64;
-    size / (1024 * 1024)
+    // bits de tamanho: ~mask (64-bit: combina hi e lo) & ~0xF → potência de 2
+    let full: u64 = if is_64 {
+        (((!mask_hi) as u64) << 32) | ((!mask) & 0xFFFF_FFF0) as u64
+    } else {
+        ((!mask) & 0xFFFF_FFF0) as u64
+    };
+    // BAR de 64-bit: os 32 bits baixos só têm 20 bits de tamanho (bits 4-31),
+    // os 32 altos têm os 32 restantes — size = potência de 2.
+    let size = if is_64 {
+        let lo = ((!mask) & 0xFFFF_FFF0) as u64;
+        let hi = (!mask_hi) as u64;
+        if hi > 0 {
+            // maior potência de 2 ≤ (hi<<32 | lo) — hi>0 ⇒ ≥4GB
+            hi.leading_zeros().checked_sub(0).map(|_| 0x1_0000_0000u64).unwrap_or(0)
+        } else {
+            lo
+        }
+    } else {
+        full
+    };
+    let _ = size;
+    let sz = full.max(1); // full já é potência de 2 (bits de tamanho)
+    sz / (1024 * 1024)
 }

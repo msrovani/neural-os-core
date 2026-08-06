@@ -186,6 +186,9 @@ impl SysInstaller {
 
         // 5. Monta NeuralFS e copia kernel.elf para raiz como /boot/kernel.elf
         //    Primeiro cria dir /boot/ (parent_ino=1), depois cria o arquivo
+        //    S18: este path é vestigial — o Limine carrega kernel.elf da ESP
+        //    (copiada crua acima); /boot/kernel.elf na NeuralFS serve como
+        //    referência/cópia de segurança, não é o boot path.
         let mut vol = NeuralVolume::mount(target, neural_start)
             .ok_or("NeuralFS mount failed")?;
 

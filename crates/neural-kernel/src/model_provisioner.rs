@@ -16,7 +16,9 @@ const ORDER: &[ModelSlot] = &[
 ];
 
 fn fetch(url: &str) -> Option<Vec<u8>> {
-    match crate::net::resolve_and_http_get_safe(url) {
+    // S14: roteia pelo tls::fetch_url (https-capable) — não só HTTP puro do net.
+    // Se UPDATE_URL for https, o provision não quebra mais.
+    match hermes_crate::tls::fetch_url(url) {
         Ok(data) if !data.is_empty() => Some(data),
         Ok(_) | Err(_) => None,
     }

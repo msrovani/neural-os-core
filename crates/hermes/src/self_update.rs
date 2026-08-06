@@ -16,18 +16,40 @@ const KERNEL_ELF: &str = "kernel.elf";
 
 pub struct SelfUpdate;
 
-fn fnv1a64(data: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in data {
-        h ^= *b as u64;
-        h = h.wrapping_mul(0x100000001b3);
+/// SHA-256 hex do blob (S1 ADR-0086 — integridade real, não FNV).
+fn sha256_hex(data: &[u8]) -> String {
+    let h = k_nano::tpm::sha256(data);
+    let mut s = String::with_capacity(64);
+    for b in h {
+        s.push_str(&alloc::format!("{:02x}", b));
     }
-    h
+    s
+}
+
+/// Compara hex de hash case-insensitive (manifest pode vir em upper).
+fn hex_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.chars()
+            .zip(b.chars())
+            .all(|(x, y)| x.eq_ignore_ascii_case(&y))
+}
+
+/// Sanity check mínimo de ELF64 antes de promover (S6): magic + e_type + e_machine.
+/// Kernel promovido que não é ELF válido nunca chega ao Limine.
+fn is_valid_elf(data: &[u8]) -> bool {
+    data.len() > 64
+        && &data[0..4] == b"\x7fELF"
+        && data[4] == 2        // ELF64
+        && data[5] == 1        // LSB
+        && data[16] == 2       // e_type = EXEC
+        && data[18] == 0x3e    // e_machine = x86-64
 }
 
 impl SelfUpdate {
-    /// HTTP(S) GET `url` → length>0 + FNV-1a log → write inactive slot via `apply_update`.
-    pub fn fetch_update(url: &str) -> Result<usize, &'static str> {
+    /// HTTP(S) GET `url` → verifica hash (se manifest forneceu) + sanity ELF →
+    /// grava slot inativo via `apply_update`. Retorna (bytes, sha256_hex).
+    /// S1: blob NÃO verificado nunca entra no slot.
+    pub fn fetch_update(url: &str, expected_sha256: Option<&str>) -> Result<(usize, String), &'static str> {
         let data = crate::tls::fetch_url(url).map_err(|e| {
             k_nano::slog_hermes!("UPDATE", "info", "fetch=FAIL err={}", e);
             e
@@ -37,12 +59,37 @@ impl SelfUpdate {
             return Err("update_empty");
         }
         let n = data.len();
-        let hash = fnv1a64(&data);
+        let hash = sha256_hex(&data);
+        // S1: se o manifest anunciou sha256, exige igual — senão rejeita.
+        if let Some(expected) = expected_sha256 {
+            if !hex_eq(&hash, expected) {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "error",
+                    "fetch=REJECT hash mismatch bytes={} got={} expected={}",
+                    n,
+                    hash,
+                    expected
+                );
+                return Err("hash_mismatch");
+            }
+        }
+        // S6: sanity de ELF mesmo sem hash (protege contra blob truncado).
+        if !is_valid_elf(&data) {
+            k_nano::slog_hermes!(
+                "UPDATE",
+                "error",
+                "fetch=REJECT not ELF bytes={} hash={}",
+                n,
+                hash
+            );
+            return Err("not_elf");
+        }
         if !Self::apply_update(&data) {
             k_nano::slog_hermes!(
                 "UPDATE",
                 "info",
-                "fetch=FAIL err=apply bytes={} fnv={:016x}",
+                "fetch=FAIL err=apply bytes={} sha256={}",
                 n,
                 hash
             );
@@ -51,45 +98,45 @@ impl SelfUpdate {
         k_nano::slog_hermes!(
             "UPDATE",
             "info",
-            "fetch=OK bytes={} fnv={:016x}",
+            "fetch=OK bytes={} sha256={}",
             n,
             hash
         );
-        Ok(n)
+        Ok((n, hash))
     }
 
-    /// Detecta qual slot esta ativo lendo BOOTCFG~1 da FAT32
+    /// Detecta qual slot esta ativo lendo BOOTCFG~1 da FAT32 (S7: todas partições)
     pub fn active_slot() -> u8 {
-        let ata = ATA_DRIVER.lock();
-        let ata = match ata.as_ref() { Some(a) => a, None => return 1 };
-        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
-        for part in &parts {
-            // ponytail: 0xEF = ESP FAT32 do GPT instalado — U6 ADR-0086
-            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-                let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
-                if let Some(fs) = fs {
-                    if let Some(cfg) = unsafe { fs.read_file(BOOT_CFG) } {
-                        let text = core::str::from_utf8(&cfg).unwrap_or("");
-                        if text.contains("slot_b") { return 2; }
-                    }
-                }
-                break;
+        match Self::read_fat_file(BOOT_CFG) {
+            Some(cfg) => {
+                let text = core::str::from_utf8(&cfg).unwrap_or("");
+                if text.contains("slot_b") { 2 } else { 1 }
             }
+            None => 1,
         }
-        1
     }
 
     /// Ativa o outro slot para o proximo boot.
     /// Promove o slot inativo → kernel.elf (que o Limine carrega) — U1 ADR-0086.
     /// Antes de promover, faz backup do kernel atual no slot que sai (rollback U4).
+    /// S3: se o backup falha, ABORTA (não destrói o único kernel bom silenciosamente).
     pub fn switch_slot() -> bool {
         let current = Self::active_slot();
         let next = if current == 1 { 2 } else { 1 };
         let cur_name = if current == 1 { SLOT_A } else { SLOT_B };
         let next_name = if next == 1 { SLOT_A } else { SLOT_B };
-        // Backup do kernel atual → slot que sai (preserva o bom p/ rollback)
+        // Backup do kernel atual → slot que sai (preserva o bom p/ rollback).
+        // Se falhar, aborta — promover sem backup = perder o único kernel bom.
         if let Some(cur) = Self::read_fat_file(KERNEL_ELF) {
-            let _ = Self::write_kernel(cur_name, &cur);
+            if !Self::write_kernel(cur_name, &cur) {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "error",
+                    "switch ABORT: backup do kernel atual em {} falhou",
+                    cur_name
+                );
+                return false;
+            }
         }
         if !Self::promote_slot(next_name) {
             return false;
@@ -105,7 +152,7 @@ impl SelfUpdate {
     /// Só executa se há update pendente (tries==1, gravado pelo switch_slot);
     /// após o rollback, tries=0 impede loop de alternância (U4 ADR-0086).
     pub fn rollback() -> bool {
-        let (active, tries) = Self::boot_state();
+        let (active, tries, _attempts) = Self::boot_state();
         if tries == 0 {
             k_nano::slog_hermes!("UPDATE", "info", "rollback skip: no pending update (tries=0)");
             return false;
@@ -116,7 +163,7 @@ impl SelfUpdate {
             return false;
         }
         let cfg_text = alloc::format!(
-            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":0}}",
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":0,\"attempts\":0}}",
             fallback, fb_name
         );
         let ok = Self::write_bootcfg(&cfg_text);
@@ -131,37 +178,110 @@ impl SelfUpdate {
         ok
     }
 
-    /// Lê (slot_ativo, tries) do BOOTCFG~1. Default: (1, 0).
-    fn boot_state() -> (u8, u8) {
+    /// Lê (slot_ativo, tries, attempts) do BOOTCFG~1. Default: (1, 0, 0).
+    fn boot_state() -> (u8, u8, u8) {
         let Some(cfg) = Self::read_fat_file(BOOT_CFG) else {
-            return (1, 0);
+            return (1, 0, 0);
         };
         let text = core::str::from_utf8(&cfg).unwrap_or("");
         let slot = if text.contains("\"boot_slot\":\"2\"") || text.contains("slot_b") { 2 } else { 1 };
         let tries = if text.contains("\"tries\":1") { 1 } else { 0 };
-        (slot, tries)
+        // S5: contador de tentativas de boot com update pendente.
+        let attempts = if let Some(idx) = text.find("\"attempts\":") {
+            text[idx + 10..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<u8>()
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        (slot, tries, attempts)
     }
 
-    /// Lê o slot e grava como kernel.elf na mesma FAT32 (ESP/dados).
-    /// ponytail: kernel.elf é o path fixo do Limine — o slot vira o kernel ativo.
-    fn promote_slot(slot_name: &str) -> bool {
-        let ata = ATA_DRIVER.lock();
-        let ata = match ata.as_ref() { Some(a) => a, None => return false };
-        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
-        for part in &parts {
-            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-                let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
-                let Some(fs) = fs else { continue };
-                let Some(blob) = (unsafe { fs.read_file(slot_name) }) else { continue };
-                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
-                    if unsafe { w.write_file(KERNEL_ELF, &blob) } {
-                        kjson!("UPDATE", "PROMOTE", "ok", "slot", slot_name, "kernel", KERNEL_ELF);
-                        return true;
-                    }
-                }
-            }
+    /// S5: marca boot bem-sucedido — zera tries/attempts (update aplicado e OK).
+    /// Chamado quando o Runtime é atingido (boot OK). Evita rollback espúrio por
+    /// crash não relacionado semanas depois (S5 oracle).
+    pub fn mark_boot_ok() {
+        let (active, tries, _) = Self::boot_state();
+        if tries == 0 {
+            return;
         }
-        false
+        let cur_name = if active == 1 { SLOT_A } else { SLOT_B };
+        let cfg_text = alloc::format!(
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":0,\"attempts\":0}}",
+            active, cur_name
+        );
+        if Self::write_bootcfg(&cfg_text) {
+            k_nano::slog_hermes!("UPDATE", "info", "mark_boot_ok: slot {} confirmado (tries zerado)", active);
+        }
+    }
+
+    /// S5+S6: registra uma tentativa de boot com update pendente.
+    /// Se attempts >= MAX (kernel novo não confirmou N boots), força rollback.
+    /// Robusto a hang/early-panic onde o SelfHeal nem roda (S6 oracle).
+    pub fn note_boot_attempt(max_attempts: u8) -> bool {
+        let (active, tries, attempts) = Self::boot_state();
+        if tries == 0 {
+            return true; // sem update pendente — nada a fazer
+        }
+        let next = attempts.saturating_add(1);
+        let cur_name = if active == 1 { SLOT_A } else { SLOT_B };
+        let cfg_text = alloc::format!(
+            "{{\"boot_slot\":\"{}\",\"kernel\":\"{}\",\"tries\":1,\"attempts\":{}}}",
+            active, cur_name, next
+        );
+        let _ = Self::write_bootcfg(&cfg_text);
+        if next >= max_attempts {
+            k_nano::slog_hermes!(
+                "UPDATE",
+                "warn",
+                "{} boots falhos com update pendente — forçando rollback",
+                next
+            );
+            return Self::rollback();
+        }
+        k_nano::slog_hermes!(
+            "UPDATE",
+            "info",
+            "boot attempt {}/{} (update pendente no slot {})",
+            next,
+            max_attempts,
+            active
+        );
+        true
+    }
+
+    /// Lê o slot e grava como kernel.elf na MESMA partição FAT32 (S7: pair).
+    /// ponytail: kernel.elf é o path fixo do Limine — o slot vira o kernel ativo.
+    /// S6: sanity de ELF antes de promover — blob inválido nunca chega ao Limine.
+    fn promote_slot(slot_name: &str) -> bool {
+        let ok = with_fat_pair(|fs, w| {
+            let blob = unsafe { fs.read_file(slot_name) }?;
+            if !is_valid_elf(&blob) {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "error",
+                    "promote REJECT: slot {} nao e ELF valido (corrompido?)",
+                    slot_name
+                );
+                return Some(false);
+            }
+            if unsafe { w.write_file(KERNEL_ELF, &blob) } {
+                kjson!("UPDATE", "PROMOTE", "ok", "slot", slot_name, "kernel", KERNEL_ELF);
+                Some(true)
+            } else {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "error",
+                    "promote FAIL: write kernel.elf a partir de {}",
+                    slot_name
+                );
+                Some(false)
+            }
+        });
+        ok.unwrap_or(false)
     }
 
     /// Nova atualizacao recebida do canal — salva no slot inativo
@@ -170,97 +290,54 @@ impl SelfUpdate {
         Self::write_kernel(slot, data)
     }
 
-    /// Lê arquivo da primeira FAT32 (0x0B/0x0C/0x1C/0xEF) que o contém.
+    /// Lê arquivo de qualquer FAT32 (todas as partições — S7).
     fn read_fat_file(name: &str) -> Option<alloc::vec::Vec<u8>> {
-        let ata = ATA_DRIVER.lock();
-        let ata = ata.as_ref()?;
-        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
-        for part in &parts {
-            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-                let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
-                if let Some(fs) = fs {
-                    if let Some(data) = unsafe { fs.read_file(name) } {
-                        return Some(data);
-                    }
-                }
-            }
-        }
-        None
+        with_fat_reader(|fs| unsafe { fs.read_file(name) })
     }
 
     fn write_bootcfg(text: &str) -> bool {
-        let ata = ATA_DRIVER.lock();
-        let ata = match ata.as_ref() { Some(a) => a, None => return false };
-        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
-        for part in &parts {
-            // ponytail: 0xEF = ESP FAT32 do GPT instalado — U6 ADR-0086
-            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
-                    unsafe { w.write_file(BOOT_CFG, text.as_bytes()); }
-                    kjson!("UPDATE", "BOOTCFG", "written", "slot", alloc::format!("\"{}\"", text));
-                    return true;
-                }
-                break;
+        // S7: escreve na MESMA partição (pair) — todas as FAT32 são tentadas.
+        let ok = with_fat_pair(|_fs, w| {
+            let ok = unsafe { w.write_file(BOOT_CFG, text.as_bytes()) };
+            if ok {
+                kjson!("UPDATE", "BOOTCFG", "written", "slot", alloc::format!("\"{}\"", text));
+                Some(true)
+            } else {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "error",
+                    "BOOTCFG write falhou (FAT cheia?) — tries/rollback podem nao persistir"
+                );
+                Some(false)
             }
-        }
-        false
+        });
+        ok.unwrap_or(false)
     }
 
     fn write_kernel(name: &str, data: &[u8]) -> bool {
-        let ata = ATA_DRIVER.lock();
-        let ata = match ata.as_ref() { Some(a) => a, None => return false };
-        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
-        for part in &parts {
-            // ponytail: 0xEF = ESP FAT32 do GPT instalado — U6 ADR-0086
-            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
-                    unsafe { w.write_file(name, data); }
-                    kjson!("UPDATE", "KERNEL", "written", "slot", name);
-                    return true;
-                }
-                break;
+        // S7: escreve na MESMA partição (pair) — todas as FAT32 são tentadas.
+        let ok = with_fat_pair(|_fs, w| {
+            let ok = unsafe { w.write_file(name, data) };
+            if ok {
+                kjson!("UPDATE", "KERNEL", "written", "slot", name);
+                Some(true)
+            } else {
+                k_nano::slog_hermes!(
+                    "UPDATE",
+                    "error",
+                    "KERNEL write falhou slot={} (FAT cheia?)",
+                    name
+                );
+                Some(false)
             }
-        }
-        false
+        });
+        ok.unwrap_or(false)
     }
 
     pub fn status(&self) -> String {
         let slot = Self::active_slot();
         alloc::format!("[UPDATE] Active slot: {} (BOOTCFG~1), A/B switching ready", slot)
     }
-}
-
-/// Labor 34: bridge git thin pack bytes → inactive slot (se parecer blob kernel).
-pub fn apply_pack_bytes(pack_or_blob: &[u8]) -> Result<usize, &'static str> {
-    if pack_or_blob.len() < 16 {
-        return Err("too_short");
-    }
-    // Se PACK header — extrair via git_thin; senão tratar como blob cru.
-    let blob = if pack_or_blob.starts_with(b"PACK") {
-        match crate::git_thin::apply_thin_pack(pack_or_blob) {
-            Ok(n) if n > 0 => {
-                // apply_thin_pack returns size; need bytes — use pack as standby blob for MVP
-                k_nano::slog_hermes!(
-                    "UPDATE",
-                    "info",
-                    "pack_bridge objs_ok size={} VERDICT=PARTIAL reason=use_pack_as_slot_blob",
-                    n
-                );
-                pack_or_blob
-            }
-            Ok(_) => return Err("empty_pack"),
-            Err(e) => {
-                k_nano::slog_hermes!("UPDATE", "info", "pack_bridge PARTIAL err={}", e);
-                pack_or_blob
-            }
-        }
-    } else {
-        pack_or_blob
-    };
-    if !SelfUpdate::apply_update(blob) {
-        return Err("slot_write_fail");
-    }
-    Ok(blob.len())
 }
 
 pub fn boot_smoke() -> bool {
@@ -282,29 +359,63 @@ pub fn boot_smoke() -> bool {
 
 const UPDATE_CFG_NAME: &str = "UPDATE.CFG";
 
-/// Lê `UPDATE_URL=...` do UPDATE.CFG na FAT32 (ATA; mesmo padrão do active_slot).
-pub fn read_update_cfg() -> Option<String> {
+/// S7: itera TODAS as partições FAT32 (0x0B/0x0C/0x1C/0xEF) — semântica única.
+/// A closure roda por partição; para na primeira que retorna Some. Conserta a
+/// inconsistência "primeira FAT vs procurar em todas" (bug em stick híbrido MBR).
+fn with_fat_reader<T>(mut f: impl FnMut(&k_nano::fat32::Fat32Reader) -> Option<T>) -> Option<T> {
     let ata = ATA_DRIVER.lock();
     let ata = ata.as_ref()?;
     let parts = unsafe { k_nano::fat32::read_mbr(ata) };
     for part in &parts {
-        // ponytail: 0xEF = ESP FAT32 do GPT instalado (SysInstaller) — U6 ADR-0086
         if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
-            let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) }?;
-            let data = unsafe { fs.read_file(UPDATE_CFG_NAME) }?;
-            let text = core::str::from_utf8(&data).ok()?;
-            for line in text.lines() {
-                let line = line.trim();
-                if let Some(rest) = line.strip_prefix("UPDATE_URL=") {
-                    let url = rest.trim();
-                    if url.starts_with("http") {
-                        return Some(String::from(url));
+            if let Some(fs) = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) } {
+                if let Some(v) = f(&fs) {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// S7: mesmo padrão para escrita (reader+writer da MESMA partição — promote lê
+/// e grava no mesmo lugar, evitando slot numa partição e kernel.elf em outra).
+fn with_fat_pair<T>(
+    mut f: impl FnMut(&k_nano::fat32::Fat32Reader, &k_nano::fat32::Fat32Writer) -> Option<T>,
+) -> Option<T> {
+    let ata = ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = unsafe { k_nano::fat32::read_mbr(ata) };
+    for part in &parts {
+        if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+            if let Some(fs) = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) } {
+                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
+                    if let Some(v) = f(&fs, &w) {
+                        return Some(v);
                     }
                 }
             }
         }
     }
     None
+}
+
+/// Lê `UPDATE_URL=...` do UPDATE.CFG na FAT32 (todas as partições — S7).
+pub fn read_update_cfg() -> Option<String> {
+    with_fat_reader(|fs| {
+        let data = unsafe { fs.read_file(UPDATE_CFG_NAME) }?;
+        let text = core::str::from_utf8(&data).ok()?;
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("UPDATE_URL=") {
+                let url = rest.trim();
+                if url.starts_with("http") {
+                    return Some(String::from(url));
+                }
+            }
+        }
+        None
+    })
 }
 
 /// Extrai `"<key>":"..."` de um JSON simples (sem serde — no_std).
@@ -328,7 +439,22 @@ fn parse_version(v: &str) -> (u64, u64, u64) {
 /// Rotina diária OTA (ADR-0086): UPDATE.CFG → GET manifest → compara versão →
 /// se nova, baixa pro slot inativo (nunca sobrescreve o slot rodando).
 /// Nunca falha: retorna relatório textual para log/skill.
+/// S13: lock (AtomicBool) — cron + shell + skill podem disparar em paralelo;
+/// só um check por vez (evita double-download e interleave de switch_slot).
 pub fn check_for_update() -> String {
+    use core::sync::atomic::{AtomicBool, Ordering};
+    static IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+    if IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        return String::from("[UPDATE] check ja em andamento (skip)");
+    }
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let _ = IN_PROGRESS.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = Guard;
+
     let Some(url) = read_update_cfg() else {
         return String::from("[UPDATE] cfg=missing (UPDATE.CFG na FAT32)");
     };
@@ -343,15 +469,31 @@ pub fn check_for_update() -> String {
     let Some(remote) = json_field(text, "version") else {
         return String::from("[UPDATE] manifest=no_version");
     };
+    // S19: env!("CARGO_PKG_VERSION") é a versão do crate HERMES, não do kernel.
+    // Hoje sincronizados (ambos 1.9.9) — se hermes versionar independente, o
+    // compare quebra. Alternativa futura: versão embutida no BOOTCFG/kernel.elf.
     let local = env!("CARGO_PKG_VERSION");
-    if parse_version(&remote) <= parse_version(local) {
+    // S15: version ilegível logada (não só "up_to_date" silencioso)
+    let rv = parse_version(&remote);
+    if rv == (0, 0, 0) {
+        k_nano::slog_hermes!(
+            "UPDATE",
+            "warn",
+            "version remota ilegivel: '{}' (parse falhou) — sem update",
+            remote
+        );
+        return alloc::format!("[UPDATE] manifest=version_ilegivel '{}'", remote);
+    }
+    if rv <= parse_version(local) {
         return alloc::format!("[UPDATE] up_to_date local={} remote={}", local, remote);
     }
     let Some(kurl) = json_field(text, "url") else {
         return alloc::format!("[UPDATE] newer={} manifest=no_url", remote);
     };
-    match SelfUpdate::fetch_update(&kurl) {
-        Ok(n) => {
+    // S1: hash esperado do manifest (se presente) — verificação antes de gravar o slot.
+    let expected = json_field(text, "sha256");
+    match SelfUpdate::fetch_update(&kurl, expected.as_deref()) {
+        Ok((n, _hash)) => {
             // U1: promove o slot inativo → kernel.elf (o Limine carrega) + BOOTCFG
             let switched = SelfUpdate::switch_slot();
             // ADR-0086 §2.8: evento de vida — o OS lembra que atualizou o cérebro
@@ -361,6 +503,14 @@ pub fn check_for_update() -> String {
                 remote,
                 if switched { "OK" } else { "FAIL" }
             ));
+            // S11: persiste last_update no SELF.STATE (não só episódico)
+            k_ai::self_state::write_self_state(
+                k_ai::self_state::LifePhase::Residente,
+                None,
+                false,
+                None,
+                Some(&remote),
+            );
             alloc::format!(
                 "[UPDATE] applied bytes={} {} -> {} promote={} (reboot p/ ativar slot)",
                 n,
