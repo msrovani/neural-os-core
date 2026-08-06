@@ -535,7 +535,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | I8 | **`self_check::verify_install_checksum` é placeholder** (sem walk de diretório) | Verificação 2026-08-05 | implementar walk /boot + compare |
 | ~~I9~~ | ~~**Kernel não lê CONFIG.TXT em runtime** — não há `boot_media::mode()`; `detect_boot_source` (rollback.rs) é órfão~~ | ✅ **resolvido 2026-08-05** | `k_nano/src/boot_mode.rs`: `boot_mode()` lê CONFIG.TXT (BOOT_MODE=install/live) + detecta NeuralFS 0x7F no boot device = Installed; cacheado + `set_boot_mode` p/ menu |
 | ~~I10~~ | ~~**`SELF.STATE` não existe** — o OS não tem autobiografia persistente (quem sou / o que já fiz); episódica/HANR/audit existem mas nada escreve o self do ciclo de vida~~ | ✅ **resolvido 2026-08-05** | `k_ai/src/self_state.rs`: SELF.STATE em `sys/self_state` (KV SGDB) + `record_life_event` (narrativa L3); wiring: boot grava fase (boot_mode→LifePhase), update aplicado registra episódico |
-| I11 | **Loop de telemetria não existe** — neural não POSTa log, server não recebe; sem `do_POST`, sem HTTP POST no cliente smoltcp | Decisão §3.5 | LogAgent (push BOOT.LOG) + POST no cliente + `do_POST` no serve_update.py |
+| ~~I11~~ | ~~**Loop de telemetria não existe** — neural não POSTa log, server não recebe; sem `do_POST`, sem HTTP POST no cliente smoltcp~~ | ✅ **resolvido 2026-08-05** | `log_agent.rs`: POST /api/logs via `tcp_exchange` (URL do UPDATE.CFG, nunca hardcoded); comando shell `telemetry`; `serve_update.py` `do_POST` grava `target/logs/neural-*.log` |
 | I12 | **Imagem instalável fixa não é default** — `MODELS_SOURCE=network` é opt-in (ADR-0079 §2.8); builds atuais ainda embutem modelos na imagem | Decisão §3.6A | elevar `MODELS_SOURCE=network` a default do fluxo instalável; build mini (kernel+HwExpert+tiny) |
 
 ---

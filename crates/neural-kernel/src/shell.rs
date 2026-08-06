@@ -62,6 +62,10 @@ pub fn execute(cmd: &str) -> String {
             let n = crate::model_provisioner::provision_missing();
             alloc::format!("Provision: {} slots baixados\n", n)
         }
+        "telemetry" => {
+            // ADR-0086 I11: empurra o BOOT.LOG pro server (opencode analisa a quente)
+            crate::log_agent::push_boot_log()
+        }
         "gpu" => crate::gpu::backend::gpu_status().into(),
         "vram" => crate::gpu::vram::vram_status(),
         "agents" => alloc::format!("Agents: 248\n"),

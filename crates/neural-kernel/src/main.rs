@@ -101,6 +101,7 @@ pub use k_nano::{kjson, klog, klogc, serial_print, serial_println};
 pub use jarbas_crate::{display, gpu, jarvis, uvc_driver, virtio_gpu, vision_agent};
 
 mod limine_boot;
+mod log_agent;
 
 mod serial;
 

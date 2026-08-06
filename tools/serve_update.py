@@ -22,11 +22,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KERNEL = ROOT / "target" / "limine-esp-tree" / "kernel.elf"
+LOGS_DIR = ROOT / "target" / "logs"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -53,6 +55,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802
+        """ADR-0086 §3.5: neural empurra o BOOT.LOG (telemetria dev↔neural)."""
+        if self.path.split("?", 1)[0] != "/api/logs":
+            self.send_error(404, "not found")
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length > 0 else b""
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = LOGS_DIR / f"neural-{stamp}.log"
+        path.write_bytes(body)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"ok")
+        sys.stderr.write(f"[OTA] log recebido: {path} ({len(body)} bytes)\n")
 
 
 def main() -> int:
