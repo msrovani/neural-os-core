@@ -2657,6 +2657,9 @@ pub(crate) fn kernel_boot(
     registry.register(Box::new(browser_agent::BrowserAgent::new()));
     registry.register(Box::new(sgdb_agent::SgdbAgent::new()));
     registry.register(Box::new(wifi_agent::WifiAgent::new()));
+    // ADR-0086 I6: AutoInstallerAgent — EventDriven no tópico SYS_INSTALL
+    // (mensageiro: instala o sistema no HD alvo; orquestra HwProfiler+SysInstaller).
+    registry.register(Box::new(k_nano::installer_agent::AutoInstallerAgent::new()));
 
     // Late refresh: GPU CapTokens (GpuCompute) podem ter sido grantados após early emit
     k_hal::hw_gate::emit_all_refresh();

@@ -530,7 +530,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 | I3 | **Limine no target**: SysInstaller copia a ESP crua por setor (sem escrever limine.conf específico do alvo) | ADR-0079-plan 1.5 | BootloaderInstaller dedicado + limine.conf do target |
 | I4 | **ModelProvisioner** (`MODELS_SOURCE=network`) não implementado | ADR-0079 §2.8 | `cortex/src/model_provisioner.rs` |
 | I5 | **Leitura NeuralFS de modelos** no boot (hoje só FAT32/exFAT) | ADR-0079 §2.8 | estender load sites |
-| I6 | **AutoInstallerAgent órfão**: existe e é linkado (`lib.rs:98`), mas **não registrado no boot** — ninguém publica SYS_INSTALL | Verificação 2026-08-05 | registrar no AgentFleet + intent `/install` |
+| ~~I6~~ | ~~**AutoInstallerAgent órfão**: existe e é linkado (`lib.rs:98`), mas **não registrado no boot** — ninguém publica SYS_INSTALL~~ | ✅ **resolvido 2026-08-05** | registrado no AgentFleet (main.rs) + comando shell `install` publica `SYS_INSTALL` |
 | I7 | **`hw_profiler::gpu_vram_mb = 2048` hardcoded** p/ NVIDIA — decisão "GPU 4GB+ VRAM → 7B" depende de VRAM real | Verificação 2026-08-05 | decode de tamanho de BAR0 VRAM |
 | I8 | **`self_check::verify_install_checksum` é placeholder** (sem walk de diretório) | Verificação 2026-08-05 | implementar walk /boot + compare |
 | ~~I9~~ | ~~**Kernel não lê CONFIG.TXT em runtime** — não há `boot_media::mode()`; `detect_boot_source` (rollback.rs) é órfão~~ | ✅ **resolvido 2026-08-05** | `k_nano/src/boot_mode.rs`: `boot_mode()` lê CONFIG.TXT (BOOT_MODE=install/live) + detecta NeuralFS 0x7F no boot device = Installed; cacheado + `set_boot_mode` p/ menu |

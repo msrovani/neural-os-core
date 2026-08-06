@@ -47,6 +47,16 @@ pub fn execute(cmd: &str) -> String {
         "dns" => { let ip = [10,0,2,3]; alloc::format!("DNS: {}.{}.{}.{}\n", ip[0], ip[1], ip[2], ip[3]) }
         "http" | "fetch" => { if args.is_empty() { String::from("Usage: fetch <url>\n") } else { fetch_cmd(args) } }
         "update" => { let r = crate::self_update::check_for_update(); alloc::format!("{}\n", r) }
+        "install" => {
+            // ADR-0086: dispara o AutoInstallerAgent (SYS_INSTALL) — mensageiro instala no HD
+            let _ = crate::EVENT_BUS.publish(crate::Event {
+                id: 0,
+                topic: alloc::string::String::from(k_nano::installer_agent::TOPIC_SYS_INSTALL),
+                payload: args.as_bytes().to_vec(),
+                token: crate::CapabilityToken::Legacy(1),
+            });
+            String::from("Install request sent (SYS_INSTALL)\n")
+        }
         "gpu" => crate::gpu::backend::gpu_status().into(),
         "vram" => crate::gpu::vram::vram_status(),
         "agents" => alloc::format!("Agents: 248\n"),
