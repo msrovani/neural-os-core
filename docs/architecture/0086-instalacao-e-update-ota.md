@@ -519,7 +519,7 @@ vida; o ciclo de vida **é** uma expressão dela.
 
 | # | Gap | Origem | Próximo passo |
 |---|-----|--------|---------------|
-| U1 | **Elo de boot**: update grava KERNEL~1/2 na FAT32 de dados, mas Limine carrega kernel.elf da ESP | Sessão atual | limine.conf/boot path ler slot apontado por BOOTCFG~1 |
+| ~~U1~~ | ~~**Elo de boot**: update grava KERNEL~1/2 na FAT32 de dados, mas Limine carrega kernel.elf da ESP~~ | ✅ **resolvido 2026-08-05** | `switch_slot()` promove o slot inativo → `kernel.elf` (path fixo do Limine) + BOOTCFG; `check_for_update` chama switch após aplicar |
 | ~~U2~~ | ~~**Trigger imediato**: 1º check só após 24h de uptime~~ | ✅ **resolvido 2026-08-05** | comando shell `update` → `check_for_update()` (shell.rs) |
 | U3 | **Assinatura/TPM**: fetch atual só FNV-1a; Ed25519 (SIG) + TPM PCR[8] previstos na ADR-0031 | ADR-0031 §1.4 | add SHA-256/Ed25519 no fetch + TPM extend |
 | U4 | **Rollback automático** não testado no boot | ADR-0031 / #308c | watchdog de boot (3 tries → last_good) |

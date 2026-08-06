@@ -11,6 +11,8 @@ use k_nano::kjson;
 const SLOT_A: &str = "KERNEL~1";
 const SLOT_B: &str = "KERNEL~2";
 const BOOT_CFG: &str = "BOOTCFG~1";
+/// Path fixo que o Limine carrega (limine.conf: `boot():/kernel.elf`).
+const KERNEL_ELF: &str = "kernel.elf";
 const CHANNEL_MANIFEST_URL: &str = "http://10.0.2.2:8080/UPDATE.MANIFEST";
 
 pub enum UpdateChannel { Stable, Nightly, Security }
@@ -103,13 +105,39 @@ impl SelfUpdate {
         1
     }
 
-    /// Ativa o outro slot para o proximo boot
+    /// Ativa o outro slot para o proximo boot.
+    /// Promove o slot inativo → kernel.elf (que o Limine carrega) — U1 ADR-0086.
     pub fn switch_slot() -> bool {
         let current = Self::active_slot();
         let next = if current == 1 { 2 } else { 1 };
         let next_name = if next == 1 { SLOT_A } else { SLOT_B };
+        if !Self::promote_slot(next_name) {
+            return false;
+        }
         let cfg_text = alloc::format!("{{\"boot_slot\":\"{}\",\"kernel\":\"{}\"}}", next, next_name);
         Self::write_bootcfg(&cfg_text)
+    }
+
+    /// Lê o slot e grava como kernel.elf na mesma FAT32 (ESP/dados).
+    /// ponytail: kernel.elf é o path fixo do Limine — o slot vira o kernel ativo.
+    fn promote_slot(slot_name: &str) -> bool {
+        let ata = ATA_DRIVER.lock();
+        let ata = match ata.as_ref() { Some(a) => a, None => return false };
+        let parts = unsafe { k_nano::fat32::read_mbr(ata) };
+        for part in &parts {
+            if matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+                let fs = unsafe { k_nano::fat32::Fat32Reader::new(ata, part) };
+                let Some(fs) = fs else { continue };
+                let Some(blob) = (unsafe { fs.read_file(slot_name) }) else { continue };
+                if let Some(w) = unsafe { k_nano::fat32::Fat32Writer::new(ata, part) } {
+                    if unsafe { w.write_file(KERNEL_ELF, &blob) } {
+                        kjson!("UPDATE", "PROMOTE", "ok", "slot", slot_name, "kernel", KERNEL_ELF);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// Rollback: volta para o slot anterior
@@ -294,12 +322,17 @@ pub fn check_for_update() -> String {
         return alloc::format!("[UPDATE] newer={} manifest=no_url", remote);
     };
     match SelfUpdate::fetch_update(&kurl) {
-        Ok(n) => alloc::format!(
-            "[UPDATE] applied bytes={} {} -> {} (reboot p/ ativar slot)",
-            n,
-            local,
-            remote
-        ),
+        Ok(n) => {
+            // U1: promove o slot inativo → kernel.elf (o Limine carrega) + BOOTCFG
+            let switched = SelfUpdate::switch_slot();
+            alloc::format!(
+                "[UPDATE] applied bytes={} {} -> {} promote={} (reboot p/ ativar slot)",
+                n,
+                local,
+                remote,
+                if switched { "OK" } else { "FAIL" }
+            )
+        }
         Err(e) => alloc::format!("[UPDATE] apply=fail err={}", e),
     }
 }
