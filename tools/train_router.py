@@ -591,37 +591,30 @@ def export_bitnet(embed, W, path):
 
 
 def verify_roundtrip(path, embed, Wq, samples):
-    """Independent minimal parser — mirrors load_router_from_file position math."""
+    """Independent minimal parser — mirrors export_bitnet v6 posicional layout
+    (preamble + router bloco, ADR-0085 model_type=2)."""
     data = path.read_bytes()
     assert len(data) >= 32
-    magic, version, vocab, hidden, layers = struct.unpack_from("<IIIII", data, 0)
+    # Preamble: magic u32 + version u16 + num_params u64 + model_type u8 + reserved[3]
+    magic, = struct.unpack_from("<I", data, 0)
+    version, = struct.unpack_from("<H", data, 4)
+    model_type, = struct.unpack_from("<B", data, 14)
     assert magic == 0xBE11BE11, f"magic {magic:#x}"
-    assert version == 3 and vocab == VOCAB and hidden == HIDDEN and layers == 1
-    model_type = data[20:36].split(b"\x00")[0]
-    assert model_type == b"trinity_router"
-    ntensors = struct.unpack_from("<I", data, 36)[0]
-    assert ntensors == 2
+    assert version == 6, f"version {version}"
+    # Router bloco: vocab u32 + hidden u16 + n_experts u16
+    vocab, hidden, n_exp = struct.unpack_from("<IHH", data, 18)
+    assert vocab == VOCAB and hidden == HIDDEN and n_exp == N_EXPERTS, \
+        f"dims {vocab}x{hidden}x{n_exp}"
 
-    pos = 40
-    embed_parsed = None
-    Wq_parsed = None
-    for _ in range(ntensors):
-        name = data[pos:pos + 64].split(b"\x00")[0]
-        n_orig, n_quant = struct.unpack_from("<II", data, pos + 64)
-        is_weight = b"router_weight" in name
-        data_bytes = n_orig if is_weight else n_orig * 4
-        pos += 72
-        if name == b"router_embed":
-            floats = np.frombuffer(data[pos:pos + data_bytes], dtype="<f4")
-            assert floats.size == VOCAB * HIDDEN, f"embed count {floats.size}"
-            embed_parsed = floats.reshape(VOCAB, HIDDEN)
-        elif is_weight:
-            i8s = np.frombuffer(data[pos:pos + data_bytes], dtype=np.int8)
-            assert i8s.size == HIDDEN * N_EXPERTS, f"weight count {i8s.size}"
-            Wq_parsed = i8s.reshape(HIDDEN, N_EXPERTS)
-        pos += data_bytes + n_quant  # mirror the Rust reader advance
+    pos = 26
+    embed_bytes = VOCAB * HIDDEN * 4
+    embed_parsed = np.frombuffer(data[pos:pos + embed_bytes], dtype="<f4").reshape(VOCAB, HIDDEN)
+    pos += embed_bytes
+    wbytes = HIDDEN * N_EXPERTS
+    Wq_parsed = np.frombuffer(data[pos:pos + wbytes], dtype=np.int8).reshape(HIDDEN, N_EXPERTS)
+    pos += wbytes
+    assert pos == len(data), f"trailing bytes {len(data) - pos}"
 
-    assert embed_parsed is not None and Wq_parsed is not None
     assert np.array_equal(embed_parsed, embed), "embed round-trip mismatch"
     assert np.array_equal(Wq_parsed, Wq), "quantized W round-trip mismatch"
 
@@ -689,6 +682,10 @@ def write_report(res, cm, prec, rec, f1, path):
 
 
 def main():
+    import sys as _sys
+    # ponytail: permite `from tools.bitnet_writer` quando rodado como script (tools/ não é pacote)
+    if str(Path(__file__).resolve().parents[1]) not in _sys.path:
+        _sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     outdir = Path(__file__).resolve().parent / "target"
     outdir.mkdir(exist_ok=True)
     bitnet_path = outdir / "ROUTER.BITNET"

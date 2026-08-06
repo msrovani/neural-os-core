@@ -539,91 +539,63 @@ pub fn generate_random_router_weights(num_experts: usize) -> (Vec<f32>, PackedTe
 /// "router_weight" (HIDDEN*MAX_EXPERTS i8 ternário).
 /// Retorna true se carregado com sucesso.
 pub fn load_router_from_file(data: &[u8]) -> bool {
-    if data.len() < 32 { return false; }
+    // Layout v6 posicional (ADR-0085 model_type=2, tools/train_router.py export_bitnet):
+    //   preamble: magic u32 + version u16 + num_params u64 + model_type u8 + reserved[3]
+    //   router bloco: vocab u32 + hidden u16 + n_experts u16
+    //   embed f32[vocab*hidden] + weight i8[hidden*n_experts] (row-major)
+    if data.len() < 18 + 8 { return false; }
     let r4 = |off: usize| u32::from_le_bytes(data[off..off+4].try_into().unwrap_or([0; 4]));
+    let r2 = |off: usize| u16::from_le_bytes(data[off..off+2].try_into().unwrap_or([0; 2]));
     if r4(0) != 0xBE11BE11 { return false; }
 
-    let _ver = r4(4);
-    let _vocab = r4(8) as usize;
-    let hidden = r4(12) as usize;
-    let _layers = r4(16);
+    let _version = r2(4);
+    let vocab = r4(18) as usize;
+    let hidden = r2(22) as usize;
+    let n_exp = r2(24) as usize;
 
     if hidden != ROUTER_HIDDEN {
         k_nano::slog_cortex!("TRINITY", "warn", "Router hidden mismatch: file={} expected={}", hidden, ROUTER_HIDDEN);
         return false;
     }
-
-    // Pula até os tensores. Formato canônico (tools/train_router.py export_bitnet):
-    // header 20B (magic/ver/vocab/hidden/layers) + model_type(16) + ntensors(4) @36.
-    let off = 20 + 16 + 4; // pos do 1º tensor
-    if off + 4 > data.len() { return false; }
-    let ntensors = r4(off - 4) as usize;
-
-    let mut pos = off;
-    let mut embed_loaded = false;
-    let mut weight_loaded = false;
-    let mut embed_vec: Option<Vec<f32>> = None;
-    let mut weight_tensor: Option<PackedTernaryTensor> = None;
-
-    for _ in 0..ntensors {
-        if pos + 64 + 8 > data.len() { break; }
-        let name_bytes = &data[pos..pos+64];
-        let name_end = name_bytes.iter().position(|&b| b==0).unwrap_or(64);
-        let name = core::str::from_utf8(&name_bytes[..name_end]).unwrap_or("");
-        let n_orig = r4(pos + 64) as usize;
-        let n_quant = r4(pos + 64 + 4) as usize;
-        let is_weight = name.contains("router_weight");
-        // Leitura: router_weight = i8 bruto (n_orig bytes); demais = f32 (n_orig*4).
-        let data_bytes = if is_weight { n_orig } else { n_orig * 4 };
-        pos += 64 + 8;
-
-        if name.contains("router_embed") {
-            if pos + data_bytes <= data.len() {
-                let floats: Vec<f32> = data[pos..pos + data_bytes]
-                    .chunks_exact(4)
-                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                    .collect();
-                if floats.len() == VOCAB * ROUTER_HIDDEN {
-                    embed_vec = Some(floats);
-                    embed_loaded = true;
-                }
-            }
-        } else if is_weight {
-            if pos + data_bytes <= data.len() {
-                // n_orig = HIDDEN * num_experts i8 values (1..=ROUTER_MAX_EXPERTS)
-                let weights: Vec<i8> = data[pos..pos + data_bytes]
-                    .iter()
-                    .map(|&b| b as i8)
-                    .collect();
-                let n_exp = weights.len() / ROUTER_HIDDEN;
-                if n_exp >= 1
-                    && weights.len() == n_exp * ROUTER_HIDDEN
-                    && n_exp <= ROUTER_MAX_EXPERTS
-                {
-                    weight_tensor = Some(PackedTernaryTensor {
-                        shape: (ROUTER_HIDDEN, n_exp),
-                        packed_data: PackedTernaryTensor::pack_weights(&weights),
-                    });
-                    weight_loaded = true;
-                }
-            }
-        }
-        // Avanço canônico (export_bitnet pado o weight para n_orig*4 + n_quant).
-        pos += n_orig * 4 + n_quant;
+    if n_exp < 1 || n_exp > ROUTER_MAX_EXPERTS {
+        k_nano::slog_cortex!("TRINITY", "warn", "Router n_experts fora do range: {}", n_exp);
+        return false;
     }
 
-    if embed_loaded && weight_loaded {
-        // n_exp antes do move (weight_tensor vai para ROUTER_WEIGHT abaixo)
-        let n_exp = weight_tensor.as_ref().map(|t| t.shape.1).unwrap_or(0);
-        // Store in a static for the router to pick up
-        *ROUTER_EMBED.lock() = embed_vec;
-        *ROUTER_WEIGHT.lock() = weight_tensor;
-        k_nano::slog_cortex!("TRINITY", "info", "Router MoE loaded from file: {} dim, {} experts", ROUTER_HIDDEN, n_exp);
-        true
-    } else {
-        k_nano::slog_cortex!("TRINITY", "warn", "Router file missing tensors: embed={} weight={}", embed_loaded, weight_loaded);
-        false
+    // Dados posicionais: embed (vocab*hidden f32) + weight (hidden*n_exp i8)
+    let mut pos = 26;
+    let embed_bytes = vocab * hidden * 4;
+    if pos + embed_bytes + hidden * n_exp > data.len() { return false; }
+
+    let floats: Vec<f32> = data[pos..pos + embed_bytes]
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    if floats.len() != VOCAB * ROUTER_HIDDEN {
+        k_nano::slog_cortex!("TRINITY", "warn", "Router embed count: {} (esperado {})", floats.len(), VOCAB * ROUTER_HIDDEN);
+        return false;
     }
+    pos += embed_bytes;
+
+    let weights: Vec<i8> = data[pos..pos + hidden * n_exp]
+        .iter()
+        .map(|&b| b as i8)
+        .collect();
+    let weight_tensor = PackedTernaryTensor {
+        shape: (ROUTER_HIDDEN, n_exp),
+        packed_data: PackedTernaryTensor::pack_weights(&weights),
+    };
+
+    *ROUTER_EMBED.lock() = Some(floats);
+    *ROUTER_WEIGHT.lock() = Some(weight_tensor);
+    k_nano::slog_cortex!(
+        "TRINITY",
+        "info",
+        "Router MoE loaded from file (v6): {} dim, {} experts",
+        ROUTER_HIDDEN,
+        n_exp
+    );
+    true
 }
 
 /// Static storage for router weights loaded from file (before TrinityRouter init).
@@ -680,4 +652,39 @@ pub fn init_trinity() -> TrinityRouter {
         description: "Sintese de fala — TTS, voz, audio", weight: None,
     });
     router
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{load_router_from_file, ROUTER_EMBED, ROUTER_WEIGHT, ROUTER_HIDDEN};
+
+    /// Monta um blob v6 posicional em memória (espelha tools/train_router.py export_bitnet)
+    /// e valida que o loader Rust o parseia — a ponte treino→kernel (item 11 ADR-0083).
+    #[test]
+    fn load_router_v6_roundtrip() {
+        const VOCAB: usize = 99;
+        const N_EXPERTS: usize = 7;
+        let embed: Vec<f32> = (0..VOCAB * ROUTER_HIDDEN).map(|i| (i % 7) as f32 * 0.01).collect();
+        let weights: Vec<i8> = (0..ROUTER_HIDDEN * N_EXPERTS).map(|i| (i % 3) as i8 - 1).collect();
+
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&0xBE11BE11u32.to_le_bytes()); // magic
+        blob.extend_from_slice(&6u16.to_le_bytes());          // version
+        blob.extend_from_slice(&0u64.to_le_bytes());          // num_params (informativo)
+        blob.push(2u8);                                       // model_type=router
+        blob.extend_from_slice(&[0u8; 3]);                    // reserved
+        blob.extend_from_slice(&(VOCAB as u32).to_le_bytes()); // vocab
+        blob.extend_from_slice(&(ROUTER_HIDDEN as u16).to_le_bytes()); // hidden
+        blob.extend_from_slice(&(N_EXPERTS as u16).to_le_bytes());     // n_experts
+        for f in &embed { blob.extend_from_slice(&f.to_le_bytes()); }
+        blob.extend_from_slice(weights.iter().map(|&w| w as u8).collect::<Vec<u8>>().as_slice());
+
+        assert!(load_router_from_file(&blob), "loader deve aceitar blob v6");
+        assert!(ROUTER_EMBED.lock().is_some(), "embed carregado");
+        assert!(ROUTER_WEIGHT.lock().is_some(), "weight carregado");
+
+        // Limpa statics p/ não vazar para outros testes.
+        *ROUTER_EMBED.lock() = None;
+        *ROUTER_WEIGHT.lock() = None;
+    }
 }
