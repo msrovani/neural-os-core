@@ -145,13 +145,64 @@ impl Agent for AutoInstallerAgent {
         if !self.receiver.has_pending() {
             return AgentTickResult::Pending;
         }
-        // A instalação é iniciada pelo SysInstaller via chamada direta
-        // (ou por shell / install command no Hermes).
-        // O EventDriven aqui serve para notificações futuras.
-        while let Some(_ev) = self.receiver.try_receive() {
-            // ponytail: instalação disparada externamente via shell ou agente supervisor
-            crate::slog_nano!("INSTALL", "info", "SYS_INSTALL event received");
+        // SYS_INSTALL recebido (shell `install` / intent) → executa a instalação:
+        // source = boot device (ATA), target = 1º disco da StorageBus (ADR-0086 I2/I3).
+        while let Some(ev) = self.receiver.try_receive() {
+            crate::slog_nano!("INSTALL", "info", "SYS_INSTALL event received: {:?}", ev.topic);
+            let result = self.run_install_from_bus();
+            crate::slog_nano!(
+                "INSTALL",
+                "info",
+                "instalacao: {}",
+                result.as_deref().unwrap_or("FAILED")
+            );
         }
         AgentTickResult::Pending
+    }
+}
+
+impl AutoInstallerAgent {
+    /// Dispara a instalação com source=boot (ATA) e target=1º disco não-boot.
+    /// ponytail: target = AHCI → NVMe → USB (globals vivos); sem UI de seleção
+    /// (menu de disco fica como refinamento — I3 fase 1.8).
+    fn run_install_from_bus(&self) -> Result<String, &'static str> {
+        // source: boot device (ATA) — lê o kernel.elf da ESP
+        let mut ata_guard = crate::globals::ATA_DRIVER.lock();
+        let Some(ata) = ata_guard.as_mut() else {
+            return Err("sem ATA (boot device ausente)");
+        };
+        let parts = unsafe { crate::fat32::read_mbr(ata) };
+        let mut kernel_elf: Option<alloc::vec::Vec<u8>> = None;
+        for p in &parts {
+            if matches!(p.type_code, 0x0B | 0x0C | 0x1C | 0xEF) {
+                if let Some(fs) = unsafe { crate::fat32::Fat32Reader::new(ata, p) } {
+                    if let Some(k) = unsafe { fs.read_file("kernel.elf") } {
+                        kernel_elf = Some(k);
+                        break;
+                    }
+                }
+            }
+        }
+        let kernel = kernel_elf.ok_or("kernel.elf nao encontrado no boot")?;
+        crate::slog_nano!("INSTALL", "info", "kernel.elf lido: {} bytes", kernel.len());
+
+        // target: 1º disco não-boot (AHCI → NVMe → USB) via globals
+        let mut inst = SysInstaller::new();
+        if let Some(g) = crate::globals::AHCI_DRIVER.lock().as_mut() {
+            let dev: &mut dyn BlockDevice = g;
+            inst.install(ata, dev, &kernel)?;
+            return Ok(alloc::format!("instalado em AHCI ({} bytes)", inst.bytes_copied));
+        }
+        if let Some(g) = crate::disk_agent::nvme::NVME_DRIVER.lock().as_mut() {
+            let dev: &mut dyn BlockDevice = g;
+            inst.install(ata, dev, &kernel)?;
+            return Ok(alloc::format!("instalado em NVMe ({} bytes)", inst.bytes_copied));
+        }
+        if let Some(g) = crate::globals::USB_MSC.lock().as_mut() {
+            let dev: &mut dyn BlockDevice = g;
+            inst.install(ata, dev, &kernel)?;
+            return Ok(alloc::format!("instalado em USB ({} bytes)", inst.bytes_copied));
+        }
+        Err("nenhum disco alvo (AHCI/NVMe/USB) disponivel")
     }
 }
