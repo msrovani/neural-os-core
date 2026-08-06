@@ -385,6 +385,11 @@ def populate(path):
     platform = "virtio-qemu" if boot_mode == "qemu" else "baremetal"
     config_content = (
         f"BOOT_MODE={boot_mode}\nPLATFORM={platform}\nGPU=auto\nLOG_TO_FAT32=1\n"
+        + (
+            "MODELS_SOURCE=network\n"
+            if os.environ.get("MODELS_SOURCE", "").strip().lower() == "network"
+            else ""
+        )
     ).encode()
     files.append(("CONFIG.TXT", config_content))
     # UPDATE.CFG — endereço do servidor OTA (ADR-0086). Override via env UPDATE_URL

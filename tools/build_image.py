@@ -63,6 +63,12 @@ def parse_args():
         action="store_true",
         help="Usar mkexfat.py em vez de mkfat32.py (experimental, sem BOOT.LOG)",
     )
+    p.add_argument(
+        "--mini",
+        action="store_true",
+        help="Imagem instalavel FIXA (ADR-0086 s3.6A): so kernel+HwExpert+firmware+UPDATE.CFG, "
+        "sem modelos grandes — o alvo baixa o brain no 1o boot (PACK_LLM=none + MODELS_SOURCE=network)",
+    )
     return p.parse_args()
 
 
@@ -128,6 +134,12 @@ def main():
     env = os.environ.copy()
     env.pop("SKIP_2B", None)
     env["BOOT_MODE"] = boot_mode
+
+    # ADR-0086 s3.6A (I12): imagem instalável fixa — sem modelos grandes; o alvo
+    # baixa o brain no 1º boot via ModelProvisioner. PACK_LLM=none + MODELS_SOURCE.
+    if args.mini:
+        env["PACK_LLM"] = "none"
+        env["MODELS_SOURCE"] = "network"
 
     # ADR-0056: pack LEGOs antes do maker (mkexfat/mkfat32 tambem reinjeta)
     print("=== Device LEGO pack (ecosystem/devices -> target/lego) ===")
