@@ -129,3 +129,51 @@ names/tags + ntensors) → **nunca carregava** → fallback LCG (exatamente o lo
 Ato 1 (install no target.raw) alcançou o **Runtime** (evidência parcial) mas o `sendkey`
 via monitor TCP não acionou o shell (pipeline teclado→Hermes). Refinamento pendente: debug do
 envio de scancodes (usb-kbd) ou trigger por outro canal.
+
+---
+
+## 8. Revisão profunda do NeuralFS + compatibilidade NeuralFS/MHI/SGDB (mesma sessão)
+
+### 8.1 Correções NeuralFS (oracle F1-F16 + BAFS/LiberFS) — commit `f07834f`
+
+| Fix | Severidade | O que era | Correção |
+|-----|-----------|-----------|----------|
+| **F1** | CRÍTICO | free-stack LIFO entregava blocos invertidos/não-contíguos ao extent → corrupção silenciosa na re-escrita | `alloc_contiguous()`: popa, ordena, valida contiguidade; fallback bump |
+| **F2** | ALTA | reclaimava blocos antigos ANTES dos novos existirem → power-loss/ENOSPC destruía a versão boa | dados novos → cow folha → commit → **só então** reclaim; no erro devolve os novos |
+| **F3** | ALTA | `probe_magic` só lia bloco 1; primário corrompido + backup bom = format destruía tudo | probe com fallback ao backup; volume existe mas mount falha → **nunca formata** |
+| **F5** | MÉDIA | journal com CRC inválido montava mesmo assim (`dirty` nunca lido) | `recover` falhou → mount retorna None (log CRÍTICO) |
+| **F6** | MÉDIA | re-format podia sofrer replay de transação velha | format zera a região do journal |
+| **F8** | MÉDIA | `read_file` materializava 792MB na RAM | `read_range(ino, offset, len)` — AirLLM streaming |
+| **F10** | MÉDIA | create_file/dir aceitavam `..`, `/`, `\`, NUL | `valid_name()` rejeita todos |
+| **F12** | MÉDIA | `extent.rs` + `checksum_tree.rs` dead (sem consumers) | removidos + facades atualizadas |
+| **F13** | BAIXA | `Superblock::new` morto e com layout divergente | removido |
+| **F14** | BAIXA | smokes level2/power_loss existiam sem caller | wireados no bootstrap_ram |
+| **F15** | BAIXA | hack redundante de root update em write_file | removido (cow_leaf_for_key já atualiza) |
+| **F16** | BAIXA | `commit_tx` sem flush de dispositivo (só fence CPU) | flush barrier: free_list → sync_cache → journal → sync_cache → sb (padrão LiberFS) |
+
+**Licença corrigida (lib-1):** BAFS é **GPL-3.0** desde v1.2 (não MIT) — TECNOLOGIAS.md corrigido.
+BAFS upstream congelado (0 issues/PRs); LiberFS (Unlicense) emerge como referência de
+flush-barrier + freeing-deferido; littlefs2-pure como referência de torn-write test.
+
+### 8.2 Compatibilidade NeuralFS/MHI/SGDB (oracle C1-C10) — commit `6a8f379`
+
+| Achado | Severidade | Correção aplicada |
+|--------|-----------|-------------------|
+| **C1** | CRÍTICA | TickvLite gravava no LBA 2048 (colidia com ESP+NeuralFS do GPT instalado — brick no 1º boot NVMe real) → região movida para o **fim do disco** (antes da backup GPT) |
+| **C2** | ALTA | backend=RAM reportado como ok mas volátil (SELF.STATE/episódica evaporam sem aviso) → log CRÍTICO no init_flash |
+| **C4** | MÉDIA | EpisodicMemory reescrevia o tail completo a cada record (amplificação O(n) no flash) → fonte única doc-por-episódio |
+| **C9** | BAIXA | provision não registrava meta no SGDB → `persist_slot` grava `pkg/model/<file>` (file+bytes+sha256) — ponte NeuralFS↔SGDB |
+
+**Pendências documentadas:** C6 (ArcCache morto — wire como wrapper BlockDevice ou delete),
+C5 (MHI hinting-only — wire `record_access` no read_range ou podar), C7 (vocabulário "tiers"
+cognitivos vs físicos), C8 (rebuild de índice a cada boot).
+
+### 8.3 Estado real do NeuralFS (para o doc)
+
+- **Inodes/dirents são INLINE** na leaf B-tree (48B items, 84/folha) — o "inode de 128B em
+  bloco dedicado" era design-only (removido).
+- **Sem checksum de dados**: CRC32C cobre B-tree/superblocos/journal; `checksum_tree_root` fica 0.
+- **Journal não-circular** confirmado; `sfence` ≠ flush — flush real via `sync_cache` agora.
+- **Mapa canônico**: modelos/firmware = NeuralFS `/models/`; kernel/slots/BOOTCFG = FAT32 ESP;
+  memória IA (L2-L7, HANR, audit) = SGDB→TickvLite (partição dedicada C1); SELF.STATE =
+  NeuralFS write-through (futuro); índices ART/BQ = RAM-only rebuild do TickvLite.

@@ -3,6 +3,48 @@
 ## [Unreleased]
 
 
+### SESSION_252 (cont.): Revisão profunda do NeuralFS (F1-F16) + compatibilidade NeuralFS/MHI/SGDB (C1-C10) — 2026-08-05
+
+**NeuralFS — correções (oracle + BAFS/LiberFS):**
+
+- **F1 CRÍTICO** — `alloc_contiguous()`: o free-stack LIFO entregava blocos invertidos/
+  não-contíguos ao extent → corrupção silenciosa na re-escrita (reescrever um modelo
+  corrompia o arquivo). Agora ordena e valida contiguidade, fallback bump.
+- **F2** — ordem CoW correta: dados novos → cow folha → commit → **só então** reclaim dos
+  antigos (antes destruía a versão boa em power-loss/ENOSPC). No erro, devolve os novos.
+- **F3** — mount seguro: `probe_magic` com fallback ao backup (bloco 2); volume existe mas
+  mount falha → **nunca formata** (wipe de /models/ evitado). BAFS/LiberFS: freeing deferido.
+- **F5** — journal com CRC inválido → mount recusa (não monta transação parcial).
+- **F6** — format zera o journal (sem replay de tx velha de formato anterior).
+- **F8** — `read_range(ino, offset, len)`: destrava AirLLM streaming (read_file materializava
+  792MB na RAM, estourando o heap antes do model_fit).
+- **F10** — `valid_name()`: create_file/dir rejeita `..`, `/`, `\`, NUL, controle.
+- **F12** — dead code removido: `extent.rs` + `checksum_tree.rs` (sem consumers; facades
+  hermes/bin atualizadas).
+- **F13** — `Superblock::new` removido (morto, layout divergente do format).
+- **F14** — smokes `level2` + `power_loss_soft` wireados no bootstrap_ram (antes sem caller).
+- **F15** — hack redundante de root update removido.
+- **F16** — flush barrier no commit_tx: free_list → sync_cache → journal → sync_cache → sb
+  (padrão LiberFS; QEMU/RAM mascarava ausência de flush).
+- **Licença** — BAFS é **GPL-3.0** desde v1.2 (não MIT) — TECNOLOGIAS.md corrigido. BAFS
+  upstream congelado (0 issues/PRs); LiberFS (Unlicense) como referência de flush+defer.
+
+**Compatibilidade NeuralFS/MHI/SGDB (C1-C10):**
+
+- **C1 CRÍTICO** — TickvLite gravava no LBA 2048 (colidia com ESP@2048 + NeuralFS@4096 do
+  GPT instalado → brick no 1º boot NVMe real). Região movida para o fim do disco (antes da
+  backup GPT).
+- **C2** — backend=RAM reportado como ok mas volátil → log CRÍTICO no init_flash.
+- **C4** — EpisodicMemory: fonte única doc-por-episódio (removida a reescrita O(n) do tail).
+- **C9** — ponte provision↔SGDB: `persist_slot` registra `pkg/model/<file>` (bytes+sha256).
+- **Pendências documentadas:** C6 (ArcCache morto), C5 (MHI hinting-only), C7 (tiers
+  cognitivos vs físicos), C8 (rebuild de índice a cada boot).
+
+**Doc:** NeuralFS.md §13 (estado real: inodes inline, sem checksum de dados, journal
+não-circular, mapa canônico por tipo de dado). Commits f07834f + 6a8f379.
+cargo check 0 erros; testes k-nano 62 + k_ai 19 PASS.
+
+
 ### SESSION_252: ADR-0086 Instalação + Update OTA — processo unificado + execução completa (2026-08-05)
 
 ADR canônica consolidando instalação (ADR-0079, deprecada) + update (ADR-0031 §1, deprecado)

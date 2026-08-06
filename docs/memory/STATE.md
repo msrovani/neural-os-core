@@ -1,4 +1,20 @@
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s252 — ADR-0086 + NeuralFS profundo + compat MHI/SGDB
+#   SESSION_252 (continuação): revisão profunda do NeuralFS (F1-F16, oracle + BAFS/LiberFS)
+#     + compatibilidade NeuralFS/MHI/SGDB (C1-C10):
+#     F1 CRÍTICO alloc_contiguous (free-stack LIFO corrompia re-escrita) · F2 ordem CoW
+#     (dados→commit→reclaim) · F3 mount seguro (probe backup; nunca formata volume
+#     existente) · F5 journal corrompido recusa mount · F6 format zera journal · F8
+#     read_range (AirLLM streaming) · F10 valid_name · F12 dead code removido (extent/
+#     checksum_tree) · F13 Superblock::new · F14 smokes wireados · F15 · F16 flush
+#     barrier (LiberFS sync_cache). Licença BAFS MIT→GPL-3.0 (lib-1; repo congelado v1.2).
+#     C1 CRÍTICO TickvLite LBA 2048 colidia com ESP+NeuralFS (brick NVMe real) → fim do
+#     disco · C2 log RAM volátil · C4 episodic tail O(n) removido · C9 ponte provision↔SGDB.
+#     Pendências: C6 ArcCache morto, C5 MHI hinting-only, C7 tiers, C8 rebuild.
+#     Commits f07834f + 6a8f379. cargo check 0 erros; testes k-nano 62 + k_ai 19 PASS.
+#     NeuralFS.md §13 (estado real) + TECNOLOGIAS.md (licença) atualizados.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s252 — ADR-0086 Instalação + Update OTA (processo canônico)
 #   SESSION_252: ADR-0086 Accepted — unifica instalação (ADR-0079 deprecada) + update
 #     (ADR-0031 §1 deprecado) + ADR-0074 (lacuna sem arquivo); 10 gaps fechados, 0 erros:
