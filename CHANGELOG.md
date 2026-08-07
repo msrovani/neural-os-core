@@ -3,6 +3,50 @@
 ## [Unreleased]
 
 
+### SESSION_252 (cont.): ADR-0087 implementada — MHI Real DMA Multi-Tier Fases 1–5 ✅ (2026-08-06)
+
+**Revisão ADR-0047 + reconciliação SASOS/CE (0b11354):** 0047-GPU §7 (SASOS = VRAM no heap,
+acesso pontual por ponteiro) + ADR-0087 (CE/SDMA/BCS = DMA bulk via engine) reconciliados como
+**complementares** — SASOS decide ONDE o dado vive, CE decide COMO moves bulk acontecem.
+Roadmap: Fase 4a (SASOS, dá o ponteiro) antes de 4b (CE, dá a velocidade). WC p/ gravação
+VRAM via CPU, UC p/ leitura.
+
+**ADR-0087 — MHI Real (7 commits, ~1.200 LOC, 22 testes host, 0 erros):**
+
+- **Pré-req 4a — detecção medida de BARs (f0e5911):** `k_nano::pci::read_bar_size`
+  (técnica 0xFFFFFFFF) + `detect.rs` seleciona MMIO/VRAM por tamanho real, não tabela DID.
+  🔴 **Bug de raiz AMD invisível:** amdgpu (Bonaire+) mapeia **VRAM→BAR0, doorbell→BAR2,
+  MMIO→BAR5** — o código assumia VRAM=BAR2/MMIO=BAR0 (o oposto). AIOS mede o silício.
+- **F1 — NVMe PRP zero-copy (c222cdc):** `nvme_prp_layout` (regras Linux: PRP1 só, PRP2 =
+  2ª página, lista ≥3 páginas, 512 entradas); cdw8/9 antes ficavam 0 = transfer >1 página
+  quebrado; `read/write_blocks_direct(lba, dma_phys, len)` para callers MHI.
+- **F2 — MHI wiring (c222cdc):** `record_access` (era ZERO callers) agora chamado de disk
+  write `io_scheduler_flush`, disk read `readahead_hint` (lba*512), `vram_alloc`/`vram_free`/
+  `msched_record`; histerese `hot_hits` (streak ≥2, LWN 898766), `tier_id`, VRAM na escada.
+- **F3 — Intel BCS (c4634be):** 4 bugs de encoding (i915 source): base 0x220000→**0x22000**,
+  TAIL +0x38→**+0x30** (0x38 é RING_START), CTL 4096→**0x3001** (RING_CTL_SIZE|VALID), blit
+  header 0x41000000 (**XY_COLOR_BLT**!)→**0x54F00008** (XY_SRC_COPY_BLT 0x53, depth no DW1,
+  DW3 x2/y2, src_pitch) + **MI_FLUSH_DW** 0x4C000001 (não o MI_FLUSH antigo 0x02000000); sem
+  MI_BATCH_BUFFER_END no ring (engine pararia antes do TAIL); pin GGTT.
+- **F4a — SASOS real (9346cd4):** `map_page_uc_at`/`map_region_uc_2mb_at` (VA arbitrário) +
+  `init_sasos_vram` mapeia aperture em 0x4020_0000_0000+ UC; `sasos_vram_ptr`/
+  `sasos_phys_to_ptr` (ponteiro CPU unificado, base p/ `Tensor::location = MemTier::Vram`).
+  Substitui o PoC simbólico.
+- **F4b — NVIDIA CE Pascal (2fd3acc):** channel dedicado (classe 0xc1b5, privileged
+  inst|0x20, runlist CE, USERD fence), DMA_COPY phys→phys (apertures 0x0260/0x0264
+  SRC=0x1000/DST=0x2000, 0x0400×8, launch 0x0300), canário 64KB RAM→VRAM→RAM golden;
+  `mhi_tier0_copy()` seam p/ MHI tier1→tier0. HW-gated (GTX 1050).
+- **F5 — policy (f6ddc89):** `DEMOTION_ORDER` explícita + `demote_to()` (um degrau por vez) +
+  `migration_rate_ok()` (64MB/janela de 100 ticks, LWN 898766) no `mhi_tick`.
+
+**Fase 6 (AMD SDMA + SGL + P2P)** = AWAITING_HW (ADR-0087 §4). Pesquisa AMD VRAM (lib-1):
+dGPU RDNA VRAM→BAR0/doorbell→BAR2/MMIO→BAR5, ReBAR expõe VRAM total (sem ReBAR aperture
+≈256MB), APU = carveout de RAM sem BAR, SDMA ring offsets + packet COPY 4MB + fence
+SDMA_OP_WRITE + polling wb. Ver SESSION_252 §9.
+
+**Doc:** ADR-0087 atualizada (Fases 1–5 ✅ + pré-req 4a), INDEX (0047-gpu/0087), SESSION_252 §9.
+
+
 ### SESSION_252 (cont.): Revisão profunda do NeuralFS (F1-F16) + compatibilidade NeuralFS/MHI/SGDB (C1-C10) — 2026-08-05
 
 **NeuralFS — correções (oracle + BAFS/LiberFS):**

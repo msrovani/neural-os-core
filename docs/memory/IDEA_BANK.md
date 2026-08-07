@@ -95,10 +95,10 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | exFAT/NTFS/EXT write | #417 | ✅ exFAT write opt-in SESSION_144; NTFS/EXT ⏳ | — |
 | cloud sync | #418 | ✅ NetFs TCP smoke QEMU | `[NETFS] VERDICT=PASS` SESSION_152; backends S3/WebDAV residual |
 | Storage UI | #419 | ✅ CLI `storage_report`; UI App ⏳ | — |
-| MHI DMA | #420 | ▶️ AWAITING_HW SESSION_146 `[MHI-DMA]` | soft-MVP ✅ |
+| MHI DMA | #420 | ✅ **ADR-0087 F1–F5** (SESSION_252 §9): PRP zero-copy + wiring + BCS + SASOS + CE + policy | soft-MVP ✅ → real; F6 AMD SDMA AWAITING_HW |
 | SysInstaller | #421 | defer | — |
 | NeuralFS disco | #422 | mount/GPT ✅; evidência Onda 1 | USB power-loss ▶️ AWAITING_HW |
-| GPU Direct | #423 | ▶️ AWAITING_HW SESSION_146 `[GDS-HW]` | stub probe; sem P2P |
+| GPU Direct | #423 | ❌ **SKIP** (hairpin/ACS bloqueia em notebook; GDS é NVLink-only — ADR-0087 §4) | caminho prático: NVMe→DRAM (PRP) → CE (DRAM→VRAM) |
 | LAN/RX/DHCP/VirtIO-net | #73, #117–120 | ✅ L3.5–L5 SESSION_149/150; #117 polish / #251–252 timer | base LAN |
 | `/fetch` + Update HTTP | #121, #308a/b | ✅ HTTP path SESSION_152; reboot A/B residual | net_bridge |
 | WiFi ath10k QCA6174 | Note1050 / #407b | A0–A3 código ✅ SESSION_161; runtime Note AWAITING | pista ativa; iwlwifi secondary |

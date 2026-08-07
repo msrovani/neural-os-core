@@ -177,3 +177,51 @@ cognitivos vs físicos), C8 (rebuild de índice a cada boot).
 - **Mapa canônico**: modelos/firmware = NeuralFS `/models/`; kernel/slots/BOOTCFG = FAT32 ESP;
   memória IA (L2-L7, HANR, audit) = SGDB→TickvLite (partição dedicada C1); SELF.STATE =
   NeuralFS write-through (futuro); índices ART/BQ = RAM-only rebuild do TickvLite.
+
+---
+
+## 9. Revisão família ADR-0047 + reconciliação SASOS/CE + ADR-0087 implementada (mesma sessão)
+
+### 9.1 Revisão "uma a uma" das ADRs 0047 (usuário: "vi 3 adr 47, uma hmi")
+
+| ADR | Estado | Veredito |
+|-----|--------|----------|
+| 0047-Latent | Accepted (MVP parcial) | ✅ nenhuma ação — SGDB já cobre o gap narrativo; MHI agora tem dono (0087) |
+| **0047-GPU** | Accepted (MVP parcial) | ⚠️ **§7 SASOS vs ADR-0087 CE**: duas abordagens para o Tier 0 → reconciliados como complementares |
+| 0047-HMI | Superseded→0058 | ✅ sem overlap DMA |
+
+**Reconciliação (commit `0b11354`):** SASOS (0047-GPU §7 = VRAM no heap, acesso pontual por ponteiro)
++ CE/SDMA/BCS (0087 = DMA bulk via engine) **não são concorrentes — são complementares**.
+SASOS decide ONDE o dado vive (ponteiro); CE decide COMO moves bulk acontecem (engine).
+Roadmap 0087 Fase 4 dividida: **4a SASOS** (dá o ponteiro, pré-requisito lógico) antes de
+**4b CE** (dá a velocidade). WC vs UC: SASOS mapeia WC p/ gravação de VRAM via CPU, UC p/ leitura.
+INDEX + 0047-GPU §7.2 + 0087 §2.0.1 atualizados.
+
+### 9.2 ADR-0087 implementada — Fases 1–5 ✅ (7 commits, ~1.200 LOC, 22 testes host)
+
+| Fase | Entrega | Commit | Verificação |
+|------|---------|--------|-------------|
+| Pré-req 4a | **Detecção medida de BARs** — `k_nano::pci::read_bar_size` (0xFFFFFFFF) + `detect.rs` seleciona MMIO/VRAM por tamanho real (VRAM = maior BAR ≥64MB; AMD dGPU VRAM→BAR0 ⇒ MMIO=BAR5; APU sem BAR grande → DRAM compartilhada) | `f0e5911` | check 0 erros |
+| 1 | **NVMe PRP zero-copy** — `nvme_prp_layout` (PRP1/PRP2/lista 512, regras Linux), `io_nvm` com prp1+prp2 (cdw8/9 antes ficavam 0 = quebra >1 página), `read/write_blocks_direct` | `c222cdc` (fix-1) | 3 testes host |
+| 2 | **MHI wiring** — `record_access` com callers reais (disk write `io_scheduler_flush`, disk read `readahead_hint` lba*512; `vram_alloc` registra/`vram_free` unregister/`msched_record` acessa); `hot_hits` + histerese (streak ≥2, LWN 898766); `tier_id`; VRAM na escada | `c222cdc` (fix-2) | 6 testes host |
+| 3 | **Intel BCS** — 4 bugs: `BLT_RING_BASE` 0x220000→**0x22000**, TAIL +0x38→**+0x30** (0x38 = RING_START), CTL 4096→**0x3001**, blit header 0x41000000 (XY_COLOR_BLT!)→**0x54F00008** (XY_SRC_COPY_BLT, depth no DW1, DW3 x2/y2) + **MI_FLUSH_DW** 0x4C000001; sem BB_END no ring (engine pararia antes do TAIL); pin GGTT | `c4634be` | check 0 erros |
+| 4a | **SASOS real** — `map_page_uc_at`/`map_region_uc_2mb_at` (VA arbitrário) + `init_sasos_vram` mapeia aperture em 0x4020_0000_0000+ UC; `sasos_vram_ptr`/`sasos_phys_to_ptr` (ponteiro CPU unificado); substitui PoC simbólico | `9346cd4` | 1 teste host |
+| 4b | **NVIDIA CE Pascal** — channel dedicado (classe 0xc1b5, privileged inst\|0x20, runlist CE, USERD fence), DMA_COPY phys→phys (apertures 0x0260/0x0264 SRC=0x1000/DST=0x2000, 0x0400×8, launch 0x0300), canário 64KB RAM→VRAM→RAM golden; `mhi_tier0_copy()` seam | `2fd3acc` (fix-3) | 3 testes host |
+| 5 | **Policy** — `DEMOTION_ORDER` explícita + `demote_to()` + `migration_rate_ok()` (64MB/janela 100 ticks, LWN 898766) no `mhi_tick` | `f6ddc89` | 9 testes host |
+
+Fase 6 (AMD SDMA + SGL + P2P) permanece **AWAITING_HW** (ADR-0087 §4). Pesquisa AMD VRAM (lib-1,
+amdgpu source): dGPU RDNA VRAM→BAR0/doorbell→BAR2/MMIO→BAR5 (Bonaire+), ReBAR expõe VRAM total
+(sem ReBAR aperture ≈256MB), APU = carveout de RAM sem BAR, SDMA ring offsets + packet COPY
+4MB/vez + fence via SDMA_OP_WRITE + polling wb.
+
+### 9.3 Lições da sessão (ver AGENTS.md)
+
+- **AMD BAR roles ≠ NVIDIA**: amdgpu (Bonaire+) mapeia VRAM→BAR0, doorbell→BAR2, MMIO→BAR5 —
+  o código local assumia VRAM=BAR2/MMIO=BAR0. Como AMD era AWAITING_HW, o bug era invisível.
+  Fix de raiz: **medir o tamanho real dos BARs em runtime** e atribuir roles por evidência.
+- **Intel BCS**: 0x22000 (não 0x220000); TAIL=+0x30 (0x22038 é RING_START); XY_SRC_COPY_BLT =
+  0x54F00008 (0x41 = XY_COLOR_BLT!); MI_FLUSH_DW = 0x4C000001 (0x02000000 é MI_FLUSH pré-gen6).
+- **Ring submission ≠ batch**: não usar MI_BATCH_BUFFER_END no ring (engine para nele, HEAD nunca
+  alcança TAIL → wait_idle timeout); ring vazio ⟺ HEAD==TAIL.
+- **NVMe PRP**: PRP1 só vale se o transfer cabe numa página; >1 página precisa PRP2 ou lista
+  (512 entradas/página); cdw8/9 nunca eram setados (bug latente multi-página).
