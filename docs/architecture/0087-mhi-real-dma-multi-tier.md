@@ -196,8 +196,8 @@ GTX 1050 é o árbitro). HW-gated.
 ## 6. Gaps/Notas de compatibilidade (desta sessão)
 
 - **C1 (TickvLite LBA 2048)**: já corrigido — região movida para o fim do disco (f07834f). O MHI tier 2 deve respeitar a mesma região.
-- **C5 (MHI sem callers)**: este ADR é o wire — `record_access` nos paths.
-- **C6 (ArcCache morto)**: decisão em aberto — wire como wrapper BlockDevice (beneficia NeuralFS+SGDB+FAT32 de uma vez) ou delete. Recomendação: wire como wrapper quando o MHI tiver dispatch real.
+- **C5 (MHI sem callers)**: este ADR é o wire — `record_access` nos paths. **Nota pós-C6 (1f71d25):** o `readahead_hint` onde o read-path estava wiredado era código morto (zero callers) e foi deletado; o seam real de leitura agora é `CachedDisk::read_sectors` (1 linha p/ `record_access` — follow-up).
+- **C6 (ArcCache morto) ✅ (1f71d25)**: wire como wrapper — `CachedDisk<'a>` (BlockDevice, write-through, read cache por setor 512B, 1MB) inserido no seam `with_dev` do NeuralFS (`/models/` + SGDB). `readahead_hint`/`readahead_cache` deletados (write-only, zero callers). 5 testes host.
 
 ## 7. Referências
 
