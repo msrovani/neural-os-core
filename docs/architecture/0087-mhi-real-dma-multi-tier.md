@@ -143,6 +143,14 @@ Fase 6 — AMD SDMA + SGL + P2P reavaliação              [AWAITING_HW]
 o CE dá a velocidade de transfer bulk (pesos 792MB). Paralelizáveis, mas o
 tensor na VRAM é pré-requisito lógico para migração bulk.
 
+**Pré-requisito 4a ✅ (f0e5911):** detecção de VRAM por **medição de BARs** —
+`k_nano::pci::read_bar_size` (técnica 0xFFFFFFFF) + `detect.rs` seleciona
+MMIO/VRAM por tamanho real (VRAM = maior BAR ≥ 64MB; MMIO = BAR0 exceto
+quando BAR0 é a aperture — AMD dGPU → BAR5, APU → BAR5). Corrige o bug de
+raiz: AMD mapeia VRAM→BAR0/MMIO→BAR5 (amdgpu Bonaire+), o código assumia
+VRAM→BAR2/MMIO→BAR0. APU sem BAR grande → DRAM compartilhada (honesto).
+AIOS: mede o silício, não tabela DID.
+
 ## 6. Gaps/Notas de compatibilidade (desta sessão)
 
 - **C1 (TickvLite LBA 2048)**: já corrigido — região movida para o fim do disco (f07834f). O MHI tier 2 deve respeitar a mesma região.
