@@ -1,6 +1,6 @@
 ﻿# 🧠 Idea Bank — neural-os-core v2.0
 
-**Última atualização:** 2026-07-23 — ADR-0075 Emagrecer neural-kernel E0–E4 + SESSION_215.
+**Última atualização:** 2026-08-07 — ADR-0088 PREMISSA MÁXIMA AIOS-First + IDEA #512.
 **Documento vivo:** Toda ideia discutida neste projeto tem destino conhecido.
 
 ---
@@ -67,6 +67,9 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#486** Vector DB in-kernel TF-IDF (RAG) | ADR-0064 | ❌ rejeitada | crate `vector-db` criada mas nunca integrada → deletada. SGDB real = ADR-0063 `k_ai::sgdb` (BQ Flat SIMD). |
 | **#487** Embeddings neurais in-kernel L4+ | ADR-0064 F6 | ✅ implementado | BGE embedding em `k_ai::memory_systems` (`bge_embed()`, `load_bge()`). Usado via `k_ai::sgdb::layers::remember_semantic()` + BQ L4. |
 | **#491–#505** TicKV + NoProto + Índices IA SGDB | ADR-0063 | 🟡 fazendo | **Memory Quality SESSION_176:** SleepCycle ckpt✅ recall L4 hybrid✅ V-flag✅ ART SIMD✅. Residual: crates upstream, HNSW, DoD 10M/100k |
+
+| **#512** AIOS-First Premissa Máxima | ADR-0088 | ✅ mapeada | Irrevogável (2026-08-07); governa toda decisão desde o boot — IA sempre, HITL, self-* contínuo, nada bypassado, busca dos 10%. LER: `docs/architecture/0088-*.md` |
+| **#513** Storage Transport Resolver (self-adaptive I/O) | ADR-0088 (política) + ADR-0087/0062 P3 (técnica) | 🟡 agendada | Boot FS deixa de hardcodar `AtaDriver` PIO → resolve transporte em runtime (NVMe PRP → AHCI PRDT → BMIDE 0xC8 → PIO fallback), mede com `measure_bandwidth` existente, degrada com honra (TCG lento → boot sem disco + log CRÍTICO, nunca trava). Primeiro caso prático da PREMISSA MÁXIMA (#512). TODO #18 |
 
 | **#479** TLS 1.3 via embedded-tls no neural-os-core | ADR-0062 P1 / SESSION_157–158 | ✅ MVP (residual CertVerify/FAT) |
 | **#480** VFS layer + BlockDevice trait unificado | ADR-0062 P2 / SESSION_171 | ✅ MVP (StorageBus; residual POSIX) |

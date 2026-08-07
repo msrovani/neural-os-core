@@ -38,6 +38,7 @@ Fonte: `docs/architecture/INDEX.md` (lifecycle). Sequência de execução recome
 | 15 | Ring3 isolation — 🔴 triple-fault blocker (`TRY_ENTER_RING3=false`; sessão debug dedicada) | 0077 | 4 | ~1.500 | 🔴 |
 | 16 | Multi-slot multimodal (GGUF→ternário, 6 slots, visão SigLIP, learning contínuo) | 0078 | 4 | ~2.500 | ⏳ |
 | 17 | Golden silício GPU multi-geração (NVIDIA ACR/GSP · AMD PSP/KIQ/MES · Intel GuC/walkers) | 0048–50 | 4 | ~3.000 + HW | ⏳ ▶️ |
+| 18 | **Storage Transport Resolver (self-adaptive I/O)** — boot FS via `BlockDevice` (não `AtaDriver` fixo); escolhe transporte em runtime (NVMe PRP → AHCI PRDT → BMIDE 0xC8 → PIO); usa `measure_bandwidth`; degradação honrada (TCG lento → boot sem disco + log CRÍTICO, nunca trava) | 0088 (política) + 0087/0062 P3 | 2 | ~500 | ⏳ IDEA #513; 1º caso prático da PREMISSA MÁXIMA |
 
 **Regra:** itens ▶️ AWAITING_HW não bloqueiam o gate v2.0.0 se tiverem defer explícito; 🔴 0077 resolve ANTES de re-habilitar Ring3 (ver `interrupts_ext.rs` review HIGH, SESSION_245).
 

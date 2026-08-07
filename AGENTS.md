@@ -7,11 +7,35 @@
 #   Sprints 106+: K³CHJ wire + ADR-0042 — base v1.8.0; consolidação v1.8.6 → **v1.9.0 TEST**
 #   v1.8.6 = ADR-0041 H4+/H5+/AS + HalOffer; v1.9.0 = Pós-LAN + Residuals 0–7; v2.0.0 = gate após review
 #   Gate v2.0.0 = N1–N5 + wire + review; v1.8.0 = marco adequação (Jul 2026); não "2.0 completo" sem review
-#   K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
+# K³CHJ = k-nano + k-hal + k-ai + Cortex + Hermes + Jarbas (histórico K²CHJ = sem k-hal na marca)
+# ════════════════════════════════════════════════════════
+
+# ════════════════════════════════════════════════════════
+#   ⚡ PREMISSA MÁXIMA — IRREVOGÁVEL, IRRETRATÁVEL (ADR-0088)
+#   PRIMEIRA A SER ANALISADA E APRECIADA EM TODA DECISÃO.
+# ════════════════════════════════════════════════════════
+# 1. Somos o PRIMEIRO AIOS — Sistema Operacional com Inteligência
+#    Artificial DESDE O BOOT. IA não é feature: é o modo de operar.
+# 2. O neural usa AI SEMPRE, tomando decisões HITL (human-in-the-loop),
+#    interagindo e se auto-tudo: auto-adaptar, auto-curar, auto-upgrade,
+#    auto-gerar funcionalidades, auto-pesquisar soluções na internet —
+#    autônomo e automático.
+# 3. TODA decisão e caminho tomado DEVE ser tratado com: inferência,
+#    adaptação, memorização, aprendizado, versionamento, auto-adaptação,
+#    autonomia e automatismo.
+# 4. NADA é simplesmente bypassado: todo desvio/fallback/workaround
+#    exige análise e pesquisa, gerando busca ativa por soluções,
+#    correções, melhorias e otimizações — sempre registrada
+#    (IDEA → ADR → SESSION).
+# 5. Todo procedimento busca incessantemente aqueles 10% de melhoria
+#    (detectar → medir → decidir → otimizar → versionar), sem nunca
+#    degradar segurança, HITL ou confiabilidade.
+# Fonte: docs/architecture/0088-aios-first-premissa-maxima.md
 # ════════════════════════════════════════════════════════
 
 # NAVEGAÇÃO RÁPIDA PARA AI DEVS
 # ════════════════════════════════════════════════════════
+# docs/architecture/0088-*.md  → ⚡ PREMISSA MÁXIMA AIOS-First (LER PRIMEIRO)
 # docs/archive/sprints/sprint-plan-92-100.md → Roadmap histórico v1.0
 # TECNOLOGIAS.md               → Catálogo completo de todas as tecnologias (100+)
 # docs/architecture/INDEX.md   → Lifecycle e conflitos de IDs das ADRs
