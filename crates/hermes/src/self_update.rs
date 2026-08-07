@@ -419,10 +419,14 @@ pub fn read_update_cfg() -> Option<String> {
 }
 
 /// Extrai `"<key>":"..."` de um JSON simples (sem serde — no_std).
+/// Aceita `"key":"` e `"key": "` (json.dumps do Python emite espaço após `:`).
 fn json_field(body: &str, key: &str) -> Option<String> {
-    let pat = alloc::format!("\"{}\":\"", key);
+    let pat = alloc::format!("\"{}\"", key);
     let i = body.find(&pat)?;
-    let rest = &body[i + pat.len()..];
+    let after = &body[i + pat.len()..];
+    // pula `:` + espaços opcionais
+    let rest = after.strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
     let end = rest.find('"')?;
     Some(String::from(&rest[..end]))
 }

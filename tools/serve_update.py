@@ -185,7 +185,9 @@ def main() -> int:
         "url": f"{base}/KERNEL.BIN",
         "sha256": sha,
     }).encode() + b"\n"
-    Handler.token = args.token or secrets.token_hex(8)
+    # S2: token de sessão — `--token ""` desliga auth explicitamente (dev localhost,
+    # o kernel no_std não envia Authorization: Bearer). `--token` ausente = aleatório.
+    Handler.token = args.token if args.token is not None else secrets.token_hex(8)
 
     print(f"[OTA] version={args.version} kernel={args.kernel} ({len(Handler.kernel)} bytes)")
     print(f"[OTA] sha256={sha}")
