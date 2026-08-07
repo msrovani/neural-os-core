@@ -151,6 +151,20 @@ raiz: AMD mapeia VRAM→BAR0/MMIO→BAR5 (amdgpu Bonaire+), o código assumia
 VRAM→BAR2/MMIO→BAR0. APU sem BAR grande → DRAM compartilhada (honesto).
 AIOS: mede o silício, não tabela DID.
 
+**Fase 1 ✅ (c222cdc):** NVMe PRP zero-copy — `nvme_prp_layout()` (regras do
+Linux `nvme_setup_prps`: PRP1 só; PRP2 = 2ª página; lista ≥3 páginas, 512
+entradas), `io_nvm` com prp1+prp2 (cdw8/9 antes ficavam 0 = quebra >1
+página), página de lista fixa por driver, `read/write_blocks_direct(lba,
+dma_phys, len)` para callers MHI. Bounce path inalterado. 3 testes host.
+
+**Fase 2 ✅ (c222cdc):** MHI wiring — `record_access` tem callers reais
+(disk write `io_scheduler_flush`, disk read `readahead_hint` com convenção
+lba*512 dos stubs; `vram_alloc` registra / `vram_free` unregister /
+`msched_record` acessa). Policy: `hot_hits` + histerese (promoção só com
+streak ≥ 2, LWN 898766), `tier_id` (VRAM=300 DRAM=200 NVMe=100 HDD=25
+USB=10), VRAM na escada (hot working set → Vram, dispatch AWAITING).
+6 testes host.
+
 ## 6. Gaps/Notas de compatibilidade (desta sessão)
 
 - **C1 (TickvLite LBA 2048)**: já corrigido — região movida para o fim do disco (f07834f). O MHI tier 2 deve respeitar a mesma região.
