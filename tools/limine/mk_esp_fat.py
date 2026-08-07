@@ -99,7 +99,12 @@ def write_gpt(
     """Escreve GPT header (LBA 1), entries (LBA 2-33), backup entries (últimos LBAs - 32),
     backup header (último LBA). FAT32 em part_lba permanece inalterado.
     """
-    esp_type_guid = bytes.fromhex("C12A7328F81F11D2BA4B00A0C93EC93B")
+    # GUID da ESP on-disk em little-endian misto (GPT exige LE nos 3 primeiros
+    # campos). NÃO usar bytes.fromhex("C12A7328...") — isso é a ordem textual
+    # (BE) e o kernel (fat32.rs GPT_ESP) não reconhece → partição vira 0xEE em
+    # vez de 0xEF → with_fat_reader rejeita → UPDATE.CFG "missing".
+    # Formato idêntico ao tools/build_usb_unified.py:38 (28732ac1...).
+    esp_type_guid = uuid.UUID("C12A7328-F81F-11D2-BA4B-00A0C93EC93B").bytes_le
     last_lba = total_sectors - 1
     end_lba = part_lba + part_sectors - 1
     last_usable_lba = last_lba - 33  # = total_sectors - 34

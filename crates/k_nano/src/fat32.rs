@@ -785,7 +785,18 @@ impl<'a> Fat32Writer<'a> {
             for s in 0..spc {
                 let off = s as usize * bps;
                 let end = off + bps;
-                let sector_data = if end <= chunk.len() { &chunk[off..end] } else { &chunk[off..] };
+                // SECTOR SHORT-WRITE BUG: se o arquivo < 512B, o setor s=1 fazia
+                // &chunk[512..] -> PANIC (range start out of range). Fix: setor
+                // sem dados = zeros (cluster FAT32 é maior que o arquivo; o size
+                // no dirent limita a leitura). Bug real de HW: WIFI.CFG/BOOT.LOG/
+                // TLSPINS.BIN pequenos gravados na ESP panicavam.
+                let sector_data = if off >= chunk.len() {
+                    &[][..]
+                } else if end <= chunk.len() {
+                    &chunk[off..end]
+                } else {
+                    &chunk[off..]
+                };
                 let mut sector = [0u8; 512];
                 sector[..sector_data.len()].copy_from_slice(sector_data);
                 if !self.reader.ata.write_sectors(lba + s, &sector, 1) {

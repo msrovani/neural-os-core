@@ -617,8 +617,11 @@ pub fn remap_pic_pit_fallback() {
         // ICW4: 8086 mode
         core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0x01u8, options(nostack, preserves_flags));
         core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0x01u8, options(nostack, preserves_flags));
-        // Mask: IRQ0 (PIT) + IRQ2 (cascade) abertos; resto mascarado
-        core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xFAu8, options(nostack, preserves_flags));
+        // Mask: IRQ0 (PIT) + IRQ1 (teclado) + IRQ2 (cascade) abertos; resto mascarado.
+        // 0xF8 = 1111_1000 (bits 0,1,2 = 0). ANTES era 0xFA (1111_1010) — bit 1
+        // setado = IRQ1 do teclado MASCARADO → sendkey/scancode nunca chegava ao
+        // InputAgent (o mouse funciona por polling do status 0x64, não IRQ12).
+        core::arch::asm!("out dx, al", in("dx") 0x21u16, in("al") 0xF8u8, options(nostack, preserves_flags));
         core::arch::asm!("out dx, al", in("dx") 0xA1u16, in("al") 0xFFu8, options(nostack, preserves_flags));
     }
     unsafe { crate::apic::pit_init(); }
