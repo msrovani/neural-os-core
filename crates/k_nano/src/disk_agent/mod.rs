@@ -41,7 +41,6 @@ pub struct DiskIntelligenceAgent {
     tick_run: bool,
     tick_count: u64,
     io_queue: Vec<(u8, u8, u64, Vec<u8>)>,
-    readahead_cache: Vec<(u64, u64, Vec<u8>)>,
     cache: ArcCache,
     last_migration_tick: u64,
     smart_history: Vec<SmartHistoryEntry>,
@@ -64,7 +63,6 @@ impl DiskIntelligenceAgent {
             tick_run: false,
             tick_count: 0,
             io_queue: Vec::new(),
-            readahead_cache: Vec::new(),
             cache: ArcCache::new(1024, "hdd"),
             last_migration_tick: 0,
             smart_history: Vec::new(),
@@ -163,20 +161,6 @@ impl DiskIntelligenceAgent {
                 crate::mhi::record_access(lba * 512, 0);
             }
         }
-    }
-
-    fn readahead_hint(&mut self, ctrl_idx: u8, disk: u8, lba: u64, count: u64) {
-        let key = ((disk as u64) << 56) | (ctrl_idx as u64) << 48 | lba;
-        if self.readahead_cache.iter().any(|(k, _, _)| *k == key) { return; }
-        let prefetch_blocks = 32usize.min(4096 / 512);
-        let mut buf = alloc::vec![0u8; prefetch_blocks * 512];
-        if (ctrl_idx as usize) < self.controllers.len() {
-            self.controllers[ctrl_idx as usize].read_blocks(disk, lba + count, &mut buf, prefetch_blocks);
-            // ADR-0087 Fase 2: wiring record_access no caminho de leitura.
-            crate::mhi::record_access((lba + count) * 512, 0);
-        }
-        self.readahead_cache.push((key, lba + count, buf));
-        if self.readahead_cache.len() > 64 { self.readahead_cache.remove(0); }
     }
 
     fn read_partitions(&self, disk: &mut RawDisk, ctrl_idx: usize) {

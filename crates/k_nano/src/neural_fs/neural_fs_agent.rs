@@ -245,17 +245,25 @@ impl NeuralFsAgent {
     where
         F: FnOnce(&mut NeuralVolume, &mut dyn BlockDevice) -> Result<R, &'static str>,
     {
+        // ADR-0087 §6: envolve o device no CachedDisk (write-through) — TODA
+        // operação NeuralFS (read/write/list/mount de /models/ + SGDB) passa
+        // pela cache. Transparente: delega total_sectors/name/sync_cache.
         match &mut st.backend {
-            Backend::Ram(disk) => f(&mut st.volume, disk),
+            Backend::Ram(disk) => {
+                let mut cached = crate::disk_agent::cache::CachedDisk::new(disk);
+                f(&mut st.volume, &mut cached)
+            }
             Backend::Ata { .. } => {
                 let mut guard = crate::ATA_DRIVER.lock();
                 let ata = guard.as_mut().ok_or("no ata")?;
-                f(&mut st.volume, ata)
+                let mut cached = crate::disk_agent::cache::CachedDisk::new(ata);
+                f(&mut st.volume, &mut cached)
             }
             Backend::Usb { .. } => {
                 let mut guard = crate::globals::USB_MSC.lock();
                 let msc = guard.as_mut().ok_or("no usb")?;
-                f(&mut st.volume, msc)
+                let mut cached = crate::disk_agent::cache::CachedDisk::new(msc);
+                f(&mut st.volume, &mut cached)
             }
         }
     }
