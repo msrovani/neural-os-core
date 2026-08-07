@@ -165,6 +165,34 @@ streak ≥ 2, LWN 898766), `tier_id` (VRAM=300 DRAM=200 NVMe=100 HDD=25
 USB=10), VRAM na escada (hot working set → Vram, dispatch AWAITING).
 6 testes host.
 
+**Fase 3 ✅ (c4634be):** Intel BCS — 4 bugs de encoding corrigidos (i915
+source): `BLT_RING_BASE` 0x220000→**0x22000**, TAIL +0x38→**+0x30** (0x38 é
+RING_START), CTL 4096→**0x3001** (RING_CTL_SIZE|VALID), blit header
+0x41000000 (XY_COLOR_BLT!)→**0x54F00008** (XY_SRC_COPY_BLT 0x53, depth no
+DW1, DW3 x2/y2, src_pitch) + **MI_FLUSH_DW** 0x4C000001 pós-cópia (não o
+MI_FLUSH antigo 0x02000000). Ring sem MI_BATCH_BUFFER_END (engine pararia
+antes do TAIL → wait_idle timeout). Probe com pin GGTT (RING_START = gtt_off,
+não phys). HW-gated: canário blit em i915 real.
+
+**Fase 4a ✅ (9346cd4):** SASOS real — `map_page_uc_at`/`map_region_uc_2mb_at`
+(VA arbitrário, não só identidade) + `init_sasos_vram` mapeia a aperture em
+0x4020_0000_0000+ UC; `sasos_vram_ptr`/`sasos_phys_to_ptr` dão o ponteiro CPU
+unificado (base p/ `Tensor::location = MemTier::Vram`, 0047-GPU §7.4). Wire
+no `init_vram_tier` (não-fatal). Substitui o PoC simbólico (dívida morta).
+
+**Fase 4b ✅ (2fd3acc):** NVIDIA CE Pascal — channel dedicado (classe
+PASCAL_DMA_COPY_B 0xc1b5, privileged inst|0x20, runlist CE, USERD fence),
+DMA_COPY phys→phys (apertures 0x0260/0x0264 SRC=0x1000/DST=0x2000, 0x0400×8,
+launch 0x0300), canário 64KB RAM→VRAM→RAM golden; `mhi_tier0_copy()` seam p/
+MHI tier1→tier0. Builders puros host-testados (3 testes). Incertezas marcadas
+(stride runlist, layout 0x0400 literal, 0x0260/0x0264 separados — canário
+GTX 1050 é o árbitro). HW-gated.
+
+**Fase 5 ✅ (f6ddc89):** Policy — `DEMOTION_ORDER` explícita +
+`demote_to()` (um degrau por vez, não hardcoded) + `migration_rate_ok()`
+(rate limit 64MB/janela de 100 ticks, LWN 898766) respeitado no `mhi_tick`
+(promoção async sem thrash). 3 testes novos (9 mhi tests total).
+
 ## 6. Gaps/Notas de compatibilidade (desta sessão)
 
 - **C1 (TickvLite LBA 2048)**: já corrigido — região movida para o fim do disco (f07834f). O MHI tier 2 deve respeitar a mesma região.
