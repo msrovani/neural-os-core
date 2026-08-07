@@ -321,11 +321,19 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
 /// criando entradas de tabela se necessario, e marca como NO_CACHE + WRITE_THROUGH.
 /// Se uma huge page (2MB/1GB) ja cobrir o endereco, modifica as flags diretamente.
 pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
+    map_page_uc_at(phys_addr + phys_mem_offset, phys_addr, phys_mem_offset);
+}
+
+/// Mapa uma pagina de 4KB fisica em um VA ARBITRARIO (SASOS, ADR-0047-G3/0087
+/// Fase 4a) com NO_CACHE + WRITE_THROUGH. Mesmo walk L4→L3→L2→L1 de
+/// `map_page_uc`, mas o destino virtual é explícito — permite mapear VRAM no
+/// espaço do heap (0x4020_0000_0000+) sem depender da identidade phys+pmoff.
+pub unsafe fn map_page_uc_at(virt_addr: u64, phys_addr: u64, phys_mem_offset: u64) {
     use x86_64::structures::paging::PageTable;
     use x86_64::VirtAddr;
     use x86_64::PhysAddr;
 
-    let virt = VirtAddr::new(phys_addr + phys_mem_offset);
+    let virt = VirtAddr::new(virt_addr);
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();
     let base = VirtAddr::new(phys_mem_offset);
     let l4_virt = base + l4_frame.start_address().as_u64();
@@ -380,6 +388,19 @@ pub unsafe fn map_page_uc(phys_addr: u64, phys_mem_offset: u64) {
 /// Muito mais rapido que map_page_uc() para grandes regioes (ex: 8GB VRAM).
 /// Retorna o numero de entradas L2 configuradas.
 pub unsafe fn map_region_uc_2mb(phys_start: u64, size_bytes: u64, phys_mem_offset: u64) -> usize {
+    map_region_uc_2mb_at(phys_start + phys_mem_offset, phys_start, size_bytes, phys_mem_offset)
+}
+
+/// Mesmo mapeamento 2MB UC, mas com VA de destino ARBITRARIO (SASOS, ADR-0087
+/// Fase 4a). Mapeia VRAM no espaço do heap (0x4020_0000_0000+) — o ponteiro
+/// unificado que o `Tensor::location = MemTier::Vram` (0047-GPU §7.4) usa.
+/// Requer `virt_start` e `phys_start` alinhados a 2MB.
+pub unsafe fn map_region_uc_2mb_at(
+    virt_start: u64,
+    phys_start: u64,
+    size_bytes: u64,
+    phys_mem_offset: u64,
+) -> usize {
     use x86_64::structures::paging::{PageTable, PageTableFlags};
     use x86_64::VirtAddr;
     use x86_64::PhysAddr;
@@ -388,7 +409,7 @@ pub unsafe fn map_region_uc_2mb(phys_start: u64, size_bytes: u64, phys_mem_offse
     let mut offset = 0u64;
     while offset < size_bytes {
         let phys = phys_start + offset;
-        let virt = VirtAddr::new(phys + phys_mem_offset);
+        let virt = VirtAddr::new(virt_start + offset);
         let (l4_frame, _) = x86_64::registers::control::Cr3::read();
         let base = VirtAddr::new(phys_mem_offset);
         let l4_virt = base + l4_frame.start_address().as_u64();

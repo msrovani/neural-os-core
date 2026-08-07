@@ -154,6 +154,12 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     *VRAM_BUDDY.lock() = Some(buddy);
     VRAM_READY.store(true, Ordering::Release);
 
+    // SASOS (ADR-0087 Fase 4a): mapeia a aperture no espaço do heap
+    // (0x4020_0000_0000+) — o ponteiro unificado para Tensor::location =
+    // MemTier::Vram. Não falha o init se SASOS não conseguir (VRAM segue
+    // acessível por identidade phys+pmoff).
+    let _ = crate::gpu::sasos::init_sasos_vram(vram_phys, vram_size, pmoff);
+
     k_nano::slog_hal!("VRAM", "info", "{} buddy allocator ativo: {} MB", gpu.name, vram_size / (1024*1024));
     true
 }
