@@ -1594,6 +1594,17 @@ pub(crate) fn kernel_boot(
 
     publish_boot_phase(BootPhase::DriverInit, &alloc::format!("ATA probe={}", if ata_found { "found" } else { "none" }));
 
+    // SESSION_252: trigger OTA via flag QEMu-loader (padrão netmode.flag).
+    // O loop smoke (tools/qemu_ota_loop.ps1) grava 'O' na RAM; dispara
+    // check_for_update() no boot SEM depender do teclado (IRQ1 não é entregue
+    // via IOAPIC no QEMU — sendkey nunca chegava ao shell). Valida o fluxo
+    // UPDATE.CFG → GET manifest → slot inativo → serve_update.py.
+    // DEPOIS do probe do ATA: `with_fat_reader` exige ATA_DRIVER populado.
+    if crate::net::detect_qemu_ota_trigger() {
+        let report = hermes_crate::self_update::check_for_update();
+        k_nano::slog_bin!("OTA", "info", "boot trigger: {}", report);
+    }
+
     // Intel HDA audio capture (SD0) — microphone input for wake word / STT
     {
         let hda_ok = unsafe { k_nano::audio::hda::init_hda() };
