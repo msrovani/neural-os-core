@@ -282,9 +282,14 @@ impl Device for NetPhy {
         // QEMU/slirp às vezes entrega UDP/TCP com checksum 0 ou offload; verificar RX
         // descarta pacotes já contados em NET_RX_COUNT → DNS/HTTP “timeout fantasma”.
         let mut csum = ChecksumCapabilities::ignored();
-        csum.ipv4 = Checksum::Tx;
+        csum.ipv4 = Checksum::Both;
         csum.udp = Checksum::Tx;
-        csum.tcp = Checksum::Tx;
+        // TCP valida RX também (SESSION_252): ANTES era só Tx — o smoltcp aceitava
+        // payload corrompido (checksum ignorado no RX) e o TCP não retransmitia →
+        // download grande (KERNEL.BIN 17MB) vinha com bytes errados e mesmo
+        // tamanho → hash_mismatch no OTA. Com Both, segmento ruim é descartado
+        // e retransmitido — download íntegro.
+        csum.tcp = Checksum::Both;
         csum.icmpv4 = Checksum::Tx;
         caps.checksum = csum;
         caps
@@ -316,6 +321,12 @@ pub struct HttpConn {
     started: bool,
     pub buf: Vec<u8>,
     timeout: u32,
+    /// Content-Length do header HTTP (0 = não informado). Corpo truncado
+    /// (< expect_len) NUNCA é sucesso — RST/FIN precoce do slirp no OTA
+    /// (SESSION_252) produzia "download completo" com ~1748 bytes a menos.
+    pub expect_len: usize,
+    /// Offset onde o corpo começa (fim do header HTTP, após \r\n\r\n).
+    pub header_len: usize,
 }
 
 pub struct NetStack {
@@ -331,6 +342,19 @@ pub struct NetStack {
 
 fn ip_to_u32(ip: [u8; 4]) -> u32 {
     (ip[0] as u32) << 24 | (ip[1] as u32) << 16 | (ip[2] as u32) << 8 | ip[3] as u32
+}
+
+/// Busca manual de substring (no_std, sem memmem). Retorna offset da 1ª ocorrência.
+fn find_sub(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    for i in 0..=haystack.len() - needle.len() {
+        if &haystack[i..i + needle.len()] == needle {
+            return Some(i);
+        }
+    }
+    None
 }
 
 impl NetStack {
@@ -506,6 +530,8 @@ impl NetStack {
             started: false,
             buf: Vec::new(),
             timeout: 0,
+            expect_len: 0,
+            header_len: 0,
         }
     }
 
@@ -577,11 +603,19 @@ impl NetStack {
 
     pub fn http_poll(&mut self, conn: &mut HttpConn, now: u64) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
-        iface.poll(Instant::from_millis(now as i64), phy, sockets);
+        // CLOCK FIX (SESSION_252 / ora-1): `now` = TIMER_TICKS incrementado pelo
+        // PIT a ~18.2Hz (~55ms/tick). ANTES era passado como ms — o relógio do
+        // smoltcp rodava ~55× mais devagar que o real: delayed-ACK (~40ms no
+        // smoltcp) virava ~2.2s reais → slirp (RTO 1s) retransmitia, backoff
+        // estourava e ABORTAVA a conexão com RST — downloads grandes (KERNEL.BIN
+        // 17MB) truncavam ~1748 bytes no fim → hash_mismatch no OTA.
+        iface.poll(Instant::from_millis(now.saturating_mul(55) as i64), phy, sockets);
 
         conn.timeout = conn.timeout.wrapping_add(1);
-        // ~4k polls × wall_pause no bootstrap — ARP+SYN precisa >200 sob slirp/WHPX.
-        if conn.timeout > 8_000 {
+        // Limite alto: downloads grandes (KERNEL.BIN ~17MB) sob TCG/slirp drenam
+        // ~2KB por poll — timeout 8000 cortava em ~17.4MB (hash_mismatch no OTA,
+        // SESSION_252). O server manda Connection: close → Done no fim do corpo.
+        if conn.timeout > 200_000 {
             conn.state = HttpState::Failed;
             return;
         }
@@ -606,6 +640,12 @@ impl NetStack {
                         Ok(data) => {
                             conn.buf.extend_from_slice(&data);
                             conn.state = HttpState::Receiving;
+                            // Parseia Content-Length na primeira recepção (header
+                            // completo). SESSION_252/ora-1: corpo truncado nunca
+                            // é sucesso — RST/FIN precoce do slirp cortava ~1748B.
+                            if conn.expect_len == 0 && conn.header_len == 0 {
+                                Self::parse_http_meta(conn);
+                            }
                         }
                         Err(_) => conn.state = HttpState::Failed,
                     }
@@ -614,22 +654,40 @@ impl NetStack {
                 }
             }
             TcpState::CloseWait => {
-                if tcp.can_recv() {
+                // Drena TUDO o que ainda resta (RST/FIN precoce deixa dados no
+                // buffer — drenar uma vez só não basta para downloads grandes).
+                while tcp.can_recv() {
                     let result = tcp.recv(|data| {
                         let v = Vec::from(&*data);
                         (data.len(), v)
                     });
-                    if let Ok(data) = result {
-                        conn.buf.extend_from_slice(&data);
+                    match result {
+                        Ok(data) => conn.buf.extend_from_slice(&data),
+                        Err(_) => break,
                     }
                 }
                 tcp.close();
-                let data = core::mem::take(&mut conn.buf);
-                conn.state = HttpState::Done(data);
+                if Self::http_complete(conn) {
+                    let data = core::mem::take(&mut conn.buf);
+                    conn.state = HttpState::Done(data);
+                } else {
+                    conn.state = HttpState::Failed;
+                }
             }
             TcpState::Closed | TcpState::Closing => {
-                let data = core::mem::take(&mut conn.buf);
-                if !data.is_empty() {
+                // RST do slirp: pode ter dado ainda no buffer — drena e valida.
+                while tcp.can_recv() {
+                    let result = tcp.recv(|data| {
+                        let v = Vec::from(&*data);
+                        (data.len(), v)
+                    });
+                    match result {
+                        Ok(data) => conn.buf.extend_from_slice(&data),
+                        Err(_) => break,
+                    }
+                }
+                if Self::http_complete(conn) {
+                    let data = core::mem::take(&mut conn.buf);
                     conn.state = HttpState::Done(data);
                 } else {
                     conn.state = HttpState::Failed;
@@ -641,11 +699,55 @@ impl NetStack {
         }
     }
 
+    /// Extrai `Content-Length` do header HTTP (após \r\n\r\n) e o offset do corpo.
+    fn parse_http_meta(conn: &mut HttpConn) {
+        let n = conn.buf.len();
+        let mut header_end = 0usize;
+        for i in 0..n.saturating_sub(3) {
+            if conn.buf[i] == b'\r'
+                && conn.buf[i + 1] == b'\n'
+                && conn.buf[i + 2] == b'\r'
+                && conn.buf[i + 3] == b'\n'
+            {
+                header_end = i + 4;
+                break;
+            }
+        }
+        if header_end == 0 {
+            return; // header ainda incompleto
+        }
+        conn.header_len = header_end;
+        // Content-Length: "content-length:" case-insensitive no header.
+        let head = &conn.buf[..header_end];
+        let lower = head.to_ascii_lowercase();
+        let needle = b"content-length:";
+        if let Some(pos) = find_sub(&lower, needle) {
+            let start = pos + needle.len();
+            let mut end = start;
+            while end < lower.len() && (lower[end] as char).is_ascii_digit() {
+                end += 1;
+            }
+            if let Ok(cl) = core::str::from_utf8(&lower[start..end]).unwrap_or("").trim().parse::<usize>() {
+                conn.expect_len = cl;
+            }
+        }
+    }
+
+    /// True se o corpo recebido tem o Content-Length esperado (ou não informado).
+    fn http_complete(conn: &HttpConn) -> bool {
+        if conn.expect_len == 0 {
+            // Sem Content-Length: aceita se não vazio (legado).
+            return !conn.buf.is_empty();
+        }
+        // buf = header + body; body = buf.len() - header_len.
+        let body = conn.buf.len().saturating_sub(conn.header_len);
+        body >= conn.expect_len
+    }
+
     /// Envia dados brutos via TCP (nao HTTP) — usado por SMTP
     pub fn http_send_raw(&mut self, conn: &mut HttpConn, data: &[u8]) {
         conn.request = alloc::string::String::from(core::str::from_utf8(data).unwrap_or(""));
     }
-
     pub fn http_close(&mut self, conn: &mut HttpConn) {
         let Self { ref mut iface, ref mut phy, ref mut sockets, .. } = self;
         let tcp = sockets.get_mut::<TcpSocket>(conn.handle);

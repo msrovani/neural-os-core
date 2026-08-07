@@ -298,8 +298,7 @@ pub enum QemuNetMode {
 /// 8G para baixo, 1MB-aligned): o PS1 escreve o netmode.flag DEPOIS do último
 /// loader, então ele é o primeiro candidato 'S'/'B' achado — a RAM livre acima
 /// dos loaders é zero (QEMU zera o guest) e os dados de modelo nunca são lidos.
-pub fn detect_qemu_net_mode() -> QemuNetMode {
-    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+pub fn detect_qemu_net_mode() -> QemuNetMode {    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
     if pmoff == 0 {
         return QemuNetMode::User;
     }
@@ -354,6 +353,39 @@ pub unsafe fn prove_e1000_rx(sip: [u8; 4], tip: [u8; 4]) -> bool {
     false
 }
 
+/// Trigger OTA via flag QEMu-loader (padrão `netmode.flag`, SESSION_252).
+/// O launch grava 'O' num endereço 1MB-aligned dentro da RAM; o kernel escaneia
+/// a mesma janela (topo→baixo) procurando o marcador. Dispara
+/// `check_for_update()` no boot SEM depender do teclado — o IRQ1 do teclado
+/// não é entregue via IOAPIC no QEMU (bug documentado: sendkey nunca chegava
+/// ao shell). Usado pelo loop smoke OTA (tools/qemu_ota_loop.ps1).
+pub fn detect_qemu_ota_trigger() -> bool {
+    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    if pmoff == 0 {
+        return false;
+    }
+    unsafe {
+        let ram_end = crate::memory::TOTAL_RAM_MB
+            .load(core::sync::atomic::Ordering::Relaxed)
+            .saturating_mul(1024 * 1024)
+            .min(0x200000000);
+        if ram_end <= 0x100000000 {
+            return false;
+        }
+        let mut addr: u64 = ram_end;
+        while addr > 0x100000000 {
+            addr -= 0x100000; // 1MB steps (alinhamento dos loaders do PS1)
+            crate::apic::map_page_uc(addr, pmoff);
+            let p = (addr + pmoff) as *const u8;
+            if core::ptr::read_volatile(p) == b'O' {
+                k_nano::slog_bin!("OTA", "info", "trigger flag encontrado @ {:#x}", addr);
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// HTTP GET real via netstack. Usa o socket TCP do smoltcp.
 /// HTTP GET real via NetStack::http_new + http_poll + http_close
 pub unsafe fn http_get(host: [u8; 4], port: u16, path: &str) -> Option<Vec<u8>> {
@@ -369,10 +401,17 @@ pub unsafe fn http_get_host(
 ) -> Option<Vec<u8>> {
     let mut stack_guard = NETSTACK.lock();
     let stack = stack_guard.as_mut()?;
-    let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
 
     let mut conn = stack.http_new_host(host, port, path, host_header);
-    for _ in 0..8_000 {
+    // Limite alto: downloads grandes (KERNEL.BIN ~17MB) sob TCG/slirp drenam
+    // ~2KB por poll — 8000 polls cortava em ~17.4MB (hash_mismatch no OTA).
+    // O server manda Connection: close → o socket fecha sozinho no fim do corpo.
+    for _ in 0..200_000 {
+        // Re-ler o tick a cada poll: o smoltcp precisa de TEMPO AVANÇANDO para
+        // processar ACK/window/retransmissão. ANTES o `now` era lido uma vez e
+        // congelado — downloads grandes (>8KB) truncavam no fim (o KERNEL.BIN
+        // de 17MB vinha com 1748 bytes a menos → hash_mismatch no OTA).
+        let now = crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
         stack.http_poll(&mut conn, now as u64);
         match conn.state {
             crate::netstack::HttpState::Done(ref data) => {
