@@ -106,6 +106,49 @@ pub fn tier_id(tier: AllocTier) -> u32 {
     }
 }
 
+/// ADR-0087 §3: ordem de demotion explícita (quente → frio), NÃO hardcoded no
+/// ladder de sugestão. Policy estilo Linux: a demotion segue esta lista quando
+/// o tier de origem não comporta mais (evita saltos arbitrários Vram→Hdd).
+pub const DEMOTION_ORDER: [AllocTier; 5] = [
+    AllocTier::Vram,
+    AllocTier::Dram,
+    AllocTier::Nvme,
+    AllocTier::Hdd,
+    AllocTier::UsbMsc,
+];
+
+/// Próximo tier mais frio na ordem de demotion. None se já no mais frio.
+pub fn demote_to(tier: AllocTier) -> Option<AllocTier> {
+    DEMOTION_ORDER
+        .iter()
+        .position(|t| *t == tier)
+        .and_then(|i| DEMOTION_ORDER.get(i + 1).copied())
+}
+
+/// ADR-0087 §3 (LWN 898766): rate limit da migração — evita thrash. Janela de
+/// ticks + bytes máximos migrados por janela. Promoção async: excedeu o budget
+/// → skip no tick atual, sem stall no path crítico.
+const MIGRATION_RATE_WINDOW_TICKS: u64 = 100;
+const MIGRATION_RATE_MAX_BYTES: u64 = 64 * 1024 * 1024; // 64MB / janela
+static MIGRATION_WINDOW_START: AtomicU64 = AtomicU64::new(0);
+static MIGRATION_WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
+
+fn migration_rate_ok(tick: u64, size: usize) -> bool {
+    let start = MIGRATION_WINDOW_START.load(Ordering::Relaxed);
+    if tick.saturating_sub(start) >= MIGRATION_RATE_WINDOW_TICKS {
+        // Nova janela
+        MIGRATION_WINDOW_START.store(tick, Ordering::Relaxed);
+        MIGRATION_WINDOW_BYTES.store(size as u64, Ordering::Relaxed);
+        return size as u64 <= MIGRATION_RATE_MAX_BYTES;
+    }
+    let used = MIGRATION_WINDOW_BYTES.load(Ordering::Relaxed);
+    if used.saturating_add(size as u64) > MIGRATION_RATE_MAX_BYTES {
+        return false;
+    }
+    MIGRATION_WINDOW_BYTES.store(used + size as u64, Ordering::Relaxed);
+    true
+}
+
 /// ZFS-ARC-style tier suggestion (ADR-0087 §3: VRAM na escada + histerese).
 /// Promoção (sugerir tier mais quente que o atual) só quando o padrão de acesso
 /// está ESTÁVEL (hot_hits >= 2 na janela quente) — evita thrash (LWN 898766).
@@ -307,11 +350,13 @@ const SOFT_COPY_MAX: usize = 4 * 1024 * 1024;
 /// - Dram↔Dram (paginas reais, size limitado): memcpy + re-register
 /// - Demais: update de tier metadata only (DMA NVMe/VRAM deferido)
 /// - NUNCA zera memoria (bug antigo do placeholder write_bytes)
+/// - ADR-0087 §3: rate limit por janela (LWN 898766) — excedeu budget → skip
 pub fn mhi_tick(tick: u64) {
     let migrations = {
         let reg = MHI_REGISTRY.lock();
         reg.suggest_migration(tick)
     };
+    let mut budget_hit = false;
     for (addr, from, to) in migrations.iter().take(1) {
         let (size, owner) = {
             let reg = MHI_REGISTRY.lock();
@@ -320,6 +365,10 @@ pub fn mhi_tick(tick: u64) {
                 None => (4096, String::from("mhi")),
             }
         };
+        if !migration_rate_ok(tick, size) {
+            budget_hit = true;
+            continue;
+        }
         crate::slog_nano!("MHI", "info", "Queue migrate {:?}->{:?} @{:x} size={}",
             from,
             to,
@@ -332,6 +381,9 @@ pub fn mhi_tick(tick: u64) {
             size,
             owner,
         });
+    }
+    if budget_hit {
+        MHI_SKIPPED.fetch_add(1, Ordering::Relaxed);
     }
 
     let mut q = MIGRATION_QUEUE.lock();
@@ -500,5 +552,35 @@ mod tests {
         assert_eq!(reg.len(), 1);
         reg.unregister(0x2000);
         assert_eq!(reg.len(), 0);
+    }
+
+    #[test]
+    fn demote_order_follows_list() {
+        // Demotion segue DEMOTION_ORDER explícito (ADR-0087 §3), um degrau por vez.
+        assert_eq!(demote_to(AllocTier::Vram), Some(AllocTier::Dram));
+        assert_eq!(demote_to(AllocTier::Dram), Some(AllocTier::Nvme));
+        assert_eq!(demote_to(AllocTier::Nvme), Some(AllocTier::Hdd));
+        assert_eq!(demote_to(AllocTier::Hdd), Some(AllocTier::UsbMsc));
+        assert_eq!(demote_to(AllocTier::UsbMsc), None);
+    }
+
+    #[test]
+    fn rate_limit_blocks_over_budget() {
+        // Budget 64MB/janela: 2x 40MB na mesma janela → 2ª bloqueada.
+        let tick = 1000u64;
+        assert!(migration_rate_ok(tick, 40 * 1024 * 1024));
+        assert!(!migration_rate_ok(tick, 40 * 1024 * 1024));
+        // Nova janela (gap ≥ 100 ticks) libera de novo.
+        assert!(migration_rate_ok(tick + 100, 40 * 1024 * 1024));
+    }
+
+    #[test]
+    fn rate_limit_small_accumulates() {
+        let tick = 2000u64;
+        assert!(migration_rate_ok(tick, 10 * 1024 * 1024));
+        assert!(migration_rate_ok(tick, 10 * 1024 * 1024));
+        assert!(migration_rate_ok(tick, 10 * 1024 * 1024));
+        assert!(migration_rate_ok(tick, 10 * 1024 * 1024)); // 40MB < 64MB
+        assert!(!migration_rate_ok(tick, 30 * 1024 * 1024)); // 70MB > 64MB
     }
 }
