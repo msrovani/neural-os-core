@@ -2596,6 +2596,16 @@ pub(crate) fn kernel_boot(
     // Posição também atualiza no IRQ (MOUSE_ABS_*) independente do tick.
     registry.register(Box::new(agents::mouse_agent::MouseAgent::new()));
 
+    // Interativos são isentos do rate-limit do scheduler (agent-core: set_urgency
+    // >0 = NÃO rate-limited). Sem isso, InputAgent/HwBridgeAgent retornam Pending
+    // sempre e após 50 ticks o scheduler os skipa 80% — teclado/rede morrem de
+    // fome (polled=1) e o shell nunca recebe o sendkey (bug real de HW + QEMU).
+    registry.set_urgency("hw_bridge", 200);
+    registry.set_urgency("net", 180);
+    registry.set_urgency("input", 200);
+    registry.set_urgency("mouse", 150);
+    k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/net/input/mouse) — isentos de rate-limit");
+
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
     registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));
 

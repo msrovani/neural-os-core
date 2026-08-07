@@ -244,6 +244,20 @@ impl AgentRegistry {
         self.agents.iter_mut().find(|a| a.agent.manifest().name == name)
     }
 
+    /// Goal-aware: agents com urgency > 0 NÃO são rate-limited pelo scheduler
+    /// (rate-limit só atinge `urgency == 0 && consecutive_pending > 50`).
+    /// Agentes interativos (input, hw_bridge, net, mouse) devem marcar urgency
+    /// alto — senão o rate-limit os mata de fome e input/rede morrem (~50 ticks).
+    pub fn set_urgency(&mut self, name: &str, urgency: u8) -> bool {
+        match self.get_mut(name) {
+            Some(a) => {
+                a.goal_urgency = urgency;
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn active_count(&self) -> usize {
         self.agents.iter().filter(|a| a.state == AgentState::Active).count()
     }
