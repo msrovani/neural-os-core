@@ -140,9 +140,6 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
 
         let (arch, name, table_vram, is_igpu_hint) = identify_gpu(dev);
 
-        let bar0 = crate::pci_bar::decode_bar(dev.bar0, dev.bar1);
-        let bar2_phys = crate::pci_bar::decode_bar(dev.bar2, dev.bar3);
-
         let is_integrated = match vendor {
             GpuVendor::Intel => is_igpu_hint || table_vram == 0,
             GpuVendor::Amd => is_igpu_hint,
@@ -150,16 +147,43 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
             _ => false,
         };
 
-        // VRAM: tabela DID é hint; se BAR2 existir e dGPU, preferir hint de tabela
-        // (medição real de tamanho BAR exige probe PCI size — residual).
-        let (bar2, vram_bytes) = if is_integrated && vendor == GpuVendor::Intel {
-            (0u64, 0u64)
-        } else if bar2_phys != 0 && table_vram > 0 {
-            (bar2_phys, table_vram)
-        } else if bar2_phys != 0 && !is_integrated {
-            (bar2_phys, table_vram.max(256 * 1024 * 1024))
-        } else {
-            (0u64, 0u64)
+        // AIOS: mede o silício, não assume tabela (ADR-0087 §2.0.1).
+        // VRAM aperture = maior BAR de memória medido ≥ 64MB (sem ReBAR ≈ 256MB;
+        // APU/iGPU não têm BAR grande → DRAM compartilhada, honesto).
+        // MMIO = BAR0, exceto quando BAR0 É a aperture (AMD dGPU: VRAM→BAR0,
+        // doorbell→BAR2, MMIO→BAR5) → usa o par BAR4/5.
+        let (bar0, bar2, vram_bytes) = unsafe {
+            let pairs = [
+                (
+                    crate::pci_bar::decode_bar(dev.bar0, dev.bar1),
+                    k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, 0),
+                ),
+                (
+                    crate::pci_bar::decode_bar(dev.bar2, dev.bar3),
+                    k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, 2),
+                ),
+                (
+                    crate::pci_bar::decode_bar(dev.bar4, dev.bar5),
+                    k_nano::pci::read_bar_size(dev.bus, dev.device, dev.function, 4),
+                ),
+            ];
+            let vram_idx = pairs
+                .iter()
+                .enumerate()
+                .filter(|(_, (base, size))| *base != 0 && *size >= 64 * 1024 * 1024)
+                .max_by_key(|(_, (_, size))| *size)
+                .map(|(i, _)| i);
+            let vram = vram_idx
+                .map(|i| (pairs[i].0, pairs[i].1))
+                .unwrap_or((0, 0));
+            let mmio = match vram_idx {
+                // AMD dGPU: VRAM→BAR0 ⇒ MMIO=BAR5 (amdgpu Bonaire+); fallback BAR0
+                Some(0) if pairs[2].0 != 0 => pairs[2].0,
+                // APU: BAR0 ausente (VRAM = carveout de RAM, sem BAR) ⇒ MMIO=BAR5
+                None if pairs[0].0 == 0 && pairs[2].0 != 0 => pairs[2].0,
+                _ => pairs[0].0,
+            };
+            (mmio, vram.0, vram.1)
         };
 
         let (backend_kind, isa_tag, compute_candidate) =

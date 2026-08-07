@@ -240,6 +240,48 @@ pub unsafe fn read_bar_value(bus: u8, device: u8, function: u8, bar_index: u8) -
     }
 }
 
+/// Mede o tamanho real de um BAR de memória (bytes), técnica 0xFFFFFFFF (PCI).
+/// `bar_index` deve ser o dword LOW do BAR (0,2,4 para pares 64-bit — o dword
+/// high é parte do mesmo BAR e é medido internamente aqui).
+/// Retorna 0 se I/O ou BAR ausente. AIOS: mede o silício, não tabela DID
+/// (ADR-0087 §2.0.1 — VRAM aperture real vs hint de tabela).
+pub unsafe fn read_bar_size(bus: u8, device: u8, function: u8, bar_index: u8) -> u64 {
+    let offset = 0x10 + bar_index * 4;
+    let orig = read_config_dword(bus, device, function, offset);
+    if orig & 1 == 1 {
+        return 0; // I/O BAR
+    }
+    let is_64 = (orig & 0x6) == 0x4;
+    let orig_hi = if is_64 {
+        read_config_dword(bus, device, function, offset + 4)
+    } else {
+        0
+    };
+    write_config_dword(bus, device, function, offset, 0xFFFF_FFFF);
+    if is_64 {
+        write_config_dword(bus, device, function, offset + 4, 0xFFFF_FFFF);
+    }
+    let mask_lo = read_config_dword(bus, device, function, offset);
+    let mask_hi = if is_64 {
+        read_config_dword(bus, device, function, offset + 4)
+    } else {
+        0
+    };
+    write_config_dword(bus, device, function, offset, orig);
+    if is_64 {
+        write_config_dword(bus, device, function, offset + 4, orig_hi);
+    }
+    if mask_lo == 0 && mask_hi == 0 {
+        return 0; // BAR ausente
+    }
+    // ~mask = size-1 com low 4 bits 1 (BARs são 16B-aligned, potência de 2)
+    let raw = (((!mask_hi) as u64) << 32) | ((!mask_lo & 0xFFFF_FFF0) as u64);
+    if raw == 0 {
+        return 0;
+    }
+    raw + 16
+}
+
 pub(crate) unsafe fn write_config_dword(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
     let address = 0x8000_0000u32
         | ((bus as u32) << 16)
