@@ -683,6 +683,13 @@ NVMe:     0x_4040_0000_0000 — 0x_4060_0000_0000  (128GB, páginas UC → NVMe 
 Heap total: 384GB — RAM + VRAM + NVMe no mesmo range contíguo
 ```
 
+> **Reconciliação com ADR-0087 (2026-08-06):** o SASOS aqui (VRAM no heap, UC) e o
+> Copy Engine da ADR-0087 §2.0.1 **não são concorrentes — são complementares**.
+> SASOS = acesso pontual/aleatório por ponteiro (KV pages, tensores < 1MB);
+> CE/SDMA/BCS = transfers bulk via engine (pesos 792MB, migração de tier).
+> O dono do Tier 0 é a **ADR-0087** (Fase 4a = SASOS, 4b = CE); este ADR define
+> o layout SASOS e o consumo (`Tensor::location = MemTier::Vram`).
+
 ### 7.3 Modificações no page table
 
 ```rust

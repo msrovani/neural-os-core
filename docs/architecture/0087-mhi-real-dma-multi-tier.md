@@ -37,6 +37,37 @@ Resultado: infraestrutura de 5 tiers construída, tráfego real (modelos + memó
 
 **Evolução de classes CE (herança uvm_hal):** Pascal 0xc1b5 → Volta 0xc3b5 → Turing 0xc5b5 → Ampere A 0xc6b5 / B 0xc7b5 → **Ada = Ampere B (0xc7b5, sem classe nova!)** → Hopper 0xc8b5 (encrypt/decrypt inline) → Blackwell A 0xc9b5 / B 0xcab5. **O template físico Pascal (0x0260/0x0400/0x0300) sobrevive mas re-encodou a validação por geração** → dispatch por geração + canário golden obrigatório.
 
+#### 2.0.1 Reconciliar SASOS (0047-GPU §7) com CE DMA — dois mecanismos do Tier 0
+
+A ADR-0047-GPU §7 propõe **SASOS** (mapear VRAM no espaço do heap com páginas UC — zero-copy por ponteiro); esta ADR propõe **Copy Engine** (DMA bulk). **Não são concorrentes — são complementares, para acessos de natureza diferente:**
+
+| Mecanismo | Para que | Vantagem | Quando usar |
+|-----------|----------|----------|-------------|
+| **SASOS (map UC)** | Acessos pontuais/aleatórios: KV pages, tensores pequenos, debug, leitura direta CPU↔VRAM | Zero-copy por ponteiro, sem fila de comando | KV cache access (H2O working set), tensores < 1MB, interação com `msched.rs` |
+| **CE/SDMA/BCS (DMA engine)** | Transfers bulk: pesos de modelo (792MB), prefill, migração de tier | Eficiente p/ grandes volumes, sem ocupar CPU, async | Model load, tier promotion/demotion, prefill GPU |
+
+**Como coexistem no MHI:**
+
+```
+Tier 0 (VRAM) = 2 mecanismos:
+  ├── SASOS: VRAM mapado no heap (0x4020_0000_0000+) com páginas UC/WC
+  │     → acesso direto por ponteiro (KV pages, tensores pequenos)
+  │     → base para `Tensor::location = MemTier::Vram` (0047-GPU §7.4)
+  │
+  └── CE DMA: channel GPFIFO dedicado (runlist CE, privileged)
+        → transfers bulk via engine (pesos, migração de tier)
+        → fence: USERD (Pascal) / semaphore (Volta+)
+        → alimenta o `mhi_tick` para tier1↔tier0 (drivers reais)
+
+Decisão: a alocação SASOS decide ONDE o dado vive (ponteiro);
+o CE decide COMO moves bulk acontecem (engine). Ambos registrados
+no MHI via `record_access` — o CE para transfers, o SASOS para acesso.
+```
+
+**Impacto no roadmap:** a Fase 4 (NVIDIA CE) e o SASOS da 0047-GPU são **paralelizáveis** — o SASOS é pré-requisito para o tensor na VRAM (0047-GPU §7.4, ~100 LOC), o CE para migração bulk. Ordem recomendada: SASOS primeiro (dá o ponteiro), CE depois (dá a velocidade de transfer).
+
+**Nota de WC vs UC (reconciliação):** a 0047-GPU usa páginas UC para SASOS; a análise desta ADR mostra que CPU→VRAM quer **WC** (write-combining) + `movntdq` — o SASOS deve mapear **WC** para gravação de VRAM via CPU, UC para leitura. Duas variantes PAT no mesmo espaço SASOS.
+
 ### Tier 2 — NVMe
 
 - **PRP (Physical Region Page)**: `nvme_setup_prps` — offset = dma_addr & (page-1); crossing → PRP1/PRP2 ou lista (entradas 8B page-aligned). **Driver local: ZERO PRP lists** — usa bounce de 1 página (`read_sectors_bounce`).
@@ -103,10 +134,14 @@ mhi_tick → dispatch real (hoje memcpy DRAM→DRAM = no-op):
 Fase 1 — NVMe PRP lists + read/write_blocks_direct     [QEMU, hoje]
 Fase 2 — Wiring MHI: record_access nos paths + policy  [QEMU/RAM, hoje]
 Fase 3 — Intel BCS fix + MI_FLUSH_DW + pin GTT          [HW i915]
-Fase 4 — NVIDIA CE Pascal (channel CE + methods)       [GTX 1050, canary 64KB]
+Fase 4a — SASOS VRAM no heap (0047-GPU §7.4, ~100 LOC) [HW, dá o ponteiro]
+Fase 4b — NVIDIA CE Pascal (channel CE + methods)      [GTX 1050, canary 64KB; dá a velocidade]
 Fase 5 — Policy estilo Linux (tier ids, histerese)     [QEMU]
 Fase 6 — AMD SDMA + SGL + P2P reavaliação              [AWAITING_HW]
 ```
+4a antes de 4b: o SASOS dá o ponteiro (tensor na VRAM via `MemTier::Vram`),
+o CE dá a velocidade de transfer bulk (pesos 792MB). Paralelizáveis, mas o
+tensor na VRAM é pré-requisito lógico para migração bulk.
 
 ## 6. Gaps/Notas de compatibilidade (desta sessão)
 
