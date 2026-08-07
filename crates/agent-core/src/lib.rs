@@ -402,6 +402,11 @@ impl AgentRegistry {
         let mut tick_id: u64 = 0;
         loop {
             tick_id += 1;
+            // Budget por ciclo: reset a cada tick do scheduler. ANTES nunca era
+            // chamado (reset_all sem callers) — ticks_used acumulava para sempre
+            // e apos ~103 polls todos os agentes Continuous viravam Paused →
+            // polled=0 → input/rede/OTA paravam (bug real de HW + QEMU).
+            self.budget_manager.reset_all();
             // Check for respawn requests before polling agents
             let respawns = check_respawns();
             for name in &respawns {
