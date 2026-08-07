@@ -158,6 +158,9 @@ impl DiskIntelligenceAgent {
         for (ctrl_idx, disk, lba, data) in batch {
             if (ctrl_idx as usize) < self.controllers.len() {
                 self.controllers[ctrl_idx as usize].write_blocks(disk, lba, &data, (data.len() + 511) / 512);
+                // ADR-0087 Fase 2: wiring record_access no caminho de escrita
+                // (convenção dos stubs = lba * 512).
+                crate::mhi::record_access(lba * 512, 0);
             }
         }
     }
@@ -169,6 +172,8 @@ impl DiskIntelligenceAgent {
         let mut buf = alloc::vec![0u8; prefetch_blocks * 512];
         if (ctrl_idx as usize) < self.controllers.len() {
             self.controllers[ctrl_idx as usize].read_blocks(disk, lba + count, &mut buf, prefetch_blocks);
+            // ADR-0087 Fase 2: wiring record_access no caminho de leitura.
+            crate::mhi::record_access((lba + count) * 512, 0);
         }
         self.readahead_cache.push((key, lba + count, buf));
         if self.readahead_cache.len() > 64 { self.readahead_cache.remove(0); }

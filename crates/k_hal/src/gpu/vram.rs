@@ -160,7 +160,11 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
 
 /// Aloca na VRAM via buddy allocator
 pub fn vram_alloc(size: usize) -> Option<u64> {
-    VRAM_BUDDY.lock().as_mut()?.alloc(size as u64)
+    let addr = VRAM_BUDDY.lock().as_mut()?.alloc(size as u64)?;
+    // ADR-0087 Fase 2: registra no MHI para a policy ver acessos (hot → VRAM).
+    k_nano::mhi::MHI_REGISTRY.lock().register(
+        x86_64::PhysAddr::new(addr), size, k_nano::mhi::AllocTier::Vram, "vram");
+    Some(addr)
 }
 
 /// Libera bloco VRAM com merge automático de buddies
@@ -168,6 +172,8 @@ pub fn vram_free(addr: u64, size: usize) {
     if let Some(ref mut buddy) = *VRAM_BUDDY.lock() {
         buddy.free(addr, size as u64);
     }
+    // ADR-0087 Fase 2: remove do registry (evita crescimento infinito).
+    k_nano::mhi::unregister(addr);
 }
 
 /// #334 MSched — Belady OPT eviction predictor (conectado ao MschedPredictor)
@@ -184,6 +190,8 @@ pub fn msched_record(addr: u64) {
     if let Some(ref mut m) = *MSCHED.lock() {
         m.record_access(addr);
     }
+    // ADR-0087 Fase 2: wiring de acesso real no MHI (latency não medida aqui).
+    k_nano::mhi::record_access(addr, 0);
 }
 
 pub fn msched_predict(working_set: &[u64]) -> u64 {

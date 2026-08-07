@@ -53,12 +53,20 @@ impl AllocTier {
     }
 }
 
+/// Janela "quente" em ticks: acessos dentro desta janela contam para o streak
+/// de histerese (mesma ordem dos thresholds de recency da escada).
+const HOT_WINDOW_TICKS: u64 = 500;
+/// Streak mínimo de acessos quentes para sugerir promoção (ADR-0087 §3, LWN 898766).
+const HOT_HITS_PROMOTE: u32 = 2;
+
 pub struct AllocProfile {
     pub phys_addr: PhysAddr,
     pub size_bytes: usize,
     pub tier: AllocTier,
     pub access_count: u64,
     pub last_access_tick: u64,
+    /// Streak de acessos dentro da janela quente (histerese — zera no frio).
+    pub hot_hits: u32,
     pub owner: String,
 }
 
@@ -70,30 +78,52 @@ impl AllocProfile {
             tier,
             access_count: 0,
             last_access_tick: 0,
+            hot_hits: 0,
             owner: String::from(owner),
         }
     }
     pub fn record_access(&mut self, tick: u64) {
         self.access_count += 1;
+        // Histerese (ADR-0087 §3): acesso dentro da janela quente incrementa o
+        // streak; acesso frio (gap > janela) reinicia em 1. Promoção exige >= 2.
+        if tick.saturating_sub(self.last_access_tick) < HOT_WINDOW_TICKS {
+            self.hot_hits = self.hot_hits.saturating_add(1);
+        } else {
+            self.hot_hits = 1;
+        }
         self.last_access_tick = tick;
     }
 }
 
-/// ZFS-ARC-style tier suggestion
+/// ADR-0087 §3: ids de tier (maior = mais rápido). SSD não existe no enum — omitido.
+pub fn tier_id(tier: AllocTier) -> u32 {
+    match tier {
+        AllocTier::Vram => 300,
+        AllocTier::Dram => 200,
+        AllocTier::Nvme => 100,
+        AllocTier::Hdd => 25,
+        AllocTier::UsbMsc => 10,
+    }
+}
+
+/// ZFS-ARC-style tier suggestion (ADR-0087 §3: VRAM na escada + histerese).
+/// Promoção (sugerir tier mais quente que o atual) só quando o padrão de acesso
+/// está ESTÁVEL (hot_hits >= 2 na janela quente) — evita thrash (LWN 898766).
 pub fn arc_suggest_tier(profile: &AllocProfile, now: u64, _weight: f32) -> AllocTier {
     let freq = profile.access_count;
     let recency = now.saturating_sub(profile.last_access_tick);
-    if freq > 10 && recency < 500 {
+    let stable_hot = profile.hot_hits >= HOT_HITS_PROMOTE;
+    if stable_hot && freq > 10 && recency < 500 {
+        return AllocTier::Vram; // working set quente → VRAM (peer DMA = Fase 4a HW)
+    }
+    if stable_hot && recency < 1000 {
         return AllocTier::Dram;
     }
-    if recency < 1000 {
+    if stable_hot && recency < 3000 {
         return AllocTier::Nvme;
     }
     if profile.size_bytes > 1024 * 1024 {
         return AllocTier::Hdd;
-    }
-    if freq > 3 {
-        return AllocTier::Dram;
     }
     AllocTier::Hdd
 }
@@ -112,6 +142,11 @@ impl MhiRegistry {
     pub fn register(&mut self, addr: PhysAddr, size: usize, tier: AllocTier, owner: &str) {
         self.allocations
             .insert(addr.as_u64(), AllocProfile::new(addr, size, tier, owner));
+    }
+
+    /// Remove alocação do registry (ex: vram_free) — evita crescimento infinito.
+    pub fn unregister(&mut self, addr: u64) {
+        self.allocations.remove(&addr);
     }
 
     pub fn record_access(&mut self, addr: PhysAddr, tick: u64, _latency_ns: u32) {
@@ -173,6 +208,18 @@ pub struct MigrationRequest {
 use crate::sync::irq_lock::IrqSafeLock;
 pub static MHI_REGISTRY: IrqSafeLock<MhiRegistry> = IrqSafeLock::new(MhiRegistry::new());
 pub static MIGRATION_QUEUE: IrqSafeLock<Vec<MigrationRequest>> = IrqSafeLock::new(Vec::new());
+
+/// ADR-0087 Fase 2 — wiring: call sites reais (disk I/O, msched) registram acesso.
+/// Tick vem do contador global TIMER_TICKS (monotônico, incrementado no timer IRQ).
+pub fn record_access(addr: u64, latency_ns: u32) {
+    let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
+    MHI_REGISTRY.lock().record_access(PhysAddr::new(addr), tick, latency_ns);
+}
+
+/// Remove registro de alocação (ex: vram_free).
+pub fn unregister(addr: u64) {
+    MHI_REGISTRY.lock().unregister(addr);
+}
 
 /// Soft-migrate counters (honest MVP — not full DMA).
 pub static MHI_SOFT_META: AtomicU64 = AtomicU64::new(0);
@@ -385,4 +432,73 @@ pub fn migration_stats() -> (u64, u64, u64) {
         MHI_SOFT_COPY.load(Ordering::Relaxed),
         MHI_SKIPPED.load(Ordering::Relaxed),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile() -> AllocProfile {
+        AllocProfile::new(PhysAddr::new(0x1000), 4096, AllocTier::Hdd, "test")
+    }
+
+    #[test]
+    fn tier_id_order() {
+        assert!(tier_id(AllocTier::Vram) > tier_id(AllocTier::Dram));
+        assert!(tier_id(AllocTier::Dram) > tier_id(AllocTier::Nvme));
+        assert!(tier_id(AllocTier::Nvme) > tier_id(AllocTier::Hdd));
+        assert!(tier_id(AllocTier::Hdd) > tier_id(AllocTier::UsbMsc));
+        assert_eq!(tier_id(AllocTier::Vram), 300);
+        assert_eq!(tier_id(AllocTier::Dram), 200);
+        assert_eq!(tier_id(AllocTier::Nvme), 100);
+        assert_eq!(tier_id(AllocTier::Hdd), 25);
+        assert_eq!(tier_id(AllocTier::UsbMsc), 10);
+    }
+
+    #[test]
+    fn hysteresis_no_thrash_single_access() {
+        // Um acesso isolado NÃO promove (hot_hits=1 < 2).
+        let mut p = profile();
+        p.record_access(100);
+        assert_eq!(arc_suggest_tier(&p, 110, 0.5), AllocTier::Hdd);
+    }
+
+    #[test]
+    fn hysteresis_promotes_after_stable_hot() {
+        // Dois acessos na janela quente → hot_hits=2 → promoção para Dram.
+        let mut p = profile();
+        p.record_access(100);
+        p.record_access(200);
+        assert_eq!(arc_suggest_tier(&p, 250, 0.5), AllocTier::Dram);
+    }
+
+    #[test]
+    fn hysteresis_cold_gap_resets_streak() {
+        // Acesso com gap > janela quente zera o streak (reinicia em 1).
+        let mut p = profile();
+        p.record_access(100);
+        p.record_access(200); // hot_hits=2
+        p.record_access(5000); // frio: gap 4800 > 500 → hot_hits=1
+        assert_eq!(p.hot_hits, 1);
+        assert_eq!(arc_suggest_tier(&p, 5100, 0.5), AllocTier::Hdd);
+    }
+
+    #[test]
+    fn vram_suggested_for_hot_working_set() {
+        let mut p = profile();
+        for t in (100..=2000).step_by(50) {
+            p.record_access(t);
+        }
+        assert!(p.access_count > 10);
+        assert_eq!(arc_suggest_tier(&p, 2100, 0.5), AllocTier::Vram);
+    }
+
+    #[test]
+    fn unregister_removes() {
+        let mut reg = MhiRegistry::new();
+        reg.register(PhysAddr::new(0x2000), 4096, AllocTier::Vram, "test");
+        assert_eq!(reg.len(), 1);
+        reg.unregister(0x2000);
+        assert_eq!(reg.len(), 0);
+    }
 }

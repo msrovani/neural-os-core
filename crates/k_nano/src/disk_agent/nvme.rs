@@ -26,6 +26,68 @@ const IO_READ: u8 = 0x02;
 
 const Q_ENTRIES: u32 = 64;
 
+/// Resultado do layout PRP para uma transferência DMA (ADR-0087 Fase 1).
+/// 512 entradas = 1 página 4KB de entradas de 8B (cabe em `prp_list` do driver).
+#[derive(Debug, Clone, Copy)]
+pub struct PrpLayout {
+    pub prp1: u64,
+    pub prp2: u64,
+    pub list: [u64; 512],
+    pub n_list: usize,
+    /// true se a transferência precisa de mais de 512 entradas de lista
+    /// (impossível de enviar com a página fixa do driver) — `n_list` fica 0.
+    pub overflow: bool,
+}
+
+/// Algoritmo do Linux `nvme_setup_prps` (regras de PRP NVMe 1.4):
+/// - cabe numa página (offset+len <= page_size): só PRP1.
+/// - exatamente 2 páginas: PRP1 + PRP2 apontando direto para a 2ª página.
+/// - mais de 2 páginas: PRP1 + PRP2 = endereço da página da lista PRP
+///   (lista preenchida por entrada, cada uma apontando para uma página).
+/// `page_size` deve ser potência de 2 (o driver usa 4096).
+/// Função pura — sem HW, testável no host.
+pub fn nvme_prp_layout(dma_addr: u64, len: usize, page_size: usize) -> PrpLayout {
+    let mut out = PrpLayout {
+        prp1: dma_addr,
+        prp2: 0,
+        list: [0u64; 512],
+        n_list: 0,
+        overflow: false,
+    };
+    if len == 0 {
+        return out;
+    }
+    let ps = page_size as u64;
+    let offset = dma_addr & (ps - 1);
+    let first_page = dma_addr & !(ps - 1);
+    if offset + len as u64 <= ps {
+        return out; // prp1 = dma_addr, prp2 = 0
+    }
+    let mut remaining = len as u64 - (ps - offset);
+    let mut cur = first_page + ps;
+    if remaining <= ps {
+        out.prp2 = cur; // segunda página direto, sem lista
+        return out;
+    }
+    // Lista PRP: entradas apontam para cada página restante.
+    let mut n = 0usize;
+    while remaining > 0 {
+        if n >= 512 {
+            out.n_list = 0;
+            out.prp2 = 0;
+            out.overflow = true;
+            return out;
+        }
+        out.list[n] = cur;
+        n += 1;
+        cur += ps;
+        remaining = remaining.saturating_sub(ps);
+    }
+    out.n_list = n;
+    // prp2 = endereço da PÁGINA da lista (o caller fornece a página DMA).
+    out
+}
+
 pub struct NvmeDriver {
     mmio: *mut u32,
     pmoff: u64,
@@ -34,6 +96,8 @@ pub struct NvmeDriver {
     admin_cq: QueueMem,
     io_sq: QueueMem,
     io_cq: QueueMem,
+    /// 1 página fixa para listas PRP (ponytail: preenchida por chamada, sem alloc/free por transfer).
+    prp_list: QueueMem,
     admin_sq_tail: u32,
     admin_cq_head: u32,
     admin_cq_phase: u16,
@@ -73,6 +137,10 @@ impl NvmeDriver {
 
         let admin_sq = Self::alloc_q(Q_ENTRIES)?;
         let admin_cq = Self::alloc_q(Q_ENTRIES)?;
+        let prp_list = match Self::alloc_dma(1) {
+            Some((pa, va)) => QueueMem { phys: pa, virt: va },
+            None => return None,
+        };
 
         // Disable controller
         mmio.add((NVME_CC / 4) as usize).write_volatile(0);
@@ -116,6 +184,7 @@ impl NvmeDriver {
                 phys: 0,
                 virt: core::ptr::null_mut(),
             },
+            prp_list,
             admin_sq_tail: 0,
             admin_cq_head: 0,
             admin_cq_phase: 1,
@@ -293,16 +362,58 @@ impl NvmeDriver {
         if blocks == 0 || self.io_sq.virt.is_null() {
             return false;
         }
-        let data_pa = (buf as u64).wrapping_sub(self.pmoff);
-        self.io_nvm(IO_READ, lba, data_pa, blocks)
+        let dma_phys = (buf as u64).wrapping_sub(self.pmoff);
+        let len = blocks as usize * self.lba_size as usize;
+        self.io_nvm_prp(IO_READ, lba, dma_phys, len, blocks)
     }
 
     pub unsafe fn write_blocks(&mut self, lba: u64, buf: *const u8, blocks: u32) -> bool {
         if blocks == 0 || self.io_sq.virt.is_null() {
             return false;
         }
-        let data_pa = (buf as u64).wrapping_sub(self.pmoff);
-        self.io_nvm(IO_WRITE, lba, data_pa, blocks)
+        let dma_phys = (buf as u64).wrapping_sub(self.pmoff);
+        let len = blocks as usize * self.lba_size as usize;
+        self.io_nvm_prp(IO_WRITE, lba, dma_phys, len, blocks)
+    }
+
+    /// Zero-copy: o caller passa o endereço FÍSICO de uma região DMA contígua;
+    /// o driver monta os PRPs direto (ADR-0087 Fase 1, path MHI).
+    pub unsafe fn read_blocks_direct(&mut self, lba: u64, dma_phys: u64, len: usize) -> bool {
+        if len == 0 || self.io_sq.virt.is_null() {
+            return false;
+        }
+        let blocks = (len + self.lba_size as usize - 1) / self.lba_size as usize;
+        self.io_nvm_prp(IO_READ, lba, dma_phys, len, blocks as u32)
+    }
+
+    /// Zero-copy: ver `read_blocks_direct`.
+    pub unsafe fn write_blocks_direct(&mut self, lba: u64, dma_phys: u64, len: usize) -> bool {
+        if len == 0 || self.io_sq.virt.is_null() {
+            return false;
+        }
+        let blocks = (len + self.lba_size as usize - 1) / self.lba_size as usize;
+        self.io_nvm_prp(IO_WRITE, lba, dma_phys, len, blocks as u32)
+    }
+
+    /// Monta PRPs (nvme_prp_layout) e submete o comando. Usa a página fixa
+    /// `prp_list` quando a transferência precisa de lista PRP.
+    unsafe fn io_nvm_prp(&mut self, opcode: u8, lba: u64, dma_phys: u64, len: usize, blocks: u32) -> bool {
+        let layout = nvme_prp_layout(dma_phys, len, 4096);
+        if layout.overflow {
+            crate::slog_nano!("NVMe", "err", "PRP list overflow (>512 páginas)");
+            return false;
+        }
+        let prp2 = if layout.n_list > 0 {
+            // Preenche a página fixa de lista PRP (entradas de 8B, little-endian nativo).
+            let list = self.prp_list.virt as *mut u64;
+            for i in 0..layout.n_list {
+                list.add(i).write_volatile(layout.list[i]);
+            }
+            self.prp_list.phys
+        } else {
+            layout.prp2
+        };
+        self.io_nvm(opcode, lba, layout.prp1, prp2, blocks)
     }
 
     /// BlockDevice-friendly: DMA bounce (1 page) then copy out.
@@ -328,7 +439,10 @@ impl NvmeDriver {
         } else {
             lba
         };
-        if !self.io_nvm(IO_READ, start_lba, pa, nlb.max(1)) {
+        // ponytail: bounce path inalterado (ADR-0087 — o fix é o path direto).
+        // Buffer bounce = alloc_dma contíguo; transfer multi-página segue com PRP2=0,
+        // como antes (comportamento preservado; callers MHI usam *_direct).
+        if !self.io_nvm(IO_READ, start_lba, pa, 0, nlb.max(1)) {
             return false;
         }
         let src = if self.lba_size == 4096 {
@@ -353,19 +467,19 @@ impl NvmeDriver {
         if self.lba_size == 4096 {
             // RMW for partial 4K
             let start_lba = lba / 8;
-            if !self.io_nvm(IO_READ, start_lba, pa, 1) {
+            if !self.io_nvm(IO_READ, start_lba, pa, 0, 1) {
                 return false;
             }
             let dst = va.add(((lba % 8) * 512) as usize);
             core::ptr::copy_nonoverlapping(buf.as_ptr(), dst, buf.len());
-            self.io_nvm(IO_WRITE, start_lba, pa, 1)
+            self.io_nvm(IO_WRITE, start_lba, pa, 0, 1)
         } else {
             core::ptr::copy_nonoverlapping(buf.as_ptr(), va, buf.len());
-            self.io_nvm(IO_WRITE, lba, pa, sectors)
+            self.io_nvm(IO_WRITE, lba, pa, 0, sectors)
         }
     }
 
-    unsafe fn io_nvm(&mut self, opcode: u8, lba: u64, data_pa: u64, blocks: u32) -> bool {
+    unsafe fn io_nvm(&mut self, opcode: u8, lba: u64, prp1: u64, prp2: u64, blocks: u32) -> bool {
         let cid = self.alloc_cid();
         let tail = self.io_sq_tail;
         let entry = self.io_sq.virt.add((tail as usize) * 64) as *mut u32;
@@ -374,8 +488,10 @@ impl NvmeDriver {
         }
         entry.add(0).write_volatile(opcode as u32 | ((cid as u32) << 16));
         entry.add(1).write_volatile(self.nsid);
-        entry.add(6).write_volatile(data_pa as u32);
-        entry.add(7).write_volatile((data_pa >> 32) as u32);
+        entry.add(6).write_volatile(prp1 as u32);
+        entry.add(7).write_volatile((prp1 >> 32) as u32);
+        entry.add(8).write_volatile(prp2 as u32);
+        entry.add(9).write_volatile((prp2 >> 32) as u32);
         entry.add(10).write_volatile(lba as u32);
         entry.add(11).write_volatile((lba >> 32) as u32);
         entry.add(12).write_volatile(blocks.saturating_sub(1)); // NLB 0-based
@@ -466,4 +582,56 @@ unsafe fn read_u64(p: *const u8) -> u64 {
     let lo = core::ptr::read_unaligned(p as *const u32) as u64;
     let hi = core::ptr::read_unaligned(p.add(4) as *const u32) as u64;
     lo | (hi << 32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nvme_prp_layout;
+
+    const PS: usize = 4096;
+
+    #[test]
+    fn prp_cabe_em_uma_pagina() {
+        // alinhado: 1 página inteira
+        let l = nvme_prp_layout(0x1000, PS, PS);
+        assert_eq!(l.prp1, 0x1000);
+        assert_eq!(l.prp2, 0);
+        assert_eq!(l.n_list, 0);
+        assert!(!l.overflow);
+        // desalinhado: 1 byte no fim da página 0x1000 + 1 byte na página 0x2000
+        let l2 = nvme_prp_layout(0x1FFF, 2, PS);
+        assert_eq!(l2.prp1, 0x1FFF);
+        assert_eq!(l2.prp2, 0x2000);
+        assert_eq!(l2.n_list, 0);
+        assert!(!l2.overflow);
+    }
+
+    #[test]
+    fn prp_exatamente_duas_paginas() {
+        let l = nvme_prp_layout(0x1000, 2 * PS, PS);
+        assert_eq!(l.prp1, 0x1000);
+        assert_eq!(l.prp2, 0x2000);
+        assert_eq!(l.n_list, 0);
+        assert!(!l.overflow);
+    }
+
+    #[test]
+    fn prp_lista_com_mais_de_duas_paginas() {
+        // 4 páginas alinhadas: prp1 = 0x1000, lista = 0x2000..0x4000 (3 entradas)
+        let l = nvme_prp_layout(0x1000, 4 * PS, PS);
+        assert_eq!(l.prp1, 0x1000);
+        assert_eq!(l.n_list, 3);
+        assert_eq!(l.list[0], 0x2000);
+        assert_eq!(l.list[1], 0x3000);
+        assert_eq!(l.list[2], 0x4000);
+        assert!(!l.overflow);
+        // desalinhado: 0x1FFF + 2 páginas → prp1=0x1FFF, lista cobre 0x2000,0x3000
+        let l2 = nvme_prp_layout(0x1FFF, PS + 2 * PS + 1, PS);
+        assert_eq!(l2.prp1, 0x1FFF);
+        assert_eq!(l2.n_list, 3);
+        assert_eq!(l2.list[0], 0x2000);
+        assert_eq!(l2.list[1], 0x3000);
+        assert_eq!(l2.list[2], 0x4000);
+        assert!(!l2.overflow);
+    }
 }
