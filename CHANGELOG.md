@@ -3,6 +3,35 @@
 ## [Unreleased]
 
 
+### SESSION_252 (cont.): Loop QEMU OTA — Jarbas + server python validados (2026-08-07)
+
+**Objetivo (usuário):** WiFi + SMP para HW real + loop boot→log→correções→kill→restart até o
+neural subir o Jarbas e se comunicar com o server python (serve_update.py).
+
+**Comunicação OTA VALIDADA:**
+- Jarbas sobe (Hermes-PnP ready, DisplayAgent, 55 agents, Runtime)
+- `GET /UPDATE.MANIFEST` → **200** e `GET /KERNEL.BIN` → **200** no serve_update.py
+- Download do KERNEL.BIN (17MB) com **tamanho exato** (17415280)
+
+**12 fixes em 10 commits** (bugs reais de HW, muitos latentes):
+- **Teclado morto:** `scancode_to_ascii` era stub (None p/ tudo) — sendkey nunca acionava o shell
+  (0c4e661). **Scheduler:** rate-limit matava de fome agents passivos → `set_urgency` isenta
+  interativos (b5d846e); `BudgetManager.reset_all` sem callers → todos Paused → polled=0
+  (09cb434). **Rede/OTA:** smoltcp clock TIMER_TICKS≠ms (PIT 18.2Hz ≈ 55ms → relógio 55× lento →
+  RST slirp → download truncava 1748B) + Content-Length não validado + checksum TCP RX ignorado
+  (8f517d9); json_field `": "` do json.dumps + serve_update `--token ""` (272eef9); FAT32
+  short-write <512B PANIC + PIC fallback 0xFA mascarava IRQ1 teclado + ESP GUID BE vs LE on-disk
+  → UPDATE.CFG missing (c203eb9); trigger OTA via flag QEMu-loader + scripts ota_launch/ota_loop
+  (d32f301).
+- **Residual (ora-1):** hash_mismatch do KERNEL.BIN = frame allocator não exclui kernel/heap/
+  page tables (`init_from_usable_ranges`) → dealloc de frame vivo → DMA e1000 sobrescreve o heap.
+  Fix proposto documentado (exclusões no init + auditoria de deallocs).
+- **WiFi/SMP:** código A0-A6 completo e wired (a3_on_bind via generic_wifi; init_smp/
+  wake_aps_sequential); HW-gated (QEMU sem QCA6174 → AWAITING honesto). SMP funciona em QEMU TCG.
+
+**Doc:** AGENTS.md +12 lições; IDEA_BANK OTA e2e ✅; SESSION_252 §10; SESSION_INDEX.
+
+
 ### SESSION_252 (cont.): ADR-0087 implementada — MHI Real DMA Multi-Tier Fases 1–5 ✅ (2026-08-06)
 
 **Revisão ADR-0047 + reconciliação SASOS/CE (0b11354):** 0047-GPU §7 (SASOS = VRAM no heap,

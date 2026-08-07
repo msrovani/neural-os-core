@@ -1168,6 +1168,7 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
 - ADR-0042 N1–N5 + wire ✅ CLOSED (não é pista ativa)
 - ADR-0040: #417/#419/#282e–g ✅ · 282h ⏳ · **#418 peer PASS** (S3/WebDAV residual) · **#420 MHI DMA ✅ ADR-0087 F1–F5** (PRP/wiring/BCS/SASOS/CE/P5 policy; SESSION_252 §9) · **#423 GDS ❌ SKIP** (hairpin/ACS — ADR-0087 §4) · #422 USB AWAITING
 - Onda 5 GPU: #420 ✅ ADR-0087 · #423 ❌ skip · #454–456 ▶️ `[GPU-HW]`
+- **OTA e2e (ADR-0086 A2) ✅ comunicação validada (SESSION_252 §10):** Jarbas sobe + GET /UPDATE.MANIFEST 200 + GET /KERNEL.BIN 200 no serve_update.py; download 17MB tamanho exato. **Residual:** hash_mismatch = frame allocator não exclui kernel/heap/page tables → dealloc de frame vivo → DMA e1000 sobrescreve heap (ora-1: fix = exclusões no init + auditoria deallocs). WiFi/SMP: código A0-A6 wired; HW-gated (AWAITING).
 - Onda 6 AirLLM: ATA ✅ · Net path ✅ · PreFlight `airllm-net` PARTIAL (falta e2e) · ▶️ `[AIRLLM-DMA]`
 - Onda 7 / Pós-LAN: LAN+NetFs ✅ · TLS ✅ · WiFi ath10k A3 código ✅ SESSION_161 · runtime Note AWAITING
 - Trilha R soft-float: SESSION_147 ⏳

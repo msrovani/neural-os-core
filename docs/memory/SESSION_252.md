@@ -223,5 +223,47 @@ amdgpu source): dGPU RDNA VRAM→BAR0/doorbell→BAR2/MMIO→BAR5 (Bonaire+), Re
   0x54F00008 (0x41 = XY_COLOR_BLT!); MI_FLUSH_DW = 0x4C000001 (0x02000000 é MI_FLUSH pré-gen6).
 - **Ring submission ≠ batch**: não usar MI_BATCH_BUFFER_END no ring (engine para nele, HEAD nunca
   alcança TAIL → wait_idle timeout); ring vazio ⟺ HEAD==TAIL.
-- **NVMe PRP**: PRP1 só vale se o transfer cabe numa página; >1 página precisa PRP2 ou lista
-  (512 entradas/página); cdw8/9 nunca eram setados (bug latente multi-página).
+- **NVMe PRP**: PRP1 só vale se o transfer cabe numa página; >1 página precisa PRP2
+  ou lista (512 entradas/página); cdw8/9 nunca eram setados (bug latente multi-página).
+
+---
+
+## 10. Loop QEMU OTA — Jarbas + comunicação com o server python (mesma sessão)
+
+### 10.1 Fechamento do ciclo OTA e2e (ADR-0086 A2)
+
+**Objetivo (usuário):** loop boot→log→correções→kill→restart até o neural subir o Jarbas
+**e se comunicar com o server python** (serve_update.py). Além disso: WiFi + SMP para HW real.
+
+**Resultado — comunicação VALIDADA:**
+- Jarbas sobe (Hermes-PnP ready, DisplayAgent, 55 agents, Runtime)
+- `GET /UPDATE.MANIFEST` → **200** e `GET /KERNEL.BIN` → **200** no serve_update.py
+- Download do KERNEL.BIN (17MB) com **tamanho exato** (17415280)
+
+**Bug-fixes descobertos e corrigidos no caminho (10 commits):**
+
+| # | Fix | Commit |
+|---|-----|--------|
+| 1 | **scancode_to_ascii era stub** (None p/ tudo) — teclado morto em HW real e QEMU (sendkey nunca acionava o shell) | 0c4e661 |
+| 2 | **Scheduler rate-limit** matava de fome agents passivos (`Pending >50x → skip 80%` → polled=1 → input/rede paravam) — `set_urgency` isenta interativos | b5d846e |
+| 3 | **BudgetManager.reset_all sem callers** — ticks_used acumulava → todos Paused após ~103 polls → polled=0 | 09cb434 |
+| 4 | **smoltcp clock**: TIMER_TICKS (PIT 18.2Hz ≈ 55ms) tratado como ms → relógio 55× lento → RST do slirp → download 17MB truncava 1748B | 8f517d9 |
+| 5 | **Content-Length não validado** — RST/FIN precoce virava "Done" | 8f517d9 |
+| 6 | **Checksum TCP RX ignorado** (só Tx) — payload corrompido aceito | 8f517d9 |
+| 7 | **json_field** não tolerava `": "` do json.dumps → manifest=no_version | 272eef9 |
+| 8 | **serve_update.py**: `--token ""` não desligava auth (args.token or random) → 401 | 272eef9 |
+| 9 | **FAT32 short-write**: arquivo < 512B em cluster spc=2 → PANIC (WIFI.CFG/BOOT.LOG) | c203eb9 |
+| 10 | **PIC fallback 0xFA** mascarava IRQ1 (teclado) — 0xF8 corrige | c203eb9 |
+| 11 | **ESP GUID**: bytes.fromhex (BE) vs GPT little-endian misto → ESP virava 0xEE → UPDATE.CFG missing | c203eb9 |
+| 12 | **Trigger OTA via flag QEMu-loader** (padrão netmode.flag) + scripts ota_launch/ota_loop | d32f301 |
+
+**Residual documentado (ora-1, 2ª investigação):** o download agora tem tamanho EXATO mas o
+hash ainda difere (corrupção de conteúdo não-determinística) — **frame allocator não exclui
+kernel/heap/page tables** (`init_from_usable_ranges` só marca MEMMAP_USABLE como livre); um
+`deallocate_frame` de frame vivo (gguf_mmap.rs:121, dma.rs) devolve ao pool → e1000 aloca como
+buffer RX → DMA sobrescreve o heap (conn.buf) **depois** do checksum validar. Fix proposto:
+excluir kernel/.bss.heap/page tables no init + auditar deallocs (unmap antes do free).
+
+**WiFi/SMP:** código A0-A6 completo e wired (a3_on_bind via generic_wifi; init_smp/
+wake_aps_sequential no boot); HW-gated (QEMU sem QCA6174 → AWAITING honesto). SMP funciona em
+QEMU TCG (-smp 2); validação de timing de AP em HW real pendente.
