@@ -15,6 +15,7 @@ pub mod intel_display;
 pub mod nvidia;
 pub mod nvidia_pascal;
 pub mod nvidia_pascal_acr;
+pub mod nvidia_pascal_ce;
 pub mod nvidia_pascal_qmd;
 pub mod nvidia_pascal_sw;
 pub mod amd;
@@ -39,4 +40,7 @@ pub mod bench;
 pub mod work_queue;
 pub mod sasos;
 pub mod pipeline_g5;
+
+// Seam ADR-0087 Fase 4b — Copy Engine (MHI tier1→tier0). mhi.rs (Fase 5) chama.
+pub use nvidia_pascal_ce::{ce_ready, mhi_tier0_copy};
 

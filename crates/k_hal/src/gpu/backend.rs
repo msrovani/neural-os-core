@@ -9,6 +9,7 @@ use crate::gpu::detect::{GpuInfo, GpuVendor};
 use crate::gpu::display_coex::{self, GpuAssignment};
 use crate::gpu::intel::{IntelRing, BcsRing};
 use crate::gpu::nvidia::NvidiaGpu;
+use crate::gpu::nvidia_pascal_ce;
 use crate::gpu::ring::GpuJobRing;
 use cortex::tensor::Tensor;
 use spin::Mutex;
@@ -209,6 +210,9 @@ pub unsafe fn init_backend_with_plan(gpus: &[GpuInfo], plan: &GpuAssignment) {
         GpuVendor::Nvidia => {
             if let Some(nv) = NvidiaGpu::probe(gpu, pmoff) {
                 k_nano::slog_hal!("GPU", "BACKEND", "NVIDIA probe: {}", nv.status());
+                // ADR-0087 Fase 4b — Copy Engine (DMA bulk RAM↔VRAM): channel CE
+                // + canário 64KB. HW-gated; ready só com golden (honesto).
+                nvidia_pascal_ce::probe_global(gpu);
                 *CURRENT_BACKEND.lock() = Some(GpuAccel::Nvidia(nv));
             } else {
                 k_nano::slog_hal!("GPU", "BACKEND", "NVIDIA init falhou, fallback CPU");
