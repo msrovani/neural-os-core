@@ -18,6 +18,9 @@ const FORCE_WAKEUP: u64 = 0x0A278;
 pub const MI_BATCH_BUFFER_START: u32 = 0x31A00000;
 pub const MI_BATCH_BUFFER_END: u32 = 0x00500000;
 pub const MI_NOOP: u32 = 0x00000000;
+/// MI_FLUSH_DW (não o MI_FLUSH antigo 0x02000000!) — `MI_INSTR(0x26, 1)` = 3 dwords.
+/// Fase 3 ADR-0087: flush de caches pós-blit (coerência CPU↔GPU no BCS).
+pub const MI_FLUSH_DW: u32 = 0x4C000001;
 
 // MEDIA_OBJECT — submete compute shader para Execution Units
 pub const MEDIA_OBJECT: u32 = 0x2A000000;
@@ -261,11 +264,16 @@ pub unsafe fn init_gtt(mmio: u64, ring_pa: u64, ring_size_pages: u32) -> bool {
 }
 
 // BCS (Blitter Command Streamer) ring — engine dedicado para blit.
-// Register base em 0x22000, layout identico ao RCS.
-const BCS_RING_BASE: u64 = 0x220000;
-const BCS_RING_HEAD: u64 = 0x220034;
-const BCS_RING_TAIL: u64 = 0x220038;
-const BCS_RING_CTL: u64 = 0x22003C;
+// BLT_RING_BASE = 0x22000 (i915_reg.h; Fase 3 ADR-0087: era 0x220000 — hex a mais).
+// Offsets do i915: TAIL=+0x30, HEAD=+0x34, START=+0x38, CTL=+0x3C.
+// RING_START recebe o GGTT offset do ring pinado (não endereço físico).
+const BCS_RING_BASE: u64 = 0x22000;
+const BCS_RING_TAIL: u64 = 0x22030;
+const BCS_RING_HEAD: u64 = 0x22034;
+const BCS_RING_START: u64 = 0x22038;
+const BCS_RING_CTL: u64 = 0x2203C;
+/// RING_CTL para ring de 16KB: ((16384/4096)-1)<<12 | RING_VALID = 0x3001
+const BCS_RING_CTL_16K: u32 = 0x3001;
 
 pub struct BcsRing {
     pub mmio: u64,
@@ -282,12 +290,23 @@ impl BcsRing {
 
         unsafe {
             core::ptr::write_bytes(ring_va, 0, 16384);
-            core::ptr::write_volatile((mmio + BCS_RING_BASE) as *mut u64, ring_pa);
-            core::ptr::write_volatile((mmio + BCS_RING_CTL) as *mut u32, 4096);
+            // Pin GGTT (ADR-0050 P2) — RING_START recebe o GGTT offset do ring,
+            // não endereço físico (Fase 3 ADR-0087; i915 xcs_resume).
+            let gtt_off = {
+                let mut gtt = crate::gpu::intel_gtt::GgttPin::new(mmio);
+                gtt.pin_sys(ring_pa, 4)
+            };
+            if gtt_off.is_none() {
+                // Fallback legado se pin WOPCM falhar (índices esgotados).
+                crate::gpu::intel::init_gtt(mmio, ring_pa, 4);
+            }
+            let start = gtt_off.unwrap_or(ring_pa);
+            core::ptr::write_volatile((mmio + BCS_RING_START) as *mut u32, start as u32);
+            core::ptr::write_volatile((mmio + BCS_RING_CTL) as *mut u32, BCS_RING_CTL_16K);
             core::ptr::write_volatile((mmio + BCS_RING_HEAD) as *mut u32, 0);
             core::ptr::write_volatile((mmio + BCS_RING_TAIL) as *mut u32, 0);
         }
-        k_nano::slog_hal!("BCS", "info", "Blitter ring at {:#x} size 4096 dw", ring_pa);
+        k_nano::slog_hal!("BCS", "info", "Blitter ring at {:#x} size 4096 dw (GTT pinned)", ring_pa);
         Some(BcsRing { mmio, ring_pa, ring_va, ring_size: 4096, tail: 0 })
     }
 
@@ -326,19 +345,29 @@ impl BcsRing {
         false
     }
 
-    /// Executa blit no BCS ring (XY_SRC_COPY_BLT)
+    /// Executa blit no BCS ring (XY_SRC_COPY_BLT, Gen9 64-bit, 32bpp, untiled).
+    /// Fase 3 ADR-0087: encoding correta do i-g-t/i915 (intel_batchbuffer.c) —
+    /// header 0x54C00000 (opcode 0x53, não 0x41!), WRITE_A|WRITE_RGB, length 8.
     pub fn blit(&mut self, src: u64, dst: u64, w: u32, h: u32, bpp: u32) -> bool {
         let pitch = w * bpp;
         let cmd = [
-            0x41000000 | (3 << 24) | (pitch << 0),
-            (0xCC << 16) | (h << 0),
-            (0 << 16) | (w << 0),
-            (dst & 0xFFFFFFFF) as u32,
-            ((dst >> 32) & 0xFFFFFFFF) as u32,
-            (src & 0xFFFFFFFF) as u32,
-            ((src >> 32) & 0xFFFFFFFF) as u32,
-            MI_BATCH_BUFFER_END,
+            0x54F00008,                                     // DW0: SRC_COPY_BLT 64-bit + len 8
+            (3 << 24) | (pitch & 0xFFFF),                   // DW1: depth 32bpp (bits 25:24) + dst_pitch
+            (0 << 16) | 0,                                  // DW2: dst_x=0, dst_y=0
+            ((h & 0xFFFF) << 16) | (w & 0xFFFF),            // DW3: dst_x2=w, dst_y2=h
+            (dst & 0xFFFFFFFF) as u32,                      // DW4: dst_addr lo
+            ((dst >> 32) & 0xFFFFFFFF) as u32,              // DW5: dst_addr hi
+            (0 << 16) | 0,                                  // DW6: src_x=0, src_y=0
+            (pitch & 0xFFFF),                               // DW7: src_pitch
+            (src & 0xFFFFFFFF) as u32,                      // DW8: src_addr lo
+            ((src >> 32) & 0xFFFFFFFF) as u32,              // DW9: src_addr hi
+            MI_FLUSH_DW,                                    // flush caches pós-cópia (coerência CPU)
+            0,                                              // addr = 0 (sem store)
+            0,                                              // data = 0
         ];
+        // ponytail: submissão por ring NÃO usa MI_BATCH_BUFFER_END (engine pararia
+        // nele e HEAD nunca alcança TAIL → wait_idle timeout). O ring vazio ⟺
+        // HEAD==TAIL; o flush final garante coerência antes do poll.
         self.write(&cmd);
         self.submit();
         self.wait_idle(1000000)
