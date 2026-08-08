@@ -225,8 +225,8 @@ extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     if ticks < 5 {
         puts(b"[TIMER] Interrupt fired! tick="); putdec(ticks as u64); putc(b'\n');
     }
-    // Process async executor wake notifications
-    crate::async_rt::global_executor().process_wakes();
+    // Só marca; o poll dos futures roda no idle do scheduler (fora do IRQ).
+    crate::async_rt::request_wake_processing();
     send_eoi(32);
 }
 

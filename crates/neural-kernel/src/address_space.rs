@@ -269,20 +269,19 @@ pub fn create_sandbox_as() -> Result<AddressSpace, &'static str> {
     let l4_frame = alloc_zeroed_frame().ok_or("sandbox: sem frame L4")?;
     let l4_ptr = unsafe { &mut *frame_as_table(l4_frame) };
 
-    // Copia só os entries necessários do kernel:
-    // P4[511] = kernel text/data/bss (IDT, GDT, TSS, IST stacks inclusos)
-    // P4[~255] = HHDM (phys mem offset — supervisor-only, sem USER_ACCESSIBLE)
-    // P4[~128-224] = podem ser omitidos (heap, arena, MVP) — sandbox não precisa
-    for i in 0..512 {
-        let kernel_entry = &kernel_l4_ptr[i];
-        if !kernel_entry.flags().contains(PageTableFlags::PRESENT) {
-            continue;
-        }
-        // Mapeia entries de kernel e HHDM (qualquer P4 index ≥ 256)
-        if i >= 256 {
-            l4_ptr[i] = kernel_entry.clone();
-        }
+    // Fronteira de isolamento: copiar SÓ P4[511] (kernel text/data/bss — IDT,
+    // GDT, TSS e IST stacks; obrigatório senão a 1ª exceção em CPL=3 dá triple
+    // fault). Todo o resto da metade alta fica fora: copiar qualquer P4 ≥ 256
+    // dava ao sandbox o HHDM inteiro (= toda a RAM física) — o oposto do
+    // isolamento. As páginas de user são mapeadas depois via `map_user_page`.
+    // Nota: sem HHDM (P4[256]) qualquer handler que rode com CR3=sandbox e
+    // toque HHDM dá #PF — os handlers do caminho Ring3 usam só port I/O.
+    const KERNEL_P4: usize = 511;
+    let kernel_entry = &kernel_l4_ptr[KERNEL_P4];
+    if !kernel_entry.flags().contains(PageTableFlags::PRESENT) {
+        return Err("sandbox: P4[511] kernel ausente");
     }
+    l4_ptr[KERNEL_P4] = kernel_entry.clone();
 
     Ok(AddressSpace { l4_frame })
 }

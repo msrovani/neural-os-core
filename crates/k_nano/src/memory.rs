@@ -211,12 +211,11 @@ impl BitmapFrameAllocator {
         if count == 0 || count % 512 != 0 {
             return self.allocate_contiguous(count);
         }
-        // Tenta alocar blocos de 512 frames alinhados a 2 MiB
-        let _huge_count = count / 512;
-        for h in 0.. {
-            let start_bit = self.next_free_bit + h * 512;
-            // Verifica alinhamento a 2 MiB
-            if start_bit % 512 != 0 { continue; }
+        // Alinha next_free_bit para boundary de 512 (2 MiB) antes de buscar,
+        // evitando loop infinito quando next_free_bit % 512 != 0.
+        let aligned_start = (self.next_free_bit + 511) & !511;
+        let mut start_bit = aligned_start;
+        loop {
             if start_bit + count > self.total_frames { break; }
             let mut ok = true;
             for j in 0..count {
@@ -228,6 +227,7 @@ impl BitmapFrameAllocator {
                 self.allocated_count += count;
                 return Some(PhysFrame::containing_address(PhysAddr::new(start_bit as u64 * FRAME_SIZE)));
             }
+            start_bit += 512;
         }
         None
     }

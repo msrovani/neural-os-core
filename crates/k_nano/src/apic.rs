@@ -200,7 +200,13 @@ pub unsafe fn map_mmio_page(phys_addr: u64, phys_mem_offset: u64) {
     map_page_uc(phys_addr & !0xFFF, phys_mem_offset);
 }
 
-pub unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
+/// Marca a página HHDM de `phys_addr` como UC (PCD|PWT).
+///
+/// Retorna `false` (sem mutar nada) se a página não estiver mapeada — o
+/// chamador PRECISA tratar: um buffer DMA que ficou cacheable lê cache stale
+/// silenciosamente. Para MMIO novo use `map_page_uc` (que cria o mapeamento).
+#[must_use]
+pub unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) -> bool {
     let virt = VirtAddr::new(phys_addr + phys_mem_offset);
 
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();
@@ -209,56 +215,61 @@ pub unsafe fn set_page_uc(phys_addr: u64, phys_mem_offset: u64) {
     let l4_virt = base + l4_frame.start_address().as_u64();
     let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
     let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
-    if !l3_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         let mut flags = l3_entry.flags();
         flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
         l3_entry.set_flags(flags);
         x86_64::instructions::tlb::flush(virt);
-        return;
+        return true;
     }
 
     let l3_virt = base + l3_entry.addr().as_u64();
     let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
     let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
-    if !l2_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         let mut flags = l2_entry.flags();
         flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
         l2_entry.set_flags(flags);
         x86_64::instructions::tlb::flush(virt);
-        return;
+        return true;
     }
 
     let l2_virt = base + l2_entry.addr().as_u64();
     let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
     let l1_entry = &mut l2_table[usize::from(virt.p2_index())];
-    if !l1_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+    if !l1_entry.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         let mut flags = l1_entry.flags();
         flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
         l1_entry.set_flags(flags);
         x86_64::instructions::tlb::flush(virt);
-        return;
+        return true;
     }
 
     let l1_virt = base + l1_entry.addr().as_u64();
     let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
     let pte = &mut l1_table[usize::from(virt.p1_index())];
+    if !pte.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     let mut flags = pte.flags();
     flags |= PageTableFlags::NO_CACHE | PageTableFlags::WRITE_THROUGH;
     pte.set_flags(flags);
 
     x86_64::instructions::tlb::flush(virt);
+    true
 }
 
 /// Restore page attributes from UC (NO_CACHE | WRITE_THROUGH) back to WB (Write-Back).
 /// Clears the PCD (Page Cache Disable) and PWT (Page Write Through) bits in the PTE.
-pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
+///
+/// Retorna `false` se a página não estiver mapeada (nada foi alterado).
+#[must_use]
+pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) -> bool {
     let virt = VirtAddr::new(phys_addr + phys_mem_offset);
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();
     let base = VirtAddr::new(phys_mem_offset);
@@ -266,7 +277,7 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
     let l4_virt = base + l4_frame.start_address().as_u64();
     let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
     let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
-    if !l3_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+    if !l3_entry.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     if l3_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         let mut flags = l3_entry.flags();
@@ -274,13 +285,13 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
         flags.remove(PageTableFlags::WRITE_THROUGH);
         l3_entry.set_flags(flags);
         x86_64::instructions::tlb::flush(virt);
-        return;
+        return true;
     }
 
     let l3_virt = base + l3_entry.addr().as_u64();
     let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
     let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
-    if !l2_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+    if !l2_entry.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     if l2_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         let mut flags = l2_entry.flags();
@@ -288,13 +299,13 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
         flags.remove(PageTableFlags::WRITE_THROUGH);
         l2_entry.set_flags(flags);
         x86_64::instructions::tlb::flush(virt);
-        return;
+        return true;
     }
 
     let l2_virt = base + l2_entry.addr().as_u64();
     let l2_table = &mut *(l2_virt.as_mut_ptr::<PageTable>());
     let l1_entry = &mut l2_table[usize::from(virt.p2_index())];
-    if !l1_entry.flags().contains(PageTableFlags::PRESENT) { return; }
+    if !l1_entry.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     if l1_entry.flags().contains(PageTableFlags::HUGE_PAGE) {
         let mut flags = l1_entry.flags();
@@ -302,12 +313,13 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
         flags.remove(PageTableFlags::WRITE_THROUGH);
         l1_entry.set_flags(flags);
         x86_64::instructions::tlb::flush(virt);
-        return;
+        return true;
     }
 
     let l1_virt = base + l1_entry.addr().as_u64();
     let l1_table = &mut *(l1_virt.as_mut_ptr::<PageTable>());
     let pte = &mut l1_table[usize::from(virt.p1_index())];
+    if !pte.flags().contains(PageTableFlags::PRESENT) { return false; }
 
     let mut flags = pte.flags();
     flags.remove(PageTableFlags::NO_CACHE);
@@ -315,6 +327,7 @@ pub unsafe fn set_page_wb(phys_addr: u64, phys_mem_offset: u64) {
     pte.set_flags(flags);
 
     x86_64::instructions::tlb::flush(virt);
+    true
 }
 
 /// Mapa uma pagina de 4KB para MMIO no endereco fisico `phys_addr`,
@@ -457,8 +470,11 @@ pub unsafe fn init_apic(info: &AcpiInfo) {
     crate::slog_nano!("APIC", "info", "Inicializando APIC...");
     println!("[APIC] Inicializando APIC...");
 
-    set_page_uc(0xFEC0_0000, info.phys_mem_offset);
-    set_page_uc(0xFEE0_0000, info.phys_mem_offset);
+    let ioapic_uc = set_page_uc(0xFEC0_0000, info.phys_mem_offset);
+    let lapic_uc = set_page_uc(0xFEE0_0000, info.phys_mem_offset);
+    if !ioapic_uc || !lapic_uc {
+        crate::slog_nano!("APIC", "warn", "set_page_uc falhou: ioapic={} lapic={} (pagina nao mapeada)", ioapic_uc, lapic_uc);
+    }
     crate::slog_nano!("APIC", "info", "IOAPIC/LAPIC pages mapped uncacheable.");
 
     // SVR deve ser escrito IMEDIATAMENTE após mapear as páginas,

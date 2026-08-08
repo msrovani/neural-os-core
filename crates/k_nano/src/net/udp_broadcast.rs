@@ -646,8 +646,10 @@ pub fn recv_fragmented(port: u16) -> Option<Vec<u8>> {
 
 /// Header do ACK de fragmento: "FRACK\0" (6B) + frag_id u32 LE + idx u32 LE = 14 bytes.
 const FRACK_HEADER_SIZE: usize = 6 + 8;
-/// Timeout por ACK em ticks (~500ms a 100Hz).
-const FRACK_TIMEOUT_TICKS: u64 = 50;
+/// Timeout por ACK em ticks. O PIT roda a ~18.2Hz (~55ms/tick), NÃO 100Hz:
+/// 9 ticks ≈ 500ms. O valor antigo (50) dava ~2.75s por tentativa — com 4
+/// tentativas × N fragmentos o TX bloqueava por minutos.
+const FRACK_TIMEOUT_TICKS: u64 = 9;
 /// Max retransmissões por fragmento.
 const FRACK_MAX_RETRIES: u8 = 3;
 
@@ -707,7 +709,13 @@ pub fn send_fragmented_unicast(payload: &[u8], dest_mac: [u8; 6], port: u16) -> 
                             }
                         }
                     }
-                    core::hint::spin_loop();
+                    // ponytail: dorme até a próxima IRQ (timer/NIC) em vez de
+                    // queimar o core; se IF=0 não dá pra dormir → spin.
+                    if x86_64::instructions::interrupts::are_enabled() {
+                        x86_64::instructions::hlt();
+                    } else {
+                        core::hint::spin_loop();
+                    }
                 }
             }
             if !acked {
@@ -823,7 +831,7 @@ pub fn recv_fragmented_unicast(port: u16) -> Option<Vec<u8>> {
         
         // Re-trava para verificar completude.
         let mut table = REASSEMBLY.lock();
-        let rs = table[slot_pos].as_mut().unwrap();
+        let Some(rs) = table[slot_pos].as_mut() else { continue; };
         
         // Completo? Concatena por índice e libera o slot.
         if rs.received == rs.total_frags {

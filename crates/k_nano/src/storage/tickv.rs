@@ -194,6 +194,7 @@ impl TickvLite {
             off += total;
         }
         let val = found.ok_or("no ckpt")?;
+        if val.len() < 24 { return Err("ckpt short"); }
         if &val[0..4] != b"TKCK" {
             return Err("bad ckpt magic");
         }

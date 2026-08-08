@@ -857,6 +857,8 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     crate::display::fb::boot_ckpt(53, "scheduler run start");
     registry.run(
         || {
+            // Wakes marcados pelo IRQ do timer são processados aqui (fora do IRQ).
+            k_nano::async_rt::drain_pending_wakes();
             // Governor ondemand tick — escala frequência por carga da fila de AP
             k_nano::cpufreq::ondemand_tick(k_nano::smp::ap_work::has_pending());
             x86_64::instructions::hlt();

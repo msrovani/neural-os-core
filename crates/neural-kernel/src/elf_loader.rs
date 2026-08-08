@@ -89,7 +89,13 @@ impl ElfLoader {
         let mut any_load = false;
 
         for i in 0..phnum {
-            let off = phoff as usize + i * phentsize;
+            // Checked arithmetic: phoff + i * phentsize pode overflow usize.
+            let off = phoff as usize;
+            let entry_size = phentsize;
+            let off = match off.checked_add(i.checked_mul(entry_size).unwrap_or(0)) {
+                Some(v) => v,
+                None => return Err("ELF: program header offset overflow"),
+            };
             // Program header entry is at least 56 bytes for ELF64
             if off + 56 > data.len() {
                 return Err("ELF: program header out of bounds");
@@ -122,9 +128,10 @@ impl ElfLoader {
 
             // Map pages for this segment
             let start_page = p_vaddr & !0xFFF;
-            let end = p_vaddr + p_memsz;
+            let end = p_vaddr.saturating_add(p_memsz);
             // Round up to page boundary
             let end_page = (end + 0xFFF) & !0xFFF;
+            if end_page < start_page { return Err("ELF: segment wraps"); }
             let pages = ((end_page - start_page) / 4096) as usize;
 
             for j in 0..pages {

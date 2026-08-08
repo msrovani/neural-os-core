@@ -51,9 +51,7 @@ pub fn dma_alloc_coalesced(size: usize) -> Option<DmaBuf> {
         let frame = alloc.allocate_contiguous(pages)?;
         let pa = frame.start_address().as_u64();
         // Mapa páginas coalescentes como UC (uncacheable) para DMA
-        for i in 0..pages {
-            crate::apic::set_page_uc(pa + i as u64 * 4096, PHYS_MEM_OFFSET.load(Ordering::Relaxed));
-        }
+        mark_uc_or_warn(pa, pages, "dma_alloc_coalesced");
         let va = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
         core::ptr::write_bytes(va, 0, pages * 4096);
         pa
@@ -72,9 +70,7 @@ pub fn dma_alloc(size: usize) -> Option<DmaBuf> {
         let alloc = (*guard).as_mut()?;
         let frame = alloc.allocate_contiguous(pages)?;
         let pa = frame.start_address().as_u64();
-        for i in 0..pages {
-            crate::apic::set_page_uc(pa + i as u64 * 4096, PHYS_MEM_OFFSET.load(Ordering::Relaxed));
-        }
+        mark_uc_or_warn(pa, pages, "dma_alloc");
         let va = (pa + PHYS_MEM_OFFSET.load(Ordering::Relaxed)) as *mut u8;
         core::ptr::write_bytes(va, 0, pages * 4096);
         pa
@@ -83,31 +79,46 @@ pub fn dma_alloc(size: usize) -> Option<DmaBuf> {
     Some(DmaBuf { phys: pa, virt, size: pages * 4096 })
 }
 
-/// Restore page attributes from UC back to WB (should be called when freeing DMA pages)
-fn restore_page_wb(phys: u64, pages: usize) {
+/// Marca `pages` páginas como UC e loga se alguma não estava mapeada.
+///
+/// Página que fica cacheable = o device escreve por DMA e a CPU lê cache stale
+/// (sem erro nenhum). Não dá pra falhar a alocação aqui (drivers já dependem
+/// dela), mas o log expõe o buffer suspeito.
+fn mark_uc_or_warn(phys: u64, pages: usize, who: &str) {
     let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let mut failed = 0usize;
     for i in 0..pages {
-        let addr = phys + i as u64 * 4096;
-        unsafe { crate::apic::set_page_wb(addr, pm); }
+        if !unsafe { crate::apic::set_page_uc(phys + i as u64 * 4096, pm) } {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        crate::slog_nano!("DMA", "warn",
+            "{}: {}/{} paginas nao ficaram UC (HHDM nao mapeado) phys={:#x} - risco de cache stale",
+            who, failed, pages, phys);
     }
 }
 
-/// Libera páginas DMA
-pub fn dma_free(buf: DmaBuf) {
-    let phys = buf.phys;
-    let pages = (buf.size + 4095) / 4096;
-    restore_page_wb(phys, pages);
-    unsafe {
-        use x86_64::structures::paging::{FrameDeallocator, PhysFrame, Size4KiB};
-        use x86_64::PhysAddr;
-        let mut guard = GLOBAL_ALLOCATOR.lock();
-        if let Some(alloc) = (*guard).as_mut() {
-            for i in 0..pages {
-                let f = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(phys + i as u64 * 4096));
-                alloc.deallocate_frame(f);
-            }
+/// Restore page attributes from UC back to WB (should be called when freeing DMA pages)
+fn restore_page_wb(phys: u64, pages: usize) {
+    let pm = PHYS_MEM_OFFSET.load(Ordering::Relaxed);
+    let mut failed = 0usize;
+    for i in 0..pages {
+        let addr = phys + i as u64 * 4096;
+        if !unsafe { crate::apic::set_page_wb(addr, pm) } {
+            failed += 1;
         }
     }
+    if failed > 0 {
+        crate::slog_nano!("DMA", "warn", "restore_wb: {}/{} paginas nao mapeadas phys={:#x}", failed, pages, phys);
+    }
+}
+
+/// Libera páginas DMA.
+///
+/// `buf` é consumido; o `Drop` impl já faz `restore_page_wb` + dealloc dos frames.
+pub fn dma_free(buf: DmaBuf) {
+    drop(buf);
 }
 
 // ─── PhysicalBuffer ────────────────────────────────────────────────────────

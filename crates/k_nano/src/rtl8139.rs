@@ -268,10 +268,13 @@ impl Rtl8139Driver {
 
         let off = self.rx_offset as usize;
 
-        // SEGURANÇA: verificar se o offset está nos limites do buffer
-        // O buffer tem RX_BUF_LEN (8192) + PAD + WRAP. O wrap de 1500 bytes
-        // garante que um frame de 1514 bytes nunca ultrapasse o fim do buffer.
-        if off >= RX_BUF_SIZE {
+        // SEGURANÇA: o buffer alocado tem RX_BUF_SIZE = RX_BUF_LEN (8192) + PAD
+        // + WRAP bytes. Invariante: `off` é sempre um índice DENTRO desse buffer
+        // e o header de 4 bytes lido em off..off+4 precisa caber — por isso o
+        // guard é `off + 4 <= RX_BUF_SIZE`, não `off < RX_BUF_SIZE`.
+        // O wrap de 1500 bytes garante que o corpo de um frame de 1514 bytes
+        // iniciado perto de RX_BUF_LEN não ultrapasse o fim do buffer.
+        if off + 4 > RX_BUF_SIZE {
             self.rx_offset = 0;
             return None;
         }
@@ -324,6 +327,10 @@ impl Rtl8139Driver {
 
         // Calcula próximo offset: alinhado a 32 bits (dwords)
         // total_len + 4 (CRC? não, total_len já inclui CRC) + 3 para alinhamento
+        // O cursor usa RX_BUF_LEN porque é o tamanho do RING programado no RCR
+        // — é onde o NIC dá wrap. RX_BUF_SIZE (LEN+PAD+WRAP) é só o tamanho da
+        // ALOCAÇÃO (área de overflow onde o NIC pode terminar de escrever um
+        // frame iniciado no fim do ring); é o bound de leitura, nunca o módulo.
         let consumed = ((total_len + 4 + 3) / 4) * 4;
         self.rx_offset = ((off + consumed) % RX_BUF_LEN) as u16;
 

@@ -10,9 +10,27 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, AtomicUsize, AtomicU64, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-/// Lock-free single-producer single-consumer ring buffer
-/// 
-/// Used for waker queue in the async executor.
+/// Executa `f` com interrupções desabilitadas (no-op no host/testes).
+///
+/// ponytail: o SPSC é produzido por código normal (`wake_future`) e consumido
+/// pelo IRQ do timer — um `try_push` interrompido no meio corrompe head/tail
+/// (store simples, sem CAS). Seção crítica no BSP resolve sem CAS nem lock.
+#[cfg(target_os = "none")]
+#[inline(always)]
+fn irq_free<R>(f: impl FnOnce() -> R) -> R {
+    x86_64::instructions::interrupts::without_interrupts(f)
+}
+
+#[cfg(not(target_os = "none"))]
+#[inline(always)]
+fn irq_free<R>(f: impl FnOnce() -> R) -> R {
+    f()
+}
+
+/// Single-producer single-consumer ring buffer, seguro contra IRQ
+///
+/// `try_push`/`try_pop` rodam com interrupções desabilitadas — o produtor é
+/// código normal e o consumidor é o handler do timer.
 pub struct SpscChannel<T> {
     /// Ring buffer storage
     buffer: UnsafeCell<[MaybeUninit<T>; 256]>,
@@ -40,43 +58,47 @@ impl<T> SpscChannel<T> {
     /// 
     /// Returns true if successful, false if buffer is full
     pub fn try_push(&self, value: T) -> bool {
-        let tail = self.tail.load(Ordering::Acquire);
-        let head = self.head.load(Ordering::Acquire);
+        irq_free(|| {
+            let tail = self.tail.load(Ordering::Acquire);
+            let head = self.head.load(Ordering::Acquire);
 
-        // Check if buffer is full
-        if tail.wrapping_sub(head) > self.mask {
-            return false;
-        }
+            // Check if buffer is full
+            if tail.wrapping_sub(head) > self.mask {
+                return false;
+            }
 
-        unsafe {
-            let buffer = &mut *self.buffer.get();
-            let idx = tail & self.mask;
-            buffer[idx].write(value);
-        }
+            unsafe {
+                let buffer = &mut *self.buffer.get();
+                let idx = tail & self.mask;
+                buffer[idx].write(value);
+            }
 
-        self.tail.store(tail.wrapping_add(1), Ordering::Release);
-        true
+            self.tail.store(tail.wrapping_add(1), Ordering::Release);
+            true
+        })
     }
 
     /// Try to pop a value (consumer only)
     /// 
     /// Returns Some(value) if available, None if empty
     pub fn try_pop(&self) -> Option<T> {
-        let head = self.head.load(Ordering::Acquire);
-        let tail = self.tail.load(Ordering::Acquire);
+        irq_free(|| {
+            let head = self.head.load(Ordering::Acquire);
+            let tail = self.tail.load(Ordering::Acquire);
 
-        // Check if buffer is empty
-        if head == tail {
-            return None;
-        }
+            // Check if buffer is empty
+            if head == tail {
+                return None;
+            }
 
-        unsafe {
-            let buffer = &*self.buffer.get();
-            let idx = head & self.mask;
-            let value = core::ptr::read(buffer[idx].as_ptr());
-            self.head.store(head.wrapping_add(1), Ordering::Release);
-            Some(value)
-        }
+            unsafe {
+                let buffer = &*self.buffer.get();
+                let idx = head & self.mask;
+                let value = core::ptr::read(buffer[idx].as_ptr());
+                self.head.store(head.wrapping_add(1), Ordering::Release);
+                Some(value)
+            }
+        })
     }
 
     /// Check if the channel is empty
@@ -286,7 +308,11 @@ impl AsyncExecutor {
         let _ = self.wake_channel.try_push(index);
     }
 
-    /// Process wake notifications (called from main loop)
+    /// Process wake notifications (called from main loop / scheduler idle)
+    ///
+    /// Nunca chamar do handler do timer: `poll_task` roda futures arbitrários
+    /// (aloca no heap, pode pegar locks) dentro do IRQ. Use
+    /// [`request_wake_processing`] no IRQ e [`drain_pending_wakes`] no loop.
     pub fn process_wakes(&self) {
         while let Some(index) = self.wake_channel.try_pop() {
             // Poll the future at this index
@@ -368,6 +394,21 @@ pub fn global_executor() -> &'static AsyncExecutor {
     &GLOBAL_EXECUTOR
 }
 
+/// Sinaliza que há wakes pendentes (setado pelo IRQ do timer).
+static WAKES_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Chamada do IRQ do timer: só marca a flag (nenhum poll de future no IRQ).
+pub fn request_wake_processing() {
+    WAKES_PENDING.store(true, Ordering::Release);
+}
+
+/// Chamada do loop principal / idle do scheduler: processa os wakes fora do IRQ.
+pub fn drain_pending_wakes() {
+    if WAKES_PENDING.swap(false, Ordering::AcqRel) {
+        global_executor().process_wakes();
+    }
+}
+
 /// VTABLE for raw waker
 static VTABLE: RawWakerVTable = RawWakerVTable::new(
     |data| RawWaker::new(data, &VTABLE), // clone
@@ -391,8 +432,8 @@ static VTABLE: RawWakerVTable = RawWakerVTable::new(
 /// This should be registered in the IDT for the timer interrupt vector.
 /// It wakes futures and advances the async runtime.
 pub extern "x86-interrupt" fn apic_timer_handler(_stack_frame: x86_64::structures::idt::InterruptStackFrame) {
-    // Process wake notifications
-    global_executor().process_wakes();
+    // Só sinaliza — o poll dos futures acontece fora do contexto de IRQ.
+    request_wake_processing();
 
     // Send EOI to LAPIC
     unsafe {
