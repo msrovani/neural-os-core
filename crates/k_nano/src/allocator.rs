@@ -100,6 +100,11 @@ fn grow_bump_auto(need: usize) -> bool {
             }
         };
         let virt = VirtAddr::new((heap_start + current_limit + allocated * 4096) as u64);
+        // SESSION_252 diagnóstico (ora-1): loga o 1º frame físico alocado ao
+        // heap — para comparar com os RX buffers do e1000 (corrupção OTA).
+        if allocated < 4 || allocated % 512 == 0 {
+            crate::slog_nano!("HEAP", "BUMP", "frame[{}] phys={:#x} virt={:#x}", allocated, phys, virt.as_u64());
+        }
         unsafe {
             map_page_direct(base, virt, phys);
             // Verificação real (AIOS): mapa apenas se a página ficou PRESENT.

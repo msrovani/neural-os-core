@@ -117,6 +117,9 @@ pub struct MemmapEntry {
 }
 
 pub const MEMMAP_USABLE: u64 = 0;
+// Limine (protocolo): 0=USABLE 1=RESERVED 2=ACPI_RECLAIMABLE 3=ACPI_NVS
+// 4=BAD_MEMORY 5=BOOTLOADER_RECLAIMABLE 6=KERNEL_AND_MODULES.
+pub const MEMMAP_KERNEL_AND_MODULES: u64 = 6;
 pub const MEMMAP_BOOTLOADER_RECLAIMABLE: u64 = 5;
 
 #[repr(C)]
@@ -196,6 +199,37 @@ pub struct StackSizeRequest {
 }
 
 pub type EntryPointFn = unsafe extern "C" fn() -> !;
+
+/// `struct limine_kernel_address_response` — onde o Limine carregou o kernel.
+#[repr(C)]
+pub struct KernelAddressResponse {
+    pub revision: u64,
+    /// Endereço físico onde o kernel foi carregado (page-aligned).
+    pub physical_base: u64,
+    /// Endereço virtual (higher-half) onde o kernel foi carregado.
+    pub virtual_base: u64,
+}
+
+/// `struct limine_kernel_address_request` — pede para o Limine reportar onde
+/// o kernel vive. SEM este request o memmap pode reportar a RAM do kernel
+/// como USABLE → frame allocator entrega frames do kernel/.bss.heap para DMA
+/// (e1000 RX buffer) → NIC sobrescreve o heap (conn.buf) → corrupção com
+/// tamanho exato (SESSION_252/ora-1). Com ele, o Limine marca o kernel como
+/// KernelAndModules (tipo 1) — o filtro MEMMAP_USABLE exclui naturalmente.
+#[repr(C)]
+pub struct KernelAddressRequest {
+    pub id: [u64; 4],
+    pub revision: u64,
+    pub response: *mut KernelAddressResponse,
+}
+
+/// limine_kernel_address_request id (limine.h).
+pub const KERNEL_ADDRESS_ID: [u64; 4] = [
+    0x4d7a142ed453c958,
+    0xedab48064cbade10,
+    0x0f1f0f2b44cab7dc,
+    0xac4e0519e23c6c2e,
+];
 
 #[repr(C)]
 pub struct EntryPointResponse {
@@ -278,6 +312,16 @@ pub struct LimineHandoff {
     pub rsdp: Option<u64>,
     pub regions: [MemRegion; 64],
     pub region_count: usize,
+    /// Endereço físico onde o Limine carregou o kernel (KernelAddressRequest).
+    /// Usado para marcar a imagem do kernel (incl. .bss.heap) como OCUPADA no
+    /// frame allocator — SESSION_252/ora-1: sem isso o allocator pode entregar
+    /// frames do kernel para DMA (e1000 RX) e o NIC sobrescreve o heap.
+    pub kernel_phys: u64,
+    /// Região KernelAndModules (tipo 1 do memmap) — fallback quando o
+    /// KernelAddressRequest não é processado (response null nesta build).
+    /// SESSION_252: o memmap SEMPRE reporta o kernel como tipo 1; sem este
+    /// fallback a imagem do kernel fica marcada como USABLE → DMA corrompe.
+    pub kernel_region: (u64, u64),
 }
 
 impl LimineHandoff {
@@ -287,15 +331,18 @@ impl LimineHandoff {
             rsdp: None,
             regions: [MemRegion { base: 0, len: 0 }; 64],
             region_count: 0,
+            kernel_phys: 0,
+            kernel_region: (0, 0),
         }
     }
 
-    /// Lê os responses dos requests HHDM, memmap e RSDP.
+    /// Lê os responses dos requests HHDM, memmap, RSDP e KernelAddress.
     /// `apply_hhdm` e `set_boot_rsdp` continuam a cargo do entry.
     pub fn collect_from_requests(
         hhdm: &HhdmRequest,
         memmap: &MemmapRequest,
         rsdp: &RsdpRequest,
+        kaddr: &KernelAddressRequest,
     ) -> Self {
         let mut h = Self::new();
 
@@ -321,7 +368,7 @@ impl LimineHandoff {
         };
         h.pm_offset = offset;
 
-        // Memmap — apenas usable
+        // Memmap — apenas usable (e guarda a região do kernel, tipo 1)
         if !memmap.response.is_null() {
             let mm = unsafe { &*memmap.response };
             let count = mm.entry_count as usize;
@@ -335,6 +382,13 @@ impl LimineHandoff {
                             len: ent.length,
                         };
                         h.region_count += 1;
+                    } else if ent.entry_type == MEMMAP_KERNEL_AND_MODULES && ent.length > 0 {
+                        // SESSION_252: fallback do KernelAddressRequest (response null
+                        // nesta build do Limine). Guarda a MAIOR região tipo 6 (kernel
+                        // com .bss.heap ~522MB; entradas menores são módulos/ACPI).
+                        if ent.length > h.kernel_region.1 {
+                            h.kernel_region = (ent.base, ent.length);
+                        }
                     }
                 }
             }
@@ -355,6 +409,29 @@ impl LimineHandoff {
             };
         }
 
+        // KernelAddress — onde o Limine carregou o kernel (físico).
+        // SESSION_252: debug do request — se response null, o Limine não
+        // processou o KernelAddressRequest (ID/versão da build).
+        crate::slog_nano!(
+            "LIMINE",
+            "info",
+            "kaddr_response_ptr={:#x} (null={})",
+            kaddr.response as u64,
+            kaddr.response.is_null() as u8
+        );
+        if !kaddr.response.is_null() {
+            let r = unsafe { &*kaddr.response };
+            crate::slog_nano!(
+                "LIMINE",
+                "info",
+                "kernel_phys={:#x} kernel_virt={:#x} rev={}",
+                r.physical_base,
+                r.virtual_base,
+                r.revision
+            );
+            h.kernel_phys = r.physical_base;
+        }
+
         h
     }
 }
@@ -371,6 +448,16 @@ impl BootHandoff for LimineHandoff {
     }
     fn usable_regions(&self) -> &[MemRegion] {
         &self.regions[..self.region_count]
+    }
+    fn kernel_phys(&self) -> Option<u64> {
+        if self.kernel_phys != 0 {
+            Some(self.kernel_phys)
+        } else {
+            None
+        }
+    }
+    fn kernel_region(&self) -> (u64, u64) {
+        self.kernel_region
     }
 }
 

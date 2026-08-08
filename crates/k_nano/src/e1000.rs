@@ -294,6 +294,14 @@ impl E1000Driver {
             let virt = (buf + pmoff) as *mut u8;
             for j in 0..2048 { virt.add(j).write_volatile(0); }
         }
+        // SESSION_252 diagnóstico (ora-1): loga os 4 primeiros e últimos RX
+        // buffers físicos — para comparar com os frames do heap (grow_bump_auto)
+        // e do kernel image. Se colidirem, o frame allocator entregou um frame
+        // vivo ao DMA (corrupção do download OTA com tamanho exato).
+        for (i, &bp) in self.rx_buf_paddrs[..4].iter().enumerate() {
+            crate::slog_nano!("E1000", "info", "RX buf[{}] phys={:#x}", i, bp);
+        }
+        crate::slog_nano!("E1000", "info", "RX buf[63] phys={:#x} rx_ring={:#x}", self.rx_buf_paddrs[63], rx_ring);
 
         // RDT=0 primeiro para esvaziar o ring (Linux faz isso)
         self.write32(REG_RDT, 0);

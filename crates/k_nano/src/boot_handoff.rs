@@ -25,6 +25,21 @@ pub trait BootHandoff {
     /// Fatia das regiões de memória utilizáveis.
     fn usable_regions(&self) -> &[MemRegion];
 
+    /// Endereço físico onde o bootloader carregou o kernel image (se conhecido).
+    /// Usado para marcar a RAM do kernel como OCUPADA no frame allocator
+    /// (SESSION_252/ora-1: sem isso, frames do kernel/heap podem ser entregues
+    /// a DMA — e1000 RX sobrescreve o heap). Default None (bootloader legado).
+    fn kernel_phys(&self) -> Option<u64> {
+        None
+    }
+
+    /// Região KernelAndModules do memmap (base, len) — fallback do
+    /// kernel_phys quando o KernelAddressRequest não é processado pelo
+    /// bootloader (SESSION_252: Limine response null). Default (0,0).
+    fn kernel_region(&self) -> (u64, u64) {
+        (0, 0)
+    }
+
     /// Verdadeiro se `addr` físico cai em alguma região de memória.
     /// Usado para verificar se o QEMU loader depositou dados em 4GB.
     fn has_addr_in_any_region(&self, addr: u64) -> bool {

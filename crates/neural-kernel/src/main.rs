@@ -1286,6 +1286,28 @@ pub(crate) fn kernel_boot(
             buf[i] = (usable[i].base, usable[i].len);
         }
         frame_allocator.init_from_usable_ranges(&buf[..n]);
+
+        // SESSION_252/ora-1: marca a RAM do kernel (image + .bss.heap) como
+        // OCUPADA — o Limine pode reportá-la como USABLE e o frame allocator
+        // entregaria frames do kernel/heap para DMA (e1000 RX buffer) → o NIC
+        // sobrescrevia o heap (conn.buf do download OTA) → hash_mismatch com
+        // tamanho exato. KERNEL_END é definido no limine.ld (fim da imagem).
+        extern "C" {
+            static KERNEL_END: u8;
+        }
+        if let Some(kp) = handoff.kernel_phys() {
+            let virt_end = unsafe { &KERNEL_END as *const u8 as u64 };
+            let image_len = virt_end.saturating_sub(0xffff_ffff_8000_0000);
+            frame_allocator.reserve_range(kp, image_len);
+        } else if let (kb, kl) = handoff.kernel_region() {
+            // SESSION_252: KernelAddressRequest não processado por esta build
+            // do Limine (response null) — usa a região KernelAndModules (tipo 1)
+            // do memmap, que SEMPRE existe. Marca a imagem do kernel como OCUPADA.
+            frame_allocator.reserve_range(kb, kl);
+            k_nano::slog_bin!("MEM", "info", "kernel_region fallback: reserva {:#x} len={:#x}", kb, kl);
+        } else {
+            k_nano::slog_bin!("MEM", "info", "kernel_phys ausente — não reserva imagem (risco DMA)");
+        }
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");

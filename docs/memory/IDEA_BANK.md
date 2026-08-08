@@ -102,7 +102,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | SysInstaller | #421 | defer | — |
 | NeuralFS disco | #422 | mount/GPT ✅; evidência Onda 1 | USB power-loss ▶️ AWAITING_HW |
 | GPU Direct | #423 | ❌ **SKIP** (hairpin/ACS bloqueia em notebook; GDS é NVLink-only — ADR-0087 §4) | caminho prático: NVMe→DRAM (PRP) → CE (DRAM→VRAM) |
-| OTA e2e (A2 smoke) | #308/#417–423 | ✅ **comunicação validada** (SESSION_252 §10): Jarbas sobe + GET /UPDATE.MANIFEST 200 + GET /KERNEL.BIN 200 no serve_update.py | download 17MB com tamanho exato; hash_mismatch residual = frame allocator não exclui kernel/heap (ora-1: init_from_usable_ranges) |
+| OTA e2e (A2 smoke) | #308/#417–423 | ✅ **comunicação validada** (SESSION_252 §10): Jarbas sobe + GET /UPDATE.MANIFEST 200 + GET /KERNEL.BIN 200 no serve_update.py | download 17MB com tamanho exato; **hash_mismatch = bug no sha256 do guest** (0x80 do padding fora do bloco para len%64≠0) — download estava íntegro; fix: padding inline correto + vetores FIPS (SESSION_252 §11) |
 | LAN/RX/DHCP/VirtIO-net | #73, #117–120 | ✅ L3.5–L5 SESSION_149/150; #117 polish / #251–252 timer | base LAN |
 | `/fetch` + Update HTTP | #121, #308a/b | ✅ HTTP path SESSION_152; reboot A/B residual | net_bridge |
 | WiFi ath10k QCA6174 | Note1050 / #407b | A0–A3 código ✅ SESSION_161; runtime Note AWAITING | pista ativa; iwlwifi secondary |

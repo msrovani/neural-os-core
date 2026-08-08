@@ -105,6 +105,27 @@ impl BitmapFrameAllocator {
         self.bitmap[byte_idx] &= !(1u8 << bit_idx);
     }
 
+    /// Marca uma região física como OCUPADA (nunca entregue a DMA).
+    /// SESSION_252/ora-1: o Limine pode reportar a RAM do kernel (image + .bss)
+    /// como USABLE → o frame allocator entregava frames do kernel/heap para o
+    /// e1000 (buffer RX) → DMA do NIC sobrescrevia o heap (conn.buf do OTA) →
+    /// corrupção com tamanho exato. Use após init_from_usable_ranges com a
+    /// região do kernel (KernelAddressRequest.physical_base → KERNEL_END).
+    pub fn reserve_range(&mut self, base: u64, len: u64) {
+        if len == 0 {
+            return;
+        }
+        let end = base.saturating_add(len);
+        let start_idx = (base / FRAME_SIZE) as usize;
+        let end_idx = ((end.saturating_sub(1)) / FRAME_SIZE) as usize;
+        for i in start_idx..=end_idx {
+            if (i as usize) < BITMAP_SIZE * BITS_PER_BYTE {
+                self.set_bit(i as usize);
+            }
+        }
+        crate::slog_nano!("MEM", "info", "frame allocator reserva {:#x}..{:#x} ({} KB)", base, end, len / 1024);
+    }
+
     /// Marca um bit como 1 (frame ocupado).
     #[inline]
     fn set_bit(&mut self, index: usize) {

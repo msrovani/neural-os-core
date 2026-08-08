@@ -267,3 +267,65 @@ excluir kernel/.bss.heap/page tables no init + auditar deallocs (unmap antes do 
 **WiFi/SMP:** código A0-A6 completo e wired (a3_on_bind via generic_wifi; init_smp/
 wake_aps_sequential no boot); HW-gated (QEMU sem QCA6174 → AWAITING honesto). SMP funciona em
 QEMU TCG (-smp 2); validação de timing de AP em HW real pendente.
+
+## 11. Causa raiz do hash_mismatch — NÃO era frame allocator (SESSION_252 continuação)
+
+A hipótese do ora-1 (§10 residual) era: frame allocator entrega frames do kernel/heap ao e1000 RX → DMA sobrescreve conn.buf. **Investigação provou que está ERRADA.**
+
+### 11.1 Evidência que refuta o frame allocator
+
+Logs de diagnóstico (memmap completo + endereços físicos):
+
+| Região | Endereço físico | Tipo memmap |
+|--------|----------------|-------------|
+| Kernel (522MB, incl. .bss.heap 512MB) | `0x983bd000..0xb8dc0000` | type=6 (KERNEL_AND_MODULES) |
+| RX buffers e1000 (64×4KB) | `0x613c5000..0x61405000` | type=0 (USABLE) |
+| conn.buf (heap talc) | dentro do kernel image | type=6 |
+
+- Kernel em `0x98...` (2.4GB), RX buffers em `0x61...` (1.5GB) — **nunca colidem**
+- O Limine reporta o kernel como type=6 (KERNEL_AND_MODULES), NÃO USABLE → frame allocator nunca entrega
+- `MEMMAP_KERNEL_AND_MODULES` no protocolo Limine = **6** (não 1!) — o código usava 1 (RESERVED), corrigido
+- Reserva correta: `kernel_region fallback: reserva 0x983bd000 len=0x20a03000` (522MB)
+
+### 11.2 A causa raiz real: bug no SHA-256 do guest
+
+O download estava **ÍNTEGRO** o tempo todo. O bug era no `k_nano::tpm::sha256`:
+
+```rust
+// ANTES (buggy): sha256_pad colocava block[0] = 0x80
+fn sha256_pad(total_len: usize) -> ([u8; 64], bool) {
+    let mut block = [0u8; 64];
+    block[0] = 0x80;  // ← ERRADO: 0x80 no índice 0
+    ...
+}
+// E o montador copiava pad_block[remaining..64] → 0x80 (em [0]) NUNCA entrava
+for i in remaining..64 { last[i] = pad_block[i]; }
+```
+
+Para qualquer mensagem com `len % 64 != 0` (kernel.elf: `17415976 % 64 = 40`), o byte `0x80` do padding SHA-256 **ficava fora do bloco final** → hash errado **deterministicamente**.
+
+**Prova:** reproduzi a lógica exata do Rust em Python → `rust-buggy = 91e4e6a6...` bate exatamente com o `got` do guest em 3 rodadas consecutivas. O `got` era idêntico entre rodadas com o mesmo arquivo (determinístico) — o que descartava race de DMA (que seria não-determinístico).
+
+### 11.3 Fix
+
+`crates/k_nano/src/tpm.rs` — reescrito o padding inline no `sha256()`:
+- `last[remaining] = 0x80` (índice correto, não 0)
+- Caso `remaining >= 56` (two_blocks): bloco extra separado com só `bit_len` (sem 0x80)
+- Removido `sha256_pad` (substituído pelo padding inline correto)
+
+Adicionados 3 vetores de teste FIPS 180-2 (incl. caso two_blocks):
+- `sha256_abc` (len=3, remaining=3) → `ba7816bf...`
+- `sha256_empty` (len=0) → `e3b0c442...`
+- `sha256_two_blocks` (len=56, 64, 63) → hashes FIPS
+
+### 11.4 Por que o mesh/TLS "funcionavam" com o sha256 bugado
+
+O sha256 bugado produzia hash **deterministicamente errado** mas **consistente** — dois nós usando a mesma implementação chegavam ao mesmo hash. O mesh TOFU (`peer_public_key()` + HMAC-SHA256) e TLS (fingerprints auto-geridos) eram **self-consistent**. Só falharia contra referência externa (ex: pin de certificado gerado por OpenSSL/hashlib).
+
+### 11.5 Verificação
+
+- 3 testes sha256 no k_nano: **PASS**
+- Workspace completo (k_nano 86, cortex 46, hermes 20, jarbas 5, k_ai 17): **PASS** (bench `dod_10m_100k` skipado — OOM pré-existente, não relacionado)
+- Loop OTA e2e: **`fetch=OK bytes=17415904 sha256=b42a2a...` + `KERNEL~2 written`** — hash bate, slot inativo escrito
+
+**Lição crítica:** corrupção "com tamanho exato + hash determinístico" = bug no hash, não na transmissão. Sempre valide a implementação criptográfica contra vetores FIPS antes de investigar a rede.

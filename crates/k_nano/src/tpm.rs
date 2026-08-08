@@ -115,21 +115,6 @@ impl TisRegs {
     }
 }
 
-fn sha256_pad(total_len: usize) -> ([u8; 64], bool) {
-    let ml = (total_len as u64) * 8;
-    let bit_len = ml.to_be_bytes();
-    let mut block = [0u8; 64];
-    block[0] = 0x80;
-    let idx = total_len % 64;
-    if idx < 56 {
-        block[56..64].copy_from_slice(&bit_len);
-        (block, false)
-    } else {
-        block[56..64].copy_from_slice(&bit_len);
-        (block, true)
-    }
-}
-
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
     0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -194,23 +179,85 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
         block.copy_from_slice(&data[b * 64..(b + 1) * 64]);
         sha256_round(&mut state, &block);
     }
+    // SESSION_252: padding montado AQUI (correto nos 2 casos). Antes, o
+    // 0x80 ficava em `pad_block[0]` e o montador copiava `[remaining..64]`
+    // → 0x80 nunca entrava no bloco final (len % 64 != 0) → hash errado
+    // (ex: kernel.elf 17415976 % 64 = 40 → OTA hash_mismatch).
     let remaining = data.len() % 64;
     let mut last = [0u8; 64];
     last[..remaining].copy_from_slice(&data[full_blocks * 64..]);
-    let (pad_block, two_blocks) = sha256_pad(data.len());
-    if two_blocks {
-        for i in remaining..64 { last[i] = pad_block[i]; }
+    let bit_len = ((data.len() as u64) * 8).to_be_bytes();
+    if remaining < 56 {
+        // Cabe tudo num bloco: dados || 0x80 || zeros || bit_len
+        last[remaining] = 0x80;
+        last[56..64].copy_from_slice(&bit_len);
         sha256_round(&mut state, &last);
-        sha256_round(&mut state, &pad_block);
     } else {
-        for i in remaining..64 { last[i] = pad_block[i]; }
+        // Dois blocos: [dados || 0x80 || zeros] + [zeros || bit_len]
+        last[remaining] = 0x80;
         sha256_round(&mut state, &last);
+        let mut extra = [0u8; 64];
+        extra[56..64].copy_from_slice(&bit_len);
+        sha256_round(&mut state, &extra);
     }
     let mut hash = [0u8; 32];
     for i in 0..8 {
         hash[i * 4..i * 4 + 4].copy_from_slice(&state[i].to_be_bytes());
     }
     hash
+}
+
+/// Vetores de teste SHA-256 (FIPS 180-2) — SESSION_252: o padding antigo
+/// (0x80 fora do bloco final) falhava nos casos com len%64 != 0; o vetor
+/// "abc" (1 bloco, remaining=3) e o de 55 bytes (two_blocks) pegam ambos.
+#[cfg(test)]
+mod sha256_tests {
+    use super::sha256;
+
+    fn hex(h: &[u8; 32]) -> String {
+        h.iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    #[test]
+    fn sha256_abc() {
+        // len=3 → remaining=3 < 56 (1 bloco final). Antes: 0x80 fora → falha.
+        assert_eq!(
+            hex(&sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn sha256_empty() {
+        // len=0 → remaining=0: bloco só de padding (0x80 no índice 0).
+        assert_eq!(
+            hex(&sha256(b"")),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn sha256_two_blocks() {
+        // len=56 → remaining=56 → dois blocos finais (0x80 no índice 56,
+        // bit_len no bloco extra). Antes: 0x80 fora do bloco → falha.
+        let v56: Vec<u8> = (0..56u8).collect();
+        assert_eq!(
+            hex(&sha256(&v56)),
+            "da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562"
+        );
+        // len=64 → remaining=0: um bloco cheio + bloco de padding.
+        let v64: Vec<u8> = (0..64u8).collect();
+        assert_eq!(
+            hex(&sha256(&v64)),
+            "fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108"
+        );
+        // len=63 → remaining=63 → dois blocos (0x80 no índice 63).
+        let v63: Vec<u8> = (0..63u8).collect();
+        assert_eq!(
+            hex(&sha256(&v63)),
+            "29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488"
+        );
+    }
 }
 
 pub fn init_tpm(phys_mem_offset: u64) {

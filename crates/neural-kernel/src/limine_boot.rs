@@ -4,9 +4,9 @@
 
 use core::ptr::null_mut;
 use k_nano::limine::{
-    self, BaseRevision, FramebufferRequest, HhdmRequest, MemmapRequest, ModuleRequest,
-    RsdpRequest, StackSizeRequest, FRAMEBUFFER_ID, HHDM_ID, MEMMAP_ID, MODULE_ID,
-    REQUESTS_END, REQUESTS_START, RSDP_ID, STACK_SIZE_ID,
+    self, BaseRevision, FramebufferRequest, HhdmRequest, KernelAddressRequest, MemmapRequest,
+    ModuleRequest, RsdpRequest, StackSizeRequest, FRAMEBUFFER_ID, HHDM_ID, KERNEL_ADDRESS_ID,
+    MEMMAP_ID, MODULE_ID, REQUESTS_END, REQUESTS_START, RSDP_ID, STACK_SIZE_ID,
 };
 
 // ─── Requests (secção .requests no linker) ────────────────────────────
@@ -40,6 +40,19 @@ static mut LIMINE_HHDM: HhdmRequest = HhdmRequest {
 #[link_section = ".requests"]
 static mut LIMINE_MEMMAP: MemmapRequest = MemmapRequest {
     id: MEMMAP_ID,
+    revision: 0,
+    response: null_mut(),
+};
+
+// SESSION_252/ora-1: sem KernelAddressRequest o Limine reporta a RAM do kernel
+// como USABLE → frame allocator entrega frames do kernel/.bss.heap para DMA →
+// e1000 RX buffer sobrescreve o heap (corrupção com tamanho exato no OTA).
+// Com o request, o Limine marca o kernel como KernelAndModules (tipo 1) e o
+// filtro MEMMAP_USABLE (limine.rs) exclui naturalmente.
+#[used]
+#[link_section = ".requests"]
+static mut LIMINE_KERNEL_ADDR: KernelAddressRequest = KernelAddressRequest {
+    id: KERNEL_ADDRESS_ID,
     revision: 0,
     response: null_mut(),
 };
@@ -120,6 +133,7 @@ unsafe extern "C" fn limine_entry() -> ! {
         &LIMINE_HHDM,
         &LIMINE_MEMMAP,
         &LIMINE_RSDP,
+        &LIMINE_KERNEL_ADDR,
     );
 
     // Debug: log do HHDM offset recebido
