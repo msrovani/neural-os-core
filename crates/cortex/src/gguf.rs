@@ -1014,7 +1014,7 @@ fn optimal_threshold(data: &[f32]) -> f32 {
 ///
 /// O threshold é calculado por tensor (percentil 85 da magnitude),
 /// não global fixo em 0.1 — recupera ~0.5-1.0 perplexity sem custo de runtime.
-pub(crate) fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
+pub fn f32_to_ternary_packed(data: &[f32], rows: usize, cols: usize) -> PackedTernaryTensor {
     let threshold = optimal_threshold(data);
     let mut vals = Vec::with_capacity(rows * cols);
     for &v in data.iter().take(rows * cols) {

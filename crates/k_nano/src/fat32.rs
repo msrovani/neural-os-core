@@ -1197,5 +1197,26 @@ pub unsafe fn write_boot_log(ata: &AtaDriver, part: &Partition, msg: &str) -> bo
     }
 }
 
+/// Lê um range de bytes de um arquivo FAT32 pelo nome, via ATA driver.
+/// Helper standalone para streaming de tensores GGUF (AirLLM).
+/// Retorna bytes de `offset` até `offset + size` do arquivo.
+pub unsafe fn read_file_range_by_name(
+    path: &str,
+    offset: usize,
+    size: usize,
+) -> Option<Vec<u8>> {
+    let name = path.trim().to_uppercase();
+    let ata = crate::ATA_DRIVER.lock();
+    let ata = ata.as_ref()?;
+    let parts = read_mbr(ata);
+    for part in &parts {
+        if part.type_code == 0x0B || part.type_code == 0x0C || part.type_code == 0x1C || part.type_code == 0x73 {
+            let fs = Fat32Reader::new(ata, part)?;
+            return fs.read_file_range(&name, offset, size);
+        }
+    }
+    None
+}
+
 
 
