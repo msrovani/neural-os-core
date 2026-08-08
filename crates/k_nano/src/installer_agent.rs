@@ -13,10 +13,16 @@ use crate::neural_fs::volume::NeuralVolume;
 
 /// Tópico do EventBus para disparar instalação.
 pub const TOPIC_SYS_INSTALL: &str = "SYS_INSTALL";
+/// Tópico para solicitar UI de seleção de disco (Jarbas → DisplayAgent).
+pub const TOPIC_SYS_INSTALL_UI: &str = "SYS_INSTALL_UI";
 /// Tópico para notificar progresso (Jarbas card escuta).
 pub const TOPIC_INSTALL_PROGRESS: &str = "INSTALL_PROGRESS";
 
 pub static INSTALLER_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Índice do disco alvo selecionado pela UI (card de seleção).
+/// -1 = sem seleção (auto: 1º disco não-boot). Definido pelo card de seleção em Jarbas.
+pub static DISK_SELECTION: core::sync::atomic::AtomicI8 = core::sync::atomic::AtomicI8::new(-1);
 
 const INSTALL_MANIFEST: AgentManifest = AgentManifest {
     name: "auto-installer",
@@ -162,9 +168,9 @@ impl Agent for AutoInstallerAgent {
 }
 
 impl AutoInstallerAgent {
-    /// Dispara a instalação com source=boot (ATA) e target=1º disco não-boot.
-    /// ponytail: target = AHCI → NVMe → USB (globals vivos); sem UI de seleção
-    /// (menu de disco fica como refinamento — I3 fase 1.8).
+    /// Dispara a instalação com source=boot (ATA) e target=disco selecionado.
+    /// Se DISK_SELECTION >= 0, usa o disco escolhido pela UI (validando target ≠ source).
+    /// Senão, usa 1º disco não-boot (AHCI → NVMe → USB) automaticamente.
     fn run_install_from_bus(&self) -> Result<String, &'static str> {
         // source: boot device (ATA) — lê o kernel.elf da ESP
         let mut ata_guard = crate::globals::ATA_DRIVER.lock();
@@ -185,23 +191,50 @@ impl AutoInstallerAgent {
         }
         let kernel = kernel_elf.ok_or("kernel.elf nao encontrado no boot")?;
         crate::slog_nano!("INSTALL", "info", "kernel.elf lido: {} bytes", kernel.len());
+        drop(ata_guard);
 
-        // target: 1º disco não-boot (AHCI → NVMe → USB) via globals
-        let mut inst = SysInstaller::new();
-        if let Some(g) = crate::globals::AHCI_DRIVER.lock().as_mut() {
-            let dev: &mut dyn BlockDevice = g;
-            inst.install(ata, dev, &kernel)?;
-            return Ok(alloc::format!("instalado em AHCI ({} bytes)", inst.bytes_copied));
-        }
-        if let Some(g) = crate::disk_agent::nvme::NVME_DRIVER.lock().as_mut() {
-            let dev: &mut dyn BlockDevice = g;
-            inst.install(ata, dev, &kernel)?;
-            return Ok(alloc::format!("instalado em NVMe ({} bytes)", inst.bytes_copied));
-        }
-        if let Some(g) = crate::globals::USB_MSC.lock().as_mut() {
-            let dev: &mut dyn BlockDevice = g;
-            inst.install(ata, dev, &kernel)?;
-            return Ok(alloc::format!("instalado em USB ({} bytes)", inst.bytes_copied));
+        // target: disco selecionado pela UI (DISK_SELECTION) ou 1º não-boot
+        let sel = crate::installer_agent::DISK_SELECTION.load(Ordering::Relaxed);
+        let target_idx = if sel >= 0 {
+            sel as usize
+        } else {
+            0 // auto: install_on_disk tenta 1, 2, 3...
+        };
+        self.install_on_disk(target_idx, &kernel)
+    }
+
+    /// Instala no disco de índice `target_idx`.
+    /// Se target_idx == 0 (auto), tenta 1, 2, 3... até achar um device válido.
+    /// Valida target ≠ source (índice 0).
+    fn install_on_disk(&self, target_idx: usize, kernel: &[u8]) -> Result<String, &'static str> {
+        // Source = boot ATA (índice 0)
+        let mut source = crate::globals::ATA_DRIVER.lock();
+        let Some(src) = source.as_mut() else {
+            return Err("sem ATA (boot device ausente)");
+        };
+        let src_ptr = src as *mut dyn BlockDevice;
+        drop(source); // libera lock antes de obter target
+
+        // Target: índice específico ou auto (1, 2, 3...)
+        let start = if target_idx > 0 { target_idx } else { 1 };
+        for idx in start..=3 {
+            // Valida target ≠ source: fonte é sempre índice 0 (boot ATA)
+            if idx == 0 { continue; }
+            let mut target = SysInstaller::device_for_index(idx);
+            let Some(tgt) = target else { continue; };
+            let mut inst = SysInstaller::new();
+            // SAFETY: source (ATA) e target (AHCI/NVMe/USB) são dispositivos distintos
+            // em locks diferentes — não há aliasing.
+            let src = unsafe { &mut *src_ptr };
+            match inst.install(src, tgt, kernel) {
+                Ok(()) => {
+                    return Ok(alloc::format!("instalado em disco #{} ({} bytes)", idx, inst.bytes_copied));
+                }
+                Err(e) => {
+                    crate::slog_nano!("INSTALL", "warn", "disco #{} falhou: {}", idx, e);
+                    continue;
+                }
+            }
         }
         Err("nenhum disco alvo (AHCI/NVMe/USB) disponivel")
     }

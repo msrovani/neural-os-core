@@ -3,3 +3,4 @@
 
 pub mod storage_card;
 pub mod install_card;
+pub mod disk_selection_card;

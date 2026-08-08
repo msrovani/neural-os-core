@@ -48,14 +48,15 @@ pub fn execute(cmd: &str) -> String {
         "http" | "fetch" => { if args.is_empty() { String::from("Usage: fetch <url>\n") } else { fetch_cmd(args) } }
         "update" => { let r = crate::self_update::check_for_update(); alloc::format!("{}\n", r) }
         "install" => {
-            // ADR-0086: dispara o AutoInstallerAgent (SYS_INSTALL) — mensageiro instala no HD
+            // ADR-0086 A5: solicita UI de seleção de disco (Jarbas → DisplayAgent).
+            // O clique no disco dispara SYS_INSTALL com o DISK_SELECTION definido.
             let _ = crate::EVENT_BUS.publish(crate::Event {
                 id: 0,
-                topic: alloc::string::String::from(k_nano::installer_agent::TOPIC_SYS_INSTALL),
+                topic: alloc::string::String::from(k_nano::installer_agent::TOPIC_SYS_INSTALL_UI),
                 payload: args.as_bytes().to_vec(),
                 token: crate::CapabilityToken::Legacy(1),
             });
-            String::from("Install request sent (SYS_INSTALL)\n")
+            String::from("Install: selecione o disco de destino na UI\n")
         }
         "provision" => {
             // ADR-0086 I4: baixa os modelos que faltam do server (UPDATE.CFG) — 1º boot Residente

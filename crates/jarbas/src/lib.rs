@@ -17,6 +17,7 @@ pub mod ide;
 pub mod image_viewer;
 pub mod jarvis;
 pub mod screensaver;
+pub mod cards;
 pub mod uvc_driver;
 pub mod vconsole;
 pub mod virtio_gpu;

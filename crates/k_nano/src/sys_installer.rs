@@ -59,7 +59,43 @@ impl SysInstaller {
         }
     }
 
-    /// Escaneia discos: fonte via ATA_DRIVER, candidatos a target via StorageBus.
+    /// Retorna o BlockDevice para um dado índice de disco.
+    /// index 0 = boot ATA (source), index 1+ = devices não-boot em ordem de prioridade.
+    /// Retorna None se o índice não mapear a um device válido.
+    pub fn device_for_index(index: usize) -> Option<&'static mut dyn BlockDevice> {
+        if index == 0 {
+            // boot ATA (source)
+            let mut g = crate::globals::ATA_DRIVER.lock();
+            return g.as_mut().map(|d| {
+                let p: *mut dyn BlockDevice = d;
+                unsafe { &mut *p }
+            });
+        }
+        // index 1+ = não-boot em prioridade: AHCI → NVMe → USB
+        let mut seen = 0usize;
+        if let Some(g) = crate::globals::AHCI_DRIVER.lock().as_mut() {
+            seen += 1;
+            if seen == index {
+                let p: *mut dyn BlockDevice = g;
+                return Some(unsafe { &mut *p });
+            }
+        }
+        if let Some(g) = crate::disk_agent::nvme::NVME_DRIVER.lock().as_mut() {
+            seen += 1;
+            if seen == index {
+                let p: *mut dyn BlockDevice = g;
+                return Some(unsafe { &mut *p });
+            }
+        }
+        if let Some(g) = crate::globals::USB_MSC.lock().as_mut() {
+            seen += 1;
+            if seen == index {
+                let p: *mut dyn BlockDevice = g;
+                return Some(unsafe { &mut *p });
+            }
+        }
+        None
+    }
     pub fn scan_disks(&mut self) {
         self.status = InstallStatus::Scanning;
         self.disks.clear();

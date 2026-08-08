@@ -254,6 +254,12 @@ impl JarbasDesktop {
         }
     }
 
+    /// Consome o último clique em botão de card (card_id, button_index).
+    /// Retorna None se não houve clique. Padrão: ler-e-zerar para evitar re-trigger.
+    pub fn take_card_hit_button(&mut self) -> Option<(u32, usize)> {
+        self.card_hit_button.take()
+    }
+
     /// Spawn a new window (legacy or card or tiled)
     pub fn spawn_window(&mut self, content: WindowContent, title: &str, floating: bool) -> WindowId {
         let id = WindowId(self.next_window_id);

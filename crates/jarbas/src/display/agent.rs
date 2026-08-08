@@ -145,6 +145,8 @@ pub struct DisplayAgent {
     latent_receiver: Option<event_bus::LatentReceiver>,
     llm_stream_receiver: event_bus::Receiver,
     mesh_health_receiver: Option<event_bus::Receiver>,
+    /// ADR-0086 A5: receiver para solicitação de UI de seleção de disco.
+    install_ui_receiver: Option<event_bus::Receiver>,
     gpu_inited: bool,
     demo_ui_sent: bool,
     input_buffer: alloc::string::String,
@@ -183,6 +185,7 @@ impl DisplayAgent {
             render_window_receiver: EVENT_BUS.subscribe(crate::display::render_registry::TOPIC_RENDER_WINDOW),
             latent_receiver: None,
             mesh_health_receiver: None,
+            install_ui_receiver: None,
             gpu_inited: false,
             demo_ui_sent: false,
             input_buffer: alloc::string::String::new(),
@@ -193,6 +196,27 @@ impl DisplayAgent {
             drag_off_x: 0,
             drag_off_y: 0,
 power_armed_until: 0,
+        }
+    }
+
+    /// Trata clique em botão de card. Card 7902 = seleção de disco do instalador.
+    fn handle_card_button(&mut self, card_id: u32, btn_idx: usize) {
+        match card_id {
+            7902 => {
+                // Disk selection card: btn_idx → disco não-boot → DISK_SELECTION
+                if let Some(disk_idx) = crate::cards::disk_selection_card::button_index_to_disk_index(btn_idx) {
+                    k_nano::installer_agent::DISK_SELECTION.store(disk_idx as i8, core::sync::atomic::Ordering::Relaxed);
+                    k_nano::slog_jarbas!("INSTALL", "info", "disco #{} selecionado via UI", disk_idx);
+                    // Dispara instalação com o disco escolhido
+                    let _ = k_nano::EVENT_BUS.publish(event_bus::Event {
+                        id: 0,
+                        topic: alloc::string::String::from(k_nano::installer_agent::TOPIC_SYS_INSTALL),
+                        payload: alloc::vec::Vec::new(),
+                        token: event_bus::CapabilityToken::Legacy(1),
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -836,9 +860,27 @@ impl Agent for DisplayAgent {
             }
         }
 
+        // ── SYS_INSTALL_UI: solicitação de UI de seleção de disco (ADR-0086 A5) ──
+        if self.install_ui_receiver.is_none() {
+            self.install_ui_receiver = Some(EVENT_BUS.subscribe(k_nano::installer_agent::TOPIC_SYS_INSTALL_UI));
+        }
+        if let Some(ref rx) = self.install_ui_receiver {
+            while let Some(_ev) = rx.try_receive() {
+                if let Some(ref mut desktop) = *COMPOSITOR.lock() {
+                    let decl = crate::cards::disk_selection_card::disk_selection_card();
+                    desktop.spawn_card(decl);
+                    k_nano::slog_jarbas!("INSTALL", "info", "card de selecao de disco spawnado");
+                }
+            }
+        }
+
         // Render desktop: orb circular no compositor (avatar partículas após clear interno)
         let mut comp = COMPOSITOR.lock();
         if let Some(ref mut desktop) = *comp {
+            // Consome clique em botão de card (ex: seleção de disco do instalador).
+            if let Some((card_id, btn_idx)) = desktop.take_card_hit_button() {
+                self.handle_card_button(card_id, btn_idx);
+            }
             desktop.render(tick, self.avatar.as_mut(), self.avatar_state_label);
         }
         drop(comp);
