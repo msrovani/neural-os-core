@@ -48,7 +48,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | #433–440 | ADR-0042 | ✅ mapeada | N1–N5 + wire; marco v1.8.0 |
 | #442 | ADR-0045 Sound | ✅ mapeada | Backlog da pista Sound |
 | #448 | ADR-0047-HMI | ✅ mapeada | H1+H4 UI_SPEC |
-| #449 | ADR-0046 AirLLM | ✅ mapeada | GGUFStreamingModel SESSION_127; hot-swap Net SESSION_128 |
+| #449 | ADR-0046 AirLLM | ✅ mapeada | GGUFStreamingModel SESSION_127; hot-swap Net SESSION_128; **K-quants Q2_K/Q3_K/Q5_K ✅ SESSION_253**; forward_streaming demo ✅ SESSION_253; DMA prefetch AWAITING |
 | auto-skill / SIL / SkillObserver | ADR-0036 (+ skill stack) | ✅ Sprint 108 | `hermes/self_evolve.rs` + SelfEvolveAgent |
 | **#277** Agency / HwRegistry | ADR-0051 + 0052; 277c→0041 HalOffer | ✅ mapeada | SESSION_134; 277c 🟡 |
 | **#278** GGUF | ADR-0046 | ✅ mapeada | 278a MVP ✅ SESSION_127; residuals Onda 6 |
@@ -81,7 +81,7 @@ Adota-se a **Regra A: ADR por tema**, não `1 ideia = 1 ADR`.
 | **#486** GPU (NVIDIA) driver para compute | ADR própria (P5) | ⏳ |
 | **#487** WiFi (Intel AX200/201/210/211) driver | ADR própria (P6) | ⏳ |
 | **#488** Intel i225 2.5G NIC driver | ADR própria (P7) | ✅ SESSION_217 (raw ptrs, kick_rx, prove_rx, clflush) |
-| **#489** ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ |
+| **#489** ext4/btrfs/NTFS read-write | ADR própria (P8/P9/P10) | ⏳ | **NTFS read+list ✅ SESSION_253** ($MFT parse, resident data, root dir); NTFS/EXT write = defer honesto |
 | **#490** USB Storage driver | ADR-0062 P11 / SESSION_170 | ✅ MVP (bringup+BOT; residual hubs/SS) |
 | **#491** Vulkan driver | ADR própria (P12) | ⏳ |
 | **#492** SMP completo (trampoline + work-stealing) | ADR própria (P13) | ⏳ |
@@ -99,7 +99,7 @@ Triagem temática concluída; **sem ADRs retroativas** para ✅ antigos.
 | cloud sync | #418 | ✅ NetFs TCP smoke QEMU | `[NETFS] VERDICT=PASS` SESSION_152; backends S3/WebDAV residual |
 | Storage UI | #419 | ✅ CLI `storage_report`; UI App ⏳ | — |
 | MHI DMA | #420 | ✅ **ADR-0087 F1–F5** (SESSION_252 §9): PRP zero-copy + wiring + BCS + SASOS + CE + policy | soft-MVP ✅ → real; F6 AMD SDMA AWAITING_HW |
-| SysInstaller | #421 | defer | — |
+| SysInstaller | #421 | ✅ SESSION_253 | **UI seleção de disco ✅ (A5)** — card Jarbas + DISK_SELECTION + install_on_disk; núcleo ✅ ADR-0086 |
 | NeuralFS disco | #422 | mount/GPT ✅; evidência Onda 1 | USB power-loss ▶️ AWAITING_HW |
 | GPU Direct | #423 | ❌ **SKIP** (hairpin/ACS bloqueia em notebook; GDS é NVLink-only — ADR-0087 §4) | caminho prático: NVMe→DRAM (PRP) → CE (DRAM→VRAM) |
 | OTA e2e (A2 smoke) | #308/#417–423 | ✅ **comunicação validada** (SESSION_252 §10): Jarbas sobe + GET /UPDATE.MANIFEST 200 + GET /KERNEL.BIN 200 no serve_update.py | download 17MB com tamanho exato; **hash_mismatch = bug no sha256 do guest** (0x80 do padding fora do bloco para len%64≠0) — download estava íntegro; fix: padding inline correto + vetores FIPS (SESSION_252 §11) |

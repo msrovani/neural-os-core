@@ -1,4 +1,12 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s253 — AirLLM K-quants + NTFS read + SysInstaller UI
+#   SESSION_253: AirLLM K-quants Q2_K/Q3_K/Q5_K (dequant llama.cpp) + forward_streaming
+#     demo (carrega camada-por-camada do FAT32) + NTFS read+list ($MFT parse, resident data)
+#     + SysInstaller UI (card de seleção de disco, ADR-0086 A5). 5 commits, 0 erros.
+#     23 testes cortex PASS (4 GGUF) + 2 NTFS PASS + 3 jarbas PASS + 18 k_ai PASS.
+#     Commits: 9fe919f + 704a176 + 6faa052 + cd555b1 + 0f0f85e.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s252 — ADR-0086 + NeuralFS profundo + compat MHI/SGDB
 #   SESSION_252 (continuação): revisão profunda do NeuralFS (F1-F16, oracle + BAFS/LiberFS)
 #     + compatibilidade NeuralFS/MHI/SGDB (C1-C10):
