@@ -151,7 +151,10 @@ mod tests {
     use super::{bench_dod, bench_d_series};
 
     /// DoD ADR-0063: ART 10M chaves binárias + BQ 100k × 1024-dim. Host-only.
+    /// #[ignore]: benchmark pesado (~10M chaves → ~4-8GB RAM). Rodar com
+    /// `cargo test -- --ignored` em host com memória suficiente.
     #[test]
+    #[ignore]
     fn dod_10m_100k() {
         let (ok, msg) = bench_dod(10_000_000, 100_000);
         assert!(ok, "DOD failed: {}", msg);
