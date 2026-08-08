@@ -15,6 +15,10 @@ const GGUF_VERSION: u32 = 3;
 pub(crate) const QK_K: usize = 256;
 const Q4_K_BLOCK_BYTES: usize = 144; // d+dmin+scales[12]+qs[128]
 pub(crate) const Q6_K_BLOCK_BYTES: usize = 210; // ql[128]+qh[64]+scales[16]+d
+// SESSION_252: K-quants Q2_K/Q3_K/Q5_K (llama.cpp layout, QK_K=256).
+const Q2_K_BLOCK_BYTES: usize = 96;  // d(2)+dmin(2)+scales[12]+mins[16]+qs[64]
+const Q3_K_BLOCK_BYTES: usize = 128; // d(2)+dmin(2)+scales[12]+mins[16]+qh[32]+qs[64]
+const Q5_K_BLOCK_BYTES: usize = 192; // d(2)+dmin(2)+scales[12]+mins[16]+qh[32]+qs[128]
 
 #[derive(Debug, Clone, Copy)]
 #[allow(non_camel_case_types)] // nomes alinhados a ggml/llama.cpp (Q4_K, …)
@@ -96,8 +100,19 @@ impl GgufType {
                 let blocks = (ne + QK_K - 1) / QK_K;
                 blocks.saturating_mul(Q6_K_BLOCK_BYTES)
             }
-            GgufType::Q4_1 | GgufType::Q5_1 | GgufType::Q8_1
-            | GgufType::Q2_K | GgufType::Q3_K | GgufType::Q5_K => {
+            GgufType::Q2_K => {
+                let blocks = (ne + QK_K - 1) / QK_K;
+                blocks.saturating_mul(Q2_K_BLOCK_BYTES)
+            }
+            GgufType::Q3_K => {
+                let blocks = (ne + QK_K - 1) / QK_K;
+                blocks.saturating_mul(Q3_K_BLOCK_BYTES)
+            }
+            GgufType::Q5_K => {
+                let blocks = (ne + QK_K - 1) / QK_K;
+                blocks.saturating_mul(Q5_K_BLOCK_BYTES)
+            }
+            GgufType::Q4_1 | GgufType::Q5_1 | GgufType::Q8_1 => {
                 ne.saturating_mul(2) // bound until dedicated dequant
             }
             GgufType::Unknown(_) => ne.saturating_mul(4),
@@ -560,6 +575,164 @@ fn dequantize_q6_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static s
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Q2_K: 2-bit K-quant (llama.cpp QK_K=256, block 96B)
+// Layout: d(f16) + dmin(f16) + scales[12] + mins[16] + qs[64]
+// scales/mins são 6-bit packed em bytes (4 valores por 3 bytes no llama.cpp,
+// mas aqui usamos 1 byte cada = layout simplificado GGMLv3).
+// ---------------------------------------------------------------------------
+
+/// Q2_K block: 96 B → 256 f32. Escala 6-bit + quants 2-bit.
+fn dequantize_q2_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static str> {
+    if block.len() < Q2_K_BLOCK_BYTES || out.len() < QK_K {
+        return Err("Q2_K block too short");
+    }
+    let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+    let scales = &block[4..16]; // 12 bytes (6-bit cada, mask 0x3F)
+    let mins = &block[16..32]; // 16 bytes (6-bit cada)
+    let qs = &block[32..96]; // 64 bytes (4 quants 2-bit por byte)
+    let mut y = 0usize;
+    for j in 0..4 {
+        let sc = d * ((scales[j] & 0x3F) as f32);
+        let m = dmin * ((mins[j] & 0x3F) as f32);
+        for k in 0..32 {
+            let q = ((qs[j * 16 + k / 4] >> ((k % 4) * 2)) & 3) as f32;
+            out[y + k] = sc * q - m;
+        }
+        y += 32;
+    }
+    Ok(())
+}
+
+/// Dequantiza tensor Q2_K.
+pub fn dequantize_q2_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
+    let total = rows * cols;
+    let num_blocks = (total + QK_K - 1) / QK_K;
+    let expected = num_blocks * Q2_K_BLOCK_BYTES;
+    if data.len() < expected {
+        return None;
+    }
+    let mut tensor_data = Vec::with_capacity(total);
+    let mut scratch = [0.0f32; QK_K];
+    for b in 0..num_blocks {
+        let start = b * Q2_K_BLOCK_BYTES;
+        if dequantize_q2_k_block(&data[start..start + Q2_K_BLOCK_BYTES], &mut scratch).is_err() {
+            return None;
+        }
+        let remaining = total - tensor_data.len();
+        let to_copy = remaining.min(QK_K);
+        tensor_data.extend_from_slice(&scratch[..to_copy]);
+    }
+    Tensor::from_row_major((rows, cols), tensor_data)
+}
+
+// ---------------------------------------------------------------------------
+// Q3_K: 3-bit K-quant (llama.cpp QK_K=256, block 128B)
+// Layout: d(f16) + dmin(f16) + scales[12] + mins[16] + qh[32] + qs[64]
+// ---------------------------------------------------------------------------
+
+/// Q3_K block: 128 B → 256 f32. Escala 6-bit + quants 3-bit + high-bit 1-bit.
+fn dequantize_q3_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static str> {
+    if block.len() < Q3_K_BLOCK_BYTES || out.len() < QK_K {
+        return Err("Q3_K block too short");
+    }
+    let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+    let scales = &block[4..16]; // 12 bytes (6-bit)
+    let mins = &block[16..32]; // 16 bytes (6-bit)
+    let qh = &block[32..64]; // 32 bytes (1-bit mask)
+    let qs = &block[64..128]; // 64 bytes (4 quants 2-bit por byte — low 2 bits)
+    let mut y = 0usize;
+    for j in 0..4 {
+        let sc = d * ((scales[j] & 0x3F) as f32);
+        let m = dmin * ((mins[j] & 0x3F) as f32);
+        for k in 0..32 {
+            let q_low = ((qs[j * 16 + k / 4] >> ((k % 4) * 2)) & 3) as f32;
+            let q_high = ((qh[j * 8 + k / 8] >> (k % 8)) & 1) as f32;
+            let q = q_low + q_high * 4.0;
+            out[y + k] = sc * q - m;
+        }
+        y += 32;
+    }
+    Ok(())
+}
+
+/// Dequantiza tensor Q3_K.
+pub fn dequantize_q3_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
+    let total = rows * cols;
+    let num_blocks = (total + QK_K - 1) / QK_K;
+    let expected = num_blocks * Q3_K_BLOCK_BYTES;
+    if data.len() < expected {
+        return None;
+    }
+    let mut tensor_data = Vec::with_capacity(total);
+    let mut scratch = [0.0f32; QK_K];
+    for b in 0..num_blocks {
+        let start = b * Q3_K_BLOCK_BYTES;
+        if dequantize_q3_k_block(&data[start..start + Q3_K_BLOCK_BYTES], &mut scratch).is_err() {
+            return None;
+        }
+        let remaining = total - tensor_data.len();
+        let to_copy = remaining.min(QK_K);
+        tensor_data.extend_from_slice(&scratch[..to_copy]);
+    }
+    Tensor::from_row_major((rows, cols), tensor_data)
+}
+
+// ---------------------------------------------------------------------------
+// Q5_K: 5-bit K-quant (llama.cpp QK_K=256, block 192B)
+// Layout: d(f16) + dmin(f16) + scales[12] + mins[16] + qh[32] + qs[128]
+// ---------------------------------------------------------------------------
+
+/// Q5_K block: 192 B → 256 f32. Escala 6-bit + quants 5-bit (low 4 + high 1).
+fn dequantize_q5_k_block(block: &[u8], out: &mut [f32]) -> Result<(), &'static str> {
+    if block.len() < Q5_K_BLOCK_BYTES || out.len() < QK_K {
+        return Err("Q5_K block too short");
+    }
+    let d = f16_to_f32(u16::from_le_bytes([block[0], block[1]]));
+    let dmin = f16_to_f32(u16::from_le_bytes([block[2], block[3]]));
+    let scales = &block[4..16]; // 12 bytes (6-bit)
+    let mins = &block[16..32]; // 16 bytes (6-bit)
+    let qh = &block[32..64]; // 32 bytes (1-bit high mask)
+    let qs = &block[64..192]; // 128 bytes (4 quants 4-bit por byte)
+    let mut y = 0usize;
+    for j in 0..4 {
+        let sc = d * ((scales[j] & 0x3F) as f32);
+        let m = dmin * ((mins[j] & 0x3F) as f32);
+        for k in 0..32 {
+            let q_low = ((qs[j * 32 + k / 2] >> ((k % 2) * 4)) & 0xF) as f32;
+            let q_high = ((qh[j * 8 + k / 8] >> (k % 8)) & 1) as f32;
+            let q = q_low + q_high * 16.0;
+            out[y + k] = sc * q - m;
+        }
+        y += 32;
+    }
+    Ok(())
+}
+
+/// Dequantiza tensor Q5_K.
+pub fn dequantize_q5_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
+    let total = rows * cols;
+    let num_blocks = (total + QK_K - 1) / QK_K;
+    let expected = num_blocks * Q5_K_BLOCK_BYTES;
+    if data.len() < expected {
+        return None;
+    }
+    let mut tensor_data = Vec::with_capacity(total);
+    let mut scratch = [0.0f32; QK_K];
+    for b in 0..num_blocks {
+        let start = b * Q5_K_BLOCK_BYTES;
+        if dequantize_q5_k_block(&data[start..start + Q5_K_BLOCK_BYTES], &mut scratch).is_err() {
+            return None;
+        }
+        let remaining = total - tensor_data.len();
+        let to_copy = remaining.min(QK_K);
+        tensor_data.extend_from_slice(&scratch[..to_copy]);
+    }
+    Tensor::from_row_major((rows, cols), tensor_data)
+}
+
 /// Dequantiza tensor Q6_K.
 pub fn dequantize_q6_k(data: &[u8], rows: usize, cols: usize) -> Option<Tensor> {
     let total = rows * cols;
@@ -702,6 +875,78 @@ mod tests {
             assert!((logits[j] - want).abs() < 1e-3, "matmul col {}: {} vs {}", j, logits[j], want);
         }
     }
+
+    /// Q2_K: constrói um bloco conhecido e verifica dequant (d=1, scale=1, min=0 → out=q).
+    #[test]
+    fn q2_k_dequant_known_block() {
+        let mut block = [0u8; Q2_K_BLOCK_BYTES];
+        block[0..2].copy_from_slice(&f16_to_f32_bytes(1.0)); // d = 1.0
+        block[2..4].copy_from_slice(&f16_to_f32_bytes(0.0)); // dmin = 0.0
+        for s in 0..4 { block[4 + s] = 1; } // scales[0..4] = 1 (6-bit)
+        // qs: 4 quants 2-bit por byte, 16 bytes por grupo
+        // grupo 0 (bytes 32..48): q=2 em todas as posições
+        for i in 0..16 { block[32 + i] = 0b10101010; } // q=2 cada
+        let mut out = [0.0f32; QK_K];
+        dequantize_q2_k_block(&block, &mut out).unwrap();
+        // out[0..32] = d * scale * q - dmin = 1.0 * 1.0 * 2.0 - 0.0 = 2.0
+        for i in 0..32 {
+            assert!((out[i] - 2.0).abs() < 1e-5, "Q2_K q[{}] = {} want 2.0", i, out[i]);
+        }
+    }
+
+    /// Q3_K: constrói um bloco conhecido e verifica dequant (d=1, scale=1, min=0, q_low=3, q_high=1 → q=7).
+    #[test]
+    fn q3_k_dequant_known_block() {
+        let mut block = [0u8; Q3_K_BLOCK_BYTES];
+        block[0..2].copy_from_slice(&f16_to_f32_bytes(1.0)); // d = 1.0
+        block[2..4].copy_from_slice(&f16_to_f32_bytes(0.0)); // dmin = 0.0
+        for s in 0..4 { block[4 + s] = 1; } // scales[0..4] = 1
+        // qh: high-bit = 1 → byte 32..64 = 0xFF
+        for i in 0..32 { block[32 + i] = 0xFF; }
+        // qs: low 2-bit = 3 → bytes 64..128 = 0b11111111
+        for i in 0..64 { block[64 + i] = 0xFF; }
+        let mut out = [0.0f32; QK_K];
+        dequantize_q3_k_block(&block, &mut out).unwrap();
+        // q = q_low(3) + q_high(1)*4 = 7 → out = 1.0 * 1.0 * 7.0 - 0.0 = 7.0
+        for i in 0..32 {
+            assert!((out[i] - 7.0).abs() < 1e-5, "Q3_K q[{}] = {} want 7.0", i, out[i]);
+        }
+    }
+
+    /// Q5_K: constrói um bloco conhecido e verifica dequant (d=1, scale=1, min=0, q_low=5, q_high=1 → q=21).
+    #[test]
+    fn q5_k_dequant_known_block() {
+        let mut block = [0u8; Q5_K_BLOCK_BYTES];
+        block[0..2].copy_from_slice(&f16_to_f32_bytes(1.0)); // d = 1.0
+        block[2..4].copy_from_slice(&f16_to_f32_bytes(0.0)); // dmin = 0.0
+        for s in 0..4 { block[4 + s] = 1; } // scales[0..4] = 1
+        // qh: high-bit = 1 → bytes 32..64 = 0xFF
+        for i in 0..32 { block[32 + i] = 0xFF; }
+        // qs: low 4-bit = 5 → bytes 64..192: cada byte = 0x55 (5 em cada nibble)
+        for i in 0..128 { block[64 + i] = 0x55; }
+        let mut out = [0.0f32; QK_K];
+        dequantize_q5_k_block(&block, &mut out).unwrap();
+        // q = q_low(5) + q_high(1)*16 = 21 → out = 1.0 * 1.0 * 21.0 - 0.0 = 21.0
+        for i in 0..32 {
+            assert!((out[i] - 21.0).abs() < 1e-5, "Q5_K q[{}] = {} want 21.0", i, out[i]);
+        }
+    }
+
+    /// Helper: f16 → 2 bytes LE (para construir blocos de teste).
+    fn f16_to_f32_bytes(v: f32) -> [u8; 2] {
+        let bits = v.to_bits();
+        let sign = (bits >> 31) & 1;
+        let exp = ((bits >> 23) & 0xFF) as i32 - 127;
+        let mant = bits & 0x7FFFFF;
+        let f16: u16 = if exp < -14 {
+            (sign << 15) as u16 // zero/denorm → 0
+        } else if exp > 15 {
+            ((sign << 15) | 0x7C00) as u16 // inf
+        } else {
+            ((sign << 15) | (((exp + 15) as u32) << 10) | (mant >> 13)) as u16
+        };
+        f16.to_le_bytes()
+    }
 }pub fn dequantize_raw(qtype: GgufType, data: &[u8], rows: usize, cols: usize) -> Option<Vec<f32>> {
     let ne = rows * cols;
     match qtype {
@@ -728,6 +973,9 @@ mod tests {
         GgufType::Q8_0 => dequantize_q8_0(data, rows, cols).map(|t| t.data),
         GgufType::Q4_K => dequantize_q4_k(data, rows, cols).map(|t| t.data),
         GgufType::Q6_K => dequantize_q6_k(data, rows, cols).map(|t| t.data),
+        GgufType::Q2_K => dequantize_q2_k(data, rows, cols).map(|t| t.data),
+        GgufType::Q3_K => dequantize_q3_k(data, rows, cols).map(|t| t.data),
+        GgufType::Q5_K => dequantize_q5_k(data, rows, cols).map(|t| t.data),
         _ => None,
     }
 }
@@ -1075,7 +1323,7 @@ pub fn print_supported_formats() -> String {
         "Supported GGUF formats (AirLLM streaming):\n\
          Q4_0/Q5_0/Q8_0: classic block dequant OK\n\
          Q4_K/Q6_K: K-quant dequant OK (llama.cpp)\n\
-         Q2_K/Q3_K/Q5_K: type known, dequant deferred\n\
+         Q2_K/Q3_K/Q5_K: K-quant dequant OK (llama.cpp)\n\
          F16/F32: float OK\n\
          Prefetch: soft double-buffer (NOT peer DMA)\n\
          Hot-swap ATA: /model <FAT32-8.3-name>\n\

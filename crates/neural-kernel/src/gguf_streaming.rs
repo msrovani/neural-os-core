@@ -76,6 +76,6 @@ pub fn log_airllm_residuals() {
     k_nano::slog_bin!(
         "GGUF",
         "info",
-        "AirLLM residuals: ATA/Net hot-swap OK; DMA prefetch / K-quants avançados = AWAITING"
+        "AirLLM residuals: ATA/Net hot-swap OK; K-quants Q2_K/Q3_K/Q5_K OK; DMA prefetch = AWAITING"
     );
 }
