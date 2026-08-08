@@ -21,7 +21,7 @@ static mut LIMINE_BASE_REV: BaseRevision = BaseRevision::new(2);
 
 #[used]
 #[link_section = ".requests"]
-static mut LIMINE_STACK: StackSizeRequest = StackSizeRequest {
+pub(crate) static mut LIMINE_STACK: StackSizeRequest = StackSizeRequest {
     id: STACK_SIZE_ID,
     revision: 0,
     response: null_mut(),

@@ -1310,6 +1310,15 @@ pub(crate) fn kernel_boot(
         } else {
             k_nano::slog_bin!("MEM", "info", "kernel_phys ausente — não reserva imagem (risco DMA)");
         }
+
+        // SESSION_254: o frame allocator não conhece a stack de 2MB que o Limine
+        // alocou (StackSizeRequest) — se entregar frames da própria stack do
+        // kernel, alocação sobrescreve return addresses → #PF ip=0 (crash só com
+        // loader QEMU 4GB+, que empurra o watermark do allocator até a stack).
+        if let Some(resp) = unsafe { crate::limine_boot::LIMINE_STACK.response.as_ref() } {
+            frame_allocator.reserve_range(resp.address, 2 * 1024 * 1024);
+            k_nano::slog_bin!("MEM", "info", "reserva stack Limine {:#x} len=2MB", resp.address);
+        }
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
@@ -1344,9 +1353,8 @@ pub(crate) fn kernel_boot(
             }
         }
 
-        // Estende heap: frame allocator + mapper prontos após init_memory + arena
-        allocator::resize_bump_heap(1024);
-
+        // ponytail/AIOS: sem resize eager p/ 1024MB — grow_bump_auto cobre sob
+        // demanda (LazyBumpAllocator OOM → allocator.rs:46). Menos frames no T+0.
         crate::boot_logger::log("BOOT: Heap init OK");
         crate::display::fb::boot_ckpt(12, "arena+boot_logger");
     }
@@ -1469,9 +1477,13 @@ pub(crate) fn kernel_boot(
         let pct = (detected_ram_mb as u64 * 3) / 4;
         pct.clamp(512, 1536) as usize
     };
-    allocator::resize_bump_heap(heap_initial_mb);
-    k_nano::slog_bin!("HEAP", "AIOS", "heap auto-alvo={}MB inicial (RAM detectada={}MB; grow sob demanda)",
-        heap_initial_mb, detected_ram_mb);
+    // ponytail/AIOS: não mapeia eager o teto — LazyBumpAllocator já chama
+    // grow_bump_auto (256MB/passo) no OOM (allocator.rs:46). O resize aqui só
+    // garante o piso mínimo; acima disso cresce sob demanda (menos frames no
+    // T+0 → menor watermark → menor janela do crash de stack do Limine).
+    allocator::resize_bump_heap(heap_initial_mb.min(512));
+    k_nano::slog_bin!("HEAP", "AIOS", "heap piso={}MB (RAM={}MB; grow_bump_auto sob demanda até budget {}MB)",
+        heap_initial_mb.min(512), detected_ram_mb, heap_initial_mb);
     // TALC init — APÓS init_global_allocator (alloc_physical_frame disponível)
     allocator::talc_init_post_memory().expect("talc post-init failed");
 
