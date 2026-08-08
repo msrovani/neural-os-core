@@ -213,13 +213,16 @@ macro_rules! klogc {
 /// Uso: kjson!("BOOT","DISPLAY","fb","w",1280,"h",720,"bpp",3)
 /// Output: J{"t":0,"l":"BOOT","a":"DISPLAY","e":"fb","w":1280,"h":720,"bpp":3}
 /// Prefixo "J" permite filtrar linhas JSON do resto do log.
+/// Bufferiza em alloc::String antes de emitir — evita fragmentação no serial.
 #[macro_export]
 macro_rules! kjson {
     ($lvl:expr, $agent:expr, $event:expr $(, $k:expr, $v:expr)*) => {{
         let tick = $crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed);
-        $crate::serial::_print(format_args!("J{{\"t\":{},\"l\":\"{}\",\"a\":\"{}\",\"e\":\"{}\"", tick, $lvl, $agent, $event));
-        $($crate::serial::_print(format_args!(",\"{}\":{}", $k, $v));)*
-        $crate::serial::_print(format_args!("}}\n"));
+        let mut s = alloc::format!("J{{\"t\":{},\"l\":\"{}\",\"a\":\"{}\",\"e\":\"{}\"", tick, $lvl, $agent, $event);
+        $(s.push_str(&alloc::format!(",\"{}\":{}", $k, $v));)*
+        s.push('}');
+        s.push('\n');
+        $crate::serial::_print(format_args!("{}", s));
     }}
 }
 
