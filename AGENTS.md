@@ -49,6 +49,7 @@
 # CHANGELOG.md                 → Histórico de versões
 # ROADMAP.md                   → Roadmap completo (v1.0 → v2.0)
 # TODO.md                      → Checklist mestre de tarefas
+# CONTEXT.md                   → Glossário de domínio (linguagem compartilhada)
 # crates/k_nano/src/           → Ring 0 — HAL base, drivers, PCI, memory (wired no bin)
 # crates/k_hal/src/            → Ring 1 — DeviceCap, HalOffer, MMIO BE, VirtIO transporte
 # crates/k_ai/src/             → SelfHeal, Trust, inventário (wired N2.5)
