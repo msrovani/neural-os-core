@@ -1,0 +1,27 @@
+diff --git a/utils/convert-hf-to-gguf-bitnet.py b/utils/convert-hf-to-gguf-bitnet.py
+index b11e831..52cffda 100644
+--- a/utils/convert-hf-to-gguf-bitnet.py
++++ b/utils/convert-hf-to-gguf-bitnet.py
+@@ -1043,6 +1043,10 @@ class BitnetModel(Model):
+     def set_gguf_parameters(self):
+         super().set_gguf_parameters()
+ 
++        # bitnet-b1.58-2B-4T uses relu^2 in the FFN; the runtime reads it from
++        # <arch>.hidden_activation (see llama_model_bitnet::load_arch_hparams).
++        self.gguf_writer.add_hidden_act("relu2")
++
+         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+ 
+         # rope dimension count (required for correct positional encoding)
+diff --git a/utils/convert-ms-to-gguf-bitnet.py b/utils/convert-ms-to-gguf-bitnet.py
+index edf7027..334839f 100644
+--- a/utils/convert-ms-to-gguf-bitnet.py
++++ b/utils/convert-ms-to-gguf-bitnet.py
+@@ -1157,6 +1157,7 @@ class OutputFile:
+             name = str(params.path_model.parent).split('/')[-1]
+ 
+         self.gguf.add_name                (name)
++        self.gguf.add_hidden_act          ("relu2")
+         self.gguf.add_vocab_size          (params.n_vocab)
+         self.gguf.add_context_length      (params.n_ctx)
+         self.gguf.add_embedding_length    (params.n_embd)
