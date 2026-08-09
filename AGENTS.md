@@ -1,4 +1,4 @@
-# ════════════════════════════════════════════════════════
+﻿# ════════════════════════════════════════════════════════
 #   PLANO DIRETOR — neural-os-core v2.0 "K³CHJ Core" 🏆
 #   ~26.000 LOC, 180+ arquivos Rust, ~50 agentes nativos, 0 erros
 #   Sprints 92→100: v1.0 "Gold Master" — A Era do Silício ✅
@@ -443,7 +443,7 @@ ID=9001) retry periódico até FAT_READY=true.
 - **Frame allocator não exclui kernel/heap → DMA sobrescreve memória viva (SESSION_252/OTA, residual):** `init_from_usable_ranges` (memory.rs:56-98) marca como livre tudo que o Limine reporta `MEMMAP_USABLE` — sem excluir a imagem do kernel, `.bss.heap` (HEAP_BUFFER) nem page tables. Quando um `deallocate_frame` devolve um frame ainda vivo (gguf_mmap.rs:121, dma.rs, virtio_net.rs), o e1000 aloca esse frame como buffer RX e o DMA do NIC **sobrescreve o heap (conn.buf do download) depois do checksum validar** — tamanho exato + hash não-determinístico. Fix proposto (ora-1): excluir kernel/heap/page tables no init + auditar deallocs (unmap antes do free).
 - **Corrupção com tamanho exato + hash determinístico = bug no hash, não na transmissão (SESSION_252/OTA):** o download do KERNEL.BIN (17MB) tinha tamanho exato mas hash errado — e o `got` era **idêntico entre rodadas** com o mesmo arquivo (determinístico). A hipótese de frame allocator/DMA race estava **errada** (seria não-determinística). A causa raiz era o `k_nano::tpm::sha256`: o byte `0x80` do padding SHA-256 ficava no índice 0 do bloco de pad em vez de `remaining` → para `len % 64 != 0` (kernel.elf: `17415976 % 64 = 40`) o hash saía errado deterministicamente. **Sempre valide a implementação criptográfica contra vetores FIPS antes de investigar a rede.** Fix: padding inline correto (`last[remaining] = 0x80` + bloco extra quando `remaining >= 56`) + 3 vetores FIPS de teste em `tpm.rs`. O mesh/TLS "funcionavam" com o sha256 bugado porque eram self-consistent (dois nós com o mesmo bug = mesmo hash errado).
 
-# Referências
+- **Stack do bootloader é memória viva não reservada (SESSION_254):** o kernel pede stack de 2MB ao Limine (`StackSizeRequest`) mas NÃO reserva onde ela foi alocada no frame allocator → com loader 4GB (BITNET2B), o watermark das alocações sobe até a região da stack (~2.44GB, logo abaixo da imagem) e o allocator entrega frames da PRÓPRIA stack do kernel → return address corrompido → `#PF ip=0x0000000000000000`. O `StackSizeResponse` do Limine tem campo `address` — usar `reserve_range(stack_addr, 2MB)` junto com a reserva da imagem. Heap eager (`resize_bump_heap` 1024/1536MB no T+0) PIORA: sobe o watermark e expõe o bug; piso 512MB + `grow_bump_auto` (OOM, allocator.rs:46) é o comportamento AIOS e o 2B v6 carrega sem reserva (auto-grow 512→768→1024MB). Bisect provou pré-existente (pai do bughunt crasha igual; sem loader passa).# Referências
 - ADR-0036: JARVIS Unified Interaction Layer
 - ADR-0037: SMP+GPU Architecture (multi-vendor)
 - ADR-0033: On-Device Micro-Learning (Self-Training MoE)

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### SESSION_254: Crash ip=0 com loader 4GB + heap lazy AIOS (2026-08-09)
+
+**Fix `8901d97` — 3 arquivos, 0 erros:**
+
+- **Stack do Limine reservada (root cause do #PF ip=0x0):** `StackSizeResponse` ganhou
+  o campo `address` (ABI real do Limine: revision + address) e o frame allocator
+  agora reserva os 2MB da stack (`reserve_range`). Antes o allocator tratava a
+  região da stack (~2.44GB) como livre — com o loader BITNET2B @4GB as alocações
+  extras do boot empurravam o watermark até lá, entregando frames da própria
+  stack do kernel → return address corrompido → `#PF ip=0x0000000000000000`.
+- **Heap lazy AIOS (premissa 4):** removido o `resize_bump_heap` eager (1024MB e
+  teto 1536MB no T+0); piso 512MB + `grow_bump_auto` sob demanda (256MB/passo,
+  já existia no OOM do LazyBumpAllocator). Menos gordura no T+0 = menor janela
+  do crash + o modelo 2B v6 carrega sem reserva eager.
+- **Validação QEMU TCG (BITNET2B + HWEXPRT4 + hw_expert_v4):** MVP-C demo OK
+  (ponto exato do crash), auto-grow 512→768→1024MB, `LLM LOADED file=577MB
+  h=2560 L=30` (antes llm=ABSENT).
 
 ### SESSION_252 (cont.): Loop QEMU OTA — Jarbas + server python validados (2026-08-07)
 

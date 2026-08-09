@@ -46,6 +46,7 @@ explicit gate over a silent promise.
 | Area | State |
 |---|---|
 | UEFI boot (Limine) | Booting through all 8 phases in QEMU (WHPX/TCG); BIOS legacy boot is **not** supported |
+| Memory management | AIOS self-adapting heap: modest 512MB floor, `grow_bump_auto` expands on demand (256MB steps) up to 75% of detected RAM; Limine kernel stack reserved in the frame allocator (fixes a `#PF ip=0` with large QEMU-loader models at 4GB+) |
 | Networking | Intel e1000 driver (TX/RX, DMA fixed via uncached mapping), raw DNS, HTTP GET via smoltcp, NTP, TLS 1.3 (`embedded-tls`, wired through hermes), NetFs (TCP file server, smoke-tested) |
 | P2P mesh | Two QEMU instances discover each other over UDP broadcast (port 42069), exchange skills; selective ACK per fragment, 16-slot reassembly, HMAC-SHA256/Ed25519 crypto tiers, token-bucket rate limiting |
 | Storage | ATA PIO, FAT32 read/write (data partition), exFAT (opt-in) |

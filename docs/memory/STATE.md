@@ -1237,3 +1237,10 @@ Todos os sprints de infraestrutura (GPU, JARVIS, SleepCycle, Cognitive, Self-Hea
   - Render Registry: RENDER_REGISTER / RENDER_WINDOW topics for dynamic agent-created windows
   - Cleanup: NeuralConsole removed (~287 LOC dead code eliminated), AppId legados removidos
   - cargo check --release: 0 erros
+
+---
+
+**Estado v1.9.9 — SESSION_254 (2026-08-09):** Crash ip=0 com loader 4GB corrigido.
+- **Fix 8901d97:** Stack do Limine (2MB) reservada no frame allocator (StackSizeResponse.address + reserve_range) — antes o allocator podia entregar frames da propria stack do kernel (watermark alto com BITNET2B) → return address corrompido → #PF ip=0x0.
+- **Heap lazy AIOS:** piso 512MB + grow_bump_auto sob demanda (256MB/passo) — removido resize eager 1024/1536MB. 2B v6 carrega (LLM LOADED 577MB, auto-grow 512→768→1024MB) sem reservar 1GB no T+0.
+- cargo check --release: 0 erros.
