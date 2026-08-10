@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### SESSION_256: neural-sgdb — SGDB extraído como projeto comunitário standalone (2026-08-09)
+
+**Extração + 4 commits no repo novo (github.com/msrovani/neural-sgdb), 0 erros no OS:**
+
+- **Topologia (HITL, Modo 1):** repo separado, evolução independente. O OS mantém
+  `k_ai::sgdb` interno (AGPL); neural-sgdb é projeto comunitário (MIT OR
+  Apache-2.0, zero deps, dual-mode `no_std`+`std`). Sem fiação — porta futura =
+  versão publicada no crates.io. Interop: formato NMD1 byte-idêntico.
+- **v0.1 (`f14c2e4`):** art/memory_doc/bq/hamming portados, engine instance-based,
+  `Storage` trait + `InMemory` + `FileStorage` (append-log CRC32 crash-safe),
+  facade `Sgdb` (remember_exchange/semantic, recall, rag_context, remember_fact,
+  scan_prefix, checkpoint). Seams: clock `now: u64`, `cpu_caps()`/`set_cpu_caps`,
+  `sgdb_log!`. 20+1 testes; no_std check limpo.
+- **p2p (`d62da15`):** `CrdtMemorySync` + `Transport` trait + `UdpTransport` std
+  (feature `p2p`, merge LWW simétrico; rate-limit `Option<u64>` — edge primeiro
+  sync em now=0). 24+1 testes.
+- **bench + MCP (`9e1080d`):** `examples/bench.rs` (ART get P50≈200ns, BQ top-5
+  ≈310µs 10k×1024, recall@5 BQ vs FP32 = 100%) + `examples/mcp_server.rs`
+  (JSON-RPC 2.0 stdio, handshake 2025-11-25, tools remember/recall/rag_context,
+  embedding demo trigramas). `378e633` chore (.gitignore sgdb_memory.db).
+- **Lições:** subagente não escreve fora do workspace (2 fixers vazios);
+  `f32::sqrt` não existe no core p/ x86_64-unknown-none; MCP `-32601` em
+  server/discover = fallback client moderno; Claude Code envia tools/list sem
+  esperar initialized; ART upstream não suporta chave-prefixo.
+- **Roadmap neural-sgdb 5/6** — TKLV interop adiado (exige leitor TickvLite do
+  OS no host p/ verificação honesta; NMD1 já interop).
+
 ### SESSION_255: HW Expert v6 (ADR-0085 §3.2) + imagem HW real com BITNET2B v6 (2026-08-09)
 
 **1 commit, 0 erros — 24 testes cortex PASS:**

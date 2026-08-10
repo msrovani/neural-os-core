@@ -10,6 +10,11 @@ Linux, no cloud dependency.
 [![License](https://img.shields.io/badge/license-AGPLv3-blue?style=flat-square)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-nightly_1.98-orange?style=flat-square)](https://www.rust-lang.org/)
 
+> **Community project:** the cognitive memory database of this OS is extracted as a
+> standalone, permissively-licensed crate — **[neural-sgdb](https://github.com/msrovani/neural-sgdb)**
+> (MIT OR Apache-2.0, zero deps, `no_std` + `std`, CRDT memory sync, MCP server).
+> Interop with the OS via the NMD1 document format.
+
 ---
 
 ## What this is

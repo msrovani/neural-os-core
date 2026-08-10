@@ -1,4 +1,19 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s256 — neural-sgdb standalone (extração Modo 1)
+#   SESSION_256: núcleo `k_ai::sgdb` (ADR-0063) extraído para repo comunitário
+#     separado github.com/msrovani/neural-sgdb — MIT OR Apache-2.0, zero deps,
+#     dual-mode no_std+std. OS MANTÉM k_ai::sgdb interno (AGPL); SEM fiação
+#     (porta futura = versão crates.io); interop NMD1 byte-idêntico.
+#     v0.1 (art/memory_doc/bq/hamming + Storage trait InMemory/FileStorage +
+#     facade Sgdb) + feature p2p (CrdtMemorySync/Transport/UdpTransport) +
+#     benchmarks (ART get P50≈200ns, BQ top-5 ≈310µs, recall@5=100%) + MCP
+#     server (remember/recall/rag_context, JSON-RPC stdio 2025-11-25).
+#     4 commits; 20+1/24+1 testes; no_std check limpo. Roadmap 5/6 — TKLV
+#     interop adiado (exige leitor TickvLite do OS no host). Lições: subagente
+#     não escreve fora do workspace; f32::sqrt não existe no core
+#     (x86_64-unknown-none); MCP -32601 = fallback client moderno.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s255 — HW Expert v6 (ADR-0085 mt=1) + imagem HW real
 #   SESSION_255: hwexpert v6 criado + loader F1b + usb_hw.img (BITNET2B v6 + hwexpert v6).
 #     Conversor tools/convert_hwexpert_v5_to_v6.py (v5 prefixos → v6 canônico sem
