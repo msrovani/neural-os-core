@@ -2,6 +2,32 @@
 
 ## [Unreleased]
 
+### SESSION_255: HW Expert v6 (ADR-0085 §3.2) + imagem HW real com BITNET2B v6 (2026-08-09)
+
+**1 commit, 0 erros — 24 testes cortex PASS:**
+
+- **hwexpert v6 criado** (`tools/convert_hwexpert_v5_to_v6.py`): converte o v5
+  legado (body com prefixos `u32 len+scale` + rope) para o formato canônico v6
+  (model_type=1, num_params u64, sem prefixos, feat=0x03, sem rope). Parity
+  byte-exact em todos os tensores + predições idênticas nos 10 devices
+  canônicos (`tools/check_hwexpert_v6_parity.py` PASS).
+- **Decisão de fidelidade q_dim:** o modelo é treinado com **q_dim=32** (atenção
+  truncada) e o forward usa `model.q_dim` — colapsar para hidden (ADR §3.2
+  literal) muda predições (provado em `tools/check_hwexpert_qdim.py`: 7/10 DIFF).
+  O conversor preserva q_dim=32 e o loader lê shapes fixos hwexpert.
+- **Loader v6 hwexpert (F1b):** `load_hwexpert_v6()` em cortex.rs (header v6
+  estrito + body sem prefixos), dispatch `model_type=1` em model.rs, call sites
+  do boot (main.rs) tentam v6 primeiro com fallback v5. **Teste host com
+  arquivos reais** (`hwexpert_v6_matches_v5_predictions`): v5+v6 via
+  include_bytes, 5 saídas × 10 devices — PASS.
+- **Imagem HW real:** mkfat32 `HWEXPRT4.BIN` prefere `hw_expert_v6.bitnet`;
+  `cargo build --release -p boot`; `PACK_LLM=2b python tools/build_image.py
+  --hw --unified --size 6144` → `target/usb_hw.img` (6271MB). Verificado no
+  FAT32: `HWEXPRT4.BIN` = 265620B **ver=6 mt=1** h=128 L=6 q_dim=32 feat=0x03 +
+  `BITNET2B.BIN` = 755MB **ver=6 mt=0** h=2560 L=30.
+- **Pendentes:** boot QEMU runtime com o v6; retreino do HW Expert com a receita
+  1-bit (IDEA #489).
+
 ### SESSION_254: Crash ip=0 com loader 4GB + heap lazy AIOS (2026-08-09)
 
 **Fix `8901d97` — 3 arquivos, 0 erros:**

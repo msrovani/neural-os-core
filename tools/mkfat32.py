@@ -53,8 +53,9 @@ def pack_llm_set() -> set[str]:
     return out
 
 def find_file(name):
-    for d in [os.path.join(ROOT, "models"), ROOT, os.path.join(ROOT, "target"),
-              os.path.join(ROOT, "firmware"),
+    # target1 = canônico de modelos v6 (SESSION_254+); depois staging/legado.
+    for d in [os.path.join(ROOT, "target1"), os.path.join(ROOT, "models"), ROOT,
+              os.path.join(ROOT, "target"), os.path.join(ROOT, "firmware"),
               os.path.join(ROOT, "crates/neural-kernel"), os.path.join(ROOT, "tools/target")]:
         p = os.path.join(d, name)
         if os.path.exists(p): return p
@@ -201,7 +202,7 @@ def populate(path):
         ("RUSTCDR.BITNET", find_file("rust_coder.bitnet") or find_file("RUSTCDR.BITNET") or find_file("RUSTCDR2.BIN")),
         ("HW_EXPERT.BITNET", find_file("hw_expert_tf.bitnet") or find_file("hw_expert_v3.bitnet")),
         ("HWEXPRT.BIN", find_file("hw_expert_v3.bitnet") or find_file("hw_expert_tf.bitnet") or find_file("HWEXPRT.BIN")),
-        ("HWEXPRT4.BIN", find_file("hw_expert_v4.bitnet") or find_file("HWEXPRT4.BIN")),
+        ("HWEXPRT4.BIN", find_file("hw_expert_v6.bitnet") or find_file("hw_expert_v4.bitnet") or find_file("HWEXPRT4.BIN")),
         ("PIPER.BIN", find_file("PIPER_PT_BR.BIN") or find_file("PIPER.BIN") or find_file("PIPER_PT_BR_CADU_MEDIUM.bitnet")),
         ("PIPER_EN.BIN", find_file("PIPER_EN.BIN")),
         ("STT.BIN", find_file("STT.BIN")),
@@ -210,19 +211,19 @@ def populate(path):
         ("BITNET13.BIN", find_bitnet_13() if "13" in llm else None),
         ("BITNET850.BIN", find_bitnet_850() if "850" in llm else None),
         ("MICRO.BIN", None),  # evita stub; boot usa BITNET850/13
-        ("BITNET2B.BIN", (find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN")
+        ("BITNET2B.BIN", (find_file("BITNET2B.v6") or find_file("bitnet_2B.bitnet") or find_file("BITNET2B.BIN")
          or find_file("BITNET-2B.BITNET") or find_file("bitnet-BitNet-b1_58-2B-4T.bitnet"))
          if "2b" in llm else None),
         ("BITNET.BIN", None),  # alias legado; não empacota stub
         ("BITNET3B.BIN", find_bitnet_3b() if "3b" in llm else None),
         ("MICRO.BITNET", None if ("850" in llm or "13" in llm) else find_file("MICRO.BITNET")),
         # ADR-0078/0079: todos os slots ModelHub (fat_names_for em cortex::model_hub)
-        ("VISION.BIN", find_file("VISION.BIN")),
-        ("LLAMA8B.BIN", find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
-        ("RUSTCDR3.BIN", find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
-        ("RERANKER.BIN", find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
-        ("LEARNER.BIN", find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
-        ("AGENT.BIN", find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
+        ("VISION.BIN", find_file("VISION.v6") or find_file("VISION.BIN")),
+        ("LLAMA8B.BIN", find_file("PRO.v6") or find_file("LLAMA8B.BIN") or find_file("LLAMA8B.BITNET")),
+        ("RUSTCDR3.BIN", find_file("RUSTCDR3.v6") or find_file("RUSTCDR3.BIN") or find_file("RUSTCDR3.BITNET")),
+        ("RERANKER.BIN", find_file("RERANKER.v6") or find_file("RERANKER.BIN") or find_file("RERANKER.BITNET")),
+        ("LEARNER.BIN", find_file("LEARNER.v6") or find_file("LEARNER.BIN") or find_file("LEARNER.BITNET")),
+        ("AGENT.BIN", find_file("AGENT.v6") or find_file("AGENT.BIN") or find_file("AGENT.BITNET")),
     ]
     # ADR-0056: LEGOs cedo (antes do walk firmware) — evita esgotar root dir
     _inject_device_legos(files)

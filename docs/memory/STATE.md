@@ -1,4 +1,18 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s255 — HW Expert v6 (ADR-0085 mt=1) + imagem HW real
+#   SESSION_255: hwexpert v6 criado + loader F1b + usb_hw.img (BITNET2B v6 + hwexpert v6).
+#     Conversor tools/convert_hwexpert_v5_to_v6.py (v5 prefixos → v6 canônico sem
+#     prefixos, feat=0x03, sem rope; parity byte-exact + predições idênticas PASS).
+#     Loader load_hwexpert_v6 (cortex.rs) + dispatch mt=1 (model.rs) + call sites
+#     v6-primeiro (main.rs) + teste host com arquivos reais (5 saídas × 10 devices PASS).
+#     cargo check --release: 0 erros; 24 testes cortex PASS.
+#     Imagem: PACK_LLM=2b build_image --hw --unified --size 6144 → target/usb_hw.img
+#     (6271MB). Verificado no FAT32: HWEXPRT4.BIN ver=6 mt=1 h=128 q_dim=32 feat=0x03 +
+#     BITNET2B.BIN ver=6 mt=0 h=2560 L=30. Lição: q_dim do hwexpert = contrato de
+#     predição (não colapsar p/ hidden — muda predições). Pendente: boot QEMU runtime,
+#     retreino 1-bit (#489). Commit único.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s253 — AirLLM K-quants + NTFS read + SysInstaller UI
 #   SESSION_253: AirLLM K-quants Q2_K/Q3_K/Q5_K (dequant llama.cpp) + forward_streaming
 #     demo (carrega camada-por-camada do FAT32) + NTFS read+list ($MFT parse, resident data)

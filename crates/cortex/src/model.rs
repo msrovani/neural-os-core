@@ -60,12 +60,8 @@ pub fn load_model_v6(data: &[u8]) -> Option<ModelView> {
         6 => match data[14] {
             // LLM v6: cortex::load_model_v6 (já despacha v6 estrito + legado)
             0 => crate::cortex::load_model_v6(data).map(ModelView::Llm),
-            // HWExpert v6: loader próprio pendente; v5 legado via load_hwexpert_v5
-            1 => {
-                k_nano::slog_cortex!("MODEL", "warn",
-                    "v6 hwexpert loader pendente (F1b) — tentando legado v5");
-                crate::cortex::load_hwexpert_v5(data).map(ModelView::HwExpert)
-            }
+            // HWExpert v6 (ADR-0085 §3.2): loader canônico sem prefixos
+            1 => crate::cortex::load_hwexpert_v6(data).map(ModelView::HwExpert),
             _ => {
                 k_nano::slog_cortex!("MODEL", "warn", "v6 model_type={} desconhecido", data[14]);
                 None

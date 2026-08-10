@@ -3260,7 +3260,9 @@ pub(crate) fn kernel_boot(
                     if magic == 0xBE11BE11 {
                         if addr + (scan_sz as u64) <= scan_end {
                             let data = unsafe { core::slice::from_raw_parts(ptr, scan_sz) };
-                            if let Some(v4model) = cortex_crate::cortex::load_hwexpert_v5(data) {
+                            if let Some(v4model) = cortex_crate::cortex::load_hwexpert_v6(data)
+                                .or_else(|| cortex_crate::cortex::load_hwexpert_v5(data))
+                            {
                                 cortex_crate::cortex::set_hwexpert_v4_model(v4model);
                                 k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (QEMU-loader @{:#x})", addr);
                                 v4_ok = true;
@@ -3282,7 +3284,9 @@ pub(crate) fn kernel_boot(
                             }
                             if let Some(fs) = crate::fat32::Fat32Reader::new(ata, p) {
                                 if let Some(v4data) = fs.read_file("llama8b.bin") {
-                                    if let Some(v4model) = crate::cortex::load_hwexpert_v5(&v4data) {
+                                    if let Some(v4model) = crate::cortex::load_hwexpert_v6(&v4data)
+                                        .or_else(|| crate::cortex::load_hwexpert_v5(&v4data))
+                                    {
                                         crate::cortex::set_hwexpert_v4_model(v4model);
                                         k_nano::slog_bin!("HWEXPERT", "info", "v4 multi-head LOADED (FAT) size={}KB", v4data.len() / 1024);
                                         v4_ok = true;

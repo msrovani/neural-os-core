@@ -357,6 +357,101 @@ pub fn load_hwexpert_v5(data: &[u8]) -> Option<HwExpertV4Model> {
     })
 }
 
+/// Carrega modelo HW Expert no formato canônico v6 (ADR-0085 §3.2, model_type=1).
+/// Body sem prefixos (rms = f32 puro; tensor = packed + f32 scale), shapes
+/// fixos hwexpert: q/k/v/o=(h,h), g/u=(h,ff), d=(ff,h) — mesmos do
+/// load_hwexpert_v5, sem rope (forward não usa). feat bits do header v6:
+/// bit0=rms_inner_attn, bit1=rms_ffn_norm (o v6 não tem rope/theta p/ hwexpert).
+/// q_dim do header é preservado no modelo: o forward (predict_hw_v4) usa
+/// model.q_dim para truncar a atenção (modelo treinado com qd = h/heads).
+pub fn load_hwexpert_v6(data: &[u8]) -> Option<HwExpertV4Model> {
+    let mut off = 0;
+    let magic = read_u32(data, &mut off)?;
+    if magic != 0xBE11BE11 { return None; }
+    let version = read_u16(data, &mut off)?;
+    if version != 6 { return None; }
+    let _num_params = read_u64(data, &mut off)?;
+    let model_type = read_u8(data, &mut off)?;
+    if model_type != 1 { return None; } // HWExpert
+    if off + 3 > data.len() { return None; }
+    if data[off] != 0 || data[off + 1] != 0 || data[off + 2] != 0 { return None; }
+    off += 3;
+
+    // Bloco transformer (ADR-0085 §2, offset 18)
+    let hidden = read_u16(data, &mut off)? as usize;
+    let num_layers = read_u16(data, &mut off)? as usize;
+    let num_heads = read_u16(data, &mut off)? as usize;
+    let vocab_size = read_u32(data, &mut off)? as usize;
+    let _max_seq = read_u16(data, &mut off)? as usize;
+    let intermediate_size = read_u16(data, &mut off)? as usize;
+    let _num_kv_heads = read_u16(data, &mut off)? as usize;
+    let q_dim = read_u16(data, &mut off)? as usize;
+    let _num_medusa = read_u32(data, &mut off)? as usize;
+    off += 4; // tie_flag
+    let _tok_type = read_u8(data, &mut off)?;
+    let tok_len = read_u32(data, &mut off)? as usize;
+    off = off.saturating_add(tok_len);
+    let _act_type = read_u8(data, &mut off)?;   // não usado p/ hwexpert
+    let _embed_type = read_u8(data, &mut off)?; // 0 = ternary
+    let feat = read_u8(data, &mut off)?;
+    if feat & 0xF8 != 0 { return None; }
+    let has_inner = (feat & 0x01) != 0;
+    let has_ffn = (feat & 0x02) != 0;
+    let kv_head_dim = q_dim / num_heads.max(1);
+
+    k_nano::slog_cortex!("HWEXPERT", "info",
+        "v6 multi-head h={} L={} q_dim={} vocab={} ff={} feat=0x{:02x}",
+        hidden, num_layers, q_dim, vocab_size, intermediate_size, feat);
+
+    // Embed (packed + scale — sem prefixo, ADR-0085 D1)
+    let (embed, embed_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, vocab_size)?;
+
+    // Layers — shapes fixos hwexpert (q/k/v/o=(h,h), g/u=(h,ff), d=(ff,h))
+    let mut layers = Vec::with_capacity(num_layers);
+    for _i in 0..num_layers {
+        let rms_attn = read_f32_vec(data, &mut off, hidden)?;
+        let rms_ffn = read_f32_vec(data, &mut off, hidden)?;
+        let rms_inner_attn = if has_inner { read_f32_vec(data, &mut off, hidden)? }
+                             else { vec![1.0; kv_head_dim * num_heads] };
+        let rms_ffn_norm = if has_ffn { read_f32_vec(data, &mut off, intermediate_size)? }
+                           else { vec![1.0; intermediate_size] };
+        let (q, q_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, hidden)?;
+        let (k, k_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, hidden)?;
+        let (v, v_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, hidden)?;
+        let (o, o_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, hidden)?;
+        let (gate, gate_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, intermediate_size)?;
+        let (up, up_scale) = read_ternary_tensor_with_scale(data, &mut off, hidden, intermediate_size)?;
+        let (down, down_scale) = read_ternary_tensor_with_scale(data, &mut off, intermediate_size, hidden)?;
+        layers.push(LayerWeights {
+            rms_attn, q, q_scale, k, k_scale, v, v_scale, o, o_scale,
+            rms_ffn, rms_inner_attn, rms_ffn_norm,
+            gate, gate_scale, up, up_scale, down, down_scale,
+            kv_dim: q_dim, num_kv_heads: num_heads, intermediate_size,
+            ffn_group_size: intermediate_size * q_dim / hidden.max(1),
+        });
+    }
+
+    let rms_final = read_f32_vec(data, &mut off, hidden)?;
+
+    // 5 heads (substitui unembed/medusa — ADR-0085 §3.2)
+    let (family_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 17)?;
+    let (fw_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 8)?;
+    let (agent_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 9)?;
+    let (caps_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 10)?;
+    let (next_head, _) = read_ternary_tensor_with_scale(data, &mut off, hidden, 9)?;
+
+    k_nano::slog_cortex!("HWEXPERT", "info",
+        "v6 multi-head loaded: hidden={} layers={} heads=[17,8,9,10,9] {}KB",
+        hidden, num_layers, data.len() / 1024);
+    GLOBAL_MODEL_PARAMS.store(data.len() as u64, core::sync::atomic::Ordering::Relaxed);
+
+    Some(HwExpertV4Model {
+        hidden, num_layers, embed, embed_scale, layers, rms_final,
+        family_head, fw_head, agent_head, caps_head, next_head,
+        q_dim, ff_dim: intermediate_size,
+    })
+}
+
 /// Pack 4 tokens from VID/DID (same packing as Python pack_vid_did)
 fn pack_vid_did(vid: u16, did: u16, vocab: u32) -> [u32; 4] {
     let v = vocab as u16;
@@ -3102,6 +3197,67 @@ fn v6_roundtrip_load() {
     assert!(tern_eq(&m.embed, &model.embed));
     assert!(tern_eq(&m.unembed, &model.unembed));
     assert!(m.embed_scale == 1.5 && m.unembed_scale == 0.6);
+}
+
+/// HW Expert v6 (ADR-0085 §3.2): o arquivo convertido tools/target/hw_expert_v6.bitnet
+/// (mt=1) deve carregar e produzir predições IDÊNTICAS ao v5 legado
+/// (models/hw_expert/hw_expert_v4.bitnet) nos devices canônicos — prova de que
+/// a conversão é fiel e o loader v6 lê o mesmo modelo (F1b).
+#[cfg(test)]
+#[test]
+fn hwexpert_v6_matches_v5_predictions() {
+    let v5_bytes = include_bytes!("../../../models/hw_expert/hw_expert_v4.bitnet");
+    let v6_bytes = include_bytes!("../../../tools/target/hw_expert_v6.bitnet");
+
+    let m5 = load_hwexpert_v5(v5_bytes).expect("v5 load falhou");
+    let m6 = load_hwexpert_v6(v6_bytes).expect("v6 load falhou");
+
+    assert_eq!(m6.hidden, 128);
+    assert_eq!(m6.num_layers, 6);
+    assert_eq!(m6.q_dim, 32, "q_dim preservado (forward trunca atenção)");
+    assert_eq!(m6.ff_dim, 256);
+
+    let devices = [
+        (0x8086u16, 0x100Eu16),
+        (0x1234u16, 0x1111u16),
+        (0x8086u16, 0x1237u16),
+        (0x8086u16, 0x7000u16),
+        (0x8086u16, 0x7010u16),
+        (0x8086u16, 0x7113u16),
+        (0x1AF4u16, 0x1000u16),
+        (0x8086u16, 0x2723u16),
+        (0x168Cu16, 0x003Eu16),
+        (0x10ECu16, 0x8139u16),
+    ];
+    for (vid, did) in devices {
+        let p5 = predict_hw_v4(&m5, vid, did);
+        let p6 = predict_hw_v4(&m6, vid, did);
+        assert_eq!(
+            p5.family_id, p6.family_id,
+            "family_id {vid:04x}:{did:04x} v5={} v6={}",
+            p5.family_id, p6.family_id
+        );
+        assert_eq!(
+            p5.fw_id, p6.fw_id,
+            "fw_id {vid:04x}:{did:04x} v5={} v6={}",
+            p5.fw_id, p6.fw_id
+        );
+        assert_eq!(
+            p5.agent_id, p6.agent_id,
+            "agent_id {vid:04x}:{did:04x} v5={} v6={}",
+            p5.agent_id, p6.agent_id
+        );
+        assert_eq!(
+            p5.caps_bits, p6.caps_bits,
+            "caps {vid:04x}:{did:04x} v5={:#x} v6={:#x}",
+            p5.caps_bits, p6.caps_bits
+        );
+        assert_eq!(
+            p5.next_action, p6.next_action,
+            "next {vid:04x}:{did:04x} v5={} v6={}",
+            p5.next_action, p6.next_action
+        );
+    }
 }
 
 pub fn argmax_row(logits: &Tensor, row: usize) -> u32 {
