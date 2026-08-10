@@ -47,7 +47,9 @@ jobs:
             -drive if=pflash,format=raw,file=/usr/share/ovmf/OVMF.fd,readonly=on \
             -netdev user,id=n0 -device e1000,netdev=n0 \
             -display none -serial file:logs/boot.txt || true
-          grep -q "Phase 6" logs/boot.txt && grep -q "tick=" logs/boot.txt \
+          # #5: o kernel atual loga [BOOT:Runtime], nunca "Phase 6" (evidência
+          # 05/08: "Phase 6: 0" — grep positivo obsoleto que derrubava o CI).
+          grep -q '\[BOOT:Runtime\]' logs/boot.txt && grep -q 'tick=' logs/boot.txt \
             || { echo "BOOT SMOKE FAILED"; tail -50 logs/boot.txt; exit 1; }
           # Auditoria 10 itens #5: negativo em sinais da classe "reboot loop"
           # (IST/GDT zerado, walk HUGE_PAGE, triple fault). Zero tolerância para
