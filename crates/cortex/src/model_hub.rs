@@ -323,20 +323,23 @@ pub fn slot_from_bitnet_bytes(len: usize) -> ModelSlot {
 /// FAT 8.3 candidatos por slot (ordem de preferência).
 pub fn fat_names_for(slot: ModelSlot) -> &'static [&'static str] {
     match slot {
-        ModelSlot::Reranker => &["RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
-        ModelSlot::Vision => &["VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
+        // target1 canônico (.v6 primeiro); fallback .BIN legado
+        ModelSlot::Reranker => &["RERANKER.v6", "RERANKER.BIN", "RERANK.BITNET", "RERANK.BIN"],
+        ModelSlot::Vision => &["VISION.v6", "VISION.BIN", "SIGLIP.BIN", "VIT.BIN"],
         ModelSlot::GeneratorPro => &[
+            "PRO.v6",
             "PRO.BIN",
             "BITNET3B.BIN",
             "BITN3B.BIN",
             "LLAMA8B.BIN",
             "BITNET2B.BIN",
         ],
-        ModelSlot::RustCoder => &["RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
-        ModelSlot::HwExpert => &["HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
-        ModelSlot::Learner => &["LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
-        ModelSlot::Agent => &["AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
+        ModelSlot::RustCoder => &["RUSTCDR3.v6", "RUSTCDR3.BIN", "RUSTCDR2.BIN", "RUSTCDR.BITNET", "RUSTCDR.BIN"],
+        ModelSlot::HwExpert => &["HWEXPRT.v6", "HWEXPRT.BIN", "HWEXPERT.BIN", "HWEXPRT4.BIN", "HWEXPRT4.bin"],
+        ModelSlot::Learner => &["LEARNER.v6", "LEARNER.BIN", "QWEEN05.BIN", "QWEN05B.BIN"],
+        ModelSlot::Agent => &["AGENT.v6", "AGENT.BIN", "QWEN3B.BIN", "QWEN.BIN"],
         ModelSlot::Active => &[
+            "BITNET2B.v6",
             "BITNET2B.BIN",
             "BITNET13.BIN",
             "BITNET850.BIN",
