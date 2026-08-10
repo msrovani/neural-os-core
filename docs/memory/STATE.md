@@ -1,4 +1,16 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s257 — neural-sgdb Maturation v0.3 (crate comunitário)
+#   SESSION_257: maturação do repo neural-sgdb (separado) — 14 commits
+#     (24aacda..96cac70, +1.475/−87), matriz DoD verde 66+1/44+1/75+1 p2p.
+#     P1 baseline (no-default quebrava) · P2 correctness (VectorClock
+#     semântico, CRDT multi-value+own_writes, FileStorage recovery — CRÍTICO
+#     tombstone ressuscitava, HIGH panic truncado) · P3 BQ bounded top-k
+#     (320µs vs 592µs) · P4 durability+fsync, compact atômico, rebuild ·
+#     P5 MemoryState sem quebrar NMD1 · P6 fuzz + revisão independente (5
+#     fixes). NMD1/TKLV byte-idênticos ao OS preservados; API aditiva.
+#     v0.3.0 bump. 6 bugs reais pegos.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s256 — neural-sgdb standalone (extração Modo 1)
 #   SESSION_256: núcleo `k_ai::sgdb` (ADR-0063) extraído para repo comunitário
 #     separado github.com/msrovani/neural-sgdb — MIT OR Apache-2.0, zero deps,

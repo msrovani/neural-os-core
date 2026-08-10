@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+### SESSION_257: neural-sgdb Maturation Sprint v0.3 — crate comunitário (2026-08-10)
+
+**14 commits no repo neural-sgdb (`24aacda..96cac70`, +1.475/−87), matriz DoD verde:**
+
+- **P1 Baseline:** `cargo test --no-default-features` quebrava (30 erros —
+  testes usavam prelude std + backends sem gate) → imports alloc, gates de
+  feature, exemplo mcp_server por feature.
+- **P2 Correctness:** VectorClock semântico (happens_before/concurrent/merge/
+  PartialEq por mapa — o derive por slot fazia relógios com mesma causalidade
+  serem "desiguais"); CRDT `MergeVerdict` + `conflicts` (multi-value, self-packet
+  ignorado, `own_writes` como base de concorrência); FileStorage recovery
+  endurecido (bounds, le32 sem unwrap, tombstone-before-bound — CRÍTICO: o
+  tombstone vlen=u32::MAX era tratado como length absurdo e a chave deletada
+  RESSUSCITAVA no reopen); parsing safety (rd_u32/rd_u64); recall determinístico
+  (dedupe overwrite BQ + tie-break por key).
+- **P3 Performance:** BQ top-k bounded heap O(N·D/64 + N log k) — bench
+  heap(k=5)=320µs vs full-sort(k=N)=592µs; recall@5 baseline honesto (cosseno
+  FP32 real; 0% em dados sintéticos — sign-BQ diverge de cosseno em ruído).
+- **P4 Persistence:** durability explícita (Buffered/Flushed/Durable + fsync
+  com handle read+write p/ Windows); `FileStorage::compact()` atômico
+  (temp+rename, remove tombstones); `Sgdb::rebuild_indices` público +
+  `open_with_node_id`.
+- **P5 Memory semantics:** `MemoryState` (Active/Superseded/Archived/
+  Invalidated) **sem quebrar NMD1** (side-table `sys/state/` via Storage cru);
+  `MemoryLayer::from_u8` = ponto único de validação.
+- **P6 Validation:** fuzz adversarial determinístico (decode/view/scan/CRDT
+  nunca panics) + **revisão independente ora-1 → 5 fixes** (HIGH tombstone
+  truncado PANICAVA no open; MED tombstone sem CRC; MED CRDT sucessor causal
+  do mesmo peer virava Conflict para sempre; LOW compact vlen=0 vs TOMBSTONE;
+  LOW set_state log).
+- **Compatibilidade:** API aditiva (remember/recall/rag_context intactos);
+  NMD1/TKLV byte-idênticos ao OS (MemoryState não serializado); zero deps
+  novas; sem threads/async.
+- **Matriz:** 66+1 default · 44+1 no-default · 75+1 p2p · no_std/std-only/
+  std+file-storage/examples limpos. v0.3.0 bump.
+- **6 bugs reais pegos** (baseline, tombstone CRÍTICO, HIGH panic, MED CRDT,
+  BQ overwrite dup, VectorClock igualdade).
+
 ### SESSION_256: neural-sgdb — SGDB extraído como projeto comunitário standalone (2026-08-09)
 
 **Extração + 4 commits no repo novo (github.com/msrovani/neural-sgdb), 0 erros no OS:**
