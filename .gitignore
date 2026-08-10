@@ -77,6 +77,7 @@ pipenv
 # Modelos grandes (>100 MB) - apenas local
 *.safetensors
 models/llm_moe/bitnet_2B.bitnet
+models/bitnet_2B.bitnet
 models/tokenizer/BGE_M3.BIN
 # Modelos de terceiros (MIT) — baixados via tools/download_models.py
 models/tokenizer/PIPER_PT_BR.BIN
