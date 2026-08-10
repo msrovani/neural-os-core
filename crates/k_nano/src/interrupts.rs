@@ -61,35 +61,35 @@ const TIMER_IST_INDEX: u16 = 3;
 // BSP uses static stacks; APs will have their IST stacks allocated via init_ap_ist().
 static mut TSS_ARRAY: [TaskStateSegment; MAX_APS + 1] = [TaskStateSegment::new(); MAX_APS + 1];
 
-lazy_static! {
-    static ref TSS: &'static TaskStateSegment = {
-        // BSP TSS at index 0
-        let tss = unsafe { &mut TSS_ARRAY[0] };
-        tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 5;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
-            const STACK_SIZE: usize = 4096 * 4;
-            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
-            let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(STACK));
-            stack_start + STACK_SIZE
-        };
-        tss
+/// Auditoria #2 (opção a): init EXPLÍCITO do TSS do BSP (TSS_ARRAY[0]) com
+/// stacks IST estáticos. Sem lazy_static TSS — a ordem fica garantida em
+/// init_idt(): init_bsp_tss() → GDT (deref) → load. O GDT referencia
+/// TSS_ARRAY[0] direto e HARD-GATEIA ISTs zerados (classe SESSION_250:
+/// lazy_static que inicializa outro static pode nunca rodar → push p/ VA 0 →
+/// #DF → triple fault). Chame ANTES de qualquer deref do GDT.
+fn init_bsp_tss() {
+    const DF_STACK_SIZE: usize = 4096 * 5;
+    const IST_STACK_SIZE: usize = 4096 * 4;
+    static mut DF_STACK: [u8; DF_STACK_SIZE] = [0; DF_STACK_SIZE];
+    static mut PF_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
+    static mut GP_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
+    static mut TIMER_STACK: [u8; IST_STACK_SIZE] = [0; IST_STACK_SIZE];
+    let tss = unsafe { &mut TSS_ARRAY[0] };
+    tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = {
+        let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(DF_STACK));
+        stack_start + DF_STACK_SIZE
+    };
+    tss.interrupt_stack_table[PAGE_FAULT_IST_INDEX as usize] = {
+        let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(PF_STACK));
+        stack_start + IST_STACK_SIZE
+    };
+    tss.interrupt_stack_table[GENERAL_PROTECTION_IST_INDEX as usize] = {
+        let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(GP_STACK));
+        stack_start + IST_STACK_SIZE
+    };
+    tss.interrupt_stack_table[TIMER_IST_INDEX as usize] = {
+        let stack_start = VirtAddr::from_ptr(core::ptr::addr_of!(TIMER_STACK));
+        stack_start + IST_STACK_SIZE
     };
 }
 
@@ -104,11 +104,21 @@ lazy_static! {
         // Restaura 1 TSS compartilhado (TSS_ARRAY[0], BSP), design pré-f41aa03
         // com boot conhecido OK. ISTs per-AP continuam alocadas em TSS_ARRAY
         // (init_ap_tss preenche; GDT referencia TSS[0] até haver GDT maior).
-        // ⚠️ &*TSS (deref do lazy_static) FORÇA o init do TSS — sem isso os
-        // interrupt_stack_table ficam zerados (TaskStateSegment::new) e a
-        // entrega de #PF/#GP/timer com IST faz push para 0 → #DF → triple
-        // (SESSION_250 — reboot loop pós-heap do commit 2662d50).
-        let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(&*TSS));
+        // Auditoria #2 (a): sem lazy_static TSS — referencia TSS_ARRAY[0]
+        // direto; init_bsp_tss() deve rodar ANTES (ordem explícita em
+        // init_idt). HARD-GATE: ISTs zerados = init não rodou (classe
+        // SESSION_250: entrega de #PF/#GP/timer com IST faz push p/ 0 → #DF
+        // → triple, reboot loop do commit 2662d50) — halt com mensagem.
+        let bsp_tss = unsafe { &*core::ptr::addr_of!(TSS_ARRAY[0]) };
+        // TaskStateSegment é repr(C, packed) — ler campos por valor via addr_of.
+        let ist_ptr = unsafe { core::ptr::addr_of!(bsp_tss.interrupt_stack_table) };
+        let df_ist = unsafe { (*ist_ptr)[DOUBLE_FAULT_IST_INDEX as usize] };
+        let pf_ist = unsafe { (*ist_ptr)[PAGE_FAULT_IST_INDEX as usize] };
+        if df_ist == VirtAddr::new(0) || pf_ist == VirtAddr::new(0) {
+            puts(b"[IDT] FATAL: init_bsp_tss() nao rodou antes do GDT (ISTs zerados) - halt\n");
+            loop { x86_64::instructions::hlt(); }
+        }
+        let shared_tss_selector = gdt.add_entry(Descriptor::tss_segment(bsp_tss));
         let tss_selectors = [shared_tss_selector; MAX_APS + 1];
         
         (gdt, Selectors { code_selector, tss_selectors })
@@ -582,6 +592,10 @@ pub unsafe fn ap_load_idt_and_tss(tss_selector: SegmentSelector) {
 
 /// Carrega GDT + TSS + IDT
 pub fn init_idt() {
+    // Auditoria #2 (a): ordem explícita — TSS antes de QUALQUER deref do GDT
+    // (o lazy_static GDT referencia TSS_ARRAY[0] e o gate acima falha alto se
+    // os ISTs ainda estiverem zerados).
+    init_bsp_tss();
     GDT.0.load();
     unsafe {
         x86_64::instructions::segmentation::CS::set_reg(GDT.1.code_selector);

@@ -89,6 +89,17 @@ pub fn predict_all_pci() {
     k_nano::slog_kai!("SGDB", "hw_predict", "HW Expert v4 NN gated off (veredito 2026-08-04) — skip");
 }
 
+/// ADR-0082 Onda CPU — LEITURA (fecha o loop: consumidores leem /hw/* de
+/// volta em vez de só escrever). `key` sem prefixo (ex. "cpu/isa") → lê
+/// "hw/cpu/isa". None se indisponível (SGDB off / key ausente / não-utf8).
+pub fn hw_get(key: &str) -> Option<String> {
+    let full = format!("{}{}", ns::HW, key);
+    match get_kv(&full) {
+        Ok(Some(bytes)) => String::from_utf8(bytes).ok(),
+        _ => None,
+    }
+}
+
 /// KV cru sob key absoluta (ex. `hanr/user`, `pkg/foo`, `audit/head`).
 pub fn put_kv(key: &str, data: &[u8]) -> Result<(), &'static str> {
     ensure_ready();

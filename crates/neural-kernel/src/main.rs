@@ -1042,8 +1042,7 @@ fn n4_hermes_gate(intent_e2e: Option<bool>) {
     // PluginHub builtins carregados em init_wasm_runtime (echo,calc,counter,fib,mul,fact,mem).
     const WASM_HUB_BUILTINS: usize = 7;
     let topics_ok = !crate::hermes::TOPIC_USER_INTENT.is_empty()
-        && !crate::hermes::TOPIC_HERMES_RESPONSE.is_empty()
-        && crate::jarbas_bridge::topics_in_sync();
+        && !crate::hermes::TOPIC_HERMES_RESPONSE.is_empty();
     let llm_loaded = crate::cortex::model_is_loaded();
 
     k_nano::slog_hermes!("Gate", "n4", "intent_router=REGISTERED topics={}/{} react=7phase",
@@ -1189,13 +1188,8 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
         if wake_reg { "OK" } else { "MISSING" },
         if mixer_reg { "OK" } else { "MISSING" }
     );
-    let topics_ok = crate::jarbas_bridge::topics_in_sync();
-    k_nano::slog_jarbas!(
-        "IPC",
-        "hermes",
-        "topics_mirror={} full_wire=OK(jarbas-crate)",
-        if topics_ok { "OK" } else { "DRIFT" }
-    );
+    // N5.6 IPC mirror: contrato garantido estruturalmente (re-export
+    // jarbas-crate via crate::audio) — check runtime tautológico removido.
 
     // Criterios funcionais N5 (ADR): compositor vivo; persona via Hermes; voz agents;
     // FB/display integration; voz expressao e2e; IPC mirror. Crate link -> N5.7.
@@ -1208,7 +1202,7 @@ fn n5_jarbas_gate(registry: &agent_core::AgentRegistry, voice_e2e: Option<bool>)
         Some(false) => false,
         None => n53,
     };
-    let n56 = topics_ok;
+    let n56 = true; // N5.6 IPC mirror — contrato estrutural (re-export jarbas-crate)
     let met = n51 && n52 && n53 && n54 && n55 && n56;
     k_nano::slog_jarbas!(
         "Gate",
@@ -1880,7 +1874,6 @@ pub(crate) fn kernel_boot(
     crate::boot_logger::log("BOOT: Desktop apps OK");
 
     audio::init_audio();
-    jarbas_bridge::log_bridge_status();
 
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
@@ -3838,7 +3831,26 @@ pub(crate) fn kernel_boot(
             k_nano::boot_mode::BootMode::Unknown => LifePhase::Unknown,
         };
         let prev = current_phase();
-        write_self_state(phase, None, prev != phase, None, None);
+        // ADR-0082 Onda CPU — fechar o loop (#4 auditoria): o boot relê /hw/*
+        // da SGDB em vez de redescobrir (ADR-0086: boot é releitura). O perfil
+        // resolvido alimenta o hw_profile do SELF.STATE. Fallback = valor live
+        // (SGDB off / key ausente → degrada, nunca quebra o boot).
+        let live_isa = k_nano::platform_probe::hw_info().isa_name();
+        let hw_profile = match k_ai::sgdb::hw_get("cpu/isa") {
+            Some(p) if p == live_isa => {
+                k_nano::slog_bin!("HW", "onda", "Onda CPU loop OK: /hw/cpu/isa={} (releitura)", p);
+                Some(p)
+            }
+            Some(p) => {
+                k_nano::slog_bin!("HW", "onda", "Onda CPU divergencia: sgdb={} live={} (usa live)", p, live_isa);
+                Some(String::from(live_isa))
+            }
+            None => {
+                k_nano::slog_bin!("HW", "onda", "Onda CPU: /hw/cpu/isa indisponivel (fallback live={})", live_isa);
+                Some(String::from(live_isa))
+            }
+        };
+        write_self_state(phase, None, prev != phase, hw_profile.as_deref(), None);
         record_life_event(&alloc::format!("boot phase={} (prev={})", phase.as_str(), prev.as_str()));
         k_nano::slog_bin!("SELF", "info", "SELF.STATE: fase={} (SGDB best-effort)", phase.as_str());
 

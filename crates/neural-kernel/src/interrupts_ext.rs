@@ -245,11 +245,57 @@ extern "x86-interrupt" fn page_fault_handler(f: InterruptStackFrame, code: PageF
     }
     dump_exception("#PF", &f, Some(code.bits() as u64));
     puts(b" CR2="); puthex(cr2.as_u64()); putc(b'\n');
+    #[cfg(feature = "heap-trace")]
+    dump_pf_walk(cr2.as_u64(), f.stack_pointer.as_u64());
     let count = PAGE_FAULT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if count <= 10 {
         return;
     }
     loop { x86_64::instructions::hlt(); }
+}
+
+/// Debug heap-trace: caminha a page table ATUAL (CR3 do fault) até a CR2 e
+/// imprime as entradas — mostra se o mapeamento "verificado" no grow ainda
+/// existe no momento do #PF (e em qual CR3).
+#[cfg(feature = "heap-trace")]
+fn dump_pf_walk(cr2: u64, sp: u64) {
+    use x86_64::structures::paging::{PageTable, PageTableFlags};
+    use x86_64::VirtAddr;
+    let pmoff = crate::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pmoff == 0 { return; }
+    let base = VirtAddr::new(pmoff);
+    let virt = VirtAddr::new(cr2 & !0xFFF);
+    // Dump do stack: return addresses do memcpy → chamadores (0xffffffff80xxxxxx).
+    unsafe {
+        let sp_ptr = sp as *const u64;
+        for i in 0..16 {
+            let val = core::ptr::read_volatile(sp_ptr.add(i));
+            if val >= 0xffffffff80000000 && val < 0xffffffffc0000000 {
+                puts(b"  stack["); putdec(i as u64); puts(b"]="); puthex(val); puts(b"\n");
+            }
+        }
+    }
+    let (l4f, _) = x86_64::registers::control::Cr3::read();
+    let l4 = unsafe { &*((base + l4f.start_address().as_u64()).as_ptr::<PageTable>()) };
+    let e3 = &l4[virt.p4_index()];
+    let e3f = e3.flags();
+    puts(b"  pfwalk cr3="); puthex(l4f.start_address().as_u64());
+    puts(b" p4["); putdec(u64::from(virt.p4_index())); puts(b"] addr="); puthex(e3.addr().as_u64()); puts(b" flags="); puthex(e3f.bits()); puts(b"\n");
+    if !e3f.contains(PageTableFlags::PRESENT) { return; }
+    let l3 = unsafe { &*((base + e3.addr().as_u64()).as_ptr::<PageTable>()) };
+    let e2 = &l3[virt.p3_index()];
+    let e2f = e2.flags();
+    puts(b"  pfwalk p3["); putdec(u64::from(virt.p3_index())); puts(b"] addr="); puthex(e2.addr().as_u64()); puts(b" flags="); puthex(e2f.bits()); puts(b" huge="); putdec(e2f.contains(PageTableFlags::HUGE_PAGE) as u64); puts(b"\n");
+    if !e2f.contains(PageTableFlags::PRESENT) || e2f.contains(PageTableFlags::HUGE_PAGE) { return; }
+    let l2 = unsafe { &*((base + e2.addr().as_u64()).as_ptr::<PageTable>()) };
+    let e1 = &l2[virt.p2_index()];
+    let e1f = e1.flags();
+    puts(b"  pfwalk p2["); putdec(u64::from(virt.p2_index())); puts(b"] addr="); puthex(e1.addr().as_u64()); puts(b" flags="); puthex(e1f.bits()); puts(b" huge="); putdec(e1f.contains(PageTableFlags::HUGE_PAGE) as u64); puts(b"\n");
+    if !e1f.contains(PageTableFlags::PRESENT) || e1f.contains(PageTableFlags::HUGE_PAGE) { return; }
+    let l1 = unsafe { &*((base + e1.addr().as_u64()).as_ptr::<PageTable>()) };
+    let pte = &l1[virt.p1_index()];
+    let ptef = pte.flags();
+    puts(b"  pfwalk p1["); putdec(u64::from(virt.p1_index())); puts(b"] addr="); puthex(pte.addr().as_u64()); puts(b" flags="); puthex(ptef.bits()); puts(b" present="); putdec(ptef.contains(PageTableFlags::PRESENT) as u64); puts(b" writable="); putdec(ptef.contains(PageTableFlags::WRITABLE) as u64); puts(b"\n");
 }
 
 // --------------------------------------------------------------------------

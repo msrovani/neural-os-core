@@ -49,4 +49,12 @@ jobs:
             -display none -serial file:logs/boot.txt || true
           grep -q "Phase 6" logs/boot.txt && grep -q "tick=" logs/boot.txt \
             || { echo "BOOT SMOKE FAILED"; tail -50 logs/boot.txt; exit 1; }
+          # Auditoria 10 itens #5: negativo em sinais da classe "reboot loop"
+          # (IST/GDT zerado, walk HUGE_PAGE, triple fault). Zero tolerância para
+          # [SELF-HEAL] e assinatura de triple fault; [EXC] tolera até 3 (o
+          # page_fault_handler aceita count<=3 por design — evidência 0041: 0).
+          EXC=$(grep -c '\[EXC\]' logs/boot.txt 2>/dev/null || true)
+          if grep -Eq '\[SELF-HEAL\]|CR2=0xfffffffffffffff8' logs/boot.txt || [ "${EXC:-0}" -ge 4 ]; then
+            echo "BOOT SMOKE FAILED: exceção/triple fault no log ([EXC]=${EXC:-0})"; tail -50 logs/boot.txt; exit 1
+          fi
           echo "BOOT SMOKE PASS"

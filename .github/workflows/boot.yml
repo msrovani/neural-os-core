@@ -27,6 +27,13 @@ jobs:
       - name: Verificar boot completo
         run: |
           grep -q '\[BOOT:Runtime\]' boot.txt || { echo "FALHA: boot não chegou ao Runtime"; exit 1; }
+          # Auditoria 10 itens #5: negativo em sinais da classe "reboot loop".
+          # Zero tolerância para [SELF-HEAL]/triple fault; [EXC] até 3 (design do
+          # page_fault_handler count<=3).
+          EXC=$(grep -c '\[EXC\]' boot.txt 2>/dev/null || true)
+          if grep -Eq '\[SELF-HEAL\]|CR2=0xfffffffffffffff8' boot.txt || [ "${EXC:-0}" -ge 4 ]; then
+            echo "FALHA: exceção/triple fault no boot ([EXC]=${EXC:-0})"; tail -50 boot.txt; exit 1
+          fi
           AGENTS=$(grep -oP 'AgentFleet\] \K[0-9]+' boot.txt | head -1)
           echo "Agentes registrados: $AGENTS"
       - uses: actions/upload-artifact@v4

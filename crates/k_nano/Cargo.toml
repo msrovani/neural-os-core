@@ -35,6 +35,8 @@ soft-reboot-bootlog = []
 boot-chime = []
 # Labor 53: AP workers vivos (`ap_pollable`) — OFF default (deadlock sem IDT/IPI pleno).
 ap-pollable = []
+# Auditoria 10 itens #8: log diagnóstico frame[] do grow_bump_auto (SESSION_252) — OFF default.
+heap-trace = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "heap-trace"))'] }

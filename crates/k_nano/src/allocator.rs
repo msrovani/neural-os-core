@@ -8,6 +8,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicIsize, AtomicUsize, Ordering};
 use spin::Mutex;
 use talc::{Span, Talc, Talck, ErrOnOom};
+use x86_64::structures::paging::page_table::PageTableEntry;
 use x86_64::structures::paging::{FrameAllocator, PageTable, PageTableFlags};
 use x86_64::{PhysAddr, VirtAddr};
 
@@ -86,10 +87,26 @@ fn grow_bump_auto(need: usize) -> bool {
 
     let want = need.saturating_add(HEAP_GROW_STEP - 1) / HEAP_GROW_STEP * HEAP_GROW_STEP;
     let extra = want.saturating_sub(current_limit);
-    let diff_pages = extra.div_ceil(4096);
+    // SESSION_258/fix: cobrir a página que contém o último byte pedido
+    // (heap_start + want - 1) — com heap_start desalinhado, o fim da região
+    // caía no meio de uma página desmapeada → #PF (insert_rec/ART no boot).
+    let base_off = (heap_start + current_limit) % 4096;
+    let diff_pages = (extra + base_off).div_ceil(4096);
+
+    #[cfg(feature = "heap-trace")]
+    {
+        crate::slog_nano!("HEAP", "PT", "grow: heap_start={:#x} (aligned={:#x}) cr3base={:#x} current={}MB need={} want={}MB diff_pages={}",
+            heap_start, heap_start & !0xFFF, base.as_u64(), current_limit / (1024*1024), need, want / (1024*1024), diff_pages);
+    }
 
     let mut allocated = 0usize;
-    for _i in 0..diff_pages {
+    #[cfg_attr(not(feature = "heap-trace"), allow(unused_variables))]
+    for i in 0..diff_pages {
+        #[cfg(feature = "heap-trace")]
+        if i == 0 || i == 511 || i == 512 || i == diff_pages - 1 {
+            let v = VirtAddr::new((heap_start + current_limit + i * 4096) as u64);
+            unsafe { dump_pt_walk(base, v, "grow", i) };
+        }
         // Lock só para allocate_frame — solta ANTES de map_page_direct
         // (map_page_direct → alloc_pt_frame re-locka; TicketLock não é reentrante).
         let phys = {
@@ -100,17 +117,18 @@ fn grow_bump_auto(need: usize) -> bool {
             }
         };
         let virt = VirtAddr::new((heap_start + current_limit + allocated * 4096) as u64);
-        // SESSION_252 diagnóstico (ora-1): loga o 1º frame físico alocado ao
-        // heap — para comparar com os RX buffers do e1000 (corrupção OTA).
+        // SESSION_252 diagnóstico (ora-1) — OFF default (feature heap-trace):
+        // loga o 1º frame físico alocado ao heap para comparar com os RX buffers
+        // do e1000. Causa raiz do OTA hash_mismatch era o sha256 (aa66c8b), não
+        // overlap de frames — o log só é útil em sessões de investigação.
+        #[cfg(feature = "heap-trace")]
         if allocated < 4 || allocated % 512 == 0 {
             crate::slog_nano!("HEAP", "BUMP", "frame[{}] phys={:#x} virt={:#x}", allocated, phys, virt.as_u64());
         }
-        unsafe {
-            map_page_direct(base, virt, phys);
-            // Verificação real (AIOS): mapa apenas se a página ficou PRESENT.
-            if heap_pte_present(base, virt) {
-                allocated += 1;
-            }
+        // Auditoria #1: mapa apenas se map_page_direct confirma (bool) E a
+        // página está PRESENT (heap_pte_present — verificação real de CR3).
+        if unsafe { map_page_direct(base, virt, phys) && heap_pte_present(base, virt) } {
+            allocated += 1;
         }
     }
     if allocated > 0 {
@@ -123,6 +141,42 @@ fn grow_bump_auto(need: usize) -> bool {
     }
     // Retorna true SÓ se o novo limite cobre `need` (senão o alloc re-tenta).
     need <= HEAP_LIMIT.load(Ordering::Relaxed)
+}
+
+/// Debug heap-trace: caminha a page table ATUAL (CR3) para um endereço e
+/// imprime as entradas e3/e2/e1/pte com flags. Só compila com a feature
+/// heap-trace (OFF default). Ajuda a diagnosticar mapeamentos "verificados"
+/// por heap_pte_present que depois #PFam (classe map_page_direct/HUGE_PAGE).
+#[cfg(feature = "heap-trace")]
+unsafe fn dump_pt_walk(base: VirtAddr, virt: VirtAddr, tag: &str, i: usize) {
+    use x86_64::structures::paging::PageTableFlags;
+    let (l4f, _) = x86_64::registers::control::Cr3::read();
+    let (p4, p3, p2, p1) = (virt.p4_index(), virt.p3_index(), virt.p2_index(), virt.p1_index());
+    crate::slog_nano!("HEAP", "PT", "{} i={} cr3={:#x} virt={:#x} p4={:?} p3={:?} p2={:?} p1={:?}",
+        tag, i, l4f.start_address().as_u64(), virt.as_u64(), p4, p3, p2, p1);
+    let l4 = &*((base + l4f.start_address().as_u64()).as_ptr::<PageTable>());
+    let e3 = &l4[p4];
+    let e3f = e3.flags();
+    crate::slog_nano!("HEAP", "PT", "{} e3(p4[{:?}]) addr={:#x} flags={:#x} huge={} present={}",
+        tag, p4, e3.addr().as_u64(), e3f.bits(), e3f.contains(PageTableFlags::HUGE_PAGE), e3f.contains(PageTableFlags::PRESENT));
+    if !e3f.contains(PageTableFlags::PRESENT) || e3f.contains(PageTableFlags::HUGE_PAGE) { return; }
+    let l3 = &*((base + e3.addr().as_u64()).as_ptr::<PageTable>());
+    let e2 = &l3[p3];
+    let e2f = e2.flags();
+    crate::slog_nano!("HEAP", "PT", "{} e2(p3[{:?}]) addr={:#x} flags={:#x} huge={} present={}",
+        tag, p3, e2.addr().as_u64(), e2f.bits(), e2f.contains(PageTableFlags::HUGE_PAGE), e2f.contains(PageTableFlags::PRESENT));
+    if !e2f.contains(PageTableFlags::PRESENT) || e2f.contains(PageTableFlags::HUGE_PAGE) { return; }
+    let l2 = &*((base + e2.addr().as_u64()).as_ptr::<PageTable>());
+    let e1 = &l2[p2];
+    let e1f = e1.flags();
+    crate::slog_nano!("HEAP", "PT", "{} e1(p2[{:?}]) addr={:#x} flags={:#x} huge={} present={}",
+        tag, p2, e1.addr().as_u64(), e1f.bits(), e1f.contains(PageTableFlags::HUGE_PAGE), e1f.contains(PageTableFlags::PRESENT));
+    if !e1f.contains(PageTableFlags::PRESENT) || e1f.contains(PageTableFlags::HUGE_PAGE) { return; }
+    let l1 = &*((base + e1.addr().as_u64()).as_ptr::<PageTable>());
+    let pte = &l1[p1];
+    let ptef = pte.flags();
+    crate::slog_nano!("HEAP", "PT", "{} pte(p1[{:?}]) addr={:#x} flags={:#x} present={} writable={}",
+        tag, p1, pte.addr().as_u64(), ptef.bits(), ptef.contains(PageTableFlags::PRESENT), ptef.contains(PageTableFlags::WRITABLE));
 }
 
 /// Tamanho mínimo do bloco de auto-crescimento do heap.
@@ -141,12 +195,16 @@ pub fn heap_used_bytes() -> usize {
     if offset < 0 { 0 } else { offset as usize }
 }
 
-/// Buffer de heap estático — seção própria `.bss.heap` colocada no FIM da
-/// imagem (limine.ld). Extensão alem dele (resize_bump_heap) só toca espaço
+/// Buffer de heap estático — seção própria `.heap` (NÃO `.bss.heap`: o padrão
+/// `*(.bss .bss.*)` do linker engole `.bss.heap` e o HEAP_BUFFER voltava para
+/// o `.bss` comum, desalinhado — SESSION_258). Colocada no FIM da imagem
+/// (limine.ld) e ALINHADA a MAXPAGESIZE: heap_start alinhado garante que a
+/// extensão (grow) comece e termine em fronteiras de página.
+/// Extensão alem dele (resize_bump_heap) só toca espaço
 /// livre — NUNCA corrompe outras statics .bss (GLOBAL_ALLOCATOR, etc).
 /// SESSION_233: sem isso, extender HEAP_LIMIT alem de HEAP_SIZE sobrescrevia
 /// statics adjacentes e zerava total_frames (falsa exaustao de frames).
-#[link_section = ".bss.heap"]
+#[link_section = ".heap"]
 pub static mut HEAP_BUFFER: [u8; HEAP_SIZE] = [0u8; HEAP_SIZE];
 
 /// TALC allocator usado APÓS o boot para resize_heap (não é o global_allocator).
@@ -194,10 +252,10 @@ pub fn resize_heap_to_mb(target_mb: usize) {
             }
         };
         let virt = VirtAddr::new(start_virt + (i as u64 * 4096));
-        unsafe {
-            map_page_direct(base, virt, phys);
+        // Auditoria #1: só conta página realmente mapeada (rollback se falhar).
+        if unsafe { map_page_direct(base, virt, phys) } {
+            allocated += 1;
         }
-        allocated += 1;
     }
 
     if allocated > 0 {
@@ -219,59 +277,83 @@ pub fn resize_heap_to_mb(target_mb: usize) {
     }
 }
 
-unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) {
+/// Mapeia a página de 4KiB `virt` para o frame físico `phys` na page table
+/// ATUAL (CR3). **Contrato verificável (auditoria #1):** retorna `true` SOMENTE
+/// se, após a chamada, a página está mapeada (present) para `phys`.
+///
+/// HUGE_PAGE em qualquer nível (SESSION_250 §2.3/§4): NUNCA descer para um walk
+/// se a entrada já é 1GB/2MB page (lê P2 garbage → páginas não-mapeadas → #PF).
+/// Em vez de early-return mudo, VALIDA a cobertura: se a página gigante cobre
+/// `phys` e é writable → ok (true, sem dividir). Se não cobre → falha (false)
+/// — o chamador NÃO avança o limite (rollback), em vez de mapear VA errada.
+/// PTE já presente com outro `phys` = conflito → false (nunca alias silencioso:
+/// foi exatamente isso que corrompeu o boot no SESSION_258 pré-alinhamento).
+unsafe fn map_page_direct(base: VirtAddr, virt: VirtAddr, phys: u64) -> bool {
     let (l4_frame, _) = x86_64::registers::control::Cr3::read();
     let l4_virt = base + l4_frame.start_address().as_u64();
     let l4_tbl = &mut *(l4_virt.as_mut_ptr::<PageTable>());
     let e3 = &mut l4_tbl[virt.p4_index()];
-    // HUGE_PAGE em TODOS os níveis (SESSION_250 §2.3/§4): não descer para um
-    // walk se a entrada já é 1GB/2MB page — lê P2 garbage → páginas não-mapeadas
-    // → #PF → reboot loop. Fix real do known-issue (commit 2662d50).
     if e3.flags().contains(PageTableFlags::HUGE_PAGE) {
-        return;
+        return huge_page_covers(e3, phys, 1024 * 1024 * 1024);
     }
     if !e3.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
-        if f == 0 { return; }
+        if f == 0 { return false; }
         e3.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
     let l3_virt = base + e3.addr().as_u64();
     let l3_tbl = &mut *(l3_virt.as_mut_ptr::<PageTable>());
     let e2 = &mut l3_tbl[virt.p3_index()];
     if e2.flags().contains(PageTableFlags::HUGE_PAGE) {
-        return;
+        return huge_page_covers(e2, phys, 1024 * 1024 * 1024);
     }
     if !e2.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
-        if f == 0 { return; }
+        if f == 0 { return false; }
         e2.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     }
     let l2_virt = base + e2.addr().as_u64();
     let l2_tbl = &mut *(l2_virt.as_mut_ptr::<PageTable>());
     let e1 = &mut l2_tbl[virt.p2_index()];
+    if e1.flags().contains(PageTableFlags::PRESENT) && e1.flags().contains(PageTableFlags::HUGE_PAGE) {
+        return huge_page_covers(e1, phys, 2 * 1024 * 1024);
+    }
     if !e1.flags().contains(PageTableFlags::PRESENT) {
         let f = alloc_pt_frame(base);
-        if f == 0 { return; }
+        if f == 0 { return false; }
         e1.set_addr(PhysAddr::new(f), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
-    }
-    if e1.flags().contains(PageTableFlags::HUGE_PAGE) {
-        return;
     }
     let l1_virt = base + e1.addr().as_u64();
     let l1_tbl = &mut *(l1_virt.as_mut_ptr::<PageTable>());
     let pte = &mut l1_tbl[virt.p1_index()];
     if pte.flags().contains(PageTableFlags::PRESENT) {
+        if pte.addr().as_u64() != phys {
+            // Conflito: página já mapeada para outro frame — NUNCA sobrescrever
+            // nem fingir sucesso (alias silencioso). Chamador faz rollback.
+            return false;
+        }
         if !pte.flags().contains(PageTableFlags::WRITABLE) {
-            // Add WRITABLE if page exists but is read-only
             let mut flags = pte.flags();
             flags.insert(PageTableFlags::WRITABLE);
             pte.set_flags(flags);
             x86_64::instructions::tlb::flush(virt);
         }
-        return;
+        return true;
     }
     pte.set_addr(PhysAddr::new(phys), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
     x86_64::instructions::tlb::flush(virt);
+    true
+}
+
+/// true se a entrada é uma página gigante present+writable cujo range físico
+/// [addr, addr+size) contém `phys` — ou seja, `virt` resolve para `phys`.
+fn huge_page_covers(entry: &PageTableEntry, phys: u64, size: u64) -> bool {
+    let f = entry.flags();
+    if !f.contains(PageTableFlags::PRESENT) || !f.contains(PageTableFlags::WRITABLE) {
+        return false;
+    }
+    let base_pa = entry.addr().as_u64();
+    phys >= base_pa && phys < base_pa + size
 }
 
 /// #PF cure: buraco no heap Tier-1 (BitNet `to_vec` mid-load). Retorna true se page presente apos.
@@ -297,8 +379,7 @@ pub fn try_fault_in_heap(cr2: u64) -> bool {
         None => return false,
     };
     unsafe {
-        map_page_direct(base, virt, phys);
-        heap_pte_present(base, virt)
+        map_page_direct(base, virt, phys) && heap_pte_present(base, virt)
     }
 }
 
@@ -413,10 +494,10 @@ pub fn resize_bump_heap(target_mb: usize) {
             }
         };
         let virt = VirtAddr::new((heap_start + HEAP_SIZE + allocated * 4096) as u64);
-        unsafe {
-            map_page_direct(base, virt, phys);
+        // Auditoria #1: só conta página realmente mapeada (rollback se falhar).
+        if unsafe { map_page_direct(base, virt, phys) } {
+            allocated += 1;
         }
-        allocated += 1;
     }
     if allocated > 0 {
         let new_limit = HEAP_SIZE + allocated * 4096;

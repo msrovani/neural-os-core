@@ -48,9 +48,18 @@ SECTIONS
     /* SESSION_233: HEAP_BUFFER (512MB) em secao propria no FIM da imagem.
        O bump allocator estende alem dele (resize_bump_heap) mapeando frames
        novos — como nada vem depois no .bss, a extensao NAO corrompe statics
-       adjacentes (GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET, TOTAL_RAM_MB). */
-    .bss.heap : {
-        *(.bss.heap)
+       adjacentes (GLOBAL_ALLOCATOR, PHYS_MEM_OFFSET, TOTAL_RAM_MB).
+       SESSION_258/fix: secao renomeada para `.heap` (o padrao `*(.bss .bss.*)`
+       engolia `.bss.heap` e o buffer voltava para o .bss comum, desalinhado) e
+       ALINHADA a MAXPAGESIZE — heap_start nao-alinhado fazia o fim da regiao
+       crescida cair no meio de uma pagina desmapeada (tail 0x698 bytes) →
+       #PF em insert_rec/ART no fim do boot. */
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+    /* NOLOAD: rustc emite seções custom (não-.bss*) como PROGBITS — sem NOLOAD,
+       os 512MB de zeros iam para o arquivo (elf 555MB). O PHDR :data mapeia a
+       região e o bootloader zeroa o gap p_filesz→p_memsz (comportamento bss). */
+    .heap (NOLOAD) : {
+        *(.heap)
     } :data
 
     /* SESSION_252/ora-1: fim da imagem do kernel — usado pelo frame allocator
