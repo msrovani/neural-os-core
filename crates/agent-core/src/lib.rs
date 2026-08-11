@@ -78,6 +78,23 @@ fn should_poll_flow(flow: &FlowTrigger, tick: u64, last_poll: u64, has_event: bo
     }
 }
 
+/// Watchdog: só considera "runaway" agente sem urgency (não-interativo).
+/// Interativos (urgency>0) retornam Pending por design e pollam todo tick —
+/// crashear por "nunca Done" os mataria sem recuperação. Espelha a isenção do
+/// rate-limit (run(): urgency == 0 && consecutive > 50).
+fn watchdog_should_crash(urgency: u8, consecutive_pending: u64) -> bool {
+    urgency == 0 && consecutive_pending > 10000
+}
+
+/// EventDriven: decide se o agente deve ser pollado neste tick.
+/// Polla no 1º tick (last_poll == 0 — cobre agents que anunciam uma vez,
+/// ex.: SpecialistAgent) ou quando has_pending() sinaliza trabalho.
+/// NUNCA deriva de consecutive_pending (self-referential): isso fazia agents
+/// dormirem para sempre após 20 Pending, sem caminho de wake.
+fn event_driven_has_event(last_poll: u64, has_pending: bool) -> bool {
+    last_poll == 0 || has_pending
+}
+
 #[derive(Clone, Debug)]
 pub struct AgentManifest {
     pub name: &'static str,
@@ -107,6 +124,10 @@ pub trait Agent: Send {
     fn tick(&mut self, tick: u64, tick_count: u64) -> AgentTickResult;
     fn on_activate(&mut self) {}
     fn on_deactivate(&mut self) {}
+    /// EventDriven: há trabalho pendente? (ex.: receiver do EventBus com
+    /// mensagem). Default false — agents sem trabalho assíncrono ficam em
+    /// dormência após o 1º tick (last_poll == 0).
+    fn has_pending(&self) -> bool { false }
 }
 
 /// Extensao opcional do AgentManifest para suporte a Crew/Flow.
@@ -437,7 +458,14 @@ impl AgentRegistry {
                     continue;
                 }
                 let schedule = self.agents[i].schedule;
-                let has_event = schedule != ScheduleKind::EventDriven || consecutive < 20;
+                // EventDriven: polla no 1º tick ou quando o agente sinaliza
+                // trabalho pendente (has_pending) — nunca por consecutive_pending
+                // (self-referential: dormência eterna após 20 Pending, sem wake).
+                let has_event = schedule != ScheduleKind::EventDriven
+                    || event_driven_has_event(
+                        self.agents[i].last_poll,
+                        self.agents[i].agent.has_pending(),
+                    );
                 let should_poll = should_poll_flow(flow, tick_id, self.agents[i].last_poll, has_event);
                 if !should_poll {
                     continue;
@@ -463,11 +491,18 @@ impl AgentRegistry {
                 // PostTick hook: always run, even after Pending
                 self.hooks.run(hooks::HookType::PostTick, agent_name, tick_id);
 
-                // Watchdog: detecta loops infinitos (10000+ ticks sem Done)
+                // Watchdog: detecta loops infinitos (10000+ ticks sem Done).
+                // Só crashea agentes SEM urgency (espelha a isenção do rate-limit
+                // acima): interativos (urgency>0) retornam Pending por design e
+                // pollam todo tick — crashear por "nunca Done" os mataria em ~9 min
+                // sem recuperação (RESPAWN_QUEUE sem writers, hooks não wireados).
                 match result {
                     AgentTickResult::Pending => {
                         self.agents[i].consecutive_pending += 1;
-                        if self.agents[i].consecutive_pending > 10000 {
+                        if watchdog_should_crash(
+                            self.agents[i].goal_urgency,
+                            self.agents[i].consecutive_pending,
+                        ) {
                             self.agents[i].state = AgentState::Crashed;
                         }
                     }
@@ -570,5 +605,23 @@ fn maybe_log_sched_metrics(tick_id: u64, n_agents: usize, polled: u32) {
     // BEI tick hook (ADR-0060)
     if let Some(hook) = unsafe { BEI_TICK_HOOK } {
         hook(tick_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sched_semantics_event_driven_and_watchdog() {
+        // EventDriven: polla no 1º tick (announce) e quando há trabalho pendente;
+        // dorme sem contador self-referential (nunca fica órfão por consecutive).
+        assert!(event_driven_has_event(0, false));      // 1º tick
+        assert!(event_driven_has_event(500, true));     // trabalho pendente
+        assert!(!event_driven_has_event(500, false));   // dorme
+        // Watchdog: só crashea sem urgency (interativos com urgency>0 imunes).
+        assert!(!watchdog_should_crash(200, 1_000_000));
+        assert!(!watchdog_should_crash(0, 10000));
+        assert!(watchdog_should_crash(0, 10001));
     }
 }

@@ -147,6 +147,10 @@ impl Agent for AutoInstallerAgent {
         &self.manifest
     }
 
+    fn has_pending(&self) -> bool {
+        self.receiver.has_pending()
+    }
+
     fn tick(&mut self, _tick: u64, _tick_count: u64) -> AgentTickResult {
         if !self.receiver.has_pending() {
             return AgentTickResult::Pending;

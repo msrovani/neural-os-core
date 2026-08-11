@@ -2648,10 +2648,10 @@ pub(crate) fn kernel_boot(
     // sempre e após 50 ticks o scheduler os skipa 80% — teclado/rede morrem de
     // fome (polled=1) e o shell nunca recebe o sendkey (bug real de HW + QEMU).
     registry.set_urgency("hw_bridge", 200);
-    registry.set_urgency("net", 180);
+    registry.set_urgency("network_agent", 180);
     registry.set_urgency("input", 200);
     registry.set_urgency("mouse", 150);
-    k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/net/input/mouse) — isentos de rate-limit");
+    k_nano::slog_bin!("Sched", "info", "urgency aplicada p/ interativos (hw_bridge/network_agent/input/mouse) — isentos de rate-limit");
 
     // SysInfoAgent — painel de debug com CPU/memória/agentes na tela
     registry.register(Box::new(agents::sysinfo_agent::SysInfoAgent::new()));

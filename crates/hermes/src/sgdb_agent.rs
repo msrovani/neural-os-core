@@ -298,6 +298,10 @@ impl Agent for SgdbAgent {
         &SGDB_MANIFEST
     }
 
+    fn has_pending(&self) -> bool {
+        self.cmd_receiver.has_pending()
+    }
+
     fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
         while let Some(event) = self.cmd_receiver.try_receive() {
             self.handle_cmd(&event.payload);

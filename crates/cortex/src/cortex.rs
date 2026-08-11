@@ -3206,8 +3206,8 @@ fn v6_roundtrip_load() {
 #[cfg(test)]
 #[test]
 fn hwexpert_v6_matches_v5_predictions() {
-    let v5_bytes = include_bytes!("../../../models/hw_expert/hw_expert_v4.bitnet");
-    let v6_bytes = include_bytes!("../../../tools/target/hw_expert_v6.bitnet");
+    let v5_bytes = include_bytes!("../../../legacy/hw_expert_v4.bitnet");
+    let v6_bytes = include_bytes!("../../../target1/hw_expert_v6.bitnet");
 
     let m5 = load_hwexpert_v5(v5_bytes).expect("v5 load falhou");
     let m6 = load_hwexpert_v6(v6_bytes).expect("v6 load falhou");
