@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+### SESSION_258: Bughunt + Fixes Scheduler 3× HIGH + Fix boot UEFI pendrive (2026-08-11)
+
+**2 commits (`f44d343` + `2dd6ffc`), 0 erros, 186 testes PASS.**
+
+- **Bughunt 4 lanes oracle:** 10 bugs confirmados (3× HIGH fixados) + 1 falso HIGH
+  refutado por medição própria (ora leu headers .v6 em offsets errados — todos os 4
+  canônicos passam no gate). Mediu-se o artefato real antes de reportar.
+- **fix(scheduler) `f44d343`:**
+  - `set_urgency("net")` → `"network_agent"` — manifest real do NetAgent; o fix de
+    starvation do s252 nunca aplicava (rede seguia rate-limited 80% após 50 Pending).
+  - `watchdog_should_crash(urgency, consecutive)` — watchdog só crashea agente SEM
+    urgency; interativos (urgency>0) retornam Pending por design e não morrem mais em
+    ~9 min sem recuperação (RESPAWN_QUEUE sem writers).
+  - Trait `Agent::has_pending()` (default false) + `event_driven_has_event(last_poll,
+    has_pending)` — EventDriven polla no 1º tick ou com trabalho pendente; antes dormia
+    para sempre após 20 Pending (contador self-referential, sem wake) — 147 Agency
+    specialists + AutoInstallerAgent (SYS_INSTALL nunca consumido) inertes.
+  - `AutoInstallerAgent`/`SgdbAgent` implementam `has_pending()` via receiver do EventBus.
+  - Teste host novo `sched_semantics_event_driven_and_watchdog`; goldens hwexpert
+    un-ignored (`!legacy/hw_expert_v4.bitnet`, `!target1/hw_expert_v6.bitnet`) — teste
+    de paridade cortex estava quebrado desde 372afd6 (paths include_bytes movidos).
+- **fix(hw-boot) `2dd6ffc`:** pendrive (E:) não era reconhecido como bootável UEFI —
+  regressão `df88cc0` deixou o MBR só com dados 0x0C (sem 0xEE protetora: firmware trata
+  como MBR-legacy com FAT sem boot flag). Fix: MBR híbrido slot0=0xEE protetora cobrindo
+  o disco todo + slot1=dados 0x0C (Windows monta E:, firmware UEFI acha a ESP em LBA 2048).
+  Validado QEMU/OVMF: boot=limine + 8 fases.
+- **Runtime validado:** rebuild real (`cargo clean -p neural-kernel` remove 0 arquivos
+  p/ kernel no_std — remover `target/x86_64-unknown-none/`); boot QEMU 6G + BITNET2B.v6:
+  crash ip=0 do s254 **não reincidiu**; auto-grow AIOS 512→2560MB; LLM LOADED h=2560 L=30.
+- **MEDs latentes reportados (não fixados):** wrap 2⁶⁴ sem guard em `grow_bump_auto`
+  (allocator.rs:102), 2º probe QEMU-loader hardcoda `BITNET_2B_V4_BYTES` (main.rs:2889),
+  PDPTE HUGE_PAGE no nível errado (apic.rs:440, GPU AWAITING_HW), `deallocate_frame` sem
+  ownership check, expert loader-scan hardcoded dentro do arquivo 2B, netmode reverse-scan
+  false-positive.
+- **Pendência usuário:** regravar `target/usb_hw.img` (build `PACK_LLM=2b --size 6144`,
+  ~6.3GB) no pendrive via Rufus DD (Secure Boot OFF).
+
 ### SESSION_257: neural-sgdb Maturation Sprint v0.3 — crate comunitário (2026-08-10)
 
 **14 commits no repo neural-sgdb (`24aacda..96cac70`, +1.475/−87), matriz DoD verde:**

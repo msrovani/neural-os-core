@@ -1,4 +1,20 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s258 — Bughunt (auditoria + runtime) + Fixes Scheduler + MBR HW
+#   SESSION_258: bughunt 4 lanes oracle (10 bugs confirmados, 1 falso HIGH refutado
+#     por medição própria) + validação runtime QEMU com loader 2B v6 (crash ip=0 do
+#     s254 não reincidiu; auto-grow 512→2560MB; LLM LOADED h=2560 L=30).
+#     Fixes 3× HIGH scheduler (f44d343): set_urgency "net"→"network_agent" (fix de
+#     starvation do s252 nunca aplicava), watchdog_should_crash só sem urgency
+#     (interativos não morrem mais em ~9min), EventDriven via Agent::has_pending()
+#     (147 specialists + AutoInstallerAgent acordam — antes dormência eterna após
+#     20 Pending). Fix boot UEFI pendrive (2dd6ffc): MBR híbrido 0xEE protetora
+#     (disco todo) + dados 0x0C — regressão df88cc0 deixava o stick sem reconhecer
+#     como bootável. 186 testes PASS; cargo check --release 0 erros.
+#     Pendência usuário: regravar target/usb_hw.img (build completo ~6.3GB).
+#     MEDs latentes reportados (wrap grow_bump_auto, PDPTE HUGE_PAGE, dealloc sem
+#     ownership, 2º probe v4 const, scans hardcoded) — não fixados.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s257 — neural-sgdb Maturation v0.3 (crate comunitário)
 #   SESSION_257: maturação do repo neural-sgdb (separado) — 14 commits
 #     (24aacda..96cac70, +1.475/−87), matriz DoD verde 66+1/44+1/75+1 p2p.
