@@ -1,4 +1,17 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s259 — Keyboard modifiers + BrokenThorn OSDev mine
+#   SESSION_259: teclado com Shift/CapsLock/break codes — `scancode_to_ascii`
+#     virou pura `(scancode, shift, caps) -> Option<char>` (letras uppercase iff
+#     shift != caps XOR, dígitos/símbolos shiftados, teclas [ ] ; ' ` \ , absorvidas
+#     da cópia morta do bin); InputAgent (bin + hermes espelho) rastreia shift/caps
+#     (breaks 0xAA/0xB6 limpam, CapsLock toggla no make 0x3A). Cópia morta do bin
+#     (main.rs:4019, zero callers) DELETADA — fonte única em k_nano. Série OSDev do
+#     BrokenThorn minerada no mempalace room brokenthorn-osdev (5 drawers; site dá
+#     403 — Wayback funciona). Scan 14 tópicos: gap real = teclado; PIC/PIT, PMM/VMM,
+#     VFS, DMA cobertos; FDC/8237 fora do alvo. 11 testes host PASS; cargo check 0 erros.
+#     IDEA_BANK #528 (LEDs 0xED + self-test 8042) e #529 (teclas E0 + set 2).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s258 — Bughunt (auditoria + runtime) + Fixes Scheduler + MBR HW
 #   SESSION_258: bughunt 4 lanes oracle (10 bugs confirmados, 1 falso HIGH refutado
 #     por medição própria) + validação runtime QEMU com loader 2B v6 (crash ip=0 do

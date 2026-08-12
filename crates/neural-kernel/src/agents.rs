@@ -138,11 +138,13 @@ pub struct InputAgent {
     buffer: String,
     ctrl: bool,
     alt: bool,
+    shift: bool,
+    caps: bool,
 }
 
 impl InputAgent {
     pub fn new() -> Self {
-        InputAgent { receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"), buffer: String::new(), ctrl: false, alt: false }
+        InputAgent { receiver: EVENT_BUS.subscribe("RAW_HW_IRQ1"), buffer: String::new(), ctrl: false, alt: false, shift: false, caps: false }
     }
 }
 
@@ -173,6 +175,10 @@ impl InputAgent {
         match key {
             0x1D => { self.ctrl = pressed; }
             0x38 => { self.alt = pressed; }
+            // Left Shift = 0x2A, Right Shift = 0x36 (break 0xAA/0xB6 clears)
+            0x2A | 0x36 => { self.shift = pressed; }
+            // CapsLock: toggle only on make (0x3A); break 0xBA no-op
+            0x3A if pressed => { self.caps = !self.caps; }
             0x53 if self.ctrl && self.alt && pressed => { self.handle_cad(); }
             // F1-F6 (0x3B-0x40) with Ctrl+Alt for virtual console switching
             k @ 0x3B..=0x40 if self.ctrl && self.alt && pressed => {
@@ -198,7 +204,7 @@ impl InputAgent {
                 }
             }
             0x0E => { self.buffer.pop(); }
-            _ => { if let Some(ch) = k_nano::scancode_to_ascii(scancode) { self.buffer.push(ch); } }
+            _ => { if let Some(ch) = k_nano::scancode_to_ascii(scancode, self.shift, self.caps) { self.buffer.push(ch); } }
         }
         // Echo tecla para o display em tempo real
         let _ = EVENT_BUS.publish(Event {

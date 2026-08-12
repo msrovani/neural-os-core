@@ -141,6 +141,7 @@ pub struct InputAgent {
     shift: bool,
     /// Super key (Win/Cmd) — scancode 0x5B (Left Win) / 0x5C (Right Win).
     super_key: bool,
+    caps: bool,
 }
 
 /// Tópico publicado pelo InputAgent com payload `[scancode, ctrl, alt, shift, super_key]`.
@@ -156,6 +157,7 @@ impl InputAgent {
             alt: false,
             shift: false,
             super_key: false,
+            caps: false,
         }
     }
 }
@@ -191,6 +193,8 @@ impl InputAgent {
             0x2A | 0x36 => { self.shift = pressed; }
             // Left Win (Super) = 0x5B, Right Win = 0x5C
             0x5B | 0x5C => { self.super_key = pressed; }
+            // CapsLock: toggle only on make (0x3A); break 0xBA no-op
+            0x3A if pressed => { self.caps = !self.caps; }
             _ => {}
         }
         // Publica KEY_EVENT com modifiers para o DisplayAgent (atalhos WM).
@@ -226,7 +230,7 @@ impl InputAgent {
             _ => {
                 // Skip keyboard shortcuts that shouldn't type
                 if scancode == 0x53 || scancode == 0x39 { }  // Delete and Space handled by WM
-                else if let Some(ch) = k_nano::scancode_to_ascii(scancode) { self.buffer.push(ch); }
+                else if let Some(ch) = k_nano::scancode_to_ascii(scancode, self.shift, self.caps) { self.buffer.push(ch); }
             }
         }
         // Echo tecla para o display em tempo real

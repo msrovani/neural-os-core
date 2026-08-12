@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### SESSION_259: Keyboard modifiers (Shift/CapsLock/break) + BrokenThorn OSDev mining (2026-08-12)
+
+**1 commit, 0 erros, 11 testes k_nano PASS.**
+
+- **fix(keyboard):** `scancode_to_ascii` agora é pura `(scancode, shift, caps) -> Option<char>`
+  — letras uppercase iff `shift != caps` (XOR), dígitos/símbolos shiftados (`!@#{}:"~|< >?_+`),
+  teclas faltantes (`[ ] ; ' \` \ ,`) absorvidas da cópia morta do bin. InputAgent (bin + hermes
+  espelho) rastreia `shift`/`caps`: breaks `0xAA/0xB6` limpam shift, CapsLock toggla só no make
+  `0x3A` (break `0xBA` no-op). Cópia morta `pub(crate) fn scancode_to_ascii` do bin (main.rs:4019,
+  zero callers) DELETADA — fonte única em k_nano. 11 testes host PASS (7 novos: shift upper,
+  caps upper, XOR lower, shifted digits/symbols, caps≠digits, shift≠space, Enter shiftado None).
+- **docs(mine):** série OSDev do BrokenThorn minerada no mempalace room `neural-os-core/brokenthorn-osdev`
+  (5 drawers: índice + OSDev19 teclado/8042 + scan codes set 1/2 + AT/ACPI/multimedia); site dá 403
+  direto, Wayback `web.archive.org/web/2024/...` funciona. Scan de código (14 tópicos) → gap real
+  era o teclado; PIC/PIT, PMM/VMM, VFS, DMA já cobertos; FDC/8237 fora do alvo (storage = ATA/AHCI/NVMe/USB).
+- **IDEA_BANK:** #528 (LEDs 0xED + self-test 8042 0xAA→0x55), #529 (teclas E0: setas/Insert/Home/End + set 2).
+
 ### SESSION_258: Bughunt + Fixes Scheduler 3× HIGH + Fix boot UEFI pendrive (2026-08-11)
 
 **2 commits (`f44d343` + `2dd6ffc`), 0 erros, 186 testes PASS.**
