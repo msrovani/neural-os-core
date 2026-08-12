@@ -188,8 +188,6 @@ pub struct RsdpRequest {
 #[repr(C)]
 pub struct StackSizeResponse {
     pub revision: u64,
-    /// Endereço físico onde o Limine alocou a stack (limine_stack_size_response).
-    pub address: u64,
 }
 
 #[repr(C)]

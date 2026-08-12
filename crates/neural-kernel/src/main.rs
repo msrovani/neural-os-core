@@ -1311,14 +1311,24 @@ pub(crate) fn kernel_boot(
             k_nano::slog_bin!("MEM", "info", "kernel_phys ausente — não reserva imagem (risco DMA)");
         }
 
-        // SESSION_254: o frame allocator não conhece a stack de 2MB que o Limine
-        // alocou (StackSizeRequest) — se entregar frames da própria stack do
-        // kernel, alocação sobrescreve return addresses → #PF ip=0 (crash só com
-        // loader QEMU 4GB+, que empurra o watermark do allocator até a stack).
-        if let Some(resp) = unsafe { crate::limine_boot::LIMINE_STACK.response.as_ref() } {
-            frame_allocator.reserve_range(resp.address, 2 * 1024 * 1024);
-            k_nano::slog_bin!("MEM", "info", "reserva stack Limine {:#x} len=2MB", resp.address);
-        }
+        // SESSION_254/258: o frame allocator não conhece a stack de 2MB que o
+        // Limine alocou (StackSizeRequest) — se entregar frames da própria stack
+        // do kernel, alocação sobrescreve return addresses → #PF ip=0 / triple
+        // fault (crash HW real no bloco K33; QEMU passa porque o watermark não
+        // cruza). O protocolo Limine NÃO expõe o endereço da stack na resposta
+        // (limine_stack_size_response = { revision } apenas — o campo `address`
+        // do fix anterior era fantasma, lia 0 → reserva no-op). Derivação correta:
+        // o kernel EXECUTA nessa stack → RSP atual está dentro dela; reserva a
+        // janela de 2MB que a contém (RSP virtual = phys + pm_offset no HHDM).
+        let rsp: u64;
+        unsafe { core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack, preserves_flags)); }
+        let rsp_phys = rsp.wrapping_sub(pm_offset);
+        // Stack pode não ser 2MB-alinhada → margem: reserva 4MB a partir de
+        // (rsp alinhado p/ baixo em 2MB) − 2MB. Cobre a stack 2MB + folga
+        // mesmo se a base estiver até ~2MB abaixo do RSP atual.
+        let stack_base = (rsp_phys & !(2 * 1024 * 1024 - 1)) - 2 * 1024 * 1024;
+        frame_allocator.reserve_range(stack_base, 4 * 1024 * 1024);
+        k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=4MB (rsp_phys={:#x})", stack_base, rsp_phys);
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
