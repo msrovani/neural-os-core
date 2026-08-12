@@ -13,6 +13,7 @@ use crate::display::gpu_backend;
 use hermes::agents::TOPIC_KEY_EVENT;
 use crate::clipboard_notify::TOPIC_TOAST;
 use k_nano::net::mesh::TOPIC_MESH_HEALTH;
+use k_nano::sync::IrqSafeLock;
 
 // Simple JSON parser for MESH_HEALTH payload (no_std compatible)
 mod mesh_health_json {
@@ -117,6 +118,16 @@ mod mesh_health_json {
         result
     }
 }
+
+/// Snapshot de um peer do mesh, consumido pelo compositor (draw_mesh_graph).
+pub struct MeshPeerNode {
+    pub node_id: u8,
+    pub reachable: bool,
+    pub avg_rtt: u32,
+    pub p99_rtt: u32,
+}
+pub(crate) static MESH_GRAPH: IrqSafeLock<alloc::vec::Vec<MeshPeerNode>> =
+    IrqSafeLock::new(alloc::vec::Vec::new());
 
 const DISPLAY_MANIFEST: AgentManifest = AgentManifest {
     name: "display",
@@ -714,7 +725,7 @@ impl Agent for DisplayAgent {
             } // while pkt
         } // if latent_receiver
 
-        // Mesh Health: drena MESH_HEALTH (JSON) e renderiza cards de status dos peers
+        // Mesh Health: drena MESH_HEALTH (JSON) → MESH_GRAPH (compositor renderiza).
         if self.mesh_health_receiver.is_none() {
             self.mesh_health_receiver = Some(EVENT_BUS.subscribe(TOPIC_MESH_HEALTH));
         }
@@ -722,40 +733,17 @@ impl Agent for DisplayAgent {
             while let Some(ev) = rx.try_receive() {
                 let json_str = core::str::from_utf8(&ev.payload).unwrap_or("");
                 let peers = mesh_health_json::parse(json_str);
+                let mut graph = MESH_GRAPH.lock();
+                graph.clear();
                 for health in peers {
-                    if let Some(ref mut desktop) = *COMPOSITOR.lock() {
-                        let w = desktop.fb.info.width;
-                        let _h = desktop.fb.info.height;
-                        let card_w = 200;
-                        let card_h = 80;
-                        let x = 10;
-                        let y = 10 + (health.node_id as usize % 8) * (card_h + 5);
-                        // Background
-                        let bg_color = if health.reachable { 0x1A_3A_1A } else { 0x3A_1A_1A };
-                        desktop.fb.fill_rect(x, y, card_w, card_h, 
-                            (bg_color >> 16) as u8, (bg_color >> 8) as u8, bg_color as u8);
-                        // Border
-                        let border_color = if health.reachable { 0x00_FF_00 } else { 0xFF_00_00 };
-                        desktop.fb.fill_rect(x, y, card_w, 1, 
-                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
-                        desktop.fb.fill_rect(x, y + card_h - 1, card_w, 1, 
-                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
-                        desktop.fb.fill_rect(x, y, 1, card_h, 
-                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
-                        desktop.fb.fill_rect(x + card_w - 1, y, 1, card_h, 
-                            (border_color >> 16) as u8, (border_color >> 8) as u8, border_color as u8);
-                        // Text
-                        let status = if health.reachable { "ONLINE" } else { "OFFLINE" };
-                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 4,
-                            &alloc::format!("Peer {}: {}", health.node_id, status), w, 0xFF, 0xFF, 0xFF);
-                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 20,
-                            &alloc::format!("RTT: {}ms p99: {}ms", health.avg_rtt, health.p99_rtt), w, 0xAA, 0xAA, 0xAA);
-                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 36,
-                            &alloc::format!("TX:{} ACK:{} Fail:{}", health.tx, health.ack, health.fail), w, 0x88, 0x88, 0x88);
-                        crate::display::compositor::draw_text(&mut desktop.fb, x + 4, y + 52,
-                            &alloc::format!("Probe timeout: {}ms", health.probe_to), w, 0x66, 0x66, 0x66);
-                    }
+                    graph.push(MeshPeerNode {
+                        node_id: health.node_id,
+                        reachable: health.reachable,
+                        avg_rtt: health.avg_rtt as u32,
+                        p99_rtt: health.p99_rtt as u32,
+                    });
                 }
+                drop(graph);
             }
         }
 

@@ -411,6 +411,9 @@ impl JarbasDesktop {
             if let Some(av) = avatar { av.render(&mut self.fb); }
         }
 
+        // Mesh P2P graph — centro da tela (hub = Jarbas, satélites = peers)
+        self.draw_mesh_graph(tick);
+
         // ═════════════════════════════════════════════════════════════
         // CAMADA 1: Barra de status (topo) — COSMIC-style panel
         // ═════════════════════════════════════════════════════════════
@@ -442,42 +445,11 @@ impl JarbasDesktop {
         }
 
         // ═════════════════════════════════════════════════════════════
-        // CAMADA 2: Painel Hermes (direito 35%, translúcido COSMIC)
-        // ═════════════════════════════════════════════════════════════
-        let gap = 4usize; // COSMIC tile gap
-        let right_w = w * 35 / 100;
-        let rx = w.saturating_sub(right_w + gap);
-        let panel_y = sb_h + gap;
-        let panel_h = h.saturating_sub(sb_h + gap * 2);
-
-        // Fundo translúcido COSMIC (bg_alt com cantos arredondados)
-        decorations::draw_rounded_rect(&mut self.fb, rx, panel_y, right_w, panel_h, 8,
-                                       theme.bg_alt.0/2, theme.bg_alt.1/2, theme.bg_alt.2/2);
-        // Borda sutil
-        decorations::draw_rounded_rect(&mut self.fb, rx, panel_y, right_w, 1, 0,
-                                       theme.border.0/3, theme.border.1/3, theme.border.2/3);
-        // Título
-        draw_text(&mut self.fb, rx + 8, panel_y + 6, "[Hermes Console]", self.w,
-                  theme.accent.0, theme.accent.1, theme.accent.2);
-
-        let cli_content = crate::display::console::get_overlay_text();
-        let hermes_lines: Vec<&str> = cli_content.lines().collect();
-        let available_h = panel_h.saturating_sub(28);
-        let max_visible = available_h / 16;
-        let start = hermes_lines.len().saturating_sub(max_visible.max(1));
-        for (i, line) in hermes_lines.iter().enumerate().skip(start).take(max_visible) {
-            let color = if line.contains("[ERROR]") { (255u8,80u8,80u8) }
-                else if line.contains("[SKILL]") { (80u8,130u8,220u8) }
-                else if line.contains("[CORTEX]") || line.contains("[LLM]") { (220u8,200u8,0u8) }
-                else { theme.fg_muted };
-            draw_text(&mut self.fb, rx + 8, panel_y + 26 + (i - start) * 16, line,
-                      self.w, color.0, color.1, color.2);
-        }
-
-        // ═════════════════════════════════════════════════════════════
         // CAMADA 3: Workspace — ChatWindow (esquerdo, opaco, com gap)
         // ═════════════════════════════════════════════════════════════
-        let left_w = w.saturating_sub(right_w + gap * 3); // sobra após painel direito
+        let gap = 4usize; // COSMIC tile gap
+        let panel_h = h.saturating_sub(sb_h + gap * 2); // área útil sob a barra de status
+        let left_w = w.saturating_sub(gap * 2); // margens laterais pequenas (painel Hermes removido)
         let window_updates = {
             let ws = self.workspaces.active();
             let screen_rect = Rect {
@@ -577,6 +549,42 @@ impl JarbasDesktop {
         self.fb.swap();
     }
 
+    /// Mesh P2P graph — hub = Jarbas, satellites = peers, edge color = RTT.
+    /// Chamado dentro de render() (após o bg wipe, antes do swap) para que o
+    /// desenho sobreviva — fora daqui o próximo render() apagaria.
+    fn draw_mesh_graph(&mut self, tick: u64) {
+        use core::f32::consts::PI;
+        use libm::{sinf, cosf};
+        let (w, h) = (self.w, self.h);
+        let cx = (w / 2) as isize;
+        let cy = ((h + 28) / 2) as isize; // ligeiramente abaixo da barra de status
+        let orbit = (core::cmp::min(w, h) as f32 * 0.32) as isize;
+        // Hub: Jarbas (deep purple identity)
+        self.fb.fill_circle_glow(cx, cy, 26, 106, 13, 173, 45);
+        self.fb.fill_circle_glow(cx, cy, 12, 106, 13, 173, 80);
+        self.fb.fill_circle_glow(cx, cy, 5, 255, 255, 255, 90);
+        let peers = crate::display::agent::MESH_GRAPH.lock();
+        let n = peers.len().min(12);
+        for (i, p) in peers.iter().take(n).enumerate() {
+            let ang = (i as f32) * 2.0 * PI / (n.max(1) as f32);
+            let px = cx + (cosf(ang) * orbit as f32) as isize;
+            let py = cy + (sinf(ang) * orbit as f32) as isize;
+            let pulse = (sinf(tick as f32 * 0.05 + i as f32) * 1.0) as isize;
+            let (er, eg, eb) = if p.reachable {
+                let t = (p.p99_rtt.min(1500) as f32 / 1500.0).clamp(0.0, 1.0);
+                let rr = (60.0 + t * 180.0) as u8;   // green -> red
+                let gg = (220.0 - t * 160.0) as u8;
+                (rr, gg, 60u8)
+            } else {
+                (70, 70, 70)
+            };
+            self.fb.draw_line(cx, cy, px, py, er, eg, eb);
+            let r = 5 + pulse;
+            self.fb.fill_circle_glow(px, py, r + 6, er, eg, eb, 40);
+            self.fb.fill_circle_glow(px, py, r, er, eg, eb, 90);
+        }
+    }
+
     // ── Métodos cosméticos do WM (ADR-0065) ────────────────────────────
 
     pub fn register_app(&mut self, app_id: AppId, title: &str, layer: Layer) {
@@ -602,12 +610,7 @@ impl JarbasDesktop {
     }
 
     pub fn ensure_hermes_overlay(&mut self) {
-        if !self.windows.iter().any(|w| w.app_id == Some(AppId::HermesChat)) {
-            self.register_app(AppId::HermesChat, "Hermes Chat", Layer::HermesOverlay);
-        }
-        if let Some(chat) = self.windows.iter_mut().find(|w| w.app_id == Some(AppId::HermesChat)) {
-            chat.visible = true;
-        }
+        // ponytail: Hermes chat window removed from the UI (mesh-graph view).
     }
 
     pub fn render_window(&mut self, win: &Window, theme: &Theme) {
