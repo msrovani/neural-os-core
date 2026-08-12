@@ -12,6 +12,8 @@
 **Residuals por onda:** 0–7 ✅ · Pós-LAN ✅ (NetFs PASS) · **ADR-0086 ✅ (Instalação + Update OTA completos, SESSION_252)** · WiFi AWAITING · **TLS parcial ✅ (s156 smoke PASS; PKI real pendente)** · R soft-float defer.
 **Fora do gate (não atracar):** SmileyOS 279a–b/e, Cube 283a, XDNA 💰, SKYNET 315.26–27, Mach-O/APK, wasmi-USB #8/#11.
 
+**Feito recente (SESSION_261):** mesh graph UI — orb virou hub do grafo P2P (peers ≤12, aresta por p99 RTT); chat Hermes + card SysInfo 9001 removidos da UI; cards de mesh invisíveis corrigidos (draw dentro do render()). Segue: grafo persistente via SGDB (#532) + click-to-inspect (#533).
+
 ---
 
 ## ▶️ FILA ADR — pendências ordenadas por complexidade (mais simples → mais complexo)

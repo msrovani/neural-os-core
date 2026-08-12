@@ -1,4 +1,21 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s261 — Mesh graph UI (orb → hub do grafo) + UI limpa
+#   SESSION_261: análise tweet @antpalkin (Kimi Agent Swarm — "você não recebe
+#     300 respostas, recebe um mapa") → o orb (Soul Mirror, nível "um eu") vira
+#     o NÓ CENTRAL do grafo (nível "sistema"): hub afetivo Jarbas roxo + glow,
+#     satélites = peers do mesh (≤12, órbita determinística), aresta hub→peer
+#     colorida por p99 RTT (verde→amarelo→vermelho, offline cinza), pulso
+#     senoidal. 🔴 Bug de raiz: cards de mesh (agent.rs:717-760) eram desenhados
+#     no tick ANTES do render() — render() apaga o back buffer (compositor.rs:394)
+#     e só swap() dentro dele (577) → NUNCA apareceram na tela; desenho fora do
+#     render() = apagado. Fix: grafo DENTRO do render() (após o orb, antes do swap).
+#     UI limpa: painel "Hermes Console" (direita 35%) deletado, workspace
+#     full-width, ensure_hermes_overlay no-op (chat Hermes nunca spawna), card
+#     SysInfo 9001 removido (sysinfo_agent → unit struct; BOOT.LOG flush retry
+#     MANTIDO p/ HW real USB-MSC lento). 4 arquivos; cargo check --release 0
+#     erros. IDEA #532 (grafo persistente via SGDB) + #533 (click-to-inspect).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s259 — Keyboard modifiers + BrokenThorn OSDev mine
 #   SESSION_259: teclado com Shift/CapsLock/break codes — `scancode_to_ascii`
 #     virou pura `(scancode, shift, caps) -> Option<char>` (letras uppercase iff

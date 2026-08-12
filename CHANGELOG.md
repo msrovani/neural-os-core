@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### SESSION_261: Mesh graph UI — orb vira hub do grafo P2P + chat Hermes/SysInfo removidos (2026-08-12)
+
+**2 commits, 0 erros, cargo check --release.**
+
+- **feat(jarbas):** grafo de mesh como visual central (inspirado no tweet @antpalkin
+  sobre Kimi Agent Swarm — "você não recebe 300 respostas, recebe um mapa"). O orb
+  (Soul Mirror) deixa de ser o único elemento da camada de fundo e vira o **nó central
+  do grafo**: hub afetivo Jarbas (roxo + glow + core branco) + satélites = peers do
+  mesh (≤12, órbita determinística `2π·i/n`, pulso senoidal) + aresta hub→peer colorida
+  por p99 RTT (lerp verde→amarelo→vermelho em 0..1500ms; offline cinza).
+  `DoubleBuffer::draw_line` (Bresenham inteiro) em fb.rs; `MESH_GRAPH:
+  IrqSafeLock<Vec<MeshPeerNode>>` em agent.rs (drain MESH_HEALTH → snapshot);
+  `draw_mesh_graph(tick)` chamado DENTRO do render() (após o orb, antes do swap).
+  Sem mesh ativo → degrada para o hub sozinho.
+- **fix(jarbas):** os cards de status de mesh (agent.rs:717-760) eram desenhados no
+  tick do DisplayAgent ANTES do `desktop.render()` — o render() apaga o back buffer
+  inteiro (compositor.rs:394) e só swap() dentro dele (577) → os cards **nunca
+  apareciam na tela**. Desenho fora do render() = apagado a cada frame. O grafo
+  corrige de raiz (desenha dentro do render()).
+- **cleanup(ui):** painel "Hermes Console" (CAMADA 2, direita 35%) DELETADO; workspace
+  full-width (`left_w = w - gap*2`); `ensure_hermes_overlay()` → no-op (janela
+  HermesChat nunca mais spawna; OpenChat/ShowLauncher no-op); card SysInfo 9001
+  (CPU/RAM/agentes/uptime/net/storage) removido — sysinfo_agent virou unit struct,
+  **BOOT.LOG flush retry mantido** (HW real: USB-MSC demora a enumerar).
+- **IDEA_BANK:** #532 (grafo persistente via SGDB — "a base fica mais esperta a cada
+  run"), #533 (click-to-inspect no grafo — mouse PS/2 já integrado).
+
 ### SESSION_260: Crash HW real no K33 — campo `address` fantasma do StackSizeResponse + fix stack via RSP (2026-08-12)
 
 **1 commit (`57ad20a`), 0 erros, validado QEMU/OVMF.**
