@@ -12,6 +12,20 @@
 #     IDEA_BANK #528 (LEDs 0xED + self-test 8042) e #529 (teclas E0 + set 2).
 #
 # ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s260 — Crash HW K33: campo address fantasma + fix stack via RSP
+#   SESSION_260: reboot em HW real (i5-7300HQ/16GB, boot UEFI pendrive) no K33
+#     + pendrive corrompido. Causa raiz: fix do s254 lia `StackSizeResponse.address`
+#     — campo INVENTADO no struct Rust; protocolo Limine define só `{ revision }`.
+#     Lia .bss zerado = 0 → reserve_range(0,2MB) no-op → stack 2MB nunca reservada →
+#     alocações do K33 cruzam a stack → return address corrompido → triple fault
+#     → reboot (QEMU 6G passava: watermark menor). Pendrive corrompido = reboot no
+#     meio do overwrite_boot_log rasgava o dir cluster FAT32 (agravado a cada boot).
+#     Fix 57ad20a: derivar stack do RSP atual (kernel executa nela; RSP=phys+pm_off)
+#     + reservar (rsp&~2MB)−2MB, 4MB; StackSizeResponse corrigido p/ ABI real.
+#     Validado QEMU: reserva stack via RSP 0x98000000 len=4MB (antes 0x0).
+#     usb_hw.img regenerado (6271MB). Pendências: USB-MSC CSW tag + DMA WB (MED).
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s258 — Bughunt (auditoria + runtime) + Fixes Scheduler + MBR HW
 #   SESSION_258: bughunt 4 lanes oracle (10 bugs confirmados, 1 falso HIGH refutado
 #     por medição própria) + validação runtime QEMU com loader 2B v6 (crash ip=0 do

@@ -2,6 +2,36 @@
 
 ## [Unreleased]
 
+### SESSION_260: Crash HW real no K33 — campo `address` fantasma do StackSizeResponse + fix stack via RSP (2026-08-12)
+
+**1 commit (`57ad20a`), 0 erros, validado QEMU/OVMF.**
+
+- **Sintoma HW real:** notebook (i5-7300HQ/GTX 1050/16GB, boot UEFI pendrive) parava no
+  checkpoint `K33: apps+audio+wasm` e **rebootava** (triple fault — panic handler faz hlt,
+  não rebota); pendrive FAT32 corrompido depois.
+- **Causa raiz (2 bugs encadeados):**
+  1. **Stack nunca reservada:** o fix do s254 lia `StackSizeResponse.address` — campo
+     **inventado no struct Rust**; o protocolo Limine define só `{ revision }`
+     (limine-protocol/PROTOCOL.md). Lia .bss zerado = 0 → `reserve_range(0, 2MB)` = no-op
+     silencioso. No HW real (16GB, watermark > QEMU 6G) as alocações do bloco K33
+     (arena 512MB + wasmi + exec_arena W^X) cruzam a stack → return address corrompido →
+     `#PF→#DF→triple fault→reboot`. QEMU passava (watermark menor) — classe
+     "funciona no emulador, explode em HW real".
+  2. **Pendrive corrompido:** o reboot no meio do `overwrite_boot_log` (k_nano
+     boot_logger.rs:182-209, dir cluster reescrito setor-a-setor, 10+ flushes antes do K33)
+     rasgava o dir FAT32 — agravado a cada boot.
+- **Fix `57ad20a`:** derivar a stack do **RSP atual** (o kernel executa nela; RSP virtual =
+  phys + pm_offset no HHDM) + reservar `(rsp & ~2MB) − 2MB, 4MB` (margem p/ stack
+  não-alinhada); `StackSizeResponse` corrigido p/ o ABI real. Log validado:
+  `reserva stack via RSP 0x98000000 len=4MB (rsp_phys=0x982d0b80)` — antes `0x0`.
+- `kernel_region fallback` (0x9839f000) intacto — imagem + stack ambas reservadas.
+- **Pendências MED (ora-1):** USB-MSC CSW tag nunca validado + DMA em páginas WB sem
+  `map_page_uc` (usb_msc.rs:148-160,232-238 — classe e1000); `overwrite_boot_log` com
+  escrita de dir não-atômica (corrupção em crash futuro).
+- **Lições:** conferir PROTOCOL.md antes de usar campo de resposta de bootloader (campo
+  "obviamente útil" que lê 0 = bug latente que explode em HW com mais RAM); derivação por
+  estado real (RSP) > struct de resposta; reboot HW = triple fault, não panic.
+
 ### SESSION_259: Keyboard modifiers (Shift/CapsLock/break) + BrokenThorn OSDev mining (2026-08-12)
 
 **1 commit, 0 erros, 11 testes k_nano PASS.**
