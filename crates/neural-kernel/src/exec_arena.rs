@@ -118,6 +118,19 @@ pub unsafe fn jit_write_exec(code: &[u8]) -> Result<u64, &'static str> {
     core::sync::atomic::fence(Ordering::SeqCst);
     // Fase execução: RX (remove WRITABLE → W^X).
     set_leaf_flags(virt, PageTableFlags::PRESENT)?;
+    // SESSÃO_260: self-modifying code — `mfence` + `invlpg` NÃO bastam para
+    // executar código recém-escrito em HW real (Intel SDM 8.1.3): o prefetcher
+    // pode ter buscado a linha antes da escrita. `cpuid` (serializing) invalida
+    // icache/pipeline. TCG mascara (sem icache) — Kaby Lake real travava no K33.
+    // rbx é reservado pelo LLVM: salva/restaura via push/pop (cpuid clobbera
+    // eax/ebx/ecx/edx — outputs descartados, só importa a serialização).
+    core::arch::asm!(
+        "push rbx",
+        "cpuid",
+        "pop rbx",
+        out("eax") _, out("ecx") _, out("edx") _,
+        options(nomem, nostack, preserves_flags)
+    );
     Ok(ARENA_VA)
 }
 

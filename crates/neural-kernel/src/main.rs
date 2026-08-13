@@ -1892,19 +1892,45 @@ pub(crate) fn kernel_boot(
     audio::init_audio();
     jarbas_bridge::log_bridge_status();
 
+    // SESSÃO_260: checkpoints de progresso dentro do bloco K33 — cada self-test
+    // loga um K próprio (33a..33h) para o boot HW real identificar QUAL trava
+    // (sem serial, o K* no FB é o único canal). O cpuid do exec_arena corrigiu o
+    // SMC; se ainda travar, o último K mostra o alvo exato.
+    crate::display::fb::boot_ckpt(33, "apps+audio+wasm");
+    let mut k33 = 1u8;
+    macro_rules! k33_step {
+        ($tag:expr) => {{
+            crate::display::fb::boot_ckpt(33, $tag);
+            crate::boot_logger::log(alloc::format!("BOOT: K33[{}] {}", k33, $tag).as_str());
+            k33 += 1;
+        }};
+    }
+    crate::apps::init_apps();
+    k33_step!("apps ok");
+    audio::init_audio();
+    k33_step!("audio ok");
+
     let _skillopt = crate::structured_decode::SkillOptimizer::new();
     crate::micropython_wasm::try_init_at_boot();
+    k33_step!("micropython");
     // ADR-0059: runtime WASM real (wasmi) + seletor de caminho (A/B/C) — self-tests.
     let _ = hermes_crate::wasmi_rt::self_test();
+    k33_step!("wasmi");
     let _ = hermes_crate::wasm_build::self_test(); // F4: op-IR→wasm→wasmi
+    k33_step!("wasm_build");
     let _ = hermes_crate::app_factory::self_test(); // F3: gera→monta→sandbox
+    k33_step!("app_factory");
     // ADR-0059 F7: arena W^X — execução de código nativo gerado on-device (base JIT).
     let _ = crate::exec_arena::self_test();
+    k33_step!("exec_arena");
     // ADR-0081 Fase B + BEI: self-tests do transporte P2P (chunking CHK\0),
     // serialização .bitnet roundtrip (save_model) e aprendizado federado.
     let _ = k_nano::net::mesh::chunk_self_test();
+    k33_step!("mesh_chunk");
     let _ = cortex_crate::cortex::model_save_roundtrip_self_test();
+    k33_step!("roundtrip");
     let _ = cortex_crate::federated::federated_self_test();
+    k33_step!("federated");
     // ADR-0083 §5.2: backprop real do TransformerTrainer — CE loss diminui
     // em sequência sintética (critério de aceite).
     {
