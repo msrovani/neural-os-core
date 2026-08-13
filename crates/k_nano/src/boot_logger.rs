@@ -131,21 +131,34 @@ fn fat32_parts(dev: &mut dyn BlockDevice) -> Vec<crate::fat32::Partition> {
 }
 
 /// Sobrescreve `BOOT.LOG` pré-alocado no FAT32 via BlockDevice (USB ou ATA).
+/// SESSÃO_260: logs de diagnóstico no motivo exato de cada falha — no HW real
+/// (pendrive bootável via USB-MSC) o flush falhava silencioso e o BOOT.LOG
+/// ficava vazio; com o motivo, o próximo boot mostra onde trava.
 unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
     let want = encode_83(BOOT_LOG_NAME);
     let parts = fat32_parts(dev);
+    if parts.is_empty() {
+        crate::slog_nano!("LOG", "warn", "bootlog: 0 particoes FAT32 encontradas (MBR/GPT parse?)");
+        return false;
+    }
     for part in &parts {
         if !matches!(part.type_code, 0x0B | 0x0C | 0x1C | 0x73) { continue; }
         let lba_start = part.lba_start as u64;
         let mut bpb = [0u8; 512];
-        if !dev.read_sectors(lba_start, &mut bpb) { continue; }
+        if !dev.read_sectors(lba_start, &mut bpb) {
+            crate::slog_nano!("LOG", "warn", "bootlog: read BPB LBA {} falhou", lba_start);
+            continue;
+        }
         if &bpb[3..11] == b"EXFAT   " { continue; }
         let bps = u16::from_le_bytes([bpb[0x0B], bpb[0x0C]]) as u32;
         let spc = bpb[0x0D] as u32;
         let reserved = u16::from_le_bytes([bpb[0x0E], bpb[0x0F]]) as u32;
         let fat_count = bpb[0x10] as u32;
         let root_entries = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
-        if root_entries > 0 || bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 { continue; }
+        if root_entries > 0 || bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 {
+            crate::slog_nano!("LOG", "warn", "bootlog: LBA {} BPB nao-FAT32 (re={} bps={} spc={})", lba_start, root_entries, bps, spc);
+            continue;
+        }
         let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
         let root_cluster = u32::from_le_bytes([bpb[0x2C], bpb[0x2D], bpb[0x2E], bpb[0x2F]]);
         let fat_lba = lba_start as u32 + reserved;
@@ -161,6 +174,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
             for s in 0..spc {
                 let off = (s * bps) as usize;
                 if !dev.read_sectors((clba + s) as u64, &mut dir[off..off + bps as usize]) {
+                    crate::slog_nano!("LOG", "warn", "bootlog: read dir LBA {} falhou", u64::from(clba) + u64::from(s));
                     return false;
                 }
             }
@@ -187,6 +201,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                         let take = (write_len - written).min(512);
                         sector[..take].copy_from_slice(&data[written..written + take]);
                         if !dev.write_sectors((fc_lba + s) as u64, &sector) {
+                            crate::slog_nano!("LOG", "warn", "bootlog: WRITE LBA {} falhou (tick={})", u64::from(fc_lba) + u64::from(s), crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed));
                             return false;
                         }
                         written += take;
@@ -194,7 +209,10 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                     let fat_off = fc as usize * 4;
                     let fat_sec = fat_lba + (fat_off as u32 / bps);
                     let mut fsec = [0u8; 512];
-                    if !dev.read_sectors(fat_sec as u64, &mut fsec) { return false; }
+                    if !dev.read_sectors(fat_sec as u64, &mut fsec) {
+                        crate::slog_nano!("LOG", "warn", "bootlog: read FAT LBA {} falhou", fat_sec);
+                        return false;
+                    }
                     let boff = fat_off % bps as usize;
                     fc = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
                 }
@@ -204,9 +222,11 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                 for s in 0..spc {
                     let off = (s * bps) as usize;
                     if !dev.write_sectors((clba + s) as u64, &dir[off..off + bps as usize]) {
+                        crate::slog_nano!("LOG", "warn", "bootlog: write dir LBA {} falhou", u64::from(clba) + u64::from(s));
                         return false;
                     }
                 }
+                crate::slog_nano!("LOG", "info", "bootlog: OK {} bytes em {} (LBA {})", written, BOOT_LOG_NAME, lba_start);
                 return true;
             }
             let fat_off = cluster as usize * 4;
@@ -216,6 +236,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
             let boff = fat_off % bps as usize;
             cluster = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
         }
+        crate::slog_nano!("LOG", "warn", "bootlog: BOOT.LOG NAO encontrado no root dir (walked={})", walked);
     }
     false
 }
@@ -248,19 +269,31 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
     } else {
         // Tenta USB-MSC → ATA PIO → AHCI SATA → NVMe — nesta ordem.
         // USB-MSC tem sync_cache após cada write.
+        // SESSÃO_260: loga o MOTIVO de cada falha — no HW real (pendrive via
+        // USB-MSC) o flush falhava silencioso e o BOOT.LOG ficava vazio.
         let mut ok = false;
+        let mut reason = "nenhum backend disponivel";
         if let Some(mut g) = crate::globals::USB_MSC.try_lock() {
             if let Some(ref mut msc) = *g {
                 ok = unsafe { overwrite_boot_log(msc, &content) };
                 if ok {
                     msc.sync_cache();
+                } else {
+                    reason = "USB-MSC: overwrite_boot_log falhou (leitura/escrita do FAT32)";
                 }
+            } else {
+                reason = "USB-MSC: presente mas None";
             }
+        } else {
+            reason = "USB-MSC: try_lock falhou (lock ocupado)";
         }
         if !ok {
             if let Some(mut g) = crate::globals::ATA_DRIVER.try_lock() {
                 if let Some(ref mut ata) = *g {
                     ok = unsafe { overwrite_boot_log(ata, &content) };
+                    if !ok {
+                        reason = "ATA PIO: overwrite_boot_log falhou";
+                    }
                 }
             }
         }
@@ -268,6 +301,9 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             if let Some(mut g) = crate::globals::AHCI_DRIVER.try_lock() {
                 if let Some(ref mut ahci) = *g {
                     ok = unsafe { overwrite_boot_log(ahci, &content) };
+                    if !ok {
+                        reason = "AHCI: overwrite_boot_log falhou";
+                    }
                 }
             }
         }
@@ -275,8 +311,14 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             if let Some(mut g) = crate::disk_agent::nvme::NVME_DRIVER.try_lock() {
                 if let Some(ref mut nvme) = *g {
                     ok = unsafe { overwrite_boot_log(nvme, &content) };
+                    if !ok {
+                        reason = "NVMe: overwrite_boot_log falhou";
+                    }
                 }
             }
+        }
+        if !ok {
+            crate::slog_nano!("LOG", "info", "BOOT.LOG flush FALHOU — {}", reason);
         }
         ok
     };
