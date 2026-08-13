@@ -2327,6 +2327,7 @@ pub(crate) fn kernel_boot(
             // Separa iGPU (display) de dGPU (compute) para qualquer combinacao
 
             let plan = crate::gpu::display_coex::plan_assignment(&gpus);
+            crate::display::fb::boot_ckpt(43, "gpu plan");
 
             k_nano::slog_bin!("Log", "msg", "{}", crate::gpu::display_coex::assignment_status(&plan, &gpus));
 
@@ -2334,10 +2335,13 @@ pub(crate) fn kernel_boot(
 
             if let Some(ci) = plan.compute_index() {
                 if let Some(g) = gpus.get(ci) {
+                    crate::display::fb::boot_ckpt(43, "gpu vram map");
                     if crate::gpu::vram::init_vram_tier(g) {
                         // IDEA #67 — MHI AllocTier::Vram → buddy BAR
                         crate::mhi::register_vram_allocator(crate::gpu::vram::vram_alloc);
+                        crate::display::fb::boot_ckpt(43, "gpu vram ok");
                     } else {
+                        crate::display::fb::boot_ckpt(43, "gpu vram fail");
                         k_nano::slog_bin!(
                             "MHI-DMA",
                             "info",

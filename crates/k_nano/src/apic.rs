@@ -428,6 +428,10 @@ pub unsafe fn map_region_uc_2mb_at(
         let l4_virt = base + l4_frame.start_address().as_u64();
         let l4_table = &mut *(l4_virt.as_mut_ptr::<PageTable>());
 
+        // SESSÃO_260 (ora-1 HIGH): o mapeamento 2MB deve ir na PDE (nível 2,
+        // p2_index), NÃO na PDPTE — PDPTE+PS=1 mapeia 1GB e o loop reescrevia
+        // a mesma entrada 512× (só a última 2MB por GB valia). HW real (GTX
+        // 1050) congelava; QEMU (VGA dummy) nunca exercitava.
         let l3_entry = &mut l4_table[usize::from(virt.p4_index())];
         if !l3_entry.flags().contains(PageTableFlags::PRESENT) {
             let frame = alloc_mmio_frame(base);
@@ -436,11 +440,19 @@ pub unsafe fn map_region_uc_2mb_at(
         let l3_virt = base + l3_entry.addr().as_u64();
         let l3_table = &mut *(l3_virt.as_mut_ptr::<PageTable>());
 
-        // L2 entry with HUGE_PAGE (2MB)
-        let l2_entry = &mut l3_table[usize::from(virt.p3_index())];
-        // Alinhar phys ao boundary de 2MB
+        // PDPTE (nível 3): aponta para o PD; SEM HUGE_PAGE.
+        let pdp_entry = &mut l3_table[usize::from(virt.p3_index())];
+        if !pdp_entry.flags().contains(PageTableFlags::PRESENT) {
+            let frame = alloc_mmio_frame(base);
+            pdp_entry.set_addr(PhysAddr::new(frame), PageTableFlags::PRESENT | PageTableFlags::WRITABLE);
+        }
+        let pd_virt = base + pdp_entry.addr().as_u64();
+        let pd_table = &mut *(pd_virt.as_mut_ptr::<PageTable>());
+
+        // PDE (nível 2) com HUGE_PAGE (2MB) — índice p2_index.
+        let pde = &mut pd_table[usize::from(virt.p2_index())];
         let aligned_phys = phys & !((1 << 21) - 1);
-        l2_entry.set_addr(PhysAddr::new(aligned_phys),
+        pde.set_addr(PhysAddr::new(aligned_phys),
             PageTableFlags::PRESENT | PageTableFlags::WRITABLE
             | PageTableFlags::HUGE_PAGE | PageTableFlags::NO_CACHE
             | PageTableFlags::WRITE_THROUGH);
