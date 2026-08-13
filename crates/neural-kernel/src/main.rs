@@ -815,22 +815,19 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
     // Safe path: VGA + serial sem alocar
 
     {
-
         let mut writer = crate::vga_buffer::WRITER.lock();
-
         if let Some(ref mut w) = *writer { let _ = write!(w, "[PANIC] {}", info); }
-
     }
 
     {
-
         let mut serial = crate::serial::SERIAL.lock();
-
         if let Some(ref mut s) = *serial { let _ = write!(s, "[PANIC] {}", info); }
-
     }
 
-
+    // SESSÃO_260: pinta o panic no framebuffer — VGA morre após o claim do FB e
+    // o serial é mudo no notebook real → freeze parecia "travou sem razão".
+    // console_print desenha direto no FB (sem alocar, sem depender do VGA).
+    crate::display::fb::console_print("[PANIC] ");
 
     // HALT — não aloca (raw_vec capacity overflow em higher-half faz format!() estourar isize::MAX)
     k_nano::boot_ramlog::append("[PANIC] halt");
@@ -1939,16 +1936,20 @@ pub(crate) fn kernel_boot(
             k_nano::slog_bin!("TRAIN", "info", "{}", t.status());
         }
     }
+    k33_step!("trainer");
     // ADR-0081 tier cripto (Relativizado HMAC-SHA256): vetor RFC 4231 caso 1.
     let _ = k_nano::crypto::hmac_self_test();
+    k33_step!("hmac");
     // ADR-0081 Tier F: AEAD X25519 DH + ChaCha20-Poly1305 — self-test com
     // keypairs fake (DH simétrico → chaves iguais; roundtrip; tamper→None;
     // nonce diverge por clock). Roda antes de init_session_identity (usa
     // keypair fake, não a seed da sessão).
     let _ = k_nano::crypto::aead_self_test();
+    k33_step!("aead");
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0060). NÃO registra ainda —
     // porto seguro: B/C nativo gated até o ring passar o gate.
     crate::isolation_ring::init_connectors();
+    k33_step!("connectors");
     // ADR-0063 F0/F1a: TickvLite mount + smoke (NVMe ou RAM)
     if k_nano::storage::tickv_smoke() {
         k_nano::slog_bin!(
@@ -1962,8 +1963,10 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("TICKV", "smoke", "FAIL or skip");
         crate::boot_logger::log("BOOT: [TICKV] smoke FAIL");
     }
+    k33_step!("tickv");
     // ADR-0063: facade + demo + Hamming dispatch
     k_ai::sgdb::boot_init();
+    k33_step!("sgdb_boot");
     {
         let p = k_ai::sgdb::hamming_kernel_name();
         k_nano::slog_bin!("sgdb", "hamming", "{}", p);
@@ -1976,6 +1979,7 @@ pub(crate) fn kernel_boot(
         k_nano::slog_bin!("sgdb", "demo", "Q-jump FAIL");
         crate::boot_logger::log("BOOT: [sgdb] quality demo FAIL");
     }
+    k33_step!("sgdb_demo");
     if k_nano::storage::is_ready() {
         if k_nano::storage::backend_name() == "ram" {
             k_nano::slog_bin!("sgdb", "e2e_ckpt", "SKIP (ram)");
