@@ -129,6 +129,15 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
         return false;
     }
 
+    // SESSÃO_260 (HW real GTX 1050): BAR size medido pode vir lixo (ex:
+    // 2^64-1 como o VGA dummy do QEMU logou) → o loop do mapeamento 2MB
+    // rodaria bilhões de iterações = freeze aparente. BARs são potências de 2
+    // e VRAM > 64GB não existe em placa consumer. Skip honesto se lixo.
+    if gpu.vram_size > 64 * 1024 * 1024 * 1024 || gpu.vram_size.count_ones() != 1 {
+        k_nano::slog_hal!("VRAM", "warn", "{}: vram_size suspeito {:#x} — skip (medicao de BAR duvidosa)", gpu.name, gpu.vram_size);
+        return false;
+    }
+
     let pmoff = k_nano::memory::PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
     let vram_phys = gpu.bar2;
     let vram_size = gpu.vram_size;
