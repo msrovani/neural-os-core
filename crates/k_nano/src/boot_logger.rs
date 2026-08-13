@@ -1,9 +1,9 @@
-//! Boot Logger — buffer RAM → flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
+﻿//! Boot Logger â€” buffer RAM â†’ flush FAT32 (`BOOT.LOG` 8.3) via BlockDevice.
 //!
-//! Notebooks modernos sem COM: este é o canal de diagnóstico.
+//! Notebooks modernos sem COM: este Ã© o canal de diagnÃ³stico.
 //! Feature `fat-boot-log` (ativa no crate `boot` para imagem HW).
 //!
-//! `BOOT.LOG` é pré-alocado no mkfat32 (256 KiB) para sobrescrita via BlockDevice
+//! `BOOT.LOG` Ã© prÃ©-alocado no mkfat32 (256 KiB) para sobrescrita via BlockDevice
 //! (USB-MSC ou ATA) sem alocar clusters novos no boot.
 //!
 //! Display-dependent wrappers (init_after_usb, maybe_uefi_flush_reboot,
@@ -18,9 +18,9 @@ use spin::Mutex;
 
 use crate::block_dev::BlockDevice;
 
-/// Nome 8.3 fixo — fácil achar no Windows após atribuir letra ao volume.
+/// Nome 8.3 fixo â€” fÃ¡cil achar no Windows apÃ³s atribuir letra ao volume.
 pub const BOOT_LOG_NAME: &str = "BOOT.LOG";
-/// Capacidade do arquivo pré-alocado (mkfat32).
+/// Capacidade do arquivo prÃ©-alocado (mkfat32).
 pub const BOOT_LOG_CAP: usize = 256 * 1024;
 
 struct StackBuf {
@@ -49,7 +49,7 @@ impl Write for StackBuf {
 
 pub static SESSION_FILENAME: Mutex<Option<String>> = Mutex::new(None);
 pub static FAT_READY: AtomicBool = AtomicBool::new(false);
-/// Heap talc já inicializado — obrigatório antes de qualquer alloc no logger.
+/// Heap talc jÃ¡ inicializado â€” obrigatÃ³rio antes de qualquer alloc no logger.
 static HEAP_READY: AtomicBool = AtomicBool::new(false);
 
 pub fn heap_ready() -> bool {
@@ -63,15 +63,15 @@ pub fn mark_heap_ready() {
 const PRE_FAT_CAPACITY: usize = 512;
 static PRE_FAT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PRE_FAT_BUF: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
-/// Conteúdo acumulado da sessão (cabe no BOOT.LOG pré-alocado).
+/// ConteÃºdo acumulado da sessÃ£o (cabe no BOOT.LOG prÃ©-alocado).
 static SESSION_BODY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static DISK_WRITES: AtomicUsize = AtomicUsize::new(0);
-/// Mensagens desde o último flush bem-sucedido (USB MSC é lento: não reescreve a cada linha).
+/// Mensagens desde o Ãºltimo flush bem-sucedido (USB MSC Ã© lento: nÃ£o reescreve a cada linha).
 static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
 const FLUSH_EVERY: usize = 8;
 
 fn buffer_log(msg: &str) {
-    // Espelho físico (ramlog); persistência FAT só via MSC/ATA — sem soft-reboot.
+    // Espelho fÃ­sico (ramlog); persistÃªncia FAT sÃ³ via MSC/ATA â€” sem soft-reboot.
     crate::boot_ramlog::append(msg);
     if !HEAP_READY.load(Ordering::Relaxed) {
         return;
@@ -101,7 +101,7 @@ fn encode_83(name: &str) -> [u8; 11] {
     out
 }
 
-/// Lista partições FAT32 (MBR + GPT hybrid do usb_hw.img).
+/// Lista partiÃ§Ãµes FAT32 (MBR + GPT hybrid do usb_hw.img).
 fn fat32_parts(dev: &mut dyn BlockDevice) -> Vec<crate::fat32::Partition> {
     let mut mbr = [0u8; 512];
     if !dev.read_sectors(0, &mut mbr) || mbr[0x1FE] != 0x55 || mbr[0x1FF] != 0xAA {
@@ -130,15 +130,15 @@ fn fat32_parts(dev: &mut dyn BlockDevice) -> Vec<crate::fat32::Partition> {
     parts
 }
 
-/// Sobrescreve `BOOT.LOG` pré-alocado no FAT32 via BlockDevice (USB ou ATA).
-/// SESSÃO_260: logs de diagnóstico no motivo exato de cada falha — no HW real
-/// (pendrive bootável via USB-MSC) o flush falhava silencioso e o BOOT.LOG
-/// ficava vazio; com o motivo, o próximo boot mostra onde trava.
+/// Sobrescreve `BOOT.LOG` prÃ©-alocado no FAT32 via BlockDevice (USB ou ATA).
+/// SESSÃƒO_260: logs de diagnÃ³stico no motivo exato de cada falha â€” no HW real
+/// (pendrive bootÃ¡vel via USB-MSC) o flush falhava silencioso e o BOOT.LOG
+/// ficava vazio; com o motivo, o prÃ³ximo boot mostra onde trava.
 unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
     let want = encode_83(BOOT_LOG_NAME);
     let parts = fat32_parts(dev);
     if parts.is_empty() {
-        crate::slog_nano!("LOG", "warn", "bootlog: 0 particoes FAT32 encontradas (MBR/GPT parse?)");
+        crate::boot_logger::log(&alloc::format!("bootlog: 0 particoes FAT32 encontradas (MBR/GPT parse?)"));
         return false;
     }
     for part in &parts {
@@ -146,7 +146,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
         let lba_start = part.lba_start as u64;
         let mut bpb = [0u8; 512];
         if !dev.read_sectors(lba_start, &mut bpb) {
-            crate::slog_nano!("LOG", "warn", "bootlog: read BPB LBA {} falhou", lba_start);
+            crate::boot_logger::log(&alloc::format!("bootlog: read BPB LBA {} falhou", lba_start));
             continue;
         }
         if &bpb[3..11] == b"EXFAT   " { continue; }
@@ -156,7 +156,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
         let fat_count = bpb[0x10] as u32;
         let root_entries = u16::from_le_bytes([bpb[0x11], bpb[0x12]]);
         if root_entries > 0 || bps < 512 || bps > 4096 || bps % 32 != 0 || spc == 0 {
-            crate::slog_nano!("LOG", "warn", "bootlog: LBA {} BPB nao-FAT32 (re={} bps={} spc={})", lba_start, root_entries, bps, spc);
+            crate::boot_logger::log(&alloc::format!("bootlog: LBA {} BPB nao-FAT32 (re={} bps={} spc={})", lba_start, root_entries, bps, spc));
             continue;
         }
         let spf = u32::from_le_bytes([bpb[0x24], bpb[0x25], bpb[0x26], bpb[0x27]]);
@@ -174,7 +174,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
             for s in 0..spc {
                 let off = (s * bps) as usize;
                 if !dev.read_sectors((clba + s) as u64, &mut dir[off..off + bps as usize]) {
-                    crate::slog_nano!("LOG", "warn", "bootlog: read dir LBA {} falhou", u64::from(clba) + u64::from(s));
+                    crate::boot_logger::log(&alloc::format!("bootlog: read dir LBA {} falhou", u64::from(clba) + u64::from(s)));
                     return false;
                 }
             }
@@ -201,7 +201,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                         let take = (write_len - written).min(512);
                         sector[..take].copy_from_slice(&data[written..written + take]);
                         if !dev.write_sectors((fc_lba + s) as u64, &sector) {
-                            crate::slog_nano!("LOG", "warn", "bootlog: WRITE LBA {} falhou (tick={})", u64::from(fc_lba) + u64::from(s), crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed));
+                            crate::boot_logger::log(&alloc::format!("bootlog: WRITE LBA {} falhou (tick={})", u64::from(fc_lba) + u64::from(s), crate::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed)));
                             return false;
                         }
                         written += take;
@@ -210,7 +210,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                     let fat_sec = fat_lba + (fat_off as u32 / bps);
                     let mut fsec = [0u8; 512];
                     if !dev.read_sectors(fat_sec as u64, &mut fsec) {
-                        crate::slog_nano!("LOG", "warn", "bootlog: read FAT LBA {} falhou", fat_sec);
+                        crate::boot_logger::log(&alloc::format!("bootlog: read FAT LBA {} falhou", fat_sec));
                         return false;
                     }
                     let boff = fat_off % bps as usize;
@@ -222,11 +222,11 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                 for s in 0..spc {
                     let off = (s * bps) as usize;
                     if !dev.write_sectors((clba + s) as u64, &dir[off..off + bps as usize]) {
-                        crate::slog_nano!("LOG", "warn", "bootlog: write dir LBA {} falhou", u64::from(clba) + u64::from(s));
+                        crate::boot_logger::log(&alloc::format!("bootlog: write dir LBA {} falhou", u64::from(clba) + u64::from(s)));
                         return false;
                     }
                 }
-                crate::slog_nano!("LOG", "info", "bootlog: OK {} bytes em {} (LBA {})", written, BOOT_LOG_NAME, lba_start);
+                crate::boot_logger::log(&alloc::format!("bootlog: OK {} bytes em {} (LBA {})", written, BOOT_LOG_NAME, lba_start));
                 return true;
             }
             let fat_off = cluster as usize * 4;
@@ -236,7 +236,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
             let boff = fat_off % bps as usize;
             cluster = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
         }
-        crate::slog_nano!("LOG", "warn", "bootlog: BOOT.LOG NAO encontrado no root dir (walked={})", walked);
+        crate::boot_logger::log(&alloc::format!("bootlog: BOOT.LOG NAO encontrado no root dir (walked={})", walked));
     }
     false
 }
@@ -267,9 +267,9 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
     let ok = if let Some(d) = dev {
         unsafe { overwrite_boot_log(d, &content) }
     } else {
-        // Tenta USB-MSC → ATA PIO → AHCI SATA → NVMe — nesta ordem.
-        // USB-MSC tem sync_cache após cada write.
-        // SESSÃO_260: loga o MOTIVO de cada falha — no HW real (pendrive via
+        // Tenta USB-MSC â†’ ATA PIO â†’ AHCI SATA â†’ NVMe â€” nesta ordem.
+        // USB-MSC tem sync_cache apÃ³s cada write.
+        // SESSÃƒO_260: loga o MOTIVO de cada falha â€” no HW real (pendrive via
         // USB-MSC) o flush falhava silencioso e o BOOT.LOG ficava vazio.
         let mut ok = false;
         let mut reason = "nenhum backend disponivel";
@@ -318,7 +318,7 @@ fn persist_now(dev: Option<&mut dyn BlockDevice>) -> bool {
             }
         }
         if !ok {
-            crate::slog_nano!("LOG", "info", "BOOT.LOG flush FALHOU — {}", reason);
+            crate::boot_logger::log(&alloc::format!("BOOT.LOG flush FALHOU - {}", reason));
         }
         ok
     };
@@ -336,7 +336,7 @@ fn persist_now(_dev: Option<&mut dyn BlockDevice>) -> bool {
     false
 }
 
-/// Init legado ATA (partições já lidas).
+/// Init legado ATA (partiÃ§Ãµes jÃ¡ lidas).
 pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partition]) {
     #[cfg(feature = "fat-boot-log")]
     {
@@ -347,7 +347,7 @@ pub fn init(ata: Option<&crate::ata::AtaDriver>, _parts: &[crate::fat32::Partiti
                 ok,
                 DISK_WRITES.load(Ordering::Relaxed));
             if !ok {
-                crate::slog_nano!("LOG", "info", "WARN: BOOT.LOG não gravado — confira FAT32 no stick");
+                crate::slog_nano!("LOG", "info", "WARN: BOOT.LOG nÃ£o gravado â€” confira FAT32 no stick");
             }
         } else {
             let ok = persist_now(None);
@@ -396,7 +396,7 @@ pub fn log_quiet(msg: &str) {
     }
 }
 
-/// Flush forçado (checkpoints críticos). Retorna true se gravou em FAT.
+/// Flush forÃ§ado (checkpoints crÃ­ticos). Retorna true se gravou em FAT.
 pub fn flush() -> bool {
     #[cfg(feature = "fat-boot-log")]
     {
@@ -410,7 +410,7 @@ pub fn flush() -> bool {
     { false }
 }
 
-/// Anexa texto sem `serial_println` (evita recursão no path sem-COM do serial.rs).
+/// Anexa texto sem `serial_println` (evita recursÃ£o no path sem-COM do serial.rs).
 pub fn append_raw(msg: &str) {
     if !HEAP_READY.load(Ordering::Relaxed) {
         return;
@@ -435,3 +435,4 @@ pub fn append_raw(msg: &str) {
         }
     }
 }
+
