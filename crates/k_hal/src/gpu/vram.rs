@@ -149,15 +149,12 @@ pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
     }
     k_nano::slog_hal!("VRAM", "info", "Mapeados {} x 2MB pages para VRAM @ {:#x}", pages, vram_phys);
 
-    let test_addr = vram_phys + pmoff;
-    let test_val: u32 = 0xDEADBEEF;
-    core::ptr::write_volatile(test_addr as *mut u32, test_val);
-    let read_back = core::ptr::read_volatile(test_addr as *const u32);
-    if read_back != test_val {
-        k_nano::slog_hal!("VRAM", "info", "{}: teste VRAM falhou em {:#x}", gpu.name, vram_phys);
-        return false;
-    }
-    k_nano::slog_hal!("VRAM", "info", "{}: teste VRAM OK @ {:#x}", gpu.name, vram_phys);
+    // SESSÃO_260 (HW real, notebook dual-GPU): NÃO fazer write/read de teste na
+    // VRAM aqui. A dGPU (GTX 1050) está em D3 (desligada) durante o boot — o
+    // scan PCI vê os BARs, mas um write_volatile na VRAM dela gera hang de
+    // barramento PCIe = freeze aparente (o QEMU com VGA dummy nunca exercitava).
+    // O mapeamento UC em si é inofensivo; o teste destrutivo é validação de dev
+    // que assume GPU ligada — fica para quando a GPU for power-on (ACR/firmware).
 
     let buddy = VramBuddy::new(vram_phys, vram_size, gpu.name);
     *VRAM_BUDDY.lock() = Some(buddy);
