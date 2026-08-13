@@ -206,6 +206,23 @@ pub unsafe fn read_pci_capabilities(bus: u8, device: u8, function: u8) -> alloc:
     caps
 }
 
+/// D-state do dispositivo via PCI PM capability (cap_id 0x01, PMCSR offset+4,
+/// bits 0-1). SESSÃO_260: dGPU em D3 tem BARs visíveis mas tocar a VRAM gera
+/// hang de barramento PCIe (freeze real no boot). Medir o estado real antes
+/// de power-on/compute. Retorna (state, pmc_base_ptr).
+///   0 = D0 (ativo) · 3 = D3hot · 4 = D3cold (device absent/deep sleep)
+pub unsafe fn pci_power_state(bus: u8, device: u8, function: u8) -> (u8, u8) {
+    let caps = read_pci_capabilities(bus, device, function);
+    for (cap_id, ptr) in &caps {
+        if *cap_id == 0x01 {
+            // PMCSR está no offset+4; D-state = bits [1:0]
+            let pmcsr = read_config_dword(bus, device, function, ptr + 4);
+            return ((pmcsr & 0x3) as u8, *ptr as u8);
+        }
+    }
+    (0xFF, 0) // sem PM capability → assume D0 (device antigo)
+}
+
 /// Varre capabilities PCI por tipo 0x09 (VirtIO vendor-specific)
 /// e extrai cfg_type, bar, offset, length para encontrar o MMIO base.
 pub unsafe fn read_virtio_cap(bus: u8, device: u8, function: u8, target_cfg_type: u8) -> Option<VirtioPciCap> {

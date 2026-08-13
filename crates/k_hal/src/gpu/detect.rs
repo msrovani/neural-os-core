@@ -73,6 +73,9 @@ pub struct GpuInfo {
     pub has_compute: bool,
     pub is_integrated: bool,
     pub pci_bus: u8, pub pci_dev: u8, pub pci_fn: u8,
+    /// D-state PCI (PM capability): 0=D0 ativo, 3=D3hot, 4=D3cold. dGPU
+    /// frequentemente dorme (D3) no boot — BARs visíveis mas tocar = hang.
+    pub pci_dstate: u8,
     pub name: &'static str,
     /// Backend candidato após family probe (não implica Ready).
     pub backend_kind: ComputeBackendKind,
@@ -196,16 +199,19 @@ pub unsafe fn detect_all() -> Vec<GpuInfo> {
             has_compute: false,
             is_integrated,
             pci_bus: dev.bus, pci_dev: dev.device, pci_fn: dev.function,
+            // SESSÃO_260: mede o D-state real (PMCSR) — AIOS mede o silício,
+            // não assume. dGPU em D3 não deve receber compute/mapping.
+            pci_dstate: k_nano::pci::pci_power_state(dev.bus, dev.device, dev.function).0,
             name,
             backend_kind,
             isa_tag,
             compute_candidate,
         };
 
-        k_nano::slog_hal!("GPU", "info", "{}: {:04x}:{:04x} arch={:?} backend={:?} isa={} bar0={:#x} bar2={:#x} vram={}MB igpu={} compute_cand={} has_compute=false",
+        k_nano::slog_hal!("GPU", "info", "{}: {:04x}:{:04x} arch={:?} backend={:?} isa={} bar0={:#x} bar2={:#x} vram={}MB igpu={} Dstate={} compute_cand={} has_compute=false",
             gpu.name, dev.vendor_id, dev.device_id, gpu.arch, gpu.backend_kind,
             gpu.isa_tag.as_str(), gpu.bar0, gpu.bar2, gpu.vram_mb(),
-            gpu.is_integrated, gpu.compute_candidate);
+            gpu.is_integrated, gpu.pci_dstate, gpu.compute_candidate);
 
         gpus.push(gpu);
     }

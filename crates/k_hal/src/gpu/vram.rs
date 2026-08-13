@@ -124,6 +124,13 @@ pub static VRAM_BUDDY: spin::Mutex<Option<VramBuddy>> = spin::Mutex::new(None);
 
 /// Inicializa VRAM buddy allocator para a GPU detectada
 pub unsafe fn init_vram_tier(gpu: &GpuInfo) -> bool {
+    // SESSÃO_260 (AIOS, notebook dual-GPU): dGPU dorme em D3 no boot — BARs
+    // visíveis mas a VRAM não responde; mapear/tocar gera hang de barramento
+    // PCIe = freeze real. Mede o D-state (PCI PMCSR) e só prossegue em D0.
+    if gpu.pci_dstate != 0 {
+        k_nano::slog_hal!("VRAM", "info", "{}: D-state={} (D3) — VRAM dormindo, skip compute/map (power-on antes)", gpu.name, gpu.pci_dstate);
+        return false;
+    }
     if gpu.bar2 == 0 || gpu.vram_size == 0 {
         k_nano::slog_hal!("VRAM", "info", "{}: sem BAR2 mapeavel (usando DRAM compartilhada)", gpu.name);
         return false;
