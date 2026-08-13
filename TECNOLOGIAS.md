@@ -148,8 +148,8 @@ Tecnologias que definem a categoria "AI-native Operating System" e não possuem 
 
 ## 5. 🎵 ÁUDIO — Captura e Reprodução
 
-**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `neural-kernel/src/audio/*`; `jarbas/src/audio` = espelho de migração (não wired ao bin).
-**Backlog residual:** Sprint Sound ✅ (2026-07-16) — soft-float/VITS + cutover jarbas ainda abertos. Não bloqueia ADR-0042.
+**ADR:** [0045-sound-voice-stack.md](docs/architecture/0045-sound-voice-stack.md) — truth em `crates/jarbas/src/audio/*` (cutover e51a48b); `neural-kernel/src/audio` = facade 4 linhas re-exportando `jarbas_crate::audio::*`.
+**Backlog residual:** Sprint Sound ✅ (2026-07-16) — soft-float/VITS + dedup HDA k_nano↔k_hal abertos. Não bloqueia ADR-0042.
 
 | # | Tecnologia | 🏆 Inovação | Inspiração | Licença Orig. | Arquivo | Status |
 |---|-----------|------------|------------|---------------|---------|--------|

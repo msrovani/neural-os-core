@@ -112,7 +112,6 @@ pub mod usb_trust;
 pub mod vfs;
 pub mod vga_buffer;
 pub mod verify;
-pub mod virtio_gpu;
 pub mod virtio_net;
 pub mod audio;
 pub mod xhci;

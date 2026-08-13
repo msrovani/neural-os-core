@@ -14,9 +14,6 @@ pub static MIC_CAPTURE_RING: AudioRingBuffer = AudioRingBuffer::new();
 /// Ring de playback (TTS) — mixer drena para HDA/UAC.
 pub static PLAYBACK_RING: AudioRingBuffer = AudioRingBuffer::new();
 
-/// Compat: alias histórico (mic). Preferir MIC_CAPTURE_RING / PLAYBACK_RING.
-pub static AUDIO_RING: AudioRingBuffer = AudioRingBuffer::new();
-
 pub static LAST_VOICE_EMOTION: AtomicU8 = AtomicU8::new(0);
 
 const VOICE_MANIFEST: AgentManifest = AgentManifest {
@@ -103,7 +100,6 @@ impl Agent for JarbasVoiceAgent {
             };
             crate::display::avatar::process_audio_fft(pcm);
             let _ = MIC_CAPTURE_RING.push(pcm);
-            let _ = AUDIO_RING.push(pcm);
 
             let frame_size = 320;
             for chunk in pcm.chunks(frame_size) {

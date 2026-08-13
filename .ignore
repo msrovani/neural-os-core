@@ -1,0 +1,3 @@
+# Deepwork state: git-local mas legível pelo OpenCode (contraparte de .gitignore)
+!.slim/deepwork/
+!.slim/deepwork/**

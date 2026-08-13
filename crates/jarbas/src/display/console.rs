@@ -11,25 +11,6 @@ use spin::Mutex;
 /// Alimentado pelo ConsoleAgent (neural-kernel) quando recebe HERMES_RESPONSE.
 pub static OVERLAY_TEXT: Mutex<String> = Mutex::new(String::new());
 
-/// Retorna o conteúdo atual do overlay (últimas linhas).
-pub fn get_overlay_text() -> String {
-    let txt = OVERLAY_TEXT.lock();
-    // Limita a ~2000 chars p/ não estourar memória
-    let slice = if txt.len() > 2000 {
-        let start = txt.len() - 2000;
-        // Tenta quebrar no início de uma linha
-        let s = &txt[start..];
-        if let Some(nl) = s.find('\n') {
-            &txt[start + nl + 1..]
-        } else {
-            s
-        }
-    } else {
-        txt.as_str()
-    };
-    String::from(slice)
-}
-
 /// Adiciona linha ao buffer overlay.
 pub fn push_overlay_line(line: &str) {
     let mut txt = OVERLAY_TEXT.lock();

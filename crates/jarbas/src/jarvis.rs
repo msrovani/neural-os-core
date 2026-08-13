@@ -28,54 +28,6 @@ pub struct SoulProfile {
 
 impl SoulProfile {
     pub fn default_jarbas() -> Self { SoulProfile { name: String::from("JARBAS"), tone: String::from("witty"), humor_level: 0.5, formality: 0.3, empathy: 0.8 } }
-
-    /// Carrega PERSONA.md (Jarbas) — fallback SOUL.md só se PERSONA ausente.
-    pub fn load_from_vfs() -> Self {
-        let mut profile = Self::default_jarbas();
-        let data = hermes::globals::read_vfs("/mnt/neural/PERSONA.md")
-            .or_else(|_| hermes::globals::read_vfs("/mnt/neural/SOUL.md"))
-            .or_else(|_| hermes::globals::read_vfs("/SOUL.MD"));
-        if let Ok(data) = data {
-            let text = core::str::from_utf8(&data).unwrap_or("");
-            for line in text.lines() {
-                let l = line.trim();
-                if let Some(val) = l.strip_prefix("name:") { profile.name = val.trim().into(); }
-                else if let Some(val) = l.strip_prefix("name=") { profile.name = val.trim().into(); }
-                else if let Some(val) = l.strip_prefix("tone:") { profile.tone = val.trim().into(); }
-                else if let Some(val) = l.strip_prefix("tone=") { profile.tone = val.trim().into(); }
-                else if let Some(val) = l.strip_prefix("humor:") { if let Ok(v) = val.trim().parse::<f32>() { profile.humor_level = v; } }
-                else if let Some(val) = l.strip_prefix("humor=") { if let Ok(v) = val.trim().parse::<f32>() { profile.humor_level = v; } }
-                else if let Some(val) = l.strip_prefix("formality:") { if let Ok(v) = val.trim().parse::<f32>() { profile.formality = v; } }
-                else if let Some(val) = l.strip_prefix("formality=") { if let Ok(v) = val.trim().parse::<f32>() { profile.formality = v; } }
-                else if let Some(val) = l.strip_prefix("empathy:") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
-                else if let Some(val) = l.strip_prefix("empathy=") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
-            }
-            if profile.name == "JARBAS" && text.contains("Hermes") {
-                profile.name = String::from("Hermes");
-                profile.tone = String::from("precise");
-            }
-            k_nano::slog_jarbas!("PERSONA", "info", "Perfil Jarbas: {} ({})", profile.name, profile.tone);
-            return profile;
-        }
-        // Defaults de PERSONA.md via Hermes memory_store
-        hermes::memory_store::ensure_defaults();
-        let slice = hermes::memory_store::persona_slice();
-        for line in slice.lines() {
-            let l = line.trim();
-            if let Some(val) = l.strip_prefix("name:") { profile.name = val.trim().into(); }
-            else if let Some(val) = l.strip_prefix("tone:") { profile.tone = val.trim().into(); }
-            else if let Some(val) = l.strip_prefix("humor:") { if let Ok(v) = val.trim().parse::<f32>() { profile.humor_level = v; } }
-            else if let Some(val) = l.strip_prefix("formality:") { if let Ok(v) = val.trim().parse::<f32>() { profile.formality = v; } }
-            else if let Some(val) = l.strip_prefix("empathy:") { if let Ok(v) = val.trim().parse::<f32>() { profile.empathy = v; } }
-        }
-        k_nano::slog_jarbas!("PERSONA", "info", "defaults: {} ({})", profile.name, profile.tone);
-        profile
-    }
-
-    /// Alias legado — preferir `load_from_vfs()`.
-    pub fn load_from_fat32() -> Self {
-        Self::load_from_vfs()
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -237,29 +189,6 @@ impl SkillDiscovery {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// #315.9 ADE Pipeline — Spec→Execute→Review→Recover
-// ═══════════════════════════════════════════════════════════════════════════════
-
-pub enum AdeStage { Spec, Execute, Review, Recover }
-
-pub fn ade_pipeline(action: &str, expected: &str) -> (String, bool) {
-    let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    // Spec: valida acao
-    if action.is_empty() { return (String::from("ADE: Spec falhou — acao vazia"), false); }
-    // Execute: roda acao e captura resultado
-    let result = alloc::format!("[ADE] Exec: {} em t={}", action, tick);
-    k_nano::slog_jarbas!("Log", "msg", "{}", result);
-    // Review: compara com expected
-    let review_ok = expected.is_empty() || action.contains(expected);
-    if !review_ok {
-        // Recover: tenta rollback
-        let recovery = alloc::format!("ADE: Review falhou — esperado '{}' mas acao='{}'. Recovery: rollback.", expected, action);
-        return (recovery, false);
-    }
-    (alloc::format!("ADE OK: {}", result), true)
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // #315.10 Semantic Cache (5-tier)
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -293,50 +222,6 @@ impl SemanticCache {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// #315.11 Persona Pipeline (16 stages) — wire com componentes reais
-// ═══════════════════════════════════════════════════════════════════════════════
-
-pub fn persona_pipeline(text: &str, ego: &mut EgoLayer, session: &mut SessionHistory,
-    _discover: &mut SkillDiscovery, notif: &mut NotificationGate, dream: &mut DreamEngine,
-    heartbeat: &mut Heartbeat, babel: &mut BabelIndex) -> String {
-    let tick = k_nano::interrupts::TIMER_TICKS.load(core::sync::atomic::Ordering::Relaxed) as u64;
-    let mut output = String::new();
-    // 1. Safety: verifica seguranca
-    let safety = hermes::safety::check_safety(text);
-    if let hermes::safety::SafetyVerdict::Violation { layer, reason } = safety {
-        return alloc::format!("[PIPELINE] Safety Layer {}: {}", layer, reason);
-    }
-    // 2. Stop: verifica se deve parar
-    if text.contains("/stop") || text.contains("/halt") { return String::from("[PIPELINE] Stopped"); }
-    // 3. Converse: detecta emocao
-    let emotion = EmotionAnalysis::analyze(text);
-    output.push_str(&alloc::format!("[PIPELINE] Emotion: {:?} ", emotion.dominant()));
-    // 4. SkillHigh: tenta matcher com skill existente
-    // 5. Persona: fluid update
-    // 6. SkillMedium
-    // 7. QA
-    // 8. Fallback
-    // 9. Reflex
-    // 10. Dream
-    if tick % 500 == 0 { dream.tick(tick, &[String::from(text)]); }
-    if let Some(insight) = dream.insights.last() { output.push_str(&alloc::format!("[DREAM] {} ", insight)); }
-    // 11. Ego
-    ego.learn("persona", emotion.dominant() != crate::jarvis::Emotion::Neutral);
-    output.push_str(&alloc::format!("[EGO] {}", ego.status()));
-    // 12. Compress
-    if session.entries.len() > 20 { session.compress("drop_lowest"); }
-    // 13. Notify
-    if emotion.anger > 0.5 { notif.push_with_agent("Alta deteccao de raiva!", Urgency::High, "pipeline"); }
-    // 14. Heartbeat
-    if tick % 1000 == 0 { heartbeat.tick(tick, 0.0, 0.0, true); }
-    // 15. Babel
-    if tick % 500 == 0 { babel.tick(tick, text.len()); }
-    // 16. Audit
-    let _ = hermes::globals::AUDIT_TRAIL.lock().push(tick, "pipeline", "persona", text.as_bytes());
-    output
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // #315.20 Fluid Persona
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -361,43 +246,6 @@ impl SoulProfile {
     pub fn describe(&self) -> String {
         alloc::format!("[PERSONA] mode={:?} tone={} humor={:.1} formality={:.1} empathy={:.1}", self.mode(), self.tone, self.humor_level, self.formality, self.empathy)
     }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// Análise Emocional (legado)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-pub fn detect_emotion(text: &str) -> (Emotion, f32) {
-    let a = EmotionAnalysis::analyze(text);
-    (a.dominant(), a.neutral)
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// IPW Monitor (#315.2)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-pub struct IpwMonitor {
-    last_energy: u64, total_energy_uj: u64, tokens_generated: u64, last_tick: u64, pub tokens_per_watt: f32,
-}
-impl IpwMonitor {
-    pub fn new() -> Self { IpwMonitor { last_energy: 0, total_energy_uj: 0, tokens_generated: 0, last_tick: 0, tokens_per_watt: 0.0 } }
-    pub fn sample(&mut self, tick: u64, tokens: u64) {
-        self.tokens_generated += tokens;
-        if tick.wrapping_sub(self.last_tick) < 10 { return; }
-        self.last_tick = tick;
-        unsafe {
-            let mut lo: u32; let mut hi: u32;
-            core::arch::asm!("rdmsr", in("ecx") 0x610u32, out("eax") lo, out("edx") hi, options(nostack, preserves_flags));
-            let energy = (hi as u64) << 32 | lo as u64;
-            if self.last_energy > 0 && energy > 0 {
-                let delta = energy.wrapping_sub(self.last_energy);
-                self.total_energy_uj = self.total_energy_uj.wrapping_add(delta);
-                if delta > 0 { self.tokens_per_watt = self.tokens_generated as f32 / (self.total_energy_uj as f32 / 1_000_000.0); }
-            }
-            self.last_energy = energy;
-        }
-    }
-    pub fn efficiency(&self) -> String { alloc::format!("IPW: {:.1} tok/W", self.tokens_per_watt) }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -672,7 +520,6 @@ impl BabelIndex {
 
 pub struct JarbasEngine {
     pub soul: SoulProfile,
-    pub ipw: IpwMonitor,
     pub session: SessionHistory,
     pub notifications: NotificationGate,
     pub thread: SessionlessThread,
@@ -702,7 +549,7 @@ impl JarbasEngine {
         consent.register("exec", ConsentLevel::Dangerous, "execute system commands");
         consent.register("network", ConsentLevel::Moderate, "network access");
         JarbasEngine {
-            soul: SoulProfile::default_jarbas(), ipw: IpwMonitor::new(),
+            soul: SoulProfile::default_jarbas(),
             session: SessionHistory::new(256), notifications: NotificationGate::new(),
             thread: SessionlessThread::new(500), emotion: EmotionAnalysis::analyze(""),
             consent, discovery: SkillDiscovery::new(), cache: SemanticCache::new(),
@@ -754,30 +601,18 @@ impl JarbasEngine {
 
     pub fn tick(&mut self, tick: u64) {
         self.persona_tick();
-        self.ipw.sample(tick, 1);
         if tick % 100 == 0 { self.session.compress("drop_lowest"); }
-        // Sprint 90 ticks
-        let mems: Vec<String> = self.session.entries.iter().map(|e| e.text.clone()).collect();
-        self.dream.tick(tick, &mems);
+        // Sprint 90 ticks — dream gate primeiro: evita clonar até 256 strings/tick
+        // quando o dream não vai rodar (gate interno do DreamEngine: 500 ticks).
+        if tick.wrapping_sub(self.dream.last_dream_tick) >= 500 {
+            let mems: Vec<String> = self.session.entries.iter().map(|e| e.text.clone()).collect();
+            self.dream.tick(tick, &mems);
+        }
         self.heartbeat.tick(tick, 0.5, 0.3, false);
         self.babel.tick(tick, self.session.entries.len());
     }
 
     pub fn avatar_state_for(&self, thinking: bool, speaking: bool) -> AvatarState {
         if speaking { AvatarState::Speaking } else if thinking { AvatarState::Processing } else { self.avatar_state }
-    }
-
-    pub fn status(&self) -> String {
-        let hw_info = if let Some(p) = self.hardware_profile_cache {
-            alloc::format!("hw_profile={}", p.name())
-        } else {
-            alloc::format!("hw_profile=unprobed")
-        };
-        alloc::format!("JARVIS: {} {} {} {} {} {} {} {} {} {} {} {} {}",
-            self.emotion.describe(), self.soul.describe(), self.ipw.efficiency(),
-            self.consent.status(), self.cache.status(), self.discovery.status(),
-            self.dream.status(), self.ego.status(), self.heartbeat.status(),
-            self.tool_state.status(), self.auto_skill.status(), self.babel.status(),
-            hw_info)
     }
 }

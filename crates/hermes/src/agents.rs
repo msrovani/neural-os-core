@@ -2774,32 +2774,6 @@ impl Agent for FsBridgeAgent {
     }
 }
 
-// ---------------------------------------------------------------------------
-// GpuDriverAgent — init VirtIO-GPU (boot phase)
-// ---------------------------------------------------------------------------
-
-pub struct GpuDriverAgent;
-
-const GPUDRIVER_MANIFEST: AgentManifest = AgentManifest {
-    name: "gpu_driver",
-    kind: AgentKind::Driver,
-    schedule: ScheduleKind::Oneshot,
-    auto_start: true,
-    persist: false,
-};
-
-impl Agent for GpuDriverAgent {
-    fn manifest(&self) -> &AgentManifest { &GPUDRIVER_MANIFEST }
-    fn tick(&mut self, _tick: u64, _count: u64) -> AgentTickResult {
-        unsafe {
-            if k_nano::virtio_gpu::init_driver_virtio_gpu() {
-                k_nano::slog_jarbas!("VGPU", "info", "VirtIO-GPU OK.");
-            }
-        }
-        AgentTickResult::Done
-    }
-}
-
 // ── DiagnosticSkill ─────────────────────────────────────────────
 // Substitui os testes inline de Box/Vec/Tensor/SiLU/RMSNorm/BitNet
 // que estavam no boot flow procedural. SystemAgent executa esta skill

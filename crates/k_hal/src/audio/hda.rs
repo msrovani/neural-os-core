@@ -167,7 +167,7 @@ pub fn poll_hda_audio() {
 }
 
 /// Escreve audio no buffer DMA SD1 para reproducao.
-/// Chamado pelo AudioMixerAgent quando ha dados no AUDIO_RING.
+/// Chamado pelo AudioMixerAgent quando ha dados no PLAYBACK_RING.
 pub fn write_hda_playback(samples: &[i16]) {
     if !HDA_INIT_DONE.load(Ordering::Relaxed) { return; }
     let bar = HDA_BAR.load(Ordering::Relaxed);

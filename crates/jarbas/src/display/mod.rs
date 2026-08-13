@@ -16,7 +16,6 @@ pub mod font;
 pub mod agent;
 pub mod theme;
 pub mod compositor;
-pub mod ttf_engine;
 pub mod avatar;
 pub mod avatar8;
 pub mod soul_mirror;

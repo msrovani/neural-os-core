@@ -1,29 +1,5 @@
-//! JARVIS Desktop — compositor multi-window + app icons + WASM skill launcher + LLM icons.
+//! JARVIS Desktop — compositor multi-window + app icons + LLM icons.
 //! Port da UI do SmileyOS + JARVIS .NET MAUI.
-
-/// Gera um icone (padrao 8x8) via IA a partir de uma descricao.
-/// Usa o HWEXPERT_MODEL para sintetizar um pequeno bitmap.
-pub fn generate_llm_icon(description: &str) -> [u8; 64] {
-    let mut icon = [0u8; 64];
-    if let Some(ref model) = *cortex::cortex::HWEXPERT_MODEL.lock() {
-        let prompt = alloc::format!("gere icone 8x8 para: {}", description);
-        let resp = model.generate(&prompt);
-        // Parseia resposta como numeros 0-255
-        let nums: Vec<u8> = resp.bytes().filter(|b| b.is_ascii_digit()).collect();
-        for (i, &b) in nums.iter().enumerate().take(64) {
-            icon[i] = b;
-        }
-    }
-    // Se falhou, gera padrao geometrico baseado no hash da descricao
-    if icon.iter().all(|&b| b == 0) {
-        let hash = description.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64));
-        for i in 0..64 {
-            let bit = (hash >> (i % 64)) & 1;
-            icon[i] = if bit == 1 { 200 } else { 30 };
-        }
-    }
-    icon
-}
 
 use alloc::vec::Vec;
 use alloc::string::String;
@@ -133,19 +109,6 @@ pub fn draw_text(fb: &mut DoubleBuffer, x: usize, y: usize, text: &str, scr_w: u
     crate::display::font::draw_text_scaled(fb, x, y, text, 1, scr_w, r, g, b);
 }
 
-/// #82: Renderiza tensor visualization overlay
-pub fn render_tensor_viz(fb: &mut DoubleBuffer, x: usize, y: usize, _w: usize, _h: usize) {
-    
-    use libm::sinf;
-    let mut data = [0.0f32; 400];
-    for i in 0..20 { for j in 0..20 { data[i*20+j] = (sinf(i as f32*0.3)*sinf(j as f32*0.3)).abs()*0.5+0.5; } }
-    crate::display::font::draw_tensor_heatmap(fb, x, y, &data, 20, 20);
-    draw_text(fb, x, y+85, "Attention", fb.info.width, 0,200,255);
-    let bars = [0.9f32,0.7,0.5,0.8,0.3,0.6,0.4,0.7,0.2,0.5];
-    crate::display::font::draw_attention_graph(fb, x, y+105, &bars, 100, 25);
-    draw_text(fb, x, y+135, "Scores", fb.info.width, 0,200,100);
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Layer { OrbBackground, HermesOverlay, AppWindows, DockBar }
 
@@ -159,11 +122,6 @@ pub static MOUSE_BUTTONS: IrqSafeLock<u8> = IrqSafeLock::new(0);
 // Timing de frame para FPS control
 pub static LAST_FRAME_TICK: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 pub const TARGET_FRAME_TICKS: u64 = 3; // ~60 FPS (assumindo ~5ms/tick)
-
-#[derive(Clone)]
-pub struct WasmIcon { pub name: String, pub description: String, pub idx: usize }
-
-
 
 pub struct JarbasDesktop {
     // Compositor base
@@ -181,8 +139,6 @@ pub struct JarbasDesktop {
     pub windows: Vec<Window>,
     pub next_window_id: u64,
 
-    // WASM skills (icons)
-    pub wasm_skills: Vec<WasmIcon>,
     pub active: AppId,
     pub avatar_visible: bool,
     pub w: usize, pub h: usize, pub tick: u64,
@@ -235,7 +191,6 @@ impl JarbasDesktop {
             theme_mode: crate::display::theme::ThemeMode::Dark,
             windows: Vec::new(),
             next_window_id: 1,
-            wasm_skills: Vec::new(), 
             active: AppId::None, 
             avatar_visible: true, 
             w, h, tick: 0, 
@@ -426,7 +381,7 @@ impl JarbasDesktop {
         let mem_ctx = k_nano::memory::global_hardware_context();
         let mem_pct = mem_ctx.get(0).copied().unwrap_or(0.0);
         let agent_count = self.windows.len();
-        let llm_busy = crate::display::console::get_overlay_text().contains("[CORTEX]");
+        let llm_busy = crate::display::console::OVERLAY_TEXT.lock().contains("[CORTEX]");
 
         let status = alloc::format!(
             "t:{}  ag:{}  mem:{:.0}%  {}  {}",
@@ -825,15 +780,6 @@ impl JarbasDesktop {
             }
             self.relayout_active_workspace();
         }
-    }
-
-    pub fn publish_wasm_skill(&mut self, name: &str, description: &str) {
-        let idx = self.wasm_skills.len();
-        self.wasm_skills.push(WasmIcon {
-            name: alloc::string::String::from(name),
-            description: alloc::string::String::from(description),
-            idx,
-        });
     }
 
     /// Soul Mirror — orb afetivo (Onda 7) substitui o orb cyan fixo.

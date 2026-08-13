@@ -344,39 +344,6 @@ pub fn card_json_schema_hint() -> &'static str {
     )
 }
 
-// ─── Cards demo (ADR-0058 S4) — provam o pipeline sem modelo/HW ─────────────
-
-/// Card de status do sistema (rótulos + gauges + botão de ação).
-pub fn demo_status_card() -> UiDeclaration {
-    UiDeclaration::new(1001, "Sistema K3CHJ", 60, 92, 300, 176)
-        .push(Widget::KeyValue(String::from("Kernel"), String::from("v1.9.1")))
-        .push(Widget::Gauge { label: String::from("CPU"), value: 37, max: 100, unit: String::from("%") })
-        .push(Widget::Gauge { label: String::from("MEM"), value: 52, max: 100, unit: String::from("%") })
-        .push(Widget::Divider)
-        .push(Widget::Button(String::from("Atualizar")))
-}
-
-/// Card de clima (demo "clima de amanhã" — dados reais viriam da skill weather).
-pub fn demo_weather_card() -> UiDeclaration {
-    UiDeclaration::new(1002, "Clima - Amanha", 392, 92, 300, 176)
-        .push(Widget::KeyValue(String::from("Condicao"), String::from("Nublado")))
-        .push(Widget::KeyValue(String::from("Temp"), String::from("22 C")))
-        .push(Widget::KeyValue(String::from("Max/Min"), String::from("25/16")))
-        .push(Widget::Bars { label: String::from("24h (C)"), values: alloc::vec![16, 17, 19, 22, 24, 23, 20, 18] })
-}
-
-/// Card scaffold de videochamada (interação mouse/teclado; mic/alto-falante/
-/// câmera dependem de HDA/UVC existentes — S4 é a UI + roteamento de botões).
-pub fn demo_call_card() -> UiDeclaration {
-    UiDeclaration::new(1003, "Chamada de Video", 724, 92, 320, 220)
-        .push(Widget::Panel { label: String::from("[camera / video feed]"), height: 96 })
-        .push(Widget::KeyValue(String::from("Status"), String::from("pronto")))
-        .push(Widget::Button(String::from("Atender")))
-        .push(Widget::Button(String::from("Microfone")))
-        .push(Widget::Button(String::from("Alto-falante")))
-        .push(Widget::Button(String::from("Encerrar")))
-}
-
 fn extract_str(json: &str, key: &str) -> Option<String> {
     let pat = alloc::format!("\"{}\"", key);
     let idx = json.find(&pat)?;

@@ -13,7 +13,6 @@ pub mod vad;
 pub mod tts;
 pub mod ser;
 pub mod context;
-pub mod neural;
 pub mod piper;
 pub mod voice;
 pub mod skills;

@@ -605,24 +605,20 @@ pub struct DoubleBuffer {
 }
 
 impl DoubleBuffer {
-    pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize, rgb_order: bool) -> Self {
-        let size = height.saturating_mul(stride);
-        DoubleBuffer {
-            info: FramebufferInfo { addr, width, height, stride, bpp, rgb_order },
-            back: alloc::vec![0u8; size],
-        }
-    }
-
     /// Constrói o double-buffer a partir do GpuDevice já probeado (fonte dinâmica).
     pub fn from_gpu(gpu: &GpuDevice) -> Self {
-        Self::new(
-            gpu.fb_addr as usize,
-            gpu.fb_width as usize,
-            gpu.fb_height as usize,
-            gpu.stride_bytes(),
-            gpu.bytes_per_pixel(),
-            gpu.rgb_order,
-        )
+        let size = (gpu.fb_height as usize).saturating_mul(gpu.stride_bytes());
+        DoubleBuffer {
+            info: FramebufferInfo {
+                addr: gpu.fb_addr as usize,
+                width: gpu.fb_width as usize,
+                height: gpu.fb_height as usize,
+                stride: gpu.stride_bytes(),
+                bpp: gpu.bytes_per_pixel(),
+                rgb_order: gpu.rgb_order,
+            },
+            back: alloc::vec![0u8; size],
+        }
     }
 
     pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
@@ -784,67 +780,6 @@ impl DoubleBuffer {
             }
         }
         k_nano::interrupts::CURSOR_LOCK.store(false, Ordering::Release);
-    }
-}
-
-/// Framebuffer BGRA32 (single buffer, legado) — implementa DrawTarget<Rgb888>
-pub struct Framebuffer {
-    pub info: FramebufferInfo,
-}
-
-impl Framebuffer {
-    pub fn new(addr: usize, width: usize, height: usize, stride: usize, bpp: usize) -> Self {
-        Framebuffer { info: FramebufferInfo { addr, width, height, stride, bpp, rgb_order: false } }
-    }
-
-    pub fn set_pixel(&mut self, x: usize, y: usize, r: u8, g: u8, b: u8) {
-        if x >= self.info.width || y >= self.info.height { return; }
-        let bpp = self.info.bpp;
-        let fb_size = self.info.height.saturating_mul(self.info.stride);
-        let offset = y * self.info.stride + x * bpp;
-        if offset + bpp > fb_size { return; }
-        unsafe {
-            let ptr = self.info.addr as *mut u8;
-            write_volatile(ptr.wrapping_add(offset + 0), b);
-            write_volatile(ptr.wrapping_add(offset + 1), g);
-            write_volatile(ptr.wrapping_add(offset + 2), r);
-            if bpp > 3 { write_volatile(ptr.wrapping_add(offset + 3), 0xFF); }
-        }
-    }
-
-    pub fn clear(&mut self, r: u8, g: u8, b: u8) {
-        for y in 0..self.info.height {
-            for x in 0..self.info.width {
-                self.set_pixel(x, y, r, g, b);
-            }
-        }
-    }
-
-    pub fn fill_rect(&mut self, x: usize, y: usize, w: usize, h: usize, r: u8, g: u8, b: u8) {
-        for dy in 0..h {
-            for dx in 0..w {
-                self.set_pixel(x + dx, y + dy, r, g, b);
-            }
-        }
-    }
-
-    pub fn draw_char(&mut self, x: usize, y: usize, char_data: &[u8], w: usize, h: usize, fg: (u8, u8, u8), bg: (u8, u8, u8)) {
-        for dy in 0..h {
-            for dx in 0..w {
-                let alpha = char_data[dy * w + dx];
-                if alpha > 128 {
-                    self.set_pixel(x + dx, y + dy, fg.0, fg.1, fg.2);
-                } else if alpha > 0 {
-                    let bg_alpha = 255 - alpha;
-                    let rr = (fg.0 as u16 * alpha as u16 + bg.0 as u16 * bg_alpha as u16) / 255;
-                    let gg = (fg.1 as u16 * alpha as u16 + bg.1 as u16 * bg_alpha as u16) / 255;
-                    let bb = (fg.2 as u16 * alpha as u16 + bg.2 as u16 * bg_alpha as u16) / 255;
-                    self.set_pixel(x + dx, y + dy, rr as u8, gg as u8, bb as u8);
-                } else {
-                    self.set_pixel(x + dx, y + dy, bg.0, bg.1, bg.2);
-                }
-            }
-        }
     }
 }
 
