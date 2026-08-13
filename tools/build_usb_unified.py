@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Gera imagem USB unificada (boot UEFI + dados FAT32/exFAT) para Rufus DD / um pendrive.
 
-Layout (GPT + MBR híbrido amigavel a Windows removable e firmware UEFI):
+Layout (GPT + MBR com dados+ESP — empirico no notebook real, SESSÃO_258/260):
   Part GPT 0 — ESP (conteudo de target/uefi.img / bootloader 0.11) — FAT
   Part GPT 1 — dados (FAT32 default — monta no Explorer; --exfat opcional)
-  MBR slot0 — protetora GPT 0xEE cobrindo o disco todo (firmware UEFI
-    reconhece GPT → acha ESP; sem 0xEE o stick nao lista como bootavel)
-  MBR slot1 — dados 0x0C/0x07 (Windows em pendrive ignora GPT e monta MBR;
-    skipa a 0xEE protetora). UEFI boot usa a GPT (ESP em LBA 2048).
+  MBR slot0 — dados 0x0C/0x07 (Windows monta E:; FAT32/exFAT)
+  MBR slot1 — ESP 0xEF SEM flag ativa (firmware UEFI acha \EFI\BOOT\BOOTX64.EFI
+    pelo tipo no MBR; 0x80 era o que fazia o Windows tratar como disco de sistema
+    e nao montar; 0xEE-only/sem-ESP fizeram firmware real nao listar)
 
 Uso:
   python tools/build_usb_unified.py
@@ -174,26 +174,30 @@ def write_removable_mbr(
     data_sectors: int,
     data_mbr_type: int = 0x0C,
 ) -> None:
-    """MBR híbrido p/ pendrive: protetora GPT 0xEE (disco todo) + dados (Explorer).
+    """MBR p/ pendrive: dados 0x0C + ESP 0xEF (SEM flag ativa) — Windows monta, firmware boota.
 
-    Slot 0 = 0xEE protetora cobrindo o disco TODO. UEFI spec exige a entrada
-    protetora para o firmware reconhecer GPT e achar a ESP (limine/kernel.elf);
-    sem ela o firmware trata o stick como MBR-legacy (FAT sem boot) e NÃO
-    lista como bootável (regressão df88cc0, SESSÃO_258).
-    Slot 1 = dados FAT32/exFAT (letra no Explorer). Windows skipa a 0xEE
-    protetora e monta os dados; firmware UEFI usa a GPT (ESP em 2048).
+    Lição SESSÃO_258/260 (empírica no notebook real):
+    - Pré-df88cc0 (dados + ESP 0xEF COM 0x80 ativa): BOOTAVA no notebook
+      (SESSÃO_139) mas Windows não montava NEURAL-OS (0x80 → disco de sistema).
+    - df88cc0 (só dados): Windows montava E:, mas firmware não listava (sem ESP).
+    - 2dd6ffc (0xEE + dados, só GPT p/ ESP): OVMF bootava, mas o firmware do
+      notebook NÃO lista — ele quer o ESP visível no MBR (não só na GPT).
+    Fix: slot0=dados 0x0C (Windows monta E:) + slot1=ESP 0xEF SEM 0x80
+    (Windows oculta partição 0xEF de Explorer por padrão; firmware UEFI
+    encontra o ESP pelo tipo no MBR — flag ativa é para BIOS-legacy, e era
+    o que fazia o Windows tratar o stick como disco de sistema).
     """
     mbr = bytearray(SECTOR)
-    # Part 0 — protetora GPT (cobre o disco inteiro; mesmo padrão do uefi.img/mk_esp_fat)
+    # Part 0 — dados (Windows Explorer monta; FAT32/exFAT)
     mbr[0x1BE] = 0x00
-    mbr[0x1BE + 4] = 0xEE
-    struct.pack_into("<I", mbr, 0x1BE + 8, 1)
-    struct.pack_into("<I", mbr, 0x1BE + 12, min(max(1, data_start + data_sectors - 1), 0xFFFFFFFF))
-    # Part 1 — dados (Explorer)
+    mbr[0x1BE + 4] = data_mbr_type & 0xFF
+    struct.pack_into("<I", mbr, 0x1BE + 8, data_start)
+    struct.pack_into("<I", mbr, 0x1BE + 12, min(data_sectors, 0xFFFFFFFF))
+    # Part 1 — ESP (firmware UEFI acha \EFI\BOOT\BOOTX64.EFI; sem 0x80)
     mbr[0x1CE] = 0x00
-    mbr[0x1CE + 4] = data_mbr_type & 0xFF
-    struct.pack_into("<I", mbr, 0x1CE + 8, data_start)
-    struct.pack_into("<I", mbr, 0x1CE + 12, min(data_sectors, 0xFFFFFFFF))
+    mbr[0x1CE + 4] = 0xEF
+    struct.pack_into("<I", mbr, 0x1CE + 8, esp_start)
+    struct.pack_into("<I", mbr, 0x1CE + 12, min(esp_sectors, 0xFFFFFFFF))
     mbr[0x1FE], mbr[0x1FF] = 0x55, 0xAA
     f.seek(0)
     f.write(mbr)
