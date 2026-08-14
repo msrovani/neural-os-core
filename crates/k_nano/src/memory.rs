@@ -3,10 +3,12 @@ use x86_64::structures::paging::{FrameAllocator, FrameDeallocator, OffsetPageTab
 use x86_64::PhysAddr;
 use x86_64::VirtAddr;
 
-/// Número de bytes no bitmap para cobrir 8 GB de memória física.
-/// Cada frame de 4 KiB = 1 bit. 1 byte = 8 frames = 32 KiB cobertos por byte.
-/// 262144 bytes × 8 bits × 4096 bytes = 8 GiB.
-pub const BITMAP_SIZE: usize = 262144; // 256KB cobre 8GB fisicos
+/// Número de bytes no bitmap de frames físicos.
+/// SESSÃO_260 (AIOS auto-adaptar): o buffer cobre o pior caso de RAM comum
+/// (512KB × 8 bits × 4096 = 16GiB). O kernel NÃO usa tudo — o `total_frames`
+/// é derivado da RAM REAL detectada (`last_end` do memory map) em
+/// `init_from_usable_ranges`. Aumentar o buffer se máquinas >16GB aparecerem.
+pub const BITMAP_SIZE: usize = 524288; // 512KB cobre 16GiB fisicos
 const BITS_PER_BYTE: usize = 8;
 const FRAME_SIZE: u64 = 4096;
 
@@ -94,6 +96,10 @@ impl BitmapFrameAllocator {
         let ram_mb = (last_end / (1024 * 1024)) as u64;
         if ram_mb > 0 {
             TOTAL_RAM_MB.store(ram_mb, core::sync::atomic::Ordering::Relaxed);
+            // SESSÃO_260 (AIOS): loga a RAM real detectada — o dump do BOOT.LOG
+            // mostra quanto o kernel viu, separado do que gerencia.
+            crate::slog_nano!("MEM", "info", "RAM detectada {} MB; frames gerenciados {} (bitmap {})",
+                ram_mb, self.total_frames, BITMAP_SIZE);
         }
     }
 

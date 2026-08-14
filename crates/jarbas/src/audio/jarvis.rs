@@ -146,10 +146,17 @@ pub fn emit_hw_greeting_at_register() {
     }
 
     let mem_mb = {
-        let g = k_nano::memory::GLOBAL_ALLOCATOR.lock();
-        g.as_ref()
-            .map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024))
-            .unwrap_or(0)
+        // SESSÃO_260 (AIOS): mostra a RAM REAL detectada no memory map, não o
+        // total gerenciado pelo frame allocator (que era limitado ao bitmap).
+        let real = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+        if real > 0 {
+            real
+        } else {
+            let g = k_nano::memory::GLOBAL_ALLOCATOR.lock();
+            g.as_ref()
+                .map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024))
+                .unwrap_or(0)
+        }
     };
     let cpu = k_nano::smp::percpu::CPU_COUNT.load(Ordering::Relaxed);
     let agents = {
@@ -193,10 +200,17 @@ impl Agent for JarbasAgent {
             self.greeting_prompt_sent = true;
 
             self.greet_mem_mb = {
-                let g = k_nano::memory::GLOBAL_ALLOCATOR.lock();
-                g.as_ref()
-                    .map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024))
-                    .unwrap_or(0)
+                // AIOS: RAM real detectada no memory map (TOTAL_RAM_MB), não o
+                // total gerenciado pelo frame allocator.
+                let real = k_nano::memory::TOTAL_RAM_MB.load(core::sync::atomic::Ordering::Relaxed);
+                if real > 0 {
+                    real
+                } else {
+                    let g = k_nano::memory::GLOBAL_ALLOCATOR.lock();
+                    g.as_ref()
+                        .map(|a| (a.total_frames as u64 * 4096) / (1024 * 1024))
+                        .unwrap_or(0)
+                }
             };
             self.greet_cpu = k_nano::smp::percpu::CPU_COUNT.load(core::sync::atomic::Ordering::Relaxed);
             self.greet_agents = {
