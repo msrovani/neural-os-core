@@ -183,8 +183,39 @@ pub unsafe fn init_smp() {
     let n_aps = (ap_expected as usize).min(k_nano::smp::percpu::MAX_APS);
     let region_base = heap_top - ((n_aps as u64) + 1) * stack_per_ap;
     let mut ap_ids = [0u8; k_nano::smp::percpu::MAX_APS];
-    for i in 0..n_aps {
-        ap_ids[i] = bsp_lapic_id.wrapping_add((i as u8) + 1);
+    // SESSÃO_260: usa os IDs REAIS do MADT (BOOT_APIC_IDS) — o guess sequencial
+    // (bsp+1, bsp+2...) falha no metal com HT: i5-7300HQ tem LAPIC IDs
+    // não-sequenciais (ex: 0,1,4,5 ou 0,2,4,6). INIT-SIPI para ID inexistente
+    // → 0 APs acordam (madt_lapics=4, total_cores=1 no boot real).
+    {
+        let ids = crate::acpi::BOOT_APIC_IDS.lock();
+        let mut idx = 0;
+        if ids.len() > 0 {
+            for &id in ids.iter() {
+                if id as u8 != bsp_lapic_id && idx < n_aps {
+                    ap_ids[idx] = id as u8;
+                    idx += 1;
+                }
+            }
+        }
+        // Fallback: MADT sem IDs suficientes → guess sequencial
+        while idx < n_aps {
+            ap_ids[idx] = bsp_lapic_id.wrapping_add((idx as u8) + 1);
+            idx += 1;
+        }
+    }
+    // Log dos IDs alvo no ramlog (dump BOOT.LOG no FB) — visível no metal.
+    {
+        let mut s = alloc::string::String::from("SMP: ap_ids = [");
+        for (i, &id) in ap_ids[..n_aps].iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            use core::fmt::Write as _;
+            let _ = write!(s, "{:#04x}", id);
+        }
+        s.push(']');
+        k_nano::boot_logger::log(&s);
     }
 
     crate::display::fb::boot_ckpt(22, "smp: INIT-SIPI seq");

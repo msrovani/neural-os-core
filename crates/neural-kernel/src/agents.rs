@@ -1836,8 +1836,29 @@ impl Agent for BootSelfHealAgent {
             if !trusted {
                 k_nano::slog_kai!("Gate", "n2", "trust DENY (token,agent,skill)=(1,self_heal,recover) — skip scan");
             } else {
-                let devices = unsafe { crate::pci::scan_pci() };
-                let inv = crate::inventory::HardwareInventory::collect(devices, None);
+                // SESSÃO_260: no metal sem ATA (boot USB, ATA probe=none), o
+                // scan_pci() pode travar em devices com MMIO lento. Pula o
+                // inventário pesado e faz honest noop — o boot continua.
+                let has_ata = crate::ATA_DRIVER.lock().is_some();
+                if !has_ata {
+                    k_nano::slog_kai!("Gate", "n2", "trust OK mas sem ATA (boot USB) — skip PCI scan pesado (honest noop)");
+                    let mut heal = crate::SELF_HEAL.lock();
+                    let report = heal.run_vid_gated_scan(&[]);
+                    let inv = crate::inventory::HardwareInventory {
+                        cpu_count: 1,
+                        total_ram_bytes: 0,
+                        pci_devices: alloc::vec::Vec::new(),
+                        lapic_count: 1,
+                        has_virtio_net: false,
+                        has_virtio_gpu: false,
+                        has_nvme: false,
+                        has_xhci: false,
+                    };
+                    k_nano::slog_kai!("Gate", "n2", "gate complete (noop USB) heal={} noop={} HEALTH_ISSUE={}",
+                        report.heal_issues, report.noop, report.health_published);
+                } else {
+                    let devices = unsafe { crate::pci::scan_pci() };
+                    let inv = crate::inventory::HardwareInventory::collect(devices, None);
                 let triples = inv.vid_class_triples();
                 let fw_n = inv.fw_gated_devices().len();
                 k_nano::slog_kai!("Gate", "n2", "inventory pci={} fw_gated={} trust=OK",
@@ -1856,6 +1877,7 @@ impl Agent for BootSelfHealAgent {
                     report.noop,
                     report.health_published);
             }
+        }
         }
 
         // Shutdown persistente via FAT — orçado (ver boot_log_agent). Sem budget,
