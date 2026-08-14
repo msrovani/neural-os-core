@@ -843,7 +843,7 @@ fn sched_metrics_hook(tick: u64, n_agents: usize, polled: u32) {
 }
 
 fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
-    // init_phase AQUI (stack ≥2MB): round-robin Oneshot + timeout — seguro com System/Monitor
+    // init_phase AQUI (stack é 2MB): round-robin Oneshot + timeout — seguro com System/Monitor
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
     crate::display::fb::boot_ckpt(51, "init_phase start");
     registry.init_phase();
@@ -851,6 +851,19 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
     // ADR-0060: BEI tick hook — runs every scheduler tick
     agent_core::set_bei_tick_hook(Some(bei_init::bei_tick));
+    // SESSÃO_260: rastreio do 1º ciclo — loga cada agente ANTES do tick no
+    // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). Se o HW real travar num
+    // agente, o último nome no dump revela o alvo. Remove-se depois de achar.
+    registry.register_hook(agent_core::hooks::Hook {
+        hook_type: agent_core::hooks::HookType::PreTick,
+        name: "s260_trace",
+        callback: |agent_name, tick| {
+            if tick <= 2 {
+                k_nano::boot_logger::log(&alloc::format!("SCHED1: poll {}", agent_name));
+            }
+            agent_core::hooks::HookResult::Allow
+        },
+    });
     crate::display::fb::boot_ckpt(53, "scheduler run start");
     registry.run(
         || {
