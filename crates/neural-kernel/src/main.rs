@@ -1336,9 +1336,9 @@ pub(crate) fn kernel_boot(
         // Stack pode não ser 2MB-alinhada → margem: reserva 4MB a partir de
         // (rsp alinhado p/ baixo em 2MB) − 2MB. Cobre a stack 2MB + folga
         // mesmo se a base estiver até ~2MB abaixo do RSP atual.
-        let stack_base = (rsp_phys & !(2 * 1024 * 1024 - 1)) - 2 * 1024 * 1024;
-        frame_allocator.reserve_range(stack_base, 4 * 1024 * 1024);
-        k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=4MB (rsp_phys={:#x})", stack_base, rsp_phys);
+        let stack_base = (rsp_phys & !(2 * 1024 * 1024 - 1)) - 4 * 1024 * 1024;
+        frame_allocator.reserve_range(stack_base, 8 * 1024 * 1024);
+        k_nano::slog_bin!("MEM", "info", "reserva stack via RSP {:#x} len=8MB (rsp_phys={:#x})", stack_base, rsp_phys);
         kjson!("DBG", "MEM", "usable_regions", "n", n as u64, "boot", boot_tag);
     }
     crate::display::fb::boot_ckpt(7, "frame_allocator ok");
@@ -2199,7 +2199,15 @@ pub(crate) fn kernel_boot(
                 drop(ata_guard);
                 let mut addr = 0x100000000u64;
                 while addr < 0x180000000 {
+                    // SESSÃO_260 (AIOS): o scan lia read_volatile em região de
+                    // HOLE (RAM < addr) sem checar mapeamento → #PF storm
+                    // (CR2=pmoff+0x100000000) quando a RAM não alcança. Só lê
+                    // se a página está PRESENT (walk das page tables ativas).
                     let ptr = (addr + pm) as *const u8;
+                    if !crate::memory::is_page_present(addr + pm) {
+                        addr = addr.saturating_add(0x100000);
+                        continue;
+                    }
                     let magic = core::ptr::read_volatile(ptr as *const u32);
                     if magic == 0xBE11BE11 {
                         found = true;
@@ -2528,6 +2536,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P6 Ring3 WARN (non-fatal)");
         }
     }
+    crate::display::fb::boot_ckpt(45, "P6 ring3");
 
     // ADR-0082 F2.1: ELF64 loader self-test (parse + sandbox + RX/RW + BSS) — non-fatal
     if crate::elf_loader::elf_boot_self_test() {
@@ -2535,6 +2544,7 @@ pub(crate) fn kernel_boot(
     } else {
         crate::boot_logger::log("BOOT: ELF loader self-test WARN (non-fatal)");
     }
+    crate::display::fb::boot_ckpt(45, "P6 elf");
 
     // ADR-0082 F3.1: arena W^X USER no sandbox AS (base p/ Cranelift B/C) — non-fatal
     if crate::exec_arena::user_arena_self_test() {
@@ -2542,6 +2552,7 @@ pub(crate) fn kernel_boot(
     } else {
         crate::boot_logger::log("BOOT: USER arena self-test WARN (non-fatal)");
     }
+    crate::display::fb::boot_ckpt(45, "P6 user_arena");
 
     // ADR-0077: conectores do Ring3 isolation ring (ex-ADR-0059 F6) — gated
     crate::isolation_ring::init_connectors();
@@ -2557,6 +2568,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P7 demand-page WARN (non-fatal)");
         }
     }
+    crate::display::fb::boot_ckpt(45, "P6 demand");
 
     // P8 (ADR-0041): VirtIO vring sobre DMA pin (layout-compatible) — non-fatal
     match crate::virtio_vring::demo_virtio_vring() {
@@ -2569,6 +2581,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P8 vring WARN (non-fatal)");
         }
     }
+    crate::display::fb::boot_ckpt(45, "P6 vring");
 
     // P9 (ADR-0041): GGUF/FAT file-backed mmap + demand-paging — non-fatal
     match crate::gguf_mmap::demo_gguf_mmap() {
@@ -2581,6 +2594,7 @@ pub(crate) fn kernel_boot(
             crate::boot_logger::log("BOOT: P9 gguf-mmap WARN (non-fatal)");
         }
     }
+    crate::display::fb::boot_ckpt(45, "P6 gguf");
 
     // Skill Observer: registra observação inicial
     crate::display::fb::boot_ckpt(45, "ADR-0041 demos done");
@@ -3114,6 +3128,12 @@ pub(crate) fn kernel_boot(
             }
             let mut addr = start;
             while addr < end {
+                // SESSÃO_260: só lê páginas PRESENT (scan atravessa hole quando
+                // a RAM não alcança os endereços do loader → #PF storm).
+                if !crate::memory::is_page_present(addr + pm) {
+                    addr = addr.saturating_add(0x100000);
+                    continue;
+                }
                 let ptr = (addr + pm) as *const u8;
                 let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
                 if magic == 0xBE11BE11 {
@@ -3282,6 +3302,11 @@ pub(crate) fn kernel_boot(
                 let scan_sz: usize = 1024 * 1024;
                 let mut addr = scan_start;
                 while addr < scan_end && !v4_ok {
+                    // SESSÃO_260: scan atravessa hole quando RAM não alcança.
+                    if !crate::memory::is_page_present(addr + pm) {
+                        addr = addr.saturating_add(0x100000);
+                        continue;
+                    }
                     let ptr = (addr + pm) as *const u8;
                     let magic = unsafe { core::ptr::read_volatile(ptr as *const u32) };
                     if magic == 0xBE11BE11 {

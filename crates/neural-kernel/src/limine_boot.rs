@@ -25,7 +25,7 @@ pub(crate) static mut LIMINE_STACK: StackSizeRequest = StackSizeRequest {
     id: STACK_SIZE_ID,
     revision: 0,
     response: null_mut(),
-    stack_size: 2 * 1024 * 1024,
+    stack_size: 8 * 1024 * 1024,
 };
 
 #[used]

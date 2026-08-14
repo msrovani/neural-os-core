@@ -298,6 +298,47 @@ pub fn alloc_physical_frame() -> Option<PhysFrame<Size4KiB>> {
     guard.as_mut().and_then(|a| a.allocate_frame())
 }
 
+/// SESSÃO_260 (AIOS): verifica se uma VA está mapeada (PRESENT) nas page
+/// tables ATIVAS. Usado pelo scan do QEMU-loader para não ler hole
+/// não-mapeado (CR2=pmoff+0x100000000 quando a RAM não alcança) — #PF storm.
+/// Walk das 4 tabelas (PML4→PDPT→PD→PT) seguindo o CR3 atual.
+pub fn is_page_present(virt: u64) -> bool {
+    use x86_64::structures::paging::PageTable;
+    use x86_64::VirtAddr;
+    let pm = PHYS_MEM_OFFSET.load(core::sync::atomic::Ordering::Relaxed);
+    if pm == 0 {
+        return false;
+    }
+    let v = VirtAddr::new(virt);
+    let (l4_frame, _) = x86_64::registers::control::Cr3::read();
+    let base = VirtAddr::new(pm);
+    let l4 = unsafe { &*(base + l4_frame.start_address().as_u64()).as_ptr::<PageTable>() };
+    let l4e = &l4[v.p4_index()];
+    if !l4e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return false;
+    }
+    let l3 = unsafe { &*(base + l4e.addr().as_u64()).as_ptr::<PageTable>() };
+    let l3e = &l3[v.p3_index()];
+    if !l3e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return false;
+    }
+    if l3e.flags().contains(x86_64::structures::paging::PageTableFlags::HUGE_PAGE) {
+        return true; // 1GB page
+    }
+    let l2 = unsafe { &*(base + l3e.addr().as_u64()).as_ptr::<PageTable>() };
+    let l2e = &l2[v.p2_index()];
+    if !l2e.flags().contains(x86_64::structures::paging::PageTableFlags::PRESENT) {
+        return false;
+    }
+    if l2e.flags().contains(x86_64::structures::paging::PageTableFlags::HUGE_PAGE) {
+        return true; // 2MB page
+    }
+    let l1 = unsafe { &*(base + l2e.addr().as_u64()).as_ptr::<PageTable>() };
+    l1[v.p1_index()]
+        .flags()
+        .contains(x86_64::structures::paging::PageTableFlags::PRESENT)
+}
+
 #[allow(dead_code)]
 pub unsafe fn dealloc_physical_frame(frame: PhysFrame<Size4KiB>) {
     let mut guard = GLOBAL_ALLOCATOR.lock();
