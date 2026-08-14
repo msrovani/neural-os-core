@@ -405,6 +405,23 @@ pub unsafe fn init_smp() {
         tramp_vector,
         n_aps
     );
+    // SESSÃO_260: loga os IDs alvo no ramlog — HW real acordou 0 APs
+    // (madt_lapics=4 total_cores=1). Se os IDs não batem com o LAPIC real
+    // (HT threads podem ter IDs não-sequenciais), o INIT-SIPI vai para o
+    // lugar errado e o AP nunca entra. Visível no dump "BOOT.LOG (RAM)".
+    {
+        let mut s = alloc::string::String::from("SMP: ap_ids = [");
+        for (i, &id) in ap_ids[..n_aps].iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            use core::fmt::Write as _;
+            let _ = write!(s, "{:#04x}", id);
+        }
+        s.push(']');
+        crate::boot_logger::log(&s);
+        crate::slog_nano!("SMP", "info", "{}", s);
+    }
 
     let ap_woke = wake_aps_sequential(
         tramp_phys,

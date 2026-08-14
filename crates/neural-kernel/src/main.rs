@@ -846,6 +846,15 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
     // init_phase AQUI (stack é 2MB): round-robin Oneshot + timeout — seguro com System/Monitor
     k_nano::slog_bin!("BOOT", "info", "init_phase (heap stack, round-robin)...");
     crate::display::fb::boot_ckpt(51, "init_phase start");
+    // SESSÃO_260: trace do init_phase — loga cada Oneshot ANTES do tick no
+    // ramlog (dump ">>> BOOT.LOG (RAM) <<<" no FB). HW real travou no K51.
+    registry.init_trace = Some(|name, round| {
+        let line = alloc::format!("INIT1: r{} poll {}", round, name);
+        k_nano::boot_logger::log(&line);
+        // Imprime no FB também — o dump do ramlog roda ANTES do init_phase,
+        // então no freeze o último nome na tela é o alvo.
+        crate::display::fb::console_print(&line);
+    });
     registry.init_phase();
     crate::display::fb::boot_ckpt(52, "init_phase done");
     agent_core::set_sched_metrics_hook(Some(sched_metrics_hook));
@@ -860,6 +869,10 @@ fn raw_sched_run(registry: &mut agent_core::AgentRegistry) -> ! {
         callback: |agent_name, tick| {
             if tick <= 2 {
                 k_nano::boot_logger::log(&alloc::format!("SCHED1: poll {}", agent_name));
+                // SESSÃO_260: imprime no FB também — o dump do ramlog acontece
+                // ANTES do init_phase, então quando o HW trava num agente o
+                // último nome na tela revela o alvo.
+                crate::display::fb::console_print(&alloc::format!("SCHED1: poll {}", agent_name));
             }
             agent_core::hooks::HookResult::Allow
         },

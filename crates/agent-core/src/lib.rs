@@ -214,6 +214,11 @@ pub struct AgentRegistry {
     pub budget_manager: BudgetManager,
     /// HookRegistry — PreTick/PostTick/OnCrash/OnSpawn hooks.
     pub hooks: hooks::HookRegistry,
+    /// SESSÃO_260: trace opcional do init_phase (fn pointer, zero-dep) —
+    /// chamado ANTES de cada tick de um Oneshot no init_phase. O HW real
+    /// travou no K51 (init_phase start) sem K52; o bin seta isso para logar
+    /// no ramlog e revelar o agente do freeze.
+    pub init_trace: Option<fn(&str, u64)>,
 }
 
 impl AgentRegistry {
@@ -223,6 +228,7 @@ impl AgentRegistry {
             skill_map: BTreeMap::new(),
             budget_manager: BudgetManager::new(),
             hooks: hooks::HookRegistry::new(),
+            init_trace: None,
         }
     }
 
@@ -389,6 +395,9 @@ impl AgentRegistry {
                 any_active = true;
                 self.agents[i].tick_counter += 1;
                 let tc = self.agents[i].tick_counter;
+                if let Some(trace) = self.init_trace {
+                    trace(self.agents[i].agent.manifest().name, round);
+                }
                 match self.agents[i].agent.tick(round, tc) {
                     AgentTickResult::Done => self.agents[i].state = AgentState::Done,
                     AgentTickResult::Crashed => self.agents[i].state = AgentState::Crashed,
