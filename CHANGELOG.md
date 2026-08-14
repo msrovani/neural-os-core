@@ -1,6 +1,14 @@
 ﻿# Changelog â€” neural-os-core v2.0 "Ring Buffer Refactor"
 
 ## [Unreleased]
+### SESSION_262: Regressao pos-rebuild - scans #PF + SMP wake MADT + freeze self_heal (2026-08-14)
+
+**4 commits, 0 erros, cargo check --release.**
+
+- **fix(boot):** scans QEMU-loader so leem paginas PRESENT (is_page_present walk PML4->PT com HUGE_PAGE 1GB/2MB) - BGE/expert/HWEXPRT4 scans liam hole nao-mapeado -> #PF storm em maquina com RAM insuficiente. Stack do Limine 2MB->8MB + reserva via RSP 8MB (stack overflow no registro de agentes pos-rebuild).
+- **fix(smp):** wake do bin usava guess sequencial (bsp+1, bsp+2...) em vez dos IDs reais do MADT (BOOT_APIC_IDS) - no i5-7300HQ (HT) os LAPIC IDs nao sao sequenciais (ex 0,1,4,5), INIT-SIPI para ID inexistente -> 0 APs acordavam. Fix usa MADT + fallback + log 'SMP: ap_ids'.
+- **fix(selfheal):** freeze no init_phase (K51) no metal sem ATA - scan_pci + inventario pesado travava. Pula scan quando ATA_DRIVER=None (honest noop).
+- **trace(agent-core):** AgentRegistry.init_trace (fn pointer zero-dep) loga 'INIT1: r<N> poll <agente>' no FB antes de cada tick de Oneshot no init_phase - revela o agente do freeze.
 
 ### SESSION_261: Mesh graph UI — orb vira hub do grafo P2P + chat Hermes/SysInfo removidos (2026-08-12)
 

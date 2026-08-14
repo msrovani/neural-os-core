@@ -1,4 +1,15 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s262 — Regressão pós-rebuild: scans #PF + SMP wake MADT + self_heal
+#   SESSION_262: após `cargo clean` + rebuild from scratch, HW real regrediu (K45→K51).
+#     3 bugs: (1) scans QEMU-loader liam páginas não-mapeadas → #PF storm (fix is_page_present
+#     + stack Limine 8MB); (2) wake SMP do bin usava guess sequencial (bsp+1..) em vez dos IDs
+#     reais do MADT → 0 APs acordavam no i5-7300HQ (HT, IDs não-sequenciais ex 0,1,4,5) — fix
+#     usa BOOT_APIC_IDS + log 'SMP: ap_ids'; (3) freeze self_heal no init_phase no metal sem
+#     ATA (scan_pci pesado) — fix pula scan quando ATA_DRIVER=None. Instrumentação: init_trace
+#     no agent-core (fn pointer) loga 'INIT1: r<N> poll <agente>' no FB. 4 commits (61682db,
+#     f11d41e, ecb3f6c). Pendente: confirmar total_cores=4 no HW real + RAM greeting superestima.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s261 — Mesh graph UI (orb → hub do grafo) + UI limpa
 #   SESSION_261: análise tweet @antpalkin (Kimi Agent Swarm — "você não recebe
 #     300 respostas, recebe um mapa") → o orb (Soul Mirror, nível "um eu") vira
