@@ -1632,10 +1632,22 @@ pub unsafe fn init_platform_sync() {
         crate::interrupts::remap_pic_pit_fallback();
     }
     crate::display::fb::boot_ckpt(20, "PLATFORM smp");
-    // Nao forca SMP: trampoline stub → BSP only (sem hang SIPI)
+    // Nao forca SMP: trampoline stub é BSP only (sem hang SIPI)
+    // SESSÃO_260 (AIOS auto-tudo): loga hv + LAPICs do MADT + APs esperados no
+    // ramlog — o dump do BOOT.LOG mostra se o wake vai acontecer e quantos.
+    let hv_name = k_nano::platform_probe::hypervisor().name();
+    let madt_lapics = acpi_info.as_ref().map(|i| i.lapic_count).unwrap_or(0);
+    let ap_expected = crate::smp::AP_COUNT.load(Ordering::Relaxed);
+    k_nano::boot_logger::log(&alloc::format!(
+        "SMP: hv={} madt_lapics={} ap_expected={} allow_smp={}",
+        hv_name, madt_lapics, ap_expected,
+        k_nano::platform_probe::allow_smp()
+    ));
     crate::smp::init_smp();
+    let cores = k_nano::smp::total_cores();
+    k_nano::boot_logger::log(&alloc::format!("SMP: total_cores={} apos wake", cores));
     // ADR-0061: Initialize core pinning pools after SMP (k_nano owns core_pinning + smp)
-    k_nano::core_pinning::init_pools(k_nano::smp::total_cores());
+    k_nano::core_pinning::init_pools(cores);
     // STI so depois de SMP — timer IRQ nao pode reentrar serial/FB spinlock
     x86_64::instructions::interrupts::enable();
     k_nano::interrupts::calibrate_timer_hz();

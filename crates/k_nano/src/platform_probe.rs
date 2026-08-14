@@ -418,7 +418,12 @@ pub fn build_gate(hv: HypervisorKind, isa: &CpuFeatures) -> FeatureGate {
         HypervisorKind::None => (true, 255u8, false),
         HypervisorKind::Kvm => (true, 4, true),
         HypervisorKind::Tcg => (true, 4, true),
-        HypervisorKind::MicrosoftHv => (false, 0, true),
+        // SESSÃO_260 (AIOS auto-tudo): Windows 11 com VBS/Hyper-V reporta
+        // MicrosoftHv — mas o Hyper-V expõe TODOS os vCPUs ao guest; o kernel
+        // deve acordar e usar todos (premissa: usar o HW completo). O gate
+        // antigo (false,0) deixava o notebook real em 1 core. WHPX tem AP wake
+        // funcional (IPI dirigido, ADR-0057 WS-A); retry 3x cobre jitter.
+        HypervisorKind::MicrosoftHv => (true, 255, true),
         HypervisorKind::VBox | HypervisorKind::VMware => (false, 0, true),
         HypervisorKind::QemuGeneric | HypervisorKind::UnknownHv => (true, 4, true),
     };
