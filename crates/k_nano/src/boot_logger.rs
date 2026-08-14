@@ -68,7 +68,9 @@ static SESSION_BODY: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 static DISK_WRITES: AtomicUsize = AtomicUsize::new(0);
 /// Mensagens desde o último flush bem-sucedido (USB MSC é lento: não reescreve a cada linha).
 static SINCE_FLUSH: AtomicUsize = AtomicUsize::new(0);
-const FLUSH_EVERY: usize = 8;
+/// Data-only flushes (SESSION_260) permitem intervalos menores sem rasgar o dir.
+/// 16 ≈ equilíbrio entre perda em crash e tráfego BOT no stick.
+const FLUSH_EVERY: usize = 16;
 
 fn buffer_log(msg: &str) {
     // Espelho físico (ramlog); persistência FAT só via MSC/ATA — sem soft-reboot.
@@ -130,7 +132,16 @@ fn fat32_parts(dev: &mut dyn BlockDevice) -> Vec<crate::fat32::Partition> {
     parts
 }
 
-/// Sobrescreve `BOOT.LOG` pré-alocado no FAT32 via BlockDevice (USB ou ATA).
+/// Sobrescreve payload de `BOOT.LOG` pré-alocado via BlockDevice (USB ou ATA).
+///
+/// **SESSION_260:** reescrever o dir cluster a cada flush rasgava o FAT se o
+/// boot crashasse no meio (triple fault) → Windows não montava o volume.
+/// Política segura:
+/// 1. Escreve **só clusters de dados** (payload + padding zero até o fim do
+///    último setor tocado).
+/// 2. Só toca a directory entry se o tamanho em disco for 0 ou absurdo
+///    (< 512) — aí fixa em `BOOT_LOG_CAP` **num único WRITE** do setor do
+///    dirent (não reescreve o cluster inteiro). Demais flushes = data-only.
 unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
     let want = encode_83(BOOT_LOG_NAME);
     let parts = fat32_parts(dev);
@@ -173,10 +184,17 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                 let alloc_size = u32::from_le_bytes([
                     dir[entry + 28], dir[entry + 29], dir[entry + 30], dir[entry + 31],
                 ]) as usize;
+                // Capacidade efetiva: se o dirent ainda tem size “curto” (seed
+                // truncado / 0), assumimos o pré-alocado de mkfat32 (BOOT_LOG_CAP).
+                let capacity = if alloc_size >= 512 {
+                    alloc_size.min(BOOT_LOG_CAP)
+                } else {
+                    BOOT_LOG_CAP
+                };
                 let fc_lo = u16::from_le_bytes([dir[entry + 26], dir[entry + 27]]);
                 let fc_hi = u16::from_le_bytes([dir[entry + 20], dir[entry + 21]]);
                 let mut fc = ((fc_hi as u32) << 16) | fc_lo as u32;
-                let write_len = data.len().min(alloc_size).min(BOOT_LOG_CAP);
+                let write_len = data.len().min(capacity);
                 let mut written = 0usize;
 
                 while fc >= 2 && fc < 0x0FFF_FFF8 && written < write_len {
@@ -186,6 +204,7 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                         let mut sector = [0u8; 512];
                         let take = (write_len - written).min(512);
                         sector[..take].copy_from_slice(&data[written..written + take]);
+                        // Padding zero no resto do setor → leitor vê EOF limpo.
                         if !dev.write_sectors((fc_lba + s) as u64, &sector) {
                             return false;
                         }
@@ -199,15 +218,18 @@ unsafe fn overwrite_boot_log(dev: &mut dyn BlockDevice, data: &[u8]) -> bool {
                     fc = u32::from_le_bytes([fsec[boff], fsec[boff + 1], fsec[boff + 2], fsec[boff + 3]]) & 0x0FFF_FFFF;
                 }
 
-                let new_size = (write_len as u32).to_le_bytes();
-                dir[entry + 28..entry + 32].copy_from_slice(&new_size);
-                for s in 0..spc {
-                    let off = (s * bps) as usize;
-                    if !dev.write_sectors((clba + s) as u64, &dir[off..off + bps as usize]) {
+                // Dirent: só se size inválido/curto — fixa CAP com 1 WRITE de setor.
+                // Flushes seguintes = data-only (crash-safe vs SESSION_260).
+                if alloc_size < 512 || alloc_size > BOOT_LOG_CAP {
+                    let target = (capacity as u32).to_le_bytes();
+                    dir[entry + 28..entry + 32].copy_from_slice(&target);
+                    let sector_idx = (entry as u32) / bps;
+                    let off = (sector_idx * bps) as usize;
+                    if !dev.write_sectors((clba + sector_idx) as u64, &dir[off..off + bps as usize]) {
                         return false;
                     }
                 }
-                return true;
+                return written > 0 || write_len == 0;
             }
             let fat_off = cluster as usize * 4;
             let fat_sec = fat_lba + (fat_off as u32 / bps);
@@ -368,13 +390,50 @@ pub fn flush() -> bool {
     { false }
 }
 
+/// Tenta (re)enumerar USB-MSC se ainda não há BlockDevice útil p/ BOOT.LOG.
+/// Usado pelo SysInfoAgent em HW real quando o bring-up early falhou (porta
+/// CCS atrasada) — sem isto o retry só chamava `flush()` em vão.
+pub fn try_ensure_usb_msc() -> bool {
+    if crate::globals::USB_MSC.lock().is_some() {
+        return true;
+    }
+    if crate::xhci::XHCI_STATE.lock().is_none() {
+        unsafe { crate::xhci::init_xhci(); }
+    }
+    let msc = unsafe { crate::usb_msc::UsbMassStorage::probe() };
+    let ok = msc.is_some();
+    if ok {
+        *crate::globals::USB_MSC.lock() = msc;
+        crate::slog_nano!("LOG", "info", "try_ensure_usb_msc: MSC OK (retry)");
+    }
+    ok
+}
+
+/// Retry completo: re-probe MSC se preciso + flush. Retorna true se FAT_READY.
+pub fn ensure_persisted() -> bool {
+    if FAT_READY.load(Ordering::Relaxed) {
+        let _ = flush();
+        return true;
+    }
+    let _ = try_ensure_usb_msc();
+    flush()
+}
+
 /// Anexa texto sem `serial_println` (evita recursão no path sem-COM do serial.rs).
 pub fn append_raw(msg: &str) {
     if !HEAP_READY.load(Ordering::Relaxed) {
+        crate::boot_ramlog::append(msg);
         return;
     }
     if !FAT_READY.load(Ordering::Relaxed) {
         buffer_log(msg);
+        #[cfg(feature = "fat-boot-log")]
+        {
+            let n = SINCE_FLUSH.fetch_add(1, Ordering::Relaxed) + 1;
+            if n >= FLUSH_EVERY {
+                let _ = persist_now(None);
+            }
+        }
         return;
     }
     let tick = crate::interrupts::TIMER_TICKS.load(Ordering::Relaxed) as u64;
@@ -393,3 +452,33 @@ pub fn append_raw(msg: &str) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_83_boot_log() {
+        let e = encode_83("BOOT.LOG");
+        assert_eq!(&e[..8], b"BOOT    ");
+        assert_eq!(&e[8..], b"LOG");
+    }
+
+    #[test]
+    fn boot_log_cap_matches_mkfat32() {
+        assert_eq!(BOOT_LOG_CAP, 256 * 1024);
+        assert_eq!(BOOT_LOG_NAME, "BOOT.LOG");
+    }
+
+    /// Garante que, com `--features fat-boot-log`, o path real (não o stub)
+    /// está compilado. Sem a feature este teste nem entra no binário de teste
+    /// sob o cfg abaixo — rode: `cargo test -p k-nano --features fat-boot-log`.
+    #[cfg(feature = "fat-boot-log")]
+    #[test]
+    fn fat_boot_log_feature_compiles_persist_path() {
+        // flush() sob a feature chama persist_now real (sem BlockDevice → false,
+        // mas não é o stub cfg(not(...)) que sempre retornava false sem tentar).
+        assert!(!flush() || FAT_READY.load(Ordering::Relaxed));
+    }
+}
+

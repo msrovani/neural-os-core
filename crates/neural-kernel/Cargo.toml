@@ -44,10 +44,11 @@ default = ["ring3"]
 ring3 = []
 # Sprint 107 QEMU HIT clima (STT-sim seed + lexicon constrained). Off = HW real.
 weather-e2e = []
-# Persiste B*.LOG no FAT32 (útil em pendrive sem cabo serial). Off por default
-# (PIO ATA no boot pode ser lento); ative para captura em disco:
+# Persiste BOOT.LOG no FAT32 (pendrive live USB / HW sem COM). Off por default
+# no check host; a crate `boot` liga no artifact. **Propaga para k-nano** —
+# sem `k-nano/fat-boot-log`, persist_now era stub e o stick nunca recebia log.
 #   cargo nk --features fat-boot-log
-fat-boot-log = []
+fat-boot-log = ["k-nano/fat-boot-log"]
 # Soft-reboot 0xCF9 para BOOT.LOG — **default OFF**. Nunca ligar em HW produto
 # (loop: NEURLOG! sem UEFI writer de NEURDONE). Debug/experimento apenas.
 fat-boot-log-soft-reboot = ["fat-boot-log", "k-nano/soft-reboot-bootlog"]

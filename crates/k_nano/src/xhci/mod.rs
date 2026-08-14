@@ -195,6 +195,9 @@ pub struct XhciState {
 }
 
 pub unsafe fn init_xhci() {
+    if XHCI_STATE.lock().is_some() {
+        return; // already up (early BOOT.LOG path)
+    }
     let devs = crate::pci::scan_pci();
     for d in &devs {
         if d.class != 0x0C || d.subclass != 0x03 { continue; }

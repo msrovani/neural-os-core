@@ -10,6 +10,7 @@
 #[allow(unused_imports)]
 pub use k_nano::boot_logger::{
     FAT_READY,
+    ensure_persisted,
     flush,
     log,
     log_quiet,
@@ -26,7 +27,7 @@ pub fn init_after_usb() {
         let has_msc = crate::USB_MSC.lock().is_some();
         let has_ata = crate::ATA_DRIVER.lock().is_some();
         let has_ahci = crate::AHCI_DRIVER.lock().is_some();
-        let ok = flush();
+        let ok = ensure_persisted();
         k_nano::slog_bin!(
             "LOG", "info",
             "init_after_usb BOOT.LOG ok={} msc={} ata={} ahci={} (procure BOOT.LOG na raiz FAT32)",

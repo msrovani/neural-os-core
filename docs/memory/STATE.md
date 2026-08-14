@@ -1,4 +1,13 @@
 ﻿# ═════════════════════════════════════════════════════════
+# STATE — neural-os-core v1.9.99-s262 — Early BOOT.LOG no pendrive live USB
+#   SESSION_262: bug raiz — `fat-boot-log` só no bin; `k_nano::persist_now` era
+#     stub permanente (feature inexistente na crate). Wire
+#     `fat-boot-log = ["k-nano/fat-boot-log"]`. Early path pós-platform_sync
+#     (xHCI+MSC+flush, K18) antes de NIC/ATA. overwrite data-only (SESSION_260).
+#     SysInfo `ensure_persisted` re-probe MSC. serial journal → append_raw.
+#     3 testes host boot_logger PASS; cargo check fat-boot-log 0 erros.
+#
+# ═════════════════════════════════════════════════════════
 # STATE — neural-os-core v1.9.99-s261 — Mesh graph UI (orb → hub do grafo) + UI limpa
 #   SESSION_261: análise tweet @antpalkin (Kimi Agent Swarm — "você não recebe
 #     300 respostas, recebe um mapa") → o orb (Soul Mirror, nível "um eu") vira

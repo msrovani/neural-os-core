@@ -31,10 +31,14 @@ default = []
 global-alloc = []
 # Soft-reboot 0xCF9 para flush BOOT.LOG — **OFF em produto** (loop HW sem NEURDONE).
 soft-reboot-bootlog = []
+# Persiste BOOT.LOG no FAT32 (USB-MSC/ATA/AHCI/NVMe). Propagado pelo bin
+# `neural-kernel` via `fat-boot-log = ["k-nano/fat-boot-log"]` (crate `boot`).
+# Sem este feature, `persist_now` era stub permanente — BOOT.LOG nunca gravava.
+fat-boot-log = []
 # Labor 39: PC speaker boot chime — OFF default.
 boot-chime = []
 # Labor 53: AP workers vivos (`ap_pollable`) — OFF default (deadlock sem IDT/IPI pleno).
 ap-pollable = []
 
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("kernel", "soft-reboot-bootlog", "fat-boot-log"))'] }
